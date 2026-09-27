@@ -94,7 +94,9 @@ func TestShippedAcceptanceSuites(t *testing.T) {
 	if testing.Short() {
 		t.Skip("runs go test on each suite")
 	}
-	raw, err := os.ReadFile("tasksets/dev-swarm-tasks-v1.json")
+	// requireTaskSets skips in a CE checkout, where the export strips the
+	// EE-only task sets; it fails if they exist but the set is missing.
+	raw, err := os.ReadFile(requireTaskSets(t, "tasksets/dev-swarm-tasks-v1.json")[0])
 	if err != nil {
 		t.Fatal(err)
 	}

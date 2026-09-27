@@ -72,12 +72,12 @@ func TestIngestInputArtifacts_CarriesDocumentPathsOntoTheQueue(t *testing.T) {
 		logger: zerolog.Nop(),
 	}
 	task := &persistence.Task{ID: "t", ProjectID: "p",
-		Payload: documentPayload(t, map[string]string{"in_a": "https://docs.vornik.io"})}
+		Payload: documentPayload(t, map[string]string{"in_a": "docs/guides/reference-architecture.md"})}
 	e.ingestInputArtifacts(context.Background(), task, &persistence.Execution{ID: "x", WorkflowID: "companion-rag-ingest"})
 
 	require.Len(t, q.items, 2)
 	require.NotNil(t, q.items[0].DocumentPath)
-	assert.Equal(t, "https://docs.vornik.io", *q.items[0].DocumentPath)
+	assert.Equal(t, "docs/guides/reference-architecture.md", *q.items[0].DocumentPath)
 	assert.Nil(t, q.items[1].DocumentPath, "an artifact uploaded without a path is not a document ingest")
 }
 
@@ -98,17 +98,17 @@ func TestIngestInputArtifacts_SyncFallbackSupersedesAfterTheScopeStamp(t *testin
 	store := &stubArtifactStore{bytesByID: map[string][]byte{"in_a": []byte("a"), "in_b": []byte("b")}}
 	e := &Executor{memoryIndexer: mi, artifactStore: store, logger: zerolog.Nop()}
 	task := &persistence.Task{ID: "t", ProjectID: "p",
-		Payload: documentPayload(t, map[string]string{"in_a": "https://docs.vornik.io"})}
+		Payload: documentPayload(t, map[string]string{"in_a": "docs/guides/reference-architecture.md"})}
 	e.ingestInputArtifacts(context.Background(), task, &persistence.Execution{ID: "x"})
 
 	assert.Equal(t, []string{
-		"document:https://docs.vornik.io",
+		"document:docs/guides/reference-architecture.md",
 		"scope:github.com/acme/widgets",
-		"supersede:https://docs.vornik.io",
+		"supersede:docs/guides/reference-architecture.md",
 		"ingest:notes.md",
 		"scope:github.com/acme/widgets",
 	}, mi.events)
-	assert.Equal(t, []string{"p|github.com/acme/widgets|https://docs.vornik.io|"}, mi.supersedes)
+	assert.Equal(t, []string{"p|github.com/acme/widgets|docs/guides/reference-architecture.md|"}, mi.supersedes)
 }
 
 // A.7, review R3: without the document method the synchronous fallback fails

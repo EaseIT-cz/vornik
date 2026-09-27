@@ -16,7 +16,7 @@ import (
 // one batch, so a bare file name cannot be the document's identity.
 
 func TestValidateDocumentPath(t *testing.T) {
-	ok := []string{"docs/a.md", "a.md", "https://docs.vornik.io"}
+	ok := []string{"docs/a.md", "a.md", "docs/guides/reference-architecture.md"}
 	for _, p := range ok {
 		require.NoError(t, validateDocumentPath(p, pathBase(p)), p)
 	}

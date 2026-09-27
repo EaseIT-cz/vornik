@@ -42,7 +42,7 @@ func documentHarness(t *testing.T) (*workerHarness, *documentIndexer) {
 func TestIngestWorker_DocumentItemPublishesUnderItsPathAndSupersedes(t *testing.T) {
 	h, idx := documentHarness(t)
 	art := h.addArtifact(t, "proj-D", "reference-architecture.md", "# body\n")
-	path, scope := "https://docs.vornik.io", "github.com/acme/widgets"
+	path, scope := "docs/guides/reference-architecture.md", "github.com/acme/widgets"
 	item := &persistence.IngestQueueItem{ProjectID: "proj-D", SourceArtifactID: art, ProducerRole: "rag-ingester",
 		RepoScope: &scope, DocumentPath: &path}
 	stats, err := h.worker.processItemWithStats(context.Background(), item, "epoch-7")

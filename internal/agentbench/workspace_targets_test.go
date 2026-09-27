@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"os"
-	"path/filepath"
 	"regexp"
 	"strings"
 	"testing"
@@ -121,7 +120,7 @@ func TestRunner_NoWorkspaceIsRecordedAsSuch(t *testing.T) {
 // Every shipped task set carries targets for every task, and a dev-swarm
 // task's targets are the scratch paths its prompt names.
 func TestShippedTaskSetsDeclareTargets(t *testing.T) {
-	files, _ := filepath.Glob("tasksets/*.json")
+	files := requireTaskSets(t, "tasksets/*.json") // skips in a CE checkout
 	scratch := regexp.MustCompile(`scratch/[\w-]+`)
 	n := 0
 	for _, f := range files {

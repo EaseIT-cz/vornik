@@ -138,7 +138,7 @@ func sameIDs(t *testing.T, got []string, want ...string) {
 	}
 }
 
-const docPath = "https://docs.vornik.io"
+const docPath = "docs/guides/reference-architecture.md"
 
 func TestIntegration_SupersedeDocument_NewestUploadWins(t *testing.T) {
 	f := newDocFixture(t)

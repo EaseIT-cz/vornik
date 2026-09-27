@@ -22,14 +22,14 @@ func TestPlanLegacyDocuments(t *testing.T) {
 		{Name: "reference-architecture.md", Chunks: 7, ByDate: map[string]int{"2026-09-01": 3, "2026-09-20": 4}},
 		{Name: "index.md", Chunks: 2},
 		{Name: "gone.md", Chunks: 1},
-		{Name: "BACKLOG.md", Chunks: 9},
+		{Name: "backlog.md", Chunks: 9},
 	}
 	tracked := []string{
-		"https://docs.vornik.io",
+		"docs/guides/reference-architecture.md",
 		"docs/public/index.md", "docs/public/guides/index.md",
-		"https://docs.vornik.io",
+		"docs/guides/backlog.md",
 	}
-	survivors := map[string]string{"https://docs.vornik.io": "art_new"}
+	survivors := map[string]string{"docs/guides/reference-architecture.md": "art_new"}
 	rows, err := planLegacyDocumentsWith(docs, tracked, func(p string) (string, error) { return survivors[p], nil }, wholeVersion)
 	if err != nil {
 		t.Fatal(err)
@@ -38,7 +38,7 @@ func TestPlanLegacyDocuments(t *testing.T) {
 	for _, r := range rows {
 		got[r.Name] = r
 	}
-	if r := got["reference-architecture.md"]; r.Decision != legacySupersede || r.Path != "https://docs.vornik.io" || r.Survivor != "art_new" {
+	if r := got["reference-architecture.md"]; r.Decision != legacySupersede || r.Path != "docs/guides/reference-architecture.md" || r.Survivor != "art_new" {
 		t.Errorf("unique and re-ingested must be superseded: %+v", r)
 	}
 	if r := got["index.md"]; r.Decision != legacyAmbiguous || len(r.Candidates) != 2 {
@@ -47,7 +47,7 @@ func TestPlanLegacyDocuments(t *testing.T) {
 	if r := got["gone.md"]; r.Decision != legacyMissing {
 		t.Errorf("a name not in the checkout must be left alone: %+v", r)
 	}
-	if r := got["BACKLOG.md"]; r.Decision != legacyNotReingested || r.Path != "https://docs.vornik.io" {
+	if r := got["backlog.md"]; r.Decision != legacyNotReingested || r.Path != "docs/guides/backlog.md" {
 		t.Errorf("a name whose path has no live version yet must be left alone: %+v", r)
 	}
 }

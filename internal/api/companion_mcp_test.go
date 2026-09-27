@@ -211,6 +211,23 @@ func TestCompanionMCP_MalformedJSON_ParseError(t *testing.T) {
 	assert.Equal(t, -32700, resp.Error.Code)
 }
 
+// 2026-09-27 regression: the streamable-HTTP stream request (GET with Accept:
+// text/event-stream) got 200 text/plain, which a spec-following client reads as
+// a stream that ended and keeps re-opening. A re-open during a daemon restart
+// failed with ECONNREFUSED and Claude Code dropped the companion on every
+// restart. The spec's answer when no stream is offered is 405.
+func TestCompanionMCP_StreamRequestIsMethodNotAllowed(t *testing.T) {
+	srv, _, _ := newCompanionMCPServer(t)
+	for _, accept := range []string{"text/event-stream", "application/json, text/event-stream"} {
+		req := httptest.NewRequest(http.MethodGet, "/api/v1/mcp/companion", nil)
+		req.Header.Set("Accept", accept)
+		rec := httptest.NewRecorder()
+		srv.CompanionMCPHandler(rec, req)
+		assert.Equal(t, http.StatusMethodNotAllowed, rec.Code, "Accept: %s", accept)
+		assert.Equal(t, http.MethodPost, rec.Header().Get("Allow"), "Accept: %s", accept)
+	}
+}
+
 func TestCompanionMCP_GETReturns200_LivenessProbe(t *testing.T) {
 	srv, _, _ := newCompanionMCPServer(t)
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/mcp/companion", nil)

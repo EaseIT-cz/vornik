@@ -1,7 +1,7 @@
 ---
 sources:
     - path: docs/release-notes
-      sha256: 136e77bb167aebdcad79f039f5e086c28faa9ab095cf5848d6e6b97ebfae5215
+      sha256: 4b119546be04a9cdae2a25244ce2107face1502206ffe709564a540faead6ddc
 ---
 # Release Notes
 
@@ -14,6 +14,29 @@ behavior changes, and notable fixes. Internal-only changes are omitted.
     so upgrades generally require no config changes. Always take a backup
     before upgrading. A few releases ask you to restart the daemon to pick up
     new behavior; those are called out below.
+
+---
+
+## 2026.9.8
+
+**Claude Code no longer loses the vornik companion when the daemon
+restarts.** Since Claude Code 2.1.282, every daemon restart dropped the
+companion from an open session, and its tools stayed gone until you ran
+`/mcp`.
+
+The companion endpoint answered the MCP server-notification stream request
+with the wrong status, so Claude Code kept re-opening the stream and marked
+the server failed when a re-open landed during a restart. The endpoint now
+answers that request the way the MCP spec requires (`405`), Claude Code holds
+no stream, and a restart goes unnoticed between calls. Upgrade the daemon;
+nothing changes on the client side.
+
+**Fixes.** Tests added in 2026.9.7 that failed only in the Community Edition
+tree now pass there.
+
+**Known issue.** If one of your MCP servers is unreachable, a daemon restart
+can keep the API unavailable for about a minute while startup waits on it.
+The companion no longer disconnects over it; a fix is planned.
 
 ---
 

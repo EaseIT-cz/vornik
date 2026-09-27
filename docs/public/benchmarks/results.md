@@ -403,6 +403,7 @@ each is stated:
 | `2026.9.5` | none — **a gap, not a waiver** | No run was taken, and this cycle DID change the retrieval path: recall began ranking by recency and letting a recurring series supersede its earlier members. It shipped unmeasured on the axes above. Stated late — this row was added with 2026.9.7's, whose run measures the tree that includes it — rather than left as a silent gap. |
 | `2026.9.6` | none | No run was taken. The cycle bounds agent containers and fixes the adoption board; the board reads the retrieval and ingest audit ledgers but changes neither path. Stated late, with 2026.9.7's, rather than left as a silent gap. |
 | `2026.9.7` | **yes** | The memory open axis above, on the release build (`2026.9.6-117-gee40525c8`, n=3). The cycle changes ingestion and retrieval, so a waiver was not open to it. The v9 agent-harness arms run on the slow-hardware track and are reported in the release notes, not in this table. |
+| `2026.9.8` | none | No run was taken. The patch changes only the companion endpoint's reply to a `GET` stream request, plus test fixtures. It touches no ingestion, embedding, retrieval or scoring path, so the axes stand where 2026.9.7's measured row left them. Stated rather than left as a silent gap. |
 
 A missing row stated as missing is honest. An absent row is not — which is the whole
 reason this section exists.

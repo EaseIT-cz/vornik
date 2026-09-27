@@ -111,6 +111,17 @@ type mcpToolDef struct {
 func (s *Server) CompanionMCPHandler(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodGet:
+		// A streamable-HTTP client asking for the server-notification
+		// stream gets 405: the companion pushes nothing, and 405 is the
+		// spec's only other answer. A 200 here read as a stream that
+		// ended, so clients kept re-opening it, and a re-open during a
+		// daemon restart dropped the companion from Claude Code
+		// (2026-09-27; design 23, "Streamable HTTP Handshake" item 5).
+		if strings.Contains(r.Header.Get("Accept"), "text/event-stream") {
+			w.Header().Set("Allow", http.MethodPost)
+			http.Error(w, "no server-notification stream; use POST", http.StatusMethodNotAllowed)
+			return
+		}
 		// Liveness probe for tooling that hits the endpoint to
 		// check reachability before opening a session. MCP clients
 		// don't strictly need this; it's purely operator-friendly.

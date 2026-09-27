@@ -42,6 +42,7 @@ import (
 
 	"vornik.io/vornik/internal/chat"
 	"vornik.io/vornik/internal/registry"
+	"vornik.io/vornik/internal/stepoutcome"
 
 	"vornik.io/vornik/internal/config"
 )
@@ -66,9 +67,65 @@ const (
 // modelHealthStat is one model's recent aggregate runtime health.
 type modelHealthStat struct {
 	model                  string
-	samples                int   // total recent steps observed for this model
-	failures               int   // steps whose outcome was not 'ok'/'pending_validation'
+	samples                int   // recent steps CHARGED to this model (excluded classes removed)
+	failures               int   // charged steps whose outcome was not 'ok'/'pending_validation'
 	medianCompletionTokens int64 // median completion_tokens across recent calls
+	// excludedByClass counts recent failures NOT charged to the model — the
+	// container, host or an upstream step failed (stepoutcome.
+	// NotAttributableToModel; model-health attribution design, 2026-09-24).
+	excludedByClass map[string]int
+}
+
+// excludedTotal sums excludedByClass.
+func (s modelHealthStat) excludedTotal() int {
+	n := 0
+	for _, c := range s.excludedByClass {
+		n += c
+	}
+	return n
+}
+
+// dominantExcluded returns the excluded class with the most failures (ties by
+// name, for a stable message).
+func (s modelHealthStat) dominantExcluded() (string, int) {
+	best, bestN := "", 0
+	for c, n := range s.excludedByClass {
+		if n > bestN || (n == bestN && c < best) {
+			best, bestN = c, n
+		}
+	}
+	return best, bestN
+}
+
+// excludedBreakdown renders "class: n, class: n", largest first.
+func (s modelHealthStat) excludedBreakdown() string {
+	classes := make([]string, 0, len(s.excludedByClass))
+	for c := range s.excludedByClass {
+		classes = append(classes, c)
+	}
+	sort.Slice(classes, func(i, j int) bool {
+		if s.excludedByClass[classes[i]] != s.excludedByClass[classes[j]] {
+			return s.excludedByClass[classes[i]] > s.excludedByClass[classes[j]]
+		}
+		return classes[i] < classes[j]
+	})
+	parts := make([]string, 0, len(classes))
+	for _, c := range classes {
+		parts = append(parts, fmt.Sprintf("%s: %d", c, s.excludedByClass[c]))
+	}
+	return strings.Join(parts, ", ")
+}
+
+// excludedDominates is the host-problem rule: a model's recent failures that
+// were NOT its own outnumber the ones that were, and are at least the sample
+// floor. "Outnumber", not a ratio: the finding's claim is "most of what went
+// wrong here was not the model", and a majority is what that sentence means.
+// Not gated on the charged floor — in an ONGOING outage the newest rows (the
+// row cap takes the newest) can all be excluded, and a check that went silent
+// then would hide the model when it matters most.
+func excludedDominates(s modelHealthStat, floor int) bool {
+	ex := s.excludedTotal()
+	return ex >= floor && ex > s.failures
 }
 
 // modelHealthFinding is one flagged model with its severity + recommendation.
@@ -329,13 +386,34 @@ func collectModelFallbacks(swarms []*registry.Swarm) (referenced map[string]bool
 func evalModelHealth(stats []modelHealthStat, fallbacks map[string]string, th config.ResolvedDoctorThresholds) []modelHealthFinding {
 	var findings []modelHealthFinding
 	for _, s := range stats {
+		// The host-problem finding is its own row, emitted whatever the
+		// charged sample count (design: an ongoing outage leaves none).
+		host := excludedDominates(s, th.ModelMinSamples.Value)
+		var hostFinding *modelHealthFinding
+		if host {
+			class, _ := s.dominantExcluded()
+			hostFinding = &modelHealthFinding{
+				model:  s.model,
+				status: "WARNING",
+				message: fmt.Sprintf("%s: %d recent failure(s) NOT charged to the model (%s) outnumber its own (%d/%d) — "+
+					"a container/host or upstream problem, not the model; check %s before changing models",
+					s.model, s.excludedTotal(), s.excludedBreakdown(), s.failures, s.samples, hostCheckFor(class)),
+			}
+		}
+		// The sample floor applies to the CHARGED denominator.
 		if s.samples < th.ModelMinSamples.Value {
+			if hostFinding != nil {
+				findings = append(findings, *hostFinding)
+			}
 			continue
 		}
 		failRate := float64(s.failures) / float64(s.samples)
 		degenerate := s.medianCompletionTokens < modelHealthDegenerateTokens
 		highFail := failRate >= th.ModelFailureRate.Value
 		if !highFail && !degenerate {
+			if hostFinding != nil {
+				findings = append(findings, *hostFinding)
+			}
 			continue
 		}
 
@@ -350,6 +428,9 @@ func evalModelHealth(stats []modelHealthStat, fallbacks map[string]string, th co
 		if degenerate {
 			reasons = append(reasons, fmt.Sprintf("degenerate output (median %d completion tokens)", s.medianCompletionTokens))
 		}
+		if ex := s.excludedTotal(); ex > 0 {
+			reasons = append(reasons, fmt.Sprintf("%d further failure(s) not charged to the model (%s)", ex, s.excludedBreakdown()))
+		}
 
 		rec := "no fallback configured — set modelFallback on the affected role(s)"
 		if fb := fallbacks[s.model]; fb != "" {
@@ -360,9 +441,97 @@ func evalModelHealth(stats []modelHealthStat, fallbacks map[string]string, th co
 			status:  status,
 			message: fmt.Sprintf("%s: %s; %s", s.model, strings.Join(reasons, ", "), rec),
 		})
+		if hostFinding != nil {
+			findings = append(findings, *hostFinding) // after the model's own row
+		}
 	}
-	sort.Slice(findings, func(i, j int) bool { return findings[i].model < findings[j].model })
+	// Stable: by model; within a model, the model finding before the host one.
+	sort.SliceStable(findings, func(i, j int) bool { return findings[i].model < findings[j].model })
 	return findings
+}
+
+// hostCheckFor names the doctor check that covers an excluded class.
+func hostCheckFor(class string) string {
+	switch class {
+	case stepoutcome.ClassAgentMountUnusable, stepoutcome.ClassContainerStartFailed:
+		return "agent_image_uid and image_freshness"
+	case stepoutcome.ClassMissingPrerequisite:
+		return "the upstream step that should have produced the input"
+	case stepoutcome.ClassWorkspaceUnavailable:
+		return "orphan_worktrees and the project's git hooks (process-spawn law S6-D1)"
+	default:
+		return "the container runtime (podman) and host resources"
+	}
+}
+
+// queryModelHealthOutcomes aggregates recent step outcomes per model: the
+// CHARGED samples and failures, and the failures NOT charged to the model, by
+// class (model-health attribution design, 2026-09-24). Portable SQL (FILTER,
+// COALESCE, IN) — unlike the token-median query beside it — so it is tested
+// against SQLite as well as run on Postgres.
+func queryModelHealthOutcomes(ctx context.Context, db *sql.DB, since time.Time) (map[string]*modelHealthStat, error) {
+	// 'ok' / 'pending_validation' are not failures, and the audit labels
+	// 'superseded' / 'orphaned' are absences, not outcomes (2026-09-04). The
+	// classes that are not the model's (model-health attribution design,
+	// 2026-09-24) leave both counts and are reported per class instead.
+	// The list is the Go declaration passed as parameters, so the SQL cannot
+	// drift from stepoutcome.NotAttributableToModel.
+	args := []any{since, modelHealthRowCap}
+	var ph []string
+	for _, c := range stepoutcome.NotAttributableToModelClasses() {
+		args = append(args, c)
+		ph = append(ph, fmt.Sprintf("$%d", len(args)))
+	}
+	excluded := "COALESCE(error_class, '') IN (" + strings.Join(ph, ", ") + ")"
+	outcomeRows, err := db.QueryContext(ctx, `
+		SELECT model,
+		       COALESCE(error_class, '') AS error_class,
+		       COUNT(*) FILTER (WHERE NOT excluded) AS samples,
+		       COUNT(*) FILTER (WHERE NOT excluded AND outcome NOT IN ('ok', 'pending_validation', 'superseded', 'orphaned')) AS failures,
+		       COUNT(*) FILTER (WHERE excluded AND outcome NOT IN ('ok', 'pending_validation')) AS excluded_failures
+		FROM (
+		    SELECT model, outcome, error_class, `+excluded+` AS excluded
+		    FROM execution_step_outcomes
+		    WHERE recorded_at >= $1 AND model <> ''
+		      AND outcome NOT IN ('superseded', 'orphaned')
+		    ORDER BY recorded_at DESC
+		    LIMIT $2
+		) recent
+		GROUP BY model, COALESCE(error_class, '')
+	`, args...)
+	if err != nil {
+		return nil, fmt.Errorf("query step outcomes: %w", err)
+	}
+	defer func() { _ = outcomeRows.Close() }()
+
+	statByModel := map[string]*modelHealthStat{}
+	for outcomeRows.Next() {
+		var model, class string
+		var samples, failures, excludedFailures int
+		if err := outcomeRows.Scan(&model, &class, &samples, &failures, &excludedFailures); err != nil {
+			// Fail, don't drop: a missing (model, class) row would understate
+			// exactly the excluded counts this aggregation exists to report.
+			return nil, fmt.Errorf("scan step outcomes: %w", err)
+		}
+		st, ok := statByModel[model]
+		if !ok {
+			st = &modelHealthStat{model: model}
+			statByModel[model] = st
+		}
+		st.samples += samples
+		st.failures += failures
+		if excludedFailures > 0 {
+			if st.excludedByClass == nil {
+				st.excludedByClass = map[string]int{}
+			}
+			st.excludedByClass[class] += excludedFailures
+		}
+	}
+	if err := outcomeRows.Err(); err != nil {
+		return nil, fmt.Errorf("scan step outcomes: %w", err)
+	}
+
+	return statByModel, nil
 }
 
 // queryModelHealthStats is the default DB-backed source: per-model recent
@@ -384,36 +553,10 @@ func (h *DoctorHandlers) queryModelHealthStats(ctx context.Context) ([]modelHeal
 	// existed on 2026-09-04, and they are excluded from every other quality
 	// surface (quality_repository's canonStepFilter, workflow-stats' first-pass
 	// denominator). This check was the one place still counting them.
-	outcomeRows, err := h.db.QueryContext(ctx, `
-		SELECT model,
-		       COUNT(*) AS samples,
-		       COUNT(*) FILTER (WHERE outcome NOT IN ('ok', 'pending_validation', 'superseded', 'orphaned')) AS failures
-		FROM (
-		    SELECT model, outcome
-		    FROM execution_step_outcomes
-		    WHERE recorded_at >= $1 AND model <> ''
-		      AND outcome NOT IN ('superseded', 'orphaned')
-		    ORDER BY recorded_at DESC
-		    LIMIT $2
-		) recent
-		GROUP BY model
-	`, since, modelHealthRowCap)
+	// AND the classes that are not the model's — see queryModelHealthOutcomes.
+	statByModel, err := queryModelHealthOutcomes(ctx, h.db, since)
 	if err != nil {
-		return nil, fmt.Errorf("query step outcomes: %w", err)
-	}
-	defer func() { _ = outcomeRows.Close() }()
-
-	statByModel := map[string]*modelHealthStat{}
-	for outcomeRows.Next() {
-		var model string
-		var samples, failures int
-		if err := outcomeRows.Scan(&model, &samples, &failures); err != nil {
-			continue
-		}
-		statByModel[model] = &modelHealthStat{model: model, samples: samples, failures: failures}
-	}
-	if err := outcomeRows.Err(); err != nil {
-		return nil, fmt.Errorf("scan step outcomes: %w", err)
+		return nil, err
 	}
 
 	// Median completion tokens per model from the usage table.

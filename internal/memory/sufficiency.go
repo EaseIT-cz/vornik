@@ -59,11 +59,23 @@ func (s *Searcher) RecallSufficient(
 	// scores. Setting it here (not on the interactive callers) is what scopes
 	// the rerank latency to context assembly.
 	opts.Rerank = true
-	run := func(o SearchOptions) ([]SearchResult, error) {
+	// Each round reports what it DID through its own observation bag, because
+	// the absolute floor is meaningless on a round whose rerank degraded
+	// (memory-benchmark-harness design, correction 2026-09-26).
+	attempted := false
+	run := func(o SearchOptions) ([]SearchResult, bool, error) {
+		obs := &RetrievalObservation{}
 		// Same query string every round → embedding cache hit.
-		return s.RecallWithContext(ctx, projectID, query, o, reqCtx)
+		res, err := s.RecallWithContext(WithRetrievalObservation(ctx, obs), projectID, query, o, reqCtx)
+		attempted = attempted || obs.RerankAttempted
+		return res, obs.Reranked, err
 	}
-	return sufficiencyLoop(opts, s.sufficiency, s.rerankerActive(), run)
+	res, reranked, err := sufficiencyLoop(opts, s.sufficiency, s.rerankerActive(), run)
+	if outer := RetrievalObservationFromContext(ctx); outer != nil {
+		outer.RerankAttempted = outer.RerankAttempted || attempted
+		outer.Reranked = reranked
+	}
+	return res, err
 }
 
 // sufficiencyLoop is the pure, testable core. `run` executes one firewall-
@@ -76,36 +88,39 @@ func sufficiencyLoop(
 	base SearchOptions,
 	cfg SufficiencyConfig,
 	rerankerActive bool,
-	run func(SearchOptions) ([]SearchResult, error),
-) ([]SearchResult, error) {
-	first, err := run(base)
+	run func(SearchOptions) ([]SearchResult, bool, error),
+) ([]SearchResult, bool, error) {
+	first, firstReranked, err := run(base)
 	if err != nil {
-		return nil, err // round-1 error == the single-shot error
+		return nil, false, err // round-1 error == the single-shot error
 	}
-	if !cfg.Enabled || !rerankerActive || cfg.MaxRounds <= 1 {
-		return truncateResults(first, base.Limit), nil
+	// An unreranked round 1 (the rerank degraded) collapses to the single
+	// shot: its scores are RRF, not calibrated relevance, so the floor would
+	// only drive widening rounds that degrade again.
+	if !cfg.Enabled || !rerankerActive || cfg.MaxRounds <= 1 || !firstReranked {
+		return truncateResults(first, base.Limit), firstReranked, nil
 	}
 
-	best := first
+	best, bestReranked := first, firstReranked
 	bestCount := highRelCount(first, cfg.ScoreFloor)
 	if bestCount >= cfg.MinHighRel {
-		return truncateResults(first, base.Limit), nil
+		return truncateResults(first, base.Limit), firstReranked, nil
 	}
 
 	for round := 2; round <= cfg.MaxRounds; round++ {
-		r, rerr := run(widenOptions(base, round))
-		if rerr != nil {
-			break // return best so far — never a partial/merged set
+		r, reranked, rerr := run(widenOptions(base, round))
+		if rerr != nil || !reranked {
+			break // return best so far — never a partial/merged set, never an unreranked round
 		}
 		c := highRelCount(r, cfg.ScoreFloor)
 		if c >= cfg.MinHighRel {
-			return truncateResults(r, base.Limit), nil // first sufficient round
+			return truncateResults(r, base.Limit), reranked, nil // first sufficient round
 		}
 		if c > bestCount { // strictly greater only → round 1 wins ties
-			best, bestCount = r, c
+			best, bestCount, bestReranked = r, c, reranked
 		}
 	}
-	return truncateResults(best, base.Limit), nil
+	return truncateResults(best, base.Limit), bestReranked, nil
 }
 
 // widenOptions grows the candidate pool for round N (N>=2) without touching

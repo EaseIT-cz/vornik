@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
@@ -26,18 +25,38 @@ import (
 // the operator's diagnostic loop is "find the one thing that's
 // wrong," not "is the page healthy?"
 type runtimeReadinessProbe struct {
-	cfg *config.Config
+	cfg   *config.Config
+	tools toolDeclarer
 }
 
-func newRuntimeReadinessProbe(cfg *config.Config) ui.RuntimeReadinessSource {
-	return &runtimeReadinessProbe{cfg: cfg}
+// toolDeclarer answers whether the pinned agent image declares a sandbox
+// tool (*sandboxtool.Runner in production).
+type toolDeclarer interface {
+	Declared(ctx context.Context, tool string) (bool, string)
 }
 
-// VoiceStatus probes the configured STT + TTS provider's binary +
-// model + ffmpeg paths. Mirrors container_voice.go's boot probes
-// (probeBinary + probeModel) but renders to a slice of result rows
-// instead of WARN log lines.
-func (p *runtimeReadinessProbe) VoiceStatus(_ context.Context) ui.VoiceRuntimeStatus {
+// toolDeclarer is the runner as the readiness page takes it: nil, never a
+// typed nil, when there is no runner.
+func (c *Container) toolDeclarer() toolDeclarer {
+	if c.sandboxRunner == nil {
+		return nil
+	}
+	return c.sandboxRunner
+}
+
+// newRuntimeReadinessProbe builds the probe. tools is the sandbox runner;
+// nil renders every tool row as "no sandbox runner".
+func newRuntimeReadinessProbe(cfg *config.Config, tools toolDeclarer) ui.RuntimeReadinessSource {
+	return &runtimeReadinessProbe{cfg: cfg, tools: tools}
+}
+
+// VoiceStatus reports the configured STT + TTS providers' tools and
+// models. The tools run in the pinned agent image (process-spawn law
+// S5b), so their rows ask whether the image declares them — never the
+// host's $PATH; the models are host files the sandbox mounts, so their
+// rows stat them. Renders to a slice of result rows instead of WARN log
+// lines.
+func (p *runtimeReadinessProbe) VoiceStatus(ctx context.Context) ui.VoiceRuntimeStatus {
 	out := ui.VoiceRuntimeStatus{
 		STTProvider: strings.TrimSpace(p.cfg.Voice.STT.Provider),
 		TTSProvider: strings.TrimSpace(p.cfg.Voice.TTS.Provider),
@@ -46,18 +65,18 @@ func (p *runtimeReadinessProbe) VoiceStatus(_ context.Context) ui.VoiceRuntimeSt
 	if out.STTProvider != "" {
 		stt := p.cfg.Voice.STT
 		out.Probes = append(out.Probes,
-			probeBinaryRow("Whisper binary", stt.BinaryPath, []string{"whisper-cpp", "whisper-cli", "main"}),
+			sandboxToolRow(ctx, "whisper-cli (agent image)", "whisper-cli", p.tools),
 			probeModelRow("Whisper model", stt.Model),
-			probeBinaryRow("ffmpeg (STT)", stt.FFmpegPath, []string{"ffmpeg"}),
+			sandboxToolRow(ctx, "ffmpeg (agent image, STT)", "ffmpeg", p.tools),
 		)
 	}
 	// TTS block.
 	if out.TTSProvider != "" {
 		tts := p.cfg.Voice.TTS
 		out.Probes = append(out.Probes,
-			probeBinaryRow("Piper binary", tts.BinaryPath, []string{"piper"}),
+			sandboxToolRow(ctx, "piper (agent image)", "piper", p.tools),
 			probeModelRow("Piper voice model", tts.Voice),
-			probeBinaryRow("ffmpeg (TTS)", tts.FFmpegPath, []string{"ffmpeg"}),
+			sandboxToolRow(ctx, "ffmpeg (agent image, TTS)", "ffmpeg", p.tools),
 		)
 	}
 	return out
@@ -99,40 +118,17 @@ func (p *runtimeReadinessProbe) StorageStatus(_ context.Context) ui.StorageRunti
 	return out
 }
 
-// probeBinaryRow stats the configured binary path; falls back to
-// $PATH lookup against the supplied candidate list when the
-// configured path is empty. Returns a ui.VoiceProbeStatus filled
-// in for the table renderer.
-func probeBinaryRow(label, configured string, pathCandidates []string) ui.VoiceProbeStatus {
-	row := ui.VoiceProbeStatus{Label: label, Configured: true}
-	configured = strings.TrimSpace(configured)
-	if configured == "" {
-		// Fall back to PATH lookup. configured stays empty in the
-		// rendered table because the operator hasn't pinned it;
-		// the resolved Path field shows where it was found.
-		row.Configured = false
-		for _, name := range pathCandidates {
-			if p, err := exec.LookPath(name); err == nil {
-				row.Path = p
-				row.OK = true
-				return row
-			}
-		}
-		row.Error = fmt.Sprintf("not found on $PATH (tried %s)", strings.Join(pathCandidates, ", "))
+// sandboxToolRow reports whether the pinned agent image declares tool. A
+// nil declarer (no sandbox runner) renders red with the reason.
+func sandboxToolRow(ctx context.Context, label, tool string, tools toolDeclarer) ui.VoiceProbeStatus {
+	row := ui.VoiceProbeStatus{Label: label, Configured: true, Path: tool}
+	if tools == nil {
+		row.Error = "no sandbox runner: the voice tools run only in the agent image"
 		return row
 	}
-	row.Path = configured
-	info, err := os.Stat(configured)
-	switch {
-	case err == nil && info.Mode()&0o111 == 0:
-		row.Error = fmt.Sprintf("file exists but not executable (mode=%s)", info.Mode())
-	case err == nil:
-		row.OK = true
-	case os.IsNotExist(err):
-		row.Error = "file not found at configured path"
-	default:
-		row.Error = err.Error()
-	}
+	ok, detail := tools.Declared(ctx, tool)
+	row.OK = ok
+	row.Error = detail
 	return row
 }
 

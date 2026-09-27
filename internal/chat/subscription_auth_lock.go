@@ -1,9 +1,6 @@
 package chat
 
-import (
-	"os"
-	"syscall"
-)
+import "vornik.io/vornik/internal/filelock"
 
 // withAuthFileLock runs fn while holding an exclusive advisory lock on
 // a sibling "<path>.lock" file, serializing credential refreshes across
@@ -18,20 +15,12 @@ import (
 // single-use-refresh-token hardening) so the claude manager — which
 // shares ~/.claude/.credentials.json with the interactive CLI and any
 // sibling vornik process — uses the identical serialization
-// (2026-06-07 architecture review, subscription-auth finding 2).
+// (2026-06-07 architecture review, subscription-auth finding 2). The lock
+// itself now lives in internal/filelock, shared with the
+// config_template_drift acknowledgement store.
 func withAuthFileLock(path string, fn func() error) error {
 	if path == "" {
 		return fn()
 	}
-	lockPath := path + ".lock"
-	f, err := os.OpenFile(lockPath, os.O_CREATE|os.O_RDWR, 0o600)
-	if err != nil {
-		return fn()
-	}
-	defer func() { _ = f.Close() }()
-	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX); err != nil {
-		return fn()
-	}
-	defer func() { _ = syscall.Flock(int(f.Fd()), syscall.LOCK_UN) }()
-	return fn()
+	return filelock.WithExclusive(path+".lock", fn)
 }

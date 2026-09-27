@@ -193,11 +193,8 @@ func writePyString(b *strings.Builder, s string) {
 		default:
 			switch {
 			case r < 0x20 || (r >= 0x7f && r <= 0xffff):
-				if r < 0x20 || r >= 0x7f {
-					fmt.Fprintf(b, `\u%04x`, r)
-				} else {
-					b.WriteRune(r)
-				}
+				// Control characters, DEL and every non-ASCII BMP rune.
+				fmt.Fprintf(b, `\u%04x`, r)
 			case r > 0xffff:
 				r -= 0x10000
 				fmt.Fprintf(b, `\u%04x\u%04x`, 0xd800+(r>>10), 0xdc00+(r&0x3ff))

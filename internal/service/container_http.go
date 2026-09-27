@@ -43,6 +43,7 @@ import (
 	"vornik.io/vornik/internal/memory"
 	"vornik.io/vornik/internal/onboarding"
 	"vornik.io/vornik/internal/persistence"
+	"vornik.io/vornik/internal/persistence/postgres"
 	"vornik.io/vornik/internal/postmortem"
 	"vornik.io/vornik/internal/projectdoctor"
 	"vornik.io/vornik/internal/ratelimit"
@@ -357,6 +358,9 @@ func (c *Container) initHTTPServer() error {
 	}
 	if c.repos != nil && c.repos.LeaderLocks != nil {
 		apiOpts = append(apiOpts, api.WithLeaderLockRepository(c.repos.LeaderLocks))
+		// `vornikctl leader-lock release` (issue #60). Its counter is wired
+		// with the other metrics below, once the served registry exists.
+		apiOpts = append(apiOpts, api.WithLeaderLockRelease(c.repos.LeaderLocks, c.WiredWorkerIDs))
 	}
 	if c.repos != nil && c.repos.Instincts != nil {
 		// Continuous-learning instinct layer surfaces: list / show /
@@ -659,6 +663,10 @@ func (c *Container) initHTTPServer() error {
 		if c.mcpGateMetrics == nil {
 			c.mcpGateMetrics = api.NewMCPGateMetrics(reg)
 		}
+		// Leader-lock release outcomes (issue #60). Same pass-2-only rule.
+		if c.leaderLockReleaseMetrics == nil {
+			c.leaderLockReleaseMetrics = api.NewLeaderLockReleaseMetrics(reg)
+		}
 		// Tool-audit coverage census (vornik_tool_audit_rows_total). Same
 		// pass-2-only registry rule as the metrics above, and for this one the
 		// rule is load-bearing twice over: the holder is created back at
@@ -728,6 +736,7 @@ func (c *Container) initHTTPServer() error {
 		apiOpts = append(apiOpts, api.WithDryRunMetrics(c.dryRunMetrics))
 		apiOpts = append(apiOpts, api.WithAgentAPIWriteMetrics(c.agentWriteMetrics))
 		apiOpts = append(apiOpts, api.WithMCPGateMetrics(c.mcpGateMetrics))
+		apiOpts = append(apiOpts, api.WithLeaderLockReleaseMetrics(c.leaderLockReleaseMetrics))
 		apiOpts = append(apiOpts, api.WithTaintWriteMetrics(c.taintWriteMetrics))
 		apiOpts = append(apiOpts, api.WithChainMetrics(c.chainMetrics))
 	}
@@ -845,7 +854,7 @@ func (c *Container) initHTTPServer() error {
 	// endpoint. Built once; shared by the api + ui wirings below.
 	workflowApplier := newWorkflowApplier(
 		proposalsRepo, c.ConfigReloader,
-		resolveRegistryConfigDir(c.ConfigPath),
+		resolveRegistryConfigDir(c.ConfigPath), &c.Logger,
 	)
 	if workflowApplier != nil {
 		apiOpts = append(apiOpts, api.WithWorkflowApplier(&workflowApplierAdapter{a: workflowApplier}))
@@ -908,8 +917,9 @@ func (c *Container) initHTTPServer() error {
 			0, // minEvidence: fall back to DefaultMinEvidence.
 			c.Logger.With().Str("component", "workflowhealing-trial").Logger(),
 		).WithMetrics(c.healingObserverOnce()). // vornik_workflow_healing_trials_total / _trial_duration_seconds (EE only; nil-safe)
-							WithRegistrar(c.Registry).            // route candidate-genome replays at a transient workflow id
-							WithTriggers(c.repos.HealingTriggers) // empty evidence → fall back to the trigger's evidence set
+							WithRegistrar(c.Registry).             // route candidate-genome replays at a transient workflow id
+							WithTriggers(c.repos.HealingTriggers). // empty evidence → fall back to the trigger's evidence set
+							WithWorkflowLookup(c.Registry)         // the live file, to tell an INTRODUCED inert timeout from a pre-existing one
 		// Per-candidate gate thresholds sourced from the overrides repo
 		// (keyed by trigger class). No override row → DefaultGateThresholds;
 		// nil overrides repo → the runner's static gate.
@@ -1578,7 +1588,20 @@ func (c *Container) initHTTPServer() error {
 		if c.Registry != nil {
 			dh.SetConfigDir(c.Registry.GetConfigDir())
 		}
+		// config_template_drift explains hunks an applied remove/reorder
+		// deleted, from the proposal ledger (drift design, slice E).
+		if c.repos != nil && c.repos.WorkflowProposals != nil {
+			dh.SetWorkflowProposals(c.repos.WorkflowProposals)
+		}
 		dh.SetServerConfig(c.Config)
+		// model_route_coverage asks the live router, never a copy of its
+		// route table (model-route-coverage design, 2026-09-24; issue #61(b)).
+		// Requires initChat to have run: Container.Init calls initChat before
+		// initHTTPServer, and a nil router leaves the check SKIPPED, never
+		// wrong.
+		if c.chatRouter != nil {
+			dh.SetChatRouteResolver(c.chatRouter.Resolves)
+		}
 		// Configuration assistant (2026-09-13): the engine is built over the
 		// API server's own wiring; the doctor's secret snapshot feeds its
 		// fresh hygiene gate. Its root is the deployed configs tree — never
@@ -1620,7 +1643,17 @@ func (c *Container) initHTTPServer() error {
 		// a static list. initScheduler runs before initHTTPServer in
 		// NewContainer, so the snapshot is populated by this point.
 		dh.SetSystemHandlerNames(c.systemHandlerNames)
-		dh.SetGatewayURL(c.Config.Gateway.Address) // empty when unconfigured → SKIPPED
+		dh.SetGitConfigComposition(c.gitConfigComposition) // nil → SKIPPED
+		dh.SetGatewayURL(c.Config.Gateway.Address)         // empty when unconfigured → SKIPPED
+		// project_dependencies (dependency provisioning design §8.2): read
+		// per doctor run from the live registry, through the same planner
+		// the mount path uses. Unwired when no cache is configured, so the
+		// check says SKIPPED rather than a false OK.
+		if dir := c.Config.Runtime.DependencyCacheDir(); dir != "" && c.Registry != nil {
+			dh.SetDependencyInventory(func() []api.ProjectDependencyStatus {
+				return dependencyInventory(c.Registry, resolveProjectWorkspacePath(c.Config.Runtime.ProjectWorkspacePath), dir)
+			})
+		}
 		if c.repos != nil && c.repos.LeaderLocks != nil {
 			dh.SetLeaderLockRepository(c.repos.LeaderLocks)
 			// Passed as a closure, evaluated per doctor run: the elector set
@@ -1881,6 +1914,23 @@ func (c *Container) initHTTPServer() error {
 	// operators to type something their workspace does not answer.
 	if cmds := c.slackSlashCommands(); len(cmds) > 0 {
 		uiOpts = append(uiOpts, ui.WithSlackLinkCommands(cmds))
+	}
+	// The regulatory record (regulatory record design §3): both editions, never
+	// behind the edition gate. The statutory ledgers are Postgres-only today, so
+	// on SQLite they stay nil and the page says "not recorded on this backend".
+	// The RESOLVED driver is used — an empty database.driver means postgres.
+	if c.repos != nil {
+		var regRequests ui.RegulatoryRequests
+		var regIncidents ui.RegulatoryIncidents
+		if c.DB != nil && c.backend != nil && c.backend.Driver == "postgres" {
+			regRequests = postgres.NewDataSubjectRepository(c.DB)
+			regIncidents = postgres.NewIncidentRepository(c.DB)
+		}
+		var regDisclosures ui.RegulatoryDisclosures
+		if c.repos.ChannelDisclosure != nil {
+			regDisclosures = c.repos.ChannelDisclosure
+		}
+		uiOpts = append(uiOpts, ui.WithRegulatoryLedgers(regRequests, regIncidents, regDisclosures, c.repos.AdminAudit))
 	}
 	if acc := c.accountsService(); acc != nil {
 		uiOpts = append(uiOpts, ui.WithAccountsService(acc))
@@ -2499,7 +2549,7 @@ func (c *Container) adminUIOptions(deps adminUIDeps) []ui.ServerOption { //nolin
 		ui.WithAdminReadinessProvider(newAdminReadinessFromAPI(deps.apiServer)),
 		ui.WithAdminLeaseAuditSource(newAdminLeaseAudit(c.DB)),
 		ui.WithAdminStuckExecutionSource(newAdminStuckExecs(c.DB)),
-		ui.WithRuntimeReadinessSource(newRuntimeReadinessProbe(c.Config)),
+		ui.WithRuntimeReadinessSource(newRuntimeReadinessProbe(c.Config, c.toolDeclarer())),
 	)
 	// Cluster + worker observability — reads daemon_leader_locks
 	// straight via the repo. The repo's SQLite stub returns nil on

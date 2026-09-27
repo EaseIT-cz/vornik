@@ -16,6 +16,7 @@ import (
 	"vornik.io/vornik/internal/forge"
 	"vornik.io/vornik/internal/mcpauth"
 	"vornik.io/vornik/internal/projectdeps"
+	"vornik.io/vornik/internal/safepath"
 	"vornik.io/vornik/internal/taintlineage"
 	"vornik.io/vornik/internal/trading"
 )
@@ -1978,6 +1979,12 @@ func (p *Project) ResolveBacklogFilePath() string {
 	}
 	cleaned := filepath.Clean(v)
 	if cleaned == ".." || strings.HasPrefix(cleaned, ".."+string(filepath.Separator)) {
+		return ""
+	}
+	// Never into the repository's git directory: the deposit and the tick
+	// write this file, and git runs what .git/hooks holds on the host
+	// (process-spawn law design §3, git http-backend precondition, 2026-09-26).
+	if safepath.HasGitDirSegment(cleaned) {
 		return ""
 	}
 	return cleaned

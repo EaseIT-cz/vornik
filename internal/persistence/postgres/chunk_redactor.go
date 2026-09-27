@@ -80,9 +80,22 @@ func (r *ChunkRedactorRepository) RedactChunk(
 		return zero, errors.New("postgres: RedactChunk needs a chunk id and the expected content hash")
 	}
 
-	// The same hashing function the ingest path uses, so the row's hash stays
-	// consistent with what ChunkExistsByHash would compute for this text.
+	// The same hashing scheme the ingest path used for THIS row. A document
+	// chunk's hash is salted with its upload (memory rollback x supersession
+	// design, A.7), detected from the stored row itself: recomputing it plain
+	// would silently move the chunk back into project-wide dedup, and make the
+	// no-op and collision checks below look in the wrong namespace.
+	var artifactID sql.NullString
+	var currentContent string
+	if err := r.db.QueryRowContext(ctx,
+		`SELECT artifact_id, content FROM project_memory_chunks WHERE id = $1`, chunkID,
+	).Scan(&artifactID, &currentContent); err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return zero, fmt.Errorf("postgres: read chunk scheme for %s: %w", chunkID, err)
+	}
 	newHash := memory.ContentHash(newContent)
+	if memory.IsDocumentChunkHash(expectedHash, artifactID.String, currentContent) {
+		newHash = memory.DocumentChunkHash(artifactID.String, newContent)
+	}
 
 	// Idempotency (§9): re-running a redaction over already-redacted text is a
 	// no-op. Detected here rather than by writing identical values, because the

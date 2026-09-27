@@ -400,6 +400,12 @@ func (w *TuneWorker) proposeTimeoutBinding(ctx context.Context, st StepLatencySa
 	suggested := bindingSuggestion(st, current)
 	rc, rerr := w.Actionize.RenderStepTimeout(st.Workflow, st.Step, suggested)
 	if rerr != nil {
+		if errors.Is(rerr, ErrWallClockBinds) {
+			w.fileWallClockBinds(ctx, st.Project, st.Step, fmt.Sprintf(
+				"Step %q (workflow %s, role %s) is pinned against its %s timeout — %d of %d runs truncated, sustained for %d consecutive scans.",
+				st.Step, st.Workflow, st.Role, formatDurationShort(current), st.TimeoutCount, st.Count, w.breachesToPropose()), rerr)
+			return
+		}
 		if !errors.Is(rerr, ErrChangeNotUseful) {
 			w.Logger.Warn().Err(rerr).Str("project", st.Project).Str("step", st.Step).
 				Msg("tune: step-timeout raise render failed")
@@ -744,6 +750,16 @@ func (w *TuneWorker) tryActionableLatency(ctx context.Context, project string, s
 	suggested := time.Duration(math.Ceil(slow.P95Seconds*1.5)) * time.Second
 	rc, rerr := w.Actionize.RenderStepTimeout(slow.Workflow, slow.Step, suggested)
 	if rerr != nil {
+		if errors.Is(rerr, ErrWallClockBinds) {
+			// Filed here and reported as handled: the caller's generic fallback
+			// would say the timeout is "not the binding constraint", which is
+			// false — the wall clock is.
+			w.fileWallClockBinds(ctx, project, slow.Step, fmt.Sprintf(
+				"Execution p95 latency %.0fs (n=%d), sustained for %d consecutive scans. Slowest step is %q (workflow %s, role %s) at p95 %.0fs, at/over %.0f%% of its %s timeout.",
+				s.P95Seconds, s.Count, w.breachesToPropose(), slow.Step, slow.Workflow, slow.Role, slow.P95Seconds,
+				w.bindingThreshold()*100, formatDurationShort(current)), rerr)
+			return true
+		}
 		if !errors.Is(rerr, ErrChangeNotUseful) {
 			w.Logger.Warn().Err(rerr).Str("project", project).Str("step", slow.Step).Msg("tune: step-timeout render failed; filing informational")
 		}
@@ -1294,6 +1310,24 @@ func tuneTimeoutReclaimTitle(project, step string) string {
 // project-keyed latency proposal.
 func tuneTimeoutBindingTitle(project, step string) string {
 	return fmt.Sprintf("Tune: raise binding timeout for %s on %s", step, project)
+}
+
+// tuneWallClockBindsTitle is DISTINCT from tuneTimeoutBindingTitle on purpose
+// (actionable-proposals design §12, review 0d7a F2): sharing it would let this
+// note — open, or in its rejection cooldown — dedup-suppress the actionable
+// raise once an operator widens the cap.
+func tuneWallClockBindsTitle(project, step string) string {
+	return fmt.Sprintf("Tune: maxWallClock binds step %s on %s", step, project)
+}
+
+// fileWallClockBinds files the review-only note that a step is pinned against
+// a timeout the workflow's maxWallClock already caps (§12). The renderer never
+// raises maxWallClock; the remedy is named, not applied.
+func (w *TuneWorker) fileWallClockBinds(ctx context.Context, project, step, observed string, cause error) {
+	rationale := observed + " Raising the step's timeout would do nothing: " + cause.Error() + "."
+	ev, _ := json.Marshal(map[string]string{"signal": "wall_clock_binds", "step": step}) // JSON, not Go, quoting (review 7db4 minor)
+	evidence := string(ev)
+	w.propose(ctx, project, tuneWallClockBindsTitle(project, step), rationale, evidence, "tune-detector")
 }
 
 func instinctToolTimeoutTitle(k ProjectToolKey) string {

@@ -744,6 +744,15 @@ func recencyDisabledIsATrueRevert(t *testing.T, h RecencyHarness) {
 //
 // Named index, not "an index": a future planner picking a different one is
 // exactly the regression worth hearing about.
+// The make-up recencyPlanStaysIndexed gives the table: enough other-project
+// rows that the fixture's own project is a minority. Measured against a
+// freshly created database (recency design §7.0): 250 rows still fail, 500
+// pass, so 1,000 is at least 2x margin.
+const (
+	recencyPlanForeignRows     = 1000
+	recencyPlanForeignProjects = 20
+)
+
 func recencyPlanStaysIndexed(t *testing.T, h RecencyHarness) {
 	ctx := context.Background()
 	project := uniqueID("proj")
@@ -769,7 +778,28 @@ func recencyPlanStaysIndexed(t *testing.T, h RecencyHarness) {
 			Content: "an ordinary note", CreatedAt: now.AddDate(0, 0, -i),
 		})
 	}
+	// Other projects' rows, so this test's project is a minority of the table
+	// WHATEVER the shared database held before (recency design §7.0,
+	// 2026-09-24). Without them, on a near-empty database the fixture IS the
+	// table and a sequential scan is the planner's rational choice — the
+	// assertion then failed on test order, not on a regression (1 in 7 full
+	// lanes; 3 in 3 against a freshly created database).
+	for i := 0; i < recencyPlanForeignRows; i++ {
+		chunks = append(chunks, RecencyChunk{
+			ID:         fmt.Sprintf("%s-o%04d", project, i),
+			ProjectID:  fmt.Sprintf("%s-other-%02d", project, i%recencyPlanForeignProjects),
+			ArtifactID: fmt.Sprintf("%s-other-art-%04d", project, i), SourceName: fmt.Sprintf("o-%04d.md", i),
+			Content: "another project's note", CreatedAt: now.AddDate(0, 0, -(i % 400)),
+		})
+	}
 	seedAll(ctx, t, h, chunks)
+	// Everything seeded here goes, so it does not feed the next run's
+	// statistics either.
+	t.Cleanup(func() {
+		_, _ = h.DB.ExecContext(context.Background(),
+			"DELETE FROM project_memory_chunks WHERE project_id = "+h.Arg(1)+" OR project_id LIKE "+h.Arg(2),
+			project, project+"-other-%")
+	})
 	// Table-scoped on purpose: a bare ANALYZE is the whole database on
 	// Postgres, and this suite shares that database with every other
 	// integration test.

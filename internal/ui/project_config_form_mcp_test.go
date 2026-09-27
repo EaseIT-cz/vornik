@@ -564,7 +564,8 @@ mcp:
 
 // TestProjectConfigFormSave_MCPAddCustomServer — POST with new
 // custom-server fields → YAML gets a new server entry; registry
-// round-trips it.
+// round-trips it. The row names no program (no command), so the process-spawn
+// law's stdio guard lets it through: it chooses nothing to execute.
 func TestProjectConfigFormSave_MCPAddCustomServer(t *testing.T) {
 	root := writeFormFixture(t)
 	reg := registry.New()

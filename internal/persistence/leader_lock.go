@@ -35,6 +35,16 @@ func (l DaemonLeaderLock) IsHeldBy(holderID string, now time.Time) bool {
 	return l.HolderID == holderID && !l.ExpiresAt.Before(now)
 }
 
+// LeaderLockExpired is THE expiry definition for a leader-lock row: expired
+// once expires_at is strictly before now. The doctor's EXPIRED classification
+// calls it, and each driver's DeleteExpired states the same strict
+// `expires_at < now` in SQL, pinned against this by
+// repotest.RunLeaderLockBoundarySuite. The doctor used `<=` until 2026-09-25,
+// so at expires_at == now it said "release it" and the release refused.
+func LeaderLockExpired(expiresAt, now time.Time) bool {
+	return expiresAt.Before(now)
+}
+
 // DaemonLeaderLockRepository persists the per-worker leader
 // lock rows. Implementations:
 //   - Postgres: real multi-replica HA semantics via

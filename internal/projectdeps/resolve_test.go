@@ -1,7 +1,6 @@
 package projectdeps
 
 import (
-	"context"
 	"errors"
 	"os"
 	"path/filepath"
@@ -20,7 +19,7 @@ func projectWithLock(t *testing.T, content string) string {
 
 func TestPlanReportsAnUnmaterialisedKeyAsPendingNotBroken(t *testing.T) {
 	root := projectWithLock(t, goodLock)
-	r := NewResolver(NewStore(t.TempDir(), PostureConnected), "linux-amd64")
+	r := NewResolver(NewStore(t.TempDir()), "linux-amd64")
 
 	plans := r.Plan(root, []Entry{{Ecosystem: EcosystemPip, Lockfile: "requirements.lock"}})
 	if len(plans) != 1 {
@@ -45,7 +44,7 @@ func TestPlanReportsAnUnmaterialisedKeyAsPendingNotBroken(t *testing.T) {
 
 func TestPlanReportsAMaterialisedKey(t *testing.T) {
 	root := projectWithLock(t, goodLock)
-	store := NewStore(t.TempDir(), PostureConnected)
+	store := NewStore(t.TempDir())
 	r := NewResolver(store, "linux-amd64")
 
 	key := CacheKey(EcosystemPip, []byte(goodLock), "linux-amd64")
@@ -61,7 +60,7 @@ func TestPlanReportsAMaterialisedKey(t *testing.T) {
 }
 
 func TestPlanReportsADefectiveManifestAsAProblem(t *testing.T) {
-	store := NewStore(t.TempDir(), PostureConnected)
+	store := NewStore(t.TempDir())
 	r := NewResolver(store, "linux-amd64")
 
 	t.Run("lockfile the project does not have", func(t *testing.T) {
@@ -91,7 +90,7 @@ func TestPlanReportsADefectiveManifestAsAProblem(t *testing.T) {
 func TestPlanDoesNotEscapeTheProjectRoot(t *testing.T) {
 	// Validate() refuses a traversing lockfile at registry load, but Plan
 	// must not depend on having been called only on validated input.
-	store := NewStore(t.TempDir(), PostureConnected)
+	store := NewStore(t.TempDir())
 	r := NewResolver(store, "linux-amd64")
 	root := t.TempDir()
 
@@ -117,72 +116,77 @@ func TestPlanDoesNotEscapeTheProjectRoot(t *testing.T) {
 	}
 }
 
-func TestEnsureRefusesTheWholeSetOnOneProblem(t *testing.T) {
+func installedMarker(t *testing.T, store *Store, key string, images ...string) {
+	t.Helper()
+	body, err := EncodeMarker(MarkerMeta{Key: key, Images: images})
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeTree(t, store.Path(key), map[string]string{CompletionMarker: string(body)})
+}
+
+// Mounts is the DAEMON's read-only path (design §8.2): it never fetches, and a
+// tree is mounted only when installed AND installed for the step's image.
+func TestMountsRefusesTheWholeSetOnOneProblem(t *testing.T) {
 	// A partial mount hands the agent an environment that imports some of
 	// what the project declared, and the missing half surfaces as an
 	// ordinary ImportError that reads like the code's fault.
-	store := NewStore(t.TempDir(), PostureConnected)
+	store := NewStore(t.TempDir())
+	installedMarker(t, store, "k1", "img:1")
 	r := NewResolver(store, "linux-amd64")
-
-	mounts, err := r.Ensure(context.Background(), []Plan{
+	mounts, err := r.Mounts("proj", []Plan{
 		{Entry: Entry{Ecosystem: EcosystemPip}, Key: "k1", Materialised: true},
 		{Entry: Entry{Ecosystem: EcosystemPip}, Problem: errors.New("lockfile is not hash-pinned")},
-	})
-	if err == nil {
-		t.Fatal("Ensure() = nil error, want the problem surfaced")
-	}
-	if mounts != nil {
-		t.Fatalf("Ensure() = %v mounts, want none", mounts)
+	}, "img:1")
+	if err == nil || mounts != nil {
+		t.Fatalf("Mounts() = %v, %v; want the problem and no mounts", mounts, err)
 	}
 }
 
-func TestEnsureWithNoPlansInjectsNothing(t *testing.T) {
-	r := NewResolver(NewStore(t.TempDir(), PostureConnected), "linux-amd64")
-	mounts, err := r.Ensure(context.Background(), nil)
-	if err != nil {
-		t.Fatalf("Ensure(nil) = %v", err)
-	}
-	if mounts != nil {
-		t.Fatalf("Ensure(nil) = %v, want nil so no empty PYTHONPATH can be injected", mounts)
+func TestMountsWithNoPlansInjectsNothing(t *testing.T) {
+	mounts, err := NewResolver(NewStore(t.TempDir()), "linux-amd64").Mounts("proj", nil, "img:1")
+	if err != nil || mounts != nil {
+		t.Fatalf("Mounts(nil) = %v, %v; want nil so no empty PYTHONPATH can be injected", mounts, err)
 	}
 }
 
-func TestEnsureReturnsMountsForAlreadyMaterialisedKeys(t *testing.T) {
-	store := NewStore(t.TempDir(), PostureConnected)
-	r := NewResolver(store, "linux-amd64")
-	writeTree(t, store.Path("k1"), map[string]string{CompletionMarker: "key: k1\n"})
-
-	mounts, err := r.Ensure(context.Background(), []Plan{{Entry: Entry{Ecosystem: EcosystemPip}, Key: "k1", Materialised: true}})
-	if err != nil {
-		t.Fatalf("Ensure() = %v", err)
-	}
-	if len(mounts) != 1 || mounts[0].HostPath != store.Path("k1") {
-		t.Fatalf("Ensure() = %+v", mounts)
+func TestMountsServesATreeInstalledForThisImage(t *testing.T) {
+	store := NewStore(t.TempDir())
+	installedMarker(t, store, "k1", "img:1", "img:2")
+	mounts, err := NewResolver(store, "linux-amd64").Mounts("proj", []Plan{{Entry: Entry{Ecosystem: EcosystemPip}, Key: "k1", Materialised: true}}, "img:2")
+	if err != nil || len(mounts) != 1 || mounts[0].HostPath != store.Path("k1") {
+		t.Fatalf("Mounts() = %+v, %v", mounts, err)
 	}
 }
 
-func TestEnsureRefusesAnEcosystemSliceOneDoesNotMaterialise(t *testing.T) {
-	r := NewResolver(NewStore(t.TempDir(), PostureConnected), "linux-amd64")
-	_, err := r.Ensure(context.Background(), []Plan{{Entry: Entry{Ecosystem: EcosystemNPM}, Key: "k1"}})
+func TestMountsRefusesAnUninstalledTreeNamingTheVerb(t *testing.T) {
+	r := NewResolver(NewStore(t.TempDir()), "linux-amd64")
+	_, err := r.Mounts("proj", []Plan{{Entry: Entry{Ecosystem: EcosystemPip, Lockfile: "requirements.lock"}, Key: "k1"}}, "img:1")
+	if !errors.Is(err, ErrNotInstalled) || !strings.Contains(err.Error(), "vornikctl deps install proj") {
+		t.Fatalf("Mounts() = %v, want ErrNotInstalled naming the verb", err)
+	}
+}
+
+func TestMountsRefusesATreeInstalledForOtherImages(t *testing.T) {
+	store := NewStore(t.TempDir())
+	installedMarker(t, store, "k1", "img:old")
+	_, err := NewResolver(store, "linux-amd64").Mounts("proj", []Plan{{Entry: Entry{Ecosystem: EcosystemPip}, Key: "k1", Materialised: true}}, "img:new")
+	if !errors.Is(err, ErrInstalledForOtherImage) || !strings.Contains(err.Error(), "img:old") || !strings.Contains(err.Error(), "img:new") {
+		t.Fatalf("Mounts() = %v, want ErrInstalledForOtherImage naming both", err)
+	}
+}
+
+func TestMountsRefusesAnEcosystemSliceOneDoesNotMaterialise(t *testing.T) {
+	_, err := NewResolver(NewStore(t.TempDir()), "linux-amd64").Mounts("proj", []Plan{{Entry: Entry{Ecosystem: EcosystemNPM}, Key: "k1"}}, "img:1")
 	if err == nil || !strings.Contains(err.Error(), "slice 1 provisions pip only") {
-		t.Fatalf("Ensure() = %v, want a not-yet-materialised refusal", err)
-	}
-}
-
-func TestEnsureSurfacesTheAirGappedRefusal(t *testing.T) {
-	store := NewStore(t.TempDir(), PostureAirGapped)
-	r := NewResolver(store, "linux-amd64")
-
-	_, err := r.Ensure(context.Background(), []Plan{{Entry: Entry{Ecosystem: EcosystemPip}, Key: "k1", LockfilePath: "/proj/requirements.lock"}})
-	if !errors.Is(err, ErrAirGapped) {
-		t.Fatalf("Ensure() = %v, want ErrAirGapped", err)
+		t.Fatalf("Mounts() = %v, want a not-yet-materialisable refusal", err)
 	}
 }
 
 func TestNewResolverDefaultsToTheMaterialisingHostsPlatform(t *testing.T) {
 	// The materialising host is the one whose wheels the container
 	// imports, so its platform is the honest default.
-	r := NewResolver(NewStore(t.TempDir(), PostureConnected), "")
+	r := NewResolver(NewStore(t.TempDir()), "")
 	if r.platform != Platform() {
 		t.Fatalf("platform = %q, want %q", r.platform, Platform())
 	}

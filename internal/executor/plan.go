@@ -142,6 +142,11 @@ type agentInputOpts struct {
 	// to this step. Gates the tool-budget prompt block: telling an agent to call a
 	// tool it does not have wastes tokens and invites a hallucinated call.
 	ToolGrantAvailable bool
+	// RoleCannotOpenExtractions reports that this step's role cannot call
+	// document_get_outline and document_read_section (media routing LLD §4.2a).
+	// The attached-files block then stops telling it to use them. Negative so
+	// the zero value is today's behaviour.
+	RoleCannotOpenExtractions bool
 	// WorktreeGitReadOnly is true when the project is mounted as a git
 	// worktree, whose main .git the runtime bind-mounts read-only — so git
 	// writes from inside it cannot land. Gates the workspace-git block.
@@ -784,6 +789,25 @@ func buildAttachedFilesBlock(inputFiles []string, extractions []map[string]any) 
 // memory handles when it also has an extraction), and only genuinely unstaged
 // documents carry the memory-only guidance.
 func buildAttachedFilesBlockStaged(inputFiles []string, extractions []map[string]any, staged map[string]string) string {
+	return buildAttachedFilesBlockForRole(inputFiles, extractions, staged, true)
+}
+
+// boundedReadContract is the paging contract for document_read_section. ONE
+// constant for both blocks that can name the route (media routing LLD §4.2a):
+// staging an extracted file moves it from ATTACHED DOCUMENTS to ATTACHED FILES,
+// and a capable role named the route without the contract would pull a section
+// whole — being within the staging cap does not make any one section small.
+const boundedReadContract = "Read in bounded slices: document_read_section takes offset_chars + limit_chars, and returns next_offset with has_more — page with those rather than pulling a section whole."
+
+// unableRoleExtractedNotice replaces the ATTACHED DOCUMENTS preamble for a step
+// whose role cannot call the document tools (§4.2a). The preamble told such a
+// role to call tools it lacked: T-8f69, 17 refused document_get_outline calls.
+const unableRoleExtractedNotice = "Each file below was extracted into project memory and is too large to stage. This role cannot call the document tools, so it cannot open the file. memory_search returns matching passages from it, not the whole document. If what you need is not in those passages, say that you could not read the file; do not infer its contents."
+
+// buildAttachedFilesBlockForRole is buildAttachedFilesBlockStaged for one
+// step's role. canOpenExtractions says whether that role can call
+// document_get_outline and document_read_section (extractionAccess).
+func buildAttachedFilesBlockForRole(inputFiles []string, extractions []map[string]any, staged map[string]string, canOpenExtractions bool) string {
 	if len(inputFiles) == 0 {
 		return ""
 	}
@@ -825,59 +849,99 @@ func buildAttachedFilesBlockStaged(inputFiles []string, extractions []map[string
 	}
 
 	var sb strings.Builder
-	if len(extracted) > 0 {
-		sb.WriteString("## ATTACHED DOCUMENTS (already in project memory)\n")
+	writeExtractedSection(&sb, extracted, canOpenExtractions)
+	writeStagedSection(&sb, legacy, byBasename, staged, canOpenExtractions)
+	return strings.TrimRight(sb.String(), "\n")
+}
+
+// writeExtractedSection writes the ATTACHED DOCUMENTS block for extracted,
+// unstaged files. A role that cannot call the document tools gets the
+// plain-truth notice instead of the preamble telling it to use them (§4.2a).
+func writeExtractedSection(sb *strings.Builder, extracted []extractedAttachment, canOpenExtractions bool) {
+	if len(extracted) == 0 {
+		return
+	}
+	sb.WriteString("## ATTACHED DOCUMENTS (already in project memory)\n")
+	if canOpenExtractions {
 		sb.WriteString("These documents have been extracted into structured text + indexed into project memory at task-creation time. The raw binary is NOT staged in the container — access the content via mcp__vornik__document_get_outline / document_read_section / document_get_metadata (use the extracted_document_id below), or via memory_search for cross-document queries. Do NOT attempt to file_read these documents — there is no staged file path.\n")
 		// The WHY and the PAGING CONTRACT, moved here from assistant-swarm's
 		// rolePrelude (LLD 09 §13.5b). In the preset they were config-borne — paid
 		// on every step of every role whether or not anything was attached, and
 		// present on exactly one deployment. Here they are paid only when an
 		// unstaged extracted document actually exists, on every deployment.
-		sb.WriteString("Read in bounded slices: document_read_section takes offset_chars + limit_chars, and returns next_offset with has_more — page with those rather than pulling a section whole. A raw read of a 600 KB EPUB or a 30 MB PDF blows the context window of every model in the fallback chain, which is why there is no staged path to read.\n")
-		for _, e := range extracted {
-			sb.WriteString("- ")
-			if e.Title != "" {
-				sb.WriteString(e.Title)
-				if e.Author != "" {
-					sb.WriteString(" by ")
-					sb.WriteString(e.Author)
-				}
-			} else {
-				sb.WriteString(e.Filename)
+		sb.WriteString(boundedReadContract + " A raw read of a 600 KB EPUB or a 30 MB PDF blows the context window of every model in the fallback chain, which is why there is no staged path to read.\n")
+	} else {
+		sb.WriteString(unableRoleExtractedNotice + "\n")
+	}
+	for _, e := range extracted {
+		sb.WriteString("- ")
+		if e.Title != "" {
+			sb.WriteString(e.Title)
+			if e.Author != "" {
+				sb.WriteString(" by ")
+				sb.WriteString(e.Author)
 			}
-			sb.WriteString("\n")
-			fmt.Fprintf(&sb, "    filename: %s; %d sections, %d chunks; artifact_id=%s; extracted_document_id=%s\n",
-				e.Filename, e.SectionCount, e.ChunksIngested, e.ArtifactID, e.ExtractedDocumentID)
+		} else {
+			sb.WriteString(e.Filename)
+		}
+		sb.WriteString("\n")
+		fmt.Fprintf(sb, "    filename: %s; %d sections, %d chunks; artifact_id=%s; extracted_document_id=%s\n",
+			e.Filename, e.SectionCount, e.ChunksIngested, e.ArtifactID, e.ExtractedDocumentID)
+	}
+}
+
+// writeStagedSection writes the ATTACHED FILES block for staged files.
+func writeStagedSection(sb *strings.Builder, legacy []string, byBasename map[string]map[string]any, staged map[string]string, canOpenExtractions bool) {
+	if len(legacy) == 0 {
+		return
+	}
+	if sb.Len() > 0 {
+		sb.WriteString("\n")
+	}
+	sb.WriteString("## ATTACHED FILES\n")
+	sb.WriteString("The following files are staged inside the container. Read them at these paths regardless of any other path mentioned in the task prompt above:\n")
+	// A staged file that was ALSO extracted names the bounded route to a
+	// role that can call it, and the block then carries the paging
+	// contract once (§4.2a, round 3 F1).
+	routed := canOpenExtractions && stagedEntryRouted(legacy, byBasename)
+	if routed {
+		sb.WriteString(boundedReadContract + "\n")
+	}
+	for _, p := range legacy {
+		base := filepath.Base(p)
+		// Prefer the path the executor actually staged the file at; fall
+		// back to the conventional location when the caller passed no index
+		// (the pre-staging callers and the legacy wrapper).
+		path := staged[base]
+		if path == "" {
+			path = "/app/workspace/artifacts/in/" + base
+		}
+		sb.WriteString("- ")
+		sb.WriteString(path)
+		// When the same file was ALSO extracted into project memory, say so
+		// and hand over the handles — both routes are true, and the agent
+		// picks whichever its tool grants allow.
+		if ext, ok := byBasename[base]; ok {
+			fmt.Fprintf(sb, " (also in project memory: extracted_document_id=%s, artifact_id=%s",
+				stringField(ext, "extracted_document_id"), stringField(ext, "artifact_id"))
+			if routed && stringField(ext, "extracted_document_id") != "" {
+				sb.WriteString("; readable with document_read_section")
+			}
+			sb.WriteString(")")
+		}
+		sb.WriteString("\n")
+	}
+}
+
+// stagedEntryRouted reports whether any staged entry was also extracted, so a
+// role that can call document_read_section is named the route (§4.2a).
+func stagedEntryRouted(legacy []string, byBasename map[string]map[string]any) bool {
+	for _, p := range legacy {
+		if ext, ok := byBasename[filepath.Base(p)]; ok && stringField(ext, "extracted_document_id") != "" {
+			return true
 		}
 	}
-	if len(legacy) > 0 {
-		if sb.Len() > 0 {
-			sb.WriteString("\n")
-		}
-		sb.WriteString("## ATTACHED FILES\n")
-		sb.WriteString("The following files are staged inside the container. Read them at these paths regardless of any other path mentioned in the task prompt above:\n")
-		for _, p := range legacy {
-			base := filepath.Base(p)
-			// Prefer the path the executor actually staged the file at; fall
-			// back to the conventional location when the caller passed no index
-			// (the pre-staging callers and the legacy wrapper).
-			path := staged[base]
-			if path == "" {
-				path = "/app/workspace/artifacts/in/" + base
-			}
-			sb.WriteString("- ")
-			sb.WriteString(path)
-			// When the same file was ALSO extracted into project memory, say so
-			// and hand over the handles — both routes are true, and the agent
-			// picks whichever its tool grants allow.
-			if ext, ok := byBasename[base]; ok {
-				fmt.Fprintf(&sb, " (also in project memory: extracted_document_id=%s, artifact_id=%s)",
-					stringField(ext, "extracted_document_id"), stringField(ext, "artifact_id"))
-			}
-			sb.WriteString("\n")
-		}
-	}
-	return strings.TrimRight(sb.String(), "\n")
+	return false
 }
 
 // extractedAttachment is the per-input shape buildAttachedFilesBlock

@@ -3,11 +3,15 @@
 // §11 (Phase 3) — text-extractable PDFs only; OCR fallback for
 // scanned PDFs lands with Phase 5.
 //
-// Approach: shell out to poppler's pdftotext binary (a host
-// dependency, same as our reliance on jq/git inside containers).
-// Page boundaries are preserved via the form-feed (\x0c) bytes
-// pdftotext emits by default, which we split on to produce one
-// section per page.
+// Approach: poppler's pdftotext, run in the pinned agent image through
+// the sandbox runner (process-spawn law S5b,
+// https://docs.vornik.io §7): an
+// uploaded PDF is untrusted input, so it is parsed in a network-less,
+// memory-bounded one-shot, never on the daemon host. With no sandbox, or
+// an image that does not declare pdftotext, extraction reports "not
+// available in the agent image"; there is no host fallback. Page
+// boundaries are preserved via the form-feed (\x0c) bytes pdftotext emits
+// by default, which we split on to produce one section per page.
 //
 // Why not a pure-Go library: pdfcpu/ledongthuc/dslipak all fall
 // short on the long tail of PDFs in the wild — embedded fonts,
@@ -22,10 +26,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"os/exec"
+	"os"
+	"path/filepath"
 	"strings"
 
 	"vornik.io/vornik/internal/extractor"
+	"vornik.io/vornik/internal/sandboxtool"
 )
 
 const (
@@ -45,19 +51,22 @@ const (
 	// (split before ingestion). 5000 covers any real textbook
 	// or research compilation.
 	maxPDFPages = 5000
+
+	// inputName and outputName are fixed: the operator's file name
+	// never reaches the tool's argv.
+	inputName  = "document.pdf"
+	outputName = "text.txt"
 )
 
-// New returns a freshly-constructed PDF extractor.
-func New() *Extractor { return &Extractor{} }
-
-// NewWithBinary lets tests inject a different binary path / args
-// without touching $PATH. Production code uses New().
-func NewWithBinary(path string) *Extractor { return &Extractor{binaryPath: path} }
+// New returns a PDF extractor that runs pdftotext through sb. A nil sb
+// makes every extraction "not available".
+func New(sb sandboxtool.Sandbox) *Extractor { return &Extractor{sandbox: sb} }
 
 // Extractor implements extractor.Extractor for PDF files via the
-// poppler pdftotext binary. Stateless; safe across goroutines.
+// poppler pdftotext binary in the sandbox. Stateless; safe across
+// goroutines.
 type Extractor struct {
-	binaryPath string // empty = look up "pdftotext" on PATH
+	sandbox sandboxtool.Sandbox
 }
 
 // Name returns the canonical extractor name.
@@ -66,57 +75,49 @@ func (*Extractor) Name() string { return Name }
 // Version returns the extractor version string.
 func (*Extractor) Version() string { return Version }
 
-// Extract runs pdftotext on the source file and splits the output
-// on form-feed page boundaries to produce one section per page.
-// Returns a structured Result with one Section per page; the
-// outline mirrors sections 1:1 with PageStart populated for
-// citation-friendly retrieval.
+// Extract runs pdftotext on the source file in the sandbox and splits the
+// output on form-feed page boundaries to produce one section per page.
+// Returns a structured Result with one Section per page; the outline
+// mirrors sections 1:1 with PageStart populated for citation-friendly
+// retrieval.
 //
 // Errors:
-//   - pdftotext binary missing on PATH → fail fast so the operator
-//     sees a clear "install poppler-utils" message rather than a
-//     confusing exec error deep in the stack.
-//   - pdftotext exit code != 0 → wrap stderr verbatim.
+//   - no sandbox, or pdftotext not in the agent image → an error that
+//     errors.Is sandboxtool.ErrNotAvailable.
+//   - pdftotext failure, timeout or memory limit → the run's outcome,
+//     with poppler's own message ("Syntax Error: ...").
 //   - Zero text extracted (scanned PDF) → return ErrNoTextExtracted
 //     so callers can route to the OCR fallback when it lands.
 func (e *Extractor) Extract(ctx context.Context, src extractor.Source) (extractor.Result, error) {
 	if src.FilePath == "" {
 		return extractor.Result{}, fmt.Errorf("pdf: source file path is empty")
 	}
-
-	binary := e.binaryPath
-	if binary == "" {
-		binary = "pdftotext"
-	}
-	resolved, err := exec.LookPath(binary)
-	if err != nil {
-		return extractor.Result{}, fmt.Errorf("pdf: %s not found on PATH (install poppler-utils): %w", binary, err)
+	if e.sandbox == nil {
+		return extractor.Result{}, fmt.Errorf("pdf: pdftotext: %w (no sandbox runner)", sandboxtool.ErrNotAvailable)
 	}
 
 	// pdftotext flags:
 	//   -enc UTF-8     — force UTF-8 output (default is sometimes ASCII)
-	//   -nopgbrk       — REMOVED. We rely on form-feed (\x0c) chars
-	//                    between pages for section splits, so we must
-	//                    NOT pass this flag.
+	//   -nopgbrk       — NOT passed: we rely on the form-feed (\x0c)
+	//                    chars between pages for section splits.
 	//   -q             — suppress informational stderr noise; real
 	//                    errors still surface via non-zero exit.
-	//   <input> -      — read from path, write to stdout.
-	cmd := exec.CommandContext(ctx, resolved, "-enc", "UTF-8", "-q", src.FilePath, "-")
-	var stdout, stderr bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
-	if err := cmd.Run(); err != nil {
-		// Surface stderr verbatim so the daemon log shows
-		// poppler's diagnostic ("Syntax Error: invalid xref", etc.)
-		// rather than just "exit status 1".
-		msg := strings.TrimSpace(stderr.String())
-		if msg == "" {
-			msg = err.Error()
-		}
-		return extractor.Result{}, fmt.Errorf("pdf: pdftotext failed: %s", msg)
+	res, err := e.sandbox.Run(ctx, sandboxtool.Spec{
+		Feature:    sandboxtool.FeaturePDF,
+		Entrypoint: "pdftotext",
+		Args:       []string{"-enc", "UTF-8", "-q", "/in/" + inputName, "/out/" + outputName},
+		Inputs:     []sandboxtool.Input{{Name: inputName, Path: src.FilePath}},
+	})
+	if err != nil {
+		return extractor.Result{}, fmt.Errorf("pdf: pdftotext: %w", err)
+	}
+	defer res.Close()
+	text, err := os.ReadFile(filepath.Join(res.OutDir, outputName))
+	if err != nil {
+		return extractor.Result{}, fmt.Errorf("pdf: pdftotext wrote no text: %w", err)
 	}
 
-	pages := splitPages(stdout.Bytes())
+	pages := splitPages(text)
 	// pdftotext often emits a trailing \x0c after the last page,
 	// yielding an empty final entry from the split. Strip trailing
 	// all-whitespace pages so PageCount reflects real pages, not

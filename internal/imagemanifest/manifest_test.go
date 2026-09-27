@@ -87,7 +87,11 @@ func skipWalkDir(path, root, name string) bool {
 		return false
 	}
 	switch name {
-	case ".git", "node_modules", ".vornik-export", ".vornik-public-clone":
+	case ".git", "node_modules", ".vornik-export", ".vornik-public-clone",
+		// Git-ignored agent state: Claude Code places worktrees at
+		// .claude/worktrees/<id>, each a full checkout whose Containerfiles
+		// this walk would otherwise count as unmanifested (2026-09-26).
+		".claude":
 		return true
 	}
 	return false
@@ -102,6 +106,9 @@ func TestSkipWalkDir_NeverSkipsTheRoot(t *testing.T) {
 	}
 	if skipWalkDir("/x/.vornik-public-clone", "/x/.vornik-public-clone", ".vornik-public-clone") {
 		t.Fatal("same defect for the clone directory")
+	}
+	if !skipWalkDir("/x/.claude", "/x", ".claude") {
+		t.Fatal("agent worktrees under .claude/ are not part of the repository and must be skipped")
 	}
 	// Nested copies must still be skipped, or every image is counted twice.
 	if !skipWalkDir(root+"/.vornik-export", root, ".vornik-export") {

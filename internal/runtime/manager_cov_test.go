@@ -3,8 +3,12 @@ package runtime
 import (
 	"context"
 	"errors"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
+
+	"vornik.io/vornik/internal/spawn"
 )
 
 // managerCovFakeInspect returns a fake-podman script that emits a single
@@ -259,22 +263,22 @@ exit 1
 	}
 }
 
-func TestPullImage_SuccessAndFailure(t *testing.T) {
-	ok := &Manager{podmanPath: writeFakePodman(t, `#!/usr/bin/env bash
-if [[ "$1" == "pull" ]]; then exit 0; fi
-exit 1
-`)}
-	if err := ok.PullImage(context.Background(), "alpine:latest"); err != nil {
-		t.Fatalf("PullImage() error = %v", err)
+// A pull is outside the process-spawn law's closed set (design, "S1b-2, as
+// built"): PullImage had no caller and was deleted rather than given a kind,
+// and the manager's podman seam refuses the verb before any process starts.
+func TestPodman_RefusesAPullAndAnUnpinnedRun(t *testing.T) {
+	marker := filepath.Join(t.TempDir(), "ran")
+	m := &Manager{podmanPath: writeFakePodman(t, "#!/usr/bin/env bash\ntouch "+marker+"\n")}
+	if _, err := m.podman(context.Background(), "pull", "ghcr.io/grinco/vornik-agent:latest"); !errors.Is(err, spawn.ErrRefused) {
+		t.Fatalf("pull: want spawn.ErrRefused, got %v", err)
 	}
-
-	bad := &Manager{podmanPath: writeFakePodman(t, `#!/usr/bin/env bash
-echo "manifest unknown" >&2
-exit 1
-`)}
-	err := bad.PullImage(context.Background(), "nope:latest")
-	if err == nil || !strings.Contains(err.Error(), "podman pull failed") {
-		t.Fatalf("expected pull failure, got %v", err)
+	if _, err := m.StartContainer(context.Background(), &ContainerConfig{
+		Image: "docker.io/attacker/img:latest", ProjectID: "p", Role: "r", TaskID: "t",
+	}); !errors.Is(err, spawn.ErrRefused) {
+		t.Fatalf("unpinned image: want spawn.ErrRefused, got %v", err)
+	}
+	if _, err := os.Stat(marker); err == nil {
+		t.Fatal("podman ran for a refused argv")
 	}
 }
 

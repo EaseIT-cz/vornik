@@ -3,15 +3,15 @@ package dispatcher
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
-	"html"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 
 	"vornik.io/vornik/internal/outputguard"
 	"vornik.io/vornik/internal/safepath"
+	"vornik.io/vornik/internal/sandboxtool"
 )
 
 // renderDocumentArgs is the parsed shape of the render_document tool
@@ -24,8 +24,9 @@ type renderDocumentArgs struct {
 
 // renderDocument writes markdown content + converted forms (HTML / PDF)
 // and delivers each file directly to the chat via FileSender. No
-// LLM, no agent container, no task — the conversion is a one-shot
-// shell call to pandoc / weasyprint. The dispatcher's prompt
+// LLM and no task — the conversion is one pandoc run inside the pinned
+// agent image (sandboxRenderer on the sandboxtool runner; never on the
+// daemon host, process-spawn law S4/S5a). The dispatcher's prompt
 // instructs the LLM to prefer this tool over create_task whenever
 // the user supplies the content themselves and just wants the
 // formats rendered.
@@ -39,32 +40,34 @@ type renderDocumentArgs struct {
 //
 // Formats vocabulary:
 //   - "md"   — writes content verbatim to <name>.md and delivers it
-//   - "html" — pandoc <name>.md -o <name>.html
-//   - "pdf"  — pandoc <name>.md --pdf-engine=weasyprint -o <name>.pdf
+//   - "html" — pandoc --standalone, in the agent image
+//   - "pdf"  — pandoc --pdf-engine=weasyprint, in the agent image
+//   - "docx" — pandoc, in the agent image
 //
-// On exec failure (pandoc not installed, conversion crash) the tool
-// reports the failure plainly; the dispatcher's prompt forbids
-// inline-rendering as a fallback.
+// When the sandbox cannot render (no agent image configured, podman or the
+// image absent, a tool missing from it) the tool reports "rendering not
+// available in the agent image" plainly; there is no host or in-process
+// fallback, and the dispatcher's prompt forbids inline-rendering.
+//
 // renderRequestedFormats renders the requested non-md formats from the source
 // markdown, returning the produced file paths (md source first, always) and a
 // per-format failure list. Extracted from renderDocument to keep it under the
 // complexity ratchet.
-func renderRequestedFormats(ctx context.Context, tmpDir, mdPath, safeName, content string, wantSet map[string]bool) (produced, failures []string) {
+func renderRequestedFormats(ctx context.Context, r sandboxRenderer, tmpDir, mdPath, safeName string, wantSet map[string]bool) (produced, failures []string) {
 	produced = []string{mdPath} // md is the source — always available.
-	if wantSet["html"] {
-		htmlPath := filepath.Join(tmpDir, safeName+".html")
-		if err := renderMarkdownToHTML(ctx, mdPath, htmlPath, safeName, content); err != nil {
-			failures = append(failures, fmt.Sprintf("html: %v", err))
-		} else {
-			produced = append(produced, htmlPath)
+	for _, format := range []string{"html", "pdf", "docx"} {
+		if !wantSet[format] {
+			continue
 		}
-	}
-	if wantSet["pdf"] {
-		pdfPath := filepath.Join(tmpDir, safeName+".pdf")
-		if err := renderMarkdownToPDF(ctx, mdPath, pdfPath); err != nil {
-			failures = append(failures, fmt.Sprintf("pdf: %v", err))
+		outPath, err := renderPath(tmpDir, safeName, format)
+		if err != nil {
+			failures = append(failures, fmt.Sprintf("%s: %v", format, err))
+			continue
+		}
+		if err := r.render(ctx, mdPath, outPath, safeName, format); err != nil {
+			failures = append(failures, fmt.Sprintf("%s: %v", format, err))
 		} else {
-			produced = append(produced, pdfPath)
+			produced = append(produced, outPath)
 		}
 	}
 	return produced, failures
@@ -125,7 +128,10 @@ func (te *ToolExecutor) renderDocument(ctx context.Context, argsJSON string, fs 
 	}
 	defer func() { _ = os.RemoveAll(tmpDir) }()
 
-	mdPath := filepath.Join(tmpDir, safeName+".md")
+	mdPath, err := renderPath(tmpDir, safeName, "md")
+	if err != nil {
+		return ToolResult{Content: fmt.Sprintf("render_document: %v", err)}
+	}
 	if err := os.WriteFile(mdPath, []byte(args.Content), 0o600); err != nil {
 		return ToolResult{Content: fmt.Sprintf("render_document: write md: %v", err)}
 	}
@@ -135,7 +141,7 @@ func (te *ToolExecutor) renderDocument(ctx context.Context, argsJSON string, fs 
 		wantSet[strings.ToLower(strings.TrimSpace(f))] = true
 	}
 
-	produced, failures := renderRequestedFormats(ctx, tmpDir, mdPath, safeName, args.Content, wantSet)
+	produced, failures := renderRequestedFormats(ctx, te.sandbox(), tmpDir, mdPath, safeName, wantSet)
 
 	// If the caller asked for md ONLY, produced is [mdPath] and we
 	// deliver it. If md wasn't requested but other formats were, drop
@@ -165,126 +171,95 @@ func (te *ToolExecutor) renderDocument(ctx context.Context, argsJSON string, fs 
 	}
 }
 
-// renderMarkdownToHTML produces a minimal stand-alone HTML file.
-// Three-tier fallback:
-//  1. Host pandoc (fastest, no container overhead)
-//  2. Pandoc inside the vornik-agent container image (works on
-//     immutable hosts where pandoc isn't installed system-wide)
-//  3. In-process <pre>-wrapped HTML (last-resort, unstyled)
-func renderMarkdownToHTML(ctx context.Context, mdPath, htmlPath, title, rawMarkdown string) error {
-	if _, err := exec.LookPath("pandoc"); err == nil {
-		cmd := exec.CommandContext(ctx, "pandoc",
-			mdPath,
-			"--standalone",
-			"--metadata", "title="+title,
-			"-o", htmlPath,
-		)
-		if out, err := cmd.CombinedOutput(); err != nil {
-			return fmt.Errorf("pandoc: %v (%s)", err, strings.TrimSpace(string(out)))
-		}
-		return nil
+// renderPath is where <name>.<ext> is written. name is already a cleaned file
+// name; this is the second guard, so a name that ever slipped past the first
+// still cannot write outside tmpDir (S4 review F5).
+func renderPath(tmpDir, name, ext string) (string, error) {
+	if _, err := safepath.CleanPathComponent(name); err != nil {
+		return "", fmt.Errorf("output name: %w", err)
 	}
-	if err := runPandocViaPodman(ctx, mdPath, htmlPath,
-		[]string{"--standalone", "--metadata", "title=" + title},
-	); err == nil {
-		return nil
-	} else if !isPodmanUnavailable(err) {
-		// Container ran but pandoc failed inside — surface that
-		// failure verbatim so operators see the real reason.
-		return err
-	}
-	// Last resort: wrap the markdown in a <pre> block. Readable but
-	// unstyled. Operators who care about quality should keep
-	// vornik-agent:latest pulled or install pandoc on the host.
-	body := fmt.Sprintf(`<!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="utf-8">
-<title>%s</title>
-<style>body{font-family:sans-serif;max-width:48em;margin:2em auto;padding:0 1em;line-height:1.5} pre{white-space:pre-wrap;font-family:inherit}</style>
-</head>
-<body><pre>%s</pre></body>
-</html>
-`, html.EscapeString(title), html.EscapeString(rawMarkdown))
-	return os.WriteFile(htmlPath, []byte(body), 0o600)
-}
-
-// renderMarkdownToPDF produces a PDF via pandoc with weasyprint as
-// the engine. Tries host pandoc first, then the vornik-agent
-// container as fallback. PDF has NO in-process fallback — if
-// neither path works the caller surfaces the failure plainly.
-func renderMarkdownToPDF(ctx context.Context, mdPath, pdfPath string) error {
-	hostPandoc, _ := exec.LookPath("pandoc")
-	hostWeasy, _ := exec.LookPath("weasyprint")
-	if hostPandoc != "" && hostWeasy != "" {
-		cmd := exec.CommandContext(ctx, "pandoc",
-			mdPath,
-			"--pdf-engine=weasyprint",
-			"-o", pdfPath,
-		)
-		if out, err := cmd.CombinedOutput(); err != nil {
-			return fmt.Errorf("pandoc/weasyprint: %v (%s)", err, strings.TrimSpace(string(out)))
-		}
-		return nil
-	}
-	if err := runPandocViaPodman(ctx, mdPath, pdfPath,
-		[]string{"--pdf-engine=weasyprint"},
-	); err == nil {
-		return nil
-	} else {
-		return err
-	}
-}
-
-// runPandocViaPodman invokes pandoc inside the vornik-agent
-// container image which ships both pandoc and weasyprint. Bind-
-// mounts the tmpdir (where both input and output live), runs as
-// the daemon's UID via --userns=keep-id so the output file is
-// readable on the host without chown gymnastics.
-//
-// Returns errPodmanUnavailable when podman isn't on PATH or the
-// vornik-agent image isn't present (callers can fall back). Any
-// other error means the container ran but pandoc itself failed.
-func runPandocViaPodman(ctx context.Context, inPath, outPath string, extraArgs []string) error {
-	if _, err := exec.LookPath("podman"); err != nil {
-		return errPodmanUnavailable
-	}
-	tmpDir := filepath.Dir(inPath)
-	inName := filepath.Base(inPath)
-	outName := filepath.Base(outPath)
-	args := []string{
-		"run", "--rm",
-		"--userns=keep-id",
-		"-v", tmpDir + ":/work:Z",
-		"-w", "/work",
-		"--entrypoint", "pandoc",
-		"vornik-agent:latest",
-		inName,
-	}
-	args = append(args, extraArgs...)
-	args = append(args, "-o", outName)
-	cmd := exec.CommandContext(ctx, "podman", args...)
-	out, err := cmd.CombinedOutput()
+	p, err := safepath.JoinUnder(tmpDir, name+"."+ext)
 	if err != nil {
-		// Distinguish "image missing" (still podman-unavailable for
-		// our purposes — caller can choose a different fallback)
-		// from real pandoc errors.
-		body := strings.TrimSpace(string(out))
-		if strings.Contains(body, "Error: short-name") ||
-			strings.Contains(body, "no such image") ||
-			strings.Contains(body, "image not known") {
-			return errPodmanUnavailable
-		}
-		return fmt.Errorf("pandoc-in-podman: %v (%s)", err, body)
+		return "", fmt.Errorf("output name: %w", err)
 	}
-	return nil
+	return p, nil
 }
 
-// errPodmanUnavailable signals "couldn't even invoke pandoc here";
-// callers fall back to the next strategy. isPodmanUnavailable lets
-// the call sites distinguish from real conversion errors.
-var errPodmanUnavailable = fmt.Errorf("podman path unavailable for pandoc fallback")
+// errRenderUnavailable reports that the sandbox cannot render at all: no agent
+// image configured, podman absent, the image not present locally, or pandoc or
+// weasyprint missing from it. There is deliberately no fallback, neither host
+// pandoc nor an in-process approximation (process-spawn law, S4).
+var errRenderUnavailable = errors.New("rendering not available in the agent image")
 
-func isPodmanUnavailable(err error) bool {
-	return err == errPodmanUnavailable
+// sandboxRenderer renders markdown with pandoc INSIDE the pinned agent image —
+// the allowlisted PodmanAgent kind of the process-spawn law
+// (https://docs.vornik.io, S4). The run
+// itself — limits, hardening, timeout, concurrency, scratch and metrics — is
+// the sandboxtool runner's, feature "render" (S5a). What this adds:
+//   - one fixed entrypoint, pandoc, with an argv built only from the format;
+//   - argv carries no user text: the content is /in/input.md and the title is
+//     /in/meta.yaml, both written by the daemon, and the output name is fixed.
+type sandboxRenderer struct {
+	runner *sandboxtool.Runner
+}
+
+func (te *ToolExecutor) sandbox() sandboxRenderer {
+	return sandboxRenderer{runner: te.sandboxRunner}
+}
+
+// pandocArgs is the whole of pandoc's argv for one format.
+func pandocArgs(format string) []string {
+	args := []string{"/in/input.md", "--metadata-file=/in/meta.yaml"}
+	switch format {
+	case "pdf":
+		args = append(args, "--pdf-engine=weasyprint")
+	case "html":
+		args = append(args, "--standalone")
+	}
+	// docx needs neither: pandoc writes a complete Word document natively.
+	return append(args, "-o", "/out/output."+format)
+}
+
+// render converts mdPath into outPath; format is "html", "pdf" or "docx".
+func (r sandboxRenderer) render(ctx context.Context, mdPath, outPath, title, format string) error {
+	if r.runner == nil {
+		return fmt.Errorf("%w (no sandbox runner configured)", errRenderUnavailable)
+	}
+	content, err := os.ReadFile(mdPath) //nolint:gosec // the daemon's own temp file
+	if err != nil {
+		return err
+	}
+	// JSON is valid YAML, and json.Marshal escapes the title safely.
+	meta, err := json.Marshal(map[string]string{"title": title})
+	if err != nil {
+		return err
+	}
+	res, err := r.runner.Run(ctx, sandboxtool.Spec{
+		Feature:    sandboxtool.FeatureRender,
+		Entrypoint: "pandoc",
+		Args:       pandocArgs(format),
+		Inputs:     []sandboxtool.Input{{Name: "input.md", Data: content}, {Name: "meta.yaml", Data: meta}},
+	})
+	if err != nil {
+		var re *sandboxtool.RunError
+		if errors.As(err, &re) && errors.Is(err, sandboxtool.ErrNotAvailable) {
+			return fmt.Errorf("%w (%s)", errRenderUnavailable, re.Detail)
+		}
+		return err // timed out, out of memory, input too large, or pandoc's own error
+	}
+	defer res.Close()
+	return moveFile(filepath.Join(res.OutDir, "output."+format), outPath)
+}
+
+// moveFile renames, falling back to a copy: the runner's scratch root and the
+// render temp dir may be on different filesystems.
+func moveFile(src, dst string) error {
+	if err := os.Rename(src, dst); err == nil {
+		return nil
+	}
+	b, err := os.ReadFile(src) //nolint:gosec // the runner's own scratch
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(dst, b, 0o600)
 }

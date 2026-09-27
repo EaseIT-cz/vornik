@@ -258,7 +258,7 @@ func TestMintAndRevoke_StartContainerFailureStillRevokes(t *testing.T) {
 		}
 		// startContainer errors — revoke must still fire via the defer above.
 		_, _ = e.startContainer(context.Background(), task, "exec-1", role.Runtime.Image, role.Name,
-			t.TempDir(), t.TempDir(), t.TempDir(), role, "", 5*time.Second, extraEnv)
+			t.TempDir(), t.TempDir(), t.TempDir(), role, "", 5*time.Second, extraEnv, nil)
 	}
 
 	runStep()

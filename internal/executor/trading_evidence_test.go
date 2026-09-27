@@ -30,7 +30,7 @@ func (r *evidenceAuditRepo) List(_ context.Context, f persistence.ToolAuditFilte
 func evidenceProject() *registry.Project {
 	p := tradingFloorProject("trade")
 	p.Trading.Scorecard.Enabled = false
-	p.Trading.EntryPolicy = trading.EntryPolicy{Enabled: true, AllowedSymbols: []string{"MSFT"}, MaxRiskUSD: 50, MaxEntriesPerTick: 1}
+	p.Trading.EntryPolicy = trading.EntryPolicy{Enabled: true, AllowedSymbols: []string{"MSFT"}, NoPositionAdditions: true, MaxRiskUSD: 50, MaxEntriesPerTick: 1}
 	p.Trading.AnalysisEvidence = trading.AnalysisEvidence{Enabled: true, MinDailyBars: 205, BenchmarkSymbols: []string{"SPY"}}
 	return p
 }

@@ -41,19 +41,25 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync/atomic"
 	"time"
 
 	"github.com/rs/zerolog"
+
+	"vornik.io/vornik/internal/spawn"
 )
 
 // CodexCLIClient is a Provider that shells out to the `codex` CLI.
 // Construction is cheap; each request spawns a fresh subprocess.
 type CodexCLIClient struct {
-	binary    string
+	// binary is the configured program's path, for logs and errors.
+	binary string
+	// program is what runs: a spawn.ConfiguredCommand the config loader's
+	// hand-off minted (process-spawn law, reading 3; S1b-2); "codex" when
+	// chat.cli_binary is empty. A client without one refuses to run.
+	program   spawn.ConfiguredCommand
 	model     string
 	timeout   time.Duration
 	extraArgs []string
@@ -71,9 +77,12 @@ type CodexCLIClient struct {
 // CodexOption configures a CodexCLIClient.
 type CodexOption func(*CodexCLIClient)
 
-// WithCodexBinary overrides the codex binary path.
-func WithCodexBinary(path string) CodexOption {
-	return func(c *CodexCLIClient) { c.binary = path }
+// WithCodexBinary sets the codex program, minted from config.
+func WithCodexBinary(program spawn.ConfiguredCommand) CodexOption {
+	return func(c *CodexCLIClient) {
+		c.program = program
+		c.binary = program.Path()
+	}
 }
 
 // WithCodexTimeout caps each subprocess invocation.
@@ -297,8 +306,9 @@ func (c *CodexCLIClient) runCodex(ctx context.Context, id uint64, req *codexRequ
 	// Prompt is passed via stdin (not argv) to dodge size limits and
 	// shell-quoting issues on long multi-turn conversations.
 
-	cmd := exec.CommandContext(ctx, c.binary, args...)
-	cmd.Stdin = strings.NewReader(req.prompt)
+	// The process-spawn law's ConfiguredProgram kind: the program is the
+	// configured one; the per-call args, stdin and env are ours.
+	opts := spawn.ConfiguredOptions{Args: args}
 	// Prepend the codex binary's directory to PATH so its node
 	// dependency is discoverable. systemd user services inherit a
 	// minimal PATH that doesn't include /home/linuxbrew/.linuxbrew/bin
@@ -324,11 +334,16 @@ func (c *CodexCLIClient) runCodex(ctx context.Context, id uint64, req *codexRequ
 		if !rewrote {
 			env = append(env, "PATH="+binDir)
 		}
-		cmd.Env = env
+		opts.Env = env
 	}
+	cmd, err := spawn.ConfiguredProgram(ctx, c.program, opts)
+	if err != nil {
+		return nil, fmt.Errorf("codex: %w", err)
+	}
+	cmd.SetStdin(strings.NewReader(req.prompt))
 
 	stderr := &bytes.Buffer{}
-	cmd.Stderr = stderr
+	cmd.SetStderr(stderr)
 
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {

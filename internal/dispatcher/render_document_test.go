@@ -132,56 +132,6 @@ func TestRenderDocument_SendDocumentErrorReportedInline(t *testing.T) {
 	}
 }
 
-// TestRenderDocument_HtmlFallbackToInProcess: no pandoc / podman →
-// the third-tier in-process renderer kicks in, producing a wrapped
-// <pre> HTML file. Verified via the SendDocument capture.
-func TestRenderDocument_HtmlFallbackToInProcess(t *testing.T) {
-	t.Setenv("PATH", "") // forces LookPath for pandoc + podman to fail
-	te := &ToolExecutor{}
-	fs := &stubSenderRecording{}
-	res := te.renderDocument(context.Background(),
-		`{"content":"# Hi","name":"cv","formats":["html"]}`, fs)
-	if !strings.Contains(res.Content, "Delivered: cv.html") {
-		t.Errorf("expected delivery; got %q", res.Content)
-	}
-}
-
-// TestRenderDocument_PDFFailsWithoutToolchain: no pandoc / podman →
-// renderMarkdownToPDF returns errPodmanUnavailable; the dispatcher
-// reports the failure to the caller.
-func TestRenderDocument_PDFFailsWithoutToolchain(t *testing.T) {
-	t.Setenv("PATH", "")
-	te := &ToolExecutor{}
-	fs := &stubSenderRecording{}
-	res := te.renderDocument(context.Background(),
-		`{"content":"# Hi","name":"cv","formats":["pdf"]}`, fs)
-	// every requested format failed → that branch surfaces inside
-	// the result.
-	if !strings.Contains(res.Content, "every requested format failed") {
-		t.Errorf("expected every-failed branch; got %q", res.Content)
-	}
-}
-
-func TestIsPodmanUnavailable(t *testing.T) {
-	if !isPodmanUnavailable(errPodmanUnavailable) {
-		t.Fatal("recognised sentinel must return true")
-	}
-	if isPodmanUnavailable(nil) {
-		t.Fatal("nil should not be classified as unavailable")
-	}
-	if isPodmanUnavailable(errSendFailed) {
-		t.Fatal("unrelated error should not be classified as unavailable")
-	}
-}
-
-func TestRunPandocViaPodman_PodmanMissing(t *testing.T) {
-	t.Setenv("PATH", "")
-	err := runPandocViaPodman(context.Background(), "/tmp/foo.md", "/tmp/foo.html", nil)
-	if !isPodmanUnavailable(err) {
-		t.Fatalf("expected errPodmanUnavailable; got %v", err)
-	}
-}
-
 // errSendFailed is a sentinel for the stub sender.
 var errSendFailed = stubSenderError("send failed")
 

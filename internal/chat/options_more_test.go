@@ -23,6 +23,8 @@ import (
 
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/rs/zerolog"
+
+	"vornik.io/vornik/internal/spawn"
 )
 
 // -- Client option sweep --------------------------------------------------
@@ -92,7 +94,7 @@ func TestClient_SetMetrics_NilAndReal(t *testing.T) {
 func TestCodexCLIClient_OptionSweep(t *testing.T) {
 	catalog := []ModelInfo{{ID: "gpt-5.4"}, {ID: "gpt-5.4-mini"}}
 	c := NewCodexCLIClient("gpt-5.4-mini",
-		WithCodexBinary("/usr/local/bin/codex"),
+		WithCodexBinary(spawn.NewConfiguredCommand("/usr/local/bin/codex")),
 		WithCodexTimeout(33*time.Second),
 		WithCodexLogger(zerolog.Nop()),
 		WithCodexModelCatalog(catalog),

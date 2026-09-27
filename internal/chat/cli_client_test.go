@@ -8,6 +8,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"vornik.io/vornik/internal/spawn"
 )
 
 func TestParseToolCall(t *testing.T) {
@@ -249,7 +251,7 @@ func TestCLIClient_ImplementsProvider(t *testing.T) {
 
 func TestCLIClient_WithModel(t *testing.T) {
 	orig := NewCLIClient("claude-sonnet-4-6",
-		WithCLIBinary("/usr/bin/claude"),
+		WithCLIBinary(spawn.NewConfiguredCommand("/usr/bin/claude")),
 	)
 	clone := orig.WithModel("claude-opus-4-6")
 

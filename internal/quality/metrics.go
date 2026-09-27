@@ -23,6 +23,10 @@ type ExecutionScoreMetrics struct {
 	WriteFailuresTotal   prometheus.Counter
 	PublicationPending   prometheus.Gauge
 	OldestPendingSeconds prometheus.Gauge
+	// RejectedTotal counts executions whose row the durable layer refused as
+	// structurally invalid (persistence.ErrInvalidQualityScore). Each is
+	// counted once per boot and then no longer retried.
+	RejectedTotal prometheus.Counter
 }
 
 // NewExecutionScoreMetrics registers bounded publication-health metrics.
@@ -43,6 +47,10 @@ func NewExecutionScoreMetrics(reg prometheus.Registerer) *ExecutionScoreMetrics 
 		OldestPendingSeconds: promauto.With(reg).NewGauge(prometheus.GaugeOpts{
 			Name: "vornik_execution_quality_score_oldest_pending_seconds",
 			Help: "Age in seconds of the oldest terminal execution still awaiting a quality score row.",
+		}),
+		RejectedTotal: promauto.With(reg).NewCounter(prometheus.CounterOpts{
+			Name: "vornik_execution_quality_score_rejected_total",
+			Help: "Executions whose quality score row was refused as structurally invalid. Each is counted once per boot and then skipped, while fewer than 1024 are held; past that, each attempt counts.",
 		}),
 	}
 }

@@ -60,8 +60,8 @@ func TestMetrics_SupersededExcludedFromSuccessRate(t *testing.T) {
 	registry := prometheus.NewRegistry()
 	m := NewMetrics(registry)
 
-	m.RecordFinalOutcome("coder", "claude", "ok")
-	m.RecordFinalOutcome("coder", "claude", "superseded")
+	m.RecordFinalOutcome("coder", "claude", "ok", "")
+	m.RecordFinalOutcome("coder", "claude", "superseded", "")
 
 	rate := testutil.ToFloat64(m.ModelSuccessRate.WithLabelValues("coder", "claude"))
 	assert.Equal(t, 1.0, rate, "superseded must be excluded from the success-rate denominator")
@@ -312,15 +312,15 @@ models:
 	assert.Equal(t, 0.0, testutil.ToFloat64(m.LLMTokensTotal.WithLabelValues("proj", "coder", "typod-model-xyz", "prompt")))
 
 	// Outcome counters bucket on the same catalog.
-	m.RecordFinalOutcome("coder", "another-unknown", "ok")
+	m.RecordFinalOutcome("coder", "another-unknown", "ok", "")
 	assert.Equal(t, 1.0, testutil.ToFloat64(m.AgentStepOutcomesTotal.WithLabelValues("coder", "other", "ok")))
 	assert.Equal(t, 0.0, testutil.ToFloat64(m.AgentStepOutcomesTotal.WithLabelValues("coder", "another-unknown", "ok")))
-	m.RecordAgentStepOutcome("coder", "yet-another-unknown", "failed")
+	m.RecordFinalOutcome("coder", "yet-another-unknown", "failed", "")
 	assert.Equal(t, 1.0, testutil.ToFloat64(m.AgentStepOutcomesTotal.WithLabelValues("coder", "other", "failed")))
 
 	// With no catalog the raw model passes through (current behavior).
 	m2 := NewMetrics(prometheus.NewRegistry())
-	m2.RecordFinalOutcome("coder", "raw-model", "ok")
+	m2.RecordFinalOutcome("coder", "raw-model", "ok", "")
 	assert.Equal(t, 1.0, testutil.ToFloat64(m2.AgentStepOutcomesTotal.WithLabelValues("coder", "raw-model", "ok")))
 }
 
@@ -330,16 +330,16 @@ func TestMetrics_ModelSuccessRateGauge(t *testing.T) {
 
 	// 7 ok, 2 failed, 1 timeout → denominator 10; success rate 0.7.
 	// RecordFinalOutcome is the source of truth for the quality gauges
-	// (legacy RecordAgentStepOutcome no longer updates the mirror, so
-	// it can't drive derived gauges anymore).
+	// (the legacy RecordAgentStepOutcome, which never updated the mirror,
+	// was removed 2026-09-24).
 	for i := 0; i < 7; i++ {
-		m.RecordFinalOutcome("coder", "qwen", "ok")
+		m.RecordFinalOutcome("coder", "qwen", "ok", "")
 	}
-	m.RecordFinalOutcome("coder", "qwen", "failed")
-	m.RecordFinalOutcome("coder", "qwen", "failed")
-	m.RecordFinalOutcome("coder", "qwen", "timeout")
+	m.RecordFinalOutcome("coder", "qwen", "failed", "")
+	m.RecordFinalOutcome("coder", "qwen", "failed", "")
+	m.RecordFinalOutcome("coder", "qwen", "timeout", "")
 	// Cancel doesn't count toward denominator — should not change the rate.
-	m.RecordFinalOutcome("coder", "qwen", "cancelled")
+	m.RecordFinalOutcome("coder", "qwen", "cancelled", "")
 
 	got := testutil.ToFloat64(m.ModelSuccessRate.WithLabelValues("coder", "qwen"))
 	assert.InDelta(t, 0.7, got, 1e-9)
@@ -351,13 +351,13 @@ func TestMetrics_ModelQualityGauges(t *testing.T) {
 
 	// Mixed outcome run: 5 ok, 2 parse_error, 1 refused, 2 degenerate_loop → denom 10.
 	for i := 0; i < 5; i++ {
-		m.RecordFinalOutcome("coder", "flaky-model", "ok")
+		m.RecordFinalOutcome("coder", "flaky-model", "ok", "")
 	}
-	m.RecordFinalOutcome("coder", "flaky-model", "parse_error")
-	m.RecordFinalOutcome("coder", "flaky-model", "parse_error")
-	m.RecordFinalOutcome("coder", "flaky-model", "refused")
-	m.RecordFinalOutcome("coder", "flaky-model", "degenerate_loop")
-	m.RecordFinalOutcome("coder", "flaky-model", "degenerate_loop")
+	m.RecordFinalOutcome("coder", "flaky-model", "parse_error", "")
+	m.RecordFinalOutcome("coder", "flaky-model", "parse_error", "")
+	m.RecordFinalOutcome("coder", "flaky-model", "refused", "")
+	m.RecordFinalOutcome("coder", "flaky-model", "degenerate_loop", "")
+	m.RecordFinalOutcome("coder", "flaky-model", "degenerate_loop", "")
 
 	assert.InDelta(t, 0.5, testutil.ToFloat64(m.ModelSuccessRate.WithLabelValues("coder", "flaky-model")), 1e-9)
 	assert.InDelta(t, 0.2, testutil.ToFloat64(m.ModelParseFailureRate.WithLabelValues("coder", "flaky-model")), 1e-9)
@@ -385,11 +385,11 @@ models:
 	for i := 0; i < 5; i++ {
 		m.RecordLLMUsage("p1", "coder", "model-x", 1_000_000, 500_000, 1, table)
 	}
-	m.RecordFinalOutcome("coder", "model-x", "ok")
-	m.RecordFinalOutcome("coder", "model-x", "ok")
-	m.RecordFinalOutcome("coder", "model-x", "ok")
-	m.RecordFinalOutcome("coder", "model-x", "failed")
-	m.RecordFinalOutcome("coder", "model-x", "failed")
+	m.RecordFinalOutcome("coder", "model-x", "ok", "")
+	m.RecordFinalOutcome("coder", "model-x", "ok", "")
+	m.RecordFinalOutcome("coder", "model-x", "ok", "")
+	m.RecordFinalOutcome("coder", "model-x", "failed", "")
+	m.RecordFinalOutcome("coder", "model-x", "failed", "")
 
 	cost := testutil.ToFloat64(m.ModelEffectiveCostUSD.WithLabelValues("coder", "model-x"))
 	assert.InDelta(t, 1.00, cost, 1e-9)
@@ -406,12 +406,12 @@ func TestMetrics_ModelGauges_NoDataLeavesSeriesUnset(t *testing.T) {
 
 	// Only cancelled → denominator is 0 → success rate undefined → gauge not set.
 	// Only failed → denominator non-zero → rate 0 → gauge IS set.
-	m.RecordFinalOutcome("coder", "only-cancelled", "cancelled")
-	m.RecordFinalOutcome("coder", "only-cancelled", "cancelled")
+	m.RecordFinalOutcome("coder", "only-cancelled", "cancelled", "")
+	m.RecordFinalOutcome("coder", "only-cancelled", "cancelled", "")
 	// Accessing a never-set gauge lazily creates a zero-valued series in the
 	// Prometheus client, so `ToFloat64` returns 0 either way. Instead record
 	// a real value on a different label set and assert it doesn't leak.
-	m.RecordFinalOutcome("coder", "has-runs", "failed")
+	m.RecordFinalOutcome("coder", "has-runs", "failed", "")
 	rate := testutil.ToFloat64(m.ModelSuccessRate.WithLabelValues("coder", "has-runs"))
 	assert.InDelta(t, 0.0, rate, 1e-9) // failed-only → 0/1 = 0.0
 
@@ -431,26 +431,6 @@ models:
 	// 0 (lazy-materialised), but that's a display-only concern; the test
 	// above at least confirms we didn't set it to a divide-by-zero NaN.
 	_ = testutil.ToFloat64(m.ModelEffectiveCostUSD.WithLabelValues("coder", "model-y"))
-}
-
-func TestMetrics_RecordAgentStepOutcome(t *testing.T) {
-	registry := prometheus.NewRegistry()
-	m := NewMetrics(registry)
-
-	m.RecordAgentStepOutcome("coder", "qwen-coder", "success")
-	m.RecordAgentStepOutcome("coder", "qwen-coder", "success")
-	m.RecordAgentStepOutcome("coder", "qwen-coder", "failed")
-	m.RecordAgentStepOutcome("reviewer", "glm-flash", "success")
-	m.RecordAgentStepOutcome("reviewer", "glm-flash", "timeout")
-
-	assert.Equal(t, 2.0, testutil.ToFloat64(m.AgentStepOutcomesTotal.WithLabelValues("coder", "qwen-coder", "success")))
-	assert.Equal(t, 1.0, testutil.ToFloat64(m.AgentStepOutcomesTotal.WithLabelValues("coder", "qwen-coder", "failed")))
-	assert.Equal(t, 1.0, testutil.ToFloat64(m.AgentStepOutcomesTotal.WithLabelValues("reviewer", "glm-flash", "timeout")))
-
-	// Empty role or model → no record.
-	m.RecordAgentStepOutcome("", "qwen-coder", "success")
-	m.RecordAgentStepOutcome("coder", "", "success")
-	assert.Equal(t, 2.0, testutil.ToFloat64(m.AgentStepOutcomesTotal.WithLabelValues("coder", "qwen-coder", "success")))
 }
 
 func TestMetrics_RecordLLMUsageWithCache_TokenCounters(t *testing.T) {

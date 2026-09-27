@@ -167,3 +167,61 @@ func TestCompanionMCP_ToolAudit_DoesNotIncludeArgumentContent(t *testing.T) {
 	assert.Contains(t, e.ToolInput, "args_bytes=",
 		"tool_input records the byte length")
 }
+
+// Companion tool-audit design (2026-09-24): the writer left ID and CreatedAt
+// unset for four months, so the first row took id ” and every later call was
+// absorbed by ON CONFLICT (id), and Postgres dated the survivor year 1 for the
+// retention sweep to delete. Production held zero companion rows. The shape
+// test above never looked at either field.
+func TestCompanionMCP_ToolAudit_EveryCallGetsItsOwnIDAndTime(t *testing.T) {
+	srv, keyRepo, _ := newCompanionMCPServer(t)
+	raw, _ := seedCompanionKey(t, keyRepo, "alpha", []string{"wf-alpha"})
+	audit := &fakeToolAuditRepo{}
+	srv.toolAuditRepo = audit
+	before := time.Now().UTC().Add(-time.Second)
+	for i := 0; i < 2; i++ {
+		req := withCompanionBearer(mcpRequest(t, "tools/call", map[string]any{"name": "catalog", "arguments": map[string]any{}}), raw)
+		srv.CompanionMCPHandler(httptest.NewRecorder(), req)
+	}
+	entries := audit.snapshot()
+	require.Len(t, entries, 2)
+	assert.NotEmpty(t, entries[0].ID)
+	assert.NotEmpty(t, entries[1].ID)
+	assert.NotEqual(t, entries[0].ID, entries[1].ID, "two calls must be two rows, not one collision")
+	for _, e := range entries {
+		assert.False(t, e.CreatedAt.Before(before), "CreatedAt must be the call time, got %v", e.CreatedAt)
+	}
+}
+
+// Companion tool-audit design F1: the outcome COLUMN is set, not only folded
+// into tool_output — the audit views classify rows on it.
+func TestCompanionMCP_ToolAudit_SetsTheOutcomeColumn(t *testing.T) {
+	srv, keyRepo, _ := newCompanionMCPServer(t)
+	raw, _ := seedCompanionKey(t, keyRepo, "alpha", []string{"wf-alpha"})
+	audit := &fakeToolAuditRepo{}
+	srv.toolAuditRepo = audit
+	req := withCompanionBearer(mcpRequest(t, "tools/call", map[string]any{"name": "catalog", "arguments": map[string]any{}}), raw)
+	srv.CompanionMCPHandler(httptest.NewRecorder(), req)
+	entries := audit.snapshot()
+	require.Len(t, entries, 1)
+	assert.Equal(t, "ok", entries[0].Outcome)
+	assert.Contains(t, entries[0].ToolOutput, "status=ok")
+}
+
+// Implementation review F1: a tool error sets the column to "error", and the
+// status text in tool_output agrees with it.
+func TestCompanionMCP_ToolAudit_SetsTheOutcomeColumnOnError(t *testing.T) {
+	srv, keyRepo, taskRepo := newCompanionMCPServer(t)
+	raw, _ := seedCompanionKey(t, keyRepo, "alpha", nil)
+	taskRepo.GetFunc = func(_ context.Context, _ string) (*persistence.Task, error) {
+		return &persistence.Task{ID: "task-other", ProjectID: "beta", Status: persistence.TaskStatusRunning}, nil
+	}
+	audit := &fakeToolAuditRepo{}
+	srv.toolAuditRepo = audit
+	req := withCompanionBearer(mcpRequest(t, "tools/call", map[string]any{"name": "status", "arguments": map[string]any{"task_id": "task-other"}}), raw)
+	srv.CompanionMCPHandler(httptest.NewRecorder(), req)
+	entries := audit.snapshot()
+	require.Len(t, entries, 1)
+	assert.Equal(t, "error", entries[0].Outcome)
+	assert.Contains(t, entries[0].ToolOutput, "status=error")
+}

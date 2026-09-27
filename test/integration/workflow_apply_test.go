@@ -3,14 +3,16 @@
 
 package integration_test
 
-// End-to-end test for the memetic apply path (Slice 4) against a
-// real postgres + a sandbox git repo + a temp config tree. Pins
+// End-to-end test for the memetic apply path (Slice 4) against a real
+// postgres + a temp config tree whose source side is a git repository. Pins
 // the contract that:
-//   - Approve → Apply transitions the row to status=applied
-//     and records the actual git commit SHA.
-//   - The new WORKFLOW.md lands on disk in the deployed tree.
-//   - The git repo in the source tree shows a new commit
-//     mentioning the proposal_id.
+//   - Approve → Apply transitions the row to status=applied, stamps
+//     applied_commit with workflowapply.NoGitCommit, and round-trips the
+//     deployed file it replaced in pre_apply_yaml (what rollback restores).
+//   - The new WORKFLOW.md lands on disk in both trees.
+//   - The source repository gains NO commit. Process-spawn law S3
+//     (https://docs.vornik.io) —
+//     incident: apply ran `git commit` on the daemon host, on request.
 //   - Apply on a pending (not-yet-approved) row errors with the
 //     "must be approved" sentinel.
 
@@ -61,49 +63,25 @@ func (w *itWorkflowWriter) Write(_ context.Context, workflowID string, body []by
 	return filepath.Join(w.sourceDir, "workflows", workflowID+".md"), nil
 }
 
-// itGitCommitter mirrors the service-package gitCommitter inline.
-type itGitCommitter struct {
-	repoDir string
-}
-
-func (g *itGitCommitter) Commit(ctx context.Context, path, message, _, _ string) (string, error) {
-	add := exec.CommandContext(ctx, "git", "-C", g.repoDir, "add", "--", path)
-	if out, err := add.CombinedOutput(); err != nil {
-		return "", fmt.Errorf("git add: %w: %s", err, out)
-	}
-	commit := exec.CommandContext(ctx, "git", "-C", g.repoDir,
-		"commit", "-m", message, "--only", "--", path)
-	commit.Env = append(os.Environ(),
-		"GIT_AUTHOR_NAME=vornik-it",
-		"GIT_AUTHOR_EMAIL=it@vornik.test",
-		"GIT_COMMITTER_NAME=vornik-it",
-		"GIT_COMMITTER_EMAIL=it@vornik.test",
-	)
-	if out, err := commit.CombinedOutput(); err != nil {
-		return "", fmt.Errorf("git commit: %w: %s", err, out)
-	}
-	sha := exec.CommandContext(ctx, "git", "-C", g.repoDir, "rev-parse", "HEAD")
-	out, err := sha.Output()
-	if err != nil {
-		return "", err
-	}
-	return strings.TrimSpace(string(out)), nil
+// ReadDeployed makes the writer a workflowapply.DeployedReader, as the
+// service-package writer is; without it the applier refuses to apply.
+func (w *itWorkflowWriter) ReadDeployed(_ context.Context, workflowID string) ([]byte, error) {
+	return os.ReadFile(filepath.Join(w.deployedDir, "workflows", workflowID+".md"))
 }
 
 type stubReloader struct{ called int }
 
 func (s *stubReloader) Reload() error { s.called++; return nil }
 
-// setupSourceRepoForWorkflow creates a temporary git repo with a
-// baseline <workflowID>.md committed so subsequent `git commit
-// --only` calls have something to compare against. The workflow ID
-// is parametric so every test run uses a unique one and can't trip
-// the partial unique index on workflow_proposals (one pending
-// proposal per workflow). Regression: 2026-06-04 — both applier
-// e2e tests used the fixed ID "research"; a killed run left a
-// stale pending row behind (t.Cleanup never fired) and every
-// later Insert failed with "workflow already has a pending
-// proposal" until the row was deleted by hand.
+// setupSourceRepoForWorkflow creates a source tree that is a git repository
+// with a baseline <workflowID>.md committed, and a deployed tree holding the
+// same baseline. The workflow ID is parametric so every test run uses a
+// unique one and can't trip the partial unique index on workflow_proposals
+// (one pending proposal per workflow). Regression: 2026-06-04 — both applier
+// e2e tests used the fixed ID "research"; a killed run left a stale pending
+// row behind (t.Cleanup never fired) and every later Insert failed with
+// "workflow already has a pending proposal" until the row was deleted by
+// hand.
 func setupSourceRepoForWorkflow(t *testing.T, workflowID string) (sourceDir string, deployedDir string) {
 	t.Helper()
 	sourceDir = t.TempDir()
@@ -112,9 +90,10 @@ func setupSourceRepoForWorkflow(t *testing.T, workflowID string) (sourceDir stri
 	mustRun(t, "git", "-C", sourceDir, "init", "-q")
 	mustRun(t, "git", "-C", sourceDir, "config", "user.email", "it@vornik.test")
 	mustRun(t, "git", "-C", sourceDir, "config", "user.name", "vornik-it")
-	require.NoError(t, os.MkdirAll(filepath.Join(sourceDir, "workflows"), 0o755))
-	baseline := filepath.Join(sourceDir, "workflows", workflowID+".md")
-	require.NoError(t, os.WriteFile(baseline, []byte("baseline"), 0o644))
+	for _, dir := range []string{sourceDir, deployedDir} {
+		require.NoError(t, os.MkdirAll(filepath.Join(dir, "workflows"), 0o755))
+		require.NoError(t, os.WriteFile(filepath.Join(dir, "workflows", workflowID+".md"), []byte("baseline"), 0o644))
+	}
 	mustRun(t, "git", "-C", sourceDir, "add", "workflows/"+workflowID+".md")
 	mustRun(t, "git", "-C", sourceDir, "commit", "-q", "-m", "baseline")
 	return sourceDir, deployedDir
@@ -126,6 +105,13 @@ func mustRun(t *testing.T, name string, args ...string) {
 	if out, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("%s %v: %v: %s", name, args, err, out)
 	}
+}
+
+func headOf(t *testing.T, repoDir string) string {
+	t.Helper()
+	out, err := exec.Command("git", "-C", repoDir, "rev-parse", "HEAD").Output()
+	require.NoError(t, err)
+	return strings.TrimSpace(string(out))
 }
 
 func TestApplier_E2E_HappyPath(t *testing.T) {
@@ -141,8 +127,8 @@ func TestApplier_E2E_HappyPath(t *testing.T) {
 	})
 
 	sourceDir, deployedDir := setupSourceRepoForWorkflow(t, workflowID)
+	headBefore := headOf(t, sourceDir)
 	writer := &itWorkflowWriter{sourceDir: sourceDir, deployedDir: deployedDir}
-	git := &itGitCommitter{repoDir: sourceDir}
 	reloader := &stubReloader{}
 
 	ctx := context.Background()
@@ -161,40 +147,32 @@ func TestApplier_E2E_HappyPath(t *testing.T) {
 	require.NoError(t, repo.Decide(ctx, proposalID,
 		persistence.WorkflowProposalStatusApproved, "operator-x", "looks good"))
 
-	applier := workflowapply.NewApplier(repo, writer, git, reloader,
-		workflowapply.ApplierConfig{AuthorName: "vornik-architect", AuthorEmail: "architect@vornik.test"})
+	applier := workflowapply.NewApplier(repo, writer, reloader, workflowapply.ApplierConfig{})
 
 	got, err := applier.Apply(ctx, proposalID, "operator-x")
 	require.NoError(t, err)
 	require.Equal(t, persistence.WorkflowProposalStatusApplied, got.Status)
-	require.NotEmpty(t, got.AppliedCommit)
-	require.NotEqual(t, "no-git", got.AppliedCommit)
+	require.Equal(t, workflowapply.NoGitCommit, got.AppliedCommit)
 
 	// Files exist in both trees.
-	deployedPath := filepath.Join(deployedDir, "workflows", workflowID+".md")
-	sourcePath := filepath.Join(sourceDir, "workflows", workflowID+".md")
-	for _, p := range []string{deployedPath, sourcePath} {
+	for _, p := range []string{
+		filepath.Join(deployedDir, "workflows", workflowID+".md"),
+		filepath.Join(sourceDir, "workflows", workflowID+".md"),
+	} {
 		body, err := os.ReadFile(p)
 		require.NoError(t, err, "read %s", p)
 		require.Contains(t, string(body), "version: 2.0.0",
 			"file %s should contain the new YAML", p)
 	}
 
-	// Git log shows our commit subject + body.
-	out, err := exec.Command("git", "-C", sourceDir, "log", "-1", "--pretty=%B").Output()
-	require.NoError(t, err)
-	logBody := string(out)
-	require.Contains(t, logBody, "workflow("+workflowID+"):", "commit subject")
-	require.Contains(t, logBody, proposalID, "commit body should reference proposal_id")
-	require.Contains(t, logBody, "operator-x", "commit body should reference operator")
-
+	require.Equal(t, headBefore, headOf(t, sourceDir), "apply must not commit to the source tree")
 	require.Equal(t, 1, reloader.called, "reloader should fire exactly once")
 
-	// Round-trip via repo to confirm the row's applied_commit
-	// matches what HEAD points at.
+	// Round-trip via repo: the replaced file is what rollback will restore.
 	roundTrip, err := repo.Get(ctx, proposalID)
 	require.NoError(t, err)
-	require.Equal(t, got.AppliedCommit, roundTrip.AppliedCommit)
+	require.Equal(t, workflowapply.NoGitCommit, roundTrip.AppliedCommit)
+	require.Equal(t, "baseline", roundTrip.PreApplyYAML)
 	require.NotNil(t, roundTrip.AppliedAt)
 }
 
@@ -226,15 +204,14 @@ func TestApplier_E2E_NotApproved(t *testing.T) {
 
 	sourceDir, deployedDir := setupSourceRepoForWorkflow(t, workflowID)
 	writer := &itWorkflowWriter{sourceDir: sourceDir, deployedDir: deployedDir}
-	applier := workflowapply.NewApplier(repo, writer, &itGitCommitter{repoDir: sourceDir}, &stubReloader{},
-		workflowapply.ApplierConfig{})
+	applier := workflowapply.NewApplier(repo, writer, &stubReloader{}, workflowapply.ApplierConfig{})
 
 	_, err := applier.Apply(ctx, proposalID, "operator-x")
 	require.Error(t, err)
 	require.ErrorIs(t, err, workflowapply.ErrProposalNotApproved)
 
-	// File must NOT have been written.
-	if _, err := os.Stat(filepath.Join(deployedDir, "workflows", workflowID+".md")); err == nil {
-		t.Error("apply on pending should not write the file")
-	}
+	// File must NOT have been overwritten.
+	body, err := os.ReadFile(filepath.Join(deployedDir, "workflows", workflowID+".md"))
+	require.NoError(t, err)
+	require.Equal(t, "baseline", string(body), "apply on pending should not write the file")
 }

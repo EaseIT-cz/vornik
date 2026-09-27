@@ -333,12 +333,14 @@ func TestW3HealReplayErroredWhenRegistrarRejects(t *testing.T) {
 	}
 }
 
-// TestW3HealReplayErroredWhenCandidateDiffUnparseable: a replay whose
-// stored candidate diff cannot be parsed back into a genome cannot route
-// at the candidate — errored, not a false pass. (Static catches this as
-// FAILED; replay must catch it as ERRORED since it's a wiring failure,
-// not a candidate-quality verdict.)
-func TestW3HealReplayErroredWhenCandidateDiffUnparseable(t *testing.T) {
+// TestW3HealReplayFailsWhenCandidateDiffUnparseable: a replay whose stored
+// candidate diff cannot be parsed is refused by the shared pre-trial check as
+// FAILED, never a false pass, and before any replay runs. It used to read
+// ERRORED here (replay parsed on its own, after the infrastructure checks);
+// an unparseable genome is a candidate defect, as the static trial always
+// said (self-healing genome design, 2026-09-24). A genuine WIRING failure
+// still errors — see TestW3HealReplayErroredWhenRegistrarRejects.
+func TestW3HealReplayFailsWhenCandidateDiffUnparseable(t *testing.T) {
 	cands := newFakeCandidateRepo()
 	trials := newFakeTrialRepo()
 	c := seedCandidate(t, cands, persistence.HealingCandidateDraft, "not a parseable workflow at all", "")
@@ -358,8 +360,12 @@ func TestW3HealReplayErroredWhenCandidateDiffUnparseable(t *testing.T) {
 	if err != nil {
 		t.Fatalf("RunTrial: %v", err)
 	}
-	if res.Verdict != persistence.HealingTrialErrored {
-		t.Fatalf("verdict = %q, want errored (candidate diff unparseable for replay)", res.Verdict)
+	// An unparseable genome is a CANDIDATE defect, so it fails — in both modes,
+	// from the shared pre-trial check (self-healing genome design,
+	// 2026-09-24). It used to read errored on replay only because replay parsed
+	// on its own, after the infrastructure checks; static already said failed.
+	if res.Verdict != persistence.HealingTrialFailed {
+		t.Fatalf("verdict = %q, want failed (candidate diff unparseable)", res.Verdict)
 	}
 }
 

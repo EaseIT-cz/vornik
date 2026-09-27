@@ -53,6 +53,7 @@ type backfillBatchResponse struct {
 	Skipped   int      `json:"skipped"`
 	Remaining int      `json:"remaining"`
 	Errors    []string `json:"errors,omitempty"`
+	Paused    bool     `json:"paused,omitempty"`
 }
 
 func runMemoryBackfillTitles(cmd *cobra.Command, args []string) error {
@@ -140,6 +141,12 @@ func runMemoryBackfillTitles(cmd *cobra.Command, args []string) error {
 
 		// Nothing left → done.
 		if b.Remaining == 0 {
+			break
+		}
+		// The daemon refuses optional LLM work for the titler's model
+		// (chat.optional_work); every further batch would be refused too.
+		if b.Paused {
+			fmt.Println("paused: the daemon has optional LLM work disabled for the titler's model (chat.optional_work).")
 			break
 		}
 		// Defensive: server returned no rows even though Remaining > 0.

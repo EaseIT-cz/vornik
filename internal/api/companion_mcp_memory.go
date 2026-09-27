@@ -81,15 +81,25 @@ func (s *Server) recordCompanionToolAudit(ctx context.Context, key *persistence.
 		return
 	}
 	const toolNamespace = "mcp__plugin_vornik-companion_vornik__"
-	outcome := "ok"
+	// One branch derives both the outcome column and the status text in
+	// tool_output, so the two cannot disagree (implementation review F1).
+	outcome, column := "ok", "ok"
 	if toolErr != nil {
+		column = "error"
 		outcome = "error: " + toolErr.Error()
 		if len(outcome) > 512 {
 			outcome = outcome[:512]
 		}
 	}
 	taskID := "companion:" + key.ID
+	// The row's identity, time and outcome, set here (companion tool-audit
+	// design, 2026-09-24). All three were unset for four months: the first row
+	// took id '' and ON CONFLICT (id) swallowed every later call, and Postgres
+	// dated it year 1 for the retention sweep to delete — production held zero
+	// companion rows. The outcome COLUMN is what the audit views classify on;
+	// the error text stays in tool_output.
 	entry := &persistence.ToolAuditEntry{
+		ID:          persistence.GenerateID("ta"),
 		ProjectID:   key.ProjectID,
 		TaskID:      taskID,
 		ExecutionID: persistence.GenerateID("compex"),
@@ -97,6 +107,8 @@ func (s *Server) recordCompanionToolAudit(ctx context.Context, key *persistence.
 		ToolInput:   fmt.Sprintf("args_bytes=%d", len(args)),
 		ToolOutput:  fmt.Sprintf("status=%s result_bytes=%d", outcome, len(result)),
 		DurationMs:  persistence.ClampToolAuditDurationMs(dur.Milliseconds()),
+		Outcome:     column,
+		CreatedAt:   time.Now().UTC(),
 	}
 	if err := s.toolAuditRepo.Log(ctx, entry); err != nil {
 		s.logger.Warn().

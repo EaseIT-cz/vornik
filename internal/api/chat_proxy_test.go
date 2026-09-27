@@ -737,3 +737,24 @@ func TestChatCompletions_ModelUnhealthy503(t *testing.T) {
 	assert.Contains(t, w.Body.String(), "MODEL_UNHEALTHY")
 	assert.NotContains(t, w.Body.String(), "ROUTE_OVERFLOW")
 }
+
+// TestChatCompletions_TaskTrafficIsNeverBestEffort — the agent path is the
+// breaker's health signal, so the context the proxy hands the provider must
+// not carry the best-effort mark, even when the request names a call site
+// (model health breaker design §5.3a; the architecture law keeps any
+// non-optional package from calling chat.WithBestEffort at all).
+func TestChatCompletions_TaskTrafficIsNeverBestEffort(t *testing.T) {
+	stub := okStub()
+	s := &Server{logger: zerolog.Nop(), chatProvider: stub, promptCacheMode: chat.CacheModeAuto}
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/chat/completions",
+		strings.NewReader(`{"model":"gpt-4","messages":[{"role":"user","content":"hi"}]}`))
+	req.Header.Set("X-Vornik-Project-ID", "assistant")
+	req.Header.Set("X-Vornik-Role", "coder")
+	w := httptest.NewRecorder()
+	s.ChatCompletions(w, req)
+
+	require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
+	require.NotNil(t, stub.lastCtx)
+	assert.False(t, chat.IsBestEffort(stub.lastCtx), "task traffic must stay a health signal")
+}

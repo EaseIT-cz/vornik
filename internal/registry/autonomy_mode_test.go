@@ -56,6 +56,16 @@ func TestResolveBacklogFilePath(t *testing.T) {
 		{"parent_rejected", "../queue.md", ""},
 		{"nested_traversal_rejected", "ops/../../escape.md", ""},
 		{"clean_collapses_dot", "./BACKLOG.md", "BACKLOG.md"},
+		// The git http-backend precondition (process-spawn law design §3,
+		// round-1 F3; found by S1b-2's hooks-writer audit, 2026-09-26): the
+		// backlog deposit and the autonomy tick write this file, so a path
+		// into the repository's .git directory would let a config value write
+		// a hook that git runs on the host.
+		{"git_hooks_rejected", ".git/hooks/post-update", ""},
+		{"git_config_rejected", ".git/config", ""},
+		{"nested_git_rejected", "sub/.git/hooks/x", ""},
+		{"git_case_rejected", ".GIT/hooks/x", ""},
+		{"gitignore_kept", ".gitignore.md", ".gitignore.md"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

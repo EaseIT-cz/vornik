@@ -42,8 +42,12 @@ type tradingOrderStreamRequest struct {
 	TimeInForce      string  `json:"time_in_force"`
 	Status           string  `json:"status"`
 	LastStatusReason string  `json:"last_status_reason,omitempty"`
-	SubmittedAt      string  `json:"submitted_at,omitempty"` // RFC3339
-	TerminalAt       string  `json:"terminal_at,omitempty"`  // RFC3339
+	// FilledQty is the broker's cumulative fill for the order, sent on every
+	// partial/filled status row. It was missing here until 2026-09-24, so
+	// encoding/json dropped it and every row kept filled_qty = 0.
+	FilledQty   float64 `json:"filled_qty,omitempty"`
+	SubmittedAt string  `json:"submitted_at,omitempty"` // RFC3339
+	TerminalAt  string  `json:"terminal_at,omitempty"`  // RFC3339
 }
 
 // IngestTradingOrder handles POST /api/v1/internal/trading-orders.
@@ -98,6 +102,7 @@ func (s *Server) IngestTradingOrder(w http.ResponseWriter, r *http.Request) {
 		respondError(w, http.StatusBadRequest, "VALIDATION_ERROR", err.Error())
 		return
 	}
+	s.noteUnknownIngestFields("order", body, &req)
 	if req.ID == "" || req.ProjectID == "" || req.IdempotencyKey == "" || req.Symbol == "" || req.Status == "" {
 		s.recordTradingIngestError("order", "validation")
 		respondError(w, http.StatusBadRequest, "VALIDATION_ERROR",
@@ -117,6 +122,14 @@ func (s *Server) IngestTradingOrder(w http.ResponseWriter, r *http.Request) {
 	if req.StopPrice < 0 || math.IsNaN(req.StopPrice) || math.IsInf(req.StopPrice, 0) {
 		s.recordTradingIngestError("order", "validation")
 		respondError(w, http.StatusBadRequest, "VALIDATION_ERROR", "stop_price must be a finite non-negative number")
+		return
+	}
+	// A fill count above the order's size is a malformed row: refused (the
+	// broker journals the refusal) and counted apart from generic
+	// validation, never clamped into a plausible-looking number.
+	if req.FilledQty < 0 || math.IsNaN(req.FilledQty) || math.IsInf(req.FilledQty, 0) || req.FilledQty > req.Qty {
+		s.recordTradingIngestError("order", "filled_above_qty")
+		respondError(w, http.StatusBadRequest, "VALIDATION_ERROR", "filled_qty must be a finite number between 0 and qty")
 		return
 	}
 
@@ -149,6 +162,7 @@ func (s *Server) IngestTradingOrder(w http.ResponseWriter, r *http.Request) {
 		TimeInForce:      req.TimeInForce,
 		Status:           req.Status,
 		LastStatusReason: req.LastStatusReason,
+		FilledQty:        req.FilledQty,
 	}
 	if req.TaskID != "" {
 		order.TaskID = &req.TaskID

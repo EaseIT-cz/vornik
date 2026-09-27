@@ -445,6 +445,20 @@ const (
 	// fan-out behavior.
 	// See https://docs.vornik.io §3 (Delegation Limits).
 	TaskFailureClassDelegationGuard = "DELEGATION_GUARD"
+	// TaskFailureClassWorkspaceUnavailable fires when the daemon cannot give a
+	// task its own git worktree: the project's repository could not be
+	// bootstrapped, `git worktree add` failed twice (typically a project's
+	// post-checkout hook — git-lfs, husky, pre-commit — aborting the add), or
+	// the worktree could not be re-created for a retry. The task fails before
+	// any container starts. Infrastructure, never the model's fault.
+	//
+	// Process-spawn law S6-D1: there is no shared-workspace fallback any more;
+	// it mounted the project's .git read-write into the agent container, so an
+	// agent could plant hooks the daemon's own git later ran on the host.
+	// Deliberately NOT terminal: a transient cause (disk full, a leftover the
+	// next attempt's cleanup removes) can clear on a re-run, which costs no
+	// container. See https://docs.vornik.io
+	TaskFailureClassWorkspaceUnavailable = "WORKSPACE_UNAVAILABLE"
 )
 
 // Execution represents a workflow execution instance.
@@ -620,6 +634,66 @@ type TaskMessageFilter struct {
 	MessageKinds   []string // optional; restrict to these kinds
 	IncludeDeleted bool     // reserved; v1 doesn't soft-delete
 	Limit          int
+}
+
+// TaskStatusHoldsNoLease reports whether a row in status s must hold no
+// lease: CANCELLED and CLOSED. Both drivers clear the four lease columns on
+// every write into one of these (scheduler design §4.9; incident 2026-09-23,
+// six CANCELLED rows kept theirs). Nothing consumes a lease after them — the
+// scheduler reads CANCELLED as "terminated elsewhere" and releases nothing.
+//
+// FAILED and COMPLETED are deliberately NOT here: the executor writes them
+// while the lease is live, and the scheduler's TaskCompleted then consumes the
+// lease BY ITS ID — ReleaseLease(QUEUED) is how a retryable FAILED task is
+// re-queued. Clearing the lease at the FAILED write would silently drop every
+// retry.
+func TaskStatusHoldsNoLease(s TaskStatus) bool {
+	switch s {
+	case TaskStatusCancelled, TaskStatusClosed:
+		return true
+	}
+	return false
+}
+
+// TaskLeaseClearColumns is the ONE list of lease-column assignments a write
+// clears when it puts a row in a TaskStatusHoldsNoLease status (scheduler
+// design §4.9). Both drivers use it, in both of their SQL styles: appended as
+// TaskLeaseClearSQL, or spread into a SET slice (TransitionConditional).
+var TaskLeaseClearColumns = []string{
+	"lease_id = NULL", "leased_at = NULL", "leased_by = NULL", "lease_expires_at = NULL",
+}
+
+// TaskLeaseClearSQL is TaskLeaseClearColumns as a SET-list suffix (leading
+// ", "). Driver-neutral: no placeholders.
+var TaskLeaseClearSQL = ", " + strings.Join(TaskLeaseClearColumns, ", ")
+
+// TaskLeaseClearSQLFor returns TaskLeaseClearSQL when status holds no lease,
+// else "".
+func TaskLeaseClearSQLFor(status TaskStatus) string {
+	if TaskStatusHoldsNoLease(status) {
+		return TaskLeaseClearSQL
+	}
+	return ""
+}
+
+// CancellableTaskStatuses is the set an operator- or sweeper-initiated cancel
+// may move to CANCELLED, as ONE conditional write (scheduler design §4.10). A
+// site POLICY, narrower than the state machine: COMPLETED is legal to cancel
+// in the conversational lifecycle and is deliberately not offered (its exits
+// are CLOSE or a follow-up); FAILED, CANCELLED and CLOSED are end states.
+// Returns a fresh slice so no caller can mutate the policy.
+func CancellableTaskStatuses() []TaskStatus {
+	return []TaskStatus{
+		TaskStatusPending, TaskStatusQueued, TaskStatusLeased, TaskStatusRunning,
+		TaskStatusWaitingForChildren, TaskStatusAwaitingInput, TaskStatusAwaitingExternal,
+		TaskStatusPaused, TaskStatusAwaitingApproval,
+	}
+}
+
+// ClearLeaseFields nils the struct's lease fields, so a full-row write of a
+// terminal task carries no lease (scheduler design §4.9).
+func (t *Task) ClearLeaseFields() {
+	t.LeaseID, t.LeasedAt, t.LeasedBy, t.LeaseExpiresAt = nil, nil, nil, nil
 }
 
 // TransitionOpts carries optional companion-column mutations for
@@ -937,6 +1011,25 @@ type ToolAuditEntry struct {
 	// report success after one (design §3.2, §3.3).
 	OutcomeClass string    `json:"outcome_class,omitempty"`
 	CreatedAt    time.Time `json:"created_at"`
+}
+
+// DefaultToolAuditIdentity fills an empty ID with a generated one and a zero
+// CreatedAt with now, before a write. Both drivers' Log call it, so neither
+// can lose a row to a caller that forgot either field (companion tool-audit
+// design, 2026-09-24): an empty id only ever collides with the last empty id
+// under ON CONFLICT (id), and a zero time is swept by retention as year 1.
+// A caller that sets a stable id — the agent's stream-then-batch pair relies
+// on it for idempotency — is untouched.
+func DefaultToolAuditIdentity(e *ToolAuditEntry) {
+	if e == nil {
+		return
+	}
+	if e.ID == "" {
+		e.ID = GenerateID("ta")
+	}
+	if e.CreatedAt.IsZero() {
+		e.CreatedAt = time.Now().UTC()
+	}
 }
 
 // ToolAuditFilter defines filtering options for tool audit queries.
@@ -1713,6 +1806,12 @@ type IngestQueueItem struct {
 	// can stamp it on the resulting chunks via PatchScopeByArtifact
 	// after IngestText returns. NULL = uncategorized.
 	RepoScope *string
+	// DocumentPath is a document ingest's path in its repository
+	// (migration 200; memory rollback x supersession design, amendment
+	// 2026-09-26). When set, the worker publishes the chunks under it and
+	// supersedes the document's earlier uploads. NULL = not a document
+	// ingest.
+	DocumentPath *string
 }
 
 // MemoryFeedbackStats aggregates retrieval activity for one project
@@ -2675,6 +2774,14 @@ const (
 	WorkflowProposalKindReorderSteps         WorkflowProposalKind = "reorder_steps"
 )
 
+// PreApplySnapshotKinds are the kinds whose applies record the deployed file
+// they wrote over (migration 197): the ONE list both the applier (what it
+// captures) and config_template_drift (what it consults) read, so the two
+// cannot drift apart (config-drift slice E).
+func PreApplySnapshotKinds() []WorkflowProposalKind {
+	return []WorkflowProposalKind{WorkflowProposalKindRemoveStep, WorkflowProposalKindReorderSteps}
+}
+
 // ValidWorkflowProposalKind reports whether k is in the closed set
 // (the sentinel counts as valid). Used at the wire boundary so a
 // malformed architect output / API filter is rejected rather than
@@ -2728,6 +2835,11 @@ type WorkflowProposal struct {
 	AppliedCommit  string     `json:"applied_commit,omitempty"`
 	RollbackCommit string     `json:"rollback_commit,omitempty"`
 	Notes          string     `json:"notes,omitempty"`
+	// PreApplyYAML is the deployed workflow file as it was just before the
+	// apply wrote over it (migration 197), recorded for remove_step and
+	// reorder_steps only; empty when not recorded. Evidence for the
+	// config_template_drift doctor row, not part of the admin API's JSON.
+	PreApplyYAML string `json:"-"`
 }
 
 // ---------------------------------------------------------------------------

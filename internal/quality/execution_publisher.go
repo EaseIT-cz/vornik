@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sync"
 	"time"
 
 	"vornik.io/vornik/internal/persistence"
@@ -34,7 +35,20 @@ type ExecutionScorePublisher struct {
 	outcomes StepOutcomeReader
 	now      func() time.Time
 	metrics  *ExecutionScoreMetrics
+
+	// rejected holds executions whose row the durable layer refused as
+	// structurally invalid. A retry cannot succeed, so Reconcile skips them
+	// until the next boot (agent-quality-benchmark design, amendment
+	// 2026-09-26). Capped at maxRejected.
+	rejectedMu sync.Mutex
+	rejected   map[string]struct{}
 }
+
+// maxRejected bounds the rejected set, and with it Reconcile's over-fetch.
+// Past it a reject is still counted and returned, but no longer skipped, so
+// it is retried and counted again on each pass. Reconcile is single-scheduled;
+// the over-fetch is exact for serial passes only.
+const maxRejected = 1024
 
 // ReconcileResult reports one bounded publication pass.
 type ReconcileResult struct {
@@ -81,12 +95,14 @@ func (p *ExecutionScorePublisher) Publish(ctx context.Context, exec *persistence
 		ProjectID: exec.ProjectID, TaskID: exec.TaskID, ExecutionID: exec.ID,
 		WorkflowID: exec.WorkflowID, WorkflowRevision: exec.WorkflowRevision,
 		ScorerVersion: ExecutionScorerVersion, ScoringPolicySHA: policySHA,
-		Kind: string(verdict.Kind), Status: string(verdict.Status), Score: verdict.Score,
+		Kind: string(verdict.Kind), Status: string(verdict.Status), Score: durableScore(verdict),
 		PassedCaseCount: verdict.PassedCaseCount, PinnedCaseCount: verdict.PinnedCaseCount,
 		Diagnostic: verdict.Diagnostic, CaseEvidence: evidence, RecordedAt: p.now().UTC(),
 	}
 	if err := p.repo.Upsert(ctx, row); err != nil {
-		if p.metrics != nil {
+		if errors.Is(err, persistence.ErrInvalidQualityScore) {
+			p.reject(exec.ID)
+		} else if p.metrics != nil {
 			p.metrics.WriteFailuresTotal.Inc()
 		}
 		return err
@@ -104,13 +120,22 @@ func (p *ExecutionScorePublisher) Reconcile(ctx context.Context, limit int) (Rec
 	if p == nil || p.repo == nil {
 		return ReconcileResult{}, fmt.Errorf("execution score publisher is not configured")
 	}
-	pending, err := p.repo.ListPendingTerminal(ctx, limit)
+	// Over-fetch by the rejected count, so rows that can never publish
+	// cannot starve newer executions out of the bounded selection.
+	pending, err := p.repo.ListPendingTerminal(ctx, limit+p.rejectedCount())
 	if err != nil {
 		return ReconcileResult{}, err
 	}
-	result := ReconcileResult{Selected: len(pending)}
+	result := ReconcileResult{}
 	var failures []error
 	for _, exec := range pending {
+		if p.isRejected(exec.ID) {
+			continue
+		}
+		if result.Selected == limit {
+			break
+		}
+		result.Selected++
 		if err := p.Publish(ctx, exec); err != nil {
 			result.Failed++
 			failures = append(failures, fmt.Errorf("publish execution %s: %w", exec.ID, err))
@@ -135,6 +160,46 @@ func (p *ExecutionScorePublisher) Reconcile(ctx context.Context, limit int) (Rec
 		}
 	}
 	return result, errors.Join(failures...)
+}
+
+// durableScore maps a verdict onto the durable row's score: NULL exactly when
+// the status carries no measurement. The scorer's verdict keeps its
+// placeholder 0 for unscorable (the bench scores from it); the row does not.
+func durableScore(v ExecutionScore) *float64 {
+	if persistence.ExecutionQualityScoreUnmeasured(string(v.Status)) {
+		return nil
+	}
+	return v.Score
+}
+
+func (p *ExecutionScorePublisher) reject(id string) {
+	p.rejectedMu.Lock()
+	defer p.rejectedMu.Unlock()
+	if p.rejected == nil {
+		p.rejected = map[string]struct{}{}
+	}
+	if _, seen := p.rejected[id]; seen {
+		return
+	}
+	if p.metrics != nil && p.metrics.RejectedTotal != nil {
+		p.metrics.RejectedTotal.Inc()
+	}
+	if len(p.rejected) < maxRejected {
+		p.rejected[id] = struct{}{}
+	}
+}
+
+func (p *ExecutionScorePublisher) isRejected(id string) bool {
+	p.rejectedMu.Lock()
+	defer p.rejectedMu.Unlock()
+	_, ok := p.rejected[id]
+	return ok
+}
+
+func (p *ExecutionScorePublisher) rejectedCount() int {
+	p.rejectedMu.Lock()
+	defer p.rejectedMu.Unlock()
+	return len(p.rejected)
 }
 
 // WithStepOutcomes wires the reader contract_satisfaction needs. Chainable so

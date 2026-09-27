@@ -2,7 +2,6 @@ package mcp
 
 import (
 	"context"
-	"os"
 	"os/exec"
 	"strconv"
 	"syscall"
@@ -12,6 +11,8 @@ import (
 	"github.com/rs/zerolog"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"vornik.io/vornik/internal/spawn"
 )
 
 // Regression tests for the 2026-07-15 pagedrop registry-badge incident:
@@ -60,6 +61,7 @@ func forkingServerConfig(name string) ServerConfig {
 		Transport: "stdio",
 		Command:   "python3",
 		Args:      []string{"-c", fakeForkingMCPServer},
+		Program:   spawn.NewConfiguredCommand("python3", "-c", fakeForkingMCPServer),
 	}
 }
 
@@ -139,8 +141,10 @@ func TestRegistryRefreshAll_ForkingStdioServer_PublishesReachable(t *testing.T) 
 // half the assertion — a missing guard would SIGKILL the test process.
 func TestKillProcessGroup_DegeneratePIDsAreRefused(t *testing.T) {
 	for _, pid := range []int{0, -1} {
-		c := &Client{cmd: &exec.Cmd{Process: &os.Process{Pid: pid}}}
-		assert.NoError(t, c.killProcessGroup(), "pid %d must be refused, not signalled", pid)
+		assert.NoError(t, killGroup(pid, func() error {
+			t.Fatalf("pid %d must be refused, not signalled", pid)
+			return nil
+		}), "pid %d must be refused, not signalled", pid)
 	}
 	assert.NoError(t, (&Client{}).killProcessGroup(), "nil cmd is a no-op")
 }

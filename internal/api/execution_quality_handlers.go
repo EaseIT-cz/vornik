@@ -93,10 +93,5 @@ func (s *Server) ExecutionQualityList(w http.ResponseWriter, r *http.Request) {
 }
 
 func knownExecutionQualityStatus(status string) bool {
-	switch status {
-	case "scored", "missing_contract", "invalid_evidence", "not_applicable":
-		return true
-	default:
-		return false
-	}
+	return persistence.KnownExecutionQualityStatus(status)
 }

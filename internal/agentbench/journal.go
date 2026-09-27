@@ -25,10 +25,38 @@ import (
 // a run refuses to start without a committed pre-registration, and its blob hash
 // is written into the journal so a report can print it beside every figure.
 
+// RunKind is what a run is FOR, declared before it runs (release-gate design
+// §9). A comparison measures a difference between arms; a calibration or
+// noise-floor pass measures one configuration so a later comparison can be
+// sized. They need different commitments, so they are different kinds rather
+// than one document with optional fields.
+type RunKind string
+
+const (
+	// RunKindComparison is the default: an absent kind means comparison, which
+	// is what every pre-registration committed before the field existed meant.
+	RunKindComparison RunKind = "comparison"
+	// RunKindCalibration measures one arm's per-task pass rates, the input to
+	// `bench agent calibrate`.
+	RunKindCalibration RunKind = "calibration"
+	// RunKindNoiseFloor measures one configuration's paired spread, the input
+	// to `bench agent noise-floor`.
+	RunKindNoiseFloor RunKind = "noise_floor"
+)
+
 // PreRegistration is what an operator commits BEFORE a run.
 type PreRegistration struct {
+	// Kind is omitempty so a pre-registration committed before the field keeps
+	// its bytes, and therefore the hash every journal made under it carries.
+	// Absent reads as comparison; an unknown value is refused, never defaulted.
+	//
+	// Safe for a COMMITTED file only. A producer that builds a
+	// PreRegistration and forgets Kind would silently turn a measurement pass
+	// into a comparison, so journal-writing paths copy, never construct (§9.3a).
+	Kind RunKind `json:"kind,omitempty"`
 	// Arms names the arms being compared. Two or more, because a
-	// pre-registration for a single arm registers no comparison.
+	// pre-registration for a single arm registers no comparison. A measurement
+	// kind names exactly one: the configuration it measures.
 	Arms []string `json:"arms"`
 	// Metric is the one figure this run is commissioned to move.
 	Metric string `json:"metric"`
@@ -58,8 +86,55 @@ type PreRegistration struct {
 	ReleaseGatePolicySHA256 string `json:"releaseGatePolicySha256,omitempty"`
 }
 
+// EffectiveKind resolves an absent kind to comparison. It does not validate:
+// an unknown kind comes back as itself, for Validate to refuse.
+func (p PreRegistration) EffectiveKind() RunKind {
+	if p.Kind == "" {
+		return RunKindComparison
+	}
+	return p.Kind
+}
+
+// IsMeasurement reports whether this is a single-configuration measurement
+// pass (calibration or noise floor) rather than a comparison.
+func (p PreRegistration) IsMeasurement() bool {
+	k := p.EffectiveKind()
+	return k == RunKindCalibration || k == RunKindNoiseFloor
+}
+
+// BindArm refuses to run an arm the pre-registration does not declare.
+//
+// Incident 2026-09-20: `--arm 2026.9.5-hard-cal` ran under a pre-registration
+// declaring two OTHER arms, because Arms had exactly one consumer — Validate —
+// and nothing compared it with the arm actually run. A pre-registration that
+// does not bind to its run commits to nothing.
+func (p PreRegistration) BindArm(arm string) error {
+	if strings.TrimSpace(arm) == "" {
+		return fmt.Errorf("--arm is required: the run must name which of the pre-registered "+
+			"arms it is (declared: %s)", strings.Join(p.Arms, ", "))
+	}
+	for _, a := range p.Arms {
+		if a == arm {
+			return nil
+		}
+	}
+	return fmt.Errorf("the pre-registration does not declare arm %q (declared: %s). This "+
+		"applies to a comparison as well as a measurement pass: a journal's pre-registration "+
+		"must describe the run that produced it, so run a declared arm or commit a "+
+		"pre-registration that names this one", arm, strings.Join(p.Arms, ", "))
+}
+
 // Validate refuses a pre-registration that does not commit to anything.
 func (p PreRegistration) Validate() error {
+	switch p.EffectiveKind() {
+	case RunKindComparison:
+	case RunKindCalibration, RunKindNoiseFloor:
+		return p.validateMeasurement()
+	default:
+		return fmt.Errorf("pre-registration declares unknown run kind %q: expected %q, %q or %q "+
+			"(an unknown kind is refused, never read as the default)",
+			p.Kind, RunKindComparison, RunKindCalibration, RunKindNoiseFloor)
+	}
 	if len(p.Arms) < 2 {
 		return fmt.Errorf("pre-registration needs at least two arms: registering a single "+
 			"arm commits to no comparison, got %d", len(p.Arms))
@@ -134,6 +209,50 @@ func (p PreRegistration) Validate() error {
 	return nil
 }
 
+// validateMeasurement checks a calibration or noise-floor pre-registration
+// (§9.1). It short-circuits the comparison rules: zero sigma, delta and pairs
+// are REQUIRED here, where the comparison branch refuses them.
+func (p PreRegistration) validateMeasurement() error {
+	kind := p.EffectiveKind()
+	if len(p.Arms) != 1 {
+		return fmt.Errorf("a %s pre-registration names exactly one arm — the configuration it "+
+			"measures — got %d", kind, len(p.Arms))
+	}
+	if strings.TrimSpace(p.Arms[0]) == "" {
+		return fmt.Errorf("pre-registration names an empty arm")
+	}
+	if strings.TrimSpace(p.Metric) == "" {
+		return fmt.Errorf("pre-registration names no metric: a %s pass measures one metric's "+
+			"behaviour, and without it the artifact cannot say which", kind)
+	}
+	if p.SigmaD != 0 || p.SigmaN != 0 {
+		return fmt.Errorf("a %s pre-registration must not declare sigma: the pass exists to "+
+			"measure it, so a declared value is either the number about to be measured or a "+
+			"stale one that would read as provenance", kind)
+	}
+	if p.TargetDelta != 0 {
+		return fmt.Errorf("a %s pre-registration must not declare a target delta: it sizes a "+
+			"comparison, and this pass compares nothing", kind)
+	}
+	if p.ComputedPairs != 0 {
+		return fmt.Errorf("a %s pre-registration must not declare a computed pair count: there "+
+			"is no sigma yet to compute it from", kind)
+	}
+	if len(p.IndependentAxes) != 0 {
+		return fmt.Errorf("a %s pre-registration must not declare independent axes: they name "+
+			"what a comparison may vary, and a measurement pass varies nothing", kind)
+	}
+	if p.CalibrationSHA256 != "" || p.NoiseFloorSHA256 != "" || p.ReleaseGatePolicySHA256 != "" {
+		return fmt.Errorf("a %s pre-registration must not pin release artifacts: those bind a "+
+			"release comparison, which this pass is an input to", kind)
+	}
+	if strings.TrimSpace(p.Rationale) == "" {
+		return fmt.Errorf("pre-registration has no rationale: one nobody had to think " +
+			"about registers nothing")
+	}
+	return nil
+}
+
 // ReleaseGateEnabled reports whether this pre-registration pins the release
 // artifacts. Validate establishes that a partial set cannot reach this point.
 func (p PreRegistration) ReleaseGateEnabled() bool {
@@ -153,8 +272,12 @@ func (p PreRegistration) Hash() (string, error) {
 
 // RunManifest identifies a run.
 type RunManifest struct {
-	RunID string    `json:"runId"`
-	Arm   ArmFields `json:"arm"`
+	RunID string `json:"runId"`
+	// WorkspaceReset records whether each task started from a pristine
+	// workspace: WorkspaceResetTargets or WorkspaceResetNoWorkspace
+	// (benchmark LLD §12.23).
+	WorkspaceReset string    `json:"workspaceReset,omitempty"`
+	Arm            ArmFields `json:"arm"`
 	// ArmKey and ArmPartial are denormalised so a reader does not have to
 	// recompute the key to know whether the run is comparable.
 	ArmKey     string `json:"armKey"`
@@ -274,6 +397,12 @@ func (j Journal) CheckReadable() error {
 			"or task set means comparability is unverified, which is not the same as " +
 			"verified-identical")
 	}
+	if j.Manifest.PreRegistration.IsMeasurement() {
+		// Power sizes a comparison. A measurement pass is not sized — it produces
+		// the sigma — so "underpowered" is not a finding about it, and a warning
+		// that fired on every correct calibration would teach operators to ignore it.
+		return nil
+	}
 	return j.Manifest.Power.Refuse()
 }
 
@@ -296,6 +425,24 @@ func CompareJournals(a, b Journal, observedDelta float64) (string, error) {
 	}
 	if a.Manifest.ArmPartial || b.Manifest.ArmPartial {
 		return "", fmt.Errorf("cannot compare a journal with a partial arm key")
+	}
+	for _, side := range []struct {
+		label string
+		j     Journal
+	}{{"first", a}, {"second", b}} {
+		pre := side.j.Manifest.PreRegistration
+		if pre.IsMeasurement() {
+			return "", fmt.Errorf("the %s journal is a %s pass, not a comparison arm: it measured "+
+				"one configuration to size later comparisons, and its pre-registration commits "+
+				"to no difference (release-gate design §9.3)", side.label, pre.EffectiveKind())
+		}
+		// This is the one consumer that reads journals without validating them,
+		// so an unknown kind — only reachable by a journal that bypassed the
+		// runner — is refused here too rather than read as comparison.
+		if pre.EffectiveKind() != RunKindComparison {
+			return "", fmt.Errorf("the %s journal declares unknown run kind %q; only a comparison "+
+				"journal may be compared", side.label, pre.Kind)
+		}
 	}
 	if math.IsNaN(observedDelta) || math.IsInf(observedDelta, 0) {
 		return "", fmt.Errorf("observed delta must be finite")

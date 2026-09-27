@@ -172,3 +172,14 @@ func TestEvalExistingPrefixErrorIsNotErrNotExist(t *testing.T) {
 		t.Fatalf("error should NOT be ErrNotExist (it is ENOTDIR), got %v", err)
 	}
 }
+
+func TestHasGitDirSegment(t *testing.T) {
+	for p, want := range map[string]bool{
+		".git": true, ".git/hooks/x": true, "a/.git/config": true, "a/.GIT/x": true, `a\.git\x`: true,
+		".gitignore": false, ".github/workflows/ci.yml": false, "git/x": false, "": false, "a/b.git": false,
+	} {
+		if got := HasGitDirSegment(p); got != want {
+			t.Errorf("HasGitDirSegment(%q) = %v, want %v", p, got, want)
+		}
+	}
+}

@@ -1,141 +1,142 @@
-// Tests for the PDF extractor. We can't synthesize a real PDF
-// fixture inline (poppler+the file format are too complex), so
-// the strategy is two-pronged:
-//
-//   - Unit-test the parts that don't need pdftotext: page-split,
-//     title summarisation, metadata fallback.
-//   - Skip the binary-driven happy-path test when pdftotext is
-//     missing; on hosts that DO have it (the daemon host, our CI
-//     image), exercise the full Extract path with a tiny known
-//     PDF written from ghostscript's "hello world" template.
+// Tests for the PDF extractor. pdftotext runs in the agent image through
+// the sandbox runner (process-spawn law S5b, design §7), never on the daemon
+// host, so these tests play it with a fake sandbox and pin the run's shape:
+// feature, fixed entrypoint, fixed argv with no user text, the input copied
+// in from its path, the text read back from /out. The real tool runs under
+// the podman e2e lane (test/e2e/sandbox_media_test.go).
 package pdf
 
 import (
 	"context"
+	"errors"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
 
 	"vornik.io/vornik/internal/extractor"
+	"vornik.io/vornik/internal/sandboxtool"
+	"vornik.io/vornik/internal/sandboxtool/sandboxtest"
 )
 
-// helloPDF is a minimal 1-page PDF with the literal text "Hello,
-// PDF world." written using PDF's native Tj operator. Generated
-// once by hand following the PDF 1.4 spec; produces ~600 bytes
-// on disk. Lets the happy-path test run against real pdftotext
-// without a runtime fixture-generator.
-//
-// Structure:
-//   - Catalog → Pages tree (1 page)
-//   - Helvetica font dictionary
-//   - Single content stream with BT/Tj/ET
-//   - Cross-reference table + trailer
-//
-// The whitespace inside the content stream is significant — PDF
-// is whitespace-sensitive between operators.
-const helloPDF = "%PDF-1.4\n" +
-	"1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n" +
-	"2 0 obj\n<< /Type /Pages /Kids [3 0 R] /Count 1 >>\nendobj\n" +
-	"3 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >>\nendobj\n" +
-	"4 0 obj\n<< /Length 56 >>\nstream\nBT /F1 24 Tf 100 700 Td (Hello, PDF world.) Tj ET\nendstream\nendobj\n" +
-	"5 0 obj\n<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>\nendobj\n" +
-	"xref\n0 6\n0000000000 65535 f \n0000000010 00000 n \n0000000054 00000 n \n0000000100 00000 n \n0000000208 00000 n \n0000000310 00000 n \n" +
-	"trailer\n<< /Size 6 /Root 1 0 R >>\nstartxref\n378\n%%EOF\n"
-
-// requirePDFTotext skips the test when pdftotext is missing on
-// PATH. CI runs with poppler-utils installed; developer laptops
-// might not.
-func requirePDFTotext(t *testing.T) {
-	t.Helper()
-	if _, err := exec.LookPath("pdftotext"); err != nil {
-		t.Skip("pdftotext not on PATH; skipping (install poppler-utils to enable)")
-	}
+// fakePDFToText plays pdftotext: it writes text to the output path the argv
+// names.
+func fakePDFToText(t *testing.T, text string) *sandboxtest.Fake {
+	return sandboxtest.New(t, func(_ sandboxtool.Spec, _ map[string][]byte, out string) error {
+		return os.WriteFile(filepath.Join(out, "text.txt"), []byte(text), 0o600)
+	})
 }
 
-func writeHelloPDF(t *testing.T, path string) {
+func writePDF(t *testing.T) string {
 	t.Helper()
-	if err := os.WriteFile(path, []byte(helloPDF), 0o600); err != nil {
-		t.Fatalf("write fixture: %v", err)
+	path := filepath.Join(t.TempDir(), "report (final).pdf")
+	if err := os.WriteFile(path, []byte("%PDF-1.4 fixture"), 0o600); err != nil {
+		t.Fatal(err)
 	}
+	return path
 }
 
-func TestExtract_HappyPath(t *testing.T) {
-	requirePDFTotext(t)
-	dir := t.TempDir()
-	path := filepath.Join(dir, "hello.pdf")
-	writeHelloPDF(t, path)
-
-	res, err := New().Extract(context.Background(), extractor.Source{
-		FilePath:     path,
-		MimeType:     "application/pdf",
-		OriginalName: "hello.pdf",
+func TestExtract_RunsPdftotextInTheSandbox(t *testing.T) {
+	sb := fakePDFToText(t, "Hello, PDF world.\n\x0c")
+	path := writePDF(t)
+	res, err := New(sb).Extract(context.Background(), extractor.Source{
+		FilePath: path, MimeType: "application/pdf", OriginalName: "hello.pdf",
 	})
 	if err != nil {
 		t.Fatalf("Extract: %v", err)
 	}
-	if len(res.Sections) != 1 {
-		t.Fatalf("sections = %d; want 1 (single-page fixture)", len(res.Sections))
+	specs := sb.Specs()
+	if len(specs) != 1 {
+		t.Fatalf("want one sandbox run, got %d", len(specs))
 	}
-	if !strings.Contains(res.Sections[0].Content, "Hello") {
-		t.Errorf("content missing fixture text; got %q", res.Sections[0].Content)
+	spec := specs[0]
+	if spec.Feature != sandboxtool.FeaturePDF || spec.Entrypoint != "pdftotext" {
+		t.Fatalf("run = %s/%s", spec.Feature, spec.Entrypoint)
 	}
-	if res.Sections[0].SectionID != "page-0001" {
-		t.Errorf("section_id = %q; want page-0001", res.Sections[0].SectionID)
+	if got := strings.Join(spec.Args, " "); got != "-enc UTF-8 -q /in/document.pdf /out/text.txt" {
+		t.Fatalf("argv = %q", got)
 	}
-	if res.Outline[0].PageStart != 1 {
-		t.Errorf("outline PageStart = %d; want 1", res.Outline[0].PageStart)
+	// The input is copied from its path under a fixed name: the operator's
+	// file name never reaches argv.
+	if len(spec.Inputs) != 1 || spec.Inputs[0].Name != "document.pdf" || spec.Inputs[0].Path != path {
+		t.Fatalf("inputs = %+v", spec.Inputs)
 	}
-	if res.Metadata.PageCount != 1 {
-		t.Errorf("Metadata.PageCount = %d; want 1", res.Metadata.PageCount)
+	if len(res.Sections) != 1 || !strings.Contains(res.Sections[0].Content, "Hello") {
+		t.Fatalf("sections = %+v", res.Sections)
 	}
-	// Title falls back to filename minus extension when the PDF
-	// carries no document properties.
+	if res.Sections[0].SectionID != "page-0001" || res.Outline[0].PageStart != 1 || res.Metadata.PageCount != 1 {
+		t.Fatalf("page accounting: %+v %+v", res.Sections[0], res.Metadata)
+	}
 	if res.Metadata.Title != "hello" {
 		t.Errorf("Metadata.Title = %q; want \"hello\"", res.Metadata.Title)
 	}
 }
 
-func TestExtract_MissingBinary_FailsFastWithGuidance(t *testing.T) {
-	// Inject a binary name that won't exist on any host.
-	ext := NewWithBinary("pdftotext-deliberately-missing-xyz")
-	_, err := ext.Extract(context.Background(), extractor.Source{
-		FilePath: "/tmp/anything.pdf",
-		MimeType: "application/pdf",
-	})
-	if err == nil {
-		t.Fatal("expected error for missing binary")
+// §7.1 decision 4: no sandbox, or a tool the image does not declare, is "not
+// available" — never a host fallback.
+func TestExtract_NotAvailableNeverFallsBackToTheHost(t *testing.T) {
+	marker := hostTrap(t, "pdftotext")
+	_, err := New(nil).Extract(context.Background(), extractor.Source{FilePath: writePDF(t)})
+	if !errors.Is(err, sandboxtool.ErrNotAvailable) {
+		t.Fatalf("no sandbox: want not available, got %v", err)
 	}
-	if !strings.Contains(err.Error(), "install poppler-utils") {
-		t.Errorf("error must mention the install hint; got %v", err)
+	sb := sandboxtest.New(t, func(sandboxtool.Spec, map[string][]byte, string) error {
+		return sandboxtest.NotAvailable(sandboxtool.FeaturePDF)
+	})
+	_, err = New(sb).Extract(context.Background(), extractor.Source{FilePath: writePDF(t)})
+	if !errors.Is(err, sandboxtool.ErrNotAvailable) {
+		t.Fatalf("undeclared tool: want not available, got %v", err)
+	}
+	if _, statErr := os.Stat(marker); statErr == nil {
+		t.Fatal("a host pdftotext ran")
 	}
 }
 
 func TestExtract_EmptyFilePath(t *testing.T) {
-	_, err := New().Extract(context.Background(), extractor.Source{})
+	_, err := New(fakePDFToText(t, "x")).Extract(context.Background(), extractor.Source{})
 	if err == nil {
 		t.Fatal("expected error for empty FilePath")
 	}
 }
 
-func TestExtract_PdftotextFailure_SurfacesStderr(t *testing.T) {
-	requirePDFTotext(t)
-	// Garbage input — pdftotext will exit non-zero with a clear
-	// "Syntax Error" stderr line. The error must propagate so the
-	// daemon log shows the diagnostic.
+func TestExtract_PdftotextFailure_SurfacesTheToolsMessage(t *testing.T) {
+	sb := sandboxtest.New(t, func(sandboxtool.Spec, map[string][]byte, string) error {
+		return sandboxtest.Failed(sandboxtool.FeaturePDF, "Syntax Error: Couldn't find trailer dictionary")
+	})
+	_, err := New(sb).Extract(context.Background(), extractor.Source{FilePath: writePDF(t)})
+	if err == nil || !strings.Contains(err.Error(), "pdftotext") || !strings.Contains(err.Error(), "trailer dictionary") {
+		t.Fatalf("error should name pdftotext and carry its message; got %v", err)
+	}
+}
+
+func TestExtract_ScannedPDFReportsNoText(t *testing.T) {
+	_, err := New(fakePDFToText(t, "  \n\x0c \n\x0c")).Extract(context.Background(), extractor.Source{FilePath: writePDF(t)})
+	if !errors.Is(err, ErrNoTextExtracted) {
+		t.Fatalf("want ErrNoTextExtracted, got %v", err)
+	}
+	_, err = New(fakePDFToText(t, "a\x0c \x0cb")).Extract(context.Background(), extractor.Source{FilePath: writePDF(t)})
+	if err != nil {
+		t.Fatalf("a blank middle page is skipped, not an error: %v", err)
+	}
+	// No output file at all is a failure, not an empty document.
+	sb := sandboxtest.New(t, func(sandboxtool.Spec, map[string][]byte, string) error { return nil })
+	if _, err := New(sb).Extract(context.Background(), extractor.Source{FilePath: writePDF(t)}); err == nil {
+		t.Fatal("a missing output must be an error")
+	}
+}
+
+// hostTrap puts a fake program first on PATH that leaves a marker if anything
+// runs it on the host.
+func hostTrap(t *testing.T, program string) string {
+	t.Helper()
 	dir := t.TempDir()
-	path := filepath.Join(dir, "garbage.pdf")
-	if err := os.WriteFile(path, []byte("this is not a PDF at all"), 0o600); err != nil {
-		t.Fatalf("write garbage: %v", err)
+	marker := filepath.Join(dir, "ran")
+	script := "#!/bin/sh\ntouch '" + marker + "'\n"
+	if err := os.WriteFile(filepath.Join(dir, program), []byte(script), 0o755); err != nil { //nolint:gosec // test fixture
+		t.Fatal(err)
 	}
-	_, err := New().Extract(context.Background(), extractor.Source{FilePath: path})
-	if err == nil {
-		t.Fatal("expected error from pdftotext on garbage input")
-	}
-	if !strings.Contains(err.Error(), "pdftotext") {
-		t.Errorf("error should mention pdftotext; got %v", err)
-	}
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	return marker
 }
 
 func TestSplitPages(t *testing.T) {
@@ -207,7 +208,7 @@ func TestBuildMetadata_TitleFromFilename(t *testing.T) {
 }
 
 func TestExtractor_Identifies(t *testing.T) {
-	e := New()
+	e := New(nil)
 	if e.Name() != Name {
 		t.Errorf("Name = %q; want %q", e.Name(), Name)
 	}

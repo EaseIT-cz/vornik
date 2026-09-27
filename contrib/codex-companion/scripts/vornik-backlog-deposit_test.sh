@@ -212,6 +212,102 @@ EOF
 out="$(run "$f2" --title "Surface the offline daemon health check in chat")"; rc=$?
 [ $rc -eq 3 ] && ok "exact-match dedup still fires" || bad "rc=$rc, want 3"
 
+# --- a priority-grouped file (the 2026-09-25 triage layout) --------------
+# Deposits land at the END of their own priority's H1 group, not after the last
+# item in the file (which is the bottom of Parked). P0 joins P1.
+grouped() {
+  g="$TMP/$1.md"
+  cat > "$g" <<'EOF'
+# vornik Backlog
+
+Preamble.
+
+# P1 — do next
+
+## [ ] P1 — First urgent item (2026-09-01)
+
+detail one
+
+# P2
+
+## [ ] P2 — A reliability item (2026-09-02)
+
+detail two
+
+# P3
+
+## [ ] P3 — A cleanup item (2026-09-03)
+
+detail three
+
+# Parked — waiting on a date, a decision or an external event
+
+## [ ] PARKED — A parked item (2026-09-04)
+
+detail four
+EOF
+  printf '%s' "$g"
+}
+# line_of FILE TEXT — first line number containing TEXT
+line_of() { grep -n -F -- "$2" "$1" | head -1 | cut -d: -f1; }
+
+# in_group FILE TITLE AFTER BEFORE — TITLE lies after AFTER and before BEFORE
+in_group() {
+  n="$(line_of "$1" "$2")"
+  [ -n "$n" ] && [ "$n" -gt "$(line_of "$1" "$3")" ] && [ "$n" -lt "$(line_of "$1" "$4")" ]
+}
+
+echo "--- a P2 deposit lands at the end of the P2 group ---"
+g="$(grouped grp2)"
+out="$(run "$g" --title "A grouped P2 finding" --priority P2)"; rc=$?
+if [ $rc -eq 0 ] && in_group "$g" "A grouped P2 finding" "A reliability item" "# P3"; then
+  ok "P2 inside the P2 group"
+else
+  bad "rc=$rc out=$out"
+fi
+
+echo "--- a P0 deposit joins the P1 group ---"
+g="$(grouped grp0)"
+out="$(run "$g" --title "A grouped P0 finding" --priority P0)"; rc=$?
+if [ $rc -eq 0 ] && in_group "$g" "A grouped P0 finding" "First urgent item" "# P2"; then
+  ok "P0 inside the P1 group"
+else
+  bad "rc=$rc out=$out"
+fi
+
+echo "--- a P3 deposit lands before Parked ---"
+g="$(grouped grp3)"
+out="$(run "$g" --title "A grouped P3 finding" --priority P3)"; rc=$?
+if [ $rc -eq 0 ] && in_group "$g" "A grouped P3 finding" "A cleanup item" "# Parked"; then
+  ok "P3 inside the P3 group"
+else
+  bad "rc=$rc out=$out"
+fi
+
+echo "--- a grouped file with no group for the priority falls back ---"
+g="$TMP/nogroup.md"
+cat > "$g" <<'EOF'
+# vornik Backlog
+
+# P1 — do next
+
+## [ ] P1 — Only urgent (2026-09-01)
+
+detail
+EOF
+out="$(run "$g" --title "A fallback P3 finding" --priority P3)"; rc=$?
+if [ $rc -eq 0 ] && grep -q "A fallback P3 finding" "$g"; then ok "fell back to the old rule"; else bad "rc=$rc out=$out"; fi
+
+echo "--- the grouped layout is only inserted into, never rewritten ---"
+g="$(grouped grpkeep)"; cp "$g" "$TMP/grpkeep.orig"
+BODY=body run "$g" --title "Keep everything else" --priority P2 >/dev/null
+if diff <(grep -v -e "Keep everything else" -e "Filed by the vornik companion" -e "^---$" -e "^body$" -e "^$" "$g") \
+        <(grep -v "^$" "$TMP/grpkeep.orig") >/dev/null; then
+  ok "original content intact"
+else
+  bad "the grouped file was rewritten"
+fi
+
 echo "---"
 echo "PASS: $pass passed, $fail failed"
 [ "$fail" -eq 0 ] || exit 1

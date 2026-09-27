@@ -96,8 +96,11 @@ func TestLLMReranker_LLMErrorDegradesToInput(t *testing.T) {
 	rr := &LLMReranker{Client: fp, Logger: zerolog.Nop()}
 	in := []SearchResult{{ChunkID: "a"}, {ChunkID: "b"}}
 	out, err := rr.Rerank(context.Background(), "q", in)
-	if err != nil {
-		t.Fatal("must not propagate")
+	// Degrades are REPORTED now, in RRF order (memory-benchmark-harness
+	// design, correction 2026-09-26): swallowing them made a failed rerank
+	// observe as a successful one.
+	if !errors.Is(err, ErrRerankDegraded) {
+		t.Fatalf("want ErrRerankDegraded, got %v", err)
 	}
 	if out[0].ChunkID != "a" || out[1].ChunkID != "b" {
 		t.Fatal("order should be preserved on error")

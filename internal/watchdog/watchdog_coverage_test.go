@@ -653,6 +653,37 @@ func (r *errOnUpdateStatusTaskRepo) UpdateStatus(ctx context.Context, id string,
 	return r.stubTaskRepo.UpdateStatus(ctx, id, status)
 }
 
+func (r *errOnUpdateStatusTaskRepo) TransitionConditional(ctx context.Context, id string, from []persistence.TaskStatus, to persistence.TaskStatus, opts persistence.TransitionOpts) (bool, error) {
+	if id == r.failID {
+		return false, errors.New("cancel failed")
+	}
+	return r.stubTaskRepo.TransitionConditional(ctx, id, from, to, opts)
+}
+
+// Scheduler design §4.10: an approval that lands between the sweep's List and
+// its write must not be overwritten — the write is gated on AWAITING_APPROVAL.
+func TestSweepExpiredApprovals_DoesNotCancelATaskApprovedMeanwhile(t *testing.T) {
+	now := time.Date(2026, 6, 16, 12, 0, 0, 0, time.UTC)
+	tasks := newStubTaskRepo()
+	tasks.listResult = []*persistence.Task{
+		{ID: "approved", ProjectID: "p1", Status: persistence.TaskStatusAwaitingApproval, UpdatedAt: now.Add(-100 * time.Hour)},
+		{ID: "stale", ProjectID: "p1", Status: persistence.TaskStatusAwaitingApproval, UpdatedAt: now.Add(-100 * time.Hour)},
+	}
+	tasks.live = map[string]persistence.TaskStatus{"approved": persistence.TaskStatusQueued}
+	cfg := DefaultConfig()
+	cfg.ApprovalTimeout = 96 * time.Hour
+	w := New(cfg, noRowsExecRepo(), tasks, zerolog.Nop(), nil)
+	w.now = func() time.Time { return now }
+	w.ctx = context.Background()
+
+	w.sweepExpiredApprovals(context.Background())
+	got := tasks.cancelledIDs()
+	if _, overwritten := got["approved"]; overwritten {
+		t.Fatal("a task approved after the sweep listed it was cancelled")
+	}
+	assert.Equal(t, persistence.TaskStatusCancelled, got["stale"], "the still-pending approval must be cancelled")
+}
+
 // readCounter extracts the current float value of a prometheus counter
 // via its Write hook — no registry scrape needed.
 func readCounter(t *testing.T, c prometheus.Counter) float64 {

@@ -77,6 +77,11 @@ type dbBackedPublisher struct {
 	logger   zerolog.Logger
 	nodeID   string
 
+	// detachedBound caps each I/O phase of Publish (the append, then the
+	// NOTIFY), which run detached from the caller's cancellation so a killed
+	// step's last events survive it. A field so tests can shorten it.
+	detachedBound time.Duration
+
 	// listenerCtx + cancel control the LISTEN goroutine. nil when
 	// the wrapper is constructed without a listener (NOTIFY-only
 	// deployments — they still cross-replicate but only one-way).
@@ -116,11 +121,12 @@ func NewDBBacked(ctx context.Context, cfg NewDBBackedConfig) (Publisher, func(),
 		inner = &inProcessPublisher{streams: map[string]*stream{}, ringSize: envInt("VORNIK_LIVE_RING_SIZE", 200)}
 	}
 	p := &dbBackedPublisher{
-		inner:    inner,
-		repo:     cfg.Repo,
-		notifier: cfg.Notifier,
-		logger:   cfg.Logger,
-		nodeID:   cfg.NodeID,
+		inner:         inner,
+		repo:          cfg.Repo,
+		notifier:      cfg.Notifier,
+		logger:        cfg.Logger,
+		nodeID:        cfg.NodeID,
+		detachedBound: defaultDetachedBound,
 	}
 	if cfg.Listener != nil {
 		lctx, cancel := context.WithCancel(ctx)
@@ -158,16 +164,29 @@ func (p *dbBackedPublisher) Publish(ctx context.Context, executionID, kind strin
 			Msg("livepubsub: marshal failed; falling back to in-process publish")
 		return p.inner.Publish(ctx, executionID, kind, payload)
 	}
-	seq, err := p.repo.Append(ctx, executionID, kind, raw)
+	// The append and the NOTIFY run on the caller's values but NOT its
+	// cancellation, each under its own fresh bound: a step killed at its
+	// budget publishes its last events on a cancelled context, and those are
+	// the record of what just happened (live-task-observation design,
+	// amendment 2026-09-25).
+	detached := context.WithoutCancel(ctx)
+	appendCtx, cancelAppend := context.WithTimeout(detached, p.detachedBound)
+	seq, err := p.repo.Append(appendCtx, executionID, kind, raw)
+	timedOut := appendCtx.Err() != nil
+	cancelAppend()
 	if err != nil {
 		// DB blip — keep the local stream alive so the user doesn't
 		// see a gap. Cross-replica fanout is lost for this event;
-		// the next successful Append re-syncs.
+		// the next successful Append re-syncs. The in-process publish
+		// never reads its context, so the spent bound cannot stop it
+		// (pinned by TestDBBackedPublisher_AppendBoundExpiryFallsBackLocally).
+		cause := p.causeOf(timedOut, "append")
 		p.logger.Warn().Err(err).
 			Str("execution_id", executionID).
 			Str("kind", kind).
+			Str("cause", cause).
 			Msg("livepubsub: DB append failed; falling back to in-process publish")
-		return p.inner.Publish(ctx, executionID, kind, payload)
+		return p.inner.Publish(appendCtx, executionID, kind, payload)
 	}
 
 	// Local delivery uses the DB-authoritative seq + timestamp so
@@ -187,14 +206,37 @@ func (p *dbBackedPublisher) Publish(ctx context.Context, executionID, kind strin
 	// notification's ListSince fallback).
 	if p.notifier != nil {
 		notif := fmt.Sprintf("%s|%d|%s", executionID, seq, p.nodeID)
-		if err := p.notifier.Notify(ctx, NotifyChannel, notif); err != nil {
+		notifyCtx, cancelNotify := context.WithTimeout(detached, p.detachedBound)
+		err := p.notifier.Notify(notifyCtx, NotifyChannel, notif)
+		timedOut := notifyCtx.Err() != nil
+		cancelNotify()
+		if err != nil {
 			p.logger.Warn().Err(err).
 				Str("execution_id", executionID).
 				Int64("seq", seq).
+				Str("cause", p.causeOf(timedOut, "notify")).
 				Msg("livepubsub: NOTIFY failed; cross-replica fanout will miss this event")
 		}
 	}
 	return seq
+}
+
+// defaultDetachedBound: the append is an INSERT into the daemon's own
+// database, normally milliseconds; what lost the record was cancellation, not
+// latency. 5 s is three orders over a healthy append and still short enough
+// that a wedged database cannot pin a finished step's goroutine.
+const defaultDetachedBound = 5 * time.Second
+
+// causeOf labels a failed publish phase for the warning, counting it when the
+// phase ran out its own detached bound.
+func (p *dbBackedPublisher) causeOf(timedOut bool, phase string) string {
+	if !timedOut {
+		return "db_error"
+	}
+	if m := p.inner.metrics; m != nil && m.DetachedTimeoutTotal != nil {
+		m.DetachedTimeoutTotal.WithLabelValues(phase).Inc()
+	}
+	return "detached_timeout"
 }
 
 // Subscribe delegates to the in-process publisher for the live

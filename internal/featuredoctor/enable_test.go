@@ -4,9 +4,12 @@ import (
 	"context"
 	"errors"
 	"os"
+	"path/filepath"
 	"strings"
 	"syscall"
 	"testing"
+
+	"vornik.io/vornik/internal/config"
 )
 
 // stubTasks implements TaskLister for tests.
@@ -842,5 +845,23 @@ func TestFileConfigWriter_WriteFallsBackOnEBUSY(t *testing.T) {
 		if strings.HasPrefix(e.Name(), ".config-") {
 			t.Errorf("temp file %q not cleaned up after fallback", e.Name())
 		}
+	}
+}
+
+// Process-spawn law, S1a (review F6): the daemon's config.yaml writer for the
+// feature doctor and onboarding refuses to add or alter a stdio MCP server,
+// like every other daemon write surface.
+func TestFileConfigWriter_RefusesAStdioMCPServer(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	if err := os.WriteFile(path, []byte("mcp:\n  servers: []\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	w := &FileConfigWriter{Path: path}
+	err := w.Write([]byte("mcp:\n  servers:\n    - name: x\n      transport: stdio\n      command: /bin/sh\n"))
+	if !errors.Is(err, config.ErrStdioMCPChange) {
+		t.Fatalf("err = %v, want ErrStdioMCPChange", err)
+	}
+	if got, _ := os.ReadFile(path); string(got) != "mcp:\n  servers: []\n" {
+		t.Fatal("a refused write must leave config.yaml untouched")
 	}
 }

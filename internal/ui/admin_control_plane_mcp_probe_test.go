@@ -98,14 +98,14 @@ func TestMCPProbe_RejectsBadEndpointAndSecret(t *testing.T) {
 		t.Errorf("expected invalid-endpoint message; got: %s", rec.Body.String())
 	}
 
-	// Literal secret in the stdio command (a bare high-entropy token with no
-	// space / colon / slash trips the secret-literal guard).
+	// A stdio command, even one that looks like a pasted secret, is refused as
+	// stdio before anything else (process-spawn law, reading 3).
 	rec = httptest.NewRecorder()
 	srv.AdminControlPlaneMCPProbe(rec, probeRequest(url.Values{
 		"transport": {"stdio"}, "command": {strings.Repeat("A", 40)},
 	}))
-	if !strings.Contains(rec.Body.String(), "placeholder") {
-		t.Errorf("expected secret-literal rejection; got: %s", rec.Body.String())
+	if !strings.Contains(rec.Body.String(), "Invalid endpoint") {
+		t.Errorf("expected the stdio refusal; got: %s", rec.Body.String())
 	}
 	if connectCalled {
 		t.Error("connect must not be attempted for invalid/secret input")

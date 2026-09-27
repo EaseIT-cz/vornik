@@ -173,6 +173,27 @@ type TrialRunner struct {
 	asyncBound   time.Duration
 	log          zerolog.Logger
 	metrics      TrialMetrics
+	// lookup answers "what is live right now", so preTrialRefusals can tell
+	// an inert step timeout the candidate INTRODUCED from one the live file
+	// already has. The promoter's seam, same registry (self-healing genome
+	// design, 2026-09-24). Nil → every such finding counts as introduced.
+	lookup WorkflowLookup
+}
+
+// WithWorkflowLookup wires the live-workflow lookup preTrialRefusals compares
+// against. Production passes the registry it gives the promoter.
+func (r *TrialRunner) WithWorkflowLookup(l WorkflowLookup) *TrialRunner {
+	if r != nil {
+		r.lookup = l
+	}
+	return r
+}
+
+// RefusalMetrics is the OPTIONAL half of the metrics seam: a TrialMetrics that
+// also implements it counts each pre-trial refusal by code and candidate
+// class. Existing implementations and doubles need not change.
+type RefusalMetrics interface {
+	RecordHealingRefusal(code, class string)
 }
 
 // TriggerEvidenceSource is the narrow seam RunTrial uses to fall back
@@ -466,11 +487,27 @@ func (r *TrialRunner) execute(ctx context.Context, cand *persistence.HealingCand
 	candidateID := cand.ID
 
 	res := &TrialResult{Mode: mode}
-	switch mode {
-	case persistence.HealingTrialModeStatic:
-		r.runStatic(cand, res)
-	case persistence.HealingTrialModeReplay:
-		r.runReplay(ctx, cand, evidenceIDs, res)
+	// One check before EITHER mode (self-healing genome design, 2026-09-24):
+	// the replay trial — the one promotion requires — never validated at all,
+	// so a candidate that makes a step timeout inert passed it.
+	if wf, refusals := r.preTrialRefusals(cand); len(refusals) > 0 {
+		res.Verdict = persistence.HealingTrialFailed
+		res.Scorecard = HealingScorecard{RiskLevel: string(cand.RiskLevel), Verdict: string(persistence.HealingTrialFailed)}
+		for _, rf := range refusals {
+			res.Scorecard.Reasons = append(res.Scorecard.Reasons, rf.reason)
+		}
+		r.countRefusals(cand, refusals)
+		r.log.Info().Str("candidate_id", cand.ID).Str("workflow_id", cand.WorkflowID).
+			Str("class", string(cand.CandidateClass)).Str("mode", string(mode)).
+			Str("first_code", refusals[0].code).Int("reasons", len(refusals)).
+			Msg("workflowhealing: candidate refused before the trial ran")
+	} else {
+		switch mode {
+		case persistence.HealingTrialModeStatic:
+			r.runStatic(cand, wf, res)
+		case persistence.HealingTrialModeReplay:
+			r.runReplay(ctx, cand, evidenceIDs, res)
+		}
 	}
 
 	// Cancel-independent finalization window.
@@ -533,37 +570,17 @@ func (r *TrialRunner) advance(ctx context.Context, candidateID string, status pe
 	}
 }
 
-// runStatic validates the candidate genome's shape + policy. It re-
-// parses the candidate's ProposalDiff (the full candidate WORKFLOW.md)
-// and runs the registry validator. A genome that parses + validates
-// clean PASSES; anything else FAILS with the validator's findings as
-// the scorecard reasons. Static never produces inconclusive (it is a
-// deterministic check) and never errored (parse/validate failures are
-// FAILED verdicts, not runner errors).
-func (r *TrialRunner) runStatic(cand *persistence.HealingCandidate, res *TrialResult) {
+// runStatic is the static trial's own check: the genome-hash policy. Parse,
+// validator errors and inert step timeouts are refused BEFORE it, by
+// preTrialRefusals, which both modes share and which hands over the parsed
+// genome. A genome that reaches here and hashes consistently PASSES. Static
+// never produces inconclusive (it is a deterministic check) and never errored
+// (parse/validate failures are FAILED verdicts, not runner errors).
+func (r *TrialRunner) runStatic(cand *persistence.HealingCandidate, wf *registry.Workflow, res *TrialResult) {
 	sc := HealingScorecard{RiskLevel: string(cand.RiskLevel)}
 
-	wf, err := registry.ParseWorkflowMarkdown([]byte(cand.ProposalDiff), cand.WorkflowID+".md")
-	if err != nil {
-		sc.Verdict = string(persistence.HealingTrialFailed)
-		sc.Reasons = []string{"candidate genome failed to parse: " + err.Error()}
-		res.Verdict = persistence.HealingTrialFailed
-		res.Scorecard = sc
-		return
-	}
-
-	report := registry.ValidateWorkflowMarkdown([]byte(cand.ProposalDiff), cand.WorkflowID+".md")
-	if report.HasErrors() {
-		for _, f := range report.Findings {
-			if f.Severity == registry.SeverityError {
-				sc.Reasons = append(sc.Reasons, f.Code+": "+f.Message)
-			}
-		}
-		sc.Verdict = string(persistence.HealingTrialFailed)
-		res.Verdict = persistence.HealingTrialFailed
-		res.Scorecard = sc
-		return
-	}
+	// Parse + validate already ran in preTrialRefusals, which handed over the
+	// parsed genome, so the hash check below does not parse a second time.
 
 	// Policy check: confirm the candidate genome's hash matches the
 	// hash denormalised onto the candidate row. A mismatch means the
@@ -581,6 +598,93 @@ func (r *TrialRunner) runStatic(cand *persistence.HealingCandidate, res *TrialRe
 	sc.Reasons = []string{"candidate workflow validates clean (static shape + policy check passed)"}
 	res.Verdict = persistence.HealingTrialPassed
 	res.Scorecard = sc
+}
+
+// trialRefusal is one pre-trial refusal: its counter code (which also begins
+// its scorecard reason) and the reason.
+type trialRefusal struct {
+	code   string
+	reason string
+	// perTrial marks a code counted once per trial however many reasons it
+	// produced (validator errors: several are usually one broken edit).
+	perTrial bool
+}
+
+// preTrialRefusals runs before both trial modes and returns the parsed
+// candidate genome plus every reason to refuse it:
+//
+//  1. it does not parse → one parse_error;
+//  2. the validator reports ERRORs → one validator_error reason each, counted
+//     once per trial;
+//  3. it INTRODUCES an inert step timeout → one step_timeout_exceeds_wall_clock
+//     reason and count per such step. "Introduced" is SEMANTIC: the live
+//     workflow has the same step with the same parsed timeout under the same
+//     parsed cap, or the finding is new — "20m" rewritten as "1200s" is not a
+//     change. With no live workflow to compare against, every one counts.
+//
+// Every reason begins with its code, so the scorecard and the counter agree.
+func (r *TrialRunner) preTrialRefusals(cand *persistence.HealingCandidate) (*registry.Workflow, []trialRefusal) {
+	wf, err := registry.ParseWorkflowMarkdown([]byte(cand.ProposalDiff), cand.WorkflowID+".md")
+	if err != nil {
+		return nil, []trialRefusal{{code: RefusalCodeParse, reason: refusalReason(RefusalCodeParse, "candidate genome failed to parse: "+err.Error())}}
+	}
+	var out []trialRefusal
+	report := registry.ValidateWorkflowMarkdown([]byte(cand.ProposalDiff), cand.WorkflowID+".md")
+	for _, f := range report.Findings {
+		if f.Severity == registry.SeverityError {
+			out = append(out, trialRefusal{code: RefusalCodeValidator, perTrial: true,
+				reason: refusalReason(RefusalCodeValidator, f.Code+": "+f.Message)})
+		}
+	}
+	const inert = RefusalCodeInertTimeout
+	candidateInert := registry.WallClockFindings(wf)
+	if len(candidateInert) == 0 {
+		return wf, out
+	}
+	var live *registry.Workflow
+	if r.lookup != nil {
+		live = r.lookup.GetWorkflow(cand.WorkflowID)
+	}
+	if live == nil {
+		for _, f := range candidateInert {
+			out = append(out, trialRefusal{code: inert, reason: refusalReason(inert, f.Finding.Message+
+				" (the live workflow was unavailable to compare against, so this counts as introduced)")})
+		}
+		return wf, out
+	}
+	type key struct {
+		step         string
+		timeout, cap time.Duration
+	}
+	existing := map[key]bool{}
+	for _, f := range registry.WallClockFindings(live) {
+		existing[key{f.StepID, f.Timeout, f.Cap}] = true
+	}
+	for _, f := range candidateInert {
+		if existing[key{f.StepID, f.Timeout, f.Cap}] {
+			continue // pre-existing and untouched: compared, not reported
+		}
+		out = append(out, trialRefusal{code: inert, reason: refusalReason(inert, f.Finding.Message)})
+	}
+	return wf, out
+}
+
+// countRefusals feeds the optional refusal counter.
+func (r *TrialRunner) countRefusals(cand *persistence.HealingCandidate, refusals []trialRefusal) {
+	rm, ok := r.metrics.(RefusalMetrics)
+	if !ok || rm == nil {
+		return
+	}
+	counted := map[string]bool{}
+	for _, rf := range refusals {
+		if rf.perTrial {
+			if counted[rf.code] {
+				continue
+			}
+			counted[rf.code] = true
+		}
+		rm.RecordHealingRefusal(rf.code, string(cand.CandidateClass))
+	}
 }
 
 // runReplay re-runs each evidence execution under the candidate

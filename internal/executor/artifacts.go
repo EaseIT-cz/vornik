@@ -803,7 +803,7 @@ func (e *Executor) recordStepOutcomeWithSignalsAndBudget(
 	// degenerate_loop) bypass finalizePendingOutcome — emit the
 	// Prometheus event here so the quality gauges see them.
 	if e.metrics != nil && outcome != string(stepoutcome.PendingValidation) && outcome != "" {
-		e.metrics.RecordFinalOutcome(role, model, outcome)
+		e.metrics.RecordFinalOutcome(role, model, outcome, errorClass)
 	}
 }
 
@@ -836,7 +836,7 @@ func (e *Executor) finalizePendingOutcome(
 		return
 	}
 	if e.metrics != nil {
-		e.metrics.RecordFinalOutcome(role, model, outcome)
+		e.metrics.RecordFinalOutcome(role, model, outcome, errorClass)
 	}
 	// Mirror the record-time broadcast: the live view seeded/rendered this
 	// step's card off the pending_validation row and needs the flip.
@@ -869,7 +869,9 @@ func (e *Executor) sweepPendingOutcomes(ctx context.Context, executionID, fallba
 			Msg("step outcome: swept pending rows")
 		if e.metrics != nil {
 			for _, r := range swept {
-				e.metrics.RecordFinalOutcome(r.Role, r.Model, fallbackOutcome)
+				// A swept row carries no error class, so it never counts as
+				// a failure not charged to the model.
+				e.metrics.RecordFinalOutcome(r.Role, r.Model, fallbackOutcome, "")
 			}
 		}
 	}

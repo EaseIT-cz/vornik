@@ -45,9 +45,12 @@ import (
 func (h *DoctorHandlers) checkWorkflowMDShape() DoctorCheck {
 	const name = "workflow_md_shape"
 	if h.configDir == "" {
+		// SKIPPED, not OK: nothing was examined (doctor-skipped-vs-ok design).
+		// This check reported OK here until 2026-09-24, when it absorbed the
+		// second workflow_md_shape implementation, which said SKIPPED.
 		return DoctorCheck{
 			Name:    name,
-			Status:  "OK",
+			Status:  "SKIPPED",
 			Message: "no config directory configured; skipping",
 		}
 	}
@@ -57,7 +60,7 @@ func (h *DoctorHandlers) checkWorkflowMDShape() DoctorCheck {
 		if os.IsNotExist(err) {
 			return DoctorCheck{
 				Name:    name,
-				Status:  "OK",
+				Status:  "SKIPPED",
 				Message: "no workflows directory; nothing to validate",
 			}
 		}
@@ -146,6 +149,10 @@ func (h *DoctorHandlers) checkWorkflowMDShape() DoctorCheck {
 			Message: fmt.Sprintf("%d recommended-field warning(s) across %d file(s)", len(warns), countDistinctFiles(warns)),
 			Items:   items,
 		}
+	}
+	if checked == 0 && len(readErrs) == 0 {
+		// Nothing examined is SKIPPED, not a clean pass.
+		return DoctorCheck{Name: name, Status: "SKIPPED", Message: "no workflow files under workflows/; nothing to validate"}
 	}
 	msg := fmt.Sprintf("all %d workflow file(s) pass the SKILL.md shape", checked)
 	if len(readErrs) > 0 {

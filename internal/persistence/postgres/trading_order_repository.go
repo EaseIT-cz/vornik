@@ -86,10 +86,10 @@ func (r *TradingOrderRepository) Record(ctx context.Context, order *persistence.
 		)
 		ON CONFLICT (project_id, idempotency_key) DO UPDATE SET
 		    broker_order_id    = COALESCE(EXCLUDED.broker_order_id, trading_orders.broker_order_id),
-		    status             = EXCLUDED.status,
-		    last_status_reason = EXCLUDED.last_status_reason,
+		    status             = CASE WHEN `+staleStatusPredicate+` THEN trading_orders.status ELSE EXCLUDED.status END,
+		    last_status_reason = CASE WHEN `+staleStatusPredicate+` THEN trading_orders.last_status_reason ELSE EXCLUDED.last_status_reason END,
 		    terminal_at        = COALESCE(EXCLUDED.terminal_at, trading_orders.terminal_at),
-		    filled_qty         = EXCLUDED.filled_qty`,
+		    filled_qty         = GREATEST(trading_orders.filled_qty, EXCLUDED.filled_qty)`,
 		order.ID, order.ProjectID, ptrStringOrNil(order.TaskID),
 		ptrStringOrNil(order.ExecutionID), ptrStringOrNil(order.BrokerOrderID),
 		order.IdempotencyKey, order.Mode, order.Symbol, order.Action, order.OrderType,
@@ -162,6 +162,16 @@ func (r *TradingOrderRepository) checkIdentityMatch(ctx context.Context, order *
 		persistence.ErrOrderIdentityMismatch, order.ProjectID, order.IdempotencyKey, strings.Join(mismatches, ", "))
 }
 
+// staleStatusPredicate is true when an incoming row would rewind a final
+// order to a non-final status — a stale row arriving late (a journal replay,
+// a retried partial after filled). Every status row for an order upserts one
+// row, so the upsert is forward-only: a final status is kept against a
+// non-final one, while a final incoming status always wins (boot reconcile's
+// cancelled -> filled correction). Trading-fill-reconciliation design,
+// finding #7 correction (2026-09-24).
+const staleStatusPredicate = `trading_orders.status IN ('filled','cancelled','rejected')
+		       AND EXCLUDED.status IN ('submitted','partial','orphaned')`
+
 // List returns trading_orders rows matching the filter,
 // newest-first. Default page size 100; cap at 5000 so a
 // caller passing PageSize=0 doesn't accidentally trigger a
@@ -199,6 +209,7 @@ func (r *TradingOrderRepository) List(ctx context.Context, filter persistence.Tr
 			&o.IdempotencyKey, &o.Mode, &o.Symbol, &o.Action, &o.OrderType,
 			&o.Qty, &limitPx, &stopPx, &o.TimeInForce,
 			&o.Status, &o.LastStatusReason, &o.SubmittedAt, &terminalAt,
+			&o.FilledQty,
 		); err != nil {
 			return nil, mapDBError(err)
 		}
@@ -238,7 +249,8 @@ func buildTradingOrderQuery(filter persistence.TradingOrderFilter, countOnly boo
 			SELECT id, project_id, task_id, execution_id, broker_order_id,
 			       idempotency_key, mode, symbol, action, order_type,
 			       qty, limit_price, stop_price, time_in_force,
-			       status, last_status_reason, submitted_at, terminal_at
+			       status, last_status_reason, submitted_at, terminal_at,
+			       filled_qty
 			FROM trading_orders WHERE 1=1`)
 	}
 	args := make([]any, 0, 5)

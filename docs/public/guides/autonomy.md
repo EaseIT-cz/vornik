@@ -3,7 +3,7 @@ sources:
     - path: internal/autonomy/manager.go
       sha256: adae608de34e54e60e42dd72489e4e7ac9aeffce86d7b26c441d29734e91a6f3
     - path: internal/registry/project.go
-      sha256: e861ee9c2ea7aade5b07e616dd12a47137db2566a89958363bf015f9a2e93c2e
+      sha256: aa81ba21422bf09879f1e8dff3f8fed933af7ff8c73906d08e67a6781298c835
 ---
 # Autonomy — self-running projects
 
@@ -128,7 +128,8 @@ page in the UI) — the loop is cancelled.
 ## Backlog autonomy and agent deposits
 
 `backlog` mode reads a plain checklist file — `BACKLOG.md` by default
-(`autonomy.backlogFilePath` to point at another workspace-relative path) —
+(`autonomy.backlogFilePath` to point at another workspace-relative path, never
+inside `.git/`) —
 and fires the first pending line as a task, ticking it off when the task is
 accepted. You can hand-author that file, but agents can feed it too: any role
 permitted to call the `backlog_deposit` tool can record an off-scope finding —

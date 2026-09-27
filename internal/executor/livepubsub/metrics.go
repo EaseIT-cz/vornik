@@ -9,6 +9,11 @@ import "github.com/prometheus/client_golang/prometheus"
 type Metrics struct {
 	PublishedTotal *prometheus.CounterVec // {kind}
 	DroppedTotal   *prometheus.CounterVec // {reason}
+	// DetachedTimeoutTotal counts a DB-backed publish phase that ran out its
+	// own bound after being detached from the caller's cancellation
+	// (amendment 2026-09-25). phase=append: the event is lost to other
+	// replicas; phase=notify: delayed until ListSince catch-up, not lost.
+	DetachedTimeoutTotal *prometheus.CounterVec // {phase}
 }
 
 // NewMetrics creates and registers the live-event metrics. Returns nil
@@ -34,7 +39,13 @@ func NewMetrics(reg *prometheus.Registry) *Metrics {
 			Name:      "events_dropped_total",
 			Help:      "Live execution events dropped to a slow subscriber during non-blocking fan-out, by reason.",
 		}, []string{"reason"}),
+		DetachedTimeoutTotal: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Namespace: "vornik",
+			Subsystem: "live",
+			Name:      "event_detached_timeout_total",
+			Help:      "DB-backed live-event publish phases that ran out their own bound, by phase (append = lost to other replicas; notify = delayed until catch-up).",
+		}, []string{"phase"}),
 	}
-	reg.MustRegister(m.PublishedTotal, m.DroppedTotal)
+	reg.MustRegister(m.PublishedTotal, m.DroppedTotal, m.DetachedTimeoutTotal)
 	return m
 }

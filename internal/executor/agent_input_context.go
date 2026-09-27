@@ -119,7 +119,8 @@ func assembleAgentPrompt(task *persistence.Task, stepPromptArg string, opts *age
 	// when it is sitting in the workspace — the customer-reported "facts
 	// document exists but was never analyzed" failure (2026-08-03).
 	if len(inputFiles) > 0 {
-		prompt += "\n\n" + buildAttachedFilesBlockStaged(inputFiles, inputExtractions, stagedArtifactIndex(opts))
+		canOpen := opts == nil || !opts.RoleCannotOpenExtractions
+		prompt += "\n\n" + buildAttachedFilesBlockForRole(inputFiles, inputExtractions, stagedArtifactIndex(opts), canOpen)
 	}
 	if opts == nil {
 		return prompt, timeContext

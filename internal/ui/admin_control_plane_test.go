@@ -330,11 +330,16 @@ func TestCPApplyOutcome_MapsEngineErrors(t *testing.T) {
 		controlplane.ErrDaemonAckRequired: "ack-required",
 		controlplane.ErrReviewOnly:        "review-only",
 		controlplane.ErrStaleBase:         "stale-base", // must NOT fall to the misleading "apply-failed"
+		// Design §12 / review 53a1 F4: as the engine wraps it.
+		fmt.Errorf("change re-validation failed: %w", fmt.Errorf("revalidate: %w: x", controlplane.ErrWallClockLowered)): "wall-clock-lowered",
 	}
 	for err, want := range cases {
 		if got := cpApplyOutcome(err); got != want {
 			t.Errorf("cpApplyOutcome(%v) = %q, want %q", err, got, want)
 		}
+	}
+	if _, ok := cpFlashMessages["wall-clock-lowered"]; !ok {
+		t.Error("wall-clock-lowered has no flash message")
 	}
 	// The stale-base token has a distinct, non-misleading flash message.
 	if _, ok := cpFlashMessages["stale-base"]; !ok {

@@ -1,7 +1,7 @@
 ---
 sources:
     - path: docs/release-notes
-      sha256: 9c6074a10d30227c57722f382ce2b7c4d03840d07d45c5759149e2b56669971a
+      sha256: 136e77bb167aebdcad79f039f5e086c28faa9ab095cf5848d6e6b97ebfae5215
 ---
 # Release Notes
 
@@ -14,6 +14,183 @@ behavior changes, and notable fixes. Internal-only changes are omitted.
     so upgrades generally require no config changes. Always take a backup
     before upgrading. A few releases ask you to restart the daemon to pick up
     new behavior; those are called out below.
+
+---
+
+## 2026.9.7
+
+!!! warning "Upgrade requirements"
+    - **Rebuild or pull the agent image with this release.** Document, image,
+      video and audio extraction and voice transcription and speech now run
+      inside the agent image, never on your host. With an older image, PDF,
+      OCR, video, audio and voice all report **"not available"** — there is
+      no fallback to host programs. The image is about 1.8 GB; models are not
+      included.
+    - **Audio extraction changed engine.** It no longer runs the Python
+      `whisper` command; it runs whisper.cpp with the model at
+      `extractors.audio.model_path`, falling back to `voice.stt.model`. **With
+      neither set, audio extraction is not available.**
+    - `voice.stt.binary_path`, `voice.stt.ffmpeg_path`,
+      `voice.tts.binary_path` and `voice.tts.ffmpeg_path` are now ignored. The
+      daemon warns at startup when they are set; you can delete them.
+    - **Host checks moved to `vornikctl doctor`.** The doctor in the UI and
+      REST API now shows a single `host_checks` row telling you to run
+      `vornikctl doctor` for the container and image checks.
+    - **Stdio MCP servers can be added only by editing your config files on
+      the host.** The admin UI, proposals and the project editors refuse them.
+      HTTP MCP servers are unaffected.
+    - Workflow changes applied **before** this release can no longer be rolled
+      back from the UI; rollback refuses them and names the file. Changes
+      applied from now on roll back as before.
+    - If a project declares `dependencies:`, run
+      `vornikctl deps install <project>` before its tasks run; until then its
+      steps fail and name that command.
+    - **Git:** a globally installed git-lfs (or any global filter driver) is
+      no longer used by the daemon's git; run `git lfs install --local` in
+      the project's workspace instead. The new `git_config_composition`
+      doctor row lists anything dropped.
+    - If a project's workspace cannot get an isolated worktree for a task,
+      the task now fails with `WORKSPACE_UNAVAILABLE` instead of running
+      unisolated. A git hook that breaks `git worktree add` is the usual
+      cause.
+    - Roles with `runtimePolicy: warm` no longer see the project
+      workspace; use `ephemeral` for any role that needs it. Swarms
+      scaffolded from the `basic`, `dev` or `research` presets had a warm
+      lead; the daemon warns about them on load.
+    - After upgrading, re-run the config asset install from the same release
+      so the new `config_template_drift` doctor check has a current baseline.
+
+**No request can make Vornik run a program on your host.** Only `vornikctl`,
+run by you, starts host processes. Nothing that arrives through chat, the REST
+API, MCP, A2A or a webhook can make the daemon run one — not even a fixed
+command. Before this release, several paths could:
+
+- An admin form, the "add MCP server" form, proposals and the project editors
+  could register a command-line MCP server the daemon would launch. They now
+  refuse to. Stdio servers are added by editing the config files on the host.
+- The doctor ran container and system commands for its host checks, the
+  support report included `podman info`, and diagnose read the system
+  journal. These host checks now run only in `vornikctl doctor`, which
+  merges them into the same report (pretty and `--json`). The support report
+  no longer includes `podman info`, and diagnose no longer shows a journal
+  tail.
+- Applying or rolling back a workflow change, and deleting an artifact, made
+  git commits. They no longer do: the change history is in the database.
+  Apply now records the file it replaces and refuses if it cannot, so every
+  apply can be rolled back; rollback restores that file to both config trees.
+  The control-plane mirror still writes your source checkout — you commit it.
+- `render_document` ran pandoc on the host. It now renders only in the agent
+  image, with no network and no fallback, and gains a `docx` format.
+- Uploaded PDFs, images, video and recordings, and every voice note, were
+  processed by programs on the host. They now run in the agent image.
+- Only one internal component may start a process at all, and it runs a
+  closed set of five kinds: the agent container, control verbs on the
+  daemon's own containers, git in a workspace, the git-over-HTTPS backend,
+  and programs you named in your config files. Anything outside that shape
+  is refused before it starts.
+- **The daemon's own git no longer reads anything an agent can write.** Git
+  runs programs named by the repository and its config: hooks, file
+  monitors, and filter drivers named in `.gitattributes`. Several paths let
+  an agent's workspace choose them. The daemon now refuses to run a task
+  unisolated, pins the repository it works in, and reads a global git
+  config composed from yours that keeps your identity and credentials and
+  drops every driver. Every git flow (pull-request review, issue fixes,
+  pushes, merge-back, autonomy refresh) was tested against real git before
+  and after the change, and on a live repository before release.
+
+**Every sandboxed tool run is bounded.** Each run has no network, a read-only
+root filesystem, dropped capabilities, and a memory limit, CPU share, process
+limit, timeout and input size per feature (render, PDF, OCR, video, audio,
+speech-to-text, text-to-speech). Oversized input is refused before anything
+starts. Output is capped per feature, and enforced while the tool runs: no
+single file can exceed the cap, and the output directory is checked once a
+second. That is a sampled bound, not a disk quota, so a run can overshoot by
+about one second of writes before it is stopped. At most
+`sandbox_tools.max_concurrent` runs (default 2) happen at once, with one slot
+kept for voice so a batch of extractions cannot stall a voice note. Tune
+per feature with `sandbox_tools.limits.<feature>`,
+`sandbox_tools.timeouts.<feature>` and `sandbox_tools.cpus.<feature>`;
+`sandbox_tools.max_input_bytes` overrides every feature's input bound. These
+settings are read at startup, not on config reload. The startup memory check
+counts the sandbox pool; only limits you set yourself can refuse a boot.
+A new `sandbox_tools` doctor check runs each tool on a generated sample, and
+four metrics cover it: `vornik_sandbox_tool_runs_total`,
+`vornik_sandbox_tool_duration_seconds`, `vornik_sandbox_tool_wait_seconds` and
+`vornik_sandbox_tool_remove_failures_total`.
+
+**Re-ingesting a document now replaces its earlier versions.** Every re-ingest
+used to add its chunks beside all earlier ones, all still live, so recall
+could serve a months-old section of a document you had since rewritten. A
+document is now identified by its path in its repository; the newest upload
+wins and older versions are retired. Each version is stored whole, so an
+unchanged section is never lost with the old version. Your agents' own output
+is never affected.
+
+- `/rag-ingest` in the companion plugin takes its scope from the files' own
+  repository, not the directory you ran it in, and refuses an upload that
+  mixes repositories.
+- `vornikctl memory supersede-legacy-documents` retires the name-only versions
+  ingested before this release, once a document has been re-ingested under
+  its path. It is a dry run unless you pass `--apply`, and leaves alone any
+  name two files share. On our reference deployment it retired 2,980 stale
+  chunks across 69 documents.
+- Documents over about 125 KB could not be ingested in 2026.9.6 — a size
+  guard meant to protect an agent's context also blocked ingest, where no
+  agent reads the file. Fixed.
+
+**Companion plugins 0.26.0 (Claude Code) and 0.23.0 (Codex)** ship with this
+release: repository-scoped `/rag-ingest` and `/upload`, and backlog deposits
+that land in their own priority group.
+
+**The agent-quality benchmark measured the wrong thing, and v9 fixes it.**
+Tasks ask the swarm to write new files, but the workspace kept earlier runs'
+output, so from the second run onward agents re-validated code that was
+already written. Every task now starts from a clean workspace, and four tasks
+are graded by acceptance tests the agents never see (reported alongside the
+score, not used as a gate). Harness v9 results are **not comparable** with
+earlier dev-swarm figures, including earlier baselines.
+The first graded v9 arm ran on a local Ollama host: a 35B mixture-of-experts
+model (about 3B parameters active) at 4-bit passed all four hidden acceptance
+suites. That is one run per task, on small single-file fixes, at 23 to over 90
+minutes per task. It shows a locally served model can land correct fixes on
+this harness; it is not a claim about harder work or a statistical result.
+
+**On a slow backend.** When `scheduler.speed_aware_timeouts` is enabled, the
+speed factor now stretches step timeouts, not only the task lease, which never
+limited anything. `chat.optional_work.disabled` and
+`chat.optional_work.disabled_models` switch off optional LLM work (narration,
+memory titles and summaries, reranking) for a model too slow to serve it
+beside tasks. Optional work hitting its own short deadline no longer marks the
+model unhealthy and fails your next tasks.
+
+**New operator tools.**
+
+- A **regulatory record** page lists every data-subject request and security
+  incident, with those near or past their GDPR deadlines first, and AI Act
+  disclosure counts per channel. It shows identifiers, deadlines and hashes,
+  never personal data. Available in both editions.
+- **`vornikctl leader-lock release`** clears an orphaned leader-lock row the
+  doctor reports, and refuses a lock that is still held. The doctor no longer
+  reports a lock nothing in your build would renew as an error.
+- **`vornikctl deps install` and `deps status`** install a project's declared
+  dependencies inside the agent image, from pre-built packages only.
+- The **`config_template_drift`** doctor check tells you when a deployed
+  config lacks a fix its shipped template has; `vornikctl doctor ack` declines
+  one you do not want, and records who did.
+
+**Chat can no longer cancel or retry a task on its own.** The model could
+cancel or retry a task without asking. Now it proposes, and you confirm in
+your own next message.
+
+**Fixes.** The doctor's model routing check asks the live router, so it no
+longer calls working models "unrouted". A model is no longer blamed for
+failures caused by containers or mounts. `orphan_fk_rows` keeps your LLM cost
+history instead of offering to delete it. `vornikctl doctor --json` no longer
+drops fields. A step timeout above the workflow's `maxWallClock` now warns,
+since it can never take effect. A cancelled task no longer overwrites a task
+that finished at the same moment, and holds no lease. An explicit empty
+`database.driver` now means Postgres, which turns on features that were
+silently off under that setting.
 
 ---
 

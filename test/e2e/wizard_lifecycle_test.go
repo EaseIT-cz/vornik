@@ -63,7 +63,30 @@ const (
 var (
 	httpBase string // http://127.0.0.1:<port>
 	dbPath   string // SQLite file the daemon owns
+
+	// e2eWork, e2eConfigFile and e2eConfigsTree locate the booted daemon's
+	// config, for tests that run vornikctl against it.
+	e2eWork        string
+	e2eConfigFile  string
+	e2eConfigsTree string
+	// spawnShimDir holds logging stand-ins for the host programs the
+	// process-spawn law keeps off the daemon's request path; they are first on
+	// the daemon's PATH and append each call to spawnShimLog (see
+	// installSpawnShims in process_spawn_law_http_test.go).
+	spawnShimDir string
+	spawnShimLog string
+	// sourceRoot is a git repository holding the operator's source config
+	// tree (VORNIK_CONFIGS_SOURCE_DIR = <sourceRoot>/configs), so the
+	// control-plane mirror runs against a real checkout.
+	sourceRoot string
+	// workspaceRoot is runtime.project_workspace_path: per-project
+	// workspaces live at <workspaceRoot>/<projectID>.
+	workspaceRoot string
 )
+
+// e2eStaticProject is laid out at boot (not through the wizard), so tests that
+// need a project in the registry from the start have one.
+const e2eStaticProject = "e2e-static"
 
 // TestMain builds the daemon, lays out a temp config tree, boots the
 // real binary, waits for readiness, runs the tests, then tears down.
@@ -115,8 +138,17 @@ func runE2E(m *testing.M) (int, error) {
 	port := freePort()
 	httpBase = fmt.Sprintf("http://127.0.0.1:%d", port)
 
+	workspaceRoot = filepath.Join(work, "workspaces")
 	if err := layoutConfigTree(configsTree, filepath.Join(work, "vornik.yaml"), dbPath, work, port); err != nil {
 		return 1, fmt.Errorf("layout config: %w", err)
+	}
+	e2eWork, e2eConfigFile, e2eConfigsTree = work, filepath.Join(work, "vornik.yaml"), configsTree
+	if err := installSpawnShims(work); err != nil {
+		return 1, fmt.Errorf("spawn shims: %w", err)
+	}
+	sourceRoot = filepath.Join(work, "source")
+	if err := layoutSourceCheckout(sourceRoot); err != nil {
+		return 1, fmt.Errorf("layout source checkout: %w", err)
 	}
 
 	logFile, _ := os.Create(filepath.Join(work, "daemon.log"))
@@ -125,6 +157,8 @@ func runE2E(m *testing.M) (int, error) {
 	daemon.Env = append(os.Environ(),
 		"VORNIK_CONFIG="+filepath.Join(work, "vornik.yaml"),
 		"VORNIK_CONFIGS_DIR="+configsTree,
+		"PATH="+spawnShimDir+string(os.PathListSeparator)+os.Getenv("PATH"),
+		"VORNIK_CONFIGS_SOURCE_DIR="+filepath.Join(sourceRoot, "configs"),
 	)
 	if logFile != nil {
 		daemon.Stdout, daemon.Stderr = logFile, logFile
@@ -413,12 +447,19 @@ func layoutConfigTree(configsTree, configFile, dbFile, work string, port int) er
 		}
 	}
 	tmplDir := filepath.Join(configsTree, "project-templates", e2eTemplateSlug)
+	static := func(tmpl string) string {
+		r := strings.NewReplacer("{{.projectId}}", e2eStaticProject, "{{.displayName}}", "E2E Static", "{{.topic}}", "fixtures")
+		return r.Replace(tmpl)
+	}
 	files := map[string]string{
-		filepath.Join(tmplDir, "template.yaml"):     e2eTemplateManifest,
-		filepath.Join(tmplDir, "project.yaml.tmpl"): e2eProjectTmpl,
-		filepath.Join(tmplDir, "swarm.md.tmpl"):     e2eSwarmTmpl,
-		filepath.Join(tmplDir, "workflow.md.tmpl"):  e2eWorkflowTmpl,
-		configFile: fmt.Sprintf(e2eDaemonConfig, port, dbFile, filepath.Join(work, "artifacts"), filepath.Join(work, "artifacts")),
+		filepath.Join(tmplDir, "template.yaml"):                            e2eTemplateManifest,
+		filepath.Join(tmplDir, "project.yaml.tmpl"):                        e2eProjectTmpl,
+		filepath.Join(tmplDir, "swarm.md.tmpl"):                            e2eSwarmTmpl,
+		filepath.Join(tmplDir, "workflow.md.tmpl"):                         e2eWorkflowTmpl,
+		filepath.Join(configsTree, "projects", e2eStaticProject+".yaml"):   static(e2eProjectTmpl),
+		filepath.Join(configsTree, "swarms", e2eStaticProject+"-swarm.md"): static(e2eSwarmTmpl),
+		filepath.Join(configsTree, "workflows", e2eStaticProject+"-wf.md"): static(e2eWorkflowTmpl),
+		configFile: fmt.Sprintf(e2eDaemonConfig, port, dbFile, filepath.Join(work, "artifacts"), filepath.Join(work, "artifacts"), workspaceRoot),
 	}
 	for path, body := range files {
 		if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
@@ -519,7 +560,7 @@ Do the one thing for {{.displayName}}.
 
 // e2eDaemonConfig is the dev-config shape: SQLite, loopback, auth off,
 // every LLM/observability subsystem disabled. Args: port, dbPath,
-// artifactsPath, artifactsPath.
+// artifactsPath, artifactsPath, projectWorkspacePath.
 const e2eDaemonConfig = `server:
   address: "127.0.0.1:%d"
   read_timeout: 30s
@@ -562,6 +603,31 @@ autonomy:
 runtime:
   userns_mode: ""
   run_as_user: ""
+  project_workspace_path: "%s"
 mcp:
   servers: []
 `
+
+// layoutSourceCheckout creates the operator's source config tree as a git
+// repository with one commit, so a test can assert the daemon adds none.
+func layoutSourceCheckout(root string) error {
+	for _, sub := range []string{"projects", "swarms", "workflows"} {
+		if err := os.MkdirAll(filepath.Join(root, "configs", sub), 0o755); err != nil {
+			return err
+		}
+	}
+	if err := os.WriteFile(filepath.Join(root, "configs", "README.md"), []byte("source tree\n"), 0o644); err != nil {
+		return err
+	}
+	for _, args := range [][]string{
+		{"init", "-q"},
+		{"add", "."},
+		{"-c", "user.name=e2e", "-c", "user.email=e2e@example.invalid", "commit", "-q", "-m", "seed"},
+	} {
+		cmd := exec.Command("git", append([]string{"-C", root}, args...)...)
+		if out, err := cmd.CombinedOutput(); err != nil {
+			return fmt.Errorf("git %v: %v: %s", args, err, out)
+		}
+	}
+	return nil
+}

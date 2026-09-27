@@ -36,8 +36,8 @@ func (h *DoctorHandlers) checkModelRouteCoverage() DoctorCheck {
 	if h.configDir == "" {
 		return DoctorCheck{Name: name, Status: "SKIPPED", Message: "no config dir; skipping"}
 	}
-	if len(h.chatRoutePrefixes) == 0 {
-		return DoctorCheck{Name: name, Status: "SKIPPED", Message: "no chat model_route prefixes configured; skipping (router not in use)"}
+	if h.chatRouteResolver == nil {
+		return DoctorCheck{Name: name, Status: "SKIPPED", Message: "the chat provider is not the router, so there is no route table to check against; skipping"}
 	}
 
 	reg := registry.New()
@@ -59,7 +59,7 @@ func (h *DoctorHandlers) checkModelRouteCoverage() DoctorCheck {
 	}
 
 	refs := collectModelRefs(reg.ListSwarms())
-	findings := evalModelRouteCoverage(refs, h.chatRoutePrefixes, table)
+	findings := evalModelRouteCoverage(refs, h.chatRouteResolver, table)
 	if len(findings) == 0 {
 		return DoctorCheck{Name: name, Status: "OK", Message: "all swarm-role models are routed and priced"}
 	}
@@ -108,11 +108,14 @@ func collectModelRefs(swarms []*registry.Swarm) []modelRef {
 }
 
 // evalModelRouteCoverage returns a finding string per model that fails to
-// route or fails to price. Pure — no I/O — so it's directly unit-testable.
-func evalModelRouteCoverage(refs []modelRef, routePrefixes []string, table *pricing.Table) []string {
+// route or fails to price. Pure given a deterministic resolver — in
+// production that is the live router's Resolves, so "routed" is the router's
+// own decision, never a copy of its rule (model-route-coverage design,
+// 2026-09-24; issue #61(b)).
+func evalModelRouteCoverage(refs []modelRef, resolve func(model string) (route string, matched bool), table *pricing.Table) []string {
 	var findings []string
 	for _, r := range refs {
-		routed := modelMatchesAnyPrefix(r.model, routePrefixes)
+		route, routed := resolve(r.model)
 		_, priced := table.Lookup(r.model)
 		if routed && priced {
 			continue
@@ -122,7 +125,11 @@ func evalModelRouteCoverage(refs []modelRef, routePrefixes []string, table *pric
 			problems = append(problems, "unrouted (no model_route prefix matches)")
 		}
 		if !priced {
-			problems = append(problems, "unpriced (no pricing.yaml entry)")
+			if routed {
+				problems = append(problems, fmt.Sprintf("unpriced (no pricing.yaml entry; route %q would bill it)", route))
+			} else {
+				problems = append(problems, "unpriced (no pricing.yaml entry)")
+			}
 		}
 		kind := "model"
 		if r.isFallback {
@@ -132,15 +139,4 @@ func evalModelRouteCoverage(refs []modelRef, routePrefixes []string, table *pric
 			kind, r.model, r.role, r.swarm, strings.Join(problems, ", ")))
 	}
 	return findings
-}
-
-// modelMatchesAnyPrefix mirrors the chat router's prefix-match rule: a route
-// with an empty prefix is a catch-all that matches every model.
-func modelMatchesAnyPrefix(model string, prefixes []string) bool {
-	for _, p := range prefixes {
-		if p == "" || strings.HasPrefix(model, p) {
-			return true
-		}
-	}
-	return false
 }

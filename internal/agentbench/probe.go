@@ -11,7 +11,7 @@ import (
 	"context"
 	"fmt"
 	"sort"
-	"strings"
+	"vornik.io/vornik/internal/agenttools"
 )
 
 // TaskRef identifies the benchmark task an execution was running.
@@ -294,7 +294,8 @@ func (p GrantProbe) Score(_ context.Context, task TaskRef, gold Gold, trace Trac
 }
 
 // normaliseTool reduces a tool name to the bare form both sides can be compared
-// in, mirroring the daemon's own ceiling check (mcpRoleToolAllowed).
+// in: agenttools.BareToolName, the normalisation the daemon's own ceiling check
+// uses, called rather than mirrored so the two cannot drift.
 //
 // WHY THE METRIC NEEDS IT. Gold records what was INVOKED, which tool_audit_log
 // stores bare ("git_status"). Grants record what the model ASKED FOR, which is
@@ -304,13 +305,7 @@ func (p GrantProbe) Score(_ context.Context, task TaskRef, gold Gold, trace Trac
 // prefix. A metric that depends on how a model spells a name is not measuring the
 // grant decision.
 func normaliseTool(name string) string {
-	if i := strings.LastIndex(name, "__"); i >= 0 {
-		name = name[i+2:]
-	}
-	if i := strings.LastIndex(name, "."); i >= 0 {
-		name = name[i+1:]
-	}
-	return name
+	return agenttools.BareToolName(name)
 }
 
 func normaliseTools(items []string) []string {

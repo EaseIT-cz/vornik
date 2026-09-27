@@ -1,7 +1,7 @@
 ---
 sources:
     - path: https://docs.vornik.io
-      sha256: 69bba1cb257cf7a9abec8f1e0d4d434432716b619dc2b915c89260f9480a78cb
+      sha256: 32e8ddfe1b1bec505630c51e6b9e26f45496ba174dc48f7c12edeea4fa8016eb
 ---
 # Concepts
 

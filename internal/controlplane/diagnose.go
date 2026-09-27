@@ -272,6 +272,11 @@ func (d *Diagnoser) maybeFileProposal(ctx context.Context, b *DiagnoseBundle, v 
 		if rc, rerr := d.renderConfigChange(b.ProjectID, v.ConfigChange); rerr != nil {
 			d.Logger.Warn().Err(rerr).Str("kind", v.ConfigChange.Kind).
 				Msg("diagnose: config_change failed validation; filed review-only")
+			// Say what the scan path says for the same condition (actionable-
+			// proposals design §12): the suggested raise cannot act, and why.
+			if errors.Is(rerr, ErrWallClockBinds) {
+				p.Rationale += "\n\nThe suggested step-timeout change was not rendered: " + rerr.Error() + "."
+			}
 		} else {
 			p.ApplyTarget = rc.ApplyTarget
 			p.ApplyContent = rc.ApplyContent

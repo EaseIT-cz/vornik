@@ -3,21 +3,22 @@
 
 package integration_test
 
-// End-to-end test for the memetic rollback path (Slice 5) against
-// a real postgres + sandbox git repo. Pins:
-//   - apply then rollback transitions the row applied →
-//     rolled_back and stamps the revert commit SHA.
-//   - the working tree's WORKFLOW.md is restored to the pre-apply
-//     version (verifying the git revert actually changed the file).
+// End-to-end test for the memetic rollback path (Slice 5) against a real
+// postgres + a source tree that is a git repository. Pins:
+//   - apply then rollback transitions the row applied → rolled_back and
+//     restores the working tree's WORKFLOW.md from the pre_apply_yaml the
+//     apply recorded, with NO git commit (process-spawn law S3,
+//     https://docs.vornik.io; incident:
+//     rollback was a `git revert` the daemon ran on request).
+//   - a row applied before S3 (a real applied_commit, no pre_apply_yaml) is
+//     refused, naming the commit to restore from, and the file is untouched.
 //   - rollback on a not-applied row errors with ErrProposalNotApplied.
 
 import (
 	"context"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
-	"strings"
 	"testing"
 	"time"
 
@@ -28,41 +29,7 @@ import (
 	"vornik.io/vornik/internal/workflowapply"
 )
 
-// itGitReverter mirrors the service-package gitReverter inline.
-type itGitReverter struct {
-	repoDir string
-}
-
-func (g *itGitReverter) Revert(ctx context.Context, sha, msg, _, _ string) (string, error) {
-	env := append(os.Environ(),
-		"GIT_AUTHOR_NAME=vornik-it",
-		"GIT_AUTHOR_EMAIL=it@vornik.test",
-		"GIT_COMMITTER_NAME=vornik-it",
-		"GIT_COMMITTER_EMAIL=it@vornik.test",
-	)
-	cmd := exec.CommandContext(ctx, "git", "-C", g.repoDir,
-		"revert", "--no-edit", "-m", "1", sha)
-	cmd.Env = env
-	if out, err := cmd.CombinedOutput(); err != nil {
-		return "", fmt.Errorf("git revert: %w: %s", err, out)
-	}
-	if msg != "" {
-		amend := exec.CommandContext(ctx, "git", "-C", g.repoDir,
-			"commit", "--amend", "-m", msg)
-		amend.Env = env
-		if out, err := amend.CombinedOutput(); err != nil {
-			return "", fmt.Errorf("git amend: %w: %s", err, out)
-		}
-	}
-	sha2 := exec.CommandContext(ctx, "git", "-C", g.repoDir, "rev-parse", "HEAD")
-	out, err := sha2.Output()
-	if err != nil {
-		return "", err
-	}
-	return strings.TrimSpace(string(out)), nil
-}
-
-func TestRollbacker_E2E_AppliesThenReverts(t *testing.T) {
+func TestRollbacker_E2E_AppliesThenRestores(t *testing.T) {
 	db := connectDB(t)
 	defer db.Close()
 	repo := postgres.NewWorkflowProposalRepository(db)
@@ -75,8 +42,8 @@ func TestRollbacker_E2E_AppliesThenReverts(t *testing.T) {
 	})
 
 	sourceDir, deployedDir := setupSourceRepoForWorkflow(t, workflowID)
+	headBefore := headOf(t, sourceDir)
 	writer := &itWorkflowWriter{sourceDir: sourceDir, deployedDir: deployedDir}
-	git := &itGitCommitter{repoDir: sourceDir}
 	reloader := &stubReloader{}
 
 	ctx := context.Background()
@@ -94,37 +61,71 @@ func TestRollbacker_E2E_AppliesThenReverts(t *testing.T) {
 	require.NoError(t, repo.Decide(ctx, proposalID,
 		persistence.WorkflowProposalStatusApproved, "operator-x", "ok"))
 
-	// Apply first so we have a real commit to revert.
-	applier := workflowapply.NewApplier(repo, writer, git, reloader,
-		workflowapply.ApplierConfig{AuthorName: "vornik-architect", AuthorEmail: "architect@vornik.test"})
-	applied, err := applier.Apply(ctx, proposalID, "operator-x")
+	applier := workflowapply.NewApplier(repo, writer, reloader, workflowapply.ApplierConfig{})
+	_, err := applier.Apply(ctx, proposalID, "operator-x")
 	require.NoError(t, err)
-	require.NotEmpty(t, applied.AppliedCommit)
 
-	// File now contains the new YAML. The proposal's YAML overrides
-	// workflowId to "research" via the YAML body — fine; the file
-	// path on disk uses our test-unique workflowID.
 	sourcePath := filepath.Join(sourceDir, "workflows", workflowID+".md")
+	deployedPath := filepath.Join(deployedDir, "workflows", workflowID+".md")
 	body, _ := os.ReadFile(sourcePath)
 	require.Contains(t, string(body), "version: 2.0.0")
 
-	// Roll back. Use a real git reverter against the same source
-	// tree.
-	rollbacker := workflowapply.NewRollbacker(repo, &itGitReverter{repoDir: sourceDir}, reloader,
-		workflowapply.RollbackerConfig{AuthorName: "vornik-it", AuthorEmail: "it@vornik.test"})
+	rollbacker := workflowapply.NewRollbacker(repo, writer, reloader, workflowapply.RollbackerConfig{})
 	got, err := rollbacker.Rollback(ctx, proposalID, "operator-y")
 	require.NoError(t, err)
 	require.Equal(t, persistence.WorkflowProposalStatusRolledBack, got.Status)
-	require.NotEmpty(t, got.RollbackCommit)
-	require.NotEqual(t, applied.AppliedCommit, got.RollbackCommit)
+	require.Equal(t, workflowapply.NoGitCommit, got.RollbackCommit)
 
-	// File should be back to the baseline (pre-apply) content.
-	body2, _ := os.ReadFile(sourcePath)
-	require.Equal(t, "baseline", strings.TrimSpace(string(body2)),
-		"git revert should restore the pre-apply file content")
+	// Both trees are back to the baseline (pre-apply) content.
+	for _, p := range []string{sourcePath, deployedPath} {
+		b, err := os.ReadFile(p)
+		require.NoError(t, err)
+		require.Equal(t, "baseline", string(b), "rollback should restore the pre-apply file in %s", p)
+	}
+	require.Equal(t, headBefore, headOf(t, sourceDir), "neither apply nor rollback may commit")
 
 	// Reloader fired twice — once on apply, once on rollback.
 	require.Equal(t, 2, reloader.called)
+}
+
+func TestRollbacker_E2E_RefusesARowAppliedBeforeS3(t *testing.T) {
+	db := connectDB(t)
+	defer db.Close()
+	repo := postgres.NewWorkflowProposalRepository(db)
+
+	suffix := fmt.Sprintf("%d", time.Now().UnixNano())
+	workflowID := "research-rb-old-" + suffix
+	proposalID := "wpr-rb-old-" + suffix
+	t.Cleanup(func() {
+		_, _ = db.Exec(`DELETE FROM workflow_proposals WHERE workflow_id = $1`, workflowID)
+	})
+
+	ctx := context.Background()
+	require.NoError(t, repo.Insert(ctx, &persistence.WorkflowProposal{
+		ID: proposalID, WorkflowID: workflowID,
+		Status:       persistence.WorkflowProposalStatusPending,
+		ProposalYAML: "new", Motivation: "m",
+		EvidenceRunIDs: []string{"r-1"}, Confidence: 0.7,
+		ArchitectModel: "m", CreatedAt: time.Now().UTC(),
+	}))
+	require.NoError(t, repo.Decide(ctx, proposalID,
+		persistence.WorkflowProposalStatusApproved, "operator-x", "ok"))
+	// The pre-S3 shape: marked applied with a real commit, nothing recorded.
+	require.NoError(t, repo.MarkApplied(ctx, proposalID, "abc1234def"))
+
+	sourceDir, deployedDir := setupSourceRepoForWorkflow(t, workflowID)
+	writer := &itWorkflowWriter{sourceDir: sourceDir, deployedDir: deployedDir}
+	rollbacker := workflowapply.NewRollbacker(repo, writer, &stubReloader{}, workflowapply.RollbackerConfig{})
+	_, err := rollbacker.Rollback(ctx, proposalID, "operator-x")
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "abc1234def", "the refusal names the commit to restore from")
+
+	row, err := repo.Get(ctx, proposalID)
+	require.NoError(t, err)
+	require.Equal(t, persistence.WorkflowProposalStatusApplied, row.Status)
+	b, err := os.ReadFile(filepath.Join(deployedDir, "workflows", workflowID+".md"))
+	require.NoError(t, err)
+	require.Equal(t, "baseline", string(b), "a refused rollback writes nothing")
 }
 
 func TestRollbacker_E2E_NotApplied(t *testing.T) {
@@ -148,9 +149,9 @@ func TestRollbacker_E2E_NotApplied(t *testing.T) {
 		ArchitectModel: "m", CreatedAt: time.Now().UTC(),
 	}))
 
-	sourceDir, _ := setupSourceRepoForWorkflow(t, workflowID)
-	rollbacker := workflowapply.NewRollbacker(repo, &itGitReverter{repoDir: sourceDir}, &stubReloader{},
-		workflowapply.RollbackerConfig{})
+	sourceDir, deployedDir := setupSourceRepoForWorkflow(t, workflowID)
+	writer := &itWorkflowWriter{sourceDir: sourceDir, deployedDir: deployedDir}
+	rollbacker := workflowapply.NewRollbacker(repo, writer, &stubReloader{}, workflowapply.RollbackerConfig{})
 	_, err := rollbacker.Rollback(ctx, proposalID, "operator-x")
 	require.Error(t, err)
 	require.ErrorIs(t, err, workflowapply.ErrProposalNotApplied)

@@ -124,17 +124,17 @@ func TestMetricsCov_RecordFinalOutcome_AllBuckets(t *testing.T) {
 	}
 	for _, o := range outcomes {
 		assert.NotPanics(t, func() {
-			m.RecordFinalOutcome("writer", "model-a", o)
+			m.RecordFinalOutcome("writer", "model-a", o, "")
 		})
 	}
 
 	// Guard branches: empty role / model / outcome and nil receiver.
 	var nilM *Metrics
 	assert.NotPanics(t, func() {
-		nilM.RecordFinalOutcome("r", "m", "ok")
-		m.RecordFinalOutcome("", "m", "ok")
-		m.RecordFinalOutcome("r", "", "ok")
-		m.RecordFinalOutcome("r", "m", "")
+		nilM.RecordFinalOutcome("r", "m", "ok", "")
+		m.RecordFinalOutcome("", "m", "ok", "")
+		m.RecordFinalOutcome("r", "", "ok", "")
+		m.RecordFinalOutcome("r", "m", "", "")
 	})
 }
 

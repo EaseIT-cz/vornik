@@ -46,7 +46,6 @@ type PoolEntry struct {
 	InputDir     string // host-side bind mount for /app/input
 	OutputDir    string // host-side bind mount for /app/output
 	WorkspaceDir string // host-side bind mount for /app/workspace
-	ProjectDir   string // host-side bind mount for /app/workspace/project (per-project shared dir)
 }
 
 // PoolConfig configures the warm pool.
@@ -65,19 +64,18 @@ func DefaultPoolConfig() PoolConfig {
 
 // WarmPool manages a pool of reusable agent containers.
 type WarmPool struct {
-	mu                   sync.Mutex
-	started              bool
-	stopped              bool
-	manager              *Manager
-	config               PoolConfig
-	entries              map[string]*PoolEntry    // containerID -> entry
-	byKey                map[PoolKey][]*PoolEntry // key -> entries
-	envVars              map[string]string        // LLM env vars injected into warm containers
-	projectWorkspacePath string                   // host path for per-project shared dirs
-	logger               zerolog.Logger
-	metrics              *PoolMetrics
-	stopCh               chan struct{}
-	wg                   sync.WaitGroup
+	mu      sync.Mutex
+	started bool
+	stopped bool
+	manager *Manager
+	config  PoolConfig
+	entries map[string]*PoolEntry    // containerID -> entry
+	byKey   map[PoolKey][]*PoolEntry // key -> entries
+	envVars map[string]string        // LLM env vars injected into warm containers
+	logger  zerolog.Logger
+	metrics *PoolMetrics
+	stopCh  chan struct{}
+	wg      sync.WaitGroup
 }
 
 // PoolOption configures the WarmPool.
@@ -91,13 +89,6 @@ func WithPoolLogger(l zerolog.Logger) PoolOption {
 // WithPoolEnvVars sets the env vars injected into warm containers.
 func WithPoolEnvVars(env map[string]string) PoolOption {
 	return func(p *WarmPool) { p.envVars = env }
-}
-
-// WithPoolProjectWorkspacePath sets the host path used for per-project
-// persistent directories. Warm containers will receive the same
-// /app/workspace/project/ mount as ephemeral containers.
-func WithPoolProjectWorkspacePath(path string) PoolOption {
-	return func(p *WarmPool) { p.projectWorkspacePath = path }
 }
 
 // WithPoolPrometheusRegistry creates pool metrics.
@@ -275,15 +266,12 @@ func (p *WarmPool) StartWarm(ctx context.Context, key PoolKey, envOverrides map[
 		}
 	}
 
-	// Create per-project shared dir if a workspace path is configured.
-	var projectDir string
-	if p.projectWorkspacePath != "" {
-		projectDir = filepath.Join(p.projectWorkspacePath, key.ProjectID)
-		if err := os.MkdirAll(projectDir, 0o755); err != nil {
-			p.logger.Warn().Err(err).Str("project_dir", projectDir).Msg("failed to create project dir for warm container")
-			projectDir = ""
-		}
-	}
+	// No project directory (process-spawn law S6-D5). A warm container
+	// outlives any one task, so it cannot carry a task's worktree, and the
+	// project directory it used to get was mounted read-write with its .git:
+	// an agent could write .git/hooks or .git/config that the daemon's next
+	// git command in the project ran on the host. Roles that need the
+	// workspace use the ephemeral policy.
 
 	// Merge env vars: pool defaults → role overrides → warm mode flag.
 	envVars := make(map[string]string, min(len(p.envVars)+len(envOverrides)+1, maxWarmEnvVars))
@@ -305,7 +293,6 @@ func (p *WarmPool) StartWarm(ctx context.Context, key PoolKey, envOverrides map[
 		InputDir:        inputDir,
 		OutputDir:       outputDir,
 		WorkspaceDir:    workspaceDir,
-		ProjectDir:      projectDir,
 		// Per-role network policy, carried on the pool key so warm
 		// containers honor runtime.network exactly like ephemeral ones
 		// (Step B; mitigation plan §7.1). The Manager applies the
@@ -329,7 +316,6 @@ func (p *WarmPool) StartWarm(ctx context.Context, key PoolKey, envOverrides map[
 		InputDir:     inputDir,
 		OutputDir:    outputDir,
 		WorkspaceDir: workspaceDir,
-		ProjectDir:   projectDir,
 	}
 
 	// Replace the placeholder with the real entry.

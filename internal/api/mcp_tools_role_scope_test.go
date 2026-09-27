@@ -3,6 +3,8 @@ package api
 import (
 	"testing"
 
+	"vornik.io/vornik/internal/agenttools"
+
 	"vornik.io/vornik/internal/chat"
 )
 
@@ -85,7 +87,7 @@ func TestAdvertisedTools_HonoursWildcards(t *testing.T) {
 // Advertisement and invocation must be decided by the SAME policy. If they could
 // disagree, one direction advertises a tool that /mcp/call then refuses (the agent
 // burns an iteration on a guaranteed 403), and the other advertises less than it
-// permits (harmless but confusing). Deriving both from mcpRoleToolAllowed makes
+// permits (harmless but confusing). Deriving both from agenttools.RoleAllowsTool makes
 // the first impossible by construction; this test pins it against future drift.
 func TestAdvertisedTools_NeverExceedsInvokePermission(t *testing.T) {
 	all := tools(
@@ -103,7 +105,7 @@ func TestAdvertisedTools_NeverExceedsInvokePermission(t *testing.T) {
 	for _, allowed := range allowlists {
 		for _, adv := range advertisedTools(all, allowed) {
 			name := adv.Function.Name
-			if !mcpRoleToolAllowed(allowed, name) {
+			if !agenttools.RoleAllowsTool(allowed, name) {
 				t.Errorf("allowlist %v advertises %q but the invoke gate refuses it — an "+
 					"agent would spend an iteration to earn a guaranteed 403", allowed, name)
 			}

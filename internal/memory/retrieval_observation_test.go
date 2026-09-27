@@ -1,9 +1,15 @@
 package memory
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"strings"
 	"testing"
+
+	"github.com/rs/zerolog"
+
+	"vornik.io/vornik/internal/chat"
 )
 
 // What the retrieval path DID, as opposed to what it was configured to do.
@@ -137,5 +143,84 @@ func TestRetrievalObservationFromContext_NilAndMissing(t *testing.T) {
 	if ctx := WithRetrievalObservation(context.Background(), nil); RetrievalObservationFromContext(ctx) != nil {
 		t.Error("stamping nil must leave the ctx without an observation rather than " +
 			"installing a bag nothing can write to")
+	}
+}
+
+// The REAL LLM reranker must report its degrades (memory-benchmark-harness
+// design, correction 2026-09-26). The stub test above always passed, while
+// LLMReranker swallowed every failure and returned (results, nil), so a
+// timed-out rerank was observed as reranked. Found by the optional-work
+// error-logging sweep (breaker design §5.3d).
+func TestRetrievalObservation_TheRealRerankerReportsItsDegrades(t *testing.T) {
+	cases := []struct {
+		name  string
+		reply titlerReply
+	}{
+		{"failed call", titlerReply{err: errors.New("upstream 503")}},
+		{"timed out", titlerReply{err: context.DeadlineExceeded}},
+		{"unparsable scores", titlerReply{content: "not a score list"}},
+		{"optional work refused", titlerReply{err: chat.ErrOptionalWorkDisabled}},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			r, mock, cleanup := newRepo(t)
+			defer cleanup()
+			s := NewSearcher(Config{}, r, nil)
+			s.SetReranker(&LLMReranker{Client: &titlerFakeProvider{replies: []titlerReply{c.reply}}})
+			mock.ExpectQuery("ts_rank").
+				WithArgs("p", "q", 15, "q").
+				WillReturnRows(makeRR([]string{"a", "b", "c"}, []float64{0.9, 0.7, 0.5}))
+			obs := &RetrievalObservation{}
+			ctx := WithRetrievalObservation(context.Background(), obs)
+			if _, err := s.SearchWithOptions(ctx, "p", "q", SearchOptions{Limit: 5, Rerank: true}); err != nil {
+				t.Fatal(err)
+			}
+			if obs.Reranked || !obs.RerankAttempted || obs.Method() != "context-assembly" {
+				t.Fatalf("a degraded rerank must be observed as attempted and NOT reranked: %+v (%s)", obs, obs.Method())
+			}
+		})
+	}
+}
+
+func TestLLMReranker_DegradeWrapsErrRerankDegraded(t *testing.T) {
+	rr := &LLMReranker{Client: &titlerFakeProvider{replies: []titlerReply{{err: errors.New("down")}}}}
+	in := []SearchResult{{ChunkID: "a"}, {ChunkID: "b"}}
+	out, err := rr.Rerank(context.Background(), "q", in)
+	if !errors.Is(err, ErrRerankDegraded) {
+		t.Fatalf("want ErrRerankDegraded, got %v", err)
+	}
+	if len(out) != 2 || out[0].ChunkID != "a" {
+		t.Fatalf("a degrade returns the input in RRF order: %+v", out)
+	}
+}
+
+// A reranker error that is NOT a reported degrade keeps the searcher's own Warn
+// (the reranker did not log it), while a degrade is not logged twice.
+func TestSearcher_LogsOnlyUnreportedRerankErrors(t *testing.T) {
+	for _, c := range []struct {
+		name     string
+		err      error
+		wantWarn bool
+	}{
+		{"unreported error", errors.New("boom"), true},
+		{"reported degrade", &RerankDegradedError{Cause: RerankCauseLLM, Err: errors.New("down")}, false},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			r, mock, cleanup := newRepo(t)
+			defer cleanup()
+			var buf bytes.Buffer
+			s := NewSearcher(Config{}, r, nil)
+			s.SetLogger(zerolog.New(&buf))
+			s.SetReranker(&stubReranker{err: c.err})
+			mock.ExpectQuery("ts_rank").
+				WithArgs("p", "q", 15, "q").
+				WillReturnRows(makeRR([]string{"a", "b", "c"}, []float64{0.9, 0.7, 0.5}))
+			if _, err := s.SearchWithOptions(context.Background(), "p", "q", SearchOptions{Limit: 5, Rerank: true}); err != nil {
+				t.Fatal(err)
+			}
+			if got := strings.Contains(buf.String(), "reranker error"); got != c.wantWarn {
+				t.Fatalf("searcher warn = %v, want %v:\n%s", got, c.wantWarn, buf.String())
+			}
+		})
 	}
 }

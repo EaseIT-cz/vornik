@@ -27,9 +27,11 @@ package sqlite
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	_ "modernc.org/sqlite"
@@ -49,7 +51,8 @@ type Config struct {
 	// independent in-memory DBs) and 5 for file-backed paths.
 	MaxOpenConns int
 
-	// ConnectTimeout bounds the initial open + ping. Defaults to 5s.
+	// ConnectTimeout bounds the initial open + ping. Zero defers to the
+	// caller's context deadline, or 5s when it has none (connectContext).
 	ConnectTimeout time.Duration
 }
 
@@ -102,9 +105,6 @@ func Connect(ctx context.Context, cfg Config) (*DB, error) {
 			cfg.MaxOpenConns = 5
 		}
 	}
-	if cfg.ConnectTimeout <= 0 {
-		cfg.ConnectTimeout = 5 * time.Second
-	}
 
 	// The modernc.org/sqlite driver registers under the name
 	// "sqlite". Pass file-mode pragmas via the connection string so
@@ -128,14 +128,44 @@ func Connect(ctx context.Context, cfg Config) (*DB, error) {
 	}
 	db.SetMaxOpenConns(cfg.MaxOpenConns)
 
-	pingCtx, cancel := context.WithTimeout(ctx, cfg.ConnectTimeout)
+	pingCtx, cancel, bound := connectContext(ctx, cfg.ConnectTimeout)
 	defer cancel()
 	if err := db.PingContext(pingCtx); err != nil {
 		_ = db.Close()
-		return nil, fmt.Errorf("sqlite: ping %q: %w", cfg.Path, err)
+		return nil, fmt.Errorf("sqlite: ping %q (bound: %s): %w", cfg.Path, bound, err)
 	}
 
 	return &DB{DB: db, config: cfg}, nil
+}
+
+// defaultConnectTimeout bounds an open whose caller set neither a
+// ConnectTimeout nor a context deadline — the daemon's case.
+const defaultConnectTimeout = 5 * time.Second
+
+// connectContext derives the context that bounds Connect's open + ping, and
+// names the bound for the error message (storage-abstraction design, SQLite
+// connect deadline, 2026-09-24). In order: a configured timeout (still capped
+// by the caller, as any derived context is); else the caller's own deadline,
+// with no second, shorter one imposed — the caller owns the budget; else the
+// 5 s default. Before this, Connect always imposed 5 s, so `doctor --offline`'s
+// 30 s and a saturated host's 6 s first open collided.
+func connectContext(ctx context.Context, timeout time.Duration) (context.Context, context.CancelFunc, string) {
+	if timeout > 0 {
+		if d, ok := ctx.Deadline(); ok && time.Until(d) < timeout {
+			// The caller's shorter deadline caps the derived context, so it is
+			// the bound that fires — label it as such.
+			c, cancel := context.WithCancel(ctx)
+			return c, cancel, fmt.Sprintf("%s from caller deadline (under ConnectTimeout %s)", time.Until(d).Round(time.Millisecond), timeout)
+		}
+		c, cancel := context.WithTimeout(ctx, timeout)
+		return c, cancel, fmt.Sprintf("%s from ConnectTimeout", timeout)
+	}
+	if d, ok := ctx.Deadline(); ok {
+		c, cancel := context.WithCancel(ctx)
+		return c, cancel, fmt.Sprintf("%s from caller deadline", time.Until(d).Round(time.Millisecond))
+	}
+	c, cancel := context.WithTimeout(ctx, defaultConnectTimeout)
+	return c, cancel, fmt.Sprintf("%s default", defaultConnectTimeout)
 }
 
 // Migrate applies the consolidated schema. Idempotent.
@@ -149,6 +179,9 @@ func (d *DB) Migrate(ctx context.Context) error {
 	// Reconciling before schemaSQL means the index has its column by the time
 	// it is created.
 	if err := d.applyAdditiveColumns(ctx); err != nil {
+		return err
+	}
+	if err := d.applyTableRebuilds(ctx); err != nil {
 		return err
 	}
 	if _, err := d.ExecContext(ctx, schemaSQL); err != nil {
@@ -226,6 +259,15 @@ var sqliteAdditiveColumns = []additiveColumn{
 	{"project_memory_chunks", "source_name", `TEXT`},
 	{"project_memory_chunks", "artifact_id", `TEXT`},
 	{"project_memory_chunks", "expires_at", `TEXT`},
+	// Postgres migration 200 — a document ingest's path in its repository
+	// (memory rollback x supersession design, amendment 2026-09-26). Nullable,
+	// no backfill: NULL means "not a document ingest".
+	{"project_ingest_queue", "document_path", `TEXT`},
+	// schemaSQL indexes project_memory_chunks(project_id, repo_scope,
+	// source_name) for the same migration. repo_scope has been in the slim
+	// chunk table since 2026-06-05; a database created before that lacks it,
+	// and the CREATE INDEX would fail startup, so it lands here first.
+	{"project_memory_chunks", "repo_scope", `TEXT`},
 }
 
 // applyAdditiveColumns adds any registered column missing from an existing
@@ -254,6 +296,105 @@ func (d *DB) applyAdditiveColumns(ctx context.Context) error {
 		}
 	}
 	return nil
+}
+
+// tableRebuild brings an EXISTING table's definition up to date where SQLite
+// cannot ALTER it in place: a CHECK constraint. schemaSQL is CREATE TABLE IF
+// NOT EXISTS, so a changed CHECK otherwise reaches fresh databases only, and
+// an existing one keeps refusing rows the code now writes.
+//
+// The rebuild runs when the table's stored definition lacks marker, a
+// substring only the new definition contains. It creates the new table
+// beside the old one, copies every row, drops the old table and renames the
+// new one, in ONE transaction; schemaSQL then recreates the indexes. It is
+// idempotent: afterwards the marker is present.
+//
+// It assumes a LEAF table: nothing references it by foreign key. Dropping a
+// referenced table would break those references; such an entry must handle
+// them explicitly. execution_quality_scores is a leaf, and its own reference
+// to executions is re-declared by the DDL.
+type tableRebuild struct {
+	table  string
+	marker string
+	ddl    string // the table's CREATE TABLE statement, as in schemaSQL
+}
+
+// sqliteTableRebuilds is the registry, append-only. Postgres gets the same
+// change through a numbered migration, named in each entry.
+var sqliteTableRebuilds = []tableRebuild{
+	// Postgres migration 199: execution_quality_scores learns `unscorable`
+	// (agent-quality-benchmark design, amendment 2026-09-26).
+	{"execution_quality_scores", "'unscorable'", executionQualityScoresTableSQL},
+}
+
+func (d *DB) applyTableRebuilds(ctx context.Context) error {
+	for _, r := range sqliteTableRebuilds {
+		var def string
+		err := d.QueryRowContext(ctx,
+			`SELECT sql FROM sqlite_master WHERE type='table' AND name=?`, r.table).Scan(&def)
+		if errors.Is(err, sql.ErrNoRows) {
+			continue // fresh database; schemaSQL creates it current
+		}
+		if err != nil {
+			return fmt.Errorf("sqlite: probe table %s: %w", r.table, err)
+		}
+		if strings.Contains(def, r.marker) {
+			continue
+		}
+		if err := d.rebuildTable(ctx, r); err != nil {
+			return fmt.Errorf("sqlite: rebuild %s: %w", r.table, err)
+		}
+	}
+	return nil
+}
+
+func (d *DB) rebuildTable(ctx context.Context, r tableRebuild) error {
+	tmp := r.table + "_rebuild"
+	createTmp := strings.Replace(r.ddl, "CREATE TABLE IF NOT EXISTS "+r.table+" (", "CREATE TABLE "+tmp+" (", 1)
+	if createTmp == r.ddl {
+		return fmt.Errorf("DDL does not create %s", r.table)
+	}
+	cols, err := d.tableColumns(ctx, r.table)
+	if err != nil {
+		return err
+	}
+	// Named columns, not SELECT *: an ADD COLUMN puts a column last, so the
+	// old table's order need not match the DDL's.
+	list := strings.Join(cols, ", ")
+	tx, err := d.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+	for _, stmt := range []string{
+		`DROP TABLE IF EXISTS ` + tmp,
+		createTmp,
+		`INSERT INTO ` + tmp + ` (` + list + `) SELECT ` + list + ` FROM ` + r.table,
+		`DROP TABLE ` + r.table,
+		`ALTER TABLE ` + tmp + ` RENAME TO ` + r.table,
+	} {
+		if _, err := tx.ExecContext(ctx, stmt); err != nil {
+			return fmt.Errorf("%s: %w", strings.SplitN(stmt, "(", 2)[0], err)
+		}
+	}
+	return tx.Commit()
+}
+
+func (d *DB) tableColumns(ctx context.Context, table string) ([]string, error) {
+	rows, err := d.QueryContext(ctx, `SELECT name FROM pragma_table_info(?) ORDER BY cid`, table)
+	if err != nil {
+		return nil, fmt.Errorf("sqlite: columns of %s: %w", table, err)
+	}
+	defer func() { _ = rows.Close() }()
+	var cols []string
+	for rows.Next() {
+		var c string
+		if err := rows.Scan(&c); err != nil {
+			return nil, err
+		}
+		cols = append(cols, `"`+c+`"`)
+	}
+	return cols, rows.Err()
 }
 
 func (d *DB) tableExists(ctx context.Context, table string) (bool, error) {

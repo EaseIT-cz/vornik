@@ -2,7 +2,10 @@ package executor
 
 import (
 	"context"
-	"os/exec"
+	"fmt"
+	"path/filepath"
+
+	"vornik.io/vornik/internal/spawn"
 )
 
 // gitRunner abstracts running git subcommands so the executor's git-backed
@@ -30,14 +33,53 @@ type gitRunner interface {
 	combined(ctx context.Context, args ...string) ([]byte, error)
 }
 
+// execGitRunner runs git through the process-spawn law's GitWorkspace kind
+// (internal/spawn, design "S1b-2, as built"): every call site passes
+// `-C <dir>` first, and spawn refuses a dir outside the registered workspace
+// root, a subcommand outside the orchestration set, and any option that names
+// a program. A refusal returns before any process starts.
 type execGitRunner struct{}
 
 func (execGitRunner) output(ctx context.Context, args ...string) ([]byte, error) {
-	return exec.CommandContext(ctx, "git", args...).Output()
+	cmd, err := gitWorkspaceCmd(ctx, args)
+	if err != nil {
+		return nil, err
+	}
+	return cmd.Output()
 }
 
 func (execGitRunner) combined(ctx context.Context, args ...string) ([]byte, error) {
-	return exec.CommandContext(ctx, "git", args...).CombinedOutput()
+	cmd, err := gitWorkspaceCmd(ctx, args)
+	if err != nil {
+		return nil, err
+	}
+	return cmd.CombinedOutput()
+}
+
+// gitWorkspaceCmd splits the `-C <dir>` every executor git call leads with.
+// When dir is a task worktree (<project>/.worktrees/<task>) the command names
+// the worktree's git dir itself, derived from the daemon's own paths and never
+// from the worktree's agent-writable .git file (process-spawn law S6-D2); spawn
+// refuses a worktree command without it (S6-D3).
+func gitWorkspaceCmd(ctx context.Context, args []string) (*spawn.Cmd, error) {
+	if len(args) < 2 || args[0] != "-C" {
+		return nil, fmt.Errorf("%w: executor git call without a leading -C <dir>: %q", spawn.ErrRefused, args)
+	}
+	if dirs, ok := worktreeGitDirs(args[1]); ok {
+		return spawn.GitWorkspaceDirs(ctx, args[1], dirs, args[2:]...)
+	}
+	return spawn.GitWorkspace(ctx, args[1], args[2:]...)
+}
+
+// worktreeGitDirs is the daemon's own answer to "which repository does this
+// task worktree belong to": <project>/.git/worktrees/<task> for
+// <project>/.worktrees/<task>, from the path layout worktreePath creates.
+func worktreeGitDirs(dir string) (spawn.GitDirs, bool) {
+	root := projectRootFromWorktree(dir)
+	if root == "" {
+		return spawn.GitDirs{}, false
+	}
+	return spawn.GitDirs{GitDir: worktreeAdminDir(root, filepath.Base(dir)), WorkTree: dir}, true
 }
 
 // gitExec is the package-level git runner. Production leaves it as the real

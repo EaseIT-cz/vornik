@@ -51,6 +51,26 @@ func TestLoadConfig(t *testing.T) {
 	}
 }
 
+// The bridge's mcp.json is its config file: a stdio entry's program is minted
+// from it at load, and an HTTP entry carries none (process-spawn law, S1b-2).
+func TestLoadConfig_MintsStdioPrograms(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "mcp.json")
+	body := `[{"name":"local","transport":"stdio","command":"python3","args":["-m","srv"]},{"name":"h","transport":"sse","url":"http://x/sse"}]`
+	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	servers, err := loadConfig(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p := servers[0].Program; p.Path() != "python3" || len(p.Args()) != 2 || p.Args()[1] != "srv" {
+		t.Fatalf("stdio program = %q %v", p.Path(), p.Args())
+	}
+	if !servers[1].Program.IsZero() {
+		t.Fatal("an HTTP server must carry no program")
+	}
+}
+
 func TestLoadConfigRejectsInvalidJSON(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "mcp.json")
 	if err := os.WriteFile(path, []byte(`not json`), 0o644); err != nil {

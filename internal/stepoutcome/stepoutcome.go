@@ -266,6 +266,21 @@ const (
 	// runtime configuration. 61 rows. Sub-second and deterministic, which is
 	// the signature of a fallback rung that has never once worked.
 	ClassContainerStartFailed = "container_start_failed"
+	// ClassAgentMountUnusable — the container started but the agent could not
+	// use its contract mounts (read the task file, write output or workspace):
+	// an image/host uid, userns or SELinux-label mismatch. Recognised from the
+	// agent's exit code AgentExitMountUnusable, never from its log. Incident
+	// 2026-09-17/18: 69 steps of a uid-1000 image on a uid-1001 host sat in the
+	// unclassified bucket. Unclassified-step-outcome design §11.
+	ClassAgentMountUnusable = "agent_mount_unusable"
+	// ClassWorkspaceUnavailable — the daemon could not give the task its own
+	// git worktree (the project repository could not be bootstrapped, or
+	// `git worktree add` failed twice, or the worktree could not be
+	// re-created for a retry), so the step never started and no container
+	// ran. Infrastructure, never the model's fault. Process-spawn law S6-D1:
+	// there is no shared-workspace fallback any more. The task carries
+	// WORKSPACE_UNAVAILABLE.
+	ClassWorkspaceUnavailable = "workspace_unavailable"
 
 	// ClassModelUnhealthy is a circuit-open fast-reject: the (route, model)
 	// breaker is OPEN, so the call never reached the model — and never started
@@ -295,6 +310,48 @@ func (o Outcome) IsTerminal() bool {
 
 // String returns the outcome's string form. Safe to call on zero values.
 func (o Outcome) String() string { return string(o) }
+
+// notAttributableToModel is the set of step-failure classes that say nothing
+// about the model the step ran on: the container, its host, or an upstream
+// step failed, not the model (model-health attribution design, 2026-09-24).
+// model_health removes them from a model's failure rate and reports them
+// apart. Deliberately NOT here: llm_call_failed and model_unhealthy (the
+// model's own call / breaker), context_timeout and context_cancelled (a slow or
+// hung model; the classifier cannot tell an operator's cancel of a hung model
+// from a shutdown), every output-quality class, and unclassified (unknown is
+// charged, not forgiven). NOT the doctor's fallback_rungs list either — that
+// one answers "is this rung dead?", a different question.
+var notAttributableToModel = []string{
+	ClassContainerStartFailed,
+	ClassContainerWaitFailed,
+	ClassContainerKilled,
+	ClassAgentMountUnusable,
+	ClassMissingPrerequisite,
+	ClassWorkspaceUnavailable,
+}
+
+// NotAttributableToModel reports whether a step failure of this class says
+// nothing about the model the step ran on.
+func NotAttributableToModel(class string) bool {
+	for _, c := range notAttributableToModel {
+		if c == class {
+			return true
+		}
+	}
+	return false
+}
+
+// NotAttributableToModelClasses returns the set, as a copy.
+func NotAttributableToModelClasses() []string {
+	out := make([]string, len(notAttributableToModel))
+	copy(out, notAttributableToModel)
+	return out
+}
+
+// AgentExitMountUnusable is the exit code the agent entrypoint returns when
+// its mount preflight fails (EX_CONFIG, sysexits.h). Nothing else in the
+// entrypoint uses it, so the daemon can classify on the code alone.
+const AgentExitMountUnusable = 78
 
 // errorClasses is the closed set of error-class values this package declares.
 //
@@ -329,6 +386,8 @@ var errorClasses = []string{
 	ClassContainerKilled,
 	ClassContainerWaitFailed,
 	ClassContainerStartFailed,
+	ClassAgentMountUnusable,
+	ClassWorkspaceUnavailable,
 }
 
 // ErrorClasses returns every declared error class, sorted, for operator-facing

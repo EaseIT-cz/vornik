@@ -149,6 +149,9 @@ func retryableHTTPDo(
 		if attempt == maxAttempts {
 			break
 		}
+		if err := RetryAllowed(ctx); err != nil {
+			return nil, err
+		}
 		logger.Warn().
 			Int("attempt", attempt).
 			Int("max_attempts", maxAttempts).

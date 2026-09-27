@@ -5,6 +5,8 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"vornik.io/vornik/internal/workflowapply"
 )
 
 // TestFSWorkflowWriter_WritesUnderWorkflowsDir is the happy path: a valid
@@ -53,5 +55,32 @@ func TestFSWorkflowWriter_RejectsUnsafeID(t *testing.T) {
 	rootEntries, _ := os.ReadDir(deployed)
 	if len(rootEntries) != 1 { // only workflows/
 		t.Fatalf("expected only workflows/ under deployed root, got %v", rootEntries)
+	}
+}
+
+// Config-drift slice E: ReadDeployed returns the deployed file exactly (the
+// pre-apply snapshot the doctor diffs), under the same id guard as Write, and
+// the writer satisfies the applier's optional extension.
+func TestFSWorkflowWriter_ReadDeployed(t *testing.T) {
+	deployed := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(deployed, "workflows"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	body := []byte("---\nworkflowId: wf1\n---\nsteps:\n  - id: a\n")
+	if err := os.WriteFile(filepath.Join(deployed, "workflows", "wf1.md"), body, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	var w workflowapply.DeployedReader = &fsWorkflowWriter{deployedConfigDir: deployed}
+	got, err := w.ReadDeployed(context.Background(), "wf1")
+	if err != nil || string(got) != string(body) {
+		t.Fatalf("ReadDeployed = %q, %v; want %q", got, err, body)
+	}
+	for _, id := range []string{"../evil", "a/b", ""} {
+		if _, err := w.ReadDeployed(context.Background(), id); err == nil {
+			t.Errorf("ReadDeployed(%q) expected error", id)
+		}
+	}
+	if _, err := w.ReadDeployed(context.Background(), "missing"); err == nil {
+		t.Error("a missing file read as an empty snapshot")
 	}
 }

@@ -1,8 +1,6 @@
 package projectdeps
 
 import (
-	"context"
-	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -69,20 +67,11 @@ func TestInjectEnvWithAnEmptyExistingPath(t *testing.T) {
 	}
 }
 
-func TestWithSiteCustomiseWritesTheAddsitedirShim(t *testing.T) {
+func TestWriteSiteCustomiseWritesTheAddsitedirShim(t *testing.T) {
 	dir := t.TempDir()
-	fetched := false
-	fetch := WithSiteCustomise(func(_ context.Context, d string) error {
-		fetched = true
-		return os.MkdirAll(filepath.Join(d, SiteDir), 0o700)
-	})
-	if err := fetch(context.Background(), dir); err != nil {
-		t.Fatalf("fetch = %v", err)
+	if err := WriteSiteCustomise(dir); err != nil {
+		t.Fatalf("WriteSiteCustomise = %v", err)
 	}
-	if !fetched {
-		t.Fatal("the wrapped fetcher did not run")
-	}
-
 	body, err := os.ReadFile(filepath.Join(dir, SiteCustomiseFile))
 	if err != nil {
 		t.Fatalf("sitecustomize.py missing: %v", err)
@@ -90,23 +79,8 @@ func TestWithSiteCustomiseWritesTheAddsitedirShim(t *testing.T) {
 	// site.addsitedir is the ACTIVE mechanism: PYTHONPATH alone does not
 	// process .pth files, so a dependency relying on .pth wiring at
 	// interpreter start silently does not initialise.
-	if !strings.Contains(string(body), "site.addsitedir") {
-		t.Fatalf("sitecustomize.py = %q, want it to call site.addsitedir", body)
-	}
-	if !strings.Contains(string(body), SiteDir) {
-		t.Fatalf("sitecustomize.py = %q, want it to add the lib dir", body)
-	}
-}
-
-func TestWithSiteCustomiseDoesNotWriteWhenTheFetchFails(t *testing.T) {
-	dir := t.TempDir()
-	boom := errors.New("index unreachable")
-	err := WithSiteCustomise(func(context.Context, string) error { return boom })(context.Background(), dir)
-	if !errors.Is(err, boom) {
-		t.Fatalf("err = %v, want the fetch error", err)
-	}
-	if _, statErr := os.Stat(filepath.Join(dir, SiteCustomiseFile)); !errors.Is(statErr, os.ErrNotExist) {
-		t.Fatalf("a failed fetch must not leave a shim behind: %v", statErr)
+	if !strings.Contains(string(body), "site.addsitedir") || !strings.Contains(string(body), SiteDir) {
+		t.Fatalf("sitecustomize.py = %q, want it to addsitedir the lib dir", body)
 	}
 }
 

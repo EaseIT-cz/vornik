@@ -13,6 +13,7 @@ import (
 	"strconv"
 	"strings"
 	"text/tabwriter"
+	"time"
 
 	"github.com/spf13/cobra"
 
@@ -45,6 +46,8 @@ var (
 	benchAgentTaskSetPath        string
 	benchAgentTaskSetFull        string
 	benchAgentTasks              string
+	benchAgentWorkspace          string
+	benchAgentAcceptanceImage    string
 	benchAgentJournalPath        string
 	benchAgentRunID              string
 	benchAgentArm                string
@@ -169,7 +172,9 @@ var benchAgentCalibrateCmd = &cobra.Command{
 		"form a long pass takes: one journal per repeat chunk and task batch, so a " +
 		"10-repeat 10-task calibration leaves 50 files. The merge refuses inputs that " +
 		"are not one run — a differing arm, pre-registration, or tier policy — and " +
-		"refuses a repeat index that collided across chunks.",
+		"refuses a repeat index that collided across chunks. The pass must have been " +
+		"pre-registered with \"kind\": \"calibration\" (one arm, no sigma), and its " +
+		"pre-registration must be unedited since the run.",
 	Args: cobra.MinimumNArgs(1),
 	RunE: runBenchAgentCalibrate,
 }
@@ -177,8 +182,11 @@ var benchAgentCalibrateCmd = &cobra.Command{
 var benchAgentNoiseFloorCmd = &cobra.Command{
 	Use:   "noise-floor <same-config-journal-a> <same-config-journal-b>",
 	Short: "Measure paired release-gate noise from two same-config arms",
-	Args:  cobra.ExactArgs(2),
-	RunE:  runBenchAgentNoiseFloor,
+	Long: "Both journals must come from passes pre-registered with \"kind\": " +
+		"\"noise_floor\" (one arm, no sigma — the pass exists to measure it), with " +
+		"pre-registrations unedited since the run.",
+	Args: cobra.ExactArgs(2),
+	RunE: runBenchAgentNoiseFloor,
 }
 
 var benchAgentGateCmd = &cobra.Command{
@@ -219,11 +227,14 @@ func init() {
 			"of being refused as disagreeing arms. Takes a FILE, never a digest: a hash "+
 			"typed by hand can be wrong in a way nothing detects, a file cannot")
 	benchAgentRunCmd.Flags().StringVar(&benchAgentPreRegPath, "preregistration", "",
-		"REQUIRED: committed manifest stating the arms, metric, intended delta and computed n")
+		"REQUIRED: committed manifest stating the run kind, arms, metric, intended delta and "+
+			"computed n. A comparison (the default) names two or more arms; a calibration or "+
+			"noise_floor pass names one and declares no sigma. --arm must be a declared arm")
 	benchAgentRunCmd.Flags().StringVar(&benchAgentJournalPath, "journal", "journal.json",
 		"where to write the run journal")
 	benchAgentRunCmd.Flags().StringVar(&benchAgentRunID, "run-id", "", "identifier for this run")
-	benchAgentRunCmd.Flags().StringVar(&benchAgentArm, "arm", "", "name of the arm being run")
+	benchAgentRunCmd.Flags().StringVar(&benchAgentArm, "arm", "",
+		"name of the arm being run; must be one the pre-registration declares")
 	benchAgentRunCmd.Flags().IntVar(&benchAgentRepeats, "repeats", 1,
 		"runs per task; repeats shrink a task's contribution to sigma_d but add no pairs")
 	benchAgentRunCmd.Flags().IntVar(&benchAgentRepeatOffset, "repeat-offset", 0,
@@ -250,7 +261,13 @@ func init() {
 		"release gate policy pinned by the pre-registration")
 	for _, c := range []*cobra.Command{benchAgentGoldCmd, benchAgentRunCmd} {
 		c.Flags().StringVar(&benchAgentTaskSetPath, "tasks", "", "JSON task set to run")
+		c.Flags().StringVar(&benchAgentWorkspace, "workspace", "",
+			"the benchmark project's git workspace; each task's declared targets are cleared "+
+				"from it before the task runs, so it starts from a pristine tree (benchmark LLD §12.23)")
 	}
+	benchAgentRunCmd.Flags().StringVar(&benchAgentAcceptanceImage, "acceptance-image", "",
+		"agent image the hidden acceptance suites run in (podman, no network); needed when "+
+			"--workspace is set and a task carries a suite (benchmark LLD §12.24)")
 
 	for _, c := range []*cobra.Command{benchAgentReportCmd, benchAgentRollupCmd, benchAgentCompareCmd} {
 		c.Flags().BoolVar(&benchAgentJSON, "json", false, "emit JSON instead of a table")
@@ -359,6 +376,10 @@ func runBenchAgentGold(cmd *cobra.Command, _ []string) error {
 	if err != nil {
 		return err
 	}
+	if err := agentbench.ValidateTaskTargets(tasks, benchAgentWorkspace != ""); err != nil {
+		return err
+	}
+	workspace := benchWorkspace()
 	runner, store, closeDB, err := buildRunnerParts()
 	if err != nil {
 		return err
@@ -378,6 +399,11 @@ func runBenchAgentGold(cmd *cobra.Command, _ []string) error {
 	var observed []agentbench.UnrestrictedRun
 	for _, spec := range agentbench.SortTasks(tasks) {
 		for i := 0; i < benchAgentRuns; i++ {
+			if workspace != nil {
+				if _, err := workspace.Prepare(cmd.Context(), spec, i+1); err != nil {
+					return fmt.Errorf("unrestricted run of %q cannot start from a pristine workspace: %w", spec.ID, err)
+				}
+			}
 			outcome, err := runner.Run(cmd.Context(), spec)
 			if err != nil {
 				return fmt.Errorf("unrestricted run of %q: %w", spec.ID, err)
@@ -395,6 +421,14 @@ func runBenchAgentGold(cmd *cobra.Command, _ []string) error {
 	_ = r
 
 	manifest, err := agentbench.BuildGold(benchAgentTaskSetHash, observed, benchAgentRuns)
+	if err == nil {
+		// The gold path clears targets itself (it does not run through
+		// Runner.Run); its manifest carries the provenance (§12.23).
+		manifest.WorkspaceReset = agentbench.WorkspaceResetNoWorkspace
+		if workspace != nil {
+			manifest.WorkspaceReset = agentbench.WorkspaceResetTargets
+		}
+	}
 	if err != nil {
 		return err
 	}
@@ -517,6 +551,11 @@ func runBenchAgentRun(cmd *cobra.Command, _ []string) error {
 	if err != nil {
 		return err
 	}
+	// Bound before the task set is read (release-gate design §9.2): the run
+	// being made must be one the pre-registration committed to.
+	if err := preReg.BindArm(benchAgentArm); err != nil {
+		return err
+	}
 	if benchAgentGoldPath != "" {
 		if _, err := loadGoldIfPresent(benchAgentGoldPath); err != nil {
 			return err
@@ -529,6 +568,9 @@ func runBenchAgentRun(cmd *cobra.Command, _ []string) error {
 	}
 	tasks, err := loadTaskSet(benchAgentTaskSetPath)
 	if err != nil {
+		return err
+	}
+	if err := agentbench.ValidateTaskTargets(tasks, benchAgentWorkspace != ""); err != nil {
 		return err
 	}
 	// When this run is one batch of a larger set, the arm's axes describe the
@@ -578,9 +620,14 @@ func runBenchAgentRun(cmd *cobra.Command, _ []string) error {
 			}
 		}
 	}
-	power, err := agentbench.CheckPower(preReg.SigmaD, preReg.SigmaN, preReg.TargetDelta, availablePairs)
-	if err != nil {
-		return err
+	// A measurement pass is not sized: it exists to produce the sigma a power
+	// check needs, so its journal's power block stays zero (§9.2).
+	var power agentbench.PowerCheck
+	if !preReg.IsMeasurement() {
+		power, err = agentbench.CheckPower(preReg.SigmaD, preReg.SigmaN, preReg.TargetDelta, availablePairs)
+		if err != nil {
+			return err
+		}
 	}
 
 	r := &agentbench.Runner{
@@ -590,6 +637,16 @@ func runBenchAgentRun(cmd *cobra.Command, _ []string) error {
 		// gold set exists, so a run without one still measures schema following
 		// and tool use rather than producing nothing.
 		Probes: probeSet(gold != nil),
+	}
+	if ws := benchWorkspace(); ws != nil {
+		r.Workspace = ws
+	}
+	grader, err := benchGrader(tasks)
+	if err != nil {
+		return err
+	}
+	if grader != nil {
+		r.Grader = grader
 	}
 	journal, err := r.Run(cmd.Context(), agentbench.RunConfig{
 		RunID:           benchAgentRunID,
@@ -776,6 +833,14 @@ func buildArmOver(tasks, axisTasks []agentbench.TaskSpec, gold *agentbench.GoldM
 		TierPolicySHA256:    agentbench.TierPolicyDigest(axis),
 		Probes:              probeNames(gold != nil),
 	}
+	// The suites are an arm axis only when this run grades with them.
+	if benchAgentWorkspace != "" && benchAgentAcceptanceImage != "" {
+		d, err := agentbench.AcceptanceSetDigest(axis)
+		if err != nil {
+			return agentbench.ArmFields{}, err
+		}
+		arm.AcceptanceSHA256 = d
+	}
 	if gold != nil {
 		h, err := gold.SHA256()
 		if err != nil {
@@ -875,8 +940,12 @@ func buildRunnerParts() (*agentbench.DaemonTaskRunner, *agentbench.SQLTraceStore
 	if url == "" || token == "" {
 		return nil, nil, nil, fmt.Errorf("VORNIK_URL and VORNIK_COMPANION_TOKEN must be set")
 	}
+	timeout, err := benchTaskTimeout()
+	if err != nil {
+		return nil, nil, nil, err
+	}
 	daemon := agentbench.NewDaemonTaskRunner(agentbench.DaemonConfig{
-		BaseURL: url, Token: token, Project: benchAgentProject,
+		BaseURL: url, Token: token, Project: benchAgentProject, Timeout: timeout,
 	})
 
 	db, err := openBenchDB()
@@ -885,6 +954,24 @@ func buildRunnerParts() (*agentbench.DaemonTaskRunner, *agentbench.SQLTraceStore
 	}
 	return daemon, &agentbench.SQLTraceStore{DB: db, Dialect: agentbench.Postgres},
 		func() { _ = db.Close() }, nil
+}
+
+// benchTaskTimeout is how long the harness waits for one task to reach a
+// terminal state: VORNIK_BENCH_TASK_TIMEOUT (a Go duration), or 0 for the
+// runner's own default (30m). An unparsable or non-positive value is refused,
+// never silently replaced: a slow-hardware arm (2026-09-25) needs hours per
+// dev-pipeline task, and a typo falling back to 30m would record every task as
+// a harness timeout.
+func benchTaskTimeout() (time.Duration, error) {
+	v := os.Getenv("VORNIK_BENCH_TASK_TIMEOUT")
+	if v == "" {
+		return 0, nil
+	}
+	d, err := time.ParseDuration(v)
+	if err != nil || d <= 0 {
+		return 0, fmt.Errorf("VORNIK_BENCH_TASK_TIMEOUT=%q: want a positive Go duration such as 4h", v)
+	}
+	return d, nil
 }
 
 // openBenchDB opens the ledger the run will READ. The guard has already
@@ -903,6 +990,56 @@ func openBenchDB() (*sql.DB, error) {
 	return db, nil
 }
 
+// workspaceLine says whether "task success" is evidence that the tasks WROTE
+// their code (benchmark LLD §12.23): with no reset, a task may have
+// re-validated an earlier run's output; with a reset, how many declared
+// targets the tasks actually produced.
+func workspaceLine(j agentbench.Journal) string {
+	if j.Manifest.WorkspaceReset != agentbench.WorkspaceResetTargets {
+		return "NOT reset: tasks may have re-validated earlier runs' output (harness < 9 or no --workspace)"
+	}
+	produced, declared := 0, 0
+	for _, run := range j.TaskRuns {
+		for _, ok := range run.TargetsProduced {
+			declared++
+			if ok {
+				produced++
+			}
+		}
+	}
+	return fmt.Sprintf("pristine per task; targets produced %d/%d", produced, declared)
+}
+
+// benchGrader is the acceptance grader, or nil when there is no workspace to
+// grade. With a workspace, a task set carrying suites REQUIRES an image:
+// silently skipping the grade would publish an ungraded run as graded.
+func benchGrader(tasks []agentbench.TaskSpec) (agentbench.AcceptanceGrader, error) {
+	if benchAgentWorkspace == "" {
+		return nil, nil
+	}
+	hasSuite := false
+	for _, t := range tasks {
+		hasSuite = hasSuite || t.Acceptance != ""
+	}
+	if benchAgentAcceptanceImage == "" {
+		if hasSuite {
+			return nil, fmt.Errorf("the task set carries acceptance suites: pass --acceptance-image, " +
+				"or they would go ungraded while the run looks graded (benchmark LLD §12.24)")
+		}
+		return nil, nil
+	}
+	return podmanGrader{workspace: benchAgentWorkspace, image: benchAgentAcceptanceImage}, nil
+}
+
+// benchWorkspace is the task-target clearer for --workspace, or nil (an
+// untyped nil, so the runner records the run as no-workspace).
+func benchWorkspace() agentbench.WorkspacePreparer {
+	if benchAgentWorkspace == "" {
+		return nil
+	}
+	return gitWorkspace{dir: benchAgentWorkspace}
+}
+
 // loadTaskSet reads the benchmark task set.
 func loadTaskSet(path string) ([]agentbench.TaskSpec, error) {
 	if path == "" {
@@ -918,6 +1055,13 @@ func loadTaskSet(path string) ([]agentbench.TaskSpec, error) {
 	}
 	if len(tasks) == 0 {
 		return nil, fmt.Errorf("task set %s is empty", path)
+	}
+	// Attachments and acceptance suites are written relative to the task-set
+	// file, as TaskSpec documents; without this they resolved against the
+	// working directory and pointed at nothing.
+	base := filepath.Dir(filepath.Clean(path))
+	for i := range tasks {
+		tasks[i] = tasks[i].WithAttachmentBase(base)
 	}
 	return tasks, nil
 }
@@ -1062,6 +1206,8 @@ func runBenchAgentRollup(cmd *cobra.Command, args []string) error {
 	} else {
 		_, _ = fmt.Fprintf(w, "task success\tundefined\n")
 	}
+	_, _ = fmt.Fprintf(w, "workspace\t%s\n", workspaceLine(j))
+	_, _ = fmt.Fprintf(w, "acceptance\t%s\n", acceptanceLine(j))
 	for _, class := range []agentbench.FailureClass{
 		agentbench.FailureTask, agentbench.FailureContextOverflow,
 		agentbench.FailureInfra, agentbench.FailureHarness,
@@ -1212,6 +1358,7 @@ func runBenchAgentCompare(cmd *cobra.Command, args []string) error {
 		_, _ = fmt.Fprintf(cmd.OutOrStdout(), "  %s coverage: %s\n  %s coverage: %s\n",
 			ra.Arm, agentbench.SummariseScoreCoverage(a.TaskScores, quality.ScoreKindPinnedCaseValidation),
 			rb.Arm, agentbench.SummariseScoreCoverage(b.TaskScores, quality.ScoreKindPinnedCaseValidation))
+		printAcceptanceComparison(cmd, ra.Arm, a, rb.Arm, b)
 		return nil
 	}
 
@@ -1224,7 +1371,16 @@ func runBenchAgentCompare(cmd *cobra.Command, args []string) error {
 		return err
 	}
 	_, _ = fmt.Fprintf(cmd.OutOrStdout(), "%s vs %s\n%s %s\n", ra.Arm, rb.Arm, label, verdict)
+	printAcceptanceComparison(cmd, ra.Arm, a, rb.Arm, b)
 	return nil
+}
+
+// printAcceptanceComparison prints both arms' independent grades side by
+// side. Descriptive only: acceptance feeds no delta, sigma_d or gate until a
+// change states the graded-set size §5.4 needs (benchmark LLD §12.24).
+func printAcceptanceComparison(cmd *cobra.Command, armA string, a agentbench.Journal, armB string, b agentbench.Journal) {
+	_, _ = fmt.Fprintf(cmd.OutOrStdout(), "acceptance (descriptive, not a gate):\n  %s: %s\n  %s: %s\n",
+		armA, acceptanceLine(a), armB, acceptanceLine(b))
 }
 
 func runBenchAgentCalibrate(cmd *cobra.Command, args []string) error {

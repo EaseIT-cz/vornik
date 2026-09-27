@@ -31,20 +31,56 @@ func (r *IncidentRepository) Create(ctx context.Context, i incident.Incident) er
 
 // Get fetches one incident.
 func (r *IncidentRepository) Get(ctx context.Context, id string) (incident.Incident, error) {
-	var i incident.Incident
-	var state string
-	var occurred, notifiedAuth, notifiedSubj, closed sql.NullTime
-	err := r.db.QueryRowContext(ctx,
+	return scanIncident(r.db.QueryRowContext(ctx,
 		`SELECT id, state, occurred_at, became_aware_at, facts, effects, remedial,
 		        authority_risk, authority_risk_reason, notified_authority_at, authority_reference,
 		        subject_risk, subject_risk_reason, notified_subjects_at, subject_exemption,
 		        assessed_by, closed_at
-		   FROM security_incidents WHERE id = $1`, id).
-		Scan(&i.ID, &state, &occurred, &i.BecameAwareAt, &i.Facts, &i.Effects, &i.Remedial,
-			&i.AuthorityRisk, &i.AuthorityRiskReason, &notifiedAuth, &i.AuthorityReference,
-			&i.SubjectRisk, &i.SubjectRiskReason, &notifiedSubj, &i.SubjectExemption,
-			&i.AssessedBy, &closed)
+		   FROM security_incidents WHERE id = $1`, id).Scan)
+}
+
+// List returns incidents in EVERY state, newest awareness first, id descending
+// as the tiebreaker so offset paging is deterministic (regulatory record design
+// §6). ListLive is the deadline query; this is the record.
+func (r *IncidentRepository) List(ctx context.Context, limit, offset int) ([]incident.Incident, error) {
+	if limit <= 0 || limit > 200 {
+		limit = 200
+	}
+	if offset < 0 {
+		offset = 0
+	}
+	rows, err := r.db.QueryContext(ctx,
+		`SELECT id, state, occurred_at, became_aware_at, facts, effects, remedial,
+		        authority_risk, authority_risk_reason, notified_authority_at, authority_reference,
+		        subject_risk, subject_risk_reason, notified_subjects_at, subject_exemption,
+		        assessed_by, closed_at
+		   FROM security_incidents
+		  ORDER BY became_aware_at DESC, id DESC
+		  LIMIT $1 OFFSET $2`, limit, offset)
 	if err != nil {
+		return nil, mapDBError(err)
+	}
+	defer func() { _ = rows.Close() }()
+	var out []incident.Incident
+	for rows.Next() {
+		i, err := scanIncident(rows.Scan)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, i)
+	}
+	return out, rows.Err()
+}
+
+// scanIncident reads the full incident column set Get and List share.
+func scanIncident(scan func(...any) error) (incident.Incident, error) {
+	var i incident.Incident
+	var state string
+	var occurred, notifiedAuth, notifiedSubj, closed sql.NullTime
+	if err := scan(&i.ID, &state, &occurred, &i.BecameAwareAt, &i.Facts, &i.Effects, &i.Remedial,
+		&i.AuthorityRisk, &i.AuthorityRiskReason, &notifiedAuth, &i.AuthorityReference,
+		&i.SubjectRisk, &i.SubjectRiskReason, &notifiedSubj, &i.SubjectExemption,
+		&i.AssessedBy, &closed); err != nil {
 		return incident.Incident{}, mapDBError(err)
 	}
 	i.State = incident.State(state)

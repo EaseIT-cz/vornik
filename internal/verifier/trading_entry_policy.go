@@ -17,6 +17,9 @@ type policyProposal struct {
 	Qty           float64 `json:"qty"`
 	LimitPrice    float64 `json:"limit_price"`
 	StopLossPrice float64 `json:"stop_loss_price"`
+	// AddEvidence is carried by `intent: add` (amendment 2026-09-25); nil
+	// for opens and closes.
+	AddEvidence *trading.AddEvidence `json:"add_evidence"`
 }
 
 // FilterTradingEntryPolicy gates both strategist proposals and risk approvals.
@@ -65,7 +68,7 @@ func filterEntryArray(obj map[string]json.RawMessage, key string, policy trading
 			return fmt.Errorf("entry policy: invalid proposal")
 		}
 		p.Intent = strings.ToLower(strings.TrimSpace(p.Intent))
-		if p.Intent != "" && p.Intent != "open" && p.Intent != "close" {
+		if p.Intent != "" && p.Intent != "open" && p.Intent != "close" && p.Intent != "add" {
 			return fmt.Errorf("entry policy: unknown intent %q", p.Intent)
 		}
 		if p.Intent == "close" {
@@ -74,6 +77,9 @@ func filterEntryArray(obj map[string]json.RawMessage, key string, policy trading
 		}
 		sym := strings.ToUpper(strings.TrimSpace(p.Symbol))
 		reason := entryPolicyReason(p, policy)
+		if reason == "" && p.Intent == "add" {
+			reason = additionReason(p, policy)
+		}
 		if reason == "" && (entries >= policy.MaxEntriesPerTick || seen[sym]) {
 			reason = "entry_count_or_duplicate"
 		}
@@ -101,6 +107,21 @@ func filterEntryArray(obj map[string]json.RawMessage, key string, policy trading
 		obj["entry_policy_rejections"], err = json.Marshal(rejected)
 	}
 	return err
+}
+
+// additionReason applies the conditional-addition rule to an `intent: add`
+// proposal that already passed the entry rules. The numbers it judges are the
+// carried add_evidence, which the analysis-evidence gate proves on the
+// strategist's array; the limit is the proposal's own limit_price, the field
+// the broker receives.
+func additionReason(p policyProposal, policy trading.EntryPolicy) string {
+	if !policy.PullbackAdditions.Enabled {
+		return "additions_disabled"
+	}
+	if p.AddEvidence == nil {
+		return "add_evidence_missing"
+	}
+	return policy.PullbackAdditions.Reason(*p.AddEvidence, p.LimitPrice)
 }
 
 func entryPolicyReason(p policyProposal, policy trading.EntryPolicy) string {

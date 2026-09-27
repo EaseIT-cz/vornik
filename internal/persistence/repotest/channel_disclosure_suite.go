@@ -129,4 +129,41 @@ func RunChannelDisclosureSuite(t *testing.T, repo persistence.ChannelDisclosureR
 			}
 		}
 	})
+
+	// The regulatory-record page's evidence summary (regulatory record design
+	// §6, review F5): per (channel, wording version), how many notices were
+	// served and when the first and last were, aggregated in SQL on BOTH
+	// backends. A unique channel keeps this run's rows apart from other runs'.
+	t.Run("SummaryBetween groups by channel and wording", func(t *testing.T) {
+		ch := uniqueID("sumch")
+		for _, sess := range []string{"s1", "s2"} {
+			if err := repo.MarkServed(ctx, ch, sess, "hash-a"); err != nil {
+				t.Fatalf("MarkServed: %v", err)
+			}
+		}
+		if err := repo.MarkServed(ctx, ch, "s3", "hash-b"); err != nil {
+			t.Fatalf("MarkServed: %v", err)
+		}
+		sum, err := repo.SummaryBetween(ctx, time.Now().Add(-time.Hour), time.Now().Add(time.Hour))
+		if err != nil {
+			t.Fatalf("SummaryBetween: %v", err)
+		}
+		got := map[string]persistence.ChannelDisclosureSummary{}
+		for _, row := range sum {
+			if row.Channel == ch {
+				got[row.TextHash] = row
+			}
+		}
+		if len(got) != 2 || got["hash-a"].Count != 2 || got["hash-b"].Count != 1 {
+			t.Fatalf("want hash-a x2 and hash-b x1 for %s, got %+v", ch, got)
+		}
+		a := got["hash-a"]
+		if a.FirstServed.IsZero() || a.LastServed.Before(a.FirstServed) {
+			t.Errorf("first/last served not set sensibly: %+v", a)
+		}
+		empty, err := repo.SummaryBetween(ctx, time.Now().Add(-48*time.Hour), time.Now().Add(-47*time.Hour))
+		if err != nil || empty == nil && err != nil {
+			t.Fatalf("an empty window is an empty result, not an error: %v", err)
+		}
+	})
 }

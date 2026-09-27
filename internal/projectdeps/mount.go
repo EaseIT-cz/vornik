@@ -1,7 +1,6 @@
 package projectdeps
 
 import (
-	"context"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -126,18 +125,4 @@ func WriteSiteCustomise(dir string) error {
 		return fmt.Errorf("write %s: %w", SiteCustomiseFile, err)
 	}
 	return nil
-}
-
-// WithSiteCustomise wraps a Fetcher so every pip materialisation carries its
-// sitecustomize.py. Wrapping rather than leaving it to each call site: a
-// materialisation that skipped it would import packages and silently fail to
-// initialise the ones that need .pth wiring, which is the failure mode hardest
-// to attribute from inside an agent.
-func WithSiteCustomise(fetch Fetcher) Fetcher {
-	return func(ctx context.Context, dir string) error {
-		if err := fetch(ctx, dir); err != nil {
-			return err
-		}
-		return WriteSiteCustomise(dir)
-	}
 }

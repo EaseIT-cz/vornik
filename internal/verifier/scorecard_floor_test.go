@@ -520,3 +520,33 @@ func TestFilterTradingProposals_ExitsNeverDropped(t *testing.T) {
 	assert.Equal(t, "TSLA", props[0]["symbol"])
 	assert.True(t, hasProps)
 }
+
+// Amendment 2026-09-25: an add is an entry with STRICTER conditions than an
+// open, so it faces the same scorecard/regime floor. Before this change the
+// floor assigned a side only to intent "open", so an "add" would have been
+// waved through as a non-open, skipping the floor.
+func TestFilterTradingProposals_AddFacesTheEntryFloor(t *testing.T) {
+	fc := floorCfgEnabled()
+	subFloor := []byte(`{"proposals":[{"symbol":"SHEL","intent":"add","action":"BUY","qty":6,"region":"eu","scorecard":{"total":0},"regime":{"label":"RISK_ON","component_count":5}}]}`)
+	out, err := FilterTradingProposals(subFloor, fc)
+	require.NoError(t, err)
+	props, hasProps := parseFilteredProposals(t, out)
+	assert.Empty(t, props, "a sub-floor add must be dropped like a sub-floor open")
+	assert.False(t, hasProps)
+
+	riskOff := []byte(`{"proposals":[{"symbol":"SHEL","intent":"add","action":"BUY","qty":6,"region":"eu","scorecard":{"total":5},"regime":{"label":"RISK_OFF","component_count":5}}]}`)
+	out, err = FilterTradingProposals(riskOff, fc)
+	require.NoError(t, err)
+	props, _ = parseFilteredProposals(t, out)
+	assert.Empty(t, props, "a risk-off add must be dropped like a risk-off long open")
+
+	qualifying := []byte(`{"proposals":[{"symbol":"SHEL","intent":"add","action":"BUY","qty":6,"region":"eu","scorecard":{"total":5},"regime":{"label":"RISK_ON","component_count":5}}]}`)
+	out, err = FilterTradingProposals(qualifying, fc)
+	require.NoError(t, err)
+	props, _ = parseFilteredProposals(t, out)
+	require.Len(t, props, 1)
+
+	// An add is a long BUY by definition: a SELL add is an integrity error.
+	_, err = FilterTradingProposals([]byte(`{"proposals":[{"symbol":"SHEL","intent":"add","action":"SELL","qty":6,"scorecard":{"total":5},"regime":{"label":"RISK_ON","component_count":5}}]}`), fc)
+	require.Error(t, err)
+}

@@ -11,6 +11,7 @@ import (
 
 	"vornik.io/vornik/internal/datasubject"
 	"vornik.io/vornik/internal/memory"
+	"vornik.io/vornik/internal/persistence"
 )
 
 // DataSubjectRepository persists the GDPR data-subject axis and the rights
@@ -259,25 +260,10 @@ func (r *DataSubjectRepository) CreateRequest(ctx context.Context, req datasubje
 
 // GetRequest fetches one request.
 func (r *DataSubjectRepository) GetRequest(ctx context.Context, id string) (datasubject.Request, error) {
-	var req datasubject.Request
-	var kind, state string
-	var by, how, extReason, hash, refused, ground sql.NullString
-	var verifiedAt sql.NullTime
-	err := r.db.QueryRowContext(ctx,
+	return scanRequest(r.db.QueryRowContext(ctx,
 		`SELECT id, subject_id, kind, state, opened_at, verified_by, verified_how, verified_at,
 		        extended, extended_reason, report_hash, refused_reason, erasure_ground
-		   FROM data_subject_requests WHERE id = $1`, id).
-		Scan(&req.ID, &req.SubjectID, &kind, &state, &req.OpenedAt, &by, &how, &verifiedAt,
-			&req.Extended, &extReason, &hash, &refused, &ground)
-	if err != nil {
-		return datasubject.Request{}, mapDBError(err)
-	}
-	req.Kind, req.State = datasubject.RequestKind(kind), datasubject.RequestState(state)
-	req.VerifiedBy, req.VerifiedHow = by.String, how.String
-	req.VerifiedAt = verifiedAt.Time
-	req.ExtendedReason, req.ReportHash, req.RefusedReason = extReason.String, hash.String, refused.String
-	req.ErasureGround = datasubject.ErasureGround(ground.String)
-	return req, nil
+		   FROM data_subject_requests WHERE id = $1`, id).Scan)
 }
 
 // SaveRequest persists a state transition.
@@ -317,6 +303,83 @@ func (r *DataSubjectRepository) ListLiveRequests(ctx context.Context) ([]datasub
 		out = append(out, req)
 	}
 	return out, rows.Err()
+}
+
+// maxRegulatoryPage caps one page of the regulatory record (design §6).
+const maxRegulatoryPage = 200
+
+func clampRegulatoryPage(limit, offset int) (int, int) {
+	if limit <= 0 || limit > maxRegulatoryPage {
+		limit = maxRegulatoryPage
+	}
+	if offset < 0 {
+		offset = 0
+	}
+	return limit, offset
+}
+
+// ListRequests returns requests in EVERY state, newest first, id descending as
+// the tiebreaker so offset paging is deterministic (regulatory record design
+// §6). ListLiveRequests is the deadline query; this is the record.
+func (r *DataSubjectRepository) ListRequests(ctx context.Context, limit, offset int) ([]datasubject.Request, error) {
+	limit, offset = clampRegulatoryPage(limit, offset)
+	rows, err := r.db.QueryContext(ctx,
+		`SELECT id, subject_id, kind, state, opened_at, verified_by, verified_how, verified_at,
+		        extended, extended_reason, report_hash, refused_reason, erasure_ground,
+		        report_json IS NOT NULL
+		   FROM data_subject_requests
+		  ORDER BY opened_at DESC, id DESC
+		  LIMIT $1 OFFSET $2`, limit, offset)
+	if err != nil {
+		return nil, mapDBError(err)
+	}
+	defer func() { _ = rows.Close() }()
+	var out []datasubject.Request
+	for rows.Next() {
+		var retained bool
+		req, err := scanRequest(func(dest ...any) error { return rows.Scan(append(dest, &retained)...) })
+		if err != nil {
+			return nil, err
+		}
+		req.ReportRetained = retained
+		out = append(out, req)
+	}
+	return out, rows.Err()
+}
+
+// GetRequestReport returns the retained report and its hash. Two misses, two
+// errors (design §6, review F2): no row is persistence.ErrNotFound; a row with
+// no retained report is persistence.ErrReportNotRetained (which also satisfies
+// errors.Is(err, ErrNotFound)).
+func (r *DataSubjectRepository) GetRequestReport(ctx context.Context, id string) (reportJSON, hash string, err error) {
+	var body, h sql.NullString
+	err = r.db.QueryRowContext(ctx,
+		`SELECT report_json, report_hash FROM data_subject_requests WHERE id = $1`, id).Scan(&body, &h)
+	if err != nil {
+		return "", "", mapDBError(err)
+	}
+	if !body.Valid || strings.TrimSpace(body.String) == "" {
+		return "", "", persistence.ErrReportNotRetained
+	}
+	return body.String, h.String, nil
+}
+
+// scanRequest reads the full request column set GetRequest and ListRequests share.
+func scanRequest(scan func(...any) error) (datasubject.Request, error) {
+	var req datasubject.Request
+	var kind, state string
+	var by, how, extReason, hash, refused, ground sql.NullString
+	var verifiedAt sql.NullTime
+	if err := scan(&req.ID, &req.SubjectID, &kind, &state, &req.OpenedAt, &by, &how, &verifiedAt,
+		&req.Extended, &extReason, &hash, &refused, &ground); err != nil {
+		return datasubject.Request{}, mapDBError(err)
+	}
+	req.Kind, req.State = datasubject.RequestKind(kind), datasubject.RequestState(state)
+	req.VerifiedBy, req.VerifiedHow = by.String, how.String
+	req.VerifiedAt = verifiedAt.Time
+	req.ExtendedReason, req.ReportHash, req.RefusedReason = extReason.String, hash.String, refused.String
+	req.ErasureGround = datasubject.ErasureGround(ground.String)
+	return req, nil
 }
 
 // --- content collection ---

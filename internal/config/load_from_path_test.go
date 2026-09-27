@@ -119,3 +119,58 @@ func TestValidateBytes(t *testing.T) {
 		}
 	})
 }
+
+// TestLoadFromPath_DatabaseDriverResolvesToPostgres — Validate has always read
+// an empty database.driver as postgres, but seven feature gates compare the
+// field with the literal "postgres" (chat memory writer, live events, reminder
+// completion notices, three black-box builders). An explicit `driver: ""`
+// therefore passed validation and ran on Postgres with those features dark
+// (found 2026-09-25 while triaging the backlog). The loader resolves the field,
+// so every reader sees the driver that storage.Open actually connects.
+func TestLoadFromPath_DatabaseDriverResolvesToPostgres(t *testing.T) {
+	for name, body := range map[string]string{
+		"key absent":     "api:\n  auth_enabled: false\n",
+		"explicit empty": "api:\n  auth_enabled: false\ndatabase:\n  driver: \"\"\n",
+	} {
+		t.Run(name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "config.yaml")
+			if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+				t.Fatalf("write config: %v", err)
+			}
+			cfg, prov, err := LoadFromPathWithProvenance(path)
+			if err != nil {
+				t.Fatalf("LoadFromPathWithProvenance error: %v", err)
+			}
+			if cfg.Database.Driver != "postgres" {
+				t.Errorf("Database.Driver = %q, want postgres", cfg.Database.Driver)
+			}
+			if name == "explicit empty" {
+				if got := prov.Values["database.driver"].Origin; got != OriginDerived {
+					t.Errorf("database.driver origin = %q, want %q", got, OriginDerived)
+				}
+			}
+		})
+	}
+}
+
+// One resolution of the dependency cache for the daemon and vornikctl deps
+// (project dependency provisioning design §8.2).
+func TestDependencyCacheDir(t *testing.T) {
+	t.Setenv("VORNIK_DATA_DIR", "")
+	for _, c := range []struct{ set, ws, want string }{
+		{"/srv/deps", "/data/workspaces", "/srv/deps"},
+		{"", "/data/workspaces", "/data/deps"},
+		{"", "/data/workspaces/", "/data/deps"},
+		{"", "", ""},
+	} {
+		if got := (RuntimeConfig{DependencyCachePath: c.set, ProjectWorkspacePath: c.ws}).DependencyCacheDir(); got != c.want {
+			t.Errorf("(%q, %q) = %q, want %q", c.set, c.ws, got, c.want)
+		}
+	}
+	// With no workspace path configured, both derive from VORNIK_DATA_DIR,
+	// exactly as the daemon's workspace resolution always has.
+	t.Setenv("VORNIK_DATA_DIR", "/var/lib/vornik")
+	if got := (RuntimeConfig{}).DependencyCacheDir(); got != "/var/lib/vornik/deps" {
+		t.Errorf("derived from VORNIK_DATA_DIR = %q", got)
+	}
+}

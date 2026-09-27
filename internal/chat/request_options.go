@@ -168,6 +168,17 @@ func WithCallSite(ctx context.Context, site string) context.Context {
 	return context.WithValue(ctx, callSiteContextKey{}, site)
 }
 
+// WithDefaultCallSite labels ctx with site only when it carries no label yet,
+// so a caller's own, more specific label wins. For entry points that label
+// everything they forward (the chat proxy, the dispatcher; ledger-completeness
+// design §13).
+func WithDefaultCallSite(ctx context.Context, site string) context.Context {
+	if CallSiteFromContext(ctx) != "" {
+		return ctx
+	}
+	return WithCallSite(ctx, site)
+}
+
 // CallSiteFromContext returns the call-site label set by WithCallSite,
 // or "" when absent.
 func CallSiteFromContext(ctx context.Context) string {
@@ -245,4 +256,34 @@ func PromptCacheKeyFromContext(ctx context.Context) string {
 		return v
 	}
 	return ""
+}
+
+type bestEffortContextKey struct{}
+
+// WithBestEffort marks ctx as carrying OPTIONAL work under a deadline its
+// caller set for itself (a narration line, a memory title). The model-health
+// breaker does not count that deadline running out as a model failure, and
+// such a call never takes the half-open probe (LLD
+// 2026-07-11-model-health-circuit-breaker §5.3a). Task traffic must never
+// carry the mark: internal/architecture allowlists the packages that may call
+// this.
+func WithBestEffort(ctx context.Context) context.Context {
+	return context.WithValue(ctx, bestEffortContextKey{}, true)
+}
+
+// IsBestEffort reports whether ctx was marked by WithBestEffort.
+func IsBestEffort(ctx context.Context) bool {
+	if ctx == nil {
+		return false
+	}
+	v, _ := ctx.Value(bestEffortContextKey{}).(bool)
+	return v
+}
+
+// RetryAllowed is the check an attempt loop makes before another attempt: nil
+// while ctx is live, ctx.Err() once it is done. A retry on a spent context
+// cannot succeed and only logs a retry that never happens (LLD
+// 2026-07-11-model-health-circuit-breaker §5.3b).
+func RetryAllowed(ctx context.Context) error {
+	return ctx.Err()
 }

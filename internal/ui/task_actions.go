@@ -7,6 +7,7 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"slices"
 	"time"
 
 	"vornik.io/vornik/internal/api"
@@ -36,39 +37,44 @@ func (s *Server) cancelOne(ctx context.Context, r *http.Request, taskID string) 
 		// branching in TaskCancel.
 		return false
 	}
-	switch task.Status {
-	case persistence.TaskStatusQueued, persistence.TaskStatusPending,
-		persistence.TaskStatusLeased, persistence.TaskStatusRunning,
-		persistence.TaskStatusWaitingForChildren,
-		persistence.TaskStatusAwaitingInput, persistence.TaskStatusAwaitingExternal,
-		persistence.TaskStatusPaused:
-		// cancellable — non-terminal per the scheduler state machine.
-		// Pre-fix only the executor-driven statuses were listed, so a
-		// parent stuck in WAITING_FOR_CHILDREN (operator closed the
-		// child without the parent-unblock hook firing) had no UI exit
-		// short of a direct DB update. AWAITING_* and PAUSED are
-		// likewise non-terminal and should be operator-cancellable —
-		// state_machine.TriggerOperatorCancel allows "any non-terminal
-		// → CANCELLED".
-	default:
+	// Fast path: a row already finished at read time gets the clear refusal
+	// without a write. It no longer GUARDS the write — the snapshot is exactly
+	// what is stale when a task completes between this read and the write
+	// below (scheduler design §4.10). Pre-fix only the executor-driven
+	// statuses were listed, which left a WAITING_FOR_CHILDREN parent with no
+	// UI exit; the shared set is every status an operator may cancel.
+	cancellable := persistence.CancellableTaskStatuses()
+	if !slices.Contains(cancellable, task.Status) {
 		return false
 	}
-	// Ask the executor, not task.Status — that read predates the status write
-	// below, and a task that reached RUNNING in between would keep a live
-	// container while its row said CANCELLED (05-scheduler.md §4.7).
+	// ONE conditional write, gated on the live row. If the task reached an
+	// end state since the read, nothing happens: no teardown, no parent
+	// unblock (its own terminal transition owes that), no child cascade, no
+	// "cancelled" log line. The redirect target shows the row's real status.
+	moved, err := s.taskRepo.TransitionConditional(ctx, taskID,
+		cancellable, persistence.TaskStatusCancelled, persistence.TransitionOpts{})
+	if err != nil {
+		// Logged so an infrastructure failure is not indistinguishable from
+		// "the task already finished" (review a3d9 F4).
+		s.logger.Warn().Err(err).Str("task_id", taskID).Msg("cancel: conditional CANCELLED write failed")
+		return false
+	}
+	if !moved {
+		return false
+	}
+	// Teardown AFTER the transition, asked of the executor — not of the
+	// status snapshot, which predates the write (05-scheduler.md §4.7).
 	if s.executor != nil {
 		if _, cerr := s.executor.CancelIfActive(taskID); cerr != nil {
 			s.logger.Warn().Err(cerr).Str("task_id", taskID).
 				Msg("cancel: container did not stop — it may still be running")
 		}
 	}
-	_ = s.taskRepo.UpdateStatus(ctx, taskID, persistence.TaskStatusCancelled)
 	// CANCELLED is terminal, so drive the parent-unblock sweep —
 	// same wiring as the close path (uiCloseTask). For a non-running
 	// child the executor's handleCancelled never fires, so without
 	// this a WAITING_FOR_CHILDREN parent waited for the cancelled
-	// child forever (regression 2026-06-07; the WAITING_FOR_CHILDREN
-	// case in the switch above was treating that symptom).
+	// child forever (regression 2026-06-07).
 	if task.ParentTaskID != nil && *task.ParentTaskID != "" && s.executor != nil {
 		s.executor.NotifyChildTerminal(ctx, taskID)
 	}

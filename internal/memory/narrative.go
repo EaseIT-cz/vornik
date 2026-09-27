@@ -2,6 +2,7 @@ package memory
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -105,6 +106,7 @@ func (w *NarrativeWriter) Write(ctx context.Context, terms []TermFrequency, samp
 	}
 	callCtx, cancel := context.WithTimeout(ctx, timeout)
 	callCtx = chat.WithCallSite(callCtx, "memory.narrative")
+	callCtx = chat.WithBestEffort(callCtx) // optional work; breaker design §5.3a
 	defer cancel()
 
 	msgs := []chat.Message{
@@ -136,6 +138,12 @@ func (w *NarrativeWriter) Write(ctx context.Context, terms []TermFrequency, samp
 			lastErr = err
 		} else {
 			lastErr = fmt.Errorf("NarrativeWriter.Write: no choices in response")
+		}
+		// A spent context cannot carry attempt 2; it would fail in
+		// milliseconds and count as a second failure (breaker design §5.3b).
+		// A refusal of optional work would be refused again (§5.3d).
+		if chat.RetryAllowed(callCtx) != nil || errors.Is(err, chat.ErrOptionalWorkDisabled) {
+			return "", lastErr
 		}
 	}
 	return "", lastErr

@@ -2,6 +2,7 @@ package chat
 
 import (
 	"context"
+	"errors"
 	"sync"
 	"time"
 )
@@ -127,15 +128,28 @@ func (h *HealthGatedProvider) breakerFor(model string) *Breaker {
 }
 
 // gate runs call() behind the breaker for the inner provider's current model.
-func (h *HealthGatedProvider) gate(_ context.Context, call func() (*ChatResponse, error)) (*ChatResponse, error) {
+func (h *HealthGatedProvider) gate(ctx context.Context, call func() (*ChatResponse, error)) (*ChatResponse, error) {
 	model := h.inner.Model()
 	b := h.breakerFor(model)
-	permitted, probe, state := b.Allow()
+	bestEffort := IsBestEffort(ctx)
+	var permitted, probe bool
+	var state CircuitState
+	if bestEffort {
+		permitted, state = b.AllowWithoutProbe()
+	} else {
+		permitted, probe, state = b.Allow()
+	}
 	if !permitted {
 		h.setStateGauge(model, state)
 		return nil, &ModelUnhealthyError{Route: h.routeName, Model: model, State: state.Label(), OpenSince: b.OpenSince()}
 	}
 	resp, err := call()
+	if bestEffort && errors.Is(err, context.DeadlineExceeded) {
+		// The caller's own deadline on optional work: not a health sample,
+		// neither failure nor success (§5.3a). Counted so the starvation shows.
+		h.incBestEffortDeadline(model, CallSiteFromContext(ctx))
+		return resp, err
+	}
 	// A call is a health "success" unless it's an upstream infra failure —
 	// shape/plausibility errors, nil, and caller-cancellation all count as
 	// success (the model is reachable). IsUpstreamInfraError already excludes
@@ -155,6 +169,12 @@ func (h *HealthGatedProvider) gate(_ context.Context, call func() (*ChatResponse
 func (h *HealthGatedProvider) setStateGauge(model string, s CircuitState) {
 	if h.metrics != nil && h.metrics.ModelHealthState != nil {
 		h.metrics.ModelHealthState.WithLabelValues(h.routeName, model).Set(float64(s))
+	}
+}
+
+func (h *HealthGatedProvider) incBestEffortDeadline(model, site string) {
+	if h.metrics != nil && h.metrics.BestEffortDeadlines != nil {
+		h.metrics.BestEffortDeadlines.WithLabelValues(h.routeName, model, site).Inc()
 	}
 }
 

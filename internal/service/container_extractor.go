@@ -74,12 +74,16 @@ func (c *Container) initExtractorPipeline() {
 		c.Logger.Error().Err(err).Msg("extractor: failed to register EPUB extractor")
 		return
 	}
-	// PDF — shells out to poppler's pdftotext. We register
-	// unconditionally; if poppler is missing the binary check
-	// happens at Extract time and surfaces "install poppler-utils"
-	// to the operator. Pre-flight check (Phase 7) will warn at
-	// boot.
-	if err := reg.Register(pdf.New(), "application/pdf"); err != nil {
+	// PDF, audio, image OCR and video run their tools (pdftotext,
+	// ffmpeg + whisper-cli, tesseract, ffprobe + ffmpeg) in the pinned
+	// agent image through the sandbox runner (process-spawn law S5b,
+	// https://docs.vornik.io §7),
+	// never on the daemon host. They register unconditionally: a missing
+	// runner, image, tool or model reports "not available" at Extract
+	// time, and initSandboxTools logs at boot which tools the image
+	// declares.
+	sb := c.sandbox()
+	if err := reg.Register(pdf.New(sb), "application/pdf"); err != nil {
 		c.Logger.Error().Err(err).Msg("extractor: failed to register PDF extractor")
 		return
 	}
@@ -98,37 +102,32 @@ func (c *Container) initExtractorPipeline() {
 		c.Logger.Error().Err(err).Msg("extractor: failed to register text extractor")
 		return
 	}
-	// Audio — shells out to whisper (Python openai-whisper, on PATH).
-	// Register against audio/* so any inbound audio MIME flows to
-	// the same extractor; whisper accepts mp3 / wav / m4a / flac
-	// natively. Like PDF: registration is unconditional; the
-	// binary check happens at Extract time with a helpful "install
-	// openai-whisper" message when missing.
-	if err := reg.Register(audio.New(), "audio/*"); err != nil {
+	// Audio — ffmpeg normalises, whisper-cli (whisper.cpp) transcribes
+	// with the ggml model from extractors.audio.model_path, falling back
+	// to voice.stt.model (design §7.1 decisions 2 and 3). audio/* so any
+	// inbound audio MIME flows to the same extractor.
+	if err := reg.Register(audio.New(sb, c.Config.AudioExtractionModel()), "audio/*"); err != nil {
 		c.Logger.Error().Err(err).Msg("extractor: failed to register audio extractor")
 		return
 	}
-	// Images — pure-Go header decode for dimensions + optional
-	// tesseract OCR (graceful degradation when missing on the
-	// daemon host). image/* covers jpeg/png/gif/webp at the
+	// Images — pure-Go header decode for dimensions + tesseract OCR in
+	// the sandbox (graceful degradation when not available). image/* covers jpeg/png/gif/webp at the
 	// dispatch layer; the stdlib decoder handles png/jpeg/gif
 	// natively. Other image variants degrade to a metadata-only
 	// section via the same error path.
-	if err := reg.Register(imagex.New(), "image/*"); err != nil {
+	if err := reg.Register(imagex.New(sb), "image/*"); err != nil {
 		c.Logger.Error().Err(err).Msg("extractor: failed to register image extractor")
 		return
 	}
 	// Video — ffprobe metadata + uniform-interval keyframe sampling via
-	// ffmpeg. Registered unconditionally like PDF and audio: the binary
-	// check happens at Extract time with an install hint, and a host
-	// without ffmpeg degrades to a metadata-only failure rather than a
-	// dispatch-time gap the operator cannot see. Neither binary is a new
-	// dependency — the voice subsystem already requires ffmpeg.
+	// ffmpeg, both in the sandbox. Registered unconditionally like PDF
+	// and audio: an image without them reports "not available" at
+	// Extract time rather than leaving a dispatch-time gap the operator
+	// cannot see.
 	//
 	// see LLD § https://docs.vornik.io §4.6
 	videoOpts := videox.NewWithOptions(
-		c.Config.Voice.STT.FFmpegPath, // reuse the operator's configured ffmpeg
-		"",                            // ffprobe from PATH (same package as ffmpeg)
+		sb,
 		c.Config.Media.Video.MaxFrames,
 		c.Config.Media.Video.MinIntervalSeconds,
 	)

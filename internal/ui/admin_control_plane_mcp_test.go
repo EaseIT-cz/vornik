@@ -97,10 +97,11 @@ func TestMCPAdd_RejectsBadTransport(t *testing.T) {
 
 func TestMCPAdd_RejectsSecretLiteral(t *testing.T) {
 	s, repo := mcpTestServer(t)
-	// A long bare token in the URL position → looks like a literal secret.
+	// A stdio command that looks like a pasted secret: refused as stdio first
+	// (process-spawn law, reading 3), and no proposal is drafted either way.
 	rec := postMCP(t, s, url.Values{"action": {"add"}, "name": {"x"}, "transport": {"stdio"}, "command": {"sk-abcdefghijklmnopqrstuvwxyz012345"}})
-	if !strings.Contains(rec.Header().Get("Location"), "mcp-secret") {
-		t.Fatalf("secret literal must be rejected, got %s", rec.Header().Get("Location"))
+	if !strings.Contains(rec.Header().Get("Location"), "mcp-stdio-refused") {
+		t.Fatalf("a stdio command must be refused, got %s", rec.Header().Get("Location"))
 	}
 	if n := draftCountUI(t, repo); n != 0 {
 		t.Fatalf("no proposal on secret literal, got %d", n)
@@ -307,4 +308,26 @@ func draftCountUI(t *testing.T, repo persistence.ProposalRepository) int {
 	t.Helper()
 	ps, _ := repo.List(context.Background(), persistence.ProposalListFilter{})
 	return len(ps)
+}
+
+// The apply engine resolves ApplyTarget against the configured file's
+// directory, so the target must be that file's own name. It was hardcoded to
+// "config.yaml", so a deployment whose config file is named otherwise got
+// "replace target config.yaml does not exist" on apply (found by the
+// process-spawn-law end-to-end suite, 2026-09-26).
+func TestMCPAdd_ApplyTargetIsTheConfiguredFileName(t *testing.T) {
+	repo := newProposalRepoUI(t)
+	path := filepath.Join(t.TempDir(), "vornik.yaml")
+	if err := os.WriteFile(path, []byte(mcpBaseConfig), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	s := NewServer(WithProposalStore(repo), WithControlPlaneConfigPath(path))
+	postMCP(t, s, url.Values{"action": {"add"}, "name": {"web"}, "transport": {"streamable-http"}, "url": {"https://x/mcp"}})
+	ps, err := repo.List(context.Background(), persistence.ProposalListFilter{})
+	if err != nil || len(ps) != 1 {
+		t.Fatalf("expected one proposal, got %d (%v)", len(ps), err)
+	}
+	if ps[0].ApplyTarget != "vornik.yaml" {
+		t.Fatalf("ApplyTarget = %q, want the configured file's name", ps[0].ApplyTarget)
+	}
 }

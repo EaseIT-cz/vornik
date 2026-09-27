@@ -11,7 +11,7 @@ roles:
     - name: "lead"
       description: "Plans research and writing tasks"
       count: 1
-      runtimePolicy: "warm"
+      runtimePolicy: "ephemeral"
       maxTokens: 2048
       requiredOutputKeys: ["plan"]
       runtime:

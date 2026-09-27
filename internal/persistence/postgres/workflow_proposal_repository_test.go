@@ -63,11 +63,11 @@ func TestWorkflowProposalRepository_List_KindFilter(t *testing.T) {
 		"id", "workflow_id", "status", "kind", "proposal_yaml", "motivation",
 		"evidence_run_ids", "instinct_ids", "confidence", "architect_model", "created_at",
 		"decided_at", "decided_by", "applied_at", "applied_commit",
-		"rollback_commit", "notes",
+		"rollback_commit", "notes", "pre_apply_yaml",
 	}
 	rows := sqlmock.NewRows(cols).
 		AddRow("wpr-k", "wf-x", "pending", "add_step", "", "", pq.Array([]string{}), nil, float32(0.6), "m", time.Now(),
-			nil, nil, nil, nil, nil, nil)
+			nil, nil, nil, nil, nil, nil, nil)
 
 	mock.ExpectQuery(regexp.QuoteMeta("kind = ANY(")).
 		WithArgs(pq.Array([]string{"add_step"}), 50).
@@ -193,11 +193,11 @@ func TestWorkflowProposalRepository_Get_Found(t *testing.T) {
 		"id", "workflow_id", "status", "kind", "proposal_yaml", "motivation",
 		"evidence_run_ids", "instinct_ids", "confidence", "architect_model", "created_at",
 		"decided_at", "decided_by", "applied_at", "applied_commit",
-		"rollback_commit", "notes",
+		"rollback_commit", "notes", "pre_apply_yaml",
 	}).AddRow(
 		p.ID, p.WorkflowID, "pending", "add_step", p.ProposalYAML, p.Motivation,
 		pq.Array(p.EvidenceRunIDs), pq.Array(p.InstinctIDs), p.Confidence, p.ArchitectModel, p.CreatedAt,
-		nil, nil, nil, nil, nil, nil,
+		nil, nil, nil, nil, nil, nil, nil,
 	)
 	mock.ExpectQuery(regexp.QuoteMeta("SELECT id, workflow_id, status")).
 		WithArgs("wpr-1").WillReturnRows(rows)
@@ -250,11 +250,11 @@ func TestWorkflowProposalRepository_List(t *testing.T) {
 		"id", "workflow_id", "status", "kind", "proposal_yaml", "motivation",
 		"evidence_run_ids", "instinct_ids", "confidence", "architect_model", "created_at",
 		"decided_at", "decided_by", "applied_at", "applied_commit",
-		"rollback_commit", "notes",
+		"rollback_commit", "notes", "pre_apply_yaml",
 	}
 	rows := sqlmock.NewRows(cols).
 		AddRow("wpr-2", "wf-research", "pending", "unspecified", "", "", pq.Array([]string{}), nil, float32(0.5), "m", time.Now(),
-			nil, nil, nil, nil, nil, nil)
+			nil, nil, nil, nil, nil, nil, nil)
 
 	mock.ExpectQuery(regexp.QuoteMeta("FROM workflow_proposals")).
 		WithArgs("wf-research", pq.Array([]string{"pending"}), 50).
@@ -457,12 +457,12 @@ func TestWorkflowProposalRepository_Get_AllNullableFieldsSet(t *testing.T) {
 		"id", "workflow_id", "status", "kind", "proposal_yaml", "motivation",
 		"evidence_run_ids", "instinct_ids", "confidence", "architect_model", "created_at",
 		"decided_at", "decided_by", "applied_at", "applied_commit",
-		"rollback_commit", "notes",
+		"rollback_commit", "notes", "pre_apply_yaml",
 	}).AddRow(
 		"wpr-1", "wf-x", "rolled_back", "change_timeout", "yaml", "motiv",
 		pq.Array([]string{"r-1"}), pq.Array([]string{"inst-1"}), float32(0.5), "model", created,
 		decided, "operator-y", applied, "abc1234",
-		"def5678", "rollback because regressed",
+		"def5678", "rollback because regressed", "steps:\n  - id: gone\n",
 	)
 	mock.ExpectQuery(regexp.QuoteMeta("SELECT id, workflow_id, status")).
 		WithArgs("wpr-1").WillReturnRows(rows)
@@ -486,6 +486,9 @@ func TestWorkflowProposalRepository_Get_AllNullableFieldsSet(t *testing.T) {
 	if got.RollbackCommit != "def5678" {
 		t.Errorf("rollback_commit: %q", got.RollbackCommit)
 	}
+	if got.PreApplyYAML != "steps:\n  - id: gone\n" {
+		t.Errorf("pre_apply_yaml: %q", got.PreApplyYAML)
+	}
 	if got.Notes != "rollback because regressed" {
 		t.Errorf("notes: %q", got.Notes)
 	}
@@ -507,7 +510,7 @@ func TestWorkflowProposalRepository_List_DefaultsAndNoFilter(t *testing.T) {
 		"id", "workflow_id", "status", "kind", "proposal_yaml", "motivation",
 		"evidence_run_ids", "instinct_ids", "confidence", "architect_model", "created_at",
 		"decided_at", "decided_by", "applied_at", "applied_commit",
-		"rollback_commit", "notes",
+		"rollback_commit", "notes", "pre_apply_yaml",
 	})
 	mock.ExpectQuery(regexp.QuoteMeta("FROM workflow_proposals")).
 		WithArgs(50).
@@ -519,5 +522,44 @@ func TestWorkflowProposalRepository_List_DefaultsAndNoFilter(t *testing.T) {
 	}
 	if len(got) != 0 {
 		t.Fatalf("want 0 rows, got %d", len(got))
+	}
+}
+
+// TestWorkflowProposalRepository_MarkAppliedWithPreApply — config-drift
+// slice E: the pre-apply snapshot is stamped in the SAME UPDATE that marks the
+// row applied, so an applied remove/reorder never exists without the file it
+// was applied to (when the writer could read it).
+func TestWorkflowProposalRepository_MarkAppliedWithPreApply(t *testing.T) {
+	db, mock, cleanup := newMockDBTX(t)
+	defer cleanup()
+	repo := NewWorkflowProposalRepository(db)
+
+	mock.ExpectExec(regexp.QuoteMeta("SET status = 'applied', applied_at = NOW(), applied_commit = $1, pre_apply_yaml = $2")).
+		WithArgs("abc1234", "steps:\n  - id: a\n", "wpr-1").
+		WillReturnResult(sqlmock.NewResult(0, 1))
+
+	if err := repo.MarkAppliedWithPreApply(context.Background(), "wpr-1", "abc1234", []byte("steps:\n  - id: a\n")); err != nil {
+		t.Fatalf("MarkAppliedWithPreApply: %v", err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("unmet sql expectations: %v", err)
+	}
+	if err := repo.MarkAppliedWithPreApply(context.Background(), "wpr-1", "", []byte("x")); err == nil {
+		t.Fatal("an empty commit was accepted")
+	}
+}
+
+// A zero-row UPDATE is classified exactly as MarkApplied's is.
+func TestWorkflowProposalRepository_MarkAppliedWithPreApply_WrongState(t *testing.T) {
+	db, mock, cleanup := newMockDBTX(t)
+	defer cleanup()
+	repo := NewWorkflowProposalRepository(db)
+	mock.ExpectExec(regexp.QuoteMeta("UPDATE workflow_proposals")).
+		WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectQuery(regexp.QuoteMeta("SELECT status FROM workflow_proposals")).
+		WillReturnRows(sqlmock.NewRows([]string{"status"}).AddRow("pending"))
+	err := repo.MarkAppliedWithPreApply(context.Background(), "wpr-1", "abc", []byte("x"))
+	if !errors.Is(err, persistence.ErrInvalidProposalTransition) {
+		t.Fatalf("err = %v, want ErrInvalidProposalTransition", err)
 	}
 }

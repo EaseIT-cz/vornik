@@ -30,6 +30,41 @@ COPY . .
 RUN CGO_ENABLED=0 GOOS=linux go build -o /bin/mcp-bridge ./cmd/mcp-bridge \
  && CGO_ENABLED=0 GOOS=linux go build -o /bin/vornik-agent-helper ./cmd/agent-helper
 
+# whisper.cpp's CLI for the sandboxed speech tools (process-spawn law S5,
+# https://docs.vornik.io §7): voice STT
+# and audio extraction run it in a network-less one-shot of THIS image instead
+# of on the daemon host. Built from a pinned commit (the v1.8.7 tag) as a
+# static binary; models are never baked in, they are mounted read-only.
+FROM ubuntu:24.04@sha256:4fbb8e6a8395de5a7550b33509421a2bafbc0aab6c06ba2cef9ebffbc7092d90 AS whisper
+ARG WHISPER_CPP_COMMIT=48f628a84833905ee4a0658ee6d4a5c915ce1997
+RUN apt-get update && apt-get install -y --no-install-recommends \
+      build-essential cmake git ca-certificates \
+ && rm -rf /var/lib/apt/lists/*
+RUN git clone https://github.com/ggml-org/whisper.cpp /src/whisper.cpp \
+ && git -C /src/whisper.cpp checkout --quiet "${WHISPER_CPP_COMMIT}" \
+ && test "$(git -C /src/whisper.cpp rev-parse HEAD)" = "${WHISPER_CPP_COMMIT}" \
+ && cmake -S /src/whisper.cpp -B /src/build -DBUILD_SHARED_LIBS=OFF \
+      -DWHISPER_BUILD_TESTS=OFF -DGGML_NATIVE=OFF -DCMAKE_BUILD_TYPE=Release \
+ && cmake --build /src/build --target whisper-cli -j"$(nproc)" \
+ && install -m 0755 /src/build/bin/whisper-cli /usr/local/bin/whisper-cli
+
+# piper's release bundle (binary + its espeak-ng data and onnxruntime), pinned
+# by sha256 per architecture. Voice TTS runs it in the sandbox (S5).
+FROM ubuntu:24.04@sha256:4fbb8e6a8395de5a7550b33509421a2bafbc0aab6c06ba2cef9ebffbc7092d90 AS piper
+ARG TARGETARCH
+ARG PIPER_RELEASE=2023.11.14-2
+RUN apt-get update && apt-get install -y --no-install-recommends curl ca-certificates \
+ && rm -rf /var/lib/apt/lists/*
+RUN set -e; \
+    case "${TARGETARCH:-amd64}" in \
+      amd64) arch=x86_64;  sum=a50cb45f355b7af1f6d758c1b360717877ba0a398cc8cbe6d2a7a3a26e225992 ;; \
+      arm64) arch=aarch64; sum=fea0fd2d87c54dbc7078d0f878289f404bd4d6eea6e7444a77835d1537ab88eb ;; \
+      *) echo "unsupported TARGETARCH ${TARGETARCH}" >&2; exit 1 ;; \
+    esac; \
+    curl -sSL -o /tmp/piper.tgz "https://github.com/rhasspy/piper/releases/download/${PIPER_RELEASE}/piper_linux_${arch}.tar.gz"; \
+    echo "${sum}  /tmp/piper.tgz" | sha256sum -c -; \
+    tar -xzf /tmp/piper.tgz -C /opt
+
 FROM ubuntu:24.04@sha256:4fbb8e6a8395de5a7550b33509421a2bafbc0aab6c06ba2cef9ebffbc7092d90
 # Build provenance (2026-08-25). The revision label is what makes image
 # staleness detectable at all: doctor's image_freshness check compares it
@@ -53,6 +88,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     python3-numpy python3-scipy mypy \
     imagemagick \
     pandoc weasyprint fonts-dejavu \
+    poppler-utils tesseract-ocr tesseract-ocr-eng ffmpeg \
     gcc libc6-dev \
     gnupg \
     && rm -rf /var/lib/apt/lists/*
@@ -71,7 +107,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 #     (2026-07-09: a hardened github-review on headmatch #34 couldn't run
 #     `python -m mypy` — "mypy is not installed" — and fell back to inspection).
 #     Project-specific runtime deps (e.g. headmatch's soundfile/pyyaml) are NOT
-#     baked here — the coder pip-installs them per task (PIP_BREAK_SYSTEM_PACKAGES).
+#     baked here. A project that declares `dependencies:` gets them installed
+#     by the operator (`vornikctl deps install`, inside THIS image) and mounted
+#     read-only for every role; one that does not still has the coder
+#     pip-install per task (PIP_BREAK_SYSTEM_PACKAGES).
 ENV PIP_BREAK_SYSTEM_PACKAGES=1
 
 # GitHub CLI (gh) — the github-router workflow uses it for outbound GitHub
@@ -120,6 +159,9 @@ RUN userdel --remove ubuntu 2>/dev/null || true \
  && chown -R vornik:vornik /app \
  && chmod 1777 /app/input /app/output /app/workspace /home/vornik
 
+COPY --from=whisper /usr/local/bin/whisper-cli /usr/local/bin/whisper-cli
+COPY --from=piper /opt/piper /opt/piper
+RUN ln -s /opt/piper/piper /usr/local/bin/piper
 COPY --from=builder /bin/mcp-bridge /usr/local/bin/mcp-bridge
 COPY --from=builder /bin/vornik-agent-helper /usr/local/bin/vornik-agent-helper
 
@@ -174,6 +216,12 @@ RUN chmod +x /entrypoint.sh
 # The value is the contract version, so a future change to which paths are
 # writable can bump it rather than having to invent a second label.
 LABEL io.vornik.agent.uid-agnostic="1"
+
+# The tools this image offers the daemon's sandboxed one-shots (process-spawn
+# law S5, design §7.1 decision 4). The daemon reads it from the pinned image and
+# reports a feature whose tool is absent as "not available" rather than ever
+# running it on the host; vornikctl doctor RUNS each one to verify function.
+LABEL io.vornik.sandbox-tools="pdftotext,tesseract,ffmpeg,ffprobe,whisper-cli,piper"
 
 WORKDIR /app/workspace
 USER vornik:vornik

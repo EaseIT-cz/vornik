@@ -14,6 +14,7 @@ import (
 	"vornik.io/vornik/internal/persistence"
 	"vornik.io/vornik/internal/pricing"
 	"vornik.io/vornik/internal/ratelimit"
+	"vornik.io/vornik/internal/sandboxtool"
 )
 
 // AgentOption configures an Agent.
@@ -34,6 +35,16 @@ func WithMaxIterations(n int) AgentOption {
 		if n > 0 {
 			a.maxIterations = n
 		}
+	}
+}
+
+// WithSandboxRunner sets the sandbox one-shot runner render_document runs
+// pandoc through, in the pinned agent image and never on the daemon host
+// (process-spawn law S4/S5a); unset, render_document reports that rendering is
+// not available.
+func WithSandboxRunner(r *sandboxtool.Runner) AgentOption {
+	return func(a *Agent) {
+		a.sandboxRunner = r
 	}
 }
 

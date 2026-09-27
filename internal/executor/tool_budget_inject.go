@@ -2,6 +2,7 @@ package executor
 
 import (
 	"encoding/json"
+	"math"
 	"strconv"
 	"time"
 
@@ -35,6 +36,49 @@ func applyStepTimeoutBudget(native time.Duration, roleConfig *registry.SwarmRole
 // effective wall-clock, leaving headroom for the step to observe the
 // timeout, fail fast, and let the executor retry — rather than one call
 // consuming the whole step.
+// applySpeedFactor stretches (or, on a host faster than the reference,
+// shrinks) a step budget by the declared inference-speed factor
+// (dynamic-tool-budget design §6.2.1b). budget is the tier-scaled value,
+// native the step's own timeout. Time only: iterations never move.
+//
+//   - no timeout (0), no factor (<=0) or factor 1: unchanged;
+//   - a warm role is stretched but never shrunk, because shrinking its time
+//     against unchanged iterations is the split §6.1 forbids;
+//   - a downscale is floored at min(floor, native), so it can neither starve a
+//     step nor lift it above its own timeout.
+func applySpeedFactor(budget, native time.Duration, factor float64, role *registry.SwarmRole, floor time.Duration) time.Duration {
+	if budget <= 0 || native <= 0 || factor <= 0 || factor == 1 {
+		return budget
+	}
+	if factor < 1 && role != nil && role.RuntimePolicy == "warm" {
+		return budget
+	}
+	scaled := time.Duration(math.Round(float64(budget) * factor))
+	lift := floor
+	if lift > native {
+		lift = native
+	}
+	if scaled < lift {
+		scaled = lift
+	}
+	return scaled
+}
+
+// resolveStepTimeout is the ONE ordering of a step's time budget (design
+// §6.2.1b): native × tier (when tool_budget is on) × speed, floored, then the
+// counterfactual cap last, which only lowers.
+func resolveStepTimeout(native time.Duration, role *registry.SwarmRole, tier string, autonomous bool, cfg toolbudget.Config, speed float64, cfCap time.Duration) time.Duration {
+	t := native
+	if cfg.Enabled {
+		t = applyStepTimeoutBudget(native, role, tier, autonomous, cfg)
+	}
+	t = applySpeedFactor(t, native, speed, role, cfg.MinStepTimeout)
+	if cfCap > 0 && cfCap < t {
+		t = cfCap
+	}
+	return t
+}
+
 const perCallStepTimeoutFraction = 0.5
 
 // perCallTimeoutFloor keeps the coupled per-call timeout from collapsing

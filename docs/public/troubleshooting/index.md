@@ -1,7 +1,7 @@
 ---
 sources:
     - path: https://docs.vornik.io
-      sha256: 01f75898603e5ff869f533209c47d23ce026fe8e20ee2dac7006d24bf7105e84
+      sha256: 976aa7f7a4ba3cf8e3470dea8500f6840d9ab2704241a7f3ac9219a68ab8c2b0
 ---
 # Troubleshooting
 
@@ -36,20 +36,31 @@ vornikctl doctor
 
 `vornikctl doctor` runs a battery of checks (configuration validity, database
 schema, container runtime, agent images, stuck tasks) and prints actionable
-results. It is the fastest way to localize a problem. A few checks are worth
-knowing by name:
+results. It is the fastest way to localize a problem. Most checks come from
+the daemon; the host checks (`podman_config`, `agent_images`,
+`agent_image_uid`, `image_freshness`) need podman, skopeo or systemctl, so
+`vornikctl doctor` runs them itself, on the host where you run it, and merges
+them into the same report. The daemon never runs a program on a request, so
+its own `/api/v1/doctor` answer lists them as a single `host_checks` entry
+pointing here. Run `vornikctl doctor` on the machine that runs the daemon for
+the host checks to mean anything. A few checks are worth knowing by name:
 
 - **`model_health`** — looks at the last 24 hours and flags a model that is
   failing too often or returning degenerate (near-empty) output, and
-  recommends the role's configured fallback model. It never switches models
-  for you — swapping a model under a live swarm is left to you.
+  recommends the role's configured fallback model. Failures that were not the
+  model's — the agent's container could not start or could not read its
+  files — are counted separately, and when they are most of what went wrong
+  the check tells you to look at the host (`agent_image_uid`,
+  `image_freshness`), not the model. It never switches models for you —
+  swapping a model under a live swarm is left to you.
 - **`config_crlf`** — finds config files saved with Windows-style CRLF line
   endings, a common cause of phantom config drift (see
   [Configuration drift after editing in the UI](#configuration-drift-after-editing-in-the-ui)).
   Run `vornikctl doctor --fix` to normalize them to LF in place.
-- **`model_route_coverage`** — confirms every model a role uses resolves to a
-  configured route and has a pricing entry, so nothing routes to an
-  unintended catch-all or has its cost silently estimated.
+- **`model_route_coverage`** — confirms every model a role uses is routed by
+  the running chat router (including the default routes an enabled provider
+  adds) and has a pricing entry, so nothing routes to an unintended catch-all
+  or has its cost silently estimated.
 
 ### Collect evidence before asking for help
 

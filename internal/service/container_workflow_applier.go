@@ -1,7 +1,7 @@
 package service
 
 // Slice 4 wiring — service-layer adapters for the workflow-proposal
-// applier. Filesystem writer (two-tree discipline), git committer,
+// applier and rollbacker. Filesystem writer (two-tree discipline)
 // and config-reload trigger. Kept here so internal/workflowapply stays
 // free of filesystem / exec / git dependencies.
 
@@ -9,9 +9,9 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
-	"strings"
+
+	"github.com/rs/zerolog"
 
 	"vornik.io/vornik/internal/config"
 	"vornik.io/vornik/internal/persistence"
@@ -36,11 +36,11 @@ func (w *workflowApplierAdapter) Apply(ctx context.Context, proposalID, appliedB
 // fsWorkflowWriter implements workflowapply.WorkflowWriter against the
 // two-tree config discipline: writes to both source (operator's
 // vornik checkout) and deployed (daemon's read-target) trees. The
-// source path is returned for git staging.
+// source path is returned; nothing commits it (process-spawn law, S3).
 //
 // Source-tree empty / not present is non-fatal: deployed-only
 // deployments (production daemons without an operator checkout)
-// get the file written to the deployed tree and no git commit.
+// get the file written to the deployed tree only.
 type fsWorkflowWriter struct {
 	sourceConfigDir   string // <root>/configs, contains workflows/
 	deployedConfigDir string // ~/.config/vornik/configs, contains workflows/
@@ -68,8 +68,8 @@ func (w *fsWorkflowWriter) Write(_ context.Context, workflowID string, body []by
 
 	// Source tree write is optional. When the source tree exists
 	// AND has a workflows/ directory, we mirror the write so the
-	// operator's git repo reflects the change. Otherwise we skip
-	// silently — the applier handles the "no git commit" case.
+	// operator's checkout reflects the change (they commit it). Otherwise we skip
+	// silently.
 	if w.sourceConfigDir == "" {
 		_ = deployedPath
 		return "", nil
@@ -83,6 +83,25 @@ func (w *fsWorkflowWriter) Write(_ context.Context, workflowID string, body []by
 		return "", fmt.Errorf("write source tree: %w", err)
 	}
 	return sourcePath, nil
+}
+
+// ReadDeployed returns the deployed workflow file as it is now — the
+// applier's pre-apply snapshot (config-drift slice E), read before Write
+// replaces it. Same id guard as Write; a missing file is an error, not an
+// empty snapshot, so the applier records nothing rather than a false one.
+func (w *fsWorkflowWriter) ReadDeployed(_ context.Context, workflowID string) ([]byte, error) {
+	if w.deployedConfigDir == "" {
+		return nil, fmt.Errorf("fsWorkflowWriter: deployedConfigDir not set")
+	}
+	safeID, err := safepath.CleanPathComponent(workflowID)
+	if err != nil {
+		return nil, fmt.Errorf("fsWorkflowWriter: invalid workflowID: %w", err)
+	}
+	path, err := safepath.JoinUnder(filepath.Join(w.deployedConfigDir, "workflows"), safeID+".md")
+	if err != nil {
+		return nil, fmt.Errorf("workflowID escapes workflows directory: %w", err)
+	}
+	return os.ReadFile(path)
 }
 
 func (w *fsWorkflowWriter) writeToTree(configDir, workflowID string, body []byte) (string, error) {
@@ -101,56 +120,6 @@ func (w *fsWorkflowWriter) writeToTree(configDir, workflowID string, body []byte
 		return "", err
 	}
 	return candidate, nil
-}
-
-// gitCommitter implements workflowapply.GitCommitter via `git` binary
-// calls. Stages one path (so the commit doesn't accidentally
-// include unrelated working-tree changes) and commits with the
-// operator-supplied message + identity.
-type gitCommitter struct {
-	repoDir string // the git repo root (or any subdirectory inside it)
-}
-
-func (g *gitCommitter) Commit(ctx context.Context, path, message, authorName, authorEmail string) (string, error) {
-	if g.repoDir == "" {
-		return "", fmt.Errorf("gitCommitter: repoDir not set")
-	}
-	// Stage just this one path so unrelated working-tree changes
-	// don't ride along.
-	add := exec.CommandContext(ctx, "git", "-C", g.repoDir, "add", "--", path)
-	if out, err := add.CombinedOutput(); err != nil {
-		return "", fmt.Errorf("git add: %w: %s", err, strings.TrimSpace(string(out)))
-	}
-	// Commit with author env vars overriding any local git
-	// config so the architect identity is recorded consistently
-	// even on shared boxes. --only restricts the commit to the
-	// staged path even if the working tree has other changes.
-	env := append([]string{}, os.Environ()...)
-	if authorName != "" {
-		env = append(env,
-			"GIT_AUTHOR_NAME="+authorName,
-			"GIT_COMMITTER_NAME="+authorName,
-		)
-	}
-	if authorEmail != "" {
-		env = append(env,
-			"GIT_AUTHOR_EMAIL="+authorEmail,
-			"GIT_COMMITTER_EMAIL="+authorEmail,
-		)
-	}
-	commit := exec.CommandContext(ctx, "git", "-C", g.repoDir,
-		"commit", "-m", message, "--only", "--", path)
-	commit.Env = env
-	if out, err := commit.CombinedOutput(); err != nil {
-		return "", fmt.Errorf("git commit: %w: %s", err, strings.TrimSpace(string(out)))
-	}
-
-	sha := exec.CommandContext(ctx, "git", "-C", g.repoDir, "rev-parse", "HEAD")
-	out, err := sha.Output()
-	if err != nil {
-		return "", fmt.Errorf("git rev-parse HEAD: %w", err)
-	}
-	return strings.TrimSpace(string(out)), nil
 }
 
 // configReloadAdapter bridges *config.ConfigReloader to
@@ -174,73 +143,31 @@ func (a *configReloadAdapter) Reload() error {
 // missing; the admin endpoint nil-checks and surfaces 503.
 //
 // The source-tree path is resolved from VORNIK_CONFIGS_SOURCE_DIR
-// env (operator's vornik checkout root) — falls back to the
-// deployed tree if unset. When source == deployed, the applier
-// effectively writes once and (if the deployed tree is a git
-// repo) commits there. Most dev deployments will land in this
-// shape; production has a deployed-only tree and skips git.
+// env (operator's vornik checkout root). When set, the writer mirrors
+// every apply into it; nothing commits it — the daemon runs no git on a
+// request (process-spawn law, S3). The operator commits the source tree
+// with their own git.
 func newWorkflowApplier(
 	proposals persistence.WorkflowProposalRepository,
 	reloader *config.ConfigReloader,
 	deployedConfigDir string,
+	logger *zerolog.Logger,
 ) *workflowapply.Applier {
 	if proposals == nil || deployedConfigDir == "" {
 		return nil
 	}
-	sourceDir := os.Getenv("VORNIK_CONFIGS_SOURCE_DIR")
-	writer := &fsWorkflowWriter{
-		sourceConfigDir:   sourceDir,
-		deployedConfigDir: deployedConfigDir,
-	}
-
-	// Pick the git repo root: prefer the source tree (where the
-	// operator's checkout lives). If unset, fall back to the
-	// deployed tree iff it's a git repo. Otherwise leave git nil
-	// — the applier records "no-git" as applied_commit.
-	gitDir := sourceDir
-	if gitDir == "" {
-		gitDir = deployedConfigDir
-	}
-	var git workflowapply.GitCommitter
-	if isGitRepo(gitDir) {
-		git = &gitCommitter{repoDir: gitDir}
-	}
-
 	return workflowapply.NewApplier(
-		proposals, writer, git,
+		proposals, newFSWorkflowWriter(deployedConfigDir),
 		&configReloadAdapter{reloader: reloader},
-		workflowapply.ApplierConfig{
-			AuthorName:  envOr("VORNIK_GIT_AUTHOR_NAME", "vornik-architect"),
-			AuthorEmail: envOr("VORNIK_GIT_AUTHOR_EMAIL", "architect@vornik.local"),
-		},
+		workflowapply.ApplierConfig{Logger: logger},
 	)
 }
 
-func isGitRepo(dir string) bool {
-	if dir == "" {
-		return false
+// newFSWorkflowWriter is the two-tree writer both the applier and the
+// rollbacker use, so a rollback restores to exactly the trees an apply wrote.
+func newFSWorkflowWriter(deployedConfigDir string) *fsWorkflowWriter {
+	return &fsWorkflowWriter{
+		sourceConfigDir:   os.Getenv("VORNIK_CONFIGS_SOURCE_DIR"),
+		deployedConfigDir: deployedConfigDir,
 	}
-	// Walk up looking for a .git directory. `git rev-parse
-	// --is-inside-work-tree` would be more correct but adds an
-	// exec call to startup; the .git check is good enough for
-	// the "should we wire a committer" decision.
-	cur := dir
-	for {
-		info, err := os.Stat(filepath.Join(cur, ".git"))
-		if err == nil && (info.IsDir() || info.Mode().IsRegular()) {
-			return true
-		}
-		parent := filepath.Dir(cur)
-		if parent == cur {
-			return false
-		}
-		cur = parent
-	}
-}
-
-func envOr(key, dflt string) string {
-	if v := os.Getenv(key); v != "" {
-		return v
-	}
-	return dflt
 }

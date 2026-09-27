@@ -11,12 +11,12 @@ import (
 	"net/http"
 	"net/textproto"
 	"os"
-	"os/exec"
 	"strconv"
 	"strings"
 
 	"vornik.io/vornik/internal/persistence"
 	"vornik.io/vornik/internal/safepath"
+	"vornik.io/vornik/internal/spawn"
 )
 
 const maxGitCGIHeaderBytes = 64 << 10
@@ -160,12 +160,21 @@ func (s *Server) GitHTTPBackend(w http.ResponseWriter, r *http.Request) {
 
 	env := buildGitCGIEnv(r, gitProjectRoot, pathInfo)
 
-	cmd := exec.CommandContext(r.Context(), "git", "http-backend") //nolint:gosec
-	cmd.Env = env
-	cmd.Stdin = r.Body
-
 	// Wrap the response writer to count bytes for the audit row.
 	cw := &countingResponseWriter{ResponseWriter: w, statusCode: http.StatusOK}
+
+	// The process-spawn law's GitHTTPBackend kind (internal/spawn): exactly
+	// `git http-backend`, the CGI environment from an allowlist, and
+	// GIT_PROJECT_ROOT under the registered workspace root. A refusal starts
+	// nothing.
+	cmd, err := spawn.GitHTTPBackend(r.Context(), env)
+	if err != nil {
+		respondError(cw, http.StatusInternalServerError, "GIT_BACKEND_ERROR",
+			"git http-backend refused: "+err.Error())
+		s.writeGitAudit(r, rawID, "error", cw.bytesWritten)
+		return
+	}
+	cmd.SetStdin(r.Body)
 
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
@@ -183,7 +192,7 @@ func (s *Server) GitHTTPBackend(w http.ResponseWriter, r *http.Request) {
 
 	status, streamErr := streamCGIResponse(cw, stdout)
 	if streamErr != nil {
-		_ = cmd.Process.Kill()
+		_ = cmd.Kill()
 		_ = cmd.Wait()
 		// A client disconnect surfaces here as a copy error; it is not a
 		// backend fault, so don't write a response or an "error" audit row.

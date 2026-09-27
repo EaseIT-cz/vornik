@@ -47,6 +47,20 @@ func (c *Container) applyAgentMemoryLimit(
 	if warn != "" {
 		c.Logger.Warn().Msg(warn)
 	}
+	if c.sandboxRunner != nil {
+		sb := sandboxCommitment{
+			set:           c.Config.SandboxTools.IsSet(),
+			maxConcurrent: c.sandboxRunner.MaxConcurrent(),
+			largest:       c.sandboxRunner.LargestMemory(),
+		}
+		sbWarn, sbErr := checkCombinedMemory(raw, limit, concurrency, sb, total, available)
+		if sbErr != nil {
+			return nil, fmt.Errorf("agent and sandbox memory: %w", sbErr)
+		}
+		if sbWarn != "" {
+			c.Logger.Warn().Msg(sbWarn)
+		}
+	}
 	if limit <= 0 {
 		c.Logger.Warn().Msg("agent containers run UNBOUNDED: one agent can exhaust host " +
 			"memory (runtime.agent_memory_limit is \"none\", or the host total is unreadable)")
@@ -160,6 +174,78 @@ func resolveAgentMemoryLimit(raw string, concurrency int, totalBytes, availableB
 	}
 
 	return limit, "", nil
+}
+
+// sandboxCommitment is the sandbox one-shot pool's side of the memory check
+// (process-spawn law S5a): every slot running the largest feature.
+type sandboxCommitment struct {
+	set           bool // the operator set max_concurrent or a limit
+	maxConcurrent int
+	largest       int64
+}
+
+// checkCombinedMemory adds the sandbox pool's commitment to the agents' and
+// says whether the daemon may boot (design §7.3).
+//
+// It inherits resolveAgentMemoryLimit's rule that only a number an operator
+// CHOSE can refuse a boot (S5-R3A). The refusal product counts the agent term
+// only when agent_memory_limit was set, and the sandbox term only when
+// sandbox_tools was; it fires only when the sandbox term is in it, because the
+// agent-only product was already checked. Every other overcommit — a derived
+// agent limit, sandbox defaults — WARNs and boots: a pure-default config on a
+// 4 GB host must boot, because a host-dependent safety property cannot be met
+// by a host-independent default. The refusal names all five exits (S5-N3);
+// the agent side's escape hatch is spelt "none", which is what
+// resolveAgentMemoryLimit accepts.
+func checkCombinedMemory(agentRaw string, agentLimit int64, concurrency int, sb sandboxCommitment, totalBytes, availableBytes int64) (string, error) {
+	if concurrency < 1 {
+		concurrency = 1
+	}
+	agentCommitted := max(agentLimit, 0) * int64(concurrency)
+	sandboxCommitted := int64(sb.maxConcurrent) * sb.largest
+	if sandboxCommitted < 0 || (sb.largest > 0 && sandboxCommitted/sb.largest != int64(sb.maxConcurrent)) {
+		return "", fmt.Errorf("sandbox_tools.max_concurrent %d x %s overflows a 64-bit byte count",
+			sb.maxConcurrent, humanBytes(sb.largest))
+	}
+	combined := agentCommitted + sandboxCommitted
+	if totalBytes <= 0 {
+		return "", nil // no basis for either check
+	}
+
+	agentSet := strings.TrimSpace(agentRaw) != "" && agentLimit > 0
+	if sb.set {
+		chosen := sandboxCommitted
+		if agentSet {
+			chosen += agentCommitted
+		}
+		if chosen > totalBytes {
+			return "", fmt.Errorf(
+				"agent containers (%s) plus sandbox tools (sandbox_tools.max_concurrent %d x largest "+
+					"limit %s = %s) commit %s, more than the host's total memory (%s). Lower "+
+					"runtime.agent_memory_limit, lower scheduler.max_concurrent_tasks, lower "+
+					"sandbox_tools.max_concurrent, lower a sandbox_tools.limits.<feature>, or set "+
+					"runtime.agent_memory_limit: \"none\"",
+				humanBytes(agentCommitted), sb.maxConcurrent, humanBytes(sb.largest),
+				humanBytes(sandboxCommitted), humanBytes(chosen), humanBytes(totalBytes))
+		}
+	}
+	if combined > totalBytes {
+		return fmt.Sprintf(
+			"agent containers (%s) plus sandbox tools (%s) commit %s, more than the host's total "+
+				"memory (%s). Booting, because these are defaults or derived rather than set; "+
+				"lower scheduler.max_concurrent_tasks or sandbox_tools.max_concurrent if every "+
+				"slot may fill at once",
+			humanBytes(agentCommitted), humanBytes(sandboxCommitted), humanBytes(combined),
+			humanBytes(totalBytes)), nil
+	}
+	if availableBytes > 0 && combined > availableBytes {
+		return fmt.Sprintf(
+			"agent containers (%s) plus sandbox tools (%s) commit %s, more than is currently "+
+				"available (%s). Booting: this may be page cache or a transient spike",
+			humanBytes(agentCommitted), humanBytes(sandboxCommitted), humanBytes(combined),
+			humanBytes(availableBytes)), nil
+	}
+	return "", nil
 }
 
 // humanBytes renders a byte count the way the operator wrote it, because a

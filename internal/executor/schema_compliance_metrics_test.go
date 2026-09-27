@@ -55,10 +55,10 @@ func TestRecordFinalOutcome_SchemaViolationDrivesGauge(t *testing.T) {
 	m := NewMetrics(registry)
 
 	// 8 outcomes: 2 schema_violation, 6 ok.
-	m.RecordFinalOutcome("lead", "zai.glm-5", "schema_violation")
-	m.RecordFinalOutcome("lead", "zai.glm-5", "schema_violation")
+	m.RecordFinalOutcome("lead", "zai.glm-5", "schema_violation", "")
+	m.RecordFinalOutcome("lead", "zai.glm-5", "schema_violation", "")
 	for i := 0; i < 6; i++ {
-		m.RecordFinalOutcome("lead", "zai.glm-5", "ok")
+		m.RecordFinalOutcome("lead", "zai.glm-5", "ok", "")
 	}
 
 	got := testutil.ToFloat64(m.ModelSchemaViolationRate.WithLabelValues("lead", "zai.glm-5"))
@@ -69,7 +69,7 @@ func TestRecordFinalOutcome_SchemaViolationDrivesGauge(t *testing.T) {
 
 	// Different model should be at zero — gauge cardinality must be
 	// keyed on the (role, model) pair, not bleed across models.
-	m.RecordFinalOutcome("lead", "moonshotai.kimi-k2.5", "ok")
+	m.RecordFinalOutcome("lead", "moonshotai.kimi-k2.5", "ok", "")
 	others := testutil.ToFloat64(m.ModelSchemaViolationRate.WithLabelValues("lead", "moonshotai.kimi-k2.5"))
 	if others != 0 {
 		t.Errorf("kimi rate must be 0 (no schema_violation recorded), got %v", others)

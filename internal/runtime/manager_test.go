@@ -85,7 +85,7 @@ echo '{"Client":{"Version":"5.0.0"}}'
 `)}
 
 	containerID, err := manager.StartContainer(context.Background(), &ContainerConfig{
-		Image:     "alpine:latest",
+		Image:     "localhost/vornik-agent:test",
 		ProjectID: "proj",
 		Role:      "worker",
 		TaskID:    "task-1",
@@ -113,7 +113,7 @@ echo '{"Client":{"Version":"5.0.0"}}'
 	}
 
 	_, err := manager.StartContainer(context.Background(), &ContainerConfig{
-		Image:     "alpine:latest",
+		Image:     "localhost/vornik-agent:test",
 		ProjectID: "proj",
 		Role:      "worker",
 		TaskID:    "task-2",
@@ -142,7 +142,7 @@ echo '{"Client":{"Version":"5.0.0"}}'
 `)}
 
 	_, err := manager.StartContainer(context.Background(), &ContainerConfig{
-		Image:     "alpine:latest",
+		Image:     "localhost/vornik-agent:test",
 		ProjectID: "proj",
 		Role:      "worker",
 		TaskID:    "task-3",

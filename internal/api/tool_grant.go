@@ -7,6 +7,8 @@ import (
 	"sort"
 	"strings"
 
+	"vornik.io/vornik/internal/agenttools"
+
 	"vornik.io/vornik/internal/chat"
 )
 
@@ -80,7 +82,7 @@ func EvaluateToolGrant(requested, ceiling []string) GrantOutcome {
 	// An empty ceiling means "unrestricted" everywhere else in this system, so a
 	// grant against it can only narrow — nothing to refuse.
 	for _, want := range requested {
-		if len(ceiling) == 0 || mcpRoleToolAllowed(ceiling, want) {
+		if agenttools.AllowlistAdmits(ceiling, want) {
 			out.Accepted = append(out.Accepted, want)
 			continue
 		}

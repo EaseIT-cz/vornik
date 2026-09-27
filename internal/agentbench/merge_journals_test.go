@@ -19,6 +19,10 @@ func chunkJournal(runID string, repeat int, taskIDs ...string) Journal {
 		RunID: runID, Arm: arm, ArmKey: arm.Key(), TaskTiers: tiers,
 		DaemonBuild: "d0d07a6d1183", HarnessBuild: "d0d07a6d1183",
 	}}
+	// A chunk of a calibration pass carries that pass's pre-registration
+	// (release-gate design §9.3), identical across chunks so they merge.
+	j.Manifest.PreRegistration = calibrationPreReg()
+	j.Manifest.PreRegistrationHash, _ = j.Manifest.PreRegistration.Hash()
 	for _, id := range taskIDs {
 		j.TaskRuns = append(j.TaskRuns, TaskRun{
 			TaskID: id, Repeat: repeat, Succeeded: true,

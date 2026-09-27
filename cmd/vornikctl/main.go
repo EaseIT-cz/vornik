@@ -38,6 +38,8 @@ func main() {
 		if msg := err.Error(); msg != "" {
 			fmt.Fprintf(os.Stderr, "error: %s\n", msg)
 		}
-		os.Exit(1)
+		// A command may ask for a specific code (leader-lock release's 0-5
+		// contract); anything else exits 1 as before.
+		os.Exit(cli.ExitCodeOf(err))
 	}
 }

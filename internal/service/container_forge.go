@@ -6,13 +6,13 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
 	"time"
 	"vornik.io/vornik/internal/forgereview"
 
+	forgeh "vornik.io/vornik/internal/executor/handlers/forge"
 	"vornik.io/vornik/internal/forge"
 	_ "vornik.io/vornik/internal/forge/github" // registers the "github" forge provider via init()
 	"vornik.io/vornik/internal/persistence"
@@ -78,13 +78,9 @@ func (s *forgePublishSource) PublishSource(ctx context.Context, task *persistenc
 		return "", "", fmt.Errorf("forge: cannot locate publish source (missing workspace path or task project)")
 	}
 	gitDir := filepath.Join(s.workspacePath, task.ProjectID)
-	out, err := exec.CommandContext(ctx, "git", "-C", gitDir, "rev-parse", "HEAD").Output()
+	sha, err := forgeh.WorkspaceHead(ctx, gitDir)
 	if err != nil {
-		return "", "", fmt.Errorf("forge: rev-parse HEAD in %s: %w", gitDir, err)
-	}
-	sha := strings.TrimSpace(string(out))
-	if sha == "" {
-		return "", "", fmt.Errorf("forge: empty HEAD sha in %s", gitDir)
+		return "", "", err
 	}
 	return gitDir, sha, nil
 }

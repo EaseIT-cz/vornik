@@ -325,6 +325,17 @@ func stripInvalidProjects(cfg *ConfigSet) *ValidationError {
 			// this check; their gate paths are operator-vouched and
 			// failures still surface at runtime.
 			role := roleByName[step.Role]
+			// A warm container mounts no project workspace (process-spawn
+			// law S6-D5): it outlives any one task, so it cannot carry a
+			// task's worktree. A workflow step run by a warm role therefore
+			// cannot read or write the project. Warn, do not strip — same
+			// non-fatal channel as autonomy.workflow_id above.
+			if role != nil && role.RuntimePolicy == "warm" {
+				msg := fmt.Errorf("project '%s' workflow '%s' step '%s' runs role '%s' with runtimePolicy: warm, and a warm container mounts no project workspace — the step cannot read or write the project; use runtimePolicy: ephemeral for roles that work on the workspace",
+					projectID, workflow.ID, stepID, step.Role)
+				errs = append(errs, msg)
+				fmt.Fprintf(os.Stderr, "vornik/registry: WARNING: %s\n", msg)
+			}
 			if role == nil || role.OutputSchema == nil {
 				continue
 			}

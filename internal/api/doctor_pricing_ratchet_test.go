@@ -34,6 +34,14 @@ func TestPricingCoverage_NoUncheckedModelField(t *testing.T) {
 		"model_capabilities": "a map keyed by model id, not a model id",
 		"model_limits":       "a map keyed by model id, not a model id",
 		"model_fallbacks":    "a map of model id → fallback id, not a model id field",
+		// chat.optional_work.disabled_models (breaker design §5.3d) lists models
+		// whose optional work is REFUSED. It never causes a call, so there is
+		// nothing on it to price; the models themselves are priced where used.
+		"disabled_models": "a list of models whose optional calls are refused, never called through it",
+		// extractors.audio.model_path (process-spawn law S5b) is a local ggml
+		// whisper model FILE run by whisper-cli in the sandbox: no provider
+		// call, nothing to price.
+		"model_path": "a local whisper model file run in the sandbox, not a priced model id",
 
 		// Reached through the registry rather than the daemon snapshot, so they
 		// are covered by checkPricingCoverage without appearing in modelRefs.

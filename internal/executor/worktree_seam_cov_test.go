@@ -3,6 +3,7 @@ package executor
 import (
 	"context"
 	"errors"
+	"os"
 	"path/filepath"
 	"testing"
 
@@ -19,6 +20,16 @@ func TestCreateWorktree_HappyPathReturnsWorktreeDir(t *testing.T) {
 	withGitRunner(t, f)
 
 	projectDir := t.TempDir()
+	// The fake runs no git, so lay out the admin dir `git worktree add` would
+	// write: createWorktree verifies it names this worktree (S6-D2).
+	admin := filepath.Join(projectDir, ".git", "worktrees", "task_abc")
+	if err := os.MkdirAll(admin, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(admin, "gitdir"),
+		[]byte(filepath.Join(projectDir, ".worktrees", "task_abc", ".git")+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 	wt, err := createWorktree(context.Background(), projectDir, "task_abc", zerolog.Nop())
 	if err != nil {
 		t.Fatalf("createWorktree: unexpected error %v", err)

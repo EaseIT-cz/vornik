@@ -28,6 +28,7 @@ func NewToolAuditRepository(db DBTX) *ToolAuditRepository {
 // safety net for crashed agents that didn't manage to stream
 // every tool call before exiting.
 func (r *ToolAuditRepository) Log(ctx context.Context, entry *persistence.ToolAuditEntry) error {
+	persistence.DefaultToolAuditIdentity(entry)
 	_, err := r.db.ExecContext(ctx, `
 		INSERT INTO tool_audit_log (
 			id, project_id, task_id, execution_id, step_id,

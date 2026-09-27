@@ -77,7 +77,7 @@ func (r *WorkflowProposalRepository) Get(ctx context.Context, id string) (*persi
 		SELECT id, workflow_id, status, kind, proposal_yaml, motivation,
 		       evidence_run_ids, instinct_ids, confidence, architect_model, created_at,
 		       decided_at, decided_by, applied_at, applied_commit,
-		       rollback_commit, notes
+		       rollback_commit, notes, pre_apply_yaml
 		FROM workflow_proposals
 		WHERE id = $1`, id)
 	return scanWorkflowProposal(row.Scan)
@@ -94,7 +94,7 @@ func (r *WorkflowProposalRepository) List(ctx context.Context, filter persistenc
 		SELECT id, workflow_id, status, kind, proposal_yaml, motivation,
 		       evidence_run_ids, instinct_ids, confidence, architect_model, created_at,
 		       decided_at, decided_by, applied_at, applied_commit,
-		       rollback_commit, notes
+		       rollback_commit, notes, pre_apply_yaml
 		FROM workflow_proposals
 		WHERE 1=1`)
 	args := []any{}
@@ -196,6 +196,31 @@ func (r *WorkflowProposalRepository) MarkApplied(ctx context.Context, id, applie
 	return nil
 }
 
+// MarkAppliedWithPreApply is MarkApplied that also records the deployed file
+// as it was before the apply (config-drift slice E, migration 197), in the
+// same UPDATE, so the snapshot and the applied status cannot disagree.
+// Optional extension: the applier type-asserts for it and falls back to
+// MarkApplied.
+func (r *WorkflowProposalRepository) MarkAppliedWithPreApply(ctx context.Context, id, appliedCommit string, preApply []byte) error {
+	if appliedCommit == "" {
+		return fmt.Errorf("workflow_proposal: MarkAppliedWithPreApply requires a commit hash")
+	}
+	res, err := r.db.ExecContext(ctx, `
+		UPDATE workflow_proposals
+		SET status = 'applied', applied_at = NOW(), applied_commit = $1, pre_apply_yaml = $2
+		WHERE id = $3 AND status = 'approved'`,
+		appliedCommit, string(preApply), id,
+	)
+	if err != nil {
+		return mapDBError(err)
+	}
+	n, _ := res.RowsAffected()
+	if n == 0 {
+		return r.classifyMissedTransition(ctx, id)
+	}
+	return nil
+}
+
 // MarkRolledBack flips applied → rolled_back + stamps the revert
 // commit.
 func (r *WorkflowProposalRepository) MarkRolledBack(ctx context.Context, id, rollbackCommit string) error {
@@ -274,12 +299,12 @@ func scanWorkflowProposal(scan func(...any) error) (*persistence.WorkflowProposa
 	var kind sql.NullString
 	var evidence, instincts pq.StringArray
 	var decidedAt, appliedAt sql.NullTime
-	var decidedBy, appliedCommit, rollbackCommit, notes sql.NullString
+	var decidedBy, appliedCommit, rollbackCommit, notes, preApply sql.NullString
 	if err := scan(
 		&p.ID, &p.WorkflowID, &status, &kind, &p.ProposalYAML, &p.Motivation,
 		&evidence, &instincts, &p.Confidence, &p.ArchitectModel, &p.CreatedAt,
 		&decidedAt, &decidedBy, &appliedAt, &appliedCommit,
-		&rollbackCommit, &notes,
+		&rollbackCommit, &notes, &preApply,
 	); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, persistence.ErrNotFound
@@ -317,6 +342,9 @@ func scanWorkflowProposal(scan func(...any) error) (*persistence.WorkflowProposa
 	}
 	if notes.Valid {
 		p.Notes = notes.String
+	}
+	if preApply.Valid {
+		p.PreApplyYAML = preApply.String
 	}
 	return &p, nil
 }

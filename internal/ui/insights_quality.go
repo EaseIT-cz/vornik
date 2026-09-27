@@ -20,6 +20,9 @@ type QualityWorkflowSummary struct {
 	MissingContract int
 	InvalidEvidence int
 	NotApplicable   int
+	// Unscorable counts executions the contract examined and cannot
+	// evaluate (a repeated step). Examined, so it is coverage; never averaged.
+	Unscorable int
 	// AwaitingEvidence is MissingContract+InvalidEvidence: executions whose
 	// workflow DOES declare a scoring policy but whose agents produced no
 	// usable evidence for it. Kept out of MeanPercent on purpose — folding a
@@ -42,6 +45,7 @@ type QualityCoverage struct {
 	Scored           int
 	AwaitingEvidence int
 	NotApplicable    int
+	Unscorable       int
 }
 
 // QualityView is the computed read model behind the three page states.
@@ -165,6 +169,10 @@ func summarizeExecutionQuality(rows []*persistence.ExecutionQualityScore) Qualit
 			view.Attention = append(view.Attention, row)
 		case "not_applicable":
 			a.NotApplicable++
+		case "unscorable":
+			a.Unscorable++
+			countDiagnostic(diagnostics, row.Diagnostic, "unscorable")
+			view.Attention = append(view.Attention, row)
 		}
 	}
 
@@ -177,7 +185,8 @@ func summarizeExecutionQuality(rows []*persistence.ExecutionQualityScore) Qualit
 		view.Coverage.Scored += a.Scored
 		view.Coverage.AwaitingEvidence += a.AwaitingEvidence
 		view.Coverage.NotApplicable += a.NotApplicable
-		if a.Scored > 0 || a.AwaitingEvidence > 0 {
+		view.Coverage.Unscorable += a.Unscorable
+		if a.Scored > 0 || a.AwaitingEvidence > 0 || a.Unscorable > 0 {
 			view.Coverage.Declaring++
 			view.Declaring = append(view.Declaring, a.QualityWorkflowSummary)
 			continue

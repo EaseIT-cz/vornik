@@ -66,6 +66,24 @@ func ContentHash(text string) string {
 	return hex.EncodeToString(sum[:])
 }
 
+// DocumentChunkHash is the content_hash of a chunk of a document ingest:
+// sha256(artifactID || NUL || text), hex. Salting with the upload keeps two
+// uploads of one document from colliding on the project-wide unique hash, so
+// each version is stored whole (memory rollback x supersession design, A.7).
+// It is NOT the embedding cache key, which is the embed input's hash.
+func DocumentChunkHash(artifactID, text string) string {
+	sum := sha256.Sum256([]byte(artifactID + "\x00" + text))
+	return hex.EncodeToString(sum[:])
+}
+
+// IsDocumentChunkHash reports whether stored is the salted hash of text for
+// artifactID: how a writer that changes a chunk's text (the Art 17 redactor)
+// tells which scheme to keep. The two schemes are disjoint by SHA-256
+// preimage resistance, not by construction.
+func IsDocumentChunkHash(stored, artifactID, text string) bool {
+	return artifactID != "" && stored == DocumentChunkHash(artifactID, text)
+}
+
 // embeddingCacheRepo is the postgres-backed EmbedCache implementation.
 // Wraps *Repository's *sql.DB; doesn't pull in any new dependencies.
 type embeddingCacheRepo struct {

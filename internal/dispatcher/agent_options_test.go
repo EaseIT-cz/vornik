@@ -8,6 +8,7 @@ package dispatcher
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"github.com/rs/zerolog"
@@ -17,6 +18,7 @@ import (
 	"vornik.io/vornik/internal/persistence"
 	"vornik.io/vornik/internal/pricing"
 	"vornik.io/vornik/internal/ratelimit"
+	"vornik.io/vornik/internal/sandboxtool"
 )
 
 // stubInputArtifactStore is a minimal InputArtifactStore that lets us
@@ -49,6 +51,31 @@ func TestWithLogger_SetsLogger(t *testing.T) {
 	a := newOptionsAgent(WithLogger(want))
 	if a.logger.GetLevel() != want.GetLevel() {
 		t.Fatalf("logger level not propagated: got %v", a.logger.GetLevel())
+	}
+}
+
+// The sandbox runner reaches the tool executor, where render_document uses it
+// (process-spawn law S4/S5a).
+func TestWithSandboxRunner_ReachesTheToolExecutor(t *testing.T) {
+	sb := &fakeSandbox{}
+	a := newOptionsAgent(WithSandboxRunner(newTestSandbox(t, sandboxtool.Config{Image: "img"}, sb.run)))
+	_ = a.ExecuteTool(context.Background(), "render_document", `{"content":"# Hi","name":"cv","formats":["html"]}`, &stubSenderRecording{})
+	if len(sb.calls) != 1 {
+		t.Fatal("the runner set by WithSandboxRunner was not used")
+	}
+}
+
+// ExecuteTool drives a tool through the same Execute path a chat turn uses.
+func TestExecuteTool_RunsTheToolThroughExecute(t *testing.T) {
+	a := newOptionsAgent()
+	fs := &stubSenderRecording{}
+	res := a.ExecuteTool(context.Background(), "render_document", `{"content":"# Hi","name":"cv","formats":["md"]}`, fs)
+	if !strings.Contains(res.Content, "Delivered: cv.md") || len(fs.paths) != 1 {
+		t.Fatalf("got %q, sent %v", res.Content, fs.paths)
+	}
+	var nilAgent *Agent
+	if got := nilAgent.ExecuteTool(context.Background(), "render_document", `{}`, fs); !strings.Contains(got.Content, "not configured") {
+		t.Fatalf("a nil agent must refuse, got %q", got.Content)
 	}
 }
 

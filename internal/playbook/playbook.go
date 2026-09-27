@@ -193,7 +193,7 @@ var corpus = map[string]Entry{
 		Cause:        "The execution context's deadline elapsed. Either workflow.maxWallClock fired (proactive cap) or a step's timeout: ... was exceeded.",
 		Suggestions: []string{
 			"Check the workflow YAML for `maxWallClock:` — if set, this is the proactive ceiling.",
-			"Per-step timeouts (workflow.steps.<id>.timeout) are independent of maxWallClock; tighten or relax based on observed step duration in the dashboard.",
+			"maxWallClock is the execution's deadline and caps every step: a per-step timeout (workflow.steps.<id>.timeout) above it is inert, so raise maxWallClock with it. `vornikctl workflow validate` flags the pair (step_timeout_exceeds_wall_clock).",
 			"If the run was making forward progress under the watchdog's no-progress threshold, raising the cap is the right call. If not, the agent was stuck — see TOOL_ITERATION_LIMIT instead.",
 		},
 	},
@@ -362,6 +362,24 @@ var corpus = map[string]Entry{
 			"Do NOT check the App installation or its permissions for this class — that is FORGE_TARGET_UNAVAILABLE, and this failure never made a forge request.",
 			"This task did NOT exhaust its attempts — it stopped after one deliberately. Re-drive it only after the trigger is fixed; the same job would be refused again.",
 		},
+	},
+	persistence.TaskFailureClassWorkspaceUnavailable: {
+		Class:        persistence.TaskFailureClassWorkspaceUnavailable,
+		Scope:        ScopeTask,
+		HumanMessage: "Vornik could not prepare a private copy of the project for this task, so it did not start.",
+		Cause: "The daemon could not give the task its own git worktree: the project's repository could not be " +
+			"bootstrapped, `git worktree add` failed twice, or the worktree could not be re-created for a retry. " +
+			"The task failed before any container started. There is no shared-workspace fallback any more " +
+			"(process-spawn law S6-D1): it mounted the project's .git read-write into the agent, which let an agent " +
+			"plant hooks the daemon's own git later ran on the host.",
+		Suggestions: []string{
+			"Read the task's last error: it carries git's own message. A project hook named there (post-checkout from git-lfs, husky or pre-commit) aborting `git worktree add` is the usual cause — make the hook tolerate a worktree (git-lfs: install git-lfs on the daemon's PATH, or define it per project with `git lfs install --local`), or remove the hook.",
+			"A leftover admin directory under <project>/.git/worktrees/<task> that git will not prune (a `locked` file) makes git pick another name, which is refused: remove it by hand, then `git -C <project> worktree prune`.",
+			"Run `vornikctl doctor` and read `orphan_worktrees`: a pile-up of stale worktrees under <project>/.worktrees is reported there, and `vornikctl doctor --fix` prunes them.",
+			"A bootstrap failure (the project directory is not writable, or the disk is full) names the directory in the error: fix its permissions or free space; the task can be re-driven once it is fixed.",
+			"This is never the model's fault — do not switch models or fallbacks. No container started.",
+		},
+		References: []string{"https://docs.vornik.io (S6-D1)"},
 	},
 	persistence.TaskFailureClassForgeTargetUnavailable: {
 		Class:        persistence.TaskFailureClassForgeTargetUnavailable,
@@ -699,6 +717,33 @@ var corpus = map[string]Entry{
 			"Sub-second and deterministic is the signature. Reproduce by hand: run the agent image with that role's env and read stderr.",
 			"Check image freshness first — `vornikctl doctor` has an image_freshness check, and an agent image that was never rebuilt is the most common cause.",
 			"A FALLBACK rung failing this way has never once worked, and the ladder walks silently past it. A rung that fails 4-of-4 in under a second is not a fallback; treat it as absent.",
+		},
+	},
+	stepoutcome.ClassWorkspaceUnavailable: {
+		Class:        stepoutcome.ClassWorkspaceUnavailable,
+		Scope:        ScopeStep,
+		HumanMessage: "This step did not start: Vornik could not prepare a private copy of the project for it.",
+		Cause: "The daemon could not give the task its own git worktree, so the step never started and no container ran " +
+			"(the task carries WORKSPACE_UNAVAILABLE). Infrastructure, never the model's fault; model health does not " +
+			"charge it to a model.",
+		Suggestions: []string{
+			"Read the task's last error: it carries git's own message. A project hook named there (post-checkout from git-lfs, husky or pre-commit) aborting `git worktree add` is the usual cause — make the hook tolerate a worktree (git-lfs: install git-lfs on the daemon's PATH, or define it per project with `git lfs install --local`), or remove the hook.",
+			"A leftover admin directory under <project>/.git/worktrees/<task> that git will not prune (a `locked` file) makes git pick another name, which is refused: remove it by hand, then `git -C <project> worktree prune`.",
+			"Run `vornikctl doctor` and read `orphan_worktrees`: a pile-up of stale worktrees under <project>/.worktrees is reported there, and `vornikctl doctor --fix` prunes them.",
+			"A bootstrap failure (the project directory is not writable, or the disk is full) names the directory in the error: fix its permissions or free space; the task can be re-driven once it is fixed.",
+			"This is never the model's fault — do not switch models or fallbacks. No container started.",
+		},
+		References: []string{"https://docs.vornik.io (S6-D1)"},
+	},
+	stepoutcome.ClassAgentMountUnusable: {
+		Class:        stepoutcome.ClassAgentMountUnusable,
+		Scope:        ScopeStep,
+		HumanMessage: "The agent could not use the files the daemon gave it.",
+		Cause:        "The container started, but the agent could not read its task file or write its output or workspace — the image's user does not match the host's mount owner (uid, userns keep-id, or an SELinux label). The model was never usefully called.",
+		Suggestions: []string{
+			"Run `vornikctl doctor` and read `agent_image_uid`: an image baked for a different uid than the daemon's is the usual cause, typically after pulling a published image over a local build.",
+			"Rebuild the agent image for this host with `make build-agent` (it passes this host's uid); no daemon restart is needed.",
+			"Every step fails while this lasts, on every model — do not switch models or fallbacks to work around it, and read `model_health` with that in mind.",
 		},
 	},
 }

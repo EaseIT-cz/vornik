@@ -135,6 +135,10 @@ type TaskRepository interface {
 	// parked in AWAITING_APPROVAL, cancel the ones past the timeout.
 	List(ctx context.Context, filter persistence.TaskFilter) ([]*persistence.Task, error)
 	UpdateStatus(ctx context.Context, id string, status persistence.TaskStatus) error
+	// TransitionConditional gates the approval-timeout cancel on the live
+	// status, so an approval landing between List and the write is not
+	// overwritten (scheduler design §4.10).
+	TransitionConditional(ctx context.Context, id string, from []persistence.TaskStatus, to persistence.TaskStatus, opts persistence.TransitionOpts) (bool, error)
 }
 
 // Config holds watchdog tunables. Zero-value defaults are applied at
@@ -559,8 +563,16 @@ func (w *Watchdog) sweepExpiredApprovals(ctx context.Context) {
 		if t == nil || !t.UpdatedAt.Before(cutoff) {
 			continue
 		}
-		if err := w.taskRepo.UpdateStatus(ctx, t.ID, persistence.TaskStatusCancelled); err != nil {
+		moved, err := w.taskRepo.TransitionConditional(ctx, t.ID,
+			[]persistence.TaskStatus{persistence.TaskStatusAwaitingApproval},
+			persistence.TaskStatusCancelled, persistence.TransitionOpts{})
+		if err != nil {
 			w.logger.Warn().Err(err).Str("task_id", t.ID).Msg("watchdog: approval-timeout cancel failed")
+			continue
+		}
+		if !moved {
+			// Approved (or otherwise moved on) since List read it: no longer
+			// awaiting approval, so the timeout no longer applies.
 			continue
 		}
 		expired++

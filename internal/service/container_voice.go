@@ -2,10 +2,10 @@ package service
 
 import (
 	"os"
-	"os/exec"
 	"strings"
 
 	"vornik.io/vornik/internal/config"
+	"vornik.io/vornik/internal/sandboxtool"
 	"vornik.io/vornik/internal/voice"
 )
 
@@ -20,15 +20,13 @@ import (
 // (e.g. whisper-local without a model path) surface as a returned
 // error so the operator sees the typo loudly.
 //
-// Boot-time diagnostics: when a provider sub-block is configured,
-// the function probes the resolved binary + model + ffmpeg paths
-// and logs the outcome. Missing binaries / unreadable model files
-// are reported as WARN so the operator sees the misconfig in the
-// daemon's startup log instead of waiting for the first voice
-// message to fail. Probing is best-effort — failures don't block
-// boot (per the slice-1 design's "binaries probed lazily on first
-// call" rule), but the diagnostic surface is what makes
-// troubleshooting tractable when something's off.
+// The providers run whisper-cli, piper and ffmpeg in the pinned agent
+// image through the sandbox runner (process-spawn law S5b,
+// https://docs.vornik.io §7), so
+// there is no host binary to probe: boot checks the model files (a stat)
+// and warns about the host-path keys that no longer do anything. Whether
+// the image carries the tools is logged by initSandboxTools, and
+// `vornikctl doctor` runs each one.
 func (c *Container) initVoice() error {
 	// STT --------------------------------------------------------
 	sttRaw := strings.TrimSpace(c.Config.Voice.STT.Provider)
@@ -37,13 +35,11 @@ func (c *Container) initVoice() error {
 	} else {
 		c.Logger.Info().
 			Str("provider", sttRaw).
-			Str("binary_path", c.Config.Voice.STT.BinaryPath).
 			Str("model", c.Config.Voice.STT.Model).
-			Str("ffmpeg_path", c.Config.Voice.STT.FFmpegPath).
 			Str("language_hint", c.Config.Voice.STT.LanguageHint).
 			Msg("voice: configuring STT provider")
 	}
-	stt, err := buildSTTProvider(c.Config.Voice.STT)
+	stt, err := buildSTTProvider(c.Config.Voice.STT, c.sandbox())
 	if err != nil {
 		return err
 	}
@@ -64,14 +60,12 @@ func (c *Container) initVoice() error {
 	} else {
 		c.Logger.Info().
 			Str("provider", ttsRaw).
-			Str("binary_path", c.Config.Voice.TTS.BinaryPath).
 			Str("voice_model", c.Config.Voice.TTS.Voice).
-			Str("ffmpeg_path", c.Config.Voice.TTS.FFmpegPath).
 			Float64("speed", c.Config.Voice.TTS.Speed).
 			Int("max_text_runes", c.Config.Voice.TTS.MaxTextRunes).
 			Msg("voice: configuring TTS provider")
 	}
-	tts, err := buildTTSProvider(c.Config.Voice.TTS)
+	tts, err := buildTTSProvider(c.Config.Voice.TTS, c.sandbox())
 	if err != nil {
 		return err
 	}
@@ -94,103 +88,78 @@ func (c *Container) initVoice() error {
 	return nil
 }
 
-func buildSTTProvider(cfg config.VoiceSTTConfig) (voice.STTProvider, error) {
+// sandbox is the runner as the features take it: a nil runner is a nil
+// Sandbox (never a typed nil), which the features report as "not
+// available".
+func (c *Container) sandbox() sandboxtool.Sandbox {
+	if c.sandboxRunner == nil {
+		return nil
+	}
+	return c.sandboxRunner
+}
+
+func buildSTTProvider(cfg config.VoiceSTTConfig, sb sandboxtool.Sandbox) (voice.STTProvider, error) {
 	switch strings.ToLower(strings.TrimSpace(cfg.Provider)) {
 	case "":
 		return nil, nil
 	case "whisper-local":
 		return voice.NewWhisperLocalSTT(voice.WhisperConfig{
-			BinaryPath:   strings.TrimSpace(cfg.BinaryPath),
 			ModelPath:    strings.TrimSpace(cfg.Model),
-			FFmpegPath:   strings.TrimSpace(cfg.FFmpegPath),
 			LanguageHint: cfg.LanguageHint,
 			Threads:      cfg.Threads,
+			Sandbox:      sb,
 		})
 	default:
 		return nil, nil
 	}
 }
 
-func buildTTSProvider(cfg config.VoiceTTSConfig) (voice.TTSProvider, error) {
+func buildTTSProvider(cfg config.VoiceTTSConfig, sb sandboxtool.Sandbox) (voice.TTSProvider, error) {
 	switch strings.ToLower(strings.TrimSpace(cfg.Provider)) {
 	case "":
 		return nil, nil
 	case "piper":
 		return voice.NewPiperLocalTTS(voice.PiperConfig{
-			BinaryPath:   strings.TrimSpace(cfg.BinaryPath),
 			ModelPath:    strings.TrimSpace(cfg.Voice),
-			FFmpegPath:   strings.TrimSpace(cfg.FFmpegPath),
 			DefaultSpeed: cfg.Speed,
 			MaxTextRunes: cfg.MaxTextRunes,
+			Sandbox:      sb,
 		})
 	default:
 		return nil, nil
 	}
 }
 
-// probeSTT runs best-effort accessibility checks on the resolved
-// STT config and logs the outcomes. Doesn't fail boot — the
-// provider wrapper probes lazily on first call by design, but the
-// operator sees the warnings here first so they can fix the
-// install before sending a voice message and getting a humane
-// error reply.
+// probeSTT checks the STT model on the host and warns about the host-path
+// keys that are ignored since the tools moved into the agent image. It
+// doesn't fail boot: the operator sees the warnings before the first voice
+// message gets a humane error reply.
 func probeSTT(c *Container, cfg config.VoiceSTTConfig) {
-	probeBinary(c, "whisper", cfg.BinaryPath, []string{"whisper-cpp", "whisper-cli", "main"})
 	probeModel(c, "whisper", cfg.Model)
-	probeBinary(c, "ffmpeg", cfg.FFmpegPath, []string{"ffmpeg"})
+	warnIgnoredPath(c, "voice.stt.binary_path", cfg.BinaryPath)
+	warnIgnoredPath(c, "voice.stt.ffmpeg_path", cfg.FFmpegPath)
 }
 
 func probeTTS(c *Container, cfg config.VoiceTTSConfig) {
-	probeBinary(c, "piper", cfg.BinaryPath, []string{"piper"})
 	probeModel(c, "piper", cfg.Voice)
-	probeBinary(c, "ffmpeg", cfg.FFmpegPath, []string{"ffmpeg"})
+	if v := strings.TrimSpace(cfg.Voice); v != "" {
+		if _, err := os.Stat(v + ".json"); err != nil {
+			c.Logger.Warn().Str("path", v+".json").
+				Msg("voice: piper voice config not found beside the model — piper needs <voice>.onnx.json next to the .onnx")
+		}
+	}
+	warnIgnoredPath(c, "voice.tts.binary_path", cfg.BinaryPath)
+	warnIgnoredPath(c, "voice.tts.ffmpeg_path", cfg.FFmpegPath)
 }
 
-// probeBinary resolves a binary path either from the explicit
-// config value or by walking $PATH using the provided candidates,
-// then stat's the result. Logs INFO with the resolved path, or
-// WARN when nothing's reachable. The label parameter ("whisper",
-// "piper", "ffmpeg") is the field-tag the operator searches for
-// in their logs.
-func probeBinary(c *Container, label, configured string, pathCandidates []string) {
-	configured = strings.TrimSpace(configured)
-	if configured != "" {
-		info, err := os.Stat(configured)
-		switch {
-		case err == nil && info.Mode()&0o111 == 0:
-			c.Logger.Warn().
-				Str("path", configured).
-				Str("mode", info.Mode().String()).
-				Msgf("voice: %s binary exists but is not executable — chmod +x or fix binary_path", label)
-		case err == nil:
-			c.Logger.Info().
-				Str("path", configured).
-				Msgf("voice: %s binary OK", label)
-		case os.IsNotExist(err):
-			c.Logger.Warn().
-				Str("path", configured).
-				Msgf("voice: %s binary not found at configured path — first voice call will fail", label)
-		default:
-			c.Logger.Warn().
-				Err(err).
-				Str("path", configured).
-				Msgf("voice: %s binary stat failed", label)
-		}
+// warnIgnoredPath warns when a host-binary key is still set: since 2026.9.7
+// the voice tools run in the agent image and the key does nothing.
+func warnIgnoredPath(c *Container, key, value string) {
+	if strings.TrimSpace(value) == "" {
 		return
 	}
-	// No explicit path — fall back to $PATH lookup.
-	for _, name := range pathCandidates {
-		if p, err := exec.LookPath(name); err == nil {
-			c.Logger.Info().
-				Str("path", p).
-				Str("name", name).
-				Msgf("voice: %s binary resolved from $PATH", label)
-			return
-		}
-	}
-	c.Logger.Warn().
-		Strs("tried", pathCandidates).
-		Msgf("voice: %s binary not on $PATH (set binary_path in config to point at the install) — first voice call will fail", label)
+	c.Logger.Warn().Str("key", key).Str("value", value).
+		Msgf("voice: %s is ignored — the voice tools run in the agent image (process-spawn law S5b); remove the key", key)
 }
 
 // probeModel stat's the model file and logs its size. Empty path

@@ -402,8 +402,9 @@ func TestOrderRecord_FilledQtyBoundAndUpdated(t *testing.T) {
 		WillReturnRows(sqlmock.NewRows([]string{"symbol", "action", "qty", "limit_price"}))
 
 	// The INSERT must pass filled_qty (6.0) as the 19th arg, and the
-	// ON CONFLICT fragment must include filled_qty = EXCLUDED.filled_qty.
-	mock.ExpectExec(regexp.QuoteMeta("filled_qty = EXCLUDED.filled_qty")).
+	// ON CONFLICT fragment: the fill count only grows (a late partial must
+	// not lower it — finding #7 correction, 2026-09-24).
+	mock.ExpectExec(regexp.QuoteMeta("filled_qty = GREATEST(trading_orders.filled_qty, EXCLUDED.filled_qty)")).
 		WithArgs(
 			"ord-fq", "p-fq",
 			nil, nil, nil, // task_id, execution_id, broker_order_id
@@ -436,6 +437,7 @@ func orderRows() *sqlmock.Rows {
 		"idempotency_key", "mode", "symbol", "action", "order_type",
 		"qty", "limit_price", "stop_price", "time_in_force",
 		"status", "last_status_reason", "submitted_at", "terminal_at",
+		"filled_qty",
 	})
 }
 
@@ -455,12 +457,14 @@ func TestOrderList_DefaultPageSize(t *testing.T) {
 			"key-1", "paper", "AAPL", "BUY", "LMT",
 			10.0, &limitPx, nil, "DAY",
 			"filled", "OK", submitted, &terminal,
+			10.0,
 		).
 		AddRow(
 			"ord-2", "p-1", nil, nil, nil,
 			"key-2", "paper", "MSFT", "SELL", "MKT",
 			5.0, nil, nil, "DAY",
 			"submitted", "", submitted, nil,
+			0.0,
 		)
 
 	mock.ExpectQuery(regexp.QuoteMeta("FROM trading_orders WHERE 1=1")).
@@ -485,6 +489,10 @@ func TestOrderList_DefaultPageSize(t *testing.T) {
 	}
 	if out[1].TerminalAt != nil {
 		t.Errorf("row 1 terminal_at should be nil")
+	}
+	// filled_qty was written but never read back until 2026-09-24.
+	if out[0].FilledQty != 10 || out[1].FilledQty != 0 {
+		t.Errorf("filled_qty roundtrip: %v, %v", out[0].FilledQty, out[1].FilledQty)
 	}
 }
 

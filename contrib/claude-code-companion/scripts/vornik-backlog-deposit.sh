@@ -220,6 +220,25 @@ if last_heading_item >= 0:
             insert_at = j
             break
 
+# Priority groups (the 2026-09-25 triage layout): when the file groups items
+# under H1 headings "# P1 ...", "# P2", "# P3", the deposit lands at the END of
+# its own priority's group, before the next H1 — otherwise every deposit would
+# land after the last item in the file, which is the bottom of "# Parked".
+# P0 joins the P1 group. No group for the priority: the rule above stands.
+target_group = "P1" if priority == "P0" else priority
+group_start = None
+for j, line in enumerate(lines):
+    m = re.match(r'^#\s+(P[0-3])\b', line)
+    if m and m.group(1) == target_group:
+        group_start = j
+        break
+if group_start is not None:
+    insert_at = len(lines)
+    for j in range(group_start + 1, len(lines)):
+        if re.match(r'^#\s', lines[j]):
+            insert_at = j
+            break
+
 # Land inside the separator convention the file already uses between items.
 before = lines[:insert_at]
 after  = lines[insert_at:]

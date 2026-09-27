@@ -303,11 +303,12 @@ func (r *ChannelReceiver) Receive(ctx context.Context, msg conversation.ChannelM
 	return nil
 }
 
-// maybeAcknowledgeMemoryWrite stamps a pending shared-scope memory-write confirmation when
-// this inbound turn is a human-originated acknowledgement (chat memory-write design §5.3.2
-// step 2, §5.6). No-op unless the confirmation store is wired.
+// maybeAcknowledgeMemoryWrite stamps a pending confirmation — a shared-scope memory write, or
+// (design §12) a cancel_task / retry_task — when this inbound turn is a human-originated
+// acknowledgement OF THAT PROPOSAL'S KIND (chat memory-write design §5.3.2 step 2, §5.6, §12).
+// No-op unless the confirmation store is wired.
 //
-// THREE GUARDS, all cheap and all before the store is touched:
+// GUARDS (the first two before the store is touched; the scope match after the lookup):
 //
 //  1. isAcknowledgeableTurn — the turn carries a human SpeakerID (fails CLOSED on the empty
 //     zero value, so a synthetic/system turn can never acknowledge — §5.6.4) and is not a
@@ -325,7 +326,8 @@ func (r *ChannelReceiver) maybeAcknowledgeMemoryWrite(ctx context.Context, msg c
 	if r.MemoryWriteConfirmations == nil || operatorID == "" {
 		return
 	}
-	if !isAcknowledgeableTurn(msg) || !isShareAcknowledgement(msg.Text) {
+	// Cheap guards first: only a human's typed turn that is SOME scope's phrase costs a lookup.
+	if !isAcknowledgeableTurn(msg) || !isAnyAcknowledgement(msg.Text) {
 		return
 	}
 	channel := r.Channel.Name()
@@ -342,6 +344,12 @@ func (r *ChannelReceiver) maybeAcknowledgeMemoryWrite(ctx context.Context, msg c
 		return
 	}
 	if pending == nil || pending.Acknowledged() {
+		return
+	}
+	// The phrase must acknowledge THIS proposal's kind (design §12): one pending row per
+	// conversation may be a shared write, a cancel or a retry, and "share it" must never
+	// discharge a pending cancel.
+	if !acknowledgementMatchesScope(msg.Text, pending.Scope) {
 		return
 	}
 	if _, err := r.MemoryWriteConfirmations.Acknowledge(ctx, channel, msg.SessionID, operatorID, time.Now()); err != nil {

@@ -149,19 +149,14 @@ func commitCount(t *testing.T, dir string) int {
 	return n
 }
 
-func lastCommitMessage(t *testing.T, dir string) string {
-	t.Helper()
-	out, err := exec.Command("git", "-C", dir, "log", "-1", "--format=%B").CombinedOutput()
-	if err != nil {
-		t.Fatalf("git log: %v: %s", err, out)
-	}
-	return string(out)
-}
-
-// TestNewProposalMirror_CommitTrailerOnNormalization asserts the end-to-end
-// mirror closure: when a normalization fires, the source file is qualified AND
-// the git commit carries a `mirror-normalized: <name>` trailer (review A6).
-func TestNewProposalMirror_CommitTrailerOnNormalization(t *testing.T) {
+// TestNewProposalMirror_WritesTheSourceTreeAndCommitsNothing: the mirror
+// propagates an applied change (normalized) into the operator's checkout and
+// makes NO git commit, even when the checkout is a git repository. Process-spawn
+// law S3 (https://docs.vornik.io).
+// Incident: operator-proposal apply and rollback committed to the source tree,
+// a request-triggered git spawn on the daemon host. The operator commits the
+// source tree with their own git; the normalization is logged and counted.
+func TestNewProposalMirror_WritesTheSourceTreeAndCommitsNothing(t *testing.T) {
 	sourceRoot, sourceConfigsDir := writeMirrorSource(t)
 	gitInit(t, sourceRoot)
 	t.Setenv("VORNIK_CONFIGS_SOURCE_DIR", sourceConfigsDir)
@@ -171,56 +166,21 @@ func TestNewProposalMirror_CommitTrailerOnNormalization(t *testing.T) {
 	if mirror == nil {
 		t.Fatal("newProposalMirror returned nil with a source dir set")
 	}
-	if err := mirror("cpp_test_1", map[string][]byte{
-		"configs/swarms/basic-swarm.md": []byte(swarmBareImage),
-	}); err != nil {
-		t.Fatalf("mirror: %v", err)
+	for _, id := range []string{"cpp_first", "cpp_second"} {
+		if err := mirror(id, map[string][]byte{
+			"configs/swarms/basic-swarm.md": []byte(swarmBareImage),
+		}); err != nil {
+			t.Fatalf("mirror %s: %v", id, err)
+		}
 	}
-
 	got, err := os.ReadFile(filepath.Join(sourceConfigsDir, "swarms", "basic-swarm.md"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !strings.Contains(string(got), `image: "ghcr.io/grinco/vornik-agent:latest"`) {
-		t.Errorf("committed source must carry the qualified image:\n%s", got)
+		t.Errorf("the source tree must carry the qualified image:\n%s", got)
 	}
-	msg := lastCommitMessage(t, sourceConfigsDir)
-	if !strings.Contains(msg, "mirror-normalized: agent-image-qualify") {
-		t.Errorf("commit message missing normalization trailer:\n%s", msg)
-	}
-	if !strings.Contains(msg, "control-plane: apply cpp_test_1") {
-		t.Errorf("commit message missing proposal subject:\n%s", msg)
-	}
-}
-
-// TestNewProposalMirror_NoChurnCommit_Idempotent proves the §3.4 steady state is
-// stable, not a drift oscillation: after the first apply qualifies + commits the
-// image, a SECOND apply carrying the same stale-deployed bytes normalizes to the
-// identical qualified source → empty git diff → NO spurious commit (A3).
-func TestNewProposalMirror_NoChurnCommit_Idempotent(t *testing.T) {
-	sourceRoot, sourceConfigsDir := writeMirrorSource(t)
-	gitInit(t, sourceRoot)
-	t.Setenv("VORNIK_CONFIGS_SOURCE_DIR", sourceConfigsDir)
-
-	c := &Container{Logger: zerolog.Nop()}
-	mirror := c.newProposalMirror()
-
-	files := map[string][]byte{"configs/swarms/basic-swarm.md": []byte(swarmBareImage)}
-	if err := mirror("cpp_first", files); err != nil {
-		t.Fatalf("first mirror: %v", err)
-	}
-	if n := commitCount(t, sourceConfigsDir); n != 1 {
-		t.Fatalf("first apply should produce exactly 1 commit, got %d", n)
-	}
-
-	// Second apply with the same stale-deployed bytes: normalizes to the same
-	// qualified source already on disk → nothing to commit.
-	if err := mirror("cpp_second", map[string][]byte{
-		"configs/swarms/basic-swarm.md": []byte(swarmBareImage),
-	}); err != nil {
-		t.Fatalf("second mirror: %v", err)
-	}
-	if n := commitCount(t, sourceConfigsDir); n != 1 {
-		t.Errorf("second apply must NOT produce a churn commit; commit count = %d, want 1", n)
+	if n := commitCount(t, sourceConfigsDir); n != 0 {
+		t.Fatalf("the mirror made %d git commit(s); the daemon must commit nothing", n)
 	}
 }

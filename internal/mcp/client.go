@@ -10,7 +10,6 @@ import (
 	"io"
 	"net/http"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -22,6 +21,7 @@ import (
 	"github.com/rs/zerolog"
 
 	"vornik.io/vornik/internal/safepath"
+	"vornik.io/vornik/internal/spawn"
 )
 
 // ErrClientNotReading marks a stdio client whose response reader has exited:
@@ -41,13 +41,19 @@ import (
 // concluded it had misclicked its own tool.
 var ErrClientNotReading = errors.New("mcp client is no longer reading responses")
 
+// ErrNoConfiguredProgram refuses a stdio server whose ServerConfig carries no
+// Program: stdio programs come only from the config files, minted into a
+// spawn.ConfiguredCommand where the loaded config becomes a ServerConfig
+// (process-spawn law, reading 3; S1b-2).
+var ErrNoConfiguredProgram = errors.New("stdio servers are registered in the config files, not through the daemon: no configured program")
+
 // Client is a connection to a single MCP server.
 type Client struct {
 	config ServerConfig
 	logger zerolog.Logger
 
 	// stdio transport
-	cmd    *exec.Cmd
+	cmd    *spawn.Cmd
 	stdin  io.WriteCloser
 	stdout *bufio.Scanner
 
@@ -126,7 +132,14 @@ func Connect(ctx context.Context, cfg ServerConfig, logger zerolog.Logger) (*Cli
 
 	switch cfg.Transport {
 	case "stdio":
-		if err := validateLauncher(cfg.Command); err != nil {
+		// The program is the ConfiguredCommand the config loader's hand-off
+		// minted (process-spawn law, reading 3; S1b-2). A ServerConfig built
+		// anywhere else — the UI probe, a form — carries none, and is refused
+		// here even if its own HTTP-only guard regressed.
+		if cfg.Program.IsZero() {
+			return nil, fmt.Errorf("mcp server %s: %w", cfg.Name, ErrNoConfiguredProgram)
+		}
+		if err := validateLauncher(cfg.Program.Path()); err != nil {
 			return nil, fmt.Errorf("mcp server %s: %w", cfg.Name, err)
 		}
 		if err := c.startStdio(); err != nil {
@@ -308,7 +321,7 @@ func (c *Client) shouldRefreshAndRetry(err error) bool {
 // group kill reaches every descendant, and sets cmd.WaitDelay as a
 // backstop for descendants that escape the group (setsid).
 func (c *Client) Close() error {
-	if c.cmd != nil && c.cmd.Process != nil {
+	if c.cmd != nil && c.cmd.Started() {
 		if err := c.killProcessGroup(); err != nil {
 			c.logger.Debug().Err(err).Str("server", c.config.Name).Msg("mcp: process kill error")
 		}
@@ -324,19 +337,25 @@ func (c *Client) Close() error {
 // to a single-process kill when the group signal fails (e.g. the group
 // is already gone, or the process was started without Setpgid).
 func (c *Client) killProcessGroup() error {
-	if c.cmd == nil || c.cmd.Process == nil {
+	if c.cmd == nil || !c.cmd.Started() {
 		return nil
 	}
+	return killGroup(c.cmd.Pid(), c.cmd.Kill)
+}
+
+// killGroup SIGKILLs process group pid, falling back to killOne when the
+// group signal fails.
+func killGroup(pid int, killOne func() error) error {
 	// Refuse degenerate PIDs: negating Pid 0 signals the DAEMON'S OWN
 	// process group (kill(0, SIGKILL) = self-DoS) and a released
 	// process's Pid -1 would negate to kill(1). Neither can follow a
 	// successful Start, but the blast radius of getting this wrong is
 	// the whole daemon — guard unconditionally.
-	if c.cmd.Process.Pid <= 0 {
+	if pid <= 0 {
 		return nil
 	}
-	if err := syscall.Kill(-c.cmd.Process.Pid, syscall.SIGKILL); err != nil {
-		return c.cmd.Process.Kill()
+	if err := syscall.Kill(-pid, syscall.SIGKILL); err != nil {
+		return killOne()
 	}
 	return nil
 }
@@ -440,9 +459,9 @@ func collidingAuthEnvKeys(cfg ServerConfig) []string {
 }
 
 // startStdio launches the subprocess. It deliberately takes NO context: see
-// the exec.Command note below — the caller's ctx bounds the connect handshake
-// and must not bound the process, so a ctx parameter here would be an
-// invitation to wire it into exec.CommandContext and reintroduce the 2026-07-15
+// the context.Background() note below — the caller's ctx bounds the connect
+// handshake and must not bound the process, so a ctx parameter here would be
+// an invitation to wire it into the spawn and reintroduce the 2026-07-15
 // regression.
 func (c *Client) startStdio() error {
 	env := buildStdioEnv(c.config)
@@ -453,38 +472,44 @@ func (c *Client) startStdio() error {
 			Msg("mcp: auth credentials overwriting env values of the same name")
 	}
 
-	args := make([]string, len(c.config.Args))
-	for i, a := range c.config.Args {
-		args[i] = expandSafe(a)
-	}
-
-	// Deliberately NOT exec.CommandContext: the caller's ctx bounds
-	// the CONNECT handshake, but the subprocess must live as long as the
-	// client — project clients are connected under a bounded startup ctx
-	// and then held for hours. Binding the process to that ctx killed
+	// Deliberately context.Background(), not the caller's ctx: the caller's
+	// ctx bounds the CONNECT handshake, but the subprocess must live as long
+	// as the client — project clients are connected under a bounded startup
+	// ctx and then held for hours. Binding the process to that ctx killed
 	// every long-lived stdio client ~30s after boot (2026-07-15 deploy;
 	// the pre-group-kill code had the same wiring and "worked" only
 	// because tsx's orphaned grandchild kept serving the inherited pipes
 	// after the wrapper died). Teardown is exclusively Close()'s job.
-	c.cmd = exec.Command(c.config.Command, args...)
-	c.cmd.Env = env
+	//
+	// The program and its configured args come from c.config.Program, the
+	// process-spawn law's ConfiguredProgram kind; the configured args pass
+	// through expandSafe.
+	//
 	// Own process group + bounded Wait: Close()'s group kill reaches
 	// every descendant the launcher forks (tsx, npx — see the Close()
 	// doc comment), and WaitDelay releases cmd.Wait (with ErrWaitDelay)
 	// if some descendant that escaped the group still holds the stderr
 	// pipe open after the process itself is gone.
-	c.cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
-	c.cmd.WaitDelay = 10 * time.Second
+	//
 	// Pin cwd to "/" so the MCP subprocess can't read files via
 	// relative paths against the daemon's working directory. The
 	// daemon may be running from a config tree that contains
 	// secrets (e.g. vornik.yaml with DB credentials); inheriting
 	// that CWD would let a poorly-written MCP server expose them
 	// through a relative-path bug. Per audit recommendation.
-	c.cmd.Dir = "/"
-	c.cmd.Stderr = &logWriter{logger: c.logger, server: c.config.Name}
+	cmd, err := spawn.ConfiguredProgram(context.Background(), c.config.Program, spawn.ConfiguredOptions{
+		ArgMapper:    expandSafe,
+		Env:          env,
+		Dir:          "/",
+		ProcessGroup: true,
+		WaitDelay:    10 * time.Second,
+	})
+	if err != nil {
+		return err
+	}
+	c.cmd = cmd
+	c.cmd.SetStderr(&logWriter{logger: c.logger, server: c.config.Name})
 
-	var err error
 	c.stdin, err = c.cmd.StdinPipe()
 	if err != nil {
 		return fmt.Errorf("stdin pipe: %w", err)
@@ -498,7 +523,7 @@ func (c *Client) startStdio() error {
 	c.stdout.Buffer(make([]byte, 0, 1024*1024), 10*1024*1024) // 10MB line buffer
 
 	if err := c.cmd.Start(); err != nil {
-		return fmt.Errorf("start command %q: %w", c.config.Command, err)
+		return fmt.Errorf("start command %q: %w", c.config.Program.Path(), err)
 	}
 
 	go c.readStdioResponses()

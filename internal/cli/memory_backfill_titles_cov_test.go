@@ -138,3 +138,26 @@ func TestRunMemoryBackfillTitles_MaxCap(t *testing.T) {
 		t.Errorf("max-cap output: %s", out)
 	}
 }
+
+// A paused batch (breaker design §5.3d) ends the title loop at once.
+func TestRunMemoryBackfillTitles_StopsOnAPausedBatch(t *testing.T) {
+	var batches int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Query().Get("count") == "true" {
+			_ = json.NewEncoder(w).Encode(backfillBatchResponse{Remaining: 4})
+			return
+		}
+		batches++
+		_ = json.NewEncoder(w).Encode(backfillBatchResponse{Processed: 4, Remaining: 4, Paused: true})
+	}))
+	defer srv.Close()
+	t.Setenv("VORNIK_API_URL", srv.URL)
+	backfillCov_reset()
+	out, err := captureStdoutFunc(t, func() error { return runMemoryBackfillTitles(memoryBackfillTitlesCmd, nil) })
+	if err != nil {
+		t.Fatalf("a pause is not an error: %v", err)
+	}
+	if batches != 1 || !strings.Contains(out, "paused") {
+		t.Fatalf("want one batch and a pause message, got %d batches:\n%s", batches, out)
+	}
+}

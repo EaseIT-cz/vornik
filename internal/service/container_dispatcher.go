@@ -41,6 +41,10 @@ func (c *Container) initDispatcher() {
 
 	opts := []dispatcher.AgentOption{
 		dispatcher.WithLogger(c.Logger.With().Str("component", "dispatcher").Logger()),
+		// render_document renders only inside the release's pinned agent
+		// image, never on the daemon host (process-spawn law S4), through
+		// the bounded sandbox runner (S5a).
+		dispatcher.WithSandboxRunner(c.sandboxRunner),
 	}
 	if c.Config.Chat.DeferredToolThreshold != 0 {
 		opts = append(opts, dispatcher.WithDeferredToolThreshold(c.Config.Chat.DeferredToolThreshold))

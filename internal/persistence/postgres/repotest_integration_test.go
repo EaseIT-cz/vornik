@@ -1044,6 +1044,7 @@ func TestClusterNode_PostgresContract(t *testing.T) {
 
 func TestLeaderLock_PostgresContract(t *testing.T) {
 	repotest.RunLeaderLockSuite(t, NewLeaderLockRepository(newIntegrationDB(t).DB))
+	repotest.RunLeaderLockBoundarySuite(t, NewLeaderLockRepository(newIntegrationDB(t).DB), time.Microsecond)
 }
 
 func TestEntityMention_PostgresContract(t *testing.T) {

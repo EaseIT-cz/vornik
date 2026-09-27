@@ -4,10 +4,10 @@ import (
 	"context"
 	"encoding/base64"
 	"fmt"
-	"os/exec"
 	"strings"
 
 	"vornik.io/vornik/internal/forge"
+	"vornik.io/vornik/internal/spawn"
 )
 
 // gitPushToOrigin pushes sha to refs/heads/branch on the local clone's `origin`
@@ -34,14 +34,17 @@ func gitPushToOrigin(ctx context.Context, gitDir, branch, sha, token string) err
 	authHeader := "Authorization: Basic " +
 		base64.StdEncoding.EncodeToString([]byte("x-access-token:"+token))
 
-	cmd := exec.CommandContext(ctx, "git", "-C", gitDir, "push", "origin", refspec)
-	// GIT_CONFIG_COUNT/KEY/VALUE inject config without touching argv or disk.
-	cmd.Env = append(cmd.Environ(),
-		"GIT_CONFIG_COUNT=1",
-		"GIT_CONFIG_KEY_0=http.extraheader",
-		"GIT_CONFIG_VALUE_0="+authHeader,
-		"GIT_TERMINAL_PROMPT=0", // never block on an interactive credential prompt
-	)
+	// The process-spawn law's GitWorkspace kind (internal/spawn): gitDir must
+	// lie under the registered workspace root. The header travels as
+	// GIT_CONFIG_COUNT/KEY/VALUE (http.extraheader), which injects config
+	// without touching argv or disk, with the credential prompt disabled.
+	cmd, err := spawn.GitWorkspace(ctx, gitDir, "push", "origin", refspec)
+	if err != nil {
+		return fmt.Errorf("forge/github: git push %s: %w", branch, err)
+	}
+	if err := cmd.WithGitHTTPAuthHeader(authHeader); err != nil {
+		return fmt.Errorf("forge/github: git push %s: %w", branch, err)
+	}
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		// git's stderr names the failure (non-fast-forward, auth, etc.); surface

@@ -132,11 +132,11 @@ func (r *LeaderLockRepository) Release(_ context.Context, _, _ string) error {
 // orphaned row is just as visible and just as un-clearable, and issue #60 is
 // reproducible on a sqlite box.
 //
-// Two statements under one transaction rather than DELETE … RETURNING, which
-// sqlite gained only recently and which this driver cannot be assumed to
-// support: the SELECT and the DELETE share the same `expires_at < ?` predicate
-// and the same transaction, so the atomicity the Postgres statement gets from
-// RETURNING is preserved rather than approximated.
+// DELETE … RETURNING, as on Postgres (this driver's SQLite has it;
+// chunk_graph_extraction_repository.go already relies on it). It replaced a
+// SELECT-then-DELETE pair on 2026-09-25, whose "returned" row was a read and
+// whose timestamp parse errors were discarded, so a malformed value audited a
+// zero expiry in silence.
 func (r *LeaderLockRepository) DeleteExpired(ctx context.Context, workerID string, now time.Time) (*persistence.DaemonLeaderLock, error) {
 	nowStr := now.UTC().Format(time.RFC3339Nano)
 	tx, err := r.db.BeginTx(ctx, nil)
@@ -145,29 +145,35 @@ func (r *LeaderLockRepository) DeleteExpired(ctx context.Context, workerID strin
 	}
 	defer func() { _ = tx.Rollback() }()
 
+	// ONE statement, so the returned row is the row the predicate deleted, not
+	// a read beside it (leader-lock release contract 2026-09-25,
+	// review-20260925-8d83 F1). The transaction commits only once the returned
+	// timestamps parse: a row whose facts nobody can read is not removed.
 	var (
 		l                          persistence.DaemonLeaderLock
 		acquired, renewed, expires string
 	)
 	err = tx.QueryRowContext(ctx, `
-SELECT worker_id, holder_id, acquired_at, renewed_at, expires_at, epoch
-FROM daemon_leader_locks
-WHERE worker_id = ? AND expires_at < ?`, workerID, nowStr).
+DELETE FROM daemon_leader_locks
+WHERE worker_id = ? AND expires_at < ?
+RETURNING worker_id, holder_id, acquired_at, renewed_at, expires_at, epoch`, workerID, nowStr).
 		Scan(&l.WorkerID, &l.HolderID, &acquired, &renewed, &expires, &l.Epoch)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
 	}
 	if err != nil {
-		return nil, fmt.Errorf("leader_lock: delete expired: select: %w", err)
-	}
-	l.AcquiredAt, _ = time.Parse(time.RFC3339Nano, acquired)
-	l.RenewedAt, _ = time.Parse(time.RFC3339Nano, renewed)
-	l.ExpiresAt, _ = time.Parse(time.RFC3339Nano, expires)
-
-	if _, err := tx.ExecContext(ctx, `
-DELETE FROM daemon_leader_locks
-WHERE worker_id = ? AND expires_at < ?`, workerID, nowStr); err != nil {
 		return nil, fmt.Errorf("leader_lock: delete expired: %w", err)
+	}
+	for _, f := range []struct {
+		dst *time.Time
+		raw string
+		col string
+	}{{&l.AcquiredAt, acquired, "acquired_at"}, {&l.RenewedAt, renewed, "renewed_at"}, {&l.ExpiresAt, expires, "expires_at"}} {
+		t, perr := time.Parse(time.RFC3339Nano, f.raw)
+		if perr != nil {
+			return nil, fmt.Errorf("leader_lock: delete expired: %s %q does not parse, row kept: %w", f.col, f.raw, perr)
+		}
+		*f.dst = t
 	}
 	if err := tx.Commit(); err != nil {
 		return nil, fmt.Errorf("leader_lock: delete expired: commit: %w", err)

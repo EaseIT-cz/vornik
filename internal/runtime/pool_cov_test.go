@@ -95,7 +95,7 @@ func TestStartWarm_SuccessRegistersEntryAndMergesEnv(t *testing.T) {
 	pool := NewWarmPool(mgr, PoolConfig{MaxPerRole: 2},
 		WithPoolEnvVars(map[string]string{"BASE": "1"}),
 	)
-	key := PoolKey{ProjectID: "p", Role: "coder", Image: "img"}
+	key := PoolKey{ProjectID: "p", Role: "coder", Image: "localhost/vornik-agent:test"}
 
 	entry, err := pool.StartWarm(context.Background(), key, map[string]string{"OVERRIDE": "2"})
 	if err != nil {

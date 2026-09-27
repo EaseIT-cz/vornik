@@ -202,3 +202,14 @@ func TestFallbackRungs_EnvironmentFailuresAreNamedAsSuch(t *testing.T) {
 		t.Errorf("finding %q does not name the environment population", items[0])
 	}
 }
+
+// Unclassified-step-outcome design §11: a mount failure is a property of the
+// HOST, not of a rung — every step fails while it lasts — so it must not make
+// a fallback rung that ran during an outage read as never having worked.
+func TestFallbackRungs_AHostWideMountFailureIsNotADeadRung(t *testing.T) {
+	for _, c := range unreachedInferenceClasses {
+		if c == "agent_mount_unusable" {
+			t.Fatal("agent_mount_unusable is host-wide; listing it reports every rung that ran during an outage as dead")
+		}
+	}
+}

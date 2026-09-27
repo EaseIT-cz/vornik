@@ -2,10 +2,12 @@ package memory
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
 	"github.com/rs/zerolog"
+	"vornik.io/vornik/internal/chat"
 )
 
 // TitleBackfiller drives the one-shot LLM title backfill. It reads
@@ -30,16 +32,23 @@ type TitleBackfiller struct {
 	// loop concurrently would race on the same NULL-titled
 	// chunks and pay duplicate LLM cost.
 	LeaderGate LeaderGate
+
+	// optionalPaused remembers that the last tick paused on a refusal of
+	// optional work, so the loop logs the pause and the resume once each.
+	optionalPaused bool
 }
 
 // BackfillResult summarises one BackfillBatch call. Remaining is a
 // snapshot taken after the batch completes — callers loop until
 // Remaining == 0 (or until they hit their own --max cap).
 type BackfillResult struct {
-	Processed int      `json:"processed"`
-	Succeeded int      `json:"succeeded"`
-	Failed    int      `json:"failed"`
-	Skipped   int      `json:"skipped"` // empty content / titler returned ""
+	Processed int `json:"processed"`
+	Succeeded int `json:"succeeded"`
+	Failed    int `json:"failed"`
+	Skipped   int `json:"skipped"` // empty content / titler returned ""
+	// Paused: optional LLM work is disabled for the titler's model, so the
+	// batch stopped calling it (breaker design §5.3d). Not a failure.
+	Paused    bool     `json:"paused,omitempty"`
 	Remaining int      `json:"remaining"`
 	Errors    []string `json:"errors,omitempty"` // first few, capped
 }
@@ -148,9 +157,10 @@ func (b *TitleBackfiller) runOnce(ctx context.Context, batchSize int) *BackfillR
 			return backfillCounts{
 				Processed: r.Processed, Succeeded: r.Succeeded,
 				Failed: r.Failed, Skipped: r.Skipped, Remaining: r.Remaining,
+				Paused: r.Paused,
 			}, nil
 		},
-	))
+	).withPaused(&b.optionalPaused))
 	if !haveEvidence {
 		return nil
 	}
@@ -184,6 +194,10 @@ func (b *TitleBackfiller) BackfillBatch(ctx context.Context, batchSize int) (*Ba
 			return out, ctx.Err()
 		}
 		title, terr := b.Titler.Title(ctx, row.Content, row.ProjectID, row.ID)
+		if errors.Is(terr, chat.ErrOptionalWorkDisabled) {
+			out.Paused = true
+			break
+		}
 		if terr != nil {
 			out.Failed++
 			if len(out.Errors) < 5 {

@@ -44,6 +44,23 @@ type IngestTextWriter interface {
 	IngestText(ctx context.Context, projectID, taskID, artifactID, sourceName, content string) error
 }
 
+// DocumentTextWriter ingests one upload of a document with salted chunk
+// hashes, so the version is stored whole (memory rollback x supersession
+// design, A.7). *Indexer implements it. A document item whose indexer lacks it
+// FAILS rather than being stored unsalted, which would reopen the defect
+// silently.
+type DocumentTextWriter interface {
+	IngestDocumentText(ctx context.Context, projectID, taskID, artifactID, documentPath, content string) error
+}
+
+// DocumentSuperseder leaves only the newest upload of a document live
+// (memory rollback x supersession design, amendment 2026-09-26). *Indexer
+// implements it; the worker finds it on its indexer by type assertion, so a
+// test indexer opts in by implementing it too.
+type DocumentSuperseder interface {
+	SupersedeDocument(ctx context.Context, projectID, repoScope, documentPath, epochID string) (int, error)
+}
+
 // ArtifactReader is the narrow read-side surface of the artifact
 // repository the worker needs. We don't depend on the full
 // persistence.ArtifactRepository (Create/Delete/UpdateTaskID/etc)
@@ -424,7 +441,7 @@ func (w *IngestWorker) processItemWithStats(ctx context.Context, item *persisten
 		if err != nil {
 			return IngestStats{}, err
 		}
-		return IngestStats{Admitted: 1}, nil
+		return IngestStats{Admitted: 1, Superseded: w.supersedeDocument(ctx, item, epochID)}, nil
 	}
 	art, err := w.artifact.Get(ctx, item.SourceArtifactID)
 	if err != nil {
@@ -463,11 +480,52 @@ func (w *IngestWorker) processItemWithStats(ctx context.Context, item *persisten
 	if item.RepoScope != nil {
 		opts.RepoScope = *item.RepoScope
 	}
-	return w.pipeline.IngestArtifactWithOptions(
-		ctx, item.ProjectID, taskID, item.SourceArtifactID, art.Name,
+	opts.Document = item.DocumentPath != nil && *item.DocumentPath != ""
+	stats, err := w.pipeline.IngestArtifactWithOptions(
+		ctx, item.ProjectID, taskID, item.SourceArtifactID, documentSourceName(item, art),
 		item.ProducerRole, execID, string(content), sourceSize, epochID,
 		opts,
 	)
+	if err != nil {
+		return stats, err
+	}
+	stats.Superseded += w.supersedeDocument(ctx, item, epochID)
+	return stats, nil
+}
+
+// documentSourceName is the name an item's chunks are published under: a
+// document ingest's path in its repository, which is its identity, or else
+// the artifact's own name.
+func documentSourceName(item *persistence.IngestQueueItem, art *persistence.Artifact) string {
+	if item.DocumentPath != nil && *item.DocumentPath != "" {
+		return *item.DocumentPath
+	}
+	return art.Name
+}
+
+// supersedeDocument runs document supersession for a document ingest, once,
+// after all of the item's chunks are published. It never fails the item: the
+// chunks have landed, a retry would re-ingest the same content, and the next
+// ingest of the document converges it anyway.
+func (w *IngestWorker) supersedeDocument(ctx context.Context, item *persistence.IngestQueueItem, epochID string) int {
+	if item.DocumentPath == nil || *item.DocumentPath == "" || item.RepoScope == nil {
+		return 0
+	}
+	var idx any = w.indexer
+	if w.testIndexer != nil {
+		idx = w.testIndexer
+	}
+	sup, ok := idx.(DocumentSuperseder)
+	if !ok || sup == nil {
+		return 0
+	}
+	n, err := sup.SupersedeDocument(ctx, item.ProjectID, *item.RepoScope, *item.DocumentPath, epochID)
+	if err != nil {
+		w.logger.Warn().Err(err).Str("project_id", item.ProjectID).Str("document_path", *item.DocumentPath).
+			Msg("ingest worker: document supersession failed (non-fatal; the next ingest of this document converges it)")
+		return 0
+	}
+	return n
 }
 
 // processItem reads the artifact and pipes the content through the
@@ -521,7 +579,17 @@ func (w *IngestWorker) processItem(ctx context.Context, item *persistence.Ingest
 	if w.testIndexer != nil {
 		idx = w.testIndexer
 	}
-	if err := idx.IngestText(ctx, item.ProjectID, taskID, item.SourceArtifactID, art.Name, string(content)); err != nil {
+	if item.DocumentPath != nil && *item.DocumentPath != "" {
+		dw, ok := idx.(DocumentTextWriter)
+		if !ok {
+			return fmt.Errorf("document ingest of %q: the indexer cannot store a document version whole", *item.DocumentPath)
+		}
+		if err := dw.IngestDocumentText(ctx, item.ProjectID, taskID, item.SourceArtifactID, *item.DocumentPath, string(content)); err != nil {
+			return fmt.Errorf("indexer.IngestDocumentText: %w", err)
+		}
+		return nil
+	}
+	if err := idx.IngestText(ctx, item.ProjectID, taskID, item.SourceArtifactID, documentSourceName(item, art), string(content)); err != nil {
 		return fmt.Errorf("indexer.IngestText: %w", err)
 	}
 	return nil

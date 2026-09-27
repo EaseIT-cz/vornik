@@ -547,6 +547,9 @@ func (a *Agent) doChatCall(
 	callMsgs = append(callMsgs, chat.Message{Role: "system", Content: systemPrompt})
 	callMsgs = append(callMsgs, msgs...)
 	ctx = chat.WithRequestPriority(ctx, 0)
+	// Billed by recordLLMUsage; labelled so the log can tell a chat turn from
+	// a workflow step (ledger-completeness design §13).
+	ctx = chat.WithDefaultCallSite(ctx, "dispatcher.turn")
 	if onText != nil {
 		return a.chatClient.CompleteWithToolsStream(ctx, callMsgs, tools, onText)
 	}

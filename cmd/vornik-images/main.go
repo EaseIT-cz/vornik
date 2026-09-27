@@ -28,6 +28,7 @@ import (
 	"strings"
 
 	"vornik.io/vornik/internal/imagemanifest"
+	"vornik.io/vornik/internal/imagemanifest/hostprobe"
 )
 
 func main() {
@@ -55,7 +56,7 @@ func main() {
 
 	images := imagemanifest.All()
 	if !*all {
-		images = imagemanifest.Deployable(imagemanifest.HostProber{})
+		images = imagemanifest.Deployable(hostprobe.HostProber{})
 	}
 
 	// -obtain decides, pulls and records; what it prints is what still needs a

@@ -53,4 +53,20 @@ type ChannelDisclosureRepository interface {
 	// first. This is the enforcement-response query — see the Art 99
 	// runbook in docs/operator/.
 	ServedBetween(ctx context.Context, from, to time.Time) ([]ChannelDisclosure, error)
+
+	// SummaryBetween aggregates the disclosures served in [from, to] per
+	// (channel, wording version) — count, first and last served — IN SQL, so
+	// the regulatory-record page never loads the rows (regulatory record
+	// design §6). An empty window is an empty slice, not a miss.
+	SummaryBetween(ctx context.Context, from, to time.Time) ([]ChannelDisclosureSummary, error)
+}
+
+// ChannelDisclosureSummary is one (channel, wording version) line of the
+// Art 50 evidence summary. It carries counts and times, never a session id.
+type ChannelDisclosureSummary struct {
+	Channel     string
+	TextHash    string
+	Count       int
+	FirstServed time.Time
+	LastServed  time.Time
 }

@@ -1,6 +1,7 @@
 package controlplane
 
 import (
+	"errors"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -94,5 +95,34 @@ func TestResolveTarget_NoRootsConfigured(t *testing.T) {
 	}
 	if want := filepath.Join(cfg, "workspace/proj/file.md"); got != want {
 		t.Fatalf("want the config-rooted path, got %q", got)
+	}
+}
+
+// The git http-backend precondition (process-spawn law design §3, round-1 F3;
+// found by S1b-2's hooks-writer audit, 2026-09-26): a project repository's
+// hooks/ may be written by the daemon's guard installer alone. Before this, any
+// approved proposal kind but workspace_context could resolve an op such as
+// workspace/<project>/.git/hooks/post-update under the workspace root, and git
+// http-backend would then run it on the host at the next push. A .git segment
+// is refused in every root, the config tree included.
+func TestResolveTarget_RefusesAnyGitDirectorySegment(t *testing.T) {
+	e := &ApplyEngine{ConfigDir: t.TempDir(), Roots: map[string]string{"workspace": t.TempDir()}}
+	for _, rel := range []string{
+		"workspace/proj/.git/hooks/post-update",
+		"workspace/proj/.git/config",
+		"workspace/proj/sub/.git/hooks/pre-commit",
+		"workspace/proj/.GIT/hooks/x",
+		".git/hooks/pre-commit",
+		"configs/.git/config",
+	} {
+		if _, err := e.resolveTarget(rel); !errors.Is(err, ErrGitDirPath) {
+			t.Errorf("%q: want ErrGitDirPath, got %v", rel, err)
+		}
+	}
+	// .gitignore and friends are files, not the git directory.
+	for _, rel := range []string{"workspace/proj/.gitignore", "workspace/proj/.github/workflows/ci.yml", "configs/.gitattributes"} {
+		if _, err := e.resolveTarget(rel); err != nil {
+			t.Errorf("%q: want accepted, got %v", rel, err)
+		}
 	}
 }

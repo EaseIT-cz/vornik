@@ -57,10 +57,29 @@ func (s *Server) cancelExecutionOne(ctx context.Context, r *http.Request, execID
 	if exec.ProjectID != "" && !api.RequestAllowsProject(r, exec.ProjectID) {
 		return false
 	}
-	if exec.Status == persistence.ExecutionStatusRunning && s.executor != nil {
-		_ = s.executor.Cancel(exec.TaskID)
+	// ONE conditional write on the TASK row, gated on its live status
+	// (scheduler design §4.10): pre-fix this wrote CANCELLED unchecked, so a
+	// task that had finished was recorded as cancelled.
+	moved, err := s.taskRepo.TransitionConditional(ctx, exec.TaskID,
+		persistence.CancellableTaskStatuses(), persistence.TaskStatusCancelled, persistence.TransitionOpts{})
+	if err != nil {
+		s.logger.Warn().Err(err).Str("execution_id", execID).Str("task_id", exec.TaskID).
+			Msg("execution cancel: conditional CANCELLED write failed")
+		return false
 	}
-	_ = s.taskRepo.UpdateStatus(ctx, exec.TaskID, persistence.TaskStatusCancelled)
+	if !moved {
+		return false
+	}
+	// Teardown asked of the executor's live map, after the transition — not
+	// decided by an execution-status snapshot (05-scheduler.md §4.7).
+	if s.executor != nil {
+		if _, cerr := s.executor.CancelIfActive(exec.TaskID); cerr != nil {
+			s.logger.Warn().Err(cerr).Str("task_id", exec.TaskID).
+				Msg("execution cancel: container did not stop — it may still be running")
+		}
+	}
+	// The execution row carries no lease and is written only once the task
+	// gate passed; the task row is canonical (§4.10).
 	_ = s.execRepo.UpdateStatus(ctx, execID, persistence.ExecutionStatusCancelled)
 	s.logger.Info().Str("execution_id", execID).Str("task_id", exec.TaskID).Msg("execution cancelled via UI")
 	return true

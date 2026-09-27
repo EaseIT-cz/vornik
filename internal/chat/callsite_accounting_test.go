@@ -97,6 +97,22 @@ var callSiteRegistry = map[string]callSiteAccounting{
 			"Previously assigned only in distiller_test.go — the seam existed and " +
 			"production never used it.",
 	},
+	"agent.step": {
+		accounted: true,
+		note: "Chat proxy, request from an agent container (X-Vornik-Task-ID or " +
+			"X-Vornik-Execution-ID). The agent flushes its own workflow_step row via " +
+			"POST /api/v1/internal/llm-usage, so recordChatAPIUsage skips it; the label and " +
+			"the skip come from one test, isInternalAgentRequest (ledger-completeness §13).",
+	},
+	"chat.external": {
+		accounted: true,
+		note: "Chat proxy, any other request: recordChatAPIUsage bills it as source " +
+			"external_api, role external_api (ledger-completeness §13).",
+	},
+	"dispatcher.turn": {
+		accounted: true,
+		note:      "Dispatcher chat turn (Agent.doChatCall), billed by Agent.recordLLMUsage (ledger-completeness §13).",
+	},
 	"config-assistant": {
 		accounted: true,
 		note: "configassist.Engine records assistant loop usage through its Usage recorder " +
@@ -192,7 +208,7 @@ func repoRoot(t *testing.T) string {
 }
 
 // discoverCallSites parses every non-test .go file under internal/ and
-// cmd/ and returns each distinct chat.WithCallSite label mapped to the
+// cmd/ and returns each distinct chat.WithCallSite / WithDefaultCallSite label mapped to the
 // file that declares it.
 //
 // Constants are resolved, not just literals. The narrator declares its
@@ -276,7 +292,7 @@ func discoverCallSites(t *testing.T, root string) map[string]string {
 				return true
 			}
 			sel, ok := call.Fun.(*ast.SelectorExpr)
-			if !ok || sel.Sel == nil || sel.Sel.Name != "WithCallSite" {
+			if !ok || sel.Sel == nil || (sel.Sel.Name != "WithCallSite" && sel.Sel.Name != "WithDefaultCallSite") {
 				return true
 			}
 			switch arg := call.Args[1].(type) {

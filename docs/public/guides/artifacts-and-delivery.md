@@ -1,11 +1,11 @@
 ---
 sources:
     - path: internal/dispatcher/render_document.go
-      sha256: 978d37b59d3584d28b5260865673db9fbb40bbf123ecff1d76a3eab1c49a27fe
+      sha256: a554dd5c00418182be9a080437ce53d6a351ec8d6a77af3ef8eea55678103318
     - path: internal/dispatcher/tools.go
-      sha256: 920ab6235056cc270e9138842e9e27299e45eee4a18abf27a61fed7526fd61f9
+      sha256: bdc771da3a935a111e655d7856e19b77c062734be6dcb1ee8bb515f1392d78ce
     - path: internal/dispatcher/agent.go
-      sha256: 1c7c27875235cc30d2bc0a9390c58a1e37776ed1d6704e37881cb67153876f10
+      sha256: 5270346a85c8f51d53d0c7619fd15565b801ab5d79fec9f2c832894921df1e40
     - path: internal/email/channel.go
       sha256: 38058785781c8f5dad5197c282de88501a07e81a192d3cec3c6715bd57fb8a6a
     - path: internal/slack/voice.go
@@ -30,8 +30,10 @@ You never name a recipient; the destination is bound to the conversation.
 ## Rendering a document on the fly
 
 `render_document` converts markdown you (or the agent) supply into one or more
-formats and sends each file back to the chat. It runs deterministically on the
-daemon host — no agent container, no extra model call.
+formats and sends each file back to the chat. It runs deterministically, with no
+extra model call. The conversion happens inside the bundled agent image, in a
+short-lived container with no network access, never on the daemon host itself:
+the host needs podman and the agent image, not pandoc.
 
 Parameters:
 
@@ -39,15 +41,55 @@ Parameters:
 |---|---|---|
 | `content` | yes | The markdown source, rendered verbatim. |
 | `name` | yes | Base filename, no extension (e.g. `quarterly-report`). |
-| `formats` | no | Any of `md`, `html`, `pdf`. Defaults to all three. |
+| `formats` | no | Any of `md`, `html`, `pdf`, `docx`. Defaults to `md`, `html` and `pdf`. |
 
 - **`md`** is always available — it's the source written to a file.
-- **`html`** is produced with `pandoc`. If pandoc isn't on the host it falls
-  back to a bundled renderer, and as a last resort to a plain unstyled wrapper,
-  so an HTML file is always delivered.
-- **`pdf`** is produced with `pandoc` + `weasyprint`. Both must be available
-  (directly on the host, or via the bundled agent image). If neither path can
-  render a PDF, the failure is reported plainly rather than silently dropped.
+- **`html`** is produced with `pandoc` in the agent image.
+- **`pdf`** is produced with `pandoc` + `weasyprint` in the agent image.
+- **`docx`** (a Word document) is produced with `pandoc` in the agent image.
+- If the agent image isn't present locally (it is never pulled for this), or
+  podman isn't available, the tool reports that rendering is not available
+  rather than falling back to anything on the host. An `md` file you asked
+  for is still delivered.
+- Each render is bounded: 1 GiB of memory, one CPU and 120 seconds by default
+  (`sandbox_tools.limits.render`, `sandbox_tools.timeouts.render`), and a
+  document over 16 MiB is refused before anything starts. A render that runs
+  out of time or memory reports "timed out" or "exceeded its memory limit".
+  Sandbox runs share a pool of two by default (`sandbox_tools.max_concurrent`),
+  one of them kept for voice, so renders run one at a time and queue behind
+  each other.
+
+### Extraction and voice run in the same sandbox
+
+Since 2026.9.7 every tool that parses an uploaded or spoken file runs in the
+agent image under the same bounds, never on the daemon host:
+
+| Feature | Tool | Memory / CPUs / timeout | Largest input | Largest output |
+|---|---|---|---|---|
+| `render` | pandoc | 1 GiB / 1 / 120 s | 16 MiB | 256 MiB |
+| `pdf` | pdftotext | 512 MiB / 1 / 60 s | 256 MiB | 256 MiB |
+| `image_ocr` | tesseract | 512 MiB / 1 / 120 s | 32 MiB | 16 MiB |
+| `video` | ffprobe, ffmpeg | 1 GiB / 2 / 300 s | 2 GiB | 256 MiB |
+| `audio` | ffmpeg, whisper-cli | 2 GiB / 2 / 600 s | 512 MiB | 1 GiB |
+| `voice_stt` | ffmpeg, whisper-cli | 2 GiB / 2 / 120 s | 64 MiB | 256 MiB |
+| `voice_tts` | piper, ffmpeg | 2 GiB / 1 / 60 s | 16 MiB | 64 MiB |
+
+Override memory, CPUs and timeouts per feature under `sandbox_tools.limits`,
+`sandbox_tools.cpus` and `sandbox_tools.timeouts`; `sandbox_tools.max_input_bytes`,
+when set, replaces every feature's input bound. A run whose output passes its
+bound fails. The agent image declares its tools in the
+`io.vornik.sandbox-tools` label; a feature whose tool the pinned image does not
+declare (an image older than the release) reports "not available in the agent
+image" without starting anything, and `vornikctl doctor` runs every tool on a
+fixture to prove it works.
+
+**Audio extraction changed in 2026.9.7.** It used to run OpenAI's Python
+`whisper` CLI on the host with its `turbo` model. It now runs whisper.cpp
+(`whisper-cli`) in the sandbox with a ggml model you configure:
+`extractors.audio.model_path`, or — when that is unset — `voice.stt.model`.
+With neither, audio extraction reports "not available". Quality and language
+coverage follow the model you pick (`ggml-base.en.bin` is English-only; a
+multilingual model such as `ggml-small.bin` detects the language).
 
 Rendered files are **transient**: they're streamed straight to the chat and not
 kept in long-term storage. Use `render_document` for "make me this document

@@ -38,7 +38,7 @@ type Recording struct {
 // live request; a line whose stored hash disagrees with that is refused —
 // the recording was edited or made by a different canonical form.
 func Load(r io.Reader) (*Recording, error) {
-	rec := &Recording{byHash: map[string]*Entry{}}
+	rec := &Recording{}
 	sc := bufio.NewScanner(r)
 	sc.Buffer(make([]byte, 0, 1024*1024), 64*1024*1024)
 	line := 0
@@ -69,15 +69,15 @@ func Load(r io.Reader) (*Recording, error) {
 			e.RequestHash = hash
 		}
 		rec.Entries = append(rec.Entries, e)
-		if _, dup := rec.byHash[e.RequestHash]; !dup {
-			rec.byHash[e.RequestHash] = &rec.Entries[len(rec.Entries)-1]
-		}
 	}
 	if err := sc.Err(); err != nil {
 		return nil, err
 	}
-	// The slice may have reallocated while appending; rebuild the index.
-	rec.byHash = map[string]*Entry{}
+	// Index once, after the last append: pointers taken while appending would
+	// dangle whenever the slice reallocated. First entry wins on a duplicate
+	// hash. (Load used to build a second index during the loop and discard
+	// it here — audit 2026-09-05.)
+	rec.byHash = make(map[string]*Entry, len(rec.Entries))
 	for i := range rec.Entries {
 		if _, dup := rec.byHash[rec.Entries[i].RequestHash]; !dup {
 			rec.byHash[rec.Entries[i].RequestHash] = &rec.Entries[i]

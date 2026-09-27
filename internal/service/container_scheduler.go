@@ -33,6 +33,7 @@ import (
 	"vornik.io/vornik/internal/persistence"
 	"vornik.io/vornik/internal/ratelimit"
 	"vornik.io/vornik/internal/runtime"
+	"vornik.io/vornik/internal/sandboxtool"
 	"vornik.io/vornik/internal/scheduler"
 	"vornik.io/vornik/internal/schemaregistry"
 	"vornik.io/vornik/internal/secrets"
@@ -161,6 +162,9 @@ func (c *Container) initScheduler() error {
 	// Shared with initDispatcher's WithProjectWorkspacePath — the two
 	// trust boundaries must resolve the same root.
 	executorConfig.ProjectWorkspacePath = resolveProjectWorkspacePath(c.Config.Runtime.ProjectWorkspacePath)
+	// Installed project dependency trees, mounted read-only; the daemon never
+	// installs them (dependency provisioning design §8.2).
+	executorConfig.DependencyCacheDir = c.Config.Runtime.DependencyCacheDir()
 
 	executorConfig.LogLevel = c.Config.Logging.Level
 
@@ -182,6 +186,17 @@ func (c *Container) initScheduler() error {
 	// by default, in which case the budget injection is a no-op. See
 	// https://docs.vornik.io
 	executorConfig.ToolBudget = c.Config.ToolBudget.Resolved()
+	// Every step timeout takes the same declared speed factor as the lease
+	// (dynamic-tool-budget design §6.2.1b). 1.0 when off.
+	if f, clamped := c.speedFactor(); f != 1 {
+		executorConfig.StepSpeedFactor = f
+		ev := c.Logger.Info()
+		if clamped {
+			ev = c.Logger.Warn()
+		}
+		ev.Float64("factor", f).Bool("clamped_at_max", clamped).
+			Msg("step timeouts scaled for measured inference speed (time only; warm roles are never shrunk)")
+	}
 
 	// Producer-success gate (LLD 2026-07-12-rag-ingest-producer-success-gate):
 	// default-on (nil → on); explicit false → passthrough + startup WARN.
@@ -636,9 +651,8 @@ func (c *Container) initScheduler() error {
 			runtime.WithPoolLogger(c.Logger),
 			runtime.WithPoolEnvVars(executorConfig.AgentLLMEnv),
 		}
-		if executorConfig.ProjectWorkspacePath != "" {
-			poolOpts = append(poolOpts, runtime.WithPoolProjectWorkspacePath(executorConfig.ProjectWorkspacePath))
-		}
+		// No workspace path: a warm container mounts no project directory
+		// (process-spawn law S6-D5).
 		pool := runtime.NewWarmPool(runtimeManager, poolCfg, poolOpts...)
 		pool.Start()
 		c.warmPool = pool
@@ -1073,7 +1087,19 @@ func (c *Container) initScheduler() error {
 			// was true, this line ran, and across 151,818 production LLM-usage rows
 			// not one reranker call was ever made. A feature that can be configured
 			// on and still be inert has to announce which gate closed.
-			if active, reason := mgr.Searcher.RerankerStatus(); active {
+			active, reason := mgr.Searcher.RerankerStatus()
+			if active && c.ChatClient != nil {
+				// Configured on, wired, and still refused on every call: the
+				// trap this line exists for (breaker design §5.3d).
+				model := rr.Model
+				if model == "" {
+					model = c.ChatClient.Model()
+				}
+				if optionalWorkDisables(c.Config.Chat.OptionalWork, model) {
+					active, reason = false, "optional LLM work is disabled for model "+model+" (chat.optional_work)"
+				}
+			}
+			if active {
 				c.Logger.Info().
 					Str("component", "memory").Str("sub", "reranker").
 					Str("model", rr.Model).
@@ -1707,6 +1733,11 @@ func (c *Container) rebuildSchedulerMetrics() {
 		c.Logger.Info().Msg("executor metrics wired")
 	}
 
+	if c.sandboxRunner != nil {
+		c.sandboxRunner.SetMetrics(sandboxtool.NewMetrics(reg))
+		c.Logger.Info().Msg("sandbox tool metrics wired")
+	}
+
 	if c.agentHealth != nil {
 		c.agentHealth.SetMetrics(agenthealth.NewMetrics(reg))
 		c.Logger.Info().Msg("agent LLM health breaker metrics wired")
@@ -1799,6 +1830,36 @@ func retrievalRoutingConfig(rr config.MemoryRetrievalRoutingConfig) memory.Retri
 	return out
 }
 
+// speedFactor is the ONE declared inference-speed factor, shared by the lease
+// and every step timeout so the two can never scale by different numbers
+// (dynamic-tool-budget design §6.2.1b). 1.0 when the feature is off, no rate
+// is declared, or the reference is unusable (that last one logged).
+//
+// Computed once (the lease and the executor both ask), so an unusable
+// reference is logged once. clamped is true only at max_factor: the
+// min_factor floor on a fast host is the Guardrails' intent, not a warning.
+func (c *Container) speedFactor() (factor float64, clamped bool) {
+	c.speedFactorOnce.Do(func() {
+		c.speedFactorValue, c.speedFactorClamped = 1, false
+		sat := c.Config.Scheduler.SpeedAwareTimeouts
+		if !sat.Enabled {
+			return
+		}
+		f, cl, err := speedprofile.Factor(sat.ObservedTokensPerSec, speedprofile.FactorConfig{
+			ReferenceTokensPerSec: sat.ReferenceTokensPerSec,
+			MinFactor:             sat.MinFactor,
+			MaxFactor:             sat.MaxFactor,
+		})
+		if err != nil {
+			c.Logger.Warn().Err(err).
+				Msg("speed_aware_timeouts is enabled but unusable — timeouts left unscaled")
+			return
+		}
+		c.speedFactorValue, c.speedFactorClamped = f, cl
+	})
+	return c.speedFactorValue, c.speedFactorClamped
+}
+
 // scaleLeaseForSpeed stretches the lease on hardware slower than the reference.
 //
 // Off unless speed_aware_timeouts is enabled AND a reference is declared, in
@@ -1815,16 +1876,7 @@ func (c *Container) scaleLeaseForSpeed(baseSeconds int) int {
 	if !sat.Enabled || baseSeconds <= 0 {
 		return baseSeconds
 	}
-	factor, clamped, err := speedprofile.Factor(sat.ObservedTokensPerSec, speedprofile.FactorConfig{
-		ReferenceTokensPerSec: sat.ReferenceTokensPerSec,
-		MinFactor:             sat.MinFactor,
-		MaxFactor:             sat.MaxFactor,
-	})
-	if err != nil {
-		c.Logger.Warn().Err(err).
-			Msg("speed_aware_timeouts is enabled but unusable — lease timeout left unscaled")
-		return baseSeconds
-	}
+	factor, clamped := c.speedFactor()
 	if factor == 1 {
 		return baseSeconds
 	}

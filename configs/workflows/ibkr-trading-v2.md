@@ -58,7 +58,8 @@ Never label a held symbol flat based on memory or an old cached proposal.
 Paper-only probation policy:
 - New-entry universe: ASML, AZN, GOOGL, JPM, MSFT, SAP, SHEL, SONY.
 - Other watched names are observation/exit-only, including NVDA and TSM holdings.
-- Long opens only. No new shorts, position additions, averaging down, or pyramiding.
+- Long entries only. No new shorts or averaging down. The one allowed addition is a
+  pullback in a winning position (intent=add), under the conditions in PROJECT_CONTEXT.md.
 - At most one new entry per tick, two filled or working entries per New York
   trading day, six simultaneous positions, two positions per region, and
   $15,000 gross exposure. Existing excess positions are managed normally;
@@ -131,7 +132,7 @@ positive WHOLE share count, qty*entry >= $500, and qty*(entry-stop) <= $50.
 Fractional shares are disabled. Never round quantity up to meet a minimum.
 Costs and gaps can exceed planned risk; do not describe $50 as a guaranteed cap.
 
-Every proposal carries symbol, intent (open/close), action (BUY/SELL), qty,
+Every proposal carries symbol, intent (open/add/close), action (BUY/SELL), qty,
 conviction, order_type=LMT, limit_price, and a rationale with tool-observed data.
 Every open also carries stop_loss_price, holding_state=flat, region, scorecard
 {total,trend,momentum,macro}, and regime {score,label,stale,component_count}.
@@ -151,7 +152,8 @@ If proposals are empty, immediately return {"approved":[],"rejected":[],
 
 Otherwise independently fetch get_account_summary (including its positions array) and get_orders.
 Recheck every v2 constraint from the strategist step and project context,
-particularly the entry universe, long-only policy, no position additions,
+particularly the entry universe, long-only policy, the conditional-addition rule
+(winner, trend, pullback band, one add, <= original size, every share protected),
 one new entry this tick/two per trading day, six-position/two-per-region limit,
 pending exposure, $150 daily realized loss pause, $50 planned entry risk,
 $500 minimum notional, whole shares, and five-session cooldown after ANY exit.

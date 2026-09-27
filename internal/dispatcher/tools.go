@@ -26,6 +26,7 @@ import (
 	"vornik.io/vornik/internal/ratelimit"
 	"vornik.io/vornik/internal/registry"
 	"vornik.io/vornik/internal/safepath"
+	"vornik.io/vornik/internal/sandboxtool"
 	"vornik.io/vornik/internal/textsim"
 	"vornik.io/vornik/internal/untrusted"
 )
@@ -269,7 +270,10 @@ type ChannelFollowupRegistrar interface {
 
 // ToolExecutor executes individual tool calls on behalf of the dispatcher agent.
 type ToolExecutor struct {
-	registry      *registry.Registry
+	registry *registry.Registry
+	// sandboxRunner runs render_document's pandoc in the pinned agent image
+	// (process-spawn law S4/S5a); nil means rendering is not available.
+	sandboxRunner *sandboxtool.Runner
 	taskRepo      persistence.TaskRepository
 	execRepo      persistence.ExecutionRepository
 	artifactRepo  persistence.ArtifactRepository
@@ -1402,9 +1406,10 @@ func (te *ToolExecutor) formatWaitResult(ctx context.Context, task *persistence.
 }
 
 func (te *ToolExecutor) cancelTask(ctx context.Context, argsJSON string, allowedProjects []string) ToolResult {
+	// A `confirm` the model still sends is ignored: the confirmation must come from the
+	// user's own turn (chat memory-write design §12).
 	var args struct {
-		TaskID  string `json:"task_id"`
-		Confirm bool   `json:"confirm"`
+		TaskID string `json:"task_id"`
 	}
 	if err := json.Unmarshal([]byte(argsJSON), &args); err != nil {
 		return ToolResult{Content: fmt.Sprintf("Invalid arguments: %v", err)}
@@ -1412,11 +1417,14 @@ func (te *ToolExecutor) cancelTask(ctx context.Context, argsJSON string, allowed
 	if _, err := te.taskProjectAllowed(ctx, args.TaskID, allowedProjects); err != nil {
 		return ToolResult{Content: err.Error()}
 	}
+	if ok, reply := te.confirmTaskAction(ctx, scopeCancelTask, "cancel", args.TaskID); !ok {
+		return reply
+	}
 
 	action := chat.Action{
 		Type:    chat.ActionCancelTask,
 		TaskID:  args.TaskID,
-		Confirm: args.Confirm,
+		Confirm: true, // authorized above, and only there
 	}
 	result, err := chat.ExecuteAction(ctx, action, te.taskRepo, te.execRepo, nil)
 	if err != nil {
@@ -1427,9 +1435,10 @@ func (te *ToolExecutor) cancelTask(ctx context.Context, argsJSON string, allowed
 }
 
 func (te *ToolExecutor) retryTask(ctx context.Context, argsJSON string, allowedProjects []string) ToolResult {
+	// A `confirm` the model still sends is ignored: the confirmation must come from the
+	// user's own turn (chat memory-write design §12).
 	var args struct {
-		TaskID  string `json:"task_id"`
-		Confirm bool   `json:"confirm"`
+		TaskID string `json:"task_id"`
 	}
 	if err := json.Unmarshal([]byte(argsJSON), &args); err != nil {
 		return ToolResult{Content: fmt.Sprintf("Invalid arguments: %v", err)}
@@ -1437,11 +1446,14 @@ func (te *ToolExecutor) retryTask(ctx context.Context, argsJSON string, allowedP
 	if _, err := te.taskProjectAllowed(ctx, args.TaskID, allowedProjects); err != nil {
 		return ToolResult{Content: err.Error()}
 	}
+	if ok, reply := te.confirmTaskAction(ctx, scopeRetryTask, "retry", args.TaskID); !ok {
+		return reply
+	}
 
 	action := chat.Action{
 		Type:    chat.ActionRetryTask,
 		TaskID:  args.TaskID,
-		Confirm: args.Confirm,
+		Confirm: true, // authorized above, and only there
 	}
 	result, err := chat.ExecuteAction(ctx, action, te.taskRepo, te.execRepo, nil)
 	if err != nil {
@@ -2296,13 +2308,12 @@ func DispatcherTools() []chat.Tool {
 			Type: "function",
 			Function: chat.ToolFunction{
 				Name: "cancel_task",
-				Description: "Cancel a running or queued task. DESTRUCTIVE: confirm with the user first. " +
-					"Call WITHOUT confirm to get a confirmation prompt to relay; only call with confirm=true after the user explicitly agrees.",
+				Description: "Cancel a running or queued task. DESTRUCTIVE: the first call only asks for confirmation " +
+					"and returns the exact phrase the user must type; relay it, wait for the user to type it, then call again for the same task.",
 				Parameters: json.RawMessage(`{
 					"type":"object",
 					"properties":{
-						"task_id":{"type":"string","description":"Task ID to cancel"},
-						"confirm":{"type":"boolean","description":"Set true ONLY after the user has explicitly confirmed the cancellation."}
+						"task_id":{"type":"string","description":"Task ID to cancel"}
 					},
 					"required":["task_id"]
 				}`),
@@ -2312,13 +2323,12 @@ func DispatcherTools() []chat.Tool {
 			Type: "function",
 			Function: chat.ToolFunction{
 				Name: "retry_task",
-				Description: "Retry a failed task (resets it to QUEUED). DESTRUCTIVE: re-runs the task and spends additional budget — " +
-					"confirm with the user first. Call WITHOUT confirm to get a confirmation prompt to relay; only call with confirm=true after the user explicitly agrees.",
+				Description: "Retry a failed task (resets it to QUEUED). DESTRUCTIVE: re-runs the task and spends additional budget. " +
+					"The first call only asks for confirmation and returns the exact phrase the user must type; relay it, wait for the user to type it, then call again for the same task.",
 				Parameters: json.RawMessage(`{
 					"type":"object",
 					"properties":{
-						"task_id":{"type":"string","description":"Task ID to retry"},
-						"confirm":{"type":"boolean","description":"Set true ONLY after the user has explicitly confirmed the retry."}
+						"task_id":{"type":"string","description":"Task ID to retry"}
 					},
 					"required":["task_id"]
 				}`),
@@ -2421,13 +2431,13 @@ func DispatcherTools() []chat.Tool {
 			Type: "function",
 			Function: chat.ToolFunction{
 				Name:        "render_document",
-				Description: "Render user-supplied markdown into the requested formats (md / html / pdf) and deliver each file directly to the chat. Deterministic — runs pandoc/weasyprint on the daemon host, no agent container, no LLM. Use this WHENEVER the user supplies the content themselves (CV text, report draft, README) and just wants it rendered + delivered. Faster and far more reliable than create_task → adaptive workflow for transforms-only work.",
+				Description: "Render user-supplied markdown into the requested formats (md / html / pdf / docx) and deliver each file directly to the chat. Deterministic — runs pandoc/weasyprint in a short-lived, network-less agent-image container, no task, no LLM. Use this WHENEVER the user supplies the content themselves (CV text, report draft, README) and just wants it rendered + delivered. Faster and far more reliable than create_task → adaptive workflow for transforms-only work.",
 				Parameters: json.RawMessage(`{
 					"type":"object",
 					"properties":{
 						"content":{"type":"string","description":"Markdown source. Will be rendered verbatim — do not pre-process."},
 						"name":{"type":"string","description":"Base filename, no extension (e.g. 'CV-Senior-Lead-AI-MSD-20260518-en'). Used for every requested format."},
-						"formats":{"type":"array","items":{"type":"string","enum":["md","html","pdf"]},"description":"Formats to render. Default is all three (md + html + pdf)."}
+						"formats":{"type":"array","items":{"type":"string","enum":["md","html","pdf","docx"]},"description":"Formats to render. Default is md + html + pdf; add docx for a Word document."}
 					},
 					"required":["content","name"]
 				}`),

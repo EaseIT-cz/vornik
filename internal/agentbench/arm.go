@@ -98,10 +98,26 @@ import (
 //	    identically either side. What changed is what the run was allowed to
 //	    consume, which is a property of the measurement and not of the scorer.
 //
+//	v9 (2026-09-26) — EVERY TASK STARTS FROM A PRISTINE WORKSPACE. Every
+//	    dev-swarm task asks for NEW files under scratch/<pkg>, and nothing ever
+//	    removed a task's output from the benchmark workspace. From the second
+//	    arm onward, a repeated task found its target files already written, by
+//	    whichever earlier arm first passed it, on whatever model that arm used.
+//	    It then re-validated them. The targets of the four tasks run on
+//	    2026-09-25/26 date from 2026-08-14. The harness now clears each task's
+//	    declared targets before every repeat (benchmark LLD §12.23) and journals
+//	    what the task produced.
+//
+//	    This changes what the task STARTS FROM, and so what success means:
+//	    before, "re-validate a finished package"; now, "write it". No arm-key
+//	    axis captures that, so the version is the only guard. v8 and earlier
+//	    dev-swarm figures are not comparable to v9 ones, including the
+//	    release-gate baselines.
+//
 // v1 was never bumped through any of those, which is the failure this comment
 // exists to prevent: the mechanism refused nothing because nobody moved the
 // number it keys on.
-const HarnessVersion = "8"
+const HarnessVersion = "9"
 
 // ArmFields enumerates every axis that makes two agent-benchmark runs
 // incomparable.
@@ -186,6 +202,9 @@ type ArmFields struct {
 	// TierPolicySHA256 pins which tasks are tripwires, scored gates, and
 	// exploratory diagnostics without changing the identity of what agents ran.
 	TierPolicySHA256 string `json:"tierPolicySha256"`
+	// AcceptanceSHA256 pins the hidden acceptance suites (and which tasks
+	// have one): changing a test changes what "passed" means (§12.24).
+	AcceptanceSHA256 string `json:"acceptanceSha256,omitempty"`
 
 	// Probes lists the probes that scored the run, sorted. A run scored by two
 	// probes is not a superset of one scored by three — the third may have
@@ -210,6 +229,7 @@ func (a ArmFields) fieldPairs() [][2]string {
 		{"gold_sha256", a.GoldSHA256},
 		{"scoring_policy_sha256", a.ScoringPolicySHA256},
 		{"tier_policy_sha256", a.TierPolicySHA256},
+		{"acceptance_sha256", a.AcceptanceSHA256},
 		{"probes", strings.Join(sortedCopy(a.Probes), ",")},
 	}
 }

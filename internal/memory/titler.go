@@ -2,6 +2,7 @@ package memory
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -149,6 +150,7 @@ func (t *Titler) Title(ctx context.Context, content, projectID, chunkID string) 
 	}
 	callCtx, cancel := context.WithTimeout(ctx, timeout)
 	callCtx = chat.WithCallSite(callCtx, "memory.titler")
+	callCtx = chat.WithBestEffort(callCtx) // optional work; breaker design §5.3a
 	defer cancel()
 
 	msgs := []chat.Message{
@@ -210,8 +212,8 @@ func (t *Titler) Title(ctx context.Context, content, projectID, chunkID string) 
 		} else {
 			lastErr = fmt.Errorf("titler: no choices in response")
 		}
-		if callCtx.Err() != nil {
-			return "", lastErr
+		if chat.RetryAllowed(callCtx) != nil || errors.Is(err, chat.ErrOptionalWorkDisabled) {
+			return "", lastErr // a refusal would be refused again (breaker design §5.3d)
 		}
 		if attempt == maxAttempts {
 			break

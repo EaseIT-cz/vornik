@@ -6,6 +6,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"vornik.io/vornik/internal/spawn"
 )
 
 func TestParseCodexStream(t *testing.T) {
@@ -79,7 +81,7 @@ func TestCodexCLIClient_ImplementsInterfaces(t *testing.T) {
 
 func TestCodexCLIClient_WithModel(t *testing.T) {
 	orig := NewCodexCLIClient("gpt-5.4-mini",
-		WithCodexBinary("/usr/bin/codex"),
+		WithCodexBinary(spawn.NewConfiguredCommand("/usr/bin/codex")),
 	)
 	clone := orig.WithModel("gpt-5.3-codex")
 	assert.Equal(t, "gpt-5.3-codex", clone.Model())

@@ -17,7 +17,18 @@ one new entry per tick and two filled/working entries per New York trading day.
 Existing excess holdings remain managed: no forced exit solely for count/risk
 budget changes, and no new positions while the book is over a limit.
 
-No additions to existing or pending positions, averaging down, or new shorts.
+No averaging down and no new shorts. ONE addition per position is allowed,
+only as a pullback in a winner (intent=add): the holding is long and in profit
+(last_close > the broker's avg_cost, and the add's limit >= avg_cost); the trend
+is intact (last_close > sma50 > sma200 and sma20 > sma50) with an open-quality
+scorecard and regime; last_close is within 1 x atr14 of sma20 and rsi14 is in
+[45, 60]; the limit lies inside sma20 +/- 1 x atr14; the add is no larger than the
+original entry and carries its own protective stop, and every held share is
+already protected. A position that already had its add, or has a pending entry,
+gets none. An add is an entry: it counts toward one entry per tick and two per
+day, and cooldowns apply. It carries add_evidence {avg_cost, last_close, sma20,
+sma50, sma200, rsi14, atr14} copied VERBATIM from get_account_summary and
+mcp__ta__scorecard; the daemon and the broker enforce every condition in code.
 Do not add correlated semiconductor exposure while a semiconductor is held.
 After ANY exit, wait five completed US trading sessions before re-entry; also
 obey the broker's 120-hour stop-out cooldown. Use dated order/fill evidence.

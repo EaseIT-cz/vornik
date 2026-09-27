@@ -10,7 +10,7 @@ import (
 // 2026-09-10 amendment: the three portfolio gates travel in the entry policy.
 // Zero is off; negative or non-finite values are invalid even when disabled.
 func TestEntryPolicyPortfolioLimitsValidate(t *testing.T) {
-	base := EntryPolicy{Enabled: true, MaxRiskUSD: 50, MaxEntriesPerTick: 1}
+	base := EntryPolicy{Enabled: true, NoPositionAdditions: true, MaxRiskUSD: 50, MaxEntriesPerTick: 1}
 	require.NoError(t, base.Validate())
 	ok := base
 	ok.MaxGrossExposureUSD, ok.MaxPositions, ok.DailyLossPauseUSD = 15000, 6, 150

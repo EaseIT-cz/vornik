@@ -304,6 +304,9 @@ func appendWorkflowSchemaFindings(report *WorkflowMDValidationReport, content []
 	// workflow_onfail_connector.go for why the rule is advisory and why it is
 	// scoped to steps reachable only as a recovery target.
 	appendOnFailConnectorFindings(report, wf)
+	// Same kind of WARNING: a step timeout the execution's maxWallClock makes
+	// unreachable (design §14, workflow_wallclock.go).
+	appendWallClockFindings(report, wf)
 }
 
 func ValidateWorkflowMarkdown(content []byte, filename string) *WorkflowMDValidationReport {

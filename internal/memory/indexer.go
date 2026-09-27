@@ -172,6 +172,32 @@ func (idx *Indexer) IngestText(ctx context.Context, projectID, taskID, artifactI
 // IngestText's delegation above behaviour-preserving rather than merely
 // signature-preserving.
 func (idx *Indexer) IngestTextAt(ctx context.Context, projectID, taskID, artifactID, sourceName, content string, eventTime time.Time) error {
+	return idx.ingestTextAt(ctx, projectID, taskID, artifactID, sourceName, content, eventTime, false)
+}
+
+// IngestDocumentTextAt ingests one upload of a document (a document path as
+// sourceName). Each chunk's content_hash is DocumentChunkHash(artifactID,
+// text), so two uploads of the same document never collide on the
+// project-wide unique hash and every version is stored whole: identical text
+// within this upload still de-duplicates, identical text in another upload does
+// not (memory rollback x supersession design, A.7). Incident: with plain hashes
+// a changed document's re-ingest stored only its changed chunks, and
+// supersession then retired the unchanged sections with the old upload.
+func (idx *Indexer) IngestDocumentTextAt(ctx context.Context, projectID, taskID, artifactID, documentPath, content string, eventTime time.Time) error {
+	if artifactID == "" {
+		return fmt.Errorf("document ingest of %q needs its upload's artifact id", documentPath)
+	}
+	return idx.ingestTextAt(ctx, projectID, taskID, artifactID, documentPath, content, eventTime, true)
+}
+
+// IngestDocumentText is IngestDocumentTextAt with an unknown event time: the
+// surface the ingest worker's legacy path and the executor's synchronous
+// fallback call for a document ingest.
+func (idx *Indexer) IngestDocumentText(ctx context.Context, projectID, taskID, artifactID, documentPath, content string) error {
+	return idx.IngestDocumentTextAt(ctx, projectID, taskID, artifactID, documentPath, content, time.Time{})
+}
+
+func (idx *Indexer) ingestTextAt(ctx context.Context, projectID, taskID, artifactID, sourceName, content string, eventTime time.Time, document bool) error {
 	if content == "" {
 		return nil
 	}
@@ -205,6 +231,10 @@ func (idx *Indexer) IngestTextAt(ctx context.Context, projectID, taskID, artifac
 	chunks := make([]MemoryChunk, 0, len(rawChunks))
 	for _, rc := range rawChunks {
 		id := chunkID(projectID, artifactID, sourceName, rc.Index)
+		hash := rc.Hash
+		if document {
+			hash = DocumentChunkHash(artifactID, rc.Text)
+		}
 		chunks = append(chunks, MemoryChunk{
 			ID:          id,
 			ProjectID:   projectID,
@@ -213,7 +243,7 @@ func (idx *Indexer) IngestTextAt(ctx context.Context, projectID, taskID, artifac
 			SourceName:  sourceName,
 			ChunkIndex:  rc.Index,
 			Content:     rc.Text,
-			ContentHash: rc.Hash,
+			ContentHash: hash,
 			CreatedAt:   time.Now(),
 			EventTime:   eventTime,
 			SeriesKey:   seriesKey,
@@ -482,6 +512,15 @@ func (idx *Indexer) SupersedeBySameSource(ctx context.Context, projectID, conten
 		return 0, nil
 	}
 	return idx.repo.SupersedeBySameSource(ctx, projectID, contentClass, sourceName, taskID, newArtifactID, epochID)
+}
+
+// SupersedeDocument leaves only the newest upload of one document live; see
+// Repository.SupersedeDocument.
+func (idx *Indexer) SupersedeDocument(ctx context.Context, projectID, repoScope, documentPath, epochID string) (int, error) {
+	if idx == nil || idx.repo == nil {
+		return 0, nil
+	}
+	return idx.repo.SupersedeDocument(ctx, projectID, repoScope, documentPath, epochID)
 }
 
 // PatchPolicyByArtifact updates per-policy columns for every chunk

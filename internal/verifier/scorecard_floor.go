@@ -230,12 +230,18 @@ func classifyFloorProposal(p floorProposal, entryCfg trading.EntryConfig, protec
 		side = "long"
 	case intent == "open" && action == "SELL":
 		side = "short"
+	case intent == "add" && action == "BUY":
+		// An add is a long entry with stricter conditions than an open
+		// (trading-entry-policy amendment 2026-09-25), so it faces the same
+		// floor. Before this case it had no side and skipped the floor.
+		side = "long"
 	default:
 		side = ""
 	}
-	// Malformed OPEN (action not BUY/SELL) — integrity violation, HARD (never
-	// silently waved through as a non-open).
-	if side == "" && intent == "open" {
+	// Malformed OPEN or ADD (an open whose action is not BUY/SELL, or an add
+	// that is not a BUY) — integrity violation, HARD (never silently waved
+	// through as a non-open).
+	if side == "" && (intent == "open" || intent == "add") {
 		return floorHard, "unknown_action", fmt.Sprintf(
 			"strategist proposed an open on %s that fails the code-enforced entry floor: unknown_action (action=%q) — only BUY/SELL opens are floor-gated, so an unrecognized action must not bypass the deterministic gate",
 			p.Symbol, p.Action)

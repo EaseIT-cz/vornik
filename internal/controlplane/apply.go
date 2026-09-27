@@ -16,6 +16,7 @@ import (
 
 	"github.com/rs/zerolog"
 
+	"vornik.io/vornik/internal/config"
 	"vornik.io/vornik/internal/persistence"
 	"vornik.io/vornik/internal/safepath"
 )
@@ -53,6 +54,11 @@ var (
 	// either a bug or an attempt to write a file where a root belongs — and it
 	// is refused rather than quietly resolved under the config directory.
 	ErrReservedRootPath = errors.New("control-plane: apply target names a reserved root, not a file under one")
+	// ErrGitDirPath means an op path passes through a git directory. git runs
+	// what .git/hooks and .git/config name on the daemon host, so no proposal
+	// may write there, in any root (process-spawn law design §3, the git
+	// http-backend precondition; S1b-2, 2026-09-26).
+	ErrGitDirPath = errors.New("control-plane: apply target is inside a .git directory")
 	// ErrContentTooLarge means the apply content exceeds the size cap.
 	ErrContentTooLarge = errors.New("control-plane: apply content too large")
 	// ErrApplyInProgress means another apply/rollback holds the global lock.
@@ -246,6 +252,13 @@ func (e *ApplyEngine) resolveTarget(rel string) (string, error) {
 	if e.isReservedRootName(rel) {
 		return "", ErrReservedRootPath
 	}
+	// Checked on the proposal-authored path, before any root resolves it, so
+	// it holds for the workspace root and the config tree alike. A symlink
+	// planted to reach a .git directory is JoinUnder's to refuse (it resolves
+	// symlinks and re-checks containment), not this lexical check's.
+	if safepath.HasGitDirSegment(rel) {
+		return "", ErrGitDirPath
+	}
 	if root, rest, ok := e.namedRoot(rel); ok {
 		full, err := safepath.JoinUnderRel(root, rest)
 		if err != nil {
@@ -420,6 +433,13 @@ func (e *ApplyEngine) Apply(ctx context.Context, id, actor string, ackDaemon boo
 			}
 		default:
 			return fmt.Errorf("unknown apply op %q for %s", op.Op, op.Path)
+		}
+		// Process-spawn law, reading 3: no proposal may add or alter a stdio
+		// MCP server; the daemon would launch its program on reload.
+		if isYAMLPath(op.Path) {
+			if serr := stdioMCPChange(pre, []byte(op.Content)); serr != nil {
+				return serr
+			}
 		}
 		if e.Validate != nil {
 			if verr := e.Validate(op.Path, op.Content); verr != nil {
@@ -933,4 +953,14 @@ func syncDir(dir string) error {
 		return err
 	}
 	return d.Close()
+}
+
+// ErrStdioMCPChange refuses a proposal that adds or alters a stdio MCP server
+// (process-spawn law, https://docs.vornik.io).
+var ErrStdioMCPChange = config.ErrStdioMCPChange
+
+var stdioMCPChange = config.StdioMCPChange
+
+func isYAMLPath(p string) bool {
+	return strings.HasSuffix(p, ".yaml") || strings.HasSuffix(p, ".yml")
 }

@@ -58,6 +58,9 @@ const (
 	sharedWriteExpired sharedWriteDecision = "confirmation_expired"
 	// sharedWriteWrongOperator — a different speaker than the one who proposed.
 	sharedWriteWrongOperator sharedWriteDecision = "different_speaker"
+	// sharedWriteWrongScope: the pending row is for another kind of action (design §12). Refused
+	// on its own, so cross-scope authorization never rests on fingerprints not colliding.
+	sharedWriteWrongScope sharedWriteDecision = "different_action"
 )
 
 // permits reports whether this decision allows the write to proceed.
@@ -111,6 +114,9 @@ func authorizeSharedWrite(
 ) sharedWriteDecision {
 	if rec == nil {
 		return sharedWriteNoRecord
+	}
+	if rec.Scope != string(memoryScopeShared) {
+		return sharedWriteWrongScope
 	}
 	// An empty caller identity can never match a proposer, but say so explicitly rather than
 	// relying on string inequality: this is the path a synthetic turn takes (design §5.6.1),

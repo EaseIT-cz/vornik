@@ -3,6 +3,7 @@ package memory
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
@@ -66,6 +67,37 @@ func NewConfiguredReranker(enabled bool, client chat.Provider, model string, max
 // memetic package's WithInstincts / WithApplicationWriter shape rather
 // than growing an already-long positional parameter list.
 type RerankerOption func(*LLMReranker)
+
+// ErrRerankDegraded marks a rerank that did not happen: the results came back
+// in their RRF order. The searcher then leaves RetrievalObservation.Reranked
+// false and does not log again, because the reranker already logged the cause
+// (memory-benchmark-harness design, correction 2026-09-26). A search never
+// fails for it.
+var ErrRerankDegraded = errors.New("rerank degraded; RRF order kept")
+
+// The degrade causes.
+const (
+	RerankCauseLLM                  = "llm"   // failed call, timeout, empty answer
+	RerankCauseParse                = "parse" // scores that did not parse
+	RerankCauseOptionalWorkDisabled = "optional_work_disabled"
+)
+
+// RerankDegradedError carries the cause of a degrade. It matches
+// ErrRerankDegraded and its underlying error under errors.Is.
+type RerankDegradedError struct {
+	Cause string
+	Err   error
+}
+
+func (e *RerankDegradedError) Error() string {
+	if e.Err == nil {
+		return "rerank degraded (" + e.Cause + ")"
+	}
+	return "rerank degraded (" + e.Cause + "): " + e.Err.Error()
+}
+
+// Unwrap exposes both the sentinel and the cause's own error.
+func (e *RerankDegradedError) Unwrap() []error { return []error{ErrRerankDegraded, e.Err} }
 
 // WithRerankerSpend wires the billing recorder. Takes an llmspend.Recorder
 // rather than a repo + pricing pair, matching every other component: the seam
@@ -166,6 +198,7 @@ func (r *LLMReranker) Rerank(ctx context.Context, query string, results []Search
 	}
 	callCtx, cancel := context.WithTimeout(ctx, timeout)
 	callCtx = chat.WithCallSite(callCtx, "memory.reranker")
+	callCtx = chat.WithBestEffort(callCtx) // optional work; breaker design §5.3a
 	defer cancel()
 
 	userPrompt := buildRerankPrompt(query, head, snippetCap)
@@ -189,17 +222,27 @@ func (r *LLMReranker) Rerank(ctx context.Context, query string, results []Search
 			Msg("memory: rerank candidates span multiple projects — cost attribution is ambiguous, billing the first")
 	}
 	r.recordUsage(ctx, resp, billTo)
-	if err != nil || resp == nil || len(resp.Choices) == 0 {
+	if errors.Is(err, chat.ErrOptionalWorkDisabled) {
+		// Optional LLM work is off for the reranker's model (breaker design
+		// §5.3d): a state the operator chose, so Debug, and RRF as before.
+		r.Logger.Debug().Int("candidates", len(head)).
+			Msg("memory: reranker disabled (optional LLM work off for its model) — RRF ordering")
+		return results, &RerankDegradedError{Cause: RerankCauseOptionalWorkDisabled, Err: err}
+	}
+	if err != nil || resp == nil || len(resp.Choices) == 0 || strings.TrimSpace(resp.Choices[0].Message.Content) == "" {
+		if err == nil {
+			err = errors.New("no usable answer")
+		}
 		r.Logger.Warn().Err(err).Int("candidates", len(head)).
 			Msg("memory: reranker LLM call failed — degrading to RRF ordering")
-		return results, nil
+		return results, &RerankDegradedError{Cause: RerankCauseLLM, Err: err}
 	}
 	scores, perr := parseRerankScores(resp.Choices[0].Message.Content, len(head))
 	if perr != nil {
 		r.Logger.Warn().Err(perr).
 			Str("raw", truncate(resp.Choices[0].Message.Content, 200)).
 			Msg("memory: reranker parse failed — degrading to RRF ordering")
-		return results, nil
+		return results, &RerankDegradedError{Cause: RerankCauseParse, Err: perr}
 	}
 
 	// Stable sort head by score desc. Ties preserve the RRF order.

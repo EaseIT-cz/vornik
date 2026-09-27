@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"sort"
 	"strconv"
@@ -32,10 +31,7 @@ import (
 // failing source becomes a noted gap, never a hard fail.
 type diagnoseObserver struct{ c *Container }
 
-const (
-	diagLogsCap  = 16 * 1024
-	diagExecsCap = 12 * 1024
-)
+const diagExecsCap = 12 * 1024
 
 func (o diagnoseObserver) Observe(ctx context.Context, focus string) (*controlplane.DiagnoseBundle, error) {
 	project, err := o.resolveFocus(ctx, focus)
@@ -58,7 +54,9 @@ func (o diagnoseObserver) Observe(ctx context.Context, focus string) (*controlpl
 		addSec("recent successful executions", o.execSummary(ctx, project, persistence.ExecutionStatusCompleted, 3, addGap))
 		addSec("metrics", o.metricsSummary(ctx, project, addGap))
 	}
-	addSec("recent logs", diagJournal(project))
+	// No "recent logs" section: it ran `journalctl` on the daemon host, and
+	// this bundle is built on a request (process-spawn law, S2). Journals
+	// reach a report through `vornikctl report`, in the operator's shell.
 	if o.c.repos != nil && o.c.repos.Skills != nil {
 		addSec("known failure patterns", o.skillHints(ctx))
 	}
@@ -237,28 +235,6 @@ func (o diagnoseObserver) skillHints(ctx context.Context) string {
 	return sb.String()
 }
 
-// diagJournal reads recent daemon journal lines mentioning the project
-// (best-effort; empty on non-systemd hosts).
-func diagJournal(project string) string {
-	out, err := exec.Command("journalctl", "--user", "-u", "vornik", "-n", "300", "--no-pager").CombinedOutput()
-	if err != nil {
-		return ""
-	}
-	var sb strings.Builder
-	for _, line := range strings.Split(string(out), "\n") {
-		if project == "" || strings.Contains(line, project) {
-			if len(line) > 400 {
-				line = line[:400] + "…"
-			}
-			sb.WriteString(line + "\n")
-			if sb.Len() > diagLogsCap {
-				break
-			}
-		}
-	}
-	return sb.String()
-}
-
 func truncateDiag(s string, n int) string {
 	s = strings.TrimSpace(s)
 	if len(s) <= n {
@@ -312,9 +288,17 @@ func applyContentValidate(path, content string) error {
 // newProposalMirror builds the two-trees mirror hook (actionable-proposals
 // §4.7): after a successful apply/rollback it propagates the final file
 // states into the operator's source checkout (VORNIK_CONFIGS_SOURCE_DIR, the
-// same seam the memetic applier uses) and makes ONE git commit per proposal.
-// Nil when no source tree is configured (deployed-only deployments). Errors
-// are the engine's to WARN on — the deployed tree is the source of truth.
+// same seam the workflow applier uses). Nil when no source tree is configured
+// (deployed-only deployments). Errors are the engine's to WARN on — the
+// deployed tree is the source of truth.
+//
+// It commits nothing. Until 2026-09-26 it made one git commit per proposal,
+// with a `mirror-normalized:` trailer per normalizer; apply and rollback are
+// requests, and the process-spawn law
+// (https://docs.vornik.io, S3) forbids a
+// request from making the daemon run a program. The operator commits the source
+// tree with their own git; each normalization is logged by mirrorOneFile and
+// counted by configMirrorMetrics, and the proposal ledger is the audit record.
 func (c *Container) newProposalMirror() func(proposalID string, files map[string][]byte) error {
 	sourceConfigsDir := os.Getenv("VORNIK_CONFIGS_SOURCE_DIR")
 	if sourceConfigsDir == "" {
@@ -323,17 +307,9 @@ func (c *Container) newProposalMirror() func(proposalID string, files map[string
 	sourceRoot := filepath.Dir(sourceConfigsDir) // holds config.yaml siblings of configs/
 	logger := c.Logger.With().Str("component", "control-plane").Str("engine", "mirror").Logger()
 	return func(proposalID string, files map[string][]byte) error {
-		var staged []string
 		var firstErr error
-		// Collect the DISTINCT normalizer names that fired across all files in
-		// this proposal, in first-seen order, so the commit message carries a
-		// `mirror-normalized: <name>` trailer per normalizer (review A6) — the
-		// operator who later `git revert`s a bad rewrite finds the audit at the
-		// commit, not only in the daemon log.
-		var normalizerOrder []string
-		seenNormalizer := map[string]bool{}
 		for rel, content := range files {
-			target, ok, notes, err := mirrorOneFile(sourceRoot, sourceConfigsDir, rel, content, logger)
+			_, _, notes, err := mirrorOneFile(sourceRoot, sourceConfigsDir, rel, content, logger)
 			if err != nil {
 				if strings.Contains(err.Error(), "escapes") {
 					return err
@@ -345,31 +321,11 @@ func (c *Container) newProposalMirror() func(proposalID string, files map[string
 			}
 			for _, note := range notes {
 				c.configMirrorMetrics.Inc(note.Name)
-				if !seenNormalizer[note.Name] {
-					seenNormalizer[note.Name] = true
-					normalizerOrder = append(normalizerOrder, note.Name)
-				}
-			}
-			if ok {
-				staged = append(staged, target)
+				logger.Info().Str("proposal_id", proposalID).Str("rel", rel).Str("normalizer", note.Name).
+					Msg("mirror: normalized before source write; commit the source tree to keep it")
 			}
 		}
-		if firstErr != nil {
-			return firstErr
-		}
-		if len(staged) > 0 && isGitRepo(sourceConfigsDir) {
-			msg := fmt.Sprintf("control-plane: apply %s", proposalID)
-			if len(normalizerOrder) > 0 {
-				msg += "\n" // blank line separating subject from the trailer block
-				for _, name := range normalizerOrder {
-					msg += fmt.Sprintf("\nmirror-normalized: %s", name)
-				}
-			}
-			if err := gitCommitPaths(sourceConfigsDir, staged, msg); err != nil {
-				return fmt.Errorf("mirror: git commit: %w", err)
-			}
-		}
-		return nil
+		return firstErr
 	}
 }
 
@@ -437,24 +393,6 @@ func mirrorOneFile(sourceRoot, sourceConfigsDir, rel string, content []byte, log
 		return "", false, nil, wErr
 	}
 	return clean, true, notes, nil
-}
-
-// gitCommitPaths stages the given absolute paths and makes one commit in the
-// repo containing dir. `git add -A -- <paths>` records deletions too.
-func gitCommitPaths(dir string, paths []string, message string) error {
-	addArgs := append([]string{"-C", dir, "add", "-A", "--"}, paths...)
-	if out, err := exec.Command("git", addArgs...).CombinedOutput(); err != nil {
-		return fmt.Errorf("git add: %v: %s", err, out)
-	}
-	commitArgs := []string{"-C", dir, "commit", "-m", message,
-		"--author", envOr("VORNIK_GIT_AUTHOR_NAME", "vornik-control-plane") + " <" + envOr("VORNIK_GIT_AUTHOR_EMAIL", "control-plane@vornik.local") + ">"}
-	if out, err := exec.Command("git", commitArgs...).CombinedOutput(); err != nil {
-		if strings.Contains(string(out), "nothing to commit") {
-			return nil
-		}
-		return fmt.Errorf("git commit: %v: %s", err, out)
-	}
-	return nil
 }
 
 // newProposalApplier builds the Phase-2 apply/rollback engine (LLD

@@ -117,10 +117,6 @@ func TestWithPoolOptions(t *testing.T) {
 	if got, want := len(p.envVars), 1; got != want {
 		t.Errorf("WithPoolEnvVars: envVars len = %d, want %d", got, want)
 	}
-	WithPoolProjectWorkspacePath("/tmp/projects")(p)
-	if p.projectWorkspacePath != "/tmp/projects" {
-		t.Errorf("WithPoolProjectWorkspacePath: got %q", p.projectWorkspacePath)
-	}
 }
 
 // TestWithPoolPrometheusRegistry_NilSkips matches the manager

@@ -5,7 +5,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"os/exec"
 	"strconv"
 	"strings"
 	"time"
@@ -13,6 +12,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/rs/zerolog"
 	"vornik.io/vornik/internal/projectdeps"
+	"vornik.io/vornik/internal/spawn"
 )
 
 // maxPodmanArgs is a hard ceiling on the pre-allocated capacity of a
@@ -252,7 +252,7 @@ func New(opts ...ManagerOption) (*Manager, error) {
 
 	// Discover podman binary
 	if m.podmanPath == "" {
-		path, err := exec.LookPath("podman")
+		path, err := spawn.LookPodman()
 		if err != nil {
 			return nil, &PodmanNotAvailableError{Err: err}
 		}
@@ -304,8 +304,7 @@ func (m *Manager) verifyPodmanAvailable() error {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	cmd := exec.CommandContext(ctx, m.podmanPath, "version", "--format", "json")
-	output, err := cmd.CombinedOutput()
+	output, err := m.podman(ctx, "version", "--format", "json")
 	if err != nil && podmanVersionUsable(output, err) {
 		// Answered, then died. See podmanVersionUsable — refusing to start
 		// here cost the vornik-ee#66 E2E lane a full run.
@@ -720,7 +719,27 @@ func (m *Manager) runStartAttempt(ctx context.Context, config *ContainerConfig, 
 }
 
 func (m *Manager) runPodmanCommand(ctx context.Context, args []string) ([]byte, error) {
-	cmd := exec.CommandContext(ctx, m.podmanPath, args...)
+	return m.podman(ctx, args...)
+}
+
+// podman runs one podman invocation through the process-spawn law's kinds
+// (internal/spawn): `run` is PodmanAgent, which accepts only the pinned agent
+// image and the flags this manager emits; every other verb is PodmanControl.
+// A refused argv returns the refusal and starts nothing. Output is combined,
+// as every caller here parses or reports both streams.
+func (m *Manager) podman(ctx context.Context, args ...string) ([]byte, error) {
+	var (
+		cmd *spawn.Cmd
+		err error
+	)
+	if len(args) > 0 && args[0] == "run" {
+		cmd, err = spawn.PodmanAgent(ctx, m.podmanPath, args)
+	} else {
+		cmd, err = spawn.PodmanControl(ctx, m.podmanPath, args)
+	}
+	if err != nil {
+		return nil, err
+	}
 	return cmd.CombinedOutput()
 }
 
@@ -755,8 +774,7 @@ func (m *Manager) tryMigrateOnPauseError(ctx context.Context, output []byte) boo
 	migrateCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 
-	cmd := exec.CommandContext(migrateCtx, m.podmanPath, "system", "migrate")
-	migrateOut, err := cmd.CombinedOutput()
+	migrateOut, err := m.podman(migrateCtx, "system", "migrate")
 	if err != nil {
 		m.logger.Error().
 			Err(err).
@@ -795,8 +813,7 @@ func (m *Manager) StopContainer(ctx context.Context, containerID string, force b
 	}
 	args = append(args, containerID)
 
-	cmd := exec.CommandContext(ctx, m.podmanPath, args...)
-	output, err := cmd.CombinedOutput()
+	output, err := m.podman(ctx, args...)
 	if err != nil {
 		// Check if container doesn't exist
 		if strings.Contains(string(output), "no such container") {
@@ -824,8 +841,7 @@ func (m *Manager) RemoveContainer(ctx context.Context, containerID string, force
 	}
 	args = append(args, containerID)
 
-	cmd := exec.CommandContext(ctx, m.podmanPath, args...)
-	output, err := cmd.CombinedOutput()
+	output, err := m.podman(ctx, args...)
 	if err != nil {
 		// Check if container doesn't exist
 		if strings.Contains(string(output), "no such container") {
@@ -847,8 +863,7 @@ func (m *Manager) RemoveContainer(ctx context.Context, containerID string, force
 func (m *Manager) InspectContainer(ctx context.Context, containerID string) (*Container, error) {
 	args := []string{"inspect", "--format", "json", containerID}
 
-	cmd := exec.CommandContext(ctx, m.podmanPath, args...)
-	output, err := cmd.CombinedOutput()
+	output, err := m.podman(ctx, args...)
 	if err != nil {
 		if strings.Contains(string(output), "no such container") {
 			return nil, &ContainerNotFoundError{ContainerID: containerID}
@@ -942,8 +957,7 @@ func (m *Manager) ListContainers(ctx context.Context, filters map[string]string)
 		}
 	}
 
-	cmd := exec.CommandContext(ctx, m.podmanPath, args...)
-	output, err := cmd.CombinedOutput()
+	output, err := m.podman(ctx, args...)
 	if err != nil {
 		m.recordPodmanError("list")
 		return nil, fmt.Errorf("podman ps failed: %w - output: %s", err, string(output))
@@ -1050,8 +1064,7 @@ func (m *Manager) WaitForExit(ctx context.Context, containerID string, timeout t
 		Dur("timeout", timeout).
 		Msg("waiting for podman container exit")
 
-	cmd := exec.CommandContext(ctx, m.podmanPath, args...)
-	output, err := cmd.CombinedOutput()
+	output, err := m.podman(ctx, args...)
 	if err != nil {
 		// podman wait exits with the container's own exit code, so a non-zero
 		// status is expected when the container fails. Try to parse the output
@@ -1168,33 +1181,6 @@ func contextWithOptionalTimeout(parent context.Context, timeout time.Duration) (
 	return context.WithTimeout(parent, timeout)
 }
 
-// PullImage pulls a container image by reference.
-//
-// NOT THE OBTAIN PATH, and this comment is the whole point of keeping the
-// function. Deciding WHETHER to pull belongs to `imagemanifest.Decide`, which
-// `cmd/vornik-images -obtain` calls — one rule, reached by both the updater and
-// the doctor, because a rule duplicated between bash and Go is a rule with two
-// answers (packaged-image-provenance design §S2.3). A caller that pulls through
-// here without consulting that decision would be the second obtain path, and
-// the one that is wrong is always the one nobody exercises.
-//
-// It stays because the runtime manager is where image lifecycle lives and a
-// future caller (a warm-pull on first dispatch, say) belongs here rather than
-// shelling out beside it — but it is DELIBERATELY unreferenced today, which is
-// a fact worth stating rather than a gap worth closing by inventing a caller.
-func (m *Manager) PullImage(ctx context.Context, image string) error {
-	args := []string{"pull", image}
-
-	cmd := exec.CommandContext(ctx, m.podmanPath, args...)
-	output, err := cmd.CombinedOutput()
-	if err != nil {
-		m.recordPodmanError("pull")
-		return fmt.Errorf("podman pull failed: %w - output: %s", err, string(output))
-	}
-
-	return nil
-}
-
 // IsAvailable checks if podman is available and functional.
 func (m *Manager) IsAvailable() bool {
 	return m.verifyPodmanAvailable() == nil
@@ -1213,8 +1199,7 @@ func (m *Manager) Logs(ctx context.Context, containerID string, tail int) (strin
 	}
 	args = append(args, containerID)
 
-	cmd := exec.CommandContext(ctx, m.podmanPath, args...)
-	output, err := cmd.CombinedOutput()
+	output, err := m.podman(ctx, args...)
 	if err != nil {
 		if strings.Contains(string(output), "no such container") {
 			return "", &ContainerNotFoundError{ContainerID: containerID}

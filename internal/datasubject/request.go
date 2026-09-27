@@ -78,6 +78,11 @@ type Request struct {
 	// ReportHash pins the artefact that was produced, so "what did we actually
 	// send them" is answerable later (Art 5(2)).
 	ReportHash string
+	// ReportRetained reports whether the report itself (not only its hash) was
+	// kept — set by the regulatory record's listing so it links a download only
+	// where one exists (regulatory record design §4). Erasure retains its
+	// report; an Art 15/20 export today keeps only the hash.
+	ReportRetained bool
 
 	// RefusedReason is required in StateRefused. A refusal with no stated
 	// ground is the shape of obstruction, and Art 12(4) requires the subject be

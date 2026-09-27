@@ -158,3 +158,22 @@ func evalExistingPrefix(path string) (string, bool, error) {
 		cur = parent
 	}
 }
+
+// HasGitDirSegment reports whether a relative path passes through a
+// repository's git directory: any segment equal to ".git" (case-insensitively,
+// for case-insensitive filesystems). ".gitignore" or ".github" are files and
+// directories of the tree, not the git directory.
+//
+// Why it exists (process-spawn law design §3, git http-backend precondition,
+// 2026-09-26): git runs the programs in .git/hooks and the ones .git/config
+// names, on the daemon host, at the next push or daemon git command. So a path
+// that arrives as DATA — a proposal's op path, a configured file path — must
+// never land there; only the daemon's own guard installer writes hooks.
+func HasGitDirSegment(rel string) bool {
+	for _, seg := range strings.FieldsFunc(rel, func(r rune) bool { return r == '/' || r == '\\' }) {
+		if strings.EqualFold(strings.TrimSpace(seg), ".git") {
+			return true
+		}
+	}
+	return false
+}

@@ -444,25 +444,12 @@ func TestClassifyBackfiller_CountRemainingAll(t *testing.T) {
 	}
 }
 
-// LIVELOCK, observed in production 2026-07-30. The auto-loop selected
-// `ORDER BY created_at ASC LIMIT 25`, the classifier declined all 25, and a declined row
-// is never written — so the same page came back every tick and permanently blocked the
-// 1,174 rows behind it. The journal showed it plainly: succeeded=0, skipped=25 and
-// remaining pinned at 1199 across every tick, for hours.
-//
-// The cursor has to advance past what nothing can classify.
-func TestClassifyBackfiller_AdvancesPastRowsNothingCanClassify(t *testing.T) {
-	b := &ClassifyBackfiller{}
-	if b.offset != 0 {
-		t.Fatalf("fresh backfiller offset = %d, want 0", b.offset)
-	}
-	// Simulate a tick that declined everything.
-	b.offset += 25
-	if b.offset != 25 {
-		t.Fatalf("offset after an all-declined page = %d, want 25 so the next tick "+
-			"reaches rows the first page was blocking", b.offset)
-	}
-}
+// The 2026-07-30 livelock regression test that stood here incremented
+// b.offset by hand, so it could not fail, and the cross-project sweep never
+// advanced the cursor at all (rag-ingest pipeline design, correction
+// 2026-09-26). The real tests drive two sweeps through the repository:
+// TestClassifyAcrossProjects_CursorAdvancesPastAnAllAbstainedPage and its
+// paused siblings in optional_work_test.go.
 
 // The deterministic role map is consulted BEFORE the LLM: it is free, it is what the
 // ingest path itself uses, and for a known producer_role it is the authoritative answer.

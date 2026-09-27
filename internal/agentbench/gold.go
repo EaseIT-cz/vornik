@@ -86,6 +86,12 @@ type GoldManifest struct {
 	// "correct" means for the gate, so it is not self-certifiable by the
 	// harness that produced it.
 	ReviewedBy string `json:"reviewedBy,omitempty"`
+	// WorkspaceReset records whether the unrestricted runs started from a
+	// pristine workspace (benchmark LLD §12.23). Gold is the tool path a task
+	// NEEDED, and an agent facing pre-existing files takes a different path
+	// (read and validate instead of write), so gold recorded without the
+	// reset describes the wrong task. Empty on manifests from before v9.
+	WorkspaceReset string `json:"workspaceReset,omitempty"`
 }
 
 // Validate refuses a manifest whose task-set digest is not a digest.
@@ -157,10 +163,11 @@ func (m GoldManifest) SHA256() (string, error) {
 // set always hashes alike regardless of the order runs happened to arrive in.
 func (m GoldManifest) canonical() GoldManifest {
 	out := GoldManifest{
-		TaskSetSHA256: m.TaskSetSHA256,
-		Runs:          m.Runs,
-		ReviewedBy:    m.ReviewedBy,
-		Entries:       make([]Gold, 0, len(m.Entries)),
+		TaskSetSHA256:  m.TaskSetSHA256,
+		Runs:           m.Runs,
+		ReviewedBy:     m.ReviewedBy,
+		WorkspaceReset: m.WorkspaceReset,
+		Entries:        make([]Gold, 0, len(m.Entries)),
 	}
 	for _, e := range m.Entries {
 		paths := make([][]string, 0, len(e.Paths))
@@ -393,7 +400,7 @@ func MergeGold(manifests ...GoldManifest) (GoldManifest, error) {
 	// manifest's target is the largest, since that is what a complete entry owes.
 	runsByTask := map[string]int{}
 
-	for _, m := range manifests {
+	for i, m := range manifests {
 		if m.TaskSetSHA256 == "" {
 			return GoldManifest{}, fmt.Errorf("refusing to merge a manifest with no task-set hash")
 		}
@@ -406,6 +413,13 @@ func MergeGold(manifests ...GoldManifest) (GoldManifest, error) {
 			return GoldManifest{}, fmt.Errorf("refusing to merge manifests from different task "+
 				"sets (%s vs %s): the result would pin neither",
 				shortHash(out.TaskSetSHA256), shortHash(m.TaskSetSHA256))
+		}
+		if i == 0 {
+			out.WorkspaceReset = m.WorkspaceReset
+		} else if out.WorkspaceReset != m.WorkspaceReset {
+			return GoldManifest{}, fmt.Errorf("refusing to merge manifests recorded under different "+
+				"workspace resets (%q vs %q): half the gold would describe re-validation (§12.23)",
+				out.WorkspaceReset, m.WorkspaceReset)
 		}
 		for _, e := range m.Entries {
 			runsByTask[e.TaskID] += m.Runs

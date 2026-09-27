@@ -3,11 +3,14 @@ package agentbench
 import (
 	"bytes"
 	"context"
+	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"regexp"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -74,6 +77,12 @@ func parseMaxModelLen(body string) (int, bool) {
 // a window: that is "undiscovered", not "zero", and CheckConfiguredWindow
 // treats it as inconclusive rather than as a mismatch.
 func DiscoverModelWindow(ctx context.Context, endpoint, apiKey, model string) (int, error) {
+	// Ollama does not refuse an impossible max_tokens: it clamps and
+	// generates, so the probe below would only run into its deadline. Ask it
+	// directly first (benchmark LLD §12.11.3, amended 2026-09-26).
+	if n, isOllama, err := discoverOllamaWindow(ctx, endpoint, apiKey, model); isOllama {
+		return n, err
+	}
 	body := fmt.Sprintf(`{"model":%q,"max_tokens":99000000,"messages":[{"role":"user","content":"x"}]}`, model)
 
 	reqCtx, cancel := context.WithTimeout(ctx, 20*time.Second)
@@ -185,4 +194,108 @@ func CheckConfiguredWindow(model string, configured, discovered int) WindowVerdi
 		v.Message = fmt.Sprintf("model %q: configured %d, endpoint serves %d", model, configured, discovered)
 	}
 	return v
+}
+
+// ErrOllamaModelNotLoaded means the endpoint is Ollama and the model is not loaded,
+// so its served window cannot be read without loading it and generating.
+// "Undiscovered", not a mismatch.
+var ErrOllamaModelNotLoaded = errors.New("model not loaded on the Ollama server; its served window is unknown until it is")
+
+// ollamaRoot strips ONE trailing "/v1" (both Ollama roots serve the OpenAI
+// surface at host/v1). Anything else is left alone; its /api/ps then 404s and
+// the refusal probe runs.
+func ollamaRoot(endpoint string) string {
+	e := strings.TrimRight(endpoint, "/")
+	return strings.TrimSuffix(e, "/v1")
+}
+
+// discoverOllamaWindow reads the served window from Ollama's GET /api/ps.
+// isOllama is false for anything that does not answer like Ollama, and the
+// caller then runs the refusal probe.
+func discoverOllamaWindow(ctx context.Context, endpoint, apiKey, model string) (n int, isOllama bool, err error) {
+	root := ollamaRoot(endpoint)
+	var ps struct {
+		Models *[]struct {
+			Name          string `json:"name"`
+			Model         string `json:"model"`
+			Digest        string `json:"digest"`
+			ContextLength int    `json:"context_length"`
+		} `json:"models"`
+	}
+	if !ollamaGetJSON(ctx, root+"/api/ps", apiKey, &ps) || ps.Models == nil {
+		return 0, false, nil
+	}
+	for _, m := range *ps.Models {
+		// Every entry must look like Ollama's, or this is some other server
+		// that happens to have a "models" list.
+		if (m.Name == "" && m.Model == "") || m.ContextLength <= 0 {
+			return 0, false, nil
+		}
+	}
+	for _, m := range *ps.Models {
+		if m.Name == model || m.Model == model {
+			return m.ContextLength, true, nil
+		}
+	}
+	// An alias whose original is already loaded is listed under the
+	// original's name; the two share a digest (§12.11.3, aliases).
+	if digest := ollamaDigest(ctx, root, apiKey, model); digest != "" {
+		for _, m := range *ps.Models {
+			if m.Digest == digest {
+				return m.ContextLength, true, nil
+			}
+		}
+	}
+	// Not listed: confirm it IS Ollama before refusing to probe.
+	var ver struct {
+		Version string `json:"version"`
+	}
+	if !ollamaGetJSON(ctx, root+"/api/version", apiKey, &ver) || ver.Version == "" {
+		return 0, false, nil
+	}
+	return 0, true, fmt.Errorf("model-window probe: %q: %w", model, ErrOllamaModelNotLoaded)
+}
+
+// ollamaDigest returns the model's digest from GET /api/tags, or "" when it
+// cannot be read (the caller then reports "undiscovered", never a guess).
+func ollamaDigest(ctx context.Context, root, apiKey, model string) string {
+	var tags struct {
+		Models []struct {
+			Name   string `json:"name"`
+			Model  string `json:"model"`
+			Digest string `json:"digest"`
+		} `json:"models"`
+	}
+	if !ollamaGetJSON(ctx, root+"/api/tags", apiKey, &tags) {
+		return ""
+	}
+	for _, t := range tags.Models {
+		if t.Name == model || t.Model == model {
+			return t.Digest
+		}
+	}
+	return ""
+}
+
+// ollamaGetJSON GETs url and decodes a 200 JSON body into v. False on any
+// failure: the caller treats that as "not Ollama".
+func ollamaGetJSON(ctx context.Context, url, apiKey string, v any) bool {
+	reqCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(reqCtx, http.MethodGet, url, nil)
+	if err != nil {
+		return false
+	}
+	if apiKey != "" {
+		req.Header.Set("Authorization", "Bearer "+apiKey)
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return false
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusOK {
+		return false
+	}
+	return json.NewDecoder(io.LimitReader(resp.Body, 256*1024)).Decode(v) == nil
 }

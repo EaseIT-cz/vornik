@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -11,18 +12,28 @@ import (
 	"github.com/spf13/cobra"
 )
 
+// doctorCheck mirrors the daemon's DoctorCheck for pretty-printing. It is also
+// the second declaration site for host-check fields, beside hostdoctor.Check
+// (doctorHostChecks maps one onto the other field by field), so a field added
+// to a host check must be added to both, or it never reaches the output.
 type doctorCheck struct {
 	Name    string   `json:"name"`
 	Status  string   `json:"status"`
 	Message string   `json:"message"`
 	Items   []string `json:"items,omitempty"`
 	Fixed   int      `json:"fixed,omitempty"`
+	// Removed: the "<project>/<task>" worktrees an orphan_worktrees fix
+	// deleted, whose git side vornikctl cleans on the host.
+	Removed []string `json:"removed,omitempty"`
 }
 
 type doctorReport struct {
 	Timestamp string        `json:"timestamp"`
 	Checks    []doctorCheck `json:"checks"`
 	Summary   string        `json:"summary"`
+	// DaemonRevision is the daemon's build revision, for the host
+	// image-freshness check.
+	DaemonRevision string `json:"daemon_revision,omitempty"`
 }
 
 var (
@@ -48,13 +59,20 @@ Schema & storage:
   role_prompt_sanity    Lint swarm role prompts: tool refs vs allowedTools, output shape, untrusted_content awareness
   eval_suite_lint       Parse configs/evals/*.json; flag suites with missing/incompatible project/workflow/swarm
   database_schema       Verify expected tables and indexes exist (incl. 2026.4.11+ additions)
-  orphan_fk_rows        Detect orphan rows in audit / llm_usage / watchers referencing missing tasks
+  orphan_fk_rows        Detect orphan audit / watcher rows referencing missing tasks (cost-ledger rows are kept, reported)
   orphan_worktrees      .worktrees/ subdirs with no matching live task
   config_crlf           Config files with CRLF line endings (UI YAML-writer drift); --fix normalizes to LF
+  config_template_drift Deployed configs that lack what this version's templates ship (preserve-existing
+                        upgrades never apply a template fix); needs the installer's .templates baseline
 
-Runtime:
+Host (run by vornikctl on this host, not by the daemon — they need podman,
+skopeo or systemctl, and no daemon request may run a program):
   podman_config         Check podman availability and rootless configuration
   agent_images          Verify agent images referenced in swarm configs are available
+  agent_image_uid       Compare the agent image's baked uid with the keep-id mapping
+  image_freshness       Deployment images vs the daemon's build (release record)
+
+Runtime:
   env_file_freshness    Flag EnvironmentFile= entries modified after daemon
                         start (systemd reads them only at ExecStart, so
                         post-edit secrets are invisible until restart)
@@ -133,11 +151,38 @@ func runDoctor(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("failed to parse response: %w", err)
 	}
 
-	if doctorJSON {
-		enc := json.NewEncoder(os.Stdout)
-		enc.SetIndent("", "  ")
-		return enc.Encode(report)
+	// --fix: the daemon removed orphan worktree directories; git's side of
+	// each is cleaned here, on the host (process-spawn law, S2).
+	if doctorFix {
+		if removed := removedWorktrees(report); len(removed) > 0 {
+			for _, note := range doctorWorktreeGitCleanup(removed) {
+				fmt.Fprintf(os.Stderr, "orphan_worktrees: %s\n", note)
+			}
+		}
 	}
+
+	// --json passes the daemon's body through (indented) rather than
+	// re-encoding doctorCheck: the mirror declares only what pretty-print
+	// needs, and re-encoding it dropped `kept` (orphan-FK ledger design F7,
+	// 2026-09-24) — and would drop any field the daemon adds later. The decode
+	// above stays: it is the validity guard, so a malformed body fails here
+	// instead of being forwarded. The host checks are spliced into the raw body
+	// in place of the daemon's host_checks pointer.
+	if doctorJSON {
+		body, err = mergeHostChecksJSON(doctorContext(cmd), body, report.DaemonRevision)
+		if err != nil {
+			return fmt.Errorf("failed to merge host checks: %w", err)
+		}
+		var out bytes.Buffer
+		if err := json.Indent(&out, body, "", "  "); err != nil {
+			return fmt.Errorf("failed to format response: %w", err)
+		}
+		out.WriteByte('\n')
+		_, err := os.Stdout.Write(out.Bytes())
+		return err
+	}
+
+	report = mergeHostChecks(doctorContext(cmd), report)
 
 	// Pretty-print
 	for _, check := range report.Checks {

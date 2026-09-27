@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"regexp"
 	"strconv"
@@ -1023,6 +1024,217 @@ func (r *Repository) SupersedeBySameSource(ctx context.Context, projectID, conte
 	}
 	n, _ := res.RowsAffected()
 	return int(n), nil
+}
+
+// SupersedeDocument marks every earlier upload of one document superseded,
+// leaving the newest upload's chunks live (LLD
+// memory-rollback-supersession-design.md, amendment 2026-09-26). A document
+// is identified by (project, repo scope, document path), where the path is the
+// file's path in its repository, declared by the uploader and used as the
+// chunks' source_name. Neither task_id nor content_class is part of the key:
+// every re-ingest is a new task with no task ID, and the class is re-assigned
+// on every ingest.
+//
+// INVARIANT (upload-only): only chunks whose source artifact is an operator
+// upload (artifact_class INPUT, origin 'upload') are ever superseded or
+// chosen as the survivor. An agent's output artifact is never touched,
+// whatever it is named.
+//
+// The survivor is the newest upload that still has a SERVABLE chunk
+// (published, neither superseded nor refuted): a newer version whose chunks
+// were all quarantined or refuted must not hide the last good one. Among
+// those it is the upload with the latest created_at; ties break on id,
+// an opaque stable order rather than a time order. The statement does not
+// depend on which item calls it, so running it after every item converges on
+// the same survivor in any processing order. epochID is the epoch of the drain
+// that runs it, recorded as restore provenance exactly as SupersedeBySameSource
+// does; empty (the synchronous fallback, which has no epoch) records NULL.
+//
+// Returns the count of chunks marked superseded.
+func (r *Repository) SupersedeDocument(ctx context.Context, projectID, repoScope, documentPath, epochID string) (int, error) {
+	if r == nil || r.db == nil {
+		return 0, nil
+	}
+	if projectID == "" || repoScope == "" || documentPath == "" {
+		return 0, nil
+	}
+	res, err := r.db.ExecContext(ctx, `
+		UPDATE project_memory_chunks
+		SET validation_status    = 'superseded',
+		    pre_supersede_status = validation_status,
+		    superseded_in_epoch  = NULLIF($4, '')
+		WHERE `+documentSupersedeWhere+`
+	`, projectID, repoScope, documentPath, epochID)
+	if err != nil {
+		return 0, fmt.Errorf("supersede document %q: %w", documentPath, err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return 0, err
+	}
+	return int(n), nil
+}
+
+// documentSupersedeWhere selects the chunks SupersedeDocument retires for
+// ($1 project, $2 scope, $3 document path): servable upload chunks of the
+// document that do not belong to the survivor. The survivor subquery and the
+// outer filter share uploadChunkPredicate, the upload-only invariant, so the
+// two cannot disagree about which chunks count; DocumentOlderChunks counts
+// with the same clause, so a dry run reports exactly what would be retired.
+const documentSupersedeWhere = uploadChunkPredicate + `
+		  AND source_name = $3
+		  AND artifact_id <> (
+		        SELECT a.id FROM artifacts a
+		        WHERE a.id IN (SELECT DISTINCT artifact_id FROM project_memory_chunks
+		                       WHERE ` + uploadChunkPredicate + ` AND source_name = $3)
+		        ORDER BY a.created_at DESC, a.id DESC
+		        LIMIT 1)`
+
+// DocumentOlderChunks counts the chunks SupersedeDocument would retire for a
+// document path, without changing anything.
+func (r *Repository) DocumentOlderChunks(ctx context.Context, projectID, repoScope, documentPath string) (int, error) {
+	if r == nil || r.db == nil || projectID == "" || repoScope == "" || documentPath == "" {
+		return 0, nil
+	}
+	var n int
+	if err := r.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM project_memory_chunks WHERE `+documentSupersedeWhere,
+		projectID, repoScope, documentPath).Scan(&n); err != nil {
+		return 0, fmt.Errorf("count older chunks of %q: %w", documentPath, err)
+	}
+	return n, nil
+}
+
+// LegacyDocument is a document uploaded before document paths existed: its
+// servable chunks carry only a bare file name.
+type LegacyDocument struct {
+	Name   string
+	Chunks int
+	// ByDate counts the chunks per ingest date (YYYY-MM-DD), so an operator
+	// sees how many versions a cleanup would retire.
+	ByDate map[string]int
+}
+
+// uploadChunkPredicate restricts a chunk query to servable chunks of operator
+// uploads in one project and scope ($1, $2): the same upload-only invariant as
+// SupersedeDocument.
+const uploadChunkPredicate = `project_id = $1
+		  AND repo_scope IS NOT DISTINCT FROM $2
+		  AND lifecycle_state = 'published'
+		  AND validation_status NOT IN ('superseded','refuted','legacy')
+		  AND artifact_id IN (SELECT id FROM artifacts
+		                      WHERE project_id = $1
+		                        AND artifact_class = 'INPUT' AND origin = 'upload')`
+
+// LegacyDocuments lists the bare-name upload documents in a scope (amendment
+// A.5 of the memory rollback x supersession design). A name with a "/" is a
+// document path and is never listed.
+func (r *Repository) LegacyDocuments(ctx context.Context, projectID, repoScope string) ([]LegacyDocument, error) {
+	if r == nil || r.db == nil {
+		return nil, nil
+	}
+	rows, err := r.db.QueryContext(ctx, `
+		SELECT source_name, to_char(created_at, 'YYYY-MM-DD'), COUNT(*)
+		FROM project_memory_chunks
+		WHERE `+uploadChunkPredicate+`
+		  AND position('/' in source_name) = 0
+		GROUP BY 1, 2
+		ORDER BY 1, 2`, projectID, repoScope)
+	if err != nil {
+		return nil, fmt.Errorf("legacy documents: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+	var out []LegacyDocument
+	for rows.Next() {
+		var name, date string
+		var n int
+		if err := rows.Scan(&name, &date, &n); err != nil {
+			return nil, err
+		}
+		if len(out) == 0 || out[len(out)-1].Name != name {
+			out = append(out, LegacyDocument{Name: name, ByDate: map[string]int{}})
+		}
+		last := &out[len(out)-1]
+		last.Chunks += n
+		last.ByDate[date] += n
+	}
+	return out, rows.Err()
+}
+
+// DocumentSurvivor returns the upload artifact whose chunks SupersedeDocument
+// keeps live for a document path, or "" when the path has no servable
+// version.
+func (r *Repository) DocumentSurvivor(ctx context.Context, projectID, repoScope, documentPath string) (string, error) {
+	if r == nil || r.db == nil {
+		return "", nil
+	}
+	var id string
+	err := r.db.QueryRowContext(ctx, `
+		SELECT a.id FROM artifacts a
+		WHERE a.id IN (SELECT DISTINCT artifact_id FROM project_memory_chunks
+		               WHERE `+uploadChunkPredicate+` AND source_name = $3)
+		ORDER BY a.created_at DESC, a.id DESC
+		LIMIT 1`, projectID, repoScope, documentPath).Scan(&id)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", nil
+	}
+	if err != nil {
+		return "", fmt.Errorf("document survivor %q: %w", documentPath, err)
+	}
+	return id, nil
+}
+
+// DocumentVersionIsWhole reports whether the live version of a document path
+// was stored whole: its survivor upload's servable chunks all carry the salted
+// DocumentChunkHash, which only a whole-version (A.7) ingest writes. A version
+// ingested before that was de-duplicated against older uploads and may be
+// missing sections, so it is not whole. No survivor is not whole either.
+func (r *Repository) DocumentVersionIsWhole(ctx context.Context, projectID, repoScope, documentPath string) (bool, error) {
+	survivor, err := r.DocumentSurvivor(ctx, projectID, repoScope, documentPath)
+	if err != nil || survivor == "" {
+		return false, err
+	}
+	rows, err := r.db.QueryContext(ctx, `
+		SELECT content, content_hash FROM project_memory_chunks
+		WHERE `+uploadChunkPredicate+` AND source_name = $3 AND artifact_id = $4`,
+		projectID, repoScope, documentPath, survivor)
+	if err != nil {
+		return false, fmt.Errorf("check document version %q: %w", documentPath, err)
+	}
+	defer func() { _ = rows.Close() }()
+	n := 0
+	for rows.Next() {
+		var content, hash string
+		if err := rows.Scan(&content, &hash); err != nil {
+			return false, err
+		}
+		if !IsDocumentChunkHash(hash, survivor, content) {
+			return false, rows.Err()
+		}
+		n++
+	}
+	return n > 0, rows.Err()
+}
+
+// SupersedeLegacyDocument retires every servable bare-name upload chunk of one
+// name in a scope. The caller has established that the name belongs to exactly
+// one file and that the file's path-identity version is live; this method only
+// refuses a name that is itself a path. There is no epoch, so provenance is
+// NULL: a one-off cleanup, not restorable by rollback.
+func (r *Repository) SupersedeLegacyDocument(ctx context.Context, projectID, repoScope, name string) (int, error) {
+	if r == nil || r.db == nil || projectID == "" || name == "" || strings.Contains(name, "/") {
+		return 0, nil
+	}
+	res, err := r.db.ExecContext(ctx, `
+		UPDATE project_memory_chunks
+		SET validation_status    = 'superseded',
+		    pre_supersede_status = validation_status
+		WHERE `+uploadChunkPredicate+`
+		  AND source_name = $3`, projectID, repoScope, name)
+	if err != nil {
+		return 0, fmt.Errorf("supersede legacy document %q: %w", name, err)
+	}
+	n, err := res.RowsAffected()
+	return int(n), err
 }
 
 // splitSourceNameForSupersede separates an artifact source_name

@@ -924,7 +924,7 @@ func TestGenerateArtifactID(t *testing.T) {
 func TestExecutor_StartContainer(t *testing.T) {
 	e, _, _, _, _ := setup()
 	role := &registry.SwarmRole{Name: "worker", Runtime: registry.SwarmRoleRuntime{Image: "test-image:latest"}}
-	id, err := e.startContainer(context.Background(), &persistence.Task{ID: "t1", ProjectID: "p1"}, "e1", "test-image:latest", "worker", "/tmp/in", "/tmp/out", "/tmp/work", role, "", e.config.DefaultTimeout, nil)
+	id, err := e.startContainer(context.Background(), &persistence.Task{ID: "t1", ProjectID: "p1"}, "e1", "test-image:latest", "worker", "/tmp/in", "/tmp/out", "/tmp/work", role, "", e.config.DefaultTimeout, nil, nil)
 	assert.NoError(t, err)
 	assert.Contains(t, id, "container-")
 }
@@ -933,7 +933,7 @@ func TestExecutor_StartContainer_Error(t *testing.T) {
 	e, rt, _, _, _ := setup()
 	rt.startErr = errors.New("fail")
 	role := &registry.SwarmRole{Name: "worker", Runtime: registry.SwarmRoleRuntime{Image: "test-image:latest"}}
-	_, err := e.startContainer(context.Background(), &persistence.Task{ID: "t1"}, "e1", "test-image:latest", "worker", "/tmp/in", "/tmp/out", "/tmp/work", role, "", e.config.DefaultTimeout, nil)
+	_, err := e.startContainer(context.Background(), &persistence.Task{ID: "t1"}, "e1", "test-image:latest", "worker", "/tmp/in", "/tmp/out", "/tmp/work", role, "", e.config.DefaultTimeout, nil, nil)
 	assert.Error(t, err)
 }
 
@@ -950,7 +950,7 @@ func TestExecutor_StartContainer_ModelOverride(t *testing.T) {
 			Image: "test-image:latest",
 		},
 	}
-	_, err := e.startContainer(context.Background(), &persistence.Task{ID: "t1", ProjectID: "p1"}, "e1", "test-image:latest", "coder", "/tmp/in", "/tmp/out", "/tmp/work", role, "", e.config.DefaultTimeout, nil)
+	_, err := e.startContainer(context.Background(), &persistence.Task{ID: "t1", ProjectID: "p1"}, "e1", "test-image:latest", "coder", "/tmp/in", "/tmp/out", "/tmp/work", role, "", e.config.DefaultTimeout, nil, nil)
 	assert.NoError(t, err)
 	// Verify the container was started with the overridden model
 	rt.mu.Lock()

@@ -154,6 +154,7 @@ func navModel() []navAreaDef {
 			// the 2026-09-15 nav dedupe — it rendered the same accounts with
 			// fewer actions and only in Enterprise.
 			{Key: "operator", Label: "Accounts", Href: "/ui/operator/accounts", Icon: "navIconUsers", AdminOnly: true},
+			{Key: "regulatory", Label: "Regulatory record", Href: "/ui/operator/regulatory", Icon: "navIconAudit", AdminOnly: true},
 			{Key: "admin-skills", Label: "Skills", Href: "/ui/admin/skills", Icon: "navIconSkill"},
 			{Key: "admin-control-plane", Label: "Control plane", Href: "/ui/admin/control-plane", Icon: "navIconControlPlane"},
 			{Key: "admin-keys", Label: "Keys & access", Href: "/ui/admin/keys", Icon: "navIconKey"},

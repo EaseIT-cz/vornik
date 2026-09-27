@@ -49,6 +49,41 @@ func healingReason(t *persistence.HealingTrigger) string {
 		formatHealingValue(t.ThresholdValue) + "."
 }
 
+// healingIntent is the assistant's intent: the trigger's regression, plus the
+// most recent pre-trial refusal for the same workflow when there is one
+// (self-healing genome design, "The producer hears the last refusal",
+// 2026-09-24). Without it, a regression that persists opened a new trigger and
+// the assistant could repeat what the trial had just refused. Still derived
+// entirely from rows, so the same ledger always yields the same intent.
+//
+// Best-effort: a failed lookup is logged and the assistant runs on the plain
+// intent — a missing constraint must not block a repair, and the trial still
+// refuses a repeat.
+func (s *Server) healingIntent(ctx context.Context, t *persistence.HealingTrigger) string {
+	reason := healingReason(t)
+	if s.healingCandidateRepo == nil || s.healingTrialRepo == nil {
+		return reason
+	}
+	now := time.Now
+	if s.healingNow != nil {
+		now = s.healingNow
+	}
+	prior, err := workflowhealing.PriorRefusal(ctx, s.healingCandidateRepo, s.healingTrialRepo,
+		t.ProjectID, t.WorkflowID, now().UTC())
+	if err != nil {
+		s.logger.Warn().Err(err).Str("trigger_id", t.ID).Str("workflow_id", t.WorkflowID).
+			Msg("prior refusal lookup failed; the assistant runs without it")
+		return reason
+	}
+	if prior == nil {
+		return reason
+	}
+	s.logger.Info().Str("trigger_id", t.ID).Str("workflow_id", t.WorkflowID).
+		Str("prior_candidate_id", prior.CandidateID).Int("reasons", len(prior.Reasons)).
+		Msg("healing producer: the assistant is told about the prior refusal")
+	return reason + " " + prior.Constraint()
+}
+
 // formatHealingValue renders a metric value without pretending to a precision
 // the trigger does not carry.
 func formatHealingValue(v float64) string {
@@ -78,7 +113,7 @@ func (s *Server) generateAssistantCandidate(ctx context.Context, t *persistence.
 		return nil, errHealingProducerUnavailable
 	}
 	cp, err := s.healingAssistant.ProposeForHealing(ctx, t.ProjectID, t.WorkflowID,
-		healingReason(t), t.EvidenceExecutionIDs)
+		s.healingIntent(ctx, t), t.EvidenceExecutionIDs)
 	if err != nil {
 		return nil, err
 	}

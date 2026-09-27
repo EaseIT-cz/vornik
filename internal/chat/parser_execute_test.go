@@ -228,9 +228,10 @@ func TestExecuteAction_CancelTask_HappyPath(t *testing.T) {
 		GetFunc: func(_ context.Context, id string) (*persistence.Task, error) {
 			return &persistence.Task{ID: id, Status: persistence.TaskStatusQueued}, nil
 		},
-		UpdateStatusFunc: func(_ context.Context, _ string, s persistence.TaskStatus) error {
-			updatedStatus = s
-			return nil
+		// ONE conditional write gated on the live row (scheduler design §4.10).
+		TransitionConditionalFunc: func(_ context.Context, _ string, _ []persistence.TaskStatus, to persistence.TaskStatus, _ persistence.TransitionOpts) (bool, error) {
+			updatedStatus = to
+			return true, nil
 		},
 	}
 	res, err := ExecuteAction(context.Background(),
@@ -243,7 +244,7 @@ func TestExecuteAction_CancelTask_HappyPath(t *testing.T) {
 		t.Fatalf("Success=false; msg=%q", res.Message)
 	}
 	if updatedStatus != persistence.TaskStatusCancelled {
-		t.Errorf("UpdateStatus arg: got %s, want CANCELLED", updatedStatus)
+		t.Errorf("transition target: got %s, want CANCELLED", updatedStatus)
 	}
 }
 
@@ -294,8 +295,8 @@ func TestExecuteAction_CancelTask_UpdateError(t *testing.T) {
 		GetFunc: func(_ context.Context, id string) (*persistence.Task, error) {
 			return &persistence.Task{ID: id, Status: persistence.TaskStatusRunning}, nil
 		},
-		UpdateStatusFunc: func(context.Context, string, persistence.TaskStatus) error {
-			return errors.New("conflict")
+		TransitionConditionalFunc: func(context.Context, string, []persistence.TaskStatus, persistence.TaskStatus, persistence.TransitionOpts) (bool, error) {
+			return false, errors.New("conflict")
 		},
 	}
 	res, err := ExecuteAction(context.Background(),

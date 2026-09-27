@@ -64,8 +64,10 @@ func calibrationJournal() Journal {
 	}
 	arm := baseArm()
 	arm.TaskSetSHA256, arm.ScoringPolicySHA256, arm.TierPolicySHA256 = "tasks", "scores", "tiers"
+	pre := calibrationPreReg()
+	preHash, _ := pre.Hash()
 	j := Journal{Manifest: RunManifest{RunID: "calibration-1", Arm: arm,
-		ArmKey: arm.Key(), TaskTiers: tiers}}
+		ArmKey: arm.Key(), TaskTiers: tiers, PreRegistration: pre, PreRegistrationHash: preHash}}
 	for _, row := range []struct {
 		id     string
 		passes []bool
@@ -148,6 +150,8 @@ func TestBuildCalibration_RefusesMissingDuplicateOrHarnessEvidence(t *testing.T)
 
 func noiseFloorJournal(repeats int, gateA, gateB float64) Journal {
 	j := calibrationJournal()
+	j.Manifest.PreRegistration.Kind = RunKindNoiseFloor
+	j.Manifest.PreRegistrationHash, _ = j.Manifest.PreRegistration.Hash()
 	j.TaskScores = nil
 	for _, taskID := range []string{"gate-a", "gate-b"} {
 		for repeat := 1; repeat <= repeats; repeat++ {

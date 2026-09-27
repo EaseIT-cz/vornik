@@ -1,39 +1,192 @@
-// Tests for the audio extractor. Real whisper invocations are
-// skipped when the binary isn't on PATH (developer laptops); the
-// rest is unit-tested via the JSON-parsing seams.
+// Tests for the audio extractor. ffmpeg and whisper-cli (whisper.cpp) run in
+// the agent image through the sandbox runner (process-spawn law S5b, design
+// §7.1 decision 2); a fake sandbox plays them here and the real tools run
+// under the podman e2e lane. The rest is unit-tested via the parsing seams.
 package audio
 
 import (
 	"context"
+	"errors"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
 
 	"vornik.io/vornik/internal/extractor"
+	"vornik.io/vornik/internal/sandboxtool"
+	"vornik.io/vornik/internal/sandboxtool/sandboxtest"
 )
 
-func requireWhisper(t *testing.T) {
+// whisperCppJSON is the shape whisper-cli -oj writes (whisper.cpp v1.8.7).
+const whisperCppJSON = `{
+  "result": {"language": "en"},
+  "transcription": [
+    {"timestamps": {"from": "00:00:00,000", "to": "00:00:05,000"}, "offsets": {"from": 0, "to": 5000}, "text": " Hello, world."},
+    {"timestamps": {"from": "00:00:05,000", "to": "00:00:08,000"}, "offsets": {"from": 5000, "to": 8000}, "text": " [BLANK_AUDIO]"},
+    {"timestamps": {"from": "00:00:08,000", "to": "00:01:02,500"}, "offsets": {"from": 8000, "to": 62500}, "text": " Second sentence here."}
+  ]
+}`
+
+func writeModel(t *testing.T) string {
 	t.Helper()
-	if _, err := exec.LookPath("whisper"); err != nil {
-		t.Skip("whisper not on PATH; skipping (install via pip/brew to enable)")
+	path := filepath.Join(t.TempDir(), "ggml-base.en.bin")
+	if err := os.WriteFile(path, []byte("ggml"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
+
+func writeAudio(t *testing.T) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "meeting notes.mp3")
+	if err := os.WriteFile(path, []byte("ID3 audio"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
+
+// fakeTools plays ffmpeg (normalising to /out/audio.wav) and whisper-cli
+// (writing its JSON to /out/transcript.json).
+func fakeTools(t *testing.T, transcript string) *sandboxtest.Fake {
+	return sandboxtest.New(t, func(spec sandboxtool.Spec, in map[string][]byte, out string) error {
+		switch spec.Entrypoint {
+		case "ffmpeg":
+			return os.WriteFile(filepath.Join(out, "audio.wav"), []byte("RIFF wav of "+string(in["audio"])), 0o600)
+		case "whisper-cli":
+			return os.WriteFile(filepath.Join(out, "transcript.json"), []byte(transcript), 0o600)
+		}
+		return errors.New("unexpected tool " + spec.Entrypoint)
+	})
+}
+
+// Design §7.1 decision 2: the audio extractor moves from the Python whisper
+// CLI to whisper.cpp in the sandbox — ffmpeg normalises, whisper-cli
+// transcribes with the model mounted from its DIRECTORY at /models.
+func TestExtract_NormalisesThenTranscribesInTheSandbox(t *testing.T) {
+	model := writeModel(t)
+	audioPath := writeAudio(t)
+	sb := fakeTools(t, whisperCppJSON)
+	res, err := New(sb, model).Extract(context.Background(), extractor.Source{
+		FilePath: audioPath, MimeType: "audio/mpeg", OriginalName: "standup.mp3",
+	})
+	if err != nil {
+		t.Fatalf("Extract: %v", err)
+	}
+	specs := sb.Specs()
+	if len(specs) != 2 {
+		t.Fatalf("want an ffmpeg run and a whisper-cli run, got %d", len(specs))
+	}
+	norm, whisper := specs[0], specs[1]
+	if norm.Feature != sandboxtool.FeatureAudio || norm.Entrypoint != "ffmpeg" ||
+		strings.Join(norm.Args, " ") != "-nostdin -loglevel error -threads 2 -filter_threads 2 -i /in/audio -threads 2 -ac 1 -ar 16000 -acodec pcm_s16le -f wav /out/audio.wav" ||
+		len(norm.Inputs) != 1 || norm.Inputs[0].Name != "audio" || norm.Inputs[0].Path != audioPath {
+		t.Fatalf("normalise run = %+v", norm)
+	}
+	if whisper.Feature != sandboxtool.FeatureAudio || whisper.Entrypoint != "whisper-cli" ||
+		strings.Join(whisper.Args, " ") != "-m /models/ggml-base.en.bin -f /in/audio.wav -l auto -oj -of /out/transcript -np" ||
+		whisper.ModelDir != filepath.Dir(model) {
+		t.Fatalf("whisper run = %+v", whisper)
+	}
+	if len(whisper.Inputs) != 1 || whisper.Inputs[0].Name != "audio.wav" {
+		t.Fatalf("whisper input = %+v", whisper.Inputs)
+	}
+	// Non-speech markers ([BLANK_AUDIO]) are dropped; timestamps come from
+	// the millisecond offsets.
+	if len(res.Sections) != 2 || res.Sections[1].Content != "Second sentence here." {
+		t.Fatalf("sections = %+v", res.Sections)
+	}
+	if res.Outline[1].TimestampStartSec != 8 || res.Sections[1].Title != "00:00:08 — 00:01:02" {
+		t.Fatalf("timestamps: %+v %+v", res.Outline[1], res.Sections[1])
+	}
+	if res.Metadata.Language != "en" || res.Metadata.DurationSeconds != 62 || res.Metadata.Title != "standup" {
+		t.Fatalf("metadata = %+v", res.Metadata)
 	}
 }
 
-func TestExtract_MissingBinary_GuidesOperator(t *testing.T) {
-	ext := NewWithBinary("whisper-deliberately-missing-xyz", "")
-	_, err := ext.Extract(context.Background(), extractor.Source{FilePath: "/dev/null"})
-	if err == nil {
-		t.Fatal("expected error for missing binary")
+// Design §7.1 decision 3: with no model configured (neither
+// extractors.audio.model_path nor voice.stt.model), audio extraction is
+// "not available", and no tool runs.
+func TestExtract_NoModelIsNotAvailable(t *testing.T) {
+	for name, model := range map[string]string{
+		"unset":   "",
+		"missing": filepath.Join(t.TempDir(), "absent.bin"),
+	} {
+		t.Run(name, func(t *testing.T) {
+			sb := fakeTools(t, whisperCppJSON)
+			_, err := New(sb, model).Extract(context.Background(), extractor.Source{FilePath: writeAudio(t)})
+			if !errors.Is(err, sandboxtool.ErrNotAvailable) {
+				t.Fatalf("want not available, got %v", err)
+			}
+			if !strings.Contains(err.Error(), "extractors.audio.model_path") {
+				t.Fatalf("the error must name the key to set: %v", err)
+			}
+			if len(sb.Specs()) != 0 {
+				t.Fatal("no tool may run without a model")
+			}
+		})
 	}
-	if !strings.Contains(err.Error(), "pip install") && !strings.Contains(err.Error(), "brew install") {
-		t.Errorf("error should suggest install commands; got %v", err)
+}
+
+// §7.1 decision 4: never a host fallback — neither to whisper-cli nor to the
+// Python whisper CLI this extractor used to run.
+func TestExtract_NotAvailableNeverFallsBackToTheHost(t *testing.T) {
+	dir := t.TempDir()
+	marker := filepath.Join(dir, "ran")
+	for _, tool := range []string{"whisper", "whisper-cli", "ffmpeg"} {
+		if err := os.WriteFile(filepath.Join(dir, tool), []byte("#!/bin/sh\ntouch '"+marker+"'\n"), 0o755); err != nil { //nolint:gosec // test fixture
+			t.Fatal(err)
+		}
+	}
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	if _, err := New(nil, writeModel(t)).Extract(context.Background(), extractor.Source{FilePath: writeAudio(t)}); !errors.Is(err, sandboxtool.ErrNotAvailable) {
+		t.Fatalf("no sandbox: want not available, got %v", err)
+	}
+	sb := sandboxtest.New(t, func(sandboxtool.Spec, map[string][]byte, string) error {
+		return sandboxtest.NotAvailable(sandboxtool.FeatureAudio)
+	})
+	if _, err := New(sb, writeModel(t)).Extract(context.Background(), extractor.Source{FilePath: writeAudio(t)}); !errors.Is(err, sandboxtool.ErrNotAvailable) {
+		t.Fatalf("undeclared tool: want not available, got %v", err)
+	}
+	if _, err := os.Stat(marker); err == nil {
+		t.Fatal("a host whisper/ffmpeg ran")
+	}
+}
+
+func TestExtract_SilenceIsNoSpeech(t *testing.T) {
+	silent := `{"result":{"language":"en"},"transcription":[{"offsets":{"from":0,"to":1000},"text":" [BLANK_AUDIO]"}]}`
+	_, err := New(fakeTools(t, silent), writeModel(t)).Extract(context.Background(), extractor.Source{FilePath: writeAudio(t)})
+	if !errors.Is(err, ErrNoSpeech) {
+		t.Fatalf("want ErrNoSpeech, got %v", err)
+	}
+}
+
+func TestExtract_ToolFailuresSurface(t *testing.T) {
+	sb := sandboxtest.New(t, func(spec sandboxtool.Spec, _ map[string][]byte, _ string) error {
+		if spec.Entrypoint == "ffmpeg" {
+			return sandboxtest.Failed(sandboxtool.FeatureAudio, "Invalid data found when processing input")
+		}
+		return nil
+	})
+	_, err := New(sb, writeModel(t)).Extract(context.Background(), extractor.Source{FilePath: writeAudio(t)})
+	if err == nil || !strings.Contains(err.Error(), "Invalid data found") {
+		t.Fatalf("the tool's message must surface: %v", err)
+	}
+	if _, err := New(fakeTools(t, "{not json"), writeModel(t)).Extract(context.Background(), extractor.Source{FilePath: writeAudio(t)}); err == nil {
+		t.Fatal("malformed whisper JSON must error")
+	}
+	noJSON := sandboxtest.New(t, func(spec sandboxtool.Spec, _ map[string][]byte, out string) error {
+		if spec.Entrypoint == "ffmpeg" {
+			return os.WriteFile(filepath.Join(out, "audio.wav"), []byte("RIFF"), 0o600)
+		}
+		return nil
+	})
+	if _, err := New(noJSON, writeModel(t)).Extract(context.Background(), extractor.Source{FilePath: writeAudio(t)}); err == nil {
+		t.Fatal("a missing transcript must error")
 	}
 }
 
 func TestExtract_EmptyPath_Errors(t *testing.T) {
-	_, err := New().Extract(context.Background(), extractor.Source{})
+	_, err := New(nil, "").Extract(context.Background(), extractor.Source{})
 	if err == nil {
 		t.Fatal("expected error for empty FilePath")
 	}
@@ -137,40 +290,11 @@ func TestDurationFromSegments(t *testing.T) {
 }
 
 func TestExtractor_Identifies(t *testing.T) {
-	e := New()
+	e := New(nil, "")
 	if e.Name() != Name {
 		t.Errorf("Name = %q; want %q", e.Name(), Name)
 	}
 	if e.Version() != Version {
 		t.Errorf("Version = %q; want %q", e.Version(), Version)
-	}
-}
-
-// TestExtract_HappyPath only runs when whisper is on PATH AND
-// the user has provided a tiny fixture audio file. We don't
-// commit binary audio to the repo, so the test creates a brief
-// silent WAV (parseable by whisper as "no speech" but the
-// segment-walk plumbing still exercises). For full happy-path
-// coverage operators run `go test -v` with a real .wav at
-// $VORNIK_TEST_AUDIO_PATH.
-func TestExtract_HappyPath_RealWhisperOptional(t *testing.T) {
-	requireWhisper(t)
-	fixture := os.Getenv("VORNIK_TEST_AUDIO_PATH")
-	if fixture == "" {
-		t.Skip("set VORNIK_TEST_AUDIO_PATH to a small .wav/.mp3 to run the real-whisper happy path")
-	}
-	res, err := New().Extract(context.Background(), extractor.Source{
-		FilePath:     fixture,
-		MimeType:     "audio/mpeg",
-		OriginalName: filepath.Base(fixture),
-	})
-	if err != nil {
-		t.Fatalf("Extract: %v", err)
-	}
-	if len(res.Sections) == 0 {
-		t.Error("expected at least one section from real audio fixture")
-	}
-	if res.Metadata.DurationSeconds == 0 {
-		t.Error("DurationSeconds should be > 0 for real audio")
 	}
 }

@@ -231,3 +231,30 @@ func TestDispatch_RefusesEmptyWorkspace(t *testing.T) {
 		}
 	}
 }
+
+// Pins writePyString's escaping at the edges of the branch the 2026-09-05
+// audit found unreachable, so removing it cannot change output: Python's
+// json.dumps(ensure_ascii=True) escapes every control character, DEL and
+// every non-ASCII BMP rune as \uXXXX, and astral runes as a surrogate pair.
+func TestPyJSON_EscapesAtTheBoundaries(t *testing.T) {
+	// "#" stands for a backslash in the expectations, so no escape sequence
+	// is ever interpreted on the way into this file.
+	esc := func(s string) string { return strings.ReplaceAll(s, "#", string(rune(92))) }
+	cases := []struct{ in, want string }{
+		{string(rune(0x01)), `"#u0001"`},
+		{string(rune(0x1f)), `"#u001f"`},
+		{" ", `" "`},
+		{"~", `"~"`},
+		{string(rune(0x7f)), `"#u007f"`},
+		{string(rune(0x80)), `"#u0080"`},
+		{string(rune(0xffff)), `"#uffff"`},
+		{string(rune(0x10000)), `"#ud800#udc00"`},
+	}
+	for _, c := range cases {
+		got := pyJSON(pyObject{{"s", c.in}})
+		want := "{\n  \"s\": " + esc(c.want) + "\n}"
+		if got != want {
+			t.Errorf("pyJSON(%U) = %q, want %q", []rune(c.in)[0], got, want)
+		}
+	}
+}

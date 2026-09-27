@@ -8,6 +8,7 @@ import (
 
 	"github.com/rs/zerolog"
 
+	"vornik.io/vornik/internal/chat"
 	"vornik.io/vornik/internal/leaderelection"
 )
 
@@ -116,7 +117,17 @@ func (w *LLMConsolidateWorker) tick(ctx context.Context) {
 		if ctx.Err() != nil {
 			return
 		}
-		if err := w.processOne(ctx, pid); err != nil {
+		err := w.processOne(ctx, pid)
+		if errors.Is(err, chat.ErrOptionalWorkDisabled) {
+			// Optional LLM work is off for the narrative model (breaker design
+			// §5.3d). Every project would be refused alike: end the tick, and
+			// count it as idle, not errored.
+			w.Logger.Debug().Str("project", pid).
+				Msg("llm-consolidate worker: optional LLM work disabled; tick skipped")
+			w.recordTickOutcome("idle")
+			return
+		}
+		if err != nil {
 			failed++
 			w.recordProjectOutcome(pid, "errored")
 			w.Logger.Warn().Err(err).Str("project", pid).

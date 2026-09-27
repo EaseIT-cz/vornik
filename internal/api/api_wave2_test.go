@@ -524,7 +524,7 @@ func w2OrphanFKDB(t *testing.T) *sql.DB {
 	t.Cleanup(func() { _ = db.Close() })
 	stmts := []string{
 		`CREATE TABLE tasks (id TEXT PRIMARY KEY)`,
-		`CREATE TABLE task_llm_usage (id TEXT PRIMARY KEY, task_id TEXT, source TEXT)`,
+		`CREATE TABLE task_llm_usage (id TEXT PRIMARY KEY, task_id TEXT, source TEXT, recorded_at TIMESTAMP)`,
 		`CREATE TABLE tool_audit_log (id TEXT PRIMARY KEY, task_id TEXT)`,
 		`CREATE TABLE task_watchers (task_id TEXT)`,
 		`INSERT INTO tasks (id) VALUES ('T1')`,
@@ -542,23 +542,25 @@ func w2OrphanFKDB(t *testing.T) *sql.DB {
 // TestW2APICheckOrphanFKRows_FixDeletesOnlyTrueOrphans: with fix=true,
 // the probe DELETEs the dangling row (u2→ghost) and reports OK once all
 // orphans are cleaned, leaving the valid row (u1→T1) intact.
-func TestW2APICheckOrphanFKRows_FixDeletesOnlyTrueOrphans(t *testing.T) {
+func TestW2APICheckOrphanFKRows_FixKeepsTheCostLedger(t *testing.T) {
 	db := w2OrphanFKDB(t)
 	h := &DoctorHandlers{db: db}
 
 	got := h.checkOrphanFKRows(t.Context(), true)
 	assert.Equal(t, "orphan_fk_rows", got.Name)
-	assert.Equal(t, "OK", got.Status, "all orphans cleaned → OK")
-	assert.Equal(t, 1, got.Fixed)
+	assert.Equal(t, "OK", got.Status, "a cost-ledger row outliving its task is not a finding")
+	// Orphan-FK ledger design (2026-09-24): task_llm_usage is the cost ledger;
+	// --fix never deletes from it, even for a task that no longer exists.
+	assert.Equal(t, 0, got.Fixed)
+	assert.Equal(t, 1, got.Kept)
 
-	// The valid row survives; the orphan is gone.
 	var remaining int
 	require.NoError(t, db.QueryRow(`SELECT COUNT(*) FROM task_llm_usage`).Scan(&remaining))
-	assert.Equal(t, 1, remaining, "only the dangling row may be deleted")
+	assert.Equal(t, 2, remaining, "no cost-ledger row may be deleted by --fix")
 
 	var ghost int
 	require.NoError(t, db.QueryRow(`SELECT COUNT(*) FROM task_llm_usage WHERE task_id='ghost'`).Scan(&ghost))
-	assert.Equal(t, 0, ghost)
+	assert.Equal(t, 1, ghost, "the row for the deleted task is kept, as the record of money spent")
 }
 
 // ---------------------------------------------------------------------

@@ -31,7 +31,7 @@ func tradingFloorProject(id string) *registry.Project {
 func TestEntryPolicyGatesApprovalsWithScorecardOff(t *testing.T) {
 	p := tradingFloorProject("trade")
 	p.Trading.Scorecard.Enabled = false
-	p.Trading.EntryPolicy = trading.EntryPolicy{Enabled: true, AllowedSymbols: []string{"AAPL"}, LongOnly: true, MaxRiskUSD: 50, MaxEntriesPerTick: 1}
+	p.Trading.EntryPolicy = trading.EntryPolicy{Enabled: true, AllowedSymbols: []string{"AAPL"}, LongOnly: true, NoPositionAdditions: true, MaxRiskUSD: 50, MaxEntriesPerTick: 1}
 	resolver := &MockWorkflowResolver{projects: map[string]*registry.Project{"trade": p}}
 	e := &Executor{logger: zerolog.Nop(), workflows: resolver}
 	task := &persistence.Task{ID: "t", ProjectID: "trade", Payload: []byte(`{"taskType":"trading"}`)}

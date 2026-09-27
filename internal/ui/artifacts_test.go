@@ -287,12 +287,19 @@ func TestProjectArtifacts_DeleteRemovesFile(t *testing.T) {
 	assert.True(t, os.IsNotExist(err), "file should have been removed: err=%v", err)
 }
 
-func TestProjectArtifacts_DeleteCommitsArtifactRelativePath(t *testing.T) {
+// TestProjectArtifacts_DeleteMakesNoGitCommit: the delete removes the file and
+// the daemon runs no git — process-spawn law S3
+// (https://docs.vornik.io). Incident: the
+// handler ran `git add -u` + `git commit` on request. The deletion is left as a
+// working-tree change, which the next task's merge-time auto-commit (task
+// orchestration, on the law's allowlist) records.
+func TestProjectArtifacts_DeleteMakesNoGitCommit(t *testing.T) {
 	root := stageWorkspace(t, "demo")
 	projectDir := filepath.Join(root, "demo")
 	runGit(t, projectDir, "init")
 	runGit(t, projectDir, "-c", "user.name=test", "-c", "user.email=test@example.invalid", "add", "artifacts")
 	runGit(t, projectDir, "-c", "user.name=test", "-c", "user.email=test@example.invalid", "commit", "-m", "seed artifact")
+	headBefore := runGit(t, projectDir, "rev-parse", "HEAD")
 
 	s := NewServer(WithProjectWorkspaceRoot(root))
 	form := url.Values{}
@@ -305,19 +312,19 @@ func TestProjectArtifacts_DeleteCommitsArtifactRelativePath(t *testing.T) {
 	s.ProjectArtifactDelete(w, req, "demo")
 
 	require.Equal(t, http.StatusSeeOther, w.Code)
-	status := runGit(t, projectDir, "status", "--short")
-	assert.Equal(t, "", strings.TrimSpace(status), "artifact deletion should be committed, not left as a dirty D entry")
-	log := runGit(t, projectDir, "log", "-1", "--pretty=%s")
-	assert.Contains(t, log, "ui: deleted artifact artifacts/out/note.md")
+	_, err := os.Stat(filepath.Join(projectDir, "artifacts", "out", "note.md"))
+	assert.True(t, os.IsNotExist(err), "the file must be removed: err=%v", err)
+	assert.Equal(t, headBefore, runGit(t, projectDir, "rev-parse", "HEAD"), "the delete must make no git commit")
+	assert.Contains(t, runGit(t, projectDir, "status", "--short"), "D artifacts/out/note.md",
+		"the deletion is left for the next task's auto-commit")
 }
 
 // TestProjectArtifacts_DeleteTakesWorkspaceLock asserts the delete path
 // acquires the SAME shared per-project workspace lock the executor and the
-// git-over-HTTPS handler take (lock-on-mutation). We inject a Locker, hold the
-// project's exclusive lock from another goroutine, fire the delete, and assert
-// it does NOT complete (file still present) while we hold the lock — then
-// release and confirm the delete proceeds. This proves the handler blocks on
-// the injected lock for that project ID.
+// git-over-HTTPS handler take (lock-on-mutation) around the UNLINK, the
+// workspace mutation. We hold the project's exclusive lock, fire the delete,
+// and assert the file is still present while we hold it — then release and
+// confirm the delete proceeds.
 func TestProjectArtifacts_DeleteTakesWorkspaceLock(t *testing.T) {
 	root := stageWorkspace(t, "demo")
 	lock := workspacelock.New()
@@ -344,15 +351,15 @@ func TestProjectArtifacts_DeleteTakesWorkspaceLock(t *testing.T) {
 
 	target := filepath.Join(root, "demo", "artifacts", "out", "note.md")
 
-	// While we hold the lock the handler must NOT finish: it blocks on
-	// lock.Lock("demo") before its git commit + the redirect write.
-	// (The unlink itself happens before the lock; what the lock guards
-	// is the git mutation, so the handler cannot complete until we
-	// release.)
+	// While we hold the lock the handler must NOT finish, and must not have
+	// removed the file: it blocks on lock.Lock("demo") before the unlink.
 	select {
 	case <-done:
 		t.Fatal("delete completed while the project workspace lock was held — handler did not take the shared lock")
 	case <-time.After(150 * time.Millisecond):
+	}
+	if _, err := os.Stat(target); err != nil {
+		t.Fatalf("the file was removed while the workspace lock was held: %v", err)
 	}
 
 	// Release the lock; the handler must now proceed to completion.

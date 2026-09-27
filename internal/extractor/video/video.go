@@ -5,12 +5,13 @@
 // the audio track is speech that whisper turns into text. That is the whole
 // design — one mechanism, reused, rather than a third special case.
 //
-// Approach: shell out to ffprobe (metadata) and ffmpeg (frame sampling),
-// matching the audio extractor's whisper shell-out and the PDF extractor's
-// poppler shell-out. A CGO binding would conflict with the daemon's
-// CGO_ENABLED=0 posture and lag upstream releases. Neither binary is a new
-// deployment dependency: voice already requires ffmpeg
-// (voice.stt.ffmpeg_path), and ffprobe ships in the same package.
+// Approach: ffprobe (metadata) and ffmpeg (frame sampling), run in the
+// pinned agent image through the sandbox runner (process-spawn law S5b,
+// https://docs.vornik.io §7), like the
+// other media extractors: an uploaded video is untrusted input, parsed in a
+// network-less, memory-bounded one-shot, never on the daemon host. A CGO
+// binding would conflict with the daemon's CGO_ENABLED=0 posture and lag
+// upstream releases.
 //
 // Frame sampling is uniform-interval, not scene-change detection. Uniform is
 // predictable and cheap, and adequate for "what is this video about"; the
@@ -22,18 +23,17 @@
 package video
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
 
 	"vornik.io/vornik/internal/extractor"
+	"vornik.io/vornik/internal/sandboxtool"
 )
 
 // Name identifies this extractor on every extracted_documents row.
@@ -56,25 +56,27 @@ const (
 	sectionFrames   = "002-frames"
 )
 
+// inputName is the fixed name the video has in /in: the operator's file name
+// never reaches argv.
+const inputName = "video"
+
 // Extractor implements extractor.Extractor for video files. Stateless
 // across calls.
 type Extractor struct {
-	ffmpegPath  string // empty = look up "ffmpeg" on PATH
-	ffprobePath string // empty = look up "ffprobe" on PATH
+	sandbox     sandboxtool.Sandbox
 	maxFrames   int
 	minInterval int
 }
 
-// New returns the default extractor: ffmpeg/ffprobe from PATH, built-in
-// sampling bounds.
-func New() *Extractor { return &Extractor{} }
+// New returns an extractor that runs ffprobe/ffmpeg through sb, with the
+// built-in sampling bounds. A nil sb makes every extraction "not available".
+func New(sb sandboxtool.Sandbox) *Extractor { return &Extractor{sandbox: sb} }
 
-// NewWithOptions lets the operator (and tests) override the binaries and
-// the sampling bounds. Zero values fall back to the defaults.
-func NewWithOptions(ffmpegPath, ffprobePath string, maxFrames, minIntervalSeconds int) *Extractor {
+// NewWithOptions lets the operator (and tests) override the sampling
+// bounds. Zero values fall back to the defaults.
+func NewWithOptions(sb sandboxtool.Sandbox, maxFrames, minIntervalSeconds int) *Extractor {
 	return &Extractor{
-		ffmpegPath:  ffmpegPath,
-		ffprobePath: ffprobePath,
+		sandbox:     sb,
 		maxFrames:   maxFrames,
 		minInterval: minIntervalSeconds,
 	}
@@ -113,12 +115,11 @@ func (e *Extractor) Extract(ctx context.Context, src extractor.Source) (extracto
 	if src.FilePath == "" {
 		return extractor.Result{}, fmt.Errorf("video: source file path is empty")
 	}
-	ffprobe, err := e.resolve(e.ffprobePath, "ffprobe")
-	if err != nil {
-		return extractor.Result{}, err
+	if e.sandbox == nil {
+		return extractor.Result{}, fmt.Errorf("video: ffprobe: %w (no sandbox runner)", sandboxtool.ErrNotAvailable)
 	}
 
-	probe, probeErr := runFFprobe(ctx, ffprobe, src.FilePath)
+	probe, probeErr := e.runFFprobe(ctx, src.FilePath)
 	if probeErr != nil {
 		return extractor.Result{}, probeErr
 	}
@@ -160,20 +161,6 @@ func (e *Extractor) Extract(ctx context.Context, src extractor.Source) (extracto
 	}, nil
 }
 
-// resolve looks up a binary, returning an error that tells the operator how
-// to install it rather than a bare "not found".
-func (e *Extractor) resolve(configured, fallback string) (string, error) {
-	binary := configured
-	if binary == "" {
-		binary = fallback
-	}
-	resolved, err := exec.LookPath(binary)
-	if err != nil {
-		return "", fmt.Errorf("video: %s not found on PATH (install ffmpeg — the voice subsystem already requires it): %w", binary, err)
-	}
-	return resolved, nil
-}
-
 // samplingPlan converts a duration into (interval, frame count), honouring
 // the interval floor so a short clip does not yield near-identical frames.
 func (e *Extractor) samplingPlan(durationSeconds float64) (interval, frames int) {
@@ -209,37 +196,33 @@ type frame struct {
 	content []byte
 }
 
-// sampleFrames runs one ffmpeg pass writing JPEG frames at a fixed rate
-// into a temp dir, then reads them back as bytes for the Runner to persist.
+// sampleFrames runs one ffmpeg pass in the sandbox writing JPEG frames at
+// a fixed rate into /out, then reads them back as bytes for the Runner to
+// persist.
 func (e *Extractor) sampleFrames(ctx context.Context, path string, interval, wanted int) ([]frame, error) {
-	ffmpeg, err := e.resolve(e.ffmpegPath, "ffmpeg")
+	res, err := e.sandbox.Run(ctx, sandboxtool.Spec{
+		Feature:    sandboxtool.FeatureVideo,
+		Entrypoint: "ffmpeg",
+		Args: []string{
+			"-nostdin", "-loglevel", "error", "-threads", sandboxtool.FFmpegThreads, "-filter_threads", sandboxtool.FFmpegThreads,
+			"-i", "/in/" + inputName, "-threads", sandboxtool.FFmpegThreads,
+			// The first frame, then the first at least interval seconds
+			// after the last one kept. fps=1/<interval> emitted no frame at
+			// all from a clip shorter than the interval (S5b e2e,
+			// 2026-09-26); select keeps frame 0 whatever the length.
+			"-vf", fmt.Sprintf(`select=isnan(prev_selected_t)+gte(t-prev_selected_t\,%d)`, interval),
+			"-fps_mode", "vfr",
+			"-frames:v", strconv.Itoa(wanted),
+			"-q:v", "3",
+			"/out/frame-%03d.jpg",
+		},
+		Inputs: []sandboxtool.Input{{Name: inputName, Path: path}},
+	})
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("ffmpeg frame sampling failed: %w", err)
 	}
-	outDir, err := os.MkdirTemp("", "vornik-video-frames-*")
-	if err != nil {
-		return nil, fmt.Errorf("create temp dir: %w", err)
-	}
-	defer func() { _ = os.RemoveAll(outDir) }()
-
-	args := []string{
-		"-nostdin", "-loglevel", "error",
-		"-i", path,
-		"-vf", fmt.Sprintf("fps=1/%d", interval),
-		"-frames:v", strconv.Itoa(wanted),
-		"-q:v", "3",
-		filepath.Join(outDir, "frame-%03d.jpg"),
-	}
-	cmd := exec.CommandContext(ctx, ffmpeg, args...)
-	var stderr bytes.Buffer
-	cmd.Stderr = &stderr
-	if err := cmd.Run(); err != nil {
-		msg := strings.TrimSpace(stderr.String())
-		if msg == "" {
-			msg = err.Error()
-		}
-		return nil, fmt.Errorf("ffmpeg frame sampling failed: %s", msg)
-	}
+	defer res.Close()
+	outDir := res.OutDir
 
 	entries, err := os.ReadDir(outDir)
 	if err != nil {
@@ -326,25 +309,51 @@ func formatOffset(seconds int) string {
 	return fmt.Sprintf("%dm%02ds", seconds/60, seconds%60)
 }
 
-func runFFprobe(ctx context.Context, ffprobe, path string) (*ffprobeOutput, error) {
-	cmd := exec.CommandContext(ctx, ffprobe,
-		"-v", "error",
-		"-print_format", "json",
-		"-show_format", "-show_streams",
-		path,
-	)
-	var stdout, stderr bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
-	if err := cmd.Run(); err != nil {
-		msg := strings.TrimSpace(stderr.String())
-		if msg == "" {
-			msg = err.Error()
+// Duration runs ffprobe on path in the sandbox and returns the media's
+// duration in seconds and whether it has an audio track: the probe run
+// Extract makes, exported so `vornikctl doctor` checks ffprobe with it.
+func (e *Extractor) Duration(ctx context.Context, path string) (seconds float64, hasAudio bool, err error) {
+	if e.sandbox == nil {
+		return 0, false, fmt.Errorf("video: ffprobe: %w (no sandbox runner)", sandboxtool.ErrNotAvailable)
+	}
+	probe, err := e.runFFprobe(ctx, path)
+	if err != nil {
+		return 0, false, err
+	}
+	for _, s := range probe.Streams {
+		if s.CodecType == "audio" {
+			hasAudio = true
 		}
-		return nil, fmt.Errorf("video: ffprobe failed: %s", msg)
+	}
+	return parseSeconds(probe.Format.Duration), hasAudio, nil
+}
+
+// runFFprobe reads the video's format and streams in the sandbox. ffprobe
+// writes its JSON to /out (-o), so the run's combined output stays a
+// diagnostic and never mixes into the parse.
+func (e *Extractor) runFFprobe(ctx context.Context, path string) (*ffprobeOutput, error) {
+	res, err := e.sandbox.Run(ctx, sandboxtool.Spec{
+		Feature:    sandboxtool.FeatureVideo,
+		Entrypoint: "ffprobe",
+		Args: []string{
+			"-v", "error",
+			"-print_format", "json",
+			"-show_format", "-show_streams",
+			"-o", "/out/probe.json",
+			"/in/" + inputName,
+		},
+		Inputs: []sandboxtool.Input{{Name: inputName, Path: path}},
+	})
+	if err != nil {
+		return nil, fmt.Errorf("video: ffprobe: %w", err)
+	}
+	defer res.Close()
+	raw, err := os.ReadFile(filepath.Join(res.OutDir, "probe.json"))
+	if err != nil {
+		return nil, fmt.Errorf("video: ffprobe wrote no output: %w", err)
 	}
 	var out ffprobeOutput
-	if err := json.Unmarshal(stdout.Bytes(), &out); err != nil {
+	if err := json.Unmarshal(raw, &out); err != nil {
 		return nil, fmt.Errorf("video: parse ffprobe JSON: %w", err)
 	}
 	return &out, nil

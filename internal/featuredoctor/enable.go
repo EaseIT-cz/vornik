@@ -266,6 +266,12 @@ var renameFunc = os.Rename
 // crash-mid-write is recoverable; a hard failure here would otherwise leave
 // the operator unable to save config at all on these (common) deployments.
 func (w *FileConfigWriter) Write(data []byte) error {
+	// Process-spawn law, reading 3: no daemon write may add or alter a stdio
+	// MCP server, whose program the daemon launches on the reload that follows.
+	existing, _ := os.ReadFile(w.Path)
+	if err := config.StdioMCPChange(existing, data); err != nil {
+		return err
+	}
 	dir := filepath.Dir(w.Path)
 	tmp, err := os.CreateTemp(dir, ".config-*.yaml.tmp")
 	if err != nil {

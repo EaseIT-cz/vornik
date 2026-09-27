@@ -289,9 +289,13 @@ func TestCheckOrphanWorktrees_FixRemovesOnlyClassifiedOrphans(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	fixed, items := fixOrphanWorktreeFindings(findings, root)
+	// The daemon removes the directories (no spawn) and reports which ones, so
+	// vornikctl doctor --fix can clean git's side on the host (process-spawn
+	// law, S2: the git worktree prune / branch -D left the daemon).
+	fixed, items, removed := fixOrphanWorktreeFindings(findings)
 	assert.Equal(t, 2, fixed)
 	assert.Len(t, items, 2)
+	assert.ElementsMatch(t, []string{"project-1/task-missing", "project-1/task-failed"}, removed)
 	assert.NoDirExists(t, missing)
 	assert.NoDirExists(t, failed)
 	assert.DirExists(t, running)

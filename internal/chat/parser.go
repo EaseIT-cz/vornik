@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
@@ -43,12 +44,13 @@ type Action struct {
 	// the resolved value here.
 	Priority int                    `json:"priority,omitempty"` // for create_task
 	Input    map[string]interface{} `json:"input,omitempty"`
-	// Confirm gates destructive actions (cancel_task, retry_task). The
-	// server refuses to execute a destructive action unless Confirm is
-	// true, returning a confirmation prompt instead — so an ambiguous or
-	// accidental request can't cancel/retry in a single turn. The caller
-	// (chat agent) sets this only after the user has explicitly agreed.
-	Confirm bool `json:"confirm,omitempty"`
+	// Confirm gates destructive actions (cancel_task, retry_task): ExecuteAction refuses a
+	// destructive action unless it is true. It is NOT decodable from JSON (`json:"-"`), so no
+	// model-emitted text — a tool argument or an action block parsed by ParseActions — can set
+	// it. INVARIANT (chat memory-write design §12): ExecuteAction's only production callers are
+	// the dispatcher's task tools, which set it only after dispatcher.authorizeTaskAction granted
+	// — the user's own acknowledgement, stamped from their inbound turn.
+	Confirm bool `json:"-"`
 	// ChatTurnID, when non-empty, is stamped onto Task.ChatTurnID
 	// during create_task so the dispatcher turn that spawned the task
 	// can be queried later (in-conversation dedup, follow-up
@@ -100,15 +102,18 @@ func isDestructiveAction(actionType string) bool {
 // confirmationPrompt is the message returned when a destructive action is
 // refused pending confirmation.
 func confirmationPrompt(action Action) string {
+	// Reached only when a destructive action arrives without the dispatcher's authorization
+	// (chat memory-write design §12). The model cannot fix that by re-issuing the call with a
+	// flag — the confirmation comes from the user's own turn, through the task tool.
 	switch action.Type {
 	case ActionCancelTask:
-		return fmt.Sprintf("Confirmation required: cancelling task %s stops in-progress work and cannot be undone. "+
-			"Confirm with the user, then re-issue cancel_task with confirm=true.", action.TaskID)
+		return fmt.Sprintf("Confirmation required: cancelling task %s needs the user's own confirmation, "+
+			"collected by the cancel_task tool. Nothing was cancelled.", action.TaskID)
 	case ActionRetryTask:
-		return fmt.Sprintf("Confirmation required: retrying task %s re-runs it and spends additional budget. "+
-			"Confirm with the user, then re-issue retry_task with confirm=true.", action.TaskID)
+		return fmt.Sprintf("Confirmation required: retrying task %s needs the user's own confirmation, "+
+			"collected by the retry_task tool. Nothing was retried.", action.TaskID)
 	default:
-		return fmt.Sprintf("Confirmation required for %s; re-issue with confirm=true after the user agrees.", action.Type)
+		return fmt.Sprintf("Confirmation required for %s: it needs the user's own confirmation. Nothing was done.", action.Type)
 	}
 }
 
@@ -179,7 +184,8 @@ func ParseActions(response string) []Action {
 
 // ExecuteAction executes an action against the task API.
 func ExecuteAction(ctx context.Context, action Action, taskRepo persistence.TaskRepository, execRepo persistence.ExecutionRepository, gate *BudgetGate) (ActionResult, error) {
-	// Confirmation gate: a destructive action must carry Confirm=true or
+	// Confirmation gate: a destructive action must carry Confirm (set only by the
+	// dispatcher after an authorized two-step, §12 — never decodable from JSON) or
 	// it is refused (not executed) with a confirmation prompt, so an
 	// ambiguous request can't cancel/retry in a single turn (security LLD
 	// review batch 3). Authz is enforced separately at the tool layer.
@@ -374,19 +380,36 @@ func executeCancelTask(ctx context.Context, action Action, taskRepo persistence.
 		}, fmt.Errorf("task not found: %s", action.TaskID)
 	}
 
-	// Check if task can be cancelled
-	if task.Status == persistence.TaskStatusCompleted || task.Status == persistence.TaskStatusFailed || task.Status == persistence.TaskStatusCancelled {
+	// Fast path for a clear message; it does not guard the write (scheduler
+	// design §4.10). CLOSED is an end state too — the old check let it through.
+	cancellable := persistence.CancellableTaskStatuses()
+	if !slices.Contains(cancellable, task.Status) {
 		return ActionResult{
 			Success: false,
 			Message: fmt.Sprintf("Task %s is already in terminal state: %s", task.ID, task.Status),
 		}, fmt.Errorf("task is already in terminal state")
 	}
 
-	if err := taskRepo.UpdateStatus(ctx, action.TaskID, persistence.TaskStatusCancelled); err != nil {
+	// ONE conditional write, gated on the live row: a task that finished
+	// between the read above and this write is left as it is.
+	moved, err := taskRepo.TransitionConditional(ctx, action.TaskID,
+		cancellable, persistence.TaskStatusCancelled, persistence.TransitionOpts{})
+	if err != nil {
 		return ActionResult{
 			Success: false,
 			Message: fmt.Sprintf("Failed to cancel task: %v", err),
 		}, err
+	}
+	if !moved {
+		// Report the row's CURRENT status: the snapshot is what went stale.
+		now := "a non-cancellable state"
+		if fresh, ferr := taskRepo.Get(ctx, action.TaskID); ferr == nil && fresh != nil {
+			now = string(fresh.Status)
+		}
+		return ActionResult{
+			Success: false,
+			Message: fmt.Sprintf("Task %s moved to %s before it could be cancelled.", action.TaskID, now),
+		}, fmt.Errorf("task is no longer cancellable")
 	}
 
 	return ActionResult{

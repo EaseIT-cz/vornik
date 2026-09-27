@@ -890,6 +890,9 @@ CREATE TABLE IF NOT EXISTS project_memory_chunks (
 );
 CREATE INDEX IF NOT EXISTS idx_chunks_project_needs ON project_memory_chunks(project_id, needs_graph_extraction);
 CREATE INDEX IF NOT EXISTS idx_chunks_project_time ON project_memory_chunks(project_id, created_at);
+-- Migration 200: SupersedeDocument filters one document's chunks by
+-- (project, scope, source_name).
+CREATE INDEX IF NOT EXISTS idx_memory_chunks_document ON project_memory_chunks(project_id, repo_scope, source_name);
 CREATE INDEX IF NOT EXISTS idx_chunks_project_scope ON project_memory_chunks(project_id, repo_scope, created_at DESC);
 -- Partial, and carrying id as its last key, because the recency re-rank's
 -- EXISTS compares the row-value tuple (created_at, id) so that two members
@@ -1012,7 +1015,8 @@ CREATE TABLE IF NOT EXISTS project_ingest_queue (
     started_at          TEXT,
     finished_at         TEXT,
     last_error          TEXT,
-    repo_scope          TEXT
+    repo_scope          TEXT,
+    document_path       TEXT  -- migration 200: the file's path in its repository, for a document ingest; NULL = not one
 );
 CREATE INDEX IF NOT EXISTS idx_ingest_project_state ON project_ingest_queue(project_id, state);
 CREATE INDEX IF NOT EXISTS idx_ingest_state_started ON project_ingest_queue(state, started_at);
@@ -1899,28 +1903,7 @@ CREATE INDEX IF NOT EXISTS idx_execution_tool_grants_lookup
 -- execution_quality_scores — one deterministic quality verdict for every
 -- terminal execution. The publisher reconciles terminal executions missing a
 -- row, so execution_id is both identity and completeness boundary.
-CREATE TABLE IF NOT EXISTS execution_quality_scores (
-    execution_id       TEXT PRIMARY KEY REFERENCES executions(id) ON DELETE CASCADE,
-    project_id         TEXT NOT NULL,
-    task_id            TEXT NOT NULL,
-    workflow_id        TEXT NOT NULL,
-    workflow_revision  TEXT NOT NULL,
-    scorer_version     TEXT NOT NULL,
-    scoring_policy_sha TEXT NOT NULL DEFAULT '',
-    kind               TEXT NOT NULL DEFAULT '',
-    status             TEXT NOT NULL CHECK (status IN ('scored','missing_contract','invalid_evidence','not_applicable')),
-    score              REAL,
-    passed_case_count  INTEGER NOT NULL DEFAULT 0,
-    pinned_case_count  INTEGER NOT NULL DEFAULT 0,
-    diagnostic         TEXT NOT NULL DEFAULT '',
-    case_evidence      TEXT NOT NULL DEFAULT '[]',
-    recorded_at        TEXT NOT NULL,
-    CHECK ((status = 'not_applicable' AND score IS NULL) OR
-           (status <> 'not_applicable' AND score IS NOT NULL)),
-    CHECK (score IS NULL OR (score >= 0 AND score <= 1)),
-    CHECK (passed_case_count >= 0 AND pinned_case_count >= passed_case_count)
-);
-CREATE INDEX IF NOT EXISTS idx_execution_quality_scores_project_time
+` + executionQualityScoresTableSQL + `CREATE INDEX IF NOT EXISTS idx_execution_quality_scores_project_time
     ON execution_quality_scores (project_id, recorded_at DESC);
 CREATE INDEX IF NOT EXISTS idx_execution_quality_scores_workflow_time
     ON execution_quality_scores (workflow_id, recorded_at DESC);
@@ -2077,4 +2060,32 @@ CREATE INDEX IF NOT EXISTS idx_ui_sessions_user ON ui_sessions (user_id);
 CREATE INDEX IF NOT EXISTS idx_ui_sessions_origin_credential
     ON ui_sessions (origin_credential_id) WHERE revoked_at IS NULL AND origin_credential_id IS NOT NULL;
 
+`
+
+// executionQualityScoresTableSQL is the execution_quality_scores table, shared
+// by schemaSQL and by the table rebuild that brings an existing database's
+// CHECKs up to date (sqliteTableRebuilds). One copy, so the two cannot drift.
+// The `unscorable` status (agent-quality-benchmark design, amendment
+// 2026-09-26) is the rebuild's marker.
+const executionQualityScoresTableSQL = `CREATE TABLE IF NOT EXISTS execution_quality_scores (
+    execution_id       TEXT PRIMARY KEY REFERENCES executions(id) ON DELETE CASCADE,
+    project_id         TEXT NOT NULL,
+    task_id            TEXT NOT NULL,
+    workflow_id        TEXT NOT NULL,
+    workflow_revision  TEXT NOT NULL,
+    scorer_version     TEXT NOT NULL,
+    scoring_policy_sha TEXT NOT NULL DEFAULT '',
+    kind               TEXT NOT NULL DEFAULT '',
+    status             TEXT NOT NULL CHECK (status IN ('scored','missing_contract','invalid_evidence','not_applicable','unscorable')),
+    score              REAL,
+    passed_case_count  INTEGER NOT NULL DEFAULT 0,
+    pinned_case_count  INTEGER NOT NULL DEFAULT 0,
+    diagnostic         TEXT NOT NULL DEFAULT '',
+    case_evidence      TEXT NOT NULL DEFAULT '[]',
+    recorded_at        TEXT NOT NULL,
+    CHECK ((status IN ('not_applicable','unscorable') AND score IS NULL) OR
+           (status NOT IN ('not_applicable','unscorable') AND score IS NOT NULL)),
+    CHECK (score IS NULL OR (score >= 0 AND score <= 1)),
+    CHECK (passed_case_count >= 0 AND pinned_case_count >= passed_case_count)
+);
 `

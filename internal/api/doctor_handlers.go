@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"net/http"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -16,10 +15,10 @@ import (
 	"vornik.io/vornik/internal/chat"
 	"vornik.io/vornik/internal/config"
 	"vornik.io/vornik/internal/featuredoctor"
-	"vornik.io/vornik/internal/imagemanifest"
 	"vornik.io/vornik/internal/persistence"
 	"vornik.io/vornik/internal/pricing"
 	"vornik.io/vornik/internal/registry"
+	"vornik.io/vornik/internal/version"
 )
 
 // DoctorCheck is a single diagnostic finding.
@@ -29,6 +28,13 @@ type DoctorCheck struct {
 	Message string   `json:"message"`
 	Items   []string `json:"items,omitempty"`
 	Fixed   int      `json:"fixed,omitempty"`
+	// Kept counts rows a check deliberately keeps although they match its
+	// pattern (orphan_fk_rows: cost-ledger rows whose task was deleted).
+	Kept int `json:"kept,omitempty"`
+	// Removed names the "<project>/<taskID>" worktrees an orphan_worktrees fix
+	// deleted, so `vornikctl doctor --fix` can clean git's side of each on the
+	// host (process-spawn law, S2: the daemon no longer runs git for it).
+	Removed []string `json:"removed,omitempty"`
 }
 
 // DoctorReport is the full doctor response.
@@ -36,10 +42,50 @@ type DoctorReport struct {
 	Timestamp string        `json:"timestamp"`
 	Checks    []DoctorCheck `json:"checks"`
 	Summary   string        `json:"summary"`
+	// DaemonRevision is the commit this daemon was built from (build info; no
+	// spawn). vornikctl's host image-freshness check compares the host's
+	// images against it rather than against its own build.
+	DaemonRevision string `json:"daemon_revision,omitempty"`
+}
+
+// hostChecksNotice replaces the doctor checks that must run a program on the
+// host (podman_config, agent_images, agent_image_uid, image_freshness). They
+// ran inside this handler until the process-spawn law, S2
+// (https://docs.vornik.io): a REST
+// request must not reach a process spawn, so they run in `vornikctl doctor`,
+// on the host, and are merged into the same report there. SKIPPED, not OK: the
+// daemon has not examined them.
+func hostChecksNotice() DoctorCheck {
+	return DoctorCheck{
+		Name:    "host_checks",
+		Status:  "SKIPPED",
+		Message: "host checks (podman, agent images, image freshness, systemd) run on the host: vornikctl doctor",
+	}
+}
+
+// resolveDaemonRevision returns the commit this daemon was built from, or ""
+// for a build that carries no VCS stamp.
+func (h *DoctorHandlers) resolveDaemonRevision() string {
+	if h.daemonRevisionFunc != nil {
+		return h.daemonRevisionFunc()
+	}
+	rev, dirty, ok := version.BuildRevision()
+	if !ok || rev == "" {
+		return ""
+	}
+	if dirty {
+		rev += "-dirty"
+	}
+	return rev
 }
 
 // DoctorHandlers provides the /api/v1/doctor endpoint.
 type DoctorHandlers struct {
+	// buildRevision reports the running binary's revision for
+	// config_template_drift's baseline-currency test; nil means
+	// version.BuildRevision. A seam because a test binary carries no VCS stamp.
+	buildRevision func() (rev string, dirty, ok bool)
+
 	// thresholds holds the resolved doctor bounds — the operator's
 	// doctor.thresholds folded over the compiled defaults, each value carrying
 	// which of the two supplied it. thresholdsKnown distinguishes "no config
@@ -81,16 +127,24 @@ type DoctorHandlers struct {
 	// not be indistinguishable here.
 	depsInventory DependencyInventory
 
-	db             *sql.DB
-	configDir      string
-	configPath     string // path config.yaml was loaded from, for checkConfigSecretHygiene
-	serverAddress  string
-	apiAuthEnabled bool
-	apiKeys        []string
-	pricingPath    string
-	artifactsRoot  string
-	workspacesRoot string
-	gatewayURL     string
+	// gitConfigComposition is the daemon's startup composition of its git
+	// config (process-spawn law S6-D4), for checkGitConfigComposition. nil
+	// means not wired: the check reports SKIPPED.
+	gitConfigComposition *GitConfigComposition
+
+	db        *sql.DB
+	configDir string
+	// workflowProposals is the applied-proposal ledger config_template_drift
+	// consults to explain hunks an approved remove/reorder deleted (slice E).
+	workflowProposals workflowProposalLedger
+	configPath        string // path config.yaml was loaded from, for checkConfigSecretHygiene
+	serverAddress     string
+	apiAuthEnabled    bool
+	apiKeys           []string
+	pricingPath       string
+	artifactsRoot     string
+	workspacesRoot    string
+	gatewayURL        string
 	// agentLLMEndpoint and unixSocketPath back checkAgentLLMTopology, the
 	// fresh-install "Invalid API key" guard (F2b): agents mint per-task keys
 	// that only the daemon's own /api/v1 proxy accepts, and an empty
@@ -200,12 +254,10 @@ type DoctorHandlers struct {
 	// Nil-safe — the enable endpoint returns 503 when absent.
 	configReloader *config.ConfigReloader
 
-	// chatRoutePrefixes is a snapshot of the configured chat
-	// model_route prefixes (config.Chat.Router.Routes[].Prefix),
-	// captured at boot by SetServerConfig. checkModelRouteCoverage
-	// uses it to assert every swarm-role model resolves to a route.
-	// Empty (no routes configured) downgrades the check to a skip.
-	chatRoutePrefixes []string
+	// chatRouteResolver is the live chat router's Resolves — the router's own
+	// routing decision, so model_route_coverage cannot disagree with dispatch.
+	// Nil when the chat provider is not the router (the check then SKIPs).
+	chatRouteResolver func(model string) (route string, matched bool)
 
 	// modelHealthSource supplies recent per-model runtime health
 	// statistics for checkModelHealth. Defaults to a DB-backed query
@@ -236,63 +288,18 @@ type DoctorHandlers struct {
 	// file is absent all profile intervals fall back to a default cadence.
 	loginRequired map[string]time.Duration
 
-	// usernsMode is cfg.Runtime.UserNSMode at boot ("", "host", "keep-id").
-	// checkAgentImageUID uses it to decide whether the keep-id subuid
-	// preflight applies (F3b — second guard for the rootless workspace
-	// "Permission denied" incident; see doctor_agent_image_uid.go).
-	usernsMode string
 	// retention* back checkRetentionEnabled. Snapshotted as values rather than a
 	// config pointer for the same reason secretFields are: a later hot-reload
 	// must not silently change what the doctor reports.
 	retentionKnown   bool
 	retentionEnabled bool
 	retentionWindows map[string]int
-	// bakedUIDFunc is the injectable seam for reading the agent image's
-	// baked-in uid (`podman run --rm --entrypoint id <image> -u`). Nil ⇒
-	// realBakedUID; tests inject a fake so they never shell out to podman.
-	bakedUIDFunc func(ctx context.Context, image string) (int, error)
-	// subuidOKFunc is the injectable seam for the keep-id subuid preflight
-	// (checks /etc/subuid + /etc/subgid + newuidmap). Nil ⇒
-	// subuidProvisioned; tests inject a fake so they never touch the
-	// filesystem or PATH.
-	subuidOKFunc func() bool
-	// imageLabelsFunc is the injectable seam for reading an image's OCI
-	// labels. nil uses realImageLabels. Split from bakedUIDFunc because it
-	// answers WITHOUT starting a container, which is what lets the check
-	// complete on a 1.3GB image (CE issue 59).
-	imageLabelsFunc func(ctx context.Context, image string) (map[string]string, error)
-
-	// The three seams below back checkImageFreshness (see
-	// doctor_image_freshness.go). Each is nil-safe and defaults to the
-	// real host implementation; tests inject fakes so the check never
-	// shells out to podman or systemctl, and so its verdicts are
-	// assertable on a machine with no images at all.
-	//
-	// imageProber resolves manifest conditions (which optional stacks
-	// this host intends to run). Nil ⇒ hostProber.
-	imageProber imagemanifest.Prober
-	// imageRevisionFunc reads an image's build-revision label, reporting
-	// whether the label was present. Nil ⇒ realImageRevision.
-	imageRevisionFunc func(ctx context.Context, image string) (revision string, labelled bool, err error)
-	// imageRecordFunc loads the release image record — what this release
-	// DECLARES its images to be. Injected so the six-scenario truth table
-	// (design §10) is unit-testable without a packaged host.
-	imageRecordFunc func() (*imagemanifest.ReleaseRecord, error)
-	// imageDigestFunc reads an image's manifest digest. Separate from
-	// imageRevisionFunc because the two answer different questions: the label
-	// says which SOURCE an image came from, the digest says which BUILD.
-	imageDigestFunc func(ctx context.Context, image string) (string, error)
-	// publishedDigestsFunc reads the per-architecture manifest digests a
-	// registry currently serves for a tag, WITHOUT pulling. Nil ⇒ the
-	// imagemanifest SkopeoIndexReader the release recorder already uses; a
-	// second reader here would be the two-implementations hazard tenet §5
-	// names. Returns an error when the registry cannot be reached, skopeo is
-	// absent, or the shared budget is exhausted — each of which is a
-	// NOT VERIFIED outcome with its own reason, never an OK.
-	publishedDigestsFunc func(ctx context.Context, tag string) (map[string]string, error)
+	// The podman / image seams moved to internal/hostdoctor with their checks
+	// (process-spawn law, S2). daemonRevisionFunc stays: the report states the
+	// daemon's revision for vornikctl's host image-freshness check.
 	// daemonRevisionFunc reports the commit this daemon was built from.
 	// Nil ⇒ version.BuildRevision with the -dirty suffix applied.
-	daemonRevisionFunc func() (string, bool)
+	daemonRevisionFunc func() string
 }
 
 // SetAPIMetrics wires the registered APIMetrics so the
@@ -403,7 +410,6 @@ func (h *DoctorHandlers) SetServerConfig(cfg *config.Config) {
 	h.chatEndpoint = cfg.Chat.Endpoint
 	h.chatAPIKey = cfg.Chat.APIKey
 	h.chatProvider = cfg.Chat.Provider
-	h.usernsMode = cfg.Runtime.UserNSMode
 
 	// Retention posture for checkRetentionEnabled. Only NON-ZERO windows are
 	// recorded: an unset window prunes nothing, so counting it as configured
@@ -458,14 +464,6 @@ func (h *DoctorHandlers) SetServerConfig(cfg *config.Config) {
 		"auth.providers.github.client_secret": githubClientSecret(cfg),
 	}
 
-	// Snapshot the chat model-route prefixes for checkModelRouteCoverage.
-	// VALUES not the slice header so a later hot-reload can't mutate what
-	// the check sees mid-request.
-	h.chatRoutePrefixes = h.chatRoutePrefixes[:0]
-	for _, rt := range cfg.Chat.Router.Routes {
-		h.chatRoutePrefixes = append(h.chatRoutePrefixes, rt.Prefix)
-	}
-
 	h.dispatcherProjectID = cfg.Telegram.DispatcherProjectID
 	// Prefer the agent_llm model (used by container agents) only as a
 	// fallback because the bot's chat client typically uses chat.model.
@@ -485,6 +483,14 @@ func githubClientSecret(cfg *config.Config) string {
 		return ""
 	}
 	return cfg.Auth.Providers.GitHub.ClientSecret
+}
+
+// SetChatRouteResolver hands model_route_coverage the live router's Resolves.
+// It must be re-called after any router rebuild (the router is built once at
+// startup today); nil reverts the check to SKIPPED. Model-route-coverage
+// design, 2026-09-24.
+func (h *DoctorHandlers) SetChatRouteResolver(resolve func(model string) (route string, matched bool)) {
+	h.chatRouteResolver = resolve
 }
 
 // SetConfigPath records the filesystem path config.yaml was loaded
@@ -542,6 +548,7 @@ func (h *DoctorHandlers) SetPricingPath(path string) {
 func (h *DoctorHandlers) RunReportReadOnly(ctx context.Context) DoctorReport {
 	const fix = false
 	report := DoctorReport{Timestamp: time.Now().UTC().Format(time.RFC3339)}
+	report.DaemonRevision = h.resolveDaemonRevision()
 	report.Checks = append(report.Checks, h.checkStaleLeases(ctx, fix))
 	report.Checks = append(report.Checks, h.checkOrphanedWatchers(ctx, fix))
 	report.Checks = append(report.Checks, h.checkStuckExecutions(ctx, fix))
@@ -550,8 +557,10 @@ func (h *DoctorHandlers) RunReportReadOnly(ctx context.Context) DoctorReport {
 	report.Checks = append(report.Checks, h.checkWorkflowSwarmCompat())
 	report.Checks = append(report.Checks, h.checkConfigClassCompat())
 	report.Checks = append(report.Checks, h.checkSchemaGateDrift())
+	report.Checks = append(report.Checks, h.checkConfigTemplateDrift())
 	report.Checks = append(report.Checks, h.checkDatabaseSchema(ctx))
-	report.Checks = append(report.Checks, h.checkPodmanConfig(ctx))
+	report.Checks = append(report.Checks, hostChecksNotice())
+	report.Checks = append(report.Checks, h.checkGitConfigComposition())
 	report.Checks = append(report.Checks, h.checkAgentLLMTopology())
 	report.Checks = append(report.Checks, h.checkAPISecurityPosture())
 	report.Checks = append(report.Checks, h.checkBudgetUtilisation(ctx))
@@ -573,6 +582,7 @@ func (h *DoctorHandlers) RunReportReadOnly(ctx context.Context) DoctorReport {
 	report.Checks = append(report.Checks, h.checkGatewayHealthy(ctx, fix))
 	report.Checks = append(report.Checks, h.checkWebWritesInsecure(ctx, fix))
 	report.Checks = append(report.Checks, h.checkUnclassifiedShare(ctx))
+	appendTemplateDriftPointer(report.Checks)
 	issues := 0
 	for _, c := range report.Checks {
 		if c.Status != "OK" && c.Status != "SKIPPED" {
@@ -601,31 +611,30 @@ func (h *DoctorHandlers) RunDoctor(w http.ResponseWriter, r *http.Request) {
 	report := DoctorReport{
 		Timestamp: time.Now().UTC().Format(time.RFC3339),
 	}
+	report.DaemonRevision = h.resolveDaemonRevision()
 
 	report.Checks = append(report.Checks, h.checkStaleLeases(ctx, fix))
 	report.Checks = append(report.Checks, h.checkOrphanedWatchers(ctx, fix))
 	report.Checks = append(report.Checks, h.checkStuckExecutions(ctx, fix))
 	report.Checks = append(report.Checks, h.checkTaskStateAudit(ctx, fix))
 	report.Checks = append(report.Checks, h.checkConfigValidation())
-	report.Checks = append(report.Checks, h.checkWorkflowMdShape())
 	report.Checks = append(report.Checks, h.checkWorkflowSwarmCompat())
 	report.Checks = append(report.Checks, h.checkConfigClassCompat())
 	report.Checks = append(report.Checks, h.checkSchemaGateDrift())
 	report.Checks = append(report.Checks, h.checkWorkflowOnFailMasking())
+	report.Checks = append(report.Checks, h.checkConfigTemplateDrift())
 	report.Checks = append(report.Checks, h.checkWorkflowMDShape())
 	report.Checks = append(report.Checks, h.checkRolePromptSanity())
 	report.Checks = append(report.Checks, h.checkRoleLibrary())
 	report.Checks = append(report.Checks, h.checkEvalSuiteLint())
 	report.Checks = append(report.Checks, h.checkDatabaseSchema(ctx))
 	report.Checks = append(report.Checks, h.checkOrphanFKRows(ctx, fix))
-	report.Checks = append(report.Checks, h.checkPodmanConfig(ctx))
+	report.Checks = append(report.Checks, hostChecksNotice())
+	report.Checks = append(report.Checks, h.checkGitConfigComposition())
 	report.Checks = append(report.Checks, h.checkEnvFileFreshness())
 	report.Checks = append(report.Checks, h.checkBuildProvenance())
-	report.Checks = append(report.Checks, h.checkAgentImages(ctx))
 	report.Checks = append(report.Checks, h.checkAgentLLMTopology())
 	report.Checks = append(report.Checks, h.checkAgentLLMAPIKey(ctx))
-	report.Checks = append(report.Checks, h.checkAgentImageUID(ctx))
-	report.Checks = append(report.Checks, h.checkImageFreshness(ctx))
 	report.Checks = append(report.Checks, h.checkAPISecurityPosture())
 	report.Checks = append(report.Checks, h.checkAPIKeyStrength())
 	report.Checks = append(report.Checks, h.checkPricingCoverage())
@@ -657,6 +666,7 @@ func (h *DoctorHandlers) RunDoctor(w http.ResponseWriter, r *http.Request) {
 	report.Checks = append(report.Checks, h.checkGatewayHealthy(ctx, fix))
 	report.Checks = append(report.Checks, h.checkWebWritesInsecure(ctx, fix))
 	report.Checks = append(report.Checks, h.checkUnclassifiedShare(ctx))
+	appendTemplateDriftPointer(report.Checks)
 
 	issues := 0
 	fixed := 0
@@ -1032,183 +1042,6 @@ func (h *DoctorHandlers) checkDatabaseSchema(ctx context.Context) DoctorCheck {
 	return DoctorCheck{Name: name, Status: "OK", Message: "all tables and indexes present"}
 }
 
-// checkPodmanConfig verifies podman runtime configuration.
-func (h *DoctorHandlers) checkPodmanConfig(ctx context.Context) DoctorCheck {
-	name := "podman_config"
-
-	podmanPath, err := exec.LookPath("podman")
-	if err != nil {
-		return DoctorCheck{Name: name, Status: "ERROR", Message: "podman not found in PATH"}
-	}
-
-	checkCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
-	defer cancel()
-
-	cmd := exec.CommandContext(checkCtx, podmanPath, "info", "--format",
-		"{{.Host.RemoteSocket.Exists}} {{.Store.GraphRoot}}")
-	output, err := cmd.CombinedOutput()
-	if err != nil {
-		return DoctorCheck{
-			Name:    name,
-			Status:  "ERROR",
-			Message: "podman info failed",
-			Items:   []string{strings.TrimSpace(string(output))},
-		}
-	}
-
-	var items []string
-
-	// Check subuid/subgid for rootless operation
-	cmd = exec.CommandContext(checkCtx, podmanPath, "info", "--format", "{{.Host.IDMappings.UIDMap}}")
-	uidOut, err := cmd.Output()
-	if err != nil || strings.TrimSpace(string(uidOut)) == "[]" {
-		items = append(items, "WARNING: no UID mappings — rootless containers may fail (check /etc/subuid)")
-	}
-
-	if len(items) > 0 {
-		return DoctorCheck{Name: name, Status: "WARNING", Message: "podman available with warnings", Items: items}
-	}
-	return DoctorCheck{Name: name, Status: "OK", Message: fmt.Sprintf("podman OK (%s)", podmanPath)}
-}
-
-// agentImagesFromSwarms collects the unique, real (non-empty, non-"noop:")
-// agent images referenced by any role across swarms. Shared by
-// checkAgentImages and firstAgentImage so both walk the same set of images
-// the same way. Skips the "noop:" sentinel prefix used for non-containerised
-// roles like the dispatcher — runtime.image is required by the registry
-// loader, but those roles never launch a container, so podman image exists
-// (or a baked-uid probe) would always falsely flag them.
-func agentImagesFromSwarms(swarms map[string]*registry.Swarm) map[string]bool {
-	images := make(map[string]bool)
-	for _, swarm := range swarms {
-		for _, role := range swarm.Roles {
-			if role.Runtime.Image == "" || strings.HasPrefix(role.Runtime.Image, "noop:") {
-				continue
-			}
-			images[role.Runtime.Image] = true
-		}
-	}
-	return images
-}
-
-// firstAgentImage returns one representative real agent image configured
-// under configDir, or "" if none are configured. checkAgentImageUID only
-// needs a single agent image to compare its baked uid against the host uid
-// (unlike checkAgentImages, which must check every image's local
-// availability), so this picks the lexicographically-first image name for
-// determinism rather than returning the whole set.
-func firstAgentImage(configDir string) (string, error) {
-	swarms, err := registry.LoadSwarms(configDir)
-	if err != nil {
-		return "", err
-	}
-	images := agentImagesFromSwarms(swarms)
-	if len(images) == 0 {
-		return "", nil
-	}
-	names := make([]string, 0, len(images))
-	for image := range images {
-		names = append(names, image)
-	}
-	sort.Strings(names)
-	return names[0], nil
-}
-
-// checkAgentImages verifies that agent images referenced in swarm configs are available locally.
-func (h *DoctorHandlers) checkAgentImages(ctx context.Context) DoctorCheck {
-	name := "agent_images"
-
-	if h.configDir == "" {
-		return DoctorCheck{Name: name, Status: "SKIPPED", Message: "no config directory configured, skipping image check"}
-	}
-
-	swarms, err := registry.LoadSwarms(h.configDir)
-	if err != nil {
-		return DoctorCheck{Name: name, Status: "ERROR", Message: fmt.Sprintf("failed to load swarms: %v", err)}
-	}
-
-	// Collect unique images. Skip the "noop:" sentinel prefix used for
-	// non-containerised roles like the dispatcher — runtime.image is
-	// required by the registry loader, but those roles never launch a
-	// container, so podman image exists would always falsely flag them.
-	images := agentImagesFromSwarms(swarms)
-
-	if len(images) == 0 {
-		return DoctorCheck{Name: name, Status: "OK", Message: "no agent images configured"}
-	}
-
-	podmanPath, err := exec.LookPath("podman")
-	if err != nil {
-		return DoctorCheck{Name: name, Status: "WARNING", Message: "podman not found, cannot verify images"}
-	}
-
-	var missing []string
-	for image := range images {
-		checkCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
-		cmd := exec.CommandContext(checkCtx, podmanPath, "image", "exists", image)
-		if err := cmd.Run(); err != nil {
-			missing = append(missing, image)
-		}
-		cancel()
-	}
-
-	if len(missing) > 0 {
-		// Split by whether the missing reference can actually be pulled.
-		// A qualified ref (registry host, digest, or localhost/) is
-		// fetchable on first use, so it stays a WARNING. An unqualified
-		// short name is NOT: under `short-name-mode = enforced` (the host
-		// default) podman must prompt for a registry and, with no TTY, the
-		// run fails outright — every job using that swarm dies at container
-		// start. That is precisely the 2026-06-27 incident, where the
-		// swarmd→vornik rename left configs pointing at the unbuilt short
-		// name `swarmd-agent:latest`. Such a miss is an ERROR: it is broken
-		// now, not "will be pulled later".
-		var blocking []string
-		for _, m := range missing {
-			if imageIsUnqualified(m) {
-				blocking = append(blocking, m)
-			}
-		}
-		if len(blocking) > 0 {
-			sort.Strings(blocking)
-			return DoctorCheck{
-				Name:    name,
-				Status:  "ERROR",
-				Message: fmt.Sprintf("%d agent image(s) missing AND unqualified — podman cannot resolve a short name without a TTY (short-name resolution enforced), so every job using these swarms will fail at container start. Build/tag the image locally or qualify the reference with a registry.", len(blocking)),
-				Items:   blocking,
-			}
-		}
-		sort.Strings(missing)
-		return DoctorCheck{
-			Name:    name,
-			Status:  "WARNING",
-			Message: fmt.Sprintf("%d agent images not found locally (will be pulled on first use)", len(missing)),
-			Items:   missing,
-		}
-	}
-
-	return DoctorCheck{Name: name, Status: "OK", Message: fmt.Sprintf("all %d agent images available", len(images))}
-}
-
-// imageIsUnqualified reports whether ref is a container "short name" — an
-// image reference with no registry component (e.g. "vornik-agent:latest"
-// or "library/ubuntu"). Such names rely on unqualified-search-registries
-// plus an interactive prompt to resolve; under `short-name-mode =
-// enforced` with no TTY they cannot be pulled at all. A reference whose
-// first path segment looks like a registry host (contains '.' or ':') or
-// is the special "localhost" is qualified and remains pullable.
-func imageIsUnqualified(ref string) bool {
-	slash := strings.IndexByte(ref, '/')
-	if slash < 0 {
-		return true
-	}
-	first := ref[:slash]
-	if first == "localhost" || strings.ContainsAny(first, ".:") {
-		return false
-	}
-	return true
-}
-
 // checkOrphanFKRows detects rows that reference tasks/executions which no
 // longer exist. Schema ON DELETE CASCADE covers most paths, but rows can
 // be orphaned when a table is populated AFTER its parent is deleted (e.g.
@@ -1242,21 +1075,19 @@ func (h *DoctorHandlers) checkOrphanFKRows(ctx context.Context, fix bool) Doctor
 	probes := []probe{
 		{
 			label: "tool_audit_log",
+			// A companion row's task_id is the synthetic session id
+			// "companion:<api_key_id>" by design (B-17): it never names a
+			// task, so it can never dangle — excluded like NULL/'' (companion
+			// tool-audit design, 2026-09-24; --fix would otherwise delete the
+			// whole companion audit trail). Real task ids are GenerateID("task").
 			countSQL: `SELECT COUNT(*) FROM tool_audit_log
 			           WHERE tool_audit_log.task_id IS NOT NULL AND tool_audit_log.task_id <> ''
+			             AND tool_audit_log.task_id NOT LIKE 'companion:%'
 			             AND NOT EXISTS (SELECT 1 FROM tasks WHERE tasks.id = tool_audit_log.task_id)`,
 			deleteSQL: `DELETE FROM tool_audit_log
 			            WHERE tool_audit_log.task_id IS NOT NULL AND tool_audit_log.task_id <> ''
+			              AND tool_audit_log.task_id NOT LIKE 'companion:%'
 			              AND NOT EXISTS (SELECT 1 FROM tasks WHERE tasks.id = tool_audit_log.task_id)`,
-		},
-		{
-			label: "task_llm_usage",
-			countSQL: `SELECT COUNT(*) FROM task_llm_usage
-			           WHERE task_llm_usage.task_id IS NOT NULL AND task_llm_usage.task_id <> ''
-			             AND NOT EXISTS (SELECT 1 FROM tasks WHERE tasks.id = task_llm_usage.task_id)`,
-			deleteSQL: `DELETE FROM task_llm_usage
-			            WHERE task_llm_usage.task_id IS NOT NULL AND task_llm_usage.task_id <> ''
-			              AND NOT EXISTS (SELECT 1 FROM tasks WHERE tasks.id = task_llm_usage.task_id)`,
 		},
 		{
 			label: "task_watchers",
@@ -1296,18 +1127,72 @@ func (h *DoctorHandlers) checkOrphanFKRows(ctx context.Context, fix bool) Doctor
 		}
 	}
 
-	if totalOrphans == 0 {
-		return DoctorCheck{Name: name, Status: "OK", Message: "no orphan FK rows across audit/usage/watchers"}
+	// The cost LEDGER, separately and with no delete statement at all
+	// (orphan-FK ledger design, 2026-09-24): a task_llm_usage row whose task
+	// was deleted is the record of money spent, not garbage.
+	ledger, ledgerErr := h.countLedgerOrphans(ctx)
+	var parts []string
+	if ledgerErr == nil && ledger.recent > 0 {
+		parts = append(parts, fmt.Sprintf("%d cost-ledger rows for tasks deleted in the last %d days — task deletes do "+
+			"not cascade to cost rows; find what deleted them", ledger.recent, int(ledgerRecentWindow.Hours()/24)))
+		items = append(items, fmt.Sprintf("task_llm_usage: %d recent row(s) for deleted tasks (kept, not removed)", ledger.recent))
 	}
-	status := "WARNING"
-	msg := fmt.Sprintf("%d orphan rows referencing missing tasks", totalOrphans)
-	if fix {
-		msg = fmt.Sprintf("%d orphan rows cleaned up", totalFixed)
-		if totalFixed == totalOrphans {
-			status = "OK"
-		}
+	switch {
+	case totalOrphans == 0 && ledgerErr == nil && ledger.kept == 0:
+		// Truly clean: the usage table has nothing naming a deleted task either.
+		parts = append(parts, "no orphan rows across audit/usage/watchers")
+	case totalOrphans == 0:
+		parts = append(parts, "no orphan rows across audit/watchers")
+	case fix:
+		parts = append(parts, fmt.Sprintf("%d orphan rows cleaned up", totalFixed))
+	default:
+		parts = append(parts, fmt.Sprintf("%d orphan rows referencing missing tasks", totalOrphans))
 	}
-	return DoctorCheck{Name: name, Status: status, Message: msg, Items: items, Fixed: totalFixed}
+	if ledgerErr != nil {
+		parts = append(parts, fmt.Sprintf("cost-ledger count unavailable: %v", ledgerErr))
+	} else if ledger.kept > 0 {
+		parts = append(parts, fmt.Sprintf("%d cost-ledger rows (%d deleted tasks) kept by design", ledger.kept, ledger.tasks))
+	}
+
+	status := "OK"
+	if totalOrphans > 0 && (!fix || totalFixed != totalOrphans) {
+		status = "WARNING"
+	}
+	// Recent ledger rows mean a task was deleted recently; that is a WARNING
+	// whatever the orphan count, and the fix path's OK flip does not reset it.
+	if ledgerErr == nil && ledger.recent > 0 {
+		status = "WARNING"
+	}
+	return DoctorCheck{Name: name, Status: status, Message: strings.Join(parts, "; "),
+		Items: items, Fixed: totalFixed, Kept: ledger.kept}
+}
+
+// ledgerRecentWindow bounds "recent" for cost-ledger rows whose task is gone:
+// a row recorded within it means the task was deleted recently. 30 days — the
+// window the doctor's other recency checks use for "is this still happening".
+const ledgerRecentWindow = 30 * 24 * time.Hour
+
+// ledgerOrphans is what the cost-ledger probe measures.
+type ledgerOrphans struct {
+	kept, tasks, recent int
+}
+
+// countLedgerOrphans counts task_llm_usage rows naming a task that no longer
+// exists: all of them, the distinct tasks, and those recorded recently. One
+// portable query — the cutoff is a parameter, so no dialect date arithmetic.
+// Read-only; there is deliberately no delete counterpart.
+func (h *DoctorHandlers) countLedgerOrphans(ctx context.Context) (ledgerOrphans, error) {
+	var l ledgerOrphans
+	err := h.db.QueryRowContext(ctx, `
+		SELECT COUNT(*),
+		       COUNT(DISTINCT task_llm_usage.task_id),
+		       COALESCE(SUM(CASE WHEN task_llm_usage.recorded_at >= $1 THEN 1 ELSE 0 END), 0)
+		  FROM task_llm_usage
+		 WHERE task_llm_usage.task_id IS NOT NULL AND task_llm_usage.task_id <> ''
+		   AND NOT EXISTS (SELECT 1 FROM tasks WHERE tasks.id = task_llm_usage.task_id)`,
+		time.Now().UTC().Add(-ledgerRecentWindow),
+	).Scan(&l.kept, &l.tasks, &l.recent)
+	return l, err
 }
 
 // checkAPISecurityPosture flags a deployment that listens on a non-loopback
@@ -1655,7 +1540,7 @@ func (h *DoctorHandlers) checkOrphanWorktrees(fix bool) DoctorCheck {
 		Message: fmt.Sprintf("%d orphan worktree dir(s) found", len(findings)),
 	}
 	if fix {
-		check.Fixed, items = fixOrphanWorktreeFindings(findings, h.workspacesRoot)
+		check.Fixed, items, check.Removed = fixOrphanWorktreeFindings(findings)
 	} else {
 		for _, finding := range findings {
 			items = append(items, formatOrphanWorktreeFinding(finding))
@@ -1669,8 +1554,18 @@ func (h *DoctorHandlers) checkOrphanWorktrees(fix bool) DoctorCheck {
 	return check
 }
 
-func fixOrphanWorktreeFindings(findings []orphanWorktreeFinding, workspacesRoot string) (int, []string) {
+// fixOrphanWorktreeFindings removes the orphan worktree directories and
+// reports each one it removed as "<project>/<taskID>".
+//
+// git's administrative side (`git worktree prune`, and `git branch -D
+// worktree/<taskID>`, without which a later `git worktree add` for the same
+// task fails with "already exists") is NOT done here any more: that is a
+// process spawn, and this runs inside a REST request (process-spawn law, S2).
+// `vornikctl doctor --fix` does it on the host for exactly the worktrees
+// listed in the check's Removed field.
+func fixOrphanWorktreeFindings(findings []orphanWorktreeFinding) (int, []string, []string) {
 	items := make([]string, 0, len(findings))
+	var removed []string
 	fixed := 0
 	for _, finding := range findings {
 		rel := formatOrphanWorktreeFinding(finding)
@@ -1678,26 +1573,11 @@ func fixOrphanWorktreeFindings(findings []orphanWorktreeFinding, workspacesRoot 
 			items = append(items, fmt.Sprintf("%s; remove failed: %v", rel, err))
 			continue
 		}
-		// Also clean up git's administrative side so `git worktree
-		// list` stops reporting the entry as prunable and the orphan
-		// `worktree/<taskID>` branch goes away. Without this, a
-		// follow-up `git worktree add` for the same task ID would
-		// fail with "already exists" until the admin dir is pruned.
-		// Both commands are best-effort — if the project isn't a git
-		// repo, prune and branch -D no-op without surfacing an error.
-		if workspacesRoot != "" {
-			projectDir := filepath.Join(workspacesRoot, finding.project)
-			_, _ = exec.CommandContext(context.Background(), "git", "-C", projectDir, "worktree", "prune").CombinedOutput()
-			// `--` separator: defense-in-depth so the branch arg is never
-			// reinterpreted as a flag, even if the source of finding.taskID
-			// changes (today it comes from a directory name in
-			// .worktrees/, which the prefix already protects).
-			_, _ = exec.CommandContext(context.Background(), "git", "-C", projectDir, "branch", "-D", "--", "worktree/"+finding.taskID).CombinedOutput()
-		}
 		fixed++
 		items = append(items, rel+" removed")
+		removed = append(removed, finding.project+"/"+finding.taskID)
 	}
-	return fixed, items
+	return fixed, items, removed
 }
 
 func formatOrphanWorktreeFinding(finding orphanWorktreeFinding) string {

@@ -77,27 +77,9 @@ func TestAgentImageSmokeBuildsAndRunsAsNonRoot(t *testing.T) {
 	}
 	requirePodman(t)
 
-	repoRoot := findRepoRoot(t)
-
-	// Build the image using the current process's uid/gid so bind
-	// mounts work under --userns=host later in the test — this
-	// mirrors what `make build-agent` does for a local operator.
-	// The test is deterministic across developers and CI because we
-	// always use os.Getuid/os.Getgid rather than hardcoding 1000.
+	buildAgentImage(t)
 	uid := os.Getuid()
 	gid := os.Getgid()
-	buildCmd := exec.Command(
-		"podman", "build",
-		"-f", "images/vornik-agent/Containerfile",
-		"--build-arg", fmt.Sprintf("VORNIK_UID=%d", uid),
-		"--build-arg", fmt.Sprintf("VORNIK_GID=%d", gid),
-		"-t", agentImageTag,
-		".",
-	)
-	buildCmd.Dir = repoRoot
-	if out, err := buildCmd.CombinedOutput(); err != nil {
-		t.Fatalf("podman build failed: %v\n%s", err, out)
-	}
 
 	// Identity probe — run `id` as the image's default user and
 	// assert it matches the uid we built for and is not root.

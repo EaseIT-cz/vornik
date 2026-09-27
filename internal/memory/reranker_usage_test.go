@@ -3,12 +3,14 @@ package memory
 import (
 	"bytes"
 	"context"
+	"errors"
 	"strings"
 	"testing"
 	"vornik.io/vornik/internal/llmspend"
 
 	"github.com/rs/zerolog"
 
+	"vornik.io/vornik/internal/chat"
 	"vornik.io/vornik/internal/persistence"
 )
 
@@ -92,8 +94,9 @@ func TestLLMReranker_RecordsUsageWhenParseFails(t *testing.T) {
 		{ChunkID: "b", ProjectID: "proj-2"},
 	}
 	out, err := rr.Rerank(context.Background(), "q", in)
-	if err != nil {
-		t.Fatalf("Rerank must degrade, not error: %v", err)
+	// A degrade is reported (correction 2026-09-26) and still billed.
+	if !errors.Is(err, ErrRerankDegraded) {
+		t.Fatalf("Rerank must report the degrade: %v", err)
 	}
 	if len(out) != 2 || out[0].ChunkID != "a" {
 		t.Fatalf("expected degrade to RRF order, got %+v", out)
@@ -233,5 +236,46 @@ func TestLLMReranker_NoWarnForSingleProject(t *testing.T) {
 	}
 	if strings.Contains(logs.String(), "ambiguous") {
 		t.Errorf("single-project search must not warn, got: %s", logs.String())
+	}
+}
+
+// Degrades report their cause AND keep billing what was billed
+// (memory-benchmark-harness design, correction 2026-09-26): an empty answer and
+// unparsable scores were charged the moment they returned, so they write a row;
+// a timeout never got a response, so it writes none; a refusal of optional work
+// made no request at all.
+func TestLLMReranker_DegradesReportTheirCauseAndKeepBilling(t *testing.T) {
+	cases := []struct {
+		name  string
+		reply titlerReply
+		cause string
+		rows  int
+	}{
+		{"empty answer", titlerReply{content: ""}, "llm", 1},
+		{"unparsable scores", titlerReply{content: "no scores here"}, "parse", 1},
+		{"timeout", titlerReply{err: context.DeadlineExceeded}, "llm", 0},
+		{"refused", titlerReply{err: chat.ErrOptionalWorkDisabled}, "optional_work_disabled", 0},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			rec := &fakeUsageRecorder{}
+			rr := &LLMReranker{
+				Client: &titlerFakeProvider{replies: []titlerReply{c.reply}},
+				Logger: zerolog.Nop(),
+				spend:  llmspend.New(rec, fixedPricing{}, persistence.TaskLLMUsageSourceMemoryReranker, rerankerRole),
+			}
+			in := []SearchResult{{ChunkID: "a", ProjectID: "p"}, {ChunkID: "b", ProjectID: "p"}}
+			out, err := rr.Rerank(context.Background(), "q", in)
+			var d *RerankDegradedError
+			if !errors.As(err, &d) || !errors.Is(err, ErrRerankDegraded) || d.Cause != c.cause {
+				t.Fatalf("want a degrade with cause %q, got %v", c.cause, err)
+			}
+			if len(out) != 2 || out[0].ChunkID != "a" {
+				t.Fatalf("a degrade returns the input in RRF order: %+v", out)
+			}
+			if len(rec.rows) != c.rows {
+				t.Fatalf("usage rows = %d, want %d", len(rec.rows), c.rows)
+			}
+		})
 	}
 }

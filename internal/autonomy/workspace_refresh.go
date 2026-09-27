@@ -4,9 +4,10 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
+
+	"vornik.io/vornik/internal/spawn"
 )
 
 // ExecGitRefresh is the default gitRefresh hook (wired via WithGitRefresh):
@@ -24,7 +25,12 @@ func ExecGitRefresh(ctx context.Context, repoDir string) error {
 		return nil // not a git checkout — nothing to refresh
 	}
 	run := func(args ...string) (string, error) {
-		cmd := exec.CommandContext(ctx, "git", append([]string{"-C", repoDir}, args...)...)
+		// The process-spawn law's GitWorkspace kind (internal/spawn): repoDir
+		// must lie under the registered workspace root.
+		cmd, err := spawn.GitWorkspace(ctx, repoDir, args...)
+		if err != nil {
+			return "", fmt.Errorf("git %s: %w", strings.Join(args, " "), err)
+		}
 		out, err := cmd.CombinedOutput()
 		if err != nil {
 			return "", fmt.Errorf("git %s: %w: %s", strings.Join(args, " "), err, strings.TrimSpace(string(out)))

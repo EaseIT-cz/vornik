@@ -63,6 +63,16 @@ type Metrics struct {
 	// ModelHealthTrips counts circuit-open transitions (closed→open and a
 	// failed half-open probe re-opening) per (route, model).
 	ModelHealthTrips *prometheus.CounterVec
+	// BestEffortDeadlines counts best-effort calls (WithBestEffort) that ran
+	// out their caller's own deadline. Those are not breaker samples (LLD
+	// 2026-07-11-model-health §5.3a), so this is where a slow backend starving
+	// an optional feature shows. It counts deadlines only, not MODEL_UNHEALTHY
+	// rejections by an OPEN circuit (those show on ModelHealthState).
+	BestEffortDeadlines *prometheus.CounterVec
+	// OptionalWorkRefused counts best-effort calls refused, without a
+	// network call, because the operator switched optional work off for the
+	// model (LLD 2026-07-11-model-health §5.3d).
+	OptionalWorkRefused *prometheus.CounterVec
 	// ModelFallbackTotal counts router-level non-swarm model fallbacks (the
 	// FallbackProvider retried an unhealthy primary on its configured twin).
 	// Label names mirror vornik_executor_model_fallback_total for cross-source
@@ -189,6 +199,18 @@ func NewMetrics(reg *prometheus.Registry) *Metrics {
 			Name:      "model_health_trips_total",
 			Help:      "Circuit-open transitions per (route, model).",
 		}, []string{"route", "model"}),
+		BestEffortDeadlines: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Namespace: "vornik",
+			Subsystem: "chat",
+			Name:      "best_effort_deadline_total",
+			Help:      "Best-effort calls that ran out their caller's own deadline, per (route, model, call_site). Not counted by the model-health breaker.",
+		}, []string{"route", "model", "call_site"}),
+		OptionalWorkRefused: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Namespace: "vornik",
+			Subsystem: "chat",
+			Name:      "optional_work_refused_total",
+			Help:      "Best-effort calls refused without a network call because optional work is disabled for the model, per (model, call_site).",
+		}, []string{"model", "call_site"}),
 		ModelFallbackTotal: prometheus.NewCounterVec(prometheus.CounterOpts{
 			Namespace: "vornik",
 			Subsystem: "chat",
@@ -210,7 +232,7 @@ func NewMetrics(reg *prometheus.Registry) *Metrics {
 		m.CacheCreationTokensTotal, m.CacheReadTokensTotal,
 		m.CacheHitRatio, m.CacheDollarsSavedTotal,
 		m.SubscriptionTokenRefreshTotal,
-		m.ModelHealthState, m.ModelHealthTrips, m.ModelFallbackTotal,
+		m.ModelHealthState, m.ModelHealthTrips, m.BestEffortDeadlines, m.OptionalWorkRefused, m.ModelFallbackTotal,
 	)
 	return m
 }

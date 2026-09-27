@@ -61,6 +61,10 @@ const (
 	ReasonProposalUnscored            = "proposal_unscored"
 	ReasonProposalMismatch            = "proposal_mismatch"
 	ReasonRegionUnscored              = "region_unscored"
+	// Conditional additions (amendment 2026-09-25).
+	ReasonAddNotHeld          = "add_not_held"
+	ReasonAddEvidenceMissing  = "add_evidence_missing"
+	ReasonAddEvidenceMismatch = "add_evidence_mismatch"
 )
 
 // unavailableFallbackBars is the broker-sourced history a held symbol needs
@@ -79,6 +83,8 @@ const valueTolerance = 0.00005
 type scorecardOut struct {
 	Total, Trend, Momentum, Macro *int
 	LastClose, SMA50              *float64
+	// The pullback-addition indicators (amendment 2026-09-25).
+	SMA20, SMA200, RSI14, ATR14 *float64
 }
 
 type regimeOut struct {
@@ -88,6 +94,7 @@ type regimeOut struct {
 
 type evidence struct {
 	held       map[string]float64
+	avgCost    map[string]*float64
 	scorecards map[string]scorecardOut
 	regimes    map[string]regimeOut
 	barsDeep   map[string]int
@@ -115,7 +122,7 @@ func upperField(raw, key string) string {
 }
 
 func collect(calls []ToolCall) evidence {
-	ev := evidence{held: map[string]float64{}, scorecards: map[string]scorecardOut{}, regimes: map[string]regimeOut{}, barsDeep: map[string]int{}}
+	ev := evidence{held: map[string]float64{}, avgCost: map[string]*float64{}, scorecards: map[string]scorecardOut{}, regimes: map[string]regimeOut{}, barsDeep: map[string]int{}}
 	for _, c := range calls {
 		switch bareTool(c.Name) {
 		case "get_account_summary":
@@ -139,8 +146,9 @@ func (ev *evidence) collectSnapshot(c ToolCall) {
 	}
 	var out struct {
 		Positions *[]struct {
-			Symbol string  `json:"symbol"`
-			Qty    float64 `json:"qty"`
+			Symbol  string   `json:"symbol"`
+			Qty     float64  `json:"qty"`
+			AvgCost *float64 `json:"avg_cost"`
 		} `json:"positions"`
 	}
 	// A wrapped envelope or a response without a positions key is not a
@@ -150,9 +158,12 @@ func (ev *evidence) collectSnapshot(c ToolCall) {
 	}
 	ev.snapshot = true
 	ev.held = map[string]float64{}
+	ev.avgCost = map[string]*float64{}
 	for _, p := range *out.Positions {
 		if p.Qty != 0 {
-			ev.held[strings.ToUpper(strings.TrimSpace(p.Symbol))] = p.Qty
+			sym := strings.ToUpper(strings.TrimSpace(p.Symbol))
+			ev.held[sym] = p.Qty
+			ev.avgCost[sym] = p.AvgCost
 		}
 	}
 }
@@ -169,11 +180,16 @@ func (ev *evidence) collectScorecard(c ToolCall) {
 		Macro     *int     `json:"macro"`
 		LastClose *float64 `json:"last_close"`
 		SMA50     *float64 `json:"sma50"`
+		SMA20     *float64 `json:"sma20"`
+		SMA200    *float64 `json:"sma200"`
+		RSI14     *float64 `json:"rsi14"`
+		ATR14     *float64 `json:"atr14"`
 	}
 	if json.Unmarshal([]byte(c.Output), &out) != nil || out.Total == nil {
 		return
 	}
-	ev.scorecards[sym] = scorecardOut{out.Total, out.Trend, out.Momentum, out.Macro, out.LastClose, out.SMA50}
+	ev.scorecards[sym] = scorecardOut{out.Total, out.Trend, out.Momentum, out.Macro, out.LastClose, out.SMA50,
+		out.SMA20, out.SMA200, out.RSI14, out.ATR14}
 }
 
 func (ev *evidence) collectRegime(c ToolCall) {
@@ -229,6 +245,16 @@ type evidenceProposal struct {
 		Score *int   `json:"score"`
 		Label string `json:"label"`
 	} `json:"regime"`
+	// AddEvidence is the canonical block an `intent: add` carries.
+	AddEvidence *struct {
+		AvgCost   *float64 `json:"avg_cost"`
+		LastClose *float64 `json:"last_close"`
+		SMA20     *float64 `json:"sma20"`
+		SMA50     *float64 `json:"sma50"`
+		SMA200    *float64 `json:"sma200"`
+		RSI14     *float64 `json:"rsi14"`
+		ATR14     *float64 `json:"atr14"`
+	} `json:"add_evidence"`
 }
 
 func near(a, b *float64) bool {
@@ -281,6 +307,9 @@ func CheckAnalysisEvidence(result []byte, calls []ToolCall, cfg AnalysisEvidence
 	if r := checkHoldingsReview(env, ev, closes, isProtected); r != nil {
 		return r
 	}
+	if r := checkAddProposals(proposals, ev); r != nil {
+		return r
+	}
 	return checkOpenProposals(proposals, ev)
 }
 
@@ -305,6 +334,41 @@ func (ev *evidence) unexamined(cfg AnalysisEvidence, allowed []string) []string 
 	}
 	sort.Strings(missing)
 	return missing
+}
+
+// checkAddProposals proves every number an `intent: add` carries (amendment
+// 2026-09-25): the symbol is held long in this step's account snapshot, its
+// avg_cost equals the snapshot's, and the six indicators equal this step's
+// scorecard output for it. The pullback RULE is the filter's; this proves the
+// numbers the rule will judge were returned by a tool.
+func checkAddProposals(proposals []evidenceProposal, ev evidence) *EvidenceRefusal {
+	for _, p := range proposals {
+		if !strings.EqualFold(strings.TrimSpace(p.Intent), "add") {
+			continue
+		}
+		sym := strings.ToUpper(strings.TrimSpace(p.Symbol))
+		if ev.held[sym] <= 0 {
+			return &EvidenceRefusal{ReasonAddNotHeld, "add proposal " + sym + " names a symbol not held long in this step's get_account_summary; an add needs an existing long position"}
+		}
+		if p.AddEvidence == nil {
+			return &EvidenceRefusal{ReasonAddEvidenceMissing, "add proposal " + sym + " carries no add_evidence {avg_cost, last_close, sma20, sma50, sma200, rsi14, atr14}"}
+		}
+		e := p.AddEvidence
+		sc := ev.scorecards[sym]
+		if !near(e.AvgCost, ev.avgCost[sym]) {
+			return &EvidenceRefusal{ReasonAddEvidenceMismatch, "add proposal " + sym + " carries an avg_cost that differs from the get_account_summary position for " + sym}
+		}
+		for _, f := range []struct {
+			name      string
+			got, want *float64
+		}{{"last_close", e.LastClose, sc.LastClose}, {"sma20", e.SMA20, sc.SMA20}, {"sma50", e.SMA50, sc.SMA50},
+			{"sma200", e.SMA200, sc.SMA200}, {"rsi14", e.RSI14, sc.RSI14}, {"atr14", e.ATR14, sc.ATR14}} {
+			if !near(f.got, f.want) {
+				return &EvidenceRefusal{ReasonAddEvidenceMismatch, "add proposal " + sym + " carries a " + f.name + " that differs from (or is absent in) the mcp__ta__scorecard output for " + sym}
+			}
+		}
+	}
+	return nil
 }
 
 func checkOpenProposals(proposals []evidenceProposal, ev evidence) *EvidenceRefusal {

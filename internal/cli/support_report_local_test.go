@@ -34,7 +34,7 @@ func sqliteConfigWithData(t *testing.T, secret string) (*config.Config, string) 
 	dir := t.TempDir()
 	dbPath := filepath.Join(dir, "vornik.db")
 
-	b, err := storage.Open(context.Background(), config.DatabaseConfig{Driver: "sqlite", Path: dbPath})
+	b, err := storage.Open(sqliteOpenCtx(t), config.DatabaseConfig{Driver: "sqlite", Path: dbPath})
 	if err != nil {
 		t.Fatalf("seed open: %v", err)
 	}
@@ -133,7 +133,7 @@ func TestCollectLocalBundle_RecordsTheUnavailableSections(t *testing.T) {
 	cfg, cfgPath := sqliteConfigWithData(t, "sk-localsectiontestAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA")
 	prov := resolveProvenance(daemonIdentity{Reachable: false, Err: "connection refused"})
 
-	res, err := collectLocalBundleFrom(context.Background(), cfg, cfgPath, testDetector(t),
+	res, err := collectLocalBundleFrom(sqliteOpenCtx(t), cfg, cfgPath, testDetector(t),
 		supportReportOptions{Task: "task_local_1", MaxSize: supportDefaultMaxSize}, prov)
 	if err != nil {
 		t.Fatalf("collect: %v", err)
@@ -167,7 +167,7 @@ func TestCollectLocalBundle_RedactsTheConfigSecret(t *testing.T) {
 	cfg, cfgPath := sqliteConfigWithData(t, secret)
 	prov := resolveProvenance(daemonIdentity{Reachable: false})
 
-	res, err := collectLocalBundleFrom(context.Background(), cfg, cfgPath, testDetector(t),
+	res, err := collectLocalBundleFrom(sqliteOpenCtx(t), cfg, cfgPath, testDetector(t),
 		supportReportOptions{Task: "task_local_1", MaxSize: supportDefaultMaxSize}, prov)
 	if err != nil {
 		t.Fatalf("collect: %v", err)

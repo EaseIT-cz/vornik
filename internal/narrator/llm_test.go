@@ -84,3 +84,22 @@ func (o *overridableFakeProvider) WithModel(model string) chat.Provider {
 }
 
 var _ chat.ModelOverridable = (*overridableFakeProvider)(nil)
+
+// TestLLM_LineCallIsBestEffort — a narration line is decorative work under
+// the narrator's own deadline, so its call carries chat.WithBestEffort and
+// that deadline running out is not a model-health failure (breaker design
+// §5.3a). Incident: the 2026-09-25 slow-hardware bench arm, where narrator
+// timeouts helped open the circuit for the task traffic.
+func TestLLM_LineCallIsBestEffort(t *testing.T) {
+	fp := &fakeProvider{replies: []string{"Reading the pricing pages you gave me."}}
+	h := newTestHarness(t, func(n *Narrator) { n.Client = fp })
+	seedRunningExecution(h)
+	h.Sub.push(testExecID, livepubsub.KindStepStarted, livepubsub.StepStartedPayload{StepID: "s1", Role: "researcher"})
+	h.awaitLine(2 * time.Second)
+	fp.mu.Lock()
+	ctx := fp.lastCtx
+	fp.mu.Unlock()
+	if ctx == nil || !chat.IsBestEffort(ctx) {
+		t.Fatal("the narrator's line call must carry the best-effort mark")
+	}
+}

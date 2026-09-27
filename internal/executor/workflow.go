@@ -107,8 +107,14 @@ func (e *Executor) executeWorkflowAttempt(ctx context.Context, task *persistence
 	// after step 1. Operator-reported on a CV-extraction task:
 	// "writer claimed it preserved the CV but the file never
 	// reached its container".
+	//
+	// Staging also follows what the roles can read (media routing LLD §4.2a):
+	// a step whose role cannot open extractions forces the same staging a
+	// declared require_input_artifacts does, within the same cap.
+	stagingDecision := decideInputStaging(plan)
 	taskInputArtifacts := extractTaskInputArtifacts(task.Payload, e.config.MediaStageMaxBytes,
-		plan.workflow.RequireInputArtifacts, requireInputStageMaxBytes)
+		stagingDecision.force, requireInputStageMaxBytes)
+	e.observeInputStaging(task.ID, task.Payload, taskInputArtifacts, stagingDecision)
 	stepArtifacts = append(stepArtifacts, taskInputArtifacts...)
 
 	// Loop protection: track how many times each step is visited.
@@ -245,22 +251,20 @@ func (e *Executor) executeWorkflowAttempt(ctx context.Context, task *persistence
 		// cap so the "override only LOWERS" invariant holds against the
 		// scaled native. Ephemeral roles only — see applyStepTimeoutBudget.
 		// See https://docs.vornik.io §6/§7.
-		if e.config.ToolBudget.Enabled {
+		// Then the declared inference-speed factor (§6.2.1b), then the
+		// counterfactual cap, which only LOWERS, as max_iters_per_step does.
+		// One pure function owns the order: resolveStepTimeout.
+		{
 			roleConfig, _ := findSwarmRole(plan.swarm, step.Role)
-			// Item 5 (2026-07-18): same origin-resolving autonomous determination
-			// as the iteration budget (container.go) — the two budgets MUST move
-			// together (parent design §6.1), so both front e.budgetAutonomous.
-			autonomous := e.budgetAutonomous(ctx, task)
-			stepTimeout = applyStepTimeoutBudget(stepTimeout, roleConfig, state.ComplexityTier, autonomous, e.config.ToolBudget)
-		}
-
-		// Counterfactual budget can tighten the timeout. Same
-		// "override only LOWERS" rule as max_iters_per_step.
-		if cfBudget.StepTimeoutSeconds > 0 {
-			cap := time.Duration(cfBudget.StepTimeoutSeconds) * time.Second
-			if cap < stepTimeout {
-				stepTimeout = cap
+			autonomous := false
+			if e.config.ToolBudget.Enabled {
+				// Item 5 (2026-07-18): same origin-resolving autonomous
+				// determination as the iteration budget (container.go) — the
+				// two budgets MUST move together (parent design §6.1).
+				autonomous = e.budgetAutonomous(ctx, task)
 			}
+			cfCap := time.Duration(cfBudget.StepTimeoutSeconds) * time.Second
+			stepTimeout = resolveStepTimeout(stepTimeout, roleConfig, state.ComplexityTier, autonomous, e.config.ToolBudget, e.config.StepSpeedFactor, cfCap)
 		}
 
 		switch step.Type {
@@ -2547,49 +2551,14 @@ func resolvePedantic(payload []byte, workflow *registry.Workflow, project *regis
 // created the task and however it was routed. The class has recurred five times against
 // creation-side fixes.
 func extractTaskInputArtifacts(payload []byte, maxMediaBytes int64, requireInputArtifacts bool, requireStageMaxBytes int64) []map[string]string {
-	if len(payload) == 0 {
+	in, ok := parseTaskInputContext(payload)
+	if !ok {
 		return nil
 	}
-	var parsed struct {
-		Context struct {
-			InputFiles       []string         `json:"inputFiles"`
-			InputExtractions []map[string]any `json:"inputExtractions"`
-		} `json:"context"`
-	}
-	if json.Unmarshal(payload, &parsed) != nil {
-		return nil
-	}
-	// Build a basename → extracted? lookup so positional matches
-	// don't drag stale references when the dispatcher records
-	// fewer extractions than files (e.g. one EPUB ingested, one
-	// .bin pass-through). When extractions equal inputFiles in
-	// count we treat all as extracted; the positional join is
-	// exactly what buildAttachedFilesBlock uses upstream.
-	extractedBasenames := make(map[string]bool, len(parsed.Context.InputExtractions))
-	if len(parsed.Context.InputExtractions) > 0 {
-		if len(parsed.Context.InputExtractions) == len(parsed.Context.InputFiles) {
-			for i, path := range parsed.Context.InputFiles {
-				if path == "" {
-					continue
-				}
-				if _, ok := parsed.Context.InputExtractions[i]["extracted_document_id"]; ok {
-					extractedBasenames[filepath.Base(path)] = true
-				}
-			}
-		} else {
-			// Mismatched counts — flag every basename as extracted
-			// to favour memory-only access over a maybe-staged copy.
-			// Mirrors buildAttachedFilesBlock's fallback shape.
-			for _, path := range parsed.Context.InputFiles {
-				if path != "" {
-					extractedBasenames[filepath.Base(path)] = true
-				}
-			}
-		}
-	}
+	extractedBasenames := extractedBasenameSet(in.InputFiles, in.InputExtractions)
 
-	out := make([]map[string]string, 0, len(parsed.Context.InputFiles))
-	for _, path := range parsed.Context.InputFiles {
+	out := make([]map[string]string, 0, len(in.InputFiles))
+	for _, path := range in.InputFiles {
 		if path == "" {
 			continue
 		}
@@ -2619,6 +2588,60 @@ func extractTaskInputArtifacts(payload []byte, maxMediaBytes int64, requireInput
 		return nil
 	}
 	return out
+}
+
+// taskInputContext is the slice of a task payload that input staging reads.
+type taskInputContext struct {
+	InputFiles       []string         `json:"inputFiles"`
+	InputExtractions []map[string]any `json:"inputExtractions"`
+}
+
+// parseTaskInputContext is the ONE parse of it, shared by staging and the
+// §4.2a observer so the observer cannot go dark on a payload staging accepts.
+func parseTaskInputContext(payload []byte) (taskInputContext, bool) {
+	var parsed struct {
+		Context taskInputContext `json:"context"`
+	}
+	if len(payload) == 0 || json.Unmarshal(payload, &parsed) != nil {
+		return taskInputContext{}, false
+	}
+	return parsed.Context, true
+}
+
+// extractedBasenameSet marks which input files were extracted. Shared by
+// extractTaskInputArtifacts and the §4.2a staging observer so they count the
+// same files.
+func extractedBasenameSet(inputFiles []string, extractions []map[string]any) map[string]bool {
+	// Build a basename → extracted? lookup so positional matches
+	// don't drag stale references when the dispatcher records
+	// fewer extractions than files (e.g. one EPUB ingested, one
+	// .bin pass-through). When extractions equal inputFiles in
+	// count we treat all as extracted; the positional join is
+	// exactly what buildAttachedFilesBlock uses upstream.
+	extractedBasenames := make(map[string]bool, len(extractions))
+	if len(extractions) == 0 {
+		return extractedBasenames
+	}
+	if len(extractions) != len(inputFiles) {
+		// Mismatched counts — flag every basename as extracted
+		// to favour memory-only access over a maybe-staged copy.
+		// Mirrors buildAttachedFilesBlock's fallback shape.
+		for _, path := range inputFiles {
+			if path != "" {
+				extractedBasenames[filepath.Base(path)] = true
+			}
+		}
+		return extractedBasenames
+	}
+	for i, path := range inputFiles {
+		if path == "" {
+			continue
+		}
+		if _, ok := extractions[i]["extracted_document_id"]; ok {
+			extractedBasenames[filepath.Base(path)] = true
+		}
+	}
+	return extractedBasenames
 }
 
 // requireInputStageMaxBytes bounds the raw bytes staged for a workflow that declares
@@ -3044,6 +3067,19 @@ func (e *Executor) ingestOutputArtifacts(ctx context.Context, task *persistence.
 	}
 }
 
+// documentTextWriter is the memory indexer's document ingest, which stores a
+// version whole (salted chunk hashes, memory rollback x supersession design
+// A.7); *memory.Indexer implements it.
+type documentTextWriter interface {
+	IngestDocumentText(ctx context.Context, projectID, taskID, artifactID, documentPath, content string) error
+}
+
+// documentSuperseder is the memory indexer's document supersession, which
+// retires a document's earlier uploads; *memory.Indexer implements it.
+type documentSuperseder interface {
+	SupersedeDocument(ctx context.Context, projectID, repoScope, documentPath, epochID string) (int, error)
+}
+
 // inputArtifactRef pairs a staged input artifact's store ID with its
 // best-effort display name (storage-path basename) for the sync ingest
 // fallback. The enqueue path needs only the ID — the worker reads the
@@ -3051,6 +3087,10 @@ func (e *Executor) ingestOutputArtifacts(ctx context.Context, task *persistence.
 type inputArtifactRef struct {
 	ID   string
 	Name string
+	// DocumentPath is the file's path in its repository when the uploader
+	// declared one (context.inputDocumentPaths; memory rollback x
+	// supersession design, amendment 2026-09-26). Empty = not a document.
+	DocumentPath string
 }
 
 // inputArtifactRefsFromPayload reads the API-folded
@@ -3063,8 +3103,9 @@ func inputArtifactRefsFromPayload(payload []byte) []inputArtifactRef {
 	}
 	var p struct {
 		Context struct {
-			InputArtifactIDs []string `json:"inputArtifactIDs"`
-			InputFiles       []string `json:"inputFiles"`
+			InputArtifactIDs   []string          `json:"inputArtifactIDs"`
+			InputFiles         []string          `json:"inputFiles"`
+			InputDocumentPaths map[string]string `json:"inputDocumentPaths"`
 		} `json:"context"`
 	}
 	if err := json.Unmarshal(payload, &p); err != nil {
@@ -3083,7 +3124,7 @@ func inputArtifactRefsFromPayload(payload []byte) []inputArtifactRef {
 		if i < len(p.Context.InputFiles) {
 			name = filepath.Base(p.Context.InputFiles[i])
 		}
-		refs = append(refs, inputArtifactRef{ID: id, Name: name})
+		refs = append(refs, inputArtifactRef{ID: id, Name: name, DocumentPath: p.Context.InputDocumentPaths[id]})
 	}
 	return refs
 }
@@ -3141,6 +3182,10 @@ func (e *Executor) ingestInputArtifacts(ctx context.Context, task *persistence.T
 				ProposedConfidence: 0.5,
 				RepoScope:          scopePtr,
 			}
+			if ref.DocumentPath != "" {
+				path := ref.DocumentPath
+				item.DocumentPath = &path
+			}
 			if err := e.ingestQueue.Enqueue(ctx, item); err != nil {
 				e.logger.Warn().Err(err).Str("artifact_id", ref.ID).
 					Msg("memory: failed to enqueue input artifact — falling back to synchronous indexer")
@@ -3173,7 +3218,21 @@ func (e *Executor) ingestInputArtifacts(ctx context.Context, task *persistence.T
 		if sourceName == "" {
 			sourceName = ref.ID
 		}
-		if err := e.memoryIndexer.IngestText(ctx, task.ProjectID, task.ID, ref.ID, sourceName, string(content)); err != nil {
+		ingest := e.memoryIndexer.IngestText
+		if ref.DocumentPath != "" {
+			sourceName = ref.DocumentPath
+			// A document version is stored whole (salted hashes); without
+			// that method it fails rather than landing unsalted (A.7, R3).
+			dw, ok := e.memoryIndexer.(documentTextWriter)
+			if !ok {
+				e.logger.Warn().Str("artifact_id", ref.ID).Str("document_path", ref.DocumentPath).
+					Msg("memory: the indexer cannot store a document version whole; not ingested")
+				failed++
+				continue
+			}
+			ingest = dw.IngestDocumentText
+		}
+		if err := ingest(ctx, task.ProjectID, task.ID, ref.ID, sourceName, string(content)); err != nil {
 			e.logger.Warn().Err(err).Str("artifact_id", ref.ID).Str("source_name", sourceName).
 				Msg("memory: input artifact IngestText failed")
 			failed++
@@ -3183,6 +3242,17 @@ func (e *Executor) ingestInputArtifacts(ctx context.Context, task *persistence.T
 			if err := e.memoryIndexer.PatchScopeByArtifact(ctx, task.ProjectID, ref.ID, repoScope); err != nil {
 				e.logger.Warn().Err(err).Str("artifact_id", ref.ID).Str("repo_scope", repoScope).
 					Msg("memory: failed to stamp repo_scope on input chunks (ingest succeeded)")
+			}
+		}
+		// Document supersession runs after the scope stamp, because it keys
+		// on the scope. This path has no epoch, so the supersession records
+		// NULL provenance (the design's epochless rule).
+		if ref.DocumentPath != "" && repoScope != "" {
+			if sup, ok := e.memoryIndexer.(documentSuperseder); ok {
+				if _, err := sup.SupersedeDocument(ctx, task.ProjectID, repoScope, ref.DocumentPath, ""); err != nil {
+					e.logger.Warn().Err(err).Str("artifact_id", ref.ID).Str("document_path", ref.DocumentPath).
+						Msg("memory: document supersession failed (ingest succeeded; the next ingest converges it)")
+				}
 			}
 		}
 		committed++

@@ -264,6 +264,8 @@ func NewRouter(server *Server, cfg *config.Config) *Router {
 		// Doctor endpoint (authenticated)
 		if doctorHandlers != nil {
 			mux.HandleFunc("/api/v1/doctor", doctorHandlers.RunDoctor)
+			// config_template_drift acknowledgements — admin-gated, fail-closed.
+			mux.HandleFunc("/api/v1/doctor/ack", doctorHandlers.AckDoctorFinding)
 			// Feature-doctor read surface: list all features + per-feature diagnosis.
 			// The exact-match route wins for the bare "/features" path; the
 			// trailing-slash prefix route handles both "/features/{id}" lookups and
@@ -279,6 +281,9 @@ func NewRouter(server *Server, cfg *config.Config) *Router {
 		// (404 when disabled) and the admin-key allowlist (403 when
 		// auth is enabled but the key isn't admin).
 		mux.HandleFunc("/api/v1/admin/audit", server.AdminAuditList)
+		// Leader-lock release (issue #60): the predicate in DeleteExpired is
+		// the control, enforced here, daemon-side; the admin gate fronts it.
+		mux.HandleFunc("/api/v1/admin/leader-locks/release", server.LeaderLockRelease)
 		// Chat-audit list endpoint — CLI mirror of /ui/admin/chat-audit.
 		// One row per dispatcher turn (system prompt hash, model, tool
 		// calls, response excerpt, cost). Same admin gate matrix as

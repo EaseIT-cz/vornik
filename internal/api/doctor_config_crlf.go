@@ -18,6 +18,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"vornik.io/vornik/internal/configdrift"
 )
 
 // crlfScanMaxBytes bounds how much of a single file we read when sniffing for
@@ -109,7 +110,19 @@ func (h *DoctorHandlers) collectCRLFScanFiles() []string {
 
 	if h.configDir != "" {
 		_ = filepath.Walk(h.configDir, func(path string, info os.FileInfo, err error) error {
-			if err != nil || info.IsDir() {
+			if err != nil {
+				return nil
+			}
+			// The config_template_drift baselines are the shipped bytes, and
+			// --fix rewrites what it finds: the baseline must stay what
+			// shipped, and a CRLF template is not the operator's to fix.
+			if rel, rerr := filepath.Rel(h.configDir, path); rerr == nil && configdrift.IsBaselineArtifact(rel) {
+				if info.IsDir() {
+					return filepath.SkipDir
+				}
+				return nil
+			}
+			if info.IsDir() {
 				return nil
 			}
 			if !crlfScanExtensions[strings.ToLower(filepath.Ext(path))] {

@@ -1201,6 +1201,7 @@ func (a *memoryTitleBackfillAdapter) BackfillBatch(ctx context.Context, batchSiz
 		Skipped:   res.Skipped,
 		Remaining: res.Remaining,
 		Errors:    res.Errors,
+		Paused:    res.Paused,
 	}, nil
 }
 
@@ -1232,6 +1233,7 @@ func (a *memoryClassifyBackfillAdapter) BackfillBatch(ctx context.Context, proje
 		Remaining: res.Remaining,
 		Exhausted: res.Exhausted,
 		Errors:    res.Errors,
+		Paused:    res.Paused,
 	}, nil
 }
 

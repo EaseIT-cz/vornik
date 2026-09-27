@@ -171,11 +171,13 @@ type fakeProvider struct {
 	calls   int
 	Prompts []string
 	model   string
+	lastCtx context.Context
 }
 
-func (f *fakeProvider) Complete(_ context.Context, messages []chat.Message) (*chat.ChatResponse, error) {
+func (f *fakeProvider) Complete(ctx context.Context, messages []chat.Message) (*chat.ChatResponse, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	f.lastCtx = ctx
 	for _, m := range messages {
 		if m.Role == "user" {
 			f.Prompts = append(f.Prompts, m.Content)

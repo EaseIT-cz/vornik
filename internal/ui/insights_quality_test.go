@@ -101,3 +101,33 @@ func TestSummarizeExecutionQuality_SeparatesTheThreeStates(t *testing.T) {
 		}
 	})
 }
+
+// An unscorable row is EXAMINED, not absent (agent-quality-benchmark design,
+// amendment 2026-09-26): before, the summary had no case for it and the row
+// vanished from the page. It is counted, listed for attention, and never
+// averaged.
+func TestSummarizeExecutionQuality_CountsUnscorableWithoutAveragingIt(t *testing.T) {
+	view := summarizeExecutionQuality([]*persistence.ExecutionQualityScore{
+		qs("dev-pipeline", "scored", "", f(0.8), 4),
+		qs("dev-pipeline", "unscorable", "multi_visit_last_only", nil, 0),
+	})
+	if len(view.Declaring) != 1 {
+		t.Fatalf("Declaring = %+v", view.Declaring)
+	}
+	w := view.Declaring[0]
+	if w.Unscorable != 1 || w.Scored != 1 || w.MeanPercent != 80 {
+		t.Fatalf("summary = %+v, want 1 unscorable, 1 scored, mean 80", w)
+	}
+	if view.Coverage.Unscorable != 1 {
+		t.Errorf("coverage must count the unscorable row as examined: %+v", view.Coverage)
+	}
+	found := false
+	for _, r := range view.Attention {
+		if r.Status == "unscorable" {
+			found = true
+		}
+	}
+	if !found {
+		t.Error("an unscorable execution is a scorer gap and belongs on the attention list")
+	}
+}

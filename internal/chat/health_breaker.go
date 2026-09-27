@@ -135,6 +135,16 @@ func (b *Breaker) Allow() (permitted, probe bool, state CircuitState) {
 	}
 }
 
+// AllowWithoutProbe is Allow for a best-effort caller: it is permitted only
+// while the circuit is CLOSED and never flips OPEN→HALF_OPEN, so the probe is
+// always taken by a caller whose budget is the real one (LLD
+// 2026-07-11-model-health §5.3a).
+func (b *Breaker) AllowWithoutProbe() (permitted bool, state CircuitState) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.state == CircuitClosed, b.state
+}
+
 // OpenSince returns the OPEN timestamp for the reject error (best-effort).
 func (b *Breaker) OpenSince() time.Time {
 	b.mu.Lock()

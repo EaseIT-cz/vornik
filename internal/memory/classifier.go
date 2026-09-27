@@ -2,6 +2,7 @@ package memory
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -153,6 +154,7 @@ func (c *Classifier) Classify(
 	}
 	callCtx, cancel := context.WithTimeout(ctx, timeout)
 	callCtx = chat.WithCallSite(callCtx, "memory.classifier")
+	callCtx = chat.WithBestEffort(callCtx) // optional work; breaker design §5.3a
 	defer cancel()
 
 	user := buildClassifierUserPrompt(body, sourceName, producerRole)
@@ -209,7 +211,7 @@ func (c *Classifier) Classify(
 		} else {
 			lastErr = fmt.Errorf("classifier: no choices in response")
 		}
-		if callCtx.Err() != nil {
+		if chat.RetryAllowed(callCtx) != nil || errors.Is(err, chat.ErrOptionalWorkDisabled) {
 			return ClassUnclassified, lastErr
 		}
 		if attempt == maxAttempts {

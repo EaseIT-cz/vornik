@@ -1,7 +1,7 @@
 package projectdeps
 
 import (
-	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -96,24 +96,39 @@ func (r *Resolver) Plan(projectRoot string, entries []Entry) []Plan {
 	return plans
 }
 
-// Ensure materialises every plan that needs it and returns the mounts.
-//
-// It refuses the WHOLE set on the first failure rather than mounting the part
-// that worked. A partial mount is the reviewer problem again: the agent gets
-// an environment that imports some of what the project declared, and the
-// missing half surfaces as an ordinary ImportError that reads like the code's
-// fault rather than the provisioner's.
-func (r *Resolver) Ensure(ctx context.Context, plans []Plan) ([]Mount, error) {
+// ErrNotInstalled means a declared dependency set has no complete tree in the
+// cache. The daemon never installs (design §8): the remedy is the operator's.
+var ErrNotInstalled = errors.New("project dependencies are not installed")
+
+// ErrInstalledForOtherImage means the tree exists but was installed for images
+// that do not include this step's role image, so its compiled wheels may not
+// import under that image's interpreter.
+var ErrInstalledForOtherImage = errors.New("project dependencies were installed for other images")
+
+// Mounts returns the mounts for plans, READ-ONLY: it never fetches (design
+// §8.2, replacing Ensure, which fetched). It refuses the WHOLE set on the
+// first plan that cannot serve image, rather than mounting the part that
+// works: a partial environment surfaces as an ordinary ImportError that reads
+// like the code's fault rather than the provisioner's (§7a item 3).
+func (r *Resolver) Mounts(project string, plans []Plan, image string) ([]Mount, error) {
 	mounts := make([]Mount, 0, len(plans))
 	for _, p := range plans {
 		if p.Problem != nil {
 			return nil, fmt.Errorf("dependency %s: %w", p.Entry.Ecosystem, p.Problem)
 		}
 		if p.Entry.Ecosystem != EcosystemPip {
-			return nil, fmt.Errorf("dependency %s: not yet materialised — slice 1 provisions pip only", p.Entry.Ecosystem)
+			return nil, fmt.Errorf("dependency %s: not yet materialisable — slice 1 provisions pip only", p.Entry.Ecosystem)
 		}
-		if _, err := r.store.Materialise(ctx, p.Key, WithSiteCustomise(PipFetcher(nil, p.LockfilePath))); err != nil {
-			return nil, err
+		if !p.Materialised {
+			return nil, fmt.Errorf("%w: %s (%s) — run `vornikctl deps install %s` on this host", ErrNotInstalled, p.Entry.Lockfile, p.Key, project)
+		}
+		meta, err := r.store.ReadMarker(p.Key)
+		if err != nil {
+			return nil, fmt.Errorf("dependency %s: %w", p.Key, err)
+		}
+		if !meta.ListsImage(image) {
+			return nil, fmt.Errorf("%w: %s was installed for %v, this step runs %s — run `vornikctl deps install %s`",
+				ErrInstalledForOtherImage, p.Key, meta.Images, image, project)
 		}
 		mounts = append(mounts, p.Mount(r.store))
 	}

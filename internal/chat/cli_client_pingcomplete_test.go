@@ -19,6 +19,8 @@ import (
 	"runtime"
 	"testing"
 	"time"
+
+	"vornik.io/vornik/internal/spawn"
 )
 
 func skipIfNoUnixBinaries(t *testing.T) {
@@ -36,7 +38,7 @@ func skipIfNoUnixBinaries(t *testing.T) {
 
 func TestCLIClient_Ping_Success(t *testing.T) {
 	skipIfNoUnixBinaries(t)
-	c := NewCLIClient("model-x", WithCLIBinary("/bin/true"))
+	c := NewCLIClient("model-x", WithCLIBinary(spawn.NewConfiguredCommand("/bin/true")))
 	if err := c.Ping(context.Background()); err != nil {
 		t.Errorf("Ping(/bin/true): got %v, want nil", err)
 	}
@@ -44,7 +46,7 @@ func TestCLIClient_Ping_Success(t *testing.T) {
 
 func TestCLIClient_Ping_NonZeroExit(t *testing.T) {
 	skipIfNoUnixBinaries(t)
-	c := NewCLIClient("model-x", WithCLIBinary("/bin/false"))
+	c := NewCLIClient("model-x", WithCLIBinary(spawn.NewConfiguredCommand("/bin/false")))
 	err := c.Ping(context.Background())
 	if err == nil {
 		t.Error("Ping(/bin/false): got nil, want error")
@@ -52,7 +54,7 @@ func TestCLIClient_Ping_NonZeroExit(t *testing.T) {
 }
 
 func TestCLIClient_Ping_BinaryMissing(t *testing.T) {
-	c := NewCLIClient("model-x", WithCLIBinary("/this/does/not/exist"))
+	c := NewCLIClient("model-x", WithCLIBinary(spawn.NewConfiguredCommand("/this/does/not/exist")))
 	err := c.Ping(context.Background())
 	if err == nil {
 		t.Error("Ping(missing-binary): got nil, want error")
@@ -66,7 +68,7 @@ func TestCLIClient_Ping_BinaryMissing(t *testing.T) {
 func TestCLIClient_Complete_ErrorOnEmptyOutput(t *testing.T) {
 	skipIfNoUnixBinaries(t)
 	c := NewCLIClient("model-x",
-		WithCLIBinary("/bin/true"),
+		WithCLIBinary(spawn.NewConfiguredCommand("/bin/true")),
 		WithCLITimeout(5*time.Second))
 	_, err := c.Complete(context.Background(), []Message{
 		{Role: "user", Content: "hello"},
@@ -78,7 +80,7 @@ func TestCLIClient_Complete_ErrorOnEmptyOutput(t *testing.T) {
 
 func TestCLIClient_CompleteWithTools_ErrorOnEmptyOutput(t *testing.T) {
 	skipIfNoUnixBinaries(t)
-	c := NewCLIClient("model-x", WithCLIBinary("/bin/true"))
+	c := NewCLIClient("model-x", WithCLIBinary(spawn.NewConfiguredCommand("/bin/true")))
 	tools := []Tool{{Type: "function", Function: ToolFunction{Name: "ping"}}}
 	_, err := c.CompleteWithTools(context.Background(),
 		[]Message{{Role: "user", Content: "hi"}}, tools)
@@ -89,7 +91,7 @@ func TestCLIClient_CompleteWithTools_ErrorOnEmptyOutput(t *testing.T) {
 
 func TestCLIClient_CompleteWithToolsStream_ErrorOnEmptyOutput(t *testing.T) {
 	skipIfNoUnixBinaries(t)
-	c := NewCLIClient("model-x", WithCLIBinary("/bin/true"))
+	c := NewCLIClient("model-x", WithCLIBinary(spawn.NewConfiguredCommand("/bin/true")))
 	_, err := c.CompleteWithToolsStream(context.Background(),
 		[]Message{{Role: "user", Content: "hi"}}, nil, nil)
 	if err == nil {
@@ -99,7 +101,7 @@ func TestCLIClient_CompleteWithToolsStream_ErrorOnEmptyOutput(t *testing.T) {
 
 func TestCLIClient_Complete_ErrorOnNonZeroExit(t *testing.T) {
 	skipIfNoUnixBinaries(t)
-	c := NewCLIClient("model-x", WithCLIBinary("/bin/false"))
+	c := NewCLIClient("model-x", WithCLIBinary(spawn.NewConfiguredCommand("/bin/false")))
 	_, err := c.Complete(context.Background(), []Message{
 		{Role: "user", Content: "x"},
 	})
@@ -110,7 +112,7 @@ func TestCLIClient_Complete_ErrorOnNonZeroExit(t *testing.T) {
 
 func TestCLIClient_Complete_EmptyMessagesRejected(t *testing.T) {
 	skipIfNoUnixBinaries(t)
-	c := NewCLIClient("model-x", WithCLIBinary("/bin/true"))
+	c := NewCLIClient("model-x", WithCLIBinary(spawn.NewConfiguredCommand("/bin/true")))
 	_, err := c.Complete(context.Background(), nil)
 	if err == nil {
 		t.Error("Complete with no messages must error")
@@ -122,7 +124,7 @@ func TestCLIClient_Complete_EmptyMessagesRejected(t *testing.T) {
 func TestCodexCLI_Complete_ErrorOnEmptyOutput(t *testing.T) {
 	skipIfNoUnixBinaries(t)
 	c := NewCodexCLIClient("gpt-5.4-mini",
-		WithCodexBinary("/bin/true"),
+		WithCodexBinary(spawn.NewConfiguredCommand("/bin/true")),
 		WithCodexTimeout(5*time.Second))
 	_, err := c.Complete(context.Background(), []Message{
 		{Role: "user", Content: "hi"},
@@ -134,7 +136,7 @@ func TestCodexCLI_Complete_ErrorOnEmptyOutput(t *testing.T) {
 
 func TestCodexCLI_CompleteWithTools_ErrorOnEmptyOutput(t *testing.T) {
 	skipIfNoUnixBinaries(t)
-	c := NewCodexCLIClient("gpt-5.4-mini", WithCodexBinary("/bin/true"))
+	c := NewCodexCLIClient("gpt-5.4-mini", WithCodexBinary(spawn.NewConfiguredCommand("/bin/true")))
 	tools := []Tool{{Type: "function", Function: ToolFunction{Name: "ping"}}}
 	_, err := c.CompleteWithTools(context.Background(),
 		[]Message{{Role: "user", Content: "hi"}}, tools)
@@ -145,7 +147,7 @@ func TestCodexCLI_CompleteWithTools_ErrorOnEmptyOutput(t *testing.T) {
 
 func TestCodexCLI_CompleteWithToolsStream_ErrorOnEmptyOutput(t *testing.T) {
 	skipIfNoUnixBinaries(t)
-	c := NewCodexCLIClient("gpt-5.4-mini", WithCodexBinary("/bin/true"))
+	c := NewCodexCLIClient("gpt-5.4-mini", WithCodexBinary(spawn.NewConfiguredCommand("/bin/true")))
 	_, err := c.CompleteWithToolsStream(context.Background(),
 		[]Message{{Role: "user", Content: "hi"}}, nil, nil)
 	if err == nil {
@@ -155,7 +157,7 @@ func TestCodexCLI_CompleteWithToolsStream_ErrorOnEmptyOutput(t *testing.T) {
 
 func TestCodexCLI_Complete_ErrorOnNonZeroExit(t *testing.T) {
 	skipIfNoUnixBinaries(t)
-	c := NewCodexCLIClient("gpt-5.4-mini", WithCodexBinary("/bin/false"))
+	c := NewCodexCLIClient("gpt-5.4-mini", WithCodexBinary(spawn.NewConfiguredCommand("/bin/false")))
 	_, err := c.Complete(context.Background(), []Message{
 		{Role: "user", Content: "x"},
 	})
@@ -166,7 +168,7 @@ func TestCodexCLI_Complete_ErrorOnNonZeroExit(t *testing.T) {
 
 func TestCodexCLI_Complete_EmptyMessagesRejected(t *testing.T) {
 	skipIfNoUnixBinaries(t)
-	c := NewCodexCLIClient("gpt-5.4-mini", WithCodexBinary("/bin/true"))
+	c := NewCodexCLIClient("gpt-5.4-mini", WithCodexBinary(spawn.NewConfiguredCommand("/bin/true")))
 	_, err := c.Complete(context.Background(), nil)
 	if err == nil {
 		t.Error("Codex Complete with no messages must error")

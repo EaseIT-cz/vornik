@@ -13,6 +13,8 @@ import (
 	"strings"
 	"time"
 
+	"vornik.io/vornik/internal/agenttools"
+
 	"vornik.io/vornik/internal/auth"
 	"vornik.io/vornik/internal/budget"
 	"vornik.io/vornik/internal/chat"
@@ -57,6 +59,11 @@ type CreateTaskRequest struct {
 type InputArtifact struct {
 	Name    string `json:"name"`
 	Content string `json:"content"`
+	// Path is the file's path in its repository, declared by the uploader
+	// (memory rollback x supersession design, amendment 2026-09-26). It is
+	// the document's identity: re-ingesting the same path supersedes the
+	// earlier versions. Optional; absent means today's behaviour.
+	Path string `json:"path,omitempty"`
 }
 
 // CreateTaskResponse represents the response for task creation.
@@ -1795,9 +1802,14 @@ func (s *Server) roleAllowsMCPTool(ctx context.Context, taskID, qualifiedName st
 		// visibility — a deployment running every MCP call unrestricted read
 		// exactly like one whose roles all resolve. See MCPGateMetrics.
 		s.recordMCPGap("call", reason)
-		return true
 	}
-	return mcpRoleToolAllowed(allowed, qualifiedName)
+	// Behaviour-neutral: an empty allowlist admitted before (this branch used
+	// to return true) and AllowlistAdmits admits it now. The gate and the
+	// executor's input-staging decision agree because BOTH call
+	// AllowlistAdmits (media routing LLD §4.2a). Do not substitute
+	// agenttools.RoleAllowsTool here: it is the stricter bare matcher, admits
+	// nothing on an empty slice, and would flip this fail-open to fail-closed.
+	return agenttools.AllowlistAdmits(allowed, qualifiedName)
 }
 
 // roleToolAllowlistReason resolves the calling task's current role and returns
@@ -1873,7 +1885,7 @@ func (s *Server) roleToolAllowlistReason(ctx context.Context, taskID string) ([]
 // 11,937 tokens of MCP schemas going to every role, including roles that need a
 // handful (registry design §10).
 //
-// Decided by mcpRoleToolAllowed — the same predicate the invoke-time gate uses —
+// Decided by agenttools.AllowlistAdmits — the same predicate the invoke-time gate uses —
 // so the advertised set can never exceed the permitted set. An empty allowlist is
 // passthrough, matching the fail-open rule everywhere else.
 //
@@ -1886,7 +1898,7 @@ func advertisedTools(all []chat.Tool, allowed []string) []chat.Tool {
 	}
 	out := make([]chat.Tool, 0, len(all))
 	for _, t := range all {
-		if mcpRoleToolAllowed(allowed, t.Function.Name) {
+		if agenttools.AllowlistAdmits(allowed, t.Function.Name) {
 			out = append(out, t)
 		}
 	}
@@ -1909,83 +1921,6 @@ func mcpCallerTaskID(r *http.Request) string {
 		}
 	}
 	return r.Header.Get("X-Task-ID")
-}
-
-// mcpRoleToolAllowed applies a resolved (non-empty) role allowlist to one
-// requested tool. Pure (no I/O) so the policy is unit-testable without
-// standing up task → execution → workflow → role resolution.
-//
-// CLOSED-WORLD (B2 authorization gate): a role with a non-empty allowlist may
-// invoke only the tools it lists. MCP-qualified tools (mcp__server__tool) must
-// be granted EXPLICITLY — by exact name, by bare segment, or by a wildcard the
-// operator writes deliberately:
-//
-//	mcp__*           → any MCP tool (defer MCP gating to the project layer:
-//	                   permissions.allowedTools + the MCP server's allowed_tools)
-//	mcp__server__*   → any tool of one MCP server
-//
-// There is NO fail-open by omission: listing only built-in tools does NOT
-// grant MCP tools (that would let a deliberately-narrow role reach, e.g.,
-// broker place_order whenever the project enables it). A role that should use
-// project MCP tools declares that intent with mcp__* or the specific tools.
-//
-// Trading roles keep the strict intersection (listing mcp__broker__get_quote
-// still denies mcp__broker__place_order). Regression context: the janka
-// `researcher` listed only built-in tools and so could not call
-// mcp__scraper__web_fetch — every portal scan got a daemon-level FORBIDDEN,
-// starving the RAG (2026-06-20). The fix is to GRANT the tool in the role
-// config (here + the distributed swarm presets), not to fail open.
-func mcpRoleToolAllowed(allowed []string, qualifiedName string) bool {
-	// Bare tool segment so an allowlist authored as either the qualified or the
-	// bare name both match.
-	//
-	// TWO namespace conventions reach this check, and only one used to be
-	// handled. MCP qualifies with "__" (mcp__vornik__file_read); the
-	// OpenAI-compatible function schema qualifies with "." (functions.file_read),
-	// and that is the form a model emits when it names a tool back to us. Handling
-	// only "__" meant every grant request phrased the second way was refused
-	// against a ceiling of bare names — so a reviewer asking for
-	// "functions.git_status" was denied a tool its role plainly allows, retried
-	// with four different spellings, and burned nine tool calls failing. Found by
-	// the agent-quality benchmark against real refusal rows, 2026-08-14.
-	//
-	// This widens matching only in the direction the operator already intended:
-	// an allowlist entry "file_read" means the file_read tool however the caller
-	// spelled it. Exact entries are still matched first and are unaffected.
-	bare := qualifiedName
-	if idx := strings.LastIndex(qualifiedName, "__"); idx >= 0 {
-		bare = qualifiedName[idx+2:]
-	}
-	if idx := strings.LastIndex(bare, "."); idx >= 0 {
-		bare = bare[idx+1:]
-	}
-	isMCP := strings.HasPrefix(qualifiedName, "mcp__")
-	for _, a := range allowed {
-		if a == qualifiedName || a == bare {
-			return true
-		}
-		if isMCP && mcpWildcardMatch(a, qualifiedName) {
-			return true
-		}
-	}
-	return false
-}
-
-// mcpWildcardMatch reports whether an allowlist entry is an MCP wildcard that
-// covers qualifiedName (already known to start with "mcp__"). Supported:
-// "mcp__*" (all MCP tools) and "mcp__<server>__*" (one server's tools). The
-// operator must write the wildcard explicitly — absence never grants.
-func mcpWildcardMatch(entry, qualifiedName string) bool {
-	if entry == "mcp__*" {
-		return true
-	}
-	if prefix, ok := strings.CutSuffix(entry, "*"); ok {
-		// e.g. entry "mcp__broker__*" → prefix "mcp__broker__"
-		if strings.HasPrefix(prefix, "mcp__") && strings.HasPrefix(qualifiedName, prefix) {
-			return true
-		}
-	}
-	return false
 }
 
 // Healthz handles GET /healthz

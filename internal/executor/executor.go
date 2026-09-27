@@ -230,6 +230,12 @@ type Config struct {
 	// ProjectWorkspacePath is the base dir for per-project persistent workspaces.
 	ProjectWorkspacePath string
 
+	// DependencyCacheDir is where `vornikctl deps install` put project
+	// dependency trees; the executor only reads and mounts them (project
+	// dependency provisioning design §8.2). Empty: nothing is mounted, and a
+	// project that declares dependencies refuses to start its agents.
+	DependencyCacheDir string
+
 	// LogLevel is the daemon's log level, passed to agent containers.
 	LogLevel string
 
@@ -252,6 +258,10 @@ type Config struct {
 	// their static VORNIK_MAX_TOOL_ITERATIONS. See
 	// https://docs.vornik.io
 	ToolBudget toolbudget.Config
+	// StepSpeedFactor is the declared inference-speed factor applied to every
+	// step timeout after the tier factor (dynamic-tool-budget design
+	// §6.2.1b). 0 or 1 = unscaled. Computed once at startup, like the lease.
+	StepSpeedFactor float64
 
 	// RequireProducerSuccess gates RAG ingest on the producing task reaching
 	// COMPLETED (LLD 2026-07-12-rag-ingest-producer-success-gate). *bool default-
@@ -2079,7 +2089,7 @@ func (e *Executor) runExecution(ctx context.Context, task *persistence.Task, exe
 	// will simply not finish in human-reasonable time." Empty = no
 	// cap (preserves the pre-feature behaviour for upgrades).
 	if plan != nil && plan.workflow != nil && plan.workflow.MaxWallClock != "" {
-		if d, perr := time.ParseDuration(plan.workflow.MaxWallClock); perr == nil && d > 0 {
+		if d, perr := registry.WallClockCap(plan.workflow.MaxWallClock); d > 0 {
 			var cancelDeadline context.CancelFunc
 			ctx, cancelDeadline = context.WithTimeout(ctx, d)
 			// Wrap the original cancelation so the deadline timer
@@ -2125,31 +2135,34 @@ func (e *Executor) runExecution(ctx context.Context, task *persistence.Task, exe
 	backlogFile := resolveBacklogFile(e.workflows, e.config.ProjectWorkspacePath, task.ProjectID)
 
 	// Bootstrap: ensure the project workspace is a git repo with at least
-	// one commit. This lets us unconditionally use worktree isolation +
-	// auto-commit-on-merge for every project, regardless of whether an
-	// operator ever ran `git init` by hand. Failure here falls through to
-	// the legacy non-worktree path below — the task still runs, it just
-	// loses the per-task isolation and the merge-time persistence
-	// guarantee, same as it did before this bootstrap existed.
+	// one commit, then give the task its own worktree. Every task that has a
+	// project runs in a worktree or does not run: there is no shared mode
+	// (process-spawn law S6-D1). The shared fallback mounted the project
+	// directory read-write with its .git, so an agent could write .git/hooks
+	// or .git/config that the daemon's next git command in the project ran on
+	// the host. A bootstrap or worktree failure now fails the task
+	// WORKSPACE_UNAVAILABLE before any container starts.
+	//
 	// Per-project lock guards the git+worktree setup so two tasks
 	// on the same project can't race each other (worktree branch
-	// collision, snapshotWorkspaceRef tearing). Lock window is
+	// collision). Lock window is
 	// intentionally short — releases before the actual task run
 	// kicks off so parallel executions across projects aren't
 	// serialised. Wrapped in IIFE so a panic anywhere in the
 	// setup block still unlocks (pre-2026-05-29 the inline unlock
 	// would leak the lock on panic, deadlocking every subsequent
 	// task on the same project).
-	var wsRef string
-	var useWorktrees bool
+	useWorktrees := projectDir != ""
+	var workspaceErr error
 	func() {
+		if !useWorktrees {
+			return // no project workspace configured: nothing is mounted
+		}
 		unlockProject := e.wsLock().Lock(task.ProjectID)
 		defer unlockProject()
 		if err := ensureGitRepo(ctx, projectDir, e.logger); err != nil {
-			e.logger.Warn().
-				Err(err).
-				Str("project_dir", projectDir).
-				Msg("bootstrap: failed to initialize project git repo — falling back to shared workspace")
+			workspaceErr = newWorkspaceUnavailable("bootstrap the project's git repository", projectDir, err)
+			return
 		}
 
 		// Deterministic pre-work rebase for forge tasks: reset the project clone
@@ -2210,31 +2223,31 @@ func (e *Executor) runExecution(ctx context.Context, task *persistence.Task, exe
 			}
 		}
 
-		// When the project is a git repository, create an isolated worktree for this
-		// task so parallel executions don't share the working tree. Each attempt gets
-		// a fresh worktree branched from HEAD; on success the branch is merged back.
-		// Fall back to the legacy snapshot/reset approach when git is not available.
-		useWorktrees = isGitRepo(projectDir)
-		if useWorktrees {
-			wt, wtErr := createWorktree(ctx, projectDir, task.ID, e.logger)
-			if wtErr != nil {
-				// Branch or directory may exist from a paused/interrupted prior run.
-				// Remove it and retry once before falling back to shared workspace.
-				removeWorktree(ctx, projectDir, worktreePath(projectDir, task.ID), task.ID, e.logger)
-				wt, wtErr = createWorktree(ctx, projectDir, task.ID, e.logger)
-			}
-			if wtErr != nil {
-				e.logger.Warn().Err(wtErr).Str("project_dir", projectDir).
-					Msg("worktree creation failed — falling back to shared workspace")
-				useWorktrees = false
-			} else {
-				plan.worktreeDir = wt
-			}
+		// Create an isolated worktree for this task so parallel executions
+		// don't share the working tree. Each attempt gets a fresh worktree
+		// branched from HEAD; on success the branch is merged back.
+		wt, wtErr := createWorktree(ctx, projectDir, task.ID, e.logger)
+		if wtErr != nil {
+			// Branch or directory may exist from a paused/interrupted prior run.
+			// Remove it and retry once.
+			removeWorktree(ctx, projectDir, worktreePath(projectDir, task.ID), task.ID, e.logger)
+			wt, wtErr = createWorktree(ctx, projectDir, task.ID, e.logger)
 		}
-		if !useWorktrees {
-			wsRef = snapshotWorkspaceRef(projectDir)
+		if wtErr != nil {
+			workspaceErr = newWorkspaceUnavailable("create the task's worktree", projectDir, wtErr)
+			return
 		}
+		plan.worktreeDir = wt
 	}()
+	if workspaceErr != nil {
+		e.logger.Error().Err(workspaceErr).Str("task_id", task.ID).Str("project_dir", projectDir).
+			Msg("workspace unavailable — failing the task before any container starts (no shared mode, S6-D1)")
+		span.SetStatus(codes.Error, "workspace unavailable")
+		span.RecordError(workspaceErr)
+		e.recordWorkspaceUnavailable(ctx, task, execution, plan, workspaceErr)
+		e.handleFailure(ctx, task, execution, workspaceErr)
+		return
+	}
 
 	// cleanupWorktree returns a non-nil error only on the success path
 	// when the merge-back itself fails. A merge failure means the
@@ -2372,11 +2385,7 @@ retryLoop:
 				// 2026-06-04; same rationale as cleanupWorktree).
 				resetCtx, cancelReset := context.WithTimeout(context.Background(), worktreeCleanupTimeout)
 				unlockReset := e.wsLock().Lock(task.ProjectID)
-				if !useWorktrees {
-					if resetErr := resetWorkspace(resetCtx, projectDir, wsRef, e.logger); resetErr != nil {
-						e.logger.Warn().Err(resetErr).Msg("workspace reset failed after cancellation")
-					}
-				} else {
+				if useWorktrees {
 					cleanProjectDir(resetCtx, projectDir, e.logger, e.cleanExcludesFor(task.ProjectID)...)
 				}
 				unlockReset()
@@ -2394,25 +2403,29 @@ retryLoop:
 			if attempts >= maxAttempts {
 				break
 			}
-			// Prepare a clean workspace for the retry attempt.
+			// Prepare a clean workspace for the retry attempt: remove the
+			// failed worktree and create a fresh one from HEAD. A worktree
+			// that cannot be re-created ENDS the retries (S6-D1): there is no
+			// shared mode to fall back to.
 			unlockRetry := e.wsLock().Lock(task.ProjectID)
 			if useWorktrees {
-				// Remove the failed worktree and create a fresh one from HEAD.
 				removeWorktree(ctx, projectDir, plan.worktreeDir, task.ID, e.logger)
 				plan.worktreeDir = ""
 				wt, wtErr := createWorktree(ctx, projectDir, task.ID, e.logger)
 				if wtErr != nil {
-					e.logger.Warn().Err(wtErr).Msg("worktree re-creation failed before retry")
-					// Retry will use the main project dir — clean it so the next
-					// attempt doesn't inherit files from the failed one.
-					cleanProjectDir(ctx, projectDir, e.logger, e.cleanExcludesFor(task.ProjectID)...)
-				} else {
-					plan.worktreeDir = wt
+					// The failed attempt's worktree is already removed; discard
+					// its tracked-file residue as cleanupWorktree(false) would
+					// (design §4.2 of the workspace-hygiene design), since the
+					// post-loop cleanup has no worktree left to key on.
+					discardFailedTaskResidue(ctx, projectDir, backlogFile, task.ID, task.ProjectID, e.metrics, e.logger)
+					unlockRetry()
+					lastErr = newWorkspaceUnavailable("re-create the task's worktree before a retry", projectDir, wtErr)
+					e.logger.Error().Err(lastErr).Str("task_id", task.ID).
+						Msg("workspace unavailable — ending the retries (no shared mode, S6-D1)")
+					e.recordWorkspaceUnavailable(ctx, task, execution, plan, lastErr)
+					break
 				}
-			} else {
-				if resetErr := resetWorkspace(ctx, projectDir, wsRef, e.logger); resetErr != nil {
-					e.logger.Warn().Err(resetErr).Msg("workspace reset failed before retry")
-				}
+				plan.worktreeDir = wt
 			}
 			unlockRetry()
 			if e.metrics != nil {
@@ -2497,11 +2510,7 @@ retryLoop:
 		_ = cleanupWorktree(false)
 	}
 	unlockFinal := e.wsLock().Lock(task.ProjectID)
-	if !useWorktrees {
-		if resetErr := resetWorkspace(ctx, projectDir, wsRef, e.logger); resetErr != nil {
-			e.logger.Warn().Err(resetErr).Msg("workspace reset failed after execution failure")
-		}
-	} else if !preserveWorkspace {
+	if useWorktrees && !preserveWorkspace {
 		// Skip cleanProjectDir when we just merged the worktree —
 		// cleanup would discard the freshly-merged untracked files.
 		cleanProjectDir(ctx, projectDir, e.logger, e.cleanExcludesFor(task.ProjectID)...)

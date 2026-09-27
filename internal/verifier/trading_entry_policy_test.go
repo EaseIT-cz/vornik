@@ -9,7 +9,7 @@ import (
 )
 
 func TestTradingEntryPolicy(t *testing.T) {
-	policy := trading.EntryPolicy{Enabled: true, AllowedSymbols: []string{"MSFT"}, LongOnly: true, MaxRiskUSD: 50, MinNotionalUSD: 500, MaxEntriesPerTick: 1}
+	policy := trading.EntryPolicy{Enabled: true, AllowedSymbols: []string{"MSFT"}, LongOnly: true, NoPositionAdditions: true, MaxRiskUSD: 50, MinNotionalUSD: 500, MaxEntriesPerTick: 1}
 	valid := `{"symbol":"MSFT","intent":"open","action":"BUY","qty":2,"limit_price":500,"stop_loss_price":480,"order_type":"LMT"}`
 	for _, field := range []string{"proposals", "approved"} {
 		t.Run(field, func(t *testing.T) {

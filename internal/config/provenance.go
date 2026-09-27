@@ -328,6 +328,7 @@ func LoadFromPathWithProvenance(path string) (*Config, *Provenance, error) {
 		}
 	}
 
+	recordChanged(cfg, prov, func(c *Config) { c.Database.applyDefaults() }, derivedBy("database.applyDefaults"))
 	recordChanged(cfg, prov, func(c *Config) { c.Composer.applyDefaults() }, derivedBy("composer.applyDefaults"))
 	recordChanged(cfg, prov, func(c *Config) { c.Identity.applyDefaults() }, derivedBy("identity.applyDefaults"))
 	recordChanged(cfg, prov, func(c *Config) { c.ConfigAssistant.applyDefaults() }, derivedBy("config_assistant.applyDefaults"))

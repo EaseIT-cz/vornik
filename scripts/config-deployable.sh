@@ -63,3 +63,15 @@ config_is_tunable() {
 	done
 	return 1
 }
+
+# config_is_baseline_artifact <rel-to-configs> -> 0 for the files the
+# config_template_drift machinery keeps in the deployed tree: the two baselines
+# (.templates/, .origin/) and the ack store (.template-acks). Every consumer
+# that scans the deployed tree skips these, so the check's own artifacts never
+# become the next noise problem (drift design, third amendment).
+config_is_baseline_artifact() {
+	case "$1" in
+		.templates|.templates/*|.origin|.origin/*|.template-acks|.template-acks.lock) return 0 ;;
+	esac
+	return 1
+}

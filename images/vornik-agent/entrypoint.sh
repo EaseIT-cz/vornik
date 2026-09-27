@@ -2110,7 +2110,52 @@ setup_gh_git_credentials() {
     fi
 }
 
+# preflight_contract_mounts checks that the agent can use its three contract
+# mounts, by doing what it will do with them: read the task file, and create
+# then remove a file in the output directory and the workspace. Returns 78
+# (EX_CONFIG; the daemon's stepoutcome.AgentExitMountUnusable — nothing else
+# here uses it) naming the path and this process's uid:gid, 0 otherwise.
+#
+# WHY. 2026-09-17/18 a pulled image baked for uid 1000 ran on a uid-1001 host
+# under keep-id: jq could not open the task file, nothing was writable, and 69
+# steps exited 1 into `unclassified` — with "LLM call failed" in the same log,
+# so the model got the blame. Unclassified-step-outcome design §11.
+#
+# Real operations, not `test -r`/`-w`: access(2) checks permission bits only,
+# so an SELinux or AppArmor denial would pass it and fail the real write. A
+# MISSING or EMPTY task file passes — that is a daemon defect, not a mount this
+# agent cannot use, and must not be sent to an image rebuild. A probe that can
+# be created but not removed also fails: the agent could not manage its own
+# files there, and a stranded probe must not reach output collection.
+preflight_contract_mounts() {
+    local who probe dir
+    who="$(id -u 2>/dev/null):$(id -g 2>/dev/null)"
+    if [ -e "$INPUT_FILE" ] || ! [ -x "$(dirname "$INPUT_FILE")" ]; then
+        if ! head -c1 "$INPUT_FILE" >/dev/null 2>&1; then
+            # An unsearchable input directory hides the file entirely; only a
+            # genuinely absent file (searchable directory) is the daemon's case.
+            log "FATAL: contract mount unusable: cannot read $INPUT_FILE (running as uid:gid $who)"
+            return 78
+        fi
+    fi
+    for dir in "$(dirname "$OUTPUT_FILE")" "$WORKSPACE"; do
+        probe="$dir/.vornik-preflight.$$"
+        if ! ( : > "$probe" ) 2>/dev/null; then
+            log "FATAL: contract mount unusable: cannot write in $dir (running as uid:gid $who)"
+            return 78
+        fi
+        if ! rm -f "$probe" 2>/dev/null || [ -e "$probe" ]; then
+            log "FATAL: contract mount unusable: cannot remove a file in $dir (running as uid:gid $who)"
+            return 78
+        fi
+    done
+    return 0
+}
+
 main() {
+    # FIRST, before credentials setup or any jq: an agent that cannot use its
+    # mounts says so with its own exit code (design §11).
+    preflight_contract_mounts || return $?
     log "starting (model=$LLM_MODEL)"
     debug "env: LLM_ENDPOINT=$LLM_ENDPOINT LLM_MODEL=$LLM_MODEL API_KEY=${LLM_API_KEY:+set(${#LLM_API_KEY}chars)}"
     CANCELLED=0

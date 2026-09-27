@@ -127,7 +127,8 @@ func (h *DoctorHandlers) checkLeaderLocksHealth() DoctorCheck {
 				"%d leader-lock row(s) ORPHANED — no elector for that worker in this build/config, "+
 					"so nothing will ever renew them (Enterprise-only subsystem on a Community build, "+
 					"a disabled feature, or a deleted project). Clear them with "+
-					"`vornikctl leader-lock release <worker>` or `--all-orphaned`. "+
+					"`vornikctl leader-lock release <worker>` or "+
+					"`vornikctl leader-lock release --all-orphaned --reason <why>`. "+
 					"%d stale, %d active.",
 				orphaned, stale, active,
 			)
@@ -154,7 +155,7 @@ func classifyLeaderLock(r *persistence.DaemonLeaderLock, now time.Time) (string,
 	expiresIn := r.ExpiresAt.Sub(now)
 	renewedAgo := now.Sub(r.RenewedAt)
 	switch {
-	case expiresIn <= 0:
+	case persistence.LeaderLockExpired(r.ExpiresAt, now):
 		return "EXPIRED", fmt.Sprintf(
 			"holder=%s expired %s ago (last renewed %s ago)",
 			r.HolderID, humanLeaderLockDuration(-expiresIn), humanLeaderLockDuration(renewedAgo),

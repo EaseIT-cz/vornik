@@ -137,3 +137,16 @@ func TestCeilingHash_OrderIndependentAndDistinguishing(t *testing.T) {
 		t.Error("an empty ceiling should be recorded as unrestricted, not as a digest of nothing")
 	}
 }
+
+// An empty ceiling accepts every request: "unrestricted" everywhere in this
+// system. Pinned when the `len(ceiling) == 0 ||` guard folded into
+// agenttools.AllowlistAdmits (media routing LLD §4.2a), so the move is shown to
+// be behaviour-neutral rather than claimed (review-20260925 implementation F1).
+func TestEvaluateToolGrant_EmptyCeilingAcceptsAll(t *testing.T) {
+	for _, ceiling := range [][]string{nil, {}} {
+		out := EvaluateToolGrant([]string{"mcp__broker__place_order", "file_read"}, ceiling)
+		if len(out.RefusedNames) != 0 || len(out.Accepted) != 2 {
+			t.Fatalf("ceiling %v: accepted %v refused %v, want both accepted", ceiling, out.Accepted, out.RefusedNames)
+		}
+	}
+}

@@ -1,11 +1,11 @@
 ---
 sources:
     - path: internal/api/companion_mcp.go
-      sha256: b72c1afac25f117532a345ba6f5f0b8e4eea9cb8ab6b2d70debf79ca07b3d42d
+      sha256: 4797a2cc6f3f589b13e17cdfc2518306139ac190643d23b207749f11968d8789
     - path: contrib/claude-code-companion/.claude-plugin/plugin.json
-      sha256: 0d39489a1381fedcd8934b197cfa0c4731d1efc3ae067494aa41f0e58da79363
+      sha256: 94bb71bc19dd3bd7892ac8977f993ba8d6f2450d0ff509a8bd795f1c377c55ee
     - path: contrib/codex-companion/.codex-plugin/plugin.json
-      sha256: f1bb30238d2b5ed5f19e03fba87859fcdea4d232d6e56aecbc8f8ad13e41f1b8
+      sha256: 9f735cfd2f5fb414adfb95bf77ab5ef74edcce7573097411204c9205946ca6e3
 ---
 # Companion plugin
 
@@ -201,6 +201,29 @@ Notes go through vornik's full ingest pipeline (secret scanning, dedup, policy),
 and large content should be sent through the ingest workflow rather than a single
 `remember` call.
 
+### Re-ingesting a document
+
+When you change a document and ingest it again, recall should serve the new
+version, not both. Claude's `/rag-ingest` sends each file's path within its git
+repository (`docs/design/index.md`, say) along with the bytes. That path is
+the document's identity: ingesting the same path again, in the same repo
+scope, retires the earlier versions, and recall serves only the newest. Two
+different files that share a name, such as two `index.md` files, stay
+separate because their paths differ.
+
+`/rag-ingest` takes the repo scope from the repository that holds the files,
+not from the directory you run it in. It refuses an upload that mixes files
+from two repositories, or a repository with loose files, and names the scopes
+it found, so each repository's files land under their own scope. A file
+outside any repository is ingested as before, with no path. Codex, staging
+files by hand, sends the same `path` field on each input artifact.
+
+Documents ingested before paths existed carry only a file name. Re-ingest them
+with a current plugin, then retire the old versions with
+`vornikctl memory supersede-legacy-documents -p <project> --scope <scope> --root <checkout>`.
+It is a dry run until you add `--apply`, and it leaves alone any name that more
+than one file in the checkout shares.
+
 ### Digging harder when the fast answer misses
 
 `recall` is tuned for interactive use: one search pass, ranked by fusing semantic
@@ -267,6 +290,10 @@ and to quote what the agent needs from a large document inline in the prompt
 instead of attaching the whole thing. This is worth refusing early because the
 alternative is what used to happen: the agent runs, spends its budget, and then
 fails on its output contract, so you pay for a review you do not get.
+
+The check applies only to workflows where an agent reads the upload. An
+ingest workflow with no agent step, such as `companion-rag-ingest`, stores each
+file directly and is exempt, so a large document can be ingested whole.
 
 One note on `/upload`'s output, because its failure used to be quiet. A run that
 completed prints `VORNIK_UPLOAD_END` as its last line; output without that

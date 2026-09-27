@@ -252,12 +252,15 @@ var cpFlashMessages = map[string]string{
 	"apply-failed": "Apply failed (auto-rolled-back if the config was rejected).",
 	"content-too-large": "Refused: the file this proposal rewrites is larger than the apply size cap — " +
 		"nothing was written. Raise controlplane's content cap or split the change.",
+	"wall-clock-lowered": "Refused: the workflow's maxWallClock was lowered since this proposal was drafted, " +
+		"so its step timeout would exceed the cap and do nothing — nothing was written. Reject it; the detector re-files if still needed.",
 	"error": "That action could not be completed.",
 	// MCP-tab (hub §4) write outcomes.
 	"mcp-proposed":      "MCP change proposed — review the diff + apply on the Proposals tab.",
 	"mcp-bad-name":      "Invalid server name (use letters, digits, - or _).",
-	"mcp-bad-transport": "Transport must be stdio, sse, or streamable-http.",
-	"mcp-bad-endpoint":  "sse/streamable-http need a valid http(s) URL; stdio needs a command.",
+	"mcp-bad-transport": "Transport must be sse or streamable-http. A stdio server is registered in the config files on the host.",
+	"mcp-bad-endpoint":  "sse/streamable-http need a valid http(s) URL.",
+	"mcp-stdio-refused": "stdio MCP servers are registered by editing the config files on the host, not through the daemon: the daemon would run that program.",
 	"mcp-secret":        "A field looked like a literal secret — use a ${ENV_VAR} placeholder instead.",
 	"mcp-not-found":     "No MCP server by that name to remove.",
 	// Discovery verdicts, surfaced instead of hidden: each is our own
@@ -881,6 +884,10 @@ func cpApplyOutcome(err error) string {
 		// Refused BEFORE any write (base hash mismatch) — nothing was rolled
 		// back, so the generic "apply-failed" message would mislead.
 		return "stale-base"
+	case errors.Is(err, controlplane.ErrWallClockLowered):
+		// Refused by the re-validation, before any write: "apply-failed" would
+		// say the config was rejected and rolled back (design §12).
+		return "wall-clock-lowered"
 	case errors.Is(err, controlplane.ErrContentTooLarge):
 		// Also refused before any write. Fell through to "apply-failed" until
 		// 2026-08-05, telling the operator their config had been rejected and

@@ -2,6 +2,7 @@ package mcp
 
 import (
 	"bufio"
+	"context"
 	"os/exec"
 	"sync"
 	"testing"
@@ -10,6 +11,8 @@ import (
 	"github.com/rs/zerolog"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"vornik.io/vornik/internal/spawn"
 )
 
 // clientLifecycleSleeper starts a long-lived child process the test can
@@ -28,7 +31,8 @@ func clientLifecycleSleeper(t *testing.T) *Client {
 		config: ServerConfig{Name: "sleeper", Transport: "stdio"},
 		logger: zerolog.Nop(),
 	}
-	c.cmd = exec.Command(sleep, "30")
+	c.cmd, err = spawn.ConfiguredProgram(context.Background(), spawn.NewConfiguredCommand(sleep, "30"), spawn.ConfiguredOptions{})
+	require.NoError(t, err)
 	stdin, err := c.cmd.StdinPipe()
 	require.NoError(t, err)
 	c.stdin = stdin
@@ -107,6 +111,7 @@ func TestStartStdio_WiresTransportAndCwd(t *testing.T) {
 			Transport: "stdio",
 			Command:   "sleep",
 			Args:      []string{"30"},
+			Program:   spawn.NewConfiguredCommand("sleep", "30"),
 			Env:       map[string]string{"FOO": "$BAR_UNSET"},
 		},
 		logger:  zerolog.Nop(),
@@ -115,7 +120,7 @@ func TestStartStdio_WiresTransportAndCwd(t *testing.T) {
 	// Allow the bare "sleep" launcher to resolve via PATH for exec.Command.
 	require.NoError(t, c.startStdio())
 	require.NotNil(t, c.cmd)
-	assert.Equal(t, "/", c.cmd.Dir, "subprocess cwd must be pinned to / per the audit")
+	assert.Equal(t, "/", c.cmd.Dir(), "subprocess cwd must be pinned to / per the audit")
 	require.NotNil(t, c.stdin)
 	require.NotNil(t, c.stdout)
 

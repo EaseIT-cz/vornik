@@ -7,121 +7,73 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
+
+	"vornik.io/vornik/internal/sandboxtool"
 )
 
-// WhisperConfig configures the local whisper.cpp STT subprocess
-// wrapper.
+// WhisperConfig configures the local whisper.cpp speech-to-text provider.
 //
-// Host dep matrix (slice-2 decisions):
+// Both tools it needs run in the pinned agent image through the sandbox
+// runner (process-spawn law S5b,
+// https://docs.vornik.io §7), never
+// on the daemon host: an inbound voice note is untrusted input.
 //
-//   - whisper.cpp `main` CLI binary
-//     (https://github.com/ggerganov/whisper.cpp). The deployment host
-//     needs `whisper-cpp` OR `main` on $PATH, OR an explicit
-//     BinaryPath. The official build produces a binary named `main`;
-//     some Linux distributions rename to `whisper-cpp` to avoid
-//     PATH collisions. The wrapper probes both.
-//   - one ggml-format model file (.bin). Recommended starting points:
-//     ggml-base.en.bin (~150 MB, English-only, fast on CPU) and
-//     ggml-medium.bin (~1.5 GB, multilingual, much slower). Operator
-//     downloads via the upstream models/download-ggml-model.sh script
-//     and points ModelPath at the .bin.
-//   - ffmpeg, ALWAYS. Inbound audio from Telegram (OGG/Opus) and
-//     Slack (MP4/M4A) needs normalisation to the 16-kHz mono PCM WAV
-//     whisper.cpp accepts; the wrapper pipes every Transcribe call
-//     through ffmpeg first. Documented here so the slice-2 commit
-//     doesn't surprise operators on minimal containers.
+//   - ffmpeg, ALWAYS. Inbound audio from Telegram (OGG/Opus) and Slack
+//     (MP4/M4A) is normalised to the 16-kHz mono PCM WAV whisper.cpp is
+//     built for.
+//   - whisper-cli (whisper.cpp), with one ggml-format model file (.bin):
+//     ggml-base.en.bin (~150 MB, English-only, fast on CPU) or
+//     ggml-medium.bin (~1.5 GB, multilingual, much slower). The model's
+//     DIRECTORY is mounted read-only at /models.
 //
-// Why subprocess vs CGo vs Python (the slice-2 decision):
-//
-//   - whisper.cpp CLI via subprocess: no CGo (cross-compilation
-//     trivially with `go build`), no Python runtime. Two binary
-//     deps on the host but those install via the operator's package
-//     manager.
-//   - whisper.cpp via CGo: complicates cross-compile; pulling
-//     C-toolchain headers into vornik's build pipeline raises the
-//     dev-onboarding bar. Rejected.
-//   - faster-whisper via Python: requires a Python runtime + pip
-//     install + virtualenv management. Better accuracy on noisy
-//     audio but the operational tax is heavy. Rejected for the MVP;
-//     remains available as a slice-7 hosted-style fallback if an
-//     operator wants it.
+// Why whisper.cpp vs CGo vs Python (the slice-2 decision): no CGo keeps
+// cross-compilation trivial, and no Python runtime keeps the agent image
+// free of PyTorch. The same engine serves audio extraction (§7.1 decision 2).
 type WhisperConfig struct {
-	// BinaryPath is the absolute path to the whisper.cpp main CLI
-	// binary. Empty asks exec.LookPath("whisper-cpp"), falling back
-	// to exec.LookPath("main") (the upstream-build name).
-	BinaryPath string
-
 	// ModelPath is the absolute path to the ggml model file
-	// (e.g. /usr/local/share/whisper.cpp/ggml-base.en.bin). Required.
+	// (e.g. /var/lib/vornik/voice/ggml-base.en.bin). Required.
 	ModelPath string
 
-	// FFmpegPath is the absolute path to the ffmpeg binary. Empty
-	// asks exec.LookPath("ffmpeg"). Always used — whisper.cpp can't
-	// read OGG/Opus or MP4/M4A directly.
-	FFmpegPath string
-
 	// LanguageHint is an optional BCP-47 nudge for the recogniser.
-	// Empty asks whisper.cpp to auto-detect.
+	// Empty leaves whisper.cpp's default (English).
 	LanguageHint string
 
-	// Threads pins the OMP thread count. Zero defers to whisper.cpp's
-	// default (one per physical core).
+	// Threads pins the thread count. Zero defers to whisper.cpp's
+	// default; the sandbox's voice_stt CPU share bounds it either way.
 	Threads int
 
-	// TempDir is the directory under which the wrapper writes its
-	// intermediate WAV. Empty falls back to os.TempDir(). Tests can
-	// pin this so the artifact is asserted-on without race.
-	TempDir string
+	// Sandbox runs the tools. Nil makes every Transcribe report
+	// ErrProviderUnavailable; there is no host fallback.
+	Sandbox sandboxtool.Sandbox
 }
 
-// whisperLocalSTT wraps the whisper.cpp main CLI as an STTProvider.
-// The subprocess flow is:
+// whisperLocalSTT runs whisper.cpp as an STTProvider. Each Transcribe is
+// two voice_stt sandbox runs, both on the pool's reserved voice slot:
 //
-//  1. Read all of `audio` into memory (audio messages are short;
-//     1 minute of OGG/Opus is ~120 KiB, far below the per-call cap
-//     of any platform).
-//  2. Spawn ffmpeg with stdin = audio bytes, stdout = 16 kHz mono
-//     16-bit PCM WAV. Container detection is automatic; ffmpeg
-//     probes the header.
-//  3. Write the WAV to a temp file (whisper.cpp's `main` reads from
-//     a file path, not stdin).
-//  4. Spawn whisper.cpp with --output-json. The CLI writes
-//     <temp>.json next to the input file.
-//  5. Read and parse the JSON. Done.
+//  1. ffmpeg normalises the inbound bytes (in /in) to /out/audio.wav.
+//  2. whisper-cli transcribes that WAV with --output-json into /out.
 //
-// All four steps respect ctx cancellation; the temp WAV + JSON are
-// cleaned up in a deferred best-effort sweep.
+// The runner bounds both runs (memory, CPU, timeout) and removes their
+// scratch; the caller's ctx cancels them.
 type whisperLocalSTT struct {
 	cfg WhisperConfig
-
-	// runCmd swaps in fakes for testing. Defaults to runRealCmd.
-	runCmd func(ctx context.Context, name string, args []string, stdin []byte) (stdout []byte, stderr []byte, err error)
-
-	// tempFileWriter is a seam for tests: real code uses
-	// writeTempFile (which writes to disk + returns the path); tests
-	// stub it to assert on the bytes without touching disk.
-	tempFileWriter func(dir, namePrefix string, contents []byte) (path string, cleanup func(), err error)
 }
 
-// NewWhisperLocalSTT constructs the wrapper. Returns an error only
-// when the config is structurally broken (empty ModelPath). Missing
-// binaries surface as ErrProviderUnavailable on the first Transcribe.
+// NewWhisperLocalSTT constructs the provider. Returns an error only when
+// the config is structurally broken (empty ModelPath). An absent sandbox or
+// a tool the image lacks surfaces as ErrProviderUnavailable on Transcribe.
 func NewWhisperLocalSTT(cfg WhisperConfig) (STTProvider, error) {
 	if strings.TrimSpace(cfg.ModelPath) == "" {
 		return nil, errors.New("voice: WhisperConfig.ModelPath is required")
 	}
-	return &whisperLocalSTT{
-		cfg:            cfg,
-		runCmd:         runRealCmd,
-		tempFileWriter: writeTempFile,
-	}, nil
+	return &whisperLocalSTT{cfg: cfg}, nil
 }
 
-// Transcribe is the STTProvider entry point. See the type comment for
-// the four-step flow.
+// Transcribe is the STTProvider entry point. See the type comment for the
+// two-run flow.
 func (w *whisperLocalSTT) Transcribe(ctx context.Context, audio io.Reader, hint Hint) (Transcript, error) {
 	if audio == nil {
 		return Transcript{}, errors.New("voice: nil audio reader")
@@ -129,7 +81,8 @@ func (w *whisperLocalSTT) Transcribe(ctx context.Context, audio io.Reader, hint 
 	// Read the inbound payload into memory. 64 MiB is a defensive
 	// ceiling — the design doc notes Telegram voice messages cap at
 	// 1 minute (~120 KiB OGG/Opus) and Slack audio at 5 minutes
-	// (~5 MiB MP4/AAC); 64 MiB is comfortable headroom.
+	// (~5 MiB MP4/AAC); 64 MiB is comfortable headroom, and the
+	// sandbox's voice_stt input bound.
 	const maxInboundBytes = 64 * 1024 * 1024
 	audioBytes, err := io.ReadAll(io.LimitReader(audio, maxInboundBytes+1))
 	if err != nil {
@@ -141,104 +94,114 @@ func (w *whisperLocalSTT) Transcribe(ctx context.Context, audio io.Reader, hint 
 	if len(audioBytes) == 0 {
 		return Transcript{}, errors.New("voice: empty audio input")
 	}
+	if w.cfg.Sandbox == nil {
+		return Transcript{}, fmt.Errorf("%w: %w (no sandbox runner)", ErrProviderUnavailable, sandboxtool.ErrNotAvailable)
+	}
+	if err := modelReady("voice.stt.model", w.cfg.ModelPath); err != nil {
+		return Transcript{}, err
+	}
 
-	// Step 1: ffmpeg normalise to 16 kHz mono 16-bit PCM WAV. -y
-	// would overwrite an output file, but we're piping to stdout
-	// here. -ac 1 = mono; -ar 16000 = 16 kHz (whisper's native rate);
-	// -f wav over stdout.
-	ffmpegBin := w.cfg.FFmpegPath
-	if ffmpegBin == "" {
-		resolved, err := exec.LookPath("ffmpeg")
-		if err != nil {
-			return Transcript{}, fmt.Errorf("%w: ffmpeg binary not found: %v", ErrProviderUnavailable, err)
-		}
-		ffmpegBin = resolved
-	}
-	ffArgs := []string{
-		"-loglevel", "error",
-		"-i", "-",
-		"-ac", "1",
-		"-ar", "16000",
-		"-acodec", "pcm_s16le",
-		"-f", "wav",
-		"-",
-	}
-	wavBytes, ffStderr, err := w.runCmd(ctx, ffmpegBin, ffArgs, audioBytes)
+	// Run 1: ffmpeg normalise to 16 kHz mono 16-bit PCM WAV.
+	norm, err := w.cfg.Sandbox.Run(ctx, NormaliseSpec(audioBytes))
 	if err != nil {
-		return Transcript{}, fmt.Errorf("voice: ffmpeg normalise failed: %w: %s", err, trimSpaces(string(ffStderr)))
+		return Transcript{}, runFailure("ffmpeg normalise", err)
 	}
-	if len(wavBytes) == 0 {
+	defer norm.Close()
+	wavPath := filepath.Join(norm.OutDir, "audio.wav")
+	if st, serr := os.Stat(wavPath); serr != nil || st.Size() == 0 {
 		return Transcript{}, errors.New("voice: ffmpeg produced empty WAV")
 	}
 
-	// Step 2: write to a temp file. whisper.cpp's `main` doesn't
-	// accept stdin — it mmaps the audio file.
-	tmpDir := w.cfg.TempDir
-	if tmpDir == "" {
-		tmpDir = os.TempDir()
-	}
-	wavPath, cleanupWAV, err := w.tempFileWriter(tmpDir, "vornik-voice-*.wav", wavBytes)
-	if err != nil {
-		return Transcript{}, fmt.Errorf("voice: write temp WAV: %w", err)
-	}
-	defer cleanupWAV()
-
-	// Step 3: whisper.cpp subprocess. --output-json writes the
-	// transcript to <input>.json (NOT stdout). --no-prints silences
-	// the model-loading banner so stderr stays a usable error signal.
-	whisperBin := w.cfg.BinaryPath
-	if whisperBin == "" {
-		resolved, lookupErr := lookupWhisperBinary()
-		if lookupErr != nil {
-			return Transcript{}, fmt.Errorf("%w: whisper.cpp binary not found: %v",
-				ErrProviderUnavailable, lookupErr)
-		}
-		whisperBin = resolved
-	}
-	whisperArgs := []string{
-		"--model", w.cfg.ModelPath,
-		"--file", wavPath,
-		"--output-json",
-		"--no-prints",
-	}
+	// Run 2: whisper-cli. -oj -of writes /out/transcript.json; -np keeps
+	// the combined output a diagnostic.
+	args := []string{"-m", "/models/" + filepath.Base(w.cfg.ModelPath), "-f", "/in/audio.wav",
+		"-oj", "-of", "/out/transcript", "-np"}
 	if w.cfg.Threads > 0 {
-		whisperArgs = append(whisperArgs, "--threads", fmt.Sprintf("%d", w.cfg.Threads))
+		args = append(args, "-t", strconv.Itoa(w.cfg.Threads))
 	}
 	lang := strings.TrimSpace(hint.LanguageHint)
 	if lang == "" {
 		lang = strings.TrimSpace(w.cfg.LanguageHint)
 	}
-	if lang != "" {
-		// whisper.cpp accepts the language hint as a short code
-		// ("en", "de"). BCP-47 like "en-US" → take the prefix.
-		short := lang
-		if idx := strings.IndexAny(short, "-_"); idx > 0 {
-			short = short[:idx]
-		}
-		whisperArgs = append(whisperArgs, "--language", short)
+	if code := languageCode(lang); code != "" {
+		args = append(args, "-l", code)
 	}
-
-	_, whStderr, err := w.runCmd(ctx, whisperBin, whisperArgs, nil)
+	res, err := w.cfg.Sandbox.Run(ctx, sandboxtool.Spec{
+		Feature:    sandboxtool.FeatureVoiceSTT,
+		Entrypoint: "whisper-cli",
+		Args:       args,
+		Inputs:     []sandboxtool.Input{{Name: "audio.wav", Path: wavPath}},
+		ModelDir:   filepath.Dir(w.cfg.ModelPath),
+	})
 	if err != nil {
-		return Transcript{}, fmt.Errorf("voice: whisper.cpp failed: %w: %s",
-			err, trimSpaces(string(whStderr)))
+		return Transcript{}, runFailure("whisper.cpp", err)
 	}
-
-	// Step 4: read & parse the JSON sidecar.
-	jsonPath := wavPath + ".json"
-	rawJSON, err := os.ReadFile(jsonPath)
+	defer res.Close()
+	rawJSON, err := os.ReadFile(filepath.Join(res.OutDir, "transcript.json"))
 	if err != nil {
 		return Transcript{}, fmt.Errorf("voice: read whisper JSON: %w", err)
 	}
-	defer func() { _ = os.Remove(jsonPath) }()
 	return parseWhisperJSON(rawJSON)
 }
 
+// NormaliseSpec is the voice_stt run that decodes an inbound voice note
+// (Telegram OGG/Opus, Slack MP4/AAC — the container is detected from the
+// header) into /out/audio.wav, 16 kHz mono 16-bit PCM. Exported so `vornikctl
+// doctor` decodes its Opus and AAC samples with exactly this run.
+func NormaliseSpec(audio []byte) sandboxtool.Spec {
+	return sandboxtool.Spec{
+		Feature:    sandboxtool.FeatureVoiceSTT,
+		Entrypoint: "ffmpeg",
+		Args: []string{"-nostdin", "-loglevel", "error", "-threads", sandboxtool.FFmpegThreads, "-filter_threads", sandboxtool.FFmpegThreads,
+			"-i", "/in/voice", "-threads", sandboxtool.FFmpegThreads, "-ac", "1", "-ar", "16000", "-acodec", "pcm_s16le", "-f", "wav", "/out/audio.wav"},
+		Inputs: []sandboxtool.Input{{Name: "voice", Data: audio}},
+	}
+}
+
+// languageCode maps a BCP-47 hint ("en-US") to the short code whisper.cpp
+// takes ("en"). Anything that is not two or three letters is dropped, so a
+// hint can never reach argv as anything but a language code.
+func languageCode(hint string) string {
+	short := hint
+	if idx := strings.IndexAny(short, "-_"); idx > 0 {
+		short = short[:idx]
+	}
+	short = strings.ToLower(short)
+	if len(short) < 2 || len(short) > 3 {
+		return ""
+	}
+	for _, r := range short {
+		if r < 'a' || r > 'z' {
+			return ""
+		}
+	}
+	return short
+}
+
+// runFailure wraps a sandbox run's error; a tool the image lacks (or no
+// image) is ErrProviderUnavailable as well, so the channel adapters keep
+// their "voice is not set up" handling.
+// modelReady pre-flights a voice model on every call, as the audio extractor
+// does: a model removed or replaced by a directory after startup would
+// otherwise fail as a podman mount error naming neither the setting nor the
+// file, and start a container for nothing (S5b review residual R4).
+func modelReady(setting, path string) error {
+	if st, err := os.Stat(path); err != nil || st.IsDir() {
+		return fmt.Errorf("%w: model %s is not a readable file (check %s)", ErrProviderUnavailable, path, setting)
+	}
+	return nil
+}
+
+func runFailure(step string, err error) error {
+	if errors.Is(err, sandboxtool.ErrNotAvailable) {
+		return fmt.Errorf("%w: %s: %w", ErrProviderUnavailable, step, err)
+	}
+	return fmt.Errorf("voice: %s failed: %w", step, err)
+}
+
 // whisperJSONShape mirrors the subset of whisper.cpp's --output-json
-// envelope we consume. The full schema is documented at
-// https://github.com/ggerganov/whisper.cpp/blob/master/examples/main/main.cpp
-// — we lift the language verdict, the global duration, and the
-// per-segment text + confidence (when present).
+// envelope we consume: the language verdict, and the per-segment text,
+// offsets and confidence (when present).
 //
 // Layout (abbreviated):
 //
@@ -251,10 +214,9 @@ func (w *whisperLocalSTT) Transcribe(ctx context.Context, audio io.Reader, hint 
 //	  ]
 //	}
 //
-// Newer whisper.cpp builds emit a token-level "confidence" or
-// "no_speech_prob" — we honour `no_speech_prob` when present
-// (treating 1 - no_speech_prob as the segment confidence) and fall
-// back to 0 (unknown).
+// Builds that emit a "confidence" or "no_speech_prob" are honoured
+// (treating 1 - no_speech_prob as the segment confidence); otherwise the
+// confidence is 0 (unknown).
 type whisperJSONShape struct {
 	Result struct {
 		Language string `json:"language"`
@@ -273,10 +235,10 @@ type whisperJSONShape struct {
 	} `json:"transcription"`
 }
 
-// parseWhisperJSON folds the JSON sidecar into a Transcript. Combines
-// the per-segment texts (space-separated), takes the max-To offset as
-// the duration, and averages the per-segment confidence (when any
-// segment reported one).
+// parseWhisperJSON folds the JSON into a Transcript. Combines the
+// per-segment texts (space-separated), takes the max-To offset as the
+// duration, and averages the per-segment confidence (when any segment
+// reported one).
 func parseWhisperJSON(raw []byte) (Transcript, error) {
 	var doc whisperJSONShape
 	if err := json.Unmarshal(raw, &doc); err != nil {
@@ -318,53 +280,5 @@ func parseWhisperJSON(raw []byte) (Transcript, error) {
 	return out, nil
 }
 
-// lookupWhisperBinary probes the known names whisper.cpp's main CLI
-// ships under: distros rename to "whisper-cpp", upstream's 2024+
-// builds publish "whisper-cli" (homebrew uses this name), and the
-// historical default was "main". Returns the first hit. The error
-// surface is the LAST exec.LookPath error, which is the more
-// actionable one (it includes $PATH context).
-func lookupWhisperBinary() (string, error) {
-	candidates := []string{"whisper-cpp", "whisper-cli", "main"}
-	var lastErr error
-	for _, name := range candidates {
-		if p, err := exec.LookPath(name); err == nil {
-			return p, nil
-		} else {
-			lastErr = err
-		}
-	}
-	if lastErr == nil {
-		lastErr = errors.New("no whisper.cpp candidate on PATH")
-	}
-	return "", lastErr
-}
-
-// writeTempFile writes contents to a fresh file under dir with the
-// given prefix pattern (os.CreateTemp shape), returning the path and a
-// best-effort cleanup callback. The seam exists so tests can stub the
-// disk-touching path without permission gymnastics.
-func writeTempFile(dir, namePrefix string, contents []byte) (string, func(), error) {
-	f, err := os.CreateTemp(dir, namePrefix)
-	if err != nil {
-		return "", func() {}, err
-	}
-	if _, err := f.Write(contents); err != nil {
-		_ = f.Close()
-		_ = os.Remove(f.Name())
-		return "", func() {}, err
-	}
-	if err := f.Close(); err != nil {
-		_ = os.Remove(f.Name())
-		return "", func() {}, err
-	}
-	path := f.Name()
-	return path, func() { _ = os.Remove(path) }, nil
-}
-
 // Compile-time guard: whisperLocalSTT satisfies STTProvider.
 var _ STTProvider = (*whisperLocalSTT)(nil)
-
-// Ensure filepath remains referenced — Transcribe may grow filepath
-// safety logic on follow-up slices.
-var _ = filepath.Base

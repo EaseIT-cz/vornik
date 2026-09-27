@@ -178,6 +178,10 @@
                     {{else if eq .QualityScore.Status "missing_contract"}}
                     <p class="text-sm font-medium text-rose-700 dark:text-rose-300">Missing scoring contract</p>
                     <p class="mt-1 text-xs font-mono text-ink-400">{{.QualityScore.Diagnostic}}</p>
+                    {{else if eq .QualityScore.Status "unscorable"}}
+                    <p class="text-sm font-medium text-amber-700 dark:text-amber-300">Not scorable by this contract</p>
+                    <p class="mt-1 text-xs font-mono text-ink-400">{{.QualityScore.Diagnostic}}</p>
+                    <p class="mt-1 text-xs text-ink-500">A step ran more than once, and the contract can grade only one visit. This is a gap in the scorer, not a zero for the run.</p>
                     {{else if eq .QualityScore.Status "not_applicable"}}
                     <p class="text-sm text-ink-300">Not applicable</p>
                     <p class="mt-1 text-xs text-ink-500">This workflow does not declare a quality-scoring policy.</p>

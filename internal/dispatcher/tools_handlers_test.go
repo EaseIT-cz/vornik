@@ -574,41 +574,49 @@ func TestCancelTask_Happy(t *testing.T) {
 		GetFunc:          func(_ context.Context, _ string) (*persistence.Task, error) { return task, nil },
 		UpdateStatusFunc: func(_ context.Context, _ string, _ persistence.TaskStatus) error { return nil },
 	}
-	te := newExecutor(withTaskRepo(repo), withExecRepo(&mocks.MockExecutionRepository{}))
-	res := te.cancelTask(context.Background(), `{"task_id":"t1","confirm":true}`, nil)
-	if strings.Contains(res.Content, "Error:") {
-		t.Errorf("unexpected error: %q", res.Content)
+	// Authorized through the §12 two-step (the user's own acknowledgement), not a model flag.
+	confirms := newFakeConfirmRepo(nil)
+	seedTaskAck(confirms, scopeCancelTask, "t1", testMemOperator, time.Now().Add(time.Hour))
+	te := taskExecutor(confirms, repo)
+	res := te.cancelTask(sharedCtx(), `{"task_id":"t1"}`, nil)
+	if strings.Contains(res.Content, "Error:") || strings.Contains(res.Content, "Confirmation required") {
+		t.Errorf("an authorized cancel must execute: %q", res.Content)
 	}
 }
 
 func TestCancelTask_ExecuteActionError(t *testing.T) {
-	// executeCancelTask calls UpdateStatus(taskID, CANCELLED);
-	// make it fail to drive the error branch.
+	// executeCancelTask writes CANCELLED with ONE conditional transition
+	// (scheduler design §4.10); make it fail to drive the error branch.
 	task := &persistence.Task{ID: "t1", ProjectID: "snake", Status: persistence.TaskStatusRunning}
 	repo := &mocks.MockTaskRepository{
-		GetFunc:          func(_ context.Context, _ string) (*persistence.Task, error) { return task, nil },
-		UpdateStatusFunc: func(_ context.Context, _ string, _ persistence.TaskStatus) error { return errors.New("db down") },
+		GetFunc: func(_ context.Context, _ string) (*persistence.Task, error) { return task, nil },
+		TransitionConditionalFunc: func(context.Context, string, []persistence.TaskStatus, persistence.TaskStatus, persistence.TransitionOpts) (bool, error) {
+			return false, errors.New("db down")
+		},
 	}
-	te := newExecutor(withTaskRepo(repo), withExecRepo(&mocks.MockExecutionRepository{}))
-	res := te.cancelTask(context.Background(), `{"task_id":"t1","confirm":true}`, nil)
+	confirms := newFakeConfirmRepo(nil)
+	seedTaskAck(confirms, scopeCancelTask, "t1", testMemOperator, time.Now().Add(time.Hour))
+	te := taskExecutor(confirms, repo)
+	res := te.cancelTask(sharedCtx(), `{"task_id":"t1"}`, nil)
 	if !strings.Contains(res.Content, "Error") {
 		t.Errorf("expected error surface: %q", res.Content)
 	}
 }
 
 // TestDestructiveTools_RequireConfirm is the hardening regression
-// (2026-06-15): cancel_task / retry_task invoked WITHOUT confirm must
-// return a confirmation prompt and not mutate the task.
+// (2026-06-15, strengthened 2026-09-25 by design §12): cancel_task /
+// retry_task without the user's acknowledgement must return a confirmation
+// prompt and not mutate the task.
 func TestDestructiveTools_RequireConfirm(t *testing.T) {
 	for _, tc := range []struct {
 		name string
 		call func(*ToolExecutor) ToolResult
 	}{
 		{"cancel", func(te *ToolExecutor) ToolResult {
-			return te.cancelTask(context.Background(), `{"task_id":"t1"}`, nil)
+			return te.cancelTask(sharedCtx(), `{"task_id":"t1"}`, nil)
 		}},
 		{"retry", func(te *ToolExecutor) ToolResult {
-			return te.retryTask(context.Background(), `{"task_id":"t1"}`, nil)
+			return te.retryTask(sharedCtx(), `{"task_id":"t1"}`, nil)
 		}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -620,7 +628,7 @@ func TestDestructiveTools_RequireConfirm(t *testing.T) {
 				UpdateStatusFunc: func(_ context.Context, _ string, _ persistence.TaskStatus) error { mutated = true; return nil },
 				UpdateFunc:       func(_ context.Context, _ *persistence.Task) error { mutated = true; return nil },
 			}
-			te := newExecutor(withTaskRepo(repo), withExecRepo(&mocks.MockExecutionRepository{}))
+			te := taskExecutor(newFakeConfirmRepo(nil), repo)
 			res := tc.call(te)
 			if !strings.Contains(res.Content, "Confirmation required") {
 				t.Errorf("expected confirmation prompt, got %q", res.Content)
@@ -662,10 +670,12 @@ func TestRetryTask_Happy(t *testing.T) {
 		GetFunc:    func(_ context.Context, _ string) (*persistence.Task, error) { return task, nil },
 		UpdateFunc: func(_ context.Context, _ *persistence.Task) error { return nil },
 	}
-	te := newExecutor(withTaskRepo(repo), withExecRepo(&mocks.MockExecutionRepository{}))
-	res := te.retryTask(context.Background(), `{"task_id":"t1","confirm":true}`, nil)
-	if strings.Contains(res.Content, "Error:") {
-		t.Errorf("unexpected error: %q", res.Content)
+	confirms := newFakeConfirmRepo(nil)
+	seedTaskAck(confirms, scopeRetryTask, "t1", testMemOperator, time.Now().Add(time.Hour))
+	te := taskExecutor(confirms, repo)
+	res := te.retryTask(sharedCtx(), `{"task_id":"t1"}`, nil)
+	if strings.Contains(res.Content, "Error:") || strings.Contains(res.Content, "Confirmation required") {
+		t.Errorf("an authorized retry must execute: %q", res.Content)
 	}
 }
 
@@ -675,8 +685,10 @@ func TestRetryTask_ExecuteActionError(t *testing.T) {
 		GetFunc:    func(_ context.Context, _ string) (*persistence.Task, error) { return task, nil },
 		UpdateFunc: func(_ context.Context, _ *persistence.Task) error { return errors.New("db down") },
 	}
-	te := newExecutor(withTaskRepo(repo), withExecRepo(&mocks.MockExecutionRepository{}))
-	res := te.retryTask(context.Background(), `{"task_id":"t1","confirm":true}`, nil)
+	confirms := newFakeConfirmRepo(nil)
+	seedTaskAck(confirms, scopeRetryTask, "t1", testMemOperator, time.Now().Add(time.Hour))
+	te := taskExecutor(confirms, repo)
+	res := te.retryTask(sharedCtx(), `{"task_id":"t1"}`, nil)
 	if !strings.Contains(res.Content, "Error") {
 		t.Errorf("expected error surface: %q", res.Content)
 	}

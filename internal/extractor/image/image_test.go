@@ -15,9 +15,10 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
-	"time"
 
 	swarmextractor "vornik.io/vornik/internal/extractor"
+	"vornik.io/vornik/internal/sandboxtool"
+	"vornik.io/vornik/internal/sandboxtool/sandboxtest"
 )
 
 func writePNGFixture(t *testing.T, w, h int) string {
@@ -57,7 +58,7 @@ func writeJPEGFixture(t *testing.T, w, h int) string {
 
 func TestExtract_PNG_HappyPath_NoOCR(t *testing.T) {
 	// Force OCR-unavailable by pointing at a missing binary.
-	ext := NewWithTesseractBinary("tesseract-deliberately-missing-xyz")
+	ext := New(nil)
 	path := writePNGFixture(t, 64, 32)
 	res, err := ext.Extract(context.Background(), swarmextractor.Source{
 		FilePath:     path,
@@ -86,13 +87,13 @@ func TestExtract_PNG_HappyPath_NoOCR(t *testing.T) {
 	if res.Metadata.Extra["format"] != "png" {
 		t.Errorf("metadata.format = %q", res.Metadata.Extra["format"])
 	}
-	if res.Metadata.Extra["ocr_engine"] != "none (tesseract missing)" {
+	if res.Metadata.Extra["ocr_engine"] != "none (tesseract not available in the agent image)" {
 		t.Errorf("ocr_engine tag = %q", res.Metadata.Extra["ocr_engine"])
 	}
 }
 
 func TestExtract_JPEG_DecodesDimensions(t *testing.T) {
-	ext := NewWithTesseractBinary("tesseract-missing")
+	ext := New(nil)
 	path := writeJPEGFixture(t, 200, 100)
 	res, err := ext.Extract(context.Background(), swarmextractor.Source{
 		FilePath:     path,
@@ -117,14 +118,14 @@ func TestExtract_NonImage_Errors(t *testing.T) {
 	if err := os.WriteFile(path, []byte("this is not an image"), 0o600); err != nil {
 		t.Fatalf("write: %v", err)
 	}
-	_, err := NewWithTesseractBinary("missing").Extract(context.Background(), swarmextractor.Source{FilePath: path})
+	_, err := New(nil).Extract(context.Background(), swarmextractor.Source{FilePath: path})
 	if err == nil {
 		t.Fatal("expected error on non-image input")
 	}
 }
 
 func TestExtract_EmptyPath_Errors(t *testing.T) {
-	_, err := New().Extract(context.Background(), swarmextractor.Source{})
+	_, err := New(nil).Extract(context.Background(), swarmextractor.Source{})
 	if err == nil {
 		t.Fatal("expected error for empty FilePath")
 	}
@@ -136,30 +137,26 @@ func TestExtract_OversizeRejected(t *testing.T) {
 	if err := os.WriteFile(path, make([]byte, maxImageBytes+1), 0o600); err != nil {
 		t.Fatalf("write: %v", err)
 	}
-	_, err := New().Extract(context.Background(), swarmextractor.Source{FilePath: path})
+	_, err := New(nil).Extract(context.Background(), swarmextractor.Source{FilePath: path})
 	if err == nil || !strings.Contains(err.Error(), "cap") {
 		t.Errorf("expected cap-exceeded error; got %v", err)
 	}
 }
 
-// TestExtract_OCR_StubBinary verifies that when a tesseract-like
-// binary IS available, the extractor pipes its stdout into the
-// section content. We use a tiny shell script as the stub so the
-// test runs on every host regardless of tesseract installation.
-func TestExtract_OCR_StubBinary(t *testing.T) {
-	// Write a fake tesseract that ignores args and prints a
-	// deterministic line on stdout. Bash isn't guaranteed but
-	// /bin/sh is on every supported daemon host.
-	scriptDir := t.TempDir()
-	script := filepath.Join(scriptDir, "fake-tesseract")
-	body := "#!/bin/sh\necho 'WHITEBOARD: design sketch'\n"
-	if err := os.WriteFile(script, []byte(body), 0o700); err != nil {
-		t.Fatalf("write stub: %v", err)
-	}
+// fakeTesseract plays tesseract in the sandbox: it writes text to the
+// output base the argv names (tesseract appends .txt).
+func fakeTesseract(t *testing.T, text string) *sandboxtest.Fake {
+	return sandboxtest.New(t, func(_ sandboxtool.Spec, _ map[string][]byte, out string) error {
+		return os.WriteFile(filepath.Join(out, "ocr.txt"), []byte(text), 0o600)
+	})
+}
 
+// TestExtract_OCR_RunsInTheSandbox: tesseract's text is folded into the
+// section, and the run is the fixed image_ocr shape (process-spawn law S5b).
+func TestExtract_OCR_RunsInTheSandbox(t *testing.T) {
+	sb := fakeTesseract(t, "WHITEBOARD: design sketch\n")
 	path := writePNGFixture(t, 32, 32)
-	ext := NewWithTesseractBinary(script)
-	res, err := ext.Extract(context.Background(), swarmextractor.Source{
+	res, err := New(sb).Extract(context.Background(), swarmextractor.Source{
 		FilePath:     path,
 		MimeType:     "image/png",
 		OriginalName: "whiteboard.png",
@@ -167,12 +164,18 @@ func TestExtract_OCR_StubBinary(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Extract: %v", err)
 	}
+	spec := sb.Specs()[0]
+	if spec.Feature != sandboxtool.FeatureImageOCR || spec.Entrypoint != "tesseract" ||
+		strings.Join(spec.Args, " ") != "/in/image /out/ocr --psm 3" ||
+		len(spec.Inputs) != 1 || spec.Inputs[0].Name != "image" || spec.Inputs[0].Path != path {
+		t.Fatalf("run = %+v", spec)
+	}
 	body0 := res.Sections[0].Content
 	if !strings.Contains(body0, "## Recognised text (tesseract OCR)") {
 		t.Errorf("missing OCR section header: %q", body0)
 	}
 	if !strings.Contains(body0, "WHITEBOARD: design sketch") {
-		t.Errorf("OCR stdout not folded into content: %q", body0)
+		t.Errorf("OCR text not folded into content: %q", body0)
 	}
 	if res.Metadata.Extra["ocr_engine"] != "tesseract" {
 		t.Errorf("ocr_engine = %q", res.Metadata.Extra["ocr_engine"])
@@ -185,15 +188,8 @@ func TestExtract_OCR_StubBinary(t *testing.T) {
 // indicate "no text recognised" rather than failing the whole
 // extraction.
 func TestExtract_OCR_StubProducesEmpty(t *testing.T) {
-	scriptDir := t.TempDir()
-	script := filepath.Join(scriptDir, "fake-empty-tesseract")
-	body := "#!/bin/sh\necho ''\n"
-	if err := os.WriteFile(script, []byte(body), 0o700); err != nil {
-		t.Fatalf("write stub: %v", err)
-	}
-
 	path := writePNGFixture(t, 16, 16)
-	res, err := NewWithTesseractBinary(script).Extract(context.Background(), swarmextractor.Source{
+	res, err := New(fakeTesseract(t, "\n")).Extract(context.Background(), swarmextractor.Source{
 		FilePath: path, OriginalName: "icon.png",
 	})
 	if err != nil {
@@ -207,45 +203,49 @@ func TestExtract_OCR_StubProducesEmpty(t *testing.T) {
 	}
 }
 
-// TestExtract_OCR_PerPageTimeout — batch-3 ingress/untrusted-input:
-// document-extraction hardening (d). A hanging OCR invocation must
-// be bounded by a per-page deadline, not run until the whole
-// extraction's (much larger) budget elapses. We stub tesseract with
-// a script that sleeps far longer than the per-page timeout; the
-// extractor must abort the OCR and surface a failure footer while
-// still producing a valid metadata section. Pre-fix the OCR call
-// uses the parent context only and would block for the full sleep.
-func TestExtract_OCR_PerPageTimeout(t *testing.T) {
-	scriptDir := t.TempDir()
-	script := filepath.Join(scriptDir, "slow-tesseract")
-	// Sleep 30s — far beyond the tiny per-page timeout we inject.
-	body := "#!/bin/sh\nsleep 30\necho 'too late'\n"
-	if err := os.WriteFile(script, []byte(body), 0o700); err != nil {
-		t.Fatalf("write stub: %v", err)
-	}
-
-	ext := NewWithTesseractBinary(script)
-	ext.ocrPageTimeout = 200 * time.Millisecond // inject a tiny deadline
-
-	path := writePNGFixture(t, 32, 32)
-	start := time.Now()
-	res, err := ext.Extract(context.Background(), swarmextractor.Source{
-		FilePath: path, OriginalName: "slow.png",
+// TestExtract_OCR_TimeoutDegradesHonestly — batch-3 ingress/untrusted-input
+// hardening (d): one OCR run is bounded per page. The bound is now the
+// sandbox's image_ocr timeout; a run it kills still yields the metadata
+// section, with a footer saying OCR failed and why.
+func TestExtract_OCR_TimeoutDegradesHonestly(t *testing.T) {
+	sb := sandboxtest.New(t, func(sandboxtool.Spec, map[string][]byte, string) error {
+		return &sandboxtool.RunError{Outcome: sandboxtool.OutcomeTimeout, Feature: sandboxtool.FeatureImageOCR, Detail: "after 2m0s"}
 	})
-	elapsed := time.Since(start)
+	res, err := New(sb).Extract(context.Background(), swarmextractor.Source{
+		FilePath: writePNGFixture(t, 32, 32), OriginalName: "slow.png",
+	})
 	if err != nil {
 		t.Fatalf("Extract should degrade gracefully on OCR timeout, got: %v", err)
 	}
-	// Must have aborted well before the 30s sleep would finish.
-	if elapsed > 5*time.Second {
-		t.Fatalf("per-page OCR timeout not enforced; took %v", elapsed)
-	}
 	body0 := res.Sections[0].Content
-	if !strings.Contains(body0, "OCR failed") {
-		t.Errorf("expected OCR-failed footer after timeout; got: %q", body0)
+	if !strings.Contains(body0, "OCR failed") || !strings.Contains(body0, "timed out") {
+		t.Errorf("expected an OCR-failed footer naming the timeout; got: %q", body0)
 	}
 	if res.Metadata.Extra["ocr_engine"] != "failed" {
 		t.Errorf("ocr_engine = %q; want failed", res.Metadata.Extra["ocr_engine"])
+	}
+}
+
+// §7.1 decision 4: an image without tesseract never falls back to the host.
+func TestExtract_OCR_NotAvailableNeverRunsTheHostTool(t *testing.T) {
+	dir := t.TempDir()
+	marker := filepath.Join(dir, "ran")
+	if err := os.WriteFile(filepath.Join(dir, "tesseract"), []byte("#!/bin/sh\ntouch '"+marker+"'\n"), 0o755); err != nil { //nolint:gosec // test fixture
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	sb := sandboxtest.New(t, func(sandboxtool.Spec, map[string][]byte, string) error {
+		return sandboxtest.NotAvailable(sandboxtool.FeatureImageOCR)
+	})
+	res, err := New(sb).Extract(context.Background(), swarmextractor.Source{FilePath: writePNGFixture(t, 8, 8)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(res.Sections[0].Content, "OCR not available in the agent image") {
+		t.Errorf("footer: %q", res.Sections[0].Content)
+	}
+	if _, err := os.Stat(marker); err == nil {
+		t.Fatal("a host tesseract ran")
 	}
 }
 
@@ -264,7 +264,7 @@ func TestTitleFromSource(t *testing.T) {
 }
 
 func TestExtractor_Identifies(t *testing.T) {
-	e := New()
+	e := New(nil)
 	if e.Name() != Name {
 		t.Errorf("Name = %q; want %q", e.Name(), Name)
 	}

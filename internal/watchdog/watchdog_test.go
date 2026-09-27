@@ -84,7 +84,11 @@ type stubTaskRepo struct {
 	updates    []*persistence.Task
 	listResult []*persistence.Task // returned by List
 	listErr    error
-	statusSet  map[string]persistence.TaskStatus // id → status set via UpdateStatus
+	statusSet  map[string]persistence.TaskStatus // id → status set via UpdateStatus / TransitionConditional
+	// live overrides the status TransitionConditional compares against, for a
+	// row that moved on after List read it (scheduler design §4.10). Absent:
+	// the listed snapshot's status is the live one.
+	live map[string]persistence.TaskStatus
 }
 
 func newStubTaskRepo() *stubTaskRepo {
@@ -135,6 +139,29 @@ func (s *stubTaskRepo) UpdateStatus(_ context.Context, id string, status persist
 	}
 	s.statusSet[id] = status
 	return nil
+}
+
+func (s *stubTaskRepo) TransitionConditional(_ context.Context, id string, from []persistence.TaskStatus, to persistence.TaskStatus, _ persistence.TransitionOpts) (bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	current, ok := s.live[id]
+	if !ok {
+		for _, t := range s.listResult {
+			if t != nil && t.ID == id {
+				current = t.Status
+			}
+		}
+	}
+	for _, f := range from {
+		if f == current {
+			if s.statusSet == nil {
+				s.statusSet = map[string]persistence.TaskStatus{}
+			}
+			s.statusSet[id] = to
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 func (s *stubTaskRepo) cancelledIDs() map[string]persistence.TaskStatus {

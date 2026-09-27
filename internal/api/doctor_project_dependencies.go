@@ -20,7 +20,7 @@ package api
 //	         they cannot run.
 //	WARNING  the manifest is sound and the key is not materialised yet. Not
 //	         a defect: a fresh install, a changed lockfile, or an air-gapped
-//	         deployment awaiting `vornikctl deps import`. It IS a statement
+//	         deployment awaiting `vornikctl deps install --from`. It IS a statement
 //	         that the reviewer case does not work right now.
 //	OK       every declared key is present and complete.
 
@@ -36,6 +36,10 @@ import (
 type ProjectDependencyStatus struct {
 	ProjectID string
 	Plans     []projectdeps.Plan
+	// StaleImages lists, per installed key, the project's role images the
+	// tree was NOT installed for (design §8.2): the daemon refuses to mount it
+	// for those roles.
+	StaleImages map[string][]string
 }
 
 // DependencyInventory supplies the resolved manifest of every project that
@@ -73,7 +77,7 @@ func (h *DoctorHandlers) checkProjectDependencies() DoctorCheck {
 		}
 	}
 
-	var broken, pending []string
+	var broken, pending, stale []string
 	declared := 0
 
 	for _, proj := range inventory {
@@ -83,12 +87,16 @@ func (h *DoctorHandlers) checkProjectDependencies() DoctorCheck {
 			case p.Problem != nil:
 				broken = append(broken, fmt.Sprintf("%s/%s: %v", proj.ProjectID, p.Entry.Ecosystem, p.Problem))
 			case !p.Materialised:
-				pending = append(pending, fmt.Sprintf("%s/%s (key %s)", proj.ProjectID, p.Entry.Ecosystem, p.Key))
+				pending = append(pending, fmt.Sprintf("%s/%s (key %s): vornikctl deps install %s", proj.ProjectID, p.Entry.Ecosystem, p.Key, proj.ProjectID))
+			case len(proj.StaleImages[p.Key]) > 0:
+				stale = append(stale, fmt.Sprintf("%s/%s (key %s) not installed for %s: vornikctl deps install %s",
+					proj.ProjectID, p.Entry.Ecosystem, p.Key, strings.Join(proj.StaleImages[p.Key], ", "), proj.ProjectID))
 			}
 		}
 	}
 	sort.Strings(broken)
 	sort.Strings(pending)
+	sort.Strings(stale)
 
 	switch {
 	case len(broken) > 0:
@@ -98,18 +106,24 @@ func (h *DoctorHandlers) checkProjectDependencies() DoctorCheck {
 			msg += fmt.Sprintf(" (a further %d are sound but not yet materialised)", len(pending))
 		}
 		return DoctorCheck{Name: name, Status: "ERROR", Message: msg}
-	case len(pending) > 0:
+	case len(pending) > 0 || len(stale) > 0:
+		// The daemon never installs (design §8): the remedy is the operator's
+		// `vornikctl deps install`, run on the agent host (with --from
+		// <wheelhouse> when air-gapped). Until then those projects' agents
+		// refuse to start rather than run code they cannot import.
+		parts := append(append([]string{}, pending...), stale...)
 		return DoctorCheck{
 			Name:   name,
 			Status: "WARNING",
-			Message: fmt.Sprintf("%d of %d declared dependency sets are not materialised, so their projects' agents cannot run the code they review: %s — run the provisioning job, or `vornikctl deps import <bundle>` on an air-gapped deployment",
-				len(pending), declared, strings.Join(pending, "; ")),
+			Message: fmt.Sprintf("%d of %d declared dependency sets are not installed for the images their roles run, so those agents refuse to start: %s. "+
+				"Install on the agent host (add --from <wheelhouse> when air-gapped). This check compares image NAMES; after an agent-image rebuild under the same tag, `vornikctl deps status` compares image IDs",
+				len(pending)+len(stale), declared, strings.Join(parts, "; ")),
 		}
 	default:
 		return DoctorCheck{
 			Name:    name,
 			Status:  "OK",
-			Message: fmt.Sprintf("all %d declared dependency sets across %d projects are materialised", declared, len(inventory)),
+			Message: fmt.Sprintf("all %d declared dependency sets across %d projects are installed for their roles' images", declared, len(inventory)),
 		}
 	}
 }

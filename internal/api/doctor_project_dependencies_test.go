@@ -70,7 +70,7 @@ func TestProjectDependenciesPendingWarnsAndNamesTheRemedy(t *testing.T) {
 	if got.Status != "WARNING" {
 		t.Fatalf("Status = %q, want WARNING", got.Status)
 	}
-	for _, want := range []string{"headmatch", "pip-linux-amd64-abc", "vornikctl deps import"} {
+	for _, want := range []string{"headmatch", "pip-linux-amd64-abc", "vornikctl deps install headmatch"} {
 		if !strings.Contains(got.Message, want) {
 			t.Fatalf("Message = %q, want it to carry %q", got.Message, want)
 		}
@@ -105,5 +105,39 @@ func TestProjectDependenciesBrokenManifestIsAnError(t *testing.T) {
 	// not hide that another is also not ready.
 	if !strings.Contains(got.Message, "a further 1 are sound but not yet materialised") {
 		t.Fatalf("Message = %q, want the pending count kept", got.Message)
+	}
+}
+
+// A tree installed for images the project's roles no longer run is refused at
+// mount time, so the doctor says so, with the install remedy (design §8.2).
+func TestProjectDependencies_StaleImagesWarn(t *testing.T) {
+	h := &DoctorHandlers{}
+	h.SetDependencyInventory(func() []ProjectDependencyStatus {
+		return []ProjectDependencyStatus{{
+			ProjectID:   "headmatch",
+			Plans:       []projectdeps.Plan{{Entry: projectdeps.Entry{Ecosystem: projectdeps.EcosystemPip}, Key: "pip-k", Materialised: true}},
+			StaleImages: map[string][]string{"pip-k": {"vornik-agent:v2"}},
+		}}
+	})
+	got := h.checkProjectDependencies()
+	if got.Status != "WARNING" || !strings.Contains(got.Message, "vornik-agent:v2") || !strings.Contains(got.Message, "vornikctl deps install headmatch") {
+		t.Fatalf("got %+v", got)
+	}
+}
+
+// The inventory turns an unreadable marker into a planned Problem, and the
+// doctor reports it as ERROR, as the mount path refuses it
+// (review-20260925-f900 F2, -05ea finding 1).
+func TestProjectDependencies_UnreadableMarkerIsError(t *testing.T) {
+	h := &DoctorHandlers{}
+	h.SetDependencyInventory(func() []ProjectDependencyStatus {
+		return []ProjectDependencyStatus{{
+			ProjectID: "headmatch",
+			Plans: []projectdeps.Plan{{Entry: projectdeps.Entry{Ecosystem: projectdeps.EcosystemPip}, Key: "pip-k", Materialised: true,
+				Problem: errors.New("installed tree's completion marker is unreadable: bad json")}},
+		}}
+	})
+	if got := h.checkProjectDependencies(); got.Status != "ERROR" || !strings.Contains(got.Message, "unreadable") {
+		t.Fatalf("got %+v", got)
 	}
 }

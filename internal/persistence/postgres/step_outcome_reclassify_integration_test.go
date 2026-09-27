@@ -5,6 +5,7 @@ package postgres
 import (
 	"context"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -332,5 +333,161 @@ func TestMigration173_DownRestoresOnlyWhatUpChanged(t *testing.T) {
 	if got := classOf(live); got != "model_unhealthy" {
 		t.Errorf("after Down: LIVE-classifier row error_class = %q, want model_unhealthy — "+
 			"an unbounded Down discarded a legitimate classification the migration never made", got)
+	}
+}
+
+// Migration 195 names the 2026-09-17/18 agent-image uid outage in history:
+// 69 steps whose agent could not open its own task file landed in
+// `unclassified` with exit code 1. The live path now classifies on exit 78
+// from the agent's mount preflight; history has only the text, so Up keys on
+// the agent's exact first-action literal, bounded to rows before the
+// structured channel shipped (unclassified-step-outcome design §11).
+func TestMigration195_ReclassifiesTheMountOutageAndDownRestoresIt(t *testing.T) {
+	db := newIntegrationDB(t)
+	ctx := context.Background()
+	stamp := time.Now().UnixNano()
+	const lit = "container exited with code 1\n\n--- Container Log (last 400 lines) ---\n" +
+		"[vornik-agent] starting (model=glm-5.2)\n" +
+		"jq: error: Could not open file /app/input/task.json: Permission denied\n"
+	type seed struct {
+		id, class, detail, recorded string
+		code                        any
+		wantUp                      string
+	}
+	seeds := []seed{
+		{fmt.Sprintf("m195-hit-%d", stamp), "unclassified", lit, "2026-09-18 01:00:00+00", 1, "agent_mount_unusable"},
+		// the same literal AFTER the bound — never swept in
+		{fmt.Sprintf("m195-late-%d", stamp), "unclassified", lit, "2026-09-26 01:00:00+00", 1, "unclassified"},
+		// a different unclassified failure in the window
+		{fmt.Sprintf("m195-other-%d", stamp), "unclassified", "container exited with code 1\n\n--- Container Log ---\nsomething else\n", "2026-09-18 01:00:00+00", 1, "unclassified"},
+		// already classified — Up must not relabel it
+		{fmt.Sprintf("m195-classed-%d", stamp), "llm_call_failed", lit, "2026-09-18 01:00:00+00", 1, "llm_call_failed"},
+	}
+	for _, s := range seeds {
+		if _, err := db.DB.ExecContext(ctx, `
+			INSERT INTO execution_step_outcomes
+				(id, project_id, task_id, execution_id, step_id, role, model,
+				 outcome, error_class, error_detail, recorded_at, container_exit_code)
+			VALUES ($1,'p','t','e','s','worker','m','failed',$2,$3,$4::timestamptz,$5)`,
+			s.id, s.class, s.detail, s.recorded, s.code); err != nil {
+			t.Fatalf("seed %s: %v", s.id, err)
+		}
+		id := s.id
+		t.Cleanup(func() { _, _ = db.DB.Exec(`DELETE FROM execution_step_outcomes WHERE id = $1`, id) })
+	}
+	classOf := func(id string) string {
+		var c string
+		if err := db.DB.QueryRowContext(ctx,
+			`SELECT error_class FROM execution_step_outcomes WHERE id = $1`, id).Scan(&c); err != nil {
+			t.Fatalf("read back %s: %v", id, err)
+		}
+		return c
+	}
+	if _, err := db.DB.ExecContext(ctx, migrationUpSQL(t, 195)); err != nil {
+		t.Fatalf("up: %v", err)
+	}
+	for _, s := range seeds {
+		if got := classOf(s.id); got != s.wantUp {
+			t.Errorf("after Up: %s = %q, want %q", s.id, got, s.wantUp)
+		}
+	}
+	// Idempotent: a second Up changes nothing.
+	if _, err := db.DB.ExecContext(ctx, migrationUpSQL(t, 195)); err != nil {
+		t.Fatalf("up again: %v", err)
+	}
+	if _, err := db.DB.ExecContext(ctx, migrationDownSQL(t, 195)); err != nil {
+		t.Fatalf("down: %v", err)
+	}
+	for _, s := range seeds {
+		if got := classOf(s.id); got != s.class {
+			t.Errorf("after Down: %s = %q, want its original %q", s.id, got, s.class)
+		}
+	}
+}
+
+// Migration 196 (companion tool-audit design, 2026-09-24): a violator the old
+// companion writer produced — id ” and a year-1 created_at — is REPAIRED
+// (generated id, current time, marked output), not deleted; afterwards the
+// CHECKs reject new ones; Down drops them.
+func TestMigration196_RepairsTheViolatorThenRejectsNewOnes(t *testing.T) {
+	db := newIntegrationDB(t)
+	ctx := context.Background()
+	// The suite's DB is already migrated: take the constraints off so the
+	// pre-fix state can be seeded, exactly as production held it.
+	if _, err := db.DB.ExecContext(ctx, migrationDownSQL(t, 196)); err != nil {
+		t.Fatalf("down: %v", err)
+	}
+	exec := fmt.Sprintf("m196-%d", time.Now().UnixNano())
+	if _, err := db.DB.ExecContext(ctx, `DELETE FROM tool_audit_log WHERE id = ''`); err != nil {
+		t.Fatalf("clear: %v", err)
+	}
+	if _, err := db.DB.ExecContext(ctx, `
+		INSERT INTO tool_audit_log (id, project_id, task_id, execution_id, step_id, tool_name, tool_input, tool_output, duration_ms, outcome, outcome_class, created_at)
+		VALUES ('', 'p', 'companion:akey_x', $1, '', 'mcp__plugin_vornik-companion_vornik__delegate', 'args_bytes=1', 'status=ok', 5, '', '', '0001-01-01T00:00:00Z')`, exec); err != nil {
+		t.Fatalf("seed violator: %v", err)
+	}
+	// Implementation review F3: the two single-column branches, each alone.
+	// A real time with an empty id keeps its time and gets NO marker; a real
+	// id with a year-1 time keeps its id and IS marked. (Seeded before Up, so
+	// the empty id here is the one the repair renames, not a second '' row:
+	// the first violator above is renamed in the same UPDATE.)
+	if _, err := db.DB.ExecContext(ctx, `
+		INSERT INTO tool_audit_log (id, project_id, task_id, execution_id, tool_name, tool_output, created_at) VALUES
+		('m196-timeonly', 'p', 'companion:akey_x', $1 || '-timeonly', 'x', 'status=ok', '0001-01-01T00:00:00Z')`, exec); err != nil {
+		t.Fatalf("seed time-only violator: %v", err)
+	}
+	if _, err := db.DB.ExecContext(ctx, migrationUpSQL(t, 196)); err != nil {
+		t.Fatalf("up: %v", err)
+	}
+	t.Cleanup(func() { _, _ = db.DB.Exec(`DELETE FROM tool_audit_log WHERE execution_id LIKE $1 || '%'`, exec) })
+
+	var id, out string
+	var created time.Time
+	if err := db.DB.QueryRowContext(ctx, `SELECT id, tool_output, created_at FROM tool_audit_log WHERE execution_id = $1`, exec).
+		Scan(&id, &out, &created); err != nil {
+		t.Fatalf("the violator was deleted, not repaired: %v", err)
+	}
+	if !strings.HasPrefix(id, "ta_repaired_") || created.Year() < 2026 || !strings.Contains(out, "repaired by migration 196") {
+		t.Fatalf("repair incomplete: id=%q created=%v out=%q", id, created, out)
+	}
+	for name, stmt := range map[string]string{
+		"empty id":    `INSERT INTO tool_audit_log (id, project_id, task_id, execution_id, tool_name, created_at) VALUES ('', 'p', 't', 'e', 'x', now())`,
+		"year 1 time": `INSERT INTO tool_audit_log (id, project_id, task_id, execution_id, tool_name, created_at) VALUES ('m196-y1', 'p', 't', 'e', 'x', '0001-01-01T00:00:00Z')`,
+	} {
+		if _, err := db.DB.ExecContext(ctx, stmt); err == nil {
+			t.Errorf("%s: accepted after migration 196; want a CHECK violation", name)
+			_, _ = db.DB.Exec(`DELETE FROM tool_audit_log WHERE id IN ('', 'm196-y1')`)
+		}
+	}
+
+	var timeOnlyOut string
+	var timeOnlyAt time.Time
+	if err := db.DB.QueryRowContext(ctx, `SELECT tool_output, created_at FROM tool_audit_log WHERE id = 'm196-timeonly'`).
+		Scan(&timeOnlyOut, &timeOnlyAt); err != nil {
+		t.Fatalf("time-only violator lost its id: %v", err)
+	}
+	if timeOnlyAt.Year() < 2026 || !strings.Contains(timeOnlyOut, "repaired by migration 196") {
+		t.Errorf("time-only repair: at=%v out=%q; want the migration's time and the marker", timeOnlyAt, timeOnlyOut)
+	}
+
+	// Implementation review F2: Down re-opens insertion, then Up re-applies
+	// and repairs the id-only shape: a new id, the original time, no marker.
+	if _, err := db.DB.ExecContext(ctx, migrationDownSQL(t, 196)); err != nil {
+		t.Fatalf("down: %v", err)
+	}
+	if _, err := db.DB.ExecContext(ctx, `INSERT INTO tool_audit_log (id, project_id, task_id, execution_id, tool_name, tool_output, created_at) VALUES ('', 'p', 't', $1 || '-idonly', 'x', 'status=ok', '2026-09-20T10:00:00Z')`, exec); err != nil {
+		t.Fatalf("after Down an empty-id insert is still rejected: %v", err)
+	}
+	if _, err := db.DB.ExecContext(ctx, migrationUpSQL(t, 196)); err != nil {
+		t.Fatalf("re-up: %v", err)
+	}
+	var idOnly, idOnlyOut string
+	var idOnlyAt time.Time
+	if err := db.DB.QueryRowContext(ctx, `SELECT id, tool_output, created_at FROM tool_audit_log WHERE execution_id = $1 || '-idonly'`, exec).
+		Scan(&idOnly, &idOnlyOut, &idOnlyAt); err != nil {
+		t.Fatalf("id-only violator: %v", err)
+	}
+	if !strings.HasPrefix(idOnly, "ta_repaired_") || !idOnlyAt.Equal(time.Date(2026, 9, 20, 10, 0, 0, 0, time.UTC)) || strings.Contains(idOnlyOut, "repaired") {
+		t.Errorf("id-only repair: id=%q at=%v out=%q; want a new id, the original time, no marker", idOnly, idOnlyAt, idOnlyOut)
 	}
 }

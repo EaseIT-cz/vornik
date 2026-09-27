@@ -357,10 +357,17 @@ func Open(ctx context.Context, cfg config.DatabaseConfig) (*Backend, error) {
 // remaining fields stay nil for now — phase-2 follow-on commits
 // fill them in. Tests against this Backend must scope themselves to
 // the implemented surface.
-func openSQLite(ctx context.Context, cfg config.DatabaseConfig) (*Backend, error) {
-	sqliteCfg := sqlite.Config{Path: cfg.Path}
+// sqliteConfig is the one place storage builds a sqlite.Config, for both
+// openSQLite and OpenReadOnly. It leaves ConnectTimeout zero on purpose: a
+// non-zero value would override the caller's context deadline and re-clamp
+// every deadline-bearing CLI caller to it (storage-abstraction design, SQLite
+// connect deadline, 2026-09-24).
+func sqliteConfig(cfg config.DatabaseConfig) sqlite.Config {
+	return sqlite.Config{Path: cfg.Path}
+}
 
-	db, err := sqlite.Connect(ctx, sqliteCfg)
+func openSQLite(ctx context.Context, cfg config.DatabaseConfig) (*Backend, error) {
+	db, err := sqlite.Connect(ctx, sqliteConfig(cfg))
 	if err != nil {
 		return nil, fmt.Errorf("storage: connect sqlite: %w", err)
 	}
@@ -692,7 +699,7 @@ func OpenReadOnly(ctx context.Context, cfg config.DatabaseConfig) (*Backend, err
 		// caller must invoke, and this path never does.
 		return openPostgres(ctx, cfg)
 	case "sqlite":
-		db, err := sqlite.Connect(ctx, sqlite.Config{Path: cfg.Path})
+		db, err := sqlite.Connect(ctx, sqliteConfig(cfg))
 		if err != nil {
 			return nil, fmt.Errorf("storage: connect sqlite: %w", err)
 		}

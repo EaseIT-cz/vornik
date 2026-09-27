@@ -10,7 +10,7 @@ roles:
     - name: "lead"
       description: "Plans code tasks and schedules autonomous work"
       count: 1
-      runtimePolicy: "warm"
+      runtimePolicy: "ephemeral"
       maxTokens: 2048
       requiredOutputKeys: ["plan"]
       runtime:

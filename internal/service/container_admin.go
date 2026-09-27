@@ -220,7 +220,7 @@ func (a *adminMCPRefresher) RefreshAll(ctx context.Context) error {
 		// stable; the manager wants its package-local shape.
 		servers := make([]mcp.ServerConfig, 0, len(p.MCP.Servers))
 		for _, s := range p.MCP.Servers {
-			servers = append(servers, mcp.ServerConfig{
+			cfg := mcp.ServerConfig{
 				Name:           s.Name,
 				Transport:      s.Transport,
 				Command:        s.Command,
@@ -229,7 +229,9 @@ func (a *adminMCPRefresher) RefreshAll(ctx context.Context) error {
 				URL:            s.URL,
 				AllowedTools:   s.AllowedTools,
 				TimeoutSeconds: s.TimeoutSeconds,
-			})
+			}
+			cfg.Program = configuredMCPProgram(cfg)
+			servers = append(servers, cfg)
 		}
 		if len(servers) == 0 {
 			continue

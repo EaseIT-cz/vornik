@@ -7,6 +7,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
 	"vornik.io/vornik/internal/pricing"
+	"vornik.io/vornik/internal/stepoutcome"
 )
 
 const (
@@ -77,6 +78,16 @@ type Metrics struct {
 	// view.
 	AgentStepOutcomesTotal *prometheus.CounterVec
 
+	// StepFailuresNotChargedToModelTotal counts terminal step failures whose
+	// error class says nothing about the model (stepoutcome.
+	// NotAttributableToModel: container start/wait/kill, unusable mount,
+	// missing upstream input). A SUBSET of AgentStepOutcomesTotal's non-ok
+	// outcomes, never an addition. The doctor's model_health removes the same
+	// classes from its rate; this makes an ongoing host outage visible
+	// outside the doctor (model-health attribution design, 2026-09-24
+	// amendment). Only classes named at write time count.
+	StepFailuresNotChargedToModelTotal *prometheus.CounterVec
+
 	// ResidueDiscardTotal counts non-backlog tracked files restored to HEAD
 	// at a failed/cancelled task terminal (discardFailedTaskResidue). A
 	// non-zero count for a project means an agent wrote a tracked file
@@ -138,6 +149,17 @@ type Metrics struct {
 	// no id node to pin, and the bug is ours — without this, that case reads
 	// as provider non-enforcement and libels the provider for a daemon defect.
 	PinnedCaseEnumInstalledTotal *prometheus.CounterVec
+
+	// InputStagingRoleUnableTotal counts extracted input documents in a
+	// workflow where a step's role cannot open extractions with the document
+	// tools (media routing LLD §4.2a), per unable role. outcome is what
+	// happened to the file (staged within the cap, or over_cap and the
+	// plain-truth prompt served); cause is why the role was unable.
+	InputStagingRoleUnableTotal *prometheus.CounterVec
+	// InputStagingNoFileReaderTotal counts staged input files handed to a role
+	// with none of file_read, read_many_files, grep or run_shell. NOT exclusive
+	// with the counter above: do not sum them.
+	InputStagingNoFileReaderTotal prometheus.Counter
 
 	// ModelSuccessRate is success / (success+failed+timeout) per (role, model).
 	// Cancelled outcomes are excluded: a user-initiated cancel should not
@@ -559,6 +581,15 @@ func NewMetrics(registerer prometheus.Registerer) *Metrics {
 			},
 			[]string{"role", "model", "outcome"},
 		),
+		StepFailuresNotChargedToModelTotal: promauto.With(registerer).NewCounterVec(
+			prometheus.CounterOpts{
+				Namespace: executorNamespace,
+				Subsystem: executorSubsystem,
+				Name:      "step_failures_not_charged_to_model_total",
+				Help:      "Terminal step failures whose error class is not the model's (container start/wait/kill, unusable mount, missing upstream input), by role+model+class. A SUBSET of agent_step_outcomes_total's non-ok outcomes - subtract, never add. Only classes named when the outcome is written count (a failure written unclassified is not here); swept rows carry no class; resets on restart. The doctor's model_health is the window authority.",
+			},
+			[]string{"role", "model", "class"},
+		),
 		ResidueDiscardTotal: promauto.With(registerer).NewCounterVec(
 			prometheus.CounterOpts{
 				Namespace: executorNamespace,
@@ -594,6 +625,23 @@ func NewMetrics(registerer prometheus.Registerer) *Metrics {
 				Help:      "Executions where a pinned_case_validation verifier's emitted schema actually carried the producer's pinned case ids. A violation with no install means the daemon never pinned, not that the provider ignored the enum.",
 			},
 			[]string{"role"},
+		),
+		InputStagingRoleUnableTotal: promauto.With(registerer).NewCounterVec(
+			prometheus.CounterOpts{
+				Namespace: executorNamespace,
+				Subsystem: "input_staging",
+				Name:      "role_unable_total",
+				Help:      "Counted per (extracted input file x unable role): a workflow step's role cannot open extractions with the document tools. outcome: staged (within the cap) or over_cap; cause: outline_missing, read_section_missing, both_missing, unresolved_role. Not a count of files or tasks.",
+			},
+			[]string{"outcome", "cause"},
+		),
+		InputStagingNoFileReaderTotal: promauto.With(registerer).NewCounter(
+			prometheus.CounterOpts{
+				Namespace: executorNamespace,
+				Subsystem: "input_staging",
+				Name:      "no_file_reader_total",
+				Help:      "Counted per (staged input file x role with none of file_read, read_many_files, grep, run_shell). Not exclusive with role_unable_total: do not sum them.",
+			},
 		),
 		StepTaintTotal: promauto.With(registerer).NewCounterVec(
 			prometheus.CounterOpts{
@@ -905,6 +953,24 @@ func (m *Metrics) RecordDelegationGuardRejection(reason string) {
 	m.DelegationGuardRejectionsTotal.WithLabelValues(reason).Inc()
 }
 
+// RecordInputStagingRoleUnable counts one extracted document for one role
+// that cannot open extractions (media routing LLD §4.2a).
+func (m *Metrics) RecordInputStagingRoleUnable(outcome, cause string) {
+	if m == nil || m.InputStagingRoleUnableTotal == nil {
+		return
+	}
+	m.InputStagingRoleUnableTotal.WithLabelValues(outcome, cause).Inc()
+}
+
+// RecordInputStagingNoFileReader counts one staged file handed to a role with
+// no file reader.
+func (m *Metrics) RecordInputStagingNoFileReader() {
+	if m == nil || m.InputStagingNoFileReaderTotal == nil {
+		return
+	}
+	m.InputStagingNoFileReaderTotal.Inc()
+}
+
 // RecordChildArtifactStaging records one F1 staging-gate pass: staged is the
 // number of child artifact entries staged onto the resuming parent step,
 // missing the number of delegation children with no COMPLETED execution, and
@@ -1105,39 +1171,35 @@ func (m *Metrics) RecordLLMUsageWithCache(projectID, role, model string, promptT
 	}
 }
 
-// RecordAgentStepOutcome attributes one agent-step completion to a role+model
-// pair using the legacy 4-label taxonomy ("success", "failed", "timeout",
-// "cancelled"). Kept for the container.go defer which only has err-based
-// classification at its disposal. RecordFinalOutcome is the source of
-// truth for the richer taxonomy.
-func (m *Metrics) RecordAgentStepOutcome(role, model, outcome string) {
-	if m == nil || role == "" || model == "" {
-		return
-	}
-	m.AgentStepOutcomesTotal.WithLabelValues(role, m.modelLabel(model), outcome).Inc()
-	// Don't mirror here — the richer stats live on the RecordFinalOutcome
-	// path. This legacy method just keeps the original counter label
-	// space populated for any existing dashboards.
-}
-
 // RecordFinalOutcome records a step's terminal outcome in the richer
-// taxonomy. Unlike RecordAgentStepOutcome, this is the source of truth
-// for the quality-rate gauges — every finalize, sweep, and direct
+// taxonomy. It is the source of truth for the quality-rate gauges — every finalize, sweep, and direct
 // terminal write goes through here. The Prometheus counter
 // AgentStepOutcomesTotal gets the same label value so a single counter
 // carries both legacy and richer outcomes.
 //
 // Called from:
 //   - finalizePendingOutcome (consumer finalized a pending row)
-//   - sweepPendingOutcomes (terminal sweep finalized leftover pending)
+//   - sweepPendingOutcomes (terminal sweep finalized leftover pending;
+//     passes errorClass "" — a swept row has no class)
 //   - recordStepOutcome when outcome != pending_validation (direct
 //     terminal write, e.g. container-level failure)
-func (m *Metrics) RecordFinalOutcome(role, model, outcome string) {
+//
+// It is the only emitter of both AgentStepOutcomesTotal and
+// StepFailuresNotChargedToModelTotal, so the subset relation between them
+// holds by construction and both carry the same catalogue-guarded model.
+func (m *Metrics) RecordFinalOutcome(role, model, outcome, errorClass string) {
 	if m == nil || role == "" || model == "" || outcome == "" {
 		return
 	}
 	model = m.modelLabel(model)
 	m.AgentStepOutcomesTotal.WithLabelValues(role, model, outcome).Inc()
+	// Terminal failures only: pending_validation is excluded here too, not
+	// just by the callers, so the charged-failures subtraction (which drops
+	// pending_validation) can never be fed a row it never counted.
+	if outcome != string(stepoutcome.OK) && outcome != string(stepoutcome.PendingValidation) &&
+		stepoutcome.NotAttributableToModel(errorClass) {
+		m.StepFailuresNotChargedToModelTotal.WithLabelValues(role, model, errorClass).Inc()
+	}
 
 	m.statsMu.Lock()
 	defer m.statsMu.Unlock()

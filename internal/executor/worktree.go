@@ -6,13 +6,14 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"sort"
 	"strings"
 	"time"
 
 	"github.com/rs/zerolog"
+
+	"vornik.io/vornik/internal/spawn"
 )
 
 // forgeCheckout is the loosely-parsed subset of a task's forge_job the worktree
@@ -261,8 +262,62 @@ func isGitRepo(dir string) bool {
 	if dir == "" {
 		return false
 	}
+	// A task worktree is judged by its admin dir, which the daemon names from
+	// its own paths, never by its .git file, which the agent can rewrite or
+	// delete (process-spawn law S6-D2).
+	if root := projectRootFromWorktree(dir); root != "" {
+		st, err := os.Stat(worktreeAdminDir(root, filepath.Base(dir)))
+		return err == nil && st.IsDir()
+	}
 	_, err := os.Stat(filepath.Join(dir, ".git"))
 	return err == nil
+}
+
+// worktreeAdminDir is a task worktree's administrative directory,
+// <project>/.git/worktrees/<task>, derived from the daemon's own paths
+// (process-spawn law S6-D2). Every daemon git command in the worktree names it
+// as GIT_DIR, so the worktree's agent-writable .git pointer is never read.
+func worktreeAdminDir(projectDir, taskID string) string {
+	return filepath.Join(projectDir, ".git", "worktrees", taskID)
+}
+
+// sameFile compares two paths after following symlinks where they exist.
+func sameFile(a, b string) bool {
+	ra, err1 := filepath.EvalSymlinks(a)
+	rb, err2 := filepath.EvalSymlinks(b)
+	if err1 != nil || err2 != nil {
+		return filepath.Clean(a) == filepath.Clean(b)
+	}
+	return ra == rb
+}
+
+// worktreeAdminNamesItself verifies, from the project's .git alone, that the
+// admin dir the daemon derives, <project>/.git/worktrees/<task>, is the one
+// git created for wtDir: its gitdir file names <wtDir>/.git. False when git
+// chose a SUFFIXED admin name (a leftover it would not prune) (S6-D2).
+func worktreeAdminNamesItself(projectDir, taskID, wtDir string) bool {
+	raw, err := os.ReadFile(filepath.Join(worktreeAdminDir(projectDir, taskID), "gitdir"))
+	if err != nil {
+		return false
+	}
+	return sameFile(strings.TrimSpace(string(raw)), filepath.Join(wtDir, ".git"))
+}
+
+// worktreePointerIntact reports whether the worktree's .git is still the
+// regular file git wrote, pointing at the daemon-derived admin dir. The agent
+// can rewrite it; removeWorktree then never lets git read it (S6-D2).
+func worktreePointerIntact(projectDir, taskID, wtDir string) bool {
+	p := filepath.Join(wtDir, ".git")
+	st, err := os.Lstat(p)
+	if err != nil || !st.Mode().IsRegular() || st.Size() > 4096 {
+		return false
+	}
+	raw, err := os.ReadFile(p)
+	if err != nil {
+		return false
+	}
+	target, ok := strings.CutPrefix(strings.TrimSpace(string(raw)), "gitdir: ")
+	return ok && sameFile(target, worktreeAdminDir(projectDir, taskID))
 }
 
 // preReceiveHookScript is the POSIX-sh hook installed at
@@ -490,6 +545,19 @@ func createWorktree(ctx context.Context, projectDir, taskID string, logger zerol
 		_, _ = gitExec.combined(ctx, "-C", projectDir, "worktree", "prune")
 		_, _ = gitExec.combined(ctx, "-C", projectDir, "branch", "-D", "--", branch)
 		return "", fmt.Errorf("git worktree add: %w: %s", err, strings.TrimSpace(string(out)))
+	}
+
+	// S6-D2: every daemon git command in this worktree will name
+	// <project>/.git/worktrees/<task> as its GIT_DIR. Verify once, before any
+	// agent runs, that it is the admin dir git created for this worktree. If
+	// git chose a suffixed name (a leftover admin dir it would not prune), the
+	// derived one names a different worktree: remove this one and fail (D1).
+	if !worktreeAdminNamesItself(projectDir, taskID, wtDir) {
+		_ = os.RemoveAll(wtDir)
+		_, _ = gitExec.combined(ctx, "-C", projectDir, "worktree", "prune")
+		_, _ = gitExec.combined(ctx, "-C", projectDir, "branch", "-D", "--", branch)
+		return "", fmt.Errorf("git worktree add: the admin dir %s does not belong to %s (git chose another name; a leftover under %s must be removed by hand)",
+			worktreeAdminDir(projectDir, taskID), wtDir, filepath.Join(projectDir, ".git", "worktrees"))
 	}
 
 	logger.Info().
@@ -1239,7 +1307,18 @@ func removeWorktree(ctx context.Context, projectDir, worktreeDir, taskID string,
 
 	branch := worktreeBranch(taskID)
 
-	if out, err := gitExec.combined(cleanupCtx, "-C", projectDir, "worktree", "remove", "--force", worktreeDir); err != nil {
+	// S6-D2: `git worktree remove` reads the worktree's .git pointer, which
+	// the agent can rewrite. When it no longer names the daemon-derived admin
+	// dir, git never reads it: remove the directory and prune, which reads
+	// only the project's .git.
+	if !worktreePointerIntact(projectDir, taskID, worktreeDir) {
+		logger.Warn().
+			Str("task_id", taskID).
+			Str("worktree_dir", worktreeDir).
+			Msg("worktree .git pointer does not name its admin dir (tampered or missing) — removing the directory without letting git read it")
+		_ = os.RemoveAll(worktreeDir)
+		_, _ = gitExec.combined(cleanupCtx, "-C", projectDir, "worktree", "prune")
+	} else if out, err := gitExec.combined(cleanupCtx, "-C", projectDir, "worktree", "remove", "--force", worktreeDir); err != nil {
 		logger.Warn().
 			Str("task_id", taskID).
 			Str("output", strings.TrimSpace(string(out))).
@@ -1416,11 +1495,15 @@ func worktreeInUseByContainer(ctx context.Context, worktreeDir string) bool {
 	if worktreeDir == "" {
 		return false
 	}
-	out, err := exec.CommandContext(ctx, "podman", "ps",
+	cmd, err := spawn.PodmanControl(ctx, "", []string{"ps",
 		"--no-trunc",
 		"--filter", "status=running",
 		"--format", "{{.Mounts}}",
-	).CombinedOutput()
+	})
+	if err != nil {
+		return false
+	}
+	out, err := cmd.CombinedOutput()
 	if err != nil {
 		return false
 	}

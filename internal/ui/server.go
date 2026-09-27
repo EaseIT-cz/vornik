@@ -309,6 +309,14 @@ type Server struct {
 	// accounts backs /ui/operator/accounts (the CE operator shell,
 	// 2026-09-13). Nil → "not wired" page, 503 on POST.
 	accounts *authz.Accounts
+	// regRequests / regIncidents / regDisclosures / regAudit back the
+	// regulatory record (/ui/operator/regulatory, both editions). Nil
+	// requests/incidents = not recorded on this backend (SQLite); nil
+	// regAudit = no report downloads (never unaudited ones).
+	regRequests    RegulatoryRequests
+	regIncidents   RegulatoryIncidents
+	regDisclosures RegulatoryDisclosures
+	regAudit       persistence.AdminAuditRepository
 	// operatorCapability is admin.allowed_keys, accepted by the CE shell as
 	// an explicit operator capability in both editions.
 	operatorCapability config.AdminConfig
@@ -448,7 +456,7 @@ type Server struct {
 	// workspaceLock is the shared per-project workspace lock. The
 	// service container injects the SAME *workspacelock.Locker the
 	// executor and API server hold, so the live artifact-delete path
-	// (commitArtifactDeletion) is mutually exclusive per project with
+	// (the unlink in ProjectArtifactDelete) is mutually exclusive per project with
 	// task execution and git-over-HTTPS pushes. Never nil after
 	// NewServer (falls back to workspacelock.New()).
 	workspaceLock  *workspacelock.Locker
@@ -2394,6 +2402,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/account/", s.MyAccountAction)
 	mux.HandleFunc("/operator/accounts", s.operatorAccountsRouter)
 	mux.HandleFunc("/operator/accounts/", s.operatorAccountsRouter)
+	mux.HandleFunc("/operator/regulatory", s.operatorRegulatoryRouter)
+	mux.HandleFunc("/operator/regulatory/", s.operatorRegulatoryRouter)
 	mux.HandleFunc("/operator/assist", s.operatorAssistRouter)
 
 	// Memory hardening section (Phase 2-4): per-project view of

@@ -2,6 +2,7 @@ package memory
 
 import (
 	"context"
+	"errors"
 	"time"
 
 	"github.com/rs/zerolog"
@@ -488,9 +489,14 @@ func (s *Searcher) searchInternal(ctx context.Context, projectID, query string, 
 		}
 		reordered, rerr := s.reranker.Rerank(ctx, query, results)
 		if rerr != nil {
-			s.logger.Warn().Err(rerr).
-				Str("project_id", projectID).
-				Msg("memory: reranker error — keeping RRF order")
+			// A degrade was logged by the reranker with its cause; anything
+			// else is logged here. Either way RRF order is kept and the
+			// observation stays unreranked.
+			if !errors.Is(rerr, ErrRerankDegraded) {
+				s.logger.Warn().Err(rerr).
+					Str("project_id", projectID).
+					Msg("memory: reranker error — keeping RRF order")
+			}
 		} else {
 			results = reordered
 			if obs != nil {

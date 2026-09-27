@@ -20,6 +20,7 @@ import (
 	"vornik.io/vornik/internal/chat"
 	"vornik.io/vornik/internal/config"
 	"vornik.io/vornik/internal/pricing"
+	"vornik.io/vornik/internal/spawn"
 	"vornik.io/vornik/internal/version"
 )
 
@@ -166,7 +167,39 @@ func (c *Container) initChat() error {
 			Bool("log_content", logContent).
 			Msg("chat call logging enabled")
 	}
+	c.ChatClient = wrapOptionalWork(c.ChatClient, cfg.OptionalWork, c.Logger)
 	return nil
+}
+
+// optionalWorkDisables reports whether the switch refuses optional work on
+// model, so a resolved-state boot line (the reranker's) can say INERT instead
+// of ACTIVE for a feature every call of which will be refused.
+func optionalWorkDisables(cfg config.ChatOptionalWorkConfig, model string) bool {
+	if cfg.Disabled {
+		return true
+	}
+	for _, m := range cfg.DisabledModels {
+		if m == model {
+			return true
+		}
+	}
+	return false
+}
+
+// wrapOptionalWork puts the optional-work gate OUTSIDE the logging provider,
+// so a refused call makes no request, writes no "llm call" line and is no
+// breaker sample (LLD 2026-07-11-model-health §5.3d). An unset config leaves
+// the chain exactly as it was.
+func wrapOptionalWork(client chat.Provider, cfg config.ChatOptionalWorkConfig, logger zerolog.Logger) chat.Provider {
+	gcfg := chat.OptionalWorkConfig{Disabled: cfg.Disabled, DisabledModels: cfg.DisabledModels}
+	if client == nil || gcfg.Empty() {
+		return client
+	}
+	logger.Info().
+		Bool("all_models", cfg.Disabled).
+		Strs("models", cfg.DisabledModels).
+		Msg("chat: optional LLM work disabled (narration, memory titles/classes/narratives, reranking degrade without the model)")
+	return chat.NewOptionalWorkGate(client, gcfg, nil)
 }
 
 // initChatHTTP configures the default OpenAI-compatible HTTP client.
@@ -220,9 +253,9 @@ func (c *Container) initChatClaudeCLI(cfg config.ChatConfig) error {
 	opts := []chat.CLIOption{
 		chat.WithCLILogger(c.Logger.With().Str("component", "chat").Str("provider", "claude-cli").Logger()),
 	}
-	if cfg.CLIBinary != "" {
-		opts = append(opts, chat.WithCLIBinary(cfg.CLIBinary))
-	}
+	// The program is minted here, from config (process-spawn law, reading 3;
+	// S1b-2): chat.cli_binary, or "claude" on PATH when it is empty.
+	opts = append(opts, chat.WithCLIBinary(spawn.NewConfiguredCommand(fallbackNonEmpty(cfg.CLIBinary, "claude"))))
 	if cfg.Timeout != "" {
 		if timeout, err := time.ParseDuration(cfg.Timeout); err == nil {
 			opts = append(opts, chat.WithCLITimeout(timeout))
@@ -361,9 +394,9 @@ func (c *Container) initChatCodexCLI(cfg config.ChatConfig) error {
 	opts := []chat.CodexOption{
 		chat.WithCodexLogger(c.Logger.With().Str("component", "chat").Str("provider", "codex-cli").Logger()),
 	}
-	if cfg.CLIBinary != "" {
-		opts = append(opts, chat.WithCodexBinary(cfg.CLIBinary))
-	}
+	// The program is minted here, from config (process-spawn law, reading 3;
+	// S1b-2): chat.cli_binary, or "codex" on PATH when it is empty.
+	opts = append(opts, chat.WithCodexBinary(spawn.NewConfiguredCommand(fallbackNonEmpty(cfg.CLIBinary, "codex"))))
 	if cfg.Timeout != "" {
 		if timeout, err := time.ParseDuration(cfg.Timeout); err == nil {
 			opts = append(opts, chat.WithCodexTimeout(timeout))
@@ -414,9 +447,8 @@ func (c *Container) initChatRouter(cfg config.ChatConfig) error {
 		opts := []chat.CLIOption{
 			chat.WithCLILogger(c.Logger.With().Str("component", "chat").Str("provider", "claude-cli").Logger()),
 		}
-		if rcfg.ClaudeCLI.Binary != "" {
-			opts = append(opts, chat.WithCLIBinary(rcfg.ClaudeCLI.Binary))
-		}
+		// Minted from config (process-spawn law, reading 3; S1b-2).
+		opts = append(opts, chat.WithCLIBinary(spawn.NewConfiguredCommand(fallbackNonEmpty(rcfg.ClaudeCLI.Binary, "claude"))))
 		if timeout > 0 {
 			opts = append(opts, chat.WithCLITimeout(timeout))
 		}
@@ -432,9 +464,8 @@ func (c *Container) initChatRouter(cfg config.ChatConfig) error {
 		opts := []chat.CodexOption{
 			chat.WithCodexLogger(c.Logger.With().Str("component", "chat").Str("provider", "codex-cli").Logger()),
 		}
-		if rcfg.CodexCLI.Binary != "" {
-			opts = append(opts, chat.WithCodexBinary(rcfg.CodexCLI.Binary))
-		}
+		// Minted from config (process-spawn law, reading 3; S1b-2).
+		opts = append(opts, chat.WithCodexBinary(spawn.NewConfiguredCommand(fallbackNonEmpty(rcfg.CodexCLI.Binary, "codex"))))
 		if timeout > 0 {
 			opts = append(opts, chat.WithCodexTimeout(timeout))
 		}
@@ -830,6 +861,7 @@ func (c *Container) initChatRouter(cfg config.ChatConfig) error {
 	} else {
 		c.ChatClient = router
 	}
+	c.chatRouter = router
 
 	enabledKinds := make([]string, 0, len(subs))
 	for k := range subs {

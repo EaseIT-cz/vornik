@@ -26,6 +26,7 @@ import (
 
 	"vornik.io/vornik/internal/config"
 	"vornik.io/vornik/internal/persistence"
+	"vornik.io/vornik/internal/registry"
 	"vornik.io/vornik/internal/swarmenv"
 )
 
@@ -34,6 +35,32 @@ import (
 // informational proposal instead. Distinct from a real render error so
 // callers can log the two differently.
 var ErrChangeNotUseful = errors.New("control-plane: computed change is not an improvement over the current value")
+
+// ErrWallClockBinds means a step-timeout raise cannot act: the step's timeout
+// already meets the workflow's maxWallClock, the EXECUTION's deadline, which
+// caps every step (actionable-proposals design §12). Deliberately NOT wrapping
+// ErrChangeNotUseful — both scan callers drop that one silently, and "the wall
+// clock is the binding constraint" is what the operator needs to hear. The
+// renderer never raises maxWallClock itself: that widens every step's budget,
+// a different decision from one step's timeout.
+var ErrWallClockBinds = errors.New("control-plane: the workflow's maxWallClock binds; raising the step timeout cannot act")
+
+// ErrWallClockLowered refuses an APPLY: the proposal's step timeout, valid
+// when drafted, now exceeds the workflow's maxWallClock (lowered since), so
+// applying it would do nothing. Distinct from ErrWallClockBinds, which is the
+// render-time refusal the detector files as a note; this one reaches the
+// operator who clicked Apply, and the hub maps it to its own flash (design
+// §12, review 53a1 F4). Nothing is written.
+var ErrWallClockLowered = errors.New("control-plane: the workflow's maxWallClock was lowered since this proposal was drafted")
+
+// Clamp reasons: which bound was FINAL when a rendered timeout was clamped, so
+// a summary never attributes the constraint to the wrong bound (§12).
+const (
+	ClampRelative  = "relative"   // max(5m, 2×current)
+	ClampAbsolute  = "absolute"   // MaxSuggestedStepTimeout
+	ClampFloor     = "floor"      // 30s
+	ClampWallClock = "wall_clock" // the workflow's maxWallClock
+)
 
 // RenderedChange is a concrete, applyable config edit (design §4.3). The
 // caller stamps ApplyTarget/ApplyContent/Diff onto the proposal and merges
@@ -47,6 +74,7 @@ type RenderedChange struct {
 	BlastRadius  string         // persistence.ProposalScope*
 	LiveApply    bool           // skip the busy gate (MCP catalog edits only)
 	Clamped      bool           // the suggested value was clamped to a bound
+	ClampReason  string         // which bound was final (Clamp* constants); "" when not clamped. Render-local: never persisted into Evidence (design §12)
 	Change       map[string]any // typed params, recorded in Evidence for apply-time re-validation
 }
 
@@ -115,6 +143,32 @@ func projectRel(projectID string) (string, error) {
 	return "configs/projects/" + projectID + ".yaml", nil
 }
 
+// CurrentMaxWallClock reads a workflow's maxWallClock — the execution's
+// deadline — with the executor's rule for what counts: unset, unparseable or
+// non-positive is no cap (0, "", nil). raw is the value as the workflow spells
+// it, for messages. The single source for render time and apply time (§12).
+func (a *Actionizer) CurrentMaxWallClock(workflowID string) (d time.Duration, raw string, err error) {
+	rel, err := workflowRel(workflowID)
+	if err != nil {
+		return 0, "", err
+	}
+	data, err := a.ReadFile(rel)
+	if err != nil {
+		return 0, "", err
+	}
+	if _, ferr := config.EditFrontmatter(data, func(fm []byte) ([]byte, error) {
+		raw = config.GetYAMLString(fm, "maxWallClock")
+		return fm, nil
+	}); ferr != nil {
+		return 0, "", ferr
+	}
+	// The executor's rule, not a copy of it (review 53a1 F3).
+	if d, _ = registry.WallClockCap(raw); d == 0 {
+		return 0, "", nil
+	}
+	return d, raw, nil
+}
+
 // CurrentStepTimeout reads a workflow step's explicit timeout. explicit=false
 // (nil error) means the step exists but has no timeout of its own — the
 // caller takes the informational branch (design §4.4: the renderer never
@@ -174,7 +228,26 @@ func (a *Actionizer) RenderStepTimeout(workflowID, stepID string, suggested time
 	if !explicit {
 		return nil, fmt.Errorf("control-plane: step %s has no explicit timeout; not rendering a first one", stepID)
 	}
-	bounded, clamped := boundStepTimeout(suggested, current, a.maxStepTimeout())
+	// maxWallClock FIRST (design §12): a step already at the execution's cap
+	// reports it whatever the suggestion says — unless the step is also at the
+	// absolute cap, which then binds whatever maxWallClock is, and "raise
+	// maxWallClock" would be the inert remedy this check exists to prevent
+	// (review 53a1 F2). That case falls to the bounds' honest no-op.
+	wallClock, wallClockRaw, err := a.CurrentMaxWallClock(workflowID)
+	if err != nil {
+		return nil, err
+	}
+	if wallClock > 0 && current >= wallClock && current < a.maxStepTimeout() {
+		return nil, fmt.Errorf("%w: step %q in workflow %s has timeout %s, and the workflow's maxWallClock is %s — "+
+			"the execution is cancelled at %s, so a longer step timeout does nothing. Raise maxWallClock by hand if "+
+			"the step genuinely needs more time", ErrWallClockBinds, stepID, workflowID,
+			formatDurationShort(current), wallClockRaw, wallClockRaw)
+	}
+	bounded, reason := boundStepTimeout(suggested, current, a.maxStepTimeout())
+	if wallClock > 0 && bounded > wallClock {
+		bounded, reason = wallClock, ClampWallClock
+	}
+	clamped := reason != ""
 	if bounded <= current {
 		return nil, ErrChangeNotUseful
 	}
@@ -202,7 +275,8 @@ func (a *Actionizer) RenderStepTimeout(workflowID, stepID string, suggested time
 		// acknowledgement, and checks every project for active tasks at apply.
 		BlastRadius: persistence.ProposalScopeDaemon,
 		Clamped:     clamped,
-		Summary:     fmt.Sprintf("steps[%s].timeout: %q → %q", stepID, formatDurationShort(current), newVal),
+		ClampReason: reason,
+		Summary:     stepTimeoutSummary(stepID, current, newVal, reason),
 		Change: map[string]any{
 			"kind": "workflow_step_timeout", "workflow": workflowID, "step": stepID, "timeout": newVal,
 		},
@@ -278,26 +352,37 @@ func (a *Actionizer) RenderStepTimeoutReduction(workflowID, stepID string, sugge
 }
 
 // boundStepTimeout clamps suggested to [30s, max(5m, 2×current)] then to the
-// absolute cap. Reports whether any clamp engaged.
-func boundStepTimeout(suggested, current, absCap time.Duration) (time.Duration, bool) {
-	clamped := false
+// absolute cap. It applies the §4.5 bounds and reports which one was FINAL
+// ("" when none applied).
+func boundStepTimeout(suggested, current, absCap time.Duration) (time.Duration, string) {
+	reason := ""
 	relCap := 2 * current
 	if relCap < 5*time.Minute {
 		relCap = 5 * time.Minute
 	}
 	if suggested > relCap {
 		suggested = relCap
-		clamped = true
+		reason = ClampRelative
 	}
 	if suggested > absCap {
 		suggested = absCap
-		clamped = true
+		reason = ClampAbsolute
 	}
 	if suggested < 30*time.Second {
 		suggested = 30 * time.Second
-		clamped = true
+		reason = ClampFloor
 	}
-	return suggested, clamped
+	return suggested, reason
+}
+
+// stepTimeoutSummary is the one-line change summary; it names maxWallClock
+// only when the wall clock was the final bound (§12).
+func stepTimeoutSummary(stepID string, current time.Duration, newVal, reason string) string {
+	s := fmt.Sprintf("steps[%s].timeout: %q → %q", stepID, formatDurationShort(current), newVal)
+	if reason == ClampWallClock {
+		s += " (clamped to maxWallClock)"
+	}
+	return s
 }
 
 // RenderRoleModel renders a swarm_role_model change: the model must exist in
@@ -606,6 +691,17 @@ func (a *Actionizer) revalidateStepTimeout(cc *DiagnoseConfigChange) error {
 	}
 	if !explicit {
 		return fmt.Errorf("revalidate: step %s no longer has an explicit timeout", cc.Step)
+	}
+	// A proposal drafted before an operator lowered the cap must not apply an
+	// inert value (design §12).
+	want, _ := time.ParseDuration(cc.Timeout)
+	wallClock, wallClockRaw, err := a.CurrentMaxWallClock(cc.Workflow)
+	if err != nil {
+		return fmt.Errorf("revalidate: %w", err)
+	}
+	if wallClock > 0 && want > wallClock {
+		return fmt.Errorf("revalidate: %w: timeout %s now exceeds workflow %s's maxWallClock %s, which caps every step — "+
+			"the change would do nothing", ErrWallClockLowered, cc.Timeout, cc.Workflow, wallClockRaw)
 	}
 	return nil
 }

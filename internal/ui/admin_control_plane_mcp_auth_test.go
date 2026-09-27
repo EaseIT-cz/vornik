@@ -76,19 +76,18 @@ func TestMcpAddEdit_WritesAStaticAuthBlock(t *testing.T) {
 	}
 }
 
-func TestMcpAddEdit_WritesAnEnvAuthBlock(t *testing.T) {
-	out, _, err := mcpAddEditWith(t, "mcp:\n  servers: []\n", "reddit", url.Values{
+// Env auth belongs to stdio servers, and the form refuses stdio outright
+// (process-spawn law, reading 3): an env block for a stdio server is written in
+// the config files on the host, never through the daemon.
+func TestMcpAddEdit_EnvAuthOnStdioIsRefusedWithTheServer(t *testing.T) {
+	_, _, err := mcpAddEditWith(t, "mcp:\n  servers: []\n", "reddit", url.Values{
 		"transport":     {"stdio"},
 		"command":       {"reddit-mcp"},
 		"auth_mode":     {"env"},
 		"auth_env_from": {"REDDIT_CLIENT_ID=secret://rid\nREDDIT_CLIENT_SECRET=secret://rsec"},
 	})
-	if err != nil {
-		t.Fatalf("mcpAddEdit: %v", err)
-	}
-	got := parsedAuth(t, out, "reddit")
-	if got.EnvFrom["REDDIT_CLIENT_SECRET"] != "secret://rsec" {
-		t.Errorf("env_from = %v", got.EnvFrom)
+	if !errors.Is(err, errMCPStdioRefused) {
+		t.Fatalf("err = %v, want errMCPStdioRefused", err)
 	}
 }
 
@@ -126,10 +125,6 @@ func TestMcpAddEdit_ValidatesAtTheFormNotAtApply(t *testing.T) {
 		{"literal instead of a reference", url.Values{
 			"transport": {"streamable-http"}, "url": {"https://x/mcp"},
 			"auth_mode": {"static"}, "auth_value_from": {"PLACEHOLDER-not-a-secret-ref"},
-		}},
-		{"static on stdio", url.Values{
-			"transport": {"stdio"}, "command": {"x"},
-			"auth_mode": {"static"}, "auth_value_from": {"secret://t"},
 		}},
 		{"env on a remote transport", url.Values{
 			"transport": {"streamable-http"}, "url": {"https://x/mcp"},
@@ -286,31 +281,9 @@ func TestMcpAddEdit_IgnoresFieldsOutsideTheSubmittedMode(t *testing.T) {
 		}
 	})
 
-	t.Run("env ignores the header and oauth fields", func(t *testing.T) {
-		out, _, err := mcpAddEditWith(t, "mcp:\n  servers: []\n", "reddit", url.Values{
-			"transport":       {"stdio"},
-			"command":         {"reddit-mcp"},
-			"auth_mode":       {"env"},
-			"auth_env_from":   {"REDDIT_CLIENT_ID=secret://rid"},
-			"auth_value_from": {"secret://LEFTOVER"},
-			"auth_scopes":     {"read:jira-work"},
-		})
-		if err != nil {
-			t.Fatalf("mcpAddEdit: %v", err)
-		}
-		got := parsedAuth(t, out, "reddit")
-		if got.EnvFrom["REDDIT_CLIENT_ID"] != "secret://rid" {
-			t.Fatalf("auth = %+v", got)
-		}
-		if got.ValueFrom != "" || len(got.Scopes) != 0 {
-			t.Errorf("fields from another mode survived: %+v", got)
-		}
-		// A static value_from on stdio would also be a validation error — the
-		// point here is that it never reaches Validate at all.
-		if strings.Contains(string(out), "LEFTOVER") {
-			t.Errorf("another mode's credential reference reached config:\n%s", out)
-		}
-	})
+	// "env ignores the header and oauth fields" is gone: env auth exists only
+	// for stdio servers, which the form now refuses before reading any auth
+	// field (TestMcpAddEdit_EnvAuthOnStdioIsRefusedWithTheServer).
 }
 
 func TestParseEnvFromLines(t *testing.T) {

@@ -7,6 +7,7 @@ package service
 
 import (
 	"context"
+	"errors"
 	"time"
 
 	"vornik.io/vornik/internal/persistence"
@@ -123,7 +124,18 @@ func (c *Container) reconcileExecutionQualityScores() {
 		ctx = cc
 	}
 	result, err := c.executionScorePublisher.Reconcile(ctx, 100)
-	if err != nil {
+	switch {
+	case errors.Is(err, persistence.ErrInvalidQualityScore):
+		// A structural reject is a code defect. The publisher skips a rejected
+		// execution until restart, so this fires on the pass that first meets
+		// it, not every 30 s (agent-quality-benchmark design, amendment
+		// 2026-09-26). The joined error also carries any transient failures.
+		c.Logger.Error().Err(err).
+			Int("selected", result.Selected).
+			Int("published", result.Published).
+			Int("failed", result.Failed).
+			Msg("execution quality score refused as invalid; not retried until restart")
+	case err != nil:
 		c.Logger.Warn().Err(err).
 			Int("selected", result.Selected).
 			Int("published", result.Published).

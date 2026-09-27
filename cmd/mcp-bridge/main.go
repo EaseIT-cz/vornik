@@ -43,6 +43,7 @@ import (
 	"github.com/rs/zerolog"
 	"vornik.io/vornik/internal/chat"
 	"vornik.io/vornik/internal/mcp"
+	"vornik.io/vornik/internal/spawn"
 )
 
 const (
@@ -303,6 +304,15 @@ func loadConfig(path string) ([]mcp.ServerConfig, error) {
 	var servers []mcp.ServerConfig
 	if err := json.Unmarshal(data, &servers); err != nil {
 		return nil, fmt.Errorf("parse mcp.json: %w", err)
+	}
+	// This file is the bridge's config, inside the sandbox: its stdio
+	// programs are minted here, as the daemon's config loader mints its own
+	// (process-spawn law, reading 3; S1b-2). ServerConfig.Program is never
+	// decoded from JSON.
+	for i := range servers {
+		if servers[i].Transport == "stdio" {
+			servers[i].Program = spawn.NewConfiguredCommand(servers[i].Command, servers[i].Args...)
+		}
 	}
 	return servers, nil
 }

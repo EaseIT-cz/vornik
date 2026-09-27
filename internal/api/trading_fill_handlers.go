@@ -117,6 +117,7 @@ func (s *Server) readAndParseFillRequest(w http.ResponseWriter, r *http.Request,
 		respondError(w, http.StatusBadRequest, "VALIDATION_ERROR", err.Error())
 		return nil, true
 	}
+	s.noteUnknownIngestFields(label, body, &req)
 	if req.ID == "" || req.OrderID == "" || req.ProjectID == "" || req.Symbol == "" {
 		s.recordTradingIngestError(label, "validation")
 		respondError(w, http.StatusBadRequest, "VALIDATION_ERROR",

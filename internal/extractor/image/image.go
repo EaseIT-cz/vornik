@@ -4,11 +4,13 @@
 //
 // Approach: pure-Go header decode for dimensions + format (uses
 // stdlib image package which already supports jpeg/png/gif), then
-// optionally shell out to tesseract for OCR when the binary is on
-// PATH. Tesseract is the long-standing open-source OCR engine;
-// when missing, the extractor degrades gracefully — operators
-// still get an image-with-metadata entry indexed into memory,
-// they just don't get the recognised text layer.
+// OCR with tesseract in the pinned agent image through the sandbox
+// runner (process-spawn law S5b,
+// https://docs.vornik.io §7),
+// never on the daemon host. When the sandbox or the image's tesseract
+// is not available, the extractor degrades gracefully — operators
+// still get an image-with-metadata entry indexed into memory, they
+// just don't get the recognised text layer, and the section says why.
 //
 // Why no EXIF in v1: reading EXIF requires a separate dependency
 // (stdlib's image/jpeg skips APP1 segments entirely). Most useful
@@ -23,7 +25,6 @@
 package image
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -32,13 +33,11 @@ import (
 	_ "image/jpeg" // stdlib decoder side-effect import
 	_ "image/png"  // stdlib decoder side-effect import
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
-	"syscall"
-	"time"
 
 	"vornik.io/vornik/internal/extractor"
+	"vornik.io/vornik/internal/sandboxtool"
 )
 
 const (
@@ -51,39 +50,21 @@ const (
 	// stdlib image.DecodeConfig (which fully reads the header
 	// before returning size).
 	maxImageBytes = 32 << 20
-
-	// defaultOCRPageTimeout bounds a SINGLE tesseract invocation
-	// (one image == one OCR "page"). Independent of the parent
-	// extraction context so a per-page hang can't consume the whole
-	// extraction budget — an attacker crafting an image that makes
-	// tesseract spin is capped here, per page, not per document.
-	// batch-3 ingress/untrusted-input: document-extraction hardening (d).
-	// 120s is generous for a single dense scanned page; real OCR of
-	// a screenshot/whiteboard finishes in well under a second.
-	defaultOCRPageTimeout = 120 * time.Second
 )
 
-// New returns the default extractor. OCR is attempted when
-// tesseract is on PATH; absence is a non-fatal degradation
-// (extraction still produces a metadata-only section).
-func New() *Extractor { return &Extractor{} }
-
-// NewWithTesseractBinary lets tests inject a different binary
-// path / a stub script that fakes the OCR contract.
-func NewWithTesseractBinary(path string) *Extractor {
-	return &Extractor{tesseractPath: path}
-}
+// New returns an image extractor that OCRs through sb. A nil sb, or an
+// image without tesseract, is a non-fatal degradation: extraction still
+// produces a metadata-only section.
+//
+// One image is one OCR "page", and one sandbox run: the image_ocr timeout
+// (sandbox_tools.timeouts.image_ocr, default 120 s) is the per-page bound
+// that batch-3 ingress hardening (d) introduced, so a crafted image that
+// makes tesseract spin is capped per page, not per document.
+func New(sb sandboxtool.Sandbox) *Extractor { return &Extractor{sandbox: sb} }
 
 // Extractor implements extractor.Extractor for image files.
 type Extractor struct {
-	// tesseractPath overrides the PATH lookup for tesseract.
-	// Empty means "look up `tesseract` on PATH at extract time".
-	tesseractPath string
-
-	// ocrPageTimeout bounds a single OCR invocation. Zero falls back
-	// to defaultOCRPageTimeout. Tests inject a tiny value to exercise
-	// the per-page-deadline guard without sleeping.
-	ocrPageTimeout time.Duration
+	sandbox sandboxtool.Sandbox
 }
 
 func (*Extractor) Name() string    { return Name }
@@ -127,17 +108,15 @@ func (e *Extractor) Extract(ctx context.Context, src extractor.Source) (extracto
 	fmt.Fprintf(&body, "Dimensions: %d × %d pixels\n", cfg.Width, cfg.Height)
 	fmt.Fprintf(&body, "File size: %d bytes\n", st.Size())
 
-	// OCR pass — best-effort. tesseract missing is logged at
-	// the wrapper level (the registry's pre-flight check); the
-	// extractor itself just appends an OCR section when text
-	// comes back.
+	// OCR pass — best-effort: a failed or unavailable OCR still
+	// yields the metadata section, with a footer saying why.
 	ocrText, ocrErr := e.runOCR(ctx, src.FilePath)
 	switch {
 	case ocrErr == nil && ocrText != "":
 		body.WriteString("\n## Recognised text (tesseract OCR)\n\n")
 		body.WriteString(ocrText)
-	case errors.Is(ocrErr, errOCRUnavailable):
-		body.WriteString("\n(OCR not available: tesseract is not installed on the daemon host)")
+	case errors.Is(ocrErr, sandboxtool.ErrNotAvailable):
+		body.WriteString("\n(OCR not available in the agent image: " + ocrErr.Error() + ")")
 	case ocrErr != nil:
 		fmt.Fprintf(&body, "\n(OCR failed: %s)", ocrErr.Error())
 	default:
@@ -175,71 +154,33 @@ func (e *Extractor) Extract(ctx context.Context, src extractor.Source) (extracto
 	}, nil
 }
 
-// errOCRUnavailable signals that tesseract isn't installed. The
-// extractor uses it to switch on a "OCR not available" footer in
-// the section content without dropping the rest of the metadata.
-var errOCRUnavailable = errors.New("tesseract not available")
-
-// runOCR shells out to tesseract and returns the recognised text.
-// Returns (errOCRUnavailable, "") when the binary is missing —
-// caller treats that as a non-fatal degradation.
+// runOCR runs tesseract on the image in the sandbox and returns the
+// recognised text. An error that errors.Is sandboxtool.ErrNotAvailable is a
+// non-fatal degradation the caller reports as such.
 func (e *Extractor) runOCR(ctx context.Context, imagePath string) (string, error) {
-	binary := e.tesseractPath
-	if binary == "" {
-		binary = "tesseract"
+	if e.sandbox == nil {
+		return "", fmt.Errorf("tesseract: %w (no sandbox runner)", sandboxtool.ErrNotAvailable)
 	}
-	resolved, err := exec.LookPath(binary)
+	// tesseract <input> <outputbase> writes <outputbase>.txt. --psm 3 is
+	// the default page-segmentation mode (fully automatic, no OSD); we
+	// keep it explicit so a future per-project tuning surface has a clean
+	// knob. The input name is fixed: the operator's file name never
+	// reaches argv.
+	res, err := e.sandbox.Run(ctx, sandboxtool.Spec{
+		Feature:    sandboxtool.FeatureImageOCR,
+		Entrypoint: "tesseract",
+		Args:       []string{"/in/image", "/out/ocr", "--psm", "3"},
+		Inputs:     []sandboxtool.Input{{Name: "image", Path: imagePath}},
+	})
 	if err != nil {
-		return "", errOCRUnavailable
+		return "", fmt.Errorf("tesseract: %w", err)
 	}
-
-	// Per-page OCR deadline (hardening (d)): bound this single
-	// invocation independently of the parent extraction context so a
-	// hanging/spinning tesseract can't run until the whole-extraction
-	// budget elapses. CommandContext kills the process when ctx
-	// fires.
-	timeout := e.ocrPageTimeout
-	if timeout <= 0 {
-		timeout = defaultOCRPageTimeout
+	defer res.Close()
+	text, err := os.ReadFile(filepath.Join(res.OutDir, "ocr.txt"))
+	if err != nil {
+		return "", fmt.Errorf("tesseract wrote no text: %w", err)
 	}
-	ocrCtx, cancel := context.WithTimeout(ctx, timeout)
-	defer cancel()
-
-	// tesseract <input> stdout — writes recognised text to stdout
-	// when the second arg is the literal "stdout". --psm 3 is the
-	// default page-segmentation mode (fully automatic, no OSD); we
-	// keep it explicit so a future per-project tuning surface has
-	// a clean knob.
-	cmd := exec.CommandContext(ocrCtx, resolved, imagePath, "stdout", "--psm", "3")
-	// Run tesseract in its own process group and, on context fire,
-	// SIGKILL the whole group — otherwise a child (e.g. a wrapper
-	// shell's `sleep`) survives and keeps the stdout pipe open,
-	// blocking Wait forever and defeating the per-page deadline.
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
-	cmd.Cancel = func() error {
-		// Negative pid = signal the entire process group.
-		return syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
-	}
-	// Belt-and-suspenders: even if a grandchild keeps the pipe open,
-	// don't block Wait more than a moment past the kill.
-	cmd.WaitDelay = 2 * time.Second
-	var stdout, stderr bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
-	if err := cmd.Run(); err != nil {
-		// Distinguish a per-page-deadline kill from a genuine
-		// tesseract error so the operator-visible footer is honest
-		// about which guard fired.
-		if ocrCtx.Err() == context.DeadlineExceeded {
-			return "", fmt.Errorf("tesseract: per-page OCR timeout exceeded (%s)", timeout)
-		}
-		msg := strings.TrimSpace(stderr.String())
-		if msg == "" {
-			msg = err.Error()
-		}
-		return "", fmt.Errorf("tesseract: %s", msg)
-	}
-	return strings.TrimSpace(stdout.String()), nil
+	return strings.TrimSpace(string(text)), nil
 }
 
 // ocrEngineLabel renders a small "ocr_engine" metadata tag the
@@ -248,8 +189,8 @@ func (e *Extractor) runOCR(ctx context.Context, imagePath string) (string, error
 // to find the "(OCR not available)" footer.
 func ocrEngineLabel(ocrErr error) string {
 	switch {
-	case errors.Is(ocrErr, errOCRUnavailable):
-		return "none (tesseract missing)"
+	case errors.Is(ocrErr, sandboxtool.ErrNotAvailable):
+		return "none (tesseract not available in the agent image)"
 	case ocrErr != nil:
 		return "failed"
 	default:

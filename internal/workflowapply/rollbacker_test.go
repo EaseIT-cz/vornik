@@ -11,43 +11,31 @@ import (
 	"vornik.io/vornik/internal/persistence"
 )
 
-type stubGitReverter struct {
-	gotSHA, gotMsg, gotName, gotEmail string
-	revertSHA                         string
-	err                               error
-}
+// Rollback restores the pre-apply file the apply recorded, with no git:
+// process-spawn law S3 (https://docs.vornik.io).
+// Incident: rollback was a `git revert` the daemon ran on request.
 
-func (g *stubGitReverter) Revert(_ context.Context, sha, msg, name, email string) (string, error) {
-	g.gotSHA, g.gotMsg, g.gotName, g.gotEmail = sha, msg, name, email
-	if g.err != nil {
-		return "", g.err
-	}
-	if g.revertSHA == "" {
-		return "revert-sha", nil
-	}
-	return g.revertSHA, nil
-}
-
-func appliedFixture(id, workflowID, appliedSHA string) *persistence.WorkflowProposal {
+func appliedFixture(preApply string) *persistence.WorkflowProposal {
 	return &persistence.WorkflowProposal{
-		ID: id, WorkflowID: workflowID,
+		ID: "wpr-1", WorkflowID: "research",
 		Status:         persistence.WorkflowProposalStatusApplied,
 		ProposalYAML:   "yaml",
 		Motivation:     "m",
 		EvidenceRunIDs: []string{"r-1", "r-2", "r-3"},
 		Confidence:     0.8,
 		ArchitectModel: "m",
-		AppliedCommit:  appliedSHA,
+		AppliedCommit:  NoGitCommit,
+		PreApplyYAML:   preApply,
 		CreatedAt:      time.Now().UTC(),
 	}
 }
 
-func TestRollbacker_HappyPath(t *testing.T) {
+func TestRollbacker_RestoresThePriorFile(t *testing.T) {
 	repo := newStubProposalRepo()
-	_ = repo.Insert(context.Background(), appliedFixture("wpr-1", "research", "abc1234"))
-	git := &stubGitReverter{revertSHA: "def5678"}
+	_ = repo.Insert(context.Background(), appliedFixture("prior genome"))
+	writer := &stubWriter{files: map[string]string{"research": "applied genome"}}
 	reloader := &stubReloader{}
-	r := NewRollbacker(repo, git, reloader, RollbackerConfig{AuthorName: "vornik"})
+	r := NewRollbacker(repo, writer, reloader, RollbackerConfig{})
 
 	got, err := r.Rollback(context.Background(), "wpr-1", "operator-y")
 	if err != nil {
@@ -56,29 +44,42 @@ func TestRollbacker_HappyPath(t *testing.T) {
 	if got.Status != persistence.WorkflowProposalStatusRolledBack {
 		t.Errorf("status: %q", got.Status)
 	}
-	if got.RollbackCommit != "def5678" {
-		t.Errorf("rollback_commit: %q", got.RollbackCommit)
+	if writer.files["research"] != "prior genome" {
+		t.Errorf("file = %q, want the pre-apply content", writer.files["research"])
 	}
-	if git.gotSHA != "abc1234" {
-		t.Errorf("revert should target applied_commit, got %q", git.gotSHA)
-	}
-	if !strings.Contains(git.gotMsg, "workflow(research)") {
-		t.Errorf("revert message: %q", git.gotMsg)
-	}
-	if !strings.Contains(git.gotMsg, "operator-y") {
-		t.Errorf("revert message should include operator: %q", git.gotMsg)
+	if got.RollbackCommit != NoGitCommit {
+		t.Errorf("rollback_commit = %q, want %q", got.RollbackCommit, NoGitCommit)
 	}
 	if reloader.called != 1 {
 		t.Errorf("reloader should fire once, got %d", reloader.called)
 	}
 }
 
+// A row applied before S3 carries a git SHA and no recorded file; the daemon no
+// longer runs git, so it refuses and names the commit to restore from.
+func TestRollbacker_RefusesARowWithoutAPreApplyFile(t *testing.T) {
+	repo := newStubProposalRepo()
+	legacy := appliedFixture("")
+	legacy.AppliedCommit = "abc1234"
+	_ = repo.Insert(context.Background(), legacy)
+	writer := &stubWriter{files: map[string]string{"research": "applied genome"}}
+	r := NewRollbacker(repo, writer, &stubReloader{}, RollbackerConfig{})
+
+	_, err := r.Rollback(context.Background(), "wpr-1", "operator-x")
+	if err == nil || !strings.Contains(err.Error(), "abc1234") {
+		t.Fatalf("want a refusal naming the commit to restore from, got %v", err)
+	}
+	if writer.files["research"] != "applied genome" || writer.gotWorkflowID != "" {
+		t.Error("a refused rollback must not touch the file")
+	}
+}
+
 func TestRollbacker_NotApplied(t *testing.T) {
 	repo := newStubProposalRepo()
-	approved := appliedFixture("wpr-1", "research", "abc1234")
+	approved := appliedFixture("prior")
 	approved.Status = persistence.WorkflowProposalStatusApproved
 	_ = repo.Insert(context.Background(), approved)
-	r := NewRollbacker(repo, &stubGitReverter{}, &stubReloader{}, RollbackerConfig{})
+	r := NewRollbacker(repo, &stubWriter{}, &stubReloader{}, RollbackerConfig{})
 
 	_, err := r.Rollback(context.Background(), "wpr-1", "operator-x")
 	if !errors.Is(err, ErrProposalNotApplied) {
@@ -86,69 +87,50 @@ func TestRollbacker_NotApplied(t *testing.T) {
 	}
 }
 
-// TestRollbacker_NoGitHistory — applied_commit is the "no-git"
-// sentinel (Slice 4 deployed-only deployment). Rollback fails
-// early with a clear message rather than asking git to revert a
-// non-existent SHA.
-func TestRollbacker_NoGitHistory(t *testing.T) {
+func TestRollbacker_NoWriterWired(t *testing.T) {
 	repo := newStubProposalRepo()
-	_ = repo.Insert(context.Background(), appliedFixture("wpr-1", "research", "no-git"))
-	r := NewRollbacker(repo, &stubGitReverter{}, &stubReloader{}, RollbackerConfig{})
-
-	_, err := r.Rollback(context.Background(), "wpr-1", "operator-x")
-	if err == nil || !strings.Contains(err.Error(), "no git commit") {
-		t.Fatalf("want no-git-history error, got %v", err)
-	}
-}
-
-// TestRollbacker_NoGitWired — applier wrote a real commit but
-// no GitReverter is wired. Hard fail; we don't silently skip the
-// revert step because that would leave the filesystem out of
-// sync with the row state.
-func TestRollbacker_NoGitWired(t *testing.T) {
-	repo := newStubProposalRepo()
-	_ = repo.Insert(context.Background(), appliedFixture("wpr-1", "research", "abc1234"))
+	_ = repo.Insert(context.Background(), appliedFixture("prior"))
 	r := NewRollbacker(repo, nil, &stubReloader{}, RollbackerConfig{})
-
 	_, err := r.Rollback(context.Background(), "wpr-1", "operator-x")
-	if err == nil || !strings.Contains(err.Error(), "git reverter not wired") {
-		t.Fatalf("want no-git-wired error, got %v", err)
+	if err == nil || !strings.Contains(err.Error(), "writer not wired") {
+		t.Fatalf("want no-writer error, got %v", err)
 	}
 }
 
 func TestRollbacker_NotFound(t *testing.T) {
 	repo := newStubProposalRepo()
-	r := NewRollbacker(repo, &stubGitReverter{}, &stubReloader{}, RollbackerConfig{})
+	r := NewRollbacker(repo, &stubWriter{}, &stubReloader{}, RollbackerConfig{})
 	_, err := r.Rollback(context.Background(), "missing", "operator-x")
 	if !errors.Is(err, persistence.ErrNotFound) {
 		t.Fatalf("want ErrNotFound, got %v", err)
 	}
 }
 
-// TestRollbacker_GitRevertError — git revert fails (e.g. merge
-// conflict against current HEAD). Error propagates; row stays
-// in applied so the operator can retry.
-func TestRollbacker_GitRevertError(t *testing.T) {
+// A failed restore leaves the row applied so the operator can retry.
+func TestRollbacker_WriteError(t *testing.T) {
 	repo := newStubProposalRepo()
-	_ = repo.Insert(context.Background(), appliedFixture("wpr-1", "research", "abc1234"))
-	git := &stubGitReverter{err: fmt.Errorf("conflict")}
-	r := NewRollbacker(repo, git, &stubReloader{}, RollbackerConfig{})
+	_ = repo.Insert(context.Background(), appliedFixture("prior"))
+	writer := &stubWriter{err: fmt.Errorf("disk full")}
+	r := NewRollbacker(repo, writer, &stubReloader{}, RollbackerConfig{})
 
 	_, err := r.Rollback(context.Background(), "wpr-1", "operator-x")
-	if err == nil || !strings.Contains(err.Error(), "conflict") {
-		t.Fatalf("want git error propagated, got %v", err)
+	if err == nil || !strings.Contains(err.Error(), "disk full") {
+		t.Fatalf("want writer error propagated, got %v", err)
+	}
+	if got, _ := repo.Get(context.Background(), "wpr-1"); got.Status != persistence.WorkflowProposalStatusApplied {
+		t.Errorf("status = %q, want still applied", got.Status)
 	}
 }
 
 func TestRollbacker_EmptyProposalID(t *testing.T) {
-	r := NewRollbacker(newStubProposalRepo(), &stubGitReverter{}, &stubReloader{}, RollbackerConfig{})
+	r := NewRollbacker(newStubProposalRepo(), &stubWriter{}, &stubReloader{}, RollbackerConfig{})
 	if _, err := r.Rollback(context.Background(), "", "operator-x"); err == nil {
 		t.Error("empty proposalID should error")
 	}
 }
 
 func TestRollbacker_NoProposalsRepo(t *testing.T) {
-	r := NewRollbacker(nil, &stubGitReverter{}, &stubReloader{}, RollbackerConfig{})
+	r := NewRollbacker(nil, &stubWriter{}, &stubReloader{}, RollbackerConfig{})
 	_, err := r.Rollback(context.Background(), "wpr-1", "operator-x")
 	if err == nil || !strings.Contains(err.Error(), "proposals repo") {
 		t.Errorf("want missing-repo error, got %v", err)

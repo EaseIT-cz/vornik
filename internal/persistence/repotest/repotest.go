@@ -220,6 +220,63 @@ func RunToolAuditSuite(t *testing.T, repo persistence.ToolAuditRepository) {
 		}
 	})
 
+	// Companion tool-audit design (2026-09-24). recordCompanionToolAudit left
+	// ID and CreatedAt unset for four months: the first row took id '' and
+	// every later call was absorbed by ON CONFLICT (id); Postgres stored the
+	// zero time, and the 30-day retention sweep deleted the one row as year
+	// 1. SQLite already defaulted CreatedAt, so no SQLite test saw it. The
+	// repository now fills both, on both drivers.
+	t.Run("Log_fills_an_empty_id_and_a_zero_time", func(t *testing.T) {
+		project := uniqueID("proj-noid")
+		before := time.Now().UTC().Add(-time.Minute)
+		for i := 0; i < 2; i++ {
+			if err := repo.Log(ctx, &persistence.ToolAuditEntry{
+				ProjectID: project, TaskID: "companion:akey_x", ExecutionID: uniqueID("compex"),
+				ToolName: "mcp__plugin_vornik-companion_vornik__delegate",
+			}); err != nil {
+				t.Fatalf("Log #%d: %v", i, err)
+			}
+		}
+		got, err := repo.List(ctx, persistence.ToolAuditFilter{ProjectID: &project})
+		if err != nil {
+			t.Fatalf("List: %v", err)
+		}
+		if len(got) != 2 {
+			t.Fatalf("two id-less writes stored %d rows, want 2 — an empty id collided", len(got))
+		}
+		if got[0].ID == "" || got[1].ID == "" || got[0].ID == got[1].ID {
+			t.Fatalf("ids %q / %q: want two distinct, non-empty generated ids", got[0].ID, got[1].ID)
+		}
+		for _, e := range got {
+			if e.CreatedAt.Before(before) {
+				t.Fatalf("created_at %v: a zero time was stored instead of now", e.CreatedAt)
+			}
+		}
+	})
+
+	// The trade the defaulting makes (companion tool-audit design F2): a
+	// forgetful caller that re-emits a streamed row WITHOUT its id now writes a
+	// second row instead of losing it. Pinned, so the behaviour is a decision.
+	t.Run("A_stable_id_then_an_empty_id_re_emission_is_two_rows", func(t *testing.T) {
+		project := uniqueID("proj-reemit")
+		stable := uniqueID("aud")
+		for _, id := range []string{stable, ""} {
+			if err := repo.Log(ctx, &persistence.ToolAuditEntry{
+				ID: id, ProjectID: project, TaskID: "task-r", ExecutionID: "exec-r", ToolName: "shell",
+				CreatedAt: time.Now().UTC(),
+			}); err != nil {
+				t.Fatalf("Log(%q): %v", id, err)
+			}
+		}
+		got, err := repo.List(ctx, persistence.ToolAuditFilter{ProjectID: &project})
+		if err != nil {
+			t.Fatalf("List: %v", err)
+		}
+		if len(got) != 2 {
+			t.Fatalf("stored %d rows, want 2 — a visible duplicate, not a silent loss", len(got))
+		}
+	})
+
 	t.Run("Log_is_idempotent_on_duplicate_id", func(t *testing.T) {
 		entry := &persistence.ToolAuditEntry{
 			ID:          uniqueID("aud"),
@@ -766,6 +823,144 @@ func RunTaskRepositorySuite(t *testing.T, repo persistence.TaskRepository) {
 		if got.LeaseID != nil {
 			t.Errorf("LeaseID should be nil after Release, got %v", *got.LeaseID)
 		}
+	})
+
+	// Scheduler design §4.9. Incident 2026-09-23: six CANCELLED rows kept
+	// their lease columns (task_20260923152347_2d2c9149a5bdedcb cancelled from
+	// the UI while RUNNING, via the bare UpdateStatus); the doctor's
+	// task_state_audit reported them as a data leak. Every write into a status
+	// nothing releases a lease after (CANCELLED, CLOSED) clears it in the same
+	// statement; FAILED keeps it for the scheduler's retry release.
+	t.Run("Terminal_writes_clear_the_lease", func(t *testing.T) {
+		leasedTask := func(t *testing.T) *persistence.Task {
+			t.Helper()
+			project := uniqueID("proj")
+			_ = repo.Create(ctx, newQueuedTask(project))
+			leased, err := repo.LeaseTask(ctx, persistence.LeaseOptions{
+				ProjectID: project, LeaseHolder: "test-holder", LeaseDurationSeconds: 300,
+			})
+			if err != nil {
+				t.Fatalf("LeaseTask: %v", err)
+			}
+			if err := repo.UpdateStatus(ctx, leased.ID, persistence.TaskStatusRunning); err != nil {
+				t.Fatalf("UpdateStatus RUNNING: %v", err)
+			}
+			return leased
+		}
+		assertNoLease := func(t *testing.T, id string, want persistence.TaskStatus) {
+			t.Helper()
+			got, err := repo.Get(ctx, id)
+			if err != nil {
+				t.Fatalf("Get: %v", err)
+			}
+			if got.Status != want {
+				t.Fatalf("status %s, want %s", got.Status, want)
+			}
+			if got.LeaseID != nil || got.LeasedAt != nil || got.LeasedBy != nil || got.LeaseExpiresAt != nil {
+				t.Errorf("terminal row still holds a lease: id=%v at=%v by=%v expires=%v",
+					got.LeaseID, got.LeasedAt, got.LeasedBy, got.LeaseExpiresAt)
+			}
+		}
+
+		t.Run("UpdateStatus", func(t *testing.T) {
+			task := leasedTask(t)
+			// A non-terminal write keeps the lease: the task is still running.
+			got, _ := repo.Get(ctx, task.ID)
+			if got == nil || got.LeaseID == nil {
+				t.Fatal("UpdateStatus RUNNING dropped a live lease")
+			}
+			if err := repo.UpdateStatus(ctx, task.ID, persistence.TaskStatusCancelled); err != nil {
+				t.Fatal(err)
+			}
+			assertNoLease(t, task.ID, persistence.TaskStatusCancelled)
+		})
+		t.Run("UpdateStatus_CLOSED", func(t *testing.T) {
+			task := leasedTask(t)
+			if err := repo.UpdateStatus(ctx, task.ID, persistence.TaskStatusClosed); err != nil {
+				t.Fatal(err)
+			}
+			assertNoLease(t, task.ID, persistence.TaskStatusClosed)
+		})
+		// The handoff the rule must NOT break: the executor writes FAILED while
+		// the lease is live, and the scheduler re-queues a retryable task by
+		// that lease id. Clearing it at the FAILED write drops the retry.
+		t.Run("FAILED_keeps_the_lease_for_the_schedulers_retry", func(t *testing.T) {
+			task := leasedTask(t)
+			if err := repo.UpdateStatus(ctx, task.ID, persistence.TaskStatusFailed); err != nil {
+				t.Fatal(err)
+			}
+			if err := repo.ReleaseLease(ctx, task.ID, *task.LeaseID, persistence.TaskStatusQueued,
+				persistence.ReleaseOptions{Attempt: 2, MaxAttempts: 3}); err != nil {
+				t.Fatal(err)
+			}
+			got, err := repo.Get(ctx, task.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got.Status != persistence.TaskStatusQueued {
+				t.Fatalf("status %s after the scheduler's retry release, want QUEUED — the FAILED write lost the lease", got.Status)
+			}
+		})
+		t.Run("TransitionToCancelled", func(t *testing.T) {
+			task := leasedTask(t)
+			if ok, err := repo.TransitionToCancelled(ctx, task.ID); err != nil || !ok {
+				t.Fatalf("TransitionToCancelled: ok=%v err=%v", ok, err)
+			}
+			assertNoLease(t, task.ID, persistence.TaskStatusCancelled)
+		})
+		t.Run("TransitionConditional_without_ClearLease", func(t *testing.T) {
+			task := leasedTask(t)
+			ok, err := repo.TransitionConditional(ctx, task.ID,
+				[]persistence.TaskStatus{persistence.TaskStatusRunning},
+				persistence.TaskStatusCancelled, persistence.TransitionOpts{})
+			if err != nil || !ok {
+				t.Fatalf("TransitionConditional: ok=%v err=%v", ok, err)
+			}
+			assertNoLease(t, task.ID, persistence.TaskStatusCancelled)
+		})
+		t.Run("Update_full_row", func(t *testing.T) {
+			task := leasedTask(t)
+			full, err := repo.Get(ctx, task.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			full.Status = persistence.TaskStatusCancelled
+			if err := repo.Update(ctx, full); err != nil {
+				t.Fatal(err)
+			}
+			assertNoLease(t, task.ID, persistence.TaskStatusCancelled)
+			if full.LeaseID != nil || full.LeasedAt != nil || full.LeasedBy != nil || full.LeaseExpiresAt != nil {
+				t.Error("Update left the caller's struct holding a lease the row no longer has")
+			}
+		})
+		// Review 6fdb F4: the clear must be conditional on the status.
+		t.Run("Update_full_row_non_terminal_keeps_the_lease", func(t *testing.T) {
+			task := leasedTask(t)
+			full, err := repo.Get(ctx, task.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := repo.Update(ctx, full); err != nil {
+				t.Fatal(err)
+			}
+			got, err := repo.Get(ctx, task.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got.LeaseID == nil || full.LeaseID == nil {
+				t.Fatal("a RUNNING full-row Update dropped a live lease")
+			}
+		})
+		t.Run("TransitionConditional_to_CLOSED", func(t *testing.T) {
+			task := leasedTask(t)
+			ok, err := repo.TransitionConditional(ctx, task.ID,
+				[]persistence.TaskStatus{persistence.TaskStatusRunning},
+				persistence.TaskStatusClosed, persistence.TransitionOpts{})
+			if err != nil || !ok {
+				t.Fatalf("TransitionConditional: ok=%v err=%v", ok, err)
+			}
+			assertNoLease(t, task.ID, persistence.TaskStatusClosed)
+		})
 	})
 
 	t.Run("RenewLease_rejects_stale_lease_id", func(t *testing.T) {
@@ -2133,6 +2328,91 @@ func RunTradingOrderSuite(t *testing.T, repo persistence.TradingOrderRepository)
 			t.Fatalf("expected ErrOrderIdentityMismatch, got %v", err)
 		}
 	})
+
+	t.Run("Record_is_monotonic", func(t *testing.T) { tradingOrderMonotonic(t, repo) })
+}
+
+// tradingOrderMonotonic pins the upsert's forward-only rule (trading-fill
+// reconciliation design, finding #7 correction, 2026-09-24): every status
+// row for an order upserts ONE row, so a stale row arriving late — a journal
+// replay, a retried partial landing after filled — must not rewind it. The
+// fill count only grows; a final status is sticky against a non-final one;
+// final-to-final corrections (boot reconcile's cancelled -> filled) apply.
+func tradingOrderMonotonic(t *testing.T, repo persistence.TradingOrderRepository) {
+	t.Helper()
+	ctx := context.Background()
+	project := uniqueID("proj")
+	base := persistence.TradingOrder{
+		ID: uniqueID("ord"), ProjectID: project, IdempotencyKey: uniqueID("idem"), Mode: "paper",
+		Symbol: "SAP", Action: "BUY", OrderType: "LMT", Qty: 10, TimeInForce: "DAY",
+	}
+	record := func(status, reason string, filled float64) {
+		t.Helper()
+		row := base
+		row.ID = status + "-" + base.IdempotencyKey
+		row.Status, row.LastStatusReason, row.FilledQty = status, reason, filled
+		if err := repo.Record(ctx, &row); err != nil {
+			t.Fatalf("Record %s: %v", status, err)
+		}
+	}
+	read := func() *persistence.TradingOrder {
+		t.Helper()
+		list, err := repo.List(ctx, persistence.TradingOrderFilter{ProjectID: &project})
+		if err != nil || len(list) != 1 {
+			t.Fatalf("want exactly one row per order, got %d (%v)", len(list), err)
+		}
+		return list[0]
+	}
+	record("submitted", "", 0)
+	record("partial", "", 4)
+	record("filled", "", 10)
+	record("partial", "", 4) // the stale partial, replayed late
+	if got := read(); got.Status != "filled" || got.FilledQty != 10 {
+		t.Fatalf("a late partial rewound the order: status %s filled %v", got.Status, got.FilledQty)
+	}
+	record("submitted", "trigger", 0)
+	if got := read(); got.Status != "filled" || got.LastStatusReason != "" || got.FilledQty != 10 {
+		t.Fatalf("a late submitted rewound the order: %s %q %v", got.Status, got.LastStatusReason, got.FilledQty)
+	}
+
+	// Final -> final is a correction and applies.
+	base.IdempotencyKey = uniqueID("idem")
+	record("cancelled", "boot_reconcile: broker reports cancelled", 0)
+	record("filled", "boot_reconcile: broker reports filled", 10)
+	if got := read2(t, repo, project, base.IdempotencyKey); got.Status != "filled" || got.FilledQty != 10 {
+		t.Fatalf("a final-to-final correction was refused: %s %v", got.Status, got.FilledQty)
+	}
+
+	// A late orphaned does not rewind a cancelled row.
+	base.IdempotencyKey = uniqueID("idem")
+	record("cancelled", "agent_cancel_request", 0)
+	record("orphaned", "boot_reconcile: broker did not recognise", 0)
+	if got := read2(t, repo, project, base.IdempotencyKey); got.Status != "cancelled" || got.LastStatusReason != "agent_cancel_request" {
+		t.Fatalf("a late orphaned rewound a cancelled row: %s %q", got.Status, got.LastStatusReason)
+	}
+
+	// orphaned is a placeholder: an authoritative final status replaces it.
+	base.IdempotencyKey = uniqueID("idem")
+	record("orphaned", "boot_reconcile: broker did not recognise", 0)
+	record("filled", "boot_reconcile: broker reports filled", 10)
+	if got := read2(t, repo, project, base.IdempotencyKey); got.Status != "filled" || got.FilledQty != 10 {
+		t.Fatalf("orphaned -> filled did not apply: %s %v", got.Status, got.FilledQty)
+	}
+}
+
+func read2(t *testing.T, repo persistence.TradingOrderRepository, project, idem string) *persistence.TradingOrder {
+	t.Helper()
+	list, err := repo.List(context.Background(), persistence.TradingOrderFilter{ProjectID: &project})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, o := range list {
+		if o.IdempotencyKey == idem {
+			return o
+		}
+	}
+	t.Fatalf("no row for %s", idem)
+	return nil
 }
 
 // RunTradingFillSuite — fill ingestion + SumVolume. INSERT OR
@@ -2824,6 +3104,41 @@ func RunIngestQueueSuite(t *testing.T, repo persistence.IngestQueueRepository, a
 	t.Helper()
 	ctx := context.Background()
 	project := uniqueID("proj")
+
+	// Migration 200 (memory rollback x supersession design, amendment
+	// 2026-09-26): a document ingest's path survives the enqueue -> claim
+	// boundary, and an item without one claims back with none.
+	t.Run("DocumentPath_round_trips", func(t *testing.T) {
+		docProject := uniqueID("proj-doc")
+		withPath := seedArtifactRow(t, ctx, artifactRepo, docProject)
+		without := seedArtifactRow(t, ctx, artifactRepo, docProject)
+		path := "https://docs.vornik.io"
+		scope := "github.com/acme/widgets"
+		for _, it := range []*persistence.IngestQueueItem{
+			{ProjectID: docProject, SourceArtifactID: withPath, ProducerRole: "rag-ingester", RepoScope: &scope, DocumentPath: &path},
+			{ProjectID: docProject, SourceArtifactID: without, ProducerRole: "rag-ingester"},
+		} {
+			if err := repo.Enqueue(ctx, it); err != nil {
+				t.Fatalf("Enqueue: %v", err)
+			}
+		}
+		claimed, err := repo.ClaimBatch(ctx, docProject, 10)
+		if err != nil || len(claimed) != 2 {
+			t.Fatalf("ClaimBatch = %d, %v", len(claimed), err)
+		}
+		for _, it := range claimed {
+			switch it.SourceArtifactID {
+			case withPath:
+				if it.DocumentPath == nil || *it.DocumentPath != path {
+					t.Errorf("DocumentPath = %v, want %q", it.DocumentPath, path)
+				}
+			case without:
+				if it.DocumentPath != nil {
+					t.Errorf("an item enqueued without a path claimed back with %q", *it.DocumentPath)
+				}
+			}
+		}
+	})
 
 	t.Run("Enqueue_then_ClaimBatch_returns_processing_rows", func(t *testing.T) {
 		// Distinct artifacts per row: the active-idempotency index allows

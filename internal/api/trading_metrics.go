@@ -32,6 +32,11 @@ type TradingMetrics struct {
 	// rate. Split by endpoint so an operator can see which
 	// channel is misbehaving without correlating the request log.
 	IngestErrorsTotal *prometheus.CounterVec
+	// IngestUnknownFieldsTotal counts body keys an ingest's request struct
+	// does not declare — fields the broker sends that this daemon drops.
+	// Non-zero means a wire contract has drifted (the filled_qty class,
+	// 2026-09-24).
+	IngestUnknownFieldsTotal *prometheus.CounterVec
 }
 
 // NewTradingMetrics registers the trading ingest metrics on the
@@ -62,6 +67,12 @@ func NewTradingMetrics(reg prometheus.Registerer) *TradingMetrics {
 			Name:      "ingest_errors_total",
 			Help:      "Trading audit-channel ingest errors (validation, body too large, auth).",
 		}, []string{"endpoint", "reason"}),
+		IngestUnknownFieldsTotal: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Namespace: "vornik",
+			Subsystem: "trading",
+			Name:      "ingest_unknown_fields_total",
+			Help:      "Trading ingest body keys the daemon's request struct does not declare (dropped fields).",
+		}, []string{"endpoint", "field"}),
 	}
 	if reg != nil {
 		reg.MustRegister(
@@ -69,6 +80,7 @@ func NewTradingMetrics(reg prometheus.Registerer) *TradingMetrics {
 			m.OrdersIngestedTotal,
 			m.FillsIngestedTotal,
 			m.IngestErrorsTotal,
+			m.IngestUnknownFieldsTotal,
 		)
 	}
 	return m

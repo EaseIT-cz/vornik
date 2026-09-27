@@ -33,7 +33,8 @@ func IsKnownTaskFailureClass(s string) bool {
 		TaskFailureClassUnknown,
 		TaskFailureClassWorkflowCfg,
 		TaskFailureClassWorkflowDrift,
-		TaskFailureClassWorkflowRole:
+		TaskFailureClassWorkflowRole,
+		TaskFailureClassWorkspaceUnavailable:
 		return true
 	}
 	return false

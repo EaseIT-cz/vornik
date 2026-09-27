@@ -2,11 +2,13 @@ package memory
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sync"
 	"time"
 
 	"github.com/rs/zerolog"
+	"vornik.io/vornik/internal/chat"
 )
 
 // ClassifyBackfiller drives the LLM-driven class backfill: walks
@@ -28,6 +30,10 @@ type ClassifyBackfiller struct {
 	// LeaderGate gates the tick loop on the elected leader.
 	// Same shape + nil-safe contract as TitleBackfiller.
 	LeaderGate LeaderGate
+
+	// optionalPaused remembers that the last tick paused on a refusal of
+	// optional work, so the loop logs the pause and the resume once each.
+	optionalPaused bool
 
 	// offset walks the oldest-first queue past rows nothing can classify.
 	//
@@ -68,8 +74,11 @@ type ClassifyBackfillResult struct {
 	// can still be non-zero: those rows were deliberately left unclassified
 	// because the model abstained. It lets the CLI finish an exhaustive pass
 	// without mistaking honest abstentions for a livelock.
-	Exhausted bool     `json:"exhausted,omitempty"`
-	Errors    []string `json:"errors,omitempty"`
+	Exhausted bool `json:"exhausted,omitempty"`
+	// Paused: optional LLM work is disabled for the classifier's model, so
+	// the batch stopped calling it (breaker design §5.3d). Not a failure.
+	Paused bool     `json:"paused,omitempty"`
+	Errors []string `json:"errors,omitempty"`
 }
 
 // CountRemaining returns how many chunks still need classification.
@@ -182,9 +191,10 @@ func (b *ClassifyBackfiller) runOnce(ctx context.Context, batchSize int) *Classi
 			return backfillCounts{
 				Processed: r.Processed, Succeeded: r.Succeeded,
 				Failed: r.Failed, Skipped: r.Skipped, Remaining: r.Remaining,
+				Paused: r.Paused,
 			}, nil
 		},
-	))
+	).withPaused(&b.optionalPaused))
 	if !haveEvidence {
 		return nil
 	}
@@ -242,7 +252,18 @@ func (b *ClassifyBackfiller) BackfillBatchAcrossProjects(ctx context.Context, ba
 			out.Succeeded++
 			continue
 		}
+		if out.Paused {
+			continue // the model refused optional work this batch; the role map still ran
+		}
 		class, cerr := b.Classifier.Classify(ctx, row.Content, row.SourceName, row.ProducerRole, row.ProjectID, row.ID)
+		if errors.Is(cerr, chat.ErrOptionalWorkDisabled) {
+			// Optional LLM work is off for this model (breaker design
+			// §5.3d): stop calling it for the rest of the batch, but keep
+			// resolving rows the role map can answer. Not a failure, and
+			// not skipped, so the offset does not walk past these rows.
+			out.Paused = true
+			continue
+		}
 		if cerr != nil {
 			out.Failed++
 			if len(out.Errors) < 5 {
@@ -277,7 +298,28 @@ func (b *ClassifyBackfiller) BackfillBatchAcrossProjects(ctx context.Context, ba
 	} else {
 		out.Remaining = remaining
 	}
+	b.offset = nextCursor(b.offset, out)
 	return out, nil
+}
+
+// nextCursor is the sweep cursor after a batch, shared by both sweeps
+// (rag-ingest pipeline design, correction 2026-09-26). Any success resets it,
+// because updated rows leave the unclassified set and shift the offsets. A
+// batch that classified nothing advances past what it examined, so a page
+// nothing can place cannot block the rows behind it (the 2026-07-30
+// livelock). A PAUSED batch did not put its rows to the model, so the cursor
+// stays put rather than hiding them for a cycle.
+func nextCursor(offset int, out *ClassifyBackfillResult) int {
+	switch {
+	case out.Succeeded > 0:
+		return 0
+	case out.Paused:
+		return offset
+	case out.Processed > 0:
+		return offset + out.Processed
+	default:
+		return offset
+	}
 }
 
 // BackfillBatch processes up to batchSize unclassified chunks in
@@ -334,7 +376,18 @@ func (b *ClassifyBackfiller) BackfillBatch(ctx context.Context, projectID string
 			out.Succeeded++
 			continue
 		}
+		if out.Paused {
+			continue // the model refused optional work this batch; the role map still ran
+		}
 		class, cerr := b.Classifier.Classify(ctx, row.Content, row.SourceName, row.ProducerRole, row.ProjectID, row.ID)
+		if errors.Is(cerr, chat.ErrOptionalWorkDisabled) {
+			// Optional LLM work is off for this model (breaker design
+			// §5.3d): stop calling it for the rest of the batch, but keep
+			// resolving rows the role map can answer. Not a failure, and
+			// not skipped, so the offset does not walk past these rows.
+			out.Paused = true
+			continue
+		}
 		if cerr != nil {
 			out.Failed++
 			if len(out.Errors) < 5 {
@@ -373,11 +426,7 @@ func (b *ClassifyBackfiller) BackfillBatch(ctx context.Context, projectID string
 	// Deletions from successful updates shift the SQL offset. Restarting after
 	// any success is conservative but correct; advancing after a no-progress
 	// batch is what reaches rows that all preceding abstentions would hide.
-	if out.Succeeded > 0 {
-		b.projectOffsets[projectID] = 0
-	} else if out.Processed > 0 {
-		b.projectOffsets[projectID] = offset + out.Processed
-	}
+	b.projectOffsets[projectID] = nextCursor(offset, out)
 	return out, nil
 }
 

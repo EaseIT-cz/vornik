@@ -44,14 +44,15 @@ func (r *IngestQueueRepository) Enqueue(ctx context.Context, item *persistence.I
 		INSERT INTO project_ingest_queue (
 			id, project_id, source_artifact_id, producer_role,
 			ingest_execution_id, priority, proposed_class, proposed_confidence,
-			state, attempts, enqueued_at, repo_scope
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			state, attempts, enqueued_at, repo_scope, document_path
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT (project_id, source_artifact_id)
 			WHERE state IN ('queued','processing')
 			DO NOTHING`,
 		item.ID, item.ProjectID, item.SourceArtifactID, item.ProducerRole,
 		item.IngestExecutionID, item.Priority, item.ProposedClass, item.ProposedConfidence,
 		item.State, item.Attempts, sqliteTime(item.EnqueuedAt), item.RepoScope,
+		item.DocumentPath,
 	)
 	return err
 }
@@ -116,7 +117,7 @@ func (r *IngestQueueRepository) ClaimBatch(ctx context.Context, projectID string
 			SELECT id, project_id, source_artifact_id, producer_role,
 			       ingest_execution_id, priority, proposed_class,
 			       proposed_confidence, state, attempts, enqueued_at,
-			       started_at, finished_at, last_error, repo_scope
+			       started_at, finished_at, last_error, repo_scope, document_path
 			FROM project_ingest_queue WHERE id = ?`, id)
 		item, err := scanIngestQueueItem(row)
 		if err != nil {
@@ -245,15 +246,15 @@ func (r *IngestQueueRepository) CountStaleProcessing(ctx context.Context, olderT
 func scanIngestQueueItem(scanner interface{ Scan(dest ...any) error }) (*persistence.IngestQueueItem, error) {
 	item := &persistence.IngestQueueItem{}
 	var (
-		ingestExecID, proposedClass, lastError, repoScope sql.NullString
-		enqueuedAt                                        sqlTime
-		startedAt, finishedAt                             sqlNullTime
+		ingestExecID, proposedClass, lastError, repoScope, documentPath sql.NullString
+		enqueuedAt                                                      sqlTime
+		startedAt, finishedAt                                           sqlNullTime
 	)
 	if err := scanner.Scan(
 		&item.ID, &item.ProjectID, &item.SourceArtifactID, &item.ProducerRole,
 		&ingestExecID, &item.Priority, &proposedClass,
 		&item.ProposedConfidence, &item.State, &item.Attempts, &enqueuedAt,
-		&startedAt, &finishedAt, &lastError, &repoScope,
+		&startedAt, &finishedAt, &lastError, &repoScope, &documentPath,
 	); err != nil {
 		return nil, err
 	}
@@ -268,6 +269,9 @@ func scanIngestQueueItem(scanner interface{ Scan(dest ...any) error }) (*persist
 	}
 	if repoScope.Valid {
 		item.RepoScope = &repoScope.String
+	}
+	if documentPath.Valid {
+		item.DocumentPath = &documentPath.String
 	}
 	item.EnqueuedAt = enqueuedAt.Time
 	if startedAt.Valid {

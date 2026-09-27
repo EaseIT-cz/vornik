@@ -341,3 +341,95 @@ func TestIntegrationMemoryChunks_TSVIsStillAGeneratedColumn(t *testing.T) {
 			"search updating itself, and a maintained column would need explicit refresh", generated)
 	}
 }
+
+// Document chunks (memory rollback x supersession design, A.7): their
+// content_hash is DocumentChunkHash(artifact_id, text). The redactor must keep
+// that scheme, or a redacted document chunk silently rejoins project-wide dedup,
+// its no-op check never matches, and its collision check looks in the wrong
+// namespace.
+func seedDocumentChunk(t *testing.T, db *DB, id, artifactID, content string) seededChunk {
+	t.Helper()
+	ctx := context.Background()
+	if _, err := db.ExecContext(ctx, `INSERT INTO artifacts (id, project_id, name, artifact_class, storage_path, origin)
+		VALUES ($1, $2, 'doc.md', 'INPUT', '/dev/null', 'upload') ON CONFLICT (id) DO NOTHING`, artifactID, redactTestProject); err != nil {
+		t.Fatalf("seed artifact %s: %v", artifactID, err)
+	}
+	t.Cleanup(func() { _, _ = db.ExecContext(context.Background(), `DELETE FROM artifacts WHERE id = $1`, artifactID) })
+	hash := memory.DocumentChunkHash(artifactID, content)
+	if _, err := db.ExecContext(ctx, `
+		INSERT INTO project_memory_chunks (id, project_id, content, content_hash, source_name, artifact_id)
+		VALUES ($1, $2, $3, $4, 'docs/doc.md', $5)`,
+		id, redactTestProject, content, hash, artifactID); err != nil {
+		t.Fatalf("seed document chunk %s: %v", id, err)
+	}
+	return seededChunk{id: id, content: content, hash: hash}
+}
+
+func TestIntegrationRedactChunk_DocumentChunkKeepsItsSaltedHash(t *testing.T) {
+	db := newIntegrationDB(t)
+	ctx := context.Background()
+	repo := NewChunkRedactorRepository(db.DB)
+	before, after := "Called jane@example.com about the lease.", "Called [redacted] about the lease."
+	cleanRedactTest(t, db)
+	c := seedDocumentChunk(t, db, "redact-doc", "art-redact-doc", before)
+
+	got, err := repo.RedactChunk(ctx, c.id, c.hash, after)
+	if err != nil || got.Outcome != datasubject.RedactionApplied {
+		t.Fatalf("RedactChunk = %+v, %v", got, err)
+	}
+	if st := readChunk(t, db, c.id); st.hash != memory.DocumentChunkHash("art-redact-doc", after) {
+		t.Fatalf("content_hash = %s, want the salted hash of the redacted text", st.hash)
+	}
+}
+
+func TestIntegrationRedactChunk_DocumentChunkReRedactIsANoOp(t *testing.T) {
+	db := newIntegrationDB(t)
+	ctx := context.Background()
+	repo := NewChunkRedactorRepository(db.DB)
+	text := "Called [redacted] about the lease."
+	cleanRedactTest(t, db)
+	c := seedDocumentChunk(t, db, "redact-doc-idem", "art-redact-idem", text)
+	setEmbedding(t, db, c.id)
+	if got, err := repo.RedactChunk(ctx, c.id, c.hash, text); err != nil || got.Outcome != datasubject.RedactionApplied {
+		t.Fatalf("RedactChunk = %+v, %v", got, err)
+	}
+	if st := readChunk(t, db, c.id); !st.hasEmbed || st.hash != c.hash {
+		t.Fatalf("a no-op redaction of a document chunk changed it: %+v", st)
+	}
+}
+
+func TestIntegrationRedactChunk_TwoDocumentVersionsDoNotCollide(t *testing.T) {
+	db := newIntegrationDB(t)
+	ctx := context.Background()
+	repo := NewChunkRedactorRepository(db.DB)
+	after := "Called [redacted] about the lease."
+	cleanRedactTest(t, db)
+	v1 := seedDocumentChunk(t, db, "redact-doc-v1", "art-redact-v1", "Called jane@example.com about the lease.")
+	v2 := seedDocumentChunk(t, db, "redact-doc-v2", "art-redact-v2", "Called jane@example.com about the lease.")
+	for _, c := range []seededChunk{v1, v2} {
+		if got, err := repo.RedactChunk(ctx, c.id, c.hash, after); err != nil || got.Outcome != datasubject.RedactionApplied {
+			t.Fatalf("redacting %s = %+v, %v: two versions of a document must not collide", c.id, got, err)
+		}
+	}
+}
+
+// A second redaction of a document chunk still sees the salted scheme: the
+// detection reads the post-first-redaction row (code review, A.7).
+func TestIntegrationRedactChunk_DocumentChunkRedactedTwiceStaysSalted(t *testing.T) {
+	db := newIntegrationDB(t)
+	ctx := context.Background()
+	repo := NewChunkRedactorRepository(db.DB)
+	v0, v1, v2 := "Jane and Peter met about the lease.", "[redacted] and Peter met about the lease.", "[redacted] and [redacted] met about the lease."
+	cleanRedactTest(t, db)
+	c := seedDocumentChunk(t, db, "redact-doc-twice", "art-redact-twice", v0)
+	if got, err := repo.RedactChunk(ctx, c.id, c.hash, v1); err != nil || got.Outcome != datasubject.RedactionApplied {
+		t.Fatalf("first redaction = %+v, %v", got, err)
+	}
+	mid := readChunk(t, db, c.id)
+	if got, err := repo.RedactChunk(ctx, c.id, mid.hash, v2); err != nil || got.Outcome != datasubject.RedactionApplied {
+		t.Fatalf("second redaction = %+v, %v", got, err)
+	}
+	if st := readChunk(t, db, c.id); st.hash != memory.DocumentChunkHash("art-redact-twice", v2) {
+		t.Fatalf("after two redactions content_hash = %s, want the salted hash", st.hash)
+	}
+}

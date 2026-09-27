@@ -10,7 +10,7 @@ roles:
     - name: "lead"
       description: "Plans implementation, delegates to coder / reviewer"
       count: 1
-      runtimePolicy: "warm"
+      runtimePolicy: "ephemeral"
       maxTokens: 2048
       # requiredOutputKeys enforces the plan shape so downstream gates
       # never see undefined fields. Keep the list tight — one key per

@@ -34,6 +34,12 @@ const (
 	// ErrNotFound indicates the requested entity was not found.
 	ErrNotFound RepositoryError = "not found"
 
+	// ErrReportNotRetained means the data-subject request exists but no report
+	// was retained for it (regulatory record design §6). A miss, so it
+	// satisfies errors.Is(err, ErrNotFound) — but distinguishable, so the
+	// page can say "no retained report" rather than "no such request".
+	ErrReportNotRetained RepositoryError = "no retained report"
+
 	// ErrDuplicateKey indicates a unique constraint violation.
 	ErrDuplicateKey RepositoryError = "duplicate key"
 
@@ -122,7 +128,7 @@ func (e RepositoryError) Is(target error) bool {
 		return false
 	}
 	switch e {
-	case ErrIdentityNotFound, ErrUserNotFound, ErrGroupNotFound, ErrSessionNotFound:
+	case ErrIdentityNotFound, ErrUserNotFound, ErrGroupNotFound, ErrSessionNotFound, ErrReportNotRetained:
 		return true
 	}
 	return false

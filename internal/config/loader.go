@@ -121,6 +121,7 @@ func ValidateBytes(data []byte) error {
 	if err := yaml.Unmarshal(data, cfg); err != nil {
 		return fmt.Errorf("parse: %w", err)
 	}
+	cfg.Database.applyDefaults()
 	cfg.Composer.applyDefaults()
 	cfg.Identity.applyDefaults()
 	cfg.ConfigAssistant.applyDefaults()

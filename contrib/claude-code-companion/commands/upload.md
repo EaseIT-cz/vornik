@@ -103,10 +103,37 @@ if not paths:
 # as recall()/remember()/delegate() do at session start:
 #   1. explicit --scope wins
 #   2. else $VORNIK_REPO_SCOPE (operator pin)
-#   3. else auto-detect from cwd's git remote.origin.url
+#   3. else auto-detect from the git remote.origin.url of the repository
+#      that holds ALL the files, when they share one; otherwise of the cwd
 #   4. else repo toplevel basename (local-only repo)
 #   5. else current folder basename (not a git repo — never empty, so
 #      the scope never degrades to "none"/project-wide)
+# Step 3 looks at the files first (memory rollback x supersession design,
+# amendment 2026-09-26): uploads run from a helper directory outside any
+# repository were scoped with that directory's name, and scoped recall could
+# not see them. Files from several repositories are legitimate here (a review
+# of a diff plus a design), so this command falls back to the cwd rather than
+# refusing; /rag-ingest, which records document identity, refuses instead.
+def files_repo():
+    import subprocess
+    tops = set()
+    for p in paths:
+        # Real paths, as /rag-ingest uses: a symlinked directory must not
+        # make one repository look like two.
+        d = os.path.dirname(os.path.realpath(os.path.expanduser(p)))
+        try:
+            out = subprocess.run(
+                ["git", "-C", d, "rev-parse", "--show-toplevel"],
+                capture_output=True, text=True, timeout=2, check=False,
+            )
+            top = out.stdout.strip() if out.returncode == 0 else ""
+        except (subprocess.SubprocessError, FileNotFoundError, OSError):
+            top = ""
+        tops.add(os.path.realpath(top) if top else "")
+    if len(tops) == 1 and "" not in tops:
+        return tops.pop()
+    return None
+
 def resolve_scope():
     if scope_arg is not None:
         return scope_arg.strip()
@@ -114,10 +141,11 @@ def resolve_scope():
     if env_pin:
         return env_pin
     import subprocess
+    git_cwd = files_repo()
     try:
         out = subprocess.run(
             ["git", "config", "--get", "remote.origin.url"],
-            capture_output=True, text=True, timeout=2, check=False,
+            capture_output=True, text=True, timeout=2, check=False, cwd=git_cwd,
         )
         url = out.stdout.strip()
     except (subprocess.SubprocessError, FileNotFoundError):
@@ -129,7 +157,7 @@ def resolve_scope():
         try:
             top = subprocess.run(
                 ["git", "rev-parse", "--show-toplevel"],
-                capture_output=True, text=True, timeout=2, check=False,
+                capture_output=True, text=True, timeout=2, check=False, cwd=git_cwd,
             )
             base = os.path.basename(top.stdout.strip())
             return base or os.path.basename(os.getcwd())

@@ -1,13 +1,13 @@
 ---
 sources:
     - path: internal/service/container_scheduler.go
-      sha256: 095c1451459824cefaf994b8f7dc1ed012e19beef50b9d87bfb06a004eaa8c63
+      sha256: fef9ddb41171aa13e78e2a85aad9997959cb69dd2b6b6eec29ae5a43ff20a81c
     - path: internal/service/memory_adapter.go
-      sha256: 581042ad9d2ec6300d380a62f8a37c6a62659109e337cf448ac9e4256524f770
+      sha256: 9a075b167fc29ec4d2ffab41f3584b6e905d06877a55c287cb7ac2e770ae2f1e
     - path: internal/memory/reranker.go
-      sha256: fa57cbdcf4bbbb803d0074c2eb3740dc0d509d92a9b91d1cf3495b9cf8dc3ad8
+      sha256: 2db6fa73c81bedda7ce9728feead4d627380e97f84a88c94b9db63075f21c93a
     - path: internal/config/config.go
-      sha256: 4f292ff2fbf7659efa1f0c282d725eface78601f4ca157f6f7a9a0c8c3230d16
+      sha256: b91499d0c0af9eabd8adea135f3d8ba52cdf244d679924a35915c4264584df0d
 ---
 # Reference architecture
 
@@ -171,7 +171,10 @@ roles:
       image: "localhost/vornik-agent:latest"   # required
 ```
 
-Every role needs a runtime image. Roles routinely differ in model — a cheap model for
+Every role needs a runtime image, and it must be the Vornik agent image:
+`ghcr.io/grinco/vornik-agent` or `localhost/vornik-agent`, any tag or digest (a
+bare `vornik-agent:<tag>` is qualified to the first). The daemon refuses to start
+a container from any other image. Roles routinely differ in model — a cheap model for
 classification, a stronger one for synthesis — and that heterogeneity is normal, not
 drift.
 
@@ -254,7 +257,7 @@ a config value is a statement of intent, not evidence of behaviour.
 
 **Observe:** the daemon logs the **resolved** state at start —
 `memory reranker ACTIVE` or `memory reranker INERT` with the reason and the specific
-gate that closed. Then confirm behaviour, not intent:
+gate that closed. One such gate is `chat.optional_work`: a reranker whose model is listed there is configured on and refused on every call, so the line says INERT and names it. Then confirm behaviour, not intent:
 
 ```sql
 SELECT role, count(*) FROM task_llm_usage WHERE role ILIKE '%rerank%' GROUP BY role;
@@ -265,7 +268,7 @@ accumulates reranker rows once context-assembly recall runs. Enabled-plus-zero-r
 is a **defect**.
 
 Scored-sufficiency widening is **reranker-gated** — it cannot activate without a live
-reranker, so an enabled sufficiency block on an inert reranker is doing nothing.
+reranker, so an enabled sufficiency block on an inert reranker is doing nothing. It is gated on what each round DID, not on configuration: a round whose rerank degraded (timed out, failed, refused by `chat.optional_work`) carries RRF scores, so it ends the widening rather than feeding the relevance floor (correction 2026-09-26).
 
 ### Scope isolation
 

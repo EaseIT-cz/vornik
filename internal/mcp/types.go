@@ -8,16 +8,24 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+
+	"vornik.io/vornik/internal/spawn"
 )
 
 // ServerConfig defines how to connect to an MCP server.
 type ServerConfig struct {
-	Name      string            `yaml:"name" json:"name"`
-	Transport string            `yaml:"transport" json:"transport"` // "stdio", "sse", or "streamable-http"
-	Command   string            `yaml:"command" json:"command"`     // for stdio
-	Args      []string          `yaml:"args" json:"args"`           // for stdio
-	Env       map[string]string `yaml:"env" json:"env"`             // for stdio (supports ${VAR} expansion)
-	URL       string            `yaml:"url" json:"url"`             // for sse and streamable-http
+	Name      string   `yaml:"name" json:"name"`
+	Transport string   `yaml:"transport" json:"transport"` // "stdio", "sse", or "streamable-http"
+	Command   string   `yaml:"command" json:"command"`     // for stdio
+	Args      []string `yaml:"args" json:"args"`           // for stdio
+	// Program is what a stdio launch actually runs: Command and Args minted
+	// into a spawn.ConfiguredCommand by the config loader's hand-off
+	// (internal/service), never decoded from YAML or JSON. A stdio server
+	// without one is refused (ErrNoConfiguredProgram), so a ServerConfig a
+	// request built cannot start a program (process-spawn law, S1b-2).
+	Program spawn.ConfiguredCommand `yaml:"-" json:"-"`
+	Env     map[string]string       `yaml:"env" json:"env"` // for stdio (supports ${VAR} expansion)
+	URL     string                  `yaml:"url" json:"url"` // for sse and streamable-http
 	// AllowedTools, when non-empty, restricts the Client's exposed tool
 	// set to only those whose names are listed. Empty means "all tools
 	// the server advertises" (back-compatible default).

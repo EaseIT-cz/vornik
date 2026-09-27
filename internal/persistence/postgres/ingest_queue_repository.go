@@ -55,15 +55,15 @@ func (r *IngestQueueRepository) Enqueue(ctx context.Context, item *persistence.I
 		INSERT INTO project_ingest_queue (
 			id, project_id, source_artifact_id, producer_role,
 			ingest_execution_id, priority, proposed_class, proposed_confidence,
-			state, attempts, enqueued_at, repo_scope
-		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+			state, attempts, enqueued_at, repo_scope, document_path
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
 		ON CONFLICT (project_id, source_artifact_id)
 			WHERE state IN ('queued','processing')
 			DO NOTHING
 	`,
 		item.ID, item.ProjectID, item.SourceArtifactID, item.ProducerRole,
 		item.IngestExecutionID, item.Priority, item.ProposedClass, item.ProposedConfidence,
-		item.State, item.Attempts, item.EnqueuedAt, item.RepoScope,
+		item.State, item.Attempts, item.EnqueuedAt, item.RepoScope, item.DocumentPath,
 	)
 	return mapDBError(err)
 }
@@ -103,7 +103,8 @@ func (r *IngestQueueRepository) ClaimBatch(ctx context.Context, projectID string
 		RETURNING q.id, q.project_id, q.source_artifact_id, q.producer_role,
 		          q.ingest_execution_id, q.priority, q.proposed_class,
 		          q.proposed_confidence, q.state, q.attempts, q.enqueued_at,
-		          q.started_at, q.finished_at, q.last_error, q.repo_scope
+		          q.started_at, q.finished_at, q.last_error, q.repo_scope,
+		          q.document_path
 	`, projectID, limit)
 	if err != nil {
 		return nil, mapDBError(err)
@@ -296,6 +297,7 @@ func scanIngestQueueItem(rows *sql.Rows) (*persistence.IngestQueueItem, error) {
 		&item.IngestExecutionID, &item.Priority, &item.ProposedClass,
 		&item.ProposedConfidence, &item.State, &item.Attempts, &item.EnqueuedAt,
 		&item.StartedAt, &item.FinishedAt, &item.LastError, &item.RepoScope,
+		&item.DocumentPath,
 	); err != nil {
 		return nil, err
 	}

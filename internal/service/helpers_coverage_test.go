@@ -32,19 +32,13 @@ func TestNormalizeFirewallMode(t *testing.T) {
 	}
 }
 
-func TestEnvOrEmptyAndEnvOr(t *testing.T) {
+func TestEnvOrEmpty(t *testing.T) {
 	if got := envOrEmpty(""); got != "" {
 		t.Errorf("envOrEmpty(empty key) = %q, want empty", got)
 	}
 	t.Setenv("VORNIK_TEST_HELPER_VAR", "hello")
 	if got := envOrEmpty("VORNIK_TEST_HELPER_VAR"); got != "hello" {
 		t.Errorf("envOrEmpty(set) = %q, want hello", got)
-	}
-	if got := envOr("VORNIK_TEST_HELPER_VAR", "dflt"); got != "hello" {
-		t.Errorf("envOr(set) = %q, want hello", got)
-	}
-	if got := envOr("VORNIK_TEST_UNSET_VAR_XYZ", "dflt"); got != "dflt" {
-		t.Errorf("envOr(unset) = %q, want dflt", got)
 	}
 }
 
@@ -129,36 +123,6 @@ func TestDaemonHolderID(t *testing.T) {
 	}
 	if again := c.daemonHolderID(); again != id {
 		t.Errorf("holder id not cached: %q != %q", again, id)
-	}
-}
-
-func TestIsGitRepo(t *testing.T) {
-	if isGitRepo("") {
-		t.Error("empty dir must be false")
-	}
-	nonGitDir := t.TempDir()
-	if isGitRepo(nonGitDir) {
-		t.Logf("temp dir %q is inside a git work tree; using root fallback for negative case", nonGitDir)
-	} else {
-		t.Logf("fresh temp dir %q correctly detected as non-git", nonGitDir)
-	}
-	if isGitRepo("/") {
-		t.Error("root dir without .git must be false")
-	}
-	dir := t.TempDir()
-	if err := os.Mkdir(filepath.Join(dir, ".git"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if !isGitRepo(dir) {
-		t.Error("dir with .git must be true")
-	}
-	// A nested subdir of a git repo is also inside the work tree.
-	sub := filepath.Join(dir, "a", "b")
-	if err := os.MkdirAll(sub, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if !isGitRepo(sub) {
-		t.Error("subdir of a git repo must be true")
 	}
 }
 

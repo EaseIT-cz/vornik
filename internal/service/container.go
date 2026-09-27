@@ -65,8 +65,10 @@ import (
 	"sync/atomic"
 	"syscall"
 	"time"
+
 	"vornik.io/vornik/internal/authz"
 	"vornik.io/vornik/internal/chatauth"
+	"vornik.io/vornik/internal/sandboxtool"
 
 	editionpkg "vornik.io/vornik/internal/version"
 
@@ -128,9 +130,14 @@ import (
 
 // Container holds all initialized services and dependencies.
 type Container struct {
-	Config         *config.Config
-	ConfigPath     string
-	ConfigReloader *config.ConfigReloader
+	Config *config.Config
+	// speedFactor* cache the declared inference-speed factor, shared by the
+	// lease and every step timeout (dynamic-tool-budget design §6.2.1b).
+	speedFactorOnce    sync.Once
+	speedFactorValue   float64
+	speedFactorClamped bool
+	ConfigPath         string
+	ConfigReloader     *config.ConfigReloader
 	// stagedConfig holds a freshly re-parsed config.yaml between the reload
 	// loader (parse+validate) and activator (apply hot-reloadable keys) phases.
 	// Single-threaded within one reload pass (the ConfigReloader serialises
@@ -301,6 +308,11 @@ type Container struct {
 	// CLI provider (internal/chat/cli_client.go) can be plugged in
 	// alongside the HTTP one.
 	ChatClient chat.Provider
+	// chatRouter is the router ChatClient dispatches through, kept so the
+	// doctor's model_route_coverage can ask it how a model routes instead of
+	// re-deriving the table (model-route-coverage design, 2026-09-24). Nil
+	// when chat.provider is not "router".
+	chatRouter *chat.Router
 
 	// ChatCallStats tallies every model call's outcome per (model, call_site) for the
 	// doctor's model_calls_live check. Built when chat logging is wired; see
@@ -313,8 +325,11 @@ type Container struct {
 	// Bot.Start fires (so the ConversationChannel receiver is bound
 	// before the poll loop hands inbound to HandleMessage). Nil when
 	// chat is disabled.
-	Dispatcher  *dispatcher.Agent
-	TelegramBot *telegram.Bot
+	Dispatcher *dispatcher.Agent
+	// sandboxRunner runs one-shot tools in the pinned agent image
+	// (process-spawn law S5a). Built by initSandboxTools.
+	sandboxRunner *sandboxtool.Runner
+	TelegramBot   *telegram.Bot
 	// composedMCP is the built-in tool executor served to agents, retained so
 	// the configuration assistant's agent entrypoint can attach to it after
 	// the assistant engine exists. See container_http.go.
@@ -493,6 +508,9 @@ type Container struct {
 	// handlers the RUNNING daemon actually registered, not a static list.
 	// Composer task 1.1b concern-2.
 	systemHandlerNames []string
+	// gitConfigComposition is the startup composition of the daemon's git
+	// config (S6-D4), reported by the doctor's git_config_composition check.
+	gitConfigComposition *api.GitConfigComposition
 	// agentHealth is the per-model agent-LLM circuit breaker registry
 	// (LLD 2026-07-12-agent-llm-health-breaker). Retained here (the
 	// registry is constructed in initScheduler) so the later metrics-
@@ -721,6 +739,9 @@ type Container struct {
 	configMirrorMetrics *configrecon.Metrics
 	agentWriteMetrics   *api.AgentAPIWriteMetrics
 	mcpGateMetrics      *api.MCPGateMetrics
+	// leaderLockReleaseMetrics backs vornik_leader_lock_release_total (issue
+	// #60); built once on the served registry like mcpGateMetrics.
+	leaderLockReleaseMetrics *api.LeaderLockReleaseMetrics
 	// auditRedactMetrics is the SHARED tool-audit census holder. One per
 	// container, injected into every auditredact.Repo — the rebuild below
 	// leaves two live instances and a per-instance counter would publish a
@@ -872,6 +893,18 @@ func NewContainer(cfg *config.Config, configPath string, opts ...ContainerOption
 
 	// Phase 1 Step 1: Initialize structured JSON logger
 	c.initLogger()
+
+	// The process-spawn law's git kinds run only under a registered
+	// workspace root (S1b-2). A root that cannot be registered ("/") is a
+	// configuration the executor's git would refuse at every call, so it
+	// refuses startup instead.
+	if err := registerSpawnWorkspaceRoot(cfg.Runtime.ProjectWorkspacePath); err != nil {
+		return nil, fmt.Errorf("runtime.project_workspace_path: %w", err)
+	}
+	// Every daemon git command reads no system config and a global config
+	// composed from the operator's allowlisted keys (process-spawn law S6-D4).
+	// Composed before anything that runs git is wired.
+	c.composeDaemonGitConfig()
 
 	c.Logger.Info().
 		Str("config_path", configPath).
@@ -1060,6 +1093,13 @@ func NewContainer(cfg *config.Config, configPath string, opts ...ContainerOption
 	// racing through independent Stores.
 	if c.BacklogStore == nil {
 		c.BacklogStore = backlogfile.NewStore()
+	}
+
+	// The sandbox one-shot runner (process-spawn law S5a). Before
+	// initScheduler: the agent memory check there adds its commitment.
+	if err := c.initSandboxTools(); err != nil {
+		c.Logger.Error().Err(err).Msg("failed to initialize sandbox tools")
+		return nil, fmt.Errorf("sandbox tools: %w", err)
 	}
 
 	// Phase 1 Step 4: Initialize scheduler (depends on task repository,

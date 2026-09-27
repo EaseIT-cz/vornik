@@ -40,6 +40,13 @@ type TaskSpec struct {
 	// give them one. The delegate tool has always accepted inputArtifacts; the
 	// benchmark simply had no way to express them.
 	Attachments []string `json:"attachments,omitempty"`
+	// Targets are the workspace-relative paths the task must create. They are
+	// cleared before each repeat so the task starts where its prompt says it
+	// does (benchmark LLD §12.23).
+	Targets []string `json:"targets,omitempty"`
+	// Acceptance is the task's hidden acceptance suite, a directory relative
+	// to the task-set file (benchmark LLD §12.24). Empty: not graded.
+	Acceptance string `json:"acceptance,omitempty"`
 	// attachmentBase is the directory Attachments resolve against — the task
 	// set's own directory. Unexported so a task-set file cannot set it and
 	// reach outside where it lives.
@@ -138,6 +145,13 @@ type Runner struct {
 	Probes []Probe
 	// Now is injected so a journal's timing is reproducible under test.
 	Now func() time.Time
+	// Workspace, when set, clears each task repeat's targets before it runs
+	// and records what it produced (benchmark LLD §12.23). Nil records the
+	// run as not fresh-workspace evidence.
+	Workspace WorkspacePreparer
+	// Grader, when set, grades each repeat with the task's hidden acceptance
+	// suite (benchmark LLD §12.24).
+	Grader AcceptanceGrader
 }
 
 // Run executes the arm and returns its journal.
@@ -150,6 +164,11 @@ func (r *Runner) Run(ctx context.Context, cfg RunConfig) (Journal, error) {
 		return Journal{}, err
 	}
 	if err := cfg.PreRegistration.Validate(); err != nil {
+		return Journal{}, err
+	}
+	// Defence in depth for §9.2: the CLI binds --arm before reading the task
+	// set, and a caller that is not the CLI must not be able to skip it.
+	if err := cfg.PreRegistration.BindArm(cfg.Arm.Name); err != nil {
 		return Journal{}, err
 	}
 	if r.Tasks == nil || r.Traces == nil {
@@ -181,7 +200,11 @@ func (r *Runner) Run(ctx context.Context, cfg RunConfig) (Journal, error) {
 		PreRegistration:     cfg.PreRegistration,
 		Power:               cfg.Power,
 		TaskTiers:           taskTierMap(cfg.Tasks),
+		WorkspaceReset:      WorkspaceResetNoWorkspace,
 	}}
+	if r.Workspace != nil {
+		j.Manifest.WorkspaceReset = WorkspaceResetTargets
+	}
 
 	repeats := cfg.Repeats
 	if repeats < 1 {
@@ -213,7 +236,32 @@ func (r *Runner) Run(ctx context.Context, cfg RunConfig) (Journal, error) {
 			// The TaskRun and its TaskScore must carry the SAME index, or the
 			// gate's per-(task,repeat) join silently matches nothing.
 			repeat := cfg.RepeatOffset + i + 1
+			var clearCommit string
+			if r.Workspace != nil {
+				c, perr := r.Workspace.Prepare(ctx, spec, repeat)
+				if perr != nil {
+					return j, fmt.Errorf("task %q repeat %d cannot start from a pristine workspace: %w", spec.ID, repeat, perr)
+				}
+				clearCommit = c
+			}
 			taskRun, records := r.runOnce(ctx, cfg, spec, repeat)
+			if r.Workspace != nil {
+				taskRun.ClearCommit = clearCommit
+				produced, perr := r.Workspace.Produced(ctx, spec)
+				if perr != nil {
+					// Not knowing what a task produced must not read as "it
+					// produced everything": that is the check this exists for.
+					return j, fmt.Errorf("task %q repeat %d: cannot read what it produced: %w", spec.ID, repeat, perr)
+				}
+				taskRun.TargetsProduced = produced
+			}
+			if r.Grader != nil {
+				res := AcceptanceResult{Outcome: AcceptanceNotGraded}
+				if spec.Acceptance != "" {
+					res = r.Grader.Grade(ctx, spec)
+				}
+				taskRun.Acceptance = &res
+			}
 			j.TaskRuns = append(j.TaskRuns, taskRun)
 			j.Records = append(j.Records, records...)
 			if spec.Scoring != nil {

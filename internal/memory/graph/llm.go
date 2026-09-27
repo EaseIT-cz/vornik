@@ -97,7 +97,7 @@ func completeWithRetry(ctx context.Context, client chat.Provider, msgs []chat.Me
 			return resp, nil
 		}
 		lastErr = err
-		if ctx.Err() != nil {
+		if chat.RetryAllowed(ctx) != nil {
 			return nil, err
 		}
 		if attempt == maxAttempts {

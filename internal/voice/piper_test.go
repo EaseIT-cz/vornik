@@ -4,18 +4,22 @@ import (
 	"context"
 	"encoding/binary"
 	"errors"
-	"fmt"
-	"io"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"vornik.io/vornik/internal/sandboxtool"
+	"vornik.io/vornik/internal/sandboxtool/sandboxtest"
 )
 
+// piper and its ffmpeg transcode run in the agent image through the sandbox
+// runner (process-spawn law S5b, design §7): a fake sandbox plays them here,
+// and the real tools run under the podman e2e lane.
+
 // makeWAV builds a minimal 16-bit PCM RIFF/WAVE blob with the given
-// sample rate and duration. Used by the table tests below to drive
-// parseWAV + the runCmd fake stdout. Kept as a helper rather than a
-// testdata fixture so the test stays hermetic — no chmod, no shell.
+// sample rate and duration. Kept as a helper rather than a testdata
+// fixture so the test stays hermetic.
 func makeWAV(sampleRate, durationSamples int) []byte {
 	bytesPerSample := 2 // 16-bit PCM, mono
 	dataBytes := durationSamples * bytesPerSample
@@ -49,40 +53,52 @@ func appendU16LE(b []byte, v uint16) []byte {
 	return append(b, buf[:]...)
 }
 
-// stubbedPiper builds a piperLocalTTS whose runCmd records every call
-// and returns canned stdout/stderr/err per call index. The caller
-// uses returned `calls` to assert on argv / stdin.
-type recordedCall struct {
-	bin   string
-	args  []string
-	stdin []byte
+// piperTools plays piper (writing wav to /out/speech.wav) and ffmpeg
+// (writing the transcoded reply). Either may be replaced by an error.
+type piperTools struct {
+	wav       []byte
+	piperErr  error
+	ffmpegOut []byte
+	ffmpegErr error
 }
 
-func stubbedPiper(t *testing.T, cfg PiperConfig, responses []stubResp) (*piperLocalTTS, *[]recordedCall) {
+func (p piperTools) fake(t *testing.T) *sandboxtest.Fake {
+	return sandboxtest.New(t, func(spec sandboxtool.Spec, _ map[string][]byte, out string) error {
+		switch spec.Entrypoint {
+		case "piper":
+			if p.piperErr != nil {
+				return p.piperErr
+			}
+			if p.wav == nil {
+				return nil
+			}
+			return os.WriteFile(filepath.Join(out, "speech.wav"), p.wav, 0o600)
+		case "ffmpeg":
+			if p.ffmpegErr != nil {
+				return p.ffmpegErr
+			}
+			if p.ffmpegOut == nil {
+				return nil
+			}
+			name := filepath.Base(spec.Args[len(spec.Args)-1])
+			return os.WriteFile(filepath.Join(out, name), p.ffmpegOut, 0o600)
+		}
+		return errors.New("unexpected tool " + spec.Entrypoint)
+	})
+}
+
+func newPiper(t *testing.T, sb sandboxtool.Sandbox, cfg PiperConfig) *piperLocalTTS {
 	t.Helper()
+	if cfg.ModelPath == "" {
+		cfg.ModelPath = "en_US-lessac-low.onnx"
+	}
+	cfg.ModelPath = modelFile(t, cfg.ModelPath)
+	cfg.Sandbox = sb
 	prov, err := NewPiperLocalTTS(cfg)
 	if err != nil {
 		t.Fatalf("NewPiperLocalTTS: %v", err)
 	}
-	p := prov.(*piperLocalTTS)
-	calls := []recordedCall{}
-	idx := 0
-	p.runCmd = func(_ context.Context, name string, args []string, stdin []byte) ([]byte, []byte, error) {
-		calls = append(calls, recordedCall{bin: name, args: append([]string(nil), args...), stdin: append([]byte(nil), stdin...)})
-		if idx >= len(responses) {
-			return nil, nil, fmt.Errorf("test bug: runCmd called %d time(s), only %d response(s) queued", idx+1, len(responses))
-		}
-		r := responses[idx]
-		idx++
-		return r.stdout, r.stderr, r.err
-	}
-	return p, &calls
-}
-
-type stubResp struct {
-	stdout []byte
-	stderr []byte
-	err    error
+	return prov.(*piperLocalTTS)
 }
 
 func TestPiperLocalTTS_New_RequiresModelPath(t *testing.T) {
@@ -109,7 +125,7 @@ func TestPiperLocalTTS_New_AppliesDefaults(t *testing.T) {
 }
 
 func TestPiperLocalTTS_Synthesize_EmptyText(t *testing.T) {
-	p, _ := stubbedPiper(t, PiperConfig{ModelPath: "/m.onnx", BinaryPath: "/usr/bin/piper"}, nil)
+	p := newPiper(t, piperTools{}.fake(t), PiperConfig{})
 	for _, in := range []string{"", "   ", "\t\n"} {
 		_, err := p.Synthesize(context.Background(), in, TTSOptions{})
 		if !errors.Is(err, ErrEmptyText) {
@@ -119,328 +135,192 @@ func TestPiperLocalTTS_Synthesize_EmptyText(t *testing.T) {
 }
 
 func TestPiperLocalTTS_Synthesize_OversizeText(t *testing.T) {
-	cfg := PiperConfig{ModelPath: "/m.onnx", BinaryPath: "/usr/bin/piper", MaxTextRunes: 10}
-	p, _ := stubbedPiper(t, cfg, nil)
+	p := newPiper(t, piperTools{}.fake(t), PiperConfig{MaxTextRunes: 10})
 	_, err := p.Synthesize(context.Background(), strings.Repeat("a", 100), TTSOptions{})
 	if !errors.Is(err, ErrOversizeText) {
 		t.Errorf("err = %v, want ErrOversizeText", err)
 	}
 }
 
-func TestPiperLocalTTS_Synthesize_MissingBinary(t *testing.T) {
-	// Empty BinaryPath + a name that's vanishingly unlikely to be on
-	// $PATH forces the exec.LookPath fallback to fail. We swap the
-	// piper binary name by abusing the public API path: NewPiperLocalTTS
-	// always uses "piper", so we set BinaryPath to a non-existent
-	// absolute path and assert the runCmd never reaches a real exec
-	// (the lookup branch only triggers when BinaryPath is empty).
-	// Instead, exercise the empty-BinaryPath path by temporarily
-	// emptying $PATH.
-	t.Setenv("PATH", "")
-	p, err := NewPiperLocalTTS(PiperConfig{ModelPath: "/m.onnx"})
-	if err != nil {
-		t.Fatalf("NewPiperLocalTTS: %v", err)
+// §7.1 decision 4: no sandbox, or an image without piper, reports the
+// provider unavailable and never runs a host piper.
+func TestPiperLocalTTS_Synthesize_NotAvailableNeverRunsTheHost(t *testing.T) {
+	dir := t.TempDir()
+	marker := filepath.Join(dir, "ran")
+	for _, tool := range []string{"piper", "ffmpeg"} {
+		if err := os.WriteFile(filepath.Join(dir, tool), []byte("#!/bin/sh\ntouch '"+marker+"'\n"), 0o755); err != nil { //nolint:gosec // test fixture
+			t.Fatal(err)
+		}
 	}
-	_, gotErr := p.Synthesize(context.Background(), "hi", TTSOptions{})
-	if !errors.Is(gotErr, ErrProviderUnavailable) {
-		t.Errorf("err = %v, want ErrProviderUnavailable", gotErr)
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	p := newPiper(t, nil, PiperConfig{})
+	if _, err := p.Synthesize(context.Background(), "hello", TTSOptions{}); !errors.Is(err, ErrProviderUnavailable) || !errors.Is(err, sandboxtool.ErrNotAvailable) {
+		t.Fatalf("no sandbox: err = %v", err)
+	}
+	p = newPiper(t, piperTools{piperErr: sandboxtest.NotAvailable(sandboxtool.FeatureVoiceTTS)}.fake(t), PiperConfig{})
+	if _, err := p.Synthesize(context.Background(), "hello", TTSOptions{}); !errors.Is(err, ErrProviderUnavailable) {
+		t.Fatalf("undeclared piper: err = %v, want ErrProviderUnavailable", err)
+	}
+	p = newPiper(t, piperTools{wav: makeWAV(22050, 100), ffmpegErr: sandboxtest.NotAvailable(sandboxtool.FeatureVoiceTTS)}.fake(t), PiperConfig{})
+	if _, err := p.Synthesize(context.Background(), "hello", TTSOptions{Format: "ogg-opus"}); !errors.Is(err, ErrProviderUnavailable) {
+		t.Fatalf("undeclared ffmpeg: err = %v, want ErrProviderUnavailable", err)
+	}
+	if _, err := os.Stat(marker); err == nil {
+		t.Fatal("a host piper/ffmpeg ran")
 	}
 }
 
-func TestPiperLocalTTS_Synthesize_SubprocessNonZero(t *testing.T) {
-	p, _ := stubbedPiper(t, PiperConfig{
-		ModelPath:  "/m.onnx",
-		BinaryPath: "/usr/bin/piper",
-	}, []stubResp{
-		{stderr: []byte("Error: model not found\n"), err: errors.New("exit status 1")},
-	})
+func TestPiperLocalTTS_Synthesize_ToolFailureSurfaces(t *testing.T) {
+	p := newPiper(t, piperTools{piperErr: sandboxtest.Failed(sandboxtool.FeatureVoiceTTS, "Unable to load voice")}.fake(t), PiperConfig{})
 	_, err := p.Synthesize(context.Background(), "hello", TTSOptions{})
-	if err == nil {
-		t.Fatal("expected error")
-	}
-	if !strings.Contains(err.Error(), "piper exec failed") {
-		t.Errorf("err = %v, want it to mention 'piper exec failed'", err)
-	}
-	if !strings.Contains(err.Error(), "model not found") {
-		t.Errorf("err = %v, want it to surface stderr 'model not found'", err)
+	if err == nil || !strings.Contains(err.Error(), "Unable to load voice") {
+		t.Errorf("err = %v, want piper's message", err)
 	}
 }
 
 func TestPiperLocalTTS_Synthesize_EmptyOutput(t *testing.T) {
-	p, _ := stubbedPiper(t, PiperConfig{
-		ModelPath:  "/m.onnx",
-		BinaryPath: "/usr/bin/piper",
-	}, []stubResp{{}}) // empty stdout, no error
-	_, err := p.Synthesize(context.Background(), "hello", TTSOptions{})
-	if err == nil || !strings.Contains(err.Error(), "empty output") {
-		t.Errorf("err = %v, want empty-output message", err)
+	p := newPiper(t, piperTools{}.fake(t), PiperConfig{})
+	if _, err := p.Synthesize(context.Background(), "hello", TTSOptions{}); err == nil {
+		t.Error("expected error on missing output")
 	}
 }
 
 func TestPiperLocalTTS_Synthesize_NotAWAV(t *testing.T) {
-	p, _ := stubbedPiper(t, PiperConfig{
-		ModelPath:  "/m.onnx",
-		BinaryPath: "/usr/bin/piper",
-	}, []stubResp{{stdout: []byte("NOT-A-WAV-EVER")}})
-	_, err := p.Synthesize(context.Background(), "hello", TTSOptions{})
-	if err == nil || !strings.Contains(err.Error(), "WAV") {
-		t.Errorf("err = %v, want parse-WAV message", err)
+	p := newPiper(t, piperTools{wav: []byte("not a wav at all, definitely not RIFF, padded to be long enough")}.fake(t), PiperConfig{})
+	if _, err := p.Synthesize(context.Background(), "hello", TTSOptions{}); err == nil {
+		t.Error("expected WAV parse error")
 	}
 }
 
+// The run is the fixed voice_tts shape: the text rides stdin from a file,
+// never argv; the voice's DIRECTORY is mounted at /models.
 func TestPiperLocalTTS_Synthesize_WAVOutput(t *testing.T) {
 	wav := makeWAV(22050, 22050) // 1 second
-	p, calls := stubbedPiper(t, PiperConfig{
-		ModelPath:  "/m.onnx",
-		BinaryPath: "/usr/bin/piper",
-	}, []stubResp{{stdout: wav}})
-
-	audio, err := p.Synthesize(context.Background(), "hello world", TTSOptions{Format: "wav", Speed: 1.0})
+	sb := piperTools{wav: wav}.fake(t)
+	p := newPiper(t, sb, PiperConfig{ModelPath: "/var/lib/vornik/voice/en_US-lessac-low.onnx"})
+	out, err := p.Synthesize(context.Background(), "hello --model /etc/passwd", TTSOptions{})
 	if err != nil {
 		t.Fatalf("Synthesize: %v", err)
 	}
-	if audio.MimeType != "audio/wav" {
-		t.Errorf("MimeType = %q, want audio/wav", audio.MimeType)
+	if out.MimeType != "audio/wav" || out.SampleRateHz != 22050 || out.DurationMs != 1000 || len(out.Bytes) != len(wav) {
+		t.Errorf("audio = %+v", out)
 	}
-	if audio.SampleRateHz != 22050 {
-		t.Errorf("SampleRateHz = %d, want 22050", audio.SampleRateHz)
+	specs := sb.Specs()
+	if len(specs) != 1 {
+		t.Fatalf("wav needs no transcode run, got %d runs", len(specs))
 	}
-	if audio.DurationMs < 900 || audio.DurationMs > 1100 {
-		t.Errorf("DurationMs = %d, want ~1000", audio.DurationMs)
+	spec := specs[0]
+	if spec.Feature != sandboxtool.FeatureVoiceTTS || spec.Entrypoint != "piper" ||
+		spec.ModelDir != filepath.Dir(p.cfg.ModelPath) || spec.Stdin != "text" {
+		t.Fatalf("run = %+v", spec)
 	}
-	if len(*calls) != 1 {
-		t.Fatalf("calls = %d, want 1", len(*calls))
+	if got := strings.Join(spec.Args, " "); got != "--model /models/en_US-lessac-low.onnx --length_scale 1.0000 --output_file /out/speech.wav --quiet" {
+		t.Fatalf("argv = %q", got)
 	}
-	got := (*calls)[0]
-	if got.bin != "/usr/bin/piper" {
-		t.Errorf("bin = %q, want /usr/bin/piper", got.bin)
-	}
-	if !sliceContains(got.args, "--model", "/m.onnx") {
-		t.Errorf("args missing --model /m.onnx: %v", got.args)
-	}
-	if !sliceContains(got.args, "--length-scale", "1.0000") {
-		t.Errorf("args missing --length-scale 1.0000 (speed=1.0): %v", got.args)
-	}
-	if string(got.stdin) != "hello world" {
-		t.Errorf("stdin = %q, want %q", string(got.stdin), "hello world")
+	if len(spec.Inputs) != 1 || spec.Inputs[0].Name != "text" || string(spec.Inputs[0].Data) != "hello --model /etc/passwd" {
+		t.Fatalf("the text must ride stdin: %+v", spec.Inputs)
 	}
 }
 
 func TestPiperLocalTTS_Synthesize_SpeedPlumbing(t *testing.T) {
-	wav := makeWAV(22050, 22050)
-	cases := []struct {
-		name        string
-		speed       float64
-		wantScale   string
-		wantPresent bool
-	}{
-		{"natural", 1.0, "1.0000", true},
-		{"fast", 2.0, "0.5000", true},
-		{"slow", 0.5, "2.0000", true},
-		{"zero-falls-back-to-default", 0.0, "1.0000", true},
+	sb := piperTools{wav: makeWAV(22050, 100)}.fake(t)
+	p := newPiper(t, sb, PiperConfig{DefaultSpeed: 1.0})
+	if _, err := p.Synthesize(context.Background(), "hi", TTSOptions{Speed: 2.0}); err != nil {
+		t.Fatal(err)
 	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			p, calls := stubbedPiper(t, PiperConfig{
-				ModelPath:  "/m.onnx",
-				BinaryPath: "/p",
-			}, []stubResp{{stdout: wav}})
-			_, err := p.Synthesize(context.Background(), "hi", TTSOptions{Format: "wav", Speed: tc.speed})
+	if !sliceContains(sb.Specs()[0].Args, "--length_scale", "0.5000") {
+		t.Errorf("speed 2.0 must become length_scale 0.5: %v", sb.Specs()[0].Args)
+	}
+}
+
+// Telegram's Opus and Slack's AAC replies keep working: the transcode is a
+// second voice_tts run on piper's WAV.
+func TestPiperLocalTTS_Synthesize_Transcodes(t *testing.T) {
+	for _, tc := range []struct {
+		format, mime, output string
+		wantArgs             []string
+	}{
+		{"ogg-opus", "audio/ogg", "/out/reply.ogg", []string{"-c:a", "libopus", "-f", "ogg"}},
+		{"mp4-aac", "audio/mp4", "/out/reply.m4a", []string{"-c:a", "aac", "-f", "mp4"}},
+	} {
+		t.Run(tc.format, func(t *testing.T) {
+			sb := piperTools{wav: makeWAV(22050, 22050), ffmpegOut: []byte("ENCODED")}.fake(t)
+			p := newPiper(t, sb, PiperConfig{})
+			out, err := p.Synthesize(context.Background(), "hello", TTSOptions{Format: tc.format})
 			if err != nil {
 				t.Fatalf("Synthesize: %v", err)
 			}
-			if !sliceContains((*calls)[0].args, "--length-scale", tc.wantScale) {
-				t.Errorf("args missing --length-scale %s: %v", tc.wantScale, (*calls)[0].args)
+			if out.MimeType != tc.mime || string(out.Bytes) != "ENCODED" || out.DurationMs != 1000 {
+				t.Errorf("audio = %+v", out)
+			}
+			specs := sb.Specs()
+			if len(specs) != 2 {
+				t.Fatalf("want piper then ffmpeg, got %d runs", len(specs))
+			}
+			ff := specs[1]
+			if ff.Feature != sandboxtool.FeatureVoiceTTS || ff.Entrypoint != "ffmpeg" || ff.Args[len(ff.Args)-1] != tc.output {
+				t.Fatalf("transcode run = %+v", ff)
+			}
+			// The pids bound needs ffmpeg's threads capped (e2e, 2026-09-26).
+			if !sliceContains(ff.Args, "-threads", "2", "-filter_threads", "2") ||
+				!sliceContains(ff.Args, "-i", "/in/speech.wav", "-threads", "2") || !sliceContains(ff.Args, tc.wantArgs[0], tc.wantArgs[1]) ||
+				!sliceContains(ff.Args, tc.wantArgs[2], tc.wantArgs[3]) {
+				t.Fatalf("transcode argv = %v", ff.Args)
+			}
+			if len(ff.Inputs) != 1 || ff.Inputs[0].Name != "speech.wav" {
+				t.Fatalf("transcode input = %+v", ff.Inputs)
 			}
 		})
 	}
 }
 
-func TestPiperLocalTTS_Synthesize_OggOpus(t *testing.T) {
-	wav := makeWAV(22050, 22050)
-	oggBytes := []byte("OggS\x00\x02fake-ogg-payload")
-	p, calls := stubbedPiper(t, PiperConfig{
-		ModelPath:  "/m.onnx",
-		BinaryPath: "/p",
-		FFmpegPath: "/ffmpeg",
-	}, []stubResp{
-		{stdout: wav},      // piper call
-		{stdout: oggBytes}, // ffmpeg call
-	})
-	audio, err := p.Synthesize(context.Background(), "hi", TTSOptions{Format: "ogg-opus"})
-	if err != nil {
-		t.Fatalf("Synthesize: %v", err)
-	}
-	if audio.MimeType != "audio/ogg" {
-		t.Errorf("MimeType = %q, want audio/ogg", audio.MimeType)
-	}
-	if string(audio.Bytes) != string(oggBytes) {
-		t.Errorf("ogg bytes not propagated: got %q", audio.Bytes)
-	}
-	if len(*calls) != 2 {
-		t.Fatalf("calls = %d, want 2 (piper + ffmpeg)", len(*calls))
-	}
-	if (*calls)[1].bin != "/ffmpeg" {
-		t.Errorf("second call bin = %q, want /ffmpeg", (*calls)[1].bin)
-	}
-	if !sliceContains((*calls)[1].args, "libopus") {
-		t.Errorf("ffmpeg args missing libopus: %v", (*calls)[1].args)
-	}
-	// stdin of ffmpeg call should be the WAV bytes verbatim
-	if len((*calls)[1].stdin) != len(wav) {
-		t.Errorf("ffmpeg stdin len = %d, want WAV len %d", len((*calls)[1].stdin), len(wav))
-	}
-}
-
-func TestPiperLocalTTS_Synthesize_Mp4Aac(t *testing.T) {
-	wav := makeWAV(22050, 22050)
-	mp4Bytes := []byte("\x00\x00\x00\x20ftypiso5fake")
-	p, calls := stubbedPiper(t, PiperConfig{
-		ModelPath:  "/m.onnx",
-		BinaryPath: "/p",
-		FFmpegPath: "/ffmpeg",
-	}, []stubResp{
-		{stdout: wav},
-		{stdout: mp4Bytes},
-	})
-	audio, err := p.Synthesize(context.Background(), "hi", TTSOptions{Format: "mp4-aac"})
-	if err != nil {
-		t.Fatalf("Synthesize: %v", err)
-	}
-	if audio.MimeType != "audio/mp4" {
-		t.Errorf("MimeType = %q, want audio/mp4", audio.MimeType)
-	}
-	if !sliceContains((*calls)[1].args, "aac") {
-		t.Errorf("ffmpeg args missing aac: %v", (*calls)[1].args)
-	}
-}
-
 func TestPiperLocalTTS_Synthesize_UnknownFormat(t *testing.T) {
-	wav := makeWAV(22050, 22050)
-	p, _ := stubbedPiper(t, PiperConfig{
-		ModelPath:  "/m.onnx",
-		BinaryPath: "/p",
-	}, []stubResp{{stdout: wav}})
-	_, err := p.Synthesize(context.Background(), "hi", TTSOptions{Format: "flac"})
-	if err == nil || !strings.Contains(err.Error(), "unsupported format") {
-		t.Errorf("err = %v, want unsupported-format error", err)
+	p := newPiper(t, piperTools{wav: makeWAV(22050, 100)}.fake(t), PiperConfig{})
+	if _, err := p.Synthesize(context.Background(), "hi", TTSOptions{Format: "flac"}); err == nil {
+		t.Error("expected error on unknown format")
 	}
-}
-
-func TestPiperLocalTTS_Synthesize_FfmpegMissing(t *testing.T) {
-	wav := makeWAV(22050, 22050)
-	t.Setenv("PATH", "")
-	p, _ := stubbedPiper(t, PiperConfig{
-		ModelPath:  "/m.onnx",
-		BinaryPath: "/p",
-		// FFmpegPath empty + empty PATH → exec.LookPath fails
-	}, []stubResp{{stdout: wav}})
-	_, err := p.Synthesize(context.Background(), "hi", TTSOptions{Format: "ogg-opus"})
-	if !errors.Is(err, ErrProviderUnavailable) {
-		t.Errorf("err = %v, want ErrProviderUnavailable", err)
+	if _, err := p.transcode(context.Background(), "/x.wav", "flac"); err == nil {
+		t.Error("transcode must refuse an unknown format")
 	}
 }
 
 func TestPiperLocalTTS_Synthesize_FfmpegFails(t *testing.T) {
-	wav := makeWAV(22050, 22050)
-	p, _ := stubbedPiper(t, PiperConfig{
-		ModelPath:  "/m.onnx",
-		BinaryPath: "/p",
-		FFmpegPath: "/ffmpeg",
-	}, []stubResp{
-		{stdout: wav},
-		{stderr: []byte("Encoder libopus not found"), err: errors.New("exit status 1")},
-	})
+	p := newPiper(t, piperTools{wav: makeWAV(22050, 100), ffmpegErr: sandboxtest.Failed(sandboxtool.FeatureVoiceTTS, "Unknown encoder 'libopus'")}.fake(t), PiperConfig{})
 	_, err := p.Synthesize(context.Background(), "hi", TTSOptions{Format: "ogg-opus"})
-	if err == nil || !strings.Contains(err.Error(), "ffmpeg transcode failed") {
-		t.Errorf("err = %v, want ffmpeg transcode error", err)
+	if err == nil || !strings.Contains(err.Error(), "Unknown encoder") {
+		t.Errorf("err = %v, want ffmpeg's message", err)
 	}
 }
 
 func TestPiperLocalTTS_Synthesize_FfmpegEmptyOutput(t *testing.T) {
-	wav := makeWAV(22050, 22050)
-	p, _ := stubbedPiper(t, PiperConfig{
-		ModelPath:  "/m.onnx",
-		BinaryPath: "/p",
-		FFmpegPath: "/ffmpeg",
-	}, []stubResp{
-		{stdout: wav},
-		{}, // empty stdout, no error
-	})
-	_, err := p.Synthesize(context.Background(), "hi", TTSOptions{Format: "ogg-opus"})
-	if err == nil || !strings.Contains(err.Error(), "empty output") {
-		t.Errorf("err = %v, want empty-output error", err)
+	p := newPiper(t, piperTools{wav: makeWAV(22050, 100), ffmpegOut: []byte{}}.fake(t), PiperConfig{})
+	if _, err := p.Synthesize(context.Background(), "hi", TTSOptions{Format: "mp4-aac"}); err == nil {
+		t.Error("expected error on empty transcode output")
 	}
 }
 
 func TestParseWAV_TooShort(t *testing.T) {
 	if _, _, err := parseWAV([]byte("RIFF")); err == nil {
-		t.Errorf("expected error on truncated header")
+		t.Error("expected error on short input")
 	}
 }
 
 func TestParseWAV_BadMagic(t *testing.T) {
-	in := make([]byte, 44)
-	copy(in, []byte("NOTAWAVE0000WAVE"))
-	if _, _, err := parseWAV(in); err == nil {
-		t.Errorf("expected error on bad magic")
+	b := makeWAV(22050, 10)
+	copy(b[0:4], "XXXX")
+	if _, _, err := parseWAV(b); err == nil {
+		t.Error("expected error on bad RIFF magic")
 	}
 }
 
 func TestParseWAV_OK(t *testing.T) {
-	in := makeWAV(48000, 24000) // 0.5 s @ 48 kHz
-	sr, dur, err := parseWAV(in)
+	sr, dur, err := parseWAV(makeWAV(16000, 8000))
 	if err != nil {
 		t.Fatalf("parseWAV: %v", err)
 	}
-	if sr != 48000 {
-		t.Errorf("sampleRate = %d, want 48000", sr)
-	}
-	if dur < 480 || dur > 520 {
-		t.Errorf("durationMs = %d, want ~500", dur)
-	}
-}
-
-// TestRunRealCmd_RoundTrip exercises the production runRealCmd via
-// /bin/sh -c so we don't take a hard dep on the actual piper binary
-// in CI but still cover the exec.CommandContext path (stdin pipe,
-// stdout capture, non-zero exit). Skipped on non-Unix hosts where
-// /bin/sh isn't present.
-func TestRunRealCmd_RoundTrip(t *testing.T) {
-	if _, err := os.Stat("/bin/sh"); err != nil {
-		t.Skip("no /bin/sh available")
-	}
-	stdout, stderr, err := runRealCmd(context.Background(), "/bin/sh", []string{"-c", "cat"}, []byte("hello"))
-	if err != nil {
-		t.Fatalf("runRealCmd: %v (stderr=%s)", err, stderr)
-	}
-	if string(stdout) != "hello" {
-		t.Errorf("stdout = %q, want %q", stdout, "hello")
-	}
-}
-
-func TestRunRealCmd_NonZeroExit(t *testing.T) {
-	if _, err := os.Stat("/bin/sh"); err != nil {
-		t.Skip("no /bin/sh available")
-	}
-	_, stderr, err := runRealCmd(context.Background(), "/bin/sh", []string{"-c", "echo boom >&2; exit 7"}, nil)
-	if err == nil {
-		t.Fatalf("expected error on exit 7")
-	}
-	if !strings.Contains(string(stderr), "boom") {
-		t.Errorf("stderr = %q, want 'boom'", stderr)
-	}
-}
-
-func TestRunRealCmd_BinaryNotFound(t *testing.T) {
-	// Use an absolute path that can't exist so we don't depend on
-	// PATH ordering across CI environments. tmpdir + a clearly-fake
-	// name avoids any cleanup question.
-	tmp := t.TempDir()
-	missing := filepath.Join(tmp, "definitely-not-a-binary")
-	_, _, err := runRealCmd(context.Background(), missing, nil, nil)
-	if err == nil {
-		t.Fatal("expected error when binary missing")
+	if sr != 16000 || dur != 500 {
+		t.Errorf("sr=%d dur=%d, want 16000/500", sr, dur)
 	}
 }
 
@@ -461,27 +341,9 @@ func TestRunesIn(t *testing.T) {
 	}
 }
 
-func TestTrimSpaces(t *testing.T) {
-	if got := trimSpaces("  hello   world  \n\t"); got != "hello world" {
-		t.Errorf("trimSpaces = %q, want %q", got, "hello world")
-	}
-}
-
-// sliceContains reports whether `args` contains `flag` immediately
-// followed by `value`. Used to assert on subprocess argv shape.
+// sliceContains reports whether `args` contains the pair in sequence.
 func sliceContains(args []string, pair ...string) bool {
-	if len(pair) == 0 {
-		return false
-	}
-	if len(pair) == 1 {
-		for _, a := range args {
-			if a == pair[0] {
-				return true
-			}
-		}
-		return false
-	}
-	for i := 0; i < len(args)-len(pair)+1; i++ {
+	for i := 0; i+len(pair) <= len(args); i++ {
 		ok := true
 		for j, p := range pair {
 			if args[i+j] != p {
@@ -496,5 +358,51 @@ func sliceContains(args []string, pair ...string) bool {
 	return false
 }
 
-// keep io referenced — parseWAV's io use may evolve.
-var _ = io.Discard
+// modelFile writes an empty model file named after path's base into a temp
+// directory: the providers pre-flight their model on every call (process-spawn
+// law S5b review residual R4), so a test's model has to exist.
+func modelFile(t *testing.T, path string) string {
+	t.Helper()
+	p := filepath.Join(t.TempDir(), filepath.Base(path))
+	if err := os.WriteFile(p, []byte("model"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return p
+}
+
+// S5b review residual R4 (review-20260926-c245 F2): piper did not pre-flight
+// its model per call, unlike the audio extractor, so a voice model removed
+// after startup failed as an opaque podman mount error. Now it is
+// ErrProviderUnavailable naming the file, and no container starts.
+func TestVoiceProviders_AMissingModelIsUnavailableAndStartsNothing(t *testing.T) {
+	sb := piperTools{wav: makeWAV(22050, 100)}.fake(t)
+	p := newPiper(t, sb, PiperConfig{})
+	gone := p.cfg.ModelPath
+	if err := os.Remove(gone); err != nil {
+		t.Fatal(err)
+	}
+	_, err := p.Synthesize(context.Background(), "hello", TTSOptions{})
+	if !errors.Is(err, ErrProviderUnavailable) || !strings.Contains(err.Error(), gone) {
+		t.Fatalf("piper with its model gone: want ErrProviderUnavailable naming %s, got %v", gone, err)
+	}
+	if n := len(sb.Specs()); n != 0 {
+		t.Fatalf("a missing model must start no container, got %d runs", n)
+	}
+
+	wsb := whisperTools{wav: makeWAV(16000, 100), transcript: helloJSON}.fake(t)
+	w := newWhisper(t, wsb, WhisperConfig{})
+	dir := w.(*whisperLocalSTT).cfg.ModelPath
+	if err := os.Remove(dir); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(dir, 0o700); err != nil { // a directory where the file was
+		t.Fatal(err)
+	}
+	_, err = w.Transcribe(context.Background(), strings.NewReader("OggS"), Hint{})
+	if !errors.Is(err, ErrProviderUnavailable) || !strings.Contains(err.Error(), dir) {
+		t.Fatalf("whisper with a directory for a model: want ErrProviderUnavailable naming %s, got %v", dir, err)
+	}
+	if n := len(wsb.Specs()); n != 0 {
+		t.Fatalf("a missing model must start no container, got %d runs", n)
+	}
+}

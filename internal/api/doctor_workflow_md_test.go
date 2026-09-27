@@ -55,8 +55,8 @@ func writeWorkflowDir(t *testing.T, files map[string]string) string {
 func TestCheckWorkflowMDShape_NoConfigDir(t *testing.T) {
 	h := &DoctorHandlers{}
 	check := h.checkWorkflowMDShape()
-	if check.Status != "OK" {
-		t.Fatalf("no configDir → OK; got %s (%s)", check.Status, check.Message)
+	if check.Status != "SKIPPED" {
+		t.Fatalf("no configDir → SKIPPED (nothing examined); got %s (%s)", check.Status, check.Message)
 	}
 }
 
@@ -64,8 +64,20 @@ func TestCheckWorkflowMDShape_NoWorkflowsDir(t *testing.T) {
 	// configDir exists, but no workflows/ subdir under it.
 	h := &DoctorHandlers{configDir: t.TempDir()}
 	check := h.checkWorkflowMDShape()
-	if check.Status != "OK" {
-		t.Fatalf("missing workflows dir → OK; got %s (%s)", check.Status, check.Message)
+	if check.Status != "SKIPPED" {
+		t.Fatalf("missing workflows dir → SKIPPED (nothing examined); got %s (%s)", check.Status, check.Message)
+	}
+}
+
+// An empty workflows/ directory examined nothing either.
+func TestCheckWorkflowMDShape_EmptyWorkflowsDirIsSkipped(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(dir, "workflows"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	h := &DoctorHandlers{configDir: dir}
+	if check := h.checkWorkflowMDShape(); check.Status != "SKIPPED" {
+		t.Fatalf("empty workflows dir → SKIPPED; got %s (%s)", check.Status, check.Message)
 	}
 }
 

@@ -128,6 +128,16 @@ them to `mcp__vornik__delegate` as `inputArtifacts`:
 If a workflow advertises `require_input_artifacts=true` in `catalog`, a
 delegation without `inputArtifacts` is invalid. Stage the bytes first.
 
+**Re-ingesting a document.** For `companion-rag-ingest`, give each input
+artifact a `path`: the file's path relative to the top of the git repository
+that holds it, exactly as git reports it (`git -C <file's dir> rev-parse
+--show-prefix` plus the file name), ending in the artifact's `name`. The path is
+the document's identity: re-ingesting the same path in the same `repo_scope`
+supersedes the earlier versions, so RAG serves only the newest. Take the
+`repo_scope` from the FILE's repository (`git -C <file's dir> config --get
+remote.origin.url`), not from your working directory, and send one repository's
+files per call. A file outside any repository gets no `path`.
+
 You do NOT need to set `skip_auto_extract` for those workflows. The daemon
 derives it from `require_input_artifacts` and forces it on, because a workflow
 that reads a staged file must not have that file auto-extracted into RAG at

@@ -11,6 +11,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"vornik.io/vornik/internal/projectdeps"
 
 	"vornik.io/vornik/internal/budget"
 	"vornik.io/vornik/internal/chat"
@@ -245,6 +246,14 @@ func refineAgentFailureOutcomeErr(err error) (stepoutcome.Outcome, string) {
 	if errors.As(err, &refusal) {
 		return refusal.outcome(), refusal.class
 	}
+	// The agent's mount preflight failed: it returns a dedicated exit code
+	// before it runs anything, because the cause (Permission denied on its own
+	// mounts) exists only in the log, and that log also says "LLM call failed"
+	// — read as text it would be misfiled. The code is the signal.
+	// Unclassified-step-outcome design §11; after the two arms above, pinned.
+	if code := containerExitCodeFromError(err); code != nil && *code == stepoutcome.AgentExitMountUnusable {
+		return stepoutcome.Failed, stepoutcome.ClassAgentMountUnusable
+	}
 	return refineAgentFailureOutcome(errorBeforeLogTail(err.Error()))
 }
 
@@ -285,6 +294,103 @@ func refineAgentFailureOutcome(detail string) (stepoutcome.Outcome, string) {
 	default:
 		return stepoutcome.Failed, stepoutcome.ClassUnclassified
 	}
+}
+
+// agentStops is the stop the agent recorded in result.json (agentOutcome),
+// parsed before the step-outcome pipeline runs. At most one is set in
+// practice; the order below is the one the recorder has always used.
+type agentStops struct {
+	tripwire, iterationCap, promptBudget string
+}
+
+// agentStopOutcome returns the outcome and class of the agent's recorded stop:
+// the project budget tripwire (it bailed before the next call would breach
+// the envelope), the tool-iteration cap, or the per-step prompt-token budget.
+func agentStopOutcome(s agentStops) (stepoutcome.Outcome, string, bool) {
+	switch {
+	case s.tripwire != "":
+		return stepoutcome.BudgetTripwire, stepoutcome.ClassBudgetTripwire, true
+	case s.iterationCap != "":
+		return stepoutcome.IterationExhausted, stepoutcome.ClassIterationCap, true
+	case s.promptBudget != "":
+		return stepoutcome.PromptTokenBudget, stepoutcome.ClassPromptTokenBudget, true
+	}
+	return "", "", false
+}
+
+// detail is the recorded stop's own text, in agentStopOutcome's order.
+func (s agentStops) detail() string {
+	switch {
+	case s.tripwire != "":
+		return s.tripwire
+	case s.iterationCap != "":
+		return s.iterationCap
+	}
+	return s.promptBudget
+}
+
+// failedStepOutcome classifies a step that failed with err. It covers the
+// four fixed arms (timeout, cancelled, schema_violation, parse_error) exactly
+// as before; the agent's recorded stop is consulted only in the fifth, when
+// the refiner cannot name the failure. The hallucination override is applied
+// by the caller afterwards and still wins, and with the outcome kept at
+// failed the pair stays consistent.
+//
+// Unclassified-step-outcome design §12 (2026-09-24): when the refiner cannot
+// name the failure but the agent recorded a stop — it ran out of its
+// prompt-token budget, tool iterations or cost envelope before writing its
+// declared output — the stop IS the cause. It is read from the typed field
+// the agent wrote, never from the refusal's sentence. A failure the refiner
+// does name keeps that name; a budget stop does not explain it.
+func failedStepOutcome(ctx context.Context, err error, stops agentStops) (string, string) {
+	switch classifyStepOutcome(ctx, err) {
+	case "timeout":
+		// A named cause outranks the wall clock; see timeoutOutcomeAndClass.
+		return timeoutOutcomeAndClass(err)
+	case "cancelled":
+		return string(stepoutcome.Cancelled), stepoutcome.ClassContextCancelled
+	case "schema_violation":
+		return string(stepoutcome.SchemaViolation), stepoutcome.ClassVerifyFailed
+	case "parse_error":
+		return string(stepoutcome.ParseError), stepoutcome.ClassVerifyFailed
+	}
+	// The agent names its own cause in result.json, and that text reaches us
+	// in err. Recover it rather than recording only "the container exited
+	// non-zero" — the whole 2026-08-16 long-horizon arm was one
+	// indistinguishable bucket because this was thrown away.
+	refinedOutcome, refinedClass := refineAgentFailureOutcomeErr(err)
+	if refinedClass == stepoutcome.ClassUnclassified {
+		// The OUTCOME stays failed: the step did fail. Only the class names the
+		// stop. On the success branch the stop's own outcome literal means
+		// "stopped early but produced output and the workflow continues";
+		// reusing it here would give one literal two meanings (review 1a18 F1).
+		if _, c, ok := agentStopOutcome(stops); ok {
+			return string(stepoutcome.Failed), c
+		}
+	}
+	return string(refinedOutcome), refinedClass
+}
+
+// failedStepRecord is everything the outcome recorder writes for a step that
+// failed with err: the classification, then the hallucination override, then
+// the detail. One function so the precedence — a named refiner class or fixed
+// arm, then the hallucination override, then the agent's recorded stop, then
+// unclassified — is testable as a whole (unclassified-step-outcome design §12,
+// review cbb7 F1).
+//
+// Hallucination-driven failures get a distinct class so the dashboard groups
+// them apart from generic failures. The detector populates hallucinationDetail
+// in tandem with err, so this fires only when it chose to fail the step; it
+// wins over every arm, and it changes the CLASS only — the outcome is the
+// classification's, so the pair stays consistent.
+func failedStepRecord(ctx context.Context, err error, stops agentStops, hallucinationDetail string) (outcome, class, detail string) {
+	outcome, class = failedStepOutcome(ctx, err, stops)
+	detail = err.Error()
+	if hallucinationDetail != "" {
+		class = stepoutcome.ClassHallucinated
+		detail = hallucinationDetail
+	}
+	return outcome, class, detail
 }
 
 // timeoutOutcomeAndClass decides the (outcome, errClass) pair for a step whose
@@ -414,49 +520,16 @@ func (e *Executor) executeAgentStep(ctx context.Context, task *persistence.Task,
 		// pending_validation (or degenerate_loop when the detector
 		// fired). Failure paths write the terminal outcome directly.
 		// recordStepOutcome emits the Prometheus event for terminal
-		// outcomes — we deliberately don't call RecordAgentStepOutcome
-		// here because that would double-count the counter once
-		// finalizePendingOutcome fires on the consumer side.
+		// outcomes (through RecordFinalOutcome, the counters' only
+		// emitter) — nothing is emitted here, because that would
+		// double-count once finalizePendingOutcome fires on the consumer
+		// side.
 		outcome := string(stepoutcome.PendingValidation)
 		errClass := ""
 		errDetail := ""
+		stops := agentStops{tripwire: budgetTripwireDetail, iterationCap: iterationCapDetail, promptBudget: promptTokenBudgetDetail}
 		if err != nil {
-			switch classifyStepOutcome(ctx, err) {
-			case "timeout":
-				// A named cause outranks the wall clock; see
-				// timeoutOutcomeAndClass.
-				outcome, errClass = timeoutOutcomeAndClass(err)
-			case "cancelled":
-				outcome = string(stepoutcome.Cancelled)
-				errClass = stepoutcome.ClassContextCancelled
-			case "schema_violation":
-				outcome = string(stepoutcome.SchemaViolation)
-				errClass = stepoutcome.ClassVerifyFailed
-			case "parse_error":
-				outcome = string(stepoutcome.ParseError)
-				errClass = stepoutcome.ClassVerifyFailed
-			default:
-				// The agent names its own cause in result.json, and that
-				// text reaches us in err. Recover it rather than recording
-				// only "the container exited non-zero" — the whole
-				// 2026-08-16 long-horizon arm was one indistinguishable
-				// bucket because this was thrown away. Falls back to
-				// Failed/container_non_zero_exit for anything unrecognised,
-				// so the change is additive.
-				refinedOutcome, refinedClass := refineAgentFailureOutcomeErr(err)
-				outcome = string(refinedOutcome)
-				errClass = refinedClass
-			}
-			errDetail = err.Error()
-			// Hallucination-driven failures get a distinct error class
-			// so the dashboard can group them apart from generic
-			// container failures. The detector populates
-			// hallucinationDetail in tandem with err so this branch
-			// fires only when the detector chose to fail the step.
-			if hallucinationDetail != "" {
-				errClass = stepoutcome.ClassHallucinated
-				errDetail = hallucinationDetail
-			}
+			outcome, errClass, errDetail = failedStepRecord(ctx, err, stops, hallucinationDetail)
 		} else if degenerateLoopDetail != "" {
 			// Container exit was clean but the tool loop got stuck in a
 			// repeated call pattern. Quality failure of the step itself —
@@ -464,31 +537,12 @@ func (e *Executor) executeAgentStep(ctx context.Context, task *persistence.Task,
 			outcome = string(stepoutcome.DegenerateLoop)
 			errClass = stepoutcome.ClassDegenerateLoop
 			errDetail = degenerateLoopDetail
-		} else if budgetTripwireDetail != "" {
-			// Agent voluntarily bailed before its next LLM call would
-			// have breached the project's remaining budget envelope.
-			// Step exit was clean (status=COMPLETED in result.json) so
-			// the workflow doesn't take an OnFail transition — but the
-			// quality signal must reflect that this wasn't usable
-			// output, just an early stop. Operators see budget_tripwire
-			// rows on the dashboard and know to either widen the cap
-			// or break the work into smaller tasks.
-			outcome = string(stepoutcome.BudgetTripwire)
-			errClass = stepoutcome.ClassBudgetTripwire
-			errDetail = budgetTripwireDetail
-		} else if iterationCapDetail != "" {
-			outcome = string(stepoutcome.IterationExhausted)
-			errClass = stepoutcome.ClassIterationCap
-			errDetail = iterationCapDetail
-		} else if promptTokenBudgetDetail != "" {
-			// Agent voluntarily stopped the tool loop before prompt
-			// replay crossed the configured per-step token ceiling.
-			// The wrapper already made one tool-free finalization call,
-			// so the workflow may continue, but metrics should not
-			// count it as an unconstrained OK.
-			outcome = string(stepoutcome.PromptTokenBudget)
-			errClass = stepoutcome.ClassPromptTokenBudget
-			errDetail = promptTokenBudgetDetail
+		} else if o, c, ok := agentStopOutcome(stops); ok {
+			// The agent stopped early on its own ceiling — a cost budget
+			// tripwire, the tool-iteration cap, or the prompt-token budget —
+			// with a clean exit, so the workflow does not take on_fail; but
+			// the quality signal must not count it as an unconstrained OK.
+			outcome, errClass, errDetail = string(o), c, stops.detail()
 		}
 		durMS := time.Since(stepStartedAt).Milliseconds()
 		// Carry the container's exit status onto the row. nil when the step
@@ -646,6 +700,12 @@ func (e *Executor) executeAgentStep(ctx context.Context, task *persistence.Task,
 	// the block told every role to call a tool most of them were forbidden, and
 	// they obediently tried (§12.6a of the agent-quality design).
 	opts.ToolGrantAvailable = e.toolGrantsWired && RoleMayGrantTools(plan.swarm, step.Role)
+	// Set on the same one path, for the same reason: the attached-files block
+	// must not name document tools this step's role cannot call (§4.2a).
+	if plan != nil {
+		canOpenExtractions, _ := extractionAccess(plan.swarm, step.Role)
+		opts.RoleCannotOpenExtractions = !canOpenExtractions
+	}
 	// Workspace-git guidance is injected only when the project really is a
 	// worktree — exactly the predicate startContainer uses to decide whether to
 	// bind-mount the main .git read-only, so the block can never describe a
@@ -897,7 +957,14 @@ func (e *Executor) executeAgentStep(ctx context.Context, task *persistence.Task,
 		// drift (incident 2026-06-13: only the warm path was wired, so ephemeral
 		// agents hit "gh: not logged into any GitHub hosts").
 		e.injectGitHubToken(ctx, extraEnv, plan.project)
-		containerID, err = e.startContainer(ctx, task, execution.ID, roleConfig.Runtime.Image, step.Role, inputDir, outputDir, workspaceDir, roleConfig, plan.worktreeDir, timeout, extraEnv)
+		// Dependency mounts are resolved HERE, not inside startContainer, so a
+		// refusal (not installed, installed for another image) fails the step
+		// without being marked retryable: retrying cannot install anything.
+		depMounts, depErr := e.dependencyMounts(task, plan, roleConfig.Runtime.Image)
+		if depErr != nil {
+			return "", nil, fmt.Errorf("project dependencies: %w", depErr)
+		}
+		containerID, err = e.startContainer(ctx, task, execution.ID, roleConfig.Runtime.Image, step.Role, inputDir, outputDir, workspaceDir, roleConfig, plan.worktreeDir, timeout, extraEnv, depMounts)
 		if err != nil {
 			return "", nil, markRetryable(fmt.Errorf("failed to start container: %w", err))
 		}
@@ -1780,8 +1847,18 @@ func (e *Executor) runHallucinationDetector(ctx context.Context, task *persisten
 	return signalBlob, detail, errors.New(detail)
 }
 
+// errWarmIneligible sends a step to the ephemeral path.
+var errWarmIneligible = errors.New("warm pool: step is not eligible for a pre-started container")
+
 // executeWarmAgentStep runs a task on a warm container from the pool.
 func (e *Executor) executeWarmAgentStep(ctx context.Context, task *persistence.Task, execution *persistence.Execution, plan *executionPlan, stepID string, roleConfig *registry.SwarmRole, inputData []byte, workspaceDir string, timeout time.Duration, stepStart time.Time, preStepArtifactSnapshot ArtifactDirSnapshot) (string, []byte, error) {
+	// A warm container is started before its task, so it cannot carry the
+	// project's dependency mounts: a project that declares dependencies runs
+	// its warm roles on the ephemeral path (dependency provisioning §8.2).
+	// The caller falls through to the ephemeral container on any error.
+	if planDeclaresDependencies(plan) {
+		return "", nil, errWarmIneligible
+	}
 	key := runtime.PoolKey{
 		ProjectID: task.ProjectID,
 		Role:      roleConfig.Name,
@@ -2018,125 +2095,18 @@ func (e *Executor) executeWarmAgentStep(ctx context.Context, task *persistence.T
 // of the default path derived from ProjectWorkspacePath — used for worktree isolation.
 // extraEnv, when non-nil, is merged into envVars after all other env building so
 // caller-supplied values (e.g. the minted per-task VORNIK_API_KEY) win over defaults.
-func (e *Executor) startContainer(ctx context.Context, task *persistence.Task, executionID, image, role, inputDir, outputDir, workspaceDir string, roleConfig *registry.SwarmRole, projectDirOverride string, timeout time.Duration, extraEnv map[string]string) (string, error) {
-	roleEnvVars := roleConfig.Runtime.EnvVars
-	// Build env vars: start with LLM config, then merge role-specific overrides.
-	envVars := make(map[string]string, len(e.config.AgentLLMEnv)+len(roleEnvVars)+4)
-	for k, v := range e.config.AgentLLMEnv {
-		envVars[k] = v
-	}
-	for k, v := range roleEnvVars {
-		envVars[k] = v
-	}
-	// Project-scoped named secrets (per-secret allowlist): inject only the
-	// operator-declared credentials this project is allowed to bind. Placed
-	// after role envVars so an authorized secret wins over a same-named role
-	// literal; the minted per-task key (extraEnv) still wins over everything.
-	for k, v := range e.namedSecretEnv(task.ProjectID) {
-		envVars[k] = v
-	}
-	// Effective model: operator override > counterfactual > role.model > role
-	// envVars > global (effectiveRoleModelForTask — the SAME resolution used for
-	// metrics/usage, so the launched model and the recorded model can't drift).
-	// Fixes operator_model_override (Fallback-model button / model:fallback hint /
-	// recovery model_fallback action) never reaching VORNIK_LLM_MODEL (2026-06-20).
-	if m := e.effectiveRoleModelForTask(task, roleConfig); m != "" {
-		envVars["VORNIK_LLM_MODEL"] = m
-	}
-	// Apply model-specific limits for the effective model — regardless of whether the
-	// model came from role.model, runtime.envVars, or the global agent_llm config.
-	if effectiveModel := envVars["VORNIK_LLM_MODEL"]; effectiveModel != "" {
-		if limit, ok := e.config.ModelLimits[effectiveModel]; ok {
-			if limit.MaxTokens > 0 {
-				envVars["VORNIK_LLM_MAX_TOKENS"] = strconv.Itoa(limit.MaxTokens)
-			}
-			if limit.ContextSize > 0 {
-				envVars["VORNIK_LLM_CONTEXT_SIZE"] = strconv.Itoa(limit.ContextSize)
-			}
-		}
-	}
-	// Role-level explicit token overrides win over model limits.
-	if roleConfig.MaxTokens > 0 {
-		envVars["VORNIK_LLM_MAX_TOKENS"] = strconv.Itoa(roleConfig.MaxTokens)
-	}
-	if roleConfig.ContextSize > 0 {
-		envVars["VORNIK_LLM_CONTEXT_SIZE"] = strconv.Itoa(roleConfig.ContextSize)
-	}
-	// Counterfactual budget — tighten max_tokens for replays.
-	// Mirrors the warm-pool path above; same LOWERS-only rule.
-	if cfBudget := counterfactual.ExtractPayload(task.Payload).Budget; cfBudget.MaxTokens > 0 {
-		current, _ := strconv.Atoi(envVars["VORNIK_LLM_MAX_TOKENS"])
-		if current == 0 || cfBudget.MaxTokens < current {
-			envVars["VORNIK_LLM_MAX_TOKENS"] = strconv.Itoa(cfBudget.MaxTokens)
-		}
-	}
-	if e.config.LogLevel != "" {
-		envVars["VORNIK_LOG_LEVEL"] = e.config.LogLevel
-	}
-	// Per-task project scope for mcp-bridge's daemon-proxy mode. Without
-	// this, the bridge can't tell which project's MCP tools to ask the
-	// daemon for — the project is the security boundary here, not the
-	// task. Combined with VORNIK_API_URL (set container-wide in service
-	// init), this enables agent containers to use MCP tools without
-	// spawning their own subprocesses.
-	if task.ProjectID != "" {
-		envVars["VORNIK_PROJECT_ID"] = task.ProjectID
-	}
-	if task.ID != "" {
-		envVars["VORNIK_TASK_ID"] = task.ID
-	}
-	if executionID != "" {
-		envVars["VORNIK_EXECUTION_ID"] = executionID
-	}
-	// Cold-start env-stamp for creation_source + user-context-path.
-	// Mirrors the warm-path roleEnv block above so role
-	// systemPrompts can branch on VORNIK_TASK_CREATION_SOURCE +
-	// VORNIK_USER_CONTEXT_PATH regardless of whether the agent
-	// container was spun up cold or recycled from the warm pool.
-	if task.CreationSource != "" {
-		envVars["VORNIK_TASK_CREATION_SOURCE"] = string(task.CreationSource)
-	}
-	if task.CreationSource == persistence.TaskCreationSourceUser && e.workflows != nil {
-		if proj := e.workflows.GetProject(task.ProjectID); proj != nil {
-			if userCtx := proj.ResolveUserContextFilePath(); userCtx != "" {
-				envVars["VORNIK_USER_CONTEXT_PATH"] = userCtx
-			}
-		}
-	}
-	injectCostEnv(envVars, e.pricing, envVars["VORNIK_LLM_MODEL"])
-	// Snapshot the project's remaining budget for the agent's in-loop
-	// tripwire. Cold-start path resolves the project through the
-	// workflow resolver since startContainer doesn't carry the plan.
-	// A nil resolver (some test paths) silently skips — same as a
-	// project with no caps.
-	if e.workflows != nil {
-		if proj := e.workflows.GetProject(task.ProjectID); proj != nil {
-			if _, err := injectBudgetEnv(ctx, envVars, e.llmUsageRepo, proj, time.Now().UTC()); err != nil {
-				e.logger.Warn().
-					Err(err).
-					Str("project_id", task.ProjectID).
-					Str("execution_id", executionID).
-					Msg("budget snapshot failed — agent will run without remaining-budget hints")
-			}
-		}
-	}
+func (e *Executor) startContainer(ctx context.Context, task *persistence.Task, executionID, image, role, inputDir, outputDir, workspaceDir string, roleConfig *registry.SwarmRole, projectDirOverride string, timeout time.Duration, extraEnv map[string]string, depMounts []projectdeps.Mount) (string, error) {
+	envVars := e.agentEnv(ctx, task, executionID, roleConfig, extraEnv)
 
-	// Apply caller-supplied env overrides last so they win over every
-	// default built above. The primary use is the minted per-task
-	// VORNIK_API_KEY passed in from executeAgentStep where the paired
-	// defer revokeTaskKey was already registered.
-	for k, v := range extraEnv {
-		envVars[k] = v
-	}
-
-	// Resolve the project directory mounted into the container.
-	// A worktree override takes precedence over the default per-project path.
-	var projectDir string
-	if projectDirOverride != "" {
+	// The project directory mounted into the container is the task's
+	// worktree and nothing else. There is no shared mode (process-spawn law
+	// S6-D1): runExecution gives every task with a project a worktree or fails
+	// it WORKSPACE_UNAVAILABLE, so an empty override means the task has no
+	// project workspace and gets no /app/workspace/project mount. The project
+	// root, .git and all, is never mounted read-write.
+	projectDir := ""
+	if projectRootFromWorktree(projectDirOverride) != "" {
 		projectDir = projectDirOverride
-	} else if e.config.ProjectWorkspacePath != "" {
-		projectDir = filepath.Join(e.config.ProjectWorkspacePath, task.ProjectID)
-		_ = os.MkdirAll(projectDir, 0o755)
 	}
 
 	modelSource := "global"
@@ -2181,6 +2151,8 @@ func (e *Executor) startContainer(ctx context.Context, task *persistence.Task, e
 		// preserves the permissive default; roles opt into stricter
 		// modes via runtime.network in their swarm config.
 		Network: runtime.NetworkMode(roleConfig.Runtime.Network),
+		// Read-only project dependency trees (dependency provisioning §8.2).
+		DependencyMounts: depMounts,
 	}
 
 	// Start the container - runtime will handle its own tracing
@@ -2787,4 +2759,164 @@ func capContainerLog(logs string) string {
 	}
 	return fmt.Sprintf("[... %d bytes truncated; showing the last %d bytes ...]\n%s",
 		len(logs)-len(tail), len(tail), tail)
+}
+
+// projectDirFor is the project directory mounted into an agent container: the
+// worktree override when there is one, else the per-project workspace.
+func (e *Executor) projectDirFor(task *persistence.Task, override string) string {
+	if override != "" {
+		return override
+	}
+	if e.config.ProjectWorkspacePath != "" {
+		return filepath.Join(e.config.ProjectWorkspacePath, task.ProjectID)
+	}
+	return ""
+}
+
+func planDeclaresDependencies(plan *executionPlan) bool {
+	return plan != nil && plan.project != nil && len(plan.project.Dependencies) > 0
+}
+
+// dependencyMounts returns the project's installed dependency trees for this
+// step's image, READ-ONLY (project dependency provisioning design §8.2): the
+// daemon never installs. The lockfiles are read from the directory the
+// container will mount, so the key is over the bytes the agent sees. A project
+// with no manifest gets no mounts; one whose trees are not installed, or were
+// installed for other images, refuses with the `vornikctl deps install`
+// remedy.
+func (e *Executor) dependencyMounts(task *persistence.Task, plan *executionPlan, image string) ([]projectdeps.Mount, error) {
+	if !planDeclaresDependencies(plan) {
+		return nil, nil
+	}
+	if e.config.DependencyCacheDir == "" {
+		return nil, fmt.Errorf("project %s declares dependencies but no dependency cache is configured (runtime.dependency_cache_path)", task.ProjectID)
+	}
+	resolver := projectdeps.NewResolver(projectdeps.NewStore(e.config.DependencyCacheDir), "")
+	plans := resolver.Plan(e.projectDirFor(task, plan.worktreeDir), plan.project.Dependencies)
+	return resolver.Mounts(task.ProjectID, plans, image)
+}
+
+// applyTokenLimits sets the agent's token limits, in precedence order: the
+// effective model's configured limits (whichever source chose the model),
+// then the role's explicit overrides, then a counterfactual budget, which may
+// only LOWER max_tokens (mirroring the warm-pool path).
+func (e *Executor) applyTokenLimits(envVars map[string]string, task *persistence.Task, roleConfig *registry.SwarmRole) {
+	if effectiveModel := envVars["VORNIK_LLM_MODEL"]; effectiveModel != "" {
+		if limit, ok := e.config.ModelLimits[effectiveModel]; ok {
+			if limit.MaxTokens > 0 {
+				envVars["VORNIK_LLM_MAX_TOKENS"] = strconv.Itoa(limit.MaxTokens)
+			}
+			if limit.ContextSize > 0 {
+				envVars["VORNIK_LLM_CONTEXT_SIZE"] = strconv.Itoa(limit.ContextSize)
+			}
+		}
+	}
+	if roleConfig.MaxTokens > 0 {
+		envVars["VORNIK_LLM_MAX_TOKENS"] = strconv.Itoa(roleConfig.MaxTokens)
+	}
+	if roleConfig.ContextSize > 0 {
+		envVars["VORNIK_LLM_CONTEXT_SIZE"] = strconv.Itoa(roleConfig.ContextSize)
+	}
+	if cfBudget := counterfactual.ExtractPayload(task.Payload).Budget; cfBudget.MaxTokens > 0 {
+		current, _ := strconv.Atoi(envVars["VORNIK_LLM_MAX_TOKENS"])
+		if current == 0 || cfBudget.MaxTokens < current {
+			envVars["VORNIK_LLM_MAX_TOKENS"] = strconv.Itoa(cfBudget.MaxTokens)
+		}
+	}
+}
+
+// applyProjectEnv adds the project-derived agent env: the user-context path
+// for a user-created task, and a snapshot of the project's remaining budget
+// for the agent's in-loop tripwire. The cold-start path resolves the project
+// through the workflow resolver since startContainer doesn't carry the plan;
+// a nil resolver (some test paths) skips both, as for a project with no caps.
+func (e *Executor) applyProjectEnv(ctx context.Context, envVars map[string]string, task *persistence.Task, executionID string) {
+	if e.workflows == nil {
+		return
+	}
+	proj := e.workflows.GetProject(task.ProjectID)
+	if proj == nil {
+		return
+	}
+	if task.CreationSource == persistence.TaskCreationSourceUser {
+		if userCtx := proj.ResolveUserContextFilePath(); userCtx != "" {
+			envVars["VORNIK_USER_CONTEXT_PATH"] = userCtx
+		}
+	}
+	if _, err := injectBudgetEnv(ctx, envVars, e.llmUsageRepo, proj, time.Now().UTC()); err != nil {
+		e.logger.Warn().
+			Err(err).
+			Str("project_id", task.ProjectID).
+			Str("execution_id", executionID).
+			Msg("budget snapshot failed — agent will run without remaining-budget hints")
+	}
+}
+
+// agentEnv builds an ephemeral agent container's environment: the LLM config,
+// role overrides, the project's authorised secrets, the effective model and
+// its token limits, task identity, project context and budget, and finally the
+// caller's overrides (the minted per-task key), which win over everything.
+func (e *Executor) agentEnv(ctx context.Context, task *persistence.Task, executionID string, roleConfig *registry.SwarmRole, extraEnv map[string]string) map[string]string {
+	roleEnvVars := roleConfig.Runtime.EnvVars
+	// Build env vars: start with LLM config, then merge role-specific overrides.
+	envVars := make(map[string]string, len(e.config.AgentLLMEnv)+len(roleEnvVars)+4)
+	for k, v := range e.config.AgentLLMEnv {
+		envVars[k] = v
+	}
+	for k, v := range roleEnvVars {
+		envVars[k] = v
+	}
+	// Project-scoped named secrets (per-secret allowlist): inject only the
+	// operator-declared credentials this project is allowed to bind. Placed
+	// after role envVars so an authorized secret wins over a same-named role
+	// literal; the minted per-task key (extraEnv) still wins over everything.
+	for k, v := range e.namedSecretEnv(task.ProjectID) {
+		envVars[k] = v
+	}
+	// Effective model: operator override > counterfactual > role.model > role
+	// envVars > global (effectiveRoleModelForTask — the SAME resolution used for
+	// metrics/usage, so the launched model and the recorded model can't drift).
+	// Fixes operator_model_override (Fallback-model button / model:fallback hint /
+	// recovery model_fallback action) never reaching VORNIK_LLM_MODEL (2026-06-20).
+	if m := e.effectiveRoleModelForTask(task, roleConfig); m != "" {
+		envVars["VORNIK_LLM_MODEL"] = m
+	}
+	e.applyTokenLimits(envVars, task, roleConfig)
+	if e.config.LogLevel != "" {
+		envVars["VORNIK_LOG_LEVEL"] = e.config.LogLevel
+	}
+	// Per-task project scope for mcp-bridge's daemon-proxy mode. Without
+	// this, the bridge can't tell which project's MCP tools to ask the
+	// daemon for — the project is the security boundary here, not the
+	// task. Combined with VORNIK_API_URL (set container-wide in service
+	// init), this enables agent containers to use MCP tools without
+	// spawning their own subprocesses.
+	if task.ProjectID != "" {
+		envVars["VORNIK_PROJECT_ID"] = task.ProjectID
+	}
+	if task.ID != "" {
+		envVars["VORNIK_TASK_ID"] = task.ID
+	}
+	if executionID != "" {
+		envVars["VORNIK_EXECUTION_ID"] = executionID
+	}
+	// Cold-start env-stamp for creation_source + user-context-path.
+	// Mirrors the warm-path roleEnv block above so role
+	// systemPrompts can branch on VORNIK_TASK_CREATION_SOURCE +
+	// VORNIK_USER_CONTEXT_PATH regardless of whether the agent
+	// container was spun up cold or recycled from the warm pool.
+	if task.CreationSource != "" {
+		envVars["VORNIK_TASK_CREATION_SOURCE"] = string(task.CreationSource)
+	}
+	injectCostEnv(envVars, e.pricing, envVars["VORNIK_LLM_MODEL"])
+	e.applyProjectEnv(ctx, envVars, task, executionID)
+
+	// Apply caller-supplied env overrides last so they win over every
+	// default built above. The primary use is the minted per-task
+	// VORNIK_API_KEY passed in from executeAgentStep where the paired
+	// defer revokeTaskKey was already registered.
+	for k, v := range extraEnv {
+		envVars[k] = v
+	}
+	return envVars
 }

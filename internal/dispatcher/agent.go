@@ -24,6 +24,7 @@ import (
 	"vornik.io/vornik/internal/pricing"
 	"vornik.io/vornik/internal/ratelimit"
 	"vornik.io/vornik/internal/registry"
+	"vornik.io/vornik/internal/sandboxtool"
 )
 
 // AuditRepository is the subset of persistence.ToolAuditRepository used by the dispatcher.
@@ -174,6 +175,9 @@ type Agent struct {
 	metrics       *Metrics
 	mcpManager    MCPExecutor
 	maxIterations int
+	// sandboxRunner runs render_document's pandoc in the pinned agent image
+	// (WithSandboxRunner; process-spawn law S4/S5a).
+	sandboxRunner *sandboxtool.Runner
 	// deferredToolThreshold overrides DefaultDeferredToolThreshold for
 	// the F12 deferred-tool-loading gate. 0 = package default (20);
 	// negative = never defer (full MCP catalog always visible). Set via
@@ -558,6 +562,7 @@ func NewAgent(
 	}
 	a.toolExecutor = &ToolExecutor{
 		registry:                     reg,
+		sandboxRunner:                a.sandboxRunner,
 		taskRepo:                     taskRepo,
 		execRepo:                     execRepo,
 		artifactRepo:                 artifactRepo,

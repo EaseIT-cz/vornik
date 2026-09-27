@@ -112,3 +112,29 @@ func TestLeaderLock_ListScansEpoch(t *testing.T) {
 		}
 	}
 }
+
+// DeleteExpired is ONE statement whose facts are the audit's facts, and a row
+// whose stored timestamps do not parse is NOT removed (leader-lock release
+// contract 2026-09-25, review-20260925-8d83 F1). It used to SELECT, then DELETE,
+// and assign time.Parse errors to _, so a malformed value audited a zero
+// expiry in silence after the row was already gone.
+func TestLeaderLock_DeleteExpiredKeepsARowItCannotRead(t *testing.T) {
+	db := newTestDB(t)
+	repo := sqlite.NewLeaderLockRepository(db.DB)
+	ctx := context.Background()
+	// "2000-garbage" sorts before any real timestamp, so the expiry predicate
+	// matches; the parse is what must stop the delete.
+	if _, err := db.ExecContext(ctx, `INSERT INTO daemon_leader_locks
+		(worker_id, holder_id, acquired_at, renewed_at, expires_at, epoch)
+		VALUES ('w-bad', 'h1', '2000-garbage', '2000-garbage', '2000-garbage', 3)`); err != nil {
+		t.Fatal(err)
+	}
+	row, err := repo.DeleteExpired(ctx, "w-bad", time.Now())
+	if err == nil {
+		t.Fatalf("an unparseable row must fail the release, got row=%+v", row)
+	}
+	var n int
+	if err := db.QueryRowContext(ctx, `SELECT COUNT(*) FROM daemon_leader_locks WHERE worker_id = 'w-bad'`).Scan(&n); err != nil || n != 1 {
+		t.Fatalf("the row must survive a failed release: count=%d err=%v", n, err)
+	}
+}

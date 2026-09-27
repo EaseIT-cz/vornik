@@ -14,10 +14,12 @@ type stubHealingAssistant struct {
 	proposal *persistence.ControlPlaneProposal
 	err      error
 	calls    int
+	reason   string // the intent the producer handed the assistant
 }
 
-func (s *stubHealingAssistant) ProposeForHealing(context.Context, string, string, string, []string) (*persistence.ControlPlaneProposal, error) {
+func (s *stubHealingAssistant) ProposeForHealing(_ context.Context, _, _, reason string, _ []string) (*persistence.ControlPlaneProposal, error) {
 	s.calls++
+	s.reason = reason
 	return s.proposal, s.err
 }
 

@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"time"
@@ -93,9 +94,9 @@ func validMCPEndpoint(transport, url, command string) error {
 			return errMCPBadEndpoint
 		}
 	case "stdio":
-		if command == "" {
-			return errMCPBadEndpoint
-		}
+		// Process-spawn law, reading 3: a stdio server's program never comes
+		// from a web form, whether probed now or added for a later reload.
+		return errMCPStdioRefused
 	}
 	return nil
 }
@@ -193,8 +194,8 @@ func (s *Server) AdminControlPlaneMCPWrite(w http.ResponseWriter, r *http.Reques
 		Rationale:    fmt.Sprintf("MCP server %q %s via the control-plane hub by %s. Review the diff, then apply (daemon-scope — affects every project). Applies live — no idle window needed.", name, action, actor),
 		Evidence:     string(evidence),
 		Status:       persistence.ProposalStatusDraft,
-		ProposedBy:   "operator-ui", // reserved principal — server-stamped, never from input
-		ApplyTarget:  "config.yaml",
+		ProposedBy:   "operator-ui",                 // reserved principal — server-stamped, never from input
+		ApplyTarget:  filepath.Base(s.cpConfigPath), // the engine resolves it against this file's directory
 		ApplyContent: string(edited),
 		// LiveApply: adding/removing an MCP server is non-disruptive to in-flight
 		// tasks — the MCP catalog is injected into agent containers at start
@@ -301,8 +302,11 @@ func (s *Server) hasSecretLiteral(v string) bool {
 }
 
 var (
-	errMCPBadTransport  = fmt.Errorf("bad transport")
-	errMCPBadEndpoint   = fmt.Errorf("bad endpoint")
+	errMCPBadTransport = fmt.Errorf("bad transport")
+	errMCPBadEndpoint  = fmt.Errorf("bad endpoint")
+	// errMCPStdioRefused: stdio servers are registered in the config files,
+	// never through the daemon (process-spawn law, reading 3).
+	errMCPStdioRefused  = config.ErrStdioMCPChange
 	errMCPSecretLiteral = fmt.Errorf("secret literal")
 	errMCPNotFound      = fmt.Errorf("not found")
 	// errMCPBadAuth reports a malformed auth block from the Add/Edit form.
@@ -323,6 +327,8 @@ func mcpErrToken(err error) string {
 		return "mcp-bad-transport"
 	case errors.Is(err, errMCPBadEndpoint):
 		return "mcp-bad-endpoint"
+	case errors.Is(err, errMCPStdioRefused):
+		return "mcp-stdio-refused"
 	case errors.Is(err, errMCPSecretLiteral):
 		return "mcp-secret"
 	case errors.Is(err, errMCPNotFound):

@@ -135,6 +135,7 @@ vornik reads its configuration from `config.yaml`. The keys below are the custom
 | `runtime.warm_pool.idle_timeout` | string | How long an idle warm container is kept. | — |
 | `runtime.warm_pool.max_per_role` | int | Max warm containers per project and role. | — |
 | `runtime.project_workspace_path` | string | Base directory for per-project persistent workspaces. | — |
+| `runtime.dependency_cache_path` | string | Directory for installed project dependency trees (empty: a deps/ sibling of project_workspace_path). | — |
 | `runtime.delegation_depth_limit` | int | Max nesting depth for delegation chains (0 = default). | — |
 | `runtime.delegation_fanout_limit` | int | Max child tasks one parent may spawn in a batch (0 = default). | — |
 
@@ -296,6 +297,8 @@ vornik reads its configuration from `config.yaml`. The keys below are the custom
 | `chat.model_capabilities` | map | Per-model modality declarations (text, vision, audio). Undeclared models fall back to built-in id patterns, then text-only. | — |
 | `chat.wizard_model` | string | Model for the project-setup wizard. | — |
 | `chat.fixit_model` | string | Model for the Fix-It Doctor repair chat. | — |
+| `chat.optional_work.disabled` | bool | Refuse all optional LLM work (narration, memory titles/classes/narratives, reranking) on every model. | — |
+| `chat.optional_work.disabled_models` | list | Refuse optional LLM work on these model ids (exact match). For a backend too slow to serve it beside task traffic. | — |
 | `chat.timeout` | string | Bound on a single LLM round-trip. | — |
 | `chat.dispatch_timeout` | string | Bound on one complete interactive (multi-call) turn. | — |
 | `chat.max_history` | int | Max conversation messages kept. | — |
@@ -427,9 +430,13 @@ vornik reads its configuration from `config.yaml`. The keys below are the custom
 | Key | Type | Description | Environment override |
 |---|---|---|---|
 | `voice.stt.provider` | string | Speech-to-text provider (whisper-local). | — |
-| `voice.stt.model` | string | Absolute path to the STT model file. | — |
+| `voice.stt.model` | string | Absolute path to the STT ggml model file; its directory is mounted read-only into the sandbox. | — |
+| `voice.stt.binary_path` | string | Ignored since 2026.9.7 (whisper-cli runs in the agent image); startup warns when set. | — |
+| `voice.stt.ffmpeg_path` | string | Ignored since 2026.9.7 (ffmpeg runs in the agent image); startup warns when set. | — |
 | `voice.tts.provider` | string | Text-to-speech provider (piper). | — |
-| `voice.tts.voice` | string | Absolute path to the TTS voice model. | — |
+| `voice.tts.voice` | string | Absolute path to the TTS voice model (.onnx, with its .onnx.json beside it); the directory is mounted read-only into the sandbox. | — |
+| `voice.tts.binary_path` | string | Ignored since 2026.9.7 (piper runs in the agent image); startup warns when set. | — |
+| `voice.tts.ffmpeg_path` | string | Ignored since 2026.9.7 (ffmpeg runs in the agent image); startup warns when set. | — |
 
 ## media
 
@@ -441,6 +448,22 @@ vornik reads its configuration from `config.yaml`. The keys below are the custom
 | `media.inline_max_images` | int | Most images attached to one dispatcher chat turn. 0 = built-in default (4). | — |
 | `media.video.max_frames` | int | Most keyframes sampled from one video. 0 = extractor default (8). | — |
 | `media.video.min_interval_seconds` | int | Shortest gap between sampled keyframes. 0 = extractor default (5). | — |
+
+## sandbox_tools
+
+| Key | Type | Description | Environment override |
+|---|---|---|---|
+| `sandbox_tools.max_concurrent` | int | Most sandbox tool runs at once; with 2 or more, one slot is reserved for voice. 0 = default (2). | — |
+| `sandbox_tools.limits` | map | Per-feature memory limit (e.g. render: 1GiB). Features: render, pdf, image_ocr, video, audio, voice_stt, voice_tts. Absent = the feature's default. | — |
+| `sandbox_tools.cpus` | map | Per-feature CPU share as podman --cpus takes it (e.g. video: "1.5"). Absent = the feature's default (2 for video, audio and voice_stt; 1 otherwise). | — |
+| `sandbox_tools.timeouts` | map | Per-feature timeout in seconds (e.g. render: 120). Absent = the feature's default. | — |
+| `sandbox_tools.max_input_bytes` | int | Largest total input of one run for EVERY feature, refused before any container starts. 0 = each feature's default (render 16 MiB, pdf 256 MiB, image_ocr 32 MiB, video 2 GiB, audio 512 MiB, voice_stt 64 MiB, voice_tts 16 MiB). | — |
+
+## extractors
+
+| Key | Type | Description | Environment override |
+|---|---|---|---|
+| `extractors.audio.model_path` | string | Absolute path to the ggml whisper model (.bin) audio extraction uses; its directory is mounted read-only into the sandbox. Empty = voice.stt.model; neither set = audio extraction not available. | — |
 
 ## node
 

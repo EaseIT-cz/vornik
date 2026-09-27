@@ -165,6 +165,10 @@ for sub in "${CONFIG_DEPLOYABLE_DIRS[@]}"; do
 			case "$rel" in
 				*.bak|*.bak-*|*.bak.*|*.pre-*|*~|*.orig|*.rej) continue ;;
 			esac
+			# The config_template_drift baselines live at the configs root,
+			# so this subdirectory scan never meets them today; the shared
+			# predicate is here so a future root-level scan inherits it.
+			config_is_baseline_artifact "$sub/$rel" && continue
 			[ -f "$src/$rel" ] || echo "DEPLOYED-ONLY (not in repo): $sub/$rel"
 		done < <(cd "$DEPLOYED/$sub" && find . -type f)
 	fi

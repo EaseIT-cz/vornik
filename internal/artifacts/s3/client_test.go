@@ -98,8 +98,13 @@ func TestBackend_StripPrefix(t *testing.T) {
 	}
 }
 
+// NOT t.Parallel(), and neither is TestNew_PropagatesBuilderError: both swap
+// the package-global buildClient, which every New() call reads. Run in
+// parallel, the two raced each other and every parallel test calling New
+// (the race detector failed `make test` on 2026-09-24, and one test could run
+// against the other's stub). Go runs serial top-level tests to completion
+// before it resumes any paused parallel test, so serial here means no overlap.
 func TestNew_BuildsClient(t *testing.T) {
-	t.Parallel()
 	// Swap the SDK builder for a stub so tests don't hit STS / IMDS.
 	original := buildClient
 	defer func() { buildClient = original }()
@@ -134,7 +139,7 @@ func TestNew_BuildsClient(t *testing.T) {
 }
 
 func TestNew_PropagatesBuilderError(t *testing.T) {
-	t.Parallel()
+	// Serial: swaps the package-global buildClient (see TestNew_BuildsClient).
 	original := buildClient
 	defer func() { buildClient = original }()
 	wantErr := errors.New("boom")

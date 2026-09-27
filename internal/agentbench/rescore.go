@@ -67,6 +67,24 @@ func RescoreWithTasks(ctx context.Context, j Journal, traces TraceReader, probes
 			j.Manifest.RunID, j.Manifest.Arm.HarnessVersion, HarnessVersion, reason)
 	}
 
+	// Acceptance verdicts cannot be recomputed from stored state (the produced
+	// tree is not in stepResults), so they are carried forward verbatim: which
+	// is only honest while the suites are the ones that produced them (§12.24).
+	if j.Manifest.Arm.AcceptanceSHA256 != "" {
+		if len(tasks) == 0 {
+			return Journal{}, fmt.Errorf("journal %q carries acceptance verdicts; re-score it with its task set, "+
+				"so the suites can be checked against the ones that graded it (§12.24)", j.Manifest.RunID)
+		}
+		now, err := AcceptanceSetDigest(tasks)
+		if err != nil {
+			return Journal{}, err
+		}
+		if now != j.Manifest.Arm.AcceptanceSHA256 {
+			return Journal{}, fmt.Errorf("journal %q was graded by different acceptance suites than the task set now "+
+				"carries; its verdicts cannot be carried forward or recomputed (§12.24)", j.Manifest.RunID)
+		}
+	}
+
 	out := j
 	out.Manifest.Arm.HarnessVersion = HarnessVersion
 	out.Records = make([]ExecutionRecord, 0, len(j.Records))

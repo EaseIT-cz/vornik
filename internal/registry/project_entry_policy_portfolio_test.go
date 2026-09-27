@@ -20,6 +20,7 @@ trading:
   entry_policy:
     enabled: true
     allowed_symbols: [MSFT]
+    no_position_additions: true
     max_risk_usd: 50
     max_entries_per_tick: 1
     max_gross_exposure_usd: 15000

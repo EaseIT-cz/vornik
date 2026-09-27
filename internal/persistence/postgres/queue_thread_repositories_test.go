@@ -17,6 +17,7 @@ func ingestQueueRows() *sqlmock.Rows {
 		"ingest_execution_id", "priority", "proposed_class",
 		"proposed_confidence", "state", "attempts", "enqueued_at",
 		"started_at", "finished_at", "last_error", "repo_scope",
+		"document_path",
 	})
 }
 
@@ -246,7 +247,7 @@ func TestIngestQueueRepositoryLifecycle(t *testing.T) {
 		IngestExecutionID: &execID, ProposedClass: &class, ProposedConfidence: 0.8,
 	}
 	mock.ExpectExec(regexp.QuoteMeta("INSERT INTO project_ingest_queue")).
-		WithArgs(sqlmock.AnyArg(), item.ProjectID, item.SourceArtifactID, item.ProducerRole, item.IngestExecutionID, item.Priority, item.ProposedClass, item.ProposedConfidence, "queued", item.Attempts, sqlmock.AnyArg(), item.RepoScope).
+		WithArgs(sqlmock.AnyArg(), item.ProjectID, item.SourceArtifactID, item.ProducerRole, item.IngestExecutionID, item.Priority, item.ProposedClass, item.ProposedConfidence, "queued", item.Attempts, sqlmock.AnyArg(), item.RepoScope, item.DocumentPath).
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	if err := repo.Enqueue(context.Background(), item); err != nil {
 		t.Fatalf("Enqueue() error = %v", err)
@@ -259,8 +260,8 @@ func TestIngestQueueRepositoryLifecycle(t *testing.T) {
 	mock.ExpectQuery(regexp.QuoteMeta("WITH claimed AS")).
 		WithArgs("proj-a", 16).
 		WillReturnRows(ingestQueueRows().
-			AddRow("ing-2", "proj-a", "art-2", "tester", nil, int16(50), nil, float32(0), "processing", int16(1), now.Add(time.Minute), now, nil, nil, nil).
-			AddRow("ing-1", "proj-a", "art-1", "coder", execID, int16(10), class, float32(0.8), "processing", int16(1), now, now, nil, nil, nil))
+			AddRow("ing-2", "proj-a", "art-2", "tester", nil, int16(50), nil, float32(0), "processing", int16(1), now.Add(time.Minute), now, nil, nil, nil, nil).
+			AddRow("ing-1", "proj-a", "art-1", "coder", execID, int16(10), class, float32(0.8), "processing", int16(1), now, now, nil, nil, nil, nil))
 	claimed, err := repo.ClaimBatch(context.Background(), "proj-a", 0)
 	if err != nil {
 		t.Fatalf("ClaimBatch() error = %v", err)

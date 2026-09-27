@@ -1,0 +1,118 @@
+{{define "operator_regulatory.html"}}
+<!DOCTYPE html>
+<html lang="en">
+{{template "pageHead" .}}
+<body class="bg-dark-900 text-gray-100 min-h-screen flex flex-col">
+    {{template "nav" .}}
+
+    <main id="main" tabindex="-1" class="flex-1 max-w-7xl mx-auto w-full py-6 px-4 sm:px-6 lg:px-8 shell-offset">
+        <div class="space-y-6">
+            <div class="flex items-center gap-3">
+                {{template "navIconAudit"}}
+                <h1 class="text-xl font-semibold text-gray-100">Regulatory record</h1>
+                <a href="/ui/" class="text-xs text-brand-400 hover:text-brand-300 ml-auto">← Dashboard</a>
+            </div>
+
+            <p class="text-xs text-gray-500">
+                Every GDPR and EU AI Act action this deployment records, organised by obligation. The page shows identifiers,
+                grounds, dispositions, deadlines and hashes, never the personal data that was requested, exported or erased,
+                and never the free text of an incident record. Downloading a retained report is itself recorded in the admin
+                audit log.
+            </p>
+
+            {{range .Errors}}
+            <div class="glass rounded-xl border border-red-700/50 bg-red-900/20 px-4 py-2.5 text-sm text-red-200">{{.}}</div>
+            {{end}}
+
+            <section id="attention" class="glass rounded-xl border border-dark-700 p-5 space-y-3">
+                <h2 class="text-base font-semibold text-gray-100">Needs attention now</h2>
+                <p class="text-xs text-gray-500">The two statutory clocks: GDPR Art 12(3), a month to answer a subject request (extendable), and Art 33(1), 72 hours from awareness to notify the supervisory authority of a breach.</p>
+                <h3 class="text-sm text-gray-300">Subject requests past or near their deadline</h3>
+                {{if not .RequestsRecorded}}
+                <p class="text-sm text-gray-400">Not recorded on this deployment: the SQLite backend has no subject-request ledger. GDPR requests require PostgreSQL.</p>
+                {{else if .AttentionRequests}}
+                <ul class="text-sm space-y-1">{{range .AttentionRequests}}
+                    <li><span class="font-mono">{{.ID}}</span> — {{.Right}}, {{.State}}, deadline {{.Deadline}}{{if .Overdue}} <span class="text-red-400 font-semibold">OVERDUE</span>{{end}}</li>{{end}}
+                </ul>
+                {{else}}<p class="text-sm text-gray-400">None.</p>{{end}}
+                <h3 class="text-sm text-gray-300">Incidents past or near the 72-hour notification deadline</h3>
+                {{if not .IncidentsRecorded}}
+                <p class="text-sm text-gray-400">Not recorded on this deployment: the SQLite backend has no breach ledger. Incidents require PostgreSQL.</p>
+                {{else if .AttentionIncidents}}
+                <ul class="text-sm space-y-1">{{range .AttentionIncidents}}
+                    <li><span class="font-mono">{{.ID}}</span> — {{.State}}, aware {{.Aware}}, deadline {{.Deadline}}{{if .Overdue}} <span class="text-red-400 font-semibold">OVERDUE</span>{{end}}</li>{{end}}
+                </ul>
+                {{else}}<p class="text-sm text-gray-400">None.</p>{{end}}
+            </section>
+
+            <section id="requests" class="glass rounded-xl border border-dark-700 p-5 space-y-3">
+                <h2 class="text-base font-semibold text-gray-100">Data-subject requests (GDPR Art 15–21)</h2>
+                {{if not .RequestsRecorded}}
+                <p class="text-sm text-gray-400">Not recorded on this deployment: the SQLite backend has no subject-request ledger. GDPR requests require PostgreSQL (<code class="font-mono">vornikctl subject</code> refuses on SQLite).</p>
+                {{else if not .Requests}}<p class="text-sm text-gray-400">No requests recorded.</p>
+                {{else}}
+                <div class="overflow-x-auto"><table class="min-w-full text-xs">
+                    <thead class="text-gray-400"><tr><th scope="col" class="text-left p-1">Request</th><th scope="col" class="text-left p-1">Subject</th><th scope="col" class="text-left p-1">Right</th><th scope="col" class="text-left p-1">State</th><th scope="col" class="text-left p-1">Opened</th><th scope="col" class="text-left p-1">Deadline</th><th scope="col" class="text-left p-1">Verified</th><th scope="col" class="text-left p-1">Refusal / ground</th><th scope="col" class="text-left p-1">Report</th></tr></thead>
+                    <tbody>{{range .Requests}}
+                    <tr class="border-t border-dark-700">
+                        <td class="p-1 font-mono">{{.ID}}</td><td class="p-1 font-mono">{{.SubjectID}}</td><td class="p-1">{{.Right}}</td><td class="p-1">{{.State}}</td>
+                        <td class="p-1">{{.Opened}}</td><td class="p-1">{{.Deadline}}{{if .Extended}}<br><span class="text-gray-500">{{.Extended}}</span>{{end}}{{if .Overdue}} <span class="text-red-400">overdue</span>{{end}}</td>
+                        <td class="p-1">{{.Verified}}</td><td class="p-1">{{.Refused}}{{if .ErasureGround}} ground: {{.ErasureGround}}{{end}}</td>
+                        <td class="p-1">{{if .HashShort}}<span class="font-mono" title="{{.HashFull}}">{{.HashShort}}</span>{{end}}{{if and .HasReport $.DownloadsEnabled}} <a class="text-brand-400" href="/ui/operator/regulatory/requests/{{.ID}}/report">download</a>{{end}}{{if .NotRetained}}<br><span class="text-gray-500">{{.NotRetained}}</span>{{end}}</td>
+                    </tr>{{end}}</tbody>
+                </table></div>
+                <p class="text-xs text-gray-500">Only erasure keeps its report. An Art 15 or Art 20 export is the subject's personal data, so it is not retained and only its hash is kept: the hash identifies the copy that was sent, and cannot reproduce it.</p>
+                {{if .RequestsNext}}<a class="text-xs text-brand-400" href="{{.RequestsNext}}#requests">Older requests →</a>{{end}}
+                {{end}}
+            </section>
+
+            <section id="incidents" class="glass rounded-xl border border-dark-700 p-5 space-y-3">
+                <h2 class="text-base font-semibold text-gray-100">Security incidents (GDPR Art 33–34)</h2>
+                {{if not .IncidentsRecorded}}
+                <p class="text-sm text-gray-400">Not recorded on this deployment: the SQLite backend has no breach ledger. Incidents require PostgreSQL (<code class="font-mono">vornikctl incident</code> refuses on SQLite).</p>
+                {{else if not .Incidents}}<p class="text-sm text-gray-400">No incidents recorded.</p>
+                {{else}}
+                <p class="text-xs text-gray-500">The Art 33(5) facts, effects and remedial action are shown as recorded or not, with their length, because they are free text that can name people; read them with <code class="font-mono">vornikctl incident</code>.</p>
+                <div class="overflow-x-auto"><table class="min-w-full text-xs">
+                    <thead class="text-gray-400"><tr><th scope="col" class="text-left p-1">Incident</th><th scope="col" class="text-left p-1">State</th><th scope="col" class="text-left p-1">Aware</th><th scope="col" class="text-left p-1">Deadline</th><th scope="col" class="text-left p-1">Authority risk</th><th scope="col" class="text-left p-1">Authority notified</th><th scope="col" class="text-left p-1">Subject risk</th><th scope="col" class="text-left p-1">Subjects notified / exemption</th><th scope="col" class="text-left p-1">Art 33(5) record</th><th scope="col" class="text-left p-1">Closed</th></tr></thead>
+                    <tbody>{{range .Incidents}}
+                    <tr class="border-t border-dark-700">
+                        <td class="p-1 font-mono">{{.ID}}</td><td class="p-1">{{.State}}</td><td class="p-1">{{.Aware}}</td><td class="p-1">{{.Deadline}}{{if .Overdue}} <span class="text-red-400">overdue</span>{{end}}</td>
+                        <td class="p-1">{{.AuthorityRisk}}</td><td class="p-1">{{.NotifiedAuthority}}{{if .AuthorityRef}} ref {{.AuthorityRef}}{{end}}</td>
+                        <td class="p-1">{{.SubjectRisk}}</td><td class="p-1">{{.NotifiedSubjects}}{{if .Exemption}} exemption: {{.Exemption}}{{end}}</td>
+                        <td class="p-1">facts {{if .FactsLen}}recorded ({{.FactsLen}} chars){{else}}missing{{end}}; effects {{if .EffectsLen}}recorded ({{.EffectsLen}}){{else}}missing{{end}}; remedial {{if .RemedialLen}}recorded ({{.RemedialLen}}){{else}}missing{{end}}</td>
+                        <td class="p-1">{{.Closed}}</td>
+                    </tr>{{end}}</tbody>
+                </table></div>
+                {{if .IncidentsNext}}<a class="text-xs text-brand-400" href="{{.IncidentsNext}}#incidents">Older incidents →</a>{{end}}
+                {{end}}
+            </section>
+
+            <section id="disclosures" class="glass rounded-xl border border-dark-700 p-5 space-y-3">
+                <h2 class="text-base font-semibold text-gray-100">AI-interaction disclosures (EU AI Act Art 50)</h2>
+                <p class="text-xs text-gray-500">Notices served in the last {{.DisclosureDays}} days, per channel and per wording version. Counts only; the conversations disclosed to are not listed here.</p>
+                {{if .RangeError}}<p class="text-sm text-amber-300">{{.RangeError}}</p>{{end}}
+                {{if not .Disclosures}}<p class="text-sm text-gray-400">No notices served in this window.</p>
+                {{else}}
+                <table class="min-w-full text-xs">
+                    <thead class="text-gray-400"><tr><th scope="col" class="text-left p-1">Channel</th><th scope="col" class="text-left p-1">Wording version</th><th scope="col" class="text-left p-1">Notices</th><th scope="col" class="text-left p-1">First</th><th scope="col" class="text-left p-1">Last</th></tr></thead>
+                    <tbody>{{range .Disclosures}}
+                    <tr class="border-t border-dark-700"><td class="p-1">{{.Channel}}</td><td class="p-1 font-mono" title="{{.HashFull}}">{{.HashShort}}</td><td class="p-1">{{.Count}}</td><td class="p-1">{{.First}}</td><td class="p-1">{{.Last}}</td></tr>{{end}}</tbody>
+                </table>
+                {{end}}
+                <form method="get" class="text-xs text-gray-400">Window: <input class="w-16 bg-dark-800 border border-dark-600 rounded px-1" type="number" name="days" min="1" max="366" value="{{.DisclosureDays}}"> days <button class="text-brand-400">show</button></form>
+            </section>
+
+            <section id="other" class="glass rounded-xl border border-dark-700 p-5 space-y-2">
+                <h2 class="text-base font-semibold text-gray-100">Other regulatory trails</h2>
+                <ul class="text-sm space-y-1 text-gray-300">
+                    <li><strong>Profile-use audit</strong> (GDPR Art 5(1)(a)): per operator, <code class="font-mono">vornikctl operator audit &lt;operator-id&gt;</code>.{{if not .RequestsRecorded}} Not recorded on this deployment: the audit is not recorded on the SQLite backend.{{end}}</li>
+                    <li><strong>Memory firewall evaluations</strong> (Art 5(1)(c)): {{if .FirewallAvailable}}<a class="text-brand-400" href="/ui/admin/memory-firewall">memory firewall</a>{{else}}not available on this deployment{{end}}.</li>
+                    <li><strong>Chat audit and retention</strong> (Art 5(2)): {{if .EnterpriseAdmin}}<a class="text-brand-400" href="/ui/admin/chat-audit">chat audit</a>{{else}}not part of this edition{{end}}.</li>
+                </ul>
+            </section>
+        </div>
+    </main>
+</body>
+</html>
+{{end}}

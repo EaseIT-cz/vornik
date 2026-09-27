@@ -1,7 +1,6 @@
 package cli
 
 import (
-	"context"
 	"path/filepath"
 	"testing"
 
@@ -21,7 +20,7 @@ import (
 // Filed 2026-09-04 alongside the CE support bundle, which introduced
 // storage.OpenReadOnly specifically to avoid adding a second instance of this.
 func TestOfflineDoctor_DoesNotMigrateTheDatabaseItDiagnoses(t *testing.T) {
-	ctx := context.Background()
+	ctx := sqliteOpenCtx(t)
 	dbPath := filepath.Join(t.TempDir(), "vornik.db")
 	cfg := &config.Config{Database: config.DatabaseConfig{Driver: "sqlite", Path: dbPath}}
 
@@ -72,7 +71,7 @@ func TestOfflineDoctor_DoesNotMigrateTheDatabaseItDiagnoses(t *testing.T) {
 // columns added to a table after it first shipped, so a CLI one build ahead of
 // the daemon rewrote the operator's schema mid-diagnosis.
 func TestOfflineDoctor_DoesNotAlterAnExistingSchema(t *testing.T) {
-	ctx := context.Background()
+	ctx := sqliteOpenCtx(t)
 	dbPath := filepath.Join(t.TempDir(), "vornik.db")
 	cfg := &config.Config{Database: config.DatabaseConfig{Driver: "sqlite", Path: dbPath}}
 

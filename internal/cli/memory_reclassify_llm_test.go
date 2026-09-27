@@ -258,3 +258,28 @@ func TestRunLLMReclassifyLoop_JSONOutput(t *testing.T) {
 		t.Fatalf("totals: %+v", r)
 	}
 }
+
+// A paused batch (optional LLM work disabled for the classifier's model;
+// breaker design §5.3d, 2026-09-26) ends the loop at once: every further
+// batch would be refused alike.
+func TestRunLLMReclassifyLoop_StopsOnAPausedBatch(t *testing.T) {
+	spec := &llmHandlerSpec{
+		probeRemaining: 5,
+		batchResponses: []llmReclassifyResponse{
+			{Processed: 5, Remaining: 5, Paused: true},
+			{Processed: 5, Remaining: 5, Paused: true},
+		},
+	}
+	srv := newLLMTestServer(t, spec)
+	defer srv.Close()
+	w, read := captureStdout(t)
+	if err := runLLMReclassifyLoop("p", false, false, 10, w); err != nil {
+		t.Fatal(err)
+	}
+	if got := read(); !strings.Contains(got, "paused") {
+		t.Fatalf("missing pause message: %s", got)
+	}
+	if n := spec.batchCalls.Load(); n != 1 {
+		t.Fatalf("a paused batch must end the loop: %d batches, want 1", n)
+	}
+}

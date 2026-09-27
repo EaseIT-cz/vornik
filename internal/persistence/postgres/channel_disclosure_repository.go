@@ -52,6 +52,31 @@ func (r *ChannelDisclosureRepository) MarkServed(ctx context.Context, channel, s
 	return nil
 }
 
+// SummaryBetween aggregates in SQL per (channel, wording version) — the
+// regulatory-record page's Art 50 evidence summary; no rows reach the daemon.
+func (r *ChannelDisclosureRepository) SummaryBetween(ctx context.Context, from, to time.Time) ([]persistence.ChannelDisclosureSummary, error) {
+	rows, err := r.db.QueryContext(ctx,
+		`SELECT channel, text_hash, COUNT(*), MIN(served_at), MAX(served_at)
+		   FROM channel_disclosure_log
+		  WHERE served_at BETWEEN $1 AND $2
+		  GROUP BY channel, text_hash
+		  ORDER BY channel, MIN(served_at)`,
+		from.UTC(), to.UTC())
+	if err != nil {
+		return nil, fmt.Errorf("postgres: channel_disclosure_log summary: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+	out := []persistence.ChannelDisclosureSummary{}
+	for rows.Next() {
+		var s persistence.ChannelDisclosureSummary
+		if err := rows.Scan(&s.Channel, &s.TextHash, &s.Count, &s.FirstServed, &s.LastServed); err != nil {
+			return nil, fmt.Errorf("postgres: channel_disclosure_log summary scan: %w", err)
+		}
+		out = append(out, s)
+	}
+	return out, rows.Err()
+}
+
 // ServedBetween is the Art 99 enforcement-response query.
 func (r *ChannelDisclosureRepository) ServedBetween(ctx context.Context, from, to time.Time) ([]persistence.ChannelDisclosure, error) {
 	rows, err := r.db.QueryContext(ctx,

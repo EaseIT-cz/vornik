@@ -54,7 +54,7 @@ configuration, not a recording — so they can gate before any gold pass.
 
 Build a task calibration artifact from a repeated journal
 
-Several journals are merged before the artifact is derived, which is the form a long pass takes: one journal per repeat chunk and task batch, so a 10-repeat 10-task calibration leaves 50 files. The merge refuses inputs that are not one run — a differing arm, pre-registration, or tier policy — and refuses a repeat index that collided across chunks.
+Several journals are merged before the artifact is derived, which is the form a long pass takes: one journal per repeat chunk and task batch, so a 10-repeat 10-task calibration leaves 50 files. The merge refuses inputs that are not one run — a differing arm, pre-registration, or tier policy — and refuses a repeat index that collided across chunks. The pass must have been pre-registered with "kind": "calibration" (one arm, no sigma), and its pre-registration must be unedited since the run.
 
 ```
 vornikctl bench agent calibrate <journal>... [flags]
@@ -118,6 +118,7 @@ vornikctl bench agent gold [flags]
 | `--swarm` |  | swarm whose roles execute the tasks |
 | `--task-set-hash` |  | digest of the task set being recorded; the regeneration fence compares against it |
 | `--tasks` |  | JSON task set to run |
+| `--workspace` |  | the benchmark project's git workspace; each task's declared targets are cleared from it before the task runs, so it starts from a pristine tree (benchmark LLD §12.23) |
 
 ## vornikctl bench agent gold-merge
 
@@ -143,6 +144,8 @@ vornikctl bench agent gold-merge <batch.json>... [flags]
 ## vornikctl bench agent noise-floor
 
 Measure paired release-gate noise from two same-config arms
+
+Both journals must come from passes pre-registered with "kind": "noise_floor" (one arm, no sigma — the pass exists to measure it), with pre-registrations unedited since the run.
 
 ```
 vornikctl bench agent noise-floor <same-config-journal-a> <same-config-journal-b> [flags]
@@ -234,7 +237,8 @@ vornikctl bench agent run [flags]
 
 | Flag | Default | Description |
 |---|---|---|
-| `--arm` |  | name of the arm being run |
+| `--acceptance-image` |  | agent image the hidden acceptance suites run in (podman, no network); needed when --workspace is set and a task carries a suite (benchmark LLD §12.24) |
+| `--arm` |  | name of the arm being run; must be one the pre-registration declares |
 | `--benchmark-project` |  | the only project this deployment permits benchmarking in |
 | `--calibration` |  | release calibration artifact pinned by the pre-registration |
 | `--context-policy` |  | REQUIRED: names the policy under test (suppression set, advert gating, ceiling). It is the independent variable, so a run that does not name it cannot be compared |
@@ -247,7 +251,7 @@ vornikctl bench agent run [flags]
 | `--i-know-this-wipes` |  | must equal --database; this run bulk-writes and clears it |
 | `--journal` | `journal.json` | where to write the run journal |
 | `--noise-floor` |  | release noise-floor artifact pinned by the pre-registration |
-| `--preregistration` |  | REQUIRED: committed manifest stating the arms, metric, intended delta and computed n |
+| `--preregistration` |  | REQUIRED: committed manifest stating the run kind, arms, metric, intended delta and computed n. A comparison (the default) names two or more arms; a calibration or noise_floor pass names one and declares no sigma. --arm must be a declared arm |
 | `--project` |  | project to run in |
 | `--repeat-offset` | `0` | shift the repeat index this invocation stamps, so a run split across several invocations produces globally unique (task, repeat) pairs. Pass chunk_index * repeat_batch. Without it every chunk numbers its repeats from 1, and calibration refuses the collision rather than counting one repeat many times |
 | `--repeats` | `1` | runs per task; repeats shrink a task's contribution to sigma_d but add no pairs |
@@ -255,6 +259,7 @@ vornikctl bench agent run [flags]
 | `--swarm` |  | swarm whose roles execute the tasks |
 | `--task-set-full` |  | the WHOLE task set this run is one batch of. The arm's task-derived axes describe this file rather than --tasks, so batches of one arm merge instead of being refused as disagreeing arms. Takes a FILE, never a digest: a hash typed by hand can be wrong in a way nothing detects, a file cannot |
 | `--tasks` |  | JSON task set to run |
+| `--workspace` |  | the benchmark project's git workspace; each task's declared targets are cleared from it before the task runs, so it starts from a pristine tree (benchmark LLD §12.23) |
 
 ## vornikctl bench agent taskset-hash
 
@@ -597,13 +602,20 @@ Schema & storage:
   role_prompt_sanity    Lint swarm role prompts: tool refs vs allowedTools, output shape, untrusted_content awareness
   eval_suite_lint       Parse configs/evals/*.json; flag suites with missing/incompatible project/workflow/swarm
   database_schema       Verify expected tables and indexes exist (incl. 2026.4.11+ additions)
-  orphan_fk_rows        Detect orphan rows in audit / llm_usage / watchers referencing missing tasks
+  orphan_fk_rows        Detect orphan audit / watcher rows referencing missing tasks (cost-ledger rows are kept, reported)
   orphan_worktrees      .worktrees/ subdirs with no matching live task
   config_crlf           Config files with CRLF line endings (UI YAML-writer drift); --fix normalizes to LF
+  config_template_drift Deployed configs that lack what this version's templates ship (preserve-existing
+                        upgrades never apply a template fix); needs the installer's .templates baseline
 
-Runtime:
+Host (run by vornikctl on this host, not by the daemon — they need podman,
+skopeo or systemctl, and no daemon request may run a program):
   podman_config         Check podman availability and rootless configuration
   agent_images          Verify agent images referenced in swarm configs are available
+  agent_image_uid       Compare the agent image's baked uid with the keep-id mapping
+  image_freshness       Deployment images vs the daemon's build (release record)
+
+Runtime:
   env_file_freshness    Flag EnvironmentFile= entries modified after daemon
                         start (systemd reads them only at ExecStart, so
                         post-edit secrets are invisible until restart)
@@ -650,6 +662,24 @@ vornikctl doctor [flags]
 | `--fix` | `false` | Automatically repair detected issues |
 | `--json` | `false` | Output in JSON format |
 | `--offline` | `false` | Run static checks WITHOUT the daemon (config parse, DB reachability, migration state, recent journal errors) — the escape hatch when the daemon won't start |
+
+## vornikctl doctor ack
+
+Acknowledge a config_template_drift finding you have decided not to take
+
+Record that you decline what config_template_drift currently reports for one
+deployed config file, e.g.
+
+  vornikctl doctor ack config_template_drift workflows/dev-pipeline.md
+
+The acknowledgement covers that file's findings AS THEY ARE NOW: a later
+template change, a new removal or an edit to a canonical override re-opens the
+row, because it is a new decision. Requires an admin key. Only
+config_template_drift is acknowledgeable.
+
+```
+vornikctl doctor ack <check> <file>
+```
 
 ## vornikctl doctor feature
 
@@ -2174,6 +2204,43 @@ vornikctl memory stats [flags]
 |---|---|---|
 | `--json` | `false` | JSON output |
 | `-p`, `--project` |  | Show only this project (default: all) |
+
+## vornikctl memory supersede-legacy-documents
+
+Retire bare-name document chunks that a path-identity re-ingest has replaced
+
+Documents uploaded before document paths existed carry only a bare file
+name, so re-ingesting them never superseded the earlier versions. For each
+bare name in the scope, this verb looks the name up in the checkout at --root:
+
+  exactly one tracked file, and that path has a live re-ingest  -> superseded
+  two or more tracked files with the name (e.g. index.md)       -> left alone
+  no tracked file with the name                                 -> left alone
+  one file, but not yet re-ingested under its path              -> left alone
+  the path version predates whole-version ingest                -> left alone
+                                                                   (re-ingest first)
+  a file at the repository root (its name is its path)          -> older uploads
+                                                                   superseded, the
+                                                                   newest kept
+
+Re-ingest the documents with a current companion plugin first, then run this.
+A dry run by default: it prints, per name, the surviving upload and the chunks
+it would retire per ingest date. Nothing is written without --apply. The
+retirement records no epoch, so a corpus rollback does not restore it.
+
+Always runs against the live daemon's chunk store.
+
+```
+vornikctl memory supersede-legacy-documents [flags]
+```
+
+| Flag | Default | Description |
+|---|---|---|
+| `--allow-scope-mismatch` | `false` | Run although --scope is not the scope the checkout at --root resolves to (a pinned or retagged scope) |
+| `--apply` | `false` | Write the plan; without it this is a dry run |
+| `--root` |  | A path inside the checkout the documents come from (required) |
+| `--scope` |  | Repo scope the documents were ingested under (required) |
+| `-p`, `--project` |  | Project ID (required) |
 
 ## vornikctl memory wipe
 

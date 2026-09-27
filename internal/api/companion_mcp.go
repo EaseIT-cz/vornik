@@ -226,6 +226,7 @@ func companionToolDefs() []mcpToolDef {
 							"properties": map[string]any{
 								"name":    map[string]any{"type": "string", "description": "Filename as it will land in the agent's /app/input/uploads/ directory."},
 								"content": map[string]any{"type": "string", "description": "Base64-encoded file bytes."},
+								"path":    map[string]any{"type": "string", "description": "Optional: the file's path relative to the root of the git repository that holds it, ending in name (e.g. docs/design/index.md). It is the document's identity for companion-rag-ingest: re-ingesting the same path in the same repo_scope supersedes the earlier versions, so RAG serves only the newest. Omit it for a file outside any repository."},
 							},
 							"required": []string{"name", "content"},
 						},
@@ -908,11 +909,23 @@ func (s *Server) companionToolDelegate(ctx context.Context, key *persistence.API
 	// workflow definition. Unknown / ad-hoc workflows (nil lookup)
 	// are NOT blocked — preserve the prior behaviour for IDs the
 	// catalog doesn't know.
-	// Staged-artifact size guard (2026-09-15). Checked BEFORE the workflow
-	// lookups below because it needs neither: bytes the caller is sending
+	// Staged-artifact size guard (2026-09-15): bytes the caller is sending
 	// against a context this daemon configures. See
 	// companion_artifact_budget.go for the run it is named after.
-	if s.config != nil && len(args.InputArtifacts) > 0 {
+	//
+	// A known workflow with no step has no agent to read the upload
+	// (companion-rag-ingest: the executor deposits each artifact by ID),
+	// so there is no context to protect. Refusing it blocked every
+	// document over ~125 KB from RAG (2026-09-26).
+	agentless := false
+	if s.projectRegistry != nil {
+		if wf := s.projectRegistry.GetWorkflow(args.Workflow); wf != nil && len(wf.Steps) == 0 {
+			agentless = true
+			s.logger.Debug().Str("workflow", args.Workflow).Int("input_artifacts", len(args.InputArtifacts)).
+				Msg("staged-artifact size guard skipped: the workflow has no step, so no agent reads the upload")
+		}
+	}
+	if s.config != nil && len(args.InputArtifacts) > 0 && !agentless {
 		total := 0
 		for _, a := range args.InputArtifacts {
 			// base64 inflates by 4/3; the staged file is what the agent reads.

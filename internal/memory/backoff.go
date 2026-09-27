@@ -123,6 +123,9 @@ func observeBackfillTick(
 // backfillCounts is one tick's outcome, in the shape both backfill loops produce.
 type backfillCounts struct {
 	Processed, Succeeded, Failed, Skipped, Remaining int
+	// Paused: the batch met a refusal of optional work (breaker design
+	// §5.3d) and stopped calling the model. Not a failure.
+	Paused bool
 }
 
 // backfillTickHooks parameterises runBackfillTick with the parts that genuinely differ
@@ -137,6 +140,9 @@ type backfillTickHooks struct {
 	tickOutcome  func(outcome string)
 	chunkCounts  func(succeeded, failed, skipped int)
 	setRemaining func(int)
+	// paused is the loop's own flag, so the pause and resume lines are logged
+	// once per transition, not once per tick. Nil disables them.
+	paused *bool
 }
 
 // runBackfillTick performs one backfill cycle and reports what happened.
@@ -181,6 +187,27 @@ func runBackfillTick(ctx context.Context, batchSize int, h backfillTickHooks) (b
 		return backfillCounts{Processed: batchSize, Failed: batchSize}, true
 	}
 
+	if counts.Paused {
+		// Optional work is switched off for this model: a state the
+		// operator chose, not evidence about the endpoint, so no backoff and
+		// no per-tick line (breaker design §5.3d).
+		if h.tickOutcome != nil {
+			h.tickOutcome("paused")
+		}
+		if h.setRemaining != nil {
+			h.setRemaining(counts.Remaining)
+		}
+		if h.paused != nil && !*h.paused {
+			*h.paused = true
+			h.logger.Info().Int("remaining", counts.Remaining).
+				Msg(h.label + " backfill auto-loop: paused, optional LLM work is disabled for this model")
+		}
+		return counts, false
+	}
+	if h.paused != nil && *h.paused {
+		*h.paused = false
+		h.logger.Info().Msg(h.label + " backfill auto-loop: resumed")
+	}
 	if h.tickOutcome != nil {
 		h.tickOutcome("progressed")
 	}
@@ -198,6 +225,12 @@ func runBackfillTick(ctx context.Context, batchSize int, h backfillTickHooks) (b
 		Int("remaining", counts.Remaining).
 		Msg(h.label + " backfill auto-loop: tick complete")
 	return counts, true
+}
+
+// withPaused attaches the loop's pause flag (see backfillTickHooks.paused).
+func (h backfillTickHooks) withPaused(p *bool) backfillTickHooks {
+	h.paused = p
+	return h
 }
 
 // backfillMetricSet is one backfill loop's metric family. The classify and title families

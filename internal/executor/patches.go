@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 )
@@ -42,12 +41,12 @@ func generatePlanChanges(ctx context.Context, worktreeDir, fromSHA, toSHA string
 	// worktree stays clean. --zero-commit and --no-signature keep the
 	// patches reproducible across runs; callers who want From/signature
 	// headers can reverse this later.
-	out, err := exec.CommandContext(ctx,
-		"git", "-C", worktreeDir,
+	out, err := gitExec.combined(ctx,
+		"-C", worktreeDir,
 		"format-patch",
 		fromSHA+".."+toSHA,
 		"-o", outputDir,
-	).CombinedOutput()
+	)
 	if err != nil {
 		_ = os.RemoveAll(outputDir)
 		return nil, fmt.Errorf("git format-patch failed: %w (%s)", err, strings.TrimSpace(string(out)))
@@ -109,14 +108,14 @@ func buildChangeSummary(ctx context.Context, worktreeDir, fromSHA, toSHA string)
 	// format argument itself — exec.Command rejects NUL bytes in args.
 	const formatSpec = "%h%n%s%n%b%x00"
 
-	out, err := exec.CommandContext(ctx,
-		"git", "-C", worktreeDir,
+	out, err := gitExec.output(ctx,
+		"-C", worktreeDir,
 		"log",
 		fromSHA+".."+toSHA,
 		"--no-merges",
 		"--reverse",
 		"--format="+formatSpec,
-	).Output()
+	)
 	if err != nil {
 		return nil, "", fmt.Errorf("git log: %w", err)
 	}

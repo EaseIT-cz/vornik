@@ -2,12 +2,9 @@ package executor
 
 import (
 	"context"
-	"os"
-	"os/exec"
 	"path/filepath"
 	"testing"
 
-	"github.com/rs/zerolog"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"vornik.io/vornik/internal/persistence"
@@ -167,57 +164,6 @@ func TestTaskWorkflowIDY(t *testing.T) {
 
 	real := "research"
 	assert.Equal(t, "research", taskWorkflowID(&persistence.Task{WorkflowID: &real}))
-}
-
-// TestSnapshotWorkspaceRef_EmptyDir — guard returns "" without
-// invoking git.
-func TestSnapshotWorkspaceRef_EmptyDir(t *testing.T) {
-	assert.Equal(t, "", snapshotWorkspaceRef(""))
-}
-
-// TestSnapshotWorkspaceRef_NotARepo — when .git doesn't exist
-// under dir, the helper short-circuits to "" (no fork). Used at
-// recovery time to skip workspaces that aren't git repos.
-func TestSnapshotWorkspaceRef_NotARepo(t *testing.T) {
-	dir := t.TempDir()
-	assert.Equal(t, "", snapshotWorkspaceRef(dir),
-		"non-repo dir must short-circuit before invoking git")
-}
-
-// TestSnapshotWorkspaceRef_RealRepo — initializes a real git
-// repo under t.TempDir(), commits, then asserts the helper
-// returns the HEAD SHA. Verifies the happy path runs git
-// correctly (no subprocess injection, output trimmed).
-func TestSnapshotWorkspaceRef_RealRepo(t *testing.T) {
-	dir := t.TempDir()
-	runGit := func(args ...string) {
-		t.Helper()
-		cmd := exec.Command("git", append([]string{"-C", dir}, args...)...)
-		// Use a deterministic empty env subset so user config
-		// doesn't change behaviour.
-		cmd.Env = append(os.Environ(),
-			"GIT_AUTHOR_NAME=test", "GIT_AUTHOR_EMAIL=test@example.com",
-			"GIT_COMMITTER_NAME=test", "GIT_COMMITTER_EMAIL=test@example.com",
-		)
-		out, err := cmd.CombinedOutput()
-		require.NoError(t, err, "git %v: %s", args, string(out))
-	}
-	runGit("init", "-q", "-b", "main")
-	require.NoError(t, os.WriteFile(filepath.Join(dir, "f.txt"), []byte("hi"), 0o644))
-	runGit("add", "f.txt")
-	runGit("commit", "-q", "-m", "init")
-
-	got := snapshotWorkspaceRef(dir)
-	assert.Len(t, got, 40, "real HEAD SHA must be 40 hex chars")
-}
-
-// TestResetWorkspace_EmptyArgsNoOp — both empty dir and empty
-// ref short-circuit silently. Used by the recovery path when
-// no snapshot was captured (older executions pre-snapshot wiring).
-func TestResetWorkspace_EmptyArgs(t *testing.T) {
-	require.NoError(t, resetWorkspace(context.Background(), "", "ref", zerolog.Nop()))
-	require.NoError(t, resetWorkspace(context.Background(), "dir", "", zerolog.Nop()))
-	require.NoError(t, resetWorkspace(context.Background(), "", "", zerolog.Nop()))
 }
 
 // TestWorkflowEffectiveWorkspaceDirY — three resolution branches:

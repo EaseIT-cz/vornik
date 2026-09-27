@@ -162,6 +162,19 @@ func (r *Router) providerFor(model string) (p Provider, name string, matched boo
 	return r.fallback, "fallback", false
 }
 
+// Resolves reports which route `model` would take and whether an explicit
+// route matched. It is the SAME decision dispatch makes — it calls
+// providerFor and discards the provider — so a caller that needs to know
+// routing (the doctor's model_route_coverage) never keeps a second copy of the
+// rule. Side-effect free; not on the dispatch path. Model-route-coverage
+// design 2026-09-24: the copy the doctor used to keep missed the default
+// routes merged in for enabled sub-providers and treated a suffix-only route
+// as a catch-all.
+func (r *Router) Resolves(model string) (routeName string, matched bool) {
+	_, name, matched := r.providerFor(model)
+	return name, matched
+}
+
 // Complete implements Provider. Routes through the fallback (no model
 // info available here; callers that care use WithModel first).
 func (r *Router) Complete(ctx context.Context, messages []Message) (*ChatResponse, error) {

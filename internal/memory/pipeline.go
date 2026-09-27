@@ -12,6 +12,7 @@ import (
 
 	"github.com/rs/zerolog"
 
+	"vornik.io/vornik/internal/chat"
 	"vornik.io/vornik/internal/persistence"
 	"vornik.io/vornik/internal/secrets"
 )
@@ -501,6 +502,13 @@ type IngestArtifactOptions struct {
 	// persists as NULL, so temporal recall falls back to ingest time and the
 	// chunk behaves exactly as it did before the column existed.
 	EventTime time.Time
+
+	// Document marks a document ingest: sourceName is the document's path, the
+	// chunks are stored with DocumentChunkHash so the version lands whole, and
+	// the exact-duplicate gate is skipped, since a match against another
+	// ingest's chunk must not stop a document's new version from landing
+	// (memory rollback x supersession design, A.7).
+	Document bool
 }
 
 // IngestArtifact runs one source artifact through the pipeline with
@@ -586,6 +594,11 @@ func (p *Pipeline) IngestArtifactWithOptions(
 				Str("producer_role", producerRole).
 				Str("class", string(class)).
 				Msg("inline classifier fallback: chunk classified")
+		} else if errors.Is(lerr, chat.ErrOptionalWorkDisabled) {
+			// Optional LLM work is off for the classifier's model (breaker
+			// design §5.3d): a state, not a misconfiguration.
+			p.logger.Debug().Str("project_id", projectID).
+				Msg("inline classifier fallback: optional LLM work disabled; storing chunk as unclassified")
 		} else if lerr != nil {
 			// Warn (not Debug) so a misconfigured classifier — the
 			// most likely cause of every inline call failing — is
@@ -655,7 +668,7 @@ func (p *Pipeline) IngestArtifactWithOptions(
 	}
 
 	dedupFn := func(pid, hash string) (bool, error) {
-		if p.cfg.ChunkExists == nil {
+		if p.cfg.ChunkExists == nil || opts.Document {
 			return false, nil
 		}
 		return p.cfg.ChunkExists(ctx, pid, hash)
@@ -737,7 +750,11 @@ func (p *Pipeline) IngestArtifactWithOptions(
 		// chunk creation remains a single path. Phase 4 extends
 		// the indexer with class/confidence/expires_at parameters
 		// so chunks carry the policy-derived metadata.
-		if err := p.indexer.IngestTextAt(ctx, projectID, taskID, artifactID, sourceName, cand.Content, cand.EventTime); err != nil {
+		ingest := p.indexer.IngestTextAt
+		if opts.Document {
+			ingest = p.indexer.IngestDocumentTextAt
+		}
+		if err := ingest(ctx, projectID, taskID, artifactID, sourceName, cand.Content, cand.EventTime); err != nil {
 			return stats, fmt.Errorf("pipeline: indexer.IngestTextAt: %w", err)
 		}
 		// Best-effort backfill of the per-class metadata onto the

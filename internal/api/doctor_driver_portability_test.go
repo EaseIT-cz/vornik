@@ -55,7 +55,7 @@ func seedPortabilityDB(t *testing.T) *sql.DB {
 			id TEXT PRIMARY KEY, task_id TEXT, project_id TEXT, status TEXT,
 			created_at TIMESTAMP, updated_at TIMESTAMP, error_message TEXT)`,
 		`CREATE TABLE task_watchers (task_id TEXT, chat_id TEXT, created_at TIMESTAMP)`,
-		`CREATE TABLE task_llm_usage (id TEXT PRIMARY KEY, task_id TEXT, source TEXT)`,
+		`CREATE TABLE task_llm_usage (id TEXT PRIMARY KEY, task_id TEXT, source TEXT, recorded_at TIMESTAMP)`,
 		`CREATE TABLE tool_audit_log (id TEXT PRIMARY KEY, task_id TEXT)`,
 		`CREATE TABLE execution_step_outcomes (
 			execution_id TEXT, step_id TEXT, role TEXT, model TEXT,

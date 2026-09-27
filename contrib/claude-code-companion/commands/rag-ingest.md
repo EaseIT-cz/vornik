@@ -140,37 +140,30 @@ def collect(path):
 
 expanded = []
 for p in paths:
-    expanded.extend(collect(p))
+    for f in collect(p):
+        # The same file named twice (or reached twice by a walk) is sent once.
+        if f not in expanded:
+            expanded.append(f)
 
-# repo_scope resolution mirrors /upload exactly.
-def resolve_scope():
-    if scope_arg is not None:
-        return scope_arg.strip()
-    env_pin = os.environ.get("VORNIK_REPO_SCOPE", "").strip()
-    if env_pin:
-        return env_pin
-    import subprocess
+# repo_scope and document paths come from the FILES' repository, not from the
+# working directory (memory rollback x supersession design, amendment
+# 2026-09-26). Run from a directory outside any repository, the old rule scoped
+# the upload with that directory's name, and scoped recall could not see it.
+# Each file's path in its repository is its document identity: re-ingesting
+# the same path supersedes the earlier versions in RAG.
+import subprocess
+
+def git(args, cwd):
     try:
         out = subprocess.run(
-            ["git", "config", "--get", "remote.origin.url"],
+            ["git", "-C", cwd] + args,
             capture_output=True, text=True, timeout=2, check=False,
         )
-        url = out.stdout.strip()
-    except (subprocess.SubprocessError, FileNotFoundError):
-        return os.path.basename(os.getcwd())
-    if not url:
-        # No remote → repo toplevel basename; not a git repo → current
-        # folder basename. Never empty, so the scope can't degrade to
-        # "none"/project-wide. Mirrors session-start.sh + /upload.
-        try:
-            top = subprocess.run(
-                ["git", "rev-parse", "--show-toplevel"],
-                capture_output=True, text=True, timeout=2, check=False,
-            )
-            base = os.path.basename(top.stdout.strip())
-            return base or os.path.basename(os.getcwd())
-        except (subprocess.SubprocessError, FileNotFoundError):
-            return os.path.basename(os.getcwd())
+    except (subprocess.SubprocessError, FileNotFoundError, OSError):
+        return ""
+    return out.stdout.strip() if out.returncode == 0 else ""
+
+def normalize_remote(url):
     for suf in (".git",):
         if url.endswith(suf):
             url = url[:-len(suf)]
@@ -178,10 +171,10 @@ def resolve_scope():
     for pre in ("https://", "http://", "ssh://"):
         if url.startswith(pre):
             url = url[len(pre):]
-    # Then strip any "<user>@" prefix — covers git@, gitlab@,
+    # Then strip any "<user>@" prefix: covers git@, gitlab@,
     # https://user@host shapes, and any future provider that ships a
     # different username convention. The "@" must come before the
-    # first ":" or "/" to actually be a user separator (otherwise it's
+    # first ":" or "/" to actually be a user separator (otherwise it is
     # inside the path).
     at_idx = url.find("@")
     if at_idx > 0:
@@ -194,6 +187,62 @@ def resolve_scope():
     if ":" in url and "/" not in url.split(":", 1)[0]:
         url = url.replace(":", "/", 1)
     return url
+
+def scope_of_repo(top):
+    # No remote: the repository's folder name. Never empty.
+    url = git(["config", "--get", "remote.origin.url"], top)
+    return normalize_remote(url) if url else os.path.basename(top)
+
+def cwd_scope():
+    # Files outside any repository: the old working-directory rule.
+    top = git(["rev-parse", "--show-toplevel"], os.getcwd())
+    return scope_of_repo(top) if top else os.path.basename(os.getcwd())
+
+# Which repository holds each file, and the file's path inside it. Real paths
+# on both sides, so a symlinked home directory cannot produce a path that
+# climbs out of the repository.
+doc_path = {}
+repo_top = {}
+top_of_dir = {}  # one git call per directory, not per file
+for p_abs in expanded:
+    d = os.path.dirname(p_abs)
+    if d not in top_of_dir:
+        top = git(["rev-parse", "--show-toplevel"], d)
+        top_of_dir[d] = os.path.realpath(top) if top else ""
+    top_real = top_of_dir[d]
+    if not top_real:
+        continue
+    rel = os.path.relpath(os.path.realpath(p_abs), top_real).replace(os.sep, "/")
+    if rel == ".." or rel.startswith("../"):
+        continue
+    repo_top[p_abs] = top_real
+    doc_path[p_abs] = rel
+
+tops = sorted(set(repo_top.values()))
+if len(tops) > 1:
+    print(f"error: these files come from {len(tops)} repositories:")
+    for t in tops:
+        print(f"  {scope_of_repo(t)}  ({t})")
+    print("Ingest each repository's files in a separate /rag-ingest call, so each lands")
+    print("in its own repo_scope with its own document paths.")
+    sys.exit(1)
+if repo_top and len(repo_top) != len(expanded):
+    loose = [p for p in expanded if p not in repo_top]
+    print(f"error: {len(loose)} file(s) are outside the repository {scope_of_repo(tops[0])}:")
+    for p in loose[:10]:
+        print(f"  {p}")
+    print("Ingest files outside a repository in a separate /rag-ingest call.")
+    sys.exit(1)
+
+def resolve_scope():
+    if scope_arg is not None:
+        return scope_arg.strip()
+    env_pin = os.environ.get("VORNIK_REPO_SCOPE", "").strip()
+    if env_pin:
+        return env_pin
+    if tops:
+        return scope_of_repo(tops[0])
+    return cwd_scope()
 
 repo_scope = resolve_scope()
 
@@ -220,10 +269,17 @@ for p_abs in expanded:
         print("(up to the total-body limit) or ingest the file alone.")
         sys.exit(1)
     total_bytes += len(data)
+    base = os.path.basename(p_abs)
+    if p_abs in doc_path:
+        # A file with a document path keeps its real name: the daemon
+        # requires the path to end in it, and the path, not the name, is
+        # what tells two index.md files apart.
+        files.append({"name": base, "content": base64.b64encode(data).decode("ascii"),
+                      "path": doc_path[p_abs]})
+        continue
     # Collisions: when a directory walk hits multiple files of the same
     # basename, disambiguate with parent-dir prefix. Without this, the
     # rag-ingester would overwrite its OUTPUT artifacts mid-loop.
-    base = os.path.basename(p_abs)
     if base in seen_names:
         parent = os.path.basename(os.path.dirname(p_abs))
         base = f"{parent}__{base}"
@@ -243,6 +299,14 @@ if not url_base or not token:
     print("error: VORNIK_URL and VORNIK_COMPANION_TOKEN must be set in this shell")
     print("(the same env the .mcp.json plugin config uses — see contrib/claude-code-companion/README.md)")
     sys.exit(1)
+
+print(f"repo_scope: {repo_scope}")
+for f in files:
+    if "path" in f:
+        print(f"  {f['path']}")
+    else:
+        print(f"  {f['name']}  (outside any repository: no document path)")
+
 url = url_base + "/api/v1/mcp/companion"
 
 delegate_args = {

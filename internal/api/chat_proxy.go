@@ -294,6 +294,14 @@ func (s *Server) ChatCompletions(w http.ResponseWriter, r *http.Request) {
 	// 2026-07-18-nonswarm-llm-fallback-design.md §4).
 	ctx = chat.WithoutModelFallback(ctx)
 
+	// Label the call by who accounts for it, decided by the same test as the
+	// billing skip in recordChatAPIUsage (ledger-completeness design §13).
+	if isInternalAgentRequest(r) {
+		ctx = chat.WithDefaultCallSite(ctx, "agent.step")
+	} else {
+		ctx = chat.WithDefaultCallSite(ctx, "chat.external")
+	}
+
 	// Pass through to whichever Provider is wired. CompleteWithTools
 	// is the universal method — an empty tools slice makes it
 	// equivalent to Complete(), so we always go through this path to
@@ -501,6 +509,16 @@ func (s *Server) pricingTableLoaded() *pricing.Table {
 	return s.pricingTableCache
 }
 
+// isInternalAgentRequest reports whether a proxy request came from a
+// vornik agent container: either id header set. It is the ONE test behind
+// both the billing skip and the call-site label, so the label always names
+// the ledger row that accounts for the call. It trusts the headers exactly as
+// far as the billing skip always has; a forged id is wrong on both at once,
+// never on one (ledger-completeness design §13).
+func isInternalAgentRequest(r *http.Request) bool {
+	return r.Header.Get("X-Vornik-Task-ID") != "" || r.Header.Get("X-Vornik-Execution-ID") != ""
+}
+
 // recordChatAPIUsage writes a TaskLLMUsage row for a third-party
 // chat-proxy call. Mirrors dispatcher.Agent.recordLLMUsage but
 // keyed off external-API attribution rather than dispatcher
@@ -539,7 +557,7 @@ func (s *Server) recordChatAPIUsage(ctx context.Context, r *http.Request, model 
 	// workflow_step row, double-recording here would inflate the
 	// cost dashboard. Detect via task/execution headers; either
 	// being non-empty marks the call as agent-originated.
-	if r.Header.Get("X-Vornik-Task-ID") != "" || r.Header.Get("X-Vornik-Execution-ID") != "" {
+	if isInternalAgentRequest(r) {
 		return
 	}
 	if resp.Usage.PromptTokens == 0 && resp.Usage.CompletionTokens == 0 {

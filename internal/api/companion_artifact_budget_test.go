@@ -1,8 +1,20 @@
 package api
 
 import (
+	"bytes"
+	"encoding/base64"
+	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
+	"vornik.io/vornik/internal/config"
+	"vornik.io/vornik/internal/registry"
+	"vornik.io/vornik/internal/taskcreate"
 )
 
 // The observed run: 248 KB of staged artifacts against a 100k context, which
@@ -63,4 +75,72 @@ func TestStagedArtifactBudget_RefusalCarriesItsArithmetic(t *testing.T) {
 	if !strings.Contains(msg, "136") || !strings.Contains(msg, "41808") {
 		t.Fatalf("the refusal does not carry its arithmetic: %s", msg)
 	}
+}
+
+// ingestGuardRegistry has one agent-less ingest workflow and one agent workflow,
+// both artifact-only.
+func ingestGuardRegistry(t *testing.T) *registry.Registry {
+	t.Helper()
+	root := t.TempDir()
+	for _, d := range []string{"projects", "swarms", "workflows"} {
+		require.NoError(t, os.MkdirAll(filepath.Join(root, d), 0o755))
+	}
+	files := map[string]string{
+		"swarms/swarm.md": "---\nswarmId: swarm-1\nroles:\n  - name: worker\n    runtime:\n      image: test-image\n---\n",
+		"workflows/wf-ingest.md": "---\nworkflowId: wf-ingest\nentrypoint: done\nrequire_input_artifacts: true\n" +
+			"ingest_input_artifacts: true\nterminals:\n  done:\n    status: COMPLETED\n---\n",
+		"workflows/wf-review.md": "---\nworkflowId: wf-review\nentrypoint: run\nrequire_input_artifacts: true\nsteps:\n  run:\n" +
+			"    type: agent\n    prompt: \"review\"\n    role: worker\n    on_success: done\nterminals:\n  done:\n    status: COMPLETED\n---\n",
+		"projects/alpha.yaml": "projectId: alpha\ndisplayName: Alpha\nswarmId: swarm-1\ndefaultWorkflowId: wf-review\ndefaultPriority: 50\n",
+	}
+	for name, body := range files {
+		require.NoError(t, os.WriteFile(filepath.Join(root, name), []byte(body), 0o644))
+	}
+	reg := registry.New()
+	require.NoError(t, reg.Load(root))
+	return reg
+}
+
+func delegateLargeUpload(t *testing.T, workflow string) (string, bool) {
+	t.Helper()
+	srv, keyRepo, taskRepo := newCompanionMCPServer(t)
+	reg := ingestGuardRegistry(t)
+	srv.projectRegistry = reg
+	srv.taskCreator = taskcreate.New(taskcreate.WithTaskRepository(taskRepo), taskcreate.WithProjectRegistry(reg))
+	srv.inputArtifactStore = &fakeInputArtifactStore{}
+	srv.config = &config.Config{Runtime: config.RuntimeConfig{AgentLLM: config.AgentLLMConfig{ContextSize: 100000, MaxTokens: 16384}}}
+	raw, _ := seedCompanionKey(t, keyRepo, "alpha", []string{workflow})
+	doc := base64.StdEncoding.EncodeToString(bytes.Repeat([]byte("x"), 280*1024)) // the benchmark LLD's size
+	req := withCompanionBearer(mcpRequest(t, "tools/call", map[string]any{
+		"name": "delegate",
+		"arguments": map[string]any{
+			"workflow":       workflow,
+			"prompt":         "ingest the staged design",
+			"inputArtifacts": []map[string]any{{"name": "design.md", "content": doc}},
+		},
+	}), raw)
+	rec := httptest.NewRecorder()
+	srv.CompanionMCPHandler(rec, req)
+	return decodeToolText(t, decodeJSONRPC(t, rec.Body.Bytes()))
+}
+
+// The 2026-09-26 regression: the guard refused companion-rag-ingest, which
+// has no agent step, so no document over about 125 KB could reach RAG.
+func TestStagedArtifactBudget_AgentlessIngestIsExempt(t *testing.T) {
+	text, isErr := delegateLargeUpload(t, "wf-ingest")
+	require.False(t, isErr, "an agent-less ingest reads nothing into a context; got: %s", text)
+}
+
+func TestStagedArtifactBudget_AgentWorkflowIsStillRefused(t *testing.T) {
+	text, isErr := delegateLargeUpload(t, "wf-review")
+	require.True(t, isErr, "an agent that reads the upload must still be protected")
+	assert.Contains(t, text, "ARTIFACTS_EXCEED_CONTEXT")
+}
+
+// An unknown workflow cannot be shown agent-less, so it stays measured
+// (review-20260926-405f F3).
+func TestStagedArtifactBudget_UnknownWorkflowIsStillRefused(t *testing.T) {
+	text, isErr := delegateLargeUpload(t, "wf-not-in-the-registry")
+	require.True(t, isErr, "an unknown workflow must not be exempt")
+	assert.Contains(t, text, "ARTIFACTS_EXCEED_CONTEXT")
 }

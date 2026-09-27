@@ -44,19 +44,80 @@ var shareAcknowledgementPhrases = map[string]bool{
 	"potvrzuji sdileni":      true,
 }
 
-// isShareAcknowledgement reports whether the text is EXACTLY one of the accepted phrases.
-//
-// Normalisation is limited to what cannot change meaning: case, surrounding whitespace,
-// collapsed internal whitespace, and trailing sentence punctuation. Anything else — including a
-// phrase embedded in a longer sentence — is not an acknowledgement.
-func isShareAcknowledgement(text string) bool {
+// cancelAcknowledgementPhrases / retryAcknowledgementPhrases acknowledge a pending
+// cancel_task / retry_task (design §12). Same rules as the share set: closed, matched whole,
+// no bare "yes"/"ano", Czech with and without diacritics — and DISJOINT from every other
+// scope's set, so no phrase can discharge a proposal of another kind.
+var cancelAcknowledgementPhrases = map[string]bool{
+	"cancel it":         true,
+	"confirm cancel":    true,
+	"zruš to":           true,
+	"zrus to":           true,
+	"potvrzuji zrušení": true,
+	"potvrzuji zruseni": true,
+}
+
+var retryAcknowledgementPhrases = map[string]bool{
+	"retry it":            true,
+	"confirm retry":       true,
+	"zkus to znovu":       true,
+	"potvrzuji opakování": true,
+	"potvrzuji opakovani": true,
+}
+
+// acknowledgementPhraseSets maps a confirmation Scope to its closed phrase set. A scope not
+// listed acknowledges NOTHING — a future scope fails closed until it is given a set.
+var acknowledgementPhraseSets = map[string]map[string]bool{
+	string(memoryScopeShared): shareAcknowledgementPhrases,
+	scopeCancelTask:           cancelAcknowledgementPhrases,
+	scopeRetryTask:            retryAcknowledgementPhrases,
+}
+
+// normaliseAcknowledgement is limited to what cannot change meaning: case, surrounding
+// whitespace, collapsed internal whitespace, and trailing sentence punctuation. Anything
+// else — including a phrase embedded in a longer sentence — is not an acknowledgement.
+func normaliseAcknowledgement(text string) string {
 	s := strings.ToLower(strings.Join(strings.Fields(text), " "))
 	s = strings.TrimRight(s, ".!…")
-	s = strings.TrimSpace(s)
+	return strings.TrimSpace(s)
+}
+
+// acknowledgementMatchesScope reports whether the text is EXACTLY one of the phrases that
+// acknowledge a proposal of this scope (design §12). The receiver matches against the PENDING
+// row's scope, so "share it" can never discharge a pending cancel.
+func acknowledgementMatchesScope(text, scope string) bool {
+	s := normaliseAcknowledgement(text)
+	return s != "" && acknowledgementPhraseSets[scope][s]
+}
+
+// isAnyAcknowledgement reports whether the text acknowledges SOME scope. The receiver checks it
+// before touching the store, so an ordinary message never costs a lookup.
+func isAnyAcknowledgement(text string) bool {
+	s := normaliseAcknowledgement(text)
 	if s == "" {
 		return false
 	}
-	return shareAcknowledgementPhrases[s]
+	for _, set := range acknowledgementPhraseSets {
+		if set[s] {
+			return true
+		}
+	}
+	return false
+}
+
+// isShareAcknowledgement reports whether the text is EXACTLY one of the shared-scope phrases.
+func isShareAcknowledgement(text string) bool {
+	return acknowledgementMatchesScope(text, string(memoryScopeShared))
+}
+
+// acknowledgementPhrasesFor lists a scope's accepted phrases, sorted, for the request text.
+func acknowledgementPhrasesFor(scope string) []string {
+	out := make([]string, 0, len(acknowledgementPhraseSets[scope]))
+	for p := range acknowledgementPhraseSets[scope] {
+		out = append(out, p)
+	}
+	sort.Strings(out)
+	return out
 }
 
 // acceptedSharePhrasesText renders the closed acknowledgement set as a stable, quoted list for

@@ -10,90 +10,37 @@ import (
 	"vornik.io/vornik/internal/config"
 )
 
-// TestProbeBinaryRow_ConfiguredAndPresent — when the operator pins
-// a path AND it exists + is executable, the row reports OK.
-func TestProbeBinaryRow_ConfiguredAndPresent(t *testing.T) {
-	tmp := t.TempDir()
-	bin := filepath.Join(tmp, "fake-whisper")
-	if err := os.WriteFile(bin, []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
-		t.Fatal(err)
+// fakeDeclared answers which tools the agent image declares.
+type fakeDeclared map[string]bool
+
+func (f fakeDeclared) Declared(_ context.Context, tool string) (bool, string) {
+	if f[tool] {
+		return true, ""
 	}
-	row := probeBinaryRow("Whisper binary", bin, []string{"whisper-cpp"})
-	if !row.Configured {
-		t.Error("Configured should be true for an explicit path")
-	}
-	if !row.OK {
-		t.Errorf("OK should be true; got error %q", row.Error)
-	}
-	if row.Path != bin {
-		t.Errorf("Path = %q, want %q", row.Path, bin)
-	}
+	return false, "localhost/vornik-agent:x does not declare " + tool
 }
 
-// TestProbeBinaryRow_ConfiguredButNotExecutable — a file that
-// exists but lacks +x renders red with an explanatory error.
-// Mirrors the operator-facing diagnostic from probeBinary in
-// container_voice.go.
-func TestProbeBinaryRow_ConfiguredButNotExecutable(t *testing.T) {
+// Process-spawn law S5b: the voice tools run in the agent image, so the
+// readiness row asks whether the image declares the tool; it never looks
+// on the host's $PATH. A PATH-first fake binary must not make the row OK.
+func TestSandboxToolRow_AsksTheImageNeverTheHost(t *testing.T) {
 	tmp := t.TempDir()
-	bin := filepath.Join(tmp, "fake-piper-noperm")
-	if err := os.WriteFile(bin, []byte("x"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	row := probeBinaryRow("Piper binary", bin, nil)
-	if row.OK {
-		t.Error("OK should be false for non-executable file")
-	}
-	if !strings.Contains(row.Error, "not executable") {
-		t.Errorf("error should mention non-executable; got %q", row.Error)
-	}
-}
-
-// TestProbeBinaryRow_ConfiguredButMissing — clear error when the
-// pinned path doesn't exist. Operators see "first voice call will
-// fail" in the daemon log; the row carries the same signal.
-func TestProbeBinaryRow_ConfiguredButMissing(t *testing.T) {
-	row := probeBinaryRow("Whisper binary", "/nonexistent/vornik-test-whisper", nil)
-	if row.OK {
-		t.Error("OK should be false")
-	}
-	if !strings.Contains(row.Error, "not found") {
-		t.Errorf("error should mention not found; got %q", row.Error)
-	}
-}
-
-// TestProbeBinaryRow_FallsBackToPath — when configured is empty,
-// the helper walks $PATH against the candidate list. Verified by
-// dropping a fake on a controlled $PATH.
-func TestProbeBinaryRow_FallsBackToPath(t *testing.T) {
-	tmp := t.TempDir()
-	fake := filepath.Join(tmp, "whisper-cpp")
-	if err := os.WriteFile(fake, []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+	if err := os.WriteFile(filepath.Join(tmp, "piper"), []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	t.Setenv("PATH", tmp)
-	row := probeBinaryRow("Whisper binary", "", []string{"whisper-cpp", "whisper-cli"})
-	if row.Configured {
-		t.Error("Configured should be false when no explicit path")
-	}
-	if !row.OK {
-		t.Errorf("expected OK from PATH lookup; error=%q", row.Error)
-	}
-	if filepath.Base(row.Path) != "whisper-cpp" {
-		t.Errorf("Path = %q, want a whisper-cpp resolution", row.Path)
-	}
-}
 
-// TestProbeBinaryRow_NoPathHitNorConfigured — no path, no $PATH
-// match → renders red with an actionable error.
-func TestProbeBinaryRow_NoPathHitNorConfigured(t *testing.T) {
-	t.Setenv("PATH", "/tmp/empty-vornik-test")
-	row := probeBinaryRow("Whisper binary", "", []string{"nonexistent-bin-xyz"})
-	if row.OK {
-		t.Error("OK should be false")
+	row := sandboxToolRow(context.Background(), "piper (agent image)", "piper", fakeDeclared{"whisper-cli": true})
+	if row.OK || !strings.Contains(row.Error, "does not declare piper") {
+		t.Fatalf("a host piper must not count: %+v", row)
 	}
-	if !strings.Contains(row.Error, "not found on $PATH") {
-		t.Errorf("error should mention $PATH; got %q", row.Error)
+	row = sandboxToolRow(context.Background(), "whisper-cli (agent image)", "whisper-cli", fakeDeclared{"whisper-cli": true})
+	if !row.OK || !row.Configured || row.Path != "whisper-cli" {
+		t.Fatalf("a declared tool is OK: %+v", row)
+	}
+	row = sandboxToolRow(context.Background(), "ffmpeg (agent image)", "ffmpeg", nil)
+	if row.OK || !strings.Contains(row.Error, "no sandbox runner") {
+		t.Fatalf("no runner: %+v", row)
 	}
 }
 
@@ -199,7 +146,7 @@ func TestProbeFilesystemWritable_PathIsAFile(t *testing.T) {
 // Probes so the template renders the "voice disabled" placeholder.
 func TestRuntimeReadinessProbe_VoiceStatus_DisabledProvider(t *testing.T) {
 	cfg := &config.Config{}
-	p := newRuntimeReadinessProbe(cfg)
+	p := newRuntimeReadinessProbe(cfg, nil)
 	got := p.VoiceStatus(context.Background())
 	if got.STTProvider != "" || got.TTSProvider != "" {
 		t.Errorf("expected disabled providers; got %+v", got)
@@ -210,18 +157,24 @@ func TestRuntimeReadinessProbe_VoiceStatus_DisabledProvider(t *testing.T) {
 }
 
 // TestRuntimeReadinessProbe_VoiceStatus_PopulatesProbes — configured
-// providers populate 6 probe rows (3 STT + 3 TTS).
+// providers populate 6 probe rows (3 STT + 3 TTS): each provider's two
+// agent-image tools and its model.
 func TestRuntimeReadinessProbe_VoiceStatus_PopulatesProbes(t *testing.T) {
 	cfg := &config.Config{}
 	cfg.Voice.STT.Provider = "whisper-local"
 	cfg.Voice.TTS.Provider = "piper"
-	p := newRuntimeReadinessProbe(cfg)
+	p := newRuntimeReadinessProbe(cfg, nil)
 	got := p.VoiceStatus(context.Background())
 	if got.STTProvider != "whisper-local" || got.TTSProvider != "piper" {
 		t.Errorf("provider names lost: %+v", got)
 	}
 	if len(got.Probes) != 6 {
 		t.Errorf("expected 6 probe rows (3 STT + 3 TTS), got %d", len(got.Probes))
+	}
+	for _, row := range got.Probes {
+		if strings.Contains(row.Label, "agent image") && (row.OK || !strings.Contains(row.Error, "no sandbox runner")) {
+			t.Errorf("with no runner a tool row is not OK: %+v", row)
+		}
 	}
 }
 
@@ -232,7 +185,7 @@ func TestRuntimeReadinessProbe_StorageStatus_Filesystem(t *testing.T) {
 	cfg := &config.Config{}
 	cfg.Storage.Backend = "filesystem"
 	cfg.Storage.ArtifactsPath = tmp
-	p := newRuntimeReadinessProbe(cfg)
+	p := newRuntimeReadinessProbe(cfg, nil)
 	got := p.StorageStatus(context.Background())
 	if got.Backend != "filesystem" {
 		t.Errorf("Backend = %q, want filesystem", got.Backend)
@@ -256,7 +209,7 @@ func TestRuntimeReadinessProbe_StorageStatus_S3_ReportsConfig(t *testing.T) {
 	cfg.Storage.S3.Bucket = "vornik-prod-artifacts"
 	cfg.Storage.S3.Prefix = "prod"
 	cfg.Storage.S3.UsePathStyle = true
-	p := newRuntimeReadinessProbe(cfg)
+	p := newRuntimeReadinessProbe(cfg, nil)
 	got := p.StorageStatus(context.Background())
 	if got.Backend != "s3" {
 		t.Errorf("Backend = %q, want s3", got.Backend)

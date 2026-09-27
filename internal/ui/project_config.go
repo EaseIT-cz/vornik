@@ -5,8 +5,10 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
+	"vornik.io/vornik/internal/config"
 	"vornik.io/vornik/internal/registry"
 	"vornik.io/vornik/internal/safepath"
 )
@@ -201,6 +203,15 @@ func copyUIDir(src, dst string) error {
 }
 
 func writeProjectConfigAtomic(path string, content []byte) (string, error) {
+	// Process-spawn law, reading 3: no UI edit may add or alter a stdio MCP
+	// server, since the daemon launches its program on the reload that
+	// follows. Every UI writer of a config file comes through here.
+	if strings.HasSuffix(path, ".yaml") || strings.HasSuffix(path, ".yml") {
+		existing, _ := os.ReadFile(path) //nolint:gosec // the caller's validated config path
+		if err := config.StdioMCPChange(existing, content); err != nil {
+			return "", err
+		}
+	}
 	dir := filepath.Dir(path)
 	base := filepath.Base(path)
 	var backupPath string

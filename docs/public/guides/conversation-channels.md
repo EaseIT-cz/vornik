@@ -313,18 +313,20 @@ message, and — if the conversation started in voice — speaks its reply back.
 A conversation's "voice mode" is sticky: once someone speaks, vornik keeps
 replying with audio until the next message comes in as text.
 
-The current release uses local, open-weight speech engines that run on the same
-host as vornik:
+The current release uses local, open-weight speech engines:
 
 - **Speech-to-text:** [whisper.cpp](https://github.com/ggerganov/whisper.cpp)
-  with a Whisper model file.
+  (`whisper-cli`) with a Whisper ggml model file.
 - **Text-to-speech:** [Piper](https://github.com/rhasspy/piper) with a Piper
   voice.
-- **Audio conversion:** `ffmpeg`, built with Opus support for Telegram and AAC
-  for Slack.
+- **Audio conversion:** `ffmpeg`, with Opus for Telegram and AAC for Slack.
 
-Install those binaries and download the model files, then point the
-configuration at them.
+Since 2026.9.7 the programs ship **in the agent image** and every voice note is
+processed there, in a one-shot container with no network and a memory, CPU and
+time limit (`sandbox_tools.limits.voice_stt` / `voice_tts`, see
+[Artifacts and delivery](artifacts-and-delivery.md)). Nothing is installed on,
+or run on, the daemon host. You download only the **model files**; vornik
+mounts each model's directory read-only into the container.
 
 ### Configuration
 
@@ -333,14 +335,10 @@ voice:
   stt:
     provider: "whisper-local"
     model: "/path/to/ggml-base.en.bin"
-    binary_path: "/usr/local/bin/whisper-cpp"
-    ffmpeg_path: "/usr/bin/ffmpeg"
-    language_hint: "en"        # leave empty to auto-detect
+    language_hint: "en"        # leave empty for English
   tts:
     provider: "piper"
     voice: "/path/to/en_US-amy-medium.onnx"
-    binary_path: "/usr/local/bin/piper"
-    ffmpeg_path: "/usr/bin/ffmpeg"
     speed: 1.0
     max_text_runes: 1500
 ```
@@ -354,12 +352,21 @@ both.
 - `max_text_runes` caps how much text gets spoken (1500 is about 90 seconds).
   Telegram limits voice messages to 60 seconds, so set this to suit your
   channel; vornik trims overly long replies rather than failing silently.
-- Your `ffmpeg` must be built with Opus support for Telegram audio and AAC for
-  Slack audio. A minimal build may be missing these.
+- `binary_path` and `ffmpeg_path` are **ignored since 2026.9.7**: the programs
+  come from the agent image. The daemon logs a warning while they are still set;
+  remove them. An agent image older than the release lacks the tools, and voice
+  then reports "not available in the agent image" — there is no fallback to a
+  program on the host.
+- Run `vornikctl doctor`: its `sandbox_tools` check transcribes a one-second
+  clip with your Whisper model, synthesises a phrase with your Piper voice, and
+  round-trips Opus and AAC through `ffmpeg`, all in the sandbox, so a wrong or
+  missing model shows up there rather than at the first voice note.
 - Use the smallest Whisper model that is accurate enough for you. On a machine
   without a GPU, larger models can take many seconds to transcribe a clip.
 - For Piper, point `voice` at the `.onnx` file; its matching `.onnx.json`
-  must sit beside it.
+  must sit beside it (the whole directory is mounted).
+- `voice.stt.model` also serves **audio document extraction** unless
+  `extractors.audio.model_path` names a different model.
 
 ---
 

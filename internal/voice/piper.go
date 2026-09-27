@@ -1,54 +1,39 @@
 package voice
 
 import (
-	"bytes"
 	"context"
 	"encoding/binary"
 	"errors"
 	"fmt"
-	"io"
-	"os/exec"
+	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
+
+	"vornik.io/vornik/internal/sandboxtool"
 )
 
-// PiperConfig configures the local Piper TTS subprocess wrapper.
+// PiperConfig configures the local Piper text-to-speech provider.
 //
-// Host dep matrix (slice-1 decisions):
+// Both tools it needs run in the pinned agent image through the sandbox
+// runner (process-spawn law S5b,
+// https://docs.vornik.io §7), never
+// on the daemon host:
 //
-//   - Piper CLI binary (https://github.com/rhasspy/piper). The
-//     deployment host needs `piper` somewhere on $PATH OR an explicit
-//     BinaryPath. Tested with piper 2023.x; the binary's CLI surface
-//     has been stable since 1.0.
-//   - At least one voice model (.onnx + .onnx.json pair). The
-//     `en_US-amy-medium` model is the documented default; operators
-//     point ModelPath at the .onnx file and Piper auto-discovers the
-//     adjacent .json.
-//   - ffmpeg, when callers ask for Format other than "wav" (Piper
-//     emits WAV natively; the transcode step turns it into ogg-opus
-//     for Telegram or mp4-aac for Slack). The fallback decision is
-//     "use ffmpeg" — universally available, avoids a Go-side encoder
-//     dependency. Documented here so the slice-1 commit doesn't
-//     surprise operators on minimal containers.
+//   - piper (2023.11.14-2 in the image), with one voice model: the .onnx
+//     and its .onnx.json side by side. The model's DIRECTORY is mounted
+//     read-only at /models, so piper finds the .json beside the .onnx.
+//   - ffmpeg, when callers ask for a Format other than "wav": Piper emits
+//     WAV; the transcode turns it into ogg-opus for Telegram or mp4-aac
+//     for Slack.
 //
-// All three are runtime-probed lazily: a missing binary surfaces as
+// A missing sandbox or a tool the image lacks surfaces as
 // ErrProviderUnavailable on the first Synthesize call, NOT at
-// construction. This lets the daemon boot in environments where voice
-// is opt-in and the operator hasn't yet installed the deps.
+// construction, so the daemon boots where voice is opt-in.
 type PiperConfig struct {
-	// BinaryPath is the absolute path to the piper CLI binary. Empty
-	// asks exec.LookPath("piper"), so operators can install via their
-	// package manager and leave the field unset.
-	BinaryPath string
-
 	// ModelPath is the absolute path to the voice model's .onnx file.
 	// Required — Piper has no implicit default model.
 	ModelPath string
-
-	// FFmpegPath is the absolute path to the ffmpeg binary used for
-	// the WAV→ogg-opus / WAV→mp4-aac transcode. Empty asks
-	// exec.LookPath("ffmpeg").
-	FFmpegPath string
 
 	// DefaultVoice is the fallback when TTSOptions.VoiceID is empty.
 	// Piper's CLI doesn't actually use a voice name — the voice IS
@@ -57,8 +42,8 @@ type PiperConfig struct {
 	DefaultVoice string
 
 	// DefaultSpeed is the fallback when TTSOptions.Speed is 0.
-	// Piper's CLI flag --length-scale takes the INVERSE of speed
-	// (length 0.5 = 2x faster); the wrapper does that translation.
+	// Piper's --length_scale takes the INVERSE of speed (length 0.5 =
+	// 2x faster); the provider does that translation.
 	DefaultSpeed float64
 
 	// MaxTextRunes caps one synthesis call. Defends against an LLM
@@ -66,6 +51,10 @@ type PiperConfig struct {
 	// voice envelope. Zero falls back to defaultPiperMaxRunes
 	// (1500 runes ~ 90 seconds at conversational pace).
 	MaxTextRunes int
+
+	// Sandbox runs the tools. Nil makes every Synthesize report
+	// ErrProviderUnavailable; there is no host fallback.
+	Sandbox sandboxtool.Sandbox
 }
 
 const (
@@ -74,31 +63,18 @@ const (
 	defaultPiperMaxRunes = 1500
 )
 
-// piperLocalTTS wraps the Piper CLI binary as a TTSProvider. The
-// subprocess flow is:
+// piperLocalTTS runs Piper as a TTSProvider. Each Synthesize is one or two
+// voice_tts sandbox runs, on the pool's reserved voice slot:
 //
-//  1. spawn piper with --model <ModelPath> --output_raw (Piper emits
-//     a raw WAV on stdout when --output_raw is unset; we pipe stdout
-//     into either ffmpeg or back to the caller depending on Format).
-//  2. write the input text on the subprocess's stdin and close it
-//     (Piper waits for EOF before emitting).
-//  3. read stdout bytes.
-//  4. transcode if Format != "wav".
-//
-// All four steps happen under a context-aware exec.Cmd so cancellation
-// propagates to the OS process.
+//  1. piper reads the text on stdin (from a file in /in, so the text is
+//     never argv) and writes /out/speech.wav.
+//  2. when Format is not "wav", ffmpeg transcodes that WAV into /out.
 type piperLocalTTS struct {
 	cfg PiperConfig
-
-	// runCmd swaps in fakes for testing. Defaults to runRealCmd; tests
-	// stub this to return canned WAV / fail at specific stages.
-	runCmd func(ctx context.Context, name string, args []string, stdin []byte) (stdout []byte, stderr []byte, err error)
 }
 
-// NewPiperLocalTTS constructs the Piper subprocess wrapper. Returns
-// an error only when the config is structurally broken (empty
-// ModelPath). Missing binaries are NOT a construction failure —
-// they surface as ErrProviderUnavailable on the first call.
+// NewPiperLocalTTS constructs the provider. Returns an error only when the
+// config is structurally broken (empty ModelPath).
 func NewPiperLocalTTS(cfg PiperConfig) (TTSProvider, error) {
 	if strings.TrimSpace(cfg.ModelPath) == "" {
 		return nil, errors.New("voice: PiperConfig.ModelPath is required")
@@ -112,12 +88,12 @@ func NewPiperLocalTTS(cfg PiperConfig) (TTSProvider, error) {
 	if cfg.MaxTextRunes <= 0 {
 		cfg.MaxTextRunes = defaultPiperMaxRunes
 	}
-	return &piperLocalTTS{cfg: cfg, runCmd: runRealCmd}, nil
+	return &piperLocalTTS{cfg: cfg}, nil
 }
 
-// Synthesize is the TTSProvider entry point. Validates inputs,
-// invokes the Piper subprocess, transcodes if needed, and returns
-// the encoded audio + metadata. Honors ctx cancellation.
+// Synthesize is the TTSProvider entry point. Validates inputs, runs piper
+// in the sandbox, transcodes if needed, and returns the encoded audio +
+// metadata. Honors ctx cancellation.
 func (p *piperLocalTTS) Synthesize(ctx context.Context, text string, opts TTSOptions) (Audio, error) {
 	trimmed := strings.TrimSpace(text)
 	if trimmed == "" {
@@ -127,46 +103,51 @@ func (p *piperLocalTTS) Synthesize(ctx context.Context, text string, opts TTSOpt
 		return Audio{}, fmt.Errorf("%w: %d runes > %d cap",
 			ErrOversizeText, runesIn(trimmed), p.cfg.MaxTextRunes)
 	}
-
-	bin := p.cfg.BinaryPath
-	if bin == "" {
-		resolved, err := exec.LookPath("piper")
-		if err != nil {
-			return Audio{}, fmt.Errorf("%w: piper binary not found: %v", ErrProviderUnavailable, err)
-		}
-		bin = resolved
+	if p.cfg.Sandbox == nil {
+		return Audio{}, fmt.Errorf("%w: %w (no sandbox runner)", ErrProviderUnavailable, sandboxtool.ErrNotAvailable)
+	}
+	if err := modelReady("voice.tts.voice", p.cfg.ModelPath); err != nil {
+		return Audio{}, err
 	}
 
 	speed := opts.Speed
 	if speed <= 0 {
 		speed = p.cfg.DefaultSpeed
 	}
-	// Piper's --length-scale is the inverse of speed: shorter scale =
+	// Piper's --length_scale is the inverse of speed: shorter scale =
 	// faster speech.
 	lengthScale := 1.0 / speed
 
-	args := []string{
-		"--model", p.cfg.ModelPath,
-		"--length-scale", formatFloat(lengthScale),
-		"--output_file", "-",
-	}
-	stdout, stderr, err := p.runCmd(ctx, bin, args, []byte(trimmed))
+	res, err := p.cfg.Sandbox.Run(ctx, sandboxtool.Spec{
+		Feature:    sandboxtool.FeatureVoiceTTS,
+		Entrypoint: "piper",
+		Args: []string{
+			"--model", "/models/" + filepath.Base(p.cfg.ModelPath),
+			"--length_scale", formatFloat(lengthScale),
+			"--output_file", "/out/speech.wav",
+			"--quiet",
+		},
+		Inputs:   []sandboxtool.Input{{Name: "text", Data: []byte(trimmed)}},
+		Stdin:    "text",
+		ModelDir: filepath.Dir(p.cfg.ModelPath),
+	})
 	if err != nil {
-		// Subprocess exited non-zero or couldn't spawn. Surface
-		// stderr verbatim — Piper's error messages are short and
-		// actionable ("model not found", "invalid voice", ...).
-		return Audio{}, fmt.Errorf("voice: piper exec failed: %w: %s", err, trimSpaces(string(stderr)))
+		// piper's own message ("Unable to load voice", ...) is in the
+		// run error's detail.
+		return Audio{}, runFailure("piper", err)
 	}
-	if len(stdout) == 0 {
+	defer res.Close()
+	wavPath := filepath.Join(res.OutDir, "speech.wav")
+	wav, err := os.ReadFile(wavPath)
+	if err != nil || len(wav) == 0 {
 		return Audio{}, errors.New("voice: piper produced empty output")
 	}
 
 	// Piper writes a RIFF WAV header followed by PCM samples. The
-	// parser here is defensive: it only consults the header to set
-	// SampleRateHz and DurationMs; the bytes themselves pass through
-	// unchanged to the transcode step (or the caller, when
-	// Format=="wav").
-	sampleRate, durationMs, parseErr := parseWAV(stdout)
+	// parser only consults the header to set SampleRateHz and
+	// DurationMs; the bytes pass through unchanged to the transcode
+	// step (or the caller, when Format=="wav").
+	sampleRate, durationMs, parseErr := parseWAV(wav)
 	if parseErr != nil {
 		return Audio{}, fmt.Errorf("voice: piper output not a parseable WAV: %w", parseErr)
 	}
@@ -175,119 +156,80 @@ func (p *piperLocalTTS) Synthesize(ctx context.Context, text string, opts TTSOpt
 	if format == "" {
 		format = "wav"
 	}
-
-	switch format {
-	case "wav":
-		return Audio{
-			Bytes:        stdout,
-			MimeType:     "audio/wav",
-			DurationMs:   durationMs,
-			SampleRateHz: sampleRate,
-		}, nil
-	case "ogg-opus":
-		out, err := p.transcode(ctx, stdout, format)
-		if err != nil {
-			return Audio{}, err
-		}
-		return Audio{
-			Bytes:        out,
-			MimeType:     "audio/ogg",
-			DurationMs:   durationMs,
-			SampleRateHz: sampleRate,
-		}, nil
-	case "mp4-aac":
-		out, err := p.transcode(ctx, stdout, format)
-		if err != nil {
-			return Audio{}, err
-		}
-		return Audio{
-			Bytes:        out,
-			MimeType:     "audio/mp4",
-			DurationMs:   durationMs,
-			SampleRateHz: sampleRate,
-		}, nil
-	default:
+	mime := map[string]string{"wav": "audio/wav", "ogg-opus": "audio/ogg", "mp4-aac": "audio/mp4"}[format]
+	if mime == "" {
 		return Audio{}, fmt.Errorf("voice: unsupported format %q (want wav | ogg-opus | mp4-aac)", format)
 	}
+	out := wav
+	if format != "wav" {
+		if out, err = p.transcode(ctx, wavPath, format); err != nil {
+			return Audio{}, err
+		}
+	}
+	return Audio{
+		Bytes:        out,
+		MimeType:     mime,
+		DurationMs:   durationMs,
+		SampleRateHz: sampleRate,
+	}, nil
 }
 
-// transcode runs ffmpeg to convert Piper's WAV output to either
-// ogg-opus (Telegram-native) or mp4-aac (Slack-native). Driven by a
-// canned arg list per target format so the call site stays small.
-func (p *piperLocalTTS) transcode(ctx context.Context, wavBytes []byte, format string) ([]byte, error) {
-	bin := p.cfg.FFmpegPath
-	if bin == "" {
-		resolved, err := exec.LookPath("ffmpeg")
-		if err != nil {
-			return nil, fmt.Errorf("%w: ffmpeg binary not found: %v", ErrProviderUnavailable, err)
-		}
-		bin = resolved
+// transcode runs ffmpeg in the sandbox to convert Piper's WAV to either
+// ogg-opus (Telegram-native) or mp4-aac (Slack-native). Driven by a canned
+// arg list per target format so the call site stays small.
+func (p *piperLocalTTS) transcode(ctx context.Context, wavPath, format string) ([]byte, error) {
+	spec, output, err := TranscodeSpec(wavPath, format)
+	if err != nil {
+		return nil, err
 	}
+	res, err := p.cfg.Sandbox.Run(ctx, spec)
+	if err != nil {
+		return nil, runFailure("ffmpeg transcode", err)
+	}
+	defer res.Close()
+	encoded, err := os.ReadFile(filepath.Join(res.OutDir, output))
+	if err != nil || len(encoded) == 0 {
+		return nil, errors.New("voice: ffmpeg transcode produced empty output")
+	}
+	return encoded, nil
+}
+
+// TranscodeSpec is the voice_tts run that encodes the WAV at wavPath for a
+// channel: "ogg-opus" (Telegram) or "mp4-aac" (Slack). It returns the run
+// and the name of the file it writes in /out. Exported so `vornikctl doctor`
+// encodes its Opus and AAC samples with exactly this run.
+func TranscodeSpec(wavPath, format string) (sandboxtool.Spec, string, error) {
 	var args []string
+	var output string
 	switch format {
 	case "ogg-opus":
 		// Telegram's sendVoice expects OGG with a single Opus stream.
-		// 48 kHz is the only Opus-native rate; ffmpeg auto-resamples
+		// 48 kHz is the only Opus-native rate; ffmpeg resamples
 		// Piper's 22.05 kHz output. -application voip biases the
 		// encoder for speech latency over music fidelity.
-		args = []string{
-			"-loglevel", "error",
-			"-f", "wav",
-			"-i", "-",
-			"-c:a", "libopus",
-			"-b:a", "32k",
-			"-application", "voip",
-			"-ar", "48000",
-			"-ac", "1",
-			"-f", "ogg",
-			"-",
-		}
+		output = "/out/reply.ogg"
+		args = []string{"-nostdin", "-loglevel", "error", "-threads", sandboxtool.FFmpegThreads, "-filter_threads", sandboxtool.FFmpegThreads,
+			"-f", "wav", "-i", "/in/speech.wav", "-threads", sandboxtool.FFmpegThreads,
+			"-c:a", "libopus", "-b:a", "32k", "-application", "voip", "-ar", "48000", "-ac", "1",
+			"-f", "ogg", output}
 	case "mp4-aac":
-		// Slack's audio clip UI renders MP4/AAC inline. -movflags
-		// frag_keyframe+empty_moov lets ffmpeg write the MP4 to a
-		// non-seekable stdout (the default MP4 writer rewinds, which
-		// breaks pipes).
-		args = []string{
-			"-loglevel", "error",
-			"-f", "wav",
-			"-i", "-",
-			"-c:a", "aac",
-			"-b:a", "64k",
-			"-ar", "44100",
-			"-ac", "1",
-			"-movflags", "frag_keyframe+empty_moov+default_base_moof",
-			"-f", "mp4",
-			"-",
-		}
+		// Slack's audio clip UI renders MP4/AAC inline. The fragmented
+		// layout is kept from the stdout era: players accept it and it
+		// streams.
+		output = "/out/reply.m4a"
+		args = []string{"-nostdin", "-loglevel", "error", "-threads", sandboxtool.FFmpegThreads, "-filter_threads", sandboxtool.FFmpegThreads,
+			"-f", "wav", "-i", "/in/speech.wav", "-threads", sandboxtool.FFmpegThreads,
+			"-c:a", "aac", "-b:a", "64k", "-ar", "44100", "-ac", "1",
+			"-movflags", "frag_keyframe+empty_moov+default_base_moof", "-f", "mp4", output}
 	default:
-		return nil, fmt.Errorf("voice: transcode: unsupported format %q", format)
+		return sandboxtool.Spec{}, "", fmt.Errorf("voice: transcode: unsupported format %q", format)
 	}
-	stdout, stderr, err := p.runCmd(ctx, bin, args, wavBytes)
-	if err != nil {
-		return nil, fmt.Errorf("voice: ffmpeg transcode failed: %w: %s",
-			err, trimSpaces(string(stderr)))
-	}
-	if len(stdout) == 0 {
-		return nil, errors.New("voice: ffmpeg transcode produced empty output")
-	}
-	return stdout, nil
-}
-
-// runRealCmd is the production runCmd implementation. Pipes stdin in,
-// collects stdout + stderr separately, and honours ctx cancellation
-// via exec.CommandContext (SIGKILL on ctx.Done()).
-func runRealCmd(ctx context.Context, name string, args []string, stdin []byte) ([]byte, []byte, error) {
-	cmd := exec.CommandContext(ctx, name, args...)
-	if len(stdin) > 0 {
-		cmd.Stdin = bytes.NewReader(stdin)
-	}
-	var outBuf, errBuf bytes.Buffer
-	cmd.Stdout = &outBuf
-	cmd.Stderr = &errBuf
-	if err := cmd.Run(); err != nil {
-		return outBuf.Bytes(), errBuf.Bytes(), err
-	}
-	return outBuf.Bytes(), errBuf.Bytes(), nil
+	return sandboxtool.Spec{
+		Feature:    sandboxtool.FeatureVoiceTTS,
+		Entrypoint: "ffmpeg",
+		Args:       args,
+		Inputs:     []sandboxtool.Input{{Name: "speech.wav", Path: wavPath}},
+	}, filepath.Base(output), nil
 }
 
 // parseWAV reads the minimal RIFF/WAVE header to extract sample rate
@@ -354,15 +296,5 @@ func formatFloat(f float64) string {
 	return strconv.FormatFloat(f, 'f', 4, 64)
 }
 
-// trimSpaces collapses repeated whitespace runs in stderr so error
-// messages stay greppable. Stderr from Piper/ffmpeg often contains
-// long ANSI runs and progress bars.
-func trimSpaces(s string) string {
-	return strings.Join(strings.Fields(s), " ")
-}
-
 // Compile-time guard: piperLocalTTS satisfies TTSProvider.
 var _ TTSProvider = (*piperLocalTTS)(nil)
-
-// ensure io is used (parseWAV may evolve to streaming).
-var _ = io.Discard

@@ -6,6 +6,7 @@ import (
 	"crypto/subtle"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -456,6 +457,15 @@ type Config struct {
 	// dispatcher turn. See
 	// https://docs.vornik.io
 	Media MediaConfig `yaml:"media"`
+	// SandboxTools bounds the one-shot tool runs (document rendering, and
+	// extraction and voice as they move there) in the pinned agent image:
+	// per-feature memory and timeout, and how many run at once. See
+	// https://docs.vornik.io §7.
+	SandboxTools SandboxToolsConfig `yaml:"sandbox_tools"`
+	// Extractors configures the document extractors that need an operator
+	// choice: today the whisper model audio extraction runs in the sandbox.
+	// See https://docs.vornik.io §7.
+	Extractors ExtractorsConfig `yaml:"extractors"`
 	// ToolBudget configures dynamic per-role tool-use limits: a planner
 	// emits a complexity tier and the daemon scales each role's static
 	// VORNIK_MAX_TOOL_ITERATIONS by a config-capped factor. Opt-in, off
@@ -1592,6 +1602,16 @@ type DatabaseConfig struct {
 	Path     string `yaml:"path"`                                                                               // SQLite database file path (driver="sqlite")
 }
 
+// applyDefaults resolves an empty Driver to "postgres", the backend
+// storage.Open connects for it. Feature gates compare Driver with the literal
+// "postgres", so an unresolved `driver: ""` ran on Postgres with those
+// features off (2026-09-25).
+func (d *DatabaseConfig) applyDefaults() {
+	if d.Driver == "" {
+		d.Driver = "postgres"
+	}
+}
+
 // StorageConfig holds artifact storage configuration.
 //
 // Backend selects the artifact backend:
@@ -1737,12 +1757,12 @@ type SchedulerConfig struct {
 	// the defaults were calibrated on. OFF by default: enabled:false is
 	// byte-identical to not having the feature.
 	//
-	// The lease timeout comes FIRST because it is the binding constraint.
-	// Measured 2026-08-15: on a 12 tok/s host, replaying 702 real step shapes
-	// puts 16% of steps past the 5m lease, against 0% on a 206 tok/s host.
-	// Scaling a step timeout while the lease stays fixed changes nothing for
-	// those steps — the task is re-leased mid-flight and the container dies
-	// regardless.
+	// One declared factor scales the lease and every step timeout (after the
+	// tier factor; time only). The lease was scaled first, on a replay
+	// (2026-08-15) predicting it would bind; a live slow arm (2026-09-25/26)
+	// showed the scheduler renews it while a step runs, and that step budgets
+	// are what bind, so they now take the same factor (dynamic-tool-budget
+	// design §6.2.1a/§6.2.1b).
 	SpeedAwareTimeouts SpeedAwareTimeoutsConfig `yaml:"speed_aware_timeouts"`
 	// DefaultStepTimeout is the ceiling for a step whose workflow declares
 	// none. It was a 30m constant in executor.DefaultConfig with no way to
@@ -1813,6 +1833,13 @@ type RuntimeConfig struct {
 	// Each project gets {path}/{projectID}/ mounted at /app/workspace/project/ in containers.
 	// Default: derived from VORNIK_DATA_DIR or /var/lib/vornik/workspaces.
 	ProjectWorkspacePath string `yaml:"project_workspace_path" doc:"Base directory for per-project persistent workspaces."`
+
+	// DependencyCachePath is where `vornikctl deps install` materialises
+	// project dependency trees and the daemon mounts them from (project
+	// dependency provisioning design §8.2). Empty derives
+	// <parent of project_workspace_path>/deps; resolve it with
+	// DependencyCacheDir, never by reading this field.
+	DependencyCachePath string `yaml:"dependency_cache_path" doc:"Directory for installed project dependency trees (empty: a deps/ sibling of project_workspace_path)."`
 
 	// DelegationDepthLimit caps how many levels deep a delegation chain may
 	// run before the engine refuses further delegation. 0 uses the executor
@@ -2207,7 +2234,15 @@ type ChatConfig struct {
 	// autonomy default in Model. Empty inherits Model, same fallback
 	// convention as WizardModel above.
 	FixItModel string `yaml:"fixit_model" doc:"Model for the Fix-It Doctor repair chat."`
-	Timeout    string `yaml:"timeout" doc:"Bound on a single LLM round-trip."`
+	// OptionalWork switches off optional LLM work (every call marked
+	// chat.WithBestEffort: narration lines, memory titles, classification,
+	// consolidation narratives, reranking) per model, for a backend too slow
+	// to serve it beside the task traffic. Refused calls make no request and
+	// each caller degrades as it would without an answer. Unset = today.
+	//
+	// see LLD § https://docs.vornik.io §5.3d
+	OptionalWork ChatOptionalWorkConfig `yaml:"optional_work"`
+	Timeout      string                 `yaml:"timeout" doc:"Bound on a single LLM round-trip."`
 	// DispatchTimeout caps one complete interactive turn (multi-LLM-call,
 	// multi-tool-call) for the dispatcher. Semantically different from
 	// Timeout, which limits a single LLM round-trip. A turn that calls
@@ -2285,6 +2320,12 @@ func (c ChatConfig) ProviderConfigured() bool {
 	default: // "", "http", "openai" — the single-provider HTTP path
 		return strings.TrimSpace(c.Endpoint) != "" && strings.TrimSpace(c.Model) != ""
 	}
+}
+
+// ChatOptionalWorkConfig selects the models whose optional LLM work is refused.
+type ChatOptionalWorkConfig struct {
+	Disabled       bool     `yaml:"disabled" doc:"Refuse all optional LLM work (narration, memory titles/classes/narratives, reranking) on every model."`
+	DisabledModels []string `yaml:"disabled_models" doc:"Refuse optional LLM work on these model ids (exact match). For a backend too slow to serve it beside task traffic."`
 }
 
 // ChatRouterConfig composes multiple providers behind a single
@@ -3444,27 +3485,30 @@ type VoiceConfig struct {
 }
 
 // VoiceSTTConfig configures the speech-to-text provider. The MVP
-// ships one implementation: provider=="whisper-local" wraps the
-// whisper.cpp `main` CLI binary. Other provider names parse but
-// produce a startup warning and a nil provider (voice inbound
-// falls back to the attachment path).
+// ships one implementation: provider=="whisper-local" runs whisper.cpp's
+// whisper-cli, and ffmpeg to normalise the inbound audio, in the pinned
+// agent image through the sandbox runner (process-spawn law S5b). Other
+// provider names parse but produce a startup warning and a nil provider
+// (voice inbound falls back to the attachment path).
 type VoiceSTTConfig struct {
 	// Provider selects the implementation. "whisper-local" is the
 	// only supported value today; empty disables STT.
 	Provider string `yaml:"provider" doc:"Speech-to-text provider (whisper-local)."`
 
 	// Model is the absolute path to the ggml model file
-	// (whisper-local).
-	Model string `yaml:"model" doc:"Absolute path to the STT model file."`
+	// (whisper-local). Its directory is mounted read-only into the
+	// sandbox. Audio extraction falls back to it when
+	// extractors.audio.model_path is unset.
+	Model string `yaml:"model" doc:"Absolute path to the STT ggml model file; its directory is mounted read-only into the sandbox."`
 
-	// BinaryPath is the absolute path to the whisper.cpp CLI.
-	// Empty asks exec.LookPath("whisper-cpp") then "main".
-	BinaryPath string `yaml:"binary_path"`
+	// BinaryPath is ignored since 2026.9.7: whisper-cli runs from the
+	// agent image, never from the host. Parsed so an existing config
+	// still loads; startup warns when it is set.
+	BinaryPath string `yaml:"binary_path" doc:"Ignored since 2026.9.7 (whisper-cli runs in the agent image); startup warns when set."`
 
-	// FFmpegPath is the absolute path to ffmpeg. Empty asks
-	// exec.LookPath("ffmpeg"). Required at runtime — whisper.cpp
-	// can't read OGG/Opus or MP4/M4A natively.
-	FFmpegPath string `yaml:"ffmpeg_path"`
+	// FFmpegPath is ignored since 2026.9.7, like BinaryPath: ffmpeg
+	// runs from the agent image.
+	FFmpegPath string `yaml:"ffmpeg_path" doc:"Ignored since 2026.9.7 (ffmpeg runs in the agent image); startup warns when set."`
 
 	// LanguageHint is an optional BCP-47 nudge for the recogniser
 	// (e.g. "en"). Empty leaves auto-detect.
@@ -3476,25 +3520,26 @@ type VoiceSTTConfig struct {
 }
 
 // VoiceTTSConfig configures the text-to-speech provider. The MVP
-// ships one implementation: provider=="piper" wraps the Piper CLI
-// binary. Other provider names parse but produce a startup
-// warning and a nil provider (outbound replies stay text).
+// ships one implementation: provider=="piper" runs the Piper CLI, and
+// ffmpeg for the reply transcode, in the pinned agent image through the
+// sandbox runner (process-spawn law S5b). Other provider names parse but
+// produce a startup warning and a nil provider (outbound replies stay text).
 type VoiceTTSConfig struct {
 	// Provider selects the implementation. "piper" is the only
 	// supported value today; empty disables TTS.
 	Provider string `yaml:"provider" doc:"Text-to-speech provider (piper)."`
 
-	// Voice is the absolute path to the Piper voice model (.onnx).
-	Voice string `yaml:"voice" doc:"Absolute path to the TTS voice model."`
+	// Voice is the absolute path to the Piper voice model (.onnx). Its
+	// directory is mounted read-only into the sandbox, so the
+	// .onnx.json piper reads beside it comes with it.
+	Voice string `yaml:"voice" doc:"Absolute path to the TTS voice model (.onnx, with its .onnx.json beside it); the directory is mounted read-only into the sandbox."`
 
-	// BinaryPath is the absolute path to the piper CLI. Empty asks
-	// exec.LookPath("piper").
-	BinaryPath string `yaml:"binary_path"`
+	// BinaryPath is ignored since 2026.9.7: piper runs from the agent
+	// image. Parsed so an existing config still loads; startup warns.
+	BinaryPath string `yaml:"binary_path" doc:"Ignored since 2026.9.7 (piper runs in the agent image); startup warns when set."`
 
-	// FFmpegPath is the absolute path to ffmpeg used for the
-	// WAV→ogg-opus / WAV→mp4-aac transcode. Empty asks
-	// exec.LookPath("ffmpeg").
-	FFmpegPath string `yaml:"ffmpeg_path"`
+	// FFmpegPath is ignored since 2026.9.7, like BinaryPath.
+	FFmpegPath string `yaml:"ffmpeg_path" doc:"Ignored since 2026.9.7 (ffmpeg runs in the agent image); startup warns when set."`
 
 	// Speed is the synthesis playback speed (1.0 = natural). Zero
 	// falls back to 1.0.
@@ -3614,6 +3659,52 @@ type MediaConfig struct {
 	Video MediaVideoConfig `yaml:"video"`
 }
 
+// SandboxToolsConfig bounds the sandbox one-shot runs (process-spawn law S5a).
+// Every key is optional: an absent one takes the feature's built-in default,
+// and only keys an operator SET count toward the startup memory refusal.
+//
+// Feature names: render, pdf, image_ocr, video, audio, voice_stt, voice_tts.
+// An unknown feature name refuses startup rather than being ignored.
+//
+// see LLD § https://docs.vornik.io §7
+type SandboxToolsConfig struct {
+	MaxConcurrent int               `yaml:"max_concurrent" doc:"Most sandbox tool runs at once; with 2 or more, one slot is reserved for voice. 0 = default (2)."`
+	Limits        map[string]string `yaml:"limits" doc:"Per-feature memory limit (e.g. render: 1GiB). Features: render, pdf, image_ocr, video, audio, voice_stt, voice_tts. Absent = the feature's default."`
+	CPUs          map[string]string `yaml:"cpus" doc:"Per-feature CPU share as podman --cpus takes it (e.g. video: \"1.5\"). Absent = the feature's default (2 for video, audio and voice_stt; 1 otherwise)."`
+	Timeouts      map[string]int    `yaml:"timeouts" doc:"Per-feature timeout in seconds (e.g. render: 120). Absent = the feature's default."`
+	MaxInputBytes int64             `yaml:"max_input_bytes" doc:"Largest total input of one run for EVERY feature, refused before any container starts. 0 = each feature's default (render 16 MiB, pdf 256 MiB, image_ocr 32 MiB, video 2 GiB, audio 512 MiB, voice_stt 64 MiB, voice_tts 16 MiB)."`
+}
+
+// ExtractorsConfig configures the document extractors.
+type ExtractorsConfig struct {
+	Audio ExtractorsAudioConfig `yaml:"audio"`
+}
+
+// ExtractorsAudioConfig configures audio extraction, which runs whisper.cpp
+// (whisper-cli) in the agent image.
+type ExtractorsAudioConfig struct {
+	ModelPath string `yaml:"model_path" doc:"Absolute path to the ggml whisper model (.bin) audio extraction uses; its directory is mounted read-only into the sandbox. Empty = voice.stt.model; neither set = audio extraction not available."`
+}
+
+// AudioExtractionModel is the whisper model audio extraction uses:
+// extractors.audio.model_path, falling back to voice.stt.model (design §7.1
+// decision 3). Empty means audio extraction is not available.
+func (c *Config) AudioExtractionModel() string {
+	if c == nil {
+		return ""
+	}
+	if p := strings.TrimSpace(c.Extractors.Audio.ModelPath); p != "" {
+		return p
+	}
+	return strings.TrimSpace(c.Voice.STT.Model)
+}
+
+// IsSet reports whether the operator set anything that sizes the sandbox's
+// memory commitment: only then may it count toward the startup refusal.
+func (s SandboxToolsConfig) IsSet() bool {
+	return s.MaxConcurrent > 0 || len(s.Limits) > 0
+}
+
 // MediaVideoConfig bounds video keyframe sampling.
 //
 // Sampling is uniform-interval, so these two numbers decide what the system
@@ -3668,4 +3759,36 @@ type SpeedAwareTimeoutsConfig struct {
 	ObservedTokensPerSec float64 `yaml:"observed_tokens_per_sec" doc:"This host's measured decode rate (see: vornikctl profile). Zero disables scaling."`
 	MinSamples           int     `yaml:"min_samples" doc:"Steps required before a fitted profile is trusted at all."`
 	Window               string  `yaml:"window" doc:"Rolling window the profile is fitted over."`
+}
+
+// DependencyCacheDir resolves the dependency cache directory, the ONE
+// resolution the daemon and `vornikctl deps` share (project dependency
+// provisioning design §8.2): the configured path, else a deps/ sibling of the
+// project workspace path, else "" (the feature is off: no mounts, the doctor
+// check SKIPPED).
+func (r RuntimeConfig) DependencyCacheDir() string {
+	if r.DependencyCachePath != "" {
+		return r.DependencyCachePath
+	}
+	ws := r.ProjectWorkspaceDir()
+	if ws == "" {
+		return ""
+	}
+	return filepath.Join(filepath.Dir(filepath.Clean(ws)), "deps")
+}
+
+// ProjectWorkspaceDir is the effective base directory for per-project
+// workspaces: runtime.project_workspace_path when set, otherwise
+// $VORNIK_DATA_DIR/workspaces, otherwise "". The executor's staging guard,
+// the dispatcher's create_task confinement and `vornikctl deps` MUST resolve
+// it identically (incident-telegram-upload-input-roots-20260712), so it has
+// one owner.
+func (r RuntimeConfig) ProjectWorkspaceDir() string {
+	if r.ProjectWorkspacePath != "" {
+		return r.ProjectWorkspacePath
+	}
+	if dataDir := os.Getenv("VORNIK_DATA_DIR"); dataDir != "" {
+		return filepath.Join(dataDir, "workspaces")
+	}
+	return ""
 }

@@ -3,10 +3,39 @@ package forge
 import (
 	"context"
 	"fmt"
-	"os/exec"
 	"strconv"
 	"strings"
+
+	"vornik.io/vornik/internal/spawn"
 )
+
+// gitOutput runs git in gitDir through the process-spawn law's GitWorkspace
+// kind (internal/spawn): gitDir must lie under the registered workspace root,
+// and a refusal starts nothing.
+func gitOutput(ctx context.Context, gitDir string, args ...string) ([]byte, error) {
+	cmd, err := spawn.GitWorkspace(ctx, gitDir, args...)
+	if err != nil {
+		return nil, err
+	}
+	return cmd.Output()
+}
+
+// WorkspaceHead returns the HEAD commit of the project clone at gitDir: the
+// publish source a forge.open_change_request step opens its change request
+// from. It lives here, with the handler's other git reads, so the service
+// wiring that locates the clone spawns nothing itself (process-spawn law,
+// S1b-2).
+func WorkspaceHead(ctx context.Context, gitDir string) (string, error) {
+	out, err := gitOutput(ctx, gitDir, "rev-parse", "HEAD")
+	if err != nil {
+		return "", fmt.Errorf("forge: rev-parse HEAD in %s: %w", gitDir, err)
+	}
+	sha := strings.TrimSpace(string(out))
+	if sha == "" {
+		return "", fmt.Errorf("forge: empty HEAD sha in %s", gitDir)
+	}
+	return sha, nil
+}
 
 // commitsBeyondBase returns how many commits sha has beyond the base branch, and
 // ok=false when it can't be determined (e.g. the base ref isn't present locally).
@@ -19,7 +48,7 @@ func commitsBeyondBase(ctx context.Context, gitDir, base, sha string) (int, bool
 		return 0, false
 	}
 	for _, ref := range []string{"origin/" + base, base} {
-		out, err := exec.CommandContext(ctx, "git", "-C", gitDir, "rev-list", "--count", ref+".."+sha).Output()
+		out, err := gitOutput(ctx, gitDir, "rev-list", "--count", ref+".."+sha)
 		if err != nil {
 			continue
 		}
@@ -40,12 +69,12 @@ func patchFromBase(ctx context.Context, gitDir, base, sha string) ([]byte, error
 		return nil, fmt.Errorf("forge: patch: empty gitDir/base/sha")
 	}
 	for _, ref := range []string{"origin/" + base, base} {
-		if out, err := exec.CommandContext(ctx, "git", "-C", gitDir, "format-patch", "--stdout", ref+".."+sha).Output(); err == nil && len(out) > 0 {
+		if out, err := gitOutput(ctx, gitDir, "format-patch", "--stdout", ref+".."+sha); err == nil && len(out) > 0 {
 			return out, nil
 		}
 	}
 	for _, ref := range []string{"origin/" + base, base} {
-		if out, err := exec.CommandContext(ctx, "git", "-C", gitDir, "diff", ref+".."+sha).Output(); err == nil && len(out) > 0 {
+		if out, err := gitOutput(ctx, gitDir, "diff", ref+".."+sha); err == nil && len(out) > 0 {
 			return out, nil
 		}
 	}

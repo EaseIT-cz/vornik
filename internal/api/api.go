@@ -174,6 +174,10 @@ type MemoryTitleBackfillResult struct {
 	Skipped   int      `json:"skipped"`
 	Remaining int      `json:"remaining"`
 	Errors    []string `json:"errors,omitempty"`
+	// Paused: the daemon has optional LLM work disabled for this model
+	// (chat.optional_work; breaker design §5.3d), so the batch stopped
+	// calling it. A caller looping on Remaining must stop on Paused.
+	Paused bool `json:"paused,omitempty"`
 }
 
 // MemoryClassifyBackfiller drives one batch of the LLM
@@ -194,6 +198,10 @@ type MemoryClassifyBackfillResult struct {
 	Remaining int      `json:"remaining"`
 	Exhausted bool     `json:"exhausted,omitempty"`
 	Errors    []string `json:"errors,omitempty"`
+	// Paused: the daemon has optional LLM work disabled for this model
+	// (chat.optional_work; breaker design §5.3d), so the batch stopped
+	// calling it. A caller looping on Remaining must stop on Paused.
+	Paused bool `json:"paused,omitempty"`
 }
 
 // MemoryGraphReflagger drives POST /api/v1/memory/regraph — flips
@@ -669,6 +677,10 @@ type Server struct {
 	// healingTrialRepo backs the trial history rendered on the candidate
 	// GET endpoint (migration 88). Nil leaves the trials slice empty.
 	healingTrialRepo persistence.WorkflowHealingTrialRepository
+	// healingNow is the producer's clock for the prior-refusal window; nil
+	// means time.Now (a test seam — the window is otherwise untestable at the
+	// producer).
+	healingNow func() time.Time
 	// stepOutcomeRepo powers deterministic-recipe step selection in the
 	// healing generate-candidate path (Self-Healing Workflow Genome v1,
 	// part 2): it tallies per-step failures across a trigger's evidence
@@ -807,6 +819,13 @@ type Server struct {
 	// Nil makes the endpoint return 503 — same fail-soft contract
 	// every other optional surface uses.
 	adminAuditRepo persistence.AdminAuditRepository
+	// leaderLockWired and leaderLockReleaseMetrics back POST
+	// /api/v1/admin/leader-locks/release (issue #60), with leaderLockRepo
+	// (declared with the cluster fields); a nil repo answers 503.
+	// leaderLockNow is the request clock, read ONCE per request.
+	leaderLockWired          func() []string
+	leaderLockReleaseMetrics *LeaderLockReleaseMetrics
+	leaderLockNow            func() time.Time
 	// operatorProfileRepo backs /api/v1/operators surface (list /
 	// show / set / forget) consumed by the `vornikctl operator` CLI
 	// + future external integrations. Nil → endpoints 503. The
@@ -1313,6 +1332,11 @@ type Server struct {
 	// (orders, fills, safety events). Nil-safe; ingest still
 	// persists rows when metrics is unset.
 	tradingMetrics *TradingMetrics
+	// ingestUnknownSeen dedups the trading ingests' unknown-field WARN to
+	// one per (endpoint, key) per process. Bounded by how far the broker's
+	// wire contract has drifted (endpoints x unexpected keys), not by
+	// request volume.
+	ingestUnknownSeen sync.Map
 	// taskCreator is the shared task-creation core that both
 	// surfaces (REST + UI form) funnel through. When wired,
 	// CreateTask delegates the persist/enqueue/rate-limit/budget

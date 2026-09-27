@@ -2,7 +2,9 @@ package service
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -10,6 +12,7 @@ import (
 
 	"github.com/rs/zerolog"
 	"vornik.io/vornik/internal/config"
+	"vornik.io/vornik/internal/voice"
 )
 
 // TestBuildSTTProvider_EmptyProviderReturnsNil — operator hasn't
@@ -17,7 +20,7 @@ import (
 // c.voiceSTT nil and the channel adapters stay on the
 // text-only path.
 func TestBuildSTTProvider_EmptyProviderReturnsNil(t *testing.T) {
-	p, err := buildSTTProvider(config.VoiceSTTConfig{})
+	p, err := buildSTTProvider(config.VoiceSTTConfig{}, nil)
 	if err != nil {
 		t.Fatalf("buildSTTProvider(empty): %v", err)
 	}
@@ -31,7 +34,7 @@ func TestBuildSTTProvider_EmptyProviderReturnsNil(t *testing.T) {
 // initVoice surfaces this via a warn-level log rather than failing
 // boot, since voice is opt-in scaffolding.
 func TestBuildSTTProvider_UnknownProviderReturnsNil(t *testing.T) {
-	p, err := buildSTTProvider(config.VoiceSTTConfig{Provider: "deepgram-cloud"})
+	p, err := buildSTTProvider(config.VoiceSTTConfig{Provider: "deepgram-cloud"}, nil)
 	if err != nil {
 		t.Fatalf("buildSTTProvider(unknown): %v", err)
 	}
@@ -44,7 +47,7 @@ func TestBuildSTTProvider_UnknownProviderReturnsNil(t *testing.T) {
 // provider path bubbles up provider-side validation errors so the
 // operator sees the typo loudly at boot.
 func TestBuildSTTProvider_WhisperLocalRequiresModel(t *testing.T) {
-	_, err := buildSTTProvider(config.VoiceSTTConfig{Provider: "whisper-local"})
+	_, err := buildSTTProvider(config.VoiceSTTConfig{Provider: "whisper-local"}, nil)
 	if err == nil {
 		t.Fatal("expected error from whisper-local with empty model, got nil")
 	}
@@ -60,7 +63,7 @@ func TestBuildSTTProvider_WhisperLocalHappyPath(t *testing.T) {
 	p, err := buildSTTProvider(config.VoiceSTTConfig{
 		Provider: "whisper-local",
 		Model:    "/tmp/fake.ggml.bin",
-	})
+	}, nil)
 	if err != nil {
 		t.Fatalf("buildSTTProvider: %v", err)
 	}
@@ -75,7 +78,7 @@ func TestBuildSTTProvider_CaseInsensitiveProviderName(t *testing.T) {
 	p, err := buildSTTProvider(config.VoiceSTTConfig{
 		Provider: "Whisper-Local",
 		Model:    "/tmp/fake.ggml.bin",
-	})
+	}, nil)
 	if err != nil {
 		t.Fatalf("buildSTTProvider: %v", err)
 	}
@@ -86,7 +89,7 @@ func TestBuildSTTProvider_CaseInsensitiveProviderName(t *testing.T) {
 
 // TestBuildTTSProvider_EmptyProviderReturnsNil — symmetric to STT.
 func TestBuildTTSProvider_EmptyProviderReturnsNil(t *testing.T) {
-	p, err := buildTTSProvider(config.VoiceTTSConfig{})
+	p, err := buildTTSProvider(config.VoiceTTSConfig{}, nil)
 	if err != nil {
 		t.Fatalf("buildTTSProvider(empty): %v", err)
 	}
@@ -98,7 +101,7 @@ func TestBuildTTSProvider_EmptyProviderReturnsNil(t *testing.T) {
 // TestBuildTTSProvider_UnknownProviderReturnsNil — unsupported
 // names parse without error.
 func TestBuildTTSProvider_UnknownProviderReturnsNil(t *testing.T) {
-	p, err := buildTTSProvider(config.VoiceTTSConfig{Provider: "elevenlabs"})
+	p, err := buildTTSProvider(config.VoiceTTSConfig{Provider: "elevenlabs"}, nil)
 	if err != nil {
 		t.Fatalf("buildTTSProvider(unknown): %v", err)
 	}
@@ -110,7 +113,7 @@ func TestBuildTTSProvider_UnknownProviderReturnsNil(t *testing.T) {
 // TestBuildTTSProvider_PiperRequiresVoice — provider validation
 // errors surface to the operator at boot.
 func TestBuildTTSProvider_PiperRequiresVoice(t *testing.T) {
-	_, err := buildTTSProvider(config.VoiceTTSConfig{Provider: "piper"})
+	_, err := buildTTSProvider(config.VoiceTTSConfig{Provider: "piper"}, nil)
 	if err == nil {
 		t.Fatal("expected error from piper with empty voice, got nil")
 	}
@@ -127,7 +130,7 @@ func TestBuildTTSProvider_PiperHappyPath(t *testing.T) {
 		Voice:        "/tmp/voice.onnx",
 		Speed:        1.0,
 		MaxTextRunes: 1500,
-	})
+	}, nil)
 	if err != nil {
 		t.Fatalf("buildTTSProvider: %v", err)
 	}
@@ -256,109 +259,6 @@ func findLog(records []map[string]any, needle string) map[string]any {
 	return nil
 }
 
-// TestProbeBinary_ConfiguredPathMissing — operator pointed at a
-// path that doesn't exist; we want a WARN with the bad path so the
-// diagnostic is greppable.
-func TestProbeBinary_ConfiguredPathMissing(t *testing.T) {
-	var buf bytes.Buffer
-	c := &Container{Logger: captureLogger(&buf)}
-	probeBinary(c, "whisper", "/does/not/exist/whisper-cli", []string{"whisper-cpp"})
-
-	rec := findLog(logRecords(t, &buf), "whisper binary not found at configured path")
-	if rec == nil {
-		t.Fatalf("expected 'not found at configured path' warning; got %q", buf.String())
-	}
-	if rec["level"] != "warn" {
-		t.Errorf("level = %v, want warn", rec["level"])
-	}
-	if rec["path"] != "/does/not/exist/whisper-cli" {
-		t.Errorf("path = %v, want /does/not/exist/whisper-cli", rec["path"])
-	}
-}
-
-// TestProbeBinary_ConfiguredPathOK — explicit path that exists
-// and is executable logs INFO with the resolved path.
-func TestProbeBinary_ConfiguredPathOK(t *testing.T) {
-	tmp := t.TempDir()
-	fake := filepath.Join(tmp, "whisper-cli")
-	if err := os.WriteFile(fake, []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
-		t.Fatalf("write fake binary: %v", err)
-	}
-	var buf bytes.Buffer
-	c := &Container{Logger: captureLogger(&buf)}
-	probeBinary(c, "whisper", fake, []string{"whisper-cpp"})
-
-	rec := findLog(logRecords(t, &buf), "whisper binary OK")
-	if rec == nil {
-		t.Fatalf("expected 'whisper binary OK' info; got %q", buf.String())
-	}
-	if rec["level"] != "info" {
-		t.Errorf("level = %v, want info", rec["level"])
-	}
-}
-
-// TestProbeBinary_ConfiguredPathNotExecutable — a common operator
-// foot-gun: the binary file exists but isn't chmod +x. Surface a
-// distinct warning so they can fix it before sending voice.
-func TestProbeBinary_ConfiguredPathNotExecutable(t *testing.T) {
-	tmp := t.TempDir()
-	fake := filepath.Join(tmp, "whisper-cli")
-	if err := os.WriteFile(fake, []byte("data"), 0o644); err != nil {
-		t.Fatalf("write fake binary: %v", err)
-	}
-	var buf bytes.Buffer
-	c := &Container{Logger: captureLogger(&buf)}
-	probeBinary(c, "whisper", fake, []string{"whisper-cpp"})
-
-	rec := findLog(logRecords(t, &buf), "not executable")
-	if rec == nil {
-		t.Fatalf("expected 'not executable' warning; got %q", buf.String())
-	}
-	if rec["level"] != "warn" {
-		t.Errorf("level = %v, want warn", rec["level"])
-	}
-}
-
-// TestProbeBinary_FallbackToPath — config is empty, $PATH lookup
-// succeeds, INFO logs the resolved location.
-func TestProbeBinary_FallbackToPath(t *testing.T) {
-	tmp := t.TempDir()
-	fake := filepath.Join(tmp, "whisper-cli")
-	if err := os.WriteFile(fake, []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
-		t.Fatalf("write fake binary: %v", err)
-	}
-	t.Setenv("PATH", tmp)
-	var buf bytes.Buffer
-	c := &Container{Logger: captureLogger(&buf)}
-	probeBinary(c, "whisper", "", []string{"whisper-cpp", "whisper-cli", "main"})
-
-	rec := findLog(logRecords(t, &buf), "resolved from $PATH")
-	if rec == nil {
-		t.Fatalf("expected 'resolved from $PATH' info; got %q", buf.String())
-	}
-	if rec["name"] != "whisper-cli" {
-		t.Errorf("name = %v, want whisper-cli", rec["name"])
-	}
-}
-
-// TestProbeBinary_FallbackToPathFails — empty config + nothing on
-// PATH yields the loud catch-all WARN listing every candidate the
-// operator could install.
-func TestProbeBinary_FallbackToPathFails(t *testing.T) {
-	t.Setenv("PATH", "")
-	var buf bytes.Buffer
-	c := &Container{Logger: captureLogger(&buf)}
-	probeBinary(c, "whisper", "", []string{"whisper-cpp", "whisper-cli", "main"})
-
-	rec := findLog(logRecords(t, &buf), "not on $PATH")
-	if rec == nil {
-		t.Fatalf("expected 'not on $PATH' warning; got %q", buf.String())
-	}
-	if rec["level"] != "warn" {
-		t.Errorf("level = %v, want warn", rec["level"])
-	}
-}
-
 // TestProbeModel_MissingFile — operator config points at a model
 // file that isn't there; warn so they download it.
 func TestProbeModel_MissingFile(t *testing.T) {
@@ -425,64 +325,47 @@ func TestProbeModel_EmptyPath(t *testing.T) {
 	}
 }
 
-// TestInitVoice_LogsResolvedConfigForSTT — when the operator
-// wires STT, the boot-time config dump exposes the resolved
-// binary + model paths so they're greppable on first failure.
+// TestInitVoice_LogsResolvedConfigForSTT — when the operator wires STT,
+// the boot-time config dump exposes the model path, and the model is
+// checked on the host (a stat, no spawn: the tools run in the agent image).
 func TestInitVoice_LogsResolvedConfigForSTT(t *testing.T) {
 	tmp := t.TempDir()
-	binary := filepath.Join(tmp, "whisper-cli")
-	if err := os.WriteFile(binary, []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
-		t.Fatalf("write binary: %v", err)
-	}
 	model := filepath.Join(tmp, "ggml-base.en.bin")
 	if err := os.WriteFile(model, []byte("data"), 0o644); err != nil {
 		t.Fatalf("write model: %v", err)
 	}
-	ffmpeg := filepath.Join(tmp, "ffmpeg")
-	if err := os.WriteFile(ffmpeg, []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
-		t.Fatalf("write ffmpeg: %v", err)
-	}
-
 	var buf bytes.Buffer
 	c := &Container{
 		Logger: captureLogger(&buf),
 		Config: &config.Config{
 			Voice: config.VoiceConfig{
-				STT: config.VoiceSTTConfig{
-					Provider:   "whisper-local",
-					Model:      model,
-					BinaryPath: binary,
-					FFmpegPath: ffmpeg,
-				},
+				STT: config.VoiceSTTConfig{Provider: "whisper-local", Model: model},
 			},
 		},
 	}
 	if err := c.initVoice(); err != nil {
 		t.Fatalf("initVoice: %v", err)
 	}
-
 	records := logRecords(t, &buf)
-	if rec := findLog(records, "configuring STT provider"); rec == nil {
-		t.Errorf("missing config-dump log; got %q", buf.String())
+	for _, want := range []string{"configuring STT provider", "whisper model OK", "voice providers initialized"} {
+		if findLog(records, want) == nil {
+			t.Errorf("missing %q; got %q", want, buf.String())
+		}
 	}
-	if rec := findLog(records, "whisper binary OK"); rec == nil {
-		t.Errorf("missing whisper-OK log; got %q", buf.String())
-	}
-	if rec := findLog(records, "whisper model OK"); rec == nil {
-		t.Errorf("missing model-OK log; got %q", buf.String())
-	}
-	if rec := findLog(records, "ffmpeg binary OK"); rec == nil {
-		t.Errorf("missing ffmpeg-OK log; got %q", buf.String())
-	}
-	if rec := findLog(records, "voice providers initialized"); rec == nil {
-		t.Errorf("missing summary log; got %q", buf.String())
+	if findLog(records, "ignored") != nil {
+		t.Errorf("nothing is ignored when no host path is set: %q", buf.String())
 	}
 }
 
-// TestInitVoice_WarnsOnEachMisconfig — well-formed Provider but
-// every dependency is broken: the operator sees one WARN per
-// missing component so they can fix them in order.
+// TestInitVoice_WarnsOnEachMisconfig — a model file that is missing, and
+// the host binary paths that no longer do anything (process-spawn law S5b:
+// whisper-cli, piper and ffmpeg run in the agent image), each get a WARN.
 func TestInitVoice_WarnsOnEachMisconfig(t *testing.T) {
+	voiceDir := t.TempDir()
+	onnx := filepath.Join(voiceDir, "en_US-lessac-low.onnx")
+	if err := os.WriteFile(onnx, []byte("onnx"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 	var buf bytes.Buffer
 	c := &Container{
 		Logger: captureLogger(&buf),
@@ -494,21 +377,48 @@ func TestInitVoice_WarnsOnEachMisconfig(t *testing.T) {
 					BinaryPath: "/no/such/whisper-cli",
 					FFmpegPath: "/no/such/ffmpeg",
 				},
+				TTS: config.VoiceTTSConfig{Provider: "piper", Voice: onnx, BinaryPath: "/usr/bin/piper"},
 			},
 		},
 	}
 	if err := c.initVoice(); err != nil {
 		t.Fatalf("initVoice: %v", err)
 	}
-
 	records := logRecords(t, &buf)
 	for _, want := range []string{
-		"whisper binary not found at configured path",
 		"whisper model file not found",
-		"ffmpeg binary not found at configured path",
+		"voice.stt.binary_path is ignored",
+		"voice.stt.ffmpeg_path is ignored",
+		"voice.tts.binary_path is ignored",
+		"piper voice config not found beside the model",
 	} {
 		if findLog(records, want) == nil {
 			t.Errorf("missing warning %q; got %q", want, buf.String())
 		}
+	}
+}
+
+// Voice runs through the daemon's sandbox runner: initVoice hands it to both
+// providers, so a Transcribe with no runner reports unavailable rather than
+// reaching for a host binary.
+func TestInitVoice_ProvidersUseTheSandbox(t *testing.T) {
+	c := &Container{
+		Logger: zerolog.Nop(),
+		Config: &config.Config{Voice: config.VoiceConfig{
+			STT: config.VoiceSTTConfig{Provider: "whisper-local", Model: "/tmp/m.bin"},
+			TTS: config.VoiceTTSConfig{Provider: "piper", Voice: "/tmp/v.onnx"},
+		}},
+	}
+	if err := c.initVoice(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.voiceSTT.Transcribe(context.Background(), strings.NewReader("x"), voice.Hint{}); !errors.Is(err, voice.ErrProviderUnavailable) {
+		t.Fatalf("no runner: %v", err)
+	}
+	if _, err := c.voiceTTS.Synthesize(context.Background(), "hi", voice.TTSOptions{}); !errors.Is(err, voice.ErrProviderUnavailable) {
+		t.Fatalf("no runner: %v", err)
+	}
+	if c.sandbox() != nil {
+		t.Fatal("a nil runner must be a nil Sandbox, not a typed nil")
 	}
 }

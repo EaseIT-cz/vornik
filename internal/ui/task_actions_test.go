@@ -73,6 +73,7 @@ func TestCancelOne_StatusGating(t *testing.T) {
 		{"awaiting-input-cancellable", persistence.TaskStatusAwaitingInput, true},
 		{"awaiting-external-cancellable", persistence.TaskStatusAwaitingExternal, true},
 		{"paused-cancellable", persistence.TaskStatusPaused, true},
+		{"awaiting-approval-cancellable", persistence.TaskStatusAwaitingApproval, true},
 		{"completed-not-cancellable", persistence.TaskStatusCompleted, false},
 		{"failed-not-cancellable", persistence.TaskStatusFailed, false},
 		{"closed-not-cancellable", persistence.TaskStatusClosed, false},
@@ -84,9 +85,15 @@ func TestCancelOne_StatusGating(t *testing.T) {
 				GetFunc: func(_ context.Context, _ string) (*persistence.Task, error) {
 					return uiTask("t1", tc.status), nil
 				},
+				// The write is ONE conditional transition gated on the live
+				// row (scheduler design §4.10), never a bare UpdateStatus.
 				UpdateStatusFunc: func(_ context.Context, _ string, _ persistence.TaskStatus) error {
-					updateCalled = true
+					t.Error("cancelOne wrote CANCELLED with a bare UpdateStatus")
 					return nil
+				},
+				TransitionConditionalFunc: func(_ context.Context, _ string, _ []persistence.TaskStatus, to persistence.TaskStatus, _ persistence.TransitionOpts) (bool, error) {
+					updateCalled = to == persistence.TaskStatusCancelled
+					return true, nil
 				},
 			}
 			srv := NewServer(WithTaskRepository(repo))
@@ -95,7 +102,7 @@ func TestCancelOne_StatusGating(t *testing.T) {
 				t.Errorf("status=%s: got %v, want %v", tc.status, got, tc.want)
 			}
 			if tc.want && !updateCalled {
-				t.Errorf("status=%s: expected UpdateStatus to be called", tc.status)
+				t.Errorf("status=%s: expected the conditional CANCELLED transition", tc.status)
 			}
 		})
 	}
@@ -152,9 +159,9 @@ func TestTaskCancel_Success_Redirect(t *testing.T) {
 		GetFunc: func(_ context.Context, _ string) (*persistence.Task, error) {
 			return uiTask("t1", persistence.TaskStatusQueued), nil
 		},
-		UpdateStatusFunc: func(_ context.Context, _ string, _ persistence.TaskStatus) error {
+		TransitionConditionalFunc: func(_ context.Context, _ string, _ []persistence.TaskStatus, _ persistence.TaskStatus, _ persistence.TransitionOpts) (bool, error) {
 			updates++
-			return nil
+			return true, nil
 		},
 	}
 	srv := NewServer(WithTaskRepository(repo))
@@ -168,7 +175,7 @@ func TestTaskCancel_Success_Redirect(t *testing.T) {
 		t.Errorf("location: %q", rec.Header().Get("Location"))
 	}
 	if updates != 1 {
-		t.Errorf("UpdateStatus calls: got %d, want 1", updates)
+		t.Errorf("conditional cancel transitions: got %d, want 1", updates)
 	}
 }
 
@@ -221,9 +228,9 @@ func TestTaskBulkCancel_Multiple(t *testing.T) {
 		GetFunc: func(_ context.Context, id string) (*persistence.Task, error) {
 			return uiTask(id, statuses[id]), nil
 		},
-		UpdateStatusFunc: func(_ context.Context, _ string, _ persistence.TaskStatus) error {
+		TransitionConditionalFunc: func(_ context.Context, _ string, _ []persistence.TaskStatus, _ persistence.TaskStatus, _ persistence.TransitionOpts) (bool, error) {
 			cancelled++
-			return nil
+			return true, nil
 		},
 	}
 	srv := NewServer(WithTaskRepository(repo))

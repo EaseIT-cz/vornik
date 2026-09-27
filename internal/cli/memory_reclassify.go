@@ -200,6 +200,7 @@ type llmReclassifyResponse struct {
 	Remaining int      `json:"remaining"`
 	Exhausted bool     `json:"exhausted,omitempty"`
 	Errors    []string `json:"errors,omitempty"`
+	Paused    bool     `json:"paused,omitempty"`
 }
 
 // runLLMReclassifyLoop drives the LLM-backfill batch-by-batch. The
@@ -265,6 +266,10 @@ func runLLMReclassifyLoop(projectID string, dryRun, asJSON bool, batchSize int, 
 			batch.Processed, batch.Succeeded, batch.Skipped, batch.Failed, batch.Remaining)
 
 		if batch.Remaining == 0 {
+			break
+		}
+		if batch.Paused {
+			_, _ = fmt.Fprintln(out, "  (paused: the daemon has optional LLM work disabled for the classifier's model — chat.optional_work)")
 			break
 		}
 		if batch.Exhausted {

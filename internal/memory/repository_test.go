@@ -1699,3 +1699,36 @@ func TestRequeueMissingForEmbedding_FiltersOnNullEmbedding(t *testing.T) {
 		t.Fatalf("query must filter on embedding IS NULL: %v", err)
 	}
 }
+
+// Document supersession (amendment 2026-09-26): missing identity is a no-op,
+// and the statement binds project, scope, path, epoch in that order. The
+// behaviour itself is pinned against Postgres in
+// document_supersede_integration_test.go.
+func TestSupersedeDocument_GuardsAndBinding(t *testing.T) {
+	var nilR *Repository
+	if n, err := nilR.SupersedeDocument(context.Background(), "p", "s", "d", ""); n != 0 || err != nil {
+		t.Fatal("a nil repository is a no-op")
+	}
+	r, mock, cleanup := newRepo(t)
+	defer cleanup()
+	for _, args := range [][3]string{{"", "s", "d"}, {"p", "", "d"}, {"p", "s", ""}} {
+		if n, err := r.SupersedeDocument(context.Background(), args[0], args[1], args[2], ""); n != 0 || err != nil {
+			t.Fatalf("missing identity %v must be a no-op", args)
+		}
+	}
+	mock.ExpectExec("UPDATE project_memory_chunks").
+		WithArgs("p", "github.com/acme/widgets", "docs/a.md", "epoch-1").
+		WillReturnResult(sqlmock.NewResult(0, 4))
+	n, err := r.SupersedeDocument(context.Background(), "p", "github.com/acme/widgets", "docs/a.md", "epoch-1")
+	if err != nil || n != 4 {
+		t.Fatalf("got %d %v", n, err)
+	}
+	mock.ExpectExec("UPDATE project_memory_chunks").WillReturnError(errors.New("boom"))
+	if _, err := r.SupersedeDocument(context.Background(), "p", "s", "d", ""); err == nil {
+		t.Fatal("a failed statement is an error")
+	}
+	var idx *Indexer
+	if n, err := idx.SupersedeDocument(context.Background(), "p", "s", "d", ""); n != 0 || err != nil {
+		t.Fatal("a nil indexer is a no-op")
+	}
+}

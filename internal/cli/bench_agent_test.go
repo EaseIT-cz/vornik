@@ -400,9 +400,10 @@ func TestBenchAgent_ReleaseArtifactCommandsWriteHashedEvidence(t *testing.T) {
 		AgentImages: map[string]string{"worker": "sha256:image"}, ContextPolicy: "policy",
 		TaskSetSHA256: "tasks", TierPolicySHA256: "tiers", ScoringPolicySHA256: "scores",
 		Probes: []string{"schema-following"}}
-	mk := func(runID string, values map[string]float64) agentbench.Journal {
+	mk := func(runID string, kind agentbench.RunKind, values map[string]float64) agentbench.Journal {
 		j := agentbench.Journal{Manifest: agentbench.RunManifest{RunID: runID, Arm: arm,
 			ArmKey: arm.Key(), TaskTiers: tiers}}
+		stampMeasurementPass(&j, kind)
 		for repeat := 1; repeat <= 10; repeat++ {
 			j.TaskRuns = append(j.TaskRuns, agentbench.TaskRun{TaskID: "trip", Repeat: repeat, Succeeded: true})
 			for _, id := range []string{"gate-a", "gate-b"} {
@@ -415,14 +416,18 @@ func TestBenchAgent_ReleaseArtifactCommandsWriteHashedEvidence(t *testing.T) {
 		}
 		return j
 	}
-	aPath := writeAgentBenchJSON(t, dir, "a.json", mk("a", map[string]float64{"gate-a": .4, "gate-b": .6}))
-	bPath := writeAgentBenchJSON(t, dir, "b.json", mk("b", map[string]float64{"gate-a": .5, "gate-b": .4}))
+	calPath := writeAgentBenchJSON(t, dir, "cal.json",
+		mk("cal", agentbench.RunKindCalibration, map[string]float64{"gate-a": .4, "gate-b": .6}))
+	aPath := writeAgentBenchJSON(t, dir, "a.json",
+		mk("a", agentbench.RunKindNoiseFloor, map[string]float64{"gate-a": .4, "gate-b": .6}))
+	bPath := writeAgentBenchJSON(t, dir, "b.json",
+		mk("b", agentbench.RunKindNoiseFloor, map[string]float64{"gate-a": .5, "gate-b": .4}))
 
 	benchAgentCalibrationOutPath = filepath.Join(dir, "calibration.json")
 	var out bytes.Buffer
 	cmd := *benchAgentCalibrateCmd
 	cmd.SetOut(&out)
-	if err := runBenchAgentCalibrate(&cmd, []string{aPath}); err != nil {
+	if err := runBenchAgentCalibrate(&cmd, []string{calPath}); err != nil {
 		t.Fatalf("calibrate: %v", err)
 	}
 	if _, err := os.Stat(benchAgentCalibrationOutPath); err != nil || !strings.Contains(out.String(), "sha256") {
@@ -795,6 +800,7 @@ func TestBenchAgentCalibrate_AcceptsTheChunksOfOneBatchedRun(t *testing.T) {
 			j := agentbench.Journal{Manifest: agentbench.RunManifest{
 				RunID: fmt.Sprintf("run-c%d-tb%d", chunk, batch), Arm: arm,
 				ArmKey: arm.Key(), TaskTiers: tiers}}
+			stampMeasurementPass(&j, agentbench.RunKindCalibration)
 			for _, id := range ids {
 				// Repeat carries the offset, so the three chunks cover 1,2,3.
 				repeat := chunk + 1
@@ -853,6 +859,7 @@ func TestBenchAgentCalibrate_RefusesChunksThatRestampedTheRepeatIndex(t *testing
 		j := agentbench.Journal{Manifest: agentbench.RunManifest{
 			RunID: fmt.Sprintf("run-c%d-tb0", chunk), Arm: arm, ArmKey: arm.Key(),
 			TaskTiers: map[string]agentbench.TaskTier{"gate-a": agentbench.TaskTierGate}}}
+		stampMeasurementPass(&j, agentbench.RunKindCalibration)
 		// Every chunk stamps repeat 1: the defect itself.
 		j.TaskRuns = append(j.TaskRuns, agentbench.TaskRun{
 			TaskID: "gate-a", Repeat: 1, Succeeded: chunk != 0,
@@ -870,4 +877,40 @@ func TestBenchAgentCalibrate_RefusesChunksThatRestampedTheRepeatIndex(t *testing
 	if !strings.Contains(err.Error(), "repeat-offset") {
 		t.Fatalf("error must name the fix: %v", err)
 	}
+}
+
+// Release-gate design §9.2. Incident 2026-09-20: `--arm 2026.9.5-hard-cal` ran
+// under a pre-registration declaring two OTHER arms, and nothing compared them.
+// The refusal must come before the task set is even read — no task-set path is
+// set here, so reaching that step would fail with a different error.
+func TestBenchAgent_RunRefusesAnArmThePreRegistrationDoesNotDeclare(t *testing.T) {
+	dir := t.TempDir()
+	resetAgentFlags()
+	prevArm := benchAgentArm
+	t.Cleanup(func() { benchAgentArm = prevArm })
+	benchAgentDatabase = "agentbench_local"
+	benchAgentConfirmWipe = "agentbench_local"
+	benchAgentProject = "bench"
+	benchAgentBenchProject = "bench"
+	benchAgentSwarm = "bench"
+	benchAgentArm = "2026.9.5-hard-cal"
+	benchAgentPreRegPath = writeAgentBenchJSON(t, dir, "prereg.json", agentbench.PreRegistration{
+		Arms: []string{"2026.9.4-rc", "2026.9.5-d6"}, Metric: agentbench.PinnedCaseValidationMetric,
+		TargetDelta: 0.05, SigmaD: 0.02, SigmaN: 10, ComputedPairs: 13, Rationale: "release comparison",
+	})
+
+	err := runBenchAgentRun(benchAgentRunCmd, nil)
+	if err == nil || !strings.Contains(err.Error(), "2026.9.5-hard-cal") ||
+		!strings.Contains(err.Error(), "does not declare") || !strings.Contains(err.Error(), "comparison") {
+		t.Fatalf("an undeclared arm ran under the pre-registration: %v", err)
+	}
+}
+
+// stampMeasurementPass gives a fixture journal the pre-registration a real
+// measurement pass would carry (release-gate design §9.3): calibrate and
+// noise-floor refuse any journal that was not pre-registered as their kind.
+func stampMeasurementPass(j *agentbench.Journal, kind agentbench.RunKind) {
+	j.Manifest.PreRegistration = agentbench.PreRegistration{Kind: kind, Arms: []string{"measured"},
+		Metric: agentbench.PinnedCaseValidationMetric, Rationale: "fixture measurement pass"}
+	j.Manifest.PreRegistrationHash, _ = j.Manifest.PreRegistration.Hash()
 }

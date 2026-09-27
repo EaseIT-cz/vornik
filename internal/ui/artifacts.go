@@ -13,18 +13,14 @@ package ui
 // directory the agents drop files into.
 
 import (
-	"context"
 	"fmt"
 	"io"
 	"net/http"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"sort"
 	"strings"
 	"time"
-
-	"github.com/rs/zerolog"
 
 	"vornik.io/vornik/internal/api"
 	"vornik.io/vornik/internal/safepath"
@@ -292,97 +288,33 @@ func (s *Server) ProjectArtifactDelete(w http.ResponseWriter, r *http.Request, p
 		http.Error(w, "Refusing to delete non-regular file", http.StatusBadRequest)
 		return
 	}
-	if err := os.Remove(full); err != nil {
+	// Lock-on-mutation: the unlink is a workspace writer, so it takes the
+	// SAME shared per-project workspace lock the executor and the
+	// git-over-HTTPS handler take, serialising against concurrent task
+	// execution and pushes on this project. The lock is a leaf, released
+	// before the HTTP redirect, never held across it.
+	//
+	// No git runs here (process-spawn law, S3,
+	// https://docs.vornik.io). Until
+	// 2026-09-26 this handler committed the deletion; a request may not make
+	// the daemon run a program. The deletion stays a working-tree change
+	// until the next task's merge-time auto-commit records it.
+	removeErr := func() error {
+		unlock := s.workspaceLock.Lock(projectID)
+		defer unlock()
+		return os.Remove(full)
+	}()
+	if err := removeErr; err != nil {
 		s.logger.Error().Err(err).Str("path", full).Msg("ProjectArtifactDelete: remove failed")
 		dest := fmt.Sprintf("/ui/projects/%s/artifacts?err=%s",
 			projectID, urlQueryEscape("Delete failed: "+err.Error()))
 		http.Redirect(w, r, dest, http.StatusSeeOther)
 		return
 	}
-	// Commit the deletion atomically. Without this the workspace
-	// stays dirty (D entries for every deleted artifact) until the
-	// next task's mergeWorktree fires its autoCommitTrackedChangesOnly
-	// pass — fragile, leaves the operator's git status confusing,
-	// and a daemon restart in between strands the deletions in the
-	// working tree where they're easy to lose.
-	//
-	// Best-effort: a failed git op doesn't roll back the unlink (the
-	// file is already gone); the next task's autoCommit pass picks
-	// up the stranded state. Logged so the operator sees the miss.
-	projectDir := filepath.Join(s.projectWorkspaceRoot, projectID)
-	// Lock-on-mutation: the git add+commit below is a workspace
-	// writer, so it must take the SAME shared per-project workspace
-	// lock the executor and git-over-HTTPS handler take, serialising
-	// against concurrent task execution / pushes on this project. The
-	// lock is a leaf — taken immediately around the git ops and
-	// released (defer, inside the IIFE) BEFORE the HTTP redirect, never
-	// held across it.
-	func() {
-		unlock := s.workspaceLock.Lock(projectID)
-		defer unlock()
-		commitArtifactDeletion(r.Context(), projectDir, filepath.Join("artifacts", filepath.FromSlash(rel)), s.logger)
-	}()
 	s.logger.Info().Str("project_id", projectID).Str("rel_path", rel).Msg("artifact deleted")
 	dest := fmt.Sprintf("/ui/projects/%s/artifacts?ok=%s",
 		projectID, urlQueryEscape("Deleted "+rel))
 	http.Redirect(w, r, dest, http.StatusSeeOther)
-}
-
-// commitArtifactDeletion records an operator-driven artifact unlink
-// in the project's git history. Without this the workspace stays
-// dirty with a `D` entry until the next task's mergeWorktree runs
-// autoCommitTrackedChangesOnly — which works, but is fragile: a
-// daemon restart in between strands the deletion in the working
-// tree where it shows up as an unexplained `git status` noise.
-//
-// Best-effort. Errors are logged but never propagated — the unlink
-// already succeeded, the worst case is the existing
-// mergeWorktree-time auto-commit picks it up later.
-func commitArtifactDeletion(ctx context.Context, projectDir, relPath string, logger zerolog.Logger) {
-	if projectDir == "" {
-		return
-	}
-	// Only proceed when projectDir is actually a git repo. New
-	// projects on which no task has run yet have a workspace dir
-	// but no .git; falling through silently is the right behaviour.
-	if err := exec.CommandContext(ctx, "git", "-C", projectDir, "rev-parse", "--git-dir").Run(); err != nil {
-		return
-	}
-	// git add -u <relPath> stages the deletion specifically without
-	// touching unrelated dirty state.
-	if out, err := exec.CommandContext(ctx, "git", "-C", projectDir, "add", "-u", "--", relPath).CombinedOutput(); err != nil {
-		logger.Warn().
-			Err(err).
-			Str("project_dir", projectDir).
-			Str("path", relPath).
-			Str("output", strings.TrimSpace(string(out))).
-			Msg("ProjectArtifactDelete: git add -u failed; deletion will land on next mergeWorktree auto-commit")
-		return
-	}
-	msg := "ui: deleted artifact " + relPath
-	cmd := exec.CommandContext(ctx, "git", "-C", projectDir,
-		"-c", "user.name=vornik-ui",
-		"-c", "user.email=ui@vornik.io",
-		"commit", "-m", msg)
-	if out, err := cmd.CombinedOutput(); err != nil {
-		text := strings.TrimSpace(string(out))
-		// "nothing to commit" is a benign no-op — git had nothing
-		// staged because the file was already removed in HEAD (e.g.
-		// race where the file was committed elsewhere first).
-		if !strings.Contains(text, "nothing to commit") {
-			logger.Warn().
-				Err(err).
-				Str("project_dir", projectDir).
-				Str("path", relPath).
-				Str("output", text).
-				Msg("ProjectArtifactDelete: git commit failed; deletion will land on next mergeWorktree auto-commit")
-		}
-		return
-	}
-	logger.Debug().
-		Str("project_dir", projectDir).
-		Str("path", relPath).
-		Msg("ProjectArtifactDelete: committed deletion")
 }
 
 // listArtifactFiles walks the per-project artifacts/ tree and

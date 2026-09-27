@@ -60,12 +60,12 @@ func (r *TradingOrderRepository) Record(ctx context.Context, order *persistence.
 			filled_qty
 		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT (project_id, idempotency_key) DO UPDATE SET
-			status              = excluded.status,
-			last_status_reason  = excluded.last_status_reason,
+			status              = CASE WHEN `+staleStatusPredicateSqlite+` THEN trading_orders.status ELSE excluded.status END,
+			last_status_reason  = CASE WHEN `+staleStatusPredicateSqlite+` THEN trading_orders.last_status_reason ELSE excluded.last_status_reason END,
 			stop_price          = excluded.stop_price,
 			terminal_at         = excluded.terminal_at,
 			broker_order_id     = COALESCE(excluded.broker_order_id, trading_orders.broker_order_id),
-			filled_qty          = excluded.filled_qty`,
+			filled_qty          = MAX(trading_orders.filled_qty, excluded.filled_qty)`,
 		order.ID, order.ProjectID, order.TaskID, order.ExecutionID, order.BrokerOrderID,
 		order.IdempotencyKey, order.Mode, order.Symbol, order.Action, order.OrderType,
 		order.Qty, order.LimitPrice, order.StopPrice, order.TimeInForce,
@@ -161,6 +161,12 @@ func (r *TradingOrderRepository) Count(ctx context.Context, filter persistence.T
 	return n, nil
 }
 
+// staleStatusPredicateSqlite is the SQLite spelling of the Postgres
+// driver's staleStatusPredicate: a final order is not rewound to a
+// non-final status by a late row; a final incoming status always wins.
+const staleStatusPredicateSqlite = `trading_orders.status IN ('filled','cancelled','rejected')
+			AND excluded.status IN ('submitted','partial','orphaned')`
+
 func buildTradingOrderQuerySqlite(filter persistence.TradingOrderFilter, countOnly bool) (string, []any) {
 	var b strings.Builder
 	if countOnly {
@@ -170,7 +176,8 @@ func buildTradingOrderQuerySqlite(filter persistence.TradingOrderFilter, countOn
 			SELECT id, project_id, task_id, execution_id, broker_order_id,
 			       idempotency_key, mode, symbol, action, order_type,
 			       qty, limit_price, stop_price, time_in_force,
-			       status, last_status_reason, submitted_at, terminal_at
+			       status, last_status_reason, submitted_at, terminal_at,
+			       filled_qty
 			FROM trading_orders WHERE 1=1`)
 	}
 	args := make([]any, 0, 5)
@@ -210,6 +217,7 @@ func scanTradingOrder(scanner interface{ Scan(dest ...any) error }) (*persistenc
 		&o.IdempotencyKey, &o.Mode, &o.Symbol, &o.Action, &o.OrderType,
 		&o.Qty, &limitPx, &stopPx, &o.TimeInForce,
 		&o.Status, &o.LastStatusReason, &submittedAt, &terminalAt,
+		&o.FilledQty,
 	)
 	if err != nil {
 		return nil, err

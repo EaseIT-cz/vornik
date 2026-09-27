@@ -150,6 +150,10 @@ func (r *TaskRepository) GetByIdempotencyKey(ctx context.Context, projectID, ide
 // current_phase, expected_by, closed_at, closed_by, message_count,
 // open_checkpoint_id) are updated via TransitionConditional and not
 // touched here.
+//
+// When task.Status is CANCELLED or CLOSED it nils the struct's lease fields
+// before the write (scheduler design §4.9), as it sets UpdatedAt; on success
+// the struct matches the row.
 func (r *TaskRepository) Update(ctx context.Context, task *persistence.Task) error {
 	if task == nil {
 		return fmt.Errorf("task is nil")
@@ -158,6 +162,12 @@ func (r *TaskRepository) Update(ctx context.Context, task *persistence.Task) err
 		return err
 	}
 	task.UpdatedAt = time.Now().UTC()
+	if persistence.TaskStatusHoldsNoLease(task.Status) {
+		// Before the write, like UpdatedAt above: on success the struct matches
+		// the row; on failure the caller has an error and must not reuse it
+		// (scheduler design §4.9, review 6fdb F1).
+		task.ClearLeaseFields()
+	}
 	_, err := r.db.ExecContext(ctx, `
 		UPDATE tasks
 		SET project_id = ?,
@@ -377,17 +387,20 @@ func (r *TaskRepository) Count(ctx context.Context, filter persistence.TaskFilte
 // UpdateStatus atomically updates task status.
 func (r *TaskRepository) UpdateStatus(ctx context.Context, id string, status persistence.TaskStatus) error {
 	now := sqliteTime(time.Now().UTC())
+	// A terminal row holds no lease (scheduler design §4.9): eight callers
+	// write a terminal status through here, so the clear lives here.
+	leaseClear := persistence.TaskLeaseClearSQLFor(status)
 	// failed_at rides along with the status write, as it does in
 	// TransitionConditional: the dashboard's recency card is only as honest as
 	// the least-careful path into FAILED.
 	if status == persistence.TaskStatusFailed {
 		_, err := r.db.ExecContext(ctx,
-			`UPDATE tasks SET status = ?, updated_at = ?, failed_at = ? WHERE id = ?`,
+			`UPDATE tasks SET status = ?, updated_at = ?, failed_at = ?`+leaseClear+` WHERE id = ?`,
 			string(status), now, now, id)
 		return err
 	}
 	_, err := r.db.ExecContext(ctx,
-		`UPDATE tasks SET status = ?, updated_at = ? WHERE id = ?`,
+		`UPDATE tasks SET status = ?, updated_at = ?`+leaseClear+` WHERE id = ?`,
 		string(status), now, id)
 	return err
 }
@@ -395,7 +408,7 @@ func (r *TaskRepository) UpdateStatus(ctx context.Context, id string, status per
 // TransitionToCancelled is the atomic conditional CANCELLED transition.
 func (r *TaskRepository) TransitionToCancelled(ctx context.Context, id string) (bool, error) {
 	res, err := r.db.ExecContext(ctx, `
-		UPDATE tasks SET status = 'CANCELLED', updated_at = ?
+		UPDATE tasks SET status = 'CANCELLED', updated_at = ?`+persistence.TaskLeaseClearSQL+`
 		WHERE id = ?
 		  AND status IN ('QUEUED','LEASED','RUNNING','PENDING','PAUSED')`,
 		sqliteTime(time.Now().UTC()), id)
@@ -463,13 +476,10 @@ func (r *TaskRepository) TransitionConditional(
 		sets = append(sets, "last_error_class = ?")
 		args = append(args, *opts.LastErrorClass)
 	}
-	if opts.ClearLease {
-		sets = append(sets,
-			"lease_id = NULL",
-			"leased_at = NULL",
-			"leased_by = NULL",
-			"lease_expires_at = NULL",
-		)
+	// A terminal row holds no lease, whatever the caller asked (scheduler
+	// design §4.9).
+	if opts.ClearLease || persistence.TaskStatusHoldsNoLease(to) {
+		sets = append(sets, persistence.TaskLeaseClearColumns...)
 	}
 	if opts.Attempt > 0 {
 		sets = append(sets, "attempt = ?")

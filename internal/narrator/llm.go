@@ -98,6 +98,7 @@ func (n *Narrator) composeLine(ctx context.Context, kind triggerKind, in templat
 	timeout := n.llmTimeout()
 	callCtx, cancel := context.WithTimeout(ctx, timeout)
 	callCtx = chat.WithCallSite(callCtx, narratorCallSite)
+	callCtx = chat.WithBestEffort(callCtx) // optional work; breaker design §5.3a
 	defer cancel()
 
 	msgs := []chat.Message{

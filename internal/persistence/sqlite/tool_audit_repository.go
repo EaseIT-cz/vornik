@@ -25,10 +25,8 @@ func NewToolAuditRepository(db DBTX) *ToolAuditRepository {
 // uniqueness violations on the primary key so repeated writes from
 // the streaming + batch paths converge.
 func (r *ToolAuditRepository) Log(ctx context.Context, entry *persistence.ToolAuditEntry) error {
+	persistence.DefaultToolAuditIdentity(entry)
 	createdAt := entry.CreatedAt
-	if createdAt.IsZero() {
-		createdAt = time.Now().UTC()
-	}
 	_, err := r.db.ExecContext(ctx, `
 		INSERT OR IGNORE INTO tool_audit_log (
 			id, project_id, task_id, execution_id, step_id,

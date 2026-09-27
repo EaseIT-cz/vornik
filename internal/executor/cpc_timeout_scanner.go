@@ -220,11 +220,18 @@ func (s *CPCTimeoutScanner) cascadeCancelCallee(ctx context.Context, cpc *persis
 		persistence.TaskStatusCancelled:
 		return
 	}
-	if err := s.executor.taskRepo.UpdateStatus(ctx, taskID, persistence.TaskStatusCancelled); err != nil {
+	// ONE conditional write, gated on the live row (scheduler design §4.10):
+	// a callee that finished after the read above keeps its outcome.
+	moved, err := s.executor.taskRepo.TransitionConditional(ctx, taskID,
+		persistence.CancellableTaskStatuses(), persistence.TaskStatusCancelled, persistence.TransitionOpts{})
+	if err != nil {
 		s.executor.logger.Warn().Err(err).
 			Str("cpc_id", cpc.ID).
 			Str("callee_task_id", taskID).
 			Msg("cpc timeout scanner: cancel_on_timeout cascade failed; callee task still in flight")
+		return
+	}
+	if !moved {
 		return
 	}
 	s.executor.logger.Info().

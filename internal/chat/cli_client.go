@@ -44,22 +44,27 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"os/exec"
 	"strings"
 	"sync/atomic"
 	"time"
 
 	"github.com/rs/zerolog"
+
+	"vornik.io/vornik/internal/spawn"
 )
 
 // CLIClient is a Provider implementation that shells out to the
 // `claude` CLI binary. Construction is cheap; each request spawns a
 // fresh subprocess so there's no connection-pool state to manage.
 type CLIClient struct {
-	// binary is the path to the claude CLI. Defaults to "claude"
-	// (resolved via PATH) when NewCLIClient is called without
-	// WithCLIBinary; absolute paths work too.
+	// binary is the configured program's path, for logs and errors.
 	binary string
+
+	// program is what runs: a spawn.ConfiguredCommand the config loader's
+	// hand-off minted (process-spawn law, reading 3; S1b-2). The service
+	// wiring always sets it, "claude" when chat.cli_binary is empty; a
+	// client without one refuses to run rather than choosing a program.
+	program spawn.ConfiguredCommand
 
 	// model is the model identifier passed through to `claude --model`.
 	// Leave empty to use whatever Claude Code's current session
@@ -109,9 +114,12 @@ type CLIClient struct {
 // CLIOption configures a CLIClient.
 type CLIOption func(*CLIClient)
 
-// WithCLIBinary overrides the claude binary path.
-func WithCLIBinary(path string) CLIOption {
-	return func(c *CLIClient) { c.binary = path }
+// WithCLIBinary sets the claude program, minted from config.
+func WithCLIBinary(program spawn.ConfiguredCommand) CLIOption {
+	return func(c *CLIClient) {
+		c.program = program
+		c.binary = program.Path()
+	}
 }
 
 // WithCLITimeout sets a per-request timeout (applied alongside the
@@ -199,7 +207,10 @@ func (c *CLIClient) ListModels(_ context.Context) ([]ModelInfo, error) {
 // (typically "command not found") becomes a readiness failure so
 // the daemon's startup gate can wait until the binary is reachable.
 func (c *CLIClient) Ping(ctx context.Context) error {
-	cmd := exec.CommandContext(ctx, c.binary, "--version")
+	cmd, err := spawn.ConfiguredProgram(ctx, c.program, spawn.ConfiguredOptions{Args: []string{"--version"}})
+	if err != nil {
+		return fmt.Errorf("cli binary %q: %w", c.binary, err)
+	}
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("cli binary %q --version failed: %w (output: %s)", c.binary, err, truncate(string(out), 200))
@@ -398,8 +409,21 @@ func (c *CLIClient) runClaude(ctx context.Context, id uint64, req *cliRequest) (
 	}
 	args = append(args, c.extraArgs...)
 
-	cmd := exec.CommandContext(ctx, c.binary, args...)
-	cmd.Stdin = strings.NewReader(req.userTurn)
+	// The process-spawn law's ConfiguredProgram kind: the program is the
+	// configured one; the per-call args, stdin and env are ours.
+	env := os.Environ()
+	env = append(env,
+		"CLAUDE_CODE_DISABLE_ADAPTIVE_THINKING=1",
+		"MAX_THINKING_TOKENS=0",
+	)
+	if c.effortLevel != "" {
+		env = append(env, "CLAUDE_CODE_EFFORT_LEVEL="+c.effortLevel)
+	}
+	cmd, err := spawn.ConfiguredProgram(ctx, c.program, spawn.ConfiguredOptions{Args: args, Env: env})
+	if err != nil {
+		return nil, fmt.Errorf("cli: %w", err)
+	}
+	cmd.SetStdin(strings.NewReader(req.userTurn))
 
 	// Env overlay: start with the parent env and layer on the thinking
 	// controls. CLAUDE_CODE_EFFORT_LEVEL=low alone still lets the
@@ -415,18 +439,10 @@ func (c *CLIClient) runClaude(ctx context.Context, id uint64, req *cliRequest) (
 	// Haiku. Opus 4.7 always runs adaptive reasoning and ignores
 	// both — which is what we want: coder roles on Opus keep their
 	// reasoning, Sonnet orchestration roles get 2-5s turns.
-	env := os.Environ()
-	env = append(env,
-		"CLAUDE_CODE_DISABLE_ADAPTIVE_THINKING=1",
-		"MAX_THINKING_TOKENS=0",
-	)
-	if c.effortLevel != "" {
-		env = append(env, "CLAUDE_CODE_EFFORT_LEVEL="+c.effortLevel)
-	}
-	cmd.Env = env
+	// (The environment is set above, at the spawn.)
 
 	stderr := &bytes.Buffer{}
-	cmd.Stderr = stderr
+	cmd.SetStderr(stderr)
 
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {

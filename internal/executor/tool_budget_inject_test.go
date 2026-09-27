@@ -161,7 +161,7 @@ func TestToolBudget_EndToEnd_ExtraEnvOverridesStatic(t *testing.T) {
 
 	_, err := e.startContainer(context.Background(),
 		&persistence.Task{ID: "t1", ProjectID: "p1"}, "e1", "test-image:latest",
-		"coder", "/tmp/in", "/tmp/out", "/tmp/work", role, "", e.config.DefaultTimeout, extraEnv)
+		"coder", "/tmp/in", "/tmp/out", "/tmp/work", role, "", e.config.DefaultTimeout, extraEnv, nil)
 	assert.NoError(t, err)
 
 	rt.mu.Lock()
@@ -191,7 +191,7 @@ func TestToolBudget_EndToEnd_DisabledKeepsStatic(t *testing.T) {
 	// With no injection, extraEnv carries no budget override.
 	_, err := e.startContainer(context.Background(),
 		&persistence.Task{ID: "t1", ProjectID: "p1"}, "e1", "test-image:latest",
-		"coder", "/tmp/in", "/tmp/out", "/tmp/work", role, "", e.config.DefaultTimeout, nil)
+		"coder", "/tmp/in", "/tmp/out", "/tmp/work", role, "", e.config.DefaultTimeout, nil, nil)
 	assert.NoError(t, err)
 
 	rt.mu.Lock()

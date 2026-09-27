@@ -603,6 +603,7 @@ func TestClusterNode_Contract(t *testing.T) {
 
 func TestLeaderLock_Contract(t *testing.T) {
 	repotest.RunLeaderLockSuite(t, sqlite.NewLeaderLockRepository(newTestDB(t).DB))
+	repotest.RunLeaderLockBoundarySuite(t, sqlite.NewLeaderLockRepository(newTestDB(t).DB), time.Second)
 }
 
 func TestEntityMention_Contract(t *testing.T) {

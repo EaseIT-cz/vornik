@@ -20,7 +20,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"path"
 	"path/filepath"
+	"strings"
 
 	"vornik.io/vornik/internal/extractor"
 	"vornik.io/vornik/internal/persistence"
@@ -32,9 +34,10 @@ import (
 // struct keeps the caller-side merge code straightforward —
 // extractions stay aligned with inputFiles by index.
 type inputArtifactResult struct {
-	StoragePath string
-	ArtifactID  string
-	Extraction  map[string]any // nil when extraction skipped/failed
+	StoragePath  string
+	ArtifactID   string
+	Extraction   map[string]any // nil when extraction skipped/failed
+	DocumentPath string         // the uploader-declared path in its repository; "" = none
 }
 
 // processInputArtifactsOpts controls per-call behaviour of the input-
@@ -104,6 +107,11 @@ func (s *Server) processInputArtifactsWithOpts(ctx context.Context, projectID st
 		if err != nil {
 			return nil, fmt.Errorf("inputArtifacts[%d]: %w", i, err)
 		}
+		if in.Path != "" {
+			if err := validateDocumentPath(in.Path, safeName); err != nil {
+				return nil, fmt.Errorf("inputArtifacts[%d]: path: %w", i, err)
+			}
+		}
 		// Inline base64 is the documented Content shape. We accept
 		// both standard and URL-safe encodings to be lenient with
 		// CLI tooling.
@@ -135,9 +143,10 @@ func (s *Server) processInputArtifactsWithOpts(ctx context.Context, projectID st
 			extraction = s.tryAutoExtract(ctx, projectID, art)
 		}
 		out = append(out, inputArtifactResult{
-			StoragePath: art.StoragePath,
-			ArtifactID:  art.ID,
-			Extraction:  extraction,
+			StoragePath:  art.StoragePath,
+			ArtifactID:   art.ID,
+			Extraction:   extraction,
+			DocumentPath: in.Path,
 		})
 	}
 	return out, nil
@@ -288,15 +297,24 @@ func mergeInputsIntoContext(raw json.RawMessage, results []inputArtifactResult) 
 	files := make([]string, 0, len(results))
 	ids := make([]string, 0, len(results))
 	extractions := make([]map[string]any, 0, len(results))
+	documentPaths := map[string]string{}
 	for _, r := range results {
 		files = append(files, r.StoragePath)
 		ids = append(ids, r.ArtifactID)
 		if r.Extraction != nil {
 			extractions = append(extractions, r.Extraction)
 		}
+		if r.DocumentPath != "" {
+			documentPaths[r.ArtifactID] = r.DocumentPath
+		}
 	}
 	ctx["inputFiles"] = files
 	ctx["inputArtifactIDs"] = ids
+	// Built by the daemon from the validated paths, so every key is an
+	// artifact it just stored; absent when no upload carried a path.
+	if len(documentPaths) > 0 {
+		ctx["inputDocumentPaths"] = documentPaths
+	}
 	if len(extractions) > 0 {
 		ctx["inputExtractions"] = extractions
 	}
@@ -310,3 +328,28 @@ func mergeInputsIntoContext(raw json.RawMessage, results []inputArtifactResult) 
 // Keep the filepath import used even when tests don't reach the
 // path-sanitisation branches directly.
 var _ = filepath.Base
+
+// maxDocumentPathBytes bounds an uploader-declared document path.
+const maxDocumentPathBytes = 512
+
+// validateDocumentPath checks an uploader-declared document path (memory
+// rollback x supersession design, amendment 2026-09-26). It must be a clean,
+// relative path inside a repository, at most 512 bytes of UTF-8, and end in
+// the upload's own cleaned file name, so the path and the stored artifact
+// cannot describe different files. Compared byte for byte, no case folding:
+// the uploader sends the path exactly as git reports it.
+func validateDocumentPath(p, fileName string) error {
+	switch {
+	case len(p) > maxDocumentPathBytes:
+		return fmt.Errorf("%d bytes, over the %d-byte limit", len(p), maxDocumentPathBytes)
+	case strings.HasPrefix(p, "/"):
+		return fmt.Errorf("%q is absolute; send the path relative to the repository root", p)
+	case path.Clean(p) != p:
+		return fmt.Errorf("%q is not a clean path (it would read as %q)", p, path.Clean(p))
+	case p == ".." || strings.HasPrefix(p, "../"):
+		return fmt.Errorf("%q leaves the repository", p)
+	case path.Base(p) != fileName:
+		return fmt.Errorf("%q does not end in the upload's name %q", p, fileName)
+	}
+	return nil
+}

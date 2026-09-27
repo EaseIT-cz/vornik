@@ -74,6 +74,7 @@ func (s *Server) IngestTradingSafetyEvent(w http.ResponseWriter, r *http.Request
 		respondError(w, http.StatusBadRequest, "VALIDATION_ERROR", err.Error())
 		return
 	}
+	s.noteUnknownIngestFields("safety_event", body, &req)
 	if req.ID == "" || req.ProjectID == "" || req.Kind == "" {
 		s.recordTradingIngestError("safety_event", "validation")
 		respondError(w, http.StatusBadRequest, "VALIDATION_ERROR",

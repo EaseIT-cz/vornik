@@ -33,6 +33,13 @@ type TaskRun struct {
 	Succeeded    bool     `json:"succeeded"`
 	ErrorText    string   `json:"errorText,omitempty"`
 	ExecutionIDs []string `json:"executionIds,omitempty"`
+	// ClearCommit is the workspace commit that removed this repeat's targets
+	// before it ran; TargetsProduced is, per target, whether it existed at
+	// the workspace HEAD afterwards (benchmark LLD §12.23).
+	ClearCommit     string          `json:"clearCommit,omitempty"`
+	TargetsProduced map[string]bool `json:"targetsProduced,omitempty"`
+	// Acceptance is the repeat's independent grade (benchmark LLD §12.24).
+	Acceptance *AcceptanceResult `json:"acceptance,omitempty"`
 }
 
 // ValidateTaskTiers refuses a blended/implicit task set before it can be used
@@ -106,6 +113,37 @@ type CalibrationManifest struct {
 func (m CalibrationManifest) SHA256() string { return digestJSON(m) }
 
 // BuildCalibration derives and validates calibration without rewriting tiers.
+// requireMeasurementPass binds a release artifact to a run that declared its
+// purpose before it ran (release-gate design §9.3): the journal's
+// pre-registration must be of the wanted kind, valid, and unedited since the
+// run — its recomputed hash equal to the one the runner journaled, the same
+// tamper rule validateReleaseJournal applies at the gate.
+//
+// Incident 2026-09-20: a calibration pass had to borrow a comparison's
+// pre-registration because a single-arm pass could not be registered at all.
+// Such a journal is refused here with the reason, rather than silently
+// becoming the evidence a release gate is sized from.
+func requireMeasurementPass(label string, j Journal, want RunKind) error {
+	pre := j.Manifest.PreRegistration
+	if got := pre.EffectiveKind(); got != want {
+		return fmt.Errorf("%s was run under a %s pre-registration; a %s artifact must come from a "+
+			"pass pre-registered as kind %q, so the artifact is bound to a run that declared its "+
+			"purpose before it ran", label, got, want, want)
+	}
+	if err := pre.Validate(); err != nil {
+		return fmt.Errorf("%s pre-registration is invalid: %w", label, err)
+	}
+	hash, err := pre.Hash()
+	if err != nil {
+		return err
+	}
+	if j.Manifest.PreRegistrationHash == "" || j.Manifest.PreRegistrationHash != hash {
+		return fmt.Errorf("%s pre-registration does not match the hash journaled at run time: it "+
+			"was edited after the run, so it no longer states what the run committed to", label)
+	}
+	return nil
+}
+
 func BuildCalibration(j Journal, sourceJournalSHA256 string) (CalibrationManifest, error) {
 	if !validSHA256(sourceJournalSHA256) {
 		return CalibrationManifest{}, fmt.Errorf("source journal sha256 must be 64 hexadecimal characters")
@@ -118,6 +156,9 @@ func BuildCalibration(j Journal, sourceJournalSHA256 string) (CalibrationManifes
 	}
 	if j.Manifest.ArmKey == "" || j.Manifest.ArmKey != j.Manifest.Arm.Key() {
 		return CalibrationManifest{}, fmt.Errorf("calibration source journal arm key is missing or inconsistent")
+	}
+	if err := requireMeasurementPass("calibration source journal", j, RunKindCalibration); err != nil {
+		return CalibrationManifest{}, err
 	}
 	if len(j.Manifest.TaskTiers) == 0 || j.Manifest.Arm.TierPolicySHA256 == "" {
 		return CalibrationManifest{}, fmt.Errorf("journal has no task-tier policy")
@@ -289,6 +330,12 @@ func BuildNoiseFloor(a, b Journal, sourceASHA256, sourceBSHA256 string) (NoiseFl
 	}
 	if a.Manifest.ArmPartial || b.Manifest.ArmPartial {
 		return NoiseFloorManifest{}, fmt.Errorf("noise-floor source journal has a partial arm key")
+	}
+	if err := requireMeasurementPass("first noise-floor source journal", a, RunKindNoiseFloor); err != nil {
+		return NoiseFloorManifest{}, err
+	}
+	if err := requireMeasurementPass("second noise-floor source journal", b, RunKindNoiseFloor); err != nil {
+		return NoiseFloorManifest{}, err
 	}
 	if a.Manifest.ArmKey == "" || b.Manifest.ArmKey == "" ||
 		a.Manifest.ArmKey != a.Manifest.Arm.Key() || b.Manifest.ArmKey != b.Manifest.Arm.Key() {

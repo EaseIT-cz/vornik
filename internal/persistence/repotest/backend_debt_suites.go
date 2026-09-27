@@ -638,6 +638,40 @@ func leaderLockDeleteExpired(ctx context.Context, t *testing.T, repo persistence
 	}
 }
 
+// RunLeaderLockBoundarySuite pins that DeleteExpired and
+// persistence.LeaderLockExpired agree at the expiry instant (horizontal scaling
+// LLD, `leader-lock release` contract 2026-09-25). The doctor used
+// expires_at <= now and the statement expires_at < now, so at
+// expires_at == now the doctor said "release it" and the release refused.
+//
+// step is the smallest offset the driver orders correctly: 1µs on Postgres
+// (timestamptz stores microseconds; 1ns can land in the same stored
+// microsecond), 1s on SQLite, whose RFC3339Nano TEXT does not sort in time
+// order within a second (backlog P2, 2026-09-25). The sub-second SQLite case
+// is added when that fix lands.
+func RunLeaderLockBoundarySuite(t *testing.T, repo persistence.DaemonLeaderLockRepository, step time.Duration) {
+	t.Helper()
+	ctx := context.Background()
+	now := time.Now().UTC().Truncate(time.Second)
+	for _, off := range []time.Duration{0, -step, step} {
+		worker := uniqueID("worker-boundary")
+		expires := now.Add(off)
+		// Acquire at expires-ttl with ttl: the stored expires_at is exactly
+		// `expires`.
+		const ttl = time.Hour
+		if ok, _, err := repo.Acquire(ctx, worker, "h1", expires.Add(-ttl), ttl); err != nil || !ok {
+			t.Fatalf("Acquire(%v): ok=%t err=%v", off, ok, err)
+		}
+		row, err := repo.DeleteExpired(ctx, worker, now)
+		if err != nil {
+			t.Fatalf("DeleteExpired(%v): %v", off, err)
+		}
+		if released, want := row != nil, persistence.LeaderLockExpired(expires, now); released != want {
+			t.Errorf("expires_at = now%+v: DeleteExpired released=%t, LeaderLockExpired=%t — the two must agree", off, released, want)
+		}
+	}
+}
+
 func leaderLockFirstAcquire(ctx context.Context, t *testing.T, repo persistence.DaemonLeaderLockRepository, worker string, now time.Time) {
 	t.Helper()
 	ok, epoch, err := repo.Acquire(ctx, worker, "h1", now, time.Minute)
@@ -939,6 +973,41 @@ func RunExecutionQualityScoreSuite(t *testing.T, repo persistence.ExecutionQuali
 	t.Run("Upsert_requires_a_matching_execution_identity", func(t *testing.T) { qualityScoreIdentity(ctx, t, fx) })
 	t.Run("Upsert_round_trips_replaces_and_leaves_the_pending_set", func(t *testing.T) { qualityScoreRoundTrip(ctx, t, fx) })
 	t.Run("List_filters", func(t *testing.T) { qualityScoreListFilters(ctx, t, fx) })
+	t.Run("Upsert_unscorable_stores_NULL_and_replaces_in_place", func(t *testing.T) {
+		qualityScoreUnscorable(ctx, t, fx.repo, seedTerminalExecution(ctx, t, execs, tasks, fx.project, persistence.ExecutionStatusCompleted))
+	})
+}
+
+// qualityScoreUnscorable: the durable row accepts the scorer's `unscorable`
+// verdict with a NULL score, and a second publish of the same execution
+// replaces the row rather than adding one (agent-quality-benchmark design,
+// amendment 2026-09-26). Incident: the slow-hardware bench arm, where the
+// refused row left its execution pending and the reconciler retried it every
+// 30 s, forever.
+func qualityScoreUnscorable(ctx context.Context, t *testing.T, repo persistence.ExecutionQualityScoreRepository, exec *persistence.Execution) {
+	t.Helper()
+	s := &persistence.ExecutionQualityScore{ProjectID: exec.ProjectID, TaskID: exec.TaskID, ExecutionID: exec.ID, WorkflowID: exec.WorkflowID,
+		WorkflowRevision: exec.WorkflowRevision, ScorerVersion: "v1", Kind: "pinned_case_validation", Status: "unscorable",
+		Diagnostic: "multi_visit_last_only", CaseEvidence: json.RawMessage(`[]`), RecordedAt: time.Now().UTC().Truncate(time.Millisecond)}
+	if err := repo.Upsert(ctx, s); err != nil {
+		t.Fatalf("an unscorable row must be writable: %v", err)
+	}
+	got, err := repo.GetByExecution(ctx, exec.ID)
+	if err != nil || got.Status != "unscorable" || got.Score != nil || got.Diagnostic != "multi_visit_last_only" {
+		t.Fatalf("round trip = %+v, %v; want unscorable with a NULL score", got, err)
+	}
+	if err := repo.Upsert(ctx, s); err != nil {
+		t.Fatalf("a second publish of the same execution must upsert: %v", err)
+	}
+	rows, err := repo.List(ctx, persistence.ExecutionQualityScoreFilter{ExecutionID: exec.ID, PageSize: 10})
+	if err != nil || len(rows) != 1 {
+		t.Fatalf("one row per execution after two publishes, got %d (%v)", len(rows), err)
+	}
+	zero := 0.0
+	s.Score = &zero
+	if err := repo.Upsert(ctx, s); !errors.Is(err, persistence.ErrInvalidQualityScore) {
+		t.Fatalf("unscorable with a number is a structural reject, got %v", err)
+	}
 }
 
 func seedTerminalExecution(ctx context.Context, t *testing.T, execs persistence.ExecutionRepository, tasks persistence.TaskRepository, project string, status persistence.ExecutionStatus) *persistence.Execution {

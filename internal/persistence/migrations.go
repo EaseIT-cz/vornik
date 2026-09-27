@@ -8288,4 +8288,209 @@ DROP INDEX IF EXISTS idx_ui_sessions_origin_credential;
 ALTER TABLE ui_sessions DROP COLUMN IF EXISTS origin_credential_id;
 `,
 	},
+	{
+		Version: 195,
+		Name:    "step_outcome_reclassify_agent_mount_unusable",
+		// Names the 2026-09-17/18 agent-image uid outage in history: a pulled
+		// image baked for uid 1000 on a uid-1001 host under keep-id could not
+		// read /app/input/task.json, and 69 steps landed in `unclassified` with
+		// exit code 1 — 69 of the 85 rows that put the doctor's
+		// unclassified-share check at 6.5% over its 5% threshold. Same reason as
+		// 173: without it the check warns for a month over a fixed incident.
+		//
+		// UNLIKE 170 and 173 THIS MATCHES INSIDE THE LOG TAIL. Those applied the
+		// live predicate to history, split before the tail to mirror
+		// errorBeforeLogTail. Here the live predicate is an exit code (78, from
+		// the agent's mount preflight) that history does not carry: the cause
+		// exists only in the tail. What makes that safe is the literal — jq
+		// opening that exact path and being denied, the agent's first action —
+		// keyed further on the incident's exit code and bounded to before the
+		// structured channel shipped. A live row cannot match: the preflight
+		// returns before any jq runs.
+		//
+		// Postgres only, like 170/173 (SQLite has no history). IDEMPOTENT: after
+		// Up no row matches. One column, one predicate — never a wipe, and the
+		// target IS the production database.
+		//
+		// Design: https://docs.vornik.io §11
+		Up: `
+UPDATE execution_step_outcomes SET error_class = 'agent_mount_unusable'
+ WHERE error_class = 'unclassified'
+   AND container_exit_code = 1
+   AND recorded_at < '2026-09-25T00:00:00Z'
+   AND error_detail LIKE '%Could not open file /app/input/task.json: Permission denied%';
+`,
+		// The exact inverse: the same literal, code and bound. No applied_at
+		// bound is needed (contrast 173, whose live classifier writes the same
+		// class on rows that also match its predicate, so its Down must stop at
+		// the moment Up ran): here the live classifier writes this class only
+		// for exit 78, and no exit-78 row can carry this jq line.
+		Down: `
+UPDATE execution_step_outcomes SET error_class = 'unclassified'
+ WHERE error_class = 'agent_mount_unusable'
+   AND container_exit_code = 1
+   AND recorded_at < '2026-09-25T00:00:00Z'
+   AND error_detail LIKE '%Could not open file /app/input/task.json: Permission denied%';
+`,
+	},
+	{
+		Version: 196,
+		Name:    "tool_audit_log_identity_checks",
+		// A storage-boundary backstop for the companion tool-audit defect
+		// (companion tool-audit design, 2026-09-24): recordCompanionToolAudit
+		// left ID and CreatedAt unset, so the first companion row took id ''
+		// and ON CONFLICT (id) swallowed every later call, and Postgres dated
+		// it year 1 for the 30-day retention sweep to delete. Both drivers'
+		// Log now default the two fields; these CHECKs make a writer that
+		// bypasses Log (raw SQL, a second repository method) fail loudly
+		// instead of losing rows silently.
+		//
+		// REPAIR, NOT DELETE, first: production held one violator at design
+		// time — the live companion delegate row, id '' and year-1
+		// created_at — and a row recording a real call is worth keeping. It
+		// gets a generated id and the migration's own time, marked in
+		// tool_output so the substituted time is never read as the call's.
+		// The ids are random (md5 of random() + the row's own fields), like
+		// GenerateID's random suffix.
+		//
+		// Postgres only (SQLite takes its shape from a fresh CREATE TABLE and
+		// has no history). Idempotent: the repair matches nothing on a second
+		// run, and each constraint is dropped-if-exists before it is added.
+		Up: `
+UPDATE tool_audit_log
+   SET tool_output = COALESCE(tool_output, '') ||
+           CASE WHEN created_at <= '2000-01-01' THEN ' [created_at unknown: repaired by migration 196]' ELSE '' END,
+       created_at  = CASE WHEN created_at <= '2000-01-01' THEN now() ELSE created_at END,
+       id          = CASE WHEN id = '' THEN 'ta_repaired_' || md5(random()::text || clock_timestamp()::text || COALESCE(execution_id, ''))
+                          ELSE id END
+ WHERE id = '' OR created_at <= '2000-01-01';
+ALTER TABLE tool_audit_log DROP CONSTRAINT IF EXISTS tool_audit_log_id_nonempty;
+ALTER TABLE tool_audit_log ADD CONSTRAINT tool_audit_log_id_nonempty CHECK (id <> '') NOT VALID;
+ALTER TABLE tool_audit_log VALIDATE CONSTRAINT tool_audit_log_id_nonempty;
+ALTER TABLE tool_audit_log DROP CONSTRAINT IF EXISTS tool_audit_log_created_at_real;
+ALTER TABLE tool_audit_log ADD CONSTRAINT tool_audit_log_created_at_real CHECK (created_at > '2000-01-01') NOT VALID;
+ALTER TABLE tool_audit_log VALIDATE CONSTRAINT tool_audit_log_created_at_real;
+`,
+		// The repair is not reverted: a generated id and a marked time are
+		// strictly better than '' and year 1, and there is no original value
+		// to restore.
+		Down: `
+ALTER TABLE tool_audit_log DROP CONSTRAINT IF EXISTS tool_audit_log_created_at_real;
+ALTER TABLE tool_audit_log DROP CONSTRAINT IF EXISTS tool_audit_log_id_nonempty;
+`,
+	},
+	{
+		Version: 197,
+		Name:    "workflow_proposals_pre_apply_yaml",
+		// Config-drift slice E (2026-07-16 config-tree drift design, "Slice E —
+		// the pre-apply snapshot"): the deployed workflow file as it was just
+		// BEFORE an applied remove_step / reorder_steps wrote over it. The
+		// config_template_drift doctor row diffs it against the proposal to
+		// find what the approved change deleted, and exempts a missed-fix hunk
+		// that lies wholly inside that. NULL = not recorded (applied before
+		// this migration, another kind, or a writer that could not read); the
+		// row then says the exemption could not be evaluated rather than
+		// guessing. Additive and nullable, so it is instant on Postgres.
+		// Postgres only: SQLite has no architect surface (its proposal
+		// repository is a stub that can never hold an applied row).
+		Up:   `ALTER TABLE workflow_proposals ADD COLUMN IF NOT EXISTS pre_apply_yaml TEXT;`,
+		Down: `ALTER TABLE workflow_proposals DROP COLUMN IF EXISTS pre_apply_yaml;`,
+	},
+	{
+		Version: 198,
+		Name:    "trading_orders_filled_qty_backfill",
+		// Trading-fill-reconciliation design, finding #7 correction
+		// (2026-09-24): the ingest struct dropped the broker's filled_qty, so
+		// every trading_orders row kept the column DEFAULT 0 (0 of 215
+		// `filled` rows non-zero on the reference host). This repairs the rows
+		// their own trading_fills can vouch for, joined as the ledger joins
+		// them (order_id = trading_orders.id): a `filled` row only when the
+		// fill sum EQUALS qty, a `partial` row only when 0 < sum < qty.
+		// Anything else stays 0 rather than written as a mismatch — measured
+		// at design time: 203 repaired, 12 pre-July rows left (11
+		// boot_reconcile stop fills with no fill row, one fractional-era NVDA
+		// row whose 6-share fill exceeds its 2.7614 qty).
+		//
+		// Idempotent: it touches only rows at 0 whose fills match. Postgres
+		// only: SQLite takes its shape from a fresh schema and has no history.
+		Up: `
+UPDATE trading_orders o
+   SET filled_qty = f.total
+  FROM (SELECT order_id, SUM(qty) AS total FROM trading_fills GROUP BY order_id) f
+ WHERE f.order_id = o.id
+   AND o.filled_qty = 0
+   AND ((o.status = 'filled'  AND f.total = o.qty)
+     OR (o.status = 'partial' AND f.total > 0 AND f.total < o.qty));
+`,
+		// Nothing to undo that the schema could tell apart from a real count:
+		// the repaired values are the fills' own sums.
+		Down: ``,
+	},
+	{
+		Version: 199,
+		Name:    "execution_quality_scores_unscorable",
+		// Agent-quality-benchmark design, amendment 2026-09-26: the scorer
+		// has emitted `unscorable` since 2026-09-19 and the durable row
+		// refused it, so every multi-visit execution failed to publish and
+		// was retried every 30 s, forever. `unscorable` joins the status set
+		// and, like not_applicable, stores a NULL score (it is not a
+		// measurement).
+		//
+		// Both new CHECKs are supersets of the old ones, so the re-scan on
+		// ADD cannot fail on existing rows. The runner applies the whole Up in
+		// one transaction, so a concurrent writer never sees the table
+		// unconstrained. SQLite gets the same change through its table
+		// rebuild (sqlite.sqliteTableRebuilds).
+		//
+		// A plain ADD, not the NOT VALID + VALIDATE two-step: the table holds
+		// one row per terminal execution (thousands, not millions), and the
+		// supersets mean the validating scan cannot fail, so the lock is held
+		// for one short scan.
+		Up: `
+ALTER TABLE execution_quality_scores DROP CONSTRAINT IF EXISTS execution_quality_scores_status_check;
+ALTER TABLE execution_quality_scores DROP CONSTRAINT IF EXISTS execution_quality_scores_check;
+ALTER TABLE execution_quality_scores ADD CONSTRAINT execution_quality_scores_status_check
+    CHECK (status IN ('scored','missing_contract','invalid_evidence','not_applicable','unscorable'));
+ALTER TABLE execution_quality_scores ADD CONSTRAINT execution_quality_scores_check
+    CHECK ((status IN ('not_applicable','unscorable') AND score IS NULL) OR
+           (status NOT IN ('not_applicable','unscorable') AND score IS NOT NULL));
+`,
+		// Refuses while any unscorable row exists: the old CHECKs cannot hold
+		// it, and deleting a verdict to make a rollback pass is not the
+		// migration's call.
+		Down: `
+ALTER TABLE execution_quality_scores DROP CONSTRAINT IF EXISTS execution_quality_scores_status_check;
+ALTER TABLE execution_quality_scores DROP CONSTRAINT IF EXISTS execution_quality_scores_check;
+ALTER TABLE execution_quality_scores ADD CONSTRAINT execution_quality_scores_status_check
+    CHECK (status IN ('scored','missing_contract','invalid_evidence','not_applicable'));
+ALTER TABLE execution_quality_scores ADD CONSTRAINT execution_quality_scores_check
+    CHECK ((status = 'not_applicable' AND score IS NULL) OR
+           (status <> 'not_applicable' AND score IS NOT NULL));
+`,
+	},
+	{
+		Version: 200,
+		Name:    "ingest_queue_document_path",
+		// Memory rollback x supersession design, amendment 2026-09-26:
+		// re-ingesting a document never superseded its earlier versions,
+		// because an upload has no task ID and supersession was keyed on it.
+		// A document ingest now carries the file's path in its repository
+		// across the enqueue -> drain boundary, and the chunks are published
+		// under it. Nullable, no backfill: NULL is "not a document ingest",
+		// which every existing row is.
+		//
+		// The index serves SupersedeDocument, which filters one document's
+		// chunks by (project, scope, source_name); the table had no index on
+		// source_name. SQLite gets both through schemaSQL and
+		// sqliteAdditiveColumns.
+		Up: `
+ALTER TABLE project_ingest_queue ADD COLUMN IF NOT EXISTS document_path TEXT;
+CREATE INDEX IF NOT EXISTS idx_memory_chunks_document
+    ON project_memory_chunks (project_id, repo_scope, source_name);
+`,
+		Down: `
+DROP INDEX IF EXISTS idx_memory_chunks_document;
+ALTER TABLE project_ingest_queue DROP COLUMN IF EXISTS document_path;
+`,
+	},
 }

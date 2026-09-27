@@ -34,6 +34,7 @@ import (
 	"vornik.io/vornik/internal/memory"
 	"vornik.io/vornik/internal/persistence"
 	"vornik.io/vornik/internal/registry"
+	"vornik.io/vornik/internal/spawn"
 	"vornik.io/vornik/internal/storage"
 	"vornik.io/vornik/internal/telegram"
 	"vornik.io/vornik/internal/trading"
@@ -209,6 +210,12 @@ func (c *Container) mcpDesiredServers() map[string][]mcp.ServerConfig {
 					}
 				}
 			}
+			// The program a stdio launch runs, minted here — where the loaded
+			// config becomes a ServerConfig — and nowhere a request reaches
+			// (process-spawn law, reading 3; S1b-2). After the inheritance
+			// above, so a name-only subscription runs the daemon entry's
+			// program.
+			cfg.Program = configuredMCPProgram(cfg)
 			// The label must name BOTH the project doing the work and the
 			// scope its credential actually resolves at — a log line reading
 			// "project X" for a grant stored at project_id "" sends an
@@ -299,6 +306,17 @@ func (c *Container) applyMCPAuth(cfg *mcp.ServerConfig, auth mcpauth.Auth, grant
 	return true
 }
 
+// configuredMCPProgram mints the stdio program of a ServerConfig built from
+// loaded config: the config loader's hand-off, the one place outside the
+// sandbox bridge that may call spawn.NewConfiguredCommand (pinned by
+// TestSpawnLaw_OnlyNamedPackagesImportSpawn). Non-stdio servers carry none.
+func configuredMCPProgram(cfg mcp.ServerConfig) spawn.ConfiguredCommand {
+	if cfg.Transport != "stdio" {
+		return spawn.ConfiguredCommand{}
+	}
+	return spawn.NewConfiguredCommand(cfg.Command, cfg.Args...)
+}
+
 // daemonMCPServerConfigs converts the daemon-level MCP catalog (config.yaml's
 // mcp.servers) into client configs with any `auth:` block resolved. Shared by
 // the discovery registry so an authenticated daemon-scope server is probed WITH
@@ -318,6 +336,7 @@ func (c *Container) daemonMCPServerConfigs() []mcp.ServerConfig {
 			AllowedTools:   s.AllowedTools,
 			TimeoutSeconds: s.TimeoutSeconds,
 		}
+		cfg.Program = configuredMCPProgram(cfg)
 		// Daemon-scope servers are admin-configured and have no project
 		// allowlist to check against.
 		if !c.applyMCPAuth(&cfg, s.Auth, mcpauth.Grants{Unrestricted: true}, "", "daemon") {

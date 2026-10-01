@@ -1,6 +1,7 @@
 package executor
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -530,6 +531,11 @@ func (e *Executor) executeAgentStep(ctx context.Context, task *persistence.Task,
 		stops := agentStops{tripwire: budgetTripwireDetail, iterationCap: iterationCapDetail, promptBudget: promptTokenBudgetDetail}
 		if err != nil {
 			outcome, errClass, errDetail = failedStepRecord(ctx, err, stops, hallucinationDetail)
+			// Carry the recorded class on the returned error so the retry
+			// ladder decides on the class this row records, not a second
+			// classification (T-0d3c; step-retry design §9 D9.1). Error()
+			// is unchanged.
+			err = withStepClass(err, errClass)
 		} else if degenerateLoopDetail != "" {
 			// Container exit was clean but the tool loop got stuck in a
 			// repeated call pattern. Quality failure of the step itself —
@@ -655,7 +661,7 @@ func (e *Executor) executeAgentStep(ctx context.Context, task *persistence.Task,
 	// `roleConfig != nil` check that turned the mistake into a silent no-op —
 	// the agent kept being failed for rules it was never shown, and the
 	// in-container nudge never fired once across a whole benchmark arm.
-	if len(opts.PlausibilityRules) == 0 && plan != nil && plan.swarm != nil {
+	if len(opts.PlausibilityRules) == 0 && !opts.RouteContract && plan != nil && plan.swarm != nil {
 		if rc, rcErr := findSwarmRole(plan.swarm, step.Role); rcErr == nil && rc != nil {
 			opts.PlausibilityRules = rc.PlausibilityRules
 		}
@@ -751,6 +757,9 @@ func (e *Executor) executeAgentStep(ctx context.Context, task *persistence.Task,
 		return "", nil, err
 	}
 	effectiveModel = e.effectiveRoleModelForTask(task, roleConfig)
+	// The output contract this step is held to: the role's, unless the router
+	// contract replaces it (the adaptive route step).
+	contractRole := roleContractFor(roleConfig, opts)
 
 	// Agent-LLM health gate (LLD 2026-07-12-agent-llm-health-breaker): a
 	// per-model circuit breaker fed by agent-container call outcomes. When
@@ -781,6 +790,14 @@ func (e *Executor) executeAgentStep(ctx context.Context, task *persistence.Task,
 		cid, result, werr := e.executeWarmAgentStep(ctx, task, execution, plan, stepID, roleConfig, input, workspaceDir, timeout, stepStart, preStepArtifactSnapshot)
 		if werr == nil {
 			agentStamp.AgentImageID = e.observeAgentImageID(ctx, cid)
+			// The one deliberate exception to mirroring the ephemeral path:
+			// the memory peak is NOT stamped. memory.peak never decreases, so
+			// in a reused container it spans every task the container ran
+			// (agent container memory limits design §2.3a). A warm-policy
+			// step whose pool was exhausted falls through to the ephemeral
+			// path below and records its own.
+			e.logger.Debug().Str("execution_id", execution.ID).Str("step", stepID).
+				Msg("memory peak suppressed: a warm container's peak spans the tasks it has run")
 			// Mirror the ephemeral path's post-exit persistence: tool
 			// audit log, LLM usage (cost+tokens), and the degenerate-
 			// loop detector. Without these, warm-pool runs were absent
@@ -808,7 +825,7 @@ func (e *Executor) executeAgentStep(ctx context.Context, task *persistence.Task,
 				if opts != nil {
 					effective = opts.EffectiveSchema
 				}
-				if msg := e.checkOutputContract(result, step.Role, roleConfig.RequiredOutputKeys, effective); msg != "" {
+				if msg := e.checkOutputContract(result, step.Role, contractRole.RequiredOutputKeys, effective); msg != "" {
 					return "", nil, fmt.Errorf("%s", msg)
 				}
 			}
@@ -1093,6 +1110,7 @@ func (e *Executor) executeAgentStep(ctx context.Context, task *persistence.Task,
 		}
 		taintStampVal = e.taintStampFromStep(stepTaint)
 		e.recordLLMUsageFromResult(ctx, task, execution, stepID, step.Role, effectiveModel, rawResultBytes)
+		e.stampMemoryPeak(&agentStamp, rawResultBytes, step.Role, execution.ID, stepID)
 	} else {
 		e.logger.Warn().Str("execution_id", execution.ID).Str("step", stepID).
 			Msg("audit: result.json is empty or missing — no audit entries")
@@ -1179,7 +1197,7 @@ func (e *Executor) executeAgentStep(ctx context.Context, task *persistence.Task,
 		if opts != nil {
 			effective = opts.EffectiveSchema
 		}
-		if msg := e.checkOutputContract(rawResultBytes, step.Role, roleConfig.RequiredOutputKeys, effective); msg != "" {
+		if msg := e.checkOutputContract(rawResultBytes, step.Role, contractRole.RequiredOutputKeys, effective); msg != "" {
 			agentError = msg
 		}
 	}
@@ -1196,7 +1214,7 @@ func (e *Executor) executeAgentStep(ctx context.Context, task *persistence.Task,
 		postStepHEAD = gitHEAD(ctx, plan.worktreeDir)
 	}
 	so := &StepOutcome{
-		Task: task, Execution: execution, Step: &step, StepID: stepID, RoleConfig: roleConfig,
+		Task: task, Execution: execution, Step: &step, StepID: stepID, RoleConfig: contractRole,
 		ResultBytes: resultBytes, RawResultBytes: rawResultBytes,
 		WorkspaceDir: workspaceDir, ProjectDir: effectiveProjectDir, StepStart: stepStart,
 		PreStepHEAD: preStepHEAD, PostStepHEAD: postStepHEAD,
@@ -2919,4 +2937,44 @@ func (e *Executor) agentEnv(ctx context.Context, task *persistence.Task, executi
 		envVars[k] = v
 	}
 	return envVars
+}
+
+// memoryPeakFromResult reads usage.memory_peak_bytes from a raw result.json:
+// a non-negative integer, or nil when it is absent or malformed. Never
+// defaulted to 0 (agent container memory limits design §2.3a).
+func memoryPeakFromResult(raw []byte) *int64 {
+	var r struct {
+		Usage struct {
+			Peak json.RawMessage `json:"memory_peak_bytes"`
+		} `json:"usage"`
+	}
+	if err := json.Unmarshal(raw, &r); err != nil {
+		return nil
+	}
+	// A bare JSON integer only: a quoted "12" or a fraction is not a
+	// reported peak.
+	p := bytes.TrimSpace(r.Usage.Peak)
+	if len(p) == 0 || p[0] < '0' || p[0] > '9' {
+		return nil
+	}
+	v, err := strconv.ParseInt(string(p), 10, 64)
+	if err != nil {
+		return nil
+	}
+	return &v
+}
+
+// stampMemoryPeak puts the container's reported memory peak on the step's
+// outcome row. Called on the ephemeral path only (see the warm branch in
+// executeAgentStep). A missing peak is logged, so a column that stays NULL
+// across a deployment is distinguishable from one nobody tried to fill.
+func (e *Executor) stampMemoryPeak(stamp *agentBudgetStamp, rawResult []byte, role, executionID, stepID string) {
+	stamp.ContainerMemoryPeakBytes = memoryPeakFromResult(rawResult)
+	if e.metrics != nil {
+		e.metrics.RecordMemoryPeakReport(role, stamp.ContainerMemoryPeakBytes != nil)
+	}
+	if stamp.ContainerMemoryPeakBytes == nil {
+		e.logger.Debug().Str("execution_id", executionID).Str("step", stepID).
+			Msg("memory peak not reported: result.json has no usage.memory_peak_bytes (agent image predates it, or the cgroup read was not trusted)")
+	}
 }

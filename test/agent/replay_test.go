@@ -67,83 +67,97 @@ func TestEntrypointReplay(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			replay := llmreplay.NewServer(rec)
-			srv := httptest.NewServer(replay)
-			defer srv.Close()
-			// The daemon and memory APIs: present (so the entrypoint advertises
-			// what it advertised in the container) and empty (404 to everything).
-			apiStub := httptest.NewServer(http.NotFoundHandler())
-			defer apiStub.Close()
+			// Every case runs under a C and a UTF-8 locale and must give the same
+			// result.json. The request size was ${#request}, characters under a
+			// UTF-8 locale and bytes under C, so the fixture recorded on one host
+			// failed on another (found by the CE export's clean-environment unit
+			// lane, 2026-10-01; cost-efficiency design §3).
+			for _, locale := range []string{"C", "C.UTF-8"} {
+				t.Run(locale, func(t *testing.T) {
+					replay := llmreplay.NewServer(rec)
+					srv := httptest.NewServer(replay)
+					defer srv.Close()
+					// The daemon and memory APIs: present (so the entrypoint advertises
+					// what it advertised in the container) and empty (404 to everything).
+					apiStub := httptest.NewServer(http.NotFoundHandler())
+					defer apiStub.Close()
 
-			tmp := t.TempDir()
-			ws := filepath.Join(tmp, "ws")
-			if out, err := exec.Command("cp", "-a", filepath.Join(caseDir, "workspace"), ws).CombinedOutput(); err != nil {
-				t.Fatalf("copy workspace: %v\n%s", err, out)
-			}
-			if err := os.MkdirAll(filepath.Join(tmp, "out"), 0o755); err != nil {
-				t.Fatal(err)
-			}
-			binDir := filepath.Join(tmp, "bin")
-			if err := os.MkdirAll(binDir, 0o755); err != nil {
-				t.Fatal(err)
-			}
-			if catalog := filepath.Join(caseDir, "mcp_catalog.json"); fileExists(catalog) {
-				writeMCPBridgeStub(t, binDir, catalog)
-			}
-			ids := taskIdentity(t, filepath.Join(caseDir, "task.json"))
-			// The role's environment first (env.json: the container's VORNIK_* /
-			// AGENT_* variables minus secrets, URLs and ids — tool budget, token
-			// caps, model name, all of which shape the request), then the
-			// harness's own values, which win because Go keeps the last
-			// duplicate.
-			env := append(os.Environ(), fixtureEnv(t, filepath.Join(caseDir, "env.json"))...)
-			model := fixtureModel(t, caseDir, recPath)
-			cmd := exec.Command("bash", entrypoint)
-			env = append(env,
-				"WORKSPACE="+ws,
-				"INPUT_FILE="+filepath.Join(caseDir, "task.json"),
-				"OUTPUT_FILE="+filepath.Join(tmp, "out", "result.json"),
-				"VORNIK_LLM_ENDPOINT="+srv.URL,
-				"VORNIK_LLM_MODEL="+model,
-				"VORNIK_LLM_API_KEY=replay",
-				"VORNIK_API_URL="+apiStub.URL,
-				"VORNIK_MEM_URL="+apiStub.URL,
-				"VORNIK_TASK_ID="+ids.TaskID,
-				"VORNIK_PROJECT_ID="+ids.ProjectID,
-				"VORNIK_EXECUTION_ID="+ids.Workflow.ExecutionID,
-				"VORNIK_HELPER_DIR="+helperDir,
-				"VORNIK_TOOL_REGISTRY="+fixtureToolRegistry(caseDir, filepath.Join(filepath.Dir(entrypoint), "tool_registry.generated.sh")),
-				"PATH="+binDir+string(os.PathListSeparator)+helperDir+string(os.PathListSeparator)+os.Getenv("PATH"),
-			)
-			cmd.Env = env
-			out, err := cmd.CombinedOutput()
-			if err != nil {
-				t.Fatalf("entrypoint: %v\n%s", err, out)
-			}
-			st := replay.Stats()
-			if st.Missed != 0 {
-				t.Errorf("replay missed %d request(s) — the loop diverged from the recording\n%s", st.Missed, out)
-			}
-			if st.Served != len(rec.Entries) {
-				t.Errorf("served %d of %d recorded exchanges", st.Served, len(rec.Entries))
-			}
-			got, err := os.ReadFile(filepath.Join(tmp, "out", "result.json"))
-			if err != nil {
-				t.Fatalf("result.json: %v\n%s", err, out)
-			}
-			expectedPath := filepath.Join(caseDir, "expected_result.json")
-			if !fileExists(expectedPath) && os.Getenv("VORNIK_REPLAY_RECORD") == "1" {
-				if err := os.WriteFile(expectedPath, got, 0o644); err != nil {
-					t.Fatal(err)
-				}
-				t.Fatalf("recorded %s from this replay — re-run without VORNIK_REPLAY_RECORD to check it", expectedPath)
-			}
-			want, err := os.ReadFile(expectedPath)
-			if err != nil {
-				t.Fatal(err)
-			}
-			if !sameResult(got, want) {
-				t.Errorf("result.json differs from the recorded run:\n got: %s\nwant: %s", got, want)
+					tmp := t.TempDir()
+					ws := filepath.Join(tmp, "ws")
+					if out, err := exec.Command("cp", "-a", filepath.Join(caseDir, "workspace"), ws).CombinedOutput(); err != nil {
+						t.Fatalf("copy workspace: %v\n%s", err, out)
+					}
+					if err := os.MkdirAll(filepath.Join(tmp, "out"), 0o755); err != nil {
+						t.Fatal(err)
+					}
+					binDir := filepath.Join(tmp, "bin")
+					if err := os.MkdirAll(binDir, 0o755); err != nil {
+						t.Fatal(err)
+					}
+					if catalog := filepath.Join(caseDir, "mcp_catalog.json"); fileExists(catalog) {
+						writeMCPBridgeStub(t, binDir, catalog)
+					}
+					ids := taskIdentity(t, filepath.Join(caseDir, "task.json"))
+					// The role's environment first (env.json: the container's VORNIK_* /
+					// AGENT_* variables minus secrets, URLs and ids — tool budget, token
+					// caps, model name, all of which shape the request), then the
+					// harness's own values, which win because Go keeps the last
+					// duplicate.
+					env := append(os.Environ(), fixtureEnv(t, filepath.Join(caseDir, "env.json"))...)
+					env = append(env, "LC_ALL="+locale, "LANG="+locale)
+					model := fixtureModel(t, caseDir, recPath)
+					cmd := exec.Command("bash", entrypoint)
+					env = append(env,
+						"WORKSPACE="+ws,
+						"INPUT_FILE="+filepath.Join(caseDir, "task.json"),
+						"OUTPUT_FILE="+filepath.Join(tmp, "out", "result.json"),
+						"VORNIK_LLM_ENDPOINT="+srv.URL,
+						"VORNIK_LLM_MODEL="+model,
+						"VORNIK_LLM_API_KEY=replay",
+						"VORNIK_API_URL="+apiStub.URL,
+						"VORNIK_MEM_URL="+apiStub.URL,
+						"VORNIK_TASK_ID="+ids.TaskID,
+						"VORNIK_PROJECT_ID="+ids.ProjectID,
+						"VORNIK_EXECUTION_ID="+ids.Workflow.ExecutionID,
+						"VORNIK_HELPER_DIR="+helperDir,
+						// The container's memory peak is not part of a recorded run: a
+						// harness that itself ran in a private cgroup namespace would
+						// otherwise report its own (memory limits design §2.3a).
+						"VORNIK_CGROUP_SELF=/nonexistent",
+						"VORNIK_TOOL_REGISTRY="+fixtureToolRegistry(caseDir, filepath.Join(filepath.Dir(entrypoint), "tool_registry.generated.sh")),
+						"PATH="+binDir+string(os.PathListSeparator)+helperDir+string(os.PathListSeparator)+os.Getenv("PATH"),
+					)
+					cmd.Env = env
+					out, err := cmd.CombinedOutput()
+					if err != nil {
+						t.Fatalf("entrypoint: %v\n%s", err, out)
+					}
+					st := replay.Stats()
+					if st.Missed != 0 {
+						t.Errorf("replay missed %d request(s) — the loop diverged from the recording\n%s", st.Missed, out)
+					}
+					if st.Served != len(rec.Entries) {
+						t.Errorf("served %d of %d recorded exchanges", st.Served, len(rec.Entries))
+					}
+					got, err := os.ReadFile(filepath.Join(tmp, "out", "result.json"))
+					if err != nil {
+						t.Fatalf("result.json: %v\n%s", err, out)
+					}
+					expectedPath := filepath.Join(caseDir, "expected_result.json")
+					if !fileExists(expectedPath) && os.Getenv("VORNIK_REPLAY_RECORD") == "1" {
+						if err := os.WriteFile(expectedPath, got, 0o644); err != nil {
+							t.Fatal(err)
+						}
+						t.Fatalf("recorded %s from this replay — re-run without VORNIK_REPLAY_RECORD to check it", expectedPath)
+					}
+					want, err := os.ReadFile(expectedPath)
+					if err != nil {
+						t.Fatal(err)
+					}
+					if !sameResult(got, want) {
+						t.Errorf("result.json differs from the recorded run:\n got: %s\nwant: %s", got, want)
+					}
+				})
 			}
 		})
 	}

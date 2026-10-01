@@ -3,7 +3,7 @@ sources:
     - path: internal/observability/metrics.go
       sha256: 71ab1bc0f72aea69510677c929b401a7ab7030c1371905197f6504c5a71c120b
     - path: internal/ui/spend.go
-      sha256: 73130096111f0b64f6c9955058678174f0ede5563c565fba7642ee1596fe482f
+      sha256: 9515335ba47d3962017c35e70226c679019bb0adaa4d207e327aa1676af907b3
     - path: internal/reminders/metrics.go
       sha256: bb22804ef50c44d048082968c16e51c5d729f4dafe5b1b892fe9719d0fc0fec6
 ---
@@ -50,7 +50,9 @@ token counts it surfaces a few efficiency signals.
 
 Embedding spend appears under the role **Memory · Embedder** and the source
 **Memory embedding**. It is included in every rollup on the page — a deployment using a hosted embedder can see what
-ingest and retrieval cost, not only what chat cost.
+ingest and retrieval cost, not only what chat cost. The LLM reranker that
+reorders recall candidates appears as **Memory · Reranker** (source **Memory
+reranking**).
 
 - **Input ratio** — prompt tokens as a share of total; a persistently high ratio
   flags context bloat.

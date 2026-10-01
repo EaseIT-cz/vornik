@@ -214,7 +214,20 @@ func companionToolDefs() []mcpToolDef {
 					},
 					"prompt": map[string]any{
 						"type":        "string",
-						"description": "Human-readable task description. Becomes context.prompt in the persisted task payload.",
+						"description": "Human-readable task description. Becomes context.prompt in the persisted task payload. Required for ordinary workflows; REFUSED for broker workflows, which take `inputs` instead.",
+					},
+					"inputs": map[string]any{
+						"type":        "object",
+						"description": "Typed inputs for a broker workflow, validated against the input_schema catalog() shows for it. Broker workflows take these instead of a prompt.",
+					},
+					"notify": map[string]any{
+						"type":        "object",
+						"description": "Optional webhook for completion pushes, when the daemon advertises companion-push. Vornik POSTs {task_id, state} when the task ends and {task_id, action_id, action, state} when a proposed write changes state: ids and states only, so call status or result for anything else. A push may arrive twice; treat it as a prompt to check. A private address must be listed in the project's companion_push.allowed_cidrs.",
+						"properties": map[string]any{
+							"url":   map[string]any{"type": "string", "description": "http(s) URL to POST to"},
+							"token": map[string]any{"type": "string", "description": "Optional; sent back as Authorization: Bearer <token> so you can tell the push came from Vornik"},
+						},
+						"required": []string{"url"},
 					},
 					"task_type": map[string]any{
 						"type":        "string",
@@ -251,12 +264,12 @@ func companionToolDefs() []mcpToolDef {
 						"description": "When true, inputArtifacts are stored as raw files only — no automatic MIME-based extraction + memory ingest at upload time. Use this when the chosen workflow is itself an ingestion workflow (companion-rag-ingest, future document-ingest) so the agent gets the raw file staged at /app/workspace/artifacts/in/ instead of finding the file already extracted and skipped. Default false preserves the Telegram/email upload shape where 'just index it' is the right behaviour.",
 					},
 				},
-				"required": []string{"workflow", "prompt"},
+				"required": []string{"workflow"},
 			},
 		},
 		{
 			Name:        "status",
-			Description: "Return current task status (QUEUED/LEASED/RUNNING/COMPLETED/FAILED/CANCELLED).",
+			Description: "Return current task status (QUEUED/LEASED/RUNNING/COMPLETED/FAILED/CANCELLED). For a broker workflow the raw error is never returned; error_class is one of failed, timeout, budget, egress_no_output, egress_oversize, egress_schema.",
 			InputSchema: map[string]any{
 				"type":       "object",
 				"properties": map[string]any{"task_id": map[string]any{"type": "string"}},
@@ -265,11 +278,19 @@ func companionToolDefs() []mcpToolDef {
 		},
 		{
 			Name:        "result",
-			Description: "Return a completed task's output artifacts INLINE (non-transcript OUTPUT class; 64 KiB shared budget, truncated entries flagged). This is the only artifact-read surface a companion key has — companion keys cannot reach the REST API. Returns {complete:false} cleanly while the task is still in flight.",
+			Description: "Return a completed task's output artifacts INLINE (non-transcript OUTPUT class; 64 KiB shared budget, truncated entries flagged). This is the only artifact-read surface a companion key has — companion keys cannot reach the REST API. Returns {complete:false} cleanly while the task is still in flight. For a broker workflow it returns only the declared egress document as `output`. wait_seconds (0-25) holds the call open until the task finishes.",
 			InputSchema: map[string]any{
-				"type":       "object",
-				"properties": map[string]any{"task_id": map[string]any{"type": "string"}},
-				"required":   []string{"task_id"},
+				"type": "object",
+				"properties": map[string]any{
+					"task_id": map[string]any{"type": "string"},
+					"wait_seconds": map[string]any{
+						"type":        "integer",
+						"minimum":     0,
+						"maximum":     companionResultMaxWaitSeconds,
+						"description": "Hold the call open up to this many seconds until the task reaches a terminal state. 0 (default) returns at once.",
+					},
+				},
+				"required": []string{"task_id"},
 			},
 		},
 		{
@@ -637,6 +658,17 @@ func (s *Server) handleCompanionToolCall(w http.ResponseWriter, r *http.Request,
 	// the memory_*_audit tables (or task rows for delegate); this row
 	// is a thin index — tool name + duration + ok/error.
 	auditStart := time.Now()
+	// Key-shape refusals (broker design §5.6, §8) run before any tool: a
+	// memory-only key has no task tools, and a broker-project key has only
+	// the §5.6 allowlist — unknown tools included.
+	if gateErr := s.gateCompanionTool(key, params.Name); gateErr != nil {
+		s.recordCompanionToolAudit(ctx, key, params.Name, params.Arguments, "", gateErr, time.Since(auditStart))
+		writeJSONRPCResult(w, id, mcpToolCallResult{
+			Content: []mcpToolContent{{Type: "text", Text: gateErr.Error()}},
+			IsError: true,
+		})
+		return
+	}
 	switch params.Name {
 	case "delegate":
 		result, toolErr = s.companionToolDelegate(ctx, key, params.Arguments)
@@ -869,6 +901,10 @@ type delegateArgs struct {
 	// allow_unreachable_urls, which a host would read as "this URL
 	// happens to be down" and set for the wrong reason.
 	AcknowledgeWorkflowCannotFetch bool `json:"acknowledge_workflow_cannot_fetch"`
+	// Inputs are a broker workflow's typed inputs (broker design §4.3).
+	Inputs json.RawMessage `json:"inputs"`
+	// Notify asks for completion pushes (broker write-actions design §7a).
+	Notify *companionNotify `json:"notify"`
 }
 
 func (s *Server) companionToolDelegate(ctx context.Context, key *persistence.APIKey, raw json.RawMessage) (string, error) {
@@ -885,12 +921,6 @@ func (s *Server) companionToolDelegate(ctx context.Context, key *persistence.API
 	if args.Workflow == "" {
 		return "", errors.New("workflow is required")
 	}
-	if args.Prompt == "" {
-		return "", errors.New("prompt is required")
-	}
-	if args.TaskType == "" {
-		args.TaskType = args.Workflow
-	}
 
 	// Scope check: workflow must be in the key's allowlist when set.
 	// nil allowlist means "every workflow the project permits" — the
@@ -906,6 +936,24 @@ func (s *Server) companionToolDelegate(ctx context.Context, key *persistence.API
 		if !allowed {
 			return "", fmt.Errorf("workflow %q not in this key's allowedWorkflows", args.Workflow)
 		}
+	}
+
+	// notify is checked before either path creates a task, so a refused
+	// URL creates nothing (broker write-actions design §7a).
+	if err := s.checkCompanionNotify(key, args.Notify); err != nil {
+		return "", err
+	}
+
+	// Broker boundary (broker design §4): a broker workflow, or ANY workflow
+	// asked for by a broker-project key, takes the typed-input path.
+	if s.isBrokerProjectKey(key) || s.brokerWorkflowOf(args.Workflow) != nil {
+		return s.companionBrokerDelegate(ctx, key, args, args.Inputs)
+	}
+	if args.Prompt == "" {
+		return "", errors.New("prompt is required")
+	}
+	if args.TaskType == "" {
+		args.TaskType = args.Workflow
 	}
 
 	// Artifact-only workflow guard (2026-06-05 rag-ingest
@@ -1001,14 +1049,8 @@ func (s *Server) companionToolDelegate(ctx context.Context, key *persistence.API
 	// error we log and fall open — the project-level budget gate in
 	// taskCreator.Create is the backstop, and a transient DB blip
 	// shouldn't freeze every delegate.
-	if key.BudgetCapUSD != nil && s.llmUsageRepo != nil {
-		spent, sumErr := s.llmUsageRepo.SumCostByAPIKey(ctx, key.ID, time.Time{}, time.Time{})
-		if sumErr != nil {
-			s.logger.Warn().Err(sumErr).Str("api_key_id", key.ID).
-				Msg("companion delegate: budget-cap spend lookup failed; allowing (project budget gate still applies)")
-		} else if spent >= *key.BudgetCapUSD {
-			return "", fmt.Errorf("BUDGET_EXCEEDED: key budget cap $%.4f reached (spent $%.4f); delegate refused", *key.BudgetCapUSD, spent)
-		}
+	if err := s.checkCompanionKeyBudget(ctx, key); err != nil {
+		return "", err
 	}
 
 	// Build the task payload context. Stamp the companion session
@@ -1114,6 +1156,9 @@ func (s *Server) companionToolDelegate(ctx context.Context, key *persistence.API
 		"eta_seconds": companionDelegateETASeconds,
 		"eta_hint":    "poll status() in 10-30 seconds; result() once status=COMPLETED",
 		"created":     task.CreatedAt.UTC().Format(time.RFC3339),
+	}
+	if args.Notify != nil {
+		out["push"] = s.registerCompanionPush(ctx, task.ID, args.Notify)
 	}
 	// cost_estimate (LLD-21 §67 / drift-mitigation §8.2). Historical
 	// mean cost for this (project, workflow) built on the Phase-1
@@ -1279,7 +1324,23 @@ func (s *Server) companionToolStatus(ctx context.Context, key *persistence.APIKe
 		"created_at": task.CreatedAt.UTC().Format(time.RFC3339),
 		"attempt":    task.Attempt,
 	}
-	if task.LastError != nil && *task.LastError != "" {
+	if wf := s.brokerWorkflowOf(derefString(task.WorkflowID)); wf != nil || s.isBrokerProjectKey(key) {
+		// Broker design §5.2: last_error can quote the content the task was
+		// processing, so a broker task — and ANY task read through a
+		// broker-project key (review-20260929-388f H1: an ordinary task left
+		// from before the project was flipped) — reports a closed
+		// error_class instead.
+		if class := s.brokerStatusErrorClass(ctx, task, wf); class != "" {
+			out["error_class"] = class
+		}
+		actions, err := s.brokerActionsView(ctx, task, wf)
+		if err != nil {
+			return "", err
+		}
+		if actions != nil {
+			out["actions"] = actions
+		}
+	} else if task.LastError != nil && *task.LastError != "" {
 		out["last_error"] = *task.LastError
 	}
 	b, _ := json.MarshalIndent(out, "", "  ")
@@ -1288,11 +1349,17 @@ func (s *Server) companionToolStatus(ctx context.Context, key *persistence.APIKe
 
 // ---- tool: result -------------------------------------------------
 
+// resultArgs is taskIDArg plus the bounded long-poll (broker design §6).
+type resultArgs struct {
+	TaskID      string `json:"task_id"`
+	WaitSeconds int    `json:"wait_seconds"`
+}
+
 func (s *Server) companionToolResult(ctx context.Context, key *persistence.APIKey, raw json.RawMessage) (string, error) {
 	if s.taskRepo == nil {
 		return "", errors.New("task repo not wired")
 	}
-	var args taskIDArg
+	var args resultArgs
 	if err := json.Unmarshal(raw, &args); err != nil {
 		return "", fmt.Errorf("invalid arguments: %w", err)
 	}
@@ -1310,6 +1377,7 @@ func (s *Server) companionToolResult(ctx context.Context, key *persistence.APIKe
 	if task.ProjectID != key.ProjectID {
 		return "", fmt.Errorf("task %s not found", args.TaskID)
 	}
+	task, waitCapped := s.waitForTerminal(ctx, key, task, args.WaitSeconds)
 	if !isTerminalStatus(task.Status) {
 		// Not an error — a normal poll-not-yet-done outcome the host
 		// LLM should handle gracefully. We return a clean "pending"
@@ -1319,8 +1387,17 @@ func (s *Server) companionToolResult(ctx context.Context, key *persistence.APIKe
 			"status":   string(task.Status),
 			"complete": false,
 		}
+		if waitCapped {
+			out["wait_capped"] = true
+		}
 		b, _ := json.MarshalIndent(out, "", "  ")
 		return string(b), nil
+	}
+	if wf := s.brokerWorkflowOf(derefString(task.WorkflowID)); wf != nil || s.isBrokerProjectKey(key) {
+		// A broker-project key gets the broker shape for every task, so an
+		// ordinary task in its project (review-20260929-388f H1) cannot fall
+		// through to the raw inline-artifact path below.
+		return s.companionBrokerResult(ctx, task, wf)
 	}
 
 	out := map[string]any{
@@ -1636,8 +1713,21 @@ func (s *Server) companionToolCatalog(ctx context.Context, key *persistence.APIK
 
 	wfEntries := make([]map[string]any, 0, len(workflowIDs))
 	for _, wfID := range workflowIDs {
+		// Broker workflows run only in broker projects, and a broker
+		// project runs nothing else (broker design §4.3, §5.6).
+		if (s.brokerWorkflowOf(wfID) != nil) != project.Broker {
+			continue
+		}
 		entry := map[string]any{"id": wfID}
 		if wf := s.projectRegistry.GetWorkflow(wfID); wf != nil {
+			if wf.Broker != nil {
+				entry["input_schema"] = wf.Broker.InputSchema
+				entry["egress_schema"] = wf.Broker.Egress.Schema
+				entry["egress_provenance"] = wf.Broker.Egress.EffectiveProvenance()
+				if proposes := brokerProposesCatalog(wf); proposes != nil {
+					entry["proposes"] = proposes
+				}
+			}
 			entry["display_name"] = wf.DisplayName
 			entry["description"] = wf.Description
 			// Derived network capability, published NEXT TO the
@@ -1681,12 +1771,18 @@ func (s *Server) companionToolCatalog(ctx context.Context, key *persistence.APIK
 		// shape so the host LLM knows what to send without guessing
 		// from tool descriptions. Workflow-agnostic in v1.
 		"delegate_input_schema": delegateInputSchema(),
+	}
+	if project.Broker {
+		// A broker-project key has no memory tools at all (§5.6); the
+		// capability booleans would only advertise a surface it cannot use.
+		out["broker"] = true
+	} else {
 		// LLD 22: surface memory capabilities so the client renders
 		// the right tool palette without trial-and-error on recall /
 		// remember. Always present (booleans default false) so the
 		// schema is stable across keys.
-		"memory_read":  key.MemoryRead,
-		"memory_write": key.MemoryWrite,
+		out["memory_read"] = key.MemoryRead
+		out["memory_write"] = key.MemoryWrite
 	}
 	if key.BudgetCapUSD != nil {
 		out["budget_cap_usd"] = *key.BudgetCapUSD
@@ -1811,6 +1907,9 @@ func (s *Server) companionToolWhoami(ctx context.Context, key *persistence.APIKe
 		if err := json.Unmarshal(raw, &args); err != nil {
 			return "", fmt.Errorf("invalid arguments: %w", err)
 		}
+	}
+	if s.isBrokerProjectKey(key) {
+		return brokerWhoami(key), nil
 	}
 	out := map[string]any{
 		"project_id":           key.ProjectID,

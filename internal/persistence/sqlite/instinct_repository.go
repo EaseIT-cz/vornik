@@ -16,7 +16,8 @@ import (
 //
 // Parity notes:
 //   - trigger_json is a BLOB carrying raw JSON bytes.
-//   - timestamps are TEXT (RFC3339Nano, UTC) — lexically sortable, so
+//   - timestamps are TEXT in sqliteTime's fixed-width form — lexically
+//     sortable (since 2026-10-01; RFC3339Nano was not), so
 //     max(last_seen_at, excluded.last_seen_at) preserves the
 //     "latest corroboration wins" rule the Postgres GREATEST does.
 //   - support/contradict counts use SUM(CASE …) rather than COUNT(*)

@@ -53,11 +53,13 @@ var operatorProfileKnownKeys = []string{
 // profile field, the model emits "[overriding profile: <key> — ...]"
 // instead so the operator sees the override explicitly.
 const operatorProfileCitationFooter = `
-# When a reply relies on any of the fields above, prefix the
-# sentence with [from your profile: <key>] (or [from your notes]
-# for the notes line). If the current turn contradicts a profile
-# field, use [overriding profile: <key>] instead so the operator
-# can see the override explicitly.`
+# Cite a field ONLY in a sentence it actually shaped: prefix that
+# sentence with [from your profile: <key>], or [from your notes] when
+# it relied on the notes line. Most replies rely on none of it; then
+# write no marker at all. Never write a marker to say a field does not
+# apply (no "[from your notes: not applicable]"). If the current turn
+# contradicts a profile field, use [overriding profile: <key>] instead
+# so the operator can see the override explicitly.`
 
 // appendOperatorProfileBlock returns the system prompt with an
 // <operator_profile>...</operator_profile> block appended when

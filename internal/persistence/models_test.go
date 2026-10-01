@@ -2,6 +2,7 @@ package persistence
 
 import (
 	"encoding/json"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -301,4 +302,45 @@ func TestAPIKey_RotatedCopy_PreservesScope(t *testing.T) {
 	assert.Equal(t, 7, *prior.RateLimitRPS, "RPS pointer must not alias prior")
 	assert.Equal(t, 9.5, *prior.BudgetCapUSD, "budget pointer must not alias prior")
 	assert.Equal(t, "companion-architectural-review", prior.AllowedWorkflows[0], "workflow slice must not alias prior")
+}
+
+// TestAPIKey_RotatedCopy_CarriesEveryNonIdentityField walks the struct so a
+// field added later cannot be silently dropped by rotation. The hand-listed
+// test above missed SkillRead/SkillWrite/SkillAdmin: rotating a companion key
+// stripped its knowledge-skill grants without any error (found 2026-09-29
+// while adding DelegateDisabled for the broker design).
+func TestAPIKey_RotatedCopy_CarriesEveryNonIdentityField(t *testing.T) {
+	// Fields rotation deliberately resets or replaces.
+	fresh := map[string]bool{
+		"ID": true, "KeyHash": true, "KeyPrefix": true, "CreatedAt": true,
+		"CreatedBy": true, "LastUsedAt": true, "RevokedAt": true,
+		// Resolved at authentication time, never stored (see its comment).
+		"OwnerUserID": true,
+	}
+	prior := &APIKey{}
+	pv := reflect.ValueOf(prior).Elem()
+	for i := 0; i < pv.NumField(); i++ {
+		f := pv.Field(i)
+		switch f.Kind() {
+		case reflect.Bool:
+			f.SetBool(true)
+		case reflect.String:
+			f.SetString("x")
+		case reflect.Slice:
+			f.Set(reflect.MakeSlice(f.Type(), 1, 1))
+		case reflect.Pointer:
+			f.Set(reflect.New(f.Type().Elem()))
+		}
+	}
+	got := prior.RotatedCopy("id", "hash", "prefix", "by", time.Now())
+	gv := reflect.ValueOf(got).Elem()
+	for i := 0; i < pv.NumField(); i++ {
+		name := pv.Type().Field(i).Name
+		if fresh[name] {
+			continue
+		}
+		if gv.Field(i).IsZero() {
+			t.Errorf("RotatedCopy drops %s", name)
+		}
+	}
 }

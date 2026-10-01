@@ -173,6 +173,17 @@ type agentInputOpts struct {
 	// so the prompt can refer to it. Empty/nil for non-adaptive
 	// steps — the field is only set on the route step itself.
 	AdaptiveCandidateWorkflows []string
+	// ToolFree offers the step NO tools: allowedTools is empty (the
+	// always-granted union is not applied), the tool/workspace guidance blocks
+	// are not composed, and config.toolFree tells the container to skip MCP
+	// discovery and send tools:[]. Set only by applyStrictRouteContract.
+	ToolFree bool
+	// RouteContract means the router's contract replaces the role's: the
+	// role's requiredOutputKeys and plausibility rules are not applied, because
+	// the answer can only be {selected_workflow, reason} and
+	// handleSelectedWorkflowRoute validates the pick. Set only by
+	// applyStrictRouteContract.
+	RouteContract bool
 	// ProjectTimezone is the project's configured IANA timezone for
 	// agent-facing current date/time context. Empty or invalid falls
 	// back to UTC.
@@ -523,6 +534,14 @@ func buildAgentInput(task *persistence.Task, executionID, workflowID, swarmID, s
 	// agent read what the project already knows; withholding them buys no
 	// containment and costs it the context that would have kept it guessing.
 	allowedTools = withAlwaysGrantedTools(allowedTools)
+	// A tool-free step (the strict-adaptive route step) is offered nothing —
+	// not the role's list and not the always-granted union. An empty list must
+	// not read as "declared nothing, so unrestricted" either.
+	toolFree := opts != nil && opts.ToolFree
+	if toolFree {
+		allowedTools = []string{}
+		mcpUnrestricted = false
+	}
 
 	input := map[string]any{
 		"taskId":    task.ID,
@@ -550,6 +569,11 @@ func buildAgentInput(task *persistence.Task, executionID, workflowID, swarmID, s
 			// parseable JSON object. Future "json_schema" flavours land alongside.
 			"responseFormat": optResponseFormat(opts),
 		},
+	}
+	// Additive: absent on every step but a tool-free one, so an older agent
+	// image and every other payload are unchanged (LLD 09 §3).
+	if toolFree {
+		input["config"].(map[string]any)["toolFree"] = true
 	}
 	// responseSchema (deterministic-output-schema item 7): surface the role's
 	// JSON Schema so a runtime with provider-side schema enforcement can use it.
@@ -584,7 +608,7 @@ func buildAgentInput(task *persistence.Task, executionID, workflowID, swarmID, s
 	// resultEmissionTool (item 9): the strongest portable enforcement — the
 	// model emits its result via a tool call whose args ARE result.json, which
 	// every major provider validates against the declared schema before return.
-	if opts != nil && opts.ResultEmissionTool != nil {
+	if opts != nil && opts.ResultEmissionTool != nil && !toolFree {
 		input["config"].(map[string]any)["resultEmissionTool"] = opts.ResultEmissionTool
 	}
 

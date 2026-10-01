@@ -2130,6 +2130,14 @@ func (e *Executor) prepareAgentStepInput(
 			e.metrics.PinnedCaseEnumInstalledTotal.WithLabelValues(roleConfig.Name).Inc()
 		}
 	}
+	// The adaptive route step's contract: no tools, a schema whose enum is the
+	// candidate list, a focused router prompt. LAST, so nothing above re-adds
+	// the role's tools, prompt or schema. Incident 2026-09-28 (parent
+	// task_20260928150654_7ddaa17fe3a66569); 10-delegation-engine.md, "The
+	// route step is tool-free and schema-bound".
+	if strictRouteContractApplies(plan.workflow, plan.project, currentStepID, step) {
+		applyStrictRouteContract(opts, plan.project.AdaptiveCandidateWorkflows)
+	}
 	return opts, roleConfig, nil
 }
 
@@ -2726,6 +2734,17 @@ func (e *Executor) handleSuccess(ctx context.Context, task *persistence.Task, ex
 		return
 	}
 
+	// Broker write proposals are staged BEFORE the COMPLETED write, so a
+	// completed task never lacks its actions (broker write-actions design
+	// §5.1). A store error is a retryable failure of this execution: the
+	// ordinary failure path owns attempts, execution status and the lease.
+	if err := e.stageBrokerActions(ctx, task, execution); err != nil {
+		e.logger.Warn().Err(err).Str("task_id", task.ID).
+			Msg("handleSuccess: broker actions could not be staged; failing the attempt")
+		e.handleFailure(ctx, task, execution, err)
+		return
+	}
+
 	// Calculate duration
 	duration := time.Since(e.getStartTime(task.ID))
 
@@ -2749,6 +2768,10 @@ func (e *Executor) handleSuccess(ctx context.Context, task *persistence.Task, ex
 	// follow-up turn (see 2026-05-21 watchlist incident).
 	_ = e.taskRepo.UpdateStatus(ctx, task.ID, persistence.TaskStatusCompleted)
 	task.Status = persistence.TaskStatusCompleted
+	// Staged proposals become visible in /inbox only now, and before any
+	// notification, so a front agent released by the completion always
+	// finds them (design §5.1).
+	e.promoteBrokerActions(ctx, task)
 	// Credit a "worked" maturity signal to every knowledge skill
 	// injected into this task's executions (learning-loop §D.1).
 	e.creditSkillsWorked(ctx, task.ID)
@@ -2817,11 +2840,7 @@ func (e *Executor) handleSuccess(ctx context.Context, task *persistence.Task, ex
 	}
 
 	// Notify watchers
-	if e.notifier != nil {
-		e.notifier.NotifyTaskCompleted(ctx, task, true, notifyMsg)
-	} else {
-		e.logger.Warn().Str("task_id", task.ID).Msg("no completion notifier configured — skipping notification")
-	}
+	e.notifyCompletion(ctx, task, true, notifyMsg, true)
 
 	// Phase 3: fire the LLM-as-judge async if the project opts
 	// in. Done after notify so the judge's latency doesn't
@@ -2955,6 +2974,7 @@ func (e *Executor) ingestOutputArtifacts(ctx context.Context, task *persistence.
 	// project default exists. Empty after both is still a no-op downstream.
 	repoScope := memoryscope.Resolve(task.Payload, e.projectRepoScope(task.ProjectID))
 
+	brokerDeclared := e.brokerDeclaredOutputs(execution.WorkflowID)
 	for _, a := range artifacts {
 		if a == nil {
 			continue
@@ -2966,6 +2986,13 @@ func (e *Executor) ingestOutputArtifacts(ctx context.Context, task *persistence.
 		// or its post-2026-05-15 disambiguated form
 		// route-response-20260515-0f96.md). See isTranscriptArtifact.
 		if isTranscriptArtifact(a.Name) {
+			continue
+		}
+		// A broker workflow's egress and proposal outputs never enter
+		// memory: the proposal holds drafted third-party-derived arguments,
+		// and the egress is already the one thing allowed to leave (broker
+		// write-actions design §5.1). By name, whatever the extension.
+		if brokerDeclared[OriginalArtifactName(a.Name)] {
 			continue
 		}
 		// Only ingest markdown files.
@@ -3697,11 +3724,7 @@ func (e *Executor) handleFailure(ctx context.Context, task *persistence.Task, ex
 	// would have nobody to tell. Defer the announcement until the
 	// retry budget is actually exhausted.
 	if !e.taskWillRetry(task) {
-		if e.notifier != nil {
-			e.notifier.NotifyTaskCompleted(ctx, task, false, errorMsg)
-		} else {
-			e.logger.Warn().Str("task_id", task.ID).Msg("no completion notifier configured — skipping notification")
-		}
+		e.notifyCompletion(ctx, task, false, errorMsg, true)
 
 		// Phase 3 LLM-as-judge — fire on TERMINAL failures too, not
 		// just success. Without this, tasks whose Phase 1 detector
@@ -3765,11 +3788,7 @@ func (e *Executor) handleCancelled(ctx context.Context, task *persistence.Task, 
 	// CPC=failed so the caller's on_fail fires.
 	e.resolveCrossProjectCallForTask(ctx, task, false)
 
-	if e.notifier != nil {
-		e.notifier.NotifyTaskCompleted(ctx, task, false, "Task cancelled")
-	} else {
-		e.logger.Warn().Str("task_id", task.ID).Msg("no completion notifier configured — skipping notification")
-	}
+	e.notifyCompletion(ctx, task, false, "Task cancelled", true)
 
 	// Cancellation is a terminal status like success/failure, so it
 	// must drive the parent-unblock sweep too. Regression context

@@ -511,6 +511,13 @@ func stripDisambiguationSuffix(name string) string {
 	return name
 }
 
+// OriginalArtifactName returns the name an agent gave an output file, before
+// the executor's -YYYYMMDD-xxxx disambiguation suffix. The companion broker
+// egress path matches a workflow's declared egress.output against it.
+func OriginalArtifactName(name string) string {
+	return stripDisambiguationSuffix(name)
+}
+
 // isTranscriptArtifact reports whether the artifact name follows
 // the per-step execution-transcript convention `<step>-response.md`.
 // These artifacts capture an agent step's raw output for the UI's
@@ -638,6 +645,11 @@ type agentBudgetStamp struct {
 	// nil → NULL, meaning no container ran — which is NOT the same as a
 	// container that exited 0, so this is never defaulted.
 	ContainerExitCode *int
+	// ContainerMemoryPeakBytes is the cgroup memory high-water mark the
+	// container reported in result.json (migration 204; agent container
+	// memory limits design §2.3a). nil → NULL: not reported. Stamped on the
+	// ephemeral path only, by stampMemoryPeak.
+	ContainerMemoryPeakBytes *int64
 	// StepPrompt is the step's first model input as the container wrote it
 	// (step_prompt.json), or nil when no file was written — an image predating
 	// the contract, or a step that died before its first request. Persisted
@@ -757,6 +769,8 @@ func (e *Executor) recordStepOutcomeWithSignalsAndBudget(
 		// failure bucket can be grouped by exit code instead of regexed
 		// out of error_detail.
 		ContainerExitCode: budget.ContainerExitCode,
+		// Migration-204: the container's own memory peak; nil stays NULL.
+		ContainerMemoryPeakBytes: budget.ContainerMemoryPeakBytes,
 		// Migration-137 taint-lineage stamp — populated for agent steps only;
 		// non-agent steps leave these false/NULL via a zero taintStamp (§5.1).
 		UntrustedContentUsed: taint.UntrustedContentUsed,

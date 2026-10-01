@@ -57,6 +57,8 @@ func TestTaskKeyMinter_MintTaskKey_CreatesKeyAndReturnsRaw(t *testing.T) {
 			false, false, false, sql.NullString{},
 			// skill caps (skill_read, skill_write, skill_admin) all false
 			false, false, false,
+			// delegate_disabled (broker design §8) — task keys delegate nothing via companion anyway
+			false,
 		).
 		WillReturnResult(sqlmock.NewResult(0, 1))
 

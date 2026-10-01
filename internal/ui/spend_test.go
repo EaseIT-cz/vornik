@@ -235,3 +235,11 @@ func TestSpendMarksEstimatedTokens(t *testing.T) {
 func TestDisplaySource_EmbedderIsLabelled(t *testing.T) {
 	assert.Equal(t, "Memory embedding", displaySource("memory_embedder"))
 }
+
+// The reranker's spend is ledgered as role and source "memory_reranker"
+// (internal/memory/reranker.go) but rendered as the raw column value on
+// /ui/spend (spend-attribution backlog item, 2026-08-12).
+func TestDisplay_RerankerIsLabelled(t *testing.T) {
+	assert.Equal(t, "Memory · Reranker", displayRole("memory_reranker"))
+	assert.Equal(t, "Memory reranking", displaySource("memory_reranker"))
+}

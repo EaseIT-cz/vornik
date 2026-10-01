@@ -1431,6 +1431,45 @@ func RunAPIKeyRepositorySuite(t *testing.T, repo persistence.APIKeyRepository) {
 		}
 	})
 
+	// Broker design (2026-09-29) §8: a memory key for a front agent must not
+	// also be a delegate key. delegate_disabled is the only way to say so —
+	// an empty workflow list is refused at grant and nil means "all".
+	t.Run("DelegateDisabled_round_trips_on_every_read", func(t *testing.T) {
+		hash := uniqueID("hash")
+		k := &persistence.APIKey{
+			ID: uniqueID("akey"), ProjectID: uniqueID("proj"), KeyHash: hash,
+			KeyPrefix: "sk-test", CreatedAt: time.Now().UTC(),
+			MemoryRead: true, DelegateDisabled: true,
+		}
+		if err := repo.Create(ctx, k); err != nil {
+			t.Fatalf("Create: %v", err)
+		}
+		got, err := repo.LookupActiveByHash(ctx, hash)
+		if err != nil {
+			t.Fatalf("LookupActiveByHash: %v", err)
+		}
+		if !got.DelegateDisabled {
+			t.Fatal("delegate_disabled lost on LookupActiveByHash")
+		}
+		byID, err := repo.GetByID(ctx, k.ID)
+		if err != nil {
+			t.Fatalf("GetByID: %v", err)
+		}
+		if !byID.DelegateDisabled {
+			t.Fatal("delegate_disabled lost on GetByID")
+		}
+		plain := &persistence.APIKey{
+			ID: uniqueID("akey"), ProjectID: uniqueID("proj"), KeyHash: uniqueID("hash"),
+			KeyPrefix: "sk-test", CreatedAt: time.Now().UTC(),
+		}
+		if err := repo.Create(ctx, plain); err != nil {
+			t.Fatalf("Create plain: %v", err)
+		}
+		if got, err := repo.GetByID(ctx, plain.ID); err != nil || got.DelegateDisabled {
+			t.Fatalf("default must be false: %+v, %v", got, err)
+		}
+	})
+
 	t.Run("UpdateCapabilities_grants_and_revokes", func(t *testing.T) {
 		hash := uniqueID("hash")
 		k := &persistence.APIKey{
@@ -2559,6 +2598,49 @@ func RunExecutionStepOutcomeSuite(t *testing.T, repo persistence.ExecutionStepOu
 	ctx := context.Background()
 	project := uniqueID("proj")
 	exec := uniqueID("exec")
+
+	// container_memory_peak_bytes (agent container memory limits design
+	// §2.3a): the agent's reported cgroup high-water mark. A real peak can
+	// exceed 2^31 (the 2026-09 git format-patch runaway reached 2.99 GB), and
+	// NULL means "not reported", which is not 0.
+	t.Run("ContainerMemoryPeak_round_trips", func(t *testing.T) {
+		peakExec, peakProject := uniqueID("exec"), uniqueID("proj")
+		big := int64(2_990_000_000)
+		for _, c := range []struct {
+			step string
+			peak *int64
+		}{{"peak", &big}, {"none", nil}} {
+			if err := repo.Record(ctx, &persistence.ExecutionStepOutcome{
+				ID: uniqueID("oc"), ProjectID: peakProject, TaskID: uniqueID("t"), ExecutionID: peakExec,
+				StepID: c.step, Role: "worker", Model: "m", Outcome: "ok",
+				ContainerMemoryPeakBytes: c.peak, RecordedAt: time.Now().UTC(),
+			}); err != nil {
+				t.Fatalf("Record %s: %v", c.step, err)
+			}
+		}
+		got, err := repo.List(ctx, persistence.ExecutionStepOutcomeFilter{ExecutionIDs: []string{peakExec}})
+		if err != nil {
+			t.Fatalf("List: %v", err)
+		}
+		seen := 0
+		for _, o := range got {
+			switch o.StepID {
+			case "peak":
+				seen++
+				if o.ContainerMemoryPeakBytes == nil || *o.ContainerMemoryPeakBytes != big {
+					t.Fatalf("peak = %v, want %d", o.ContainerMemoryPeakBytes, big)
+				}
+			case "none":
+				seen++
+				if o.ContainerMemoryPeakBytes != nil {
+					t.Fatalf("an unreported peak came back as %d, want NULL", *o.ContainerMemoryPeakBytes)
+				}
+			}
+		}
+		if seen != 2 {
+			t.Fatalf("listed %d of the 2 rows", seen)
+		}
+	})
 
 	t.Run("Record_Finalize_Sweep_lifecycle", func(t *testing.T) {
 		// Two pending rows under one execution.

@@ -138,6 +138,7 @@ func (s *Server) enqueueVerifiedWebhook(ctx context.Context, w http.ResponseWrit
 		if findings := s.secretsDetector.Scan(body); len(findings) > 0 {
 			action := secrets.ResolveAction(secrets.CheckpointWebhook, s.secretsActions)
 			counts := secrets.CountByType(findings)
+			s.recordSecretFindings(projectID, "", secrets.CheckpointWebhook, counts)
 			eventID := webhookEventIDFromBodyOrHeader(body, source.EventIDPath, deliveryID)
 			logEvent := s.logger.Warn().
 				Str("project_id", projectID).

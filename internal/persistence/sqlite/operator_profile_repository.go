@@ -57,7 +57,7 @@ func (r *OperatorProfileRepository) Upsert(ctx context.Context, p *persistence.O
 	if len(structured) == 0 {
 		structured = []byte("{}")
 	}
-	now := time.Now().UTC().Format(time.RFC3339Nano)
+	now := sqliteTime(time.Now())
 	const q = `
 INSERT INTO operator_profile (operator_id, structured, notes, created_at, updated_at)
 VALUES (?, ?, ?, ?, ?)

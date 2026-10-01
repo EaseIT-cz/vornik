@@ -42,10 +42,10 @@ func (r *ExecutionStepOutcomeRepository) Record(ctx context.Context, o *persiste
 			context_source,
 			complexity_tier, effective_tool_budget, tool_calls_used,
 			untrusted_content_used, untrusted_sources, requires_review,
-			container_exit_code,
+			container_exit_code, container_memory_peak_bytes,
 			prompt_system_hash, prompt_user_hash, prompt_tools_hash,
 			input_hash, result_hash
-		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29)`,
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29, $30)`,
 		o.ID, o.ProjectID, o.TaskID, o.ExecutionID, o.StepID,
 		o.Role, o.Model, emptyStringToNullable(o.AgentImageID), o.Outcome, nullableString(o.AttributedToStepID),
 		o.ErrorClass, o.ErrorDetail, nullableInt64(o.DurationMS),
@@ -54,7 +54,7 @@ func (r *ExecutionStepOutcomeRepository) Record(ctx context.Context, o *persiste
 		emptyStringToNullable(o.ContextSource),
 		emptyStringToNullable(o.ComplexityTier), nullableInt(o.EffectiveToolBudget), nullableInt(o.ToolCallsUsed),
 		o.UntrustedContentUsed, nullableJSONB(o.UntrustedSources), o.RequiresReview,
-		nullableInt(o.ContainerExitCode),
+		nullableInt(o.ContainerExitCode), nullableInt64(o.ContainerMemoryPeakBytes),
 		o.PromptHashes.System, o.PromptHashes.User, o.PromptHashes.Tools,
 		o.PromptHashes.Input, o.PromptHashes.Result,
 	)
@@ -257,7 +257,7 @@ func (r *ExecutionStepOutcomeRepository) List(ctx context.Context, f persistence
 		       finalized_at, recorded_at, hallucination_signals,
 		       complexity_tier, effective_tool_budget, tool_calls_used,
 		       untrusted_content_used, untrusted_sources, requires_review,
-		       container_exit_code,
+		       container_exit_code, container_memory_peak_bytes,
 		       prompt_system_hash, prompt_user_hash, prompt_tools_hash,
 		       input_hash, result_hash
 		FROM execution_step_outcomes WHERE 1=1`
@@ -357,6 +357,7 @@ func (r *ExecutionStepOutcomeRepository) List(ctx context.Context, f persistence
 			untrustedSources    []byte
 			requiresReview      sql.NullBool
 			containerExitCode   sql.NullInt64
+			memoryPeak          sql.NullInt64
 			agentImageID        sql.NullString
 		)
 		if err := rows.Scan(
@@ -366,7 +367,7 @@ func (r *ExecutionStepOutcomeRepository) List(ctx context.Context, f persistence
 			&finalizedAt, &o.RecordedAt, &signals,
 			&complexityTier, &effectiveToolBudget, &toolCallsUsed,
 			&untrustedUsed, &untrustedSources, &requiresReview,
-			&containerExitCode,
+			&containerExitCode, &memoryPeak,
 			&o.PromptHashes.System, &o.PromptHashes.User, &o.PromptHashes.Tools,
 			&o.PromptHashes.Input, &o.PromptHashes.Result,
 		); err != nil {
@@ -389,6 +390,11 @@ func (r *ExecutionStepOutcomeRepository) List(ctx context.Context, f persistence
 		if containerExitCode.Valid {
 			v := int(containerExitCode.Int64)
 			o.ContainerExitCode = &v
+		}
+		// Valid-checked too: NULL is "not reported", not a zero peak.
+		if memoryPeak.Valid {
+			v := memoryPeak.Int64
+			o.ContainerMemoryPeakBytes = &v
 		}
 		o.AttributedToStepID = stringPtrOrNil(attributed)
 		if durationMS.Valid {

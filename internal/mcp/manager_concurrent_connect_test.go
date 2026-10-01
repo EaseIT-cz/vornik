@@ -123,8 +123,12 @@ func TestSyncProjects_HangingDialDoesNotStallBatch(t *testing.T) {
 }
 
 // A dial that ignores cancellation can still succeed after the overall
-// reconnect budget has expired. That client never enters the swapped catalog;
-// it must be drained and closed or every reload leaks a transport/subprocess.
+// reconnect budget has expired. It must never leak: since 2026-10-01 (MCP
+// failed-connect recovery, phase 2 P2) a late success is installed when its
+// pending entry and the catalog generation still match, and closed otherwise.
+// This test forces the "otherwise": a reload lands before the late success,
+// so the client must be drained and closed or every reload leaks a
+// transport/subprocess.
 func TestSyncProjects_ClosesClientThatConnectsAfterBudget(t *testing.T) {
 	origConnect, origClose := connectFn, closeFn
 	defer func() { connectFn, closeFn = origConnect, origClose }()
@@ -154,6 +158,8 @@ func TestSyncProjects_ClosesClientThatConnectsAfterBudget(t *testing.T) {
 	<-dialStarted
 	<-done
 	require.Zero(t, mgr.ServerCount(), "a post-budget dial must not enter the live catalog")
+	// A reload supersedes the catalog the late dial belonged to.
+	mgr.SyncProjects(context.Background(), map[string][]ServerConfig{})
 
 	close(releaseDial)
 	select {

@@ -31,3 +31,54 @@ func TestHostYAMLShipsKeepID(t *testing.T) {
 		t.Fatalf("host template must ship userns_mode=keep-id, got %q", cfg.Runtime.UserNSMode)
 	}
 }
+
+// TestHostYAMLIsHardenedByDefault pins the 2026-10-01 audit of shipped
+// defaults (external scan of a production instance; quickstart LLD §3.2): the
+// host seed bound 0.0.0.0 with api.auth_enabled: false, so every quickstart
+// install served the API to the LAN without a key. Loaded through the real
+// loader (env expansion + Validate), not a bare unmarshal, so the assertion is
+// about what the daemon would actually run.
+func TestHostYAMLIsHardenedByDefault(t *testing.T) {
+	data, err := os.ReadFile("../../deployments/podman/config/vornik.host.yaml")
+	if err != nil {
+		t.Fatalf("read host yaml: %v", err)
+	}
+	dir := t.TempDir()
+	path := dir + "/config.yaml"
+	if err := os.WriteFile(path, data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for k, v := range map[string]string{
+		"VORNIK_API_KEY":           "op-key-0123456789abcdef0123456789abcdef",
+		"POSTGRES_DB":              "vornik",
+		"POSTGRES_USER":            "vornik",
+		"VORNIK_DATABASE_PASSWORD": "pw",
+		"VORNIK_DATA_DIR":          dir,
+		"VORNIK_RUN_AS_USER":       "1000:1000",
+		"CHAT_ENDPOINT":            "http://127.0.0.1:11434/v1",
+		"CHAT_MODEL":               "m",
+		"AGENT_LLM_ENDPOINT":       "http://127.0.0.1:11434/v1",
+		"AGENT_LLM_MODEL":          "m",
+	} {
+		t.Setenv(k, v)
+	}
+	cfg, err := LoadFromPath(path)
+	if err != nil {
+		t.Fatalf("the shipped host seed must load and validate: %v", err)
+	}
+	if !cfg.API.AuthEnabled {
+		t.Fatal("host seed must ship api.auth_enabled: true")
+	}
+	if len(cfg.API.APIKeys) != 1 || cfg.API.APIKeys[0] != "op-key-0123456789abcdef0123456789abcdef" {
+		t.Fatalf("api.api_keys must be the expanded VORNIK_API_KEY, got %d entries", len(cfg.API.APIKeys))
+	}
+	if !cfg.Admin.IsAdminKey("op-key-0123456789abcdef0123456789abcdef") {
+		t.Fatal("the operator key must hold admin scope")
+	}
+	if cfg.Admin.IsAdminKey("") {
+		t.Fatal("an empty key must never be admin")
+	}
+	if mode, _ := cfg.Web.WritesMode(); mode != "off" {
+		t.Fatalf("web.writes must default off, got %q", mode)
+	}
+}

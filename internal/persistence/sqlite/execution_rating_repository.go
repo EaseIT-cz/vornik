@@ -96,9 +96,9 @@ func (r *ExecutionRatingRepository) Delete(ctx context.Context, executionID, rat
 
 // DeleteOlderThan prunes by the rating's own horizon and returns the count.
 //
-// The comparison is on the RFC3339Nano text, which sorts lexicographically in
-// timestamp order for UTC values of the same width — the convention every
-// ordered column in this schema relies on.
+// The comparison is on the stored text, which sorts in time order because
+// every SQLite timestamp is written in sqliteTime's fixed-width form (SQLite
+// timestamp ordering design; RFC3339Nano did not, below one second).
 func (r *ExecutionRatingRepository) DeleteOlderThan(ctx context.Context, cutoff time.Time) (int64, error) {
 	res, err := r.db.ExecContext(ctx,
 		`DELETE FROM execution_ratings WHERE created_at < ?`, sqliteTime(cutoff))

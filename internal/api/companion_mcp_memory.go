@@ -2,6 +2,8 @@ package api
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -105,7 +107,7 @@ func (s *Server) recordCompanionToolAudit(ctx context.Context, key *persistence.
 		ExecutionID: persistence.GenerateID("compex"),
 		ToolName:    toolNamespace + toolName,
 		ToolInput:   fmt.Sprintf("args_bytes=%d", len(args)),
-		ToolOutput:  fmt.Sprintf("status=%s result_bytes=%d", outcome, len(result)),
+		ToolOutput:  companionAuditOutput(toolName, outcome, result),
 		DurationMs:  persistence.ClampToolAuditDurationMs(dur.Milliseconds()),
 		Outcome:     column,
 		CreatedAt:   time.Now().UTC(),
@@ -117,6 +119,19 @@ func (s *Server) recordCompanionToolAudit(ctx context.Context, key *persistence.
 			Str("project_id", entry.ProjectID).
 			Msg("companion tool-audit write failed (call already succeeded)")
 	}
+}
+
+// companionAuditOutput is the tool_output text of a companion audit row:
+// status and size only. A `result` row adds a sha256 of the bytes returned,
+// so what left the daemon can be matched later without the row holding it
+// (broker design 2026-09-29 §5.2).
+func companionAuditOutput(toolName, outcome, result string) string {
+	out := fmt.Sprintf("status=%s result_bytes=%d", outcome, len(result))
+	if toolName == "result" && result != "" {
+		sum := sha256.Sum256([]byte(result))
+		out += " sha256=" + hex.EncodeToString(sum[:])
+	}
+	return out
 }
 
 // LLD 22 — Companion RAG: `recall` + `remember` MCP tools.

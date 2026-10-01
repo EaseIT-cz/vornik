@@ -81,6 +81,8 @@ var doctorCheckConfigPointer = map[string]string{
 	"checkToolAuditRedaction":      "",
 	"checkUnclassifiedShare":       "",
 	"checkWebWritesInsecure":       "",
+	"checkStuckBrokerActions":      "",
+	"checkMCPProjectConnections":   "",
 	"checkWorkspaceCanonical":      "",
 }
 

@@ -146,6 +146,12 @@ func (p *PushNotifier) push(ctx context.Context, task *persistence.Task, state s
 	if p == nil || p.repo == nil {
 		return
 	}
+	// A companion-created task's config is served by the companion push
+	// outbox, in its own envelope (broker write-actions design §7a): one
+	// config, one pusher.
+	if task.CreationSource == persistence.TaskCreationSourceCompanion {
+		return
+	}
 	cfg, err := p.repo.Get(ctx, task.ID)
 	if err != nil {
 		if !errors.Is(err, persistence.ErrNotFound) {

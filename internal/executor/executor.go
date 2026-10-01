@@ -369,8 +369,20 @@ type Executor struct {
 	// outcome rows then carry empty hashes, never an error.
 	stepPromptRepo persistence.StepPromptRepository
 	notifier       CompletionNotifier
-	steering       SteeringNotifier
-	memoryIndexer  MemoryIndexer
+	// completionObservers receive every terminal notification in addition to
+	// notifier, and independently of it: notifier is replaced wholesale by
+	// the chat subsystems and is nil on a daemon with no chat channel. Used
+	// by the companion result(wait_seconds) long-poll (broker design §6).
+	completionObservers []CompletionNotifier
+	// brokerActions stages and promotes broker write proposals around the
+	// COMPLETED transition (broker write-actions design §5.1). nil: off.
+	brokerActions persistence.BrokerActionRepository
+	// brokerActionNotify is told when a task's proposals are promoted to
+	// pending (Telegram notify-only, broker write-actions design §5.3).
+	brokerActionNotify    BrokerActionNotifyFunc
+	completionObserversMu sync.RWMutex
+	steering              SteeringNotifier
+	memoryIndexer         MemoryIndexer
 	// budgetNotifier receives per-task cost-governor soft-breach + hard-park
 	// alerts (LLD 2026-07-24 §3.5/§3.6). Optional — nil no-ops (same pattern
 	// as CompletionNotifier). Deduped once per task via taskBudgetWarned.
@@ -1119,6 +1131,34 @@ func WithCircuitBreaker(cb *circuitBreaker) Option {
 func WithBudgetNotifier(n budget.Notifier) Option {
 	return func(e *Executor) {
 		e.budgetNotifier = n
+	}
+}
+
+// AddCompletionObserver registers n to receive every terminal notification,
+// whatever notifier is (or is not) configured. Append-only.
+func (e *Executor) AddCompletionObserver(n CompletionNotifier) {
+	if e == nil || n == nil {
+		return
+	}
+	e.completionObserversMu.Lock()
+	defer e.completionObserversMu.Unlock()
+	e.completionObservers = append(e.completionObservers, n)
+}
+
+// notifyCompletion is the single path for a terminal notification: the
+// configured notifier (warning when none is set and warnIfUnset), then every
+// observer.
+func (e *Executor) notifyCompletion(ctx context.Context, task *persistence.Task, success bool, msg string, warnIfUnset bool) {
+	if e.notifier != nil {
+		e.notifier.NotifyTaskCompleted(ctx, task, success, msg)
+	} else if warnIfUnset {
+		e.logger.Warn().Str("task_id", task.ID).Msg("no completion notifier configured — skipping notification")
+	}
+	e.completionObserversMu.RLock()
+	observers := append([]CompletionNotifier(nil), e.completionObservers...)
+	e.completionObserversMu.RUnlock()
+	for _, o := range observers {
+		o.NotifyTaskCompleted(ctx, task, success, msg)
 	}
 }
 

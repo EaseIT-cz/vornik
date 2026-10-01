@@ -229,7 +229,9 @@ CREATE TABLE IF NOT EXISTS api_keys (
     skill_write       INTEGER NOT NULL DEFAULT 0,
     skill_admin       INTEGER NOT NULL DEFAULT 0,
     -- git-over-HTTPS push gate (LLD slice 2). Default 0 = read-only.
-    allow_push        INTEGER NOT NULL DEFAULT 0
+    allow_push        INTEGER NOT NULL DEFAULT 0,
+    -- migration 201: refuse every companion task tool (broker design §8). Default 0.
+    delegate_disabled INTEGER NOT NULL DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS idx_api_keys_project   ON api_keys(project_id);
 CREATE INDEX IF NOT EXISTS idx_api_keys_active    ON api_keys(key_hash) WHERE revoked_at IS NULL;
@@ -514,10 +516,12 @@ CREATE INDEX IF NOT EXISTS idx_budget_reservations_task      ON budget_reservati
 -- isn't holding an open SSE stream. Keyed by task_id.
 -- ============================================================
 CREATE TABLE IF NOT EXISTS a2a_push_configs (
-    task_id    TEXT PRIMARY KEY,
-    url        TEXT NOT NULL,
-    token      TEXT,
-    created_at TEXT NOT NULL
+    task_id      TEXT PRIMARY KEY,
+    url          TEXT NOT NULL,
+    token        TEXT,
+    created_at   TEXT NOT NULL,
+    -- the task status last pushed by the companion outbox (migration 203)
+    pushed_state TEXT
 );
 
 -- ============================================================
@@ -669,6 +673,9 @@ CREATE TABLE IF NOT EXISTS execution_step_outcomes (
     -- migration 169 parity: the container's exit status. NULL = no container
     -- ran, which is NOT the same as exiting 0.
     container_exit_code    INTEGER,
+    -- migration 204 parity: the agent container's reported cgroup memory
+    -- high-water mark; NULL = not reported (agent container memory limits §2.3a).
+    container_memory_peak_bytes INTEGER,
     -- migration 175 parity: what the step was TOLD at its first model request,
     -- as hashes into step_prompts. '' = not recorded.
     prompt_system_hash     TEXT NOT NULL DEFAULT '',
@@ -688,6 +695,33 @@ CREATE INDEX IF NOT EXISTS idx_step_outcomes_result ON execution_step_outcomes(r
 
 -- migration 175 parity: content-addressed parts of a step's first model
 -- request, redacted at write, pruned when no outcome row references them.
+-- ============================================================
+-- broker_actions — migration 202 (broker write-actions design §5.2)
+-- ============================================================
+CREATE TABLE IF NOT EXISTS broker_actions (
+    action_id     TEXT PRIMARY KEY,
+    project_id    TEXT NOT NULL,
+    task_id       TEXT NOT NULL,
+    api_key_id    TEXT,
+    workflow_id   TEXT NOT NULL,
+    action_kind   TEXT NOT NULL,
+    tool          TEXT NOT NULL,
+    args_json     BLOB NOT NULL,
+    args_sha256   TEXT NOT NULL,
+    status        TEXT NOT NULL CHECK (status IN ('staged','pending','approved','executing','executed','failed','rejected','expired','unknown','discarded','proposal_missing','proposal_invalid')),
+    approver      TEXT,
+    outcome_json  BLOB,
+    outcome_class TEXT CHECK (outcome_class IS NULL OR outcome_class IN ('ok','tool_error','pre_send_error','timeout','transport_error','operator_resolved')),
+    created_at    TEXT NOT NULL,
+    expires_at    TEXT NOT NULL,
+    decided_at    TEXT,
+    executed_at   TEXT,
+    -- the §6 front state last pushed to the companion (Postgres migration 203)
+    pushed_state  TEXT,
+    UNIQUE (task_id, action_kind)
+);
+CREATE INDEX IF NOT EXISTS idx_broker_actions_status ON broker_actions (status, project_id, created_at);
+
 CREATE TABLE IF NOT EXISTS step_prompts (
     hash       TEXT PRIMARY KEY,
     part       TEXT NOT NULL,

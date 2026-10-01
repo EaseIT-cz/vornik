@@ -72,6 +72,10 @@ func DefaultConfig() Config {
 type DB struct {
 	*sql.DB
 	config Config
+	// normalizeRecorder, when set, observes each timestamp column pass the
+	// one-time normaliser runs during Migrate. Test seam; per instance, so
+	// parallel tests cannot see each other's passes.
+	normalizeRecorder func(tableColumn)
 }
 
 // Connect opens a SQLite database at cfg.Path, verifies connectivity,
@@ -187,7 +191,9 @@ func (d *DB) Migrate(ctx context.Context) error {
 	if _, err := d.ExecContext(ctx, schemaSQL); err != nil {
 		return fmt.Errorf("sqlite: apply schema: %w", err)
 	}
-	return nil
+	// One-time data normalisation, after the schema so every column exists
+	// (SQLite timestamp ordering design, D4).
+	return d.applyTimestampNormalization(ctx)
 }
 
 // additiveColumn is a column added to an EXISTING table after that table first
@@ -205,6 +211,24 @@ type additiveColumn struct {
 	ddl string
 }
 
+// sqliteAdditiveBackfills holds, per "table.column", a statement run once,
+// right after that column is added to an existing table (never on a fresh
+// database, which has no rows to backfill).
+var sqliteAdditiveBackfills = map[string]string{
+	// Postgres migration 203 — the companion push outbox (broker
+	// write-actions design §7a). Existing rows are marked as already pushed
+	// so an upgrade does not push a backlog: the task status for configs,
+	// the §6 front state for actions: pending, and staged of a COMPLETED
+	// task, are pending_approval; staged of an unfinished task stays NULL and
+	// is pushed once when promoted (review-20260930-c6b5 F1).
+	"a2a_push_configs.pushed_state": `UPDATE a2a_push_configs SET pushed_state = (SELECT status FROM tasks WHERE tasks.id = a2a_push_configs.task_id)`,
+	"broker_actions.pushed_state": `UPDATE broker_actions SET pushed_state = CASE
+		WHEN status = 'pending' THEN 'pending_approval'
+		WHEN status = 'staged' AND EXISTS (SELECT 1 FROM tasks t WHERE t.id = broker_actions.task_id AND t.status = 'COMPLETED') THEN 'pending_approval'
+		WHEN status = 'staged' THEN NULL
+		ELSE status END`,
+}
+
 // sqliteAdditiveColumns is the registry. Keep it append-only and in the same
 // order as the corresponding Postgres migrations, so the two backends can be
 // diffed by eye.
@@ -216,6 +240,7 @@ var sqliteAdditiveColumns = []additiveColumn{
 	{"project_skills", "distinct_justification", `TEXT NOT NULL DEFAULT ''`},
 	// Postgres migration 175 — step-prompt persistence: hashes into step_prompts.
 	{"execution_step_outcomes", "prompt_system_hash", `TEXT NOT NULL DEFAULT ''`},
+	{"execution_step_outcomes", "container_memory_peak_bytes", `INTEGER`},
 	{"execution_step_outcomes", "prompt_user_hash", `TEXT NOT NULL DEFAULT ''`},
 	{"execution_step_outcomes", "prompt_tools_hash", `TEXT NOT NULL DEFAULT ''`},
 	// Postgres migration 180 — which BODY of a skill an execution ran with
@@ -263,11 +288,16 @@ var sqliteAdditiveColumns = []additiveColumn{
 	// (memory rollback x supersession design, amendment 2026-09-26). Nullable,
 	// no backfill: NULL means "not a document ingest".
 	{"project_ingest_queue", "document_path", `TEXT`},
+	{"api_keys", "delegate_disabled", `INTEGER NOT NULL DEFAULT 0`},
 	// schemaSQL indexes project_memory_chunks(project_id, repo_scope,
 	// source_name) for the same migration. repo_scope has been in the slim
 	// chunk table since 2026-06-05; a database created before that lacks it,
 	// and the CREATE INDEX would fail startup, so it lands here first.
 	{"project_memory_chunks", "repo_scope", `TEXT`},
+	// Postgres migration 203 — the companion push outbox; backfilled once
+	// (sqliteAdditiveBackfills).
+	{"a2a_push_configs", "pushed_state", `TEXT`},
+	{"broker_actions", "pushed_state", `TEXT`},
 }
 
 // applyAdditiveColumns adds any registered column missing from an existing
@@ -293,6 +323,11 @@ func (d *DB) applyAdditiveColumns(ctx context.Context) error {
 		stmt := fmt.Sprintf("ALTER TABLE %s ADD COLUMN %s %s", c.table, c.column, c.ddl)
 		if _, err := d.ExecContext(ctx, stmt); err != nil {
 			return fmt.Errorf("sqlite: add column %s.%s: %w", c.table, c.column, err)
+		}
+		if backfill := sqliteAdditiveBackfills[c.table+"."+c.column]; backfill != "" {
+			if _, err := d.ExecContext(ctx, backfill); err != nil {
+				return fmt.Errorf("sqlite: backfill %s.%s: %w", c.table, c.column, err)
+			}
 		}
 	}
 	return nil

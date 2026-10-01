@@ -11,6 +11,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"vornik.io/vornik/internal/approval"
 
 	"github.com/rs/zerolog/log"
 	"vornik.io/vornik/internal/apikey"
@@ -394,23 +395,21 @@ func (c AuthConfig) serveAuthEnabled(w http.ResponseWriter, r *http.Request, nex
 	// plugin) skip this gate entirely; browsers don't auto-attach those headers
 	// cross-origin. See isCSRFSafe for the decision ladder.
 	_, _, isBasic := r.BasicAuth()
-	// Two conditions, ONE gate. The ladder is the first: does this mutating
-	// cookie/Basic request look same-origin at all. The double-submit token
-	// is the second, and it only ever runs after the ladder passed — it
-	// exists to close the ladder's same-SITE-but-cross-ORIGIN acceptance
-	// (a sibling subdomain), which no header signal distinguishes. See
-	// csrfDoubleSubmitOK.
-	csrfBlocked := (isBasic || hasSessionCookie) && !isCSRFSafe(r)
-	doubleSubmitOK := !hasSessionCookie || csrfDoubleSubmitOK(r)
-	if !csrfBlocked && !doubleSubmitOK {
-		csrfBlocked = true
-	}
-	if csrfBlocked && !isGitSmartHTTP(r) {
+	// Two conditions, ONE gate, evaluated IN SEQUENCE (CE human-login LLD
+	// §6.3). The ladder is the first: does this mutating cookie/Basic request
+	// look same-origin at all. The double-submit token is the second, and it
+	// only runs after the ladder passed — it closes the ladder's
+	// same-SITE-but-cross-ORIGIN acceptance (a sibling subdomain), which no
+	// header signal distinguishes. Sequential rather than parallel so (a) a
+	// request the ladder refused never has its body peeked for a form token,
+	// and (b) the 403 can name which condition failed.
+	if cause := csrfGateCause(r, isBasic, hasSessionCookie); cause != csrfCauseNone {
 		// Log the denial with the signals that drove it — this gate is
 		// otherwise silent, which made the git-over-HTTPS 403 hard to
 		// diagnose (the request just 403s with no server-side trace).
 		log.Warn().
 			Str("component", "auth-csrf").
+			Str("cause", string(cause)).
 			Str("method", r.Method).
 			Str("path", r.URL.Path).
 			Bool("basic_auth", isBasic).
@@ -418,10 +417,8 @@ func (c AuthConfig) serveAuthEnabled(w http.ResponseWriter, r *http.Request, nex
 			Str("sec_fetch_site", r.Header.Get("Sec-Fetch-Site")).
 			Str("origin", r.Header.Get("Origin")).
 			Str("host", r.Host).
-			Bool("double_submit_ok", doubleSubmitOK).
-			Msg("CSRF gate blocked a cross-site mutating request (Basic/cookie, no same-origin signal, or a double-submit token that did not match); programmatic clients should use Authorization: Bearer or X-API-Key")
-		respondError(w, http.StatusForbidden, "CSRF_BLOCKED",
-			"cross-site mutating request via Basic Auth refused; use Authorization: Bearer for programmatic clients, or open the UI in the same origin")
+			Msg("CSRF gate blocked a mutating request; programmatic clients should use Authorization: Bearer or X-API-Key")
+		respondError(w, http.StatusForbidden, "CSRF_BLOCKED", csrfBlockedMessage(cause, isBasic, hasSessionCookie))
 		return
 	}
 
@@ -1169,26 +1166,11 @@ func isCSRFSafe(r *http.Request) bool {
 	case http.MethodGet, http.MethodHead, http.MethodOptions:
 		return true
 	}
-	switch r.Header.Get("Sec-Fetch-Site") {
-	case "same-origin", "same-site", "none":
-		return true
-	case "cross-site":
-		return false
-	}
-	origin := r.Header.Get("Origin")
-	if origin == "" {
-		// A3: neither Sec-Fetch-Site nor Origin present on a mutating
-		// Basic/cookie request — no trustworthy same-origin signal.
-		// Fail closed (the caller returns 403 CSRF_BLOCKED).
-		return false
-	}
-	parsed, err := url.Parse(origin)
-	if err != nil || parsed.Host == "" {
-		// Malformed Origin from a browser is a strong signal of
-		// tampering. Conservative default: reject.
-		return false
-	}
-	return parsed.Host == r.Host
+	// The ladder itself (Sec-Fetch-Site, else an Origin matching the host,
+	// else refuse — A3) lives in internal/approval so the inbox approval
+	// handlers and this middleware cannot drift apart (broker write-actions
+	// design §5.3).
+	return approval.SameOrigin(r)
 }
 
 // respondUnauthorized writes a 401 with both the JSON body

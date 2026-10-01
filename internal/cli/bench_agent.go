@@ -556,6 +556,14 @@ func runBenchAgentRun(cmd *cobra.Command, _ []string) error {
 	if err := preReg.BindArm(benchAgentArm); err != nil {
 		return err
 	}
+	// The containment check needs git, so it lives in agentbench-reproduce.sh
+	// (agent benchmark design §12.20.4). Said, so a direct run is visibly
+	// unchecked rather than silently passed.
+	if preReg.RequiresScorer != "" {
+		_, _ = fmt.Fprintf(cmd.ErrOrStderr(), "NOTE: the pre-registration declares requiresScorer %s; "+
+			"whether this harness contains it is checked only by scripts/agentbench-reproduce.sh, "+
+			"not by a direct run.\n", preReg.RequiresScorer)
+	}
 	if benchAgentGoldPath != "" {
 		if _, err := loadGoldIfPresent(benchAgentGoldPath); err != nil {
 			return err

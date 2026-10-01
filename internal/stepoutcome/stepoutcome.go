@@ -399,6 +399,46 @@ func ErrorClasses() []string {
 	return out
 }
 
+// infraRetryableClasses is the ALLOWLIST of step error classes the infra retry
+// ladder may re-run. The ladder re-runs with IDENTICAL inputs, so it may only
+// retry what a transient condition can produce: the genuine residual, a
+// provider/transport failure, the three container-runtime failures, and a wall
+// clock that ran out with nothing else named. Every other class names a
+// deterministic failure of the model or the contract (a schema violation, a
+// budget stop, a loop, an overflow …) that the same inputs reproduce.
+//
+// An allowlist, not a denylist of the deterministic classes: a class added to
+// the vocabulary later is NOT retryable until someone argues it in here.
+// Incident T-0d3c (2026-09-28): five identical ~620k-token attempts on a schema
+// violation. Design: 2026-08-27-step-retry-configuration-design.md §9 D9.2.
+var infraRetryableClasses = []string{
+	ClassUnclassified,
+	ClassLLMCallFailed,
+	ClassContainerStartFailed,
+	ClassContainerWaitFailed,
+	ClassContainerKilled,
+	ClassContextTimeout,
+}
+
+// InfraRetryableClasses returns the infra-retry allowlist, sorted. A copy.
+func InfraRetryableClasses() []string {
+	out := make([]string, len(infraRetryableClasses))
+	copy(out, infraRetryableClasses)
+	sort.Strings(out)
+	return out
+}
+
+// IsInfraRetryableClass reports whether the infra retry ladder may re-run a
+// step that failed with this class.
+func IsInfraRetryableClass(s string) bool {
+	for _, c := range infraRetryableClasses {
+		if c == s {
+			return true
+		}
+	}
+	return false
+}
+
 // IsErrorClass reports whether s is a declared error class.
 func IsErrorClass(s string) bool {
 	for _, c := range errorClasses {

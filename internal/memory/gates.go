@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"vornik.io/vornik/internal/secrets"
 )
@@ -134,6 +135,12 @@ type GateConfig struct {
 	// MinContentWords quarantines chunks with fewer words.
 	// Default 10.
 	MinContentWords int
+	// DepositMinContentChars and DepositMinContentWords are the floor
+	// for a deliberate deposit (a companion: or chat: producer): below
+	// either, the deposit is rejected. Counted in runes. Defaults 10
+	// and 3 (pipeline design, update 2026-10-01).
+	DepositMinContentChars int
+	DepositMinContentWords int
 	// TruncationToleranceFraction allows ±N% byte drift between
 	// the candidate Content size and the source artifact's recorded
 	// byte length. Default 0.05 (5%). Only applied when the gate is
@@ -492,9 +499,20 @@ func PromptInjectionGate(c *IngestCandidate, cfg GateConfig) GateOutcome {
 
 // MinContentGate refuses near-empty chunks. Sub-MinContentChars =
 // reject (caller bug — content shouldn't have been queued).
-// Sub-MinContentWords = quarantine (operator can release if
-// they decide the brevity was intentional).
+// Sub-MinContentWords = quarantine, for review. Nothing promotes a
+// quarantined row back into the store (the UI's release only dismisses
+// it), so a quarantine here is a refusal with a review trail.
+//
+// A deliberate deposit (companion: or chat: producer, the predicate
+// ProvenanceCompleteGate uses) is one fact someone chose to keep, not
+// chunker residue, so it has its own floor and is rejected below it:
+// quarantining a deposit would lose it without telling the depositor.
+// Hermes e2e lane, 2026-09-30: "The user's dentist is Dr Novak." was
+// rejected by the document floor (pipeline design, update 2026-10-01).
 func MinContentGate(c *IngestCandidate, cfg GateConfig) GateOutcome {
+	if isDeliberateHumanProducer(c.ProducerRole) {
+		return depositMinContent(c, cfg)
+	}
 	if cfg.MinContentChars <= 0 {
 		cfg.MinContentChars = 64
 	}
@@ -513,6 +531,33 @@ func MinContentGate(c *IngestCandidate, cfg GateConfig) GateOutcome {
 			Action: GateQuarantine,
 			Gate:   GateMinContent,
 			Detail: fmt.Sprintf("%d words < min %d", wordCount(c.Content), cfg.MinContentWords),
+		}
+	}
+	return GateOutcome{Action: GateAllow, Gate: GateMinContent}
+}
+
+// depositMinContent is MinContentGate's floor for a deliberate deposit:
+// rejected under DepositMinContentWords words or DepositMinContentChars
+// runes.
+func depositMinContent(c *IngestCandidate, cfg GateConfig) GateOutcome {
+	if cfg.DepositMinContentChars <= 0 {
+		cfg.DepositMinContentChars = 10
+	}
+	if cfg.DepositMinContentWords <= 0 {
+		cfg.DepositMinContentWords = 3
+	}
+	if n := wordCount(c.Content); n < cfg.DepositMinContentWords {
+		return GateOutcome{
+			Action: GateReject,
+			Gate:   GateMinContent,
+			Detail: fmt.Sprintf("deposit: %d words < min %d", n, cfg.DepositMinContentWords),
+		}
+	}
+	if n := utf8.RuneCountInString(c.Content); n < cfg.DepositMinContentChars {
+		return GateOutcome{
+			Action: GateReject,
+			Gate:   GateMinContent,
+			Detail: fmt.Sprintf("deposit: %d chars < min %d", n, cfg.DepositMinContentChars),
 		}
 	}
 	return GateOutcome{Action: GateAllow, Gate: GateMinContent}

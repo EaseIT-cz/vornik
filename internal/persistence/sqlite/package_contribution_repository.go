@@ -36,7 +36,15 @@ func (r *PackageContributionRepository) RecordContributions(ctx context.Context,
 		return err
 	}
 	defer func() { _ = tx.Rollback() }()
+	if err := insertContributionsTx(ctx, tx, rows); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
 
+// insertContributionsTx inserts rows inside tx, shared by RecordContributions
+// and ReplaceContributions.
+func insertContributionsTx(ctx context.Context, tx *sql.Tx, rows []persistence.PackageContribution) error {
 	for _, row := range rows {
 		if row.Kind == "" || row.RowID == "" || row.Package == "" {
 			return fmt.Errorf("contribution needs kind, row id and package: %+v", row)
@@ -54,10 +62,33 @@ func (r *PackageContributionRepository) RecordContributions(ctx context.Context,
 INSERT INTO package_contributions
     (kind, row_id, package, package_version, path, content_hash_at_install, installed_at)
 VALUES (?, ?, ?, ?, ?, ?, ?)`,
-			row.Kind, row.RowID, row.Package, row.PackageVersion, row.Path, row.ContentHashAtInstall, at.UTC())
+			row.Kind, row.RowID, row.Package, row.PackageVersion, row.Path, row.ContentHashAtInstall, sqliteTime(at))
 		if err != nil {
 			return fmt.Errorf("record contribution %s/%s: %w", row.Kind, row.RowID, err)
 		}
+	}
+	return nil
+}
+
+// ReplaceContributions deletes the package's rows and inserts the new ones in
+// one transaction (package design §8): a key refusal on the insert rolls the
+// delete back, so the old rows stay intact.
+func (r *PackageContributionRepository) ReplaceContributions(ctx context.Context, pkg string, rows []persistence.PackageContribution) error {
+	for _, row := range rows {
+		if row.Package != pkg {
+			return fmt.Errorf("replace %s: row %s/%s names package %q", pkg, row.Kind, row.RowID, row.Package)
+		}
+	}
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+	if _, err := tx.ExecContext(ctx, `DELETE FROM package_contributions WHERE package = ?`, pkg); err != nil {
+		return fmt.Errorf("replace %s: delete old rows: %w", pkg, err)
+	}
+	if err := insertContributionsTx(ctx, tx, rows); err != nil {
+		return fmt.Errorf("replace %s: %w", pkg, err)
 	}
 	return tx.Commit()
 }

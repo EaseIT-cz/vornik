@@ -1,9 +1,9 @@
 ---
 sources:
     - path: internal/registry/project.go
-      sha256: aa81ba21422bf09879f1e8dff3f8fed933af7ff8c73906d08e67a6781298c835
+      sha256: f1b264a1a40a9d69952959b378443bdfbf8836d53180a8bbe2fbed84ac51e41e
     - path: internal/mcp/client.go
-      sha256: 295a8bac8d0116b1d5bc53ae231ec7d1c2e975652383883dedd2b6c3cb5484ff
+      sha256: e6e63cb2816132187f2b0790a11d3e19857d44cc8fa1068db252ddddedfd1ff6
     - path: internal/mcp/ratelimit.go
       sha256: 19ad0c64e2abd9d25e95971e1ba5e3cfe91f34852edeca6e4f9c70825b2e901d
     - path: internal/cli/mcp.go
@@ -415,6 +415,35 @@ A generic parameter name such as `path` or `dir` is treated the same way. Where
 that parameter is really a *remote* path, the cost is one line in `allowed_tools`;
 the opposite mistake costs arbitrary file access.
 
+### Declaring a server read-only for broker workflows
+
+A **broker project** (see the companion guide) runs workflows on behalf of a
+front-end agent that must never hold your credentials. Its roles may only use
+MCP tools from servers you declare read-only, and only tools you list by name:
+
+```yaml
+mcp:
+  servers:
+    - name: gmail
+      transport: sse
+      url: http://gmail-mcp:8080/sse
+      broker_read_only: true        # every tool in allowed_tools only reads
+      allowed_tools: [search_messages, get_message]
+      operator_authored: false      # the content is third-party mail (default)
+```
+
+A server whose tools **write** is declared `broker_write: true` instead. Only
+the daemon calls those tools, to execute a write a broker workflow proposed and
+a person approved in `/inbox`. No broker role may hold them, a server cannot
+be both `broker_read_only` and `broker_write`, and nothing executes unless
+the daemon runs with `broker.writes: on`.
+
+Vornik cannot check either claim. `broker_read_only` is your statement that the
+listed tools do not change anything. `operator_authored: true` says the server
+serves only content you wrote, and it is what lets a broker workflow skip the
+injection scan on its output. Leave it off for mail, web pages, tickets or
+anything else a stranger can write into.
+
 ## Throttling tools with `toolRateLimits`
 
 Some tools are expensive or sensitive — placing orders, scraping the web. Give
@@ -507,6 +536,22 @@ re-probe does not change what you see: the row keeps showing the previous result
 and the time it was taken, until the new probe lands and replaces it. So a
 failing server reads `unreachable` continuously rather than flickering — the
 `last checked` timestamp is what tells you how old that verdict is.
+
+**This view is an inventory, not a project's connection.** `reachable` comes
+from a probe the daemon runs on its own. It says nothing about whether a
+given project's client is connected. A project's server can be down while
+this table says `reachable`: for example, when the project's own connect
+failed because the server was restarting at that moment. For per-project
+connection state, run `vornikctl doctor` and read `mcp_project_connections`.
+It lists every project server that has been trying to reconnect for more
+than two minutes, with its last error.
+
+The daemon retries a project server whose connect failed. It retries in the
+background with backoff (15 s, then up to every 5 minutes), and immediately
+when a task calls one of the server's tools. After 10 minutes it sends one
+operator alert, and one more when the server reconnects. Until it
+reconnects, the model is told that the server is down, not that its
+arguments were wrong.
 
 **Call a tool directly**, skipping the model — the fastest way to confirm a
 tool works and check its arguments:

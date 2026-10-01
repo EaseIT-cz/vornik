@@ -45,8 +45,8 @@ func NewLeaderLockRepository(db *sql.DB) *LeaderLockRepository {
 // contract is honoured).
 func (r *LeaderLockRepository) Acquire(ctx context.Context, workerID, holderID string, now time.Time, ttl time.Duration) (bool, int64, error) {
 	expires := now.Add(ttl)
-	nowStr := now.UTC().Format(time.RFC3339Nano)
-	expiresStr := expires.UTC().Format(time.RFC3339Nano)
+	nowStr := sqliteTime(now)
+	expiresStr := sqliteTime(expires)
 
 	// Read the existing row (if any).
 	var cur persistence.DaemonLeaderLock
@@ -138,7 +138,7 @@ func (r *LeaderLockRepository) Release(_ context.Context, _, _ string) error {
 // whose timestamp parse errors were discarded, so a malformed value audited a
 // zero expiry in silence.
 func (r *LeaderLockRepository) DeleteExpired(ctx context.Context, workerID string, now time.Time) (*persistence.DaemonLeaderLock, error) {
-	nowStr := now.UTC().Format(time.RFC3339Nano)
+	nowStr := sqliteTime(now)
 	tx, err := r.db.BeginTx(ctx, nil)
 	if err != nil {
 		return nil, fmt.Errorf("leader_lock: delete expired: begin: %w", err)

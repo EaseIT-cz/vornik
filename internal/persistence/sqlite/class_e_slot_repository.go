@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"fmt"
 	"strings"
+	"time"
 
 	"vornik.io/vornik/internal/persistence"
 )
@@ -26,9 +27,9 @@ func (r *ClassESlotRepository) Reserve(ctx context.Context, credentialID, day st
 		return fmt.Errorf("class-E slot reservation needs a credential, a day and a positive slot")
 	}
 	_, err := r.db.ExecContext(ctx, `
-		INSERT INTO class_e_slot_reservations (credential_id, day, slot)
-		VALUES (?, ?, ?)`,
-		credentialID, day, slot)
+		INSERT INTO class_e_slot_reservations (credential_id, day, slot, created_at)
+		VALUES (?, ?, ?, ?)`,
+		credentialID, day, slot, sqliteTime(time.Now()))
 	// The same PRIMARY KEY collision Postgres reports as 23505. Matched on the
 	// driver's message because that is how every other repository in this
 	// package detects it; the contract the two must agree on is

@@ -14,6 +14,7 @@ import (
 	"vornik.io/vornik/internal/chat"
 	"vornik.io/vornik/internal/persistence"
 	"vornik.io/vornik/internal/registry"
+	"vornik.io/vornik/internal/stepoutcome"
 )
 
 // shapeRetryMaxAttempts caps how many corrective re-runs we'll do on a
@@ -781,6 +782,15 @@ func (e *Executor) executeAgentStepWithInfraRetry(
 		}
 
 		if !cfg.shouldRetry(err) {
+			// Say that the ladder looked and declined, not merely that it
+			// never ran (step-retry design §9 D9.2).
+			if class, ok := recordedStepClass(err); ok && !stepoutcome.IsInfraRetryableClass(class) {
+				e.logger.Info().
+					Str("execution_id", execution.ID).
+					Str("step", stepIDForAttempt).
+					Str("error_class", class).
+					Msg("infra retry: deterministic failure class — not retried with identical inputs")
+			}
 			// Not retryable — kick it back to the caller (shape retry layer
 			// or the workflow loop) without burning more retry budget on a
 			// problem that won't fix itself.

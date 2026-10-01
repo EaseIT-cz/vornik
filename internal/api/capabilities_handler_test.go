@@ -13,6 +13,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"vornik.io/vornik/internal/registry"
+	"vornik.io/vornik/internal/taskwait"
 	"vornik.io/vornik/internal/telemetryclient"
 	"vornik.io/vornik/internal/version"
 )
@@ -212,6 +213,11 @@ func TestGetCapabilities_FeatureFlagsContractStable(t *testing.T) {
 		"companion-v1",
 		"companion-mcp",
 		"a2a-inbound",
+		// Broker design 2026-09-29 §9: a front-agent plugin reads these to
+		// decide whether to offer broker workflows and whether result() can
+		// long-poll, and falls back on an older daemon that lacks them.
+		"companion-broker",
+		"companion-result-wait",
 	}
 	for _, key := range required {
 		_, ok := resp.Features[key]
@@ -280,4 +286,21 @@ func TestServer_BuildVersion_PrefersLazyAndIgnoresEmptyEager(t *testing.T) {
 
 	// Neither wired: empty, and the caller decides what to report.
 	assert.Empty(t, NewServer().BuildVersion())
+}
+
+// companion-result-wait is honest: true only when the wait hub is wired, since
+// without it result(wait_seconds) answers immediately.
+func TestGetCapabilities_BrokerFlagsFollowWiring(t *testing.T) {
+	srv, _, _ := newCompanionMCPServer(t)
+	rec := httptest.NewRecorder()
+	srv.GetCapabilities(rec, httptest.NewRequest(http.MethodGet, "/api/v1/capabilities", nil))
+	resp := decodeCapabilities(t, rec.Body.Bytes())
+	assert.True(t, resp.Features["companion-broker"])
+	assert.False(t, resp.Features["companion-result-wait"], "no hub wired: wait_seconds answers at once")
+
+	srv.taskWaitHub = taskwait.New()
+	rec = httptest.NewRecorder()
+	srv.GetCapabilities(rec, httptest.NewRequest(http.MethodGet, "/api/v1/capabilities", nil))
+	resp = decodeCapabilities(t, rec.Body.Bytes())
+	assert.True(t, resp.Features["companion-result-wait"])
 }

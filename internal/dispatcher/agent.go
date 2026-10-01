@@ -383,6 +383,7 @@ type Agent struct {
 	webWriteRepo       persistence.WebWriteRepo
 	webWrites          config.WebDaemonConfig
 	webApprovalHook    WebWriteApprovalHook
+	webPendingNotify   WebWritePendingNotifier
 	// webWriteTokenStore is the operator-chat-driven approval-token delivery
 	// channel: the inbox approve handler Puts the minted token, web_submit
 	// (mode=submit) Takes it when the assistant submits without a token arg.
@@ -607,6 +608,7 @@ func NewAgent(
 		webWriteRepo:          a.webWriteRepo,
 		webWrites:             a.webWrites,
 		webApprovalHook:       a.webApprovalHook,
+		webPendingNotify:      a.webPendingNotify,
 		webWriteTokenStore:    a.webWriteTokenStore,
 		logger:                a.logger,
 	}

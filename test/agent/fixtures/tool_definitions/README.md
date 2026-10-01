@@ -20,3 +20,9 @@ accompanies a refactor is the refactor changing behaviour.
 grep.head_limit minimum 1 and describe that constraint. This accompanies the
 runtime fix for non-positive limits in tool-dispatch design §11. All other
 cells and all other schema fields remain unchanged.
+
+2026-09-28 deliberate schema change: `tool_result_read` gains an optional
+integer `offset` (minimum 0) and a description that says it pages. This
+accompanies the fresh-tool-result context cap and paging in the tool-result
+hygiene design (amendment 2026-09-28). 25 of 30 cells change — exactly the
+ones that advertise `tool_result_read` — and only in that one definition.

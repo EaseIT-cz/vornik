@@ -61,12 +61,19 @@ func (a *sqliteStringArray) Scan(src interface{}) error {
 	return nil
 }
 
-// sqliteTime renders a time.Time as RFC3339Nano. modernc.org/sqlite
-// doesn't auto-convert TEXT → time.Time on Scan, so the round-trip
-// goes through string at both ends — sqliteTime to encode + scanTime
-// / sqlTime to decode.
+// sqliteTimeLayout is the ONE text form of a SQLite timestamp: UTC, nine
+// fractional digits, "Z" — fixed width, so string order is time order.
+// SQLite compares these TEXT columns as strings. RFC3339Nano, the form used
+// until 2026-10-01, trims trailing zeros and its "Z" sorts above every digit,
+// so "…:05Z" sorted after "…:05.5Z" (SQLite timestamp ordering design).
+const sqliteTimeLayout = "2006-01-02T15:04:05.000000000Z"
+
+// sqliteTime renders a time.Time in sqliteTimeLayout. modernc.org/sqlite
+// doesn't auto-convert TEXT → time.Time on Scan, so the round-trip goes
+// through string at both ends — sqliteTime to encode + scanTime / sqlTime to
+// decode, which parse this form with the RFC3339Nano layout.
 func sqliteTime(t time.Time) string {
-	return t.UTC().Format(time.RFC3339Nano)
+	return t.UTC().Format(sqliteTimeLayout)
 }
 
 // sqliteTimePtr is the nullable companion; returns nil when t is

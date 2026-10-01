@@ -758,6 +758,9 @@ func displaySource(s string) string {
 		// resolution, skill preflight and infrastructure probes. Unlabelled
 		// until 2026-08-12, when it started appearing here at all.
 		return "Memory embedding"
+	case "memory_reranker":
+		// The LLM reranker over recall candidates (internal/memory/reranker.go).
+		return "Memory reranking"
 	case "task_narrator":
 		return "Execution narration"
 	case "fix_it_doctor":
@@ -809,6 +812,8 @@ func displayRole(s string) string {
 		return "Memory · Project Narrator"
 	case "memory_embedder":
 		return "Memory · Embedder"
+	case "memory_reranker":
+		return "Memory · Reranker"
 	case "rag-ingester":
 		// Swarm role (companion-example-swarm) whose whole job is async
 		// ingestion into RAG memory — group it with the Memory family

@@ -59,6 +59,15 @@ type PackageContributionRepository interface {
 	// row count.
 	ListPackages(ctx context.Context) ([]InstalledPackage, error)
 
+	// ReplaceContributions swaps one package's provenance for `package
+	// upgrade` (package design §8). The package's existing rows are deleted
+	// and rows inserted, and the two COMMIT TOGETHER OR NOT AT ALL: a row
+	// another package claims refuses the whole replace and leaves this
+	// package's OLD rows intact. A driver that ran them as two independent
+	// statements would leave the package with no provenance at all. Every
+	// row must name pkg.
+	ReplaceContributions(ctx context.Context, pkg string, rows []PackageContribution) error
+
 	// DeleteContributions removes a package's rows. Called only after the
 	// uninstall plan has been applied to disk.
 	DeleteContributions(ctx context.Context, pkg string) (int64, error)

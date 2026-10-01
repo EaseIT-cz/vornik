@@ -133,6 +133,21 @@ TOOL_RAW_KEEP_RECENT_BATCHES="${VORNIK_TOOL_RAW_KEEP_RECENT_BATCHES:-3}"
 TOOL_RAW_HEAD_CHARS="${VORNIK_TOOL_RAW_HEAD_CHARS:-1200}"
 TOOL_RAW_TAIL_CHARS="${VORNIK_TOOL_RAW_TAIL_CHARS:-800}"
 STEP_PROMPT_TOKEN_BUDGET="${VORNIK_STEP_PROMPT_TOKEN_BUDGET:-0}"
+# Max bytes of a FRESH tool result placed in the conversation (tool-result
+# hygiene design, amendment 2026-09-28). The whole captured result is stashed
+# under .tool_results/ and paged with tool_result_read(offset); only the
+# conversation copy is capped. 0 disables; clamped to TOOL_RESULT_MAX_BYTES.
+# Effective only while hygiene is on — without a stash there is nothing to
+# point at. Incident: task_20260928151317_04e71d8e65b50d3c, where whole scraper
+# web_fetch pages drove one request to ~57k prompt tokens by the fourth call.
+TOOL_RESULT_CONTEXT_BYTES="${VORNIK_TOOL_RESULT_CONTEXT_BYTES:-32768}"
+# Character target for the flattened transcript a budget finalization runs on
+# when the full conversation would cross the prompt-token budget (prompt-token
+# budget design, amendment 2026-09-28, D4).
+BUDGET_FINALIZE_TRANSCRIPT_CHARS="${VORNIK_BUDGET_FINALIZE_TRANSCRIPT_CHARS:-40000}"
+# Finalization turns a budget-stopped step may spend: write (only when a
+# declared output file is unwritten), answer, and one JSON-only re-ask (D3).
+BUDGET_FINALIZE_MAX_CALLS=3
 
 # Per-million-token prices for this container's model. Injected by the
 # executor from the daemon's pricing.yaml so the agent can log per-iteration
@@ -165,6 +180,14 @@ tool_result_hygiene_enabled() {
 }
 
 step_prompt_token_budget() {
+    # A tool-free step (the adaptive route) has one turn: no tool phase to end
+    # and nothing to finalize against. It inherits its role's budget, which
+    # would otherwise push the one-call router into budget finalization on turn
+    # one (combined review of the 2026-09-28 fixes, F1).
+    if [ "${TOOL_FREE:-0}" = "1" ]; then
+        printf '0'
+        return
+    fi
     local budget="${STEP_PROMPT_TOKEN_BUDGET:-0}"
     case "$budget" in
         ""|*[!0-9]*)
@@ -172,6 +195,88 @@ step_prompt_token_budget() {
             ;;
     esac
     printf '%s' "$budget"
+}
+
+# tool_result_context_cap prints the effective in-conversation cap for a fresh
+# tool result, or 0 when the cap is off (knob 0/invalid, or hygiene disabled so
+# no stash exists to page from). Never above TOOL_RESULT_MAX_BYTES.
+tool_result_context_cap() {
+    local cap="${TOOL_RESULT_CONTEXT_BYTES:-0}"
+    case "$cap" in
+        ""|*[!0-9]*) cap=0 ;;
+    esac
+    if ! tool_result_hygiene_enabled; then
+        cap=0
+    fi
+    if [ "$cap" -gt "${TOOL_RESULT_MAX_BYTES:-0}" ] 2>/dev/null; then
+        cap="$TOOL_RESULT_MAX_BYTES"
+    fi
+    printf '%s' "$cap"
+}
+
+# utf8_slice PATH START LEN OUT writes to OUT at most LEN bytes of PATH from
+# byte START, with both ends moved onto UTF-8 code-point boundaries (start
+# forward, end backward), and prints the end offset it used. The fresh-result
+# context cap and tool_result_read pages cut through this so neither splits a
+# character, and the offset each names for "read further" is the real one —
+# the hygiene design's whole-character guarantee, kept on the new paths.
+utf8_slice() {
+    python3 - "$1" "$2" "$3" "$4" <<'PY'
+import sys
+
+path, start, n, out = sys.argv[1], int(sys.argv[2]), int(sys.argv[3]), sys.argv[4]
+with open(path, "rb") as f:
+    data = f.read()
+
+
+def cont(i):
+    return i < len(data) and (data[i] & 0xC0) == 0x80
+
+
+start = max(0, min(start, len(data)))
+while cont(start):
+    start += 1
+end = min(len(data), start + max(0, n))
+if end < len(data):
+    while end > start and cont(end):
+        end -= 1
+with open(out, "wb") as f:
+    f.write(data[start:end])
+print(end)
+PY
+}
+
+# container_memory_peak prints this container's cgroup memory high-water mark
+# in bytes, or fails when it is not known. Trusted only from the container's
+# OWN cgroup: /proc/self/cgroup must be exactly "0::/" (cgroup v2, root of a
+# private namespace). Under a host namespace /sys/fs/cgroup is another
+# cgroup's, readable and wrong; a run on a host (the shell and replay tests)
+# fails the same check. Agent container memory limits design §2.3a.
+container_memory_peak() {
+    local self peak
+    self=$(cat "${VORNIK_CGROUP_SELF:-/proc/self/cgroup}" 2>/dev/null) || return 1
+    [ "$self" = "0::/" ] || return 1
+    peak=$(cat "${VORNIK_MEMORY_PEAK_FILE:-/sys/fs/cgroup/memory.peak}" 2>/dev/null) || return 1
+    case "$peak" in ''|*[!0-9]*) return 1 ;; esac
+    printf '%s' "$peak"
+}
+
+# byte_len prints the length of $1 in bytes, whatever the locale. ${#var}
+# counts characters under a UTF-8 locale and bytes under C, so a size taken
+# with it depended on the host (cost-efficiency design §3, corrected
+# 2026-10-01).
+byte_len() {
+    printf '%s' "$1" | LC_ALL=C wc -c | tr -d ' '
+}
+
+# request_file_tokens prints the preflight token estimate of a built request
+# file: the same (bytes + 2) / 3 heuristic the loop logs, over the same string
+# the loop sends, so a reserve computed here and a call estimated there are in
+# the same unit.
+request_file_tokens() {
+    local body
+    body=$(cat "$1")
+    printf '%s' "$(( ($(byte_len "$body") + 2) / 3 ))"
 }
 
 # ms_now returns milliseconds-since-epoch as a portable 13-digit value.
@@ -350,6 +455,9 @@ tool_runs_in_helper() {
 # measured a need for. Consolidate only with a profile in hand.
 tool_call_permitted() {
     local name="$1"
+    # A tool-free step was offered nothing, so it may call nothing — checked
+    # before the exemptions, which are about advertising, not permission here.
+    [ "${TOOL_FREE:-0}" = "1" ] && return 1
     tool_name_ungated "$name" && return 0
     tool_prefix_ungated "$name" && return 0
     builtin_tool_allowed "$name"
@@ -383,6 +491,45 @@ sys.stdout.write(
            "", sys.stdin.read(), flags=re.DOTALL).strip()
 )
 ' 2>/dev/null
+}
+
+# extract_structured_json TEXT prints the structured JSON object a model answer
+# carries, or nothing. One implementation for the result merge in write_result
+# and for the budget finalization's "did the answer carry its JSON?" check —
+# two copies of one extraction would disagree on exactly the answers that
+# matter (CLAUDE.md §5).
+extract_structured_json() {
+    local src="$1" structured=""
+    [ -n "$src" ] || return 0
+    # Pass 1: pure JSON object
+    if printf '%s' "$src" | jq -e 'type == "object"' >/dev/null 2>&1; then
+        structured="$src"
+    else
+        # Pass 2: markdown code fences (```json ... ``` or ``` ... ```)
+        local stripped
+        stripped=$(printf '%s' "$src" | sed -n '/^```/,/^```/{/^```/d;p;}')
+        if [ -n "$stripped" ] && printf '%s' "$stripped" | jq -e 'type == "object"' >/dev/null 2>&1; then
+            structured="$stripped"
+        fi
+    fi
+    # Pass 3: extract first {...} substring from mixed text, handling
+    # multi-line JSON by collapsing newlines before greedy matching.
+    if [ -z "$structured" ]; then
+        local extracted
+        # Collapse newlines so { ... } spans work across lines.
+        # `|| true`: grep exits 1 when the text holds no braces at all, and
+        # under `set -o pipefail` that aborts the whole agent through the
+        # exit trap ("unexpected exit (code 1), writing emergency result").
+        # Latent while this block was reachable only for a non-empty
+        # RESPONSE that had already failed passes 1 and 2; reading $message
+        # as a fallback (2026-08-19) makes prose-only answers reach here,
+        # and prose-only is the common case for a bail path.
+        extracted=$(printf '%s' "$src" | tr '\n' ' ' | grep -o '{.*}' | tail -1 || true)
+        if [ -n "$extracted" ] && printf '%s' "$extracted" | jq -e 'type == "object"' >/dev/null 2>&1; then
+            structured="$extracted"
+        fi
+    fi
+    printf '%s' "$structured"
 }
 
 # write_result STATUS MESSAGE RESPONSE DURATION [ERROR]
@@ -486,6 +633,223 @@ if changed:
         f.write("\n")
     os.replace(tmp, path)
 PY
+}
+
+# compact_for_budget_finalization FILE [TARGET_CHARS] rewrites the message
+# history FILE for a finalization call that would not fit the prompt-token
+# budget whole (prompt-token budget design, amendment 2026-09-28, D4).
+#
+# The first two messages (system, task) stay verbatim. Everything after them —
+# except a trailing user message, which is the pending finalization instruction
+# — is flattened into ONE user message: the model's own notes (assistant text,
+# up to 3000 chars each), one line per tool call (name + 300 chars of args), a
+# head preview of each tool result (the results share what is left of the
+# target, floor 300 each), and harness notes (1000 chars each).
+#
+# Flattening, not stubbing: no tool_calls/tool pairing survives to be orphaned,
+# so the request is valid on every provider whatever it held before.
+#
+# Incident: task_20260928151317_04e71d8e65b50d3c — the finalization call was the
+# largest request of the step, so it was always the one over budget.
+compact_for_budget_finalization() {
+    local file="$1" target="${2:-$BUDGET_FINALIZE_TRANSCRIPT_CHARS}"
+    case "$target" in
+        ""|*[!0-9]*) target=40000 ;;
+    esac
+    python3 - "$file" "$target" <<'PY'
+import json
+import os
+import sys
+
+path, target = sys.argv[1], int(sys.argv[2])
+with open(path, "r", encoding="utf-8") as f:
+    messages = json.load(f)
+if len(messages) <= 2:
+    raise SystemExit(0)
+
+head, rest = messages[:2], messages[2:]
+tail = []
+if rest and rest[-1].get("role") == "user":
+    tail = [rest[-1]]
+    rest = rest[:-1]
+if not rest:
+    raise SystemExit(0)
+
+ASSISTANT_CAP, ARGS_CAP, NOTE_CAP, RESULT_FLOOR = 3000, 300, 1000, 300
+
+
+def text_of(content):
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        return "\n".join(p.get("text", "") for p in content if isinstance(p, dict))
+    return ""
+
+
+def clip(s, n):
+    s = s.strip()
+    if len(s) <= n:
+        return s
+    return s[:n] + f" [...{len(s) - n} more chars omitted]"
+
+
+fixed, results = [], 0
+for m in rest:
+    role = m.get("role")
+    if role == "assistant":
+        fixed.append(min(len(text_of(m.get("content"))), ASSISTANT_CAP))
+        fixed.append(sum(ARGS_CAP + 40 for _ in (m.get("tool_calls") or [])))
+    elif role == "tool":
+        results += 1
+    else:
+        fixed.append(min(len(text_of(m.get("content"))), NOTE_CAP))
+share = RESULT_FLOOR
+if results:
+    share = max(RESULT_FLOOR, (target - sum(fixed)) // results)
+
+lines = [
+    "WORK SO FAR (compacted by the harness to fit this step's prompt-token budget; "
+    "tool results are shown as head previews only and cannot be re-read in this final turn):",
+]
+for m in rest:
+    role = m.get("role")
+    if role == "assistant":
+        t = text_of(m.get("content"))
+        if t.strip():
+            lines.append("[your notes]\n" + clip(t, ASSISTANT_CAP))
+        for call in m.get("tool_calls") or []:
+            fn = call.get("function") or {}
+            lines.append(f"[you called {fn.get('name', '?')}] " + clip(str(fn.get("arguments", "")), ARGS_CAP))
+    elif role == "tool":
+        lines.append(f"[result of {m.get('tool_call_id', '?')}]\n" + clip(text_of(m.get("content")), share))
+    else:
+        t = text_of(m.get("content"))
+        if t.strip():
+            lines.append("[harness note]\n" + clip(t, NOTE_CAP))
+
+out = head + [{"role": "user", "content": "\n\n".join(lines)}] + tail
+tmp = path + ".tmp"
+with open(tmp, "w", encoding="utf-8") as f:
+    json.dump(out, f, ensure_ascii=False, separators=(",", ":"))
+    f.write("\n")
+os.replace(tmp, path)
+PY
+}
+
+# --- Budget finalization (prompt-token budget design, amendment 2026-09-28) ---
+#
+# Incident task_20260928151317_04e71d8e65b50d3c: five researcher attempts each
+# gathered ~20 iterations of real findings, then the gate made its ONE tool-free
+# finalization call, the model answered in prose, the schema re-ask was REFUSED
+# ("would be exceeded again before a final answer"), and the step's whole work
+# was lost to schema_violation. The functions below implement the fix: reserve
+# headroom for finalization (D2), and run finalization as a short bounded
+# sequence of calls the gate never refuses, compacting the context when the
+# whole conversation would not fit (D3, D4).
+
+# schema_answer_owed RESPONSE_FORMAT — true when the step must end on a
+# structured answer: a response_format directive, or the forced emit tool.
+schema_answer_owed() {
+    [ -n "${1:-}" ] && return 0
+    [ "${VORNIK_EMIT_TOOL_FINALIZE:-0}" = "1" ] && [ -n "${EMIT_TOOL_NAME:-}" ]
+}
+
+# output_contract_write_pending TOOLS_FILE — true when the step declares an
+# output file that is not written yet AND file_write is among its tools, i.e.
+# when a finalization "write" turn could still satisfy the contract.
+output_contract_write_pending() {
+    [ -n "${REQUIRE_OUTPUT_GLOB:-}" ] || return 1
+    output_contract_satisfied && return 1
+    jq -e 'any(.[]; .function.name == "file_write")' "$1" >/dev/null 2>&1
+}
+
+# budget_answer_tools OUT — writes the answer turn's tools array to OUT and
+# prints the name of the tool to force, if any: the emit tool when forced-emit
+# finalization is enabled (the same mechanism ordinary schema finalization
+# uses), otherwise an empty array so response_format applies.
+budget_answer_tools() {
+    local out="$1"
+    if [ "${VORNIK_EMIT_TOOL_FINALIZE:-0}" = "1" ] && [ -n "${EMIT_TOOL_NAME:-}" ]; then
+        emit_tool_definitions "$out"
+        printf '%s' "$EMIT_TOOL_NAME"
+    else
+        printf '[]\n' > "$out"
+    fi
+}
+
+budget_answer_instruction() {
+    printf '%s' "Prompt-token budget: this step has used nearly all of its prompt-token budget, so the tool phase is over and no tools are available. Using only the evidence above, produce your final answer now, in the required output format, with every required field. If your findings are incomplete, say so explicitly inside the answer (mark it partial and state the gaps) rather than omitting fields."
+}
+
+budget_write_instruction() {
+    printf 'Prompt-token budget: this step has used nearly all of its prompt-token budget, so the tool phase is over. This step must produce a file matching %s and it has not been written yet. Call file_write ONCE now to write it in full from the evidence you already have. You will then be asked for the final answer.' "${REQUIRE_OUTPUT_GLOB:-}"
+}
+
+budget_reask_instruction() {
+    printf '%s' "Your previous reply did not contain the JSON object this step requires. Reply with ONLY that JSON object, with every required field, built from the evidence above. Do not call tools."
+}
+
+# append_user_message MSGS_FILE TEXT
+append_user_message() {
+    local file="$1"
+    jq --arg c "$2" '. + [{"role":"user","content":$c}]' "$file" > "$file.tmp" && mv "$file.tmp" "$file"
+}
+
+# budget_finalization_reserve MSGS TOOLS SCHEMA_NAME RESPONSE_FORMAT
+# RESPONSE_SCHEMA — prints the prompt tokens to hold back for finalization (D2):
+# the compacted answer request built from the conversation as it stands, times
+# the mandatory finalization turns, plus the write turn's output (it becomes
+# part of the answer turn's prompt) when an output file is still owed.
+budget_finalization_reserve() {
+    local msgs="$1" tools="$2" schema_name="$3" rf="$4" rs="${5:-null}"
+    local m="$WORKSPACE/.budget_reserve_msgs.json" t="$WORKSPACE/.budget_reserve_tools.json" r="$WORKSPACE/.budget_reserve_request.json"
+    local force est calls=1 extra=0
+    cp "$msgs" "$m"
+    compact_for_budget_finalization "$m"
+    append_user_message "$m" "$(budget_answer_instruction)"
+    force=$(budget_answer_tools "$t")
+    build_llm_request_file "$r" "$m" "$t" "$schema_name" "$rf" "$rs" "$force"
+    est=$(request_file_tokens "$r")
+    if output_contract_write_pending "$tools"; then
+        calls=2
+        extra="${LLM_MAX_TOKENS:-0}"
+        case "$extra" in ""|*[!0-9]*) extra=0 ;; esac
+    fi
+    rm -f "$m" "$t" "$r"
+    printf '%s' "$(( est * calls + extra ))"
+}
+
+# budget_finalization_request REQ MSGS TOOLS SCHEMA_NAME RESPONSE_FORMAT
+# RESPONSE_SCHEMA BASE BUDGET — prepares and builds the next finalization call
+# into REQ (D3): a "write" turn first when an output file is owed, then the
+# "answer" turn. Appends the turn's instruction to MSGS, and compacts MSGS once
+# (D4) when the whole conversation would cross the budget. Sets
+# BUDGET_FINALIZE_KIND. The gate never refuses what this builds.
+budget_finalization_request() {
+    local req="$1" msgs="$2" tools="$3" schema_name="$4" rf="$5" rs="${6:-null}" base="$7" budget="$8"
+    local fin_tools="$WORKSPACE/.budget_final_tools.json" force="" est
+    if [ "${BUDGET_FINALIZE_WRITE_TRIED:-0}" = "0" ] && output_contract_write_pending "$tools"; then
+        BUDGET_FINALIZE_KIND="write"
+        BUDGET_FINALIZE_WRITE_TRIED=1
+        jq '[.[] | select(.function.name == "file_write")]' "$tools" > "$fin_tools"
+        force="file_write"
+        append_user_message "$msgs" "$(budget_write_instruction)"
+    else
+        BUDGET_FINALIZE_KIND="answer"
+        force=$(budget_answer_tools "$fin_tools")
+        if [ "${BUDGET_FINALIZE_ANSWER_ASKED:-0}" = "0" ]; then
+            BUDGET_FINALIZE_ANSWER_ASKED=1
+            append_user_message "$msgs" "$(budget_answer_instruction)"
+        fi
+    fi
+    build_llm_request_file "$req" "$msgs" "$fin_tools" "$schema_name" "$rf" "$rs" "$force"
+    est=$(request_file_tokens "$req")
+    if [ $(( base + est )) -gt "$budget" ] && [ "${BUDGET_CONTEXT_COMPACTED:-0}" = "0" ]; then
+        BUDGET_CONTEXT_COMPACTED=1
+        compact_for_budget_finalization "$msgs"
+        build_llm_request_file "$req" "$msgs" "$fin_tools" "$schema_name" "$rf" "$rs" "$force"
+        log "prompt-token budget finalization: context compacted for the $BUDGET_FINALIZE_KIND turn ($est -> $(request_file_tokens "$req") estimated prompt tokens; base=$base budget=$budget)"
+    fi
 }
 
 # in_recovery_hop reports whether this step is a lead RECOVERY hop — the
@@ -650,6 +1014,17 @@ write_result() {
         }')
     rm -f "$tool_audit_f" "$artifacts_f" "$error_f"
 
+    # usage.memory_peak_bytes (agent container memory limits design §2.3a):
+    # the daemon cannot read it, because the cgroup is torn down when the
+    # container exits. Added by its own step, only when known: every field
+    # above defaults to 0, and a 0 here would read as a measurement.
+    local _peak
+    if _peak=$(container_memory_peak); then
+        base_result=$(guard_result_update \
+            "$(printf '%s' "$base_result" | jq -c --argjson p "$_peak" '.usage.memory_peak_bytes = $p' 2>/dev/null)" \
+            "$base_result" 'memory peak')
+    fi
+
     # Merge structured LLM response into result.json so workflow gates can
     # match fields like "review.approved == true". Handles pure JSON, JSON
     # wrapped in markdown code fences, and mixed text with embedded JSON.
@@ -669,35 +1044,8 @@ write_result() {
     # paths that were already unusual.
     local merge_src="${response:-$message}"
     if [ -n "$merge_src" ]; then
-        local structured=""
-        # Pass 1: pure JSON object
-        if printf '%s' "$merge_src" | jq -e 'type == "object"' >/dev/null 2>&1; then
-            structured="$merge_src"
-        else
-            # Pass 2: markdown code fences (```json ... ``` or ``` ... ```)
-            local stripped
-            stripped=$(printf '%s' "$merge_src" | sed -n '/^```/,/^```/{/^```/d;p;}')
-            if [ -n "$stripped" ] && printf '%s' "$stripped" | jq -e 'type == "object"' >/dev/null 2>&1; then
-                structured="$stripped"
-            fi
-        fi
-        # Pass 3: extract first {...} substring from mixed text, handling
-        # multi-line JSON by collapsing newlines before greedy matching.
-        if [ -z "$structured" ]; then
-            local extracted
-            # Collapse newlines so { ... } spans work across lines.
-            # `|| true`: grep exits 1 when the text holds no braces at all, and
-            # under `set -o pipefail` that aborts the whole agent through the
-            # exit trap ("unexpected exit (code 1), writing emergency result").
-            # Latent while this block was reachable only for a non-empty
-            # RESPONSE that had already failed passes 1 and 2; reading $message
-            # as a fallback (2026-08-19) makes prose-only answers reach here,
-            # and prose-only is the common case for a bail path.
-            extracted=$(printf '%s' "$merge_src" | tr '\n' ' ' | grep -o '{.*}' | tail -1 || true)
-            if [ -n "$extracted" ] && printf '%s' "$extracted" | jq -e 'type == "object"' >/dev/null 2>&1; then
-                structured="$extracted"
-            fi
-        fi
+        local structured
+        structured=$(extract_structured_json "$merge_src")
         if [ -n "$structured" ]; then
             # merge_structured_result cannot return empty when $structured
             # parses, so the answer can no longer be lost here. It handles the
@@ -1223,6 +1571,11 @@ trim_expanded_mcp_tools() {
 
 rebuild_tools_file() {
     local builtin_tools_file="$1" mcp_tools_file="$2" expanded_names_file="$3" pinned_names_file="$4" tools_file="$5"
+    # config.toolFree: nothing is offered, not even current_time (LLD 09 §3).
+    if [ "${TOOL_FREE:-0}" = "1" ]; then
+        printf '[]\n' > "$tools_file"
+        return 0
+    fi
     local mcp_count
     mcp_count=$(jq 'length' "$mcp_tools_file" 2>/dev/null || echo 0)
 
@@ -1319,13 +1672,30 @@ handle_tool_result_read() {
         echo "ERROR: no saved tool result for tool_call_id=$tool_call_id"
         return
     fi
-    local size
+    # Paged (tool-result hygiene design, amendment 2026-09-28): a fresh result
+    # enters the conversation capped at the context cap with a pointer to the
+    # next offset, so this must be able to read PAST the first page — before,
+    # it could only ever return the first TOOL_RESULT_MAX_BYTES.
+    local offset page size
+    offset=$(printf '%s' "$params" | jq -r '.offset // 0 | tostring' 2>/dev/null)
+    case "$offset" in
+        ""|*[!0-9]*) offset=0 ;;
+    esac
+    page=$(tool_result_context_cap)
+    if [ "$page" -le 0 ] 2>/dev/null; then
+        page="$TOOL_RESULT_MAX_BYTES"
+    fi
     size=$(wc -c < "$path")
-    if [ "$size" -gt "$TOOL_RESULT_MAX_BYTES" ]; then
-        head -c "$TOOL_RESULT_MAX_BYTES" "$path"
-        printf '\n\n[... truncated at %d bytes by tool_result_read, total %d bytes]' "$TOOL_RESULT_MAX_BYTES" "$size"
-    else
-        cat "$path"
+    if [ "$offset" -gt 0 ] && [ "$offset" -ge "$size" ]; then
+        echo "ERROR: offset $offset is past the end of the saved result ($size bytes)"
+        return
+    fi
+    local page_file="$WORKSPACE/.tool_result_read_page" end
+    end=$(utf8_slice "$path" "$offset" "$page" "$page_file")
+    cat "$page_file"
+    rm -f "$page_file"
+    if [ "$end" -lt "$size" ]; then
+        printf '\n\n[... truncated at %d bytes by tool_result_read, total %d bytes; call tool_result_read again with offset=%d to read further]' "$end" "$size" "$end"
     fi
 }
 
@@ -2174,6 +2544,29 @@ main() {
     MAX_PROMPT_TOKENS_ACTUAL=0
     PROMPT_TOKEN_BUDGET_FINAL_CALL=0
     PROMPT_TOKEN_BUDGET_DETAIL=""
+    # Budget finalization state (prompt-token budget design, amendment
+    # 2026-09-28). TOTAL_PROMPT_TOKENS_BUDGETED is the gate's base: reported
+    # usage per call where the provider gave one, the estimate otherwise.
+    TOTAL_PROMPT_TOKENS_BUDGETED=0
+    PROMPT_TOKEN_BUDGET_WARNED=0
+    BUDGET_FINALIZE_CALLS=0
+    BUDGET_FINALIZE_KIND=""
+    BUDGET_FINALIZE_WRITE_TRIED=0
+    BUDGET_FINALIZE_ANSWER_ASKED=0
+    BUDGET_FINALIZE_REASKED=0
+    BUDGET_CONTEXT_COMPACTED=0
+    # budget_finalization_request's tools scratch file is rebuilt per
+    # finalization but was never removed; do not let it outlive its task.
+    rm -f "${WORKSPACE:-/nonexistent}/.budget_final_tools.json"
+    # Finalization flags live in the shell, and warm mode runs main() once per
+    # task in the SAME shell: without these resets a task inherited the previous
+    # task's "finalization already happened" state.
+    SCHEMA_FINALIZE_PENDING=0
+    EMIT_FORCE_ACTIVE=0
+    TOOL_PHASE_HAPPENED=0
+    NO_TOOL_NUDGE_SENT=0
+    OUTPUT_CONTRACT_NUDGED=0
+    PLAUSIBILITY_NUDGED=0
     BUDGET_TRIPWIRE_DETAIL=""
     # Cumulative cost in USD across all iterations of this step.
     # Streamed to the daemon after every iteration so cancelled
@@ -2220,6 +2613,13 @@ main() {
     # was never told to write. Knowing the glob lets the agent notice and fix it
     # inside the same step instead of burning a shape-retry.
     REQUIRE_OUTPUT_GLOB=$(jq -r '.workflow.requireOutputGlob // ""' "$INPUT_FILE")
+    # config.toolFree (LLD 09 §3): this step is offered NO tools — the
+    # strict-adaptive route step. With no tools the no-tool nudge and schema
+    # finalization cannot fire and response_format applies on turn one; the
+    # 2026-09-28 router incident was the nudge re-asking a correct first answer.
+    # Re-derived on every main() so a warm container never carries it over.
+    TOOL_FREE=0
+    if jq -e '.config.toolFree == true' "$INPUT_FILE" >/dev/null 2>&1; then TOOL_FREE=1; fi
     # The role's gate-mode plausibility rules. Role-level, not step-level —
     # unlike requireOutputGlob above — because that is where they are declared.
     # See plausibility_violations for why the agent needs them at all.
@@ -2264,6 +2664,10 @@ main() {
     debug "task=$task_id role=$role step=$STEP_ID"
     debug "prompt: $prompt"
 
+    # A tool-free step keeps the prompt it was given (or a no-tools default):
+    # the default below and the tool-budget, time and memory sections all tell
+    # the model to call tools it is not offered. Restored after those sections.
+    local tool_free_system_prompt="$system_prompt"
     # Build system message
     if [ -z "$system_prompt" ]; then
         system_prompt="You are a $role agent in a software development workflow (step: $STEP_ID).
@@ -2320,6 +2724,9 @@ If the task depends on today's date, the current time, deadlines, market hours, 
 
 ## Project memory
 You have access to a memory_search tool that retrieves relevant findings from past tasks in this project. Search before starting new research to avoid duplicating work."
+    fi
+    if [ "${TOOL_FREE:-0}" = "1" ]; then
+        system_prompt="${tool_free_system_prompt:-You are a $role agent (step: $STEP_ID). You have no tools on this step: answer from the user message alone.}"
     fi
 
     # Check for input artifacts. Text artifacts get inlined into the
@@ -2409,7 +2816,9 @@ ${previous_result}
     # Discover MCP tools from the daemon proxy when available, otherwise
     # from project config written by the executor to /app/input/mcp.json.
     printf '[]' > "$mcp_tools_file"
-    if command -v mcp-bridge >/dev/null 2>&1 && { [ -n "${VORNIK_API_URL:-}" ] || [ -f "/app/input/mcp.json" ]; }; then
+    if [ "${TOOL_FREE:-0}" = "1" ]; then
+        log "tool-free step: no tools offered, MCP discovery skipped"
+    elif command -v mcp-bridge >/dev/null 2>&1 && { [ -n "${VORNIK_API_URL:-}" ] || [ -f "/app/input/mcp.json" ]; }; then
         log "MCP: discovering tools"
         if mcp_out=$(mcp-bridge discover 2>/tmp/mcp_discover_err); then
             printf '%s' "$mcp_out" > "$mcp_tools_file"
@@ -2719,7 +3128,11 @@ ${previous_result}
         local request
         request=$(cat "$req_file")
 
-        local req_size=${#request}
+        # Bytes, as sent (llm_call sends $request): ${#request} counted
+        # characters under a UTF-8 locale (cost-efficiency design §3,
+        # corrected 2026-10-01).
+        local req_size
+        req_size=$(byte_len "$request")
         local prompt_tokens_estimate visible_tools_count mcp_tools_count
         prompt_tokens_estimate=$(( (req_size + 2) / 3 ))
         visible_tools_count=$(jq 'length' "$tools_file" 2>/dev/null || echo 0)
@@ -2737,45 +3150,89 @@ ${previous_result}
         LAST_PROMPT_TOKENS_ESTIMATE="$prompt_tokens_estimate"
         log "preflight task_id=${task_id:-} execution_id=${execution_id:-} step_id=${STEP_ID:-} role=${role:-} iteration=$iteration request_bytes=$req_size prompt_tokens_estimate=$prompt_tokens_estimate context_size=${LLM_CONTEXT_SIZE:-0} max_tokens=${LLM_MAX_TOKENS:-0} visible_tools=$visible_tools_count mcp_catalog_tools=$mcp_tools_count"
 
+        # Prompt-token budget gate (prompt-token budget design; amendment
+        # 2026-09-28). The ceiling bounds the TOOL phase. Finalization is a
+        # short bounded sequence the gate never refuses — refusing it is what
+        # lost the whole step in task_20260928151317_04e71d8e65b50d3c.
         local step_prompt_budget prompt_tokens_budget_base projected_prompt_tokens
         step_prompt_budget=$(step_prompt_token_budget)
-        prompt_tokens_budget_base="${TOTAL_PROMPT_TOKENS:-0}"
-        if [ "${TOTAL_PROMPT_TOKENS_ESTIMATED:-0}" -gt "$prompt_tokens_budget_base" ] 2>/dev/null; then
-            prompt_tokens_budget_base="$TOTAL_PROMPT_TOKENS_ESTIMATED"
-        fi
+        # D1: reported usage per call where the provider gave one, the estimate
+        # otherwise — not max(actual_total, estimate_total), which let a bytes/3
+        # estimate running 13-70% high stop steps early.
+        prompt_tokens_budget_base="${TOTAL_PROMPT_TOKENS_BUDGETED:-0}"
         projected_prompt_tokens=$(( prompt_tokens_budget_base + prompt_tokens_estimate ))
-        if [ "$step_prompt_budget" -gt 0 ] && [ "$projected_prompt_tokens" -gt "$step_prompt_budget" ]; then
-            if [ "${PROMPT_TOKEN_BUDGET_FINAL_CALL:-0}" = "1" ]; then
-                PROMPT_TOKEN_BUDGET_DETAIL="step prompt-token budget ${step_prompt_budget} would be exceeded again before a final answer; cumulative_prompt_tokens=${TOTAL_PROMPT_TOKENS}; cumulative_prompt_tokens_estimate=${TOTAL_PROMPT_TOKENS_ESTIMATED}; next_prompt_tokens_estimate=${prompt_tokens_estimate}"
-                local last_content
-                last_content=$(jq -r 'map(select(.role=="assistant" and .content != null)) | last.content // "Step stopped before another LLM call because the per-step prompt-token budget was exhausted."' "$msgs_file")
-                write_result "COMPLETED" "$last_content" "" "$(get_duration)"
-                log "prompt-token budget stop: $PROMPT_TOKEN_BUDGET_DETAIL"
-                return 0
+        if [ "$step_prompt_budget" -gt 0 ]; then
+            if [ "${PROMPT_TOKEN_BUDGET_FINAL_CALL:-0}" != "1" ] && [ "${SCHEMA_FINALIZE_PENDING:-0}" != "1" ]; then
+                # D2: hold back what the finalization will cost.
+                # Built only once the budget is within reach: the compacted
+                # answer request is never larger than ~this request (it drops
+                # the tools array), so while base + 5*next + max_tokens is
+                # under budget, reserve + warning margin cannot reach it and
+                # the python/jq pass is skipped.
+                local finalize_reserve=0
+                if [ $(( projected_prompt_tokens + 5 * prompt_tokens_estimate + ${LLM_MAX_TOKENS:-0} )) -ge "$step_prompt_budget" ]; then
+                    finalize_reserve=$(budget_finalization_reserve "$msgs_file" "$tools_file" "$schema_name" "$response_format" "${response_schema:-null}")
+                fi
+                if [ $(( projected_prompt_tokens + finalize_reserve )) -gt "$step_prompt_budget" ]; then
+                    PROMPT_TOKEN_BUDGET_FINAL_CALL=1
+                    # The budget finalization IS the schema finalization: without
+                    # this the ordinary "re-ask tool-free" branch fires after it.
+                    SCHEMA_FINALIZE_PENDING=1
+                    log "prompt-token budget finalization: cumulative=$prompt_tokens_budget_base next_estimate=$prompt_tokens_estimate reserve=$finalize_reserve budget=$step_prompt_budget - ending the tool phase"
+                elif [ "${PROMPT_TOKEN_BUDGET_WARNED:-0}" = "0" ] && \
+                     [ $(( projected_prompt_tokens + 2 * prompt_tokens_estimate + finalize_reserve )) -gt "$step_prompt_budget" ]; then
+                    # About two tool rounds left: say so while tools are still
+                    # offered, so a required file can be written in time.
+                    PROMPT_TOKEN_BUDGET_WARNED=1
+                    log "prompt-token budget warning: cumulative=$prompt_tokens_budget_base next_estimate=$prompt_tokens_estimate reserve=$finalize_reserve budget=$step_prompt_budget"
+                    append_user_message "$msgs_file" "Prompt-token budget: this step has about two tool rounds of its prompt-token budget left. Stop gathering. If this step must write an output file, write it now; then give your final answer."
+                    build_llm_request_file "$req_file" "$msgs_file" "$step_tools_file" "$schema_name" "$response_format" "${response_schema:-null}" "$step_force_tool"
+                    request=$(cat "$req_file")
+                    req_size=$(byte_len "$request")
+                    prompt_tokens_estimate=$(( (req_size + 2) / 3 ))
+                    projected_prompt_tokens=$(( prompt_tokens_budget_base + prompt_tokens_estimate ))
+                fi
             fi
 
-            PROMPT_TOKEN_BUDGET_FINAL_CALL=1
-            log "prompt-token budget finalization: cumulative=$TOTAL_PROMPT_TOKENS cumulative_estimate=$TOTAL_PROMPT_TOKENS_ESTIMATED next_estimate=$prompt_tokens_estimate budget=$step_prompt_budget - making one tool-free final call"
-            jq --argjson budget "$step_prompt_budget" \
-               --argjson used "$prompt_tokens_budget_base" \
-               --argjson next "$prompt_tokens_estimate" \
-               '. + [{"role":"user","content":("Prompt-token budget: this step has used about " + ($used|tostring) + " prompt tokens, and the next request is estimated at " + ($next|tostring) + ", exceeding the per-step budget of " + ($budget|tostring) + ". Do not call tools. Summarize what you have, state any gaps, and produce the best final answer now.")}]' \
-               "$msgs_file" > "$msgs_file.tmp" && mv "$msgs_file.tmp" "$msgs_file"
-            printf '[]\n' > "$WORKSPACE/.empty_tools.json"
-            build_llm_request_file "$req_file" "$msgs_file" "$WORKSPACE/.empty_tools.json" "$schema_name" "$response_format" "${response_schema:-null}"
-            request=$(cat "$req_file")
-            req_size=${#request}
-            prompt_tokens_estimate=$(( (req_size + 2) / 3 ))
-            visible_tools_count=0
-            projected_prompt_tokens=$(( prompt_tokens_budget_base + prompt_tokens_estimate ))
+            if [ "${PROMPT_TOKEN_BUDGET_FINAL_CALL:-0}" = "1" ]; then
+                if [ "${BUDGET_FINALIZE_CALLS:-0}" -ge "$BUDGET_FINALIZE_MAX_CALLS" ]; then
+                    PROMPT_TOKEN_BUDGET_DETAIL="step prompt-token budget ${step_prompt_budget}: ${BUDGET_FINALIZE_CALLS} finalization turns used without a final answer; cumulative_prompt_tokens=${TOTAL_PROMPT_TOKENS}; cumulative_prompt_tokens_budgeted=${prompt_tokens_budget_base}; cumulative_prompt_tokens_estimate=${TOTAL_PROMPT_TOKENS_ESTIMATED}"
+                    local last_content
+                    last_content=$(jq -r 'map(select(.role=="assistant" and .content != null)) | last.content // "Step stopped before another LLM call because the per-step prompt-token budget was exhausted."' "$msgs_file")
+                    write_result "COMPLETED" "$last_content" "" "$(get_duration)"
+                    log "prompt-token budget stop: $PROMPT_TOKEN_BUDGET_DETAIL"
+                    return 0
+                fi
+                budget_finalization_request "$req_file" "$msgs_file" "$tools_file" "$schema_name" "$response_format" "${response_schema:-null}" "$prompt_tokens_budget_base" "$step_prompt_budget"
+                BUDGET_FINALIZE_CALLS=$(( ${BUDGET_FINALIZE_CALLS:-0} + 1 ))
+                request=$(cat "$req_file")
+                req_size=$(byte_len "$request")
+                prompt_tokens_estimate=$(( (req_size + 2) / 3 ))
+                visible_tools_count=$(jq '.tools | length' "$req_file" 2>/dev/null || echo 0)
+                projected_prompt_tokens=$(( prompt_tokens_budget_base + prompt_tokens_estimate ))
+                PROMPT_TOKEN_BUDGET_DETAIL="step prompt-token budget ${step_prompt_budget} ended the tool phase; finalization turn ${BUDGET_FINALIZE_CALLS} (${BUDGET_FINALIZE_KIND}); cumulative_prompt_tokens_before=${prompt_tokens_budget_base}; turn_prompt_tokens_estimate=${prompt_tokens_estimate}; projected_total=${projected_prompt_tokens}; context_compacted=${BUDGET_CONTEXT_COMPACTED}"
+                log "preflight finalization task_id=${task_id:-} execution_id=${execution_id:-} step_id=${STEP_ID:-} role=${role:-} iteration=$iteration kind=$BUDGET_FINALIZE_KIND turn=$BUDGET_FINALIZE_CALLS/$BUDGET_FINALIZE_MAX_CALLS request_bytes=$req_size prompt_tokens_estimate=$prompt_tokens_estimate context_size=${LLM_CONTEXT_SIZE:-0} max_tokens=${LLM_MAX_TOKENS:-0} visible_tools=$visible_tools_count mcp_catalog_tools=$mcp_tools_count"
+            elif [ "${SCHEMA_FINALIZE_PENDING:-0}" = "1" ] && [ "$projected_prompt_tokens" -gt "$step_prompt_budget" ] && \
+                 [ "${BUDGET_CONTEXT_COMPACTED:-0}" = "0" ]; then
+                # An ordinary schema finalization (the tool phase ended on its
+                # own) near the ceiling: compact and send it — never refuse it.
+                BUDGET_CONTEXT_COMPACTED=1
+                compact_for_budget_finalization "$msgs_file"
+                build_llm_request_file "$req_file" "$msgs_file" "$step_tools_file" "$schema_name" "$response_format" "${response_schema:-null}" "$step_force_tool"
+                request=$(cat "$req_file")
+                req_size=$(byte_len "$request")
+                log "schema finalization: context compacted to fit the prompt-token budget ($prompt_tokens_estimate -> $(( (req_size + 2) / 3 )) estimated prompt tokens; base=$prompt_tokens_budget_base budget=$step_prompt_budget)"
+                prompt_tokens_estimate=$(( (req_size + 2) / 3 ))
+                projected_prompt_tokens=$(( prompt_tokens_budget_base + prompt_tokens_estimate ))
+                PROMPT_TOKEN_BUDGET_DETAIL="step prompt-token budget ${step_prompt_budget}: schema finalization sent on a compacted context; cumulative_prompt_tokens_before=${prompt_tokens_budget_base}; final_prompt_tokens_estimate=${prompt_tokens_estimate}"
+            fi
             if [ "$req_size" -gt "${MAX_REQUEST_BYTES:-0}" ] 2>/dev/null; then
                 MAX_REQUEST_BYTES="$req_size"
             fi
             if [ "$prompt_tokens_estimate" -gt "${MAX_PROMPT_TOKENS_ESTIMATE:-0}" ] 2>/dev/null; then
                 MAX_PROMPT_TOKENS_ESTIMATE="$prompt_tokens_estimate"
             fi
-            PROMPT_TOKEN_BUDGET_DETAIL="step prompt-token budget ${step_prompt_budget} triggered a tool-free finalization call; cumulative_prompt_tokens_before_final=${TOTAL_PROMPT_TOKENS}; cumulative_prompt_tokens_estimate_before_final=${TOTAL_PROMPT_TOKENS_ESTIMATED}; final_prompt_tokens_estimate=${prompt_tokens_estimate}; projected_total=${projected_prompt_tokens}"
-            log "preflight finalization task_id=${task_id:-} execution_id=${execution_id:-} step_id=${STEP_ID:-} role=${role:-} iteration=$iteration request_bytes=$req_size prompt_tokens_estimate=$prompt_tokens_estimate context_size=${LLM_CONTEXT_SIZE:-0} max_tokens=${LLM_MAX_TOKENS:-0} visible_tools=$visible_tools_count mcp_catalog_tools=$mcp_tools_count"
+            LAST_PROMPT_TOKENS_ESTIMATE="$prompt_tokens_estimate"
         fi
 
         local response
@@ -2783,6 +3240,9 @@ ${previous_result}
         local resp_size=${#response}
         debug "received response ($resp_size bytes)"
         TOTAL_PROMPT_TOKENS_ESTIMATED=$((TOTAL_PROMPT_TOKENS_ESTIMATED + prompt_tokens_estimate))
+        # D1: what this call counts against the budget — its reported usage
+        # when the provider sent one (set below), else the estimate.
+        local _call_budget_tokens="$prompt_tokens_estimate"
 
         # Accumulate token usage for cost metrics. BAG echoes Bedrock's
         # usage block verbatim; missing fields default to 0. Do this before
@@ -2794,6 +3254,9 @@ ${previous_result}
             _cc=$(printf '%s' "$response" | jq -r '.usage.cache_creation_tokens // .usage.cache_creation_input_tokens // 0')
             _cr=$(printf '%s' "$response" | jq -r '.usage.cache_read_tokens // .usage.cache_read_input_tokens // .usage.prompt_tokens_details.cached_tokens // 0')
             TOTAL_PROMPT_TOKENS=$((TOTAL_PROMPT_TOKENS + _p))
+            if [ "$_p" -gt 0 ] 2>/dev/null; then
+                _call_budget_tokens="$_p"
+            fi
             TOTAL_COMPLETION_TOKENS=$((TOTAL_COMPLETION_TOKENS + _c))
             TOTAL_CACHE_CREATION_TOKENS=$((TOTAL_CACHE_CREATION_TOKENS + _cc))
             TOTAL_CACHE_READ_TOKENS=$((TOTAL_CACHE_READ_TOKENS + _cr))
@@ -2810,6 +3273,7 @@ ${previous_result}
             log "iteration=$iteration tokens_in=$_p tokens_out=$_c cache_write=$_cc cache_read=$_cr est_cost=\$$_est_cost (cumulative in=$TOTAL_PROMPT_TOKENS out=$TOTAL_COMPLETION_TOKENS cache_write=$TOTAL_CACHE_CREATION_TOKENS cache_read=$TOTAL_CACHE_READ_TOKENS)"
         fi
         TOTAL_ITERATIONS=$iteration
+        TOTAL_PROMPT_TOKENS_BUDGETED=$(( ${TOTAL_PROMPT_TOKENS_BUDGETED:-0} + _call_budget_tokens ))
 
         # LLM usage stream: cumulative numbers for this (task, step,
         # role) row, posted after every iteration with a deterministic
@@ -2978,6 +3442,40 @@ ${previous_result}
                     continue
                     ;;
             esac
+
+            # Budget finalization turn (prompt-token budget design, amendment
+            # 2026-09-28, D3). Handled BEFORE the ordinary finalization and
+            # nudge branches below: those either re-ask tool-free (which the
+            # budget finalization already is) or nudge the model to use tools
+            # it no longer has. What this adds is the one thing the incident
+            # lacked — when the answer carried no JSON, ask once more for ONLY
+            # the JSON instead of ending on the prose.
+            if [ "${PROMPT_TOKEN_BUDGET_FINAL_CALL:-0}" = "1" ]; then
+                local _fin_json
+                _fin_json=$(extract_structured_json "$content")
+                if [ -z "$_fin_json" ] && [ "${BUDGET_FINALIZE_CALLS:-0}" -lt "$BUDGET_FINALIZE_MAX_CALLS" ]; then
+                    if [ "${BUDGET_FINALIZE_KIND:-}" = "write" ]; then
+                        # Declined to write; move on to the answer turn.
+                        log "prompt-token budget finalization: the write turn answered without writing; asking for the final answer"
+                        printf '%s' "$response" | jq -c '[.choices[0].message]' > "$WORKSPACE/.final_msg.json"
+                        jq --slurpfile msg "$WORKSPACE/.final_msg.json" '. + $msg[0]' "$msgs_file" > "$msgs_file.tmp" \
+                            && mv "$msgs_file.tmp" "$msgs_file"
+                        continue
+                    fi
+                    if schema_answer_owed "$response_format" && [ "${BUDGET_FINALIZE_REASKED:-0}" = "0" ]; then
+                        BUDGET_FINALIZE_REASKED=1
+                        log "prompt-token budget finalization: the answer carried no JSON object; re-asking for the JSON only"
+                        printf '%s' "$response" | jq -c '[.choices[0].message]' > "$WORKSPACE/.final_msg.json"
+                        jq --slurpfile msg "$WORKSPACE/.final_msg.json" '. + $msg[0]' "$msgs_file" > "$msgs_file.tmp" \
+                            && mv "$msgs_file.tmp" "$msgs_file"
+                        append_user_message "$msgs_file" "$(budget_reask_instruction)"
+                        continue
+                    fi
+                fi
+                write_result "COMPLETED" "$content" "$content" "$(get_duration)"
+                log "completed on a prompt-token budget finalization turn ($BUDGET_FINALIZE_CALLS/$BUDGET_FINALIZE_MAX_CALLS, ${BUDGET_FINALIZE_KIND:-answer})"
+                return 0
+            fi
 
             # The tool phase suppressed response_format, because sending it
             # alongside tools makes tool calling impossible under guided
@@ -3180,6 +3678,22 @@ ${previous_result}
             # Per-call, not per-step: without the reset the first near-repeat
             # would brand every later call's result with the advisory.
             local near_repeat_warn=0
+            # A tool call answering a budget finalization turn that did not
+            # offer it (incident shape 2: retry 1 returned file_write with
+            # tools: []). Executed as before — it is within the role's grants
+            # and it counts as that turn — except on the LAST permitted turn,
+            # where nothing will ever read its result: only file_write, which
+            # still has an effect (the output contract), runs there.
+            if [ "${PROMPT_TOKEN_BUDGET_FINAL_CALL:-0}" = "1" ] && [ "${BUDGET_FINALIZE_KIND:-}" = "answer" ] && \
+               { [ -z "${EMIT_TOOL_NAME:-}" ] || [ "$tc_name" != "${EMIT_TOOL_NAME:-}" ]; }; then
+                if [ "${BUDGET_FINALIZE_CALLS:-0}" -ge "$BUDGET_FINALIZE_MAX_CALLS" ] && [ "$tc_name" != "file_write" ]; then
+                    log "prompt-token budget finalization: $tc_name called on the last tool-free finalization turn — not executed"
+                    tool_result="[not executed: the tool phase is over and this was the last finalization turn]"
+                    tc_cache_hit=1
+                else
+                    log "prompt-token budget finalization: $tc_name called on a tool-free finalization turn — executing it as that turn"
+                fi
+            fi
             if [ "$tc_name" = "file_read" ]; then
                 local rp_raw rp_abs
                 rp_raw=$(printf '%s' "$tc_args" | jq -r '.path // empty')
@@ -3507,6 +4021,27 @@ ${previous_result}
             local tool_msg_file="$WORKSPACE/.tool_msg.json"
             local tool_result_file="$WORKSPACE/.tool_result_raw"
             printf '%s' "$tool_result" > "$tool_result_file"
+            # Context cap for a FRESH result (tool-result hygiene design,
+            # amendment 2026-09-28). The stash written above holds the whole
+            # capture; the conversation gets the first page plus a pointer, so
+            # one fetched web page cannot ride every later request at full
+            # size. The stash's existence is the precondition: it proves
+            # hygiene is on and the id is safe, i.e. that the pointer resolves.
+            # tool_result_read is exempt — its output is already one page.
+            local _ctx_cap _ctx_total
+            _ctx_cap=$(tool_result_context_cap)
+            if [ "$_ctx_cap" -gt 0 ] && [ "$tc_name" != "tool_result_read" ] && \
+               [ -f "$WORKSPACE/.tool_results/${tc_id}.txt" ]; then
+                _ctx_total=$(wc -c < "$tool_result_file")
+                if [ "$_ctx_total" -gt "$_ctx_cap" ]; then
+                    local _ctx_end
+                    _ctx_end=$(utf8_slice "$tool_result_file" 0 "$_ctx_cap" "$tool_result_file.cap")
+                    printf '\n\n[tool result truncated for context: showing bytes 0-%d of %d. The full result is saved; call tool_result_read with tool_call_id="%s" and offset=%d to read further.]' \
+                        "$_ctx_end" "$_ctx_total" "$tc_id" "$_ctx_end" >> "$tool_result_file.cap"
+                    mv "$tool_result_file.cap" "$tool_result_file"
+                    log "tool result for $tc_name capped in context: $_ctx_total -> $_ctx_end bytes (full body in .tool_results/${tc_id}.txt, pageable with tool_result_read)"
+                fi
+            fi
             jq -n --arg id "$tc_id" --rawfile content "$tool_result_file" \
                 '{"role":"tool","tool_call_id":$id,"content":$content}' > "$tool_msg_file"
             jq --slurpfile msg "$tool_msg_file" '. + $msg' "$msgs_file" > "$msgs_file.tmp" && mv "$msgs_file.tmp" "$msgs_file"
@@ -3545,12 +4080,36 @@ ${previous_result}
        '. + [{"role":"user","content":("You have used all " + ($cap|tostring) + " of your tool calls and no more are available. Do not call tools. Using only what you already have, produce your best complete final answer now, in the required output format. If some part is unfinished, say so explicitly rather than omitting it.")}]' \
        "$msgs_file" > "$msgs_file.tmp" && mv "$msgs_file.tmp" "$msgs_file"
 
-    printf '[]\n' > "$WORKSPACE/.empty_tools.json"
-    local cap_req="$WORKSPACE/.cap_final_request.json" cap_resp cap_content=""
-    build_llm_request_file "$cap_req" "$msgs_file" "$WORKSPACE/.empty_tools.json" \
-        "${role}_result" "$response_format" "${response_schema:-null}"
+    # Same answer-turn shape as the budget finalization (prompt-token budget
+    # design, amendment 2026-09-28): the forced emit tool when that is how
+    # this role's schema binds, tool-free response_format otherwise — and,
+    # when a prompt-token budget is set and the whole conversation would
+    # cross it, the compacted context rather than the full one.
+    local cap_req="$WORKSPACE/.cap_final_request.json" cap_tools="$WORKSPACE/.cap_final_tools.json" cap_force cap_resp cap_content=""
+    cap_force=$(budget_answer_tools "$cap_tools")
+    build_llm_request_file "$cap_req" "$msgs_file" "$cap_tools" \
+        "${role}_result" "$response_format" "${response_schema:-null}" "$cap_force"
+    local cap_budget
+    cap_budget=$(step_prompt_token_budget)
+    if [ "$cap_budget" -gt 0 ] && [ "${BUDGET_CONTEXT_COMPACTED:-0}" = "0" ] && \
+       [ $(( ${TOTAL_PROMPT_TOKENS_BUDGETED:-0} + $(request_file_tokens "$cap_req") )) -gt "$cap_budget" ]; then
+        BUDGET_CONTEXT_COMPACTED=1
+        compact_for_budget_finalization "$msgs_file"
+        build_llm_request_file "$cap_req" "$msgs_file" "$cap_tools" \
+            "${role}_result" "$response_format" "${response_schema:-null}" "$cap_force"
+        log "iteration cap: context compacted to fit the prompt-token budget ($cap_budget)"
+    fi
     if cap_resp=$(llm_call "$(cat "$cap_req")" 2>/dev/null); then
         cap_content=$(printf '%s' "$cap_resp" | jq -r '.choices[0].message.content // ""' 2>/dev/null)
+        if [ -n "$cap_force" ]; then
+            # A forced emit call carries the answer in its arguments.
+            local cap_emit
+            cap_emit=$(printf '%s' "$cap_resp" | jq -c --arg n "$cap_force" \
+                '[.choices[0].message.tool_calls[]? | select(.function.name == $n) | .function.arguments | (fromjson? // .)] | first // empty | select(type == "object")' 2>/dev/null)
+            if [ -n "$cap_emit" ]; then
+                cap_content="$cap_emit"
+            fi
+        fi
     fi
 
     if [ -n "$cap_content" ]; then

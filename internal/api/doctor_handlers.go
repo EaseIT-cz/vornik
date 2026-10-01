@@ -15,6 +15,7 @@ import (
 	"vornik.io/vornik/internal/chat"
 	"vornik.io/vornik/internal/config"
 	"vornik.io/vornik/internal/featuredoctor"
+	"vornik.io/vornik/internal/mcp"
 	"vornik.io/vornik/internal/persistence"
 	"vornik.io/vornik/internal/pricing"
 	"vornik.io/vornik/internal/registry"
@@ -232,6 +233,18 @@ type DoctorHandlers struct {
 	// "leader-election not wired" when absent (SQLite branch
 	// or any deployment that hasn't migrated to 57).
 	leaderLockRepo persistence.DaemonLeaderLockRepository
+
+	// brokerActions backs stuck_broker_actions (broker write-actions design
+	// §5.4). Nil → the check reports SKIPPED.
+	brokerActions persistence.BrokerActionRepository
+
+	// mcpPending backs mcp_project_connections (MCP failed-connect recovery
+	// design, D4); mcpNow is its clock seam, set only by tests (nil means
+	// time.Now). Nil source → SKIPPED.
+	mcpPending func() (int, []mcp.PendingServer)
+	// mcpWithheld lists servers withheld at config resolution.
+	mcpWithheld func() []string
+	mcpNow      func() time.Time
 
 	// wiredWorkerIDs reports the singleton workers THIS process actually
 	// constructed an elector for. It is what lets daemon_leader_locks_health
@@ -581,6 +594,8 @@ func (h *DoctorHandlers) RunReportReadOnly(ctx context.Context) DoctorReport {
 	report.Checks = append(report.Checks, h.checkScraperProfileFreshness(ctx, fix))
 	report.Checks = append(report.Checks, h.checkGatewayHealthy(ctx, fix))
 	report.Checks = append(report.Checks, h.checkWebWritesInsecure(ctx, fix))
+	report.Checks = append(report.Checks, h.checkStuckBrokerActions(ctx))
+	report.Checks = append(report.Checks, h.checkMCPProjectConnections())
 	report.Checks = append(report.Checks, h.checkUnclassifiedShare(ctx))
 	appendTemplateDriftPointer(report.Checks)
 	issues := 0
@@ -665,6 +680,8 @@ func (h *DoctorHandlers) RunDoctor(w http.ResponseWriter, r *http.Request) {
 	report.Checks = append(report.Checks, h.checkScraperProfileFreshness(ctx, fix))
 	report.Checks = append(report.Checks, h.checkGatewayHealthy(ctx, fix))
 	report.Checks = append(report.Checks, h.checkWebWritesInsecure(ctx, fix))
+	report.Checks = append(report.Checks, h.checkStuckBrokerActions(ctx))
+	report.Checks = append(report.Checks, h.checkMCPProjectConnections())
 	report.Checks = append(report.Checks, h.checkUnclassifiedShare(ctx))
 	appendTemplateDriftPointer(report.Checks)
 

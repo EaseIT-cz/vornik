@@ -246,6 +246,7 @@ func TestExecutionStepOutcomeRepositoryRecordFinalizeListAndCounts(t *testing.T)
 	}
 	mock.ExpectExec(regexp.QuoteMeta("INSERT INTO execution_step_outcomes")).
 		WithArgs(outcome.ID, outcome.ProjectID, outcome.TaskID, outcome.ExecutionID, outcome.StepID, outcome.Role, outcome.Model, sqlmock.AnyArg(), outcome.Outcome, sqlmock.AnyArg(), outcome.ErrorClass, outcome.ErrorDetail, sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(),
+			sqlmock.AnyArg(), // migration 204: container_memory_peak_bytes
 			// migration 175: the three prompt hashes ('' when not recorded);
 			// migration 178: the two boundary-file hashes, same convention.
 			outcome.PromptHashes.System, outcome.PromptHashes.User, outcome.PromptHashes.Tools,
@@ -288,10 +289,10 @@ func TestExecutionStepOutcomeRepositoryRecordFinalizeListAndCounts(t *testing.T)
 			"finalized_at", "recorded_at", "hallucination_signals",
 			"complexity_tier", "effective_tool_budget", "tool_calls_used",
 			"untrusted_content_used", "untrusted_sources", "requires_review",
-			"container_exit_code",
+			"container_exit_code", "container_memory_peak_bytes",
 			"prompt_system_hash", "prompt_user_hash", "prompt_tools_hash",
 			"input_hash", "result_hash",
-		}).AddRow("out-1", projectID, "task-1", "exec-1", stepID, "coder", "gpt-test", nil, "ok", attr, "", "", duration, finalized, finalized, []byte(`[{"kind":"url"}]`), nil, nil, nil, false, nil, false, nil, "", "", "", "", ""))
+		}).AddRow("out-1", projectID, "task-1", "exec-1", stepID, "coder", "gpt-test", nil, "ok", attr, "", "", duration, finalized, finalized, []byte(`[{"kind":"url"}]`), nil, nil, nil, false, nil, false, nil, nil, "", "", "", "", ""))
 	list, err := repo.List(context.Background(), persistence.ExecutionStepOutcomeFilter{
 		ProjectID: &projectID, StepID: &stepID, PageSize: 10,
 	})

@@ -135,6 +135,21 @@ func (s *Server) featureFlags() map[string]bool {
 		// /a2a/v1/agents/. True only when the handler has been
 		// explicitly wired in service.Container.
 		"a2a-inbound": s.a2aHandler != nil,
+		// Privileged-work broker (design 2026-09-29 §9). A front-agent plugin
+		// offers broker workflows only when companion-broker is true, and
+		// long-polls result() only when companion-result-wait is true; on an
+		// older daemon both are absent and the plugin falls back to plain
+		// delegate + polling. companion-result-wait needs the wait hub, since
+		// without it wait_seconds is accepted and answered immediately.
+		"companion-broker":      s.apiKeyRepo != nil && s.projectRegistry != nil && s.taskCreator != nil && s.taskRepo != nil,
+		"companion-result-wait": s.taskRepo != nil && s.taskWaitHub != nil,
+		// Broker write-actions design §8: result/status carry actions and
+		// catalog carries proposes; true only when writes are on and the
+		// store is wired.
+		"companion-broker-actions": s.brokerActionsCapable(),
+		// Broker write-actions design §7a: delegate accepts notify and the
+		// companion pusher runs (the store is wired only where it does).
+		"companion-push": s.companionPushConfigs != nil,
 	}
 	return flags
 }

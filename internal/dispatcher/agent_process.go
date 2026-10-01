@@ -155,6 +155,9 @@ func (a *Agent) Process(ctx context.Context, req Request) (result Result) {
 	// Work on a local copy so the caller's slice is not mutated.
 	msgs := make([]chat.Message, len(req.Messages))
 	copy(msgs, req.Messages)
+	// Malformed citation markers in earlier replies seed the model to copy
+	// them (operator-profile-design.md, 2026-09-28).
+	sanitizeHistoryCitations(msgs)
 
 	activeProject := req.Project
 	// guardWarnings accumulates output-guard findings across every
@@ -189,6 +192,9 @@ func (a *Agent) Process(ctx context.Context, req Request) (result Result) {
 		}
 
 		assistantMsg := resp.Choices[0].Message
+		// A malformed citation marker on an intermediate (tool-calling) turn
+		// would seed the next iteration of this same call.
+		assistantMsg.Content = sanitizeCitationMarkers(assistantMsg.Content)
 		msgs = append(msgs, assistantMsg)
 
 		if len(assistantMsg.ToolCalls) == 0 {
@@ -196,7 +202,7 @@ func (a *Agent) Process(ctx context.Context, req Request) (result Result) {
 			// <think>/<reasoning> blocks gpt-oss-style models embed
 			// in-content so the user sees the answer, not the model's
 			// scratch pad.
-			text := stripReasoning(assistantMsg.Content)
+			text := sanitizeCitationMarkers(stripReasoning(assistantMsg.Content))
 			if text == "" {
 				text = "Done."
 			}
@@ -343,6 +349,9 @@ func (a *Agent) ProcessStreaming(ctx context.Context, req Request, onText chat.S
 
 	msgs := make([]chat.Message, len(req.Messages))
 	copy(msgs, req.Messages)
+	// Malformed citation markers in earlier replies seed the model to copy
+	// them (operator-profile-design.md, 2026-09-28).
+	sanitizeHistoryCitations(msgs)
 
 	activeProject := req.Project
 	var guardWarnings []GuardWarning
@@ -390,10 +399,13 @@ func (a *Agent) ProcessStreaming(ctx context.Context, req Request, onText chat.S
 		}
 
 		assistantMsg := resp.Choices[0].Message
+		// A malformed citation marker on an intermediate (tool-calling) turn
+		// would seed the next iteration of this same call.
+		assistantMsg.Content = sanitizeCitationMarkers(assistantMsg.Content)
 		msgs = append(msgs, assistantMsg)
 
 		if len(assistantMsg.ToolCalls) == 0 {
-			text := stripReasoning(assistantMsg.Content)
+			text := sanitizeCitationMarkers(stripReasoning(assistantMsg.Content))
 			if text == "" {
 				text = "Done."
 			}

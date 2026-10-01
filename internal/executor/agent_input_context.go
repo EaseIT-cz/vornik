@@ -219,7 +219,15 @@ func buildAgentContextMap(taskType, prompt string, timeContext currentDateTimeCo
 		// the second lock on the same rule.
 		suppressed := opts.suppressesGuidanceBlock
 		sp := opts.SystemPrompt
-		if !suppressed(promptblock.CanonicalContext) {
+		// A tool-free step (the strict-adaptive router) gets none of the
+		// blocks that describe tools or a workspace it does not have:
+		// canonical context ("read it before walking the workspace"), the
+		// skill index (fetched by a tool), tool budget, workspace git. The
+		// invariant reporting-integrity block below still applies. See
+		// 10-delegation-engine.md, "The route step is tool-free and
+		// schema-bound".
+		toolFree := opts.ToolFree
+		if !toolFree && !suppressed(promptblock.CanonicalContext) {
 			sp = composeSystemPromptWithCanonicalContext(sp, opts.CanonicalContext)
 		}
 		// Learned skills are operator-approved, so they ride the trusted
@@ -227,10 +235,12 @@ func buildAgentContextMap(taskType, prompt string, timeContext currentDateTimeCo
 		// context (LLD 2026-07-07-knowledge-skill-store-design §4). Not a
 		// daemon-authored block and so not suppressible here: an operator who
 		// wants fewer skills manages the skill store.
-		sp = composeSystemPromptWithSkillIndex(sp, opts.Skills)
+		if !toolFree {
+			sp = composeSystemPromptWithSkillIndex(sp, opts.Skills)
+		}
 		// Tool-budget guidance rides the binary, not the swarm preset, so an upgrade
 		// reaches every existing deployment's agents (see tool_grant_prompt.go).
-		if !suppressed(promptblock.ToolBudget) {
+		if !toolFree && !suppressed(promptblock.ToolBudget) {
 			sp = composeSystemPromptWithToolGrant(sp, opts.ToolGrantAvailable)
 		}
 		// Reporting integrity states an invariant every deployment enforces
@@ -249,7 +259,7 @@ func buildAgentContextMap(taskType, prompt string, timeContext currentDateTimeCo
 		// reporting integrity — switching it off would remove the explanation
 		// and leave the failure. Gated at all because, unlike that block, this
 		// one is FALSE on a deployment that mounts no worktree.
-		sp = composeSystemPromptWithWorkspaceGit(sp, opts.WorktreeGitReadOnly)
+		sp = composeSystemPromptWithWorkspaceGit(sp, opts.WorktreeGitReadOnly && !toolFree)
 		contextMap["systemPrompt"] = sp
 	}
 	// Adaptive candidate list — the lead picks a value from this slice

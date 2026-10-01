@@ -90,6 +90,7 @@ var Contract = map[string]MissBehavior{
 	"ExecutionRatingRepository.Get":                  MissErrNotFound, // *ExecutionRating
 	"ExecutionRepository.GetByTaskID":                MissErrNotFound, // *Execution
 	"StepPromptRepository.Get":                       MissErrNotFound, // *StepPrompt — a pruned or never-landed part
+	"BrokerActionRepository.Get":                     MissErrNotFound, // *BrokerAction
 	"ExecutionRepository.Get":                        MissErrNotFound, // *Execution
 	"ExecutionToolGrantRepository.Current":           MissErrNotFound, // *ExecutionToolGrant
 	"ExtractedDocumentRepository.GetByArtifact":      MissErrNotFound, // *ExtractedDocument

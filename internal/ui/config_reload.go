@@ -92,7 +92,7 @@ func (s *Server) applyConfigEdit(reason string) reloadResult {
 		case config.ReloadDeferred:
 			s.markRestartPending(reason)
 			return reloadResult{
-				Message: "Configuration saved to disk. A daemon restart is required to apply it (another reload is in progress or the reloader is busy).",
+				Message: "Configuration saved to disk. Another reload is in progress; this change is applied when that reload finishes. If this banner stays, the reloader is stuck: restart the daemon to apply it.",
 				Level:   "warning",
 			}
 		default: // ReloadFailed

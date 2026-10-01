@@ -68,7 +68,7 @@ func secretSpans(data []byte) ([]secretSpan, bool) {
 				k, v := n.Content[i], n.Content[i+1]
 				// k.Value is the DECODED key: quotes and tags are already
 				// gone, which is the whole reason for parsing.
-				if v.Kind == yaml.ScalarNode && isSecretBearing(inNamedSecrets, k.Value, v.Value) {
+				if (v.Kind == yaml.ScalarNode && isSecretBearing(inNamedSecrets, k.Value, v.Value)) || isSecretList(k, v) {
 					if span, ok := spanFor(lines, k, v); ok {
 						out = append(out, span)
 						continue
@@ -218,6 +218,181 @@ func residualSecret(sanitized []byte) (string, bool) {
 						return
 					}
 					continue
+				}
+				if isSecretList(k, v) {
+					found = k.Value // a placeholder is a scalar; a literal list survived
+					return
+				}
+				// A secret-named value reached through an alias: the text
+				// shows only `*name`, the literal sits at the anchor under a
+				// harmless key, and neither rule redacts it. Refuse the file.
+				if secretNamedValue(inNamedSecrets, k.Value) && aliasesLiteral(v) {
+					found = k.Value
+					return
+				}
+				walk(v, inNamedSecrets || strings.EqualFold(k.Value, "named_secrets"))
+			}
+		}
+	}
+	walk(&root, false)
+	return found, found != ""
+}
+
+// isSecretList reports whether a secret-named key holds a LIST carrying a
+// literal value anywhere inside it (`api_keys:`, `allowed_keys:`, a list of
+// lists, or a list of maps such as the legacy `api_keys: [{key: ...}]` form,
+// whose inner keys are not secret-shaped on their own). List items have no
+// key of their own, so the per-scalar rule never sees them; the list is
+// redacted whole, as one value. A list holding only env references is names,
+// not values, and stays editable. (Review of the 2026-10-01 external-scan fix:
+// the scalar-only rule let such lists through, residualSecret mirrored the
+// blind spot, and the first cut of this rule looked only at direct items.)
+func isSecretList(k, v *yaml.Node) bool {
+	if v.Kind != yaml.SequenceNode || !secrethygiene.IsSecretBearingName(k.Value) {
+		return false
+	}
+	// named_secrets is the one secret-named list with its own per-field rule
+	// (§10a: every item's `value` is replaced unconditionally, its `name`
+	// stays editable). Blanking it whole would hide the names and ${VAR}
+	// references the operator edits through the assistant.
+	if strings.EqualFold(k.Value, "named_secrets") {
+		return false
+	}
+	return hasLiteralScalar(v)
+}
+
+// hasLiteralScalar reports whether n holds, at any depth, a scalar that is
+// neither empty, an env reference, nor an issued placeholder. Mapping KEYS
+// are names and are skipped. Aliases are NOT followed here: the walker edits
+// text, so redacting `*name` would leave the anchor's literal in place;
+// residualSecret refuses that case instead (aliasesLiteral).
+func hasLiteralScalar(n *yaml.Node) bool {
+	switch n.Kind {
+	case yaml.ScalarNode:
+		iv := strings.TrimSpace(n.Value)
+		return iv != "" && !strings.HasPrefix(iv, "$") && !strings.Contains(iv, placeholderPrefix)
+	case yaml.SequenceNode:
+		for _, c := range n.Content {
+			if hasLiteralScalar(c) {
+				return true
+			}
+		}
+	case yaml.MappingNode:
+		for i := 1; i < len(n.Content); i += 2 {
+			if hasLiteralScalar(n.Content[i]) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// secretNamedValue reports whether a key's value is secret by NAME alone:
+// the shared token rule, or `value` inside named_secrets (§10a).
+func secretNamedValue(inNamedSecrets bool, key string) bool {
+	return (inNamedSecrets && strings.EqualFold(key, "value")) || secrethygiene.IsSecretBearingName(key)
+}
+
+// aliasesLiteral reports whether n reaches a literal scalar THROUGH an alias:
+// an alias anywhere in n (sequence items, mapping values; keys are names)
+// whose target holds, after following any further alias chain, a literal.
+// The walker never follows aliases (it edits text, and the alias text is
+// only `*name`), so this check must: the secret lives at the anchor, where
+// nothing redacts it. Round-3/4 reviews of the 2026-10-01 external-scan fix;
+// this predated the list rule (`api_key: *tok`).
+func aliasesLiteral(n *yaml.Node) bool {
+	return aliasReach(n, 0)
+}
+
+// maxAliasDepth bounds alias chasing; yaml.v3 refuses cyclic aliases, so this
+// is a backstop, and hitting it counts as reaching a literal (fail closed).
+const maxAliasDepth = 64
+
+func aliasReach(n *yaml.Node, depth int) bool {
+	if n == nil {
+		return false
+	}
+	if depth > maxAliasDepth {
+		return true
+	}
+	switch n.Kind {
+	case yaml.AliasNode:
+		return literalThroughAliases(n.Alias, depth+1)
+	case yaml.SequenceNode:
+		for _, c := range n.Content {
+			if aliasReach(c, depth) {
+				return true
+			}
+		}
+	case yaml.MappingNode:
+		for i := 1; i < len(n.Content); i += 2 { // values only: keys are names
+			if aliasReach(n.Content[i], depth) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// literalThroughAliases is hasLiteralScalar that also follows aliases, for
+// the alias check only. hasLiteralScalar itself must not follow them: the
+// walker would then redact the `*name` text and report the file clean while
+// the anchor's literal stayed in place.
+func literalThroughAliases(n *yaml.Node, depth int) bool {
+	if n == nil {
+		return false
+	}
+	if depth > maxAliasDepth {
+		return true
+	}
+	switch n.Kind {
+	case yaml.AliasNode:
+		return literalThroughAliases(n.Alias, depth+1)
+	case yaml.SequenceNode:
+		for _, c := range n.Content {
+			if literalThroughAliases(c, depth) {
+				return true
+			}
+		}
+	case yaml.MappingNode:
+		for i := 1; i < len(n.Content); i += 2 {
+			if literalThroughAliases(n.Content[i], depth) {
+				return true
+			}
+		}
+	default:
+		return hasLiteralScalar(n)
+	}
+	return false
+}
+
+// aliasedSecret reports the first secret-named key whose value reaches a
+// literal through an alias, judged on the ORIGINAL document. residualSecret
+// runs on the sanitised text and cannot see an alias the walker swallowed:
+// in `api_keys: [sk-lit, *tok]` the whole list becomes one placeholder, the
+// `*tok` text with it, and the anchor's literal is left in plain sight.
+func aliasedSecret(data []byte) (string, bool) {
+	var root yaml.Node
+	if err := yaml.Unmarshal(data, &root); err != nil || len(root.Content) == 0 {
+		return "", false
+	}
+	var found string
+	var walk func(n *yaml.Node, inNamedSecrets bool)
+	walk = func(n *yaml.Node, inNamedSecrets bool) {
+		if n == nil || found != "" {
+			return
+		}
+		switch n.Kind {
+		case yaml.DocumentNode, yaml.SequenceNode:
+			for _, c := range n.Content {
+				walk(c, inNamedSecrets)
+			}
+		case yaml.MappingNode:
+			for i := 0; i+1 < len(n.Content); i += 2 {
+				k, v := n.Content[i], n.Content[i+1]
+				if secretNamedValue(inNamedSecrets, k.Value) && aliasesLiteral(v) {
+					found = k.Value
+					return
 				}
 				walk(v, inNamedSecrets || strings.EqualFold(k.Value, "named_secrets"))
 			}

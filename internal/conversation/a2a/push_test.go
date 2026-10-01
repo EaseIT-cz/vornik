@@ -159,3 +159,31 @@ func TestValidateWebhookURL(t *testing.T) {
 		}
 	}
 }
+
+// review-20260930-5e5d F3: the companion push allowlist has its own
+// validator (companionpush.ValidateNotifyURL); this one, used by the A2A
+// submit path, still refuses every private literal.
+func TestValidateWebhookURL_StillRefusesPrivateAddresses(t *testing.T) {
+	for _, u := range []string{"http://192.168.1.20:8080/push", "http://10.0.0.5/", "http://[fd00::1]/", "http://100.64.1.1/"} {
+		if err := ValidateWebhookURL(u); err == nil {
+			t.Errorf("%s accepted; the A2A path must keep refusing private addresses", u)
+		}
+	}
+}
+
+// Broker write-actions design §7a: a companion-created task's push config is
+// served by the companion outbox, in its own envelope. The A2A pusher skips
+// it, so one config is served by one pusher.
+func TestPushNotifier_SkipsCompanionTasks(t *testing.T) {
+	allowLoopbackForTest(t)
+	got := &capturedPush{}
+	srv := pushServer(t, got)
+	defer srv.Close()
+	n := NewPushNotifier(fakePushRepo{cfg: &persistence.A2APushConfig{TaskID: "t1", URL: srv.URL}}, zerolog.Nop())
+	task := &persistence.Task{ID: "t1", CreationSource: persistence.TaskCreationSourceCompanion}
+	n.NotifyTaskCompleted(context.Background(), task, true, "done")
+	n.NotifySteeringRequired(context.Background(), task, "AWAITING_INPUT")
+	if got.count != 0 {
+		t.Fatalf("the A2A pusher sent %d pushes for a companion task", got.count)
+	}
+}

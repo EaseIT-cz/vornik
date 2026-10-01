@@ -8493,4 +8493,108 @@ DROP INDEX IF EXISTS idx_memory_chunks_document;
 ALTER TABLE project_ingest_queue DROP COLUMN IF EXISTS document_path;
 `,
 	},
+	{
+		Version: 201,
+		Name:    "api_keys_delegate_disabled",
+		// Broker design (https://docs.vornik.io
+		// privileged-work-broker-design.md) §8: a front agent's MEMORY key
+		// must not also be a delegate key. An empty allowed_workflows is
+		// refused at grant and NULL means "every workflow", so "no
+		// delegation" needs its own column. Additive, default FALSE: no
+		// existing key changes behaviour. SQLite gets it through schemaSQL
+		// and sqliteAdditiveColumns.
+		Up: `
+ALTER TABLE api_keys ADD COLUMN IF NOT EXISTS delegate_disabled BOOLEAN NOT NULL DEFAULT FALSE;
+`,
+		Down: `
+ALTER TABLE api_keys DROP COLUMN IF EXISTS delegate_disabled;
+`,
+	},
+	{
+		Version: 202,
+		Name:    "broker_actions",
+		// Broker write-actions design (https://docs.vornik.io
+		// write-actions-and-push-design.md) §5.2: one row per proposed write.
+		// UNIQUE (task_id, action_kind) makes staging idempotent; the status
+		// CHECK pins the closed state set. args_json / args_sha256 are written
+		// only while a row is unapprovable (see BrokerActionRepository.Stage).
+		// SQLite gets the same table through schemaSQL.
+		Up: `
+CREATE TABLE IF NOT EXISTS broker_actions (
+    action_id     TEXT PRIMARY KEY,
+    project_id    TEXT NOT NULL,
+    task_id       TEXT NOT NULL,
+    api_key_id    TEXT,
+    workflow_id   TEXT NOT NULL,
+    action_kind   TEXT NOT NULL,
+    tool          TEXT NOT NULL,
+    args_json     BYTEA NOT NULL,
+    args_sha256   TEXT NOT NULL,
+    status        TEXT NOT NULL CHECK (status IN ('staged','pending','approved','executing','executed','failed','rejected','expired','unknown','discarded','proposal_missing','proposal_invalid')),
+    approver      TEXT,
+    outcome_json  BYTEA,
+    outcome_class TEXT CHECK (outcome_class IS NULL OR outcome_class IN ('ok','tool_error','pre_send_error','timeout','transport_error','operator_resolved')),
+    created_at    TIMESTAMPTZ NOT NULL,
+    expires_at    TIMESTAMPTZ NOT NULL,
+    decided_at    TIMESTAMPTZ,
+    executed_at   TIMESTAMPTZ,
+    UNIQUE (task_id, action_kind)
+);
+CREATE INDEX IF NOT EXISTS idx_broker_actions_status ON broker_actions (status, project_id, created_at);
+`,
+		Down: `
+DROP INDEX IF EXISTS idx_broker_actions_status;
+DROP TABLE IF EXISTS broker_actions;
+`,
+	},
+	{
+		Version: 203,
+		Name:    "companion_push_outbox",
+		// Broker write-actions design §7a: completion push is an outbox.
+		// pushed_state records the name last pushed (the task status on
+		// a2a_push_configs; the §6 front state on broker_actions). Existing
+		// rows are marked as already pushed so an upgrade does not push a
+		// backlog. The mapping is the §6 front state: pending, and staged of a
+		// COMPLETED task, are pending_approval; staged of an unfinished task
+		// stays NULL and is pushed once when promoted (review-20260930-c6b5 F1).
+		Up: `
+ALTER TABLE a2a_push_configs ADD COLUMN IF NOT EXISTS pushed_state TEXT;
+ALTER TABLE broker_actions ADD COLUMN IF NOT EXISTS pushed_state TEXT;
+UPDATE a2a_push_configs c SET pushed_state = t.status::text FROM tasks t WHERE t.id = c.task_id AND c.pushed_state IS NULL;
+UPDATE broker_actions a SET pushed_state = CASE
+    WHEN a.status = 'pending' THEN 'pending_approval'
+    WHEN a.status = 'staged' AND EXISTS (SELECT 1 FROM tasks t WHERE t.id = a.task_id AND t.status::text = 'COMPLETED') THEN 'pending_approval'
+    WHEN a.status = 'staged' THEN NULL
+    ELSE a.status END
+ WHERE a.pushed_state IS NULL;
+`,
+		Down: `
+ALTER TABLE broker_actions DROP COLUMN IF EXISTS pushed_state;
+ALTER TABLE a2a_push_configs DROP COLUMN IF EXISTS pushed_state;
+`,
+	},
+	{
+		Version: 204,
+		Name:    "step_outcome_container_memory_peak",
+		// The agent container's cgroup memory high-water mark, as the
+		// container reported it in result.json. The daemon cannot read it
+		// itself: the cgroup is torn down when the container exits, before
+		// RemoveContainer. NULL = not reported (an OOM kill, a crash, a warm
+		// container whose peak spans tasks, an untrusted read) and is never
+		// defaulted. A distribution read from this column understates the
+		// tail unless OOM kills (vornik_runtime_container_oom_kills_total)
+		// are counted beside it. BIGINT: a real peak exceeds 2^31.
+		//
+		// Design: https://docs.vornik.io §2.3a
+		Up: `
+ALTER TABLE execution_step_outcomes
+    ADD COLUMN IF NOT EXISTS container_memory_peak_bytes BIGINT;
+COMMENT ON COLUMN execution_step_outcomes.container_memory_peak_bytes IS
+    'Agent container cgroup memory.peak as the container reported it; NULL = not reported (OOM kill, crash, warm reuse, untrusted read). Count OOM kills beside it or the tail is understated.';
+`,
+		Down: `
+ALTER TABLE execution_step_outcomes
+    DROP COLUMN IF EXISTS container_memory_peak_bytes;
+`,
+	},
 }

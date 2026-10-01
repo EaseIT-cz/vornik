@@ -22,6 +22,10 @@ import (
 	"strings"
 	"time"
 
+	"vornik.io/vornik/internal/brokeractions"
+	"vornik.io/vornik/internal/companionpush"
+	"vornik.io/vornik/internal/mcp"
+
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/rs/zerolog"
 	"vornik.io/vornik/internal/admin"
@@ -52,6 +56,7 @@ import (
 	"vornik.io/vornik/internal/retention"
 	"vornik.io/vornik/internal/slack"
 	"vornik.io/vornik/internal/taskcreate"
+	"vornik.io/vornik/internal/taskwait"
 	"vornik.io/vornik/internal/telemetryclient"
 	"vornik.io/vornik/internal/templates"
 	"vornik.io/vornik/internal/tradingauth"
@@ -410,6 +415,24 @@ func (c *Container) initHTTPServer() error {
 	apiOpts = append(apiOpts, api.WithBacklogStore(c.BacklogStore))
 	if c.Executor != nil {
 		apiOpts = append(apiOpts, api.WithExecutor(c.Executor))
+		// Companion result(wait_seconds): released by the executor's own
+		// terminal transitions, via an observer rather than the completion
+		// notifier, which the chat subsystems replace wholesale and which is
+		// absent on a daemon with no chat channel (broker design §6).
+		waitHub := taskwait.New()
+		c.Executor.AddCompletionObserver(waitHub)
+		apiOpts = append(apiOpts, api.WithTaskWaitHub(waitHub))
+	}
+	// Broker write actions seen by front agents (broker write-actions design
+	// §6): the actions array in companion result/status and the
+	// companion-broker-actions capability flag.
+	if c.repos != nil && c.repos.BrokerActions != nil {
+		apiOpts = append(apiOpts, api.WithBrokerActionRepository(c.repos.BrokerActions))
+	}
+	// delegate's notify and companion-push, exactly where the pusher runs
+	// (design §7a).
+	if c.companionPushWired() {
+		apiOpts = append(apiOpts, api.WithCompanionPushConfigs(c.repos.A2APushConfigs))
 	}
 	// Shared per-project workspace lock — same instance the executor +
 	// UI server hold. Stored on the api server for the git-over-HTTPS
@@ -676,6 +699,17 @@ func (c *Container) initHTTPServer() error {
 		// EVERY backend, including sqlite, which never re-runs the postgres-only
 		// repo rebuild. Attach is idempotent; this block runs twice.
 		c.auditRedactMetrics.Attach(reg, &c.Logger)
+		// Broker action series (vornik_broker_actions_*), same Attach rule:
+		// the worker is built in Run, after both initHTTPServer passes.
+		if c.brokerActionMetrics == nil {
+			c.brokerActionMetrics = brokeractions.NewMetrics()
+		}
+		c.brokerActionMetrics.Attach(reg, &c.Logger)
+		// vornik_companion_push_total, same Attach rule (design §7a).
+		if c.companionPushMetrics == nil {
+			c.companionPushMetrics = companionpush.NewMetrics()
+		}
+		c.companionPushMetrics.Attach(reg)
 		// The §5.3 legacy-grant counter, same Attach rule and for the same
 		// reason: the holder is created during subsystem init, before any
 		// registry exists. This counter IS the removal gate ("14 consecutive
@@ -1550,6 +1584,11 @@ func (c *Container) initHTTPServer() error {
 
 	apiServer := api.NewServer(apiOpts...)
 	c.apiServer = apiServer
+	// The webhook and backlog-deposit checkpoints record their findings too
+	// (secret-leak Phase 3 design, "the remaining sinks").
+	if c.repos != nil && c.repos.SecretRedaction != nil {
+		apiServer.SetSecretRedactionAudit(c.repos.SecretRedaction)
+	}
 
 	// Gate the post-task skill distiller against near-duplicates (LLD §12.2).
 	// Wired HERE rather than as an executor Option because the checker is
@@ -1654,6 +1693,18 @@ func (c *Container) initHTTPServer() error {
 				return dependencyInventory(c.Registry, resolveProjectWorkspacePath(c.Config.Runtime.ProjectWorkspacePath), dir)
 			})
 		}
+		if c.repos != nil && c.repos.BrokerActions != nil {
+			dh.SetBrokerActionRepository(c.repos.BrokerActions)
+		}
+		// Read c.mcpManager at call time: the manager is created by initMCP,
+		// which may run after the handlers are built.
+		dh.SetMCPPendingSource(func() (int, []mcp.PendingServer) {
+			if c.mcpManager == nil {
+				return 0, nil
+			}
+			return c.mcpManager.PendingStatus()
+		})
+		dh.SetMCPWithheldSource(c.mcpWithheldServers)
 		if c.repos != nil && c.repos.LeaderLocks != nil {
 			dh.SetLeaderLockRepository(c.repos.LeaderLocks)
 			// Passed as a closure, evaluated per doctor run: the elector set
@@ -1876,6 +1927,14 @@ func (c *Container) initHTTPServer() error {
 	// Takes it (operator-chat-driven v1 — the assistant never holds the token).
 	// agent_run_id is unused in v1 (the pending row surfaces in /inbox regardless
 	// of task status), so the deliver closure ignores it.
+	// Broker write actions in /inbox (broker write-actions design §5.3). The
+	// kick reads c.brokerActionWorker at call time: the worker is built in
+	// Run, after this runs.
+	if c.repos != nil && c.repos.BrokerActions != nil {
+		uiOpts = append(uiOpts, ui.WithBrokerActions(c.repos.BrokerActions, func(actionID string) {
+			c.brokerActionWorker.Kick(actionID)
+		}), ui.WithBrokerActionChanged(func() { c.companionPusher.Kick() }))
+	}
 	if repo, store := c.webWriteComponents(); repo != nil {
 		uiOpts = append(uiOpts,
 			ui.WithWebWriteRepo(repo),

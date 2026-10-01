@@ -377,6 +377,59 @@ FOOTER="$(print_success_footer 2>&1)"
 case "$FOOTER" in *"vornikctl doctor"*) ok "footer names vornikctl doctor";; *) bad "footer missing 'vornikctl doctor': $FOOTER";; esac
 case "$FOOTER" in *"vornikctl report"*) ok "footer names vornikctl report";; *) bad "footer missing 'vornikctl report': $FOOTER";; esac
 
+echo "--- ensure_api_key (hardened-by-default seed, 2026-10-01) ---"
+# The seeded config requires an API key (vornik.host.yaml auth_enabled: true);
+# the external scan of 2026-10-01 found the old seed served the API to the LAN
+# unauthenticated. The key lands in secrets/api.env, the one file both the
+# daemon's loader and shell-env.sh source.
+K="$TMP/kcfg"; mkdir -p "$K"
+( ensure_api_key "$K" ) >/dev/null 2>&1
+if [ -f "$K/secrets/api.env" ]; then ok "key file created"; else bad "secrets/api.env not created"; fi
+mode="$(stat -c %a "$K/secrets/api.env" 2>/dev/null || stat -f %Lp "$K/secrets/api.env")"
+[ "$mode" = 600 ] && ok "key file is 0600" || bad "key file mode $mode, want 600"
+key1="$(sed -n 's/^VORNIK_API_KEY=//p' "$K/secrets/api.env")"
+case "$key1" in *[!0-9a-f]*|"") bad "key is not hex: '$key1'";; *) [ "${#key1}" -eq 64 ] && ok "key is 64 hex chars" || bad "key length ${#key1}, want 64";; esac
+( ensure_api_key "$K" ) >/dev/null 2>&1
+key2="$(sed -n 's/^VORNIK_API_KEY=//p' "$K/secrets/api.env")"
+[ "$key1" = "$key2" ] && ok "re-run preserves the key" || bad "re-run rotated the key"
+K2="$TMP/kcfg2"; mkdir -p "$K2"; printf 'VORNIK_API_KEY=operator-chosen\n' > "$K2/vornik.env"
+( ensure_api_key "$K2" ) >/dev/null 2>&1
+[ ! -e "$K2/secrets/api.env" ] && ok "an operator-set key in vornik.env is respected" || bad "generated a second key despite vornik.env"
+K3="$TMP/kcfg3"; mkdir -p "$K3"; printf 'VORNIK_API_KEY=\n' > "$K3/vornik.env"
+( ensure_api_key "$K3" ) >/dev/null 2>&1
+[ -f "$K3/secrets/api.env" ] && ok "an EMPTY key line does not count as set" || bad "empty VORNIK_API_KEY= treated as set"
+OUT="$(ensure_api_key "$TMP/kcfg4" 2>&1)"
+case "$OUT" in *"$(sed -n 's/^VORNIK_API_KEY=//p' "$TMP/kcfg4/secrets/api.env")"*) bad "ensure_api_key printed the key";; *) ok "key is never printed";; esac
+
+echo "--- fresh_db_install ---"
+# Randomise the DB password only when nothing could already hold the old one:
+# Postgres fixes it when the volume is initialised.
+make_stub podman 'echo podman_unrelated; exit 0'
+if isolated fresh_db_install "$TMP/no-such.env"; then ok "no deps .env + no volume ⇒ fresh"; else bad "fresh install not detected"; fi
+make_stub podman 'echo podman_vornik-postgres-data; exit 0'
+if isolated fresh_db_install "$TMP/no-such.env"; then bad "existing postgres volume treated as fresh"; else ok "existing volume ⇒ keep password"; fi
+make_stub podman 'exit 1'
+if isolated fresh_db_install "$TMP/no-such.env"; then bad "podman failure treated as fresh"; else ok "podman unusable ⇒ keep password (fail safe)"; fi
+make_stub podman 'exit 0'
+: > "$TMP/deps.env"
+if isolated fresh_db_install "$TMP/deps.env"; then bad "existing deps .env treated as fresh"; else ok "existing deps .env ⇒ keep password"; fi
+rm -f "$STUB/podman"
+
+echo "--- warn_auth_disabled ---"
+printf 'api:\n  auth_enabled: false\n' > "$TMP/old.yaml"
+W="$(warn_auth_disabled "$TMP/old.yaml" 2>&1)"
+case "$W" in *auth_enabled*) ok "auth-off config warns";; *) bad "no warning for auth-off config: $W";; esac
+printf 'api:\n  auth_enabled: true\n' > "$TMP/new.yaml"
+W="$(warn_auth_disabled "$TMP/new.yaml" 2>&1)"
+[ -z "$W" ] && ok "auth-on config is silent" || bad "warned on auth-on config: $W"
+
+echo "--- shipped host seed is hardened ---"
+SEED="$SCRIPT_DIR/config/vornik.host.yaml"
+grep -Eq '^  auth_enabled: true' "$SEED" && ok "seed requires an API key" || bad "vornik.host.yaml does not set api.auth_enabled: true"
+grep -Eq '^[[:space:]]+- "\$\{VORNIK_API_KEY\}"' "$SEED" && ok "seed takes the key from VORNIK_API_KEY" || bad "seed does not reference VORNIK_API_KEY"
+grep -Eq '^  writes: "?insecure' "$SEED" && bad "seed enables insecure web writes" || ok "seed leaves web writes off"
+grep -Eq 'insecure_http: true' "$SEED" && bad "seed enables plaintext A2A" || ok "seed has no plaintext A2A peer"
+
 echo "---"
 echo "PASS: $pass passed, $fail failed"
 [ "$fail" -eq 0 ] || exit 1

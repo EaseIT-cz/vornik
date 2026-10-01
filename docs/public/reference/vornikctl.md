@@ -2375,6 +2375,33 @@ row is simply cleared.
 vornikctl package uninstall <package>
 ```
 
+## vornikctl package upgrade
+
+Upgrade an installed package to the version in an archive
+
+Replace an installed package's contributions with the version in an
+archive, deciding per file:
+
+  unedited                  replaced with the new version (or kept if identical)
+  already the new version   adopted
+  dropped by the new version removed if unedited
+  new in this version       added, with install's conflict checks
+
+Provenance records each file's hash at install, not its content, so an
+upgrade cannot merge: a contribution you EDITED or DELETED refuses the whole
+upgrade, naming every file. Restore it (or copy your tuning aside), upgrade,
+then reapply.
+
+The daemon picks the new config up on its next reload.
+
+```
+vornikctl package upgrade <dir-or-tarball> [flags]
+```
+
+| Flag | Default | Description |
+|---|---|---|
+| `--dry-run` | `false` | Print the plan without touching disk or the provenance store |
+
 ## vornikctl project
 
 Inspect projects loaded by the daemon

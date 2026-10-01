@@ -165,4 +165,13 @@ var WorkflowDeferredPaths = []string{
 	// *bool tri-state (nil = inherit project/task) — a true/false select
 	// can't express "unset"; edit via raw YAML.
 	"pedantic",
+	// Broker block (privileged-work broker design 2026-09-29) — a security
+	// boundary (typed inputs, egress schema). Deliberately YAML-only: the
+	// load rules reject most shapes a form could produce by accident.
+	"broker.input_schema",
+	"broker.egress.output",
+	"broker.egress.schema",
+	"broker.egress.max_bytes",
+	"broker.egress.provenance",
+	"broker.proposes",
 }

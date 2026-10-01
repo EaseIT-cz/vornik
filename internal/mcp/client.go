@@ -251,7 +251,7 @@ func (c *Client) Name() string {
 // in-daemon ceiling is to absorb the misbehaviour ourselves.
 func (c *Client) CallTool(ctx context.Context, name string, args json.RawMessage) (*ToolResult, error) {
 	if !c.toolAllowed(name) {
-		return nil, fmt.Errorf("tool %q is not in allowed_tools for server %q", name, c.config.Name)
+		return nil, &toolNotAllowedError{tool: name, server: c.config.Name}
 	}
 	if blocked, retryAfter := c.toolLimiter.Allow(c.config.Name, name); blocked {
 		ObserveToolRateLimited(c.config.ProjectID, c.config.Name, name)
@@ -1198,3 +1198,15 @@ func (c *Client) applyMutatingToolGate(cfg ServerConfig, tools []Tool) error {
 	}
 	return nil
 }
+
+// toolNotAllowedError is CallTool's refusal of a tool outside the server's
+// allowed_tools. It is raised before any request is sent (ErrNotSent), and
+// keeps the message agents already read.
+type toolNotAllowedError struct{ tool, server string }
+
+func (e *toolNotAllowedError) Error() string {
+	return fmt.Sprintf("tool %q is not in allowed_tools for server %q", e.tool, e.server)
+}
+
+// Is reports the refusal as ErrNotSent.
+func (e *toolNotAllowedError) Is(target error) bool { return target == ErrNotSent }

@@ -121,6 +121,36 @@ case "$rehydrated" in
   *"[... truncated at 48 bytes by tool_result_read"*) ;;
   *) echo "FAIL: rehydrated body did not include truncation marker" >&2; exit 1 ;;
 esac
+# Paging (hygiene design, amendment 2026-09-28): tool_result_read must read
+# PAST the first page, and neither a page nor the offset it names may split a
+# UTF-8 character. "αβγ" is 2 bytes per letter; a 5-byte page must stop at 4.
+printf 'αβγδεζ' > "$tmp/.tool_results/paged.txt"
+saved_max="$TOOL_RESULT_MAX_BYTES"
+TOOL_RESULT_MAX_BYTES=5
+page1="$(handle_tool_result_read '{"tool_call_id":"paged"}')"
+case "$page1" in
+  "αβ"*"offset=4 to read further]") ;;
+  *) echo "FAIL: first page did not stop on a character boundary / name offset=4: $page1" >&2; exit 1 ;;
+esac
+page2="$(handle_tool_result_read '{"tool_call_id":"paged","offset":4}')"
+case "$page2" in
+  "γδ"*"offset=8 to read further]") ;;
+  *) echo "FAIL: offset paging did not return the next page: $page2" >&2; exit 1 ;;
+esac
+page_mid="$(handle_tool_result_read '{"tool_call_id":"paged","offset":5}')"
+case "$page_mid" in
+  "δ"*) ;;
+  *) echo "FAIL: an offset inside a character must advance to the next boundary: $page_mid" >&2; exit 1 ;;
+esac
+page_last="$(handle_tool_result_read '{"tool_call_id":"paged","offset":8}')"
+[ "$page_last" = "εζ" ] || { echo "FAIL: last page should carry no footer: $page_last" >&2; exit 1; }
+past_end="$(handle_tool_result_read '{"tool_call_id":"paged","offset":99}')"
+case "$past_end" in
+  "ERROR: offset 99 is past the end"*) ;;
+  *) echo "FAIL: offset past the end not reported: $past_end" >&2; exit 1 ;;
+esac
+TOOL_RESULT_MAX_BYTES="$saved_max"
+
 direct_read="$(exec_tool file_read '{"path":".tool_results/old1.txt"}')"
 case "$direct_read" in
   "ERROR: .tool_results is only readable through tool_result_read") ;;

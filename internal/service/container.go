@@ -66,6 +66,9 @@ import (
 	"syscall"
 	"time"
 
+	"vornik.io/vornik/internal/brokeractions"
+	"vornik.io/vornik/internal/companionpush"
+
 	"vornik.io/vornik/internal/authz"
 	"vornik.io/vornik/internal/chatauth"
 	"vornik.io/vornik/internal/sandboxtool"
@@ -401,6 +404,10 @@ type Container struct {
 	// metrics registry is wired.
 	dispatcherMetrics *dispatcher.Metrics
 	mcpManager        *mcp.Manager
+	// mcpWithheld lists project MCP servers the last config resolution
+	// withheld (mcpDesiredServers), for the doctor. Guarded by mcpWithheldMu.
+	mcpWithheldMu sync.Mutex
+	mcpWithheld   []string
 	// mcpRegistry caches the daemon-level MCP server catalog
 	// declared by config.MCP.Servers. Distinct from mcpManager
 	// (which holds per-project active clients used by agents) —
@@ -746,7 +753,20 @@ type Container struct {
 	// container, injected into every auditredact.Repo — the rebuild below
 	// leaves two live instances and a per-instance counter would publish a
 	// denominator over half the rows. See auditredact.Metrics.
-	auditRedactMetrics   *auditredact.Metrics
+	auditRedactMetrics *auditredact.Metrics
+	// brokerActionWorker executes approved broker write actions; built in
+	// Run (container_broker_actions.go). Written exactly once, in Run,
+	// before the HTTP server starts; the /inbox kick closure reads it
+	// without a lock on that basis, so do not reassign it after Serve.
+	// brokerActionMetrics is its shared metrics holder, attached to the
+	// served registry in initHTTPServer.
+	brokerActionWorker  *brokeractions.Worker
+	brokerActionMetrics *brokeractions.Metrics
+	// companionPusher is the companion push outbox loop (broker
+	// write-actions design §7a); written once in Run before Serve, like
+	// brokerActionWorker. companionPushMetrics is attached in initHTTPServer.
+	companionPusher      *companionpush.Pusher
+	companionPushMetrics *companionpush.Metrics
 	agentWritesAllWarned bool
 	taintWriteMetrics    *api.TaintWriteMetrics
 	chainMetrics         *api.AuthChainMetrics
@@ -1135,8 +1155,10 @@ func NewContainer(cfg *config.Config, configPath string, opts ...ContainerOption
 	}
 	c.Logger.Info().Msg("effective-cost monitor initialized")
 
-	// Phase 1 Step 5b: Initialize MCP servers from project configs
-	c.initMCP()
+	// Phase 1 Step 5b: Initialize MCP servers from project configs, with the
+	// short startup budget: anything slower becomes pending and is installed
+	// or retried in the background (MCP failed-connect recovery, phase 2 P1).
+	c.initMCPWithBudget(mcpStartupBudget)
 	// Daemon-level MCP discovery registry — populates /api/v1/mcp/servers
 	// + /ui/mcp from the top-level mcp.servers block in the daemon
 	// config. NOT the same wiring as the per-project clients above;
@@ -1972,6 +1994,24 @@ func (c *Container) Run(ctx context.Context) error {
 		c.autonomyElector.BootstrapAcquire(ctx)
 		go c.autonomyElector.Run(ctx)
 	}
+
+	// Broker action worker (broker write-actions design §5.4). Assigned
+	// before the HTTP server starts, so the /inbox approve closure that
+	// reads c.brokerActionWorker never races this write.
+	// The push loop first: the worker's OnChange kicks it.
+	if c.companionPusher = c.newCompanionPusher(); c.companionPusher != nil {
+		if c.Executor != nil {
+			c.Executor.AddCompletionObserver(c.companionPusher)
+		}
+		go c.companionPusher.Run(c.collectorsCtx)
+	}
+	if c.brokerActionWorker = c.newBrokerActionWorker(); c.brokerActionWorker != nil {
+		go c.brokerActionWorker.Run(c.collectorsCtx)
+	}
+	// MCP failed-connect recovery (every node, not leader-gated): retries a
+	// project's MCP server whose dial failed. Before 2026-09-30 such a server
+	// stayed dark until a reload or restart (ibkr-trader's broker, 24 hours).
+	c.startMCPReconnector(c.collectorsCtx)
 
 	// Start the agent unix socket BEFORE executor recovery so that any
 	// resumed step's podman container can bind-mount the socket immediately.

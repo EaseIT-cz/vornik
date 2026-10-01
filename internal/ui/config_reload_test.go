@@ -48,6 +48,11 @@ func TestApplyConfigEdit_Deferred_SetsRestartPending(t *testing.T) {
 	if !strings.Contains(strings.ToLower(res.Message), "restart") {
 		t.Fatalf("message %q should mention a restart", res.Message)
 	}
+	// A busy reloader now applies the edit when it frees (a coalesced
+	// follow-up cycle, 2026-10-01); only a stuck one needs the restart.
+	if !strings.Contains(res.Message, "when that reload finishes") {
+		t.Fatalf("message %q should say the edit applies when the other reload finishes", res.Message)
+	}
 	pending, reason, _ := s.RestartPending()
 	if !pending {
 		t.Fatal("restart SHOULD be pending after a deferred reload")

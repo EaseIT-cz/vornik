@@ -53,3 +53,92 @@ func isStrictRouteStep(wf *registry.Workflow, stepID string) bool {
 func isDelegatorStep(step registry.WorkflowStep) bool {
 	return strings.TrimSpace(step.DelegatedWorkflow) != ""
 }
+
+// strictRouteContractApplies reports whether this step is the adaptive
+// workflow's LLM route step — the one step whose answer is a workflow pick and
+// nothing else. It is the predicate that gates the router contract
+// (applyStrictRouteContract): no tools, a JSON schema whose enum is the
+// candidate list, a focused router system prompt.
+//
+// Two candidates at least: one is auto-routed without an LLM call
+// (dispatchAgentStep). Never a delegator step, whose answer is a
+// delegatedTasks plan. Only the ENTRYPOINT: the adaptive workflow has one step
+// today, and a worker step added to it later must not be silently turned into a
+// tool-less router (review 75dd F1).
+//
+// Contract sites (10-delegation-engine.md, "The route step is tool-free and
+// schema-bound"): this predicate, applyStrictRouteContract, the answer consumer
+// handleSelectedWorkflowRoute, and config.toolFree handling in
+// images/vornik-agent/entrypoint.sh.
+func strictRouteContractApplies(wf *registry.Workflow, project *registry.Project, stepID string, step registry.WorkflowStep) bool {
+	return wf != nil && wf.ID == "adaptive" && stepID == wf.Entrypoint &&
+		isStrictRouteStep(wf, stepID) && !isDelegatorStep(step) &&
+		project != nil && len(project.AdaptiveCandidateWorkflows) >= 2
+}
+
+// routerSystemPrompt replaces the role's system prompt on the route step. The
+// lead's prompt describes checkpoints, recovery, budgets and git — the work of a
+// lead — and the incident of 2026-09-28 is what a router does when told it is
+// one. Operator routing guidance belongs in the adaptive workflow's `route`
+// step prompt, which is unchanged.
+const routerSystemPrompt = `You are a workflow router. Your only job is to pick which of the project's candidate workflows should run the task in the user message.
+
+You have no tools on this step. Do not plan the work, research it, or produce it — the workflow you pick has the tools and the budget to do that.
+
+The candidate list (context.adaptiveCandidateWorkflows) is the whole configuration; nothing else is needed and nothing is missing.
+
+Answer with exactly one JSON object and nothing else:
+{"selected_workflow": "<one id from the candidate list, verbatim>", "reason": "<one sentence>"}`
+
+// roleContractFor returns the role config whose OUTPUT CONTRACT (required keys,
+// plausibility rules) a step is held to. Under the router contract that is a
+// copy with both cleared: a route answer can only be {selected_workflow,
+// reason}, and handleSelectedWorkflowRoute is the check that knows the allowed
+// values. Every other step gets the role unchanged. The copy is shallow. It is
+// passed to the two checkOutputContract calls and as StepOutcome.RoleConfig,
+// whose only reader is the plausibility participant (pipeline_points.go) —
+// review 75dd F4.
+func roleContractFor(role *registry.SwarmRole, opts *agentInputOpts) *registry.SwarmRole {
+	if role == nil || opts == nil || !opts.RouteContract {
+		return role
+	}
+	c := *role
+	c.RequiredOutputKeys = nil
+	c.PlausibilityRules = nil
+	return &c
+}
+
+// applyStrictRouteContract rewrites a route step's agent input into the router
+// contract (see strictRouteContractApplies). Runs after resolveRoleOpts, which
+// has already set the role's prompt and schema.
+func applyStrictRouteContract(opts *agentInputOpts, candidates []string) {
+	if opts == nil {
+		return
+	}
+	opts.ToolFree = true
+	opts.RouteContract = true
+	opts.SystemPrompt = routerSystemPrompt
+	enum := make([]any, 0, len(candidates))
+	for _, c := range candidates {
+		enum = append(enum, c)
+	}
+	opts.ResponseFormat = "json_schema"
+	opts.ResponseSchema = map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"selected_workflow": map[string]any{"type": "string", "enum": enum},
+			"reason":            map[string]any{"type": "string"},
+		},
+		"required":             []any{"selected_workflow", "reason"},
+		"additionalProperties": false,
+	}
+	// A tool; a tool-free step carries none.
+	opts.ResultEmissionTool = nil
+	// Hand-built schema with no dialect tree — same rule as the recovery
+	// override in plan_step.go.
+	opts.EffectiveSchema = nil
+	opts.PlausibilityRules = nil
+	// The lead role's shape hint describes the lead's schema, not this one; the
+	// router's corrective re-run carries buildRouteCorrectiveHint instead.
+	opts.ShapeRetryHint = ""
+}

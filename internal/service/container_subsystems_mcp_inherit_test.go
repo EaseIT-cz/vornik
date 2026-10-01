@@ -15,6 +15,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/rs/zerolog"
@@ -150,11 +151,15 @@ func TestMcpDesiredServers_OwnTransportUntouched(t *testing.T) {
 	}
 }
 
-// TestMcpDesiredServers_NameOnlyNoDaemonMatch_PassesThroughUnchanged
-// covers case (c): a name-only entry with no matching daemon-level
-// server keeps today's log-and-skip path — mcpDesiredServers must not
-// panic or synthesize a transport out of nothing.
-func TestMcpDesiredServers_NameOnlyNoDaemonMatch_PassesThroughUnchanged(t *testing.T) {
+// TestMcpDesiredServers_NameOnlyNoDaemonMatch_IsWithheld covers case (c):
+// a name-only entry with no matching daemon-level server is a configuration
+// error, not an outage, so it is withheld instead of handed to the manager.
+// Regression, 2026-10-01: once the manager retried failed dials (MCP
+// failed-connect recovery design), the assistant project's dangling
+// "homeassistant" subscription became a pending server retried every 5
+// minutes, with an operator alert saying Vornik "keeps retrying" something
+// that could never connect.
+func TestMcpDesiredServers_NameOnlyNoDaemonMatch_IsWithheld(t *testing.T) {
 	reg := writeMCPInheritFixture(t, "mcp:\n  servers:\n    - name: \"unknown-server\"\n")
 
 	c := &Container{
@@ -164,12 +169,15 @@ func TestMcpDesiredServers_NameOnlyNoDaemonMatch_PassesThroughUnchanged(t *testi
 	}
 
 	desired := c.mcpDesiredServers()
-	got := desired["test-project"][0]
-	if got.Transport != "" {
-		t.Errorf("Transport = %q, want empty (no daemon match to inherit from)", got.Transport)
+	for _, got := range desired["test-project"] {
+		if got.Name == "unknown-server" {
+			t.Fatalf("a name-only entry with no daemon match must be withheld, got %+v", got)
+		}
 	}
-	if got.Name != "unknown-server" {
-		t.Errorf("Name = %q, want unknown-server", got.Name)
+	// And it is reported, for the doctor's mcp_project_connections.
+	withheld := c.mcpWithheldServers()
+	if len(withheld) != 1 || !strings.Contains(withheld[0], "test-project/unknown-server") {
+		t.Fatalf("withheld = %v, want one entry for test-project/unknown-server", withheld)
 	}
 }
 

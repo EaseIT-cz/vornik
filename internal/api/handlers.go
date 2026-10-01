@@ -1582,6 +1582,10 @@ func (s *Server) ListMCPTools(w http.ResponseWriter, r *http.Request) {
 		respondJSON(w, http.StatusOK, map[string]any{"tools": []any{}})
 		return
 	}
+	// A server still starting (boot, or a just-failed dial) gets a bounded
+	// wait, so a step does not silently start without its tools (MCP
+	// failed-connect recovery, phase 2 P3).
+	s.waitForStartingMCPServers(r.Context(), projectID)
 	tools := s.mcpExecutor.Tools(projectID)
 	// Narrow to the calling role's allowedTools. The agent's mcp-bridge reads this
 	// list and turns it into the tool schemas sent to the model on EVERY iteration,

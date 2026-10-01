@@ -52,11 +52,21 @@ logging:
   format: json
 
 api:
-  # No auth by default. Flip to true + populate api_keys before exposing the
-  # UI beyond loopback.
-  auth_enabled: false
-  # api_keys:
-  #   - "${VORNIK_API_KEY}"
+  # Hardened by default (2026-10-01): the daemon binds 0.0.0.0 (see server:
+  # above), so every request needs a key. quickstart.sh generates one into
+  # secrets/api.env (0600), which the daemon and shell-env.sh both read. Log
+  # in to the UI with it. An unset VORNIK_API_KEY fails closed: an empty key
+  # matches nothing.
+  auth_enabled: true
+  api_keys:
+    - "${VORNIK_API_KEY}"
+
+# The single operator keeps the admin console that an auth-off install used
+# to open to everyone, and nobody else gets it.
+admin:
+  enabled: true
+  allowed_keys:
+    - "${VORNIK_API_KEY}"
 
 metrics:
   enabled: false

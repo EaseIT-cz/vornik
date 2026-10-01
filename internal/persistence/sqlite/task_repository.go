@@ -278,7 +278,7 @@ func (r *TaskRepository) List(ctx context.Context, filter persistence.TaskFilter
 	}
 	if filter.UpdatedBefore != nil {
 		b.WriteString(" AND updated_at < ?")
-		args = append(args, *filter.UpdatedBefore)
+		args = append(args, sqliteTime(*filter.UpdatedBefore))
 	}
 	if filter.UpdatedSince != nil {
 		b.WriteString(" AND updated_at >= ?")
@@ -933,8 +933,8 @@ func (r *TaskRepository) GetChildren(ctx context.Context, parentTaskID string) (
 // re-decompose without the resume guard fast-failing on stale children.
 func (r *TaskRepository) OrphanChildren(ctx context.Context, parentTaskID string) (int, error) {
 	res, err := r.db.ExecContext(ctx,
-		`UPDATE tasks SET parent_task_id = NULL, updated_at = CURRENT_TIMESTAMP WHERE parent_task_id = ?`,
-		parentTaskID)
+		`UPDATE tasks SET parent_task_id = NULL, updated_at = ? WHERE parent_task_id = ?`,
+		sqliteTime(time.Now()), parentTaskID)
 	if err != nil {
 		return 0, err
 	}

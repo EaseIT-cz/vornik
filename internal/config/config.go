@@ -508,6 +508,9 @@ type Config struct {
 	// Web gates supervised web write actions (form fill+submit) daemon-wide.
 	// See https://docs.vornik.io
 	Web WebDaemonConfig `yaml:"web"`
+	// Broker gates write actions proposed by broker workflows daemon-wide.
+	// See https://docs.vornik.io
+	Broker BrokerDaemonConfig `yaml:"broker"`
 	// Gateway configures the local API gateway (Kong DB-less) that fronts
 	// authenticated third-party HTTP APIs for the query_api tool. See
 	// https://docs.vornik.io
@@ -735,6 +738,42 @@ func (c WebDaemonConfig) WritesMode() (string, error) {
 	default:
 		return "", fmt.Errorf("web.writes: unknown value %q (want off|on|insecure)", c.Writes)
 	}
+}
+
+// BrokerDaemonConfig gates broker write actions: a write a broker workflow
+// proposes, a human approves in /inbox, and the daemon then executes itself.
+type BrokerDaemonConfig struct {
+	Writes        string `yaml:"writes" doc:"Broker write-action mode: off (default; delegating a workflow that proposes writes is refused and nothing approved executes) or on (writes execute after approval in /inbox, each also gated by its MCP server's broker_write declaration)."`
+	ActionTimeout string `yaml:"action_timeout" doc:"Bound on one approved write's tool call (default 60s, at most 10m). A call that times out is recorded as unknown, never retried."`
+}
+
+// WritesMode validates broker.writes and returns off|on, or an error the
+// daemon fails startup on.
+func (c BrokerDaemonConfig) WritesMode() (string, error) {
+	switch c.Writes {
+	case "", "off":
+		return "off", nil
+	case "on":
+		return "on", nil
+	default:
+		return "", fmt.Errorf("broker.writes: unknown value %q (want off|on)", c.Writes)
+	}
+}
+
+// EffectiveActionTimeout resolves broker.action_timeout (default 60s,
+// between 1s and 10m).
+func (c BrokerDaemonConfig) EffectiveActionTimeout() (time.Duration, error) {
+	if c.ActionTimeout == "" {
+		return 60 * time.Second, nil
+	}
+	d, err := time.ParseDuration(c.ActionTimeout)
+	if err != nil {
+		return 0, fmt.Errorf("broker.action_timeout: %w", err)
+	}
+	if d < time.Second || d > 10*time.Minute {
+		return 0, fmt.Errorf("broker.action_timeout must be between 1s and 10m, got %s", d)
+	}
+	return d, nil
 }
 
 // BlockNotifyConfig — proactive operator notification on a scraper block.

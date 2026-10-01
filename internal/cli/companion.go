@@ -40,6 +40,7 @@ type companionGrantOutput struct {
 	MemoryRead       bool       `json:"memoryRead,omitempty"`
 	MemoryWrite      bool       `json:"memoryWrite,omitempty"`
 	DefaultRepoScope string     `json:"defaultRepoScope,omitempty"`
+	DelegateDisabled bool       `json:"delegateDisabled,omitempty"`
 }
 
 type companionKeyOutput struct {
@@ -92,6 +93,7 @@ var (
 	companionGrantSkillWrite   bool
 	companionGrantSkillAdmin   bool
 	companionGrantSkillAll     bool
+	companionGrantNoDelegate   bool
 	companionGrantJSON         bool
 
 	companionKeysProject string
@@ -115,7 +117,7 @@ var companionKeysCmd = &cobra.Command{
 
 func init() {
 	companionGrantCmd.Flags().StringVarP(&companionGrantProject, "project", "p", "", "Project ID (required) — typically companion-<user>")
-	companionGrantCmd.Flags().StringVar(&companionGrantClient, "client", "", "Host LLM client: claude-code | codex | gemini-cli | opencode (required)")
+	companionGrantCmd.Flags().StringVar(&companionGrantClient, "client", "", "Host LLM client: claude-code | codex | gemini-cli | opencode | hermes | openclaw (required)")
 	companionGrantCmd.Flags().StringVar(&companionGrantLabel, "label", "", "Operator-friendly session label (e.g. 'vadim/laptop')")
 	companionGrantCmd.Flags().StringVar(&companionGrantWorkflowsCSV, "workflows", "",
 		"Comma-separated workflow allowlist (omit for 'all project workflows')")
@@ -144,6 +146,8 @@ func init() {
 		"Allow this key to approve/reject skills (the human gate that promotes a draft to active).")
 	companionGrantCmd.Flags().BoolVar(&companionGrantSkillAll, "skill-all", false,
 		"Shorthand for --skill-read --skill-write --skill-admin.")
+	companionGrantCmd.Flags().BoolVar(&companionGrantNoDelegate, "no-delegate", false,
+		"Refuse every task tool (delegate/status/result/cancel/list/catalog) for this key — the shape of a front agent's memory key")
 	companionGrantCmd.Flags().BoolVar(&companionGrantJSON, "json", false, "Emit JSON instead of human text")
 	_ = companionGrantCmd.MarkFlagRequired("project")
 	_ = companionGrantCmd.MarkFlagRequired("client")
@@ -219,6 +223,9 @@ func runCompanionGrant(cmd *cobra.Command, args []string) error {
 	if skillAdmin {
 		body["skillAdmin"] = true
 	}
+	if companionGrantNoDelegate {
+		body["delegateDisabled"] = true
+	}
 
 	client := ClientFromEnv()
 	resp, err := client.Post("/api/v1/companion/grant", body)
@@ -234,6 +241,21 @@ func runCompanionGrant(cmd *cobra.Command, args []string) error {
 	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
 		return fmt.Errorf("decode: %w", err)
 	}
+	// Mixed versions: a daemon older than --no-delegate ignores the unknown
+	// field and mints a key that CAN delegate. Never hand that key out as a
+	// memory-only key — revoke it and say why (broker design 2026-09-29,
+	// upgrade section).
+	if companionGrantNoDelegate && !out.DelegateDisabled {
+		dr, derr := client.Delete("/api/v1/projects/" + out.ProjectID + "/keys/" + out.ID)
+		if derr != nil {
+			return fmt.Errorf("the daemon does not support --no-delegate (upgrade it first), and revoking the key it minted (%s) failed: %w — revoke it by hand", out.ID, derr)
+		}
+		_ = dr.Body.Close()
+		if dr.StatusCode >= 300 {
+			return fmt.Errorf("the daemon does not support --no-delegate (upgrade it first), and revoking the key it minted (%s) returned HTTP %d — revoke it by hand", out.ID, dr.StatusCode)
+		}
+		return fmt.Errorf("the daemon does not support --no-delegate (upgrade it first); the key it minted (%s) could delegate, so it was revoked", out.ID)
+	}
 	if companionGrantJSON {
 		return json.NewEncoder(os.Stdout).Encode(out)
 	}
@@ -244,9 +266,12 @@ func runCompanionGrant(cmd *cobra.Command, args []string) error {
 		fmt.Printf("  label:      %s\n", out.SessionLabel)
 	}
 	fmt.Printf("  prefix:     %s\n", out.KeyPrefix)
-	if len(out.AllowedWorkflows) > 0 {
+	switch {
+	case out.DelegateDisabled:
+		fmt.Printf("  workflows:  none (delegate disabled)\n")
+	case len(out.AllowedWorkflows) > 0:
 		fmt.Printf("  workflows:  %s\n", strings.Join(out.AllowedWorkflows, ", "))
-	} else {
+	default:
 		fmt.Printf("  workflows:  (all project workflows)\n")
 	}
 	if out.BudgetCapUSD != nil {
@@ -261,6 +286,9 @@ func runCompanionGrant(cmd *cobra.Command, args []string) error {
 		fmt.Printf("  memory:     read + write\n")
 	case out.MemoryRead:
 		fmt.Printf("  memory:     read only\n")
+	}
+	if out.DelegateDisabled {
+		fmt.Printf("  delegate:   disabled (memory-only key)\n")
 	}
 	if out.DefaultRepoScope != "" {
 		fmt.Printf("  repo_scope: %s (default; stamped on memory calls that omit repo_scope)\n", out.DefaultRepoScope)

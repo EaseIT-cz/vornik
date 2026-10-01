@@ -7,12 +7,15 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
 	"regexp"
 	"sort"
 	"strings"
+
+	"gopkg.in/yaml.v3"
 
 	"vornik.io/vornik/internal/secrethygiene"
 )
@@ -50,6 +53,10 @@ type placeholder struct {
 	value string
 	file  string
 	key   string
+	// padded: redactSpans inserted the space between `key:` and the token
+	// because the value began on a later line (a block list or mapping).
+	// Rematerialize removes it again, so the round trip stays byte-exact.
+	padded bool
 }
 
 // Limits bound the snapshot (review R7: byte and file limits).
@@ -291,10 +298,39 @@ func isSecretsPath(rel string) bool {
 // Returns the sanitized bytes and the first secret-bearing key it could NOT
 // redact, if any; the caller refuses the snapshot in that case.
 func (s *Snapshot) sanitize(rel string, data []byte) ([]byte, string) {
+	if isYAMLPath(rel) {
+		// The walker and both post-conditions read ONE parsed document; the
+		// config tree holds single-document files, so a second `---`
+		// document is refused rather than shipped unscreened (round-5 review
+		// of the 2026-10-01 external-scan fix).
+		if multiDocument(data) {
+			return data, "<multi-document>"
+		}
+		// An unparseable YAML file takes the line pass, which redacts only
+		// values under secret-named keys: an anchor's literal under a
+		// harmless key, reached by an alias, would ship. A broken file
+		// WITHOUT anchor/alias syntax still reaches the assistant, which is
+		// how an operator gets help repairing it.
+		if _, ok := secretSpans(data); !ok && anchorAndAliasSyntax(data) {
+			return data, "<anchor-in-unparseable-yaml>"
+		}
+	}
+	// Markdown frontmatter is YAML too. A frontmatter the parser cannot read
+	// falls to the line pass with the same anchor blind spot (round-6 review).
+	if fm, ok := frontmatter(data); ok && !isYAMLPath(rel) {
+		if _, parsed := secretSpans(fm); !parsed && anchorAndAliasSyntax(fm) {
+			return data, "<anchor-in-unparseable-frontmatter>"
+		}
+	}
 	if spans, ok := secretSpans(data); ok {
 		out := s.redactSpans(rel, data, spans)
 		if leftover, bad := residualSecret(out); bad {
 			return out, leftover
+		}
+		// Judged on the ORIGINAL bytes: redaction can swallow the alias text
+		// that would have shown residualSecret the anchor's literal.
+		if key, bad := aliasedSecret(data); bad {
+			return out, key
 		}
 		return out, ""
 	}
@@ -335,6 +371,9 @@ func (s *Snapshot) redactSpans(rel string, data []byte, spans []secretSpan) []by
 			// The value began on a later line; YAML needs a space after the
 			// colon or `key:TOKEN` parses as a scalar, not a mapping.
 			prefix += " "
+			ph := s.placeholders[tok]
+			ph.padded = true
+			s.placeholders[tok] = ph
 		}
 		lines[start] = []byte(prefix + tok)
 	}
@@ -599,6 +638,9 @@ func (s *Snapshot) Rematerialize(rel string, data []byte) (string, error) {
 		if !ok || ph.file != rel {
 			return "", fmt.Errorf("%w (%s in %s)", ErrPlaceholderTampered, tok[:len(placeholderPrefix)+6], rel)
 		}
+		if ph.padded && strings.Contains(out, " "+tok) {
+			tok = " " + tok
+		}
 		out = strings.Replace(out, tok, ph.value, 1)
 	}
 	return out, nil
@@ -710,4 +752,58 @@ func TouchedFiles(ops []Op) []string {
 		out = append(out, op.Path)
 	}
 	return out
+}
+
+func isYAMLPath(rel string) bool {
+	ext := strings.ToLower(filepath.Ext(rel))
+	return ext == ".yaml" || ext == ".yml"
+}
+
+// multiDocument reports whether data holds more than one YAML document.
+// Undecodable input answers false; the parse-failure path judges it.
+func multiDocument(data []byte) bool {
+	dec := yaml.NewDecoder(bytes.NewReader(data))
+	var first yaml.Node
+	if err := dec.Decode(&first); err != nil {
+		return false
+	}
+	var second yaml.Node
+	return !errors.Is(dec.Decode(&second), io.EOF)
+}
+
+// anchorAndAliasSyntax reports whether text both defines an anchor and uses
+// an alias, as a scan without a parser can see them: an `&` and a `*` each
+// followed by a name (anything but whitespace and flow indicators). It
+// requires NOTHING before the token. Rounds 6 and 7 of the review each found a
+// character an enumerated "must follow" class missed (a tag, a closing brace),
+// and the scan runs only on text the parser already rejected, so
+// over-matching (an `&amp;` or `a*b` in a value) costs a refusal, never a
+// leak.
+func anchorAndAliasSyntax(text []byte) bool {
+	return anchorToken.Match(text) && aliasToken.Match(text)
+}
+
+var (
+	anchorToken = regexp.MustCompile(`&[^\s,\[\]{}]+`)
+	aliasToken  = regexp.MustCompile(`\*[^\s,\[\]{}]+`)
+)
+
+// frontmatter returns the YAML block of a markdown file that opens with a
+// `---` line (LF or CRLF) and closes with the next one, or everything after
+// the opening line when no closing fence exists.
+func frontmatter(data []byte) ([]byte, bool) {
+	rest, ok := bytes.CutPrefix(data, []byte("---\n"))
+	if !ok {
+		// CRLF files occur (the doctor's config_crlf check exists for them).
+		if rest, ok = bytes.CutPrefix(data, []byte("---\r\n")); !ok {
+			return nil, false
+		}
+	}
+	end := bytes.Index(rest, []byte("\n---"))
+	if end < 0 {
+		// An unclosed fence: everything after the opening line is the
+		// frontmatter as far as screening goes (fail closed, round 7).
+		return rest, true
+	}
+	return rest[:end+1], true
 }

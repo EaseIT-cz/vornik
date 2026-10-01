@@ -389,6 +389,13 @@ func WithWebWriteApprovalHook(h WebWriteApprovalHook) AgentOption {
 	return func(a *Agent) { a.webApprovalHook = h }
 }
 
+// WithWebWritePendingNotifier wires the operator alert sent when a preview
+// stores a pending web-write (supervised web-write design, Components.4:
+// notify-only, never an approval path). It must not block.
+func WithWebWritePendingNotifier(n WebWritePendingNotifier) AgentOption {
+	return func(a *Agent) { a.webPendingNotify = n }
+}
+
 // WithAdminAuditRepository wires the admin-audit repo so the
 // set_reminder tool writes a reminder.set row on success.
 // Optional — nil leaves the chat-set audit silent (the runner's

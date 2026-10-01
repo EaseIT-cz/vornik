@@ -259,6 +259,9 @@ func (e *Executor) scanContainerLogsForSecrets(ctx context.Context, execution *p
 	}
 	action := secrets.ResolveAction(secrets.CheckpointContainerLogs, e.secretsActions)
 	counts := secrets.CountByType(findings)
+	// Recorded in every branch, like the result_json sink (secret-leak
+	// Phase 3 design, "the remaining sinks", 2026-10-01).
+	e.recordRedactionEvents(ctx, execution.ProjectID, execution.TaskID, execution.ID, secrets.CheckpointContainerLogs, counts)
 	logEvent := e.logger.Warn().
 		Str("execution_id", execution.ID).
 		Str("step", stepID).

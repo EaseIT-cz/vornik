@@ -309,6 +309,7 @@ func (s *Server) backlogDepositSecretScan(w http.ResponseWriter, req backlogDepo
 	}
 	action := secrets.ResolveAction(secrets.CheckpointBacklogDeposit, s.secretsActions)
 	counts := secrets.CountByType(findings)
+	s.recordSecretFindings(req.ProjectID, req.TaskID, secrets.CheckpointBacklogDeposit, counts)
 	logEvent := s.logger.Warn().
 		Str("project_id", req.ProjectID).
 		Str("task_id", req.TaskID).

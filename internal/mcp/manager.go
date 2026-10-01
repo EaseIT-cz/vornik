@@ -42,6 +42,19 @@ type Manager struct {
 	// result to push an operator Telegram alert for a solvable scraper block
 	// on a curated portal. Nil (default) → no notification. See block_notify.go.
 	blockNotifier *BlockNotifier
+	// pending holds each configured (project, server) whose dial failed, with
+	// the config needed to retry it (failed-connect recovery design). Swapped
+	// with clients by SyncProjects; guarded by mu.
+	pending map[string]map[string]*pendingServer
+	// now is the clock seam for backoff and alert thresholds.
+	now func() time.Time
+	// outageNotify sends the notify-only outage and recovery alerts; nil
+	// sends nothing. Guarded by mu.
+	outageNotify func(ctx context.Context, text string) error
+	// ready is closed and replaced (under mu) whenever a client is installed
+	// for a pending server, and on Close: the broadcast that wakes
+	// WaitForStartingServers (phase 2, P3).
+	ready chan struct{}
 }
 
 // SetBlockNotifier wires the scraper-block → Telegram notify hook. Nil-safe;
@@ -56,7 +69,10 @@ func (m *Manager) SetBlockNotifier(bn *BlockNotifier) {
 func NewManager(logger zerolog.Logger) *Manager {
 	return &Manager{
 		clients: make(map[string]map[string]*Client),
+		pending: make(map[string]map[string]*pendingServer),
 		logger:  logger,
+		now:     time.Now,
+		ready:   make(chan struct{}),
 	}
 }
 
@@ -69,12 +85,15 @@ var connectFn = Connect
 // stream that won't terminate) without a real transport.
 var closeFn = (*Client).Close
 
-// dialResult owns one attempted connection. client==nil means the dial failed
-// and is omitted from the replacement catalog.
+// dialResult owns one attempted connection. client==nil means the dial failed:
+// it is omitted from the replacement catalog and recorded as pending with cfg
+// and err (failed-connect recovery design, D1).
 type dialResult struct {
 	projectID string
 	name      string
 	client    *Client
+	cfg       ServerConfig
+	err       error
 }
 
 // SyncProjects reconciles the manager to exactly the desired
@@ -129,50 +148,48 @@ func (m *Manager) SyncProjects(ctx context.Context, desired map[string][]ServerC
 				defer cancel()
 				client, err := connectFn(connectCtx, cfg, m.logger.With().Str("project", projectID).Logger())
 				if err != nil {
+					err = redactConnectErr(err)
 					m.logger.Error().
 						Err(err).
 						Str("project", projectID).
 						Str("server", cfg.Name).
 						Msg("mcp: failed to connect")
-					results <- dialResult{projectID, cfg.Name, nil}
+					results <- dialResult{projectID: projectID, name: cfg.Name, cfg: cfg, err: err}
 					return
 				}
-				results <- dialResult{projectID, cfg.Name, client}
+				results <- dialResult{projectID: projectID, name: cfg.Name, client: client, cfg: cfg}
 			}(projectID, cfg)
 		}
 	}
 
-	pending := total
-collect:
-	for pending > 0 {
-		select {
-		case r := <-results:
-			if r.client != nil {
-				fresh[r.projectID][r.name] = r.client
-			}
-			pending--
-		case <-ctx.Done():
-			m.logger.Warn().
-				Int("connected", total-pending).
-				Int("total", total).
-				Msg("mcp: reconnect budget exceeded; proceeding with connected servers, slow dials abandoned")
-			break collect
-		}
-	}
+	now := m.now()
+	freshPending, pending := m.collectDials(ctx, results, total, fresh, now)
 	if pending > 0 {
 		// Dials whose transports ignore cancellation can still succeed after the
 		// reload budget expires. The buffered result channel keeps their send from
 		// blocking, but without a receiver the resulting clients (including stdio
 		// subprocesses) would be orphaned forever. Reap exactly the abandoned
 		// results out of band so the reload itself remains bounded.
-		go closeLateDialResults(results, pending, closeFn)
+		// The abandoned dials are pending, recorded here where their config is
+		// in scope (D1, F3).
+		recordAbandonedDials(desired, fresh, freshPending, now)
 	}
 
 	m.mu.Lock()
 	displaced := m.clients
 	m.clients = fresh
+	m.swapPendingLocked(freshPending)
 	m.generation++
+	gen := m.generation
 	m.mu.Unlock()
+	if pending > 0 {
+		// A late success is installed if its entry is still pending and no
+		// reload has swapped the catalog since this one (phase 2, P2);
+		// otherwise it is closed, as before.
+		// closeFn pinned here, on the calling goroutine (phase 1 design,
+		// implementation note): the reaper outlives this call.
+		go m.reapLateDialResults(results, pending, gen, closeFn)
+	}
 
 	// Close the displaced (old-catalog) clients OUT OF BAND. The new catalog is
 	// already live after the swap above, so nothing needs these closes to
@@ -202,12 +219,23 @@ collect:
 	}
 }
 
-func closeLateDialResults(results <-chan dialResult, remaining int, closer func(*Client) error) {
+// reapLateDialResults receives the dials a reconcile abandoned at its
+// budget. A success is installed through installRecovered when its pending
+// entry still exists and the catalog is still generation gen; anything else
+// is closed. It takes no redialLocks mutex: a dial-on-use racing a late dial
+// costs at most one extra dial, and the loser of the install closes its
+// client (phase 2, P2).
+func (m *Manager) reapLateDialResults(results <-chan dialResult, remaining int, gen uint64, closer func(*Client) error) {
 	for range remaining {
 		r := <-results
-		if r.client != nil {
-			_ = closer(r.client)
+		if r.client == nil {
+			continue
 		}
+		if recovered, ok := m.installRecovered(r.projectID, r.name, r.client, gen); ok {
+			m.onRecovered(r.projectID, r.name, recovered)
+			continue
+		}
+		_ = closer(r.client)
 	}
 }
 
@@ -236,11 +264,13 @@ func (m *Manager) StartForProject(ctx context.Context, projectID string, servers
 		client, err := connectFn(connectCtx, cfg, m.logger.With().Str("project", projectID).Logger())
 		cancel()
 		if err != nil {
+			err = redactConnectErr(err)
 			m.logger.Error().
 				Err(err).
 				Str("project", projectID).
 				Str("server", cfg.Name).
 				Msg("mcp: failed to connect")
+			m.recordStartFailure(projectID, cfg, err, startGen)
 			continue
 		}
 		m.mu.Lock()
@@ -271,8 +301,61 @@ func (m *Manager) StartForProject(ctx context.Context, projectID string, servers
 			_ = old.Close()
 		}
 		m.clients[projectID][cfg.Name] = client
+		recovered := m.pending[projectID][cfg.Name]
+		if recovered != nil {
+			m.dropPendingLocked(projectID, cfg.Name)
+			m.signalReadyLocked()
+		}
 		m.mu.Unlock()
+		if recovered != nil {
+			m.onRecovered(projectID, cfg.Name, recovered)
+		}
 	}
+}
+
+// recordStartFailure records a StartForProject dial failure as pending,
+// unless a reload swapped the catalog meanwhile: the reload built the
+// authoritative pending set itself, so this path seeds nothing (D1, F4).
+func (m *Manager) recordStartFailure(projectID string, cfg ServerConfig, err error, startGen uint64) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.generation != startGen {
+		return
+	}
+	if existing := m.pending[projectID][cfg.Name]; existing != nil {
+		existing.cfg = cfg
+		existing.recordFailure(err, m.now())
+		return
+	}
+	if m.pending[projectID] == nil {
+		m.pending[projectID] = make(map[string]*pendingServer)
+	}
+	m.pending[projectID][cfg.Name] = newPendingServer(cfg, err, m.now())
+	pendingGauge().WithLabelValues(projectID, cfg.Name).Set(1)
+}
+
+// swapPendingLocked installs a reload's pending set. A server that was
+// already pending and failed again keeps its outage start, attempt count and
+// alert state, so a reload neither hides an outage nor re-alerts it. Caller
+// holds mu.
+func (m *Manager) swapPendingLocked(fresh map[string]map[string]*pendingServer) {
+	for projectID, byServer := range m.pending {
+		for name, old := range byServer {
+			if p := fresh[projectID][name]; p != nil {
+				p.since, p.alerted = old.since, old.alerted
+				p.attempts += old.attempts
+				p.nextAttempt = p.lastAttempt.Add(backoffAfter(p.attempts))
+				continue
+			}
+			pendingGauge().DeleteLabelValues(projectID, name)
+		}
+	}
+	for projectID, byServer := range fresh {
+		for name := range byServer {
+			pendingGauge().WithLabelValues(projectID, name).Set(1)
+		}
+	}
+	m.pending = fresh
 }
 
 // Tools returns the discovered tools for one project, in OpenAI
@@ -362,6 +445,16 @@ func (m *Manager) Execute(ctx context.Context, projectID, qualifiedName, argsJSO
 			Msg("mcp: re-dial succeeded — retrying the tool call")
 		result, err = m.callOnce(ctx, projectID, serverName, toolName, argsJSON)
 	}
+	// A server whose dial failed gets one dial on use, off every lock:
+	// callOnce has returned and released its read lock (D3, F1).
+	if errors.Is(err, errServerPending) {
+		if dialErr := m.dialPending(projectID, serverName, true); dialErr == nil {
+			result, err = m.callOnce(ctx, projectID, serverName, toolName, argsJSON)
+		}
+		if errors.Is(err, errServerPending) {
+			err = errors.New(m.pendingMessage(projectID, serverName))
+		}
+	}
 	duration := time.Since(start)
 
 	if err != nil {
@@ -411,6 +504,9 @@ func (m *Manager) callOnce(ctx context.Context, projectID, serverName, toolName,
 		client = byServer[serverName]
 	}
 	if client == nil {
+		if m.pending[projectID][serverName] != nil {
+			return nil, fmt.Errorf("%w: %s for project %s", errServerPending, serverName, projectID)
+		}
 		return nil, fmt.Errorf("MCP server %q not connected for project %q", serverName, projectID)
 	}
 	return client.CallTool(ctx, toolName, json.RawMessage(argsJSON))
@@ -455,7 +551,8 @@ func (m *Manager) redial(projectID, serverName string) error {
 	defer cancel()
 	fresh, err := connectFn(ctx, cfg, m.logger.With().Str("project", projectID).Logger())
 	if err != nil {
-		return err
+		// Redacted at the return: Execute logs it (phase 2, P4).
+		return redactConnectErr(err)
 	}
 
 	// Pin the closer HERE, on the calling goroutine, rather than letting the
@@ -547,6 +644,13 @@ func (m *Manager) Close() {
 		}
 	}
 	m.clients = make(map[string]map[string]*Client)
+	m.swapPendingLocked(make(map[string]map[string]*pendingServer))
+	// A reconnector or dial-on-use dial in flight must fail its install
+	// check rather than resurrect a client after shutdown (D1, F5).
+	m.generation++
+	// Wake any WaitForStartingServers: it re-checks, finds nothing pending,
+	// and returns (phase 2, P3).
+	m.signalReadyLocked()
 }
 
 // parseQualifiedName splits mcp__{server}__{tool} into server and tool names.
@@ -560,4 +664,59 @@ func parseQualifiedName(name string) (server, tool string, ok bool) {
 		return "", "", false
 	}
 	return parts[0], parts[1], true
+}
+
+// recordAbandonedDials records as pending every desired server that has
+// neither a client nor a failed result: its dial outlived the reload budget.
+func recordAbandonedDials(desired map[string][]ServerConfig, fresh map[string]map[string]*Client,
+	freshPending map[string]map[string]*pendingServer, now time.Time) {
+	for projectID, servers := range desired {
+		if fresh[projectID] == nil {
+			continue
+		}
+		for _, cfg := range servers {
+			if fresh[projectID][cfg.Name] != nil || freshPending[projectID][cfg.Name] != nil {
+				continue
+			}
+			if freshPending[projectID] == nil {
+				freshPending[projectID] = make(map[string]*pendingServer)
+			}
+			freshPending[projectID][cfg.Name] = newPendingServer(cfg, errors.New("dial exceeded the reconnect budget"), now)
+		}
+	}
+}
+
+// collectDials receives dial results until every dial reported or ctx (the
+// reload budget) expires. Connected clients go into fresh; failed dials are
+// returned as pending entries. The second result is how many dials were
+// abandoned.
+func (m *Manager) collectDials(ctx context.Context, results <-chan dialResult, total int,
+	fresh map[string]map[string]*Client, now time.Time) (map[string]map[string]*pendingServer, int) {
+	freshPending := make(map[string]map[string]*pendingServer)
+	addPending := func(projectID string, p *pendingServer) {
+		if freshPending[projectID] == nil {
+			freshPending[projectID] = make(map[string]*pendingServer)
+		}
+		freshPending[projectID][p.cfg.Name] = p
+	}
+	pending := total
+collect:
+	for pending > 0 {
+		select {
+		case r := <-results:
+			if r.client != nil {
+				fresh[r.projectID][r.name] = r.client
+			} else {
+				addPending(r.projectID, newPendingServer(r.cfg, r.err, now))
+			}
+			pending--
+		case <-ctx.Done():
+			m.logger.Warn().
+				Int("connected", total-pending).
+				Int("total", total).
+				Msg("mcp: reconnect budget exceeded; proceeding with connected servers, slow dials abandoned")
+			break collect
+		}
+	}
+	return freshPending, pending
 }

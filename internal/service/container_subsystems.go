@@ -17,6 +17,7 @@ import (
 	"fmt"
 	"maps"
 	"os"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -56,7 +57,19 @@ import (
 // watcher-wedge fix.
 const mcpReconnectBudget = 35 * time.Second
 
+// mcpStartupBudget bounds the boot-time reconcile: a server still dialling
+// when it expires becomes pending, is installed when its dial finishes, and
+// is retried by the reconnector otherwise, so one slow or dead server no
+// longer holds the HTTP listener closed (MCP failed-connect recovery design,
+// phase 2 P1). Reloads keep mcpReconnectBudget.
+const mcpStartupBudget = 5 * time.Second
+
 func (c *Container) initMCP() {
+	c.initMCPWithBudget(mcpReconnectBudget)
+}
+
+// initMCPWithBudget reconciles the MCP manager within budget.
+func (c *Container) initMCPWithBudget(budget time.Duration) {
 	if c.Registry == nil {
 		return
 	}
@@ -85,7 +98,7 @@ func (c *Container) initMCP() {
 	// fix for the 2026-07-08 watcher wedge (offline MCP server stalled the
 	// activator; the deferred initMCP-no-timeout follow-up from the
 	// 2026-07-06 non-blocking-config-save design).
-	ctx, cancel := context.WithTimeout(context.Background(), mcpReconnectBudget)
+	ctx, cancel := context.WithTimeout(context.Background(), budget)
 	defer cancel()
 	c.mcpManager.SyncProjects(ctx, desired)
 	if len(desired) == 0 {
@@ -109,6 +122,7 @@ func (c *Container) initMCP() {
 func (c *Container) mcpDesiredServers() map[string][]mcp.ServerConfig {
 	daemonServers := indexMCPServersByName(c.daemonMCPServers())
 	desired := make(map[string][]mcp.ServerConfig)
+	var withheld []string
 	for _, p := range c.Registry.ListProjects() {
 		if len(p.MCP.Servers) == 0 {
 			continue
@@ -158,9 +172,9 @@ func (c *Container) mcpDesiredServers() map[string][]mcp.ServerConfig {
 			// server's connection fields while keeping the project's
 			// own AllowedTools narrowing. A project entry that already
 			// declares its own transport stays verbatim (today's
-			// behavior), and a name-only entry with no daemon match
-			// falls through unchanged — the manager's existing
-			// log-and-skip path handles it.
+			// behavior), and a name-only entry with no daemon match is
+			// withheld with an error (2026-10-01; it used to fall through
+			// to a dial that failed with `unsupported transport ""`).
 			auth := s.Auth
 			grants := mcpauth.Grants{Allowed: p.Permissions.Secrets}
 			// Scope the CREDENTIAL is resolved under. The project's own by
@@ -194,6 +208,7 @@ func (c *Container) mcpDesiredServers() map[string][]mcp.ServerConfig {
 								Str("project", p.ID).
 								Str("server", s.Name).
 								Msg("MCP: refusing to register server — the project entry and the daemon-scope server both declare auth; give the project entry its own transport/url to own the credential, or drop its auth block to inherit the daemon's")
+							withheld = append(withheld, p.ID+"/"+s.Name+": both the project entry and the daemon-scope server declare auth")
 							continue
 						}
 						auth = daemon.Auth
@@ -208,6 +223,18 @@ func (c *Container) mcpDesiredServers() map[string][]mcp.ServerConfig {
 							Str("server", s.Name).
 							Msg("MCP: project uses a daemon-scope server whose credentials are shared with every project")
 					}
+				} else {
+					// A name-only subscription to a server config.yaml does not
+					// define is a configuration error, not an outage: withhold it,
+					// so the manager does not retry and alert on something that
+					// can never connect (MCP failed-connect recovery design, As
+					// built; the assistant project's "homeassistant", 2026-10-01).
+					c.Logger.Error().
+						Str("project", p.ID).
+						Str("server", s.Name).
+						Msg("MCP: refusing to register server — the project subscribes to it by name only, but config.yaml mcp.servers defines no server of that name; add it there or give the project entry its own transport")
+					withheld = append(withheld, p.ID+"/"+s.Name+": subscribed by name only, but config.yaml mcp.servers does not define it")
+					continue
 				}
 			}
 			// The program a stdio launch runs, minted here — where the loaded
@@ -231,6 +258,10 @@ func (c *Container) mcpDesiredServers() map[string][]mcp.ServerConfig {
 		}
 		desired[p.ID] = servers
 	}
+	sort.Strings(withheld)
+	c.mcpWithheldMu.Lock()
+	c.mcpWithheld = withheld
+	c.mcpWithheldMu.Unlock()
 	return desired
 }
 
@@ -1130,4 +1161,11 @@ func (c *Container) chatAuthShim() *chatauth.Shim {
 		)
 	})
 	return c.chatShim
+}
+
+// mcpWithheldServers returns the servers the last config resolution withheld.
+func (c *Container) mcpWithheldServers() []string {
+	c.mcpWithheldMu.Lock()
+	defer c.mcpWithheldMu.Unlock()
+	return append([]string(nil), c.mcpWithheld...)
 }

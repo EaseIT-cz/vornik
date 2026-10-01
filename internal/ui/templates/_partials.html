@@ -62,6 +62,12 @@
     <link rel="apple-touch-icon" sizes="180x180" href="/ui/static/apple-touch-icon.png">
     <title>{{.Title}} - Vornik</title>
     <script src="https://cdn.tailwindcss.com"></script>
+    {{/* The ONE sender of the double-submit CSRF token (internal/ui/csrf_client.js;
+         CE human-login LLD §6.3). Before htmx and every page script, so htmx
+         requests, the fetch API and POST forms all carry it. Inline, not
+         /ui/static/: the service worker caches static assets forever. Without
+         it every mutating console action is refused 403 (P1, 2026-09-28). */}}
+    <script>{{csrfClientScript}}</script>
     {{/* HTMX is vendored under /ui/static/ so the dashboard works offline
          and the CDN can't break the UI. Tailwind stays on the CDN — a
          self-hosted build needs a node toolchain we don't ship. */}}

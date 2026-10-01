@@ -24,6 +24,8 @@ func resetCompanionFlags() {
 	companionGrantExpires = ""
 	companionGrantRepoScope = ""
 	companionGrantJSON = false
+	companionGrantMemoryRead = false
+	companionGrantNoDelegate = false
 	companionKeysProject = ""
 	companionKeysJSON = false
 }
@@ -273,4 +275,93 @@ func TestRunCompanionKeysList_PropagatesAPIError(t *testing.T) {
 	err := runCompanionKeysList(nil, nil)
 	require.Error(t, err)
 	assert.Contains(t, strings.ToUpper(err.Error()), "VALIDATION_ERROR")
+}
+
+// TestRunCompanionGrant_NoDelegate_ForwardedAndPrinted — --no-delegate is the
+// shape of a front agent's memory key (broker design 2026-09-29 §8); it must
+// reach the daemon as delegateDisabled and the output must say so.
+func TestRunCompanionGrant_NoDelegate_ForwardedAndPrinted(t *testing.T) {
+	t.Cleanup(resetCompanionFlags)
+	srv, captured := captureGrantRequest(t, `{
+		"id":"k1","projectId":"memory-acme","clientKind":"hermes",
+		"secret":"sk-vornik-memory.xxx","keyPrefix":"sk-vornik-me",
+		"memoryRead":true,"delegateDisabled":true,
+		"createdAt":"2026-09-29T10:00:00Z"
+	}`)
+	defer srv.Close()
+	t.Setenv("VORNIK_API_URL", srv.URL)
+	t.Setenv("VORNIK_API_KEY", "test-admin-key")
+
+	companionGrantProject = "memory-acme"
+	companionGrantClient = "hermes"
+	companionGrantMemoryRead = true
+	companionGrantNoDelegate = true
+
+	out, err := captureStdoutFunc(t, func() error { return runCompanionGrant(nil, nil) })
+	require.NoError(t, err)
+
+	var got map[string]any
+	require.NoError(t, json.Unmarshal(*captured, &got))
+	assert.Equal(t, true, got["delegateDisabled"])
+	assert.Contains(t, out, "delegate:   disabled")
+	assert.Contains(t, out, "workflows:  none (delegate disabled)")
+}
+
+// Mixed versions: an older daemon ignores the unknown delegateDisabled field
+// and mints a key that CAN delegate. The CLI must notice the missing echo,
+// revoke the key it was just handed, and fail — never report a memory-only
+// key that is not one (broker design 2026-09-29, upgrade section).
+func TestRunCompanionGrant_NoDelegate_RevokesWhenDaemonIgnoresIt(t *testing.T) {
+	t.Cleanup(resetCompanionFlags)
+	var deleted string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodDelete {
+			deleted = r.URL.Path
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusCreated)
+		_, _ = w.Write([]byte(`{"id":"k-old","projectId":"memory-acme","clientKind":"claude-code",
+			"secret":"sk-vornik-memory.xxx","keyPrefix":"sk-vornik-me","memoryRead":true,
+			"createdAt":"2026-09-29T10:00:00Z"}`))
+	}))
+	defer srv.Close()
+	t.Setenv("VORNIK_API_URL", srv.URL)
+	t.Setenv("VORNIK_API_KEY", "test-admin-key")
+
+	companionGrantProject = "memory-acme"
+	companionGrantClient = "claude-code"
+	companionGrantMemoryRead = true
+	companionGrantNoDelegate = true
+
+	out, err := captureStdoutFunc(t, func() error { return runCompanionGrant(nil, nil) })
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "does not support --no-delegate")
+	assert.Equal(t, "/api/v1/projects/memory-acme/keys/k-old", deleted, "the key the old daemon minted must be revoked")
+	assert.NotContains(t, out, "sk-vornik-memory.xxx", "the secret of a revoked key must not be printed")
+}
+
+func TestRunCompanionGrant_NoDelegate_RevokeFailureSaysRevokeByHand(t *testing.T) {
+	t.Cleanup(resetCompanionFlags)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodDelete {
+			w.WriteHeader(http.StatusInternalServerError)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusCreated)
+		_, _ = w.Write([]byte(`{"id":"k-old","projectId":"memory-acme","clientKind":"claude-code","secret":"s","keyPrefix":"p","createdAt":"2026-09-29T10:00:00Z"}`))
+	}))
+	defer srv.Close()
+	t.Setenv("VORNIK_API_URL", srv.URL)
+	t.Setenv("VORNIK_API_KEY", "test-admin-key")
+	companionGrantProject = "memory-acme"
+	companionGrantClient = "claude-code"
+	companionGrantNoDelegate = true
+
+	err := runCompanionGrant(nil, nil)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "revoke it by hand")
+	assert.Contains(t, err.Error(), "k-old")
 }

@@ -313,3 +313,24 @@ var assertAnErr = errStub("boom")
 type errStub string
 
 func (e errStub) Error() string { return string(e) }
+
+// TestScanContainerLogsForSecrets_RecordsRedactionAudit — the container-log
+// checkpoint redacted and logged but recorded nothing (secret-leak Phase 3
+// design, "the remaining sinks", 2026-10-01).
+func TestScanContainerLogsForSecrets_RecordsRedactionAudit(t *testing.T) {
+	e := newTestExecutorWithSecrets(t, nil)
+	audit := &fakeRedactionAudit{}
+	e.secretRedactionAudit = audit
+
+	body := []byte("ANTHROPIC_API_KEY=sk-ant-api03-abcdefghijklmnopqrstuvwxyz1234\nstep failed")
+	e.scanContainerLogsForSecrets(context.Background(),
+		&persistence.Execution{ID: "e1", TaskID: "t1", ProjectID: "p1"}, "step", body)
+
+	require.NotEmpty(t, audit.events, "a container-log finding must persist an audit event")
+	ev := audit.events[0]
+	assert.Equal(t, "p1", ev.ProjectID)
+	assert.Equal(t, "t1", ev.TaskID)
+	assert.Equal(t, "e1", ev.ExecutionID)
+	assert.Equal(t, secrets.CheckpointContainerLogs, ev.Checkpoint)
+	assert.Equal(t, "live", ev.Source)
+}

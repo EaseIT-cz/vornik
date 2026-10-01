@@ -70,7 +70,9 @@ func TestSqliteStringArray_RoundTrip(t *testing.T) {
 // across the various input shapes.
 func TestSqliteTimeHelpers(t *testing.T) {
 	t0 := time.Date(2026, 5, 20, 12, 0, 0, 0, time.UTC)
-	if got := sqliteTime(t0); got != "2026-05-20T12:00:00Z" {
+	// The fixed-width form (SQLite timestamp ordering design, D1): a whole
+	// second keeps its nine zero digits, so it sorts before any fraction.
+	if got := sqliteTime(t0); got != "2026-05-20T12:00:00.000000000Z" {
 		t.Errorf("sqliteTime = %q", got)
 	}
 	if v := sqliteTimePtr(nil); v != nil {

@@ -27,6 +27,9 @@ func TestRedactConfig_MasksSecretShapedKeys(t *testing.T) {
 		{"dsn", "dsn", "postgres://u:p@h/db", true},
 		{"connection_string", "connection_string", "Server=x;Password=y", true},
 		{"private_key", "private_key", "-----BEGIN KEY-----", true},
+		// External scan 2026-10-01 (F2): admin.allowed_keys has no json tag.
+		{"admin allowlist", "AllowedKeys", "sk-vornik-admin-x", true},
+		{"s3 access key id", "access_key_id", "AKIAEXAMPLE", true},
 		{"max_tokens_carveout", "max_tokens", "4096", false},
 		{"external_base_url_carveout", "external_base_url", "https://vornik.example.com", false},
 		{"webuibaseurl_carveout", "WebUIBaseURL", "https://ui.example.com", false},

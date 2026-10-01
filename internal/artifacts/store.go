@@ -51,6 +51,10 @@ type Store struct {
 	// images.
 	secretsDetector secrets.Detector
 	secretsActions  map[string]secrets.Action
+	// redactionRecorder (optional) records the artifact checkpoint's strong
+	// findings to secret_redaction_audit (secret-leak Phase 3 design,
+	// "the remaining sinks"). Nil records nothing.
+	redactionRecorder RedactionRecorder
 }
 
 // StoreOption is a functional option for configuring the Store.
@@ -117,6 +121,43 @@ func (s *Store) BasePath() string {
 // store is initialized before the secrets detector in the service
 // container's boot sequence, so the detector lands via this setter
 // once it's available.
+// RedactionRecorder is the slice of persistence.SecretRedactionAuditRepository
+// the store needs.
+type RedactionRecorder interface {
+	Record(ctx context.Context, events []persistence.SecretRedactionEvent) error
+}
+
+// SetRedactionRecorder wires the secret_redaction_audit recorder. Nil-safe.
+func (s *Store) SetRedactionRecorder(r RedactionRecorder) {
+	s.redactionRecorder = r
+}
+
+// recordStrongFindings records one event per strong finding type. Heuristic
+// findings are not recorded on this surface (the artifact heuristic-redaction
+// design measured ~7,000 with zero true positives). Best-effort: a failure is
+// logged and never fails the write.
+func (s *Store) recordStrongFindings(projectID, taskID string, strong []secrets.Finding) {
+	if s.redactionRecorder == nil || len(strong) == 0 {
+		return
+	}
+	var events []persistence.SecretRedactionEvent
+	for ft, n := range secrets.CountByType(strong) {
+		if n <= 0 {
+			continue
+		}
+		events = append(events, persistence.SecretRedactionEvent{
+			ProjectID: projectID, TaskID: taskID,
+			Checkpoint: secrets.CheckpointArtifacts, FindingType: ft, Count: n, Source: "live",
+		})
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := s.redactionRecorder.Record(ctx, events); err != nil {
+		s.logger.Warn().Err(err).Str("task_id", taskID).Str("checkpoint", secrets.CheckpointArtifacts).
+			Msg("secrets: failed to record redaction audit event(s) — badge/history will under-count")
+	}
+}
+
 func (s *Store) SetSecrets(d secrets.Detector, actions map[string]secrets.Action) {
 	s.secretsDetector = d
 	s.secretsActions = actions
@@ -650,6 +691,7 @@ func (s *Store) scanForBackend(srcPath, mimeType, projectID, taskID, name string
 			//
 			// See https://docs.vornik.io
 			strong := secrets.DropHeuristic(findings)
+			s.recordStrongFindings(projectID, taskID, strong)
 
 			logEvent := s.logger.Warn().
 				Str("project_id", projectID).

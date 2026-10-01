@@ -951,15 +951,15 @@
             const kind = evt.kind || '';
             const payload = evt.payload || {};
             switch (kind) {
-                case 'step_started':       onStepStarted(payload); break;
-                case 'step_completed':     onStepCompleted(payload); break;
+                case 'step_started':       onStepStarted(payload, evt.seq); break;
+                case 'step_completed':     onStepCompleted(payload, evt.seq); break;
                 case 'llm_call_started':   onLLMCallStarted(payload); break;
                 case 'llm_call_finished':  onLLMCallFinished(payload); break;
                 case 'llm_token':          onLLMToken(payload); break;
                 case 'tool_call_started':  onToolCallStarted(payload); break;
                 case 'tool_call_finished': onToolCallFinished(payload); break;
                 case 'file_edit':          onFileEdit(payload); break;
-                case 'outcome_recorded':   onOutcomeRecorded(payload); break;
+                case 'outcome_recorded':   onOutcomeRecorded(payload, evt.seq); break;
                 case 'narration_line':     onNarrationLine(payload); break;
                 case 'hint_applied':       onHintApplied(payload); break;
                 case 'paused':             onPaused(payload); break;
@@ -1107,21 +1107,45 @@
             }
         }
 
-        function onStepStarted(p) {
+        // applyStatusSeq reports whether a frame with this seq may set the
+        // card's status, and records it as the card's high-water mark if so.
+        // A frame whose seq is not newer than the one that last set the
+        // badge is refused: a duplicate or out-of-order replay must never
+        // regress a finished card to "running" (T-0d3c, 2026-09-28 — a DB
+        // replay for another viewer fanned old step_started frames to this
+        // page). Per card, not per execution: live events from different
+        // replicas can legitimately arrive out of seq order, and only the
+        // status transitions need the guard. Frames without a seq, and the
+        // synthetic seq -1, always apply.
+        function applyStatusSeq(card, seq) {
+            if (typeof seq !== 'number' || seq < 0) return true;
+            if (typeof card.statusSeq === 'number' && seq <= card.statusSeq) return false;
+            card.statusSeq = seq;
+            return true;
+        }
+
+        function onStepStarted(p, seq) {
             const sid = p.step_id || '';
             if (!sid) return;
+            // A stale start must not open or activate the card either, so
+            // an existing card is checked before ensureStepCard touches it;
+            // a new card records this seq as its first status.
+            const known = stepCards[sid];
+            if (known && !applyStatusSeq(known, seq)) return;
             const card = ensureStepCard(sid, {active: true});
+            if (!known) applyStatusSeq(card, seq);
             card.badge.textContent = 'running';
             card.badge.className = 'inline-flex items-center px-1.5 py-0.5 text-[10px] font-medium rounded bg-accent-900/40 text-accent-300';
             setActiveStep(sid);
         }
 
-        function onStepCompleted(p) {
+        function onStepCompleted(p, seq) {
             const sid = p.step_id || '';
             if (!sid) return;
             // Create-or-adopt: with DB replay the completion may be the
             // first event we see for this step (2026-07-12 fix).
             const card = ensureStepCard(sid, {});
+            if (!applyStatusSeq(card, seq)) return;
             card.badge.textContent = p.outcome ? p.outcome : 'completed';
             card.badge.className = 'inline-flex items-center px-1.5 py-0.5 text-[10px] font-medium rounded ' +
                 ((p.outcome && p.outcome !== 'ok') ? 'bg-rose-500/10 dark:bg-rose-900/40 text-rose-700 dark:text-rose-300' : 'bg-emerald-500/10 dark:bg-emerald-900/40 text-emerald-700 dark:text-emerald-300');
@@ -1325,7 +1349,7 @@
             card.fileList.appendChild(li);
         }
 
-        function onOutcomeRecorded(p) {
+        function onOutcomeRecorded(p, seq) {
             const sid = p.step_id;
             if (!sid) return;
             // Create-or-adopt (2026-07-12 fix): retry attempts
@@ -1334,6 +1358,7 @@
             // off "running", so it must not be dropped just because the
             // card doesn't exist yet.
             const card = ensureStepCard(sid, {});
+            if (!applyStatusSeq(card, seq)) return;
             if (p.class) {
                 // pending_validation is an interim state, not a failure —
                 // amber like the server-side seed, not rose.

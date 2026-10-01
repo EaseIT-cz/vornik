@@ -87,7 +87,9 @@ sha256sum -c quickstart.sh.sha256 && VORNIK_REF="$REF" bash quickstart.sh
 
 The daemon creates and migrates its own schema on first boot, so all you supply
 is an empty database — the script provisions it. When it finishes, open
-<http://localhost:8080/ui>: a first-run **setup guide** walks you through
+<http://localhost:8080/ui> and log in with the API key the installer generated
+(`VORNIK_API_KEY` in `~/.config/vornik/secrets/api.env`; every request needs it).
+A first-run **setup guide** walks you through
 connecting an LLM endpoint and key (with a live connection test), optional
 memory/RAG, and creating your first project. To do the same from the terminal,
 set `VORNIK_CHAT_API_KEY` in `~/.config/vornik/vornik.env` and run

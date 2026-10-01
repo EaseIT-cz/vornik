@@ -5,7 +5,7 @@ sources:
     - path: internal/memoryfirewall/evaluator.go
       sha256: e86f66f23ad5cd34f55b0bee562d59514951c709f0f9709b6684e34bfead55ed
     - path: internal/memory/gates.go
-      sha256: 73e5984d56f0d8fff846db86e13a250b2bb87cf28b82e1fb264d247afeebb49c
+      sha256: 3d86b8d69f3be22ba37450ea6a2d0703560f85bd230c779084cf1d68b7121c36
 ---
 # Memory & RAG
 
@@ -110,6 +110,16 @@ Two ingest-side gates protect memory at write time:
   redacted (e.g. `[REDACTED:openai_key]`), and a deposit that's mostly secret is
   rejected outright rather than stored as a husk. The escape hatch
   `VORNIK_ALLOW_UNSCANNED_MEMORY` exists for deliberate, audited exceptions.
+
+## Minimum length of a note
+
+Memory also refuses content too short to carry a fact. A note you or an
+agent deposit deliberately, through the companion `remember` tool or by
+asking the assistant in chat to remember something, needs at least three
+words and ten characters. "My dentist is Dr Novak." is kept; "Dr Novak" is
+refused, and the caller is told nothing was saved. Content from documents
+and agent output is held to a higher floor (64 characters and 10 words),
+because a fragment that short is usually leftover from splitting a document.
 
 ## Audit and compliance export
 

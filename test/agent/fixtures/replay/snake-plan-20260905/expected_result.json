@@ -16,9 +16,9 @@
     "cache_read_tokens": 0,
     "total_tokens": 9572,
     "iterations": 2,
-    "max_request_bytes": 24076,
-    "max_prompt_tokens_estimate": 8026,
-    "prompt_tokens_estimated_total": 15439,
+    "max_request_bytes": 24126,
+    "max_prompt_tokens_estimate": 8042,
+    "prompt_tokens_estimated_total": 15471,
     "max_prompt_tokens_actual": 4535,
     "context_size": 100000,
     "max_tokens": 8192

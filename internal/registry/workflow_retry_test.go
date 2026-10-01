@@ -89,6 +89,40 @@ func TestRetryOnRejectsUnknownErrorClass(t *testing.T) {
 	}
 }
 
+// A KNOWN class that names a deterministic failure is still rejected: the step
+// retry ladder re-runs with identical inputs, so it may only name classes a
+// transient condition can produce. Incident T-0d3c (2026-09-28) spent five
+// identical ~620k-token attempts on a schema violation. Design:
+// 2026-08-27-step-retry-configuration-design.md §9 D9.2.
+func TestRetryOnRejectsDeterministicErrorClasses(t *testing.T) {
+	for _, class := range []string{
+		"verify_claims_failed", "prompt_token_budget", "iteration_cap",
+		"degenerate_loop", "context_overflow", "plausibility_violation",
+		"missing_prerequisite", "hallucinated_claim",
+	} {
+		t.Run(class, func(t *testing.T) {
+			src := strings.Replace(retryStepYAML,
+				`["llm_call_failed", "context_timeout"]`,
+				`["llm_call_failed", "`+class+`"]`, 1)
+			var w Workflow
+			if err := yaml.Unmarshal([]byte(src), &w); err != nil {
+				t.Fatalf("unmarshal: %v", err)
+			}
+			err := w.Validate("wf.md")
+			if err == nil {
+				t.Fatalf("retry.on naming the deterministic class %q must fail validation", class)
+			}
+			msg := err.Error()
+			if !strings.Contains(msg, class) {
+				t.Errorf("error must name the offending class: %q", msg)
+			}
+			if !strings.Contains(msg, "context_timeout") || !strings.Contains(msg, "unclassified") {
+				t.Errorf("error must list the retryable classes so the fix is obvious: %q", msg)
+			}
+		})
+	}
+}
+
 // Known classes validate cleanly.
 func TestRetryOnAcceptsKnownErrorClasses(t *testing.T) {
 	var w Workflow

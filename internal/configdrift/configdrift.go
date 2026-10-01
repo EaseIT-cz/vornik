@@ -224,7 +224,22 @@ func compareFile(rel string, cls Class, tmplBytes, deployedBytes []byte, configs
 		}
 		return nil
 	}
-	hunks, idx, inserted := diffHalves(tmpl, dep, ops)
+	// Exact mode is decided once per file, and only when a replace or an
+	// insert needs it (drift design, slice G).
+	var origin map[string]bool
+	var vagueReason string
+	if hasTag(ops, 'r') || hasTag(ops, 'i') {
+		origin, vagueReason = trustedOrigin(rel, dep, configsDir, origins)
+	}
+	// Owned here, not by classifySoft, so a replace-only file with a slice G
+	// hunk is consistently exact (review-20260930-21d7). Hard keys do not
+	// carry the regime, and the soft key exists only with inserted lines, the
+	// case that already set it, so no existing ack re-keys.
+	if origin != nil {
+		ff.Exact = true
+		ff.OriginRevision = origins[rel].revision
+	}
+	hunks, idx, inserted := diffHalves(tmpl, dep, ops, origin)
 	ff.missingHunks, ff.missingIdx, ff.tmplLines = hunks, idx, tmpl
 	var missing []string
 	for _, h := range hunks {
@@ -232,7 +247,7 @@ func compareFile(rel string, cls Class, tmplBytes, deployedBytes []byte, configs
 	}
 	ff.Missing = bound(missing)
 	if len(inserted) > 0 {
-		classifySoft(ff, inserted, tmpl, dep, configsDir, origins)
+		classifySoft(ff, inserted, tmpl, origin, vagueReason)
 	}
 	if len(ff.Missing) == 0 && len(ff.RemovedByTemplate) == 0 && ff.SoftCount == 0 {
 		return nil
@@ -242,8 +257,10 @@ func compareFile(rel string, cls Class, tmplBytes, deployedBytes []byte, configs
 
 // diffHalves splits the opcodes into the hard `d` half (template lines the
 // deployment lacks, documentation filtered) and the soft `a` half (deployed-only
-// hunks, blank lines dropped). `replace` is the ignored `c` class.
-func diffHalves(tmpl, dep []string, ops []difflib.OpCode) (missing [][]string, missingIdx [][]int, inserted [][]string) {
+// hunks, blank lines dropped). `replace` is the ignored `c` class, except in
+// exact mode (origin non-nil) where an untuned value the template changed is a
+// missed change and joins the hard half (slice G).
+func diffHalves(tmpl, dep []string, ops []difflib.OpCode, origin map[string]bool) (missing [][]string, missingIdx [][]int, inserted [][]string) {
 	fmEnd := frontMatterEnd(tmpl)
 	for _, op := range ops {
 		switch op.Tag {
@@ -264,18 +281,56 @@ func diffHalves(tmpl, dep []string, ops []difflib.OpCode) (missing [][]string, m
 			if hunk := nonBlank(dep[op.J1:op.J2]); len(hunk) > 0 {
 				inserted = append(inserted, hunk)
 			}
+		case 'r':
+			if hunk, at := missedValue(tmpl, dep, op, origin, fmEnd); len(hunk) > 0 {
+				missing = append(missing, hunk)
+				missingIdx = append(missingIdx, at)
+			}
 		}
 	}
 	return missing, missingIdx, inserted
 }
 
+// missedValue applies slice G to one replace opcode. With a trusted .origin,
+// when every non-blank deployed line is an .origin line (the deployment never
+// tuned it), the template lines absent from .origin (what the template
+// changed), documentation filtered, are a missed change. Anything else, and
+// vague mode (origin nil), is tuning or nothing, and returns nil.
+func missedValue(tmpl, dep []string, op difflib.OpCode, origin map[string]bool, fmEnd int) ([]string, []int) {
+	if origin == nil {
+		return nil, nil
+	}
+	for _, l := range dep[op.J1:op.J2] {
+		if strings.TrimSpace(l) != "" && !origin[l] {
+			return nil, nil
+		}
+	}
+	var hunk []string
+	var at []int
+	for i := op.I1; i < op.I2; i++ {
+		l := tmpl[i]
+		if strings.TrimSpace(l) == "" || isDocumentation(l, i, fmEnd) || origin[l] {
+			continue
+		}
+		hunk = append(hunk, l)
+		at = append(at, i)
+	}
+	return hunk, at
+}
+
+func hasTag(ops []difflib.OpCode, tag byte) bool {
+	for _, op := range ops {
+		if op.Tag == tag {
+			return true
+		}
+	}
+	return false
+}
+
 // classifySoft fills the soft class: exact against a trustworthy .origin,
 // otherwise the vague count and largest hunk, with the reason.
-func classifySoft(ff *FileFinding, inserted [][]string, tmpl, dep []string, configsDir string, origins map[string]originEntry) {
-	origin, reason := trustedOrigin(ff.Rel, dep, configsDir, origins)
+func classifySoft(ff *FileFinding, inserted [][]string, tmpl []string, origin map[string]bool, reason string) {
 	if origin != nil {
-		ff.Exact = true
-		ff.OriginRevision = origins[ff.Rel].revision
 		// A line the template REMOVED was in .origin and is absent from the
 		// current template. A line the template still has, elsewhere, was
 		// moved — a tuner's reorder — which is tuning, not a template

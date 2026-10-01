@@ -1477,6 +1477,14 @@ type APIKey struct {
 	// is opt-in per key. Stored as BOOLEAN on postgres and INTEGER 0/1
 	// on the sqlite mirror.
 	AllowPush bool `json:"allow_push,omitempty"`
+
+	// DelegateDisabled refuses every task tool on the companion endpoint
+	// (delegate, status, result, cancel, list, catalog) for this key. It is
+	// how a front agent's MEMORY key is kept from also being a delegate key:
+	// an empty AllowedWorkflows is refused at grant, and nil means "all".
+	// Set by `vornikctl companion grant --no-delegate`. Broker design
+	// (https://docs.vornik.io) §8.
+	DelegateDisabled bool `json:"delegate_disabled,omitempty"`
 }
 
 // RotatedCopy returns the replacement key for a rotation: a brand-new
@@ -1510,7 +1518,11 @@ func (k *APIKey) RotatedCopy(id, keyHash, keyPrefix, createdBy string, now time.
 		DefaultRepoScope: k.DefaultRepoScope,
 		MemoryRead:       k.MemoryRead,
 		MemoryWrite:      k.MemoryWrite,
+		SkillRead:        k.SkillRead,
+		SkillWrite:       k.SkillWrite,
+		SkillAdmin:       k.SkillAdmin,
 		AllowPush:        k.AllowPush,
+		DelegateDisabled: k.DelegateDisabled,
 	}
 	// Pointer-valued fields: copy the pointee so the rotated row never
 	// aliases the prior row's storage.
@@ -2159,6 +2171,14 @@ type ExecutionStepOutcome struct {
 	// 125 (podman refused to start) are different findings, and a regex over
 	// free text is the salvage-parsing we are trying to delete.
 	ContainerExitCode *int `json:"container_exit_code,omitempty"`
+	// ContainerMemoryPeakBytes is the agent container's cgroup memory
+	// high-water mark as the container itself reported it in result.json
+	// (agent container memory limits design §2.3a; migration 204). nil means
+	// not reported: an OOM kill, a crash, a warm-pool container whose peak
+	// spans tasks, or a host where the read is not trusted. Never defaulted
+	// to 0. A distribution read from it understates the tail unless OOM
+	// kills (vornik_runtime_container_oom_kills_total) are counted beside it.
+	ContainerMemoryPeakBytes *int64 `json:"container_memory_peak_bytes,omitempty"`
 	// PromptHashes point into step_prompts: what the model was TOLD at the
 	// step's first request, in three content-addressed parts (step-prompt
 	// persistence design §4), and — since migration 178 — the two files at

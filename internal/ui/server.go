@@ -802,6 +802,14 @@ type Server struct {
 	// TODO(web-write Task 10) so the operator decision is never lost. The raw
 	// token is delivered to the agent ONLY; it is never rendered in the UI.
 	webWriteApprovalDeliver WebWriteApprovalDeliverFunc
+
+	// brokerActionRepo backs the broker write-action cards in /inbox
+	// (broker write-actions design §5.3); nil hides them. brokerActionKick
+	// hands an approved action to the daemon's action worker.
+	brokerActionRepo persistence.BrokerActionRepository
+	brokerActionKick func(actionID string)
+	// brokerActionChanged tells the push outbox a decision was recorded.
+	brokerActionChanged func()
 }
 
 // WebWriteApprovalDeliverFunc delivers an approved web-write's one-time
@@ -2357,6 +2365,7 @@ func (s *Server) Handler() http.Handler {
 	// Approve mints the one-time capability token; both are POST-only (never a
 	// deeplinkable GET).
 	mux.HandleFunc("/inbox/web-write/", s.webWriteInboxRouter)
+	mux.HandleFunc("/inbox/broker-action/", s.brokerActionInboxRouter)
 
 	// Executions — cross-task run list (IA completion) + detail/actions
 	// under the prefix.
@@ -2414,7 +2423,7 @@ func (s *Server) Handler() http.Handler {
 	// Vendored client-side assets (htmx.min.js). Serve with a long
 	// Cache-Control since the asset is shipped pinned to a binary
 	// version — any change in JS implies a redeploy.
-	mux.Handle("/static/", http.StripPrefix("/", http.FileServer(http.FS(staticFS))))
+	mux.Handle("/static/", staticHandler())
 
 	// Cmd+K palette JSON endpoint. Mounted at /palette/search so
 	// the global key handler in pageHead can fetch+render results
@@ -2943,6 +2952,9 @@ func (s *Server) render(w http.ResponseWriter, name string, data any) {
 // nav helpers (and any future entry) are unit-testable in isolation.
 func uiFuncMap() template.FuncMap {
 	return template.FuncMap{
+		// The double-submit CSRF sender, rendered inline by pageHead
+		// (csrf_client.go; design §6.3 of the CE human-login LLD).
+		"csrfClientScript": csrfClientScript,
 		"index": func(m map[persistence.TaskStatus]int64, key persistence.TaskStatus) int64 {
 			if m == nil {
 				return 0

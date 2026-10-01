@@ -292,6 +292,12 @@ type Repositories struct {
 	// fail-softs to 503 when unwired, same pattern as
 	// CrossProjectCalls.
 	WorkflowProposals persistence.WorkflowProposalRepository
+	// BrokerActions persists writes proposed by broker workflows, approved in
+	// /inbox and executed by the daemon (broker write-actions design §5).
+	BrokerActions persistence.BrokerActionRepository
+	// CompanionPushOutbox reads due companion pushes and records delivery
+	// (broker write-actions design §7a).
+	CompanionPushOutbox persistence.CompanionPushOutbox
 	// ClusterNodes backs the fleet heartbeat registry (migration 95,
 	// Slice C1). Every DB-having node (ui/worker/all) upserts its
 	// own row; the /api/v1/cluster endpoint reads the table.
@@ -464,6 +470,8 @@ func buildSQLiteRepositories(db *sql.DB) *Repositories {
 		ProfileUseAudit:         sqlite.NewProfileUseAuditRepository(db),
 		TelegramPollerState:     sqlite.NewTelegramPollerStateRepository(db),
 		WorkflowProposals:       sqlite.NewWorkflowProposalRepository(db),
+		BrokerActions:           sqlite.NewBrokerActionRepository(db),
+		CompanionPushOutbox:     sqlite.NewCompanionPushOutbox(db),
 		// Round 3 — memory + KG.
 		StepOutcomes:         sqlite.NewExecutionStepOutcomeRepository(db),
 		StepPrompts:          sqlite.NewStepPromptRepository(db),
@@ -632,6 +640,8 @@ func Build(dbtx persistence.DBTX) *Repositories {
 		ProfileUseAudit:                postgres.NewProfileUseAuditRepository(dbtx),
 		TelegramPollerState:            postgres.NewTelegramPollerStateRepository(dbtx),
 		WorkflowProposals:              postgres.NewWorkflowProposalRepository(dbtx),
+		BrokerActions:                  postgres.NewBrokerActionRepository(dbtx),
+		CompanionPushOutbox:            postgres.NewCompanionPushOutbox(dbtx),
 		ExecutionNarration:             postgres.NewExecutionNarrationRepository(dbtx),
 	}
 	withPostgresTradingStores(r, dbtx)

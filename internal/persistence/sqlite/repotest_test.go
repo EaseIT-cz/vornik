@@ -603,7 +603,7 @@ func TestClusterNode_Contract(t *testing.T) {
 
 func TestLeaderLock_Contract(t *testing.T) {
 	repotest.RunLeaderLockSuite(t, sqlite.NewLeaderLockRepository(newTestDB(t).DB))
-	repotest.RunLeaderLockBoundarySuite(t, sqlite.NewLeaderLockRepository(newTestDB(t).DB), time.Second)
+	repotest.RunLeaderLockBoundarySuite(t, sqlite.NewLeaderLockRepository(newTestDB(t).DB), time.Microsecond)
 }
 
 func TestEntityMention_Contract(t *testing.T) {
@@ -662,4 +662,43 @@ func TestPackageContributionSuite(t *testing.T) {
 func TestCredentialSessionSuite(t *testing.T) {
 	db := newTestDB(t)
 	repotest.RunCredentialSessionSuite(t, sqlite.NewUISessionRepository(db.DB), sqlite.NewIdentityRepository(db.DB))
+}
+
+// TestBrokerAction_Contract — the broker write-action store (broker
+// write-actions design §5). CE runs broker projects on SQLite too.
+func TestBrokerAction_Contract(t *testing.T) {
+	db := newTestDB(t)
+	repotest.RunBrokerActionSuite(t, sqlite.NewBrokerActionRepository(db.DB), func(t *testing.T, taskID, projectID, status string) {
+		t.Helper()
+		now := time.Now().UTC().Format(time.RFC3339Nano)
+		if _, err := db.Exec(`INSERT INTO tasks (id, project_id, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?)`,
+			taskID, projectID, status, now, now); err != nil {
+			t.Fatalf("seed task: %v", err)
+		}
+	})
+}
+
+// TestCompanionPush_Contract runs the §7a outbox suite (broker write-actions
+// design) on SQLite.
+func TestCompanionPush_Contract(t *testing.T) {
+	db := newTestDB(t)
+	repotest.RunCompanionPushSuite(t, repotest.CompanionPushHarness{
+		Outbox:  sqlite.NewCompanionPushOutbox(db.DB),
+		Configs: sqlite.NewA2APushConfigRepository(db.DB),
+		Actions: sqlite.NewBrokerActionRepository(db.DB),
+		SeedTask: func(t *testing.T, id, projectID, source, status string) {
+			t.Helper()
+			now := time.Now().UTC().Format(time.RFC3339Nano)
+			if _, err := db.Exec(`INSERT INTO tasks (id, project_id, status, creation_source, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)`,
+				id, projectID, status, source, now, now); err != nil {
+				t.Fatalf("seed task: %v", err)
+			}
+		},
+		SetStatus: func(t *testing.T, id, status string) {
+			t.Helper()
+			if _, err := db.Exec(`UPDATE tasks SET status = ? WHERE id = ?`, status, id); err != nil {
+				t.Fatal(err)
+			}
+		},
+	})
 }

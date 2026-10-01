@@ -267,6 +267,9 @@ func (c *Container) initDispatcher() {
 			dispatcher.WithWebWriteRepo(repo),
 			dispatcher.WithWebWritesConfig(c.Config.Web),
 			dispatcher.WithWebWriteTokenStore(store),
+			// Notify-only Telegram alert for a stored preview (supervised
+			// web-write design Components.4; unwired until 2026-09-30).
+			dispatcher.WithWebWritePendingNotifier(c.notifyWebWritePending),
 		)
 	}
 

@@ -117,8 +117,16 @@ checked twice: a same-origin signal (`Sec-Fetch-Site`, falling back to
 
 **If you are writing a browser client against this API**, read the
 `vornik_csrf` cookie and echo it in the `X-Vornik-CSRF` header on every POST,
-PUT, PATCH and DELETE. Without it the request is refused with 403 and the
-daemon logs a line naming the signals that drove the decision.
+PUT, PATCH and DELETE. A plain HTML form, which cannot set a header, may
+instead send the token as the form's **first** field, named `vornik_csrf`
+(url-encoded or multipart bodies only). Without it the request is refused with
+403 `CSRF_BLOCKED`, and the message says which check failed: no same-origin
+signal, a missing token, or a token that did not match. The daemon logs the
+same cause alongside the signals that drove the decision.
+
+The web console does all of this itself. If a console button answers
+"CSRF token missing" or "did not match", reload the page; the session may
+have been re-issued in another tab.
 
 Callers using `Authorization: Bearer` — the CLI, MCP clients, A2A peers — skip
 all of this. A browser never attaches that header on its own, so those requests

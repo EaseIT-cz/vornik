@@ -677,6 +677,55 @@ func TestIngestCompanionNote_Rejected_EmptyContent(t *testing.T) {
 	}
 }
 
+// A short personal fact deposited through the companion remember tool is
+// admitted end to end (Hermes e2e lane H3, 2026-09-30: it was REJECTED by
+// min_content; pipeline design update 2026-10-01).
+func TestIngestCompanionNote_AdmitsAShortFact(t *testing.T) {
+	p, _, _, mock, cleanup := newPipelineTestRig(t)
+	defer cleanup()
+	mock.ExpectExec("INSERT INTO project_memory_chunks").
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec("INSERT INTO memory_embed_queue").
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec("UPDATE project_memory_chunks").
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec("UPDATE project_memory_chunks").
+		WillReturnResult(sqlmock.NewResult(0, 0))
+
+	got, err := p.IngestCompanionNote(context.Background(), "e2e-memory", "hermes", "akey-mem", "",
+		"The user's dentist is Dr Novak.", "", 0, "", time.Time{})
+	if err != nil {
+		t.Fatalf("IngestCompanionNote: %v", err)
+	}
+	if got.Stats.Admitted != 1 {
+		t.Fatalf("Admitted = %d, want 1; stats=%+v", got.Stats.Admitted, got.Stats)
+	}
+}
+
+// The same fact typed in chat is admitted too (pipeline design update
+// 2026-10-01: the floor was never companion-specific).
+func TestIngestChatMemory_AdmitsAShortFact(t *testing.T) {
+	p, _, _, mock, cleanup := newPipelineTestRig(t)
+	defer cleanup()
+	p.cfg.CreateChatMemoryArtifact = func(context.Context, string, string, string, int64) error { return nil }
+	mock.ExpectExec("INSERT INTO project_memory_chunks").
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec("INSERT INTO memory_embed_queue").
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec("UPDATE project_memory_chunks").
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectQuery("SELECT id FROM project_memory_chunks").
+		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow("chunk-1"))
+
+	got, err := p.IngestChatMemory(context.Background(), "proj-x", "telegram", "s1", "The user's dentist is Dr Novak.")
+	if err != nil {
+		t.Fatalf("IngestChatMemory: %v", err)
+	}
+	if got.Stats.Admitted != 1 {
+		t.Fatalf("Admitted = %d, want 1; stats=%+v", got.Stats.Admitted, got.Stats)
+	}
+}
+
 func TestIngestCompanionNote_RejectsOversizedTTLBeforeArtifact(t *testing.T) {
 	p, _, _, _, cleanup := newPipelineTestRig(t)
 	defer cleanup()

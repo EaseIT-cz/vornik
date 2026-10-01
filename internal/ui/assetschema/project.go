@@ -211,6 +211,14 @@ var ProjectDeferredPaths = []string{
 	// durable memory writes (chat memory-write design §5.1); YAML-only like the
 	// other allowlists so granting a channel is a deliberate config edit.
 	"memory.write_channels",
+	// Broker-project flag (privileged-work broker design 2026-09-29) — turns
+	// every key on the project broker-only; a deliberate config edit, not a
+	// checkbox.
+	"broker",
+	// Companion push reach (broker write-actions design §7a) — opens private
+	// ranges to outbound webhooks; YAML-only like the other network
+	// allowlists, so widening reach is a deliberate config edit.
+	"companion_push.allowed_cidrs",
 	// MCP server wiring — complex nested blocks.
 	"mcp.servers",
 	"mcp.toolRateLimits",

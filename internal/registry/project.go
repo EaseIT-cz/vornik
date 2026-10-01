@@ -2,6 +2,8 @@
 package registry
 
 import (
+	"net/netip"
+
 	"errors"
 	"fmt"
 	"os"
@@ -11,6 +13,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"vornik.io/vornik/internal/companionpush"
 
 	"github.com/rs/zerolog"
 	"vornik.io/vornik/internal/forge"
@@ -56,6 +60,15 @@ type Project struct {
 	Permissions ProjectPermissions `yaml:"permissions"`
 	// MCP configures Model Context Protocol servers for this project
 	MCP ProjectMCP `yaml:"mcp"`
+	// Broker marks this project as a broker project: the place that holds
+	// credentials a front-end agent (Hermes, OpenClaw, …) must never see.
+	// Every companion key on it is broker-only — no memory, no skills,
+	// broker workflows only — and broker workflows run nowhere else. See
+	// https://docs.vornik.io
+	Broker bool `yaml:"broker,omitempty" since:"2026.9.9"`
+	// CompanionPush configures completion push for this project's companion
+	// tasks. See the broker write-actions design §7a.
+	CompanionPush CompanionPushConfig `yaml:"companion_push,omitempty" since:"2026.9.9"`
 	// Budget caps LLM spend for this project. Zero values disable the cap.
 	Budget ProjectBudget `yaml:"budget"`
 	// Chat configures per-project chat behaviour. Currently only a system
@@ -2160,6 +2173,21 @@ type MCPServerConfig struct {
 	// it is project-scoped or daemon-scoped.
 	// See https://docs.vornik.io §4.
 	Auth mcpauth.Auth `yaml:"auth,omitempty"`
+	// BrokerReadOnly is the operator's declaration that every tool listed
+	// in AllowedTools only reads. A broker workflow's role may hold an MCP
+	// tool only from a server that declares it (and only a tool the list
+	// names). The daemon cannot prove an external server is read-only, so
+	// the claim is explicit and per server. See the broker design §4.2.
+	BrokerReadOnly bool `yaml:"broker_read_only,omitempty"`
+	// OperatorAuthored declares that this server serves only content the
+	// operator wrote. A broker workflow may declare first_party egress only
+	// when every server in its project says so; absent means third party.
+	OperatorAuthored bool `yaml:"operator_authored,omitempty"`
+	// BrokerWrite declares that the tools in AllowedTools write, and may be
+	// called by the daemon to execute a broker action a human approved. No
+	// broker role may hold them: an agent never calls a write tool. Mutually
+	// exclusive with BrokerReadOnly. See the broker write-actions design §4.2.
+	BrokerWrite bool `yaml:"broker_write,omitempty"`
 }
 
 // ProjectPermissions defines project-level access and permissions
@@ -2191,7 +2219,32 @@ func (e ProjectValidationError) Error() string {
 }
 
 // Validate validates a Project struct
+// CompanionPushConfig is a project's companion_push block.
+type CompanionPushConfig struct {
+	// AllowedCIDRs lists the private ranges (RFC 1918, fc00::/7,
+	// 100.64.0.0/10) that pushes for this project's tasks may reach. Empty:
+	// public addresses only. List the narrowest range that reaches the
+	// front agent.
+	AllowedCIDRs []string `yaml:"allowed_cidrs,omitempty" since:"2026.9.9"`
+}
+
+// CompanionPushAllowed returns the parsed allowlist, or nil. Validate has
+// already refused a malformed or out-of-range entry.
+func (p *Project) CompanionPushAllowed() []netip.Prefix {
+	if p == nil || len(p.CompanionPush.AllowedCIDRs) == 0 {
+		return nil
+	}
+	out, err := companionpush.ParseAllowedCIDRs(p.CompanionPush.AllowedCIDRs)
+	if err != nil {
+		return nil
+	}
+	return out
+}
+
 func (p *Project) Validate(filename string) error {
+	if _, err := companionpush.ParseAllowedCIDRs(p.CompanionPush.AllowedCIDRs); err != nil {
+		return ProjectValidationError{File: filename, Field: "companion_push.allowed_cidrs", Message: err.Error()}
+	}
 	if p.ID == "" {
 		return ProjectValidationError{File: filename, Field: "projectId", Message: "projectId is required"}
 	}

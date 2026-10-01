@@ -121,7 +121,8 @@ func (r *ChatMemoryWriteConfirmationRepository) Delete(ctx context.Context, chan
 }
 
 // DeleteExpired sweeps rows at or past expires_at. String comparison is correct because every
-// timestamp is written as UTC RFC3339Nano, which is lexicographically ordered.
+// timestamp is written in sqliteTime's fixed-width form (SQLite timestamp ordering design).
+// RFC3339Nano, used until 2026-10-01, was NOT lexically ordered below one second.
 func (r *ChatMemoryWriteConfirmationRepository) DeleteExpired(ctx context.Context, now time.Time) (int64, error) {
 	res, err := r.db.ExecContext(ctx,
 		`DELETE FROM chat_memory_write_confirmations WHERE expires_at <= ?`,

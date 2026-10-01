@@ -45,6 +45,7 @@ import (
 	"vornik.io/vornik/internal/registry"
 	"vornik.io/vornik/internal/secrets"
 	"vornik.io/vornik/internal/taskcreate"
+	"vornik.io/vornik/internal/taskwait"
 	"vornik.io/vornik/internal/telemetryclient"
 	"vornik.io/vornik/internal/templates"
 	"vornik.io/vornik/internal/tradingauth"
@@ -593,6 +594,16 @@ type Server struct {
 	executionQualityScores persistence.ExecutionQualityScoreRepository
 	artifactRepo           persistence.ArtifactRepository
 	artifactOpener         ArtifactOpener
+	// taskWaitHub releases companion result(wait_seconds) long-polls on a
+	// task's terminal transition (broker design §6). nil: wait_seconds is
+	// accepted and answered immediately.
+	taskWaitHub *taskwait.Hub
+	// brokerActionRepo backs the actions array in companion result/status
+	// for workflows that propose writes (broker write-actions design §6).
+	brokerActionRepo persistence.BrokerActionRepository
+	// companionPushConfigs stores delegate's notify (broker write-actions
+	// design §7a); nil: notify is refused and companion-push is off.
+	companionPushConfigs persistence.A2APushConfigRepository
 	// forker backs POST /executions/{id}/fork-from-step (Feature
 	// #1 Phase B). nil → endpoint returns 503.
 	forker ForkExecutor
@@ -1311,6 +1322,10 @@ type Server struct {
 	// that legitimately carry long high-entropy tokens).
 	secretsDetector secrets.Detector
 	secretsActions  map[string]secrets.Action
+	// secretRedactionAudit records the webhook and backlog-deposit
+	// checkpoints' findings (secret-leak Phase 3 design, "the remaining
+	// sinks"). Nil records nothing.
+	secretRedactionAudit secretRedactionRecorder
 
 	// backlogStore backs POST /api/v1/internal/backlog-deposit (Task 5,
 	// autonomous-development-loop design). nil → the endpoint returns 503.
@@ -1796,6 +1811,20 @@ type ArtifactOpener interface {
 // this for the snapshot to happen.
 func WithInputArtifactStore(s InputArtifactStore) ServerOption {
 	return func(srv *Server) { srv.inputArtifactStore = s }
+}
+
+// WithTaskWaitHub wires the terminal-transition hub the companion result
+// long-poll waits on. The same hub must be registered as an executor
+// completion observer.
+func WithTaskWaitHub(h *taskwait.Hub) ServerOption {
+	return func(srv *Server) { srv.taskWaitHub = h }
+}
+
+// WithBrokerActionRepository wires the broker-action store read by the
+// companion result/status actions array and the companion-broker-actions
+// capability flag.
+func WithBrokerActionRepository(r persistence.BrokerActionRepository) ServerOption {
+	return func(srv *Server) { srv.brokerActionRepo = r }
 }
 
 // WithArtifactOpener wires backend-aware artifact reads for extraction.

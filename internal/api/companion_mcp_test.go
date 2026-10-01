@@ -1036,13 +1036,18 @@ func TestCompanionMCP_Catalog_InputSchemaAndCostEstimate(t *testing.T) {
 	require.NoError(t, json.Unmarshal([]byte(text), &out))
 
 	// delegate_input_schema is present and shaped like a JSON Schema
-	// object naming the required workflow + prompt args.
+	// object. Only workflow is schema-required: prompt is required for an
+	// ordinary workflow and refused for a broker workflow, which takes
+	// inputs instead (broker design 2026-09-29 §4.3), so the handler — not
+	// the schema — enforces it.
 	schema, ok := out["delegate_input_schema"].(map[string]any)
 	require.True(t, ok, "catalog must surface delegate_input_schema")
 	assert.Equal(t, "object", schema["type"])
 	req2, _ := schema["required"].([]any)
-	assert.Contains(t, req2, "workflow")
-	assert.Contains(t, req2, "prompt")
+	assert.Equal(t, []any{"workflow"}, req2)
+	props, _ := schema["properties"].(map[string]any)
+	assert.Contains(t, props, "prompt")
+	assert.Contains(t, props, "inputs")
 
 	wfs, _ := out["workflows"].([]any)
 	require.Len(t, wfs, 1)

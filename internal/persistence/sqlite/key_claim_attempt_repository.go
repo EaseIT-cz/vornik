@@ -43,13 +43,13 @@ func (r *KeyClaimAttemptRepository) RecordClaimAttempt(ctx context.Context, keyI
 
 	if _, err := tx.ExecContext(ctx,
 		`INSERT INTO key_claim_attempts (id, key_id, attempted_at) VALUES (?, ?, ?)`,
-		newClaimAttemptID(now), keyID, now.UTC()); err != nil {
+		newClaimAttemptID(now), keyID, sqliteTime(now)); err != nil {
 		return 0, err
 	}
 	var count int
 	if err := tx.QueryRowContext(ctx,
 		`SELECT count(*) FROM key_claim_attempts WHERE key_id = ? AND attempted_at > ?`,
-		keyID, now.Add(-window).UTC()).Scan(&count); err != nil {
+		keyID, sqliteTime(now.Add(-window))).Scan(&count); err != nil {
 		return 0, err
 	}
 	if err := tx.Commit(); err != nil {
@@ -60,7 +60,7 @@ func (r *KeyClaimAttemptRepository) RecordClaimAttempt(ctx context.Context, keyI
 
 // PruneClaimAttempts deletes attempts older than before.
 func (r *KeyClaimAttemptRepository) PruneClaimAttempts(ctx context.Context, before time.Time) (int64, error) {
-	res, err := r.db.ExecContext(ctx, `DELETE FROM key_claim_attempts WHERE attempted_at <= ?`, before.UTC())
+	res, err := r.db.ExecContext(ctx, `DELETE FROM key_claim_attempts WHERE attempted_at <= ?`, sqliteTime(before))
 	if err != nil {
 		return 0, err
 	}

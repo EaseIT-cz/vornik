@@ -37,7 +37,12 @@ type MockRuntime struct {
 	// lead's first answer is intentionally bad and the second must
 	// recover. Default nil mimics the legacy single-output behaviour.
 	outputJSONSequence []string
-	lastConfig         *runtime.ContainerConfig
+	// logs, when non-empty, is what Logs returns — the container-log tail the
+	// executor appends to a failed step's error. Default empty preserves the
+	// legacy behaviour (no tail). Used by the 2026-09-28 T-0d3c retry tests to
+	// put infra-looking text in the TAIL of a deterministic failure.
+	logs       string
+	lastConfig *runtime.ContainerConfig
 	// waitGate, when non-nil, causes WaitForExit to block on it so tests
 	// can observe the executor's state while a run is mid-flight.
 	waitGate          chan struct{}
@@ -287,7 +292,9 @@ func (m *MockRuntime) RemoveContainer(ctx context.Context, id string, force bool
 }
 
 func (m *MockRuntime) Logs(ctx context.Context, containerID string, tail int) (string, error) {
-	return "", nil
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.logs, nil
 }
 
 type MockExecRepo struct {

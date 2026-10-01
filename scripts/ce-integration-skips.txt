@@ -1,0 +1,12 @@
+# Integration tests that skip BY DESIGN in the exported CE tree, each with
+# its reason (CE export runbook, amendment 2026-10-01, D4). The export's
+# integration lane fails on any skip not listed here. Format:
+# <package>.<Test><TAB><reason>. An entry with no reason fails closed; an
+# entry whose test ran is reported stale, so remove it.
+vornik.io/vornik/internal/persistence/postgres.TestTaskJudgeVerdictRepository_Record	placeholder that always skips: it needs a driver-level mock for the SELECT EXISTS pre-flight
+vornik.io/vornik/internal/persistence/postgres.TestTaskJudgeVerdictRepository_Record_DefaultRecordedAt	placeholder that always skips, as above
+vornik.io/vornik/test/integration.TestDispatcherAnswersFromMemoryWithoutSchedulingTask	opt-in live dispatcher test (VORNIK_INTEGRATION); the public CI does not set it either
+vornik.io/vornik/internal/cli.TestBenchAgent_ShippedTaskSetLoads	reads the EE agent-benchmark task sets, which the export prunes
+vornik.io/vornik/internal/cli.TestIntegrationDepsInstall_WheelImportsInsideTheImage	needs podman and the agent image, which neither the public CI nor the export runner has; the EE integration lane skips it too, so no CI lane runs it today (filed). Passed on a host with the image, 2026-10-01
+vornik.io/vornik/internal/cli.TestIntegrationDepsInstall_SdistIsRefusedAndNeverBuilt	needs podman and the agent image, as above
+vornik.io/vornik/internal/cli.TestIntegrationDepsInstall_IncompleteLockfileIsRefused	needs podman and the agent image, as above

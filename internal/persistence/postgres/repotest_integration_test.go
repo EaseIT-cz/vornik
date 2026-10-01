@@ -999,6 +999,42 @@ func TestProjectFirstSeen_PostgresContract(t *testing.T) {
 	repotest.RunProjectFirstSeenSuite(t, NewProjectFirstSeenRepository(db.DB))
 }
 
+// TestBrokerAction_PostgresContract — the broker write-action store on the
+// production lane (broker write-actions design §5).
+func TestBrokerAction_PostgresContract(t *testing.T) {
+	db := newIntegrationDB(t)
+	repotest.RunBrokerActionSuite(t, NewBrokerActionRepository(db.DB), func(t *testing.T, taskID, projectID, status string) {
+		t.Helper()
+		if _, err := db.DB.Exec(`INSERT INTO tasks (id, project_id, status, created_at, updated_at) VALUES ($1, $2, $3, NOW(), NOW())`,
+			taskID, projectID, status); err != nil {
+			t.Fatalf("seed task: %v", err)
+		}
+	})
+}
+
+// TestCompanionPush_PostgresContract — the §7a outbox on the production lane.
+func TestCompanionPush_PostgresContract(t *testing.T) {
+	db := newIntegrationDB(t)
+	repotest.RunCompanionPushSuite(t, repotest.CompanionPushHarness{
+		Outbox:  NewCompanionPushOutbox(db.DB),
+		Configs: NewA2APushConfigRepository(db.DB),
+		Actions: NewBrokerActionRepository(db.DB),
+		SeedTask: func(t *testing.T, id, projectID, source, status string) {
+			t.Helper()
+			if _, err := db.DB.Exec(`INSERT INTO tasks (id, project_id, status, creation_source, created_at, updated_at) VALUES ($1, $2, $3, $4, NOW(), NOW())`,
+				id, projectID, status, source); err != nil {
+				t.Fatalf("seed task: %v", err)
+			}
+		},
+		SetStatus: func(t *testing.T, id, status string) {
+			t.Helper()
+			if _, err := db.DB.Exec(`UPDATE tasks SET status = $1 WHERE id = $2`, status, id); err != nil {
+				t.Fatal(err)
+			}
+		},
+	})
+}
+
 // TestStepPrompt_PostgresContract — the same contract on the production lane.
 func TestStepPrompt_PostgresContract(t *testing.T) {
 	db := newIntegrationDB(t)
@@ -1102,4 +1138,64 @@ func TestPackageContributionSuite(t *testing.T) {
 func TestCredentialSessionSuite(t *testing.T) {
 	db := newIntegrationDB(t)
 	repotest.RunCredentialSessionSuite(t, NewUISessionRepository(db.DB), NewIdentityRepository(db.DB))
+}
+
+// TestMigration203_MarksExistingRowsAsPushed runs migration 203's Up text on
+// rows written with pushed_state NULL (as they were before it) and checks
+// the mapping — review-20260930-5e5d F1/F5 and -c6b5 F1: pending, and staged
+// of a COMPLETED task, become pending_approval; staged of an unfinished task
+// stays NULL; a task config takes its task's status. Up is idempotent
+// (ADD COLUMN IF NOT EXISTS; updates only NULL rows), so it can be re-run.
+func TestMigration203_MarksExistingRowsAsPushed(t *testing.T) {
+	db := newIntegrationDB(t)
+	var up string
+	for _, m := range persistence.DefaultMigrations {
+		if m.Version == 203 {
+			up = m.Up
+		}
+	}
+	if up == "" {
+		t.Fatal("migration 203 not found")
+	}
+	task := "mig203-" + time.Now().Format("150405.000000")
+	mustExec := func(q string, args ...any) {
+		t.Helper()
+		if _, err := db.DB.Exec(q, args...); err != nil {
+			t.Fatalf("%s: %v", q, err)
+		}
+	}
+	mustExec(`INSERT INTO tasks (id, project_id, status, creation_source, created_at, updated_at) VALUES ($1, 'mig-p', 'COMPLETED', 'COMPANION', NOW(), NOW())`, task)
+	mustExec(`INSERT INTO a2a_push_configs (task_id, url) VALUES ($1, 'https://h.example/x')`, task)
+	for i, st := range []string{"pending", "staged", "executed"} {
+		mustExec(`INSERT INTO broker_actions (action_id, project_id, task_id, api_key_id, workflow_id, action_kind, tool, args_json, args_sha256, status, created_at, expires_at)
+			VALUES ($1, 'mig-p', $2, '', 'w', $3, 'mcp__w__t', '{}', 'h', $4, NOW(), NOW() + interval '1 hour')`,
+			task+"-"+st, task, fmt.Sprintf("k%d", i), st)
+	}
+	running := task + "-run"
+	mustExec(`INSERT INTO tasks (id, project_id, status, creation_source, created_at, updated_at) VALUES ($1, 'mig-p', 'RUNNING', 'COMPANION', NOW(), NOW())`, running)
+	mustExec(`INSERT INTO broker_actions (action_id, project_id, task_id, api_key_id, workflow_id, action_kind, tool, args_json, args_sha256, status, created_at, expires_at)
+		VALUES ($1, 'mig-p', $2, '', 'w', 'k', 'mcp__w__t', '{}', 'h', 'staged', NOW(), NOW() + interval '1 hour')`, task+"-staged-running", running)
+	mustExec(`UPDATE broker_actions SET pushed_state = NULL WHERE task_id = $1`, running)
+	mustExec(`UPDATE a2a_push_configs SET pushed_state = NULL WHERE task_id = $1`, task)
+	mustExec(`UPDATE broker_actions SET pushed_state = NULL WHERE task_id = $1`, task)
+	mustExec(up)
+
+	var cfg sql.NullString
+	if err := db.DB.QueryRow(`SELECT pushed_state FROM a2a_push_configs WHERE task_id = $1`, task).Scan(&cfg); err != nil || cfg.String != "COMPLETED" {
+		t.Fatalf("config pushed_state = %v (%v), want COMPLETED", cfg, err)
+	}
+	for st, want := range map[string]sql.NullString{
+		"pending":        {String: "pending_approval", Valid: true},
+		"staged":         {String: "pending_approval", Valid: true}, // of a COMPLETED task (review-20260930-c6b5 F1)
+		"staged-running": {},
+		"executed":       {String: "executed", Valid: true},
+	} {
+		var got sql.NullString
+		if err := db.DB.QueryRow(`SELECT pushed_state FROM broker_actions WHERE action_id = $1`, task+"-"+st).Scan(&got); err != nil {
+			t.Fatal(err)
+		}
+		if got != want {
+			t.Errorf("%s: pushed_state = %v, want %v", st, got, want)
+		}
+	}
 }

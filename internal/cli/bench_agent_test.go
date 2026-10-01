@@ -906,6 +906,40 @@ func TestBenchAgent_RunRefusesAnArmThePreRegistrationDoesNotDeclare(t *testing.T
 	}
 }
 
+// A direct run with requiresScorer set says the containment check is not run
+// here (agent benchmark design §12.20.4): visibly unchecked, not silently
+// passed. Without the field it says nothing.
+func TestBenchAgent_RunSaysRequiresScorerIsUncheckedHere(t *testing.T) {
+	for _, req := range []string{"a2627935e", ""} {
+		dir := t.TempDir()
+		resetAgentFlags()
+		prevArm := benchAgentArm
+		t.Cleanup(func() { benchAgentArm = prevArm })
+		benchAgentDatabase = "agentbench_local"
+		benchAgentConfirmWipe = "agentbench_local"
+		benchAgentProject = "bench"
+		benchAgentBenchProject = "bench"
+		benchAgentSwarm = "bench"
+		benchAgentArm = "cal"
+		benchAgentPreRegPath = writeAgentBenchJSON(t, dir, "prereg.json", agentbench.PreRegistration{
+			Kind: agentbench.RunKindCalibration, Arms: []string{"cal"},
+			Metric: agentbench.PinnedCaseValidationMetric, Rationale: "calibration", RequiresScorer: req,
+		})
+		benchAgentTaskSetPath = filepath.Join(dir, "missing-tasks.json")
+		var errOut bytes.Buffer
+		benchAgentRunCmd.SetErr(&errOut)
+		_ = runBenchAgentRun(benchAgentRunCmd, nil)
+		benchAgentRunCmd.SetErr(nil)
+		said := strings.Contains(errOut.String(), "requiresScorer") && strings.Contains(errOut.String(), "agentbench-reproduce.sh")
+		if req != "" && !said {
+			t.Fatalf("requiresScorer %q: no unchecked line on stderr: %q", req, errOut.String())
+		}
+		if req == "" && strings.Contains(errOut.String(), "requiresScorer") {
+			t.Fatalf("no requiresScorer, yet stderr mentions it: %q", errOut.String())
+		}
+	}
+}
+
 // stampMeasurementPass gives a fixture journal the pre-registration a real
 // measurement pass would carry (release-gate design §9.3): calibrate and
 // noise-floor refuse any journal that was not pre-registered as their kind.

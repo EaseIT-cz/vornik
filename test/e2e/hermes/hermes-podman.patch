@@ -1,0 +1,16 @@
+diff --git a/Dockerfile b/Dockerfile
+index ba9cbe8..b54d6e9 100644
+--- a/Dockerfile
++++ b/Dockerfile
+@@ -325,7 +325,10 @@ RUN mkdir -p /tmp/hermes-runtime && chmod 0700 /tmp/hermes-runtime
+ # node_modules + source (21s amd64 / 222s arm64 — #49113).  `a+rX,go-w`
+ # gives the non-root hermes user read + traverse but no write; root retains
+ # write so the build steps below don't need chmod u+w dances.
+-COPY --link --chmod=a+rX,go-w . .
++# vornik e2e: podman/buildah does not accept a symbolic --chmod mode, so copy
++# first and apply the same mode (a+rX,go-w) in a separate step.
++COPY --link . .
++RUN chmod -R a+rX,go-w /opt/hermes
+ 
+ # ---------- Permissions ----------
+ # Link hermes-agent itself (editable). Deps are already installed in the

@@ -644,11 +644,12 @@ func leaderLockDeleteExpired(ctx context.Context, t *testing.T, repo persistence
 // expires_at <= now and the statement expires_at < now, so at
 // expires_at == now the doctor said "release it" and the release refused.
 //
-// step is the smallest offset the driver orders correctly: 1µs on Postgres
-// (timestamptz stores microseconds; 1ns can land in the same stored
-// microsecond), 1s on SQLite, whose RFC3339Nano TEXT does not sort in time
-// order within a second (backlog P2, 2026-09-25). The sub-second SQLite case
-// is added when that fix lands.
+// step is the smallest offset the driver orders correctly: 1µs on both.
+// Postgres timestamptz stores microseconds (1ns can land in the same stored
+// microsecond). SQLite ran at 1s until 2026-10-01, because its RFC3339Nano
+// TEXT did not sort in time order within a second; the fixed-width form
+// (SQLite timestamp ordering design) made 1µs correct, and at 1µs the old
+// form released a lease 1µs before it expired.
 func RunLeaderLockBoundarySuite(t *testing.T, repo persistence.DaemonLeaderLockRepository, step time.Duration) {
 	t.Helper()
 	ctx := context.Background()

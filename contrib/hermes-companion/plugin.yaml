@@ -1,0 +1,44 @@
+name: vornik-companion
+version: 0.2.2
+manifest_version: 2
+# Declared, not inferred: Hermes classifies an undeclared plugin whose
+# __init__.py mentions a memory provider as `kind: exclusive`, and general
+# discovery skips exclusive plugins, so the broker tools never loaded
+# (e2e lane bring-up against Hermes v2026.9.24). The memory provider is
+# still found by Hermes's memory discovery, which scans plugin directories
+# itself.
+kind: standalone
+description: >-
+  Vornik as Hermes's privileged-work broker and long-term memory. Hermes holds
+  no credentials: work that touches mail, calendar, documents or accounts is
+  delegated to operator-authored broker workflows on a Vornik daemon, which
+  return a bounded, schema-validated result instead of raw access.
+  0.2.1 — install and memory-provider instructions corrected against
+  Hermes v2026.9.24: the provider is named vornik-companion.
+  0.2.0 — broker write actions: the skill explains proposed writes and their
+  approval states, and vornik_result says how to relay them.
+  0.1.0 — first release: broker tools, digest hook, /vornik-peek and
+  /vornik-result, and the vornik memory provider.
+author: EaseIT Labs s.r.o. and contributors
+license: Apache-2.0
+homepage: https://docs.vornik.io/features/companion/
+tags: [vornik, broker, memory, privacy]
+
+provides_tools:
+  - vornik_catalog
+  - vornik_delegate
+  - vornik_result
+  - vornik_status
+  - vornik_cancel
+provides_hooks:
+  - pre_llm_call
+
+requires_env:
+  - name: VORNIK_URL
+    description: "Base URL of the Vornik daemon, e.g. https://vornik.example.com"
+  - name: VORNIK_BROKER_TOKEN
+    description: "Companion key minted on a BROKER project (vornikctl companion grant -p <broker project> --client hermes --workflows ...)"
+    secret: true
+  - name: VORNIK_MEMORY_TOKEN
+    description: "Optional. Companion key on a separate memory project, minted with --memory-all --no-delegate. Enables the vornik memory provider."
+    secret: true

@@ -33,6 +33,12 @@ func NewPackageContributionRepository(db DBTX) *PackageContributionRepository {
 // concurrent installs. The primary key is the enforcement point; this is the
 // door it is behind.
 func (r *PackageContributionRepository) RecordContributions(ctx context.Context, rows []persistence.PackageContribution) error {
+	return insertContributions(ctx, r.db, rows)
+}
+
+// insertContributions is RecordContributions' statement, shared with
+// ReplaceContributions so the two cannot drift on validation or columns.
+func insertContributions(ctx context.Context, exec persistence.DBTX, rows []persistence.PackageContribution) error {
 	if len(rows) == 0 {
 		return nil
 	}
@@ -81,8 +87,47 @@ INSERT INTO package_contributions
     (kind, row_id, package, package_version, path, content_hash_at_install, installed_at)
 VALUES ` + strings.Join(values, ", ")
 
-	if _, err := r.db.ExecContext(ctx, query, args...); err != nil {
+	if _, err := exec.ExecContext(ctx, query, args...); err != nil {
 		return fmt.Errorf("record %d contribution(s): %w", len(rows), err)
+	}
+	return nil
+}
+
+// ReplaceContributions deletes the package's rows and inserts the new ones in
+// one transaction (package design §8): a key refusal on the insert rolls the
+// delete back, so the old rows stay intact. When the repository already runs
+// inside a caller's transaction, that transaction gives the same guarantee.
+func (r *PackageContributionRepository) ReplaceContributions(ctx context.Context, pkg string, rows []persistence.PackageContribution) error {
+	for _, row := range rows {
+		if row.Package != pkg {
+			return fmt.Errorf("replace %s: row %s/%s names package %q", pkg, row.Kind, row.RowID, row.Package)
+		}
+	}
+	tx, ok, err := persistence.BeginTx(ctx, r.db, nil)
+	if err != nil {
+		return err
+	}
+	exec := r.db
+	committed := false
+	if ok {
+		exec = tx
+		defer func() {
+			if !committed {
+				_ = tx.Rollback()
+			}
+		}()
+	}
+	if _, err := exec.ExecContext(ctx, `DELETE FROM package_contributions WHERE package = $1`, pkg); err != nil {
+		return fmt.Errorf("replace %s: delete old rows: %w", pkg, err)
+	}
+	if err := insertContributions(ctx, exec, rows); err != nil {
+		return fmt.Errorf("replace %s: %w", pkg, err)
+	}
+	if ok {
+		if err := tx.Commit(); err != nil {
+			return fmt.Errorf("replace %s: commit: %w", pkg, err)
+		}
+		committed = true
 	}
 	return nil
 }

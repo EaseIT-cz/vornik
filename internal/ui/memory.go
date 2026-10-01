@@ -716,13 +716,14 @@ func (s *Server) MemoryQuarantineAction(w http.ResponseWriter, r *http.Request, 
 		// Release marks the quarantine row as reviewed-and-cleared
 		// without re-promoting the chunk. The MarkReleased
 		// signature accepts a released_chunk_id which we leave
-		// empty — re-insertion is a separate operator action via
-		// the corrector's InsertCorrection path (the quarantine
-		// row itself doesn't carry the content, only a reference
-		// to the source artifact, so a UI-triggered re-insert
-		// would have to re-fetch + re-chunk). What this action
-		// DOES do: dismisses the item from the pending review
-		// list so the operator's queue stays clean.
+		// empty: nothing here stores the content. The row does
+		// carry it (recordQuarantine writes it), but promoting it
+		// into the store is not implemented; the corrector's
+		// InsertCorrection path writes content an operator
+		// supplies, not a quarantined row (pipeline design, update
+		// 2026-10-01). What this action DOES do: dismisses the item
+		// from the pending review list so the operator's queue
+		// stays clean.
 		if err := s.memoryQuarantine.MarkReleased(ctx, id, ""); err != nil {
 			httpError(w, http.StatusInternalServerError, "release failed: "+err.Error())
 			return

@@ -148,8 +148,9 @@ func (r *CostTuningCanaryRepository) HasActiveCooldown(ctx context.Context, swar
 
 // LatestWindowUntil returns the greatest window_until among canaries on
 // (swarm, role) whose window_until <= before — the baseline clamp anchor.
-// Times are TEXT (RFC3339Nano) so lexical MAX == chronological MAX for the
-// fixed-width, UTC, zero-padded encoding sqliteTime emits.
+// Times are TEXT in sqliteTime's fixed-width form, so lexical MAX ==
+// chronological MAX (true since 2026-10-01: the RFC3339Nano form before it
+// trimmed zeros and was not fixed-width).
 func (r *CostTuningCanaryRepository) LatestWindowUntil(ctx context.Context, swarmID, role string, before time.Time) (time.Time, bool, error) {
 	var s sql.NullString
 	err := r.db.QueryRowContext(ctx, `

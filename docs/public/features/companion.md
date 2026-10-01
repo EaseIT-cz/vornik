@@ -1,7 +1,7 @@
 ---
 sources:
     - path: internal/api/companion_mcp.go
-      sha256: f51126bdb55e4fb29af164acfee5e6ed75a39d1e7b1b9fcfb3e847fad592d8a5
+      sha256: dcd24085951349d7a45beabcd0fb51ee767d6186b29ec955229f3d8fcb4b39b2
     - path: contrib/claude-code-companion/.claude-plugin/plugin.json
       sha256: 94bb71bc19dd3bd7892ac8977f993ba8d6f2450d0ff509a8bd795f1c377c55ee
     - path: contrib/codex-companion/.codex-plugin/plugin.json
@@ -329,6 +329,153 @@ own web tools, save them as local files, and send those files to the
 `inputArtifacts` in Codex. If a URL in your prompt is incidental — a link
 quoted for context in a diff you want reviewed — pass
 `acknowledge_workflow_cannot_fetch: true` and the delegation proceeds.
+
+## Broker projects: a front-end agent without the keys
+
+The companion can also serve a **front-end agent**, a conversational assistant
+such as Hermes Agent that your users talk to all day. The pattern is privilege
+separation: the front agent holds **no credentials** for your mailbox, CRM or
+accounts. Vornik holds them. When the front agent needs something from those
+systems, it runs a **broker workflow** on Vornik and gets back a distilled
+result. It never gets raw access or raw content.
+
+A **broker project** is an ordinary project with `broker: true`. Everything
+about it is stricter:
+
+- **Broker workflows only.** A key on a broker project can run only workflows
+  that declare a `broker:` block, and a broker workflow runs nowhere except in
+  a broker project.
+- **Typed inputs, no prompt.** A broker workflow declares an `input_schema`.
+  `delegate` takes `inputs` that must match it, and refuses a free-text
+  `prompt`. Every string input must be bounded (`enum`, a date or time
+  `format`, or `pattern` with `maxLength`), or be marked `x-untrusted: true`
+  with a `maxLength` of 512 or less. All untrusted strings together may carry
+  at most 1024 characters. Untrusted values reach the broker's agent wrapped as
+  data, never as instructions.
+- **One document out.** `result` returns only the file named in
+  `egress.output`, validated against `egress.schema` and capped at
+  `egress.max_bytes` (at most 64 KiB). No other artifact of the task is
+  returned, a document that is too large is refused rather than truncated, and
+  `status` reports a closed `error_class` instead of the raw error text. Every
+  string in the document is scanned for injection phrasing and, by default,
+  wrapped as third-party data.
+- **No memory, no skills.** Keys on a broker project cannot use `recall`,
+  `remember` or the skill tools, and `vornikctl companion grant` refuses to
+  grant them there. Give the front agent its long-term memory in a separate
+  project, with a key minted `--no-delegate`.
+- **Read-only tools, declared.** Each MCP server a broker workflow uses must be
+  marked `broker_read_only: true` in the project, with an explicit
+  `allowed_tools` list, and the workflow's roles must name each tool exactly.
+  Vornik cannot check that a server's tools only read; that flag is your
+  statement that they do.
+
+A minimal setup, with two keys in two projects:
+
+```bash
+# the project that holds the mail server, with broker: true in its config
+# (configs/examples/broker-mail.yaml is a complete example)
+vornikctl companion grant -p broker-mail --client hermes --workflows mail-digest,mail-reply --budget-usd 5
+# the front agent's memory, which can never delegate
+vornikctl companion grant -p assistant-memory --client hermes --memory-all --no-delegate
+```
+
+`result` accepts `wait_seconds` (up to 25): the call is held open until the
+task finishes or the time runs out, so a chat agent does not have to poll.
+
+**Completion push.** A harness that can receive a webhook passes
+`notify: {url, token}` to `delegate` (when the daemon advertises
+`companion-push`). Vornik then POSTs `{task_id, state}` when the task ends,
+and `{task_id, action_id, action, state}` when a proposed write changes state.
+Pushes carry ids and closed states only, with `Authorization: Bearer <token>`
+if you gave one; fetch anything else with `status` or `result`. A push can
+arrive twice or report only the latest state, so treat it as a prompt to
+check, not as the record. Delivery is retried on later passes and survives a
+daemon restart. The response to `delegate` says `"push": "registered"`, or
+`"not_registered"` if the webhook could not be stored (the task still runs;
+poll it). A `notify` the daemon refuses creates no task.
+
+Pushes go to public addresses only, unless the project lists the private
+range the receiver lives in:
+
+```yaml
+companion_push:
+  # RFC 1918, fd00::/8-style unique-local, or 100.64.0.0/10 (Tailscale and
+  # similar overlays). List the narrowest range that reaches your agent: in
+  # some clouds 100.64.0.0/10 fronts provider-internal services.
+  allowed_cidrs: ["192.168.1.0/24"]
+```
+
+Loopback and link-local addresses are always refused, redirects are refused,
+and a hostname is judged by the address it resolves to when Vornik connects.
+
+**Upgrading.** Nothing changes for existing keys or plugins until you set
+`broker: true` on a project. Deploy the new daemon before you add that flag:
+an older daemon rejects a project file containing it. Plugins detect support
+through the `companion-broker` and `companion-result-wait` flags in
+`/api/v1/capabilities` and fall back on an older daemon. `vornikctl companion
+grant --no-delegate` refuses to hand out a key from a daemon too old to honour
+the flag: it revokes the key and tells you to upgrade.
+
+**What this does and does not promise.** The front agent never holds the
+credential and never sees content outside the declared egress schema. That is
+not the same as "nothing sensitive reaches it": a summary of a sensitive email
+is itself sensitive. Injection phrasing in the source data is reduced and
+labelled, not made impossible, which is why a broker workflow cannot write
+anything on its own: at most it proposes a write that a person approves (see
+below). If you ever set `broker: false` on a broker project
+again, run `vornikctl memory wipe --project <project>` first. The project's
+memory holds summaries of every broker task, and without the flag they become
+recallable.
+
+### Proposed writes: a person approves every one
+
+A broker workflow may **propose** a write, such as a reply to an email,
+instead of performing it. The workflow declares each kind of write under
+`broker.proposes`: the MCP tool that performs it and an `args_schema` bounding
+the arguments the agent drafts. The agent writes a proposal file; it never
+holds the tool. After the task completes, the proposal appears in `/inbox` as a
+**Needs approval** card showing the tool, the requesting key and the complete
+arguments, with the fields a model drafted from third-party content flagged.
+**Approve & send** binds to exactly those arguments, and the daemon then calls
+the tool once. Nothing retries a write: if the daemon cannot tell whether a
+call reached the vendor, the action is left `unknown` for an operator, who
+checks and records the outcome with `vornikctl broker-action resolve`.
+
+Writes are off unless you turn them on. They need:
+
+- `broker.writes: on` in the daemon config (default `off`; while off, a
+  workflow that proposes is refused at `delegate` with
+  `BROKER_WRITES_DISABLED`, and read-only workflows keep working);
+- an MCP server in the broker project declared `broker_write: true`, listing
+  the tool in `allowed_tools` (see [MCP tools](../guides/mcp-tools.md)).
+
+The front agent sees each proposed write in `result` and `status` as an
+`actions` list of `{action_id, action, state, expires_at}`, never the
+arguments and never the tool's response. `state` is one of
+`pending_approval`, `approved`, `executing`, `executed`, `failed`, `rejected`,
+`expired`, `unknown`, `proposal_missing` and `proposal_invalid`. `catalog`
+lists each workflow's `proposes` as `{action, tool}`, and the daemon
+advertises `companion-broker-actions` in `/api/v1/capabilities` while writes are
+on. If the action store cannot be read, `result` and `status` for a proposing
+workflow fail with a retryable error rather than report no actions. An
+unapproved proposal expires after its `approval_ttl` (default 24 hours).
+When a Telegram bot is configured, operators get a message with the project,
+the task and a link to `/inbox`: no arguments, and no way to decide from
+Telegram.
+
+The shipped reference is the `mail-reply` workflow: it finds one message,
+drafts a reply the operator reviews in `/inbox`, and returns only whether the
+message was found and a one-line summary of the draft.
+`configs/examples/broker-mail.yaml` declares the send-capable server it needs.
+
+**Hermes Agent** has a ready-made plugin in `contrib/hermes-companion/`. It
+adds the broker tools, a skill teaching Hermes when to use them, a hook that
+announces finished tasks, and a `vornik` memory provider. Install steps are in
+its README.
+
+The shipped reference is the `mail-digest` workflow with the `broker-swarm`
+swarm: a digest of recent mail carrying sender domain, time, category, whether
+it needs a reply and a one-line summary, and never a body or an address.
 
 ## Setting it up
 

@@ -533,6 +533,13 @@ vornik reads its configuration from `config.yaml`. The keys below are the custom
 | `web.submit_secret` | string | Daemon↔scraper web_submit capability secret attached as daemon_auth (prefer submit_secret_file). Required when web.writes is on/insecure. | `VORNIK_WEB_SUBMIT_SECRET` |
 | `web.submit_secret_file` | string | Path to a file holding the web_submit capability secret (preferred over inline submit_secret). | — |
 
+## broker
+
+| Key | Type | Description | Environment override |
+|---|---|---|---|
+| `broker.writes` | string | Broker write-action mode: off (default; delegating a workflow that proposes writes is refused and nothing approved executes) or on (writes execute after approval in /inbox, each also gated by its MCP server's broker_write declaration). | — |
+| `broker.action_timeout` | string | Bound on one approved write's tool call (default 60s, at most 10m). A call that times out is recorded as unknown, never retried. | — |
+
 ## gateway
 
 | Key | Type | Description | Environment override |

@@ -19,6 +19,8 @@ package cli
 import (
 	"archive/tar"
 	"compress/gzip"
+	"database/sql"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -116,19 +118,45 @@ func TestIntegration_CheckTargetSchemaAbsent_RefusesMigratedDB(t *testing.T) {
 }
 
 func TestIntegration_CheckTargetEmpty_PassesOnFreshTables(t *testing.T) {
+	// Its own database, so "fresh" is true by construction. On the shared
+	// integration database earlier packages in the same -p 1 run always
+	// left rows, so this test SKIPPED on every run, in the public CI too,
+	// and examined nothing (found by the CE export's integration lane,
+	// which fails on an unexplained skip, 2026-10-01).
 	db := dbcovSetup(t)
 	cfg := dbcovDBConfig(t)
-	// projects + tasks empty right after migration → gate passes.
-	// (Guard: if a prior suite left rows, this would flake; assert
-	// the precondition so a failure is self-explaining.)
-	var pN, tN int
-	_ = db.QueryRow(`SELECT COUNT(*) FROM projects`).Scan(&pN)
-	_ = db.QueryRow(`SELECT COUNT(*) FROM tasks`).Scan(&tN)
-	if pN != 0 || tN != 0 {
-		t.Skipf("shared DB has projects=%d tasks=%d rows; checkTargetEmpty precondition not met", pN, tN)
+	cfg.Name = "vornik_integration_test_emptyprobe"
+	if _, err := db.Exec(`DROP DATABASE IF EXISTS ` + cfg.Name); err != nil {
+		t.Fatalf("drop scratch database: %v", err)
 	}
+	if _, err := db.Exec(`CREATE DATABASE ` + cfg.Name); err != nil {
+		t.Fatalf("create scratch database (the test role needs CREATEDB): %v", err)
+	}
+	t.Cleanup(func() { _, _ = db.Exec(`DROP DATABASE IF EXISTS ` + cfg.Name + ` WITH (FORCE)`) })
+	scratch, err := sql.Open("postgres", fmt.Sprintf("host=%s port=%d user=%s password=%s dbname=%s sslmode=disable",
+		cfg.Host, cfg.Port, cfg.User, cfg.Password, cfg.Name))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = scratch.Close() })
+	schema, err := os.ReadFile(filepath.Join("..", "..", "deployments", "postgres", "schema", "001_initial.sql"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := scratch.Exec(string(schema)); err != nil {
+		t.Fatalf("apply base schema: %v", err)
+	}
+
 	if err := checkTargetEmpty(&cfg); err != nil {
 		t.Fatalf("checkTargetEmpty refused an empty target: %v", err)
+	}
+	// The probe examined real tables: one row and it refuses. Without this a
+	// target whose tables were missing would pass for the wrong reason.
+	if _, err := scratch.Exec(`INSERT INTO tasks (id, project_id) VALUES ('t-probe', 'p-probe')`); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	if err := checkTargetEmpty(&cfg); err == nil {
+		t.Fatal("checkTargetEmpty passed a target with a tasks row")
 	}
 }
 

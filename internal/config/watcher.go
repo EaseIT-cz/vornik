@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/rs/zerolog"
@@ -316,6 +317,15 @@ type ConfigReloader struct {
 	// behind a running reload.
 	reloadMu sync.Mutex
 
+	// rerunRequested coalesces reload requests that found reloadMu held:
+	// TryReload sets it instead of dropping the request, runCycle clears it
+	// at the start (a cycle that starts afterwards reads the edit from disk),
+	// and retryPendingLoop runs one follow-up cycle while it is set. Before
+	// 2026-10-01 such a request was simply lost: a watcher-detected edit that
+	// raced another trigger's cycle was never applied (config hot-reload
+	// design, "Granularity and coalescing").
+	rerunRequested atomic.Bool
+
 	mu             sync.RWMutex
 	reloadErrors   []string
 	reloadWarnings []string
@@ -458,7 +468,7 @@ func (r *ConfigReloader) handleWatchedChange(changed []string) {
 		// finishReloadSuccess already logged "config reloaded successfully".
 	case ReloadDeferred:
 		r.logger.Warn().Dur("bound", bound).
-			Msg("config reload deferred (slow/busy reloader — e.g. an offline MCP server); applying in background, scan loop stays live")
+			Msg("config reload deferred (slow or busy reloader — e.g. an offline MCP server); it applies when the reloader frees, and the scan loop stays live")
 	case ReloadBlocked:
 		r.logger.Info().Err(err).
 			Msg("config reload activation blocked (e.g. in-flight tasks); retry loop will re-attempt")
@@ -506,6 +516,9 @@ func (r *ConfigReloader) Reload() error {
 // status fields. The caller MUST hold reloadMu: Reload() takes it directly;
 // TryReload()'s watchdog goroutine takes it before calling runCycle.
 func (r *ConfigReloader) runCycle() error {
+	// A cycle starting now reads the disk after any request that found the
+	// lock held, so it serves those requests.
+	r.rerunRequested.Store(false)
 	r.mu.Lock()
 	r.lastAttempt = time.Now()
 	r.reloadErrors = nil
@@ -626,8 +639,10 @@ const (
 	// ReloadApplied — the cycle completed cleanly within the bound.
 	ReloadApplied ReloadOutcome = iota
 	// ReloadDeferred — the reloader was busy/wedged (lock held) or the
-	// cycle exceeded the bound. The edit is on disk; a daemon restart is
-	// required to apply it.
+	// cycle exceeded the bound. The edit is on disk. A busy reloader runs a
+	// coalesced follow-up cycle once it frees (rerunRequested), and an
+	// overrunning cycle finishes in the background; only a WEDGED reloader
+	// needs a daemon restart.
 	ReloadDeferred
 	// ReloadBlocked — activation is gated (e.g. in-flight tasks). The edit
 	// is on disk and will apply on a later reload or a restart.
@@ -651,6 +666,7 @@ const (
 //     everywhere, never a hang.
 func (r *ConfigReloader) TryReload(d time.Duration) (ReloadOutcome, error) {
 	if !r.reloadMu.TryLock() {
+		r.rerunRequested.Store(true)
 		return ReloadDeferred, nil
 	}
 	done := make(chan error, 1)
@@ -731,20 +747,32 @@ func (r *ConfigReloader) retryPendingLoop(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			status := r.Status()
-			if !status.PendingActivation || !status.Blocked {
-				continue
-			}
-			r.logger.Info().Str("reason", status.BlockedReason).Msg("retrying blocked config activation")
-			// Bounded, like the watcher trigger: this retry goroutine must not
-			// wedge on a stalled reload cycle either.
-			bound := r.reloadBound
-			if bound <= 0 {
-				bound = watchReloadBound
-			}
-			if outcome, err := r.TryReload(bound); outcome != ReloadApplied {
-				r.logger.Debug().Err(err).Msg("blocked config activation still pending")
-			}
+			r.retryTick()
 		}
+	}
+}
+
+// retryTick runs one bounded reload when an activation is blocked on
+// in-flight tasks, or when a request was coalesced while another cycle held
+// reloadMu (rerunRequested).
+func (r *ConfigReloader) retryTick() {
+	status := r.Status()
+	blocked := status.PendingActivation && status.Blocked
+	if !blocked && !r.rerunRequested.Load() {
+		return
+	}
+	if blocked {
+		r.logger.Info().Str("reason", status.BlockedReason).Msg("retrying blocked config activation")
+	} else {
+		r.logger.Info().Msg("running a coalesced config reload: a change arrived while another reload held the lock")
+	}
+	// Bounded, like the watcher trigger: this retry goroutine must not
+	// wedge on a stalled reload cycle either.
+	bound := r.reloadBound
+	if bound <= 0 {
+		bound = watchReloadBound
+	}
+	if outcome, err := r.TryReload(bound); outcome != ReloadApplied {
+		r.logger.Debug().Err(err).Msg("config reload still pending")
 	}
 }

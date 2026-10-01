@@ -44,7 +44,10 @@ sha256sum -c quickstart.sh.sha256 && VORNIK_REF="$REF" bash quickstart.sh
 That one-liner (this directory's `quickstart.sh`) installs prerequisites,
 builds `vornik` + `vornikctl` in an ephemeral golang container, builds the
 agent image, seeds `~/.config/vornik`, brings up the deps, and starts the
-`vornik` user service. Then connect an LLM — open
+`vornik` user service. The API and UI require a key: the script generates
+one into `~/.config/vornik/secrets/api.env` (0600) and the seeded config
+reads it as `VORNIK_API_KEY`. Log in to the UI with it; `vornikctl` picks it
+up once you source `~/.config/vornik/shell-env.sh`. Then connect an LLM: open
 <http://localhost:8080/ui> and the first-run **setup guide** (`/ui/setup`)
 tests your endpoint + key and creates a first project. Or from the terminal:
 

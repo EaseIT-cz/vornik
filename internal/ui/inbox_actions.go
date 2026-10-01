@@ -12,6 +12,7 @@ import (
 	"sort"
 	"strings"
 	"time"
+	"vornik.io/vornik/internal/approval"
 
 	"vornik.io/vornik/internal/api"
 	"vornik.io/vornik/internal/dispatcher"
@@ -138,6 +139,13 @@ type webWriteFieldRow struct {
 	Bound      bool   `json:"bound"`
 }
 
+// WebWriteCardAnchor is the HTML id of a pending web-write's /inbox card.
+// The Telegram alert deep-links to it, so both use this one definition.
+func WebWriteCardAnchor(submissionID string) string { return "web-write-" + submissionID }
+
+// Anchor is the card's HTML id (WebWriteCardAnchor).
+func (c webWriteCard) Anchor() string { return WebWriteCardAnchor(c.SubmissionID) }
+
 // ScreenshotHref returns the operator-facing URL for the filled-form preview
 // screenshot, or "" when there is no screenshot to show.
 //
@@ -248,13 +256,10 @@ func (s *Server) WebWriteApprove(w http.ResponseWriter, r *http.Request, submiss
 		http.Error(w, "web-write approvals not configured", http.StatusServiceUnavailable)
 		return
 	}
-	if r.Method != http.MethodPost {
-		// A minted capability MUST NOT be reachable via a GET deep link.
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-	if !inboxRequestSameOrigin(r) {
-		http.Error(w, "CSRF: cross-site or unverifiable origin", http.StatusForbidden)
+	// A minted capability MUST NOT be reachable via a GET deep link or a
+	// cross-site request: the shared approval gate, before any row is read.
+	if err := approval.CheckRequest(r); err != nil {
+		approval.WriteError(w, r, err)
 		return
 	}
 
@@ -266,9 +271,11 @@ func (s *Server) WebWriteApprove(w http.ResponseWriter, r *http.Request, submiss
 		http.NotFound(w, r)
 		return
 	}
-	// Multi-tenant scope gate: a project-scoped caller must not approve
-	// another tenant's web-write (mirrors TaskConversationAction).
-	if !s.uiRequireProjectScope(w, r, row.ProjectID) {
+	// Multi-tenant scope gate + approver identity: a project-scoped caller
+	// must not approve another tenant's web-write.
+	approver, aerr := approval.Authorize(r, row.ProjectID, api.RequestAllowsProject, s.operatorIDForRequest)
+	if aerr != nil {
+		approval.WriteError(w, r, aerr)
 		return
 	}
 
@@ -282,7 +289,6 @@ func (s *Server) WebWriteApprove(w http.ResponseWriter, r *http.Request, submiss
 		return
 	}
 	tokenHash := dispatcher.WebWriteApprovalTokenHash(token, row)
-	approver := s.operatorIDForRequest(r)
 
 	if err := s.webWriteRepo.Approve(ctx, submissionID, tokenHash, approver); err != nil {
 		if errors.Is(err, persistence.ErrNoTransition) {
@@ -325,12 +331,8 @@ func (s *Server) WebWriteReject(w http.ResponseWriter, r *http.Request, submissi
 		http.Error(w, "web-write approvals not configured", http.StatusServiceUnavailable)
 		return
 	}
-	if r.Method != http.MethodPost {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-	if !inboxRequestSameOrigin(r) {
-		http.Error(w, "CSRF: cross-site or unverifiable origin", http.StatusForbidden)
+	if err := approval.CheckRequest(r); err != nil {
+		approval.WriteError(w, r, err)
 		return
 	}
 
@@ -342,11 +344,12 @@ func (s *Server) WebWriteReject(w http.ResponseWriter, r *http.Request, submissi
 		http.NotFound(w, r)
 		return
 	}
-	if !s.uiRequireProjectScope(w, r, row.ProjectID) {
+	approver, aerr := approval.Authorize(r, row.ProjectID, api.RequestAllowsProject, s.operatorIDForRequest)
+	if aerr != nil {
+		approval.WriteError(w, r, aerr)
 		return
 	}
 
-	approver := s.operatorIDForRequest(r)
 	if err := s.webWriteRepo.Reject(ctx, submissionID, approver); err != nil {
 		if errors.Is(err, persistence.ErrNoTransition) {
 			s.redirectInbox(w, r, "web-write-already-decided")
@@ -384,31 +387,4 @@ func newWebWriteApprovalToken() (string, error) {
 		return "", fmt.Errorf("web-write token: %w", err)
 	}
 	return hex.EncodeToString(b[:]), nil
-}
-
-// inboxRequestSameOrigin mirrors the daemon AuthMiddleware's CSRF same-origin
-// decision (internal/api isCSRFSafe) applied defensively in-handler for this
-// higher-stakes write (approving a web-write mints a capability). This codebase
-// has no per-form CSRF token — mutating cookie/Basic requests are gated by the
-// Sec-Fetch-Site / Origin same-origin signal — so this re-applies that exact
-// ladder here rather than inventing a token the rest of the UI doesn't use.
-// Fails closed when no trustworthy same-origin signal is present.
-func inboxRequestSameOrigin(r *http.Request) bool {
-	switch r.Header.Get("Sec-Fetch-Site") {
-	case "same-origin", "same-site", "none":
-		return true
-	case "cross-site":
-		return false
-	}
-	origin := r.Header.Get("Origin")
-	if origin == "" {
-		// No Sec-Fetch-Site and no Origin on a mutating request — no
-		// same-origin signal to trust. Fail closed.
-		return false
-	}
-	parsed, err := url.Parse(origin)
-	if err != nil || parsed.Host == "" {
-		return false
-	}
-	return parsed.Host == r.Host
 }

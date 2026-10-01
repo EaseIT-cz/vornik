@@ -457,7 +457,11 @@ func TestSandboxMediaE2E_SweepRemovesOnlyThisRunnersLeftovers(t *testing.T) {
 			t.Fatalf("create %s: %v\n%s", name, err, out)
 		}
 	}
-	t.Cleanup(func() { _ = exec.Command("podman", "rm", "-f", "--ignore", mine, theirs).Run() })
+	t.Cleanup(func() { // bounded, as in trimmedLabelImage
+		ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+		defer cancel()
+		_ = exec.CommandContext(ctx, "podman", "rm", "-f", "--ignore", mine, theirs).Run()
+	})
 
 	n, err := r.SweepContainers(context.Background())
 	if err != nil || n != 1 {
@@ -485,7 +489,14 @@ func trimmedLabelImage(t *testing.T, base string) string {
 	if err != nil {
 		t.Fatalf("build trimmed-label image: %v\n%s", err, out)
 	}
-	t.Cleanup(func() { _ = exec.Command("podman", "rmi", "-f", tag).Run() })
+	// Bounded: on the 2026-10-01 CI run (36910205508) a timed-out tool run
+	// left podman wedged, and this unbounded rmi hung until the package's
+	// test timeout, hiding the real assertion behind a panic.
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+		defer cancel()
+		_ = exec.CommandContext(ctx, "podman", "rmi", "-f", tag).Run()
+	})
 	return tag
 }
 

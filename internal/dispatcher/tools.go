@@ -423,6 +423,9 @@ type ToolExecutor struct {
 	webWriteRepo       persistence.WebWriteRepo
 	webWrites          config.WebDaemonConfig
 	webApprovalHook    WebWriteApprovalHook
+	// webPendingNotify alerts operators that a pending web-write awaits
+	// them in /inbox (notify-only). nil: nobody is told.
+	webPendingNotify WebWritePendingNotifier
 	// webWriteTokenStore delivers approval tokens from the inbox approve
 	// handler to the submit path in operator-chat-driven v1 (LLD Components.5).
 	// nil → submit requires an explicit approval_token arg (autonomous mode).

@@ -10,6 +10,7 @@ governs.
 | everything not listed below | [AGPL-3.0](LICENSE) | The Vornik Community Edition: daemon, CLI, agent image, docs, configs, tests. |
 | `contrib/claude-code-companion/` | [Apache-2.0](contrib/claude-code-companion/LICENSE) | Claude Code companion plugin. Installed into a third-party tool, so it carries a permissive licence on purpose. |
 | `contrib/codex-companion/` | [Apache-2.0](contrib/codex-companion/LICENSE) | Codex companion plugin. Same reasoning. |
+| `contrib/hermes-companion/` | [Apache-2.0](contrib/hermes-companion/LICENSE) | Hermes Agent companion plugin. Same reasoning. |
 | `.claude-plugin/marketplace.json` | Apache-2.0 | The marketplace manifest that lists the plugin above. |
 | vendored third-party files | their own | Listed with copyright and licence text in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md). Go module dependencies are inventoried in the CycloneDX SBOM attached to each release. |
 

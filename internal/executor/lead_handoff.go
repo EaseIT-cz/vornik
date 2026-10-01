@@ -243,6 +243,14 @@ func (e *Executor) handleClosureRequestOutcome(
 	e.applyScratchpadUpdate(ctx, task.ID, execution.ID, outcome)
 	e.applyPhaseTransitions(ctx, task.ID, execution.ID, outcome.PhaseTransitions)
 
+	// Broker write proposals are staged before COMPLETED on this path too
+	// (design §5.1). A proposing broker workflow cannot reach lead handoff
+	// today (plan and forge steps are refused for broker workflows); the
+	// seam is here so a future change on either side cannot drop actions.
+	if err := e.stageBrokerActions(ctx, task, execution); err != nil {
+		return err
+	}
+
 	// Atomic RUNNING → COMPLETED. Without this, the lease would
 	// expire and the scheduler would re-lease the task, the lead
 	// would re-run and emit closure_request again — until
@@ -261,6 +269,8 @@ func (e *Executor) handleClosureRequestOutcome(
 		e.logger.Warn().
 			Str("task_id", task.ID).
 			Msg("closure_request emitted but task drifted out of RUNNING")
+	} else {
+		e.promoteBrokerActions(ctx, task)
 	}
 	e.logger.Info().
 		Str("task_id", task.ID).
@@ -360,9 +370,13 @@ func (e *Executor) handleLeadHandoffFinalization(
 			notifyMsg = r.Message
 		}
 	}
-	if e.notifier != nil {
-		e.notifier.NotifyTaskCompleted(ctx, task, true, notifyMsg)
-	}
+	// This transition is AWAITING_INPUT, not terminal. Completion observers —
+	// including the companion result(wait_seconds) hub — still fire; a waiter
+	// re-reads the task and keeps waiting because it is not terminal. Do not
+	// gate observers on terminality here: that would silently drop this
+	// handoff notification for any future observer that wants it
+	// (review-20260929-f14b F1).
+	e.notifyCompletion(ctx, task, true, notifyMsg, false)
 	// Steering prompt to the originating chat/DM (default-on, not gated on the
 	// completion-watcher opt-in the notifier above uses).
 	e.notifySteering(ctx, task, string(persistence.TaskStatusAwaitingInput))

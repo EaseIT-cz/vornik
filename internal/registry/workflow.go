@@ -198,6 +198,12 @@ type Workflow struct {
 	// essential: without it, every task with uploaded attachments
 	// (Telegram/email/research inputs) would be dumped into RAG.
 	IngestInputArtifacts bool `yaml:"ingest_input_artifacts,omitempty"`
+	// Broker, when set, makes this a broker workflow: a front-end agent's
+	// key on a broker project may run it with typed inputs, and the
+	// companion returns only the declared egress document. Nil for every
+	// ordinary workflow. See broker.go and https://docs.vornik.io
+	// 2026-09-29-companion-privileged-work-broker-design.md.
+	Broker *WorkflowBroker `yaml:"broker,omitempty"`
 }
 
 // WorkflowA2A is the per-workflow A2A protocol surface
@@ -949,6 +955,10 @@ func (w *Workflow) Validate(filename string) error {
 		return err
 	}
 
+	if err := w.Broker.Validate(); err != nil {
+		return WorkflowValidationError{File: filename, Field: "broker", Message: err.Error()}
+	}
+
 	return nil
 }
 
@@ -1600,15 +1610,29 @@ func (w *Workflow) validateRetryClasses(filename string) error {
 			}
 		}
 		for _, class := range step.Retry.On {
-			if stepoutcome.IsErrorClass(class) {
-				continue
+			if !stepoutcome.IsErrorClass(class) {
+				return WorkflowValidationError{
+					File:  filename,
+					Field: fmt.Sprintf("steps.%s.retry.on", stepID),
+					Message: fmt.Sprintf(
+						"unknown step error class %q; valid classes are: %s",
+						class, strings.Join(stepoutcome.ErrorClasses(), ", ")),
+				}
 			}
-			return WorkflowValidationError{
-				File:  filename,
-				Field: fmt.Sprintf("steps.%s.retry.on", stepID),
-				Message: fmt.Sprintf(
-					"unknown step error class %q; valid classes are: %s",
-					class, strings.Join(stepoutcome.ErrorClasses(), ", ")),
+			// A known class that names a DETERMINISTIC failure is refused too:
+			// the ladder re-runs with identical inputs, which cannot change a
+			// schema violation or a budget stop (incident T-0d3c; design
+			// 2026-08-27-step-retry-configuration-design.md §9 D9.2).
+			if !stepoutcome.IsInfraRetryableClass(class) {
+				return WorkflowValidationError{
+					File:  filename,
+					Field: fmt.Sprintf("steps.%s.retry.on", stepID),
+					Message: fmt.Sprintf(
+						"step error class %q is deterministic and cannot be retried with identical inputs; "+
+							"it goes to the shape retry, model fallback and on_fail instead. "+
+							"retry.on may name only: %s",
+						class, strings.Join(stepoutcome.InfraRetryableClasses(), ", ")),
+				}
 			}
 		}
 	}

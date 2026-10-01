@@ -18,6 +18,7 @@ func RunPackageContributionSuite(t *testing.T, repo persistence.PackageContribut
 	runPackageOwnershipCases(t, repo)
 	runPackageBatchCases(t, repo)
 	runPackageListingCases(t, repo)
+	runPackageReplaceCases(t, repo)
 }
 
 // runPackageOwnershipCases covers the writes and the one-owner invariant —
@@ -198,5 +199,82 @@ func runPackageListingCases(t *testing.T, repo persistence.PackageContributionRe
 
 	t.Run("recording nothing is not an error", func(t *testing.T) {
 		wantOK(t, "RecordContributions(empty)", repo.RecordContributions(ctx, nil))
+	})
+}
+
+// runPackageReplaceCases covers ReplaceContributions, the provenance swap of
+// `package upgrade` (package design §8). It must commit the delete and the
+// insert together or not at all: a key refusal leaves the OLD rows intact,
+// because a driver that ran them as two statements would leave the package
+// with no provenance at all.
+func runPackageReplaceCases(t *testing.T, repo persistence.PackageContributionRepository) {
+	ctx := context.Background()
+	row := func(pkg, ver, kind, id, hash string) persistence.PackageContribution {
+		return persistence.PackageContribution{
+			Kind: kind, RowID: id, Package: pkg, PackageVersion: ver,
+			Path: kind + "s/" + id + ".md", ContentHashAtInstall: hash,
+			InstalledAt: time.Now().UTC(),
+		}
+	}
+
+	t.Run("replace swaps a package's rows, including one it keeps", func(t *testing.T) {
+		pkg := uniqueID("pkg-up")
+		kept, dropped, added := uniqueID("kept"), uniqueID("dropped"), uniqueID("added")
+		wantOK(t, "seed", repo.RecordContributions(ctx, []persistence.PackageContribution{
+			row(pkg, "1.2.0", "workflow", kept, "hash-old"),
+			row(pkg, "1.2.0", "role", dropped, "hash-r"),
+		}))
+		wantOK(t, "replace", repo.ReplaceContributions(ctx, pkg, []persistence.PackageContribution{
+			row(pkg, "1.3.0", "workflow", kept, "hash-new"),
+			row(pkg, "1.3.0", "workflow", added, "hash-a"),
+		}))
+		got, err := repo.ContributionsByPackage(ctx, pkg)
+		wantOK(t, "ContributionsByPackage", err)
+		if len(got) != 2 {
+			t.Fatalf("rows after replace = %d, want 2: %+v", len(got), got)
+		}
+		for _, r := range got {
+			if r.PackageVersion != "1.3.0" {
+				t.Fatalf("row %s kept version %q", r.RowID, r.PackageVersion)
+			}
+			if r.RowID == kept && r.ContentHashAtInstall != "hash-new" {
+				t.Fatalf("the kept row carries %q, want the new hash", r.ContentHashAtInstall)
+			}
+			if r.RowID == dropped {
+				t.Fatal("a row the new version dropped survived the replace")
+			}
+		}
+	})
+
+	t.Run("a key refusal leaves the old rows intact", func(t *testing.T) {
+		pkg, other := uniqueID("pkg-up"), uniqueID("pkg-other")
+		mine, theirs := uniqueID("mine"), uniqueID("theirs")
+		wantOK(t, "seed mine", repo.RecordContributions(ctx, []persistence.PackageContribution{row(pkg, "1.2.0", "workflow", mine, "hash-m")}))
+		wantOK(t, "seed theirs", repo.RecordContributions(ctx, []persistence.PackageContribution{row(other, "1.0.0", "workflow", theirs, "hash-t")}))
+		err := repo.ReplaceContributions(ctx, pkg, []persistence.PackageContribution{
+			row(pkg, "1.3.0", "workflow", mine, "hash-m2"),
+			row(pkg, "1.3.0", "workflow", theirs, "hash-x"),
+		})
+		if err == nil {
+			t.Fatal("ReplaceContributions took a row another package owns")
+		}
+		got, gerr := repo.ContributionsByPackage(ctx, pkg)
+		wantOK(t, "ContributionsByPackage", gerr)
+		if len(got) != 1 || got[0].RowID != mine || got[0].ContentHashAtInstall != "hash-m" || got[0].PackageVersion != "1.2.0" {
+			t.Fatalf("old rows not intact after a refused replace: %+v", got)
+		}
+		if owner, ok, _ := repo.ContributionOwner(ctx, "workflow", theirs); !ok || owner != other {
+			t.Fatalf("the other package's row changed owner: %q (%v)", owner, ok)
+		}
+	})
+
+	t.Run("a row naming another package is refused", func(t *testing.T) {
+		pkg := uniqueID("pkg-up")
+		err := repo.ReplaceContributions(ctx, pkg, []persistence.PackageContribution{
+			row(uniqueID("someone-else"), "1.0.0", "workflow", uniqueID("w"), "h"),
+		})
+		if err == nil {
+			t.Fatal("ReplaceContributions accepted a row for a different package")
+		}
 	})
 }

@@ -98,6 +98,11 @@ type InboxData struct {
 	// /ui/inbox/web-write/{id}/{approve|reject}; approve mints the capability
 	// token. Empty when the web-write repo is unwired or no row is pending.
 	WebWrites []webWriteCard
+
+	// BrokerActions are pending broker write actions (broker write-actions
+	// design §5.3): each card shows the complete arguments, and approve binds
+	// to their hash. Empty when the store is unwired or nothing is pending.
+	BrokerActions []brokerActionCard
 }
 
 // NavAttentionCount implements navAttentionCounter (nav_model.go) so the
@@ -430,6 +435,7 @@ func (s *Server) Inbox(w http.ResponseWriter, r *http.Request) {
 	// submission_id, not a task status) — loaded whenever the web-write repo
 	// is wired regardless of taskRepo.
 	data.WebWrites = s.loadPendingWebWrites(r)
+	data.BrokerActions = s.loadPendingBrokerActions(r)
 
 	// Rank by urgency, then oldest-first within a category.
 	sort.SliceStable(data.Items, func(i, j int) bool {
@@ -442,7 +448,7 @@ func (s *Server) Inbox(w http.ResponseWriter, r *http.Request) {
 	// pending web-write approvals (both are things a human is blocked on).
 	// The informational "Retrying…" rows render in the queue but are excluded
 	// — nothing is blocked on them, so they must not inflate the badge.
-	data.Count = countActionableItems(data.Items) + len(data.WebWrites)
+	data.Count = countActionableItems(data.Items) + len(data.WebWrites) + len(data.BrokerActions)
 
 	// vornik_ui_inbox_views_total{role} (design §5.8) — every inbox
 	// render, regardless of whether taskRepo is wired (a view is a

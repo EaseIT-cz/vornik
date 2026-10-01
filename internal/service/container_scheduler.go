@@ -90,6 +90,12 @@ func (c *Container) initScheduler() error {
 	}
 	c.artifactStore = artifactStore
 	c.artifactBackend = backend
+	// The artifact checkpoint records its strong findings to
+	// secret_redaction_audit (secret-leak Phase 3 design, "the remaining
+	// sinks"). A nil interface on SQLite leaves it unwired.
+	if c.repos != nil && c.repos.SecretRedaction != nil {
+		artifactStore.SetRedactionRecorder(c.repos.SecretRedaction)
+	}
 	// Wire the verifier's package-global blob reader so verifiers
 	// that inspect artifact content (artifact_min_entries and
 	// friends) read through the same backend the rest of the
@@ -479,6 +485,12 @@ func (c *Container) initScheduler() error {
 	)
 	if c.Registry != nil {
 		executorOpts = append(executorOpts, executor.WithWorkflowResolver(c.Registry))
+	}
+	// Broker write proposals are staged before and promoted after the
+	// COMPLETED transition (broker write-actions design §5.1).
+	if c.repos.BrokerActions != nil {
+		executorOpts = append(executorOpts, executor.WithBrokerActions(c.repos.BrokerActions),
+			executor.WithBrokerActionNotifier(c.notifyBrokerActionsPending))
 	}
 	// Per-task cost governor breach notifier (LLD 2026-07-24 §3.5/§3.6, impl
 	// review I1): the executor is the subsystem that fires soft-breach + hard-

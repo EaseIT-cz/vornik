@@ -118,6 +118,11 @@ type SubmitResult struct {
 // visible via the repo / inbox query). It is NOT faked here.
 type WebWriteApprovalHook func(ctx context.Context, action *persistence.WebWriteAction) error
 
+// WebWritePendingNotifier alerts operators that a pending web-write waits
+// in /inbox. Notify-only: it carries no way to decide. Separate from
+// WebWriteApprovalHook, whose job is parking the owning task.
+type WebWritePendingNotifier func(ctx context.Context, action *persistence.WebWriteAction)
+
 // webSubmitArgs is the LLM-facing arg shape. The schema description NEVER names
 // credentials. submit reads ONLY submission_id + approval_token; any executable
 // arg (url/fields) present on a submit call is rejected.
@@ -305,6 +310,10 @@ func (te *ToolExecutor) webSubmitPreview(ctx context.Context, activeProject, mod
 		te.logger.Info().
 			Str("submission_id", action.SubmissionID).
 			Msg("dispatcher: web_submit preview stored a pending action but no approval hook is wired (TODO: Task 10 resume routing)")
+	}
+
+	if te.webPendingNotify != nil {
+		te.webPendingNotify(ctx, action)
 	}
 
 	var b strings.Builder

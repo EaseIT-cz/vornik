@@ -1,6 +1,8 @@
 package macos
 
 import (
+	"errors"
+	"fmt"
 	"os/exec"
 	"testing"
 	"time"
@@ -55,6 +57,9 @@ func TestZeroEgressNetworkNoneCannotReachExternalHost(t *testing.T) {
 	// must FAIL — having just proven (above) that the image and command work
 	// and can reach the network when a device is present.
 	err := runWithTimeout(t, 15*time.Second, "podman", append([]string{"run", "--rm", "--network=none", image}, wgetArgs...)...)
+	if errors.Is(err, errCommandTimeout) {
+		t.Fatalf("%v — a --network=none container should be refused at once, not hang", err)
+	}
 	if err == nil {
 		t.Fatal("container with --network=none reached an external host — the zero-egress invariant is broken " +
 			"(no network device should mean no route to anywhere, external or not)")
@@ -65,21 +70,42 @@ func TestZeroEgressNetworkNoneCannotReachExternalHost(t *testing.T) {
 	// control above having succeeded.
 }
 
-// runWithTimeout runs cmd and returns its error (nil on success), but fails
-// the test loudly if it doesn't return within timeout (rather than letting a
-// hung podman invocation silently pass/hang the suite).
+// runWithTimeout runs cmd and returns its error (nil on success). A command
+// that does not return within timeout is killed and reported as
+// errCommandTimeout, so a hung podman invocation never hangs the suite and the
+// caller decides what a hang means.
+var errCommandTimeout = errors.New("did not return within its limit")
+
 func runWithTimeout(t *testing.T, timeout time.Duration, name string, arg ...string) error {
 	t.Helper()
 	cmd := exec.Command(name, arg...)
+	// Start before the goroutine: Kill reads cmd.Process, which Start sets,
+	// and a Run inside the goroutine raced with it (-race, 2026-10-01).
+	if err := cmd.Start(); err != nil {
+		return err
+	}
 	done := make(chan error, 1)
-	go func() { done <- cmd.Run() }()
+	go func() { done <- cmd.Wait() }()
 
 	select {
 	case err := <-done:
 		return err
 	case <-time.After(timeout):
 		_ = cmd.Process.Kill()
-		t.Fatalf("%s %v did not return within %s — expected an immediate result, not a hang/timeout", name, arg, timeout)
-		return nil // unreachable
+		return fmt.Errorf("%s %v: %w (%s)", name, arg, errCommandTimeout, timeout)
+	}
+}
+
+// A command that outlives its limit is reported as errCommandTimeout, so the
+// caller decides: the positive control skips (a slow or unreachable network
+// proves nothing), the --network=none run fails. Before 2026-10-01 a hung
+// positive control failed the test (the CE export's unit lane hit one).
+func TestRunWithTimeoutReturnsTimeoutToTheCaller(t *testing.T) {
+	err := runWithTimeout(t, 100*time.Millisecond, "sleep", "5")
+	if !errors.Is(err, errCommandTimeout) {
+		t.Fatalf("err = %v, want errCommandTimeout", err)
+	}
+	if err := runWithTimeout(t, 5*time.Second, "true"); err != nil {
+		t.Fatalf("a quick command: %v", err)
 	}
 }

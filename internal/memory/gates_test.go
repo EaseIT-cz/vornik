@@ -350,6 +350,76 @@ func TestMinContentGate(t *testing.T) {
 	}
 }
 
+// Deliberate deposits (companion:<client> and chat:<channel> producers) are
+// one fact a person or a front agent chose to keep, not chunker residue, so
+// they have their own floor: rejected under 3 words or 10 runes (pipeline
+// design, update 2026-10-01). Hermes e2e lane, 2026-09-30: "The user's
+// dentist is Dr Novak." (31 chars, 6 words) was REJECTED by the 64-char
+// document floor.
+func TestMinContentGate_DeliberateDepositFloor(t *testing.T) {
+	cfg := GateConfig{}
+	for _, role := range []string{"companion:hermes", "chat:slack"} {
+		cases := []struct {
+			content string
+			want    GateAction
+		}{
+			{"The user's dentist is Dr Novak.", GateAllow},
+			{"I like it.", GateAllow},  // 3 words, 10 chars: the floor exactly
+			{"Likes tea.", GateReject}, // 2 words
+			{"Dr Novak.", GateReject},  // 2 words, no fact
+			{"a b c", GateReject},      // 3 words, 5 chars
+			{"I am ok.", GateReject},   // 3 words, 8 chars: a passing state, refused by design
+			{"Má rád čaj.", GateAllow}, // 3 words, 11 runes
+			{"Pán Nov čaj", GateAllow}, // 3 words, 11 runes, 14 bytes
+			{"Rád čaj", GateReject},    // 2 words, multibyte
+			{"", GateReject},
+		}
+		for _, tc := range cases {
+			out := MinContentGate(&IngestCandidate{Content: tc.content, ProducerRole: role}, cfg)
+			if out.Action != tc.want {
+				t.Errorf("%s %q: action %v, want %v (%s)", role, tc.content, out.Action, tc.want, out.Detail)
+			}
+		}
+	}
+	// A rune count, not bytes: 9 runes in 14 bytes is under the floor.
+	if out := MinContentGate(&IngestCandidate{Content: "á é í ó ú", ProducerRole: "chat:slack"}, cfg); out.Action != GateReject {
+		t.Errorf("9 runes / 14 bytes: got %v, want reject (runes counted)", out.Action)
+	}
+}
+
+// The floor is keyed on the producer, not the class (review-20261001-bef2
+// F1/F2): a non-deposit producer that overrides its class to a deposit class
+// keeps the document floor, and a companion note the caller classed as
+// decision gets the deposit floor.
+func TestMinContentGate_DepositFloorFollowsTheProducer(t *testing.T) {
+	cfg := GateConfig{}
+	fact := "The user's dentist is Dr Novak."
+	for _, cls := range []ContentClass{ClassChatMemory, ClassCompanionNote} {
+		for _, role := range []string{"writer", "rag-ingester", "companion:", "chat:Slack", "chatter:x"} {
+			out := MinContentGate(&IngestCandidate{Content: fact, ProposedClass: cls, ProducerRole: role}, cfg)
+			if out.Action != GateReject {
+				t.Errorf("role %q class %s: a 31-char fact got %v, want the 64-char reject", role, cls, out.Action)
+			}
+		}
+	}
+	if out := MinContentGate(&IngestCandidate{Content: fact, ProposedClass: ClassDecision, ProducerRole: "companion:claude-code"}, cfg); out.Action != GateAllow {
+		t.Errorf("companion note classed decision: got %v, want the deposit floor to admit it", out.Action)
+	}
+	// A zero GateConfig keeps 64 and 10 for agent roles.
+	if out := MinContentGate(&IngestCandidate{Content: strings.Repeat("a", 80), ProducerRole: "writer"}, cfg); out.Action != GateQuarantine {
+		t.Errorf("agent role, 80 chars 1 word: got %v, want quarantine", out.Action)
+	}
+	// The deposit floor is configurable like the document floor.
+	strict := GateConfig{DepositMinContentWords: 8}
+	if out := MinContentGate(&IngestCandidate{Content: fact, ProducerRole: "companion:hermes"}, strict); out.Action != GateReject {
+		t.Errorf("DepositMinContentWords=8: got %v, want reject", out.Action)
+	}
+	strict = GateConfig{DepositMinContentChars: 40}
+	if out := MinContentGate(&IngestCandidate{Content: fact, ProducerRole: "companion:hermes"}, strict); out.Action != GateReject {
+		t.Errorf("DepositMinContentChars=40: got %v, want reject", out.Action)
+	}
+}
+
 func TestTruncationCheckGate(t *testing.T) {
 	// All cases here opt the candidate's class in so the gate
 	// actually runs. The "default-off" branch is covered separately

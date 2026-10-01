@@ -1,9 +1,11 @@
 package executor
 
 import (
+	"errors"
 	"time"
 
 	"vornik.io/vornik/internal/registry"
+	"vornik.io/vornik/internal/stepoutcome"
 )
 
 // resolvedRetry is a step's retry ladder settings with every default already
@@ -50,24 +52,69 @@ func resolveStepRetry(step registry.WorkflowStep) resolvedRetry {
 	return out
 }
 
+// stepClassError carries the error_class the step-outcome recorder wrote for a
+// failed agent step, so the retry ladder decides on the SAME classification the
+// operator sees. Error() is the wrapped error's text, byte for byte, so every
+// message-based consumer is unaffected. It deliberately does NOT implement
+// FailureClass(): that interface is the TASK failure vocabulary, read by
+// ClassifyExecutionFailure, and a step class there would be a category error.
+//
+// Incident T-0d3c (2026-09-28): the row said verify_claims_failed while the
+// ladder re-classified with the refiner alone, saw "unclassified", and re-ran a
+// schema violation five times. Design: 2026-08-27-step-retry-configuration-
+// design.md §9 D9.1.
+type stepClassError struct {
+	class string
+	err   error
+}
+
+func (e *stepClassError) Error() string { return e.err.Error() }
+func (e *stepClassError) Unwrap() error { return e.err }
+
+// withStepClass attaches the recorded class to err. nil and an empty class
+// pass through unchanged.
+func withStepClass(err error, class string) error {
+	if err == nil || class == "" {
+		return err
+	}
+	return &stepClassError{class: class, err: err}
+}
+
+// recordedStepClass returns the class the outcome recorder attached, if any.
+func recordedStepClass(err error) (string, bool) {
+	var sce *stepClassError
+	if errors.As(err, &sce) {
+		return sce.class, true
+	}
+	return "", false
+}
+
 // shouldRetry reports whether this step's ladder should re-run after err.
 //
-// The built-in predicate is checked FIRST and is sufficient on its own: a
-// configured `on:` list can only ever add to it. That ordering is the
-// widening guarantee expressed in code — there is no path by which a config
-// value causes shouldRetry to return false where isInfraFailure returns true.
+// The class is the one the step-outcome recorder wrote (stepClassError), so
+// what an operator sees in `error_class` is exactly what they write in `on:`.
+// Only an error that never passed through the recorder falls back to the
+// refiner.
+//
+// A recorded class outside stepoutcome's infra-retry allowlist is declined
+// BEFORE isInfraFailure: that predicate matches text anywhere in the error,
+// including the container-log tail, and a schema violation whose tail mentions
+// a gateway 503 is still a schema violation (design §9 D9.2). Otherwise the
+// built-in predicate is sufficient on its own and `on:` can only add to it.
 func (r resolvedRetry) shouldRetry(err error) bool {
+	class, recorded := recordedStepClass(err)
+	if recorded && !stepoutcome.IsInfraRetryableClass(class) {
+		return false
+	}
 	if isInfraFailure(err) {
 		return true
 	}
 	if len(r.On) == 0 {
 		return false
 	}
-	// Classify the same way the step-outcome row does, so what an operator
-	// sees in `error_class` is exactly what they write in `on:`. The class
-	// strings are internal/stepoutcome's vocabulary, validated against it at
-	// load time by Workflow.validateRetryClasses.
-	_, class := refineAgentFailureOutcomeErr(err)
+	if !recorded {
+		_, class = refineAgentFailureOutcomeErr(err)
+	}
 	return r.On[class]
 }
 

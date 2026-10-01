@@ -4,11 +4,13 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"sort"
 	"strings"
 	"time"
 
 	"vornik.io/vornik/internal/apikey"
 	"vornik.io/vornik/internal/persistence"
+	"vornik.io/vornik/internal/registry"
 )
 
 // Companion-plugin surface (LLD 21).
@@ -39,6 +41,21 @@ var knownCompanionClients = map[string]bool{
 	"codex":       true,
 	"gemini-cli":  true,
 	"opencode":    true,
+	// Front-agent harnesses that use Vornik as a privileged-work broker
+	// and memory backend (broker design 2026-09-29 §9).
+	"hermes":   true,
+	"openclaw": true,
+}
+
+// knownCompanionClientsList is the operator-facing enumeration in error
+// messages, derived so it cannot drift from the map.
+func knownCompanionClientsList() string {
+	out := make([]string, 0, len(knownCompanionClients))
+	for k := range knownCompanionClients {
+		out = append(out, k)
+	}
+	sort.Strings(out)
+	return strings.Join(out, ", ")
 }
 
 // companionGrantRequest is the body shape for POST /api/v1/companion/grant.
@@ -72,6 +89,10 @@ type companionGrantRequest struct {
 	// their deposits can't silently land NULL-scoped. Empty = no
 	// default. CLI flag: --repo-scope.
 	DefaultRepoScope string `json:"defaultRepoScope,omitempty"`
+	// DelegateDisabled refuses every companion task tool for this key —
+	// the shape of a front agent's MEMORY key (broker design §8). CLI flag:
+	// --no-delegate.
+	DelegateDisabled bool `json:"delegateDisabled,omitempty"`
 }
 
 // companionGrantResponse carries the one-time-visible secret back.
@@ -95,6 +116,7 @@ type companionGrantResponse struct {
 	SkillWrite       bool       `json:"skillWrite,omitempty"`
 	SkillAdmin       bool       `json:"skillAdmin,omitempty"`
 	DefaultRepoScope string     `json:"defaultRepoScope,omitempty"`
+	DelegateDisabled bool       `json:"delegateDisabled,omitempty"`
 }
 
 // CompanionGrant handles POST /api/v1/companion/grant. Mints a
@@ -157,7 +179,7 @@ func (s *Server) CompanionGrant(w http.ResponseWriter, r *http.Request) {
 	}
 	if !knownCompanionClients[req.ClientKind] {
 		respondError(w, http.StatusBadRequest, "UNKNOWN_CLIENT",
-			"clientKind must be one of: claude-code, codex, gemini-cli, opencode")
+			"clientKind must be one of: "+knownCompanionClientsList())
 		return
 	}
 
@@ -220,6 +242,11 @@ func (s *Server) CompanionGrant(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	if code, msg := validateBrokerGrant(project, &req, s.projectRegistry); code != "" {
+		respondError(w, http.StatusBadRequest, code, msg)
+		return
+	}
+
 	if req.BudgetCapUSD != nil && *req.BudgetCapUSD <= 0 {
 		respondError(w, http.StatusBadRequest, "VALIDATION_ERROR",
 			"budgetCapUsd must be > 0 when set (omit the field for uncapped)")
@@ -275,6 +302,7 @@ func (s *Server) CompanionGrant(w http.ResponseWriter, r *http.Request) {
 		SkillRead:        skillRead,
 		SkillWrite:       req.SkillWrite,
 		SkillAdmin:       req.SkillAdmin,
+		DelegateDisabled: req.DelegateDisabled,
 	}
 	if err := s.apiKeyRepo.Create(r.Context(), row); err != nil {
 		s.logger.Warn().Err(err).
@@ -303,6 +331,7 @@ func (s *Server) CompanionGrant(w http.ResponseWriter, r *http.Request) {
 		SkillWrite:       row.SkillWrite,
 		SkillAdmin:       row.SkillAdmin,
 		DefaultRepoScope: row.DefaultRepoScope,
+		DelegateDisabled: row.DelegateDisabled,
 	})
 }
 
@@ -389,4 +418,33 @@ func (s *Server) CompanionKeysList(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 	respondJSON(w, http.StatusOK, companionKeyListResponse{Keys: out})
+}
+
+// validateBrokerGrant applies the broker design's grant-time rules (§8):
+// every key on a broker project is broker-only, and broker workflows run in
+// broker projects only. Returns ("", "") when the grant may proceed.
+func validateBrokerGrant(project *registry.Project, req *companionGrantRequest, reg *registry.Registry) (string, string) {
+	if req.DelegateDisabled && req.AllowedWorkflows != nil {
+		return "VALIDATION_ERROR", "delegateDisabled and allowedWorkflows contradict each other; a no-delegate key runs no workflow"
+	}
+	if project.Broker {
+		if req.MemoryRead || req.MemoryWrite || req.SkillRead || req.SkillWrite || req.SkillAdmin {
+			return "BROKER_PROJECT", "project " + project.ID + " is a broker project: its keys get no memory and no skill access (grant memory on a separate memory project)"
+		}
+		if req.DelegateDisabled {
+			return "BROKER_PROJECT", "project " + project.ID + " is a broker project: a key there exists to delegate broker workflows; --no-delegate would make it useless"
+		}
+		for _, wfID := range req.AllowedWorkflows {
+			if wf := reg.GetWorkflow(strings.TrimSpace(wfID)); wf != nil && wf.Broker == nil {
+				return "BROKER_PROJECT", "project " + project.ID + " is a broker project: workflow " + wfID + " is not a broker workflow"
+			}
+		}
+		return "", ""
+	}
+	for _, wfID := range req.AllowedWorkflows {
+		if wf := reg.GetWorkflow(strings.TrimSpace(wfID)); wf != nil && wf.Broker != nil {
+			return "BROKER_WORKFLOW", "workflow " + wfID + " is a broker workflow and runs only in a broker project; project " + project.ID + " is not one"
+		}
+	}
+	return "", ""
 }

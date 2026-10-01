@@ -476,6 +476,14 @@ var secretKeyTokens = []string{
 	"dsn",
 	"connectionstring", // covers connection_string, ConnectionString
 	"privatekey",       // covers private_key, PrivateKey
+	// External scan 2026-10-01 (swarms.vornik.io F2): admin.allowed_keys has
+	// no json tag, marshals as "AllowedKeys", matched none of the tokens above,
+	// and the admin keys were served in plaintext by GET /api/v1/config. The
+	// S3 access key id rode along the same gap. The denominator for this list
+	// is internal/api TestGetConfig_EveryCredentialShapedLeafIsRedacted, which
+	// walks every credential-shaped leaf of config.Config.
+	"allowedkeys", // covers allowed_keys, AllowedKeys
+	"accesskey",   // covers access_key_id, AccessKeyID
 }
 
 // nonSecretExactKeys are exact lowercased keys that superficially

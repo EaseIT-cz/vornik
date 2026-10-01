@@ -1,6 +1,7 @@
 package executor
 
 import (
+	"strconv"
 	"sync"
 	"sync/atomic"
 
@@ -40,6 +41,13 @@ type Metrics struct {
 
 	// RetriedTotal is a counter tracking the total number of execution retries.
 	RetriedTotal *prometheus.CounterVec
+
+	// MemoryPeakReportsTotal counts agent steps on the ephemeral path by
+	// whether the container reported its memory peak (agent container memory
+	// limits design §2.3a). reported="false" covers an image that predates
+	// the field, a cgroup v1 host, and an untrusted read, so an all-NULL
+	// peak column is told apart from "nobody tried".
+	MemoryPeakReportsTotal *prometheus.CounterVec
 
 	// ToolCallsTotal is a counter tracking the total number of tool invocations
 	// reported by agent containers.
@@ -517,6 +525,15 @@ func NewMetrics(registerer prometheus.Registerer) *Metrics {
 				Help:      "Total number of execution retries.",
 			},
 			[]string{"project_id"},
+		),
+		MemoryPeakReportsTotal: promauto.With(registerer).NewCounterVec(
+			prometheus.CounterOpts{
+				Namespace: executorNamespace,
+				Subsystem: executorSubsystem,
+				Name:      "memory_peak_reports_total",
+				Help:      "Ephemeral agent steps that produced a result.json, by whether the container reported its cgroup memory peak.",
+			},
+			[]string{"role", "reported"},
 		),
 		ToolCallsTotal: promauto.With(registerer).NewCounterVec(
 			prometheus.CounterOpts{
@@ -1097,6 +1114,15 @@ func (m *Metrics) SetActiveGauge(counts map[string]int) {
 	for projectID, count := range counts {
 		m.Active.WithLabelValues(projectID).Set(float64(count))
 	}
+}
+
+// RecordMemoryPeakReport counts one ephemeral agent step by whether its
+// container reported a memory peak.
+func (m *Metrics) RecordMemoryPeakReport(role string, reported bool) {
+	if m == nil {
+		return
+	}
+	m.MemoryPeakReportsTotal.WithLabelValues(role, strconv.FormatBool(reported)).Inc()
 }
 
 // RecordToolCalls increments the tool call counter for each tool invocation.

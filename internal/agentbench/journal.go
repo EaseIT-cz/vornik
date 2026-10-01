@@ -84,6 +84,14 @@ type PreRegistration struct {
 	CalibrationSHA256       string `json:"calibrationSha256,omitempty"`
 	NoiseFloorSHA256        string `json:"noiseFloorSha256,omitempty"`
 	ReleaseGatePolicySHA256 string `json:"releaseGatePolicySha256,omitempty"`
+	// RequiresScorer is the commit (7 to 40 lowercase hex characters) the
+	// harness scoring this pass must contain: the scorer change the pass
+	// exists to exercise. agentbench-reproduce.sh refuses a harness without
+	// it; a direct run says it is unchecked (release-gate design §9.5,
+	// agent benchmark design §12.20.4). omitempty, so a file without it
+	// keeps its bytes and its hash; lowercase only, because two spellings of
+	// one commit would hash differently.
+	RequiresScorer string `json:"requiresScorer,omitempty"`
 }
 
 // EffectiveKind resolves an absent kind to comparison. It does not validate:
@@ -126,6 +134,9 @@ func (p PreRegistration) BindArm(arm string) error {
 
 // Validate refuses a pre-registration that does not commit to anything.
 func (p PreRegistration) Validate() error {
+	if err := validateRequiresScorer(p.RequiresScorer); err != nil {
+		return err
+	}
 	switch p.EffectiveKind() {
 	case RunKindComparison:
 	case RunKindCalibration, RunKindNoiseFloor:
@@ -204,6 +215,24 @@ func (p PreRegistration) Validate() error {
 		}
 		if !sameStrings(p.IndependentAxes, []string{"binary_sha256", "agent_images"}) {
 			return fmt.Errorf("release comparison independentAxes must be exactly binary_sha256 and agent_images")
+		}
+	}
+	return nil
+}
+
+// validateRequiresScorer accepts "" (not declared) or 7 to 40 lowercase hex
+// characters, on every kind (release-gate design §9.5).
+func validateRequiresScorer(v string) error {
+	if v == "" {
+		return nil
+	}
+	if len(v) < 7 || len(v) > 40 {
+		return fmt.Errorf("requiresScorer %q must be a git commit of 7 to 40 characters", v)
+	}
+	for _, r := range v {
+		if (r < '0' || r > '9') && (r < 'a' || r > 'f') {
+			return fmt.Errorf("requiresScorer %q must be lowercase hex: a commit has one canonical "+
+				"spelling, and two spellings of one commit would hash differently", v)
 		}
 	}
 	return nil

@@ -23,8 +23,9 @@
                  hx-select="#inbox-list"
                  hx-target="#inbox-list"
                  hx-swap="outerHTML">
-            {{if or .Items .WebWrites}}
+            {{if or .Items .WebWrites .BrokerActions}}
                 <ul class="space-y-2">
+                    {{range .BrokerActions}}{{template "brokerActionApprovalCard" .}}{{end}}
                     {{range .WebWrites}}{{template "webWriteApprovalCard" .}}{{end}}
                     {{range .Items}}{{template "inboxItemRow" .}}{{end}}
                 </ul>
@@ -112,6 +113,39 @@
 </li>
 {{end}}
 
+{{/* brokerActionApprovalCard — one pending broker write action (broker
+     write-actions design §5.3). The hidden args_sha256 is the hash of the
+     arguments rendered here; approve refuses when the stored row no longer
+     matches it. */}}
+{{define "brokerActionApprovalCard"}}
+<li id="broker-action-{{.ActionID}}" class="rounded-xl border border-dark-600 bg-dark-800 p-3.5 space-y-2.5">
+    <div class="flex items-center gap-2 flex-wrap text-[11px] text-gray-500">
+        <span class="font-medium uppercase tracking-wide px-2 py-0.5 rounded-full bg-amber-500/20 text-amber-700 dark:text-amber-300">Needs approval</span>
+        <span>{{.ProjectID}}</span>
+        <span class="px-1.5 py-0.5 rounded-md bg-dark-700 text-gray-400" title="a write proposed by a broker workflow">broker write</span>
+        <span class="ml-auto">{{.Age}} · {{.Expires}}</span>
+    </div>
+    <div class="min-w-0 space-y-0.5">
+        <div class="text-sm text-gray-200"><span class="font-medium text-gray-100">{{.ActionKind}}</span> via <span class="font-mono text-gray-300">{{.Tool}}</span></div>
+        <div class="text-[11px] text-gray-500">task <a class="underline" href="/ui/tasks/{{.TaskID}}">{{.TaskID}}</a>{{if .KeyLabel}} · requested by {{.KeyLabel}}{{end}}</div>
+        <div class="text-[10px] text-gray-600 font-mono truncate">{{.ActionID}}</div>
+    </div>
+    <div class="rounded-lg border border-amber-600/40 bg-amber-500/10 px-3 py-2 text-[11px] text-amber-700 dark:text-amber-300">
+        A model drafted these arguments after reading third-party content{{if .UntrustedFields}} (free text in: {{range $i, $f := .UntrustedFields}}{{if $i}}, {{end}}<span class="font-mono">{{$f}}</span>{{end}}){{end}}.{{if .SchemaUnavailable}} The workflow no longer declares this action, so which fields are free text is unknown: treat every field as drafted.{{end}} Check the recipient and every word before approving: exactly this will be sent.
+    </div>
+    <pre class="overflow-x-auto rounded-lg border border-dark-600 bg-dark-900 p-2 text-[11px] text-gray-200 whitespace-pre-wrap break-words">{{.ArgsPretty}}</pre>
+    <div class="flex flex-wrap items-center gap-1.5">
+        <form hx-post="/ui/inbox/broker-action/{{.ActionID}}/approve" hx-target="#broker-action-{{.ActionID}}" hx-swap="outerHTML" class="contents">
+            <input type="hidden" name="args_sha256" value="{{.ArgsSHA256}}">
+            <button type="submit" class="flex-1 sm:flex-none px-4 py-2 text-xs font-medium rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white transition-colors">Approve &amp; send</button>
+        </form>
+        <form hx-post="/ui/inbox/broker-action/{{.ActionID}}/reject" hx-target="#broker-action-{{.ActionID}}" hx-swap="outerHTML" class="contents">
+            <button type="submit" class="flex-1 sm:flex-none px-4 py-2 text-xs font-medium rounded-lg bg-rose-700/80 hover:bg-rose-600 text-white transition-colors">Reject</button>
+        </form>
+    </div>
+</li>
+{{end}}
+
 {{/* webWriteApprovalCard — one pending supervised web-write approval
      (supervised-web-write-actions Task 6, design §Components.4 + I7).
      Expects a webWriteCard. The card is the operator's proof that "what
@@ -125,7 +159,7 @@
      the in-handler same-origin check gate the POST). hx-target removes the
      card in place once decided. */}}
 {{define "webWriteApprovalCard"}}
-<li id="web-write-{{.SubmissionID}}" class="rounded-xl border border-dark-600 bg-dark-800 p-3.5 space-y-2.5">
+<li id="{{.Anchor}}" class="rounded-xl border border-dark-600 bg-dark-800 p-3.5 space-y-2.5">
     <div class="flex items-center gap-2 flex-wrap text-[11px] text-gray-500">
         <span class="font-medium uppercase tracking-wide px-2 py-0.5 rounded-full bg-amber-500/20 text-amber-700 dark:text-amber-300">Needs approval</span>
         <span>{{.ProjectID}}</span>
@@ -185,10 +219,10 @@
     {{end}}
 
     <div class="flex flex-wrap items-center gap-1.5">
-        <form hx-post="/ui/inbox/web-write/{{.SubmissionID}}/approve" hx-target="#web-write-{{.SubmissionID}}" hx-swap="outerHTML" class="contents">
+        <form hx-post="/ui/inbox/web-write/{{.SubmissionID}}/approve" hx-target="#{{.Anchor}}" hx-swap="outerHTML" class="contents">
             <button type="submit" class="flex-1 sm:flex-none px-4 py-2 text-xs font-medium rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white transition-colors">Approve &amp; submit</button>
         </form>
-        <form hx-post="/ui/inbox/web-write/{{.SubmissionID}}/reject" hx-target="#web-write-{{.SubmissionID}}" hx-swap="outerHTML" class="contents">
+        <form hx-post="/ui/inbox/web-write/{{.SubmissionID}}/reject" hx-target="#{{.Anchor}}" hx-swap="outerHTML" class="contents">
             <button type="submit" class="flex-1 sm:flex-none px-4 py-2 text-xs font-medium rounded-lg bg-rose-700/80 hover:bg-rose-600 text-white transition-colors">Reject</button>
         </form>
     </div>

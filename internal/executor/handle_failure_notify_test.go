@@ -449,3 +449,25 @@ func TestHandleFailure_DelegatedChildTerminalExhaustsBudget(t *testing.T) {
 	assert.Equal(t, got.MaxAttempts, got.Attempt,
 		"the storm guard must exhaust the attempt budget so the scheduler won't re-queue it")
 }
+
+// Review M1 (review-20260929-388f): a REAL terminal transition must reach a
+// completion observer — the path the companion result(wait_seconds) long-poll
+// is released by — even with no completion notifier configured.
+func TestHandleFailure_TerminalReachesCompletionObserverWithoutNotifier(t *testing.T) {
+	e, _, er, _, tr := setup()
+	obs := &recordingNotifier{}
+	e.AddCompletionObserver(obs)
+	task := &persistence.Task{ID: "t-obs", ProjectID: "p1", Status: persistence.TaskStatusRunning, Attempt: 3, MaxAttempts: 3, CreatedAt: time.Now()}
+	tr.AddTask(task)
+	exec := &persistence.Execution{ID: "e-obs", TaskID: task.ID, ProjectID: task.ProjectID, Status: persistence.ExecutionStatusRunning}
+	require.NoError(t, er.Create(context.Background(), exec))
+
+	e.handleFailure(context.Background(), task, exec, errors.New("permanent failure"))
+
+	calls := obs.snapshot()
+	require.Len(t, calls, 1, "a terminal failure must reach the observer")
+	assert.Equal(t, "t-obs", calls[0].taskID)
+	stored, err := tr.Get(context.Background(), "t-obs")
+	require.NoError(t, err)
+	assert.Equal(t, persistence.TaskStatusFailed, stored.Status, "status must be persisted before observers fire (review I1)")
+}

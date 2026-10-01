@@ -356,3 +356,16 @@ func TestInbox_RendersPendingWebWriteCard(t *testing.T) {
 		t.Error("expected screenshot placeholder for a row with no screenshot_ref")
 	}
 }
+
+// The Telegram alert deep-links to the card by this anchor
+// (review-20260930-ea34 F3): the rendered card must carry exactly it.
+func TestInbox_WebWriteCardCarriesTheSharedAnchor(t *testing.T) {
+	repo := newUIFakeWebWriteRepo()
+	repo.put(pendingWebWriteFixture())
+	srv := NewServer(WithWebWriteRepo(repo))
+	rec := httptest.NewRecorder()
+	srv.Inbox(rec, httptest.NewRequest(http.MethodGet, "/ui/inbox", nil))
+	if want := `id="` + WebWriteCardAnchor("ww_test_1") + `"`; !strings.Contains(rec.Body.String(), want) {
+		t.Fatalf("inbox body missing %s", want)
+	}
+}

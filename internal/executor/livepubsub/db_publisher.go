@@ -239,87 +239,94 @@ func (p *dbBackedPublisher) causeOf(timedOut bool, phase string) string {
 	return "detached_timeout"
 }
 
-// Subscribe delegates to the in-process publisher for the live
-// stream + supplements the replay from the DB when the
-// requested fromSeq is older than the in-memory ring.
+// Subscribe delegates to the in-process publisher's subscribe path with a
+// PRIVATE DB backfill: when the requested fromSeq is older than the ring (or
+// the ring is empty — a fresh subscriber on this replica, or any page load
+// after a daemon restart), the missing history is read from the DB and
+// served to THIS subscriber only, ahead of the live stream.
 //
-// The DB-replay path fires only when fromSeq is older than the
-// in-memory oldest. Most reconnects from the UI ask for
-// "everything I've seen + this seq" — typically <200 events back,
-// so the ring covers them and no DB query happens.
+// Pre-2026-09-28 the history was injected through IngestRemote (the live
+// deliver path): it was appended to the end of the shared ring, evicting the
+// newest events, and fanned out to every other subscriber and the fleet tap,
+// so other open pages flipped finished steps back to "running" (T-0d3c).
+// fromSeq=0 goes through the same probe — pre-2026-07-12 it was excluded, so
+// after a restart the live page rendered no history at all.
 func (p *dbBackedPublisher) Subscribe(executionID string, fromSeq int64) (<-chan LiveEvent, func(), error) {
-	// Probe the in-memory ring for its current oldest seq. If
-	// fromSeq is older, fetch the missing prefix from the DB and
-	// inject it before the live subscribe so the subscriber sees
-	// a continuous stream.
-	//
-	// fromSeq=0 (a fresh page load asking for everything) goes
-	// through the same probe — pre-2026-07-12 it was excluded
-	// (`if fromSeq > 0`), so after a daemon restart (empty ring)
-	// the live page rendered no history at all and its tool-call
-	// list disagreed with the audit log.
-	p.inner.mu.Lock()
-	s, exists := p.inner.streams[executionID]
-	p.inner.mu.Unlock()
-	var oldestInMem int64 = -1
-	if exists {
-		s.mu.Lock()
-		if len(s.ring) > 0 {
-			oldestInMem = s.ring[0].Seq
+	return p.inner.subscribe(executionID, fromSeq, func(ringOldest int64) []LiveEvent {
+		if ringOldest >= 0 && fromSeq >= ringOldest {
+			return nil // the ring snapshot covers the cursor
 		}
-		s.mu.Unlock()
-	}
-	// "DB might cover the gap" condition: the ring is empty
-	// (fresh subscriber on this replica) OR the oldest ring
-	// entry is newer than fromSeq.
-	if oldestInMem < 0 || fromSeq < oldestInMem {
-		p.replayFromDB(executionID, fromSeq, oldestInMem)
-	}
-	return p.inner.Subscribe(executionID, fromSeq)
+		return p.fetchHistory(executionID, fromSeq, ringOldest)
+	})
 }
 
 // SubscribeAll delegates to the inner in-process publisher's fleet tap.
 // Cross-replica events arrive via the LISTEN loop → IngestRemote → inner
 // deliver, which fans to the inner's fleet subscribers — so this single tap
-// sees events from every replica, not just the local one.
+// sees events from every replica, not just the local one. History replayed
+// for a per-execution subscriber never reaches it.
 func (p *dbBackedPublisher) SubscribeAll() (<-chan LiveEvent, func(), error) {
 	return p.inner.SubscribeAll()
 }
 
-// replayFromDB pulls historical events from the persistence layer
-// and injects them into the in-memory ring via IngestRemote so
-// the upcoming Subscribe call serves them transparently.
-//
-// untilSeq bounds the fetch: when the ring already has [until..],
-// we only need [fromSeq..until-1]. -1 means "no upper bound" (ring
-// is empty — fetch everything from fromSeq onward, capped by a
-// safety limit).
-func (p *dbBackedPublisher) replayFromDB(executionID string, fromSeq, untilSeq int64) {
+// replayLimit caps one subscriber's DB history — a subscriber asking for
+// fromSeq=0 on an execution with 100k events would otherwise blow up memory
+// and its channel buffer. The window served is the NEWEST replayLimit rows
+// ending where the ring begins, so the subscriber always receives a
+// contiguous suffix of the stream; the ReplayGapMarker announces a clipped
+// start. (Pre-2026-09-28 it was the OLDEST 2000 rows from fromSeq, which on
+// a long execution ended far below the ring — an unreported hole.)
+const replayLimit = 2000
+
+// fetchHistory reads the events [lo, upper) for one subscriber. upper is
+// ringOldest, or LatestSeq+1 when the ring was empty; lo is
+// max(fromSeq, upper-replayLimit). With an empty ring the read is not capped
+// at upper: rows appended after LatestSeq are returned too and deduplicated
+// against the subscriber's pending events. Errors are logged and yield no
+// history — the subscriber gets the ring-only replay, as before.
+func (p *dbBackedPublisher) fetchHistory(executionID string, fromSeq, ringOldest int64) []LiveEvent {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	// Cap the replay at a healthy bound — a subscriber asking for
-	// fromSeq=0 on an execution with 100k events would otherwise
-	// blow up memory + the per-subscriber channel buffer. The
-	// matching ReplayGapMarker from inner.Subscribe will fire if
-	// we're missing the very oldest events.
-	const replayLimit = 2000
-	rows, err := p.repo.ListSince(ctx, executionID, fromSeq, replayLimit)
+	upper := ringOldest
+	if upper < 0 {
+		latest, err := p.repo.LatestSeq(ctx, executionID)
+		if err != nil {
+			p.logger.Warn().Err(err).
+				Str("execution_id", executionID).
+				Int64("from_seq", fromSeq).
+				Msg("livepubsub: DB replay failed; subscriber will get ring-only replay")
+			return nil
+		}
+		upper = latest + 1
+	}
+	lo := fromSeq
+	if lo < 0 {
+		lo = 0
+	}
+	if upper-lo > replayLimit {
+		lo = upper - replayLimit
+	}
+	if upper <= lo {
+		return nil
+	}
+	rows, err := p.repo.ListSince(ctx, executionID, lo, replayLimit)
 	if err != nil {
 		p.logger.Warn().Err(err).
 			Str("execution_id", executionID).
 			Int64("from_seq", fromSeq).
 			Msg("livepubsub: DB replay failed; subscriber will get ring-only replay")
-		return
+		return nil
 	}
+	out := make([]LiveEvent, 0, len(rows))
 	for _, row := range rows {
-		if untilSeq >= 0 && row.Seq >= untilSeq {
-			break
+		if ringOldest >= 0 && row.Seq >= ringOldest {
+			break // the ring snapshot serves these
 		}
 		var payload any
 		if len(row.Payload) > 0 {
 			_ = json.Unmarshal(row.Payload, &payload)
 		}
-		p.inner.IngestRemote(LiveEvent{
+		out = append(out, LiveEvent{
 			ExecutionID: row.ExecutionID,
 			Seq:         row.Seq,
 			Timestamp:   row.CreatedAt,
@@ -327,6 +334,7 @@ func (p *dbBackedPublisher) replayFromDB(executionID string, fromSeq, untilSeq i
 			Payload:     payload,
 		})
 	}
+	return out
 }
 
 // runListenLoop consumes Postgres notifications from the listener

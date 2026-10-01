@@ -1,0 +1,72 @@
+# Operator example — a BROKER project that holds mail access on behalf of a
+# front-end agent (Hermes Agent, OpenClaw, …) which must never hold the
+# credential itself. Drop into ~/.config/vornik/projects/<name>.yaml.
+#
+# The front agent gets a key on THIS project for delegation only:
+#   vornikctl companion grant -p broker-mail --client hermes --workflows mail-digest,mail-reply --budget-usd 5
+# and its long-term memory lives in a SEPARATE ordinary project:
+#   vornikctl companion grant -p <memory project> --client hermes --memory-all --no-delegate
+#
+# References:
+#   https://docs.vornik.io
+#   docs/public/features/companion.md  (Broker projects)
+#   docs/public/guides/mcp-tools.md    (Declaring a server read-only)
+#
+# mail-reply PROPOSES a write (a reply). Nothing is sent until a person
+# approves the exact draft in /inbox; the daemon then sends it once through
+# the broker_write server below. It also needs, in the daemon config:
+#   broker:
+#     writes: on
+# With writes off, delegating mail-reply fails with BROKER_WRITES_DISABLED
+# and mail-digest keeps working.
+
+projectId: "broker-mail"
+displayName: "Mail broker"
+description: |
+  Holds read-only mail access for a front-end agent. Runs broker workflows
+  only; every key on it is broker-only (no memory, no skills).
+swarmId: "broker-swarm"
+defaultWorkflowId: "mail-digest"
+defaultPriority: 50
+maxConcurrentTasks: 2
+
+broker: true
+
+mcp:
+  servers:
+    # Inherits the daemon-level google-workspace server; this entry narrows
+    # it and declares the narrowing read-only. Vornik cannot verify that
+    # claim — list only tools that genuinely do not change anything.
+    - name: "google-workspace"
+      broker_read_only: true
+      allowed_tools:
+        - "time_getCurrentDate"
+        - "gmail_search"
+        - "gmail_get"
+
+    # The send-capable server. Only the daemon calls it, after a person
+    # approves a draft; no role may hold its tools (the delegate-time check
+    # refuses the workflow otherwise). A server cannot be both
+    # broker_read_only and broker_write, so this is a separate entry.
+    - name: "gmail-send"
+      transport: "streamable-http"
+      url: "https://mcp.example.com/google-workspace/mcp"
+      auth:
+        mode: static
+        value_from: "secret://GMAIL_SEND_MCP_TOKEN"
+        value_prefix: "Bearer "
+      broker_write: true
+      allowed_tools:
+        - "gmail_send"
+
+permissions:
+  # Read by the daemon's MCP auth for the gmail-send server only; secrets are
+  # never passed into agent containers.
+  secrets:
+    - "GMAIL_SEND_MCP_TOKEN"
+  allowedTools:
+    - "current_time"
+    - "file_write"
+    - "mcp__google-workspace__time_getCurrentDate"
+    - "mcp__google-workspace__gmail_search"
+    - "mcp__google-workspace__gmail_get"

@@ -38,3 +38,22 @@ func TestOutcomeString(t *testing.T) {
 	assert.Equal(t, "", Outcome("").String())
 	assert.Equal(t, "custom", Outcome("custom").String())
 }
+
+// The infra-retry allowlist is exactly these six (design 2026-08-27 §9 D9.2,
+// incident T-0d3c). Pinned so a vocabulary addition is not silently retryable
+// and a removal is a visible act.
+func TestInfraRetryableClassesIsExactlyTheSix(t *testing.T) {
+	t.Parallel()
+	assert.Equal(t, []string{
+		ClassContainerKilled, ClassContainerStartFailed, ClassContainerWaitFailed,
+		ClassContextTimeout, ClassLLMCallFailed, ClassUnclassified,
+	}, InfraRetryableClasses())
+	for _, c := range InfraRetryableClasses() {
+		assert.True(t, IsErrorClass(c), "allowlisted class %q must be in the vocabulary", c)
+		assert.True(t, IsInfraRetryableClass(c))
+	}
+	for _, c := range []string{ClassVerifyFailed, ClassPromptTokenBudget, ClassIterationCap,
+		ClassDegenerateLoop, ClassContextOverflow, ClassModelUnhealthy, ClassHallucinated} {
+		assert.False(t, IsInfraRetryableClass(c), "%q is deterministic, not infra-retryable", c)
+	}
+}

@@ -127,7 +127,7 @@ ON CONFLICT (channel_speaker_id)
 DO UPDATE SET operator_id = excluded.operator_id, linked_by = excluded.linked_by`
 	if _, err := r.db.ExecContext(ctx, q,
 		link.ChannelSpeakerID, link.OperatorID, linkedBy,
-		time.Now().UTC().Format(time.RFC3339Nano),
+		sqliteTime(time.Now()),
 	); err != nil {
 		return fmt.Errorf("operator_identity_link: upsert: %w", err)
 	}

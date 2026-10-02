@@ -1,7 +1,7 @@
 ---
 sources:
     - path: docs/release-notes
-      sha256: 4eb55febb8d68b3857c1920287f8745bd92b9b03b019351acb14c9e40dd718b1
+      sha256: 9d4c36e229287e6564fd03682146a56f9f6da591c4cfef78c12183fdb0fa4123
 ---
 # Release Notes
 
@@ -16,6 +16,19 @@ behavior changes, and notable fixes. Internal-only changes are omitted.
     new behavior; those are called out below.
 
 ---
+
+## 2026.10.3
+
+A patch release.
+
+- **`vornikctl` for macOS (arm64, amd64) is attached to the release.**
+  2026.10.2 withheld it: the check that runs it on a Mac before attaching it
+  could never pass. The check is fixed and now also runs on every push.
+- **Hermes companion plugin 0.4.0.** `hermes vornik connect` connects Hermes to
+  Vornik in one command (it runs `vornikctl agent connect hermes` and installs
+  nothing itself); `hermes vornik status` shows what is configured, never a
+  token's value. `VORNIK_URL` and the tokens are optional: an admin setup needs
+  none of them. The plugin is ready for Hermes's plugin catalog.
 
 ## 2026.10.2
 
@@ -83,6 +96,12 @@ it receives only results shaped by the schema you approved. See
 with checksums, an SBOM and build provenance attestations. The macOS binary is
 not signed: check it against `checksums.txt`, then run
 `xattr -d com.apple.quarantine vornikctl`.
+
+*Correction (2026-10-02):* 2026.10.2 itself shipped **without** the macOS
+`vornikctl`. The check that runs it on a Mac before attaching it had a defect
+and could never pass, so the release withheld both macOS binaries, as
+designed when that check fails. The Linux binaries are unaffected. The macOS
+`vornikctl` ships from 2026.10.3.
 
 **Also fixed:** the task link in Slack and chat completion notices opened a
 "project not found" page; it opens the task.

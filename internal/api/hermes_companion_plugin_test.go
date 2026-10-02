@@ -22,15 +22,20 @@ import (
 const hermesPluginDir = "../../contrib/hermes-companion"
 
 type hermesManifest struct {
-	Name          string   `yaml:"name"`
-	Version       string   `yaml:"version"`
-	License       string   `yaml:"license"`
-	ProvidesTools []string `yaml:"provides_tools"`
-	ProvidesHooks []string `yaml:"provides_hooks"`
-	RequiresEnv   []struct {
+	Name           string   `yaml:"name"`
+	Version        string   `yaml:"version"`
+	License        string   `yaml:"license"`
+	ProvidesTools  []string `yaml:"provides_tools"`
+	ProvidesHooks  []string `yaml:"provides_hooks"`
+	RequiresHermes string   `yaml:"requires_hermes"`
+	RequiresEnv    []struct {
 		Name   string `yaml:"name"`
 		Secret bool   `yaml:"secret"`
 	} `yaml:"requires_env"`
+	OptionalEnv []struct {
+		Name   string `yaml:"name"`
+		Secret bool   `yaml:"secret"`
+	} `yaml:"optional_env"`
 }
 
 func readHermesManifest(t *testing.T) hermesManifest {
@@ -49,24 +54,35 @@ func TestHermesCompanion_ManifestDeclaresWhatTheCodeRegisters(t *testing.T) {
 	assert.Equal(t, "Apache-2.0", m.License)
 	assert.Equal(t, []string{"pre_llm_call"}, m.ProvidesHooks)
 
-	src, err := os.ReadFile(hermesPluginDir + "/broker_tools.py")
-	require.NoError(t, err)
+	// Every tool the plugin can register, the memory provider's included:
+	// those register only with VORNIK_MEMORY_TOKEN set, and Hermes's catalog
+	// rule 6 is about what the plugin can register (design 24, catalog
+	// listing; review 8a55 F2).
 	var defined []string
-	for _, match := range regexp.MustCompile(`"name": "(vornik_[a-z_]+)"`).FindAllStringSubmatch(string(src), -1) {
-		defined = append(defined, match[1])
+	for _, file := range []string{"/broker_tools.py", "/memory_provider.py"} {
+		src, err := os.ReadFile(hermesPluginDir + file)
+		require.NoError(t, err)
+		for _, match := range regexp.MustCompile(`"name": "(vornik_[a-z_]+)"`).FindAllStringSubmatch(string(src), -1) {
+			defined = append(defined, match[1])
+		}
 	}
 	sort.Strings(defined)
 	declared := append([]string(nil), m.ProvidesTools...)
 	sort.Strings(declared)
-	assert.Equal(t, defined, declared, "provides_tools must list exactly the tools broker_tools.py defines")
+	assert.Equal(t, defined, declared, "provides_tools must list exactly the tools the plugin defines")
 
+	// Nothing is required: an admin setup (hermes vornik connect) needs none
+	// of the three, so they are optional_env, the tokens secret.
+	assert.Empty(t, m.RequiresEnv, "an admin setup needs no environment: declare it under optional_env")
 	env := map[string]bool{}
-	for _, e := range m.RequiresEnv {
+	for _, e := range m.OptionalEnv {
 		env[e.Name] = e.Secret
 	}
 	assert.Contains(t, env, "VORNIK_URL")
 	assert.True(t, env["VORNIK_BROKER_TOKEN"], "the broker key is a secret")
 	assert.True(t, env["VORNIK_MEMORY_TOKEN"], "the memory key is a secret")
+	// The SemVer floor the Hermes e2e lane certifies (catalog rule 14).
+	assert.Equal(t, ">=0.21.5", m.RequiresHermes)
 
 	lic, err := os.ReadFile(hermesPluginDir + "/LICENSE")
 	require.NoError(t, err)

@@ -1,5 +1,6 @@
 name: vornik-companion
-version: 0.3.0
+version: 0.4.0
+requires_hermes: ">=0.21.5"
 manifest_version: 2
 # Declared, not inferred: Hermes classifies an undeclared plugin whose
 # __init__.py mentions a memory provider as `kind: exclusive`, and general
@@ -13,6 +14,11 @@ description: >-
   no credentials: work that touches mail, calendar, documents or accounts is
   delegated to operator-authored broker workflows on a Vornik daemon, which
   return a bounded, schema-validated result instead of raw access.
+  0.4.0 — ready for Hermes's plugin catalog: `hermes vornik connect` runs
+  vornikctl agent connect hermes (it never installs anything) and
+  `hermes vornik status` shows what is configured; VORNIK_URL and both tokens
+  are optional, since an admin setup needs none of them; requires Hermes
+  0.21.5 or later.
   0.3.0 — the vornik-admin skill, for a Hermes connected to Vornik as an
   administering agent (vornikctl agent connect hermes): it sets up projects,
   workflows and connections itself, and the user approves each change on
@@ -28,16 +34,27 @@ license: Apache-2.0
 homepage: https://docs.vornik.io/features/companion/
 tags: [vornik, broker, memory, privacy]
 
+# All seven, although vornik_recall and vornik_remember come from the memory
+# provider and register only with VORNIK_MEMORY_TOKEN set: the catalog's rule
+# 6 is about what the plugin can register, and Hermes's validator warns, not
+# fails, on a declared tool its env-less probe did not see (design 24,
+# catalog listing; review 8a55 F2).
 provides_tools:
   - vornik_catalog
   - vornik_delegate
   - vornik_result
   - vornik_status
   - vornik_cancel
+  - vornik_recall
+  - vornik_remember
 provides_hooks:
   - pre_llm_call
 
-requires_env:
+# Nothing is required: a broker setup sets VORNIK_URL and VORNIK_BROKER_TOKEN,
+# a memory setup adds VORNIK_MEMORY_TOKEN, and an admin setup (hermes vornik
+# connect) needs none of them. Unset, the broker tools stay hidden and nothing
+# opens a connection.
+optional_env:
   - name: VORNIK_URL
     description: "Base URL of the Vornik daemon, e.g. https://vornik.example.com"
   - name: VORNIK_BROKER_TOKEN

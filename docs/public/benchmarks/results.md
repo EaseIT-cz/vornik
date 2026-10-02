@@ -198,6 +198,20 @@ between a deterministic gate and one that fires on noise.
 | `2026.9.6-117-gee40525c8` (2026.9.7) | 120 | all 6 | 0.9851 ±0.0000 | 0.9854 ±0.0000 | 0.9958 ±0.0000 | n=3 | `4a95cccf5f7a` |
 | `2026.9.8-52-g86d3af802` (2026.10.1) | 120 | all 6 | 0.9851 ±0.0000 | 0.9854 ±0.0000 | 0.9958 ±0.0000 | n=3 | `0c4971cc78ae` |
 | `2026.10.1-55-gc800c23be` (2026.10.2) | 120 | all 6 | 0.9851 ±0.0000 | 0.9854 ±0.0000 | 0.9958 ±0.0000 | n=3 | `dcfeaf709dc5` |
+| `2026.10.1-77-gbb5238eb2` (2026.10.3) | 120 | all 6 | 0.9851 ±0.0000 | 0.9854 ±0.0000 | 0.9958 ±0.0000 | n=3 | `16a79559dd84` |
+
+**The eighth row is 2026.10.3's release candidate** (the tagged commit
+differs from it only in documentation, this row among them), measured on
+2026-10-02 on the memory-benchmark deployment, same embedder, reranker off,
+cold corpus: each run cleared the store, re-ingested the pinned dataset and
+recorded the daemon's own revision. Every metric is identical to 2026.10.2 to
+four decimal places across three deterministic runs; the key is new
+(`16a79559dd84`) because `daemon_revision` moved. The cycle did not change the
+retrieval or ingest path (it shipped the macOS release check, the Hermes
+plugin's catalog readiness and EULA version 3), so this row is the
+no-regression check, not a measurement of a change. The harness reports
+`retrieval_path_unverified`: it trusts the daemon's reported recall method
+(`context-assembly`) rather than observing it.
 
 **The seventh row is 2026.10.2's release candidate** (the tagged commit
 differs from it only in tests and documentation), measured on 2026-10-02 on

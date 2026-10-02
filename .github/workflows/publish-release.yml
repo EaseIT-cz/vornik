@@ -168,7 +168,18 @@ jobs:
               echo "::error::no Rosetta on this runner; darwin/amd64 could not be run, so neither darwin binary is attached"
               exit 1
             fi
-            "$bin" version | tee /dev/stderr | grep -q "${GITHUB_REF_NAME}"
+            # vornikctl version prints to stderr: capture both streams once and
+            # match the text. A `version | grep -q` pipeline matched nothing and
+            # withheld 2026.10.2's darwin binaries (packaging design, "As
+            # shipped, 2026.10.2").
+            # An empty ref would make the match below vacuous (review 934d F4).
+            [ -n "${GITHUB_REF_NAME}" ] || { echo "::error::GITHUB_REF_NAME is empty; this check runs on a tag"; exit 1; }
+            out="$("$bin" version 2>&1)"
+            printf '%s\n' "$out"
+            case "$out" in
+              *"${GITHUB_REF_NAME}"*) ;;
+              *) echo "::error::darwin/$arch: vornikctl version does not name ${GITHUB_REF_NAME}"; exit 1 ;;
+            esac
             "$bin" agent connect --help >/dev/null
             echo "darwin/$arch: ran version and agent connect --help" >> "$GITHUB_STEP_SUMMARY"
           done

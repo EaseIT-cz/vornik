@@ -259,6 +259,34 @@ assert 'release' not in ceci['jobs'], 'the CE ci.yaml must not carry a release j
 assert 'macos-check' in ceci['jobs'], 'the CE ci.yaml must run the darwin checks on every push'
 assert '--- PASS' in runs(ceci['jobs']['macos-check']), \
     'the CE macOS check must count the tests it ran, or it can pass on none (0013 F4)'
+# `vornikctl version` prints to stderr. Piping it to grep matched nothing, and
+# the 2026.10.2 release withheld both darwin binaries although they ran
+# (packaging design, "As shipped, 2026.10.2"). A version check must capture
+# both streams and match the captured text, never pipe into grep -q.
+import re as _re
+for _wf, _job in (('publish-release.yml', jobs['macos-check']), ('ci.yaml', ceci['jobs']['macos-check'])):
+    _r = runs(_job)
+    assert not _re.search(r'\bversion\b[^\n]*\|', _r), \
+        f'{_wf} macos-check pipes vornikctl version into another command; capture it with 2>&1 and match the text'
+    assert _re.search(r'version 2>&1', _r), \
+        f'{_wf} macos-check must capture vornikctl version with 2>&1 (it prints to stderr)'
+# The tag is matched against the captured text, not some other stream, and
+# an empty ref cannot make the match vacuous (review 934d F2, F4). The regex
+# guards single-line pipes, the shape that shipped; it does not parse shell.
+_pr = runs(jobs['macos-check'])
+assert _re.search(r'case "\$out" in\s*\n\s*\*"\$\{GITHUB_REF_NAME\}"\*', _pr), \
+    'publish-release macos-check must match ${GITHUB_REF_NAME} against the captured $out'
+assert '[ -n "${GITHUB_REF_NAME}" ]' in _pr, 'publish-release macos-check must refuse an empty GITHUB_REF_NAME'
+# The export-time check runs the binary it builds, not only compiles it, so
+# an execution failure shows on the export push before any tag.
+_mac = runs(ceci['jobs']['macos-check'])
+assert 'agent connect --help' in _mac, \
+    'the CE ci.yaml macos-check must run the built vornikctl (version, agent connect --help)'
+# Not vacuous (8a47 F5): the built file is the file that runs.
+_b = _re.search(r'go build -o (\S+) \./cmd/vornikctl', _mac)
+assert _b and _b.group(1) != '/dev/null', 'the CE macos-check must build vornikctl to a real path'
+assert _mac.count(_b.group(1)) >= 3, \
+    f'the CE macos-check must run the binary it built ({_b.group(1)}): version and agent connect --help'
 prbody=str(pr['jobs'])
 assert 'gh release view' in prbody, \
     'creating the CE release must be idempotent — a re-run must not fail on an existing release'

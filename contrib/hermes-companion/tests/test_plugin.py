@@ -286,3 +286,158 @@ class ReviewRound2Test(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+# --- 0.4.0: the Hermes plugin-catalog listing (design 24, "Catalog listing";
+# reviews 8a55 and 06d1). ---------------------------------------------------
+
+import argparse  # noqa: E402
+import re  # noqa: E402
+import subprocess  # noqa: E402
+from pathlib import Path  # noqa: E402
+
+from vornik_hermes import cli  # noqa: E402
+
+MANIFEST = (Path(__file__).resolve().parent.parent / "plugin.yaml").read_text()
+
+
+def _yaml_list(key):
+    """Names under a top-level list key of plugin.yaml (stdlib only: the
+    tests run without PyYAML)."""
+    m = re.search(r"^%s:\n((?:[ \t]+.*\n|\n)*)" % re.escape(key), MANIFEST, re.M)
+    if not m:
+        return None
+    return re.findall(r"^\s*-\s*(?:name:\s*)?([A-Za-z0-9_]+)\s*$", m.group(1), re.M)
+
+
+class CatalogManifestTest(unittest.TestCase):
+    def test_environment_is_optional_and_nothing_is_required(self):
+        # The admin setup (vornikctl agent connect hermes) needs none of them,
+        # so declaring them required misstates the plugin (design 24 §1).
+        self.assertIn(_yaml_list("requires_env"), (None, []))
+        self.assertEqual(sorted(_yaml_list("optional_env") or []),
+                         ["VORNIK_BROKER_TOKEN", "VORNIK_MEMORY_TOKEN", "VORNIK_URL"])
+
+    def test_requires_hermes_is_the_certified_semver_floor(self):
+        self.assertRegex(MANIFEST, r'(?m)^requires_hermes:\s*">=0\.21\.5"\s*$')
+
+    def test_all_seven_tools_are_declared(self):
+        # Rule 6: the memory provider's two tools are declared although they
+        # register only with VORNIK_MEMORY_TOKEN set (review 8a55 F2).
+        self.assertEqual(sorted(_yaml_list("provides_tools")), sorted([
+            "vornik_catalog", "vornik_delegate", "vornik_result", "vornik_status",
+            "vornik_cancel", "vornik_recall", "vornik_remember"]))
+
+    def test_version_is_0_4_0(self):
+        self.assertRegex(MANIFEST, r"(?m)^version:\s*0\.4\.0\s*$")
+
+
+class CliRegistrationTest(unittest.TestCase):
+    def test_registers_the_vornik_cli_command_and_no_spawning_slash_command(self):
+        with mock.patch.dict(os.environ, {}, clear=True):
+            ctx = FakeCtx()
+            plugin.register(ctx)
+        self.assertIn("vornik", ctx.cli_commands)
+        setup_fn, handler_fn = ctx.cli_commands["vornik"]
+        self.assertIs(handler_fn, cli.handle)
+        parser = argparse.ArgumentParser()
+        setup_fn(parser)
+        args = parser.parse_args(["connect", "--url", "https://v.test", "--dry-run"])
+        self.assertEqual((args.vornik_action, args.url, args.dry_run), ("connect", "https://v.test", True))
+        self.assertEqual(parser.parse_args(["status"]).vornik_action, "status")
+        # Slash commands are model-invokable; none of them may spawn (8a55 F1).
+        self.assertEqual(sorted(ctx.commands), ["vornik-peek", "vornik-result"])
+
+
+class FakeRun:
+    def __init__(self, returncode=0, exc=None):
+        self.returncode, self.exc, self.calls = returncode, exc, []
+
+    def __call__(self, argv, **kw):
+        self.calls.append((argv, kw))
+        if self.exc:
+            raise self.exc
+        return subprocess.CompletedProcess(argv, self.returncode)
+
+
+def _connect(url=None, dry_run=False, which="/usr/bin/vornikctl", run=None):
+    out = []
+    run = run or FakeRun()
+    rc = cli.connect(argparse.Namespace(url=url, dry_run=dry_run),
+                     which=lambda name: which, run=run, out=out.append)
+    return rc, run, "\n".join(out)
+
+
+class ConnectTest(unittest.TestCase):
+    def test_runs_vornikctl_agent_connect_hermes_as_argv_without_a_shell(self):
+        rc, run, _ = _connect()
+        self.assertEqual(rc, 0)
+        argv, kw = run.calls[0]
+        self.assertEqual(argv, ["/usr/bin/vornikctl", "agent", "connect", "hermes"])
+        self.assertFalse(kw.get("shell", False))
+        self.assertEqual(kw.get("timeout"), cli.CONNECT_TIMEOUT_SECONDS)
+        self.assertEqual(cli.CONNECT_TIMEOUT_SECONDS, 120)
+
+    def test_passes_url_and_dry_run_through(self):
+        _, run, _ = _connect(url="https://v.test", dry_run=True)
+        self.assertEqual(run.calls[0][0][4:], ["--url", "https://v.test", "--dry-run"])
+
+    def test_missing_vornikctl_points_at_the_install_page_and_runs_nothing(self):
+        rc, run, out = _connect(which=None)
+        self.assertEqual(rc, 1)
+        self.assertEqual(run.calls, [])
+        self.assertIn("https://docs.vornik.io/getting-started/", out)
+        self.assertNotRegex(out, r"curl|\| *bash", "never suggest piping an installer")
+
+    def test_failure_is_relayed_with_the_prerequisites(self):
+        rc, _, out = _connect(run=FakeRun(returncode=3))
+        self.assertEqual(rc, 3)
+        self.assertIn("vornikctl auth login", out)
+        self.assertIn("vornikctl pair-device", out)
+
+    def test_timeout_is_a_failure(self):
+        rc, _, out = _connect(run=FakeRun(exc=subprocess.TimeoutExpired(["vornikctl"], 120)))
+        self.assertNotEqual(rc, 0)
+        self.assertIn("120", out)
+
+
+class StatusTest(unittest.TestCase):
+    def test_prints_url_token_presence_and_flags_but_never_a_token(self):
+        opener = FakeOpener(features=NEW_DAEMON)
+        out = []
+        env = {"VORNIK_URL": "https://vornik.test", "VORNIK_BROKER_TOKEN": "sk-secret-broker",
+               "VORNIK_MEMORY_TOKEN": ""}
+        rc = cli.status(argparse.Namespace(), env=env, opener=opener, out=out.append)
+        text = "\n".join(out)
+        self.assertEqual(rc, 0)
+        self.assertIn("https://vornik.test", text)
+        self.assertRegex(text, r"VORNIK_BROKER_TOKEN:\s*set")
+        self.assertRegex(text, r"VORNIK_MEMORY_TOKEN:\s*not set")
+        self.assertIn("companion-broker", text)
+        self.assertNotIn("sk-secret-broker", text)
+
+    def test_unconfigured_opens_no_connection(self):
+        opener = mock.Mock(side_effect=AssertionError("network used"))
+        out = []
+        rc = cli.status(argparse.Namespace(), env={}, opener=opener, out=out.append)
+        opener.assert_not_called()
+        self.assertEqual(rc, 1)
+        self.assertIn("VORNIK_URL", "\n".join(out))
+
+    def test_handle_dispatches(self):
+        with mock.patch.object(cli, "connect", return_value=7) as c:
+            self.assertEqual(cli.handle(argparse.Namespace(vornik_action="connect")), 7)
+            c.assert_called_once()
+
+
+class UnsetUrlCostsNothingTest(unittest.TestCase):
+    # The admin setup sets no VORNIK_URL: nothing may open a connection
+    # (review 8a55 F3).
+    def test_hook_tools_and_peek_never_touch_the_network(self):
+        opener = mock.Mock(side_effect=AssertionError("network used"))
+        c = VornikClient("", "", opener=opener)
+        tools = BrokerTools(c)
+        self.assertFalse(tools.available())
+        self.assertIsNone(Digest(c)(session_id="s", is_first_turn=True))
+        self.assertIn("not configured", plugin._peek(c)(""))
+        opener.assert_not_called()

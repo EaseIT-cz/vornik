@@ -1,8 +1,8 @@
 """vornik-companion for Hermes Agent.
 
 Vornik is Hermes's privileged-work broker and long-term memory. Hermes holds
-no credentials; see https://docs.vornik.io and
-the broker design it consumes.
+no credentials. Documentation: https://docs.vornik.io/features/companion/ and
+this directory's README.
 """
 
 from __future__ import annotations
@@ -11,6 +11,7 @@ import json
 import os
 from pathlib import Path
 
+from . import cli
 from .broker_tools import SCHEMAS, BrokerTools
 from .digest import Digest
 from .memory_provider import VornikMemoryProvider
@@ -78,3 +79,9 @@ def register(ctx) -> None:
     ctx.register_skill("vornik-admin", Path(__file__).parent / "skills" / "vornik-admin" / "SKILL.md")
     if os.environ.get("VORNIK_MEMORY_TOKEN"):
         ctx.register_memory_provider(VornikMemoryProvider())
+    # `hermes vornik connect|status`: a terminal subcommand a person types,
+    # the plugin's only process spawn (design 24, catalog listing §3).
+    ctx.register_cli_command("vornik", help="Connect Hermes to Vornik and check the connection",
+                             setup_fn=cli.setup, handler_fn=cli.handle,
+                             description="hermes vornik connect: run vornikctl agent connect hermes. "
+                                         "hermes vornik status: show what is configured.")

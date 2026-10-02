@@ -60,6 +60,7 @@ class FakeOpener:
 class FakeCtx:
     def __init__(self):
         self.tools, self.hooks, self.commands, self.skills, self.memory = {}, {}, {}, {}, []
+        self.cli_commands = {}
 
     def register_tool(self, name, toolset, schema, handler, override=False, check_fn=None):
         self.tools[name] = (schema, handler, check_fn)
@@ -75,3 +76,6 @@ class FakeCtx:
 
     def register_memory_provider(self, provider):
         self.memory.append(provider)
+
+    def register_cli_command(self, name, help, setup_fn, handler_fn=None, description=""):
+        self.cli_commands[name] = (setup_fn, handler_fn)

@@ -1,12 +1,39 @@
 # vornik-companion for Hermes Agent
 
-Vornik as [Hermes Agent](https://hermes-agent.nousresearch.com)'s
-**privileged-work broker** and **long-term memory**. Hermes holds no
-credentials for your mail, calendar, documents or accounts. When a request
-touches them, Hermes runs an operator-approved broker workflow on Vornik and
-gets back a bounded, schema-validated result, never raw access.
+**A hardened, enterprise-grade broker for [Hermes Agent](https://hermes-agent.nousresearch.com).**
+Hermes holds no credentials for your mail, calendar, documents or accounts.
+When a request touches them, Hermes runs an operator-approved workflow on
+your own [Vornik](https://vornik.io) daemon and gets back a bounded,
+schema-validated result, never raw access. Vornik keeps every credential,
+and every widening of Hermes's reach (a new connection, a new credential, a
+write) is approved by you on your phone. Vornik can also be Hermes's
+long-term memory.
 
-## Install
+## Two ways to use it
+
+| Setup | What Hermes can do | What it needs |
+|---|---|---|
+| **Admin** | Set up projects, workflows and connections on Vornik for you, each change approved on your phone | `hermes vornik connect` once; no environment variables |
+| **Broker** | Run the workflows your operator allowed, and get results | `VORNIK_URL` and `VORNIK_BROKER_TOKEN` (plus `VORNIK_MEMORY_TOKEN` for memory) |
+
+### Admin setup
+
+Install Vornik first (https://docs.vornik.io/getting-started/), sign
+`vornikctl` in as the operator (`vornikctl auth login`) and pair your phone
+(`vornikctl pair-device`). Then:
+
+```bash
+hermes plugins install vornik-companion
+hermes plugins enable vornik-companion
+hermes vornik connect          # runs: vornikctl agent connect hermes
+hermes vornik status           # what is configured, and what the daemon supports
+```
+
+`hermes vornik connect` adds one MCP entry to Hermes's config. The plugin's
+`vornik-admin` skill teaches Hermes to use it. The setup guide is
+https://docs.vornik.io/guides/assistant-setup/.
+
+### Broker setup
 
 On the Vornik host, set up two projects and two keys (see
 `configs/examples/broker-mail.yaml` for a complete broker project):
@@ -21,10 +48,7 @@ vornikctl companion grant -p assistant-memory --client hermes --memory-all --no-
 On the Hermes host:
 
 ```bash
-# `hermes plugins install` takes a catalog name or a Git repository whose
-# root is the plugin, so copy this directory into Hermes's plugin folder.
-# The directory name is the plugin's name, and the memory provider's name.
-cp -r contrib/hermes-companion "${HERMES_HOME:-$HOME/.hermes}/plugins/vornik-companion"
+hermes plugins install vornik-companion
 hermes plugins enable vornik-companion
 export VORNIK_URL=https://vornik.example.com
 export VORNIK_BROKER_TOKEN=sk-vornik-…   # the broker-project key
@@ -33,8 +57,8 @@ hermes config set memory.provider vornik-companion   # use Vornik as long-term m
 hermes memory status                     # expect "installed" and "available"
 ```
 
-Checked against Hermes v2026.9.24 by the end-to-end lane
-(`make test-e2e-hermes`, https://docs.vornik.io).
+Checked against Hermes v2026.9.24 (0.21.5) by the end-to-end tests in
+`test/e2e/hermes` of this repository.
 Before 0.2.1 this README said to choose `vornik`; Hermes names a memory
 provider after its plugin directory, so that selected nothing.
 
@@ -59,10 +83,12 @@ a full sentence with its context.
 
 | Surface | Name |
 |---|---|
-| Tools | `vornik_catalog`, `vornik_delegate`, `vornik_result`, `vornik_status`, `vornik_cancel` |
+| Tools | `vornik_catalog`, `vornik_delegate`, `vornik_result`, `vornik_status`, `vornik_cancel` (broker setup only) |
 | Skill | `vornik-companion:vornik-broker`: when to broker and how to treat results |
 | Hook | `pre_llm_call`: announces finished broker tasks (ids and states only) |
 | Commands | `/vornik-peek`, `/vornik-result <task_id>` |
+| CLI | `hermes vornik connect`, `hermes vornik status` |
+| Skill | `vornik-companion:vornik-admin`: how to administer Vornik through the admin setup |
 | Memory provider | `vornik-companion`: `vornik_recall` / `vornik_remember`, prefetch before each turn, mirrors Hermes's curated `MEMORY.md` / `USER.md` writes |
 
 ## Works with older daemons
@@ -90,11 +116,44 @@ results but may not say that a draft awaits approval. Plugins update off the
 manifest version, and writes are off until the operator turns them on, so
 update the plugin before enabling `broker.writes`.
 
+## What it does on your machine
+
+What you would want to know before installing (Hermes plugin catalog,
+rule 13):
+
+- **Network:** it talks only to the Vornik daemon at `VORNIK_URL`, your own.
+  It calls no third-party service and sends no telemetry. With `VORNIK_URL`
+  unset it opens no connection at all.
+- **Before each turn:** the `pre_llm_call` hook asks the daemon which broker
+  tasks finished (ids and states only); the memory provider, when enabled,
+  prefetches relevant memories.
+- **Memory:** when you select it as Hermes's memory provider, it mirrors
+  Hermes's curated `MEMORY.md` and `USER.md` writes to Vornik.
+- **Credentials:** it reads `VORNIK_BROKER_TOKEN` and `VORNIK_MEMORY_TOKEN`
+  from the environment and nothing else. It stores no credential of its own
+  and never reads another tool's login.
+- **Programs:** `hermes vornik connect`, which you type, runs your local
+  `vornikctl` (`vornikctl agent connect hermes`) with a 120-second limit. That
+  writes one MCP entry into Hermes's config and a key file only you can
+  read. Nothing else in the plugin runs a program: no tool, hook or slash
+  command does, so Hermes's model cannot trigger it.
+- **Never:** it downloads or installs nothing (without `vornikctl`,
+  `connect` prints the install page), updates nothing by itself, runs no
+  background process, and never answers an approval for you.
+
+## Licence
+
+This directory is licensed **Apache-2.0** (see `LICENSE`), although the
+repository around it is AGPL-3.0: the repository's `LICENSING.md` maps each
+directory to its licence. The companion plugins are installed into
+third-party tools, so they carry a permissive licence on purpose.
+
 ## Testing
 
 The unit tests (`python3 -m unittest discover -s tests -t .` from this
 directory) run the plugin against a scripted daemon and a fake Hermes context.
-`make test-e2e-hermes` runs it inside a pinned Hermes release against a
-Vornik daemon built from the tree and a local llama.cpp model. It needs
-podman and about 17 GB of downloads the first time (the gpt-oss-20b model and the Hermes image). It is not part of CI, and
-`RELEASE=1 make test-e2e-hermes` is the gate before a version bump.
+The end-to-end tests in `test/e2e/hermes` (build tag `e2e_hermes`) run it
+inside a pinned Hermes release against a Vornik daemon built from the tree and
+a local llama.cpp model. They need podman and about 17 GB of downloads the
+first time (the gpt-oss-20b model and the Hermes image). They are not part of
+CI; the maintainers run them before every version bump of this plugin.

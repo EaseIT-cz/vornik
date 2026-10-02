@@ -27,7 +27,7 @@ func (s *Server) isAdminClassRequest(r *http.Request) bool {
 		return true
 	}
 	key := APIKeyFromContext(r.Context())
-	return key != "" && s.adminConfig.IsAdminKey(key)
+	return key != "" && s.isAdminClassKey(key)
 }
 
 // IsBudgetCheckpoint reports whether a checkpoint message's metadata is a

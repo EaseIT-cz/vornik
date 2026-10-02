@@ -37,7 +37,7 @@ func TestImageRecord_HostBuiltWithADigestIsRejected(t *testing.T) {
 }
 
 func TestImageRecord_RegistryPinnedNeedsAtLeastOneDigest(t *testing.T) {
-	r := ImageRecord{Tag: "ghcr.io/grinco/vornik-agent:latest", SourceCommit: goodCommit}
+	r := ImageRecord{Tag: "ghcr.io/easeit-cz/vornik-agent:latest", SourceCommit: goodCommit}
 	if !r.IsRegistryPinned() {
 		t.Fatal("a ghcr.io image was not classified as registry-pinned")
 	}
@@ -51,7 +51,7 @@ func TestImageRecord_RegistryPinnedNeedsAtLeastOneDigest(t *testing.T) {
 // truthfully — the blocker that kept this record out of the package.
 func TestImageRecord_DigestForArch(t *testing.T) {
 	r := ImageRecord{
-		Tag: "ghcr.io/grinco/vornik-agent:latest", SourceCommit: goodCommit,
+		Tag: "ghcr.io/easeit-cz/vornik-agent:latest", SourceCommit: goodCommit,
 		Digests: map[string]string{"amd64": "sha256:" + hex64, "arm64": "sha256:" + hex64b},
 	}
 	if got, ok := r.DigestForArch("arm64"); !ok || got != "sha256:"+hex64b {
@@ -69,7 +69,7 @@ func TestImageRecord_DigestForArch(t *testing.T) {
 // Recording it would put a digest in the record that no host can ever match.
 func TestImageRecord_UnknownArchIsRejected(t *testing.T) {
 	r := ImageRecord{
-		Tag: "ghcr.io/grinco/vornik-agent:latest", SourceCommit: goodCommit,
+		Tag: "ghcr.io/easeit-cz/vornik-agent:latest", SourceCommit: goodCommit,
 		Digests: map[string]string{"unknown": "sha256:" + hex64},
 	}
 	if err := r.Validate(); err == nil {
@@ -80,7 +80,7 @@ func TestImageRecord_UnknownArchIsRejected(t *testing.T) {
 func TestImageRecord_DigestShapeIsValidated(t *testing.T) {
 	for _, bad := range []string{hex64, "sha256:nothex", "sha256:abc", "SHA256:" + hex64} {
 		r := ImageRecord{
-			Tag: "ghcr.io/grinco/vornik-agent:latest", SourceCommit: goodCommit,
+			Tag: "ghcr.io/easeit-cz/vornik-agent:latest", SourceCommit: goodCommit,
 			Digests: map[string]string{"amd64": bad},
 		}
 		if err := r.Validate(); err == nil {
@@ -95,7 +95,7 @@ func TestReleaseRecord_SourceIsValidated(t *testing.T) {
 		return ReleaseRecord{
 			Version: RecordVersion, Count: 1, RecordSource: src,
 			Images: []ImageRecord{{
-				Tag: "ghcr.io/grinco/vornik-agent:latest", SourceCommit: goodCommit,
+				Tag: "ghcr.io/easeit-cz/vornik-agent:latest", SourceCommit: goodCommit,
 				Digests: map[string]string{"amd64": "sha256:" + hex64},
 			}},
 		}
@@ -134,7 +134,7 @@ func TestImageRecord_RegistryPinnedRequiresAHost(t *testing.T) {
 		tag  string
 		want bool
 	}{
-		{"ghcr.io/grinco/vornik-agent:latest", true},
+		{"ghcr.io/easeit-cz/vornik-agent:latest", true},
 		{"registry.example.com:5000/team/img:1", true},
 		{"localhost/vornik-broker:latest", false},
 		{"localhost:5000/vornik-broker:latest", false},

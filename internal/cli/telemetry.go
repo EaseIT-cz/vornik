@@ -87,7 +87,7 @@ func renderTelemetrySample(event telemetryclient.Event) (string, string, error) 
 	// but they are two paths, and `vornik telemetry sample` exists so an
 	// operator can see what leaves their machine. Showing a reconstruction of
 	// that instead of the thing itself is the same class of mistake as trusting
-	// a self-report over ground truth. Adopted from grinco/vornik#8 (@vmindru).
+	// a self-report over ground truth. Adopted from EaseIT-cz/vornik#8 (@vmindru).
 	data, err := io.ReadAll(req.Body)
 	if err != nil {
 		return "", "", err

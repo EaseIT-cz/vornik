@@ -201,11 +201,11 @@ func TestAdminMemoryAudit_RepoScopeFilterReachesRepo(t *testing.T) {
 	repo := &fakeRetrievalAudit{}
 	srv := NewServer(WithMemoryRetrievalAuditRepository(repo))
 	req := httptest.NewRequest(http.MethodGet,
-		"/admin/memory-audit?repo_scope=github.com/grinco/vornik", nil)
+		"/admin/memory-audit?repo_scope=github.com/EaseIT-cz/vornik", nil)
 	rec := httptest.NewRecorder()
 	srv.AdminMemoryAudit(rec, req)
 	require.Equal(t, http.StatusOK, rec.Code)
-	assert.Equal(t, "github.com/grinco/vornik", repo.lastFilter.RepoScope)
+	assert.Equal(t, "github.com/EaseIT-cz/vornik", repo.lastFilter.RepoScope)
 }
 
 // TestAdminMemoryAudit_SinceAcceptsYMD — operators rarely type

@@ -1,7 +1,7 @@
 ---
 sources:
     - path: docs/release-notes
-      sha256: 1be47ec0fc63d450a6d5dd16a905d4b94b48d6f84bac093231d9d11a46fdb011
+      sha256: 4eb55febb8d68b3857c1920287f8745bd92b9b03b019351acb14c9e40dd718b1
 ---
 # Release Notes
 
@@ -14,6 +14,78 @@ behavior changes, and notable fixes. Internal-only changes are omitted.
     so upgrades generally require no config changes. Always take a backup
     before upgrading. A few releases ask you to restart the daemon to pick up
     new behavior; those are called out below.
+
+---
+
+## 2026.10.2
+
+!!! warning "Upgrade requirements"
+    - **Migrations 205–211** add the tables for agent credentials, approver
+      devices and approval requests, and agent key columns. All additive.
+    - **Back up `~/.config/vornik/secrets/store.key` once it exists.** Vornik
+      creates it the first time an assistant's credential is stored, and the
+      stored credentials cannot be opened without it.
+    - **Deploy the new config assets once after this update.** This update
+      runs the previous release's `vornik-update.sh`, which does not yet
+      deploy them:
+      `VORNIK_DEPLOY_REVISION=$(git -C ~/vornik rev-parse HEAD) ~/vornik/scripts/config-deploy.sh ~/.config/vornik`.
+      From the next update on, the updater does it. Vornik picks them up
+      without a restart.
+    - No agent image rebuild is needed for this release.
+
+**Vornik now lives at [github.com/EaseIT-cz/vornik](https://github.com/EaseIT-cz/vornik).**
+The repository moved from `grinco/vornik`. Issues, releases and history came
+with it, and the old address redirects, so an existing checkout keeps
+updating.
+
+- The agent image is now `ghcr.io/easeit-cz/vornik-agent`, with every
+  earlier tag copied unchanged.
+- If your configs still name `ghcr.io/grinco/vornik-agent`, they keep
+  working: Vornik maps the old name. `vornikctl doctor` lists the files and
+  the one-line command that updates them.
+
+**Let your assistant set up Vornik, with Vornik as its safety layer.** Hermes,
+Claude Code (including the Claude desktop app's Code-tab routines), Claude
+Desktop and Codex connect with `vornikctl agent connect`. The assistant then
+sets up its own projects, workflows (with schedules), REST APIs and MCP servers
+through Vornik's MCP tools, and runs them. It never sees a credential:
+credentials are entered on your paired phone. Every new connection, every
+credential and every write the assistant wants to make is approved there, and
+it receives only results shaped by the schema you approved. See
+[Let your assistant set up Vornik](../guides/assistant-setup.md).
+
+- `vornikctl pair-device` pairs your phone. Do it yourself, never through the
+  assistant.
+- `--url https://…` connects an assistant on another machine, for example a
+  Mac, to your Vornik. `vornikctl` for macOS is now part of each release.
+- The console's **Assistants** page shows what each assistant has set up.
+
+**Fixes to `vornik-update.sh`:**
+
+- After pulling the agent image, the update now tags it. Before, the image
+  arrived untagged, so `ghcr.io/easeit-cz/vornik-agent:latest` named nothing, or
+  the previous image, after an update that reported success. This fix applies
+  on the update to this release.
+- The rollback record (`STATE.txt`) now names the commit that was installed,
+  not the checkout's, and prints no rollback commit when it cannot tell. An
+  install whose checkout already sits at the target is updated without
+  `--force`. A backup written by an earlier release can name the wrong commit
+  here; use `<backup>/vornik.prev -version` instead.
+- A missing `skopeo` is now named, rather than reported as "the registry could
+  not be reached".
+- An interrupted image build removes the build containers it left; older
+  leftovers are reported with the command that removes them.
+- Updates and re-run quickstarts now deploy config files a release adds,
+  without changing any you have edited.
+
+**Releases carry binaries.** Each Community release now attaches `vornik` and
+`vornikctl` for Linux (amd64, arm64) and `vornikctl` for macOS (arm64, amd64),
+with checksums, an SBOM and build provenance attestations. The macOS binary is
+not signed: check it against `checksums.txt`, then run
+`xattr -d com.apple.quarantine vornikctl`.
+
+**Also fixed:** the task link in Slack and chat completion notices opened a
+"project not found" page; it opens the task.
 
 ---
 

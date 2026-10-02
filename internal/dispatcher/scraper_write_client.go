@@ -72,6 +72,9 @@ type mcpScraperWriteClient struct {
 // submitSecret is the daemon↔scraper web_submit capability secret attached as
 // daemon_auth on every call (shared C1 contract, config web.submit_secret).
 func NewMCPScraperWriteClient(exec scraperMCPExecutor, submitSecret string) ScraperWriteClient {
+	if exec != nil {
+		exec = scraperFence{inner: exec}
+	}
 	return &mcpScraperWriteClient{exec: exec, submitSecret: submitSecret}
 }
 

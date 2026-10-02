@@ -62,7 +62,7 @@ func TestImageFreshnessMatchingRevisionIsOK(t *testing.T) {
 
 // TestImageFreshnessDivergentRevisionWarns is the regression test for the
 // reported bug: a CE customer ran the documented update path for six weeks
-// while ghcr.io/grinco/vornik-agent:latest stayed frozen at install date, and
+// while ghcr.io/easeit-cz/vornik-agent:latest stayed frozen at install date, and
 // nothing reported it. checkAgentImages returned OK the whole time because it
 // only asks whether the image EXISTS.
 // AMENDED 2026-09-18 — the incident is unchanged, the MECHANISM that catches it
@@ -164,7 +164,7 @@ func TestImageFreshnessUnstampedDaemonIsOK(t *testing.T) {
 
 // TestImageFreshnessWalksOnlyManifestImages is the §6.1 guarantee that a
 // deliberate retag pin is invisible rather than merely tolerated. The
-// benchmark host runs ghcr.io/grinco/vornik-agent:bench precisely so a bench
+// benchmark host runs ghcr.io/easeit-cz/vornik-agent:bench precisely so a bench
 // rebuild cannot reach production's agents; that tag is not in the manifest,
 // so the check must never look at it and must never warn about it.
 const manifestWalkSHA = "e2c94d1a47bf24e85300db77f2a6a834d3354a60"

@@ -285,7 +285,7 @@ func startPostgres(t *testing.T) int {
 		"-e", "POSTGRES_USER=vornik", "-e", "POSTGRES_PASSWORD=vornik", "-e", "POSTGRES_DB=vornik",
 		pgvectorImage)
 	waitFor(t, "postgres", 90*time.Second, func() bool {
-		return exec.Command("podman", "exec", "vornik-e2e-pg", "pg_isready", "-U", "vornik").Run() == nil
+		return exec.Command("podman", postgresReadyArgs("vornik-e2e-pg")...).Run() == nil
 	})
 	run(t, "podman", "exec", "vornik-e2e-pg", "psql", "-U", "vornik", "-d", "vornik", "-c", "CREATE EXTENSION IF NOT EXISTS vector")
 	return port

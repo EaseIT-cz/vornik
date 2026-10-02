@@ -76,7 +76,7 @@ ARG VORNIK_REVISION=unknown
 ARG VORNIK_VERSION=dev
 LABEL org.opencontainers.image.revision="${VORNIK_REVISION}" \
       org.opencontainers.image.version="${VORNIK_VERSION}" \
-      org.opencontainers.image.source="https://github.com/grinco/vornik"
+      org.opencontainers.image.source="https://github.com/EaseIT-cz/vornik"
 
 # Re-declare ARGs after FROM — build args don't cross stage boundaries.
 ARG VORNIK_UID

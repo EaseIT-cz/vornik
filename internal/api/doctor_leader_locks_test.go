@@ -223,7 +223,7 @@ func TestHumanLeaderLockDuration_Buckets(t *testing.T) {
 	}
 }
 
-// Issue grinco/vornik-enterprise#60, reported 2026-09-23 against CE 2026.9.6.
+// Issue EaseIT-cz/vornik#60, reported 2026-09-23 against CE 2026.9.6.
 //
 // A Community operator got ERROR on every doctor run for six rows the
 // deployment STRUCTURALLY cannot reacquire: three Enterprise-only subsystems

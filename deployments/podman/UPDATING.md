@@ -14,7 +14,7 @@ this updates.
 ## Container images are part of the update
 
 > **Since 2026.9.3 the agent image is PULLED, not built.** The release publishes
-> it to `ghcr.io/grinco/vornik-agent`, and the updater fetches it **by digest**
+> it to `ghcr.io/easeit-cz/vornik-agent`, and the updater fetches it **by digest**
 > — so an ordinary update no longer spends several minutes building a container.
 > Images the release did not publish (the broker, the scraper, the cluster pair)
 > are still built locally, and so is the agent image on a host that cannot reach
@@ -76,17 +76,25 @@ cd ~/vornik/deployments/podman
 ### What it does, step by step
 
 1. **Preflight** — verifies podman/git/curl/systemctl, the checkout, config, the
-   user unit, and that the `vornik-postgres` container is up.
+   user unit, and that the `vornik-postgres` container is up. It warns when
+   `skopeo` is missing: without it the published agent image cannot be
+   resolved, so step 3b builds it locally when there is none and leaves an
+   existing one as it is. Install `skopeo` to pull it instead. It also reports
+   buildah working containers left by an earlier interrupted build, with the
+   command that removes them.
 2. **Backup** → `~/vornik-upgrade-backup-<UTC>/`: a full `pg_dump` (custom
    format), the current binaries (`*.prev`), `config.yaml`, and `STATE.txt`
-   (pre-upgrade commit + DB migration version).
+   (the installed commit and version, the checkout's commit, and the DB
+   migration version).
 3. **Checkout + rebuild** — checks out the target ref and rebuilds CE binaries
    in the golang container, version-stamped via `-ldflags`.
 3b. **Obtain drifted images** — for every image this host's deployment uses,
    `vornik-images -obtain` decides: pull it by digest where the release
    published one, build it locally where it did not, or leave it alone when the
    registry cannot be reached and an image is already present. A failed pull
-   cleans up and falls back to a build. This runs **before** the cutover and is
+   cleans up and falls back to a build. A pulled image is tagged with the name
+   the deployment uses. If this step is interrupted, the build containers it
+   created are removed on exit. This runs **before** the cutover and is
    **fatal** on failure, so a failure leaves the running install completely
    untouched rather than pairing a new daemon with an old image.
 3c. **Recreate the sidecars those images run in** — a rebuilt image changes
@@ -114,7 +122,9 @@ cd ~/vornik/deployments/podman
    check has to run from the NEW binary, here, and not at step 6.
 
    Step 6's `doctor` runs AFTER the swap. It diagnoses; it cannot prevent.
-5. **Cutover** — stops the service, installs the new binaries, starts it.
+5. **Cutover** — stops the service, installs the new binaries, deploys config
+   assets the release added (`scripts/config-deploy.sh`: it adds missing files,
+   such as new templates, and never changes a file you have), and starts it.
    Because the unit is `Type=notify`, systemd reports "ready" only after DB
    migrations applied and health checks passed.
 6. **Verify** — polls `/readyz`, prints the DB migration version bump, runs
@@ -151,6 +161,12 @@ The script still takes a full dump every run as a safety net.
 > unattended (`--yes`). The pre-upgrade dump lets you restore regardless.
 
 ## Recovering from an update that reported "Nothing to do"
+
+**Since 2026.10.2** the updater compares the **installed** binary's commit with
+the target, not only the checkout. When the checkout is already at the target
+and the installed binary is not, the update proceeds without `--force` and says
+why. It still needs `--force` when the installed binary's version cannot be
+mapped to a commit (for example a binary built as `dev`).
 
 **If you updated between 2026.9.0 and 2026.9.3, check this before anything
 else.** Until 2026.9.3 the updater checked out the new release *while bash was
@@ -198,6 +214,17 @@ systemctl --user start vornik.service
 # Full DB restore — only if a migration ever misbehaves (additive ones don't need it):
 podman exec -i vornik-postgres pg_restore -U vornik -d vornik --clean < "$BK/vornik-vornik-<date>.dump"
 ```
+
+`pre_upgrade_commit` is the commit of the binary that was **installed** when the
+run started, read from its version. If that version cannot be mapped to a
+commit, `STATE.txt` says `unknown` and the printed rollback has no
+`git checkout` line: check out the commit `$BK/vornik.prev -version` reports.
+
+**Backups written by 2026.10.1 or earlier can be wrong here.** They took
+`pre_upgrade_commit` from the git checkout, so after an interrupted run and a
+`--force` re-run they name the release you were upgrading **to**. For such a
+backup, ignore `STATE.txt` and use `$BK/vornik.prev -version`.
+
 
 ## Optional: a daily "update available" check
 

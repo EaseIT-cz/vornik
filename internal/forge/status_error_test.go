@@ -11,7 +11,7 @@ import (
 // not exist) was indistinguishable from a 502 (GitHub is having a moment). The
 // task-level retry then spent its whole budget on failures that could not
 // succeed — three attempts in five seconds against
-// grinco/headmatch#999999 on 2026-09-01.
+// EaseIT-cz/headmatch#999999 on 2026-09-01.
 //
 // Design https://docs.vornik.io
 

@@ -968,7 +968,14 @@ func (s *Server) adminRouter(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, "/ui/operator/accounts", http.StatusFound)
 	case "/workflow-proposals", "/workflow-proposals/":
 		s.AdminWorkflowProposals(w, r)
+	case "/agents", "/agents/":
+		s.AdminAgents(w, r, "")
 	default:
+		// /agents/<namespace> (plan P6.5). One segment only.
+		if ns, ok := strings.CutPrefix(path, "/agents/"); ok && !strings.Contains(strings.Trim(ns, "/"), "/") {
+			s.AdminAgents(w, r, ns)
+			return
+		}
 		// /users/{id}/<action> — POST surfaces from the Users page
 		// (login approval). Admin gate already wraps this router.
 		if strings.HasPrefix(path, "/users/") {

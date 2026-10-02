@@ -253,12 +253,12 @@ case "$HOUT" in
   *) ok "hostname stripped from failing command" ;;
 esac
 
-echo "--- report_install_failure emits a prefilled grinco/vornik issue URL ---"
+echo "--- report_install_failure emits a prefilled EaseIT-cz/vornik issue URL ---"
 FOUT="$(REF=2026.7.4 report_install_failure 7 2>&1)"
-case "$FOUT" in *"github.com/grinco/vornik/issues/new?"*) ok "failure hook prints the grinco/vornik issue URL" ;; *) bad "no issue URL in failure output: $FOUT" ;; esac
+case "$FOUT" in *"github.com/EaseIT-cz/vornik/issues/new?"*) ok "failure hook prints the EaseIT-cz/vornik issue URL" ;; *) bad "no issue URL in failure output: $FOUT" ;; esac
 case "$FOUT" in *"labels=bug%2Cinstall"*) ok "issue carries bug,install labels" ;; *) bad "labels not encoded: $FOUT" ;; esac
 # REGRESSION 2026-08-03 (operator report): a CE customer's report named neither the
-# edition nor the build. This installer only ever clones grinco/vornik, so an install
+# edition nor the build. This installer only ever clones EaseIT-cz/vornik, so an install
 # failure is a CE failure by construction — say so in the body and the title, the same
 # way `vornikctl report` now does.
 case "$FOUT" in *"community%20%28CE%29"*) ok "install report marks the CE edition" ;; *) bad "no edition marking in install report: $FOUT" ;; esac
@@ -429,6 +429,41 @@ grep -Eq '^  auth_enabled: true' "$SEED" && ok "seed requires an API key" || bad
 grep -Eq '^[[:space:]]+- "\$\{VORNIK_API_KEY\}"' "$SEED" && ok "seed takes the key from VORNIK_API_KEY" || bad "seed does not reference VORNIK_API_KEY"
 grep -Eq '^  writes: "?insecure' "$SEED" && bad "seed enables insecure web writes" || ok "seed leaves web writes off"
 grep -Eq 'insecure_http: true' "$SEED" && bad "seed enables plaintext A2A" || ok "seed has no plaintext A2A peer"
+
+echo "--- seed_configs deploys what the release added, on every run ---"
+# Design §15.5: before 2026-10-02 only a first run copied configs/, so a re-run
+# never delivered a new subtree such as agent-templates. Run in subshells: the
+# helper's own ok/warn would otherwise move this file's counters.
+R="$TMP/sc-repo"; C="$TMP/sc-cfg"
+mkdir -p "$R/configs/workflows" "$R/scripts" "$C/configs/workflows"
+echo seed > "$R/configs/workflows/a.md"
+cat > "$R/scripts/config-deploy.sh" <<'DEPLOY'
+#!/bin/sh
+printf '%s\n' "$1" >> "$DEPLOY_LOG"
+DEPLOY
+chmod +x "$R/scripts/config-deploy.sh"
+echo tuned > "$C/configs/workflows/mine.md"
+( DEPLOY_LOG="$TMP/sc.log" seed_configs "$R" "$C" ) >/dev/null 2>&1
+[ "$(cat "$TMP/sc.log" 2>/dev/null)" = "$C" ] && ok "an existing install runs the config deploy" \
+  || bad "an existing install did not run the config deploy (log: $(cat "$TMP/sc.log" 2>/dev/null))"
+[ -f "$C/configs/workflows/a.md" ] && bad "an existing install was re-seeded wholesale" || ok "an existing install is not re-seeded"
+rm -rf "$C" "$TMP/sc.log"; mkdir -p "$C"
+( DEPLOY_LOG="$TMP/sc.log" seed_configs "$R" "$C" ) >/dev/null 2>&1
+[ -f "$C/configs/workflows/a.md" ] && ok "a fresh install is seeded" || bad "a fresh install was not seeded"
+[ "$(cat "$TMP/sc.log" 2>/dev/null)" = "$C" ] && ok "a fresh install also runs the config deploy" \
+  || bad "a fresh install did not run the config deploy"
+
+echo "--- the real config deploy delivers agent-templates ---"
+# The outcome, not the call (review 20261002-8b42 F3): the stubs above prove
+# seed_configs invokes the deploy; this proves the deploy it invokes puts the
+# subtree agent administration needs on disk.
+REAL="$TMP/real-cfg"; mkdir -p "$REAL"
+if "$SCRIPT_DIR/../../scripts/config-deploy.sh" "$REAL" >/dev/null 2>&1 \
+   && [ -n "$(ls -A "$REAL/configs/agent-templates" 2>/dev/null)" ]; then
+  ok "config-deploy.sh lands configs/agent-templates"
+else
+  bad "config-deploy.sh did not land configs/agent-templates"
+fi
 
 echo "---"
 echo "PASS: $pass passed, $fail failed"

@@ -35,8 +35,8 @@ its published checksum before piping it to a shell (catches transit/redirect
 tampering — not a signature), fetch both first:
 
 ```bash
-REF=<release>  # a tag from github.com/grinco/vornik/releases that ships quickstart.sh.sha256
-base="https://raw.githubusercontent.com/grinco/vornik/$REF/deployments/podman"
+REF=<release>  # a tag from github.com/EaseIT-cz/vornik/releases that ships quickstart.sh.sha256
+base="https://raw.githubusercontent.com/EaseIT-cz/vornik/$REF/deployments/podman"
 curl -fsSLO "$base/quickstart.sh" && curl -fsSLO "$base/quickstart.sh.sha256"
 sha256sum -c quickstart.sh.sha256 && VORNIK_REF="$REF" bash quickstart.sh
 ```
@@ -64,7 +64,7 @@ xdg-open http://localhost:8080/ui
 cd deployments/podman
 cp .env.example .env                                    # postgres creds/ports for compose
 podman compose -f deps.compose.yaml up -d               # postgres (+ scraper.compose.yaml on EE)
-make build-agent                                        # ghcr.io/grinco/vornik-agent:latest
+make build-agent                                        # ghcr.io/easeit-cz/vornik-agent:latest
 go build -o ~/.local/bin/vornik    ./cmd/vornik         # or use the ephemeral-build one-liner
 go build -o ~/.local/bin/vornikctl ./cmd/vornikctl
 cp config/vornik.host.yaml ~/.config/vornik/config.yaml

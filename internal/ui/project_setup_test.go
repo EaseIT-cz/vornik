@@ -178,3 +178,28 @@ func TestProjectSetup_UnknownProject(t *testing.T) {
 	assert.Contains(t, body, "pill-danger", "an unresolved project must show config_valid red")
 	assert.NotContains(t, body, "Secrets present", "an unresolved project runs config_valid only")
 }
+
+// Agent-administered Vornik design §8.1, "No second writer" (review
+// 20261002-34a5 suggestion 3): the project-setup secret form routes through
+// the guarded projectdoctor.SetSecret, so an agent project is refused here
+// and nothing reaches the writer.
+func TestProjectSetup_SecretFix_RefusesAgentProjects(t *testing.T) {
+	proj := &registry.Project{
+		ID:          "hermes--finance",
+		Permissions: registry.ProjectPermissions{Secrets: []string{"hermes/FIO"}},
+	}
+	store := &setupFakeSecretStore{values: map[string]bool{}}
+	doctor := projectdoctor.New(projectdoctor.Deps{Registry: setupFakeResolver{proj: proj}, Secrets: store, SecretWriter: store})
+	srv := NewServer(WithProjectDoctor(doctor))
+
+	form := url.Values{"name": {"hermes/FIO"}, "value": {"AGENT-CANARY-VALUE"}}
+	req := httptest.NewRequest(http.MethodPost, "/ui/projects/hermes--finance/setup/secrets", strings.NewReader(form.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	rr := httptest.NewRecorder()
+	srv.ProjectSetupSecret(rr, req, "hermes--finance")
+
+	require.Equal(t, http.StatusBadRequest, rr.Code)
+	assert.Contains(t, rr.Body.String(), "approver device")
+	assert.NotContains(t, rr.Body.String(), "AGENT-CANARY-VALUE")
+	assert.False(t, store.Has("hermes/FIO"), "the agent credential reached the writer")
+}

@@ -121,7 +121,7 @@ func TestProgressSignal_SlowTurnPostsThenRemovesPlaceholder(t *testing.T) {
 	// the two moments: Send's delete only fires if it can see a stored
 	// placeholder ts, so winning that race left the placeholder undeleted and
 	// failed at "placeholder deletes = 0, want 1" — observed on the parent repo's
-	// slower CI runner (grinco/vornik-ee PR #62, 2026-08-06), never locally.
+	// slower CI runner (the retired EE mirror's PR #62, 2026-08-06), never locally.
 	// awaitPlaceholder exists for exactly this and says so; the other two
 	// progress tests already used it.
 	awaitPlaceholder(t, ch, session)

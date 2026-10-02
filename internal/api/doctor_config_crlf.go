@@ -94,6 +94,13 @@ func (h *DoctorHandlers) checkConfigCRLF(fix bool) DoctorCheck {
 // scan: every eligible file under the config dir tree plus the daemon's
 // explicit config.yaml path (which may live outside the dir).
 func (h *DoctorHandlers) collectCRLFScanFiles() []string {
+	return h.collectConfigFiles(crlfScanExtensions)
+}
+
+// collectConfigFiles returns the deduplicated deployed config files whose
+// extension is in exts, plus the daemon's config.yaml, excluding the
+// template-drift baselines.
+func (h *DoctorHandlers) collectConfigFiles(exts map[string]bool) []string {
 	var files []string
 	seen := map[string]bool{}
 	addFile := func(p string) {
@@ -125,7 +132,7 @@ func (h *DoctorHandlers) collectCRLFScanFiles() []string {
 			if info.IsDir() {
 				return nil
 			}
-			if !crlfScanExtensions[strings.ToLower(filepath.Ext(path))] {
+			if !exts[strings.ToLower(filepath.Ext(path))] {
 				return nil
 			}
 			addFile(path)

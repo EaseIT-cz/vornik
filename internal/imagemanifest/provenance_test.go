@@ -3,6 +3,7 @@ package imagemanifest
 import (
 	"os"
 	"path/filepath"
+	"strconv"
 	"testing"
 )
 
@@ -23,7 +24,7 @@ func TestObtainedRecordRoundTrips(t *testing.T) {
 
 	rec.Note(ObtainedImage{
 		Tag: AgentImageTag, Method: MethodPulled,
-		Reference: AgentImageTag + "@" + digestA, ResolvedFrom: "ghcr.io/grinco/vornik-agent:sha-abc123abc123",
+		Reference: AgentImageTag + "@" + digestA, ResolvedFrom: "ghcr.io/easeit-cz/vornik-agent:sha-abc123abc123",
 	})
 	rec.Note(ObtainedImage{Tag: "localhost/vornik-broker:latest", Method: MethodBuilt, Reference: eeHead})
 	if err := rec.Save(path); err != nil {
@@ -111,9 +112,28 @@ func TestObtainedPathHonoursTheEnvOverride(t *testing.T) {
 
 func TestCommitTagShape(t *testing.T) {
 	got := CommitTag(AgentImageTag, "a8324f170a0f2016c7af94b876f23d7cfd6f607f")
-	want := "ghcr.io/grinco/vornik-agent:sha-a8324f170a0f"
+	want := "ghcr.io/easeit-cz/vornik-agent:sha-a8324f170a0f"
 	if got != want {
 		t.Errorf("CommitTag = %q, want %q — this must match publish-agent-image.yml's "+
 			"${GITHUB_SHA::12}, or resolution finds nothing and every update builds", got, want)
+	}
+}
+
+// The EaseIT-cz migration (design §5.2): a host's obtained record written
+// before the move names the legacy repository; it still answers for the
+// canonical tag, so provenance is not lost across the rename.
+func TestLoadObtained_LegacyTagMatchesCanonical(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "obtained.json")
+	raw := `{"version":` + strconv.Itoa(ObtainedVersion) + `,"images":[{"tag":"ghcr.io/grinco/vornik-agent:latest","method":"pulled","reference":"ghcr.io/grinco/vornik-agent@sha256:aa"}]}`
+	if err := os.WriteFile(path, []byte(raw), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	rec, err := LoadObtained(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, ok := rec.MethodFor(AgentImageTag)
+	if !ok || got.Method != MethodPulled {
+		t.Fatalf("legacy obtained entry not found under the canonical tag: %+v %v", got, ok)
 	}
 }

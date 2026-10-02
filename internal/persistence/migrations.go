@@ -8597,4 +8597,201 @@ ALTER TABLE execution_step_outcomes
     DROP COLUMN IF EXISTS container_memory_peak_bytes;
 `,
 	},
+	{
+		Version: 205,
+		Name:    "agent_secrets",
+		// Agent-administered Vornik design §8.1: one sealed credential per
+		// (namespace, name). Ciphertext and nonce only; the key never touches
+		// the database. SQLite gets the same table through schemaSQL.
+		//
+		// Design: https://docs.vornik.io §8.1
+		Up: `
+CREATE TABLE IF NOT EXISTS agent_secrets (
+    namespace          TEXT NOT NULL,
+    name               TEXT NOT NULL,
+    kind               TEXT NOT NULL CHECK (kind IN ('secret','oauth_token')),
+    ciphertext         BYTEA NOT NULL,
+    nonce              BYTEA NOT NULL,
+    created_by_device  TEXT NOT NULL DEFAULT '',
+    created_at         TIMESTAMPTZ NOT NULL,
+    updated_at         TIMESTAMPTZ NOT NULL,
+    PRIMARY KEY (namespace, name)
+);
+`,
+		Down: `DROP TABLE IF EXISTS agent_secrets;`,
+	},
+	{
+		Version: 206,
+		Name:    "approver_devices",
+		// Agent-administered Vornik design §9: approver devices (the only
+		// approval principal), their pairing codes, and the approval requests
+		// they decide. Tokens and codes are sha256 digests only. "rendered"
+		// is TEXT, not JSONB, so the bytes shown are the bytes hashed.
+		// SQLite gets the same tables through schemaSQL.
+		//
+		// Design: https://docs.vornik.io §9
+		Up: `
+CREATE TABLE IF NOT EXISTS approver_devices (
+    id            TEXT PRIMARY KEY,
+    label         TEXT NOT NULL,
+    token_hash    TEXT NOT NULL UNIQUE,
+    paired_at     TIMESTAMPTZ NOT NULL,
+    paired_by     TEXT NOT NULL,
+    last_used_at  TIMESTAMPTZ NOT NULL,
+    revoked_at    TIMESTAMPTZ
+);
+CREATE TABLE IF NOT EXISTS approver_pairings (
+    code_hash    TEXT PRIMARY KEY,
+    label        TEXT NOT NULL,
+    created_at   TIMESTAMPTZ NOT NULL,
+    expires_at   TIMESTAMPTZ NOT NULL,
+    redeemed_at  TIMESTAMPTZ,
+    claim_hash   TEXT UNIQUE,
+    request_id   TEXT,
+    device_id    TEXT
+);
+CREATE TABLE IF NOT EXISTS agent_approval_requests (
+    id                 TEXT PRIMARY KEY,
+    namespace          TEXT NOT NULL DEFAULT '',
+    kind               TEXT NOT NULL CHECK (kind IN ('device_enrollment','widening_change','credential_slot')),
+    sentence           TEXT NOT NULL,
+    rendered           TEXT NOT NULL,
+    rendered_sha256    TEXT NOT NULL,
+    status             TEXT NOT NULL CHECK (status IN ('pending','approved','rejected','expired')),
+    created_at         TIMESTAMPTZ NOT NULL,
+    expires_at         TIMESTAMPTZ NOT NULL,
+    decided_at         TIMESTAMPTZ,
+    decided_by_device  TEXT,
+    applied_at         TIMESTAMPTZ
+);
+CREATE INDEX IF NOT EXISTS agent_approval_requests_pending ON agent_approval_requests (status, created_at);
+`,
+		Down: `
+DROP TABLE IF EXISTS agent_approval_requests;
+DROP TABLE IF EXISTS approver_pairings;
+DROP TABLE IF EXISTS approver_devices;
+`,
+	},
+	{
+		Version: 207,
+		Name:    "agent_approval_apply_lease",
+		// Review 20261002-4de8 F2: in a cluster every node's tick listed the
+		// same approved-unapplied requests and ran their effects at once. An
+		// effect now runs only under a claimed lease (ClaimApply), on the
+		// synchronous Decide path and on the tick alike; attempts are counted.
+		//
+		// Design: https://docs.vornik.io §9.2
+		Up: `
+ALTER TABLE agent_approval_requests ADD COLUMN IF NOT EXISTS apply_holder TEXT;
+ALTER TABLE agent_approval_requests ADD COLUMN IF NOT EXISTS apply_lease_until TIMESTAMPTZ;
+ALTER TABLE agent_approval_requests ADD COLUMN IF NOT EXISTS apply_attempts INTEGER NOT NULL DEFAULT 0;
+`,
+		Down: `
+ALTER TABLE agent_approval_requests DROP COLUMN IF EXISTS apply_attempts;
+ALTER TABLE agent_approval_requests DROP COLUMN IF EXISTS apply_lease_until;
+ALTER TABLE agent_approval_requests DROP COLUMN IF EXISTS apply_holder;
+`,
+	},
+	{
+		Version: 208,
+		Name:    "api_keys_agent_admin",
+		// Agent-administered Vornik design §5: the agent admin key of an agent
+		// namespace. agent_namespace is '' for every other key.
+		//
+		// Design: https://docs.vornik.io §5
+		Up: `
+ALTER TABLE api_keys ADD COLUMN IF NOT EXISTS agent_admin BOOLEAN NOT NULL DEFAULT FALSE;
+ALTER TABLE api_keys ADD COLUMN IF NOT EXISTS agent_namespace TEXT NOT NULL DEFAULT '';
+`,
+		Down: `
+ALTER TABLE api_keys DROP COLUMN IF EXISTS agent_namespace;
+ALTER TABLE api_keys DROP COLUMN IF EXISTS agent_admin;
+`,
+	},
+	{
+		Version: 209,
+		Name:    "agent_approval_grants",
+		// Agent-administered Vornik design §7.2, §7.3, §7.6: what a person
+		// approved on a device. Grants are written only by the widening_change
+		// effect. apply_error records an approved change that could never
+		// apply (a stale read set, a loader refusal): applied_at set with an
+		// error is that request's terminal state (plan P3.6).
+		//
+		// Design: https://docs.vornik.io §7
+		Up: `
+CREATE TABLE IF NOT EXISTS agent_integration_approvals (
+    namespace           TEXT NOT NULL,
+    project_id          TEXT NOT NULL,
+    integration         TEXT NOT NULL,
+    kind                TEXT NOT NULL CHECK (kind IN ('mcp','api')),
+    url                 TEXT NOT NULL,
+    read_tools          TEXT NOT NULL DEFAULT '[]',
+    write_tools         TEXT NOT NULL DEFAULT '[]',
+    read_pending        BOOLEAN NOT NULL DEFAULT FALSE,
+    approved_by_device  TEXT NOT NULL,
+    approved_at         TIMESTAMPTZ NOT NULL,
+    removed_at          TIMESTAMPTZ,
+    PRIMARY KEY (project_id, integration)
+);
+CREATE INDEX IF NOT EXISTS agent_integration_approvals_ns ON agent_integration_approvals (namespace);
+CREATE TABLE IF NOT EXISTS agent_workflow_approvals (
+    workflow_id         TEXT PRIMARY KEY,
+    namespace           TEXT NOT NULL,
+    project_id          TEXT NOT NULL,
+    reach_hash          TEXT NOT NULL,
+    approved_by_device  TEXT NOT NULL,
+    approved_at         TIMESTAMPTZ NOT NULL
+);
+CREATE INDEX IF NOT EXISTS agent_workflow_approvals_ns ON agent_workflow_approvals (namespace);
+CREATE TABLE IF NOT EXISTS agent_namespace_budgets (
+    namespace           TEXT PRIMARY KEY,
+    ceiling_usd         DOUBLE PRECISION NOT NULL,
+    approved_by_device  TEXT NOT NULL,
+    updated_at          TIMESTAMPTZ NOT NULL
+);
+ALTER TABLE agent_approval_requests ADD COLUMN IF NOT EXISTS apply_error TEXT;
+`,
+		Down: `
+ALTER TABLE agent_approval_requests DROP COLUMN IF EXISTS apply_error;
+DROP TABLE IF EXISTS agent_namespace_budgets;
+DROP TABLE IF EXISTS agent_workflow_approvals;
+DROP TABLE IF EXISTS agent_integration_approvals;
+`,
+	},
+	{
+		Version: 210,
+		Name:    "api_keys_one_agent_admin_per_namespace",
+		// Review 20261002-f66a F1: the grant's "namespace taken" check was a
+		// read then a write, so two concurrent grants could mint two live
+		// agent admin keys for one namespace. The invariant is the database's
+		// now: at most one unrevoked agent admin key per namespace.
+		//
+		// Design: https://docs.vornik.io §5
+		Up: `
+CREATE UNIQUE INDEX IF NOT EXISTS api_keys_one_agent_admin_per_namespace
+    ON api_keys (agent_namespace) WHERE agent_admin AND revoked_at IS NULL;
+`,
+		Down: `DROP INDEX IF EXISTS api_keys_one_agent_admin_per_namespace;`,
+	},
+	{
+		Version: 211,
+		Name:    "agent_approval_requests_kind_broker_action",
+		// Agent-administered Vornik plan P4.8: an agent project's proposed
+		// write is approved on the approver device, one request per action.
+		// Relaxes the kind CHECK from migration 206 (Postgres's default name
+		// for an unnamed inline column CHECK). SQLite gets the same change by
+		// a table rebuild (sqliteTableRebuilds).
+		//
+		// Design: https://docs.vornik.io P4.8
+		Up: `
+ALTER TABLE agent_approval_requests DROP CONSTRAINT IF EXISTS agent_approval_requests_kind_check;
+ALTER TABLE agent_approval_requests ADD CONSTRAINT agent_approval_requests_kind_check
+    CHECK (kind IN ('device_enrollment','widening_change','credential_slot','broker_action'));
+`,
+		Down: `
+ALTER TABLE agent_approval_requests DROP CONSTRAINT IF EXISTS agent_approval_requests_kind_check;
+ALTER TABLE agent_approval_requests ADD CONSTRAINT agent_approval_requests_kind_check
+    CHECK (kind IN ('device_enrollment','widening_change','credential_slot'));
+`,
+	},
 }

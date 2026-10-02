@@ -1772,7 +1772,7 @@ func TestCompanionMCP_Whoami_ResolvesEffectiveScope(t *testing.T) {
 		KeyPrefix:        apikey.DisplayPrefix(raw),
 		ClientKind:       "codex",
 		SessionLabel:     "test/laptop",
-		DefaultRepoScope: "github.com/grinco/vornik",
+		DefaultRepoScope: "github.com/EaseIT-cz/vornik",
 		MemoryRead:       true,
 		CreatedAt:        time.Now().UTC(),
 	}
@@ -1794,8 +1794,8 @@ func TestCompanionMCP_Whoami_ResolvesEffectiveScope(t *testing.T) {
 	assert.Equal(t, "alpha", out["project_id"])
 	assert.Equal(t, "codex", out["client_kind"])
 	assert.Equal(t, "test/laptop", out["session_label"])
-	assert.Equal(t, "github.com/grinco/vornik", out["default_repo_scope"])
-	assert.Equal(t, "github.com/grinco/vornik", out["effective_repo_scope"])
+	assert.Equal(t, "github.com/EaseIT-cz/vornik", out["default_repo_scope"])
+	assert.Equal(t, "github.com/EaseIT-cz/vornik", out["effective_repo_scope"])
 	assert.Equal(t, true, out["memory_read"])
 
 	// An explicit repo_scope arg overrides the key default — same
@@ -1813,7 +1813,7 @@ func TestCompanionMCP_Whoami_ResolvesEffectiveScope(t *testing.T) {
 	var out2 map[string]any
 	require.NoError(t, json.Unmarshal([]byte(text2), &out2))
 	assert.Equal(t, "popron/ccoe", out2["effective_repo_scope"])
-	assert.Equal(t, "github.com/grinco/vornik", out2["default_repo_scope"],
+	assert.Equal(t, "github.com/EaseIT-cz/vornik", out2["default_repo_scope"],
 		"an explicit arg previews effective_repo_scope without changing the key's stored default")
 }
 
@@ -2050,7 +2050,7 @@ func TestCompanionMCP_MemoryCorrect_HappyPath_RefuteAndCorrect(t *testing.T) {
 			"wrong_claim": "drop the old DB legacy_db in soak cleanup",
 			"correction":  "legacy_db IS prod and must never be dropped",
 			"max_refutes": 2,
-			"repo_scope":  "github.com/grinco/vornik",
+			"repo_scope":  "github.com/EaseIT-cz/vornik",
 		},
 	})
 	req = withCompanionBearer(req, raw)
@@ -2072,7 +2072,7 @@ func TestCompanionMCP_MemoryCorrect_HappyPath_RefuteAndCorrect(t *testing.T) {
 	assert.Equal(t, "drop the old DB legacy_db in soak cleanup", got.WrongClaim)
 	assert.Equal(t, "legacy_db IS prod and must never be dropped", got.Correction)
 	assert.Equal(t, 2, got.MaxRefutes)
-	assert.Equal(t, "github.com/grinco/vornik", got.RepoScope)
+	assert.Equal(t, "github.com/EaseIT-cz/vornik", got.RepoScope)
 	assert.Equal(t, "companion:claude-code", got.ActorKind)
 	assert.NotEmpty(t, got.ActorID)
 }

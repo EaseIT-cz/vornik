@@ -173,6 +173,14 @@ type DoctorHandlers struct {
 	// webWritesMode is the resolved daemon web.writes mode (off|on|insecure) at
 	// boot. "insecure" surfaces a persistent degraded doctor signal (LLD I2).
 	webWritesMode string
+	// agentSecrets and agentSecretKeyPath back the secret_store_key check
+	// (agent-administered Vornik design §8.1).
+	agentSecrets       persistence.AgentSecretRepository
+	agentSecretKeyPath string
+	// approverDevices and approverPush back the approver_devices check
+	// (agent-administered Vornik design §9.2).
+	approverDevices persistence.ApproverDeviceRepository
+	approverPush    bool
 
 	// systemHandlerNames is the set of system-step handler names the
 	// role-library doctor check accepts as valid tool entries. Wired
@@ -585,6 +593,7 @@ func (h *DoctorHandlers) RunReportReadOnly(ctx context.Context) DoctorReport {
 	report.Checks = append(report.Checks, h.checkConnectorAuth(ctx))
 	report.Checks = append(report.Checks, h.checkFallbackRungs(ctx))
 	report.Checks = append(report.Checks, h.checkConfigCRLF(fix))
+	report.Checks = append(report.Checks, h.checkLegacyImageNames())
 	report.Checks = append(report.Checks, h.checkProjectConfigSkew(fix))
 	report.Checks = append(report.Checks, h.checkSlackSlashCommand())
 	report.Checks = append(report.Checks, h.checkProjectDependencies())
@@ -594,6 +603,8 @@ func (h *DoctorHandlers) RunReportReadOnly(ctx context.Context) DoctorReport {
 	report.Checks = append(report.Checks, h.checkScraperProfileFreshness(ctx, fix))
 	report.Checks = append(report.Checks, h.checkGatewayHealthy(ctx, fix))
 	report.Checks = append(report.Checks, h.checkWebWritesInsecure(ctx, fix))
+	report.Checks = append(report.Checks, h.checkSecretStoreKey(ctx, fix))
+	report.Checks = append(report.Checks, h.checkApproverDevices(ctx, fix))
 	report.Checks = append(report.Checks, h.checkStuckBrokerActions(ctx))
 	report.Checks = append(report.Checks, h.checkMCPProjectConnections())
 	report.Checks = append(report.Checks, h.checkUnclassifiedShare(ctx))
@@ -680,6 +691,8 @@ func (h *DoctorHandlers) RunDoctor(w http.ResponseWriter, r *http.Request) {
 	report.Checks = append(report.Checks, h.checkScraperProfileFreshness(ctx, fix))
 	report.Checks = append(report.Checks, h.checkGatewayHealthy(ctx, fix))
 	report.Checks = append(report.Checks, h.checkWebWritesInsecure(ctx, fix))
+	report.Checks = append(report.Checks, h.checkSecretStoreKey(ctx, fix))
+	report.Checks = append(report.Checks, h.checkApproverDevices(ctx, fix))
 	report.Checks = append(report.Checks, h.checkStuckBrokerActions(ctx))
 	report.Checks = append(report.Checks, h.checkMCPProjectConnections())
 	report.Checks = append(report.Checks, h.checkUnclassifiedShare(ctx))

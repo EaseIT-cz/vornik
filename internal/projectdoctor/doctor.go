@@ -3,6 +3,7 @@ package projectdoctor
 import (
 	"context"
 	"fmt"
+	"vornik.io/vornik/internal/agentns"
 
 	"github.com/rs/zerolog"
 	"vornik.io/vornik/internal/mcp"
@@ -208,6 +209,12 @@ func (d *Doctor) TriggerSmoke(ctx context.Context, projectID string) (string, er
 func (d *Doctor) SetSecret(projectID, name, value string) error {
 	if d.deps.SecretWriter == nil {
 		return fmt.Errorf("secret writer unavailable")
+	}
+	// Agent-administered Vornik design §8.1: this writer puts values into the
+	// process environment and secrets/*.env in plaintext. An agent project's
+	// credentials live only in the sealed store, entered on an approver device.
+	if _, agent := agentns.FromID(projectID); agent {
+		return fmt.Errorf("project %q belongs to an agent namespace; its credentials are entered on an approver device, not here", projectID)
 	}
 	proj, err := d.resolve(projectID)
 	if err != nil || proj == nil {

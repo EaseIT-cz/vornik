@@ -21,13 +21,13 @@ import (
 	"strings"
 	"time"
 
-	"github.com/robfig/cron/v3"
+	"vornik.io/vornik/internal/cronexpr"
 )
 
 // cronParser is the package-scope parser for the 5-field
 // "standard" grammar (no seconds, no descriptors). robfig's
 // parser is goroutine-safe so one shared instance is fine.
-var cronParser = cron.NewParser(cron.Minute | cron.Hour | cron.Dom | cron.Month | cron.Dow)
+var cronParser = cronexpr.Parser
 
 // ErrInvalidCron means the supplied expression isn't a valid
 // 5-field POSIX cron. Wrapped so callers (parser, runner) can

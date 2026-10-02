@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"vornik.io/vornik/internal/persistence"
@@ -72,16 +73,20 @@ func (r *APIKeyRepository) Create(ctx context.Context, k *persistence.APIKey) er
 			rate_limit_rps, rate_limit_burst,
 			allowed_workflows, budget_cap_usd, client_kind, session_label,
 			memory_read, memory_write, allow_push, default_repo_scope,
-			skill_read, skill_write, skill_admin, delegate_disabled
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			skill_read, skill_write, skill_admin, delegate_disabled, agent_admin, agent_namespace
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		k.ID, k.ProjectID, k.Name, k.KeyHash, k.KeyPrefix,
 		sqliteTime(k.CreatedAt), sqliteTimePtr(k.LastUsedAt), sqliteTimePtr(k.ExpiresAt),
 		sqliteTimePtr(k.RevokedAt), k.CreatedBy, k.RateLimitRPS, k.RateLimitBurst,
 		encodeAllowedWorkflows(k.AllowedWorkflows), budget, clientKind, sessionLabel,
 		boolToInt(k.MemoryRead), boolToInt(k.MemoryWrite), boolToInt(k.AllowPush), defaultRepoScope,
 		boolToInt(k.SkillRead), boolToInt(k.SkillWrite), boolToInt(k.SkillAdmin),
-		boolToInt(k.DelegateDisabled),
+		boolToInt(k.DelegateDisabled), boolToInt(k.AgentAdmin), k.AgentNamespace,
 	)
+	if err != nil && strings.Contains(err.Error(), "UNIQUE constraint failed") {
+		// e.g. a second live agent admin key for one namespace (migration 210)
+		return persistence.ErrDuplicateKey
+	}
 	return err
 }
 
@@ -106,7 +111,7 @@ func (r *APIKeyRepository) LookupActiveByHash(ctx context.Context, keyHash strin
 		       rate_limit_rps, rate_limit_burst,
 		       allowed_workflows, budget_cap_usd, client_kind, session_label,
 		       memory_read, memory_write, allow_push, default_repo_scope,
-		       skill_read, skill_write, skill_admin, delegate_disabled
+		       skill_read, skill_write, skill_admin, delegate_disabled, agent_admin, agent_namespace
 		FROM api_keys
 		WHERE key_hash = ?
 		  AND revoked_at IS NULL
@@ -136,7 +141,7 @@ func (r *APIKeyRepository) GetByID(ctx context.Context, keyID string) (*persiste
 		       rate_limit_rps, rate_limit_burst,
 		       allowed_workflows, budget_cap_usd, client_kind, session_label,
 		       memory_read, memory_write, allow_push, default_repo_scope,
-		       skill_read, skill_write, skill_admin, delegate_disabled
+		       skill_read, skill_write, skill_admin, delegate_disabled, agent_admin, agent_namespace
 		FROM api_keys
 		WHERE id = ?`,
 		keyID)
@@ -159,7 +164,7 @@ func (r *APIKeyRepository) ListByProject(ctx context.Context, projectID string) 
 		       rate_limit_rps, rate_limit_burst,
 		       allowed_workflows, budget_cap_usd, client_kind, session_label,
 		       memory_read, memory_write, allow_push, default_repo_scope,
-		       skill_read, skill_write, skill_admin, delegate_disabled
+		       skill_read, skill_write, skill_admin, delegate_disabled, agent_admin, agent_namespace
 		FROM api_keys WHERE project_id = ?
 		ORDER BY created_at DESC`, projectID)
 	if err != nil {
@@ -187,7 +192,7 @@ func (r *APIKeyRepository) ListAttributable(ctx context.Context) ([]*persistence
 		       rate_limit_rps, rate_limit_burst,
 		       allowed_workflows, budget_cap_usd, client_kind, session_label,
 		       memory_read, memory_write, allow_push, default_repo_scope,
-		       skill_read, skill_write, skill_admin, delegate_disabled
+		       skill_read, skill_write, skill_admin, delegate_disabled, agent_admin, agent_namespace
 		FROM api_keys
 		WHERE substr(name, 1, length(?)) <> ?
 		ORDER BY created_at DESC`, persistence.TaskKeyNamePrefix, persistence.TaskKeyNamePrefix)
@@ -216,7 +221,7 @@ func (r *APIKeyRepository) ListCompanionByProject(ctx context.Context, projectID
 		       rate_limit_rps, rate_limit_burst,
 		       allowed_workflows, budget_cap_usd, client_kind, session_label,
 		       memory_read, memory_write, allow_push, default_repo_scope,
-		       skill_read, skill_write, skill_admin, delegate_disabled
+		       skill_read, skill_write, skill_admin, delegate_disabled, agent_admin, agent_namespace
 		FROM api_keys
 		WHERE project_id = ?
 		  AND client_kind IS NOT NULL
@@ -300,14 +305,15 @@ func scanAPIKey(scanner interface{ Scan(dest ...any) error }) (*persistence.APIK
 		defaultRepoScope sql.NullString
 	)
 	var memRead, memWrite, allowPush sql.NullInt64
-	var skillRead, skillWrite, skillAdmin, delegateDisabled sql.NullInt64
+	var skillRead, skillWrite, skillAdmin, delegateDisabled, agentAdmin sql.NullInt64
+	var agentNamespace sql.NullString
 	err := scanner.Scan(
 		&k.ID, &k.ProjectID, &k.Name, &k.KeyHash, &k.KeyPrefix,
 		&createdAt, &lastUsed, &expiresAt, &revokedAt, &createdBy,
 		&rps, &burst,
 		&allowedWF, &budget, &clientKind, &sessionLabel,
 		&memRead, &memWrite, &allowPush, &defaultRepoScope,
-		&skillRead, &skillWrite, &skillAdmin, &delegateDisabled,
+		&skillRead, &skillWrite, &skillAdmin, &delegateDisabled, &agentAdmin, &agentNamespace,
 	)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
@@ -360,6 +366,8 @@ func scanAPIKey(scanner interface{ Scan(dest ...any) error }) (*persistence.APIK
 	k.SkillWrite = skillWrite.Valid && skillWrite.Int64 != 0
 	k.SkillAdmin = skillAdmin.Valid && skillAdmin.Int64 != 0
 	k.DelegateDisabled = delegateDisabled.Valid && delegateDisabled.Int64 != 0
+	k.AgentAdmin = agentAdmin.Valid && agentAdmin.Int64 != 0
+	k.AgentNamespace = agentNamespace.String
 	return &k, nil
 }
 

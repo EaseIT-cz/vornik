@@ -143,7 +143,7 @@ func TestNonPedantic_GateFailureStillTakesTheRecoveryHop(t *testing.T) {
 	// walked straight into it.
 	//
 	// It won locally and on the fork's CI and LOST on the parent repo's runner
-	// (grinco/vornik-ee run 34033978109, 2026-09-06: task.Status was RUNNING).
+	// (the retired EE mirror's run 34033978109, 2026-09-06: task.Status was RUNNING).
 	// Waiting for COMPLETED is both race-free and strictly stronger — a build
 	// that skipped the recovery hop ends FAILED, so this times out rather than
 	// passing for the wrong reason.

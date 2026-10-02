@@ -35,7 +35,7 @@ func TestLoad_IsCallableTwiceInOneProcess(t *testing.T) {
 	// there — the defaults alone fail validation (api.auth_enabled is on with
 	// no keys), so on every clean runner the FIRST Load returned
 	// "api.api_keys is required" and the re-entrancy it exists to prove was
-	// never reached. Found red on grinco/vornik CI, 2026-09-07..09, and on
+	// never reached. Found red on EaseIT-cz/vornik CI, 2026-09-07..09, and on
 	// the 2026.9.4 release-prep run. The minimal config below makes the
 	// defaults valid without depending on anything outside the test.
 	dir := t.TempDir()

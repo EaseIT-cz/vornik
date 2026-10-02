@@ -13,7 +13,7 @@
 # and red in CE for any OTHER reason — which is the general case, and the one
 # this script watches.
 #
-# NO CREDENTIAL. grinco/vornik is public and a public repository's workflow
+# NO CREDENTIAL. EaseIT-cz/vornik is public and a public repository's workflow
 # runs are readable anonymously, so this needs no token, no deploy key and no
 # new secret — which is what makes it cheap enough to be worth doing at all.
 #
@@ -35,7 +35,7 @@
 set -uo pipefail
 
 sha="${1:-}"
-repo="${2:-grinco/vornik}"
+repo="${2:-EaseIT-cz/vornik}"
 workflow="${3:-ci.yaml}"
 api="${CE_CI_API:-https://api.github.com}"
 timeout="${CE_CI_TIMEOUT:-1800}"

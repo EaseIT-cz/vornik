@@ -1,13 +1,13 @@
 ---
 sources:
     - path: internal/service/container_scheduler.go
-      sha256: 23b26b4609706a6940fcb842bb70663543daf465fb175a0a1d7460ce382e6236
+      sha256: 4188b8938ef48508d5976abbb8f3cf3fcdb84d1ede78a6e5beae19fc04a0c0b3
     - path: internal/service/memory_adapter.go
       sha256: 9a075b167fc29ec4d2ffab41f3584b6e905d06877a55c287cb7ac2e770ae2f1e
     - path: internal/memory/reranker.go
       sha256: 2db6fa73c81bedda7ce9728feead4d627380e97f84a88c94b9db63075f21c93a
     - path: internal/config/config.go
-      sha256: e05eeee500987b2efa488829b19f899ba3facc6c48b44f2555a95971b5d46aba
+      sha256: 697e264ee2174a035bb4d030448b141e0c8050d2ed00b6ecd9e7f1acd9d3d82c
 ---
 # Reference architecture
 
@@ -172,7 +172,7 @@ roles:
 ```
 
 Every role needs a runtime image, and it must be the Vornik agent image:
-`ghcr.io/grinco/vornik-agent` or `localhost/vornik-agent`, any tag or digest (a
+`ghcr.io/easeit-cz/vornik-agent` or `localhost/vornik-agent`, any tag or digest (a
 bare `vornik-agent:<tag>` is qualified to the first). The daemon refuses to start
 a container from any other image. Roles routinely differ in model — a cheap model for
 classification, a stronger one for synthesis — and that heterogeneity is normal, not

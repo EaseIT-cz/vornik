@@ -1,7 +1,7 @@
 ---
 sources:
     - path: internal/registry/project.go
-      sha256: f1b264a1a40a9d69952959b378443bdfbf8836d53180a8bbe2fbed84ac51e41e
+      sha256: 60c9f0da126605df1c58a2d673baa596aff857a44f3f143f4afdd73add783453
     - path: internal/mcp/client.go
       sha256: e6e63cb2816132187f2b0790a11d3e19857d44cc8fa1068db252ddddedfd1ff6
     - path: internal/mcp/ratelimit.go
@@ -113,6 +113,12 @@ Credentials are **never written in the config**. Every credential field takes a
 must appear in the project's `permissions.secrets`. That is what lets a server
 definition travel through the control plane as a reviewable diff without
 leaking anything.
+
+Project IDs containing `--` are reserved for agent namespaces: an ID of the form
+`<namespace>--<name>` belongs to an agent's own setup. Such a project resolves only
+`secret://<namespace>/<NAME>`, from Vornik's encrypted credential store, and an
+ordinary project cannot resolve a reference of that form. Do not use `--` in your
+own project IDs.
 
 ### `mode: static` — a bearer token or API key
 

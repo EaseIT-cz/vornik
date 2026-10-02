@@ -174,4 +174,9 @@ var WorkflowDeferredPaths = []string{
 	"broker.egress.max_bytes",
 	"broker.egress.provenance",
 	"broker.proposes",
+	// Agent schedules (agent-administered Vornik design §17): rendered by the
+	// agent admin verbs and approved on a device, never edited in a form.
+	"broker.schedule.cron",
+	"broker.schedule.timezone",
+	"broker.schedule.inputs",
 }

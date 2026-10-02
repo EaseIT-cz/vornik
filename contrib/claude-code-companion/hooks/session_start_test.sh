@@ -18,7 +18,7 @@ fail() { echo "FAIL: $*" >&2; exit 1; }
 OUT="$(
   VORNIK_COMPANION_TOKEN="test-token" \
   VORNIK_URL="http://127.0.0.1:1" \
-  VORNIK_REPO_SCOPE="github.com/grinco/vornik" \
+  VORNIK_REPO_SCOPE="github.com/EaseIT-cz/vornik" \
   bash "$HOOK" 2>/dev/null
 )"
 
@@ -37,7 +37,7 @@ grep -q "authoritative design record" <<<"$CTX" || fail "authoritative-trust con
 # The repo-scope directive is a standing directive, planted on every path
 # (LLD 2026-07-12 §9).
 grep -q "vornik-companion: repo scope auto-detected" <<<"$CTX" || fail "repo-scope directive missing from the normal path"
-grep -q 'repo_scope: "github.com/grinco/vornik"' <<<"$CTX" || fail "repo-scope directive does not name the pinned scope"
+grep -q 'repo_scope: "github.com/EaseIT-cz/vornik"' <<<"$CTX" || fail "repo-scope directive does not name the pinned scope"
 
 # The envelope must be valid JSON with the SessionStart hook event.
 EVENT="$(printf '%s' "$OUT" | jq -r '.hookSpecificOutput.hookEventName')"
@@ -55,7 +55,7 @@ OUT2="$(VORNIK_COMPANION_TOKEN="" bash "$HOOK" 2>/dev/null || true)"
 OUT3="$(
   VORNIK_COMPANION_TOKEN="test-token" \
   VORNIK_URL="http://127.0.0.1:1" \
-  VORNIK_REPO_SCOPE="github.com/grinco/vornik" \
+  VORNIK_REPO_SCOPE="github.com/EaseIT-cz/vornik" \
   bash "$HOOK" --refresh 2>/dev/null
 )"
 [[ -n "$OUT3" ]] || fail "refresh emitted nothing"
@@ -63,7 +63,7 @@ CTX3="$(printf '%s' "$OUT3" | jq -r '.hookSpecificOutput.additionalContext')"
 [[ -n "$CTX3" && "$CTX3" != "null" ]] || fail "no additionalContext in refresh envelope: $OUT3"
 grep -q "context refreshed after compaction" <<<"$CTX3" || fail "refresh banner missing"
 grep -q "vornik-companion: repo scope auto-detected" <<<"$CTX3" || fail "refresh dropped the repo-scope directive"
-grep -q 'repo_scope: "github.com/grinco/vornik"' <<<"$CTX3" || fail "refresh repo-scope directive does not name the pinned scope"
+grep -q 'repo_scope: "github.com/EaseIT-cz/vornik"' <<<"$CTX3" || fail "refresh repo-scope directive does not name the pinned scope"
 grep -q "vornik-companion: RAG-first" <<<"$CTX3" || fail "refresh dropped the RAG-first directive"
 grep -q "capture reusable know-how as skills" <<<"$CTX3" || fail "refresh dropped the skill-capture directive"
 # The delegation digest is deliberately NOT reprinted on a refresh.

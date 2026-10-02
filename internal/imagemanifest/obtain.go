@@ -1,6 +1,7 @@
 package imagemanifest
 
 import (
+	"errors"
 	"fmt"
 	"strings"
 )
@@ -89,6 +90,10 @@ type Target struct {
 	RegistryReached bool
 	// Commit is the checkout's HEAD, used for host-built images.
 	Commit string
+	// LookupFailure says why the registry could not be consulted, when it
+	// could not. Decide puts it in its Leave and Build messages, so a missing
+	// resolver is not reported as an outage (issue #15, design §S2.10).
+	LookupFailure error
 }
 
 // IsRegistryTag reports whether a tag names an image obtained from a registry,
@@ -140,15 +145,20 @@ func Decide(tag string, local LocalImage, target Target) (ObtainAction, string) 
 	}
 
 	if !target.RegistryReached {
+		why := "the registry could not be reached"
+		if errors.Is(target.LookupFailure, ErrResolverAbsent) {
+			why = "skopeo is not installed, so the published digest cannot be resolved " +
+				"(install skopeo to pull the published image)"
+		}
 		if local.Present {
-			return ActionLeave, "the registry could not be reached, so the target digest is " +
+			return ActionLeave, why + ", so the target digest is " +
 				"unknown; leaving the existing image in place. `vornikctl doctor` reports its " +
 				"real state — rebuilding here would replace a verifiable pulled image with an " +
 				"unverifiable local one, on every update"
 		}
 		// Nothing to leave alone. This is the air-gapped first install, and
 		// building is the whole point of keeping that path (contract C7).
-		return ActionBuild, "the registry could not be reached and this host has no image yet; building locally"
+		return ActionBuild, why + ", and this host has no image yet; building locally"
 	}
 
 	if target.Digest == "" {

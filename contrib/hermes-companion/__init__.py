@@ -73,5 +73,8 @@ def register(ctx) -> None:
     ctx.register_command("vornik-result", handler=_result(tools), description="Show a Vornik broker task's result")
     skill = Path(__file__).parent / "skills" / "vornik-broker" / "SKILL.md"
     ctx.register_skill("vornik-broker", skill)
+    # Agent-administered Vornik (plan P6.3): the admin tools arrive over the
+    # MCP entry vornikctl agent connect hermes writes; this is how to use them.
+    ctx.register_skill("vornik-admin", Path(__file__).parent / "skills" / "vornik-admin" / "SKILL.md")
     if os.environ.get("VORNIK_MEMORY_TOKEN"):
         ctx.register_memory_provider(VornikMemoryProvider())

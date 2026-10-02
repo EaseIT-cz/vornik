@@ -21,6 +21,7 @@ import (
 	"sort"
 	"strings"
 	"time"
+	"vornik.io/vornik/internal/egressscan"
 
 	"vornik.io/vornik/internal/brokeractions"
 	"vornik.io/vornik/internal/companionpush"
@@ -106,6 +107,7 @@ func (c *Container) initHTTPServer() error {
 	if model := c.Config.Runtime.AgentLLM.Model; model != "" {
 		taskCreatorOpts = append(taskCreatorOpts, taskcreate.WithDefaultModel(model))
 	}
+	taskCreatorOpts = c.wireReachVerifier(taskCreatorOpts)
 	taskCreator := taskcreate.New(taskCreatorOpts...)
 	// Mirror onto the container so RemindersSubsystem.Start (which runs
 	// long after initHTTPServer, once Run() begins) can wire task-kind
@@ -301,6 +303,11 @@ func (c *Container) initHTTPServer() error {
 		// initHTTPServer; the gate refuses publication writes if it is ever nil.
 		api.WithAIDisclosure(c.AIDisclosure),
 	}
+	// The operator's admin keys are admin-class in both editions (agent
+	// connect, capabilities host facts); this does not open the admin surface.
+	if c.Config != nil {
+		apiOpts = append(apiOpts, api.WithAdminClassKeys(c.Config.Admin))
+	}
 	// Edition gate (outer) — Admin interfaces. Both initHTTPServer passes
 	// run this same function body, so the gate covers both automatically.
 	// The log fires only on the first pass (adminCapabilityLogged guard).
@@ -429,6 +436,22 @@ func (c *Container) initHTTPServer() error {
 	if c.repos != nil && c.repos.BrokerActions != nil {
 		apiOpts = append(apiOpts, api.WithBrokerActionRepository(c.repos.BrokerActions))
 	}
+	// The agent admin verbs (agent-administered Vornik design §6), behind
+	// agent_admin.enabled, read live so a config reload turns them on or off,
+	// and offered only once the service has built: the proxy resolves it per
+	// call, so templates installed after start take effect without a restart.
+	if c.agentAdminWireable() {
+		apiOpts = append(apiOpts, api.WithAgentAdmin(agentAdminProxy{c: c}, func() bool {
+			return c.Config != nil && c.Config.AgentAdmin.IsEnabled() && c.agentAdmin() != nil
+		}))
+	}
+	apiOpts = append(apiOpts, api.WithDaemonHost(c.daemonHost()))
+	if c.repos != nil && c.repos.ApproverDevices != nil {
+		apiOpts = append(apiOpts, api.WithApproverDevices(c.repos.ApproverDevices))
+	}
+	if c.repos != nil && c.repos.AgentGrants != nil {
+		apiOpts = append(apiOpts, api.WithAgentGrants(c.repos.AgentGrants))
+	}
 	// delegate's notify and companion-push, exactly where the pusher runs
 	// (design §7a).
 	if c.companionPushWired() {
@@ -464,6 +487,9 @@ func (c *Container) initHTTPServer() error {
 	} else if gwClient != nil {
 		apiOpts = append(apiOpts, api.WithAPIGatewayClient(gwClient))
 	}
+	// Agent projects call their own approved APIs directly, never Kong
+	// (agent-administered Vornik plan P4.5).
+	apiOpts = append(apiOpts, api.WithAgentAPIClients(c.agentAPIReader), api.WithEgressScan(c.egressScanner()))
 	// gateway.agent_writes (off|user|all): the daemon-wide policy for query_api
 	// writes from task-executing agents (LLD 2026-07-22). Value was validated at
 	// config load (loader Validate fails startup on an invalid value), so the
@@ -705,6 +731,11 @@ func (c *Container) initHTTPServer() error {
 			c.brokerActionMetrics = brokeractions.NewMetrics()
 		}
 		c.brokerActionMetrics.Attach(reg, &c.Logger)
+		// vornik_egress_secret_* (plan P5), same Attach rule.
+		if c.egressMetrics == nil {
+			c.egressMetrics = egressscan.NewMetrics()
+		}
+		c.egressMetrics.Attach(reg)
 		// vornik_companion_push_total, same Attach rule (design §7a).
 		if c.companionPushMetrics == nil {
 			c.companionPushMetrics = companionpush.NewMetrics()
@@ -1066,7 +1097,8 @@ func (c *Container) initHTTPServer() error {
 		apiOpts = append(apiOpts, api.WithToolGrants(c.repos.ExecutionToolGrants))
 	}
 	if c.mcpManager != nil || docProvider != nil || consultProvider != nil || grantProvider != nil {
-		composed := &api.ComposedMCPExecutor{Builtin: docProvider, Consult: consultProvider, Grants: grantProvider}
+		composed := &api.ComposedMCPExecutor{Builtin: docProvider, Consult: consultProvider, Grants: grantProvider,
+			Egress: c.egressScanner()}
 		if c.mcpManager != nil {
 			// Assign only when the underlying pointer is non-nil so
 			// the interface field doesn't end up as a typed-nil
@@ -1696,6 +1728,14 @@ func (c *Container) initHTTPServer() error {
 		if c.repos != nil && c.repos.BrokerActions != nil {
 			dh.SetBrokerActionRepository(c.repos.BrokerActions)
 		}
+		// Gated on its own repository: secret_store_key must not stay
+		// SKIPPED merely because an unrelated repository is absent.
+		if c.repos != nil && c.repos.AgentSecrets != nil {
+			dh.SetAgentSecretStore(c.repos.AgentSecrets, c.storeKeyPath())
+		}
+		if c.repos != nil && c.repos.ApproverDevices != nil {
+			dh.SetApproverDevices(c.repos.ApproverDevices, c.OperatorAlerter() != nil && c.Config.OperatorAlertActive())
+		}
 		// Read c.mcpManager at call time: the manager is created by initMCP,
 		// which may run after the handlers are built.
 		dh.SetMCPPendingSource(func() (int, []mcp.PendingServer) {
@@ -1934,6 +1974,10 @@ func (c *Container) initHTTPServer() error {
 		uiOpts = append(uiOpts, ui.WithBrokerActions(c.repos.BrokerActions, func(actionID string) {
 			c.brokerActionWorker.Kick(actionID)
 		}), ui.WithBrokerActionChanged(func() { c.companionPusher.Kick() }))
+	}
+	// /ui/admin/agents (agent-administered Vornik plan P6.5).
+	if v := c.agentsView(); v != nil {
+		uiOpts = append(uiOpts, ui.WithAgents(v))
 	}
 	if repo, store := c.webWriteComponents(); repo != nil {
 		uiOpts = append(uiOpts,
@@ -2391,6 +2435,9 @@ func (c *Container) initHTTPServer() error {
 		mux.Handle("/ui", uiHandler)
 		mux.Handle("/ui/", uiHandler)
 		c.Logger.Info().Msg("ui routes mounted at /ui and /ui/")
+		// More specific than /ui/, so they win the mux match and bypass
+		// AuthMiddleware: the device cookie is their only credential.
+		c.mountApproverDevicePages(mux)
 	} else {
 		c.Logger.Info().Msg("node profile: serve_ui=false; UI routes not mounted on this node")
 	}
@@ -2444,6 +2491,11 @@ func (c *Container) initHTTPServer() error {
 			cbAuthOpts = append(cbAuthOpts, api.WithSessionBackend(sessionLogin.backend))
 		}
 		wrapped := api.AuthMiddleware(api.BuildAuthConfig(c.Config, cbAuthOpts...))(cbHandler)
+		// An agent's sign-in started on an approver device comes back here
+		// too (one redirect URI); the dispatcher sends it to the device
+		// branch and everything else through the session check unchanged
+		// (agent-administered Vornik plan P4.4).
+		wrapped = c.mcpCallbackDispatch(conn, wrapped)
 		wrapped = api.PerIPLimit(
 			c.perIPLimiter,
 			c.rateLimitMetrics,

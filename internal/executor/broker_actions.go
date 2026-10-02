@@ -8,6 +8,9 @@ import (
 	"fmt"
 	"os"
 	"time"
+	"vornik.io/vornik/internal/agentns"
+	"vornik.io/vornik/internal/egressscan"
+	"vornik.io/vornik/internal/secrets"
 
 	"vornik.io/vornik/internal/approval"
 	"vornik.io/vornik/internal/persistence"
@@ -134,6 +137,9 @@ func (e *Executor) brokerActionRow(ctx context.Context, task *persistence.Task, 
 	default:
 		args, reason = parseBrokerProposal(body, prop)
 	}
+	if reason == "" {
+		reason = e.agentArgsRefusal(task.ProjectID, prop.Action, args)
+	}
 	if reason != "" {
 		e.logger.Warn().Str("task_id", task.ID).Str("action", prop.Action).Str("reason", reason).
 			Msg("broker actions: proposal invalid")
@@ -237,4 +243,27 @@ func (e *Executor) brokerDeclaredOutputs(workflowID string) map[string]bool {
 		out[p.Output] = true
 	}
 	return out
+}
+
+// agentArgsRefusal scans an agent project's proposed arguments (plan P5.3):
+// a credential-shaped value makes the proposal invalid, so a person is never
+// asked to approve sending a key. It fails closed. Operator projects pass.
+func (e *Executor) agentArgsRefusal(projectID, action string, args []byte) string {
+	if _, agent := agentns.FromID(projectID); !agent {
+		return ""
+	}
+	if e.egressDetector == nil {
+		return "the egress secret scan is not available"
+	}
+	fs, err := egressscan.ScanJSON(e.egressDetector, args)
+	if err != nil {
+		return "the egress secret scan failed"
+	}
+	if e.egressRecord != nil {
+		e.egressRecord(egressscan.SurfaceActionArgs, projectID, action, fs, secrets.ActionBlock)
+	}
+	if f, credential := egressscan.Blocking(fs); credential {
+		return "args carry " + f.String()
+	}
+	return ""
 }

@@ -22,7 +22,7 @@ import (
 // FORGE_TARGET_UNAVAILABLE, which TaskShouldRetry refuses to retry.
 func TestForgeJobFromTask_NoPullRequestIsPermanent(t *testing.T) {
 	_, err := forgeJobFromTask(taskWithJob(forgeapi.ForgeJob{
-		Repo: "grinco/headmatch", Action: "completed", HeadSHA: "320683a8",
+		Repo: "EaseIT-cz/headmatch", Action: "completed", HeadSHA: "320683a8",
 	}), "forge.fetch_diff")
 	if err == nil {
 		t.Fatal("a job with no number and no backlog origin must be refused")
@@ -58,7 +58,7 @@ func TestFetchCI_WorksWithoutAPullRequest(t *testing.T) {
 		RunID: 9, WorkflowPath: ".github/workflows/ci.yml", Conclusion: "success", HeadSHA: "320683a8",
 	}}})
 	res, err := h.Execute(context.Background(), executor.SystemStepInput{
-		Task: taskWithJob(forgeapi.ForgeJob{Repo: "grinco/headmatch", HeadSHA: "320683a8"}),
+		Task: taskWithJob(forgeapi.ForgeJob{Repo: "EaseIT-cz/headmatch", HeadSHA: "320683a8"}),
 	})
 	if err != nil {
 		t.Fatalf("a PR-less job with a head must be readable: %v", err)

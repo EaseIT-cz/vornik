@@ -227,11 +227,11 @@ var (
 	}
 	fxReportStore = &persistence.Skill{
 		ID: "fx-rep1", Name: "report-vornik-problem",
-		Description: "When a user hits or reports a problem with vornik (errors, crashes, 'isn't working', unexpected behaviour, or a failed install) — offer to help them file an ANONYMIZED report to the public grinco/vornik GitHub repo using vornikctl report; never auto-post",
+		Description: "When a user hits or reports a problem with vornik (errors, crashes, 'isn't working', unexpected behaviour, or a failed install) — offer to help them file an ANONYMIZED report to the public EaseIT-cz/vornik GitHub repo using vornikctl report; never auto-post",
 	}
 	fxReportShipped = &persistence.Skill{
 		ID: "fx-rep2", Name: "report-problem",
-		Description: "Teaches Claude how to help a user report a Vornik problem — a bug, a crash, a misbehaving swarm, or an INSTALL failure — as an anonymized GitHub issue on the public grinco/vornik repo. Use whenever the user says Vornik is broken / erroring / not installing / behaving wrong and wants to file it upstream.",
+		Description: "Teaches Claude how to help a user report a Vornik problem — a bug, a crash, a misbehaving swarm, or an INSTALL failure — as an anonymized GitHub issue on the public EaseIT-cz/vornik repo. Use whenever the user says Vornik is broken / erroring / not installing / behaving wrong and wants to file it upstream.",
 	}
 	fxRagFirst = &persistence.Skill{
 		ID: "fx-rag1", Name: "rag-first",

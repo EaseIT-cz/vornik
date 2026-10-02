@@ -45,6 +45,13 @@ require_vm_running() {
 cmd="${1:-}"
 
 case "$cmd" in
+  agent)
+    # Connecting an assistant writes its MCP entry into the assistant's own
+    # config ON THIS MAC, and the entry runs the bridge here. Forwarded into
+    # the VM, connect would write a config the assistant never reads (macOS
+    # design, amendment 2026-10-02; review 20261002-4bfc M9).
+    die "'vornikctl agent' needs the native macOS vornikctl, not this Lima shim. Download vornikctl-darwin-$(uname -m | sed 's/x86_64/amd64/') from the release, verify it against checksums.txt, and run it by its path (for example ~/Downloads/vornikctl agent connect claude-code)."
+    ;;
   delete)
     shift || true
     force=0

@@ -22,6 +22,8 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+
+	"vornik.io/vornik/internal/agentns"
 )
 
 // Auth modes. A closed enum, validated at config load so a typo fails at boot
@@ -179,10 +181,37 @@ func ParseSecretRef(v string) (string, bool) {
 		return "", false
 	}
 	name := strings.TrimPrefix(v, SecretRefPrefix)
-	if name == "" || !validSecretName(name) {
+	if name == "" {
+		return "", false
+	}
+	if strings.Contains(name, "/") {
+		// Only the strict agent shape <ns>/<NAME> may carry a "/"
+		// (agent-administered Vornik design §8.1); anything else with a
+		// slash is malformed, never split leniently.
+		ns, bare, ok := SplitSecretName(name)
+		if !ok {
+			return "", false
+		}
+		return ns + "/" + bare, true
+	}
+	if !validSecretName(name) {
 		return "", false
 	}
 	return name, true
+}
+
+// SplitSecretName splits "<ns>/<NAME>". namespaced is true only for the strict
+// agent shape: a valid namespace (agentns.Valid) and an upper-case NAME. Any
+// other name containing "/" is malformed, and so is not namespaced.
+func SplitSecretName(name string) (ns, bare string, namespaced bool) {
+	before, after, found := strings.Cut(name, "/")
+	if !found {
+		return "", name, false
+	}
+	if !agentns.Valid(before) || !agentns.ValidSecretName(after) {
+		return "", name, false
+	}
+	return before, after, true
 }
 
 // validSecretName accepts the character set an env-backed secret name can

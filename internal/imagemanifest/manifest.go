@@ -21,7 +21,11 @@
 // https://docs.vornik.io §4.2.
 package imagemanifest
 
-import "strings"
+import (
+	"strings"
+
+	"vornik.io/vornik/internal/imageref"
+)
 
 // Condition values. A row's condition states when its image is part of a
 // deployment, and is resolved against operator INTENT rather than running
@@ -66,7 +70,7 @@ const (
 // a locally present image is used without touching the network. An explicit
 // --pull=always anywhere in the run path would silently break air-gapped
 // installs; see 2026-08-28-packaged-image-provenance-design.md §3.1.1.
-const AgentImageTag = "ghcr.io/grinco/vornik-agent:latest"
+const AgentImageTag = imageref.AgentRepo + ":latest"
 
 // Image is one buildable container image.
 type Image struct {

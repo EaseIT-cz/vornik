@@ -7,7 +7,7 @@ import (
 	"testing"
 )
 
-// Regression: grinco/vornik-ee#66 CI, 2026-08-16. The E2E lane failed with
+// Regression: the retired EE mirror's #66 CI, 2026-08-16. The E2E lane failed with
 //
 //	podman availability check failed  error="signal: killed"
 //	output={"Client":{"APIVersion":"5.8.4","Version":"5.8.4",...}}

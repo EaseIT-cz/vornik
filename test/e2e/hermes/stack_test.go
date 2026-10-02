@@ -37,6 +37,14 @@ type stack struct {
 	replyTask, replyAction string
 	daemonLog              string
 	hermesHome             string
+	// Agent-administered Vornik's DoD lane (plan P8): the binaries and the
+	// config path, the bank stub and the agent's mail server.
+	ctl, cfgPath string
+	pgPort       int
+	bank         *BankStub
+	agentMail    *MCPStub
+	bankURL      string
+	agentMailURL string
 }
 
 // The stub mailbox: one invoice message whose body carries the sentinel.
@@ -102,6 +110,15 @@ func replyScript() Script {
 	}}
 }
 
+// agentImage is the image agent-defined roles run (agent_admin.agent_image):
+// the lane's override when set, else the shipped default.
+func agentImage() string {
+	if img := os.Getenv("VORNIK_E2E_AGENT_IMAGE"); img != "" {
+		return img
+	}
+	return "ghcr.io/easeit-cz/vornik-agent:latest"
+}
+
 // writeConfigs lays out config.yaml and configs/ for the run: the shipped
 // broker workflows and swarm, the example broker project pointed at the
 // stubs, and a memory project.
@@ -112,12 +129,21 @@ func writeConfigs(t *testing.T, s *stack, pgPort, apiPort int, llmURL, readURL, 
 	for _, wf := range []string{"mail-digest.md", "mail-reply.md"} {
 		copyFile(t, filepath.Join(root, "configs", "workflows", wf), filepath.Join(cfgDir, "configs", "workflows", wf))
 	}
+	// The agent admin verbs render from the shipped templates, which a
+	// deployment installs with make install-config-assets (plan P8).
+	tmpls, err := os.ReadDir(filepath.Join(root, "configs", "agent-templates"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range tmpls {
+		copyFile(t, filepath.Join(root, "configs", "agent-templates", e.Name()), filepath.Join(cfgDir, "configs", "agent-templates", e.Name()))
+	}
 	swarm, err := os.ReadFile(filepath.Join(root, "configs", "swarms", "broker-swarm.md"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	if img := os.Getenv("VORNIK_E2E_AGENT_IMAGE"); img != "" {
-		swarm = []byte(strings.ReplaceAll(string(swarm), "ghcr.io/grinco/vornik-agent:latest", img))
+		swarm = []byte(strings.ReplaceAll(string(swarm), "ghcr.io/easeit-cz/vornik-agent:latest", img))
 	}
 	swarm = []byte(strings.ReplaceAll(string(swarm), `model: "zai.glm-5"`, `model: "`+scriptedModel+`"`))
 	writeFile(t, filepath.Join(cfgDir, "configs", "swarms", "broker-swarm.md"), string(swarm))
@@ -204,6 +230,8 @@ telegram:
   enabled: false
 broker:
   writes: "on"
+agent_admin:
+  agent_image: %q
 runtime:
   # Rootless podman: the agent image is built for the host UID, so the
   # container keeps it (as production does) to read its mounted contract.
@@ -216,7 +244,7 @@ mcp:
   servers: []
 `, apiPort, filepath.Join(s.dir, "vornik.sock"), pgPort,
 		filepath.Join(s.dir, "artifacts"), filepath.Join(s.dir, "artifacts"),
-		s.adminKey, s.adminKey, llmURL, scriptedModel, llmURL, embeddingDim,
+		s.adminKey, s.adminKey, llmURL, scriptedModel, llmURL, embeddingDim, agentImage(),
 		filepath.Join(s.dir, "workspaces"), scriptedModel)
 	path := filepath.Join(cfgDir, "config.yaml")
 	writeFile(t, path, cfg)
@@ -229,12 +257,18 @@ func startStack(t *testing.T) *stack {
 	requirePodman(t)
 	s := &stack{dir: t.TempDir(), adminKey: randomKey(t)}
 	pgPort := startPostgres(t)
+	s.pgPort = pgPort
 
 	s.llm = &LLMStub{EmbeddingDim: embeddingDim, Final: "OK", Scripts: []Script{digestScript(goodDigest()), replyScript()}}
 	llmPort := serveLoopback(t, s.llm)
 	s.mailRead, s.mailSend = mailReadStub(), mailSendStub()
 	readPort := serveLoopback(t, s.mailRead)
 	sendPort := serveLoopback(t, s.mailSend)
+
+	s.bank = NewBankStub()
+	s.bankURL = fmt.Sprintf("http://127.0.0.1:%d/v1", serveLoopback(t, s.bank))
+	s.agentMail = agentMailStub()
+	s.agentMailURL = fmt.Sprintf("http://127.0.0.1:%d/mcp", serveLoopback(t, s.agentMail))
 
 	apiPort := freePort(t)
 	s.apiURL = fmt.Sprintf("http://127.0.0.1:%d", apiPort)
@@ -245,6 +279,7 @@ func startStack(t *testing.T) *stack {
 		fmt.Sprintf("http://127.0.0.1:%d/mcp", sendPort))
 
 	daemon, ctl := buildBinaries(t, s.dir)
+	s.ctl, s.cfgPath = ctl, cfgPath
 	s.daemonLog = filepath.Join(s.dir, "daemon.log")
 	logf, err := os.Create(s.daemonLog)
 	if err != nil {

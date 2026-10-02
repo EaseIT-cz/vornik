@@ -4,7 +4,7 @@
 #
 # Regression: the list used unanchored basenames (--exclude='README.md'), and an
 # rsync pattern with no slash matches at ANY depth. Every nested README.md /
-# Makefile / LICENSE was therefore frozen in grinco/vornik at whatever the
+# Makefile / LICENSE was therefore frozen in EaseIT-cz/vornik at whatever the
 # initial recreate wrote. It surfaced as CE CI red on
 # TestCompanionPlugin_ReadmeAdvertisesEverySkill (2026-07-26): the companion
 # plugin README still said "One skill" months after the bundle grew to four,
@@ -96,7 +96,7 @@ echo ">> publish preserve-list: $( [ "$fail" -eq 0 ] && echo CLEAN || echo FAILE
 # .github/workflows/codeql.yml and .github/codeql/codeql-config.yml were added
 # to the templates on 2026-08-15 to move the public repo to CodeQL advanced
 # setup and suppress 63 verified-sanitised path-injection alerts. They are on
-# the preserve-list, and grinco/vornik never had them — so every sync since has
+# the preserve-list, and EaseIT-cz/vornik never had them — so every sync since has
 # faithfully preserved their ABSENCE. Default setup was switched off the same
 # day, the advanced workflow never arrived, and the public repo went 38 days
 # with NO code scanning while 66 stale alerts stayed open.

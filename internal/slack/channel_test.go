@@ -135,7 +135,7 @@ func TestHandleWebhook_URLVerification(t *testing.T) {
 }
 
 // TestHandleWebhook_URLVerification_EscapesChallenge — regression for the
-// go/reflected-xss alert (grinco/vornik #7/#8): the url_verification handler
+// go/reflected-xss alert (EaseIT-cz/vornik #7/#8): the url_verification handler
 // echoes the request-derived challenge, which flows (via the access-log /
 // git response-writer wrappers CodeQL dedups the sink onto) into the HTTP
 // response. A challenge carrying HTML must NOT be reflected as live markup:

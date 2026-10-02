@@ -10,6 +10,7 @@ import (
 	"vornik.io/vornik/internal/config"
 	"vornik.io/vornik/internal/mcp"
 	"vornik.io/vornik/internal/persistence"
+	"vornik.io/vornik/internal/persistence/repotest"
 	"vornik.io/vornik/internal/registry"
 	"vornik.io/vornik/internal/storage"
 )
@@ -154,4 +155,58 @@ func TestNewCompanionPusher_OneCondition(t *testing.T) {
 	c.companionPusher = nil
 	c.notifyBrokerActionsPending(context.Background(), "p", "t", 1)
 	c.brokerActionWorkerConfig().OnChange()
+}
+
+// grantsFor answers GetIntegration from a fixed row set.
+type grantsFor struct {
+	persistence.AgentGrantRepository
+	rows map[string]*persistence.AgentIntegrationApproval
+}
+
+func (g grantsFor) GetIntegration(_ context.Context, projectID, integration string) (*persistence.AgentIntegrationApproval, error) {
+	if r, ok := g.rows[projectID+"/"+integration]; ok {
+		return r, nil
+	}
+	return nil, persistence.ErrNotFound
+}
+
+// Review 20261002-a048 F1 (agent-administered Vornik design §7.3): the broker
+// write worker is a tool route that does not pass CallMCPTool. For an agent
+// project, a declared broker_write tool is not enough: the tool must be in
+// the integration's DEVICE-approved write set. Control: the agent branch of
+// ToolDeclared. Without it, a hand-edited project file declaring a
+// broker_write server would send an approved action through a server no
+// person approved for writes.
+func TestBrokerActionWorkerConfig_AgentProjectNeedsApprovedWriteSet(t *testing.T) {
+	c := newBrokerActionContainer()
+	registry.SeedForTest(c.Registry, map[string]*registry.Project{"hermes--fin": {
+		ID: "hermes--fin", Broker: true,
+		MCP: registry.ProjectMCP{Servers: []registry.MCPServerConfig{{
+			Name: "mail-write", URL: "https://mail.example/mcp", BrokerWrite: true, AllowedTools: []string{"send"},
+		}}},
+	}})
+	cfg := c.brokerActionWorkerConfig()
+	if err := cfg.ToolDeclared("hermes--fin", "mcp__mail-write__send"); err == nil {
+		t.Fatal("no approval tables wired: an agent project's write must be refused")
+	}
+	rows := map[string]*persistence.AgentIntegrationApproval{}
+	c.repos.AgentGrants = grantsFor{rows: rows}
+	if err := cfg.ToolDeclared("hermes--fin", "mcp__mail-write__send"); err == nil || !strings.Contains(err.Error(), "not approved") {
+		t.Fatalf("no approval row: %v", err)
+	}
+	rows["hermes--fin/mail"] = &persistence.AgentIntegrationApproval{ProjectID: "hermes--fin", Integration: "mail", ReadTools: []string{"send"}}
+	if err := cfg.ToolDeclared("hermes--fin", "mcp__mail-write__send"); err == nil {
+		t.Fatal("a tool approved for READ only was accepted as a write")
+	}
+	rows["hermes--fin/mail"].WriteTools = []string{"send"}
+	if err := cfg.ToolDeclared("hermes--fin", "mcp__mail-write__send"); err != nil {
+		t.Fatalf("an approved write was refused: %v", err)
+	}
+}
+
+// The test double keeps the repository's miss contract.
+func TestGrantsFor_MissContract(t *testing.T) {
+	repotest.AssertMiss(t, "AgentGrantRepository.GetIntegration", func() (*persistence.AgentIntegrationApproval, error) {
+		return grantsFor{}.GetIntegration(context.Background(), "p", "absent")
+	})
 }

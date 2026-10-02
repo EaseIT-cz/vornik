@@ -27,8 +27,8 @@ var (
 
 var reportCmd = &cobra.Command{
 	Use:   "report",
-	Short: "File an anonymized problem report to grinco/vornik (guided, zero-auth)",
-	Long: `Collect anonymized diagnostics and produce a ready-to-open grinco/vornik
+	Short: "File an anonymized problem report to EaseIT-cz/vornik (guided, zero-auth)",
+	Long: `Collect anonymized diagnostics and produce a ready-to-open EaseIT-cz/vornik
 GitHub issue URL you submit with your OWN account. Works with the daemon up
 (rich diagnostics) or down (offline static checks — e.g. an install failure).
 
@@ -82,7 +82,7 @@ func runReport(_ *cobra.Command, _ []string) error {
 		return nil
 	}
 
-	fmt.Println("The issue body below is ANONYMIZED and will be PUBLIC on github.com/grinco/vornik.")
+	fmt.Println("The issue body below is ANONYMIZED and will be PUBLIC on github.com/EaseIT-cz/vornik.")
 	fmt.Println("Review it before you submit.")
 	fmt.Println()
 	fmt.Println(body)

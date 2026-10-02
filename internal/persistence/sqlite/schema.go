@@ -231,9 +231,15 @@ CREATE TABLE IF NOT EXISTS api_keys (
     -- git-over-HTTPS push gate (LLD slice 2). Default 0 = read-only.
     allow_push        INTEGER NOT NULL DEFAULT 0,
     -- migration 201: refuse every companion task tool (broker design §8). Default 0.
-    delegate_disabled INTEGER NOT NULL DEFAULT 0
+    delegate_disabled INTEGER NOT NULL DEFAULT 0,
+    -- migration 208: the agent admin key (agent-administered Vornik design §5)
+    agent_admin       INTEGER NOT NULL DEFAULT 0,
+    agent_namespace   TEXT NOT NULL DEFAULT ''
 );
 CREATE INDEX IF NOT EXISTS idx_api_keys_project   ON api_keys(project_id);
+-- migration 210: one live agent admin key per namespace (review 20261002-f66a F1)
+CREATE UNIQUE INDEX IF NOT EXISTS api_keys_one_agent_admin_per_namespace
+    ON api_keys (agent_namespace) WHERE agent_admin = 1 AND revoked_at IS NULL;
 CREATE INDEX IF NOT EXISTS idx_api_keys_active    ON api_keys(key_hash) WHERE revoked_at IS NULL;
 CREATE INDEX IF NOT EXISTS idx_api_keys_client_kind ON api_keys(client_kind) WHERE client_kind IS NOT NULL;
 
@@ -696,6 +702,75 @@ CREATE INDEX IF NOT EXISTS idx_step_outcomes_result ON execution_step_outcomes(r
 -- migration 175 parity: content-addressed parts of a step's first model
 -- request, redacted at write, pruned when no outcome row references them.
 -- ============================================================
+-- agent_secrets — migration 205 (agent-administered Vornik design §8.1)
+CREATE TABLE IF NOT EXISTS agent_secrets (
+    namespace          TEXT NOT NULL,
+    name               TEXT NOT NULL,
+    kind               TEXT NOT NULL CHECK (kind IN ('secret','oauth_token')),
+    ciphertext         BLOB NOT NULL,
+    nonce              BLOB NOT NULL,
+    created_by_device  TEXT NOT NULL DEFAULT '',
+    created_at         TEXT NOT NULL,
+    updated_at         TEXT NOT NULL,
+    PRIMARY KEY (namespace, name)
+);
+
+-- approver devices, pairings, approval requests — migration 206
+-- (agent-administered Vornik design §9)
+CREATE TABLE IF NOT EXISTS approver_devices (
+    id            TEXT PRIMARY KEY,
+    label         TEXT NOT NULL,
+    token_hash    TEXT NOT NULL UNIQUE,
+    paired_at     TEXT        NOT NULL,
+    paired_by     TEXT NOT NULL,
+    last_used_at  TEXT        NOT NULL,
+    revoked_at    TEXT       
+);
+CREATE TABLE IF NOT EXISTS approver_pairings (
+    code_hash    TEXT PRIMARY KEY,
+    label        TEXT NOT NULL,
+    created_at   TEXT        NOT NULL,
+    expires_at   TEXT        NOT NULL,
+    redeemed_at  TEXT       ,
+    claim_hash   TEXT UNIQUE,
+    request_id   TEXT,
+    device_id    TEXT
+);
+` + agentApprovalRequestsTableSQL + `;
+CREATE INDEX IF NOT EXISTS agent_approval_requests_pending ON agent_approval_requests (status, created_at);
+
+-- agent approval grants — migration 209 (agent-administered Vornik design §7)
+CREATE TABLE IF NOT EXISTS agent_integration_approvals (
+    namespace           TEXT NOT NULL,
+    project_id          TEXT NOT NULL,
+    integration         TEXT NOT NULL,
+    kind                TEXT NOT NULL CHECK (kind IN ('mcp','api')),
+    url                 TEXT NOT NULL,
+    read_tools          TEXT NOT NULL DEFAULT '[]',
+    write_tools         TEXT NOT NULL DEFAULT '[]',
+    read_pending        INTEGER NOT NULL DEFAULT 0,
+    approved_by_device  TEXT NOT NULL,
+    approved_at         TEXT NOT NULL,
+    removed_at          TEXT,
+    PRIMARY KEY (project_id, integration)
+);
+CREATE INDEX IF NOT EXISTS agent_integration_approvals_ns ON agent_integration_approvals (namespace);
+CREATE TABLE IF NOT EXISTS agent_workflow_approvals (
+    workflow_id         TEXT PRIMARY KEY,
+    namespace           TEXT NOT NULL,
+    project_id          TEXT NOT NULL,
+    reach_hash          TEXT NOT NULL,
+    approved_by_device  TEXT NOT NULL,
+    approved_at         TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS agent_workflow_approvals_ns ON agent_workflow_approvals (namespace);
+CREATE TABLE IF NOT EXISTS agent_namespace_budgets (
+    namespace           TEXT PRIMARY KEY,
+    ceiling_usd         REAL NOT NULL,
+    approved_by_device  TEXT NOT NULL,
+    updated_at          TEXT NOT NULL
+);
+
 -- broker_actions — migration 202 (broker write-actions design §5.2)
 -- ============================================================
 CREATE TABLE IF NOT EXISTS broker_actions (
@@ -2123,3 +2198,28 @@ const executionQualityScoresTableSQL = `CREATE TABLE IF NOT EXISTS execution_qua
     CHECK (passed_case_count >= 0 AND pinned_case_count >= passed_case_count)
 );
 `
+
+// agentApprovalRequestsTableSQL is the agent_approval_requests table, shared
+// by schemaSQL and the table rebuild that widens an existing database's kind
+// CHECK (sqliteTableRebuilds). The broker_action kind (agent-administered
+// Vornik plan P4.8) is the rebuild's marker.
+const agentApprovalRequestsTableSQL = `CREATE TABLE IF NOT EXISTS agent_approval_requests (
+    id                 TEXT PRIMARY KEY,
+    namespace          TEXT NOT NULL DEFAULT '',
+    kind               TEXT NOT NULL CHECK (kind IN ('device_enrollment','widening_change','credential_slot','broker_action')),
+    sentence           TEXT NOT NULL,
+    rendered           TEXT NOT NULL,
+    rendered_sha256    TEXT NOT NULL,
+    status             TEXT NOT NULL CHECK (status IN ('pending','approved','rejected','expired')),
+    created_at         TEXT        NOT NULL,
+    expires_at         TEXT        NOT NULL,
+    decided_at         TEXT       ,
+    decided_by_device  TEXT,
+    applied_at         TEXT       ,
+    -- migration 207: the apply lease (review 20261002-4de8 F2)
+    apply_holder       TEXT,
+    apply_lease_until  TEXT,
+    apply_attempts     INTEGER NOT NULL DEFAULT 0,
+    -- migration 209: why an approved change could never apply
+    apply_error        TEXT
+)`

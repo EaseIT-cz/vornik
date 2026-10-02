@@ -30,10 +30,21 @@ type MCPCall struct {
 // initialize, notifications, tools/list and tools/call. It records every
 // call, which is how the lane counts sends.
 type MCPStub struct {
-	Name  string
-	tools []MCPTool
-	mu    sync.Mutex
-	calls []MCPCall
+	Name string
+	// Token, when set, is the bearer every request must carry (plan P8.1):
+	// a lane run then proves the credential reached the server.
+	Token   string
+	tools   []MCPTool
+	mu      sync.Mutex
+	calls   []MCPCall
+	refused int
+}
+
+// Refused counts requests refused for a missing or wrong bearer.
+func (s *MCPStub) Refused() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.refused
 }
 
 // NewMCPStub builds a stub server offering tools.
@@ -52,6 +63,13 @@ func (s *MCPStub) Calls() []MCPCall {
 func (s *MCPStub) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+	if s.Token != "" && r.Header.Get("Authorization") != "Bearer "+s.Token {
+		s.mu.Lock()
+		s.refused++
+		s.mu.Unlock()
+		w.WriteHeader(http.StatusUnauthorized)
 		return
 	}
 	body, _ := io.ReadAll(io.LimitReader(r.Body, 1<<20))

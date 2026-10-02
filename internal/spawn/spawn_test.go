@@ -32,7 +32,7 @@ func accepted(t *testing.T, c *Cmd, err error, why string) *Cmd {
 	return c
 }
 
-const pinned = "ghcr.io/grinco/vornik-agent:latest"
+const pinned = "ghcr.io/easeit-cz/vornik-agent:latest"
 
 func TestPodmanAgent_AcceptsTheShapesTheDaemonBuilds(t *testing.T) {
 	ctx := context.Background()
@@ -58,7 +58,7 @@ func TestPodmanAgent_AcceptsTheShapesTheDaemonBuilds(t *testing.T) {
 		"localhost/vornik-agent:e2e", "-q", "/in/document.pdf", "/out/text.txt"}
 	must(t, "sandbox one-shot")(PodmanAgent(ctx, "/usr/bin/podman", sandboxArgv))
 	// A digest-pinned reference is the same image.
-	must(t, "digest")(PodmanAgent(ctx, "", []string{"run", "ghcr.io/grinco/vornik-agent@sha256:abc"}))
+	must(t, "digest")(PodmanAgent(ctx, "", []string{"run", "ghcr.io/easeit-cz/vornik-agent@sha256:abc"}))
 }
 
 func TestPodmanAgent_RefusesAnImageThatIsNotThePinnedAgentImage(t *testing.T) {
@@ -68,6 +68,8 @@ func TestPodmanAgent_RefusesAnImageThatIsNotThePinnedAgentImage(t *testing.T) {
 		"docker.io/attacker/vornik-agent:latest", // right name, wrong registry
 		"vornik-agent:latest",                    // bare: the runtime qualifies it first
 		"ghcr.io/grinco/vornik-agent-evil:1",
+		"ghcr.io/easeit-cz/vornik-agent-evil:1",
+		"ghcr.io/grinco/vornik-agent:latest", // legacy: mapped before argv, refused if it ever reaches it
 		"localhost/other:latest",
 	} {
 		c, err := PodmanAgent(ctx, "", []string{"run", "--detach", img})

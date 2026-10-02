@@ -21,9 +21,10 @@ const timestampDataMigration = "2026-10-01-fixed-width-timestamps"
 // catches: their declared type is plain TEXT and their name does not end in
 // _at. Found by walking the migrated schema (design D4).
 var timestampExtraColumns = map[string]bool{
-	"cluster_nodes.last_seen":           true,
-	"cost_tuning_canaries.window_until": true,
-	"project_memory_chunks.event_time":  true,
+	"agent_approval_requests.apply_lease_until": true,
+	"cluster_nodes.last_seen":                   true,
+	"cost_tuning_canaries.window_until":         true,
+	"project_memory_chunks.event_time":          true,
 }
 
 // NormalizeStats is the per-column outcome.

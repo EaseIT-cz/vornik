@@ -24,7 +24,7 @@ Syntax: optional leading flags, then an optional wrong claim, then an optional
 `|||`-separated correction:
 
     /memory-correct drop the old DB legacy_db ||| legacy_db IS prod; never drop it
-    /memory-correct --max 5 --scope github.com/grinco/vornik stale claim text
+    /memory-correct --max 5 --scope github.com/EaseIT-cz/vornik stale claim text
     /memory-correct --chunk-id 340ccc5f… --chunk-id 9750617… ||| the corrected fact
     /memory-correct refute-only claim with no replacement
 

@@ -2,10 +2,11 @@ package service
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"time"
 
-	"vornik.io/vornik/internal/mcpauth"
+	"vornik.io/vornik/internal/agenttokens"
 	"vornik.io/vornik/internal/mcpconnect"
 	"vornik.io/vornik/internal/registry"
 )
@@ -36,12 +37,16 @@ func (c *Container) mcpConnector() *mcpconnect.Connector {
 			audit = c.repos.AdminAudit
 		}
 		c.mcpOAuth = &mcpconnect.Connector{
-			Tokens: c.repos.MCPOAuthTokens,
-			// The secret store is the process environment, which is where the
-			// daemon's secrets dir lands at boot and where projectdoctor's
-			// EnvSecrets.Set writes a freshly-supplied value — so no second
-			// store is introduced here.
-			Secrets: mcpauth.EnvSecretSource{},
+			// An agent project's tokens are sealed into their row with the
+			// namespace key (agent-administered Vornik plan P4.4); operator
+			// projects' rows pass through unchanged.
+			Tokens: c.agentSealedTokens(),
+			// Operator secrets resolve from the process environment (where the
+			// daemon's secrets dir lands at boot and projectdoctor writes);
+			// agent secrets (secret://<ns>/<NAME>) from the namespaced store
+			// (agent-administered Vornik design §8.1). secretSource asks the
+			// container per lookup, so a store created after boot is seen.
+			Secrets: c.secretSource(),
 			Audit:   audit,
 			HTTP:    &http.Client{Timeout: mcpOAuthHTTPTimeout},
 			// Read LIVE rather than captured: the connector is built once at
@@ -65,7 +70,10 @@ func (c *Container) mcpConnector() *mcpconnect.Connector {
 			// sending unauthenticated requests and the badge kept saying
 			// authentication was required.
 			OnGranted: c.onMCPGrantChanged,
-			Logger:    c.Logger.With().Str("component", "mcp-oauth").Logger(),
+			// An agent project's server names its authorization server in
+			// its own metadata: those calls go through the SSRF guard (P4.4).
+			HTTPFor: agentOAuthHTTP,
+			Logger:  c.Logger.With().Str("component", "mcp-oauth").Logger(),
 		}
 		// §7.2a boot sweep: a redirect URI that changed while the daemon was down
 		// leaves stored DCR clients registered at the vendor under a callback this
@@ -88,6 +96,32 @@ func (c *Container) mcpConnector() *mcpconnect.Connector {
 		}
 	})
 	return c.mcpOAuth
+}
+
+// agentSealedTokens wraps the token repository so agent projects' tokens
+// are sealed. A token write creates the store's key on first use; a read
+// never does.
+func (c *Container) agentSealedTokens() *agenttokens.Repo {
+	return &agenttokens.Repo{
+		MCPOAuthTokenRepository: c.repos.MCPOAuthTokens,
+		ForWrite: func() (agenttokens.Sealer, error) {
+			st, err := c.secretStoreForWrite()
+			if err != nil {
+				return nil, err
+			}
+			return st, nil
+		},
+		ForRead: func() (agenttokens.Sealer, error) {
+			src := c.currentSecretSource()
+			if src.Store == nil {
+				if src.KeyErr != nil {
+					return nil, src.KeyErr
+				}
+				return nil, errors.New("no agent credential has been stored yet")
+			}
+			return src.Store, nil
+		},
+	}
 }
 
 // mcpServerRef resolves the (project, server) pair an operator named into the ServerRef the

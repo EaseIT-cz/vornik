@@ -11,6 +11,9 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"vornik.io/vornik/internal/agentadmin"
+	"vornik.io/vornik/internal/agentns"
+	"vornik.io/vornik/internal/egressscan"
 
 	"vornik.io/vornik/internal/apiaccess"
 	"vornik.io/vornik/internal/apigateway"
@@ -448,7 +451,7 @@ func (s *Server) agentAPIPreflight(w http.ResponseWriter, r *http.Request) (stri
 		respondError(w, http.StatusForbidden, "FORBIDDEN", "project not allowed")
 		return "", agentAPIContext{}, false
 	}
-	if s.apiGatewayClient == nil {
+	if s.apiClientFor(projectID) == nil {
 		respondError(w, http.StatusServiceUnavailable, "API_GATEWAY_DISABLED",
 			"third-party API gateway not configured on this daemon")
 		return "", agentAPIContext{}, false
@@ -459,7 +462,27 @@ func (s *Server) agentAPIPreflight(w http.ResponseWriter, r *http.Request) (stri
 		respondError(w, http.StatusForbidden, "FORBIDDEN", bindErr)
 		return "", agentAPIContext{}, false
 	}
+	// An agent project's REST calls pass the fail-closed agent tool gate
+	// (plan P4.5): the task's role must hold query_api, and the project must
+	// have a live approved API. This route is not CallMCPTool, so the gate
+	// there never saw it.
+	if reason, agent := s.agentToolRefusal(r.Context(), projectID, actx.taskID, agentadmin.QueryAPITool); agent && reason != "" {
+		respondError(w, http.StatusForbidden, "FORBIDDEN", reason)
+		return "", agentAPIContext{}, false
+	}
 	return projectID, actx, true
+}
+
+// apiClientFor returns the REST client of a project: an agent project's own
+// client, or the daemon's gateway client for an operator project.
+func (s *Server) apiClientFor(projectID string) apigateway.Client {
+	if _, agent := agentns.FromID(projectID); agent {
+		if s.agentAPIClients == nil {
+			return nil
+		}
+		return s.agentAPIClients(projectID)
+	}
+	return s.apiGatewayClient
 }
 
 // newAgentAPIService builds the shared capability gate for the agent path.
@@ -470,9 +493,9 @@ func (s *Server) agentAPIPreflight(w http.ResponseWriter, r *http.Request) (stri
 // package-level singleton, re-resolved on every write attempt (LLD §5.2,
 // review A1/A3). Read callers (ListProviders) pass false; reads never reach the
 // write gate, so the value is immaterial there.
-func (s *Server) newAgentAPIService(permitWrite bool) *apiaccess.Service {
+func (s *Server) newAgentAPIService(projectID string, permitWrite bool) *apiaccess.Service {
 	return &apiaccess.Service{
-		Client: s.apiGatewayClient,
+		Client: s.apiClientFor(projectID),
 		Allowlist: func(p string) ([]string, error) {
 			return s.agentAPIProviders(p), nil
 		},
@@ -521,6 +544,25 @@ func (s *Server) AgentQueryAPI(w http.ResponseWriter, r *http.Request) {
 	// also seeds the audit row + the write counter, so every mode is
 	// correlatable — including a refused write under off.
 	isWrite := !apiaccess.IsReadMethod(method)
+	if _, agent := agentns.FromID(projectID); agent {
+		// The request's path and query leave the daemon: scanned first
+		// (plan P5.2), failing closed.
+		doc, _ := json.Marshal(map[string]any{"path": req.Path, "query": req.Query})
+		if why := s.egress.scanAgentDoc(egressscan.SurfaceAPIArgs, projectID, "query_api:"+req.Provider, doc); why != "" {
+			audit.Status = agentAPIStatusRefused
+			s.writeAgentAPIAudit(r.Context(), projectID, actx, audit)
+			respondJSON(w, http.StatusOK, AgentQueryResponse{Refusal: "query_api refused: " + why + "; never send a credential in a request"})
+			return
+		}
+	}
+	if _, agent := agentns.FromID(projectID); agent && isWrite {
+		// No direct writes in a broker project (plan P4.5): a workflow
+		// proposes them and the user approves each one.
+		audit.Status = agentAPIStatusRefused
+		s.writeAgentAPIAudit(r.Context(), projectID, actx, audit)
+		respondJSON(w, http.StatusOK, AgentQueryResponse{Refusal: "An agent project's API writes are proposals: declare them in the workflow's proposes, and the user approves each one."})
+		return
+	}
 	var res writeResolution
 	if isWrite {
 		res = s.resolveAgentWrite(r.Context(), actx.taskID)
@@ -573,7 +615,7 @@ func (s *Server) AgentQueryAPI(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	outcome := s.newAgentAPIService(res.permit).Query(r.Context(), projectID, actx.role, apigateway.Request{
+	outcome := s.newAgentAPIService(projectID, res.permit).Query(r.Context(), projectID, actx.role, apigateway.Request{
 		Provider: req.Provider,
 		Method:   method,
 		Path:     req.Path,
@@ -721,7 +763,7 @@ func (s *Server) AgentListAPIProviders(w http.ResponseWriter, r *http.Request) {
 
 	// list_apis is a read (provider discovery); it never reaches the write gate,
 	// so the write permit is immaterial — pass false.
-	providers, _, err := s.newAgentAPIService(false).ListProviders(r.Context(), projectID, query)
+	providers, _, err := s.newAgentAPIService(projectID, false).ListProviders(r.Context(), projectID, query)
 	if err != nil {
 		audit.Status = agentAPIStatusRefused
 		s.writeAgentAPIAudit(r.Context(), projectID, actx, audit)

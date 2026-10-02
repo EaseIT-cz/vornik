@@ -1,5 +1,5 @@
 name: vornik-companion
-version: 0.2.2
+version: 0.3.0
 manifest_version: 2
 # Declared, not inferred: Hermes classifies an undeclared plugin whose
 # __init__.py mentions a memory provider as `kind: exclusive`, and general
@@ -13,6 +13,10 @@ description: >-
   no credentials: work that touches mail, calendar, documents or accounts is
   delegated to operator-authored broker workflows on a Vornik daemon, which
   return a bounded, schema-validated result instead of raw access.
+  0.3.0 — the vornik-admin skill, for a Hermes connected to Vornik as an
+  administering agent (vornikctl agent connect hermes): it sets up projects,
+  workflows and connections itself, and the user approves each change on
+  their phone. Vornik keeps every credential.
   0.2.1 — install and memory-provider instructions corrected against
   Hermes v2026.9.24: the provider is named vornik-companion.
   0.2.0 — broker write actions: the skill explains proposed writes and their

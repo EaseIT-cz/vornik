@@ -43,14 +43,14 @@ roles:
   - name: lead
     model: glm-5.2:cloud
     runtime:
-      image: "ghcr.io/grinco/vornik-agent:latest"
+      image: "ghcr.io/easeit-cz/vornik-agent:latest"
     permissions:
       allowedTools:
         - file_read
   - name: reviewer
     model: glm-5.2:cloud
     runtime:
-      image: "ghcr.io/grinco/vornik-agent:latest"
+      image: "ghcr.io/easeit-cz/vornik-agent:latest"
     permissions:
       allowedTools:
         - file_read
@@ -637,7 +637,7 @@ func TestPropose_ClassE_HumanApprovedPermissionDiffAndCap(t *testing.T) {
 	// Widen the reviewer by REMOVING its allowedTools block: a role with
 	// no allowedTools is UNRESTRICTED, which a text diff would never show.
 	f.assistant.script = []*chat.ChatResponse{
-		toolResp("m", `PLAN: ["swarms/s1.md"]`, call("c1", "file_edit", map[string]any{"path": "swarms/s1.md", "old_string": "  - name: reviewer\n    model: glm-5.2:cloud\n    runtime:\n      image: \"ghcr.io/grinco/vornik-agent:latest\"\n    permissions:\n      allowedTools:\n        - file_read\n", "new_string": "  - name: reviewer\n    model: glm-5.2:cloud\n    runtime:\n      image: \"ghcr.io/grinco/vornik-agent:latest\"\n"})),
+		toolResp("m", `PLAN: ["swarms/s1.md"]`, call("c1", "file_edit", map[string]any{"path": "swarms/s1.md", "old_string": "  - name: reviewer\n    model: glm-5.2:cloud\n    runtime:\n      image: \"ghcr.io/easeit-cz/vornik-agent:latest\"\n    permissions:\n      allowedTools:\n        - file_read\n", "new_string": "  - name: reviewer\n    model: glm-5.2:cloud\n    runtime:\n      image: \"ghcr.io/easeit-cz/vornik-agent:latest\"\n"})),
 		textResp("m", "widened"),
 	}
 	f.scriptJudge("pass", "allowedTools:")

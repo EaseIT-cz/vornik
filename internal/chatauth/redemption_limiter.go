@@ -50,6 +50,13 @@ func NewRedemptionLimiter() *RedemptionLimiter {
 	}
 }
 
+// NewRedemptionLimiterWith builds a limiter with an explicit budget, for a
+// surface whose bound differs from the per-speaker default (the approver
+// pairing page's global cap, agent-administered Vornik design §9.2).
+func NewRedemptionLimiterWith(limit int, window time.Duration) *RedemptionLimiter {
+	return &RedemptionLimiter{attempts: map[string][]time.Time{}, limit: limit, window: window, now: time.Now}
+}
+
 // Allow records an attempt and reports whether it may proceed.
 //
 // It counts the attempt BEFORE the outcome is known, deliberately. A limiter

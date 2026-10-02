@@ -65,7 +65,7 @@ type reportProblemArgs struct {
 // reportProblem builds an anonymised report and hands back the review link.
 //
 // IT DELIBERATELY DOES NOT SUBMIT. The report goes to a PUBLIC repository
-// (grinco/vornik), and anonymisation is a two-tier best effort over free text
+// (EaseIT-cz/vornik), and anonymisation is a two-tier best effort over free text
 // and diagnostics — it cannot prove the user's own words carry no customer
 // name, hostname or credential. So the last step stays with a human: the tool
 // returns a prefilled issue URL, the person reads the body GitHub shows them,

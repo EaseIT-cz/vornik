@@ -401,3 +401,27 @@ func guardRepoRootForService(t *testing.T) string {
 		dir = parent
 	}
 }
+
+// Issue #57 (2026-09): the completion notice linked
+// /ui/projects/<p>/tasks/<id>, a path the UI does not serve. The project router
+// read "<p>/tasks/<id>" as a project ID and answered "project not found". The
+// task page is /ui/tasks/<id>, as the steering alert has used since ede5102be.
+func TestChatCompletionNotifier_LinksTheTaskPageTheUIServes(t *testing.T) {
+	ch := &captureChannel{name: "slack"}
+	n := notifierFor(ch, map[string]*persistence.ChatAuditEntry{
+		"turn-1": {ID: "turn-1", ChatID: "slack:T123/C_general#main", ProjectID: "p"},
+	})
+
+	n.NotifyTaskCompleted(context.Background(), turnTask("task_42", "turn-1"), true, "")
+
+	sent := ch.snapshot()
+	if len(sent) != 1 {
+		t.Fatalf("messages = %d, want 1", len(sent))
+	}
+	if want := n.baseURL + "/ui/tasks/task_42|"; !strings.Contains(sent[0].Text, want) {
+		t.Errorf("the link is not the task page %q:\n%s", want, sent[0].Text)
+	}
+	if strings.Contains(sent[0].Text, "/ui/projects/") {
+		t.Errorf("the link still uses the unserved project-scoped path:\n%s", sent[0].Text)
+	}
+}

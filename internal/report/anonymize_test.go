@@ -225,7 +225,7 @@ func TestEditionTagAndTitle(t *testing.T) {
 
 func TestIssueURL_Basic(t *testing.T) {
 	u := IssueURL("Install failure: podman", "body **markdown** here")
-	if !strings.HasPrefix(u, "https://github.com/grinco/vornik/issues/new?") {
+	if !strings.HasPrefix(u, "https://github.com/EaseIT-cz/vornik/issues/new?") {
 		t.Fatalf("wrong repo/base: %s", u)
 	}
 	parsed, err := url.Parse(u)

@@ -36,6 +36,32 @@ type CapabilitiesResponse struct {
 	AllowedProjects  []ProjectSummary  `json:"allowedProjects"`
 	AllowedWorkflows []WorkflowSummary `json:"allowedWorkflows"`
 	ServerTime       time.Time         `json:"serverTime"`
+	// Host is shown to an admin-class caller only: the facts vornikctl
+	// agent connect checks before it connects a shell-capable harness
+	// (agent-administered Vornik design §3; plan P6 amendment F1).
+	Host *DaemonHostFacts `json:"host,omitempty"`
+}
+
+// DaemonHostFacts is the daemon's OS context. StoreKeyPath is a path, never
+// the key: connect tries to open it for reading as the user the harness runs
+// as, which is the readability check of plan P6 amendment F2.
+type DaemonHostFacts struct {
+	DaemonUID           int    `json:"daemon_uid"`
+	DaemonContainerized bool   `json:"daemon_containerized"`
+	StoreKeyPath        string `json:"store_key_path"`
+}
+
+// DaemonHost is what the service container knows about the daemon's host.
+type DaemonHost struct {
+	UID           int
+	Containerized bool
+	StoreKeyPath  string
+}
+
+// WithDaemonHost wires the host facts the capabilities response shows an
+// admin-class caller.
+func WithDaemonHost(h DaemonHost) ServerOption {
+	return func(srv *Server) { srv.daemonHost = &h }
 }
 
 // GetCapabilities handles GET /api/v1/capabilities. Read-only,
@@ -74,6 +100,9 @@ func (s *Server) GetCapabilities(w http.ResponseWriter, r *http.Request) {
 		Transports: []string{"http", "sse"},
 		Features:   s.featureFlags(),
 		ServerTime: time.Now().UTC(),
+	}
+	if s.daemonHost != nil && s.isAdminClassRequest(r) {
+		resp.Host = &DaemonHostFacts{DaemonUID: s.daemonHost.UID, DaemonContainerized: s.daemonHost.Containerized, StoreKeyPath: s.daemonHost.StoreKeyPath}
 	}
 
 	if s.projectRegistry != nil {
@@ -150,6 +179,10 @@ func (s *Server) featureFlags() map[string]bool {
 		// Broker write-actions design §7a: delegate accepts notify and the
 		// companion pusher runs (the store is wired only where it does).
 		"companion-push": s.companionPushConfigs != nil,
+		// Agent-administered Vornik (design §6; plan P6.4): an agent admin
+		// key is offered the admin verbs. vornikctl agent connect refuses
+		// early when this is false.
+		"companion-admin": s.agentAdmin != nil && s.agentAdminEnabled != nil && s.agentAdminEnabled(),
 	}
 	return flags
 }

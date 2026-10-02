@@ -14,7 +14,7 @@ func TestObserveAgentImageID_UsesContainerInspectionAndRejectsTags(t *testing.T)
 	const realID = "a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d7e8f90"
 	rt := &MockRuntime{inspectByID: map[string]*runtime.Container{
 		"immutable": {ID: "immutable", Image: "sha256:" + realID},
-		"tag":       {ID: "tag", Image: "ghcr.io/grinco/vornik-agent:latest"},
+		"tag":       {ID: "tag", Image: "ghcr.io/easeit-cz/vornik-agent:latest"},
 	}}
 	e := &Executor{runtime: rt}
 	if got := e.observeAgentImageID(context.Background(), "immutable"); got != "sha256:"+realID {
@@ -50,7 +50,7 @@ func TestObserveAgentImageID_AcceptsBarePodmanImageID(t *testing.T) {
 	rt := &MockRuntime{inspectByID: map[string]*runtime.Container{
 		"bare":     {ID: "bare", Image: bare},
 		"prefixed": {ID: "prefixed", Image: "sha256:" + bare},
-		"tagref":   {ID: "tagref", Image: "ghcr.io/grinco/vornik-agent:bench"},
+		"tagref":   {ID: "tagref", Image: "ghcr.io/easeit-cz/vornik-agent:bench"},
 		"short":    {ID: "short", Image: "abc123"},
 	}}
 	e := &Executor{runtime: rt}

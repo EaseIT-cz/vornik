@@ -807,6 +807,8 @@ type Server struct {
 	// (broker write-actions design §5.3); nil hides them. brokerActionKick
 	// hands an approved action to the daemon's action worker.
 	brokerActionRepo persistence.BrokerActionRepository
+	// agents backs /ui/admin/agents (agent-administered Vornik plan P6.5).
+	agents           AgentsSource
 	brokerActionKick func(actionID string)
 	// brokerActionChanged tells the push outbox a decision was recorded.
 	brokerActionChanged func()

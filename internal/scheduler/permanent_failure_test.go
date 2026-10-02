@@ -10,7 +10,7 @@ import (
 // REGRESSION — headmatch, 2026-09-01.
 //
 // Two tasks each burned their full three-attempt budget in under five seconds
-// against grinco/headmatch#999999, a PR that does not exist:
+// against EaseIT-cz/headmatch#999999, a PR that does not exist:
 //
 //	task_20260902002352_a0777354f61fbb62  3/3  22:23:52 → 22:23:57
 //	task_20260902002420_7119194d58b9596c  3/3  22:24:21 → 22:24:26
@@ -24,7 +24,7 @@ import (
 
 // incidentError is the verbatim last_error from the first failed task.
 const incidentError = `Change-request review failed. (last step: fetch_diff, reason: system step ` +
-	`forge.fetch_diff failed: forge.fetch_diff: fetch diff for grinco/headmatch#999999: ` +
+	`forge.fetch_diff failed: forge.fetch_diff: fetch diff for EaseIT-cz/headmatch#999999: ` +
 	`forge/github: fetch diff HTTP 404: {"message":"Not Found","status":"404"})`
 
 func TestPermanentForgeFailure_DoesNotSpendAnAttempt(t *testing.T) {

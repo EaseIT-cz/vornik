@@ -197,6 +197,16 @@ between a deterministic gate and one that fires on noise.
 | `2026.9.4-207-g61634a063` | 120 | all 6 | 0.9851 ±0.0000 | 0.9854 ±0.0000 | 0.9958 ±0.0000 | n=3 | `ed7ea84021e0` |
 | `2026.9.6-117-gee40525c8` (2026.9.7) | 120 | all 6 | 0.9851 ±0.0000 | 0.9854 ±0.0000 | 0.9958 ±0.0000 | n=3 | `4a95cccf5f7a` |
 | `2026.9.8-52-g86d3af802` (2026.10.1) | 120 | all 6 | 0.9851 ±0.0000 | 0.9854 ±0.0000 | 0.9958 ±0.0000 | n=3 | `0c4971cc78ae` |
+| `2026.10.1-55-gc800c23be` (2026.10.2) | 120 | all 6 | 0.9851 ±0.0000 | 0.9854 ±0.0000 | 0.9958 ±0.0000 | n=3 | `dcfeaf709dc5` |
+
+**The seventh row is 2026.10.2's release candidate** (the tagged commit
+differs from it only in tests and documentation), measured on 2026-10-02 on
+the memory-benchmark deployment, same embedder, reranker off, cold corpus.
+Every metric is identical to 2026.10.1 to four decimal places across three
+deterministic runs; the key is new (`dcfeaf709dc5`) because `daemon_revision`
+moved. The cycle did not change the retrieval or ingest path (it added agent
+administration, update-path fixes and release packaging), so this row is the
+no-regression check, not a measurement of a change.
 
 **The sixth row is 2026.10.1's release build**, measured on 2026-10-01 on the
 memory-benchmark deployment, same embedder, reranker off, cold corpus. Every

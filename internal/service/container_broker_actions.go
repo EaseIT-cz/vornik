@@ -5,7 +5,10 @@ import (
 	"errors"
 	"net/netip"
 	"strings"
+	"time"
 
+	"vornik.io/vornik/internal/agentadmin"
+	"vornik.io/vornik/internal/agentns"
 	"vornik.io/vornik/internal/brokeractions"
 	"vornik.io/vornik/internal/companionpush"
 	"vornik.io/vornik/internal/persistence"
@@ -40,8 +43,9 @@ func (c *Container) brokerActionWorkerConfig() brokeractions.Config {
 	metrics := c.brokerActionMetrics
 	redact, unscannedReason := c.brokerActionRedactor()
 	return brokeractions.Config{
-		Repo:   c.repos.BrokerActions,
-		Caller: c.mcpManager,
+		Repo: c.repos.BrokerActions,
+		// Agent API writes go to the project's agent API client (P4.8).
+		Caller: actionCaller{c: c, mcp: c.mcpManager},
 		WritesOn: func() bool {
 			mode, err := c.Config.Broker.WritesMode()
 			return err == nil && mode == "on"
@@ -54,7 +58,10 @@ func (c *Container) brokerActionWorkerConfig() brokeractions.Config {
 			if p == nil {
 				return errors.New("project is no longer loaded")
 			}
-			return registry.BrokerWriteToolDeclared(p, tool)
+			if err := registry.BrokerWriteToolDeclared(p, tool); err != nil {
+				return err
+			}
+			return c.agentWriteApproved(projectID, tool)
 		},
 		Timeout: timeout,
 		Redact:  redact,
@@ -105,9 +112,17 @@ func (c *Container) brokerActionRedactor() (func([]byte) []byte, string) {
 // NewContainer (initTelegram) and executor work only starts in Run, so the
 // write happens before any read (review-20260930-8b18 F3). It sends in the
 // background so the executor never waits on Telegram. No bot: nothing.
-func (c *Container) notifyBrokerActionsPending(_ context.Context, projectID, taskID string, n int) {
+func (c *Container) notifyBrokerActionsPending(ctx context.Context, projectID, taskID string, n int) {
 	// Promotion is a transition the push outbox sends (design §7a).
 	c.companionPusher.Kick()
+	// An agent project's actions are approved on the approver device, one
+	// request per action (agent-administered Vornik plan P4.8).
+	if _, agent := agentns.FromID(projectID); agent {
+		if svc := c.agentAdmin(); svc != nil {
+			svc.fileActionApprovals(ctx, projectID, taskID)
+		}
+		return
+	}
 	bot := c.TelegramBot
 	if bot == nil {
 		return
@@ -158,4 +173,24 @@ func (c *Container) newCompanionPusher() *companionpush.Pusher {
 // companion-push and accepts notify exactly when the pusher will run.
 func (c *Container) companionPushWired() bool {
 	return c.repos != nil && c.repos.CompanionPushOutbox != nil && c.repos.A2APushConfigs != nil
+}
+
+// agentWriteApproved refuses an agent project's broker write unless the tool
+// is in its integration's device-approved write set (agent-administered
+// Vornik design §7.3; review 20261002-a048 F1): the project file declaring
+// broker_write is not trusted on its own. Operator projects pass.
+func (c *Container) agentWriteApproved(projectID, tool string) error {
+	if _, agent := agentns.FromID(projectID); !agent {
+		return nil
+	}
+	var grants persistence.AgentGrantRepository
+	if c.repos != nil {
+		grants = c.repos.AgentGrants
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if reason := agentadmin.ToolApprovalRefusal(ctx, grants, projectID, tool, true); reason != "" {
+		return errors.New(reason)
+	}
+	return nil
 }

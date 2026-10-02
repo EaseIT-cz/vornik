@@ -55,7 +55,7 @@ func TestIngestInputArtifacts_EnqueuesByID(t *testing.T) {
 		Payload: ingestInputPayload(t,
 			[]string{"in_a", "in_b"},
 			[]string{"/store/in_a/CHANGELOG.md", "/store/in_b/notes.md"},
-			"github.com/grinco/vornik"),
+			"github.com/EaseIT-cz/vornik"),
 	}
 	exec := &persistence.Execution{ID: "x", WorkflowID: "companion-rag-ingest"}
 
@@ -66,7 +66,7 @@ func TestIngestInputArtifacts_EnqueuesByID(t *testing.T) {
 	assert.Equal(t, "in_a", q.items[0].SourceArtifactID)
 	assert.Equal(t, "in_b", q.items[1].SourceArtifactID)
 	require.NotNil(t, q.items[0].RepoScope)
-	assert.Equal(t, "github.com/grinco/vornik", *q.items[0].RepoScope)
+	assert.Equal(t, "github.com/EaseIT-cz/vornik", *q.items[0].RepoScope)
 	assert.Equal(t, "rag-ingester", q.items[0].ProducerRole, "step-less workflow defaults producer role")
 }
 

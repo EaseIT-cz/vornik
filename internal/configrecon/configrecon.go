@@ -122,7 +122,10 @@ func agentImageQualify() Normalizer {
 		Justification: "a bare short-name agent image cannot be pulled non-interactively " +
 			"(podman short-name resolution); localhost/ qualification is never operator " +
 			"intent — incident 2026-07-23, re-broke repo 3× " +
-			"(https://docs.vornik.io).",
+			"(https://docs.vornik.io). " +
+			"It also maps the legacy ghcr.io/grinco/vornik-agent name to the canonical " +
+			"one: the image moved with every tag at the same digest, so the old name is " +
+			"never a choice an operator makes (2026-10-02-easeit-org-migration-design.md §5.2).",
 		Risk:      MirrorSafe,
 		AppliesTo: isSwarmFile,
 		Normalize: normalizeSwarmImage,

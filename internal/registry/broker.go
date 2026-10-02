@@ -12,6 +12,9 @@ import (
 	"time"
 
 	"github.com/santhosh-tekuri/jsonschema/v5"
+
+	"vornik.io/vornik/internal/agentns"
+	"vornik.io/vornik/internal/cronexpr"
 )
 
 // Broker workflows — https://docs.vornik.io
@@ -76,6 +79,32 @@ type WorkflowBroker struct {
 	// never by an agent. See https://docs.vornik.io
 	// 2026-09-29-broker-write-actions-and-push-design.md §4.
 	Proposes []BrokerProposal `yaml:"proposes,omitempty" json:"proposes,omitempty"`
+	// Schedule runs the workflow unattended, for agent workflows only
+	// (agent-administered Vornik design §17). nil: on request only.
+	Schedule *BrokerSchedule `yaml:"schedule,omitempty" json:"schedule,omitempty"`
+}
+
+// BrokerSchedule is when a broker workflow runs by itself, and with what.
+type BrokerSchedule struct {
+	// Cron is a 5-field POSIX expression, evaluated in Timezone.
+	Cron string `yaml:"cron" json:"cron"`
+	// Timezone is an IANA zone name; empty means UTC.
+	Timezone string `yaml:"timezone,omitempty" json:"timezone,omitempty"`
+	// Inputs are the fixed inputs of every scheduled run, valid against the
+	// workflow's input_schema.
+	Inputs map[string]any `yaml:"inputs" json:"inputs"`
+}
+
+// BrokerScheduleMinGap is the hourly floor of design §17.1: it bounds
+// unattended spend independently of the budget.
+const BrokerScheduleMinGap = time.Hour
+
+// Location is the schedule's zone; an empty Timezone is UTC.
+func (s *BrokerSchedule) Location() (*time.Location, error) {
+	if strings.TrimSpace(s.Timezone) == "" {
+		return time.UTC, nil
+	}
+	return time.LoadLocation(s.Timezone)
 }
 
 // BrokerProposal is one kind of write a broker workflow may propose.
@@ -143,6 +172,41 @@ func (p BrokerProposal) ServerTool() (server, tool string, ok bool) {
 	return server, tool, true
 }
 
+// APITool splits an API write proposal "api:<name>:<METHOD>:<path>"
+// (agent-administered Vornik plan P4.8): one write method of one project API
+// at one fixed path. The path is part of what the person approves with the
+// workflow; an action's arguments are the request body only.
+func (p BrokerProposal) APITool() (api, method, apiPath string, ok bool) {
+	rest, found := strings.CutPrefix(p.Tool, "api:")
+	if !found {
+		return "", "", "", false
+	}
+	parts := strings.SplitN(rest, ":", 3)
+	if len(parts) != 3 {
+		return "", "", "", false
+	}
+	api, method, apiPath = parts[0], parts[1], parts[2]
+	if !apiNameRe.MatchString(api) || !apiMethods[method] || APIReadMethods[method] || !validAPIPath(apiPath) {
+		return "", "", "", false
+	}
+	return api, method, apiPath, true
+}
+
+var apiPathRe = regexp.MustCompile(`^/[A-Za-z0-9._~/-]{0,199}$`)
+
+// validAPIPath accepts a plain absolute path with no dot segments.
+func validAPIPath(p string) bool {
+	if !apiPathRe.MatchString(p) || strings.Contains(p, "//") {
+		return false
+	}
+	for _, seg := range strings.Split(p, "/") {
+		if seg == "." || seg == ".." {
+			return false
+		}
+	}
+	return true
+}
+
 func isBareJSONName(name string) bool {
 	return name == path.Base(name) && !strings.ContainsAny(name, `/\`) && strings.HasSuffix(name, ".json") && len(name) > len(".json")
 }
@@ -201,10 +265,63 @@ func (b *WorkflowBroker) Validate() error {
 	if w.budget > BrokerUntrustedBudget {
 		return fmt.Errorf("broker.input_schema: x-untrusted budget is %d characters (maxLength × every enclosing maxItems, summed); the limit is %d", w.budget, BrokerUntrustedBudget)
 	}
-	if _, err := CompileBrokerSchema("input_schema", b.InputSchema); err != nil {
+	compiled, err := CompileBrokerSchema("input_schema", b.InputSchema)
+	if err != nil {
 		return fmt.Errorf("broker.input_schema: %w", err)
 	}
+	return b.validateSchedule(compiled)
+}
+
+// validateSchedule checks design §17.1: the cron, the zone, the hourly floor,
+// and the fixed inputs against the input schema. A refusal names the field
+// and the rule, never a value: the inputs may come from an agent.
+func (b *WorkflowBroker) validateSchedule(inputSchema *jsonschema.Schema) error {
+	sc := b.Schedule
+	if sc == nil {
+		return nil
+	}
+	expr := strings.TrimSpace(sc.Cron)
+	if expr == "" {
+		return fmt.Errorf("broker.schedule.cron is required")
+	}
+	if _, err := cronexpr.Parser.Parse(expr); err != nil || strings.HasPrefix(expr, "@") {
+		return fmt.Errorf("broker.schedule.cron must be a 5-field cron expression (minute hour day-of-month month day-of-week)")
+	}
+	loc, err := sc.Location()
+	if err != nil {
+		return fmt.Errorf("broker.schedule.timezone is not a known IANA timezone")
+	}
+	gap, err := cronexpr.MinGap(expr, loc, 50)
+	if err != nil {
+		return fmt.Errorf("broker.schedule.cron must be a 5-field cron expression (minute hour day-of-month month day-of-week)")
+	}
+	if gap < BrokerScheduleMinGap {
+		return fmt.Errorf("broker.schedule.cron: a schedule may run at most hourly")
+	}
+	doc, err := jsonDocument(sc.Inputs)
+	if err != nil {
+		return fmt.Errorf("broker.schedule.inputs must be an object")
+	}
+	if err := inputSchema.Validate(doc); err != nil {
+		return fmt.Errorf("broker.schedule.inputs: %s", DescribeSchemaFailure(err))
+	}
 	return nil
+}
+
+// jsonDocument turns a YAML-decoded value into what the schema validator
+// expects: JSON types, numbers as json.Number.
+func jsonDocument(v map[string]any) (any, error) {
+	if v == nil {
+		v = map[string]any{}
+	}
+	raw, err := json.Marshal(v)
+	if err != nil {
+		return nil, err
+	}
+	dec := json.NewDecoder(bytes.NewReader(raw))
+	dec.UseNumber()
+	var out any
+	return out, dec.Decode(&out)
 }
 
 func (b *WorkflowBroker) validateEgress() error {
@@ -262,8 +379,10 @@ func (b *WorkflowBroker) validateProposes() error {
 			return fmt.Errorf("%s: duplicate action %q", at, p.Action)
 		}
 		seenAction[p.Action] = true
-		if _, _, ok := p.ServerTool(); !ok {
-			return fmt.Errorf("%s.tool must name one MCP tool exactly, as mcp__<server>__<tool>", at)
+		_, _, isMCP := p.ServerTool()
+		_, _, _, isAPI := p.APITool()
+		if !isMCP && !isAPI {
+			return fmt.Errorf("%s.tool must name one MCP tool exactly, as mcp__<server>__<tool>, or one API write, as api:<name>:<METHOD>", at)
 		}
 		out := strings.TrimSpace(p.Output)
 		if out == strings.TrimSpace(b.Egress.Output) {
@@ -504,6 +623,21 @@ var brokerSafeBuiltins = map[string]bool{
 	"tool_result_read": true,
 }
 
+// BrokerSafeBuiltins lists brokerSafeBuiltins, sorted. It is the §7.3
+// no-egress built-in allowlist of the agent admin verbs (agent-administered
+// Vornik design), so the broker rule and the agent rule are one list.
+func BrokerSafeBuiltins() []string {
+	out := make([]string, 0, len(brokerSafeBuiltins))
+	for k := range brokerSafeBuiltins {
+		out = append(out, k)
+	}
+	sort.Strings(out)
+	return out
+}
+
+// IsBrokerSafeBuiltin reports whether name is on the broker-safe list.
+func IsBrokerSafeBuiltin(name string) bool { return brokerSafeBuiltins[name] }
+
 // CheckBrokerRunnable reports why wf may not run as a broker workflow in
 // project p with swarm s, or nil. Every "cannot prove it" case refuses: an
 // unknown role, a role with no allowedTools (unrestricted in this codebase), a
@@ -544,7 +678,7 @@ func CheckBrokerRunnable(p *Project, wf *Workflow, s *Swarm) error {
 			return fmt.Errorf("workflow %q role %q has no allowedTools, which means unrestricted; a broker role must list its tools", wf.ID, roleName)
 		}
 		for _, tool := range role.Permissions.AllowedTools {
-			if err := checkBrokerTool(roleName, tool, servers); err != nil {
+			if err := checkBrokerTool(p, roleName, tool, servers); err != nil {
 				return fmt.Errorf("workflow %q: %w", wf.ID, err)
 			}
 		}
@@ -559,10 +693,20 @@ func CheckBrokerRunnable(p *Project, wf *Workflow, s *Swarm) error {
 	return nil
 }
 
-func checkBrokerTool(role, tool string, servers map[string]*MCPServerConfig) error {
+func checkBrokerTool(p *Project, role, tool string, servers map[string]*MCPServerConfig) error {
 	tool = strings.TrimSpace(tool)
 	if brokerSafeBuiltins[tool] {
 		return nil
+	}
+	if tool == agentQueryAPITool {
+		// A reader of the project's own APIs (agent-administered Vornik plan
+		// P4.5): the agent API client admits GET and HEAD only, and writes
+		// are proposals. An operator broker project would reach Kong's
+		// unrestricted query_api, so it stays refused.
+		if _, agent := agentns.FromID(p.ID); agent && len(p.APIs) > 0 {
+			return nil
+		}
+		return fmt.Errorf("role %q holds %q, which a broker role may hold only in an agent project that declares apis", role, tool)
 	}
 	rest, ok := strings.CutPrefix(tool, "mcp__")
 	if !ok {
@@ -626,6 +770,9 @@ func BrokerWriteToolDeclared(p *Project, tool string) error {
 	if p == nil {
 		return errors.New("project unknown")
 	}
+	if api, method, _, isAPI := (BrokerProposal{Tool: tool}).APITool(); isAPI {
+		return apiWriteDeclared(p, api, method)
+	}
 	serverName, toolName, ok := BrokerProposal{Tool: tool}.ServerTool()
 	if !ok {
 		return fmt.Errorf("tool %q is not mcp__<server>__<tool>", tool)
@@ -661,4 +808,27 @@ func (p BrokerProposal) UntrustedArgPaths() []string {
 	_ = w.walk("", p.ArgsSchema, 1)
 	sort.Strings(w.untrusted)
 	return w.untrusted
+}
+
+// agentQueryAPITool is the task agent's REST tool.
+const agentQueryAPITool = "query_api"
+
+// apiWriteDeclared reports why project p does not declare method as a write
+// of its API api, or nil.
+func apiWriteDeclared(p *Project, api, method string) error {
+	for _, a := range p.APIs {
+		if a.Name != api {
+			continue
+		}
+		if !a.Writes {
+			return fmt.Errorf("API %q declares no writes", api)
+		}
+		for _, m := range a.Methods {
+			if m == method {
+				return nil
+			}
+		}
+		return fmt.Errorf("API %q does not list the method %s", api, method)
+	}
+	return fmt.Errorf("the project declares no API %q", api)
 }

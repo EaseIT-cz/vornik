@@ -10,10 +10,10 @@ import (
 // every default-configuration install sends its lifecycle events. It has no
 // business naming a host the project does not control.
 //
-// grinco/vornik#8 proposed exactly that, replacing the constant with an AWS
+// EaseIT-cz/vornik#8 proposed exactly that, replacing the constant with an AWS
 // Lambda Function URL while leaving telemetry enabled by default and
 // ProductionEmissionEnabled true. The Lambda turned out to be the project's own
-// collector (grinco/vornik-infra `lambda/telemetry/`), so the intent was
+// collector (the private infrastructure repository's `lambda/telemetry/`), so the intent was
 // benign — but nothing in the build would have objected either way, and a
 // third-party host reached by default is the one change in this file that
 // cannot be walked back once a release ships.

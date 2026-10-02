@@ -135,7 +135,7 @@ func TestMainPackages_FindsEveryEntryPoint(t *testing.T) {
 	// makes the EE/CE union fall out without an export-then-analyse dance (§5.1).
 	//
 	// CE has no ./cmd/vornik-enterprise — the export strips it — so requiring it
-	// unconditionally made this test impossible to pass on grinco/vornik, where it
+	// unconditionally made this test impossible to pass on EaseIT-cz/vornik, where it
 	// was the sole red job (build-test) on every push. Edition is decided by the
 	// MODULE PATH rather than by probing for the directory: the export rewrites
 	// vornik.io/vornik → vornik.io/vornik, so this still fails loudly

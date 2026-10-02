@@ -1,0 +1,121 @@
+{{define "admin_agents.html"}}
+<!DOCTYPE html>
+<html lang="en">
+{{template "pageHead" .}}
+<body class="bg-dark-900 text-gray-100 min-h-screen flex flex-col">
+    {{template "nav" .}}
+
+    <main id="main" tabindex="-1" class="flex-1 max-w-7xl mx-auto w-full py-6 px-4 sm:px-6 lg:px-8 shell-offset">
+        <div class="space-y-5">
+            <div class="flex items-center gap-3">
+                <h1 class="text-xl font-semibold text-gray-100">{{if .Page}}Assistant {{.Page.Row.Namespace}}{{else}}Assistants{{end}}</h1>
+                {{if .Page}}
+                <a href="/ui/admin/agents" class="text-xs text-brand-400 hover:text-brand-300 ml-auto">← Assistants</a>
+                {{else}}
+                <a href="/ui/admin/" class="text-xs text-brand-400 hover:text-brand-300 ml-auto">← Admin</a>
+                {{end}}
+            </div>
+
+            <p class="text-xs text-gray-500 max-w-3xl">
+                Assistants connected with <code class="font-mono text-gray-400">vornikctl agent connect</code> set up their own projects, workflows and connections in their namespace. Everything that widens what they can reach was approved on a paired phone. Credentials are listed by name and status only; their values are never shown, here or to the assistant.
+            </p>
+
+            {{if .Error}}
+            <div class="bg-rose-900/30 border border-rose-700/40 text-rose-600 dark:text-rose-200 text-xs px-3 py-2 rounded-md">{{.Error}}</div>
+            {{end}}
+
+            {{if not .Available}}
+            <div class="glass rounded-xl border border-dark-700 p-10 text-center text-gray-500 text-sm">
+                Agent administration is not wired on this deployment.
+            </div>
+            {{else if .Page}}
+            {{with .Page}}
+            <section class="glass rounded-xl border border-dark-700 p-4 space-y-2 text-sm">
+                <div class="flex flex-wrap gap-x-6 gap-y-1 text-gray-300">
+                    <span>Assistant: <span class="font-mono">{{.Row.ClientKind}}</span></span>
+                    <span>Key: {{if eq .Row.KeyStatus "active"}}<span class="font-mono">{{.Row.KeyPrefix}}…</span>{{else}}none (disconnected){{end}}</span>
+                    <span>Last used: {{if .Row.LastUsed}}{{.Row.LastUsed}}{{else}}never{{end}}</span>
+                    <span>Monthly budgets: ${{printf "%.2f" .BudgetUSD}} of ${{printf "%.2f" .CeilingUSD}} allowed without approval</span>
+                </div>
+                <div class="text-xs text-gray-400">
+                    <div class="mb-1">{{if eq .Row.Class "mcp_only"}}This assistant reaches Vornik only through its MCP connection:{{else}}This assistant can run shell commands as its user:{{end}}</div>
+                    <ul class="list-disc list-inside space-y-0.5">{{range .Claims}}<li>{{.}}</li>{{end}}</ul>
+                </div>
+            </section>
+
+            {{if .Pending}}
+            <section class="glass rounded-xl border border-amber-700/40 p-4 text-sm">
+                <h2 class="text-sm font-semibold text-gray-200 mb-2">Waiting for approval on a phone</h2>
+                <ul class="space-y-1">{{range .Pending}}<li>{{.Sentence}} <span class="text-xs text-gray-500">{{.When}}</span></li>{{end}}</ul>
+            </section>
+            {{end}}
+
+            {{range .Projects}}
+            <section class="glass rounded-xl border border-dark-700 p-4 text-sm space-y-3">
+                <div class="flex flex-wrap items-baseline gap-3">
+                    <h2 class="font-mono text-gray-100">{{.ID}}</h2>
+                    <span class="text-gray-400">{{.Purpose}}</span>
+                    <span class="text-xs text-gray-500 ml-auto">${{printf "%.2f" .BudgetUSD}} a month</span>
+                </div>
+                <div class="grid gap-3 sm:grid-cols-3">
+                    <div>
+                        <h3 class="text-xs uppercase tracking-wider text-gray-500 mb-1">Workflows</h3>
+                        {{if .Workflows}}<ul class="space-y-0.5">{{range .Workflows}}<li><span class="font-mono">{{.Name}}</span> <span class="text-xs text-gray-500">{{.Status}}</span>{{if .Detail}}<div class="text-xs text-gray-500">{{.Detail}}</div>{{end}}</li>{{end}}</ul>{{else}}<p class="text-xs text-gray-500">none</p>{{end}}
+                    </div>
+                    <div>
+                        <h3 class="text-xs uppercase tracking-wider text-gray-500 mb-1">Connections</h3>
+                        {{if .Integrations}}<ul class="space-y-0.5">{{range .Integrations}}<li><span class="font-mono">{{.Name}}</span> <span class="text-xs text-gray-500">{{.Status}}</span>{{if .Detail}}<div class="text-xs text-gray-500 break-all">{{.Detail}}</div>{{end}}</li>{{end}}</ul>{{else}}<p class="text-xs text-gray-500">none</p>{{end}}
+                    </div>
+                    <div>
+                        <h3 class="text-xs uppercase tracking-wider text-gray-500 mb-1">Credentials</h3>
+                        {{if .Credentials}}<ul class="space-y-0.5">{{range .Credentials}}<li><span class="font-mono">{{.Name}}</span> <span class="text-xs text-gray-500">{{.Status}}</span></li>{{end}}</ul>{{else}}<p class="text-xs text-gray-500">none</p>{{end}}
+                    </div>
+                </div>
+            </section>
+            {{end}}
+
+            {{if .Failed}}
+            <section class="glass rounded-xl border border-rose-700/40 p-4 text-sm">
+                <h2 class="text-sm font-semibold text-gray-200 mb-2">Failed</h2>
+                <ul class="space-y-1">{{range .Failed}}<li>{{.Sentence}} <span class="text-xs text-gray-500">{{.When}}</span></li>{{end}}</ul>
+            </section>
+            {{end}}
+            {{if .Expired}}
+            <section class="glass rounded-xl border border-dark-700 p-4 text-sm">
+                <h2 class="text-sm font-semibold text-gray-200 mb-2">Expired without an answer</h2>
+                <ul class="space-y-1">{{range .Expired}}<li>{{.Sentence}} <span class="text-xs text-gray-500">{{.When}}</span></li>{{end}}</ul>
+            </section>
+            {{end}}
+            {{end}}
+            {{else if not .Rows}}
+            {{if not .Error}}
+            <div class="glass rounded-xl border border-dark-700 p-10 text-center text-gray-500 text-sm">
+                No assistant is connected. Pair a phone with <code class="font-mono">vornikctl pair-device</code>, then run <code class="font-mono">vornikctl agent connect hermes</code> (or claude-desktop, claude-code, codex).
+            </div>
+            {{end}}
+            {{else}}
+            <div class="glass rounded-xl border border-dark-700 overflow-x-auto">
+                <table class="min-w-full text-sm">
+                    <thead class="text-xs uppercase tracking-wider text-gray-500">
+                        <tr><th class="text-left px-4 py-2">Namespace</th><th class="text-left px-4 py-2">Assistant</th><th class="text-left px-4 py-2">Key</th><th class="text-left px-4 py-2">Last used</th><th class="text-right px-4 py-2">Projects</th><th class="text-right px-4 py-2">Waiting</th></tr>
+                    </thead>
+                    <tbody>
+                        {{range .Rows}}
+                        <tr class="border-t border-dark-700">
+                            <td class="px-4 py-2"><a class="font-mono text-brand-400 hover:text-brand-300" href="/ui/admin/agents/{{.Namespace}}">{{.Namespace}}</a></td>
+                            <td class="px-4 py-2 font-mono">{{.ClientKind}}</td>
+                            <td class="px-4 py-2">{{if eq .KeyStatus "active"}}<span class="font-mono">{{.KeyPrefix}}…</span>{{else}}<span class="text-gray-500">disconnected</span>{{end}}</td>
+                            <td class="px-4 py-2">{{if .LastUsed}}{{.LastUsed}}{{else}}<span class="text-gray-500">never</span>{{end}}</td>
+                            <td class="px-4 py-2 text-right">{{.Projects}}</td>
+                            <td class="px-4 py-2 text-right">{{.Pending}}</td>
+                        </tr>
+                        {{end}}
+                    </tbody>
+                </table>
+            </div>
+            {{end}}
+        </div>
+    </main>
+</body>
+</html>
+{{end}}

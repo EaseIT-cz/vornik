@@ -1,0 +1,398 @@
+package sqlite
+
+import (
+	"context"
+	"database/sql"
+	"errors"
+	"fmt"
+	"time"
+
+	"vornik.io/vornik/internal/persistence"
+)
+
+// ApproverDeviceRepository implements persistence.ApproverDeviceRepository
+// over SQLite. It mirrors the Postgres implementation;
+// repotest.RunApproverDeviceSuite keeps the two honest.
+type ApproverDeviceRepository struct {
+	db *sql.DB
+	// afterCount runs inside RedeemPairing once the device count is read;
+	// a test seam that makes the first-device race deterministic.
+	afterCount func()
+}
+
+// NewApproverDeviceRepository wires the repository.
+func NewApproverDeviceRepository(db *sql.DB) *ApproverDeviceRepository {
+	return &ApproverDeviceRepository{db: db}
+}
+
+var _ persistence.ApproverDeviceRepository = (*ApproverDeviceRepository)(nil)
+
+// SetRedeemHookForTest installs a function RedeemPairing calls right after it
+// reads the device count. Production code never sets it.
+func (r *ApproverDeviceRepository) SetRedeemHookForTest(fn func()) { r.afterCount = fn }
+
+// CreatePairing implements persistence.ApproverDeviceRepository.
+func (r *ApproverDeviceRepository) CreatePairing(ctx context.Context, p persistence.ApproverPairingRow) error {
+	_, err := r.db.ExecContext(ctx, `
+		INSERT INTO approver_pairings (code_hash, label, created_at, expires_at)
+		VALUES (?, ?, ?, ?)`, p.CodeHash, p.Label, sqliteTime(p.CreatedAt), sqliteTime(p.ExpiresAt))
+	return err
+}
+
+// GetPairing implements persistence.ApproverDeviceRepository.
+func (r *ApproverDeviceRepository) GetPairing(ctx context.Context, codeHash string, now time.Time) (*persistence.ApproverPairingRow, error) {
+	var (
+		p                persistence.ApproverPairingRow
+		created, expires sqlTime
+	)
+	err := r.db.QueryRowContext(ctx, `
+		SELECT code_hash, label, created_at, expires_at FROM approver_pairings
+		WHERE code_hash = ? AND redeemed_at IS NULL AND expires_at > ?`, codeHash, sqliteTime(now)).
+		Scan(&p.CodeHash, &p.Label, &created, &expires)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, persistence.ErrNotFound
+	}
+	if err != nil {
+		return nil, err
+	}
+	p.CreatedAt, p.ExpiresAt = created.Time, expires.Time
+	return &p, nil
+}
+
+// RedeemPairing implements persistence.ApproverDeviceRepository.
+//
+// Two things serialise it, and either alone suffices: the daemon's DSN begins
+// read-write transactions IMMEDIATE (_txlock=immediate, sqlite.go), and the
+// transaction's first statement is the UPDATE that consumes the code, which
+// takes SQLite's single writer lock before the device count is read. A
+// second redeemer therefore waits (busy_timeout) for the first to commit and
+// counts the committed device. Keep the write first: it holds even on a
+// handle opened without the DSN parameter (verified 2026-10-02 with the
+// suite's deterministic race).
+func (r *ApproverDeviceRepository) RedeemPairing(ctx context.Context, codeHash, claimHash string, d persistence.ApproverDeviceRow, req persistence.AgentApprovalRequestRow, now time.Time) (bool, error) {
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return false, err
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	res, err := tx.ExecContext(ctx, `
+		UPDATE approver_pairings SET redeemed_at = ?
+		WHERE code_hash = ? AND redeemed_at IS NULL AND expires_at > ?`,
+		sqliteTime(now), codeHash, sqliteTime(now))
+	if err != nil {
+		return false, err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return false, persistence.ErrNotFound
+	}
+	var active int
+	if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM approver_devices WHERE revoked_at IS NULL`).Scan(&active); err != nil {
+		return false, err
+	}
+	if r.afterCount != nil {
+		r.afterCount()
+	}
+	first := active == 0
+	if first {
+		if err := insertApproverDevice(ctx, tx, d); err != nil {
+			return false, err
+		}
+		if _, err := tx.ExecContext(ctx, `UPDATE approver_pairings SET device_id = ? WHERE code_hash = ?`, d.ID, codeHash); err != nil {
+			return false, err
+		}
+	} else {
+		if err := insertApprovalRequest(ctx, tx, req); err != nil {
+			return false, err
+		}
+		if _, err := tx.ExecContext(ctx, `UPDATE approver_pairings SET claim_hash = ?, request_id = ? WHERE code_hash = ?`,
+			claimHash, req.ID, codeHash); err != nil {
+			return false, err
+		}
+	}
+	return first, tx.Commit()
+}
+
+type execer interface {
+	ExecContext(ctx context.Context, query string, args ...interface{}) (sql.Result, error)
+}
+
+func insertApproverDevice(ctx context.Context, x execer, d persistence.ApproverDeviceRow) error {
+	_, err := x.ExecContext(ctx, `
+		INSERT INTO approver_devices (id, label, token_hash, paired_at, paired_by, last_used_at)
+		VALUES (?, ?, ?, ?, ?, ?)`,
+		d.ID, d.Label, d.TokenHash, sqliteTime(d.PairedAt), d.PairedBy, sqliteTime(d.LastUsedAt))
+	return err
+}
+
+func insertApprovalRequest(ctx context.Context, x execer, q persistence.AgentApprovalRequestRow) error {
+	_, err := x.ExecContext(ctx, `
+		INSERT INTO agent_approval_requests (id, namespace, kind, sentence, rendered, rendered_sha256, status, created_at, expires_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		q.ID, q.Namespace, q.Kind, q.Sentence, string(q.Rendered), q.RenderedSHA256, q.Status,
+		sqliteTime(q.CreatedAt), sqliteTime(q.ExpiresAt))
+	return err
+}
+
+// GetPairingByClaim implements persistence.ApproverDeviceRepository.
+func (r *ApproverDeviceRepository) GetPairingByClaim(ctx context.Context, claimHash string) (*persistence.ApproverPairingRow, error) {
+	var (
+		p                  persistence.ApproverPairingRow
+		created, expires   sqlTime
+		redeemed           sqlNullTime
+		claim, req, device sql.NullString
+	)
+	err := r.db.QueryRowContext(ctx, `
+		SELECT code_hash, label, created_at, expires_at, redeemed_at, claim_hash, request_id, device_id
+		FROM approver_pairings WHERE claim_hash = ?`, claimHash).
+		Scan(&p.CodeHash, &p.Label, &created, &expires, &redeemed, &claim, &req, &device)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, persistence.ErrNotFound
+	}
+	if err != nil {
+		return nil, err
+	}
+	p.CreatedAt, p.ExpiresAt = created.Time, expires.Time
+	if redeemed.Valid {
+		t := redeemed.Time
+		p.RedeemedAt = &t
+	}
+	p.ClaimHash, p.RequestID, p.DeviceID = claim.String, req.String, device.String
+	return &p, nil
+}
+
+// CompletePairing implements persistence.ApproverDeviceRepository. The
+// device_id IS NULL predicate makes it run once even under concurrent polls.
+func (r *ApproverDeviceRepository) CompletePairing(ctx context.Context, claimHash string, d persistence.ApproverDeviceRow) error {
+	tx, err := r.db.BeginTx(ctx, nil) // the guarded UPDATE is the first statement, as in RedeemPairing
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+	res, err := tx.ExecContext(ctx, `UPDATE approver_pairings SET device_id = ? WHERE claim_hash = ? AND device_id IS NULL`, d.ID, claimHash)
+	if err != nil {
+		return err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return persistence.ErrNotFound
+	}
+	if err := insertApproverDevice(ctx, tx, d); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+const approverDeviceCols = `id, label, token_hash, paired_at, paired_by, last_used_at, revoked_at`
+
+func scanApproverDevice(s interface{ Scan(...interface{}) error }) (persistence.ApproverDeviceRow, error) {
+	var (
+		d            persistence.ApproverDeviceRow
+		paired, used sqlTime
+		revoked      sqlNullTime
+	)
+	if err := s.Scan(&d.ID, &d.Label, &d.TokenHash, &paired, &d.PairedBy, &used, &revoked); err != nil {
+		return d, err
+	}
+	d.PairedAt, d.LastUsedAt = paired.Time, used.Time
+	if revoked.Valid {
+		t := revoked.Time
+		d.RevokedAt = &t
+	}
+	return d, nil
+}
+
+// GetDeviceByTokenHash implements persistence.ApproverDeviceRepository.
+func (r *ApproverDeviceRepository) GetDeviceByTokenHash(ctx context.Context, tokenHash string) (*persistence.ApproverDeviceRow, error) {
+	d, err := scanApproverDevice(r.db.QueryRowContext(ctx, `SELECT `+approverDeviceCols+` FROM approver_devices WHERE token_hash = ?`, tokenHash))
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, persistence.ErrNotFound
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &d, nil
+}
+
+// ListDevices implements persistence.ApproverDeviceRepository.
+func (r *ApproverDeviceRepository) ListDevices(ctx context.Context) ([]persistence.ApproverDeviceRow, error) {
+	rows, err := r.db.QueryContext(ctx, `SELECT `+approverDeviceCols+` FROM approver_devices ORDER BY paired_at, id`)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+	var out []persistence.ApproverDeviceRow
+	for rows.Next() {
+		d, err := scanApproverDevice(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, d)
+	}
+	return out, rows.Err()
+}
+
+// CountActiveDevices implements persistence.ApproverDeviceRepository.
+func (r *ApproverDeviceRepository) CountActiveDevices(ctx context.Context) (int, error) {
+	var n int
+	err := r.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM approver_devices WHERE revoked_at IS NULL`).Scan(&n)
+	return n, err
+}
+
+// RotateToken implements persistence.ApproverDeviceRepository.
+func (r *ApproverDeviceRepository) RotateToken(ctx context.Context, id, oldHash, newHash string, now time.Time) error {
+	res, err := r.db.ExecContext(ctx, `
+		UPDATE approver_devices SET token_hash = ?, last_used_at = ?
+		WHERE id = ? AND token_hash = ? AND revoked_at IS NULL`, newHash, sqliteTime(now), id, oldHash)
+	if err != nil {
+		return err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return persistence.ErrNotFound
+	}
+	return nil
+}
+
+// TouchDevice implements persistence.ApproverDeviceRepository.
+func (r *ApproverDeviceRepository) TouchDevice(ctx context.Context, id string, now time.Time) error {
+	_, err := r.db.ExecContext(ctx, `UPDATE approver_devices SET last_used_at = ? WHERE id = ?`, sqliteTime(now), id)
+	return err
+}
+
+// RevokeDevice implements persistence.ApproverDeviceRepository.
+func (r *ApproverDeviceRepository) RevokeDevice(ctx context.Context, id string, now time.Time) error {
+	_, err := r.db.ExecContext(ctx, `UPDATE approver_devices SET revoked_at = ? WHERE id = ? AND revoked_at IS NULL`, sqliteTime(now), id)
+	return err
+}
+
+// CreateRequest implements persistence.ApproverDeviceRepository.
+func (r *ApproverDeviceRepository) CreateRequest(ctx context.Context, q persistence.AgentApprovalRequestRow) error {
+	return insertApprovalRequest(ctx, r.db, q)
+}
+
+const approvalRequestCols = `id, namespace, kind, sentence, rendered, rendered_sha256, status, created_at, expires_at, decided_at, decided_by_device, applied_at, apply_attempts, apply_error`
+
+func scanApprovalRequest(s interface{ Scan(...interface{}) error }) (persistence.AgentApprovalRequestRow, error) {
+	var (
+		q                persistence.AgentApprovalRequestRow
+		rendered         string
+		created, expires sqlTime
+		decided, applied sqlNullTime
+		by, applyErr     sql.NullString
+	)
+	if err := s.Scan(&q.ID, &q.Namespace, &q.Kind, &q.Sentence, &rendered, &q.RenderedSHA256, &q.Status,
+		&created, &expires, &decided, &by, &applied, &q.ApplyAttempts, &applyErr); err != nil {
+		return q, err
+	}
+	q.Rendered = []byte(rendered)
+	q.CreatedAt, q.ExpiresAt, q.DecidedByDevice, q.ApplyError = created.Time, expires.Time, by.String, applyErr.String
+	if decided.Valid {
+		t := decided.Time
+		q.DecidedAt = &t
+	}
+	if applied.Valid {
+		t := applied.Time
+		q.AppliedAt = &t
+	}
+	return q, nil
+}
+
+// GetRequest implements persistence.ApproverDeviceRepository.
+func (r *ApproverDeviceRepository) GetRequest(ctx context.Context, id string) (*persistence.AgentApprovalRequestRow, error) {
+	q, err := scanApprovalRequest(r.db.QueryRowContext(ctx, `SELECT `+approvalRequestCols+` FROM agent_approval_requests WHERE id = ?`, id))
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, persistence.ErrNotFound
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &q, nil
+}
+
+func (r *ApproverDeviceRepository) listRequests(ctx context.Context, where string, args ...interface{}) ([]persistence.AgentApprovalRequestRow, error) {
+	rows, err := r.db.QueryContext(ctx, `SELECT `+approvalRequestCols+` FROM agent_approval_requests WHERE `+where, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+	var out []persistence.AgentApprovalRequestRow
+	for rows.Next() {
+		q, err := scanApprovalRequest(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, q)
+	}
+	return out, rows.Err()
+}
+
+// ListPending implements persistence.ApproverDeviceRepository.
+func (r *ApproverDeviceRepository) ListPending(ctx context.Context, now time.Time) ([]persistence.AgentApprovalRequestRow, error) {
+	return r.listRequests(ctx, `status = 'pending' AND expires_at > ? ORDER BY created_at DESC, id DESC`, sqliteTime(now))
+}
+
+// Decide implements persistence.ApproverDeviceRepository.
+func (r *ApproverDeviceRepository) Decide(ctx context.Context, id, shownSHA256, deviceID string, approve bool, now time.Time) error {
+	status := persistence.ApprovalRejected
+	if approve {
+		status = persistence.ApprovalApproved
+	}
+	res, err := r.db.ExecContext(ctx, `
+		UPDATE agent_approval_requests SET status = ?, decided_at = ?, decided_by_device = ?
+		WHERE id = ? AND status = 'pending' AND rendered_sha256 = ? AND expires_at > ?`,
+		status, sqliteTime(now), deviceID, id, shownSHA256, sqliteTime(now))
+	if err != nil {
+		return err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return fmt.Errorf("%w: %s", persistence.ErrApprovalNoTransition, id)
+	}
+	return nil
+}
+
+// ClaimApply implements persistence.ApproverDeviceRepository.
+func (r *ApproverDeviceRepository) ClaimApply(ctx context.Context, id, holder string, until, now time.Time) (bool, error) {
+	res, err := r.db.ExecContext(ctx, `
+		UPDATE agent_approval_requests
+		SET apply_holder = ?, apply_lease_until = ?, apply_attempts = apply_attempts + 1
+		WHERE id = ? AND status = 'approved' AND applied_at IS NULL
+		  AND (apply_lease_until IS NULL OR apply_lease_until <= ? OR apply_holder = ?)`,
+		holder, sqliteTime(until), id, sqliteTime(now), holder)
+	if err != nil {
+		return false, err
+	}
+	n, err := res.RowsAffected()
+	return n == 1, err
+}
+
+// MarkApplied implements persistence.ApproverDeviceRepository.
+func (r *ApproverDeviceRepository) MarkApplied(ctx context.Context, id string, now time.Time) error {
+	_, err := r.db.ExecContext(ctx, `UPDATE agent_approval_requests SET applied_at = ?, apply_holder = NULL, apply_lease_until = NULL WHERE id = ? AND applied_at IS NULL`, sqliteTime(now), id)
+	return err
+}
+
+// MarkApplyFailed implements persistence.ApproverDeviceRepository.
+func (r *ApproverDeviceRepository) MarkApplyFailed(ctx context.Context, id, reason string, now time.Time) error {
+	_, err := r.db.ExecContext(ctx, `UPDATE agent_approval_requests SET applied_at = ?, apply_error = ?, apply_holder = NULL, apply_lease_until = NULL WHERE id = ? AND applied_at IS NULL`,
+		sqliteTime(now), reason, id)
+	return err
+}
+
+// ListApprovedUnapplied implements persistence.ApproverDeviceRepository.
+func (r *ApproverDeviceRepository) ListApprovedUnapplied(ctx context.Context) ([]persistence.AgentApprovalRequestRow, error) {
+	return r.listRequests(ctx, `status = 'approved' AND applied_at IS NULL ORDER BY decided_at, id`)
+}
+
+// ListRecentByNamespace implements persistence.ApproverDeviceRepository.
+func (r *ApproverDeviceRepository) ListRecentByNamespace(ctx context.Context, namespace string, since time.Time) ([]persistence.AgentApprovalRequestRow, error) {
+	return r.listRequests(ctx, `namespace = ? AND created_at >= ? ORDER BY created_at DESC, id DESC`, namespace, sqliteTime(since))
+}
+
+// ExpirePending implements persistence.ApproverDeviceRepository.
+func (r *ApproverDeviceRepository) ExpirePending(ctx context.Context, now time.Time) (int, error) {
+	res, err := r.db.ExecContext(ctx, `UPDATE agent_approval_requests SET status = 'expired' WHERE status = 'pending' AND expires_at <= ?`, sqliteTime(now))
+	if err != nil {
+		return 0, err
+	}
+	n, err := res.RowsAffected()
+	return int(n), err
+}

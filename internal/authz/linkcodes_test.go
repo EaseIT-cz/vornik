@@ -809,3 +809,21 @@ func TestRedeemLinkCode_RefusesLiteralHtmlTagText(t *testing.T) {
 		t.Errorf("the clean code no longer redeems after a tag-text attempt: %v", err)
 	}
 }
+
+// Agent-administered Vornik design §9.2: pairing codes come from the same
+// generator and normalisation as link codes, but unmarked, so a chat channel
+// never mistakes one for an account link code.
+func TestOneTimeCode_UnmarkedSameNormalisation(t *testing.T) {
+	code, err := NewOneTimeCode()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(code) != linkCodeLength || LooksLikeLinkCode(code) {
+		t.Fatalf("code %q: want %d unmarked characters", code, linkCodeLength)
+	}
+	for _, typed := range []string{strings.ToLower(code), " " + code[:4] + "-" + code[4:] + " ", "`" + code + "`"} {
+		if HashOneTimeCode(typed) != HashOneTimeCode(code) {
+			t.Errorf("%q does not normalise to %q", typed, code)
+		}
+	}
+}

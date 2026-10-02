@@ -219,6 +219,9 @@ var ProjectDeferredPaths = []string{
 	// ranges to outbound webhooks; YAML-only like the other network
 	// allowlists, so widening reach is a deliberate config edit.
 	"companion_push.allowed_cidrs",
+	// Per-project REST providers (agent-administered Vornik §8.3) — written by
+	// the agent admin verbs and approved on a device; agent projects only.
+	"apis",
 	// MCP server wiring — complex nested blocks.
 	"mcp.servers",
 	"mcp.toolRateLimits",

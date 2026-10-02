@@ -1,0 +1,29 @@
+{{define "request.html"}}{{template "head" (page "Review" 0)}}
+<nav><a href="/ui/approve/">Approvals</a><a href="/ui/approve/devices">Devices</a></nav>
+<h1>Review</h1>
+{{with .Notice}}<p class="err">{{.}}</p>{{end}}
+<div class="card"><p>{{.Req.Sentence}}</p>
+<details><summary class="mut">Exactly what will change</summary><pre>{{.Pretty}}</pre></details></div>
+{{if and .Pending .Connect}}
+<form method="post" action="/ui/approve/{{.Req.ID}}/connect">
+<input type="hidden" name="rendered_sha256" value="{{.Req.RenderedSHA256}}">
+<p class="mut">You will sign in on that service's own page. Your assistant never sees it.</p>
+<button class="ok" type="submit">Connect</button>
+</form>
+<form method="post" action="/ui/approve/{{.Req.ID}}">
+<input type="hidden" name="rendered_sha256" value="{{.Req.RenderedSHA256}}">
+<button class="no" type="submit" name="decision" value="reject">Reject</button>
+</form>
+{{else if .Pending}}
+<form method="post" action="/ui/approve/{{.Req.ID}}">
+<input type="hidden" name="rendered_sha256" value="{{.Req.RenderedSHA256}}">
+{{if .TakesValue}}<label for="value">Value</label>
+<input id="value" type="password" name="value" autocomplete="off" autocapitalize="off" spellcheck="false" maxlength="16384">
+<p class="mut">Only Vornik stores it, encrypted. Your assistant never sees it.</p>
+<button class="ok" type="submit" name="decision" value="approve">Save and approve</button>{{else}}
+<button class="ok" type="submit" name="decision" value="approve">Approve</button>{{end}}
+<button class="no" type="submit" name="decision" value="reject">Reject</button>
+</form>
+{{else if .Expired}}<div class="card"><p class="mut">This request expired. Your assistant has to ask again.</p></div>
+{{else}}<div class="card"><p class="mut">Already decided: {{.Req.Status}}{{with .Req.DecidedAt}} at {{whenp .}}{{end}}.</p></div>{{end}}
+{{template "foot"}}{{end}}

@@ -38,7 +38,7 @@ func TestRunCompanionGrant_RepoScope_ForwardedAsDefaultRepoScope(t *testing.T) {
 	srv, captured := captureGrantRequest(t, `{
 		"id":"k1","projectId":"alpha","clientKind":"codex",
 		"secret":"sk-vornik-alpha.xxx","keyPrefix":"sk-vornik-al",
-		"defaultRepoScope":"github.com/grinco/vornik",
+		"defaultRepoScope":"github.com/EaseIT-cz/vornik",
 		"createdAt":"2026-06-28T10:00:00Z"
 	}`)
 	defer srv.Close()
@@ -48,7 +48,7 @@ func TestRunCompanionGrant_RepoScope_ForwardedAsDefaultRepoScope(t *testing.T) {
 
 	companionGrantProject = "alpha"
 	companionGrantClient = "codex"
-	companionGrantRepoScope = "  github.com/grinco/vornik  " // also exercises trimming
+	companionGrantRepoScope = "  github.com/EaseIT-cz/vornik  " // also exercises trimming
 	companionGrantJSON = true
 
 	require.NoError(t, runCompanionGrant(nil, nil))
@@ -56,7 +56,7 @@ func TestRunCompanionGrant_RepoScope_ForwardedAsDefaultRepoScope(t *testing.T) {
 	require.NotEmpty(t, *captured)
 	var got map[string]any
 	require.NoError(t, json.Unmarshal(*captured, &got))
-	assert.Equal(t, "github.com/grinco/vornik", got["defaultRepoScope"],
+	assert.Equal(t, "github.com/EaseIT-cz/vornik", got["defaultRepoScope"],
 		"--repo-scope must forward as a trimmed defaultRepoScope field")
 }
 

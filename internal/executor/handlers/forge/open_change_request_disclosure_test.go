@@ -23,7 +23,7 @@ import (
 //
 // The surface reaches a natural person on the same terms that closed finding A —
 // the developer who reviews and un-drafts the PR, plus anyone reading the PR
-// list where the repository is public (grinco/vornik) — and it reaches them
+// list where the repository is public (EaseIT-cz/vornik) — and it reaches them
 // through the forge abstraction, outside the dispatcher's channel chokepoint.
 //
 // What made it a finding rather than a judgement call: two sinks in ONE

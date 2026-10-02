@@ -99,6 +99,11 @@ func LoadObtained(path string) (*ObtainedRecord, error) {
 		return nil, corrupt("%s: unknown version %d (this build understands %d)",
 			path, rec.Version, ObtainedVersion)
 	}
+	// Written before the EaseIT-cz move, a obtained record names the legacy agent
+	// repository; lookups use the canonical tag (migration design §5.2).
+	for i := range rec.Images {
+		rec.Images[i].Tag = CanonicalImageRef(rec.Images[i].Tag)
+	}
 	return &rec, nil
 }
 

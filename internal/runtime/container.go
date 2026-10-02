@@ -6,6 +6,7 @@ import (
 	"os"
 	"strings"
 
+	"vornik.io/vornik/internal/imageref"
 	"vornik.io/vornik/internal/projectdeps"
 )
 
@@ -325,15 +326,13 @@ func sanitizeNamePart(s string) string {
 	return result
 }
 
-// agentRegistry is the registry path a bare agent image qualifies to. It is the
-// prefix of imagemanifest.AgentImageTag; kept as a literal here because
-// internal/runtime must not import imagemanifest (which reaches host probes).
-const agentRegistry = "ghcr.io/grinco/"
-
 // QualifyAgentImage prepends the agent registry to an UNQUALIFIED vornik agent
-// image, e.g. "vornik-agent:latest" → "ghcr.io/grinco/vornik-agent:latest". Rootless
-// podman refuses to resolve a bare short-name headless, and the daemon builds
-// the agent image as ghcr.io/grinco/vornik-agent:latest — but config round-trips
+// image, e.g. "vornik-agent:latest" → "ghcr.io/easeit-cz/vornik-agent:latest",
+// and maps the legacy ghcr.io/grinco/vornik-agent name to the canonical one
+// (EaseIT-cz migration design §5.2; internal/imageref is the one mapping, a
+// leaf package because internal/runtime must not import imagemanifest).
+// Rootless podman refuses to resolve a bare short-name headless, and the
+// daemon builds the agent image under the canonical name — but config round-trips
 // (control-plane applies mirroring a swarm file drafted against a bare-image
 // tree) have repeatedly re-introduced the unqualified form. This is the single
 // fail-safe primitive that keeps a bare name from ever failing a spawn,
@@ -347,7 +346,9 @@ const agentRegistry = "ghcr.io/grinco/"
 func QualifyAgentImage(image string) string {
 	image = strings.TrimSpace(image)
 	if strings.Contains(image, "/") {
-		return image // already qualified (localhost/…, registry host, etc.)
+		// Already qualified (localhost/…, a registry host); only the legacy
+		// agent repository is rewritten.
+		return imageref.Canonical(image)
 	}
 	if image == "vornik-agent" || strings.HasPrefix(image, "vornik-agent:") || strings.HasPrefix(image, "vornik-agent@") {
 		// agentRegistry, not "localhost/": since 2026-08-28 the agent image
@@ -355,7 +356,7 @@ func QualifyAgentImage(image string) string {
 		// qualifying to localhost/ here would resolve a bare name to an image
 		// no host has any more — turning this fail-safe into the failure it
 		// exists to prevent.
-		return agentRegistry + image
+		return imageref.AgentRegistry + image
 	}
 	return image
 }

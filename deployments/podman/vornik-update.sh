@@ -19,9 +19,11 @@
 #   4b. Runs the NEW binary's config-class preflight against the DEPLOYED tree
 #       and refuses the cutover on a dead step error class (2026-09-17: a
 #       stale class flapped a daemon on Restart=on-failure).
-#   5. Stops the service, installs the new binaries, starts it. Because the
-#      unit is Type=notify, systemd only reports "ready" AFTER the DB
-#      migrations applied and health checks passed.
+#   5. Stops the service, installs the new binaries, deploys config assets the
+#      release added (scripts/config-deploy.sh: adds missing files, never
+#      changes one you have), starts it. Because the unit is Type=notify,
+#      systemd only reports "ready" AFTER the DB migrations applied and health
+#      checks passed.
 #   6. Verifies /readyz, prints the DB migration version bump, runs doctor.
 #
 # Every Vornik migration to date is additive (CREATE/ADD ... IF NOT EXISTS),
@@ -40,6 +42,10 @@
 #                                              # the old ones (see below)
 #   ./vornik-update.sh --force            # rebuild+reinstall even if the checkout already matches
 #   ./vornik-update.sh --check            # only report current vs. available version, then exit
+#
+# Do not build container images with another tool while an update runs: an
+# interrupted update removes the buildah working containers that appeared
+# during its image step, and cannot tell a concurrent build's apart.
 #
 # CONTAINER IMAGES ARE REBUILT BY DEFAULT.
 #   Agent-side product code ships INSIDE the agent image — cmd/mcp-bridge,
@@ -180,6 +186,26 @@ log "Preflight checks"
 for t in git curl systemctl podman install; do
   command -v "$t" >/dev/null 2>&1 || die "required tool not found: $t"
 done
+# skopeo resolves the published agent image's digest (design §15.3). Without
+# it the update still works, by building, so this warns rather than fails; the
+# words follow the obtain step's leave-or-build rule.
+if ! command -v skopeo >/dev/null 2>&1; then
+  warn "skopeo is not installed: the published agent image cannot be resolved, so it"
+  warn "  will be built locally if this host has none, and an existing one is left as"
+  warn "  it is. Install skopeo (e.g. apt install skopeo) to pull the published image."
+fi
+# Leftovers of an earlier interrupted build are reported, never removed here:
+# they may be another tool's build in progress (design §15.2).
+working_containers() {
+  podman ps -a --external --format '{{.Names}}' 2>/dev/null | grep -- '-working-container$' || true
+}
+LEFTOVER_WORKING="$(working_containers)"
+if [[ -n "$LEFTOVER_WORKING" ]]; then
+  warn "$(wc -l <<<"$LEFTOVER_WORKING" | tr -d ' ') leftover buildah working container(s) from an earlier interrupted build:"
+  warn "  $(tr '\n' ' ' <<<"$LEFTOVER_WORKING")"
+  warn "  They hold image layers on disk. Remove them, if no build is running, with:"
+  warn "  podman ps -a --external --format '{{.Names}}' | grep -- '-working-container\$' | xargs -r podman rm -f"
+fi
 [[ -d "$REPO_DIR/.git" ]] || die "source checkout not found at $REPO_DIR (set VORNIK_DIR, or install via the quickstart first)"
 [[ -f "$CONFIG" ]]        || die "config not found at $CONFIG"
 systemctl --user cat "$SERVICE" >/dev/null 2>&1 || die "user unit $SERVICE not found"
@@ -201,8 +227,39 @@ git -C "$REPO_DIR" rev-parse --verify "$TARGET_REF^{commit}" >/dev/null 2>&1 \
   || die "target ref '$TARGET_REF' does not resolve to a commit"
 TARGET_COMMIT="$(git -C "$REPO_DIR" rev-parse --short "$TARGET_REF^{commit}")"
 
+# What is INSTALLED, read from the binary's own version (design §15.1, issue
+# #16). The checkout is not the install: after an interrupted run, or a manual
+# `git pull`, the checkout is already at the target while the old binary runs,
+# and a rollback record taken from the checkout points at the target.
+#
+# Only the shapes this script and the quickstart stamp are mapped: a described
+# commit (…-g<hex>[-dirty]), or a calendar version / bare hex that resolves in
+# the checkout. Anything else, `dev` above all, is unknown WITHOUT a resolve
+# attempt: `dev` is also a common branch name, and resolving it would produce
+# exactly the guessed rollback target this exists to prevent.
+installed_version() {
+  [[ -x "$BIN_DIR/vornik" ]] || return 0
+  "$BIN_DIR/vornik" -version 2>/dev/null | head -1 | awk '{print $2}'
+}
+commit_of_version() {
+  local v="$1" c
+  if [[ "$v" =~ -g([0-9a-f]{7,40})(-dirty)?$ ]]; then
+    echo "${BASH_REMATCH[1]}"
+    return
+  fi
+  if [[ "$v" =~ ^20[0-9]{2}\.[0-9.]+$ || "$v" =~ ^[0-9a-f]{7,40}$ ]]; then
+    if c="$(git -C "$REPO_DIR" rev-parse --short --verify --quiet "${v}^{commit}" 2>/dev/null)" && [[ -n "$c" ]]; then
+      echo "$c"
+      return
+    fi
+  fi
+  echo unknown
+}
+INSTALLED_VERSION="$(installed_version)"
+INSTALLED_COMMIT="$(commit_of_version "${INSTALLED_VERSION:-}")"
+
 echo
-echo "  current : commit $CURRENT_COMMIT   (DB migration v${CURRENT_DBVER:-?})"
+echo "  current : installed ${INSTALLED_VERSION:-?} (commit $INSTALLED_COMMIT), checkout at $CURRENT_COMMIT   (DB migration v${CURRENT_DBVER:-?})"
 echo "  target  : $TARGET_REF (commit $TARGET_COMMIT)"
 echo
 
@@ -210,7 +267,15 @@ if [[ "$CHECK_ONLY" == 1 ]]; then
   [[ "$CURRENT_COMMIT" == "$TARGET_COMMIT" ]] && log "Checkout is already at the target commit."
   exit 0
 fi
-if [[ "$CURRENT_COMMIT" == "$TARGET_COMMIT" && "$FORCE" != 1 ]]; then
+if [[ "$INSTALLED_COMMIT" != unknown && "$INSTALLED_COMMIT" != "$CURRENT_COMMIT" ]]; then
+  warn "The installed binary ($INSTALLED_VERSION, commit $INSTALLED_COMMIT) is not what the checkout holds ($CURRENT_COMMIT)."
+fi
+# The checkout matching the target says nothing about the install (§13.2): an
+# install behind its checkout is updated without --force.
+if [[ "$CURRENT_COMMIT" == "$TARGET_COMMIT" && "$FORCE" != 1 && "$INSTALLED_COMMIT" != unknown \
+      && "$INSTALLED_COMMIT" != "$TARGET_COMMIT" ]]; then
+  log "Checkout is at the target, but the installed binary is $INSTALLED_COMMIT; updating the install."
+elif [[ "$CURRENT_COMMIT" == "$TARGET_COMMIT" && "$FORCE" != 1 ]]; then
   log "Checkout already at target commit. Nothing to do."
   warn "This compares the git checkout, not the installed binary. If you moved HEAD"
   warn "manually (e.g. 'git pull'), pass --force to rebuild + reinstall anyway."
@@ -241,7 +306,9 @@ podman exec "$PG_CONTAINER" rm -f "/tmp/$DUMP"
 [[ -f "$BIN_DIR/vornikctl" ]] && cp -a "$BIN_DIR/vornikctl" "$BK/vornikctl.prev"
 cp -a "$CONFIG" "$BK/config.yaml"
 cat > "$BK/STATE.txt" <<EOF
-pre_upgrade_commit=$CURRENT_COMMIT
+pre_upgrade_commit=$INSTALLED_COMMIT
+pre_upgrade_version=${INSTALLED_VERSION:-unknown}
+checkout_head_at_start=$CURRENT_COMMIT
 pre_upgrade_db_version=$CURRENT_DBVER
 target_ref=$TARGET_REF
 target_commit=$TARGET_COMMIT
@@ -351,9 +418,23 @@ rebuild_images() {
   log "Images: $built built locally (obtain decisions above)"
 }
 REBUILT_ROWS="$(mktemp)"
+# Working containers that exist NOW are never removed (design §15.2). This is
+# the re-exec'd copy, after the checkout, so this trap is the one that fires.
+WORKING_BEFORE="$(working_containers)"
+remove_new_working_containers() {
+  local c
+  while IFS= read -r c; do
+    [[ -n "$c" ]] || continue
+    grep -qxF -- "$c" <<<"$WORKING_BEFORE" && continue
+    podman rm -f "$c" >/dev/null 2>&1 && warn "removed build container $c left by this run"
+  done <<<"$(working_containers)"
+}
 # Re-states the private-copy cleanup: bash keeps ONE EXIT trap, so this
-# replaces the one set at the top rather than adding to it.
-trap 'rm -f "$REBUILT_ROWS"; rm -rf "${VORNIK_UPDATE_COPY_DIR:-/nonexistent}"' EXIT
+# replaces the one set at the top rather than adding to it. INT and TERM exit
+# explicitly so an interrupt (the reported trigger) runs it.
+trap 'remove_new_working_containers; rm -f "$REBUILT_ROWS"; rm -rf "${VORNIK_UPDATE_COPY_DIR:-/nonexistent}"' EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
 
 if [[ "$REBUILD_IMAGES" == 1 ]]; then
   log "Rebuilding container images that drifted from $TARGET_REF"
@@ -466,8 +547,32 @@ log "Installing new binaries into $BIN_DIR"
 install -m 0755 "$REPO_DIR/.bin/vornik"    "$BIN_DIR/vornik"
 install -m 0755 "$REPO_DIR/.bin/vornikctl" "$BIN_DIR/vornikctl"
 
+# Config assets the release added (design §15.5): new subtrees such as
+# agent-templates never reached an updated install. Preserve-existing, with the
+# service stopped so the new daemon starts on the full tree. A warning, not a
+# failure: the binaries are already swapped.
+CONFIG_ROOT="$(dirname "$CONFIG")"
+log "Deploying config assets the release added into $CONFIG_ROOT/configs (existing files are kept)"
+if ! VORNIK_DEPLOY_REVISION="$(git -C "$REPO_DIR" rev-parse HEAD)" \
+     "$REPO_DIR/scripts/config-deploy.sh" "$CONFIG_ROOT"; then
+  warn "config asset deploy reported a problem; re-run it by hand:"
+  warn "  VORNIK_DEPLOY_REVISION=\$(git -C $REPO_DIR rev-parse HEAD) $REPO_DIR/scripts/config-deploy.sh $CONFIG_ROOT"
+fi
+
 log "Starting $SERVICE (auto-applies additive migrations)"
 systemctl --user start "$SERVICE"
+
+# The rollback's checkout line names the INSTALLED commit (§15.1); with none
+# known it prints how to find it, never a guess.
+rollback_checkout() {
+  local say="$1"
+  if [[ "$INSTALLED_COMMIT" != unknown ]]; then
+    "$say" "  git -C $REPO_DIR checkout $INSTALLED_COMMIT"
+  else
+    "$say" "  # the installed commit is unknown (version ${INSTALLED_VERSION:-absent}): run"
+    "$say" "  # $BK/vornik.prev -version and check out the commit it names"
+  fi
+}
 
 # ---------------------------------------------------------------------------
 # 6. Verify
@@ -486,7 +591,7 @@ if [[ "$ready" != 1 ]]; then
   warn "  systemctl --user stop $SERVICE"
   warn "  install -m0755 $BK/vornik.prev $BIN_DIR/vornik"
   warn "  install -m0755 $BK/vornikctl.prev $BIN_DIR/vornikctl"
-  warn "  git -C $REPO_DIR checkout $CURRENT_COMMIT"
+  rollback_checkout warn
   warn "  systemctl --user start $SERVICE"
   die "readiness check failed"
 fi
@@ -503,7 +608,7 @@ echo "Rollback if needed:"
 echo "  systemctl --user stop $SERVICE"
 echo "  install -m0755 $BK/vornik.prev $BIN_DIR/vornik"
 echo "  install -m0755 $BK/vornikctl.prev $BIN_DIR/vornikctl"
-echo "  git -C $REPO_DIR checkout $CURRENT_COMMIT"
+rollback_checkout echo
 echo "  systemctl --user start $SERVICE"
 echo "  # full DB restore (only if a migration ever misbehaves):"
 echo "  #   podman exec -i $PG_CONTAINER pg_restore -U $PG_USER -d $PG_DB --clean < $BK/$DUMP"

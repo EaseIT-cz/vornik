@@ -1,0 +1,82 @@
+# Rendered by the agent admin verbs for namespace {{.Namespace}}. Do not edit
+# by hand: an edit here is refused by the next verb that touches this project
+# (the read set no longer matches) and may be refused at execution.
+projectId: {{q .ID}}
+displayName: {{q .DisplayName}}
+description: {{q .Purpose}}
+swarmId: {{q .SwarmID}}
+defaultWorkflowId: {{q .DefaultWorkflowID}}
+defaultPriority: 50
+maxConcurrentTasks: 1
+
+broker: true
+
+budget:
+  monthly_hard_usd: {{.MonthlyUSD}}
+{{- if .Servers}}
+
+mcp:
+  servers:
+{{- range .Servers}}
+    - name: {{q .Name}}
+      transport: "streamable-http"
+      url: {{q .URL}}
+{{- if .OAuth}}
+      auth:
+        mode: oauth
+{{- if .Scopes}}
+        scopes:
+{{- range .Scopes}}
+          - {{q .}}
+{{- end}}
+{{- end}}
+{{- else if .AuthRef}}
+      auth:
+        mode: static
+        value_from: {{q .AuthRef}}
+        value_prefix: "Bearer "
+{{- end}}
+{{- if .Write}}
+      broker_write: true
+{{- else}}
+      broker_read_only: true
+{{- end}}
+{{- if .Tools}}
+      allowed_tools:
+{{- range .Tools}}
+        - {{q .}}
+{{- end}}
+{{- end}}
+{{- end}}
+{{- end}}
+{{- if .APIs}}
+
+apis:
+{{- range .APIs}}
+  - name: {{q .Name}}
+    base_url: {{q .BaseURL}}
+{{- if .AuthRef}}
+    auth:
+      header: {{q .Header}}
+      value_from: {{q .AuthRef}}
+{{- if .Prefix}}
+      prefix: {{q .Prefix}}
+{{- end}}
+{{- end}}
+    methods:
+{{- range .Methods}}
+      - {{q .}}
+{{- end}}
+{{- if .Writes}}
+    writes: true
+{{- end}}
+{{- end}}
+{{- end}}
+{{- if .Secrets}}
+
+permissions:
+  secrets:
+{{- range .Secrets}}
+    - {{q .}}
+{{- end}}
+{{- end}}

@@ -44,7 +44,7 @@ func TestCompanionMCP_ReportProblem_ReturnsTheURLAndBodyWithoutSubmitting(t *tes
 	srv, keyRepo, _ := newCompanionMCPServer(t)
 	raw, _ := seedCompanionKey(t, keyRepo, "alpha", nil)
 	stub := &stubReportBuilder{
-		url:  "https://github.com/grinco/vornik/issues/new?title=x&body=y",
+		url:  "https://github.com/EaseIT-cz/vornik/issues/new?title=x&body=y",
 		body: "## Environment\nversion: 2026.7.7\n\n## Symptom\nthe daemon wedged",
 	}
 	srv.problemReports = stub
@@ -157,7 +157,7 @@ func TestCompanionToolDefs_ReportProblemIsAdvertised(t *testing.T) {
 func TestCompanionMCP_ReportProblem_RefusesAnOversizedSymptom(t *testing.T) {
 	srv, keyRepo, _ := newCompanionMCPServer(t)
 	raw, _ := seedCompanionKey(t, keyRepo, "alpha", nil)
-	stub := &stubReportBuilder{url: "https://github.com/grinco/vornik/issues/new?x=1", body: "b"}
+	stub := &stubReportBuilder{url: "https://github.com/EaseIT-cz/vornik/issues/new?x=1", body: "b"}
 	srv.problemReports = stub
 
 	req := mcpRequest(t, "tools/call", map[string]any{
@@ -178,7 +178,7 @@ func TestCompanionMCP_ReportProblem_RefusesAnOversizedSymptom(t *testing.T) {
 func TestCompanionMCP_ReportProblem_StripsControlCharacters(t *testing.T) {
 	srv, keyRepo, _ := newCompanionMCPServer(t)
 	raw, _ := seedCompanionKey(t, keyRepo, "alpha", nil)
-	stub := &stubReportBuilder{url: "https://github.com/grinco/vornik/issues/new?x=1", body: "b"}
+	stub := &stubReportBuilder{url: "https://github.com/EaseIT-cz/vornik/issues/new?x=1", body: "b"}
 	srv.problemReports = stub
 
 	// An ANSI escape plus a NUL, wrapped in legitimate prose that must survive intact
@@ -206,7 +206,7 @@ func TestCompanionMCP_ReportProblem_ReturnsAUsableURL(t *testing.T) {
 	srv, keyRepo, _ := newCompanionMCPServer(t)
 	raw, _ := seedCompanionKey(t, keyRepo, "alpha", nil)
 	srv.problemReports = &stubReportBuilder{
-		url:  "https://github.com/grinco/vornik/issues/new?title=t&body=b&labels=bug",
+		url:  "https://github.com/EaseIT-cz/vornik/issues/new?title=t&body=b&labels=bug",
 		body: "## Symptom\nthe daemon wedged",
 	}
 

@@ -108,7 +108,7 @@ func TestValidateWorkflowMarkdown_NameShape(t *testing.T) {
 		{"Demo-Skill", true},            // uppercase
 		{"-demo", true},                 // leading hyphen
 		{"demo-", true},                 // trailing hyphen
-		{"demo--skill", true},           // consecutive hyphens
+		{"x--skill", true},              // consecutive hyphens, not an agent namespace ("demo--skill" is one: design §5)
 		{"demo_skill", true},            // underscore
 		{"demo skill", true},            // whitespace
 		{strings.Repeat("a", 65), true}, // too long
@@ -543,4 +543,34 @@ func repoRootFromRegistryTest(t *testing.T) string {
 	}
 	t.Fatalf("could not locate go.mod walking up from %s", dir)
 	return ""
+}
+
+// Agent-administered Vornik design §5: every agent ID is <ns>--<slug>, and
+// an agent workflow's is <ns>--<project>--<workflow>. The name-shape rule
+// accepts exactly that, segment by segment, and still refuses a "--" that
+// is not an agent namespace (found by the agentadmin property test: every
+// agent workflow read as a doctor error and config-assist refused it).
+func TestValidateWorkflowMarkdown_AgentIDShape(t *testing.T) {
+	for name, wantOK := range map[string]bool{
+		"hermes--finance--spend": true,
+		"hermes--finance":        true,
+		"plain-name":             true,
+		"a--b":                   false, // "a" is not a valid namespace
+		"hermes--":               false,
+		"hermes---x":             false,
+		"Hermes--x":              false,
+		"hermes--x--":            false,
+	} {
+		src := strings.Replace(minimalValid, "name: demo-skill\n", "name: "+name+"\n", 1)
+		report := ValidateWorkflowMarkdown([]byte(src), name+".md")
+		got := true
+		for _, f := range report.Findings {
+			if f.Code == "name_shape" {
+				got = false
+			}
+		}
+		if got != wantOK {
+			t.Errorf("%q: shape ok = %v, want %v", name, got, wantOK)
+		}
+	}
 }

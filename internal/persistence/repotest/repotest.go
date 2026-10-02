@@ -19,6 +19,8 @@ import (
 	"fmt"
 	"math"
 	"reflect"
+	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -149,7 +151,7 @@ func RunToolAuditSuite(t *testing.T, repo persistence.ToolAuditRepository) {
 	// Migration 168: the typed outcome must survive a round trip on BOTH
 	// backends. `go test ./...` is SQLite-only, so a Postgres-side column or
 	// scan-order mistake would ship undetected — the shape of the break that
-	// took grinco/vornik CI down on 2026-07-24.
+	// took EaseIT-cz/vornik CI down on 2026-07-24.
 	//
 	// Design: https://docs.vornik.io §3.2
 	t.Run("Outcome_class_round_trips", func(t *testing.T) {
@@ -1467,6 +1469,94 @@ func RunAPIKeyRepositorySuite(t *testing.T, repo persistence.APIKeyRepository) {
 		}
 		if got, err := repo.GetByID(ctx, plain.ID); err != nil || got.DelegateDisabled {
 			t.Fatalf("default must be false: %+v, %v", got, err)
+		}
+	})
+
+	// Agent-administered Vornik design §5: the agent admin flag and namespace
+	// round-trip on every read path, and default to off/empty.
+	t.Run("AgentAdmin_round_trips_on_every_read", func(t *testing.T) {
+		hash := uniqueID("hash")
+		k := &persistence.APIKey{
+			ID: uniqueID("akey"), ProjectID: uniqueID("proj"), KeyHash: hash,
+			KeyPrefix: "sk-test", CreatedAt: time.Now().UTC(), ClientKind: "hermes",
+			AgentAdmin: true, AgentNamespace: "hermes",
+		}
+		if err := repo.Create(ctx, k); err != nil {
+			t.Fatalf("Create: %v", err)
+		}
+		byHash, err := repo.LookupActiveByHash(ctx, hash)
+		if err != nil || !byHash.AgentAdmin || byHash.AgentNamespace != "hermes" {
+			t.Fatalf("LookupActiveByHash lost the agent admin fields: %+v, %v", byHash, err)
+		}
+		byID, err := repo.GetByID(ctx, k.ID)
+		if err != nil || !byID.AgentAdmin || byID.AgentNamespace != "hermes" {
+			t.Fatalf("GetByID lost the agent admin fields: %+v, %v", byID, err)
+		}
+		list, err := repo.ListByProject(ctx, k.ProjectID)
+		if err != nil || len(list) != 1 || !list[0].AgentAdmin || list[0].AgentNamespace != "hermes" {
+			t.Fatalf("ListByProject lost the agent admin fields: %+v, %v", list, err)
+		}
+		plain := &persistence.APIKey{
+			ID: uniqueID("akey"), ProjectID: uniqueID("proj"), KeyHash: uniqueID("hash"),
+			KeyPrefix: "sk-test", CreatedAt: time.Now().UTC(),
+		}
+		if err := repo.Create(ctx, plain); err != nil {
+			t.Fatalf("Create plain: %v", err)
+		}
+		if got, err := repo.GetByID(ctx, plain.ID); err != nil || got.AgentAdmin || got.AgentNamespace != "" {
+			t.Fatalf("defaults must be off and empty: %+v, %v", got, err)
+		}
+	})
+
+	// Review 20261002-f66a F1: at most one live agent admin key per
+	// namespace, enforced by the database (migration 210), so concurrent
+	// grants cannot both win. A revoked key frees the namespace.
+	t.Run("One_live_agent_admin_key_per_namespace", func(t *testing.T) {
+		ns := "n" + strings.ToLower(strings.NewReplacer("_", "", "-", "", ".", "").Replace(uniqueTail(uniqueID("x"))))
+		mk := func() *persistence.APIKey {
+			return &persistence.APIKey{ID: uniqueID("akey"), ProjectID: ns + "--home", KeyHash: uniqueID("hash"),
+				KeyPrefix: "sk-test", CreatedAt: time.Now().UTC(), ClientKind: "hermes", AgentAdmin: true, AgentNamespace: ns}
+		}
+		var (
+			wg   sync.WaitGroup
+			mu   sync.Mutex
+			won  []string
+			dups int
+		)
+		start := make(chan struct{})
+		for i := 0; i < 4; i++ {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				k := mk()
+				<-start
+				err := repo.Create(ctx, k)
+				mu.Lock()
+				defer mu.Unlock()
+				switch {
+				case err == nil:
+					won = append(won, k.ID)
+				case errors.Is(err, persistence.ErrDuplicateKey):
+					dups++
+				default:
+					t.Errorf("Create: %v", err)
+				}
+			}()
+		}
+		close(start)
+		wg.Wait()
+		if len(won) != 1 || dups != 3 {
+			t.Fatalf("%d keys won, %d duplicates; want exactly one live agent admin key", len(won), dups)
+		}
+		plain := &persistence.APIKey{ID: uniqueID("akey"), ProjectID: ns + "--home", KeyHash: uniqueID("hash"), KeyPrefix: "sk-test", CreatedAt: time.Now().UTC()}
+		if err := repo.Create(ctx, plain); err != nil {
+			t.Fatalf("a non-admin key on the same project was refused: %v", err)
+		}
+		if err := repo.Revoke(ctx, won[0]); err != nil {
+			t.Fatal(err)
+		}
+		if err := repo.Create(ctx, mk()); err != nil {
+			t.Fatalf("a revoked key did not free the namespace: %v", err)
 		}
 	})
 

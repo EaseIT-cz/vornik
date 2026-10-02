@@ -24,7 +24,7 @@ func TestAPIKeyRepo_DefaultRepoScope(t *testing.T) {
 		KeyHash:          "hash-scoped",
 		KeyPrefix:        "sk-scoped",
 		ClientKind:       "codex",
-		DefaultRepoScope: "github.com/grinco/vornik",
+		DefaultRepoScope: "github.com/EaseIT-cz/vornik",
 		CreatedAt:        time.Now().UTC(),
 	}
 	if err := repo.Create(ctx, scoped); err != nil {
@@ -35,8 +35,8 @@ func TestAPIKeyRepo_DefaultRepoScope(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LookupActiveByHash: %v", err)
 	}
-	if got.DefaultRepoScope != "github.com/grinco/vornik" {
-		t.Errorf("DefaultRepoScope round-trip = %q, want github.com/grinco/vornik", got.DefaultRepoScope)
+	if got.DefaultRepoScope != "github.com/EaseIT-cz/vornik" {
+		t.Errorf("DefaultRepoScope round-trip = %q, want github.com/EaseIT-cz/vornik", got.DefaultRepoScope)
 	}
 
 	// A key minted without a default scope must read back as empty
@@ -69,8 +69,8 @@ func TestAPIKeyRepo_DefaultRepoScope(t *testing.T) {
 	for _, r := range rows {
 		if r.ID == "akey-scoped" {
 			foundScoped = true
-			if r.DefaultRepoScope != "github.com/grinco/vornik" {
-				t.Errorf("list-path DefaultRepoScope = %q, want github.com/grinco/vornik", r.DefaultRepoScope)
+			if r.DefaultRepoScope != "github.com/EaseIT-cz/vornik" {
+				t.Errorf("list-path DefaultRepoScope = %q, want github.com/EaseIT-cz/vornik", r.DefaultRepoScope)
 			}
 		}
 	}

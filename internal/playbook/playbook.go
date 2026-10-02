@@ -363,6 +363,21 @@ var corpus = map[string]Entry{
 			"This task did NOT exhaust its attempts — it stopped after one deliberately. Re-drive it only after the trigger is fixed; the same job would be refused again.",
 		},
 	},
+	persistence.TaskFailureClassReachNotApproved: {
+		Class:        persistence.TaskFailureClassReachNotApproved,
+		Scope:        ScopeTask,
+		HumanMessage: "This agent workflow was not run, because what it can reach has not been approved on your phone.",
+		Cause: "An agent-administered workflow runs only with the reach a person approved on an approver device: its " +
+			"egress schema, the integrations and credentials its steps use, what it proposes and its schedule. The " +
+			"workflow being run does not match the approved reach: it was never approved, its approval was withdrawn, " +
+			"or its file was changed by a route other than the agent's own admin verbs. The check runs before any " +
+			"container starts, so nothing was sent anywhere. This class SKIPS the retry budget: retrying cannot approve it.",
+		Suggestions: []string{
+			"Ask the agent to define the workflow again: a define_workflow whose reach changed files an approval request, and the phone shows it.",
+			"Open the approval page on your paired device and approve or reject the pending request; then re-run the task.",
+			"If neither you nor the agent changed the workflow, its file was edited by hand outside the admin verbs: restore the file, or ask the agent to define the workflow again.",
+		},
+	},
 	persistence.TaskFailureClassWorkspaceUnavailable: {
 		Class:        persistence.TaskFailureClassWorkspaceUnavailable,
 		Scope:        ScopeTask,

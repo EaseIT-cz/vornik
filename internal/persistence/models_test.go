@@ -262,7 +262,7 @@ func TestAPIKey_RotatedCopy_PreservesScope(t *testing.T) {
 		RateLimitRPS: &rps, RateLimitBurst: &burst, BudgetCapUSD: &budget,
 		AllowedWorkflows: []string{"companion-architectural-review"},
 		ClientKind:       "claude-code", SessionLabel: "vadim/laptop",
-		DefaultRepoScope: "github.com/grinco/vornik",
+		DefaultRepoScope: "github.com/EaseIT-cz/vornik",
 		MemoryRead:       true, MemoryWrite: true, AllowPush: true,
 	}
 	now := time.Now().UTC()
@@ -283,7 +283,7 @@ func TestAPIKey_RotatedCopy_PreservesScope(t *testing.T) {
 	assert.Equal(t, prior.ExpiresAt, fresh.ExpiresAt)
 	assert.Equal(t, "claude-code", fresh.ClientKind)
 	assert.Equal(t, "vadim/laptop", fresh.SessionLabel)
-	assert.Equal(t, "github.com/grinco/vornik", fresh.DefaultRepoScope)
+	assert.Equal(t, "github.com/EaseIT-cz/vornik", fresh.DefaultRepoScope)
 	assert.True(t, fresh.MemoryRead)
 	assert.True(t, fresh.MemoryWrite)
 	assert.True(t, fresh.AllowPush)
@@ -343,4 +343,14 @@ func TestAPIKey_RotatedCopy_CarriesEveryNonIdentityField(t *testing.T) {
 			t.Errorf("RotatedCopy drops %s", name)
 		}
 	}
+}
+
+// Agent-administered Vornik design §5: a rotated agent admin key stays the
+// same namespace's agent admin key. Dropping either field would demote it to
+// a plain companion key (the 2026-06-27 rotation incident's shape).
+func TestAPIKey_RotatedCopy_KeepsAgentAdmin(t *testing.T) {
+	prior := &APIKey{ID: "a", ProjectID: "hermes--home", ClientKind: "hermes", AgentAdmin: true, AgentNamespace: "hermes"}
+	fresh := prior.RotatedCopy("b", "h", "p", "op", time.Now())
+	assert.True(t, fresh.AgentAdmin)
+	assert.Equal(t, "hermes", fresh.AgentNamespace)
 }

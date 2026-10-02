@@ -5,7 +5,7 @@ import "testing"
 // OPERATOR REQUEST 2026-07-30: hyperlink the words, do not paste a thousand characters
 // of percent-encoded URL into the channel.
 func TestLink(t *testing.T) {
-	const url = "https://github.com/grinco/vornik/issues/new?body=%23%23%23+long"
+	const url = "https://github.com/EaseIT-cz/vornik/issues/new?body=%23%23%23+long"
 	for _, tc := range []struct {
 		channel, want string
 	}{

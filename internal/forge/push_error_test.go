@@ -17,7 +17,7 @@ func TestClassifyPushOutput(t *testing.T) {
 			name: "github app missing workflows permission",
 			output: " ! [remote rejected] 1c5018a -> backlog/task-112 (refusing to allow a GitHub App to " +
 				"create or update workflow `.github/workflows/coverage.yml` without `workflows` permission)\n" +
-				"error: failed to push some refs to 'https://github.com/grinco/headmatch'",
+				"error: failed to push some refs to 'https://github.com/EaseIT-cz/headmatch'",
 			want: PushRejectionPermission,
 		},
 		{"resource not accessible", "remote: Resource not accessible by integration", PushRejectionPermission},

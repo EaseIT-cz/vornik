@@ -289,5 +289,10 @@ func LoadReleaseRecord(path string) (*ReleaseRecord, error) {
 		return nil, corrupt("%v", err)
 	}
 
+	// Written before the EaseIT-cz move, a release record names the legacy agent
+	// repository; lookups use the canonical tag (migration design §5.2).
+	for i := range rec.Images {
+		rec.Images[i].Tag = CanonicalImageRef(rec.Images[i].Tag)
+	}
 	return &rec, nil
 }

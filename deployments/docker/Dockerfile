@@ -75,7 +75,7 @@ ARG VORNIK_REVISION=unknown
 ARG VORNIK_VERSION=dev
 LABEL org.opencontainers.image.revision="${VORNIK_REVISION}" \
       org.opencontainers.image.version="${VORNIK_VERSION}" \
-      org.opencontainers.image.source="https://github.com/grinco/vornik"
+      org.opencontainers.image.source="https://github.com/EaseIT-cz/vornik"
 
 ENV DEBIAN_FRONTEND=noninteractive \
     VORNIK_CONFIG=/etc/vornik/config.yaml \
@@ -127,7 +127,7 @@ ARG VORNIK_REVISION=unknown
 ARG VORNIK_VERSION=dev
 LABEL org.opencontainers.image.revision="${VORNIK_REVISION}" \
       org.opencontainers.image.version="${VORNIK_VERSION}" \
-      org.opencontainers.image.source="https://github.com/grinco/vornik"
+      org.opencontainers.image.source="https://github.com/EaseIT-cz/vornik"
 
 ENV DEBIAN_FRONTEND=noninteractive \
     VORNIK_CONFIG=/etc/vornik/config.yaml \

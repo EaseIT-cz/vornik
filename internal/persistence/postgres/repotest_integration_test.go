@@ -282,9 +282,9 @@ func resetSuiteTables(t *testing.T, db *DB, tables ...string) {
 // clears together.
 var identityTables = []string{"ui_sessions", "link_codes", "user_identities", "group_members", "group_projects", "groups", "users"}
 
-func newIntegrationDB(t *testing.T) *DB {
-	t.Helper()
-	cfg := Config{
+// integrationConfig is the integration database's connection config.
+func integrationConfig() Config {
+	return Config{
 		Host:            getEnvOrDefault("POSTGRES_HOST", "localhost"),
 		Port:            integrationPort(),
 		Database:        getEnvOrDefault("POSTGRES_DB", integrationDBName),
@@ -297,6 +297,11 @@ func newIntegrationDB(t *testing.T) *DB {
 		ConnMaxIdleTime: 2 * time.Minute,
 		ConnectTimeout:  10 * time.Second,
 	}
+}
+
+func newIntegrationDB(t *testing.T) *DB {
+	t.Helper()
+	cfg := integrationConfig()
 	ctx := context.Background()
 	db, err := Connect(ctx, cfg)
 	if err != nil {
@@ -976,6 +981,8 @@ func TestMCPOAuthTokenRepository_PostgresContract(t *testing.T) {
 	db := newIntegrationDB(t)
 	resetSuiteTables(t, db, "mcp_oauth_tokens")
 	repotest.RunMCPOAuthTokenSuite(t, NewMCPOAuthTokenRepository(db.DB))
+	// Plan P4.4: the agent sealing wrapper over this driver.
+	repotest.RunSealedMCPOAuthTokenSuite(t, sealedTokens(t, NewMCPOAuthTokenRepository(db.DB)), NewMCPOAuthTokenRepository(db.DB))
 }
 
 // TestExecutionToolGrantRepository_PostgresContract — per-execution tool grants
@@ -1009,6 +1016,69 @@ func TestBrokerAction_PostgresContract(t *testing.T) {
 			taskID, projectID, status); err != nil {
 			t.Fatalf("seed task: %v", err)
 		}
+	})
+}
+
+// TestAgentSecret_PostgresContract — the agent secret table on the production
+// lane (agent-administered Vornik design §8.1).
+func TestAgentSecret_PostgresContract(t *testing.T) {
+	db := newIntegrationDB(t)
+	repotest.RunAgentSecretSuite(t, NewAgentSecretRepository(db.DB))
+}
+
+// TestAgentGrant_PostgresContract — the agent approval tables on the
+// production lane (design §7).
+func TestAgentGrant_PostgresContract(t *testing.T) {
+	db := newIntegrationDB(t)
+	repotest.RunAgentGrantSuite(t, NewAgentGrantRepository(db.DB))
+}
+
+// TestApproverDevice_PostgresContract — approver devices on the production
+// lane. First-device semantics need an empty device set, which the shared
+// database cannot offer, so each subtest gets its own schema holding only
+// migration 206's tables, reached through a pool whose every connection
+// sets search_path at connect time (before any statement is prepared).
+func TestApproverDevice_PostgresContract(t *testing.T) {
+	shared := newIntegrationDB(t)
+	// The approver tables: created by 206, extended by 207, 209 and 211. Named, not
+	// "everything from 206 on": a later migration altering another table
+	// (208 alters api_keys) has nothing to alter in a fresh schema.
+	approverMigrations := map[int]bool{206: true, 207: true, 209: true, 211: true}
+	var ups []string
+	for _, m := range persistence.DefaultMigrations {
+		if approverMigrations[m.Version] {
+			ups = append(ups, m.Up)
+		}
+	}
+	if len(ups) != len(approverMigrations) {
+		t.Fatalf("approver migrations found %d of %d", len(ups), len(approverMigrations))
+	}
+	repotest.RunApproverDeviceSuite(t, NewApproverDeviceRepository(shared.DB), func(t *testing.T) persistence.ApproverDeviceRepository {
+		schema := fmt.Sprintf("ad_%d", time.Now().UnixNano())
+		ctx := context.Background()
+		if _, err := shared.ExecContext(ctx, `CREATE SCHEMA `+schema); err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _, _ = shared.ExecContext(context.Background(), `DROP SCHEMA IF EXISTS `+schema+` CASCADE`) })
+		pool, err := sql.Open("postgres", integrationConfig().DSN()+" search_path="+schema)
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = pool.Close() })
+		pool.SetMaxOpenConns(10)
+		// Review 20261002-cb1c F1: isolation rests on the driver honouring
+		// search_path at connect. Prove it, or a silent fallback to public
+		// would run every subtest against the shared, populated tables.
+		var sp string
+		if err := pool.QueryRowContext(ctx, `SELECT current_schema()`).Scan(&sp); err != nil || sp != schema {
+			t.Fatalf("fresh-schema pool resolves to schema %q (%v), want %q", sp, err, schema)
+		}
+		for _, up := range ups {
+			if _, err := pool.ExecContext(ctx, up); err != nil {
+				t.Fatalf("approver migrations in %s: %v", schema, err)
+			}
+		}
+		return NewApproverDeviceRepository(pool)
 	})
 }
 

@@ -21,7 +21,7 @@
 # (CONFIG_TUNABLE_DIRS) governs the deploy-time SELF-CHECK in config-deploy.sh,
 # not drift-check severity. (A STRICT_CONFIG_DEPLOY-driven drift-severity tier is
 # a tracked follow-up, not yet built.)
-CONFIG_DEPLOYABLE_DIRS=(swarms workflows role-library project-templates)
+CONFIG_DEPLOYABLE_DIRS=(swarms workflows role-library project-templates agent-templates)
 
 # Top-level files shipped from repo configs/ (copied singly, not per-dir).
 # retention-recommended.yaml deploys because the doctor's Art 5(1)(e) warning

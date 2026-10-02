@@ -1698,7 +1698,14 @@ func (s *Server) CallMCPTool(w http.ResponseWriter, r *http.Request) {
 	// role's allowlist here; refuse 403 when the tool isn't permitted.
 	// Roles that declare no allowedTools are unrestricted (preserves
 	// pre-B2 behavior so non-opted-in roles don't break).
-	if !s.roleAllowsMCPTool(ctx, taskID, req.Name) {
+	// Agent-namespace projects: blocking and fail-closed against the
+	// device-written approval tables (agent-administered Vornik §10.1).
+	if reason, agent := s.agentToolRefusal(ctx, projectID, taskID, req.Name); agent {
+		if reason != "" {
+			respondError(w, http.StatusForbidden, "FORBIDDEN", reason)
+			return
+		}
+	} else if !s.roleAllowsMCPTool(ctx, taskID, req.Name) {
 		respondError(w, http.StatusForbidden, "FORBIDDEN", "tool not in the calling role's allowedTools")
 		return
 	}

@@ -172,7 +172,9 @@ func (n *chatCompletionNotifier) composeText(channelName string, task *persisten
 	// Rendered as a hyperlink on words rather than pasted raw — a task URL is long and
 	// a channel full of them is unreadable (operator, 2026-07-30).
 	if n.baseURL != "" && task.ProjectID != "" {
-		url := fmt.Sprintf("%s/ui/projects/%s/tasks/%s", n.baseURL, task.ProjectID, task.ID)
+		// /ui/tasks/<id> is the task page; /ui/projects/<p>/tasks/<id> is not served
+		// (issue #57).
+		url := fmt.Sprintf("%s/ui/tasks/%s", n.baseURL, task.ID)
 		fmt.Fprintf(&sb, "%s\n", conversation.Link(channelName, url, "open the task"))
 	}
 	sb.WriteString("\n_Ask me about it and I can summarise the result._")

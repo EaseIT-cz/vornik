@@ -122,7 +122,7 @@ github_app:
   installation_id: 89012345               # TODO: your installation ID
   webhook_secret_env: "VORNIK_NEWS_FEED_GH_WEBHOOK"
   repo_allowlist:
-    - "grinco/news-feed-tracker"       # TODO: your repo
+    - "easeit-cz/news-feed-tracker"       # TODO: your repo
   task_labels:
     - "vornik-ingest"
   pr_review_labels: []                     # PR reviews not used here

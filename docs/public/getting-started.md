@@ -5,7 +5,7 @@ first task.
 
 ## Requirements
 
-- **Go** (see [`go.mod`](https://github.com/grinco/vornik/blob/main/go.mod) for the minimum version) — to build from source.
+- **Go** (see [`go.mod`](https://github.com/EaseIT-cz/vornik/blob/main/go.mod) for the minimum version) — to build from source.
 - **A container runtime** (Podman) on the host — Vornik runs each agent in its
   own isolated container.
 - **An LLM provider** reachable from the daemon — a self-hosted, open-weight model
@@ -21,7 +21,7 @@ whole thing — paste this:
 
 > Set up Vornik for me. Follow the runbook at https://agents.vornik.io
 
-[AGENTS.md](https://github.com/grinco/vornik/blob/main/AGENTS.md) is an
+[AGENTS.md](https://github.com/EaseIT-cz/vornik/blob/main/AGENTS.md) is an
 agent-executable runbook — every step is a command plus a verifiable check.
 The agent installs the stack (via the same `get.vornik.io` script as below),
 connects your LLM key, runs a hello-world task, and wires itself in with a
@@ -50,8 +50,8 @@ checksum before running it (catches transit/redirect tampering — not a
 signature), fetch both first:
 
 ```sh
-REF=<release>  # a tag from github.com/grinco/vornik/releases that ships quickstart.sh.sha256
-base="https://raw.githubusercontent.com/grinco/vornik/$REF/deployments/podman"
+REF=<release>  # a tag from github.com/EaseIT-cz/vornik/releases that ships quickstart.sh.sha256
+base="https://raw.githubusercontent.com/EaseIT-cz/vornik/$REF/deployments/podman"
 curl -fsSLO "$base/quickstart.sh" && curl -fsSLO "$base/quickstart.sh.sha256"
 sha256sum -c quickstart.sh.sha256 && VORNIK_REF="$REF" bash quickstart.sh
 ```
@@ -60,7 +60,7 @@ When it finishes, open <http://localhost:8080/ui> and log in with the API key
 the installer generated (`VORNIK_API_KEY` in `~/.config/vornik/secrets/api.env`;
 the API rejects requests without it). A first-run **setup guide** walks you through connecting an LLM endpoint and key, optional
 memory/RAG, and creating your first project. Details and tunables:
-[deployments/podman/README.md](https://github.com/grinco/vornik/tree/main/deployments/podman).
+[deployments/podman/README.md](https://github.com/EaseIT-cz/vornik/tree/main/deployments/podman).
 
 ### macOS (inside a Linux VM)
 
@@ -97,7 +97,7 @@ API — fine for a single-operator install.
 ### Build from source
 
 ```sh
-git clone https://github.com/grinco/vornik
+git clone https://github.com/EaseIT-cz/vornik
 cd vornik
 go build -o bin/vornik ./cmd/vornik
 ```

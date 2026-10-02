@@ -296,6 +296,29 @@ func (a *Accounts) OutstandingLinkCodes(ctx context.Context, userID string) ([]*
 // using crypto/rand. Rejection is unnecessary because the alphabet length
 // divides evenly into the int63 space via big.Int's uniform Int.
 func newLinkCode() (string, error) {
+	body, err := newCodeBody()
+	if err != nil {
+		return "", err
+	}
+	// Marked at ISSUANCE, which is what makes the class close rather than
+	// shrink: recognition is a property of codes minted from here on, and
+	// pre-marker codes keep their old behaviour until they expire — a window
+	// bounded by the 10-minute TTL, not by a migration (§5.2b).
+	return MarkLinkCode(body), nil
+}
+
+// NewOneTimeCode is an UNMARKED code from the link-code generator: 8
+// characters of the unambiguous alphabet, crypto/rand. Used for approver
+// pairing (agent-administered Vornik design §9.2), which must not be
+// recognised by the chat channels as an account link code.
+func NewOneTimeCode() (string, error) { return newCodeBody() }
+
+// HashOneTimeCode is the stored digest of a code from NewOneTimeCode, with
+// the same normalisation link codes get (case, spaces, dashes, pasted
+// formatting).
+func HashOneTimeCode(code string) string { return hashLinkCode(code) }
+
+func newCodeBody() (string, error) {
 	var sb strings.Builder
 	sb.Grow(linkCodeLength)
 	limit := big.NewInt(int64(len(linkCodeAlphabet)))
@@ -306,11 +329,7 @@ func newLinkCode() (string, error) {
 		}
 		sb.WriteByte(linkCodeAlphabet[n.Int64()])
 	}
-	// Marked at ISSUANCE, which is what makes the class close rather than
-	// shrink: recognition is a property of codes minted from here on, and
-	// pre-marker codes keep their old behaviour until they expire — a window
-	// bounded by the 10-minute TTL, not by a migration (§5.2b).
-	return MarkLinkCode(sb.String()), nil
+	return sb.String(), nil
 }
 
 // hashLinkCode normalises then hashes. Normalisation is why a human can type

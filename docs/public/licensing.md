@@ -2,9 +2,9 @@
 
 Plain answers to the questions companies and fork maintainers actually ask.
 This page explains; the licence texts govern. Vornik Community Edition is
-[AGPL-3.0](https://github.com/grinco/vornik/blob/main/LICENSE). The
+[AGPL-3.0](https://github.com/EaseIT-cz/vornik/blob/main/LICENSE). The
 companion plugins under `contrib/` are Apache-2.0. The full path-by-path map
-is [LICENSING.md](https://github.com/grinco/vornik/blob/main/LICENSING.md)
+is [LICENSING.md](https://github.com/EaseIT-cz/vornik/blob/main/LICENSING.md)
 at the repository root.
 
 This is not legal advice. If a decision turns on it, have counsel read the
@@ -57,7 +57,7 @@ repository. Using, forking and modifying need no agreement with anyone.
 **What may our fork be called?** Anything except Vornik. "Fooer, a fork of
 Vornik" is fine. The name and logo are trademarks and are not covered by the
 code licence; the rules are in
-[TRADEMARKS.md](https://github.com/grinco/vornik/blob/main/TRADEMARKS.md).
+[TRADEMARKS.md](https://github.com/EaseIT-cz/vornik/blob/main/TRADEMARKS.md).
 
 **Is there a licence check, a phone-home, or a kill switch we would have to
 remove?** No. Edition is compiled in; Community builds simply do not contain

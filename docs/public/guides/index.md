@@ -26,6 +26,11 @@ already have a project up and running — if you don't, start with
   agent over the A2A protocol.
 - **[Approvals & human-in-the-loop](approvals.md)** — put a person in the loop
   with approval steps, approval-gated autonomy, and mid-run checkpoints.
+- **[Let your assistant set up Vornik](assistant-setup.md)**: connect Hermes,
+  Claude or Codex so it can build and run your automations itself, with every
+  credential entered and every change approved on your phone.
+- **[Acceptance check: an assistant sets up Vornik](assistant-setup-acceptance.md)**:
+  the per-release manual check for Claude Desktop and Claude Code.
 - **[Recovering failed work](recovery.md)** — retry a task, rerun from a step,
   or apply a structured recovery action.
 - **[Cost and caching](cost-and-caching.md)** — keep model spend predictable

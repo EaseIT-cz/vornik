@@ -17,7 +17,7 @@ mangled or truncated by tool-call serialization.
 Optional leading flags, then the note body:
 
     /remember IBKR fractional shares still blocked — error 10243 even with the permission on.
-    /remember --scope github.com/grinco/vornik --class decision <body>
+    /remember --scope github.com/EaseIT-cz/vornik --class decision <body>
     /remember --ttl 3650 a durable fact that should outlive the 30-day companion_note default
 
 User's arguments: `$ARGUMENTS`

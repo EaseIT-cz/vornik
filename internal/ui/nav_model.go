@@ -158,6 +158,7 @@ func navModel() []navAreaDef {
 			{Key: "admin-skills", Label: "Skills", Href: "/ui/admin/skills", Icon: "navIconSkill"},
 			{Key: "admin-control-plane", Label: "Control plane", Href: "/ui/admin/control-plane", Icon: "navIconControlPlane"},
 			{Key: "admin-keys", Label: "Keys & access", Href: "/ui/admin/keys", Icon: "navIconKey"},
+			{Key: "admin-agents", Label: "Assistants", Href: "/ui/admin/agents", Icon: "navIconUsers"},
 		}},
 	}
 }

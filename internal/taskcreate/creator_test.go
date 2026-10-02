@@ -593,3 +593,27 @@ func TestAsError_NilAndOther(t *testing.T) {
 		t.Error("AsError(*Error) didn't echo it back")
 	}
 }
+
+// Agent-administered Vornik §7.6: a refusing reach verifier stops the
+// create before any row exists, with its own reason code. The mock task
+// repository has no expectations set, so any Create call on it fails the
+// test.
+func TestCreate_ReachVerifierRefuses(t *testing.T) {
+	reg := loadTestRegistry(t)
+	var gotProject, gotWorkflow string
+	c := New(WithTaskRepository(&mocks.MockTaskRepository{}), WithProjectRegistry(reg),
+		WithReachVerifier(func(_ context.Context, p, w string) error {
+			gotProject, gotWorkflow = p, w
+			return errors.New("not approved")
+		}))
+	_, err := c.Create(context.Background(), Params{ProjectID: "demo", TaskType: "research"})
+	ce := AsError(err)
+	if ce == nil || ce.Reason != ReasonReachNotApproved {
+		t.Fatalf("err = %v, want ReasonReachNotApproved", err)
+	}
+	// Review 20261002-a048 F8: the request names no workflow, so the check
+	// must be on the project's DEFAULT workflow, resolved before the call.
+	if gotProject != "demo" || gotWorkflow != "build" {
+		t.Fatalf("verifier saw project %q workflow %q, want demo/build (the project's default)", gotProject, gotWorkflow)
+	}
+}

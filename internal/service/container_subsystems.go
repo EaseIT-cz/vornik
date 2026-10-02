@@ -21,6 +21,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"vornik.io/vornik/internal/agentns"
 
 	"vornik.io/vornik/internal/authz"
 	"vornik.io/vornik/internal/chatauth"
@@ -176,7 +177,7 @@ func (c *Container) mcpDesiredServers() map[string][]mcp.ServerConfig {
 			// withheld with an error (2026-10-01; it used to fall through
 			// to a dial that failed with `unsupported transport ""`).
 			auth := s.Auth
-			grants := mcpauth.Grants{Allowed: p.Permissions.Secrets}
+			grants := mcpGrantsFor(p.ID, p.Permissions.Secrets)
 			// Scope the CREDENTIAL is resolved under. The project's own by
 			// default; an inherited daemon credential overrides it below.
 			authProjectID := mcpCredentialScope(p.ID, false)
@@ -254,6 +255,9 @@ func (c *Container) mcpDesiredServers() map[string][]mcp.ServerConfig {
 			if !c.applyMCPAuth(&cfg, auth, grants, authProjectID, scopeLabel) {
 				continue
 			}
+			// An agent project's server is dialled through the SSRF guard
+			// at every call, not only when its tools were listed (P4.3).
+			guardAgentServer(&cfg, p.ID)
 			servers = append(servers, cfg)
 		}
 		desired[p.ID] = servers
@@ -315,7 +319,7 @@ func (c *Container) applyMCPAuth(cfg *mcp.ServerConfig, auth mcpauth.Auth, grant
 	if auth.IsZero() {
 		return true
 	}
-	inj, err := mcpauth.Resolve(auth, cfg.Transport, mcpauth.EnvSecretSource{}, grants)
+	inj, err := mcpauth.Resolve(auth, cfg.Transport, c.secretSource(), grants)
 	switch {
 	case errors.Is(err, mcpauth.ErrOAuthNotWired):
 		// mode: oauth resolves from the token store rather than from config —
@@ -1020,7 +1024,13 @@ func (c *Container) applyMCPOAuthToken(cfg *mcp.ServerConfig, projectID, scope s
 			Msg("MCP: auth mode oauth is configured but no token store is wired — this server will connect unauthenticated")
 		return true
 	}
-	ref, ok := c.mcpServerRef(projectID, cfg.Name)
+	refName := cfg.Name
+	if _, agent := agentns.FromID(projectID); agent {
+		// A write entry signs in as its integration: one Connect, one
+		// token row under the base name (plan P4.3b).
+		refName = agentns.IntegrationOf(cfg.Name)
+	}
+	ref, ok := c.mcpServerRef(projectID, refName)
 	if !ok {
 		// Should not happen: the caller just read this server out of the same
 		// config. Register unauthenticated rather than dropping it.

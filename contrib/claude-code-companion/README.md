@@ -58,7 +58,7 @@ plugs in without any vornik-side change.
     degraded, or failing tasks, routing by symptom through the doctor,
     the failure-class playbook, and task post-mortems.
   - `report-problem` — filing an anonymized bug, crash, or install
-    failure as a prefilled `github.com/grinco/vornik` issue the user
+    failure as a prefilled `github.com/EaseIT-cz/vornik` issue the user
     reviews and submits themselves.
 
   The last four form the operator lifecycle and cross-reference each

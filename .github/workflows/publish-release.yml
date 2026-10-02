@@ -2,7 +2,7 @@
 # Injected into the public repo at export time by scripts/export-public-ce.sh.
 #
 # WHY THIS LIVES IN THE PUBLIC REPO. Creating the release needs the releases
-# API on grinco/vornik. The CE deploy key pushes refs and cannot call that API,
+# API on EaseIT-cz/vornik. The CE deploy key pushes refs and cannot call that API,
 # and minting a cross-owner PAT would reintroduce exactly what the 2026-09-06
 # deploy-key work removed. A workflow running HERE has contents: write on its
 # own repository and needs no new credential — which is the route the
@@ -34,24 +34,157 @@ on:
   push:
     tags: ['20[0-9][0-9].*']
 
-# EXPLICIT, not inherited. "A workflow here has contents: write" describes a
-# capability; with no permissions block the job takes the repository default,
-# which is a blast radius nobody chose.
+# EXPLICIT, not inherited, and per job. With no block a job inherits the
+# repository default, a blast radius nobody chose; with one workflow-level
+# `contents: write`, every job would hold it (review 20261002-4bfc M1). So
+# the workflow grants read, and each job asks for exactly what it does:
+# only `release` writes, only `binaries` mints attestations.
 permissions:
-  contents: write
+  contents: read
 
 concurrency:
   group: publish-release-${{ github.ref_name }}
   cancel-in-progress: false
 
 jobs:
-  publish-release:
-    name: Create the release from the curated public notes
-    if: github.repository == 'grinco/vornik'
+  # The tests ci.yaml runs on every push, run again on the tagged tree before
+  # anything is built from it. The binary release this workflow now makes has
+  # a larger blast radius than notes did (review 4bfc M6).
+  test:
+    name: Test the tagged tree
+    if: github.repository == 'EaseIT-cz/vornik'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          ref: ${{ github.ref }}
+          persist-credentials: false
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
+        with:
+          go-version-file: go.mod
+      - name: gofmt
+        run: |
+          unformatted="$(gofmt -l .)"
+          if [ -n "$unformatted" ]; then echo "gofmt needed:"; echo "$unformatted"; exit 1; fi
+      - run: go vet ./...
+      - run: go test ./...
+
+  # Binaries for the release (packaging design, amendment 2026-10-02). Until
+  # then every CE release shipped notes only: the build lived in a ci.yaml job
+  # triggered by v* tags, and CE releases are calendar tags, so it never ran.
+  binaries:
+    name: Build, checksum and attest the release binaries
+    needs: test
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      id-token: write       # OIDC, required by the attestation actions
+      attestations: write   # store build-provenance + SBOM attestations
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          ref: ${{ github.ref }}
+          persist-credentials: false
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
+        with:
+          go-version-file: go.mod
+      # BuildDate is the tagged commit's time, not the clock, so a re-run
+      # builds the same bytes and its attestations name the digests that were
+      # uploaded (review 4bfc M5).
+      - name: Build
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          build_date="$(git log -1 --format=%cI)"
+          mkdir -p dist
+          build() {
+            CGO_ENABLED=0 GOOS="$1" GOARCH="$2" go build -trimpath \
+              -ldflags "-s -w -X main.Version=${TAG} -X main.BuildDate=${build_date}" \
+              -o "dist/$3-$1-$2" "./cmd/$3"
+          }
+          for arch in amd64 arm64; do
+            build linux "$arch" vornik
+            build linux "$arch" vornikctl
+            # vornikctl only: a Mac runs the assistant, never the daemon
+            # (macOS design, amendment 2026-10-02).
+            build darwin "$arch" vornikctl
+          done
+          (cd dist && sha256sum vornik-* vornikctl-* > checksums.txt)
+      - name: Generate CE SBOM (CycloneDX)
+        uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610 # v0.24.0
+        with:
+          path: .
+          format: cyclonedx-json
+          output-file: dist/vornik.cdx.json
+      - name: Attest build provenance for every binary
+        uses: actions/attest-build-provenance@a2bbfa25375fe432b6a289bc6b6cd05ecd0c4c32 # v4.1.0
+        with:
+          subject-path: |
+            dist/vornik-*
+            dist/vornikctl-*
+      - name: Attest the SBOM for every binary
+        uses: actions/attest-sbom@c604332985a26aa8cf1bdc465b92731239ec6b9e # v4.1.0
+        with:
+          subject-path: |
+            dist/vornik-*
+            dist/vornikctl-*
+          sbom-path: dist/vornik.cdx.json
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: dist
+          path: dist/
+          if-no-files-found: error
+
+  # Runs the SHIPPED darwin binaries on a Mac (review 4bfc M2). macOS runners
+  # cost nothing on a public repository. macos-latest is arm64; the amd64
+  # binary runs under Rosetta where the runner has it.
+  macos-check:
+    name: Run the macOS vornikctl on a Mac
+    needs: binaries
+    runs-on: macos-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: dist
+          path: dist
+      - name: Run them
+        run: |
+          set -euo pipefail
+          for arch in arm64 amd64; do
+            bin="dist/vornikctl-darwin-$arch"
+            chmod +x "$bin"
+            # Both binaries run, or neither is attached (review 20261002-0013
+            # F3): with no Rosetta the amd64 one could not run, and an
+            # unexecuted binary is exactly what this check exists to stop.
+            if [ "$arch" = amd64 ] && ! arch -x86_64 /usr/bin/true 2>/dev/null; then
+              echo "::error::no Rosetta on this runner; darwin/amd64 could not be run, so neither darwin binary is attached"
+              exit 1
+            fi
+            "$bin" version | tee /dev/stderr | grep -q "${GITHUB_REF_NAME}"
+            "$bin" agent connect --help >/dev/null
+            echo "darwin/$arch: ran version and agent connect --help" >> "$GITHUB_STEP_SUMMARY"
+          done
+
+  release:
+    name: Create the release from the curated public notes, then attach the binaries
+    needs: [binaries, macos-check]
+    # The release itself never waits on the Mac: a failed or flaky Mac check
+    # withholds the darwin assets and says so in the notes, and nothing else.
+    if: ${{ !cancelled() && needs.binaries.result == 'success' }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    permissions:
+      contents: write
     steps:
-      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5.0.1
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           ref: ${{ github.ref }}
           persist-credentials: false
@@ -109,19 +242,67 @@ jobs:
           fi
           echo "bytes=$(wc -c < body.md)" >> "$GITHUB_OUTPUT"
 
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: dist
+          path: dist
+
+      # A withheld Mac asset is said in the release itself, not only in a run
+      # summary nobody reads (review 4bfc M2).
+      - name: Note withheld macOS binaries in the notes
+        if: ${{ needs.macos-check.result != 'success' }}
+        run: |
+          {
+            echo
+            echo "_The macOS vornikctl binaries were not attached: the macOS check did not pass for this release._"
+          } >> body.md
+
       # Idempotent: a re-run must not fail on a release that already exists,
       # and must never overwrite one. A published release is a thing people
-      # have already read.
-      - name: Create the release
+      # have already read, and an attached binary is a thing people have
+      # already verified against its checksum: nothing is replaced (no
+      # --clobber), only what is missing is uploaded.
+      - name: Create the release and attach the binaries
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ github.ref_name }}
+          MAC_OK: ${{ needs.macos-check.result == 'success' }}
         run: |
           set -euo pipefail
+          marker="were not attached: the macOS check did not pass"
           if gh release view "$TAG" >/dev/null 2>&1; then
-            echo "release $TAG already exists; leaving it" >> "$GITHUB_STEP_SUMMARY"
-            exit 0
+            # The notes are left as published, with one exception: a re-run
+            # that now attaches the macOS binaries retracts the line saying
+            # they were withheld, so the release does not contradict its own
+            # assets (review 20261002-0013 F1).
+            if [ "$MAC_OK" = true ] && gh release view "$TAG" --json body --jq .body | grep -qF "$marker"; then
+              gh release edit "$TAG" --notes-file body.md
+              echo "release $TAG: retracted the withheld-macOS line" >> "$GITHUB_STEP_SUMMARY"
+            else
+              echo "release $TAG already exists; leaving its notes" >> "$GITHUB_STEP_SUMMARY"
+            fi
+          else
+            gh release create "$TAG" --verify-tag --title "$TAG" --notes-file body.md
+            echo "Published EaseIT-cz/vornik release $TAG (${{ steps.notes.outputs.bytes }} bytes of notes)" \
+              >> "$GITHUB_STEP_SUMMARY"
           fi
-          gh release create "$TAG" --verify-tag --title "$TAG" --notes-file body.md
-          echo "Published grinco/vornik release $TAG (${{ steps.notes.outputs.bytes }} bytes of notes)" \
-            >> "$GITHUB_STEP_SUMMARY"
+          existing="$(gh release view "$TAG" --json assets --jq '.assets[].name')"
+          # Uploads only what is missing. An upload that collides with an
+          # asset attached since the snapshot is checked against the live
+          # list instead of failing the step (review 0013 F7).
+          attach() {
+            n="$(basename "$1")"
+            grep -qx "$n" <<<"$existing" && return 0
+            gh release upload "$TAG" "$1" && return 0
+            gh release view "$TAG" --json assets --jq '.assets[].name' | grep -qx "$n"
+          }
+          for f in dist/vornik-linux-* dist/vornikctl-linux-* dist/checksums.txt dist/vornik.cdx.json; do
+            attach "$f"
+          done
+          if [ "$MAC_OK" = true ]; then
+            for f in dist/vornikctl-darwin-*; do
+              attach "$f"
+            done
+          else
+            echo "macOS binaries WITHHELD: macos-check did not succeed" >> "$GITHUB_STEP_SUMMARY"
+          fi

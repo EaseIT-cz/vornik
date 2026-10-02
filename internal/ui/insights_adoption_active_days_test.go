@@ -12,7 +12,7 @@ import (
 	"vornik.io/vornik/internal/persistence/mocks"
 )
 
-// Issue grinco/vornik#14, part 2, reported 2026-09-18 and still live after the
+// Issue EaseIT-cz/vornik#14, part 2, reported 2026-09-18 and still live after the
 // row-set half was fixed by b6222b7c0.
 //
 // THE DEFECT. `ActiveDays` was written in exactly one place — a deferred
@@ -220,7 +220,7 @@ func (e *partiallyFailingDaysRepo) ActiveDaysByAPIKey(_ context.Context, _, _ ti
 // row. The template was never wrong — it faithfully rendered the 0 the
 // collector handed it — which is exactly why a template-only test could not
 // have caught this, and why the page test that shipped with part 1 of
-// grinco/vornik#14 did not: it builds AdoptionData by hand and never runs a
+// EaseIT-cz/vornik#14 did not: it builds AdoptionData by hand and never runs a
 // collector.
 //
 // So this one drives the real HTTP handler with real ledgers behind it and

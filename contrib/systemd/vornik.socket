@@ -11,7 +11,7 @@
 
 [Unit]
 Description=vornik API socket
-Documentation=https://github.com/grinco/vornik
+Documentation=https://github.com/EaseIT-cz/vornik
 
 [Socket]
 ListenStream=8080

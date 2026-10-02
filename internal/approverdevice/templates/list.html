@@ -1,0 +1,8 @@
+{{define "list.html"}}{{template "head" (page "Approvals" 0)}}
+<nav><a href="/ui/approve/">Approvals</a><a href="/ui/approve/devices">Devices</a></nav>
+<h1>Waiting for you</h1>
+{{with .Flash}}<p class="flash">Done: {{.}}.</p>{{end}}
+{{range .Pending}}<div class="card"><p>{{.Sentence}}</p><p class="mut">{{when .CreatedAt}}</p><a href="/ui/approve/{{.ID}}">Review</a></div>
+{{else}}<div class="card"><p class="mut">Nothing is waiting for a decision.</p></div>{{end}}
+<p class="mut">This device: {{.Device.Label}}</p>
+{{template "foot"}}{{end}}

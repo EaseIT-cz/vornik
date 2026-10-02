@@ -244,7 +244,7 @@ func TestCompanionGrant_PersistsAndEchoesDefaultRepoScope(t *testing.T) {
 	body := companionGrantRequest{
 		ProjectID:        "alpha",
 		ClientKind:       "codex",
-		DefaultRepoScope: "github.com/grinco/vornik",
+		DefaultRepoScope: "github.com/EaseIT-cz/vornik",
 	}
 	raw, _ := json.Marshal(body)
 
@@ -255,11 +255,11 @@ func TestCompanionGrant_PersistsAndEchoesDefaultRepoScope(t *testing.T) {
 	require.Equal(t, http.StatusCreated, rec.Code, "body=%s", rec.Body.String())
 	var resp companionGrantResponse
 	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &resp))
-	assert.Equal(t, "github.com/grinco/vornik", resp.DefaultRepoScope,
+	assert.Equal(t, "github.com/EaseIT-cz/vornik", resp.DefaultRepoScope,
 		"response must echo the default repo scope")
 
 	require.Len(t, repo.rows, 1)
-	assert.Equal(t, "github.com/grinco/vornik", repo.rows[0].DefaultRepoScope,
+	assert.Equal(t, "github.com/EaseIT-cz/vornik", repo.rows[0].DefaultRepoScope,
 		"key row must persist the default repo scope")
 }
 

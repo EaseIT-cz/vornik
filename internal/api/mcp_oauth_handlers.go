@@ -55,7 +55,7 @@ func (s *Server) requireAdminClassGate(w http.ResponseWriter, r *http.Request) b
 		respondError(w, http.StatusUnauthorized, "UNAUTHORIZED", "admin authentication required")
 		return false
 	}
-	if !s.adminConfig.IsAdminKey(key) {
+	if !s.isAdminClassKey(key) {
 		respondError(w, http.StatusForbidden, "ADMIN_SCOPE_REQUIRED", "admin scope required")
 		return false
 	}

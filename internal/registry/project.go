@@ -3,6 +3,7 @@ package registry
 
 import (
 	"net/netip"
+	"vornik.io/vornik/internal/agentns"
 
 	"errors"
 	"fmt"
@@ -66,6 +67,9 @@ type Project struct {
 	// broker workflows only — and broker workflows run nowhere else. See
 	// https://docs.vornik.io
 	Broker bool `yaml:"broker,omitempty" since:"2026.9.9"`
+	// APIs are per-project REST providers (agent-administered Vornik
+	// design §8.3). Agent-namespace projects only in this release.
+	APIs []ProjectAPI `yaml:"apis,omitempty" since:"2026.10.2"`
 	// CompanionPush configures completion push for this project's companion
 	// tasks. See the broker write-actions design §7a.
 	CompanionPush CompanionPushConfig `yaml:"companion_push,omitempty" since:"2026.9.9"`
@@ -2254,6 +2258,9 @@ func (p *Project) Validate(filename string) error {
 	if p.DefaultWorkflowID == "" {
 		return ProjectValidationError{File: filename, Field: "defaultWorkflowId", Message: "defaultWorkflowId is required"}
 	}
+	if err := validateAPIs(filename, p); err != nil {
+		return err
+	}
 	if p.DefaultPriority < 0 || p.DefaultPriority > 100 {
 		return ProjectValidationError{File: filename, Field: "defaultPriority", Message: "must be between 0 and 100"}
 	}
@@ -2462,6 +2469,9 @@ func (p *Project) Validate(filename string) error {
 	// them as "no limit" (which is the runtime behaviour for ≤0,
 	// but that's the bypass-by-design path, not what an operator
 	// who explicitly wrote -1 meant).
+	if err := validateProjectSecretsNamespace(p); err != nil {
+		return ProjectValidationError{File: filename, Field: "permissions.secrets", Message: err.Error()}
+	}
 	// MCP auth blocks: fail at load, not at the first tool call. A malformed
 	// block otherwise presents as an unauthenticated request the server
 	// rejects — indistinguishable from a permissions problem at the vendor.
@@ -2753,4 +2763,18 @@ func attachProjectBriefs(projectsDir string, projects map[string]*Project) error
 		}
 	}
 	return nil
+}
+
+// validateProjectSecretsNamespace applies the agent namespace rule to the
+// allowlist itself (agent-administered Vornik design §8.1): an agent project
+// lists only <ns>/<NAME>, an operator project lists none of those.
+func validateProjectSecretsNamespace(p *Project) error {
+	ns, _ := agentns.FromID(p.ID)
+	err := mcpauth.CheckNamespace(p.Permissions.Secrets, ns)
+	if err != nil && ns != "" {
+		// Name the reservation, so an operator whose ID happens to contain
+		// "--" learns why (design §5), rather than reading a bare refusal.
+		return fmt.Errorf("%w (project IDs containing \"--\" are reserved for agent namespaces; %q reads as namespace %q)", err, p.ID, ns)
+	}
+	return err
 }

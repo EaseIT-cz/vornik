@@ -110,6 +110,27 @@ func (c *Container) initScheduler() error {
 	// gate a thin webhook node crash-loops on "runtime manager: podman not
 	// available" (incident 2026-06-12); the artifact store is kept because a
 	// ui node (ServeUI, !RunWorkers) still needs it for downloads.
+	// Per-IP backstop (hardening sub-item 2). Allocated only when
+	// the daemon config carries a non-zero rps + burst — operators
+	// who haven't tuned the block stay on the legacy "no per-IP
+	// gate" path. Client-IP resolution (trusted proxies) is now
+	// centralised in internal/httpx/realip and applied as the
+	// outermost middleware; the limiter reads the resolved IP from
+	// the request context.
+	//
+	// It is HTTP machinery, not worker machinery, so it sits above the
+	// worker gate below. Until 2026-10-02 it sat after it, and a ui-profile
+	// node (ServeUI, !RunWorkers) never allocated it: the per-IP backstop
+	// on /auth/*, /api/* and the approver pages was silently off there,
+	// whatever the config said (found by the approver-device throttle test).
+	if c.Config.API.RateLimit.PerIP.RPS > 0 && c.Config.API.RateLimit.PerIP.Burst > 0 {
+		c.perIPLimiter = ratelimit.NewPerIPLimiter()
+	}
+	// Said out loud, because its absence was silent before (review ea5a F8).
+	c.Logger.Info().Bool("per_ip_limiter", c.perIPLimiter != nil).
+		Int("rps", c.Config.API.RateLimit.PerIP.RPS).Int("burst", c.Config.API.RateLimit.PerIP.Burst).
+		Msg("per-IP backstop")
+
 	if c.skipNonWorker("scheduler") {
 		return nil
 	}
@@ -518,6 +539,11 @@ func (c *Container) initScheduler() error {
 		// carry plaintext credentials into durable, searchable memory.
 		c.Logger.Warn().Msg("secrets: scanning DISABLED (secrets.enabled=false) — memory/artifacts/logs may persist plaintext credentials; enable it unless you have a deliberate reason")
 	}
+	// Agent projects' proposed arguments are scanned at staging, whatever
+	// secrets.enabled says (agent-administered Vornik plan P5.3).
+	if scan := c.egressScanner(); scan != nil {
+		executorOpts = append(executorOpts, executor.WithEgressScan(scan.Detector, c.recordEgress))
+	}
 	if c.Config.Secrets.Enabled {
 		detector, actions, err := buildSecretsDetector(c.Config.Secrets)
 		if err != nil {
@@ -636,17 +662,6 @@ func (c *Container) initScheduler() error {
 	// service options so a key's bucket isn't double-debited
 	// when the same caller hits both surfaces.
 	c.apiKeyLimiter = ratelimit.NewAPIKeyLimiter()
-
-	// Per-IP backstop (hardening sub-item 2). Allocated only when
-	// the daemon config carries a non-zero rps + burst — operators
-	// who haven't tuned the block stay on the legacy "no per-IP
-	// gate" path. Client-IP resolution (trusted proxies) is now
-	// centralised in internal/httpx/realip and applied as the
-	// outermost middleware; the limiter reads the resolved IP from
-	// the request context.
-	if c.Config.API.RateLimit.PerIP.RPS > 0 && c.Config.API.RateLimit.PerIP.Burst > 0 {
-		c.perIPLimiter = ratelimit.NewPerIPLimiter()
-	}
 
 	// Warm container pool
 	if c.Config.Runtime.WarmPool.Enabled {

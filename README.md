@@ -10,9 +10,9 @@
 in isolated containers, with no network egress by default.**
 
 [![License](https://img.shields.io/badge/license-AGPL--3.0-558A98)](LICENSE)
-[![CI](https://github.com/grinco/vornik/actions/workflows/ci.yaml/badge.svg)](https://github.com/grinco/vornik/actions/workflows/ci.yaml)
+[![CI](https://github.com/EaseIT-cz/vornik/actions/workflows/ci.yaml/badge.svg)](https://github.com/EaseIT-cz/vornik/actions/workflows/ci.yaml)
 [![Docs](https://img.shields.io/badge/docs-vornik.io-558A98)](https://docs.vornik.io)
-[![Stars](https://img.shields.io/github/stars/grinco/vornik?style=flat&color=E8A87C)](https://github.com/grinco/vornik/stargazers)
+[![Stars](https://img.shields.io/github/stars/grinco/vornik?style=flat&color=E8A87C)](https://github.com/EaseIT-cz/vornik/stargazers)
 
 [Quick start](#quick-start) · [How it works](#how-it-works) · [Benchmarks](#benchmarks-measured-not-asserted) · [Docs](https://docs.vornik.io)
 
@@ -56,8 +56,8 @@ checksum before piping it to a shell — this catches transit and redirect tampe
 is not a signature — fetch both first:
 
 ```sh
-REF=<release>  # a tag from github.com/grinco/vornik/releases that ships quickstart.sh.sha256
-base="https://raw.githubusercontent.com/grinco/vornik/$REF/deployments/podman"
+REF=<release>  # a tag from github.com/EaseIT-cz/vornik/releases that ships quickstart.sh.sha256
+base="https://raw.githubusercontent.com/EaseIT-cz/vornik/$REF/deployments/podman"
 curl -fsSLO "$base/quickstart.sh" && curl -fsSLO "$base/quickstart.sh.sha256"
 sha256sum -c quickstart.sh.sha256 && VORNIK_REF="$REF" bash quickstart.sh
 ```
@@ -70,7 +70,7 @@ and your first project. Details and tunables:
 **From source:**
 
 ```sh
-git clone https://github.com/grinco/vornik && cd vornik
+git clone https://github.com/EaseIT-cz/vornik && cd vornik
 go build -o bin/vornik ./cmd/vornik     # the Community daemon
 ./bin/vornik                            # reads ./config.yaml
 vornikctl init project my-project --swarm basic-swarm

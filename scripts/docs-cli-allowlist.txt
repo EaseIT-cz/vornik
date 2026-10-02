@@ -36,3 +36,6 @@ backup
 restore
 reminders
 version
+agent
+pair-device
+devices

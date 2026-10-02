@@ -13,7 +13,7 @@
 
 [Unit]
 Description=vornik - Distributed task execution daemon
-Documentation=https://github.com/grinco/vornik
+Documentation=https://github.com/EaseIT-cz/vornik
 After=network-online.target
 Wants=network-online.target
 

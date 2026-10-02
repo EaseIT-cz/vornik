@@ -85,7 +85,7 @@ func TestResolveQueryWindow_PreservesOtherOptions(t *testing.T) {
 	opts := SearchOptions{
 		ParseQueryWindow: true,
 		Limit:            17,
-		RepoScope:        "github.com/grinco/vornik",
+		RepoScope:        "github.com/EaseIT-cz/vornik",
 		StrictScope:      true,
 	}
 	got := resolveQueryWindow("in 2023", opts, refNow)

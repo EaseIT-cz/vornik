@@ -16,7 +16,7 @@ roles:
       model: "zai.glm-5"
       maxTokens: 4096
       runtime:
-        image: "ghcr.io/grinco/vornik-agent:latest"
+        image: "ghcr.io/easeit-cz/vornik-agent:latest"
         cpu: "1"
         memory: "2Gi"
       permissions:

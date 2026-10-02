@@ -3,7 +3,7 @@ name: report-problem
 description: |
   Teaches Codex how to help a user report a Vornik problem — a bug, a crash,
   a misbehaving swarm, or an INSTALL failure — as an anonymized GitHub issue on
-  the public grinco/vornik repo. Use this skill whenever the user says Vornik
+  the public EaseIT-cz/vornik repo. Use this skill whenever the user says Vornik
   is broken / erroring / not installing / behaving wrong and wants to file it
   upstream. The heavy lifting is a deterministic CLI (`vornikctl report`); this
   skill is the guardrail around it (privacy, review-before-submit, install-time).
@@ -19,7 +19,7 @@ PUBLIC issue.
 
 Your job is NOT to collect diagnostics yourself, paste raw logs, or write the
 issue body from scratch. The daemon and the installer already produce a
-scrubbed body + a prefilled `github.com/grinco/vornik` issue URL. Your job is
+scrubbed body + a prefilled `github.com/EaseIT-cz/vornik` issue URL. Your job is
 to run the right entry point, **show the user the anonymized body**, confirm it
 carries no residual identifiers, and help them open + submit it **with their
 own GitHub account**. Nothing is ever posted automatically.
@@ -28,7 +28,7 @@ own GitHub account**. Nothing is ever posted automatically.
 
 **1. Install / quickstart failure (no daemon, maybe no `vornikctl` yet).**
 The `quickstart.sh` installer installs its own EXIT trap: on any non-zero
-exit it prints a prefilled `grinco/vornik` issue URL (labels `bug,install`)
+exit it prints a prefilled `EaseIT-cz/vornik` issue URL (labels `bug,install`)
 with scrubbed structured context — version, platform, exit code, and the
 scrubbed failing command. If the user pastes that URL or the installer's
 failure block, you don't need to run anything: help them review it and fill in
@@ -113,7 +113,7 @@ Even so, treat every report as **review-before-submit**:
    see `<path>`, `<host>`, `<ip>`, `<email>`, `<redacted*>` where identifiers
    used to be, and no stray project name, username, or secret survived.
 3. Only then hand them the prefilled URL and tell them plainly: *"This opens a
-   PUBLIC issue on github.com/grinco/vornik. Review it once more in the browser,
+   PUBLIC issue on github.com/EaseIT-cz/vornik. Review it once more in the browser,
    add any detail, then submit with your own account."*
 
 ## The attachment caveat

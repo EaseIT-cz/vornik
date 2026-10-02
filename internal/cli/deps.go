@@ -157,15 +157,25 @@ func loadDepsInputs(projectIDs []string) ([]depsInstallInput, error) {
 			RoleImages:  map[string][]string{},
 		}
 		if swarm != nil {
-			for _, role := range swarm.Roles {
-				if role.Runtime.Image != "" {
-					in.RoleImages[role.Runtime.Image] = append(in.RoleImages[role.Runtime.Image], role.Name)
-				}
-			}
+			in.RoleImages = roleImagesOf(swarm)
 		}
 		out = append(out, in)
 	}
 	return out, nil
+}
+
+// roleImagesOf maps each role image of a registry-loaded swarm to the roles
+// that run it. The registry hands over canonical image names (EaseIT-cz
+// migration design §5.2), so dependency trees are planned for the image the
+// runtime actually runs.
+func roleImagesOf(swarm *registry.Swarm) map[string][]string {
+	out := map[string][]string{}
+	for _, role := range swarm.Roles {
+		if role.Runtime.Image != "" {
+			out[role.Runtime.Image] = append(out[role.Runtime.Image], role.Name)
+		}
+	}
+	return out
 }
 
 func sortedImages(m map[string][]string) []string {

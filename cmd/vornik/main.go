@@ -1,7 +1,7 @@
 // Package main provides the Community-edition entrypoint for the Vornik daemon.
 //
 // This is the main that ships in the public Community-Edition module
-// (github.com/grinco/vornik) per editions-phase2-module-split-design.md §2. It
+// (github.com/EaseIT-cz/vornik) per editions-phase2-module-split-design.md §2. It
 // wires ONLY service.CommunityProviders() and deliberately does NOT import
 // vornik.io/vornik/internal/enterprise — the edition is fixed to
 // Community by construction (you cannot get enterprise capabilities from this

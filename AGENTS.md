@@ -66,8 +66,8 @@ missing prerequisites — warn your user first (rule 1):
 
 ```bash
 # Recommended for agents — verify the installer's checksum before running it:
-REF=<release>  # a tag from github.com/grinco/vornik/releases that ships quickstart.sh.sha256
-base="https://raw.githubusercontent.com/grinco/vornik/$REF/deployments/podman"
+REF=<release>  # a tag from github.com/EaseIT-cz/vornik/releases that ships quickstart.sh.sha256
+base="https://raw.githubusercontent.com/EaseIT-cz/vornik/$REF/deployments/podman"
 curl -fsSLO "$base/quickstart.sh" && curl -fsSLO "$base/quickstart.sh.sha256"
 sha256sum -c quickstart.sh.sha256 && VORNIK_REF="$REF" bash quickstart.sh
 

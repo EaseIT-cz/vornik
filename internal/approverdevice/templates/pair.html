@@ -1,0 +1,12 @@
+{{define "pair.html"}}{{template "head" (page "Pair this device" 0)}}
+<h1>Pair this phone as an approver</h1>
+<div class="card">
+<p>Enter the code that <b>vornikctl pair-device</b> printed in the Vornik terminal.</p>
+{{with .Error}}<p class="err">{{.}}</p>{{end}}
+<form method="post" action="/ui/pair">
+<input type="text" name="code" autocomplete="one-time-code" autocapitalize="characters" spellcheck="false" required aria-label="Pairing code">
+<button type="submit">Pair</button>
+</form>
+</div>
+<p class="mut">Only a paired device can approve what your assistant asks Vornik to do, or enter a credential.</p>
+{{template "foot"}}{{end}}

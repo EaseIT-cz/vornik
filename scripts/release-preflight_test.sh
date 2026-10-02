@@ -40,7 +40,7 @@ chmod +x "$TMP/bin/gh"
 # The retry backoff must not make the suite sleep for real.
 printf '#!/usr/bin/env bash\nexit 0\n' > "$TMP/bin/sleep"
 chmod +x "$TMP/bin/sleep"
-export PATH="$TMP/bin:$PATH" GITHUB_REF=refs/tags/2026.9.3 GITHUB_REF_NAME=2026.9.3 GITHUB_REPOSITORY=grinco/vornik-enterprise GPG_PRIVATE_KEY=test RUNNER_TEMP="$TMP" GITHUB_OUTPUT="$TMP/out" SCENARIO=new CALLS="$TMP/calls"
+export PATH="$TMP/bin:$PATH" GITHUB_REF=refs/tags/2026.9.3 GITHUB_REF_NAME=2026.9.3 GITHUB_REPOSITORY=EaseIT-cz/vornik GPG_PRIVATE_KEY=test RUNNER_TEMP="$TMP" GITHUB_OUTPUT="$TMP/out" SCENARIO=new CALLS="$TMP/calls"
 : > "$CALLS"
 bash "$ROOT/scripts/release-preflight.sh"
 grep -q 'published=false' "$GITHUB_OUTPUT"

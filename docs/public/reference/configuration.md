@@ -540,6 +540,15 @@ vornik reads its configuration from `config.yaml`. The keys below are the custom
 | `broker.writes` | string | Broker write-action mode: off (default; delegating a workflow that proposes writes is refused and nothing approved executes) or on (writes execute after approval in /inbox, each also gated by its MCP server's broker_write declaration). | — |
 | `broker.action_timeout` | string | Bound on one approved write's tool call (default 60s, at most 10m). A call that times out is recorded as unknown, never retried. | — |
 
+## agent_admin
+
+| Key | Type | Description | Environment override |
+|---|---|---|---|
+| `agent_admin.enabled` | bool | Offer the agent admin verbs to agent admin keys on the companion endpoint. On by default: nothing is reachable without an agent admin key, which only an operator mints (vornikctl agent connect) and only after an approver device is paired (vornikctl pair-device). Set false to turn the verbs off. | — |
+| `agent_admin.default_project_budget_usd` | float | Monthly budget of a project an agent creates (default 2). Raising a project's budget needs approval on an approver device. | — |
+| `agent_admin.namespace_budget_usd` | float | Ceiling on the sum of an agent's project budgets until a device approves more (default 10). | — |
+| `agent_admin.agent_image` | string | Runtime image of the roles an agent defines (default the standard agent image). | — |
+
 ## gateway
 
 | Key | Type | Description | Environment override |

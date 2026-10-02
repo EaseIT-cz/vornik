@@ -1,7 +1,7 @@
 ---
 sources:
     - path: README.md
-      sha256: d335f7237074bd3fbde5db750b399722e62d079f3f2ea5ab8b82205300d4e9c1
+      sha256: 3ded499c810baec24bdf7f2ff7735163311ef22e1bff00c71237437c359e87b9
 ---
 # Getting Started
 
@@ -55,7 +55,7 @@ defaults are safe and local-first.
 
     > Set up Vornik for me. Follow the runbook at https://agents.vornik.io
 
-    [AGENTS.md](https://github.com/grinco/vornik/blob/main/AGENTS.md) is an
+    [AGENTS.md](https://github.com/EaseIT-cz/vornik/blob/main/AGENTS.md) is an
     agent-executable runbook: install (via the same `get.vornik.io` script
     below), LLM key setup, a first task, and the agent's own companion
     project + persistent RAG memory + knowledge-skill store (so it can
@@ -79,8 +79,8 @@ checksum before piping it to a shell (catches transit/redirect tampering — not
 a signature), fetch both first:
 
 ```bash
-REF=<release>  # a tag from github.com/grinco/vornik/releases that ships quickstart.sh.sha256
-base="https://raw.githubusercontent.com/grinco/vornik/$REF/deployments/podman"
+REF=<release>  # a tag from github.com/EaseIT-cz/vornik/releases that ships quickstart.sh.sha256
+base="https://raw.githubusercontent.com/EaseIT-cz/vornik/$REF/deployments/podman"
 curl -fsSLO "$base/quickstart.sh" && curl -fsSLO "$base/quickstart.sh.sha256"
 sha256sum -c quickstart.sh.sha256 && VORNIK_REF="$REF" bash quickstart.sh
 ```
@@ -94,7 +94,7 @@ connecting an LLM endpoint and key (with a live connection test), optional
 memory/RAG, and creating your first project. To do the same from the terminal,
 set `VORNIK_CHAT_API_KEY` in `~/.config/vornik/vornik.env` and run
 `systemctl --user restart vornik`. See the
-[Podman deployment notes](https://github.com/grinco/vornik/tree/main/deployments/podman)
+[Podman deployment notes](https://github.com/EaseIT-cz/vornik/tree/main/deployments/podman)
 for tunables and the runtime model.
 
 This is the fastest way to get a working instance; the rest of this page builds

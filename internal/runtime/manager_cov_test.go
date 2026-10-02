@@ -269,7 +269,7 @@ exit 1
 func TestPodman_RefusesAPullAndAnUnpinnedRun(t *testing.T) {
 	marker := filepath.Join(t.TempDir(), "ran")
 	m := &Manager{podmanPath: writeFakePodman(t, "#!/usr/bin/env bash\ntouch "+marker+"\n")}
-	if _, err := m.podman(context.Background(), "pull", "ghcr.io/grinco/vornik-agent:latest"); !errors.Is(err, spawn.ErrRefused) {
+	if _, err := m.podman(context.Background(), "pull", "ghcr.io/easeit-cz/vornik-agent:latest"); !errors.Is(err, spawn.ErrRefused) {
 		t.Fatalf("pull: want spawn.ErrRefused, got %v", err)
 	}
 	if _, err := m.StartContainer(context.Background(), &ContainerConfig{

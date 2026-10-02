@@ -24,7 +24,7 @@ import (
 // the daemon does not produce. Caught by reading a live task's payload and
 // finding the key somewhere else.
 const ciTriggeredPayload = `{"context":{"prompt":"review"},"forge_job":{
-  "repo":"grinco/headmatch","number":54,"action":"completed",
+  "repo":"EaseIT-cz/headmatch","number":54,"action":"completed",
   "head_sha":"bd19f8a7a24fdf059d28de6c87c2b7b32dde451b",
   "head_ref":"refs/pull/54/head",
   "default_branch":"main","is_change_request":false,
@@ -34,7 +34,7 @@ const ciTriggeredPayload = `{"context":{"prompt":"review"},"forge_job":{
 // forgeCheckoutSpec accepts. Both are pinned so neither reader can be dropped
 // without a test noticing.
 const ciTriggeredPayloadNested = `{"context":{"forge_job":{
-  "repo":"grinco/headmatch","number":54,
+  "repo":"EaseIT-cz/headmatch","number":54,
   "head_ref":"refs/pull/54/head","default_branch":"main",
   "is_change_request":false}}}`
 

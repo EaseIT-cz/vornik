@@ -318,7 +318,7 @@ func (e *ApplyEngine) writeJournaled(ctx context.Context, row *persistence.Confi
 				return e.abortWrites(ctx, row, resolved, i, "drift before write #"+fmt.Sprint(i+1)+": "+drifted, err)
 			}
 		}
-		if werr := atomicWrite(ro.target, []byte(ro.op.Content)); werr != nil {
+		if werr := writePost(ro); werr != nil {
 			return e.abortWrites(ctx, row, resolved, i, "write failed for "+ro.op.Path+": "+werr.Error(),
 				fmt.Errorf("apply write failed for %s: %w", ro.op.Path, werr))
 		}
@@ -494,7 +494,7 @@ func (e *ApplyEngine) restoreOne(ctx context.Context, row *persistence.ConfigApp
 	switch {
 	case existed == ro.existed && (!existed || hashBytes(cur) == hashBytes(ro.preImage)):
 		return nil // already at the pre-image
-	case existed && hashBytes(cur) == hashBytes([]byte(ro.op.Content)):
+	case atIntended(ro.op, cur, existed):
 		if ro.existed {
 			if werr := atomicWrite(ro.target, ro.preImage); werr != nil {
 				return fmt.Errorf("revert: restore %s: %w", ro.op.Path, werr)
@@ -710,7 +710,7 @@ func targetStatus(ro resolvedOp) (string, error) {
 	switch {
 	case existed == ro.existed && (!existed || hashBytes(cur) == hashBytes(ro.preImage)):
 		return "pre", nil
-	case existed && hashBytes(cur) == hashBytes([]byte(ro.op.Content)):
+	case atIntended(ro.op, cur, existed):
 		return "intended", nil
 	default:
 		return "drift", nil
@@ -755,7 +755,7 @@ func (e *ApplyEngine) reconcileApplying(ctx context.Context, row *persistence.Co
 			if isFenced, reason := e.fenced(ctx); isFenced {
 				return e.revertOrErr(ctx, row, resolved, "fence during reconcile: "+reason, fmt.Errorf("%w: %s", ErrWriterFenced, reason))
 			}
-			if werr := atomicWrite(ro.target, []byte(ro.op.Content)); werr != nil {
+			if werr := writePost(ro); werr != nil {
 				return e.revertOrErr(ctx, row, resolved, "reconcile write failed for "+ro.op.Path+": "+werr.Error(), werr)
 			}
 			if perr := e.Journal.AppendProgress(ctx, row.ID, ro.op.Path); perr != nil {

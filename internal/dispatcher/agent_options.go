@@ -118,7 +118,7 @@ func WithGroundingTaskRepo(repo persistence.TaskRepository) AgentOption {
 
 // WithMCPManager sets the MCP tool executor for external tool integration.
 func WithMCPManager(m MCPExecutor) AgentOption {
-	return func(a *Agent) { a.mcpManager = m }
+	return func(a *Agent) { a.mcpManager = fenceAgentProjects(m) }
 }
 
 // WithDeferredToolThreshold overrides the F12 deferred-tool-loading

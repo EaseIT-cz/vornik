@@ -175,7 +175,7 @@ auth:
   #     # Org-membership signal (adds read:org scope). SOFT gate:
   #     # non-members still provision as awaiting-access; membership is
   #     # surfaced at login, not blocking. Empty = no check.
-  #     org: "grinco"
+  #     org: "easeit-cz"
 
 # ---------------------------------------------------------------------------
 # Metrics (Prometheus)

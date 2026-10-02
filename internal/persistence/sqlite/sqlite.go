@@ -124,7 +124,14 @@ func Connect(ctx context.Context, cfg Config) (*DB, error) {
 	// and under WAL the driver default (NORMAL) can lose the last committed
 	// transactions on power loss. Set explicitly so the contract does not
 	// depend on a driver default; storage.ProbeDurability reads it back.
-	dsn := cfg.Path + "?_pragma=journal_mode(WAL)&_pragma=busy_timeout(5000)&_pragma=foreign_keys(OFF)&_pragma=synchronous(FULL)"
+	//
+	// _txlock=immediate makes every read-write transaction BEGIN IMMEDIATE,
+	// which LeaseTask, IngestQueue.ClaimBatch and the corpus epoch swap rely
+	// on (read candidates, then write, with no concurrent writer between).
+	// modernc.org/sqlite ignores TxOptions.Isolation, so asking for
+	// LevelSerializable did nothing and they ran DEFERRED until 2026-10-02.
+	// ReadOnly transactions stay DEFERRED and do not take the writer lock.
+	dsn := cfg.Path + "?_pragma=journal_mode(WAL)&_pragma=busy_timeout(5000)&_pragma=foreign_keys(OFF)&_pragma=synchronous(FULL)&_txlock=immediate"
 
 	db, err := sql.Open("sqlite", dsn)
 	if err != nil {
@@ -298,6 +305,16 @@ var sqliteAdditiveColumns = []additiveColumn{
 	// (sqliteAdditiveBackfills).
 	{"a2a_push_configs", "pushed_state", `TEXT`},
 	{"broker_actions", "pushed_state", `TEXT`},
+	// Postgres migration 207 — the approval apply lease (agent-administered
+	// Vornik design §9.2; review 20261002-4de8 F2).
+	{"agent_approval_requests", "apply_holder", `TEXT`},
+	{"agent_approval_requests", "apply_lease_until", `TEXT`},
+	{"agent_approval_requests", "apply_attempts", `INTEGER NOT NULL DEFAULT 0`},
+	// Postgres migration 208 — the agent admin key (design §5).
+	{"api_keys", "agent_admin", `INTEGER NOT NULL DEFAULT 0`},
+	{"api_keys", "agent_namespace", `TEXT NOT NULL DEFAULT ''`},
+	// Postgres migration 209 — a permanently failed approved change.
+	{"agent_approval_requests", "apply_error", `TEXT`},
 }
 
 // applyAdditiveColumns adds any registered column missing from an existing
@@ -360,6 +377,9 @@ var sqliteTableRebuilds = []tableRebuild{
 	// Postgres migration 199: execution_quality_scores learns `unscorable`
 	// (agent-quality-benchmark design, amendment 2026-09-26).
 	{"execution_quality_scores", "'unscorable'", executionQualityScoresTableSQL},
+	// Postgres migration 211: agent_approval_requests learns `broker_action`
+	// (agent-administered Vornik plan P4.8).
+	{"agent_approval_requests", "'broker_action'", agentApprovalRequestsTableSQL},
 }
 
 func (d *DB) applyTableRebuilds(ctx context.Context) error {

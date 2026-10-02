@@ -43,7 +43,7 @@ section_lines() {
 # THE FLOOR, and why there is one. Releases older than the public repository's
 # own history are deliberately collapsed into a single "## Earlier releases"
 # rollup rather than given a section each — an editorial choice, not a gap, and
-# those versions were never published to grinco/vornik at all. Requiring a
+# those versions were never published to EaseIT-cz/vornik at all. Requiring a
 # section for them would make this check fire permanently on history nobody is
 # going to rewrite.
 #

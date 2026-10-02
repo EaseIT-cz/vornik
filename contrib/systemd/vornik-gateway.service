@@ -34,7 +34,7 @@
 
 [Unit]
 Description=vornik-gateway - Kong API gateway for authenticated third-party APIs
-Documentation=https://github.com/grinco/vornik
+Documentation=https://github.com/EaseIT-cz/vornik
 After=network-online.target
 Wants=network-online.target
 

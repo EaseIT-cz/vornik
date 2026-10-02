@@ -601,6 +601,20 @@ type Server struct {
 	// brokerActionRepo backs the actions array in companion result/status
 	// for workflows that propose writes (broker write-actions design §6).
 	brokerActionRepo persistence.BrokerActionRepository
+	// agentAdmin serves the agent admin verbs; agentAdminEnabled reads
+	// agent_admin.enabled live (agent-administered Vornik design §6).
+	agentAdmin        AgentAdminVerbs
+	agentAdminEnabled func() bool
+	// daemonHost is shown to admin-class callers in capabilities (plan P6.4).
+	daemonHost *DaemonHost
+	// approverDevices lets the agent admin grant refuse with no device.
+	approverDevices persistence.ApproverDeviceRepository
+	// agentGrants backs the agent tool gate (N4 for agent projects), with
+	// its examined/refused denominator.
+	agentGrants     persistence.AgentGrantRepository
+	agentToolCounts agentToolGateCounts
+	// agentRoleAllowlistForTest replaces the role resolution in tests only.
+	agentRoleAllowlistForTest func(ctx context.Context, taskID string) ([]string, mcpGapReason)
 	// companionPushConfigs stores delegate's notify (broker write-actions
 	// design §7a); nil: notify is refused and companion-push is off.
 	companionPushConfigs persistence.A2APushConfigRepository
@@ -868,6 +882,10 @@ type Server struct {
 	// requireAdminGate return a typed 501 EDITION_UNSUPPORTED (not a bare 404)
 	// so the CLI can say "Enterprise-only" instead of "404 page not found".
 	adminSurfacePresent bool
+	// adminClassKeys is the admin key list for the admin-class checks
+	// (isAdminClassRequest, requireAdminClassGate) in both editions; see
+	// WithAdminClassKeys.
+	adminClassKeys config.AdminConfig
 	// instinctRepo backs the instinct surfaces (continuous-learning
 	// instinct layer): GET /api/v1/instincts (list + filter), GET
 	// /api/v1/instincts/{id}, POST /api/v1/instincts/{id}/retire, and
@@ -1141,6 +1159,11 @@ type Server struct {
 	// fail-closed posture as the chat dispatcher's tool. Shares the
 	// concrete client the dispatcher uses (built by service.newGatewayClient).
 	apiGatewayClient apigateway.Client
+	// agentAPIClients returns an agent-namespace project's own REST client
+	// (agent-administered Vornik plan P4.5); agent projects never use Kong.
+	agentAPIClients func(projectID string) apigateway.Client
+	// egress is the outbound secret scan (plan P5).
+	egress *EgressScan
 	// agentWritesMode is the daemon-wide gateway.agent_writes policy
 	// (off|user|all) governing query_api writes from task-executing agents
 	// (LLD 2026-07-22-agent-query-api-write-policy-design.md). Empty ≡ off
@@ -1976,6 +1999,23 @@ func WithAdminConfig(cfg config.AdminConfig) ServerOption {
 	}
 }
 
+// WithAdminClassKeys gives the admin-class checks the operator's admin keys
+// in BOTH editions, without the admin surface: adminConfig and
+// adminSurfacePresent are left alone, so /api/v1/admin/* keeps its Community
+// answer. Regression: the agent-administered Vornik DoD lane found that a
+// Community daemon never recognised the operator key (WithAdminConfig is
+// Enterprise-only), so vornikctl agent connect could not mint.
+func WithAdminClassKeys(cfg config.AdminConfig) ServerOption {
+	return func(s *Server) { s.adminClassKeys = cfg }
+}
+
+// isAdminClassKey reports whether key is an operator admin key: the admin
+// surface's list (Enterprise) or the class keys (both editions). A union, so
+// nothing that was admin-class before stops being so.
+func (s *Server) isAdminClassKey(key string) bool {
+	return s.adminConfig.IsAdminKey(key) || s.adminClassKeys.IsAdminKey(key)
+}
+
 // WithInstinctRepository wires the instinct repository so the daemon
 // can expose the read/inspect/retire instinct surfaces. Nil leaves the
 // endpoints returning 503 — same fail-soft contract every other
@@ -2235,6 +2275,11 @@ func WithAPIGatewayClient(c apigateway.Client) ServerOption {
 	return func(s *Server) {
 		s.apiGatewayClient = c
 	}
+}
+
+// WithAgentAPIClients wires agent projects' REST clients (plan P4.5).
+func WithAgentAPIClients(f func(projectID string) apigateway.Client) ServerOption {
+	return func(s *Server) { s.agentAPIClients = f }
 }
 
 // WithAgentWritesMode wires the daemon-wide gateway.agent_writes policy

@@ -617,7 +617,7 @@ func (s *Server) collectKeyActivity(ctx context.Context, st *adoptionStats, quer
 	// that ASSIGNED r.ActiveDays on the way out, so the retrieval ledger was
 	// the only thing that could ever set the column: a credential with 1,284
 	// LLM calls and no RAG rendered "1,284 calls · 0/30 active days" on one
-	// row. Issue grinco/vornik#14.
+	// row. Issue EaseIT-cz/vornik#14.
 	days := newKeyDayIndex()
 
 	s.addRAGActivity(ctx, st, queryIDs, since, row, days)
@@ -657,7 +657,7 @@ func (s *Server) collectKeyActivity(ctx context.Context, st *adoptionStats, quer
 // It lives at the collector level rather than inside a contributor because the
 // previous version did not: addRAGActivity owned the sets and ASSIGNED
 // r.ActiveDays from them, so no other ledger could contribute a day even in
-// principle. Issue grinco/vornik#14.
+// principle. Issue EaseIT-cz/vornik#14.
 type keyDayIndex struct {
 	days     map[string]map[string]bool
 	projects map[string]map[string]bool
@@ -798,7 +798,7 @@ func (s *Server) addSpendActivity(ctx context.Context, st *adoptionStats, queryI
 		// per credential with no date column, and its only date-bearing sibling
 		// TimeSeriesByDay aggregates across every credential at once. Neither
 		// can answer "on which days did THIS key spend", which is why the board
-		// showed a call count beside zero active days (grinco/vornik#14).
+		// showed a call count beside zero active days (EaseIT-cz/vornik#14).
 		byKey, err := s.llmUsageRepo.ActiveDaysByAPIKey(ctx, since, until, scope)
 		if err != nil {
 			// DEGRADE, do not zero. The other ledgers' days are already in the

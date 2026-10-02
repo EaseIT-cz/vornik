@@ -82,6 +82,8 @@ Security:
   api_key_strength      Detect weak / placeholder API keys
   secrets_permissions   Secrets files/dirs with world-readable permissions
   config_secret_hygiene Config.yaml plaintext secrets or loose permissions (recommends ${ENV_VAR})
+  secret_store_key      Agent credential store: a missing or wrong key while credentials exist is an error
+  approver_devices      Agent approvals: a warning when an agent namespace exists with no paired device or no push
 
 Models:
   model_health          Role-pinned models with high recent failure rate or

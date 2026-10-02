@@ -1,5 +1,5 @@
 // Package report builds a PUBLIC-safe, anonymized problem-report body and a
-// prefilled grinco/vornik GitHub issue URL for `vornikctl report` (design
+// prefilled EaseIT-cz/vornik GitHub issue URL for `vornikctl report` (design
 // https://docs.vornik.io). Because the body is
 // posted to a PUBLIC repo, it is anonymized in TWO tiers: secret redaction
 // (internal/secrets) on every free-text field PLUS a stricter public scrubber
@@ -23,7 +23,7 @@ import (
 
 const (
 	// IssueRepo is the public CE repo problem reports are filed against.
-	IssueRepo = "grinco/vornik"
+	IssueRepo = "EaseIT-cz/vornik"
 	// defaultLabel is applied to `vornikctl report` issues.
 	defaultLabel = "bug"
 	// urlMaxBytes is the practical GitHub prefilled-issue URL cap; GitHub
@@ -419,7 +419,7 @@ func upDown(up bool) string {
 	return "down (offline diagnostics)"
 }
 
-// IssueURL builds the prefilled grinco/vornik issue URL from an ALREADY-anonymized
+// IssueURL builds the prefilled EaseIT-cz/vornik issue URL from an ALREADY-anonymized
 // body (design D4/#5: anonymize → truncate → note → encode). If the encoded URL
 // exceeds urlMaxBytes it truncates the body (safe — the body is already scrubbed)
 // and appends an attach-note.

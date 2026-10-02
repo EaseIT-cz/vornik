@@ -168,3 +168,17 @@ func TestReleaseRecord_SourceCommit(t *testing.T) {
 		t.Error("an empty record names no commit")
 	}
 }
+
+// The EaseIT-cz migration (design §5.2): a release record written before the
+// move names the agent image by the legacy repository. goodRecord above is
+// such a record, and TestLoadReleaseRecord_Valid looks it up by the canonical
+// AgentImageTag. This test states that case on its own.
+func TestLoadReleaseRecord_LegacyTagMatchesCanonical(t *testing.T) {
+	rec, err := LoadReleaseRecord(writeRecord(t, goodRecord))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := rec.Lookup("ghcr.io/easeit-cz/vornik-agent:latest"); !ok {
+		t.Fatal("a record naming ghcr.io/grinco/vornik-agent must answer for the canonical name")
+	}
+}

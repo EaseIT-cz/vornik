@@ -33,10 +33,10 @@ func (f fakeIndex) PlatformDigests(tag string) (map[string]string, error) {
 
 func TestBuildRegistryRecord_SplitsByImageKind(t *testing.T) {
 	idx := fakeIndex{byTag: map[string]map[string]string{
-		"ghcr.io/grinco/vornik-agent:latest": {"amd64": "sha256:" + hex64, "arm64": "sha256:" + hex64b},
+		"ghcr.io/easeit-cz/vornik-agent:latest": {"amd64": "sha256:" + hex64, "arm64": "sha256:" + hex64b},
 	}}
 	rec, err := BuildRegistryRecord(idx, []Image{
-		{Tag: "ghcr.io/grinco/vornik-agent:latest"},
+		{Tag: "ghcr.io/easeit-cz/vornik-agent:latest"},
 		{Tag: "localhost/vornik-broker:latest"},
 	}, goodCommit)
 	if err != nil {
@@ -66,7 +66,7 @@ func TestBuildRegistryRecord_SplitsByImageKind(t *testing.T) {
 // shipped less than it did, and the host would then report "not declared".
 func TestBuildRegistryRecord_UnpublishedRegistryImageIsFatal(t *testing.T) {
 	idx := fakeIndex{byTag: map[string]map[string]string{}}
-	_, err := BuildRegistryRecord(idx, []Image{{Tag: "ghcr.io/grinco/vornik-agent:latest"}}, goodCommit)
+	_, err := BuildRegistryRecord(idx, []Image{{Tag: "ghcr.io/easeit-cz/vornik-agent:latest"}}, goodCommit)
 	if err == nil {
 		t.Fatal("a registry image missing from the registry produced a record anyway")
 	}
@@ -89,9 +89,9 @@ func TestBuildRegistryRecord_HostBuiltOnlyNeedsNoRegistry(t *testing.T) {
 // the local mode does.
 func TestBuildRegistryRecord_RejectsADirtyCommit(t *testing.T) {
 	idx := fakeIndex{byTag: map[string]map[string]string{
-		"ghcr.io/grinco/vornik-agent:latest": {"amd64": "sha256:" + hex64},
+		"ghcr.io/easeit-cz/vornik-agent:latest": {"amd64": "sha256:" + hex64},
 	}}
-	if _, err := BuildRegistryRecord(idx, []Image{{Tag: "ghcr.io/grinco/vornik-agent:latest"}},
+	if _, err := BuildRegistryRecord(idx, []Image{{Tag: "ghcr.io/easeit-cz/vornik-agent:latest"}},
 		goodCommit+"-dirty"); err == nil {
 		t.Fatal("a -dirty commit was accepted; it names a tree that exists on one machine")
 	}
@@ -105,12 +105,12 @@ func TestBuildRegistryRecord_DropsTheAttestationManifest(t *testing.T) {
 	// guard now rejects; this test's subject is the attestation, not coverage,
 	// so it gets a realistic index rather than an exemption.
 	idx := fakeIndex{byTag: map[string]map[string]string{
-		"ghcr.io/grinco/vornik-agent:latest": {
+		"ghcr.io/easeit-cz/vornik-agent:latest": {
 			"amd64": "sha256:" + hex64, "arm64": "sha256:" + hex64b,
 			"unknown": "sha256:" + hex64b,
 		},
 	}}
-	rec, err := BuildRegistryRecord(idx, []Image{{Tag: "ghcr.io/grinco/vornik-agent:latest"}}, goodCommit)
+	rec, err := BuildRegistryRecord(idx, []Image{{Tag: "ghcr.io/easeit-cz/vornik-agent:latest"}}, goodCommit)
 	if err != nil {
 		t.Fatalf("BuildRegistryRecord: %v", err)
 	}
@@ -158,16 +158,16 @@ func TestBuildRegistryRecord_ExcludesTestOnlyImages(t *testing.T) {
 func TestBuildRegistryRecord_RejectsAnIndexMissingAReleaseArch(t *testing.T) {
 	idx := fakeIndex{byTag: map[string]map[string]string{
 		// amd64 only — exactly the shape the live registry had.
-		"ghcr.io/grinco/vornik-agent:latest": {"amd64": "sha256:" + hex64},
+		"ghcr.io/easeit-cz/vornik-agent:latest": {"amd64": "sha256:" + hex64},
 	}}
 	_, err := BuildRegistryRecord(idx, []Image{
-		{Tag: "ghcr.io/grinco/vornik-agent:latest"},
+		{Tag: "ghcr.io/easeit-cz/vornik-agent:latest"},
 	}, goodCommit)
 	if err == nil {
 		t.Fatal("a record covering only amd64 was accepted; the release packages arm64 too, " +
 			"so this record describes half the packages while claiming to describe the release")
 	}
-	for _, want := range []string{"arm64", "ghcr.io/grinco/vornik-agent:latest"} {
+	for _, want := range []string{"arm64", "ghcr.io/easeit-cz/vornik-agent:latest"} {
 		if !contains(err.Error(), want) {
 			t.Errorf("error %q does not name %q — an operator cannot act on it", err, want)
 		}
@@ -177,10 +177,10 @@ func TestBuildRegistryRecord_RejectsAnIndexMissingAReleaseArch(t *testing.T) {
 // The complement, so the guard cannot be satisfied by rejecting everything.
 func TestBuildRegistryRecord_AcceptsFullArchCoverage(t *testing.T) {
 	idx := fakeIndex{byTag: map[string]map[string]string{
-		"ghcr.io/grinco/vornik-agent:latest": {"amd64": "sha256:" + hex64, "arm64": "sha256:" + hex64b},
+		"ghcr.io/easeit-cz/vornik-agent:latest": {"amd64": "sha256:" + hex64, "arm64": "sha256:" + hex64b},
 	}}
 	if _, err := BuildRegistryRecord(idx, []Image{
-		{Tag: "ghcr.io/grinco/vornik-agent:latest"},
+		{Tag: "ghcr.io/easeit-cz/vornik-agent:latest"},
 	}, goodCommit); err != nil {
 		t.Fatalf("full coverage was rejected: %v", err)
 	}
@@ -192,12 +192,12 @@ func TestBuildRegistryRecord_AcceptsFullArchCoverage(t *testing.T) {
 // ordinary release.
 func TestBuildRegistryRecord_ExtraArchesAreRecordedNotRequired(t *testing.T) {
 	idx := fakeIndex{byTag: map[string]map[string]string{
-		"ghcr.io/grinco/vornik-agent:latest": {
+		"ghcr.io/easeit-cz/vornik-agent:latest": {
 			"amd64": "sha256:" + hex64, "arm64": "sha256:" + hex64b, "s390x": "sha256:" + hex64,
 		},
 	}}
 	rec, err := BuildRegistryRecord(idx, []Image{
-		{Tag: "ghcr.io/grinco/vornik-agent:latest"},
+		{Tag: "ghcr.io/easeit-cz/vornik-agent:latest"},
 	}, goodCommit)
 	if err != nil {
 		t.Fatalf("an index with an EXTRA arch was rejected: %v", err)

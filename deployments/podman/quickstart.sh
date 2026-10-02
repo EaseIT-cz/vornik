@@ -6,8 +6,8 @@
 # its published checksum before running it. This catches tampering in transit
 # or a compromised get.vornik.io redirect; it is NOT a signature (someone who
 # controls the tag could rewrite both files together), so also skim the script:
-#   REF=<release>  # a tag from github.com/grinco/vornik/releases that ships quickstart.sh.sha256
-#   base="https://raw.githubusercontent.com/grinco/vornik/$REF/deployments/podman"
+#   REF=<release>  # a tag from github.com/EaseIT-cz/vornik/releases that ships quickstart.sh.sha256
+#   base="https://raw.githubusercontent.com/EaseIT-cz/vornik/$REF/deployments/podman"
 #   curl -fsSLO "$base/quickstart.sh" && curl -fsSLO "$base/quickstart.sh.sha256"
 #   sha256sum -c quickstart.sh.sha256 && VORNIK_REF="$REF" bash quickstart.sh
 #
@@ -39,7 +39,7 @@
 #
 # Re-running is safe (idempotent; existing config is never clobbered).
 # Tunables via environment:
-#   VORNIK_REPO_URL   git URL to clone            (default: https://github.com/grinco/vornik)
+#   VORNIK_REPO_URL   git URL to clone            (default: https://github.com/EaseIT-cz/vornik)
 #   VORNIK_REF        branch/tag to check out      (default: pinned release tag; 'main' for bleeding-edge)
 #   VORNIK_DIR        where to place the checkout  (default: $HOME/vornik)
 #   VORNIK_SKIP_FETCH 1 = use VORNIK_DIR as-is, no clone/pull (offline/dev)
@@ -52,12 +52,12 @@ else
   set -euo pipefail
 fi
 
-REPO_URL="${VORNIK_REPO_URL:-https://github.com/grinco/vornik}"
+REPO_URL="${VORNIK_REPO_URL:-https://github.com/EaseIT-cz/vornik}"
 # DEFAULT_VORNIK_REF is stamped to the release tag at release/export time
 # (`make quickstart-stamp-ref REF=<tag>`), so the PUBLISHED installer pins a
 # concrete release rather than a moving branch. Keep it a real, recent tag in
 # the repo. Override at runtime with VORNIK_REF (e.g. VORNIK_REF=main).
-DEFAULT_VORNIK_REF="2026.10.1"
+DEFAULT_VORNIK_REF="2026.10.2"
 REF="${VORNIK_REF:-$DEFAULT_VORNIK_REF}"
 DIR="${VORNIK_DIR:-$HOME/vornik}"
 HTTP_PORT="${VORNIK_HTTP_PORT:-8080}"
@@ -71,7 +71,7 @@ warn() { printf '%s !!%s %s\n' "$c_yellow" "$c_off" "$*" >&2; }
 die()  { printf '%s xx%s %s\n' "$c_red"    "$c_off" "$*" >&2; exit 1; }
 
 # --- install-failure reporting (2026-07-25) ---------------------------------
-# On ANY non-zero exit, print a prefilled grinco/vornik issue URL the user can
+# On ANY non-zero exit, print a prefilled EaseIT-cz/vornik issue URL the user can
 # open + submit with their own GitHub account. The installer is the only actor
 # pre-install, so it carries its own (deliberately aggressive) secret scrubber.
 # It posts ONLY low-risk structured context (version/platform/exit + the scrubbed
@@ -149,7 +149,7 @@ report_install_failure() {
   # the stdin scrubber): a literal replace, hostnames carry no glob chars.
   hn="$(uname -n 2>/dev/null || hostname 2>/dev/null || true)"
   if [ -n "$hn" ]; then cmd="$(vornik_replace_all "$cmd" "$hn" '<host>')"; fi
-  # This installer only ever clones grinco/vornik, so an install failure is a
+  # This installer only ever clones EaseIT-cz/vornik, so an install failure is a
   # Community Edition failure by construction — nothing here can be EE. Marking it
   # (body AND title, matching `vornikctl report`) is what lets triage tell which
   # build a reporter was running (operator report 2026-08-03: a CE customer's
@@ -164,7 +164,7 @@ report_install_failure() {
 - failing command: ${cmd}
 
 <Add what you were doing and any error output here. This issue is PUBLIC — review your text for secrets, tokens, hostnames, and file paths before submitting.>"
-  url="https://github.com/grinco/vornik/issues/new?labels=$(vornik_urlencode 'bug,install')&title=$(vornik_urlencode "$title")&body=$(vornik_urlencode "$body")"
+  url="https://github.com/EaseIT-cz/vornik/issues/new?labels=$(vornik_urlencode 'bug,install')&title=$(vornik_urlencode "$title")&body=$(vornik_urlencode "$body")"
   printf '\n%s xx%s installation failed (exit %s).\n' "${c_red:-}" "${c_off:-}" "$ec" >&2
   printf 'Report it — this opens a prefilled, anonymized GitHub issue you review + submit:\n  %s\n\n' "$url" >&2
 }
@@ -412,6 +412,27 @@ fresh_db_install() {
 
 # warn_auth_disabled <config.yaml> — a re-run never edits an existing config;
 # it says so when that config still serves the API without a key.
+# seed_configs <repo> <config-dir>: the registry tree the daemon reads.
+# A fresh install gets the whole repo tree (projects included); every run then
+# deploys the assets the release added, preserve-existing, and stamps the
+# template baseline. Before 2026-10-02 only the first run copied anything, so
+# a re-run never delivered a new subtree such as agent-templates
+# (image-freshness design §15.5).
+seed_configs() {
+  sc_repo="$1"; sc_dir="$2"
+  if [ -z "$(ls -A "$sc_dir/configs" 2>/dev/null)" ]; then
+    mkdir -p "$sc_dir/configs"
+    cp -r "$sc_repo/configs/." "$sc_dir/configs/"
+    ok "Seeded $sc_dir/configs from the repo registry"
+  fi
+  if VORNIK_DEPLOY_REVISION="$(git -C "$sc_repo" rev-parse HEAD 2>/dev/null)" \
+       "$sc_repo/scripts/config-deploy.sh" "$sc_dir" >/dev/null; then
+    ok "Deployed the release's config assets into $sc_dir/configs (existing files kept)"
+  else
+    warn "Deploying the release's config assets reported a problem; re-run: $sc_repo/scripts/config-deploy.sh $sc_dir"
+  fi
+}
+
 warn_auth_disabled() {
   if grep -Eq '^[[:space:]]*auth_enabled:[[:space:]]*false' "$1" 2>/dev/null; then
     warn "$1 has api.auth_enabled: false — the API and UI accept requests without a key."
@@ -431,7 +452,7 @@ if [ "${VORNIK_QUICKSTART_SOURCED:-}" = 1 ]; then return 0 2>/dev/null || exit 0
 # no-op and the Linux install proceeds — no loop). See
 # https://docs.vornik.io
 if [ "$(uname -s)" = "Darwin" ]; then
-  mac_base="${VORNIK_INSTALL_BASE:-https://raw.githubusercontent.com/grinco/vornik/${REF}/deployments}"
+  mac_base="${VORNIK_INSTALL_BASE:-https://raw.githubusercontent.com/EaseIT-cz/vornik/${REF}/deployments}"
   echo "vornik: macOS detected → handing off to the Lima-VM installer (${mac_base}/macos/install.sh)"
   curl -fsSL "${mac_base}/macos/install.sh" | VORNIK_REF="${REF}" bash
   exit "$?"
@@ -503,7 +524,7 @@ if [ "${VORNIK_SKIP_FETCH:-}" = "1" ]; then
 elif [ -d "$DIR/.git" ]; then
   log "Updating existing checkout at $DIR"
   # Hard-reset to the remote ref rather than `pull --ff-only`. The CE publish
-  # rewrites grinco/vornik history, so a returning checkout can't fast-forward
+  # rewrites EaseIT-cz/vornik history, so a returning checkout can't fast-forward
   # — the old code then warned and continued on a STALE tree, and the curled
   # (latest) quickstart would reference files that tree lacks (e.g.
   # config/vornik.host.yaml) → a confusing `cp: cannot stat` later. $DIR is a
@@ -583,7 +604,7 @@ fi
 #    localhost/ ref is required: podman refuses bare short-names
 #    non-interactively, so an unqualified ref fails every job at start.
 # ---------------------------------------------------------------------------
-log "Building the agent image ghcr.io/grinco/vornik-agent:latest (first run ~1-2 min)..."
+log "Building the agent image ghcr.io/easeit-cz/vornik-agent:latest (first run ~1-2 min)..."
 # VORNIK_REVISION stamps the image with the commit it was built from. It is
 # what makes staleness detectable later: `vornikctl doctor` compares this
 # against the daemon's own build revision, and vornik-update.sh reads it to
@@ -595,11 +616,11 @@ if podman build -f "$DIR/images/vornik-agent/Containerfile" \
      --build-arg VORNIK_GID="$(id -g)" \
      --build-arg VORNIK_REVISION="$QUICKSTART_REV" \
      --build-arg VORNIK_VERSION="$QUICKSTART_VER" \
-     -t ghcr.io/grinco/vornik-agent:latest "$DIR"; then
-  ok "Agent image built: ghcr.io/grinco/vornik-agent:latest"
+     -t ghcr.io/easeit-cz/vornik-agent:latest "$DIR"; then
+  ok "Agent image built: ghcr.io/easeit-cz/vornik-agent:latest"
 else
   warn "Agent image build failed — jobs will fail at container start until it exists."
-  warn "  retry: podman build -f $DIR/images/vornik-agent/Containerfile -t ghcr.io/grinco/vornik-agent:latest $DIR"
+  warn "  retry: podman build -f $DIR/images/vornik-agent/Containerfile -t ghcr.io/easeit-cz/vornik-agent:latest $DIR"
 fi
 
 # ---------------------------------------------------------------------------
@@ -647,11 +668,8 @@ fi
 ensure_api_key "$CONFIG_DIR"
 [ -n "$new_install" ] || warn_auth_disabled "$CONFIG_DIR/config.yaml"
 
-# Seed the registry tree (projects/swarms/workflows/pricing) on first run.
-if [ -z "$(ls -A "$CONFIG_DIR/configs" 2>/dev/null)" ]; then
-  cp -r "$DIR/configs/." "$CONFIG_DIR/configs/"
-  ok "Seeded $CONFIG_DIR/configs from the repo registry"
-fi
+# Seed the registry tree on first run; deploy what the release added on every run.
+seed_configs "$DIR" "$CONFIG_DIR"
 
 # ---------------------------------------------------------------------------
 # 6. Bring up dependencies (PostgreSQL; scraper on Enterprise).

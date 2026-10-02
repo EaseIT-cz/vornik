@@ -9,6 +9,7 @@ import (
 	"sort"
 	"strings"
 	"time"
+	"vornik.io/vornik/internal/agentns"
 
 	"vornik.io/vornik/internal/api"
 	"vornik.io/vornik/internal/approval"
@@ -90,6 +91,9 @@ func (s *Server) loadPendingBrokerActions(r *http.Request) []brokerActionCard {
 		for _, row := range rows {
 			if row == nil || !api.RequestAllowsProject(r, row.ProjectID) {
 				continue
+			}
+			if _, agent := agentns.FromID(row.ProjectID); agent {
+				continue // approved on the approver device only (plan P4.8)
 			}
 			// Expired but not yet swept: not approvable, so no card
 			// (review-20260930-1334 F4).
@@ -221,6 +225,12 @@ func (s *Server) brokerActionGate(w http.ResponseWriter, r *http.Request, action
 	row, err := s.brokerActionRepo.Get(ctx, actionID)
 	if err != nil || row == nil {
 		http.NotFound(w, r)
+		return nil, "", false
+	}
+	if _, agent := agentns.FromID(row.ProjectID); agent {
+		// An agent project's action is approved on the approver device only
+		// (agent-administered Vornik plan P4.8).
+		http.Error(w, "approve this on your approver device", http.StatusForbidden)
 		return nil, "", false
 	}
 	approver, err := approval.Authorize(r, row.ProjectID, api.RequestAllowsProject, s.operatorIDForRequest)

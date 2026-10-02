@@ -17,7 +17,7 @@ import (
 //
 // forge.post_review posted the reviewer agent's prose straight to
 // provider.PostReview with no AI disclosure of any kind, and the surface runs
-// against a PUBLIC repository (grinco/headmatch). aidisclosure was wired
+// against a PUBLIC repository (EaseIT-cz/headmatch). aidisclosure was wired
 // only into dispatcher/channel_receiver.go and ui/chat.go, so this path reached
 // a human — a developer reading a review on their pull request — outside the
 // chokepoint the package doc claims no channel can bypass. Art 50(1) binds

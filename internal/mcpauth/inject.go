@@ -47,6 +47,28 @@ type Grants struct {
 	// (config.yaml's mcp.servers), which are admin-configured and have no
 	// project allowlist to check against.
 	Unrestricted bool
+	// Namespace is the calling project's agent namespace (agentns.FromID), or
+	// "" for an operator project. An agent project may resolve only
+	// secret://<Namespace>/<NAME>; an operator project may resolve none of
+	// those (agent-administered Vornik design §8.1).
+	Namespace string
+}
+
+// CheckNamespace refuses any reference outside the caller's namespace rule.
+// Errors name the reference, never a value.
+func CheckNamespace(refs []string, ns string) error {
+	for _, ref := range refs {
+		refNS, _, namespaced := SplitSecretName(ref)
+		switch {
+		case ns == "" && namespaced:
+			return fmt.Errorf("references secret %q, which belongs to agent namespace %q; an operator project cannot use it", ref, refNS)
+		case ns != "" && !namespaced:
+			return fmt.Errorf("references secret %q; an agent project may use only secret://%s/<NAME>", ref, ns)
+		case ns != "" && refNS != ns:
+			return fmt.Errorf("references secret %q, which belongs to another namespace", ref)
+		}
+	}
+	return nil
 }
 
 // Injection is the resolved credential material, ready for the MCP client.
@@ -76,6 +98,9 @@ func Resolve(a Auth, transport string, src SecretSource, g Grants) (Injection, e
 		return Injection{}, err
 	}
 	if !g.Unrestricted {
+		if err := CheckNamespace(a.SecretRefs(), g.Namespace); err != nil {
+			return Injection{}, err
+		}
 		if err := a.ValidateSecretGrants(g.Allowed); err != nil {
 			return Injection{}, err
 		}

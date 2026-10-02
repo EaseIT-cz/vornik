@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"vornik.io/vornik/internal/agentadmin"
 	"vornik.io/vornik/internal/apikey"
 	"vornik.io/vornik/internal/executor"
 	"vornik.io/vornik/internal/mcp"
@@ -165,25 +166,33 @@ func (s *Server) CompanionMCPHandler(w http.ResponseWriter, r *http.Request) {
 		// companion endpoint is stateless today, so a stable logical
 		// session token is sufficient.
 		w.Header().Set("Mcp-Session-Id", "vornik-companion")
-		writeJSONRPCResult(w, req.ID, map[string]any{
+		result := map[string]any{
 			"protocolVersion": companionMCPProtocolVersion,
 			"capabilities":    map[string]any{"tools": map[string]any{}},
 			"serverInfo": map[string]any{
 				"name":    companionMCPServerName,
 				"version": companionMCPServerVersion,
 			},
-		})
+		}
+		// An agent admin key gets the admin guidance as instructions
+		// (agent-administered Vornik plan P6.3). A key that does not resolve
+		// gets the plain answer, as before.
+		if key, err := s.resolveCompanionKey(r); err == nil && s.agentAdminOffered(key) {
+			result["instructions"] = agentadmin.AdminGuidance()
+		}
+		writeJSONRPCResult(w, req.ID, result)
 		return
 	case "notifications/initialized":
 		// Fire-and-forget; no response body per spec.
 		w.WriteHeader(http.StatusAccepted)
 		return
 	case "tools/list":
-		if _, err := s.resolveCompanionKey(r); err != nil {
+		key, err := s.resolveCompanionKey(r)
+		if err != nil {
 			writeJSONRPCError(w, req.ID, -32000, "auth: "+err.Error())
 			return
 		}
-		writeJSONRPCResult(w, req.ID, map[string]any{"tools": companionToolDefs()})
+		writeJSONRPCResult(w, req.ID, map[string]any{"tools": s.companionToolsFor(key)})
 		return
 	case "tools/call":
 		s.handleCompanionToolCall(w, r, req.ID, req.Params)
@@ -658,6 +667,23 @@ func (s *Server) handleCompanionToolCall(w http.ResponseWriter, r *http.Request,
 	// the memory_*_audit tables (or task rows for delegate); this row
 	// is a thin index — tool name + duration + ok/error.
 	auditStart := time.Now()
+	// The agent admin verbs (agent-administered Vornik §6) have their own
+	// gate: an agent admin key while agent_admin.enabled is on. To any other
+	// key they are the unknown tool a stranger gets.
+	if isAgentAdminTool(params.Name) {
+		if !s.agentAdminOffered(key) {
+			writeJSONRPCError(w, id, -32601, "unknown tool: "+params.Name)
+			return
+		}
+		result, toolErr = s.companionAdminTool(ctx, key, params.Name, params.Arguments)
+		s.recordCompanionToolAudit(ctx, key, params.Name, params.Arguments, result, toolErr, time.Since(auditStart))
+		if toolErr != nil {
+			writeJSONRPCResult(w, id, mcpToolCallResult{Content: []mcpToolContent{{Type: "text", Text: toolErr.Error()}}, IsError: true})
+			return
+		}
+		writeJSONRPCResult(w, id, mcpToolCallResult{Content: []mcpToolContent{{Type: "text", Text: result}}})
+		return
+	}
 	// Key-shape refusals (broker design §5.6, §8) run before any tool: a
 	// memory-only key has no task tools, and a broker-project key has only
 	// the §5.6 allowlist — unknown tools included.
@@ -1312,7 +1338,7 @@ func (s *Server) companionToolStatus(ctx context.Context, key *persistence.APIKe
 	// Cross-project access guard — the key is bound to one project;
 	// a task in another project must look like "not found" (don't
 	// leak existence).
-	if task.ProjectID != key.ProjectID {
+	if !keyCoversProject(key, task.ProjectID) {
 		return "", fmt.Errorf("task %s not found", args.TaskID)
 	}
 
@@ -1374,7 +1400,7 @@ func (s *Server) companionToolResult(ctx context.Context, key *persistence.APIKe
 		}
 		return "", fmt.Errorf("lookup: %w", err)
 	}
-	if task.ProjectID != key.ProjectID {
+	if !keyCoversProject(key, task.ProjectID) {
 		return "", fmt.Errorf("task %s not found", args.TaskID)
 	}
 	task, waitCapped := s.waitForTerminal(ctx, key, task, args.WaitSeconds)
@@ -1568,7 +1594,7 @@ func (s *Server) companionToolCancel(ctx context.Context, key *persistence.APIKe
 		}
 		return "", fmt.Errorf("lookup: %w", err)
 	}
-	if task.ProjectID != key.ProjectID {
+	if !keyCoversProject(key, task.ProjectID) {
 		return "", fmt.Errorf("task %s not found", args.TaskID)
 	}
 	transitioned, err := s.taskRepo.TransitionToCancelled(ctx, args.TaskID)

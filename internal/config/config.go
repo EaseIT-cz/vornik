@@ -13,6 +13,7 @@ import (
 	"gopkg.in/yaml.v3"
 
 	"vornik.io/vornik/internal/aidisclosure"
+	"vornik.io/vornik/internal/imageref"
 	"vornik.io/vornik/internal/mcpauth"
 	"vornik.io/vornik/internal/mediakind"
 )
@@ -511,6 +512,11 @@ type Config struct {
 	// Broker gates write actions proposed by broker workflows daemon-wide.
 	// See https://docs.vornik.io
 	Broker BrokerDaemonConfig `yaml:"broker"`
+	// AgentAdmin gates the agent admin verbs: an agent configuring Vornik
+	// for its user, every widening of its reach approved on the user's
+	// approver device. See
+	// https://docs.vornik.io
+	AgentAdmin AgentAdminConfig `yaml:"agent_admin"`
 	// Gateway configures the local API gateway (Kong DB-less) that fronts
 	// authenticated third-party HTTP APIs for the query_api tool. See
 	// https://docs.vornik.io
@@ -738,6 +744,45 @@ func (c WebDaemonConfig) WritesMode() (string, error) {
 	default:
 		return "", fmt.Errorf("web.writes: unknown value %q (want off|on|insecure)", c.Writes)
 	}
+}
+
+// AgentAdminConfig configures the agent admin verbs (agent-administered
+// Vornik design §5–§7).
+type AgentAdminConfig struct {
+	Enabled                 *bool   `yaml:"enabled,omitempty" doc:"Offer the agent admin verbs to agent admin keys on the companion endpoint. On by default: nothing is reachable without an agent admin key, which only an operator mints (vornikctl agent connect) and only after an approver device is paired (vornikctl pair-device). Set false to turn the verbs off."`
+	DefaultProjectBudgetUSD float64 `yaml:"default_project_budget_usd" doc:"Monthly budget of a project an agent creates (default 2). Raising a project's budget needs approval on an approver device."`
+	NamespaceBudgetUSD      float64 `yaml:"namespace_budget_usd" doc:"Ceiling on the sum of an agent's project budgets until a device approves more (default 10)."`
+	AgentImage              string  `yaml:"agent_image" doc:"Runtime image of the roles an agent defines (default the standard agent image)."`
+}
+
+// IsEnabled reports whether the agent admin verbs are offered: true unless
+// the config says enabled: false (agent-administered Vornik plan P6.4).
+func (a AgentAdminConfig) IsEnabled() bool { return a.Enabled == nil || *a.Enabled }
+
+// EffectiveDefaultProjectBudget returns the configured or default cap.
+func (a AgentAdminConfig) EffectiveDefaultProjectBudget() float64 {
+	if a.DefaultProjectBudgetUSD > 0 {
+		return a.DefaultProjectBudgetUSD
+	}
+	return 2
+}
+
+// EffectiveNamespaceBudget returns the configured or default ceiling.
+func (a AgentAdminConfig) EffectiveNamespaceBudget() float64 {
+	if a.NamespaceBudgetUSD > 0 {
+		return a.NamespaceBudgetUSD
+	}
+	return 10
+}
+
+// EffectiveAgentImage returns the configured or default role image.
+func (a AgentAdminConfig) EffectiveAgentImage(defaultImage string) string {
+	if a.AgentImage != "" {
+		// A setting written before the EaseIT-cz move names the legacy
+		// repository (migration design §5.2).
+		return imageref.CanonicalFrom(a.AgentImage, "agent_admin.agent_image")
+	}
+	return defaultImage
 }
 
 // BrokerDaemonConfig gates broker write actions: a write a broker workflow
@@ -1062,6 +1107,16 @@ type MCPServerConfig struct {
 	// project-scoped server for anything account-bearing.
 	// See https://docs.vornik.io §4.
 	Auth mcpauth.Auth `yaml:"auth,omitempty" doc:"How Vornik authenticates to this server: mode none|oauth|static|env, with secret:// references for every credential."`
+}
+
+// OperatorAlertActive reports whether operator alerts are actually sent: a
+// channel is configured AND steering notifications are on. It is the ONE
+// predicate for "is push configured?", shared by the daemon (approver-device
+// pushes, the approver_devices doctor check) and vornikctl pair-device, so the
+// two cannot disagree (review 20261002-ea5a F9: the daemon used to test the
+// notifier's existence, which ignores the enabled flag).
+func (c *Config) OperatorAlertActive() bool {
+	return c != nil && c.SteeringNotificationsEnabled && c.SteeringOperatorAlert.Channel != ""
 }
 
 // PublicOrigin returns the externally-reachable origin of this daemon

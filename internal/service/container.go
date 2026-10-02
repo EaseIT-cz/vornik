@@ -66,8 +66,10 @@ import (
 	"syscall"
 	"time"
 
+	"vornik.io/vornik/internal/approverdevice"
 	"vornik.io/vornik/internal/brokeractions"
 	"vornik.io/vornik/internal/companionpush"
+	"vornik.io/vornik/internal/egressscan"
 
 	"vornik.io/vornik/internal/authz"
 	"vornik.io/vornik/internal/chatauth"
@@ -121,6 +123,7 @@ import (
 	"vornik.io/vornik/internal/runtime"
 	"vornik.io/vornik/internal/scheduler"
 	"vornik.io/vornik/internal/secrets"
+	"vornik.io/vornik/internal/secretstore"
 	"vornik.io/vornik/internal/slack"
 	"vornik.io/vornik/internal/storage"
 	"vornik.io/vornik/internal/taskcreate"
@@ -140,7 +143,23 @@ type Container struct {
 	speedFactorValue   float64
 	speedFactorClamped bool
 	ConfigPath         string
-	ConfigReloader     *config.ConfigReloader
+	// secretStore opens agent credentials (agent-administered Vornik design
+	// §8.1); nil until a key exists. Guarded by secretStoreMu; see
+	// container_secretstore.go.
+	secretStore *secretstore.Store
+	// approverDevices is built once by approverDeviceService (design §9).
+	approverDevices     *approverdevice.Service
+	approverDevicesOnce sync.Once
+	// agentAdminSvc is built by agentAdmin on its first success (agent
+	// admin verbs, §6); agentAdminMu guards it, agentAdminWarned paces the
+	// warning while the templates are missing.
+	agentAdminSvc     *agentAdminService
+	agentAdminMu      sync.Mutex
+	agentAdminWarned  time.Time
+	secretStoreMu     sync.Mutex
+	secretStoreLoaded bool
+	secretStoreErr    error
+	ConfigReloader    *config.ConfigReloader
 	// stagedConfig holds a freshly re-parsed config.yaml between the reload
 	// loader (parse+validate) and activator (apply hot-reloadable keys) phases.
 	// Single-threaded within one reload pass (the ConfigReloader serialises
@@ -762,6 +781,11 @@ type Container struct {
 	// served registry in initHTTPServer.
 	brokerActionWorker  *brokeractions.Worker
 	brokerActionMetrics *brokeractions.Metrics
+	// egress* is the outbound secret scan (agent-administered Vornik plan
+	// P5; Part A of the 2026-07-16 secret-egress design).
+	egressOnce    sync.Once
+	egressScan    *api.EgressScan
+	egressMetrics *egressscan.Metrics
 	// companionPusher is the companion push outbox loop (broker
 	// write-actions design §7a); written once in Run before Serve, like
 	// brokerActionWorker. companionPushMetrics is attached in initHTTPServer.
@@ -913,6 +937,7 @@ func NewContainer(cfg *config.Config, configPath string, opts ...ContainerOption
 
 	// Phase 1 Step 1: Initialize structured JSON logger
 	c.initLogger()
+	c.installLegacyImageLogger()
 
 	// The process-spawn law's git kinds run only under a registered
 	// workspace root (S1b-2). A root that cannot be registered ("/") is a
@@ -1386,6 +1411,8 @@ func (c *Container) registerSubsystems() {
 		NewArchiveSweeperSubsystem(),
 		NewRemindersSubsystem(),
 		NewRateLimitCounterSweepSubsystem(),
+		// Agent broker schedules (agent-administered Vornik design §17).
+		NewBrokerScheduleSubsystem(),
 	)
 	// Instinct is edition-gated (CE/EE). The provider yields the
 	// subsystem only for editions that include it; Community yields nil.
@@ -2008,6 +2035,7 @@ func (c *Container) Run(ctx context.Context) error {
 	if c.brokerActionWorker = c.newBrokerActionWorker(); c.brokerActionWorker != nil {
 		go c.brokerActionWorker.Run(c.collectorsCtx)
 	}
+	c.startApproverDeviceTicker(c.collectorsCtx)
 	// MCP failed-connect recovery (every node, not leader-gated): retries a
 	// project's MCP server whose dial failed. Before 2026-09-30 such a server
 	// stayed dark until a reload or restart (ibkr-trader's broker, 24 hours).

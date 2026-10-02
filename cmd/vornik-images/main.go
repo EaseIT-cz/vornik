@@ -75,6 +75,7 @@ func main() {
 			inspect:    podmanInspect,
 			resolve:    skopeoResolve,
 			pull:       podmanPull,
+			tag:        podmanTag,
 			remove:     podmanRemove,
 			log:        func(f string, a ...any) { fmt.Fprintf(os.Stderr, f+"\n", a...) },
 		})

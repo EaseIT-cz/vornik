@@ -33,7 +33,7 @@ packaging is different.
   resolved state rather than configured state), `troubleshoot-vornik`
   (route by symptom through the doctor, the failure-class playbook, and
   task post-mortems), and `report-problem` (file an anonymized issue on
-  `github.com/grinco/vornik` that the user submits themselves). They
+  `github.com/EaseIT-cz/vornik` that the user submits themselves). They
   cross-reference each other so Codex can walk the lifecycle.
 - The same companion bearer-key model as Claude Code, but minted with
   `--client=codex`.
@@ -68,7 +68,7 @@ directly and, when file bytes are needed, stage them as `inputArtifacts` in the
        --workflows=companion-architectural-review,companion-test-coverage-audit,companion-doc-review,companion-data-validation,companion-research-gather,companion-report-summarize,companion-rag-ingest \
        --budget-usd=25 \
        --memory-all \
-       --repo-scope=github.com/grinco/vornik
+       --repo-scope=github.com/EaseIT-cz/vornik
    ```
 
    Copy the printed `sk-vornik-companion-...` secret. It is shown once.
@@ -122,7 +122,7 @@ can read it. Read and base64-encode the file locally, then pass it in
 {
   "workflow": "companion-architectural-review",
   "prompt": "Review the attached design doc for architectural issues.",
-  "repo_scope": "github.com/grinco/vornik",
+  "repo_scope": "github.com/EaseIT-cz/vornik",
   "inputArtifacts": [
     {
       "name": "design.md",

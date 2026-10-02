@@ -26,7 +26,7 @@ import (
 // always wins; an omitted arg falls back to the key default; both empty
 // yields project-wide (""); a nil key never panics.
 func TestEffectiveRepoScope(t *testing.T) {
-	keyWithDefault := &persistence.APIKey{DefaultRepoScope: "github.com/grinco/vornik"}
+	keyWithDefault := &persistence.APIKey{DefaultRepoScope: "github.com/EaseIT-cz/vornik"}
 	keyNoDefault := &persistence.APIKey{}
 
 	cases := []struct {
@@ -35,9 +35,9 @@ func TestEffectiveRepoScope(t *testing.T) {
 		argScope string
 		want     string
 	}{
-		{"explicit arg wins over key default", keyWithDefault, "github.com/grinco/headmatch", "github.com/grinco/headmatch"},
-		{"omitted arg falls back to key default", keyWithDefault, "", "github.com/grinco/vornik"},
-		{"whitespace-only arg falls back to key default", keyWithDefault, "   ", "github.com/grinco/vornik"},
+		{"explicit arg wins over key default", keyWithDefault, "github.com/EaseIT-cz/headmatch", "github.com/EaseIT-cz/headmatch"},
+		{"omitted arg falls back to key default", keyWithDefault, "", "github.com/EaseIT-cz/vornik"},
+		{"whitespace-only arg falls back to key default", keyWithDefault, "   ", "github.com/EaseIT-cz/vornik"},
 		{"explicit arg is trimmed", keyNoDefault, "  github.com/x/y  ", "github.com/x/y"},
 		{"both empty is project-wide", keyNoDefault, "", ""},
 		{"nil key with arg returns arg", nil, "github.com/x/y", "github.com/x/y"},
@@ -52,7 +52,7 @@ func TestEffectiveRepoScope(t *testing.T) {
 
 // testDefaultRepoScope is the canonical scope these tests bind on the key
 // and assert flows through to each memory operation.
-const testDefaultRepoScope = "github.com/grinco/vornik"
+const testDefaultRepoScope = "github.com/EaseIT-cz/vornik"
 
 // seedCompanionKeyWithDefaultScope mints a memory-capable Codex companion
 // key whose DefaultRepoScope is set at create time (the in-memory repo
@@ -118,11 +118,11 @@ func TestCompanionMCP_Remember_ExplicitScopeOverridesKeyDefault(t *testing.T) {
 
 	callCompanionTool(t, srv, raw, "remember", map[string]any{
 		"content":    "a note that belongs to a different repo",
-		"repo_scope": "github.com/grinco/headmatch",
+		"repo_scope": "github.com/EaseIT-cz/headmatch",
 	})
 
 	require.Len(t, fc.rememberCalls, 1)
-	assert.Equal(t, "github.com/grinco/headmatch", fc.rememberCalls[0].RepoScope,
+	assert.Equal(t, "github.com/EaseIT-cz/headmatch", fc.rememberCalls[0].RepoScope,
 		"explicit per-call repo_scope must override the key default")
 }
 
@@ -225,12 +225,12 @@ func TestCompanionMCP_Recall_ExplicitScopeWithStrictScope(t *testing.T) {
 
 	callCompanionTool(t, srv, raw, "recall", map[string]any{
 		"query":        "anything",
-		"repo_scope":   "github.com/grinco/headmatch",
+		"repo_scope":   "github.com/EaseIT-cz/headmatch",
 		"strict_scope": true,
 	})
 
 	require.Len(t, fc.recallCalls, 1)
-	assert.Equal(t, "github.com/grinco/headmatch", fc.recallCalls[0].Opts.RepoScope,
+	assert.Equal(t, "github.com/EaseIT-cz/headmatch", fc.recallCalls[0].Opts.RepoScope,
 		"explicit per-call repo_scope must override the key default even with strict_scope set")
 	assert.True(t, fc.recallCalls[0].Opts.StrictScope,
 		"strict_scope=true must reach the backend against the explicit scope")
@@ -270,11 +270,11 @@ func TestCompanionMCP_MemoryCorrect_ExplicitScopeOverridesKeyDefault(t *testing.
 
 	callCompanionTool(t, srv, raw, "memory_correct", map[string]any{
 		"wrong_claim": "the prod DB is throwaway; safe to drop",
-		"repo_scope":  "github.com/grinco/headmatch",
+		"repo_scope":  "github.com/EaseIT-cz/headmatch",
 		"max_refutes": 3,
 	})
 
 	require.Len(t, fc.correctCalls, 1)
-	assert.Equal(t, "github.com/grinco/headmatch", fc.correctCalls[0].RepoScope,
+	assert.Equal(t, "github.com/EaseIT-cz/headmatch", fc.correctCalls[0].RepoScope,
 		"explicit per-call repo_scope must override the key default on memory_correct")
 }

@@ -110,7 +110,7 @@ func (c *Container) initDispatcher() {
 	// satisfies dispatcher.MCPExecutor structurally); otherwise pass the raw
 	// manager unchanged.
 	if cp := c.buildConsultProvider(); cp != nil {
-		composed := &api.ComposedMCPExecutor{Consult: cp}
+		composed := &api.ComposedMCPExecutor{Consult: cp, Egress: c.egressScanner()}
 		if c.mcpManager != nil {
 			composed.External = c.mcpManager
 		}

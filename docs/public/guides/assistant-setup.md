@@ -1,0 +1,125 @@
+---
+sources:
+    - path: internal/cli/agent_connect.go
+      sha256: b717d69eb6267113d1cdb6421a743d90318fe9f46ac5dabf3cbe4e71e92144cf
+    - path: internal/harnessconfig/harnessconfig.go
+      sha256: 601958b2eed5b85284f43c80973d23b0bf9565a5d9e4db3fb42208ff69ea5984
+    - path: internal/agentadmin/harness.go
+      sha256: 5fbb31b776cf44588b4f924376a5ff901afcb372db2966d4099cd5196e70015c
+    - path: internal/agentadmin/admin_guidance.md
+      sha256: c9cf84e8ac809bd6c1a1dc0750226fab140b3623df646ed8d22eef38032a4934
+---
+# Let your assistant set up Vornik
+
+You can let an AI assistant (Hermes, Claude Desktop, Claude Code or Codex) build your automations for you through Vornik. It can create projects and workflows, and connect your mail, bank, calendar or any other service that has an MCP server or a REST API. It then runs that work for you.
+
+Vornik is the safety harness around it:
+
+- **The assistant never sees a credential.** When a service needs a password, token or sign-in, the assistant asks Vornik for it. You enter the value, or sign in, **on your own phone**, and Vornik stores it where the assistant cannot read it.
+- **Nothing that widens its reach happens without you.** Each of these is an approval request on your phone, worded plainly:
+  - connecting a service;
+  - every credential;
+  - each new workflow, and each change to what a workflow returns or can reach;
+  - a higher budget.
+- **Automations run on a schedule only if you approve it.** When the assistant gives a workflow a schedule (for example 08:00 on the 1st of every month), your phone shows the schedule in words, its timezone and the fixed inputs each run gets. Any change to them is a new approval. A schedule runs at most hourly. A run whose time passed while Vornik was down is skipped, not made up later.
+- **Writes are proposals.** A workflow that would send, pay, book or change something proposes it, and you approve each one before it happens.
+- **It stays in its own namespace.** Everything it creates is prefixed with its namespace (for example `hermes--finance`), and it cannot touch anything else: not another assistant's setup, not your own projects, not Vornik's settings.
+- **Keys and tokens do not leak out through it.** Arguments, API requests, proposed writes and returned results are scanned for credential-shaped values. A finding refuses the call.
+
+What it does receive is what you asked for. If you ask "summarise my spending", the summary of your spending reaches the assistant: that output was approved, by you, when the workflow was.
+
+## Before you start
+
+1. **Pair your phone** once, from the machine that runs Vornik:
+
+   ```
+   vornikctl pair-device
+   ```
+
+   Open the printed address on your phone and enter the code. The phone is now what approves everything the assistant asks for. Without a paired phone, no assistant can be connected.
+
+   **Do this yourself, never through the assistant.** The first phone is paired by the code alone, so an assistant that runs this command, or sees its output, could pair itself as the approver of its own requests.
+
+2. Make sure your `vornikctl` can reach Vornik with the operator's admin key, as for any other admin command (`VORNIK_API_KEY`, or `vornikctl auth login`).
+
+Agent administration is on by default (`agent_admin.enabled`). On its own that opens nothing: an assistant can use it only with an agent key, which only you can mint, and only once a phone is paired.
+
+It also needs the agent templates that `make install-config-assets` installs. If connect says Vornik does not offer agent administration, check `agent_admin.enabled` and run `make install-config-assets`; Vornik picks the templates up without a restart.
+
+## Connect the assistant
+
+Run this as the OS user the assistant runs as:
+
+```
+vornikctl agent connect hermes          # or: claude-desktop, claude-code, codex
+```
+
+Connect does five things:
+
+1. It checks that Vornik offers agent administration and that a phone is paired.
+2. It mints a key for the assistant's namespace. The default namespace is the assistant's name without dashes (`hermes`, `claudedesktop`, `claudecode`, `codex`); choose another with `--namespace`.
+3. It stores the key in `~/.config/vornik/agents/<namespace>.key`. The file is readable by you only, and **no assistant config file ever contains the key**.
+4. It adds one MCP server entry, `vornik-<namespace>`, to the assistant's own config. The entry runs `vornikctl agent mcp-bridge` with Vornik's address, which relays the assistant's requests to Vornik using the key file. Connect keeps everything else in that file, comments included.
+5. It prints what it did and what to do next.
+
+| Assistant | Config file connect edits |
+|---|---|
+| Hermes | `$HERMES_HOME/config.yaml` (default `~/.hermes/config.yaml`) |
+| Claude Desktop | `~/.config/Claude/claude_desktop_config.json` (Linux), `~/Library/Application Support/Claude/claude_desktop_config.json` (macOS) |
+| Claude Code | `~/.claude.json` |
+| Codex | `$CODEX_HOME/config.toml` (default `~/.codex/config.toml`) |
+
+Then **restart the assistant** and ask it what it can do with Vornik. It starts by reading `describe_installation`, which tells it the rules above and what you have already set up. For Claude Code and Codex, update the `vornik-companion` plugin first. Its `vornik-admin` skill carries the same guidance, and Vornik also sends that guidance over the connection itself.
+
+`--dry-run` checks everything and prints what would be done, without changing anything.
+
+If connect refuses because it cannot handle a config file (malformed JSON, or a Codex entry written in an unusual form), it says which file and changes nothing. Fix the file, or remove the old entry by hand, and run it again.
+
+## Assistants that can run shell commands
+
+Claude Code and Codex can run commands as your OS user. If Vornik also runs as **your** user, the assistant's shell could read Vornik's files directly (its secrets, its database and the assistant's own key), and no Vornik control can stop that.
+
+So for these two assistants, connect tries to open Vornik's secret-store key as you:
+
+- **Not readable:** Vornik runs as another OS user, and connect proceeds. This checks one file. It is good evidence of a separate user, but not a test of every file.
+- **Readable:** connect refuses. Run Vornik as a separate OS user (recommended), or pass `--accept-shared-user` to accept the risk knowingly.
+- **Cannot be checked** (Vornik is on another machine or in a container): connect refuses unless you pass `--accept-shared-user`.
+
+Connect prints which guarantees hold in your case. With a shared OS user, the very first phone pairing is also not protected. Every pairing raises an alert, so a pairing you did not make is detectable, but not prevented.
+
+Hermes and Claude Desktop reach Vornik only through the MCP connection, so this check does not apply to them.
+
+## Vornik on another machine
+
+The assistant can run on your laptop while Vornik runs on a server.
+
+- Connect **on the laptop**, as the user the assistant runs as.
+- Pass Vornik's HTTPS address with `--url`. Connect refuses plain HTTP to another machine. A tunnel or a reverse proxy with a certificate both work.
+- `connect` needs the operator's admin key for this one command. Put it in that command's environment only, from a terminal the assistant does not control:
+
+  ```
+  VORNIK_API_KEY=<admin key> vornikctl agent connect claude-code --url https://vornik.example --dry-run
+  VORNIK_API_KEY=<admin key> vornikctl agent connect claude-code --url https://vornik.example
+  ```
+
+- **Which name to use for Claude.**
+  - `claude-code` for Claude Code, including routines created in the Claude desktop app's **Code** tab.
+  - `claude-desktop` for Claude Desktop chats, and Cowork tasks that run on your computer.
+- **On a Mac,** download `vornikctl` for your Mac (`darwin-arm64` on Apple silicon, `darwin-amd64` on Intel) from the release, and check it against `checksums.txt`. It is not signed, so clear macOS's download quarantine before running it: `xattr -d com.apple.quarantine vornikctl`.
+- **The shell check.** For Claude Code and Codex, connect cannot see from the laptop whether the assistant can read Vornik's files, so it refuses until you pass `--accept-shared-user`. Pass it only when the assistant has **no shell or SSH access to the Vornik server** as the user Vornik runs as. With that access, the assistant could read Vornik's secrets and database directly, and nothing Vornik does can prevent that. Remove that access, or limit it to an OS user with no access to Vornik's files, first.
+
+## Assistants that run as a service
+
+If the assistant runs as its own service user (for example a Hermes gateway under systemd), run `vornikctl agent connect` **as that user**, so the key file and the config entry belong to it. The bridge refuses a key file owned by anyone else and says so.
+
+## See what an assistant has set up
+
+The console's **Assistants** page (`/ui/admin/agents`) lists each connected assistant: its namespace, its key and when it was last used, its projects, and the requests waiting on your phone. Open one to see its projects, workflows (with their schedules and next run) and connections with their approval status, and its credentials by name and status. Credential values are never shown.
+
+## Disconnect
+
+```
+vornikctl agent disconnect <namespace>
+```
+
+This revokes the assistant's key, removes the `vornik-<namespace>` entry from its config, and deletes the key file. Its projects, workflows and approvals stay, so connecting again picks up where it left off. After a disconnect, the assistant's next call to Vornik fails, and the message tells it to connect again.

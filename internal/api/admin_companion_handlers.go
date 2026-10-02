@@ -45,6 +45,9 @@ var knownCompanionClients = map[string]bool{
 	// and memory backend (broker design 2026-09-29 §9).
 	"hermes":   true,
 	"openclaw": true,
+	// Claude Desktop / claude.ai reach Vornik through vornikctl agent
+	// mcp-bridge (agent-administered Vornik plan P6.4).
+	"claude-desktop": true,
 }
 
 // knownCompanionClientsList is the operator-facing enumeration in error
@@ -93,6 +96,11 @@ type companionGrantRequest struct {
 	// the shape of a front agent's MEMORY key (broker design §8). CLI flag:
 	// --no-delegate.
 	DelegateDisabled bool `json:"delegateDisabled,omitempty"`
+	// AgentAdmin mints the agent admin key of Namespace (agent-administered
+	// Vornik design §5). ProjectID is ignored: the key is bound to the
+	// namespace's home project, which the grant creates.
+	AgentAdmin bool   `json:"agentAdmin,omitempty"`
+	Namespace  string `json:"namespace,omitempty"`
 }
 
 // companionGrantResponse carries the one-time-visible secret back.
@@ -117,6 +125,8 @@ type companionGrantResponse struct {
 	SkillAdmin       bool       `json:"skillAdmin,omitempty"`
 	DefaultRepoScope string     `json:"defaultRepoScope,omitempty"`
 	DelegateDisabled bool       `json:"delegateDisabled,omitempty"`
+	AgentAdmin       bool       `json:"agentAdmin,omitempty"`
+	Namespace        string     `json:"namespace,omitempty"`
 }
 
 // CompanionGrant handles POST /api/v1/companion/grant. Mints a
@@ -180,6 +190,10 @@ func (s *Server) CompanionGrant(w http.ResponseWriter, r *http.Request) {
 	if !knownCompanionClients[req.ClientKind] {
 		respondError(w, http.StatusBadRequest, "UNKNOWN_CLIENT",
 			"clientKind must be one of: "+knownCompanionClientsList())
+		return
+	}
+	if req.AgentAdmin {
+		s.companionGrantAgentAdmin(w, r, &req)
 		return
 	}
 

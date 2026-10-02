@@ -411,6 +411,15 @@ const (
 	// PAYLOAD, no request made (permanent-failure design D1, amended
 	// 2026-09-09).
 	TaskFailureClassForgeJobNoTarget = "FORGE_JOB_NO_TARGET"
+	// TaskFailureClassReachNotApproved is an agent-namespace workflow whose
+	// reach (egress schema, integrations, credentials, proposes, schedule)
+	// is not the one a person approved on an approver device
+	// (agent-administered Vornik design §7.6). Terminal: a re-run of the
+	// same task meets the same refusal until a person approves, which no
+	// retry can cause, and the task never started a container. Decided by
+	// the executor's typed reach error, never by message text (review
+	// 20261002-a048 F2).
+	TaskFailureClassReachNotApproved = "REACH_NOT_APPROVED"
 	// TaskFailureClassInvalidOutputLoop fires when a single role keeps
 	// emitting result.json that fails schema validation across the
 	// shape-retry + model-fallback budget. Distinct from INVALID_OUTPUT
@@ -1485,6 +1494,12 @@ type APIKey struct {
 	// Set by `vornikctl companion grant --no-delegate`. Broker design
 	// (https://docs.vornik.io) §8.
 	DelegateDisabled bool `json:"delegate_disabled,omitempty"`
+	// AgentAdmin marks the agent admin key of an agent namespace
+	// (agent-administered Vornik design §5): it may call the admin verbs on
+	// the companion endpoint for AgentNamespace, and nothing on /ui/* or any
+	// admin route. Set only by the companion grant, never by rotation alone.
+	AgentAdmin     bool   `json:"agent_admin,omitempty"`
+	AgentNamespace string `json:"agent_namespace,omitempty"`
 }
 
 // RotatedCopy returns the replacement key for a rotation: a brand-new
@@ -1523,6 +1538,8 @@ func (k *APIKey) RotatedCopy(id, keyHash, keyPrefix, createdBy string, now time.
 		SkillAdmin:       k.SkillAdmin,
 		AllowPush:        k.AllowPush,
 		DelegateDisabled: k.DelegateDisabled,
+		AgentAdmin:       k.AgentAdmin,
+		AgentNamespace:   k.AgentNamespace,
 	}
 	// Pointer-valued fields: copy the pointee so the rotated row never
 	// aliases the prior row's storage.

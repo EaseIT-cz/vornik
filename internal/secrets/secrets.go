@@ -80,6 +80,11 @@ const (
 	CheckpointWebhook        = "webhook"
 	CheckpointMemory         = "memory"
 	CheckpointBacklogDeposit = "backlog_deposit"
+	// CheckpointToolEgress scans the arguments of daemon-proxied tool calls
+	// before they leave (Part A of the 2026-07-16 secret-egress design).
+	// Default detect: the measurement soak. Agent-namespace projects always
+	// block, whatever this says (agent-administered Vornik plan P5).
+	CheckpointToolEgress = "tool_egress"
 )
 
 // DefaultCheckpoints returns the per-channel default action map.
@@ -117,6 +122,7 @@ func DefaultCheckpoints() map[string]Action {
 		CheckpointWebhook:        ActionBlock,
 		CheckpointMemory:         ActionRedact,
 		CheckpointBacklogDeposit: ActionBlock,
+		CheckpointToolEgress:     ActionDetect,
 	}
 }
 

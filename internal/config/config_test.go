@@ -932,7 +932,7 @@ auth:
     github:
       client_id: "Ov23xxxx"
       client_secret_file: "/tmp/secret"
-      org: "grinco"
+      org: "easeit-cz"
 `
 	var cfg Config
 	if err := yaml.Unmarshal([]byte(src), &cfg); err != nil {
@@ -957,7 +957,7 @@ auth:
 	if a.Providers.GitHub.ClientSecretFile != "/tmp/secret" {
 		t.Errorf("GitHub.ClientSecretFile = %q", a.Providers.GitHub.ClientSecretFile)
 	}
-	if a.Providers.GitHub.Org != "grinco" {
+	if a.Providers.GitHub.Org != "easeit-cz" {
 		t.Errorf("GitHub.Org = %q", a.Providers.GitHub.Org)
 	}
 }
@@ -1077,7 +1077,7 @@ func TestAuthSettings_Phase3_Validate(t *testing.T) {
 			setup: func(c *Config) {
 				c.Auth.ExternalBaseURL = "http://host:8080"
 				gh := validGitHub()
-				gh.Org = "grinco"
+				gh.Org = "easeit-cz"
 				gh.OrgMemberRole = "superuser"
 				c.Auth.Providers.GitHub = gh
 			},
@@ -1101,7 +1101,7 @@ func TestAuthSettings_Phase3_Validate(t *testing.T) {
 			setup: func(c *Config) {
 				c.Auth.ExternalBaseURL = "http://host:8080"
 				gh := validGitHub()
-				gh.Org = "grinco"
+				gh.Org = "easeit-cz"
 				gh.OrgMemberRole = "user"
 				c.Auth.Providers.GitHub = gh
 			},
@@ -1113,7 +1113,7 @@ func TestAuthSettings_Phase3_Validate(t *testing.T) {
 			setup: func(c *Config) {
 				c.Auth.ExternalBaseURL = "http://host:8080"
 				gh := validGitHub()
-				gh.Org = "grinco"
+				gh.Org = "easeit-cz"
 				gh.OrgMemberRole = "user"
 				gh.OrgMemberProjects = []string{"janka"}
 				c.Auth.Providers.GitHub = gh

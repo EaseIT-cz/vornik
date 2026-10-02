@@ -59,6 +59,8 @@ func TestTaskKeyMinter_MintTaskKey_CreatesKeyAndReturnsRaw(t *testing.T) {
 			false, false, false,
 			// delegate_disabled (broker design §8) — task keys delegate nothing via companion anyway
 			false,
+			// agent_admin, agent_namespace (agent-administered Vornik §5): a task key is never one
+			false, "",
 		).
 		WillReturnResult(sqlmock.NewResult(0, 1))
 

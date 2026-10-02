@@ -8,8 +8,8 @@ supplies the concrete implementations at construction time via the provider
 seam (`internal/service` `ProviderSet` / `WithProviders`).
 
 It is a CE package and lives in the public CE module (post-split:
-`github.com/grinco/vornik/internal/contracts`). The EE overlay
-(`github.com/grinco/vornik`) imports it as a normal module dependency and
+`github.com/EaseIT-cz/vornik/internal/contracts`). The EE overlay
+(`github.com/easeit-cz/vornik`) imports it as a normal module dependency and
 implements its interfaces. See
 [`https://docs.vornik.io`](../../https://docs.vornik.io)
 §4 and
@@ -43,7 +43,7 @@ Plain DTOs that cross the seam by value (no behaviour):
    semver). Additive changes (new optional DTO fields, new interfaces) are
    minor/patch. When in doubt, bump.
 
-3. **The EE overlay pins a CE tag.** `github.com/grinco/vornik` `require`s a
+3. **The EE overlay pins a CE tag.** `github.com/easeit-cz/vornik` `require`s a
    specific Community-module tag and updates on its **own schedule** — it is not
    forced to track CE `main`. A CE contracts change therefore does not break the
    EE build until EE deliberately bumps the pinned tag, at which point the EE

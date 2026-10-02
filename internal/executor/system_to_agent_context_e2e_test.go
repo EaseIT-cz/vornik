@@ -201,7 +201,7 @@ func TestSystemToAgent_ForgeFetchDiffShape(t *testing.T) {
 	diff := "diff --git a/room.py b/room.py\n@@ -1,3 +1,4 @@\n+import numpy as np\n"
 	out, err := json.Marshal(map[string]any{
 		"message": diff, "diff": diff,
-		"repo": "grinco/headmatch", "number": 50,
+		"repo": "EaseIT-cz/headmatch", "number": 50,
 		"scope": "full", "head_sha": "5875194",
 	})
 	require.NoError(t, err)

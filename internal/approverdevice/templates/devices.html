@@ -1,0 +1,8 @@
+{{define "devices.html"}}{{template "head" (page "Devices" 0)}}
+<nav><a href="/ui/approve/">Approvals</a><a href="/ui/approve/devices">Devices</a></nav>
+<h1>Approver devices</h1>
+{{range .Devices}}<div class="card"><p><b>{{.Label}}</b>{{if eq .ID $.Current.ID}} (this device){{end}}</p>
+<p class="mut">Paired {{when .PairedAt}}{{with .RevokedAt}} · revoked {{whenp .}}{{end}}</p>
+{{if not .RevokedAt}}<form method="post" action="/ui/approve/devices/{{.ID}}/revoke"><button class="no" type="submit">Revoke</button></form>{{end}}</div>
+{{end}}
+{{template "foot"}}{{end}}

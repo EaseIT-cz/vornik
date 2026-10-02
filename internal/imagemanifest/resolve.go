@@ -28,6 +28,12 @@ import (
 // replace a verifiable pulled image with an unverifiable local one (§S2.3).
 var ErrReferenceAbsent = errors.New("reference absent from registry")
 
+// ErrResolverAbsent reports that the tool that resolves a tag to a digest
+// (skopeo) is not installed. It is "could not consult", like an unreachable
+// registry, and is named separately so the message says what is missing
+// rather than blaming the network (issue #15, design §S2.10).
+var ErrResolverAbsent = errors.New("skopeo is not installed")
+
 // DigestLookup resolves a registry reference to its digest for this host's
 // platform. It returns ErrReferenceAbsent when the registry answered and has no
 // such reference; any other error means the registry could not be consulted.
@@ -106,6 +112,7 @@ func ResolveTarget(tag string, rec *ReleaseRecord, arch, headCommit string, look
 	default:
 		// Could not consult it. RegistryReached stays false, which is what
 		// routes an existing image to ActionLeave rather than a rebuild.
+		target.LookupFailure = err
 	}
 	return target, nil
 }

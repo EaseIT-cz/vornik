@@ -415,3 +415,27 @@ func TestBrokerActionDecisions_SignalThePushOutbox(t *testing.T) {
 		t.Fatalf("worker kicks = %v, want only the approve", kicked)
 	}
 }
+
+// Agent-administered Vornik plan P4.8: an agent project's action is approved
+// on the approver device only; /inbox refuses to decide it either way.
+// Control: the agent-project refusal in brokerActionGate.
+func TestBrokerActionInbox_RefusesAgentProjectActions(t *testing.T) {
+	a := pendingBrokerActionFixture()
+	a.ProjectID = "hermes--comms"
+	repo := newUIFakeBrokerActionRepo(a)
+	var kicked []string
+	srv := brokerActionServer(repo, &kicked)
+	for _, verb := range []string{"approve", "reject"} {
+		rec := httptest.NewRecorder()
+		srv.brokerActionInboxRouter(rec, brokerActionPost("/ui/inbox/broker-action/ba_test_1/"+verb, url.Values{"args_sha256": {"hash_shown"}}))
+		if rec.Code != http.StatusForbidden {
+			t.Fatalf("%s of an agent action from /inbox = %d, want 403", verb, rec.Code)
+		}
+	}
+	if len(repo.approve) != 0 || len(repo.reject) != 0 || len(kicked) != 0 {
+		t.Fatalf("/inbox reached the store (%v %v) or the worker (%v)", repo.approve, repo.reject, kicked)
+	}
+	if cards := srv.loadPendingBrokerActions(httptest.NewRequest(http.MethodGet, "/ui/inbox", nil)); len(cards) != 0 {
+		t.Fatalf("/inbox lists an agent action: %+v", cards)
+	}
+}

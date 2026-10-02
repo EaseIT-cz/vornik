@@ -2,6 +2,7 @@ package sqlite_test
 
 import (
 	"context"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -534,6 +535,8 @@ func TestChatMemoryWriteConfirmationRepository_Contract(t *testing.T) {
 func TestMCPOAuthTokenRepository_Contract(t *testing.T) {
 	db := newTestDB(t)
 	repotest.RunMCPOAuthTokenSuite(t, sqlite.NewMCPOAuthTokenRepository(db.DB))
+	// Plan P4.4: the agent sealing wrapper over this driver.
+	repotest.RunSealedMCPOAuthTokenSuite(t, sealedTokens(t, sqlite.NewMCPOAuthTokenRepository(db.DB)), sqlite.NewMCPOAuthTokenRepository(db.DB))
 }
 
 // TestExecutionToolGrantRepository_Contract — per-execution tool grants (registry
@@ -662,6 +665,41 @@ func TestPackageContributionSuite(t *testing.T) {
 func TestCredentialSessionSuite(t *testing.T) {
 	db := newTestDB(t)
 	repotest.RunCredentialSessionSuite(t, sqlite.NewUISessionRepository(db.DB), sqlite.NewIdentityRepository(db.DB))
+}
+
+// TestAgentSecret_Contract — the agent secret table (agent-administered
+// Vornik design §8.1).
+func TestAgentSecret_Contract(t *testing.T) {
+	db := newTestDB(t)
+	repotest.RunAgentSecretSuite(t, sqlite.NewAgentSecretRepository(db.DB))
+}
+
+// TestAgentGrant_Contract — the agent approval tables (design §7).
+func TestAgentGrant_Contract(t *testing.T) {
+	repotest.RunAgentGrantSuite(t, sqlite.NewAgentGrantRepository(newTestDB(t).DB))
+}
+
+// TestApproverDevice_Contract — approver devices, pairings and approval
+// requests (agent-administered Vornik design §9). A fresh database per
+// subtest: first-device semantics need an empty device set. It is a FILE
+// database with the production pool size, not :memory: (one connection),
+// which would serialise every transaction and hide the first-device race.
+func TestApproverDevice_Contract(t *testing.T) {
+	repotest.RunApproverDeviceSuite(t, sqlite.NewApproverDeviceRepository(newTestDB(t).DB), func(t *testing.T) persistence.ApproverDeviceRepository {
+		ctx := context.Background()
+		// The production shape (storage.go builds sqlite.Config{Path}), whose
+		// file-backed default pool is 5 connections.
+		cfg := sqlite.Config{Path: filepath.Join(t.TempDir(), "approver.db"), ConnectTimeout: 5 * time.Second}
+		db, err := sqlite.Connect(ctx, cfg)
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = db.Close() })
+		if err := db.Migrate(ctx); err != nil {
+			t.Fatal(err)
+		}
+		return sqlite.NewApproverDeviceRepository(db.DB)
+	})
 }
 
 // TestBrokerAction_Contract — the broker write-action store (broker

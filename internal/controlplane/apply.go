@@ -100,7 +100,7 @@ const scaffoldMaxOps = 12
 
 // applyFileOp is one file operation in a multi-op (scaffold) apply.
 type applyFileOp struct {
-	Op      string `json:"op"`   // applyOpCreate | applyOpReplace
+	Op      string `json:"op"`   // applyOpCreate | applyOpReplace | applyOpDelete
 	Path    string `json:"path"` // relative to ConfigDir (path-traversal-guarded)
 	Content string `json:"content"`
 }
@@ -108,7 +108,32 @@ type applyFileOp struct {
 const (
 	applyOpCreate  = "create"
 	applyOpReplace = "replace"
+	// applyOpDelete removes an existing file (agent-administered Vornik plan
+	// P3.4b, the agent's `remove` verb). Content is ignored. The expectation
+	// of the bytes being deleted travels in the proposal's read set, and
+	// rollback restores the pre-image through the snapshot envelope.
+	applyOpDelete = "delete"
 )
+
+// writePost puts an op's target into its intended post-state: written, or,
+// for a delete, absent.
+func writePost(ro resolvedOp) error {
+	if ro.op.Op == applyOpDelete {
+		if err := os.Remove(ro.target); err != nil && !os.IsNotExist(err) {
+			return err
+		}
+		return nil
+	}
+	return atomicWrite(ro.target, []byte(ro.op.Content))
+}
+
+// atIntended reports whether a target is in the op's intended post-state.
+func atIntended(op applyFileOp, cur []byte, existed bool) bool {
+	if op.Op == applyOpDelete {
+		return !existed
+	}
+	return existed && hashBytes(cur) == hashBytes([]byte(op.Content))
+}
 
 // snapshotEntry / snapshotEnvelope are the multi-op rollback record (design §3,
 // F4/S4): existed=false ⇒ delete on rollback; existed=true ⇒ restore Content.
@@ -387,6 +412,17 @@ func (e *ApplyEngine) Apply(ctx context.Context, id, actor string, ackDaemon boo
 	if total > applyMaxContentBytes {
 		return ErrContentTooLarge
 	}
+	// One op per path (review 20261002-f66a F6): two ops on one path would
+	// be reordered against each other (a create sorts before a delete) and
+	// the drift and read-set maps keep only one of them.
+	seenPath := map[string]bool{}
+	for _, op := range ops {
+		clean := filepath.ToSlash(filepath.Clean(op.Path))
+		if seenPath[clean] {
+			return fmt.Errorf("%w: two operations on %s in one change", ErrScaffoldConflict, op.Path)
+		}
+		seenPath[clean] = true
+	}
 	// Deterministic ordering (design §4): creates first, then replaces, with
 	// config.yaml replaced LAST so a crash leaves referenced files already on
 	// disk (orphans inert). Enforced by the engine, not the generator.
@@ -431,6 +467,14 @@ func (e *ApplyEngine) Apply(ctx context.Context, id, actor string, ackDaemon boo
 			if !existed {
 				return fmt.Errorf("%w: replace target %s does not exist", ErrScaffoldConflict, op.Path)
 			}
+		case applyOpDelete:
+			if !existed {
+				return fmt.Errorf("%w: delete target %s does not exist", ErrScaffoldConflict, op.Path)
+			}
+			// Nothing to parse or validate: the file stops existing. The
+			// registry reload decides whether what remains is still coherent.
+			resolved = append(resolved, resolvedOp{op: op, target: target, existed: existed, preImage: pre})
+			continue
 		default:
 			return fmt.Errorf("unknown apply op %q for %s", op.Op, op.Path)
 		}
@@ -480,7 +524,7 @@ func (e *ApplyEngine) Apply(ctx context.Context, id, actor string, ackDaemon boo
 	// Write every op; on any write failure reverse what we wrote and abort.
 	written := make([]resolvedOp, 0, len(resolved))
 	for _, ro := range resolved {
-		if werr := atomicWrite(ro.target, []byte(ro.op.Content)); werr != nil {
+		if werr := writePost(ro); werr != nil {
 			e.reverseWrites(written)
 			_ = e.reload()
 			return fmt.Errorf("apply write failed for %s (reversed): %w", ro.op.Path, werr)
@@ -525,6 +569,10 @@ func (e *ApplyEngine) mirror(proposalID string, files map[string][]byte) {
 func mirrorSetFromWritten(written []resolvedOp) map[string][]byte {
 	files := make(map[string][]byte, len(written))
 	for _, ro := range written {
+		if ro.op.Op == applyOpDelete {
+			files[ro.op.Path] = nil // the mirror's "deleted"
+			continue
+		}
 		files[ro.op.Path] = []byte(ro.op.Content)
 	}
 	return files
@@ -550,11 +598,16 @@ func (e *ApplyEngine) buildOps(p *persistence.ControlPlaneProposal) ([]applyFile
 // orderOps sorts creates before replaces, with a config.yaml replace last so a
 // crash mid-write leaves referenced files present (orphans inert; §4).
 func orderOps(ops []applyFileOp) {
+	// Creates, then replaces, then deletes (a file something referenced
+	// disappears last), and config.yaml after everything.
 	rank := func(o applyFileOp) int {
-		if o.Op == applyOpCreate {
-			return 0
-		}
 		if filepath.Base(o.Path) == "config.yaml" {
+			return 3
+		}
+		switch o.Op {
+		case applyOpCreate:
+			return 0
+		case applyOpDelete:
 			return 2
 		}
 		return 1
@@ -690,21 +743,21 @@ func targetsOverlap(a, b []string) bool {
 	return false
 }
 
-// expectedContentByPath maps each rel path a proposal writes to the content it
-// wrote (byte-exact; the apply engine writes op.Content/ApplyContent verbatim).
-func expectedContentByPath(p *persistence.ControlPlaneProposal) map[string]string {
-	m := map[string]string{}
+// expectedContentByPath maps each rel path a proposal touches to the op that
+// set its post-state (content byte-exact as written, or absent for a delete).
+func expectedContentByPath(p *persistence.ControlPlaneProposal) map[string]applyFileOp {
+	m := map[string]applyFileOp{}
 	if strings.TrimSpace(p.ApplyOps) != "" {
 		var ops []applyFileOp
 		if err := json.Unmarshal([]byte(p.ApplyOps), &ops); err == nil {
 			for _, o := range ops {
-				m[o.Path] = o.Content
+				m[o.Path] = o
 			}
 		}
 		return m
 	}
 	if strings.TrimSpace(p.ApplyTarget) != "" {
-		m[p.ApplyTarget] = p.ApplyContent
+		m[p.ApplyTarget] = applyFileOp{Op: applyOpReplace, Path: p.ApplyTarget, Content: p.ApplyContent}
 	}
 	return m
 }
@@ -753,7 +806,7 @@ func (e *ApplyEngine) rollbackUnsafe(ctx context.Context, p *persistence.Control
 		}
 	}
 	// Drift: disk must still equal exactly what P applied.
-	for rel, want := range expectedContentByPath(p) {
+	for rel, op := range expectedContentByPath(p) {
 		full, terr := e.resolveTarget(rel)
 		if terr != nil {
 			return false, terr
@@ -762,7 +815,9 @@ func (e *ApplyEngine) rollbackUnsafe(ctx context.Context, p *persistence.Control
 		if rerr != nil {
 			return false, fmt.Errorf("rollback safety: read %s: %w", rel, rerr)
 		}
-		if !existed || hashBytes(cur) != hashBytes([]byte(want)) {
+		// A delete applied leaves the path absent; anything else must hold
+		// exactly the bytes P wrote.
+		if !atIntended(op, cur, existed) {
 			return true, nil
 		}
 	}

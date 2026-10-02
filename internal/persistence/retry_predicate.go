@@ -62,6 +62,7 @@ func TaskShouldRetry(attempt, maxAttempts int, class string) bool {
 var terminalFailureClasses = map[string]bool{
 	TaskFailureClassForgeTargetUnavailable: true,
 	TaskFailureClassForgeJobNoTarget:       true,
+	TaskFailureClassReachNotApproved:       true,
 }
 
 // IsTerminalFailureClass reports whether a TASK failure class is one that never

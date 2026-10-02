@@ -17,24 +17,15 @@ for job in ci['jobs'].values():
    assert 'full' in step.get('if',''), 'partial PR artifact has no consumer'
 assert 'workflow_dispatch' in str(ci['jobs']['changes']['steps']), 'dispatch must run full tests'
 
-# --- the sync/release-* branch gate -----------------------------------------
-# The upstream receiver's sync PR skips CI because the PUSH to the same
-# immutable sync branch already ran it. Two things have to hold for that to be
-# a gate rather than a hole, and neither was asserted anywhere:
-#
-#   1. the push CI it defers to must actually exist, and
-#   2. the skip must be narrow enough that nothing else can claim it. Drop the
-#      same-repo clause and a FORK PR could name its head branch
-#      "sync/release-<40 hex>" and skip every check in this workflow.
+# --- no sync/release-* branch gate any more -----------------------------------
+# The EE mirror's sync PRs are retired with the mirror (EaseIT-cz migration
+# design §6). No push trigger for sync branches, and no PR-side skip on
+# `changes` that a fork could claim by naming its branch.
 push_branches = ci['on' if 'on' in ci else True]['push']['branches']
-assert 'sync/release-*' in push_branches, \
-    'sync branches must run full CI on push — the PR-side skip defers to it'
-changes_if = ci['jobs']['changes']['if']
-for clause in ("github.event_name != 'pull_request'",
-               "github.repository != 'grinco/vornik-ee'",
-               'github.event.pull_request.head.repo.full_name != github.repository',
-               "!startsWith(github.head_ref, 'sync/release-')"):
-    assert clause in changes_if, f'changes-job skip lost its {clause!r} narrowing clause'
+assert not any('sync/' in b for b in push_branches), \
+    'the retired sync/release-* branches must not trigger CI'
+assert 'if' not in ci['jobs']['changes'] or 'sync/release-' not in ci['jobs']['changes']['if'], \
+    'the changes job must not carry the retired sync-PR skip'
 # verify is the single required check. If it could pass while `changes` was
 # skipped, a skipped sync PR would report a green aggregate over zero jobs.
 verify_if = ci['jobs']['verify']['if']
@@ -57,7 +48,7 @@ assert not (needs - reported), \
     f'job(s) verify waits on but never reports: {sorted(needs - reported)}'
 r=read('.github/workflows/release.yaml')
 assert not Path('.github/workflows/release-enterprise.yaml').exists(), 'duplicate package publisher'
-assert 'grinco/vornik-enterprise' in r['jobs']['goreleaser']['if']
+assert 'EaseIT-cz/vornik' in r['jobs']['goreleaser']['if']
 assert 'GPG_PRIVATE_KEY' in str(r)
 assert '--skip=sign' not in str(r)
 assert 'Verify full CI' in str(r)
@@ -74,11 +65,41 @@ steps=ce['jobs']['publish-ce']['steps'] if 'publish-ce' in ce['jobs'] else list(
 tag_steps=[s for s in steps if 'tag' in s.get('name','').lower()]
 assert tag_steps, 'publish-ce must tag the exported CE tree'
 body=str(tag_steps[0])
-assert 'ls-remote' in body, 'the CE tag step must be idempotent — a re-run must not fail on an existing tag'
 assert 'release.tag_name' in body, 'the tag must come from the release that triggered the publish'
+# The step delegates to the export script's --push-tag (EaseIT-cz migration
+# plan T6.3), so idempotency and never-move are asserted where they live.
+assert '--push-tag' in body, 'the CE tag step must push through export-public-ce.sh --push-tag'
+export_src=(root/'scripts/export-public-ce.sh').read_text()
+push_tag_fn=export_src[export_src.index('push_ce_tag() {'):export_src.index('\n}\n', export_src.index('push_ce_tag() {'))]
+assert 'ls-remote' in push_tag_fn, 'the CE tag push must be idempotent — a re-run must not fail on an existing tag'
 # A release tag names one artifact forever. Moving it makes a published name
 # mean something new, which is the one thing a tag must never do.
-assert '--force' not in body and '-f ' not in body, 'the CE tag must never be moved'
+assert '--force' not in push_tag_fn and ' -f ' not in push_tag_fn, 'the CE tag must never be moved'
+# The publish token travels only as a per-command header (plan T6.3, review
+# 1c96 M4): every network git operation in the export goes through ce_git,
+# and no remote URL carries a credential.
+import re as _re
+for line in export_src.splitlines():
+    code=line.split('#',1)[0]
+    if _re.search(r'(?<![\w-])git((\s+-[Cc]\s+\S+)|(\s+-q))*\s+(push|clone|ls-remote)\b', code) and 'ce_git' not in code:
+        raise AssertionError(f'a network git operation bypasses ce_git: {line.strip()}')
+assert 'x-access-token:${' not in export_src.replace('printf \'x-access-token:%s\'',''), 'no URL may embed the token'
+# Not in argv either: `git -c` puts the header in the process's command line
+# (review e9a0 follow-up); ce_git passes it through GIT_CONFIG_* instead.
+assert 'git -c "http' not in export_src and 'GIT_CONFIG_VALUE_0=' in export_src, \
+    'the publish token must reach git through GIT_CONFIG_*, never `git -c` (argv is world-readable)'
+# publish-ce authenticates with the PAT; the org disables deploy keys (C1).
+ce_text=(root/'.github/workflows/publish-ce.yaml').read_text()
+assert 'secrets.CE_PUBLISH_TOKEN' in ce_text and 'CE_DEPLOY_KEY' not in ce_text and 'setup-publish-ssh' not in ce_text, \
+    'publish-ce must use CE_PUBLISH_TOKEN, not a deploy key'
+assert 'CE_REPO: EaseIT-cz/vornik' in ce_text, 'publish-ce must target EaseIT-cz/vornik'
+# The public repository's own workflows guard on its new name.
+for tmpl in ('publish-release.yml','publish-agent-image.yml','cla.yml'):
+    t=(root/'scripts/public-ce-templates'/tmpl).read_text()
+    assert "grinco/vornik" not in t, f'{tmpl} still names the old repository'
+pr_guard=read('scripts/public-ce-templates/publish-release.yml')['jobs']
+assert all("EaseIT-cz/vornik" in str(j.get('if','')) for j in pr_guard.values() if 'github.repository' in str(j.get('if',''))), \
+    'publish-release guards must name EaseIT-cz/vornik'
 # The release job DISPATCHES publish-ce (a GITHUB_TOKEN-published release fires
 # no release event), so on every automated release `github.event.release` is
 # empty and the tag step reads `inputs.tag`. 2026.9.4 shipped with no CE tag —
@@ -88,20 +109,6 @@ dispatch=[s for s in r['jobs']['goreleaser']['steps'] if 'fan-out' in s.get('nam
 assert dispatch, 'release.yaml must dispatch the publication fan-out'
 assert 'tag=' in str(dispatch[0]), 'release.yaml must pass the release tag to publish-ce (-f tag=…), or the CE tree is never tagged'
 
-# BOTH publication arms are asserted, not just the CE one. The upstream sync
-# branch reaches grinco/vornik-ee only through this dispatch — the `release:
-# published` trigger on release-upstream-pr.yaml never fires, for exactly the
-# reason stated above (a GITHUB_TOKEN-published release emits no release
-# event). So the dispatch line IS the mechanism, and until now nothing
-# asserted it: deleting it would have silently stopped every future release
-# from reaching the parent repo, with no failure anywhere.
-#
-# That is not hypothetical. It is the same unasserted-dispatch shape that
-# shipped 2026.9.3 AND 2026.9.4 with no CE tag, twice, through two different
-# doors. Asserting one arm and not the other leaves the trap armed on the
-# side nobody checked.
-assert 'release-upstream-pr.yaml' in str(dispatch[0]), \
-    'release.yaml must dispatch release-upstream-pr.yaml, or no release ever reaches grinco/vornik-ee'
 assert 'publish-ce.yaml' in str(dispatch[0]), \
     'release.yaml must dispatch publish-ce.yaml, or no release is ever exported to CE'
 
@@ -120,45 +127,24 @@ assert 'publish-ce.yaml' in str(dispatch[0]), \
 # of job names carries exactly the drift hazard the omission came from". So
 # this is a SET EQUALITY against the designated publishers, and adding a
 # publisher without dispatching it fails here rather than in production.
-PUBLISHERS={'docs.yaml','publish-ce.yaml','release-upstream-pr.yaml'}
-dispatched={w for w in PUBLISHERS|{'ci.yaml','release.yaml','upstream-sync-pr.yaml'}
+PUBLISHERS={'docs.yaml','publish-ce.yaml'}
+dispatched={w for w in PUBLISHERS|{'ci.yaml','release.yaml','release-upstream-pr.yaml','upstream-sync-pr.yaml'}
             if w in str(dispatch[0])}
 assert dispatched == PUBLISHERS, (
     'the release fan-out must dispatch exactly the designated publishers; '
     f'dispatched={sorted(dispatched)} designated={sorted(PUBLISHERS)}')
 
-# --- Gap 1: the mirror's tag push, asserted at the step, not at the dispatch -
+# --- The retired EE mirror stays retired (EaseIT-cz migration design §6) -----
 #
-# Nothing has EVER tagged grinco/vornik-ee. The content arrives (PRs #76-78
-# merged for 9.3/9.4/9.5) and the tags do not, because release-upstream-pr.yaml
-# pushes a branch and stops. That is the CE-tag defect of 2026-09-06 one
-# repository over, and it went unexamined for sixteen days because the fix was
-# applied to the instance rather than the class.
-#
-# Asserting only that the workflow is dispatched would repeat the very failure
-# this file catalogues — assert the trigger, not the outcome. Deleting the tag
-# push from the workflow must turn THIS red.
-up=read('.github/workflows/release-upstream-pr.yaml')
-def _d(node, key):
-    # workflow_dispatch: with no body parses as '' under BaseLoader, which is
-    # precisely the pre-fix state this assertion exists to reject.
-    v = node.get(key) if isinstance(node, dict) else None
-    return v if isinstance(v, dict) else {}
-assert 'tag' in _d(_d(_d(up,'on'),'workflow_dispatch'),'inputs'), \
-    'release-upstream-pr.yaml must declare a `tag` input, or the fan-out cannot pass one'
-upbody=str(up['jobs'])
-# The PUSH, not merely the string 'refs/tags/' — the first version of this
-# assertion matched the idempotency `ls-remote ... refs/tags/$TAG` check, so
-# deleting the push left it GREEN. Found by mutation-checking it, which is the
-# only reason it is not still inert.
-assert 'push upstream "HEAD:refs/tags/' in upbody, \
-    'release-upstream-pr.yaml must PUSH a tag to the mirror, or grinco/vornik-ee is never tagged'
-assert 'ls-remote' in upbody, \
-    'the mirror tag push must be idempotent — a re-run must not fail on an existing tag'
-assert '--force' not in upbody and ' -f ' not in upbody, \
-    'the mirror tag must never be moved: a release tag names one artifact forever'
-assert 'tag=' in str(dispatch[0]).split('release-upstream-pr.yaml')[1][:80], \
-    'the fan-out must pass -f tag= to release-upstream-pr.yaml, or the tag step sees nothing'
+# One Enterprise repository. The mirror's workflows, its deploy key and the
+# sync-PR job are gone; none may come back by an edit that forgets why.
+import glob as _glob
+for wf in _glob.glob(str(root/'.github/workflows/*.y*ml')):
+    body=open(wf).read()
+    for retired in ('grinco/vornik-ee','UPSTREAM_DEPLOY_KEY','CE_DEPLOY_KEY','release-upstream-pr','upstream-sync-pr','sync-pr-note','sync/release-'):
+        assert retired not in body, f'{wf} references the retired mirror machinery: {retired}'
+for gone in ('.github/workflows/release-upstream-pr.yaml','.github/workflows/upstream-sync-pr.yaml'):
+    assert not (root/gone).exists(), f'{gone} must stay deleted'
 
 # --- Gap 3: the installers must be stamped for the tag being released --------
 #
@@ -211,10 +197,68 @@ assert set(pron.keys()) == {'push'}, \
     f'the CE release workflow must trigger on tag push ONLY; found {sorted(pron.keys())}'
 assert 'tags' in pron['push'] and 'branches' not in pron['push'], \
     'the CE release workflow must trigger on tags, never on branch pushes'
-# EXPLICIT permissions. With no block the job inherits the repository default,
-# which is a blast radius nobody chose.
-assert pr.get('permissions') == {'contents': 'write'}, \
-    f"the CE release workflow must declare permissions: contents: write and nothing else; found {pr.get('permissions')}"
+# EXPLICIT permissions, per job (packaging design amendment 2026-10-02,
+# review 20261002-4bfc M1). The workflow grants read; only `release` writes
+# contents, and only `binaries` mints attestations. A workflow-level
+# `contents: write` would reach every job, including the one holding id-token.
+assert pr.get('permissions') == {'contents': 'read'}, \
+    f"the CE release workflow's workflow-level permissions must be contents: read; found {pr.get('permissions')}"
+jobs=pr['jobs']
+for name, job in jobs.items():
+    perms=job.get('permissions')
+    assert perms is not None, f'publish-release job {name} must declare its own permissions'
+    if name == 'release':
+        assert perms == {'contents': 'write'}, f'the release job must hold contents: write only; found {perms}'
+    elif name == 'binaries':
+        assert perms == {'contents': 'read', 'id-token': 'write', 'attestations': 'write'}, \
+            f'the binaries job must hold contents: read, id-token: write, attestations: write; found {perms}'
+    else:
+        assert perms == {'contents': 'read'}, f'publish-release job {name} must hold contents: read only; found {perms}'
+# The binaries are tested before they are built (M6) and a Mac runs the
+# darwin binary before it is attached (M2).
+assert jobs['binaries'].get('needs') == 'test', 'the binaries job must need the test job'
+assert 'macos-check' in jobs['release'].get('needs', []), 'the release job must see the macOS check result'
+# Only what runs counts: comments and step names cannot carry an assertion
+# (review 20261002-0013 F5).
+def runs(job):
+    out=[]
+    for st in job.get('steps',[]):
+        for line in str(st.get('run','')).splitlines():
+            if not line.strip().startswith('#'):
+                out.append(line)
+        w=st.get('with') or {}
+        out.extend(str(v) for v in w.values())
+    return '\n'.join(out)
+binsteps=runs(jobs['binaries'])
+assert 'darwin' in binsteps and 'dist/vornikctl-*' in binsteps, \
+    'the binaries job must build darwin vornikctl and attest every vornikctl binary (M3)'
+assert '%cI' in binsteps, 'BuildDate must come from the commit, not the clock, so re-runs build the same bytes (M5)'
+relsteps=runs(jobs['release'])
+# The headline invariant: the release never waits on the Mac. A flaky macOS
+# runner withholds the darwin assets; it must not skip the release (0013 F2).
+relif=str(jobs['release'].get('if',''))
+assert '!cancelled()' in relif and "needs.binaries.result == 'success'" in relif, \
+    f"the release job must run whenever the binaries built; found if: {relif}"
+assert 'macos-check' not in relif, \
+    f"the release job must not require the macOS check; found if: {relif}"
+macsteps=runs(jobs['macos-check'])
+assert 'exit 1' in macsteps and 'arch -x86_64' in macsteps, \
+    'the macOS check must fail, not skip, when it cannot run the amd64 binary (0013 F3)'
+assert 'gh release edit' in relsteps, 'a re-run that attaches the macOS binaries must retract the withheld line (0013 F1)'
+assert '--clobber' not in relsteps, 'release uploads must never replace an asset'
+assert "grep -qx" in relsteps, 'release uploads must skip assets already on the release'
+assert 'MAC_OK' in relsteps and 'vornikctl-darwin' in relsteps, \
+    'darwin assets must be uploaded only behind the macos-check result (M2)'
+assert 'were not attached' in relsteps, 'a withheld Mac asset must be said in the release notes (M2)'
+# The CE ci.yaml carried a v*-tag release job that never ran: CE tags are
+# calendar versions. It must not come back beside publish-release.
+ceci=read('scripts/public-ce-templates/ci.yaml')
+ceon=ceci.get('on', ceci.get(True, {}))
+assert 'tags' not in (ceon.get('push') or {}), 'the CE ci.yaml must not trigger on tags; releases are publish-release.yml\'s'
+assert 'release' not in ceci['jobs'], 'the CE ci.yaml must not carry a release job'
+assert 'macos-check' in ceci['jobs'], 'the CE ci.yaml must run the darwin checks on every push'
+assert '--- PASS' in runs(ceci['jobs']['macos-check']), \
+    'the CE macOS check must count the tests it ran, or it can pass on none (0013 F4)'
 prbody=str(pr['jobs'])
 assert 'gh release view' in prbody, \
     'creating the CE release must be idempotent — a re-run must not fail on an existing release'

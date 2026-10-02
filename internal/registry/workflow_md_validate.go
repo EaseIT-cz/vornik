@@ -33,6 +33,8 @@ import (
 	"regexp"
 	"strings"
 
+	"vornik.io/vornik/internal/agentns"
+
 	"gopkg.in/yaml.v3"
 )
 
@@ -72,6 +74,25 @@ const (
 // non-ASCII. The same regex validates `metadata.related_skills`
 // entries (each is a name pointing at another skill).
 var nameShapeRe = regexp.MustCompile(`^[a-z0-9]+(-[a-z0-9]+)*$`)
+
+// workflowNameShapeOK accepts lowercase-hyphens, or an agent ID
+// (agent-administered Vornik design §5): a valid agent namespace, then one
+// or more lowercase-hyphens segments, joined by agentns.Separator.
+func workflowNameShapeOK(name string) bool {
+	if nameShapeRe.MatchString(name) {
+		return true
+	}
+	ns, ok := agentns.FromID(name)
+	if !ok {
+		return false
+	}
+	for _, seg := range strings.Split(strings.TrimPrefix(name, ns+agentns.Separator), agentns.Separator) {
+		if !nameShapeRe.MatchString(seg) {
+			return false
+		}
+	}
+	return true
+}
 
 // versionShapeRe accepts both two-segment (`1.0`) and full
 // semver (`1.0.0[-pre][+meta]`) forms. agentskills.io's spec
@@ -401,7 +422,7 @@ func ValidateWorkflowMarkdown(content []byte, filename string) *WorkflowMDValida
 				Message:  fmt.Sprintf("%s is %d chars; max %d", nameField, len(name), workflowMDNameMaxLen),
 			})
 		}
-		if !nameShapeRe.MatchString(name) {
+		if !workflowNameShapeOK(name) {
 			report.Findings = append(report.Findings, WorkflowMDFinding{
 				Severity: SeverityError,
 				Code:     "name_shape",

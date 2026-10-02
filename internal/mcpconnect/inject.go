@@ -145,7 +145,7 @@ func (c *Connector) refreshLocked(ctx context.Context, ref ServerRef, current *p
 		creds.ID = current.ClientID
 	}
 
-	tr, err := mcpauth.Refresh(ctx, c.HTTP, md, creds, current.RefreshToken)
+	tr, err := mcpauth.Refresh(ctx, c.httpFor(ref.ProjectID, ref.URL), md, creds, current.RefreshToken)
 	if err != nil {
 		// invalid_grant is terminal: the grant is gone at the vendor and no
 		// amount of retrying brings it back, so flag it and stop. Any other

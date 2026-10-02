@@ -56,7 +56,7 @@ func githubConfig() *config.Config {
 				GitHub: &config.GitHubProviderSettings{
 					ClientID:     "Iv1.abc",
 					ClientSecret: "shh",
-					Org:          "grinco",
+					Org:          "easeit-cz",
 				},
 			},
 		},

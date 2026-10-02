@@ -897,3 +897,38 @@ func TestPollReloadStatus_CompletedSucceeds(t *testing.T) {
 		t.Fatalf("completed reload should succeed: %v", err)
 	}
 }
+
+// Review 20261002-8932 finding 3 (agent-administered Vornik design §8.1, "No
+// second writer"): the integrations save path writes project secrets into
+// secrets/project-secrets.env and the process environment. For an agent
+// project it must refuse before probing or placing anything.
+func TestSave_RefusesAgentProjects(t *testing.T) {
+	dir := newTestConfigDir(t)
+	envName := projectScopedEnvName("TEST_AGENT_SECRET", "hermes--finance")
+	t.Cleanup(func() { _ = os.Unsetenv(envName) })
+	prober := &fakeProber{kind: "synthetic", result: okProbe("synthetic")}
+	kind := IntegrationKind{
+		ID:     "synthetic",
+		Scope:  ScopeProject,
+		Fields: []CredentialField{{Key: "token", Secret: true, EnvName: "TEST_AGENT_SECRET"}},
+		Prober: prober,
+	}
+	target := SaveTarget{Scope: ScopeProject, ConfigFile: projectConfigFile, ScalarKeys: map[string]string{"token": "token"}}
+	cand := CandidateConfig{Kind: "synthetic", ProjectID: "hermes--finance", Values: map[string]string{"token": "AGENT-CANARY-VALUE"}}
+	_, err := Save(context.Background(), kind, target, cand, adminCaller(), SaveDeps{ConfigDir: dir})
+	if err == nil || !strings.Contains(err.Error(), "approver device") {
+		t.Fatalf("Save for an agent project = %v, want a refusal naming the approver device", err)
+	}
+	if strings.Contains(err.Error(), "AGENT-CANARY-VALUE") {
+		t.Fatal("the refusal carries the value")
+	}
+	if prober.calls != 0 {
+		t.Fatalf("probed %d time(s) before refusing", prober.calls)
+	}
+	if os.Getenv(envName) != "" {
+		t.Fatal("the value reached the process environment")
+	}
+	if b, rerr := os.ReadFile(filepath.Join(dir, "secrets", projectSecretsFile)); rerr == nil && strings.Contains(string(b), "AGENT-CANARY-VALUE") {
+		t.Fatal("the value reached the project secrets file")
+	}
+}

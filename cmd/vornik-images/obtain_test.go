@@ -2,6 +2,7 @@ package main
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -43,6 +44,7 @@ func baseOpts(t *testing.T) obtainOpts {
 		inspect:    func(string) (imagemanifest.LocalImage, error) { return imagemanifest.LocalImage{}, nil },
 		resolve:    func(string) (string, error) { return "", imagemanifest.ErrReferenceAbsent },
 		pull:       func(string) error { return nil },
+		tag:        func(string, string) error { return nil },
 		remove:     func(string) error { return nil },
 		log:        func(string, ...any) {},
 	}
@@ -62,7 +64,7 @@ func TestSuccessfulPullEmitsNoBuild(t *testing.T) {
 	if len(build) != 0 {
 		t.Errorf("got %d rows to build, want 0 — a pulled image must not also be built", len(build))
 	}
-	want := "ghcr.io/grinco/vornik-agent@" + digestA
+	want := "ghcr.io/easeit-cz/vornik-agent@" + digestA
 	if pulled != want {
 		t.Errorf("pulled %q, want %q — every obtain pulls BY DIGEST (§S2.2)", pulled, want)
 	}
@@ -232,3 +234,94 @@ func TestCorruptReleaseRecordAborts(t *testing.T) {
 }
 
 func writeFile(path, body string) error { return os.WriteFile(path, []byte(body), 0o644) }
+
+// Issue #17 (2026-10-01): a pull by digest creates no tag, and nothing tagged
+// the result, so the agent image tag (then ghcr.io/…/vornik-agent:latest) named nothing (a first
+// obtain) or the OLD image (an update) after an update that reported success.
+func TestPullTagsTheDigestWithTheDeploymentTag(t *testing.T) {
+	o := baseOpts(t)
+	o.resolve = func(string) (string, error) { return digestA, nil }
+	var order []string
+	o.pull = func(ref string) error { order = append(order, "pull "+ref); return nil }
+	o.tag = func(src, dst string) error { order = append(order, "tag "+src+" "+dst); return nil }
+
+	if _, err := runObtain([]imagemanifest.Image{agent}, o); err != nil {
+		t.Fatalf("runObtain: %v", err)
+	}
+	ref := "ghcr.io/easeit-cz/vornik-agent@" + digestA
+	want := []string{"pull " + ref, "tag " + ref + " " + agent.Tag}
+	if strings.Join(order, "|") != strings.Join(want, "|") {
+		t.Errorf("calls = %q, want %q", order, want)
+	}
+}
+
+// The tag is what the runtime resolves. Failing to set it is fatal, like
+// failing to record the obtain: step 3b runs before the cutover, and going on
+// would start a daemon whose agent tag names the wrong image or nothing.
+func TestTagFailureIsFatalAndNothingIsRecorded(t *testing.T) {
+	o := baseOpts(t)
+	o.resolve = func(string) (string, error) { return digestA, nil }
+	o.tag = func(string, string) error { return errors.New("tag: no space left on device") }
+
+	if _, err := runObtain([]imagemanifest.Image{agent}, o); err == nil || !strings.Contains(err.Error(), "no space left") {
+		t.Fatalf("runObtain err = %v, want the tag failure", err)
+	}
+	rec, err := imagemanifest.LoadObtained(imagemanifest.DefaultObtainedPath())
+	if err != nil {
+		t.Fatalf("LoadObtained: %v", err)
+	}
+	if got, ok := rec.MethodFor(agent.Tag); ok {
+		t.Errorf("recorded %+v for an image whose tag was never set", got)
+	}
+}
+
+// Issue #15 (2026-10-01): with no skopeo installed the update said the
+// registry could not be reached, while GHCR was reachable. The action (leave,
+// or build when there is no image) was right; the words sent the operator to
+// debug a network that was fine.
+func TestMissingResolverIsNamedNotReportedAsAnOutage(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		present bool
+		want    string
+	}{
+		{"existing image is left", true, "LEFT AS IS"},
+		{"no image is built", false, ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			o := baseOpts(t)
+			o.resolve = func(string) (string, error) { return "", imagemanifest.ErrResolverAbsent }
+			o.inspect = func(string) (imagemanifest.LocalImage, error) {
+				return imagemanifest.LocalImage{Present: tc.present}, nil
+			}
+			var logged strings.Builder
+			o.log = func(f string, a ...any) { logged.WriteString(fmt.Sprintf(f, a...) + "\n") }
+
+			build, err := runObtain([]imagemanifest.Image{agent}, o)
+			if err != nil {
+				t.Fatalf("runObtain: %v", err)
+			}
+			if tc.present != (len(build) == 0) {
+				t.Errorf("build = %d rows with present=%v", len(build), tc.present)
+			}
+			out := logged.String()
+			if !strings.Contains(out, "skopeo") {
+				t.Errorf("the message does not name skopeo:\n%s", out)
+			}
+			if strings.Contains(out, "could not be reached") {
+				t.Errorf("the message still blames the registry:\n%s", out)
+			}
+			if tc.want != "" && !strings.Contains(out, tc.want) {
+				t.Errorf("missing %q:\n%s", tc.want, out)
+			}
+		})
+	}
+}
+
+// skopeoResolve with no skopeo on PATH reports ErrResolverAbsent.
+func TestSkopeoResolveWithoutSkopeoIsResolverAbsent(t *testing.T) {
+	t.Setenv("PATH", t.TempDir())
+	if _, err := skopeoResolve("ghcr.io/easeit-cz/vornik-agent:sha-123456789012"); !errors.Is(err, imagemanifest.ErrResolverAbsent) {
+		t.Fatalf("err = %v, want ErrResolverAbsent", err)
+	}
+}

@@ -2,8 +2,8 @@
 
 ## Community support (free)
 
-- **Issues:** <https://github.com/grinco/vornik/issues> — bugs and feature requests.
-- **Discussions:** <https://github.com/grinco/vornik/discussions> — questions and ideas.
+- **Issues:** <https://github.com/EaseIT-cz/vornik/issues> — bugs and feature requests.
+- **Discussions:** <https://github.com/EaseIT-cz/vornik/discussions> — questions and ideas.
 
 Community support is best-effort: there is no guaranteed response time. For a
 bug, include your Vornik version (`vornik --version`), config (with secrets

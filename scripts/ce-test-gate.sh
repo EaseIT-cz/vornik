@@ -5,7 +5,7 @@
 # (https://docs.vornik.io), amendment
 # 2026-10-01.
 #
-# WHY THIS EXISTS. 2026.9.7 reached grinco/vornik with CE-only test failures.
+# WHY THIS EXISTS. 2026.9.7 reached EaseIT-cz/vornik with CE-only test failures.
 # Every publish path ran the export with SKIP_TESTS=1, and without it the
 # export's `go test ./...` was a warn that set tfail, a counter --publish
 # never read. So nothing ran the exported tree's tests before it went public.

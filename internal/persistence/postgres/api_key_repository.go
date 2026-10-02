@@ -88,8 +88,8 @@ func (r *APIKeyRepository) Create(ctx context.Context, key *persistence.APIKey) 
 		    rate_limit_rps, rate_limit_burst,
 		    allowed_workflows, budget_cap_usd, client_kind, session_label,
 		    memory_read, memory_write, allow_push, default_repo_scope,
-		    skill_read, skill_write, skill_admin, delegate_disabled
-		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22)`,
+		    skill_read, skill_write, skill_admin, delegate_disabled, agent_admin, agent_namespace
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24)`,
 		key.ID, key.ProjectID, key.Name, key.KeyHash, key.KeyPrefix,
 		key.CreatedAt, key.ExpiresAt, nullable(key.CreatedBy),
 		rps, burst,
@@ -97,7 +97,7 @@ func (r *APIKeyRepository) Create(ctx context.Context, key *persistence.APIKey) 
 		nullable(key.ClientKind), nullable(key.SessionLabel),
 		key.MemoryRead, key.MemoryWrite, key.AllowPush, nullable(key.DefaultRepoScope),
 		key.SkillRead, key.SkillWrite, key.SkillAdmin,
-		key.DelegateDisabled,
+		key.DelegateDisabled, key.AgentAdmin, key.AgentNamespace,
 	)
 	return mapDBError(err)
 }
@@ -113,7 +113,7 @@ func (r *APIKeyRepository) LookupActiveByHash(ctx context.Context, keyHash strin
 		       rate_limit_rps, rate_limit_burst,
 		       allowed_workflows, budget_cap_usd, client_kind, session_label,
 		       memory_read, memory_write, allow_push, default_repo_scope,
-		       skill_read, skill_write, skill_admin, delegate_disabled
+		       skill_read, skill_write, skill_admin, delegate_disabled, agent_admin, agent_namespace
 		FROM api_keys
 		WHERE key_hash = $1
 		  AND revoked_at IS NULL
@@ -138,7 +138,7 @@ func (r *APIKeyRepository) GetByID(ctx context.Context, keyID string) (*persiste
 		       rate_limit_rps, rate_limit_burst,
 		       allowed_workflows, budget_cap_usd, client_kind, session_label,
 		       memory_read, memory_write, allow_push, default_repo_scope,
-		       skill_read, skill_write, skill_admin, delegate_disabled
+		       skill_read, skill_write, skill_admin, delegate_disabled, agent_admin, agent_namespace
 		FROM api_keys
 		WHERE id = $1`,
 		keyID,
@@ -156,7 +156,7 @@ func (r *APIKeyRepository) ListByProject(ctx context.Context, projectID string) 
 		       rate_limit_rps, rate_limit_burst,
 		       allowed_workflows, budget_cap_usd, client_kind, session_label,
 		       memory_read, memory_write, allow_push, default_repo_scope,
-		       skill_read, skill_write, skill_admin, delegate_disabled
+		       skill_read, skill_write, skill_admin, delegate_disabled, agent_admin, agent_namespace
 		FROM api_keys
 		WHERE project_id = $1
 		ORDER BY created_at DESC`,
@@ -188,7 +188,7 @@ func (r *APIKeyRepository) ListAttributable(ctx context.Context) ([]*persistence
 		       rate_limit_rps, rate_limit_burst,
 		       allowed_workflows, budget_cap_usd, client_kind, session_label,
 		       memory_read, memory_write, allow_push, default_repo_scope,
-		       skill_read, skill_write, skill_admin, delegate_disabled
+		       skill_read, skill_write, skill_admin, delegate_disabled, agent_admin, agent_namespace
 		FROM api_keys
 		WHERE left(name, length($1)) <> $1
 		ORDER BY created_at DESC`, persistence.TaskKeyNamePrefix)
@@ -219,7 +219,7 @@ func (r *APIKeyRepository) ListCompanionByProject(ctx context.Context, projectID
 		       rate_limit_rps, rate_limit_burst,
 		       allowed_workflows, budget_cap_usd, client_kind, session_label,
 		       memory_read, memory_write, allow_push, default_repo_scope,
-		       skill_read, skill_write, skill_admin, delegate_disabled
+		       skill_read, skill_write, skill_admin, delegate_disabled, agent_admin, agent_namespace
 		FROM api_keys
 		WHERE project_id = $1
 		  AND client_kind IS NOT NULL
@@ -259,6 +259,7 @@ func scanAPIKeyRow(scanner interface{ Scan(dest ...any) error }) (*persistence.A
 		&allowedWF, &budget, &clientKind, &sessionLabel,
 		&k.MemoryRead, &k.MemoryWrite, &k.AllowPush, &defaultRepoScope,
 		&k.SkillRead, &k.SkillWrite, &k.SkillAdmin, &k.DelegateDisabled,
+		&k.AgentAdmin, &k.AgentNamespace,
 	); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, persistence.ErrAPIKeyNotFound

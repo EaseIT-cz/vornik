@@ -65,7 +65,7 @@ func TestResolveWithoutRecordUsesTheCommitTag(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ResolveTarget: %v", err)
 	}
-	want := "ghcr.io/grinco/vornik-agent:sha-" + ceCommit[:12]
+	want := "ghcr.io/easeit-cz/vornik-agent:sha-" + ceCommit[:12]
 	if asked != want {
 		t.Errorf("resolved %q, want %q — the CE path is commit-addressed", asked, want)
 	}
@@ -158,7 +158,7 @@ func TestRecordBeatsTheCommitTag(t *testing.T) {
 // rather than reporting "nothing published" — the record describes the release,
 // not every image a host might hold.
 func TestRecordWithoutThisImageFallsThrough(t *testing.T) {
-	rec := &ReleaseRecord{Images: []ImageRecord{{Tag: "ghcr.io/grinco/something-else:latest"}}}
+	rec := &ReleaseRecord{Images: []ImageRecord{{Tag: "ghcr.io/easeit-cz/something-else:latest"}}}
 	called := false
 	lookup := func(string) (string, error) { called = true; return digestB, nil }
 

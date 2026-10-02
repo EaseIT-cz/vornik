@@ -410,7 +410,7 @@ func TestRetryFromStep_AcceptsCurrentStep(t *testing.T) {
 	//
 	// Without this gate the assertions below race that goroutine. They won
 	// locally and on the fork's CI and LOST on the parent repo's runner
-	// (grinco/vornik-ee run 34033978109, 2026-09-06: CurrentStepID was "done",
+	// (the retired EE mirror's run 34033978109, 2026-09-06: CurrentStepID was "done",
 	// not "review"). A 1-in-N stochastic failure is not a flaky test, it is a
 	// test with no synchronisation; the fix is a seam, not a retry or a sleep.
 	//

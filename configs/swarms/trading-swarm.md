@@ -50,7 +50,7 @@ roles:
       model: "kimi-k2.6"
       modelFallback: "moonshotai.kimi-k2.5"
       runtime:
-        image: "ghcr.io/grinco/vornik-agent:latest"
+        image: "ghcr.io/easeit-cz/vornik-agent:latest"
       permissions:
         allowedTools:
             - "current_time"
@@ -103,7 +103,7 @@ roles:
       responseFormat: "json_object"
       shapeRetryHint: "Two rules. (1) Preserve approvals from your prior reasoning unless a cap gate fired. An empty `approved` array on retry is ONLY correct when proposals were already empty OR every proposal genuinely failed a cap. Do NOT abandon valid approvals as a safe default — that wastes the strategist's signal. (2) Each tool call AND your final response MUST be a single JSON envelope. Do NOT embed `<tool_call>`, `<arg_value>`, `<arg_key>`, `<parameter`, `<invoke`, or any other XML-wrapper tokens INSIDE the JSON. GLM-5 has been observed appending `</arg_value><arg_key>has_rejections</arg_key>...` after a clean approval — that pollutes the output and forces this retry. Emit the structured JSON cleanly with no XML markup before, after, or inside it."
       runtime:
-        image: "ghcr.io/grinco/vornik-agent:latest"
+        image: "ghcr.io/easeit-cz/vornik-agent:latest"
       permissions:
         allowedTools:
             - "current_time"
@@ -137,7 +137,7 @@ roles:
       model: "minimax-m2.7"
       modelFallback: "minimax.minimax-m2.5"
       runtime:
-        image: "ghcr.io/grinco/vornik-agent:latest"
+        image: "ghcr.io/easeit-cz/vornik-agent:latest"
       permissions:
         allowedTools:
             - "current_time"

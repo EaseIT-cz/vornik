@@ -31,7 +31,7 @@ case "$1 $2" in
       $'vornik-broker-ta\tlocalhost/vornik-broker-ta:latest\tdeployments/podman/trading.compose.yaml\t/repo/deployments/podman\tbroker-ta' \
       $'vornik-broker-news\tlocalhost/vornik-broker-news:latest\tdeployments/podman/trading.compose.yaml\t/repo/deployments/podman\tbroker-news' \
       $'vornik-scraper\tlocalhost/vornik-scraper:latest\t\t\t' \
-      $'vornik-snake-lead-task-1\tghcr.io/grinco/vornik-agent:latest\t\t\t'
+      $'vornik-snake-lead-task-1\tghcr.io/easeit-cz/vornik-agent:latest\t\t\t'
     ;;
   "inspect vornik-broker-ta") echo "restart" ;;
   "inspect vornik-broker-news") echo "none" ;;

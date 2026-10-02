@@ -36,6 +36,8 @@ import (
 	"sync"
 	"syscall"
 	"time"
+
+	"vornik.io/vornik/internal/imageref"
 )
 
 // ErrRefused marks an argv outside its kind's grammar. Nothing was started.
@@ -158,9 +160,13 @@ func podmanProgram(kind Kind, path string) (string, error) {
 // pinnedRepositories are the agent image's one name, pulled or built locally
 // (packaged-image-provenance design; imagemanifest.AgentImageTag). Any tag or
 // digest of it is the pinned image.
+//
+// The legacy ghcr.io/grinco/vornik-agent is deliberately absent (EaseIT-cz
+// migration design §5.2): runtime.QualifyAgentImage maps it on every spawn,
+// so it reaching argv means a missed seam, refused rather than run stale.
 var pinnedRepositories = map[string]bool{
-	"ghcr.io/grinco/vornik-agent": true,
-	"localhost/vornik-agent":      true,
+	imageref.AgentRepo:       true,
+	"localhost/vornik-agent": true,
 }
 
 // IsPinnedAgentImage reports whether ref names the pinned agent image.
@@ -283,6 +289,14 @@ func PodmanAgent(ctx context.Context, podmanPath string, argv []string) (*Cmd, e
 		return nil, refuse(KindPodmanAgent, "no image")
 	}
 	if !IsPinnedAgentImage(rest[0]) {
+		if imageref.Canonical(rest[0]) != rest[0] {
+			// The legacy agent name: every spawn passes through
+			// runtime.QualifyAgentImage, which maps it, so this is a seam that
+			// mapping did not see (EaseIT-cz migration design §11 item 3).
+			return nil, refuse(KindPodmanAgent, "image %q is the agent image's legacy name; "+
+				"runtime.QualifyAgentImage should have mapped it to %q before argv (a missed seam)",
+				rest[0], imageref.Canonical(rest[0]))
+		}
 		return nil, refuse(KindPodmanAgent, "image %q is not the pinned agent image", rest[0])
 	}
 	return newCmd(ctx, KindPodmanAgent, prog, argv), nil

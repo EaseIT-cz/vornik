@@ -9,6 +9,7 @@ package macos
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -294,10 +295,10 @@ func TestInstallShPinsNestedQuickstartToVornikRef(t *testing.T) {
 	if !strings.Contains(sh, `REF="${VORNIK_REF:-`) {
 		t.Error("install.sh must consume the release ref propagated by the Linux entry point")
 	}
-	if !strings.Contains(sh, `grinco/vornik/${REF}/deployments/podman/quickstart.sh`) {
+	if !strings.Contains(sh, `EaseIT-cz/vornik/${REF}/deployments/podman/quickstart.sh`) {
 		t.Error("nested quickstart fetch must use the pinned VORNIK_REF, not a moving branch")
 	}
-	if strings.Contains(sh, "grinco/vornik/main/deployments/podman/quickstart.sh") {
+	if strings.Contains(sh, "EaseIT-cz/vornik/main/deployments/podman/quickstart.sh") {
 		t.Error("nested quickstart must not silently fetch moving main")
 	}
 }
@@ -446,5 +447,38 @@ func TestShimGenericForward(t *testing.T) {
 	sh := repoFile(t, "deployments/macos/vornikctl")
 	if !strings.Contains(sh, `limactl shell vornik vornikctl "$@"`) {
 		t.Error(`vornikctl shim must forward unrecognized commands via limactl shell vornik vornikctl "$@"`)
+	}
+}
+
+// Review 20261002-4bfc M9: on a Mac with the Lima install, `vornikctl` is this
+// shim, and forwarding `agent connect` into the VM would write the MCP entry
+// into a config the Mac's assistant never reads (and `agent mcp-bridge` would
+// run in the wrong place). The shim refuses every `agent` subcommand and names
+// the native binary. Executed, not grepped: a fake limactl records any forward.
+func TestShimRefusesAgentCommands(t *testing.T) {
+	dir := t.TempDir()
+	calls := filepath.Join(dir, "limactl.calls")
+	fake := "#!/usr/bin/env bash\necho \"$*\" >> " + calls + "\n" +
+		"case \"$1\" in list) echo Running ;; esac\nexit 0\n"
+	if err := os.WriteFile(filepath.Join(dir, "limactl"), []byte(fake), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for _, args := range [][]string{
+		{"agent", "connect", "claude-code"},
+		{"agent", "mcp-bridge", "--namespace", "x"},
+		{"agent", "disconnect", "x"},
+	} {
+		cmd := exec.Command("bash", append([]string{"vornikctl"}, args...)...)
+		cmd.Env = append(os.Environ(), "PATH="+dir+":"+os.Getenv("PATH"))
+		out, err := cmd.CombinedOutput()
+		if err == nil {
+			t.Errorf("%v: the shim succeeded; it must refuse", args)
+		}
+		if !strings.Contains(string(out), "native") {
+			t.Errorf("%v: the refusal does not point at the native vornikctl:\n%s", args, out)
+		}
+		if b, _ := os.ReadFile(calls); strings.Contains(string(b), "shell") {
+			t.Errorf("%v: the shim forwarded into the VM: %s", args, b)
+		}
 	}
 }

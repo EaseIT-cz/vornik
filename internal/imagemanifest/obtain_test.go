@@ -17,7 +17,7 @@ import "testing"
 // this project has shipped before (the 2026-08-14 gold manifest).
 
 const (
-	registryTag = "ghcr.io/grinco/vornik-agent:latest"
+	registryTag = "ghcr.io/easeit-cz/vornik-agent:latest"
 	localTag    = "localhost/vornik-broker:latest"
 
 	eeHead   = "1111111111111111111111111111111111111111"
@@ -170,12 +170,12 @@ func TestLocalTagRules(t *testing.T) {
 // means one of them is wrong (tenet §5).
 func TestOneRegistryPredicate(t *testing.T) {
 	cases := map[string]bool{
-		"ghcr.io/grinco/vornik-agent:latest": true,
-		"docker.io/library/golang:1.25":      true,
-		"localhost/vornik-broker:latest":     false,
-		"localhost:5000/vornik-agent:latest": false,
-		"vornik-agent:latest":                false,
-		"vornik-agent":                       false,
+		"ghcr.io/easeit-cz/vornik-agent:latest": true,
+		"docker.io/library/golang:1.25":         true,
+		"localhost/vornik-broker:latest":        false,
+		"localhost:5000/vornik-agent:latest":    false,
+		"vornik-agent:latest":                   false,
+		"vornik-agent":                          false,
 	}
 	for tag, want := range cases {
 		if got := IsRegistryTag(tag); got != want {

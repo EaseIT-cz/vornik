@@ -8,11 +8,14 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"sort"
 	"strings"
 	"time"
 
-	"github.com/santhosh-tekuri/jsonschema/v5"
+	"vornik.io/vornik/internal/agentns"
+	"vornik.io/vornik/internal/egressscan"
+
+	"vornik.io/vornik/internal/agentadmin"
+
 	"vornik.io/vornik/internal/executor"
 	"vornik.io/vornik/internal/outputguard"
 	"vornik.io/vornik/internal/persistence"
@@ -72,6 +75,9 @@ const (
 	brokerErrEgressNoOutput = "egress_no_output"
 	brokerErrEgressOversize = "egress_oversize"
 	brokerErrEgressSchema   = "egress_schema"
+	// brokerErrEgressSecret: an agent workflow's egress document carried a
+	// credential-shaped value (agent-administered Vornik plan P5.4).
+	brokerErrEgressSecret = "egress_secret"
 )
 
 // companionKeyProject returns the key's project, or nil.
@@ -101,6 +107,23 @@ func (s *Server) gateCompanionTool(key *persistence.APIKey, tool string) error {
 	return nil
 }
 
+// brokerProjectFor is the project a broker workflow runs in for this key.
+// A task always runs in the project that owns the workflow (broker design
+// §5.4). For an ordinary key that is its own project. For an agent admin key
+// it is the workflow's owning project, when that project is in the key's
+// namespace (agent-administered Vornik design §5); anything else is nil, a
+// refusal.
+func (s *Server) brokerProjectFor(key *persistence.APIKey, wf *registry.Workflow) *registry.Project {
+	if !key.AgentAdmin {
+		return s.companionKeyProject(key)
+	}
+	owner := agentadmin.ProjectOfWorkflow(wf.ID)
+	if owner == "" || !keyCoversProject(key, owner) {
+		return nil
+	}
+	return s.projectRegistry.GetProject(owner)
+}
+
 // brokerWorkflowOf returns the workflow definition when it is a broker
 // workflow, else nil.
 func (s *Server) brokerWorkflowOf(id string) *registry.Workflow {
@@ -121,17 +144,22 @@ func (s *Server) brokerWorkflowOf(id string) *registry.Workflow {
 // brokerDelegable runs every refusal a broker delegation can meet before
 // its inputs are read: the workflow/project pairing, the runnable and
 // proposal checks, and the untyped channels (prompt, inputArtifacts).
-func (s *Server) brokerDelegable(key *persistence.APIKey, args delegateArgs) (*registry.Workflow, error) {
+func (s *Server) brokerDelegable(key *persistence.APIKey, args delegateArgs) (*registry.Workflow, *registry.Project, error) {
 	wf := s.projectRegistry.GetWorkflow(args.Workflow)
 	if wf == nil {
-		return nil, fmt.Errorf("workflow %q not found", args.Workflow)
+		return nil, nil, fmt.Errorf("workflow %q not found", args.Workflow)
 	}
-	project := s.companionKeyProject(key)
+	project := s.brokerProjectFor(key, wf)
 	if wf.Broker == nil {
-		return nil, fmt.Errorf("BROKER_PROJECT: this key's project runs broker workflows only; %q is not one (see catalog)", args.Workflow)
+		return nil, nil, fmt.Errorf("BROKER_PROJECT: this key's project runs broker workflows only; %q is not one (see catalog)", args.Workflow)
 	}
 	if project == nil || !project.Broker {
-		return nil, fmt.Errorf("BROKER_WORKFLOW: %q is a broker workflow and runs only in a broker project", args.Workflow)
+		if key.AgentAdmin {
+			// One answer for "another namespace's" and "not an agent
+			// workflow": the agent learns only that it cannot delegate it.
+			return nil, nil, fmt.Errorf("BROKER_WORKFLOW: %q is not delegable with this key", args.Workflow)
+		}
+		return nil, nil, fmt.Errorf("BROKER_WORKFLOW: %q is a broker workflow and runs only in a broker project", args.Workflow)
 	}
 	if err := registry.CheckBrokerRunnable(project, wf, s.projectRegistry.GetSwarm(project.SwarmID)); err != nil {
 		// The detail names servers, roles and tools — operator
@@ -139,27 +167,27 @@ func (s *Server) brokerDelegable(key *persistence.APIKey, args delegateArgs) (*r
 		// caller only that the operator has to act.
 		s.logger.Warn().Err(err).Str("project", project.ID).Str("workflow", wf.ID).
 			Msg("broker delegate refused: workflow is not runnable as a broker workflow")
-		return nil, fmt.Errorf("BROKER_NOT_RUNNABLE: workflow %q is not correctly configured for broker use on this daemon; the operator must fix it (details are in the daemon log)", wf.ID)
+		return nil, nil, fmt.Errorf("BROKER_NOT_RUNNABLE: workflow %q is not correctly configured for broker use on this daemon; the operator must fix it (details are in the daemon log)", wf.ID)
 	}
 	if err := registry.CheckBrokerProposals(project, wf, s.brokerWritesOn()); err != nil {
 		if errors.Is(err, registry.ErrBrokerWritesDisabled) {
-			return nil, err
+			return nil, nil, err
 		}
 		s.logger.Warn().Err(err).Str("project", project.ID).Str("workflow", wf.ID).
 			Msg("broker delegate refused: a declared write is not configured")
-		return nil, fmt.Errorf("BROKER_NOT_RUNNABLE: workflow %q proposes a write this daemon is not configured for; the operator must fix it (details are in the daemon log)", wf.ID)
+		return nil, nil, fmt.Errorf("BROKER_NOT_RUNNABLE: workflow %q proposes a write this daemon is not configured for; the operator must fix it (details are in the daemon log)", wf.ID)
 	}
 	if strings.TrimSpace(args.Prompt) != "" {
-		return nil, fmt.Errorf("INPUT_REJECTED: broker workflow %q takes typed inputs, not a prompt; pass `inputs` matching the input_schema shown by catalog", wf.ID)
+		return nil, nil, fmt.Errorf("INPUT_REJECTED: broker workflow %q takes typed inputs, not a prompt; pass `inputs` matching the input_schema shown by catalog", wf.ID)
 	}
 	if len(args.InputArtifacts) > 0 {
-		return nil, fmt.Errorf("INPUT_REJECTED: broker workflow %q does not accept inputArtifacts; an uploaded file would be an untyped channel into the broker", wf.ID)
+		return nil, nil, fmt.Errorf("INPUT_REJECTED: broker workflow %q does not accept inputArtifacts; an uploaded file would be an untyped channel into the broker", wf.ID)
 	}
-	return wf, nil
+	return wf, project, nil
 }
 
 func (s *Server) companionBrokerDelegate(ctx context.Context, key *persistence.APIKey, args delegateArgs, rawInputs json.RawMessage) (string, error) {
-	wf, err := s.brokerDelegable(key, args)
+	wf, project, err := s.brokerDelegable(key, args)
 	if err != nil {
 		return "", err
 	}
@@ -171,36 +199,12 @@ func (s *Server) companionBrokerDelegate(ctx context.Context, key *persistence.A
 		return "", err
 	}
 
-	prompt, err := renderBrokerPrompt(wf, inputs)
-	if err != nil {
-		return "", err
-	}
-	payload := map[string]any{
-		"prompt":        prompt,
-		"broker_inputs": inputs,
-		"broker":        map[string]any{"workflow": wf.ID},
-		"companion": map[string]any{
-			"client_kind":   key.ClientKind,
-			"session_label": key.SessionLabel,
-			"api_key_id":    key.ID,
-		},
-	}
-	rawCtx, err := json.Marshal(payload)
-	if err != nil {
-		return "", fmt.Errorf("encode payload: %w", err)
-	}
 	taskType := args.TaskType
 	if taskType == "" {
 		taskType = wf.ID
 	}
-	task, err := s.taskCreator.Create(ctx, taskcreate.Params{
-		ProjectID:         key.ProjectID,
-		TaskType:          taskType,
-		WorkflowID:        wf.ID,
-		RawContext:        rawCtx,
-		CreationSource:    persistence.TaskCreationSourceCompanion,
-		CreatedByAPIKeyID: key.ID,
-	})
+	task, err := s.createBrokerTask(ctx, brokerTaskParams{wf: wf, project: project, inputs: inputs, key: key,
+		taskType: taskType, source: persistence.TaskCreationSourceCompanion})
 	if err != nil {
 		if ce := taskcreate.AsError(err); ce != nil {
 			return "", fmt.Errorf("delegate failed: %s", ce.Message)
@@ -211,7 +215,7 @@ func (s *Server) companionBrokerDelegate(ctx context.Context, key *persistence.A
 		"task_id":     task.ID,
 		"status":      string(task.Status),
 		"workflow":    wf.ID,
-		"project":     key.ProjectID,
+		"project":     project.ID,
 		"eta_seconds": companionDelegateETASeconds,
 		"eta_hint":    fmt.Sprintf("call result() with wait_seconds up to %d; repeat until complete", companionResultMaxWaitSeconds),
 		"created":     task.CreatedAt.UTC().Format(time.RFC3339),
@@ -221,6 +225,56 @@ func (s *Server) companionBrokerDelegate(ctx context.Context, key *persistence.A
 	}
 	b, _ := json.MarshalIndent(out, "", "  ")
 	return string(b), nil
+}
+
+// brokerTaskParams is one broker task to create.
+type brokerTaskParams struct {
+	wf       *registry.Workflow
+	project  *registry.Project
+	inputs   map[string]any
+	key      *persistence.APIKey // nil: attributed to no key (a scheduled run with none live)
+	taskType string
+	source   persistence.TaskCreationSource
+	idemKey  string
+}
+
+// createBrokerTask is the one path a broker task is created by, delegated or
+// scheduled (agent-administered Vornik design §17.3): the prompt is the
+// validated inputs with every x-untrusted value wrapped, and the payload
+// carries the inputs and the workflow, so the reach check and egress apply
+// the same way to both.
+func (s *Server) createBrokerTask(ctx context.Context, p brokerTaskParams) (*persistence.Task, error) {
+	prompt, err := renderBrokerPrompt(p.wf, p.inputs)
+	if err != nil {
+		return nil, err
+	}
+	payload := map[string]any{
+		"prompt":        prompt,
+		"broker_inputs": p.inputs,
+		"broker":        map[string]any{"workflow": p.wf.ID},
+	}
+	keyID := ""
+	if p.key != nil {
+		keyID = p.key.ID
+		payload["companion"] = map[string]any{
+			"client_kind":   p.key.ClientKind,
+			"session_label": p.key.SessionLabel,
+			"api_key_id":    p.key.ID,
+		}
+	}
+	rawCtx, err := json.Marshal(payload)
+	if err != nil {
+		return nil, fmt.Errorf("encode payload: %w", err)
+	}
+	return s.taskCreator.Create(ctx, taskcreate.Params{
+		ProjectID:         p.project.ID,
+		TaskType:          p.taskType,
+		WorkflowID:        p.wf.ID,
+		RawContext:        rawCtx,
+		CreationSource:    p.source,
+		CreatedByAPIKeyID: keyID,
+		IdempotencyKey:    p.idemKey,
+	})
 }
 
 // validateBrokerInputs decodes and validates inputs against the workflow's
@@ -254,71 +308,12 @@ func validateBrokerInputs(wf *registry.Workflow, raw json.RawMessage) (map[strin
 	return obj, nil
 }
 
-// describeSchemaFailure lists "<path> fails <keyword>" for each leaf cause,
-// deliberately dropping the library's message (which can quote the value).
-func describeSchemaFailure(err error) string {
-	var ve *jsonschema.ValidationError
-	if !errors.As(err, &ve) {
-		return "inputs do not match the input schema"
-	}
-	var leaves []string
-	var walk func(v *jsonschema.ValidationError)
-	walk = func(v *jsonschema.ValidationError) {
-		if len(v.Causes) == 0 {
-			kw := v.KeywordLocation
-			if i := strings.LastIndex(kw, "/"); i >= 0 {
-				kw = kw[i+1:]
-			}
-			loc := v.InstanceLocation
-			if loc == "" {
-				loc = "/"
-			}
-			// A missing field is named at the parent, so name it from the
-			// message. The names come from the schema's `required` list,
-			// never from the input (Hermes e2e lane, 2026-09-30).
-			if kw == "required" {
-				if names := missingRequired(v.Message); len(names) > 0 {
-					for _, n := range names {
-						leaves = append(leaves, "inputs"+strings.TrimSuffix(loc, "/")+"/"+n+" fails required")
-					}
-					return
-				}
-			}
-			leaves = append(leaves, "inputs"+loc+" fails "+kw)
-			return
-		}
-		for _, c := range v.Causes {
-			walk(c)
-		}
-	}
-	walk(ve)
-	sort.Strings(leaves)
-	if len(leaves) > 5 {
-		leaves = append(leaves[:5], fmt.Sprintf("and %d more", len(leaves)-5))
-	}
-	return strings.Join(leaves, "; ")
-}
-
-// missingRequired reads the property names out of jsonschema v5's
-// "missing properties: 'a', 'b'" message. It is best effort: anything else
-// yields nil and the caller falls back to naming the rule only. The contract
-// is the "missing required input names the field" row of
-// TestBrokerDelegate_Refusals, which runs the real validator, so a message
-// format change in a jsonschema upgrade fails there, not silently.
-func missingRequired(msg string) []string {
-	rest, ok := strings.CutPrefix(msg, "missing properties: ")
-	if !ok {
-		return nil
-	}
-	var names []string
-	for _, q := range strings.Split(rest, ", ") {
-		if len(q) < 2 || q[0] != '\'' || q[len(q)-1] != '\'' {
-			return nil
-		}
-		names = append(names, q[1:len(q)-1])
-	}
-	return names
-}
+// describeSchemaFailure and missingRequired moved to registry, which the
+// schedule check at load also uses (agent-administered Vornik design §17.1).
+var (
+	describeSchemaFailure = registry.DescribeSchemaFailure
+	missingRequired       = registry.MissingRequired
+)
 
 // renderBrokerPrompt is the only thing the broker's agent reads as its task:
 // the validated inputs, with every x-untrusted value wrapped as data. The
@@ -568,6 +563,11 @@ func (s *Server) companionBrokerResult(ctx context.Context, task *persistence.Ta
 		out["egress_error"] = brokerErrEgressNoOutput
 	} else if res := s.resolveBrokerEgress(ctx, task, wf); res.errorClass != "" {
 		out["egress_error"] = res.errorClass
+	} else if why := s.agentEgressRefusal(task.ProjectID, wf.ID, res.doc); why != "" {
+		// The document is withheld; the reason names the field, never the
+		// value (plan P5.4).
+		out["egress_error"] = brokerErrEgressSecret
+		out["egress_error_detail"] = why
 	} else {
 		guarded, redactions := guardBrokerEgress(res.doc, wf.Broker.Egress.EffectiveProvenance())
 		out["output"] = guarded
@@ -707,4 +707,18 @@ func (s *Server) brokerWritesOn() bool {
 	}
 	mode, err := s.config.Broker.WritesMode()
 	return err == nil && mode == "on"
+}
+
+// agentEgressRefusal scans an agent-namespace workflow's egress document
+// (spec §10.2; plan P5.4) and returns why it is withheld, or "". Operator
+// broker workflows are not scanned here (outputguard covers them).
+func (s *Server) agentEgressRefusal(projectID, workflowID string, doc any) string {
+	if _, agent := agentns.FromID(projectID); !agent {
+		return ""
+	}
+	raw, err := json.Marshal(doc)
+	if err != nil {
+		return "the egress document could not be scanned"
+	}
+	return s.egress.scanAgentDoc(egressscan.SurfaceEgressDoc, projectID, workflowID, raw)
 }

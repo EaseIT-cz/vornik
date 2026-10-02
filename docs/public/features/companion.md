@@ -1,11 +1,11 @@
 ---
 sources:
     - path: internal/api/companion_mcp.go
-      sha256: dcd24085951349d7a45beabcd0fb51ee767d6186b29ec955229f3d8fcb4b39b2
+      sha256: 36420b099decdb73ab3b1c59678120623251df7a8321623fa583eeeda652299d
     - path: contrib/claude-code-companion/.claude-plugin/plugin.json
-      sha256: 94bb71bc19dd3bd7892ac8977f993ba8d6f2450d0ff509a8bd795f1c377c55ee
+      sha256: 4220667fda1dbd789a742377f0ab43a9299217a9ad6341330ca36fe52f52aa1a
     - path: contrib/codex-companion/.codex-plugin/plugin.json
-      sha256: 9f735cfd2f5fb414adfb95bf77ab5ef74edcce7573097411204c9205946ca6e3
+      sha256: e21d5920cb0cbc9c851952c2082539a9b8046fe4dae02031a2784bf37753820f
 ---
 # Companion plugin
 
@@ -146,12 +146,23 @@ get sent in a circle.
 
 **`report-problem`** — filing an **anonymized** Vornik problem report (a bug,
 a crash, a misbehaving swarm, or an install failure) as a prefilled
-`github.com/grinco/vornik` issue. The work is done by the deterministic
+`github.com/EaseIT-cz/vornik` issue. The work is done by the deterministic
 `vornikctl report` CLI (rich diagnostics when the daemon is up, `--offline`
 static checks when it is down) plus the quickstart installer's own failure URL
 for pre-daemon install errors; the skill is the guardrail — review the
 anonymized body before submitting, and you file it under your own GitHub
 account (nothing is ever posted automatically).
+
+**`vornik-admin`**: working as an administering assistant. It is in the Claude Code, Codex and Hermes bundles. It applies only to an assistant connected with an **agent admin key**, which can set up its own projects, workflows and connections in its own namespace, with you approving each change on your phone.
+
+The skill tells the assistant to:
+- start with `describe_installation`;
+- never ask for or accept a credential in chat (it calls `request_credential`, and you enter the value on your phone);
+- say plainly what you are about to approve;
+- treat every write as a proposal you approve one by one;
+- stay inside its namespace.
+
+Vornik also serves the same text to such a key directly: in the MCP `initialize` instructions and as `describe_installation`'s `how_to_work`. So an assistant without the bundle, such as Claude Desktop, still gets it. No other key ever sees it.
 
 ## Project memory and repo scope
 

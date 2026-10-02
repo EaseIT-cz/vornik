@@ -11,20 +11,18 @@
 #           :<tag> ever reached the registry. A build failure, a registry push
 #           failure or an exhausted quota leaves no versioned image and the
 #           release is still declared complete.
-#   Gap 6 — release-upstream-pr pushes a branch and (since 2026-09-22) a tag,
-#           but a HUMAN merges the PR. The mirror's main was current only
-#           because the same person merged #76, #77 and #78 — the "survived
-#           because the same person did it each time" pattern this design has
-#           already named once.
+#   (Gap 6, the EE mirror's sync PR, is retired with the mirror: EaseIT-cz
+#   migration design §6.)
+#
+# It also checks the CE publish token's recorded expiry (migration plan T6.6).
 #
 # Usage: scripts/release-audit.sh [count]
+#        scripts/release-audit.sh --check-token   (the token expiry only)
 set -uo pipefail
 
-COUNT="${1:-5}"
-EE="${RELEASE_AUDIT_EE_REPO:-grinco/vornik-enterprise}"
-CE="${RELEASE_AUDIT_CE_REPO:-grinco/vornik}"
-MIRROR="${RELEASE_AUDIT_MIRROR_REPO:-grinco/vornik-ee}"
-IMAGE="${RELEASE_AUDIT_IMAGE:-ghcr.io/grinco/vornik-agent}"
+EE="${RELEASE_AUDIT_EE_REPO:-EaseIT-cz/vornik}"
+CE="${RELEASE_AUDIT_CE_REPO:-EaseIT-cz/vornik}"
+IMAGE="${RELEASE_AUDIT_IMAGE:-ghcr.io/easeit-cz/vornik-agent}"
 
 problems=0
 # The `return 0` is not decoration. Without it the function's status is the
@@ -40,10 +38,45 @@ note() {
 }
 bad()  { note "- **$1**"; problems=$((problems + 1)); }
 
+# The CE publish token (CE_PUBLISH_TOKEN, a fine-grained PAT) expires, and
+# GitHub does not expose the expiry to Actions; RELEASE.md's rotation step
+# records it in the CE_PUBLISH_TOKEN_EXPIRES repository variable. Nothing binds
+# the variable to the token, so a missing, empty or unparseable value FAILS:
+# a silent pass would hide exactly the rotation-without-update this exists
+# for. 30 days or fewer fails too: this audit is weekly and not on the release
+# path, so failing is a month's alarm, never a blocked release.
+check_token() {
+	local expires="${CE_PUBLISH_TOKEN_EXPIRES:-}" today="${RELEASE_AUDIT_TODAY:-$(date -u +%F)}" days
+	if [ -z "$expires" ]; then
+		bad "CE_PUBLISH_TOKEN_EXPIRES is not set — record the publish token's expiry (YYYY-MM-DD) as a repository variable when it is created or rotated"
+		return
+	fi
+	local exp_s now_s
+	if ! [[ "$expires" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ ]] || ! exp_s=$(date -u -d "$expires" +%s 2>/dev/null); then
+		bad "CE_PUBLISH_TOKEN_EXPIRES='$expires' is not a date (YYYY-MM-DD)"
+		return
+	fi
+	now_s=$(date -u -d "$today" +%s)
+	days=$(( (exp_s - now_s) / 86400 ))
+	if [ "$days" -le 30 ]; then
+		bad "the CE publish token expires on $expires ($days day(s) left) — rotate it and update CE_PUBLISH_TOKEN_EXPIRES (RELEASE.md)"
+	else
+		note "- CE publish token expires on $expires ($days days left)"
+	fi
+}
+
+if [ "${1:-}" = "--check-token" ]; then
+	check_token
+	[ "$problems" -eq 0 ] || exit 1
+	exit 0
+fi
+COUNT="${1:-5}"
+
 tags=$(gh release list -R "$EE" -L "$COUNT" 2>/dev/null | cut -f1)
 [ -n "$tags" ] || { echo "release-audit: no releases found on $EE"; exit 1; }
 
 note "## Release audit — last $COUNT releases of $EE"
+check_token
 
 for tag in $tags; do
 	note ""
@@ -51,7 +84,7 @@ for tag in $tags; do
 
 	# --- Gap 5: the versioned agent image ---------------------------------
 	#
-	# ANONYMOUS. ghcr.io/grinco/vornik-agent is public, so reading its
+	# ANONYMOUS. ghcr.io/easeit-cz/vornik-agent is public, so reading its
 	# manifest needs no token and no new secret — the same reasoning
 	# wait-ce-ci.sh already uses for the public CE run.
 	#
@@ -85,7 +118,7 @@ for tag in $tags; do
 		# PENDING is not a pass: it is reported and does NOT count as a
 		# problem, because there is nothing for an operator to do yet. A build
 		# that has FAILED or that never started is a problem, and says which.
-		build=$(gh run list -R "${CE_REPO_FOR_IMAGE:-grinco/vornik}" \
+		build=$(gh run list -R "${CE_REPO_FOR_IMAGE:-$CE}" \
 			--workflow publish-agent-image.yml -L 20 \
 			--json status,conclusion,headBranch 2>/dev/null | \
 			python3 -c "
@@ -109,27 +142,6 @@ except Exception: print('unknown')" "$tag" 2>/dev/null)
 		esac
 	fi
 
-	# --- Gap 6: did the source reach the mirror? --------------------------
-	#
-	# WHICH COMMIT: the EE release tag's commit, asserted to be an ancestor
-	# of the mirror's default branch. Ancestry is TRANSITIVE and that is the
-	# point — a sync branch is cut from main, so a later sync carries every
-	# earlier commit. A release commit that no merged sync ever carried is
-	# exactly the case that should report, and the only one that does.
-	sha=$(git rev-parse "$tag^{commit}" 2>/dev/null)
-	if [ -z "$sha" ]; then
-		bad "$tag has no local commit — cannot check whether it reached $MIRROR"
-	else
-		if ! git ls-remote --exit-code --tags "https://github.com/$MIRROR" "refs/tags/$tag" >/dev/null 2>&1; then
-			bad "$MIRROR carries no tag \`$tag\`"
-		fi
-		if gh api "repos/$MIRROR/compare/main...$sha" -q .status 2>/dev/null | grep -qE 'identical|behind'; then
-			note "- release commit \`${sha:0:9}\` is on \`$MIRROR\` main"
-		else
-			bad "release commit \`${sha:0:9}\` is NOT on \`$MIRROR\` main — the sync PR was never merged. Merge it, or close it unmerged AND delete the mirror tag (a mirror tag for a rejected sync names content the mirror refused; the never-move rule protects PUBLISHED tags, and that one was advertised to nobody)"
-		fi
-	fi
-
 	# --- the CE release object -------------------------------------------
 	if gh release view "$tag" -R "$CE" >/dev/null 2>&1; then
 		note "- $CE has a release for \`$tag\`"
@@ -137,23 +149,6 @@ except Exception: print('unknown')" "$tag" 2>/dev/null)
 		bad "$CE has a TAG but no RELEASE for \`$tag\`"
 	fi
 
-	# --- the MIRROR release object ----------------------------------------
-	#
-	# Added 2026-09-23, immediately after this audit reported 2026.9.6 fully
-	# green while the mirror had a tag and no release. The audit checked the CE
-	# release object and not the mirror's, so the ONE artifact still created by
-	# hand was the one it could not see — a seventh instance of the shape this
-	# whole amendment is about, inside the control built to catch the other six.
-	#
-	# The mirror's tag is mechanised (gap 1); its release object is not, and
-	# this reports that rather than implying the release is incomplete. It is
-	# presentational on a private source mirror, which is exactly why it gets
-	# forgotten and exactly why it is worth naming.
-	if gh release view "$tag" -R "$MIRROR" >/dev/null 2>&1; then
-		note "- $MIRROR has a release for \`$tag\`"
-	else
-		bad "$MIRROR has a TAG but no RELEASE for \`$tag\` — the mirror tag is mechanised, its release object is still created by hand"
-	fi
 done
 
 note ""

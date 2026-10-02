@@ -28,5 +28,5 @@ control CLI — on a single deployable daemon.
 
 - Website: <https://vornik.io>
 - Docs: <https://docs.vornik.io>
-- Source: <https://github.com/grinco/vornik>
-- License: [AGPL-3.0](https://github.com/grinco/vornik/blob/main/LICENSE)
+- Source: <https://github.com/EaseIT-cz/vornik>
+- License: [AGPL-3.0](https://github.com/EaseIT-cz/vornik/blob/main/LICENSE)

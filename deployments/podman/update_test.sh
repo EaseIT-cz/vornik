@@ -64,12 +64,15 @@ mkdir -p "$REPO/.git" "$REPO/deployments/podman" "$REPO/.bin" "$WORK/bin" "$WORK
 cp "$WORK/old.sh" "$REPO/deployments/podman/vornik-update.sh"
 chmod +x "$REPO/deployments/podman/vornik-update.sh"
 printf 'listen: ":8080"\n' > "$WORK/cfg/config.yaml"
-: > "$REPO/.bin/vornik"; : > "$REPO/.bin/vornikctl"
+# The freshly built binaries. The later tests run through step 4's -version
+# smoke check and the cutover, so the daemon answers like a real one.
+printf '#!/usr/bin/env bash\necho "vornik 2026.9.3 (built 2026-09-06T00:00:00Z, community edition)"\n' > "$REPO/.bin/vornik"
+: > "$REPO/.bin/vornikctl"
 chmod +x "$REPO/.bin/vornik" "$REPO/.bin/vornikctl"
 
 # The manifest emitter the updater builds in step 2. One always-on row, with
 # the "-" placeholder in the target column (C8).
-ROW='ghcr.io/grinco/vornik-agent:latest\timages/vornik-agent/Containerfile\t-\t.\talways\n'
+ROW='ghcr.io/easeit-cz/vornik-agent:latest\timages/vornik-agent/Containerfile\t-\t.\talways\n'
 cat > "$REPO/.bin/vornik-images" <<EMIT
 #!/usr/bin/env bash
 # Stands in for the real emitter. With -obtain it prints only the rows that
@@ -93,7 +96,9 @@ case "\$*" in
       # that is running right now.
       cp "$WORK/new.sh" "$REPO/deployments/podman/vornik-update.sh"
       touch "$WORK/.moved" ;;
-  *"rev-parse --short HEAD"*)  [ -f "$WORK/.moved" ] && echo bbbbbbb || echo aaaaaaa ;;
+  *"2026.9.8^{commit}"*)       echo ccccccc ;;
+  *"dev^{commit}"*)            echo ddddddd ;;   # a branch named dev exists (review 8a63 F1)
+  *"rev-parse --short HEAD"*)  { [ -f "$WORK/.moved" ] || [ -f "$WORK/.attarget" ]; } && echo bbbbbbb || echo aaaaaaa ;;
   *"rev-parse --short"*)       echo bbbbbbb ;;
   *"rev-parse HEAD"*)          echo bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb ;;
   *"rev-parse --verify"*)      echo bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb ;;
@@ -107,9 +112,22 @@ GIT
 cat > "$WORK/bin/podman" <<PODMAN
 #!/usr/bin/env bash
 case "\$1" in
-  build) printf '%s\n' "\$*" >> "$BUILD_LOG"; exit 0 ;;
+  build)
+    printf '%s\n' "\$*" >> "$BUILD_LOG"
+    if [ "\${BUILD_FAILS:-}" = int ]; then
+      echo new-working-container >> "$WORK/external"
+      kill -INT "\$PPID"; sleep 2; exit 130
+    fi
+    if [ -n "\${BUILD_FAILS:-}" ]; then
+      # An interrupted build leaves its buildah working container behind.
+      echo new-working-container >> "$WORK/external"
+      exit 1
+    fi
+    exit 0 ;;
+  rm) printf '%s\n' "\${@: -1}" >> "$WORK/podman-rm.log"; exit 0 ;;
 esac
 case "\$*" in
+  "ps -a --external"*) cat "$WORK/external" 2>/dev/null ;;
   "ps --format"*)   echo vornik-postgres ;;
   *"image exists"*) exit 1 ;;   # no deployed image -> the row must be rebuilt
   *psql*)           echo 176 ;;
@@ -118,16 +136,34 @@ case "\$*" in
 esac
 PODMAN
 
-printf '#!/usr/bin/env bash\nexit 0\n' > "$WORK/bin/systemctl"
+cat > "$WORK/bin/systemctl" <<SYSTEMCTL
+#!/usr/bin/env bash
+case "\$*" in
+  *" stop "*|*" start "*) printf '%s\n' "\$*" | awk '{print \$2}' >> "$WORK/order.log" ;;
+esac
+exit 0
+SYSTEMCTL
+mkdir -p "$REPO/scripts"
+# Step 3c's helper. The earlier tests stop at step 3b; the later ones run
+# through the cutover, which needs it present.
+printf '#!/usr/bin/env bash\ncat >/dev/null\nexit 0\n' > "$REPO/deployments/podman/recreate-sidecars.sh"
+chmod +x "$REPO/deployments/podman/recreate-sidecars.sh"
+cat > "$REPO/scripts/config-deploy.sh" <<DEPLOY
+#!/usr/bin/env bash
+echo deploy >> "$WORK/order.log"
+printf '%s rev=%s\n' "\$*" "\${VORNIK_DEPLOY_REVISION:-}" > "$WORK/deploy.args"
+DEPLOY
+chmod +x "$REPO/scripts/config-deploy.sh"
 printf '#!/usr/bin/env bash\nexit 0\n' > "$WORK/bin/curl"
 chmod +x "$WORK/bin/git" "$WORK/bin/podman" "$WORK/bin/systemctl" "$WORK/bin/curl"
 
 run_updater() {
-  rm -f "$WORK/.moved"; : > "$BUILD_LOG"
+  rm -f "$WORK/.moved" "$WORK/order.log" "$WORK/deploy.args" "$WORK/podman-rm.log"; : > "$BUILD_LOG"
+  rm -rf "$WORK/home"/vornik-upgrade-backup-*
   cp "$WORK/old.sh" "$REPO/deployments/podman/vornik-update.sh"
   chmod +x "$REPO/deployments/podman/vornik-update.sh"
   env -u VORNIK_UPDATE_REEXEC -u VORNIK_UPDATE_COPY_DIR \
-    PATH="$WORK/bin:$PATH" HOME="$WORK/home" OBTAIN_MODE="${OBTAIN_MODE-}" \
+    PATH="${TEST_PATH:-$WORK/bin:$PATH}" HOME="$WORK/home" OBTAIN_MODE="${OBTAIN_MODE-}" BUILD_FAILS="${BUILD_FAILS-}" \
     VORNIK_DIR="$REPO" VORNIK_CONFIG="$WORK/cfg/config.yaml" VORNIK_BIN_DIR="$WORK/localbin" \
     bash "$REPO/deployments/podman/vornik-update.sh" "$@" > "$WORK/out" 2>&1 || true
 }
@@ -149,7 +185,7 @@ grep -q 'command not found\|syntax error\|unexpected end of file' "$WORK/out" &&
 grep -q 'Rebuilding container images' "$WORK/out" || \
   fail "the run never reached step 3b (image rebuild) after the checkout"
 
-grep -q 'ghcr.io/grinco/vornik-agent:latest' "$BUILD_LOG" || \
+grep -q 'ghcr.io/easeit-cz/vornik-agent:latest' "$BUILD_LOG" || \
   fail "step 3b ran but built no image; podman build was never invoked for the manifest row"
 
 grep -q -- '--target' "$BUILD_LOG" && \
@@ -205,7 +241,7 @@ echo 'update: the private copy is cleaned up — OK'
 #    forever. Emitting nothing is how the obtain step says "I dealt with it".
 # ---------------------------------------------------------------------------
 OBTAIN_MODE=nothing run_updater --yes --no-build
-if grep -q 'ghcr.io/grinco/vornik-agent' "$BUILD_LOG"; then
+if grep -q 'ghcr.io/easeit-cz/vornik-agent' "$BUILD_LOG"; then
   fail "the updater built an image the obtain step had already handled.
       A pulled image must not also be built — see design §S2.3."
 fi
@@ -217,10 +253,119 @@ echo 'update: an obtained image is not rebuilt — OK'
 
 # A row that IS handed back must be built, or the fallback path is dead.
 run_updater --yes --no-build
-grep -q 'ghcr.io/grinco/vornik-agent:latest' "$BUILD_LOG" || \
+grep -q 'ghcr.io/easeit-cz/vornik-agent:latest' "$BUILD_LOG" || \
   fail "the updater did not build a row the obtain step handed back — the local-build
       fallback is contract C7 and must survive Stage 2"
 
 echo 'update: a handed-back row is built — OK'
+
+# ---------------------------------------------------------------------------
+# 6. Issue #16 (2026-10-01): the rollback record took pre_upgrade_commit from
+#    the checkout. After an interrupted run moved the checkout, the --force
+#    recovery recorded the TARGET as the pre-upgrade commit and printed a
+#    rollback to it. It must come from the installed binary (design §15.1).
+# ---------------------------------------------------------------------------
+installed() {
+  printf '#!/usr/bin/env bash\necho "vornik %s (built 2026-09-27T16:46:04Z, community edition)"\n' "$1" > "$WORK/localbin/vornik"
+  chmod +x "$WORK/localbin/vornik"
+}
+installed 2026.9.8
+touch "$WORK/.attarget"
+run_updater --yes --no-build --force
+state=$(cat "$WORK/home"/vornik-upgrade-backup-*/STATE.txt 2>/dev/null || true)
+grep -qx 'pre_upgrade_commit=ccccccc' <<<"$state" || \
+  fail "STATE.txt must record the INSTALLED commit (ccccccc, from vornik 2026.9.8), got:
+$state"
+grep -qx 'checkout_head_at_start=bbbbbbb' <<<"$state" || fail "STATE.txt must record the checkout HEAD separately:
+$state"
+grep -q 'checkout ccccccc' "$WORK/out" || fail "the printed rollback must check out the installed commit"
+grep -q 'checkout bbbbbbb' "$WORK/out" && fail "the printed rollback still checks out the target"
+grep -qx 'pre_upgrade_version=2026.9.8' <<<"$state" || fail "STATE.txt must keep the version token itself:
+$state"
+
+# The form most installs carry between releases: git describe's -g<hex>,
+# with and without -dirty (review 20261002-df9b F1, F6).
+for v in 2026.10.1-3-g1a2b3c4 2026.10.1-3-g1a2b3c4-dirty; do
+  installed "$v"
+  run_updater --yes --no-build --force
+  state=$(cat "$WORK/home"/vornik-upgrade-backup-*/STATE.txt 2>/dev/null || true)
+  grep -qx 'pre_upgrade_commit=1a2b3c4' <<<"$state" || fail "$v must map to 1a2b3c4:
+$state"
+  grep -qx "pre_upgrade_version=$v" <<<"$state" || fail "STATE.txt must keep the token $v:
+$state"
+  grep -q 'checkout 1a2b3c4' "$WORK/out" || fail "the rollback for $v must check out 1a2b3c4"
+done
+echo 'update: the rollback record names the installed commit, not the checkout — OK'
+
+# The checkout HAS a ref named dev (the git stub resolves it), so resolving the
+# unstamped "dev" token would name an unrelated commit.
+installed dev
+run_updater --yes --no-build --force
+state=$(cat "$WORK/home"/vornik-upgrade-backup-*/STATE.txt 2>/dev/null || true)
+grep -qx 'pre_upgrade_commit=unknown' <<<"$state" || fail "an unmappable version must be recorded as unknown:
+$state"
+grep -qx 'pre_upgrade_version=dev' <<<"$state" || fail "STATE.txt must keep the dev token:
+$state"
+grep -q 'git -C .* checkout' "$WORK/out" && fail "no git checkout may be printed when the installed commit is unknown"
+grep -q 'ddddddd' "$WORK/out" && fail "the dev token was resolved to the dev branch: a guessed rollback target"
+echo 'update: an unknown installed commit prints no guessed rollback — OK'
+
+# The early exit trusted the checkout too: at target, installed elsewhere,
+# no --force, and it said "Nothing to do".
+installed 2026.9.8
+run_updater --yes --no-build
+grep -q 'Nothing to do' "$WORK/out" && fail "the checkout is at target but the INSTALL is not; the run must proceed"
+grep -q 'Rebuilding container images' "$WORK/out" || fail "the run did not proceed past the early exit"
+echo 'update: an install behind its checkout is updated without --force — OK'
+rm -f "$WORK/.attarget" "$WORK/localbin/vornik"
+
+# ---------------------------------------------------------------------------
+# 7. Issue #15 (2026-10-01): an interrupted build left buildah working
+#    containers behind (~28 GB on a vfs host). The EXIT trap removes the ones
+#    THIS run created, and never one that existed before (design §15.2).
+# ---------------------------------------------------------------------------
+echo old-working-container > "$WORK/external"
+BUILD_FAILS=1 run_updater --yes --no-build
+grep -qx 'new-working-container' "$WORK/podman-rm.log" 2>/dev/null || \
+  fail "the working container this run left behind was not removed"
+grep -q 'old-working-container' "$WORK/podman-rm.log" 2>/dev/null && \
+  fail "a working container that predates the run was removed; it may be another build in progress"
+grep -q 'old-working-container\|1 leftover' "$WORK/out" || fail "the pre-existing leftover is not reported"
+echo 'update: a failed build cleans up only its own containers — OK'
+
+# The reported trigger was an INTERRUPT, not a failed build (review 8a63 F4).
+echo old-working-container > "$WORK/external"
+BUILD_FAILS=int run_updater --yes --no-build
+grep -qx 'new-working-container' "$WORK/podman-rm.log" 2>/dev/null || \
+  fail "an interrupted (SIGINT) build left its working container behind"
+grep -q 'old-working-container' "$WORK/podman-rm.log" 2>/dev/null && \
+  fail "the interrupt cleanup removed a container that predates the run"
+rm -f "$WORK/external"
+echo 'update: an interrupted build cleans up only its own containers — OK'
+
+# ---------------------------------------------------------------------------
+# 8. Issue #15: with no skopeo, preflight says so (design §15.3). A PATH
+#    holding only the stubs and the basic tools the script needs.
+# ---------------------------------------------------------------------------
+SANDBOX="$WORK/sandbox-bin"; mkdir -p "$SANDBOX"
+for t in bash sh cat chmod cp cut date du env head id install mkdir mktemp rm sed sleep sort tr grep awk find wc dirname basename readlink realpath tail tee ls uname; do
+  p=$(command -v "$t" 2>/dev/null) && ln -sf "$p" "$SANDBOX/$t"
+done
+TEST_PATH="$WORK/bin:$SANDBOX" run_updater --yes --no-build
+grep -qi 'skopeo' "$WORK/out" || fail "a host without skopeo is not told that the agent image will be built instead of pulled"
+echo 'update: a missing skopeo is named at preflight — OK'
+
+# ---------------------------------------------------------------------------
+# 9. Design §15.5: new config subtrees (agent-templates) never reached an
+#    updated install. The cutover deploys them, preserve-existing, with the
+#    service stopped, stamping the target revision.
+# ---------------------------------------------------------------------------
+run_updater --yes --no-build
+[ -f "$WORK/deploy.args" ] || fail "the config assets were not deployed"
+grep -q "^$WORK/cfg rev=bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb" "$WORK/deploy.args" || \
+  fail "config-deploy got the wrong target or revision: $(cat "$WORK/deploy.args")"
+[ "$(tr '\n' ' ' < "$WORK/order.log")" = "stop deploy start " ] || \
+  fail "config deploy must run between stop and start, got: $(tr '\n' ' ' < "$WORK/order.log")"
+echo 'update: the cutover deploys new config subtrees — OK'
 
 echo 'update_test.sh: PASS'

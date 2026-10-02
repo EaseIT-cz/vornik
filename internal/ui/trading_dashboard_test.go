@@ -188,7 +188,7 @@ func TestTrading_DefaultsToFirstEnabledProjectAndRendersPanel(t *testing.T) {
 }
 
 // TestTrading_RendersHTMXWindowButtons — the trading dashboard's period +
-// project selector mirror the spend dashboard (grinco/vornik PR #5): the
+// project selector mirror the spend dashboard (EaseIT-cz/vornik PR #5): the
 // window dropdown is replaced by a 1d/7d/30d button group, and the filter form
 // refreshes only #trading-results through HTMX (no full page reload).
 func TestTrading_RendersHTMXWindowButtons(t *testing.T) {

@@ -1,0 +1,24 @@
+{{define "head"}}<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="referrer" content="no-referrer">
+{{if .Refresh}}<meta http-equiv="refresh" content="{{.Refresh}}">{{end}}
+<title>{{.Title}} · Vornik</title>
+<style>
+:root{--bg:#fafaf9;--fg:#1c1917;--mut:#57534e;--card:#fff;--line:#e7e5e4;--ok:#15803d;--no:#b91c1c;--acc:#1d4ed8}
+@media (prefers-color-scheme:dark){:root{--bg:#1c1917;--fg:#f5f5f4;--mut:#a8a29e;--card:#292524;--line:#44403c;--ok:#4ade80;--no:#f87171;--acc:#93c5fd}}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--fg);font:17px/1.5 system-ui,-apple-system,sans-serif}
+main{max-width:34rem;margin:0 auto;padding:1rem}
+h1{font-size:1.35rem;margin:.5rem 0 1rem}
+.card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:1rem;margin:0 0 .75rem}
+.mut{color:var(--mut);font-size:.9rem}
+a{color:var(--acc)}
+input[type=text]{width:100%;font-size:1.4rem;letter-spacing:.15em;padding:.7rem;border:1px solid var(--line);border-radius:10px;background:var(--bg);color:var(--fg);text-transform:uppercase}
+button{display:block;width:100%;font-size:1.1rem;padding:.9rem;border:0;border-radius:10px;margin:.5rem 0;cursor:pointer;color:#fff;background:var(--acc)}
+button.ok{background:var(--ok)}button.no{background:var(--no)}
+button.ok,button.no{color:#fff}
+pre{white-space:pre-wrap;word-break:break-word;font-size:.85rem}
+.err{color:var(--no)}.flash{color:var(--ok)}
+nav{display:flex;gap:1rem;margin:0 0 1rem;font-size:.95rem}
+</style></head><body><main>{{end}}
+{{define "foot"}}</main></body></html>{{end}}

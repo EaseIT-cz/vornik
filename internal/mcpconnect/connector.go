@@ -110,7 +110,13 @@ type Connector struct {
 	// block: this runs on the operator's callback request, and re-dialling
 	// every MCP server can take tens of seconds.
 	OnGranted func(projectID, serverName string)
-	Logger    zerolog.Logger
+	// HTTPFor, when set and returning non-nil, is the client for a server's
+	// discovery, registration, exchange and refresh calls instead of HTTP.
+	// An agent project's server chooses its authorization server through its
+	// own metadata, so those calls go through the SSRF guard
+	// (agent-administered Vornik plan P4.4).
+	HTTPFor func(projectID, serverURL string) *http.Client
+	Logger  zerolog.Logger
 
 	mu      sync.Mutex
 	pending map[string]*pendingAuth
@@ -136,6 +142,44 @@ type pendingAuth struct {
 	RedirectURI string
 	ConnectedBy string
 	CreatedAt   time.Time
+	// Origin and FlowBinding are BeginOptions' (plan P4.4); HTTP is the
+	// client the attempt started with.
+	Origin      string
+	FlowBinding string
+	HTTP        *http.Client
+}
+
+// BeginOptions mark an attempt started somewhere other than the operator's
+// session. Origin is opaque to the connector ("" = operator); FlowBinding is
+// the sha256 (hex) of the flow cookie the callback must present.
+type BeginOptions struct {
+	Origin      string
+	FlowBinding string
+}
+
+// Peek reports a pending attempt's origin and flow binding WITHOUT consuming
+// it, so the callback can choose the operator or the device branch. It is
+// not a replay defence: Complete consumes the state, and the vendor's code
+// is single-use.
+func (c *Connector) Peek(state string) (origin, binding string, ok bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.reapExpiredLocked()
+	p := c.pending[state]
+	if p == nil {
+		return "", "", false
+	}
+	return p.Origin, p.FlowBinding, true
+}
+
+// httpFor returns the client for a server's OAuth calls.
+func (c *Connector) httpFor(projectID, serverURL string) *http.Client {
+	if c.HTTPFor != nil {
+		if h := c.HTTPFor(projectID, serverURL); h != nil {
+			return h
+		}
+	}
+	return c.HTTP
 }
 
 // ServerRef identifies the server being connected and carries its auth block.
@@ -264,6 +308,11 @@ func isLoopback(host string) bool {
 // URL the operator opens. Nothing is persisted until Complete — a half-finished consent leaves
 // no grant behind.
 func (c *Connector) Begin(ctx context.Context, ref ServerRef, connectedBy string) (BeginResult, error) {
+	return c.BeginWith(ctx, ref, connectedBy, BeginOptions{})
+}
+
+// BeginWith is Begin with the attempt's origin recorded (plan P4.4).
+func (c *Connector) BeginWith(ctx context.Context, ref ServerRef, connectedBy string, opts BeginOptions) (BeginResult, error) {
 	if ref.Auth.EffectiveMode() != mcpauth.ModeOAuth {
 		return BeginResult{}, fmt.Errorf("%w: %q is mode %q", ErrNotOAuth, ref.ServerName, ref.Auth.EffectiveMode())
 	}
@@ -330,6 +379,7 @@ func (c *Connector) Begin(ctx context.Context, ref ServerRef, connectedBy string
 		ProjectID: ref.ProjectID, ServerName: ref.ServerName,
 		Metadata: md, Creds: creds, PKCE: pkce, Scopes: scopes,
 		RedirectURI: redirectURI, ConnectedBy: connectedBy, CreatedAt: time.Now(),
+		Origin: opts.Origin, FlowBinding: opts.FlowBinding, HTTP: c.httpFor(ref.ProjectID, ref.URL),
 	}
 	c.mu.Unlock()
 
@@ -373,7 +423,11 @@ func (c *Connector) Complete(ctx context.Context, state, code string) (*persiste
 		return nil, errors.New("mcpconnect: callback carried no authorization code")
 	}
 
-	tr, err := mcpauth.ExchangeCode(ctx, c.HTTP, p.Metadata, p.Creds, p.RedirectURI, code, p.PKCE)
+	hc := p.HTTP
+	if hc == nil {
+		hc = c.HTTP
+	}
+	tr, err := mcpauth.ExchangeCode(ctx, hc, p.Metadata, p.Creds, p.RedirectURI, code, p.PKCE)
 	if err != nil {
 		return nil, err
 	}
@@ -547,7 +601,7 @@ func (c *Connector) resolveMetadata(ctx context.Context, ref ServerRef) (mcpauth
 			ScopesSupported:       ref.Auth.Scopes,
 		}, nil
 	}
-	md, err := mcpauth.Discover(ctx, c.HTTP, ref.URL)
+	md, err := mcpauth.Discover(ctx, c.httpFor(ref.ProjectID, ref.URL), ref.URL)
 	if err != nil {
 		return mcpauth.Metadata{}, err
 	}
@@ -575,7 +629,7 @@ func (c *Connector) resolveClient(ctx context.Context, ref ServerRef, md mcpauth
 		return mcpauth.ClientCredentials{}, fmt.Errorf("%w for %q — set auth.client_id (and auth.client_secret_from if the vendor issued a secret)",
 			mcpauth.ErrNoDCR, ref.ServerName)
 	}
-	return mcpauth.Register(ctx, c.HTTP, md, redirectURI, scopes)
+	return mcpauth.Register(ctx, c.httpFor(ref.ProjectID, ref.URL), md, redirectURI, scopes)
 }
 
 // configuredClient resolves an operator-configured client, including its secret when the vendor

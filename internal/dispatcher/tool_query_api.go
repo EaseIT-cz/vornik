@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"vornik.io/vornik/internal/agentns"
 
 	"vornik.io/vornik/internal/apiaccess"
 	"vornik.io/vornik/internal/apigateway"
@@ -42,6 +43,11 @@ func (te *ToolExecutor) queryAPI(ctx context.Context, argsJSON, activeProject st
 	}
 	if !projectAllowed(activeProject, allowedProjects) {
 		return ToolResult{Content: fmt.Sprintf("query_api: access to project %q is not permitted for this session.", activeProject)}
+	}
+	if _, agent := agentns.FromID(activeProject); agent {
+		// The chat has no task and no role; an agent project's APIs are
+		// approved for its own workflows (agent-administered Vornik §10.1).
+		return ToolResult{Content: fmt.Sprintf("query_api: %q is an agent project; its APIs run only inside its own workflows.", activeProject)}
 	}
 	var args queryAPIArgs
 	if err := json.Unmarshal([]byte(argsJSON), &args); err != nil {

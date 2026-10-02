@@ -111,3 +111,18 @@ func TestWarmStepDeclinesAProjectWithDependencies(t *testing.T) {
 		t.Fatalf("want errWarmIneligible, got %v", err)
 	}
 }
+
+// The EaseIT-cz migration (2026-10-02-easeit-org-migration-design.md §5.2):
+// a dependency tree installed before the move records the legacy image name,
+// while the registry now hands the executor the canonical one. The tree still
+// mounts; without canonicalising the marker it was refused as installed for
+// another image, and the task lost its dependencies.
+func TestDependencyMounts_TreeInstalledForLegacyNameMounts(t *testing.T) {
+	e, _, _, _, _ := setup()
+	task, plan, root := depsPlan(t, e)
+	path := installFor(t, e, root, plan.project.Dependencies, "ghcr.io/grinco/vornik-agent:latest")
+	mounts, err := e.dependencyMounts(task, plan, "ghcr.io/easeit-cz/vornik-agent:latest")
+	if err != nil || len(mounts) != 1 || mounts[0].HostPath != path {
+		t.Fatalf("a legacy-named tree must mount for the canonical image: %+v %v", mounts, err)
+	}
+}

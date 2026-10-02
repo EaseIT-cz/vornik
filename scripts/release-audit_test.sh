@@ -17,6 +17,27 @@ fails=0
 pass() { echo "ok   - $1"; }
 fail() { echo "FAIL - $1"; fails=$((fails+1)); }
 
+# The publish token's expiry (EaseIT-cz migration plan T6.6, review 1c96 M3).
+# GitHub does not expose a fine-grained PAT's expiry to Actions, so it lives in
+# the CE_PUBLISH_TOKEN_EXPIRES repository variable; nothing binds that to the
+# real token, so missing, empty or unparseable must FAIL, never pass quietly.
+# "Today" is injected, so these cases are deterministic and need no network.
+token_case() {
+	local name="$1" expires="$2" want="$3" out rc
+	if [ "$expires" = "<unset>" ]; then
+		out="$(env -u CE_PUBLISH_TOKEN_EXPIRES RELEASE_AUDIT_TODAY=2026-10-02 "$AUDIT" --check-token 2>&1)"; rc=$?
+	else
+		out="$(CE_PUBLISH_TOKEN_EXPIRES="$expires" RELEASE_AUDIT_TODAY=2026-10-02 "$AUDIT" --check-token 2>&1)"; rc=$?
+	fi
+	if [ "$rc" -eq "$want" ]; then pass "$name"; else fail "$name (exit $rc, want $want): $out"; fi
+}
+token_case "45 days left passes" 2026-11-16 0
+token_case "30 days left fails" 2026-11-01 1
+token_case "an expired token fails" 2026-09-30 1
+token_case "an unset expiry variable fails" "<unset>" 1
+token_case "an empty expiry variable fails" "" 1
+token_case "an unparseable expiry fails" 2026-13-01 1
+
 command -v gh >/dev/null 2>&1 || { echo "release-audit_test: SKIPPED — no gh"; exit 0; }
 gh auth status >/dev/null 2>&1 || { echo "release-audit_test: SKIPPED — gh not authenticated"; exit 0; }
 
@@ -47,7 +68,7 @@ fi
 # the missing one, and it failed the moment that distinction was added
 # (2026-09-23, during the 2026.9.6 release itself). Two releases means at least
 # one has a settled build whatever day this runs.
-out="$(RELEASE_AUDIT_IMAGE=ghcr.io/grinco/definitely-not-an-image "$AUDIT" 2 2>&1)"; rc=$?
+out="$(RELEASE_AUDIT_IMAGE=ghcr.io/easeit-cz/definitely-not-an-image "$AUDIT" 2 2>&1)"; rc=$?
 if [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -q 'NO agent image'; then
 	pass "a missing agent image is reported and fatal"
 else
@@ -65,15 +86,6 @@ if printf '%s' "$out" | grep -q 'PENDING — publish-agent-image is still runnin
 	fi
 else
 	echo "skip - no image build in flight; the PENDING path is not exercisable right now"
-fi
-
-# A release commit absent from the mirror must be BOTH reported and fatal —
-# this is the state every release was in before 2026-09-22.
-out="$(RELEASE_AUDIT_MIRROR_REPO=grinco/vornik "$AUDIT" 1 2>&1)"; rc=$?
-if [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -q 'is NOT on'; then
-	pass "a release whose source never reached the mirror is reported and fatal"
-else
-	fail "unmirrored release should report and exit non-zero (rc=$rc); got: $out"
 fi
 
 echo ""

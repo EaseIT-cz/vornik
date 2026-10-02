@@ -40,6 +40,7 @@ type obtainOpts struct {
 	inspect func(tag string) (imagemanifest.LocalImage, error)
 	resolve imagemanifest.DigestLookup
 	pull    func(ref string) error
+	tag     func(src, dst string) error
 	remove  func(ref string) error
 	log     func(format string, args ...any)
 }
@@ -102,6 +103,14 @@ func runObtain(images []imagemanifest.Image, o obtainOpts) (build []imagemanifes
 					Tag: img.Tag, Method: imagemanifest.MethodBuilt, Reference: o.head, At: o.obtainedAt,
 				})
 				continue
+			}
+			// A pull by digest creates no tag, and the runtime resolves the
+			// tag: until it points here, the daemon runs the old image or
+			// none (issue #17, design §S2.10). Fatal, like the record below:
+			// this runs before the cutover. A failure leaves an untagged
+			// digest that the next run's pull reuses and tags.
+			if terr := o.tag(ref, img.Tag); terr != nil {
+				return nil, fmt.Errorf("%s: pulled %s but could not tag it: %w", img.Tag, ref, terr)
 			}
 			obtained.Note(imagemanifest.ObtainedImage{
 				Tag: img.Tag, Method: imagemanifest.MethodPulled, Reference: ref,
@@ -169,6 +178,10 @@ func skopeoResolve(ref string) (string, error) {
 	cmd.Stderr = &stderr
 	out, err := cmd.Output()
 	if err != nil {
+		// Not a registry answer: classification would read it as an outage.
+		if errors.Is(err, exec.ErrNotFound) {
+			return "", imagemanifest.ErrResolverAbsent
+		}
 		return "", imagemanifest.ClassifyLookupError(err, stderr.String())
 	}
 	return strings.TrimSpace(string(out)), nil
@@ -177,6 +190,13 @@ func skopeoResolve(ref string) (string, error) {
 func podmanPull(ref string) error {
 	cmd := exec.Command("podman", "pull", ref)
 	cmd.Stdout = os.Stderr // progress belongs on stderr; stdout carries rows
+	cmd.Stderr = os.Stderr
+	return cmd.Run()
+}
+
+func podmanTag(src, dst string) error {
+	cmd := exec.Command("podman", "tag", src, dst)
+	cmd.Stdout = os.Stderr
 	cmd.Stderr = os.Stderr
 	return cmd.Run()
 }

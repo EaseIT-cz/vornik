@@ -163,7 +163,7 @@ unexplained — stop. Don't invent a theory.
 
 Hand off to the **report-problem** skill. The diagnostic output is already in
 hand, and `vornikctl report` will collect and anonymize it into a prefilled
-issue on `github.com/grinco/vornik` that the user reviews and submits under
+issue on `github.com/EaseIT-cz/vornik` that the user reviews and submits under
 their own GitHub identity. Nothing is ever posted automatically.
 
 ---

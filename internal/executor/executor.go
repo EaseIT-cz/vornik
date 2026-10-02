@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"sync"
 	"time"
+	"vornik.io/vornik/internal/egressscan"
 
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/rs/zerolog"
@@ -663,7 +664,25 @@ type Executor struct {
 	// next process start (the field is on the Executor instance,
 	// which doesn't survive a restart).
 	shuttingDown bool
+	// reachVerifier refuses an agent workflow whose reach is not the
+	// approved one (agent-administered Vornik §7.6). Nil = not wired.
+	reachVerifier ReachVerifier
+	// egressDetector and egressRecord scan an agent project's proposed
+	// arguments at staging (agent-administered Vornik plan P5.3). A nil
+	// detector refuses agent proposals (fail closed).
+	egressDetector secrets.Detector
+	egressRecord   func(surface, projectID, what string, fs []egressscan.Finding, action secrets.Action)
 }
+
+// WithEgressScan wires the egress secret scan for agent proposals (P5.3).
+func WithEgressScan(d secrets.Detector, record func(surface, projectID, what string, fs []egressscan.Finding, action secrets.Action)) Option {
+	return func(e *Executor) { e.egressDetector, e.egressRecord = d, record }
+}
+
+// ReachVerifier judges the objects an execution will actually run: the
+// plan's project, swarm and workflow, which for a resumed execution is the
+// pinned snapshot, not the live registry (review 20261002-a048 F2).
+type ReachVerifier func(ctx context.Context, p *registry.Project, sw *registry.Swarm, wf *registry.Workflow) error
 
 // wsLock returns the per-project workspace lock, lazily allocating a private
 // fallback when the executor was built without one (struct-literal
@@ -1058,6 +1077,32 @@ func WithHallucinationMetrics(m *hallucination.Metrics) Option {
 		e.hallucinationMetrics = m
 	}
 }
+
+// SetReachVerifier installs the agent reach check, run after plan
+// resolution and again before each retry (agent-administered Vornik §7.6).
+func (e *Executor) SetReachVerifier(f ReachVerifier) {
+	e.reachVerifier = f
+}
+
+// checkReach runs the reach verifier on the plan, or returns nil when none
+// is wired.
+func (e *Executor) checkReach(ctx context.Context, plan *executionPlan) error {
+	if e.reachVerifier == nil || plan == nil || plan.project == nil || plan.workflow == nil {
+		return nil
+	}
+	if err := e.reachVerifier(ctx, plan.project, plan.swarm, plan.workflow); err != nil {
+		return reachRefusedError{err: err}
+	}
+	return nil
+}
+
+// reachRefusedError carries its failure class, so the task stops without
+// spending its retry budget (REACH_NOT_APPROVED is terminal).
+type reachRefusedError struct{ err error }
+
+func (r reachRefusedError) Error() string        { return "REACH_NOT_APPROVED: " + r.err.Error() }
+func (r reachRefusedError) Unwrap() error        { return r.err }
+func (r reachRefusedError) FailureClass() string { return persistence.TaskFailureClassReachNotApproved }
 
 // judgeRunnerInterface is the minimal contract handleSuccess /
 // handleFailure need from the judge subsystem. Allows tests to
@@ -2120,6 +2165,13 @@ func (e *Executor) runExecution(ctx context.Context, task *persistence.Task, exe
 		e.handleFailure(ctx, task, execution, err)
 		return
 	}
+	// Again at execution, because a reload between creation and now can
+	// change an agent workflow's reach (agent-administered Vornik §7.6).
+	if rerr := e.checkReach(ctx, plan); rerr != nil {
+		span.SetStatus(codes.Error, "agent workflow reach not approved")
+		e.handleFailure(ctx, task, execution, rerr)
+		return
+	}
 
 	// Per-task wall-clock hard cap. Workflow.MaxWallClock — when set —
 	// bounds the entire execution including retries, container
@@ -2358,6 +2410,12 @@ retryLoop:
 		// should resume from where it got, not restart. Only the
 		// loop-protection counters reset.
 		if attempts > 1 {
+			// An approval withdrawn while the task waited to retry stops
+			// the next attempt (review 20261002-a048 F2).
+			if rerr := e.checkReach(ctx, plan); rerr != nil {
+				lastErr = rerr
+				break
+			}
 			retryState := loadExecutionState(execution)
 			retryState.VisitCounts = nil
 			retryState.Iterations = 0

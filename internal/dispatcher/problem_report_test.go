@@ -30,7 +30,7 @@ func (s *stubReportBuilder) Edition() string { return s.edition }
 // host, so a customer talking to the bot had no way in.
 func TestReportProblem_ReturnsAReviewLinkForTheUser(t *testing.T) {
 	b := &stubReportBuilder{
-		url:  "https://github.com/grinco/vornik/issues/new?title=x",
+		url:  "https://github.com/EaseIT-cz/vornik/issues/new?title=x",
 		body: "### vornik problem report\n\n- **version:** 1.2.3\n",
 	}
 	te := &ToolExecutor{problemReports: b}
@@ -57,7 +57,7 @@ func TestReportProblem_ReturnsAReviewLinkForTheUser(t *testing.T) {
 // name or credential. So the tool must never submit; it hands back a link and says so in
 // terms a person will actually read.
 func TestReportProblem_NeverSubmitsAndSaysSo(t *testing.T) {
-	b := &stubReportBuilder{url: "https://github.com/grinco/vornik/issues/new", body: "body"}
+	b := &stubReportBuilder{url: "https://github.com/EaseIT-cz/vornik/issues/new", body: "body"}
 	te := &ToolExecutor{problemReports: b}
 
 	res := te.reportProblem(context.Background(), `{"summary":"crash on startup"}`)
@@ -164,7 +164,7 @@ func TestSetProblemReportBuilder_NilSafe(_ *testing.T) {
 // that they attach it themselves after reading it.
 func TestReportProblem_TellsThemAboutTheEvidenceBundle(t *testing.T) {
 	b := &stubReportBuilder{
-		url: "https://github.com/grinco/vornik/issues/new?title=x",
+		url: "https://github.com/EaseIT-cz/vornik/issues/new?title=x",
 		// Enterprise: support-report only exists there, so that is the edition
 		// whose response names it. The Community response is asserted by
 		// TestReportProblem_CommunityNamesTheLocalBundleCommand below.
@@ -204,7 +204,7 @@ func TestReportProblem_TellsThemAboutTheEvidenceBundle(t *testing.T) {
 // — the local form only, since the plain form still 501s.
 func TestReportProblem_CommunityNamesTheLocalBundleCommand(t *testing.T) {
 	b := &stubReportBuilder{
-		url:     "https://github.com/grinco/vornik/issues/new?title=x",
+		url:     "https://github.com/EaseIT-cz/vornik/issues/new?title=x",
 		body:    "### vornik problem report\n\n- **edition:** community (CE)\n",
 		edition: "community",
 	}

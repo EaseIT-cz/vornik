@@ -14,7 +14,7 @@ Edition open under AGPL. You keep your copyright; the CLA is a licence, not an
 assignment. What the AGPL means for *using* or *forking* Vornik (no CLA needed
 for either) is on the [Licensing](licensing.md) page.
 
-- The agreement is the [Contributor License Agreement](https://github.com/grinco/vornik/blob/main/CLA.md)
+- The agreement is the [Contributor License Agreement](https://github.com/EaseIT-cz/vornik/blob/main/CLA.md)
   (`CLA.md` at the repo root).
 - It is checked automatically on every pull request — your first PR will prompt
   you to sign by posting a one-line comment. One signature covers your future
@@ -25,7 +25,7 @@ for either) is on the [Licensing](licensing.md) page.
 ## Development setup
 
 ```sh
-git clone https://github.com/grinco/vornik
+git clone https://github.com/EaseIT-cz/vornik
 cd vornik
 go build ./cmd/vornik      # build the Community daemon
 go test ./...              # run the test suite

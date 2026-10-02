@@ -16,7 +16,7 @@
 # See onboarding-hardening-design.md, D4.
 set -u
 
-IMAGE="${AGENT_IMAGE:-ghcr.io/grinco/vornik-agent:latest}"
+IMAGE="${AGENT_IMAGE:-ghcr.io/easeit-cz/vornik-agent:latest}"
 
 command -v podman >/dev/null 2>&1 || { echo "SKIP: podman not available"; exit 0; }
 podman image exists "$IMAGE" 2>/dev/null || { echo "SKIP: $IMAGE not present locally"; exit 0; }

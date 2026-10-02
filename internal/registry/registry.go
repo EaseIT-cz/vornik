@@ -543,6 +543,7 @@ func loadConfigSet(configDir string) (*ConfigSet, error) {
 		configDir: configDir,
 		index:     index,
 	}
+	agentRuleRejections(cfg)
 
 	return cfg, nil
 }

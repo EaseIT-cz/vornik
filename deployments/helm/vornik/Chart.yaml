@@ -23,9 +23,9 @@ keywords:
   - postgresql
   - pgvector
 
-home: https://github.com/grinco/vornik
+home: https://github.com/EaseIT-cz/vornik
 sources:
-  - https://github.com/grinco/vornik
+  - https://github.com/EaseIT-cz/vornik
 
 maintainers:
   - name: vornik maintainers

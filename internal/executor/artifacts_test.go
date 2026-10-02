@@ -1237,7 +1237,7 @@ func TestNormaliseLoopInput_CollapsesDigitRuns(t *testing.T) {
 }
 
 // ActiveDaysByAPIKey: this stub predates the per-credential day query
-// (grinco/vornik#14) and no test here exercises it.
+// (EaseIT-cz/vornik#14) and no test here exercises it.
 func (s *stubLLMUsageRepo) ActiveDaysByAPIKey(context.Context, time.Time, time.Time, string) (map[string][]string, error) {
 	return nil, nil
 }

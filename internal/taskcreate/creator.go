@@ -43,6 +43,9 @@ const (
 	ReasonProjectNotFound  Reason = "PROJECT_NOT_FOUND"
 	ReasonWorkflowNotFound Reason = "WORKFLOW_NOT_FOUND"
 	ReasonWorkflowIncompat Reason = "WORKFLOW_INCOMPATIBLE"
+	// ReasonReachNotApproved refuses an agent workflow whose reach differs from
+	// what a device approved (agent-administered Vornik design §7.6).
+	ReasonReachNotApproved Reason = "REACH_NOT_APPROVED"
 	ReasonRateLimited      Reason = "RATE_LIMITED"
 	ReasonBudgetExceeded   Reason = "BUDGET_EXCEEDED"
 	ReasonInternal         Reason = "INTERNAL_ERROR"
@@ -173,6 +176,9 @@ type Creator struct {
 	defaultModel string
 	logger       zerolog.Logger
 	now          func() time.Time
+	// reachVerifier refuses an agent workflow whose live reach is not the
+	// approved one (design §7.6). Nil = no agent namespaces on this daemon.
+	reachVerifier func(ctx context.Context, projectID, workflowID string) error
 }
 
 // Option configures a Creator.
@@ -235,6 +241,11 @@ func WithPricing(t *pricing.Table) Option {
 // effective model in the forecast when neither the role nor the swarm pins one.
 func WithDefaultModel(m string) Option {
 	return func(c *Creator) { c.defaultModel = m }
+}
+
+// WithReachVerifier installs the agent reach check (design §7.6).
+func WithReachVerifier(f func(ctx context.Context, projectID, workflowID string) error) Option {
+	return func(c *Creator) { c.reachVerifier = f }
 }
 
 // WithLogger sets the logger.
@@ -319,6 +330,13 @@ func (c *Creator) Create(ctx context.Context, p Params) (*persistence.Task, erro
 					),
 				}
 			}
+		}
+	}
+	// Before any row exists: an agent workflow runs only with the reach a
+	// device approved (agent-administered Vornik §7.6).
+	if c.reachVerifier != nil {
+		if err := c.reachVerifier(ctx, p.ProjectID, workflowID); err != nil {
+			return nil, &Error{Reason: ReasonReachNotApproved, Message: err.Error()}
 		}
 	}
 

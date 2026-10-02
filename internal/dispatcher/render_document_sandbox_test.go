@@ -20,7 +20,7 @@ import (
 // and no user text in argv — and, since S5a, through the sandboxtool runner,
 // which carries the limits, hardening and timeout.
 
-const testRenderImage = "ghcr.io/grinco/vornik-agent:latest"
+const testRenderImage = "ghcr.io/easeit-cz/vornik-agent:latest"
 
 type renderCall struct {
 	name string

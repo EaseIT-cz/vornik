@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"vornik.io/vornik/internal/imageref"
 	"vornik.io/vornik/internal/mediakind"
 	"vornik.io/vornik/internal/promptblock"
 )
@@ -610,6 +611,12 @@ func loadSwarms(dir string, index *TreeIndex) (map[string]*Swarm, error) {
 			return nil, err
 		}
 		swarm := *parsed
+		// Deployed swarm files keep the agent image's legacy name (config
+		// deploys never overwrite); consumers that read Runtime.Image directly
+		// get the canonical one (EaseIT-cz migration design §5.2).
+		for i := range swarm.Roles {
+			swarm.Roles[i].Runtime.Image = imageref.CanonicalFrom(swarm.Roles[i].Runtime.Image, "swarms/"+name)
+		}
 
 		// Validate the swarm
 		if err := swarm.Validate(name); err != nil {

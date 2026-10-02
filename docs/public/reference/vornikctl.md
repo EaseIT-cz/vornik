@@ -4,6 +4,76 @@
 
 vornikctl inspects and controls a running vornik daemon.
 
+## vornikctl agent
+
+Connect an AI assistant (Hermes, Claude, Codex) to Vornik
+
+## vornikctl agent connect
+
+Let an AI assistant set up and use Vornik, with you approving on your phone
+
+Connect an assistant to Vornik as an administering agent. It can then create
+projects, workflows and connections to your services in its own namespace,
+and run them; every credential and every widening of its reach is approved
+by you on your phone, and the assistant never sees a credential.
+
+Connect checks the daemon, mints the namespace's agent key (needs a paired
+phone: vornikctl pair-device), stores the key in a file only you can read,
+and adds one MCP server entry to the assistant's own config. That entry runs
+'vornikctl agent mcp-bridge'; the assistant's config never holds the key.
+
+For an assistant that can run shell commands (Claude Code, Codex), connect
+also checks that Vornik runs as a different OS user than you: otherwise the
+assistant's shell could read Vornik's files, and connect refuses unless you
+pass --accept-shared-user.
+
+```
+vornikctl agent connect <hermes|claude-desktop|claude-code|codex> [flags]
+```
+
+| Flag | Default | Description |
+|---|---|---|
+| `--accept-shared-user` | `false` | Connect a shell-capable assistant although Vornik's files may be readable to it (see the printed table) |
+| `--dry-run` | `false` | Check and print what would be done, change nothing |
+| `--namespace` |  | The agent namespace: 2 to 16 lowercase letters and digits (default: the harness name without dashes, e.g. claudecode) |
+| `--url` |  | Vornik's URL (default $VORNIK_API_URL, then http://localhost:8080) |
+
+## vornikctl agent disconnect
+
+Revoke an assistant's Vornik key and remove what connect wrote
+
+Revoke the namespace's agent key, remove the MCP server entry connect added to
+the assistant's config, and delete the key file. The namespace's projects and
+approvals stay, so connecting again resumes where it left off.
+
+```
+vornikctl agent disconnect <namespace> [flags]
+```
+
+| Flag | Default | Description |
+|---|---|---|
+| `--url` |  | Vornik's URL (default $VORNIK_API_URL, then http://localhost:8080) |
+
+## vornikctl agent mcp-bridge
+
+Relay MCP over stdio to Vornik (run by the assistant, not by you)
+
+Relay newline-delimited MCP JSON-RPC between stdin/stdout and Vornik's
+companion endpoint, authenticated with the namespace's key file
+(<config dir>/vornik/agents/<namespace>.key, written by vornikctl agent connect).
+
+The assistant runs this command from its MCP server entry. stdout carries the
+protocol only; diagnostics go to stderr and never include the key.
+
+```
+vornikctl agent mcp-bridge [flags]
+```
+
+| Flag | Default | Description |
+|---|---|---|
+| `--namespace` |  | The agent namespace whose key to use (required) |
+| `--url` |  | Vornik's URL (default $VORNIK_API_URL, then http://localhost:8080) |
+
 ## vornikctl backup
 
 Create a one-file archive of the vornik deployment
@@ -584,6 +654,30 @@ Show a single proposal (full diff + rationale)
 vornikctl control-plane show <proposal-id>
 ```
 
+## vornikctl devices
+
+List or revoke approver devices
+
+## vornikctl devices list
+
+List approver devices, revoked ones included
+
+```
+vornikctl devices list [flags]
+```
+
+| Flag | Default | Description |
+|---|---|---|
+| `--json` | `false` | Print JSON |
+
+## vornikctl devices revoke
+
+Revoke an approver device
+
+```
+vornikctl devices revoke <device_id>
+```
+
 ## vornikctl doctor
 
 Diagnose and repair common issues
@@ -625,6 +719,8 @@ Security:
   api_key_strength      Detect weak / placeholder API keys
   secrets_permissions   Secrets files/dirs with world-readable permissions
   config_secret_hygiene Config.yaml plaintext secrets or loose permissions (recommends ${ENV_VAR})
+  secret_store_key      Agent credential store: a missing or wrong key while credentials exist is an error
+  approver_devices      Agent approvals: a warning when an agent namespace exists with no paired device or no push
 
 Models:
   model_health          Role-pinned models with high recent failure rate or
@@ -2401,6 +2497,26 @@ vornikctl package upgrade <dir-or-tarball> [flags]
 | Flag | Default | Description |
 |---|---|---|
 | `--dry-run` | `false` | Print the plan without touching disk or the provenance store |
+
+## vornikctl pair-device
+
+Pair a phone as an approver device (prints a one-time code)
+
+Print a one-time code (8 characters, 10 minutes, single use) to pair a phone
+as an approver device. Open the printed address on the phone and enter the
+code.
+
+Only an approver device can approve what an agent asks Vornik to do, or enter
+a credential for it. The first device is paired by the code alone; once a
+device exists, a new one must also be approved on an existing device.
+
+```
+vornikctl pair-device [flags]
+```
+
+| Flag | Default | Description |
+|---|---|---|
+| `--label` | `Phone` | A name for the device (1 to 40 characters), shown in approvals and alerts |
 
 ## vornikctl project
 

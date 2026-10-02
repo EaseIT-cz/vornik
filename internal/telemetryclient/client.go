@@ -23,7 +23,7 @@ const (
 	// DefaultEndpoint is the fixed production lifecycle telemetry URL.
 	//
 	// Path-less on purpose. The collector is reached through an API Gateway
-	// regional custom domain in eu-central-1 (grinco/vornik-infra
+	// regional custom domain in eu-central-1 (the private infrastructure repository's
 	// `domain.tf`), and it accepts both `POST /` and `POST /v1/collect.json`,
 	// so naming the bare host is the simpler of two equally valid forms.
 	//
@@ -37,7 +37,7 @@ const (
 	// together with a CDN/WAF identifier.
 	//
 	// This constant must name a host the project controls; TestDefaultEndpoint-
-	// IsOnTheProjectDomain enforces it. grinco/vornik#8 proposed replacing it
+	// IsOnTheProjectDomain enforces it. EaseIT-cz/vornik#8 proposed replacing it
 	// with a raw Function URL while telemetry stayed on by default, and nothing
 	// in the build objected.
 	DefaultEndpoint = "https://telemetry.vornik.io"
@@ -71,7 +71,7 @@ const (
 // distinction worth encoding.
 //
 // The collector behind telemetry.vornik.io moved from a Cloudflare Worker to
-// AWS on 2026-08-20 (grinco/vornik-infra). DefaultEndpoint's own comment
+// AWS on 2026-08-20 (the private infrastructure repository). DefaultEndpoint's own comment
 // covers the transport; what matters here is what retains what:
 //
 //   - one bucketed line in CloudWatch Logs, ~7 days;

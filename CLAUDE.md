@@ -24,6 +24,24 @@ Then one of three things is true, and each has an obligation:
 | contradicts what shipped | correct it, dated, and mark the stale sections inline |
 | does not exist for this surface | write one |
 
+**An undesigned surface is designed before it is changed, in this order:**
+
+1. **As-built first.** Write the low-level design of what the surface does
+   TODAY, reverse-engineered from the code, its configuration and its
+   observed behaviour (measured where it can be: run times, sizes, counts),
+   not from memory or intent. Say what was measured and what was inferred.
+2. **Review the as-built record** until GREEN. A wrong picture of the
+   present makes every proposal built on it wrong.
+3. **Then the change**, as a dated section of the same design: what moves,
+   why, what it costs, and what it gives up. Review it until GREEN.
+4. **Then TDD**: the failing test, the change, the test passing, the
+   design amended with what actually shipped.
+
+Never fold the as-built record and the proposal into one unreviewed draft,
+and never let "it is only configuration" (a workflow, a Makefile, a script)
+excuse a surface from this: those are where undesigned behaviour lives
+longest.
+
 **Touch a surface a design covers → amend that design in the same change.**
 Never a second document about one surface: retrieval serves whichever chunk
 ranks highest, and neither document says it is the incomplete one.

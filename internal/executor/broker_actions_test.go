@@ -13,8 +13,10 @@ import (
 
 	"github.com/rs/zerolog"
 
+	"vornik.io/vornik/internal/egressscan"
 	"vornik.io/vornik/internal/persistence"
 	"vornik.io/vornik/internal/registry"
+	"vornik.io/vornik/internal/secrets"
 )
 
 // Broker write-actions design §5.1: proposals are staged before COMPLETED,
@@ -350,5 +352,51 @@ func TestPromoteBrokerActions_NotifiesOncePerPromotion(t *testing.T) {
 	e.promoteBrokerActions(context.Background(), &persistence.Task{ID: "t9", ProjectID: "broker-p"})
 	if len(got) != 1 {
 		t.Fatalf("notified without a promotion: %v", got)
+	}
+}
+
+// Plan P5.3: an agent project's proposed arguments are scanned at staging; a
+// credential-shaped value stages the row proposal_invalid, so no approval is
+// ever asked for a key. Without a scanner an agent proposal is refused
+// (fail closed); operator projects are unchanged. Control: the egress branch
+// of brokerActionRow.
+func TestStageBrokerActions_AgentArgsScanned(t *testing.T) {
+	d, err := secrets.NewMultiDetector(secrets.Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	wf := proposingWorkflow()
+	wf.Broker.Proposes[0].ArgsSchema["properties"].(map[string]any)["note"] = map[string]any{"type": "string", "maxLength": 200, "x-untrusted": true}
+	keyed := `{"action":"gmail_reply","args":{"note":"AKIAQWERTYUIOPASDFGH","to":"jana@example.com"}}`
+	stage := func(project string, withScan bool) *persistence.BrokerAction {
+		e, fake := stagingExecutor(t, keyed)
+		e.workflows = brokerResolver{wf: wf}
+		var recorded []string
+		if withScan {
+			e.egressDetector = d
+			e.egressRecord = func(surface, _, _ string, fs []egressscan.Finding, _ secrets.Action) {
+				for _, f := range fs {
+					recorded = append(recorded, surface+"|"+f.Path)
+				}
+			}
+		}
+		key := "k"
+		if err := e.stageBrokerActions(context.Background(), &persistence.Task{ID: "t1", ProjectID: project, CreatedByAPIKeyID: &key},
+			&persistence.Execution{ID: "x1", WorkflowID: "mail-reply"}); err != nil {
+			t.Fatal(err)
+		}
+		if withScan && project != "broker-p" && (len(recorded) == 0 || recorded[0] != "action_args|$.note") {
+			t.Fatalf("recorded %q", recorded)
+		}
+		return fake.staged[0]
+	}
+	if row := stage("hermes--comms", true); row.Status != persistence.BrokerActionProposalInvalid || strings.Contains(string(row.ArgsJSON), "AKIA") {
+		t.Fatalf("an agent proposal with a key: %s %s", row.Status, row.ArgsJSON)
+	}
+	if row := stage("hermes--comms", false); row.Status != persistence.BrokerActionProposalInvalid {
+		t.Fatalf("an agent proposal with no scanner: %s", row.Status)
+	}
+	if row := stage("broker-p", true); row.Status != persistence.BrokerActionStaged {
+		t.Fatalf("an operator proposal changed: %s", row.Status)
 	}
 }

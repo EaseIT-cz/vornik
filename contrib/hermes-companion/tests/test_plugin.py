@@ -28,6 +28,7 @@ class RegisterTest(unittest.TestCase):
         self.assertIn("pre_llm_call", ctx.hooks)
         self.assertEqual(sorted(ctx.commands), ["vornik-peek", "vornik-result"])
         self.assertTrue(ctx.skills["vornik-broker"].exists())
+        self.assertTrue(ctx.skills["vornik-admin"].exists())
         self.assertEqual(ctx.memory, [], "no memory provider without VORNIK_MEMORY_TOKEN")
         with mock.patch.dict(os.environ, dict(env, VORNIK_MEMORY_TOKEN="m"), clear=True):
             ctx = FakeCtx()

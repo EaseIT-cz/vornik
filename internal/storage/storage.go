@@ -295,6 +295,15 @@ type Repositories struct {
 	// BrokerActions persists writes proposed by broker workflows, approved in
 	// /inbox and executed by the daemon (broker write-actions design §5).
 	BrokerActions persistence.BrokerActionRepository
+	// AgentSecrets holds sealed agent credentials (agent-administered Vornik
+	// design §8.1); ciphertext only, the key lives on disk.
+	AgentSecrets persistence.AgentSecretRepository
+	// ApproverDevices holds approver devices, pairing codes and the approval
+	// requests they decide (agent-administered Vornik design §9).
+	ApproverDevices persistence.ApproverDeviceRepository
+	// AgentGrants holds what a device approved for agent namespaces:
+	// integrations, workflow reach, budget ceilings (design §7).
+	AgentGrants persistence.AgentGrantRepository
 	// CompanionPushOutbox reads due companion pushes and records delivery
 	// (broker write-actions design §7a).
 	CompanionPushOutbox persistence.CompanionPushOutbox
@@ -471,6 +480,9 @@ func buildSQLiteRepositories(db *sql.DB) *Repositories {
 		TelegramPollerState:     sqlite.NewTelegramPollerStateRepository(db),
 		WorkflowProposals:       sqlite.NewWorkflowProposalRepository(db),
 		BrokerActions:           sqlite.NewBrokerActionRepository(db),
+		AgentSecrets:            sqlite.NewAgentSecretRepository(db),
+		ApproverDevices:         sqlite.NewApproverDeviceRepository(db),
+		AgentGrants:             sqlite.NewAgentGrantRepository(db),
 		CompanionPushOutbox:     sqlite.NewCompanionPushOutbox(db),
 		// Round 3 — memory + KG.
 		StepOutcomes:         sqlite.NewExecutionStepOutcomeRepository(db),
@@ -641,6 +653,9 @@ func Build(dbtx persistence.DBTX) *Repositories {
 		TelegramPollerState:            postgres.NewTelegramPollerStateRepository(dbtx),
 		WorkflowProposals:              postgres.NewWorkflowProposalRepository(dbtx),
 		BrokerActions:                  postgres.NewBrokerActionRepository(dbtx),
+		AgentSecrets:                   postgres.NewAgentSecretRepository(dbtx),
+		ApproverDevices:                postgres.NewApproverDeviceRepository(dbtx),
+		AgentGrants:                    postgres.NewAgentGrantRepository(dbtx),
 		CompanionPushOutbox:            postgres.NewCompanionPushOutbox(dbtx),
 		ExecutionNarration:             postgres.NewExecutionNarrationRepository(dbtx),
 	}

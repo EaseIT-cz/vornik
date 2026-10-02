@@ -16,6 +16,7 @@ import (
 	"strings"
 	"time"
 
+	"vornik.io/vornik/internal/agentns"
 	"vornik.io/vornik/internal/config"
 	"vornik.io/vornik/internal/featuredoctor"
 	"vornik.io/vornik/internal/onboarding"
@@ -197,6 +198,13 @@ func Save(ctx context.Context, kind IntegrationKind, target SaveTarget, cand Can
 	if kind.Scope == ScopeProject {
 		if err := validateProjectIDForPath(cand.ProjectID); err != nil {
 			return SaveResult{}, fmt.Errorf("integrations: %w", err)
+		}
+		// Agent-administered Vornik design §8.1, "No second writer": this
+		// path puts project secrets into the flat environment. An agent
+		// project's credentials are sealed in the secret store and entered
+		// on an approver device, so it is refused before any probe or write.
+		if ns, agent := agentns.FromID(cand.ProjectID); agent {
+			return SaveResult{}, fmt.Errorf("%w: project %q belongs to agent namespace %q; its credentials are entered on an approver device, not here", ErrForbidden, cand.ProjectID, ns)
 		}
 	}
 

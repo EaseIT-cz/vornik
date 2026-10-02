@@ -51,6 +51,11 @@ type ComposedMCPExecutor struct {
 	// mcp_result_guard.go for why that mattered and what phase 1 does and does
 	// not do.
 	GuardSink guardSink
+
+	// Egress scans each call's arguments before dispatch (agent-administered
+	// Vornik plan P5.1; Part A of the 2026-07-16 secret-egress design). Nil:
+	// agent projects are refused (fail closed), operator projects pass.
+	Egress *EgressScan
 }
 
 // Tools returns the union of external MCP server tools and the built-in
@@ -80,6 +85,10 @@ func (c *ComposedMCPExecutor) Tools(projectID string) []chat.Tool {
 // under those names is shadowed (defensive against a project mis-configuring an
 // MCP server with the same name).
 func (c *ComposedMCPExecutor) Execute(ctx context.Context, projectID, qualifiedName, argsJSON string) (string, error) {
+	argsJSON, err := c.egressCheck(projectID, qualifiedName, argsJSON)
+	if err != nil {
+		return "", err
+	}
 	if c.Builtin != nil && c.Builtin.Owns(qualifiedName) {
 		body, err := c.Builtin.Execute(ctx, projectID, qualifiedName, argsJSON)
 		return c.scanned(qualifiedName, body, err)

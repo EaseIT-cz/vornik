@@ -573,10 +573,12 @@ func (r *TaskRepository) LeaseTask(ctx context.Context, opts persistence.LeaseOp
 		return nil, fmt.Errorf("sqlite: LeaseTask requires *sql.DB (got %T) — Tx-wrapped repos can read but not lease", r.db)
 	}
 
-	// BEGIN IMMEDIATE — SQLite's writer-lock acquisition mode.
-	// LevelSerializable maps to it under modernc.org/sqlite. The
-	// resulting transaction will block other writers up to
-	// busy_timeout (5s) rather than racing them.
+	// BEGIN IMMEDIATE — SQLite's writer-lock acquisition mode. It
+	// comes from the DSN's _txlock=immediate (sqlite.go), NOT from the
+	// Isolation below: modernc.org/sqlite ignores TxOptions.Isolation,
+	// and before 2026-10-02 this transaction ran DEFERRED. The level is
+	// kept as a statement of intent. The transaction blocks other
+	// writers up to busy_timeout (5s) rather than racing them.
 	tx, err := db.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelSerializable})
 	if err != nil {
 		return nil, fmt.Errorf("sqlite: begin lease tx: %w", err)

@@ -30,7 +30,7 @@ roles:
     - name: "lead"
       model: "zai.glm-5"
       runtime:
-        image: "ghcr.io/grinco/vornik-agent:latest"
+        image: "ghcr.io/easeit-cz/vornik-agent:latest"
         network: egress
     - name: "coder"
       model: "kimi-k2.5"
@@ -63,7 +63,7 @@ func TestAgentImageQualify_RewritesBareLine(t *testing.T) {
 	if note == "" {
 		t.Errorf("expected a non-empty note when a rewrite fired")
 	}
-	if !bytes.Contains(out, []byte(`image: "ghcr.io/grinco/vornik-agent:latest"`)) {
+	if !bytes.Contains(out, []byte(`image: "ghcr.io/easeit-cz/vornik-agent:latest"`)) {
 		t.Errorf("output does not contain the qualified image line:\n%s", out)
 	}
 	if bytes.Contains(out, []byte(`image: "vornik-agent:latest"`)) {
@@ -151,16 +151,19 @@ func TestNormalizeImageLine_ValueForms(t *testing.T) {
 		want    string
 		changed bool
 	}{
-		{"double-quoted-bare", `        image: "vornik-agent:latest"`, `        image: "ghcr.io/grinco/vornik-agent:latest"`, true},
-		{"single-quoted-bare", `        image: 'vornik-agent:latest'`, `        image: 'ghcr.io/grinco/vornik-agent:latest'`, true},
-		{"unquoted-bare", `        image: vornik-agent:latest`, `        image: ghcr.io/grinco/vornik-agent:latest`, true},
-		{"unquoted-digest", `        image: vornik-agent@sha256:abc`, `        image: ghcr.io/grinco/vornik-agent@sha256:abc`, true},
-		{"already-qualified", `        image: "ghcr.io/grinco/vornik-agent:latest"`, `        image: "ghcr.io/grinco/vornik-agent:latest"`, false},
+		{"double-quoted-bare", `        image: "vornik-agent:latest"`, `        image: "ghcr.io/easeit-cz/vornik-agent:latest"`, true},
+		{"single-quoted-bare", `        image: 'vornik-agent:latest'`, `        image: 'ghcr.io/easeit-cz/vornik-agent:latest'`, true},
+		{"unquoted-bare", `        image: vornik-agent:latest`, `        image: ghcr.io/easeit-cz/vornik-agent:latest`, true},
+		{"unquoted-digest", `        image: vornik-agent@sha256:abc`, `        image: ghcr.io/easeit-cz/vornik-agent@sha256:abc`, true},
+		{"already-qualified", `        image: "ghcr.io/easeit-cz/vornik-agent:latest"`, `        image: "ghcr.io/easeit-cz/vornik-agent:latest"`, false},
+		// The EaseIT-cz migration (design §5.2): a legacy-qualified name is
+		// rewritten at the mirror seam too, so it never round-trips into source.
+		{"legacy-qualified", `        image: "ghcr.io/grinco/vornik-agent:latest"`, `        image: "ghcr.io/easeit-cz/vornik-agent:latest"`, true},
 		{"trailing-inline-comment-passthrough", `        image: vornik-agent:latest # bare + comment`, `        image: vornik-agent:latest # bare + comment`, false},
 		{"non-agent-image", `        image: "docker.io/library/golang:1.25"`, `        image: "docker.io/library/golang:1.25"`, false},
 		{"empty-value", `        image:`, `        image:`, false},
 		{"not-image-key", `        base_image: vornik-agent:latest`, `        base_image: vornik-agent:latest`, false},
-		{"preserves-crlf", "        image: \"vornik-agent:latest\"\r\n", "        image: \"ghcr.io/grinco/vornik-agent:latest\"\r\n", true},
+		{"preserves-crlf", "        image: \"vornik-agent:latest\"\r\n", "        image: \"ghcr.io/easeit-cz/vornik-agent:latest\"\r\n", true},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -184,7 +187,7 @@ swarmId: basic-swarm
 roles:
     - name: "lead"
       runtime:
-        image: "ghcr.io/grinco/vornik-agent:latest"
+        image: "ghcr.io/easeit-cz/vornik-agent:latest"
 ---
 The role prompt may literally discuss config, e.g.
 image: vornik-agent:latest
@@ -211,7 +214,7 @@ swarmId: basic-swarm
 roles:
     - name: "lead"
       runtime:
-        image: "ghcr.io/grinco/vornik-agent:latest"
+        image: "ghcr.io/easeit-cz/vornik-agent:latest"
 ---
 Example of the defect we guard against:
 image: vornik-agent:latest

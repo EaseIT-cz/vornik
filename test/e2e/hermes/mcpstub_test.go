@@ -65,3 +65,38 @@ func TestMCPStub_NotificationsGetNoBody(t *testing.T) {
 		t.Fatalf("status = %d", resp.StatusCode)
 	}
 }
+
+// Agent-administered Vornik plan P8.1: a stub with a Token refuses any
+// request without that bearer (so a lane run proves the credential the
+// phone entered reached the server) and counts what it refused. Control:
+// MCPStub.Token.
+func TestMCPStub_Token(t *testing.T) {
+	stub := NewMCPStub("mail", MCPTool{Name: "t", Handle: func(json.RawMessage) (string, bool) { return "ok", false }})
+	stub.Token = "ghp_CANARYMAILTOKEN0123456789abcdefghijklm" // a unit-test fixture, not the lane's MailTokenCanary
+	srv := httptest.NewServer(stub)
+	defer srv.Close()
+	post := func(auth string) int {
+		req, _ := http.NewRequest(http.MethodPost, srv.URL, bytes.NewReader([]byte(`{"jsonrpc":"2.0","id":1,"method":"tools/list"}`)))
+		if auth != "" {
+			req.Header.Set("Authorization", auth)
+		}
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_ = resp.Body.Close()
+		return resp.StatusCode
+	}
+	if got := post(""); got != http.StatusUnauthorized {
+		t.Fatalf("no bearer: %d", got)
+	}
+	if got := post("Bearer wrong"); got != http.StatusUnauthorized {
+		t.Fatalf("wrong bearer: %d", got)
+	}
+	if got := post("Bearer " + stub.Token); got != http.StatusOK {
+		t.Fatalf("right bearer: %d", got)
+	}
+	if stub.Refused() != 2 {
+		t.Fatalf("refused %d", stub.Refused())
+	}
+}

@@ -5,7 +5,9 @@ description: |
   daemon settings, projects, swarms, workflows, models, secrets, channels.
   Use this skill whenever the user wants to set up, change, or add something
   to Vornik's configuration: "add a project", "change the model", "connect a
-  channel", "where do I put this API key", "how do I turn X on". The core
+  channel", "where do I put this API key", "how do I turn X on", and
+  "connect Claude / Codex / Hermes to Vornik", "let my assistant use Vornik
+  as a broker", "pair my phone". The core
   discipline is: find the tree the running daemon actually reads, scaffold
   instead of hand-writing YAML, then validate → reload → CONFIRM. Most failed
   Vornik config changes are not wrong YAML — they are correct YAML written to
@@ -189,6 +191,95 @@ vornikctl swarm list
 
 An object that is absent from these lists did not load, however good the YAML
 looks on disk.
+
+## Connecting an assistant to Vornik (agent administration)
+
+Use this when the user wants an assistant (Claude Code, including the desktop
+app's Code-tab routines; Claude Desktop; Codex; Hermes) to set up and run its
+own automations through Vornik as a broker: Vornik holds the credentials,
+the assistant gets only approved results, and a paired phone approves every
+widening of what the assistant can reach.
+
+The assistant does the setup work itself afterwards, through MCP tools Vornik
+serves (`create_project`, `define_workflow`, `add_api`, `request_credential`,
+…). Your part is the one-time connection, and two steps of it belong to a
+**person, never to an assistant**.
+
+### The two steps an assistant must never do
+
+- **Pairing the phone.** `vornikctl pair-device` prints a one-time code, and the
+  first phone is paired by that code alone. An assistant that runs it, or sees
+  its output, can redeem the code itself and become the approver for its own
+  requests. A person runs it on the Vornik host and types the code on the phone.
+- **Minting the key.** `vornikctl agent connect` needs the operator's admin key
+  for that one command. Run it from a terminal the assistant does not control,
+  with the key in that command's environment only
+  (`VORNIK_API_KEY=… vornikctl agent connect …`). Never in a file, a shell
+  profile, or the chat.
+
+If the assistant has a shell or SSH access to the Vornik host as the daemon's
+user, no Vornik control can hold: it can read the secret store and the
+database directly. Remove that access, or give it a different OS user with no
+access to Vornik's files, before connecting. Say this to the user plainly; do
+not soften it.
+
+### Steps
+
+1. **Server ready.** On the Vornik host, the agent templates must be deployed:
+   - a source install: `make install-config-assets`;
+   - a CE install updated with `vornik-update.sh` from 2026.10.2 on: the updater deploys them;
+   - an older install: re-run the quickstart.
+
+   Agent administration is on by default (`agent_admin.enabled`). For workflows
+   that propose writes (send mail, create drafts), set `broker.writes: "on"`
+   and reload.
+2. **Phone.** A person runs `vornikctl pair-device --label "<name>"` on the
+   Vornik host and enters the code on the phone, at the address it prints. The
+   phone must reach Vornik's public address.
+3. **Connect, on the machine where the assistant runs, as the user it runs as.**
+   - Which harness:
+     - Claude Code, including the desktop app's Code-tab routines: `claude-code`;
+     - Claude Desktop chat and Cowork tasks that run locally: `claude-desktop`;
+     - Codex: `codex`;
+     - Hermes: `hermes`.
+   - When Vornik is on another machine, pass its HTTPS URL; connect refuses plain
+     HTTP to a remote host. A tunnel or a reverse proxy with a certificate both
+     work.
+
+   ```
+   VORNIK_API_KEY=<operator admin key> vornikctl agent connect claude-code --url https://vornik.example --dry-run
+   VORNIK_API_KEY=<operator admin key> vornikctl agent connect claude-code --url https://vornik.example
+   ```
+
+   On a Mac, use the native `vornikctl` from the release assets (darwin/arm64 or
+   darwin/amd64; verify `checksums.txt`, then
+   `xattr -d com.apple.quarantine vornikctl`, since it is unsigned). The Lima
+   install's `vornikctl` is a shim into its VM and cannot do this.
+
+   For a shell-capable assistant (Claude Code, Codex), connect refuses when it
+   finds Vornik's secret-store key readable, or cannot check because Vornik is
+   on another machine. In the remote case pass `--accept-shared-user` only
+   after confirming the assistant has no shell or SSH access to the Vornik
+   host as the daemon's user (see above). On a same-host install, pass it only
+   for a test install.
+4. **Restart the assistant** so it loads the new MCP entry `vornik-<namespace>`.
+5. **Verify.** Ask the assistant "What can you do with Vornik?". It should call
+   `describe_installation` and explain that approvals happen on the phone. The
+   operator page `/ui/admin/agents` lists the assistant.
+
+### Afterwards
+
+- Credentials are entered **on the phone**, never in the chat. If the
+  assistant asks for a key in the chat, it is not using Vornik; tell it to
+  request the credential through Vornik.
+- Scheduled automations can either live in the assistant (it calls `delegate`
+  and `result` on its Vornik workflow) or in Vornik (a workflow `schedule`,
+  approved on the phone). Vornik's schedule runs even when the assistant's
+  machine is off.
+- Disconnect: `vornikctl agent disconnect <namespace>` on the same machine.
+  It revokes the key and removes the entry.
+- Guide for the user: `docs/public/guides/assistant-setup.md` (docs.vornik.io,
+  Guides → Let your assistant set up Vornik).
 
 ## Edition note
 

@@ -99,3 +99,16 @@ func TestRedemptionLimiter_ForgetsIdleSpeakers(t *testing.T) {
 		t.Error("the sweep dropped the active speaker's window")
 	}
 }
+
+func TestNewRedemptionLimiterWith_UsesItsBudget(t *testing.T) {
+	l := NewRedemptionLimiterWith(2, time.Hour)
+	allowed := 0
+	for i := 0; i < 3; i++ {
+		if l.Allow("c", "x") {
+			allowed++
+		}
+	}
+	if allowed != 2 {
+		t.Fatalf("a limiter of 2 allowed %d", allowed)
+	}
+}

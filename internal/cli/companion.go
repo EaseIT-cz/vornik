@@ -126,7 +126,7 @@ func init() {
 	companionGrantCmd.Flags().StringVar(&companionGrantExpires, "expires", "",
 		"Expiration (RFC3339 or duration like 30d, 6m). Empty = never expires.")
 	companionGrantCmd.Flags().StringVar(&companionGrantRepoScope, "repo-scope", "",
-		"Default repo_scope stamped on memory calls that omit it (e.g. github.com/grinco/vornik). "+
+		"Default repo_scope stamped on memory calls that omit it (e.g. github.com/EaseIT-cz/vornik). "+
 			"Recommended for clients without a SessionStart scope injector (Codex) so deposits can't land NULL-scoped. "+
 			"An explicit per-call repo_scope still overrides it.")
 	// LLD 22: companion RAG capabilities. Off by default — existing

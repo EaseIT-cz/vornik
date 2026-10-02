@@ -13,7 +13,7 @@ func TestForSpeech(t *testing.T) {
 	}{
 		{
 			name: "a labelled link becomes the words a human would have said",
-			in:   "Prepared it — <https://github.com/grinco/vornik/issues/new?body=%23%23|open this link> and submit.",
+			in:   "Prepared it — <https://github.com/EaseIT-cz/vornik/issues/new?body=%23%23|open this link> and submit.",
 			want: "Prepared it — open this link and submit.",
 		},
 		{

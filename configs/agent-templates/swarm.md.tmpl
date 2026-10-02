@@ -1,0 +1,29 @@
+---
+swarmId: {{q .ID}}
+displayName: {{q .DisplayName}}
+description: {{q .Description}}
+leadRole: {{q .LeadRole}}
+roles:
+{{- range .Roles}}
+    - name: {{q .Name}}
+      description: {{q .Description}}
+      count: 1
+      runtimePolicy: "ephemeral"
+      runtime:
+        image: {{q $.AgentImage}}
+      permissions:
+        allowedTools:
+{{- range .Tools}}
+          - {{q .}}
+{{- end}}
+{{- end}}
+---
+
+# {{.DisplayName}}
+
+Rendered by the agent admin verbs for namespace {{.Namespace}}.
+{{range .Roles}}
+## {{.Name}}
+
+{{.Instructions}}
+{{end}}

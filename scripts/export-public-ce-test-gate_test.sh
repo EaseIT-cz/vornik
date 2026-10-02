@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Unit tests for scripts/ce-test-gate.sh, the export's test-lane wiring (CE
 # export runbook, amendment 2026-10-01, D1-D5). Incident: 2026.9.7 reached
-# grinco/vornik with CE-only test failures because every publish path ran
+# EaseIT-cz/vornik with CE-only test failures because every publish path ran
 # the export with SKIP_TESTS=1, and the unit lane set a counter --publish
 # never read.
 #

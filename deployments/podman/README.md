@@ -177,17 +177,86 @@ Migrations run automatically on startup; already-applied versions are skipped.
 
 ## Exposing beyond the host
 
-The daemon binds `0.0.0.0:8080` (required for the agent callback) — fine for
-a private host, not for a shared network. Tighten by:
+For a public **single-operator** installation, enable the installer's HTTPS
+mode. Point your DNS name directly at the host and allow incoming TCP 443.
+Install Caddy using its [official installation instructions](https://caddyserver.com/docs/install)
+and Python 3 with PyYAML (`python3-yaml` on Ubuntu) first. Then, from this
+checkout:
 
-1. Setting `api.auth_enabled: true` in `~/.config/vornik/config.yaml` and
-   adding keys to `api_keys`.
-2. Putting a real reverse proxy (Caddy, nginx) with TLS in front of `:8080`
-   and firewalling the raw port.
-3. Keeping the Postgres (and scraper) port on `127.0.0.1` (the default).
+```bash
+VORNIK_PUBLIC_HOSTNAME=vornik.example.com \
+  VORNIK_SKIP_FETCH=1 VORNIK_DIR="$PWD" \
+  bash deployments/podman/quickstart.sh
+```
 
-Anything more serious should go through the Helm chart in
-`deployments/helm/vornik` onto a real cluster.
+For a release-pinned downloaded installer, set `VORNIK_PUBLIC_HOSTNAME` in
+the same way after reviewing the installer and verifying its checksum.
+The installer calls `deployments/podman/https/configure.py`, which creates
+missing credentials, enables Vornik API authentication, and configures Caddy
+with a **separate browser password**. Routine reruns preserve the password.
+It uses `sudo` and owns `/etc/caddy/Caddyfile`; use it on a dedicated host,
+not on a Caddy installation serving other applications.
+
+Browser credentials are in `~/.config/vornik/secrets/browser.json` (mode 600).
+Read them privately on the host, and save the username/password in your
+password manager. Never paste this file or its contents into chat, logs, or
+Git. Open `https://vornik.example.com/ui/` and use the browser credentials,
+not the daemon API key, to finish onboarding.
+
+Caddy stores the browser password's hash and backend key in a private
+root-owned import, `/etc/caddy/vornik-auth.caddy` (mode 640, group `caddy`).
+After successful browser authentication, it supplies the backend key to
+Vornik. Secrets are not placed in Caddy's systemd environment: the standard
+service's `--environ` option logs environment values.
+
+Verify that missing/wrong browser credentials return 401 and valid browser
+credentials reach the UI and setup API. **After verification, close external
+access to TCP 8080 in your firewall or cloud security group**, preserving SSH
+access. The installer recommends this but does not change firewall rules.
+Keep Vornik's `0.0.0.0:8080` listener for rootless agent callbacks. Caddy
+forwards locally to it; browser access uses TCP 443. PostgreSQL stays on
+loopback. TCP 80 is unnecessary: Caddy uses TLS-ALPN certificate validation
+on TCP 443. Use an explicit HTTPS URL when TCP 80 is closed.
+
+After intentionally rotating `~/.config/vornik/secrets/api.env`, restart
+Vornik and run:
+
+```bash
+python3 deployments/podman/https/configure.py --hostname vornik.example.com
+```
+
+This refreshes Caddy's backend credential and preserves the browser password.
+Use `--http-port` if you changed `VORNIK_HTTP_PORT`, and `--config-dir` for a
+custom configuration directory. For Vornik upgrades, use `vornik-update.sh`
+as described above, rather than rerunning the installer.
+
+Before replacing a host, save `browser.json` in your password manager or
+another private persistent secret store. Server-local credentials do not
+survive instance destruction. After a fresh install, restore the file with
+mode 600 and run this from the repository root:
+
+```bash
+python3 deployments/podman/https/configure.py \
+  --hostname vornik.example.com --restore-api-key
+```
+
+The explicit flag restores the saved
+backend key and restarts Vornik. Refresh the saved bundle after rotations.
+This installer does not upload credentials to a secret store or put them in
+Terraform state.
+
+This gateway protects all HTTPS routes, including API/MCP and readiness,
+and uses one shared backend identity. Bearer-only clients need a separate
+API ingress that preserves Vornik's own authentication. For multiple users
+requiring individual permissions and audit identities, use supported
+session/SSO access instead of this shared-key gateway.
+
+The deployment defaults live in `https/Caddyfile`, `https/configure.py`, and
+the `VORNIK_PUBLIC_HOSTNAME` hook in `quickstart.sh`; no private infrastructure
+repository is required. Local installs omit `VORNIK_PUBLIC_HOSTNAME`.
+
+Validate installer changes with `sh deployments/podman/quickstart_test.sh`
+and `python3 deployments/podman/https/test_configure.py`.
 
 ## Troubleshooting
 

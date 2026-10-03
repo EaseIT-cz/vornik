@@ -45,6 +45,8 @@
 #   VORNIK_SKIP_FETCH 1 = use VORNIK_DIR as-is, no clone/pull (offline/dev)
 #   VORNIK_HTTP_PORT  host port for the UI/API     (default: 8080)
 #   POSTGRES_PORT     host port for PostgreSQL      (default: 5432)
+#   VORNIK_PUBLIC_HOSTNAME DNS name for optional Caddy HTTPS + browser password
+#                         (requires preinstalled Caddy, Python 3 + PyYAML)
 #
 if [ "${VORNIK_QUICKSTART_SOURCED:-}" = 1 ]; then
   set -eu
@@ -440,6 +442,20 @@ warn_auth_disabled() {
   fi
 }
 
+require_public_https() {
+  [ -n "${VORNIK_PUBLIC_HOSTNAME:-}" ] || return 0
+  command -v caddy >/dev/null 2>&1 || die "Public HTTPS requires Caddy; install it first (see deployments/podman/README.md)."
+  command -v python3 >/dev/null 2>&1 || die "Public HTTPS requires Python 3."
+  python3 -c 'import yaml' >/dev/null 2>&1 || die "Public HTTPS requires PyYAML (python3-yaml on Ubuntu)."
+}
+
+configure_public_https() {
+  [ -n "${VORNIK_PUBLIC_HOSTNAME:-}" ] || return 0
+  require_public_https
+  python3 "$1/deployments/podman/https/configure.py" \
+    --hostname "$VORNIK_PUBLIC_HOSTNAME" --config-dir "$2" --http-port "$3"
+}
+
 # When sourced by quickstart_test.sh, stop here — expose the helpers above
 # without running the install body (which calls sudo/podman/git/build).
 if [ "${VORNIK_QUICKSTART_SOURCED:-}" = 1 ]; then return 0 2>/dev/null || exit 0; fi
@@ -486,6 +502,10 @@ if ! command -v brew >/dev/null 2>&1; then
 fi
 # Core tools. On Bazzite/Silverblue these are already in the base image, so
 # this loop usually no-ops — we never reinstall what's present.
+require_public_https
+if [ -n "${VORNIK_PUBLIC_HOSTNAME:-}" ]; then
+  warn "Public HTTPS mode installs Caddy configuration under /etc/caddy using sudo."
+fi
 missing=()
 for t in podman git curl; do command -v "$t" >/dev/null 2>&1 || missing+=("$t"); done
 if [ "${#missing[@]}" -gt 0 ]; then
@@ -552,6 +572,9 @@ fi
 #    avoids relabeling the whole checkout (same approach the daemon uses
 #    for podman ops); harmless on non-SELinux hosts.
 # ---------------------------------------------------------------------------
+if [ -n "${VORNIK_PUBLIC_HOSTNAME:-}" ] && [ ! -f "$DIR/deployments/podman/https/configure.py" ]; then
+  die "Selected release lacks public HTTPS setup. Use a release that includes it, VORNIK_REF=main, or a current local checkout with VORNIK_SKIP_FETCH=1."
+fi
 log "Building vornik + vornikctl (first run downloads modules, ~2-3 min)..."
 mkdir -p "$DIR/.bin" "$BIN_DIR"
 BUILD_DATE="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
@@ -705,6 +728,10 @@ install -m 0644 "$DIR/deployments/podman/systemd/vornik.service" "$UNIT_DIR/vorn
 systemctl --user daemon-reload
 systemctl --user enable --now vornik.service || die "Failed to start vornik.service. Check: journalctl --user -u vornik -e"
 
+# Browser passwords and daemon API credentials have separate lifecycles.
+# This is opt-in: ordinary local installs do not require a system proxy.
+configure_public_https "$DIR" "$CONFIG_DIR" "$HTTP_PORT"
+
 # ---------------------------------------------------------------------------
 # 8. Wait for readiness and report.
 # ---------------------------------------------------------------------------
@@ -754,3 +781,8 @@ cat <<EOF
 EOF
 
 print_success_footer
+if [ -n "${VORNIK_PUBLIC_HOSTNAME:-}" ]; then
+  log "Public UI: https://${VORNIK_PUBLIC_HOSTNAME}/ui/"
+  log "Browser credentials: ${CONFIG_DIR}/secrets/browser.json (read privately; never paste into logs or chat)."
+  warn "After verifying HTTPS, close external TCP ${HTTP_PORT} access in your firewall/security group; keep SSH access."
+fi

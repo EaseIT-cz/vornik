@@ -1,0 +1,22 @@
+__VORNIK_HOSTNAME__ {
+	log
+	# Renew certificates through TCP 443; public port 80 is closed.
+	tls {
+		issuer acme {
+			disable_http_challenge
+		}
+	}
+	# Authentication runs before any browser request reaches Vornik.
+	route {
+		import /etc/caddy/vornik-auth.caddy
+		@api_key_login {
+			path /ui/login
+			query method=key
+		}
+		redir @api_key_login /ui/ 302
+		reverse_proxy 127.0.0.1:__VORNIK_HTTP_PORT__ {
+			# Supplied by the private import after browser authentication.
+			header_up Authorization "Bearer {http.vars.vornik_api_key}"
+		}
+	}
+}

@@ -465,6 +465,29 @@ else
   bad "config-deploy.sh did not land configs/agent-templates"
 fi
 
+echo "--- optional public HTTPS ---"
+make_stub python3 '#!/bin/sh
+if [ "$1" = "-c" ]; then exit 0; fi
+printf "%s\n" "$@"
+'
+make_stub caddy '#!/bin/sh
+exit 0
+'
+HTTPS_OUTPUT="$(VORNIK_PUBLIC_HOSTNAME='' isolated configure_public_https /checkout /config 9000 2>&1)" || true
+if [ -z "$HTTPS_OUTPUT" ]; then ok "local install does not configure HTTPS"; else bad "local install unexpectedly configured HTTPS"; fi
+HTTPS_OUTPUT="$(VORNIK_PUBLIC_HOSTNAME=example.test isolated configure_public_https /checkout /config 9000 2>&1)" || true
+case "$HTTPS_OUTPUT" in
+  *"/checkout/deployments/podman/https/configure.py"*"--hostname"*"example.test"*"--config-dir"*"/config"*"--http-port"*"9000"*) ok "public install forwards hostname/config/backend port";;
+  *) bad "public HTTPS setup was not invoked correctly";;
+esac
+rm -f "$STUB/caddy"
+if VORNIK_PUBLIC_HOSTNAME=example.test isolated configure_public_https /checkout /config 9000 >/dev/null 2>&1; then
+  bad "public HTTPS accepted missing Caddy"
+else
+  ok "public HTTPS refuses missing Caddy"
+fi
+rm -f "$STUB/python3"
+
 echo "---"
 echo "PASS: $pass passed, $fail failed"
 [ "$fail" -eq 0 ] || exit 1

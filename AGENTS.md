@@ -91,6 +91,20 @@ placeholder that is empty. Triage table: `deployments/podman/README.md`.
 Binaries land in `~/.local/bin` (`vornik`, `vornikctl`). If `vornikctl` is
 not found, prefix commands with `~/.local/bin/` or fix `PATH`.
 
+For a public single-operator host, use `VORNIK_PUBLIC_HOSTNAME=<DNS name>`
+with the installer after installing Caddy, Python 3, and PyYAML. Follow
+[`deployments/podman/README.md`](deployments/podman/README.md#exposing-beyond-the-host):
+the browser password is separate from the daemon API key. Ask before the
+privileged Caddy setup unless already authorized. Never display either
+credential in agent output. After verifying HTTPS, recommend closing external
+access to the daemon port in the firewall/security group; keep the daemon
+listener available for local agent callbacks. The installer does not change
+firewall rules. Installation, upgrade, and restoration instructions belong
+to this repository, not a user's private Terraform deployment.
+In HTTPS mode API authentication is enabled: use authenticated API requests
+or the browser setup guide for onboarding; the unauthenticated curl examples
+below apply to the local default.
+
 ### A2. Connect an LLM (the setup API)
 
 The first-run web guide at `http://localhost:8080/ui/setup` and this API

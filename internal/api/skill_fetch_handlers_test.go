@@ -9,20 +9,14 @@ import (
 
 	"vornik.io/vornik/internal/persistence"
 	"vornik.io/vornik/internal/persistence/sqlite"
+	"vornik.io/vornik/internal/persistence/sqlite/sqlitetest"
 )
 
 // newSkillFetchServer builds a Server with the skill store AND the
 // execution→skill association repo on one sqlite backend.
 func newSkillFetchServer(t *testing.T) (*Server, persistence.ExecutionInjectedSkillRepository) {
 	t.Helper()
-	db, err := sqlite.Connect(context.Background(), sqlite.DefaultConfig())
-	if err != nil {
-		t.Fatalf("sqlite.Connect: %v", err)
-	}
-	t.Cleanup(func() { _ = db.Close() })
-	if err := db.Migrate(context.Background()); err != nil {
-		t.Fatalf("sqlite.Migrate: %v", err)
-	}
+	db := sqlitetest.Memory(t)
 	execSkills := sqlite.NewExecutionInjectedSkillRepository(db.DB)
 	return &Server{
 		skillStore:    sqlite.NewSkillRepository(db.DB),

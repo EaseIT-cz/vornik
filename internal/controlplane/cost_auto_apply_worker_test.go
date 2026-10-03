@@ -10,6 +10,7 @@ import (
 
 	"vornik.io/vornik/internal/persistence"
 	"vornik.io/vornik/internal/persistence/sqlite"
+	"vornik.io/vornik/internal/persistence/sqlite/sqlitetest"
 )
 
 // --- test harness: real sqlite repos (higher fidelity than interface stubs) ---
@@ -67,14 +68,7 @@ func (f failingAACanaries) GetByProposalID(ctx context.Context, id string) (*per
 
 func newAAHarness(t *testing.T) *aaHarness {
 	t.Helper()
-	db, err := sqlite.Connect(context.Background(), sqlite.DefaultConfig())
-	if err != nil {
-		t.Fatalf("connect: %v", err)
-	}
-	t.Cleanup(func() { _ = db.Close() })
-	if err := db.Migrate(context.Background()); err != nil {
-		t.Fatalf("migrate: %v", err)
-	}
+	db := sqlitetest.Memory(t)
 	return &aaHarness{
 		t: t, props: sqlite.NewProposalRepository(db.DB),
 		canaries: sqlite.NewCostTuningCanaryRepository(db.DB),

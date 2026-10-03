@@ -795,6 +795,59 @@ append_user_message() {
     jq --arg c "$2" '. + [{"role":"user","content":$c}]' "$file" > "$file.tmp" && mv "$file.tmp" "$file"
 }
 
+# Output cap (LLD 09 §8.4). The third capped response in a step fails it;
+# the first two are each answered with a nudge.
+OUTPUT_CAP_MAX_NUDGES=2
+
+# response_hit_output_cap RESPONSE — true when the response was cut off at the
+# output token limit: finish_reason "length". Incident 2026-10-03
+# (task_20261003135506_c7bec90cfe425d9e): a "length" response with empty
+# content completed the step on an earlier turn's text.
+#
+# finish_reason ONLY, deliberately not "completion_tokens >= LLM_MAX_TOKENS":
+# the daemon forwards the request's max_tokens to Bedrock alone; every other
+# route applies its own construction-time cap (chat.max_tokens or the
+# sub-provider's), so LLM_MAX_TOKENS is not the cap the model ran under and a
+# usage comparison misfires both ways. Every route that can truncate maps it to
+# "length" except codex-subscription (backlog).
+response_hit_output_cap() {
+    local fr
+    fr=$(printf '%s' "$1" | jq -r '.choices[0].finish_reason // ""' 2>/dev/null)
+    [ "$fr" = "length" ]
+}
+
+# output_cap_nudge RESPONSE REQUEST — the user message that answers a capped
+# response. The response itself is NOT appended to the conversation (its
+# tool-call arguments may be cut-off JSON the converters must re-parse, and
+# partial text left in the history is what the empty-content fallback promoted
+# to the answer), so this message is the model's only record of it: it names
+# any tool calls that did not run. Tool advice names only tools the capped
+# REQUEST offered — the step's full set is not what a finalization turn offers.
+output_cap_nudge() {
+    local resp="$1" request="$2" content names ct offered msg
+    content=$(printf '%s' "$resp" | jq -r '.choices[0].message.content // "" | if type == "string" then . else tostring end' 2>/dev/null)
+    names=$(printf '%s' "$resp" | jq -r '[.choices[0].message.tool_calls[]? | (.function.name // "?")] | join(", ")' 2>/dev/null)
+    ct=$(printf '%s' "$resp" | jq -r '.usage.completion_tokens // 0' 2>/dev/null)
+    offered=$(printf '%s' "$request" | jq -r '[.tools[]?.function.name] | join(" ")' 2>/dev/null)
+    msg="Your previous response was cut off at the output limit (after ${ct:-?} output tokens) and has been discarded."
+    if [ -z "$(printf '%s' "$content" | tr -d '[:space:]')" ] && [ -z "$names" ]; then
+        msg="$msg It contained no visible text: the whole limit was spent on reasoning."
+    fi
+    if [ -n "$names" ]; then
+        msg="$msg Its tool call(s) were NOT executed: $names — their arguments were incomplete."
+    fi
+    msg="$msg Reason briefly and act now, keeping each response well under the limit."
+    case " $offered " in
+        *" file_write "*)
+            case " $offered " in
+                *" file_edit "*) msg="$msg If you need to write a long file, write a shorter version, or write it in parts: file_write a first part, then extend it with file_edit." ;;
+                *) msg="$msg If you need to write a long file, write a shorter version of it with file_write." ;;
+            esac
+            ;;
+    esac
+    printf '%s' "$msg"
+}
+
 # budget_finalization_reserve MSGS TOOLS SCHEMA_NAME RESPONSE_FORMAT
 # RESPONSE_SCHEMA — prints the prompt tokens to hold back for finalization (D2):
 # the compacted answer request built from the conversation as it stands, times
@@ -1018,6 +1071,16 @@ write_result() {
     # the daemon cannot read it, because the cgroup is torn down when the
     # container exits. Added by its own step, only when known: every field
     # above defaults to 0, and a 0 here would read as a measurement.
+    # usage.output_cap_hits (LLD 09 §8.4): responses cut off at max_tokens in
+    # this step, on a step that recovered as well as on one that failed. Only
+    # when non-zero, so its absence means none, not "not measured" on an
+    # image that predates the field.
+    if [ "${OUTPUT_CAP_HITS:-0}" -gt 0 ] 2>/dev/null; then
+        base_result=$(guard_result_update \
+            "$(printf '%s' "$base_result" | jq -c --argjson h "$OUTPUT_CAP_HITS" '.usage.output_cap_hits = $h' 2>/dev/null)" \
+            "$base_result" 'output cap hits')
+    fi
+
     local _peak
     if _peak=$(container_memory_peak); then
         base_result=$(guard_result_update \
@@ -2567,6 +2630,9 @@ main() {
     NO_TOOL_NUDGE_SENT=0
     OUTPUT_CONTRACT_NUDGED=0
     PLAUSIBILITY_NUDGED=0
+    # Per step, like the flags above: warm mode must not carry one task's
+    # output-cap hits into the next (LLD 09 §8.4).
+    OUTPUT_CAP_HITS=0
     BUDGET_TRIPWIRE_DETAIL=""
     # Cumulative cost in USD across all iterations of this step.
     # Streamed to the daemon after every iteration so cancelled
@@ -3410,6 +3476,39 @@ ${previous_result}
             return 1
         fi
 
+        # Output cap (LLD 09 §8.4): a response cut off at max_tokens is never
+        # the answer and its tool calls never run. Checked before ANY branch
+        # reads the response — the final-answer, finalization and tool-call
+        # paths all assume a complete one. Incident 2026-10-03: a "length"
+        # response with empty content took the final-answer branch, which
+        # substituted an earlier turn's text and completed a critic step that
+        # never wrote its findings — a false clean review downstream.
+        if response_hit_output_cap "$response"; then
+            OUTPUT_CAP_HITS=$(( ${OUTPUT_CAP_HITS:-0} + 1 ))
+            local _cap_ct _cap_bytes _cap_calls
+            _cap_ct=$(printf '%s' "$response" | jq -r '.usage.completion_tokens // 0')
+            _cap_bytes=$(printf '%s' "$response" | jq -r '.choices[0].message.content // "" | if type == "string" then . else tostring end | utf8bytelength')
+            _cap_calls=$(printf '%s' "$response" | jq -r '[.choices[0].message.tool_calls[]? | (.function.name // "?")] | join(",")')
+            log "output cap: iteration=$iteration finish_reason=length completion_tokens=$_cap_ct requested_max_tokens=${LLM_MAX_TOKENS:-0} content_bytes=$_cap_bytes tool_calls_not_run=[${_cap_calls}] hit=$OUTPUT_CAP_HITS/$((OUTPUT_CAP_MAX_NUDGES + 1))"
+            if [ "$OUTPUT_CAP_HITS" -gt "$OUTPUT_CAP_MAX_NUDGES" ]; then
+                write_result "FAILED" "Output cap: the model's response was cut off at its output token limit $OUTPUT_CAP_HITS times in this step (the last after $_cap_ct output tokens), so it never produced a complete answer. Raise the output token limit the model actually runs under (the role's maxTokens on Bedrock; on other routes the daemon's chat.max_tokens or the route's own max_tokens, which the role's value does not override), or use a model that spends less of its output on reasoning." "" "$(get_duration)" "output_cap"
+                log "failed (output cap)"
+                return 1
+            fi
+            # A capped prompt-token-budget finalization turn did not happen:
+            # give it back, so the bounded finalization sequence cannot run out
+            # on cut-off turns and then complete on an earlier turn's text.
+            # Bounded by OUTPUT_CAP_HITS above.
+            if [ "${PROMPT_TOKEN_BUDGET_FINAL_CALL:-0}" = "1" ] && [ "${BUDGET_FINALIZE_CALLS:-0}" -gt 0 ]; then
+                BUDGET_FINALIZE_CALLS=$(( BUDGET_FINALIZE_CALLS - 1 ))
+                if [ "${BUDGET_FINALIZE_KIND:-}" = "write" ]; then
+                    BUDGET_FINALIZE_WRITE_TRIED=0
+                fi
+            fi
+            append_user_message "$msgs_file" "$(output_cap_nudge "$response" "$request")"
+            continue
+        fi
+
         local finish_reason
         finish_reason=$(printf '%s' "$response" | jq -r '.choices[0].finish_reason // "stop"')
 
@@ -4099,7 +4198,14 @@ ${previous_result}
             "${role}_result" "$response_format" "${response_schema:-null}" "$cap_force"
         log "iteration cap: context compacted to fit the prompt-token budget ($cap_budget)"
     fi
-    if cap_resp=$(llm_call "$(cat "$cap_req")" 2>/dev/null); then
+    local cap_capped=0 cap_ok=0
+    if cap_resp=$(llm_call "$(cat "$cap_req")" 2>/dev/null); then cap_ok=1; fi
+    if [ "$cap_ok" = "1" ] && response_hit_output_cap "$cap_resp"; then
+        # A cut-off answer is not an answer here either (LLD 09 §8.4).
+        cap_capped=1
+        OUTPUT_CAP_HITS=$(( ${OUTPUT_CAP_HITS:-0} + 1 ))
+        log "output cap: the iteration-cap finalization turn was cut off (finish_reason=length); not accepted as the answer"
+    elif [ "$cap_ok" = "1" ]; then
         cap_content=$(printf '%s' "$cap_resp" | jq -r '.choices[0].message.content // ""' 2>/dev/null)
         if [ -n "$cap_force" ]; then
             # A forced emit call carries the answer in its arguments.
@@ -4120,6 +4226,16 @@ ${previous_result}
     fi
 
     log "ERROR: tool iteration cap reached ($MAX_TOOL_ITERATIONS) and the tool-free finalization produced nothing"
+    if [ "$cap_capped" = "1" ]; then
+        # The cut-off, not the iteration limit, is what left the step without
+        # an answer, so it fails as output_cap and takes the model-fallback
+        # hop like an in-loop third cap (LLD 09 §8.4; review 12ed F2). The
+        # wording avoids "tool iteration limit", which the daemon's earlier,
+        # pinned refiner arm would read as iteration_cap.
+        write_result "FAILED" "Output cap: the final tool-free turn at the iteration cap ($MAX_TOOL_ITERATIONS tool calls) was cut off at the model's output token limit, so the step has no answer. Raise the output token limit the model actually runs under, or use a model that spends less of its output on reasoning." "$last_content" "$(get_duration)" "output_cap"
+        log "failed (output cap on the iteration-cap finalization)"
+        return 1
+    fi
     write_result "FAILED" "Tool iteration limit ($MAX_TOOL_ITERATIONS) reached and a final tool-free turn produced no answer. The task was too complex for the configured limit. Increase VORNIK_MAX_TOOL_ITERATIONS or simplify the task." "$last_content" "$(get_duration)" "tool iteration cap reached ($MAX_TOOL_ITERATIONS iterations)"
     log "failed (iteration cap)"
     return 1

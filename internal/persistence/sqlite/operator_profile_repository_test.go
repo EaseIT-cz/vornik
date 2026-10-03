@@ -13,7 +13,7 @@ import (
 // so this is the persistence contract behind both the dispatcher tool and UI.
 func TestOperatorProfileRepository_RoundTrip(t *testing.T) {
 	ctx := context.Background()
-	db, err := Connect(ctx, Config{Path: ":memory:"})
+	db, err := Connect(ctx, DefaultConfig())
 	if err != nil {
 		t.Fatalf("Connect: %v", err)
 	}
@@ -60,7 +60,7 @@ func TestOperatorProfileRepository_RoundTrip(t *testing.T) {
 }
 
 func TestOperatorProfileRepository_DeleteRejectsEmptyOperatorID(t *testing.T) {
-	db, err := Connect(context.Background(), Config{Path: ":memory:"})
+	db, err := Connect(context.Background(), DefaultConfig())
 	if err != nil {
 		t.Fatalf("Connect: %v", err)
 	}

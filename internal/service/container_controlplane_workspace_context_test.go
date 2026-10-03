@@ -1,7 +1,6 @@
 package service
 
 import (
-	"context"
 	"path/filepath"
 	"testing"
 
@@ -9,6 +8,7 @@ import (
 	"vornik.io/vornik/internal/controlplane"
 	"vornik.io/vornik/internal/persistence"
 	"vornik.io/vornik/internal/persistence/sqlite"
+	"vornik.io/vornik/internal/persistence/sqlite/sqlitetest"
 	"vornik.io/vornik/internal/storage"
 )
 
@@ -16,14 +16,7 @@ import (
 // constructor needs, leaving Config for the caller to set (or not).
 func newProposalApplierContainer(t *testing.T) *Container {
 	t.Helper()
-	db, err := sqlite.Connect(context.Background(), sqlite.DefaultConfig())
-	if err != nil {
-		t.Fatalf("connect: %v", err)
-	}
-	t.Cleanup(func() { _ = db.Close() })
-	if err := db.Migrate(context.Background()); err != nil {
-		t.Fatalf("migrate: %v", err)
-	}
+	db := sqlitetest.Memory(t)
 	return &Container{
 		ConfigPath: filepath.Join(t.TempDir(), "config.yaml"),
 		repos: &storage.Repositories{

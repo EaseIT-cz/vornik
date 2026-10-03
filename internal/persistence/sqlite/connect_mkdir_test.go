@@ -22,7 +22,7 @@ func TestConnect_CreatesMissingParentDir(t *testing.T) {
 	}
 	dbPath := filepath.Join(parent, "vornik.db")
 
-	db, err := sqlite.Connect(ctx, sqlite.Config{Path: dbPath})
+	db, err := sqlite.Connect(ctx, sqlite.FixtureConfig(dbPath))
 	if err != nil {
 		t.Fatalf("Connect with missing parent dir should succeed, got: %v", err)
 	}
@@ -40,7 +40,7 @@ func TestConnect_CreatesMissingParentDir(t *testing.T) {
 // parent-dir creation (no filesystem path) and still opens.
 func TestConnect_InMemoryUnaffected(t *testing.T) {
 	ctx := context.Background()
-	db, err := sqlite.Connect(ctx, sqlite.Config{Path: ":memory:"})
+	db, err := sqlite.Connect(ctx, sqlite.FixtureConfig(":memory:"))
 	if err != nil {
 		t.Fatalf("Connect(:memory:): %v", err)
 	}

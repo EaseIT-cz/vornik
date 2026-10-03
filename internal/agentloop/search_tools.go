@@ -375,6 +375,14 @@ func (g *globWalk) expand(dir, rel string, segs []string) {
 	}
 	seg, rest := segs[0], segs[1:]
 	switch {
+	case seg == "**" && len(rest) == 0:
+		// A final ** matches every non-hidden entry beneath, files as well as
+		// directories, as python's glob does; walking directories only made
+		// "artifacts/out/**" report no matches (2026-10-03 incident).
+		if rel != "" {
+			g.out = append(g.out, rel)
+		}
+		g.all(dir, rel)
 	case seg == "**":
 		g.expand(dir, rel, rest)  // zero directories …
 		g.descend(dir, rel, rest) // … or any depth
@@ -408,6 +416,27 @@ func (g *globWalk) descend(dir, rel string, rest []string) {
 		sub := filepath.Join(rel, n)
 		g.expand(full, sub, rest)
 		g.descend(full, sub, rest)
+	}
+}
+
+// all lists every non-hidden entry under dir at any depth, following
+// directory symlinks with the same cycle guard as descend.
+func (g *globWalk) all(dir, rel string) {
+	key := realpath(dir)
+	if g.seen[key] {
+		return
+	}
+	g.seen[key] = true
+	defer delete(g.seen, key)
+	for _, n := range listDir(dir) {
+		if strings.HasPrefix(n, ".") {
+			continue
+		}
+		full, sub := filepath.Join(dir, n), filepath.Join(rel, n)
+		g.out = append(g.out, sub)
+		if isDir(full) {
+			g.all(full, sub)
+		}
 	}
 }
 

@@ -221,6 +221,12 @@ type voiceTranscript struct {
 type voiceHint struct {
 	MimeType     string
 	SampleRateHz int
+	// Kind, DurationSec and DeclaredSize are Telegram's own facts about
+	// the attachment ("voice" or "audio", its duration and file_size),
+	// logged when transcription fails (voice-messages-design.md §8).
+	Kind         string
+	DurationSec  int
+	DeclaredSize int64
 }
 
 // TelegramDocument represents a file attachment.
@@ -2816,6 +2822,7 @@ func (b *Bot) HandleUpdate(ctx context.Context, upd *Update) error {
 		msg.FileName = name
 		msg.IsVoice = true
 		msg.VoiceHint = voiceHint{MimeType: hint.MimeType, SampleRateHz: hint.SampleRateHz}
+		msg.VoiceHint.Kind, msg.VoiceHint.DurationSec, msg.VoiceHint.DeclaredSize = voiceAttachmentFacts(upd.Message.Voice, upd.Message.Audio)
 	} else if upd.Message.Document != nil {
 		msg.FileID = upd.Message.Document.FileID
 		msg.FileName = upd.Message.Document.FileName

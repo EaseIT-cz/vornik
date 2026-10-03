@@ -53,7 +53,7 @@ func TestInfraRetryableClassesIsExactlyTheSix(t *testing.T) {
 		assert.True(t, IsInfraRetryableClass(c))
 	}
 	for _, c := range []string{ClassVerifyFailed, ClassPromptTokenBudget, ClassIterationCap,
-		ClassDegenerateLoop, ClassContextOverflow, ClassModelUnhealthy, ClassHallucinated} {
+		ClassDegenerateLoop, ClassContextOverflow, ClassModelUnhealthy, ClassHallucinated, ClassOutputCap} {
 		assert.False(t, IsInfraRetryableClass(c), "%q is deterministic, not infra-retryable", c)
 	}
 }

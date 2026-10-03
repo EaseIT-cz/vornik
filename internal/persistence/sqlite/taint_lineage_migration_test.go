@@ -4,7 +4,7 @@ import (
 	"context"
 	"testing"
 
-	"vornik.io/vornik/internal/persistence/sqlite"
+	"vornik.io/vornik/internal/persistence/sqlite/sqlitetest"
 )
 
 // TestMigration137_TaintLineage_Idempotent verifies migration 137 (taint-lineage
@@ -12,18 +12,14 @@ import (
 // is idempotent. In-memory SQLite — never touches the prod DB.
 func TestMigration137_TaintLineage_Idempotent(t *testing.T) {
 	ctx := context.Background()
-	db, err := sqlite.Connect(ctx, sqlite.DefaultConfig())
-	if err != nil {
-		t.Fatalf("Connect: %v", err)
-	}
-	t.Cleanup(func() { _ = db.Close() })
+	db := sqlitetest.Connect(t, ":memory:")
 
 	if err := db.Migrate(ctx); err != nil {
 		t.Fatalf("first Migrate: %v", err)
 	}
 
 	// The three columns exist and accept a tainted row.
-	_, err = db.ExecContext(ctx, `INSERT INTO execution_step_outcomes
+	_, err := db.ExecContext(ctx, `INSERT INTO execution_step_outcomes
 		(id, project_id, task_id, execution_id, step_id, outcome, recorded_at,
 		 untrusted_content_used, untrusted_sources, requires_review)
 		VALUES ('oc-m137', 'p', 't', 'e', 's', 'ok', datetime('now'),
@@ -62,15 +58,8 @@ func TestMigration137_TaintLineage_Idempotent(t *testing.T) {
 // taint columns get the false/NULL defaults (non-agent / pre-migration rows).
 func TestMigration137_TaintLineage_DefaultsFalse(t *testing.T) {
 	ctx := context.Background()
-	db, err := sqlite.Connect(ctx, sqlite.DefaultConfig())
-	if err != nil {
-		t.Fatalf("Connect: %v", err)
-	}
-	t.Cleanup(func() { _ = db.Close() })
-	if err := db.Migrate(ctx); err != nil {
-		t.Fatalf("Migrate: %v", err)
-	}
-	_, err = db.ExecContext(ctx, `INSERT INTO execution_step_outcomes
+	db := sqlitetest.Memory(t)
+	_, err := db.ExecContext(ctx, `INSERT INTO execution_step_outcomes
 		(id, project_id, task_id, execution_id, step_id, outcome, recorded_at)
 		VALUES ('oc-m137b', 'p', 't', 'e', 's', 'ok', datetime('now'))`)
 	if err != nil {

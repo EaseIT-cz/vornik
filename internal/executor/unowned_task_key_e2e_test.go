@@ -12,6 +12,7 @@ import (
 	"vornik.io/vornik/internal/auth"
 	"vornik.io/vornik/internal/persistence"
 	"vornik.io/vornik/internal/persistence/sqlite"
+	"vornik.io/vornik/internal/persistence/sqlite/sqlitetest"
 	"vornik.io/vornik/internal/registry"
 	"vornik.io/vornik/internal/taskkeys"
 )
@@ -31,10 +32,7 @@ import (
 // Every agent run in the deployment goes through this path.
 func TestUnownedTaskKey_E2E_RealMinterRealStore(t *testing.T) {
 	ctx := context.Background()
-	db, err := sqlite.Connect(ctx, sqlite.DefaultConfig())
-	require.NoError(t, err)
-	t.Cleanup(func() { _ = db.Close() })
-	require.NoError(t, db.Migrate(ctx))
+	db := sqlitetest.Memory(t)
 	keys := sqlite.NewAPIKeyRepository(db.DB)
 
 	rt := NewMockRuntime()

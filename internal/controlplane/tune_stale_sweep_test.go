@@ -10,18 +10,12 @@ import (
 	"github.com/rs/zerolog"
 	"vornik.io/vornik/internal/persistence"
 	"vornik.io/vornik/internal/persistence/sqlite"
+	"vornik.io/vornik/internal/persistence/sqlite/sqlitetest"
 )
 
 func TestScanStaleProposals_RetiresOnlyDrifted(t *testing.T) {
 	ctx := context.Background()
-	db, err := sqlite.Connect(ctx, sqlite.DefaultConfig())
-	if err != nil {
-		t.Fatalf("connect: %v", err)
-	}
-	t.Cleanup(func() { _ = db.Close() })
-	if err := db.Migrate(ctx); err != nil {
-		t.Fatalf("migrate: %v", err)
-	}
+	db := sqlitetest.Memory(t)
 	repo := sqlite.NewProposalRepository(db.DB)
 
 	dir := t.TempDir()

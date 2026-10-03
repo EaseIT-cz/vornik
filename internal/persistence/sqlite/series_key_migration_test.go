@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"vornik.io/vornik/internal/persistence/sqlite"
+	"vornik.io/vornik/internal/persistence/sqlite/sqlitetest"
 )
 
 // The SQLite half of Postgres migration 190 — recurring-series membership on
@@ -22,14 +23,7 @@ import (
 
 func migrate190DB(t *testing.T) *sqlite.DB {
 	t.Helper()
-	db, err := sqlite.Connect(context.Background(), sqlite.DefaultConfig())
-	if err != nil {
-		t.Fatalf("Connect: %v", err)
-	}
-	t.Cleanup(func() { _ = db.Close() })
-	if err := db.Migrate(context.Background()); err != nil {
-		t.Fatalf("Migrate: %v", err)
-	}
+	db := sqlitetest.Memory(t)
 	return db
 }
 

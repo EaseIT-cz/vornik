@@ -292,6 +292,10 @@ func refineAgentFailureOutcome(detail string) (stepoutcome.Outcome, string) {
 	case strings.Contains(lowered, "failed to start container"),
 		strings.Contains(lowered, "podman run failed"):
 		return stepoutcome.Failed, stepoutcome.ClassContainerStartFailed
+	// Appended after wave 2 (2026-10-03): the agent's "Output cap: …" failure
+	// (LLD 09 §8.4). Its message is worded to match none of the arms above.
+	case strings.Contains(lowered, "output cap"):
+		return stepoutcome.Failed, stepoutcome.ClassOutputCap
 
 	default:
 		return stepoutcome.Failed, stepoutcome.ClassUnclassified

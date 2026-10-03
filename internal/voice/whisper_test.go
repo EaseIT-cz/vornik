@@ -123,7 +123,7 @@ func TestWhisperLocalSTT_Transcribe_HappyPath(t *testing.T) {
 	}
 	norm, whisper := specs[0], specs[1]
 	if norm.Feature != sandboxtool.FeatureVoiceSTT || norm.Entrypoint != "ffmpeg" ||
-		strings.Join(norm.Args, " ") != "-nostdin -loglevel error -threads 2 -filter_threads 2 -i /in/voice -threads 2 -ac 1 -ar 16000 -acodec pcm_s16le -f wav /out/audio.wav" ||
+		strings.Join(norm.Args, " ") != "-nostdin -loglevel error -threads 2 -filter_threads 2 -i /in/voice -threads 2 -map 0:a:0 -map_metadata -1 -ac 1 -ar 16000 -acodec pcm_s16le -fflags +bitexact -flags:a +bitexact -f wav /out/audio.wav" ||
 		len(norm.Inputs) != 1 || norm.Inputs[0].Name != "voice" || string(norm.Inputs[0].Data) != "OggS-mock-payload" {
 		t.Fatalf("normalise run = %+v", norm)
 	}

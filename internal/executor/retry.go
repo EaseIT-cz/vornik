@@ -467,6 +467,14 @@ func isModelShapedFailure(err error) bool {
 	if strings.Contains(msg, "PROVIDER_ERROR") {
 		return true
 	}
+	// The agent failed the step because every response was cut off at the
+	// output cap (LLD 09 §8.4). Identical inputs reproduce it; a different model
+	// is the one input that changes. Matched on the daemon's message only,
+	// before the container-log tail, like every class decision (step-retry
+	// design D9.2's tail-strip invariant).
+	if strings.Contains(errorBeforeLogTail(msg), "Output cap:") {
+		return true
+	}
 	// A circuit-open fast-reject (LLD 2026-07-11-model-health): the primary's
 	// (route, model) breaker is open, so a different model is exactly what to
 	// try. This also makes MODEL_UNHEALTHY a fail-over trigger without waiting

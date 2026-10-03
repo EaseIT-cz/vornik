@@ -5,7 +5,6 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
-	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -14,6 +13,7 @@ import (
 	"vornik.io/vornik/internal/brokergrants"
 	"vornik.io/vornik/internal/persistence"
 	"vornik.io/vornik/internal/persistence/sqlite"
+	"vornik.io/vornik/internal/persistence/sqlite/sqlitetest"
 	"vornik.io/vornik/internal/registry"
 
 	"gopkg.in/yaml.v3"
@@ -81,14 +81,7 @@ type env struct {
 func newEnv(t *testing.T) *env {
 	t.Helper()
 	ctx := context.Background()
-	db, err := sqlite.Connect(ctx, sqlite.Config{Path: filepath.Join(t.TempDir(), "g.db"), ConnectTimeout: 5 * time.Second})
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = db.Close() })
-	if err := db.Migrate(ctx); err != nil {
-		t.Fatal(err)
-	}
+	db := sqlitetest.File(t, "g.db")
 	var p registry.BrokerProposal
 	if err := yamlUnmarshal(mailProposal, &p); err != nil {
 		t.Fatal(err)

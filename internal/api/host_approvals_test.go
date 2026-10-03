@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
-	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -18,6 +17,7 @@ import (
 	"vornik.io/vornik/internal/approverdevice"
 	"vornik.io/vornik/internal/persistence"
 	"vornik.io/vornik/internal/persistence/sqlite"
+	"vornik.io/vornik/internal/persistence/sqlite/sqlitetest"
 )
 
 // Hermes approval transport design §4.3: POST /api/v1/agent/host-approvals
@@ -27,11 +27,7 @@ import (
 
 func newHostApprovalServer(t *testing.T) (*Server, *memAPIKeyRepo, *approverdevice.Service) {
 	t.Helper()
-	ctx := context.Background()
-	db, err := sqlite.Connect(ctx, sqlite.Config{Path: filepath.Join(t.TempDir(), "ha.db"), ConnectTimeout: 5 * time.Second})
-	require.NoError(t, err)
-	t.Cleanup(func() { _ = db.Close() })
-	require.NoError(t, db.Migrate(ctx))
+	db := sqlitetest.File(t, "ha.db")
 	svc := approverdevice.New(sqlite.NewApproverDeviceRepository(db.DB))
 	keys := &memAPIKeyRepo{}
 	srv := &Server{logger: zerolog.Nop(), apiKeyRepo: keys}
@@ -175,11 +171,7 @@ func TestHostApprovals_GetWaitsForTheAnswer(t *testing.T) {
 // command. It holds by construction; this pins it.
 func TestHostApprovals_NoCommandTextInPushOrLog(t *testing.T) {
 	const canary = "COMMANDCANARY-rm-rf-7f3c"
-	ctx := context.Background()
-	db, err := sqlite.Connect(ctx, sqlite.Config{Path: filepath.Join(t.TempDir(), "ha.db"), ConnectTimeout: 5 * time.Second})
-	require.NoError(t, err)
-	t.Cleanup(func() { _ = db.Close() })
-	require.NoError(t, db.Migrate(ctx))
+	db := sqlitetest.File(t, "ha.db")
 	var pushes []string
 	svc := approverdevice.New(sqlite.NewApproverDeviceRepository(db.DB),
 		approverdevice.WithNotifier(func(_ context.Context, subject, body string) { pushes = append(pushes, subject+"\n"+body) }))

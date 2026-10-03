@@ -2,7 +2,6 @@ package sqlite_test
 
 import (
 	"context"
-	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -10,6 +9,7 @@ import (
 	"vornik.io/vornik/internal/persistence"
 	"vornik.io/vornik/internal/persistence/repotest"
 	"vornik.io/vornik/internal/persistence/sqlite"
+	"vornik.io/vornik/internal/persistence/sqlite/sqlitetest"
 )
 
 // newTestDB spins up a fresh in-memory SQLite database, applies the
@@ -19,15 +19,7 @@ import (
 // suite, which is microseconds on :memory:.
 func newTestDB(t *testing.T) *sqlite.DB {
 	t.Helper()
-	ctx := context.Background()
-	db, err := sqlite.Connect(ctx, sqlite.DefaultConfig())
-	if err != nil {
-		t.Fatalf("sqlite.Connect: %v", err)
-	}
-	t.Cleanup(func() { _ = db.Close() })
-	if err := db.Migrate(ctx); err != nil {
-		t.Fatalf("sqlite.Migrate: %v", err)
-	}
+	db := sqlitetest.Memory(t)
 	return db
 }
 
@@ -684,16 +676,7 @@ func TestAgentGrant_Contract(t *testing.T) {
 // with the daemon's DSN (sqlite.Connect, the production pool), never
 // :memory:.
 func TestAgentModelDestination_Contract(t *testing.T) {
-	ctx := context.Background()
-	cfg := sqlite.Config{Path: filepath.Join(t.TempDir(), "models.db"), ConnectTimeout: 5 * time.Second}
-	db, err := sqlite.Connect(ctx, cfg)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = db.Close() })
-	if err := db.Migrate(ctx); err != nil {
-		t.Fatal(err)
-	}
+	db := sqlitetest.File(t, "models.db")
 	repotest.RunAgentModelDestinationSuite(t, sqlite.NewAgentGrantRepository(db.DB))
 }
 
@@ -704,18 +687,9 @@ func TestAgentModelDestination_Contract(t *testing.T) {
 // which would serialise every transaction and hide the first-device race.
 func TestApproverDevice_Contract(t *testing.T) {
 	repotest.RunApproverDeviceSuite(t, sqlite.NewApproverDeviceRepository(newTestDB(t).DB), func(t *testing.T) persistence.ApproverDeviceRepository {
-		ctx := context.Background()
-		// The production shape (storage.go builds sqlite.Config{Path}), whose
-		// file-backed default pool is 5 connections.
-		cfg := sqlite.Config{Path: filepath.Join(t.TempDir(), "approver.db"), ConnectTimeout: 5 * time.Second}
-		db, err := sqlite.Connect(ctx, cfg)
-		if err != nil {
-			t.Fatal(err)
-		}
-		t.Cleanup(func() { _ = db.Close() })
-		if err := db.Migrate(ctx); err != nil {
-			t.Fatal(err)
-		}
+		// The production pool shape: a file database, whose default pool is
+		// 5 connections.
+		db := sqlitetest.File(t, "approver.db")
 		return sqlite.NewApproverDeviceRepository(db.DB)
 	})
 }
@@ -764,15 +738,6 @@ func TestCompanionPush_Contract(t *testing.T) {
 // daemon's DSN (sqlite.Connect, the production pool and _txlock=immediate),
 // never :memory:, so the concurrency cases race real connections.
 func TestBrokerGrant_Contract(t *testing.T) {
-	ctx := context.Background()
-	cfg := sqlite.Config{Path: filepath.Join(t.TempDir(), "grants.db"), ConnectTimeout: 5 * time.Second}
-	db, err := sqlite.Connect(ctx, cfg)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = db.Close() })
-	if err := db.Migrate(ctx); err != nil {
-		t.Fatal(err)
-	}
+	db := sqlitetest.File(t, "grants.db")
 	repotest.RunBrokerGrantSuite(t, sqlite.NewBrokerGrantRepository(db.DB), sqlite.NewBrokerActionRepository(db.DB))
 }

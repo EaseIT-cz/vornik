@@ -47,3 +47,20 @@ func TestFake_RecordsSpecsAndPlaysTheTool(t *testing.T) {
 		t.Fatal("the handler's error is the run's")
 	}
 }
+
+// A tool that exits 0 still prints: in the voice incident of 2026-10-03,
+// whisper-cli printed why it could not read its input and exited 0, so
+// the fake has to be able to play that output.
+func TestFake_NewWithOutputCarriesWhatTheToolPrinted(t *testing.T) {
+	f := NewWithOutput(t, func(sandboxtool.Spec, map[string][]byte, string) ([]byte, error) {
+		return []byte("error: failed to read audio file"), nil
+	})
+	res, err := f.Run(context.Background(), sandboxtool.Spec{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer res.Close()
+	if string(res.Output) != "error: failed to read audio file" {
+		t.Fatalf("Output = %q", res.Output)
+	}
+}

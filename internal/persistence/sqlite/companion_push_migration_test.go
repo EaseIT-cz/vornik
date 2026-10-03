@@ -5,7 +5,7 @@ import (
 	"database/sql"
 	"testing"
 
-	"vornik.io/vornik/internal/persistence/sqlite"
+	"vornik.io/vornik/internal/persistence/sqlite/sqlitetest"
 )
 
 // Migration 203 on SQLite (broker write-actions design §7a,
@@ -16,14 +16,7 @@ import (
 // upgrade pushes no backlog.
 func TestMigration203_ExistingRowsAreMarkedPushed(t *testing.T) {
 	ctx := context.Background()
-	db, err := sqlite.Connect(ctx, sqlite.DefaultConfig())
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = db.Close() })
-	if err := db.Migrate(ctx); err != nil {
-		t.Fatal(err)
-	}
+	db := sqlitetest.Memory(t)
 	exec := func(q string, args ...any) {
 		t.Helper()
 		if _, err := db.ExecContext(ctx, q, args...); err != nil {

@@ -13,6 +13,7 @@ import (
 
 	"vornik.io/vornik/internal/persistence"
 	"vornik.io/vornik/internal/persistence/sqlite"
+	"vornik.io/vornik/internal/persistence/sqlite/sqlitetest"
 )
 
 // LLD 2026-09-13-config-apply-journal-design §7, items 1–14, each driven
@@ -35,14 +36,7 @@ type journalEnv struct {
 
 func newJournalEnv(t *testing.T) *journalEnv {
 	t.Helper()
-	db, err := sqlite.Connect(context.Background(), sqlite.DefaultConfig())
-	if err != nil {
-		t.Fatalf("connect: %v", err)
-	}
-	t.Cleanup(func() { _ = db.Close() })
-	if err := db.Migrate(context.Background()); err != nil {
-		t.Fatalf("migrate: %v", err)
-	}
+	db := sqlitetest.Memory(t)
 	dir := t.TempDir()
 	for _, d := range []string{"projects", "swarms"} {
 		if err := os.MkdirAll(filepath.Join(dir, d), 0o700); err != nil {

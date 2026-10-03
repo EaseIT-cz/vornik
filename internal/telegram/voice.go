@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"mime/multipart"
@@ -170,7 +171,21 @@ func (b *Bot) handleVoiceAttachment(ctx context.Context, msg *Message, hint voic
 	}
 	tr, err := b.voice.STT.Transcribe(ctx, bytes.NewReader(audioBytes), hint)
 	if err != nil {
-		b.logger.Warn().Err(err).Msg("voice: STT.Transcribe failed")
+		// The inbound's bytes are not kept, so this line is all the next
+		// occurrence leaves: format facts only, never audio or a
+		// transcript (incident 2026-10-03, voice-messages-design.md §8).
+		b.logger.Warn().Err(err).
+			Int64("chat_id", msg.ChatID).
+			Str("kind", msg.VoiceHint.Kind).
+			Str("mime_type", hint.MimeType).
+			Str("file_name", msg.FileName).
+			Int("bytes", len(audioBytes)).
+			Int64("declared_size", msg.VoiceHint.DeclaredSize).
+			Int("duration_s", msg.VoiceHint.DurationSec).
+			Msg("voice: STT.Transcribe failed")
+		if errors.Is(err, voice.ErrNoAudioStream) {
+			return "That file has no audio I can read — can you send it as a voice message?", false
+		}
 		return "I couldn't make out the voice message — can you try again or type it?", false
 	}
 	msg.Text = tr.Text
@@ -371,6 +386,19 @@ func detectVoiceAttachment(voiceField *TelegramVoice, audioField *TelegramAudio)
 		return audioField.FileID, name, voice.Hint{MimeType: mime}
 	}
 	return "", "", voice.Hint{}
+}
+
+// voiceAttachmentFacts is what Telegram declares about a voice or audio
+// attachment: which field it came in, its duration in seconds and its
+// file_size. Logged when transcription fails; never used to decide.
+func voiceAttachmentFacts(voiceField *TelegramVoice, audioField *TelegramAudio) (kind string, durationSec int, declaredSize int64) {
+	if voiceField != nil && voiceField.FileID != "" {
+		return "voice", voiceField.Duration, voiceField.FileSize
+	}
+	if audioField != nil && audioField.FileID != "" {
+		return "audio", audioField.Duration, audioField.FileSize
+	}
+	return "", 0, 0
 }
 
 // voiceImportHint widens this package's local voiceHint into a

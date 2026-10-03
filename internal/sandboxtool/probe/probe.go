@@ -175,9 +175,10 @@ func probeCodec(ctx context.Context, sb sandboxtool.Sandbox, f fixtures, name, f
 		return verdict(name, fmt.Errorf("decode: %w", err), "")
 	}
 	defer dec.Close()
-	decoded, rerr := os.ReadFile(filepath.Join(dec.OutDir, "audio.wav"))
-	if rerr != nil || len(decoded) <= 44 || !bytes.HasPrefix(decoded, []byte("RIFF")) {
-		return verdict(name, fmt.Errorf("decode produced no audio from %s", format), "")
+	// The same check the STT pipeline runs before whisper-cli
+	// (voice-messages-design.md §8).
+	if cerr := voice.CheckWAV(filepath.Join(dec.OutDir, "audio.wav")); cerr != nil {
+		return verdict(name, fmt.Errorf("decode produced no audio from %s: %w", format, cerr), "")
 	}
 	return verdict(name, nil, "encoded and decoded "+format)
 }

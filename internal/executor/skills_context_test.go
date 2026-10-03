@@ -7,6 +7,7 @@ import (
 
 	"vornik.io/vornik/internal/persistence"
 	"vornik.io/vornik/internal/persistence/sqlite"
+	"vornik.io/vornik/internal/persistence/sqlite/sqlitetest"
 )
 
 func TestRenderSkillIndexBlock(t *testing.T) {
@@ -54,14 +55,7 @@ func TestComposeSystemPromptWithSkillIndex(t *testing.T) {
 
 func newSkillRepoForExec(t *testing.T) persistence.SkillRepository {
 	t.Helper()
-	db, err := sqlite.Connect(context.Background(), sqlite.DefaultConfig())
-	if err != nil {
-		t.Fatalf("connect: %v", err)
-	}
-	t.Cleanup(func() { _ = db.Close() })
-	if err := db.Migrate(context.Background()); err != nil {
-		t.Fatalf("migrate: %v", err)
-	}
+	db := sqlitetest.Memory(t)
 	return sqlite.NewSkillRepository(db.DB)
 }
 
@@ -196,14 +190,7 @@ func (f fakeExecRepo) List(_ context.Context, _ persistence.ExecutionFilter) ([]
 // and the execution→skill association share a backend.
 func newExecLearningDB(t *testing.T) *sqlite.DB {
 	t.Helper()
-	db, err := sqlite.Connect(context.Background(), sqlite.DefaultConfig())
-	if err != nil {
-		t.Fatalf("connect: %v", err)
-	}
-	t.Cleanup(func() { _ = db.Close() })
-	if err := db.Migrate(context.Background()); err != nil {
-		t.Fatalf("migrate: %v", err)
-	}
+	db := sqlitetest.Memory(t)
 	return db
 }
 

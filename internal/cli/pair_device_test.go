@@ -4,27 +4,18 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"path/filepath"
 	"strings"
 	"testing"
-	"time"
 
 	"vornik.io/vornik/internal/approverdevice"
 	"vornik.io/vornik/internal/config"
 	"vornik.io/vornik/internal/persistence/sqlite"
+	"vornik.io/vornik/internal/persistence/sqlite/sqlitetest"
 )
 
 func newDeviceService(t *testing.T) *approverdevice.Service {
 	t.Helper()
-	ctx := context.Background()
-	db, err := sqlite.Connect(ctx, sqlite.Config{Path: filepath.Join(t.TempDir(), "d.db"), ConnectTimeout: 5 * time.Second})
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = db.Close() })
-	if err := db.Migrate(ctx); err != nil {
-		t.Fatal(err)
-	}
+	db := sqlitetest.File(t, "d.db")
 	return approverdevice.New(sqlite.NewApproverDeviceRepository(db.DB))
 }
 

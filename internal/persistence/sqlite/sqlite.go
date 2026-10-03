@@ -56,13 +56,32 @@ type Config struct {
 	ConnectTimeout time.Duration
 }
 
-// DefaultConfig returns a Config tuned for ephemeral test usage.
+// DefaultConfig returns a Config tuned for ephemeral test usage: an
+// in-memory database on one connection, with the fixture bound. No production
+// code calls it (storage.go builds its Config through sqliteConfig).
 func DefaultConfig() Config {
-	return Config{
-		Path:           ":memory:",
-		MaxOpenConns:   1,
-		ConnectTimeout: 5 * time.Second,
-	}
+	cfg := FixtureConfig(":memory:")
+	cfg.MaxOpenConns = 1
+	return cfg
+}
+
+// FixtureConnectTimeout bounds the open + ping of a test fixture's database.
+// The daemon's bound is defaultConnectTimeout (5 s) and is not this. Tests do
+// not measure connect latency; the bound exists so a wedged open fails the
+// test, not the package's go test timeout. Under parallel `make test` lanes on
+// a loaded disk the first open of a fresh file (WAL creation, fsync under
+// synchronous(FULL)) took 5.8-6.7 s and failed fixtures bounded at 5 s
+// (2026-09-23/24, three more on 2026-10-03). Storage-abstraction design,
+// "SQLite test fixtures" (2026-10-03).
+const FixtureConnectTimeout = 60 * time.Second
+
+// FixtureConfig is the Config a test fixture opens path with: the fixture
+// bound, and Connect's default pool for the path (1 for ":memory:", 5 for a
+// file). It deliberately leaves MaxOpenConns zero: an explicit value would
+// break the memory-vs-file split. Tests outside this package open through
+// package sqlitetest.
+func FixtureConfig(path string) Config {
+	return Config{Path: path, ConnectTimeout: FixtureConnectTimeout}
 }
 
 // DB wraps the sql.DB plus configuration metadata for the

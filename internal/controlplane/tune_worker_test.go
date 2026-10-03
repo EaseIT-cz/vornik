@@ -9,6 +9,7 @@ import (
 
 	"vornik.io/vornik/internal/persistence"
 	"vornik.io/vornik/internal/persistence/sqlite"
+	"vornik.io/vornik/internal/persistence/sqlite/sqlitetest"
 )
 
 // fakeMetrics returns scripted signals per tick.
@@ -37,14 +38,7 @@ func (f *fakeMetrics) ToolLatencies(_ context.Context) ([]ToolLatencySample, err
 
 func newTuneTestRepo(t *testing.T) persistence.ProposalRepository {
 	t.Helper()
-	db, err := sqlite.Connect(context.Background(), sqlite.DefaultConfig())
-	if err != nil {
-		t.Fatalf("connect: %v", err)
-	}
-	t.Cleanup(func() { _ = db.Close() })
-	if err := db.Migrate(context.Background()); err != nil {
-		t.Fatalf("migrate: %v", err)
-	}
+	db := sqlitetest.Memory(t)
 	return sqlite.NewProposalRepository(db.DB)
 }
 

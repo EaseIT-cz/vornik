@@ -27,6 +27,7 @@ import (
 	"vornik.io/vornik/internal/forge/github"
 	"vornik.io/vornik/internal/persistence"
 	"vornik.io/vornik/internal/persistence/sqlite"
+	"vornik.io/vornik/internal/persistence/sqlite/sqlitetest"
 	"vornik.io/vornik/internal/registry"
 	"vornik.io/vornik/internal/runtime"
 	"vornik.io/vornik/internal/spawn"
@@ -153,14 +154,7 @@ func s6RunTaskToMergeBack(t *testing.T, root, projectID, taskID string, payload 
 	if err := spawn.RegisterWorkspaceRoot(root); err != nil {
 		t.Fatal(err)
 	}
-	db, err := sqlite.Connect(context.Background(), sqlite.DefaultConfig())
-	if err != nil {
-		t.Fatalf("sqlite.Connect: %v", err)
-	}
-	t.Cleanup(func() { _ = db.Close() })
-	if err := db.Migrate(context.Background()); err != nil {
-		t.Fatalf("sqlite.Migrate: %v", err)
-	}
+	db := sqlitetest.Memory(t)
 	taskRepo := sqlite.NewTaskRepository(db.DB)
 	execRepo := sqlite.NewExecutionRepository(db.DB)
 	artifactRepo := sqlite.NewArtifactRepository(db.DB)

@@ -737,6 +737,20 @@ var corpus = map[string]Entry{
 			"Retrying by hand does not help while the circuit is open, and the ladder deliberately does not: it fast-rejects and fails over instead.",
 		},
 	},
+	stepoutcome.ClassOutputCap: {
+		Class:        stepoutcome.ClassOutputCap,
+		Scope:        ScopeStep,
+		HumanMessage: "The model kept running out of room for its answer, so the step stopped instead of finishing on a cut-off reply.",
+		Cause: "Three of the model's responses in this step were cut off at the output token limit (finish_reason=length). " +
+			"The agent discards a cut-off response — its text is incomplete and its tool calls may carry cut-off arguments — and nudged the model twice to answer more briefly before failing. " +
+			"The commonest shape is a reasoning model spending the whole limit thinking, leaving no visible text at all.",
+		Suggestions: []string{
+			"Read the container log's `output cap:` lines: `content_bytes=0` means the limit went to reasoning; a non-empty content or `tool_calls_not_run` means the answer or a file body itself was too long.",
+			"Raise the limit the model actually runs under: the role's maxTokens on Bedrock; on every other route the daemon's chat.max_tokens or the route's own max_tokens, which the role's value does not override. Or pick a model (or modelFallback) that reasons less verbosely for this role.",
+			"If the step writes a large file, tell the role to write it in parts; the agent's nudge already suggests this, and a role prompt that asks for one huge write invites the cap.",
+			"`usage.output_cap_hits` in result.json shows steps that grazed the cap and recovered — a rising count on one role is this failure arriving.",
+		},
+	},
 	stepoutcome.ClassContainerStartFailed: {
 		Class:        stepoutcome.ClassContainerStartFailed,
 		Scope:        ScopeStep,

@@ -11,6 +11,7 @@ import (
 	"github.com/rs/zerolog"
 	"vornik.io/vornik/internal/persistence"
 	"vornik.io/vornik/internal/persistence/sqlite"
+	"vornik.io/vornik/internal/persistence/sqlite/sqlitetest"
 )
 
 // TestApply_StaleBase_AutoRetires: a config-drift ErrStaleBase must not leave
@@ -19,14 +20,7 @@ import (
 // error (design 2026-07-23 §B).
 func TestApply_StaleBase_AutoRetires(t *testing.T) {
 	ctx := context.Background()
-	db, err := sqlite.Connect(ctx, sqlite.DefaultConfig())
-	if err != nil {
-		t.Fatalf("connect: %v", err)
-	}
-	t.Cleanup(func() { _ = db.Close() })
-	if err := db.Migrate(ctx); err != nil {
-		t.Fatalf("migrate: %v", err)
-	}
+	db := sqlitetest.Memory(t)
 	repo := sqlite.NewProposalRepository(db.DB)
 
 	dir := t.TempDir()
@@ -50,7 +44,7 @@ func TestApply_StaleBase_AutoRetires(t *testing.T) {
 	}
 
 	eng := &ApplyEngine{Proposals: repo, ConfigDir: dir, Logger: zerolog.Nop()}
-	err = eng.Apply(ctx, p.ID, "operator", false)
+	err := eng.Apply(ctx, p.ID, "operator", false)
 	if !errors.Is(err, ErrStaleBase) {
 		t.Fatalf("want ErrStaleBase, got %v", err)
 	}

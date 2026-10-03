@@ -18,10 +18,15 @@ import (
 // error.
 type Handler func(spec sandboxtool.Spec, in map[string][]byte, out string) error
 
+// OutputHandler is a Handler that also returns what the tool printed: the
+// run's Result.Output, which the real runner fills with the container's
+// combined stdout and stderr even when the tool exits 0.
+type OutputHandler func(spec sandboxtool.Spec, in map[string][]byte, out string) (output []byte, err error)
+
 // Fake implements sandboxtool.Sandbox.
 type Fake struct {
 	t      *testing.T
-	handle Handler
+	handle OutputHandler
 
 	mu    sync.Mutex
 	specs []sandboxtool.Spec
@@ -29,6 +34,15 @@ type Fake struct {
 
 // New returns a Fake whose runs are played by handle.
 func New(t *testing.T, handle Handler) *Fake {
+	t.Helper()
+	return &Fake{t: t, handle: func(spec sandboxtool.Spec, in map[string][]byte, out string) ([]byte, error) {
+		return nil, handle(spec, in, out)
+	}}
+}
+
+// NewWithOutput returns a Fake whose runs are played by handle, including
+// what each tool printed.
+func NewWithOutput(t *testing.T, handle OutputHandler) *Fake {
 	t.Helper()
 	return &Fake{t: t, handle: handle}
 }
@@ -51,10 +65,11 @@ func (f *Fake) Run(_ context.Context, spec sandboxtool.Spec) (*sandboxtool.Resul
 		in[i.Name] = b
 	}
 	out := f.t.TempDir()
-	if err := f.handle(spec, in, out); err != nil {
+	printed, err := f.handle(spec, in, out)
+	if err != nil {
 		return nil, err
 	}
-	return &sandboxtool.Result{OutDir: out}, nil
+	return &sandboxtool.Result{OutDir: out, Output: printed}, nil
 }
 
 // Specs returns every run so far, in order.

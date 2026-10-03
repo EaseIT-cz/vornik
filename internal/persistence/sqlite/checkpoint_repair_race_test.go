@@ -25,7 +25,7 @@ import (
 // would have to be lucky to produce, made deterministic.
 func TestRepairDanglingCheckpointPointer_DoesNotEraseALivePointer(t *testing.T) {
 	ctx := context.Background()
-	db, err := Connect(ctx, Config{Path: ":memory:"})
+	db, err := Connect(ctx, DefaultConfig())
 	if err != nil {
 		t.Fatalf("Connect: %v", err)
 	}
@@ -80,7 +80,7 @@ func TestRepairDanglingCheckpointPointer_DoesNotEraseALivePointer(t *testing.T) 
 // it is cleared.
 func TestRepairDanglingCheckpointPointer_ClearsTheStalePointer(t *testing.T) {
 	ctx := context.Background()
-	db, err := Connect(ctx, Config{Path: ":memory:"})
+	db, err := Connect(ctx, DefaultConfig())
 	if err != nil {
 		t.Fatalf("Connect: %v", err)
 	}

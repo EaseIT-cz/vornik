@@ -7,6 +7,7 @@ import (
 
 	"vornik.io/vornik/internal/persistence"
 	"vornik.io/vornik/internal/persistence/sqlite"
+	"vornik.io/vornik/internal/persistence/sqlite/sqlitetest"
 )
 
 func TestSkillShouldPromote(t *testing.T) {
@@ -58,14 +59,7 @@ func TestSkillShouldRetire(t *testing.T) {
 }
 
 func TestSkillMaturityWorker_Tick(t *testing.T) {
-	db, err := sqlite.Connect(context.Background(), sqlite.DefaultConfig())
-	if err != nil {
-		t.Fatalf("connect: %v", err)
-	}
-	t.Cleanup(func() { _ = db.Close() })
-	if err := db.Migrate(context.Background()); err != nil {
-		t.Fatalf("migrate: %v", err)
-	}
+	db := sqlitetest.Memory(t)
 	repo := sqlite.NewSkillRepository(db.DB)
 	ctx := context.Background()
 	now := time.Date(2026, 7, 7, 0, 0, 0, 0, time.UTC)

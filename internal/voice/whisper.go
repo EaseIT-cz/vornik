@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -104,16 +105,27 @@ func (w *whisperLocalSTT) Transcribe(ctx context.Context, audio io.Reader, hint 
 	// Run 1: ffmpeg normalise to 16 kHz mono 16-bit PCM WAV.
 	norm, err := w.cfg.Sandbox.Run(ctx, NormaliseSpec(audioBytes))
 	if err != nil {
+		if noAudioStream(err) {
+			return Transcript{}, fmt.Errorf("%w: %w", ErrNoAudioStream, runFailure("ffmpeg normalise", err))
+		}
 		return Transcript{}, runFailure("ffmpeg normalise", err)
 	}
 	defer norm.Close()
+	// A clean exit is not a product: ffmpeg or whisper-cli can exit 0 having
+	// written nothing, and then only their own output says why (incident
+	// 2026-10-03, voice-messages-design.md §8).
 	wavPath := filepath.Join(norm.OutDir, "audio.wav")
 	if st, serr := os.Stat(wavPath); serr != nil || st.Size() == 0 {
-		return Transcript{}, errors.New("voice: ffmpeg produced empty WAV")
+		return Transcript{}, fmt.Errorf("voice: ffmpeg exited cleanly but wrote no WAV (tool output: %s)", toolTail(norm.Output))
+	}
+	// Refuse a WAV whisper cannot read before starting a container for it.
+	if err := CheckWAV(wavPath); err != nil {
+		return Transcript{}, err
 	}
 
-	// Run 2: whisper-cli. -oj -of writes /out/transcript.json; -np keeps
-	// the combined output a diagnostic.
+	// Run 2: whisper-cli. -oj -of writes /out/transcript.json; -np drops
+	// the model-loading chatter, though whisper still prints the
+	// transcript to stdout (toolTail drops those lines from any error).
 	args := []string{"-m", "/models/" + filepath.Base(w.cfg.ModelPath), "-f", "/in/audio.wav",
 		"-oj", "-of", "/out/transcript", "-np"}
 	if w.cfg.Threads > 0 {
@@ -138,6 +150,10 @@ func (w *whisperLocalSTT) Transcribe(ctx context.Context, audio io.Reader, hint 
 	}
 	defer res.Close()
 	rawJSON, err := os.ReadFile(filepath.Join(res.OutDir, "transcript.json"))
+	if errors.Is(err, fs.ErrNotExist) {
+		// whisper-cli exits 0 when it cannot read its input.
+		return Transcript{}, fmt.Errorf("voice: whisper.cpp exited cleanly but wrote no transcript (tool output: %s)", toolTail(res.Output))
+	}
 	if err != nil {
 		return Transcript{}, fmt.Errorf("voice: read whisper JSON: %w", err)
 	}
@@ -148,14 +164,32 @@ func (w *whisperLocalSTT) Transcribe(ctx context.Context, audio io.Reader, hint 
 // (Telegram OGG/Opus, Slack MP4/AAC — the container is detected from the
 // header) into /out/audio.wav, 16 kHz mono 16-bit PCM. Exported so `vornikctl
 // doctor` decodes its Opus and AAC samples with exactly this run.
+//
+// The output is deterministic (voice-messages-design.md §8): the first audio
+// stream is mapped explicitly, so a file with none fails here ("matches no
+// streams", ErrNoAudioStream) rather than leaving the choice to ffmpeg;
+// metadata is dropped and the muxer and encoder are bitexact, so the WAV
+// is the canonical 44-byte header with no LIST/INFO chunk. Input options
+// precede -i; output options follow it.
 func NormaliseSpec(audio []byte) sandboxtool.Spec {
 	return sandboxtool.Spec{
 		Feature:    sandboxtool.FeatureVoiceSTT,
 		Entrypoint: "ffmpeg",
 		Args: []string{"-nostdin", "-loglevel", "error", "-threads", sandboxtool.FFmpegThreads, "-filter_threads", sandboxtool.FFmpegThreads,
-			"-i", "/in/voice", "-threads", sandboxtool.FFmpegThreads, "-ac", "1", "-ar", "16000", "-acodec", "pcm_s16le", "-f", "wav", "/out/audio.wav"},
+			"-i", "/in/voice",
+			"-threads", sandboxtool.FFmpegThreads, "-map", "0:a:0", "-map_metadata", "-1",
+			"-ac", "1", "-ar", "16000", "-acodec", "pcm_s16le",
+			"-fflags", "+bitexact", "-flags:a", "+bitexact", "-f", "wav", "/out/audio.wav"},
 		Inputs: []sandboxtool.Input{{Name: "voice", Data: audio}},
 	}
+}
+
+// noAudioStream reports whether a failed normalise run was ffmpeg finding no
+// audio stream to map.
+func noAudioStream(err error) bool {
+	var re *sandboxtool.RunError
+	return errors.As(err, &re) && re.Outcome == sandboxtool.OutcomeFailed &&
+		strings.Contains(re.Detail, noAudioStreamMarker)
 }
 
 // languageCode maps a BCP-47 hint ("en-US") to the short code whisper.cpp

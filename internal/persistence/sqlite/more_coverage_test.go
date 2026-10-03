@@ -7,6 +7,7 @@ import (
 
 	"vornik.io/vornik/internal/persistence"
 	"vornik.io/vornik/internal/persistence/sqlite"
+	"vornik.io/vornik/internal/persistence/sqlite/sqlitetest"
 )
 
 // TestExecutionStepOutcome_FinalizeAndList covers Finalize / List /
@@ -154,11 +155,7 @@ func TestKnowledgeEntityRepository_List(t *testing.T) {
 // TestSqliteDB_Ping_Migrate covers the DB-level helpers.
 func TestSqliteDB_Ping_Migrate(t *testing.T) {
 	ctx := context.Background()
-	db, err := sqlite.Connect(ctx, sqlite.DefaultConfig())
-	if err != nil {
-		t.Fatalf("Connect: %v", err)
-	}
-	t.Cleanup(func() { _ = db.Close() })
+	db := sqlitetest.Connect(t, ":memory:")
 
 	// Before Migrate the sentinel table is absent → IsReady errors.
 	if err := db.IsReady(ctx); err == nil {

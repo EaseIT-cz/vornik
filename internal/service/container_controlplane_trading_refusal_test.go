@@ -9,6 +9,7 @@ import (
 	"vornik.io/vornik/internal/controlplane"
 	"vornik.io/vornik/internal/persistence"
 	"vornik.io/vornik/internal/persistence/sqlite"
+	"vornik.io/vornik/internal/persistence/sqlite/sqlitetest"
 	"vornik.io/vornik/internal/storage"
 )
 
@@ -66,14 +67,7 @@ func TestNewActionizerWiresTradingClassifier(t *testing.T) {
 // would ALSO error — asserting the trading sentinel therefore pins both the
 // wiring (review-20260724-24a2 F1) and the refuse-before-revalidate ordering (F2).
 func TestProposalApplierValidateChangeRefusesTrading(t *testing.T) {
-	db, err := sqlite.Connect(context.Background(), sqlite.DefaultConfig())
-	if err != nil {
-		t.Fatalf("connect: %v", err)
-	}
-	t.Cleanup(func() { _ = db.Close() })
-	if err := db.Migrate(context.Background()); err != nil {
-		t.Fatalf("migrate: %v", err)
-	}
+	db := sqlitetest.Memory(t)
 	c := &Container{
 		ConfigPath: filepath.Join(t.TempDir(), "config.yaml"),
 		repos:      &storage.Repositories{Proposals: sqlite.NewProposalRepository(db.DB)},

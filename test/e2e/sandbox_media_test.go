@@ -377,6 +377,91 @@ func TestSandboxMediaE2E_VoiceAndAudioWithRealModels(t *testing.T) {
 	noHostToolRan(t, marker)
 }
 
+// Incident 2026-10-03 (voice-messages-design.md §8), against the real image:
+// a file with no audio stream (a PNG) fails the normalise run with
+// ErrNoAudioStream, bytes no demuxer recognises fail it with ffmpeg's own
+// message, neither reaches whisper-cli, and a real Opus note
+// normalises to the canonical, bitexact 44-byte-header WAV that CheckWAV
+// accepts. No model is downloaded: the failing inputs stop before
+// whisper-cli, and the Opus note runs NormaliseSpec on its own.
+func TestSandboxMediaE2E_UndecodableInputSaysWhy(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("sandbox e2e requires Linux + podman")
+	}
+	image := buildAgentImage(t)
+	marker := hostToolTrap(t)
+	rec := &recordingRunner{}
+	r := mediaRunner(t, image, rec)
+	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
+	defer cancel()
+
+	model := filepath.Join(t.TempDir(), "ggml-unused.bin")
+	if err := os.WriteFile(model, []byte("never loaded"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	stt, err := voice.NewWhisperLocalSTT(voice.WhisperConfig{ModelPath: model, Sandbox: r})
+	if err != nil {
+		t.Fatal(err)
+	}
+	random := make([]byte, 4000)
+	for i := range random {
+		random[i] = byte((i*7919 + 13) % 251)
+	}
+	// A PNG is a file ffmpeg reads, with a video stream and no audio one.
+	if _, err := stt.Transcribe(ctx, bytes.NewReader(probe.TextPNG("NO AUDIO", 2)), voice.Hint{}); !errors.Is(err, voice.ErrNoAudioStream) {
+		t.Errorf("png: err = %v, want ErrNoAudioStream", err)
+	}
+	// Bytes no demuxer recognises are a decode failure that carries
+	// ffmpeg's words, not "no audio stream".
+	_, err = stt.Transcribe(ctx, bytes.NewReader(random), voice.Hint{})
+	if err == nil || errors.Is(err, voice.ErrNoAudioStream) || !strings.Contains(err.Error(), "Invalid data") {
+		t.Errorf("random bytes: err = %v, want ffmpeg's decode failure", err)
+	}
+	rec.mu.Lock()
+	for _, call := range rec.calls {
+		if strings.Contains(strings.Join(call, " "), "whisper-cli") {
+			t.Errorf("whisper-cli ran on input with no audio: %v", call)
+		}
+	}
+	rec.mu.Unlock()
+
+	wavPath := filepath.Join(t.TempDir(), "tone.wav")
+	if err := os.WriteFile(wavPath, probe.SineWAV(1, 16000), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	spec, output, err := voice.TranscodeSpec(wavPath, "ogg-opus")
+	if err != nil {
+		t.Fatal(err)
+	}
+	enc, err := r.Run(ctx, spec)
+	if err != nil {
+		t.Fatalf("encode opus: %v", err)
+	}
+	opus, err := os.ReadFile(filepath.Join(enc.OutDir, output))
+	enc.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	dec, err := r.Run(ctx, voice.NormaliseSpec(opus))
+	if err != nil {
+		t.Fatalf("normalise opus: %v", err)
+	}
+	defer dec.Close()
+	out := filepath.Join(dec.OutDir, "audio.wav")
+	if err := voice.CheckWAV(out); err != nil {
+		t.Fatalf("normalised opus: %v", err)
+	}
+	wav, err := os.ReadFile(out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(wav[12:16]) != "fmt " || string(wav[36:40]) != "data" {
+		t.Errorf("want the canonical 44-byte header (no LIST chunk), got %q", wav[:48])
+	}
+	assertBounded(t, r, rec, image)
+	noHostToolRan(t, marker)
+}
+
 // §7.1 decision 4: a tool the image does not declare, an image that is not
 // there, and a model that is not configured each report "not available" —
 // and nothing runs on the host.

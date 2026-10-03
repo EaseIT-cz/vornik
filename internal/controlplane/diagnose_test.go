@@ -11,6 +11,7 @@ import (
 	"vornik.io/vornik/internal/chat"
 	"vornik.io/vornik/internal/persistence"
 	"vornik.io/vornik/internal/persistence/sqlite"
+	"vornik.io/vornik/internal/persistence/sqlite/sqlitetest"
 )
 
 // fakeProvider returns a scripted completion (or error) and stubs the rest of
@@ -59,14 +60,7 @@ func (o *fakeObserver) Observe(context.Context, string) (*DiagnoseBundle, error)
 
 func newDiagnoseRepo(t *testing.T) persistence.ProposalRepository {
 	t.Helper()
-	db, err := sqlite.Connect(context.Background(), sqlite.DefaultConfig())
-	if err != nil {
-		t.Fatalf("connect: %v", err)
-	}
-	t.Cleanup(func() { _ = db.Close() })
-	if err := db.Migrate(context.Background()); err != nil {
-		t.Fatalf("migrate: %v", err)
-	}
+	db := sqlitetest.Memory(t)
 	return sqlite.NewProposalRepository(db.DB)
 }
 

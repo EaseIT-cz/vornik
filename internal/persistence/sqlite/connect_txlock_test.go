@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"vornik.io/vornik/internal/persistence/sqlite"
+	"vornik.io/vornik/internal/persistence/sqlite/sqlitetest"
 )
 
 // TestConnect_WriteTransactionsBeginImmediate pins the begin mode the code
@@ -23,11 +23,7 @@ import (
 // ends. Under DEFERRED it completes at once.
 func TestConnect_WriteTransactionsBeginImmediate(t *testing.T) {
 	ctx := context.Background()
-	db, err := sqlite.Connect(ctx, sqlite.Config{Path: filepath.Join(t.TempDir(), "txlock.db"), ConnectTimeout: 5 * time.Second})
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = db.Close() })
+	db := sqlitetest.Connect(t, filepath.Join(t.TempDir(), "txlock.db"))
 	if _, err := db.ExecContext(ctx, `CREATE TABLE probe (v INTEGER)`); err != nil {
 		t.Fatal(err)
 	}
@@ -65,11 +61,7 @@ func TestConnect_WriteTransactionsBeginImmediate(t *testing.T) {
 // concurrent with writers.
 func TestConnect_ReadOnlyTransactionsDoNotBlockWriters(t *testing.T) {
 	ctx := context.Background()
-	db, err := sqlite.Connect(ctx, sqlite.Config{Path: filepath.Join(t.TempDir(), "txlock-ro.db"), ConnectTimeout: 5 * time.Second})
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = db.Close() })
+	db := sqlitetest.Connect(t, filepath.Join(t.TempDir(), "txlock-ro.db"))
 	if _, err := db.ExecContext(ctx, `CREATE TABLE probe (v INTEGER)`); err != nil {
 		t.Fatal(err)
 	}

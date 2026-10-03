@@ -8,6 +8,7 @@ import (
 
 	"vornik.io/vornik/internal/persistence"
 	"vornik.io/vornik/internal/persistence/sqlite"
+	"vornik.io/vornik/internal/persistence/sqlite/sqlitetest"
 )
 
 // newSkillTestServer builds a Server backed by an in-memory SQLite
@@ -15,14 +16,7 @@ import (
 // against real persistence.
 func newSkillTestServer(t *testing.T) *Server {
 	t.Helper()
-	db, err := sqlite.Connect(context.Background(), sqlite.DefaultConfig())
-	if err != nil {
-		t.Fatalf("sqlite.Connect: %v", err)
-	}
-	t.Cleanup(func() { _ = db.Close() })
-	if err := db.Migrate(context.Background()); err != nil {
-		t.Fatalf("sqlite.Migrate: %v", err)
-	}
+	db := sqlitetest.Memory(t)
 	return &Server{skillStore: sqlite.NewSkillRepository(db.DB)}
 }
 

@@ -299,6 +299,15 @@ const (
 	// the fallback hop is what carries the traffic. See
 	// https://docs.vornik.io
 	ClassModelUnhealthy = "model_unhealthy"
+
+	// ClassOutputCap — the agent failed the step because the model's
+	// responses were cut off at the output token limit (finish_reason=length)
+	// three times, after two nudges.
+	// Before 2026-10-03 such a step COMPLETED on an earlier turn's text: incident
+	// task_20261003135506_c7bec90cfe425d9e, a critic that spent its whole
+	// 16384-token cap on reasoning and produced a false clean review. Charged
+	// to the model. LLD 09 §8.4; unclassified-step-outcome design §13.
+	ClassOutputCap = "output_cap"
 )
 
 // IsTerminal reports whether an outcome value is final — i.e., not

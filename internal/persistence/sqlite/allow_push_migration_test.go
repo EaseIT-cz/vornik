@@ -4,7 +4,7 @@ import (
 	"context"
 	"testing"
 
-	"vornik.io/vornik/internal/persistence/sqlite"
+	"vornik.io/vornik/internal/persistence/sqlite/sqlitetest"
 )
 
 // TestMigration108_AllowPush_Idempotent verifies that the sqlite schema (which
@@ -12,11 +12,7 @@ import (
 // is idempotent. Uses an in-memory SQLite DB — never touches vornik_test.
 func TestMigration108_AllowPush_Idempotent(t *testing.T) {
 	ctx := context.Background()
-	db, err := sqlite.Connect(ctx, sqlite.DefaultConfig())
-	if err != nil {
-		t.Fatalf("Connect: %v", err)
-	}
-	t.Cleanup(func() { _ = db.Close() })
+	db := sqlitetest.Connect(t, ":memory:")
 
 	// First apply: full schema including allow_push column.
 	if err := db.Migrate(ctx); err != nil {
@@ -24,7 +20,7 @@ func TestMigration108_AllowPush_Idempotent(t *testing.T) {
 	}
 
 	// Verify allow_push column exists and defaults to 0.
-	_, err = db.ExecContext(ctx, `INSERT INTO api_keys
+	_, err := db.ExecContext(ctx, `INSERT INTO api_keys
 		(id, project_id, name, key_hash, key_prefix, created_at)
 		VALUES ('akey-m108', 'proj-m108', 'n', 'h_m108', 'pre', datetime('now'))`)
 	if err != nil {

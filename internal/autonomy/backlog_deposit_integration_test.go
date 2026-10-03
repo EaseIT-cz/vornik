@@ -22,6 +22,7 @@ import (
 	forgeapi "vornik.io/vornik/internal/forge"
 	"vornik.io/vornik/internal/persistence"
 	"vornik.io/vornik/internal/persistence/sqlite"
+	"vornik.io/vornik/internal/persistence/sqlite/sqlitetest"
 	"vornik.io/vornik/internal/registry"
 	"vornik.io/vornik/internal/secrets"
 )
@@ -132,10 +133,7 @@ terminals:
 	// A real sqlite-backed TaskRepository (design doc: "Integration
 	// (single test, sqlite)"), shared by the deposit handler's guard
 	// stack and the autonomy tick's create_task path.
-	db, err := sqlite.Connect(ctx, sqlite.DefaultConfig())
-	require.NoError(t, err)
-	t.Cleanup(func() { _ = db.Close() })
-	require.NoError(t, db.Migrate(ctx))
+	db := sqlitetest.Memory(t)
 	taskRepo := sqlite.NewTaskRepository(db.DB)
 
 	det, err := secrets.NewMultiDetector(secrets.Config{})

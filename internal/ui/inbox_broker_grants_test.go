@@ -7,7 +7,6 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -18,6 +17,7 @@ import (
 	"vornik.io/vornik/internal/brokergrants"
 	"vornik.io/vornik/internal/persistence"
 	"vornik.io/vornik/internal/persistence/sqlite"
+	"vornik.io/vornik/internal/persistence/sqlite/sqlitetest"
 	"vornik.io/vornik/internal/registry"
 )
 
@@ -49,15 +49,7 @@ type grantUI struct {
 
 func newGrantUI(t *testing.T) *grantUI {
 	t.Helper()
-	ctx := context.Background()
-	db, err := sqlite.Connect(ctx, sqlite.Config{Path: filepath.Join(t.TempDir(), "ui.db"), ConnectTimeout: 5 * time.Second})
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = db.Close() })
-	if err := db.Migrate(ctx); err != nil {
-		t.Fatal(err)
-	}
+	db := sqlitetest.File(t, "ui.db")
 	var p registry.BrokerProposal
 	if err := yaml.Unmarshal([]byte(`
 action: send_reply

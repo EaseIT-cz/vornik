@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -13,6 +12,7 @@ import (
 	"vornik.io/vornik/internal/chatauth"
 	"vornik.io/vornik/internal/persistence"
 	"vornik.io/vornik/internal/persistence/sqlite"
+	"vornik.io/vornik/internal/persistence/sqlite/sqlitetest"
 )
 
 type pushed struct{ subject, body string }
@@ -34,15 +34,7 @@ func (f *fixture) advance(d time.Duration) {
 
 func newFixture(t *testing.T, opts ...Option) *fixture {
 	t.Helper()
-	ctx := context.Background()
-	db, err := sqlite.Connect(ctx, sqlite.Config{Path: filepath.Join(t.TempDir(), "ad.db"), ConnectTimeout: 5 * time.Second})
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = db.Close() })
-	if err := db.Migrate(ctx); err != nil {
-		t.Fatal(err)
-	}
+	db := sqlitetest.File(t, "ad.db")
 	f := &fixture{repo: sqlite.NewApproverDeviceRepository(db.DB), now: time.Date(2026, 10, 2, 9, 0, 0, 0, time.UTC)}
 	base := []Option{
 		WithClock(f.clock),

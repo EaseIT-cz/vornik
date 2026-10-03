@@ -17,6 +17,7 @@ import (
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
 	"go.opentelemetry.io/otel/trace"
+	"vornik.io/vornik/internal/agentns"
 	"vornik.io/vornik/internal/budget"
 	"vornik.io/vornik/internal/chat"
 	"vornik.io/vornik/internal/contracts"
@@ -667,6 +668,10 @@ type Executor struct {
 	// reachVerifier refuses an agent workflow whose reach is not the
 	// approved one (agent-administered Vornik §7.6). Nil = not wired.
 	reachVerifier ReachVerifier
+	// modelReachVerifier refuses an agent role's model whose destination the
+	// namespace has not approved (agent-administered design §18.6 item 2),
+	// before every attempt of a step.
+	modelReachVerifier ModelReachVerifier
 	// egressDetector and egressRecord scan an agent project's proposed
 	// arguments at staging (agent-administered Vornik plan P5.3). A nil
 	// detector refuses agent proposals (fail closed).
@@ -1078,6 +1083,16 @@ func WithHallucinationMetrics(m *hallucination.Metrics) Option {
 	}
 }
 
+// ModelReachVerifier judges the model an agent role is about to run on:
+// the project, the role, and the effective model (after any payload
+// override). Nil means it may run.
+type ModelReachVerifier func(ctx context.Context, projectID, role, model string) error
+
+// SetModelReachVerifier installs the agent role model check (§18.6 item 2).
+func (e *Executor) SetModelReachVerifier(f ModelReachVerifier) {
+	e.modelReachVerifier = f
+}
+
 // SetReachVerifier installs the agent reach check, run after plan
 // resolution and again before each retry (agent-administered Vornik §7.6).
 func (e *Executor) SetReachVerifier(f ReachVerifier) {
@@ -1091,6 +1106,49 @@ func (e *Executor) checkReach(ctx context.Context, plan *executionPlan) error {
 		return nil
 	}
 	if err := e.reachVerifier(ctx, plan.project, plan.swarm, plan.workflow); err != nil {
+		// A refusal that carries its own class (the credential-completeness
+		// gate's SETUP_INCOMPLETE, design §19.8 F4) keeps it.
+		// Only that class: every other refusal stays REACH_NOT_APPROVED
+		// (review 20261003-6b46 F3).
+		var classed interface{ FailureClass() string }
+		if errors.As(err, &classed) && classed.FailureClass() == persistence.TaskFailureClassSetupIncomplete {
+			return err
+		}
+		return reachRefusedError{err: err}
+	}
+	return nil
+}
+
+// CheckAgentModel is the model check executeAgentStep runs before every
+// container start, exported so the daemon's own wiring can be tested end
+// to end (review 20261003-2ed0 B-extra).
+func (e *Executor) CheckAgentModel(ctx context.Context, projectID string, role *registry.SwarmRole, effective string) error {
+	return e.checkModelReach(ctx, projectID, role, effective)
+}
+
+// checkModelReach runs the model verifier for an agent-namespace role whose
+// model an agent chose or a payload override replaced; operator projects
+// and an agent role on the global model are not judged.
+func (e *Executor) checkModelReach(ctx context.Context, projectID string, role *registry.SwarmRole, effective string) error {
+	if _, agent := agentns.FromID(projectID); !agent || role == nil || effective == "" {
+		return nil
+	}
+	// Unjudged only when the role runs on the operator's global agent model:
+	// no model of its own, and nothing (a payload override, a hand-edited
+	// VORNIK_LLM_MODEL in the role's env) chose another.
+	global := ""
+	if e.config.AgentLLMEnv != nil {
+		global = e.config.AgentLLMEnv["VORNIK_LLM_MODEL"]
+	}
+	if role.Model == "" && effective == global {
+		return nil
+	}
+	if e.modelReachVerifier == nil {
+		// Fail closed, as the workflow reach check does when no approval
+		// tables exist: an agent-chosen model with no verifier is refused.
+		return reachRefusedError{err: fmt.Errorf("role %q: no model approval check is wired", role.Name)}
+	}
+	if err := e.modelReachVerifier(ctx, projectID, role.Name, effective); err != nil {
 		return reachRefusedError{err: err}
 	}
 	return nil

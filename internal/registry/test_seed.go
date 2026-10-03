@@ -20,3 +20,18 @@ func SeedForTest(r *Registry, projects map[string]*Project) {
 	r.active.projects = projects
 	r.projects = projects
 }
+
+// SeedWorkflowsForTest replaces the registry's active workflow map, the
+// workflow counterpart of SeedForTest.
+func SeedWorkflowsForTest(r *Registry, workflows map[string]*Workflow) {
+	if r == nil {
+		return
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.active == nil {
+		r.active = &ConfigSet{}
+	}
+	r.active.workflows = workflows
+	r.workflows = workflows
+}

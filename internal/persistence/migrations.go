@@ -8794,4 +8794,93 @@ ALTER TABLE agent_approval_requests ADD CONSTRAINT agent_approval_requests_kind_
     CHECK (kind IN ('device_enrollment','widening_change','credential_slot'));
 `,
 	},
+	{
+		Version: 212,
+		Name:    "agent_approval_requests_host_action",
+		// Hermes approval transport: the paired phone answers an action on the
+		// agent's own machine (kind host_action), with a scope (once, session,
+		// deny) recorded in decided_choice by the same guarded decision
+		// statement. SQLite gets both by the table rebuild
+		// (sqliteTableRebuilds, marker 'host_action').
+		//
+		// Design: https://docs.vornik.io §4.1, §4.2
+		Up: `
+ALTER TABLE agent_approval_requests DROP CONSTRAINT IF EXISTS agent_approval_requests_kind_check;
+ALTER TABLE agent_approval_requests ADD CONSTRAINT agent_approval_requests_kind_check
+    CHECK (kind IN ('device_enrollment','widening_change','credential_slot','broker_action','host_action'));
+ALTER TABLE agent_approval_requests ADD COLUMN IF NOT EXISTS decided_choice TEXT;
+`,
+		Down: `
+ALTER TABLE agent_approval_requests DROP COLUMN IF EXISTS decided_choice;
+ALTER TABLE agent_approval_requests DROP CONSTRAINT IF EXISTS agent_approval_requests_kind_check;
+ALTER TABLE agent_approval_requests ADD CONSTRAINT agent_approval_requests_kind_check
+    CHECK (kind IN ('device_enrollment','widening_change','credential_slot','broker_action'));
+`,
+	},
+	{
+		Version: 213,
+		Name:    "broker_standing_grants",
+		// Broker write-actions design, tier 2 standing grants (item 10 as
+		// revised; round 4's key_hash): a person's approval of a declared
+		// class of writes, bounded by uses and expiry. key_values is sealed
+		// with the secret-store seal; the guarded decrement compares
+		// key_hash. Covered actions carry approver 'grant:<id>', indexed for
+		// the grant page and the digest.
+		//
+		// Design: https://docs.vornik.io, Tier 2
+		Up: `
+CREATE TABLE IF NOT EXISTS broker_standing_grants (
+    id                     TEXT PRIMARY KEY,
+    project_id             TEXT NOT NULL,
+    namespace              TEXT NOT NULL DEFAULT '',
+    workflow_id            TEXT NOT NULL,
+    action                 TEXT NOT NULL,
+    key_paths              TEXT NOT NULL,
+    key_values             TEXT NOT NULL,
+    key_hash               TEXT NOT NULL,
+    max_uses               INTEGER NOT NULL CHECK (max_uses BETWEEN 1 AND 20),
+    uses_left              INTEGER NOT NULL CHECK (uses_left >= 0 AND uses_left <= max_uses),
+    expires_at             TIMESTAMPTZ NOT NULL,
+    created_at             TIMESTAMPTZ NOT NULL,
+    created_by             TEXT NOT NULL,
+    seed_action_id         TEXT NOT NULL,
+    reach_hash_at_creation TEXT NOT NULL,
+    active                 BOOLEAN NOT NULL DEFAULT TRUE,
+    paused                 BOOLEAN NOT NULL DEFAULT FALSE,
+    suspended_at           TIMESTAMPTZ,
+    revoked_at             TIMESTAMPTZ,
+    digest_through         TIMESTAMPTZ NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_broker_standing_grants_class ON broker_standing_grants (project_id, workflow_id, action);
+CREATE INDEX IF NOT EXISTS idx_broker_standing_grants_ns ON broker_standing_grants (namespace);
+CREATE INDEX IF NOT EXISTS idx_broker_actions_approver ON broker_actions (approver);
+`,
+		Down: `
+DROP INDEX IF EXISTS idx_broker_actions_approver;
+DROP TABLE IF EXISTS broker_standing_grants;
+`,
+	},
+	{
+		Version: 214,
+		Name:    "agent_model_provider_approvals",
+		// Agent-administered design §18.6 item 2 in detail (GREEN at review
+		// a125): a role may name a model from the operator's catalogue; a
+		// remote one needs a device's approval of its destination,
+		// "<sub-provider>@<endpoint host>", once per namespace. Only the
+		// widening_change effect inserts; only the operator console sets
+		// removed_at (soft removal, round 2 F7; round 3 F3).
+		//
+		// Design: https://docs.vornik.io §18.6
+		Up: `
+CREATE TABLE IF NOT EXISTS agent_model_provider_approvals (
+    namespace           TEXT NOT NULL,
+    destination         TEXT NOT NULL,
+    approved_by_device  TEXT NOT NULL,
+    approved_at         TIMESTAMPTZ NOT NULL,
+    removed_at          TIMESTAMPTZ,
+    PRIMARY KEY (namespace, destination)
+);
+`,
+		Down: `DROP TABLE IF EXISTS agent_model_provider_approvals;`,
+	},
 }

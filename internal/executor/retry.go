@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"vornik.io/vornik/internal/agentns"
 	"vornik.io/vornik/internal/chat"
 	"vornik.io/vornik/internal/persistence"
 	"vornik.io/vornik/internal/registry"
@@ -335,6 +336,13 @@ func (e *Executor) executeAgentStepWithFallback(
 		return cid, result, nil
 	}
 	if roleConfig == nil || strings.TrimSpace(roleConfig.ModelFallback) == "" {
+		return cid, result, err
+	}
+	// An agent role runs only on its own model (agent-administered design
+	// §18.6 item 2, Change 7, review d94f F6): a fallback firing here would
+	// send the role's work to a provider nobody approved. The loader refuses
+	// such a file; this is the second guard.
+	if _, agent := agentns.FromID(task.ProjectID); agent {
 		return cid, result, err
 	}
 	if !isModelShapedFailure(err) && !isPersistentTimeoutFailure(err) {

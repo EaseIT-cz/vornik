@@ -41,12 +41,21 @@ const (
 	// ApprovalKindBrokerAction approves one proposed write of an agent
 	// project (agent-administered Vornik plan P4.8).
 	ApprovalKindBrokerAction = "broker_action"
+	// ApprovalKindHostAction answers an action on the agent's own machine,
+	// enforced by the agent's host (Hermes approval transport design §4.1).
+	// Its decision carries a scope (DecidedChoice).
+	ApprovalKindHostAction = "host_action"
 
 	ApprovalPending  = "pending"
 	ApprovalApproved = "approved"
 	ApprovalRejected = "rejected"
 	ApprovalExpired  = "expired"
 )
+
+// ApprovalKinds is every kind the kind CHECK accepts (migration 212), for
+// tests that must cover each one (the §18.7 describer enumeration).
+var ApprovalKinds = []string{ApprovalKindDeviceEnrollment, ApprovalKindWideningChange,
+	ApprovalKindCredentialSlot, ApprovalKindBrokerAction, ApprovalKindHostAction}
 
 // AgentApprovalRequestRow is one thing a device is asked to decide.
 type AgentApprovalRequestRow struct {
@@ -66,11 +75,30 @@ type AgentApprovalRequestRow struct {
 	// ApplyError, with AppliedAt set, means the approved change could never
 	// apply; that is the request's terminal state.
 	ApplyError string
+	// DecidedChoice is the scope a decision carried ("once", "session",
+	// "deny" for a host_action); "" for every kind decided by a plain
+	// approve or reject (Hermes approval transport design §4.2).
+	DecidedChoice string
 }
 
 // ErrApprovalNoTransition means Decide matched no pending, unexpired row with
 // the shown hash: already decided, expired, unknown, or changed after display.
 var ErrApprovalNoTransition = errors.New("approval request: no transition")
+
+// ApprovalCap bounds CreateRequestCapped (Hermes approval transport design
+// §4.4): at most MaxPending pending, unexpired requests of the row's kind in
+// its namespace, and at most MaxRecent of them created at or after Since.
+type ApprovalCap struct {
+	MaxPending int
+	MaxRecent  int
+	Since      time.Time
+}
+
+// The two refusals of CreateRequestCapped. Nothing is written on either.
+var (
+	ErrApprovalCapPending = errors.New("approval request: too many pending requests")
+	ErrApprovalCapRecent  = errors.New("approval request: too many requests in the last hour")
+)
 
 // ApproverDeviceRepository persists devices, pairings and approval requests.
 type ApproverDeviceRepository interface {
@@ -113,6 +141,15 @@ type ApproverDeviceRepository interface {
 	// Decide moves a pending, unexpired request whose hash matches shownSHA256
 	// to approved or rejected. Anything else is ErrApprovalNoTransition.
 	Decide(ctx context.Context, id, shownSHA256, deviceID string, approve bool, now time.Time) error
+	// DecideWithChoice is Decide that also writes decided_choice, in the same
+	// guarded statement (Hermes approval transport design §4.2).
+	DecideWithChoice(ctx context.Context, id, shownSHA256, deviceID string, approve bool, choice string, now time.Time) error
+	// CreateRequestCapped inserts r unless the cap refuses it
+	// (ErrApprovalCapPending, ErrApprovalCapRecent); the count and the insert
+	// are serialised per namespace (Postgres: a transaction advisory lock;
+	// SQLite: the insert comes first and takes the writer lock, and the count
+	// includes it). A duplicate id is an error, never an overwrite.
+	CreateRequestCapped(ctx context.Context, r AgentApprovalRequestRow, c ApprovalCap, now time.Time) error
 	// ClaimApply leases an approved, unapplied request to holder until
 	// until, counting the attempt. It succeeds only when no other holder's
 	// lease is live, so in a cluster one node runs an effect at a time.
@@ -130,4 +167,8 @@ type ApproverDeviceRepository interface {
 	ListRecentByNamespace(ctx context.Context, namespace string, since time.Time) ([]AgentApprovalRequestRow, error)
 	// ExpirePending moves pending requests past expires_at to expired.
 	ExpirePending(ctx context.Context, now time.Time) (int, error)
+	// ExpirePendingRows is ExpirePending that returns the rows it expired, as
+	// expired, so a caller can count them by kind (Hermes approval transport
+	// design §8).
+	ExpirePendingRows(ctx context.Context, now time.Time) ([]AgentApprovalRequestRow, error)
 }

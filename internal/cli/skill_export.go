@@ -85,6 +85,21 @@ func runSkillExport(cmd *cobra.Command, args []string) error {
 	if skillExportLicense != "" {
 		skill.License = skillExportLicense
 	}
+	// Attribution is recommended for a published skill; this is where the
+	// file is generated, so this is where it is said (workflow-md design,
+	// "Publication recommendations belong to publishing"). stderr only:
+	// stdout is the file.
+	var missing []string
+	if skill.Author == "" {
+		missing = append(missing, "--author")
+	}
+	if skill.License == "" {
+		missing = append(missing, "--license")
+	}
+	if len(missing) > 0 {
+		_, _ = fmt.Fprintf(cmd.ErrOrStderr(), "warning: the exported skill has no %s; pass %s to attribute it before publishing\n",
+			strings.Join(fieldsOf(missing), " or "), strings.Join(missing, " and "))
+	}
 	if skillExportVersion != "" {
 		skill.Version = skillExportVersion
 		if skill.Workflow != nil {
@@ -276,4 +291,13 @@ func fetchSwarm(client *Client, swarmID string) (*registry.Swarm, error) {
 		return nil, fmt.Errorf("swarm %s: parse response: %w", swarmID, err)
 	}
 	return &sw, nil
+}
+
+// fieldsOf turns flag names into the field names they set.
+func fieldsOf(flags []string) []string {
+	out := make([]string, len(flags))
+	for i, f := range flags {
+		out[i] = strings.TrimPrefix(f, "--")
+	}
+	return out
 }

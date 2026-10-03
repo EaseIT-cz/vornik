@@ -3,7 +3,7 @@ sources:
     - path: internal/cli/agent_connect.go
       sha256: b717d69eb6267113d1cdb6421a743d90318fe9f46ac5dabf3cbe4e71e92144cf
     - path: internal/agentadmin/admin_guidance.md
-      sha256: c9cf84e8ac809bd6c1a1dc0750226fab140b3623df646ed8d22eef38032a4934
+      sha256: 840b2e11c52a4be9611c0d84b193b0c29d44c9eac744b07ff0d36c10792ffbf9
 ---
 # Acceptance check: an assistant sets up Vornik
 

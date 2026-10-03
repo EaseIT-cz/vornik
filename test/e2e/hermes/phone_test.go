@@ -35,8 +35,13 @@ func (f *fakeDevice) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	switch {
 	case r.Method == http.MethodGet && r.URL.Path == "/ui/approve/":
-		_, _ = fmt.Fprint(w, `<div class="card"><p>Connect the bank API &#34;fio&#34;.</p><p class="mut">now</p><a href="/ui/approve/apr_1">Review</a></div>`+
-			`<div class="card"><p>Enter BANK_KEY.</p><p class="mut">now</p><a href="/ui/approve/apr_2">Review</a></div>`)
+		// The list as b9a2db54b draws it: a group card first, and each
+		// Review link a link-button (class="act"). The scripted phone read
+		// none of these cards once the class attribute appeared (found by the
+		// broker design §18 E2E, 2026-10-03).
+		_, _ = fmt.Fprint(w, `<div class="card"><p>2 waiting: writes</p><a class="act" href="/ui/approve/group/w">Review together</a></div>`+
+			`<div class="card"><p>Connect the bank API &#34;fio&#34;.</p><p class="mut">now</p><a class="act" href="/ui/approve/apr_1">Review</a></div>`+
+			`<div class="card"><p>Enter BANK_KEY.</p><p class="mut">now</p><a class="act" href="/ui/approve/apr_2">Review</a></div>`)
 	case r.URL.Path != "/ui/approve/apr_1" && r.URL.Path != "/ui/approve/apr_2":
 		http.NotFound(w, r)
 	case r.Method == http.MethodGet:
@@ -47,7 +52,7 @@ func (f *fakeDevice) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "stale or cross-site", http.StatusConflict)
 			return
 		}
-		f.decisions[id] = r.PostFormValue("decision") + ":" + r.PostFormValue("value")
+		f.decisions[id] = r.PostFormValue("decision") + ":" + r.PostFormValue("value") + r.PostFormValue("grant_days") + r.PostFormValue("grant_uses")
 		http.Redirect(w, r, "/ui/approve/", http.StatusSeeOther)
 	default:
 		http.NotFound(w, r)
@@ -90,5 +95,21 @@ func TestPhone(t *testing.T) {
 	}
 	if err := p.Reject("apr_9"); err == nil {
 		t.Fatal("decided a request that does not exist")
+	}
+	// Hermes approval transport design §4.2: a host action is answered with
+	// a choice, not approve.
+	if err := p.Answer("apr_1", "session"); err != nil {
+		t.Fatal(err)
+	}
+	if dev.decisions["apr_1"] != "session:" {
+		t.Fatalf("answer: %v", dev.decisions)
+	}
+	// Broker write-actions design, tier 2: approve with a standing grant
+	// sends the page's grant choice.
+	if err := p.ApproveWithGrant("apr_2", 7, 20); err != nil {
+		t.Fatal(err)
+	}
+	if dev.decisions["apr_2"] != "approve_grant:720" {
+		t.Fatalf("approve with a grant: %v", dev.decisions)
 	}
 }

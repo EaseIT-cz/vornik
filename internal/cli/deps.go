@@ -132,6 +132,7 @@ func loadDepsInputs(projectIDs []string) ([]depsInstallInput, error) {
 		return nil, fmt.Errorf("could not locate configs/ directory (set VORNIK_CONFIGS_DIR)")
 	}
 	reg := registry.New()
+	reg.SetAgentModelCatalogue(cfg.AgentAdmin.ModelIDs()) // §18.6 item 2: judge agent roles as the daemon does
 	if err := reg.Load(configsDir); err != nil {
 		return nil, fmt.Errorf("load registry from %s: %w", configsDir, err)
 	}

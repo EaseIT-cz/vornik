@@ -4,10 +4,12 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 
 	"vornik.io/vornik/internal/agentadmin"
 	"vornik.io/vornik/internal/agentns"
 	"vornik.io/vornik/internal/persistence"
+	"vornik.io/vornik/internal/registry"
 )
 
 // The agent admin verbs on the companion endpoint (agent-administered
@@ -20,6 +22,11 @@ type AgentAdminVerbs interface {
 	Do(ctx context.Context, key *persistence.APIKey, verb string, input json.RawMessage) (agentadmin.Result, error)
 	ListSetupJSON(ctx context.Context, key *persistence.APIKey) (any, error)
 	DescribeJSON(ctx context.Context, key *persistence.APIKey) (any, error)
+	// ListRecipesJSON answers list_recipes (design §19.2).
+	ListRecipesJSON(ctx context.Context, key *persistence.APIKey) (any, error)
+	// ApprovedWorkflows is every approved workflow of the key's namespace,
+	// sorted: what catalog lists for an agent admin key (design §18.3).
+	ApprovedWorkflows(ctx context.Context, key *persistence.APIKey) ([]string, error)
 	// EnsureHome creates the namespace's home project if it does not exist
 	// and returns its ID (the grant binds the agent admin key to it).
 	EnsureHome(ctx context.Context, namespace, clientKind string) (string, error)
@@ -39,7 +46,7 @@ const (
 var agentAdminMutating = map[string]bool{
 	agentadmin.VerbCreateProject: true, agentadmin.VerbDefineSwarm: true, agentadmin.VerbDefineWorkflow: true,
 	agentadmin.VerbAddMCPServer: true, agentadmin.VerbAddAPI: true, agentadmin.VerbRequestCredential: true,
-	agentadmin.VerbSetBudget: true, agentadmin.VerbRemove: true,
+	agentadmin.VerbSetBudget: true, agentadmin.VerbRemove: true, agentadmin.VerbInstallRecipe: true,
 }
 
 // keyCoversProject reports whether a companion key may see a task in
@@ -62,7 +69,7 @@ func keyCoversProject(key *persistence.APIKey, project string) bool {
 
 // isAgentAdminTool reports whether name is an admin verb.
 func isAgentAdminTool(name string) bool {
-	return agentAdminMutating[name] || name == toolListMySetup || name == toolDescribeInstallation
+	return agentAdminMutating[name] || name == toolListMySetup || name == toolDescribeInstallation || name == agentadmin.VerbListRecipes
 }
 
 // agentAdminOffered reports whether key may see and call the admin verbs.
@@ -82,9 +89,53 @@ func (s *Server) companionToolsFor(key *persistence.APIKey) []mcpToolDef {
 		}
 	}
 	if s.agentAdminOffered(key) {
+		for i := range defs {
+			if defs[i].Name == "delegate" {
+				defs[i] = brokerOnlyDelegate(defs[i])
+			}
+		}
 		defs = append(defs, companionAdminToolDefs()...)
 	}
 	return defs
+}
+
+// brokerOnlyDelegate is delegate as an agent admin key may call it: every
+// workflow it can run is a broker workflow, which refuses a prompt and
+// inputArtifacts, so the schema omits both instead of inviting a refused call
+// (design §18.2, review 3e94 F3). The definition is copied, never mutated.
+func brokerOnlyDelegate(d mcpToolDef) mcpToolDef {
+	schema := map[string]any{}
+	for k, v := range d.InputSchema {
+		schema[k] = v
+	}
+	props := map[string]any{}
+	if in, ok := d.InputSchema["properties"].(map[string]any); ok {
+		for k, v := range in {
+			switch k {
+			case "prompt", "inputArtifacts", "skip_auto_extract", "acknowledge_workflow_cannot_fetch":
+				continue
+			}
+			props[k] = v
+		}
+	}
+	schema["properties"] = props
+	d.InputSchema = schema
+	return d
+}
+
+// inputsDescription is define_workflow's inputs description, built from the
+// validator's published rules so the two cannot drift (design §18.2).
+func inputsDescription() string {
+	var b strings.Builder
+	b.WriteString("JSON Schema (an object) of the typed inputs you will pass to delegate. Rules, enforced when the workflow is defined: ")
+	for i, r := range registry.BrokerInputRules() {
+		if i > 0 {
+			b.WriteString("; ")
+		}
+		b.WriteString(r.Text)
+	}
+	b.WriteString(".")
+	return b.String()
 }
 
 // companionAdminTool runs one admin verb.
@@ -101,6 +152,8 @@ func (s *Server) companionAdminTool(ctx context.Context, key *persistence.APIKey
 		out, err = s.agentAdmin.ListSetupJSON(ctx, key)
 	case toolDescribeInstallation:
 		out, err = s.agentAdmin.DescribeJSON(ctx, key)
+	case agentadmin.VerbListRecipes:
+		out, err = s.agentAdmin.ListRecipesJSON(ctx, key)
 	default:
 		out, err = s.agentAdmin.Do(ctx, key, name, args)
 	}
@@ -138,22 +191,27 @@ func companionAdminToolDefs() []mcpToolDef {
 		"awaiting_approval means the user must approve on their phone at approval_url; tell them the sentence."
 	roleTools := "Each tool is a workspace/clock built-in (see describe_installation) or mcp__<server>__<tool> for a read tool of a server already approved for this project."
 	return []mcpToolDef{
-		{Name: toolDescribeInstallation, Description: "Call this first. How to work with Vornik, what you may and may not do, what needs the user's approval on their phone, and your current setup.", InputSchema: obj(map[string]any{})},
+		{Name: toolDescribeInstallation, Description: "Call this first. How to work with Vornik, what you may and may not do, what needs the user's approval on their phone, the models a role may choose, and your current setup.", InputSchema: obj(map[string]any{})},
 		{Name: toolListMySetup, Description: "Your projects, roles, workflows, servers, credentials (names only, never values), budgets, and requests awaiting approval, failed or expired.", InputSchema: obj(map[string]any{})},
 		{Name: agentadmin.VerbCreateProject, Description: "Create a project (a private, broker-only space) with the default budget." + effect,
 			InputSchema: obj(map[string]any{"slug": str("2-32 chars: a-z, 0-9, single dashes."), "purpose": str("One line saying what it is for."), "template": str("Optional; only \"default\".")}, "slug", "purpose")},
 		{Name: agentadmin.VerbDefineSwarm, Description: "Set the roles of a project (its slug). A worker role always remains." + effect,
 			InputSchema: obj(map[string]any{"slug": str("The project's slug."), "roles": map[string]any{"type": "array", "maxItems": 8, "items": obj(map[string]any{
 				"name": str("Role name: a-z, 0-9, _ or -."), "instructions": str("What the role does. No lines starting with #, --- or ```."),
-				"tools": map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": roleTools}}, "name", "instructions", "tools")}}, "slug", "roles")},
+				"tools": map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": roleTools},
+				"model": str("Optional: a model id from describe_installation's models; leave it out for the installation's default. " +
+					"A local model applies at once; a remote one sends this role's work to its provider and needs the user's approval on their phone, once per destination.")},
+				"name", "instructions", "tools")}}, "slug", "roles")},
 		{Name: agentadmin.VerbDefineWorkflow, Description: "Define a workflow you can delegate: steps run in order; what it returns is exactly the egress schema, which the user approves." + effect,
 			InputSchema: obj(map[string]any{"project": str("The project's slug."), "slug": str("The workflow's slug."), "purpose": str("One line."),
-				"steps":  map[string]any{"type": "array", "maxItems": 10, "items": obj(map[string]any{"name": str("Step name."), "role": str("A role of the project."), "instructions": str("What the step does.")}, "name", "role", "instructions")},
-				"inputs": map[string]any{"type": "object", "description": "JSON Schema of the inputs you will pass to delegate (an object schema)."},
+				"steps":  map[string]any{"type": "array", "maxItems": 10, "description": "Run in order. " + agentadmin.HandoffRule, "items": obj(map[string]any{"name": str("Step name."), "role": str("A role of the project."), "instructions": str("What the step does.")}, "name", "role", "instructions")},
+				"inputs": map[string]any{"type": "object", "description": inputsDescription()},
 				"egress": map[string]any{"type": "object", "description": "JSON Schema of what you get back: objects with additionalProperties false, strings with maxLength <= 2000, arrays with maxItems <= 50, numbers, booleans, enums."},
 				"proposes": map[string]any{"type": "array", "maxItems": 8, "description": "Optional writes the workflow may PROPOSE; the user approves each one on their phone before it is made. " +
 					"Each: {action (a-z, 0-9, _), tool (mcp__<server>-write__<tool> of an approved write tool, or api:<name>:<METHOD>:<path> of an approved API write), " +
-					"args_schema (JSON Schema object of the arguments; for an API write, the request body)}.",
+					"args_schema (JSON Schema object of the arguments; for an API write, the request body), " +
+					"and optionally standing: {key: [argument names], max_days <= 7, max_uses <= 20}, which lets the user, when approving one write, also approve future writes with the same key values " +
+					"(sent without being shown to them). The key must include every argument marked \"x-destination\": true (who the write goes to); a schema with an argument marked \"x-carries-content\": true cannot declare it.",
 					"items": map[string]any{"type": "object"}},
 				"schedule": described("Optional: run the workflow automatically. The user approves the schedule, its timezone and its inputs on their phone, and any change to them. At most hourly. "+
 					"Each run's task id is in list_my_setup (recent_runs); read its output with result.", obj(map[string]any{
@@ -179,6 +237,16 @@ func companionAdminToolDefs() []mcpToolDef {
 					"header": str("Header to carry it (default Authorization)."), "prefix": str("Prefix such as \"Bearer \".")}),
 				"methods": map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "GET, HEAD, POST, PUT, PATCH, DELETE."},
 				"writes":  map[string]any{"type": "boolean", "description": "True exactly when methods include a write."}}, "project", "name", "base_url", "methods")},
+		{Name: agentadmin.VerbListRecipes, Description: "Recipes: ready-made, tested workflows Vornik ships (an inbox digest, an agenda, a morning brief). " +
+			"Each says what it reads, the variables you fill, what it returns, the sentence the user will approve, and where it is installed. Prefer a recipe when one fits.",
+			InputSchema: obj(map[string]any{})},
+		{Name: agentadmin.VerbInstallRecipe, Description: "Install a recipe into a project as one change: its server, its roles (named <recipe>-<role>), its workflow and schedule. " +
+			"The user approves it once on their phone; then each credential it needs is requested on the phone. Installing the same version again changes nothing." + effect,
+			InputSchema: obj(map[string]any{"recipe": str("The recipe's name, from list_recipes."), "project": str("The project's slug."),
+				"variables": map[string]any{"type": "object", "additionalProperties": map[string]any{"type": "string"},
+					"description": "The recipe's variables by name, each a string (list_recipes gives their types and help). A credential is never a variable."},
+				"schedule": map[string]any{"type": []any{"object", "null"}, "description": "Omit to use the recipe's default schedule (list_recipes shows it), " +
+					"null for no schedule, or {cron, timezone, inputs} as in define_workflow."}}, "recipe", "project")},
 		{Name: agentadmin.VerbRequestCredential, Description: "Ask the user to enter a credential that a server of a project already names (add the server first). " +
 			"The user types the value on their phone; you never see it and cannot pass one. Always needs approval: entering the value is the approval." + effect,
 			InputSchema: obj(map[string]any{"project": str("The project's slug."), "name": str("The credential NAME the server uses (A-Z, 0-9, _)."),

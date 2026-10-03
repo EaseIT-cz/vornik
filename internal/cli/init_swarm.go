@@ -9,8 +9,6 @@ import (
 	"strings"
 
 	"github.com/spf13/cobra"
-
-	"vornik.io/vornik/internal/registry"
 )
 
 //go:embed presets/*.md
@@ -209,7 +207,7 @@ func validateGeneratedSwarm(configDir, swarmPath string, data []byte) error {
 	if err := os.WriteFile(filepath.Join(tmp, "swarms", filepath.Base(swarmPath)), data, 0o600); err != nil {
 		return err
 	}
-	reg := registry.New()
+	reg := newCLIRegistry(configDir)
 	if err := reg.Load(tmp); err != nil {
 		return fmt.Errorf("generated swarm failed registry validation: %w", err)
 	}

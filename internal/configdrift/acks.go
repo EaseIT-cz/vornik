@@ -24,6 +24,13 @@ import (
 //
 // Record: rel \t class \t key \t regime \t date (RFC 3339, UTC, seconds —
 // so dates compare as strings; equal dates tie-break on the whole record).
+//
+// Load-bearing for the installer (drift design slice H): scripts/config-deploy.sh
+// reads this store and treats ANY record whose first field is a file's rel as
+// a decline of that file's template change. So rel stays the first field, and
+// the store holds only config_template_drift acknowledgements; a second ack
+// verb needs its own store, or the installer's reader must learn the class.
+// installer_ack_contract_test.go runs the installer against this writer.
 const (
 	ackStoreName   = ".template-acks"
 	ackLockName    = ".template-acks.lock"

@@ -21,6 +21,8 @@ import (
 func (c *Container) wireReachVerifier(opts []taskcreate.Option) []taskcreate.Option {
 	if c.Executor != nil {
 		c.Executor.SetReachVerifier(c.verifyAgentReachOf)
+		// An agent role's model, before every attempt (design §18.6 item 2).
+		c.Executor.SetModelReachVerifier(c.verifyAgentModel)
 	}
 	return append(opts, taskcreate.WithReachVerifier(c.verifyAgentReach))
 }
@@ -83,6 +85,13 @@ func (c *Container) verifyAgentReachOf(ctx context.Context, p *registry.Project,
 	}
 	if approved.ReachHash != sig.Hash() {
 		return fmt.Errorf("workflow %q changed what it returns or can reach since it was approved; define it again to ask for approval", workflowID)
+	}
+	// The credential-completeness gate (design §19.8 F4): every integration
+	// the workflow reaches that declares a credential has it set, checked
+	// where the reach check runs, at creation, at plan resolve and before
+	// each retry.
+	if name := c.missingCredential(ctx, p, sig); name != "" {
+		return &agentadmin.SetupIncompleteError{Workflow: workflowID, Credential: name}
 	}
 	return nil
 }

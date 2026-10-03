@@ -118,3 +118,78 @@ func TestAgentReach_RecheckedBeforeEachRetry(t *testing.T) {
 	assert.Equal(t, 1, starts, "an attempt ran after its approval was withdrawn")
 	assert.Equal(t, 2, rec.calls())
 }
+
+// setupIncomplete is the agent verifier's credential-completeness refusal:
+// an error that carries its own failure class (agentadmin.SetupIncompleteError).
+type setupIncomplete struct{}
+
+func (setupIncomplete) Error() string        { return "SETUP_INCOMPLETE: enter MAIL_TOKEN on your phone" }
+func (setupIncomplete) FailureClass() string { return persistence.TaskFailureClassSetupIncomplete }
+
+func waitFailedAs(t *testing.T, tr *MockTaskRepo, class string) {
+	t.Helper()
+	var got *persistence.Task
+	ok := assert.Eventually(t, func() bool {
+		got, _ = tr.Get(context.Background(), "t-agent")
+		return got != nil && got.Status == persistence.TaskStatusFailed
+	}, 2*time.Second, 10*time.Millisecond)
+	if !ok {
+		t.Fatalf("task ended %+v", got)
+	}
+	if got.LastErrorClass == nil || *got.LastErrorClass != class {
+		t.Fatalf("failure class = %v, want %s", got.LastErrorClass, class)
+	}
+}
+
+// Design §19.8 F4, §19.9 F3: a credential emptied while a task waited stops
+// it at plan resolve, the point a recovered or resumed execution passes
+// too, with SETUP_INCOMPLETE and before any container starts. Control: the
+// verifier's own failure class kept by checkReach.
+func TestAgentReach_SetupIncompleteStopsAtPlanResolve(t *testing.T) {
+	rt := NewMockRuntime()
+	e, tr := agentReachExecutor(t, rt, 3)
+	rec := &reachRecorder{answers: []error{setupIncomplete{}}}
+	e.SetReachVerifier(rec.verify)
+
+	require.NoError(t, e.Execute("t-agent"))
+	waitFailedAs(t, tr, persistence.TaskFailureClassSetupIncomplete)
+	rt.mu.Lock()
+	defer rt.mu.Unlock()
+	assert.Zero(t, rt.startCalls, "a container started without the workflow's credential")
+}
+
+// Design §19.8 F4: a credential removed while a task waits to retry stops
+// the next attempt with the same reason.
+func TestAgentReach_SetupIncompleteStopsTheRetry(t *testing.T) {
+	rt := NewMockRuntime()
+	rt.startErr = errors.New("podman start failed (forces a retry)")
+	e, tr := agentReachExecutor(t, rt, 3)
+	rec := &reachRecorder{answers: []error{nil, setupIncomplete{}}}
+	e.SetReachVerifier(rec.verify)
+
+	require.NoError(t, e.Execute("t-agent"))
+	waitFailedAs(t, tr, persistence.TaskFailureClassSetupIncomplete)
+	rt.mu.Lock()
+	starts := rt.startCalls
+	rt.mu.Unlock()
+	assert.Equal(t, 1, starts, "an attempt ran after its credential was removed")
+}
+
+// otherTerminal is a verifier refusal that carries a terminal class other
+// than SETUP_INCOMPLETE.
+type otherTerminal struct{}
+
+func (otherTerminal) Error() string        { return "something else" }
+func (otherTerminal) FailureClass() string { return persistence.TaskFailureClassForgeTargetUnavailable }
+
+// Review 20261003-6b46 F3: only the credential-completeness gate's class
+// passes through checkReach; any other refusal from the reach verifier,
+// classed or not, is REACH_NOT_APPROVED, as before recipes.
+func TestAgentReach_OnlySetupIncompleteKeepsItsOwnClass(t *testing.T) {
+	rt := NewMockRuntime()
+	e, tr := agentReachExecutor(t, rt, 1)
+	rec := &reachRecorder{answers: []error{otherTerminal{}}}
+	e.SetReachVerifier(rec.verify)
+	require.NoError(t, e.Execute("t-agent"))
+	waitFailedAs(t, tr, persistence.TaskFailureClassReachNotApproved)
+}

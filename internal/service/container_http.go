@@ -23,7 +23,9 @@ import (
 	"time"
 	"vornik.io/vornik/internal/egressscan"
 
+	"vornik.io/vornik/internal/approverdevice"
 	"vornik.io/vornik/internal/brokeractions"
+	"vornik.io/vornik/internal/brokergrants"
 	"vornik.io/vornik/internal/companionpush"
 	"vornik.io/vornik/internal/mcp"
 
@@ -448,6 +450,11 @@ func (c *Container) initHTTPServer() error {
 	apiOpts = append(apiOpts, api.WithDaemonHost(c.daemonHost()))
 	if c.repos != nil && c.repos.ApproverDevices != nil {
 		apiOpts = append(apiOpts, api.WithApproverDevices(c.repos.ApproverDevices))
+		// Hermes approval transport design §4.3: the REST pair the
+		// `vornikctl agent host-approval` verb files through.
+		if svc := c.approverDeviceService(); svc != nil {
+			apiOpts = append(apiOpts, api.WithHostApprovals(svc))
+		}
 	}
 	if c.repos != nil && c.repos.AgentGrants != nil {
 		apiOpts = append(apiOpts, api.WithAgentGrants(c.repos.AgentGrants))
@@ -731,6 +738,12 @@ func (c *Container) initHTTPServer() error {
 			c.brokerActionMetrics = brokeractions.NewMetrics()
 		}
 		c.brokerActionMetrics.Attach(reg, &c.Logger)
+		// vornik_broker_standing_grants_* and actions_covered_total
+		// (broker write-actions design, tier 2), same Attach rule.
+		if c.brokerGrantMetrics == nil {
+			c.brokerGrantMetrics = brokergrants.NewMetrics()
+		}
+		c.brokerGrantMetrics.Attach(reg)
 		// vornik_egress_secret_* (plan P5), same Attach rule.
 		if c.egressMetrics == nil {
 			c.egressMetrics = egressscan.NewMetrics()
@@ -741,6 +754,12 @@ func (c *Container) initHTTPServer() error {
 			c.companionPushMetrics = companionpush.NewMetrics()
 		}
 		c.companionPushMetrics.Attach(reg)
+		// vornik_host_approvals_total, same Attach rule (Hermes approval
+		// transport design §8).
+		if c.hostApprovalMetrics == nil {
+			c.hostApprovalMetrics = approverdevice.NewHostActionMetrics()
+		}
+		c.hostApprovalMetrics.Attach(reg)
 		// The §5.3 legacy-grant counter, same Attach rule and for the same
 		// reason: the holder is created during subsystem init, before any
 		// registry exists. This counter IS the removal gate ("14 consecutive
@@ -1735,6 +1754,11 @@ func (c *Container) initHTTPServer() error {
 		}
 		if c.repos != nil && c.repos.ApproverDevices != nil {
 			dh.SetApproverDevices(c.repos.ApproverDevices, c.OperatorAlerter() != nil && c.Config.OperatorAlertActive())
+			if c.repos.AgentGrants != nil {
+				// agent_namespace_budget (agent-administered design §18.4 F10).
+				dh.SetAgentNamespaceBudgets(c.agentNamespaceBudgets)
+				dh.SetAgentModelCatalogue(c.agentModelCatalogueStatus)
+			}
 		}
 		// Read c.mcpManager at call time: the manager is created by initMCP,
 		// which may run after the handlers are built.
@@ -1973,7 +1997,17 @@ func (c *Container) initHTTPServer() error {
 	if c.repos != nil && c.repos.BrokerActions != nil {
 		uiOpts = append(uiOpts, ui.WithBrokerActions(c.repos.BrokerActions, func(actionID string) {
 			c.brokerActionWorker.Kick(actionID)
-		}), ui.WithBrokerActionChanged(func() { c.companionPusher.Kick() }))
+		}), ui.WithBrokerActionChanged(func() { c.companionPusher.Kick() }),
+			// Standing grants (broker write-actions design, tier 2): read at
+			// call time, over the current repositories.
+			ui.WithStandingGrants(c.brokerGrants))
+	}
+	// Requests waiting on the approver device, listed (never decided) in
+	// /inbox (agent-administered design §9.2a item 3). Read at call time.
+	if c.repos != nil && c.repos.ApproverDevices != nil {
+		uiOpts = append(uiOpts, ui.WithAgentApprovals(func(ctx context.Context) ([]persistence.AgentApprovalRequestRow, error) {
+			return c.approverDeviceService().ListPending(ctx)
+		}))
 	}
 	// /ui/admin/agents (agent-administered Vornik plan P6.5).
 	if v := c.agentsView(); v != nil {

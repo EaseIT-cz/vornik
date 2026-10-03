@@ -35,7 +35,7 @@ func TestNavAreaForPage(t *testing.T) {
 		"executions":   "orchestration", // restored as a dest with the cross-task Executions list (IA completion)
 		"memory":       "memory",
 		"reminders":    "memory",
-		"integrations": "integrations",
+		"integrations": "admin", // moved beside Control plane, 2026-10-03 (operator: declutter)
 		"spend":        "insight",
 		"trading":      "insight",
 		"audit":        "insight",
@@ -61,7 +61,7 @@ func TestNavAreaForPage(t *testing.T) {
 func TestNavModelContract(t *testing.T) {
 	m := navModel()
 	// Areas in display order.
-	wantAreas := []string{"steer", "orchestration", "memory", "integrations", "insight", "admin"}
+	wantAreas := []string{"steer", "orchestration", "memory", "insight", "admin"}
 	if len(m) != len(wantAreas) {
 		t.Fatalf("navModel has %d areas, want %d", len(m), len(wantAreas))
 	}
@@ -353,5 +353,44 @@ func TestNavAreaDef_MobileLabelFallsBackToLabel(t *testing.T) {
 	a = navAreaDef{Label: "Orchestration", Short: "Tasks"}
 	if got := a.MobileLabel(); got != "Tasks" {
 		t.Errorf("MobileLabel() = %q, want the Short override %q", got, "Tasks")
+	}
+}
+
+// TestNav_IntegrationsLivesBesideControlPlane pins the 2026-10-03 move
+// (operator: "move integrations from the connect menu to control plane, to
+// declutter navigation"). The Integrations destination leaves its own
+// one-entry top-level area (the rail's "Integrations", the mobile bar's
+// "Connect") and sits in the Admin area directly after Control plane. The
+// URL is unchanged; only the grouping moves.
+func TestNav_IntegrationsLivesBesideControlPlane(t *testing.T) {
+	m := navModel()
+	for _, a := range m {
+		if a.Key == "integrations" || a.MobileLabel() == "Connect" {
+			t.Errorf("the Connect/Integrations area still exists (%q) — it should be gone", a.Key)
+		}
+	}
+	area := navDestArea(t, "integrations")
+	if area.Key != "admin" {
+		t.Fatalf("Integrations is in the %q area, want %q (beside Control plane)", area.Key, "admin")
+	}
+	if cp := navDestArea(t, "admin-control-plane"); cp.Key != area.Key {
+		t.Errorf("Control plane is in %q but Integrations is in %q", cp.Key, area.Key)
+	}
+	for i, d := range area.Dests {
+		if d.Key != "admin-control-plane" {
+			continue
+		}
+		if i+1 >= len(area.Dests) || area.Dests[i+1].Key != "integrations" {
+			t.Errorf("Integrations must directly follow Control plane in the Admin panel")
+		}
+	}
+	d := navDestByKey(t, "integrations")
+	if d.Href != "/ui/integrations" || d.Label != "Integrations" || d.Icon != "navIconIntegrations" {
+		t.Errorf("integrations dest mis-wired: %+v", d)
+	}
+	// Not dest-flagged: the catalog is scope-filtered for project users
+	// (integrations-hub-design §5.8), so the area gate alone decides.
+	if d.AdminOnly {
+		t.Error("integrations dest must not be AdminOnly; the hub's scope filter is the gate")
 	}
 }

@@ -1,0 +1,17 @@
+{{define "standing.html"}}{{template "head" (page "Standing approvals" 0)}}
+<nav><a href="/ui/approve/">Approvals</a><a href="/ui/approve/standing" aria-current="page">Standing approvals</a><a href="/ui/approve/devices">Devices</a></nav>
+<h1>Standing approvals</h1>
+{{with .Flash}}<p class="flash">Done: {{.}}.</p>{{end}}
+<p class="mut">Writes a standing approval covers are sent without showing you their text. Pause or revoke takes effect on the next write; a write already being sent completes.</p>
+{{range .Grants}}<div class="card">
+<p><strong>{{.Workflow}}: {{.Action}}</strong> to {{.Key}} <span class="mut">({{.Namespace}})</span></p>
+<p class="mut">{{.State}}. {{.UsesLeft}} of {{.MaxUses}} uses left. Ends {{when .ExpiresAt}} (UTC).</p>
+{{if eq .State "active"}}<form method="post" action="/ui/approve/standing/{{.ID}}/pause"><button type="submit">Pause</button></form>
+{{else if eq .State "paused"}}<form method="post" action="/ui/approve/standing/{{.ID}}/unpause"><button class="ok" type="submit">Resume</button></form>
+{{else if eq .State "suspended"}}<p>The workflow changed what it can reach after you approved this. Confirm to keep it.</p>
+<form method="post" action="/ui/approve/standing/{{.ID}}/confirm"><button class="ok" type="submit">Confirm</button></form>{{end}}
+{{if or (eq .State "active") (eq .State "paused") (eq .State "suspended")}}<form method="post" action="/ui/approve/standing/{{.ID}}/revoke"><button class="no" type="submit">Revoke</button></form>{{end}}
+{{with .Covered}}<details><summary class="mut">Writes it approved</summary><ul>{{range .}}<li>{{.ActionID}}: {{.Status}}, {{when .At}}</li>{{end}}</ul></details>{{end}}
+</div>
+{{else}}<div class="card"><p class="mut">No standing approvals.</p></div>{{end}}
+{{template "foot"}}{{end}}

@@ -1,5 +1,5 @@
 name: vornik-companion
-version: 0.4.0
+version: 0.11.0
 requires_hermes: ">=0.21.5"
 manifest_version: 2
 # Declared, not inferred: Hermes classifies an undeclared plugin whose
@@ -14,6 +14,31 @@ description: >-
   no credentials: work that touches mail, calendar, documents or accounts is
   delegated to operator-authored broker workflows on a Vornik daemon, which
   return a bounded, schema-validated result instead of raw access.
+  0.11.0 — the vornik-admin skill says how to hand a workflow a document
+  (an x-untrusted-document input, read by the role from artifacts/in).
+  0.10.0 — the vornik-admin skill says that a client refusing a field
+  describe_installation lists holds the tool list from before a change,
+  and to ask the user to reconnect Vornik in the client.
+  0.9.0 — the vornik-admin skill says a role may name a model from the
+  catalogue describe_installation lists; a local one applies at once, a
+  remote one is approved on the phone once per destination (provider and
+  host).
+  0.8.0 — forgetting reaches Vornik: an entry removed from (or replaced in)
+  Hermes's own memory is refuted in Vornik too, found by an identity token
+  the mirror now writes on every note (never shown to the model or the user);
+  /vornik-memory lists what Vornik keeps and /vornik-forget <id> forgets one.
+  Refuting stops recall; the record stays until retention or the operator
+  erases it.
+  0.7.0 — the Vornik approval transport: with `hermes vornik approvals on`,
+  Hermes's own safety prompts (a flagged rm -rf, a force-push) are answered
+  on the user's paired phone (allow once, allow for this session, or deny)
+  through vornikctl agent host-approval. Hermes still decides and enforces;
+  any failure, Vornik being down included, is a deny. Inert until selected.
+  0.6.0 —the vornik-admin skill says to prefer a recipe when one fits
+  (list_recipes, install_recipe: a tested workflow installed as one change
+  the user approves once); author a workflow only when none does.
+  0.5.0 — the vornik-admin skill says to build teams: a project is a domain,
+  a workflow a capability, the swarm a team of roles with their own tools.
   0.4.0 — ready for Hermes's plugin catalog: `hermes vornik connect` runs
   vornikctl agent connect hermes (it never installs anything) and
   `hermes vornik status` shows what is configured; VORNIK_URL and both tokens

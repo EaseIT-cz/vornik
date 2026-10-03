@@ -455,7 +455,7 @@ func (c AuthConfig) serveAuthEnabled(w http.ResponseWriter, r *http.Request, nex
 		if enforceKeyRateLimit(w, c.APIKeyLimiter, c.RateLimitMetrics, dbRow) {
 			return
 		}
-		if dbRow.ClientKind != "" && !isCompanionAllowedPath(r.URL.Path) {
+		if dbRow.ClientKind != "" && !isCompanionAllowedPathFor(dbRow, r.URL.Path) {
 			respondError(w, http.StatusForbidden, "FORBIDDEN",
 				"companion API keys may only use /api/v1/mcp/companion")
 			return

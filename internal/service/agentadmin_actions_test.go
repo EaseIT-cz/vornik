@@ -200,3 +200,42 @@ func TestActionCaller_ScansAtSend(t *testing.T) {
 		t.Fatal("something was sent")
 	}
 }
+
+// Approval fatigue tier 1 (broker write-actions design, review 5c20,
+// 2026-10-03): the writes one task drafted are filed as one group, described
+// for the page, so the person reviews them together. One task holds at most
+// one write per action kind (unique (task_id, action_kind)), so the group is
+// the workflow's action across runs.
+func TestAgentAdmin_AWorkflowsWritesAreOneGroup(t *testing.T) {
+	f := newAgentAdminFixtureWith(t, func(cfg *config.Config) { cfg.Broker.Writes = "on" })
+	ctx := context.Background()
+	const project = "hermes--comms"
+	now := time.Now().UTC()
+	for _, id := range []string{"ga_1", "ga_2", "ga_3"} {
+		args := `{"to":"` + id + `@b.example"}`
+		sum, _ := approval.CanonicalSHA256([]byte(args))
+		if _, err := f.c.repos.BrokerActions.Stage(ctx, &persistence.BrokerAction{ActionID: id, ProjectID: project, TaskID: "task_" + id,
+			WorkflowID: project + "--reply", ActionKind: "send_mail", Tool: "mcp__mail-write__send", ArgsJSON: []byte(args), ArgsSHA256: sum,
+			Status: persistence.BrokerActionStaged, CreatedAt: now, ExpiresAt: now.Add(time.Hour)}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, id := range []string{"ga_1", "ga_2", "ga_3"} {
+		if _, err := f.c.repos.BrokerActions.PromoteStaged(ctx, "task_"+id); err != nil {
+			t.Fatal(err)
+		}
+		f.c.notifyBrokerActionsPending(ctx, project, "task_"+id, 1)
+	}
+	group := ""
+	for _, id := range []string{"ga_1", "ga_2", "ga_3"} {
+		req := actionRequest(t, f, id)
+		d := f.c.approverDeviceService().Describe(*req)
+		if d == nil || d.Group == "" || d.Level != agentadmin.LevelHigh || !strings.Contains(d.GroupTitle, "send mail") {
+			t.Fatalf("%s: description %+v", id, d)
+		}
+		if group != "" && d.Group != group {
+			t.Fatalf("one task's writes in two groups: %s and %s", group, d.Group)
+		}
+		group = d.Group
+	}
+}

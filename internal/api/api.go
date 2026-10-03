@@ -609,6 +609,9 @@ type Server struct {
 	daemonHost *DaemonHost
 	// approverDevices lets the agent admin grant refuse with no device.
 	approverDevices persistence.ApproverDeviceRepository
+	// hostApprovals files and reads Hermes approval requests (Hermes
+	// approval transport design §4.3).
+	hostApprovals HostApprovals
 	// agentGrants backs the agent tool gate (N4 for agent projects), with
 	// its examined/refused denominator.
 	agentGrants     persistence.AgentGrantRepository

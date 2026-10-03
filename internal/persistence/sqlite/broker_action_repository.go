@@ -146,10 +146,43 @@ func (r *BrokerActionRepository) Finish(ctx context.Context, actionID, status, o
 	default:
 		return fmt.Errorf("sqlite: broker action Finish: invalid target status %q", status)
 	}
-	return transitionErr(r.db.ExecContext(ctx, `
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+	if err := transitionErr(tx.ExecContext(ctx, `
 		UPDATE broker_actions SET status = ?, outcome_class = ?, outcome_json = ?, executed_at = ?
 		WHERE action_id = ? AND status = 'executing'`,
-		status, outcomeClass, outcome, sqliteTime(now), actionID))
+		status, outcomeClass, outcome, sqliteTime(now), actionID)); err != nil {
+		return err
+	}
+	if err := refundStandingUse(ctx, tx, actionID, status, outcomeClass); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+// refundStandingUse returns a covered action's use to its grant when the
+// worker's own transition to failed/pre_send_error just affected the row
+// (nothing left Vornik): broker write-actions design, tier 2 revised item 5,
+// round 4 F2. It runs in that transition's transaction and only after it,
+// so a retried terminal write (no transition) refunds nothing, and never
+// above max_uses (review 61a5 F2).
+func refundStandingUse(ctx context.Context, tx *sql.Tx, actionID, status, outcomeClass string) error {
+	if status != persistence.BrokerActionFailed || outcomeClass != persistence.BrokerOutcomePreSendError {
+		return nil
+	}
+	var approver sql.NullString
+	if err := tx.QueryRowContext(ctx, `SELECT approver FROM broker_actions WHERE action_id = ?`, actionID).Scan(&approver); err != nil {
+		return err
+	}
+	grant := persistence.BrokerGrantIDOfApprover(approver.String)
+	if grant == "" {
+		return nil
+	}
+	_, err := tx.ExecContext(ctx, `UPDATE broker_standing_grants SET uses_left = uses_left + 1 WHERE id = ? AND uses_left < max_uses`, grant)
+	return err
 }
 
 // Resolve implements persistence.BrokerActionRepository.

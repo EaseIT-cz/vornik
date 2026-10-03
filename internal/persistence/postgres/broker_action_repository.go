@@ -146,10 +146,50 @@ func (r *BrokerActionRepository) Finish(ctx context.Context, actionID, status, o
 	default:
 		return fmt.Errorf("postgres: broker action Finish: invalid target status %q", status)
 	}
-	return brokerTransitionErr(r.db.ExecContext(ctx, `
+	tx, ok, err := persistence.BeginTx(ctx, r.db, nil)
+	if err != nil {
+		return err
+	}
+	x := r.db
+	if ok {
+		defer func() { _ = tx.Rollback() }()
+		x = tx
+	}
+	if err := brokerTransitionErr(x.ExecContext(ctx, `
 		UPDATE broker_actions SET status = $1, outcome_class = $2, outcome_json = $3, executed_at = $4
 		WHERE action_id = $5 AND status = 'executing'`,
-		status, outcomeClass, outcome, now, actionID))
+		status, outcomeClass, outcome, now, actionID)); err != nil {
+		return err
+	}
+	if err := refundStandingUse(ctx, x, actionID, status, outcomeClass); err != nil {
+		return err
+	}
+	if ok {
+		return tx.Commit()
+	}
+	return nil
+}
+
+// refundStandingUse returns a covered action's use to its grant when the
+// worker's own transition to failed/pre_send_error just affected the row
+// (nothing left Vornik): broker write-actions design, tier 2 revised item 5,
+// round 4 F2. It runs in that transition's transaction and only after it,
+// so a retried terminal write (no transition) refunds nothing, and never
+// above max_uses (review 61a5 F2).
+func refundStandingUse(ctx context.Context, x persistence.DBTX, actionID, status, outcomeClass string) error {
+	if status != persistence.BrokerActionFailed || outcomeClass != persistence.BrokerOutcomePreSendError {
+		return nil
+	}
+	var approver sql.NullString
+	if err := x.QueryRowContext(ctx, `SELECT approver FROM broker_actions WHERE action_id = $1`, actionID).Scan(&approver); err != nil {
+		return err
+	}
+	grant := persistence.BrokerGrantIDOfApprover(approver.String)
+	if grant == "" {
+		return nil
+	}
+	_, err := x.ExecContext(ctx, `UPDATE broker_standing_grants SET uses_left = uses_left + 1 WHERE id = $1 AND uses_left < max_uses`, grant)
+	return err
 }
 
 // Resolve implements persistence.BrokerActionRepository.

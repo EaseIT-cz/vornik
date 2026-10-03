@@ -109,7 +109,23 @@ implementations has one that is wrong, and the wrong one is usually the newer.
 The same holds for the operator-facing tooling: prefer the shipped skills and
 `vornikctl` verbs over hand-rolled commands.
 
-## 6. Commit discipline
+## 6. Work as a team lead, and finish what is in hand
+
+- **Delegate first, never idle-wait.** Reviews, edge-case brainstorms,
+  critiques, summaries and research go to Vornik (the companion workflows or
+  your agent namespace's team) before you start your own part; keep one in
+  flight and read results between steps. Verify what comes back.
+- **Teams, not individuals.** A project is a domain, a workflow a capability,
+  the swarm a team of roles with distinct jobs, tools and models.
+- **Park side tasks.** An off-goal bug or task is filed (backlog, with
+  evidence) or handed to a parallel agent or Vornik task; only production
+  breakage or a blocker interrupts the goal. Keep an ordered in-flight list.
+- **Write every operator idea down at once** (backlog or design), so a
+  compaction cannot lose it.
+- **Recall the design every time you touch one**, at minimum, not once per
+  session.
+
+## 7. Commit discipline
 
 - `make lint` before every commit.
 - Stage the exact paths you changed. Never `git add -A` or `git add .` — other

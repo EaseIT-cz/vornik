@@ -192,12 +192,17 @@ func (m *MockTaskRepository) ReleaseLease(ctx context.Context, taskID, leaseID s
 	if opts.Error != "" {
 		task.LastError = &opts.Error
 	}
-	// Model the real column semantics: an EMPTY ErrorClass preserves whatever is already
-	// there (see ReleaseOptions.ErrorClass). A mock that ignored the field entirely could
-	// not catch the 2026-07-30 empty-class defect at all.
-	if opts.ErrorClass != "" {
+	// Model the real column semantics, as both drivers implement them: an EMPTY
+	// ErrorClass clears the column unless KeepErrorClass is set. This mock modelled
+	// "empty preserves" until 2026-10-03, which neither driver did, and so it hid the
+	// terminal release erasing the executor's class (permanent-failure design,
+	// amendment 2026-10-03). The repository suite pins the drivers to the same rule.
+	switch {
+	case opts.ErrorClass != "":
 		cls := opts.ErrorClass
 		task.LastErrorClass = &cls
+	case !opts.KeepErrorClass:
+		task.LastErrorClass = nil
 	}
 
 	return nil

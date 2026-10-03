@@ -25,6 +25,13 @@ type tree struct {
 	homes     map[string]bool
 	advert    map[string][]string
 	writesOff bool
+	// pending are filed, undecided changes: their locks hold and their
+	// AddsUSD feed the conditional ceiling figure, as lockPending does.
+	pending []Change
+	// models is the classified catalogue and destinations the namespace's
+	// approved model destinations (design §18.6 item 2).
+	models       map[string]CatalogueModel
+	destinations map[string]bool
 }
 
 func newTree(t *testing.T, ns string) *tree {
@@ -44,7 +51,15 @@ func (tr *tree) state() *State {
 		Namespace: tr.ns, DefaultBudgetUSD: 2, CeilingUSD: tr.ceiling, AgentImage: "ghcr.io/easeit-cz/vornik-agent:latest",
 		Projects: map[string]*ProjectState{}, Workflows: map[string]*WorkflowState{},
 		FileHashes: map[string]string{}, Locked: map[string]bool{}, Approvals: tr.approvals, Advertised: tr.advert,
-		WritesOn: !tr.writesOff,
+		WritesOn: !tr.writesOff, models: tr.models, ApprovedDestinations: tr.destinations,
+	}
+	for _, c := range tr.pending {
+		for _, l := range c.Locks {
+			st.Locked[l] = true
+		}
+		if c.Grant.AddsUSD != nil && *c.Grant.AddsUSD > 0 {
+			st.PendingAddsUSD += *c.Grant.AddsUSD
+		}
 	}
 	swarms := map[string]*registry.Swarm{}
 	for path, content := range tr.files {
@@ -113,6 +128,21 @@ func (tr *tree) apply(c Change) {
 			tr.t.Fatalf("read set: %s moved", path)
 		}
 	}
+	// The ceiling as the widening_change effect decides it (§18.4), against
+	// the tree before the ops.
+	newCeiling := tr.ceiling
+	if c.Class == Widening {
+		st := tr.state()
+		after, err := st.BudgetTotalAfter(c.Ops)
+		if err != nil {
+			tr.t.Fatal(err)
+		}
+		var ok bool
+		if newCeiling, ok = CeilingAfter(c.Grant, st.CeilingUSD, st.BudgetTotal(), after); !ok {
+			tr.t.Fatalf("applying %s: the sum $%v exceeds what its sentence stated", c.Verb, after)
+		}
+	}
+	tr.ceiling = newCeiling
 	for _, op := range c.Ops {
 		if op.Op == OpDelete {
 			delete(tr.files, op.Path)
@@ -129,13 +159,21 @@ func (tr *tree) apply(c Change) {
 	for id, h := range c.Grant.Workflows {
 		tr.reach[id] = h
 	}
-	if c.Grant.CeilingUSD != nil {
-		tr.ceiling = *c.Grant.CeilingUSD
+	for _, m := range c.Grant.Models {
+		if tr.destinations == nil {
+			tr.destinations = map[string]bool{}
+		}
+		tr.destinations[m.Destination] = true
 	}
 	for _, ref := range c.Narrow.RemovedIntegrations {
 		a := tr.approvals[ref.Project][ref.Name]
 		a.Removed = true
 		tr.approvals[ref.Project][ref.Name] = a
+	}
+	for _, rm := range c.Narrow.RemovedTools {
+		a := tr.approvals[rm.Project][rm.Name]
+		a.Read = minus(a.Read, rm.Tools)
+		tr.approvals[rm.Project][rm.Name] = a
 	}
 }
 

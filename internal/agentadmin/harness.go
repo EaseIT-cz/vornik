@@ -20,6 +20,20 @@ func HarnessClassOf(clientKind string) string {
 	return HarnessShellCapable
 }
 
+// HarnessClaimsFor is a client kind's claims: its class's row, and for
+// Hermes the limit of the approval transport (Hermes approval transport
+// design §3): Vornik is the surface and the record of Hermes's own
+// approvals, not the gate.
+func HarnessClaimsFor(clientKind string) []string {
+	claims := HarnessClaims(HarnessClassOf(clientKind))
+	if clientKind == "hermes" {
+		claims = append(claims, "Not held by Vornik: when the user answers Hermes's own safety prompts on their phone "+
+			"(hermes vornik approvals on), Vornik shows Hermes's text and records the device's answer, but it cannot make Hermes obey; "+
+			"Hermes enforces it, and a modified Hermes, or one with the transport deselected, ignores the phone.")
+	}
+	return claims
+}
+
 // HarnessClaims is §3's row for a class, in plain words.
 func HarnessClaims(class string) []string {
 	if class == HarnessMCPOnly {

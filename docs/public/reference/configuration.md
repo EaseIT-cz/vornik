@@ -539,6 +539,9 @@ vornik reads its configuration from `config.yaml`. The keys below are the custom
 |---|---|---|---|
 | `broker.writes` | string | Broker write-action mode: off (default; delegating a workflow that proposes writes is refused and nothing approved executes) or on (writes execute after approval in /inbox, each also gated by its MCP server's broker_write declaration). | — |
 | `broker.action_timeout` | string | Bound on one approved write's tool call (default 60s, at most 10m). A call that times out is recorded as unknown, never retried. | — |
+| `broker.standing_grants.max_days` | int | Longest standing grant a person may set, in days (default and ceiling 7). | — |
+| `broker.standing_grants.max_uses` | int | Most writes one standing grant may cover (default and ceiling 20). | — |
+| `broker.standing_grants.max_live_per_project` | int | Most live standing grants per project (default and ceiling 10). | — |
 
 ## agent_admin
 
@@ -548,6 +551,7 @@ vornik reads its configuration from `config.yaml`. The keys below are the custom
 | `agent_admin.default_project_budget_usd` | float | Monthly budget of a project an agent creates (default 2). Raising a project's budget needs approval on an approver device. | — |
 | `agent_admin.namespace_budget_usd` | float | Ceiling on the sum of an agent's project budgets until a device approves more (default 10). | — |
 | `agent_admin.agent_image` | string | Runtime image of the roles an agent defines (default the standard agent image). | — |
+| `agent_admin.models` | list | Models an agent's roles may choose (empty, the default: none; every agent role runs on the global agent model). Whether each is local or remote is computed from where the chat router sends it: local only for an HTTP endpoint on a loopback or private address. A role on a remote model needs approval on an approver device, once per destination (sub-provider and endpoint host). Entries served by a command-line provider, with no route, or remote without an exact pricing.yaml entry are not offered; vornikctl doctor names them (agent_model_catalogue). | — |
 
 ## gateway
 

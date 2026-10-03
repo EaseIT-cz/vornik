@@ -31,8 +31,13 @@ func ProjectStateFrom(p *registry.Project, sw *registry.Swarm) *ProjectState {
 	if sw != nil {
 		for _, r := range sw.Roles {
 			ps.Swarm.Roles = append(ps.Swarm.Roles, RoleSpec{
-				Name: r.Name, Description: r.Description,
+				// The instructions too (§18.11): without them, every verb that
+				// re-renders the swarm wrote each role back with no text.
+				Name: r.Name, Description: r.Description, Instructions: r.SystemPrompt,
 				Tools: append([]string(nil), r.Permissions.AllowedTools...),
+				// The model too (design §18.6 item 2, Change 8): a re-render
+				// writes the role back on the model it runs on.
+				Model: r.Model,
 			})
 		}
 	}

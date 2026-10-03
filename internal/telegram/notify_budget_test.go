@@ -113,3 +113,24 @@ func TestNotifyBudgetBreach_UnknownPeriod(t *testing.T) {
 		t.Errorf("expected 1 call for unknown period; got %d", len(*calls))
 	}
 }
+
+// Agent-administered design §18.15 (operator, 2026-10-03): the hard-cap alert
+// told the operator to "bump the cap in the project YAML" for an agent
+// project, whose file the renderer owns; the route there is the agent's
+// set_budget, approved on the phone.
+func TestNotifyBudgetBreach_AgentProjectNamesSetBudget(t *testing.T) {
+	bot, calls, cleanup := makeAutopilotBot(t)
+	defer cleanup()
+	bot.config.AllowedUsers = map[int64]UserAccess{111: {Allowed: true, Projects: []string{"*"}}}
+	bot.NotifyBudgetBreach(context.Background(), "claudecode--engineering", "hard", "monthly", budget.Decision{MonthlyUSD: 1.03})
+	if len(*calls) != 1 {
+		t.Fatalf("expected 1 call; got %d", len(*calls))
+	}
+	body := (*calls)[0].Body
+	if strings.Contains(body, "project YAML") {
+		t.Errorf("an agent project's alert must not send the operator to the YAML: %q", body)
+	}
+	if !strings.Contains(body, "set_budget") {
+		t.Errorf("expected the set_budget route; got %q", body)
+	}
+}

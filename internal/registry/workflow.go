@@ -1820,3 +1820,20 @@ func findSwarmRole(swarm *Swarm, name string) *SwarmRole {
 	}
 	return nil
 }
+
+// AnswerSteps returns, sorted, the steps whose on_success is a terminal: the
+// steps that can end a run, and so the ones that write a broker workflow's
+// answer. A workflow define_workflow renders is a linear chain with exactly
+// one; an operator workflow may branch and have several. The agent step
+// template and the broker task prompt both take "the last step" from here
+// (agent-administered design §18.10), so they cannot disagree.
+func (w *Workflow) AnswerSteps() []string {
+	out := []string{}
+	for name, st := range w.Steps {
+		if _, ok := w.Terminals[st.OnSuccess]; ok {
+			out = append(out, name)
+		}
+	}
+	sort.Strings(out)
+	return out
+}

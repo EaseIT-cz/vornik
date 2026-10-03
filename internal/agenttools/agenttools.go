@@ -358,3 +358,14 @@ func UngatedPrefixMap() map[string]string {
 	}
 	return out
 }
+
+// EveryRole is every tool a role can call beyond the tools it declares: the
+// AlwaysGranted baseline and the tools exempt from the gate by design,
+// sorted. describe_installation states it (agent-administered design
+// §18.8), so an agent knows what its roles have.
+func EveryRole() []string {
+	out := AlwaysGranted()
+	out = append(out, ExemptNames()...)
+	sort.Strings(out)
+	return out
+}

@@ -35,6 +35,11 @@ func RunApproverDeviceSuite(t *testing.T, repo persistence.ApproverDeviceReposit
 	t.Run("Applied_and_expiry", func(t *testing.T) { approverAppliedAndExpiry(t, newApproverHarness(t, fresh)) })
 	t.Run("ClaimApply_is_one_holder_at_a_time", func(t *testing.T) { approverClaimApply(t, newApproverHarness(t, fresh)) })
 	t.Run("Broker_action_requests_store", func(t *testing.T) { approverBrokerActionKind(t, newApproverHarness(t, fresh)) })
+	// Hermes approval transport design §4.1, §4.2, §4.4.
+	t.Run("Host_action_decision_records_its_choice", func(t *testing.T) { approverHostActionChoice(t, newApproverHarness(t, fresh)) })
+	t.Run("CreateRequestCapped_bounds_pending_and_recent", func(t *testing.T) { approverCappedCreate(t, newApproverHarness(t, fresh)) })
+	t.Run("CreateRequestCapped_two_concurrent_at_the_limit", func(t *testing.T) { approverCappedCreateConcurrent(t, newApproverHarness(t, fresh)) })
+	t.Run("ExpirePendingRows_returns_what_it_expired", func(t *testing.T) { approverExpirePendingRows(t, newApproverHarness(t, fresh)) })
 }
 
 // approverBrokerActionKind: plan P4.8's broker_action kind is accepted on

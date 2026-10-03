@@ -11,6 +11,7 @@ import (
 	"vornik.io/vornik/internal/chat"
 	"vornik.io/vornik/internal/persistence"
 	"vornik.io/vornik/internal/persistence/sqlite"
+	"vornik.io/vornik/internal/registry"
 )
 
 // fakeDistillLLM satisfies chat.Provider by embedding it (nil) and
@@ -84,6 +85,7 @@ func TestMaybeDistillSkill_ProposesDraft(t *testing.T) {
 		logger:       zerolog.Nop(),
 	}
 	task := &persistence.Task{ID: "task-1", ProjectID: "p1", Payload: []byte(`{"prompt":"debug the hang"}`)}
+	ordinaryDistill(e)
 	e.maybeDistillSkill(context.Background(), task, "result text")
 
 	drafts, _ := repo.ListDrafts(context.Background(), 0)
@@ -100,6 +102,7 @@ func TestMaybeDistillSkill_SkipAndDedup(t *testing.T) {
 	ctx := context.Background()
 	// Model says skip → no draft.
 	e := &Executor{skillRepo: repo, distillerLLM: fakeDistillLLM{content: `{"skip":true}`}, logger: zerolog.Nop()}
+	ordinaryDistill(e)
 	e.maybeDistillSkill(ctx, &persistence.Task{ID: "t", ProjectID: "p1", Payload: []byte(`{"prompt":"x"}`)}, "r")
 	if d, _ := repo.ListDrafts(ctx, 0); len(d) != 0 {
 		t.Fatalf("skip must propose nothing, got %+v", d)
@@ -112,6 +115,7 @@ func TestMaybeDistillSkill_SkipAndDedup(t *testing.T) {
 		t.Fatalf("seed: %v", err)
 	}
 	e2 := &Executor{skillRepo: repo, distillerLLM: fakeDistillLLM{content: `{"skip":false,"name":"dup-skill","description":"d","body":"b2"}`}, logger: zerolog.Nop()}
+	ordinaryDistill(e2)
 	e2.maybeDistillSkill(ctx, &persistence.Task{ID: "t2", ProjectID: "p1", Payload: []byte(`{"prompt":"y"}`)}, "r")
 	if d, _ := repo.ListDrafts(ctx, 0); len(d) != 0 {
 		t.Fatalf("dedup must skip the same-named skill, got %+v", d)
@@ -159,6 +163,7 @@ func TestMaybeDistillSkill_SkipsANearDuplicate(t *testing.T) {
 		distillerLLM: fakeDistillLLM{content: `{"skip":false,"name":"prague-restaurants-feed-refresh","description":"d","body":"b"}`},
 		logger:       zerolog.Nop(),
 	}
+	ordinaryDistill(e)
 	e.maybeDistillSkill(context.Background(), &persistence.Task{
 		ID: "t", ProjectID: "p1", Payload: []byte(`{"prompt":"x"}`)}, "r")
 
@@ -182,6 +187,7 @@ func TestMaybeDistillSkill_WritesWhenNothingIsSimilar(t *testing.T) {
 		distillerLLM: fakeDistillLLM{content: `{"skip":false,"name":"genuinely-new","description":"d","body":"b"}`},
 		logger:       zerolog.Nop(),
 	}
+	ordinaryDistill(e)
 	e.maybeDistillSkill(context.Background(), &persistence.Task{
 		ID: "t", ProjectID: "p1", Payload: []byte(`{"prompt":"x"}`)}, "r")
 
@@ -204,6 +210,7 @@ func TestMaybeDistillSkill_CheckerFailureDoesNotBlock(t *testing.T) {
 		distillerLLM: fakeDistillLLM{content: `{"skip":false,"name":"still-proposed","description":"d","body":"b"}`},
 		logger:       zerolog.Nop(),
 	}
+	ordinaryDistill(e)
 	e.maybeDistillSkill(context.Background(), &persistence.Task{
 		ID: "t", ProjectID: "p1", Payload: []byte(`{"prompt":"x"}`)}, "r")
 
@@ -221,9 +228,30 @@ func TestMaybeDistillSkill_NilCheckerKeepsExactNameDedup(t *testing.T) {
 		distillerLLM: fakeDistillLLM{content: `{"skip":false,"name":"no-checker","description":"d","body":"b"}`},
 		logger:       zerolog.Nop(),
 	}
+	ordinaryDistill(e)
 	e.maybeDistillSkill(context.Background(), &persistence.Task{
 		ID: "t", ProjectID: "p1", Payload: []byte(`{"prompt":"x"}`)}, "r")
 	if d, _ := repo.ListDrafts(context.Background(), 0); len(d) != 1 {
 		t.Fatalf("nil checker must not disable proposing; got %+v", d)
+	}
+}
+
+// completedTaskRepo answers every task as a COMPLETED row of project p1: the
+// distiller re-reads the row at entry (agent-administered design §18.9), and
+// the tests above are about what it does once that check passes. Only Get is
+// overridden; the distiller calls nothing else on the repository, and the
+// embedded mock would answer any other method with empty state.
+type completedTaskRepo struct{ *MockTaskRepo }
+
+func (completedTaskRepo) Get(_ context.Context, id string) (*persistence.Task, error) {
+	return &persistence.Task{ID: id, ProjectID: "p1", Status: persistence.TaskStatusCompleted}, nil
+}
+
+// ordinaryDistill wires e for an ordinary task on an ordinary project.
+func ordinaryDistill(e *Executor) {
+	e.taskRepo = completedTaskRepo{NewMockTaskRepo()}
+	e.workflows = &MockWorkflowResolver{
+		projects:  map[string]*registry.Project{"p1": {ID: "p1", DefaultWorkflowID: "plain"}},
+		workflows: map[string]*registry.Workflow{"plain": {ID: "plain"}},
 	}
 }

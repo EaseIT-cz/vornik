@@ -174,11 +174,13 @@ func (s *Server) CompanionMCPHandler(w http.ResponseWriter, r *http.Request) {
 				"version": companionMCPServerVersion,
 			},
 		}
-		// An agent admin key gets the admin guidance as instructions
-		// (agent-administered Vornik plan P6.3). A key that does not resolve
-		// gets the plain answer, as before.
-		if key, err := s.resolveCompanionKey(r); err == nil && s.agentAdminOffered(key) {
-			result["instructions"] = agentadmin.AdminGuidance()
+		// Instructions by key kind (agent-administered Vornik plan P6.3;
+		// companion guidance design §10). A key that does not resolve gets
+		// the plain answer, as before.
+		if key, err := s.resolveCompanionKey(r); err == nil {
+			if text := s.initializeInstructions(key); text != "" {
+				result["instructions"] = text
+			}
 		}
 		writeJSONRPCResult(w, req.ID, result)
 		return
@@ -1732,61 +1734,27 @@ func (s *Server) companionToolCatalog(ctx context.Context, key *persistence.APIK
 		}
 	}
 
-	// Resolved once: the derived network capability below is a property
-	// of (workflow, swarm), and every workflow in this catalogue runs on
-	// the project's swarm.
-	projectSwarm := s.projectRegistry.GetSwarm(project.SwarmID)
-
-	wfEntries := make([]map[string]any, 0, len(workflowIDs))
-	for _, wfID := range workflowIDs {
-		// Broker workflows run only in broker projects, and a broker
-		// project runs nothing else (broker design §4.3, §5.6).
-		if (s.brokerWorkflowOf(wfID) != nil) != project.Broker {
-			continue
+	var wfEntries []map[string]any
+	if s.agentAdminOffered(key) {
+		entries, err := s.agentCatalogEntries(ctx, key)
+		if err != nil {
+			return "", err
 		}
-		entry := map[string]any{"id": wfID}
-		if wf := s.projectRegistry.GetWorkflow(wfID); wf != nil {
-			if wf.Broker != nil {
-				entry["input_schema"] = wf.Broker.InputSchema
-				entry["egress_schema"] = wf.Broker.Egress.Schema
-				entry["egress_provenance"] = wf.Broker.Egress.EffectiveProvenance()
-				if proposes := brokerProposesCatalog(wf); proposes != nil {
-					entry["proposes"] = proposes
-				}
+		wfEntries = entries
+	} else {
+		// Resolved once: the derived network capability is a property of
+		// (workflow, swarm), and every workflow in this catalogue runs on
+		// the project's swarm.
+		projectSwarm := s.projectRegistry.GetSwarm(project.SwarmID)
+		wfEntries = make([]map[string]any, 0, len(workflowIDs))
+		for _, wfID := range workflowIDs {
+			// Broker workflows run only in broker projects, and a broker
+			// project runs nothing else (broker design §4.3, §5.6).
+			if (s.brokerWorkflowOf(wfID) != nil) != project.Broker {
+				continue
 			}
-			entry["display_name"] = wf.DisplayName
-			entry["description"] = wf.Description
-			// Derived network capability, published NEXT TO the
-			// description so the two cannot disagree silently
-			// (unreachable-work guard design §4.3). Correcting a
-			// description is a one-time act; this line is the ongoing
-			// protection against one re-acquiring a browsing promise,
-			// because the promise is then visibly contradicted by the
-			// field beneath it. Always emitted — an absent field would
-			// read as "unknown", and the whole point is that the model
-			// chooses on this.
-			if registry.WorkflowIsNetworkIncapable(wf, projectSwarm) {
-				entry["network_access"] = "none"
-				entry["network_access_note"] = "This workflow cannot fetch URLs or browse: " + blessedFetchPath
-			} else {
-				entry["network_access"] = "possible"
-			}
-			// Surface the artifact-only contract so clients know to
-			// stage inputArtifacts before delegating (2026-06-05
-			// rag-ingest incident). Only emitted when set, keeping
-			// the entry lean for the common case.
-			if wf.RequireInputArtifacts {
-				entry["require_input_artifacts"] = true
-			}
+			wfEntries = append(wfEntries, s.catalogEntry(ctx, key.ProjectID, projectSwarm, wfID))
 		}
-		// cost_estimate per workflow (LLD-21 § "catalog returns ...
-		// cost estimate" / drift-mitigation §8.2). Historical mean
-		// per-task spend; omitted when there's no prior-run sample so
-		// the client doesn't read a $0 as "free".
-		if est := s.estimateWorkflowCost(ctx, key.ProjectID, wfID); est != nil {
-			entry["cost_estimate"] = est
-		}
-		wfEntries = append(wfEntries, entry)
 	}
 
 	out := map[string]any{
@@ -1818,6 +1786,80 @@ func (s *Server) companionToolCatalog(ctx context.Context, key *persistence.APIK
 	}
 	b, _ := json.MarshalIndent(out, "", "  ")
 	return string(b), nil
+}
+
+// catalogEntry is one workflow's catalog entry, as run in projectID on swarm.
+func (s *Server) catalogEntry(ctx context.Context, projectID string, projectSwarm *registry.Swarm, wfID string) map[string]any {
+	entry := map[string]any{"id": wfID}
+	if wf := s.projectRegistry.GetWorkflow(wfID); wf != nil {
+		if wf.Broker != nil {
+			entry["input_schema"] = wf.Broker.InputSchema
+			entry["egress_schema"] = wf.Broker.Egress.Schema
+			entry["egress_provenance"] = wf.Broker.Egress.EffectiveProvenance()
+			if proposes := brokerProposesCatalog(wf); proposes != nil {
+				entry["proposes"] = proposes
+			}
+		}
+		entry["display_name"] = wf.DisplayName
+		entry["description"] = wf.Description
+		// Derived network capability, published NEXT TO the
+		// description so the two cannot disagree silently
+		// (unreachable-work guard design §4.3). Correcting a
+		// description is a one-time act; this line is the ongoing
+		// protection against one re-acquiring a browsing promise,
+		// because the promise is then visibly contradicted by the
+		// field beneath it. Always emitted — an absent field would
+		// read as "unknown", and the whole point is that the model
+		// chooses on this.
+		if registry.WorkflowIsNetworkIncapable(wf, projectSwarm) {
+			entry["network_access"] = "none"
+			entry["network_access_note"] = "This workflow cannot fetch URLs or browse: " + blessedFetchPath
+		} else {
+			entry["network_access"] = "possible"
+		}
+		// Surface the artifact-only contract so clients know to
+		// stage inputArtifacts before delegating (2026-06-05
+		// rag-ingest incident). Only emitted when set, keeping
+		// the entry lean for the common case.
+		if wf.RequireInputArtifacts {
+			entry["require_input_artifacts"] = true
+		}
+	}
+	// cost_estimate per workflow (LLD-21 § "catalog returns ...
+	// cost estimate" / drift-mitigation §8.2). Historical mean
+	// per-task spend; omitted when there's no prior-run sample so
+	// the client doesn't read a $0 as "free".
+	if est := s.estimateWorkflowCost(ctx, projectID, wfID); est != nil {
+		entry["cost_estimate"] = est
+	}
+	return entry
+}
+
+// agentCatalogEntries is catalog for an agent admin key (design §18.3): every
+// approved workflow of the key's namespace, each with the project it runs in.
+// Approval is the admin service's (list_my_setup's) answer; membership is
+// re-checked here, so nothing of another namespace is listed even if that
+// answer named it.
+func (s *Server) agentCatalogEntries(ctx context.Context, key *persistence.APIKey) ([]map[string]any, error) {
+	ids, err := s.agentAdmin.ApprovedWorkflows(ctx, key)
+	if err != nil {
+		return nil, fmt.Errorf("catalog: %w", err)
+	}
+	entries := make([]map[string]any, 0, len(ids))
+	for _, wfID := range ids {
+		owner := agentadmin.ProjectOfWorkflow(wfID)
+		if owner == "" || !keyCoversProject(key, owner) {
+			continue
+		}
+		project := s.projectRegistry.GetProject(owner)
+		if project == nil || !project.Broker || s.brokerWorkflowOf(wfID) == nil {
+			continue
+		}
+		entry := s.catalogEntry(ctx, owner, s.projectRegistry.GetSwarm(project.SwarmID), wfID)
+		entry["project"] = owner
+		entries = append(entries, entry)
+	}
+	return entries, nil
 }
 
 // ---- tool: report_problem -------------------------------------------

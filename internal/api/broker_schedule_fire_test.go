@@ -133,3 +133,32 @@ func TestFireScheduledBroker_Refusals(t *testing.T) {
 	_, err = broker.FireScheduledBroker(context.Background(), "mail-digest", "sched:x")
 	require.Error(t, err, "an operator workflow, which has no schedule, was fired")
 }
+
+// setupIncompleteErr is the agent verifier's credential-completeness refusal
+// as the API sees it: an error carrying its failure class.
+type setupIncompleteErr struct{}
+
+func (setupIncompleteErr) Error() string {
+	return "SETUP_INCOMPLETE: enter MAIL_TOKEN on your phone; the workflow hermes--fin--digest cannot run until it is set"
+}
+func (setupIncompleteErr) FailureClass() string { return persistence.TaskFailureClassSetupIncomplete }
+
+// Design §19.8 F4: a scheduled slot of a workflow whose credential is not
+// set is skipped as setup_incomplete, its own kind, and creates nothing;
+// delegate refuses it naming the credential.
+func TestFireScheduledBroker_SetupIncomplete(t *testing.T) {
+	reg := seedScheduledRegistry(t, "previous")
+	srv, keys, tasks := newScheduleServer(t, reg)
+	srv.taskCreator = taskcreate.New(taskcreate.WithTaskRepository(tasks), taskcreate.WithProjectRegistry(reg),
+		taskcreate.WithReachVerifier(func(context.Context, string, string) error { return setupIncompleteErr{} }))
+	_, err := srv.FireScheduledBroker(context.Background(), "hermes--fin--digest", "sched:x")
+	require.True(t, errors.Is(err, brokerschedule.ErrSetupIncomplete), "%v", err)
+	require.Equal(t, 0, tasks.CallCount.Create)
+
+	key := &persistence.APIKey{ID: "akey-h", ProjectID: "hermes--home", Name: "hermes", KeyHash: "h", KeyPrefix: "sk-vornik-hermes",
+		ClientKind: "hermes", CreatedAt: time.Now(), AgentAdmin: true, AgentNamespace: "hermes"}
+	require.NoError(t, keys.Create(context.Background(), key))
+	_, err = srv.companionBrokerDelegate(context.Background(), key, delegateArgs{Workflow: "hermes--fin--digest"}, json.RawMessage(`{"month":"previous"}`))
+	require.Error(t, err)
+	require.True(t, strings.HasPrefix(err.Error(), "SETUP_INCOMPLETE: enter MAIL_TOKEN on your phone"), "%v", err)
+}

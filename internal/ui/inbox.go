@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"sort"
+	"strings"
 	"time"
 
 	"vornik.io/vornik/internal/api"
@@ -103,6 +104,15 @@ type InboxData struct {
 	// design §5.3): each card shows the complete arguments, and approve binds
 	// to their hash. Empty when the store is unwired or nothing is pending.
 	BrokerActions []brokerActionCard
+	// BrokerRefused names the writes a batch decision could not decide
+	// (changed since shown, or already decided), from the redirect.
+	BrokerRefused []string
+	// StandingGrants are operator projects' standing approvals (broker
+	// write-actions design, tier 2 item 8).
+	StandingGrants []standingCard
+	// AgentApprovals wait on the approver device; listed with a link, never
+	// decided here (agent-administered design §9.2a item 3).
+	AgentApprovals []agentApprovalCard
 }
 
 // NavAttentionCount implements navAttentionCounter (nav_model.go) so the
@@ -436,6 +446,11 @@ func (s *Server) Inbox(w http.ResponseWriter, r *http.Request) {
 	// is wired regardless of taskRepo.
 	data.WebWrites = s.loadPendingWebWrites(r)
 	data.BrokerActions = s.loadPendingBrokerActions(r)
+	data.StandingGrants = s.loadStandingGrants(r)
+	data.AgentApprovals = s.loadAgentApprovals(r)
+	if v := strings.TrimSpace(r.URL.Query().Get("refused")); v != "" {
+		data.BrokerRefused = strings.Split(v, ",")
+	}
 
 	// Rank by urgency, then oldest-first within a category.
 	sort.SliceStable(data.Items, func(i, j int) bool {
@@ -448,7 +463,7 @@ func (s *Server) Inbox(w http.ResponseWriter, r *http.Request) {
 	// pending web-write approvals (both are things a human is blocked on).
 	// The informational "Retrying…" rows render in the queue but are excluded
 	// — nothing is blocked on them, so they must not inflate the badge.
-	data.Count = countActionableItems(data.Items) + len(data.WebWrites) + len(data.BrokerActions)
+	data.Count = countActionableItems(data.Items) + len(data.WebWrites) + len(data.BrokerActions) + len(data.AgentApprovals)
 
 	// vornik_ui_inbox_views_total{role} (design §5.8) — every inbox
 	// render, regardless of whether taskRepo is wired (a view is a

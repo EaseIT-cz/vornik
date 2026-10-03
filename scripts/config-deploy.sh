@@ -79,9 +79,12 @@ refuse_unsafe_dest_path() {
 #                     in .templates/.stamp (absent = unstamped, untrustworthy)
 #   .origin/<rel>     the template as it stood when the deployed file was
 #                     CREATED (or, for a pre-existing file IDENTICAL to the
-#                     template being installed, seeded from it). Write-once;
-#                     .origin/.index records rel, the deployed file's hash as
-#                     created, the revision, the date, and created|seeded.
+#                     template being installed, seeded from it). Write-once,
+#                     except in a canonical directory, where slice H rewrites
+#                     it when the installer replaces an untouched file or
+#                     finds the file already equal to the template;
+#                     .origin/.index records rel, the deployed file's hash,
+#                     the revision, the date, and created|seeded|updated.
 TEMPLATES="$DEST/.templates"
 ORIGIN="$DEST/.origin"
 ORIGIN_INDEX="$ORIGIN/.index"
@@ -97,11 +100,13 @@ touch "$ORIGIN_INDEX"
 # template hashes like the template. sha256sum (GNU, BusyBox) or shasum -a 256
 # (macOS). With NEITHER, .origin is not written at all: an empty hash would make
 # every file look identical to its template and seed a wrong, write-once origin.
+HAVE_HASH=1
 if command -v sha256sum >/dev/null 2>&1; then
 	norm_hash() { tr -d '\r' < "$1" | sha256sum | cut -d' ' -f1; }
 elif command -v shasum >/dev/null 2>&1; then
 	norm_hash() { tr -d '\r' < "$1" | shasum -a 256 | cut -d' ' -f1; }
 else
+	HAVE_HASH=0
 	norm_hash() { return 1; }
 	echo "WARN: config-deploy: no sha256 tool; .origin baselines not written (config_template_drift will report the vague form)" >&2
 fi
@@ -117,7 +122,7 @@ record_template() {
 
 origin_has() { awk -F'\t' -v r="$1" '$1 == r { found = 1 } END { exit found ? 0 : 1 }' "$ORIGIN_INDEX"; }
 
-# write_origin <rel> <src> <deployed> <created|seeded> — record where a deployed
+# write_origin <rel> <src> <deployed> <created|seeded|updated> — record where a deployed
 # file came from. Replaces any entry for rel (a created file is new).
 write_origin() {
 	local rel="$1" src="$2" deployed="$3" how="$4" tmp hash
@@ -137,15 +142,76 @@ write_origin() {
 # .removed are rewritten in place, not strictly appended).
 replace_file() { mv -f "$1" "$2"; }
 
-# deploy_one <rel> <src> <dest> — copy if absent (preserve-existing), and keep
-# both baselines. .origin: on CREATE, or seeded on a preserve-existing hit when
-# no entry exists and the deployed file is identical to this template (it IS
-# this template now, so the entry is true). A diverged file gets none — its
-# origin is unknowable, and the check reports it as permanently vague.
+# origin_hash <rel> — the hash .origin recorded for rel, or "".
+origin_hash() { awk -F'\t' -v r="$1" '$1 == r { h = $2 } END { print h }' "$ORIGIN_INDEX"; }
+
+# origin_revision <rel> — the revision .origin recorded for rel.
+origin_revision() { awk -F'\t' -v r="$1" '$1 == r { v = $3 } END { print v }' "$ORIGIN_INDEX"; }
+
+# acked <rel> — 0 when the operator acknowledged (declined) a finding for rel,
+# or when the ack store exists but cannot be read (fail toward keeping the
+# file). The writer pins the layout: rel is the first field
+# (internal/configdrift/acks.go).
+acked() {
+	local store="$DEST/.template-acks"
+	[ -e "$store" ] || return 1
+	[ -r "$store" ] || return 0
+	awk -F'\t' -v r="$1" '$1 == r { f = 1 } END { exit f ? 0 : 1 }' "$store"
+}
+
+# link_count <file> — hard links to the file (GNU stat, then BSD).
+link_count() { stat -c %h "$1" 2>/dev/null || stat -f %l "$1" 2>/dev/null; }
+
+# follow_template <rel> <src> <dest> — drift design slice H: a canonical file
+# nobody edited follows the template. Before it, preserve-existing kept every
+# canonical file at the revision that first wrote it, so agent-templates never
+# received a shipped fix on an installed host (reference host, 2026-10-03).
+#   current (deployed == template, entry == both): nothing.
+#   already the template, entry differs or absent: re-seed the entry.
+#   untouched (deployed == entry), not acked, a regular single-link file:
+#     replace it atomically, THEN rewrite the entry (mode updated), so a crash
+#     between the two is repaired by the re-seed case next time.
+#   anything else (edited, no entry, acked, no hash, odd file): keep it; the
+#     drift check reports it.
+follow_template() {
+	local rel="$1" src="$2" dest="$3" dh sh oh tmp
+	if ! { dh="$(norm_hash "$dest")" && sh="$(norm_hash "$src")" && [ -n "$dh" ] && [ -n "$sh" ]; }; then
+		# Kept either way; say so when a tool exists but failed, so this keep
+		# is not mistaken for an edit or an ack (review 2a9f F1).
+		[ "$HAVE_HASH" = 1 ] && echo "WARN: config-deploy: could not hash $rel; kept as it is" >&2
+		return 0
+	fi
+	oh="$(origin_hash "$rel")"
+	if [ "$dh" = "$sh" ]; then
+		[ "$oh" = "$sh" ] || write_origin "$rel" "$src" "$dest" seeded
+		return 0
+	fi
+	[ -n "$oh" ] && [ "$oh" = "$dh" ] || return 0
+	acked "$rel" && return 0
+	[ -f "$dest" ] && [ ! -L "$dest" ] && [ "$(link_count "$dest")" = 1 ] || return 0
+	tmp="$dest.vornik-new.$$"
+	if cp "$src" "$tmp" && replace_file "$tmp" "$dest"; then
+		echo "config-deploy: updated $rel to the shipped template (unedited since $(origin_revision "$rel"))"
+		write_origin "$rel" "$src" "$dest" updated
+	else
+		rm -f "$tmp"
+		echo "WARN: config-deploy: could not update untouched canonical file: $rel" >&2
+	fi
+}
+
+# deploy_one <rel> <src> <dest> [canonical] — copy if absent (preserve-existing),
+# and keep both baselines; a file in a canonical directory follows the
+# template when nobody edited it (follow_template). Elsewhere, .origin is
+# written on CREATE, or seeded on a preserve-existing hit when no entry exists
+# and the deployed file is identical to this template (it IS this template
+# now, so the entry is true). A diverged file gets none: its origin is
+# unknowable, and the check reports it as permanently vague.
 deploy_one() {
-	local rel="$1" src="$2" dest="$3"
+	local rel="$1" src="$2" dest="$3" canonical="${4:-0}"
 	record_template "$rel" "$src"
-	if [ ! -e "$dest" ]; then
+	if [ -e "$dest" ] && [ "$canonical" = 1 ]; then
+		follow_template "$rel" "$src" "$dest"
+	elif [ ! -e "$dest" ]; then
 		mkdir -p "$(dirname "$dest")"
 		if cp "$src" "$dest"; then
 			write_origin "$rel" "$src" "$dest" created
@@ -175,11 +241,12 @@ for dir in "${CONFIG_DEPLOYABLE_DIRS[@]}"; do
 		exit 1
 	fi
 	mkdir -p "$DEST/$dir"
+	canonical=1; config_is_tunable "$dir" && canonical=0
 	while IFS= read -r rel; do
 		rel="${rel#./}"
 		dest="$DEST/$dir/$rel"
 		refuse_unsafe_dest_path "$dest"
-		deploy_one "$dir/$rel" "$src/$rel" "$dest"
+		deploy_one "$dir/$rel" "$src/$rel" "$dest" "$canonical"
 	done < <(cd "$src" && find . -type f)
 done
 

@@ -93,18 +93,61 @@ func TestCheckWorkflowMDShape_CleanDirOK(t *testing.T) {
 	}
 }
 
-func TestCheckWorkflowMDShape_WarningOnRecommendedMissing(t *testing.T) {
-	// Drop author + license → two WARNING findings, no errors.
+// workflow-md design, "Publication recommendations belong to publishing"
+// (2026-10-03): author_missing and license_missing were a permanent WARNING on
+// the reference host (26 findings, 14 files, none published). They are notes
+// for publishing, counted in the message, not a warning and not listed.
+func unattributed() string {
 	body := strings.Replace(adapterCleanWorkflow, "author: vornik\n", "", 1)
-	body = strings.Replace(body, "license: Apache-2.0\n", "", 1)
-	cfg := writeWorkflowDir(t, map[string]string{"warn.md": body})
+	return strings.Replace(body, "license: Apache-2.0\n", "", 1)
+}
+
+func TestCheckWorkflowMDShape_PublicationNotesAreNotWarnings(t *testing.T) {
+	cfg := writeWorkflowDir(t, map[string]string{"a.md": unattributed(), "b.md": unattributed(), "c.md": adapterCleanWorkflow})
+	h := &DoctorHandlers{configDir: cfg}
+	check := h.checkWorkflowMDShape()
+	if check.Status != "OK" {
+		t.Fatalf("only publication notes → OK; got %s (%s) Items=%v", check.Status, check.Message, check.Items)
+	}
+	if len(check.Items) != 0 {
+		t.Errorf("publication notes must not be listed; got %v", check.Items)
+	}
+	for _, want := range []string{"2 workflow(s) carry no author or license", "vornikctl skill export --author --license"} {
+		if !strings.Contains(check.Message, want) {
+			t.Errorf("message %q lacks %q", check.Message, want)
+		}
+	}
+}
+
+func TestCheckWorkflowMDShape_RealWarningStillWarnsWithoutTheNotes(t *testing.T) {
+	big := unattributed() + strings.Repeat("Long prose line for the soft size limit.\n", 400)
+	cfg := writeWorkflowDir(t, map[string]string{"big.md": big})
 	h := &DoctorHandlers{configDir: cfg}
 	check := h.checkWorkflowMDShape()
 	if check.Status != "WARNING" {
-		t.Fatalf("missing author/license → WARNING; got %s (%s) Items=%v", check.Status, check.Message, check.Items)
+		t.Fatalf("a real warning → WARNING; got %s (%s)", check.Status, check.Message)
 	}
-	if len(check.Items) < 2 {
-		t.Fatalf("expected at least 2 finding items; got %v", check.Items)
+	joined := strings.Join(check.Items, "\n")
+	if !strings.Contains(joined, "file_size_soft") {
+		t.Errorf("the real warning is not listed: %v", check.Items)
+	}
+	if strings.Contains(joined, "author_missing") || strings.Contains(joined, "license_missing") {
+		t.Errorf("publication notes listed beside a real warning: %v", check.Items)
+	}
+}
+
+// The count is of distinct files, and the clause rides every branch.
+func TestCheckWorkflowMDShape_PublicationClauseCountsFilesInEveryBranch(t *testing.T) {
+	onlyLicense := strings.Replace(adapterCleanWorkflow, "license: Apache-2.0\n", "", 1)
+	broken := strings.Replace(unattributed(), "description: Adapter test fixture; all required fields present.\n", "", 1)
+	cfg := writeWorkflowDir(t, map[string]string{"both.md": unattributed(), "lic.md": onlyLicense, "err.md": broken})
+	h := &DoctorHandlers{configDir: cfg}
+	check := h.checkWorkflowMDShape()
+	if check.Status != "ERROR" {
+		t.Fatalf("a real error → ERROR; got %s (%s)", check.Status, check.Message)
+	}
+	if !strings.Contains(check.Message, "3 workflow(s) carry no author or license") {
+		t.Errorf("message %q: want 3 distinct files counted in the ERROR branch", check.Message)
 	}
 }
 

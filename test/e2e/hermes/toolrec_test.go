@@ -74,3 +74,35 @@ func TestToolRecorderPassesOtherPathsThrough(t *testing.T) {
 		t.Fatalf("tools recorded from a non-completion request: %v", rec.ToolsSeen())
 	}
 }
+
+// Design 24, 0.8.0 (H3f): a fresh session after a forget must not show the
+// forgotten fact in the memory provider's prefetch block, which reaches the
+// model only inside the completion request. Both model fronts watch the
+// request bodies for it.
+func TestToolRecorderWatchesRequestBodies(t *testing.T) {
+	rec := NewToolRecorder(upstreamEcho(t).URL)
+	rec.Watch("Svoboda")
+	postThrough(t, rec, "/v1/chat/completions", `{"messages":[{"role":"user","content":"who is my physio?"}]}`)
+	if rec.WatchSeen() {
+		t.Fatal("watch fired on a body without the text")
+	}
+	postThrough(t, rec, "/v1/chat/completions", `{"messages":[{"role":"system","content":"Recalled: Dr Svoboda"}]}`)
+	if !rec.WatchSeen() {
+		t.Fatal("watch missed the text in a request body")
+	}
+	rec.Watch("Svoboda")
+	if rec.WatchSeen() {
+		t.Fatal("Watch must reset what was seen")
+	}
+}
+
+func TestLLMStubWatchesRequestBodies(t *testing.T) {
+	s := &LLMStub{Final: "ok"}
+	s.Watch("Svoboda")
+	rec := httptest.NewRecorder()
+	s.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/v1/chat/completions",
+		strings.NewReader(`{"messages":[{"role":"system","content":"Recalled: Dr Svoboda"}]}`)))
+	if !s.WatchSeen() {
+		t.Fatal("stub watch missed the text in a request body")
+	}
+}

@@ -9,6 +9,7 @@ import (
 	"vornik.io/vornik/internal/agentns"
 	"vornik.io/vornik/internal/brokerschedule"
 	"vornik.io/vornik/internal/persistence"
+	"vornik.io/vornik/internal/taskcreate"
 )
 
 // FireScheduledBroker creates the task of one scheduled slot of an agent
@@ -58,6 +59,9 @@ func (s *Server) FireScheduledBroker(ctx context.Context, workflowID, idempotenc
 	task, err := s.createBrokerTask(ctx, brokerTaskParams{wf: wf, project: project, inputs: inputs, key: key,
 		taskType: wf.ID, source: persistence.TaskCreationSourceScheduled, idemKey: idempotencyKey})
 	if err != nil {
+		if ce := taskcreate.AsError(err); ce != nil && ce.Reason == taskcreate.ReasonSetupIncomplete {
+			return "", fmt.Errorf("%w (%s)", brokerschedule.ErrSetupIncomplete, ce.Message)
+		}
 		return "", err
 	}
 	return task.ID, nil

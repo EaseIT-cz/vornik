@@ -6,10 +6,13 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"net/url"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 	"vornik.io/vornik/internal/agentns"
+	"vornik.io/vornik/internal/brokergrants"
 
 	"vornik.io/vornik/internal/api"
 	"vornik.io/vornik/internal/approval"
@@ -66,6 +69,9 @@ type brokerActionCard struct {
 	Expires           string
 	Age               string
 	createdAt         time.Time
+	// Grant is the standing grant offered under Approve (broker
+	// write-actions design, tier 2), or nil.
+	Grant *brokergrants.Offer
 }
 
 // loadPendingBrokerActions lists pending actions in the request's scope.
@@ -126,6 +132,7 @@ func (s *Server) newBrokerActionCard(ctx context.Context, row *persistence.Broke
 			card.KeyLabel = k.Name
 		}
 	}
+	card.Grant = s.grantOfferFor(row)
 	card.SchemaUnavailable = true
 	if s.projectReg != nil {
 		if wf := s.projectReg.GetWorkflow(row.WorkflowID); wf != nil && wf.Broker != nil {
@@ -153,6 +160,8 @@ func (s *Server) brokerActionInboxRouter(w http.ResponseWriter, r *http.Request)
 		s.BrokerActionApprove(w, r, parts[0])
 	case "reject":
 		s.BrokerActionReject(w, r, parts[0])
+	case "approve-grant":
+		s.BrokerActionApproveWithGrant(w, r, parts[0])
 	default:
 		http.NotFound(w, r)
 	}
@@ -210,33 +219,135 @@ func (s *Server) BrokerActionReject(w http.ResponseWriter, r *http.Request, acti
 }
 
 // brokerActionGate is the shared approval gate: POST and same origin before
-// any read, then project scope and approver once the row is known.
+// any read, then project scope and approver once the row is known. Its two
+// halves are the only places the checks live; the batch handler uses them
+// too (approval fatigue, tier 1).
 func (s *Server) brokerActionGate(w http.ResponseWriter, r *http.Request, actionID string) (*persistence.BrokerAction, string, bool) {
+	if !s.brokerRequestGate(w, r) {
+		return nil, "", false
+	}
+	row, approver, status, err := s.brokerRowGate(r, actionID)
+	if err != nil {
+		switch status {
+		case http.StatusNotFound:
+			http.NotFound(w, r)
+		case http.StatusForbidden:
+			http.Error(w, "approve this on your approver device", http.StatusForbidden)
+		default:
+			approval.WriteError(w, r, err)
+		}
+		return nil, "", false
+	}
+	return row, approver, true
+}
+
+// brokerRequestGate: the store is configured and the request is a
+// same-origin POST.
+func (s *Server) brokerRequestGate(w http.ResponseWriter, r *http.Request) bool {
 	if s.brokerActionRepo == nil {
 		http.Error(w, "broker actions not configured", http.StatusServiceUnavailable)
-		return nil, "", false
+		return false
 	}
 	if err := approval.CheckRequest(r); err != nil {
 		approval.WriteError(w, r, err)
-		return nil, "", false
+		return false
 	}
+	return true
+}
+
+// brokerRowGate loads the action and authorizes the approver for its
+// project. An agent project's action is decided on the approver device only
+// (agent-administered Vornik plan P4.8).
+func (s *Server) brokerRowGate(r *http.Request, actionID string) (*persistence.BrokerAction, string, int, error) {
 	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
 	defer cancel()
 	row, err := s.brokerActionRepo.Get(ctx, actionID)
 	if err != nil || row == nil {
-		http.NotFound(w, r)
-		return nil, "", false
+		return nil, "", http.StatusNotFound, errors.New("not found")
 	}
 	if _, agent := agentns.FromID(row.ProjectID); agent {
-		// An agent project's action is approved on the approver device only
-		// (agent-administered Vornik plan P4.8).
-		http.Error(w, "approve this on your approver device", http.StatusForbidden)
-		return nil, "", false
+		return nil, "", http.StatusForbidden, errors.New("approver device only")
 	}
 	approver, err := approval.Authorize(r, row.ProjectID, api.RequestAllowsProject, s.operatorIDForRequest)
 	if err != nil {
-		approval.WriteError(w, r, err)
-		return nil, "", false
+		return nil, "", 0, err
 	}
-	return row, approver, true
+	return row, approver, 0, nil
+}
+
+// BrokerActionBatch decides several ticked writes in one POST (approval
+// fatigue, tier 1; broker write-actions design, review 5c20). Each pick is
+// "<action_id>|<args_sha256 its card showed>" and goes through the same
+// per-row checks as a single decision: project scope, approver, and the
+// shown-hash binding. A stale or out-of-scope pick is refused and named; the
+// others proceed. Nothing is decided without a pick.
+func (s *Server) BrokerActionBatch(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if !s.brokerRequestGate(w, r) {
+		return
+	}
+	if err := r.ParseForm(); err != nil {
+		http.Error(w, "bad form", http.StatusBadRequest)
+		return
+	}
+	approve := r.PostFormValue("decision") == "approve"
+	if !approve && r.PostFormValue("decision") != "reject" {
+		s.redirectInbox(w, r, "")
+		return
+	}
+	decided := 0
+	var refused []string
+	for _, pick := range r.PostForm["pick"] {
+		id, shown, ok := strings.Cut(pick, "|")
+		if !ok || id == "" {
+			continue
+		}
+		if s.decideOneBrokerAction(r, id, strings.TrimSpace(shown), approve) {
+			decided++
+		} else {
+			refused = append(refused, id)
+		}
+	}
+	if decided > 0 {
+		s.signalBrokerActionChanged()
+	}
+	verb := "rejected"
+	if approve {
+		verb = "approved"
+	}
+	target := "/ui/inbox?notice=broker-actions-" + verb + "&n=" + strconv.Itoa(decided)
+	if len(refused) > 0 {
+		target += "&refused=" + url.QueryEscape(strings.Join(refused, ","))
+	}
+	http.Redirect(w, r, target, http.StatusSeeOther)
+}
+
+// decideOneBrokerAction is one pick of a batch: the single-decision checks,
+// without writing a response.
+func (s *Server) decideOneBrokerAction(r *http.Request, actionID, shown string, approve bool) bool {
+	row, approver, _, err := s.brokerRowGate(r, actionID)
+	if err != nil {
+		return false
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
+	defer cancel()
+	now := time.Now().UTC()
+	if !approve {
+		return s.brokerActionRepo.Reject(ctx, row.ActionID, approver, now) == nil
+	}
+	if err := s.brokerActionRepo.Approve(ctx, row.ActionID, shown, approver, now); err != nil {
+		if !errors.Is(err, persistence.ErrBrokerActionNoTransition) {
+			s.logger.Error().Err(err).Str("action_id", actionID).Msg("broker action batch approve failed")
+		}
+		return false
+	}
+	s.logger.Info().Str("action_id", actionID).Str("project", row.ProjectID).Str("approver", approver).
+		Msg("broker action approved (batch)")
+	if s.brokerActionKick != nil {
+		s.brokerActionKick(actionID)
+	}
+	return true
 }

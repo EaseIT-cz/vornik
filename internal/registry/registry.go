@@ -47,6 +47,65 @@ type Registry struct {
 	// Counts identical content too, deliberately: a counter that moved only on
 	// a change would be the digest again.
 	generation uint64
+	// agentModels is the operator's model catalogue for agent roles
+	// (agent_admin.models; agent-administered design §18.6 item 2): an agent
+	// role naming a model outside it is refused at load. New starts it from
+	// the process default (SetDefaultAgentModelCatalogue); empty refuses
+	// every agent role model (fail closed, review 20261003-a525 A1).
+	agentModels map[string]bool
+}
+
+// defaultAgentModels is the catalogue every New registry starts with: the
+// daemon sets it at boot from agent_admin.models, so the registries its
+// doctor, wizard and UI build judge by the same one. Unset: empty.
+var (
+	defaultAgentModelsMu sync.RWMutex
+	defaultAgentModels   map[string]bool
+)
+
+func modelSet(ids []string) map[string]bool {
+	set := make(map[string]bool, len(ids))
+	for _, id := range ids {
+		if id = strings.TrimSpace(id); id != "" {
+			set[id] = true
+		}
+	}
+	return set
+}
+
+// SetDefaultAgentModelCatalogue sets the catalogue New registries start
+// with (nil or empty: no agent role may name a model).
+func SetDefaultAgentModelCatalogue(ids []string) {
+	set := modelSet(ids)
+	defaultAgentModelsMu.Lock()
+	defaultAgentModels = set
+	defaultAgentModelsMu.Unlock()
+}
+
+func defaultAgentModelSet() map[string]bool {
+	defaultAgentModelsMu.RLock()
+	defer defaultAgentModelsMu.RUnlock()
+	out := make(map[string]bool, len(defaultAgentModels))
+	for k := range defaultAgentModels {
+		out[k] = true
+	}
+	return out
+}
+
+// SetAgentModelCatalogue installs the model ids this registry's agent roles
+// may name (agent_admin.models). An empty list refuses every agent role
+// model.
+func (r *Registry) SetAgentModelCatalogue(ids []string) {
+	set := modelSet(ids)
+	r.mu.Lock()
+	r.agentModels = set
+	r.mu.Unlock()
+}
+
+func (r *Registry) agentModelSet() map[string]bool {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return r.agentModels
 }
 
 // ConfigSet represents a fully loaded, validated registry snapshot.
@@ -110,10 +169,11 @@ func New() *Registry {
 		workflows: make(map[string]*Workflow),
 	}
 	return &Registry{
-		active:    active,
-		projects:  active.projects,
-		swarms:    active.swarms,
-		workflows: active.workflows,
+		active:      active,
+		projects:    active.projects,
+		swarms:      active.swarms,
+		workflows:   active.workflows,
+		agentModels: defaultAgentModelSet(),
 	}
 }
 
@@ -188,7 +248,7 @@ func (r *Registry) ConfigDir() string {
 
 // Stage loads configs into a staged snapshot without touching the active state.
 func (r *Registry) Stage(configDir string) error {
-	staged, err := loadConfigSet(configDir)
+	staged, err := loadConfigSetWith(configDir, r.agentModelSet())
 	if err != nil {
 		return err
 	}
@@ -519,6 +579,12 @@ func (r *Registry) applyActiveLocked(cfg *ConfigSet) {
 }
 
 func loadConfigSet(configDir string) (*ConfigSet, error) {
+	return loadConfigSetWith(configDir, nil)
+}
+
+// loadConfigSetWith loads a tree, judging agent role models against
+// agentModels (nil: no agent role may name a model).
+func loadConfigSetWith(configDir string, agentModels map[string]bool) (*ConfigSet, error) {
 	index := newTreeIndex(configDir)
 	projects, err := loadProjects(configDir, index)
 	if err != nil {
@@ -543,7 +609,7 @@ func loadConfigSet(configDir string) (*ConfigSet, error) {
 		configDir: configDir,
 		index:     index,
 	}
-	agentRuleRejections(cfg)
+	agentRuleRejections(cfg, agentModels)
 
 	return cfg, nil
 }
@@ -600,7 +666,7 @@ func (r *Registry) LoadFromPaths(paths ...string) error {
 		} else if err != nil {
 			return fmt.Errorf("stat config path %q: %w", p, err)
 		}
-		layer, err := loadConfigSet(p)
+		layer, err := loadConfigSetWith(p, r.agentModelSet())
 		if err != nil {
 			return fmt.Errorf("load layer %q: %w", p, err)
 		}

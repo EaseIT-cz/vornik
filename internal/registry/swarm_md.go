@@ -25,8 +25,11 @@ package registry
 
 import (
 	"fmt"
+	"strings"
 
 	"gopkg.in/yaml.v3"
+
+	"vornik.io/vornik/internal/agentns"
 )
 
 // swarmKindLabel identifies this file format in error messages.
@@ -70,8 +73,61 @@ func ParseSwarmMarkdown(content []byte, filename string) (*Swarm, error) {
 	if err := applyRolePrompts(sw, prompts, filename); err != nil {
 		return nil, err
 	}
+	if _, agent := agentns.FromID(sw.ID); agent && !hasLevel2Heading(body, roleSectionHeading) {
+		applyLegacyAgentRolePrompts(sw, body)
+	}
 
 	return sw, nil
+}
+
+// hasLevel2Heading reports whether body has the column-0 heading "## <h>".
+func hasLevel2Heading(body []byte, h string) bool {
+	for _, line := range strings.Split(string(body), "\n") {
+		if strings.TrimRight(line, " \t\r") == "## "+h {
+			return true
+		}
+	}
+	return false
+}
+
+// applyLegacyAgentRolePrompts loads role text from the layout the agent
+// swarm template wrote before agent-administered design §18.11: one
+// level-2 "## <role>" section per role, which the parser above never read,
+// so every agent-defined role ran without its instructions. It applies only
+// to agent-namespace swarms (written only by the renderer) with no
+// "## Role prompts" section, and changes nothing on disk.
+//
+// A role's text runs from its heading to the next column-0 "## " heading
+// that names a declared role not yet seen; every other line, headings
+// included, is text (review 9ad7 F1: instructions written before headings
+// were refused must load whole). A repeated role heading is text of the
+// role before it: the first section wins.
+func applyLegacyAgentRolePrompts(sw *Swarm, body []byte) {
+	idx := make(map[string]int, len(sw.Roles))
+	for i, r := range sw.Roles {
+		idx[r.Name] = i
+	}
+	texts := map[string]*strings.Builder{}
+	current := ""
+	for _, line := range strings.Split(string(body), "\n") {
+		if name, ok := strings.CutPrefix(strings.TrimRight(line, " \t\r"), "## "); ok {
+			if _, declared := idx[name]; declared && texts[name] == nil {
+				current = name
+				texts[name] = &strings.Builder{}
+				continue
+			}
+		}
+		if current != "" {
+			texts[current].WriteString(line)
+			texts[current].WriteString("\n")
+		}
+	}
+	for name, b := range texts {
+		i := idx[name]
+		if text := strings.TrimSpace(b.String()); text != "" && sw.Roles[i].SystemPrompt == "" {
+			sw.Roles[i].SystemPrompt = text
+		}
+	}
 }
 
 // decodeSwarmFrontmatter is the DECODE half of ParseSwarmMarkdown, split out so

@@ -3,6 +3,7 @@ package brokerschedule
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sync"
 	"testing"
 	"time"
@@ -221,5 +222,17 @@ func TestScheduler_UnloadableZoneCountedOnce(t *testing.T) {
 	s.TickOnce(context.Background())
 	if got := testutil.ToFloat64(skipped.WithLabelValues(ReasonError)) - before; got != 1 || len(f.keys) != 0 {
 		t.Fatalf("counted %v, fired %v", got, f.keys)
+	}
+}
+
+// Design §19.8 F4: a slot whose workflow lacks a credential is skipped as
+// setup_incomplete, on the same counter label.
+func TestScheduler_SetupIncompleteCounted(t *testing.T) {
+	now := time.Date(2026, 10, 2, 8, 1, 0, 0, time.UTC)
+	before := testutil.ToFloat64(skipped.WithLabelValues(ReasonSetupIncomplete))
+	f := &fakeFirer{err: fmt.Errorf("%w: MAIL_TOKEN", ErrSetupIncomplete)}
+	newSched(&now, &fakeSource{entries: []Entry{daily("a--b--x")}}, f, nil).TickOnce(context.Background())
+	if got := testutil.ToFloat64(skipped.WithLabelValues(ReasonSetupIncomplete)) - before; got != 1 {
+		t.Fatalf("setup_incomplete counted %v", got)
 	}
 }

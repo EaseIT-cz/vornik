@@ -133,6 +133,7 @@ func runRetention(cmd *cobra.Command, args []string) error {
 	// then a "configs/" sibling of the main config file, then "configs"
 	// relative to cwd.
 	reg := registry.New()
+	reg.SetAgentModelCatalogue(cfg.AgentAdmin.ModelIDs()) // §18.6 item 2: judge agent roles as the daemon does
 	configsDir := resolveConfigsDir(configPath)
 	if configsDir == "" {
 		return fmt.Errorf("could not locate configs/ directory (set VORNIK_CONFIGS_DIR or run from repo root)")

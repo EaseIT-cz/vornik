@@ -92,6 +92,11 @@ func (c *Container) initRegistry() error {
 		c.Logger.Warn().Err(err).Msg("chat.model_capabilities is unreadable; role-modality validation will use built-in patterns only")
 	}
 
+	// The models agent roles may name (agent-administered design §18.6 item
+	// 2): an agent role off the catalogue is refused at load, by this
+	// registry and by every one the daemon builds later (the doctor's, the
+	// wizard's, the UI's), which start from the process default.
+	registry.SetDefaultAgentModelCatalogue(c.Config.AgentAdmin.ModelIDs())
 	reg := registry.New()
 	if err := reg.Load(configDir); err != nil {
 		var ve *registry.ValidationError

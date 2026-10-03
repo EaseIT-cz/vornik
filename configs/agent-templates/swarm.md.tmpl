@@ -9,6 +9,9 @@ roles:
       description: {{q .Description}}
       count: 1
       runtimePolicy: "ephemeral"
+{{- if .Model}}
+      model: {{q .Model}}
+{{- end}}
       runtime:
         image: {{q $.AgentImage}}
       permissions:
@@ -22,8 +25,10 @@ roles:
 # {{.DisplayName}}
 
 Rendered by the agent admin verbs for namespace {{.Namespace}}.
+
+## Role prompts
 {{range .Roles}}
-## {{.Name}}
+### {{.Name}}
 
 {{.Instructions}}
 {{end}}

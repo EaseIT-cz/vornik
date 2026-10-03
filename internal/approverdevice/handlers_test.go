@@ -292,3 +292,164 @@ func TestRoutes_AllServed(t *testing.T) {
 	}
 	t.Logf("examined %d routes", n)
 }
+
+// The operator's iPhone, 2026-10-03 (agent-administered §9.2a): a link
+// tapped in Telegram opened an unpaired browser, and pairing landed on the
+// list, never on the request the link named.
+func TestPairing_ReturnsToTheRequestedPage(t *testing.T) {
+	f := newFixture(t)
+	srv := serve(t, f)
+	ctx := context.Background()
+
+	phone := newBrowser(t, srv)
+	if res, _ := phone.do(http.MethodGet, "/ui/approve/apr_x", nil, nil); res.Header.Get("Location") != "/ui/pair?next=%2Fui%2Fapprove%2Fapr_x" {
+		t.Fatalf("unpaired GET went to %q", res.Header.Get("Location"))
+	}
+	if _, body := phone.do(http.MethodGet, "/ui/pair?next=%2Fui%2Fapprove%2Fapr_x", nil, nil); !strings.Contains(body, `name="next" value="/ui/approve/apr_x"`) {
+		t.Fatalf("the form does not carry next: %s", body)
+	}
+	code, _, _ := f.svc.StartPairing(ctx, "Pixel")
+	res, _ := phone.do(http.MethodPost, "/ui/pair", url.Values{"code": {code}, "next": {"/ui/approve/apr_x"}}, nil)
+	if res.Header.Get("Location") != "/ui/approve/apr_x" {
+		t.Fatalf("first pairing went to %q", res.Header.Get("Location"))
+	}
+
+	safari := newBrowser(t, srv)
+	code2, _, _ := f.svc.StartPairing(ctx, "Safari")
+	res, _ = safari.do(http.MethodPost, "/ui/pair", url.Values{"code": {code2}, "next": {"/ui/approve/apr_y"}}, nil)
+	if res.Header.Get("Location") != "/ui/pair/wait" {
+		t.Fatalf("second pairing went to %q", res.Header.Get("Location"))
+	}
+	_, list := phone.do(http.MethodGet, "/ui/approve/", nil, nil)
+	id := regexp.MustCompile(`/ui/approve/(apr_[0-9a-f]+)`).FindStringSubmatch(list)
+	_, page := phone.do(http.MethodGet, "/ui/approve/"+id[1], nil, nil)
+	h := hashField.FindStringSubmatch(page)
+	phone.do(http.MethodPost, "/ui/approve/"+id[1], url.Values{"decision": {"approve"}, "rendered_sha256": {h[1]}}, nil)
+	if res, _ := safari.do(http.MethodGet, "/ui/pair/wait", nil, nil); res.Header.Get("Location") != "/ui/approve/apr_y" {
+		t.Fatalf("approved wait went to %q", res.Header.Get("Location"))
+	}
+}
+
+func TestPairing_DropsAForeignNext(t *testing.T) {
+	for _, next := range []string{
+		"https://evil.example/ui/approve/x", "//evil.example/ui/approve/x", "/ui/approve/../pair",
+		"/ui/approve//evil", "/ui/projects", "/ui/approve/x?y=1", "javascript:alert(1)",
+	} {
+		t.Run(next, func(t *testing.T) {
+			f := newFixture(t)
+			srv := serve(t, f)
+			phone := newBrowser(t, srv)
+			if _, body := phone.do(http.MethodGet, "/ui/pair?next="+url.QueryEscape(next), nil, nil); strings.Contains(body, `name="next"`) {
+				t.Fatalf("the form carries a foreign next: %s", body)
+			}
+			code, _, _ := f.svc.StartPairing(context.Background(), "Pixel")
+			res, _ := phone.do(http.MethodPost, "/ui/pair", url.Values{"code": {code}, "next": {next}}, nil)
+			if res.Header.Get("Location") != "/ui/approve/" {
+				t.Fatalf("pairing followed %q to %q", next, res.Header.Get("Location"))
+			}
+		})
+	}
+}
+
+const iPhoneUA = "Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Mobile/15E148 Telegram-iOS"
+
+func TestPairing_SaysWhichBrowserAndOffersToReopen(t *testing.T) {
+	f := newFixture(t)
+	srv := serve(t, f)
+	phone := newBrowser(t, srv)
+	_, body := phone.do(http.MethodGet, "/ui/pair?next=%2Fui%2Fapprove%2Fapr_x", nil, map[string]string{"User-Agent": iPhoneUA})
+	for _, want := range []string{
+		"paired in one browser",
+		`href="googlechromes://vornik.example/ui/approve/apr_x"`,
+		`href="x-safari-https://vornik.example/ui/approve/apr_x"`,
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("iOS pair page lacks %q", want)
+		}
+	}
+	_, body = phone.do(http.MethodGet, "/ui/pair?next=%2Fui%2Fapprove%2Fapr_x", nil, map[string]string{"User-Agent": "Mozilla/5.0 (Linux; Android 15) Chrome/130"})
+	if !strings.Contains(body, "paired in one browser") || strings.Contains(body, "googlechromes:") {
+		t.Errorf("non-iOS pair page: explanation or buttons wrong")
+	}
+	// The buttons name vornik.example, the configured origin, although the
+	// request reached 127.0.0.1: the host is never taken from the request.
+
+	code, _, _ := f.svc.StartPairing(context.Background(), "First")
+	newBrowser(t, srv).pairWith(code)
+	code2, _, _ := f.svc.StartPairing(context.Background(), "Second")
+	phone.do(http.MethodPost, "/ui/pair", url.Values{"code": {code2}, "next": {"/ui/approve/apr_x"}}, nil)
+	_, body = phone.do(http.MethodGet, "/ui/pair/wait", nil, map[string]string{"User-Agent": iPhoneUA})
+	for _, want := range []string{"On the browser you paired before", "paired in one browser", `href="googlechromes://vornik.example/ui/approve/apr_x"`} {
+		if !strings.Contains(body, want) {
+			t.Errorf("wait page lacks %q", want)
+		}
+	}
+}
+
+func TestPush_NamesThePairedBrowser(t *testing.T) {
+	f := newFixture(t)
+	if err := f.svc.FileRequest(context.Background(), persistence.AgentApprovalRequestRow{
+		ID: "apr_0000000000000001", Namespace: "claudecode", Kind: "widening_change", Sentence: "Raise a budget.",
+		Rendered: []byte(`{}`), RenderedSHA256: "x", Status: "pending",
+		CreatedAt: f.now, ExpiresAt: f.now.Add(time.Hour),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if len(f.pushes) != 1 || !strings.Contains(f.pushes[0].body, "Open it in the browser you paired (in Telegram: ••• → Open in Chrome or Safari).") {
+		t.Fatalf("push: %+v", f.pushes)
+	}
+}
+
+// Review 20261003-601e F2: x-safari-https does not work on iOS 16, so every
+// browser is also given the address to copy, from the configured origin.
+func TestPairing_OffersTheAddressToCopy(t *testing.T) {
+	f := newFixture(t)
+	srv := serve(t, f)
+	_, body := newBrowser(t, srv).do(http.MethodGet, "/ui/pair?next=%2Fui%2Fapprove%2Fapr_x", nil, map[string]string{"User-Agent": "Mozilla/5.0 (Linux; Android 15) Chrome/130"})
+	if !strings.Contains(body, "https://vornik.example/ui/approve/apr_x") {
+		t.Fatalf("no address to copy: %s", body)
+	}
+}
+
+// Review 20261003-601e F5, F7: the next cookie is cleared once used, and a
+// tampered one is re-validated and dropped.
+func TestPairing_NextCookieIsClearedAndRevalidated(t *testing.T) {
+	for name, val := range map[string]string{
+		"valid":  url.QueryEscape("/ui/approve/apr_y"),
+		"scheme": url.QueryEscape("https://evil.example/ui/approve/x"),
+		"double": url.QueryEscape("/ui/approve//evil"),
+		"other":  url.QueryEscape("/ui/projects"),
+	} {
+		t.Run(name, func(t *testing.T) {
+			f := newFixture(t)
+			srv := serve(t, f)
+			ctx := context.Background()
+			phone := newBrowser(t, srv)
+			code, _, _ := f.svc.StartPairing(ctx, "First")
+			phone.pairWith(code)
+			tablet := newBrowser(t, srv)
+			code2, _, _ := f.svc.StartPairing(ctx, "Second")
+			tablet.pairWith(code2)
+			u, _ := url.Parse(srv.URL + "/ui/pair")
+			tablet.c.Jar.SetCookies(u, []*http.Cookie{{Name: NextCookieName, Value: val, Path: "/ui/pair"}})
+			_, list := phone.do(http.MethodGet, "/ui/approve/", nil, nil)
+			id := regexp.MustCompile(`/ui/approve/(apr_[0-9a-f]+)`).FindStringSubmatch(list)
+			_, page := phone.do(http.MethodGet, "/ui/approve/"+id[1], nil, nil)
+			h := hashField.FindStringSubmatch(page)
+			phone.do(http.MethodPost, "/ui/approve/"+id[1], url.Values{"decision": {"approve"}, "rendered_sha256": {h[1]}}, nil)
+			want := "/ui/approve/"
+			if name == "valid" {
+				want = "/ui/approve/apr_y"
+			}
+			res, _ := tablet.do(http.MethodGet, "/ui/pair/wait", nil, nil)
+			if got := res.Header.Get("Location"); got != want {
+				t.Fatalf("approved wait went to %q, want %q", got, want)
+			}
+			for _, c := range tablet.c.Jar.Cookies(u) {
+				if c.Name == NextCookieName {
+					t.Fatal("the next cookie survived its use")
+				}
+			}
+		})
+	}
+}

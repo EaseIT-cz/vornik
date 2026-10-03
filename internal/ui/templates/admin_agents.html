@@ -50,6 +50,15 @@
             </section>
             {{end}}
 
+            {{if .Models}}
+            {{$ns := .Row.Namespace}}
+            <section class="glass rounded-xl border border-dark-700 p-4 text-sm">
+                <h2 class="text-sm font-semibold text-gray-200 mb-1">Remote models approved for this assistant</h2>
+                <p class="text-xs text-gray-500 mb-2">A role on a model that goes to one of these runs without asking again. Withdrawing one stops such roles before their next attempt; the assistant must ask the phone again.</p>
+                <ul class="space-y-1">{{range .Models}}<li class="flex flex-wrap items-center gap-2"><span class="font-mono">{{.Name}}</span> <span class="text-xs text-gray-500">{{.Status}}</span>{{if eq .Status "approved"}}<form method="post" action="/ui/admin/agents/{{$ns}}/models/withdraw" class="inline"><input type="hidden" name="destination" value="{{.Name}}"><button type="submit" class="text-xs text-rose-400 hover:text-rose-300">Withdraw</button></form>{{end}}</li>{{end}}</ul>
+            </section>
+            {{end}}
+
             {{range .Projects}}
             <section class="glass rounded-xl border border-dark-700 p-4 text-sm space-y-3">
                 <div class="flex flex-wrap items-baseline gap-3">

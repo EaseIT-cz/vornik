@@ -395,7 +395,7 @@ func validateRenderedTemplate(configDir string, rendered map[string]string) erro
 			return wErr
 		}
 	}
-	reg := registry.New()
+	reg := newCLIRegistry(configDir)
 	if err := reg.Load(tmp); err != nil {
 		return err
 	}
@@ -419,7 +419,7 @@ func validateGeneratedProject(configDir, projectPath string, data []byte) error 
 	if err := os.WriteFile(filepath.Join(tmp, "projects", filepath.Base(projectPath)), data, 0o600); err != nil {
 		return err
 	}
-	reg := registry.New()
+	reg := newCLIRegistry(configDir)
 	if err := reg.Load(tmp); err != nil {
 		return fmt.Errorf("generated project failed registry validation: %w", err)
 	}

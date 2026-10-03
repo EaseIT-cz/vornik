@@ -42,6 +42,12 @@ func TestPricingCoverage_NoUncheckedModelField(t *testing.T) {
 		// whisper model FILE run by whisper-cli in the sandbox: no provider
 		// call, nothing to price.
 		"model_path": "a local whisper model file run in the sandbox, not a priced model id",
+		// agent_admin.models (agent-administered design §18.6 item 2) is a list
+		// of {id, good_for}. Its pricing is enforced at load instead: a remote
+		// entry with no exact pricing entry is never offered and the
+		// agent_model_catalogue check names it; a role that uses an entry is
+		// reached by the registry walk.
+		"models": "agent_admin.models: unpriced remote entries are dropped and named by agent_model_catalogue; roles using one are reached by the registry walk",
 
 		// Reached through the registry rather than the daemon snapshot, so they
 		// are covered by checkPricingCoverage without appearing in modelRefs.

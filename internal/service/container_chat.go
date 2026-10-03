@@ -517,9 +517,7 @@ func (c *Container) initChatRouter(cfg config.ChatConfig) error {
 		subs["claude-subscription"] = chat.NewClaudeSubscriptionClient(rcfg.ClaudeSubscription.Model, opts...)
 	}
 	if rcfg.HTTP.Enabled {
-		if rcfg.HTTP.Endpoint == "" {
-			rcfg.HTTP.Endpoint = cfg.Endpoint
-		}
+		rcfg.HTTP.Endpoint, _, _ = routerSubEndpoint(cfg, "http")
 		if rcfg.HTTP.APIKey == "" {
 			rcfg.HTTP.APIKey = cfg.APIKey
 		}
@@ -563,10 +561,7 @@ func (c *Container) initChatRouter(cfg config.ChatConfig) error {
 		if rcfg.Vertex.Model == "" && cfg.Model == "" {
 			c.Logger.Warn().Msg("chat.router.vertex: model unset and chat.model unset — naked vertex calls will fail with ErrEmptyModel")
 		}
-		endpoint := rcfg.Vertex.Endpoint
-		if endpoint == "" {
-			endpoint = buildVertexEndpoint(rcfg.Vertex.ProjectID, rcfg.Vertex.Location)
-		}
+		endpoint, _, _ := routerSubEndpoint(cfg, "vertex")
 		opts := []chat.ClientOption{
 			chat.WithLogger(c.Logger.With().Str("component", "chat").Str("provider", "vertex").Logger()),
 			// Vertex's OpenAI-compat surface rejects the Bearer header unless
@@ -602,7 +597,7 @@ func (c *Container) initChatRouter(cfg config.ChatConfig) error {
 		if rcfg.OpenRouter.Model == "" && cfg.Model == "" {
 			c.Logger.Warn().Msg("chat.router.openrouter: model unset and chat.model unset — naked openrouter calls will fail with ErrEmptyModel")
 		}
-		endpoint := resolveOpenRouterEndpoint(rcfg.OpenRouter.Endpoint)
+		endpoint, _, _ := routerSubEndpoint(cfg, "openrouter")
 		opts := []chat.ClientOption{
 			chat.WithLogger(c.Logger.With().Str("component", "chat").Str("provider", "openrouter").Logger()),
 			// App-attribution headers. Default to identifying vornik by
@@ -645,7 +640,7 @@ func (c *Container) initChatRouter(cfg config.ChatConfig) error {
 		if rcfg.OllamaCloud.Model == "" && cfg.Model == "" {
 			c.Logger.Warn().Msg("chat.router.ollama_cloud: model unset and chat.model unset — naked ollama_cloud calls will fail with ErrEmptyModel")
 		}
-		endpoint := resolveOllamaCloudEndpoint(rcfg.OllamaCloud.Endpoint)
+		endpoint, _, _ := routerSubEndpoint(cfg, "ollama_cloud")
 		opts := []chat.ClientOption{
 			chat.WithLogger(c.Logger.With().Str("component", "chat").Str("provider", "ollama_cloud").Logger()),
 		}
@@ -1106,4 +1101,43 @@ func (c *Container) waitForChatProviderReady(ctx context.Context) {
 			}
 		}
 	}
+}
+
+// routerSubEndpoint is the endpoint URL a router sub-provider of kind calls,
+// resolved from config the way initChatRouter builds it (initChatRouter
+// reads it from here), or cli=true for a subprocess-backed kind, which has
+// no endpoint Vornik can see. ok is false for an unknown kind. The agent
+// model classifier reads the host from it (agent-administered design §18.6
+// item 2).
+func routerSubEndpoint(cfg config.ChatConfig, kind string) (endpoint string, cli, ok bool) {
+	rcfg := cfg.Router
+	switch kind {
+	case "http":
+		if rcfg.HTTP.Endpoint != "" {
+			return rcfg.HTTP.Endpoint, false, true
+		}
+		return cfg.Endpoint, false, true
+	case "vertex":
+		if rcfg.Vertex.Endpoint != "" {
+			return rcfg.Vertex.Endpoint, false, true
+		}
+		return buildVertexEndpoint(rcfg.Vertex.ProjectID, rcfg.Vertex.Location), false, true
+	case "openrouter":
+		return resolveOpenRouterEndpoint(rcfg.OpenRouter.Endpoint), false, true
+	case "ollama_cloud":
+		return resolveOllamaCloudEndpoint(rcfg.OllamaCloud.Endpoint), false, true
+	case "bedrock":
+		if rcfg.Bedrock.Region == "" {
+			// No region, no endpoint: not offered (review 20261003-2ed0 B1).
+			return "", false, false
+		}
+		return "https://bedrock-runtime." + rcfg.Bedrock.Region + ".amazonaws.com", false, true
+	case "claude-subscription":
+		return chat.ClaudeSubscriptionEndpoint(), false, true
+	case "codex-subscription":
+		return chat.CodexSubscriptionEndpoint(), false, true
+	case "claude-cli", "codex-cli":
+		return "", true, true
+	}
+	return "", false, false
 }

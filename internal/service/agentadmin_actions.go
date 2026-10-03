@@ -38,6 +38,9 @@ type actionPayload struct {
 	Tool       string          `json:"tool"`
 	Args       json.RawMessage `json:"args"`
 	ArgsSHA256 string          `json:"args_sha256"`
+	// Task groups the writes one run drafted on the page (approval fatigue,
+	// tier 1); absent on requests filed before it.
+	Task string `json:"task,omitempty"`
 }
 
 func actionRequestID(actionID string) string { return "apr_ba_" + actionID }
@@ -55,50 +58,59 @@ func (s *agentAdminService) fileActionApprovals(ctx context.Context, projectID, 
 		s.c.Logger.Error().Err(err).Str("task_id", taskID).Msg("agent actions: could not list the task's actions")
 		return
 	}
+	// One push for the task's writes, content-free (approval fatigue,
+	// tier 1): the requests are filed together.
+	var batch []persistence.AgentApprovalRequestRow
+	workflow := ""
 	for _, a := range rows {
 		if a == nil || a.Status != persistence.BrokerActionPending || a.ProjectID != projectID {
 			continue
 		}
-		if err := s.fileActionApproval(ctx, ns, a); err != nil {
-			s.c.Logger.Error().Err(err).Str("action_id", a.ActionID).Msg("agent actions: could not file the phone approval")
+		row, err := s.actionApprovalRow(ns, a)
+		if err != nil {
+			s.c.Logger.Error().Err(err).Str("action_id", a.ActionID).Msg("agent actions: could not prepare the phone approval")
+			continue
 		}
+		batch = append(batch, row)
+		workflow = a.WorkflowID
+	}
+	if len(batch) == 0 {
+		return
+	}
+	if i := strings.LastIndex(workflow, "--"); i >= 0 {
+		workflow = workflow[i+2:]
+	}
+	summary := fmt.Sprintf("Your assistant (%s) drafted %d write(s) with %s", ns, len(batch), workflow)
+	if err := s.devices.FileRequestBatch(ctx, batch, summary); err != nil {
+		s.c.Logger.Error().Err(err).Str("task_id", taskID).Msg("agent actions: could not file the phone approvals")
 	}
 }
 
-func (s *agentAdminService) fileActionApproval(ctx context.Context, ns string, a *persistence.BrokerAction) error {
-	id := actionRequestID(a.ActionID)
-	if _, err := s.requests.GetRequest(ctx, id); err == nil {
-		return nil // already filed
-	}
+// actionApprovalRow is the approval request for one pending action.
+func (s *agentAdminService) actionApprovalRow(ns string, a *persistence.BrokerAction) (persistence.AgentApprovalRequestRow, error) {
 	raw, err := json.Marshal(actionPayload{ActionID: a.ActionID, Project: a.ProjectID, Workflow: a.WorkflowID,
-		Action: a.ActionKind, Tool: a.Tool, Args: json.RawMessage(a.ArgsJSON), ArgsSHA256: a.ArgsSHA256})
+		Action: a.ActionKind, Tool: a.Tool, Args: json.RawMessage(a.ArgsJSON), ArgsSHA256: a.ArgsSHA256, Task: a.TaskID})
 	if err != nil {
-		return err
+		return persistence.AgentApprovalRequestRow{}, err
 	}
 	canon, err := approval.Canonical(raw)
 	if err != nil {
-		return err
+		return persistence.AgentApprovalRequestRow{}, err
 	}
 	sum, err := approval.CanonicalSHA256(canon)
 	if err != nil {
-		return err
+		return persistence.AgentApprovalRequestRow{}, err
 	}
 	// The sentence names the action and where it goes, never its arguments:
-	// the push carries the sentence, and the arguments (a message body, an
-	// amount) are for the device's page only.
+	// the push carries no sentence now, but the list shows it, and the
+	// arguments are for the device's page only.
 	sentence := fmt.Sprintf("Your assistant (%s) wants to %s with %s. Review exactly what it will send before you approve.",
 		ns, strings.ReplaceAll(a.ActionKind, "_", " "), describeWrite(a.Tool))
-	err = s.devices.FileRequest(ctx, persistence.AgentApprovalRequestRow{
-		ID: id, Namespace: ns, Kind: persistence.ApprovalKindBrokerAction, Sentence: sentence,
+	return persistence.AgentApprovalRequestRow{
+		ID: actionRequestID(a.ActionID), Namespace: ns, Kind: persistence.ApprovalKindBrokerAction, Sentence: sentence,
 		Rendered: canon, RenderedSHA256: sum, Status: persistence.ApprovalPending,
 		CreatedAt: time.Now().UTC(), ExpiresAt: a.ExpiresAt,
-	})
-	if err != nil {
-		if _, gerr := s.requests.GetRequest(ctx, id); gerr == nil {
-			return nil // a concurrent filing won (review 20261002-52aa #1)
-		}
-	}
-	return err
+	}, nil
 }
 
 // describeWrite names a proposable write for a person.
@@ -121,7 +133,14 @@ func (s *agentAdminService) actionEffect(ctx context.Context, r persistence.Agen
 		return fmt.Errorf("%w: the request does not name its action", approverdevice.ErrPermanent)
 	}
 	repo := s.c.repos.BrokerActions
-	err := repo.Approve(ctx, pl.ActionID, pl.ArgsSHA256, "device:"+r.DecidedByDevice, time.Now().UTC())
+	var err error
+	if days, uses, grant := approverdevice.ParseGrantChoice(r.DecidedChoice); grant {
+		// Approved with a standing grant (broker write-actions design, tier
+		// 2 item 2): the seed approval and the grant in one transaction.
+		err = s.c.approveActionWithGrant(ctx, pl, "device:"+r.DecidedByDevice, days, uses)
+	} else {
+		err = repo.Approve(ctx, pl.ActionID, pl.ArgsSHA256, "device:"+r.DecidedByDevice, time.Now().UTC())
+	}
 	if errors.Is(err, persistence.ErrBrokerActionNoTransition) {
 		a, gerr := repo.Get(ctx, pl.ActionID)
 		if gerr != nil {

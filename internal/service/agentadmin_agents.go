@@ -46,6 +46,27 @@ func (v lazyAgentsView) DescribeAgent(ctx context.Context, ns string) (*ui.Agent
 	return agentsView{s: s}.DescribeAgent(ctx, ns)
 }
 
+// WithdrawModelDestination implements ui.ModelWithdrawer.
+func (v lazyAgentsView) WithdrawModelDestination(ctx context.Context, ns, destination string) (bool, error) {
+	s := v.c.agentAdmin()
+	if s == nil {
+		return false, agentadmin.ErrUnavailable
+	}
+	return agentsView{s: s}.WithdrawModelDestination(ctx, ns, destination)
+}
+
+// WithdrawModelDestination sets removed_at on a namespace's model
+// destination approval: the only writer of removed_at (design §18.6 item 2,
+// round 3 F3; a source test pins it). The row and its history stay; the
+// run-time check treats it as absent, and approving it again is a new
+// widening.
+func (v agentsView) WithdrawModelDestination(ctx context.Context, ns, destination string) (bool, error) {
+	if !agentns.Valid(ns) {
+		return false, fmt.Errorf("invalid namespace %q", ns)
+	}
+	return v.s.grants.MarkModelDestinationRemoved(ctx, ns, destination, time.Now().UTC())
+}
+
 // namespaces lists every agent namespace with at least one project.
 func (v agentsView) namespaces() []string {
 	seen := map[string]bool{}
@@ -131,6 +152,17 @@ func (v agentsView) DescribeAgent(ctx context.Context, ns string) (*ui.AgentPage
 		Pending: requestsView(setup.Pending), Failed: requestsView(setup.Failed), Expired: requestsView(setup.Expired)}
 	for _, p := range setup.Projects {
 		page.Projects = append(page.Projects, agentProjectView(p))
+	}
+	dests, err := v.s.grants.ListModelDestinations(ctx, ns)
+	if err != nil {
+		return nil, err
+	}
+	for _, d := range dests {
+		status := "approved"
+		if d.RemovedAt != nil {
+			status = "withdrawn"
+		}
+		page.Models = append(page.Models, ui.AgentItem{Name: d.Destination, Status: status})
 	}
 	return page, nil
 }

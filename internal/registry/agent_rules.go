@@ -20,7 +20,7 @@ import (
 // (§7.3).
 
 // agentRuleRejections records every violation in cfg's index.
-func agentRuleRejections(cfg *ConfigSet) {
+func agentRuleRejections(cfg *ConfigSet, agentModels map[string]bool) {
 	if cfg == nil {
 		return
 	}
@@ -45,8 +45,12 @@ func agentRuleRejections(cfg *ConfigSet) {
 			delete(cfg.projects, id)
 		}
 	}
-	for id := range cfg.swarms {
-		if err := checkReservedID(id); err != nil {
+	for id, sw := range cfg.swarms {
+		err := checkReservedID(id)
+		if err == nil {
+			err = checkAgentSwarmModels(id, sw, agentModels)
+		}
+		if err != nil {
 			reject("swarm", id, err)
 			delete(cfg.swarms, id)
 		}
@@ -215,6 +219,30 @@ func checkAgentWritePairs(id string, servers []MCPServerConfig) error {
 		base, ok := byName[agentns.IntegrationOf(s.Name)]
 		if !ok || base.BrokerWrite || base.URL != s.URL || base.Auth.ValueFrom != s.Auth.ValueFrom {
 			return fmt.Errorf("agent project %q server %q: a write entry needs its read entry %q with the same URL and credential", id, s.Name, agentns.IntegrationOf(s.Name))
+		}
+	}
+	return nil
+}
+
+// checkAgentSwarmModels applies agent-administered design §18.6 item 2 to an
+// agent namespace's swarm: no role carries a modelFallback (Change 7, review
+// d94f F6), and a role's model is in the operator's catalogue (round 2 F4).
+// Destination approval is not judged here: it lives in the database and is
+// checked before every attempt at run time (round 3 F5). agentModels nil
+// skips the membership check (a registry the daemon did not configure).
+func checkAgentSwarmModels(id string, sw *Swarm, agentModels map[string]bool) error {
+	if sw == nil {
+		return nil
+	}
+	if _, agent := agentns.FromID(id); !agent {
+		return nil
+	}
+	for _, r := range sw.Roles {
+		if strings.TrimSpace(r.ModelFallback) != "" {
+			return fmt.Errorf("agent swarm %q role %q declares a modelFallback; an agent role runs only on its own model", id, r.Name)
+		}
+		if m := strings.TrimSpace(r.Model); m != "" && !agentModels[m] {
+			return fmt.Errorf("agent swarm %q role %q names the model %q, which is not in the operator's catalogue (agent_admin.models)", id, r.Name, m)
 		}
 	}
 	return nil

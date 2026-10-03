@@ -28,7 +28,15 @@ func TestCheckAgentImageUID(t *testing.T) {
 		t.Helper()
 		dir := t.TempDir()
 		writeSwarmWithImage(t, dir, "vornik-agent:latest")
-		return &Checker{configDir: dir, usernsMode: "keep-id", subuidOKFunc: func() bool { return true }}
+		return &Checker{
+			configDir: dir, usernsMode: "keep-id", subuidOKFunc: func() bool { return true },
+			// Unlabelled, and injected: this test used to fall through to
+			// realImageLabels and shell out to podman (found 2026-10-03, D5).
+			imageLabelsFunc: func(context.Context, string) (map[string]string, error) {
+				return map[string]string{}, nil
+			},
+			hostIdentityFunc: func() (int, int, bool) { return host, host, true },
+		}
 	}
 
 	// baked == host -> OK
@@ -108,21 +116,33 @@ func TestCheckAgentImageUID_KeepIDPreflight_RunsBeforeConfigDirGuard(t *testing.
 // start that CE issue 59 showed takes 5.92-12.55s and gets SIGKILLed by the
 // probe's own deadline.
 
-// A labelled image is fine whatever the uid: that is the whole point of D4.
+// A labelled image is fine whatever its baked uid: that is the point of D4.
+//
+// Changed 2026-10-03 (D5): this test asserted OK from the label ALONE, which is
+// the verdict the doctor gave on the 2026.10.3 reference host while every agent
+// step failed. Since D5 the label path is OK only once the probe AS THE
+// RESOLVED USER (daemon uid:gid, keep-id) passes (R6). The baked-uid probe
+// (CE issue 59's slow start) still does not run for a labelled image.
 func TestCheckAgentImageUID_UIDAgnosticLabelIsOKDespiteMismatch(t *testing.T) {
 	dir := t.TempDir()
 	writeSwarmWithImage(t, dir, "vornik-agent:latest")
-	probed := false
+	bakedProbed := false
+	var labelProbedAs []string
 	h := &Checker{
-		configDir:    dir,
-		usernsMode:   "keep-id",
-		subuidOKFunc: func() bool { return true },
+		configDir:        dir,
+		usernsMode:       "keep-id",
+		subuidOKFunc:     func() bool { return true },
+		hostIdentityFunc: func() (int, int, bool) { return 1001, 1001, true },
 		imageLabelsFunc: func(context.Context, string) (map[string]string, error) {
 			return map[string]string{agentUIDAgnosticLabel: "1"}, nil
 		},
+		labelProbeFunc: func(_ context.Context, _ string, user string) (bool, string, error) {
+			labelProbedAs = append(labelProbedAs, user)
+			return true, "", nil
+		},
 		bakedUIDFunc: func(context.Context, string) (int, error) {
-			probed = true
-			return hostUID() + 1, nil
+			bakedProbed = true
+			return 1000, nil
 		},
 	}
 
@@ -132,9 +152,12 @@ func TestCheckAgentImageUID_UIDAgnosticLabelIsOKDespiteMismatch(t *testing.T) {
 		t.Errorf("status = %q (%s), want OK — a uid-agnostic image works at any uid",
 			got.Status, got.Message)
 	}
-	if probed {
-		t.Error("the container probe ran even though the label answered — this is the " +
+	if bakedProbed {
+		t.Error("the baked-uid probe ran even though the label answered — this is the " +
 			"start that CE issue 59 reports taking 5.92-12.55s and being SIGKILLed")
+	}
+	if len(labelProbedAs) != 1 || labelProbedAs[0] != "1001:1001" {
+		t.Errorf("label probe ran as %v, want exactly [1001:1001] (D5 R6)", labelProbedAs)
 	}
 }
 

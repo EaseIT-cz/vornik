@@ -55,6 +55,13 @@ type agentAdminService struct {
 	// bg tracks detached work (a tools listing after a credential is
 	// stored), so a caller can wait for it.
 	bg sync.WaitGroup
+	// now is the clock the cover request's 24-hour cooldown reads (§18.4
+	// F10); a test moves it.
+	now func() time.Time
+	// toolGaps holds why a recipe server's tools were not filed for
+	// approval (design §19.8 F6), keyed "<project>/<server>".
+	gapsMu   sync.Mutex
+	toolGaps map[string]string
 }
 
 // background runs fn detached and tracked.
@@ -108,7 +115,7 @@ func (c *Container) agentAdmin() *agentAdminService {
 	}
 	s := &agentAdminService{c: c, renderer: r, devices: devices, grants: c.repos.AgentGrants,
 		requests: c.repos.ApproverDevices, proposals: c.repos.Proposals, engine: engine,
-		configDir: filepath.Dir(c.ConfigPath), configsDir: configsDir}
+		configDir: filepath.Dir(c.ConfigPath), configsDir: configsDir, now: time.Now}
 	devices.RegisterEffect(persistence.ApprovalKindWideningChange, s.applyApproved)
 	devices.RegisterOnReject(persistence.ApprovalKindWideningChange, s.rejectApproved)
 	// A credential slot's effect stores what its decision carried: the
@@ -120,6 +127,10 @@ func (c *Container) agentAdmin() *agentAdminService {
 	// (plan P4.8).
 	devices.RegisterEffect(persistence.ApprovalKindBrokerAction, s.actionEffect)
 	devices.RegisterOnReject(persistence.ApprovalKindBrokerAction, s.actionRejected)
+	// The approval page's plain summary and risk level (design §18.7).
+	devices.RegisterDescriber(persistence.ApprovalKindWideningChange, describeRequest)
+	devices.RegisterDescriber(persistence.ApprovalKindCredentialSlot, describeRequest)
+	devices.RegisterDescriber(persistence.ApprovalKindBrokerAction, describeAction)
 	c.agentAdminSvc = s
 	return c.agentAdminSvc
 }
@@ -149,6 +160,14 @@ func (p agentAdminProxy) ListSetupJSON(ctx context.Context, key *persistence.API
 		return nil, agentadmin.ErrUnavailable
 	}
 	return s.ListSetupJSON(ctx, key)
+}
+
+func (p agentAdminProxy) ApprovedWorkflows(ctx context.Context, key *persistence.APIKey) ([]string, error) {
+	s := p.c.agentAdmin()
+	if s == nil {
+		return nil, agentadmin.ErrUnavailable
+	}
+	return s.ApprovedWorkflows(ctx, key)
 }
 
 func (p agentAdminProxy) DescribeJSON(ctx context.Context, key *persistence.APIKey) (any, error) {
@@ -184,6 +203,10 @@ func (s *agentAdminService) Do(ctx context.Context, key *persistence.APIKey, ver
 	if verb == agentadmin.VerbAddMCPServer {
 		advertisedURL, advertised = s.advertiseUnauthenticated(ctx, ns, input)
 	}
+	var recipeTargets map[string][]string
+	if verb == agentadmin.VerbInstallRecipe {
+		recipeTargets = s.advertiseRecipeTargets(ctx, ns, input)
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	st, err := s.loadState(ctx, ns, key.ProjectID)
@@ -193,6 +216,16 @@ func (s *agentAdminService) Do(ctx context.Context, key *persistence.APIKey, ver
 	if advertisedURL != "" {
 		st.Advertised[advertisedURL] = advertised
 	}
+	for url, tools := range recipeTargets {
+		st.Advertised[url] = tools
+	}
+	// A namespace above its ceiling owes a cover request (§18.4 F10): filed
+	// here, from the state loaded under this lock and BEFORE the block
+	// check, so the first refused verb names the request it filed.
+	coverID, err := s.ensureCover(ctx, st)
+	if err != nil {
+		return AgentAdminResult{}, err
+	}
 	ch, err := s.renderer.Render(st, verb, input)
 	if err != nil {
 		return AgentAdminResult{}, err
@@ -200,9 +233,19 @@ func (s *agentAdminService) Do(ctx context.Context, key *persistence.APIKey, ver
 	if ch.Class == agentadmin.Refused {
 		return AgentAdminResult{Effect: EffectRefused, Reason: ch.Reason}, nil
 	}
+	if why, err := s.spendingBlocked(st, ch, coverID); err != nil {
+		return AgentAdminResult{}, err
+	} else if why != "" {
+		return AgentAdminResult{Effect: EffectRefused, Reason: why}, nil
+	}
 	if ch.Slot != nil {
 		return s.fileRequest(ctx, persistence.ApprovalKindCredentialSlot, "",
 			approvalPayload{Change: ch.Rendered, Locks: ch.Locks, Slot: ch.Slot}, ch)
+	}
+	if ch.Class == agentadmin.Inert && len(ch.Ops) == 0 {
+		// Nothing differs (a recipe reinstalled as it is, design §19.11 4):
+		// nothing is filed.
+		return AgentAdminResult{Effect: EffectApplied, Sentence: ch.Sentence}, nil
 	}
 	if len(ch.Ops) > 12 {
 		return AgentAdminResult{Effect: EffectRefused, Reason: verb + " refused: the change touches more than 12 files; remove the project's workflows first"}, nil
@@ -330,6 +373,9 @@ func (s *agentAdminService) verifyLoaded(ch agentadmin.Change) string {
 // recordNarrowing withdraws approvals a removal makes moot. Grants are never
 // written here: only the widening_change effect writes them.
 func (s *agentAdminService) recordNarrowing(ctx context.Context, n agentadmin.Narrowing) error {
+	if err := s.recordToolRemovals(ctx, n.RemovedTools); err != nil {
+		return err
+	}
 	now := time.Now().UTC()
 	for _, ref := range n.RemovedIntegrations {
 		if err := s.grants.MarkIntegrationRemoved(ctx, ref.Project, ref.Name, now); err != nil {
@@ -355,15 +401,24 @@ type approvalPayload struct {
 	Ops        []agentadmin.FileOp  `json:"-"`
 	// Slot is a credential_slot request's typed content (plan P4.1).
 	Slot *agentadmin.CredentialSlot `json:"slot,omitempty"`
+	// ReRenderOf names the request this one replaces: the daemon filed it
+	// because that one's stated maximum was exceeded at apply (§18.4).
+	ReRenderOf string `json:"re_render_of,omitempty"`
+	// Credentials are the credential requests an approved recipe install
+	// files next (design §19.9 F1).
+	Credentials []agentadmin.CredentialFollowUp `json:"credentials,omitempty"`
 }
 
 func (s *agentAdminService) requestApproval(ctx context.Context, p *persistence.ControlPlaneProposal, ch agentadmin.Change) (AgentAdminResult, error) {
 	return s.fileRequest(ctx, persistence.ApprovalKindWideningChange, p.ID,
-		approvalPayload{ProposalID: p.ID, Change: ch.Rendered, Grant: ch.Grant, Narrow: ch.Narrow, Locks: ch.Locks}, ch)
+		approvalPayload{ProposalID: p.ID, Change: ch.Rendered, Grant: ch.Grant, Narrow: ch.Narrow, Locks: ch.Locks, Credentials: ch.Credentials}, ch)
 }
 
 // fileRequest files an approval request of kind for the device; changeID is
-// the proposal behind it ("" for a credential slot, which has none).
+// the proposal behind it ("" for a credential slot, which has none). Callers
+// hold s.mu, and the device service's push is synchronous network I/O: it
+// never calls back into this service, so holding the lock across it orders
+// nothing new (review e1a4 F4), at the cost of holding it for one push.
 func (s *agentAdminService) fileRequest(ctx context.Context, kind, changeID string, payload approvalPayload, ch agentadmin.Change) (AgentAdminResult, error) {
 	raw, err := json.Marshal(payload)
 	if err != nil {
@@ -392,7 +447,14 @@ func (s *agentAdminService) fileRequest(ctx context.Context, kind, changeID stri
 }
 
 // applyApproved is the widening_change effect. It is idempotent: an already
-// applied proposal skips to recording the grant, which is an upsert.
+// applied proposal skips to recording the grant, and a refused one finds the
+// request it already filed in its place.
+//
+// The ceiling check, the apply and the grant are one unit under s.mu (design
+// §18.4 item 2): the namespace sum with this change is checked against the
+// most its sentence stated BEFORE anything applies, and the ceiling it
+// writes is max(ceiling, sum), read and written under the same lock, so two
+// approvals can neither both pass against a stale ceiling nor lower it.
 func (s *agentAdminService) applyApproved(ctx context.Context, r persistence.AgentApprovalRequestRow) error {
 	var pl approvalPayload
 	if err := json.Unmarshal(r.Rendered, &pl); err != nil || pl.ProposalID == "" {
@@ -403,22 +465,56 @@ func (s *agentAdminService) applyApproved(ctx context.Context, r persistence.Age
 		return err
 	}
 	actor := "device:" + r.DecidedByDevice
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	st, err := s.loadStateExcluding(ctx, r.Namespace, agentns.ID(r.Namespace, "home"), r.ID)
+	if err != nil {
+		return err
+	}
+	if pl.Grant.Cover {
+		// The daemon's cover request (§18.4 F10): the flag is read from the
+		// row's canonical payload, the document the device approved.
+		return s.applyCover(ctx, r, pl, p, actor, st)
+	}
+	// A model destination is re-resolved through the live router now
+	// (design §18.6 item 2, round 3 F2): if it is not the one the device's
+	// sentence named, nothing applies and nothing is recorded, so a row never
+	// holds a destination nobody approved.
+	if why := s.c.modelRouteMoved(pl.Grant.Models); why != "" {
+		if p.Status == persistence.ProposalStatusDraft || p.Status == persistence.ProposalStatusApproved {
+			if err := s.proposals.SetStatus(ctx, p.ID, persistence.ProposalStatusRejected, actor); err != nil {
+				return err
+			}
+		}
+		return fmt.Errorf("%w: %s", approverdevice.ErrPermanent, why)
+	}
+	ceiling := st.CeilingUSD
 	switch p.Status {
 	case persistence.ProposalStatusApplied:
+		// Applied before a crash: the sum already includes the change. The
+		// ceiling it may write is still bounded by what the user approved.
+		if pl.Grant.AddsUSD != nil || pl.Grant.CeilingUSD != nil {
+			ceiling = max(ceiling, min(st.BudgetTotal(), agentadmin.MaxAllowedTotal(pl.Grant, st.CeilingUSD)))
+		}
 	case persistence.ProposalStatusDraft, persistence.ProposalStatusApproved:
+		ch, err := s.changeOf(p)
+		if err != nil {
+			return fmt.Errorf("%w: %v", approverdevice.ErrPermanent, err)
+		}
+		after, err := st.BudgetTotalAfter(ch.Ops)
+		if err != nil {
+			return fmt.Errorf("%w: %v", approverdevice.ErrPermanent, err)
+		}
+		var ok bool
+		if ceiling, ok = agentadmin.CeilingAfter(pl.Grant, st.CeilingUSD, st.BudgetTotal(), after); !ok {
+			return s.refuseOverMaximum(ctx, r, pl, p, actor, after, agentadmin.MaxAllowedTotal(pl.Grant, st.CeilingUSD))
+		}
 		if p.Status == persistence.ProposalStatusDraft {
 			if err := s.proposals.SetStatus(ctx, p.ID, persistence.ProposalStatusApproved, actor); err != nil {
 				return err
 			}
 		}
-		ch, err := s.changeOf(p)
-		if err != nil {
-			return fmt.Errorf("%w: %v", approverdevice.ErrPermanent, err)
-		}
-		s.mu.Lock()
-		why := s.applyAndVerify(ctx, p.ID, actor, ch)
-		s.mu.Unlock()
-		if why != "" {
+		if why := s.applyAndVerify(ctx, p.ID, actor, ch); why != "" {
 			if strings.HasPrefix(why, "a task of this project is running") {
 				return errors.New(why) // transient: the tick retries
 			}
@@ -427,7 +523,104 @@ func (s *agentAdminService) applyApproved(ctx context.Context, r persistence.Age
 	default:
 		return fmt.Errorf("%w: the change is %s", approverdevice.ErrPermanent, strings.ToLower(p.Status))
 	}
-	return s.recordGrant(ctx, r, pl)
+	if err := s.recordGrant(ctx, r, pl, st.CeilingUSD, ceiling); err != nil {
+		return err
+	}
+	// A recipe install's credentials are requested once it applied, each
+	// its own approval kind on the phone (design §19.2, §19.11).
+	s.fileCredentialFollowUps(ctx, r, pl.Credentials)
+	return nil
+}
+
+// refuseOverMaximum ends an approved request whose stated maximum the
+// namespace sum would now exceed (requests made after it were approved
+// first): nothing applies, its proposal is rejected, and the same change is
+// filed again rendered against the present, so the user approves the true
+// figures (design §18.4 items 2 and 4; the new request's own push reaches
+// the approver device). A re-render pins the requests waiting NOW, so a
+// finite set of waiting requests yields finitely many re-renders (F4). The
+// caller holds s.mu; filing touches only the ledger and the device service's
+// repository and push, none of which takes s.mu, so nothing re-enters.
+func (s *agentAdminService) refuseOverMaximum(ctx context.Context, r persistence.AgentApprovalRequestRow, pl approvalPayload,
+	p *persistence.ControlPlaneProposal, actor string, sum, allowed float64) error {
+	// "Its approval stated" only when the figure is the one its sentence
+	// named; when a sibling raised the limit above that, the figure is the
+	// limit in force (review e1a4 F5).
+	figure := "the $" + agentadmin.FormatUSD(allowed) + " its approval stated"
+	if stated := statedMaximum(pl.Grant); stated < allowed-1e-9 {
+		figure = "the $" + agentadmin.FormatUSD(allowed) + " limit now in force (its approval stated $" + agentadmin.FormatUSD(stated) + ")"
+	}
+	why := fmt.Sprintf("approving it now would take your assistant's total monthly budget to $%s, above %s, "+
+		"because other requests that add spending were approved first; nothing was applied",
+		agentadmin.FormatUSD(sum), figure)
+	// File the re-render FIRST, then reject (review e1a4 F2): a crash between
+	// the two then leaves an approved proposal the retry refuses again, and
+	// reRender returns the request it already filed. The other order left a
+	// rejected proposal, which the retry answers ErrPermanent without ever
+	// filing the re-render.
+	next, err := s.reRender(ctx, r, pl, p)
+	if err != nil {
+		return err // transient: the tick retries, and finds what it already filed
+	}
+	if p.Status == persistence.ProposalStatusDraft || p.Status == persistence.ProposalStatusApproved {
+		if err := s.proposals.SetStatus(ctx, p.ID, persistence.ProposalStatusRejected, actor); err != nil {
+			return err // transient: the retry refuses again and finds the re-render
+		}
+	}
+	if next == "" {
+		return fmt.Errorf("%w: %s", approverdevice.ErrPermanent, why)
+	}
+	return fmt.Errorf("%w: %s. Vornik asked again with the true figures: request %s", approverdevice.ErrPermanent, why, next)
+}
+
+// statedMaximum is the most a request's sentence stated: max_total_usd, or a
+// legacy payload's ceiling_usd; 0 when it stated none.
+func statedMaximum(g agentadmin.Grant) float64 {
+	switch {
+	case g.MaxTotalUSD != nil:
+		return *g.MaxTotalUSD
+	case g.CeilingUSD != nil:
+		return *g.CeilingUSD
+	}
+	return 0
+}
+
+// reRender files the change behind r again, rendered against the present
+// state, and returns the new request's ID; "" when the change cannot be
+// filed again (its re-render is refused, e.g. the slug was taken meanwhile).
+// A request already filed in r's place is returned instead of a second one.
+func (s *agentAdminService) reRender(ctx context.Context, r persistence.AgentApprovalRequestRow, pl approvalPayload, p *persistence.ControlPlaneProposal) (string, error) {
+	if id, err := s.filedInPlaceOf(ctx, r.Namespace, r.ID); err != nil || id != "" {
+		return id, err
+	}
+	var doc struct {
+		Verb  string          `json:"verb"`
+		Input json.RawMessage `json:"input"`
+	}
+	if err := json.Unmarshal(pl.Change, &doc); err != nil || doc.Verb == "" {
+		return "", nil
+	}
+	st, err := s.loadStateExcluding(ctx, r.Namespace, agentns.ID(r.Namespace, "home"), r.ID)
+	if err != nil {
+		return "", err
+	}
+	ch, err := s.renderer.Render(st, doc.Verb, doc.Input)
+	if err != nil || ch.Class != agentadmin.Widening || ch.Slot != nil {
+		// Refused (the agent reads why on its next call), or inert, which
+		// the refusal makes impossible: the sum exceeded the ceiling in
+		// force. Filing nothing is the safe answer to both.
+		return "", nil
+	}
+	np, err := s.fileProposal(ctx, p.ActorKind, p.ActorCredentialID, ch)
+	if err != nil {
+		return "", err
+	}
+	res, err := s.fileRequest(ctx, persistence.ApprovalKindWideningChange, np.ID,
+		approvalPayload{ProposalID: np.ID, Change: ch.Rendered, Grant: ch.Grant, Narrow: ch.Narrow, Locks: ch.Locks, ReRenderOf: r.ID}, ch)
+	if err != nil {
+		return "", err
+	}
+	return res.ApprovalURL[strings.LastIndex(res.ApprovalURL, "/")+1:], nil
 }
 
 // changeOf rebuilds the ops of a filed proposal, for verify.
@@ -445,7 +638,10 @@ func (s *agentAdminService) changeOf(p *persistence.ControlPlaneProposal) (agent
 	return agentadmin.Change{Ops: ops}, nil
 }
 
-func (s *agentAdminService) recordGrant(ctx context.Context, r persistence.AgentApprovalRequestRow, pl approvalPayload) error {
+// recordGrant writes what an approval grants. The ceiling is written only
+// when the apply raised it (from → to, CeilingAfter's decision); the absolute
+// ceiling_usd an old payload pinned is never written as is (§18.4).
+func (s *agentAdminService) recordGrant(ctx context.Context, r persistence.AgentApprovalRequestRow, pl approvalPayload, from, to float64) error {
 	at := time.Now().UTC()
 	if r.DecidedAt != nil {
 		at = *r.DecidedAt
@@ -467,9 +663,18 @@ func (s *agentAdminService) recordGrant(ctx context.Context, r persistence.Agent
 			return err
 		}
 	}
-	if pl.Grant.CeilingUSD != nil {
+	for _, m := range pl.Grant.Models {
+		// The only writer of agent_model_provider_approvals rows (design
+		// §18.6 item 2, round 3 F3; a source test pins it).
+		if err := s.grants.UpsertModelDestination(ctx, persistence.AgentModelDestinationApproval{
+			Namespace: r.Namespace, Destination: m.Destination, ApprovedByDevice: r.DecidedByDevice, ApprovedAt: at,
+		}); err != nil {
+			return err
+		}
+	}
+	if to > from {
 		if err := s.grants.UpsertCeiling(ctx, persistence.AgentNamespaceBudget{
-			Namespace: r.Namespace, CeilingUSD: *pl.Grant.CeilingUSD, ApprovedByDevice: r.DecidedByDevice, UpdatedAt: at,
+			Namespace: r.Namespace, CeilingUSD: to, ApprovedByDevice: r.DecidedByDevice, UpdatedAt: at,
 		}); err != nil {
 			return err
 		}
@@ -491,6 +696,12 @@ func (s *agentAdminService) rejectApproved(ctx context.Context, r persistence.Ag
 // loadState reads a namespace's state from the live registry, the config
 // tree, the approval tables and the pending requests.
 func (s *agentAdminService) loadState(ctx context.Context, ns, homeProject string) (*agentadmin.State, error) {
+	return s.loadStateExcluding(ctx, ns, homeProject, "")
+}
+
+// loadStateExcluding is loadState with one request left out of the pending
+// set: the one being applied, whose locks and spending are its own.
+func (s *agentAdminService) loadStateExcluding(ctx context.Context, ns, homeProject, excludeRequest string) (*agentadmin.State, error) {
 	cfg := s.c.Config.AgentAdmin
 	st := &agentadmin.State{
 		Namespace: ns, DefaultBudgetUSD: cfg.EffectiveDefaultProjectBudget(), CeilingUSD: cfg.EffectiveNamespaceBudget(),
@@ -545,7 +756,13 @@ func (s *agentAdminService) loadState(ctx context.Context, ns, homeProject strin
 			Kind: a.Kind, URL: a.URL, Read: a.ReadTools, Write: a.WriteTools, ReadPending: a.ReadPending, Removed: a.RemovedAt != nil,
 		}
 	}
-	return st, s.lockPending(ctx, st, ns)
+	// The model catalogue, classified against the live router now, and the
+	// namespace's live destination approvals (design §18.6 item 2).
+	st.UseModelCatalogue(s.c.agentModelSpecs(), s.c.modelRoute, s.c.modelPrice)
+	if st.ApprovedDestinations, err = s.c.liveModelDestinations(ctx, ns); err != nil {
+		return nil, err
+	}
+	return st, s.lockPending(ctx, st, ns, excludeRequest)
 }
 
 // hashFiles records the current bytes of every file of the namespace, loaded
@@ -573,8 +790,10 @@ func (s *agentAdminService) hashFiles(st *agentadmin.State, ns string) error {
 	return nil
 }
 
-// lockPending marks what pending and approved-unapplied changes hold.
-func (s *agentAdminService) lockPending(ctx context.Context, st *agentadmin.State, ns string) error {
+// lockPending marks what pending and approved-unapplied changes hold, and
+// sums what the waiting ones add to the namespace's spending (§18.4 item 3:
+// widening changes only; a credential slot or a device enrolment adds none).
+func (s *agentAdminService) lockPending(ctx context.Context, st *agentadmin.State, ns, exclude string) error {
 	pending, err := s.requests.ListPending(ctx, time.Now().UTC())
 	if err != nil {
 		return err
@@ -584,7 +803,7 @@ func (s *agentAdminService) lockPending(ctx context.Context, st *agentadmin.Stat
 		return err
 	}
 	for _, r := range append(pending, unapplied...) {
-		if r.Namespace != ns || (r.Kind != persistence.ApprovalKindWideningChange && r.Kind != persistence.ApprovalKindCredentialSlot) {
+		if r.ID == exclude || r.Namespace != ns || (r.Kind != persistence.ApprovalKindWideningChange && r.Kind != persistence.ApprovalKindCredentialSlot) {
 			continue
 		}
 		var pl approvalPayload
@@ -593,6 +812,13 @@ func (s *agentAdminService) lockPending(ctx context.Context, st *agentadmin.Stat
 		}
 		for _, l := range pl.Locks {
 			st.Locked[l] = true
+			if st.LockedBy == nil {
+				st.LockedBy = map[string]string{}
+			}
+			st.LockedBy[l] = r.ID + " (" + r.Kind + ")"
+		}
+		if r.Kind == persistence.ApprovalKindWideningChange && pl.Grant.AddsUSD != nil && *pl.Grant.AddsUSD > 0 {
+			st.PendingAddsUSD += *pl.Grant.AddsUSD
 		}
 	}
 	return nil

@@ -14,6 +14,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"vornik.io/vornik/internal/brokergrants"
 
 	"github.com/rs/zerolog"
 	"vornik.io/vornik/internal/admin"
@@ -807,11 +808,17 @@ type Server struct {
 	// (broker write-actions design §5.3); nil hides them. brokerActionKick
 	// hands an approved action to the daemon's action worker.
 	brokerActionRepo persistence.BrokerActionRepository
+	// agentApprovals lists the requests waiting on the approver device
+	// (inbox_agent_approvals.go). nil hides the section.
+	agentApprovals func(context.Context) ([]persistence.AgentApprovalRequestRow, error)
 	// agents backs /ui/admin/agents (agent-administered Vornik plan P6.5).
 	agents           AgentsSource
 	brokerActionKick func(actionID string)
 	// brokerActionChanged tells the push outbox a decision was recorded.
 	brokerActionChanged func()
+	// standingGrants provides the standing-grant service (broker
+	// write-actions design, tier 2); nil hides the offer and the section.
+	standingGrants func() *brokergrants.Service
 }
 
 // WebWriteApprovalDeliverFunc delivers an approved web-write's one-time
@@ -2368,6 +2375,8 @@ func (s *Server) Handler() http.Handler {
 	// deeplinkable GET).
 	mux.HandleFunc("/inbox/web-write/", s.webWriteInboxRouter)
 	mux.HandleFunc("/inbox/broker-action/", s.brokerActionInboxRouter)
+	mux.HandleFunc("/inbox/broker-actions/batch", s.BrokerActionBatch)
+	mux.HandleFunc("/inbox/standing/", s.StandingGrantChange)
 
 	// Executions — cross-task run list (IA completion) + detail/actions
 	// under the prefix.
@@ -3043,6 +3052,9 @@ func uiFuncMap() template.FuncMap {
 			}
 			return m[key]
 		},
+		// displayTaskPayload shortens a broker task's document inputs for
+		// the task page (broker design §18; review 20261003-6fec item 3).
+		"displayTaskPayload": displayTaskPayload,
 		// prettyJSON formats raw JSON bytes with indentation for display.
 		// Strips toolAudit (large) and truncates long output fields for readability.
 		"prettyJSON": func(data []byte) string {

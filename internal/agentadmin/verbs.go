@@ -120,16 +120,15 @@ func (r *Renderer) createProject(st *State, raw json.RawMessage) (Change, error)
 	for _, op := range c.Ops {
 		c.ReadSet[op.Path] = ReadSetAbsent
 	}
-	total := st.budgetTotal() + p.MonthlyUSD
 	c.Sentence = fmt.Sprintf("Your assistant (%s) created the project %q (%s) with a $%s monthly budget.",
 		ns, id, quoteShort(in.Purpose), formatUSD(p.MonthlyUSD))
-	if total > st.CeilingUSD+1e-9 {
+	var g Grant
+	if clause, raises := spendingTerms(st, p.MonthlyUSD, &g); raises {
+		// Within the ceiling the change is inert and applies now; no grant.
 		c.Class = Widening
-		ceiling := total
-		c.Grant.CeilingUSD = &ceiling
-		c.Sentence = fmt.Sprintf("Your assistant (%s) wants to create the project %q (%s) with a $%s monthly budget. "+
-			"That takes your assistant's total monthly budget to $%s, above the $%s you approved; approving raises the limit to $%s.",
-			ns, id, quoteShort(in.Purpose), formatUSD(p.MonthlyUSD), formatUSD(total), formatUSD(st.CeilingUSD), formatUSD(total))
+		c.Grant.AddsUSD, c.Grant.MaxTotalUSD = g.AddsUSD, g.MaxTotalUSD
+		c.Sentence = fmt.Sprintf("Your assistant (%s) wants to create the project %q (%s) with a $%s monthly budget.",
+			ns, id, quoteShort(in.Purpose), formatUSD(p.MonthlyUSD)) + clause
 	}
 	return c, nil
 }
@@ -143,15 +142,27 @@ func placeholderWorkflow(ns, id string) workflowData {
 		InputSchema:  `{"additionalProperties":false,"properties":{},"type":"object"}`,
 		EgressSchema: `{"additionalProperties":false,"properties":{"ok":{"type":"boolean"}},"required":["ok"],"type":"object"}`,
 		MaxBytes:     egressDocBytes,
-		Steps: []stepData{{Name: placeholderStep, Role: defaultRole().Name, Next: "done", Last: true,
+		Steps: []stepData{{Name: placeholderStep, Role: defaultRole().Name, Next: "done", First: true, Last: true, Closing: closingOneStep,
 			Instructions: "Report whether you could start: write ok as true."}},
 	}
 }
 
 type stepData struct {
 	Name, Role, Instructions, Next string
-	Last                           bool
+	// First and Last place the step in the chain (design §18.10): every step
+	// but the first is told where earlier steps' files are, every step but
+	// the last how to hand work on, and the last writes the answer.
+	First, Last bool
+	// Closing ends the last step's text: today's sentence for a one-step
+	// workflow, and for a longer one a sentence that leaves earlier steps'
+	// files alone.
+	Closing string
 }
+
+const (
+	closingOneStep   = "Write no other output file."
+	closingMultiStep = "Write no other file, and do not change earlier steps' files."
+)
 
 type workflowData struct {
 	Namespace, ID, DisplayName, Description, Entrypoint string
@@ -161,6 +172,9 @@ type workflowData struct {
 	Proposes                                            []proposeData
 	// Schedule is broker.schedule as a JSON flow mapping; "" for none.
 	Schedule string
+	// Version is the workflow's version; "" renders 1.0.0. A recipe install
+	// marks its recipe in the build metadata (recipeVersionTag).
+	Version string
 }
 
 func (r *Renderer) defineSwarm(st *State, raw json.RawMessage) (Change, error) {
@@ -208,11 +222,64 @@ func (r *Renderer) defineSwarm(st *State, raw json.RawMessage) (Change, error) {
 	if err != nil {
 		return Change{}, err
 	}
-	if len(changed) > 0 {
+	modelClauses := modelReach(st, roles, &c)
+	if len(changed) > 0 || len(modelClauses) > 0 {
 		c.Class = Widening
-		c.Sentence = fmt.Sprintf("Your assistant (%s) wants to change the roles of %q. The workflow %s.", ns, id, strings.Join(changed, "; the workflow "))
+		c.Sentence = fmt.Sprintf("Your assistant (%s) wants to change the roles of %q.", ns, id)
+		for _, m := range modelClauses {
+			c.Sentence += " " + m
+		}
+		if len(changed) > 0 {
+			c.Sentence += fmt.Sprintf(" The workflow %s.", strings.Join(changed, "; the workflow "))
+		}
 	}
 	return c, nil
+}
+
+// catalogueModel checks a role's model against the operator's catalogue
+// (design §18.6 item 2; §7.1's Refused row: a model outside it).
+func catalogueModel(st *State, ri RoleInput) (string, string) {
+	model := strings.TrimSpace(ri.Model)
+	if model == "" {
+		return "", ""
+	}
+	if len(st.models) == 0 {
+		return "", "no model can be chosen on this installation: the operator lists none (agent_admin.models); leave model out to use the installation's default"
+	}
+	if _, ok := st.models[model]; !ok {
+		ids := make([]string, 0, len(st.models))
+		for _, m := range SortedModels(st.models) {
+			ids = append(ids, m.ID)
+		}
+		return "", fmt.Sprintf("the model %q is not in the installation's catalogue; choose one of: %s (describe_installation says what each is good for)", model, strings.Join(ids, ", "))
+	}
+	return model, ""
+}
+
+// modelReach makes a role on a remote model whose destination the namespace
+// has not approved a widening of the change (design §18.6 item 2, rounds 2
+// and 3): the approval records the destination, "<sub-provider>@<host>",
+// for the whole namespace, so a second role on it applies at once. It
+// returns one sentence clause per such role, naming the host.
+func modelReach(st *State, roles []RoleSpec, c *Change) []string {
+	var clauses []string
+	granted := map[string]bool{}
+	for _, r := range roles {
+		if r.Model == "" {
+			continue
+		}
+		m, ok := st.models[r.Model]
+		if !ok || m.Dest.Local || st.ApprovedDestinations[m.Dest.String()] {
+			continue
+		}
+		dest := m.Dest.String()
+		if !granted[dest] {
+			granted[dest] = true
+			c.Grant.Models = append(c.Grant.Models, ModelGrant{Destination: dest, Model: r.Model, Role: r.Name})
+		}
+		clauses = append(clauses, fmt.Sprintf("The %s role would use the model %q, which sends what the %s role works on to %s.", r.Name, r.Model, r.Name, m.Dest.Words()))
+	}
+	return clauses
 }
 
 // buildRoles validates define_swarm's roles and returns them, with the
@@ -239,7 +306,18 @@ func buildRoles(st *State, p *ProjectState, in []RoleInput) ([]RoleSpec, string)
 		if why != "" {
 			return nil, "role " + ri.Name + ": " + why
 		}
-		roles = append(roles, RoleSpec{Name: ri.Name, Description: firstLine(ri.Instructions), Instructions: ri.Instructions, Tools: tools})
+		// A broker step returns only through artifacts/out/result.json, so a
+		// role without file_write can never answer (§18.1). It is a
+		// workspace-confined built-in: granting it widens nothing.
+		if !contains(tools, "file_write") {
+			tools = append(tools, "file_write")
+			sort.Strings(tools)
+		}
+		model, why := catalogueModel(st, ri)
+		if why != "" {
+			return nil, "role " + ri.Name + ": " + why
+		}
+		roles = append(roles, RoleSpec{Name: ri.Name, Description: firstLine(ri.Instructions), Instructions: ri.Instructions, Tools: tools, Model: model})
 	}
 	if !seen[defaultRole().Name] {
 		roles = append(roles, defaultRole())
@@ -419,6 +497,7 @@ func workflowChange(st *State, p *ProjectState, wf *registry.Workflow, md string
 		ReadSet: map[string]string{},
 		Locks:   []string{lockProject(pid), lockWorkflow(id), workflowPath(id)},
 		Class:   Inert,
+		reach:   &sig,
 	}
 	expect(st, c.ReadSet, workflowPath(id))
 	expect(st, c.ReadSet, projectPath(pid))
@@ -430,6 +509,7 @@ func workflowChange(st *State, p *ProjectState, wf *registry.Workflow, md string
 		c.Sentence = fmt.Sprintf("Your assistant (%s) wants the project %q to run the workflow %q. "+
 			"It will return to your assistant: %s. It can reach %s.",
 			ns, pid, id, strings.Join(egressLines, "; "), reachPhrase(sig))
+		c.Sentence += documentSentence(sig)
 		c.Sentence += proposeSentence(proposePhrases)
 		c.Sentence += scheduleSentence(id, wf.Broker.Schedule, st.Workflows[id])
 	}
@@ -473,7 +553,12 @@ func buildSteps(p *ProjectState, in []StepInput) ([]stepData, string) {
 		if i+1 < len(in) {
 			next = in[i+1].Name
 		}
-		steps = append(steps, stepData{Name: s.Name, Role: s.Role, Instructions: s.Instructions, Next: next, Last: i+1 == len(in)})
+		closing := closingOneStep
+		if len(in) > 1 {
+			closing = closingMultiStep
+		}
+		steps = append(steps, stepData{Name: s.Name, Role: s.Role, Instructions: s.Instructions, Next: next,
+			First: i == 0, Last: i+1 == len(in), Closing: closing})
 	}
 	return steps, ""
 }
@@ -667,15 +752,9 @@ func (r *Renderer) setBudget(st *State, raw json.RawMessage) (Change, error) {
 	c.Sentence = fmt.Sprintf("Your assistant (%s) lowered the monthly budget of %q to $%s.", ns, pid, formatUSD(v))
 	if v > p.MonthlyUSD+1e-9 {
 		c.Class = Widening
-		total := st.budgetTotal() - p.MonthlyUSD + v
+		clause, _ := spendingTerms(st, v-p.MonthlyUSD, &c.Grant)
 		c.Sentence = fmt.Sprintf("Your assistant (%s) wants to raise the monthly budget of %q from $%s to $%s.",
-			ns, pid, formatUSD(p.MonthlyUSD), formatUSD(v))
-		if total > st.CeilingUSD+1e-9 {
-			ceiling := total
-			c.Grant.CeilingUSD = &ceiling
-			c.Sentence += fmt.Sprintf(" That takes your assistant's total monthly budget to $%s, above the $%s you approved; approving raises the limit to $%s.",
-				formatUSD(total), formatUSD(st.CeilingUSD), formatUSD(total))
-		}
+			ns, pid, formatUSD(p.MonthlyUSD), formatUSD(v)) + clause
 	}
 	return c, nil
 }
@@ -957,6 +1036,62 @@ func parseRenderedWorkflow(md, id string) (*registry.Workflow, string) {
 		return nil, fmt.Sprintf("the workflow does not load: %v", err)
 	}
 	return wf, ""
+}
+
+// documentSentence is broker design §18.7 F3's clause: the document the
+// agent may hand the team, with its real bound and type, and where its text
+// can go. "" for a workflow without one.
+func documentSentence(sig ReachSignature) string {
+	what := documentPhrase(sig.Documents)
+	if what == "" {
+		return ""
+	}
+	s := " It takes from your assistant " + what
+	if len(sig.Integrations) == 0 {
+		return s + "; nothing leaves Vornik."
+	}
+	its := "its"
+	if len(sig.Documents) > 1 {
+		its = "their"
+	}
+	return s + "; the team may use " + its + " text in requests to " + strings.Join(quoteAll(sig.Integrations), ", ") + "."
+}
+
+// documentPhrase says the declared documents: "a document of up to 64 KB
+// (text/markdown)", or "two documents, of up to 2 KB (text/x-diff) and 4 KB
+// (text/markdown)".
+func documentPhrase(docs []registry.BrokerDocument) string {
+	switch len(docs) {
+	case 0:
+		return ""
+	case 1:
+		return "a document of up to " + documentBound(docs[0])
+	}
+	parts := make([]string, len(docs))
+	for i, d := range docs {
+		parts[i] = documentBound(d)
+	}
+	list := strings.Join(parts[:len(parts)-1], ", ") + " and " + parts[len(parts)-1]
+	return countWord(len(docs)) + " documents, of up to " + list
+}
+
+// countWord spells a small count and writes a larger one in digits.
+func countWord(n int) string {
+	words := []string{"zero", "one", "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten"}
+	if n >= 0 && n < len(words) {
+		return words[n]
+	}
+	return fmt.Sprintf("%d", n)
+}
+
+// documentBound is "64 KB (text/markdown)", or the byte count when the
+// bound is not a whole number of KB.
+func documentBound(d registry.BrokerDocument) string {
+	size := fmt.Sprintf("%d bytes", d.MaxBytes)
+	if d.MaxBytes%1024 == 0 {
+		size = fmt.Sprintf("%d KB", d.MaxBytes/1024)
+	}
+	return size + " (" + d.MediaType + ")"
 }
 
 func proposeSentence(phrases []string) string {

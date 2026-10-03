@@ -401,6 +401,28 @@ EOF
 RAG_FIRST_DIRECTIVE=$(emit_rag_first_directive)
 DIGEST=$(printf '%s\n%s' "$DIGEST" "$RAG_FIRST_DIRECTIVE")
 
+# ----- Working alongside Vornik (companion guidance design §10) -----
+# The operator's rules for delegating to Vornik, for every agent. The text
+# lives once, in internal/api/companion_guidance.md; the delegate skill
+# carries it between markers (a Go test compares them) and this hook prints
+# that section, so there is no fourth copy here. A missing section prints the
+# banner, never nothing: a silently empty directive is the §9 failure.
+GUIDANCE_MISSING_BANNER='vornik-companion: the working-alongside-Vornik guidance is missing from the delegate skill; reinstall the plugin'
+emit_guidance_directive() {
+  local skill="${VORNIK_DELEGATE_SKILL:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/../skills/delegate/SKILL.md}"
+  local body=""
+  if [[ -r "$skill" ]]; then
+    body="$(awk '/<!-- vornik-guidance:end -->/{f=0} f{print} /<!-- vornik-guidance:start -->/{f=1}' "$skill")"
+  fi
+  if [[ -z "${body//[[:space:]]/}" ]]; then
+    printf '\n## %s\n' "$GUIDANCE_MISSING_BANNER"
+    return
+  fi
+  printf '\n%s\n' "$body"
+}
+GUIDANCE_DIRECTIVE=$(emit_guidance_directive)
+DIGEST=$(printf '%s\n%s' "$DIGEST" "$GUIDANCE_DIRECTIVE")
+
 if [[ -n "$DIGEST" ]]; then
   jq -n --arg ctx "$DIGEST" '{
     hookSpecificOutput: {

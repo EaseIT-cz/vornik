@@ -14,6 +14,7 @@ import (
 	"vornik.io/vornik/internal/agentadmin"
 	"vornik.io/vornik/internal/apikey"
 	"vornik.io/vornik/internal/persistence"
+	"vornik.io/vornik/internal/registry"
 )
 
 // fakeAgentAdmin records verb calls.
@@ -21,6 +22,12 @@ type fakeAgentAdmin struct {
 	calls []string
 	// unavailable makes EnsureHome report a service not built yet.
 	unavailable bool
+	// approved is what ApprovedWorkflows answers.
+	approved []string
+}
+
+func (f *fakeAgentAdmin) ApprovedWorkflows(context.Context, *persistence.APIKey) ([]string, error) {
+	return f.approved, nil
 }
 
 func (f *fakeAgentAdmin) Do(_ context.Context, _ *persistence.APIKey, verb string, _ json.RawMessage) (agentadmin.Result, error) {
@@ -30,6 +37,10 @@ func (f *fakeAgentAdmin) Do(_ context.Context, _ *persistence.APIKey, verb strin
 func (f *fakeAgentAdmin) ListSetupJSON(context.Context, *persistence.APIKey) (any, error) {
 	f.calls = append(f.calls, toolListMySetup)
 	return map[string]string{"namespace": "hermes"}, nil
+}
+func (f *fakeAgentAdmin) ListRecipesJSON(context.Context, *persistence.APIKey) (any, error) {
+	f.calls = append(f.calls, agentadmin.VerbListRecipes)
+	return map[string]any{"recipes": []map[string]string{{"name": "inbox-digest"}}}, nil
 }
 func (f *fakeAgentAdmin) EnsureHome(_ context.Context, ns, _ string) (string, error) {
 	f.calls = append(f.calls, "ensure_home:"+ns)
@@ -178,19 +189,24 @@ func TestCompanionAdmin_InitializeInstructions(t *testing.T) {
 		s, _ := m["instructions"].(string)
 		return s
 	}
-	if got := instructions(withCompanionBearer(mcpRequest(t, "initialize", nil), agentRaw)); got != agentadmin.AdminGuidance() {
+	// Companion guidance design §10 (2026-10-03): the admin guidance, the
+	// scoping sentence, then the companion text, joined by blank lines; a
+	// plain companion key gets the companion text.
+	want := agentadmin.AdminGuidance() + "\n\n" + adminDelegationScope + "\n\n" + CompanionGuidance()
+	if got := instructions(withCompanionBearer(mcpRequest(t, "initialize", nil), agentRaw)); got != want {
 		t.Fatalf("the agent admin key's instructions: %q", got)
 	}
-	if got := instructions(withCompanionBearer(mcpRequest(t, "initialize", nil), plainRaw)); got != "" {
-		t.Fatalf("a plain key got instructions: %q", got)
+	if got := instructions(withCompanionBearer(mcpRequest(t, "initialize", nil), plainRaw)); got != CompanionGuidance() {
+		t.Fatalf("a plain key's instructions: %q", got)
 	}
 	if got := instructions(mcpRequest(t, "initialize", nil)); got != "" {
 		t.Fatalf("an unauthenticated initialize got instructions: %q", got)
 	}
-	// Review 20261002-3b9f F5: agent_admin.enabled: false stops it too.
+	// Review 20261002-3b9f F5: agent_admin.enabled: false stops the admin
+	// part; the key is then an ordinary companion key.
 	enabled = false
-	if got := instructions(withCompanionBearer(mcpRequest(t, "initialize", nil), agentRaw)); got != "" {
-		t.Fatalf("instructions while agent_admin is off: %q", got)
+	if got := instructions(withCompanionBearer(mcpRequest(t, "initialize", nil), agentRaw)); strings.Contains(got, "describe_installation") {
+		t.Fatalf("admin guidance while agent_admin is off: %q", got)
 	}
 }
 
@@ -216,6 +232,33 @@ func TestCompanionAdmin_DefineWorkflowOffersSchedule(t *testing.T) {
 		return
 	}
 	t.Fatal("no define_workflow tool")
+}
+
+// Design §18.6 item 2: define_swarm offers an optional model per role,
+// pointing at describe_installation's catalogue and saying what a remote one
+// asks of the user. Control: the define_swarm tool definition.
+func TestCompanionAdmin_DefineSwarmOffersARoleModel(t *testing.T) {
+	for _, d := range companionAdminToolDefs() {
+		if d.Name != agentadmin.VerbDefineSwarm {
+			continue
+		}
+		props, _ := d.InputSchema["properties"].(map[string]any)
+		roles, _ := props["roles"].(map[string]any)
+		items, _ := roles["items"].(map[string]any)
+		rp, _ := items["properties"].(map[string]any)
+		model, _ := rp["model"].(map[string]any)
+		desc, _ := model["description"].(string)
+		if !strings.Contains(desc, "describe_installation") || !strings.Contains(desc, "remote") {
+			t.Fatalf("define_swarm role model: %v", model)
+		}
+		for _, r := range items["required"].([]string) {
+			if r == "model" {
+				t.Fatal("model is required; it must be optional")
+			}
+		}
+		return
+	}
+	t.Fatal("no define_swarm tool")
 }
 
 // Regression (DoD lane bring-up, 2026-10-02): an agent admin key was offered
@@ -246,4 +289,91 @@ func TestCompanionToolsFor_OffersOnlyWhatTheKeyMayCall(t *testing.T) {
 	if mem["delegate"] || !mem["whoami"] {
 		t.Errorf("a memory-only key: delegate %v, whoami %v", mem["delegate"], mem["whoami"])
 	}
+}
+
+// Design §18.10 (review 34c4 minor): define_workflow's steps description
+// carries the same hand-off rule as the guidance, so an agent reading only
+// the tool schema learns it too. Control: the steps description.
+func TestCompanionAdmin_DefineWorkflowStepsStateTheHandoff(t *testing.T) {
+	for _, d := range companionAdminToolDefs() {
+		if d.Name != agentadmin.VerbDefineWorkflow {
+			continue
+		}
+		props, _ := d.InputSchema["properties"].(map[string]any)
+		steps, _ := props["steps"].(map[string]any)
+		desc, _ := steps["description"].(string)
+		if !strings.Contains(desc, agentadmin.HandoffRule) {
+			t.Fatalf("define_workflow steps description %q lacks %q", desc, agentadmin.HandoffRule)
+		}
+		return
+	}
+	t.Fatal("no define_workflow tool")
+}
+
+// Design §18.2 (review 3e94 F3): an agent admin key delegates only broker
+// workflows, which refuse prompt and inputArtifacts, so the delegate schema
+// it is shown omits both instead of inviting a refused call.
+// Control: companionToolsFor's agent branch.
+func TestCompanionAdmin_DelegateSchemaForAgentKeysOmitsRefusedFields(t *testing.T) {
+	srv, keys, _ := newCompanionMCPServer(t)
+	srv.agentAdmin, srv.agentAdminEnabled = &fakeAgentAdmin{}, func() bool { return true }
+	agentRaw, err := apikey.Generate("hermes--home")
+	require.NoError(t, err)
+	require.NoError(t, keys.Create(context.Background(), &persistence.APIKey{
+		ID: "akey-agent", ProjectID: "hermes--home", Name: "hermes", KeyHash: apikey.Hash(agentRaw),
+		KeyPrefix: apikey.DisplayPrefix(agentRaw), ClientKind: "hermes", CreatedAt: time.Now().UTC(),
+		AgentAdmin: true, AgentNamespace: "hermes",
+	}))
+	plainRaw, _ := seedCompanionKey(t, keys, "assistant", nil)
+	delegateProps := func(raw string) map[string]any {
+		rec := httptest.NewRecorder()
+		srv.CompanionMCPHandler(rec, withCompanionBearer(mcpRequest(t, "tools/list", nil), raw))
+		resp := decodeJSONRPC(t, rec.Body.Bytes())
+		b, _ := json.Marshal(resp.Result)
+		var out struct {
+			Tools []mcpToolDef `json:"tools"`
+		}
+		require.NoError(t, json.Unmarshal(b, &out))
+		for _, d := range out.Tools {
+			if d.Name == "delegate" {
+				props, _ := d.InputSchema["properties"].(map[string]any)
+				return props
+			}
+		}
+		t.Fatal("no delegate tool")
+		return nil
+	}
+	agent := delegateProps(agentRaw)
+	for _, f := range []string{"prompt", "inputArtifacts"} {
+		if _, ok := agent[f]; ok {
+			t.Errorf("an agent admin key's delegate schema offers %s", f)
+		}
+	}
+	if _, ok := agent["inputs"]; !ok {
+		t.Error("an agent admin key's delegate schema lost inputs")
+	}
+	plain := delegateProps(plainRaw)
+	if _, ok := plain["prompt"]; !ok {
+		t.Error("a plain companion key's delegate schema lost prompt")
+	}
+}
+
+// Design §18.2: define_workflow's inputs description states the input rules
+// the validator enforces, from the same source.
+func TestCompanionAdmin_DefineWorkflowInputsStateTheRules(t *testing.T) {
+	for _, d := range companionAdminToolDefs() {
+		if d.Name != agentadmin.VerbDefineWorkflow {
+			continue
+		}
+		props, _ := d.InputSchema["properties"].(map[string]any)
+		inputs, _ := props["inputs"].(map[string]any)
+		desc, _ := inputs["description"].(string)
+		for _, r := range registry.BrokerInputRules() {
+			if !strings.Contains(desc, r.Text) {
+				t.Errorf("inputs description lacks rule %q", r.ID)
+			}
+		}
+		return
+	}
+	t.Fatal("no define_workflow tool")
 }

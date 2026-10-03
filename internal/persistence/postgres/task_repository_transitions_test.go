@@ -50,7 +50,7 @@ func TestReleaseLease_HappyPath(t *testing.T) {
 		WithArgs(
 			"task-1", "lease-abc",
 			persistence.TaskStatusCompleted,
-			0, 0, "", "",
+			0, 0, "", "", false,
 		).
 		WillReturnResult(sqlmock.NewResult(0, 1))
 
@@ -79,7 +79,7 @@ func TestReleaseLease_PassesAllReleaseOptions(t *testing.T) {
 		WithArgs(
 			"task-1", "lease-abc",
 			persistence.TaskStatusFailed,
-			3, 5, "boom", "transient",
+			3, 5, "boom", "transient", false,
 		).
 		WillReturnResult(sqlmock.NewResult(0, 1))
 

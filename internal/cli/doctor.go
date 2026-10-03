@@ -84,6 +84,8 @@ Security:
   config_secret_hygiene Config.yaml plaintext secrets or loose permissions (recommends ${ENV_VAR})
   secret_store_key      Agent credential store: a missing or wrong key while credentials exist is an error
   approver_devices      Agent approvals: a warning when an agent namespace exists with no paired device or no push
+  agent_namespace_budget Agent namespaces whose project budgets sum above the approved ceiling, naming the waiting cover request
+  agent_model_catalogue Agent role models: agent_admin.models entries not offered to agent roles (no route, a command-line provider, or remote without an exact price)
 
 Models:
   model_health          Role-pinned models with high recent failure rate or

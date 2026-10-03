@@ -1,0 +1,14 @@
+{{define "group.html"}}{{template "head" (page "Review together" 0)}}
+<nav><a href="/ui/approve/">Approvals</a><a href="/ui/approve/standing">Standing approvals</a><a href="/ui/approve/devices">Devices</a></nav>
+<h1>{{.Title}}</h1>
+<p class="mut">Tick the ones you approve or reject. Nothing is ticked for you, and each is checked against exactly what this page shows.</p>
+<form method="post" action="/ui/approve/group/{{.Key}}">
+{{range .Items}}<div class="card">
+<label class="pick"><input type="checkbox" name="pick" value="{{.Req.ID}}|{{.Req.RenderedSHA256}}"> <span>{{.Req.Sentence}}</span></label>
+{{with .Desc}}<p class="risk risk-{{.Level}}"><strong>Risk: {{.Level}}</strong></p>{{end}}
+<details open><summary class="mut">Exactly what will be done ({{.Req.ID}})</summary><pre>{{.Pretty}}</pre></details></div>
+{{end}}
+<button class="ok" type="submit" name="decision" value="approve">Approve ticked</button>
+<button class="no" type="submit" name="decision" value="reject">Reject ticked</button>
+</form>
+{{template "foot"}}{{end}}

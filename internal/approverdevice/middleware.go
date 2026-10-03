@@ -25,7 +25,8 @@ type deviceCtx struct {
 // RequireDevice admits only requests carrying a valid device cookie. It reads
 // no other credential (no X-API-Key, no Authorization, no vornik_session), so
 // an admin key or an operator web session grants nothing here (design §9.2).
-// GET without a device goes to the pairing page; anything else is 403. Every
+// GET without a device goes to the pairing page, which returns to the page
+// asked for once paired (§9.2a); anything else is 403. Every
 // non-GET must also pass approval.CheckRequest (POST, same origin): with
 // SameSite=Strict on the cookie that is the CSRF control of record for this
 // surface (plan amendment 1).
@@ -38,7 +39,7 @@ func (s *Service) RequireDevice(next http.Handler) http.Handler {
 		}
 		if err != nil || d == nil {
 			if r.Method == http.MethodGet || r.Method == http.MethodHead {
-				http.Redirect(w, r, "/ui/pair", http.StatusSeeOther)
+				http.Redirect(w, r, pairURL(r.URL.Path), http.StatusSeeOther)
 				return
 			}
 			s.renderStatus(w, http.StatusForbidden, "Not an approver device", "This browser is not paired as an approver device. Pair it from the Vornik terminal with vornikctl pair-device.")

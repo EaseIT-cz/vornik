@@ -34,3 +34,17 @@ func TestHarnessClassOf(t *testing.T) {
 		}
 	}
 }
+
+// Hermes approval transport design §3: what Vornik cannot promise about
+// Hermes's own approvals is stated to a Hermes key, and only to it.
+func TestHarnessClaimsFor_HermesStatesTheHostApprovalLimit(t *testing.T) {
+	hermes := strings.Join(HarnessClaimsFor("hermes"), " ")
+	for _, want := range []string{"T1 held", "Hermes's own safety prompts", "cannot make Hermes obey"} {
+		if !strings.Contains(hermes, want) {
+			t.Errorf("hermes claims miss %q: %s", want, hermes)
+		}
+	}
+	if desktop := strings.Join(HarnessClaimsFor("claude-desktop"), " "); strings.Contains(desktop, "Hermes's own safety prompts") {
+		t.Errorf("a non-Hermes harness is told about Hermes's approvals: %s", desktop)
+	}
+}

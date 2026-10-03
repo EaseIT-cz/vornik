@@ -74,6 +74,13 @@ func fileWrite(env Env, raw json.RawMessage) string {
 	if err := root.MkdirAll(filepath.Dir(rel), 0o755); err != nil {
 		return "ERROR: " + err.Error()
 	}
+	// An existing file with no write bit is refused by its mode, as
+	// file_edit refuses it, so a staged broker document (0444, broker design
+	// §18.7 F6) stays unchanged even for a privileged user (review
+	// 20261003-6fec item 1).
+	if st, err := root.Lstat(rel); err == nil && st.Mode().IsRegular() && st.Mode().Perm()&0o222 == 0 {
+		return "ERROR: the file is read-only: " + resolved
+	}
 	if err := root.WriteFile(rel, []byte(content), 0o644); err != nil {
 		return "ERROR: " + err.Error()
 	}
@@ -108,6 +115,12 @@ func fileEdit(env Env, raw json.RawMessage) string {
 	st, err := root.Stat(rel)
 	if err != nil || !st.Mode().IsRegular() {
 		return "ERROR: file not found: " + resolved
+	}
+	// The edit replaces the file by rename, which a read-only mode does not
+	// stop: refuse it here, as file_write's open is refused (a staged broker
+	// document is 0444, broker design §18.7 F6).
+	if st.Mode().Perm()&0o222 == 0 {
+		return "ERROR: the file is read-only: " + resolved
 	}
 	data, err := root.ReadFile(rel)
 	if err != nil {

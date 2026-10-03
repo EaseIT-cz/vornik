@@ -1,7 +1,7 @@
 ---
 sources:
     - path: docs/release-notes
-      sha256: 9d4c36e229287e6564fd03682146a56f9f6da591c4cfef78c12183fdb0fa4123
+      sha256: 6bfc10bdb7ec3fc21fc67f751894ee55fe52ff6d38587fa396c0a1b6f990b263
 ---
 # Release Notes
 
@@ -56,6 +56,11 @@ updating.
 - If your configs still name `ghcr.io/grinco/vornik-agent`, they keep
   working: Vornik maps the old name. `vornikctl doctor` lists the files and
   the one-line command that updates them.
+  *Correction (2026-10-02): in 2026.10.2 and 2026.10.3 that doctor check
+  does not run in `vornikctl doctor` (it was wired into the wrong report);
+  it does from the next release. Until then, find the files with
+  `grep -rl ghcr.io/grinco/vornik-agent ~/.config/vornik/configs` and update
+  them with `sed -i 's#ghcr.io/grinco/vornik-agent#ghcr.io/easeit-cz/vornik-agent#g'`.*
 
 **Let your assistant set up Vornik, with Vornik as its safety layer.** Hermes,
 Claude Code (including the Claude desktop app's Code-tab routines), Claude

@@ -76,7 +76,11 @@ func (p *Phone) Pair(code string) error {
 }
 
 var (
-	cardRE = regexp.MustCompile(`(?s)<div class="card"><p>(.*?)</p>.*?<a href="/ui/approve/([A-Za-z0-9_]+)">Review</a>`)
+	// cardRE reads one card (the page is split at each card first, so a
+	// group card's "Review together" can never pair with the next card's
+	// link). The link's attributes are not fixed: the console's link-button
+	// carries class="act".
+	cardRE = regexp.MustCompile(`(?s)^<p>(.*?)</p>.*?<a [^>]*href="/ui/approve/([A-Za-z0-9_]+)"[^>]*>Review</a>`)
 	shaRE  = regexp.MustCompile(`name="rendered_sha256" value="([^"]+)"`)
 )
 
@@ -87,8 +91,10 @@ func (p *Phone) Pending() ([]PendingRequest, error) {
 		return nil, err
 	}
 	var out []PendingRequest
-	for _, m := range cardRE.FindAllStringSubmatch(page, -1) {
-		out = append(out, PendingRequest{ID: m[2], Sentence: html.UnescapeString(m[1])})
+	for _, card := range strings.Split(page, `<div class="card">`)[1:] {
+		if m := cardRE.FindStringSubmatch(card); m != nil {
+			out = append(out, PendingRequest{ID: m[2], Sentence: html.UnescapeString(m[1])})
+		}
 	}
 	return out, nil
 }
@@ -100,7 +106,26 @@ func (p *Phone) Approve(id, value string) error { return p.decide(id, "approve",
 // Reject rejects a request.
 func (p *Phone) Reject(id string) error { return p.decide(id, "reject", "") }
 
+// Answer answers a host action with one of the choices its page offers
+// (once, session, deny; Hermes approval transport design §4.2).
+func (p *Phone) Answer(id, choice string) error { return p.decide(id, choice, "") }
+
+// ApproveWithGrant approves a write and creates a standing grant for days
+// and at most uses future writes with its key (broker write-actions design,
+// tier 2): the "Approve, and approve future writes like this" form.
+func (p *Phone) ApproveWithGrant(id string, days, uses int) error {
+	return p.decideForm(id, "approve_grant", url.Values{"grant_days": {fmt.Sprint(days)}, "grant_uses": {fmt.Sprint(uses)}})
+}
+
 func (p *Phone) decide(id, decision, value string) error {
+	var extra url.Values
+	if value != "" {
+		extra = url.Values{"value": {value}}
+	}
+	return p.decideForm(id, decision, extra)
+}
+
+func (p *Phone) decideForm(id, decision string, extra url.Values) error {
 	page, err := p.get("/ui/approve/" + id)
 	if err != nil {
 		return err
@@ -110,8 +135,8 @@ func (p *Phone) decide(id, decision, value string) error {
 		return fmt.Errorf("request %s: the page shows no decision form", id)
 	}
 	form := url.Values{"decision": {decision}, "rendered_sha256": {m[1]}}
-	if value != "" {
-		form.Set("value", value)
+	for k, v := range extra {
+		form[k] = v
 	}
 	resp, err := p.post("/ui/approve/"+id, form)
 	if err != nil {

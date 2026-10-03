@@ -65,6 +65,12 @@ func buildOfflineDoctorReportFrom(ctx context.Context, cfg *config.Config, cfgPa
 // different things.
 func finishOfflineDoctorReport(ctx context.Context, cfg *config.Config, cfgPath string, report doctorReport) (doctorReport, string) {
 	if cfg != nil {
+		// The registries the offline checks build judge agent role models by
+		// the operator's catalogue, as the daemon's do (design §18.6 item 2;
+		// the registry fails closed without one, review 20261003-a525 A1).
+		registry.SetDefaultAgentModelCatalogue(cfg.AgentAdmin.ModelIDs())
+	}
+	if cfg != nil {
 		offlineCheckDatabase(ctx, cfg, &report)
 	}
 	offlineCheckJournal(ctx, &report)

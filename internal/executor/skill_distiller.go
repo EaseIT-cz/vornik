@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"strings"
 	"sync"
 	"time"
@@ -86,6 +87,14 @@ func (l *skillDistillLimiter) allow(project string, now time.Time) bool {
 // to run async so it never delays task completion.
 func (e *Executor) maybeDistillSkill(ctx context.Context, task *persistence.Task, result string) {
 	if e.distillerLLM == nil || e.skillRepo == nil || task == nil {
+		return
+	}
+	if reason, project, err := e.distillRefusal(ctx, task); reason != "" {
+		e.logger.Info().Err(err).Str("task_id", task.ID).Str("project_id", project).
+			Str("reason", reason).Msg("skill distiller: task not distilled")
+		if e.metrics != nil {
+			e.metrics.RecordSkillDistillSkipped(reason)
+		}
 		return
 	}
 	if !e.distillLimiter.allow(task.ProjectID, time.Now().UTC()) {
@@ -187,6 +196,55 @@ func (e *Executor) maybeDistillSkill(ctx context.Context, task *persistence.Task
 	}
 	e.logger.Info().Str("skill_id", skill.ID).Str("name", skill.Name).
 		Str("task_id", task.ID).Msg("skill distiller: proposed draft from completed task")
+}
+
+// distillRefusal names why a task must not be distilled, or "" when it may
+// be (agent-administered design §18.9 item 2). A broker task's result is
+// third-party content, and a draft skill is standing instructions for the
+// project's future agents, so a broker workflow (whatever its provenance:
+// first_party is the operator's claim, not something computable yet) and any
+// task of a broker project (broker §5.2b) are never distilled. Everything is
+// re-derived here, not taken from the caller: this runs in a goroutine after
+// the success path returns, so the row and the config may have moved since.
+func (e *Executor) distillRefusal(ctx context.Context, task *persistence.Task) (reason, project string, err error) {
+	project = task.ProjectID
+	if e.taskRepo == nil {
+		return "lookup_error", project, errors.New("no task repository")
+	}
+	row, err := e.taskRepo.Get(ctx, task.ID)
+	if err != nil || row == nil {
+		// Fail closed, but apart from a real status change: a storage fault
+		// must not read as task churn (review f8b7 F4).
+		return "lookup_error", project, err
+	}
+	project = row.ProjectID
+	if row.Status != persistence.TaskStatusCompleted {
+		return "not_completed", project, nil
+	}
+	if e.workflows == nil {
+		return "unresolved", project, nil
+	}
+	p := e.workflows.GetProject(row.ProjectID)
+	if p == nil {
+		return "unresolved", project, nil
+	}
+	if p.Broker {
+		return "broker_project", project, nil
+	}
+	workflowID := p.DefaultWorkflowID
+	if row.WorkflowID != nil && *row.WorkflowID != "" && *row.WorkflowID != "-" {
+		workflowID = *row.WorkflowID
+	}
+	// A workflow gone from config cannot be shown to be ordinary, any more
+	// than a project can: fail closed (review f8b7 F1).
+	wf := e.workflows.GetWorkflow(workflowID)
+	if wf == nil {
+		return "unresolved", project, nil
+	}
+	if wf.Broker != nil {
+		return "broker_workflow", project, nil
+	}
+	return "", project, nil
 }
 
 func parseDistillCandidate(raw string) (distillCandidate, bool) {

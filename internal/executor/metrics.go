@@ -323,9 +323,11 @@ type Metrics struct {
 	// LLD: https://docs.vornik.io §3.1.2.
 	RetryFromStepTotal *prometheus.CounterVec
 	// SkillDistillSkippedTotal counts auto-proposed skill drafts suppressed by
-	// the near-duplicate gate, labelled by the reason that matched. The rate
-	// is the operator's signal that the gate is doing work rather than that
-	// the distiller has gone quiet.
+	// the near-duplicate gate, labelled by the reason that matched, and tasks
+	// the distiller refused outright (broker_workflow, broker_project,
+	// not_completed, unresolved, lookup_error; agent-administered design
+	// §18.9). The rate is the operator's signal that the gate is doing work
+	// rather than that the distiller has gone quiet.
 	SkillDistillSkippedTotal *prometheus.CounterVec
 
 	// RetryFromStepSideEffectingUpstreamTotal counts retry-from-step
@@ -845,7 +847,7 @@ func NewMetrics(registerer prometheus.Registerer) *Metrics {
 			prometheus.CounterOpts{
 				Namespace: "vornik",
 				Name:      "skill_distill_skipped_total",
-				Help:      "Auto-proposed skill drafts suppressed as near-duplicates, by match reason.",
+				Help:      "Auto-proposed skill drafts suppressed, by reason: a near-duplicate match reason, or a refused task (broker_workflow, broker_project, not_completed, unresolved, lookup_error).",
 			},
 			[]string{"reason"},
 		),
@@ -934,8 +936,10 @@ func (m *Metrics) RecordIngestSkippedProducerFailed(projectID, status string) {
 // error}. Nil-safe so executors constructed without metrics (tests) are
 // a no-op.
 // RecordSkillDistillSkipped counts drafts the near-duplicate gate suppressed,
-// by the reason that matched. Without it, "the gate is working" and "the
-// distiller stopped proposing" look identical from outside.
+// by the reason that matched, and tasks the distiller refused before calling
+// the model (broker_workflow, broker_project, not_completed, unresolved,
+// lookup_error). Without it, "the gate is working" and "the distiller
+// stopped proposing" look identical from outside.
 func (m *Metrics) RecordSkillDistillSkipped(reason string) {
 	if m == nil || m.SkillDistillSkippedTotal == nil {
 		return

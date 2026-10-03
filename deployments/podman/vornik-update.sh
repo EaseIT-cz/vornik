@@ -19,9 +19,10 @@
 #   4b. Runs the NEW binary's config-class preflight against the DEPLOYED tree
 #       and refuses the cutover on a dead step error class (2026-09-17: a
 #       stale class flapped a daemon on Restart=on-failure).
-#   5. Stops the service, installs the new binaries, deploys config assets the
-#      release added (scripts/config-deploy.sh: adds missing files, never
-#      changes one you have), starts it. Because the unit is Type=notify,
+#   5. Stops the service, installs the new binaries, deploys config assets
+#      (scripts/config-deploy.sh: adds missing files, brings a canonical file
+#      nobody edited up to the release's version, never changes one you
+#      edited or acknowledged), starts it. Because the unit is Type=notify,
 #      systemd only reports "ready" AFTER the DB migrations applied and health
 #      checks passed.
 #   6. Verifies /readyz, prints the DB migration version bump, runs doctor.
@@ -548,11 +549,13 @@ install -m 0755 "$REPO_DIR/.bin/vornik"    "$BIN_DIR/vornik"
 install -m 0755 "$REPO_DIR/.bin/vornikctl" "$BIN_DIR/vornikctl"
 
 # Config assets the release added (design §15.5): new subtrees such as
-# agent-templates never reached an updated install. Preserve-existing, with the
-# service stopped so the new daemon starts on the full tree. A warning, not a
-# failure: the binaries are already swapped.
+# agent-templates never reached an updated install. Preserve-existing, except
+# that a canonical file nobody edited follows the release (drift design slice
+# H). With the service stopped, so the new daemon starts on these files: it
+# reads agent-templates at start. A warning, not a failure: the binaries are
+# already swapped.
 CONFIG_ROOT="$(dirname "$CONFIG")"
-log "Deploying config assets the release added into $CONFIG_ROOT/configs (existing files are kept)"
+log "Deploying config assets into $CONFIG_ROOT/configs (files you edited are kept)"
 if ! VORNIK_DEPLOY_REVISION="$(git -C "$REPO_DIR" rev-parse HEAD)" \
      "$REPO_DIR/scripts/config-deploy.sh" "$CONFIG_ROOT"; then
   warn "config asset deploy reported a problem; re-run it by hand:"

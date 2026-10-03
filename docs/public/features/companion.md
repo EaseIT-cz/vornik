@@ -1,11 +1,11 @@
 ---
 sources:
     - path: internal/api/companion_mcp.go
-      sha256: 36420b099decdb73ab3b1c59678120623251df7a8321623fa583eeeda652299d
+      sha256: f7a81ddeef20e9ada42c7c4dea947db706c1798434937a40d53a5fc5b3f378dc
     - path: contrib/claude-code-companion/.claude-plugin/plugin.json
-      sha256: 4220667fda1dbd789a742377f0ab43a9299217a9ad6341330ca36fe52f52aa1a
+      sha256: ce0ea17683224392523bf7f9b6321a02041c622b3b0907d2e0f91b8827bfb83e
     - path: contrib/codex-companion/.codex-plugin/plugin.json
-      sha256: e21d5920cb0cbc9c851952c2082539a9b8046fe4dae02031a2784bf37753820f
+      sha256: 7aade1d4b8a9baf02c289d3def895fdf8178edcf0b550855a09cb61c2e5836db
 ---
 # Companion plugin
 
@@ -157,12 +157,16 @@ account (nothing is ever posted automatically).
 
 The skill tells the assistant to:
 - start with `describe_installation`;
+- build teams, not individuals: a project is a domain, a workflow is a capability, and the swarm is a team of roles, each with only the tools its job needs;
+- hand work between steps only through files under `artifacts/out/`, with only the last step writing `result.json`;
 - never ask for or accept a credential in chat (it calls `request_credential`, and you enter the value on your phone);
 - say plainly what you are about to approve;
 - treat every write as a proposal you approve one by one;
 - stay inside its namespace.
 
 Vornik also serves the same text to such a key directly: in the MCP `initialize` instructions and as `describe_installation`'s `how_to_work`. So an assistant without the bundle, such as Claude Desktop, still gets it. No other key ever sees it.
+
+**Working alongside Vornik.** Every companion connection, except one bound to a broker project, also receives a short set of working rules in its MCP `initialize` instructions: delegate the user's work to Vornik first (unless doing it yourself is quicker, it depends on what only your session holds, or the user asked you not to), never wait idle and never delegate just to stay busy, never send a secret or personal data to a workflow, check what comes back, recall before delegating, and write side problems and the user's ideas down instead of chasing them. The `delegate` skill in the Claude Code and Codex bundles opens with the same text, and the Claude Code SessionStart hook plants it again after each compaction. A memory-only key skips the two delegation rules. A broker key gets none of it: a broker serves one request, and the `vornik-broker` skill already says how.
 
 ## Project memory and repo scope
 
@@ -363,6 +367,15 @@ about it is stricter:
   with a `maxLength` of 512 or less. All untrusted strings together may carry
   at most 1024 characters. Untrusted values reach the broker's agent wrapped as
   data, never as instructions.
+- **A document in, as a declared input.** A top-level input may be declared
+  `{type: string, x-untrusted-document: {max_bytes: N, media_type: T}}`, with
+  `T` one of `text/plain`, `text/markdown` or `text/x-diff` and `N` at most
+  262,144 bytes (two such inputs per workflow, 524,288 bytes together). The
+  front agent passes the text as the input's value; `delegate` refuses it if
+  it is larger, not valid UTF-8, or holds a NUL. The text is never put into
+  the prompt: each step finds it as a read-only file at
+  `artifacts/in/<property>.<ext>`, labelled as untrusted data, and `result`
+  never returns it. `inputArtifacts` stay refused.
 - **One document out.** `result` returns only the file named in
   `egress.output`, validated against `egress.schema` and capped at
   `egress.max_bytes` (at most 64 KiB). No other artifact of the task is
@@ -481,8 +494,11 @@ message was found and a one-line summary of the draft.
 
 **Hermes Agent** has a ready-made plugin in `contrib/hermes-companion/`. It
 adds the broker tools, a skill teaching Hermes when to use them, a hook that
-announces finished tasks, and a `vornik` memory provider. Install steps are in
-its README.
+announces finished tasks, and a `vornik` memory provider. Since 0.8.0 an entry
+Hermes removes from its own memory is forgotten in Vornik too (refuted, so no
+longer recalled; the record stays until retention or the operator erases it),
+and `/vornik-memory` and `/vornik-forget <id>` let the user see what Vornik
+keeps and forget one item. Install steps are in its README.
 
 The shipped reference is the `mail-digest` workflow with the `broker-swarm`
 swarm: a digest of recent mail carrying sender domain, time, category, whether

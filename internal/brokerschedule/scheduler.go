@@ -28,6 +28,9 @@ const (
 	ReasonInputs      = "inputs"
 	ReasonBudget      = "budget"
 	ReasonError       = "error"
+	// ReasonSetupIncomplete: an integration's credential is not set (design
+	// §19.8 F4); the slot is skipped, never started.
+	ReasonSetupIncomplete = "setup_incomplete"
 )
 
 var (
@@ -199,6 +202,8 @@ func (s *Scheduler) consider(ctx context.Context, e Entry, now, prev time.Time) 
 			reason = ReasonInputs
 		case errors.Is(err, ErrBudget):
 			reason = ReasonBudget
+		case errors.Is(err, ErrSetupIncomplete):
+			reason = ReasonSetupIncomplete
 		}
 		if s.countOnce(reason, key, now) {
 			s.cfg.Logger.Warn().Err(err).Str("workflow", e.WorkflowID).Str("slot", key).Str("reason", reason).

@@ -1019,6 +1019,15 @@ func TestBrokerAction_PostgresContract(t *testing.T) {
 	})
 }
 
+// TestBrokerGrant_PostgresContract — standing grants on the production lane
+// (broker write-actions design, tier 2, rounds 3 and 4, review 61a5): the
+// advisory-locked live bound and the row-locked decrement, raced on real
+// connections.
+func TestBrokerGrant_PostgresContract(t *testing.T) {
+	db := newIntegrationDB(t)
+	repotest.RunBrokerGrantSuite(t, NewBrokerGrantRepository(db.DB), NewBrokerActionRepository(db.DB))
+}
+
 // TestAgentSecret_PostgresContract — the agent secret table on the production
 // lane (agent-administered Vornik design §8.1).
 func TestAgentSecret_PostgresContract(t *testing.T) {
@@ -1033,6 +1042,13 @@ func TestAgentGrant_PostgresContract(t *testing.T) {
 	repotest.RunAgentGrantSuite(t, NewAgentGrantRepository(db.DB))
 }
 
+// TestAgentModelDestination_PostgresContract — agent_model_provider_approvals
+// on the production lane (design §18.6 item 2 in detail).
+func TestAgentModelDestination_PostgresContract(t *testing.T) {
+	db := newIntegrationDB(t)
+	repotest.RunAgentModelDestinationSuite(t, NewAgentGrantRepository(db.DB))
+}
+
 // TestApproverDevice_PostgresContract — approver devices on the production
 // lane. First-device semantics need an empty device set, which the shared
 // database cannot offer, so each subtest gets its own schema holding only
@@ -1040,10 +1056,11 @@ func TestAgentGrant_PostgresContract(t *testing.T) {
 // sets search_path at connect time (before any statement is prepared).
 func TestApproverDevice_PostgresContract(t *testing.T) {
 	shared := newIntegrationDB(t)
-	// The approver tables: created by 206, extended by 207, 209 and 211. Named, not
-	// "everything from 206 on": a later migration altering another table
-	// (208 alters api_keys) has nothing to alter in a fresh schema.
-	approverMigrations := map[int]bool{206: true, 207: true, 209: true, 211: true}
+	// The approver tables: created by 206, extended by 207, 209, 211 and 212
+	// (the Hermes approval transport's host_action kind and decided_choice).
+	// Named, not "everything from 206 on": a later migration altering another
+	// table (208 alters api_keys) has nothing to alter in a fresh schema.
+	approverMigrations := map[int]bool{206: true, 207: true, 209: true, 211: true, 212: true}
 	var ups []string
 	for _, m := range persistence.DefaultMigrations {
 		if approverMigrations[m.Version] {

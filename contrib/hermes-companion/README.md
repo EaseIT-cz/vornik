@@ -33,6 +33,27 @@ hermes vornik status           # what is configured, and what the daemon support
 `vornik-admin` skill teaches Hermes to use it. The setup guide is
 https://docs.vornik.io/guides/assistant-setup/.
 
+### Answer Hermes's own approvals on your phone
+
+When Hermes's safety rules flag a command (`rm -rf`, `git push --force`),
+Hermes asks you in its terminal or chat. With the admin setup connected,
+the same paired phone that approves Vornik changes can answer those too:
+
+```bash
+hermes vornik approvals on     # sets security.approval.transport: vornik
+hermes vornik approvals off    # Hermes asks in its own prompt again
+```
+
+The phone offers **Allow once**, **Allow for this session** (when Hermes
+allows it) and **Deny**; "always" stays in Hermes's own terminal. Hermes
+still decides and enforces: Vornik is where you answer and where the answer
+is recorded, not the gate, and a modified Hermes, or one with the transport
+deselected, ignores the phone. While it is on, a Vornik outage denies every
+flagged command, unless you also set
+`security.approval.transport_fallback: builtin` in Hermes's config.
+`hermes vornik status` says whether the transport is registered, selected,
+and for which namespace.
+
 ### Broker setup
 
 On the Vornik host, set up two projects and two keys (see
@@ -86,10 +107,46 @@ a full sentence with its context.
 | Tools | `vornik_catalog`, `vornik_delegate`, `vornik_result`, `vornik_status`, `vornik_cancel` (broker setup only) |
 | Skill | `vornik-companion:vornik-broker`: when to broker and how to treat results |
 | Hook | `pre_llm_call`: announces finished broker tasks (ids and states only) |
-| Commands | `/vornik-peek`, `/vornik-result <task_id>` |
-| CLI | `hermes vornik connect`, `hermes vornik status` |
+| Commands | `/vornik-peek`, `/vornik-result <task_id>`; with memory: `/vornik-memory [words]`, `/vornik-forget <id>` |
+| CLI | `hermes vornik connect`, `hermes vornik status`, `hermes vornik approvals on\|off` |
+| Approval transport | `vornik`: Hermes's own approval prompts answered on the paired phone, once selected |
 | Skill | `vornik-companion:vornik-admin`: how to administer Vornik through the admin setup |
-| Memory provider | `vornik-companion`: `vornik_recall` / `vornik_remember`, prefetch before each turn, mirrors Hermes's curated `MEMORY.md` / `USER.md` writes |
+| Memory provider | `vornik-companion`: `vornik_recall` / `vornik_remember`, prefetch before each turn, mirrors Hermes's curated `MEMORY.md` / `USER.md` writes, removals included |
+
+## What Vornik keeps, and forgetting (0.8.0)
+
+`/vornik-memory` lists the 20 newest things Vornik's memory holds for you;
+`/vornik-memory dentist` lists what matches. Each line shows a short id, the
+age, where it came from, and the text. `/vornik-forget <id>` forgets that one
+item and tells you whether Vornik found it. You type these commands; the
+model cannot run them, and none of its tools can make Vornik forget.
+
+When Hermes removes or replaces an entry in its own memory (because you said
+"forget that" or corrected a fact), the plugin finds the copy it mirrored to
+Vornik and has Vornik forget it too. Be aware of what that means:
+
+- **Forgetting is not deleting.** Vornik stops recalling the item, here and
+  in every prefetch, but keeps the record for your operator's audit until the
+  memory project's retention removes it. Your operator can erase it at once.
+  A fact stored again later (re-added, or remembered by the model) comes back.
+- **A forget said in conversation is best effort.** It runs through Hermes's
+  own memory tool, and the plugin cannot add a line to Hermes's reply, so if
+  Vornik's copy is not found you are not told; it is only logged ("could not
+  find the Vornik copy of a removed memory"). Notes mirrored before 0.8.0
+  carry no identity token and are found by their exact text only.
+- **The confirmed route** is `/vornik-memory`, then `/vornik-forget <id>`:
+  it says whether something was forgotten.
+- **Bound: one note must be one chunk.** The plugin caps each mirrored note
+  at 2,048 bytes, which is one chunk at the daemon's default chunk size
+  (`memory.chunk_tokens: 512`). If your operator sets a smaller chunk size,
+  a note near the cap is split, its identity token is only in the last
+  piece, and forgetting it leaves the earlier pieces recallable. Hermes's
+  own entries are normally far shorter than the cap.
+- **Export:** the plugin shows at most 20 items at a time. For everything
+  Vornik holds, ask your operator for an export from the Vornik console.
+
+Mirrored notes end with a short identity token (`⟦vm:…⟧`). The plugin
+strips it from everything it shows you or the model.
 
 ## Works with older daemons
 
@@ -128,18 +185,23 @@ rule 13):
   tasks finished (ids and states only); the memory provider, when enabled,
   prefetches relevant memories.
 - **Memory:** when you select it as Hermes's memory provider, it mirrors
-  Hermes's curated `MEMORY.md` and `USER.md` writes to Vornik.
+  Hermes's curated `MEMORY.md` and `USER.md` writes to Vornik, and has
+  Vornik forget an entry Hermes removes or replaces.
 - **Credentials:** it reads `VORNIK_BROKER_TOKEN` and `VORNIK_MEMORY_TOKEN`
   from the environment and nothing else. It stores no credential of its own
   and never reads another tool's login.
 - **Programs:** `hermes vornik connect`, which you type, runs your local
   `vornikctl` (`vornikctl agent connect hermes`) with a 120-second limit. That
   writes one MCP entry into Hermes's config and a key file only you can
-  read. Nothing else in the plugin runs a program: no tool, hook or slash
-  command does, so Hermes's model cannot trigger it.
+  read. Once you select the approval transport (`hermes vornik approvals
+  on`), Hermes's approval seam runs `vornikctl agent host-approval` (the
+  path connect recorded, never a shell) for each flagged command, bounded by
+  Hermes's approval timeout. Nothing else in the plugin runs a program: no
+  tool, hook or slash command does, so Hermes's model cannot trigger it.
 - **Never:** it downloads or installs nothing (without `vornikctl`,
   `connect` prints the install page), updates nothing by itself, runs no
-  background process, and never answers an approval for you.
+  background process, and never answers an approval for you: only your
+  paired phone does, and anything else is a deny.
 
 ## Licence
 

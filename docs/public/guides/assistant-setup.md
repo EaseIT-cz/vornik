@@ -5,9 +5,9 @@ sources:
     - path: internal/harnessconfig/harnessconfig.go
       sha256: 601958b2eed5b85284f43c80973d23b0bf9565a5d9e4db3fb42208ff69ea5984
     - path: internal/agentadmin/harness.go
-      sha256: 5fbb31b776cf44588b4f924376a5ff901afcb372db2966d4099cd5196e70015c
+      sha256: 330a8aaf3e48e5300155a68e10ae017b93d1e4acfb194622db080880cecb161e
     - path: internal/agentadmin/admin_guidance.md
-      sha256: c9cf84e8ac809bd6c1a1dc0750226fab140b3623df646ed8d22eef38032a4934
+      sha256: 840b2e11c52a4be9611c0d84b193b0c29d44c9eac744b07ff0d36c10792ffbf9
 ---
 # Let your assistant set up Vornik
 
@@ -20,11 +20,15 @@ Vornik is the safety harness around it:
   - connecting a service;
   - every credential;
   - each new workflow, and each change to what a workflow returns or can reach;
+  - a team member on a remote model, once per destination (the provider and its host): what that member works on is sent there;
   - a higher budget.
+- **Models come from your operator's list.** A team member may use a model your operator listed for assistants (`agent_admin.models`); the assistant cannot pick any other. A model on this machine or your local network applies at once. Nothing else changes for a member given no model: it runs on the installation's default, which may itself be a remote provider. A local proxy that forwards to a remote provider counts as local, because Vornik sees only the proxy's address: whoever sets one up is responsible for what it forwards.
 - **Automations run on a schedule only if you approve it.** When the assistant gives a workflow a schedule (for example 08:00 on the 1st of every month), your phone shows the schedule in words, its timezone and the fixed inputs each run gets. Any change to them is a new approval. A schedule runs at most hourly. A run whose time passed while Vornik was down is skipped, not made up later.
-- **Writes are proposals.** A workflow that would send, pay, book or change something proposes it, and you approve each one before it happens.
+- **Writes are proposals.** A workflow that would send, pay, book or change something proposes it, and you approve each one before it happens. If the workflow declares it (and you approved that declaration with the workflow), the approval page also offers to approve future writes to the same recipient for up to 7 days, at most 20 times (your operator can lower both). Those later writes are sent without being shown to you first. Your phone's Standing approvals page lists each one with every write it sent, and pauses or revokes it with one tap; once a day you get a count of what was sent.
 - **It stays in its own namespace.** Everything it creates is prefixed with its namespace (for example `hermes--finance`), and it cannot touch anything else: not another assistant's setup, not your own projects, not Vornik's settings.
 - **Keys and tokens do not leak out through it.** Arguments, API requests, proposed writes and returned results are scanned for credential-shaped values. A finding refuses the call.
+
+- **Ready-made workflows come first.** Vornik ships tested recipes: an inbox digest, an agenda and a morning brief (mail and calendar together). The assistant installs one into a project as a single change, which you approve once; your phone then asks for each credential it needs. Until a credential is entered the workflow is installed but does not run. A recipe's answer names its source for each item, says when the data was read, and tells "nothing arrived" apart from "could not read".
 
 What it does receive is what you asked for. If you ask "summarise my spending", the summary of your spending reaches the assistant: that output was approved, by you, when the workflow was.
 
@@ -71,6 +75,8 @@ Connect does five things:
 
 Then **restart the assistant** and ask it what it can do with Vornik. It starts by reading `describe_installation`, which tells it the rules above and what you have already set up. For Claude Code and Codex, update the `vornik-companion` plugin first. Its `vornik-admin` skill carries the same guidance, and Vornik also sends that guidance over the connection itself.
 
+An assistant reads Vornik's list of tools when its session starts. After you upgrade Vornik, or change the models offered to assistants, a session that was already open can still hold the old list and refuse an option Vornik now accepts. The connection tells the assistant when the list changes, and an assistant that supports this reads it again by itself. If yours does not, it asks you to reconnect: restart the assistant, or reconnect Vornik in its MCP settings.
+
 `--dry-run` checks everything and prints what would be done, without changing anything.
 
 If connect refuses because it cannot handle a config file (malformed JSON, or a Codex entry written in an unusual form), it says which file and changes nothing. Fix the file, or remove the old entry by hand, and run it again.
@@ -111,6 +117,24 @@ The assistant can run on your laptop while Vornik runs on a server.
 ## Assistants that run as a service
 
 If the assistant runs as its own service user (for example a Hermes gateway under systemd), run `vornikctl agent connect` **as that user**, so the key file and the config entry belong to it. The bridge refuses a key file owned by anyone else and says so.
+
+## Answer Hermes's own approvals on your phone
+
+Hermes has its own safety rules: when it wants to run a command they flag (a recursive delete, a force-push, a write outside its workspace), it asks you in its terminal or chat, and an unattended Hermes waits and then refuses. With Hermes connected and the plugin installed (version 0.7.0 or later), the phone you paired for Vornik can answer those questions too:
+
+```
+hermes vornik approvals on
+```
+
+This sets `security.approval.transport: vornik` in Hermes's config. From then on, each flagged command appears on your phone with Hermes's own description and the command (secrets masked), and you choose **Allow once**, **Allow for this session** (when Hermes offers it) or **Deny**. "Always allow" stays in Hermes's terminal: a permanent change to Hermes's safety rules is not something to approve in a few seconds on a phone. `hermes vornik approvals off` returns the questions to Hermes's own prompt; `hermes vornik status` shows whether the transport is on and which namespace answers.
+
+What this does and does not promise:
+
+- Hermes still decides and enforces. Vornik shows Hermes's text, records which phone answered and when, and hands the answer back. A modified Hermes, or one with the transport switched off, ignores the phone.
+- Only a paired phone can answer. The assistant's own key cannot, and neither can an operator key or a console session.
+- While it is on, an answer needs Vornik. If Vornik is down or unreachable, Hermes refuses every flagged command, unless you also set `security.approval.transport_fallback: builtin` in Hermes's config, in which case Hermes asks in its own prompt instead.
+- The phone answers questions Hermes asks while you, or a chat gateway, are present. Hermes's single-query mode (`hermes -z`) and cron jobs never ask: they follow their own `approvals.*_mode` settings.
+- At most 3 questions wait at once per assistant, and 30 an hour; beyond that Hermes is told no.
 
 ## See what an assistant has set up
 

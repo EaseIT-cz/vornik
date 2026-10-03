@@ -348,6 +348,229 @@ else
 	fail "temp file handling: $(ls -a "$TGT/configs/.templates") / $(cat "$TGT/configs/.templates/.removed")"
 fi
 
+# --- Slice H (LLD 2026-07-16, 2026-10-03): a canonical file nobody edited
+# follows the template. Before it, every directory was preserve-existing, so
+# the reference host ran 2026-10-02's agent-templates after two shipped fixes.
+origin_field() { grep -P "^$1\t" "$TGT/configs/.origin/.index" | cut -f"$2"; }
+
+# H1: untouched canonical file + changed template -> replaced, .origin updated.
+build_repo
+TGT="$TMP/h1"; rm -rf "$TGT"
+run_deploy_rev "rev-1"
+echo "coder v2" > "$REPO/role-library/coder.md"
+run_deploy_rev "rev-2"
+if [ "$(cat "$TGT/configs/role-library/coder.md")" = "coder v2" ] \
+	&& [ "$(origin_field 'role-library/coder\.md' 3)" = "rev-2" ] \
+	&& [ "$(origin_field 'role-library/coder\.md' 5)" = "updated" ] \
+	&& [ "$(cat "$TGT/configs/.origin/role-library/coder.md")" = "coder v2" ]; then
+	pass "an untouched canonical file follows the template; .origin says updated at rev-2"
+else
+	fail "untouched canonical not updated: file='$(cat "$TGT/configs/role-library/coder.md")' origin='$(origin_field 'role-library/coder\.md' 3-5)'"
+fi
+
+# H2: an edited canonical file is kept, and its .origin is unchanged.
+build_repo
+TGT="$TMP/h2"; rm -rf "$TGT"
+run_deploy_rev "rev-1"
+echo "OPERATOR EDIT" > "$TGT/configs/role-library/coder.md"
+before="$(origin_field 'role-library/coder\.md' 2-5)"
+echo "coder v2" > "$REPO/role-library/coder.md"
+run_deploy_rev "rev-2"
+if [ "$(cat "$TGT/configs/role-library/coder.md")" = "OPERATOR EDIT" ] \
+	&& [ "$(origin_field 'role-library/coder\.md' 2-5)" = "$before" ]; then
+	pass "an edited canonical file is kept and its .origin untouched"
+else
+	fail "edited canonical overwritten or origin moved: file='$(cat "$TGT/configs/role-library/coder.md")'"
+fi
+
+# H3: already equal to the new template (synced by hand) -> .origin re-seeded,
+# file not rewritten.
+build_repo
+TGT="$TMP/h3"; rm -rf "$TGT"
+run_deploy_rev "rev-1"
+echo "coder v2" > "$REPO/role-library/coder.md"
+echo "coder v2" > "$TGT/configs/role-library/coder.md"
+touch -d '2001-01-01' "$TGT/configs/role-library/coder.md"
+run_deploy_rev "rev-2"
+if [ "$(origin_field 'role-library/coder\.md' 5)" = "seeded" ] \
+	&& [ "$(origin_field 'role-library/coder\.md' 3)" = "rev-2" ] \
+	&& [ "$(stat -c %Y "$TGT/configs/role-library/coder.md")" = "$(date -d '2001-01-01' +%s)" ]; then
+	pass "a canonical file already equal to the template re-seeds .origin without a rewrite"
+else
+	fail "re-seed: origin='$(origin_field 'role-library/coder\.md' 3-5)'"
+fi
+
+# H4: a canonical file with no .origin that differs is kept.
+build_repo
+TGT="$TMP/h4"; rm -rf "$TGT"; mkdir -p "$TGT/configs/role-library"
+echo "UNKNOWN ORIGIN" > "$TGT/configs/role-library/coder.md"
+run_deploy_rev "rev-1"
+if [ "$(cat "$TGT/configs/role-library/coder.md")" = "UNKNOWN ORIGIN" ]; then
+	pass "a differing canonical file with no .origin is kept"
+else
+	fail "a file of unknown origin was overwritten"
+fi
+
+# H5: the same untouched-and-changed case in a tunable directory is kept.
+build_repo
+TGT="$TMP/h5"; rm -rf "$TGT"
+run_deploy_rev "rev-1"
+echo "dev v2" > "$REPO/swarms/dev-swarm.md"
+run_deploy_rev "rev-2"
+if [ "$(cat "$TGT/configs/swarms/dev-swarm.md")" = "dev" ]; then
+	pass "an untouched tunable file is still preserve-existing"
+else
+	fail "a tunable file was overwritten"
+fi
+
+# H6: a top-level file is kept.
+build_repo
+TGT="$TMP/h6"; rm -rf "$TGT"
+run_deploy_rev "rev-1"
+echo "pricing v2" > "$REPO/pricing.yaml"
+run_deploy_rev "rev-2"
+if [ "$(cat "$TGT/configs/pricing.yaml")" = "pricing" ]; then
+	pass "a top-level file is still preserve-existing"
+else
+	fail "pricing.yaml was overwritten"
+fi
+
+# H7: a second install of the same revision changes nothing.
+build_repo
+TGT="$TMP/h7"; rm -rf "$TGT"
+run_deploy_rev "rev-1"
+echo "coder v2" > "$REPO/role-library/coder.md"
+run_deploy_rev "rev-2"
+snap="$(cat "$TGT/configs/.origin/.index"; cat "$TGT/configs/role-library/coder.md")"
+run_deploy_rev "rev-2"
+if [ "$(cat "$TGT/configs/.origin/.index"; cat "$TGT/configs/role-library/coder.md")" = "$snap" ] \
+	&& [ "$(origin_field 'role-library/coder\.md' 5)" = "updated" ]; then
+	pass "a repeated install is a no-op"
+else
+	fail "a repeated install changed .origin or the file"
+fi
+
+# H8 (review 508e F1, 0947 F4a): an acknowledgement is a decline. An untouched
+# canonical file with an ack record (the writer's real layout; its key names
+# an older template change) is kept after a new one, and its .origin unchanged.
+build_repo
+TGT="$TMP/h8"; rm -rf "$TGT"
+run_deploy_rev "rev-1"
+printf 'role-library/coder.md\tcanonical\tk1\texact\t2026-10-03T00:00:00Z\toperator\n' > "$TGT/configs/.template-acks"
+before="$(origin_field 'role-library/coder\.md' 2-5)"
+echo "coder v2" > "$REPO/role-library/coder.md"
+run_deploy_rev "rev-2"
+if [ "$(cat "$TGT/configs/role-library/coder.md")" = "coder" ] \
+	&& [ "$(origin_field 'role-library/coder\.md' 2-5)" = "$before" ]; then
+	pass "an acknowledged canonical file is kept"
+else
+	fail "an acknowledged canonical file was overwritten: '$(cat "$TGT/configs/role-library/coder.md")'"
+fi
+
+# H9 (508e F5): untouched means normalised-equal; a CRLF-only difference is
+# untouched, and the file comes back as the template.
+build_repo
+TGT="$TMP/h9"; rm -rf "$TGT"
+run_deploy_rev "rev-1"
+printf 'coder\r\n' > "$TGT/configs/role-library/coder.md"
+echo "coder v2" > "$REPO/role-library/coder.md"
+run_deploy_rev "rev-2"
+if [ "$(cat "$TGT/configs/role-library/coder.md")" = "coder v2" ]; then
+	pass "a CRLF-only difference counts as untouched"
+else
+	fail "CRLF-only file kept: '$(od -c "$TGT/configs/role-library/coder.md" | head -1)'"
+fi
+
+# H10: an untouched canonical path that is a symlink is kept, and the file it
+# points at is not written through it (refuse_unsafe_dest_path stops the
+# install before deploy_one; this pins that slice H did not open a way round).
+build_repo
+TGT="$TMP/h10"; rm -rf "$TGT"
+run_deploy_rev "rev-1"
+echo "coder" > "$TMP/h10-target"
+rm "$TGT/configs/role-library/coder.md"
+ln -s "$TMP/h10-target" "$TGT/configs/role-library/coder.md"
+echo "coder v2" > "$REPO/role-library/coder.md"
+run_deploy_rev "rev-2"
+if [ -L "$TGT/configs/role-library/coder.md" ] && [ "$(cat "$TMP/h10-target")" = "coder" ]; then
+	pass "a symlinked canonical file is kept and its target untouched"
+else
+	fail "wrote through a symlink: target='$(cat "$TMP/h10-target")'"
+fi
+
+# H11: a canonical file with a second hard link (it could share an inode with
+# a tunable file) is kept, and so is its twin.
+build_repo
+TGT="$TMP/h11"; rm -rf "$TGT"
+run_deploy_rev "rev-1"
+ln "$TGT/configs/role-library/coder.md" "$TMP/h11-twin"
+echo "coder v2" > "$REPO/role-library/coder.md"
+run_deploy_rev "rev-2"
+if [ "$(cat "$TMP/h11-twin")" = "coder" ] && [ "$(cat "$TGT/configs/role-library/coder.md")" = "coder" ]; then
+	pass "a hardlinked canonical file is kept, and its twin unchanged"
+else
+	fail "hardlinked file replaced: twin='$(cat "$TMP/h11-twin")'"
+fi
+
+# H12 (0947 F4b): an ack store that exists but cannot be read keeps every
+# canonical file and rewrites no entry. Skipped as root (chmod 000 does not
+# stop root reading).
+if [ "$(id -u)" -eq 0 ]; then
+	echo "skip - unreadable ack store (running as root)"
+else
+	build_repo
+	TGT="$TMP/h12"; rm -rf "$TGT"
+	run_deploy_rev "rev-1"
+	: > "$TGT/configs/.template-acks"; chmod 000 "$TGT/configs/.template-acks"
+	echo "coder v2" > "$REPO/role-library/coder.md"
+	run_deploy_rev "rev-2"
+	chmod 600 "$TGT/configs/.template-acks"
+	if [ "$(cat "$TGT/configs/role-library/coder.md")" = "coder" ] \
+		&& [ "$(origin_field 'role-library/coder\.md' 5)" = "created" ]; then
+		pass "an unreadable ack store keeps canonical files"
+	else
+		fail "unreadable ack store: file='$(cat "$TGT/configs/role-library/coder.md")'"
+	fi
+fi
+
+# H13 (0947 F5): with no working sha256 tool the hash cannot prove a file
+# untouched, so it is kept.
+build_repo
+TGT="$TMP/h13"; rm -rf "$TGT"
+run_deploy_rev "rev-1"
+mkdir -p "$TMP/nohash"
+printf '#!/bin/sh\nexit 1\n' > "$TMP/nohash/sha256sum"; cp "$TMP/nohash/sha256sum" "$TMP/nohash/shasum"
+chmod +x "$TMP/nohash/sha256sum" "$TMP/nohash/shasum"
+echo "coder v2" > "$REPO/role-library/coder.md"
+PATH="$TMP/nohash:$PATH" run_deploy_rev "rev-2"
+if [ "$(cat "$TGT/configs/role-library/coder.md")" = "coder" ]; then
+	pass "with no working sha256 tool an untouched canonical file is kept"
+else
+	fail "overwrote without a hash: '$(cat "$TGT/configs/role-library/coder.md")'"
+fi
+
+# H14 (review 2733 F5): an update that cannot be written leaves the file and
+# its .origin entry as they were, with a WARN. Skipped as root.
+if [ "$(id -u)" -eq 0 ]; then
+	echo "skip - unwritable canonical update (running as root)"
+else
+	build_repo
+	TGT="$TMP/h14"; rm -rf "$TGT"
+	run_deploy_rev "rev-1"
+	before="$(origin_field 'role-library/coder\.md' 2-5)"
+	echo "coder v2" > "$REPO/role-library/coder.md"
+	chmod 500 "$TGT/configs/role-library"
+	out="$(VORNIK_DEPLOY_REVISION=rev-2 VORNIK_REPO_CONFIGS_DIR="$REPO" "$DEPLOY" "$TGT" 2>&1)"
+	chmod 700 "$TGT/configs/role-library"
+	if [ "$(cat "$TGT/configs/role-library/coder.md")" = "coder" ] \
+		&& [ "$(origin_field 'role-library/coder\.md' 2-5)" = "$before" ] \
+		&& printf '%s' "$out" | grep -q "WARN: config-deploy: could not update"; then
+		pass "an update that cannot be written changes nothing and warns"
+	else
+		fail "unwritable update: file='$(cat "$TGT/configs/role-library/coder.md")' out=$out"
+	fi
+fi
+
 echo ""
 if [ "$fails" -eq 0 ]; then echo "test-config-deploy: ALL PASS"; exit 0; fi
 echo "test-config-deploy: $fails case(s) failed"; exit 1

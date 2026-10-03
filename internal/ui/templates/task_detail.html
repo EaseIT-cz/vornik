@@ -1048,7 +1048,7 @@
                     {{end}}
                     <details class="mt-2">
                         <summary class="text-xs text-ink-500 cursor-pointer hover:text-ink-300 select-none">Raw payload</summary>
-                        <pre class="text-xs text-ink-400 bg-surface-900 rounded-lg p-3 overflow-auto mt-2 max-h-[60vh] border border-surface-600/60">{{prettyJSON .Task.Payload}}</pre>
+                        <pre class="text-xs text-ink-400 bg-surface-900 rounded-lg p-3 overflow-auto mt-2 max-h-[60vh] border border-surface-600/60">{{prettyJSON (displayTaskPayload .Task.Payload)}}</pre>
                     </details>
                 </div>
             </details>

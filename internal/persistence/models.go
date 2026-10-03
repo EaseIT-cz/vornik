@@ -420,6 +420,12 @@ const (
 	// the executor's typed reach error, never by message text (review
 	// 20261002-a048 F2).
 	TaskFailureClassReachNotApproved = "REACH_NOT_APPROVED"
+	// TaskFailureClassSetupIncomplete is an agent-namespace workflow that
+	// reaches an integration whose credential is not set (agent-administered
+	// Vornik design §19.8 F4): checked where the reach check runs, before
+	// any container starts. Terminal: no retry can enter a credential; the
+	// person does, on their phone. Decided by the verifier's typed error.
+	TaskFailureClassSetupIncomplete = "SETUP_INCOMPLETE"
 	// TaskFailureClassInvalidOutputLoop fires when a single role keeps
 	// emitting result.json that fails schema validation across the
 	// shape-retry + model-fallback budget. Distinct from INVALID_OUTPUT

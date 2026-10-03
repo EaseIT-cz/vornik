@@ -84,6 +84,8 @@ var doctorCheckConfigPointer = map[string]string{
 	"checkWebWritesInsecure":       "",
 	"checkSecretStoreKey":          "",
 	"checkApproverDevices":         "",
+	"checkAgentNamespaceBudget":    "",
+	"checkAgentModelCatalogue":     "", // config.yaml (agent_admin.models), not a deployed config file
 	"checkStuckBrokerActions":      "",
 	"checkMCPProjectConnections":   "",
 	"checkWorkspaceCanonical":      "",

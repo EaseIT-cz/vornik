@@ -94,6 +94,7 @@ func TestIsTerminalFailureClass_IsANarrowAllowList(t *testing.T) {
 		TaskFailureClassForgeTargetUnavailable: true,
 		TaskFailureClassForgeJobNoTarget:       true, // 2026-09-09, CI-outcomes design §18
 		TaskFailureClassReachNotApproved:       true, // 2026-10-02, agent-administered Vornik §7.6
+		TaskFailureClassSetupIncomplete:        true, // 2026-10-03, agent-administered Vornik §19.8 F4
 	}
 
 	for class := range want {

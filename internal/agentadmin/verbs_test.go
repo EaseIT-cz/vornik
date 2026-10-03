@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
+	"vornik.io/vornik/internal/agentns"
 
 	"vornik.io/vornik/internal/persistence"
 	"vornik.io/vornik/internal/registry"
@@ -47,8 +48,9 @@ func TestCreateProject_InertWithinCeiling_WideningBeyond(t *testing.T) {
 	}
 	c := tr.render(VerbCreateProject, CreateProjectInput{Slug: "ff", Purpose: "One more"})
 	tr.mustClass(c, Widening)
-	if c.Grant.CeilingUSD == nil || *c.Grant.CeilingUSD != 12 || !strings.Contains(c.Sentence, "$12") {
-		t.Fatalf("ceiling grant %v, sentence %q", c.Grant.CeilingUSD, c.Sentence)
+	if c.Grant.MaxTotalUSD == nil || *c.Grant.MaxTotalUSD != 12 || c.Grant.AddsUSD == nil || *c.Grant.AddsUSD != 2 ||
+		c.Grant.CeilingUSD != nil || !strings.Contains(c.Sentence, "$12") {
+		t.Fatalf("ceiling grant %+v, sentence %q", c.Grant, c.Sentence)
 	}
 	for _, op := range c.Ops {
 		if !strings.Contains(op.Path, "hermes--ff") {
@@ -270,8 +272,8 @@ func TestSetBudget(t *testing.T) {
 		}
 	}
 	c := tr.render(VerbSetBudget, SetBudgetInput{Project: "finance", MonthlyUSD: 20})
-	if c.Grant.CeilingUSD == nil || *c.Grant.CeilingUSD != 20 {
-		t.Fatalf("raising past the ceiling must raise it: %+v", c.Grant)
+	if c.Grant.MaxTotalUSD == nil || *c.Grant.MaxTotalUSD != 20 || c.Grant.AddsUSD == nil || *c.Grant.AddsUSD != 18 {
+		t.Fatalf("raising past the ceiling must state the total it leads to: %+v", c.Grant)
 	}
 }
 
@@ -362,9 +364,14 @@ func assertNamespaced(t *testing.T, tr *tree) {
 			if len(r.Permissions.AllowedTools) == 0 {
 				t.Errorf("role %s/%s has an empty allowlist", id, r.Name)
 			}
-			// §7.1: a model override is refused in v1; nothing renders one.
-			if r.Model != "" {
-				t.Errorf("role %s/%s renders a model %q", id, r.Name, r.Model)
+			// §7.1 (amended 2026-10-03, §18.6 item 2): a model outside the
+			// operator's catalogue is refused; nothing renders one, and no
+			// role carries a modelFallback (review d94f F6).
+			if _, ok := tr.models[r.Model]; r.Model != "" && !ok {
+				t.Errorf("role %s/%s renders a model %q outside the catalogue", id, r.Name, r.Model)
+			}
+			if r.ModelFallback != "" {
+				t.Errorf("role %s/%s renders a modelFallback %q", id, r.Name, r.ModelFallback)
 			}
 		}
 	}
@@ -391,5 +398,26 @@ func TestDefineSwarm_RemovedIntegrationGrantsNothing(t *testing.T) {
 	c := tr.render(VerbDefineSwarm, DefineSwarmInput{Slug: "finance", Roles: []RoleInput{{Name: "r", Instructions: "x", Tools: []string{"mcp__fio__balance"}}}})
 	if c.Class != Refused || !strings.Contains(c.Reason, "not approved") {
 		t.Fatalf("a removed integration's tool was granted: %s %q", c.Class, c.Reason)
+	}
+}
+
+// A broker step can only return through artifacts/out/result.json, so a role
+// declared with read tools alone could never answer: task
+// task_20261002233423_4396954e34db2119 tried for 17 iterations and ended
+// egress_no_output (agent-administered Vornik design §18.1). file_write is
+// workspace-confined, so every agent role holds it.
+func TestDefineSwarm_EveryRoleCanWriteItsResult(t *testing.T) {
+	tr := newTree(t, "hermes")
+	tr.project("finance")
+	st := tr.state()
+	p := st.Projects[agentns.ID("hermes", "finance")]
+	roles, why := buildRoles(st, p, []RoleInput{{Name: "critic", Instructions: "Read and judge.", Tools: []string{"file_read", "grep"}}})
+	if why != "" {
+		t.Fatal(why)
+	}
+	for _, r := range roles {
+		if !contains(r.Tools, "file_write") {
+			t.Errorf("role %s has %v: without file_write it cannot write its result", r.Name, r.Tools)
+		}
 	}
 }

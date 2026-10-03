@@ -418,6 +418,12 @@ func NewRouter(server *Server, cfg *config.Config) *Router {
 		// even if AuthMiddleware's lighter check only verified the
 		// shape + active state.
 		mux.HandleFunc("/api/v1/mcp/companion", server.CompanionMCPHandler)
+		// Hermes approval transport (design 2026-10-03 §4.3): an agent admin
+		// key files a Hermes approval request and long-polls its answer.
+		// AuthMiddleware admits only an agent admin key among companion keys
+		// (isCompanionAllowedPathFor); the handler re-checks.
+		mux.HandleFunc(hostApprovalsPath, server.hostApprovalsRouter)
+		mux.HandleFunc(hostApprovalsPrefix, server.hostApprovalsRouter)
 
 		// Workflow-healing triggers — Black Box Phase B. The
 		// hourly detector writes triggers when a workflow's last-24h

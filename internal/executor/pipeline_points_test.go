@@ -13,6 +13,7 @@ func TestStepOutcomePoint_ParticipantsArePinned(t *testing.T) {
 	e, _, _, _, _ := setup()
 	want := []string{
 		"output_file_contract",
+		"broker_egress",
 		"tool_contract",
 		"plausibility",
 		"claimed_files",

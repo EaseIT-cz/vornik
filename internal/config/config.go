@@ -753,6 +753,24 @@ type AgentAdminConfig struct {
 	DefaultProjectBudgetUSD float64 `yaml:"default_project_budget_usd" doc:"Monthly budget of a project an agent creates (default 2). Raising a project's budget needs approval on an approver device."`
 	NamespaceBudgetUSD      float64 `yaml:"namespace_budget_usd" doc:"Ceiling on the sum of an agent's project budgets until a device approves more (default 10)."`
 	AgentImage              string  `yaml:"agent_image" doc:"Runtime image of the roles an agent defines (default the standard agent image)."`
+	// Models is the catalogue of models an agent's roles may name
+	// (agent-administered design §18.6 item 2). Empty: no model is offered.
+	Models []AgentModelConfig `yaml:"models" doc:"Models an agent's roles may choose (empty, the default: none; every agent role runs on the global agent model). Whether each is local or remote is computed from where the chat router sends it: local only for an HTTP endpoint on a loopback or private address. A role on a remote model needs approval on an approver device, once per destination (sub-provider and endpoint host). Entries served by a command-line provider, with no route, or remote without an exact pricing.yaml entry are not offered; vornikctl doctor names them (agent_model_catalogue)."`
+}
+
+// AgentModelConfig is one model of agent_admin.models.
+type AgentModelConfig struct {
+	ID      string `yaml:"id" doc:"The model id as the chat router routes it (e.g. qwen3:35b, google/gemini-2.5-pro)."`
+	GoodFor string `yaml:"good_for" doc:"One plain line saying what the model is good for; describe_installation shows it to the agent."`
+}
+
+// ModelIDs returns the catalogue's model ids.
+func (a AgentAdminConfig) ModelIDs() []string {
+	out := make([]string, 0, len(a.Models))
+	for _, m := range a.Models {
+		out = append(out, m.ID)
+	}
+	return out
 }
 
 // IsEnabled reports whether the agent admin verbs are offered: true unless
@@ -790,6 +808,50 @@ func (a AgentAdminConfig) EffectiveAgentImage(defaultImage string) string {
 type BrokerDaemonConfig struct {
 	Writes        string `yaml:"writes" doc:"Broker write-action mode: off (default; delegating a workflow that proposes writes is refused and nothing approved executes) or on (writes execute after approval in /inbox, each also gated by its MCP server's broker_write declaration)."`
 	ActionTimeout string `yaml:"action_timeout" doc:"Bound on one approved write's tool call (default 60s, at most 10m). A call that times out is recorded as unknown, never retried."`
+	// StandingGrants bounds standing grants (broker write-actions design,
+	// tier 2): lower only.
+	StandingGrants BrokerStandingGrantsConfig `yaml:"standing_grants"`
+}
+
+// Standing-grant ceilings (broker write-actions design, tier 2 revised item
+// 9). registry.StandingMaxDays/StandingMaxUses/StandingMaxLivePerProject
+// state the same numbers for the loader; a service test pins that they agree.
+const (
+	StandingGrantCeilingDays = 7
+	StandingGrantCeilingUses = 20
+	StandingGrantCeilingLive = 10
+)
+
+// BrokerStandingGrantsConfig lowers the standing-grant bounds. Zero keeps the
+// ceiling; a value above it is refused at load (the bounds are not the
+// person's, or the operator's, to raise past).
+type BrokerStandingGrantsConfig struct {
+	MaxDays           int `yaml:"max_days" doc:"Longest standing grant a person may set, in days (default and ceiling 7)."`
+	MaxUses           int `yaml:"max_uses" doc:"Most writes one standing grant may cover (default and ceiling 20)."`
+	MaxLivePerProject int `yaml:"max_live_per_project" doc:"Most live standing grants per project (default and ceiling 10)."`
+}
+
+// Effective resolves the bounds, refusing a value above its ceiling.
+func (c BrokerStandingGrantsConfig) Effective() (days, uses, live int, err error) {
+	pick := func(name string, v, ceiling int) (int, error) {
+		switch {
+		case v < 0 || v > ceiling:
+			return 0, fmt.Errorf("broker.standing_grants.%s must be 0 (the default, %d) or between 1 and %d (it may only lower the ceiling), got %d", name, ceiling, ceiling, v)
+		case v == 0:
+			return ceiling, nil
+		}
+		return v, nil
+	}
+	if days, err = pick("max_days", c.MaxDays, StandingGrantCeilingDays); err != nil {
+		return 0, 0, 0, err
+	}
+	if uses, err = pick("max_uses", c.MaxUses, StandingGrantCeilingUses); err != nil {
+		return 0, 0, 0, err
+	}
+	if live, err = pick("max_live_per_project", c.MaxLivePerProject, StandingGrantCeilingLive); err != nil {
+		return 0, 0, 0, err
+	}
+	return days, uses, live, nil
 }
 
 // WritesMode validates broker.writes and returns off|on, or an error the

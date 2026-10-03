@@ -971,6 +971,14 @@ func (s *Server) adminRouter(w http.ResponseWriter, r *http.Request) {
 	case "/agents", "/agents/":
 		s.AdminAgents(w, r, "")
 	default:
+		// /agents/<namespace>/models/withdraw (design §18.6 item 2): the
+		// console withdraws a model destination approval.
+		if rest, ok := strings.CutPrefix(path, "/agents/"); ok && strings.HasSuffix(rest, "/models/withdraw") {
+			if ns := strings.TrimSuffix(rest, "/models/withdraw"); ns != "" && !strings.Contains(ns, "/") {
+				s.AdminAgentWithdrawModel(w, r, ns)
+				return
+			}
+		}
 		// /agents/<namespace> (plan P6.5). One segment only.
 		if ns, ok := strings.CutPrefix(path, "/agents/"); ok && !strings.Contains(strings.Trim(ns, "/"), "/") {
 			s.AdminAgents(w, r, ns)

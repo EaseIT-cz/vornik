@@ -771,6 +771,17 @@ CREATE TABLE IF NOT EXISTS agent_namespace_budgets (
     updated_at          TEXT NOT NULL
 );
 
+-- agent model destination approvals — migration 214 (agent-administered
+-- design §18.6 item 2 in detail)
+CREATE TABLE IF NOT EXISTS agent_model_provider_approvals (
+    namespace           TEXT NOT NULL,
+    destination         TEXT NOT NULL,
+    approved_by_device  TEXT NOT NULL,
+    approved_at         TEXT NOT NULL,
+    removed_at          TEXT,
+    PRIMARY KEY (namespace, destination)
+);
+
 -- broker_actions — migration 202 (broker write-actions design §5.2)
 -- ============================================================
 CREATE TABLE IF NOT EXISTS broker_actions (
@@ -796,6 +807,35 @@ CREATE TABLE IF NOT EXISTS broker_actions (
     UNIQUE (task_id, action_kind)
 );
 CREATE INDEX IF NOT EXISTS idx_broker_actions_status ON broker_actions (status, project_id, created_at);
+
+-- broker_standing_grants — migration 213 (broker write-actions design,
+-- tier 2 standing grants, item 10 and round 4's key_hash)
+-- ============================================================
+CREATE TABLE IF NOT EXISTS broker_standing_grants (
+    id                     TEXT PRIMARY KEY,
+    project_id             TEXT NOT NULL,
+    namespace              TEXT NOT NULL DEFAULT '',
+    workflow_id            TEXT NOT NULL,
+    action                 TEXT NOT NULL,
+    key_paths              TEXT NOT NULL,
+    key_values             TEXT NOT NULL,
+    key_hash               TEXT NOT NULL,
+    max_uses               INTEGER NOT NULL CHECK (max_uses BETWEEN 1 AND 20),
+    uses_left              INTEGER NOT NULL CHECK (uses_left >= 0 AND uses_left <= max_uses),
+    expires_at             TEXT NOT NULL,
+    created_at             TEXT NOT NULL,
+    created_by             TEXT NOT NULL,
+    seed_action_id         TEXT NOT NULL,
+    reach_hash_at_creation TEXT NOT NULL,
+    active                 INTEGER NOT NULL DEFAULT 1,
+    paused                 INTEGER NOT NULL DEFAULT 0,
+    suspended_at           TEXT,
+    revoked_at             TEXT,
+    digest_through         TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_broker_standing_grants_class ON broker_standing_grants (project_id, workflow_id, action);
+CREATE INDEX IF NOT EXISTS idx_broker_standing_grants_ns ON broker_standing_grants (namespace);
+CREATE INDEX IF NOT EXISTS idx_broker_actions_approver ON broker_actions (approver);
 
 CREATE TABLE IF NOT EXISTS step_prompts (
     hash       TEXT PRIMARY KEY,
@@ -2202,11 +2242,12 @@ const executionQualityScoresTableSQL = `CREATE TABLE IF NOT EXISTS execution_qua
 // agentApprovalRequestsTableSQL is the agent_approval_requests table, shared
 // by schemaSQL and the table rebuild that widens an existing database's kind
 // CHECK (sqliteTableRebuilds). The broker_action kind (agent-administered
-// Vornik plan P4.8) is the rebuild's marker.
+// Vornik plan P4.8) and the host_action kind (Hermes approval transport
+// design §4.1) are the rebuilds' markers.
 const agentApprovalRequestsTableSQL = `CREATE TABLE IF NOT EXISTS agent_approval_requests (
     id                 TEXT PRIMARY KEY,
     namespace          TEXT NOT NULL DEFAULT '',
-    kind               TEXT NOT NULL CHECK (kind IN ('device_enrollment','widening_change','credential_slot','broker_action')),
+    kind               TEXT NOT NULL CHECK (kind IN ('device_enrollment','widening_change','credential_slot','broker_action','host_action')),
     sentence           TEXT NOT NULL,
     rendered           TEXT NOT NULL,
     rendered_sha256    TEXT NOT NULL,
@@ -2221,5 +2262,7 @@ const agentApprovalRequestsTableSQL = `CREATE TABLE IF NOT EXISTS agent_approval
     apply_lease_until  TEXT,
     apply_attempts     INTEGER NOT NULL DEFAULT 0,
     -- migration 209: why an approved change could never apply
-    apply_error        TEXT
+    apply_error        TEXT,
+    -- migration 212: a host_action decision's scope (once, session, deny)
+    decided_choice     TEXT
 )`

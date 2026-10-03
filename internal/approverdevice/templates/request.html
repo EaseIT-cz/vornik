@@ -1,8 +1,24 @@
 {{define "request.html"}}{{template "head" (page "Review" 0)}}
-<nav><a href="/ui/approve/">Approvals</a><a href="/ui/approve/devices">Devices</a></nav>
+<nav><a href="/ui/approve/">Approvals</a><a href="/ui/approve/standing">Standing approvals</a><a href="/ui/approve/devices">Devices</a></nav>
 <h1>Review</h1>
 {{with .Notice}}<p class="err">{{.}}</p>{{end}}
-<div class="card"><p>{{.Req.Sentence}}</p>
+{{with .Desc}}<div class="card plain"><p class="summary">{{.Summary}}</p>
+<p class="risk risk-{{.Level}}"><strong>Risk: {{.Level}}</strong></p>
+{{with .Reasons}}<ul class="reasons">{{range .}}<li>{{.}}</li>{{end}}</ul>{{end}}</div>{{end}}
+{{if .Host}}<div class="card"><p>{{.Req.Sentence}}</p>
+<p class="mut">The command, as Hermes shows it (secrets already masked):</p>
+<pre class="command">{{.Host.Command}}</pre>
+<p class="mut">Asked {{.Host.Surface}}. {{.Host.Deadline}}</p>
+<details><summary class="mut">Exactly what you are answering</summary><pre>{{.Pretty}}</pre></details></div>
+{{if .Pending}}<form method="post" action="/ui/approve/{{.Req.ID}}">
+<input type="hidden" name="rendered_sha256" value="{{.Req.RenderedSHA256}}">
+{{range .Host.Choices}}{{if eq . "once"}}<button class="ok" type="submit" name="decision" value="once">Allow once</button>
+{{else if eq . "session"}}<button class="ok" type="submit" name="decision" value="session">Allow for this session</button>
+<p class="mut">Hermes will not ask again for commands matching <code>{{$.Host.PatternKey}}</code> until this conversation ends.</p>
+{{else if eq . "deny"}}<button class="no" type="submit" name="decision" value="deny">Deny</button>
+{{end}}{{end}}</form>
+{{else if not .Expired}}<div class="card"><p class="mut">Already answered: {{with .Req.DecidedChoice}}{{.}}{{else}}{{.Req.Status}}{{end}}{{with .Req.DecidedAt}} at {{whenp .}}{{end}}.</p></div>{{end}}
+{{else}}<div class="card"><p>{{.Req.Sentence}}</p>
 <details><summary class="mut">Exactly what will change</summary><pre>{{.Pretty}}</pre></details></div>
 {{if and .Pending .Connect}}
 <form method="post" action="/ui/approve/{{.Req.ID}}/connect">
@@ -24,6 +40,14 @@
 <button class="ok" type="submit" name="decision" value="approve">Approve</button>{{end}}
 <button class="no" type="submit" name="decision" value="reject">Reject</button>
 </form>
+{{with .Grant}}<form method="post" action="/ui/approve/{{$.Req.ID}}" class="card">
+<input type="hidden" name="rendered_sha256" value="{{$.Req.RenderedSHA256}}">
+<p><strong>Approve, and send future {{.Action}} to {{.Key}} without showing you their text</strong>, for
+<select name="grant_days">{{range .Days}}<option value="{{.}}">{{.}} day{{if ne . 1}}s{{end}}</option>{{end}}</select>,
+at most <select name="grant_uses">{{range .Uses}}<option value="{{.}}">{{.}}</option>{{end}}</select> times.</p>
+<p class="mut">What a future write says will not be shown to you: {{range $i, $f := .Unreviewed}}{{if $i}}, {{end}}{{$f}}{{end}}. Your assistant writes it, and nobody reads it before it is sent. An address may reach several people (a mailing list). You see every write it sends on Standing approvals, once a day, and can pause or revoke it there at any time.</p>
+<button class="ok" type="submit" name="decision" value="approve_grant">Approve, and approve future writes like this</button>
+</form>{{end}}
 {{else if .Expired}}<div class="card"><p class="mut">This request expired. Your assistant has to ask again.</p></div>
-{{else}}<div class="card"><p class="mut">Already decided: {{.Req.Status}}{{with .Req.DecidedAt}} at {{whenp .}}{{end}}.</p></div>{{end}}
+{{else}}<div class="card"><p class="mut">Already decided: {{.Req.Status}}{{with .Req.DecidedAt}} at {{whenp .}}{{end}}.</p></div>{{end}}{{end}}
 {{template "foot"}}{{end}}

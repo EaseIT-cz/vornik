@@ -10,4 +10,7 @@ var (
 	ErrInputs = errors.New("the schedule's inputs no longer match the workflow's input schema")
 	// ErrBudget: a budget refused the run.
 	ErrBudget = errors.New("a budget refused the scheduled run")
+	// ErrSetupIncomplete: an integration the workflow reaches has no
+	// credential set (agent-administered Vornik design §19.8 F4).
+	ErrSetupIncomplete = errors.New("the workflow's setup is incomplete: a credential it needs is not set")
 )

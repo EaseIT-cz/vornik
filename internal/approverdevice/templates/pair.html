@@ -4,9 +4,19 @@
 <p>Enter the code that <b>vornikctl pair-device</b> printed in the Vornik terminal.</p>
 {{with .Error}}<p class="err">{{.}}</p>{{end}}
 <form method="post" action="/ui/pair">
+{{with .Help.Next}}<input type="hidden" name="next" value="{{.}}">{{end}}
 <input type="text" name="code" autocomplete="one-time-code" autocapitalize="characters" spellcheck="false" required aria-label="Pairing code">
 <button type="submit">Pair</button>
 </form>
 </div>
+{{template "pairingHelp" .Help}}
 <p class="mut">Only a paired device can approve what your assistant asks Vornik to do, or enter a credential.</p>
 {{template "foot"}}{{end}}
+
+{{/* pairingHelp: why a tapped link can open an unpaired browser, and the way
+     back to the paired one (agent-administered design §9.2a). */}}
+{{define "pairingHelp"}}<div class="card">
+<p>A phone is paired in one browser. A link opened inside another app, such as Telegram or Mail, opens that app's own browser, which is not paired.</p>
+{{if .Chrome}}<p><a class="act" href="{{.Chrome}}">Open in Chrome</a> <a class="act" href="{{.Safari}}">Open in Safari</a></p>{{end}}
+{{with .Address}}<p class="mut">Or copy this address into the browser you paired: <span class="ref">{{.}}</span></p>{{end}}
+</div>{{end}}

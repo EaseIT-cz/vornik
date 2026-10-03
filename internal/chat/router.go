@@ -175,6 +175,13 @@ func (r *Router) Resolves(model string) (routeName string, matched bool) {
 	return name, matched
 }
 
+// FallbackName is the kind label of the fallback sub-provider (the
+// router.default kind), "" when the router was built without one. A caller
+// that asked Resolves and got "fallback" reads which sub-provider that is
+// here (agent-administered design §18.6 item 2: a model classified by the
+// default's endpoint).
+func (r *Router) FallbackName() string { return r.fallbackName }
+
 // Complete implements Provider. Routes through the fallback (no model
 // info available here; callers that care use WithModel first).
 func (r *Router) Complete(ctx context.Context, messages []Message) (*ChatResponse, error) {

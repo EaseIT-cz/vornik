@@ -123,6 +123,10 @@ type BrokerProposal struct {
 	MaxArgsBytes int `yaml:"max_args_bytes,omitempty" json:"max_args_bytes,omitempty"`
 	// ApprovalTTL is how long a proposal waits for approval; "" = 24h.
 	ApprovalTTL string `yaml:"approval_ttl,omitempty" json:"approval_ttl,omitempty"`
+	// Standing declares the action eligible for standing grants (broker
+	// write-actions design, tier 2). Absent: never covered, and the
+	// proposal's JSON (the reach signature's input) is unchanged.
+	Standing *BrokerStanding `yaml:"standing,omitempty" json:"standing,omitempty"`
 }
 
 // Proposal limits (design §4.1).
@@ -263,7 +267,7 @@ func (b *WorkflowBroker) Validate() error {
 		return err
 	}
 	if w.budget > BrokerUntrustedBudget {
-		return fmt.Errorf("broker.input_schema: x-untrusted budget is %d characters (maxLength × every enclosing maxItems, summed); the limit is %d", w.budget, BrokerUntrustedBudget)
+		return ruleError("input_schema", ruleBudget, fmt.Sprintf("this schema's budget is %d", w.budget))
 	}
 	compiled, err := CompileBrokerSchema("input_schema", b.InputSchema)
 	if err != nil {
@@ -304,6 +308,9 @@ func (b *WorkflowBroker) validateSchedule(inputSchema *jsonschema.Schema) error 
 	}
 	if err := inputSchema.Validate(doc); err != nil {
 		return fmt.Errorf("broker.schedule.inputs: %s", DescribeSchemaFailure(err))
+	}
+	if err := b.CheckDocumentValues(sc.Inputs); err != nil {
+		return fmt.Errorf("broker.schedule.inputs: %w", err)
 	}
 	return nil
 }
@@ -361,8 +368,11 @@ func (b *WorkflowBroker) UntrustedInputPaths() []string {
 	if b == nil || b.InputSchema == nil {
 		return nil
 	}
+	// Rooted at input_schema, as Validate walks it: a document declaration
+	// is judged by its path (broker design §18.1), and a walk rooted
+	// elsewhere would stop at the first document.
 	w := &brokerSchemaWalker{}
-	_ = w.walk("", b.InputSchema, 1)
+	_ = w.walk("input_schema", b.InputSchema, 1)
 	sort.Strings(w.untrusted)
 	return w.untrusted
 }
@@ -414,6 +424,9 @@ func (b *WorkflowBroker) validateProposes() error {
 		if _, err := CompileBrokerSchema(p.Action+"-args", p.ArgsSchema); err != nil {
 			return fmt.Errorf("%s.args_schema: %w", at, err)
 		}
+		if err := p.validateStanding(); err != nil {
+			return fmt.Errorf("%s.standing: %w", at, err)
+		}
 	}
 	return nil
 }
@@ -422,6 +435,10 @@ func (b *WorkflowBroker) validateProposes() error {
 type brokerSchemaWalker struct {
 	budget    int
 	untrusted []string
+	// documents and docBytes count the x-untrusted-document declarations
+	// (broker design §18), in their own budget.
+	documents []BrokerDocument
+	docBytes  int
 	// args switches to args_schema rules: the strings are model-drafted
 	// prose meant for human review, so an x-untrusted field may be long (the
 	// whole file is capped by max_args_bytes instead of a character budget),
@@ -432,8 +449,11 @@ type brokerSchemaWalker struct {
 func (w *brokerSchemaWalker) walk(at string, node map[string]any, multiplier int) error {
 	for _, kw := range brokerRefusedKeywords {
 		if _, ok := node[kw]; ok {
-			return fmt.Errorf("broker.%s: %s is not allowed in a broker input schema (v1 proves bounds only through plain properties and items)", at, kw)
+			return ruleError(at, ruleKeywords, kw+" found")
 		}
+	}
+	if _, ok := node[brokerDocumentKey]; ok {
+		return w.walkDocument(at, node)
 	}
 	if _, ok := node["enum"]; ok {
 		return nil
@@ -451,15 +471,15 @@ func (w *brokerSchemaWalker) walk(at string, node map[string]any, multiplier int
 	case "integer", "number", "boolean", "null":
 		return nil
 	case "":
-		return fmt.Errorf("broker.%s: every node needs a single type (or enum/const)", at)
+		return ruleError(at, ruleType, "no type")
 	default:
-		return fmt.Errorf("broker.%s: unsupported type %q", at, t)
+		return ruleError(at, ruleType, fmt.Sprintf("type %q", t))
 	}
 }
 
 func (w *brokerSchemaWalker) walkObject(at string, node map[string]any, multiplier int) error {
 	if ap, ok := node["additionalProperties"].(bool); !ok || ap {
-		return fmt.Errorf("broker.%s: every object must declare additionalProperties: false", at)
+		return ruleError(at, ruleObject, "")
 	}
 	props, _ := node["properties"].(map[string]any)
 	names := make([]string, 0, len(props))
@@ -482,11 +502,11 @@ func (w *brokerSchemaWalker) walkObject(at string, node map[string]any, multipli
 func (w *brokerSchemaWalker) walkArray(at string, node map[string]any, multiplier int) error {
 	maxItems, ok := schemaInt(node["maxItems"])
 	if !ok || maxItems < 1 {
-		return fmt.Errorf("broker.%s: every array must declare maxItems", at)
+		return ruleError(at, ruleArray, "no maxItems")
 	}
 	items, ok := node["items"].(map[string]any)
 	if !ok {
-		return fmt.Errorf("broker.%s: an array needs a single items schema", at)
+		return ruleError(at, ruleArray, "no single items schema")
 	}
 	return w.walk(joinSchemaPath(at, "items"), items, multiplier*maxItems)
 }
@@ -495,14 +515,16 @@ func (w *brokerSchemaWalker) walkString(at string, node map[string]any, multipli
 	maxLen, hasMax := schemaInt(node["maxLength"])
 	if untrusted, _ := node["x-untrusted"].(bool); untrusted {
 		if !hasMax {
-			return fmt.Errorf("broker.%s: an x-untrusted string needs maxLength", at)
+			return ruleError(at, ruleUntrusted, "no maxLength")
 		}
 		limit := BrokerUntrustedStringMax
 		if w.args {
 			limit = BrokerArgsMaxBytesCeiling
 		}
 		if maxLen < 1 || maxLen > limit {
-			return fmt.Errorf("broker.%s: x-untrusted maxLength must be 1..%d", at, limit)
+			// The args_schema limit differs (w.args), so the detail states the
+			// limit that applies here.
+			return ruleError(at, ruleUntrusted, fmt.Sprintf("maxLength must be 1..%d here", limit))
 		}
 		w.budget += maxLen * multiplier
 		w.untrusted = append(w.untrusted, untrustedPropertyPath(at))
@@ -510,17 +532,17 @@ func (w *brokerSchemaWalker) walkString(at string, node map[string]any, multipli
 	}
 	if f, ok := node["format"].(string); ok {
 		if !brokerAllowedFormats[f] && (!w.args || f != "email") {
-			return fmt.Errorf("broker.%s: format %q does not bound the value; use enum, pattern+maxLength, or mark it x-untrusted", at, f)
+			return ruleError(at, ruleString, fmt.Sprintf("format %q does not bound the value", f))
 		}
 		return nil
 	}
 	if _, ok := node["pattern"].(string); ok {
 		if !hasMax || maxLen < 1 || maxLen > BrokerUntrustedStringMax {
-			return fmt.Errorf("broker.%s: a pattern-constrained string also needs maxLength 1..%d", at, BrokerUntrustedStringMax)
+			return ruleError(at, rulePattern, "")
 		}
 		return nil
 	}
-	return fmt.Errorf("broker.%s: unconstrained string; use enum, an allowed format, pattern+maxLength, or mark it x-untrusted with maxLength", at)
+	return ruleError(at, ruleString, "unconstrained string")
 }
 
 func joinSchemaPath(at, next string) string {
@@ -590,7 +612,7 @@ func stripBrokerExtensions(v any) any {
 	case map[string]any:
 		out := make(map[string]any, len(n))
 		for k, val := range n {
-			if k == "x-untrusted" {
+			if k == "x-untrusted" || k == "x-destination" || k == "x-carries-content" || k == brokerDocumentKey {
 				continue
 			}
 			out[k] = stripBrokerExtensions(val)

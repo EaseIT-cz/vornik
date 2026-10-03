@@ -260,6 +260,9 @@ func collectLocalBundleFromWithDoctor(ctx context.Context, cfg *config.Config, c
 	// workflow whose prompt asserts something the executor never sent.
 	if dir := resolveConfigsDir(cfgPath); dir != "" {
 		reg := registry.New()
+		if cfg != nil {
+			reg.SetAgentModelCatalogue(cfg.AgentAdmin.ModelIDs()) // §18.6 item 2
+		}
 		// Tolerate validation errors for the same reason the doctor checks do:
 		// the point is to show what the operator's YAML says, not to refuse the
 		// bundle because one unrelated project is misconfigured.

@@ -1,0 +1,47 @@
+{
+  "version": 1,
+  "schema": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": ["status", "as_of", "items"],
+    "properties": {
+      "status": {"enum": ["ok", "partial", "error"], "description": "ok: everything was read; partial: some sources failed (see errors); error: nothing could be read"},
+      "errors": {
+        "type": "array",
+        "maxItems": 10,
+        "items": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["source", "kind"],
+          "properties": {
+            "source": {"type": "string", "maxLength": 64},
+            "kind": {"enum": ["auth", "quota", "not_found", "unavailable"]}
+          }
+        }
+      },
+      "empty": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["reason"],
+        "properties": {
+          "reason": {"enum": ["no_data", "no_access", "filtered_out"]}
+        }
+      },
+      "as_of": {"type": "string", "maxLength": 40, "format": "date-time", "description": "when the data was read, RFC 3339 in UTC"},
+      "items": {
+        "type": "array",
+        "maxItems": 50,
+        "items": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["source"],
+          "properties": {
+            "source": {"type": "string", "maxLength": 64},
+            "link": {"type": "string", "maxLength": 2000},
+            "id": {"type": "string", "maxLength": 200}
+          }
+        }
+      }
+    }
+  }
+}

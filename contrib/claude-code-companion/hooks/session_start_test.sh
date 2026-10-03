@@ -71,4 +71,29 @@ if grep -q "delegation(s) finished since your last session" <<<"$CTX3"; then
   fail "refresh reprinted the delegation digest"
 fi
 
+# --- Case 4: the working-alongside-Vornik directive (companion guidance
+# design §10, 2026-10-03). Its body is the delegate skill's marked section,
+# byte for byte, on both paths; with the markers gone the hook prints its
+# named banner instead of nothing (review e485 F5, a950 minor).
+SKILL="$HERE/../skills/delegate/SKILL.md"
+BODY="$(awk '/<!-- vornik-guidance:end -->/{f=0} f{print} /<!-- vornik-guidance:start -->/{f=1}' "$SKILL")"
+[[ -n "$BODY" ]] || fail "the delegate skill has no marked guidance section"
+[[ "$CTX" == *"$BODY"* ]] || fail "normal path: the guidance directive is not the skill's marked section"
+[[ "$CTX3" == *"$BODY"* ]] || fail "refresh path: the guidance directive is not the skill's marked section"
+BANNER="$(sed -n "s/^GUIDANCE_MISSING_BANNER='\(.*\)'$/\1/p" "$HOOK")"
+[[ -n "$BANNER" ]] || fail "the hook defines no GUIDANCE_MISSING_BANNER constant"
+TMPSKILL="$(mktemp)"
+grep -v "vornik-guidance:" "$SKILL" >"$TMPSKILL"
+OUT4="$(
+  VORNIK_COMPANION_TOKEN="test-token" \
+  VORNIK_URL="http://127.0.0.1:1" \
+  VORNIK_REPO_SCOPE="github.com/EaseIT-cz/vornik" \
+  VORNIK_DELEGATE_SKILL="$TMPSKILL" \
+  bash "$HOOK" --refresh 2>/dev/null
+)"
+rm -f "$TMPSKILL"
+CTX4="$(printf '%s' "$OUT4" | jq -r '.hookSpecificOutput.additionalContext')"
+[[ "$CTX4" == *"$BANNER"* ]] || fail "markers missing: the banner was not printed"
+[[ "$CTX4" != *"Delegate the user's work first"* ]] || fail "markers missing: a guidance body was printed anyway"
+
 echo "PASS: session-start.sh emits every standing directive on both paths, skips the digest on --refresh, and degrades cleanly without a token"

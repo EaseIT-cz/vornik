@@ -2,7 +2,7 @@
 workflowId: {{q .ID}}
 displayName: {{q .DisplayName}}
 description: {{q .Description}}
-version: 1.0.0
+version: {{if .Version}}{{q .Version}}{{else}}1.0.0{{end}}
 entrypoint: {{q .Entrypoint}}
 broker:
   input_schema: {{.InputSchema}}
@@ -17,6 +17,9 @@ broker:
       tool: {{q .Tool}}
       output: {{q .Output}}
       args_schema: {{.ArgsSchema}}
+{{- if .Standing}}
+      standing: {{.Standing}}
+{{- end}}
 {{- end}}
 {{- end}}
 {{- if .Schedule}}
@@ -43,7 +46,10 @@ Rendered by the agent admin verbs for namespace {{.Namespace}}.
 ### {{.Name}}
 
 {{.Instructions}}
-{{if .Last}}
+{{if not .First}}
+Earlier steps' files are in `artifacts/out/`.
+{{end}}
+{{- if .Last}}
 Write `artifacts/out/result.json` with exactly the approved egress shape.
 {{- if $.Proposes}}
 To propose a change, also write a file with exactly this shape, its args
@@ -51,7 +57,13 @@ matching the action's schema; each one waits for the user's approval:
 {{- range $.Proposes}}
 - {{.Action}}: `artifacts/out/{{.Output}}` containing `{"action": "{{.Action}}", "args": { ... }}`
 {{- end}}
-Write no other output file.
-{{- else}} Write no other output file.
+{{.Closing}}
+{{- else}} {{.Closing}}
 {{- end}}
+{{else}}
+Write what the next step needs as files under `artifacts/out/` (for example
+`artifacts/out/{{.Name}}.md`). Only files there reach later steps; anything
+you write elsewhere is discarded when this step ends.
+Do not write `artifacts/out/result.json`: that name is the workflow's answer
+and only its last step writes it.
 {{end}}{{end}}

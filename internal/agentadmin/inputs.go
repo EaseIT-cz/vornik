@@ -26,6 +26,9 @@ type RoleInput struct {
 	Name         string   `json:"name"`
 	Instructions string   `json:"instructions"`
 	Tools        []string `json:"tools"`
+	// Model is optional: a model id from the installation's catalogue
+	// (design §18.6 item 2).
+	Model string `json:"model,omitempty"`
 }
 
 // DefineSwarmInput is define_swarm. Every agent project owns exactly one

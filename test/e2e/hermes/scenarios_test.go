@@ -274,12 +274,12 @@ func catalogCalls(t *testing.T) int {
 	return n
 }
 
-// TestHermesLane is the lane: H1, H2, H3b, H3, H2b, H6a, H4, H5, H6 on one
+// TestHermesLane is the lane: H1, H2, H3b, H3, H3f, H2b, H6a, H4, H5, H6 on one
 // daemon, in that order (lane design §4).
 func TestHermesLane(t *testing.T) {
 	s := startStack(t)
 	l := &laneRun{t: t, s: s, attempts: map[string]int{}, replies: map[string]string{}}
-	startHermesModel(t, s, hermesScripts(s)...)
+	startHermesModel(t, s, append(hermesScripts(s), h3fScripts()...)...)
 	prepareHermesHome(t, s)
 
 	// H1 — the plugin's tools reach the model; catalog is called. Judged on
@@ -341,6 +341,11 @@ func TestHermesLane(t *testing.T) {
 		}
 		return nil
 	})
+
+	// H3f — forgetting reaches Vornik (design 24, 0.8.0): a fact saved in
+	// Hermes's own memory, then forgotten, is refuted in Vornik and absent
+	// from a fresh session.
+	laneH3f(t, l)
 
 	// H2b — Vornik enforces the egress contract against a hostile producer.
 	hostile := goodDigest()

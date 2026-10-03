@@ -54,6 +54,29 @@ vornikctl agent disconnect <namespace> [flags]
 |---|---|---|
 | `--url` |  | Vornik's URL (default $VORNIK_API_URL, then http://localhost:8080) |
 
+## vornikctl agent host-approval
+
+Ask the paired phone to answer an assistant's own safety prompt (run by the assistant, not by you)
+
+Read an approval request from the assistant (Hermes) on stdin, file it with
+Vornik under the namespace's key, wait for the paired phone's answer until
+--deadline (unix seconds), and print {"choice": "once"|"session"|"deny",
+"reason": ...} on stdout.
+
+An answer from the phone exits 0. Anything else (Vornik unreachable, too
+many requests, the deadline passed) prints "deny" with the reason and exits
+non-zero. The key is never printed.
+
+```
+vornikctl agent host-approval [flags]
+```
+
+| Flag | Default | Description |
+|---|---|---|
+| `--deadline` | `0` | Unix time (seconds) after which the answer is deny (required) |
+| `--namespace` |  | The agent namespace whose key to use (required) |
+| `--url` |  | Vornik's URL (default $VORNIK_API_URL, then http://localhost:8080) |
+
 ## vornikctl agent mcp-bridge
 
 Relay MCP over stdio to Vornik (run by the assistant, not by you)
@@ -721,6 +744,8 @@ Security:
   config_secret_hygiene Config.yaml plaintext secrets or loose permissions (recommends ${ENV_VAR})
   secret_store_key      Agent credential store: a missing or wrong key while credentials exist is an error
   approver_devices      Agent approvals: a warning when an agent namespace exists with no paired device or no push
+  agent_namespace_budget Agent namespaces whose project budgets sum above the approved ceiling, naming the waiting cover request
+  agent_model_catalogue Agent role models: agent_admin.models entries not offered to agent roles (no route, a command-line provider, or remote without an exact price)
 
 Models:
   model_health          Role-pinned models with high recent failure rate or

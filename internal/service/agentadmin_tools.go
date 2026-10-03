@@ -8,6 +8,7 @@ import (
 	"net"
 	"net/url"
 	"sort"
+	"strings"
 	"time"
 
 	"vornik.io/vornik/internal/agentadmin"
@@ -161,7 +162,20 @@ func (s *agentAdminService) fileServerTools(ctx context.Context, ns, projectID, 
 	}
 	if res.Effect == EffectRefused {
 		log.Info().Str("reason", res.Reason).Msg("agent admin: the tools approval was not filed")
+		if len(res.MissingTools) > 0 {
+			// A recipe's tools-approval check (design §19.8 F6): the gap is
+			// shown in list_my_setup, built from the typed field, never from
+			// the refusal's text (review 20261003-6b46 F2).
+			s.setToolGap(projectID, server, "the server does not offer "+strings.Join(res.MissingTools, ", ")+"; this recipe needs them")
+		}
+		return
 	}
+	s.setToolGap(projectID, server, "")
+}
+
+// mcpServerConfigFor is a credential-less listing of url for namespace ns.
+func mcpServerConfigFor(ns, url string) mcp.ServerConfig {
+	return mcp.ServerConfig{Name: "recipe", Transport: "streamable-http", URL: url, ProjectID: agentns.ID(ns, "home")}
 }
 
 // doInternal renders and files a daemon-internal verb for ns. A device
@@ -180,7 +194,7 @@ func (s *agentAdminService) doInternal(ctx context.Context, ns, verb string, inp
 		return AgentAdminResult{}, err
 	}
 	if ch.Class != agentadmin.Widening {
-		return AgentAdminResult{Effect: EffectRefused, Reason: ch.Reason}, nil
+		return AgentAdminResult{Effect: EffectRefused, Reason: ch.Reason, MissingTools: ch.MissingTools}, nil
 	}
 	p, err := s.fileProposal(ctx, AgentSystemActor, "", ch)
 	if err != nil {

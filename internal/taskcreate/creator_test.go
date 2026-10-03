@@ -4,8 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -615,5 +617,27 @@ func TestCreate_ReachVerifierRefuses(t *testing.T) {
 	// must be on the project's DEFAULT workflow, resolved before the call.
 	if gotProject != "demo" || gotWorkflow != "build" {
 		t.Fatalf("verifier saw project %q workflow %q, want demo/build (the project's default)", gotProject, gotWorkflow)
+	}
+}
+
+// classedErr is a verifier refusal carrying its failure class.
+type classedErr struct{ class string }
+
+func (e classedErr) Error() string        { return e.class + ": enter MAIL_TOKEN on your phone" }
+func (e classedErr) FailureClass() string { return e.class }
+
+// Agent-administered Vornik §19.8 F4: the credential-completeness gate runs
+// beside the reach check and refuses with its own reason, so delegate says
+// SETUP_INCOMPLETE and a scheduled slot is skipped as setup_incomplete.
+func TestCreate_SetupIncompleteHasItsOwnReason(t *testing.T) {
+	reg := loadTestRegistry(t)
+	c := New(WithTaskRepository(&mocks.MockTaskRepository{}), WithProjectRegistry(reg),
+		WithReachVerifier(func(context.Context, string, string) error {
+			return fmt.Errorf("wrapped: %w", classedErr{class: persistence.TaskFailureClassSetupIncomplete})
+		}))
+	_, err := c.Create(context.Background(), Params{ProjectID: "demo", TaskType: "research"})
+	ce := AsError(err)
+	if ce == nil || ce.Reason != ReasonSetupIncomplete || !strings.Contains(ce.Message, "MAIL_TOKEN") {
+		t.Fatalf("err = %v, want ReasonSetupIncomplete naming the credential", err)
 	}
 }

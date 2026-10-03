@@ -679,6 +679,24 @@ func TestAgentGrant_Contract(t *testing.T) {
 	repotest.RunAgentGrantSuite(t, sqlite.NewAgentGrantRepository(newTestDB(t).DB))
 }
 
+// TestAgentModelDestination_Contract — agent_model_provider_approvals
+// (agent-administered design §18.6 item 2 in detail). A FILE database opened
+// with the daemon's DSN (sqlite.Connect, the production pool), never
+// :memory:.
+func TestAgentModelDestination_Contract(t *testing.T) {
+	ctx := context.Background()
+	cfg := sqlite.Config{Path: filepath.Join(t.TempDir(), "models.db"), ConnectTimeout: 5 * time.Second}
+	db, err := sqlite.Connect(ctx, cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	if err := db.Migrate(ctx); err != nil {
+		t.Fatal(err)
+	}
+	repotest.RunAgentModelDestinationSuite(t, sqlite.NewAgentGrantRepository(db.DB))
+}
+
 // TestApproverDevice_Contract — approver devices, pairings and approval
 // requests (agent-administered Vornik design §9). A fresh database per
 // subtest: first-device semantics need an empty device set. It is a FILE
@@ -739,4 +757,22 @@ func TestCompanionPush_Contract(t *testing.T) {
 			}
 		},
 	})
+}
+
+// TestBrokerGrant_Contract — standing grants (broker write-actions design,
+// tier 2, rounds 3 and 4, review 61a5). A FILE database opened with the
+// daemon's DSN (sqlite.Connect, the production pool and _txlock=immediate),
+// never :memory:, so the concurrency cases race real connections.
+func TestBrokerGrant_Contract(t *testing.T) {
+	ctx := context.Background()
+	cfg := sqlite.Config{Path: filepath.Join(t.TempDir(), "grants.db"), ConnectTimeout: 5 * time.Second}
+	db, err := sqlite.Connect(ctx, cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	if err := db.Migrate(ctx); err != nil {
+		t.Fatal(err)
+	}
+	repotest.RunBrokerGrantSuite(t, sqlite.NewBrokerGrantRepository(db.DB), sqlite.NewBrokerActionRepository(db.DB))
 }

@@ -378,6 +378,20 @@ var corpus = map[string]Entry{
 			"If neither you nor the agent changed the workflow, its file was edited by hand outside the admin verbs: restore the file, or ask the agent to define the workflow again.",
 		},
 	},
+	persistence.TaskFailureClassSetupIncomplete: {
+		Class:        persistence.TaskFailureClassSetupIncomplete,
+		Scope:        ScopeTask,
+		HumanMessage: "This agent workflow was not run, because a credential it needs has not been entered on your phone.",
+		Cause: "An agent-administered workflow runs only when every service it reaches has its credential set (for a recipe, " +
+			"the credentials its installation asked for). One of them is missing: it was never entered, the request was declined, " +
+			"or it was removed while the task waited. The check runs before any container starts, so nothing was sent anywhere. " +
+			"This class SKIPS the retry budget: retrying cannot enter a credential.",
+		Suggestions: []string{
+			"Open the credential request on your paired device and enter the value, or sign in; list_my_setup names it under next_steps.",
+			"If the request was declined or has expired, ask the agent to call request_credential again, or remove the workflow.",
+			"Then run the workflow again; a scheduled one runs at its next slot.",
+		},
+	},
 	persistence.TaskFailureClassWorkspaceUnavailable: {
 		Class:        persistence.TaskFailureClassWorkspaceUnavailable,
 		Scope:        ScopeTask,

@@ -61,6 +61,10 @@ type AgentPage struct {
 	Pending    []AgentRequest
 	Failed     []AgentRequest
 	Expired    []AgentRequest
+	// Models are the namespace's model destination approvals
+	// ("<sub-provider>@<host>", status approved or withdrawn; design §18.6
+	// item 2). Only this console withdraws one.
+	Models []AgentItem
 }
 
 // AgentsSource is the service behind the pages.
@@ -68,6 +72,15 @@ type AgentsSource interface {
 	ListAgents(ctx context.Context) ([]AgentRow, error)
 	// DescribeAgent returns nil for a namespace that does not exist.
 	DescribeAgent(ctx context.Context, ns string) (*AgentPage, error)
+}
+
+// ModelWithdrawer withdraws a namespace's model destination approval (sets
+// removed_at; agent-administered design §18.6 item 2, round 2 F7, round 3
+// F3). The operator console is its only caller; a source test pins that.
+type ModelWithdrawer interface {
+	// WithdrawModelDestination reports whether a live approval was
+	// withdrawn (false: absent or already withdrawn).
+	WithdrawModelDestination(ctx context.Context, ns, destination string) (bool, error)
 }
 
 // WithAgents wires the agents pages.
@@ -128,4 +141,39 @@ func (s *Server) AdminAgents(w http.ResponseWriter, r *http.Request, ns string) 
 		data.Title = "Assistant " + page.Row.Namespace
 	}
 	s.render(w, "admin_agents.html", data)
+}
+
+// AdminAgentWithdrawModel handles POST /ui/admin/agents/<ns>/models/withdraw:
+// the operator withdraws an approved model destination. A role still on a
+// model that goes there is refused before its next attempt, and the
+// assistant's next define_swarm for it asks the phone again.
+func (s *Server) AdminAgentWithdrawModel(w http.ResponseWriter, r *http.Request, ns string) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	wd, ok := s.agents.(ModelWithdrawer)
+	if s.agents == nil || !ok {
+		http.Error(w, "agent administration is not wired", http.StatusServiceUnavailable)
+		return
+	}
+	dest := strings.TrimSpace(r.FormValue("destination"))
+	if dest == "" || !strings.Contains(dest, "@") {
+		http.Error(w, "destination required", http.StatusBadRequest)
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
+	defer cancel()
+	removed, err := wd.WithdrawModelDestination(ctx, ns, dest)
+	if err != nil {
+		s.logger.Warn().Err(err).Str("namespace", ns).Str("destination", dest).Msg("admin agents: withdraw model destination failed")
+		http.Error(w, "the approval could not be withdrawn; the daemon log has the detail", http.StatusInternalServerError)
+		return
+	}
+	if !removed {
+		// Absent or already withdrawn (review 20261003-a525 A4): say so.
+		http.Error(w, "nothing to withdraw: "+dest+" is not an approved model destination of "+ns, http.StatusConflict)
+		return
+	}
+	http.Redirect(w, r, "/ui/admin/agents/"+ns, http.StatusSeeOther)
 }

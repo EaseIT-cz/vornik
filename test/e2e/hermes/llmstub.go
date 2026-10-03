@@ -42,6 +42,7 @@ type Script struct {
 // means the plumbing around the model broke, not the model (lane design
 // §3.2). It also serves deterministic /v1/embeddings.
 type LLMStub struct {
+	bodyWatch
 	Steps   []ScriptStep
 	Final   string
 	Scripts []Script
@@ -52,6 +53,17 @@ type LLMStub struct {
 	requests  int
 	failures  []string
 	toolsSeen map[string]bool
+	// firstTurns is the conversation text of every request that carried no
+	// tool result yet: what a step was given before it read anything.
+	firstTurns []string
+}
+
+// FirstTurns returns the conversation text of every request made before any
+// tool result: the step's prompt as the model received it.
+func (s *LLMStub) FirstTurns() []string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]string(nil), s.firstTurns...)
 }
 
 // ToolsSeen lists every tool name offered in any request, sorted.
@@ -117,6 +129,7 @@ func (s *LLMStub) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	body, _ := io.ReadAll(io.LimitReader(r.Body, 8<<20))
+	s.inspect(body)
 	var req chatRequest
 	if err := json.Unmarshal(body, &req); err != nil {
 		http.Error(w, "bad request", http.StatusBadRequest)
@@ -133,6 +146,9 @@ func (s *LLMStub) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	s.mu.Lock()
 	s.requests++
+	if results == 0 {
+		s.firstTurns = append(s.firstTurns, all.String())
+	}
 	if s.toolsSeen == nil {
 		s.toolsSeen = map[string]bool{}
 	}

@@ -88,22 +88,34 @@ type Effect func(ctx context.Context, r persistence.AgentApprovalRequestRow) err
 
 // Service is the device and approval-request logic.
 type Service struct {
-	repo     persistence.ApproverDeviceRepository
-	now      func() time.Time
-	perIP    *chatauth.RedemptionLimiter
-	global   *chatauth.RedemptionLimiter
-	notify   func(ctx context.Context, subject, body string)
-	origin   string
-	mu       sync.RWMutex
-	effects  map[string]Effect
-	onReject map[string]func(ctx context.Context, r persistence.AgentApprovalRequestRow)
+	repo   persistence.ApproverDeviceRepository
+	now    func() time.Time
+	perIP  *chatauth.RedemptionLimiter
+	global *chatauth.RedemptionLimiter
+	notify func(ctx context.Context, subject, body string)
+	// notifyChannel/notifyActive: the operator channel pushes go to (§9.1a).
+	notifyChannel string
+	notifyActive  bool
+	origin        string
+	mu            sync.RWMutex
+	effects       map[string]Effect
+	onReject      map[string]func(ctx context.Context, r persistence.AgentApprovalRequestRow)
 	// values are the value-entry handlers by kind (plan P4.2).
 	values map[string]ValueEntry
+	// describers produce each kind's plain summary and level (§18.7).
+	describers map[string]Describer
 	// connects are the sign-in starters by kind (plan P4.4).
 	connects map[string]ConnectEntry
 	// holder names this process in apply leases, so in a cluster one node
 	// runs an approved request's effect at a time (review 4de8 F2).
 	holder string
+	// hostRecord counts host-action outcomes (Hermes approval transport
+	// design §8).
+	hostRecord func(harness, outcome string)
+	// offers are the standing-grant offers by kind, and standing the
+	// Standing approvals page (broker write-actions design, tier 2).
+	offers   map[string]GrantOfferFunc
+	standing StandingPages
 }
 
 // applyLease bounds how long one holder may run an effect before another
@@ -120,6 +132,13 @@ func WithClock(now func() time.Time) Option { return func(s *Service) { s.now = 
 // is false and approvals still work from the page.
 func WithNotifier(fn func(ctx context.Context, subject, body string)) Option {
 	return func(s *Service) { s.notify = fn }
+}
+
+// WithNotifyChannel names the operator channel pushes go to and whether it
+// is active, so the list page can say how this device hears of a request
+// (design §9.1a): pushes never go to the browser itself.
+func WithNotifyChannel(channel string, active bool) Option {
+	return func(s *Service) { s.notifyChannel, s.notifyActive = channel, active }
 }
 
 // WithOrigin sets the public origin used in pushed links.
@@ -153,6 +172,10 @@ func New(repo persistence.ApproverDeviceRepository, opts ...Option) *Service {
 		s.holder = "node_" + fmt.Sprint(time.Now().UnixNano())
 	}
 	s.effects[persistence.ApprovalKindDeviceEnrollment] = func(context.Context, persistence.AgentApprovalRequestRow) error { return nil }
+	// A host action runs nothing in Vornik: the asker reads the answer
+	// (Hermes approval transport design §4.1), so its effect is a no-op and
+	// MarkApplied follows at once.
+	s.effects[persistence.ApprovalKindHostAction] = func(context.Context, persistence.AgentApprovalRequestRow) error { return nil }
 	return s
 }
 
@@ -191,6 +214,49 @@ var ErrValueNotStored = errors.New("approverdevice: the request was approved, bu
 const MaxValueBytes = 16 << 10
 
 // RegisterValueEntry makes requests of kind take a value on their page.
+// Description is what the approval page shows first for a request (design
+// §18.7 of the agent-administered design): a plain summary and a risk level
+// with its reasons, produced by the requester from the approved document,
+// never by an LLM or the requesting agent.
+type Description struct {
+	Summary string
+	Level   string
+	Reasons []string
+	// Group, when set, puts the request with the others of the same group
+	// (for writes: the task that drafted them) so they are reviewed together
+	// and decided in one pass (approval fatigue, tier 1). GroupTitle names
+	// the group on the list. Only [a-z0-9_] in Group.
+	Group, GroupTitle string
+}
+
+// Describer reads a request of one kind and returns its Description, or nil
+// to show the page without one.
+type Describer func(r persistence.AgentApprovalRequestRow) *Description
+
+// RegisterDescriber installs the describer for requests of kind.
+func (s *Service) RegisterDescriber(kind string, fn Describer) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.describers == nil {
+		s.describers = map[string]Describer{}
+	}
+	s.describers[kind] = fn
+}
+
+// Describe returns the request's Description, or nil when its kind has no
+// describer.
+func (s *Service) Describe(r persistence.AgentApprovalRequestRow) *Description { return s.describe(r) }
+
+func (s *Service) describe(r persistence.AgentApprovalRequestRow) *Description {
+	s.mu.RLock()
+	fn := s.describers[r.Kind]
+	s.mu.RUnlock()
+	if fn == nil {
+		return nil
+	}
+	return fn(r)
+}
+
 func (s *Service) RegisterValueEntry(kind string, fn ValueEntry) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -252,6 +318,10 @@ func (s *Service) ActiveDevice(ctx context.Context, id string) (*Device, error) 
 	return nil, ErrNoDevice
 }
 
+// browserLine follows every pushed link: the device is a cookie in one
+// browser, and a chat app opens links in its own (§9.2a).
+const browserLine = "Open it in the browser you paired (in Telegram: ••• → Open in Chrome or Safari)."
+
 // FileRequest stores an approval request and pushes its sentence and link
 // (§9.3): no values, no decision buttons.
 func (s *Service) FileRequest(ctx context.Context, r persistence.AgentApprovalRequestRow) error {
@@ -259,7 +329,32 @@ func (s *Service) FileRequest(ctx context.Context, r persistence.AgentApprovalRe
 		return err
 	}
 	s.push(ctx, "Vornik: your assistant is asking for approval",
-		fmt.Sprintf("%s\nReview it on your approver device: %s/ui/approve/%s", r.Sentence, s.origin, r.ID))
+		fmt.Sprintf("%s\nReview it on your approver device: %s/ui/approve/%s\n%s", r.Sentence, s.origin, r.ID, browserLine))
+	return nil
+}
+
+// FileRequestBatch files several requests that belong together (the writes
+// one task drafted) and pushes once, with summary as the message and the
+// list's link: content-free, as every push is (approval fatigue, tier 1). A
+// request already filed is skipped; when none is new, nothing is pushed.
+func (s *Service) FileRequestBatch(ctx context.Context, rows []persistence.AgentApprovalRequestRow, summary string) error {
+	filed := 0
+	for _, r := range rows {
+		if _, err := s.repo.GetRequest(ctx, r.ID); err == nil {
+			continue
+		}
+		if err := s.repo.CreateRequest(ctx, r); err != nil {
+			if _, gerr := s.repo.GetRequest(ctx, r.ID); gerr == nil {
+				continue // a concurrent filing won
+			}
+			return err
+		}
+		filed++
+	}
+	if filed > 0 {
+		s.push(ctx, "Vornik: your assistant is asking for approval",
+			fmt.Sprintf("%s.\nReview them on your approver device: %s/ui/approve/\n%s", summary, s.origin, browserLine))
+	}
 	return nil
 }
 
@@ -539,6 +634,11 @@ func (s *Service) Decide(ctx context.Context, d *Device, requestID, shownSHA str
 	if err != nil {
 		return err
 	}
+	if r.Kind == persistence.ApprovalKindHostAction {
+		// A plain approve would lose the scope (Hermes approval transport
+		// design §4.2): DecideChoice answers these.
+		return ErrChoiceRequired
+	}
 	fn, ok := s.effect(r.Kind)
 	if !ok {
 		return ErrUnknownKind
@@ -592,9 +692,11 @@ func (s *Service) claimAndApply(ctx context.Context, id string, fn Effect) error
 // Tick runs the once-a-minute housekeeping: expire pending requests past
 // their TTL (§12), and re-apply approved requests whose effect did not run.
 func (s *Service) Tick(ctx context.Context) error {
-	if _, err := s.repo.ExpirePending(ctx, s.now()); err != nil {
+	expired, err := s.repo.ExpirePendingRows(ctx, s.now())
+	if err != nil {
 		return err
 	}
+	s.recordExpired(expired)
 	return s.ReapplyApproved(ctx)
 }
 

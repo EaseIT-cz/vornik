@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"regexp"
+	"sort"
 	"strings"
 
 	"vornik.io/vornik/internal/agentns"
@@ -17,11 +18,26 @@ type ProposeInput struct {
 	Action     string          `json:"action"`
 	Tool       string          `json:"tool"` // mcp__<name>-write__<tool> | api:<name>:<METHOD>:<path>
 	ArgsSchema json.RawMessage `json:"args_schema"`
+	// Standing declares the write eligible for standing grants (broker
+	// write-actions design, tier 2): the person may then approve future
+	// writes with the same key without seeing their text. Part of the
+	// reach, so declaring or changing it goes back to the device.
+	Standing *StandingInput `json:"standing,omitempty"`
+}
+
+// StandingInput is a proposal's standing declaration (registry
+// BrokerStanding); the loader's rules apply to it.
+type StandingInput struct {
+	Key     []string `json:"key"`
+	MaxDays int      `json:"max_days,omitempty"`
+	MaxUses int      `json:"max_uses,omitempty"`
 }
 
 // proposeData is one rendered proposal.
 type proposeData struct {
 	Action, Tool, Output, ArgsSchema string
+	// Standing is the declaration as a JSON flow mapping; "" for none.
+	Standing string
 }
 
 const maxProposes = 8
@@ -61,7 +77,16 @@ func parseProposes(st *State, p *ProjectState, raw json.RawMessage) ([]proposeDa
 		if err != nil || len(pr.ArgsSchema) == 0 {
 			return nil, nil, fmt.Sprintf("action %q needs an args_schema object", pr.Action)
 		}
-		out = append(out, proposeData{Action: pr.Action, Tool: pr.Tool, Output: "propose-" + pr.Action + ".json", ArgsSchema: string(schema)})
+		d := proposeData{Action: pr.Action, Tool: pr.Tool, Output: "propose-" + pr.Action + ".json", ArgsSchema: string(schema)}
+		if pr.Standing != nil {
+			raw, err := json.Marshal(pr.Standing)
+			if err != nil {
+				return nil, nil, fmt.Sprintf("action %q: standing: %v", pr.Action, err)
+			}
+			d.Standing = string(raw)
+			phrase += standingPhrase(pr)
+		}
+		out = append(out, d)
 		phrases = append(phrases, pr.Action+" ("+phrase+")")
 	}
 	return out, phrases, ""
@@ -87,4 +112,31 @@ func approvedWrite(st *State, p *ProjectState, tool string) (string, string) {
 		return "", fmt.Sprintf("%q is not an approved write tool of the server %q", name, integration)
 	}
 	return integration + ": " + name, ""
+}
+
+// standingPhrase is what the approval sentence says of a standing
+// declaration (broker write-actions design, tier 2 revised): it names the
+// fields a covered write sends unseen, never "similar".
+func standingPhrase(pr ProposeInput) string {
+	var schema struct {
+		Properties map[string]json.RawMessage `json:"properties"`
+	}
+	_ = json.Unmarshal(pr.ArgsSchema, &schema)
+	inKey := map[string]bool{}
+	for _, k := range pr.Standing.Key {
+		inKey[k] = true
+	}
+	var unseen []string
+	for name := range schema.Properties {
+		if !inKey[name] {
+			unseen = append(unseen, name)
+		}
+	}
+	sort.Strings(unseen)
+	what := "their text"
+	if len(unseen) > 0 {
+		what = "their " + strings.Join(unseen, ", ")
+	}
+	return fmt.Sprintf("; you may also let future ones to the same %s be sent without showing you their text (%s)",
+		strings.Join(pr.Standing.Key, ", "), what)
 }

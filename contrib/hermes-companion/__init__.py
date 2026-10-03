@@ -11,10 +11,10 @@ import json
 import os
 from pathlib import Path
 
-from . import cli
+from . import approval, cli
 from .broker_tools import SCHEMAS, BrokerTools
 from .digest import Digest
-from .memory_provider import VornikMemoryProvider
+from .memory_provider import MemoryCommands, VornikMemoryProvider
 from .vornik_client import VornikClient, VornikError
 
 
@@ -78,10 +78,26 @@ def register(ctx) -> None:
     # MCP entry vornikctl agent connect hermes writes; this is how to use them.
     ctx.register_skill("vornik-admin", Path(__file__).parent / "skills" / "vornik-admin" / "SKILL.md")
     if os.environ.get("VORNIK_MEMORY_TOKEN"):
-        ctx.register_memory_provider(VornikMemoryProvider())
+        provider = VornikMemoryProvider()
+        ctx.register_memory_provider(provider)
+        # What Vornik keeps, and forgetting one item (design 24, 0.8.0): in-
+        # session commands the user types; no model tool forgets.
+        commands = MemoryCommands(provider)
+        ctx.register_command("vornik-memory", handler=commands.memory,
+                             description="List what Vornik's long-term memory keeps (optionally matching words)")
+        ctx.register_command("vornik-forget", handler=commands.forget,
+                             description="Make Vornik forget one memory by the id /vornik-memory shows")
     # `hermes vornik connect|status`: a terminal subcommand a person types,
     # the plugin's only process spawn (design 24, catalog listing §3).
     ctx.register_cli_command("vornik", help="Connect Hermes to Vornik and check the connection",
                              setup_fn=cli.setup, handler_fn=cli.handle,
                              description="hermes vornik connect: run vornikctl agent connect hermes. "
-                                         "hermes vornik status: show what is configured.")
+                                         "hermes vornik status: show what is configured. "
+                                         "hermes vornik approvals on|off: answer Hermes's own approvals on your phone.")
+    # The approval transport (Hermes approval transport design §4.5): inert
+    # until the user selects it (security.approval.transport: vornik, set by
+    # hermes vornik approvals on). A Hermes without the seam skips it, and
+    # hermes vornik status says so.
+    if hasattr(ctx, "register_approval_transport"):
+        ctx.register_approval_transport(approval.TRANSPORT_NAME, approval.present)
+        approval.mark_registered()

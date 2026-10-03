@@ -91,6 +91,7 @@ var Contract = map[string]MissBehavior{
 	"ExecutionRepository.GetByTaskID":                MissErrNotFound, // *Execution
 	"StepPromptRepository.Get":                       MissErrNotFound, // *StepPrompt — a pruned or never-landed part
 	"BrokerActionRepository.Get":                     MissErrNotFound, // *BrokerAction
+	"BrokerGrantRepository.Get":                      MissErrNotFound, // *BrokerStandingGrant
 	"AgentSecretRepository.Get":                      MissErrNotFound, // *AgentSecretRow
 	"ApproverDeviceRepository.GetDeviceByTokenHash":  MissErrNotFound, // *ApproverDeviceRow
 	"ApproverDeviceRepository.GetPairingByClaim":     MissErrNotFound, // *ApproverPairingRow
@@ -98,6 +99,7 @@ var Contract = map[string]MissBehavior{
 	"AgentGrantRepository.GetIntegration":            MissErrNotFound, // *AgentIntegrationApproval
 	"AgentGrantRepository.GetWorkflowReach":          MissErrNotFound, // *AgentWorkflowApproval
 	"AgentGrantRepository.GetCeiling":                MissErrNotFound, // *AgentNamespaceBudget
+	"AgentGrantRepository.GetModelDestination":       MissErrNotFound, // *AgentModelDestinationApproval
 	"ApproverDeviceRepository.GetRequest":            MissErrNotFound, // *AgentApprovalRequestRow
 	"ExecutionRepository.Get":                        MissErrNotFound, // *Execution
 	"ExecutionToolGrantRepository.Current":           MissErrNotFound, // *ExecutionToolGrant

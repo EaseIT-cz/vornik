@@ -46,9 +46,12 @@ const (
 	// ReasonReachNotApproved refuses an agent workflow whose reach differs from
 	// what a device approved (agent-administered Vornik design §7.6).
 	ReasonReachNotApproved Reason = "REACH_NOT_APPROVED"
-	ReasonRateLimited      Reason = "RATE_LIMITED"
-	ReasonBudgetExceeded   Reason = "BUDGET_EXCEEDED"
-	ReasonInternal         Reason = "INTERNAL_ERROR"
+	// ReasonSetupIncomplete refuses an agent workflow whose integration's
+	// credential is not set (agent-administered Vornik design §19.8 F4).
+	ReasonSetupIncomplete Reason = "SETUP_INCOMPLETE"
+	ReasonRateLimited     Reason = "RATE_LIMITED"
+	ReasonBudgetExceeded  Reason = "BUDGET_EXCEEDED"
+	ReasonInternal        Reason = "INTERNAL_ERROR"
 )
 
 // Error wraps a Reason with a human-readable message. Callers
@@ -336,6 +339,12 @@ func (c *Creator) Create(ctx context.Context, p Params) (*persistence.Task, erro
 	// device approved (agent-administered Vornik §7.6).
 	if c.reachVerifier != nil {
 		if err := c.reachVerifier(ctx, p.ProjectID, workflowID); err != nil {
+			// The credential-completeness gate runs beside the reach check
+			// and carries its own class (design §19.8 F4).
+			var classed interface{ FailureClass() string }
+			if errors.As(err, &classed) && classed.FailureClass() == persistence.TaskFailureClassSetupIncomplete {
+				return nil, &Error{Reason: ReasonSetupIncomplete, Message: classed.(error).Error()}
+			}
 			return nil, &Error{Reason: ReasonReachNotApproved, Message: err.Error()}
 		}
 	}

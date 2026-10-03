@@ -1095,10 +1095,15 @@ func (s *Scheduler) TaskCompleted(taskID, leaseID string, success bool, errorMsg
 
 	// Terminal. Stamp a class so `task explain` and `playbook show` have something to
 	// resolve — an empty column here was the 2026-07-30 defect. An empty return from the
-	// classifier preserves a more precise class the executor already set.
+	// classifier means it deferred to a precise class already on the row, so the release
+	// asks the repository to keep it: an empty class alone clears the column (both
+	// drivers), which erased the executor's class until 2026-10-03 (permanent-failure
+	// design, amendment 2026-10-03). "" is the classifier's only defer signal.
+	cls := classifySchedulerFailure(task, errorMsg)
 	return s.repo.ReleaseLease(s.baseContext(), taskID, leaseID, persistence.TaskStatusFailed, persistence.ReleaseOptions{
-		Error:      errorMsg,
-		ErrorClass: classifySchedulerFailure(task, errorMsg),
+		Error:          errorMsg,
+		ErrorClass:     cls,
+		KeepErrorClass: cls == "",
 	})
 }
 

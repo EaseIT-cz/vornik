@@ -775,6 +775,71 @@ func RunTaskRepositorySuite(t *testing.T, repo persistence.TaskRepository) {
 		}
 	})
 
+	// Permanent-failure design, amendment 2026-10-03: the scheduler's terminal
+	// release passes an empty class when the executor already stamped a precise
+	// one, and ReleaseLease turned that empty class into NULL on both drivers,
+	// so REACH_NOT_APPROVED vanished from the row. KeepErrorClass keeps it;
+	// without the flag an empty class still clears (a retry must not inherit
+	// an earlier attempt's class).
+	t.Run("ReleaseLease_KeepErrorClass_keeps_the_stored_class", func(t *testing.T) {
+		const stamped = "REACH_NOT_APPROVED"
+		leaseAndStamp := func(project string) *persistence.Task {
+			t.Helper()
+			_ = repo.Create(ctx, newQueuedTask(project))
+			first, err := repo.LeaseTask(ctx, persistence.LeaseOptions{ProjectID: project, LeaseHolder: "h", LeaseDurationSeconds: 300})
+			if err != nil {
+				t.Fatalf("LeaseTask: %v", err)
+			}
+			if err := repo.ReleaseLease(ctx, first.ID, *first.LeaseID, persistence.TaskStatusQueued,
+				persistence.ReleaseOptions{Error: "x", ErrorClass: stamped}); err != nil {
+				t.Fatalf("stamp: %v", err)
+			}
+			again, err := repo.LeaseTask(ctx, persistence.LeaseOptions{ProjectID: project, LeaseHolder: "h", LeaseDurationSeconds: 300})
+			if err != nil {
+				t.Fatalf("LeaseTask again: %v", err)
+			}
+			return again
+		}
+		classOf := func(id string) string {
+			t.Helper()
+			got, err := repo.Get(ctx, id)
+			if err != nil {
+				t.Fatalf("Get: %v", err)
+			}
+			if got.LastErrorClass == nil {
+				return ""
+			}
+			return *got.LastErrorClass
+		}
+
+		kept := leaseAndStamp(uniqueID("proj"))
+		if err := repo.ReleaseLease(ctx, kept.ID, *kept.LeaseID, persistence.TaskStatusFailed,
+			persistence.ReleaseOptions{Error: "terminal", KeepErrorClass: true}); err != nil {
+			t.Fatalf("release keep: %v", err)
+		}
+		if got := classOf(kept.ID); got != stamped {
+			t.Errorf("KeepErrorClass with an empty class: last_error_class = %q, want %q", got, stamped)
+		}
+
+		cleared := leaseAndStamp(uniqueID("proj"))
+		if err := repo.ReleaseLease(ctx, cleared.ID, *cleared.LeaseID, persistence.TaskStatusQueued,
+			persistence.ReleaseOptions{Error: "retry"}); err != nil {
+			t.Fatalf("release clear: %v", err)
+		}
+		if got := classOf(cleared.ID); got != "" {
+			t.Errorf("an empty class without KeepErrorClass must clear; got %q", got)
+		}
+
+		written := leaseAndStamp(uniqueID("proj"))
+		if err := repo.ReleaseLease(ctx, written.ID, *written.LeaseID, persistence.TaskStatusFailed,
+			persistence.ReleaseOptions{Error: "t", ErrorClass: "UNKNOWN", KeepErrorClass: true}); err != nil {
+			t.Fatalf("release write: %v", err)
+		}
+		if got := classOf(written.ID); got != "UNKNOWN" {
+			t.Errorf("a given class is written even with KeepErrorClass; got %q", got)
+		}
+	})
+
 	t.Run("Lease_then_Renew_then_Release_round_trip", func(t *testing.T) {
 		project := uniqueID("proj")
 		_ = repo.Create(ctx, newQueuedTask(project))

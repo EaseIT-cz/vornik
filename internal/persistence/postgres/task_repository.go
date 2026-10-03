@@ -905,12 +905,12 @@ func (r *TaskRepository) ReleaseLease(ctx context.Context, taskID, leaseID strin
 		    attempt = COALESCE(NULLIF($4, 0), attempt),
 		    max_attempts = COALESCE(NULLIF($5, 0), max_attempts),
 		    last_error = NULLIF($6, ''),
-		    last_error_class = NULLIF($7, ''),
+		    last_error_class = CASE WHEN $8 THEN COALESCE(NULLIF($7, ''), last_error_class) ELSE NULLIF($7, '') END,
 		    updated_at = NOW()
 		WHERE id = $1
 		  AND lease_id = $2
 	`
-	_, err := r.db.ExecContext(ctx, query, taskID, leaseID, newStatus, opts.Attempt, opts.MaxAttempts, opts.Error, opts.ErrorClass)
+	_, err := r.db.ExecContext(ctx, query, taskID, leaseID, newStatus, opts.Attempt, opts.MaxAttempts, opts.Error, opts.ErrorClass, opts.KeepErrorClass)
 	return mapDBError(err)
 }
 

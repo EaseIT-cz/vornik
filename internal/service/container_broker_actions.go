@@ -115,6 +115,14 @@ func (c *Container) brokerActionRedactor() (func([]byte) []byte, string) {
 func (c *Container) notifyBrokerActionsPending(ctx context.Context, projectID, taskID string, n int) {
 	// Promotion is a transition the push outbox sends (design §7a).
 	c.companionPusher.Kick()
+	// A write a standing grant covers is approved here, without a
+	// per-write approval (broker write-actions design, tier 2); the rest
+	// go to the phone or /inbox below.
+	if covered := c.coverPendingActions(ctx, projectID, taskID); covered > 0 {
+		if n -= covered; n <= 0 {
+			return
+		}
+	}
 	// An agent project's actions are approved on the approver device, one
 	// request per action (agent-administered Vornik plan P4.8).
 	if _, agent := agentns.FromID(projectID); agent {

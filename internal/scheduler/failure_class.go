@@ -24,7 +24,11 @@ import (
 // failures — enables progressive rollout". The scheduler was one of the never-updated
 // callers.
 //
-// Returning "" is meaningful: it PRESERVES whatever is already on the row. That matters
+// (That comment was wrong: both drivers wrote NULL for an empty class. Corrected
+// 2026-10-03, permanent-failure design amendment: preservation now needs
+// ReleaseOptions.KeepErrorClass, which TaskCompleted sets exactly when this returns "".)
+//
+// Returning "" is meaningful: it asks the release to KEEP whatever is already on the row. That matters
 // because the executor stamps precise classes (TOOL_ITERATION_LIMIT, SECRET_LEAK,
 // WORKFLOW_DRIFT) before the scheduler's release runs, and overwriting one of those with a
 // generic value would destroy information — making the report worse than the empty column

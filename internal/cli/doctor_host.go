@@ -32,6 +32,9 @@ var doctorHostChecks = func(ctx context.Context, daemonRevision string) []doctor
 	if env.sandbox != nil {
 		checker = checker.WithSandbox(*env.sandbox)
 	}
+	if env.runtime != nil {
+		checker = checker.WithRuntime(*env.runtime)
+	}
 	for _, c := range checker.Run(ctx) {
 		out = append(out, doctorCheck{Name: c.Name, Status: c.Status, Message: c.Message, Items: c.Items, Fixed: c.Fixed})
 	}
@@ -49,6 +52,7 @@ type doctorHostEnv struct {
 	usernsMode     string
 	workspacesRoot string
 	sandbox        *hostdoctor.SandboxEnv
+	runtime        *hostdoctor.RuntimeEnv
 }
 
 var (
@@ -68,6 +72,8 @@ func loadDoctorHostEnv() doctorHostEnv {
 			doctorHostEnvVal.workspacesRoot = cfg.Runtime.ProjectWorkspacePath
 			env := sandboxEnvFromConfig(cfg)
 			doctorHostEnvVal.sandbox = &env
+			rt := runtimeEnvFromConfig(cfg)
+			doctorHostEnvVal.runtime = &rt
 		}
 	})
 	return doctorHostEnvVal
@@ -87,6 +93,17 @@ func sandboxEnvFromConfig(cfg *config.Config) hostdoctor.SandboxEnv {
 	}
 	env.Models.AudioExtraction = cfg.AudioExtractionModel()
 	return env
+}
+
+// runtimeEnvFromConfig is what agent_image_uid needs from the daemon config
+// (onboarding-hardening-design.md D5 R6): the configured run_as_user, and the
+// directories whose owners the agent must be able to read.
+func runtimeEnvFromConfig(cfg *config.Config) hostdoctor.RuntimeEnv {
+	return hostdoctor.RuntimeEnv{
+		RunAsUser:            strings.TrimSpace(cfg.Runtime.RunAsUser),
+		ProjectWorkspacePath: cfg.Runtime.ProjectWorkspaceDir(),
+		DependencyCacheDir:   cfg.Runtime.DependencyCacheDir(),
+	}
 }
 
 // doctorContext is the command's context, or Background when the command was

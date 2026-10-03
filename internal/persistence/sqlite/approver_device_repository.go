@@ -269,22 +269,23 @@ func (r *ApproverDeviceRepository) CreateRequest(ctx context.Context, q persiste
 	return insertApprovalRequest(ctx, r.db, q)
 }
 
-const approvalRequestCols = `id, namespace, kind, sentence, rendered, rendered_sha256, status, created_at, expires_at, decided_at, decided_by_device, applied_at, apply_attempts, apply_error`
+const approvalRequestCols = `id, namespace, kind, sentence, rendered, rendered_sha256, status, created_at, expires_at, decided_at, decided_by_device, applied_at, apply_attempts, apply_error, decided_choice`
 
 func scanApprovalRequest(s interface{ Scan(...interface{}) error }) (persistence.AgentApprovalRequestRow, error) {
 	var (
-		q                persistence.AgentApprovalRequestRow
-		rendered         string
-		created, expires sqlTime
-		decided, applied sqlNullTime
-		by, applyErr     sql.NullString
+		q                    persistence.AgentApprovalRequestRow
+		rendered             string
+		created, expires     sqlTime
+		decided, applied     sqlNullTime
+		by, applyErr, choice sql.NullString
 	)
 	if err := s.Scan(&q.ID, &q.Namespace, &q.Kind, &q.Sentence, &rendered, &q.RenderedSHA256, &q.Status,
-		&created, &expires, &decided, &by, &applied, &q.ApplyAttempts, &applyErr); err != nil {
+		&created, &expires, &decided, &by, &applied, &q.ApplyAttempts, &applyErr, &choice); err != nil {
 		return q, err
 	}
 	q.Rendered = []byte(rendered)
 	q.CreatedAt, q.ExpiresAt, q.DecidedByDevice, q.ApplyError = created.Time, expires.Time, by.String, applyErr.String
+	q.DecidedChoice = choice.String
 	if decided.Valid {
 		t := decided.Time
 		q.DecidedAt = &t
@@ -332,14 +333,20 @@ func (r *ApproverDeviceRepository) ListPending(ctx context.Context, now time.Tim
 
 // Decide implements persistence.ApproverDeviceRepository.
 func (r *ApproverDeviceRepository) Decide(ctx context.Context, id, shownSHA256, deviceID string, approve bool, now time.Time) error {
+	return r.DecideWithChoice(ctx, id, shownSHA256, deviceID, approve, "", now)
+}
+
+// DecideWithChoice implements persistence.ApproverDeviceRepository. An empty
+// choice stores NULL.
+func (r *ApproverDeviceRepository) DecideWithChoice(ctx context.Context, id, shownSHA256, deviceID string, approve bool, choice string, now time.Time) error {
 	status := persistence.ApprovalRejected
 	if approve {
 		status = persistence.ApprovalApproved
 	}
 	res, err := r.db.ExecContext(ctx, `
-		UPDATE agent_approval_requests SET status = ?, decided_at = ?, decided_by_device = ?
+		UPDATE agent_approval_requests SET status = ?, decided_at = ?, decided_by_device = ?, decided_choice = ?
 		WHERE id = ? AND status = 'pending' AND rendered_sha256 = ? AND expires_at > ?`,
-		status, sqliteTime(now), deviceID, id, shownSHA256, sqliteTime(now))
+		status, sqliteTime(now), deviceID, sql.NullString{String: choice, Valid: choice != ""}, id, shownSHA256, sqliteTime(now))
 	if err != nil {
 		return err
 	}
@@ -347,6 +354,50 @@ func (r *ApproverDeviceRepository) Decide(ctx context.Context, id, shownSHA256, 
 		return fmt.Errorf("%w: %s", persistence.ErrApprovalNoTransition, id)
 	}
 	return nil
+}
+
+// CreateRequestCapped implements persistence.ApproverDeviceRepository. The
+// INSERT is the transaction's first statement, so it takes SQLite's writer
+// lock before the counts are read (as RedeemPairing's code-consuming
+// UPDATE does), and the counts include the row just inserted: over either
+// cap the transaction rolls back and nothing is written.
+func (r *ApproverDeviceRepository) CreateRequestCapped(ctx context.Context, q persistence.AgentApprovalRequestRow, c persistence.ApprovalCap, now time.Time) error {
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+	if err := insertApprovalRequest(ctx, tx, q); err != nil {
+		return err
+	}
+	var pending, recent int
+	if err := tx.QueryRowContext(ctx, `
+		SELECT COUNT(*) FROM agent_approval_requests
+		WHERE namespace = ? AND kind = ? AND status = 'pending' AND expires_at > ?`,
+		q.Namespace, q.Kind, sqliteTime(now)).Scan(&pending); err != nil {
+		return err
+	}
+	if err := tx.QueryRowContext(ctx, `
+		SELECT COUNT(*) FROM agent_approval_requests
+		WHERE namespace = ? AND kind = ? AND created_at >= ?`,
+		q.Namespace, q.Kind, sqliteTime(c.Since)).Scan(&recent); err != nil {
+		return err
+	}
+	if r.afterCount != nil {
+		r.afterCount()
+	}
+	// ">" and not ">=": the counts include the row just inserted, so a
+	// filing is refused when it would make MaxPending+1. Postgres counts
+	// before its insert and uses ">=" for the same limit. The shared
+	// contract test (repotest approverCappedCreate) refuses the
+	// MaxPending+1th filing and the MaxRecent+1th on both drivers.
+	switch {
+	case pending > c.MaxPending:
+		return persistence.ErrApprovalCapPending
+	case recent > c.MaxRecent:
+		return persistence.ErrApprovalCapRecent
+	}
+	return tx.Commit()
 }
 
 // ClaimApply implements persistence.ApproverDeviceRepository.
@@ -389,10 +440,26 @@ func (r *ApproverDeviceRepository) ListRecentByNamespace(ctx context.Context, na
 
 // ExpirePending implements persistence.ApproverDeviceRepository.
 func (r *ApproverDeviceRepository) ExpirePending(ctx context.Context, now time.Time) (int, error) {
-	res, err := r.db.ExecContext(ctx, `UPDATE agent_approval_requests SET status = 'expired' WHERE status = 'pending' AND expires_at <= ?`, sqliteTime(now))
+	rows, err := r.ExpirePendingRows(ctx, now)
+	return len(rows), err
+}
+
+// ExpirePendingRows implements persistence.ApproverDeviceRepository: one
+// UPDATE ... RETURNING, so a row is reported by exactly the pass that
+// expired it.
+func (r *ApproverDeviceRepository) ExpirePendingRows(ctx context.Context, now time.Time) ([]persistence.AgentApprovalRequestRow, error) {
+	rows, err := r.db.QueryContext(ctx, `UPDATE agent_approval_requests SET status = 'expired' WHERE status = 'pending' AND expires_at <= ? RETURNING `+approvalRequestCols, sqliteTime(now))
 	if err != nil {
-		return 0, err
+		return nil, err
 	}
-	n, err := res.RowsAffected()
-	return int(n), err
+	defer func() { _ = rows.Close() }()
+	var out []persistence.AgentApprovalRequestRow
+	for rows.Next() {
+		q, err := scanApprovalRequest(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, q)
+	}
+	return out, rows.Err()
 }

@@ -14,16 +14,20 @@ import (
 
 // ReachSignature is what a workflow approval binds (§7.6; plan amendment 4):
 // what returns (Egress), where it can reach (Integrations), with which
-// credentials (Credentials), what it may write (Proposes) and when it runs
-// unattended (Schedule). Step order, conditionals, retries, instructions and
-// the input schema are deliberately NOT in it: none of them adds a
-// destination or a credential.
+// credentials (Credentials), what it may write (Proposes), when it runs
+// unattended (Schedule) and how much text the agent can hand its roles as a
+// document (Documents; broker design §18.7 F1). Step order, conditionals,
+// retries, instructions and every other input (strings, enums, numbers) are
+// deliberately NOT in it: none of them adds a destination or a credential.
+// Documents is omitted when empty, so a workflow with no document hashes
+// exactly as it did before documents existed.
 type ReachSignature struct {
-	Egress       json.RawMessage `json:"egress"`
-	Integrations []string        `json:"integrations"`
-	Credentials  []string        `json:"credentials"`
-	Proposes     json.RawMessage `json:"proposes"`
-	Schedule     string          `json:"schedule"`
+	Egress       json.RawMessage           `json:"egress"`
+	Integrations []string                  `json:"integrations"`
+	Credentials  []string                  `json:"credentials"`
+	Proposes     json.RawMessage           `json:"proposes"`
+	Schedule     string                    `json:"schedule"`
+	Documents    []registry.BrokerDocument `json:"documents,omitempty"`
 }
 
 // SignatureOf computes a workflow's reach from LOADED config objects. The
@@ -50,6 +54,8 @@ func SignatureOf(p *registry.Project, sw *registry.Swarm, wf *registry.Workflow)
 		return sig, fmt.Errorf("schedule: %w", err)
 	}
 	sig.Schedule = sched
+	// Sorted by property (registry.WorkflowBroker.Documents).
+	sig.Documents = wf.Broker.Documents()
 
 	// The roles the steps run, and every integration their tools reach.
 	roles := map[string]bool{}

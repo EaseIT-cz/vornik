@@ -66,8 +66,10 @@ import (
 	"syscall"
 	"time"
 
+	"vornik.io/vornik/internal/agentadmin"
 	"vornik.io/vornik/internal/approverdevice"
 	"vornik.io/vornik/internal/brokeractions"
+	"vornik.io/vornik/internal/brokergrants"
 	"vornik.io/vornik/internal/companionpush"
 	"vornik.io/vornik/internal/egressscan"
 
@@ -150,6 +152,9 @@ type Container struct {
 	// approverDevices is built once by approverDeviceService (design §9).
 	approverDevices     *approverdevice.Service
 	approverDevicesOnce sync.Once
+	// hostApprovalMetrics is vornik_host_approvals_total (Hermes approval
+	// transport design §8), attached in initHTTPServer.
+	hostApprovalMetrics *approverdevice.HostActionMetrics
 	// agentAdminSvc is built by agentAdmin on its first success (agent
 	// admin verbs, §6); agentAdminMu guards it, agentAdminWarned paces the
 	// warning while the templates are missing.
@@ -335,6 +340,11 @@ type Container struct {
 	// re-deriving the table (model-route-coverage design, 2026-09-24). Nil
 	// when chat.provider is not "router".
 	chatRouter *chat.Router
+	// modelRoutes and modelPrices replace where the live router sends a
+	// model and its pricing entry, for tests of the agent role model
+	// (agent-administered design §18.6 item 2); nil in the daemon.
+	modelRoutes agentadmin.ModelResolver
+	modelPrices agentadmin.ModelPricer
 
 	// ChatCallStats tallies every model call's outcome per (model, call_site) for the
 	// doctor's model_calls_live check. Built when chat logging is wired; see
@@ -781,6 +791,9 @@ type Container struct {
 	// served registry in initHTTPServer.
 	brokerActionWorker  *brokeractions.Worker
 	brokerActionMetrics *brokeractions.Metrics
+	// brokerGrantMetrics are the standing-grant series (broker write-actions
+	// design, tier 2), attached in initHTTPServer.
+	brokerGrantMetrics *brokergrants.Metrics
 	// egress* is the outbound secret scan (agent-administered Vornik plan
 	// P5; Part A of the 2026-07-16 secret-egress design).
 	egressOnce    sync.Once
@@ -2036,6 +2049,7 @@ func (c *Container) Run(ctx context.Context) error {
 		go c.brokerActionWorker.Run(c.collectorsCtx)
 	}
 	c.startApproverDeviceTicker(c.collectorsCtx)
+	c.startBrokerGrantTicker(c.collectorsCtx)
 	// MCP failed-connect recovery (every node, not leader-gated): retries a
 	// project's MCP server whose dial failed. Before 2026-09-30 such a server
 	// stayed dark until a reload or restart (ibkr-trader's broker, 24 hours).

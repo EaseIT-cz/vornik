@@ -82,6 +82,32 @@ type Change struct {
 	// Slot, when set, makes the change a credential_slot request: no file
 	// op, no proposal; the device page stores the value (§8.2).
 	Slot *CredentialSlot
+	// Plain is the plain-language summary and risk level shown first on the
+	// approval page (design §18.7); set for every change that goes to the
+	// phone, and part of Rendered.
+	Plain *PlainView
+	// MissingTools, on a refused tools approval of a recipe server, are the
+	// recipe tools the server does not offer (design §19.8 F6): the typed
+	// signal list_my_setup's note is built from (review 20261003-6b46 F2).
+	MissingTools []string
+	// Credentials are the credential requests a recipe install files after
+	// its approval applies, one per credential (design §19.9): the ones
+	// still missing then are requested on the phone.
+	Credentials []CredentialFollowUp
+	// reach is the workflow's reach signature, kept for the plain view.
+	reach *ReachSignature
+	// recipe is the recipe an install_recipe change installs, for the plain
+	// view.
+	recipe *Recipe
+}
+
+// CredentialFollowUp is one credential a recipe install asks for once its
+// approval has applied (design §19.2, §19.11).
+type CredentialFollowUp struct {
+	Project string `json:"project"` // the full project ID
+	Name    string `json:"name"`
+	Kind    string `json:"kind"`
+	Purpose string `json:"purpose"`
 }
 
 // Grant is written only by the widening_change effect.
@@ -89,8 +115,30 @@ type Grant struct {
 	Integrations []IntegrationGrant `json:"integrations,omitempty"`
 	// Workflows maps a workflow ID to its approved reach-signature hash.
 	Workflows map[string]string `json:"workflows,omitempty"`
-	// CeilingUSD, when set, is the namespace ceiling the approval raises to.
+	// AddsUSD is what a spending change (a project creation, a budget raise)
+	// adds to the namespace sum; MaxTotalUSD the highest namespace total its
+	// sentence stated: the conditional figure when other spending requests
+	// were waiting, else the primary one. Unset when the sentence stated no
+	// total (a raise within the ceiling). At apply the daemon refuses the
+	// change if the sum with it exceeds max(ceiling, MaxTotalUSD), and
+	// otherwise sets the ceiling to max(ceiling, sum) (design §18.4).
+	AddsUSD     *float64 `json:"adds_usd,omitempty"`
+	MaxTotalUSD *float64 `json:"max_total_usd,omitempty"`
+	// CeilingUSD is the absolute ceiling requests filed before §18.4 pinned
+	// (incident 2026-10-02). It is never written now; a pending request that
+	// carries it is read as MaxTotalUSD (CeilingAfter).
 	CeilingUSD *float64 `json:"ceiling_usd,omitempty"`
+	// Cover marks the daemon's own cover request (design §18.4 F10): a
+	// namespace already above its ceiling (incident 2026-10-02, claudecode
+	// $108 against $104) is asked to approve the sum it has. Its apply takes
+	// the equality branch: the sum must still be exactly MaxTotalUSD. No
+	// verb sets it; only the daemon's filing path does, and it is part of
+	// the canonical document the device approves.
+	Cover bool `json:"cover,omitempty"`
+	// Models are the remote model destinations a define_swarm approval
+	// records for the namespace (design §18.6 item 2): one per destination
+	// the namespace had not approved.
+	Models []ModelGrant `json:"models,omitempty"`
 }
 
 // IntegrationGrant is one approved integration of one project.
@@ -109,7 +157,23 @@ type Narrowing struct {
 	RemovedIntegrations []IntegrationRef `json:"removed_integrations,omitempty"`
 	RemovedWorkflows    []string         `json:"removed_workflows,omitempty"`
 	RemovedProjects     []string         `json:"removed_projects,omitempty"`
+	// RemovedTools are read tools a recipe install drops from an approved
+	// integration (design §19.9 F2): they leave its approval, applied
+	// without one, recorded and counted (§19.11).
+	RemovedTools []ToolRemoval `json:"removed_tools,omitempty"`
 }
+
+// ToolRemoval is read tools leaving one integration's approval.
+type ToolRemoval struct {
+	Project string   `json:"project"`
+	Name    string   `json:"name"`
+	Tools   []string `json:"tools"`
+	// Kind is the narrowings counter's label (review 20261003-6b46 F4).
+	Kind string `json:"kind"`
+}
+
+// NarrowingRecipeTools is the kind of a removal a recipe install makes.
+const NarrowingRecipeTools = "recipe_tools"
 
 // IntegrationRef names one integration of one project.
 type IntegrationRef struct {
@@ -124,6 +188,9 @@ type Result struct {
 	ApprovalURL string `json:"approval_url,omitempty"`
 	Reason      string `json:"reason,omitempty"`
 	Sentence    string `json:"sentence,omitempty"`
+	// MissingTools is Change.MissingTools of a refusal, for the daemon's
+	// own callers; never sent to the agent.
+	MissingTools []string `json:"-"`
 }
 
 // Effects.

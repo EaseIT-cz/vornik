@@ -100,3 +100,31 @@ func TestAlwaysGranted_ReturnsACopy(t *testing.T) {
 		t.Fatal("AlwaysGranted handed out its backing array")
 	}
 }
+
+// Agent-administered design §18.8 (2026-10-02): agent roles receive this
+// baseline although their declared tools omit it, so the set is pinned
+// exactly. A tool added to the baseline later fails here and forces the
+// decision §18.8 records (what it reaches from an agent project) to be made
+// again, instead of arriving in every agent role silently.
+func TestAlwaysGranted_IsExactlyTheReviewedBaseline(t *testing.T) {
+	got := AlwaysGranted()
+	sort.Strings(got)
+	want := []string{"memory_search", "skill_fetch"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("AlwaysGranted() = %v, want exactly %v; a change here needs §18.8 re-decided", got, want)
+	}
+	// The other way a tool reaches every role: exempt from the gate by design
+	// (measured 2026-10-03; §18.8 first named tool_result_read as part of
+	// AlwaysGranted, which it is not).
+	if ex := ExemptNames(); !reflect.DeepEqual(ex, []string{"tool_result_read", "tool_search"}) {
+		t.Fatalf("ExemptNames() = %v; a change here needs §18.8 re-decided", ex)
+	}
+}
+
+// EveryRole is what every role can call beyond its declared tools.
+func TestEveryRole_IsTheBaselineAndTheExemptTools(t *testing.T) {
+	got := EveryRole()
+	if !reflect.DeepEqual(got, []string{"memory_search", "skill_fetch", "tool_result_read", "tool_search"}) {
+		t.Fatalf("EveryRole() = %v", got)
+	}
+}

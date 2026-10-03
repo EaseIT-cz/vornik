@@ -69,6 +69,18 @@ func (r *Renderer) approveServerTools(st *State, raw json.RawMessage) (Change, e
 		return refuse(verb, ns, "%s", why), nil
 	}
 	server := p.Servers[idx]
+	if declared := dedupSorted(server.Tools); len(declared) > 0 {
+		// A read-pending server that already declares its tools was
+		// installed by a recipe: the tools-approval check (design §19.8 F6)
+		// asks for exactly the recipe's tools, and files nothing when the
+		// server does not offer them all.
+		if missing := minus(declared, listed); len(missing) > 0 {
+			c := refuse(verb, ns, "the server at %s does not offer %s; this recipe needs them", hostOf(server.URL), strings.Join(missing, ", "))
+			c.MissingTools = missing
+			return c, nil
+		}
+		tools = declared
+	}
 	next := *p
 	next.Servers = append([]ServerState(nil), p.Servers...)
 	server.Tools = tools

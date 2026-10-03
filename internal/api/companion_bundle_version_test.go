@@ -39,13 +39,13 @@ var companionBundles = map[string]bundleBaseline{
 		manifest:        "../../contrib/claude-code-companion/.claude-plugin/plugin.json",
 		baselineVersion: "0.21.0",
 		skill:           "../../contrib/claude-code-companion/skills/delegate/SKILL.md",
-		skillSHA256:     "cf653c4dc2df3f7ab825b971d8f0e0441fada37b8bd30f152b6ed980cd2ed78e",
+		skillSHA256:     "aaee22f0d8542312ad3244e6844f4ce8abe98b08d1119b0dc2e4c392f81496d2",
 	},
 	"codex": {
 		manifest:        "../../contrib/codex-companion/.codex-plugin/plugin.json",
 		baselineVersion: "0.18.0+codex.20260904",
 		skill:           "../../contrib/codex-companion/skills/delegate/SKILL.md",
-		skillSHA256:     "a125506900ea1a8e3f9cbefb465fd48ab57e1c1e231a4b36aa77bd69ba9dc827",
+		skillSHA256:     "ce67526548aed19b046775b20e4c66b8669c6ad56b63c63c70d55d8b5ab1916f",
 	},
 }
 

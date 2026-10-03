@@ -18,6 +18,8 @@ import (
 // Renderer renders verbs from the agent templates.
 type Renderer struct {
 	tmpl *template.Template
+	// cat is the recipe catalogue (design §19), loaded with the templates.
+	cat *Catalogue
 }
 
 // Template file names in configs/agent-templates.
@@ -40,8 +42,15 @@ func NewRenderer(fsys fs.FS) (*Renderer, error) {
 	if err != nil {
 		return nil, fmt.Errorf("agent templates: %w", err)
 	}
-	return &Renderer{tmpl: t}, nil
+	cat, err := LoadCatalogue(fsys)
+	if err != nil {
+		return nil, fmt.Errorf("agent templates: %w", err)
+	}
+	return &Renderer{tmpl: t, cat: cat}, nil
 }
+
+// Catalogue returns the loaded recipes.
+func (r *Renderer) Catalogue() *Catalogue { return r.cat }
 
 func (r *Renderer) exec(name string, data any) (string, error) {
 	var buf bytes.Buffer
@@ -94,6 +103,8 @@ func (r *Renderer) Render(st *State, verb string, input json.RawMessage) (Change
 		c, err = r.approveServerTools(st, input)
 	case VerbAddAPI:
 		c, err = r.addAPI(st, input)
+	case VerbInstallRecipe:
+		c, err = r.installRecipe(st, input)
 	default:
 		return Change{}, ErrUnknownVerb
 	}
@@ -102,8 +113,12 @@ func (r *Renderer) Render(st *State, verb string, input json.RawMessage) (Change
 	}
 	c.Verb, c.Namespace = verb, ns
 	if lock := firstLocked(st, c.Locks); lock != "" {
+		if by := st.LockedBy[lock]; by != "" {
+			return refuse(verb, ns, "%s is part of a change waiting for approval, request %s; approve or reject that one first", lock, by), nil
+		}
 		return refuse(verb, ns, "%s is part of a change waiting for approval; approve or reject that one first", lock), nil
 	}
+	c.Plain = explain(st, &c)
 	if err := attachRendered(&c, input); err != nil {
 		return Change{}, err
 	}
@@ -131,6 +146,9 @@ func attachRendered(c *Change, input json.RawMessage) error {
 	}
 	if c.Slot != nil {
 		doc["slot"] = c.Slot
+	}
+	if c.Plain != nil {
+		doc["plain"] = c.Plain
 	}
 	raw, err := json.Marshal(doc)
 	if err != nil {

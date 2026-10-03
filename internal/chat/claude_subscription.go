@@ -344,10 +344,7 @@ func (c *ClaudeSubscriptionClient) call(ctx context.Context, messages []Message,
 		Int("body_bytes", len(body)).
 		Msg("claude-subscription: invoking")
 
-	base := os.Getenv("ANTHROPIC_BASE_URL")
-	if base == "" {
-		base = claudeDefaultBaseURL
-	}
+	base := ClaudeSubscriptionEndpoint()
 	buildReq := func() (*http.Request, error) {
 		req, err := http.NewRequestWithContext(ctx, http.MethodPost, base+claudeMessagesPath, bytes.NewReader(body))
 		if err != nil {
@@ -531,4 +528,15 @@ func (c *ClaudeSubscriptionClient) recordTokens(resp *ChatResponse) {
 	if resp.Usage.CompletionTokens > 0 {
 		c.metrics.TokensUsed.WithLabelValues(c.model, "completion").Add(float64(resp.Usage.CompletionTokens))
 	}
+}
+
+// ClaudeSubscriptionEndpoint is the base URL the claude-subscription
+// sub-provider posts to: ANTHROPIC_BASE_URL, else the production host. The
+// one resolution both the call and the agent model classifier read
+// (agent-administered design §18.6 item 2).
+func ClaudeSubscriptionEndpoint() string {
+	if base := os.Getenv("ANTHROPIC_BASE_URL"); base != "" {
+		return base
+	}
+	return claudeDefaultBaseURL
 }

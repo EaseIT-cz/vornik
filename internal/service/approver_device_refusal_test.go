@@ -44,16 +44,7 @@ func TestApproverDeviceRoutes_RefuseEveryNonDeviceCredential(t *testing.T) {
 	}
 	revoked := red.DeviceToken
 
-	creds := map[string]func(*http.Request){
-		"no credential":         func(*http.Request) {},
-		"admin key, X-API-Key":  func(r *http.Request) { r.Header.Set("X-API-Key", key) },
-		"admin key, Bearer":     func(r *http.Request) { r.Header.Set("Authorization", "Bearer "+key) },
-		"admin key, Basic":      func(r *http.Request) { r.SetBasicAuth("operator", key) },
-		"web session cookie":    func(r *http.Request) { r.AddCookie(&http.Cookie{Name: "vornik_session", Value: "sess-admin"}) },
-		"companion-style key":   func(r *http.Request) { r.Header.Set("X-API-Key", "sk-vornik-companion-hermes") },
-		"revoked device cookie": func(r *http.Request) { r.AddCookie(&http.Cookie{Name: approverdevice.CookieName, Value: revoked}) },
-		"forged device cookie":  func(r *http.Request) { r.AddCookie(&http.Cookie{Name: approverdevice.CookieName, Value: "forged"}) },
-	}
+	creds := nonDeviceCredentials(key, revoked)
 	examined := 0
 	for _, rt := range approverdevice.Routes() {
 		if !rt.DeviceOnly {
@@ -74,7 +65,9 @@ func TestApproverDeviceRoutes_RefuseEveryNonDeviceCredential(t *testing.T) {
 			c.HTTPServer.Handler.ServeHTTP(rec, req)
 			examined++
 			switch {
-			case rt.Method == http.MethodGet && rec.Code == http.StatusSeeOther && rec.Header().Get("Location") == "/ui/pair":
+			// The pairing page, carrying the page asked for (agent-administered
+			// §9.2a): nothing but pairing is reachable without a device.
+			case rt.Method == http.MethodGet && rec.Code == http.StatusSeeOther && pairingRedirect(rec.Header().Get("Location"), rt.Path):
 			case rt.Method == http.MethodPost && rec.Code == http.StatusForbidden:
 			default:
 				t.Errorf("%s %s with %s: %d (Location %q), want the device refusal",
@@ -101,6 +94,79 @@ func TestApproverDeviceRoutes_RefuseEveryNonDeviceCredential(t *testing.T) {
 	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), "Waiting for you") {
 		t.Fatalf("a live device was not admitted on the real mux: %d", rec.Code)
 	}
+}
+
+// nonDeviceCredentials is every credential that is not a live device cookie:
+// the admin key three ways (it holds operator rights), a web session, a
+// companion key, a revoked and a forged device cookie, and none.
+func nonDeviceCredentials(key, revoked string) map[string]func(*http.Request) {
+	return map[string]func(*http.Request){
+		"no credential":         func(*http.Request) {},
+		"admin key, X-API-Key":  func(r *http.Request) { r.Header.Set("X-API-Key", key) },
+		"admin key, Bearer":     func(r *http.Request) { r.Header.Set("Authorization", "Bearer "+key) },
+		"admin key, Basic":      func(r *http.Request) { r.SetBasicAuth("operator", key) },
+		"web session cookie":    func(r *http.Request) { r.AddCookie(&http.Cookie{Name: "vornik_session", Value: "sess-admin"}) },
+		"companion-style key":   func(r *http.Request) { r.Header.Set("X-API-Key", "sk-vornik-companion-hermes") },
+		"revoked device cookie": func(r *http.Request) { r.AddCookie(&http.Cookie{Name: approverdevice.CookieName, Value: revoked}) },
+		"forged device cookie":  func(r *http.Request) { r.AddCookie(&http.Cookie{Name: approverdevice.CookieName, Value: "forged"}) },
+	}
+}
+
+// Hermes approval transport design §8 (self-approval enumeration): a
+// host_action joins the refusal matrix. A real host_action request is posted
+// every one of its answers with every non-device credential on the daemon's
+// real mux; none decides it.
+func TestApproverDeviceRoutes_HostActionRefusesEveryNonDeviceCredential(t *testing.T) {
+	const key = "sk-vornik-approver-refusal-admin"
+	cfg := newComposerWiringTestConfig(t)
+	cfg.API.AuthEnabled = true
+	cfg.API.APIKeys = []string{key}
+	cfg.Admin.Enabled = true
+	cfg.Admin.AllowedKeys = []string{key}
+	c, err := NewContainer(cfg, isolatedConfigPath(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	svc := c.approverDeviceService()
+	if svc == nil {
+		t.Fatal("precondition: the approver device service is not wired")
+	}
+	ctx := context.Background()
+	code, _, _ := svc.StartPairing(ctx, "Old phone")
+	red, err := svc.Redeem(ctx, code, "10.0.0.1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := svc.Revoke(ctx, red.Device.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.FileHostAction(ctx, "hermes", approverdevice.HostActionRequest{
+		RequestID: "cafe01", Digest: strings.Repeat("c", 64), Command: "rm -rf /tmp/x", Description: "recursive delete",
+		PatternKey: "rm", Surface: "cli", TimeoutSeconds: 300, AllowedChoices: []string{"once", "session", "always", "deny"}}); err != nil {
+		t.Fatal(err)
+	}
+	id := approverdevice.HostActionID("hermes", "cafe01")
+	row, _ := svc.Request(ctx, id)
+	examined := 0
+	for name, apply := range nonDeviceCredentials(key, red.DeviceToken) {
+		for _, choice := range []string{"once", "session", "always", "deny", "approve"} {
+			body := strings.NewReader(url.Values{"decision": {choice}, "rendered_sha256": {row.RenderedSHA256}}.Encode())
+			req := httptest.NewRequest(http.MethodPost, "/ui/approve/"+id, body)
+			req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+			req.Header.Set("Sec-Fetch-Site", "same-origin")
+			apply(req)
+			rec := httptest.NewRecorder()
+			c.HTTPServer.Handler.ServeHTTP(rec, req)
+			examined++
+			if rec.Code != http.StatusForbidden {
+				t.Errorf("%s answering %s: %d, want 403", name, choice, rec.Code)
+			}
+		}
+	}
+	if r, _ := svc.Request(ctx, id); r.Status != "pending" || r.DecidedChoice != "" {
+		t.Fatalf("a non-device credential decided the host action: %+v", r)
+	}
+	t.Logf("examined %d credential x answer pairs", examined)
 }
 
 // Plan amendment 2: the per-IP backstop wraps the device routes even though
@@ -175,4 +241,10 @@ func TestApproverDeviceService_ChannelWithNotificationsOffDoesNotPush(t *testing
 	if cfg.OperatorAlertActive() {
 		t.Fatal("OperatorAlertActive true with notifications off")
 	}
+}
+
+// pairingRedirect: the refusal for a GET is the pairing page, optionally
+// with next naming exactly the page asked for, and nowhere else.
+func pairingRedirect(loc, path string) bool {
+	return loc == "/ui/pair" || loc == "/ui/pair?next="+url.QueryEscape(path)
 }

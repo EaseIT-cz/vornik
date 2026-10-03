@@ -380,6 +380,11 @@ var sqliteTableRebuilds = []tableRebuild{
 	// Postgres migration 211: agent_approval_requests learns `broker_action`
 	// (agent-administered Vornik plan P4.8).
 	{"agent_approval_requests", "'broker_action'", agentApprovalRequestsTableSQL},
+	// Postgres migration 212: agent_approval_requests learns `host_action`
+	// and decided_choice (Hermes approval transport design §4.1, §4.2). The
+	// rebuild copies the old table's columns by name; decided_choice starts
+	// NULL on every existing row.
+	{"agent_approval_requests", "'host_action'", agentApprovalRequestsTableSQL},
 }
 
 func (d *DB) applyTableRebuilds(ctx context.Context) error {

@@ -1,0 +1,19 @@
+{
+  "name": "Vornik approvals",
+  "short_name": "Approvals",
+  "description": "Approve what your assistant asks for",
+  "start_url": "/ui/approve/",
+  "scope": "/ui/approve/",
+  "display": "standalone",
+  "orientation": "portrait",
+  "theme_color": "#558A98",
+  "background_color": "#F5F1EC",
+  "icons": [
+    {
+      "src": "/ui/static/icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}

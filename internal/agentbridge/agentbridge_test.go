@@ -283,6 +283,58 @@ func TestLoadKey_OtherOwner(t *testing.T) {
 	}
 }
 
+// Review 20261003-ff65 item 7 (Hermes approval transport design §4.3: the
+// key never reaches stdout, stderr or the plugin): every LoadKey refusal
+// names the path and the fix, never the key material. vornikctl agent
+// host-approval and mcp-bridge print these errors. Each refusal is reached
+// with a file that holds the key.
+func TestLoadKey_ErrorsNeverCarryTheKey(t *testing.T) {
+	dir := t.TempDir()
+	write := func(name string, mode os.FileMode) string {
+		p := filepath.Join(dir, name)
+		if err := os.WriteFile(p, []byte(testKey+"\n"), mode); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Chmod(p, mode); err != nil {
+			t.Fatal(err)
+		}
+		return p
+	}
+	cases := map[string]func() string{
+		"world readable": func() string { return write("open.key", 0o644) },
+		"symlink": func() string {
+			link := filepath.Join(dir, "link.key")
+			if err := os.Symlink(write("target.key", 0o600), link); err != nil {
+				t.Fatal(err)
+			}
+			return link
+		},
+		"other owner": func() string { return write("owned.key", 0o600) },
+		"missing":     func() string { return filepath.Join(dir, "absent.key") },
+	}
+	origUID := currentUID
+	t.Cleanup(func() { currentUID = origUID })
+	examined := 0
+	for name, setup := range cases {
+		currentUID = origUID
+		if name == "other owner" {
+			currentUID = func() int { return origUID() + 1 }
+		}
+		_, err := LoadKey(setup())
+		if err == nil {
+			t.Errorf("%s: accepted", name)
+			continue
+		}
+		if strings.Contains(err.Error(), testKey) || strings.Contains(err.Error(), "CANARYKEY") {
+			t.Errorf("%s: the error carries the key: %v", name, err)
+		}
+		examined++
+	}
+	if examined != len(cases) {
+		t.Fatalf("examined %d of %d refusals", examined, len(cases))
+	}
+}
+
 // Regression (DoD lane bring-up, 2026-10-02): a key the harness's user
 // cannot reach (its directory belongs to someone else) was reported as "no
 // key at ...; run connect first", which sends the person to reconnect

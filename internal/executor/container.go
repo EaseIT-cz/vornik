@@ -14,6 +14,7 @@ import (
 	"time"
 	"vornik.io/vornik/internal/projectdeps"
 
+	"vornik.io/vornik/internal/agentns"
 	"vornik.io/vornik/internal/budget"
 	"vornik.io/vornik/internal/chat"
 	"vornik.io/vornik/internal/counterfactual"
@@ -624,6 +625,13 @@ func (e *Executor) executeAgentStep(ctx context.Context, task *persistence.Task,
 				Msg("artifact staging: could not prepare workspace staging dirs")
 		}
 	}
+	// A broker workflow's declared documents (broker design §18.3), staged
+	// after the hand-off artifacts so a same-named upstream file cannot
+	// replace the document. A value its declaration no longer admits fails
+	// the step rather than being staged.
+	if err := stageBrokerDocuments(workspaceDir, task, plan.workflow); err != nil {
+		return "", nil, err
+	}
 	// Snapshot the upstream OUTPUT files after staging and before the agent
 	// runs. persistArtifacts uses the workspace:-prefixed fingerprints to
 	// distinguish unchanged handoff inputs from files this step created or
@@ -757,6 +765,22 @@ func (e *Executor) executeAgentStep(ctx context.Context, task *persistence.Task,
 		return "", nil, err
 	}
 	effectiveModel = e.effectiveRoleModelForTask(task, roleConfig)
+	// An agent role's model, checked before every attempt (agent-administered
+	// design §18.6 item 2, round 2 F2, review a125): the EFFECTIVE model, so a
+	// payload override is judged too, against the live route now. A role the
+	// agent gave no model, with no override, runs on the operator's global
+	// model and is not the namespace's reach (round 3 F6).
+	if err := e.checkModelReach(ctx, task.ProjectID, roleConfig, effectiveModel); err != nil {
+		return "", nil, err
+	}
+	// A warm container keeps the model it first started with, whatever the
+	// check above judged, so an agent role never uses the warm pool (review
+	// 20261003-2ed0 B3): it runs on a copy whose policy is ephemeral.
+	if p := stepRuntimePolicy(task.ProjectID, roleConfig.RuntimePolicy); p != roleConfig.RuntimePolicy {
+		rc := *roleConfig
+		rc.RuntimePolicy = p
+		roleConfig = &rc
+	}
 	// The output contract this step is held to: the role's, unless the router
 	// contract replaces it (the adaptive route step).
 	contractRole := roleContractFor(roleConfig, opts)
@@ -2034,32 +2058,13 @@ func (e *Executor) executeWarmAgentStep(ctx context.Context, task *persistence.T
 	stagedInDir := filepath.Join(workspaceDir, "artifacts", "in")
 	warmInDir := filepath.Join(entry.WorkspaceDir, "artifacts", "in")
 	_ = os.RemoveAll(warmInDir)
-	if entries, err := os.ReadDir(stagedInDir); err == nil && len(entries) > 0 {
-		if err := os.MkdirAll(warmInDir, 0o755); err != nil {
-			e.warmPool.Release(entry, false)
-			return "", nil, markRetryable(fmt.Errorf("failed to create warm artifacts/in: %w", err))
-		}
-		for _, ent := range entries {
-			if ent.IsDir() {
-				continue
-			}
-			data, rerr := os.ReadFile(filepath.Join(stagedInDir, ent.Name()))
-			if rerr != nil {
-				continue
-			}
-			safeName, nerr := safepath.CleanFileName(ent.Name())
-			if nerr != nil {
-				continue
-			}
-			dst, jerr := safepath.JoinUnder(warmInDir, safeName)
-			if jerr != nil {
-				continue
-			}
-			// 0o600 — staged input artifacts can be operator-private.
-			if werr := os.WriteFile(dst, data, 0o600); werr != nil {
-				e.logger.Warn().Err(werr).Str("dst", dst).Msg("warm: failed to mirror staged input artifact")
-			}
-		}
+	// 0o600: staged input artifacts can be operator-private; a broker
+	// document stays read-only (broker design §18.7 F6).
+	if err := mirrorStagedInputs(stagedInDir, warmInDir, func(werr error, dst string) {
+		e.logger.Warn().Err(werr).Str("dst", dst).Msg("warm: failed to mirror staged input artifact")
+	}); err != nil {
+		e.warmPool.Release(entry, false)
+		return "", nil, markRetryable(fmt.Errorf("failed to create warm artifacts/in: %w", err))
 	}
 
 	if err := e.warmPool.InjectTask(entry, inputData); err != nil {
@@ -2977,4 +2982,17 @@ func (e *Executor) stampMemoryPeak(stamp *agentBudgetStamp, rawResult []byte, ro
 		e.logger.Debug().Str("execution_id", executionID).Str("step", stepID).
 			Msg("memory peak not reported: result.json has no usage.memory_peak_bytes (agent image predates it, or the cgroup read was not trusted)")
 	}
+}
+
+// stepRuntimePolicy is the runtime policy a step runs with. A warm
+// container's env (its model included) is baked when it first starts and
+// kept on reuse, so it would run the model it started with whatever the
+// model reach check judged for this step: an agent-namespace role's "warm"
+// becomes "ephemeral" and always starts its own container (review
+// 20261003-2ed0 B3, design §18.6 item 2).
+func stepRuntimePolicy(projectID, runtimePolicy string) string {
+	if _, agent := agentns.FromID(projectID); agent && runtimePolicy == "warm" {
+		return "ephemeral"
+	}
+	return runtimePolicy
 }

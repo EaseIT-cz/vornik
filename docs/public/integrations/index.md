@@ -4,7 +4,8 @@
 
     The Integrations Hub is part of the free, open-source **Community Edition** (and therefore also every Enterprise install). See [Editions](../editions.md) for the full Community vs Enterprise matrix.
 
-The Integrations Hub, at **`/ui/integrations`** in the web UI, is the guided
+The Integrations Hub, at **`/ui/integrations`** in the web UI (in the
+navigation under **Admin**, next to **Control plane**), is the guided
 way to connect the channels and tools vornik talks through — without
 hand-editing a YAML file or an `.env` file. Every credential you enter is
 **tested before it's saved**, so you find out immediately whether a token

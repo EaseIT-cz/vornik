@@ -291,3 +291,7 @@ func (c *CodexSubscriptionClient) recordMetrics(start time.Time, status string) 
 		c.metrics.ErrorsTotal.WithLabelValues(c.model, status).Inc()
 	}
 }
+
+// CodexSubscriptionEndpoint is the URL the codex-subscription sub-provider
+// posts to (agent-administered design §18.6 item 2 reads its host).
+func CodexSubscriptionEndpoint() string { return codexResponsesURL }

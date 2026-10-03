@@ -5,8 +5,10 @@ import (
 	"net/http"
 	"time"
 
+	"vornik.io/vornik/internal/agentadmin"
 	"vornik.io/vornik/internal/api"
 	"vornik.io/vornik/internal/approverdevice"
+	"vornik.io/vornik/internal/persistence"
 )
 
 // Agent-administered Vornik design §9: approver devices, the pairing page and
@@ -27,9 +29,34 @@ func (c *Container) approverDeviceService() *approverdevice.Service {
 		if alert := c.OperatorAlerter(); alert != nil && c.Config.OperatorAlertActive() {
 			opts = append(opts, approverdevice.WithNotifier(alert.NotifyOperator))
 		}
-		c.approverDevices = approverdevice.New(c.repos.ApproverDevices, opts...)
+		if c.Config != nil {
+			opts = append(opts, approverdevice.WithNotifyChannel(c.Config.SteeringOperatorAlert.Channel, c.Config.OperatorAlertActive()))
+		}
+		// Hermes approval transport design §8: vornik_host_approvals_total,
+		// attached to the registry in initHTTPServer.
+		if c.hostApprovalMetrics == nil {
+			c.hostApprovalMetrics = approverdevice.NewHostActionMetrics()
+		}
+		opts = append(opts, approverdevice.WithHostActionRecorder(c.hostApprovalMetrics.Record))
+		svc := approverdevice.New(c.repos.ApproverDevices, opts...)
+		// A host action's page leads with its §18.7 phrase at High (design
+		// §4.1). Registered here, not with the agent admin verbs: the
+		// approvals arrive whether or not the admin templates are installed.
+		svc.RegisterDescriber(persistence.ApprovalKindHostAction, describeHostAction)
+		// Standing grants (broker write-actions design, tier 2): the offer
+		// under an eligible write's Approve, and the Standing approvals
+		// page. Both read the container at call time.
+		svc.RegisterGrantOffer(persistence.ApprovalKindBrokerAction, c.grantOfferFor)
+		svc.SetStandingPages(c.standingDevicePages())
+		c.approverDevices = svc
 	})
 	return c.approverDevices
+}
+
+// describeHostAction is every host action's plain view (design §4.1).
+func describeHostAction(persistence.AgentApprovalRequestRow) *approverdevice.Description {
+	p := agentadmin.ExplainHostAction()
+	return &approverdevice.Description{Summary: p.Summary, Level: p.Level, Reasons: p.Reasons}
 }
 
 // mountApproverDevicePages mounts the device routes on the OUTER mux, ahead

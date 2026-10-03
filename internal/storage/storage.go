@@ -295,6 +295,9 @@ type Repositories struct {
 	// BrokerActions persists writes proposed by broker workflows, approved in
 	// /inbox and executed by the daemon (broker write-actions design §5).
 	BrokerActions persistence.BrokerActionRepository
+	// BrokerGrants persists standing grants (broker write-actions design,
+	// tier 2): a person's approval of a declared class of writes.
+	BrokerGrants persistence.BrokerGrantRepository
 	// AgentSecrets holds sealed agent credentials (agent-administered Vornik
 	// design §8.1); ciphertext only, the key lives on disk.
 	AgentSecrets persistence.AgentSecretRepository
@@ -480,6 +483,7 @@ func buildSQLiteRepositories(db *sql.DB) *Repositories {
 		TelegramPollerState:     sqlite.NewTelegramPollerStateRepository(db),
 		WorkflowProposals:       sqlite.NewWorkflowProposalRepository(db),
 		BrokerActions:           sqlite.NewBrokerActionRepository(db),
+		BrokerGrants:            sqlite.NewBrokerGrantRepository(db),
 		AgentSecrets:            sqlite.NewAgentSecretRepository(db),
 		ApproverDevices:         sqlite.NewApproverDeviceRepository(db),
 		AgentGrants:             sqlite.NewAgentGrantRepository(db),
@@ -653,6 +657,7 @@ func Build(dbtx persistence.DBTX) *Repositories {
 		TelegramPollerState:            postgres.NewTelegramPollerStateRepository(dbtx),
 		WorkflowProposals:              postgres.NewWorkflowProposalRepository(dbtx),
 		BrokerActions:                  postgres.NewBrokerActionRepository(dbtx),
+		BrokerGrants:                   postgres.NewBrokerGrantRepository(dbtx),
 		AgentSecrets:                   postgres.NewAgentSecretRepository(dbtx),
 		ApproverDevices:                postgres.NewApproverDeviceRepository(dbtx),
 		AgentGrants:                    postgres.NewAgentGrantRepository(dbtx),

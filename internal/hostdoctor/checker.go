@@ -50,6 +50,32 @@ type Checker struct {
 	// which is what lets the check complete on a 1.3GB image (CE issue 59).
 	imageLabelsFunc func(ctx context.Context, image string) (map[string]string, error)
 
+	// The fields below back the D5 rewrite of checkAgentImageUID
+	// (onboarding-hardening-design.md, D5 R6), set by WithRuntime.
+	//
+	// runAsUser is runtime.run_as_user; workspacesRoot is the effective
+	// project workspace dir; depsCacheDir the dependency cache dir.
+	runAsUser      string
+	workspacesRoot string
+	depsCacheDir   string
+	// hostIdentityFunc returns the uid, gid and rootlessness the daemon runs
+	// with (vornikctl runs as the daemon's user). Nil ⇒ the process's own.
+	hostIdentityFunc func() (uid, gid int, rootless bool)
+	// labelProbeFunc runs the image as user under keep-id against a 0700
+	// contract dir owned by the daemon and reports whether the contract is
+	// readable and the image's own paths writable. err means the probe could
+	// not complete (NOT MEASURED). Nil ⇒ realLabelProbe.
+	labelProbeFunc func(ctx context.Context, image, user string) (works bool, detail string, err error)
+	// defaultNSStartFunc starts a throwaway container in the default user
+	// namespace, as the runtime's first attempt does, returning podman's
+	// output. Nil ⇒ realDefaultNSStart.
+	defaultNSStartFunc func(ctx context.Context, image string) ([]byte, error)
+	// ownerUIDFunc returns a path's owner uid. Nil ⇒ os.Stat.
+	ownerUIDFunc func(path string) (int, error)
+	// dependencyMountsFunc returns a project's dependency mount host paths.
+	// Nil ⇒ the projectdeps resolver over depsCacheDir, as the executor does.
+	dependencyMountsFunc func(projectID, projectDir string) []string
+
 	// The seams below back checkImageFreshness (see image_freshness.go).
 	//
 	// imageProber resolves manifest conditions (which optional stacks this

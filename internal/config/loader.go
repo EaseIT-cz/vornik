@@ -692,6 +692,9 @@ func (c *Config) Validate() error {
 	if _, err := c.Broker.EffectiveActionTimeout(); err != nil {
 		return err
 	}
+	if _, _, _, err := c.Broker.StandingGrants.Effective(); err != nil {
+		return err
+	}
 	// gateway.agent_writes tri-state (off|user|all): fail startup on an invalid
 	// value rather than silently falling through to off (review I2). The load-
 	// time 'all' operator warning is emitted where the gateway is wired

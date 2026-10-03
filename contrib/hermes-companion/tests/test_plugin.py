@@ -328,8 +328,17 @@ class CatalogManifestTest(unittest.TestCase):
             "vornik_catalog", "vornik_delegate", "vornik_result", "vornik_status",
             "vornik_cancel", "vornik_recall", "vornik_remember"]))
 
-    def test_version_is_0_4_0(self):
-        self.assertRegex(MANIFEST, r"(?m)^version:\s*0\.4\.0\s*$")
+    def test_version_is_0_11_0(self):
+        # 0.11.0: the vornik-admin skill says how to hand a workflow a
+        # document (broker design §18). 0.10.0: the vornik-admin skill tells the assistant that a client
+        # refusing a field describe_installation lists holds a tool list from
+        # before a change, and to ask the user to reconnect Vornik
+        # (agent-administered design §18.14 finding 2). 0.9.0 was a role's
+        # model from the catalogue (§18.6 item 2).
+        self.assertRegex(MANIFEST, r"(?m)^version:\s*0\.11\.0\s*$")
+        self.assertIn("0.11.0 — ", MANIFEST, "the description carries a changelog line for 0.11.0")
+        self.assertIn("0.10.0 — ", MANIFEST, "earlier changelog lines stay")
+        self.assertIn("0.9.0 — ", MANIFEST, "earlier changelog lines stay")
 
 
 class CliRegistrationTest(unittest.TestCase):
@@ -345,7 +354,13 @@ class CliRegistrationTest(unittest.TestCase):
         args = parser.parse_args(["connect", "--url", "https://v.test", "--dry-run"])
         self.assertEqual((args.vornik_action, args.url, args.dry_run), ("connect", "https://v.test", True))
         self.assertEqual(parser.parse_args(["status"]).vornik_action, "status")
-        # Slash commands are model-invokable; none of them may spawn (8a55 F1).
+        # No slash command may spawn a program (8a55 F1). Slash commands are
+        # what the user types: at Hermes f97608f a plugin command is
+        # dispatched only from cli.py (get_plugin_command_handler, lines 1275-1277)
+        # and the gateway's inbound path (gateway/run_inbound.py, lines 1060-1061),
+        # never by a tool, agent or cron module (design 24, 0.8.0, item 6).
+        # The no-spawn rule stands anyway: it does not depend on who can run
+        # a command.
         self.assertEqual(sorted(ctx.commands), ["vornik-peek", "vornik-result"])
 
 

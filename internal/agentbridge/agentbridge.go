@@ -22,6 +22,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -33,6 +34,12 @@ type Config struct {
 	Endpoint string // the companion endpoint URL
 	Key      string
 	HTTP     *http.Client
+	// PollEvery is how often the bridge lists the tools itself to notice a
+	// change (agent-administered design §18.14); zero is DefaultPollEvery.
+	PollEvery time.Duration
+	// pollHook, when set, runs at the start of every poll: a test seam for a
+	// poll defect, fixed before Run starts (review 20261003-195e F3).
+	pollHook func()
 }
 
 // currentUID is os.Getuid; a test seam for the key file's owner check.
@@ -47,50 +54,71 @@ func Run(ctx context.Context, in io.Reader, out, errw io.Writer, cfg Config) err
 	if hc == nil {
 		hc = &http.Client{Timeout: 10 * time.Minute}
 	}
+	b := &bridge{cfg: cfg, out: out, errw: errw}
+	pollCtx, stopPoll := context.WithCancel(ctx)
+	var polling sync.WaitGroup
+	// The poll stops with the relay and is waited for, so nothing is
+	// written after Run returns.
+	defer func() {
+		stopPoll()
+		polling.Wait()
+	}()
 	sc := bufio.NewScanner(in)
 	sc.Buffer(make([]byte, 64<<10), maxMessage)
-	session, version := "", ""
 	for sc.Scan() {
 		line := bytes.TrimSpace(sc.Bytes())
 		if len(line) == 0 {
 			continue
 		}
 		var msg struct {
-			ID json.RawMessage `json:"id"`
+			ID     json.RawMessage `json:"id"`
+			Method string          `json:"method"`
+			Params struct {
+				Cursor string `json:"cursor"`
+			} `json:"params"`
 		}
 		if json.Unmarshal(line, &msg) != nil {
-			writeError(out, json.RawMessage("null"), -32700, "parse error")
+			b.writeError(json.RawMessage("null"), -32700, "parse error")
 			continue
 		}
+		// The harness's own tool list, every page of it, seeds the hash the
+		// poll compares against (design §18.14 round 2 F5; review 195e F2).
+		harnessList := msg.Method == "tools/list"
 		answered := false
 		emit := func(r []byte) {
-			var buf bytes.Buffer
-			if json.Compact(&buf, r) != nil {
+			c, ok := b.write(r)
+			if !ok {
 				// Dropped, so stdout stays protocol; said on stderr without
 				// the content (review 20261002-00bc).
-				_, _ = fmt.Fprintln(errw, "vornik bridge: dropped a reply that is not JSON")
+				b.logf("vornik bridge: dropped a reply that is not JSON")
 				return
 			}
-			if v := negotiatedVersion(buf.Bytes()); v != "" {
-				version = v
-			}
-			if sameID(buf.Bytes(), msg.ID) {
+			if sameID(c, msg.ID) {
 				answered = true
+				if harnessList {
+					b.seenPage(c, msg.Params.Cursor)
+				}
 			}
-			buf.WriteByte('\n')
-			_, _ = out.Write(buf.Bytes())
+			// After the initialize result is relayed, and only then, the
+			// poll starts (design §18.14 round 2 F3).
+			if v := negotiatedVersion(c); v != "" && b.initialized(v) {
+				polling.Add(1)
+				go func() {
+					defer polling.Done()
+					b.pollLoop(pollCtx, newPollClient())
+				}()
+			}
 		}
+		session, version := b.sessionHeaders()
 		sess, err := post(ctx, hc, cfg, session, version, line, emit)
-		if sess != "" {
-			session = sess
-		}
+		b.setSession(sess)
 		notification := len(msg.ID) == 0 || string(msg.ID) == "null"
 		if err != nil {
-			_, _ = fmt.Fprintf(errw, "vornik bridge: %v\n", err)
+			b.logf("vornik bridge: %v", err)
 			// What already arrived was relayed; an error line is added only
 			// when the request has no answer yet (review 20261002-3b9f F1).
 			if !notification && !answered {
-				writeError(out, msg.ID, -32000, "vornik: "+err.Error())
+				b.writeError(msg.ID, -32000, "vornik: "+err.Error())
 			}
 		}
 	}
@@ -205,10 +233,10 @@ func negotiatedVersion(msg []byte) string {
 	return m.Result.ProtocolVersion
 }
 
-func writeError(out io.Writer, id json.RawMessage, code int, message string) {
-	b, _ := json.Marshal(map[string]any{"jsonrpc": "2.0", "id": id,
+func (b *bridge) writeError(id json.RawMessage, code int, message string) {
+	raw, _ := json.Marshal(map[string]any{"jsonrpc": "2.0", "id": id,
 		"error": map[string]any{"code": code, "message": message}})
-	_, _ = out.Write(append(b, '\n'))
+	_, _ = b.write(raw)
 }
 
 // LoadKey reads a namespace's key file. It must be a regular file the

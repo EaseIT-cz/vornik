@@ -124,6 +124,37 @@ terminals:
     status: COMPLETED
 ---
 `)
+	// doc-review takes a Markdown document (broker design §18).
+	write("workflows/doc-review.md", `---
+workflowId: doc-review
+entrypoint: read
+broker:
+  input_schema:
+    type: object
+    additionalProperties: false
+    required: [design]
+    properties:
+      design: { type: string, x-untrusted-document: { max_bytes: 256, media_type: text/markdown } }
+      focus:  { enum: [all, security] }
+  egress:
+    output: review.json
+    max_bytes: 4096
+    schema:
+      type: object
+      required: [findings]
+      properties:
+        findings: { type: array, maxItems: 10, items: { type: string, maxLength: 300 } }
+steps:
+  read:
+    type: agent
+    prompt: "Review the document."
+    role: reader
+    on_success: done
+terminals:
+  done:
+    status: COMPLETED
+---
+`)
 	write("workflows/wf-plain.md", `---
 workflowId: wf-plain
 entrypoint: run

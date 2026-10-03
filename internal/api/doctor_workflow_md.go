@@ -9,6 +9,10 @@ package api
 //     and `vornikctl doctor` exits with a non-OK summary.
 //   - At least one WARNING finding (and no errors) → WARNING.
 //     The check still passes but the operator sees the gaps.
+//     Except the publication notes (author_missing, license_missing):
+//     they never set the status and are never items; the message counts
+//     them (workflow-md design, "Publication recommendations belong to
+//     publishing", 2026-10-03). Items are alarm findings only.
 //   - Empty findings across every file → OK.
 //
 // Implementation notes:
@@ -74,6 +78,7 @@ func (h *DoctorHandlers) checkWorkflowMDShape() DoctorCheck {
 	var (
 		errs     []workflowMDFileFinding
 		warns    []workflowMDFileFinding
+		unpub    = map[string]bool{} // files carrying a publication note
 		checked  int
 		readErrs []string
 	)
@@ -94,6 +99,10 @@ func (h *DoctorHandlers) checkWorkflowMDShape() DoctorCheck {
 			case registry.SeverityError:
 				errs = append(errs, workflowMDFileFinding{filename: e.Name(), finding: f})
 			case registry.SeverityWarning:
+				if publicationNote[f.Code] {
+					unpub[e.Name()] = true
+					continue
+				}
 				warns = append(warns, workflowMDFileFinding{filename: e.Name(), finding: f})
 			}
 		}
@@ -136,7 +145,7 @@ func (h *DoctorHandlers) checkWorkflowMDShape() DoctorCheck {
 		return DoctorCheck{
 			Name:    name,
 			Status:  "ERROR",
-			Message: fmt.Sprintf("%d workflow shape error(s) across %d file(s)", len(errs), countDistinctFiles(errs)),
+			Message: fmt.Sprintf("%d workflow shape error(s) across %d file(s)", len(errs), countDistinctFiles(errs)) + publicationClause(unpub),
 			Items:   items,
 		}
 	}
@@ -146,7 +155,7 @@ func (h *DoctorHandlers) checkWorkflowMDShape() DoctorCheck {
 		return DoctorCheck{
 			Name:    name,
 			Status:  "WARNING",
-			Message: fmt.Sprintf("%d recommended-field warning(s) across %d file(s)", len(warns), countDistinctFiles(warns)),
+			Message: fmt.Sprintf("%d recommended-field warning(s) across %d file(s)", len(warns), countDistinctFiles(warns)) + publicationClause(unpub),
 			Items:   items,
 		}
 	}
@@ -154,7 +163,7 @@ func (h *DoctorHandlers) checkWorkflowMDShape() DoctorCheck {
 		// Nothing examined is SKIPPED, not a clean pass.
 		return DoctorCheck{Name: name, Status: "SKIPPED", Message: "no workflow files under workflows/; nothing to validate"}
 	}
-	msg := fmt.Sprintf("all %d workflow file(s) pass the SKILL.md shape", checked)
+	msg := fmt.Sprintf("all %d workflow file(s) pass the SKILL.md shape", checked) + publicationClause(unpub)
 	if len(readErrs) > 0 {
 		// We checked some, couldn't read others — still OK
 		// overall (no findings against what we read) but
@@ -162,6 +171,19 @@ func (h *DoctorHandlers) checkWorkflowMDShape() DoctorCheck {
 		return DoctorCheck{Name: name, Status: "WARNING", Message: msg, Items: readErrs}
 	}
 	return DoctorCheck{Name: name, Status: "OK", Message: msg}
+}
+
+// publicationNote names the validator's codes that matter only to a workflow
+// being published (`vornikctl skill export` sets both fields).
+var publicationNote = map[string]bool{"author_missing": true, "license_missing": true}
+
+// publicationClause is the message clause counting files that carry a
+// publication note, or "" when none does.
+func publicationClause(files map[string]bool) string {
+	if len(files) == 0 {
+		return ""
+	}
+	return fmt.Sprintf("; %d workflow(s) carry no author or license, which only publishing needs (vornikctl skill export --author --license)", len(files))
 }
 
 // workflowMDFileFinding pairs a finding with the file it came

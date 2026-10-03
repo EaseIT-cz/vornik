@@ -165,3 +165,70 @@ func TestIsKnownTaskFailureClass(t *testing.T) {
 		t.Error("empty must not validate as a class")
 	}
 }
+
+// Permanent-failure design, amendment 2026-10-03: observed in the model-per-role e2e
+// arm, the executor stamped REACH_NOT_APPROVED, the classifier deferred (returned ""),
+// and the terminal release wrote NULL over it. The terminal release now asks the
+// repository to keep the class when the classifier deferred.
+func TestTaskCompleted_TerminalReleaseKeepsTheExecutorsClass(t *testing.T) {
+	repo := NewMockTaskRepository()
+	lease := "lease-1"
+	cls := persistence.TaskFailureClassReachNotApproved
+	repo.tasks["t1"] = &persistence.Task{
+		ID: "t1", Status: persistence.TaskStatusRunning, Attempt: 3, MaxAttempts: 3,
+		LeaseID: &lease, LastErrorClass: &cls,
+	}
+	s := &Scheduler{repo: repo}
+	if err := s.TaskCompleted("t1", lease, false, "reach not approved"); err != nil {
+		t.Fatalf("TaskCompleted: %v", err)
+	}
+	task := repo.tasks["t1"]
+	if task.LastErrorClass == nil || *task.LastErrorClass != cls {
+		t.Fatalf("last_error_class = %v, want %q kept", task.LastErrorClass, cls)
+	}
+}
+
+// Review 9e39 F1: when the scheduler CAN classify the message, the terminal release writes
+// its class and does not ask to keep the row's earlier one: KeepErrorClass is set only
+// when the classifier deferred. Pins against "keep on every terminal release".
+func TestTaskCompleted_TerminalReleaseWritesItsOwnClassWhenItHasOne(t *testing.T) {
+	repo := NewMockTaskRepository()
+	lease := "lease-1"
+	repo.tasks["t1"] = &persistence.Task{
+		ID: "t1", Status: persistence.TaskStatusRunning, Attempt: 3, MaxAttempts: 3, LeaseID: &lease,
+	}
+	s := &Scheduler{repo: repo}
+	if err := s.TaskCompleted("t1", lease, false, "some message nothing matches"); err != nil {
+		t.Fatalf("TaskCompleted: %v", err)
+	}
+	task := repo.tasks["t1"]
+	if task.LastErrorClass == nil || *task.LastErrorClass != persistence.TaskFailureClassUnknown {
+		t.Fatalf("last_error_class = %v, want the scheduler's own UNKNOWN", task.LastErrorClass)
+	}
+}
+
+// Review 9e39 F6: a retry requeue clears the class, so a later attempt is not judged by an
+// earlier attempt's class.
+func TestTaskCompleted_RetryClearsAnEarlierClass(t *testing.T) {
+	repo := NewMockTaskRepository()
+	lease := "lease-1"
+	cls := persistence.TaskFailureClassToolIterationLimit // precise and retryable
+	if !persistence.TaskShouldRetry(1, 3, cls) {
+		t.Fatalf("fixture: %s must be retryable at attempt 1 of 3", cls)
+	}
+	repo.tasks["t1"] = &persistence.Task{
+		ID: "t1", Status: persistence.TaskStatusRunning, Attempt: 1, MaxAttempts: 3,
+		LeaseID: &lease, LastErrorClass: &cls,
+	}
+	s := &Scheduler{repo: repo}
+	if err := s.TaskCompleted("t1", lease, false, "transient boom"); err != nil {
+		t.Fatalf("TaskCompleted: %v", err)
+	}
+	task := repo.tasks["t1"]
+	if task.Status != persistence.TaskStatusQueued {
+		t.Fatalf("status = %s, want QUEUED (a retry)", task.Status)
+	}
+	if task.LastErrorClass != nil {
+		t.Errorf("a retry requeue kept %q; want it cleared", *task.LastErrorClass)
+	}
+}

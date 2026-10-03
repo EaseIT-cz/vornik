@@ -110,15 +110,6 @@ func navModel() []navAreaDef {
 			{Key: "memory", Label: "Memory", Href: "/ui/memory", Icon: "navIconMemory"},
 			{Key: "reminders", Label: "Reminders", Href: "/ui/reminders", Icon: "navIconReminders"},
 		}},
-		// Integrations Hub (design doc: integrations-hub-design.md, task
-		// 5.3) — "connect my tools" is a distinct user job from Admin (which
-		// RoleUser cannot see), so it gets its own top-level area rather than
-		// folding into admin. No AdminOnly flag: the catalog itself is
-		// scope-filtered (daemon-scope kinds hidden for non-admins, §5.8),
-		// so a project-scoped user sees a non-empty, relevant page here.
-		{Key: "integrations", Label: "Integrations", Short: "Connect", Icon: "navIconIntegrations", Href: "/ui/integrations", Dests: []navDest{
-			{Key: "integrations", Label: "Integrations", Href: "/ui/integrations", Icon: "navIconIntegrations"},
-		}},
 		{Key: "insight", Label: "Insight", Icon: "navIconInsight", Href: "/ui/spend", Dests: []navDest{
 			{Key: "spend", Label: "Spend", Href: "/ui/spend", Icon: "navIconSpend"},
 			{Key: "trends", Label: "Trends", Href: "/ui/insights/trends", Icon: "navIconInsight"},
@@ -157,8 +148,16 @@ func navModel() []navAreaDef {
 			{Key: "regulatory", Label: "Regulatory record", Href: "/ui/operator/regulatory", Icon: "navIconAudit", AdminOnly: true},
 			{Key: "admin-skills", Label: "Skills", Href: "/ui/admin/skills", Icon: "navIconSkill"},
 			{Key: "admin-control-plane", Label: "Control plane", Href: "/ui/admin/control-plane", Icon: "navIconControlPlane"},
+			// Integrations Hub (integrations-hub-design.md §0.0a): moved
+			// here from its own one-entry top-level area (the rail's
+			// "Integrations", the mobile bar's "Connect") on 2026-10-03 —
+			// operator: "move integrations from the connect menu to control
+			// plane, to declutter navigation". URL unchanged. Not AdminOnly:
+			// the catalog is scope-filtered for project users (§5.8), and the
+			// area gate decides visibility exactly as for My account above.
+			{Key: "integrations", Label: "Integrations", Href: "/ui/integrations", Icon: "navIconIntegrations"},
 			{Key: "admin-keys", Label: "Keys & access", Href: "/ui/admin/keys", Icon: "navIconKey"},
-			{Key: "admin-agents", Label: "Assistants", Href: "/ui/admin/agents", Icon: "navIconUsers"},
+			{Key: "admin-agents", Label: "Assistants", Href: "/ui/admin/agents", Icon: "navIconRobot"},
 		}},
 	}
 }

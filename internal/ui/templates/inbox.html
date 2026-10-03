@@ -23,14 +23,53 @@
                  hx-select="#inbox-list"
                  hx-target="#inbox-list"
                  hx-swap="outerHTML">
+            {{with .BrokerRefused}}<p class="mb-2 rounded-lg border border-rose-600/40 bg-rose-500/10 px-3 py-2 text-xs text-rose-700 dark:text-rose-300">Not decided, because it changed after you saw it or was already decided: {{range $i, $id := .}}{{if $i}}, {{end}}<span class="font-mono">{{$id}}</span>{{end}}. Review it again.</p>{{end}}
+            {{if gt (len .BrokerActions) 1}}
+                <form id="broker-batch" method="post" action="/ui/inbox/broker-actions/batch" class="mb-2 flex flex-wrap items-center gap-1.5 text-xs text-gray-400">
+                    <span>Tick writes below to decide them together; each is checked against exactly what its card shows.</span>
+                    <button type="submit" name="decision" value="approve" class="px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white font-medium">Approve ticked</button>
+                    <button type="submit" name="decision" value="reject" class="px-3 py-1.5 rounded-lg bg-rose-700/80 hover:bg-rose-600 text-white font-medium">Reject ticked</button>
+                </form>
+            {{end}}
+            {{with .AgentApprovals}}
+            <div class="mb-4 space-y-2">
+                <h2 class="text-sm font-semibold text-gray-400 uppercase tracking-wide">Waiting on your approver device</h2>
+                <p class="text-xs text-gray-500">Your assistant's requests are decided on the phone you paired, not here.</p>
+                <ul class="space-y-2">
+                    {{range .}}<li class="rounded-xl border border-dark-600 bg-dark-800 p-3.5 flex flex-wrap items-center justify-between gap-2">
+                        <div class="min-w-0"><p class="text-sm text-gray-100">{{.Sentence}}</p><p class="text-xs text-gray-500">{{.Age}}</p></div>
+                        <a href="/ui/approve/{{.ID}}" class="px-3 py-1.5 rounded-lg border border-dark-500 text-xs text-gray-200 hover:bg-dark-700">Open on your approver device</a>
+                    </li>{{end}}
+                </ul>
+            </div>
+            {{end}}
             {{if or .Items .WebWrites .BrokerActions}}
                 <ul class="space-y-2">
                     {{range .BrokerActions}}{{template "brokerActionApprovalCard" .}}{{end}}
                     {{range .WebWrites}}{{template "webWriteApprovalCard" .}}{{end}}
                     {{range .Items}}{{template "inboxItemRow" .}}{{end}}
                 </ul>
-            {{else}}
+            {{else if not .AgentApprovals}}
                 {{template "emptyState" (dict "Icon" "tasks" "Title" "All clear" "Hint" "Nothing needs your attention — no approvals, checkpoints, recent failures, or blocked tasks.")}}
+            {{end}}
+            {{with .StandingGrants}}
+            <div class="mt-4 space-y-2">
+                <h2 class="text-sm font-semibold text-gray-400 uppercase tracking-wide">Standing approvals</h2>
+                <p class="text-[11px] text-gray-500">Writes these cover are sent without showing you their text. Pause or revoke takes effect on the next write; a write already being sent completes.</p>
+                <ul class="space-y-2">{{range .}}
+                    <li class="rounded-xl border border-dark-600 bg-dark-800 p-3 space-y-1.5 text-xs text-gray-300">
+                        <div><span class="font-medium text-gray-100">{{.Action}}</span> to {{.Key}} <span class="text-gray-500">({{.ProjectID}} / {{.Workflow}})</span></div>
+                        <div class="text-gray-500">{{.State}} · {{.UsesLeft}} of {{.MaxUses}} uses left · ends {{.Expires}}</div>
+                        {{with .Covered}}<details><summary class="text-gray-500">Writes it approved</summary><ul>{{range .}}<li class="font-mono">{{.ActionID}}: {{.Status}}</li>{{end}}</ul></details>{{end}}
+                        <div class="flex flex-wrap gap-1.5">
+                        {{if eq .State "active"}}<form method="post" action="/ui/inbox/standing/{{.ID}}/pause"><button type="submit" class="px-3 py-1.5 rounded-lg bg-dark-700 text-gray-200">Pause</button></form>{{end}}
+                        {{if eq .State "paused"}}<form method="post" action="/ui/inbox/standing/{{.ID}}/unpause"><button type="submit" class="px-3 py-1.5 rounded-lg bg-emerald-600 text-white">Resume</button></form>{{end}}
+                        {{if eq .State "suspended"}}<form method="post" action="/ui/inbox/standing/{{.ID}}/confirm"><button type="submit" class="px-3 py-1.5 rounded-lg bg-emerald-600 text-white">Confirm (the workflow changed what it can reach)</button></form>{{end}}
+                        {{if or (eq .State "active") (eq .State "paused") (eq .State "suspended")}}<form method="post" action="/ui/inbox/standing/{{.ID}}/revoke"><button type="submit" class="px-3 py-1.5 rounded-lg bg-rose-700/80 text-white">Revoke</button></form>{{end}}
+                        </div>
+                    </li>{{end}}
+                </ul>
+            </div>
             {{end}}
             {{if .HasMoreAttention}}
                 <p class="text-xs text-amber-600 dark:text-amber-400 mt-2">…and more waiting — showing the first {{.AttentionPageSize}}.</p>
@@ -120,6 +159,7 @@
 {{define "brokerActionApprovalCard"}}
 <li id="broker-action-{{.ActionID}}" class="rounded-xl border border-dark-600 bg-dark-800 p-3.5 space-y-2.5">
     <div class="flex items-center gap-2 flex-wrap text-[11px] text-gray-500">
+        <input type="checkbox" form="broker-batch" name="pick" value="{{.ActionID}}|{{.ArgsSHA256}}" aria-label="Tick to decide together" class="h-4 w-4">
         <span class="font-medium uppercase tracking-wide px-2 py-0.5 rounded-full bg-amber-500/20 text-amber-700 dark:text-amber-300">Needs approval</span>
         <span>{{.ProjectID}}</span>
         <span class="px-1.5 py-0.5 rounded-md bg-dark-700 text-gray-400" title="a write proposed by a broker workflow">broker write</span>
@@ -143,6 +183,14 @@
             <button type="submit" class="flex-1 sm:flex-none px-4 py-2 text-xs font-medium rounded-lg bg-rose-700/80 hover:bg-rose-600 text-white transition-colors">Reject</button>
         </form>
     </div>
+    {{with .Grant}}<form method="post" action="/ui/inbox/broker-action/{{$.ActionID}}/approve-grant" class="rounded-lg border border-dark-600 p-2 space-y-1.5 text-[11px] text-gray-300">
+        <input type="hidden" name="args_sha256" value="{{$.ArgsSHA256}}">
+        <div><span class="font-medium text-gray-100">Approve, and send future {{.Action}} to {{.Key}} without showing you their text</span>, for
+        <select name="grant_days" class="bg-dark-900">{{range .Days}}<option value="{{.}}">{{.}} day{{if ne . 1}}s{{end}}</option>{{end}}</select>,
+        at most <select name="grant_uses" class="bg-dark-900">{{range .Uses}}<option value="{{.}}">{{.}}</option>{{end}}</select> times.</div>
+        <div class="text-gray-500">Not shown to you before sending: {{range $i, $f := .Unreviewed}}{{if $i}}, {{end}}<span class="font-mono">{{$f}}</span>{{end}}. An address may reach several people (a mailing list).</div>
+        <button type="submit" class="px-3 py-1.5 rounded-lg bg-emerald-700 hover:bg-emerald-600 text-white">Approve, and approve future writes like this</button>
+    </form>{{end}}
 </li>
 {{end}}
 

@@ -39,6 +39,10 @@ func copyDir(t *testing.T, src, dst string) {
 		t.Fatal(err)
 	}
 	for _, e := range entries {
+		if e.IsDir() { // the recipes catalogue (design §19)
+			copyDir(t, filepath.Join(src, e.Name()), filepath.Join(dst, e.Name()))
+			continue
+		}
 		b, err := os.ReadFile(filepath.Join(src, e.Name()))
 		if err != nil {
 			t.Fatal(err)

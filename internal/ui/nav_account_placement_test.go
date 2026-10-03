@@ -1,6 +1,10 @@
 package ui
 
-import "testing"
+import (
+	"os"
+	"strings"
+	"testing"
+)
 
 // Operator, 2026-09-16: "my account should probably not be under steer but the
 // admin menu — where the control plane, and access keys menu items are — also
@@ -83,5 +87,26 @@ func TestNav_IdentitySurfacesDoNotShareAnIcon(t *testing.T) {
 	}
 	if got := navDestByKey(t, "operator").Icon; got != "navIconUsers" {
 		t.Errorf("Accounts icon = %q, want navIconUsers (several people — everyone else)", got)
+	}
+}
+
+// Assistants reused Accounts' two-people icon, so the rail read it as a list
+// of human users (operator, 2026-10-02). It has its own robot icon, which is
+// defined, and no other entry renders it.
+func TestNav_AssistantsHaveTheirOwnRobotIcon(t *testing.T) {
+	if got := navDestByKey(t, "admin-agents").Icon; got != "navIconRobot" {
+		t.Fatalf("Assistants icon = %q, want navIconRobot (software acting for a person, not people)", got)
+	}
+	for _, key := range []string{"my-account", "operator", "admin-keys"} {
+		if navDestByKey(t, key).Icon == "navIconRobot" {
+			t.Errorf("%s renders navIconRobot; it belongs to Assistants", key)
+		}
+	}
+	b, err := os.ReadFile("templates/_partials.html")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(b), `{{define "navIconRobot"}}`) {
+		t.Fatal("navIconRobot is not defined in templates/_partials.html")
 	}
 }

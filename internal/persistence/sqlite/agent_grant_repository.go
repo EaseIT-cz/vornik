@@ -196,3 +196,80 @@ func (r *AgentGrantRepository) GetCeiling(ctx context.Context, namespace string)
 	b.UpdatedAt = at.Time
 	return &b, nil
 }
+
+// Model destination approvals (agent-administered design §18.6 item 2 in
+// detail): repotest.RunAgentModelDestinationSuite keeps both drivers equal.
+
+const agentModelDestinationCols = `namespace, destination, approved_by_device, approved_at, removed_at`
+
+// UpsertModelDestination implements persistence.AgentGrantRepository.
+func (r *AgentGrantRepository) UpsertModelDestination(ctx context.Context, a persistence.AgentModelDestinationApproval) error {
+	_, err := r.db.ExecContext(ctx, `
+		INSERT INTO agent_model_provider_approvals (namespace, destination, approved_by_device, approved_at, removed_at)
+		VALUES (?, ?, ?, ?, NULL)
+		ON CONFLICT (namespace, destination) DO UPDATE SET
+			approved_by_device = excluded.approved_by_device, approved_at = excluded.approved_at, removed_at = NULL`,
+		a.Namespace, a.Destination, a.ApprovedByDevice, sqliteTime(a.ApprovedAt))
+	return err
+}
+
+func scanModelDestination(s interface{ Scan(...interface{}) error }) (persistence.AgentModelDestinationApproval, error) {
+	var (
+		a        persistence.AgentModelDestinationApproval
+		approved sqlTime
+		removed  sqlNullTime
+	)
+	if err := s.Scan(&a.Namespace, &a.Destination, &a.ApprovedByDevice, &approved, &removed); err != nil {
+		return a, err
+	}
+	a.ApprovedAt = approved.Time
+	if removed.Valid {
+		t := removed.Time
+		a.RemovedAt = &t
+	}
+	return a, nil
+}
+
+// GetModelDestination implements persistence.AgentGrantRepository.
+func (r *AgentGrantRepository) GetModelDestination(ctx context.Context, namespace, destination string) (*persistence.AgentModelDestinationApproval, error) {
+	a, err := scanModelDestination(r.db.QueryRowContext(ctx, `SELECT `+agentModelDestinationCols+` FROM agent_model_provider_approvals WHERE namespace = ? AND destination = ?`, namespace, destination))
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, persistence.ErrNotFound
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &a, nil
+}
+
+// ListModelDestinations implements persistence.AgentGrantRepository.
+func (r *AgentGrantRepository) ListModelDestinations(ctx context.Context, namespace string) ([]persistence.AgentModelDestinationApproval, error) {
+	rows, err := r.db.QueryContext(ctx, `SELECT `+agentModelDestinationCols+` FROM agent_model_provider_approvals WHERE namespace = ? ORDER BY destination`, namespace)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+	var out []persistence.AgentModelDestinationApproval
+	for rows.Next() {
+		a, err := scanModelDestination(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, a)
+	}
+	return out, rows.Err()
+}
+
+// MarkModelDestinationRemoved implements persistence.AgentGrantRepository.
+func (r *AgentGrantRepository) MarkModelDestinationRemoved(ctx context.Context, namespace, destination string, at time.Time) (bool, error) {
+	res, err := r.db.ExecContext(ctx, `UPDATE agent_model_provider_approvals SET removed_at = ? WHERE namespace = ? AND destination = ? AND removed_at IS NULL`,
+		sqliteTime(at), namespace, destination)
+	if err != nil {
+		return false, err
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return false, err
+	}
+	return n > 0, nil
+}

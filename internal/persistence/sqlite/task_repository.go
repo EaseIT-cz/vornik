@@ -790,11 +790,11 @@ func (r *TaskRepository) ReleaseLease(ctx context.Context, taskID, leaseID strin
 		    attempt = COALESCE(?, attempt),
 		    max_attempts = COALESCE(?, max_attempts),
 		    last_error = ?,
-		    last_error_class = ?,
+		    last_error_class = CASE WHEN ? THEN COALESCE(?, last_error_class) ELSE ? END,
 		    updated_at = ?
 		WHERE id = ?
 		  AND lease_id = ?`,
-		string(newStatus), attemptArg, maxAttemptsArg, errArg, classArg,
+		string(newStatus), attemptArg, maxAttemptsArg, errArg, opts.KeepErrorClass, classArg, classArg,
 		sqliteTime(time.Now().UTC()), taskID, leaseID)
 	return err
 }

@@ -18,6 +18,8 @@ import (
 	"sync"
 	"time"
 
+	"vornik.io/vornik/internal/agentns"
+
 	"github.com/rs/zerolog"
 	"vornik.io/vornik/internal/budget"
 	"vornik.io/vornik/internal/chat"
@@ -1921,6 +1923,11 @@ func (b *Bot) NotifyBudgetBreach(ctx context.Context, projectID, level, period s
 		emoji = "🚫"
 		headline = "hard cap hit — new tasks blocked"
 		tail = "bump the cap in the project YAML or wait for the period to roll over."
+		if _, agent := agentns.FromID(projectID); agent {
+			// The renderer owns an agent project's file; the route is the
+			// agent's set_budget, approved on the phone (agent-administered §18.15).
+			tail = "Your assistant can ask you to raise it (set_budget, approved on your phone), or wait for the period to roll over."
+		}
 	}
 
 	text := fmt.Sprintf("%s %s (%s)\n\nProject: %s\nSpent this %s: $%.2f\n%s\n\n%s",

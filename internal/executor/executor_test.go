@@ -100,6 +100,10 @@ type MockRuntime struct {
 	// attempt (e.g. primary on run 1, fallback on run 2) — not merely that
 	// a re-run happened. Read via LLMModelsLaunched() under the mock's lock.
 	llmModelPerStart []string
+	// onStart, when set, is called with each container's config at the top
+	// of StartContainer, under the mock's lock: the observation point for
+	// what the executor staged into the step's workspace (broker design §18).
+	onStart func(c *runtime.ContainerConfig)
 }
 
 func NewMockRuntime() *MockRuntime { return &MockRuntime{} }
@@ -147,6 +151,9 @@ func (m *MockRuntime) StartContainer(ctx context.Context, c *runtime.ContainerCo
 	defer m.mu.Unlock()
 	m.startCalls++
 	m.lastConfig = c
+	if m.onStart != nil {
+		m.onStart(c)
+	}
 	m.llmModelPerStart = append(m.llmModelPerStart, c.EnvVars["VORNIK_LLM_MODEL"])
 	// e9a5 handoff observation: BEFORE writing any of this step's own
 	// deliverables, snapshot whatever the executor already staged into

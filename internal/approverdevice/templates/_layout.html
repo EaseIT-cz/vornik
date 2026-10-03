@@ -2,23 +2,56 @@
 <html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="referrer" content="no-referrer">
+<meta name="theme-color" content="#558A98">
 {{if .Refresh}}<meta http-equiv="refresh" content="{{.Refresh}}">{{end}}
 <title>{{.Title}} · Vornik</title>
+<link rel="manifest" href="/ui/static/approve.webmanifest">
+<link rel="icon" type="image/svg+xml" href="/ui/static/icon.svg">
+<link rel="apple-touch-icon" href="/ui/static/apple-touch-icon.png">
 <style>
-:root{--bg:#fafaf9;--fg:#1c1917;--mut:#57534e;--card:#fff;--line:#e7e5e4;--ok:#15803d;--no:#b91c1c;--acc:#1d4ed8}
-@media (prefers-color-scheme:dark){:root{--bg:#1c1917;--fg:#f5f5f4;--mut:#a8a29e;--card:#292524;--line:#44403c;--ok:#4ade80;--no:#f87171;--acc:#93c5fd}}
-*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--fg);font:17px/1.5 system-ui,-apple-system,sans-serif}
+/* Design §9.1a: the console's tokens (internal/ui/templates/_partials.html),
+   copied as hex; a test compares them with the console's per theme. Nothing
+   here loads from another origin: credentials are typed on these pages. */
+:root{ /* light */
+--surface-900:#f5f1ec;--surface-800:#ffffff;--surface-600:#e0d5c9;
+--ink-100:#1b2026;--ink-300:#3f4750;--ink-500:#7a8492;
+--brand-500:#558a98;--accent-500:#659157;--reject:#be123c;}
+@media (prefers-color-scheme:dark){:root{ /* dark */
+--surface-900:#3b4252;--surface-800:#4c566a;--surface-600:#7a8fa8;
+--ink-100:#f3f4f6;--ink-300:#d1d5db;--ink-500:#a8b4c5;
+--brand-500:#0078c3;--accent-500:#78b41e;--reject:#fb7185;}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--surface-900);color:var(--ink-300);font:17px/1.5 system-ui,-apple-system,"Segoe UI",sans-serif}
+header{display:flex;align-items:center;gap:.6rem;padding:.75rem 1rem;border-bottom:1px solid var(--surface-600);background:var(--surface-800)}
+header img{width:28px;height:28px}
+header strong{color:var(--ink-100);font-size:1.05rem;letter-spacing:.01em}
 main{max-width:34rem;margin:0 auto;padding:1rem}
-h1{font-size:1.35rem;margin:.5rem 0 1rem}
-.card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:1rem;margin:0 0 .75rem}
-.mut{color:var(--mut);font-size:.9rem}
-a{color:var(--acc)}
-input[type=text]{width:100%;font-size:1.4rem;letter-spacing:.15em;padding:.7rem;border:1px solid var(--line);border-radius:10px;background:var(--bg);color:var(--fg);text-transform:uppercase}
-button{display:block;width:100%;font-size:1.1rem;padding:.9rem;border:0;border-radius:10px;margin:.5rem 0;cursor:pointer;color:#fff;background:var(--acc)}
-button.ok{background:var(--ok)}button.no{background:var(--no)}
-button.ok,button.no{color:#fff}
-pre{white-space:pre-wrap;word-break:break-word;font-size:.85rem}
-.err{color:var(--no)}.flash{color:var(--ok)}
-nav{display:flex;gap:1rem;margin:0 0 1rem;font-size:.95rem}
-</style></head><body><main>{{end}}
+h1{font-size:1.35rem;margin:.5rem 0 1rem;color:var(--ink-100)}
+.card{background:var(--surface-800);border:1px solid var(--surface-600);border-radius:14px;padding:1rem;margin:0 0 .75rem}
+.mut{color:var(--ink-500);font-size:.9rem}
+a{color:var(--brand-500);text-decoration:none;font-weight:500}
+a:hover{text-decoration:underline}
+.act{display:block;text-align:center;margin:.5rem 0 0;padding:.75rem;border-radius:10px;background:var(--brand-500);color:#fff}
+.act:hover{text-decoration:none;filter:brightness(1.08)}
+.ref{text-decoration:underline;font-weight:400}
+input[type=text],input[type=password]{width:100%;font-size:1.2rem;padding:.7rem;border:1px solid var(--surface-600);border-radius:10px;background:var(--surface-900);color:var(--ink-100)}
+input[type=text]{letter-spacing:.15em;text-transform:uppercase}
+button{display:block;width:100%;font-size:1.1rem;padding:.9rem;border:0;border-radius:10px;margin:.5rem 0;cursor:pointer;color:#fff;background:var(--brand-500)}
+button.ok{background:var(--accent-500)}button.no{background:var(--reject)}
+pre{white-space:pre-wrap;word-break:break-word;font-size:.85rem;color:var(--ink-100)}
+.err{color:var(--reject)}.flash{color:var(--accent-500)}
+nav{display:flex;flex-wrap:wrap;gap:.5rem;margin:0 0 1rem;font-size:.95rem}
+nav a{padding:.35rem .8rem;border-radius:999px;border:1px solid var(--surface-600);background:var(--surface-800);color:var(--ink-300)}
+nav a:hover{text-decoration:none;border-color:var(--brand-500)}
+nav a[aria-current=page]{background:var(--brand-500);border-color:var(--brand-500);color:#fff}
+.summary{font-size:1.1rem;margin:0 0 .5rem;color:var(--ink-100)}
+.risk{display:inline-block;margin:0 0 .25rem;padding:.15rem .6rem;border-radius:999px;font-size:.95rem;border:1px solid var(--surface-600)}
+.risk-Low{background:color-mix(in srgb,var(--accent-500) 18%,transparent)}
+.risk-Medium{background:color-mix(in srgb,#ca8a04 25%,transparent)}
+.risk-High{background:color-mix(in srgb,var(--reject) 22%,transparent)}
+.reasons{margin:.25rem 0 0;padding-left:1.2rem}
+.pick{display:flex;gap:.6rem;align-items:flex-start}.pick input{width:1.4rem;height:1.4rem;margin-top:.15rem}
+</style></head><body>
+<header><img src="/ui/static/icon.svg" alt=""><strong>Vornik approvals</strong></header>
+<main>{{end}}
 {{define "foot"}}</main></body></html>{{end}}

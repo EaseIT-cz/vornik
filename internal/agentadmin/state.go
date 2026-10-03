@@ -16,6 +16,11 @@ type State struct {
 	// approves a raise).
 	DefaultBudgetUSD float64
 	CeilingUSD       float64
+	// PendingAddsUSD is the sum of AddsUSD of the namespace's OTHER waiting
+	// requests that add spending (project creations and budget raises; never
+	// a device enrolment or a credential slot): the conditional figure of a
+	// ceiling sentence (design §18.4 item 3). A snapshot, not the guarantee.
+	PendingAddsUSD float64
 	// AgentImage is the runtime image agent roles run in.
 	AgentImage string
 	// WritesOn is the daemon's broker.writes: proposals need it (P4.8).
@@ -28,11 +33,24 @@ type State struct {
 	FileHashes map[string]string
 	// Locked holds every path and entity ID a pending change holds.
 	Locked map[string]bool
+	// LockedBy names, per lock, the waiting request that holds it ("<id>
+	// (<kind>)"), so a refusal can say which approval to wait for (design
+	// §18.2). Optional: a lock without an entry is refused without a name.
+	LockedBy map[string]string
 	// Approvals maps project ID → integration name → its approval.
 	Approvals map[string]map[string]IntegrationApproval
 	// Advertised maps an MCP server URL to the tools it advertised when the
 	// caller listed them for this verb call; absent means "could not list".
 	Advertised map[string][]string
+	// models is the operator's model catalogue (agent_admin.models), each
+	// entry classified against the live router when the state was read
+	// (design §18.6 item 2). Empty: no model is offered. It is set only by
+	// UseModelCatalogue, so it is always BuildCatalogue's output (review
+	// 20261003-a525 A3; a source test pins it).
+	models map[string]CatalogueModel
+	// ApprovedDestinations holds the namespace's live (not removed) model
+	// destination approvals, "<sub-provider>@<endpoint host>".
+	ApprovedDestinations map[string]bool
 }
 
 // ProjectState is one agent project as loaded.
@@ -64,6 +82,9 @@ type RoleSpec struct {
 	Description  string
 	Instructions string
 	Tools        []string
+	// Model is the role's model from the catalogue; "" runs the operator's
+	// global agent model (design §18.6 item 2).
+	Model string
 }
 
 // ServerState is one project-scoped MCP server as rendered.
@@ -121,4 +142,13 @@ func (s *State) workflowsOf(project string) []string {
 	}
 	sort.Strings(out)
 	return out
+}
+
+// UseModelCatalogue classifies the operator's catalogue (BuildCatalogue) into
+// the state and returns the entries not offered. The one way a State gets
+// its models.
+func (s *State) UseModelCatalogue(specs []ModelSpec, resolve ModelResolver, price ModelPricer) []CatalogueFinding {
+	cat, findings := BuildCatalogue(specs, resolve, price)
+	s.models = cat
+	return findings
 }

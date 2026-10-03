@@ -17,10 +17,42 @@ import (
 // reproducible; a retry at the same temperature would repeat it exactly.
 const retryTemperature = 0.7
 
+// bodyWatch watches completion request bodies for one text: the H3f arm's
+// check that a forgotten fact is absent from the prefetch block, which
+// reaches the model only inside the request (design 24, 0.8.0).
+type bodyWatch struct {
+	wmu  sync.Mutex
+	text string
+	seen bool
+}
+
+// Watch starts watching for text and forgets what was seen before.
+func (b *bodyWatch) Watch(text string) {
+	b.wmu.Lock()
+	b.text, b.seen = text, false
+	b.wmu.Unlock()
+}
+
+// WatchSeen reports whether a request since Watch carried the text.
+func (b *bodyWatch) WatchSeen() bool {
+	b.wmu.Lock()
+	defer b.wmu.Unlock()
+	return b.seen
+}
+
+func (b *bodyWatch) inspect(body []byte) {
+	b.wmu.Lock()
+	if b.text != "" && bytes.Contains(body, []byte(b.text)) {
+		b.seen = true
+	}
+	b.wmu.Unlock()
+}
+
 // ToolRecorder sits between Hermes and llama.cpp. It records the tools
 // Hermes offers the model (Hermes's session store does not keep them) and
 // re-samples retries (lane design, As built).
 type ToolRecorder struct {
+	bodyWatch
 	proxy *httputil.ReverseProxy
 
 	mu        sync.Mutex
@@ -64,6 +96,7 @@ func (r *ToolRecorder) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
+		r.inspect(body)
 		body = r.observe(body)
 		req.Body = io.NopCloser(bytes.NewReader(body))
 		req.ContentLength = int64(len(body))

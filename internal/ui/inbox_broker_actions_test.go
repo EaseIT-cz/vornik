@@ -277,6 +277,10 @@ func TestBrokerActionHandlers_UseTheSharedGate(t *testing.T) {
 	if strings.Count(s, "s.brokerActionGate(w, r, actionID)") != 2 {
 		t.Error("approve and reject must both go through brokerActionGate")
 	}
+	// The batch (approval fatigue tier 1) uses the same two halves.
+	if strings.Count(s, "s.brokerRequestGate(w, r)") != 2 || strings.Count(s, "s.brokerRowGate(r, actionID)") != 2 {
+		t.Error("the gate and the batch must share brokerRequestGate and brokerRowGate")
+	}
 }
 
 func TestBrokerActionApprove_OtherProjectsCallerIsRefused(t *testing.T) {
@@ -437,5 +441,39 @@ func TestBrokerActionInbox_RefusesAgentProjectActions(t *testing.T) {
 	}
 	if cards := srv.loadPendingBrokerActions(httptest.NewRequest(http.MethodGet, "/ui/inbox", nil)); len(cards) != 0 {
 		t.Fatalf("/inbox lists an agent action: %+v", cards)
+	}
+}
+
+// Approval fatigue tier 1 (broker write-actions design, review 5c20,
+// 2026-10-03): /inbox decides several ticked writes in one POST, each bound
+// to the hash its card showed; a stale one is refused and named, the others
+// proceed; a cross-site POST decides nothing.
+func TestBrokerActionBatch_EachBoundToItsHash(t *testing.T) {
+	a := pendingBrokerActionFixture()
+	b := pendingBrokerActionFixture()
+	b.ActionID, b.ArgsSHA256 = "ba_test_2", "hash_b"
+	repo := newUIFakeBrokerActionRepo(a, b)
+	var kicked []string
+	srv := brokerActionServer(repo, &kicked)
+
+	cross := brokerActionPost("/ui/inbox/broker-actions/batch", url.Values{"decision": {"approve"}, "pick": {"ba_test_1|hash_shown"}})
+	cross.Header.Set("Sec-Fetch-Site", "cross-site")
+	rec := httptest.NewRecorder()
+	srv.BrokerActionBatch(rec, cross)
+	if rec.Code != http.StatusForbidden || len(repo.approve) != 0 {
+		t.Fatalf("cross-site batch: %d, store %v", rec.Code, repo.approve)
+	}
+
+	rec = httptest.NewRecorder()
+	srv.BrokerActionBatch(rec, brokerActionPost("/ui/inbox/broker-actions/batch", url.Values{
+		"decision": {"approve"}, "pick": {"ba_test_1|hash_shown", "ba_test_2|stale"}}))
+	if rec.Code != http.StatusSeeOther {
+		t.Fatalf("batch = %d", rec.Code)
+	}
+	if len(kicked) != 1 || kicked[0] != "ba_test_1" {
+		t.Fatalf("kicked %v, want [ba_test_1]", kicked)
+	}
+	if loc := rec.Header().Get("Location"); !strings.Contains(loc, "ba_test_2") {
+		t.Fatalf("the refused write is not named: %s", loc)
 	}
 }

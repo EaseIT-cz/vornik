@@ -5,12 +5,15 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/rs/zerolog"
+	"vornik.io/vornik/internal/agentuser"
 	"vornik.io/vornik/internal/projectdeps"
 	"vornik.io/vornik/internal/spawn"
 )
@@ -23,6 +26,9 @@ import (
 // driving an unbounded pre-allocation (CodeQL go/uncontrolled-allocation-size).
 // append still grows the slice past this bound for any legitimate size.
 const maxPodmanArgs = 4096
+
+// synthesisedUserLogMsg is R7's log line, emitted once per image id.
+const synthesisedUserLogMsg = "agent --user synthesised from the daemon uid (D5)"
 
 // PodmanNotAvailableError is returned when podman is not found or not running.
 type PodmanNotAvailableError struct {
@@ -47,7 +53,8 @@ func (e *ContainerNotFoundError) Error() string {
 }
 
 // Manager controls local Podman agent runtimes.
-// It is stateless - all state is derived from Podman via labels.
+// It is stateless - all state is derived from Podman via labels - except
+// synthLogged, a log-once set (D5 R7) whose loss only repeats a log line.
 type Manager struct {
 	// podmanPath is the path to the podman binary.
 	podmanPath string
@@ -88,6 +95,26 @@ type Manager struct {
 	// starts. Empty means trust the image's USER directive. A typical value
 	// is "1000:1000" to guarantee non-root even if an image regresses.
 	runAsUser string
+
+	// daemonUID, daemonGID and rootless are the daemon's own identity, which
+	// the D5 resolver (internal/agentuser) needs: with run_as_user empty, a
+	// rootless keep-id attempt of a uid-agnostic image runs as daemonUID:GID
+	// (onboarding-hardening-design.md, D5 R3). New() records them from the
+	// process; a zero Manager is rootful, so it never synthesises a --user.
+	daemonUID int
+	daemonGID int
+	rootless  bool
+
+	// imageLabelFunc reads an image's id and whether it carries the
+	// uid-agnostic label. Nil uses readImageUIDAgnostic (one `podman image
+	// inspect`). A seam so tests need no podman.
+	imageLabelFunc func(ctx context.Context, image string) (imageID string, uidAgnostic bool, err error)
+
+	// synthLogged holds the image ids whose synthesised --user has been
+	// logged (R7: once per image id). The one piece of in-memory state the
+	// Manager keeps; losing it on restart only repeats a log line.
+	synthMu     sync.Mutex
+	synthLogged map[string]bool
 
 	// daemonSocketPath is the host-side path to the daemon's unix
 	// socket (server.unix_socket). When set, NetworkDaemonOnly
@@ -244,6 +271,10 @@ func New(opts ...ManagerOption) (*Manager, error) {
 	m := &Manager{
 		defaultTimeout: 60 * time.Second,
 		logger:         zerolog.Nop(),
+		// The daemon's identity, for the D5 resolver (R3).
+		daemonUID: os.Getuid(),
+		daemonGID: os.Getgid(),
+		rootless:  os.Geteuid() != 0,
 	}
 
 	for _, opt := range opts {
@@ -567,10 +598,12 @@ func (m *Manager) StartContainer(ctx context.Context, config *ContainerConfig) (
 	// If the operator explicitly chose a userns mode, honour it with a single
 	// attempt (no auto-fallback — they know what they want).  If the failure
 	// is the pause-process issue, try "podman system migrate" once and retry.
+	//
+	// The D5 resolver is applied PER ATTEMPT (attemptArgs): a configured
+	// keep-id and the chain's keep-id attempt both get the synthesised --user;
+	// the default attempt never does (onboarding-hardening-design.md D5 R1).
 	if m.userNSMode != "" {
-		args := make([]string, 0, min(len(preImageArgs)+3, maxPodmanArgs))
-		args = append(args, preImageArgs...)
-		args = append(args, "--userns", m.userNSMode, config.Image)
+		args := m.attemptArgs(ctx, config, preImageArgs, m.userNSMode, m.userNSMode)
 		id, err := m.runStartAttempt(ctx, config, args, m.userNSMode, start)
 		if err != nil && m.tryMigrateOnPauseError(ctx, []byte(err.Error())) {
 			return m.runStartAttempt(ctx, config, args, m.userNSMode, start)
@@ -593,12 +626,7 @@ func (m *Manager) StartContainer(ctx context.Context, config *ContainerConfig) (
 	}
 
 	for i, try := range tries {
-		args := make([]string, 0, min(len(preImageArgs)+3, maxPodmanArgs))
-		args = append(args, preImageArgs...)
-		if try.userns != "" {
-			args = append(args, "--userns", try.userns)
-		}
-		args = append(args, config.Image)
+		args := m.attemptArgs(ctx, config, preImageArgs, try.userns, try.label)
 
 		if i == 0 {
 			m.logger.Info().
@@ -624,12 +652,7 @@ func (m *Manager) StartContainer(ctx context.Context, config *ContainerConfig) (
 			// pause process, run "podman system migrate" and retry the
 			// last mode once more before giving up.
 			if m.tryMigrateOnPauseError(ctx, output) {
-				retryArgs := make([]string, 0, min(len(preImageArgs)+3, maxPodmanArgs))
-				retryArgs = append(retryArgs, preImageArgs...)
-				if try.userns != "" {
-					retryArgs = append(retryArgs, "--userns", try.userns)
-				}
-				retryArgs = append(retryArgs, config.Image)
+				retryArgs := m.attemptArgs(ctx, config, preImageArgs, try.userns, try.label+" (post-migrate)")
 				return m.runStartAttempt(ctx, config, retryArgs, try.label+" (post-migrate)", start)
 			}
 			m.recordPodmanError("start")
@@ -718,6 +741,114 @@ func (m *Manager) runStartAttempt(ctx context.Context, config *ContainerConfig, 
 	return containerID, nil
 }
 
+// readImageUIDAgnostic is the default imageLabelFunc (D5 R5): one `podman
+// image inspect` of the pinned image for its id and labels (57 ms on the
+// 1.3 GB image, measured 2026-09-18). The label is presence-based, through the
+// same agentuser.UIDAgnostic the doctor uses.
+func (m *Manager) readImageUIDAgnostic(ctx context.Context, image string) (string, bool, error) {
+	c, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	out, err := m.podman(c, "image", "inspect", "--format", "{{.Id}}\t{{json .Labels}}", image)
+	if err != nil {
+		return "", false, fmt.Errorf("podman image inspect %s: %w (%s)", image, err, strings.TrimSpace(string(out)))
+	}
+	id, raw, ok := strings.Cut(strings.TrimSpace(string(out)), "\t")
+	if !ok || strings.TrimSpace(id) == "" {
+		return "", false, fmt.Errorf("podman image inspect %s: unexpected output %q", image, strings.TrimSpace(string(out)))
+	}
+	var labels map[string]string
+	if err := json.Unmarshal([]byte(raw), &labels); err != nil {
+		return "", false, fmt.Errorf("podman image inspect %s: labels: %w", image, err)
+	}
+	return strings.TrimSpace(id), agentuser.UIDAgnostic(labels), nil
+}
+
+// synthesisedUser applies the D5 resolver (internal/agentuser, R3) to ONE
+// podman run attempt and returns the --user to add for it, or "" for none.
+//
+// Only the label row adds anything here: a configured run_as_user is already
+// in the pre-image args (so it appears once), and every other row means "the
+// image's own USER". The label is read only when the resolver says it
+// matters — rootless, keep-id, run_as_user empty — so the default attempt of
+// the fallback chain and every rootful start cost no inspect.
+//
+// The inspect runs on every label-eligible attempt rather than being cached
+// by image reference: a re-pull or retag gives a new image id, and the id can
+// only be learned by the same inspect. What is kept per image id is the R7
+// log line. An image that is not local yet (podman run would pull it) cannot
+// be inspected, so that one start falls back to the image's USER, as before
+// D5, with a warning naming why.
+func (m *Manager) synthesisedUser(ctx context.Context, image, userns, attempt string) string {
+	if _, why := agentuser.Resolve(m.runAsUser, userns, m.rootless, false, m.daemonUID, m.daemonGID); why != agentuser.ReasonUnlabelled {
+		return ""
+	}
+	read := m.imageLabelFunc
+	if read == nil {
+		read = m.readImageUIDAgnostic
+	}
+	id, agnostic, err := read(ctx, image)
+	if err != nil {
+		m.logger.Warn().Err(err).
+			Str("image", image).
+			Str("attempt", attempt).
+			Msg("could not read the agent image's uid-agnostic label; starting with the image's own USER (D5)")
+		return ""
+	}
+	user, why := agentuser.Resolve(m.runAsUser, userns, m.rootless, agnostic, m.daemonUID, m.daemonGID)
+	if !why.Synthesised() {
+		return ""
+	}
+	m.synthMu.Lock()
+	first := !m.synthLogged[id]
+	if first {
+		if m.synthLogged == nil {
+			m.synthLogged = map[string]bool{}
+		}
+		m.synthLogged[id] = true
+	}
+	m.synthMu.Unlock()
+	if first {
+		m.logger.Info().
+			Str("image", image).
+			Str("image_id", id).
+			Int("daemon_uid", m.daemonUID).
+			Str("attempt", attempt).
+			Str("reason", string(why)).
+			Str("user", user).
+			Msg(synthesisedUserLogMsg)
+	}
+	return user
+}
+
+// attemptArgs builds the full argv of one podman run attempt: the pre-image
+// args, the attempt's --userns, the D5 --user when the resolver synthesises
+// one (exactly once, before the image), then the image.
+func (m *Manager) attemptArgs(ctx context.Context, config *ContainerConfig, preImageArgs []string, userns, attempt string) []string {
+	args := make([]string, 0, min(len(preImageArgs)+5, maxPodmanArgs))
+	args = append(args, preImageArgs...)
+	if userns != "" {
+		args = append(args, "--userns", userns)
+	}
+	if user := m.synthesisedUser(ctx, config.Image, userns, attempt); user != "" {
+		args = append(args, "--user", user)
+	}
+	return append(args, config.Image)
+}
+
+// RunArgsForTest returns the argv StartContainer would run for one userns
+// attempt ("" = the default namespace). The podman e2e lane uses it to run
+// `id -u` with exactly the flags the runtime builds (D5 R8).
+func (m *Manager) RunArgsForTest(ctx context.Context, config *ContainerConfig, userns string) ([]string, error) {
+	if err := config.Validate(); err != nil {
+		return nil, err
+	}
+	label := userns
+	if label == "" {
+		label = "default"
+	}
+	return m.attemptArgs(ctx, config, m.buildPreImageArgs(config), userns, label), nil
+}
+
 func (m *Manager) runPodmanCommand(ctx context.Context, args []string) ([]byte, error) {
 	return m.podman(ctx, args...)
 }
@@ -743,12 +874,11 @@ func (m *Manager) podman(ctx context.Context, args ...string) ([]byte, error) {
 	return cmd.CombinedOutput()
 }
 
+// isRootlessUserNSError is the fallback chain's trigger. The classifier lives
+// in internal/agentuser so the doctor's throwaway default-namespace start (D5
+// R6) decides "would the runtime reach keep-id" by the same rule.
 func isRootlessUserNSError(output []byte) bool {
-	msg := strings.ToLower(string(output))
-	return strings.Contains(msg, "newuidmap") ||
-		strings.Contains(msg, "newgidmap") ||
-		strings.Contains(msg, "unable to create a new pause process") ||
-		strings.Contains(msg, "cannot set up namespace")
+	return agentuser.IsUserNSSetupError(output)
 }
 
 // isPauseProcessError returns true when the failure is Podman's

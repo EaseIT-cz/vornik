@@ -45,6 +45,14 @@ type stack struct {
 	agentMail    *MCPStub
 	bankURL      string
 	agentMailURL string
+	// cfgEdit, when set, rewrites config.yaml before the daemon starts (an
+	// arm that needs other chat or agent_admin settings, design §18.6 item
+	// 2); daemon, daemonCmd and daemonLogf let restartDaemon replace it.
+	cfgEdit   func(string) string
+	cfgFiles  map[string]string // extra files under configs/, written before boot
+	daemon    string
+	daemonCmd *exec.Cmd
+	daemonOut *os.File
 }
 
 // The stub mailbox: one invoice message whose body carries the sentinel.
@@ -131,12 +139,17 @@ func writeConfigs(t *testing.T, s *stack, pgPort, apiPort int, llmURL, readURL, 
 	}
 	// The agent admin verbs render from the shipped templates, which a
 	// deployment installs with make install-config-assets (plan P8).
-	tmpls, err := os.ReadDir(filepath.Join(root, "configs", "agent-templates"))
-	if err != nil {
+	// The tree descends: the recipes catalogue is a subtree (design §19).
+	src := filepath.Join(root, "configs", "agent-templates")
+	if err := filepath.WalkDir(src, func(path string, d os.DirEntry, err error) error {
+		if err != nil || d.IsDir() {
+			return err
+		}
+		rel, _ := filepath.Rel(src, path)
+		copyFile(t, path, filepath.Join(cfgDir, "configs", "agent-templates", rel))
+		return nil
+	}); err != nil {
 		t.Fatal(err)
-	}
-	for _, e := range tmpls {
-		copyFile(t, filepath.Join(root, "configs", "agent-templates", e.Name()), filepath.Join(cfgDir, "configs", "agent-templates", e.Name()))
 	}
 	swarm, err := os.ReadFile(filepath.Join(root, "configs", "swarms", "broker-swarm.md"))
 	if err != nil {
@@ -246,6 +259,12 @@ mcp:
 		filepath.Join(s.dir, "artifacts"), filepath.Join(s.dir, "artifacts"),
 		s.adminKey, s.adminKey, llmURL, scriptedModel, llmURL, embeddingDim, agentImage(),
 		filepath.Join(s.dir, "workspaces"), scriptedModel)
+	if s.cfgEdit != nil {
+		cfg = s.cfgEdit(cfg)
+	}
+	for rel, content := range s.cfgFiles {
+		writeFile(t, filepath.Join(cfgDir, "configs", rel), content)
+	}
 	path := filepath.Join(cfgDir, "config.yaml")
 	writeFile(t, path, cfg)
 	return path
@@ -254,8 +273,15 @@ mcp:
 // startStack brings the Vornik side up and mints the two Hermes keys.
 func startStack(t *testing.T) *stack {
 	t.Helper()
+	return startStackWith(t, nil, nil)
+}
+
+// startStackWith is startStack with config.yaml rewritten by edit and files
+// (paths under configs/) written first.
+func startStackWith(t *testing.T, edit func(string) string, files map[string]string) *stack {
+	t.Helper()
 	requirePodman(t)
-	s := &stack{dir: t.TempDir(), adminKey: randomKey(t)}
+	s := &stack{dir: t.TempDir(), adminKey: randomKey(t), cfgEdit: edit, cfgFiles: files}
 	pgPort := startPostgres(t)
 	s.pgPort = pgPort
 
@@ -279,28 +305,16 @@ func startStack(t *testing.T) *stack {
 		fmt.Sprintf("http://127.0.0.1:%d/mcp", sendPort))
 
 	daemon, ctl := buildBinaries(t, s.dir)
-	s.ctl, s.cfgPath = ctl, cfgPath
+	s.ctl, s.cfgPath, s.daemon = ctl, cfgPath, daemon
 	s.daemonLog = filepath.Join(s.dir, "daemon.log")
 	logf, err := os.Create(s.daemonLog)
 	if err != nil {
 		t.Fatal(err)
 	}
-	cmd := exec.Command(daemon)
-	cmd.Env = cleanEnv("VORNIK_CONFIG="+cfgPath, "VORNIK_CONFIGS_DIR="+filepath.Join(filepath.Dir(cfgPath), "configs"),
-		"VORNIK_DATA_DIR="+filepath.Join(s.dir, "data"))
-	cmd.Stdout, cmd.Stderr = logf, logf
-	if err := cmd.Start(); err != nil {
-		t.Fatal(err)
-	}
+	s.daemonOut = logf
+	s.startDaemon(t)
 	t.Cleanup(func() {
-		_ = cmd.Process.Signal(os.Interrupt)
-		done := make(chan struct{})
-		go func() { _ = cmd.Wait(); close(done) }()
-		select {
-		case <-done:
-		case <-time.After(20 * time.Second):
-			_ = cmd.Process.Kill()
-		}
+		s.stopDaemon()
 		_ = logf.Close()
 		if keep := os.Getenv("VORNIK_E2E_KEEP"); keep != "" {
 			_ = os.MkdirAll(keep, 0o755)
@@ -319,7 +333,7 @@ func startStack(t *testing.T) *stack {
 	// Guard: the daemon must have loaded exactly the lane's projects. Any
 	// other project means it reached a real configuration; stop at once.
 	if got := listProjects(t, s.apiURL, s.adminKey); strings.Join(got, ",") != "assistant-memory,broker-mail" {
-		_ = cmd.Process.Kill()
+		_ = s.daemonCmd.Process.Kill()
 		t.Fatalf("the test daemon loaded projects %v, not only the lane's own: refusing to continue", got)
 	}
 
@@ -328,6 +342,52 @@ func startStack(t *testing.T) *stack {
 	s.memoryKey = grantKey(t, ctl, s.apiURL, s.adminKey, "--project", "assistant-memory", "--client", "hermes",
 		"--memory-all", "--no-delegate")
 	return s
+}
+
+// startDaemon starts the lane daemon with the allowlisted environment.
+func (s *stack) startDaemon(t *testing.T) {
+	t.Helper()
+	cmd := exec.Command(s.daemon)
+	cmd.Env = cleanEnv("VORNIK_CONFIG="+s.cfgPath, "VORNIK_CONFIGS_DIR="+filepath.Join(filepath.Dir(s.cfgPath), "configs"),
+		"VORNIK_DATA_DIR="+filepath.Join(s.dir, "data"))
+	cmd.Stdout, cmd.Stderr = s.daemonOut, s.daemonOut
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	s.daemonCmd = cmd
+}
+
+// stopDaemon interrupts the running daemon and waits for it.
+func (s *stack) stopDaemon() {
+	cmd := s.daemonCmd
+	if cmd == nil || cmd.Process == nil {
+		return
+	}
+	_ = cmd.Process.Signal(os.Interrupt)
+	done := make(chan struct{})
+	go func() { _ = cmd.Wait(); close(done) }()
+	select {
+	case <-done:
+	case <-time.After(20 * time.Second):
+		_ = cmd.Process.Kill()
+		<-done
+	}
+	s.daemonCmd = nil
+}
+
+// restartDaemon stops the daemon, rewrites config.yaml with edit, and starts
+// it again on the same database and tree, as an operator's config edit and
+// restart do.
+func (s *stack) restartDaemon(t *testing.T, edit func(string) string) {
+	t.Helper()
+	s.stopDaemon()
+	raw, err := os.ReadFile(s.cfgPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, s.cfgPath, edit(string(raw)))
+	s.startDaemon(t)
+	waitFor(t, "the restarted vornik daemon", 2*time.Minute, func() bool { return httpOK(s.apiURL + "/health") })
 }
 
 // listProjects returns the daemon's project ids, sorted.

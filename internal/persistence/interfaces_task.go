@@ -238,11 +238,18 @@ type ReleaseOptions struct {
 	Error string
 
 	// ErrorClass is the typed classification that accompanies Error.
-	// See persistence.TaskFailureClass* constants. Empty preserves the
-	// existing column when a caller hasn't (yet) been updated to
-	// classify its failures — enables progressive rollout across
-	// release paths (executor, scheduler recovery, autonomy guards).
+	// See persistence.TaskFailureClass* constants. Empty CLEARS the column
+	// (both drivers write NULL), unless KeepErrorClass is set. This comment
+	// said "empty preserves" until 2026-10-03, which no driver did; the
+	// scheduler's terminal release relied on it and erased the executor's
+	// class (permanent-failure design, amendment 2026-10-03).
 	ErrorClass string
+
+	// KeepErrorClass keeps the stored class when ErrorClass is empty. Set
+	// only by the scheduler's terminal release when its classifier deferred
+	// to a class already on the row; a requeue for retry leaves it false so
+	// a later attempt is not judged by an earlier attempt's class.
+	KeepErrorClass bool
 }
 
 // The execution error_code an orphan sweep stamps. Constants rather than the

@@ -22,6 +22,7 @@ const timestampDataMigration = "2026-10-01-fixed-width-timestamps"
 // _at. Found by walking the migrated schema (design D4).
 var timestampExtraColumns = map[string]bool{
 	"agent_approval_requests.apply_lease_until": true,
+	"approver_devices.share_until":              true,
 	"cluster_nodes.last_seen":                   true,
 	"cost_tuning_canaries.window_until":         true,
 	"project_memory_chunks.event_time":          true,

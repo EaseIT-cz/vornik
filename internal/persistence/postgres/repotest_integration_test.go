@@ -1057,10 +1057,11 @@ func TestAgentModelDestination_PostgresContract(t *testing.T) {
 func TestApproverDevice_PostgresContract(t *testing.T) {
 	shared := newIntegrationDB(t)
 	// The approver tables: created by 206, extended by 207, 209, 211 and 212
-	// (the Hermes approval transport's host_action kind and decided_choice).
+	// (the Hermes approval transport's host_action kind and decided_choice)
+	// and 215 (rotation sharing and dead-value recognition, P1 2026-10-05).
 	// Named, not "everything from 206 on": a later migration altering another
 	// table (208 alters api_keys) has nothing to alter in a fresh schema.
-	approverMigrations := map[int]bool{206: true, 207: true, 209: true, 211: true, 212: true}
+	approverMigrations := map[int]bool{206: true, 207: true, 209: true, 211: true, 212: true, 215: true}
 	var ups []string
 	for _, m := range persistence.DefaultMigrations {
 		if approverMigrations[m.Version] {

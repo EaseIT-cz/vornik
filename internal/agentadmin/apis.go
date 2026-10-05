@@ -23,22 +23,24 @@ type AddAPIInput struct {
 	Writes bool `json:"writes,omitempty"`
 }
 
-// APIAuthInput names the header a credential is injected into.
+// APIAuthInput names where a credential is injected.
 type APIAuthInput struct {
-	Header     string `json:"header,omitempty"`     // default Authorization
-	Credential string `json:"credential,omitempty"` // the credential NAME; empty = none
-	Prefix     string `json:"prefix,omitempty"`     // e.g. "Bearer "
+	Header     string `json:"header,omitempty"`      // default Authorization
+	QueryParam string `json:"query_param,omitempty"` // e.g. "key" for legacy Google Maps
+	Credential string `json:"credential,omitempty"`  // the credential NAME; empty = none
+	Prefix     string `json:"prefix,omitempty"`      // e.g. "Bearer "; header auth only
 }
 
 // APIState is one project REST provider as rendered.
 type APIState struct {
-	Name, BaseURL, Header, AuthRef, Prefix string
-	Methods                                []string
-	Writes                                 bool
+	Name, BaseURL, Header, QueryParam, AuthRef, Prefix string
+	Methods                                            []string
+	Writes                                             bool
 }
 
 var (
 	apiHeaderRe        = regexp.MustCompile(`^[A-Za-z0-9-]{1,64}$`)
+	apiQueryParamRe    = regexp.MustCompile(`^[A-Za-z0-9_.-]{1,64}$`)
 	apiMethodOrder     = []string{"GET", "HEAD", "POST", "PUT", "PATCH", "DELETE"}
 	apiReservedHeaders = map[string]bool{"host": true, "content-length": true, "transfer-encoding": true,
 		"connection": true, "cookie": true, "te": true, "upgrade": true}
@@ -133,13 +135,27 @@ func apiStateFrom(ns string, in AddAPIInput) (APIState, string) {
 	api := APIState{Name: in.Name, BaseURL: strings.TrimRight(in.BaseURL, "/"), Methods: append(append([]string(nil), read...), write...), Writes: in.Writes}
 	a := in.Auth
 	if a.Credential == "" {
-		if a.Header != "" || a.Prefix != "" {
+		if a.Header != "" || a.QueryParam != "" || a.Prefix != "" {
 			return APIState{}, "auth needs a credential"
 		}
 		return api, ""
 	}
 	if !credentialRe.MatchString(a.Credential) {
 		return APIState{}, fmt.Sprintf("credential %q must be A-Z, 0-9 or _ and start with a letter", a.Credential)
+	}
+	if a.Header != "" && a.QueryParam != "" {
+		return APIState{}, "auth must use either header or query_param, not both"
+	}
+	if a.QueryParam != "" {
+		if !apiQueryParamRe.MatchString(a.QueryParam) {
+			return APIState{}, fmt.Sprintf("query_param %q is not usable", a.QueryParam)
+		}
+		if a.Prefix != "" {
+			return APIState{}, "prefix is only usable with header auth"
+		}
+		api.QueryParam = a.QueryParam
+		api.AuthRef = "secret://" + ns + "/" + a.Credential
+		return api, ""
 	}
 	api.Header = a.Header
 	if api.Header == "" {

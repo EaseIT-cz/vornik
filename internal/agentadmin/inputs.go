@@ -117,6 +117,8 @@ var (
 	credentialRe  = regexp.MustCompile(`^[A-Z][A-Z0-9_]{0,63}$`)
 	toolNameRe    = regexp.MustCompile(`^[A-Za-z0-9_.-]{1,128}$`)
 	scopeRe       = regexp.MustCompile(`^[A-Za-z0-9:._/-]{1,128}$`)
+	outPathRe     = regexp.MustCompile(`artifacts/out/[A-Za-z0-9_/-]([A-Za-z0-9._/-]*[A-Za-z0-9_/-])?`)
+	outIntentRe   = regexp.MustCompile(`(?i)\b(write|save|put|place|emit|output|produce|store|hand-?off)\b[^.!?\n]{0,60}\b(to|into|as|at)\s*$`)
 	maxTextRunes  = 8000
 	maxShortRunes = 300
 )

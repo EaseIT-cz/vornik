@@ -11,7 +11,7 @@ sources:
 ---
 # Let your assistant set up Vornik
 
-You can let an AI assistant (Hermes, Claude Desktop, Claude Code or Codex) build your automations for you through Vornik. It can create projects and workflows, and connect your mail, bank, calendar or any other service that has an MCP server or a REST API. It then runs that work for you.
+You can let an AI assistant (Hermes, Claude Desktop, Claude Code or Codex) build your automations for you through Vornik. For Hermes, start with [Set up Hermes with Vornik](hermes-setup.md): its default is the narrower broker setup, and this page is the opt-in. It can create projects and workflows, and connect your mail, bank, calendar or any other service that has an MCP server or a REST API. It then runs that work for you.
 
 Vornik is the safety harness around it:
 
@@ -43,6 +43,13 @@ What it does receive is what you asked for. If you ask "summarise my spending", 
    Open the printed address on your phone and enter the code. The phone is now what approves everything the assistant asks for. Without a paired phone, no assistant can be connected.
 
    **Do this yourself, never through the assistant.** The first phone is paired by the code alone, so an assistant that runs this command, or sees its output, could pair itself as the approver of its own requests.
+
+   **If the phone later shows the pairing page instead of your approvals,** the page says why:
+
+   - **The answer to its last approval did not reach it.** For example, you switched apps or lost the connection mid-tap. Run `vornikctl pair-device` again and enter the new code on that phone. It restores the same device; nothing needs revoking.
+   - **Another browser used its sign-in.** A code alone does not restore it: a device you already use must approve it again. If you did not expect this, revoke the device first (`vornikctl devices revoke`).
+
+   Vornik renews the phone's sign-in on every approval, so a copied sign-in stops working at your next approval. Every restore, and a browser that keeps using the phone's sign-in, raises an alert on your notification channel.
 
 2. Make sure your `vornikctl` can reach Vornik with the operator's admin key, as for any other admin command (`VORNIK_API_KEY`, or `vornikctl auth login`).
 
@@ -101,11 +108,13 @@ The assistant can run on your laptop while Vornik runs on a server.
 
 - Connect **on the laptop**, as the user the assistant runs as.
 - Pass Vornik's HTTPS address with `--url`. Connect refuses plain HTTP to another machine. A tunnel or a reverse proxy with a certificate both work.
-- `connect` needs the operator's admin key for this one command. Put it in that command's environment only, from a terminal the assistant does not control:
+- `connect` needs the operator's admin key for this one command. Put it in that command's environment only, from a terminal the assistant does not control, and read it so it is not on a command line or in your shell history:
 
   ```
-  VORNIK_API_KEY=<admin key> vornikctl agent connect claude-code --url https://vornik.example --dry-run
-  VORNIK_API_KEY=<admin key> vornikctl agent connect claude-code --url https://vornik.example
+  read -rs VORNIK_API_KEY && export VORNIK_API_KEY     # paste the admin key
+  vornikctl agent connect claude-code --url https://vornik.example --dry-run
+  vornikctl agent connect claude-code --url https://vornik.example
+  unset VORNIK_API_KEY
   ```
 
 - **Which name to use for Claude.**
@@ -117,6 +126,8 @@ The assistant can run on your laptop while Vornik runs on a server.
 ## Assistants that run as a service
 
 If the assistant runs as its own service user (for example a Hermes gateway under systemd), run `vornikctl agent connect` **as that user**, so the key file and the config entry belong to it. The bridge refuses a key file owned by anyone else and says so.
+
+That user needs a `vornikctl` it can execute at a path that stays put, because connect records the path into the assistant's config, and the admin key for the one connect command, since your own sign-in lives in your home. [Set up Hermes with Vornik](hermes-setup.md#admin-setup-opt-in) shows both for Hermes; the same steps apply to any assistant under its own user.
 
 ## Answer Hermes's own approvals on your phone
 

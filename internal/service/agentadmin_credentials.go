@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"unicode"
 
 	"vornik.io/vornik/internal/agentadmin"
 	"vornik.io/vornik/internal/approverdevice"
@@ -27,7 +28,7 @@ func (s *agentAdminService) enterCredential(ctx context.Context, d *approverdevi
 	if json.Unmarshal(r.Rendered, &pl) != nil || pl.Slot == nil || pl.Slot.Namespace != r.Namespace || pl.Slot.Kind != agentadmin.CredentialSecret {
 		return approverdevice.ErrNotDecidable // an OAuth slot is filled by its sign-in only
 	}
-	if len(value) == 0 || len(value) > approverdevice.MaxValueBytes {
+	if len(value) == 0 || len(value) > approverdevice.MaxValueBytes || !credentialHasVisibleContent(value) {
 		return approverdevice.ErrNotDecidable
 	}
 	err := s.devices.Decide(context.WithValue(ctx, enteredValueKey{}, value), d, r.ID, shownSHA, true)
@@ -43,6 +44,15 @@ func (s *agentAdminService) enterCredential(ctx context.Context, d *approverdevi
 	bg := context.WithoutCancel(ctx)
 	s.background(func() { s.afterCredentialStored(bg, pl.Slot.Namespace, pl.Slot.Name) })
 	return nil
+}
+
+func credentialHasVisibleContent(value []byte) bool {
+	for _, r := range string(value) {
+		if unicode.IsPrint(r) && !unicode.IsSpace(r) && !unicode.In(r, unicode.Cf) {
+			return true
+		}
+	}
+	return false
 }
 
 // enteredValueKey carries a typed value from the page into the slot effect.

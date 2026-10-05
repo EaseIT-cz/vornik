@@ -89,6 +89,35 @@ func loadErr(t *testing.T, recipe string) string {
 	return err.Error()
 }
 
+func TestRecipeLoad_RefusesConflictingHandoffPath(t *testing.T) {
+	twoStep := strings.Replace(probeRecipe,
+		`    - {name: look, role: reader, instructions: "Look at the source."}`,
+		`    - {name: look, role: reader, instructions: "Look at the source."}
+    - {name: write, role: reader, instructions: "Write result."}`, 1)
+	bad := strings.Replace(twoStep, `instructions: "Look at the source."`, `instructions: "Write findings to artifacts/out/analysis.md."`, 1)
+	if got := loadErr(t, bad); !strings.Contains(got, `artifacts/out/analysis.md`) || !strings.Contains(got, `artifacts/out/look.md`) {
+		t.Fatalf("load error = %q, want both conflicting and generated paths", got)
+	}
+}
+
+func TestRecipeLoad_AllowsEarlierHandoffReferences(t *testing.T) {
+	cases := map[string]string{
+		"read earlier file":    "Read artifacts/out/look.md, then write result.",
+		"draw on earlier file": "Write your summary, drawing on artifacts/out/look.md.",
+	}
+	for name, instructions := range cases {
+		t.Run(name, func(t *testing.T) {
+			twoStep := strings.Replace(probeRecipe,
+				`    - {name: look, role: reader, instructions: "Look at the source."}`,
+				`    - {name: look, role: reader, instructions: "Look at the source."}
+    - {name: write, role: reader, instructions: "`+instructions+`"}`, 1)
+			if err := loadErr(t, twoStep); err != "" {
+				t.Fatalf("input reference was refused as an output conflict: %s", err)
+			}
+		})
+	}
+}
+
 // probeTree is a tree on the probe catalogue with the project "personal"
 // and the probe server listable without a credential.
 func probeTree(t *testing.T) *tree {

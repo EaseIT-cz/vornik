@@ -57,7 +57,11 @@ apis:
     base_url: {{q .BaseURL}}
 {{- if .AuthRef}}
     auth:
+{{- if .QueryParam}}
+      query_param: {{q .QueryParam}}
+{{- else}}
       header: {{q .Header}}
+{{- end}}
       value_from: {{q .AuthRef}}
 {{- if .Prefix}}
       prefix: {{q .Prefix}}

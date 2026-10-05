@@ -639,22 +639,8 @@ func checkRecipeWorkflow(r *Recipe) error {
 	if len(w.Steps) == 0 || len(w.Steps) > maxSteps {
 		return fmt.Errorf("workflow: give between 1 and %d steps", maxSteps)
 	}
-	roles := map[string]bool{}
-	for _, role := range r.Team {
-		roles[role.Name] = true
-	}
-	seen := map[string]bool{"done": true}
-	for _, s := range w.Steps {
-		if !nameRe.MatchString(s.Name) || seen[s.Name] {
-			return fmt.Errorf("step name %q must be unique, not \"done\", and a-z, 0-9, _ or -", s.Name)
-		}
-		seen[s.Name] = true
-		if !roles[s.Role] {
-			return fmt.Errorf("step %s uses the role %q, which the team does not have", s.Name, s.Role)
-		}
-		if err := checkText("step "+s.Name+" instructions", s.Instructions, maxTextRunes, true); err != nil {
-			return err
-		}
+	if err := checkRecipeSteps(r); err != nil {
+		return err
 	}
 	raw, err := json.Marshal(w.Inputs)
 	if err != nil {
@@ -686,6 +672,33 @@ func checkRecipeWorkflow(r *Recipe) error {
 	for _, k := range w.Egress.Required {
 		if _, ok := w.Egress.Properties[k]; !ok {
 			return fmt.Errorf("egress: required names %q, which properties does not declare", k)
+		}
+	}
+	return nil
+}
+
+func checkRecipeSteps(r *Recipe) error {
+	roles := map[string]bool{}
+	for _, role := range r.Team {
+		roles[role.Name] = true
+	}
+	seen := map[string]bool{"done": true}
+	for i, s := range r.Workflow.Steps {
+		if !nameRe.MatchString(s.Name) || seen[s.Name] {
+			return fmt.Errorf("step name %q must be unique, not \"done\", and a-z, 0-9, _ or -", s.Name)
+		}
+		seen[s.Name] = true
+		if !roles[s.Role] {
+			return fmt.Errorf("step %s uses the role %q, which the team does not have", s.Name, s.Role)
+		}
+		if err := checkText("step "+s.Name+" instructions", s.Instructions, maxTextRunes, true); err != nil {
+			return err
+		}
+		if i+1 < len(r.Workflow.Steps) {
+			expected := "artifacts/out/" + s.Name + ".md"
+			if other := conflictingOutputPath(s.Instructions, expected); other != "" {
+				return fmt.Errorf("step %s instructions name %q, but non-answer steps must write their hand-off to %q", s.Name, other, expected)
+			}
 		}
 	}
 	return nil

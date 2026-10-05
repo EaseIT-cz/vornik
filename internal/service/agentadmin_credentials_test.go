@@ -123,6 +123,81 @@ func TestAgentAdmin_CredentialSlotEndToEnd(t *testing.T) {
 	}
 }
 
+func TestAgentAdmin_CredentialSlotRejectsBlankOrInvisibleValue(t *testing.T) {
+	for name, value := range map[string][]byte{
+		"ascii spaces":    []byte(" \n\t "),
+		"zero width only": []byte("\u200b\u200c\ufeff"),
+	} {
+		t.Run(name, func(t *testing.T) {
+			f := newAgentAdminFixture(t)
+			ctx := context.Background()
+			f.do(agentadmin.VerbCreateProject, agentadmin.CreateProjectInput{Slug: "finance", Purpose: "Monthly finance"})
+			f.approve(f.do(agentadmin.VerbAddMCPServer, agentadmin.AddMCPServerInput{Project: "finance", Name: "bank",
+				URL: "https://bank.invalid/mcp", Auth: agentadmin.MCPAuthInput{Mode: "static", Credential: "FIO"}}))
+			res := f.do(agentadmin.VerbRequestCredential, agentadmin.RequestCredentialInput{Project: "finance", Name: "FIO", Purpose: "read balances", Kind: "secret"})
+			req, _ := f.c.repos.ApproverDevices.GetRequest(ctx, requestIDOf(res))
+			if err := f.svc.enterCredential(ctx, f.device, *req, req.RenderedSHA256, value); err != approverdevice.ErrNotDecidable {
+				t.Fatalf("blank value error = %v, want ErrNotDecidable", err)
+			}
+			after, _ := f.c.repos.ApproverDevices.GetRequest(ctx, req.ID)
+			if after.Status != persistence.ApprovalPending || after.DecidedAt != nil || after.AppliedAt != nil {
+				t.Fatalf("blank value decided/stored request: %+v", after)
+			}
+			if src := f.c.currentSecretSource(); src.Store != nil {
+				if got, err := src.Store.Get(ctx, "hermes", "FIO"); err == nil {
+					t.Fatalf("blank value stored %q", got)
+				}
+			}
+			p := projectView(setupOf(t, f), "hermes--finance")
+			if p == nil || len(p.Credentials) != 1 || p.Credentials[0].Status != "missing" {
+				t.Fatalf("setup after blank refusal: %+v", p)
+			}
+		})
+	}
+}
+
+func TestAgentAdmin_CredentialSlotValueSizeBoundary(t *testing.T) {
+	t.Run("exact cap accepted", func(t *testing.T) {
+		f := newAgentAdminFixture(t)
+		ctx := context.Background()
+		f.do(agentadmin.VerbCreateProject, agentadmin.CreateProjectInput{Slug: "finance", Purpose: "Monthly finance"})
+		f.approve(f.do(agentadmin.VerbAddMCPServer, agentadmin.AddMCPServerInput{Project: "finance", Name: "bank",
+			URL: "https://bank.invalid/mcp", Auth: agentadmin.MCPAuthInput{Mode: "static", Credential: "FIO"}}))
+		res := f.do(agentadmin.VerbRequestCredential, agentadmin.RequestCredentialInput{Project: "finance", Name: "FIO", Purpose: "read balances", Kind: "secret"})
+		req, _ := f.c.repos.ApproverDevices.GetRequest(ctx, requestIDOf(res))
+		value := bytes.Repeat([]byte("x"), approverdevice.MaxValueBytes)
+		if err := f.svc.enterCredential(ctx, f.device, *req, req.RenderedSHA256, value); err != nil {
+			t.Fatalf("exact cap: %v", err)
+		}
+		got, err := f.c.currentSecretSource().Store.Get(ctx, "hermes", "FIO")
+		if err != nil || !bytes.Equal(got, value) {
+			t.Fatalf("stored exact cap len=%d err=%v", len(got), err)
+		}
+	})
+	t.Run("over cap refused before decide", func(t *testing.T) {
+		f := newAgentAdminFixture(t)
+		ctx := context.Background()
+		f.do(agentadmin.VerbCreateProject, agentadmin.CreateProjectInput{Slug: "finance", Purpose: "Monthly finance"})
+		f.approve(f.do(agentadmin.VerbAddMCPServer, agentadmin.AddMCPServerInput{Project: "finance", Name: "bank",
+			URL: "https://bank.invalid/mcp", Auth: agentadmin.MCPAuthInput{Mode: "static", Credential: "FIO"}}))
+		res := f.do(agentadmin.VerbRequestCredential, agentadmin.RequestCredentialInput{Project: "finance", Name: "FIO", Purpose: "read balances", Kind: "secret"})
+		req, _ := f.c.repos.ApproverDevices.GetRequest(ctx, requestIDOf(res))
+		value := bytes.Repeat([]byte("x"), approverdevice.MaxValueBytes+1)
+		if err := f.svc.enterCredential(ctx, f.device, *req, req.RenderedSHA256, value); err != approverdevice.ErrNotDecidable {
+			t.Fatalf("over cap error = %v, want ErrNotDecidable", err)
+		}
+		after, _ := f.c.repos.ApproverDevices.GetRequest(ctx, req.ID)
+		if after.Status != persistence.ApprovalPending || after.DecidedAt != nil || after.AppliedAt != nil {
+			t.Fatalf("over cap decided/stored request: %+v", after)
+		}
+		if src := f.c.currentSecretSource(); src.Store != nil {
+			if got, err := src.Store.Get(ctx, "hermes", "FIO"); err == nil {
+				t.Fatalf("over cap stored len=%d", len(got))
+			}
+		}
+	})
+}
+
 // Plan P4.1: concurrent first entries make one key and one store; the key
 // on disk opens what was stored. The read path never creates a key.
 func TestSecretStoreForWrite_ConcurrentFirstEntry(t *testing.T) {

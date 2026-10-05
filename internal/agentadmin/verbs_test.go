@@ -196,6 +196,12 @@ func TestDefineWorkflow_Refusals(t *testing.T) {
 		"pattern": func(in *DefineWorkflowInput) {
 			in.Egress = json.RawMessage(`{"type":"object","additionalProperties":false,"properties":{"a":{"type":"string","maxLength":10,"pattern":"(a+)+$"}}}`)
 		},
+		"non-answer output path conflicts with generated handoff": func(in *DefineWorkflowInput) {
+			in.Steps = []StepInput{
+				{Name: "read", Role: "worker", Instructions: "Write findings to artifacts/out/analysis.md."},
+				{Name: "write", Role: "worker", Instructions: "Write result."},
+			}
+		},
 	}
 	for name, mutate := range cases {
 		in := base()
@@ -203,6 +209,26 @@ func TestDefineWorkflow_Refusals(t *testing.T) {
 		if c := tr.render(VerbDefineWorkflow, in); c.Class != Refused {
 			t.Errorf("%s: accepted (%s)", name, c.Class)
 		}
+	}
+}
+
+func TestDefineWorkflow_AllowsEarlierHandoffReferences(t *testing.T) {
+	cases := map[string]string{
+		"read earlier file":    "Read artifacts/out/read.md, then write the answer.",
+		"draw on earlier file": "Write your summary, drawing on artifacts/out/read.md.",
+	}
+	for name, instructions := range cases {
+		t.Run(name, func(t *testing.T) {
+			tr := newTree(t, "hermes")
+			tr.project("finance")
+			in := DefineWorkflowInput{Project: "finance", Slug: "spend", Egress: egress1(), Steps: []StepInput{
+				{Name: "read", Role: "worker", Instructions: "Read source material."},
+				{Name: "write", Role: "worker", Instructions: instructions},
+			}}
+			if c := tr.render(VerbDefineWorkflow, in); c.Class == Refused {
+				t.Fatalf("input reference was refused as an output conflict: %s", c.Reason)
+			}
+		})
 	}
 }
 

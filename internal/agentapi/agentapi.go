@@ -8,8 +8,8 @@
 // AllowedMethods, a provider without a live api approval, a method outside
 // the approved READ set (the role route) or WRITE set (the worker route),
 // and a path that could leave the base URL. It dials through the caller's
-// SSRF-guarded client, follows no cross-host redirect, reads at most
-// MaxBodyBytes, scrubs the credential from the body, and logs method, host,
+// SSRF-guarded client, follows no redirects, reads at most MaxBodyBytes,
+// scrubs the credential from the body, and logs the API name, method, host,
 // status and byte counts only.
 package agentapi
 
@@ -222,6 +222,19 @@ func (c *Client) build(ctx context.Context, api registry.ProjectAPI, method stri
 		}
 		rdr = bytes.NewReader(raw)
 	}
+	secret := ""
+	if ref := strings.TrimSpace(api.Auth.ValueFrom); ref != "" {
+		v, ok := c.Secrets.Get(strings.TrimPrefix(ref, "secret://"))
+		if !ok || v == "" {
+			return nil, "", fmt.Errorf("%w: the API's credential is not set yet; ask the user to add it", apigateway.ErrGatewayAuth)
+		}
+		if qp := strings.TrimSpace(api.Auth.QueryParam); qp != "" {
+			q := target.Query()
+			q.Set(qp, v)
+			target.RawQuery = q.Encode()
+		}
+		secret = v
+	}
 	httpReq, err := http.NewRequestWithContext(ctx, method, target.String(), rdr)
 	if err != nil {
 		return nil, "", apigateway.ErrGatewayRequest
@@ -230,18 +243,12 @@ func (c *Client) build(ctx context.Context, api registry.ProjectAPI, method stri
 	if rdr != nil {
 		httpReq.Header.Set("Content-Type", "application/json")
 	}
-	secret := ""
-	if ref := strings.TrimSpace(api.Auth.ValueFrom); ref != "" {
-		v, ok := c.Secrets.Get(strings.TrimPrefix(ref, "secret://"))
-		if !ok || v == "" {
-			return nil, "", fmt.Errorf("%w: the API's credential is not set yet; ask the user to add it", apigateway.ErrGatewayAuth)
-		}
+	if secret != "" && strings.TrimSpace(api.Auth.QueryParam) == "" {
 		header := api.Auth.Header
 		if header == "" {
 			header = "Authorization"
 		}
-		httpReq.Header.Set(header, api.Auth.Prefix+v)
-		secret = v
+		httpReq.Header.Set(header, api.Auth.Prefix+secret)
 	}
 	return httpReq, secret, nil
 }
@@ -249,11 +256,10 @@ func (c *Client) build(ctx context.Context, api registry.ProjectAPI, method stri
 func (c *Client) do(httpReq *http.Request, api registry.ProjectAPI, secret string) (apigateway.Response, error) {
 	hc := *c.HTTP(api.BaseURL)
 	host := httpReq.URL.Hostname()
-	hc.CheckRedirect = func(r *http.Request, via []*http.Request) error {
-		if r.URL.Hostname() != host || len(via) >= 3 {
-			return http.ErrUseLastResponse
-		}
-		return nil
+	hc.CheckRedirect = func(_ *http.Request, _ []*http.Request) error {
+		// Approval binds the original endpoint and method. A redirect may
+		// change either, or forward credentials to another port or scheme.
+		return http.ErrUseLastResponse
 	}
 	resp, err := hc.Do(httpReq)
 	if err != nil {

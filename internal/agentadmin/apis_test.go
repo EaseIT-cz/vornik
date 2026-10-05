@@ -38,6 +38,19 @@ func TestAddAPI(t *testing.T) {
 	if len(apis) != 1 || apis[0].AuthRef != "secret://hermes/FIO" || apis[0].Header != "Authorization" {
 		t.Fatalf("state %+v", apis)
 	}
+	maps := AddAPIInput{Project: "finance", Name: "maps", BaseURL: "https://maps.googleapis.com",
+		Auth: APIAuthInput{Credential: "GOOGLE_MAPS", QueryParam: "key"}, Methods: []string{"GET"}}
+	cMaps := tr.render(VerbAddAPI, maps)
+	tr.mustClass(cMaps, Widening)
+	mapsBlock := cMaps.Ops[0].Content[strings.LastIndex(cMaps.Ops[0].Content, `name: "maps"`):]
+	if !strings.Contains(mapsBlock, `query_param: "key"`) || strings.Contains(mapsBlock, `header: "Authorization"`) {
+		t.Fatalf("query-param auth rendered incorrectly:\n%s", cMaps.Ops[0].Content)
+	}
+	tr.apply(cMaps)
+	apis = tr.state().Projects["hermes--finance"].APIs
+	if got := apis[1]; got.QueryParam != "key" || got.Header != "" || got.AuthRef != "secret://hermes/GOOGLE_MAPS" {
+		t.Fatalf("query-param API state %+v", got)
+	}
 
 	// A role may now hold query_api; the credential can be requested.
 	if c := tr.render(VerbDefineSwarm, DefineSwarmInput{Slug: "finance", Roles: []RoleInput{{Name: "worker", Instructions: "x", Tools: []string{"query_api"}}}}); c.Class == Refused {
@@ -65,6 +78,9 @@ func TestAddAPI(t *testing.T) {
 		"writes w/o a write": func(a *AddAPIInput) { a.Writes = true },
 		"bad credential":     func(a *AddAPIInput) { a.Auth.Credential = "fio" },
 		"reserved header":    func(a *AddAPIInput) { a.Auth.Header = "Cookie" },
+		"bad query param":    func(a *AddAPIInput) { a.Auth.QueryParam = "bad key" },
+		"two placements":     func(a *AddAPIInput) { a.Auth.QueryParam = "key" },
+		"query with prefix":  func(a *AddAPIInput) { a.Auth.Header, a.Auth.QueryParam = "", "key" },
 		"name taken":         func(*AddAPIInput) {},
 		"write suffix":       func(a *AddAPIInput) { a.Name = "fio2-write" },
 		"unknown project":    func(a *AddAPIInput) { a.Project = "nope" },
@@ -81,8 +97,10 @@ func TestAddAPI(t *testing.T) {
 	rm := tr.render(VerbRemove, RemoveInput{Kind: "integration", Project: "finance", ID: "fio"})
 	tr.mustClass(rm, Inert)
 	tr.apply(rm)
-	if len(tr.state().Projects["hermes--finance"].APIs) != 0 {
-		t.Fatal("the API survived its removal")
+	for _, a := range tr.state().Projects["hermes--finance"].APIs {
+		if a.Name == "fio" {
+			t.Fatal("the removed API survived")
+		}
 	}
 }
 

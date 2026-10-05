@@ -55,13 +55,19 @@ func TestCompanionCatalog_AgentKeyListsItsNamespacesApprovedWorkflows(t *testing
 	text, isErr := decodeToolText(t, resp)
 	require.False(t, isErr, text)
 	var out struct {
-		Workflows []struct {
+		DelegateInputSchema map[string]any `json:"delegate_input_schema"`
+		Workflows           []struct {
 			ID          string         `json:"id"`
 			Project     string         `json:"project"`
 			InputSchema map[string]any `json:"input_schema"`
 		} `json:"workflows"`
 	}
 	require.NoError(t, json.Unmarshal([]byte(text), &out))
+	props, _ := out.DelegateInputSchema["properties"].(map[string]any)
+	require.Contains(t, props, "inputs")
+	require.NotContains(t, props, "prompt")
+	reqs, _ := out.DelegateInputSchema["required"].([]any)
+	require.Equal(t, []any{"workflow", "inputs"}, reqs)
 	got := map[string]string{}
 	for _, w := range out.Workflows {
 		require.NotNil(t, w.InputSchema, "%s has no input_schema", w.ID)

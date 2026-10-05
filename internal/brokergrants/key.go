@@ -11,6 +11,7 @@
 package brokergrants
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -25,7 +26,7 @@ import (
 
 // Key is an action's normalised standing key: the key paths' values,
 // destinations normalised. Canonical is its canonical JSON and Hash the
-// SHA-256 of that, the grant row's key_hash.
+// SHA-256 (domain-separated for numeric values), the grant row's key_hash.
 type Key struct {
 	Paths     []string
 	Values    map[string]any
@@ -54,7 +55,9 @@ func KeyOf(paths []string, destinations map[string]bool, args []byte) (Key, erro
 			continue
 		}
 		var v any
-		if err := json.Unmarshal(raw, &v); err != nil {
+		dec := json.NewDecoder(bytes.NewReader(raw))
+		dec.UseNumber() // A grant must distinguish exact numeric argument values.
+		if err := dec.Decode(&v); err != nil {
 			return Key{}, fmt.Errorf("brokergrants: argument %q: %w", p, err)
 		}
 		if destinations[p] {
@@ -73,15 +76,45 @@ func KeyOf(paths []string, destinations map[string]bool, args []byte) (Key, erro
 	if err != nil {
 		return Key{}, err
 	}
-	sum := sha256.Sum256(canon)
+	hashInput := canon
+	if containsNumber(values) {
+		// Legacy numeric keys were rounded through float64. Their original
+		// approved values cannot be recovered from the key. A distinct hash
+		// domain makes every legacy numeric grant miss, requiring a fresh
+		// approval, while non-numeric grants remain compatible.
+		hashInput = append([]byte("broker-grant-numeric-v2\x00"), canon...)
+	}
+	sum := sha256.Sum256(hashInput)
 	return Key{Paths: append([]string(nil), paths...), Values: values, Canonical: canon, Hash: hex.EncodeToString(sum[:])}, nil
+}
+
+func containsNumber(v any) bool {
+	switch n := v.(type) {
+	case json.Number:
+		return true
+	case map[string]any:
+		for _, child := range n {
+			if containsNumber(child) {
+				return true
+			}
+		}
+	case []any:
+		for _, child := range n {
+			if containsNumber(child) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // keyFromCanonical rebuilds a Key for display from an opened grant's
 // canonical JSON. It never computes a hash a decrement would use.
 func keyFromCanonical(paths []string, canonical []byte) (Key, error) {
 	var values map[string]any
-	if err := json.Unmarshal(canonical, &values); err != nil {
+	dec := json.NewDecoder(bytes.NewReader(canonical))
+	dec.UseNumber()
+	if err := dec.Decode(&values); err != nil {
 		return Key{}, err
 	}
 	return Key{Paths: paths, Values: values, Canonical: canonical}, nil

@@ -1,6 +1,7 @@
 {{define "pair.html"}}{{template "head" (page "Pair this device" 0)}}
 <h1>Pair this phone as an approver</h1>
 <div class="card">
+{{with .SignedOut}}<p class="err">{{.}}</p>{{end}}
 <p>Enter the code that <b>vornikctl pair-device</b> printed in the Vornik terminal.</p>
 {{with .Error}}<p class="err">{{.}}</p>{{end}}
 <form method="post" action="/ui/pair">

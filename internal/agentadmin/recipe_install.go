@@ -560,8 +560,13 @@ func recipeSteps(rec *Recipe) []stepData {
 		if len(steps) > 1 {
 			closing = closingMultiStep
 		}
+		last := i+1 == len(steps)
+		requireOutputGlob := ""
+		if !last {
+			requireOutputGlob = "artifacts/out/" + s.Name + ".md"
+		}
 		out = append(out, stepData{Name: s.Name, Role: rec.RoleName(s.Role), Instructions: strings.TrimSpace(s.Instructions), Next: next,
-			First: i == 0, Last: i+1 == len(steps), Closing: closing})
+			RequireOutputGlob: requireOutputGlob, First: i == 0, Last: last, Closing: closing})
 	}
 	return out
 }

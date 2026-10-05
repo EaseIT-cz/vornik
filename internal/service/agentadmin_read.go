@@ -27,10 +27,23 @@ type SetupView struct {
 	Pending    []SetupRequest `json:"awaiting_approval"`
 	Failed     []SetupRequest `json:"failed"`
 	Expired    []SetupRequest `json:"expired,omitempty"`
+	// Notifications are advisory terminal approval signals since the last
+	// list_my_setup call for this namespace. The approval rows in this same
+	// response remain authoritative.
+	Notifications []SetupNotification `json:"notifications,omitempty"`
 	// ApprovedModelDestinations are the remote model destinations this
 	// namespace's approver approved and the operator has not withdrawn
 	// (design §18.14 finding 1): live rows only.
 	ApprovedModelDestinations []SetupModelDestination `json:"approved_model_destinations"`
+}
+
+// SetupNotification is one content-free terminal approval signal for an
+// agent-admin client. It never carries rendered request content or credential
+// values.
+type SetupNotification struct {
+	ChangeID string `json:"change_id"`
+	Kind     string `json:"kind"`
+	Status   string `json:"status"`
 }
 
 // SetupModelDestination is one approved model destination, exactly
@@ -204,7 +217,11 @@ func (s *agentAdminService) ListSetup(ctx context.Context, key *persistence.APIK
 		s.credentialSteps(ctx, ns, &sp)
 		v.Projects = append(v.Projects, sp)
 	}
-	return v, s.requestsOf(ctx, ns, &v)
+	if err := s.requestsOf(ctx, ns, &v); err != nil {
+		return SetupView{}, err
+	}
+	v.Notifications = s.drainNotifications(ns)
+	return v, nil
 }
 
 // approvedModelDestinations lists the namespace's live model destination

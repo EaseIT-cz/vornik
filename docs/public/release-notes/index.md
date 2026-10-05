@@ -1,7 +1,7 @@
 ---
 sources:
     - path: docs/release-notes
-      sha256: 6bfc10bdb7ec3fc21fc67f751894ee55fe52ff6d38587fa396c0a1b6f990b263
+      sha256: 35b3c01ac1e63ad72461cde961540177092544eed0be3211999a4818f8562b59
 ---
 # Release Notes
 
@@ -16,6 +16,66 @@ behavior changes, and notable fixes. Internal-only changes are omitted.
     new behavior; those are called out below.
 
 ---
+
+## 2026.10.4
+
+!!! warning "Upgrade requirements"
+    - **Rebuild the agent image.** It now contains the output-cap guard and
+      the `glob` fix for a trailing `**`.
+    - **Broker workflow schemas may no longer use property names containing
+      `.`, `[` or `]`** in their input or proposal schemas. Rename such
+      fields before you upgrade, or the workflow will not load.
+    - **Project APIs no longer follow redirects.** Point `base_url` at the
+      final endpoint.
+    - **The updater now replaces config files you never edited** in canonical
+      config directories, and lists each one it replaces. Files you edited are
+      kept.
+    - **Migrations 212–215** are additive and applied automatically.
+    - Plugins: Hermes 0.11.1, Claude Code companion 0.32.0, Codex companion
+      0.29.0.
+
+A reliability and agent-admin release.
+
+- **Paired phones stay paired.**
+  - A double tap, two open tabs, or a slow decision could sign an approver
+    phone out while other devices still listed it as active. Requests already
+    in flight now share one renewed sign-in, so concurrency no longer signs a
+    phone out.
+  - A phone that does sign out, because its last answer never arrived, is told
+    why. A `vornikctl pair-device` code restores the same device.
+  - Per-approval renewal is kept, so a copied sign-in still dies at the
+    phone's next approval. A browser riding along on the phone's approvals
+    raises an alert.
+- **Recipes, document input, per-role models.**
+  - Agents can install tested recipe workflows: inbox digest, agenda and
+    morning brief.
+  - A workflow can take a text document as input, read-only.
+  - An agent role may choose a model from the operator's catalogue. A remote
+    destination needs one approval on the phone.
+- **Setup clients see when a phone decision completes.** `list_my_setup`
+  carries content-free notifications for setup approvals.
+- **Credential entry refuses blank secrets.** Whitespace-only and
+  invisible-only values are rejected; accepted values are stored exactly as
+  entered.
+- **Approvals.**
+  - Plain-language summaries and risk levels.
+  - Batch review of a workflow's proposed writes.
+  - Bounded standing grants for repeated broker writes.
+  - Hermes's own safety prompts can be answered on the paired phone.
+  - An approval link opened in an unpaired browser leads back to the approval
+    after pairing.
+- **Agent-built workflows.**
+  - Roles receive their instructions again.
+  - A reply cut off at the output cap is never accepted as an answer.
+  - A step that does not produce its handoff file fails instead of silently
+    succeeding.
+  - Failures keep their precise class for `task explain`.
+- **Project APIs** support `auth.query_param`.
+- **Older uid-agnostic agent launches are fixed.** With `keep-id` and no
+  `run_as_user`, uid-agnostic agent images run as the daemon's UID and GID,
+  and doctor reports the real shape.
+- **Dependencies.** The telemetry server uses `undici 7.29.1`; the docs use
+  `mkdocs-material 9.7.7`.
 
 ## 2026.10.3
 

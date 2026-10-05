@@ -72,6 +72,25 @@ func (f *fixture) firstDevice(t *testing.T) (*Device, string) {
 
 // assertNoSecretsPushed: the push channel may be a mail workflow the agent
 // defined, so a push never carries a code or a token (design §9.3).
+func (f *fixture) countPushesContaining(sub string) int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	n := 0
+	for _, p := range f.pushes {
+		if strings.Contains(p.subject+" "+p.body, sub) {
+			n++
+		}
+	}
+	return n
+}
+
+func (f *fixture) assertNoPushContaining(t *testing.T, sub string) {
+	t.Helper()
+	if n := f.countPushesContaining(sub); n != 0 {
+		t.Fatalf("%d push(es) contain %q, want none", n, sub)
+	}
+}
+
 func (f *fixture) assertNoSecretsPushed(t *testing.T, secrets ...string) {
 	t.Helper()
 	f.mu.Lock()
@@ -235,22 +254,76 @@ func TestAuthenticate_RevokedIdleAndTouch(t *testing.T) {
 	_ = d
 }
 
-func TestRotate_StaleTokenIsRefused(t *testing.T) {
+// Design §9.2, amendment 2026-10-05 (P1, devices unpaired by a lost rotation
+// response): rotations from one value return ONE successor; the old value
+// stays valid until the successor is presented, then dies; a value that is
+// neither current nor previous is stale.
+func TestRotate_SuccessorIsIdempotentAndConfirmedOnUse(t *testing.T) {
 	f := newFixture(t)
 	ctx := context.Background()
 	d, tok := f.firstDevice(t)
-	newTok, err := f.svc.Rotate(ctx, d, tok)
+	s1, err := f.svc.Rotate(ctx, d, tok)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := f.svc.Rotate(ctx, d, tok); !errors.Is(err, ErrStaleDevice) {
-		t.Fatalf("rotating from the old token (the other tab): %v", err)
+	s2, err := f.svc.Rotate(ctx, d, tok) // the lost response's retry, or the other tab
+	if err != nil || s2 != s1 {
+		t.Fatalf("second rotation from the same value: %q, %v; want the same successor", s2, err)
+	}
+	if _, err := f.svc.Authenticate(ctx, tok); err != nil {
+		t.Fatalf("the old value before the successor was presented: %v", err)
+	}
+	if _, err := f.svc.Authenticate(ctx, s1); err != nil {
+		t.Fatal(err)
 	}
 	if _, err := f.svc.Authenticate(ctx, tok); !errors.Is(err, ErrNoDevice) {
-		t.Fatal("the old token still authenticates")
+		t.Fatal("the old value still authenticates after the successor was presented")
 	}
-	if _, err := f.svc.Authenticate(ctx, newTok); err != nil {
+	if _, err := f.svc.Rotate(ctx, d, tok); !errors.Is(err, ErrStaleDevice) {
+		t.Fatalf("rotating from a confirmed-away value: %v", err)
+	}
+	// A fresh rotation from the confirmed value draws a fresh nonce.
+	s3, err := f.svc.Rotate(ctx, d, s1)
+	if err != nil || s3 == s1 || s3 == "" {
+		t.Fatalf("next rotation: %q, %v", s3, err)
+	}
+	// Revocation ends both values.
+	if err := f.svc.Revoke(ctx, d.ID); err != nil {
 		t.Fatal(err)
+	}
+	for _, v := range []string{s1, s3} {
+		if _, err := f.svc.Authenticate(ctx, v); !errors.Is(err, ErrNoDevice) {
+			t.Fatalf("a revoked device's value authenticates: %v", err)
+		}
+	}
+}
+
+// The successor is computed from the PRESENTED plaintext and the nonce: the
+// stored row (hashes and nonce) alone does not yield it, and a settled row
+// keeps no nonce at all.
+func TestRotate_SuccessorNeedsThePresentedPlaintext(t *testing.T) {
+	f := newFixture(t)
+	ctx := context.Background()
+	d, tok := f.firstDevice(t)
+	s1, err := f.svc.Rotate(ctx, d, tok)
+	if err != nil {
+		t.Fatal(err)
+	}
+	row, err := f.repo.GetDeviceByTokenHash(ctx, HashToken(s1))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if successor(d.ID, row.PrevTokenHash, row.RotationNonce) == s1 {
+		t.Fatal("the successor is derivable from the stored hash and nonce")
+	}
+	if successor(d.ID, tok, row.RotationNonce) != s1 {
+		t.Fatal("the successor is not succ(id, presented, nonce)")
+	}
+	if _, err := f.svc.Authenticate(ctx, s1); err != nil {
+		t.Fatal(err)
+	}
+	if row, _ = f.repo.GetDeviceByTokenHash(ctx, HashToken(s1)); row.RotationNonce != "" {
+		t.Fatal("the nonce survived confirmation")
 	}
 }
 
@@ -487,6 +560,101 @@ func TestEffects_PermanentFailureIsRecordedNotRetried(t *testing.T) {
 	f.advance(applyLease + time.Second)
 	if err := f.svc.Tick(ctx); err != nil || calls != 1 {
 		t.Fatalf("a permanent failure was retried: calls=%d %v", calls, err)
+	}
+}
+
+func TestApproverDevice_TerminalObserverSeesApproveRejectFailureAndExpiry(t *testing.T) {
+	f := newFixture(t)
+	ctx := context.Background()
+	d, _ := f.firstDevice(t)
+	f.svc.RegisterEffect(persistence.ApprovalKindWideningChange, func(context.Context, persistence.AgentApprovalRequestRow) error { return nil })
+	f.svc.RegisterEffect(persistence.ApprovalKindCredentialSlot, func(context.Context, persistence.AgentApprovalRequestRow) error {
+		return fmt.Errorf("%w: deliberately permanent", ErrPermanent)
+	})
+	var got []string
+	f.svc.RegisterTerminalObserver(persistence.ApprovalKindWideningChange, func(_ context.Context, r persistence.AgentApprovalRequestRow, status string) {
+		got = append(got, r.ID+":"+r.Namespace+":"+r.Kind+":"+status)
+	})
+	f.svc.RegisterTerminalObserver(persistence.ApprovalKindCredentialSlot, func(_ context.Context, r persistence.AgentApprovalRequestRow, status string) {
+		got = append(got, r.ID+":"+r.Namespace+":"+r.Kind+":"+status)
+	})
+	rows := []persistence.AgentApprovalRequestRow{
+		{ID: "apr_ok", Namespace: "hermes", Kind: persistence.ApprovalKindWideningChange, Sentence: "s", Rendered: []byte(`{}`), RenderedSHA256: "h1", Status: persistence.ApprovalPending, CreatedAt: f.clock(), ExpiresAt: f.clock().Add(RequestTTL)},
+		{ID: "apr_rej", Namespace: "hermes", Kind: persistence.ApprovalKindWideningChange, Sentence: "s", Rendered: []byte(`{}`), RenderedSHA256: "h2", Status: persistence.ApprovalPending, CreatedAt: f.clock(), ExpiresAt: f.clock().Add(RequestTTL)},
+		{ID: "apr_fail", Namespace: "hermes", Kind: persistence.ApprovalKindCredentialSlot, Sentence: "s", Rendered: []byte(`{}`), RenderedSHA256: "h3", Status: persistence.ApprovalPending, CreatedAt: f.clock(), ExpiresAt: f.clock().Add(RequestTTL)},
+		{ID: "apr_exp", Namespace: "hermes", Kind: persistence.ApprovalKindWideningChange, Sentence: "s", Rendered: []byte(`{}`), RenderedSHA256: "h4", Status: persistence.ApprovalPending, CreatedAt: f.clock().Add(-2 * RequestTTL), ExpiresAt: f.clock().Add(-RequestTTL)},
+	}
+	for _, r := range rows {
+		if err := f.repo.CreateRequest(ctx, r); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := f.svc.Decide(ctx, d, "apr_ok", "h1", true); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.svc.Decide(ctx, d, "apr_rej", "h2", false); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.svc.Decide(ctx, d, "apr_fail", "h3", true); err == nil || !strings.Contains(err.Error(), "deliberately permanent") {
+		t.Fatalf("permanent failure = %v", err)
+	}
+	if err := f.svc.Tick(ctx); err != nil {
+		t.Fatal(err)
+	}
+	want := []string{
+		"apr_ok:hermes:widening_change:approved",
+		"apr_rej:hermes:widening_change:rejected",
+		"apr_fail:hermes:credential_slot:failed",
+		"apr_exp:hermes:widening_change:expired",
+	}
+	if strings.Join(got, "\n") != strings.Join(want, "\n") {
+		t.Fatalf("events:\n%s\nwant:\n%s", strings.Join(got, "\n"), strings.Join(want, "\n"))
+	}
+}
+
+func TestApproverDevice_TerminalObserverPanicsAreContained(t *testing.T) {
+	f := newFixture(t)
+	ctx := context.Background()
+	d, _ := f.firstDevice(t)
+	f.svc.RegisterEffect(persistence.ApprovalKindWideningChange, func(context.Context, persistence.AgentApprovalRequestRow) error { return nil })
+	f.svc.RegisterEffect(persistence.ApprovalKindCredentialSlot, func(context.Context, persistence.AgentApprovalRequestRow) error {
+		return fmt.Errorf("%w: deliberately permanent", ErrPermanent)
+	})
+	var got []string
+	panicObserver := func(context.Context, persistence.AgentApprovalRequestRow, string) { panic("observer boom") }
+	record := func(_ context.Context, r persistence.AgentApprovalRequestRow, status string) {
+		got = append(got, r.ID+":"+status)
+	}
+	f.svc.RegisterTerminalObserver(persistence.ApprovalKindWideningChange, panicObserver)
+	f.svc.RegisterTerminalObserver(persistence.ApprovalKindWideningChange, record)
+	f.svc.RegisterTerminalObserver(persistence.ApprovalKindCredentialSlot, panicObserver)
+	f.svc.RegisterTerminalObserver(persistence.ApprovalKindCredentialSlot, record)
+	rows := []persistence.AgentApprovalRequestRow{
+		{ID: "apr_ok_panic", Namespace: "hermes", Kind: persistence.ApprovalKindWideningChange, Sentence: "s", Rendered: []byte(`{}`), RenderedSHA256: "h1", Status: persistence.ApprovalPending, CreatedAt: f.clock(), ExpiresAt: f.clock().Add(RequestTTL)},
+		{ID: "apr_rej_panic", Namespace: "hermes", Kind: persistence.ApprovalKindWideningChange, Sentence: "s", Rendered: []byte(`{}`), RenderedSHA256: "h2", Status: persistence.ApprovalPending, CreatedAt: f.clock(), ExpiresAt: f.clock().Add(RequestTTL)},
+		{ID: "apr_fail_panic", Namespace: "hermes", Kind: persistence.ApprovalKindCredentialSlot, Sentence: "s", Rendered: []byte(`{}`), RenderedSHA256: "h3", Status: persistence.ApprovalPending, CreatedAt: f.clock(), ExpiresAt: f.clock().Add(RequestTTL)},
+		{ID: "apr_exp_panic", Namespace: "hermes", Kind: persistence.ApprovalKindWideningChange, Sentence: "s", Rendered: []byte(`{}`), RenderedSHA256: "h4", Status: persistence.ApprovalPending, CreatedAt: f.clock().Add(-2 * RequestTTL), ExpiresAt: f.clock().Add(-RequestTTL)},
+	}
+	for _, r := range rows {
+		if err := f.repo.CreateRequest(ctx, r); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := f.svc.Decide(ctx, d, "apr_ok_panic", "h1", true); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.svc.Decide(ctx, d, "apr_rej_panic", "h2", false); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.svc.Decide(ctx, d, "apr_fail_panic", "h3", true); err == nil || !strings.Contains(err.Error(), "deliberately permanent") {
+		t.Fatalf("permanent failure = %v", err)
+	}
+	if err := f.svc.Tick(ctx); err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"apr_ok_panic:approved", "apr_rej_panic:rejected", "apr_fail_panic:failed", "apr_exp_panic:expired"}
+	if strings.Join(got, "\n") != strings.Join(want, "\n") {
+		t.Fatalf("events:\n%s\nwant:\n%s", strings.Join(got, "\n"), strings.Join(want, "\n"))
 	}
 }
 

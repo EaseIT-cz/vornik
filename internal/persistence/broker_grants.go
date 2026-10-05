@@ -68,7 +68,8 @@ type BrokerStandingGrant struct {
 	// KeyValuesSealed is the normalised key's canonical JSON, sealed with the
 	// secret-store seal. Opened only by the matcher and the grant pages.
 	KeyValuesSealed string
-	// KeyHash is SHA-256 of the canonical key (brokergrants.KeyOf); the
+	// KeyHash is SHA-256 of the canonical key, domain-separated for numeric
+	// values (brokergrants.KeyOf); the
 	// guarded decrement compares it, never the values.
 	KeyHash             string
 	MaxUses             int

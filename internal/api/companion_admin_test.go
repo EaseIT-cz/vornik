@@ -72,6 +72,27 @@ func listTools(t *testing.T, srv *Server, raw string) map[string]bool {
 	return names
 }
 
+func delegatePropsFor(t *testing.T, srv *Server, raw string) map[string]any {
+	t.Helper()
+	rec := httptest.NewRecorder()
+	srv.CompanionMCPHandler(rec, withCompanionBearer(mcpRequest(t, "tools/list", nil), raw))
+	resp := decodeJSONRPC(t, rec.Body.Bytes())
+	require.Nil(t, resp.Error)
+	b, _ := json.Marshal(resp.Result)
+	var out struct {
+		Tools []mcpToolDef `json:"tools"`
+	}
+	require.NoError(t, json.Unmarshal(b, &out))
+	for _, d := range out.Tools {
+		if d.Name == "delegate" {
+			props, _ := d.InputSchema["properties"].(map[string]any)
+			return props
+		}
+	}
+	t.Fatal("no delegate tool")
+	return nil
+}
+
 func callAdminTool(t *testing.T, srv *Server, raw, tool string) jsonRPCResponse {
 	t.Helper()
 	rec := httptest.NewRecorder()
@@ -234,6 +255,25 @@ func TestCompanionAdmin_DefineWorkflowOffersSchedule(t *testing.T) {
 	t.Fatal("no define_workflow tool")
 }
 
+// The live MCP schema is the contract Hermes uses to construct add_api calls.
+// Keep the query-param auth placement advertised alongside the implementation.
+func TestCompanionAdmin_AddAPIOffersQueryParamAuth(t *testing.T) {
+	for _, d := range companionAdminToolDefs() {
+		if d.Name != agentadmin.VerbAddAPI {
+			continue
+		}
+		props, _ := d.InputSchema["properties"].(map[string]any)
+		auth, _ := props["auth"].(map[string]any)
+		authProps, _ := auth["properties"].(map[string]any)
+		queryParam, ok := authProps["query_param"].(map[string]any)
+		if !ok || !strings.Contains(queryParam["description"].(string), "legacy APIs") {
+			t.Fatalf("add_api auth schema lacks query_param guidance: %v", auth)
+		}
+		return
+	}
+	t.Fatal("no add_api tool")
+}
+
 // Design §18.6 item 2: define_swarm offers an optional model per role,
 // pointing at describe_installation's catalogue and saying what a remote one
 // asks of the user. Control: the define_swarm tool definition.
@@ -343,6 +383,18 @@ func TestCompanionAdmin_DelegateSchemaForAgentKeysOmitsRefusedFields(t *testing.
 		t.Fatal("no delegate tool")
 		return nil
 	}
+	brokerSrv, brokerKeys, _ := newBrokerMCPServer(t)
+	brokerRaw, _ := seedCompanionKey(t, brokerKeys, "broker-acme", nil)
+	broker := delegatePropsFor(t, brokerSrv, brokerRaw)
+	for _, f := range []string{"prompt", "inputArtifacts"} {
+		if _, ok := broker[f]; ok {
+			t.Errorf("a broker-project key's delegate schema offers %s", f)
+		}
+	}
+	if _, ok := broker["inputs"]; !ok {
+		t.Error("a broker-project key's delegate schema lost inputs")
+	}
+
 	agent := delegateProps(agentRaw)
 	for _, f := range []string{"prompt", "inputArtifacts"} {
 		if _, ok := agent[f]; ok {
@@ -356,6 +408,28 @@ func TestCompanionAdmin_DelegateSchemaForAgentKeysOmitsRefusedFields(t *testing.
 	if _, ok := plain["prompt"]; !ok {
 		t.Error("a plain companion key's delegate schema lost prompt")
 	}
+	if _, ok := plain["inputs"]; ok {
+		t.Error("a plain companion key's delegate schema offers broker-only inputs")
+	}
+}
+
+func TestCompanionAdmin_DelegateSchemaShapingDoesNotMutateBaseDefinition(t *testing.T) {
+	var base mcpToolDef
+	for _, d := range companionToolDefs() {
+		if d.Name == "delegate" {
+			base = d
+			break
+		}
+	}
+	require.NotEmpty(t, base.Name)
+
+	_ = brokerOnlyDelegate(base)
+	_ = promptOnlyDelegate(base)
+
+	props, _ := base.InputSchema["properties"].(map[string]any)
+	require.Contains(t, props, "prompt")
+	require.Contains(t, props, "inputs")
+	require.Contains(t, props, "inputArtifacts")
 }
 
 // Design §18.2: define_workflow's inputs description states the input rules

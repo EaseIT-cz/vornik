@@ -1,5 +1,5 @@
 name: vornik-companion
-version: 0.11.0
+version: 0.11.1
 requires_hermes: ">=0.21.5"
 manifest_version: 2
 # Declared, not inferred: Hermes classifies an undeclared plugin whose
@@ -14,6 +14,9 @@ description: >-
   no credentials: work that touches mail, calendar, documents or accounts is
   delegated to operator-authored broker workflows on a Vornik daemon, which
   return a bounded, schema-validated result instead of raw access.
+  0.11.1 — the README leads with the broker setup (the default) and points
+  to docs.vornik.io/guides/hermes-setup/, which covers Hermes and Vornik
+  under separate OS users; documentation only.
   0.11.0 — the vornik-admin skill says how to hand a workflow a document
   (an x-untrusted-document input, read by the role from artifacts/in).
   0.10.0 — the vornik-admin skill says that a client refusing a field

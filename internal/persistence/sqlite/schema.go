@@ -724,8 +724,19 @@ CREATE TABLE IF NOT EXISTS approver_devices (
     paired_at     TEXT        NOT NULL,
     paired_by     TEXT NOT NULL,
     last_used_at  TEXT        NOT NULL,
-    revoked_at    TEXT       
+    revoked_at    TEXT       ,
+    -- migration 215: rotation sharing and dead-value recognition (design
+    -- §9.2, amendment 2026-10-05 "Rotation must survive a lost response")
+    prev_token_hash  TEXT,
+    rotation_nonce   TEXT,
+    share_until      TEXT,
+    dead_token_hash  TEXT,
+    dead_reason      TEXT,
+    share_admitted   INTEGER NOT NULL DEFAULT 0,
+    share_streak     INTEGER NOT NULL DEFAULT 0
 );
+CREATE INDEX IF NOT EXISTS idx_approver_devices_prev_token ON approver_devices (prev_token_hash);
+CREATE INDEX IF NOT EXISTS idx_approver_devices_dead_token ON approver_devices (dead_token_hash);
 CREATE TABLE IF NOT EXISTS approver_pairings (
     code_hash    TEXT PRIMARY KEY,
     label        TEXT NOT NULL,

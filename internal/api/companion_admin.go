@@ -88,22 +88,49 @@ func (s *Server) companionToolsFor(key *persistence.APIKey) []mcpToolDef {
 			defs = append(defs, d)
 		}
 	}
-	if s.agentAdminOffered(key) {
+	// Broker-project keys run workflows in their own broker project; agent-admin
+	// keys delegate into broker workflows across their namespace. Both surfaces
+	// refuse prompt/inputArtifacts and take typed inputs instead.
+	if s.isBrokerProjectKey(key) || s.agentAdminOffered(key) {
 		for i := range defs {
 			if defs[i].Name == "delegate" {
 				defs[i] = brokerOnlyDelegate(defs[i])
 			}
 		}
+	} else {
+		for i := range defs {
+			if defs[i].Name == "delegate" {
+				defs[i] = promptOnlyDelegate(defs[i])
+			}
+		}
+	}
+	if s.agentAdminOffered(key) {
 		defs = append(defs, companionAdminToolDefs()...)
 	}
 	return defs
 }
 
-// brokerOnlyDelegate is delegate as an agent admin key may call it: every
-// workflow it can run is a broker workflow, which refuses a prompt and
-// inputArtifacts, so the schema omits both instead of inviting a refused call
-// (design §18.2, review 3e94 F3). The definition is copied, never mutated.
+// brokerOnlyDelegate is delegate as a broker-project or agent-admin key may
+// call it: every workflow it can run is a broker workflow, which refuses a
+// prompt and inputArtifacts, so the schema omits both instead of inviting a
+// refused call (broker design 2026-09-29 §4.3; agent-admin design §18.2,
+// review 3e94 F3). The definition is copied, never mutated.
 func brokerOnlyDelegate(d mcpToolDef) mcpToolDef {
+	return delegateSchemaWithout(d, []string{"prompt", "inputArtifacts", "skip_auto_extract", "acknowledge_workflow_cannot_fetch"}, []string{"workflow", "inputs"})
+}
+
+// promptOnlyDelegate is delegate as an ordinary companion key may call it:
+// ordinary workflows take a prompt, not broker typed inputs. The definition is
+// copied, never mutated.
+func promptOnlyDelegate(d mcpToolDef) mcpToolDef {
+	return delegateSchemaWithout(d, []string{"inputs"}, []string{"workflow", "prompt"})
+}
+
+func delegateSchemaWithout(d mcpToolDef, omit []string, required []string) mcpToolDef {
+	omitted := map[string]bool{}
+	for _, k := range omit {
+		omitted[k] = true
+	}
 	schema := map[string]any{}
 	for k, v := range d.InputSchema {
 		schema[k] = v
@@ -111,14 +138,14 @@ func brokerOnlyDelegate(d mcpToolDef) mcpToolDef {
 	props := map[string]any{}
 	if in, ok := d.InputSchema["properties"].(map[string]any); ok {
 		for k, v := range in {
-			switch k {
-			case "prompt", "inputArtifacts", "skip_auto_extract", "acknowledge_workflow_cannot_fetch":
+			if omitted[k] {
 				continue
 			}
 			props[k] = v
 		}
 	}
 	schema["properties"] = props
+	schema["required"] = required
 	d.InputSchema = schema
 	return d
 }
@@ -234,7 +261,9 @@ func companionAdminToolDefs() []mcpToolDef {
 			"A role with the query_api tool can then read it (GET, HEAD); write methods can only be proposed by a workflow, and the user approves each change." + effect,
 			InputSchema: obj(map[string]any{"project": str("The project's slug."), "name": str("API name: a-z, 0-9, _ or -."), "base_url": str("The API's base URL."),
 				"auth": obj(map[string]any{"credential": str("The credential NAME (A-Z, 0-9, _); the user enters its value on their phone. Omit for no auth."),
-					"header": str("Header to carry it (default Authorization)."), "prefix": str("Prefix such as \"Bearer \".")}),
+					"header":      str("Header to carry it (default Authorization)."),
+					"query_param": str("Query parameter to carry it, for legacy APIs such as Google Maps (for example, key). Mutually exclusive with header."),
+					"prefix":      str("Prefix such as \"Bearer \", for header auth only.")}),
 				"methods": map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "GET, HEAD, POST, PUT, PATCH, DELETE."},
 				"writes":  map[string]any{"type": "boolean", "description": "True exactly when methods include a write."}}, "project", "name", "base_url", "methods")},
 		{Name: agentadmin.VerbListRecipes, Description: "Recipes: ready-made, tested workflows Vornik ships (an inbox digest, an agenda, a morning brief). " +

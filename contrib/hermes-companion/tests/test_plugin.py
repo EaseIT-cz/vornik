@@ -12,6 +12,7 @@ from vornik_hermes.memory_provider import VornikMemoryProvider  # noqa: E402
 from vornik_hermes.vornik_client import VornikClient  # noqa: E402
 
 NEW_DAEMON = {"companion-broker": True, "companion-result-wait": True}
+BROKER_CATALOG = {"broker": True, "workflows": []}
 
 
 def client(opener, token="sk-broker"):
@@ -49,19 +50,80 @@ class CapabilityFallbackTest(unittest.TestCase):
         tools = BrokerTools(client(FakeOpener(features=None)))
         self.assertFalse(tools.available())
 
+    def test_tools_unavailable_when_token_is_not_a_broker_key(self):
+        op = FakeOpener(features=NEW_DAEMON, tools={"catalog": ({"workflows": []}, False)})
+        tools = BrokerTools(client(op))
+        self.assertFalse(tools.available())
+        out = json.loads(tools.delegate({"workflow": "mail-digest", "inputs": {}}))
+        self.assertIn("Vornik broker is not configured", out["error"])
+
+    def test_catalog_transport_failure_is_retried(self):
+        class FlakyCatalog(FakeOpener):
+            def __init__(self):
+                super().__init__(features=NEW_DAEMON, tools={"catalog": (BROKER_CATALOG, False)})
+                self.catalog_calls = 0
+
+            def __call__(self, req, timeout=0):
+                if getattr(req, "selector", "").endswith("/api/v1/mcp/companion"):
+                    self.catalog_calls += 1
+                    if self.catalog_calls == 1:
+                        raise OSError("daemon starting")
+                return super().__call__(req, timeout=timeout)
+
+        tools = BrokerTools(client(FlakyCatalog()))
+        self.assertFalse(tools.available())
+        self.assertTrue(tools.available())
+
+    def test_catalog_tool_error_is_retried(self):
+        calls = []
+
+        def catalog(_args):
+            calls.append(1)
+            if len(calls) == 1:
+                return ("daemon starting", True)
+            return (BROKER_CATALOG, False)
+
+        tools = BrokerTools(client(FakeOpener(features=NEW_DAEMON, tools={"catalog": catalog})))
+        self.assertFalse(tools.available())
+        self.assertTrue(tools.available())
+
+    def test_malformed_catalog_is_retried(self):
+        calls = []
+
+        def catalog(_args):
+            calls.append(1)
+            if len(calls) == 1:
+                return ("not json", False)
+            return (BROKER_CATALOG, False)
+
+        tools = BrokerTools(client(FakeOpener(features=NEW_DAEMON, tools={"catalog": catalog})))
+        self.assertFalse(tools.available())
+        self.assertTrue(tools.available())
+
+    def test_non_broker_catalog_is_cached(self):
+        op = FakeOpener(features=NEW_DAEMON, tools={"catalog": ({"workflows": []}, False)})
+        tools = BrokerTools(client(op))
+        self.assertFalse(tools.available())
+        self.assertFalse(tools.available())
+        self.assertEqual([name for name, *_ in op.calls], ["catalog"])
+
+    def test_tools_available_when_catalog_says_broker(self):
+        op = FakeOpener(features=NEW_DAEMON, tools={"catalog": (BROKER_CATALOG, False)})
+        self.assertTrue(BrokerTools(client(op)).available())
+
     def test_result_long_polls_only_when_advertised(self):
-        new = FakeOpener(features=NEW_DAEMON, tools={"result": ({"complete": True}, False)})
+        new = FakeOpener(features=NEW_DAEMON, tools={"catalog": (BROKER_CATALOG, False), "result": ({"complete": True}, False)})
         BrokerTools(client(new)).result({"task_id": "t1"})
         self.assertEqual(new.calls[-1][1], {"task_id": "t1", "wait_seconds": 25})
         self.assertGreater(new.calls[-1][2], 25, "HTTP timeout must outlast the server-side wait")
-        old = FakeOpener(features={"companion-broker": True}, tools={"result": ({"complete": False}, False)})
+        old = FakeOpener(features={"companion-broker": True}, tools={"catalog": (BROKER_CATALOG, False), "result": ({"complete": False}, False)})
         BrokerTools(client(old)).result({"task_id": "t1"})
         self.assertEqual(old.calls[-1][1], {"task_id": "t1"})
 
 
 class BrokerToolsTest(unittest.TestCase):
     def test_delegate_sends_typed_inputs_and_never_a_prompt(self):
-        op = FakeOpener(features=NEW_DAEMON, tools={"delegate": ({"task_id": "t9"}, False)})
+        op = FakeOpener(features=NEW_DAEMON, tools={"catalog": (BROKER_CATALOG, False), "delegate": ({"task_id": "t9"}, False)})
         out = json.loads(BrokerTools(client(op)).delegate({"workflow": "mail-digest", "inputs": {"since": "2026-09-29T00:00:00Z"}}))
         self.assertEqual(out["result"]["task_id"], "t9")
         name, args, _, auth = op.calls[-1]
@@ -70,12 +132,12 @@ class BrokerToolsTest(unittest.TestCase):
         self.assertEqual(auth, "Bearer sk-broker")
 
     def test_delegate_validates_shape_locally(self):
-        tools = BrokerTools(client(FakeOpener(features=NEW_DAEMON)))
+        tools = BrokerTools(client(FakeOpener(features=NEW_DAEMON, tools={"catalog": (BROKER_CATALOG, False)})))
         self.assertIn("error", json.loads(tools.delegate({"inputs": {}})))
         self.assertIn("error", json.loads(tools.delegate({"workflow": "w", "inputs": "free text"})))
 
     def test_refusal_is_returned_as_data_not_raised(self):
-        op = FakeOpener(features=NEW_DAEMON, tools={"delegate": ("INPUT_REJECTED: inputs/since fails format", True)})
+        op = FakeOpener(features=NEW_DAEMON, tools={"catalog": (BROKER_CATALOG, False), "delegate": ("INPUT_REJECTED: inputs/since fails format", True)})
         out = json.loads(BrokerTools(client(op)).delegate({"workflow": "w", "inputs": {}}))
         self.assertIn("INPUT_REJECTED", out["error"])
 
@@ -201,7 +263,7 @@ class ReviewRound1Test(unittest.TestCase):
 
     def test_empty_success_content_is_null_not_a_string(self):
         # L3
-        op = FakeOpener(features=NEW_DAEMON, tools={"status": ("", False)})
+        op = FakeOpener(features=NEW_DAEMON, tools={"catalog": (BROKER_CATALOG, False), "status": ("", False)})
         out = json.loads(BrokerTools(client(op)).status({"task_id": "t1"}))
         self.assertIsNone(out["result"])
 
@@ -328,17 +390,38 @@ class CatalogManifestTest(unittest.TestCase):
             "vornik_catalog", "vornik_delegate", "vornik_result", "vornik_status",
             "vornik_cancel", "vornik_recall", "vornik_remember"]))
 
-    def test_version_is_0_11_0(self):
-        # 0.11.0: the vornik-admin skill says how to hand a workflow a
+    def test_version_is_0_11_1(self):
+        # 0.11.1: the README leads with the broker setup and points to the
+        # Hermes setup guide (design 24, setup docs, 2026-10-04). 0.11.0: the vornik-admin skill says how to hand a workflow a
         # document (broker design §18). 0.10.0: the vornik-admin skill tells the assistant that a client
         # refusing a field describe_installation lists holds a tool list from
         # before a change, and to ask the user to reconnect Vornik
         # (agent-administered design §18.14 finding 2). 0.9.0 was a role's
         # model from the catalogue (§18.6 item 2).
-        self.assertRegex(MANIFEST, r"(?m)^version:\s*0\.11\.0\s*$")
-        self.assertIn("0.11.0 — ", MANIFEST, "the description carries a changelog line for 0.11.0")
+        self.assertRegex(MANIFEST, r"(?m)^version:\s*0\.11\.1\s*$")
+        self.assertIn("0.11.1 — ", MANIFEST, "the description carries a changelog line for 0.11.1")
+        self.assertIn("0.11.0 — ", MANIFEST, "earlier changelog lines stay")
         self.assertIn("0.10.0 — ", MANIFEST, "earlier changelog lines stay")
         self.assertIn("0.9.0 — ", MANIFEST, "earlier changelog lines stay")
+
+
+class ReadmeSetupTest(unittest.TestCase):
+    # 2026-10-04: a Hermes set itself up from the docs, copied the
+    # coding-companion grant (developer workflows, --skill-all) and missed the
+    # broker. The catalog page must lead with the broker and send the reader
+    # to the Hermes setup guide (design 24, setup docs).
+    README = (Path(__file__).resolve().parent.parent / "README.md").read_text()
+
+    def test_broker_setup_comes_before_admin_setup(self):
+        self.assertLess(self.README.index("### Broker setup"), self.README.index("### Admin setup"))
+        self.assertLess(self.README.index("| **Broker**"), self.README.index("| **Admin**"))
+
+    def test_points_to_the_hermes_setup_guide(self):
+        self.assertIn("https://docs.vornik.io/guides/hermes-setup/", self.README)
+
+    def test_never_suggests_coding_companion_grants(self):
+        self.assertNotIn("--skill-all", self.README.replace("no skill flags", ""))
+        self.assertNotIn("companion-architectural-review", self.README)
 
 
 class CliRegistrationTest(unittest.TestCase):

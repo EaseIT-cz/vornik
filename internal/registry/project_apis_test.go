@@ -18,6 +18,11 @@ func TestProjectAPIs_Validate(t *testing.T) {
 	if err := apiProject(good).Validate("p.yaml"); err != nil {
 		t.Fatalf("a well-formed API was refused: %v", err)
 	}
+	queryAuth := good
+	queryAuth.Auth = ProjectAPIAuth{QueryParam: "key", ValueFrom: "secret://hermes/FIO"}
+	if err := apiProject(queryAuth).Validate("p.yaml"); err != nil {
+		t.Fatalf("a query-param-auth API was refused: %v", err)
+	}
 	writes := good
 	writes.Methods, writes.Writes = []string{"GET", "POST"}, true
 	if err := apiProject(writes).Validate("p.yaml"); err != nil {
@@ -36,6 +41,9 @@ func TestProjectAPIs_Validate(t *testing.T) {
 		"write suffix":            func(a *ProjectAPI) { a.Name = "fio-write" },
 		"reserved header":         func(a *ProjectAPI) { a.Auth.Header = "Host" },
 		"header with a colon":     func(a *ProjectAPI) { a.Auth.Header = "X-A: b" },
+		"bad query parameter":     func(a *ProjectAPI) { a.Auth.Header, a.Auth.QueryParam = "", "bad key" },
+		"two auth placements":     func(a *ProjectAPI) { a.Auth.QueryParam = "key" },
+		"query auth with prefix":  func(a *ProjectAPI) { a.Auth.Header, a.Auth.QueryParam = "", "key" },
 		"value not a reference":   func(a *ProjectAPI) { a.Auth.ValueFrom = "hunter2" },
 		"secret not granted":      func(a *ProjectAPI) { a.Auth.ValueFrom = "secret://hermes/OTHER" },
 		"prefix with a line feed": func(a *ProjectAPI) { a.Auth.Prefix = "Bearer\n" },

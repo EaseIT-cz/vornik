@@ -29,6 +29,8 @@ import (
 // change is approved by "device:<id>", so the agent never approves its own.
 const AgentAdminInertActor = "system:agent-admin-inert"
 
+const agentAdminNotificationLimit = 100
+
 // AgentAdminResult is a mutating verb's outcome (§6).
 type AgentAdminResult = agentadmin.Result
 
@@ -62,6 +64,10 @@ type agentAdminService struct {
 	// approval (design §19.8 F6), keyed "<project>/<server>".
 	gapsMu   sync.Mutex
 	toolGaps map[string]string
+	// notifications is a bounded, process-local advisory buffer of terminal
+	// approval signals, keyed by request namespace.
+	notificationsMu sync.Mutex
+	notifications   map[string][]SetupNotification
 }
 
 // background runs fn detached and tracked.
@@ -118,11 +124,13 @@ func (c *Container) agentAdmin() *agentAdminService {
 		configDir: filepath.Dir(c.ConfigPath), configsDir: configsDir, now: time.Now}
 	devices.RegisterEffect(persistence.ApprovalKindWideningChange, s.applyApproved)
 	devices.RegisterOnReject(persistence.ApprovalKindWideningChange, s.rejectApproved)
+	devices.RegisterTerminalObserver(persistence.ApprovalKindWideningChange, s.recordApprovalNotification)
 	// A credential slot's effect stores what its decision carried: the
 	// typed value or the sign-in (plan P4.2/P4.4, decide then store).
 	devices.RegisterEffect(persistence.ApprovalKindCredentialSlot, s.slotEffect)
 	devices.RegisterValueEntry(persistence.ApprovalKindCredentialSlot, s.enterCredential)
 	devices.RegisterConnect(persistence.ApprovalKindCredentialSlot, agentOAuthConnect{s: s})
+	devices.RegisterTerminalObserver(persistence.ApprovalKindCredentialSlot, s.recordApprovalNotification)
 	// A proposed write is approved on the phone, one request per action
 	// (plan P4.8).
 	devices.RegisterEffect(persistence.ApprovalKindBrokerAction, s.actionEffect)
@@ -133,6 +141,35 @@ func (c *Container) agentAdmin() *agentAdminService {
 	devices.RegisterDescriber(persistence.ApprovalKindBrokerAction, describeAction)
 	c.agentAdminSvc = s
 	return c.agentAdminSvc
+}
+
+func (s *agentAdminService) recordApprovalNotification(_ context.Context, r persistence.AgentApprovalRequestRow, status string) {
+	if r.Namespace == "" {
+		return
+	}
+	n := SetupNotification{ChangeID: r.ID, Kind: r.Kind, Status: status}
+	s.notificationsMu.Lock()
+	defer s.notificationsMu.Unlock()
+	if s.notifications == nil {
+		s.notifications = map[string][]SetupNotification{}
+	}
+	buf := s.notifications[r.Namespace]
+	buf = append(buf, n)
+	if len(buf) > agentAdminNotificationLimit {
+		buf = append([]SetupNotification(nil), buf[len(buf)-agentAdminNotificationLimit:]...)
+	}
+	s.notifications[r.Namespace] = buf
+}
+
+func (s *agentAdminService) drainNotifications(ns string) []SetupNotification {
+	s.notificationsMu.Lock()
+	defer s.notificationsMu.Unlock()
+	if len(s.notifications[ns]) == 0 {
+		return nil
+	}
+	out := append([]SetupNotification(nil), s.notifications[ns]...)
+	delete(s.notifications, ns)
+	return out
 }
 
 // agentAdminWireable reports whether the structural dependencies of the

@@ -1686,13 +1686,18 @@ func (s *Server) companionToolList(ctx context.Context, key *persistence.APIKey,
 // schema lifted from the tools/list definition, so catalog() can
 // echo "here's exactly what to send to delegate" without the client
 // cross-referencing tools/list. Workflows don't carry per-workflow
-// parameter schemas in v1 — every delegate takes the same
-// {workflow, prompt, ...} shape — so the schema is workflow-agnostic
-// and surfaced once at the top level. LLD-21 § "catalog returns
-// schemas" / drift-mitigation §8.2.
-func delegateInputSchema() map[string]any {
+// parameter schemas in v1, so the schema is surfaced once at the top
+// level. It is key-shaped: broker-project and agent-admin keys take typed
+// inputs and refuse a prompt (broker design 2026-09-29 §4.3), while ordinary
+// companion keys take a prompt.
+func (s *Server) delegateInputSchemaFor(key *persistence.APIKey) map[string]any {
 	for _, def := range companionToolDefs() {
 		if def.Name == "delegate" {
+			if s.isBrokerProjectKey(key) || s.agentAdminOffered(key) {
+				def = brokerOnlyDelegate(def)
+			} else {
+				def = promptOnlyDelegate(def)
+			}
 			return def.InputSchema
 		}
 	}
@@ -1763,8 +1768,9 @@ func (s *Server) companionToolCatalog(ctx context.Context, key *persistence.APIK
 		"workflows":   wfEntries,
 		// LLD-21 § "catalog returns ... schemas". The delegate call
 		// shape so the host LLM knows what to send without guessing
-		// from tool descriptions. Workflow-agnostic in v1.
-		"delegate_input_schema": delegateInputSchema(),
+		// from tool descriptions. Key-shaped: broker/admin keys use
+		// inputs, ordinary companion keys use prompt.
+		"delegate_input_schema": s.delegateInputSchemaFor(key),
 	}
 	if project.Broker {
 		// A broker-project key has no memory tools at all (§5.6); the

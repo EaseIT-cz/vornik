@@ -173,6 +173,42 @@ func TestClient_ReadPathAndRefusals(t *testing.T) {
 	}
 }
 
+// Some legacy APIs (notably Google Maps Platform legacy web services) require
+// API-key authentication as a query parameter instead of a header. The agent
+// must still pass no credential in its query_api arguments; the daemon injects
+// the key after the egress scan and before the upstream request.
+func TestClient_QueryParamAuth(t *testing.T) {
+	srv, up := newUpstream(t)
+	p := &registry.Project{ID: "hermes--places", APIs: []registry.ProjectAPI{{Name: "maps", BaseURL: srv.URL,
+		Methods: []string{"GET"},
+		Auth:    registry.ProjectAPIAuth{QueryParam: "key", ValueFrom: "secret://hermes/GOOGLE_MAPS"}}}}
+	g := grantRows{rows: map[string]*persistence.AgentIntegrationApproval{
+		"hermes--places/maps": {ProjectID: "hermes--places", Integration: "maps", Kind: "api", ReadTools: []string{"GET"}},
+	}}
+	var logs bytes.Buffer
+	c := &Client{ProjectID: "hermes--places", Project: func(string) *registry.Project { return p }, Grants: g,
+		Secrets: secrets{"hermes/GOOGLE_MAPS": credCanary}, AllowedMethods: map[string]bool{"GET": true},
+		HTTP: func(string) *http.Client { return &http.Client{Timeout: 5 * time.Second} }, Logger: zerolog.New(&logs)}
+
+	_, err := c.Call(context.Background(), apigateway.Request{
+		Provider: "maps", Method: "GET", Path: "maps/api/place/textsearch/json",
+		Query: map[string]any{"query": "coffee in Prague", "key": "caller-supplied"},
+	})
+	if err != nil {
+		t.Fatalf("query-param auth call: %v", err)
+	}
+	got := up.seen[0]
+	if got.Header.Get("Authorization") != "" {
+		t.Fatalf("query-param auth also sent an Authorization header: %q", got.Header.Get("Authorization"))
+	}
+	if got.URL.Query().Get("query") != "coffee in Prague" || got.URL.Query().Get("key") != credCanary {
+		t.Fatalf("upstream query = %v", got.URL.Query())
+	}
+	if strings.Contains(logs.String(), credCanary) || strings.Contains(logs.String(), "caller-supplied") {
+		t.Fatalf("the query-param credential or request query leaked into logs: %s", logs.String())
+	}
+}
+
 // The worker's write route: exactly the approved write method, against the
 // live WRITE set (review 6e86 F4).
 func TestClient_WriteRoute(t *testing.T) {

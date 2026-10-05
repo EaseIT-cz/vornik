@@ -313,6 +313,7 @@ func TestBrokerCatalog_ShowsSchemasAndOnlyBrokerWorkflows(t *testing.T) {
 	require.False(t, isErr, text)
 	var out map[string]any
 	require.NoError(t, json.Unmarshal([]byte(text), &out))
+	assert.Equal(t, true, out["broker"])
 	wfs := out["workflows"].([]any)
 	require.Len(t, wfs, 1)
 	entry := wfs[0].(map[string]any)
@@ -320,6 +321,13 @@ func TestBrokerCatalog_ShowsSchemasAndOnlyBrokerWorkflows(t *testing.T) {
 	assert.NotNil(t, entry["input_schema"])
 	assert.NotNil(t, entry["egress_schema"])
 	assert.NotContains(t, text, "memory_read")
+	delegateSchema := out["delegate_input_schema"].(map[string]any)
+	reqs, _ := delegateSchema["required"].([]any)
+	assert.Equal(t, []any{"workflow", "inputs"}, reqs)
+	props := delegateSchema["properties"].(map[string]any)
+	assert.Contains(t, props, "inputs")
+	assert.NotContains(t, props, "prompt")
+	assert.NotContains(t, props, "inputArtifacts")
 
 	// And the other direction: an ordinary key never sees a broker workflow.
 	rawPlain, _ := seedCompanionKey(t, keyRepo, "memory-acme", []string{"wf-plain", "mail-digest"})

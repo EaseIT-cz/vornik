@@ -29,6 +29,9 @@ already have a project up and running — if you don't, start with
 - **[Let your assistant set up Vornik](assistant-setup.md)**: connect Hermes,
   Claude or Codex so it can build and run your automations itself, with every
   credential entered and every change approved on your phone.
+- **[Set up Hermes with Vornik](hermes-setup.md)**: Hermes as a broker
+  client with Vornik as its memory, including Vornik and Hermes under
+  separate OS users on one machine.
 - **[Acceptance check: an assistant sets up Vornik](assistant-setup-acceptance.md)**:
   the per-release manual check for Claude Desktop and Claude Code.
 - **[Recovering failed work](recovery.md)** — retry a task, rerun from a step,

@@ -15,6 +15,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"net/http"
 	"strings"
 	"sync"
@@ -44,7 +45,7 @@ const (
 // learns nothing about which condition failed.
 var (
 	ErrNoDevice     = errors.New("approverdevice: not an approver device")
-	ErrStaleDevice  = errors.New("approverdevice: this device signed in again in another tab")
+	ErrStaleDevice  = errors.New("approverdevice: this device's sign-in moved on while the page was open")
 	ErrRateLimited  = errors.New("approverdevice: too many attempts; wait a few minutes")
 	ErrBadCode      = errors.New("approverdevice: that code is not valid (it may have expired or been used)")
 	ErrUnknownKind  = errors.New("approverdevice: no effect is registered for this kind of request")
@@ -86,6 +87,12 @@ type Redemption struct {
 // re-apply loop may run it again after a crash between apply and MarkApplied.
 type Effect func(ctx context.Context, r persistence.AgentApprovalRequestRow) error
 
+// TerminalObserver is a best-effort hook for code that needs a content-free
+// signal after an approval request reaches a terminal state. The request row
+// remains the source of truth; status is one of approved, rejected, failed or
+// expired.
+type TerminalObserver func(ctx context.Context, r persistence.AgentApprovalRequestRow, status string)
+
 // Service is the device and approval-request logic.
 type Service struct {
 	repo   persistence.ApproverDeviceRepository
@@ -100,6 +107,7 @@ type Service struct {
 	mu            sync.RWMutex
 	effects       map[string]Effect
 	onReject      map[string]func(ctx context.Context, r persistence.AgentApprovalRequestRow)
+	terminal      map[string][]TerminalObserver
 	// values are the value-entry handlers by kind (plan P4.2).
 	values map[string]ValueEntry
 	// describers produce each kind's plain summary and level (§18.7).
@@ -162,6 +170,7 @@ func New(repo persistence.ApproverDeviceRepository, opts ...Option) *Service {
 		global:   chatauth.NewRedemptionLimiterWith(globalPairLimit, 10*time.Minute),
 		effects:  map[string]Effect{},
 		onReject: map[string]func(context.Context, persistence.AgentApprovalRequestRow){},
+		terminal: map[string][]TerminalObserver{},
 	}
 	for _, o := range opts {
 		o(s)
@@ -197,6 +206,31 @@ func (s *Service) RegisterOnReject(kind string, fn func(ctx context.Context, r p
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.onReject[kind] = fn
+}
+
+// RegisterTerminalObserver installs a best-effort terminal-state observer for
+// one request kind. Observers must not mutate the approval result: they run
+// after the repository transition has succeeded.
+func (s *Service) RegisterTerminalObserver(kind string, fn TerminalObserver) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.terminal[kind] = append(s.terminal[kind], fn)
+}
+
+func (s *Service) notifyTerminal(ctx context.Context, r persistence.AgentApprovalRequestRow, status string) {
+	s.mu.RLock()
+	observers := append([]TerminalObserver(nil), s.terminal[r.Kind]...)
+	s.mu.RUnlock()
+	for i, fn := range observers {
+		func() {
+			defer func() {
+				if rec := recover(); rec != nil {
+					log.Printf("approverdevice: terminal observer panic kind=%s request_id=%s status=%s observer_index=%d panic=%v", r.Kind, r.ID, status, i, rec)
+				}
+			}()
+			fn(ctx, r, status)
+		}()
+	}
 }
 
 // ValueEntry takes the value a request asks for (a credential slot, plan
@@ -561,45 +595,6 @@ func (s *Service) PollClaim(ctx context.Context, claimToken string) (string, Cla
 	return tok, ClaimApproved, nil
 }
 
-// Authenticate resolves a device token. Unknown, revoked and idle-expired
-// devices are one error, so the cookie value learns nothing.
-func (s *Service) Authenticate(ctx context.Context, token string) (*Device, error) {
-	if token == "" {
-		return nil, ErrNoDevice
-	}
-	d, err := s.repo.GetDeviceByTokenHash(ctx, HashToken(token))
-	if errors.Is(err, persistence.ErrNotFound) {
-		return nil, ErrNoDevice
-	}
-	if err != nil {
-		return nil, err
-	}
-	now := s.now()
-	if d.RevokedAt != nil || now.Sub(d.LastUsedAt) > IdleExpiry {
-		return nil, ErrNoDevice
-	}
-	if now.Sub(d.LastUsedAt) > touchInterval {
-		_ = s.repo.TouchDevice(ctx, d.ID, now)
-	}
-	return &Device{ID: d.ID, Label: d.Label, PairedAt: d.PairedAt}, nil
-}
-
-// Rotate re-issues a device's token after a decision (design §9.2). A stale
-// presented token (another tab rotated first) is ErrStaleDevice.
-func (s *Service) Rotate(ctx context.Context, d *Device, oldToken string) (string, error) {
-	tok, err := newToken()
-	if err != nil {
-		return "", err
-	}
-	if err := s.repo.RotateToken(ctx, d.ID, HashToken(oldToken), HashToken(tok), s.now()); err != nil {
-		if errors.Is(err, persistence.ErrNotFound) {
-			return "", ErrStaleDevice
-		}
-		return "", err
-	}
-	return tok, nil
-}
-
 // Revoke revokes a device; revoking an unknown or revoked device is a no-op.
 func (s *Service) Revoke(ctx context.Context, id string) error {
 	return s.repo.RevokeDevice(ctx, id, s.now())
@@ -653,10 +648,17 @@ func (s *Service) Decide(ctx context.Context, d *Device, requestID, shownSHA str
 		s.mu.RLock()
 		hook := s.onReject[r.Kind]
 		s.mu.RUnlock()
+		var decided *persistence.AgentApprovalRequestRow
 		if hook != nil {
-			if decided, err := s.repo.GetRequest(ctx, requestID); err == nil {
+			if decided, err = s.repo.GetRequest(ctx, requestID); err == nil {
 				hook(ctx, *decided)
 			}
+		}
+		if decided == nil {
+			decided, _ = s.repo.GetRequest(ctx, requestID)
+		}
+		if decided != nil {
+			s.notifyTerminal(ctx, *decided, persistence.ApprovalRejected)
 		}
 		return nil
 	}
@@ -679,24 +681,45 @@ func (s *Service) claimAndApply(ctx context.Context, id string, fn Effect) error
 	}
 	if err := fn(ctx, *r); err != nil {
 		if errors.Is(err, ErrPermanent) {
-			if merr := s.repo.MarkApplyFailed(ctx, id, err.Error(), s.now()); merr != nil {
+			now := s.now()
+			if merr := s.repo.MarkApplyFailed(ctx, id, err.Error(), now); merr != nil {
 				return merr
 			}
+			failed := *r
+			failed.AppliedAt = &now
+			failed.ApplyError = err.Error()
+			s.notifyTerminal(ctx, failed, "failed")
 			return fmt.Errorf("approverdevice: request %s was approved, but it cannot be applied: %w", id, err)
 		}
 		return fmt.Errorf("approverdevice: request %s was approved, but applying it failed (attempt %d; it will be retried): %w", id, r.ApplyAttempts, err)
 	}
-	return s.repo.MarkApplied(ctx, id, s.now())
+	now = s.now()
+	if err := s.repo.MarkApplied(ctx, id, now); err != nil {
+		return err
+	}
+	applied := *r
+	applied.AppliedAt = &now
+	s.notifyTerminal(ctx, applied, persistence.ApprovalApproved)
+	return nil
 }
 
-// Tick runs the once-a-minute housekeeping: expire pending requests past
-// their TTL (§12), and re-apply approved requests whose effect did not run.
+// Tick runs the once-a-minute housekeeping: end expired rotation shares,
+// expire pending requests past their TTL (§12), and re-apply approved
+// requests whose effect did not run.
 func (s *Service) Tick(ctx context.Context) error {
+	// End device-rotation shares past their time (design §9.2, amendment
+	// 2026-10-05), so a nonce never outlives its share by more than a tick.
+	if err := s.repo.ExpireShares(ctx, s.now()); err != nil {
+		return err
+	}
 	expired, err := s.repo.ExpirePendingRows(ctx, s.now())
 	if err != nil {
 		return err
 	}
 	s.recordExpired(expired)
+	for _, r := range expired {
+		s.notifyTerminal(ctx, r, persistence.ApprovalExpired)
+	}
 	return s.ReapplyApproved(ctx)
 }
 

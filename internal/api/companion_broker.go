@@ -412,7 +412,12 @@ func wrapUntrustedPath(node any, segs []string) {
 		return
 	}
 	seg := segs[0]
-	name, isArray := strings.CutSuffix(seg, "[]")
+	name := seg
+	depth := 0
+	for strings.HasSuffix(name, "[]") {
+		name = strings.TrimSuffix(name, "[]")
+		depth++
+	}
 	val, present := obj[name]
 	if !present {
 		return
@@ -424,31 +429,31 @@ func wrapUntrustedPath(node any, segs []string) {
 		}
 		return v
 	}
-	if isArray {
-		arr, ok := val.([]any)
-		if !ok {
-			return
-		}
-		for i := range arr {
+	var wrapValue func(any, int) any
+	wrapValue = func(v any, remaining int) any {
+		if remaining == 0 {
 			if last {
-				arr[i] = wrapLeaf(arr[i])
-			} else {
-				wrapUntrustedPath(arr[i], segs[1:])
+				return wrapLeaf(v)
+			}
+			wrapUntrustedPath(v, segs[1:])
+			return v
+		}
+		if arr, ok := v.([]any); ok {
+			for i := range arr {
+				arr[i] = wrapValue(arr[i], remaining-1)
 			}
 		}
-		return
+		return v
 	}
-	if last {
-		obj[name] = wrapLeaf(val)
-		return
-	}
-	wrapUntrustedPath(val, segs[1:])
+	obj[name] = wrapValue(val, depth)
 }
 
 func deepCopyJSON(v map[string]any) map[string]any {
 	b, _ := json.Marshal(v)
 	var out map[string]any
-	_ = json.Unmarshal(b, &out)
+	dec := json.NewDecoder(bytes.NewReader(b))
+	dec.UseNumber()
+	_ = dec.Decode(&out)
 	return out
 }
 

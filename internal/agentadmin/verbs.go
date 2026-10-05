@@ -149,6 +149,9 @@ func placeholderWorkflow(ns, id string) workflowData {
 
 type stepData struct {
 	Name, Role, Instructions, Next string
+	// RequireOutputGlob is rendered onto non-answer steps so the executor
+	// enforces the same hand-off file the prompt tells the step to write.
+	RequireOutputGlob string
 	// First and Last place the step in the chain (design §18.10): every step
 	// but the first is told where earlier steps' files are, every step but
 	// the last how to hand work on, and the last writes the answer.
@@ -557,10 +560,34 @@ func buildSteps(p *ProjectState, in []StepInput) ([]stepData, string) {
 		if len(in) > 1 {
 			closing = closingMultiStep
 		}
+		last := i+1 == len(in)
+		requireOutputGlob := ""
+		if !last {
+			requireOutputGlob = "artifacts/out/" + s.Name + ".md"
+			if other := conflictingOutputPath(s.Instructions, requireOutputGlob); other != "" {
+				return nil, fmt.Sprintf("step %s instructions name %q, but non-answer steps must write their hand-off to %q", s.Name, other, requireOutputGlob)
+			}
+		}
 		steps = append(steps, stepData{Name: s.Name, Role: s.Role, Instructions: s.Instructions, Next: next,
-			First: i == 0, Last: i+1 == len(in), Closing: closing})
+			RequireOutputGlob: requireOutputGlob, First: i == 0, Last: last, Closing: closing})
 	}
 	return steps, ""
+}
+
+func conflictingOutputPath(instructions, expected string) string {
+	for _, loc := range outPathRe.FindAllStringIndex(instructions, -1) {
+		p := instructions[loc[0]:loc[1]]
+		if p != expected {
+			before := instructions[:loc[0]]
+			if len(before) > 80 {
+				before = before[len(before)-80:]
+			}
+			if outIntentRe.MatchString(before) {
+				return p
+			}
+		}
+	}
+	return ""
 }
 
 // checkInputSchema accepts an object schema the broker compiler accepts, and

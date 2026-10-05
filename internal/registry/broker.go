@@ -488,6 +488,11 @@ func (w *brokerSchemaWalker) walkObject(at string, node map[string]any, multipli
 	}
 	sort.Strings(names)
 	for _, name := range names {
+		// Dots and brackets encode traversal in UntrustedInputPaths and
+		// UntrustedArgPaths; accepting them in literal names loses wrapping.
+		if strings.ContainsAny(name, ".[]") {
+			return ruleError(at, ruleObject, "property names must not contain dots or brackets")
+		}
 		child, ok := props[name].(map[string]any)
 		if !ok {
 			return fmt.Errorf("broker.%s: property schema must be a mapping", joinSchemaPath(at, "properties."+name))
@@ -508,7 +513,15 @@ func (w *brokerSchemaWalker) walkArray(at string, node map[string]any, multiplie
 	if !ok {
 		return ruleError(at, ruleArray, "no single items schema")
 	}
-	return w.walk(joinSchemaPath(at, "items"), items, multiplier*maxItems)
+	// Only the untrusted-text budget uses this multiplier. Saturating one
+	// above its ceiling preserves the proof without overflowing nested arrays.
+	const capMultiplier = BrokerUntrustedBudget + 1
+	if multiplier > capMultiplier/maxItems {
+		multiplier = capMultiplier
+	} else {
+		multiplier *= maxItems
+	}
+	return w.walk(joinSchemaPath(at, "items"), items, multiplier)
 }
 
 func (w *brokerSchemaWalker) walkString(at string, node map[string]any, multiplier int) error {
@@ -526,7 +539,9 @@ func (w *brokerSchemaWalker) walkString(at string, node map[string]any, multipli
 			// limit that applies here.
 			return ruleError(at, ruleUntrusted, fmt.Sprintf("maxLength must be 1..%d here", limit))
 		}
-		w.budget += maxLen * multiplier
+		// maxLen and multiplier are bounded here; saturate the sum too so
+		// repeated leaves cannot wrap it back below the input budget.
+		w.budget = min(BrokerUntrustedBudget+1, w.budget+maxLen*multiplier)
 		w.untrusted = append(w.untrusted, untrustedPropertyPath(at))
 		return nil
 	}

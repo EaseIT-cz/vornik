@@ -19,7 +19,30 @@ type ApproverDeviceRow struct {
 	PairedBy   string // "first-device" | "device:<id>"
 	LastUsedAt time.Time
 	RevokedAt  *time.Time
+
+	// Rotation sharing and dead-value recognition (agent-administered design
+	// §9.2, amendment 2026-10-05 "Rotation must survive a lost response").
+	// PrevTokenHash, RotationNonce and ShareUntil are set only while a
+	// rotation is shared with in-flight requests; DeadTokenHash and DeadReason
+	// name the most recently killed value. No plaintext value is stored.
+	PrevTokenHash string
+	RotationNonce string // 64 hex characters
+	ShareUntil    *time.Time
+	DeadTokenHash string
+	DeadReason    string // DeadExpired | DeadConfirmed
+	ShareAdmitted bool
+	ShareStreak   int
 }
+
+// Why a device's previous value died (design §9.2, amendment 2026-10-05).
+const (
+	// DeadExpired: its share ended with the successor never presented — the
+	// response that carried it was lost. Resumable with a pairing code.
+	DeadExpired = "expired"
+	// DeadConfirmed: the successor was presented, so the holder of this value
+	// is not the browser that moved on. Not resumable.
+	DeadConfirmed = "confirmed"
+)
 
 // ApproverPairingRow is one pairing code from `vornikctl pair-device`.
 type ApproverPairingRow struct {
@@ -122,15 +145,44 @@ type ApproverDeviceRepository interface {
 	// WHERE claim_hash=? AND device_id IS NULL. A second call is ErrNotFound.
 	CompletePairing(ctx context.Context, claimHash string, d ApproverDeviceRow) error
 
-	// GetDeviceByTokenHash returns revoked rows too; the caller decides.
+	// GetDeviceByTokenHash finds the row whose token_hash, prev_token_hash or
+	// dead_token_hash is tokenHash; the caller compares which matched. It
+	// returns revoked rows too; the caller decides.
 	GetDeviceByTokenHash(ctx context.Context, tokenHash string) (*ApproverDeviceRow, error)
 	ListDevices(ctx context.Context) ([]ApproverDeviceRow, error)
 	CountActiveDevices(ctx context.Context) (int, error)
-	// RotateToken is a compare-and-swap on (id, oldHash, not revoked);
-	// a miss is ErrNotFound.
-	RotateToken(ctx context.Context, id, oldHash, newHash string, now time.Time) error
+	// RotateToken is a compare-and-swap on (id, token_hash = presentedHash,
+	// not revoked); a miss is ErrNotFound. It opens a share: prev_token_hash =
+	// presentedHash, the nonce, share_until. A share still open from an
+	// earlier value ends with that value dead as DeadConfirmed. The streak
+	// survives only if the previous share admitted a request; share_admitted
+	// is consumed.
+	RotateToken(ctx context.Context, id, presentedHash, newHash, nonce string, shareUntil, now time.Time) error
+	// AdmitShare records that a request other than the rotating one was
+	// admitted on the previous value during the share with this nonce. Only
+	// the first admission of a share counts: it increments share_streak and
+	// returns first=true with the new streak.
+	AdmitShare(ctx context.Context, id, nonce string) (streak int, first bool, err error)
+	// ConfirmToken runs when currentHash (the token_hash) is presented: an
+	// open share ends with its previous value dead as DeadConfirmed, and a
+	// DeadExpired predecessor is relabelled DeadConfirmed. Idempotent;
+	// share_admitted and share_streak are left alone.
+	ConfirmToken(ctx context.Context, id, currentHash string) error
+	// CloseShare sets share_until = min(share_until, until) on the share with
+	// this nonce; a stale nonce is a no-op.
+	CloseShare(ctx context.Context, id, nonce string, until time.Time) error
+	// ExpireShares ends every share whose share_until <= now, its previous
+	// value dead as DeadExpired.
+	ExpireShares(ctx context.Context, now time.Time) error
+	// ResumeDevice, in one transaction, consumes an unexpired, unredeemed
+	// pairing code and gives the unrevoked device whose dead value is
+	// deadHash with reason DeadExpired a new token_hash, clearing its share,
+	// dead and streak state. Either guard missing is ErrNotFound and nothing
+	// changes.
+	ResumeDevice(ctx context.Context, codeHash, deadHash, newHash string, now time.Time) (*ApproverDeviceRow, error)
 	TouchDevice(ctx context.Context, id string, now time.Time) error
-	// RevokeDevice is a no-op for an already revoked or unknown device.
+	// RevokeDevice is a no-op for an already revoked or unknown device. It
+	// erases any open share (nonce included).
 	RevokeDevice(ctx context.Context, id string, now time.Time) error
 
 	CreateRequest(ctx context.Context, r AgentApprovalRequestRow) error

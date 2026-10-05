@@ -8883,4 +8883,40 @@ CREATE TABLE IF NOT EXISTS agent_model_provider_approvals (
 `,
 		Down: `DROP TABLE IF EXISTS agent_model_provider_approvals;`,
 	},
+	{
+		Version: 215,
+		Name:    "approver_devices_rotation_share",
+		// P1 2026-10-05, approver devices unpaired by a lost rotation
+		// response. A rotation is shared with in-flight requests (the
+		// previous value, the nonce of the deterministic successor, and
+		// until when); the most recently killed value is recognised with why
+		// it died, so a lost response is explained and resumable; the share
+		// streak detects a clone riding consecutive rotations. No plaintext
+		// value is stored. SQLite: the starter schema plus
+		// sqliteAdditiveColumns.
+		//
+		// Design: https://docs.vornik.io §9.2, amendment 2026-10-05
+		Up: `
+ALTER TABLE approver_devices ADD COLUMN IF NOT EXISTS prev_token_hash TEXT;
+ALTER TABLE approver_devices ADD COLUMN IF NOT EXISTS rotation_nonce TEXT;
+ALTER TABLE approver_devices ADD COLUMN IF NOT EXISTS share_until TIMESTAMPTZ;
+ALTER TABLE approver_devices ADD COLUMN IF NOT EXISTS dead_token_hash TEXT;
+ALTER TABLE approver_devices ADD COLUMN IF NOT EXISTS dead_reason TEXT;
+ALTER TABLE approver_devices ADD COLUMN IF NOT EXISTS share_admitted BOOLEAN NOT NULL DEFAULT false;
+ALTER TABLE approver_devices ADD COLUMN IF NOT EXISTS share_streak INTEGER NOT NULL DEFAULT 0;
+CREATE INDEX IF NOT EXISTS idx_approver_devices_prev_token ON approver_devices (prev_token_hash);
+CREATE INDEX IF NOT EXISTS idx_approver_devices_dead_token ON approver_devices (dead_token_hash);
+`,
+		Down: `
+DROP INDEX IF EXISTS idx_approver_devices_dead_token;
+DROP INDEX IF EXISTS idx_approver_devices_prev_token;
+ALTER TABLE approver_devices DROP COLUMN IF EXISTS share_streak;
+ALTER TABLE approver_devices DROP COLUMN IF EXISTS share_admitted;
+ALTER TABLE approver_devices DROP COLUMN IF EXISTS dead_reason;
+ALTER TABLE approver_devices DROP COLUMN IF EXISTS dead_token_hash;
+ALTER TABLE approver_devices DROP COLUMN IF EXISTS share_until;
+ALTER TABLE approver_devices DROP COLUMN IF EXISTS rotation_nonce;
+ALTER TABLE approver_devices DROP COLUMN IF EXISTS prev_token_hash;
+`,
+	},
 }

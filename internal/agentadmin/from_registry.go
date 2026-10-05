@@ -18,7 +18,7 @@ func ProjectStateFrom(p *registry.Project, sw *registry.Swarm) *ProjectState {
 	ps.Swarm.ID = p.SwarmID
 	for _, a := range p.APIs {
 		ps.APIs = append(ps.APIs, APIState{Name: a.Name, BaseURL: a.BaseURL, Header: a.Auth.Header,
-			AuthRef: strings.TrimSpace(a.Auth.ValueFrom), Prefix: a.Auth.Prefix,
+			QueryParam: a.Auth.QueryParam, AuthRef: strings.TrimSpace(a.Auth.ValueFrom), Prefix: a.Auth.Prefix,
 			Methods: append([]string(nil), a.Methods...), Writes: a.Writes})
 	}
 	for _, s := range p.MCP.Servers {

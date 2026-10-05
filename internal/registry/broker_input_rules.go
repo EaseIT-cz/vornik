@@ -21,7 +21,7 @@ var (
 	ruleKeywords = BrokerInputRule{"keywords", "no " + strings.Join(brokerRefusedKeywords, ", ") +
 		": bounds are proved only through plain properties and items"}
 	ruleType   = BrokerInputRule{"type", "every schema node has one type (object, array, string, integer, number, boolean or null) or an enum or const"}
-	ruleObject = BrokerInputRule{"object", "every object declares additionalProperties: false"}
+	ruleObject = BrokerInputRule{"object", "every object declares additionalProperties: false; property names contain no dots or brackets"}
 	ruleArray  = BrokerInputRule{"array", "every array declares maxItems and one items schema"}
 	ruleString = BrokerInputRule{"string", "every string is bounded: an enum, an allowed format (" +
 		strings.Join(allowedFormatNames(), ", ") + "), a pattern with maxLength, or x-untrusted with maxLength"}

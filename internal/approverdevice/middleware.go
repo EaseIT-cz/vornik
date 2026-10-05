@@ -33,10 +33,11 @@ type deviceCtx struct {
 func (s *Service) RequireDevice(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		c, err := r.Cookie(CookieName)
-		var d *Device
+		var res authResult
 		if err == nil {
-			d, err = s.Authenticate(r.Context(), c.Value)
+			res, err = s.authenticate(r.Context(), c.Value)
 		}
+		d := res.device
 		if err != nil || d == nil {
 			if r.Method == http.MethodGet || r.Method == http.MethodHead {
 				http.Redirect(w, r, pairURL(r.URL.Path), http.StatusSeeOther)
@@ -50,6 +51,12 @@ func (s *Service) RequireDevice(next http.Handler) http.Handler {
 				s.renderStatus(w, http.StatusForbidden, "Refused", "This request did not come from this page.")
 				return
 			}
+		}
+		if res.reissue != "" {
+			// Admitted on the previous value inside a rotation's share: the
+			// response re-sends the successor the browser has not got (design
+			// §9.2, amendment 2026-10-05).
+			w = s.withCookie(w, r, res.reissue)
 		}
 		ctx := context.WithValue(r.Context(), ctxKey{}, deviceCtx{device: d, token: c.Value})
 		next.ServeHTTP(w, r.WithContext(ctx))

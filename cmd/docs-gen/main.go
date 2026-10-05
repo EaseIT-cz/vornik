@@ -8,21 +8,26 @@
 //
 //	docs-gen cli      # regenerate docs/public/reference/vornikctl.md
 //	docs-gen config   # regenerate docs/public/reference/configuration.md
-//	docs-gen all      # both reference pages
+//	docs-gen llms     # regenerate docs/public/llms.txt from mkdocs.yml
+//	docs-gen all      # all generated public docs + tool registry
 //	docs-gen stamp    # re-anchor sources: hashes on all docs/public pages
 package main
 
 import (
+	"bufio"
 	"fmt"
 	"os"
+	"path"
 	"path/filepath"
 	"reflect"
 	"regexp"
 	"sort"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/spf13/cobra"
 	"github.com/spf13/pflag"
+	"gopkg.in/yaml.v3"
 	"vornik.io/vornik/internal/cli"
 	"vornik.io/vornik/internal/config"
 	"vornik.io/vornik/internal/docsmeta"
@@ -33,11 +38,14 @@ const genHeader = "<!-- Generated from source — do not edit by hand. -->\n\n"
 const (
 	cliPage    = "docs/public/reference/vornikctl.md"
 	configPage = "docs/public/reference/configuration.md"
+	llmsPage   = "docs/public/llms.txt"
 )
+
+var markdownLinkRE = regexp.MustCompile(`!?\[(.*?)\]\([^)]*\)`)
 
 func main() {
 	if len(os.Args) < 2 {
-		fmt.Fprintln(os.Stderr, "usage: docs-gen <cli|config|editions|tools|all|stamp>")
+		fmt.Fprintln(os.Stderr, "usage: docs-gen <cli|config|editions|llms|tools|all|stamp>")
 		os.Exit(2)
 	}
 	root, err := repoRoot()
@@ -55,12 +63,15 @@ func main() {
 		writePage(filepath.Join(root, configPage), genHeader+renderConfig(reflect.TypeOf(config.Config{})), deny)
 	case "editions":
 		writeEditions(root, deny)
+	case "llms":
+		writePage(filepath.Join(root, llmsPage), genHeader+renderLLMs(root), deny)
 	case "tools":
 		writeToolRegistry(root)
 	case "all":
 		writePage(filepath.Join(root, cliPage), genHeader+renderCLI(cli.RootCmd(), loadCLIAllow(root)), deny)
 		writePage(filepath.Join(root, configPage), genHeader+renderConfig(reflect.TypeOf(config.Config{})), deny)
 		writeEditions(root, deny)
+		writePage(filepath.Join(root, llmsPage), genHeader+renderLLMs(root), deny)
 		writeToolRegistry(root)
 	case "stamp":
 		stamp(root, os.Args[2:])
@@ -68,6 +79,364 @@ func main() {
 		fmt.Fprintf(os.Stderr, "docs-gen: unknown command %q\n", os.Args[1])
 		os.Exit(2)
 	}
+}
+
+type mkdocsConfig struct {
+	SiteName    string    `yaml:"site_name"`
+	SiteURL     string    `yaml:"site_url"`
+	DocsDir     string    `yaml:"docs_dir"`
+	ExcludeDocs yaml.Node `yaml:"exclude_docs"`
+	Nav         yaml.Node `yaml:"nav"`
+}
+
+type llmsSection struct {
+	Title string
+	Pages []llmsPageEntry
+}
+
+type llmsPageEntry struct {
+	Title string
+	Path  string
+}
+
+type excludeRules []string
+
+func renderLLMs(root string) string {
+	cfg, err := loadMkdocsConfig(filepath.Join(root, "mkdocs.yml"))
+	if err != nil {
+		fatal(err)
+	}
+	out, err := renderLLMsFromConfig(root, cfg)
+	if err != nil {
+		fatal(err)
+	}
+	return out
+}
+
+func renderLLMsFromConfig(root string, cfg mkdocsConfig) (string, error) {
+	if cfg.DocsDir == "" {
+		cfg.DocsDir = "docs"
+	}
+	siteURL := strings.TrimRight(cfg.SiteURL, "/")
+	excluded := parseExcludeDocs(cfg.ExcludeDocs)
+
+	sections, err := collectLLMSSections(cfg.Nav, excluded)
+	if err != nil {
+		return "", err
+	}
+	var b strings.Builder
+	b.WriteString("# Vornik\n\n")
+	b.WriteString("> Local-first orchestration daemon for teams of AI agents. Vornik runs asynchronous projects, swarms, workflows, memory, approvals, companion delegation, and operator tooling on infrastructure you control.\n\n")
+	b.WriteString("Install: `curl -fsSL https://get.vornik.io | bash`  (Linux with rootless Podman recommended)\n\n")
+	b.WriteString("Repo: https://github.com/EaseIT-cz/vornik\n")
+	if siteURL != "" {
+		fmt.Fprintf(&b, "Docs: %s\n", siteURL)
+	}
+
+	docsDir := filepath.Join(root, cfg.DocsDir)
+	for _, section := range sections {
+		if len(section.Pages) == 0 {
+			continue
+		}
+		fmt.Fprintf(&b, "\n## %s\n", section.Title)
+		for _, page := range section.Pages {
+			mdPath := filepath.Join(docsDir, filepath.FromSlash(page.Path))
+			title, desc, err := readMarkdownSummary(mdPath)
+			if err != nil {
+				return "", fmt.Errorf("llms: %s: %w", page.Path, err)
+			}
+			if title == "" {
+				title = page.Title
+			}
+			if desc == "" {
+				desc = title
+			}
+			fmt.Fprintf(&b, "- [%s](%s): %s\n", title, publicDocsURL(siteURL, page.Path), desc)
+		}
+	}
+	return b.String(), nil
+}
+
+func loadMkdocsConfig(path string) (mkdocsConfig, error) {
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return mkdocsConfig{}, err
+	}
+	var cfg mkdocsConfig
+	if err := yaml.Unmarshal(raw, &cfg); err != nil {
+		return mkdocsConfig{}, err
+	}
+	if len(cfg.Nav.Content) == 0 {
+		return mkdocsConfig{}, fmt.Errorf("mkdocs nav is empty")
+	}
+	return cfg, nil
+}
+
+func parseExcludeDocs(raw yaml.Node) excludeRules {
+	var out excludeRules
+	switch raw.Kind {
+	case yaml.SequenceNode:
+		for _, item := range raw.Content {
+			if item.Kind == yaml.ScalarNode {
+				addExcludeRule(&out, item.Value)
+			}
+		}
+	case yaml.ScalarNode:
+		for _, line := range strings.Split(raw.Value, "\n") {
+			addExcludeRule(&out, line)
+		}
+	}
+	return out
+}
+
+func addExcludeRule(out *excludeRules, raw string) {
+	line := strings.TrimSpace(raw)
+	if line == "" || strings.HasPrefix(line, "#") {
+		return
+	}
+	*out = append(*out, line)
+}
+
+func (rules excludeRules) match(doc string) bool {
+	for _, rule := range rules {
+		if rule == doc {
+			return true
+		}
+		if ok, _ := path.Match(rule, doc); ok {
+			return true
+		}
+		if strings.HasSuffix(rule, "/**") && strings.HasPrefix(doc, strings.TrimSuffix(rule, "**")) {
+			return true
+		}
+	}
+	return false
+}
+
+func collectLLMSSections(nav yaml.Node, excluded excludeRules) ([]llmsSection, error) {
+	if nav.Kind == yaml.DocumentNode && len(nav.Content) > 0 {
+		nav = *nav.Content[0]
+	}
+	var sections []llmsSection
+	for i := 0; i < len(nav.Content); i++ {
+		item := nav.Content[i]
+		if item.Kind == yaml.ScalarNode {
+			if !excluded.match(item.Value) {
+				sections = append(sections, llmsSection{
+					Title: "Other",
+					Pages: []llmsPageEntry{{Title: strings.TrimSuffix(filepath.Base(item.Value), ".md"), Path: item.Value}},
+				})
+			}
+			continue
+		}
+		if item.Kind != yaml.MappingNode || len(item.Content) < 2 {
+			return nil, fmt.Errorf("llms: malformed mkdocs nav entry at index %d", i)
+		}
+		title := item.Content[0].Value
+		value := item.Content[1]
+		if value.Kind == yaml.ScalarNode {
+			if strings.TrimSpace(value.Value) == "" {
+				return nil, fmt.Errorf("llms: mkdocs nav entry %q has no target", title)
+			}
+			if title == "Home" || excluded.match(value.Value) {
+				continue
+			}
+			sections = append(sections, llmsSection{
+				Title: title,
+				Pages: []llmsPageEntry{{Title: title, Path: value.Value}},
+			})
+			continue
+		}
+		pages, err := collectLLMSPages(value, excluded)
+		if err != nil {
+			return nil, fmt.Errorf("llms: mkdocs nav section %q: %w", title, err)
+		}
+		if len(pages) > 0 {
+			sections = append(sections, llmsSection{Title: title, Pages: pages})
+		}
+	}
+	return sections, nil
+}
+
+//nolint:gocognit // Recursive mkdocs nav traversal is easier to audit in one switch.
+func collectLLMSPages(node *yaml.Node, excluded excludeRules) ([]llmsPageEntry, error) {
+	if node == nil {
+		return nil, fmt.Errorf("empty nav node")
+	}
+	if node.Kind == yaml.DocumentNode && len(node.Content) > 0 {
+		return collectLLMSPages(node.Content[0], excluded)
+	}
+	var pages []llmsPageEntry
+	switch node.Kind {
+	case yaml.SequenceNode:
+		for _, child := range node.Content {
+			childPages, err := collectLLMSPages(child, excluded)
+			if err != nil {
+				return nil, err
+			}
+			pages = append(pages, childPages...)
+		}
+	case yaml.MappingNode:
+		if len(node.Content)%2 != 0 {
+			return nil, fmt.Errorf("mapping nav node has an unmatched key")
+		}
+		for i := 0; i+1 < len(node.Content); i += 2 {
+			title := node.Content[i].Value
+			value := node.Content[i+1]
+			if value.Kind == yaml.ScalarNode {
+				if strings.TrimSpace(value.Value) == "" {
+					return nil, fmt.Errorf("entry %q has no target", title)
+				}
+				if !excluded.match(value.Value) {
+					pages = append(pages, llmsPageEntry{Title: title, Path: value.Value})
+				}
+				continue
+			}
+			childPages, err := collectLLMSPages(value, excluded)
+			if err != nil {
+				return nil, fmt.Errorf("entry %q: %w", title, err)
+			}
+			pages = append(pages, childPages...)
+		}
+	case yaml.ScalarNode:
+		if strings.TrimSpace(node.Value) == "" {
+			return nil, fmt.Errorf("empty nav target")
+		}
+		if !excluded.match(node.Value) {
+			pages = append(pages, llmsPageEntry{Title: strings.TrimSuffix(filepath.Base(node.Value), ".md"), Path: node.Value})
+		}
+	default:
+		return nil, fmt.Errorf("unsupported nav node kind %d", node.Kind)
+	}
+	return pages, nil
+}
+
+func pageDescription(path string) string {
+	_, desc, err := readMarkdownSummary(path)
+	if err != nil {
+		return ""
+	}
+	return desc
+}
+
+//nolint:gocognit // Markdown summary extraction is a small state machine kept together.
+func readMarkdownSummary(path string) (string, string, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return "", "", err
+	}
+	defer func() { _ = f.Close() }()
+
+	scanner := bufio.NewScanner(f)
+	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
+	var para []string
+	var title string
+	inFrontMatter := false
+	frontMatterChecked := false
+	afterH1 := false
+	skipAdmonition := false
+	inCodeFence := false
+	for scanner.Scan() {
+		rawLine := scanner.Text()
+		line := strings.TrimSpace(rawLine)
+		if !frontMatterChecked {
+			if line == "" {
+				continue
+			}
+			frontMatterChecked = true
+			if line == "---" {
+				inFrontMatter = true
+				continue
+			}
+		}
+		if inFrontMatter {
+			if line == "---" {
+				inFrontMatter = false
+			}
+			continue
+		}
+		if strings.HasPrefix(line, "# ") {
+			if title == "" {
+				title = strings.TrimSpace(strings.TrimPrefix(line, "# "))
+			}
+			afterH1 = true
+			continue
+		}
+		if strings.HasPrefix(line, "```") {
+			inCodeFence = !inCodeFence
+			continue
+		}
+		if inCodeFence {
+			continue
+		}
+		if strings.HasPrefix(line, "!!! ") {
+			skipAdmonition = true
+			continue
+		}
+		if skipAdmonition {
+			if strings.HasPrefix(rawLine, "    ") || line == "" {
+				continue
+			}
+			skipAdmonition = false
+		}
+		if !afterH1 || line == "" {
+			if len(para) > 0 {
+				break
+			}
+			continue
+		}
+		if strings.HasPrefix(line, "## ") || strings.HasPrefix(line, "- ") {
+			if len(para) > 0 {
+				break
+			}
+			continue
+		}
+		para = append(para, line)
+	}
+	if err := scanner.Err(); err != nil {
+		return "", "", err
+	}
+	return title, compactMarkdownDescription(strings.Join(para, " ")), nil
+}
+
+func compactMarkdownDescription(s string) string {
+	if !utf8.ValidString(s) {
+		s = strings.ToValidUTF8(s, "")
+	}
+	s = strings.ReplaceAll(s, "**", "")
+	s = strings.ReplaceAll(s, "__", "")
+	s = strings.ReplaceAll(s, "`", "")
+	s = markdownLinkRE.ReplaceAllString(s, "$1")
+	s = strings.Join(strings.Fields(s), " ")
+	if len(s) <= 220 {
+		return s
+	}
+	cutLimit := 220
+	for cutLimit > 0 && !utf8.RuneStart(s[cutLimit]) {
+		cutLimit--
+	}
+	if cutLimit == 0 && !utf8.RuneStart(s[0]) {
+		cutLimit = 220
+	}
+	cut := strings.LastIndex(s[:cutLimit], " ")
+	if cut < 120 {
+		cut = cutLimit
+	}
+	return strings.TrimSpace(s[:cut]) + "..."
+}
+
+func publicDocsURL(siteURL, mdPath string) string {
+	docPath := strings.TrimSuffix(mdPath, ".md")
+	docPath = strings.TrimSuffix(docPath, "/index")
+	if docPath == "index" {
+		docPath = ""
+	}
+	if docPath != "" {
+		docPath += "/"
+	}
+	if siteURL == "" {
+		return "/" + docPath
+	}
+	return strings.TrimRight(siteURL, "/") + "/" + docPath
 }
 
 func fatal(err error) {

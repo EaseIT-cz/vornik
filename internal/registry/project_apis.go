@@ -23,11 +23,13 @@ type ProjectAPI struct {
 	Writes bool `yaml:"writes,omitempty"`
 }
 
-// ProjectAPIAuth injects one header from a secret at call time.
+// ProjectAPIAuth injects one credential from a secret at call time. Header is
+// the default placement; QueryParam supports legacy APIs that require key=.
 type ProjectAPIAuth struct {
-	Header    string `yaml:"header,omitempty"`
-	ValueFrom string `yaml:"value_from,omitempty"`
-	Prefix    string `yaml:"prefix,omitempty"`
+	Header     string `yaml:"header,omitempty"`
+	QueryParam string `yaml:"query_param,omitempty"`
+	ValueFrom  string `yaml:"value_from,omitempty"`
+	Prefix     string `yaml:"prefix,omitempty"`
 }
 
 // APIReadMethods are the methods a role may call (plan P4.5).
@@ -36,6 +38,7 @@ var APIReadMethods = map[string]bool{"GET": true, "HEAD": true}
 var (
 	apiNameRe   = regexp.MustCompile(`^[a-z][a-z0-9_-]{0,31}$`)
 	apiHeaderRe = regexp.MustCompile(`^[A-Za-z0-9-]{1,64}$`)
+	apiQueryRe  = regexp.MustCompile(`^[A-Za-z0-9_.-]{1,64}$`)
 	apiMethods  = map[string]bool{"GET": true, "HEAD": true, "POST": true, "PUT": true, "PATCH": true, "DELETE": true}
 	// apiReservedHeaders are transport headers a credential must not set.
 	apiReservedHeaders = map[string]bool{"host": true, "content-length": true, "transfer-encoding": true,
@@ -91,7 +94,7 @@ func validateAPI(a ProjectAPI, granted []string) error {
 func validateAPIAuth(a ProjectAPI, granted []string) error {
 	au := a.Auth
 	if au.ValueFrom == "" {
-		if au.Header != "" || au.Prefix != "" {
+		if au.Header != "" || au.QueryParam != "" || au.Prefix != "" {
 			return fmt.Errorf("API %q: auth needs value_from", a.Name)
 		}
 		return nil
@@ -108,6 +111,18 @@ func validateAPIAuth(a ProjectAPI, granted []string) error {
 	}
 	if !allowed {
 		return fmt.Errorf("API %q: the secret %q is not in permissions.secrets", a.Name, name)
+	}
+	if au.Header != "" && au.QueryParam != "" {
+		return fmt.Errorf("API %q: auth must use either header or query_param, not both", a.Name)
+	}
+	if au.QueryParam != "" {
+		if !apiQueryRe.MatchString(au.QueryParam) {
+			return fmt.Errorf("API %q: query_param %q is not usable", a.Name, au.QueryParam)
+		}
+		if au.Prefix != "" {
+			return fmt.Errorf("API %q: prefix is only usable with header auth", a.Name)
+		}
+		return nil
 	}
 	if au.Header != "" && (!apiHeaderRe.MatchString(au.Header) || apiReservedHeaders[strings.ToLower(au.Header)]) {
 		return fmt.Errorf("API %q: header %q is not a usable header name", a.Name, au.Header)

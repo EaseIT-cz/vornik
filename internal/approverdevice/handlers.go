@@ -131,10 +131,47 @@ func (s *Service) renderStatus(w http.ResponseWriter, status int, title, msg str
 	s.render(w, status, "status.html", statusPage{title, msg})
 }
 
+// staleMessage answers a decision whose device value moved on while the page
+// was open (a value neither current nor shared).
+const staleMessage = "This device's sign-in changed while this page was open. Open the approvals list again; if it asks you to pair, follow the steps there."
+
 // pairData backs pair.html and wait.html.
 type pairData struct {
 	Error string
 	Help  pairingHelp
+	// SignedOut explains why this browser's device value is dead, and Resume
+	// says a code restores the same device (design §9.2, amendment
+	// 2026-10-05). Both come only from the dead cookie this browser
+	// presented, never from the query.
+	SignedOut string
+	Resume    bool
+}
+
+// signedOut reads the device cookie on the pairing page: a valid device is
+// sent on to next; a recognised dead value is explained, and an expired one
+// is resumable.
+func (s *Service) signedOut(w http.ResponseWriter, r *http.Request, next string) (data pairData, done bool) {
+	data = pairData{Help: s.help(r, next)}
+	c, err := r.Cookie(CookieName)
+	if err != nil {
+		return data, false
+	}
+	res, err := s.authenticate(r.Context(), c.Value)
+	var dead *ErrDeadDevice
+	switch {
+	case err == nil && res.device != nil:
+		if res.reissue != "" {
+			w = s.withCookie(w, r, res.reissue)
+		}
+		http.Redirect(w, r, orDefault(next), http.StatusSeeOther)
+		return data, true
+	case errors.As(err, &dead) && dead.Reason == persistence.DeadExpired:
+		data.SignedOut = "This phone was signed out because the answer to its last approval did not reach it. Enter a new code from vornikctl pair-device to restore it."
+		data.Resume = true
+	case errors.As(err, &dead):
+		data.SignedOut = "This phone was signed out because another browser used its sign-in. If that was not you, revoke this device from another device or with vornikctl devices revoke. To pair this browser again, enter a code; a device you already use must approve it."
+	}
+	return data, false
 }
 
 // pairPage is the only unauthenticated POST: code entry, rate limited in the
@@ -142,20 +179,50 @@ type pairData struct {
 func (s *Service) pairPage(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodGet, http.MethodHead:
-		s.render(w, http.StatusOK, "pair.html", pairData{Help: s.help(r, validNext(r.URL.Query().Get("next")))})
+		data, done := s.signedOut(w, r, validNext(r.URL.Query().Get("next")))
+		if done {
+			return
+		}
+		s.render(w, http.StatusOK, "pair.html", data)
 	case http.MethodPost:
 		if err := approval.CheckRequest(r); err != nil {
 			s.renderStatus(w, http.StatusForbidden, "Refused", "This request did not come from this page.")
 			return
 		}
 		next := validNext(r.FormValue("next"))
+		data, done := s.signedOut(w, r, next)
+		if done {
+			return
+		}
+		if data.Resume {
+			// An expired dead value plus a terminal code restores the SAME
+			// device (design §9.2, amendment 2026-10-05).
+			c, _ := r.Cookie(CookieName)
+			tok, _, err := s.Resume(r.Context(), r.FormValue("code"), c.Value, clientIP(r))
+			switch {
+			case errors.Is(err, ErrRateLimited):
+				data.Error = err.Error()
+				s.render(w, http.StatusTooManyRequests, "pair.html", data)
+			case errors.Is(err, ErrBadCode):
+				data.Error = err.Error()
+				s.render(w, http.StatusBadRequest, "pair.html", data)
+			case err != nil:
+				s.renderStatus(w, http.StatusInternalServerError, "Something went wrong", "Try again in a moment.")
+			default:
+				SetCookie(w, r, tok)
+				http.Redirect(w, r, orDefault(next), http.StatusSeeOther)
+			}
+			return
+		}
 		res, err := s.Redeem(r.Context(), r.FormValue("code"), clientIP(r))
 		switch {
 		case errors.Is(err, ErrRateLimited):
-			s.render(w, http.StatusTooManyRequests, "pair.html", pairData{Error: err.Error(), Help: s.help(r, next)})
+			data.Error = err.Error()
+			s.render(w, http.StatusTooManyRequests, "pair.html", data)
 			return
 		case errors.Is(err, ErrBadCode):
-			s.render(w, http.StatusBadRequest, "pair.html", pairData{Error: err.Error(), Help: s.help(r, next)})
+			data.Error = err.Error()
+			s.render(w, http.StatusBadRequest, "pair.html", data)
 			return
 		case err != nil:
 			s.renderStatus(w, http.StatusInternalServerError, "Something went wrong", "Try again in a moment.")
@@ -188,7 +255,10 @@ func (s *Service) pairWait(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		// The second tab, after the first completed (plan amendment 9).
 		if dc, derr := r.Cookie(CookieName); derr == nil {
-			if d, aerr := s.Authenticate(r.Context(), dc.Value); aerr == nil && d != nil {
+			if res, aerr := s.authenticate(r.Context(), dc.Value); aerr == nil && res.device != nil {
+				if res.reissue != "" {
+					w = s.withCookie(w, r, res.reissue)
+				}
 				next := nextFromCookie(r)
 				clearNextCookie(w, r)
 				http.Redirect(w, r, orDefault(next), http.StatusSeeOther)
@@ -400,16 +470,20 @@ func (s *Service) decideGroup(w http.ResponseWriter, r *http.Request, key string
 		http.Redirect(w, r, "/ui/approve/group/"+key, http.StatusSeeOther)
 		return
 	}
-	newTok, err := s.Rotate(r.Context(), d, tokenFromRequest(r))
+	rot, err := s.rotate(r.Context(), d, tokenFromRequest(r))
 	if errors.Is(err, ErrStaleDevice) {
-		s.renderStatus(w, http.StatusConflict, "Reload", "This device signed in again in another tab. Reload this page.")
+		s.renderStatus(w, http.StatusConflict, "Signed in elsewhere", staleMessage)
 		return
 	}
 	if err != nil {
 		s.renderStatus(w, http.StatusInternalServerError, "Something went wrong", "Try again in a moment.")
 		return
 	}
-	SetCookie(w, r, newTok)
+	// Share the rotation with requests already in flight on this value until
+	// ShareGrace after this response; the cookie is written lazily (design
+	// §9.2, amendment 2026-10-05).
+	defer s.closeShare(r.Context(), d.ID, rot)
+	w = s.withCookie(w, r, rot.token)
 	decided := 0
 	var refused []string
 	for _, p := range picks {
@@ -544,18 +618,22 @@ func (s *Service) decide(w http.ResponseWriter, r *http.Request, req *persistenc
 			return
 		}
 	}
-	// Rotate first (design §9.2): a stale token (another tab rotated) is a
-	// 409 and decides nothing.
-	newTok, err := s.Rotate(r.Context(), d, tokenFromRequest(r))
+	// Rotate first (design §9.2): a value neither current nor shared (it moved
+	// on while the page was open) is a 409 and decides nothing.
+	rot, err := s.rotate(r.Context(), d, tokenFromRequest(r))
 	if errors.Is(err, ErrStaleDevice) {
-		s.renderStatus(w, http.StatusConflict, "Reload", "This device signed in again in another tab. Reload this page.")
+		s.renderStatus(w, http.StatusConflict, "Signed in elsewhere", staleMessage)
 		return
 	}
 	if err != nil {
 		s.renderStatus(w, http.StatusInternalServerError, "Something went wrong", "Try again in a moment.")
 		return
 	}
-	SetCookie(w, r, newTok)
+	// Share the rotation with requests already in flight on this value until
+	// ShareGrace after this response; the cookie is written lazily (design
+	// §9.2, amendment 2026-10-05).
+	defer s.closeShare(r.Context(), d.ID, rot)
+	w = s.withCookie(w, r, rot.token)
 	shown := r.PostFormValue("rendered_sha256")
 	if approve && takesValue {
 		err = entry(r.Context(), d, *req, shown, []byte(value))
@@ -604,16 +682,20 @@ func (s *Service) decideHost(w http.ResponseWriter, r *http.Request, req *persis
 		s.render(w, http.StatusBadRequest, "request.html", s.requestData(req, "Choose one of the answers below."))
 		return
 	}
-	newTok, err := s.Rotate(r.Context(), d, tokenFromRequest(r))
+	rot, err := s.rotate(r.Context(), d, tokenFromRequest(r))
 	if errors.Is(err, ErrStaleDevice) {
-		s.renderStatus(w, http.StatusConflict, "Reload", "This device signed in again in another tab. Reload this page.")
+		s.renderStatus(w, http.StatusConflict, "Signed in elsewhere", staleMessage)
 		return
 	}
 	if err != nil {
 		s.renderStatus(w, http.StatusInternalServerError, "Something went wrong", "Try again in a moment.")
 		return
 	}
-	SetCookie(w, r, newTok)
+	// Share the rotation with requests already in flight on this value until
+	// ShareGrace after this response; the cookie is written lazily (design
+	// §9.2, amendment 2026-10-05).
+	defer s.closeShare(r.Context(), d.ID, rot)
+	w = s.withCookie(w, r, rot.token)
 	err = s.DecideChoice(r.Context(), d, req.ID, r.PostFormValue("rendered_sha256"), choice)
 	switch {
 	case errors.Is(err, ErrNotDecidable):
@@ -651,16 +733,20 @@ func (s *Service) decideGrant(w http.ResponseWriter, r *http.Request, req *persi
 		s.render(w, http.StatusBadRequest, "request.html", s.requestDataCtx(r.Context(), req, "Choose how long and how many times, from the choices below."))
 		return
 	}
-	newTok, err := s.Rotate(r.Context(), d, tokenFromRequest(r))
+	rot, err := s.rotate(r.Context(), d, tokenFromRequest(r))
 	if errors.Is(err, ErrStaleDevice) {
-		s.renderStatus(w, http.StatusConflict, "Reload", "This device signed in again in another tab. Reload this page.")
+		s.renderStatus(w, http.StatusConflict, "Signed in elsewhere", staleMessage)
 		return
 	}
 	if err != nil {
 		s.renderStatus(w, http.StatusInternalServerError, "Something went wrong", "Try again in a moment.")
 		return
 	}
-	SetCookie(w, r, newTok)
+	// Share the rotation with requests already in flight on this value until
+	// ShareGrace after this response; the cookie is written lazily (design
+	// §9.2, amendment 2026-10-05).
+	defer s.closeShare(r.Context(), d.ID, rot)
+	w = s.withCookie(w, r, rot.token)
 	err = s.DecideGrant(r.Context(), d, req.ID, r.PostFormValue("rendered_sha256"), days, uses)
 	switch {
 	case errors.Is(err, ErrNotDecidable):

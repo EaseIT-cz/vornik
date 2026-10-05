@@ -293,5 +293,24 @@ assert 'gh release view' in prbody, \
 assert 'docs/public/release-notes/index.md' in prbody, \
     'the CE release body must come from the curated PUBLIC notes, never the EE ones'
 
+# The podman lane frees runner disk BEFORE it builds anything, and prints the
+# free space on both sides of the lane. Incident 2026-10-05: CI on the 2026.10.4
+# release commit (run 37295660864) failed with "no space left on device" while
+# rootless podman made an ID-mapped copy of the agent image's layers; the job
+# had never measured its disk, so the failure carried no numbers.
+_pod = ci['jobs']['test-e2e-podman']['steps']
+_names = [s.get('name', '') for s in _pod]
+_free = next((i for i, s in enumerate(_pod) if 'rm -rf' in s.get('run', '')), None)
+_lane = next((i for i, s in enumerate(_pod) if 'make test-e2e' in s.get('run', '')), None)
+assert _free is not None, 'the podman e2e lane must free runner disk (the 2026-10-05 ENOSPC)'
+assert _lane is not None and _free < _lane, 'disk must be freed before the podman lane runs'
+assert 'df -h' in _pod[_free]['run'], 'the disk step must print free space before and after'
+_after = [s for s in _pod[_lane + 1:] if 'df -h' in s.get('run', '')]
+assert _after and 'always()' in _after[0].get('if', ''), \
+    'free space after the lane must print on failure too (if: always())'
+# Never the hosted toolcache as a whole: setup-go's Go lives there.
+assert '/opt/hostedtoolcache ' not in _pod[_free]['run'] + ' ', \
+    'do not remove the whole hosted toolcache; setup-go installs into it'
+
 print('CI/release policy: PASS')
 PY

@@ -1,7 +1,7 @@
 ---
 sources:
     - path: internal/api/companion_mcp.go
-      sha256: f7a81ddeef20e9ada42c7c4dea947db706c1798434937a40d53a5fc5b3f378dc
+      sha256: 9ffc7eeae49373917f43f532e17afeaf8f5143aa7988a14b868bf6dc069444a3
     - path: contrib/claude-code-companion/.claude-plugin/plugin.json
       sha256: ce0ea17683224392523bf7f9b6321a02041c622b3b0907d2e0f91b8827bfb83e
     - path: contrib/codex-companion/.codex-plugin/plugin.json
@@ -498,13 +498,20 @@ announces finished tasks, and a `vornik` memory provider. Since 0.8.0 an entry
 Hermes removes from its own memory is forgotten in Vornik too (refuted, so no
 longer recalled; the record stays until retention or the operator erases it),
 and `/vornik-memory` and `/vornik-forget <id>` let the user see what Vornik
-keeps and forget one item. Install steps are in its README.
+keeps and forget one item. Setting Hermes up, including Hermes and Vornik
+under separate OS users, is in [Set up Hermes with Vornik](../guides/hermes-setup.md).
 
 The shipped reference is the `mail-digest` workflow with the `broker-swarm`
 swarm: a digest of recent mail carrying sender domain, time, category, whether
 it needs a reply and a one-line summary, and never a body or an address.
 
 ## Setting it up
+
+This is the setup for a **coding assistant** (Claude Code, Codex). For
+Hermes, or any other front-end agent, use the broker setup in
+[Set up Hermes with Vornik](../guides/hermes-setup.md) instead: the key
+below grants developer workflows and the knowledge-skill store, which a
+front-end agent should not have.
 
 On the **daemon** side, an operator prepares a companion project and mints a
 **companion-scoped key** (a plain API key won't be accepted on the companion

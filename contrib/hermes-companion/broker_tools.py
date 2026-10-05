@@ -95,14 +95,60 @@ def _wrap(client: VornikClient, tool: str, args: dict, timeout=None) -> str:
 class BrokerTools:
     def __init__(self, client: VornikClient):
         self.client = client
+        self._broker_checked = False
+        self._broker_ready = False
+        self._broker_error = ""
 
     def available(self, *_args, **_kwargs) -> bool:
-        return self.client.configured and self.client.supports("companion-broker")
+        return self.client.configured and self.client.supports("companion-broker") and self._is_broker_key()
+
+    def _unavailable_error(self) -> str:
+        if not self.client.configured:
+            return "Vornik is not configured: set VORNIK_URL and VORNIK_BROKER_TOKEN"
+        if not self.client.supports("companion-broker"):
+            return "This Vornik daemon does not support broker workflows (upgrade it)."
+        if not self._broker_checked and not self._broker_error:
+            self._is_broker_key()
+        if not self._broker_ready:
+            return self._broker_error
+        return ""
+
+    def _is_broker_key(self) -> bool:
+        if self._broker_checked:
+            return self._broker_ready
+        self._broker_ready = False
+        self._broker_error = (
+            "Vornik broker is not configured: VORNIK_BROKER_TOKEN must be a "
+            "companion key on a broker project. Run vornik_catalog with that key "
+            "or mint one with `vornikctl companion grant -p <broker-project> --client hermes ...`."
+        )
+        try:
+            text, is_error = self.client.call("catalog", {}, timeout=10)
+        except VornikError as e:
+            # Transport failures are often startup races; retry on the next
+            # availability check instead of hiding broker tools until restart.
+            self._broker_error = str(e)
+            return False
+        if is_error:
+            self._broker_error = text
+            return False
+        try:
+            body = json.loads(text)
+        except ValueError:
+            self._broker_error = "Vornik catalog returned a non-JSON response"
+            return False
+        self._broker_checked = True
+        self._broker_ready = bool(body.get("broker"))
+        return self._broker_ready
 
     def catalog(self, args: dict, **_kw) -> str:
+        if not self.available():
+            return json.dumps({"error": self._unavailable_error()})
         return _wrap(self.client, "catalog", {})
 
     def delegate(self, args: dict, **_kw) -> str:
+        if not self.available():
+            return json.dumps({"error": self._unavailable_error()})
         workflow = str((args or {}).get("workflow") or "").strip()
         if not workflow:
             return json.dumps({"error": "workflow is required; see vornik_catalog"})
@@ -112,6 +158,8 @@ class BrokerTools:
         return _wrap(self.client, "delegate", {"workflow": workflow, "inputs": inputs})
 
     def result(self, args: dict, **_kw) -> str:
+        if not self.available():
+            return json.dumps({"error": self._unavailable_error()})
         task_id = str((args or {}).get("task_id") or "").strip()
         if not task_id:
             return json.dumps({"error": "task_id is required"})
@@ -123,9 +171,13 @@ class BrokerTools:
         return _wrap(self.client, "result", call, timeout=timeout)
 
     def status(self, args: dict, **_kw) -> str:
+        if not self.available():
+            return json.dumps({"error": self._unavailable_error()})
         return _wrap(self.client, "status", {"task_id": str((args or {}).get("task_id") or "")})
 
     def cancel(self, args: dict, **_kw) -> str:
+        if not self.available():
+            return json.dumps({"error": self._unavailable_error()})
         return _wrap(self.client, "cancel", {"task_id": str((args or {}).get("task_id") or "")})
 
     def handlers(self):

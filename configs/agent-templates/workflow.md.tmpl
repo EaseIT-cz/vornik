@@ -31,6 +31,9 @@ steps:
     type: agent
     role: {{q .Role}}
     on_success: {{.Next}}
+{{- if .RequireOutputGlob}}
+    require_output_glob: {{q .RequireOutputGlob}}
+{{- end}}
 {{- end}}
 terminals:
   done:
@@ -61,9 +64,9 @@ matching the action's schema; each one waits for the user's approval:
 {{- else}} {{.Closing}}
 {{- end}}
 {{else}}
-Write what the next step needs as files under `artifacts/out/` (for example
-`artifacts/out/{{.Name}}.md`). Only files there reach later steps; anything
-you write elsewhere is discarded when this step ends.
+Write what the next step needs to `artifacts/out/{{.Name}}.md`. Only files
+under `artifacts/out/` reach later steps; anything you write elsewhere is
+discarded when this step ends.
 Do not write `artifacts/out/result.json`: that name is the workflow's answer
 and only its last step writes it.
 {{end}}{{end}}

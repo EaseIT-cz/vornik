@@ -186,26 +186,35 @@ func (r *ApproverDeviceRepository) CompletePairing(ctx context.Context, claimHas
 	})
 }
 
-const approverDeviceCols = `id, label, token_hash, paired_at, paired_by, last_used_at, revoked_at`
+const approverDeviceCols = `id, label, token_hash, paired_at, paired_by, last_used_at, revoked_at,
+	prev_token_hash, rotation_nonce, share_until, dead_token_hash, dead_reason, share_admitted, share_streak`
 
 func scanApproverDevice(s interface{ Scan(...interface{}) error }) (persistence.ApproverDeviceRow, error) {
 	var (
-		d       persistence.ApproverDeviceRow
-		revoked sql.NullTime
+		d                         persistence.ApproverDeviceRow
+		revoked, shareUntil       sql.NullTime
+		prev, nonce, dead, reason sql.NullString
 	)
-	if err := s.Scan(&d.ID, &d.Label, &d.TokenHash, &d.PairedAt, &d.PairedBy, &d.LastUsedAt, &revoked); err != nil {
+	if err := s.Scan(&d.ID, &d.Label, &d.TokenHash, &d.PairedAt, &d.PairedBy, &d.LastUsedAt, &revoked,
+		&prev, &nonce, &shareUntil, &dead, &reason, &d.ShareAdmitted, &d.ShareStreak); err != nil {
 		return d, err
 	}
 	if revoked.Valid {
 		t := revoked.Time
 		d.RevokedAt = &t
 	}
+	if shareUntil.Valid {
+		t := shareUntil.Time
+		d.ShareUntil = &t
+	}
+	d.PrevTokenHash, d.RotationNonce, d.DeadTokenHash, d.DeadReason = prev.String, nonce.String, dead.String, reason.String
 	return d, nil
 }
 
 // GetDeviceByTokenHash implements persistence.ApproverDeviceRepository.
 func (r *ApproverDeviceRepository) GetDeviceByTokenHash(ctx context.Context, tokenHash string) (*persistence.ApproverDeviceRow, error) {
-	d, err := scanApproverDevice(r.db.QueryRowContext(ctx, `SELECT `+approverDeviceCols+` FROM approver_devices WHERE token_hash = $1`, tokenHash))
+	d, err := scanApproverDevice(r.db.QueryRowContext(ctx, `SELECT `+approverDeviceCols+` FROM approver_devices
+		WHERE token_hash = $1 OR prev_token_hash = $1 OR dead_token_hash = $1 LIMIT 1`, tokenHash))
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, persistence.ErrNotFound
 	}
@@ -241,10 +250,16 @@ func (r *ApproverDeviceRepository) CountActiveDevices(ctx context.Context) (int,
 }
 
 // RotateToken implements persistence.ApproverDeviceRepository.
-func (r *ApproverDeviceRepository) RotateToken(ctx context.Context, id, oldHash, newHash string, now time.Time) error {
+func (r *ApproverDeviceRepository) RotateToken(ctx context.Context, id, presentedHash, newHash, nonce string, shareUntil, now time.Time) error {
 	res, err := r.db.ExecContext(ctx, `
-		UPDATE approver_devices SET token_hash = $1, last_used_at = $2
-		WHERE id = $3 AND token_hash = $4 AND revoked_at IS NULL`, newHash, now, id, oldHash)
+		UPDATE approver_devices SET
+			dead_token_hash = CASE WHEN prev_token_hash IS NOT NULL THEN prev_token_hash ELSE dead_token_hash END,
+			dead_reason = CASE WHEN prev_token_hash IS NOT NULL THEN 'confirmed' ELSE dead_reason END,
+			share_streak = CASE WHEN share_admitted THEN share_streak ELSE 0 END,
+			share_admitted = false,
+			prev_token_hash = $1, token_hash = $2, rotation_nonce = $3, share_until = $4, last_used_at = $5
+		WHERE id = $6 AND token_hash = $1 AND revoked_at IS NULL`,
+		presentedHash, newHash, nonce, shareUntil, now, id)
 	if err != nil {
 		return mapDBError(err)
 	}
@@ -252,6 +267,90 @@ func (r *ApproverDeviceRepository) RotateToken(ctx context.Context, id, oldHash,
 		return persistence.ErrNotFound
 	}
 	return nil
+}
+
+// AdmitShare implements persistence.ApproverDeviceRepository.
+func (r *ApproverDeviceRepository) AdmitShare(ctx context.Context, id, nonce string) (int, bool, error) {
+	var streak int
+	err := r.db.QueryRowContext(ctx, `
+		UPDATE approver_devices SET share_admitted = true, share_streak = share_streak + 1
+		WHERE id = $1 AND rotation_nonce = $2 AND NOT share_admitted
+		RETURNING share_streak`, id, nonce).Scan(&streak)
+	if errors.Is(err, sql.ErrNoRows) {
+		return 0, false, nil
+	}
+	if err != nil {
+		return 0, false, mapDBError(err)
+	}
+	return streak, true, nil
+}
+
+// ConfirmToken implements persistence.ApproverDeviceRepository.
+func (r *ApproverDeviceRepository) ConfirmToken(ctx context.Context, id, currentHash string) error {
+	if _, err := r.db.ExecContext(ctx, `
+		UPDATE approver_devices SET dead_token_hash = prev_token_hash, dead_reason = 'confirmed',
+			prev_token_hash = NULL, rotation_nonce = NULL, share_until = NULL
+		WHERE id = $1 AND token_hash = $2 AND prev_token_hash IS NOT NULL`, id, currentHash); err != nil {
+		return mapDBError(err)
+	}
+	_, err := r.db.ExecContext(ctx, `
+		UPDATE approver_devices SET dead_reason = 'confirmed'
+		WHERE id = $1 AND token_hash = $2 AND prev_token_hash IS NULL AND dead_reason = 'expired'`, id, currentHash)
+	return mapDBError(err)
+}
+
+// CloseShare implements persistence.ApproverDeviceRepository.
+func (r *ApproverDeviceRepository) CloseShare(ctx context.Context, id, nonce string, until time.Time) error {
+	_, err := r.db.ExecContext(ctx, `
+		UPDATE approver_devices SET share_until = $1
+		WHERE id = $2 AND rotation_nonce = $3 AND share_until > $1`, until, id, nonce)
+	return mapDBError(err)
+}
+
+// ExpireShares implements persistence.ApproverDeviceRepository.
+func (r *ApproverDeviceRepository) ExpireShares(ctx context.Context, now time.Time) error {
+	_, err := r.db.ExecContext(ctx, `
+		UPDATE approver_devices SET dead_token_hash = prev_token_hash, dead_reason = 'expired',
+			prev_token_hash = NULL, rotation_nonce = NULL, share_until = NULL
+		WHERE prev_token_hash IS NOT NULL AND share_until <= $1`, now)
+	return mapDBError(err)
+}
+
+// ResumeDevice implements persistence.ApproverDeviceRepository.
+func (r *ApproverDeviceRepository) ResumeDevice(ctx context.Context, codeHash, deadHash, newHash string, now time.Time) (*persistence.ApproverDeviceRow, error) {
+	var out persistence.ApproverDeviceRow
+	err := r.withTx(ctx, func(x persistence.DBTX) error {
+		res, err := x.ExecContext(ctx, `
+			UPDATE approver_pairings SET redeemed_at = $1
+			WHERE code_hash = $2 AND redeemed_at IS NULL AND expires_at > $1`, now, codeHash)
+		if err != nil {
+			return mapDBError(err)
+		}
+		if n, _ := res.RowsAffected(); n == 0 {
+			return persistence.ErrNotFound
+		}
+		d, err := scanApproverDevice(x.QueryRowContext(ctx, `
+			UPDATE approver_devices SET token_hash = $1, last_used_at = $2,
+				prev_token_hash = NULL, rotation_nonce = NULL, share_until = NULL,
+				dead_token_hash = NULL, dead_reason = NULL, share_admitted = false, share_streak = 0
+			WHERE dead_token_hash = $3 AND dead_reason = 'expired' AND revoked_at IS NULL
+			RETURNING `+approverDeviceCols, newHash, now, deadHash))
+		if errors.Is(err, sql.ErrNoRows) {
+			return persistence.ErrNotFound
+		}
+		if err != nil {
+			return mapDBError(err)
+		}
+		if _, err := x.ExecContext(ctx, `UPDATE approver_pairings SET device_id = $1 WHERE code_hash = $2`, d.ID, codeHash); err != nil {
+			return mapDBError(err)
+		}
+		out = d
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return &out, nil
 }
 
 // TouchDevice implements persistence.ApproverDeviceRepository.
@@ -262,7 +361,8 @@ func (r *ApproverDeviceRepository) TouchDevice(ctx context.Context, id string, n
 
 // RevokeDevice implements persistence.ApproverDeviceRepository.
 func (r *ApproverDeviceRepository) RevokeDevice(ctx context.Context, id string, now time.Time) error {
-	_, err := r.db.ExecContext(ctx, `UPDATE approver_devices SET revoked_at = $1 WHERE id = $2 AND revoked_at IS NULL`, now, id)
+	_, err := r.db.ExecContext(ctx, `UPDATE approver_devices SET revoked_at = $1, prev_token_hash = NULL, rotation_nonce = NULL, share_until = NULL
+		WHERE id = $2 AND revoked_at IS NULL`, now, id)
 	return mapDBError(err)
 }
 

@@ -31,6 +31,8 @@ func RunApproverDeviceSuite(t *testing.T, repo persistence.ApproverDeviceReposit
 	t.Run("ConcurrentFirstRedeem", func(t *testing.T) { approverConcurrentFirstRedeem(t, newApproverHarness(t, fresh)) })
 	t.Run("CompletePairing_runs_once", func(t *testing.T) { approverCompleteOnce(t, newApproverHarness(t, fresh)) })
 	t.Run("Rotate_touch_revoke", func(t *testing.T) { approverRotateTouchRevoke(t, newApproverHarness(t, fresh)) })
+	t.Run("Share_close_expire_and_streak", func(t *testing.T) { approverShareLifecycle(t, newApproverHarness(t, fresh)) })
+	t.Run("Resume_only_an_expired_value_with_a_code", func(t *testing.T) { approverResume(t, newApproverHarness(t, fresh)) })
 	t.Run("Decide_is_hash_bound_and_once", func(t *testing.T) { approverDecide(t, newApproverHarness(t, fresh)) })
 	t.Run("Applied_and_expiry", func(t *testing.T) { approverAppliedAndExpiry(t, newApproverHarness(t, fresh)) })
 	t.Run("ClaimApply_is_one_holder_at_a_time", func(t *testing.T) { approverClaimApply(t, newApproverHarness(t, fresh)) })
@@ -99,6 +101,9 @@ func (h *approverHarness) redeem(t *testing.T, code string) bool {
 func approverMissContract(t *testing.T, h *approverHarness) {
 	AssertMiss(t, "ApproverDeviceRepository.GetDeviceByTokenHash", func() (*persistence.ApproverDeviceRow, error) {
 		return h.repo.GetDeviceByTokenHash(h.ctx, "absent")
+	})
+	AssertMiss(t, "ApproverDeviceRepository.ResumeDevice", func() (*persistence.ApproverDeviceRow, error) {
+		return h.repo.ResumeDevice(h.ctx, "absent", "absent", "absent", h.now)
 	})
 	AssertMiss(t, "ApproverDeviceRepository.GetPairing", func() (*persistence.ApproverPairingRow, error) {
 		return h.repo.GetPairing(h.ctx, "absent", h.now)
@@ -289,20 +294,57 @@ func approverCompleteOnce(t *testing.T, h *approverHarness) {
 func approverRotateTouchRevoke(t *testing.T, h *approverHarness) {
 	h.pairing(t, "a")
 	h.redeem(t, "a")
-	if err := h.repo.RotateToken(h.ctx, "dev_a", "tok-dev_a", "tok-new", h.now); err != nil {
+	// Rotation opens a share; the previous value finds the row until it ends
+	// (design §9.2, amendment 2026-10-05: P1, devices unpaired by a lost
+	// rotation response).
+	share := h.now.Add(5 * time.Minute)
+	if err := h.repo.RotateToken(h.ctx, "dev_a", "tok-dev_a", "tok-new", "nonce-1", share, h.now); err != nil {
 		t.Fatal(err)
 	}
-	if err := h.repo.RotateToken(h.ctx, "dev_a", "tok-dev_a", "tok-other", h.now); !errors.Is(err, persistence.ErrNotFound) {
-		t.Fatalf("rotation from a stale token: %v, want ErrNotFound", err)
+	for _, hash := range []string{"tok-dev_a", "tok-new"} {
+		d, err := h.repo.GetDeviceByTokenHash(h.ctx, hash)
+		if err != nil || d.ID != "dev_a" || d.TokenHash != "tok-new" || d.PrevTokenHash != "tok-dev_a" ||
+			d.RotationNonce != "nonce-1" || d.ShareUntil == nil || !d.ShareUntil.Equal(share) {
+			t.Fatalf("open share found by %s: %+v, %v", hash, d, err)
+		}
+	}
+	// The compare-and-swap is on the CURRENT value only.
+	if err := h.repo.RotateToken(h.ctx, "dev_a", "tok-dev_a", "tok-other", "nonce-2", share, h.now); !errors.Is(err, persistence.ErrNotFound) {
+		t.Fatalf("rotation from the previous value wrote: %v, want ErrNotFound", err)
+	}
+	// Confirming with anything but the current value changes nothing.
+	if err := h.repo.ConfirmToken(h.ctx, "dev_a", "tok-dev_a"); err != nil {
+		t.Fatal(err)
+	}
+	if d, _ := h.repo.GetDeviceByTokenHash(h.ctx, "tok-dev_a"); d == nil || d.PrevTokenHash != "tok-dev_a" {
+		t.Fatal("confirming with the previous value ended the share")
+	}
+	for i := 0; i < 2; i++ { // idempotent
+		if err := h.repo.ConfirmToken(h.ctx, "dev_a", "tok-new"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	d, err := h.repo.GetDeviceByTokenHash(h.ctx, "tok-dev_a")
+	if err != nil || d.DeadTokenHash != "tok-dev_a" || d.DeadReason != persistence.DeadConfirmed ||
+		d.PrevTokenHash != "" || d.RotationNonce != "" || d.ShareUntil != nil {
+		t.Fatalf("after confirmation the old value is dead and the nonce erased: %+v, %v", d, err)
+	}
+	// Rotating from the current value again: the dead value moves on only
+	// when that share ends.
+	if err := h.repo.RotateToken(h.ctx, "dev_a", "tok-new", "tok-new2", "nonce-3", share, h.now); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.repo.ConfirmToken(h.ctx, "dev_a", "tok-new2"); err != nil {
+		t.Fatal(err)
 	}
 	if _, err := h.repo.GetDeviceByTokenHash(h.ctx, "tok-dev_a"); !errors.Is(err, persistence.ErrNotFound) {
-		t.Fatal("the old token still finds the device")
+		t.Fatal("a value two rotations back still finds the device")
 	}
 	later := h.now.Add(time.Hour)
 	if err := h.repo.TouchDevice(h.ctx, "dev_a", later); err != nil {
 		t.Fatal(err)
 	}
-	d, err := h.repo.GetDeviceByTokenHash(h.ctx, "tok-new")
+	d, err = h.repo.GetDeviceByTokenHash(h.ctx, "tok-new2")
 	if err != nil || !d.LastUsedAt.Equal(later) {
 		t.Fatalf("after touch: %+v, %v", d, err)
 	}
@@ -317,11 +359,11 @@ func approverRotateTouchRevoke(t *testing.T, h *approverHarness) {
 	if c, _ := h.repo.CountActiveDevices(h.ctx); c != 0 {
 		t.Fatalf("active devices after revoke = %d", c)
 	}
-	d, err = h.repo.GetDeviceByTokenHash(h.ctx, "tok-new")
+	d, err = h.repo.GetDeviceByTokenHash(h.ctx, "tok-new2")
 	if err != nil || d.RevokedAt == nil {
 		t.Fatalf("revoked device: %+v, %v", d, err)
 	}
-	if err := h.repo.RotateToken(h.ctx, "dev_a", "tok-new", "tok-3", later); !errors.Is(err, persistence.ErrNotFound) {
+	if err := h.repo.RotateToken(h.ctx, "dev_a", "tok-new2", "tok-5", "nonce-5", later, later); !errors.Is(err, persistence.ErrNotFound) {
 		t.Fatal("a revoked device rotated its token")
 	}
 	if all, _ := h.repo.ListDevices(h.ctx); len(all) != 1 {
@@ -484,4 +526,169 @@ func ids(rows []persistence.AgentApprovalRequestRow) []string {
 		out[i] = r.ID
 	}
 	return out
+}
+
+// approverShareLifecycle pins the share mechanics on both drivers (design
+// §9.2, amendment 2026-10-05): CloseShare only shrinks and only for its own
+// nonce; ExpireShares kills the previous value as expired and erases the
+// nonce; presenting the successor afterwards relabels it confirmed; the
+// streak counts one admission per share, survives confirmation, and resets
+// on a share with none.
+func approverShareLifecycle(t *testing.T, h *approverHarness) {
+	h.pairing(t, "a")
+	h.redeem(t, "a")
+	far := h.now.Add(5 * time.Minute)
+	if err := h.repo.RotateToken(h.ctx, "dev_a", "tok-dev_a", "s1", "n1", far, h.now); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.repo.CloseShare(h.ctx, "dev_a", "stale-nonce", h.now); err != nil {
+		t.Fatal(err)
+	}
+	if d, _ := h.repo.GetDeviceByTokenHash(h.ctx, "s1"); !d.ShareUntil.Equal(far) {
+		t.Fatalf("a stale nonce closed the share: %v", d.ShareUntil)
+	}
+	soon := h.now.Add(10 * time.Second)
+	if err := h.repo.CloseShare(h.ctx, "dev_a", "n1", soon); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.repo.CloseShare(h.ctx, "dev_a", "n1", far); err != nil { // never extends
+		t.Fatal(err)
+	}
+	if d, _ := h.repo.GetDeviceByTokenHash(h.ctx, "s1"); !d.ShareUntil.Equal(soon) {
+		t.Fatalf("share_until = %v, want %v", d.ShareUntil, soon)
+	}
+	approverShareStreak(t, h, far)
+}
+
+// approverShareStreak continues approverShareLifecycle from an open share
+// "n1" (current "s1", previous "tok-dev_a", closing at h.now+10s).
+func approverShareStreak(t *testing.T, h *approverHarness, far time.Time) {
+	soon := h.now.Add(10 * time.Second)
+	// Streak: one admission per share counts once.
+	for i, want := range []struct {
+		streak int
+		first  bool
+	}{{1, true}, {1, false}} {
+		streak, first, err := h.repo.AdmitShare(h.ctx, "dev_a", "n1")
+		if err != nil || streak != want.streak && want.first || first != want.first {
+			t.Fatalf("admission %d: streak %d first %v err %v", i, streak, first, err)
+		}
+	}
+	if _, first, _ := h.repo.AdmitShare(h.ctx, "dev_a", "other-nonce"); first {
+		t.Fatal("an admission was credited to a share with another nonce")
+	}
+	// Not yet due: nothing expires.
+	if err := h.repo.ExpireShares(h.ctx, h.now); err != nil {
+		t.Fatal(err)
+	}
+	if d, _ := h.repo.GetDeviceByTokenHash(h.ctx, "tok-dev_a"); d == nil || d.PrevTokenHash != "tok-dev_a" {
+		t.Fatal("a share expired before share_until")
+	}
+	if err := h.repo.ExpireShares(h.ctx, soon); err != nil {
+		t.Fatal(err)
+	}
+	d, err := h.repo.GetDeviceByTokenHash(h.ctx, "tok-dev_a")
+	if err != nil || d.DeadTokenHash != "tok-dev_a" || d.DeadReason != persistence.DeadExpired || d.PrevTokenHash != "" ||
+		d.RotationNonce != "" || d.ShareUntil != nil || !d.ShareAdmitted || d.ShareStreak != 1 {
+		t.Fatalf("after expiry: %+v, %v", d, err)
+	}
+	// The successor presented after its share expired: relabelled confirmed.
+	if err := h.repo.ConfirmToken(h.ctx, "dev_a", "s1"); err != nil {
+		t.Fatal(err)
+	}
+	if d, _ := h.repo.GetDeviceByTokenHash(h.ctx, "tok-dev_a"); d.DeadReason != persistence.DeadConfirmed || !d.ShareAdmitted {
+		t.Fatalf("relabel: %+v (share_admitted must survive confirmation)", d)
+	}
+	// The next rotation keeps the streak (the last share admitted a request)
+	// and consumes share_admitted; one after a quiet share resets it.
+	if err := h.repo.RotateToken(h.ctx, "dev_a", "s1", "s2", "n2", far, h.now); err != nil {
+		t.Fatal(err)
+	}
+	if streak, first, _ := h.repo.AdmitShare(h.ctx, "dev_a", "n2"); !first || streak != 2 {
+		t.Fatalf("second consecutive admitted share: streak %d first %v, want 2 true", streak, first)
+	}
+	if err := h.repo.ConfirmToken(h.ctx, "dev_a", "s2"); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.repo.RotateToken(h.ctx, "dev_a", "s2", "s3", "n3", far, h.now); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.repo.ConfirmToken(h.ctx, "dev_a", "s3"); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.repo.RotateToken(h.ctx, "dev_a", "s3", "s4", "n4", far, h.now); err != nil {
+		t.Fatal(err)
+	}
+	if d, _ := h.repo.GetDeviceByTokenHash(h.ctx, "s4"); d.ShareStreak != 0 || d.ShareAdmitted {
+		t.Fatalf("a quiet share did not reset the streak: %+v", d)
+	}
+	// Revocation erases an open share.
+	if err := h.repo.RevokeDevice(h.ctx, "dev_a", h.now); err != nil {
+		t.Fatal(err)
+	}
+	if d, _ := h.repo.GetDeviceByTokenHash(h.ctx, "s4"); d.RotationNonce != "" || d.PrevTokenHash != "" {
+		t.Fatalf("revocation kept the share: %+v", d)
+	}
+}
+
+// approverResume pins ResumeDevice: only an expired dead value of an
+// unrevoked device, only with an unexpired unused code, both or neither.
+func approverResume(t *testing.T, h *approverHarness) {
+	h.pairing(t, "a")
+	h.redeem(t, "a")
+	if err := h.repo.RotateToken(h.ctx, "dev_a", "tok-dev_a", "s1", "n1", h.now.Add(10*time.Second), h.now); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.repo.ExpireShares(h.ctx, h.now.Add(time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	h.pairing(t, "r")
+	// A wrong dead value: nothing changes, the code is not consumed.
+	if _, err := h.repo.ResumeDevice(h.ctx, "code-r", "not-dead", "fresh", h.now); !errors.Is(err, persistence.ErrNotFound) {
+		t.Fatalf("resume with an unknown dead value: %v", err)
+	}
+	if _, err := h.repo.GetPairing(h.ctx, "code-r", h.now); err != nil {
+		t.Fatal("a refused resume consumed the code")
+	}
+	if _, err := h.repo.ResumeDevice(h.ctx, "code-absent", "tok-dev_a", "fresh", h.now); !errors.Is(err, persistence.ErrNotFound) {
+		t.Fatalf("resume with an unknown code: %v", err)
+	}
+	d, err := h.repo.ResumeDevice(h.ctx, "code-r", "tok-dev_a", "fresh", h.now)
+	if err != nil || d.ID != "dev_a" || d.TokenHash != "fresh" || d.DeadTokenHash != "" || d.ShareStreak != 0 {
+		t.Fatalf("resume: %+v, %v", d, err)
+	}
+	if _, err := h.repo.GetDeviceByTokenHash(h.ctx, "s1"); !errors.Is(err, persistence.ErrNotFound) {
+		t.Fatal("the successor still finds the row after a resume")
+	}
+	// The code is spent, and the dead value is gone.
+	h.pairing(t, "r2")
+	if _, err := h.repo.ResumeDevice(h.ctx, "code-r", "tok-dev_a", "x", h.now); !errors.Is(err, persistence.ErrNotFound) {
+		t.Fatal("a used code resumed again")
+	}
+	if _, err := h.repo.ResumeDevice(h.ctx, "code-r2", "tok-dev_a", "x", h.now); !errors.Is(err, persistence.ErrNotFound) {
+		t.Fatal("a resumed dead value resumed again")
+	}
+	// A confirmed dead value is not resumable.
+	if err := h.repo.RotateToken(h.ctx, "dev_a", "fresh", "s2", "n2", h.now.Add(time.Minute), h.now); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.repo.ConfirmToken(h.ctx, "dev_a", "s2"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := h.repo.ResumeDevice(h.ctx, "code-r2", "fresh", "x", h.now); !errors.Is(err, persistence.ErrNotFound) {
+		t.Fatal("a confirmed dead value resumed")
+	}
+	// A revoked device cannot resume.
+	if err := h.repo.RotateToken(h.ctx, "dev_a", "s2", "s3", "n3", h.now.Add(time.Second), h.now); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.repo.ExpireShares(h.ctx, h.now.Add(time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.repo.RevokeDevice(h.ctx, "dev_a", h.now); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := h.repo.ResumeDevice(h.ctx, "code-r2", "s2", "x", h.now); !errors.Is(err, persistence.ErrNotFound) {
+		t.Fatal("a revoked device resumed")
+	}
 }

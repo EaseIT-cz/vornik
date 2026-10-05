@@ -13,57 +13,26 @@ long-term memory.
 
 | Setup | What Hermes can do | What it needs |
 |---|---|---|
-| **Admin** | Set up projects, workflows and connections on Vornik for you, each change approved on your phone | `hermes vornik connect` once; no environment variables |
-| **Broker** | Run the workflows your operator allowed, and get results | `VORNIK_URL` and `VORNIK_BROKER_TOKEN` (plus `VORNIK_MEMORY_TOKEN` for memory) |
+| **Broker** (the default) | Run the workflows your operator allowed, and get results | `VORNIK_URL` and `VORNIK_BROKER_TOKEN` (plus `VORNIK_MEMORY_TOKEN` for memory) |
+| **Admin** (opt-in) | Set up projects, workflows and connections on Vornik for you, each change approved on your phone | `hermes vornik connect` once; no environment variables |
 
-### Admin setup
-
-Install Vornik first (https://docs.vornik.io/getting-started/), sign
-`vornikctl` in as the operator (`vornikctl auth login`) and pair your phone
-(`vornikctl pair-device`). Then:
-
-```bash
-hermes plugins install vornik-companion
-hermes plugins enable vornik-companion
-hermes vornik connect          # runs: vornikctl agent connect hermes
-hermes vornik status           # what is configured, and what the daemon supports
-```
-
-`hermes vornik connect` adds one MCP entry to Hermes's config. The plugin's
-`vornik-admin` skill teaches Hermes to use it. The setup guide is
-https://docs.vornik.io/guides/assistant-setup/.
-
-### Answer Hermes's own approvals on your phone
-
-When Hermes's safety rules flag a command (`rm -rf`, `git push --force`),
-Hermes asks you in its terminal or chat. With the admin setup connected,
-the same paired phone that approves Vornik changes can answer those too:
-
-```bash
-hermes vornik approvals on     # sets security.approval.transport: vornik
-hermes vornik approvals off    # Hermes asks in its own prompt again
-```
-
-The phone offers **Allow once**, **Allow for this session** (when Hermes
-allows it) and **Deny**; "always" stays in Hermes's own terminal. Hermes
-still decides and enforces: Vornik is where you answer and where the answer
-is recorded, not the gate, and a modified Hermes, or one with the transport
-deselected, ignores the phone. While it is on, a Vornik outage denies every
-flagged command, unless you also set
-`security.approval.transport_fallback: builtin` in Hermes's config.
-`hermes vornik status` says whether the transport is registered, selected,
-and for which namespace.
+Start with the broker: it grants Hermes the least. The full walkthrough,
+including Vornik and Hermes under separate OS users on one machine, is
+https://docs.vornik.io/guides/hermes-setup/. Every step that mints a key
+needs the operator's admin key: a Hermes reading this hands the commands to
+the operator and does not run them itself.
 
 ### Broker setup
 
-On the Vornik host, set up two projects and two keys (see
-`configs/examples/broker-mail.yaml` for a complete broker project):
+On the Vornik host, as the operator, set up two projects and two keys (the
+setup guide above inlines a complete broker project; grant a Hermes key no
+skill flags and no `companion-*` developer workflows):
 
 ```bash
 # the broker project holds the credentials; it has `broker: true` in its config
 vornikctl companion grant -p broker-mail --client hermes --workflows mail-digest --budget-usd 5
 # Hermes's long-term memory, which can never delegate
-vornikctl companion grant -p assistant-memory --client hermes --memory-all --no-delegate
+vornikctl companion grant -p hermes-memory --client hermes --memory-all --no-delegate
 ```
 
 On the Hermes host:
@@ -71,11 +40,18 @@ On the Hermes host:
 ```bash
 hermes plugins install vornik-companion
 hermes plugins enable vornik-companion
-export VORNIK_URL=https://vornik.example.com
-export VORNIK_BROKER_TOKEN=sk-vornik-…   # the broker-project key
-export VORNIK_MEMORY_TOKEN=sk-vornik-…   # optional: the memory-project key
 hermes config set memory.provider vornik-companion   # use Vornik as long-term memory
 hermes memory status                     # expect "installed" and "available"
+```
+
+Put the URL and keys in `$HERMES_HOME/.env` (default `~/.hermes/.env`, mode
+600), which Hermes loads at every start. An `export` in a shell never
+reaches a Hermes service or survives a reboot.
+
+```
+VORNIK_URL=https://vornik.example.com    # http://localhost:8080 on the same machine
+VORNIK_BROKER_TOKEN=sk-vornik-…          # the broker-project key
+VORNIK_MEMORY_TOKEN=sk-vornik-…          # optional: the memory-project key
 ```
 
 Checked against Hermes v2026.9.24 (0.21.5) by the end-to-end tests in
@@ -99,6 +75,46 @@ a model served by llama.cpp could only send `"inputs": {}`. It also reports a no
 review as an error to the model, instead of a result the model could read
 as "saved". Vornik refuses notes under about ten words, so write a fact as
 a full sentence with its context.
+
+### Admin setup
+
+Install Vornik first (https://docs.vornik.io/getting-started/), sign
+`vornikctl` in as the operator (`vornikctl auth login`) and pair your phone
+(`vornikctl pair-device`). Then:
+
+```bash
+hermes plugins install vornik-companion
+hermes plugins enable vornik-companion
+hermes vornik connect          # runs: vornikctl agent connect hermes
+hermes vornik status           # what is configured, and what the daemon supports
+```
+
+`hermes vornik connect` adds one MCP entry to Hermes's config. The plugin's
+`vornik-admin` skill teaches Hermes to use it. The setup guide is
+https://docs.vornik.io/guides/assistant-setup/. With Hermes on its own OS
+user, that user needs its own executable `vornikctl` and the admin key for
+the one connect command: see the Hermes setup guide.
+
+### Answer Hermes's own approvals on your phone
+
+When Hermes's safety rules flag a command (`rm -rf`, `git push --force`),
+Hermes asks you in its terminal or chat. With the admin setup connected,
+the same paired phone that approves Vornik changes can answer those too:
+
+```bash
+hermes vornik approvals on     # sets security.approval.transport: vornik
+hermes vornik approvals off    # Hermes asks in its own prompt again
+```
+
+The phone offers **Allow once**, **Allow for this session** (when Hermes
+allows it) and **Deny**; "always" stays in Hermes's own terminal. Hermes
+still decides and enforces: Vornik is where you answer and where the answer
+is recorded, not the gate, and a modified Hermes, or one with the transport
+deselected, ignores the phone. While it is on, a Vornik outage denies every
+flagged command, unless you also set
+`security.approval.transport_fallback: builtin` in Hermes's config.
+`hermes vornik status` says whether the transport is registered, selected,
+and for which namespace.
 
 ## What you get
 

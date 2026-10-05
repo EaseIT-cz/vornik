@@ -334,6 +334,15 @@ var sqliteAdditiveColumns = []additiveColumn{
 	{"api_keys", "agent_namespace", `TEXT NOT NULL DEFAULT ''`},
 	// Postgres migration 209 — a permanently failed approved change.
 	{"agent_approval_requests", "apply_error", `TEXT`},
+	// Postgres migration 215 — approver-device rotation sharing and dead-value
+	// recognition (agent-administered design §9.2, amendment 2026-10-05).
+	{"approver_devices", "prev_token_hash", `TEXT`},
+	{"approver_devices", "rotation_nonce", `TEXT`},
+	{"approver_devices", "share_until", `TEXT`},
+	{"approver_devices", "dead_token_hash", `TEXT`},
+	{"approver_devices", "dead_reason", `TEXT`},
+	{"approver_devices", "share_admitted", `INTEGER NOT NULL DEFAULT 0`},
+	{"approver_devices", "share_streak", `INTEGER NOT NULL DEFAULT 0`},
 }
 
 // applyAdditiveColumns adds any registered column missing from an existing

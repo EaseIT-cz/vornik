@@ -1,11 +1,11 @@
 ---
 sources:
     - path: internal/api/companion_mcp.go
-      sha256: 9ffc7eeae49373917f43f532e17afeaf8f5143aa7988a14b868bf6dc069444a3
+      sha256: 31623786afbaa4ae55cc01b49dc75f4eb4117913e3885bf6374274810adca298
     - path: contrib/claude-code-companion/.claude-plugin/plugin.json
-      sha256: ce0ea17683224392523bf7f9b6321a02041c622b3b0907d2e0f91b8827bfb83e
+      sha256: 157c4be8448c99ef3bf27e4bb529f1ef6e69be7101d99074e47e826649348ddd
     - path: contrib/codex-companion/.codex-plugin/plugin.json
-      sha256: 7aade1d4b8a9baf02c289d3def895fdf8178edcf0b550855a09cb61c2e5836db
+      sha256: 6e95cc2ead11762fa16ee51e58ff17db70adfebb9908f259092e143cbd560fab
 ---
 # Companion plugin
 
@@ -65,6 +65,17 @@ approves it. A skill can also be marked **global** (`skill_propose global:true`
 or `skill_set_global`) so it injects into every project's roles, not just its
 home project — the way a procedure captured in your companion project reaches
 the autonomy roles. See [Knowledge skills](knowledge-skills.md).
+
+Skill responses include the current `version`, `proposed_at`, and
+`proposal_date_estimated` (true when a legacy proposal date is estimated).
+After reviewing a `skill_get` response, send that version as
+`expected_version` to `skill_approve` or `skill_reject`. A superseded
+revision is refused without changing the newer proposal. Omitting
+`expected_version` keeps compatibility with older MCP callers by selecting
+the current revision when handling the request; it cannot ensure that this
+is the revision you previously reviewed. Dashboard forms and channel
+buttons carry their displayed revision automatically; historic controls
+without a revision ask you to open the current proposal.
 
 **Proposals are checked for near-duplicates.** Before a skill is written,
 `skill_propose` scores it against the whole catalogue — every repo scope, every
@@ -498,7 +509,10 @@ announces finished tasks, and a `vornik` memory provider. Since 0.8.0 an entry
 Hermes removes from its own memory is forgotten in Vornik too (refuted, so no
 longer recalled; the record stays until retention or the operator erases it),
 and `/vornik-memory` and `/vornik-forget <id>` let the user see what Vornik
-keeps and forget one item. Setting Hermes up, including Hermes and Vornik
+keeps and forget one item. Since 0.11.3 a line Hermes forgot and later adds
+again is recalled again, while an item forgotten with `/vornik-forget` or
+corrected as wrong stays forgotten even if the same text is stored again (a
+reworded note is a new memory). Setting Hermes up, including Hermes and Vornik
 under separate OS users, is in [Set up Hermes with Vornik](../guides/hermes-setup.md).
 
 The shipped reference is the `mail-digest` workflow with the `broker-swarm`

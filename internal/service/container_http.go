@@ -760,6 +760,11 @@ func (c *Container) initHTTPServer() error {
 			c.hostApprovalMetrics = approverdevice.NewHostActionMetrics()
 		}
 		c.hostApprovalMetrics.Attach(reg)
+		// vornik_approver_https_required_total, same Attach rule (design §9.2, T12).
+		if c.approverHTTPSMetrics == nil {
+			c.approverHTTPSMetrics = approverdevice.NewHTTPSRefusalMetrics()
+		}
+		c.approverHTTPSMetrics.Attach(reg)
 		// The §5.3 legacy-grant counter, same Attach rule and for the same
 		// reason: the holder is created during subsystem init, before any
 		// registry exists. This counter IS the removal gate ("14 consecutive
@@ -2752,6 +2757,15 @@ func (c *Container) wrapRealIP(next http.Handler) (http.Handler, error) {
 		c.Logger.Warn().
 			Msg("auth is enabled but server.real_ip is unconfigured — behind a reverse proxy / Cloudflare tunnel every caller collapses to the proxy IP, so the per-IP lockout can be abused to block all clients; set server.real_ip.trusted_proxies to the proxy host")
 	}
+	// T15: an https public origin on a plain-http daemon is the shape of a
+	// TLS-terminating proxy, whose X-Forwarded-Proto is honoured only from a
+	// configured trusted proxy. Independent of auth_enabled.
+	// see LLD § https://docs.vornik.io §11.2
+	if origin := c.Config.PublicOrigin(); hasHTTPSScheme(origin) && !c.Config.RealIPConfigured() {
+		c.Logger.Warn().
+			Str("public_origin", origin).
+			Msg("public origin is https but server.real_ip is not configured, so X-Forwarded-Proto is ignored: pairing, approving and the session exchange will refuse plain http from the proxy and cookies lose Secure; enable server.real_ip and list the proxy host's own addresses in trusted_proxies")
+	}
 
 	if registry := c.observabilityRegistry(); registry != nil && c.realipMetrics == nil {
 		c.realipMetrics = realip.NewMetrics(registry)
@@ -3117,4 +3131,10 @@ func (c *Container) classESlotStore() configassist.SlotStore {
 		return nil
 	}
 	return c.repos.ClassESlots
+}
+
+// hasHTTPSScheme reports whether origin starts with the https scheme
+// (case-insensitive).
+func hasHTTPSScheme(origin string) bool {
+	return len(origin) >= len("https://") && strings.EqualFold(origin[:len("https://")], "https://")
 }

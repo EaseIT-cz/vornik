@@ -15,7 +15,13 @@ entrypoint: "review"
 require_input_artifacts: true
 maxStepVisits: 1
 maxIterations: 8
-maxWallClock: "20m"
+# 2026-09-23: 20m -> 40m. maxWallClock is the execution-level deadline and
+# caps every step inside it: the step timeout raise to 1800s below was inert
+# while this said 20m (executions kept dying at exactly 20m00s), and the model
+# fallback doubles the step budget on top. 40m lets a full 1800s primary step
+# run with 10m left for the fallback — NOT a full doubled fallback; this still
+# caps the execution, which is its job.
+maxWallClock: "40m"
 cleanup_artifacts:
   - artifacts/out/review.md
 # Scores this workflow's DECLARED output obligations — the
@@ -41,7 +47,12 @@ steps:
     role: "reviewer"
     on_success: "done"
     on_fail: "failed"
-    timeout: "814s"
+    # 2026-09-23: raised 814s -> 1800s. Three consecutive round-3 reviews of
+    # ~50KB design documents were killed mid-step ("task left executor in
+    # non-terminal status RUNNING", ~20min per attempt across 3 attempts). The
+    # round-2 review of a 39.5KB doc completed in ~9.5min, so the step was
+    # sitting just under the old ceiling and the documents grew across rounds.
+    timeout: "1800s"
 terminals:
   done:
     status: "COMPLETED"

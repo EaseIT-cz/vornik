@@ -6,6 +6,9 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
+	"net/url"
+	"strings"
 	"text/tabwriter"
 	"time"
 
@@ -97,7 +100,7 @@ var devicesRevokeCmd = &cobra.Command{
 }
 
 func init() {
-	pairDeviceCmd.Flags().StringVar(&pairDeviceLabel, "label", "Phone", "A name for the device (1 to 40 characters), shown in approvals and alerts")
+	pairDeviceCmd.Flags().StringVar(&pairDeviceLabel, "label", "", "A name for the device (1 to 40 characters), shown in approvals and alerts (default: \"Phone paired <date time>\")")
 	devicesListCmd.Flags().BoolVar(&devicesListJSON, "json", false, "Print JSON")
 	devicesCmd.AddCommand(devicesListCmd, devicesRevokeCmd)
 	rootCmd.AddCommand(pairDeviceCmd, devicesCmd)
@@ -128,6 +131,9 @@ func pairDevice(ctx context.Context, svc *approverdevice.Service, origin string,
 	if err != nil {
 		return err
 	}
+	if strings.TrimSpace(label) == "" {
+		label = defaultDeviceLabel(nowFunc())
+	}
 	code, expires, err := svc.StartPairing(ctx, label)
 	if err != nil {
 		return err
@@ -137,11 +143,14 @@ func pairDevice(ctx context.Context, svc *approverdevice.Service, origin string,
 		shown = code[:4] + "-" + code[4:]
 	}
 	if origin == "" {
-		origin = "http://<this host>:<port>"
+		origin = "https://<this host>"
 	}
 	_, _ = fmt.Fprintf(out, "Pairing code:  %s\n", shown)
 	_, _ = fmt.Fprintf(out, "Open on the phone:  %s/ui/pair\n", origin)
 	_, _ = fmt.Fprintf(out, "Expires:  %s (single use)\n", expires.Local().Format("15:04:05 MST"))
+	if plainHTTPNonLoopback(origin) {
+		_, _ = fmt.Fprintln(out, "Warning: pairing needs HTTPS. The approver pages refuse plain http to a non-loopback host: serve Vornik over HTTPS (or behind a TLS proxy listed in server.real_ip.trusted_proxies), or pair on this machine through localhost.")
+	}
 	if exists {
 		_, _ = fmt.Fprintln(out, "An approver device already exists: after the code, approve this one on that device.")
 	}
@@ -149,6 +158,21 @@ func pairDevice(ctx context.Context, svc *approverdevice.Service, origin string,
 		_, _ = fmt.Fprintln(out, "Warning: no alert channel is configured (steering_operator_alert), so pairings and approval requests are not pushed. Approvals still work from the page.")
 	}
 	return nil
+}
+
+// plainHTTPNonLoopback reports whether origin is an http URL whose host is not
+// the local machine (design §9.2, T12: the approver pages refuse it).
+func plainHTTPNonLoopback(origin string) bool {
+	u, err := url.Parse(origin)
+	if err != nil || !strings.EqualFold(u.Scheme, "http") {
+		return false
+	}
+	h := strings.TrimSuffix(u.Hostname(), ".")
+	if strings.EqualFold(h, "localhost") {
+		return false
+	}
+	ip := net.ParseIP(h)
+	return ip == nil || !ip.IsLoopback()
 }
 
 type deviceListRow struct {
@@ -207,4 +231,13 @@ func revokeDevice(ctx context.Context, svc *approverdevice.Service, id string, o
 		}
 	}
 	return fmt.Errorf("no approver device %q (see: vornikctl devices list)", id)
+}
+
+// nowFunc is the clock for the default device label; tests replace it.
+var nowFunc = time.Now
+
+// defaultDeviceLabel names a device by when it was paired, so devices paired
+// without --label differ (GitHub #79). At most 40 runes; passes CleanLabel.
+func defaultDeviceLabel(now time.Time) string {
+	return "Phone paired " + now.Format("2 Jan 15:04")
 }

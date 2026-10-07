@@ -144,7 +144,12 @@ Vornik and has Vornik forget it too. Be aware of what that means:
 - **Forgetting is not deleting.** Vornik stops recalling the item, here and
   in every prefetch, but keeps the record for your operator's audit until the
   memory project's retention removes it. Your operator can erase it at once.
-  A fact stored again later (re-added, or remembered by the model) comes back.
+- **What comes back (0.11.3).** A line Hermes forgot through its own memory
+  comes back when Hermes adds the same line again. Something you forgot with
+  `/vornik-forget`, or that was corrected as wrong, stays forgotten even if
+  the same text is stored again; a reworded note is a new memory and is
+  recalled. Items forgotten before 0.11.3 stay forgotten against identical
+  text. Replacing an entry with the same text changes nothing in Vornik.
 - **A forget said in conversation is best effort.** It runs through Hermes's
   own memory tool, and the plugin cannot add a line to Hermes's reply, so if
   Vornik's copy is not found you are not told; it is only logged ("could not

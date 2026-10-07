@@ -126,7 +126,7 @@ than queueing it.
 2. Write them to local files.
 3. Read the bytes locally and call `mcp__vornik__delegate` with
    `workflow="companion-rag-ingest"` and the files as base64
-   `inputArtifacts` (see the files rule above).
+   `inputArtifacts` (see [Files rule](#files-rule)).
 
 That path is deterministic and agent-free: 318/318 files and 3439 chunks on
 the corpus that produced 40 chunks of summary prose through the wrong

@@ -789,6 +789,13 @@ func (c *Container) initScheduler() error {
 			c.Logger.Warn().Err(err).Msg("memory manager initialization failed — continuing without memory")
 		} else {
 			c.memoryManager = mgr
+			mgr.Repository().SetApprovalRetentionResolver(func(projectID string) bool {
+				if c.Registry == nil {
+					return false
+				}
+				p := c.Registry.GetProject(projectID)
+				return p != nil && p.Retention.MemoryRequireApproval
+			})
 			executorOpts = append(executorOpts, executor.WithMemoryIndexer(mgr.Indexer))
 
 			// B-7: wire the document-ingest workflow's system
@@ -893,6 +900,10 @@ func (c *Container) initScheduler() error {
 				ChunkExists: func(ctx context.Context, projectID, hash string) (bool, error) {
 					return memRepoForChunkExists.ChunkExistsByHash(ctx, projectID, hash)
 				},
+				// GitHub #76: a refuted Hermes-mirrored note the mirror itself
+				// forgot comes back when Hermes adds the same line again
+				// (design 22, "Reinstating a refuted mirrored note").
+				ReinstateMirrored: memRepoForChunkExists.ReinstateMirroredByHash,
 				StampEpoch: func(ctx context.Context, projectID, artifactID, epochID string) error {
 					return memRepoForChunkExists.StampEpochByArtifact(ctx, projectID, artifactID, epochID)
 				},
@@ -975,6 +986,10 @@ func (c *Container) initScheduler() error {
 					if ev.RepoScope != "" {
 						s := ev.RepoScope
 						row.RepoScope = &s
+					}
+					if ev.ReinstatedChunkID != "" {
+						s := ev.ReinstatedChunkID
+						row.ReinstatedChunkID = &s
 					}
 					return memIngestAuditRepo.Record(ctx, row)
 				},

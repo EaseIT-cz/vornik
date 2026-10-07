@@ -1232,7 +1232,7 @@ func classColour(class string) string {
 	case "diagnostic":
 		return "#f87171" // red-400
 	case "external_fetch":
-		return "#659157" // accent-500 (Coolors forest green)
+		return "#1C7ED6" // brand blue (Brand Manual v1.2)
 	case "summary":
 		return "#fb923c" // orange-400
 	case "unclassified":

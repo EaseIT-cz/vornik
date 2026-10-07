@@ -147,11 +147,26 @@ func (r *BrokerGrantRepository) Get(ctx context.Context, id string) (*persistenc
 	return g, mapDBError(err)
 }
 
-// ListForAction implements persistence.BrokerGrantRepository.
-func (r *BrokerGrantRepository) ListForAction(ctx context.Context, projectID, workflowID, action string) ([]*persistence.BrokerStandingGrant, error) {
-	return r.list(ctx, `SELECT `+brokerGrantColumns+` FROM broker_standing_grants
-		WHERE project_id = $1 AND workflow_id = $2 AND action = $3 ORDER BY expires_at, id LIMIT 200`,
-		projectID, workflowID, action)
+// ListForAction implements persistence.BrokerGrantRepository: every live
+// grant first (uncapped), then the 200 most recent non-live ones, appended
+// in that order (GitHub #78).
+func (r *BrokerGrantRepository) ListForAction(ctx context.Context, projectID, workflowID, action string, now time.Time) ([]*persistence.BrokerStandingGrant, error) {
+	live, err := r.list(ctx, `SELECT `+brokerGrantColumns+` FROM broker_standing_grants
+		WHERE project_id = $1 AND workflow_id = $2 AND action = $3
+		  AND active AND uses_left > 0 AND expires_at > $4 ORDER BY expires_at, id`,
+		projectID, workflowID, action, now)
+	if err != nil {
+		return nil, err
+	}
+	dead, err := r.list(ctx, `SELECT `+brokerGrantColumns+` FROM broker_standing_grants
+		WHERE project_id = $1 AND workflow_id = $2 AND action = $3
+		  AND NOT (active AND uses_left > 0 AND expires_at > $4)
+		ORDER BY expires_at DESC, id LIMIT 200`,
+		projectID, workflowID, action, now)
+	if err != nil {
+		return nil, err
+	}
+	return append(live, dead...), nil
 }
 
 // List implements persistence.BrokerGrantRepository.
@@ -243,9 +258,12 @@ func (r *BrokerGrantRepository) CoveredActions(ctx context.Context, grantID stri
 }
 
 // DigestDue implements persistence.BrokerGrantRepository.
-func (r *BrokerGrantRepository) DigestDue(ctx context.Context, before time.Time) ([]*persistence.BrokerStandingGrant, error) {
-	return r.list(ctx, `SELECT `+brokerGrantColumns+` FROM broker_standing_grants
-		WHERE digest_through <= $1 ORDER BY digest_through LIMIT 500`, before)
+func (r *BrokerGrantRepository) DigestDue(ctx context.Context, before, now time.Time) ([]*persistence.BrokerStandingGrant, error) {
+	return r.list(ctx, `SELECT `+brokerGrantColumns+` FROM broker_standing_grants g
+		WHERE digest_through <= $1
+		  AND ((active AND uses_left > 0 AND expires_at > $2)
+		       OR EXISTS (SELECT 1 FROM broker_actions a WHERE a.approver = $3 || g.id AND a.decided_at > g.digest_through))
+		ORDER BY digest_through LIMIT 500`, before, now, persistence.BrokerGrantApproverPrefix)
 }
 
 // AdvanceDigest implements persistence.BrokerGrantRepository. Postgres keeps

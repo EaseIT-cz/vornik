@@ -2,7 +2,8 @@
 <html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="referrer" content="no-referrer">
-<meta name="theme-color" content="#558A98">
+<meta name="theme-color" content="#F6F4EF" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#10141A" media="(prefers-color-scheme: dark)">
 {{if .Refresh}}<meta http-equiv="refresh" content="{{.Refresh}}">{{end}}
 <title>{{.Title}} · Vornik</title>
 <link rel="manifest" href="/ui/static/approve.webmanifest">
@@ -10,16 +11,21 @@
 <link rel="apple-touch-icon" href="/ui/static/apple-touch-icon.png">
 <style>
 /* Design §9.1a: the console's tokens (internal/ui/templates/_partials.html),
-   copied as hex; a test compares them with the console's per theme. Nothing
+   copied as hex; a test compares them with the console's per theme. --link
+   and --ok-text are PWA-only text shades: brand-500/accent-500 are fills
+   (white text on them) and are too dark to read as text on the dark ground
+   (ui-design-refresh-design.md §11.2). Nothing
    here loads from another origin: credentials are typed on these pages. */
 :root{ /* light */
---surface-900:#f5f1ec;--surface-800:#ffffff;--surface-600:#e0d5c9;
---ink-100:#1b2026;--ink-300:#3f4750;--ink-500:#7a8492;
---brand-500:#558a98;--accent-500:#659157;--reject:#be123c;}
+--surface-900:#f6f4ef;--surface-800:#ffffff;--surface-600:#e6e1d6;
+--ink-100:#101826;--ink-300:#2e3542;--ink-500:#646c78;
+--brand-500:#145fa2;--accent-500:#3f7a1f;--reject:#be123c;
+--link:#1665ad;--ok-text:#3f7a1f;--on-reject:#ffffff;}
 @media (prefers-color-scheme:dark){:root{ /* dark */
---surface-900:#3b4252;--surface-800:#4c566a;--surface-600:#7a8fa8;
---ink-100:#f3f4f6;--ink-300:#d1d5db;--ink-500:#a8b4c5;
---brand-500:#0078c3;--accent-500:#78b41e;--reject:#fb7185;}}
+--surface-900:#10141a;--surface-800:#171c23;--surface-600:#2c3440;
+--ink-100:#ece9e1;--ink-300:#c9cdd3;--ink-500:#8a929c;
+--brand-500:#176ab8;--accent-500:#3f7a1f;--reject:#fb7185;
+--link:#4fa3e6;--ok-text:#9bdb6b;--on-reject:#10141a;}}
 *{box-sizing:border-box}
 body{margin:0;background:var(--surface-900);color:var(--ink-300);font:17px/1.5 system-ui,-apple-system,"Segoe UI",sans-serif}
 header{display:flex;align-items:center;gap:.6rem;padding:.75rem 1rem;border-bottom:1px solid var(--surface-600);background:var(--surface-800)}
@@ -29,7 +35,7 @@ main{max-width:34rem;margin:0 auto;padding:1rem}
 h1{font-size:1.35rem;margin:.5rem 0 1rem;color:var(--ink-100)}
 .card{background:var(--surface-800);border:1px solid var(--surface-600);border-radius:14px;padding:1rem;margin:0 0 .75rem}
 .mut{color:var(--ink-500);font-size:.9rem}
-a{color:var(--brand-500);text-decoration:none;font-weight:500}
+a{color:var(--link);text-decoration:none;font-weight:500}
 a:hover{text-decoration:underline}
 .act{display:block;text-align:center;margin:.5rem 0 0;padding:.75rem;border-radius:10px;background:var(--brand-500);color:#fff}
 .act:hover{text-decoration:none;filter:brightness(1.08)}
@@ -37,9 +43,9 @@ a:hover{text-decoration:underline}
 input[type=text],input[type=password]{width:100%;font-size:1.2rem;padding:.7rem;border:1px solid var(--surface-600);border-radius:10px;background:var(--surface-900);color:var(--ink-100)}
 input[type=text]{letter-spacing:.15em;text-transform:uppercase}
 button{display:block;width:100%;font-size:1.1rem;padding:.9rem;border:0;border-radius:10px;margin:.5rem 0;cursor:pointer;color:#fff;background:var(--brand-500)}
-button.ok{background:var(--accent-500)}button.no{background:var(--reject)}
+button.ok{background:var(--accent-500)}button.no{background:var(--reject);color:var(--on-reject)}
 pre{white-space:pre-wrap;word-break:break-word;font-size:.85rem;color:var(--ink-100)}
-.err{color:var(--reject)}.flash{color:var(--accent-500)}
+.err{color:var(--reject)}.flash{color:var(--ok-text)}
 nav{display:flex;flex-wrap:wrap;gap:.5rem;margin:0 0 1rem;font-size:.95rem}
 nav a{padding:.35rem .8rem;border-radius:999px;border:1px solid var(--surface-600);background:var(--surface-800);color:var(--ink-300)}
 nav a:hover{text-decoration:none;border-color:var(--brand-500)}

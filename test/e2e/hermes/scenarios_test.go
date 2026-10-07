@@ -262,7 +262,7 @@ func toolsOffered(s *stack) []string {
 // row). Read straight from the lane's Postgres container.
 func catalogCalls(t *testing.T) int {
 	t.Helper()
-	out, err := exec.Command("podman", "exec", "vornik-e2e-pg", "psql", "-U", "vornik", "-d", "vornik", "-tAc",
+	out, err := exec.Command("podman", "exec", pgContainerName(), "psql", "-U", "vornik", "-d", "vornik", "-tAc",
 		"SELECT count(*) FROM tool_audit_log WHERE project_id = 'broker-mail' AND tool_name = 'mcp__plugin_vornik-companion_vornik__catalog'").Output()
 	if err != nil {
 		t.Fatalf("count catalog calls: %v", err)

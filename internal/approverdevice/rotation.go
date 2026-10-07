@@ -108,7 +108,16 @@ func (s *Service) authenticate(ctx context.Context, token string) (authResult, e
 				return authResult{}, err
 			}
 		}
-		if now.Sub(d.LastUsedAt) > touchInterval {
+		// The first presentation touches at once, so "never used" (the
+		// enrollment re-mint guard, design §9.2 T11) is exact and not blurred
+		// by touchInterval. That touch fails closed: if it cannot be written
+		// the device would still read "never used" and a claim-cookie holder
+		// could re-mint a token in use. The hourly touch stays best-effort.
+		if d.LastUsedAt.Equal(d.PairedAt) {
+			if err := s.repo.TouchDevice(ctx, d.ID, now); err != nil {
+				return authResult{}, err
+			}
+		} else if now.Sub(d.LastUsedAt) > touchInterval {
 			_ = s.repo.TouchDevice(ctx, d.ID, now)
 		}
 		return authResult{device: dev}, nil

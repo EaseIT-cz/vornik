@@ -24,7 +24,7 @@ func TestClassColour(t *testing.T) {
 		"decision":       "#a78bfa",
 		"commit_msg":     "#fbbf24",
 		"diagnostic":     "#f87171",
-		"external_fetch": "#659157",
+		"external_fetch": "#1C7ED6",
 		"summary":        "#fb923c",
 		"unclassified":   "#94a3b8",
 		"weird_new":      "#6b7280", // unknown → gray fallback

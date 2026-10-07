@@ -15,6 +15,7 @@ package main
 
 import (
 	"bufio"
+	"errors"
 	"fmt"
 	"os"
 	"path"
@@ -71,7 +72,17 @@ func main() {
 		writePage(filepath.Join(root, cliPage), genHeader+renderCLI(cli.RootCmd(), loadCLIAllow(root)), deny)
 		writePage(filepath.Join(root, configPage), genHeader+renderConfig(reflect.TypeOf(config.Config{})), deny)
 		writeEditions(root, deny)
-		writePage(filepath.Join(root, llmsPage), genHeader+renderLLMs(root), deny)
+		switch page, skipped, err := llmsForAll(root); {
+		case err != nil:
+			fatal(err)
+		case skipped:
+			// The Community export ships docs sources without the
+			// Enterprise-owned publication config (export runbook,
+			// amendment 2026-10-05). Said out loud, never silent.
+			fmt.Fprintf(os.Stderr, "docs-gen: %s SKIPPED — no mkdocs.yml in this tree (publication config is Enterprise-owned)\n", llmsPage)
+		default:
+			writePage(filepath.Join(root, llmsPage), genHeader+page, deny)
+		}
 		writeToolRegistry(root)
 	case "stamp":
 		stamp(root, os.Args[2:])
@@ -100,6 +111,22 @@ type llmsPageEntry struct {
 }
 
 type excludeRules []string
+
+// llmsForAll renders llms.txt for `docs-gen all`, or reports it skipped when
+// the tree has no mkdocs.yml (the Community export removes it). `docs-gen
+// llms` asked for explicitly still fails without it.
+func llmsForAll(root string) (page string, skipped bool, err error) {
+	path := filepath.Join(root, "mkdocs.yml")
+	if _, statErr := os.Stat(path); errors.Is(statErr, os.ErrNotExist) {
+		return "", true, nil
+	}
+	cfg, err := loadMkdocsConfig(path)
+	if err != nil {
+		return "", false, err
+	}
+	page, err = renderLLMsFromConfig(root, cfg)
+	return page, false, err
+}
 
 func renderLLMs(root string) string {
 	cfg, err := loadMkdocsConfig(filepath.Join(root, "mkdocs.yml"))

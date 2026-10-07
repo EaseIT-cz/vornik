@@ -261,19 +261,48 @@ func TestParseCodexResponsesSSE_ScannerReadError(t *testing.T) {
 	assert.Contains(t, err.Error(), assert.AnError.Error())
 }
 
+// BACKLOG 2026-10-03 (LLD 09 s8.4): Codex cut-offs were reported as "stop" and passed as answers.
 func TestChooseFinishReason(t *testing.T) {
 	tests := []struct {
 		name         string
 		hasToolCalls bool
+		truncated    bool
 		want         string
 	}{
-		{"no tool calls", false, "stop"},
-		{"has tool calls", true, "tool_calls"},
+		{"no tool calls", false, false, "stop"},
+		{"has tool calls", true, false, "tool_calls"},
+		{"truncated", false, true, "length"},
+		{"truncated with tool call", true, true, "length"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := chooseFinishReason(tt.hasToolCalls)
+			got := chooseFinishReason(tt.hasToolCalls, tt.truncated)
 			assert.Equal(t, tt.want, got)
 		})
 	}
+}
+
+// BACKLOG 2026-10-03 (LLD 09 s8.4): Codex cut-offs were reported as "stop" and passed as answers.
+func TestCodexResponsesSSE_IncompleteMaxOutputTokensIsLength(t *testing.T) {
+	sse := "event: response.output_text.delta\n" +
+		`data: {"type":"response.output_text.delta","delta":"partial"}` + "\n\n" +
+		"event: response.incomplete\n" +
+		`data: {"type":"response.incomplete","response":{"id":"r1","status":"incomplete","incomplete_details":{"reason":"max_output_tokens"},"usage":{"input_tokens":5,"output_tokens":7}}}` + "\n\n"
+	resp, err := parseCodexResponsesSSE(strings.NewReader(sse), nil)
+	require.NoError(t, err)
+	require.Len(t, resp.Choices, 1)
+	assert.Equal(t, "length", resp.Choices[0].FinishReason)
+	assert.Equal(t, "partial", resp.Choices[0].Message.Content)
+	assert.Equal(t, 7, resp.Usage.CompletionTokens)
+	assert.Equal(t, "r1", resp.ID)
+}
+
+// A non-cap incomplete reason is not a cut-off (LLD 09 s8.4 amendment 2026-10-07).
+func TestCodexResponsesSSE_IncompleteOtherReasonStaysStop(t *testing.T) {
+	sse := "event: response.incomplete\n" +
+		`data: {"type":"response.incomplete","response":{"id":"r2","incomplete_details":{"reason":"content_filter"},"usage":{"input_tokens":5,"output_tokens":7}}}` + "\n\n"
+	resp, err := parseCodexResponsesSSE(strings.NewReader(sse), nil)
+	require.NoError(t, err)
+	assert.Equal(t, "stop", resp.Choices[0].FinishReason)
+	assert.Equal(t, 7, resp.Usage.CompletionTokens)
 }

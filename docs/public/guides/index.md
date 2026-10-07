@@ -66,3 +66,5 @@ into config. The `vornikctl` command-line tool is your main interface for
 inspecting and validating that configuration — see the
 [vornikctl reference](../reference/vornikctl.md) for the full command list and
 the [configuration reference](../reference/configuration.md) for every key.
+
+For unexpected public web redirects, use the installable [redirect discovery skill](redirect-discovery.md) to gather host evidence and report verification or unresolved destinations.

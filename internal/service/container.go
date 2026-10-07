@@ -155,6 +155,8 @@ type Container struct {
 	// hostApprovalMetrics is vornik_host_approvals_total (Hermes approval
 	// transport design §8), attached in initHTTPServer.
 	hostApprovalMetrics *approverdevice.HostActionMetrics
+	// approverHTTPSMetrics counts plain-http refusals on the approver pages.
+	approverHTTPSMetrics *approverdevice.HTTPSRefusalMetrics
 	// agentAdminSvc is built by agentAdmin on its first success (agent
 	// admin verbs, §6); agentAdminMu guards it, agentAdminWarned paces the
 	// warning while the templates are missing.

@@ -67,6 +67,7 @@ const (
 	VerbDefineWorkflow    = "define_workflow"
 	VerbAddMCPServer      = "add_mcp_server"
 	VerbSetBudget         = "set_budget"
+	VerbUpdateProject     = "update_project"
 	VerbRemove            = "remove"
 	VerbAddAPI            = "add_api"
 	VerbRequestCredential = "request_credential"
@@ -95,6 +96,8 @@ func (r *Renderer) Render(st *State, verb string, input json.RawMessage) (Change
 		c, err = r.addMCPServer(st, input)
 	case VerbSetBudget:
 		c, err = r.setBudget(st, input)
+	case VerbUpdateProject:
+		c = r.updateProject(st, input)
 	case VerbRemove:
 		c, err = r.remove(st, input)
 	case VerbRequestCredential:
@@ -114,6 +117,9 @@ func (r *Renderer) Render(st *State, verb string, input json.RawMessage) (Change
 	c.Verb, c.Namespace = verb, ns
 	if lock := firstLocked(st, c.Locks); lock != "" {
 		if by := st.LockedBy[lock]; by != "" {
+			if done, ok := credentialAlreadyRequested(verb, ns, lock, by, &c); ok {
+				return done, nil
+			}
 			return refuse(verb, ns, "%s is part of a change waiting for approval, request %s; approve or reject that one first", lock, by), nil
 		}
 		return refuse(verb, ns, "%s is part of a change waiting for approval; approve or reject that one first", lock), nil
@@ -123,6 +129,25 @@ func (r *Renderer) Render(st *State, verb string, input json.RawMessage) (Change
 		return Change{}, err
 	}
 	return c, nil
+}
+
+// credentialAlreadyRequested answers a request_credential whose namespace
+// credential is already held by a pending credential_slot request (GitHub #80,
+// design 18.16): an inert change with no ops and no slot, so the service
+// answers applied with the sentence and files nothing. holder is the
+// "<id> (<kind>)" LockedBy value.
+func credentialAlreadyRequested(verb, ns, lock, holder string, c *Change) (Change, bool) {
+	const kindSuffix = " (credential_slot)"
+	name, isCred := strings.CutPrefix(lock, "credential:"+ns+"/")
+	id, isSlot := strings.CutSuffix(holder, kindSuffix)
+	if verb != VerbRequestCredential || !isCred || !isSlot || c.Slot == nil {
+		return Change{}, false
+	}
+	return Change{
+		Verb: verb, Namespace: ns, Class: Inert,
+		Sentence: name + " is already requested for this namespace (request " + id + "); once it is entered it serves " +
+			c.Slot.Project + " too. Nothing more to request.",
+	}, true
 }
 
 func firstLocked(st *State, locks []string) string {

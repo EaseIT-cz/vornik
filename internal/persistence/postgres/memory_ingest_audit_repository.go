@@ -44,13 +44,13 @@ func (r *MemoryIngestAuditRepository) Record(ctx context.Context, audit *persist
 			id, project_id, actor_kind, actor_id,
 			source_name, content_hash, content_bytes,
 			proposed_class, decision, gate_failed,
-			chunks_admitted, ingested_at, repo_scope
-		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+			chunks_admitted, ingested_at, repo_scope, reinstated_chunk_id
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
 	`,
 		audit.ID, audit.ProjectID, audit.ActorKind, audit.ActorID,
 		audit.SourceName, audit.ContentHash, audit.ContentBytes,
 		audit.ProposedClass, audit.Decision, audit.GateFailed,
-		audit.ChunksAdmitted, audit.IngestedAt, audit.RepoScope,
+		audit.ChunksAdmitted, audit.IngestedAt, audit.RepoScope, audit.ReinstatedChunkID,
 	)
 	return mapDBError(err)
 }
@@ -69,7 +69,7 @@ func (r *MemoryIngestAuditRepository) ListByProject(ctx context.Context, project
 		SELECT id, project_id, actor_kind, actor_id,
 		       source_name, content_hash, content_bytes,
 		       proposed_class, decision, gate_failed,
-		       chunks_admitted, ingested_at, repo_scope
+		       chunks_admitted, ingested_at, repo_scope, reinstated_chunk_id
 		FROM memory_ingest_audit
 		WHERE project_id = $1
 		ORDER BY ingested_at DESC
@@ -87,7 +87,7 @@ func (r *MemoryIngestAuditRepository) ListByProject(ctx context.Context, project
 			&a.ID, &a.ProjectID, &a.ActorKind, &a.ActorID,
 			&a.SourceName, &a.ContentHash, &a.ContentBytes,
 			&a.ProposedClass, &a.Decision, &a.GateFailed,
-			&a.ChunksAdmitted, &a.IngestedAt, &a.RepoScope,
+			&a.ChunksAdmitted, &a.IngestedAt, &a.RepoScope, &a.ReinstatedChunkID,
 		); err != nil {
 			return nil, mapDBError(err)
 		}
@@ -127,7 +127,7 @@ func (r *MemoryIngestAuditRepository) List(ctx context.Context, filter persisten
 		SELECT id, project_id, actor_kind, actor_id,
 		       source_name, content_hash, content_bytes,
 		       proposed_class, decision, gate_failed,
-		       chunks_admitted, ingested_at, repo_scope
+		       chunks_admitted, ingested_at, repo_scope, reinstated_chunk_id
 		FROM memory_ingest_audit
 	`
 	if len(where) > 0 {
@@ -150,7 +150,7 @@ func (r *MemoryIngestAuditRepository) List(ctx context.Context, filter persisten
 			&a.ID, &a.ProjectID, &a.ActorKind, &a.ActorID,
 			&a.SourceName, &a.ContentHash, &a.ContentBytes,
 			&a.ProposedClass, &a.Decision, &a.GateFailed,
-			&a.ChunksAdmitted, &a.IngestedAt, &a.RepoScope,
+			&a.ChunksAdmitted, &a.IngestedAt, &a.RepoScope, &a.ReinstatedChunkID,
 		); err != nil {
 			return nil, mapDBError(err)
 		}

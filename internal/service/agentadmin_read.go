@@ -66,11 +66,12 @@ type SetupRole struct {
 
 // SetupProject is one project in list_my_setup.
 type SetupProject struct {
-	ID        string   `json:"id"`
-	Purpose   string   `json:"purpose"`
-	BudgetUSD float64  `json:"monthly_budget_usd"`
-	Home      bool     `json:"home,omitempty"`
-	Roles     []string `json:"roles"`
+	ID          string   `json:"id"`
+	DisplayName string   `json:"display_name"`
+	Purpose     string   `json:"purpose"`
+	BudgetUSD   float64  `json:"monthly_budget_usd"`
+	Home        bool     `json:"home,omitempty"`
+	Roles       []string `json:"roles"`
 	// RoleDetails is Roles with each role's model, tools and where it runs
 	// (design §18.14); Roles stays as it was so nothing that reads it breaks.
 	RoleDetails []SetupRole       `json:"role_details"`
@@ -184,7 +185,7 @@ func (s *agentAdminService) ListSetup(ctx context.Context, key *persistence.APIK
 	for _, id := range ids {
 		p := st.Projects[id]
 		v.BudgetUSD += p.MonthlyUSD
-		sp := SetupProject{ID: id, Purpose: p.Purpose, BudgetUSD: p.MonthlyUSD, Home: p.Home,
+		sp := SetupProject{ID: id, DisplayName: p.DisplayName, Purpose: p.Purpose, BudgetUSD: p.MonthlyUSD, Home: p.Home,
 			Roles: []string{}, RoleDetails: []SetupRole{}, Workflows: []SetupWorkflow{}, Servers: []SetupServer{}, APIs: []SetupAPI{},
 			Credentials: s.credentialsOf(ctx, ns, p)}
 		for _, r := range p.Swarm.Roles {
@@ -384,7 +385,7 @@ func (s *agentAdminService) Describe(ctx context.Context, key *persistence.APIKe
 		HowToWork:     agentadmin.AdminGuidance(),
 		Verbs: []string{agentadmin.VerbCreateProject, agentadmin.VerbDefineSwarm, agentadmin.VerbDefineWorkflow,
 			agentadmin.VerbAddMCPServer, agentadmin.VerbAddAPI, agentadmin.VerbRequestCredential,
-			agentadmin.VerbSetBudget, agentadmin.VerbRemove, agentadmin.VerbInstallRecipe, agentadmin.VerbListRecipes,
+			agentadmin.VerbSetBudget, agentadmin.VerbUpdateProject, agentadmin.VerbRemove, agentadmin.VerbInstallRecipe, agentadmin.VerbListRecipes,
 			"list_my_setup", "describe_installation"},
 		RoleBuiltins:  append(registry.BrokerSafeBuiltins(), agentadmin.QueryAPITool+" (read only, once the project has an approved API)"),
 		AlwaysGranted: agenttools.EveryRole(),

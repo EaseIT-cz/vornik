@@ -42,7 +42,58 @@ func parseCodexResponsesSSE(r io.Reader, onText StreamCallback) (*ChatResponse, 
 			argsBuf strings.Builder
 		}
 		inflightCalls []ToolCall
+		truncated     bool
 	)
+
+	// applyFinalResponse copies usage and id from the terminal event's response
+	// object into resp and returns incomplete_details.reason ("" when absent).
+	applyFinalResponse := func(raw json.RawMessage) string {
+		if len(raw) == 0 {
+			return ""
+		}
+		var final struct {
+			Usage *struct {
+				InputTokens        int `json:"input_tokens"`
+				OutputTokens       int `json:"output_tokens"`
+				TotalTokens        int `json:"total_tokens"`
+				InputTokensDetails *struct {
+					// cached_tokens is the subset of input_tokens the
+					// Responses API served from its automatic prompt
+					// cache (>1024-token prefixes). It is a subset of
+					// InputTokens, not additive — surfaced for cost
+					// observability, matching the chat-completions
+					// prompt_tokens_details.cached_tokens handling in
+					// stream.go.
+					CachedTokens int `json:"cached_tokens"`
+				} `json:"input_tokens_details"`
+			} `json:"usage"`
+			ID                string `json:"id"`
+			IncompleteDetails *struct {
+				Reason string `json:"reason"`
+			} `json:"incomplete_details"`
+		}
+		reason := ""
+		if err := json.Unmarshal(raw, &final); err == nil {
+			if final.Usage != nil {
+				resp.Usage.PromptTokens = final.Usage.InputTokens
+				resp.Usage.CompletionTokens = final.Usage.OutputTokens
+				resp.Usage.TotalTokens = final.Usage.TotalTokens
+				if resp.Usage.TotalTokens == 0 {
+					resp.Usage.TotalTokens = resp.Usage.PromptTokens + resp.Usage.CompletionTokens
+				}
+				if final.Usage.InputTokensDetails != nil {
+					resp.Usage.CacheReadTokens = final.Usage.InputTokensDetails.CachedTokens
+				}
+			}
+			if final.ID != "" && resp.ID == "" {
+				resp.ID = final.ID
+			}
+			if final.IncompleteDetails != nil {
+				reason = final.IncompleteDetails.Reason
+			}
+		}
+		return reason
+	}
 
 	// SSE frames are "event: <type>\ndata: <json>\n\n". Some proxies
 	// collapse to data-only; we handle both. An event is terminated
@@ -131,41 +182,15 @@ func parseCodexResponsesSSE(r io.Reader, onText StreamCallback) (*ChatResponse, 
 		case "response.completed":
 			// The completed event carries the final response object
 			// including usage. Re-parse to extract token counts.
-			if len(envelope.Response) > 0 {
-				var final struct {
-					Usage *struct {
-						InputTokens        int `json:"input_tokens"`
-						OutputTokens       int `json:"output_tokens"`
-						TotalTokens        int `json:"total_tokens"`
-						InputTokensDetails *struct {
-							// cached_tokens is the subset of input_tokens the
-							// Responses API served from its automatic prompt
-							// cache (>1024-token prefixes). It is a subset of
-							// InputTokens, not additive — surfaced for cost
-							// observability, matching the chat-completions
-							// prompt_tokens_details.cached_tokens handling in
-							// stream.go.
-							CachedTokens int `json:"cached_tokens"`
-						} `json:"input_tokens_details"`
-					} `json:"usage"`
-					ID string `json:"id"`
-				}
-				if err := json.Unmarshal(envelope.Response, &final); err == nil {
-					if final.Usage != nil {
-						resp.Usage.PromptTokens = final.Usage.InputTokens
-						resp.Usage.CompletionTokens = final.Usage.OutputTokens
-						resp.Usage.TotalTokens = final.Usage.TotalTokens
-						if resp.Usage.TotalTokens == 0 {
-							resp.Usage.TotalTokens = resp.Usage.PromptTokens + resp.Usage.CompletionTokens
-						}
-						if final.Usage.InputTokensDetails != nil {
-							resp.Usage.CacheReadTokens = final.Usage.InputTokensDetails.CachedTokens
-						}
-					}
-					if final.ID != "" && resp.ID == "" {
-						resp.ID = final.ID
-					}
-				}
+			applyFinalResponse(envelope.Response)
+
+		case "response.incomplete":
+			// BACKLOG 2026-10-03 (LLD 09 s8.4): generation stopped early.
+			// max_output_tokens is the output cap, reported as "length" so
+			// the agent refuses the partial text as an answer. Other
+			// reasons (e.g. content_filter) keep stop/tool_calls.
+			if reason := applyFinalResponse(envelope.Response); reason == "max_output_tokens" {
+				truncated = true
 			}
 
 		case "response.error":
@@ -220,7 +245,7 @@ func parseCodexResponsesSSE(r io.Reader, onText StreamCallback) (*ChatResponse, 
 		Message      Message `json:"message"`
 		FinishReason string  `json:"finish_reason"`
 	}{
-		{Index: 0, Message: msg, FinishReason: chooseFinishReason(len(inflightCalls) > 0)},
+		{Index: 0, Message: msg, FinishReason: chooseFinishReason(len(inflightCalls) > 0, truncated)},
 	}
 	return resp, nil
 }
@@ -233,7 +258,12 @@ type codexSSEItem struct {
 	Name   string `json:"name"`    // present on function_call
 }
 
-func chooseFinishReason(hasToolCalls bool) string {
+// chooseFinishReason: truncation outranks tool calls, because a call cut off
+// at the output cap is incomplete (LLD 09 s8.4).
+func chooseFinishReason(hasToolCalls, truncated bool) string {
+	if truncated {
+		return "length"
+	}
 	if hasToolCalls {
 		return "tool_calls"
 	}

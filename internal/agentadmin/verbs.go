@@ -187,6 +187,7 @@ func (r *Renderer) defineSwarm(st *State, raw json.RawMessage) (Change, error) {
 	if err := decodeStrict(raw, &in); err != nil {
 		return refuse(verb, ns, "%v", err), nil
 	}
+	in.Slug = projectSlug(ns, in.Slug) // names an existing project (design section 5, 2026-10-07)
 	id := agentns.ID(ns, in.Slug)
 	p, ok := st.Projects[id]
 	if !ok {
@@ -427,6 +428,7 @@ func (r *Renderer) defineWorkflow(st *State, raw json.RawMessage) (Change, error
 	if err := decodeStrict(raw, &in); err != nil {
 		return refuse(verb, ns, "%v", err), nil
 	}
+	in.Project = projectSlug(ns, in.Project)
 	pid := agentns.ID(ns, in.Project)
 	p, ok := st.Projects[pid]
 	if !ok {
@@ -620,6 +622,7 @@ func (r *Renderer) addMCPServer(st *State, raw json.RawMessage) (Change, error) 
 	if err := decodeStrict(raw, &in); err != nil {
 		return refuse(verb, ns, "%v", err), nil
 	}
+	in.Project = projectSlug(ns, in.Project)
 	pid := agentns.ID(ns, in.Project)
 	p, ok := st.Projects[pid]
 	if !ok {
@@ -750,6 +753,7 @@ func (r *Renderer) setBudget(st *State, raw json.RawMessage) (Change, error) {
 	if err := decodeStrict(raw, &in); err != nil {
 		return refuse(verb, ns, "%v", err), nil
 	}
+	in.Project = projectSlug(ns, in.Project)
 	pid := agentns.ID(ns, in.Project)
 	p, ok := st.Projects[pid]
 	if !ok {
@@ -797,12 +801,18 @@ func (r *Renderer) remove(st *State, raw json.RawMessage) (Change, error) {
 	var why string
 	switch in.Kind {
 	case "project":
-		why = removeProject(st, agentns.ID(ns, in.ID), &c)
+		why = removeProject(st, agentns.ID(ns, projectSlug(ns, in.ID)), &c)
 	case "workflow":
+		// Only the form <project>--<workflow> (design section 5, 2026-10-07):
+		// a full id cannot be told from it when the project is named for the
+		// namespace.
 		why = removeWorkflow(st, agentns.ID(ns, in.ID), &c)
+		if strings.HasPrefix(why, "there is no workflow") && strings.HasPrefix(in.ID, ns+agentns.Separator) && strings.Count(in.ID, agentns.Separator) >= 2 {
+			why = fmt.Sprintf("pass the workflow as %q (<project>--<workflow>, without the namespace %q)", strings.TrimPrefix(in.ID, ns+agentns.Separator), ns+agentns.Separator)
+		}
 	case "integration":
 		var err error
-		why, err = r.removeIntegration(st, agentns.ID(ns, in.Project), in.ID, &c)
+		why, err = r.removeIntegration(st, agentns.ID(ns, projectSlug(ns, in.Project)), in.ID, &c)
 		if err != nil {
 			return Change{}, err
 		}

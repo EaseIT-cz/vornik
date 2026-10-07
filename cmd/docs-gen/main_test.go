@@ -297,3 +297,21 @@ func TestRenderConfig_OnlyDocTaggedFields(t *testing.T) {
 		t.Errorf("expected section grouping by top-level key; got:\n%s", out)
 	}
 }
+
+// Incident 2026-10-05: the 2026.10.4 CE export went red in the public
+// artifact-purity gate (EaseIT-cz/vornik run 37330170849) because `docs-gen
+// all` opened mkdocs.yml, which the CE export removes (publication config is
+// Enterprise-owned). `all` reports llms.txt as SKIPPED when mkdocs.yml is
+// absent; any other error still fails.
+func TestLLMsForAll_SkipsOnlyWhenMkdocsIsAbsent(t *testing.T) {
+	root := t.TempDir()
+	if _, skipped, err := llmsForAll(root); err != nil || !skipped {
+		t.Fatalf("no mkdocs.yml: skipped=%v err=%v, want skipped", skipped, err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "mkdocs.yml"), []byte("site_name: x\nnav: []\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, skipped, err := llmsForAll(root); err == nil || skipped {
+		t.Fatalf("a present but broken mkdocs.yml: skipped=%v err=%v, want an error", skipped, err)
+	}
+}

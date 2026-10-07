@@ -6,14 +6,20 @@
   "scope": "/ui/approve/",
   "display": "standalone",
   "orientation": "portrait",
-  "theme_color": "#558A98",
-  "background_color": "#F5F1EC",
+  "theme_color": "#F6F4EF",
+  "background_color": "#F6F4EF",
   "icons": [
     {
       "src": "/ui/static/icon.svg",
       "sizes": "any",
       "type": "image/svg+xml",
-      "purpose": "any maskable"
+      "purpose": "any"
+    },
+    {
+      "src": "/ui/static/icon-maskable.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "maskable"
     }
   ]
 }

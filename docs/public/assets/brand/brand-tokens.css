@@ -1,0 +1,68 @@
+/* EaseIT Labs / Vornik brand tokens — Brand Manual v1.2 (2026-10-07).
+ *
+ * Copy this file and the fonts/ directory next to it into a site; every site
+ * keeps its own copy because the sites have no shared build. Values come from
+ * the manual's Colour and Typography sections; change them there first.
+ *
+ * Fonts are self-hosted (no Google Fonts request): variable woff2 subsets of
+ * Space Grotesk and Manrope, Latin + Latin Extended-A, SIL OFL 1.1 — keep the
+ * *-OFL.txt files alongside.
+ */
+@font-face {
+  font-family: "Space Grotesk";
+  src: url("fonts/SpaceGrotesk-Variable.woff2") format("woff2");
+  font-weight: 300 700;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: "Manrope";
+  src: url("fonts/Manrope-Variable.woff2") format("woff2");
+  font-weight: 200 800;
+  font-style: normal;
+  font-display: swap;
+}
+
+:root {
+  /* palette (light) */
+  --brand-navy: #101826;        /* primary: text, dark grounds, brackets */
+  --brand-blue: #1C7ED6;        /* brand accent: marks, agent dots, "IT", large text, fills */
+  --brand-green: #6EA83B;       /* the one signal dot — never a fill */
+  --brand-paper: #F6F4EF;       /* light page */
+  --brand-slate: #6B7480;       /* "Labs", secondary text */
+  --brand-white: #FFFFFF;       /* cards above paper */
+  --brand-line: #E6E1D6;        /* hairlines on paper */
+  --brand-blue-on-dark: #6FB4EE;
+  --brand-green-on-dark: #9BDB6B;
+
+  /* semantic (light) */
+  --bg: var(--brand-paper);
+  --surface: var(--brand-white);
+  --ink: var(--brand-navy);
+  --muted: #5E6672;             /* slate darkened for body text: 5.3:1 on paper */
+  --line: var(--brand-line);
+  /* EaseIT Blue is 3.8:1 on paper: fine for marks, large text and fills
+     behind dark text, too light for body links or white button labels.
+     Text and buttons use the AA shade; the brand blue stays the brand. */
+  --accent: #1665AD;            /* links, buttons: 5.5:1 on paper, white on it 6.0:1 */
+  --accent-hover: #11528D;      /* 7.3:1 */
+  --signal: var(--brand-green);
+
+  /* type */
+  --font-display: "Space Grotesk", "Segoe UI", system-ui, sans-serif;
+  --font-body: "Manrope", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-mono: ui-monospace, "SF Mono", "Cascadia Code", Menlo, Consolas, monospace;
+}
+
+/* Dark values (Brand Manual dark tokens). Sites opt in with their own
+   prefers-color-scheme / [data-theme] selectors by assigning these. */
+:root {
+  --dark-bg: #10141A;
+  --dark-surface: #171C23;
+  --dark-ink: #ECE9E1;
+  --dark-muted: #9AA2AC;
+  --dark-line: #262C35;
+  --dark-accent: #4FA3E6;
+  --dark-accent-hover: #6FB4EE;
+  --dark-signal: #8FCB5B;
+}

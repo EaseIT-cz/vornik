@@ -1,0 +1,64 @@
+/* docs.vornik.io theme: EaseIT Labs Brand Manual v1.2.
+ * Material reads these variables when the palette is primary/accent "custom".
+ * Fonts come from assets/brand/brand-tokens.css (self-hosted; theme.font is
+ * false, so Material requests nothing from Google Fonts).
+ */
+:root {
+  --md-text-font: "Manrope";
+  --md-code-font: ui-monospace, "SF Mono", "Cascadia Code", Menlo, Consolas;
+}
+
+/* light */
+[data-md-color-scheme="default"] {
+  --md-primary-fg-color: #101826;          /* navy header */
+  --md-primary-fg-color--light: #1E2838;
+  --md-primary-fg-color--dark: #0A0F18;
+  --md-primary-bg-color: #FFFFFF;
+  --md-primary-bg-color--light: rgba(255, 255, 255, .7);
+  --md-accent-fg-color: #1C7ED6;           /* EaseIT Blue: hover, focus */
+  --md-accent-fg-color--transparent: rgba(28, 126, 214, .1);
+  --md-default-bg-color: #F6F4EF;          /* Paper */
+  --md-default-fg-color: rgba(16, 24, 38, .87);
+  --md-default-fg-color--light: rgba(16, 24, 38, .64);
+  --md-default-fg-color--lighter: rgba(16, 24, 38, .32);
+  --md-default-fg-color--lightest: rgba(16, 24, 38, .07);
+  --md-typeset-color: #101826;
+  --md-typeset-a-color: #1665AD;           /* AA link blue, 5.5:1 on Paper */
+  --md-code-bg-color: #EEEBE3;
+  --md-footer-bg-color: #101826;
+  --md-footer-bg-color--dark: #0A0F18;
+}
+
+/* dark */
+[data-md-color-scheme="slate"] {
+  --md-hue: 215;
+  --md-primary-fg-color: #171C23;
+  --md-primary-fg-color--light: #232A33;
+  --md-primary-fg-color--dark: #10141A;
+  --md-primary-bg-color: #ECE9E1;
+  --md-primary-bg-color--light: rgba(236, 233, 225, .7);
+  --md-accent-fg-color: #6FB4EE;
+  --md-accent-fg-color--transparent: rgba(111, 180, 238, .1);
+  --md-default-bg-color: #10141A;
+  --md-default-fg-color: rgba(236, 233, 225, .87);
+  --md-default-fg-color--light: rgba(236, 233, 225, .62);
+  --md-default-fg-color--lighter: rgba(236, 233, 225, .32);
+  --md-default-fg-color--lightest: rgba(236, 233, 225, .08);
+  --md-typeset-color: #ECE9E1;
+  --md-typeset-a-color: #4FA3E6;           /* 6.8:1 on the dark ground */
+  --md-code-bg-color: #171C23;
+  --md-footer-bg-color: #0B0E13;
+  --md-footer-bg-color--dark: #07090D;
+}
+
+/* headings and the site title in the display face */
+.md-typeset h1,
+.md-typeset h2,
+.md-typeset h3,
+.md-header__topic {
+  font-family: "Space Grotesk", var(--md-text-font-family);
+  letter-spacing: -0.01em;
+}
+.md-typeset h1 { font-weight: 700; color: var(--md-typeset-color); }
+.md-typeset h2, .md-typeset h3 { font-weight: 600; }
+.md-header__button.md-logo img { height: 1.6rem; width: auto; }

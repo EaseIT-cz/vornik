@@ -186,6 +186,24 @@ func (r *ApproverDeviceRepository) CompletePairing(ctx context.Context, claimHas
 	})
 }
 
+// RemintEnrollmentToken implements persistence.ApproverDeviceRepository. One
+// statement, so the guards and the swap are atomic.
+func (r *ApproverDeviceRepository) RemintEnrollmentToken(ctx context.Context, claimHash, newHash string, notBefore time.Time) (*persistence.ApproverDeviceRow, error) {
+	d, err := scanApproverDevice(r.db.QueryRowContext(ctx, `
+		UPDATE approver_devices SET dead_token_hash = token_hash, dead_reason = 'confirmed', token_hash = $1
+		WHERE id = (SELECT device_id FROM approver_pairings WHERE claim_hash = $2 AND device_id IS NOT NULL)
+		  AND revoked_at IS NULL AND paired_at >= $3 AND last_used_at = paired_at
+		  AND dead_token_hash IS NULL AND prev_token_hash IS NULL
+		RETURNING `+approverDeviceCols, newHash, claimHash, notBefore))
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, persistence.ErrNotFound
+	}
+	if err != nil {
+		return nil, mapDBError(err)
+	}
+	return &d, nil
+}
+
 const approverDeviceCols = `id, label, token_hash, paired_at, paired_by, last_used_at, revoked_at,
 	prev_token_hash, rotation_nonce, share_until, dead_token_hash, dead_reason, share_admitted, share_streak`
 

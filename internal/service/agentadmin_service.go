@@ -744,7 +744,7 @@ func (s *agentAdminService) loadStateExcluding(ctx context.Context, ns, homeProj
 		Namespace: ns, DefaultBudgetUSD: cfg.EffectiveDefaultProjectBudget(), CeilingUSD: cfg.EffectiveNamespaceBudget(),
 		AgentImage: cfg.EffectiveAgentImage(imagemanifest.AgentImageTag),
 		Projects:   map[string]*agentadmin.ProjectState{}, Workflows: map[string]*agentadmin.WorkflowState{},
-		FileHashes: map[string]string{}, Locked: map[string]bool{},
+		FileHashes: map[string]string{}, ProjectYAML: map[string][]byte{}, Locked: map[string]bool{},
 		Approvals: map[string]map[string]agentadmin.IntegrationApproval{}, Advertised: map[string][]string{},
 	}
 	if mode, err := s.c.Config.Broker.WritesMode(); err == nil && mode == "on" {
@@ -822,6 +822,9 @@ func (s *agentAdminService) hashFiles(st *agentadmin.State, ns string) error {
 				return err
 			}
 			st.FileHashes[dir+"/"+e.Name()] = agentadmin.HashContent(b)
+			if dir == "projects" {
+				st.ProjectYAML[dir+"/"+e.Name()] = b
+			}
 		}
 	}
 	return nil

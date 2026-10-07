@@ -217,6 +217,11 @@ func (d *DB) Migrate(ctx context.Context) error {
 	if _, err := d.ExecContext(ctx, schemaSQL); err != nil {
 		return fmt.Errorf("sqlite: apply schema: %w", err)
 	}
+	// Fill only absent legacy proposal dates; subsequent migrations preserve exact dates.
+	if _, err := d.ExecContext(ctx, `UPDATE project_skills SET proposed_at = updated_at, proposal_date_estimated = 1 WHERE proposed_at IS NULL;
+ UPDATE project_skill_versions SET proposed_at = archived_at, proposal_date_estimated = 1 WHERE proposed_at IS NULL;`); err != nil {
+		return fmt.Errorf("sqlite: backfill skill proposal dates: %w", err)
+	}
 	// One-time data normalisation, after the schema so every column exists
 	// (SQLite timestamp ordering design, D4).
 	return d.applyTimestampNormalization(ctx)
@@ -259,6 +264,10 @@ var sqliteAdditiveBackfills = map[string]string{
 // order as the corresponding Postgres migrations, so the two backends can be
 // diffed by eye.
 var sqliteAdditiveColumns = []additiveColumn{
+	{"project_skills", "proposed_at", `TEXT`},
+	{"project_skills", "proposal_date_estimated", `INTEGER NOT NULL DEFAULT 0`},
+	{"project_skill_versions", "proposed_at", `TEXT`},
+	{"project_skill_versions", "proposal_date_estimated", `INTEGER NOT NULL DEFAULT 0`},
 	// Postgres migration 154 — knowledge-skill dedup preflight (LLD §12.2).
 	{"project_skills", "embedding", `TEXT NOT NULL DEFAULT ''`},
 	{"project_skills", "embedding_model", `TEXT NOT NULL DEFAULT ''`},
@@ -343,6 +352,12 @@ var sqliteAdditiveColumns = []additiveColumn{
 	{"approver_devices", "dead_reason", `TEXT`},
 	{"approver_devices", "share_admitted", `INTEGER NOT NULL DEFAULT 0`},
 	{"approver_devices", "share_streak", `INTEGER NOT NULL DEFAULT 0`},
+	// Postgres migration 218 — the refute route on a memory chunk and the
+	// reinstated chunk on an ingest-audit row (GitHub #76; design 22,
+	// "Reinstating a refuted mirrored note"). Nullable, no backfill: NULL
+	// is "route not recorded" and "not a reinstate".
+	{"project_memory_chunks", "refute_route", `TEXT`},
+	{"memory_ingest_audit", "reinstated_chunk_id", `TEXT`},
 }
 
 // applyAdditiveColumns adds any registered column missing from an existing
@@ -413,6 +428,7 @@ var sqliteTableRebuilds = []tableRebuild{
 	// rebuild copies the old table's columns by name; decided_choice starts
 	// NULL on every existing row.
 	{"agent_approval_requests", "'host_action'", agentApprovalRequestsTableSQL},
+	{"agent_approval_requests", "'memory_retention'", agentApprovalRequestsTableSQL},
 }
 
 func (d *DB) applyTableRebuilds(ctx context.Context) error {

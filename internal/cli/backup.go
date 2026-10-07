@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"time"
 
@@ -37,6 +38,7 @@ Output path defaults to ./vornik-backup-YYYYMMDD-HHMMSS.tgz. The archive
 is portable across hosts when restored via 'vornikctl restore'.
 
 Requires: pg_dump on PATH with credentials resolved from config.
+The pg_dump major version must be at least the PostgreSQL server major version.
 
 Examples:
   vornikctl backup
@@ -130,6 +132,15 @@ func runBackup(cmd *cobra.Command, args []string) error {
 	pgCmd := exec.Command("pg_dump", pgArgs...)
 	pgCmd.Env = pgEnv
 	if out, err := pgCmd.CombinedOutput(); err != nil {
+		if strings.Contains(string(out), "aborting because of server version mismatch") {
+			hint := "Install a matching or newer PostgreSQL client and put its pg_dump first on PATH."
+			// PostgreSQL reports `server version: 16.15 (...)`; never use
+			// the adjacent pg_dump version as the required package version.
+			if version := regexp.MustCompile(`server version: ([1-9][0-9]*)\.`).FindSubmatch(out); len(version) > 1 {
+				hint += fmt.Sprintf(" On Debian/Ubuntu, install postgresql-client-%s (the PostgreSQL apt repository may be required).", version[1])
+			}
+			return fmt.Errorf("pg_dump failed: %w\n%s\n%s", err, out, hint)
+		}
 		return fmt.Errorf("pg_dump failed: %w\n%s", err, out)
 	}
 	fmt.Printf("✔ database dumped (%d bytes)\n", fileSize(dumpPath))

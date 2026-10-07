@@ -58,10 +58,15 @@ FRAGMENT_RE = re.compile(r" ?(?:⟦|\\u27e6|�{1,3})vm:[0-9a-f]{0,16}(?:⟧|\\u
 # before the ellipsis the daemon appends (recent_memory cuts at 240 bytes).
 PARTIAL_TOKEN_RE = re.compile(r"\s*(?:⟦|�{1,3})(?:v(?:m)?)?\s*(…?)$")
 FORGET_MISS = "could not find the Vornik copy of a removed memory; it may still be recalled"
-FORGET_DONE = ("Forgotten: Vornik will no longer recall this unless it is stored again. The record stays "
+FORGET_DONE = ("Forgotten: Vornik will no longer recall this, even if the same text is stored again; a "
+               "reworded note is a new memory. The record stays "
                "until the memory project's retention removes it, and the operator can erase it now.")
 FORGET_NONE = ("Vornik found nothing to forget under that id (it may already be forgotten, or the id is "
                "wrong). /vornik-memory lists what is kept.")
+# The refute route the plugin declares on memory_correct (design 22, round 2):
+# only a mirror forget is reinstated by a later identical re-add.
+REASON_MIRROR_FORGET = "mirror_forget"
+REASON_FORGET_COMMAND = "forget_command"
 SHORT_ID = 12
 ID_RE = re.compile(r"^[0-9a-f]{%d,64}$" % SHORT_ID)
 
@@ -246,6 +251,12 @@ class VornikMemoryProvider(MemoryProvider):
         # Hermes's own write: the user's file changed, and the log says the
         # Vornik copy may remain.
         previous = metadata.get("previous_content") if isinstance(metadata, dict) else None
+        if (action == "replace" and isinstance(previous, str)
+                and _normalise(_mirrored_content(target, previous)) == _normalise(_mirrored_content(target, content))):
+            # GitHub #76: the mirror already holds this note (same text, same
+            # token). Forgetting and re-storing it would refute the live copy;
+            # do nothing (design 24, "Re-adding a forgotten memory (0.11.3)").
+            return None
         if action in ("remove", "replace") and isinstance(previous, str) and previous.strip():
             self._forget_mirrored(target, previous)
         if action not in ("add", "replace", "append") or not str(content or "").strip():
@@ -290,7 +301,9 @@ class VornikMemoryProvider(MemoryProvider):
             if err or not ids:
                 log.warning("vornik memory: %s (%s)", FORGET_MISS, err or "no matching note")
                 return
-            _, err = self._call("memory_correct", {"chunk_ids": ids})
+            # The route lets the daemon reinstate this note if Hermes adds the
+            # same line again (design 22, "Reinstating a refuted mirrored note").
+            _, err = self._call("memory_correct", {"chunk_ids": ids, "reason": REASON_MIRROR_FORGET})
             if err:
                 log.warning("vornik memory: %s (memory_correct: %s)", FORGET_MISS, err)
         except Exception as e:  # never fail Hermes's own memory write
@@ -362,7 +375,8 @@ class MemoryCommands:
         given = str(raw_args or "").strip().lower()
         if not ID_RE.match(given):
             return "Usage: /vornik-forget <id>  (the id /vornik-memory shows)"
-        text, err = self.provider._call("memory_correct", {"chunk_ids": [self._ids.get(given, given)]})
+        text, err = self.provider._call("memory_correct", {"chunk_ids": [self._ids.get(given, given)],
+                                                           "reason": REASON_FORGET_COMMAND})
         if err:
             return "Vornik could not forget it: %s" % strip_tokens(err)
         # The daemon contract (internal/api/companion_mcp_memory.go,

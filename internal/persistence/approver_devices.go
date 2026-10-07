@@ -68,6 +68,8 @@ const (
 	// enforced by the agent's host (Hermes approval transport design §4.1).
 	// Its decision carries a scope (DecidedChoice).
 	ApprovalKindHostAction = "host_action"
+	// ApprovalKindMemoryRetention authorizes a specific idle chunk deletion.
+	ApprovalKindMemoryRetention = "memory_retention"
 
 	ApprovalPending  = "pending"
 	ApprovalApproved = "approved"
@@ -78,7 +80,7 @@ const (
 // ApprovalKinds is every kind the kind CHECK accepts (migration 212), for
 // tests that must cover each one (the §18.7 describer enumeration).
 var ApprovalKinds = []string{ApprovalKindDeviceEnrollment, ApprovalKindWideningChange,
-	ApprovalKindCredentialSlot, ApprovalKindBrokerAction, ApprovalKindHostAction}
+	ApprovalKindCredentialSlot, ApprovalKindBrokerAction, ApprovalKindHostAction, ApprovalKindMemoryRetention}
 
 // AgentApprovalRequestRow is one thing a device is asked to decide.
 type AgentApprovalRequestRow struct {
@@ -144,6 +146,15 @@ type ApproverDeviceRepository interface {
 	// CompletePairing inserts d and sets the pairing's device_id, once:
 	// WHERE claim_hash=? AND device_id IS NULL. A second call is ErrNotFound.
 	CompletePairing(ctx context.Context, claimHash string, d ApproverDeviceRow) error
+	// RemintEnrollmentToken re-issues the token of the device a completed
+	// pairing created, for a browser whose poll response was lost (design
+	// §9.2, amendment 2026-10-07 T11). One guarded statement: the pairing
+	// found by claimHash with device_id set; the device unrevoked; paired_at
+	// >= notBefore; last_used_at = paired_at (never used); dead_token_hash and
+	// prev_token_hash NULL (not re-minted, not rotated). It swaps token_hash
+	// to newHash and records the old one as dead_token_hash with reason
+	// DeadConfirmed. Any failed guard is ErrNotFound, with no detail.
+	RemintEnrollmentToken(ctx context.Context, claimHash, newHash string, notBefore time.Time) (*ApproverDeviceRow, error)
 
 	// GetDeviceByTokenHash finds the row whose token_hash, prev_token_hash or
 	// dead_token_hash is tokenHash; the caller compares which matched. It

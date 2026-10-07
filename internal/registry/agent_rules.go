@@ -228,8 +228,8 @@ func checkAgentWritePairs(id string, servers []MCPServerConfig) error {
 // agent namespace's swarm: no role carries a modelFallback (Change 7, review
 // d94f F6), and a role's model is in the operator's catalogue (round 2 F4).
 // Destination approval is not judged here: it lives in the database and is
-// checked before every attempt at run time (round 3 F5). agentModels nil
-// skips the membership check (a registry the daemon did not configure).
+// checked before every attempt at run time (round 3 F5). A nil/empty
+// agentModels catalogue refuses every explicit role model (fail closed).
 func checkAgentSwarmModels(id string, sw *Swarm, agentModels map[string]bool) error {
 	if sw == nil {
 		return nil

@@ -154,27 +154,39 @@ func TestAgentConnect_RoundTrip(t *testing.T) {
 }
 
 // Review 6f6b F1: the gate's control is readability of the store key, for
-// a shell-capable harness only; a shared UID alone neither refuses nor
-// allows. Control: sharedUserGate, through connect.
+// a shell-capable harness only. GitHub #75 (operator 2026-10-02): "Error:
+// not connected" printed twice, and a same-UID daemon read as "could not be
+// checked" because store.key is created lazily; T6 (D3) makes an absent key
+// on a same-UID non-containerised daemon readable. A probe result of
+// readable or denied always wins. Control: sharedUserGate and classify,
+// through connect.
 func TestAgentConnect_SharedUserGate(t *testing.T) {
+	same, other := os.Getuid(), os.Getuid()+1
 	for _, tc := range []struct {
 		name    string
 		harness string
 		access  keyAccess
+		uid     int
 		accept  bool
 		ok      bool
 		says    string
 	}{
-		{"readable", "codex", keyReadable, false, false, "is readable to you"},
-		{"readable, accepted", "codex", keyReadable, true, true, "Connecting anyway"},
-		{"denied, same UID", "claude-code", keyDenied, false, true, "not readable to you"},
-		{"absent", "codex", keyAbsent, false, false, "could not be checked"},
-		{"absent, accepted", "codex", keyAbsent, true, true, "could not be checked"},
-		{"MCP-only, readable", "hermes", keyReadable, false, true, "only through its MCP connection"},
+		{"readable", "codex", keyReadable, other, false, false, "could read Vornik's data"},
+		{"readable, accepted", "codex", keyReadable, other, true, true, "Connecting anyway"},
+		{"denied, same UID", "claude-code", keyDenied, same, false, true, "not readable to you"},
+		{"absent, same UID reads as readable", "codex", keyAbsent, same, false, false, "could read Vornik's data"},
+		{"absent, same UID, accepted", "codex", keyAbsent, same, true, true, "Connecting anyway"},
+		// Today's behaviour, pinned (review 03a6 F1): a different UID with
+		// the file missing is still "could not be checked".
+		{"absent, other UID", "codex", keyAbsent, other, false, false, "could not be checked"},
+		{"absent, other UID, accepted", "codex", keyAbsent, other, true, true, "could not be checked"},
+		{"unknown", "codex", keyUnknown, same, false, false, "could not be checked"},
+		{"unknown, accepted", "codex", keyUnknown, same, true, true, "could not be checked"},
+		{"MCP-only, readable", "hermes", keyReadable, other, false, true, "only through its MCP connection"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			d := defaultDaemon()
-			d.host["daemon_uid"] = os.Getuid() // a shared UID never decides
+			d.host["daemon_uid"] = tc.uid
 			c, _ := newTestConnector(t, tc.harness, d, tc.access)
 			c.accept, c.dry = tc.accept, true
 			var out bytes.Buffer
@@ -187,18 +199,89 @@ func TestAgentConnect_SharedUserGate(t *testing.T) {
 			}
 		})
 	}
+	// A probe result of denied beats UID equality.
+	d := defaultDaemon()
+	d.host["daemon_uid"] = same
+	c, _ := newTestConnector(t, "codex", d, keyDenied)
+	c.dry = true
+	if err := c.connect(&bytes.Buffer{}); err != nil {
+		t.Fatalf("denied with a shared UID refused: %v", err)
+	}
 	// Plan P6 amendment F8: the gate uses the shared predicate, so an
 	// unknown kind is shell-capable there too.
 	if ok, _ := sharedUserGate(agentadmin.HarnessClassOf("something-new"), keyReadable, false); ok {
 		t.Fatal("an unknown harness kind passed the gate")
 	}
-	// A containerised daemon's paths are not the host's: never probed.
-	d := defaultDaemon()
+	// A containerised daemon's paths are not the host's: never probed, and
+	// a shared UID there means nothing.
+	d = defaultDaemon()
 	d.host["daemon_containerized"] = true
-	c, _ := newTestConnector(t, "codex", d, keyDenied)
+	d.host["daemon_uid"] = same
+	c, _ = newTestConnector(t, "codex", d, keyDenied)
 	c.dry = true
-	if err := c.connect(&bytes.Buffer{}); err == nil {
-		t.Fatal("a containerised daemon passed on a host probe")
+	var out bytes.Buffer
+	if err := c.connect(&out); err == nil || !strings.Contains(out.String(), "could not be checked") {
+		t.Fatalf("a containerised daemon passed on a host probe: %v\n%s", err, out.String())
+	}
+	// A relative store_key_path would be probed against this process's cwd:
+	// it is unknown, and the probe is not run (review 03a6 F3).
+	d = defaultDaemon()
+	d.host["store_key_path"] = "secrets/store.key"
+	d.host["daemon_uid"] = same
+	c, _ = newTestConnector(t, "codex", d, keyDenied)
+	c.dry = true
+	out.Reset()
+	if err := c.connect(&out); err == nil || !strings.Contains(out.String(), "could not be checked") {
+		t.Fatalf("a relative path was probed: %v\n%s", err, out.String())
+	}
+}
+
+func TestClassify(t *testing.T) {
+	h := &hostView{DaemonUID: 7}
+	if got := classify(keyAbsent, h, 7); got != keyReadable {
+		t.Fatalf("absent, same UID: %v", got)
+	}
+	for _, p := range []keyAccess{keyReadable, keyDenied, keyUnknown} {
+		if got := classify(p, h, 7); got != p {
+			t.Fatalf("probe %v changed to %v", p, got)
+		}
+	}
+	if got := classify(keyAbsent, h, 8); got != keyAbsent {
+		t.Fatalf("absent, other UID: %v", got)
+	}
+	if got := classify(keyAbsent, &hostView{DaemonUID: 7, DaemonContainerized: true}, 7); got != keyAbsent {
+		t.Fatalf("absent, containerised: %v", got)
+	}
+}
+
+// GitHub #75 (operator 2026-10-02): "Error: not connected" printed twice.
+// A refusal exits 1 and prints exactly once, naming the flag. Control: the
+// cobra command.
+func TestAgentConnect_RefusalPrintedOnceAndNamesTheFlag(t *testing.T) {
+	d := defaultDaemon()
+	d.host["daemon_uid"] = os.Getuid()
+	c, _ := newTestConnector(t, "codex", d, keyAbsent)
+	orig := newConnector
+	newConnector = func(string) (*connector, error) { return c, nil }
+	t.Cleanup(func() { newConnector = orig; rootCmd.SetOut(nil); rootCmd.SetErr(nil); rootCmd.SetArgs(nil) })
+	var out, errb bytes.Buffer
+	rootCmd.SetOut(&out)
+	rootCmd.SetErr(&errb)
+	// End to end through cobra's Execute path, as main runs it.
+	rootCmd.SetArgs([]string{"agent", "connect", "codex"})
+	err := rootCmd.Execute()
+	if err == nil || err.Error() != "" || ExitCodeOf(err) != 1 {
+		t.Fatalf("err %v code %d", err, ExitCodeOf(err))
+	}
+	all := out.String() + errb.String()
+	if n := strings.Count(all, "--accept-shared-user"); n != 1 {
+		t.Fatalf("the refusal appears %d times:\n%s", n, all)
+	}
+	if !strings.Contains(all, "refused: codex can run shell commands as you and Vornik runs as your OS user, so codex could read Vornik's data. To connect anyway, accept that: re-run with --accept-shared-user.") {
+		t.Fatalf("refusal text:\n%s", all)
+	}
+	if strings.Contains(all, "not connected") {
+		t.Fatalf("stale error text:\n%s", all)
 	}
 }
 
@@ -315,5 +398,26 @@ func TestAgentDisconnect_StaleRecordedPath(t *testing.T) {
 	}
 	if _, err := os.Stat(cfg); !os.IsNotExist(err) {
 		t.Fatal("disconnect created a file at the stale recorded path")
+	}
+}
+
+// A key read from a different UID (group or world read) must not claim that
+// Vornik runs as the user (review aff2).
+func TestAgentConnect_RefusalWording(t *testing.T) {
+	same := refusalMessage("codex", true, "/k/store.key")
+	if !strings.Contains(same, "Vornik runs as your OS user") || !strings.Contains(same, "--accept-shared-user") {
+		t.Fatal(same)
+	}
+	other := refusalMessage("codex", false, "/k/store.key")
+	if strings.Contains(other, "runs as your OS user") || !strings.Contains(other, "/k/store.key") || !strings.Contains(other, "--accept-shared-user") {
+		t.Fatal(other)
+	}
+	d := defaultDaemon()
+	d.host["daemon_uid"] = os.Getuid() + 1
+	c, _ := newTestConnector(t, "codex", d, keyReadable)
+	c.dry = true
+	var out bytes.Buffer
+	if err := c.connect(&out); err == nil || strings.Contains(out.String(), "runs as your OS user, so") || !strings.Contains(out.String(), "/var/lib/vornik/secrets/store.key") {
+		t.Fatalf("%v\n%s", err, out.String())
 	}
 }

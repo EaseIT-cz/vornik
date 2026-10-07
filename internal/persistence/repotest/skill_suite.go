@@ -19,6 +19,8 @@ import (
 // dispatcher stays flat (gocognit) and failures name the behavior.
 func RunSkillSuite(t *testing.T, repo persistence.SkillRepository) {
 	t.Helper()
+	t.Run("proposal_defaults", func(t *testing.T) { skillProposalDefaults(t, repo) })
+	t.Run("revision_bound_review_and_proposal_dates", func(t *testing.T) { skillRevisionReview(t, repo) })
 	t.Run("Create_then_GetByID_round_trips_all_fields", func(t *testing.T) { skillRoundTrip(t, repo) })
 	t.Run("Create_duplicate_natural_key_conflicts", func(t *testing.T) { skillDuplicateConflicts(t, repo) })
 	t.Run("same_name_distinct_scopes_are_separate", func(t *testing.T) { skillDistinctScopes(t, repo) })

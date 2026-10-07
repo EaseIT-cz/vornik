@@ -1,0 +1,17 @@
+{
+  "type": "function",
+  "function": {
+    "name": "document_render",
+    "description": "Render a workspace markdown file to PDF or HTML without shell access. Supports staged document inputs at artifacts/in/. Writes exclusively under artifacts/out/ and returns a path, format and byte count; existing files are never overwritten. PDF supports Unicode including Czech. External resources/images are not fetched. Use a different out_path when retrying an existing output.",
+    "parameters": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "path": {"type": "string", "description": "Workspace-relative source .md file, e.g. artifacts/in/report.md."},
+        "format": {"type": "string", "enum": ["pdf", "html"]},
+        "out_path": {"type": "string", "description": "Optional output path under artifacts/out/ with matching extension; defaults to artifacts/out/<source-basename>.<format>."}
+      },
+      "required": ["path", "format"]
+    }
+  }
+}

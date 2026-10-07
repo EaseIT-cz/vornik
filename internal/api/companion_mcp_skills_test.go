@@ -372,3 +372,107 @@ func TestSkillGet_RejectsCrossProject(t *testing.T) {
 		t.Fatalf("expected cross-project rejection, got %v", err)
 	}
 }
+
+func TestSkillModerate_RevisionBound(t *testing.T) {
+	for _, reject := range []bool{false, true} {
+		t.Run(map[bool]string{false: "approve", true: "reject"}[reject], func(t *testing.T) {
+			s := newSkillTestServer(t)
+			ctx := context.Background()
+			key := skillKey("p1", true, true)
+			args := map[string]any{"name": "revision-review", "description": "revision safety", "body": "original"}
+			out, err := s.companionToolSkillPropose(ctx, key, rawArgs(t, args))
+			if err != nil {
+				t.Fatal(err)
+			}
+			id := proposeID(t, out)
+			args["body"] = "replacement"
+			if _, err = s.companionToolSkillPropose(ctx, key, rawArgs(t, args)); err != nil {
+				t.Fatal(err)
+			}
+			moderate := s.companionToolSkillApprove
+			if reject {
+				moderate = s.companionToolSkillReject
+			}
+			_, err = moderate(ctx, key, rawArgs(t, map[string]any{"id": id, "expected_version": 1}))
+			if err == nil || !strings.Contains(err.Error(), "Superseded by v2") {
+				t.Errorf("old review must refuse v2: %v", err)
+			}
+			got, err := s.skillStore.GetByID(ctx, id)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got.Maturity != persistence.SkillMaturityDraft {
+				t.Errorf("stale review changed current revision: %s", got.Maturity)
+			}
+			for _, version := range []int{0, -1} {
+				if _, err = moderate(ctx, key, rawArgs(t, map[string]any{"id": id, "expected_version": version})); err == nil {
+					t.Errorf("accepted invalid expected_version %d", version)
+				}
+			}
+			if _, err = moderate(ctx, key, rawArgs(t, map[string]any{"id": id})); err != nil {
+				t.Fatalf("legacy omitted version: %v", err)
+			}
+		})
+	}
+}
+
+func TestSkillResponses_ProposalRevisionDate(t *testing.T) {
+	s := newSkillTestServer(t)
+	ctx := context.Background()
+	key := skillKey("p1", true, true)
+	out, err := s.companionToolSkillPropose(ctx, key, rawArgs(t, map[string]any{"name": "dated-review", "description": "dates", "body": "original", "confirm_distinct": "timestamp response regression"}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := proposeID(t, out)
+	responses := []string{out}
+	if _, err = s.companionToolSkillApprove(ctx, key, rawArgs(t, map[string]any{"id": id})); err != nil {
+		t.Fatal(err)
+	}
+	got, err := s.companionToolSkillGet(ctx, key, rawArgs(t, map[string]any{"id": id}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	responses = append(responses, got)
+	got, err = s.companionToolSkillList(ctx, key, rawArgs(t, map[string]any{}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	responses = append(responses, got)
+	if _, err = s.companionToolSkillApprove(ctx, key, rawArgs(t, map[string]any{"id": id})); err != nil {
+		t.Fatal(err)
+	}
+	got, err = s.companionToolSkillSearch(ctx, key, rawArgs(t, map[string]any{}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	responses = append(responses, got)
+	for _, response := range responses {
+		if !strings.Contains(response, "\"proposed_at\"") || !strings.Contains(response, "\"proposal_date_estimated\": false") {
+			t.Errorf("missing proposal provenance: %s", response)
+		}
+	}
+}
+
+func TestSkillModerate_RejectsInvalidRequests(t *testing.T) {
+	for _, tc := range []struct {
+		name, raw, want string
+		unwired         bool
+	}{
+		{"invalid-json", "{", "invalid arguments", false},
+		{"missing-id", `{}`, "id is required", false},
+		{"unknown-id", `{"id":"missing"}`, "skill not found", false},
+		{"unwired", `{"id":"missing"}`, "not wired", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s := newSkillTestServer(t)
+			if tc.unwired {
+				s.skillStore = nil
+			}
+			_, err := s.companionToolSkillApprove(context.Background(), skillKey("p1", true, true), json.RawMessage(tc.raw))
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("expected %s, got %v", tc.want, err)
+			}
+		})
+	}
+}

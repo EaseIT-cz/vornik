@@ -150,12 +150,14 @@ func TestFurtherDevice_NeedsApprovalFromAnExistingDevice(t *testing.T) {
 	if err != nil || st != ClaimApproved || tok == "" {
 		t.Fatalf("poll after approval = %q %s %v", tok, st, err)
 	}
+	// T11: "used" is last_used_at moving off paired_at, so the clock must move.
+	f.advance(time.Second)
 	d, err := f.svc.Authenticate(ctx, tok)
 	if err != nil || d.Label != "Tablet" {
 		t.Fatalf("new device = %+v, %v", d, err)
 	}
 	if _, st, _ := f.svc.PollClaim(ctx, r.ClaimToken); st != ClaimExpired {
-		t.Fatalf("a completed claim polled again = %s, want expired (the token is issued once)", st)
+		t.Fatalf("a completed claim polled again = %s, want expired (a used device is not re-minted)", st)
 	}
 	devs, _ := f.svc.ListDevices(ctx)
 	var tablet *persistence.ApproverDeviceRow

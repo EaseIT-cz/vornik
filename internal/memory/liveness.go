@@ -13,6 +13,8 @@ import (
 	"time"
 
 	"github.com/rs/zerolog"
+
+	"vornik.io/vornik/internal/netguard"
 )
 
 // URLLivenessChecker walks project_memory_chunks, extracts URLs from
@@ -71,7 +73,10 @@ func NewURLLivenessChecker(repo *Repository) *URLLivenessChecker {
 		Transport: &http.Transport{
 			DialContext: c.dialContext,
 		},
-		CheckRedirect: func(req *http.Request, _ []*http.Request) error {
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			if err := netguard.CheckRedirectLimit(via); err != nil {
+				return err
+			}
 			if err := c.validateLivenessURL(req.Context(), req.URL.String()); err != nil {
 				return err
 			}

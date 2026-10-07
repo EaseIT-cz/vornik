@@ -95,22 +95,40 @@ def approvals(args, load_config=None, set_value=None, unset_value=None, out=prin
     if ns and ns not in found:
         out("Namespace %r is not connected; connected: %s" % (ns, ", ".join(sorted(found))))
         return 1
+    # valid = the pin names a connected namespace; stale = a non-empty pin not
+    # among the connected set (design 2026-10-03 section 9, amended 2026-10-07).
+    pin = approval.pinned(cfg)
+    stale = pin if pin and pin not in found else ""
+    explicit = bool(ns)
     if not ns:
-        if len(found) > 1:
+        if pin in found:
+            ns = pin  # the stored choice (design 4.6), also with several connected
+        elif len(found) == 1:
+            ns = next(iter(found))
+        elif stale:
+            out("The approval pin names %r, which is no longer connected; connected: %s; name one with --namespace <ns>."
+                % (stale, ", ".join(sorted(found))))
+            return 1
+        else:
             out("More than one Vornik namespace is connected (%s); name one with --namespace <ns>." % ", ".join(sorted(found)))
             return 1
-        ns = next(iter(found))
     exe = found[ns][0]
     if not approval._executable(exe):
         out("vornikctl is not at %r, where connect recorded it. Run: hermes vornik connect" % exe)
         return 1
-    # The transport first: if the pin then fails, the state is "selected, no
-    # pin", which works whenever one namespace is connected (choose() picks
-    # it) and otherwise denies; never "pinned, not selected". Hermes's writer
-    # reports a refusal by sys.exit, so it is caught like any failure.
-    writes = [(approval.TRANSPORT_KEY, approval.TRANSPORT_NAME)]
-    if getattr(args, "namespace", None):
-        writes.append((approval.NAMESPACE_KEY, ns))
+    # No stale pin: the transport first. If the pin then fails, the state is
+    # "selected, no pin", which works whenever one namespace is connected
+    # (choose() picks it) and otherwise denies (review ff65). Replacing a stale
+    # pin: the NEW pin first, so a failed second write leaves "valid pin, not
+    # selected", which is inert, never "selected, stale pin" (all denied).
+    # Hermes's writer reports a refusal by sys.exit, so it is caught like any failure.
+    transport = (approval.TRANSPORT_KEY, approval.TRANSPORT_NAME)
+    if stale:
+        writes = [(approval.NAMESPACE_KEY, ns), transport]
+    else:
+        writes = [transport]
+        if explicit:
+            writes.append((approval.NAMESPACE_KEY, ns))
     for key, value in writes:
         try:
             set_value(key, value)
@@ -119,6 +137,8 @@ def approvals(args, load_config=None, set_value=None, unset_value=None, out=prin
             return 1
     out("Hermes's approval prompts now go to your paired phone (namespace %s). If Vornik is unreachable, "
         "Hermes denies the command unless you set security.approval.transport_fallback: builtin." % ns)
+    if stale and not explicit:
+        out('Replaced the approval pin on "%s" (no longer connected) with "%s".' % (stale, ns))
     return 0
 
 
@@ -161,6 +181,9 @@ def status(args, env=None, opener=None, out=print, load_config=None) -> int:
     except ValueError as e:
         ns = "none (%s)" % e
     out("Approval namespace: %s" % ns)
+    pin = approval.pinned(cfg)
+    if pin and pin not in approval.namespaces(cfg):
+        out('Approval pin: "%s" (no longer connected); run: hermes vornik approvals on' % pin)
     url = env.get("VORNIK_URL", "")
     out("VORNIK_URL: %s" % (url or "not set"))
     for name in TOKENS:

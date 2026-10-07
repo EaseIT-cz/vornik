@@ -653,6 +653,7 @@ var brokerSafeBuiltins = map[string]bool{
 	"current_time":     true,
 	"file_read":        true,
 	"file_write":       true,
+	"document_render":  true,
 	"file_edit":        true,
 	"read_many_files":  true,
 	"grep":             true,

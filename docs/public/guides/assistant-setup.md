@@ -1,7 +1,7 @@
 ---
 sources:
     - path: internal/cli/agent_connect.go
-      sha256: b717d69eb6267113d1cdb6421a743d90318fe9f46ac5dabf3cbe4e71e92144cf
+      sha256: 9b7c42ca54f447562aefb465ae5daefa1808de670a33e91125c26a68f5220bf6
     - path: internal/harnessconfig/harnessconfig.go
       sha256: 601958b2eed5b85284f43c80973d23b0bf9565a5d9e4db3fb42208ff69ea5984
     - path: internal/agentadmin/harness.go
@@ -40,7 +40,7 @@ What it does receive is what you asked for. If you ask "summarise my spending", 
    vornikctl pair-device
    ```
 
-   Open the printed address on your phone and enter the code. The phone is now what approves everything the assistant asks for. Without a paired phone, no assistant can be connected.
+   Open the printed address on your phone and enter the code. Pairing needs HTTPS: the approval pages refuse plain http to any address except this machine's own (`localhost`), so serve Vornik over HTTPS (or behind a TLS proxy listed in `server.real_ip.trusted_proxies`), or pair on this machine through `localhost`. The phone is now what approves everything the assistant asks for. Without a paired phone, no assistant can be connected.
 
    **Do this yourself, never through the assistant.** The first phone is paired by the code alone, so an assistant that runs this command, or sees its output, could pair itself as the approver of its own requests.
 
@@ -95,8 +95,8 @@ Claude Code and Codex can run commands as your OS user. If Vornik also runs as *
 So for these two assistants, connect tries to open Vornik's secret-store key as you:
 
 - **Not readable:** Vornik runs as another OS user, and connect proceeds. This checks one file. It is good evidence of a separate user, but not a test of every file.
-- **Readable:** connect refuses. Run Vornik as a separate OS user (recommended), or pass `--accept-shared-user` to accept the risk knowingly.
-- **Cannot be checked** (Vornik is on another machine or in a container): connect refuses unless you pass `--accept-shared-user`.
+- **Readable** (including a fresh install where Vornik runs as your own OS user and has not yet created its store key): connect refuses. Run Vornik as a separate OS user (recommended), or pass `--accept-shared-user` to accept the risk knowingly.
+- **Cannot be checked** (Vornik is on another machine, in a container, or the key you use is not an admin key; or Vornik runs as a separate user on a fresh install that has not stored a credential yet, so its store key does not exist): connect refuses unless you pass `--accept-shared-user`. In the fresh-install case, store any credential first and run connect again, or pass the flag knowingly.
 
 Connect prints which guarantees hold in your case. With a shared OS user, the very first phone pairing is also not protected. Every pairing raises an alert, so a pairing you did not make is detectable, but not prevented.
 

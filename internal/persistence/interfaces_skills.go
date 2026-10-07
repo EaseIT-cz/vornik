@@ -45,6 +45,9 @@ const (
 // edit-in-place semantics use Upsert instead.
 const ErrSkillNameConflict RepositoryError = "skill name conflict"
 
+// ErrSkillRevisionConflict means the reviewed body has been superseded.
+const ErrSkillRevisionConflict RepositoryError = "skill revision conflict"
+
 // Skill is one knowledge-skill record. RepoScope uses the migration-75
 // token convention: "" is persisted as NULL (uncategorized, visible in
 // every scope), "*" is cross-cutting, any other value is a repo token.
@@ -93,6 +96,9 @@ type Skill struct {
 	UsageWorked    int64
 	UsageCorrected int64
 	LastFiredAt    *time.Time
+
+	ProposedAt            time.Time
+	ProposalDateEstimated bool
 
 	CreatedAt time.Time
 	UpdatedAt time.Time
@@ -195,6 +201,10 @@ type SkillRepository interface {
 	// Returns ErrNotFound if the id is unknown.
 	SetMaturity(ctx context.Context, id, maturity string) error
 
+	// SetMaturityForVersion atomically reviews exactly one body revision. Retirement
+	// counts corrected feedback only when transitioning from active/trusted.
+	SetMaturityForVersion(ctx context.Context, id string, version int, maturity string) error
+
 	// RecordFeedback increments the usage counter for signal (fired /
 	// worked / corrected) and, for "fired", stamps last_fired_at.
 	// Idempotency/dedup by (skill, task, signal) is a caller concern.
@@ -266,6 +276,8 @@ type SkillVersion struct {
 	// Maturity is the maturity the skill held AT ARCHIVE TIME, which is what
 	// makes the record meaningful: archiving a `trusted` body says an operator
 	// had approved exactly this text.
-	Maturity   string
-	ArchivedAt time.Time
+	Maturity              string
+	ArchivedAt            time.Time
+	ProposedAt            time.Time
+	ProposalDateEstimated bool
 }

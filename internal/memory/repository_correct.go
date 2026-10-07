@@ -78,14 +78,42 @@ type operatorCorrectionRow struct {
 	RepoScope string
 }
 
+// Refute routes: which entry point refuted a chunk, recorded on
+// project_memory_chunks.refute_route (migration 218; GitHub #76, design 22
+// "Reinstating a refuted mirrored note"). The route is the refuter's
+// asserted label, not a daemon attestation that the mirror's forget ran:
+// mirror_forget and forget_command are honoured only from a hermes key in
+// chunk-id mode (companionToolMemoryCorrect). Only mirror_forget rows are
+// ever reinstated (ReinstateMirroredByHash).
+const (
+	RefuteRouteMirrorForget  = "mirror_forget"  // the Hermes mirror's own forget
+	RefuteRouteForgetCommand = "forget_command" // Hermes /vornik-forget
+	RefuteRouteChatForget    = "chat_forget"    // the dispatcher's memory_forget
+	RefuteRouteMemoryCorrect = "memory_correct" // any other memory_correct
+)
+
 // MarkRefutedByIDs flips validation_status to 'refuted' for every
 // chunk in chunkIDs that currently lives under projectID. The
 // project-scope filter is the IDOR guard: an attacker who guesses
 // an ID from another project can't trip refutation on it. Returns
-// the count of rows actually flipped — duplicate / already-refuted
+// the count of rows the statement changed — duplicate / already-refuted
 // IDs collapse to zero on the second call (idempotent at the
-// caller boundary).
-func (r *Repository) MarkRefutedByIDs(ctx context.Context, projectID string, chunkIDs []string) (int, error) {
+// caller boundary), with the one exception below.
+//
+// route is recorded on each changed row (an empty route stores NULL). The
+// strictest route wins (review a6f0, D2): a row already refuted with
+// mirror_forget — the only reinstatable route — is relabelled by a refute
+// with any other route, NULL included, so a fact the mirror forgot and
+// someone then refuted as wrong never comes back on an identical re-add.
+// That relabel is counted (the forget became durable). Nothing ever
+// relabels a row TO mirror_forget, and superseded rows are untouched.
+//
+// One statement on purpose (review a814): split into a flip and a
+// separate relabel, a reinstate committing between them left the row
+// valid and lost the refute, and a transaction does not prevent that under
+// READ COMMITTED. A single UPDATE that waits on the reinstate's row lock
+// re-checks BOTH branches against the new row version, so the refute lands.
+func (r *Repository) MarkRefutedByIDs(ctx context.Context, projectID string, chunkIDs []string, route string) (int, error) {
 	if r == nil || r.db == nil {
 		return 0, fmt.Errorf("memory repo: not configured")
 	}
@@ -93,18 +121,22 @@ func (r *Repository) MarkRefutedByIDs(ctx context.Context, projectID string, chu
 		return 0, nil
 	}
 	placeholders := make([]string, len(chunkIDs))
-	args := make([]any, 0, len(chunkIDs)+1)
-	args = append(args, projectID)
+	args := make([]any, 0, len(chunkIDs)+2)
+	args = append(args, projectID, route)
 	for i, id := range chunkIDs {
-		placeholders[i] = fmt.Sprintf("$%d", i+2) // $1 is project_id
+		placeholders[i] = fmt.Sprintf("$%d", i+3) // $1 project_id, $2 route
 		args = append(args, id)
 	}
 	query := fmt.Sprintf(`
 		UPDATE project_memory_chunks
-		SET validation_status = 'refuted'
+		SET validation_status = 'refuted',
+		    refute_route = NULLIF($2, '')
 		WHERE project_id = $1
 		  AND id IN (%s)
-		  AND validation_status NOT IN ('refuted', 'superseded')
+		  AND (validation_status NOT IN ('refuted', 'superseded')
+		       OR (validation_status = 'refuted'
+		           AND refute_route = 'mirror_forget'
+		           AND $2 <> 'mirror_forget'))
 	`, strings.Join(placeholders, ","))
 	res, err := r.db.ExecContext(ctx, query, args...)
 	if err != nil {

@@ -8919,4 +8919,67 @@ ALTER TABLE approver_devices DROP COLUMN IF EXISTS rotation_nonce;
 ALTER TABLE approver_devices DROP COLUMN IF EXISTS prev_token_hash;
 `,
 	},
+	{
+		Version: 216,
+		Name:    "skill_revision_proposal_dates",
+		// Issue #73: proposal dates belong to body revisions, independently of mutable metadata.
+		// Historic dates are estimates because exact proposal times were not retained.
+		Up: `
+ ALTER TABLE project_skills ADD COLUMN IF NOT EXISTS proposed_at TIMESTAMPTZ;
+ ALTER TABLE project_skills ADD COLUMN IF NOT EXISTS proposal_date_estimated BOOLEAN NOT NULL DEFAULT false;
+ ALTER TABLE project_skill_versions ADD COLUMN IF NOT EXISTS proposed_at TIMESTAMPTZ;
+ ALTER TABLE project_skill_versions ADD COLUMN IF NOT EXISTS proposal_date_estimated BOOLEAN NOT NULL DEFAULT false;
+ UPDATE project_skills SET proposed_at = updated_at, proposal_date_estimated = true WHERE proposed_at IS NULL;
+ UPDATE project_skill_versions SET proposed_at = archived_at, proposal_date_estimated = true WHERE proposed_at IS NULL;
+ ALTER TABLE project_skills ALTER COLUMN proposed_at SET NOT NULL;
+ ALTER TABLE project_skill_versions ALTER COLUMN proposed_at SET NOT NULL;
+ `,
+		Down: `
+ ALTER TABLE project_skill_versions DROP COLUMN IF EXISTS proposal_date_estimated;
+ ALTER TABLE project_skill_versions DROP COLUMN IF EXISTS proposed_at;
+ ALTER TABLE project_skills DROP COLUMN IF EXISTS proposal_date_estimated;
+ ALTER TABLE project_skills DROP COLUMN IF EXISTS proposed_at;
+ `,
+	},
+	{
+		Version: 217,
+		Name:    "memory_idle_retention_approval",
+		Up: `
+ ALTER TABLE project_memory_chunks ADD COLUMN IF NOT EXISTS last_used_at TIMESTAMPTZ;
+ CREATE INDEX IF NOT EXISTS idx_memory_last_used ON project_memory_chunks (project_id, COALESCE(last_used_at, created_at));
+ ALTER TABLE agent_approval_requests DROP CONSTRAINT IF EXISTS agent_approval_requests_kind_check;
+ ALTER TABLE agent_approval_requests ADD CONSTRAINT agent_approval_requests_kind_check CHECK (kind IN ('device_enrollment','widening_change','credential_slot','broker_action','host_action','memory_retention'));
+ CREATE INDEX IF NOT EXISTS idx_memory_retention_request_chunk ON agent_approval_requests ((rendered::jsonb->>'chunk_id'), created_at) WHERE kind='memory_retention';
+ `,
+		Down: `
+ DROP INDEX IF EXISTS idx_memory_retention_request_chunk;
+ DELETE FROM agent_approval_requests WHERE kind='memory_retention';
+ ALTER TABLE agent_approval_requests DROP CONSTRAINT IF EXISTS agent_approval_requests_kind_check;
+ ALTER TABLE agent_approval_requests ADD CONSTRAINT agent_approval_requests_kind_check CHECK (kind IN ('device_enrollment','widening_change','credential_slot','broker_action','host_action'));
+ DROP INDEX IF EXISTS idx_memory_last_used;
+ ALTER TABLE project_memory_chunks DROP COLUMN IF EXISTS last_used_at;
+ `,
+	},
+	{
+		Version: 218,
+		Name:    "memory_refute_route_and_reinstate_audit",
+		// GitHub #76; design 22, "Reinstating a refuted mirrored note"
+		// (operator decision D2). refute_route records which entry point
+		// refuted a chunk. It is the refuter's asserted label (a hermes key's
+		// declared reason is honoured only in chunk-id mode), so a
+		// Hermes-mirrored note the mirror itself forgot ('mirror_forget') can
+		// be reinstated when Hermes adds the same line again, and nothing else
+		// can. Existing rows stay NULL and are never reinstated.
+		// reinstated_chunk_id marks the ingest-audit row of a reinstate
+		// (decision 'admitted', gate_failed NULL) with the chunk it brought
+		// back. Both nullable, no backfill, no CHECK change.
+		Up: `
+ ALTER TABLE project_memory_chunks ADD COLUMN IF NOT EXISTS refute_route TEXT;
+ ALTER TABLE memory_ingest_audit ADD COLUMN IF NOT EXISTS reinstated_chunk_id TEXT;
+ `,
+		Down: `
+ ALTER TABLE memory_ingest_audit DROP COLUMN IF EXISTS reinstated_chunk_id;
+ ALTER TABLE project_memory_chunks DROP COLUMN IF EXISTS refute_route;
+ `,
+	},
 }

@@ -36,6 +36,11 @@ func (s *agentAdminService) ListRecipes(ctx context.Context, key *persistence.AP
 	if key == nil || !key.AgentAdmin || !agentns.Valid(key.AgentNamespace) {
 		return nil, fmt.Errorf("not an agent admin key")
 	}
+	// GitHub #74: every read owes the cover request (design 18.4 F10). It
+	// takes s.mu itself, so it runs before, and outside, any lock here.
+	if err := s.coverOnRead(ctx, key); err != nil {
+		return nil, err
+	}
 	st, err := s.loadState(ctx, key.AgentNamespace, key.ProjectID)
 	if err != nil {
 		return nil, err
@@ -67,7 +72,7 @@ func (p agentAdminProxy) ListRecipesJSON(ctx context.Context, key *persistence.A
 // its tools are approved after it connects.
 func (s *agentAdminService) advertiseRecipeTargets(ctx context.Context, ns string, input json.RawMessage) map[string][]string {
 	out := map[string][]string{}
-	for _, url := range s.renderer.RecipeListTargets(input) {
+	for _, url := range s.renderer.RecipeListTargets(ns, input) {
 		if _, done := out[url]; done {
 			continue
 		}

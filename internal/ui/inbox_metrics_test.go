@@ -72,3 +72,28 @@ func TestWithInboxMetrics_NilIsHarmlessNoop(t *testing.T) {
 	s := NewServer(WithInboxMetrics(nil))
 	assert.Nil(t, s.inboxMetrics)
 }
+
+// GitHub review 9fd5 (2026-10-03), T13: an approver-device list failure was
+// a warn log only. The counter makes it observable; its label set is closed.
+func TestInboxMetrics_RecordAgentApprovalsLoad_CountsByOutcome(t *testing.T) {
+	reg := prometheus.NewRegistry()
+	m := NewInboxMetrics(reg)
+	m.RecordAgentApprovalsLoad(AgentApprovalsLoadOK)
+	m.RecordAgentApprovalsLoad(AgentApprovalsLoadError)
+	m.RecordAgentApprovalsLoad(AgentApprovalsLoadError)
+	assert.Equal(t, float64(1), testutil.ToFloat64(m.AgentApprovalsLoadTotal.WithLabelValues("ok")))
+	assert.Equal(t, float64(2), testutil.ToFloat64(m.AgentApprovalsLoadTotal.WithLabelValues("error")))
+}
+
+func TestInboxMetrics_RecordAgentApprovalsLoad_UnknownOutcomeAddsNoSeries(t *testing.T) {
+	reg := prometheus.NewRegistry()
+	m := NewInboxMetrics(reg)
+	m.RecordAgentApprovalsLoad(AgentApprovalsLoadOutcome("bogus"))
+	m.RecordAgentApprovalsLoad(AgentApprovalsLoadOutcome(""))
+	assert.Equal(t, 0, testutil.CollectAndCount(m.AgentApprovalsLoadTotal))
+}
+
+func TestInboxMetrics_RecordAgentApprovalsLoad_NilReceiverNoPanic(t *testing.T) {
+	var m *InboxMetrics
+	assert.NotPanics(t, func() { m.RecordAgentApprovalsLoad(AgentApprovalsLoadError) })
+}

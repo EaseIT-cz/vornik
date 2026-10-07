@@ -11,6 +11,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+
 	"vornik.io/vornik/internal/approval"
 
 	"github.com/rs/zerolog/log"
@@ -721,23 +722,21 @@ func redirectToLogin(w http.ResponseWriter, r *http.Request) {
 		// CodeQL go/cookie-secure-not-set (2026-07-18): Secure only over HTTPS.
 		// The daemon serves plain HTTP for the LAN preview and behind a
 		// TLS-terminating proxy, so an unconditional Secure would drop the
-		// cookie on those flows; requestIsHTTPS trusts r.TLS or the proxy's
-		// X-Forwarded-Proto=https hint.
+		// cookie on those flows; requestIsHTTPS trusts r.TLS or a trusted
+		// proxy's X-Forwarded-Proto=https hint.
 		Secure: requestIsHTTPS(r),
 	})
 	http.Redirect(w, r, "/ui/login?next="+url.QueryEscape(r.URL.RequestURI()), http.StatusFound)
 }
 
 // requestIsHTTPS reports whether the request reached the client over HTTPS —
-// either directly (r.TLS set) or via a TLS-terminating proxy that forwards the
-// original scheme in X-Forwarded-Proto. Used to gate the Secure cookie
+// either directly (r.TLS set) or via a trusted TLS-terminating proxy that
+// forwards the original scheme in X-Forwarded-Proto (realip.RequestIsHTTPS;
+// cloudflare-real-ip-design.md §11, T15). Used to gate the Secure cookie
 // attribute so it is set on real HTTPS flows without breaking the daemon's
 // plain-HTTP LAN preview.
 func requestIsHTTPS(r *http.Request) bool {
-	if r != nil && r.TLS != nil {
-		return true
-	}
-	return r != nil && strings.EqualFold(r.Header.Get("X-Forwarded-Proto"), "https")
+	return realip.RequestIsHTTPS(r)
 }
 
 // APIKeyIDFromContext returns the DB-backed `api_keys.id` of the

@@ -1,8 +1,13 @@
 package telegram
 
 import (
+	"context"
 	"strings"
 	"testing"
+	"time"
+	"vornik.io/vornik/internal/persistence/sqlite"
+	"vornik.io/vornik/internal/persistence/sqlite/sqlitetest"
+	"vornik.io/vornik/internal/skills"
 
 	"vornik.io/vornik/internal/persistence"
 )
@@ -75,5 +80,108 @@ func TestSkillReviewDigestCarriesTheRatingLine(t *testing.T) {
 	plain, _ := buildSkillReviewDigest(drafts, nil)
 	if strings.Contains(plain, "📊") {
 		t.Errorf("with no rollup wired the card must not render an empty line, got:\n%s", plain)
+	}
+}
+
+func TestSkillReviewRevisionDateAndCallbackGate(t *testing.T) {
+	ctx := context.Background()
+	db := sqlitetest.Memory(t)
+	repo := sqlite.NewSkillRepository(db.DB)
+	sk, err := repo.Upsert(ctx, &persistence.Skill{ID: "revision", ProjectID: "p", Name: "deploy", Body: "one"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	text, markup := buildSkillReviewDigest([]*persistence.Skill{sk}, nil)
+	if !strings.Contains(text, "v1") || !strings.Contains(text, sk.ProposedAt.UTC().Format("2006-01-02 15:04:05 UTC")) {
+		t.Fatal(text)
+	}
+	button := markup.InlineKeyboard[0][0].CallbackData
+	if button != "skill:approve:revision:1" {
+		t.Fatalf("unbound callback %q", button)
+	}
+	rig := newCallbackRig(t)
+	rig.bot.skillRepo = repo
+	rig.bot.config.AllowedUsers = map[int64]UserAccess{42: {Allowed: true}}
+	_, err = repo.Upsert(ctx, &persistence.Skill{ID: "ignored", ProjectID: "p", Name: "deploy", Body: "two"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, payload := range []string{"revision", "revision:1", "revision:0", "revision:not-a-number"} {
+		if err := rig.bot.handleSkillCallback(ctx, "cb", 42, "approve", payload); err != nil {
+			t.Fatal(err)
+		}
+		got, _ := repo.GetByID(ctx, sk.ID)
+		if got.Maturity != persistence.SkillMaturityDraft {
+			t.Fatalf("%q approved newer revision", payload)
+		}
+	}
+	acks := rig.callsTo("answerCallbackQuery")
+	if !strings.Contains(string(acks[1].body), "Superseded by v2") {
+		t.Fatalf("stale review not explained: %s", acks[1].body)
+	}
+	if err := rig.bot.handleSkillCallback(ctx, "cb", 42, "approve", "revision:2"); err != nil {
+		t.Fatal(err)
+	}
+	got, _ := repo.GetByID(ctx, sk.ID)
+	if got.Maturity != persistence.SkillMaturityActive {
+		t.Fatal("current callback did not approve")
+	}
+	for _, tc := range []struct {
+		user            int64
+		action, payload string
+	}{{99, "approve", "revision:2"}, {42, "unknown", "revision:2"}, {42, "approve", "missing:1"}} {
+		if err := rig.bot.handleSkillCallback(ctx, "cb", tc.user, tc.action, tc.payload); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := rig.bot.handleSkillCallback(ctx, "cb", 42, "reject", "revision:2"); err != nil {
+		t.Fatal(err)
+	}
+	rig.bot.skillRepo = nil
+	if err := rig.bot.handleSkillCallback(ctx, "cb", 42, "approve", "revision:2"); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestSkillReviewNotifiesEachRevisionOnce(t *testing.T) {
+	rig := newCallbackRig(t)
+	db := sqlitetest.Memory(t)
+	repo := sqlite.NewSkillRepository(db.DB)
+	rig.bot.skillRepo = repo
+	rig.bot.config.AllowedUsers = map[int64]UserAccess{42: {Allowed: true}, 99: {Allowed: false}}
+	ctx := context.Background()
+	rig.bot.sendSkillReviewDigest(ctx) // no drafts
+	sk := &persistence.Skill{ID: "same", ProjectID: "p", Name: "repeat", Body: "one"}
+	if _, err := repo.Upsert(ctx, sk); err != nil {
+		t.Fatal(err)
+	}
+	rig.bot.sendSkillReviewDigest(ctx)
+	rig.bot.sendSkillReviewDigest(ctx)
+	if got := len(rig.callsTo("sendMessage")); got != 1 {
+		t.Fatalf("v1 notifications %d", got)
+	}
+	sk.Body = "two"
+	if _, err := repo.Upsert(ctx, sk); err != nil {
+		t.Fatal(err)
+	}
+	rig.bot.sendSkillReviewDigest(ctx)
+	rig.bot.sendSkillReviewDigest(ctx)
+	calls := rig.callsTo("sendMessage")
+	if len(calls) != 2 || !strings.Contains(string(calls[1].body), "v2") {
+		t.Fatalf("v2 never notified: %v", calls)
+	}
+	rig.bot.skillRepo = nil
+	rig.bot.sendSkillReviewDigest(ctx)
+}
+
+func TestSkillReviewCallbackLimit(t *testing.T) {
+	_, markup := buildSkillReviewDigest([]*persistence.Skill{{ID: strings.Repeat("x", 60), Version: 123, ProposedAt: time.Now()}}, nil)
+	if len(markup.InlineKeyboard) != 0 {
+		t.Fatal("oversize callback must not be emitted")
+	}
+	for _, token := range []string{"", "id", "id:0", "id:-1", "id:no", "id:1:2", ":1"} {
+		if _, _, err := skills.ParseReviewToken(token); err == nil {
+			t.Fatalf("unsafe token accepted %q", token)
+		}
 	}
 }

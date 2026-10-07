@@ -50,7 +50,7 @@ RECORD=0
 command -v jq >/dev/null 2>&1 || { echo "FAIL: jq is required" >&2; exit 1; }
 [ -f "$ENTRYPOINT" ] || { echo "FAIL: entrypoint not found at $ENTRYPOINT" >&2; exit 1; }
 
-FULL='["file_read","file_write","file_edit","run_shell","current_time","read_many_files","grep","glob","git_status","git_diff","git_log","git_show","test_run","lint_run","typecheck_run","memory_search","tool_result_read","query_api","list_apis","backlog_deposit","skill_fetch","get_conversation_window","summarize_thread","tool_search"]'
+FULL='["file_read","file_write","document_render","file_edit","run_shell","current_time","read_many_files","grep","glob","git_status","git_diff","git_log","git_show","test_run","lint_run","typecheck_run","memory_search","tool_result_read","query_api","list_apis","backlog_deposit","skill_fetch","get_conversation_window","summarize_thread","tool_search"]'
 
 ENVS=(bare nohygiene mem api task all)
 ALLOWS=(no-task-json no-allowedtools-key default-four full file-read-only)

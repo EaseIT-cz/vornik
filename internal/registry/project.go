@@ -1575,6 +1575,10 @@ type ProjectTradingRateLimit struct {
 
 // ProjectRetention controls per-project pruning thresholds in days.
 type ProjectRetention struct {
+	// MemoryRequireApproval protects automatic RAG deletion behind paired-phone approval.
+	MemoryRequireApproval bool `yaml:"memory_require_approval" since:"2026.10.7"`
+	// MemoryIdleDays defaults to 365 in approval mode; longer chunk TTLs win.
+	MemoryIdleDays   int `yaml:"memory_idle_days" since:"2026.10.7"`
 	TaskLLMUsageDays int `yaml:"task_llm_usage_days"` // cost history; default 90
 	ToolAuditDays    int `yaml:"tool_audit_days"`     // debug data; default 30
 	ChatAuditDays    int `yaml:"chat_audit_days"`     // chat turns + their prompt bodies; default 90
@@ -2246,6 +2250,9 @@ func (p *Project) CompanionPushAllowed() []netip.Prefix {
 }
 
 func (p *Project) Validate(filename string) error {
+	if p.Retention.MemoryIdleDays < 0 || p.Retention.MemoryIdleDays > 36500 {
+		return ProjectValidationError{File: filename, Field: "retention.memory_idle_days", Message: "must be between 0 (365-day default) and 36500"}
+	}
 	if _, err := companionpush.ParseAllowedCIDRs(p.CompanionPush.AllowedCIDRs); err != nil {
 		return ProjectValidationError{File: filename, Field: "companion_push.allowed_cidrs", Message: err.Error()}
 	}

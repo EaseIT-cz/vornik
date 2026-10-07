@@ -16,10 +16,16 @@ func Middleware(c Config, onUntrustedHeader func()) func(http.Handler) http.Hand
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			ip := c.ResolveClientIP(r)
-			if onUntrustedHeader != nil && c.Enabled && c.HasForwardingHeader(r) && !c.peerTrusted(r) {
+			trusted := c.Enabled && c.peerTrusted(r)
+			if onUntrustedHeader != nil && c.Enabled && c.HasForwardingHeader(r) && !trusted {
 				onUntrustedHeader()
 			}
-			next.ServeHTTP(w, r.WithContext(WithClientIP(r.Context(), ip)))
+			ctx := WithClientIP(r.Context(), ip)
+			if trusted {
+				// The one trust decision RequestIsHTTPS reads (LLD §11).
+				ctx = WithTrustedPeer(ctx)
+			}
+			next.ServeHTTP(w, r.WithContext(ctx))
 		})
 	}
 }

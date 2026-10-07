@@ -26,7 +26,8 @@ type agentApprovalCard struct {
 
 // loadAgentApprovals lists every pending request, all kinds, for the
 // operator. A project-scoped viewer sees none: the requests describe
-// namespaces' changes, not one project's. A failure hides the section.
+// namespaces' changes, not one project's. A failure hides the section and is counted
+// (vornik_ui_inbox_agent_approvals_load_total).
 func (s *Server) loadAgentApprovals(r *http.Request) []agentApprovalCard {
 	if s.agentApprovals == nil || scopeQueryIDs(r) != nil {
 		return nil
@@ -35,9 +36,11 @@ func (s *Server) loadAgentApprovals(r *http.Request) []agentApprovalCard {
 	defer cancel()
 	rows, err := s.agentApprovals(ctx)
 	if err != nil {
+		s.inboxMetrics.RecordAgentApprovalsLoad(AgentApprovalsLoadError)
 		s.logger.Warn().Err(err).Msg("inbox: approver-device requests list failed; section hidden")
 		return nil
 	}
+	s.inboxMetrics.RecordAgentApprovalsLoad(AgentApprovalsLoadOK)
 	cards := make([]agentApprovalCard, 0, len(rows))
 	for _, row := range rows {
 		cards = append(cards, agentApprovalCard{ID: row.ID, Sentence: row.Sentence,

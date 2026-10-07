@@ -26,7 +26,7 @@ func NewSkillRepository(db DBTX) *SkillRepository { return &SkillRepository{db: 
 const pgSkillColumns = `id, project_id, repo_scope, name, description, body, body_sha256,
 	domain, tags, roles, maturity, version, origin_client, origin_task, author,
 	usage_fired, usage_worked, usage_corrected, last_fired_at, created_at, updated_at,
-	is_global, embedding, embedding_model, supersedes_id, distinct_justification`
+	is_global, embedding, embedding_model, supersedes_id, distinct_justification, proposed_at, proposal_date_estimated`
 
 func encodeSkillList(v []string) string {
 	if v == nil {
@@ -76,6 +76,10 @@ func (r *SkillRepository) insert(ctx context.Context, s *persistence.Skill) erro
 	if s.UpdatedAt.IsZero() {
 		s.UpdatedAt = now
 	}
+	if s.ProposedAt.IsZero() {
+		s.ProposedAt = now
+	}
+	s.ProposalDateEstimated = false
 	if s.Maturity == "" {
 		s.Maturity = persistence.SkillMaturityDraft
 	}
@@ -84,14 +88,14 @@ func (r *SkillRepository) insert(ctx context.Context, s *persistence.Skill) erro
 	}
 	_, err := r.db.ExecContext(ctx, `
 		INSERT INTO project_skills (`+pgSkillColumns+`)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26)`,
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28)`,
 		s.ID, s.ProjectID, pgNullStr(s.RepoScope), s.Name, s.Description, s.Body, s.BodySHA256,
 		pgNullStr(s.Domain), encodeSkillList(s.Tags), encodeSkillList(s.Roles),
 		s.Maturity, s.Version, pgNullStr(s.OriginClient), pgNullStr(s.OriginTask), pgNullStr(s.Author),
 		s.UsageFired, s.UsageWorked, s.UsageCorrected, s.LastFiredAt,
 		s.CreatedAt, s.UpdatedAt, s.IsGlobal,
 		persistence.EncodeSkillVector(s.Embedding), s.EmbeddingModel,
-		s.SupersedesID, s.DistinctJustification,
+		s.SupersedesID, s.DistinctJustification, s.ProposedAt, s.ProposalDateEstimated,
 	)
 	return mapDBError(err)
 }
@@ -116,24 +120,29 @@ func (r *SkillRepository) Upsert(ctx context.Context, s *persistence.Skill) (*pe
 	if err := r.archiveVersion(ctx, existing); err != nil {
 		return nil, err
 	}
-	_, err = r.db.ExecContext(ctx, `
+	res, err := r.db.ExecContext(ctx, `
 		UPDATE project_skills SET
 			description = $1, body = $2, body_sha256 = $3, domain = $4,
 			tags = $5, roles = $6, maturity = $7, version = $8,
 			origin_client = $9, origin_task = $10, author = $11, updated_at = $12,
 			embedding = $14, embedding_model = $15,
-			supersedes_id = $16, distinct_justification = $17
-		WHERE id = $13`,
+			supersedes_id = $16, distinct_justification = $17, proposed_at = $18, proposal_date_estimated = false
+		WHERE id = $13 AND version = $19`,
 		s.Description, s.Body, s.BodySHA256, pgNullStr(s.Domain),
 		encodeSkillList(s.Tags), encodeSkillList(s.Roles),
 		persistence.SkillMaturityDraft, existing.Version+1,
 		pgNullStr(s.OriginClient), pgNullStr(s.OriginTask), pgNullStr(s.Author),
 		time.Now().UTC(), existing.ID,
 		persistence.EncodeSkillVector(s.Embedding), s.EmbeddingModel,
-		s.SupersedesID, s.DistinctJustification,
+		s.SupersedesID, s.DistinctJustification, time.Now().UTC(), existing.Version,
 	)
 	if err != nil {
 		return nil, mapDBError(err)
+	}
+	if n, err := res.RowsAffected(); err != nil {
+		return nil, err
+	} else if n == 0 {
+		return nil, persistence.ErrSkillRevisionConflict
 	}
 	return r.GetByID(ctx, existing.ID)
 }
@@ -146,18 +155,18 @@ func (r *SkillRepository) Upsert(ctx context.Context, s *persistence.Skill) (*pe
 func (r *SkillRepository) archiveVersion(ctx context.Context, s *persistence.Skill) error {
 	_, err := r.db.ExecContext(ctx, `
 		INSERT INTO project_skill_versions
-			(id, skill_id, version, name, description, body, body_sha256, maturity, archived_at)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
+			(id, skill_id, version, name, description, body, body_sha256, maturity, archived_at, proposed_at, proposal_date_estimated)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
 		ON CONFLICT (skill_id, version) DO NOTHING`,
 		persistence.GenerateID("skillver"), s.ID, s.Version, s.Name, s.Description,
-		s.Body, s.BodySHA256, s.Maturity, time.Now().UTC())
+		s.Body, s.BodySHA256, s.Maturity, time.Now().UTC(), s.ProposedAt, s.ProposalDateEstimated)
 	return mapDBError(err)
 }
 
 // ListVersions returns archived prior bodies, newest first.
 func (r *SkillRepository) ListVersions(ctx context.Context, skillID string) ([]*persistence.SkillVersion, error) {
 	rows, err := r.db.QueryContext(ctx, `
-		SELECT id, skill_id, version, name, description, body, body_sha256, maturity, archived_at
+		SELECT id, skill_id, version, name, description, body, body_sha256, maturity, archived_at, proposed_at, proposal_date_estimated
 		FROM project_skill_versions WHERE skill_id = $1 ORDER BY version DESC`, skillID)
 	if err != nil {
 		return nil, mapDBError(err)
@@ -167,7 +176,7 @@ func (r *SkillRepository) ListVersions(ctx context.Context, skillID string) ([]*
 	for rows.Next() {
 		var v persistence.SkillVersion
 		if err := rows.Scan(&v.ID, &v.SkillID, &v.Version, &v.Name, &v.Description,
-			&v.Body, &v.BodySHA256, &v.Maturity, &v.ArchivedAt); err != nil {
+			&v.Body, &v.BodySHA256, &v.Maturity, &v.ArchivedAt, &v.ProposedAt, &v.ProposalDateEstimated); err != nil {
 			return nil, err
 		}
 		out = append(out, &v)
@@ -374,6 +383,25 @@ func (r *SkillRepository) SetMaturity(ctx context.Context, id, maturity string) 
 	return pgErrIfNoRows(res)
 }
 
+// SetMaturityForVersion reviews a revision without allowing a newer body to inherit its decision.
+func (r *SkillRepository) SetMaturityForVersion(ctx context.Context, id string, version int, maturity string) error {
+	res, err := r.db.ExecContext(ctx, `UPDATE project_skills SET maturity = $1, updated_at = $2, usage_corrected = usage_corrected + CASE WHEN $1 = 'retired' AND maturity IN ('active','trusted') THEN 1 ELSE 0 END WHERE id = $3 AND version = $4`, maturity, time.Now().UTC(), id, version)
+	if err != nil {
+		return err
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if n > 0 {
+		return nil
+	}
+	if _, err := r.GetByID(ctx, id); err != nil {
+		return err
+	}
+	return persistence.ErrSkillRevisionConflict
+}
+
 // SetGlobal flips a skill's cross-project reach without touching maturity.
 func (r *SkillRepository) SetGlobal(ctx context.Context, id string, global bool) error {
 	res, err := r.db.ExecContext(ctx,
@@ -470,7 +498,7 @@ func scanPGSkill(sc pgSkillScanner) (*persistence.Skill, error) {
 		&s.ID, &s.ProjectID, &repoScope, &s.Name, &s.Description, &s.Body, &s.BodySHA256,
 		&domain, &tags, &roles, &s.Maturity, &s.Version, &originCl, &originTask, &author,
 		&s.UsageFired, &s.UsageWorked, &s.UsageCorrected, &lastFired, &s.CreatedAt, &s.UpdatedAt,
-		&s.IsGlobal, &embedding, &embModel, &supersedes, &distinctJ,
+		&s.IsGlobal, &embedding, &embModel, &supersedes, &distinctJ, &s.ProposedAt, &s.ProposalDateEstimated,
 	); err != nil {
 		return nil, err
 	}

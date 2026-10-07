@@ -134,9 +134,16 @@ type BrokerGrantRepository interface {
 	ApproveUnderGrant(ctx context.Context, actionID, argsSHA256, grantID, keyHash string, now time.Time) error
 
 	Get(ctx context.Context, id string) (*BrokerStandingGrant, error)
-	// ListForAction lists the grants of one class, any state, sooner
-	// expiry first: the matcher's candidates.
-	ListForAction(ctx context.Context, projectID, workflowID, action string) ([]*BrokerStandingGrant, error)
+	// ListForAction lists the grants of one class: the matcher's candidates.
+	// Every live grant (active AND uses_left > 0 AND expires_at > now) comes
+	// first, uncapped, sooner expiry first then id; then the non-live grants,
+	// most recent expiry first then id, at most 200. The two sets are
+	// appended in that order and never re-sorted, so the matcher's first
+	// match is the sooner-expiring live grant and its miss diagnostics still
+	// read dead rows. Paused and suspended grants count as live here; the
+	// matcher derives those misses. GitHub #78: a plain ORDER BY expires_at
+	// LIMIT 200 hid a new live grant behind 200 dead ones.
+	ListForAction(ctx context.Context, projectID, workflowID, action string, now time.Time) ([]*BrokerStandingGrant, error)
 	// List lists grants for a page, newest first.
 	List(ctx context.Context, f BrokerGrantFilter) ([]*BrokerStandingGrant, error)
 
@@ -155,8 +162,13 @@ type BrokerGrantRepository interface {
 	// CoveredActions lists the actions approved under the grant, newest
 	// first.
 	CoveredActions(ctx context.Context, grantID string, limit int) ([]*BrokerAction, error)
-	// DigestDue lists grants whose digest_through is at or before before.
-	DigestDue(ctx context.Context, before time.Time) ([]*BrokerStandingGrant, error)
+	// DigestDue lists grants whose digest_through is at or before before and
+	// that still owe a digest: every live grant at now (active AND uses_left
+	// > 0 AND expires_at > now), and a dead one only while covered actions
+	// approved under it are uncounted (decided_at > digest_through). Without
+	// that filter dead grants, which are never deleted, filled the 500-row
+	// cap and starved live grants' digests (GitHub #78 sibling).
+	DigestDue(ctx context.Context, before, now time.Time) ([]*BrokerStandingGrant, error)
 	// AdvanceDigest moves digest_through from from to to (a compare-and-set,
 	// so two nodes never count one window twice) and returns how many
 	// actions were approved under the grant in (from, to]. ok is false when

@@ -119,6 +119,16 @@ func dialContext(ctx context.Context, network, addr string) (net.Conn, error) {
 	return nil, fmt.Errorf("host %q resolved no addresses", host)
 }
 
+// CheckRedirectLimit restores Go's default bound for custom redirect callbacks.
+// via contains already-issued requests, including the original; no request-local
+// state is retained, so callers can share their HTTP client concurrently.
+func CheckRedirectLimit(via []*http.Request) error {
+	if len(via) >= 10 {
+		return fmt.Errorf("stopped after 10 requests")
+	}
+	return nil
+}
+
 // NewGuardedClient returns an *http.Client with the given overall timeout whose
 // DialContext refuses private/link-local/loopback targets and whose
 // CheckRedirect re-validates each hop, so a public URL cannot redirect into the
@@ -129,7 +139,10 @@ func NewGuardedClient(timeout time.Duration) *http.Client {
 		Transport: &http.Transport{
 			DialContext: dialContext,
 		},
-		CheckRedirect: func(req *http.Request, _ []*http.Request) error {
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			if err := CheckRedirectLimit(via); err != nil {
+				return err
+			}
 			return ValidateURL(req.Context(), req.URL.String())
 		},
 	}

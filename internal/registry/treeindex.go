@@ -112,6 +112,7 @@ func (ix *TreeIndex) sorted() *TreeIndex {
 		return nil
 	}
 	out := *ix
+	out.Layers = append([]string(nil), ix.Layers...)
 	out.Sources = append([]SourceRecord(nil), ix.Sources...)
 	out.Rejected = append([]RejectedFile(nil), ix.Rejected...)
 	sort.SliceStable(out.Sources, func(i, j int) bool {
@@ -137,4 +138,15 @@ func (r *Registry) TreeIndex() *TreeIndex {
 		return nil
 	}
 	return r.active.index.sorted()
+}
+
+// StagedTreeIndex returns a copied diagnostic index of the unactivated staged
+// snapshot, or nil before Stage. Reading it cannot promote or edit live config.
+func (r *Registry) StagedTreeIndex() *TreeIndex {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	if r.staged == nil {
+		return nil
+	}
+	return r.staged.index.sorted()
 }

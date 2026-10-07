@@ -2,8 +2,10 @@ package ui
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
 
@@ -23,9 +25,14 @@ const adminSkillsPageLimit = 500
 
 // AdminSkillRow is one skill rendered to the browser table.
 type AdminSkillRow struct {
-	ID          string
-	Name        string
-	Description string
+	Version      int
+	ProposedAt   string
+	ReviewStatus string
+	History      []AdminSkillRevision
+	HistoryError string
+	ID           string
+	Name         string
+	Description  string
 	// Body is the FULL skill document, rendered in an expandable block so the
 	// operator can read exactly what they're approving. Previously only a
 	// truncated preview was shown, making informed approval impossible
@@ -57,6 +64,14 @@ type AdminSkillRow struct {
 	// CanApprove/CanReject gate the action buttons by maturity.
 	CanApprove bool
 	CanReject  bool
+}
+
+// AdminSkillRevision renders a superseded body and its original proposal date.
+type AdminSkillRevision struct {
+	Version      int
+	ProposedAt   string
+	ReviewStatus string
+	Body         string
 }
 
 // AdminSkillRating is the rollup badge for one skill.
@@ -111,7 +126,7 @@ func (s *Server) AdminSkills(w http.ResponseWriter, r *http.Request) {
 		adminCommonData: adminCommonData{Title: "Skills", CurrentPage: "admin-skills", IsAdmin: true},
 		Available:       s.skillRepo != nil,
 		Filter:          filter,
-		Flash:           r.URL.Query().Get("done"),
+		Flash:           skillReviewFlash(r.URL.Query().Get("done")),
 	}
 	if !data.Available {
 		s.render(w, "admin_skills.html", data)
@@ -147,8 +162,10 @@ func (s *Server) AdminSkills(w http.ResponseWriter, r *http.Request) {
 		if filter != "" && sk.Maturity != filter {
 			continue
 		}
-		data.Rows = append(data.Rows, AdminSkillRow{
-			ID: sk.ID, Name: sk.Name, Description: sk.Description,
+		row := AdminSkillRow{
+			Version: sk.Version, ProposedAt: skills.ProposalDate(sk.ProposedAt, sk.ProposalDateEstimated),
+			ReviewStatus: sk.Maturity,
+			ID:           sk.ID, Name: sk.Name, Description: sk.Description,
 			Body:      strings.TrimSpace(sk.Body),
 			ProjectID: sk.ProjectID, RepoScope: sk.RepoScope, Domain: sk.Domain,
 			OriginTask: sk.OriginTask, Maturity: sk.Maturity, IsGlobal: sk.IsGlobal,
@@ -159,7 +176,23 @@ func (s *Server) AdminSkills(w http.ResponseWriter, r *http.Request) {
 			CanApprove: sk.Maturity != persistence.SkillMaturityActive && sk.Maturity != persistence.SkillMaturityTrusted,
 			CanReject:  sk.Maturity != persistence.SkillMaturityRetired,
 			Rating:     s.skillRatingBadge(r.Context(), sk.ID),
-		})
+		}
+		if sk.Maturity == persistence.SkillMaturityDraft {
+			row.ReviewStatus = "Pending review"
+		}
+		history, historyErr := s.skillRepo.ListVersions(ctx, sk.ID)
+		if historyErr != nil {
+			row.HistoryError = "Revision history unavailable"
+		} else {
+			for _, v := range history {
+				status := "Archived (" + v.Maturity + ")"
+				if v.Maturity == persistence.SkillMaturityDraft {
+					status = "Superseded by v" + strconv.Itoa(sk.Version)
+				}
+				row.History = append(row.History, AdminSkillRevision{Version: v.Version, ProposedAt: skills.ProposalDate(v.ProposedAt, v.ProposalDateEstimated), ReviewStatus: status, Body: v.Body})
+			}
+		}
+		data.Rows = append(data.Rows, row)
 	}
 	s.render(w, "admin_skills.html", data)
 }
@@ -221,9 +254,19 @@ func (s *Server) adminSkillDecide(w http.ResponseWriter, r *http.Request) {
 	if r.FormValue("action") == "reject" {
 		decision = skills.Reject
 	}
-	outcome, err := skills.ApplyDecision(ctx, s.skillRepo, id, decision)
+	version, parseErr := strconv.Atoi(r.FormValue("version"))
+	if parseErr != nil || version <= 0 {
+		redirect("review-current-proposal")
+		return
+	}
+	outcome, err := skills.ApplyDecisionForVersion(ctx, s.skillRepo, id, version, decision)
 	if err != nil {
-		redirect("error")
+		if errors.Is(err, persistence.ErrSkillRevisionConflict) {
+			redirect("superseded")
+			return
+		}
+		s.logger.Warn().Err(err).Str("skill_id", id).Int("version", version).Str("action", r.FormValue("action")).Msg("skill review: decision failed")
+		redirect("review-failed")
 		return
 	}
 	redirect(outcome)
@@ -235,4 +278,17 @@ func skillBodyPreview(body string, n int) string {
 		return body
 	}
 	return body[:n] + "…"
+}
+
+func skillReviewFlash(done string) string {
+	switch done {
+	case "review-failed":
+		return "Skill review could not be saved; no approval was confirmed. Refresh and retry."
+	case "superseded":
+		return "Superseded by a newer revision; review its version and proposal date below."
+	case "review-current-proposal":
+		return "This review has no revision; open the current proposal before approving."
+	default:
+		return done
+	}
 }

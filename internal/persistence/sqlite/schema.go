@@ -452,7 +452,10 @@ CREATE TABLE IF NOT EXISTS memory_ingest_audit (
     -- NULL = uncategorized; "*" = cross-cutting (surfaces in every
     -- scoped query); any other string = repo token. Migration 75
     -- in postgres; SQLite mirror landed in the same release.
-    repo_scope      TEXT
+    repo_scope      TEXT,
+    -- Migration 218 parity: the refuted Hermes-mirrored chunk a reinstate
+    -- brought back (GitHub #76). NULL on every other row.
+    reinstated_chunk_id TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_memory_ingest_audit_project_time ON memory_ingest_audit(project_id, ingested_at DESC);
 CREATE INDEX IF NOT EXISTS idx_memory_ingest_audit_actor ON memory_ingest_audit(actor_id) WHERE actor_id IS NOT NULL;
@@ -1006,6 +1009,9 @@ CREATE TABLE IF NOT EXISTS project_memory_chunks (
     -- sqlite CorpusEpochRepository's rollback restore pass runs
     -- against the same column shape.
     validation_status                  TEXT NOT NULL DEFAULT 'unverified',
+    -- Migration 218 parity: who refuted the row (mirror_forget,
+    -- forget_command, chat_forget, memory_correct); NULL = not recorded.
+    refute_route                       TEXT,
     superseded_in_epoch                TEXT,
     pre_supersede_status               TEXT,
     -- Recurring-series membership: the feed slug a digest belongs to, so
@@ -1631,6 +1637,8 @@ CREATE TABLE IF NOT EXISTS project_skills (
     embedding_model        TEXT NOT NULL DEFAULT '',
     supersedes_id          TEXT NOT NULL DEFAULT '',
     distinct_justification TEXT NOT NULL DEFAULT '',
+    proposed_at TEXT,
+    proposal_date_estimated INTEGER NOT NULL DEFAULT 0,
     UNIQUE (project_id, repo_scope, name)
 );
 CREATE INDEX IF NOT EXISTS idx_project_skills_lookup
@@ -1660,6 +1668,8 @@ CREATE TABLE IF NOT EXISTS project_skill_versions (
     body_sha256  TEXT NOT NULL,
     maturity     TEXT NOT NULL,
     archived_at  TEXT NOT NULL,
+    proposed_at TEXT,
+    proposal_date_estimated INTEGER NOT NULL DEFAULT 0,
     UNIQUE (skill_id, version)
 );
 CREATE INDEX IF NOT EXISTS idx_skill_versions_skill
@@ -2258,7 +2268,7 @@ const executionQualityScoresTableSQL = `CREATE TABLE IF NOT EXISTS execution_qua
 const agentApprovalRequestsTableSQL = `CREATE TABLE IF NOT EXISTS agent_approval_requests (
     id                 TEXT PRIMARY KEY,
     namespace          TEXT NOT NULL DEFAULT '',
-    kind               TEXT NOT NULL CHECK (kind IN ('device_enrollment','widening_change','credential_slot','broker_action','host_action')),
+    kind               TEXT NOT NULL CHECK (kind IN ('device_enrollment','widening_change','credential_slot','broker_action','host_action','memory_retention')),
     sentence           TEXT NOT NULL,
     rendered           TEXT NOT NULL,
     rendered_sha256    TEXT NOT NULL,

@@ -24,11 +24,11 @@ func TestMarkRefutedByIDs_FlipsRowsAndIsIDORScoped(t *testing.T) {
 	repo := NewRepository(db)
 
 	mock.ExpectExec(regexp.QuoteMeta("SET validation_status = 'refuted'")).
-		WithArgs("janka", "chunk_1", "chunk_2").
+		WithArgs("janka", "", "chunk_1", "chunk_2").
 		WillReturnResult(sqlmock.NewResult(0, 2))
 
 	n, err := repo.MarkRefutedByIDs(context.Background(), "janka",
-		[]string{"chunk_1", "chunk_2"})
+		[]string{"chunk_1", "chunk_2"}, "")
 	if err != nil {
 		t.Fatalf("MarkRefutedByIDs: %v", err)
 	}
@@ -47,7 +47,7 @@ func TestMarkRefutedByIDs_NoopOnEmptyInput(t *testing.T) {
 	db, _, _ := sqlmock.New()
 	defer func() { _ = db.Close() }()
 	repo := NewRepository(db)
-	n, err := repo.MarkRefutedByIDs(context.Background(), "p", nil)
+	n, err := repo.MarkRefutedByIDs(context.Background(), "p", nil, "")
 	if err != nil || n != 0 {
 		t.Errorf("empty input: n=%d err=%v, want (0, nil)", n, err)
 	}
@@ -177,7 +177,7 @@ func TestCorrector_RefuteByClaim_FlipsTopMatches(t *testing.T) {
 	repo := NewRepository(db)
 
 	mock.ExpectExec(regexp.QuoteMeta("SET validation_status = 'refuted'")).
-		WithArgs("janka", "chunk_a", "chunk_b").
+		WithArgs("janka", RefuteRouteMemoryCorrect, "chunk_a", "chunk_b").
 		WillReturnResult(sqlmock.NewResult(0, 2))
 
 	c := NewCorrector(repo, &stubSearcher{results: []SearchResult{
@@ -351,7 +351,7 @@ func TestCorrector_RefuteByClaim_AboveFloorRefutes(t *testing.T) {
 	repo := NewRepository(db)
 
 	mock.ExpectExec(regexp.QuoteMeta("SET validation_status = 'refuted'")).
-		WithArgs("janka", "chunk_real").
+		WithArgs("janka", RefuteRouteMemoryCorrect, "chunk_real").
 		WillReturnResult(sqlmock.NewResult(0, 1))
 
 	c := NewCorrector(repo, &stubSearcher{results: []SearchResult{
@@ -383,7 +383,7 @@ func TestCorrector_RefuteByClaim_JustAboveDefaultFloorRefutes(t *testing.T) {
 	// Only the 0.06 hit clears the default 0.05 floor; the 0.04 hit is
 	// left untouched, so exactly one id reaches the refute UPDATE.
 	mock.ExpectExec(regexp.QuoteMeta("SET validation_status = 'refuted'")).
-		WithArgs("janka", "chunk_edge").
+		WithArgs("janka", RefuteRouteMemoryCorrect, "chunk_edge").
 		WillReturnResult(sqlmock.NewResult(0, 1))
 
 	c := NewCorrector(repo, &stubSearcher{results: []SearchResult{
@@ -411,7 +411,7 @@ func TestCorrector_RefuteByClaim_MixedFloor(t *testing.T) {
 	repo := NewRepository(db)
 
 	mock.ExpectExec(regexp.QuoteMeta("SET validation_status = 'refuted'")).
-		WithArgs("janka", "chunk_hit"). // ONLY the above-floor id
+		WithArgs("janka", RefuteRouteMemoryCorrect, "chunk_hit"). // ONLY the above-floor id
 		WillReturnResult(sqlmock.NewResult(0, 1))
 
 	c := NewCorrector(repo, &stubSearcher{results: []SearchResult{
@@ -462,7 +462,7 @@ func TestCorrector_ForgetByID_MarksExactlyThatChunk(t *testing.T) {
 		WillReturnRows(sqlmock.NewRows([]string{"source_name", "content"}).
 			AddRow("notes.md", "the stale fact to forget"))
 	mock.ExpectExec(regexp.QuoteMeta("SET validation_status = 'refuted'")).
-		WithArgs("janka", "chunk_x").
+		WithArgs("janka", RefuteRouteChatForget, "chunk_x").
 		WillReturnResult(sqlmock.NewResult(0, 1))
 
 	c := NewCorrector(repo, &stubSearcher{})
@@ -559,15 +559,15 @@ func TestChunkPreviewByID_ProjectScopedLookup(t *testing.T) {
 
 func TestCorrector_RefuteByIDs_Guards(t *testing.T) {
 	var nilC *Corrector
-	_, err := nilC.RefuteByIDs(context.Background(), "p", []string{"c1"})
+	_, err := nilC.RefuteByIDs(context.Background(), "p", []string{"c1"}, "")
 	if err == nil {
 		t.Fatal("nil corrector must error")
 	}
 	c := &Corrector{Repo: &Repository{}, Searcher: nil}
-	if _, err := c.RefuteByIDs(context.Background(), "", []string{"c1"}); err == nil {
+	if _, err := c.RefuteByIDs(context.Background(), "", []string{"c1"}, ""); err == nil {
 		t.Error("empty project id must error")
 	}
-	if _, err := c.RefuteByIDs(context.Background(), "p", nil); err == nil {
+	if _, err := c.RefuteByIDs(context.Background(), "p", nil, ""); err == nil {
 		t.Error("empty chunk ids must error")
 	}
 }

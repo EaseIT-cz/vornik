@@ -445,3 +445,75 @@ func TestViews_ShowTheKeyAndCoveredActions(t *testing.T) {
 }
 
 func yamlUnmarshal(s string, v any) error { return yaml.Unmarshal([]byte(s), v) }
+
+// insertDeadGrants creates n expired grants of the class carrying the key of
+// args, the i-th expiring (base - i minutes), through the repository's own
+// create path (a dead grant does not count against the live ceiling).
+func (e *env) insertDeadGrants(args string, n int, base time.Time) {
+	e.t.Helper()
+	p := e.props["ns1--mail/send_reply"]
+	key, err := brokergrants.KeyOf(p.Standing.Key, p.Destinations(), []byte(args))
+	if err != nil {
+		e.t.Fatal(err)
+	}
+	for i := 0; i < n; i++ {
+		a := e.action("ns1--mail", args)
+		id := brokergrants.GrantID(a.ActionID)
+		sealed, _ := e.sealer.Seal("ns1", "grant/"+id, key.Canonical)
+		g := &persistence.BrokerStandingGrant{
+			ID: id, ProjectID: a.ProjectID, Namespace: "ns1", WorkflowID: a.WorkflowID, Action: a.ActionKind,
+			KeyPaths: append([]string(nil), p.Standing.Key...), KeyValuesSealed: sealed, KeyHash: key.Hash,
+			MaxUses: 1, UsesLeft: 1, ExpiresAt: base.Add(-time.Duration(i) * time.Minute), CreatedAt: e.now,
+			CreatedBy: "device:dev_1", SeedActionID: a.ActionID, ReachHashAtCreation: "reach-1", Active: true, DigestThrough: e.now,
+		}
+		if err := e.grants.ApproveSeedAndCreate(e.ctx, a.ActionID, a.ArgsSHA256, "device:dev_1", g, 10, e.now); err != nil {
+			e.t.Fatalf("dead grant %d: %v", i, err)
+		}
+	}
+}
+
+// GitHub #78 (2026-10-05 audit): 200 expired grants on one key hid a new live
+// grant of that key, so every covered write went back to a phone approval.
+// A covering match records no miss for the dead rows it skipped.
+func TestCover_LiveGrantBehindTwoHundredDead(t *testing.T) {
+	e := newEnv(t)
+	args := `{"to":"a@x.com","body":"b"}`
+	e.insertDeadGrants(args, 200, e.now.Add(-time.Hour))
+	e.seed(args, 1, 5)
+	if c, err := e.svc.Cover(e.ctx, e.action("ns1--mail", args)); !c || err != nil {
+		t.Fatalf("the live grant did not cover behind 200 dead: %v %v", c, err)
+	}
+	for _, r := range []string{"expired", "used", "revoked"} {
+		if e.metrics.Miss(r) != 0 {
+			t.Fatalf("a covered call recorded miss{%s} = %v", r, e.metrics.Miss(r))
+		}
+	}
+}
+
+// GitHub #78, the boundary the fix gives up: the dead tail is the 200 most
+// recent. With the 201st (oldest) dead grant the only one carrying the key,
+// the matcher sees no candidate with the key and records NO miss (reason
+// ""), in particular not expired; one fewer other-key dead grant and the
+// same grant is inside the tail and reports expired.
+func TestCover_DeadTailBoundaryLosesTheDiagnostic(t *testing.T) {
+	e := newEnv(t)
+	target := `{"to":"a@x.com","body":"b"}`
+	other := `{"to":"b@x.com","body":"b"}`
+	e.insertDeadGrants(target, 1, e.now.Add(-300*time.Hour)) // the oldest dead grant
+	e.insertDeadGrants(other, 200, e.now.Add(-time.Hour))    // the 200 most recent
+	if c, _ := e.svc.Cover(e.ctx, e.action("ns1--mail", target)); c {
+		t.Fatal("a dead grant covered")
+	}
+	for _, r := range []string{"expired", "used", "revoked", "key"} {
+		if e.metrics.Miss(r) != 0 {
+			t.Fatalf("beyond the 200-row tail miss{%s} = %v, want no miss", r, e.metrics.Miss(r))
+		}
+	}
+	// Control: one dead grant fewer puts the target inside the tail.
+	e2 := newEnv(t)
+	e2.insertDeadGrants(target, 1, e2.now.Add(-300*time.Hour))
+	e2.insertDeadGrants(other, 199, e2.now.Add(-time.Hour))
+	if c, _ := e2.svc.Cover(e2.ctx, e2.action("ns1--mail", target)); c || e2.metrics.Miss("expired") != 1 {
+		t.Fatalf("inside the tail: want miss{expired} = 1, got %v", e2.metrics.Miss("expired"))
+	}
+}

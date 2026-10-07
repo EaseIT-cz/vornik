@@ -3,9 +3,9 @@ package approverdevice
 import (
 	"context"
 	"net/http"
-	"strings"
 
 	"vornik.io/vornik/internal/approval"
+	"vornik.io/vornik/internal/httpx/realip"
 )
 
 // Cookie names. The device cookie is the approver-device credential; the
@@ -74,8 +74,10 @@ func tokenFromRequest(r *http.Request) string {
 	return dc.token
 }
 
+// requestIsHTTPS is realip.RequestIsHTTPS: X-Forwarded-Proto counts only from
+// a trusted proxy (cloudflare-real-ip-design.md §11, T15).
 func requestIsHTTPS(r *http.Request) bool {
-	return r.TLS != nil || strings.EqualFold(r.Header.Get("X-Forwarded-Proto"), "https")
+	return realip.RequestIsHTTPS(r)
 }
 
 // SetCookie issues the device cookie: HttpOnly, SameSite=Strict, scoped to

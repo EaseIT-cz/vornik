@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
+	"time"
 
 	"vornik.io/vornik/internal/approverdevice"
 	"vornik.io/vornik/internal/config"
@@ -104,5 +105,86 @@ func TestPushConfigured(t *testing.T) {
 	cfg.SteeringOperatorAlert.Channel = "telegram"
 	if !pushConfigured(cfg) {
 		t.Fatal("configured channel not reported")
+	}
+}
+
+// GitHub #79 (operator 2026-10-04): every device showed as "Phone".
+func TestPairDevice_DefaultLabelIsDistinct(t *testing.T) {
+	ctx := context.Background()
+	svc := newDeviceService(t)
+	old := nowFunc
+	t.Cleanup(func() { nowFunc = old })
+	base := time.Date(2026, 10, 4, 9, 30, 0, 0, time.UTC)
+	for i := 0; i < 2; i++ {
+		nowFunc = func() time.Time { return base.Add(time.Duration(i) * time.Minute) }
+		var out bytes.Buffer
+		if err := pairDevice(ctx, svc, "https://vornik.example", false, "", &out); err != nil {
+			t.Fatal(err)
+		}
+		s := out.String()
+		code := strings.TrimSpace(strings.SplitN(strings.SplitN(s, "Pairing code:", 2)[1], "\n", 2)[0])
+		r, err := svc.Redeem(ctx, code, "10.0.0.1")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if i == 0 { // revoke so the next pairing is a first-device pairing again
+			if err := revokeDevice(ctx, svc, r.Device.ID, &bytes.Buffer{}); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	devs, err := svc.ListDevices(ctx)
+	if err != nil || len(devs) != 2 {
+		t.Fatalf("devices = %+v, %v", devs, err)
+	}
+	if devs[0].Label == devs[1].Label {
+		t.Fatalf("both devices are labelled %q", devs[0].Label)
+	}
+	for _, d := range devs {
+		if !strings.HasPrefix(d.Label, "Phone paired ") {
+			t.Fatalf("label %q", d.Label)
+		}
+	}
+	if got := defaultDeviceLabel(base); got != "Phone paired 4 Oct 09:30" {
+		t.Fatalf("defaultDeviceLabel = %q", got)
+	}
+	if _, err := approverdevice.CleanLabel(defaultDeviceLabel(base)); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// Final review aa4a, 2026-10-07 (T12 follow-up): the printed address must not
+// send the operator to the "HTTPS required" refusal.
+func TestPairDevice_NoOriginPrintsHTTPSPlaceholder(t *testing.T) {
+	var out bytes.Buffer
+	if err := pairDevice(context.Background(), newDeviceService(t), "", true, "P", &out); err != nil {
+		t.Fatal(err)
+	}
+	s := out.String()
+	if !strings.Contains(s, "https://<this host>") || strings.Contains(s, "http://<this host>") {
+		t.Fatalf("placeholder is not https:\n%s", s)
+	}
+	if strings.Contains(s, "needs HTTPS") {
+		t.Fatalf("placeholder must not warn:\n%s", s)
+	}
+}
+
+func TestPairDevice_PlainHTTPNonLoopbackWarns(t *testing.T) {
+	for origin, warn := range map[string]bool{
+		"http://192.168.0.142:8080": true,
+		"http://vornik.lan":         true,
+		"http://localhost:8080":     false,
+		"http://127.0.0.1:8080":     false,
+		"http://[::1]:8080":         false,
+		"https://vornik.example":    false,
+	} {
+		var out bytes.Buffer
+		if err := pairDevice(context.Background(), newDeviceService(t), origin, true, "P", &out); err != nil {
+			t.Fatal(err)
+		}
+		got := strings.Contains(out.String(), "pairing needs HTTPS")
+		if got != warn {
+			t.Errorf("origin %q: warning=%v want %v\n%s", origin, got, warn, out.String())
+		}
 	}
 }

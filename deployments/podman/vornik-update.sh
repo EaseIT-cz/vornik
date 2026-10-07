@@ -43,6 +43,10 @@
 #                                              # the old ones (see below)
 #   ./vornik-update.sh --force            # rebuild+reinstall even if the checkout already matches
 #   ./vornik-update.sh --check            # only report current vs. available version, then exit
+#   ./vornik-update.sh --allow-downgrade  # explicitly permit an older ancestor of the installed build
+# Bare branch names prefer fetched origin branches; tags and qualified refs keep
+# their meaning. --yes and --force never imply --allow-downgrade. The ancestry
+# guard cannot prove database/config compatibility for unknown or divergent builds.
 #
 # Do not build container images with another tool while an update runs: an
 # interrupted update removes the buildah working containers that appeared
@@ -144,6 +148,7 @@ ASSUME_YES=0
 DO_BUILD=1
 CHECK_ONLY=0
 FORCE=0
+ALLOW_DOWNGRADE=0
 # Rebuilding images is what this script DOES, not an extra it can be asked for.
 # The previous default (REBUILD_AGENT=0, opt-in via --rebuild-agent) is the
 # defect this inversion fixes.
@@ -161,6 +166,7 @@ while [[ $# -gt 0 ]]; do
     --no-build)     DO_BUILD=0; shift ;;
     --check)        CHECK_ONLY=1; shift ;;
     --force)        FORCE=1; shift ;;
+    --allow-downgrade) ALLOW_DOWNGRADE=1; shift ;;
     --no-rebuild-images) REBUILD_IMAGES=0; shift ;;
     --no-recreate-sidecars) RECREATE_SIDECARS=0; shift ;;
     # Retained so cron wrappers and timers carrying the old flag keep working.
@@ -224,6 +230,13 @@ if [[ -z "$TARGET_REF" ]]; then
   TARGET_REF="$(git -C "$REPO_DIR" tag -l --sort=-creatordate | head -1)"
   [[ -n "$TARGET_REF" ]] || die "no tags found; pass --ref <tag-or-commit> (e.g. --ref origin/main)"
 fi
+# A bare branch name must not select a stale local branch after a fetch (#64).
+# Existing tags retain Git's tag-first precedence; qualified refs are deliberate.
+if [[ "$TARGET_REF" != refs/* && ! "$TARGET_REF" =~ ^[0-9a-f]{7,40}$ ]] \
+    && ! git -C "$REPO_DIR" show-ref --verify --quiet "refs/tags/$TARGET_REF" \
+    && git -C "$REPO_DIR" show-ref --verify --quiet "refs/remotes/origin/$TARGET_REF"; then
+  TARGET_REF="refs/remotes/origin/$TARGET_REF"
+fi
 git -C "$REPO_DIR" rev-parse --verify "$TARGET_REF^{commit}" >/dev/null 2>&1 \
   || die "target ref '$TARGET_REF' does not resolve to a commit"
 TARGET_COMMIT="$(git -C "$REPO_DIR" rev-parse --short "$TARGET_REF^{commit}")"
@@ -263,6 +276,27 @@ echo
 echo "  current : installed ${INSTALLED_VERSION:-?} (commit $INSTALLED_COMMIT), checkout at $CURRENT_COMMIT   (DB migration v${CURRENT_DBVER:-?})"
 echo "  target  : $TARGET_REF (commit $TARGET_COMMIT)"
 echo
+
+# Compare to the installed binary, never to a checkout that may already have
+# moved. Resolve described-version hashes too: their object may not be local.
+if [[ "$INSTALLED_COMMIT" == unknown ]] \
+    || ! INSTALLED_FULL="$(git -C "$REPO_DIR" rev-parse --verify "$INSTALLED_COMMIT^{commit}" 2>/dev/null)"; then
+  warn "downgrade safety could not be verified: installed commit is unavailable ($INSTALLED_COMMIT)."
+else
+  TARGET_FULL="$(git -C "$REPO_DIR" rev-parse --verify "$TARGET_REF^{commit}")" \
+    || die "cannot resolve target commit for downgrade inspection"
+  if [[ "$TARGET_FULL" != "$INSTALLED_FULL" ]]; then
+    if git -C "$REPO_DIR" merge-base --is-ancestor "$TARGET_FULL" "$INSTALLED_FULL"; then
+      if [[ "$ALLOW_DOWNGRADE" != 1 ]]; then
+        die "target $TARGET_REF is older than installed $INSTALLED_VERSION; refusing downgrade. Use --allow-downgrade only for an intentional rollback after checking DB/config compatibility."
+      fi
+      warn "Intentional downgrade allowed; database/config compatibility is the operator's responsibility."
+    else
+      ANCESTRY_STATUS=$?
+      [[ "$ANCESTRY_STATUS" == 1 ]] || die "git ancestry inspection failed (status $ANCESTRY_STATUS)"
+    fi
+  fi
+fi
 
 if [[ "$CHECK_ONLY" == 1 ]]; then
   [[ "$CURRENT_COMMIT" == "$TARGET_COMMIT" ]] && log "Checkout is already at the target commit."

@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"vornik.io/vornik/internal/mcp"
 	"vornik.io/vornik/internal/persistence"
@@ -76,8 +77,9 @@ type skillGetArgs struct {
 }
 
 type skillModerateArgs struct {
-	ID     string `json:"id"`
-	Reason string `json:"reason"`
+	ID              string `json:"id"`
+	Reason          string `json:"reason"`
+	ExpectedVersion *int   `json:"expected_version"`
 }
 
 type skillSetGlobalArgs struct {
@@ -88,16 +90,18 @@ type skillSetGlobalArgs struct {
 // --- response shapes -------------------------------------------------
 
 type skillSummary struct {
-	ID          string   `json:"id"`
-	Name        string   `json:"name"`
-	Description string   `json:"description"`
-	Domain      string   `json:"domain,omitempty"`
-	Tags        []string `json:"tags,omitempty"`
-	Roles       []string `json:"roles,omitempty"`
-	RepoScope   string   `json:"repo_scope,omitempty"`
-	Maturity    string   `json:"maturity"`
-	Version     int      `json:"version"`
-	IsGlobal    bool     `json:"is_global,omitempty"`
+	ID                    string    `json:"id"`
+	Name                  string    `json:"name"`
+	Description           string    `json:"description"`
+	Domain                string    `json:"domain,omitempty"`
+	Tags                  []string  `json:"tags,omitempty"`
+	Roles                 []string  `json:"roles,omitempty"`
+	RepoScope             string    `json:"repo_scope,omitempty"`
+	Maturity              string    `json:"maturity"`
+	Version               int       `json:"version"`
+	ProposedAt            time.Time `json:"proposed_at"`
+	ProposalDateEstimated bool      `json:"proposal_date_estimated"`
+	IsGlobal              bool      `json:"is_global,omitempty"`
 }
 
 func toSkillSummary(s *persistence.Skill) skillSummary {
@@ -105,6 +109,7 @@ func toSkillSummary(s *persistence.Skill) skillSummary {
 		ID: s.ID, Name: s.Name, Description: s.Description, Domain: s.Domain,
 		Tags: s.Tags, Roles: s.Roles, RepoScope: s.RepoScope,
 		Maturity: s.Maturity, Version: s.Version, IsGlobal: s.IsGlobal,
+		ProposedAt: s.ProposedAt, ProposalDateEstimated: s.ProposalDateEstimated,
 	}
 }
 
@@ -235,12 +240,14 @@ func (s *Server) companionToolSkillPropose(ctx context.Context, key *persistence
 		note = "proposed as a GLOBAL draft (affects ALL projects once approved) — an operator must approve it before it activates"
 	}
 	out := map[string]any{
-		"id":        stored.ID,
-		"name":      stored.Name,
-		"maturity":  stored.Maturity,
-		"version":   stored.Version,
-		"is_global": stored.IsGlobal,
-		"note":      note,
+		"id":                      stored.ID,
+		"name":                    stored.Name,
+		"maturity":                stored.Maturity,
+		"version":                 stored.Version,
+		"proposed_at":             stored.ProposedAt,
+		"proposal_date_estimated": stored.ProposalDateEstimated,
+		"is_global":               stored.IsGlobal,
+		"note":                    note,
 	}
 	if stored.SupersedesID != "" {
 		out["supersedes"] = stored.SupersedesID
@@ -347,6 +354,7 @@ func (s *Server) companionToolSkillGet(ctx context.Context, key *persistence.API
 		"body": skill.Body, "domain": skill.Domain, "tags": skill.Tags,
 		"roles": skill.Roles, "repo_scope": skill.RepoScope,
 		"maturity": skill.Maturity, "version": skill.Version,
+		"proposed_at": skill.ProposedAt, "proposal_date_estimated": skill.ProposalDateEstimated,
 		"is_global": skill.IsGlobal,
 	}
 	// What the people who saw this skill's output thought of THIS body — the
@@ -380,6 +388,9 @@ func (s *Server) skillModerate(ctx context.Context, key *persistence.APIKey, raw
 	if strings.TrimSpace(args.ID) == "" {
 		return "", errors.New("id is required")
 	}
+	if args.ExpectedVersion != nil && *args.ExpectedVersion <= 0 {
+		return "", errors.New("expected_version must be positive")
+	}
 	// Confirm the skill exists in this key's project before mutating,
 	// so a caller can't flip another project's skill by guessing an id.
 	skill, err := s.skillStore.GetByID(ctx, args.ID)
@@ -396,12 +407,16 @@ func (s *Server) skillModerate(ctx context.Context, key *persistence.APIKey, raw
 	if target == persistence.SkillMaturityRetired {
 		decision = skills.Reject
 	}
-	outcome, err := skills.ApplyDecision(ctx, s.skillStore, args.ID, decision)
+	version := skill.Version
+	if args.ExpectedVersion != nil {
+		version = *args.ExpectedVersion
+	}
+	outcome, err := skills.ApplyDecisionForVersion(ctx, s.skillStore, args.ID, version, decision)
 	if err != nil {
 		return "", fmt.Errorf("set maturity failed: %w", err)
 	}
 	return marshalSkill(map[string]any{
-		"id": skill.ID, "name": skill.Name, "maturity": outcome,
+		"id": skill.ID, "name": skill.Name, "maturity": outcome, "version": version,
 		"body_sha256": skill.BodySHA256, // approval binds to the exact reviewed body
 		"reason":      strings.TrimSpace(args.Reason),
 	})

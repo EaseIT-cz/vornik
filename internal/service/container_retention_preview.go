@@ -86,6 +86,7 @@ func (a *retentionPreviewAdapter) resolvePolicy(projectID string) retention.Poli
 		return policy
 	}
 	pr := p.Retention
+	policy.MemoryRequireApproval = pr.MemoryRequireApproval
 	if pr.TaskLLMUsageDays > 0 {
 		policy.TaskLLMUsageDays = pr.TaskLLMUsageDays
 	}

@@ -55,7 +55,8 @@ func (s *Searcher) RecallWithRouting(
 	// post-policy visible slice.
 	filtered := s.applyFirewall(ctx, projectID, best, reqCtx)
 	s.writeTrustVerdictTrace(ctx, projectID, verdict, cfg)
-	return filtered, verdict, nil
+	filtered, err = s.recordReturnedUse(ctx, projectID, filtered)
+	return filtered, verdict, err
 }
 
 // widenLoop wires searchInternal into the pure widenLoopCore.

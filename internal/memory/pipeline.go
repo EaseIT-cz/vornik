@@ -21,12 +21,18 @@ import (
 // Quarantine repo is required; everything else is optional and
 // nil-safe (skips the corresponding gate or stage).
 type PipelineConfig struct {
-	Quarantine      persistence.MemoryQuarantineRepository
-	Epochs          persistence.CorpusEpochRepository
-	ChunkExists     func(ctx context.Context, projectID, contentHash string) (bool, error)
-	StampEpoch      func(ctx context.Context, projectID, artifactID, epochID string) error
-	SecretsDetector secrets.Detector
-	SecretsActions  map[string]secrets.Action
+	Quarantine  persistence.MemoryQuarantineRepository
+	Epochs      persistence.CorpusEpochRepository
+	ChunkExists func(ctx context.Context, projectID, contentHash string) (bool, error)
+	// ReinstateMirrored brings back a refuted Hermes-mirrored note on a
+	// dedup_hash reject in companion-note ingest (opts.ReinstateMirrored),
+	// returning the reinstated chunk id or "". Wired to
+	// Repository.ReinstateMirroredByHash. Nil = never reinstate. GitHub #76;
+	// design 22, "Reinstating a refuted mirrored note".
+	ReinstateMirrored func(ctx context.Context, projectID, contentHash, producerRole string) (string, error)
+	StampEpoch        func(ctx context.Context, projectID, artifactID, epochID string) error
+	SecretsDetector   secrets.Detector
+	SecretsActions    map[string]secrets.Action
 	// DenyPatterns seeds the substring deny-list PolicyMatchGate enforces.
 	// It is published into the hot-reloadable gateOverrides snapshot at
 	// NewPipeline time; thereafter the live value is swapped via UpdateGates
@@ -430,6 +436,11 @@ type IngestStats struct {
 	Verified    int      // role_of_record fast-path stamps (Phase 4)
 	Superseded  int      // older chunks marked superseded by this admit (Phase 4)
 	GatesFailed []string // unique gate names that fired with non-allow
+	// Reinstated counts a refuted Hermes-mirrored note brought back instead
+	// of inserted (GitHub #76); Admitted counts it too. ReinstatedChunkID
+	// is that chunk's id.
+	Reinstated        int
+	ReinstatedChunkID string
 }
 
 // BeginEpoch creates a fresh epoch row for one ingest run. The
@@ -509,6 +520,13 @@ type IngestArtifactOptions struct {
 	// ingest's chunk must not stop a document's new version from landing
 	// (memory rollback x supersession design, A.7).
 	Document bool
+
+	// ReinstateMirrored lets a dedup_hash reject reinstate a refuted
+	// Hermes-mirrored note through PipelineConfig.ReinstateMirrored. Set only
+	// by IngestCompanionNote: agent, document and chat-memory ingest never
+	// reinstate (GitHub #76; design 22, "Reinstating a refuted mirrored
+	// note").
+	ReinstateMirrored bool
 }
 
 // IngestArtifact runs one source artifact through the pipeline with
@@ -709,6 +727,18 @@ func (p *Pipeline) IngestArtifactWithOptions(
 
 	switch final.Action {
 	case GateReject:
+		if id := p.reinstateMirrored(ctx, opts, cand, final, producerRole); id != "" {
+			// GitHub #76: the refuted mirrored note is back; this deposit
+			// is an admit, not a dedup reject.
+			stats.Admitted = 1
+			stats.Reinstated = 1
+			stats.ReinstatedChunkID = id
+			stats.GatesFailed = removeGate(stats.GatesFailed, GateDedupHash)
+			if p.cfg.Metrics != nil && p.cfg.Metrics.ReinstatedTotal != nil {
+				p.cfg.Metrics.ReinstatedTotal.WithLabelValues(projectID).Inc()
+			}
+			return stats, nil
+		}
 		stats.Rejected++
 		p.logger.Debug().
 			Str("project_id", projectID).
@@ -963,6 +993,35 @@ func classifyIngestDecision(stats IngestStats) (decision, gateFailed string) {
 	return decision, gateFailed
 }
 
+// reinstateMirrored runs the reinstate rule (design 22, "Reinstating a
+// refuted mirrored note") when a companion-note candidate was rejected by
+// dedup_hash. dedup_hash is the last gate and the runner stops at the first
+// reject, so this candidate passed every other gate under today's config.
+// Returns the reinstated chunk id, or "" (the reject stands).
+func (p *Pipeline) reinstateMirrored(ctx context.Context, opts IngestArtifactOptions, cand *IngestCandidate, final GateOutcome, producerRole string) string {
+	if !opts.ReinstateMirrored || p.cfg.ReinstateMirrored == nil || final.Gate != GateDedupHash {
+		return ""
+	}
+	id, err := p.cfg.ReinstateMirrored(ctx, cand.ProjectID, cand.ContentHash, producerRole)
+	if err != nil {
+		p.logger.Warn().Err(err).
+			Str("project_id", cand.ProjectID).
+			Msg("pipeline: reinstate of a refuted mirrored note failed; the dedup reject stands")
+		return ""
+	}
+	return id
+}
+
+func removeGate(gates []string, gate GateName) []string {
+	out := gates[:0:0]
+	for _, g := range gates {
+		if g != string(gate) {
+			out = append(out, g)
+		}
+	}
+	return out
+}
+
 // hashContent returns the hex-encoded sha256 of content. Used as
 // the dedup key on memory_ingest_audit rows so an operator can
 // query "every deposit attempt of THIS content" across keys/time.
@@ -1003,6 +1062,9 @@ type CompanionIngestAuditEvent struct {
 	// RepoScope partitions this deposit within the project's RAG
 	// (migration 75). Empty / "*" / repo token — see candidate doc.
 	RepoScope string
+	// ReinstatedChunkID names the refuted mirrored chunk this deposit
+	// reinstated (GitHub #76); empty for every other deposit.
+	ReinstatedChunkID string
 }
 
 // AgentIngestAuditEvent is the audit record handed to
@@ -1102,7 +1164,7 @@ func (p *Pipeline) IngestCompanionNote(
 	// the default — the MCP schema validates `ttl_days >= 1` so the
 	// zero-means-no-expiry interpretation is reachable only from
 	// in-process callers, and none rely on it today.
-	opts := IngestArtifactOptions{ClassOverride: class, RepoScope: repoScope, EventTime: eventTime}
+	opts := IngestArtifactOptions{ClassOverride: class, RepoScope: repoScope, EventTime: eventTime, ReinstateMirrored: true}
 	if ttlDays > 0 {
 		d := time.Duration(ttlDays) * 24 * time.Hour
 		opts.TTLOverride = &d
@@ -1145,6 +1207,8 @@ func (p *Pipeline) IngestCompanionNote(
 			GateFailed:     gateFailed,
 			ChunksAdmitted: stats.Admitted,
 			RepoScope:      repoScope,
+			// A reinstate is an admit (gate_failed NULL) naming its chunk.
+			ReinstatedChunkID: stats.ReinstatedChunkID,
 		}
 		if recErr := p.cfg.RecordCompanionIngest(ctx, event); recErr != nil {
 			p.logger.Warn().

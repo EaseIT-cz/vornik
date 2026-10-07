@@ -25,6 +25,7 @@ import (
 
 	"vornik.io/vornik/internal/authsession"
 	"vornik.io/vornik/internal/authz"
+	"vornik.io/vornik/internal/httpx/realip"
 )
 
 // sessionExchangeMinter mints a browser session for an account.
@@ -63,7 +64,8 @@ func (s *Server) SessionExchange(w http.ResponseWriter, r *http.Request) {
 	// knowingly rather than discover it.
 	if !requestIsSecure(r) && !s.insecureSessionsAllowed {
 		respondError(w, http.StatusBadRequest, "INSECURE_TRANSPORT",
-			"refusing to mint a session cookie over plaintext HTTP; terminate TLS in front of the daemon, "+
+			"refusing to mint a session cookie over plaintext HTTP; terminate TLS in front of the daemon "+
+				"(a proxy must set X-Forwarded-Proto: https and be listed in server.real_ip.trusted_proxies), "+
 				"or set the development override if this is a local deployment")
 		return
 	}
@@ -167,17 +169,12 @@ func navMarker(role string) string {
 }
 
 // requestIsSecure reports whether the request reached the daemon over TLS,
-// directly or through a proxy that said so.
-//
-// The proxy header is trusted only because the daemon is not directly exposed
-// in any supported topology — and that assumption is stated here rather than
-// assumed silently, because it is the one an operator could break by putting
-// the daemon on a public interface.
+// directly or through a proxy that said so. The proxy's X-Forwarded-Proto
+// counts only when the immediate peer is in server.real_ip.trusted_proxies
+// (realip.RequestIsHTTPS; cloudflare-real-ip-design.md §11, T15): the daemon
+// listens on the LAN, so a direct client must not be able to claim TLS.
 func requestIsSecure(r *http.Request) bool {
-	if r.TLS != nil {
-		return true
-	}
-	return strings.EqualFold(r.Header.Get("X-Forwarded-Proto"), "https")
+	return realip.RequestIsHTTPS(r)
 }
 
 // originAllowed checks the Origin/Referer against the request's own host.

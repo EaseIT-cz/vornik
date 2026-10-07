@@ -222,6 +222,7 @@ func runRetention(cmd *cobra.Command, args []string) error {
 			ArtifactsDays:             p.Retention.ArtifactsDays,
 			TaskMessagesDays:          p.Retention.TaskMessagesDays,
 			MemoryChunksDays:          p.Retention.MemoryChunksDays,
+			MemoryRequireApproval:     p.Retention.MemoryRequireApproval,
 			MemoryIngestAuditDays:     p.Retention.MemoryIngestAuditDays,
 			MemoryPolicyEvalAllowDays: p.Retention.MemoryPolicyEvalAllowDays,
 			MemoryPolicyEvalBlockDays: p.Retention.MemoryPolicyEvalBlockDays,

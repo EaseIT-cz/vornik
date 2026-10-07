@@ -2,6 +2,7 @@ package telegram
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"sync"
@@ -71,10 +72,14 @@ func (b *Bot) handleSkillCallback(ctx context.Context, callbackID string, userID
 	default:
 		return b.answerCallbackQuery(ctx, callbackID, "Unrecognised skill action.", true)
 	}
-	outcome, err := skills.ApplyDecision(ctx, b.skillRepo, payload, d)
+	id, version, parseErr := skills.ParseReviewToken(payload)
+	if parseErr != nil {
+		return b.answerCallbackQuery(ctx, callbackID, parseErr.Error(), true)
+	}
+	outcome, err := skills.ApplyDecisionForVersion(ctx, b.skillRepo, id, version, d)
 	if err != nil {
 		b.logger.Warn().Err(err).Str("skill_id", payload).Str("action", action).Msg("skill review: decision failed")
-		return b.answerCallbackQuery(ctx, callbackID, "That skill could not be found.", true)
+		return b.answerCallbackQuery(ctx, callbackID, skillReviewError(err), true)
 	}
 	return b.answerCallbackQuery(ctx, callbackID, "Skill "+outcome+".", false)
 }
@@ -96,7 +101,7 @@ func buildSkillReviewDigest(drafts []*persistence.Skill, ratingLines map[string]
 	fmt.Fprintf(&text, "🧠 %d skill(s) awaiting your review:\n", len(drafts))
 	var buttons []Button
 	for i, s := range drafts {
-		fmt.Fprintf(&text, "\n%d. *%s* — %s", i+1, s.Name, s.Description)
+		fmt.Fprintf(&text, "\n%d. *%s* · v%d — %s\n   Proposed at %s", i+1, s.Name, s.Version, s.Description, skills.ProposalDate(s.ProposedAt, s.ProposalDateEstimated))
 		if s.IsGlobal {
 			// Blast-radius label: an approved global skill fires in every
 			// project, so the approver must see the scope before deciding.
@@ -105,10 +110,10 @@ func buildSkillReviewDigest(drafts []*persistence.Skill, ratingLines map[string]
 		if line := ratingLines[s.ID]; line != "" {
 			fmt.Fprintf(&text, "\n   📊 %s", line)
 		}
-		if approve, err := EncodeCallback("skill", "approve", s.ID); err == nil {
+		if approve, err := EncodeCallback("skill", "approve", skills.ReviewToken(s.ID, s.Version)); err == nil {
 			buttons = append(buttons, Button{Text: fmt.Sprintf("✅ %d", i+1), Data: approve})
 		}
-		if reject, err := EncodeCallback("skill", "reject", s.ID); err == nil {
+		if reject, err := EncodeCallback("skill", "reject", skills.ReviewToken(s.ID, s.Version)); err == nil {
 			buttons = append(buttons, Button{Text: fmt.Sprintf("❌ %d", i+1), Data: reject})
 		}
 	}
@@ -128,7 +133,7 @@ func (b *Bot) sendSkillReviewDigest(ctx context.Context) {
 	}
 	ids := make([]string, 0, len(drafts))
 	for _, s := range drafts {
-		ids = append(ids, s.ID)
+		ids = append(ids, skills.ReviewToken(s.ID, s.Version))
 	}
 	if len(b.skillDigestSeen.freshOnly(ids)) == 0 {
 		return // nothing new since last digest
@@ -159,4 +164,11 @@ func (b *Bot) skillRatingLines(ctx context.Context, drafts []*persistence.Skill)
 		out[s.ID] = ratings.SkillApprovalLine(ctx, b.ratingArms, b.ratingProvenance, s.ID, s.BodySHA256)
 	}
 	return out
+}
+
+func skillReviewError(err error) string {
+	if errors.Is(err, persistence.ErrSkillRevisionConflict) {
+		return err.Error()
+	}
+	return "That skill could not be found."
 }

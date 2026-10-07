@@ -108,3 +108,67 @@ func TestMigrateFreshDatabaseUnaffected(t *testing.T) {
 		}
 	}
 }
+
+func TestSkillProposalDateUpgrade(t *testing.T) {
+	ctx := context.Background()
+	cfg := DefaultConfig()
+	cfg.Path = filepath.Join(t.TempDir(), "revision.db")
+	db, err := Connect(ctx, cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = db.Close() }()
+	_, err = db.Exec(oldProjectSkillsDDL + `; CREATE TABLE project_skill_versions (
+ id TEXT PRIMARY KEY, skill_id TEXT NOT NULL, version INTEGER NOT NULL,
+ name TEXT NOT NULL, description TEXT NOT NULL, body TEXT NOT NULL,
+ body_sha256 TEXT NOT NULL, maturity TEXT NOT NULL, archived_at TEXT NOT NULL,
+ UNIQUE(skill_id,version));
+ INSERT INTO project_skills (id,project_id,name,description,body,body_sha256,maturity,version,created_at,updated_at)
+ VALUES ('legacy-date','p1','legacy-date','d','new','sha','draft',2,'2026-01-01T00:00:00Z','2026-02-01T00:00:00Z');
+ INSERT INTO project_skill_versions VALUES ('old-date','legacy-date',1,'legacy-date','d','old','oldsha','active','2026-02-01T00:00:00Z');`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Migrate(ctx); err != nil {
+		t.Fatal(err)
+	}
+	repo := NewSkillRepository(db.DB)
+	live, err := repo.GetByID(ctx, "legacy-date")
+	if err != nil {
+		t.Fatal(err)
+	}
+	archive, err := repo.ListVersions(ctx, live.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !live.ProposalDateEstimated || !live.ProposedAt.Equal(live.UpdatedAt) {
+		t.Fatalf("live legacy estimate: %+v", live)
+	}
+	if len(archive) != 1 || !archive[0].ProposalDateEstimated || !archive[0].ProposedAt.Equal(archive[0].ArchivedAt) {
+		t.Fatalf("archive legacy estimate: %+v", archive)
+	}
+	next, err := repo.Upsert(ctx, live)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if next.ProposalDateEstimated || !next.ProposedAt.After(live.ProposedAt) {
+		t.Fatalf("exact next date: %+v", next)
+	}
+	if err := db.Migrate(ctx); err != nil {
+		t.Fatal(err)
+	}
+	reread, err := repo.GetByID(ctx, live.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reread.ProposalDateEstimated || !reread.ProposedAt.Equal(next.ProposedAt) {
+		t.Fatal("second migration changed exact timestamp")
+	}
+	archive, err = repo.ListVersions(ctx, live.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(archive) != 2 || !archive[0].ProposalDateEstimated || !archive[0].ProposedAt.Equal(live.ProposedAt) {
+		t.Fatal("estimated timestamp lost when archived")
+	}
+}

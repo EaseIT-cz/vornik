@@ -3,6 +3,7 @@ package sqlite
 import (
 	"context"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -133,5 +134,42 @@ func TestMigrate_RebuildsAgentApprovalRequestsForHostActions(t *testing.T) {
 		if err := db.QueryRowContext(ctx, `SELECT COUNT(*) FROM agent_approval_requests WHERE id = ? AND kind = ?`, "apr_"+k, k).Scan(&n); err != nil || n != 1 {
 			t.Fatalf("the %s row did not survive: %d %v", k, n, err)
 		}
+	}
+}
+
+// Issue #70: an existing phone database learns memory_retention without losing
+// already pending requests. SQLite cannot extend a CHECK in place.
+func TestMigrate_RebuildsAgentApprovalRequestsForMemoryRetention(t *testing.T) {
+	ctx := context.Background()
+	cfg := DefaultConfig()
+	cfg.Path = filepath.Join(t.TempDir(), "existing.db")
+	db, err := Connect(ctx, cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = db.Close() }()
+	db.SetMaxOpenConns(1)
+	if err = db.Migrate(ctx); err != nil {
+		t.Fatal(err)
+	}
+	old := strings.Replace(agentApprovalRequestsTableSQL, ",'memory_retention'", "", 1)
+	for _, stmt := range []string{`DROP TABLE agent_approval_requests`, old, `INSERT INTO agent_approval_requests (id,kind,sentence,rendered,rendered_sha256,status,created_at,expires_at) VALUES ('apr_old70','host_action','s','{}','h','pending','2026-10-01T00:00:00Z','2026-10-02T00:00:00Z')`} {
+		if _, err = db.ExecContext(ctx, stmt); err != nil {
+			t.Fatal(err)
+		}
+	}
+	insert := `INSERT INTO agent_approval_requests (id,kind,sentence,rendered,rendered_sha256,status,created_at,expires_at) VALUES ('apr_new70','memory_retention','s','{}','h','pending','2026-10-01T00:00:00Z','2026-10-02T00:00:00Z')`
+	if _, err = db.ExecContext(ctx, insert); err == nil {
+		t.Fatal("old CHECK unexpectedly allowed new kind")
+	}
+	if err = db.Migrate(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = db.ExecContext(ctx, insert); err != nil {
+		t.Fatal(err)
+	}
+	var n int
+	if err = db.QueryRowContext(ctx, `SELECT COUNT(*) FROM agent_approval_requests WHERE id='apr_old70'`).Scan(&n); err != nil || n != 1 {
+		t.Fatalf("existing phone request lost: %d %v", n, err)
 	}
 }

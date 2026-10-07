@@ -1,7 +1,7 @@
 ---
 sources:
     - path: docs/operator/storage-and-retention.md
-      sha256: 8530705d6e3b5de3dda517434f7b3b61a8b8bd356b0174020436b7307388692b
+      sha256: 674a94db8705f06ad4e0f4b3248a26a71a9fed7ab84697456caac8e9d7333079
 ---
 # Storage and Retention
 
@@ -277,3 +277,48 @@ conversation with `/summarize`.
 - [Memory and RAG](../features/memory-rag.md) — what long-term memory stores.
 - [Configuration reference](../reference/configuration.md) — every key and its
   default.
+
+
+## Approval before deleting unused project memory
+
+For a personal knowledge project such as `companion-janka`, add this block to
+its **project YAML** in the configuration tree your daemon reads:
+
+```yaml
+retention:
+  memory_require_approval: true
+  memory_idle_days: 365  # optional; 365 is the default in approval mode
+```
+
+Deploy the binary supporting these keys before adding them, then reload the
+configuration with `vornikctl config reload`. This repository change does not
+modify a running project's settings. Request production uses the existing
+daemon retention sweeper, which must be enabled (`retention.enabled: true` in
+the daemon config; default interval six hours). Pair an approver phone using
+the existing [approval-device setup](assistant-setup.md); pending requests
+appear in the inbox and on the paired phone's approval page. The operator alert
+channel sends a link when configured, without the source preview.
+
+In this mode, automatic class-TTL and creation-age chunk deletion are disabled
+for the project. A final returned recall hit resets its idle clock, including
+memory used through context assembly. A never-used or historical chunk with
+no recorded use starts from its creation time. No history of old recalls is
+invented. The idle window is the greater of `memory_idle_days` and the chunk's
+stored original TTL duration, so an explicit longer `ttl_days` is preserved.
+Chunks with no expiry remain indefinite and do not receive deletion requests.
+
+After the idle window, the daemon asks on the paired phone before deleting a
+specific chunk. The phone shows the project, source, bounded content preview
+and last-use date. Approve deletes that chunk and cleans its dependent links
+and graph provenance. Reject or leave unanswered to keep it; it remains
+searchable, and the daemon can ask again after 30 days. At most 20 requests per
+project are proposed each sweep. Only the paired-device principal can decide;
+API and companion keys cannot approve. A later recall, content replacement,
+TTL extension or retention-policy change invalidates the old deletion request.
+
+`vornikctl retention --apply` also respects this protection; it does not file
+phone requests. With no available phone approval service, memory is retained.
+Explicit erasure and manual hard eviction remain separate actions. Disabling
+approval mode restores legacy TTL and age-based retention, so old expired
+chunks can become hidden or be removed by the next sweep. Back up the store
+before choosing that policy change.

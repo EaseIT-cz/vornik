@@ -1,6 +1,11 @@
 package slack
 
-import "strings"
+import (
+	"strconv"
+	"strings"
+	"time"
+	"vornik.io/vornik/internal/skills"
+)
 
 // Slack knowledge-skill review primitives (LLD 2026-07-07-knowledge-
 // skill-learning-loop-design, approval surface).
@@ -22,9 +27,12 @@ import "strings"
 
 // SkillReviewDraft is the minimal projection the block builder needs.
 type SkillReviewDraft struct {
-	ID          string
-	Name        string
-	Description string
+	Version               int
+	ProposedAt            time.Time
+	ProposalDateEstimated bool
+	ID                    string
+	Name                  string
+	Description           string
 	// RatingLine is what the ratings rollup says about the body being
 	// approved (LLD 2026-09-08-execution-ratings-approval-paths-design §2.3).
 	// Composed by the caller, which holds the repositories; rendered verbatim
@@ -50,7 +58,7 @@ func BuildSkillReviewBlocks(drafts []SkillReviewDraft) []map[string]any {
 		blocks = append(blocks,
 			map[string]any{
 				"type": "section",
-				"text": map[string]any{"type": "mrkdwn", "text": "*" + slackEscape(d.Name) + "* — " + slackEscape(d.Description)},
+				"text": map[string]any{"type": "mrkdwn", "text": "*" + slackEscape(d.Name) + "* · v" + strconv.Itoa(d.Version) + " — " + slackEscape(d.Description) + "\nProposed at " + skills.ProposalDate(d.ProposedAt, d.ProposalDateEstimated)},
 			})
 		if d.RatingLine != "" {
 			blocks = append(blocks, map[string]any{
@@ -68,14 +76,14 @@ func BuildSkillReviewBlocks(drafts []SkillReviewDraft) []map[string]any {
 						"type":      "button",
 						"text":      map[string]any{"type": "plain_text", "text": "✅ Approve"},
 						"style":     "primary",
-						"action_id": "skill_approve:" + d.ID,
+						"action_id": "skill_approve:" + skills.ReviewToken(d.ID, d.Version),
 						"value":     d.ID,
 					},
 					{
 						"type":      "button",
 						"text":      map[string]any{"type": "plain_text", "text": "❌ Reject"},
 						"style":     "danger",
-						"action_id": "skill_reject:" + d.ID,
+						"action_id": "skill_reject:" + skills.ReviewToken(d.ID, d.Version),
 						"value":     d.ID,
 					},
 				},
@@ -107,4 +115,14 @@ func ParseSkillAction(actionID string) (approve bool, skillID string, ok bool) {
 	default:
 		return false, "", false
 	}
+}
+
+// ParseSkillRevisionAction refuses legacy review actions with no displayed revision.
+func ParseSkillRevisionAction(actionID string) (approve bool, id string, version int, ok bool) {
+	approve, token, ok := ParseSkillAction(actionID)
+	if !ok {
+		return false, "", 0, false
+	}
+	id, version, err := skills.ParseReviewToken(token)
+	return approve, id, version, err == nil
 }

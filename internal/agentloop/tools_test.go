@@ -60,12 +60,14 @@ func TestResolvePath_SymlinkPrefix(t *testing.T) {
 	}
 }
 
-// TestNoSubprocessExceptGit — the design's §5.6: the golden compares output
-// and cannot see process shape, so this asserts by inspection that the only
-// exec.Command argv the package ever builds starts with "git".
-func TestNoSubprocessExceptGit(t *testing.T) {
+// Keep fixed subprocess entrypoints visible even when a constructor is passed
+// through the renderer's injectable test seam. No arbitrary program is allowed.
+func TestAgentSubprocessPrograms(t *testing.T) {
 	fset := token.NewFileSet()
-	entries, _ := os.ReadDir(".")
+	entries, err := os.ReadDir(".")
+	if err != nil {
+		t.Fatal(err)
+	}
 	for _, e := range entries {
 		if !strings.HasSuffix(e.Name(), ".go") || strings.HasSuffix(e.Name(), "_test.go") {
 			continue
@@ -75,6 +77,13 @@ func TestNoSubprocessExceptGit(t *testing.T) {
 			t.Fatal(err)
 		}
 		ast.Inspect(f, func(n ast.Node) bool {
+			if sel, ok := n.(*ast.SelectorExpr); ok {
+				if pkg, ok := sel.X.(*ast.Ident); ok && pkg.Name == "exec" && strings.HasPrefix(sel.Sel.Name, "Command") {
+					if e.Name() != "git_tools.go" && (e.Name() != "document_render.go" || sel.Sel.Name != "CommandContext") {
+						t.Errorf("%s:%d: undeclared subprocess constructor", e.Name(), fset.Position(sel.Pos()).Line)
+					}
+				}
+			}
 			call, ok := n.(*ast.CallExpr)
 			if !ok {
 				return true
@@ -83,16 +92,20 @@ func TestNoSubprocessExceptGit(t *testing.T) {
 			if !ok {
 				return true
 			}
-			pkg, ok := sel.X.(*ast.Ident)
-			if !ok || pkg.Name != "exec" || !strings.HasPrefix(sel.Sel.Name, "Command") {
-				return true
+			if pkg, ok := sel.X.(*ast.Ident); ok && pkg.Name == "exec" && strings.HasPrefix(sel.Sel.Name, "Command") {
+				lit, ok := call.Args[0].(*ast.BasicLit)
+				if e.Name() != "git_tools.go" || !ok || lit.Value != `"git"` {
+					t.Errorf("%s: direct spawn must use literal git", e.Name())
+				}
 			}
-			if e.Name() != "git_tools.go" {
-				t.Errorf("%s:%d spawns a subprocess; only git_tools.go may", e.Name(), fset.Position(call.Pos()).Line)
+			if sel.Sel.Name == "command" && e.Name() != "document_render.go" {
+				t.Errorf("%s: unreviewed injected command seam", e.Name())
 			}
-			lit, ok := call.Args[0].(*ast.BasicLit)
-			if !ok || lit.Value != `"git"` {
-				t.Errorf("%s:%d: the only argv[0] allowed is the literal \"git\"", e.Name(), fset.Position(call.Pos()).Line)
+			if e.Name() == "document_render.go" && sel.Sel.Name == "run" {
+				lit, ok := call.Args[1].(*ast.BasicLit)
+				if !ok || (lit.Value != `"/usr/bin/pandoc"` && lit.Value != `"/usr/bin/python3"`) {
+					t.Error("renderer program must be one of two literal converters")
+				}
 			}
 			return true
 		})

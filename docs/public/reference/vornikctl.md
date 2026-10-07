@@ -111,6 +111,7 @@ Output path defaults to ./vornik-backup-YYYYMMDD-HHMMSS.tgz. The archive
 is portable across hosts when restored via 'vornikctl restore'.
 
 Requires: pg_dump on PATH with credentials resolved from config.
+The pg_dump major version must be at least the PostgreSQL server major version.
 
 Examples:
   vornikctl backup
@@ -2541,7 +2542,7 @@ vornikctl pair-device [flags]
 
 | Flag | Default | Description |
 |---|---|---|
-| `--label` | `Phone` | A name for the device (1 to 40 characters), shown in approvals and alerts |
+| `--label` |  | A name for the device (1 to 40 characters), shown in approvals and alerts (default: "Phone paired <date time>") |
 
 ## vornikctl project
 

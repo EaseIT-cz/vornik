@@ -139,12 +139,13 @@ const (
 
 // Policy is the effective (resolved) retention window for one project.
 type Policy struct {
-	ProjectID        string
-	TaskLLMUsageDays int
-	ToolAuditDays    int
-	TasksDays        int
-	ExecutionsDays   int
-	ArtifactsDays    int
+	MemoryRequireApproval bool
+	ProjectID             string
+	TaskLLMUsageDays      int
+	ToolAuditDays         int
+	TasksDays             int
+	ExecutionsDays        int
+	ArtifactsDays         int
 	// TaskMessagesDays prunes task_messages by created_at when > 0.
 	// Zero means "no independent prune" — messages still cascade
 	// from their parent task.
@@ -199,12 +200,13 @@ func Resolve(projectID string, perProject, defaults Policy) Policy {
 		return def
 	}
 	out := Policy{
-		ProjectID:        projectID,
-		TaskLLMUsageDays: pick(perProject.TaskLLMUsageDays, defaults.TaskLLMUsageDays, DefaultTaskLLMUsageDays),
-		ToolAuditDays:    pick(perProject.ToolAuditDays, defaults.ToolAuditDays, DefaultToolAuditDays),
-		TasksDays:        pick(perProject.TasksDays, defaults.TasksDays, DefaultTasksDays),
-		ExecutionsDays:   pick(perProject.ExecutionsDays, defaults.ExecutionsDays, DefaultExecutionsDays),
-		ArtifactsDays:    pick(perProject.ArtifactsDays, defaults.ArtifactsDays, DefaultArtifactsDays),
+		ProjectID:             projectID,
+		MemoryRequireApproval: perProject.MemoryRequireApproval,
+		TaskLLMUsageDays:      pick(perProject.TaskLLMUsageDays, defaults.TaskLLMUsageDays, DefaultTaskLLMUsageDays),
+		ToolAuditDays:         pick(perProject.ToolAuditDays, defaults.ToolAuditDays, DefaultToolAuditDays),
+		TasksDays:             pick(perProject.TasksDays, defaults.TasksDays, DefaultTasksDays),
+		ExecutionsDays:        pick(perProject.ExecutionsDays, defaults.ExecutionsDays, DefaultExecutionsDays),
+		ArtifactsDays:         pick(perProject.ArtifactsDays, defaults.ArtifactsDays, DefaultArtifactsDays),
 		// TaskMessagesDays / MemoryChunksDays default to 0 — opt-in
 		// only — so pick() with DefaultX=0 returns the per-project
 		// or default value verbatim. A 0-floor field would mistakenly
@@ -944,7 +946,7 @@ func (s *Sweeper) run(ctx context.Context, p Policy, previewOnly bool) (Counts, 
 	//    The class taxonomy's per-class TTL is the primary retention
 	//    mechanism; this lets operators apply a hard ceiling on top
 	//    when their chunk table grows unbounded.
-	if p.MemoryChunksDays > 0 {
+	if p.MemoryChunksDays > 0 && !p.MemoryRequireApproval {
 		if n, parked, err := s.pruneChunksOlderThan(ctx, p.ProjectID,
 			now.AddDate(0, 0, -p.MemoryChunksDays), previewOnly,
 		); err != nil {
@@ -969,14 +971,16 @@ func (s *Sweeper) run(ctx context.Context, p Policy, previewOnly bool) (Counts, 
 	//     cadence, container_autonomy.go initRetention). data_subject_links
 	//     do NOT cascade on chunk delete (polymorphic (table_name,row_id),
 	//     no FK), so pruneExpiredChunks removes the paired links first.
-	if n, parked, err := s.pruneExpiredChunks(ctx, p.ProjectID, now, previewOnly); err != nil {
-		s.warn("project_memory_chunks(expires_at)", err)
-		if firstErr == nil {
-			firstErr = err
+	if !p.MemoryRequireApproval {
+		if n, parked, err := s.pruneExpiredChunks(ctx, p.ProjectID, now, previewOnly); err != nil {
+			s.warn("project_memory_chunks(expires_at)", err)
+			if firstErr == nil {
+				firstErr = err
+			}
+		} else {
+			counts.MemoryExpired = n
+			counts.addQuarantined(parked)
 		}
-	} else {
-		counts.MemoryExpired = n
-		counts.addQuarantined(parked)
 	}
 
 	// 7c. The parked graph rows, once their grace has run out. Parking removes
@@ -1261,7 +1265,7 @@ func (s *Sweeper) pruneChunkBatch(
 		SELECT id FROM project_memory_chunks
 		WHERE project_id = $1 AND `+where+`
 		ORDER BY id
-		LIMIT $3`, projectID, threshold, chunkSweepBatchSize)
+		LIMIT $3 FOR UPDATE`, projectID, threshold, chunkSweepBatchSize)
 	if err != nil {
 		return 0, parked, fmt.Errorf("collect chunks for retention: %w", err)
 	}

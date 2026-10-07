@@ -588,7 +588,8 @@ func (c *Container) StopConfigWriterLease(ctx context.Context) error {
 }
 
 // verifyConfigGeneration confirms, after Reload returned nil, that each
-// op's target on disk holds the bytes the apply intended (§1.3).
+// op's target on disk holds the intended post-state: bytes for writes, absence
+// for deletes (§1.3, issue #66).
 //
 // What this DOES cover: a reload that reported success while the deployed
 // file was reverted, truncated, or rewritten by another writer between the
@@ -613,6 +614,18 @@ func (c *Container) verifyConfigGeneration(_ context.Context, ops []controlplane
 		target, err := c.resolveVerifyTarget(root, op.Path)
 		if err != nil {
 			return fmt.Errorf("verify generation: %s: %w", op.Path, err)
+		}
+		if op.Op == "delete" {
+			// A successful delete has no bytes to hash. Lstat also refuses
+			// dangling symlinks: a directory entry is not an absent target.
+			_, statErr := os.Lstat(target)
+			if os.IsNotExist(statErr) {
+				continue // still require registry activation below
+			}
+			if statErr != nil {
+				return fmt.Errorf("verify generation: %s deletion unreadable after reload: %w", op.Path, statErr)
+			}
+			return fmt.Errorf("verify generation: %s still exists after delete and reload", op.Path)
 		}
 		data, err := os.ReadFile(target)
 		if err != nil {

@@ -23,7 +23,8 @@ guess.
   courses,** including in titles, as long as it is clear you are not the
   project.
 - **Use the logo** to point at the project, for example a link badge or a
-  "works with" listing, at its published proportions and colours.
+  "works with" listing, at its published proportions and colours
+  ([docs.vornik.io/brand](https://docs.vornik.io/brand/)).
 
 ## You may not
 

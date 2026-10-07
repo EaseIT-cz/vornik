@@ -430,7 +430,7 @@ func companionToolDefs() []mcpToolDef {
 					"ttl_days": map[string]any{
 						"type":        "integer",
 						"minimum":     1,
-						"description": "Optional per-deposit TTL override in days. <= 0 / unset uses the class-policy default (companion_note = 30 days; spec / decision typically much longer).",
+						"description": "Optional per-deposit TTL override in days. <= 0 / unset uses the class-policy default (companion_note = 30 days; spec / decision typically much longer). If this deposit reinstates a forgotten Hermes-mirrored note, that note keeps its TTL span (its current expires_at - created_at), restarted from now, and ttl_days is ignored.",
 					},
 					"event_time": map[string]any{
 						"type":        "string",
@@ -523,6 +523,10 @@ func companionToolDefs() []mcpToolDef {
 						"type":        "string",
 						"description": "Optional repo scope for the deposited correction (migration 75). Typically the git remote '<host>/<path>'.",
 					},
+					"reason": map[string]any{
+						"type":        "string",
+						"description": "Set by the Hermes plugin only; ignored for other clients. Records why the chunks were refuted (mirror_forget or forget_command, chunk_ids mode).",
+					},
 				},
 			},
 		},
@@ -592,7 +596,7 @@ func companionToolDefs() []mcpToolDef {
 			Description: "Approve a DRAFT knowledge skill by id, promoting it to ACTIVE (the human gate). Requires skill_admin.",
 			InputSchema: map[string]any{
 				"type":       "object",
-				"properties": map[string]any{"id": map[string]any{"type": "string"}},
+				"properties": map[string]any{"id": map[string]any{"type": "string"}, "expected_version": map[string]any{"type": "integer", "minimum": 1, "description": "Version displayed in the review; refuses a newer proposal."}},
 				"required":   []any{"id"},
 			},
 		},
@@ -602,8 +606,9 @@ func companionToolDefs() []mcpToolDef {
 			InputSchema: map[string]any{
 				"type": "object",
 				"properties": map[string]any{
-					"id":     map[string]any{"type": "string"},
-					"reason": map[string]any{"type": "string"},
+					"id":               map[string]any{"type": "string"},
+					"reason":           map[string]any{"type": "string"},
+					"expected_version": map[string]any{"type": "integer", "minimum": 1, "description": "Version displayed in the review; refuses a newer proposal."},
 				},
 				"required": []any{"id"},
 			},

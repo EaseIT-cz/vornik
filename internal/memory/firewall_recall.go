@@ -119,7 +119,7 @@ func (s *Searcher) RecallWithContext(
 	if err != nil {
 		return nil, err
 	}
-	return s.applyFirewall(ctx, projectID, results, reqCtx), nil
+	return s.recordReturnedUse(ctx, projectID, s.applyFirewall(ctx, projectID, results, reqCtx))
 }
 
 // applyFirewall is the post-search firewall pass shared by

@@ -12,6 +12,7 @@ import (
 	"github.com/rs/zerolog"
 	"vornik.io/vornik/internal/authsession"
 	"vornik.io/vornik/internal/authz"
+	"vornik.io/vornik/internal/httpx/realip"
 )
 
 type fakeMinter struct {
@@ -169,10 +170,50 @@ func TestRequestIsSecure(t *testing.T) {
 	if requestIsSecure(plain) {
 		t.Fatal("a plaintext request read as secure")
 	}
-	proxied := httptest.NewRequest(http.MethodPost, "/x", nil)
-	proxied.Header.Set("X-Forwarded-Proto", "https")
+	// T15 (2026-10-07): the header alone, from an untrusted peer, is not TLS.
+	forged := httptest.NewRequest(http.MethodPost, "/x", nil)
+	forged.Header.Set("X-Forwarded-Proto", "https")
+	if requestIsSecure(forged) {
+		t.Fatal("X-Forwarded-Proto from an untrusted peer read as secure")
+	}
+	proxied := forged.WithContext(realip.WithTrustedPeer(forged.Context()))
 	if !requestIsSecure(proxied) {
-		t.Fatal("a TLS-terminating proxy's request read as insecure")
+		t.Fatal("a trusted TLS-terminating proxy's request read as insecure")
+	}
+}
+
+// T15 (2026-10-07, BACKLOG P2 "X-Forwarded-Proto is trusted from any
+// sender"): a direct plain-http client that claims HTTPS with the header is
+// still refused, because its peer is not a trusted proxy.
+func TestSessionExchange_ForgedForwardedProtoIsRefused(t *testing.T) {
+	s := &Server{logger: zerolog.Nop()}
+	subjects := &fakeSubjects{subject: &authz.ExchangeSubject{UserID: "user-1", Role: "user"}}
+	WithSessionExchange(subjects, &fakeMinter{raw: "tok"}, time.Hour, false)(s)
+
+	w := httptest.NewRecorder()
+	r := exchangeRequest("key-1")
+	r.Header.Set("X-Forwarded-Proto", "https")
+	s.SessionExchange(w, r)
+
+	if w.Code != http.StatusBadRequest || !strings.Contains(w.Body.String(), "INSECURE_TRANSPORT") {
+		t.Fatalf("forged X-Forwarded-Proto: %d %s, want 400 INSECURE_TRANSPORT", w.Code, w.Body.String())
+	}
+	if len(w.Result().Cookies()) != 0 {
+		t.Fatal("a refused exchange set a cookie")
+	}
+
+	// The same request from a trusted proxy proceeds with Secure cookies.
+	w = httptest.NewRecorder()
+	r = exchangeRequest("key-1")
+	r.Header.Set("X-Forwarded-Proto", "https")
+	s.SessionExchange(w, r.WithContext(realip.WithTrustedPeer(r.Context())))
+	if w.Code == http.StatusBadRequest || len(w.Result().Cookies()) == 0 {
+		t.Fatalf("trusted proxy: %d %s, want the exchange to proceed", w.Code, w.Body.String())
+	}
+	for _, c := range w.Result().Cookies() {
+		if !c.Secure {
+			t.Fatalf("cookie %q not Secure via a trusted proxy", c.Name)
+		}
 	}
 }
 
@@ -274,6 +315,7 @@ func TestSessionExchange_SecureFlagFollowsTheTransport(t *testing.T) {
 	w := httptest.NewRecorder()
 	r := exchangeRequest("key-1")
 	r.Header.Set("X-Forwarded-Proto", "https")
+	r = r.WithContext(realip.WithTrustedPeer(r.Context()))
 	s.SessionExchange(w, r)
 
 	for _, c := range w.Result().Cookies() {

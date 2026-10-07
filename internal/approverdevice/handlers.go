@@ -25,6 +25,14 @@ var pages = template.Must(template.New("").Funcs(template.FuncMap{
 	"page": func(title string, refresh int) map[string]any {
 		return map[string]any{"Title": title, "Refresh": refresh}
 	},
+	// shortID is the last 6 characters of a device id: enough for a person to
+	// tell two same-labelled devices apart; the full id stays the identifier.
+	"shortID": func(id string) string {
+		if len(id) <= 6 {
+			return id
+		}
+		return "dev_…" + id[len(id)-6:]
+	},
 	"when": func(t time.Time) string { return t.Format("2 Jan 2006 15:04 MST") },
 	"whenp": func(t *time.Time) string {
 		if t == nil {
@@ -70,7 +78,7 @@ func (s *Service) Handler(wrap func(http.Handler) http.Handler) http.Handler {
 	mux.HandleFunc("/ui/pair", s.pairPage)
 	mux.HandleFunc("/ui/pair/wait", s.pairWait)
 	mux.Handle("/ui/approve/", s.RequireDevice(http.HandlerFunc(s.approveRouter)))
-	h := securityHeaders(mux)
+	h := securityHeaders(s.requireSecureTransport(mux))
 	if wrap != nil {
 		h = wrap(h)
 	}

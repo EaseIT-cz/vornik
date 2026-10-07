@@ -179,7 +179,7 @@ func (c *Corrector) RefuteByClaim(ctx context.Context, projectID, wrongClaim str
 		// matched nothing confidently. Refute nothing.
 		return nil, nil
 	}
-	if _, err := c.Repo.MarkRefutedByIDs(ctx, projectID, ids); err != nil {
+	if _, err := c.Repo.MarkRefutedByIDs(ctx, projectID, ids, RefuteRouteMemoryCorrect); err != nil {
 		return nil, fmt.Errorf("memory corrector: mark refuted: %w", err)
 	}
 	return eligible, nil
@@ -195,14 +195,20 @@ func (c *Corrector) RefuteByClaim(ctx context.Context, projectID, wrongClaim str
 // touches nothing else. Project-scoped + idempotent via
 // MarkRefutedByIDs (already-refuted/superseded or wrong-project IDs
 // are skipped). Returns the count actually flipped.
-func (c *Corrector) RefuteByIDs(ctx context.Context, projectID string, chunkIDs []string) (int, error) {
+//
+// route is recorded on the flipped rows (GitHub #76); an empty route
+// records RefuteRouteMemoryCorrect.
+func (c *Corrector) RefuteByIDs(ctx context.Context, projectID string, chunkIDs []string, route string) (int, error) {
 	if c == nil || c.Repo == nil {
 		return 0, fmt.Errorf("memory corrector: not configured")
 	}
 	if projectID == "" || len(chunkIDs) == 0 {
 		return 0, fmt.Errorf("memory corrector: project id and at least one chunk id required")
 	}
-	return c.Repo.MarkRefutedByIDs(ctx, projectID, chunkIDs)
+	if route == "" {
+		route = RefuteRouteMemoryCorrect
+	}
+	return c.Repo.MarkRefutedByIDs(ctx, projectID, chunkIDs, route)
 }
 
 // ForgetByID is the deterministic single-chunk soft-evict behind the
@@ -237,7 +243,7 @@ func (c *Corrector) ForgetByID(ctx context.Context, projectID, chunkID string) (
 		// No such chunk in this project — nothing to evict.
 		return nil, nil
 	}
-	if _, err := c.Repo.MarkRefutedByIDs(ctx, projectID, []string{chunkID}); err != nil {
+	if _, err := c.Repo.MarkRefutedByIDs(ctx, projectID, []string{chunkID}, RefuteRouteChatForget); err != nil {
 		return nil, fmt.Errorf("memory corrector: mark refuted: %w", err)
 	}
 	preview := content

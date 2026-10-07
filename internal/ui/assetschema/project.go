@@ -90,9 +90,9 @@ func ProjectSchema() AssetSchema {
 				},
 			},
 			{
-				Title:    "Retention (days)",
+				Title:    "Retention",
 				Advanced: true,
-				Help:     "Days to keep each data class; 0 = inherit daemon default. Memory chunks are never pruned.",
+				Help:     "Days to keep each data class; 0 = inherit daemon default. Memory uses class TTLs unless phone approval is enabled.",
 				Fields: []Field{
 					{Path: "retention.task_llm_usage_days", Label: "Task LLM usage", Kind: KindInt},
 					{Path: "retention.tool_audit_days", Label: "Tool audit", Kind: KindInt},
@@ -102,6 +102,8 @@ func ProjectSchema() AssetSchema {
 					{Path: "retention.artifacts_days", Label: "Artifacts", Kind: KindInt},
 					{Path: "retention.task_messages_days", Label: "Task messages", Kind: KindInt},
 					{Path: "retention.memory_chunks_days", Label: "Memory chunks", Kind: KindInt},
+					{Path: "retention.memory_require_approval", Label: "Ask on phone before deleting memory", Kind: KindBool, Help: "Retain unused memory until a paired phone approves deletion. Disabling restores automatic TTL and age-based deletion."},
+					{Path: "retention.memory_idle_days", Label: "Memory idle days", Kind: KindInt, Help: "In phone approval mode, 0 defaults to 365 days since the last returned recall hit. Longer stored TTLs win. Range: 0–36500."},
 					{Path: "retention.memory_ingest_audit_days", Label: "Memory ingest audit", Kind: KindInt},
 					{Path: "retention.memory_policy_eval_allow_days", Label: "Policy eval (allow)", Kind: KindInt},
 					{Path: "retention.memory_policy_eval_block_days", Label: "Policy eval (block)", Kind: KindInt},

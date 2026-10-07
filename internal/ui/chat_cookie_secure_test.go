@@ -10,6 +10,8 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+
+	"vornik.io/vornik/internal/httpx/realip"
 )
 
 func chatCookieSecureFor(t *testing.T, mutate func(*http.Request)) bool {
@@ -38,7 +40,15 @@ func TestEnsureChatCookie_SecureOnlyOverHTTPS(t *testing.T) {
 	if !chatCookieSecureFor(t, func(r *http.Request) { r.TLS = &tls.ConnectionState{} }) {
 		t.Error("direct TLS: cookie must be Secure")
 	}
-	if !chatCookieSecureFor(t, func(r *http.Request) { r.Header.Set("X-Forwarded-Proto", "https") }) {
-		t.Error("proxied HTTPS (X-Forwarded-Proto): cookie must be Secure")
+	// T15 (2026-10-07, BACKLOG P2 "X-Forwarded-Proto is trusted from any
+	// sender"): the header from an untrusted peer is ignored.
+	if chatCookieSecureFor(t, func(r *http.Request) { r.Header.Set("X-Forwarded-Proto", "https") }) {
+		t.Error("X-Forwarded-Proto from an untrusted peer: cookie must NOT be Secure")
+	}
+	if !chatCookieSecureFor(t, func(r *http.Request) {
+		r.Header.Set("X-Forwarded-Proto", "https")
+		*r = *r.WithContext(realip.WithTrustedPeer(r.Context()))
+	}) {
+		t.Error("proxied HTTPS from a trusted proxy: cookie must be Secure")
 	}
 }

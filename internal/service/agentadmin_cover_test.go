@@ -133,6 +133,12 @@ func TestAgentAdmin_CoverFiledOnceOnTheNextVerb(t *testing.T) {
 				f.t.Fatal(err)
 			}
 		},
+		// GitHub #74 (2026-10-05 audit): list_recipes skipped coverOnRead.
+		"list_recipes": func(f *agentAdminFixture) {
+			if _, err := f.svc.ListRecipesJSON(context.Background(), f.key); err != nil {
+				f.t.Fatal(err)
+			}
+		},
 		"define_workflow": func(f *agentAdminFixture) {
 			slugs++
 			f.do(agentadmin.VerbDefineWorkflow, agentadmin.DefineWorkflowInput{Project: "aa", Slug: []string{"wa", "wb", "wc"}[slugs%3],

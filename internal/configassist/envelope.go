@@ -8,8 +8,8 @@
 //
 // The security claim this package makes, in its honest form (design §2.0):
 //
-//	The eleven helper tools minus the four git tools do not execute a
-//	program; the assistant may call only those seven; and nothing may be
+//	The assistant may call exactly seven non-executing helper tools.
+//	Git and document_render are OUT; nothing may be
 //	added to that seven without a test failing.
 //
 // envelope.go is that claim as code. Everything else in the package sits
@@ -58,10 +58,11 @@ var envelope = []Classification{
 	{"grep", In, "regex search under the snapshot root; no execution (Go implementation, not a subprocess)"},
 	{"glob", In, "path enumeration under the snapshot root"},
 	{"current_time", In, "clock read; deterministic under test"},
-	{"git_status", Out, "spawns git (the one subprocess agentloop permits); config editing needs no history — the apply engine owns git"},
+	{"git_status", Out, "spawns git; config editing needs no history — the apply engine owns git"},
 	{"git_diff", Out, "spawns git; the apply engine renders the human diff from the op bundle"},
 	{"git_log", Out, "spawns git; out of envelope by the 2026-08-03 no-exec ruling"},
 	{"git_show", Out, "spawns git; out of envelope by the 2026-08-03 no-exec ruling"},
+	{"document_render", Out, "spawns document converters in the agent image; forbidden in the daemon's in-process assistant by the no-exec ruling"},
 }
 
 // Classify returns the classification for a tool name and whether one

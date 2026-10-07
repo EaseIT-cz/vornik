@@ -31,6 +31,9 @@ type State struct {
 	// FileHashes maps a configs-relative path of this namespace's files to
 	// its current sha256 (hex). A path absent from it does not exist.
 	FileHashes map[string]string
+	// ProjectYAML captures project bytes from the same read as FileHashes.
+	// Metadata edits patch these bytes without discarding operator settings.
+	ProjectYAML map[string][]byte
 	// Locked holds every path and entity ID a pending change holds.
 	Locked map[string]bool
 	// LockedBy names, per lock, the waiting request that holds it ("<id>

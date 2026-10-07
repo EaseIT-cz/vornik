@@ -234,6 +234,64 @@ class ApprovalsCommandTest(unittest.TestCase):
                                set_value=broken, unset_value=lambda k: None, out=out.append)
         self.assertNotEqual(rc, 0)
 
+    # GitHub #77 (2026-10-05 audit): a pin on a disconnected namespace was kept and
+    # `on` reported success; every later prompt was then denied.
+    def test_on_replaces_a_pin_on_a_disconnected_namespace(self):
+        rc, writes, out = self.run_cmd(["approvals", "on"], hermes_config("hermes", pinned="gone"))
+        self.assertEqual(rc, 0)
+        self.assertEqual(writes, [("set", approval.NAMESPACE_KEY, "hermes"),
+                                  ("set", approval.TRANSPORT_KEY, approval.TRANSPORT_NAME)])
+        self.assertIn('Replaced the approval pin on "gone" (no longer connected) with "hermes".', out)
+
+    def test_on_keeps_a_valid_pin(self):
+        rc, writes, out = self.run_cmd(["approvals", "on"], hermes_config("hermes", pinned="hermes"))
+        self.assertEqual(rc, 0)
+        self.assertNotIn(("set", approval.NAMESPACE_KEY, "hermes"), writes)
+        self.assertNotIn("Replaced", out)
+
+    def test_on_with_two_namespaces_and_a_stale_pin_refuses_and_names_it(self):
+        rc, writes, out = self.run_cmd(["approvals", "on"], hermes_config("a1", "b2", pinned="gone"))
+        self.assertEqual(rc, 1)
+        self.assertEqual(writes, [])
+        self.assertIn("gone", out)
+        self.assertIn("--namespace", out)
+
+    def test_on_with_two_namespaces_and_a_valid_pin_proceeds_on_the_pin(self):
+        rc, writes, out = self.run_cmd(["approvals", "on"], hermes_config("a1", "b2", pinned="b2"))
+        self.assertEqual(rc, 0)
+        self.assertEqual(writes, [("set", approval.TRANSPORT_KEY, approval.TRANSPORT_NAME)])
+        self.assertIn("namespace b2", out)
+
+    def test_explicit_namespace_over_a_stale_pin_prints_no_replaced_notice(self):
+        rc, writes, out = self.run_cmd(["approvals", "on", "--namespace", "b2"], hermes_config("a1", "b2", pinned="gone"))
+        self.assertEqual(rc, 0)
+        self.assertIn(("set", approval.NAMESPACE_KEY, "b2"), writes)
+        self.assertNotIn("Replaced", out)
+
+    def test_replace_writes_the_pin_first_and_a_failed_second_write_is_inert(self):
+        # The new pin goes first: if the transport write then fails the state is
+        # "valid pin, not selected", never "selected, stale pin" (all denied).
+        writes, out = [], []
+
+        def flaky(k, v):
+            writes.append(k)
+            if k == approval.TRANSPORT_KEY:
+                raise SystemExit(1)
+
+        parser = argparse.ArgumentParser()
+        cli.setup(parser)
+        with mock.patch.object(approval, "_executable", lambda p: True):
+            rc = cli.approvals(parser.parse_args(["approvals", "on"]), load_config=lambda: hermes_config("hermes", pinned="gone"),
+                               set_value=flaky, unset_value=lambda k: None, out=out.append)
+        self.assertNotEqual(rc, 0)
+        self.assertEqual(writes, [approval.NAMESPACE_KEY, approval.TRANSPORT_KEY])
+        self.assertNotIn("Replaced", "\n".join(out))
+
+    def test_status_marks_a_stale_pin(self):
+        out = []
+        cli.status(argparse.Namespace(), env={}, out=out.append, load_config=lambda: hermes_config("hermes", pinned="gone", selected=True))
+        self.assertIn('"gone" (no longer connected)', "\n".join(out))
+
     def test_off_clears_the_selection_only(self):
         rc, writes, _ = self.run_cmd(["approvals", "off"], hermes_config("hermes", selected=True))
         self.assertEqual(rc, 0)

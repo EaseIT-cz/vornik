@@ -67,3 +67,84 @@ func TestRequestCredential(t *testing.T) {
 		t.Fatalf("the refusal echoed the value: %s", c.Reason)
 	}
 }
+
+// twoProjectTree is treeWithServer plus a second project "ops" whose server
+// also uses FIO, in the same namespace.
+func twoProjectTree(t *testing.T) *tree {
+	t.Helper()
+	tr := treeWithServer(t)
+	tr.apply(tr.render(VerbCreateProject, CreateProjectInput{Slug: "ops", Purpose: "operations"}))
+	tr.advert["https://ops.example/mcp"] = []string{"list"}
+	tr.apply(tr.render(VerbAddMCPServer, AddMCPServerInput{Project: "ops", Name: "opsrv", URL: "https://ops.example/mcp",
+		Auth: MCPAuthInput{Mode: "static", Credential: "FIO"}}))
+	return tr
+}
+
+func renderLocked(t *testing.T, tr *tree, holder string, in RequestCredentialInput) Change {
+	t.Helper()
+	st := tr.state()
+	st.Locked["credential:hermes/FIO"] = true
+	if holder != "" {
+		st.LockedBy = map[string]string{"credential:hermes/FIO": holder}
+	}
+	raw, _ := json.Marshal(in)
+	c, err := tr.r.Render(st, VerbRequestCredential, raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return c
+}
+
+// GitHub #80 (2026-10-03): the credential is namespace-scoped, so a second
+// project's request while the first is pending said "part of a change waiting
+// for approval". It is an applied no-op that names the credential, the request
+// and the project.
+func TestRequestCredential_SecondProjectWhilePending(t *testing.T) {
+	tr := twoProjectTree(t)
+	c := renderLocked(t, tr, "req-1 (credential_slot)", RequestCredentialInput{Project: "ops", Name: "FIO", Purpose: "x", Kind: "secret"})
+	if c.Class != Inert || len(c.Ops) != 0 || c.Slot != nil {
+		t.Fatalf("want an inert no-op, got class %v ops %d slot %v (%s)", c.Class, len(c.Ops), c.Slot, c.Reason)
+	}
+	for _, want := range []string{"FIO", "hermes--ops", "req-1", "already requested", "Nothing more to request"} {
+		if !strings.Contains(c.Sentence, want) {
+			t.Errorf("sentence lacks %q: %s", want, c.Sentence)
+		}
+	}
+	if strings.Contains(c.Sentence, "waiting for approval") || strings.Contains(c.Sentence, "credential_slot") {
+		t.Errorf("sentence leaks the old wording or the kind: %s", c.Sentence)
+	}
+}
+
+// Validation runs before the lock: a name none of B's servers use is still
+// refused for that reason, not answered with the no-op sentence.
+func TestRequestCredential_LockedButUnboundNameStillRefused(t *testing.T) {
+	tr := twoProjectTree(t)
+	st := tr.state()
+	st.Locked["credential:hermes/OTHER"] = true
+	st.LockedBy = map[string]string{"credential:hermes/OTHER": "req-1 (credential_slot)"}
+	raw, _ := json.Marshal(RequestCredentialInput{Project: "ops", Name: "OTHER", Purpose: "x", Kind: "secret"})
+	c, err := tr.r.Render(st, VerbRequestCredential, raw)
+	if err != nil || c.Class != Refused || !strings.Contains(c.Reason, "no server or API of hermes--ops uses") {
+		t.Fatalf("got %v %q %v", c.Class, c.Reason, err)
+	}
+}
+
+// Already entered: no lock is held, so B's request is the rotation path (a
+// widening slot), neither the no-op sentence nor a refusal.
+func TestRequestCredential_AlreadyEnteredIsRotation(t *testing.T) {
+	tr := twoProjectTree(t)
+	c := tr.render(VerbRequestCredential, RequestCredentialInput{Project: "ops", Name: "FIO", Purpose: "x", Kind: "secret"})
+	if c.Class != Widening || c.Slot == nil || c.Slot.Project != "hermes--ops" {
+		t.Fatalf("got %v %q", c.Class, c.Reason)
+	}
+}
+
+// No known holder (not reachable from the service, which always sets
+// LockedBy with a lock; defence in depth) keeps the generic refusal.
+func TestRequestCredential_LockWithoutHolderStillRefused(t *testing.T) {
+	tr := twoProjectTree(t)
+	c := renderLocked(t, tr, "", RequestCredentialInput{Project: "ops", Name: "FIO", Purpose: "x", Kind: "secret"})
+	if c.Class != Refused || !strings.Contains(c.Reason, "waiting for approval") {
+		t.Fatalf("got %v %q", c.Class, c.Reason)
+	}
+}

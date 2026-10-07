@@ -277,11 +277,11 @@ func (s *Service) Cover(ctx context.Context, a *persistence.BrokerAction) (bool,
 // changed since it was created is suspended here, on the next action (item
 // 6, round 4 F4). miss names why a matched grant could not be used.
 func (s *Service) matchingGrant(ctx context.Context, a *persistence.BrokerAction, key Key) (*persistence.BrokerStandingGrant, string, error) {
-	cands, err := s.cfg.Grants.ListForAction(ctx, a.ProjectID, a.WorkflowID, a.ActionKind)
+	now := s.now()
+	cands, err := s.cfg.Grants.ListForAction(ctx, a.ProjectID, a.WorkflowID, a.ActionKind, now)
 	if err != nil {
 		return nil, "", err
 	}
-	now := s.now()
 	miss := ""
 	reach, reachRead := "", false
 	for _, g := range cands { // sooner expiry first
@@ -449,7 +449,7 @@ func (s *Service) Views(ctx context.Context, f persistence.BrokerGrantFilter) ([
 // scope (agent namespace, or operator projects) with the total.
 func (s *Service) Digest(ctx context.Context) error {
 	now := s.now()
-	due, err := s.cfg.Grants.DigestDue(ctx, now.Add(-24*time.Hour))
+	due, err := s.cfg.Grants.DigestDue(ctx, now.Add(-24*time.Hour), now)
 	if err != nil {
 		return err
 	}

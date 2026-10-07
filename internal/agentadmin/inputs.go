@@ -9,6 +9,8 @@ import (
 	"regexp"
 	"strings"
 	"unicode"
+
+	"vornik.io/vornik/internal/agentns"
 )
 
 // The typed inputs of the mutating verbs (§6). Decoded strictly: an unknown
@@ -122,6 +124,28 @@ var (
 	maxTextRunes  = 8000
 	maxShortRunes = 300
 )
+
+// ProjectRefRule and NewSlugRule are the agent-facing statement of what a
+// project reference may be; the tool schemas render them (design section 5,
+// amended 2026-10-07) so the text and the code cannot drift.
+const (
+	ProjectRefRule = "The project's slug, or its full id <namespace>--<slug> as list_my_setup shows it."
+	NewSlugRule    = "A bare slug only (a full id is refused here): 2-32 chars: a-z, 0-9, single dashes."
+)
+
+// ProjectSlug is projectSlug for callers outside the package that read a
+// verb's raw input (the service's pre-approval tool listing).
+func ProjectSlug(ns, s string) string { return projectSlug(ns, s) }
+
+// projectSlug accepts a slug or the full id "<ns>--<slug>" of a project in
+// namespace ns and returns the slug. It strips the prefix once (a project
+// whose slug equals the namespace has the full id "ns--ns"). A full id in
+// another namespace is returned unchanged, so it is refused: "--" is not a
+// slug character (checkSlug) and "ns--other--x" names no project. BACKLOG
+// 2026-10-03.
+func projectSlug(ns, s string) string {
+	return strings.TrimPrefix(s, ns+agentns.Separator)
+}
 
 // checkSlug refuses a slug that is malformed or contains the reserved "--".
 func checkSlug(what, s string) error {

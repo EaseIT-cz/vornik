@@ -9,10 +9,10 @@
 **Vornik runs a swarm of AI agents as durable, leased tasks — on your own hardware,
 in isolated containers, with no network egress by default.**
 
-[![License](https://img.shields.io/badge/license-AGPL--3.0-558A98)](LICENSE)
+[![License](https://img.shields.io/badge/license-AGPL--3.0-1665AD)](LICENSE)
 [![CI](https://github.com/EaseIT-cz/vornik/actions/workflows/ci.yaml/badge.svg)](https://github.com/EaseIT-cz/vornik/actions/workflows/ci.yaml)
-[![Docs](https://img.shields.io/badge/docs-vornik.io-558A98)](https://docs.vornik.io)
-[![Stars](https://img.shields.io/github/stars/grinco/vornik?style=flat&color=E8A87C)](https://github.com/EaseIT-cz/vornik/stargazers)
+[![Docs](https://img.shields.io/badge/docs-vornik.io-1665AD)](https://docs.vornik.io)
+[![Stars](https://img.shields.io/github/stars/EaseIT-cz/vornik?style=flat&color=1665AD)](https://github.com/EaseIT-cz/vornik/stargazers)
 
 [Quick start](#quick-start) · [How it works](#how-it-works) · [Benchmarks](#benchmarks-measured-not-asserted) · [Docs](https://docs.vornik.io)
 
@@ -86,7 +86,7 @@ One daemon, one database, agents in containers. Projects choose a **swarm** (who
 and a **workflow** (how); you submit tasks and Vornik does the rest.
 
 ```mermaid
-%%{init: {'theme':'base','themeVariables':{'primaryColor':'#EEF5F7','primaryTextColor':'#1F3B44','primaryBorderColor':'#558A98','lineColor':'#558A98','fontSize':'14px'}}}%%
+%%{init: {'theme':'base','themeVariables':{'primaryColor':'#FFFFFF','primaryTextColor':'#101826','primaryBorderColor':'#1C7ED6','lineColor':'#1C7ED6','fontSize':'14px'}}}%%
 flowchart LR
     You([You / your agent]) -->|submit task| D
     subgraph Host["your host — rootless"]
@@ -112,7 +112,7 @@ A crashed agent, a restarted daemon, or a killed container does not lose work. L
 expire and the task returns to the queue; every transition is persisted and auditable.
 
 ```mermaid
-%%{init: {'theme':'base','themeVariables':{'primaryColor':'#EEF5F7','primaryTextColor':'#1F3B44','primaryBorderColor':'#558A98','lineColor':'#558A98','fontSize':'14px'}}}%%
+%%{init: {'theme':'base','themeVariables':{'primaryColor':'#FFFFFF','primaryTextColor':'#101826','primaryBorderColor':'#1C7ED6','lineColor':'#1C7ED6','fontSize':'14px'}}}%%
 stateDiagram-v2
     [*] --> QUEUED: submit
     QUEUED --> LEASED: worker claims
@@ -131,7 +131,7 @@ Deposits pass a gate stack before they land, and recall fuses a semantic and a k
 arm. This is the part the benchmarks below measure.
 
 ```mermaid
-%%{init: {'theme':'base','themeVariables':{'primaryColor':'#EEF5F7','primaryTextColor':'#1F3B44','primaryBorderColor':'#558A98','lineColor':'#558A98','fontSize':'14px'}}}%%
+%%{init: {'theme':'base','themeVariables':{'primaryColor':'#FFFFFF','primaryTextColor':'#101826','primaryBorderColor':'#1C7ED6','lineColor':'#1C7ED6','fontSize':'14px'}}}%%
 flowchart LR
     In([agent deposits]) --> G{gate stack}
     G -->|rejected| X[quarantine]

@@ -3,6 +3,7 @@ package repotest
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sync"
 	"testing"
 	"time"
@@ -18,6 +19,19 @@ import (
 func RunBrokerGrantSuite(t *testing.T, grants persistence.BrokerGrantRepository, actions persistence.BrokerActionRepository) {
 	t.Helper()
 	h := &standingHarness{grants: grants, actions: actions, ctx: context.Background(), now: time.Now().UTC().Truncate(time.Second)}
+	// Final review aa4a, 2026-10-07: the harness used to leave every grant it
+	// created live (7-day expiry) in the shared Postgres test DB. They sorted
+	// ahead of a later run's grant under DigestDue's ORDER BY digest_through
+	// LIMIT 500 and would have failed Gauges_covered_list_and_digest again.
+	// Every subtest now revokes what it created (createGrant); this check
+	// fails the run if any live grant is left behind (a delta, so a shared DB
+	// that already holds other live grants is fine).
+	liveBefore := h.liveTotal(t)
+	t.Cleanup(func() {
+		if after := h.liveTotal(t); after != liveBefore {
+			t.Errorf("the suite left %d live grants behind (before %d, after %d)", after-liveBefore, liveBefore, after)
+		}
+	})
 	t.Run("MissContract", func(t *testing.T) { AssertMissRepo(t, "BrokerGrantRepository.Get", grants.Get) })
 	t.Run("Seed_approve_creates_the_grant_in_one_transaction", func(t *testing.T) { grantSeedCreates(t, h) })
 	t.Run("Stale_seed_hash_creates_nothing", func(t *testing.T) { grantStaleSeed(t, h) })
@@ -34,6 +48,10 @@ func RunBrokerGrantSuite(t *testing.T, grants persistence.BrokerGrantRepository,
 	t.Run("Only_pre_send_error_refunds_and_only_once", func(t *testing.T) { grantRefund(t, h) })
 	t.Run("Gauges_covered_list_and_digest", func(t *testing.T) { grantGaugesAndDigest(t, h) })
 	t.Run("Digest_window_boundary_below_a_microsecond", func(t *testing.T) { grantDigestBoundary(t, h) })
+	t.Run("Live_grant_beyond_200_dead", func(t *testing.T) { grantLiveBeyondHistory(t, h) })
+	t.Run("Digest_due_is_not_starved_by_dead_grants", func(t *testing.T) { grantDigestNotStarved(t, h) })
+	t.Run("Dead_grant_owes_its_final_digest", func(t *testing.T) { grantDeadOwesFinalDigest(t, h) })
+	t.Run("Dead_tail_is_capped_most_recent_first", func(t *testing.T) { grantDeadTailCapped(t, h) })
 }
 
 type standingHarness struct {
@@ -41,6 +59,36 @@ type standingHarness struct {
 	actions persistence.BrokerActionRepository
 	ctx     context.Context
 	now     time.Time
+}
+
+func (h *standingHarness) liveTotal(t *testing.T) int {
+	t.Helper()
+	rows, err := h.grants.CountLive(h.ctx, time.Now().UTC())
+	if err != nil {
+		t.Fatal(err)
+	}
+	n := 0
+	for _, r := range rows {
+		n += int(r.Live)
+	}
+	return n
+}
+
+// createGrant is ApproveSeedAndCreate plus a cleanup that revokes the grant
+// (through the repository's Revoke) and settles its digest, so neither a live
+// nor a digest-owing row outlives the subtest. A failed create is ignored by
+// the cleanup: Revoke of a missing id is a no-op or a miss.
+func (h *standingHarness) createGrant(t *testing.T, seedActionID, seedHash string, g *persistence.BrokerStandingGrant, limit int, now time.Time) error {
+	t.Helper()
+	err := h.grants.ApproveSeedAndCreate(h.ctx, seedActionID, seedHash, "device:dev_1", g, limit, now)
+	id := g.ID
+	t.Cleanup(func() {
+		_ = h.grants.Revoke(h.ctx, id, time.Now().UTC())
+		if cur, gerr := h.grants.Get(h.ctx, id); gerr == nil {
+			_, _, _ = h.grants.AdvanceDigest(h.ctx, id, cur.DigestThrough, time.Now().UTC().Add(48*time.Hour))
+		}
+	})
+	return err
 }
 
 // pending stages and promotes one pending action of project/workflow.
@@ -74,7 +122,7 @@ func (h *standingHarness) seeded(t *testing.T, project, keyHash string, uses int
 	t.Helper()
 	seed := h.pending(t, project, "wf-mail", `{"to":"a@x.com"}`)
 	g := h.grantFor(seed, keyHash, uses)
-	if err := h.grants.ApproveSeedAndCreate(h.ctx, seed.ActionID, seed.ArgsSHA256, "device:dev_1", g, 10, h.now); err != nil {
+	if err := h.createGrant(t, seed.ActionID, seed.ArgsSHA256, g, 10, h.now); err != nil {
 		t.Fatalf("seed: %v", err)
 	}
 	return g
@@ -120,7 +168,7 @@ func grantSeedCreates(t *testing.T, h *standingHarness) {
 func grantStaleSeed(t *testing.T, h *standingHarness) {
 	seed := h.pending(t, uniqueID("p"), "wf-mail", `{"to":"a@x.com"}`)
 	g := h.grantFor(seed, "kh", 5)
-	err := h.grants.ApproveSeedAndCreate(h.ctx, seed.ActionID, "sha-stale", "device:dev_1", g, 10, h.now)
+	err := h.createGrant(t, seed.ActionID, "sha-stale", g, 10, h.now)
 	if !errors.Is(err, persistence.ErrBrokerActionNoTransition) {
 		t.Fatalf("stale hash: %v, want ErrBrokerActionNoTransition", err)
 	}
@@ -145,12 +193,12 @@ func grantLiveBound(t *testing.T, h *standingHarness) {
 	seedOld := h.pending(t, project, "wf-mail", `{}`)
 	old := h.grantFor(seedOld, "k4", 5)
 	old.ExpiresAt = h.now.Add(-time.Minute)
-	if err := h.grants.ApproveSeedAndCreate(h.ctx, seedOld.ActionID, seedOld.ArgsSHA256, "device:dev_1", old, 3, h.now); err != nil {
+	if err := h.createGrant(t, seedOld.ActionID, seedOld.ArgsSHA256, old, 3, h.now); err != nil {
 		t.Fatalf("an expired grant is not live and must not hit the bound: %v", err)
 	}
 	seed := h.pending(t, project, "wf-mail", `{}`)
 	g := h.grantFor(seed, "k5", 5)
-	if err := h.grants.ApproveSeedAndCreate(h.ctx, seed.ActionID, seed.ArgsSHA256, "device:dev_1", g, 2, h.now); !errors.Is(err, persistence.ErrBrokerGrantLimit) {
+	if err := h.createGrant(t, seed.ActionID, seed.ArgsSHA256, g, 2, h.now); !errors.Is(err, persistence.ErrBrokerGrantLimit) {
 		t.Fatalf("third live grant with a bound of 2: %v, want ErrBrokerGrantLimit", err)
 	}
 	if _, err := h.grants.Get(h.ctx, g.ID); !errors.Is(err, persistence.ErrNotFound) {
@@ -207,7 +255,7 @@ func grantLiveBoundConcurrent(t *testing.T, h *standingHarness) {
 		wg.Add(1)
 		go func(i int, s *persistence.BrokerAction) {
 			defer wg.Done()
-			errs[i] = h.grants.ApproveSeedAndCreate(h.ctx, s.ActionID, s.ArgsSHA256, "device:dev_1", h.grantFor(s, "k", 5), 2, h.now)
+			errs[i] = h.createGrant(t, s.ActionID, s.ArgsSHA256, h.grantFor(s, "k", 5), 2, h.now)
 		}(i, s)
 	}
 	wg.Wait()
@@ -337,7 +385,7 @@ func grantStatesStopCoverage(t *testing.T, h *standingHarness) {
 	seedShort := h.pending(t, project, "wf-mail", `{}`)
 	short := h.grantFor(seedShort, "ks", 5)
 	short.ExpiresAt = h.now.Add(time.Hour)
-	if err := h.grants.ApproveSeedAndCreate(h.ctx, seedShort.ActionID, seedShort.ArgsSHA256, "device:dev_1", short, 10, h.now); err != nil {
+	if err := h.createGrant(t, seedShort.ActionID, seedShort.ArgsSHA256, short, 10, h.now); err != nil {
 		t.Fatal(err)
 	}
 	if err := cover(short, short.ExpiresAt.Add(-time.Second)); err != nil {
@@ -576,7 +624,7 @@ func grantGaugesAndDigest(t *testing.T, h *standingHarness) {
 	if err != nil || len(covered) != 2 {
 		t.Fatalf("CoveredActions = %d, %v", len(covered), err)
 	}
-	due, err := h.grants.DigestDue(h.ctx, h.now)
+	due, err := h.grants.DigestDue(h.ctx, h.now, h.now)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -603,7 +651,7 @@ func grantGaugesAndDigest(t *testing.T, h *standingHarness) {
 		t.Fatalf("List = %d %v", len(ops), err)
 	}
 	grantAllAgentNamespaces(t, h)
-	cands, err := h.grants.ListForAction(h.ctx, project, "wf-mail", "send_reply")
+	cands, err := h.grants.ListForAction(h.ctx, project, "wf-mail", "send_reply", h.now)
 	if err != nil || len(cands) != 2 {
 		t.Fatalf("ListForAction = %d %v", len(cands), err)
 	}
@@ -616,7 +664,7 @@ func grantAllAgentNamespaces(t *testing.T, h *standingHarness) {
 	seedA := h.pending(t, agentProject, "wf-mail", `{}`)
 	ga := h.grantFor(seedA, "ka", 5)
 	ga.Namespace = "nsa"
-	if err := h.grants.ApproveSeedAndCreate(h.ctx, seedA.ActionID, seedA.ArgsSHA256, "device:dev_1", ga, 10, h.now); err != nil {
+	if err := h.createGrant(t, seedA.ActionID, seedA.ArgsSHA256, ga, 10, h.now); err != nil {
 		t.Fatal(err)
 	}
 	all, err := h.grants.List(h.ctx, persistence.BrokerGrantFilter{Namespace: persistence.BrokerGrantAllAgentNamespaces, Limit: 500})
@@ -661,5 +709,139 @@ func grantDigestBoundary(t *testing.T, h *standingHarness) {
 	n, ok, err = h.grants.AdvanceDigest(h.ctx, g.ID, got.DigestThrough, at.Add(time.Hour))
 	if err != nil || !ok || n != 0 {
 		t.Fatalf("the next window counted %d (ok %v, %v), want 0", n, ok, err)
+	}
+}
+
+// insertDead creates n expired grants of one class, the i-th expiring
+// (base - i minutes), through the repository's own create path
+// (ApproveSeedAndCreate with a past expiry): a dead grant is not counted
+// by the live ceiling, so no bypass is needed. Returns the grant ids in
+// creation order (most recent expiry first).
+func (h *standingHarness) insertDead(t *testing.T, project string, n int, base, digestThrough time.Time) []string {
+	t.Helper()
+	ids := make([]string, 0, n)
+	for i := 0; i < n; i++ {
+		seed := h.pending(t, project, "wf-mail", `{"to":"a@x.com"}`)
+		g := h.grantFor(seed, fmt.Sprintf("k%03d", i), 1)
+		g.ExpiresAt = base.Add(-time.Duration(i) * time.Minute)
+		g.DigestThrough = digestThrough.Add(-time.Duration(i) * time.Minute)
+		if err := h.createGrant(t, seed.ActionID, seed.ArgsSHA256, g, 10, h.now); err != nil {
+			t.Fatalf("dead grant %d: %v", i, err)
+		}
+		ids = append(ids, g.ID)
+	}
+	return ids
+}
+
+// GitHub #78 (2026-10-05 audit): ListForAction sorted by expiry and cut at 200
+// before the matcher filtered, so 200 expired grants hid a new live one.
+// The dead grants are created through ApproveSeedAndCreate with a past expiry.
+func grantLiveBeyondHistory(t *testing.T, h *standingHarness) {
+	project := uniqueID("p78")
+	h.insertDead(t, project, 200, h.now.Add(-time.Hour), h.now)
+	live := h.seeded(t, project, "klive", 1)
+	cands, err := h.grants.ListForAction(h.ctx, project, "wf-mail", "send_reply", h.now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(cands) == 0 || cands[0].ID != live.ID {
+		t.Fatalf("the live grant is not first in %d candidates", len(cands))
+	}
+	if len(cands) > 201 {
+		t.Fatalf("%d candidates, want the live grant plus at most 200 dead", len(cands))
+	}
+}
+
+// GitHub #78: the dead tail is the 200 MOST RECENT dead grants, in that
+// order, after every live grant (sooner expiry first). The oldest dead
+// grant of 201 is the one that falls off.
+func grantDeadTailCapped(t *testing.T, h *standingHarness) {
+	project := uniqueID("p78t")
+	dead := h.insertDead(t, project, 201, h.now.Add(-time.Hour), h.now)
+	liveLate := h.seeded(t, project, "klate", 1)
+	liveSoon := h.grantFor(h.pending(t, project, "wf-mail", `{}`), "ksoon", 1)
+	liveSoon.ExpiresAt = h.now.Add(time.Hour)
+	if err := h.createGrant(t, liveSoon.SeedActionID, h.status(t, liveSoon.SeedActionID).ArgsSHA256, liveSoon, 10, h.now); err != nil {
+		t.Fatal(err)
+	}
+	cands, err := h.grants.ListForAction(h.ctx, project, "wf-mail", "send_reply", h.now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(cands) != 202 {
+		t.Fatalf("%d candidates, want 2 live + 200 dead", len(cands))
+	}
+	if cands[0].ID != liveSoon.ID || cands[1].ID != liveLate.ID {
+		t.Fatalf("live order %s, %s; want the sooner-expiring first", cands[0].ID, cands[1].ID)
+	}
+	for i, g := range cands[2:] {
+		if g.ID != dead[i] {
+			t.Fatalf("dead tail position %d is %s, want %s (most recent expiry first)", i, g.ID, dead[i])
+		}
+	}
+}
+
+// GitHub #78 sibling (fix round 1, found in review): DigestDue ordered by
+// digest_through with a global LIMIT 500 and no liveness filter, so 500
+// dead grants with an old digest_through starved every live grant's digest.
+// A dead grant owes a digest only while covered actions are uncounted.
+// The dead grants are inert rows left in the shared database (the
+// repository has no delete); the filter is what keeps them from affecting
+// any other test's DigestDue.
+func grantDigestNotStarved(t *testing.T, h *standingHarness) {
+	project := uniqueID("p78d")
+	h.insertDead(t, project, 501, h.now.Add(-100*time.Hour), h.now.Add(-72*time.Hour))
+	live := h.seeded(t, project, "kd", 5)
+	due, err := h.grants.DigestDue(h.ctx, h.now, h.now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, d := range due {
+		if d.ID == live.ID {
+			found = true
+		}
+		if d.Namespace == "" && d.ProjectID == project && d.ID != live.ID {
+			t.Fatalf("dead grant %s with nothing uncounted is still due", d.ID)
+		}
+	}
+	if !found {
+		t.Fatalf("the live grant is not due behind 501 dead ones (%d returned)", len(due))
+	}
+}
+
+// A dead grant that still has uncounted covered actions owes its final
+// digest, and stops being due once it is advanced.
+func grantDeadOwesFinalDigest(t *testing.T, h *standingHarness) {
+	project := uniqueID("p78f")
+	g := h.seeded(t, project, "kf", 5)
+	a := h.pending(t, project, "wf-mail", `{}`)
+	if err := h.grants.ApproveUnderGrant(h.ctx, a.ActionID, a.ArgsSHA256, g.ID, "kf", h.now.Add(time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.grants.Revoke(h.ctx, g.ID, h.now.Add(2*time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	isDue := func() *persistence.BrokerStandingGrant {
+		due, err := h.grants.DigestDue(h.ctx, h.now.Add(time.Hour), h.now.Add(time.Hour))
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, d := range due {
+			if d.ID == g.ID {
+				return d
+			}
+		}
+		return nil
+	}
+	d := isDue()
+	if d == nil {
+		t.Fatal("a revoked grant with an uncounted covered action owes its final digest")
+	}
+	if n, ok, err := h.grants.AdvanceDigest(h.ctx, g.ID, d.DigestThrough, h.now.Add(time.Hour)); err != nil || !ok || n != 1 {
+		t.Fatalf("AdvanceDigest = %d %v %v", n, ok, err)
+	}
+	if isDue() != nil {
+		t.Fatal("a revoked grant with nothing uncounted is still due")
 	}
 }

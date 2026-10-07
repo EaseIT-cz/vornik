@@ -481,10 +481,10 @@ roles:
             self-containment AND misleads the reader).
 
         VORNIK THEME — use these EXACT colors (do not invent a palette):
-          --bg:#F5F1EC; --card:#FFFFFF; --raised:#FAF7F3; --border:#E0D5C9;
-          --ink:#1B2026; --body:#3F4750; --muted:#7A8492;
-          --brand:#558A98; --brand-strong:#427280; --brand-deep:#305A68;
-          --accent:#659157; --accent-soft:#D2E3CA;
+          --bg:#F6F4EF; --card:#FFFFFF; --raised:#FBFAF7; --border:#E6E1D6;
+          --ink:#101826; --body:#2E3643; --muted:#5E6672;
+          --brand:#1C7ED6; --brand-strong:#1665AD; --brand-deep:#11528D;
+          --accent:#1665AD; --accent-soft:#E3EEF9;
           Font: -apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif.
           Page background --bg; a centered content column ~880px max-width; cards on
           --card with a 1px --border and border-radius 10-12px; hero/section accents

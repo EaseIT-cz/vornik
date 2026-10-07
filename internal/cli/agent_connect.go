@@ -46,6 +46,8 @@ assistant's shell could read Vornik's files, and connect refuses unless you
 pass --accept-shared-user.`,
 	Args:         cobra.ExactArgs(1),
 	SilenceUsage: true,
+	// A refusal is printed once by connect itself (GitHub #75).
+	SilenceErrors: true,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		c, err := newConnector(args[0])
 		if err != nil {
@@ -109,7 +111,32 @@ const (
 	keyReadable keyAccess = iota
 	keyDenied
 	keyAbsent
+	// keyUnknown: the check could not be attempted (containerised daemon,
+	// no Host block, or a relative path).
+	keyUnknown
 )
+
+// classify turns an absent probe into readable for a same-UID,
+// non-containerised daemon: store.key is created lazily, and the daemon
+// will own it as the same user the agent's shell runs as (plan P6
+// amendment, T6, operator decision D3). readable and denied always win.
+func classify(probe keyAccess, host *hostView, uid int) keyAccess {
+	if probe == keyAbsent && host != nil && !host.DaemonContainerized && host.DaemonUID == uid {
+		return keyReadable
+	}
+	return probe
+}
+
+// refusalMessage is the one line printed when a readable store key refuses.
+// "Vornik runs as your OS user" is said only when the UIDs match; a key read
+// from another UID (group or world read) names the file instead.
+func refusalMessage(harness string, sameUID bool, keyPath string) string {
+	const tail = " To connect anyway, accept that: re-run with --accept-shared-user."
+	if sameUID {
+		return fmt.Sprintf("refused: %[1]s can run shell commands as you and Vornik runs as your OS user, so %[1]s could read Vornik's data.", harness) + tail
+	}
+	return fmt.Sprintf("refused: %[1]s can run shell commands as you and can read Vornik's key file (%[2]s), so it could read Vornik's data.", harness, keyPath) + tail
+}
 
 // probeKey opens path for reading and closes it at once; nothing is read.
 func probeKey(path string) keyAccess {
@@ -154,11 +181,14 @@ func sharedUserGate(class string, access keyAccess, accept bool) (bool, string) 
 // capabilitiesView is the part of GET /api/v1/capabilities connect reads.
 type capabilitiesView struct {
 	Features map[string]bool `json:"features"`
-	Host     *struct {
-		DaemonUID           int    `json:"daemon_uid"`
-		DaemonContainerized bool   `json:"daemon_containerized"`
-		StoreKeyPath        string `json:"store_key_path"`
-	} `json:"host"`
+	Host     *hostView       `json:"host"`
+}
+
+// hostView is the daemon's host block (admin-class keys only).
+type hostView struct {
+	DaemonUID           int    `json:"daemon_uid"`
+	DaemonContainerized bool   `json:"daemon_containerized"`
+	StoreKeyPath        string `json:"store_key_path"`
 }
 
 // agentRecord is <ns>.json beside the key file: what disconnect undoes. It
@@ -180,7 +210,9 @@ type connector struct {
 	probe       func(string) keyAccess
 }
 
-func newConnector(harness string) (*connector, error) {
+// newConnector is a variable so a test can run the cobra command against a
+// fake daemon.
+var newConnector = func(harness string) (*connector, error) {
 	exe, err := os.Executable()
 	if err != nil {
 		return nil, fmt.Errorf("find vornikctl's own path: %w", err)
@@ -221,17 +253,22 @@ func (c *connector) connect(out io.Writer) error {
 	class := agentadmin.HarnessClassOf(c.harness)
 	// A containerised daemon's paths are not this host's, so its store key
 	// is never probed: the check could not be made (plan P6 amendment F2).
-	access := keyAbsent
-	if caps.Host != nil && !caps.Host.DaemonContainerized {
-		access = c.probe(caps.Host.StoreKeyPath)
+	// A relative path would be probed against this process's cwd, so it is
+	// unknown too (review 03a6 F3).
+	access := keyUnknown
+	if caps.Host != nil && !caps.Host.DaemonContainerized && filepath.IsAbs(caps.Host.StoreKeyPath) {
+		access = classify(c.probe(caps.Host.StoreKeyPath), caps.Host, c.user.uid)
 	}
 	ok, why := sharedUserGate(class, access, c.accept)
+	if !ok && access == keyReadable {
+		why = refusalMessage(c.harness, caps.Host != nil && caps.Host.DaemonUID == c.user.uid, caps.Host.StoreKeyPath)
+	}
 	printHarnessTable(out, c.harness, class, why)
 	if caps.Host != nil && !caps.Host.DaemonContainerized && caps.Host.DaemonUID == c.user.uid {
 		_, _ = fmt.Fprintf(out, "Note: Vornik runs as your OS user (UID %d).\n", c.user.uid)
 	}
 	if !ok {
-		return errors.New("not connected")
+		return &exitCodeError{code: 1}
 	}
 	entry := harnessconfig.Entry{Namespace: c.ns, Command: c.bridge, URL: c.client.baseURL}
 	// Refuse a harness file the edit cannot handle before anything is

@@ -3,7 +3,7 @@ sources:
     - path: internal/ui/task_conversation.go
       sha256: 96c7de4aa08768e8c44cf9b487bab29c651216132c9ec4a7538cbd143587cc61
     - path: internal/registry/project.go
-      sha256: 60c9f0da126605df1c58a2d673baa596aff857a44f3f143f4afdd73add783453
+      sha256: b0f54f8e692116a4a5fd21e4913a1f3fafa521be71082d3928f26de9979c02ee
 ---
 # Approvals & human-in-the-loop
 

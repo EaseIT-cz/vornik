@@ -122,7 +122,7 @@ func TestCompanionAdmin_OfferedOnlyToAgentAdminKeysWhenEnabled(t *testing.T) {
 		t.Fatal("a plain companion key was offered the admin verbs")
 	}
 	names := listTools(t, srv, agentRaw)
-	for _, v := range []string{agentadmin.VerbCreateProject, agentadmin.VerbDefineWorkflow, toolListMySetup, toolDescribeInstallation} {
+	for _, v := range []string{agentadmin.VerbCreateProject, agentadmin.VerbUpdateProject, agentadmin.VerbDefineWorkflow, toolListMySetup, toolDescribeInstallation} {
 		if !names[v] {
 			t.Errorf("the agent admin key was not offered %s", v)
 		}
@@ -140,6 +140,13 @@ func TestCompanionAdmin_OfferedOnlyToAgentAdminKeysWhenEnabled(t *testing.T) {
 	if isErr || !strings.Contains(text, `"applied"`) {
 		t.Fatalf("the agent admin key's verb: %q (error %v)", text, isErr)
 	}
+	// Issue #67: the metadata verb follows the same namespace admin gate.
+	if resp := callAdminTool(t, srv, plainRaw, agentadmin.VerbUpdateProject); resp.Error == nil || resp.Error.Code != -32601 {
+		t.Fatalf("plain key edited project metadata: %+v", resp.Error)
+	}
+	if text, isErr := decodeToolText(t, callAdminTool(t, srv, agentRaw, agentadmin.VerbUpdateProject)); isErr || !strings.Contains(text, `"applied"`) {
+		t.Fatalf("agent metadata verb: %q (error %v)", text, isErr)
+	}
 
 	enabled = false
 	if names := listTools(t, srv, agentRaw); names[agentadmin.VerbCreateProject] {
@@ -148,8 +155,8 @@ func TestCompanionAdmin_OfferedOnlyToAgentAdminKeysWhenEnabled(t *testing.T) {
 	if resp := callAdminTool(t, srv, agentRaw, agentadmin.VerbCreateProject); resp.Error == nil || resp.Error.Code != -32601 {
 		t.Fatalf("a verb ran while disabled: %+v", resp.Error)
 	}
-	if len(fake.calls) != 1 {
-		t.Fatalf("the service was called %d times, want 1: %v", len(fake.calls), fake.calls)
+	if len(fake.calls) != 2 {
+		t.Fatalf("the service was called %d times, want 2: %v", len(fake.calls), fake.calls)
 	}
 }
 
@@ -450,4 +457,30 @@ func TestCompanionAdmin_DefineWorkflowInputsStateTheRules(t *testing.T) {
 		return
 	}
 	t.Fatal("no define_workflow tool")
+}
+
+// Review 1843 item 2 (T7): the tool schemas tell the agent that a verb naming
+// an existing project takes its slug or full id, and create_project a bare slug.
+func TestAdminToolDefs_StateTheProjectReferenceRule(t *testing.T) {
+	prop := func(tool, field string) string {
+		for _, d := range companionAdminToolDefs() {
+			if d.Name != tool {
+				continue
+			}
+			p, _ := d.InputSchema["properties"].(map[string]any)
+			f, _ := p[field].(map[string]any)
+			s, _ := f["description"].(string)
+			return s
+		}
+		return ""
+	}
+	for _, c := range [][2]string{{agentadmin.VerbDefineWorkflow, "project"}, {agentadmin.VerbSetBudget, "project"},
+		{agentadmin.VerbAddAPI, "project"}, {agentadmin.VerbDefineSwarm, "slug"}, {agentadmin.VerbRemove, "id"}} {
+		if got := prop(c[0], c[1]); !strings.Contains(got, agentadmin.ProjectRefRule) {
+			t.Errorf("%s.%s description lacks the rule: %q", c[0], c[1], got)
+		}
+	}
+	if got := prop(agentadmin.VerbCreateProject, "slug"); got != agentadmin.NewSlugRule {
+		t.Errorf("create_project.slug = %q", got)
+	}
 }

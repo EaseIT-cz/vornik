@@ -490,9 +490,10 @@ func (d *MultiDetector) Scan(text []byte) []Finding {
 	// matched openai_key shouldn't also fire entropy).
 	if d.entropyEnabled {
 		regexSpans := spanIndex(findings)
+		documentSpans := googleDocumentURLSpans(text)
 		for _, m := range d.entropyTokenRe.FindAllIndex(text, -1) {
 			start, end := m[0], m[1]
-			if regexSpans.overlaps(start, end) {
+			if regexSpans.overlaps(start, end) || withinGoogleDocumentURL(documentSpans, start, end) {
 				continue
 			}
 			tok := text[start:end]

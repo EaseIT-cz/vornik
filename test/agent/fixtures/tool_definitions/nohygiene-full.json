@@ -44,6 +44,38 @@
   },
   {
     "function": {
+      "description": "Render a workspace markdown file to PDF or HTML without shell access. Supports staged document inputs at artifacts/in/. Writes exclusively under artifacts/out/ and returns a path, format and byte count; existing files are never overwritten. PDF supports Unicode including Czech. External resources/images are not fetched. Use a different out_path when retrying an existing output.",
+      "name": "document_render",
+      "parameters": {
+        "additionalProperties": false,
+        "properties": {
+          "format": {
+            "enum": [
+              "pdf",
+              "html"
+            ],
+            "type": "string"
+          },
+          "out_path": {
+            "description": "Optional output path under artifacts/out/ with matching extension; defaults to artifacts/out/<source-basename>.<format>.",
+            "type": "string"
+          },
+          "path": {
+            "description": "Workspace-relative source .md file, e.g. artifacts/in/report.md.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "path",
+          "format"
+        ],
+        "type": "object"
+      }
+    },
+    "type": "function"
+  },
+  {
+    "function": {
       "description": "Run a shell command in the workspace directory. Use for tasks like listing files, running builds, etc. stdout+stderr is capped at 200KB; if you need more, pipe through grep/awk/tail to filter at the source (e.g. `go tool cover -func=cov.out | grep ^github.com/myorg/mypkg/`). gcc + libc6-dev are installed so `go test -race` works.",
       "name": "run_shell",
       "parameters": {

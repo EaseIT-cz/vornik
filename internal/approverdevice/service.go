@@ -120,6 +120,8 @@ type Service struct {
 	// hostRecord counts host-action outcomes (Hermes approval transport
 	// design §8).
 	hostRecord func(harness, outcome string)
+	// httpsRefused counts plain-http refusals (design §9.2, T12).
+	httpsRefused func(path string)
 	// offers are the standing-grant offers by kind, and standing the
 	// Standing approvals page (broker write-actions design, tier 2).
 	offers   map[string]GrantOfferFunc
@@ -556,7 +558,10 @@ func (s *Service) PollClaim(ctx context.Context, claimToken string) (string, Cla
 	if err != nil {
 		return "", "", err
 	}
-	if p.DeviceID != "" || p.RequestID == "" { // completed already, or the impossible unattached claim
+	if p.DeviceID != "" { // completed already: a lost response may be re-minted once (design §9.2, T11)
+		return s.remint(ctx, claimToken)
+	}
+	if p.RequestID == "" { // the impossible unattached claim
 		return "", ClaimExpired, nil
 	}
 	r, err := s.repo.GetRequest(ctx, p.RequestID)
@@ -587,11 +592,35 @@ func (s *Service) PollClaim(ctx context.Context, claimToken string) (string, Cla
 		PairedBy: "device:" + r.DecidedByDevice, LastUsedAt: now}
 	if err := s.repo.CompletePairing(ctx, HashToken(claimToken), d); err != nil {
 		if errors.Is(err, persistence.ErrNotFound) {
-			return "", ClaimExpired, nil
+			// Lost the CompletePairing race to a parallel poll: that poll's
+			// token may be the one that was lost, so try the re-mint.
+			return s.remint(ctx, claimToken)
 		}
 		return "", "", err
 	}
 	s.pushEnrolled(ctx, p.Label, now)
+	return tok, ClaimApproved, nil
+}
+
+// remint re-issues the token of a pairing that already completed, once, for
+// a never-used device inside the claim window (design §9.2, amendment
+// 2026-10-07 T11). Every refusal is ClaimExpired, with no detail.
+func (s *Service) remint(ctx context.Context, claimToken string) (string, ClaimState, error) {
+	tok, err := newToken()
+	if err != nil {
+		return "", "", err
+	}
+	now := s.now()
+	row, err := s.repo.RemintEnrollmentToken(ctx, HashToken(claimToken), HashToken(tok), now.Add(-ClaimTTL))
+	if errors.Is(err, persistence.ErrNotFound) {
+		return "", ClaimExpired, nil
+	}
+	if err != nil {
+		return "", "", err
+	}
+	s.push(ctx, "Vornik: an approver device's enrollment was re-issued",
+		fmt.Sprintf("The sign-in of the new approver device %q was re-issued at %s, because the answer to its pairing never reached the browser. If this was not you, revoke it: %s/ui/approve/devices",
+			row.Label, now.Format(time.RFC1123), s.origin))
 	return tok, ClaimApproved, nil
 }
 

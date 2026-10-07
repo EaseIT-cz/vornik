@@ -1746,6 +1746,11 @@ type MemoryIngestAudit struct {
 	// repo token (typically git remote URL <host>/<path> or repo
 	// basename). See LLD-22 follow-on for full semantics.
 	RepoScope *string `json:"repo_scope,omitempty"`
+	// ReinstatedChunkID names the refuted Hermes-mirrored chunk this
+	// admit brought back instead of inserting a row (migration 218, GitHub
+	// #76; design 22 "Reinstating a refuted mirrored note"). Nil on every
+	// other row.
+	ReinstatedChunkID *string `json:"reinstated_chunk_id,omitempty"`
 }
 
 // CorpusEpoch is one row of corpus_epochs — the manifest for one

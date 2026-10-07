@@ -45,7 +45,10 @@ func TestAgentAdmin_CredentialSlotEndToEnd(t *testing.T) {
 	if res.Effect != agentadmin.EffectAwaiting || res.ChangeID != "" {
 		t.Fatalf("request_credential: %+v", res)
 	}
-	if again := f.do(agentadmin.VerbRequestCredential, ask); again.Effect != agentadmin.EffectRefused {
+	// GitHub #80 (2026-10-03, design 18.16): a repeat for a pending namespace
+	// credential is an applied no-op whose sentence says so; it files nothing.
+	if again := f.do(agentadmin.VerbRequestCredential, ask); again.Effect != agentadmin.EffectApplied ||
+		again.ApprovalURL != "" || !strings.Contains(again.Sentence, "already requested for this namespace") {
 		t.Fatalf("a second slot for a pending credential: %+v", again)
 	}
 	id := requestIDOf(res)

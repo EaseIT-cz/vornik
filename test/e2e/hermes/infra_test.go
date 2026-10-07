@@ -227,11 +227,28 @@ func ensureImage(t *testing.T, ref string) {
 	}
 }
 
+// reapStaleContainers removes lane containers that have exited or are older
+// than reapMaxAge. It runs once, before the first startContainer.
+func reapStaleContainers() {
+	out, err := exec.Command("podman", reaperListArgs()...).Output()
+	if err != nil {
+		return
+	}
+	var cs []podmanContainer
+	if json.Unmarshal(out, &cs) != nil {
+		return
+	}
+	if ids := reapCandidates(cs, time.Now()); len(ids) > 0 {
+		_ = exec.Command("podman", append([]string{"rm", "-f"}, ids...)...).Run()
+	}
+}
+
 // startContainer runs a detached container and removes it at cleanup.
 func startContainer(t *testing.T, name string, args ...string) {
 	t.Helper()
-	_ = exec.Command("podman", "rm", "-f", name).Run()
-	run(t, "podman", append([]string{"run", "-d", "--name", name}, args...)...)
+	// No "rm -f <name>": names are per run, and a fixed-name rm removed a
+	// live sibling's container (T10). Leftovers are reaped by label instead.
+	run(t, "podman", append(append([]string{"run", "-d", "--name", name}, laneLabels()...), args...)...)
 	t.Cleanup(func() {
 		if t.Failed() {
 			logs, _ := exec.Command("podman", "logs", "--tail", "80", name).CombinedOutput()
@@ -277,18 +294,19 @@ func httpOK(url string) bool {
 }
 
 // startPostgres starts a fresh pgvector database for this run.
-func startPostgres(t *testing.T) int {
+func startPostgres(t *testing.T) (port int, name string) {
 	t.Helper()
 	ensureImage(t, pgvectorImage)
-	port := freePort(t)
-	startContainer(t, "vornik-e2e-pg", "-p", fmt.Sprintf("127.0.0.1:%d:5432", port),
+	port = freePort(t)
+	name = pgContainerName()
+	startContainer(t, name, "-p", fmt.Sprintf("127.0.0.1:%d:5432", port),
 		"-e", "POSTGRES_USER=vornik", "-e", "POSTGRES_PASSWORD=vornik", "-e", "POSTGRES_DB=vornik",
 		pgvectorImage)
 	waitFor(t, "postgres", 90*time.Second, func() bool {
-		return exec.Command("podman", postgresReadyArgs("vornik-e2e-pg")...).Run() == nil
+		return exec.Command("podman", postgresReadyArgs(name)...).Run() == nil
 	})
-	run(t, "podman", "exec", "vornik-e2e-pg", "psql", "-U", "vornik", "-d", "vornik", "-c", "CREATE EXTENSION IF NOT EXISTS vector")
-	return port
+	run(t, "podman", "exec", name, "psql", "-U", "vornik", "-d", "vornik", "-c", "CREATE EXTENSION IF NOT EXISTS vector")
+	return port, name
 }
 
 // startLlama serves the pinned model with the 64K window Hermes requires.
@@ -304,9 +322,10 @@ func startLlama(t *testing.T, m laneModel, modelDir string) string {
 		"-v", modelDir + ":/models:ro,Z", llamaImage,
 		"-m", "/models/" + m.File, "--jinja", "-c", "65536", "-np", "1",
 		"-t", threads, "--temp", "0", "--seed", "1", "--host", "0.0.0.0", "--port", "8080"}
-	startContainer(t, "vornik-e2e-llama", append(args, m.Args...)...)
+	name := llamaContainerName()
+	startContainer(t, name, append(args, m.Args...)...)
 	waitFor(t, "llama.cpp", 3*time.Minute, func() bool {
-		return exec.Command("podman", "exec", "vornik-e2e-llama", "curl", "-sf", "localhost:8080/health").Run() == nil
+		return exec.Command("podman", "exec", name, "curl", "-sf", "localhost:8080/health").Run() == nil
 	})
 	return fmt.Sprintf("http://127.0.0.1:%d/v1", port)
 }

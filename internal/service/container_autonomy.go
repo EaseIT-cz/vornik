@@ -334,6 +334,7 @@ func (c *Container) runRetentionOnce(ctx context.Context, sweeper *retention.Swe
 			ArtifactsDays:             p.Retention.ArtifactsDays,
 			TaskMessagesDays:          p.Retention.TaskMessagesDays,
 			MemoryChunksDays:          p.Retention.MemoryChunksDays,
+			MemoryRequireApproval:     p.Retention.MemoryRequireApproval,
 			MemoryIngestAuditDays:     p.Retention.MemoryIngestAuditDays,
 			MemoryPolicyEvalAllowDays: p.Retention.MemoryPolicyEvalAllowDays,
 			MemoryPolicyEvalBlockDays: p.Retention.MemoryPolicyEvalBlockDays,
@@ -341,6 +342,7 @@ func (c *Container) runRetentionOnce(ctx context.Context, sweeper *retention.Swe
 		}, defaults)
 
 		counts, err := sweeper.Sweep(ctx, policy)
+		c.fileMemoryRetentionRequests(ctx, sweeper, p)
 		if err != nil {
 			c.Logger.Warn().Err(err).Str("project", p.ID).Msg("retention sweep partially failed")
 		}

@@ -390,7 +390,10 @@ class CatalogManifestTest(unittest.TestCase):
             "vornik_catalog", "vornik_delegate", "vornik_result", "vornik_status",
             "vornik_cancel", "vornik_recall", "vornik_remember"]))
 
-    def test_version_is_0_11_1(self):
+    def test_version_is_0_11_3(self):
+        # 0.11.3: a forgotten Hermes memory added again is recallable; an
+        # identical replace touches nothing, and memory_correct declares its
+        # refute route (#76). 0.11.2: approvals on replaces a pin on a disconnected namespace (#77).
         # 0.11.1: the README leads with the broker setup and points to the
         # Hermes setup guide (design 24, setup docs, 2026-10-04). 0.11.0: the vornik-admin skill says how to hand a workflow a
         # document (broker design §18). 0.10.0: the vornik-admin skill tells the assistant that a client
@@ -398,8 +401,10 @@ class CatalogManifestTest(unittest.TestCase):
         # before a change, and to ask the user to reconnect Vornik
         # (agent-administered design §18.14 finding 2). 0.9.0 was a role's
         # model from the catalogue (§18.6 item 2).
-        self.assertRegex(MANIFEST, r"(?m)^version:\s*0\.11\.1\s*$")
-        self.assertIn("0.11.1 — ", MANIFEST, "the description carries a changelog line for 0.11.1")
+        self.assertRegex(MANIFEST, r"(?m)^version:\s*0\.11\.3\s*$")
+        self.assertIn("0.11.3 — ", MANIFEST, "the description carries a changelog line for 0.11.3")
+        self.assertIn("0.11.2 — ", MANIFEST, "earlier changelog lines stay")
+        self.assertIn("0.11.1 — ", MANIFEST, "earlier changelog lines stay")
         self.assertIn("0.11.0 — ", MANIFEST, "earlier changelog lines stay")
         self.assertIn("0.10.0 — ", MANIFEST, "earlier changelog lines stay")
         self.assertIn("0.9.0 — ", MANIFEST, "earlier changelog lines stay")

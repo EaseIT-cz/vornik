@@ -156,7 +156,7 @@ class ForgetByTokenTest(unittest.TestCase):
         d = Daemon(recall=lambda args: (hits, False))
         provider(d).on_memory_write("remove", "user", "", metadata={"previous_content": self.ENTRY})
         self.assertEqual(d.args("recall")[0], {"query": tok, "limit": 20})
-        self.assertEqual(d.args("memory_correct"), [{"chunk_ids": ["mine", "piece"]}])
+        self.assertEqual(d.args("memory_correct"), [{"chunk_ids": ["mine", "piece"], "reason": "mirror_forget"}])
         self.assertEqual(d.args("remember"), [], "a removal mirrors nothing")
 
     def test_duplicate_mirrored_notes_are_refuted_together(self):
@@ -166,7 +166,7 @@ class ForgetByTokenTest(unittest.TestCase):
                          hit("third", "[memory] unrelated note")]}
         d = Daemon(recall=lambda args: (hits, False))
         provider(d).on_memory_write("remove", "memory", "", metadata={"previous_content": self.ENTRY})
-        self.assertEqual(d.args("memory_correct"), [{"chunk_ids": ["dup1", "dup2"]}])
+        self.assertEqual(d.args("memory_correct"), [{"chunk_ids": ["dup1", "dup2"], "reason": "mirror_forget"}])
 
     def test_replace_refutes_the_old_then_mirrors_the_new(self):
         tok = spec_token("user", self.ENTRY)
@@ -174,8 +174,23 @@ class ForgetByTokenTest(unittest.TestCase):
         new = "My dentist is Dr Dvorak at the Karlin clinic."
         provider(d).on_memory_write("replace", "user", new, metadata={"previous_content": self.ENTRY})
         self.assertEqual(d.names(), ["recall", "memory_correct", "remember"])
-        self.assertEqual(d.args("memory_correct"), [{"chunk_ids": ["old"]}])
+        self.assertEqual(d.args("memory_correct"), [{"chunk_ids": ["old"], "reason": "mirror_forget"}])
         self.assertEqual(d.args("remember")[0]["content"], "[user] " + new + " " + spec_token("user", new))
+
+    # GitHub #76 (2026-10-05 audit): an identical replace refuted the mirror and
+    # the re-remember was deduplicated, so the note vanished from recall.
+    def test_identical_replace_touches_nothing(self):
+        tok = spec_token("memory", self.ENTRY)
+        d = Daemon(recall=lambda args: ({"hits": [hit("live", "[memory] " + self.ENTRY + " " + tok)]}, False))
+        provider(d).on_memory_write("replace", "memory", self.ENTRY, metadata={"previous_content": self.ENTRY})
+        self.assertEqual(d.names(), [])
+
+    def test_whitespace_only_replace_touches_nothing(self):
+        tok = spec_token("memory", self.ENTRY)
+        d = Daemon(recall=lambda args: ({"hits": [hit("live", "[memory] " + self.ENTRY + " " + tok)]}, False))
+        provider(d).on_memory_write("replace", "memory", "  " + self.ENTRY.replace(" ", "  ") + "  \n",
+                                    metadata={"previous_content": self.ENTRY})
+        self.assertEqual(d.names(), [])
 
     def test_no_previous_content_refutes_nothing(self):
         d = Daemon()
@@ -224,7 +239,7 @@ class PreTokenNotesTest(unittest.TestCase):
         d = self.daemon([hit("legacy", "[memory]  Prefers Czech for invoices\nand English for everything else.")])
         provider(d).on_memory_write("remove", "memory", "", metadata={"previous_content": self.ENTRY})
         self.assertEqual(d.args("recall")[1]["query"], "[memory] " + self.ENTRY)
-        self.assertEqual(d.args("memory_correct"), [{"chunk_ids": ["legacy"]}])
+        self.assertEqual(d.args("memory_correct"), [{"chunk_ids": ["legacy"], "reason": "mirror_forget"}])
 
     def test_a_near_miss_is_not_refuted(self):
         d = self.daemon([hit("near", "[memory] Prefers Czech for invoices and English for most things."),
@@ -244,13 +259,13 @@ class PreTokenNotesTest(unittest.TestCase):
         self.assertLess(len(written), len("[memory] " + long_entry.strip()), "test setup: the entry is cut")
         d = self.daemon([hit("cut", written + " ⟦vm:00112233aabbccdd⟧")])
         provider(d).on_memory_write("remove", "memory", "", metadata={"previous_content": long_entry})
-        self.assertEqual(d.args("memory_correct"), [{"chunk_ids": ["cut"]}])
+        self.assertEqual(d.args("memory_correct"), [{"chunk_ids": ["cut"], "reason": "mirror_forget"}])
 
     def test_an_untokenised_pre_080_note_is_matched(self):
         # Review 3cbd finding 1, the other half: no token at all.
         d = self.daemon([hit("old", "[memory] " + self.ENTRY), hit("near", "[memory] " + self.ENTRY + " Also tea.")])
         provider(d).on_memory_write("remove", "memory", "", metadata={"previous_content": "  " + self.ENTRY + "\n"})
-        self.assertEqual(d.args("memory_correct"), [{"chunk_ids": ["old"]}])
+        self.assertEqual(d.args("memory_correct"), [{"chunk_ids": ["old"], "reason": "mirror_forget"}])
 
     def test_outside_the_top_20_is_missed(self):
         # The negative N3 pins: ranked discovery is best effort.
@@ -297,8 +312,11 @@ class MemoryCommandsTest(unittest.TestCase):
         c = self.cmds(d)
         c.memory("dentist")
         out = c.forget("0123456789ab")
-        self.assertEqual(d.args("memory_correct"), [{"chunk_ids": [full]}])
-        self.assertIn("Vornik will no longer recall this unless it is stored again", out)
+        self.assertEqual(d.args("memory_correct"), [{"chunk_ids": [full], "reason": "forget_command"}])
+        # GitHub #76 (2026-10-05 audit), design 24 round 2: under strict D2 a
+        # /vornik-forget holds against identical text stored again.
+        self.assertIn("Vornik will no longer recall this, even if the same text is stored again", out)
+        self.assertNotIn("unless it is stored again", out)
         self.assertIn("retention", out)
         self.assertIn("the operator can erase it now", out)
 
@@ -306,7 +324,7 @@ class MemoryCommandsTest(unittest.TestCase):
         full = "abcdefabcdefabcdefabcdefabcdefab"
         d = Daemon(correct=lambda args: ({"refuted_count": 1}, False))
         self.cmds(d).forget(full)
-        self.assertEqual(d.args("memory_correct"), [{"chunk_ids": [full]}])
+        self.assertEqual(d.args("memory_correct"), [{"chunk_ids": [full], "reason": "forget_command"}])
 
     def test_forget_none_refuted_says_nothing_was_found(self):
         d = Daemon(correct=lambda args: ({"refuted_count": 0, "note": "flipped 0 of 1"}, False))

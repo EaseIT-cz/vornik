@@ -304,3 +304,14 @@ func TestAgentAdmin_CredentialStoreFailsAfterDecision(t *testing.T) {
 		t.Fatalf("after a failed store: status %s, apply_error %q", got.Status, got.ApplyError)
 	}
 }
+
+// T7 review a8bf: the pre-approval listing took the raw project field, so a
+// full id (hermes--news) built the project hermes--hermes--news.
+func TestListingConfig_AcceptsAFullProjectID(t *testing.T) {
+	for _, p := range []string{"news", "hermes--news"} {
+		cfg := listingConfig("hermes", agentadmin.AddMCPServerInput{Project: p, Name: "feed", URL: "https://x.example/mcp"})
+		if cfg.ProjectID != "hermes--news" {
+			t.Errorf("project %q listed as %q", p, cfg.ProjectID)
+		}
+	}
+}

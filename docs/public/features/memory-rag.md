@@ -152,3 +152,13 @@ Two admin UI surfaces complement the CLI (don't confuse them):
 | `firewall.mode` *(per project)* | `off` / `advisory` / `enforce`, overrides the daemon default |
 | `VORNIK_MEMORY_FIREWALL_MODE` | daemon-level enforcement mode |
 | `VORNIK_ALLOW_UNSCANNED_MEMORY` | audited escape hatch for the secret-scan clamp |
+
+## Retain personal knowledge until you approve deletion
+
+Projects can enable `retention.memory_require_approval` for a default 365-day
+window since the last returned recall hit. Unused finite-TTL chunks remain
+searchable while a paired-phone deletion request is pending; rejected or
+unanswered requests keep the data and may be asked again after 30 days.
+Longer stored TTLs and indefinite chunks are preserved. See
+[Storage and Retention](../guides/storage-and-retention.md#approval-before-deleting-unused-project-memory)
+for project configuration, historical last-use fallback and deployment steps.

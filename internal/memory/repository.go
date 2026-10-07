@@ -33,10 +33,11 @@ const (
 // It uses database/sql with lib/pq and speaks directly to pgvector via
 // text-literal vector syntax rather than importing a pgvector-go driver.
 type Repository struct {
-	db            *sql.DB
-	pgvectorOnce  sync.Once
-	pgvectorAvail bool
-	logger        zerolog.Logger
+	approvalRetention func(string) bool
+	db                *sql.DB
+	pgvectorOnce      sync.Once
+	pgvectorAvail     bool
+	logger            zerolog.Logger
 	// metrics + metricsProject carry the §5.7 recency signals. Optional:
 	// a nil Metrics disables emission without disabling the re-rank, so a
 	// deployment without observability still ranks correctly.
@@ -868,7 +869,7 @@ func (r *Repository) SampleChunksForViz(ctx context.Context, projectID string, a
 		WHERE project_id = $1
 		  AND lifecycle_state = 'published'
 		  AND validation_status NOT IN ('refuted','superseded')
-		  AND (expires_at IS NULL OR expires_at > NOW())
+		  AND ` + r.expiryClause(projectID, "") + `
 		  AND (epoch_id IS NULL OR epoch_id = ANY($2::text[]))
 		  ` + embedFilter + `
 		ORDER BY random()
@@ -1560,6 +1561,51 @@ func (r *Repository) ChunkExistsByHash(ctx context.Context, projectID, contentHa
 	return exists, err
 }
 
+// ReinstateMirroredByHash brings back a Hermes-mirrored note the mirror
+// itself forgot, when the companion of the same client kind stores the
+// identical note again (GitHub #76; design 22, "Reinstating a refuted
+// mirrored note", operator decision D2). Called by the pipeline only on a
+// dedup_hash reject in companion-note ingest. Returns the reinstated chunk's
+// id, or "" when no row qualifies: a live row, a superseded row, a row
+// refuted by any other route (or before routes were recorded), a row
+// without the mirror token, or one written by another client kind.
+//
+// The row's expires_at restarts from now with its current span
+// (expires_at - created_at), which equals the original TTL only if nothing
+// patched it since; the deposit's own ttl_days is not applied. Postgres-only
+// SQL (NOW(), interval arithmetic): SQLite memory writes do not work today,
+// so no SQLite row can reach this, and a SQLite variant is needed when they
+// do.
+func (r *Repository) ReinstateMirroredByHash(ctx context.Context, projectID, contentHash, producerRole string) (string, error) {
+	if r == nil || r.db == nil {
+		return "", nil
+	}
+	if projectID == "" || contentHash == "" || producerRole == "" {
+		return "", nil
+	}
+	var id string
+	err := r.db.QueryRowContext(ctx, `UPDATE project_memory_chunks
+SET validation_status = 'unverified',
+    refute_route = NULL,
+    -- restart the row's current TTL span (expires_at - created_at) from now
+    expires_at = CASE WHEN expires_at IS NULL THEN NULL
+                      ELSE NOW() + (expires_at - created_at) END
+WHERE project_id = $1
+  AND content_hash = $2      -- primary discriminator (unique idx_memory_hash)
+  AND validation_status = 'refuted'
+  AND refute_route = 'mirror_forget'
+  AND producer_role = $3
+  AND content LIKE '%⟦vm:%'  -- secondary guard: the mirror's token marker
+RETURNING id`, projectID, contentHash, producerRole).Scan(&id)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", nil
+	}
+	if err != nil {
+		return "", fmt.Errorf("reinstate mirrored chunk: %w", err)
+	}
+	return id, nil
+}
+
 // PatchPolicyByArtifact sets the per-policy columns on every chunk
 // the indexer just wrote for one artifact. Used by the Pipeline
 // to stamp content_class / confidence / producer_role /
@@ -1799,7 +1845,7 @@ semantic AS (
     SELECT id, row_number() OVER (ORDER BY embedding <=> $4::vector, id) AS rank
     FROM project_memory_chunks
     WHERE project_id = $1 AND embedding IS NOT NULL
-      AND (expires_at IS NULL OR expires_at > NOW())
+      AND ` + r.expiryClause(projectID, "") + `
     ORDER BY embedding <=> $4::vector, id LIMIT 20
 ),
 keyword AS (
@@ -1811,7 +1857,7 @@ keyword AS (
     ) AS rank
     FROM project_memory_chunks, q
     WHERE project_id = $1 AND (tsv @@ q.strict_q OR tsv @@ q.relaxed_q)
-      AND (expires_at IS NULL OR expires_at > NOW())
+      AND ` + r.expiryClause(projectID, "") + `
     LIMIT 20
 )
 SELECT c.id, c.project_id, COALESCE(c.task_id,''), c.source_name, c.content,
@@ -1859,7 +1905,7 @@ semantic AS (
     SELECT id, row_number() OVER (ORDER BY embedding <=> $4::vector, id) AS rank
     FROM project_memory_chunks
     WHERE project_id = $1 AND embedding IS NOT NULL
-      AND (expires_at IS NULL OR expires_at > NOW())
+      AND `+r.expiryClause(projectID, "")+`
       AND ($5::timestamptz IS NULL OR COALESCE(event_time, created_at) >= $5::timestamptz)
       AND ($6::timestamptz IS NULL OR COALESCE(event_time, created_at) <= $6::timestamptz)
       %[1]s
@@ -1874,7 +1920,7 @@ keyword AS (
     ) AS rank
     FROM project_memory_chunks, q
     WHERE project_id = $1 AND (tsv @@ q.strict_q OR tsv @@ q.relaxed_q)
-      AND (expires_at IS NULL OR expires_at > NOW())
+      AND `+r.expiryClause(projectID, "")+`
       AND ($5::timestamptz IS NULL OR COALESCE(event_time, created_at) >= $5::timestamptz)
       AND ($6::timestamptz IS NULL OR COALESCE(event_time, created_at) <= $6::timestamptz)
       %[1]s
@@ -1972,7 +2018,7 @@ semantic AS (
     WHERE project_id = $1 AND embedding IS NOT NULL
       AND lifecycle_state = 'published'
       AND validation_status NOT IN ('refuted','superseded')
-      AND (expires_at IS NULL OR expires_at > NOW())
+      AND `+r.expiryClause(projectID, "")+`
       AND (epoch_id IS NULL OR epoch_id = ANY($5::text[]))
       AND ($6::timestamptz IS NULL OR COALESCE(event_time, created_at) >= $6::timestamptz)
       AND ($7::timestamptz IS NULL OR COALESCE(event_time, created_at) <= $7::timestamptz)
@@ -1990,7 +2036,7 @@ keyword AS (
     WHERE project_id = $1 AND (tsv @@ q.strict_q OR tsv @@ q.relaxed_q)
       AND lifecycle_state = 'published'
       AND validation_status NOT IN ('refuted','superseded')
-      AND (expires_at IS NULL OR expires_at > NOW())
+      AND `+r.expiryClause(projectID, "")+`
       AND (epoch_id IS NULL OR epoch_id = ANY($5::text[]))
       AND ($6::timestamptz IS NULL OR COALESCE(event_time, created_at) >= $6::timestamptz)
       AND ($7::timestamptz IS NULL OR COALESCE(event_time, created_at) <= $7::timestamptz)
@@ -2098,7 +2144,7 @@ SELECT c.id, c.project_id, COALESCE(c.task_id,''), c.source_name, c.content,
        ) ELSE false END AS series_superseded
 FROM project_memory_chunks c, q
 WHERE c.project_id = $1 AND (c.tsv @@ q.strict_q OR c.tsv @@ q.relaxed_q)
-  AND (c.expires_at IS NULL OR c.expires_at > NOW())
+  AND `+r.expiryClause(projectID, "c.")+`
   AND ($4::timestamptz IS NULL OR COALESCE(c.event_time, c.created_at) >= $4::timestamptz)
   AND ($5::timestamptz IS NULL OR COALESCE(c.event_time, c.created_at) <= $5::timestamptz)
   %s
@@ -2154,7 +2200,7 @@ FROM project_memory_chunks c, q
 WHERE c.project_id = $1 AND (c.tsv @@ q.strict_q OR c.tsv @@ q.relaxed_q)
   AND c.lifecycle_state = 'published'
   AND c.validation_status NOT IN ('refuted','superseded')
-  AND (c.expires_at IS NULL OR c.expires_at > NOW())
+  AND `+r.expiryClause(projectID, "c.")+`
   AND (c.epoch_id IS NULL OR c.epoch_id = ANY($4::text[]))
   AND ($5::timestamptz IS NULL OR COALESCE(c.event_time, c.created_at) >= $5::timestamptz)
   AND ($6::timestamptz IS NULL OR COALESCE(c.event_time, c.created_at) <= $6::timestamptz)
@@ -2193,7 +2239,7 @@ func pqStringArray(s []string) interface{} {
 // no special index. Drives the SaaS reliability SLA.
 func (r *Repository) KeywordSearch(ctx context.Context, projectID string, queryText string, limit int) ([]SearchResult, error) {
 	relaxedQueryText := relaxedFTSQueryText(queryText)
-	const q = `
+	q := `
 WITH q AS (
     SELECT websearch_to_tsquery('vornik_english', $2) AS strict_q,
            websearch_to_tsquery('vornik_english', $4) AS relaxed_q
@@ -2206,7 +2252,7 @@ SELECT c.id, c.project_id, COALESCE(c.task_id,''), c.source_name, c.content,
        c.is_alive, c.last_checked_at
 FROM project_memory_chunks c, q
 WHERE project_id = $1 AND (tsv @@ q.strict_q OR tsv @@ q.relaxed_q)
-  AND (c.expires_at IS NULL OR c.expires_at > NOW())
+  AND ` + r.expiryClause(projectID, "c.") + `
 ORDER BY score DESC, c.id LIMIT $3`
 
 	rows, err := r.db.QueryContext(ctx, q, projectID, queryText, limit, relaxedQueryText)
@@ -2317,7 +2363,7 @@ SELECT id,
        (embedding IS NOT NULL) AS has_embedding
 FROM project_memory_chunks
 WHERE project_id = $1
-  AND (expires_at IS NULL OR expires_at > NOW())
+  AND ` + r.expiryClause(projectID, "") + `
   ` + scopeClause + `
 ORDER BY created_at DESC
 LIMIT $2`
@@ -2349,11 +2395,11 @@ func (r *Repository) ListChunkContents(ctx context.Context, projectID string, li
 	if limit <= 0 {
 		limit = 1000
 	}
-	const q = `
+	q := `
 SELECT content
 FROM project_memory_chunks
 WHERE project_id = $1
-  AND (expires_at IS NULL OR expires_at > NOW())
+  AND ` + r.expiryClause(projectID, "") + `
 ORDER BY created_at DESC
 LIMIT $2`
 	rows, err := r.db.QueryContext(ctx, q, projectID, limit)
@@ -2417,7 +2463,7 @@ SELECT c.id, c.project_id, COALESCE(c.task_id,''), c.source_name, c.content,
 FROM project_memory_chunks c
 WHERE c.project_id = $1 AND c.content ILIKE '%%' || $2 || '%%' ESCAPE '\'
   AND c.lifecycle_state = 'published'
-  AND (c.expires_at IS NULL OR c.expires_at > NOW())
+  AND `+r.expiryClause(projectID, "c.")+`
   %s
 ORDER BY c.created_at DESC LIMIT $3`, strings.ReplaceAll(scopeFilterSQL(strictScope, 4), "repo_scope", "c.repo_scope"))
 	rows, err := r.db.QueryContext(ctx, sql, projectID, escapeLikeWildcards(q), limit, nullableString(repoScope))
@@ -2444,7 +2490,7 @@ SELECT c.id, c.project_id, COALESCE(c.task_id,''), c.source_name, c.content,
 FROM project_memory_chunks c
 WHERE c.project_id = $1 AND c.content ILIKE '%%' || $2 || '%%' ESCAPE '\'
   AND c.lifecycle_state = 'published'
-  AND (c.expires_at IS NULL OR c.expires_at > NOW())
+  AND `+r.expiryClause(projectID, "c.")+`
   AND ($4::timestamptz IS NULL OR COALESCE(c.event_time, c.created_at) >= $4::timestamptz)
   AND ($5::timestamptz IS NULL OR COALESCE(c.event_time, c.created_at) <= $5::timestamptz)
   %s
@@ -2471,7 +2517,7 @@ FROM project_memory_chunks c
 WHERE c.project_id = $1 AND c.content ILIKE '%%' || $2 || '%%' ESCAPE '\'
   AND c.lifecycle_state = 'published'
   AND c.validation_status NOT IN ('refuted','superseded')
-  AND (c.expires_at IS NULL OR c.expires_at > NOW())
+  AND `+r.expiryClause(projectID, "c.")+`
   AND (c.epoch_id IS NULL OR c.epoch_id = ANY($4::text[]))
   AND ($5::timestamptz IS NULL OR COALESCE(c.event_time, c.created_at) >= $5::timestamptz)
   AND ($6::timestamptz IS NULL OR COALESCE(c.event_time, c.created_at) <= $6::timestamptz)

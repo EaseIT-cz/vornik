@@ -8,10 +8,10 @@
     {{/* theme-color drives the mobile browser address-bar tint and the
          PWA title-bar accent. Updated at runtime by the theme-picker
          JS below so it tracks the operator's choice. The initial value
-         is the dark-theme brand-500 (EaseIT Labs blue) since dark is the
-         default theme; the early script will overwrite this before
-         first paint if a light-theme preference is saved/system-set. */}}
-    <meta name="theme-color" content="#0078C3">
+         is the dark-theme page colour since dark is the default theme;
+         the early script will overwrite this before first paint if a
+         light-theme preference is saved/system-set. */}}
+    <meta name="theme-color" content="#10141A">
     {{/* color-scheme is also set by the active palette's `color-scheme`
          CSS property in :root/[data-theme=dark], which the browser
          honours over this meta when the page is loaded. We keep the
@@ -37,10 +37,9 @@
                     || (window.matchMedia && window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark');
                 document.documentElement.setAttribute('data-theme', theme);
                 // Sync the address-bar tint with the chosen theme.
-                // Light-theme brand-500 = #558A98 cadet teal.
-                // Dark-theme  brand-500 = #0078C3 EaseIT Labs blue.
+                // Light = Paper #F6F4EF, dark = #10141A (Brand Manual v1.2).
                 var meta = document.querySelector('meta[name="theme-color"]');
-                if (meta) meta.setAttribute('content', theme === 'dark' ? '#0078C3' : '#558A98');
+                if (meta) meta.setAttribute('content', theme === 'dark' ? '#10141A' : '#F6F4EF');
             } catch (e) {
                 // localStorage unavailable (Safari private mode, etc.) —
                 // fall through to default light theme via :root.
@@ -49,13 +48,11 @@
     </script>
     <meta name="apple-mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-    {{/* Type system (UI design elevation): Bricolage Grotesque (display) +
-         Hanken Grotesk (UI/body) + JetBrains Mono (IDs, costs, hashes).
-         Distinctive, not the system-ui default. Same CDN tier as Tailwind;
-         falls back to system fonts offline. */}}
-    <link rel="preconnect" href="https://fonts.googleapis.com">
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,500;12..96,600;12..96,700&family=Hanken+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+    {{/* Type system: Brand Manual v1.2 — Space Grotesk (display) and
+         Manrope (UI/body), self-hosted from /ui/static/fonts (see the
+         @font-face rules in the style block); code uses the system
+         monospace. No third-party font request. */}}
+    <link rel="preload" href="/ui/static/fonts/Manrope-Variable.woff2" as="font" type="font/woff2" crossorigin>
     <link rel="manifest" href="/ui/static/manifest.webmanifest">
     <link rel="icon" type="image/svg+xml" href="/ui/static/icon.svg">
     <link rel="icon" type="image/x-icon" href="/ui/static/favicon.ico">
@@ -95,13 +92,9 @@
         // touching the rendered markup.
         //
         // Themes:
-        //   light  — Coolors palette
-        //            (https://coolors.co/ffcab1-69a2b0-659157-a1c084-e05263).
-        //            Cadet teal brand, forest accent, warm off-white
-        //            surfaces, dark ink. Default for new operators.
-        //   dark   — EaseIT Labs brand palette on Nord-inspired cool-gray
-        //            surfaces. Saturated EaseIT Labs blue + lime green
-        //            accents on a charcoal floor.
+        //   Both themes follow the EaseIT Labs Brand Manual v1.2 (design:
+        //   ui-design-refresh-design.md §11): navy ink, EaseIT blue, signal
+        //   green; light = Paper surfaces, dark = the manual's dark tokens.
         //
         // Conventions baked into the token system:
         //   * `dark-*` tokens are the SURFACE tier scale (page, card,
@@ -124,9 +117,9 @@
             theme: {
                 extend: {
                     fontFamily: {
-                        sans: ['"Hanken Grotesk"', 'system-ui', '-apple-system', 'sans-serif'],
-                        display: ['"Bricolage Grotesque"', 'system-ui', 'sans-serif'],
-                        mono: ['"JetBrains Mono"', 'ui-monospace', 'SFMono-Regular', 'monospace'],
+                        sans: ['Manrope', 'system-ui', '-apple-system', 'sans-serif'],
+                        display: ['"Space Grotesk"', 'Manrope', 'system-ui', 'sans-serif'],
+                        mono: ['ui-monospace', '"SF Mono"', '"Cascadia Code"', 'Menlo', 'Consolas', 'monospace'],
                     },
                     colors: {
                         // Surface tiers (page → card → raised → border).
@@ -204,24 +197,6 @@
                             700: 'rgb(var(--accent-700) / <alpha-value>)',
                             800: 'rgb(var(--accent-800) / <alpha-value>)',
                             900: 'rgb(var(--accent-900) / <alpha-value>)'
-                        },
-                        // Light-theme-only Coolors auxiliaries. Hardcoded
-                        // (not themed) — these shades have no dark-theme
-                        // equivalent today; they render the same way in
-                        // either theme. If/when the dark theme needs
-                        // distinct sage/peach/coral tones, lift these
-                        // into the variable system.
-                        sage: {
-                            100: '#E8F0DF', 200: '#CFE1BC', 300: '#B6D2A0',
-                            400: '#A1C084', 500: '#8AA670', 600: '#73895C'
-                        },
-                        peach: {
-                            100: '#FFF1E8', 200: '#FFDFCC', 300: '#FFCAB1',
-                            400: '#FFB294', 500: '#FF9774'
-                        },
-                        coral: {
-                            100: '#FAD3D7', 200: '#F5B8BE', 300: '#EE8B95',
-                            400: '#E5707C', 500: '#E05263', 600: '#C04050'
                         }
                     }
                 }
@@ -416,87 +391,91 @@
            without re-rendering markup.
            ============================================================ */
         :root, [data-theme="light"] {
-            /* LIGHT — Coolors palette */
+            /* LIGHT — Brand Manual v1.2. The scale is ordered by ROLE, not
+               lightness: the templates are dark-first, so the steps they use
+               as text (50–400) are dark AA blues/greens, 400–600 are fills
+               behind white text, and 700–900 are light tints used at alpha.
+               Pairs are pinned by internal/ui/palette_contrast_test.go. */
             color-scheme: light;
-            /* Surface (warm off-white) */
-            --surface-900: 245 241 236;   /* #F5F1EC page bg */
-            --surface-800: 255 255 255;   /* #FFFFFF cards */
-            --surface-700: 250 247 243;   /* #FAF7F3 raised */
-            --surface-600: 224 213 201;   /* #E0D5C9 border */
+            /* Surface (Paper) */
+            --surface-900: 246 244 239; /* #F6F4EF */
+            --surface-800: 255 255 255; /* #FFFFFF */
+            --surface-700: 251 250 247; /* #FBFAF7 */
+            --surface-600: 230 225 214; /* #E6E1D6 */
             /* Ink (dark text on light bg — semantically: 100 = primary) */
-            --ink-100: 27 32 38;          /* #1B2026 primary heading */
-            --ink-200: 42 49 56;          /* #2A3138 strong body */
-            --ink-300: 63 71 80;          /* #3F4750 body */
-            --ink-400: 91 100 112;        /* #5B6470 caption */
-            --ink-500: 122 132 146;       /* #7A8492 muted */
-            --ink-600: 165 173 184;       /* #A5ADB8 disabled */
-            --ink-700: 209 213 219;       /* #D1D5DB very subtle */
-            --ink-800: 229 231 235;       /* #E5E7EB pale fill */
-            --ink-900: 243 244 246;       /* #F3F4F6 lightest */
-            /* Brand — cadet teal */
-            --brand-50:  238 245 247;     /* currentColor */
-            --brand-100: 210 227 232;     /* #D2E3E8 */
-            --brand-200: 165 199 207;     /* #A5C7CF */
-            --brand-300: 122 171 183;     /* #7AABB7 */
-            --brand-400: 105 162 176;     /* #69A2B0 — Coolors hero */
-            --brand-500: 85 138 152;      /* #558A98 nav, CTAs */
-            --brand-600: 66 114 128;      /* #427280 */
-            --brand-700: 48 90 104;       /* #305A68 */
-            --brand-800: 31 66 80;        /* #1F4250 */
-            --brand-900: 16 42 56;        /* #102A38 */
-            /* Accent — forest green */
-            --accent-50:  238 244 235;    /* #EEF4EB */
-            --accent-100: 210 227 202;    /* #D2E3CA */
-            --accent-200: 176 207 168;    /* #B0CFA8 */
-            --accent-300: 136 179 129;    /* #88B381 */
-            --accent-400: 122 159 110;    /* #7A9F6E */
-            --accent-500: 101 145 87;     /* #659157 — Coolors hero */
-            --accent-600: 84 120 74;      /* #54784A */
-            --accent-700: 67 96 61;       /* #43603D */
-            --accent-800: 50 72 48;       /* #324830 */
-            --accent-900: 33 48 36;       /* #213024 */
+            --ink-100: 16 24 38;  /* #101826 */
+            --ink-200: 30 40 56;  /* #1E2838 */
+            --ink-300: 46 53 66;  /* #2E3542 */
+            --ink-400: 94 102 114; /* #5E6672 */
+            --ink-500: 100 108 120; /* #646C78 */
+            --ink-600: 133 140 151; /* #858C97 */
+            --ink-700: 211 214 219; /* #D3D6DB */
+            --ink-800: 232 233 236; /* #E8E9EC */
+            --ink-900: 243 244 246; /* #F3F4F6 */
+            /* Brand — EaseIT blue (role-ordered, see above) */
+            --brand-50: 11 52 90;  /* #0B345A */
+            --brand-100: 14 67 116; /* #0E4374 */
+            --brand-200: 15 74 128; /* #0F4A80 */
+            --brand-300: 17 82 141; /* #11528D */
+            --brand-400: 22 101 173; /* #1665AD */
+            --brand-500: 20 95 162; /* #145FA2 */
+            --brand-600: 17 82 141; /* #11528D */
+            --brand-700: 169 209 245; /* #A9D1F5 */
+            --brand-800: 214 232 250; /* #D6E8FA */
+            --brand-900: 227 238 249; /* #E3EEF9 */
+            /* Accent — signal green (role-ordered; fills are dark greens for white text) */
+            --accent-50: 42 79 20;  /* #2A4F14 */
+            --accent-100: 48 89 26;  /* #30591A */
+            --accent-200: 59 110 30; /* #3B6E1E */
+            --accent-300: 70 122 32; /* #467A20 */
+            --accent-400: 59 110 30; /* #3B6E1E */
+            --accent-500: 63 122 31; /* #3F7A1F */
+            --accent-600: 54 105 26; /* #36691A */
+            --accent-700: 207 230 184; /* #CFE6B8 */
+            --accent-800: 226 240 210; /* #E2F0D2 */
+            --accent-900: 238 246 230; /* #EEF6E6 */
         }
         [data-theme="dark"] {
-            /* DARK — EaseIT Labs brand on Nord-inspired neutral surfaces */
+            /* DARK — Brand Manual v1.2 dark tokens (conventional light→dark scale) */
             color-scheme: dark;
-            /* Surface (neutral cool charcoal) */
-            --surface-900: 59 66 82;      /* #3B4252 page bg */
-            --surface-800: 76 86 106;     /* #4C566A cards */
-            --surface-700: 94 107 133;    /* #5E6B85 raised */
-            --surface-600: 122 143 168;   /* #7A8FA8 border */
+            /* Surface (navy-black) */
+            --surface-900: 16 20 26;  /* #10141A */
+            --surface-800: 23 28 35;  /* #171C23 */
+            --surface-700: 30 36 45;  /* #1E242D */
+            --surface-600: 44 52 64;  /* #2C3440 */
             /* Ink (light text on dark bg — same semantic numbering;
                gray-100 = lightest near-white, gray-600 = subdued) */
-            --ink-100: 243 244 246;       /* #F3F4F6 lightest */
-            --ink-200: 229 231 235;       /* #E5E7EB */
-            --ink-300: 209 213 219;       /* #D1D5DB */
-            --ink-400: 192 199 211;       /* #C0C7D3 caption (visible on surface-800) */
-            --ink-500: 168 180 197;       /* #A8B4C5 muted */
-            --ink-600: 148 161 180;       /* #94A1B4 subdued (still ≥3:1 on surface-800) */
-            --ink-700: 55 65 81;          /* #374151 */
-            --ink-800: 31 41 55;          /* #1F2937 */
-            --ink-900: 17 24 39;          /* #111827 deepest */
-            /* Brand — EaseIT Labs blue */
-            --brand-50:  230 243 250;     /* #E6F3FA */
-            --brand-100: 204 231 245;     /* #CCE7F5 */
-            --brand-200: 153 207 235;     /* #99CFEB */
-            --brand-300: 102 183 225;     /* #66B7E1 */
-            --brand-400: 51 159 215;      /* #339FD7 */
-            --brand-500: 0 120 195;       /* #0078C3 — EaseIT Labs hero */
-            --brand-600: 0 102 166;       /* #0066A6 */
-            --brand-700: 0 84 137;        /* #005489 */
-            --brand-800: 0 66 108;        /* #00426C */
-            --brand-900: 0 48 79;         /* #00304F */
-            /* Accent — EaseIT Labs lime green */
-            --accent-50:  242 248 230;    /* #F2F8E6 */
-            --accent-100: 229 240 204;    /* #E5F0CC */
-            --accent-200: 203 225 153;    /* #CBE199 */
-            --accent-300: 177 210 102;    /* #B1D266 */
-            --accent-400: 151 195 51;     /* #97C333 */
-            --accent-500: 120 180 30;     /* #78B41E EaseIT Labs hero */
-            --accent-600: 101 152 24;     /* #659818 */
-            --accent-700: 82 124 19;      /* #527C13 */
-            --accent-800: 63 96 14;       /* #3F600E */
-            --accent-900: 44 68 8;        /* #2C4408 */
+            --ink-100: 236 233 225; /* #ECE9E1 */
+            --ink-200: 222 219 211; /* #DEDBD3 */
+            --ink-300: 201 205 211; /* #C9CDD3 */
+            --ink-400: 154 162 172; /* #9AA2AC */
+            --ink-500: 138 146 156; /* #8A929C */
+            --ink-600: 115 123 134; /* #737B86 */
+            --ink-700: 55 65 81;  /* #374151 */
+            --ink-800: 31 41 55;  /* #1F2937 */
+            --ink-900: 11 14 19;  /* #0B0E13 */
+            /* Brand — EaseIT blue (400 is text only: white on it is 2.7:1) */
+            --brand-50: 238 245 252; /* #EEF5FC */
+            --brand-100: 214 232 250; /* #D6E8FA */
+            --brand-200: 169 209 245; /* #A9D1F5 */
+            --brand-300: 111 180 238; /* #6FB4EE */
+            --brand-400: 79 163 230; /* #4FA3E6 */
+            --brand-500: 23 106 184; /* #176AB8 */
+            --brand-600: 22 101 173; /* #1665AD */
+            --brand-700: 17 82 141; /* #11528D */
+            --brand-800: 14 67 116; /* #0E4374 */
+            --brand-900: 11 52 90;  /* #0B345A */
+            /* Accent — signal green */
+            --accent-50: 238 248 228; /* #EEF8E4 */
+            --accent-100: 213 240 190; /* #D5F0BE */
+            --accent-200: 185 232 148; /* #B9E894 */
+            --accent-300: 155 219 107; /* #9BDB6B */
+            --accent-400: 143 203 91; /* #8FCB5B */
+            --accent-500: 63 122 31; /* #3F7A1F */
+            --accent-600: 54 105 26; /* #36691A */
+            --accent-700: 42 79 20;  /* #2A4F14 */
+            --accent-800: 31 59 15;  /* #1F3B0F */
+            --accent-900: 22 41 11;  /* #16290B */
         }
         /* Smooth crossfade when the operator toggles the theme so the
            transition doesn't feel like a janky reload. Skipped for
@@ -516,16 +495,19 @@
         .theme-icon-moon { display: block; }
         [data-theme="dark"] .theme-icon-sun  { display: block; }
         [data-theme="dark"] .theme-icon-moon { display: none; }
-        /* Nav-logo centre dot — different colour per theme so the
-           glyph mirrors each palette's accent identity:
-             light  → peach-300  (Coolors warm highlight)
-             dark   → accent-500 (EaseIT Labs lime green) */
-        .nav-logo-dot { fill: #FFCAB1; }
-        [data-theme="dark"] .nav-logo-dot { fill: #78B41E; }
+        /* Nav-logo outcome dot — the Harness mark's green "approved
+           outcome" (brand mark design §2.2). On the rail it is the
+           on-dark signal green in both themes' glass. */
+        .nav-logo-dot { fill: #9BDB6B; }
+        [data-theme="dark"] .nav-logo-dot { fill: #9BDB6B; }
 
-        /* === Type system (UI design elevation) === */
+        /* === Type system === Brand Manual v1.2 faces, self-hosted from
+           /ui/static/fonts (SIL OFL 1.1, licences alongside) so the UI makes
+           no request to Google Fonts. */
+        @font-face { font-family: "Space Grotesk"; src: url("/ui/static/fonts/SpaceGrotesk-Variable.woff2") format("woff2"); font-weight: 300 700; font-display: swap; }
+        @font-face { font-family: "Manrope"; src: url("/ui/static/fonts/Manrope-Variable.woff2") format("woff2"); font-weight: 200 800; font-display: swap; }
         body {
-            font-family: 'Hanken Grotesk', system-ui, -apple-system, sans-serif;
+            font-family: 'Manrope', system-ui, -apple-system, sans-serif;
             -webkit-font-smoothing: antialiased;
             -moz-osx-font-smoothing: grayscale;
             text-rendering: optimizeLegibility;
@@ -546,12 +528,11 @@
             min-height: 100vh;
         }
         h1, h2, h3, .font-display {
-            font-family: 'Bricolage Grotesque', 'Hanken Grotesk', system-ui, sans-serif;
+            font-family: 'Space Grotesk', 'Manrope', system-ui, sans-serif;
             letter-spacing: -0.018em;
         }
         code, kbd, pre, samp, .font-mono {
-            font-family: 'JetBrains Mono', ui-monospace, SFMono-Regular, monospace;
-            font-feature-settings: "ss01", "zero";
+            font-family: ui-monospace, "SF Mono", "Cascadia Code", Menlo, Consolas, monospace;
         }
 
         /* === Atmosphere === page floor gets a soft brand glow + a hair of
@@ -993,26 +974,15 @@
 
 {{define "navLogo"}}
 <a href="/ui/" title="Vornik — Dashboard" aria-label="Vornik — Dashboard" class="flex items-center justify-center text-gray-100">
-    {{/* Two-colour glyph rendered for legibility on the brand-500
-         (Coolors cadet teal) nav strip:
-           - hex outline + 6 satellites: brand-50 (currentColor), very
-             pale teal — high contrast on the saturated brand-500
-             background at small sizes;
-           - centre dot: peach-300 (#FFCAB1), the warm Coolors
-             highlight — gives the glyph a two-tone identity that
-             echoes the palette without competing with the green
-             accent reserved for spend / success metrics. */}}
-    <svg class="h-7 w-7" viewBox="0 0 28 28" fill="none" aria-hidden="true">
-        <path d="M14 3L24 8.5v11L14 25 4 19.5v-11L14 3z" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/>
-        {{/* Centre dot fill is theme-aware via the `nav-logo-dot`
-             class — see the rule in pageHead. */}}
-        <circle cx="14" cy="14" r="2.5" class="nav-logo-dot"/>
-        <circle cx="14" cy="7"  r="1.8" fill="currentColor" opacity="0.9"/>
-        <circle cx="20.2" cy="10.5" r="1.8" fill="currentColor" opacity="0.9"/>
-        <circle cx="20.2" cy="17.5" r="1.8" fill="currentColor" opacity="0.9"/>
-        <circle cx="14" cy="21" r="1.8" fill="currentColor" opacity="0.9"/>
-        <circle cx="7.8"  cy="17.5" r="1.8" fill="currentColor" opacity="0.9"/>
-        <circle cx="7.8"  cy="10.5" r="1.8" fill="currentColor" opacity="0.9"/>
+    {{/* The Harness mark (https://docs.vornik.io):
+         brackets and the two agent dots take currentColor (pale on the
+         brand-500 rail); the outcome dot keeps the theme-aware
+         `nav-logo-dot` class: green, the colour of an approved outcome. */}}
+    <svg class="h-7 w-7" viewBox="0 0 120 120" fill="none" aria-hidden="true">
+        <path d="M42 24H26V96H42M78 24H94V96H78" stroke="currentColor" stroke-width="11" stroke-linecap="round" stroke-linejoin="round"/>
+        <circle cx="47" cy="45" r="10.5" fill="currentColor" opacity="0.9"/>
+        <circle cx="73" cy="45" r="10.5" fill="currentColor" opacity="0.9"/>
+        <circle cx="60" cy="75" r="11.5" class="nav-logo-dot"/>
     </svg>
     {{/* Icon-only mark (UI refresh 2026-06-08): the rail is 3.5rem wide,
          so the old "Vornik" wordmark overflowed. Pages that want the
@@ -1039,8 +1009,8 @@
 {{define "navIcons"}}{{/* shared icon SVG paths so the two surfaces stay in sync */}}{{end}}
 
 {{define "themeToggle"}}
-{{/* Theme picker — toggles between `light` (Coolors palette) and
-     `dark` (EaseIT Labs brand on Nord neutral). Persists the choice in
+{{/* Theme picker — toggles between `light` and `dark` (both Brand
+     Manual v1.2 palettes). Persists the choice in
      localStorage so it survives reloads and navigations. The early
      resolver in pageHead applies the saved value before first paint,
      so this button is the only place the operator interacts with
@@ -1082,7 +1052,7 @@
             html.setAttribute('data-theme', next);
             try { localStorage.setItem('vornik:theme', next); } catch (e) { /* ignore */ }
             var meta = document.querySelector('meta[name="theme-color"]');
-            if (meta) meta.setAttribute('content', next === 'dark' ? '#0078C3' : '#558A98');
+            if (meta) meta.setAttribute('content', next === 'dark' ? '#10141A' : '#F6F4EF');
             // Drop the transition class after the animation window so
             // unrelated HTMX swaps don't get the same fade treatment.
             window.setTimeout(function () { html.classList.remove('theme-transition'); }, 220);
@@ -1730,7 +1700,7 @@ scanner picks them up. Pass a dict:
             <polyline fill="none" stroke="#c084fc" stroke-width="1.5" points="{{.SparkLine}}"/>
             {{else}}
             <polyline fill="rgba(101, 145, 87, 0.18)" stroke="none" points="{{.SparkFilled}}"/>
-            <polyline fill="none" stroke="#659157" stroke-width="1.5" points="{{.SparkLine}}"/>
+            <polyline fill="none" stroke="#1C7ED6" stroke-width="1.5" points="{{.SparkLine}}"/>
             {{end}}
         </svg>
         {{end}}

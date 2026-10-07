@@ -282,7 +282,8 @@ func startStackWith(t *testing.T, edit func(string) string, files map[string]str
 	t.Helper()
 	requirePodman(t)
 	s := &stack{dir: t.TempDir(), adminKey: randomKey(t), cfgEdit: edit, cfgFiles: files}
-	pgPort := startPostgres(t)
+	reapStaleContainers()
+	pgPort, _ := startPostgres(t)
 	s.pgPort = pgPort
 
 	s.llm = &LLMStub{EmbeddingDim: embeddingDim, Final: "OK", Scripts: []Script{digestScript(goodDigest()), replyScript()}}

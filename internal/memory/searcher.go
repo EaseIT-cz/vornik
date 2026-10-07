@@ -308,7 +308,7 @@ func (s *Searcher) SearchWithOptions(ctx context.Context, projectID, query strin
 		}
 		reqCtx.OperatorID = rc.ActorID
 	}
-	return s.applyFirewall(ctx, projectID, results, reqCtx), nil
+	return s.recordReturnedUse(ctx, projectID, s.applyFirewall(ctx, projectID, results, reqCtx))
 }
 
 // Search executes a hybrid (or FTS-only) search for the given query scoped

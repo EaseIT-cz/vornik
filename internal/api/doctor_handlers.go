@@ -1003,16 +1003,22 @@ func (h *DoctorHandlers) checkConfigValidation() DoctorCheck {
 		return DoctorCheck{Name: name, Status: "SKIPPED", Message: "no config directory configured, skipping validation"}
 	}
 
-	reg := &registry.Registry{}
+	reg := registry.New()
 	if err := reg.Stage(h.configDir); err != nil {
 		return DoctorCheck{Name: name, Status: "ERROR", Message: fmt.Sprintf("failed to load configs: %v", err)}
 	}
+	var items []string
+	if index := reg.StagedTreeIndex(); index != nil {
+		for _, rejected := range index.Rejected {
+			items = append(items, fmt.Sprintf("%s %s: %s", rejected.Kind, rejected.Path, rejected.Error))
+		}
+	}
 	if err := reg.ValidateStaged(); err != nil {
+		items = append(items, err.Error())
+	}
+	if len(items) > 0 {
 		return DoctorCheck{
-			Name:    name,
-			Status:  "ERROR",
-			Message: "config validation failed",
-			Items:   []string{err.Error()},
+			Name: name, Status: "ERROR", Message: "config validation failed", Items: items,
 		}
 	}
 

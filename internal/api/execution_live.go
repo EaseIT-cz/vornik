@@ -24,9 +24,9 @@ const (
 	// reader can't backpressure the publisher's fan-out.
 	liveWriteTimeout = 5 * time.Second
 	// livePingInterval is how often the server pings the client
-	// to detect a half-open connection. Three missed pongs at
-	// this interval = 45s — well under any reasonable proxy
-	// idle timeout.
+	// to detect a half-open connection. A ping unanswered within
+	// another interval closes the connection (about 30s from opening
+	// when the first ping fails).
 	livePingInterval = 15 * time.Second
 	// liveReadLimit caps the maximum WebSocket frame size we
 	// read from the client. The hello frame carries a single
@@ -60,7 +60,7 @@ const (
 //  4. Subscribe to the publisher; replay any buffered events
 //     with seq >= last_seq+1; stream live thereafter.
 //  5. Send a keepalive ping every livePingInterval. Drop the
-//     connection when three pings go un-ponged or the writer
+//     connection when a ping goes unanswered or the writer
 //     times out.
 //  6. On any error or context cancel, close cleanly with a
 //     normal-closure code.
@@ -139,6 +139,11 @@ func (s *Server) ExecutionLive(w http.ResponseWriter, r *http.Request, execution
 	// or malformed JSON falls back to the query cursor, then 0.
 	hello := readLiveHello(ctx, conn, parseLiveLastSeqFromQuery(r))
 
+	// The protocol accepts no application messages after the cursor hello.
+	// Keep reading control frames so Ping can observe browser pongs and
+	// disconnects promptly cancel the stream and release its subscription.
+	ctx = conn.CloseRead(ctx)
+
 	events, unsub, err := s.liveSub.Subscribe(executionID, liveSubscribeFromSeq(hello.LastSeq))
 	if err != nil {
 		s.logger.Warn().Err(err).Str("executionId", executionID).
@@ -149,8 +154,8 @@ func (s *Server) ExecutionLive(w http.ResponseWriter, r *http.Request, execution
 	defer unsub()
 
 	// Heartbeat goroutine — server pings the client; the library
-	// auto-replies to client pings. Three missed pings (45s)
-	// equals dead.
+	// auto-replies to client pings through the active control-frame reader.
+	// One unanswered ping closes the connection after its 15s timeout.
 	pingDone := make(chan struct{})
 	go func() {
 		ticker := time.NewTicker(livePingInterval)

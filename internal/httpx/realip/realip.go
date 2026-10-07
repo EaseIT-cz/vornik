@@ -111,14 +111,18 @@ func (c Config) ResolveClientIP(r *http.Request) string {
 	return host
 }
 
-// HasForwardingHeader reports whether r carries any client-IP forwarding
-// header — the configured header, X-Forwarded-For, or CF-Connecting-IP.
-// The middleware uses it to detect a spoof ATTEMPT from an untrusted peer.
+// HasForwardingHeader reports whether r carries any forwarding header a
+// trusted proxy may set — the configured header, X-Forwarded-For,
+// CF-Connecting-IP, or X-Forwarded-Proto (LLD §11). The middleware uses it
+// to detect a spoof ATTEMPT from an untrusted peer.
 func (c Config) HasForwardingHeader(r *http.Request) bool {
 	if r.Header.Get(c.Header) != "" {
 		return true
 	}
 	if r.Header.Get("X-Forwarded-For") != "" {
+		return true
+	}
+	if r.Header.Get(ForwardedProtoHeader) != "" {
 		return true
 	}
 	return r.Header.Get(DefaultHeader) != ""

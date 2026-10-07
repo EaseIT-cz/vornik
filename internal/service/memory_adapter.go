@@ -382,7 +382,7 @@ func (a *memoryCompanionAdapter) Correct(ctx context.Context, in api.CorrectInpu
 		// Surgical by-id refute — flips exactly the named chunks,
 		// never the claim-search top matches (which may be the
 		// authoritative corrections).
-		n, err := corrector.RefuteByIDs(ctx, in.ProjectID, in.ChunkIDs)
+		n, err := corrector.RefuteByIDs(ctx, in.ProjectID, in.ChunkIDs, in.RefuteRoute)
 		if err != nil {
 			return api.CorrectResult{}, err
 		}

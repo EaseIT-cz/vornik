@@ -3,6 +3,7 @@ package slack
 import (
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestParseSkillAction(t *testing.T) {
@@ -36,7 +37,7 @@ func TestBuildSkillReviewBlocks_EscapesUserContent(t *testing.T) {
 
 func TestBuildSkillReviewBlocks(t *testing.T) {
 	blocks := BuildSkillReviewBlocks([]SkillReviewDraft{
-		{ID: "sk-1", Name: "trace-hang", Description: "when a model hangs"},
+		{ID: "sk-1", Version: 1, Name: "trace-hang", Description: "when a model hangs"},
 	})
 	// header + section + actions = 3 blocks for one draft.
 	if len(blocks) != 3 {
@@ -46,7 +47,7 @@ func TestBuildSkillReviewBlocks(t *testing.T) {
 	if len(actions) != 2 {
 		t.Fatalf("expected approve+reject buttons, got %d", len(actions))
 	}
-	if actions[0]["action_id"] != "skill_approve:sk-1" || actions[1]["action_id"] != "skill_reject:sk-1" {
+	if actions[0]["action_id"] != "skill_approve:sk-1:1" || actions[1]["action_id"] != "skill_reject:sk-1:1" {
 		t.Fatalf("wrong action_ids: %v / %v", actions[0]["action_id"], actions[1]["action_id"])
 	}
 }
@@ -80,6 +81,27 @@ func TestSkillReviewBlocksCarryTheRatingLine(t *testing.T) {
 	for _, b := range plain {
 		if b["type"] == "context" {
 			t.Error("with no rating line there must be no context block at all")
+		}
+	}
+}
+
+func TestSkillRevisionBlocksAndStaleAction(t *testing.T) {
+	at := time.Date(2026, 10, 6, 11, 30, 0, 0, time.FixedZone("CEST", 7200))
+	blocks := BuildSkillReviewBlocks([]SkillReviewDraft{{ID: "s", Name: "deploy", Version: 3, ProposedAt: at}})
+	text := blocks[1]["text"].(map[string]any)["text"].(string)
+	if !strings.Contains(text, "v3") || !strings.Contains(text, "2026-10-06 09:30:00 UTC") {
+		t.Fatal(text)
+	}
+	actions := blocks[2]["elements"].([]map[string]any)
+	for i, a := range actions {
+		ap, id, v, ok := ParseSkillRevisionAction(a["action_id"].(string))
+		if !ok || id != "s" || v != 3 || ap != (i == 0) {
+			t.Fatal(a)
+		}
+	}
+	for _, raw := range []string{"skill_approve:s", "skill_reject:s:0", "non-skill:s:3"} {
+		if _, _, _, ok := ParseSkillRevisionAction(raw); ok {
+			t.Fatal(raw)
 		}
 	}
 }

@@ -13,6 +13,19 @@ this updates.
 
 ## Container images are part of the update
 
+After fetching, `--ref main` uses `origin/main`, including when the local
+`main` branch is stale. Bare branch names containing slashes behave the same
+way. Existing tags retain precedence; use `refs/heads/main` to explicitly
+select the local branch.
+
+The updater refuses a target that is an older ancestor of the installed
+binary's commit, before backup or checkout. `--yes` and `--force` do not bypass
+this check; an intentional rollback requires `--allow-downgrade` and a separate
+assessment of database and deployed-config compatibility. `--check` returns
+nonzero for a refused downgrade too. When installed provenance is unavailable,
+the updater warns that it could not verify downgrade safety. This ancestry
+check does not establish compatibility for divergent histories.
+
 > **Since 2026.9.3 the agent image is PULLED, not built.** The release publishes
 > it to `ghcr.io/easeit-cz/vornik-agent`, and the updater fetches it **by digest**
 > — so an ordinary update no longer spends several minutes building a container.

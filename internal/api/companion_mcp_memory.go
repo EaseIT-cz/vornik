@@ -1033,6 +1033,10 @@ type CorrectInput struct {
 	// corrections would otherwise out-rank it in a claim search
 	// (refuting "top matches" would demote the corrections instead).
 	ChunkIDs []string
+	// RefuteRoute is recorded on the refuted chunks (refute_route,
+	// migration 218; GitHub #76). companionToolMemoryCorrect sets it via
+	// companionRefuteRoute; empty means memory.RefuteRouteMemoryCorrect.
+	RefuteRoute string
 }
 
 // RefutedChunkInfo is the per-row record of a chunk that was flipped to
@@ -1066,6 +1070,28 @@ type correctArgs struct {
 	MaxRefutes int      `json:"max_refutes"`
 	RepoScope  string   `json:"repo_scope"`
 	ChunkIDs   []string `json:"chunk_ids"`
+	// Reason is the Hermes plugin's declared refute route (GitHub #76).
+	Reason string `json:"reason"`
+}
+
+// companionRefuteRoute maps memory_correct's reason argument to the
+// refute route recorded on the chunks (design 22, "Reinstating a refuted
+// mirrored note"). The route is the refuter's asserted label, not a daemon
+// attestation that the mirror's forget ran: the Hermes plugin's reasons
+// are honoured only from a hermes key in chunk-id mode, and every other
+// combination records memory_correct. Only mirror_forget rows are ever
+// reinstated, so a Claude Code or Codex key cannot mark a Hermes note as
+// one the mirror forgot.
+func companionRefuteRoute(key *persistence.APIKey, reason string, chunkIDs []string) string {
+	if key != nil && key.ClientKind == "hermes" && len(chunkIDs) > 0 {
+		switch strings.TrimSpace(reason) {
+		case memory.RefuteRouteMirrorForget:
+			return memory.RefuteRouteMirrorForget
+		case memory.RefuteRouteForgetCommand:
+			return memory.RefuteRouteForgetCommand
+		}
+	}
+	return memory.RefuteRouteMemoryCorrect
 }
 
 type correctResultOut struct {
@@ -1113,11 +1139,12 @@ func (s *Server) companionToolMemoryCorrect(ctx context.Context, key *persistenc
 		// an explicit arg wins; an omitted arg falls back to the key's
 		// DefaultRepoScope (migration 110) so memory_correct doesn't search
 		// across the whole project when a caller forgets repo_scope.
-		RepoScope:  effectiveRepoScope(key, args.RepoScope),
-		MaxRefutes: args.MaxRefutes,
-		ActorKind:  companionActorKind(key),
-		ActorID:    key.ID,
-		ChunkIDs:   chunkIDs,
+		RepoScope:   effectiveRepoScope(key, args.RepoScope),
+		MaxRefutes:  args.MaxRefutes,
+		ActorKind:   companionActorKind(key),
+		ActorID:     key.ID,
+		ChunkIDs:    chunkIDs,
+		RefuteRoute: companionRefuteRoute(key, args.Reason, chunkIDs),
 	})
 	if err != nil {
 		return "", fmt.Errorf("memory_correct failed: %w", err)

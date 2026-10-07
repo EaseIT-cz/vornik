@@ -4313,6 +4313,36 @@ func RunMemoryIngestAuditSuite(t *testing.T, repo persistence.MemoryIngestAuditR
 		}
 	})
 
+	// GitHub #76 (2026-10-05 audit), design 22 round 2: a reinstate is an
+	// admit whose row names the reinstated chunk; a fresh admit names none.
+	t.Run("ReinstatedChunkID_round_trips", func(t *testing.T) {
+		project := uniqueID("proj")
+		chunkID := uniqueID("chunk")
+		a := newAudit(project, "companion:hermes:note", persistence.MemoryIngestAuditAdmitted)
+		a.ReinstatedChunkID = &chunkID
+		if err := repo.Record(ctx, a); err != nil {
+			t.Fatalf("Record: %v", err)
+		}
+		fresh := newAudit(project, "companion:hermes:note", persistence.MemoryIngestAuditAdmitted)
+		fresh.IngestedAt = a.IngestedAt.Add(-time.Second)
+		if err := repo.Record(ctx, fresh); err != nil {
+			t.Fatalf("Record fresh: %v", err)
+		}
+		got, err := repo.ListByProject(ctx, project, 10)
+		if err != nil || len(got) != 2 {
+			t.Fatalf("ListByProject: %d rows, %v", len(got), err)
+		}
+		if got[0].ReinstatedChunkID == nil || *got[0].ReinstatedChunkID != chunkID {
+			t.Errorf("reinstated_chunk_id lost: %v", got[0].ReinstatedChunkID)
+		}
+		if got[0].GateFailed != nil {
+			t.Errorf("gate_failed on a reinstate = %v, want NULL", *got[0].GateFailed)
+		}
+		if got[1].ReinstatedChunkID != nil {
+			t.Errorf("a fresh admit names a reinstated chunk: %v", *got[1].ReinstatedChunkID)
+		}
+	})
+
 	t.Run("ListByProject_orders_newest_first", func(t *testing.T) {
 		project := uniqueID("proj")
 		for i := 0; i < 3; i++ {

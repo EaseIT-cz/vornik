@@ -6,15 +6,21 @@
   "scope": "/ui/",
   "display": "standalone",
   "orientation": "portrait",
-  "theme_color": "#0078C3",
-  "background_color": "#3B4252",
+  "theme_color": "#10141A",
+  "background_color": "#10141A",
   "categories": ["productivity", "developer"],
   "icons": [
     {
       "src": "/ui/static/icon.svg",
       "sizes": "any",
       "type": "image/svg+xml",
-      "purpose": "any maskable"
+      "purpose": "any"
+    },
+    {
+      "src": "/ui/static/icon-maskable.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "maskable"
     }
   ]
 }

@@ -162,6 +162,7 @@ func RunsInHelper(name string) bool {
 var Tools = []Tool{
 	{Name: "file_read", Runtime: RuntimeHelper},
 	{Name: "file_write", Acts: true, Runtime: RuntimeHelper},
+	{Name: "document_render", Acts: true, Runtime: RuntimeHelper},
 	{Name: "run_shell", Acts: true},
 	{Name: "current_time", Runtime: RuntimeHelper},
 	{Name: "file_edit", Acts: true, Runtime: RuntimeHelper},

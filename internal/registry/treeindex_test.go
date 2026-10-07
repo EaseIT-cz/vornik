@@ -85,3 +85,25 @@ func TestTreeIndex_LayeredShadowing(t *testing.T) {
 func TestTreeIndex_NilBeforeLoad(t *testing.T) {
 	assert.Nil(t, New().TreeIndex())
 }
+
+// Issue #72: diagnostics read a copied staged index without promoting it.
+func TestStagedTreeIndex_IsolatedFromActiveAndCallerMutation(t *testing.T) {
+	r := New()
+	require.Nil(t, r.StagedTreeIndex())
+	dir := t.TempDir()
+	layerHelper(t, dir, "p1", "s1", "w1")
+	require.NoError(t, r.Load(dir))
+	active := r.TreeIndex()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "projects", "broken.yaml"), []byte("projectId: broken\nunknown_key: x\n"), 0644))
+	require.NoError(t, r.Stage(dir))
+	ix := r.StagedTreeIndex()
+	require.NotNil(t, ix)
+	require.Len(t, ix.Rejected, 1)
+	ix.Rejected[0].Error = "mutated"
+	ix.Layers[0] = "mutated"
+	ix.Sources[0].Path = "mutated"
+	require.NotEqual(t, "mutated", r.StagedTreeIndex().Rejected[0].Error)
+	require.NotEqual(t, "mutated", r.StagedTreeIndex().Layers[0])
+	require.NotEqual(t, "mutated", r.StagedTreeIndex().Sources[0].Path)
+	require.Equal(t, active, r.TreeIndex())
+}

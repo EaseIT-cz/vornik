@@ -58,6 +58,7 @@ func TestApproverDeviceRoutes_RefuseEveryNonDeviceCredential(t *testing.T) {
 				body = strings.NewReader("")
 			}
 			req := httptest.NewRequest(rt.Method, rt.Path, body)
+			req.Host = "localhost" // the approver pages refuse plain http to a non-loopback host (T12); this test is about the device gate
 			req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 			req.Header.Set("Sec-Fetch-Site", "same-origin")
 			apply(req)
@@ -88,6 +89,7 @@ func TestApproverDeviceRoutes_RefuseEveryNonDeviceCredential(t *testing.T) {
 		t.Fatal(err)
 	}
 	req := httptest.NewRequest(http.MethodGet, "/ui/approve/", nil)
+	req.Host = "localhost" // the approver pages refuse plain http to a non-loopback host (T12); this test is about the device gate
 	req.AddCookie(&http.Cookie{Name: approverdevice.CookieName, Value: live.DeviceToken})
 	rec := httptest.NewRecorder()
 	c.HTTPServer.Handler.ServeHTTP(rec, req)
@@ -152,6 +154,7 @@ func TestApproverDeviceRoutes_HostActionRefusesEveryNonDeviceCredential(t *testi
 		for _, choice := range []string{"once", "session", "always", "deny", "approve"} {
 			body := strings.NewReader(url.Values{"decision": {choice}, "rendered_sha256": {row.RenderedSHA256}}.Encode())
 			req := httptest.NewRequest(http.MethodPost, "/ui/approve/"+id, body)
+			req.Host = "localhost" // the approver pages refuse plain http to a non-loopback host (T12); this test is about the device gate
 			req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 			req.Header.Set("Sec-Fetch-Site", "same-origin")
 			apply(req)
@@ -187,6 +190,7 @@ func TestApproverDeviceRoutes_PerIPBackstop(t *testing.T) {
 	limited := false
 	for i := 0; i < 20 && !limited; i++ {
 		req := httptest.NewRequest(http.MethodGet, "/ui/pair", nil)
+		req.Host = "localhost" // the approver pages refuse plain http to a non-loopback host (T12); this test is about the device gate
 		req.RemoteAddr = "203.0.113.7:1234"
 		rec := httptest.NewRecorder()
 		c.HTTPServer.Handler.ServeHTTP(rec, req)

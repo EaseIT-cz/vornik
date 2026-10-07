@@ -178,7 +178,7 @@ only; it does not make a fetch happen.
 When you are unsure which workflow fits, read `catalog()` and this skill
 before delegating. Do not infer a capability from a workflow's name.
 
-## Six shipped workflows
+## Shipped workflows
 
 | Workflow ID | Best for |
 |---|---|

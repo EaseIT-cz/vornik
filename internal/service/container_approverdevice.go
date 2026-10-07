@@ -38,7 +38,15 @@ func (c *Container) approverDeviceService() *approverdevice.Service {
 			c.hostApprovalMetrics = approverdevice.NewHostActionMetrics()
 		}
 		opts = append(opts, approverdevice.WithHostActionRecorder(c.hostApprovalMetrics.Record))
+		// vornik_approver_https_required_total, attached in initHTTPServer
+		// (design §9.2, T12).
+		if c.approverHTTPSMetrics == nil {
+			c.approverHTTPSMetrics = approverdevice.NewHTTPSRefusalMetrics()
+		}
+		opts = append(opts, approverdevice.WithHTTPSRefusalRecorder(c.approverHTTPSMetrics.Record))
 		svc := approverdevice.New(c.repos.ApproverDevices, opts...)
+		svc.RegisterEffect(persistence.ApprovalKindMemoryRetention, c.applyMemoryRetention)
+		svc.RegisterDescriber(persistence.ApprovalKindMemoryRetention, describeMemoryRetention)
 		// A host action's page leads with its §18.7 phrase at High (design
 		// §4.1). Registered here, not with the agent admin verbs: the
 		// approvals arrive whether or not the admin templates are installed.

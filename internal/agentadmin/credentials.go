@@ -50,6 +50,7 @@ func (r *Renderer) requestCredential(st *State, raw json.RawMessage) Change {
 	if err := decodeStrict(raw, &in); err != nil {
 		return refuse(verb, ns, "%v", err)
 	}
+	in.Project = projectSlug(ns, in.Project)
 	pid := agentns.ID(ns, in.Project)
 	p, ok := st.Projects[pid]
 	if !ok {

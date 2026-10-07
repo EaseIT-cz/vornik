@@ -97,6 +97,12 @@ func (c *Container) serverConfigFor(projectID, name, rawURL string, auth mcpauth
 	return cfg, nil
 }
 
+// listingConfig is the connection the pre-approval listing makes. The project
+// is the slug or the full id, as the verb itself accepts, never ns--ns--x.
+func listingConfig(ns string, in agentadmin.AddMCPServerInput) mcp.ServerConfig {
+	return mcp.ServerConfig{Name: in.Name, Transport: "streamable-http", URL: in.URL, ProjectID: agentns.ID(ns, agentadmin.ProjectSlug(ns, in.Project))}
+}
+
 // advertiseUnauthenticated lists an add_mcp_server target BEFORE approval,
 // only when it carries no credential: listing a credentialed server first
 // would send a stored value to a URL no person has approved. The result
@@ -109,7 +115,7 @@ func (s *agentAdminService) advertiseUnauthenticated(ctx context.Context, ns str
 	if in.Auth.Mode != "" && in.Auth.Mode != "none" {
 		return "", nil
 	}
-	cfg := mcp.ServerConfig{Name: in.Name, Transport: "streamable-http", URL: in.URL, ProjectID: agentns.ID(ns, in.Project)}
+	cfg := listingConfig(ns, in)
 	tools, err := s.c.listMCPTools(ctx, cfg)
 	if err != nil {
 		s.c.Logger.Info().Str("namespace", ns).Str("server", in.Name).Err(err).Msg("agent admin: could not list a new server's tools; it will be read-pending")

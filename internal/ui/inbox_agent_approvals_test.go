@@ -9,6 +9,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/testutil"
+
 	"vornik.io/vornik/internal/persistence"
 )
 
@@ -108,5 +111,37 @@ func TestInbox_ApproverDeviceFutureRowHasNoNegativeAge(t *testing.T) {
 	srv.Inbox(rec, httptest.NewRequest(http.MethodGet, "/ui/inbox", nil))
 	if body := rec.Body.String(); !strings.Contains(body, ">0s ago<") {
 		t.Fatal("future row did not read 0s ago")
+	}
+}
+
+// GitHub review 9fd5 (2026-10-03), T13: a failed approver-request list is
+// counted as error, a good one as ok; an unwired seam and a scoped viewer
+// attempt no load and count nothing.
+func TestInbox_AgentApprovalsLoadIsCounted(t *testing.T) {
+	list := func(err error) ServerOption {
+		return WithAgentApprovals(func(context.Context) ([]persistence.AgentApprovalRequestRow, error) { return nil, err })
+	}
+	render := func(m *InboxMetrics, opt ServerOption, r *http.Request) {
+		NewServer(WithInboxMetrics(m), opt).Inbox(httptest.NewRecorder(), r)
+	}
+	get := func() *http.Request { return httptest.NewRequest(http.MethodGet, "/ui/inbox", nil) }
+	val := func(m *InboxMetrics, o string) float64 {
+		return testutil.ToFloat64(m.AgentApprovalsLoadTotal.WithLabelValues(o))
+	}
+
+	m := NewInboxMetrics(prometheus.NewRegistry())
+	render(m, list(errors.New("store down")), get())
+	if val(m, "error") != 1 || val(m, "ok") != 0 {
+		t.Fatalf("failure: error=%v ok=%v", val(m, "error"), val(m, "ok"))
+	}
+	m = NewInboxMetrics(prometheus.NewRegistry())
+	render(m, list(nil), get())
+	if val(m, "ok") != 1 || val(m, "error") != 0 {
+		t.Fatalf("success: ok=%v error=%v", val(m, "ok"), val(m, "error"))
+	}
+	m = NewInboxMetrics(prometheus.NewRegistry())
+	render(m, list(errors.New("x")), scopedUIRequest(http.MethodGet, "/ui/inbox", []string{"p1"}))
+	if n := testutil.CollectAndCount(m.AgentApprovalsLoadTotal); n != 0 {
+		t.Fatalf("a scoped viewer attempted a load: %d series", n)
 	}
 }

@@ -115,6 +115,10 @@ type Metrics struct {
 	PipelineAdmittedTotal    *prometheus.CounterVec
 	PipelineQuarantinedTotal *prometheus.CounterVec
 	PipelineRejectsTotal     *prometheus.CounterVec
+	// ReinstatedTotal counts refuted Hermes-mirrored notes brought back by
+	// an identical companion re-add (GitHub #76; design 22, "Reinstating a
+	// refuted mirrored note"), labelled by project_id.
+	ReinstatedTotal *prometheus.CounterVec
 
 	// EpochAdmittedChunksTotal is the per-epoch rollup of admitted
 	// chunks, incremented by counts.Admitted when an ingest run closes
@@ -499,6 +503,15 @@ func NewMetrics(registerer prometheus.Registerer) *Metrics {
 				Help:      "Candidates refused by the pipeline before storage (gate=schema_match etc).",
 			},
 			[]string{"project_id", "failed_gate"},
+		),
+		ReinstatedTotal: promauto.With(registerer).NewCounterVec(
+			prometheus.CounterOpts{
+				Namespace: memNamespace,
+				Subsystem: memSubsystem,
+				Name:      "reinstated_total",
+				Help:      "Refuted Hermes-mirrored notes reinstated by an identical companion re-add (refute_route mirror_forget).",
+			},
+			[]string{"project_id"},
 		),
 		PipelineShadowSignalTotal: promauto.With(registerer).NewCounterVec(
 			prometheus.CounterOpts{

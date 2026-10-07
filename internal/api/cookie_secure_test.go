@@ -10,6 +10,8 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+
+	"vornik.io/vornik/internal/httpx/realip"
 )
 
 func TestRequestIsHTTPS(t *testing.T) {
@@ -22,10 +24,16 @@ func TestRequestIsHTTPS(t *testing.T) {
 	if !requestIsHTTPS(tlsReq) {
 		t.Error("r.TLS set must report HTTPS")
 	}
+	// T15 (2026-10-07, BACKLOG P2 "X-Forwarded-Proto is trusted from any
+	// sender"): a plain-http request whose peer is not a trusted proxy must not
+	// become HTTPS by sending the header.
 	fwd := httptest.NewRequest(http.MethodGet, "/ui/x", nil)
 	fwd.Header.Set("X-Forwarded-Proto", "https")
-	if !requestIsHTTPS(fwd) {
-		t.Error("X-Forwarded-Proto=https must report HTTPS")
+	if requestIsHTTPS(fwd) {
+		t.Error("X-Forwarded-Proto=https from an untrusted peer must NOT report HTTPS")
+	}
+	if !requestIsHTTPS(fwd.WithContext(realip.WithTrustedPeer(fwd.Context()))) {
+		t.Error("X-Forwarded-Proto=https from a trusted proxy must report HTTPS")
 	}
 }
 
@@ -53,7 +61,14 @@ func TestRedirectToLogin_SecureOnlyOverHTTPS(t *testing.T) {
 	if !loginCookieSecure(t, func(r *http.Request) { r.TLS = &tls.ConnectionState{} }) {
 		t.Error("direct TLS: cookie must be Secure")
 	}
-	if !loginCookieSecure(t, func(r *http.Request) { r.Header.Set("X-Forwarded-Proto", "https") }) {
-		t.Error("proxied HTTPS: cookie must be Secure")
+	// T15 (2026-10-07): the header from an untrusted peer is ignored.
+	if loginCookieSecure(t, func(r *http.Request) { r.Header.Set("X-Forwarded-Proto", "https") }) {
+		t.Error("X-Forwarded-Proto from an untrusted peer: cookie must NOT be Secure")
+	}
+	if !loginCookieSecure(t, func(r *http.Request) {
+		r.Header.Set("X-Forwarded-Proto", "https")
+		*r = *r.WithContext(realip.WithTrustedPeer(r.Context()))
+	}) {
+		t.Error("proxied HTTPS from a trusted proxy: cookie must be Secure")
 	}
 }

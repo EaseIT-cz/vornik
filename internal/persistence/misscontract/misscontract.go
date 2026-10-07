@@ -102,6 +102,7 @@ var Contract = map[string]MissBehavior{
 	"AgentGrantRepository.GetModelDestination":       MissErrNotFound, // *AgentModelDestinationApproval
 	"ApproverDeviceRepository.GetRequest":            MissErrNotFound, // *AgentApprovalRequestRow
 	"ApproverDeviceRepository.ResumeDevice":          MissErrNotFound, // *ApproverDeviceRow
+	"ApproverDeviceRepository.RemintEnrollmentToken": MissErrNotFound, // *ApproverDeviceRow
 	"ExecutionRepository.Get":                        MissErrNotFound, // *Execution
 	"ExecutionToolGrantRepository.Current":           MissErrNotFound, // *ExecutionToolGrant
 	"ExtractedDocumentRepository.GetByArtifact":      MissErrNotFound, // *ExtractedDocument

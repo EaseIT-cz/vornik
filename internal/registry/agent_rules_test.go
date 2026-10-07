@@ -211,7 +211,7 @@ func TestShippedConfigs_NoReservedSeparator(t *testing.T) {
 // are exactly the workspace and clock tools: none of them sends anything
 // off the host. Growing the list is a deliberate edit to this test.
 func TestBrokerSafeBuiltins_ExactSet(t *testing.T) {
-	want := []string{"current_time", "file_edit", "file_read", "file_write", "glob", "grep", "read_many_files", "tool_result_read"}
+	want := []string{"current_time", "document_render", "file_edit", "file_read", "file_write", "glob", "grep", "read_many_files", "tool_result_read"}
 	got := BrokerSafeBuiltins()
 	if strings.Join(got, ",") != strings.Join(want, ",") {
 		t.Fatalf("broker-safe built-ins = %v, want exactly %v", got, want)

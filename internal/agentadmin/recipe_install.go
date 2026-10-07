@@ -68,7 +68,7 @@ type installPlan struct {
 func (r *Renderer) installRecipe(st *State, raw json.RawMessage) (Change, error) {
 	const verb = VerbInstallRecipe
 	ns := st.Namespace
-	in, rec, vars, why := r.resolveInstall(raw)
+	in, rec, vars, why := r.resolveInstall(ns, raw)
 	if why != "" {
 		return refuse(verb, ns, "%s", why), nil
 	}
@@ -123,11 +123,12 @@ func (r *Renderer) planInstall(st *State, in InstallRecipeInput, rec *Recipe, va
 // resolveInstall is the part of an install that needs no state: strict
 // decoding, the recipe, the project slug and the variables. The render and
 // the pre-approval listing both start from it.
-func (r *Renderer) resolveInstall(raw json.RawMessage) (InstallRecipeInput, *Recipe, map[string]string, string) {
+func (r *Renderer) resolveInstall(ns string, raw json.RawMessage) (InstallRecipeInput, *Recipe, map[string]string, string) {
 	var in InstallRecipeInput
 	if err := decodeStrict(raw, &in); err != nil {
 		return in, nil, nil, err.Error()
 	}
+	in.Project = projectSlug(ns, in.Project)
 	rec := r.cat.Get(in.Recipe)
 	if rec == nil {
 		return in, nil, nil, fmt.Sprintf("there is no recipe %q (list_recipes lists them: %s)", in.Recipe, strings.Join(r.recipeNames(), ", "))
@@ -657,10 +658,10 @@ func (r *Renderer) recipeNames() []string {
 // credential: the only servers Vornik may list before an approval (the
 // unauthenticated tool check, §19.8 F6). Nil when the input does not
 // resolve; the render then refuses it with the reason.
-func (r *Renderer) RecipeListTargets(input json.RawMessage) []string {
+func (r *Renderer) RecipeListTargets(ns string, input json.RawMessage) []string {
 	// One resolution with the install (review 20261003-e379 F6): an input
 	// the install would refuse is never listed.
-	_, rec, vars, why := r.resolveInstall(input)
+	_, rec, vars, why := r.resolveInstall(ns, input)
 	if why != "" {
 		return nil
 	}

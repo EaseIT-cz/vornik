@@ -29,6 +29,7 @@ import (
 	"vornik.io/vornik/internal/chat"
 	"vornik.io/vornik/internal/conversation"
 	"vornik.io/vornik/internal/dispatcher"
+	"vornik.io/vornik/internal/httpx/realip"
 	"vornik.io/vornik/internal/persistence"
 	"vornik.io/vornik/internal/sessionstore"
 	"vornik.io/vornik/internal/webchat"
@@ -395,14 +396,12 @@ func (s *Server) ensureChatCookie(w http.ResponseWriter, r *http.Request, data *
 }
 
 // uiRequestIsHTTPS reports whether the request reached the client over HTTPS —
-// directly (r.TLS set) or via a TLS-terminating proxy that forwards the
-// original scheme in X-Forwarded-Proto. Gates the Secure cookie attribute so
+// directly (r.TLS set) or via a trusted TLS-terminating proxy that forwards
+// the original scheme in X-Forwarded-Proto (realip.RequestIsHTTPS;
+// cloudflare-real-ip-design.md §11, T15). Gates the Secure cookie attribute so
 // it is set on real HTTPS without breaking the plain-HTTP LAN preview.
 func uiRequestIsHTTPS(r *http.Request) bool {
-	if r != nil && r.TLS != nil {
-		return true
-	}
-	return r != nil && strings.EqualFold(r.Header.Get("X-Forwarded-Proto"), "https")
+	return realip.RequestIsHTTPS(r)
 }
 
 // chatStoreFor returns the per-project SessionStore, allocating it

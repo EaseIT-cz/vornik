@@ -30,6 +30,7 @@ func RunApproverDeviceSuite(t *testing.T, repo persistence.ApproverDeviceReposit
 	t.Run("Unknown_expired_and_used_codes_are_one_miss", func(t *testing.T) { approverRedeemRefusals(t, newApproverHarness(t, fresh)) })
 	t.Run("ConcurrentFirstRedeem", func(t *testing.T) { approverConcurrentFirstRedeem(t, newApproverHarness(t, fresh)) })
 	t.Run("CompletePairing_runs_once", func(t *testing.T) { approverCompleteOnce(t, newApproverHarness(t, fresh)) })
+	t.Run("Remint_enrollment_token_guards", func(t *testing.T) { approverRemint(t, newApproverHarness(t, fresh)) })
 	t.Run("Rotate_touch_revoke", func(t *testing.T) { approverRotateTouchRevoke(t, newApproverHarness(t, fresh)) })
 	t.Run("Share_close_expire_and_streak", func(t *testing.T) { approverShareLifecycle(t, newApproverHarness(t, fresh)) })
 	t.Run("Resume_only_an_expired_value_with_a_code", func(t *testing.T) { approverResume(t, newApproverHarness(t, fresh)) })
@@ -104,6 +105,9 @@ func approverMissContract(t *testing.T, h *approverHarness) {
 	})
 	AssertMiss(t, "ApproverDeviceRepository.ResumeDevice", func() (*persistence.ApproverDeviceRow, error) {
 		return h.repo.ResumeDevice(h.ctx, "absent", "absent", "absent", h.now)
+	})
+	AssertMiss(t, "ApproverDeviceRepository.RemintEnrollmentToken", func() (*persistence.ApproverDeviceRow, error) {
+		return h.repo.RemintEnrollmentToken(h.ctx, "absent", "absent", h.now)
 	})
 	AssertMiss(t, "ApproverDeviceRepository.GetPairing", func() (*persistence.ApproverPairingRow, error) {
 		return h.repo.GetPairing(h.ctx, "absent", h.now)
@@ -690,5 +694,79 @@ func approverResume(t *testing.T, h *approverHarness) {
 	}
 	if _, err := h.repo.ResumeDevice(h.ctx, "code-r2", "s2", "x", h.now); !errors.Is(err, persistence.ErrNotFound) {
 		t.Fatal("a revoked device resumed")
+	}
+}
+
+// approverRemint pins RemintEnrollmentToken (design §9.2, amendment 2026-10-07
+// T11, BACKLOG 2026-10-05): every guard, the dead-value swap, and once.
+func approverRemint(t *testing.T, h *approverHarness) {
+	h.pairing(t, "a")
+	h.pairing(t, "b")
+	h.redeem(t, "a")
+	h.redeem(t, "b")
+	notBefore := h.now.Add(-15 * time.Minute)
+	// No completed pairing yet: the claim has no device.
+	if _, err := h.repo.RemintEnrollmentToken(h.ctx, "claim-b", "n1", notBefore); !errors.Is(err, persistence.ErrNotFound) {
+		t.Fatalf("remint before completion: %v", err)
+	}
+	if _, err := h.repo.RemintEnrollmentToken(h.ctx, "claim-absent", "n1", notBefore); !errors.Is(err, persistence.ErrNotFound) {
+		t.Fatalf("remint of an unknown claim: %v", err)
+	}
+	d := h.device("dev_b")
+	if err := h.repo.CompletePairing(h.ctx, "claim-b", d); err != nil {
+		t.Fatal(err)
+	}
+	// Outside the window.
+	if _, err := h.repo.RemintEnrollmentToken(h.ctx, "claim-b", "n1", h.now.Add(time.Second)); !errors.Is(err, persistence.ErrNotFound) {
+		t.Fatalf("remint outside the window: %v", err)
+	}
+	// Used device.
+	if err := h.repo.TouchDevice(h.ctx, "dev_b", h.now.Add(time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := h.repo.RemintEnrollmentToken(h.ctx, "claim-b", "n1", notBefore); !errors.Is(err, persistence.ErrNotFound) {
+		t.Fatalf("remint of a used device: %v", err)
+	}
+
+	// A second, never-used device: one re-mint, the old value dead as confirmed.
+	h.pairing(t, "c")
+	h.redeem(t, "c")
+	if err := h.repo.CompletePairing(h.ctx, "claim-c", h.device("dev_c")); err != nil {
+		t.Fatal(err)
+	}
+	got, err := h.repo.RemintEnrollmentToken(h.ctx, "claim-c", "n2", notBefore)
+	if err != nil || got.ID != "dev_c" || got.TokenHash != "n2" || got.DeadTokenHash != "tok-dev_c" || got.DeadReason != persistence.DeadConfirmed {
+		t.Fatalf("remint: %+v, %v", got, err)
+	}
+	if row, err := h.repo.GetDeviceByTokenHash(h.ctx, "tok-dev_c"); err != nil || row.TokenHash == "tok-dev_c" {
+		t.Fatalf("the old value must find the row only as the dead value: %+v, %v", row, err)
+	}
+	if _, err := h.repo.RemintEnrollmentToken(h.ctx, "claim-c", "n3", notBefore); !errors.Is(err, persistence.ErrNotFound) {
+		t.Fatalf("a second remint: %v", err)
+	}
+	// prev_token_hash on its own: a rotation that leaves last_used_at equal to
+	// paired_at (the frozen h.now) and dead_token_hash NULL still blocks it.
+	h.pairing(t, "e")
+	h.redeem(t, "e")
+	if err := h.repo.CompletePairing(h.ctx, "claim-e", h.device("dev_e")); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.repo.RotateToken(h.ctx, "dev_e", "tok-dev_e", "s-e", "n-e", h.now.Add(time.Minute), h.now); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := h.repo.RemintEnrollmentToken(h.ctx, "claim-e", "n5", notBefore); !errors.Is(err, persistence.ErrNotFound) {
+		t.Fatalf("remint of a device in a rotation share: %v", err)
+	}
+	// Revoked device.
+	h.pairing(t, "d")
+	h.redeem(t, "d")
+	if err := h.repo.CompletePairing(h.ctx, "claim-d", h.device("dev_d")); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.repo.RevokeDevice(h.ctx, "dev_d", h.now); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := h.repo.RemintEnrollmentToken(h.ctx, "claim-d", "n4", notBefore); !errors.Is(err, persistence.ErrNotFound) {
+		t.Fatalf("remint of a revoked device: %v", err)
 	}
 }

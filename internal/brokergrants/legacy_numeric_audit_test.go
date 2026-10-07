@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"testing"
+	"time"
 
 	"vornik.io/vornik/internal/brokergrants"
 	"vornik.io/vornik/internal/persistence"
@@ -15,8 +16,8 @@ type legacyNumericGrants struct {
 	hash string
 }
 
-func (r legacyNumericGrants) ListForAction(ctx context.Context, project, workflow, action string) ([]*persistence.BrokerStandingGrant, error) {
-	rows, err := r.BrokerGrantRepository.ListForAction(ctx, project, workflow, action)
+func (r legacyNumericGrants) ListForAction(ctx context.Context, project, workflow, action string, now time.Time) ([]*persistence.BrokerStandingGrant, error) {
+	rows, err := r.BrokerGrantRepository.ListForAction(ctx, project, workflow, action, now)
 	for i, row := range rows {
 		copyRow := *row
 		copyRow.KeyHash = r.hash

@@ -3,6 +3,8 @@ package service
 import (
 	"io/fs"
 	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -26,5 +28,15 @@ func TestInContainer(t *testing.T) {
 	c := &Container{ConfigPath: "/cfg/config.yaml"}
 	if h := c.daemonHost(); h.UID != os.Geteuid() || h.StoreKeyPath != c.storeKeyPath() {
 		t.Fatalf("daemonHost: %+v", h)
+	}
+}
+
+// GitHub #75 (T6): a relative --config made store_key_path relative, so
+// vornikctl probed it against its own cwd. The daemon reports an absolute path.
+func TestDaemonHost_StoreKeyPathIsAbsolute(t *testing.T) {
+	c := &Container{ConfigPath: "cfg/config.yaml"}
+	h := c.daemonHost()
+	if !filepath.IsAbs(h.StoreKeyPath) || !strings.HasSuffix(h.StoreKeyPath, filepath.Join("cfg", "secrets", "store.key")) {
+		t.Fatalf("store key path: %q", h.StoreKeyPath)
 	}
 }

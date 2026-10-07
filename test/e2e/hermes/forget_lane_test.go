@@ -55,7 +55,7 @@ func memoryChunks(t *testing.T, text string) []memChunk {
 	t.Helper()
 	q := fmt.Sprintf(`SELECT id || chr(31) || coalesce(validation_status,'') || chr(31) || replace(content, chr(10), ' ')
 FROM project_memory_chunks WHERE project_id = 'assistant-memory' AND content LIKE '%%%s%%' ORDER BY created_at`, text)
-	out, err := exec.Command("podman", "exec", "vornik-e2e-pg", "psql", "-U", "vornik", "-d", "vornik", "-tAc", q).Output()
+	out, err := exec.Command("podman", "exec", pgContainerName(), "psql", "-U", "vornik", "-d", "vornik", "-tAc", q).Output()
 	if err != nil {
 		t.Fatalf("read memory chunks: %v", err)
 	}

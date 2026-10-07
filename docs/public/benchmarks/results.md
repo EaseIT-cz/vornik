@@ -199,6 +199,26 @@ between a deterministic gate and one that fires on noise.
 | `2026.9.8-52-g86d3af802` (2026.10.1) | 120 | all 6 | 0.9851 ±0.0000 | 0.9854 ±0.0000 | 0.9958 ±0.0000 | n=3 | `0c4971cc78ae` |
 | `2026.10.1-55-gc800c23be` (2026.10.2) | 120 | all 6 | 0.9851 ±0.0000 | 0.9854 ±0.0000 | 0.9958 ±0.0000 | n=3 | `dcfeaf709dc5` |
 | `2026.10.1-77-gbb5238eb2` (2026.10.3) | 120 | all 6 | 0.9851 ±0.0000 | 0.9854 ±0.0000 | 0.9958 ±0.0000 | n=3 | `16a79559dd84` |
+| `2026.10.4-171-g2213d297b` (2026.10.5) | 120 | all 6 | 0.9851 ±0.0000 | 0.9854 ±0.0000 | 0.9958 ±0.0000 | n=3 | `d2ffc5b3e11e` |
+
+**The ninth row is 2026.10.5's release candidate** (`main` at `2213d297b`,
+an enterprise build), measured on 2026-10-07 on the memory-benchmark
+deployment, same embedder (`openai/qwen3-embedding:0.6b@1024d`), reranker
+off, cold corpus: each run cleared the store (1,897 chunks before each run,
+as in every row since 2026.9.7), re-ingested the pinned dataset and recorded
+the daemon's own revision. Every metric is identical to 2026.10.3 to four
+decimal places across three deterministic runs, so **no regression**. The key
+is new (`d2ffc5b3e11e`) and the only key field that moved is
+`daemon_revision`; dataset revision, `max_tokens`, item selection and
+embedder are unchanged. The run was required: the cycle changed the companion
+note ingest path (a forgotten memory added again is reinstated and
+recallable; a refute takes the strictest route and lands in one statement so
+a racing reinstate cannot lose it) and made recall record the use of each
+result it returns, for idle retention. **What it does NOT show:** this
+benchmark ingests each item once into a cold store and never forgets or
+refutes, so the reinstate and refute paths are not exercised; they are
+covered by the daemon's own tests on both database drivers. The run carries
+`retrieval_path_unverified`, as every row since the third does.
 
 **The eighth row is 2026.10.3's release candidate** (the tagged commit
 differs from it only in documentation, this row among them), measured on
@@ -442,6 +462,10 @@ each is stated:
 | `2026.9.7` | **yes** | The memory open axis above, on the release build (`2026.9.6-117-gee40525c8`, n=3). The cycle changes ingestion and retrieval, so a waiver was not open to it. The v9 agent-harness arms run on the slow-hardware track and are reported in the release notes, not in this table. |
 | `2026.9.8` | none | No run was taken. The patch changes only the companion endpoint's reply to a `GET` stream request, plus test fixtures. It touches no ingestion, embedding, retrieval or scoring path, so the axes stand where 2026.9.7's measured row left them. Stated rather than left as a silent gap. |
 | `2026.10.1` | **memory row only** | The memory open axis above, on the release build (n=3). The cycle lowers the minimum size of a deliberate memory deposit from a companion client, and this benchmark ingests through that path, so a waiver was not open to it. **No agent row.** The cycle changes the agent harness substantially (the router step, the retry ladder, the prompt-token budget and the tool-result cap), so this is a gap, not a waiver. The agent arm's model is the self-hosted Qwen3.8-27B on the endpoint that has been unreachable since 2026-09-04, and the comparability key pins the model, so a run on any other model would start a new table that cannot show a regression against the 2026.9.0 row. A substitute arm on a locally served 20B model was considered and not run: one arm is about 20M prompt tokens, which on the reference host's integrated GPU is days, not hours. The changes are covered instead by regression tests that replay each incident, and by an end-to-end lane that drives a front-end agent through the broker on a locally served model. |
+| `2026.10.2` | **memory row only** | The memory open axis above, on the release candidate (`2026.10.1-55-gc800c23be`, n=3), identical to 2026.10.1. The cycle did not touch ingestion, embedding, retrieval or scoring (agent administration, approver devices, sealed agent credentials and release packaging), so the row is the no-regression check. Stated late, with 2026.10.5's, rather than left as a silent gap. |
+| `2026.10.3` | **memory row only** | The memory open axis above, on the release candidate (`2026.10.1-77-gbb5238eb2`, n=3), identical to 2026.10.2. The cycle touched no ingestion, embedding, retrieval or scoring path (the macOS release check, the Hermes plugin's catalog readiness, EULA version 3). Stated late, with 2026.10.5's, rather than left as a silent gap. |
+| `2026.10.4` | none | No run was taken. The cycle changes no daemon-side ingestion, embedding, retrieval or scoring code: its memory changes are the Hermes plugin's forgetting (0.8.0), which calls the existing correction path from the client, plus tests (one measures a companion note as one chunk); the rest is broker grants, agent administration and approval transport. The axes stand where 2026.10.3's row left them, and 2026.10.5's row measures the tree that includes this cycle. Stated late, with 2026.10.5's, rather than left as a silent gap. |
+| `2026.10.5` | **memory row only** | The memory open axis above, on the release candidate (`2026.10.4-171-g2213d297b`, n=3), identical to 2026.10.3. The cycle changes the companion note ingest path (memory reinstate after a forget, the refute route) and makes recall record each returned result's use, so a waiver was not open to it. No agent row, for the reason stated under 2026.10.1: the arm's model endpoint is still unreachable. |
 
 A missing row stated as missing is honest. An absent row is not — which is the whole
 reason this section exists.

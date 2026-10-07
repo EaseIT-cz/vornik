@@ -19,6 +19,9 @@ func TestStaticFS_IOSIconAssetsEmbedded(t *testing.T) {
 		"static/apple-touch-icon.png",
 		"static/favicon-32.png",
 		"static/favicon.ico",
+		"static/icon-maskable.svg",
+		"static/fonts/SpaceGrotesk-Variable.woff2",
+		"static/fonts/Manrope-Variable.woff2",
 	}
 	for _, name := range assets {
 		f, err := staticFS.Open(name)

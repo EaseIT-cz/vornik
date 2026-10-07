@@ -80,6 +80,7 @@ func (r *Renderer) addAPI(st *State, raw json.RawMessage) (Change, error) {
 	if err := decodeStrict(raw, &in); err != nil {
 		return refuse(verb, ns, "%v", err), nil
 	}
+	in.Project = projectSlug(ns, in.Project)
 	pid := agentns.ID(ns, in.Project)
 	p, ok := st.Projects[pid]
 	if !ok {

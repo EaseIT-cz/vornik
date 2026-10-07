@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"vornik.io/vornik/internal/chatauth"
+	"vornik.io/vornik/internal/httpx/realip"
 	"vornik.io/vornik/internal/persistence"
 )
 
@@ -216,6 +217,7 @@ func TestMiddleware_CrossSitePostRefused(t *testing.T) {
 func TestCookie_Attributes(t *testing.T) {
 	r := httptest.NewRequest(http.MethodGet, "/ui/pair", nil)
 	r.Header.Set("X-Forwarded-Proto", "https")
+	r = r.WithContext(realip.WithTrustedPeer(r.Context()))
 	w := httptest.NewRecorder()
 	SetCookie(w, r, "tok")
 	c := w.Result().Cookies()[0]
@@ -226,6 +228,15 @@ func TestCookie_Attributes(t *testing.T) {
 	SetCookie(w, httptest.NewRequest(http.MethodGet, "/ui/pair", nil), "tok")
 	if w.Result().Cookies()[0].Secure {
 		t.Fatal("Secure on plain HTTP would break the LAN preview")
+	}
+	// T15 (2026-10-07, BACKLOG P2 "X-Forwarded-Proto is trusted from any
+	// sender"): the header from an untrusted peer does not make it HTTPS.
+	forged := httptest.NewRequest(http.MethodGet, "/ui/pair", nil)
+	forged.Header.Set("X-Forwarded-Proto", "https")
+	w = httptest.NewRecorder()
+	SetCookie(w, forged, "tok")
+	if w.Result().Cookies()[0].Secure {
+		t.Fatal("Secure set from an untrusted peer's X-Forwarded-Proto")
 	}
 }
 
@@ -782,5 +793,234 @@ func TestRotation_ErrorRenderClosesTheShare(t *testing.T) {
 	d, err := f.repo.GetDeviceByTokenHash(context.Background(), HashToken(phone.deviceCookie()))
 	if err != nil || d.ShareUntil == nil || !d.ShareUntil.Equal(f.clock().Add(ShareGrace)) {
 		t.Fatalf("share after an error render: %+v, %v; want share_until = now+%v", d, err, ShareGrace)
+	}
+}
+
+// GitHub #79 (operator 2026-10-04): every device showed as "Phone".
+func TestDevicesPage_ShowsShortIDAndLastUse(t *testing.T) {
+	f := newFixture(t)
+	srv := serve(t, f)
+	ctx := context.Background()
+	var ids []string
+	var last *browser
+	for i := 0; i < 2; i++ {
+		b := newBrowser(t, srv)
+		code, _, _ := f.svc.StartPairing(ctx, "Phone")
+		if res := b.pairWith(code); res.Header.Get("Location") != "/ui/approve/" {
+			t.Fatalf("pairing %d went to %q", i, res.Header.Get("Location"))
+		}
+		devs, err := f.svc.ListDevices(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, d := range devs {
+			if d.RevokedAt == nil {
+				ids = append(ids, d.ID)
+				if i == 0 { // revoke so the next pairing is a first-device pairing
+					if err := f.svc.Revoke(ctx, d.ID); err != nil {
+						t.Fatal(err)
+					}
+				}
+			}
+		}
+		last = b
+	}
+	if len(ids) != 2 {
+		t.Fatalf("ids = %v", ids)
+	}
+	f.advance(time.Minute) // a used device has LastUsedAt after PairedAt
+	res, body := last.do(http.MethodGet, "/ui/approve/devices", nil, nil)
+	if res.StatusCode != 200 {
+		t.Fatalf("devices page: %d", res.StatusCode)
+	}
+	for _, id := range ids {
+		if !strings.Contains(body, id[len(id)-6:]) {
+			t.Fatalf("id suffix of %s missing:\n%s", id, body)
+		}
+	}
+	if !strings.Contains(body, "last used") || !strings.Contains(body, "paired ") {
+		t.Fatalf("no last-use text:\n%s", body)
+	}
+}
+
+// BACKLOG 2026-10-05: a lost enrollment-poll response left the device active
+// and the browser unpaired. The poll's response (the only carrier of the new
+// device cookie) is discarded; the next poll with the same claim cookie must
+// still pair the browser, and the discarded token must be dead.
+func TestPair_LostPollResponseStillPairsTheBrowser(t *testing.T) {
+	f := newFixture(t)
+	srv := serve(t, f)
+	ctx := context.Background()
+	first, _ := f.firstDevice(t)
+	tablet := newBrowser(t, srv)
+	code := f.pair(t, "Tablet")
+	if res := tablet.pairWith(code); res.Header.Get("Location") != "/ui/pair/wait" {
+		t.Fatalf("second pairing went to %q", res.Header.Get("Location"))
+	}
+	pend, _ := f.svc.ListPending(ctx)
+	if len(pend) != 1 {
+		t.Fatalf("pending: %+v", pend)
+	}
+	if err := f.svc.Decide(ctx, first, pend[0].ID, pend[0].RenderedSHA256, true); err != nil {
+		t.Fatal(err)
+	}
+	u, _ := url.Parse(srv.URL + "/ui/pair")
+	var claim string
+	for _, c := range tablet.c.Jar.Cookies(u) {
+		if c.Name == ClaimCookieName {
+			claim = c.Value
+		}
+	}
+	if claim == "" {
+		t.Fatal("the tablet holds no claim cookie")
+	}
+
+	// The first poll reaches the server; its response is discarded.
+	lost := newBrowser(t, srv)
+	lost.c.Jar.SetCookies(u, []*http.Cookie{{Name: ClaimCookieName, Value: claim, Path: "/ui/pair"}})
+	lost.do(http.MethodGet, "/ui/pair/wait", nil, nil)
+	discarded := lost.deviceCookie()
+	if discarded == "" {
+		t.Fatal("the first poll set no device cookie")
+	}
+
+	// The tablet polls again with the same claim cookie.
+	if res, _ := tablet.do(http.MethodGet, "/ui/pair/wait", nil, nil); res.StatusCode != http.StatusSeeOther {
+		t.Fatalf("second poll: %d", res.StatusCode)
+	}
+	if tablet.deviceCookie() == "" || tablet.deviceCookie() == discarded {
+		t.Fatalf("the second poll set no new device cookie (got %q, discarded %q)", tablet.deviceCookie(), discarded)
+	}
+	if res, _ := tablet.do(http.MethodGet, "/ui/approve/devices", nil, nil); res.StatusCode != http.StatusOK {
+		t.Fatalf("the re-minted cookie on /ui/approve/devices: %d %s", res.StatusCode, res.Header.Get("Location"))
+	}
+	if _, err := f.svc.Authenticate(ctx, discarded); !errors.Is(err, ErrNoDevice) {
+		t.Fatalf("the discarded first token still authenticates: %v", err)
+	}
+	if devs, _ := f.svc.ListDevices(ctx); len(devs) != 2 {
+		t.Fatalf("devices: %+v", devs)
+	}
+}
+
+// BACKLOG 2026-10-05 (operator report): plain-http pairing failed as "did not
+// come from this page". Review 1a8f rows included.
+func TestMiddleware_PlainHTTPNonLoopbackIsRefusedWithTheReason(t *testing.T) {
+	var counted []string
+	f := newFixture(t, WithHTTPSRefusalRecorder(func(p string) { counted = append(counted, p) }))
+	h := f.svc.Handler(nil)
+	do := func(method, path, host string, hdr map[string]string) *httptest.ResponseRecorder {
+		r := httptest.NewRequest(method, path, strings.NewReader(url.Values{"code": {"X"}}.Encode()))
+		r.Host = host
+		r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		for k, v := range hdr {
+			r.Header.Set(k, v)
+		}
+		w := httptest.NewRecorder()
+		h.ServeHTTP(w, r)
+		return w
+	}
+	refused := func(name string, w *httptest.ResponseRecorder) {
+		t.Helper()
+		body := w.Body.String()
+		if w.Code != http.StatusForbidden || !strings.Contains(body, "need HTTPS") || !strings.Contains(body, "X-Forwarded-Proto: https") {
+			t.Errorf("%s: %d %q, want 403 with the HTTPS reason", name, w.Code, body)
+		}
+		if strings.Contains(body, "did not come from this page") {
+			t.Errorf("%s: wrong message", name)
+		}
+		if w.Header().Get("Content-Security-Policy") == "" {
+			t.Errorf("%s: refusal lacks the CSP", name)
+		}
+	}
+	lan := "192.168.0.142:8080"
+	refused("POST /ui/pair", do(http.MethodPost, "/ui/pair", lan, map[string]string{"Origin": "null"}))
+	refused("GET /ui/pair", do(http.MethodGet, "/ui/pair", lan, nil))
+	refused("GET /ui/pair/wait", do(http.MethodGet, "/ui/pair/wait", lan, nil))
+	refused("GET /ui/approve/", do(http.MethodGet, "/ui/approve/", lan, nil))
+	refused("POST /ui/approve/apr_x", do(http.MethodPost, "/ui/approve/apr_x", lan, map[string]string{"Origin": "null"}))
+	if len(counted) != 5 || counted[0] != "pair" || counted[3] != "approve" {
+		t.Errorf("counted %v, want pair,pair,pair,approve,approve", counted)
+	}
+
+	// Loopback over http passes the gate: the pairing POST reaches its handler.
+	if w := do(http.MethodPost, "/ui/pair", "localhost:8080", map[string]string{"Origin": "http://localhost:8080"}); strings.Contains(w.Body.String(), "need HTTPS") {
+		t.Errorf("loopback refused: %d %q", w.Code, w.Body.String())
+	}
+	if w := do(http.MethodGet, "/ui/pair", "[::1]:8080", nil); w.Code != http.StatusOK {
+		t.Errorf("GET /ui/pair on [::1]: %d", w.Code)
+	}
+	// T15 (2026-10-07, BACKLOG P2 "X-Forwarded-Proto is trusted from any
+	// sender"): a direct plain-http client forging the header is refused and
+	// counted, because its peer is not a trusted proxy.
+	refused("forged X-Forwarded-Proto", do(http.MethodPost, "/ui/pair", lan, map[string]string{"X-Forwarded-Proto": "https", "Origin": "https://192.168.0.142:8080"}))
+	if len(counted) != 6 {
+		t.Errorf("forged header not counted: %v", counted)
+	}
+	// Behind a trusted proxy that says https the same LAN host passes.
+	pr := httptest.NewRequest(http.MethodPost, "/ui/pair", strings.NewReader(url.Values{"code": {"X"}}.Encode()))
+	pr.Host = lan
+	pr.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	pr.Header.Set("X-Forwarded-Proto", "https")
+	pr.Header.Set("Origin", "https://192.168.0.142:8080")
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, pr.WithContext(realip.WithTrustedPeer(pr.Context())))
+	if strings.Contains(w.Body.String(), "need HTTPS") {
+		t.Errorf("https via a trusted proxy refused: %d", w.Code)
+	}
+	// A forged Host: localhost over plain http passes the new gate only; with no
+	// device cookie RequireDevice still refuses (403 for a POST) and with a
+	// cookie-less GET it redirects to pairing; SameOrigin still refuses Origin null.
+	if w := do(http.MethodPost, "/ui/approve/apr_x", "localhost:8080", map[string]string{"Origin": "null"}); w.Code != http.StatusForbidden || strings.Contains(w.Body.String(), "need HTTPS") {
+		t.Errorf("forged localhost POST: %d %q", w.Code, w.Body.String())
+	}
+	if w := do(http.MethodGet, "/ui/approve/", "localhost:8080", nil); w.Code != http.StatusSeeOther {
+		t.Errorf("forged localhost GET without cookie: %d", w.Code)
+	}
+	if w := do(http.MethodPost, "/ui/pair", "localhost:8080", map[string]string{"Origin": "null"}); w.Code != http.StatusForbidden || !strings.Contains(w.Body.String(), "did not come from this page") {
+		t.Errorf("forged localhost pair POST with Origin null: %d %q", w.Code, w.Body.String())
+	}
+}
+
+// Final review aa4a, 2026-10-07: since T11 LastUsedAt == PairedAt means the
+// device was never used, but the devices page printed "last used <paired_at>"
+// for it, a lie that hides a paired-but-unclaimed device.
+func TestDevicesPage_NeverUsedDeviceSaysSo(t *testing.T) {
+	f := newFixture(t)
+	srv := serve(t, f)
+	ctx := context.Background()
+	b := newBrowser(t, srv)
+	if res := b.pairWith(f.pair(t, "Phone")); res.Header.Get("Location") != "/ui/approve/" {
+		t.Fatalf("first pairing went to %q", res.Header.Get("Location"))
+	}
+	f.advance(time.Minute)
+	if res, _ := b.do(http.MethodGet, "/ui/approve/devices", nil, nil); res.StatusCode != 200 {
+		t.Fatalf("devices page: %d", res.StatusCode)
+	}
+	devs, _ := f.svc.ListDevices(ctx)
+	if len(devs) != 1 {
+		t.Fatalf("devices: %+v", devs)
+	}
+	first := devs[0]
+
+	// A second device is approved but its browser has not yet presented the token.
+	tablet := newBrowser(t, srv)
+	if res := tablet.pairWith(f.pair(t, "Tablet")); res.Header.Get("Location") != "/ui/pair/wait" {
+		t.Fatalf("second pairing went to %q", res.Header.Get("Location"))
+	}
+	pend, _ := f.svc.ListPending(ctx)
+	if len(pend) != 1 {
+		t.Fatalf("pending: %+v", pend)
+	}
+	if err := f.svc.Decide(ctx, &Device{ID: first.ID, Label: first.Label, PairedAt: first.PairedAt}, pend[0].ID, pend[0].RenderedSHA256, true); err != nil {
+		t.Fatal(err)
+	}
+	// The tablet's poll mints its device; it has not yet used the token.
+	if res, _ := tablet.do(http.MethodGet, "/ui/pair/wait", nil, nil); res.StatusCode != http.StatusSeeOther {
+		t.Fatalf("tablet poll: %d", res.StatusCode)
+	}
+	f.advance(time.Minute)
+	_, body := b.do(http.MethodGet, "/ui/approve/devices", nil, nil)
+	if strings.Count(body, "never used") != 1 || strings.Count(body, "last used") != 1 {
+		t.Fatalf("want one 'never used' (tablet) and one 'last used' (this phone):\n%s", body)
 	}
 }

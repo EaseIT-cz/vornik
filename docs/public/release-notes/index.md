@@ -1,7 +1,7 @@
 ---
 sources:
     - path: docs/release-notes
-      sha256: 35b3c01ac1e63ad72461cde961540177092544eed0be3211999a4818f8562b59
+      sha256: f9ad5cf7bcd8fd60af574707be5765f77964bc2a76712f5a41116d1e8adafd1c
 ---
 # Release Notes
 
@@ -16,6 +16,80 @@ behavior changes, and notable fixes. Internal-only changes are omitted.
     new behavior; those are called out below.
 
 ---
+
+## 2026.10.5
+
+!!! warning "Upgrade requirements"
+    - **Pairing and approving need HTTPS.** `/ui/pair` and `/ui/approve/`
+      refuse plain http to a non-loopback host. Serve TLS, use a TLS proxy, or
+      browse to `http://localhost`.
+    - **`X-Forwarded-Proto` counts only from a trusted proxy.** Enable
+      `server.real_ip` and list the proxy host's own addresses in
+      `server.real_ip.trusted_proxies` as single addresses (`/32`, `/128`,
+      `127.0.0.1/32`), never a subnet that carries containers. The proxy must
+      replace the header, not append to it. Behind a TLS proxy that is not
+      listed, pairing and approving answer "HTTPS required". The daemon warns at
+      startup when its public origin is https and `server.real_ip` is not
+      configured.
+    - **Idle memory retention can require phone approval (opt-in).** Set
+      `retention.memory_require_approval: true` on a project and unused
+      memory is no longer deleted automatically: after the idle window
+      (`retention.memory_idle_days`, default 365) the daemon asks on the paired
+      phone. Rejected or unanswered requests keep the data. Deploy this release
+      before adding the key, then `vornikctl config reload`. Turning it off
+      restores TTL and age-based deletion; back up first.
+    - **Skill review can name the revision.** `skill_approve` and
+      `skill_reject` accept `expected_version`; a superseded revision is refused.
+    - **The updater refuses a downgrade** unless you pass `--allow-downgrade`,
+      and `--ref main` uses the fetched `origin/main`.
+    - **Rebuild the agent image** for the new `document_render` helper.
+    - **Migrations 216–218** are additive and applied automatically.
+    - **Hermes companion plugin 0.11.3** (from 0.11.1).
+    - **`vornikctl agent connect` exits 1 with one refusal line.** A script
+      that matched "not connected" must match the new line or the exit code.
+
+A brand, Hermes, approvals, memory and agent-admin release. Draft: not yet
+released.
+
+- **New brand.** The console, app icons, favicons and the docs site move to the
+  new Vornik mark and colour scheme. The new console colours meet WCAG AA
+  contrast in both themes, and the console and docs site serve their fonts
+  themselves instead of calling Google Fonts. The docs site gains a brand page.
+
+- **Hermes.**
+  - Turning approvals on replaces a stale pin on a disconnected namespace.
+  - Replacing a note with identical text no longer forgets it.
+  - A note you forgot and add again is recallable again, when the forget came
+    from Hermes's own forget path.
+- **Agent admin.**
+  - `list_recipes` files the cover request every read owes.
+  - `agent connect` states its refusal once.
+  - Verbs accept a project's full id.
+  - A credential already requested for a namespace serves the next project.
+  - `update_project` changes a project's description or display name.
+  - A role granted the `document_render` helper can convert staged Markdown to
+    a PDF or HTML file.
+  - Google document links are no longer redacted as high-entropy strings.
+- **Approvals and devices.**
+  - A lost pairing-poll response no longer unpairs the browser.
+  - Paired devices get distinct default names, and the devices page shows the
+    id, the last use and "never used".
+  - `vornikctl pair-device` prints an https address and warns on plain http.
+- **Standing grants.** A live grant is never hidden behind dead ones, and dead
+  grants no longer starve live grants' digests.
+- **Fixes.**
+  - The updater prefers the fetched remote branch and refuses a downgrade.
+  - Project removal is verified by the file's absence.
+  - `vornikctl backup` explains a PostgreSQL client and server version mismatch.
+  - The doctor checks agent models against your catalogue.
+  - Guarded redirects stop after 10 hops.
+  - Live task pages close dead websocket connections.
+  - Skill reviews are bound to the revision they were shown.
+- **Redirect discovery.** A new skill investigates an unexpected public
+  redirect and reports only what independent evidence supports. See
+  [Discover and validate redirects](../guides/redirect-discovery.md).
+- **Runtime.** A Codex response cut off at the output cap reports
+  `finish_reason: length`.
 
 ## 2026.10.4
 
@@ -1679,7 +1753,7 @@ default** — read that item before upgrading.
   chunks rather than the attachment, because extracting the upload at submit time
   suppressed staging the file for the agent. Workflows that declare they need
   input artifacts now always get the raw file. The Claude Code and Codex
-  companion plugins ship as 0.14.0 and 0.12.0 with corrected guidance; installed
+  companion plugins ship as 0.13.0 and 0.11.0 with corrected guidance; installed
   clients pick that up on their next marketplace update.
 - **New: your coding assistant can now configure and troubleshoot Vornik.** Both
   companion plugins bundle an operator lifecycle triad — `configure-vornik`,

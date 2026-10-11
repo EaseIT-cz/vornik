@@ -12,7 +12,7 @@ import (
 // Renderer produces a deterministic, operator-friendly explanation
 // for a terminal task — no LLM call. It joins the failure class
 // playbook entry with the structured evidence (step outcomes, tool
-// audit, container-log tail) and emits a short plain-text summary
+// audit, the daemon-held task log tail) and emits a short plain-text summary
 // plus the structured inputs the caller can render however they
 // like.
 //
@@ -299,7 +299,7 @@ func nextAction(in *RenderedInputs) string {
 		return "Try first: " + in.Playbook.Suggestions[0]
 	}
 	if in.LastErrorClass != "" {
-		return fmt.Sprintf("No playbook entry for class %s — read the task's last_error and container log tail in full.",
+		return fmt.Sprintf("No playbook entry for class %s — read the task's last_error and task log tail in full.",
 			in.LastErrorClass)
 	}
 	return "No classified failure — inspect the task's executions and tool-audit log directly."

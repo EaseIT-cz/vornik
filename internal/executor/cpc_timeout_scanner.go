@@ -7,6 +7,7 @@ import (
 
 	"vornik.io/vornik/internal/executor/livepubsub"
 	"vornik.io/vornik/internal/persistence"
+	"vornik.io/vornik/internal/taskcancel"
 )
 
 // cpcTimeoutScannerInterval is how often the goroutine wakes
@@ -152,15 +153,11 @@ func (s *CPCTimeoutScanner) processOne(ctx context.Context, cpc *persistence.Cro
 
 	// Live event on caller's stream.
 	if callerExecID := e.lookupExecutionIDForTask(ctx, cpc.CallerTaskID); callerExecID != "" {
-		errMsg := ""
-		if cpc.ErrorMessage != nil {
-			errMsg = *cpc.ErrorMessage
-		}
 		e.emitLive(ctx, callerExecID, livepubsub.KindCrossProjectCallResolved, livepubsub.CrossProjectCallResolvedPayload{
 			CPCId:        cpc.ID,
 			Status:       string(persistence.CPCStatusTimedOut),
 			Summary:      "timeout elapsed",
-			ErrorMessage: errMsg,
+			ErrorMessage: publicCPCErrorMessage(string(persistence.CPCStatusTimedOut)),
 			DurationMs:   dur.Milliseconds(),
 		})
 	}
@@ -198,12 +195,15 @@ func (s *CPCTimeoutScanner) processOne(ctx context.Context, cpc *persistence.Cro
 		Msg("cpc timeout scanner: row timed out, caller re-queued")
 }
 
-// cascadeCancelCallee transitions the callee task to CANCELLED
-// when its CPC times out and the workflow opted into the
-// cascade via cancel_on_timeout. The existing task-cancel
-// primitive handles the rest of the cleanup (executor
-// shutdown signal, container teardown). Best-effort — failure
-// here logs but doesn't fail the scanner.
+// cascadeCancelCallee cancels the callee task when its CPC times
+// out and the workflow opted into the cascade via
+// cancel_on_timeout, through the shared cancel primitive
+// (05-scheduler.md §4.11): the conditional write, then the
+// callee's container teardown, parent unblock and child cascade.
+// This comment used to say "the existing task-cancel primitive
+// handles the rest"; nothing was called, and the callee's
+// container ran on (GitHub #300 audit, site #7). Best-effort —
+// failure here logs but doesn't fail the scanner.
 func (s *CPCTimeoutScanner) cascadeCancelCallee(ctx context.Context, cpc *persistence.CrossProjectCall) {
 	if cpc == nil || cpc.CalleeTaskID == nil || s.executor == nil || s.executor.taskRepo == nil {
 		return
@@ -222,8 +222,15 @@ func (s *CPCTimeoutScanner) cascadeCancelCallee(ctx context.Context, cpc *persis
 	}
 	// ONE conditional write, gated on the live row (scheduler design §4.10):
 	// a callee that finished after the read above keeps its outcome.
-	moved, err := s.executor.taskRepo.TransitionConditional(ctx, taskID,
-		persistence.CancellableTaskStatuses(), persistence.TaskStatusCancelled, persistence.TransitionOpts{})
+	outcome, err := taskcancel.Cancel(ctx, s.executor.taskRepo, s.executor, taskID,
+		persistence.CancellableTaskStatuses())
+	moved := outcome.Transitioned
+	if outcome.TeardownErr != nil {
+		s.executor.logger.Warn().Err(outcome.TeardownErr).
+			Str("cpc_id", cpc.ID).
+			Str("callee_task_id", taskID).
+			Msg("cpc timeout scanner: callee container did not stop — it may still be running")
+	}
 	if err != nil {
 		s.executor.logger.Warn().Err(err).
 			Str("cpc_id", cpc.ID).

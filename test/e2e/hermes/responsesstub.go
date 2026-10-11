@@ -17,6 +17,7 @@ import (
 // with the final text. An MCP tool is offered inside a namespace
 // (mcp__<server>) and called by its plain name with that namespace.
 type ResponsesStub struct {
+	evidence callEvidence
 	Scripts  []Script
 	Final    string
 	mu       sync.Mutex
@@ -108,10 +109,13 @@ func (s *ResponsesStub) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	offered, names := offeredTools(req.Tools)
 	text, results, last := readInput(req.Input)
+	s.evidence.responseInput(req.Input)
 	s.mu.Lock()
 	s.seen = names
 	s.mu.Unlock()
-	writeResponseItem(w, s.nextItem(text, offered, results, last))
+	item := s.nextItem(text, offered, results, last)
+	s.evidence.responseItem(item)
+	writeResponseItem(w, item)
 }
 
 // nextItem is the scripted turn: step n's call, or the final message.

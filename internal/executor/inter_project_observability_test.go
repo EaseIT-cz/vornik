@@ -2,6 +2,7 @@ package executor
 
 import (
 	"context"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -224,7 +225,7 @@ func TestResolveCPC_EmitsAndAuditsTerminal(t *testing.T) {
 				ResultEnvelope:     c.envelope,
 			}
 			if !c.succeeded {
-				msg := "callee blew up"
+				msg := "callee blew up at https://api.example/?token=sk-live-secret"
 				calleeTask.LastError = &msg
 			}
 
@@ -241,6 +242,13 @@ func TestResolveCPC_EmitsAndAuditsTerminal(t *testing.T) {
 			}
 			if c.wantErr && payload.ErrorMessage == "" {
 				t.Error("expected non-empty ErrorMessage for failed/rejected branch")
+			}
+			if strings.Contains(payload.ErrorMessage, "sk-live-secret") || strings.Contains(payload.ErrorMessage, "api.example") {
+				t.Errorf("callee error leaked into live event: %q", payload.ErrorMessage)
+			}
+			wantPublicError := publicCPCErrorMessage(c.wantStatus)
+			if payload.ErrorMessage != wantPublicError {
+				t.Errorf("event error = %q, want generic public message %q", payload.ErrorMessage, wantPublicError)
 			}
 
 			// Audit row.

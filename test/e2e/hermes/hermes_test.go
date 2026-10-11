@@ -75,6 +75,7 @@ type hermesRun struct {
 // scan it (Hermes drops to a remapped user inside the container).
 func runHermes(t *testing.T, s *stack, prompt string) hermesRun {
 	t.Helper()
+	modelEvidence(s).reset()
 	args := []string{"run", "--rm", "--network", "host",
 		"-v", s.hermesHome + ":/opt/data:Z",
 		"-e", "VORNIK_URL=" + s.hermesURL,

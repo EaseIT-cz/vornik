@@ -165,7 +165,7 @@ func TestGatherEvidence_AssemblesAllSections(t *testing.T) {
 		"Tool audit",
 		"fetch",
 		"429",
-		"Container log tail",
+		"Task log tail",
 		"stderr line one",
 		"Original prompt:",
 	} {

@@ -27,16 +27,26 @@ also checks that Vornik runs as a different OS user than you: otherwise the
 assistant's shell could read Vornik's files, and connect refuses unless you
 pass --accept-shared-user.
 
+For any other assistant, 'connect generic --print' mints the key the same
+way, writes no assistant config, and prints the MCP entry to paste (the
+stdio entry that runs the bridge, and the streamable-HTTP form). --client
+names the assistant's kind (default generic); an assistant Vornik has no
+adapter for is treated as one that can run shell commands.
+
 ```
-vornikctl agent connect <hermes|claude-desktop|claude-code|codex> [flags]
+vornikctl agent connect <hermes|claude-desktop|claude-code|codex|generic> [flags]
 ```
 
 | Flag | Default | Description |
 |---|---|---|
 | `--accept-shared-user` | `false` | Connect a shell-capable assistant although Vornik's files may be readable to it (see the printed table) |
+| `--api-key-stdin` | `false` | Read the operator's admin key from the first line of standard input (pipe it; a terminal is refused), instead of VORNIK_API_KEY or the stored sign-in |
+| `--client` |  | generic only: the assistant's client kind, lowercase letters, digits and dashes (default generic) |
 | `--dry-run` | `false` | Check and print what would be done, change nothing |
 | `--namespace` |  | The agent namespace: 2 to 16 lowercase letters and digits (default: the harness name without dashes, e.g. claudecode) |
+| `--print` | `false` | generic only: write no assistant config; print the MCP entry (JSON on standard output) to paste |
 | `--url` |  | Vornik's URL (default $VORNIK_API_URL, then http://localhost:8080) |
+| `--vornikctl` |  | Absolute path of the vornikctl the assistant runs; symlinks are resolved and the resolved file is recorded (default: this vornikctl). It must be executable by you |
 
 ## vornikctl agent disconnect
 
@@ -619,6 +629,49 @@ vornikctl control-plane diagnose <focus> [flags]
 | `--json` | `false` | Emit the raw verdict JSON |
 | `--propose` | `false` | File a review-only DRAFT proposal from the diagnosis (never auto-applied) |
 
+## vornikctl control-plane journal
+
+Config-apply journal: list open rows, resolve a row parked in DRIFT (admin key)
+
+## vornikctl control-plane journal list
+
+List the open config-apply journal rows (DRIFT rows block their projects)
+
+```
+vornikctl control-plane journal list
+```
+
+## vornikctl control-plane journal resolve
+
+Resolve a DRIFT row: --keep the files as they are, or --restore the prior content
+
+Resolve a config-apply journal row parked in DRIFT, which unblocks its projects.
+
+--keep accepts the files as they are and writes nothing. When every file holds
+the content the proposal wrote and the proposal is APPROVED, the row and the
+proposal are marked APPLIED. When the proposal is no longer APPROVED (for
+example REJECTED), the row is closed as FAILED with a note that you kept the
+files, and the proposal is left as it is. When a file was edited by hand, the
+row is marked FAILED and an APPROVED proposal is retired.
+
+--restore writes back the content each file had before the apply (overwriting
+a hand edit), removes a file the apply created when it still holds what the
+apply wrote, and reloads. The row is marked REVERTED and the proposal stays
+APPROVED.
+
+Requires an admin key. Every resolve is audited. Resolving an already
+resolved row the same way changes nothing.
+
+```
+vornikctl control-plane journal resolve <journal-id> [flags]
+```
+
+| Flag | Default | Description |
+|---|---|---|
+| `--author` |  | Who resolves it, recorded on the row and in the audit (defaults to $USER) |
+| `--keep` | `false` | Accept the files as they are (no file is written) |
+| `--restore` | `false` | Write the prior content back (overwrites a hand edit) |
+
 ## vornikctl control-plane proposals
 
 List control-plane proposals
@@ -775,6 +828,10 @@ secrets_permissions, and dispatcher_role findings. Schema, runtime,
 security posture, pricing, and budget checks are diagnostic only
 because they require operator config changes or external runtime actions.
 
+With API authentication enabled, daemon-backed doctor requires an admin-class
+API key. A plain project or agent key is not sufficient. Use --offline when
+the daemon is unavailable or admin credentials are not configured locally.
+
 ```
 vornikctl doctor [flags]
 ```
@@ -816,6 +873,9 @@ With an id argument, full prereq detail (including remediation hints for
 unmet prereqs) is shown for that feature.
 
 Exit code 1 when any feature is blocked or degraded.
+
+With API authentication enabled, this daemon-wide readiness view requires
+an admin-class API key.
 
 ```
 vornikctl doctor feature [id] [flags]

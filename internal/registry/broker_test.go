@@ -270,3 +270,53 @@ func TestBrokerProposal_UntrustedArgPaths(t *testing.T) {
 		t.Fatalf("no schema: %v", got)
 	}
 }
+
+// GitHub #96 (2026-10-08): the over-budget refusal printed the walker's
+// clamped sum (BrokerUntrustedBudget+1 = 1025) instead of the schema's real
+// total, so an author could not tell how far over the budget a schema was
+// (read-only review of a73349740, 2026-10-04; broker design §4.3 amendment).
+func TestBrokerSchema_OverBudgetReportsRealTotal(t *testing.T) {
+	cases := map[string]struct {
+		props string
+		want  string
+	}{
+		"three flat leaves": {
+			"    a: { type: string, x-untrusted: true, maxLength: 512 }\n" +
+				"    b: { type: string, x-untrusted: true, maxLength: 512 }\n" +
+				"    c: { type: string, x-untrusted: true, maxLength: 512 }", "budget is 1536"},
+		"one leaf in an array of 10": {
+			"    xs: { type: array, maxItems: 10, items: { type: string, x-untrusted: true, maxLength: 500 } }", "budget is 5000"},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			err := parseBroker(t, brokerWithProps(tc.props)).Validate()
+			if err == nil {
+				t.Fatal("an over-budget schema loaded")
+			}
+			if !strings.Contains(err.Error(), tc.want) || strings.Contains(err.Error(), "1025") {
+				t.Fatalf("refusal %q: want %q and not the clamped 1025", err, tc.want)
+			}
+			if strings.Contains(err.Error(), "budget is -") {
+				t.Fatalf("refusal reports a negative total: %q", err)
+			}
+		})
+	}
+}
+
+// GitHub #96 (2026-10-08): a maxItems product past 2^63 must still be
+// refused, and the reported total must saturate rather than wrap.
+func TestBrokerSchema_HugeMultiplierSaturatesWithoutWrap(t *testing.T) {
+	props := "    xs:\n      type: array\n      maxItems: 4000000000\n      items:\n        type: array\n        maxItems: 4000000000\n" +
+		"        items: { type: string, x-untrusted: true, maxLength: 512 }"
+	err := parseBroker(t, brokerWithProps(props)).Validate()
+	if err == nil {
+		t.Fatal("a schema whose multiplier overflows loaded")
+	}
+	msg := err.Error()
+	if !strings.Contains(msg, "budget is more than 9223372036854775807") {
+		t.Fatalf("refusal %q: want the saturated form", msg)
+	}
+	if strings.Contains(msg, "budget is -") || strings.Contains(msg, "1025") {
+		t.Fatalf("refusal %q wrapped or reported the clamp", msg)
+	}
+}

@@ -389,3 +389,105 @@ func TestSearch_RepoErrorPropagatesNoAudit(t *testing.T) {
 		t.Fatalf("audit should not be recorded on error")
 	}
 }
+
+// GitHub #94 (2026-10-07, T4): the legacy path returned a refuted note. A
+// Searcher without an epoch source took the six legacy statements, which
+// filtered expiry but not validation_status. Each statement must now carry
+// the predicate the epoch statements carry. sqlmock matches by regexp, so a
+// statement without the predicate does not match its expectation and the
+// call fails: these fail on the old SQL and pass on the new.
+const refutedPredicate = `validation_status NOT IN \('refuted','superseded'\)`
+
+func TestSearcher_LegacyPathNeverReturnsRefutedRow(t *testing.T) {
+	r, mock, cleanup := newRepo(t)
+	defer cleanup()
+	s := NewSearcher(Config{}, r, nil) // no epoch source, no embedder
+	s.setMetrics(freshMetrics())
+
+	// Search (no date, no scope): HybridSearch has no vector → KeywordSearch.
+	mock.ExpectQuery("(?s)ts_rank.*" + refutedPredicate).
+		WillReturnRows(makeRR([]string{"c1"}, []float64{0.5}))
+	got, err := s.Search(context.Background(), "p", "q", 10)
+	if err != nil || len(got) != 1 {
+		t.Fatalf("Search: %v %v", got, err)
+	}
+	// SearchWithOptions with a date window: hybridSearchTemporal has no
+	// vector → keywordSearchTemporal.
+	mock.ExpectQuery("(?s)ts_rank.*" + refutedPredicate + `.*\$4::timestamptz`).
+		WillReturnRows(makeRR([]string{"c1"}, []float64{0.5}))
+	got, err = s.SearchWithOptions(context.Background(), "p", "q", SearchOptions{Limit: 10, FromDate: time.Now().AddDate(0, -1, 0)})
+	if err != nil || len(got) != 1 {
+		t.Fatalf("SearchWithOptions: %v %v", got, err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// The two hybrid statements, which a Searcher without an embedder never
+// reaches: the predicate must be inside BOTH ranking CTEs, so a refuted or
+// superseded row cannot take a rank slot from a live one.
+func TestSearcher_LegacyPathNeverReturnsSupersededRow(t *testing.T) {
+	bothCTEs := "(?s)semantic AS.*" + refutedPredicate + ".*keyword AS.*" + refutedPredicate
+	vec := []float32{0.1, 0.2, 0.3}
+
+	t.Run("HybridSearch", func(t *testing.T) {
+		r, mock, cleanup := newRepo(t)
+		defer cleanup()
+		mock.ExpectQuery("SELECT EXISTS.*pg_extension").
+			WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(true))
+		mock.ExpectQuery(bothCTEs).WillReturnRows(makeRR([]string{"c1"}, []float64{0.5}))
+		if got, err := r.HybridSearch(context.Background(), "p", vec, "q", 5); err != nil || len(got) != 1 {
+			t.Fatalf("HybridSearch: %v %v", got, err)
+		}
+		if err := mock.ExpectationsWereMet(); err != nil {
+			t.Fatal(err)
+		}
+	})
+	t.Run("hybridSearchTemporal", func(t *testing.T) {
+		r, mock, cleanup := newRepo(t)
+		defer cleanup()
+		mock.ExpectQuery("SELECT EXISTS.*pg_extension").
+			WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(true))
+		mock.ExpectQuery(bothCTEs).WillReturnRows(makeRR([]string{"c1"}, []float64{0.5}))
+		got, err := r.hybridSearchTemporal(context.Background(), "p", vec, "q", 5, time.Now().AddDate(0, -1, 0), time.Time{}, "", false)
+		if err != nil || len(got) != 1 {
+			t.Fatalf("hybridSearchTemporal: %v %v", got, err)
+		}
+		if err := mock.ExpectationsWereMet(); err != nil {
+			t.Fatal(err)
+		}
+	})
+}
+
+// The substring fallbacks, reached when the FTS statement errors: one
+// cascade from KeywordSearch, one from keywordSearchTemporal.
+func TestRepository_KeywordSearchExcludesRefuted(t *testing.T) {
+	substring := "(?s)ILIKE.*" + refutedPredicate
+
+	t.Run("KeywordSearch to substringSearch", func(t *testing.T) {
+		r, mock, cleanup := newRepo(t)
+		defer cleanup()
+		mock.ExpectQuery("ts_rank").WillReturnError(errors.New("fts unavailable"))
+		mock.ExpectQuery(substring).WillReturnRows(makeRR([]string{"c1"}, []float64{1}))
+		if got, err := r.KeywordSearch(context.Background(), "p", "q", 5); err != nil || len(got) != 1 {
+			t.Fatalf("KeywordSearch: %v %v", got, err)
+		}
+		if err := mock.ExpectationsWereMet(); err != nil {
+			t.Fatal(err)
+		}
+	})
+	t.Run("keywordSearchTemporal to substringSearchTemporal", func(t *testing.T) {
+		r, mock, cleanup := newRepo(t)
+		defer cleanup()
+		mock.ExpectQuery("ts_rank").WillReturnError(errors.New("fts unavailable"))
+		mock.ExpectQuery(substring).WillReturnRows(makeRR([]string{"c1"}, []float64{1}))
+		got, err := r.keywordSearchTemporal(context.Background(), "p", "q", 5, time.Now().AddDate(0, -1, 0), time.Time{}, "", false)
+		if err != nil || len(got) != 1 {
+			t.Fatalf("keywordSearchTemporal: %v %v", got, err)
+		}
+		if err := mock.ExpectationsWereMet(); err != nil {
+			t.Fatal(err)
+		}
+	})
+}

@@ -19,8 +19,11 @@ mcp:
   servers:
 {{- range .Servers}}
     - name: {{q .Name}}
-      transport: "streamable-http"
+      transport: {{if .Transport}}{{q .Transport}}{{else}}"streamable-http"{{end}}
       url: {{q .URL}}
+{{- if .Account}}
+      account: {{q .Account}}
+{{- end}}
 {{- if .OAuth}}
       auth:
         mode: oauth
@@ -55,6 +58,9 @@ apis:
 {{- range .APIs}}
   - name: {{q .Name}}
     base_url: {{q .BaseURL}}
+{{- if .Account}}
+    account: {{q .Account}}
+{{- end}}
 {{- if .AuthRef}}
     auth:
 {{- if .QueryParam}}

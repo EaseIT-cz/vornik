@@ -118,6 +118,11 @@ func ClassifyExecutionFailure(err error, hint string) string {
 		return persistence.TaskFailureClassWorkflowRole
 	case containsAny(lowered, "workflow not found", "step .* not found", "workflow configuration"):
 		return persistence.TaskFailureClassWorkflowCfg
+	// Agent-container failures preserve the proxy's stable MODEL_UNHEALTHY
+	// marker in the task error. Keep it in the LLM failure family so task
+	// diagnosis does not call a known model-circuit failure UNKNOWN.
+	case containsAny(lowered, "model_unhealthy", "model unhealthy"):
+		return persistence.TaskFailureClassLLMError
 	case containsAny(lowered, "chat provider", "llm", "anthropic", "openai", "gateway", "upstream", "502 bad gateway", "503 service", "stream closed"):
 		return persistence.TaskFailureClassLLMError
 	case containsAny(lowered, "rate limit", "too many requests", "429"):

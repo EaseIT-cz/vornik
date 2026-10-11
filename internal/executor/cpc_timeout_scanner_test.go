@@ -2,6 +2,7 @@ package executor
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
@@ -40,6 +41,7 @@ func TestCPCTimeoutScanner_TickResolvesExpired(t *testing.T) {
 	// row should claim.
 	past := time.Now().Add(-1 * time.Minute)
 	future := time.Now().Add(10 * time.Minute)
+	storedError := "callee failed: https://api.example/?token=sk-live-secret"
 	cpc.rows["ccp_expired"] = &persistence.CrossProjectCall{
 		ID:             "ccp_expired",
 		CallerTaskID:   "task-caller",
@@ -49,6 +51,7 @@ func TestCPCTimeoutScanner_TickResolvesExpired(t *testing.T) {
 		Status:         persistence.CPCStatusRunning,
 		CreatedAt:      time.Now().Add(-5 * time.Minute),
 		TimeoutAt:      &past,
+		ErrorMessage:   &storedError,
 	}
 	cpc.rows["ccp_fresh"] = &persistence.CrossProjectCall{
 		ID:            "ccp_fresh",
@@ -82,6 +85,9 @@ func TestCPCTimeoutScanner_TickResolvesExpired(t *testing.T) {
 	payload, _ := events[0].Payload.(livepubsub.CrossProjectCallResolvedPayload)
 	if payload.Status != string(persistence.CPCStatusTimedOut) {
 		t.Errorf("event status = %q, want timed_out", payload.Status)
+	}
+	if payload.ErrorMessage != "cross-project call timed out" || strings.Contains(payload.ErrorMessage, "sk-live-secret") {
+		t.Errorf("unsafe timeout event error message: %q", payload.ErrorMessage)
 	}
 	// Audit row written.
 	if rows := audit.byAction(auditActionCPCResolve); len(rows) != 1 {

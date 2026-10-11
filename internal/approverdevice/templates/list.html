@@ -1,5 +1,5 @@
 {{define "list.html"}}{{template "head" (page "Approvals" 0)}}
-<nav><a href="/ui/approve/" aria-current="page">Approvals</a><a href="/ui/approve/standing">Standing approvals</a><a href="/ui/approve/devices">Devices</a></nav>
+{{template "nav" "approvals"}}
 <h1>Waiting for you</h1>
 {{with .Flash}}<p class="flash">Done: {{.}}.</p>{{end}}
 {{with .Refused}}<p class="err">Not decided, because it changed after you opened it or was already decided: {{range $i, $id := .}}{{if $i}}, {{end}}<a class="ref" href="/ui/approve/{{$id}}">{{$id}}</a>{{end}}. Review it again.</p>{{end}}

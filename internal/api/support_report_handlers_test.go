@@ -15,6 +15,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 	"vornik.io/vornik/internal/config"
 	"vornik.io/vornik/internal/persistence"
+	"vornik.io/vornik/internal/persistence/mocks"
 	"vornik.io/vornik/internal/secrets"
 	"vornik.io/vornik/internal/supportbundle"
 )
@@ -235,34 +236,36 @@ func TestParseWindow_UntilBeforeSince(t *testing.T) {
 	}
 }
 
-// stubLogSource + stubOpener satisfy the Server's TaskLogSource +
-// ArtifactOpener so the handler's container-log injection + the opener
-// adapter are exercised.
-type stubLogSource struct{ secret string }
-
-func (s stubLogSource) TaskLogs(_ context.Context, _ string, _ int) (string, error) {
-	return "container stderr token=" + s.secret + "\n", nil
-}
-
+// stubOpener satisfies the Server's ArtifactOpener so the opener adapter is
+// exercised.
 type stubOpener struct{ data []byte }
 
 func (s stubOpener) Open(_ context.Context, _ string) (io.ReadCloser, error) {
 	return io.NopCloser(bytes.NewReader(s.data)), nil
 }
 
-func TestSupportReport_ContainerLogsAndMetrics(t *testing.T) {
+// GitHub #294 (2026-10-08): the bundle's task log came from
+// Executor.TaskLogs, which ran podman logs on the request. It is now the
+// daemon-held task log (api.HeldTaskLog), redacted like every other file, in
+// task/task_log.txt. Pre-fix there is no task_log.txt.
+func TestSupportReport_TaskLogIsHeld(t *testing.T) {
 	det, err := secrets.NewMultiDetector(secrets.Config{})
 	if err != nil {
 		t.Fatal(err)
 	}
 	now := time.Now()
 	logSecret := "sk-CONTAINERLOGSECRET0000000000000000000000000000"
+	errMsg := "step failed\n--- Container Log ---\ncontainer stderr token=" + logSecret + "\n"
 	reg := prometheusNewRegistry()
 	s := NewServer(
 		WithAdminConfig(config.AdminConfig{Enabled: true, AllowedKeys: []string{"sk-admin"}}),
 		WithTaskRepository(supportTaskRepoStub{task: &persistence.Task{ID: "t1", ProjectID: "p1", CreatedAt: now, UpdatedAt: now}}),
+		WithExecutionRepository(&mocks.MockExecutionRepository{
+			GetByTaskIDFunc: func(_ context.Context, id string) (*persistence.Execution, error) {
+				return &persistence.Execution{ID: "e1", TaskID: id, ProjectID: "p1", ErrorMessage: &errMsg}, nil
+			},
+		}),
 		WithSecrets(det, secrets.DefaultCheckpoints()),
-		WithTaskLogSource(stubLogSource{secret: logSecret}),
 		WithMetricsRegistry(reg),
 	)
 	req := withAdminKeyContext(
@@ -274,15 +277,21 @@ func TestSupportReport_ContainerLogsAndMetrics(t *testing.T) {
 		t.Fatalf("want 200, got %d (%s)", rec.Code, rec.Body.String())
 	}
 	files := extractBundle(t, rec.Body.Bytes())
-	cl, ok := files["task/container_logs.txt"]
+	if _, ok := files["task/container_logs.txt"]; ok {
+		t.Errorf("task/container_logs.txt is gone with #294: the daemon reads no container log on a request")
+	}
+	cl, ok := files["task/task_log.txt"]
 	if !ok {
-		t.Fatalf("missing container_logs.txt; have %v", keysOf(files))
+		t.Fatalf("missing task/task_log.txt; have %v", keysOf(files))
+	}
+	if !bytes.Contains(cl, []byte("step failed")) {
+		t.Errorf("task log does not carry the persisted error:\n%s", cl)
 	}
 	if bytes.Contains(cl, []byte(logSecret)) {
-		t.Errorf("container log secret leaked:\n%s", cl)
+		t.Errorf("task log secret leaked:\n%s", cl)
 	}
 	if !bytes.Contains(cl, []byte("[REDACTED:")) {
-		t.Errorf("container log not redacted:\n%s", cl)
+		t.Errorf("task log not redacted:\n%s", cl)
 	}
 }
 

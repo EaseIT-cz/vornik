@@ -29,7 +29,7 @@ func checkNames(r DoctorReport) map[string]DoctorCheck {
 func TestRunDoctor_HostChecksLeftTheDaemon(t *testing.T) {
 	h := NewDoctorHandlers(closedDB(t))
 	rec := httptest.NewRecorder()
-	h.RunDoctor(rec, httptest.NewRequest(http.MethodPost, "/api/v1/doctor", nil))
+	h.RunDoctor(rec, authDisabledReq(httptest.NewRequest(http.MethodPost, "/api/v1/doctor", nil)))
 	require.Equal(t, http.StatusOK, rec.Code)
 	var report DoctorReport
 	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &report))
@@ -59,7 +59,7 @@ func TestRunDoctor_ReportsTheDaemonRevision(t *testing.T) {
 	h := NewDoctorHandlers(closedDB(t))
 	h.daemonRevisionFunc = func() string { return "0123456789ab" }
 	rec := httptest.NewRecorder()
-	h.RunDoctor(rec, httptest.NewRequest(http.MethodPost, "/api/v1/doctor", nil))
+	h.RunDoctor(rec, authDisabledReq(httptest.NewRequest(http.MethodPost, "/api/v1/doctor", nil)))
 	var report DoctorReport
 	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &report))
 	assert.Equal(t, "0123456789ab", report.DaemonRevision)

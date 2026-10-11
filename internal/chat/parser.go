@@ -12,6 +12,7 @@ import (
 	"vornik.io/vornik/internal/budget"
 	"vornik.io/vornik/internal/persistence"
 	"vornik.io/vornik/internal/registry"
+	"vornik.io/vornik/internal/taskcancel"
 )
 
 // BudgetGate carries the dependencies executeCreateTask needs to atomically
@@ -51,6 +52,12 @@ type Action struct {
 	// the dispatcher's task tools, which set it only after dispatcher.authorizeTaskAction granted
 	// — the user's own acknowledgement, stamped from their inbound turn.
 	Confirm bool `json:"-"`
+	// Teardown is what a cancel_task owes once the row moved: stop the live
+	// execution, unblock a waiting parent, cascade to children (05-scheduler
+	// §4.11, GitHub #300). Like Confirm it is NOT decodable from JSON; the
+	// dispatcher sets it from its wired executor. Nil means the write only —
+	// the executor's step guard is then what stops further work.
+	Teardown taskcancel.Teardown `json:"-"`
 	// ChatTurnID, when non-empty, is stamped onto Task.ChatTurnID
 	// during create_task so the dispatcher turn that spawned the task
 	// can be queried later (in-conversation dedup, follow-up
@@ -390,10 +397,14 @@ func executeCancelTask(ctx context.Context, action Action, taskRepo persistence.
 		}, fmt.Errorf("task is already in terminal state")
 	}
 
-	// ONE conditional write, gated on the live row: a task that finished
-	// between the read above and this write is left as it is.
-	moved, err := taskRepo.TransitionConditional(ctx, action.TaskID,
-		cancellable, persistence.TaskStatusCancelled, persistence.TransitionOpts{})
+	// The shared cancel primitive (05-scheduler.md §4.11): ONE conditional
+	// write, gated on the live row — a task that finished between the read
+	// above and this write is left as it is — then, only if it moved, the
+	// teardown the dispatcher wired: stop the live execution, unblock a
+	// waiting parent, cascade to children. This path used to flip the row
+	// only and leave the container running (GitHub #300 audit, site #5).
+	outcome, err := taskcancel.Cancel(ctx, taskRepo, action.Teardown, action.TaskID, cancellable)
+	moved := outcome.Transitioned
 	if err != nil {
 		return ActionResult{
 			Success: false,
@@ -410,6 +421,15 @@ func executeCancelTask(ctx context.Context, action Action, taskRepo persistence.
 			Success: false,
 			Message: fmt.Sprintf("Task %s moved to %s before it could be cancelled.", action.TaskID, now),
 		}, fmt.Errorf("task is no longer cancellable")
+	}
+	if outcome.TeardownErr != nil {
+		// Fixed wording: the runtime error carries host detail, and this
+		// message reaches a chat channel.
+		return ActionResult{
+			Success: true,
+			Message: fmt.Sprintf("Task %s has been cancelled and its parent and child tasks updated, but its running execution could not be stopped and may still be running.", action.TaskID),
+			Data:    action.TaskID,
+		}, nil
 	}
 
 	return ActionResult{

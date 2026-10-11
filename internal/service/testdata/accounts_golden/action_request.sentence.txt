@@ -1,0 +1,1 @@
+Your assistant (hermes) wants to send mail with mail (send). Review exactly what it will send before you approve.

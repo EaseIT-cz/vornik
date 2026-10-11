@@ -149,11 +149,27 @@ func (r *TaskRepository) GetByIdempotencyKey(ctx context.Context, projectID, ide
 // before the write (scheduler design §4.9), as it sets UpdatedAt; on success
 // the struct matches the row.
 func (r *TaskRepository) Update(ctx context.Context, task *persistence.Task) error {
+	_, err := r.update(ctx, task, nil)
+	return err
+}
+
+// UpdateIfStatus is Update guarded by the row's current status (GitHub #303;
+// 05-scheduler §4.11): the same column set, plus AND status = ANY(allowed).
+// false, nil when no row matched.
+func (r *TaskRepository) UpdateIfStatus(ctx context.Context, task *persistence.Task, allowed []persistence.TaskStatus) (bool, error) {
+	if len(allowed) == 0 {
+		return false, fmt.Errorf("UpdateIfStatus: allowed statuses required")
+	}
+	return r.update(ctx, task, allowed)
+}
+
+// update is Update's statement; a non-nil allowed adds the status guard.
+func (r *TaskRepository) update(ctx context.Context, task *persistence.Task, allowed []persistence.TaskStatus) (bool, error) {
 	if task == nil {
-		return fmt.Errorf("task is nil")
+		return false, fmt.Errorf("task is nil")
 	}
 	if err := persistence.ValidateStoredTaskBudget(task.BudgetUSD); err != nil {
-		return err
+		return false, err
 	}
 	task.UpdatedAt = time.Now().UTC()
 	if persistence.TaskStatusHoldsNoLease(task.Status) {
@@ -163,7 +179,25 @@ func (r *TaskRepository) Update(ctx context.Context, task *persistence.Task) err
 		task.ClearLeaseFields()
 	}
 
-	_, err := r.db.ExecContext(ctx, `
+	args := []any{
+		task.ID, task.ProjectID, task.WorkflowID, task.IdempotencyKey, task.ParentTaskID, task.CreationSource,
+		task.DelegationMode, task.Status, task.Priority, task.Payload, pq.Array(task.Dependencies),
+		task.LeaseID, task.LeasedAt, task.LeasedBy, task.LeaseExpiresAt,
+		task.Attempt, task.MaxAttempts, task.LastError, task.LastErrorClass, task.UpdatedAt,
+		task.BudgetUSD,
+		string(task.Status),
+	}
+	guard := ""
+	if allowed != nil {
+		// Same shape as TransitionConditional's status filter.
+		statuses := make([]string, len(allowed))
+		for i, s := range allowed {
+			statuses[i] = string(s)
+		}
+		guard = "\n\t\t  AND status = ANY($23)"
+		args = append(args, pq.Array(statuses))
+	}
+	res, err := r.db.ExecContext(ctx, `
 		UPDATE tasks
 		SET project_id = $2,
 		    workflow_id = $3,
@@ -206,19 +240,15 @@ func (r *TaskRepository) Update(ctx context.Context, task *persistence.Task) err
 		    -- ("inconsistent types deduced for parameter $8"). A separate
 		    -- placeholder is unambiguous, and the redundant arg is free.
 		    failed_at = CASE WHEN $22 = 'FAILED' THEN COALESCE(failed_at, NOW()) ELSE NULL END
-		WHERE id = $1
-	`,
-		task.ID, task.ProjectID, task.WorkflowID, task.IdempotencyKey, task.ParentTaskID, task.CreationSource,
-		task.DelegationMode, task.Status, task.Priority, task.Payload, pq.Array(task.Dependencies),
-		task.LeaseID, task.LeasedAt, task.LeasedBy, task.LeaseExpiresAt,
-		task.Attempt, task.MaxAttempts, task.LastError, task.LastErrorClass, task.UpdatedAt,
-		task.BudgetUSD,
-		string(task.Status),
-	)
+		WHERE id = $1`+guard, args...)
 	if err != nil {
-		return mapDBError(err)
+		return false, mapDBError(err)
 	}
-	return nil
+	n, err := res.RowsAffected()
+	if err != nil {
+		return false, mapDBError(err)
+	}
+	return n > 0, nil
 }
 
 // Delete removes a task by ID.

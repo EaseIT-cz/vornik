@@ -479,7 +479,7 @@ func TestW2APIRunDoctor_RejectsNonPOST(t *testing.T) {
 	h := &DoctorHandlers{db: closedDB(t)}
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/doctor", nil)
 	rec := httptest.NewRecorder()
-	h.RunDoctor(rec, req)
+	h.RunDoctor(rec, authDisabledReq(req))
 
 	require.Equal(t, http.StatusMethodNotAllowed, rec.Code)
 	env := decodeErrorEnvelope(t, rec.Body.Bytes())
@@ -495,7 +495,7 @@ func TestW2APIRunDoctor_ReportShapeAndStuckMetricsNilSafe(t *testing.T) {
 	h := &DoctorHandlers{db: closedDB(t)}
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/doctor", nil)
 	rec := httptest.NewRecorder()
-	h.RunDoctor(rec, req)
+	h.RunDoctor(rec, authDisabledReq(req))
 
 	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
 	assert.Equal(t, "application/json", rec.Header().Get("Content-Type"))

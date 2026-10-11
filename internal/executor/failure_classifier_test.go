@@ -58,6 +58,18 @@ func TestClassifyExecutionFailure_EmptyInput(t *testing.T) {
 	assert.Equal(t, "", ClassifyExecutionFailure(nil, ""))
 }
 
+// TestClassifyExecutionFailure_ModelUnhealthyTaskReport pins the reporting
+// failure from the 2026-10-11 Hermes render incident (#322): the agent surfaced
+// the proxy's MODEL_UNHEALTHY circuit-open marker, but task diagnosis grouped
+// it as UNKNOWN. The task-level vocabulary has LLM_ERROR (the step outcome has
+// the more specific model_unhealthy class); keep the report actionable without
+// changing retry or routing policy.
+func TestClassifyExecutionFailure_ModelUnhealthyTaskReport(t *testing.T) {
+	marker := `agent reported FAILED status: MODEL_UNHEALTHY: model "glm-5.3" on route "agent" circuit open`
+	assert.Equal(t, persistence.TaskFailureClassLLMError,
+		ClassifyExecutionFailure(nil, marker))
+}
+
 // TestClassifyExecutionFailure_StringBranches walks every
 // containsAny branch in the classifier. Each case targets one
 // branch; a refactor that re-orders the switch or drops a branch

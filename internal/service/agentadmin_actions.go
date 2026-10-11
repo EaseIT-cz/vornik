@@ -8,8 +8,10 @@ import (
 	"strings"
 	"time"
 	"vornik.io/vornik/internal/egressscan"
+	"vornik.io/vornik/internal/requestguard"
 	"vornik.io/vornik/internal/secrets"
 
+	"vornik.io/vornik/internal/agentadmin"
 	"vornik.io/vornik/internal/agentns"
 	"vornik.io/vornik/internal/apigateway"
 	"vornik.io/vornik/internal/approval"
@@ -41,6 +43,10 @@ type actionPayload struct {
 	// Task groups the writes one run drafted on the page (approval fatigue,
 	// tier 1); absent on requests filed before it.
 	Task string `json:"task,omitempty"`
+	// Account is the account the write acts from (design §22.2.6; GitHub
+	// #119 item 8), omitted for the default account with no identity so
+	// that payload is unchanged.
+	Account *agentadmin.AccountGrant `json:"account,omitempty"`
 }
 
 func actionRequestID(actionID string) string { return "apr_ba_" + actionID }
@@ -66,7 +72,7 @@ func (s *agentAdminService) fileActionApprovals(ctx context.Context, projectID, 
 		if a == nil || a.Status != persistence.BrokerActionPending || a.ProjectID != projectID {
 			continue
 		}
-		row, err := s.actionApprovalRow(ns, a)
+		row, err := s.actionApprovalRow(ctx, ns, a)
 		if err != nil {
 			s.c.Logger.Error().Err(err).Str("action_id", a.ActionID).Msg("agent actions: could not prepare the phone approval")
 			continue
@@ -87,9 +93,13 @@ func (s *agentAdminService) fileActionApprovals(ctx context.Context, projectID, 
 }
 
 // actionApprovalRow is the approval request for one pending action.
-func (s *agentAdminService) actionApprovalRow(ns string, a *persistence.BrokerAction) (persistence.AgentApprovalRequestRow, error) {
+func (s *agentAdminService) actionApprovalRow(ctx context.Context, ns string, a *persistence.BrokerAction) (persistence.AgentApprovalRequestRow, error) {
+	if err := s.c.checkActionAccount(ctx, a.ProjectID, a.AccountGuard); err != nil {
+		return persistence.AgentApprovalRequestRow{}, err
+	}
+	acct, phrase, confirmed := s.c.writeAccount(ctx, a.ProjectID, a.Tool)
 	raw, err := json.Marshal(actionPayload{ActionID: a.ActionID, Project: a.ProjectID, Workflow: a.WorkflowID,
-		Action: a.ActionKind, Tool: a.Tool, Args: json.RawMessage(a.ArgsJSON), ArgsSHA256: a.ArgsSHA256, Task: a.TaskID})
+		Action: a.ActionKind, Tool: a.Tool, Args: json.RawMessage(a.ArgsJSON), ArgsSHA256: a.ArgsSHA256, Task: a.TaskID, Account: acct})
 	if err != nil {
 		return persistence.AgentApprovalRequestRow{}, err
 	}
@@ -104,8 +114,18 @@ func (s *agentAdminService) actionApprovalRow(ns string, a *persistence.BrokerAc
 	// The sentence names the action and where it goes, never its arguments:
 	// the push carries no sentence now, but the list shows it, and the
 	// arguments are for the device's page only.
-	sentence := fmt.Sprintf("Your assistant (%s) wants to %s with %s. Review exactly what it will send before you approve.",
-		ns, strings.ReplaceAll(a.ActionKind, "_", " "), describeWrite(a.Tool))
+	from := ""
+	switch {
+	case !confirmed:
+		from = "; the account of " + integrationOfTool(a.Tool) + " could not be confirmed"
+	case phrase != "":
+		from = " from " + phrase
+	}
+	sentence := fmt.Sprintf("Your assistant (%s) wants to %s with %s%s. Review exactly what it will send before you approve.",
+		ns, strings.ReplaceAll(a.ActionKind, "_", " "), describeWrite(a.Tool), from)
+	if err := s.c.checkActionAccount(ctx, a.ProjectID, a.AccountGuard); err != nil {
+		return persistence.AgentApprovalRequestRow{}, err
+	}
 	return persistence.AgentApprovalRequestRow{
 		ID: actionRequestID(a.ActionID), Namespace: ns, Kind: persistence.ApprovalKindBrokerAction, Sentence: sentence,
 		Rendered: canon, RenderedSHA256: sum, Status: persistence.ApprovalPending,
@@ -140,6 +160,9 @@ func (s *agentAdminService) actionEffect(ctx context.Context, r persistence.Agen
 		err = s.c.approveActionWithGrant(ctx, pl, "device:"+r.DecidedByDevice, days, uses)
 	} else {
 		err = repo.Approve(ctx, pl.ActionID, pl.ArgsSHA256, "device:"+r.DecidedByDevice, time.Now().UTC())
+	}
+	if errors.Is(err, persistence.ErrAccountTransition) {
+		return fmt.Errorf("%w: %s", approverdevice.ErrPermanent, (&requestguard.Refusal{}).Error())
 	}
 	if errors.Is(err, persistence.ErrBrokerActionNoTransition) {
 		a, gerr := repo.Get(ctx, pl.ActionID)
@@ -192,6 +215,18 @@ func (a actionCaller) CallToolOnce(ctx context.Context, projectID, tool, argsJSO
 	// sends them, so the cover does not rest on the staged body being the
 	// sent one (review 20261002-3ef1 R3). Agent projects only; fail closed.
 	if _, agent := agentns.FromID(projectID); agent {
+		storedProject, vector, ok := brokeractions.ActionContext(ctx)
+		if !ok || storedProject != projectID {
+			return "", false, fmt.Errorf("%w: %w", mcp.ErrNotSent, &requestguard.Refusal{})
+		}
+		if err := a.c.checkActionAccount(ctx, projectID, vector); err != nil {
+			return "", false, fmt.Errorf("%w: %w", mcp.ErrNotSent, &requestguard.Refusal{})
+		}
+		ctx = requestguard.With(ctx, func(checkCtx context.Context) error { return a.c.checkActionAccount(checkCtx, projectID, vector) })
+		if !requestguard.Present(ctx) {
+			return "", false, fmt.Errorf("%w: %w", mcp.ErrNotSent, &requestguard.Refusal{})
+		}
+
 		if why := a.c.agentArgsAtSend(projectID, tool, argsJSON); why != "" {
 			return "", false, fmt.Errorf("%w: %s", mcp.ErrNotSent, why)
 		}
@@ -233,4 +268,67 @@ func (c *Container) agentArgsAtSend(projectID, tool, argsJSON string) string {
 		return "the arguments carry " + f.String()
 	}
 	return ""
+}
+
+// writeAccount is the account a write acts from (design §22.2.6, §22.2.14
+// item 5): the integration of tool, its live approval row's identity and
+// label, and the label of the same connection in the live registry
+// project. It returns the grant (nil for the default account with no
+// identity alone at its host), the phrase for the sentence, and whether the
+// account is confirmed: false when the row is missing or removed, or its
+// label differs from the file's.
+func (c *Container) writeAccount(ctx context.Context, projectID, tool string) (*agentadmin.AccountGrant, string, bool) {
+	acct, ok := c.writeAccountOf(ctx, projectID, tool)
+	if !ok {
+		return nil, "", false
+	}
+	if acct.phrase == "" {
+		return nil, "", true
+	}
+	return &agentadmin.AccountGrant{Label: acct.label, Identity: acct.identity, IdentitySource: acct.source}, acct.phrase, true
+}
+
+type writeAccountView struct {
+	label, identity, source, phrase string
+}
+
+// writeAccountOf reads the account of tool's connection; ok is false when it
+// cannot be confirmed (the fail-closed case of design §22.2.6).
+func (c *Container) writeAccountOf(ctx context.Context, projectID, tool string) (writeAccountView, bool) {
+	name := integrationOfTool(tool)
+	if c.repos == nil || c.repos.AgentGrants == nil || c.Registry == nil {
+		return writeAccountView{}, false
+	}
+	row, err := c.repos.AgentGrants.GetIntegration(ctx, projectID, name)
+	if err != nil || row.RemovedAt != nil {
+		return writeAccountView{}, false
+	}
+	p := c.Registry.GetProject(projectID)
+	if p == nil {
+		return writeAccountView{}, false
+	}
+	ps := agentadmin.ProjectStateFrom(p, nil)
+	fileLabel, found := agentadmin.ConnectionLabel(ps, name)
+	if !found || fileLabel != row.StoredAccountLabel() {
+		return writeAccountView{}, false
+	}
+	// A consuming-project identity cannot verify an inherited daemon token.
+	if ref, ok := c.mcpServerRef(projectID, name); ok && ref.ProjectID != projectID {
+		row.AccountIdentity = ""
+		row.IdentitySource = ""
+	}
+	st := &agentadmin.State{Approvals: map[string]map[string]agentadmin.IntegrationApproval{projectID: {name: {
+		AccountIdentity: row.AccountIdentity, IdentitySource: row.IdentitySource}}}}
+	return writeAccountView{label: fileLabel, identity: row.AccountIdentity, source: row.IdentitySource,
+		phrase: agentadmin.ConnectionPhrase(st, ps, name)}, true
+}
+
+// integrationOfTool is the integration a proposal's tool writes through:
+// the API name of api:<name>:..., or the base of mcp__<server>-write__<tool>.
+func integrationOfTool(tool string) string {
+	if api, _, _, ok := (registry.BrokerProposal{Tool: tool}).APITool(); ok {
+		return api
+	}
+	server, _, _ := strings.Cut(strings.TrimPrefix(tool, "mcp__"), "__")
+	return agentns.IntegrationOf(server)
 }

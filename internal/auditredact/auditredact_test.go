@@ -401,3 +401,62 @@ func TestLoggingPathsDoNotLeakTheSecret(t *testing.T) {
 		t.Errorf("the log must name the finding type for forensics; got %q", out)
 	}
 }
+
+// GitHub #293 (2026-10-08): the realtime writer publishes tool I/O on the live
+// stream after Log. LogStored returns exactly what was handed to the inner
+// repository, so that second sink can carry the stored row instead of the raw
+// request. One scan, one census count, one redaction-audit record per call.
+func TestLogStoredReturnsTheStoredRow(t *testing.T) {
+	inner := newConflictRepo()
+	audit := &recordingAudit{}
+	m := NewMetrics()
+	repo := New(inner, detector(t), nil, audit, nil, nil)
+	repo.SetMetrics(m)
+	in := entry("a1", "run_shell", "export K="+syntheticKey, "echoed "+syntheticKey)
+
+	stored, err := repo.LogStored(context.Background(), in)
+	if err != nil {
+		t.Fatalf("LogStored: %v", err)
+	}
+	row := inner.rows["a1"]
+	if stored.ToolInput != row.ToolInput || stored.ToolOutput != row.ToolOutput {
+		t.Fatalf("returned entry differs from the stored row: got %+v, stored %+v", stored, row)
+	}
+	if strings.Contains(stored.ToolInput, syntheticKey) || strings.Contains(stored.ToolOutput, syntheticKey) {
+		t.Error("returned entry carries the secret")
+	}
+	if !strings.Contains(in.ToolInput, syntheticKey) {
+		t.Error("caller's entry was mutated")
+	}
+	if got := m.PreAttachRows(); got != 1 {
+		t.Errorf("census counted %d rows for one call, want 1", got)
+	}
+	if len(audit.events) != 1 {
+		t.Errorf("redaction audit recorded %d events, want 1 (one finding type)", len(audit.events))
+	}
+}
+
+// A clean row, detect-only and the bypass all store the caller's text, and
+// LogStored says so: the second sink follows the row, never a rule of its own.
+func TestLogStoredFollowsTheRowWhenNothingIsRedacted(t *testing.T) {
+	detect := map[string]secrets.Action{secrets.CheckpointToolAudit: secrets.ActionDetect}
+	cases := map[string]*Repo{
+		"clean":       New(newConflictRepo(), detector(t), nil, nil, nil, nil),
+		"detect-only": New(newConflictRepo(), detector(t), detect, nil, nil, nil),
+		"bypass":      NewBypassed(newConflictRepo(), ReasonSecretsDisabled, nil),
+	}
+	for name, repo := range cases {
+		input := "git status"
+		if name != "clean" {
+			input = "k=" + syntheticKey
+		}
+		stored, err := repo.LogStored(context.Background(), entry("a1", "run_shell", input, "ok"))
+		if err != nil {
+			t.Fatalf("%s: LogStored: %v", name, err)
+		}
+		row := repo.Inner().(*conflictRepo).rows["a1"]
+		if stored.ToolInput != row.ToolInput || stored.ToolInput != input {
+			t.Errorf("%s: returned %q, stored %q, want both %q", name, stored.ToolInput, row.ToolInput, input)
+		}
+	}
+}

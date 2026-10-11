@@ -142,6 +142,11 @@ type ServerConfig struct {
 	// DialGuard client rather than an unguarded default client — Connect has
 	// no other seam for that. Ignored by the stdio transport.
 	HTTPClient *http.Client `yaml:"-" json:"-"`
+	// NotDialledReason, when set, means the server must not be dialled: an
+	// oauth server with no stored grant (auth design §14, GitHub #91). It is
+	// wiring state, never config or wire shape. Connect refuses such a
+	// config before any I/O, and the registry reports it as not dialled.
+	NotDialledReason string `yaml:"-" json:"-"`
 }
 
 // TaskIDHeaderKey / ExecutionIDHeaderKey carry the originating

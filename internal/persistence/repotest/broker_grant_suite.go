@@ -16,9 +16,9 @@ import (
 // 3 and 4, review 61a5). The concurrency cases run on the production pool:
 // the SQLite harness is a file database opened with the daemon's DSN, the
 // Postgres one the integration lane; never :memory:.
-func RunBrokerGrantSuite(t *testing.T, grants persistence.BrokerGrantRepository, actions persistence.BrokerActionRepository) {
+func RunBrokerGrantSuite(t *testing.T, grants persistence.BrokerGrantRepository, actions persistence.BrokerActionRepository, epochs persistence.AccountTransitionRepository) {
 	t.Helper()
-	h := &standingHarness{grants: grants, actions: actions, ctx: context.Background(), now: time.Now().UTC().Truncate(time.Second)}
+	h := &standingHarness{epochs: epochs, grants: grants, actions: actions, ctx: context.Background(), now: time.Now().UTC().Truncate(time.Second)}
 	// Final review aa4a, 2026-10-07: the harness used to leave every grant it
 	// created live (7-day expiry) in the shared Postgres test DB. They sorted
 	// ahead of a later run's grant under DigestDue's ORDER BY digest_through
@@ -52,9 +52,121 @@ func RunBrokerGrantSuite(t *testing.T, grants persistence.BrokerGrantRepository,
 	t.Run("Digest_due_is_not_starved_by_dead_grants", func(t *testing.T) { grantDigestNotStarved(t, h) })
 	t.Run("Dead_grant_owes_its_final_digest", func(t *testing.T) { grantDeadOwesFinalDigest(t, h) })
 	t.Run("Dead_tail_is_capped_most_recent_first", func(t *testing.T) { grantDeadTailCapped(t, h) })
+	t.Run("List_live_grant_beyond_200_dead", func(t *testing.T) { grantListLiveBeyondDead(t, h) })
+	t.Run("List_dead_tail_is_capped_most_recent_first", func(t *testing.T) { grantListDeadTailCapped(t, h) })
+	t.Run("List_paused_and_suspended_count_as_live", func(t *testing.T) { grantListPausedSuspendedLive(t, h) })
+	t.Run("List_refuses_a_zero_now", func(t *testing.T) { grantListZeroNow(t, h) })
+	t.Run("List_live_cap_truncates_visibly", func(t *testing.T) { grantListLiveCap(t, h) })
+	t.Run("List_classifies_by_instant_not_zone", func(t *testing.T) { grantListNonUTCNow(t, h) })
+	t.Run("Account_round_trip_and_legacy", func(t *testing.T) { grantAccountRoundTrip(t, h) })
+	t.Run("ConfirmAccount_conditional_update", func(t *testing.T) { grantConfirmAccount(t, h) })
+	t.Run("Account_epoch_stale_seed_and_reverse_order", func(t *testing.T) { grantAccountEpochSeed(t, h) })
+}
+
+func grantAccountEpochSeed(t *testing.T, h *standingHarness) {
+	ns := uniqueID("epoch")
+	seed := h.pending(t, ns+"--mail", "wf-mail", `{"to":"a@x.com"}`)
+	g := h.grantFor(seed, "kh", 5)
+	g.Namespace = ns
+	guard, err := h.epochs.ReadDecisionEpoch(h.ctx, ns)
+	if err != nil {
+		t.Fatal(err)
+	}
+	g.DecisionGuard = guard
+	ticket, err := h.epochs.Begin(h.ctx, persistence.AccountNamespaceScope(ns), "rotate", "test", h.now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, busy := range []bool{true, false} {
+		if !busy {
+			if err = h.epochs.Abort(h.ctx, ticket); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if err = h.grants.ApproveSeedAndCreate(h.ctx, seed.ActionID, seed.ArgsSHA256, "device", g, 10, h.now); !errors.Is(err, persistence.ErrAccountTransition) {
+			t.Fatalf("busy=%v stale creation: %v", busy, err)
+		}
+		if a := h.status(t, seed.ActionID); a.Status != persistence.BrokerActionPending {
+			t.Fatal("refused creation approved seed")
+		}
+		if _, err = h.grants.Get(h.ctx, g.ID); !errors.Is(err, persistence.ErrNotFound) {
+			t.Fatal("refused creation inserted grant")
+		}
+	}
+	if err = h.createGrant(t, seed.ActionID, seed.ArgsSHA256, g, 10, h.now); err != nil {
+		t.Fatal(err)
+	}
+	ticket, err = h.epochs.Begin(h.ctx, persistence.AccountNamespaceScope(ns), "next", "test", h.now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if err := h.epochs.Abort(h.ctx, ticket); err != nil {
+			t.Error(err)
+		}
+	}()
+	listed, err := h.grants.List(h.ctx, persistence.BrokerGrantFilter{Namespace: ns, Now: h.now, Limit: 1})
+	if err != nil || len(listed) != 1 || listed[0].ID != g.ID {
+		t.Fatalf("transition missed prior terminal grant: %v", err)
+	}
+	if ok, err := h.grants.Suspend(h.ctx, g.ID, h.now); err != nil || !ok {
+		t.Fatalf("suspend prior terminal: %v/%v", ok, err)
+	}
+}
+
+// grantAccountRoundTrip: a grant records the account it was made under
+// (GitHub #119 item 8, agent-administered design §22.2.16, migration 220);
+// a grant written without one reads as unknown (an empty label).
+func grantAccountRoundTrip(t *testing.T, h *standingHarness) {
+	seed := h.pending(t, uniqueID("p"), "wf-mail", `{"to":"a@x.com"}`)
+	g := h.grantFor(seed, "kh-acc", 5)
+	g.AccountLabel, g.AccountIdentity = "work", "alice@corp.example"
+	if err := h.createGrant(t, seed.ActionID, seed.ArgsSHA256, g, 10, h.now); err != nil {
+		t.Fatal(err)
+	}
+	got, err := h.grants.Get(h.ctx, g.ID)
+	if err != nil || got.AccountLabel != "work" || got.AccountIdentity != "alice@corp.example" {
+		t.Fatalf("account read back as %q/%q (%v)", got.AccountLabel, got.AccountIdentity, err)
+	}
+	legacy := h.seeded(t, uniqueID("p"), "kh-legacy", 5)
+	if got, _ := h.grants.Get(h.ctx, legacy.ID); got.AccountLabel != "" || got.AccountIdentity != "" {
+		t.Fatalf("a grant made without an account reads %q/%q, want unknown", got.AccountLabel, got.AccountIdentity)
+	}
+}
+
+// grantConfirmAccount: ConfirmAccount reactivates a suspended grant and
+// records the new account only while the stored account is the one the
+// page showed (design §22.2.16 item 4).
+func grantConfirmAccount(t *testing.T, h *standingHarness) {
+	seed := h.pending(t, uniqueID("p"), "wf-mail", `{"to":"a@x.com"}`)
+	g := h.grantFor(seed, "kh-conf", 5)
+	g.AccountLabel, g.AccountIdentity = "work", "alice@corp.example"
+	if err := h.createGrant(t, seed.ActionID, seed.ArgsSHA256, g, 10, h.now); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.grants.(persistence.AccountGuardedGrants).ConfirmAccountGuarded(h.ctx, g.ID, "reach-2", "work", "alice@corp.example", "work", "bob@corp.example", g.DecisionGuard); !errors.Is(err, persistence.ErrBrokerGrantNoTransition) {
+		t.Fatalf("ConfirmAccount on a live, unsuspended grant: %v, want ErrBrokerGrantNoTransition", err)
+	}
+	if ok, err := h.grants.Suspend(h.ctx, g.ID, h.now); err != nil || !ok {
+		t.Fatalf("suspend: %v %v", ok, err)
+	}
+	if err := h.grants.(persistence.AccountGuardedGrants).ConfirmAccountGuarded(h.ctx, g.ID, "reach-2", "work", "carol@corp.example", "work", "bob@corp.example", g.DecisionGuard); !errors.Is(err, persistence.ErrBrokerGrantNoTransition) {
+		t.Fatalf("ConfirmAccount with a stale old account: %v, want ErrBrokerGrantNoTransition", err)
+	}
+	if got, _ := h.grants.Get(h.ctx, g.ID); got.SuspendedAt == nil || got.AccountIdentity != "alice@corp.example" {
+		t.Fatalf("a refused ConfirmAccount changed the grant: %+v", got)
+	}
+	if err := h.grants.(persistence.AccountGuardedGrants).ConfirmAccountGuarded(h.ctx, g.ID, "reach-2", "work", "alice@corp.example", "work", "bob@corp.example", g.DecisionGuard); err != nil {
+		t.Fatal(err)
+	}
+	got, _ := h.grants.Get(h.ctx, g.ID)
+	if got.SuspendedAt != nil || got.ReachHashAtCreation != "reach-2" || got.AccountLabel != "work" || got.AccountIdentity != "bob@corp.example" {
+		t.Fatalf("after ConfirmAccount: %+v", got)
+	}
 }
 
 type standingHarness struct {
+	epochs  persistence.AccountTransitionRepository
 	grants  persistence.BrokerGrantRepository
 	actions persistence.BrokerActionRepository
 	ctx     context.Context
@@ -80,6 +192,13 @@ func (h *standingHarness) liveTotal(t *testing.T) int {
 // the cleanup: Revoke of a missing id is a no-op or a miss.
 func (h *standingHarness) createGrant(t *testing.T, seedActionID, seedHash string, g *persistence.BrokerStandingGrant, limit int, now time.Time) error {
 	t.Helper()
+	if g.Namespace != "" {
+		var err error
+		g.DecisionGuard, err = h.epochs.ReadDecisionEpoch(h.ctx, g.Namespace)
+		if err != nil {
+			return err
+		}
+	}
 	err := h.grants.ApproveSeedAndCreate(h.ctx, seedActionID, seedHash, "device:dev_1", g, limit, now)
 	id := g.ID
 	t.Cleanup(func() {
@@ -372,7 +491,7 @@ func grantStatesStopCoverage(t *testing.T, h *standingHarness) {
 	if err := cover(g, h.now); !errors.Is(err, persistence.ErrBrokerGrantNotCovered) {
 		t.Fatalf("suspended: %v", err)
 	}
-	if err := h.grants.Confirm(h.ctx, g.ID, "reach-2"); err != nil {
+	if err := h.grants.(persistence.AccountGuardedGrants).ConfirmGuarded(h.ctx, g.ID, "reach-2", g.DecisionGuard); err != nil {
 		t.Fatal(err)
 	}
 	if got, _ := h.grants.Get(h.ctx, g.ID); got.SuspendedAt != nil || got.ReachHashAtCreation != "reach-2" {
@@ -403,7 +522,7 @@ func grantStatesStopCoverage(t *testing.T, h *standingHarness) {
 	if err := h.grants.SetPaused(h.ctx, g.ID, false); !errors.Is(err, persistence.ErrBrokerGrantNoTransition) {
 		t.Fatalf("unpausing a revoked grant: %v", err)
 	}
-	if err := h.grants.Confirm(h.ctx, g.ID, "x"); !errors.Is(err, persistence.ErrBrokerGrantNoTransition) {
+	if err := h.grants.(persistence.AccountGuardedGrants).ConfirmGuarded(h.ctx, g.ID, "x", g.DecisionGuard); !errors.Is(err, persistence.ErrBrokerGrantNoTransition) {
 		t.Fatalf("confirming a revoked grant: %v", err)
 	}
 	if err := h.grants.Revoke(h.ctx, g.ID, h.now); !errors.Is(err, persistence.ErrBrokerGrantNoTransition) {
@@ -646,7 +765,7 @@ func grantGaugesAndDigest(t *testing.T, h *standingHarness) {
 		t.Fatalf("a second pass over the same window counted %d (ok %v)", n, ok)
 	}
 	// Lists for pages: operator projects by id; every agent namespace ("*").
-	ops, err := h.grants.List(h.ctx, persistence.BrokerGrantFilter{ProjectIDs: []string{project}})
+	ops, err := h.grants.List(h.ctx, persistence.BrokerGrantFilter{ProjectIDs: []string{project}, Now: h.now})
 	if err != nil || len(ops) != 2 {
 		t.Fatalf("List = %d %v", len(ops), err)
 	}
@@ -667,7 +786,7 @@ func grantAllAgentNamespaces(t *testing.T, h *standingHarness) {
 	if err := h.createGrant(t, seedA.ActionID, seedA.ArgsSHA256, ga, 10, h.now); err != nil {
 		t.Fatal(err)
 	}
-	all, err := h.grants.List(h.ctx, persistence.BrokerGrantFilter{Namespace: persistence.BrokerGrantAllAgentNamespaces, Limit: 500})
+	all, err := h.grants.List(h.ctx, persistence.BrokerGrantFilter{Namespace: persistence.BrokerGrantAllAgentNamespaces, Limit: 500, Now: h.now})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -843,5 +962,238 @@ func grantDeadOwesFinalDigest(t *testing.T, h *standingHarness) {
 	}
 	if isDue() != nil {
 		t.Fatal("a revoked grant with nothing uncounted is still due")
+	}
+}
+
+// listScope is one Standing approvals page scope: an operator project
+// (Namespace "", ProjectIDs), one agent namespace, or every agent namespace.
+type listScope struct {
+	name      string
+	project   string
+	namespace string
+	limit     int // the dead tail's cap: 0 is the default 200
+	filter    func(now time.Time) persistence.BrokerGrantFilter
+}
+
+// listTailCap is the cap the cheaper cases use. The defect is the same at
+// any Limit (one ORDER BY created_at ... LIMIT f.Limit), so only the
+// operator case pays for the issue's 200; each dead grant is a committed
+// transaction on a file database, and 800 of them stalled the SQLite
+// package past its timeout on a loaded host (2026-10-08).
+const listTailCap = 20
+
+// listScopes returns fresh scopes; namespaces are 2 to 16 lowercase letters
+// and digits, so they are built from a counter, not uniqueID.
+func (h *standingHarness) listScopes() []listScope {
+	op := uniqueID("p93")
+	ns := fmt.Sprintf("ln%d", time.Now().UnixNano()%1e12)
+	all := fmt.Sprintf("la%d", time.Now().UnixNano()%1e12)
+	return []listScope{
+		{name: "operator_projects", project: op, filter: func(now time.Time) persistence.BrokerGrantFilter {
+			return persistence.BrokerGrantFilter{ProjectIDs: []string{op}, Now: now}
+		}},
+		{name: "one_agent_namespace", project: ns + "--mail", namespace: ns, limit: listTailCap, filter: func(now time.Time) persistence.BrokerGrantFilter {
+			return persistence.BrokerGrantFilter{Namespace: ns, Now: now, Limit: listTailCap}
+		}},
+		{name: "all_agent_namespaces", project: all + "--mail", namespace: all, limit: listTailCap, filter: func(now time.Time) persistence.BrokerGrantFilter {
+			return persistence.BrokerGrantFilter{Namespace: persistence.BrokerGrantAllAgentNamespaces, Now: now, Limit: listTailCap}
+		}},
+	}
+}
+
+// listGrant creates one grant in sc through the repository's create path,
+// created at createdAt. kind is "live", "expired", "revoked" or "used".
+func (h *standingHarness) listGrant(t *testing.T, sc listScope, kind string, createdAt time.Time) *persistence.BrokerStandingGrant {
+	t.Helper()
+	seed := h.pending(t, sc.project, "wf-mail", `{"to":"a@x.com"}`)
+	g := h.grantFor(seed, "k-"+kind, 1)
+	g.Namespace = sc.namespace
+	g.CreatedAt = createdAt
+	switch kind {
+	case "expired":
+		g.ExpiresAt = h.now.Add(-time.Hour)
+	case "used":
+		g.UsesLeft = 0
+	}
+	if err := h.createGrant(t, seed.ActionID, seed.ArgsSHA256, g, 10, h.now); err != nil {
+		t.Fatalf("%s grant: %v", kind, err)
+	}
+	if kind == "revoked" {
+		if err := h.grants.Revoke(h.ctx, g.ID, h.now); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return g
+}
+
+// listDead creates n dead grants in sc, cycling expired, revoked and used
+// up, the i-th created at base + i seconds. Returns their ids, most recent
+// first.
+func (h *standingHarness) listDead(t *testing.T, sc listScope, n int, base time.Time) []string {
+	t.Helper()
+	kinds := []string{"expired", "revoked", "used"}
+	ids := make([]string, n)
+	for i := 0; i < n; i++ {
+		g := h.listGrant(t, sc, kinds[i%3], base.Add(time.Duration(i)*time.Second))
+		ids[n-1-i] = g.ID
+	}
+	return ids
+}
+
+func containsGrant(gs []*persistence.BrokerStandingGrant, id string) bool {
+	for _, g := range gs {
+		if g.ID == id {
+			return true
+		}
+	}
+	return false
+}
+
+// GitHub #93 (2026-10-07 review): List ordered by created_at with LIMIT 200
+// and hid an old live grant behind 200 newer dead ones, so the Standing
+// approvals page could neither show nor revoke it. Every page scope.
+func grantListLiveBeyondDead(t *testing.T, h *standingHarness) {
+	for _, sc := range h.listScopes() {
+		t.Run(sc.name, func(t *testing.T) {
+			live := h.listGrant(t, sc, "live", h.now.Add(-time.Hour))
+			n := sc.limit
+			if n == 0 {
+				n = 200
+			}
+			h.listDead(t, sc, n, h.now)
+			got, err := h.grants.List(h.ctx, sc.filter(h.now))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !containsGrant(got, live.ID) {
+				t.Fatalf("the live grant %s is not among %d listed grants", live.ID, len(got))
+			}
+			// In a scope of its own the one live grant leads; every agent
+			// namespace may hold other live grants in a shared database.
+			if sc.name != "all_agent_namespaces" && got[0].ID != live.ID {
+				t.Fatalf("the live grant is not first: %s", got[0].ID)
+			}
+		})
+	}
+}
+
+// GitHub #93: the dead tail is the f.Limit most recent dead grants, after
+// every live grant; live grants keep created_at DESC among themselves.
+func grantListDeadTailCapped(t *testing.T, h *standingHarness) {
+	sc := h.listScopes()[0]
+	dead := h.listDead(t, sc, listTailCap+1, h.now.Add(-time.Hour))
+	liveOld := h.listGrant(t, sc, "live", h.now.Add(-2*time.Hour))
+	liveNew := h.listGrant(t, sc, "live", h.now.Add(-30*time.Minute))
+	f := sc.filter(h.now)
+	f.Limit = listTailCap
+	got, err := h.grants.List(h.ctx, f)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 2+listTailCap {
+		t.Fatalf("%d grants listed, want 2 live + %d dead", len(got), listTailCap)
+	}
+	if got[0].ID != liveNew.ID || got[1].ID != liveOld.ID {
+		t.Fatalf("live order %s, %s; want the newer first", got[0].ID, got[1].ID)
+	}
+	for i, g := range got[2:] {
+		if g.ID != dead[i] {
+			t.Fatalf("dead tail position %d is %s, want %s (most recent first)", i, g.ID, dead[i])
+		}
+	}
+	if containsGrant(got, dead[listTailCap]) {
+		t.Fatal("the oldest dead grant is listed; the tail is not capped")
+	}
+}
+
+// GitHub #93: a paused or suspended grant is live for the page (a person
+// most needs to find it again), so it is never cut by the dead tail.
+func grantListPausedSuspendedLive(t *testing.T, h *standingHarness) {
+	sc := h.listScopes()[0]
+	paused := h.listGrant(t, sc, "live", h.now.Add(-2*time.Hour))
+	if err := h.grants.SetPaused(h.ctx, paused.ID, true); err != nil {
+		t.Fatal(err)
+	}
+	suspended := h.listGrant(t, sc, "live", h.now.Add(-2*time.Hour))
+	if ok, err := h.grants.Suspend(h.ctx, suspended.ID, h.now); err != nil || !ok {
+		t.Fatalf("suspend: %v %v", ok, err)
+	}
+	h.listDead(t, sc, listTailCap, h.now.Add(-time.Hour))
+	f := sc.filter(h.now)
+	f.Limit = listTailCap
+	got, err := h.grants.List(h.ctx, f)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !containsGrant(got, paused.ID) || !containsGrant(got, suspended.ID) {
+		t.Fatalf("paused listed %v, suspended listed %v", containsGrant(got, paused.ID), containsGrant(got, suspended.ID))
+	}
+	// Review b240 finding 1: they are in the LIVE group (uncapped, first),
+	// not merely somewhere in the list.
+	if len(got) < 2 {
+		t.Fatalf("%d grants listed", len(got))
+	}
+	lead := map[string]bool{got[0].ID: true, got[1].ID: true}
+	if !lead[paused.ID] || !lead[suspended.ID] {
+		t.Fatalf("paused and suspended must lead as live grants; first two are %s, %s", got[0].ID, got[1].ID)
+	}
+}
+
+// GitHub #93: the driver never reads the clock; a filter without Now is a
+// caller bug, refused rather than classified by the zero time.
+func grantListZeroNow(t *testing.T, h *standingHarness) {
+	sc := h.listScopes()[0]
+	if _, err := h.grants.List(h.ctx, persistence.BrokerGrantFilter{ProjectIDs: []string{sc.project}}); !errors.Is(err, persistence.ErrBrokerGrantFilterNoNow) {
+		t.Fatalf("List without Now = %v, want ErrBrokerGrantFilterNoNow", err)
+	}
+}
+
+// Review b240 finding 2 (2026-10-08): the live group had no bound but the
+// per-project ceiling summed over the scope. A hard cap (LiveCap, default
+// persistence.BrokerGrantLiveListCap) truncates it and says so with
+// ErrBrokerGrantLiveTruncated, the rows still returned.
+func grantListLiveCap(t *testing.T, h *standingHarness) {
+	sc := h.listScopes()[0]
+	for i := 0; i < 3; i++ {
+		h.listGrant(t, sc, "live", h.now.Add(-time.Duration(i)*time.Minute))
+	}
+	dead := h.listGrant(t, sc, "expired", h.now.Add(-time.Hour))
+	f := sc.filter(h.now)
+	f.LiveCap = 2
+	got, err := h.grants.List(h.ctx, f)
+	if !errors.Is(err, persistence.ErrBrokerGrantLiveTruncated) {
+		t.Fatalf("List over the live cap = %v, want ErrBrokerGrantLiveTruncated", err)
+	}
+	if len(got) != 3 || !containsGrant(got, dead.ID) {
+		t.Fatalf("got %d rows (dead listed %v), want 2 live + the dead tail", len(got), containsGrant(got, dead.ID))
+	}
+	f.LiveCap = 3
+	if _, err := h.grants.List(h.ctx, f); err != nil {
+		t.Fatalf("at the cap exactly: %v, want no truncation", err)
+	}
+}
+
+// Review b240 finding 3: Now in another zone classifies by the instant.
+func grantListNonUTCNow(t *testing.T, h *standingHarness) {
+	sc := h.listScopes()[0]
+	seed := h.pending(t, sc.project, "wf-mail", `{"to":"a@x.com"}`)
+	g := h.grantFor(seed, "k-zone", 1)
+	g.ExpiresAt = h.now.Add(30 * time.Minute)
+	if err := h.createGrant(t, seed.ActionID, seed.ArgsSHA256, g, 10, h.now); err != nil {
+		t.Fatal(err)
+	}
+	east := h.now.In(time.FixedZone("UTC+5", 5*3600))
+	got, err := h.grants.List(h.ctx, sc.filter(east))
+	if err != nil || len(got) != 1 || got[0].ID != g.ID {
+		t.Fatalf("List at %v = %d rows, %v", east, len(got), err)
+	}
+	f := sc.filter(east.Add(time.Hour)) // after the expiry, in the same zone
+	f.Limit = 5
+	got, err = h.grants.List(h.ctx, f)
+	if err != nil || len(got) != 1 {
+		t.Fatalf("after expiry: %d rows, %v", len(got), err)
+	}
+	if !got[0].ExpiresAt.Before(f.Now) {
+		t.Fatalf("the grant is listed but its expiry %v is not before %v", got[0].ExpiresAt, f.Now)
 	}
 }

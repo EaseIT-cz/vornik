@@ -76,7 +76,7 @@ func TestStandingGrants_AgentNamespaceEndToEnd(t *testing.T) {
 	if seed.Status != persistence.BrokerActionApproved || seed.Approver != "device:"+f.device.ID {
 		t.Fatalf("seed %s by %q", seed.Status, seed.Approver)
 	}
-	grants, err := f.c.repos.BrokerGrants.List(ctx, persistence.BrokerGrantFilter{Namespace: "hermes"})
+	grants, err := f.c.repos.BrokerGrants.List(ctx, persistence.BrokerGrantFilter{Namespace: "hermes", Now: time.Now()})
 	if err != nil || len(grants) != 1 || grants[0].UsesLeft != 20 || grants[0].Namespace != "hermes" {
 		t.Fatalf("grants = %+v, %v", grants, err)
 	}

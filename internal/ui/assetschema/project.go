@@ -292,6 +292,9 @@ var ProjectDeferredPaths = []string{
 	"forge.github.app_id", "forge.github.installation_id",
 	"forge.github.private_key_path", "forge.github.api_base_url",
 	"forge.github.repo",
+	// Issue triage grants are operator-reviewed YAML-only policy beside App credentials.
+	"forge.issues.repos", "forge.issues.labels_enabled",
+	"forge.issues.allowed_labels", "forge.issues.close_enabled",
 	// Email connector (IMAP/SMTP, secrets via env).
 	"email.imap_host", "email.imap_port", "email.imap_username", "email.imap_password_env",
 	"email.imap_mailbox", "email.smtp_host", "email.smtp_port", "email.smtp_username",

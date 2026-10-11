@@ -72,12 +72,15 @@ func (s *Server) SupportReport(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Container logs come from the Server's taskLogSource (the builder
-	// has no executor dependency). Fetch + inject so they redact through
-	// the same path, then re-finalize so MANIFEST/REDACTION reflect them.
-	if br.TaskID != "" && s.taskLogSource != nil {
-		if logs, lerr := s.taskLogSource.TaskLogs(r.Context(), br.TaskID, supportbundle.ContainerLogTail); lerr == nil {
-			builder.WriteContainerLogs(br, res, logs)
+	// The task log is the daemon-held one (GitHub #294: this used to ask
+	// the executor, which ran podman logs on the request). Inject it so it
+	// redacts through the same path, then re-finalize so MANIFEST/REDACTION
+	// reflect it.
+	if br.TaskID != "" {
+		held := s.heldTaskLog()
+		held.Uncapped = true // redact whole values, never a cut fragment
+		if logs, lerr := held.TaskLogs(r.Context(), br.TaskID, supportbundle.TaskLogTail); lerr == nil {
+			builder.WriteTaskLog(br, res, logs)
 			builder.Finalize(br, res)
 		}
 	}

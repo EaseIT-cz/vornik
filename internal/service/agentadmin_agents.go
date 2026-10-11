@@ -184,15 +184,27 @@ func agentProjectView(p SetupProject) ui.AgentProject {
 		out.Workflows = append(out.Workflows, item)
 	}
 	for _, s := range p.Servers {
-		out.Integrations = append(out.Integrations, ui.AgentItem{Name: s.Name, Status: s.Status, Detail: s.URL})
+		out.Integrations = append(out.Integrations, ui.AgentItem{Name: s.Name, Status: s.Status, Detail: s.URL, Checked: checkedText(s.connectionCheck)})
 	}
 	for _, a := range p.APIs {
-		out.Integrations = append(out.Integrations, ui.AgentItem{Name: a.Name, Status: a.Status, Detail: a.BaseURL})
+		out.Integrations = append(out.Integrations, ui.AgentItem{Name: a.Name, Status: a.Status, Detail: a.BaseURL, Checked: checkedText(a.connectionCheck)})
 	}
 	for _, c := range p.Credentials {
-		out.Credentials = append(out.Credentials, ui.AgentItem{Name: c.Name, Status: c.Status})
+		status := c.Status
+		if status == "set" {
+			status = "stored" // a stored value, not one the provider accepted (design §6.2)
+		}
+		out.Credentials = append(out.Credentials, ui.AgentItem{Name: c.Name, Status: status})
 	}
 	return out
+}
+
+// checkedText is a connection's last test in a person's words.
+func checkedText(c connectionCheck) string {
+	if c.LastCheckedAt == nil {
+		return "not tested"
+	}
+	return "last tested " + c.LastCheckedAt.UTC().Format("2006-01-02 15:04 UTC") + ": " + c.LastResult
 }
 
 func requestsView(rs []SetupRequest) []ui.AgentRequest {

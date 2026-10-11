@@ -1,5 +1,5 @@
 {{define "devices.html"}}{{template "head" (page "Devices" 0)}}
-<nav><a href="/ui/approve/">Approvals</a><a href="/ui/approve/standing">Standing approvals</a><a href="/ui/approve/devices" aria-current="page">Devices</a></nav>
+{{template "nav" "devices"}}
 <h1>Approver devices</h1>
 {{range .Devices}}<div class="card"><p><b>{{.Label}}</b> <span class="mut">{{shortID .ID}}</span>{{if eq .ID $.Current.ID}} (this device){{end}}</p>
 <p class="mut">paired {{when .PairedAt}} · {{if .LastUsedAt.Equal .PairedAt}}never used{{else}}last used {{when .LastUsedAt}}{{end}}{{with .RevokedAt}} · revoked {{whenp .}}{{end}}</p>

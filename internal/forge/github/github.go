@@ -58,6 +58,7 @@ type Provider struct {
 	httpClient     *http.Client
 	mention        string // bot handle for comment commands; empty = package default
 
+	issueMu     sync.Mutex
 	mu          sync.Mutex
 	cachedToken string
 	tokenExpiry time.Time

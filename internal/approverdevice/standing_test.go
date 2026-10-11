@@ -140,9 +140,13 @@ func TestGrantOffer_PlainApproveRecordsNoChoice(t *testing.T) {
 type fakeStanding struct {
 	mu      sync.Mutex
 	changes []string
+	views   []StandingView
 }
 
 func (f *fakeStanding) List(context.Context) ([]StandingView, error) {
+	if f.views != nil {
+		return f.views, nil
+	}
 	exp := time.Date(2026, 10, 9, 9, 0, 0, 0, time.UTC)
 	return []StandingView{{ID: "bsg_1", Namespace: "ns1", Workflow: "mail", Action: "send reply", Key: "to a@x.com",
 		State: "active", UsesLeft: 18, MaxUses: 20, ExpiresAt: exp,
@@ -192,5 +196,57 @@ func TestStandingPage_ListsAndChanges(t *testing.T) {
 	anon := newBrowser(t, phone.srv)
 	if res, _ := anon.do(http.MethodGet, "/ui/approve/standing", nil, nil); res.StatusCode == http.StatusOK {
 		t.Fatal("the standing page answered without a device")
+	}
+}
+
+func (f *fakeStanding) Reaffirm(ctx context.Context, id, shown string) error {
+	if shown != "shown-account-pair" {
+		return ErrNotDecidable
+	}
+	return f.Change(ctx, id, "reaffirm")
+}
+
+// GitHub #119 item 8: reaffirm is a device-only, same-origin form whose
+// account-pair hash must come from the POST body, never the query string.
+func TestStandingPage_Reaffirm(t *testing.T) {
+	f, _, phone := grantFixture(t)
+	st := &fakeStanding{}
+	f.svc.SetStandingPages(st)
+	route := "/ui/approve/standing/bsg_1/reaffirm"
+	if res, _ := phone.do(http.MethodPost, route, url.Values{"shown": {"shown-account-pair"}}, nil); res.StatusCode != http.StatusSeeOther {
+		t.Fatalf("reaffirm: %d", res.StatusCode)
+	}
+	if res, _ := phone.do(http.MethodPost, route+"?shown=shown-account-pair", url.Values{}, nil); res.StatusCode != http.StatusConflict {
+		t.Fatalf("query hash: %d", res.StatusCode)
+	}
+	if res, _ := phone.do(http.MethodPost, route, url.Values{"shown": {"stale"}}, nil); res.StatusCode != http.StatusConflict {
+		t.Fatalf("stale hash: %d", res.StatusCode)
+	}
+	if res, _ := phone.do(http.MethodPost, route, url.Values{"shown": {"shown-account-pair"}}, map[string]string{"Origin": "https://evil.example"}); res.StatusCode != http.StatusForbidden {
+		t.Fatalf("cross-site reaffirm: %d", res.StatusCode)
+	}
+	anon := newBrowser(t, phone.srv)
+	if res, _ := anon.do(http.MethodPost, route, url.Values{"shown": {"shown-account-pair"}}, nil); res.StatusCode == http.StatusSeeOther {
+		t.Fatal("anonymous reaffirm accepted")
+	}
+	if strings.Join(st.changes, ",") != "bsg_1:reaffirm" {
+		t.Fatalf("changes: %v", st.changes)
+	}
+}
+
+func TestStandingPage_AccountDriftCard(t *testing.T) {
+	f, _, phone := grantFixture(t)
+	f.svc.SetStandingPages(&fakeStanding{views: []StandingView{{ID: "bsg_1", State: "suspended", MadeFor: "your work account (alice@corp.example)", NowAccount: "your work account (bob@corp.example)", AccountChanged: true, ReaffirmToken: "shown-account-pair"}}})
+	res, page := phone.do(http.MethodGet, "/ui/approve/standing", nil, nil)
+	if res.StatusCode != http.StatusOK {
+		t.Fatalf("page: %d", res.StatusCode)
+	}
+	for _, want := range []string{"Made for your work account (alice@corp.example)", "Now your work account (bob@corp.example)", "The connection now acts as your work account (bob@corp.example)", `action="/ui/approve/standing/bsg_1/reaffirm"`, `name="shown" value="shown-account-pair"`} {
+		if !strings.Contains(page, want) {
+			t.Errorf("missing %q", want)
+		}
+	}
+	if strings.Contains(page, `action="/ui/approve/standing/bsg_1/confirm"`) {
+		t.Fatal("changed account offers one-tap confirm")
 	}
 }

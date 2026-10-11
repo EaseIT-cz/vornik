@@ -9,6 +9,8 @@ import (
 	"text/tabwriter"
 
 	"github.com/spf13/cobra"
+
+	"vornik.io/vornik/internal/mcpconnect"
 )
 
 // MCP debug CLI — read-only list of a project's MCP tools and a
@@ -138,6 +140,9 @@ type mcpServersDescriptor struct {
 	} `json:"tools"`
 	Error         string `json:"error,omitempty"`
 	LastCheckedAt string `json:"last_checked_at"`
+	// NotDialled: an oauth server with no grant, deliberately not dialled
+	// (auth design §14, GitHub #91).
+	NotDialled bool `json:"not_dialled,omitempty"`
 }
 
 type mcpServersResp struct {
@@ -166,6 +171,9 @@ func runMCPServers(cmd *cobra.Command, args []string) error {
 		status := "reachable"
 		switch {
 		case s.Reachable:
+		case s.NotDialled:
+			// Nothing is wrong with the server: it waits for a consent.
+			status = mcpconnect.NoGrantState
 		case s.LastCheckedAt == "":
 			// Never probed, so there is no verdict to report yet — see the
 			// registry's placeholder comment. The daemon OMITS last_checked_at

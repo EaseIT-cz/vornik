@@ -55,7 +55,7 @@ func callTool(t *testing.T, srv *Server, raw, tool string, args map[string]any) 
 }
 
 func TestBrokerProjectToolAllowlist_ExactSetBothDirections(t *testing.T) {
-	want := []string{"cancel", "catalog", "delegate", "list", "result", "status", "whoami"}
+	want := []string{"cancel", "catalog", "daemon_log", "delegate", "doctor", "list", "list_artifacts", "read_artifact", "result", "status", "task_explain", "task_logs", "whoami"}
 	var got []string
 	for k := range brokerProjectTools {
 		got = append(got, k)
@@ -265,18 +265,25 @@ func TestBrokerStatus_ClosedErrorClassNeverLastError(t *testing.T) {
 		lastErr string
 		digest  string
 		want    string
+		class   string
 	}{
-		{"failed", persistence.TaskStatusFailed, "parse error near: " + brokerSentinel, "", "failed"},
-		{"budget", persistence.TaskStatusFailed, "BUDGET_EXCEEDED " + brokerSentinel, "", "budget"},
-		{"timeout", persistence.TaskStatusFailed, "step timed out " + brokerSentinel, "", "timeout"},
-		{"completed but schema-invalid", persistence.TaskStatusCompleted, "", `{"nope":1}`, "egress_schema"},
-		{"completed clean", persistence.TaskStatusCompleted, "", `{"items":[]}`, ""},
+		// GitHub #299 (2026-10-08): the class comes from the stored class
+		// column, not from these texts.
+		{"failed", persistence.TaskStatusFailed, "parse error near: " + brokerSentinel, "", "failed", persistence.TaskFailureClassInvalidOutput},
+		{"budget", persistence.TaskStatusFailed, "BUDGET_EXCEEDED " + brokerSentinel, "", "budget", persistence.TaskFailureClassBudgetBlocked},
+		{"timeout", persistence.TaskStatusFailed, "step timed out " + brokerSentinel, "", "timeout", persistence.TaskFailureClassTimeout},
+		{"completed but schema-invalid", persistence.TaskStatusCompleted, "", `{"nope":1}`, "egress_schema", ""},
+		{"completed clean", persistence.TaskStatusCompleted, "", `{"items":[]}`, "", ""},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			srv, keyRepo, taskRepo := newBrokerMCPServer(t)
 			raw, _ := seedCompanionKey(t, keyRepo, "broker-acme", nil)
-			brokerTask(t, srv, taskRepo, tc.status, tc.digest, tc.lastErr)
+			if tc.class != "" {
+				failedBrokerTask(t, srv, taskRepo, tc.lastErr, tc.class)
+			} else {
+				brokerTask(t, srv, taskRepo, tc.status, tc.digest, tc.lastErr)
+			}
 			text, isErr := callTool(t, srv, raw, "status", map[string]any{"task_id": "t1"})
 			require.False(t, isErr, text)
 			assert.NotContains(t, text, brokerSentinel)

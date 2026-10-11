@@ -37,6 +37,8 @@ var errServerPending = errors.New("mcp server pending reconnect")
 type pendingServer struct {
 	cfg         ServerConfig
 	lastErr     string
+	lastCause   error // redacted, kept typed for classification
+	lastStatus  int
 	since       time.Time
 	lastAttempt time.Time
 	nextAttempt time.Time
@@ -53,6 +55,12 @@ type PendingServer struct {
 	LastAttempt time.Time
 	Attempts    int
 	LastError   string
+	// HTTPStatus and Cause let a caller classify the failure by type and
+	// status, never by text (live-task-observation design, Change 2026-10-08
+	// C7). Cause is the redacted error; it is for classification only and is
+	// never rendered to an agent.
+	HTTPStatus int
+	Cause      error
 }
 
 // backoffAfter is the wait before the next background attempt, given how
@@ -83,7 +91,9 @@ func (p *pendingServer) recordFailure(err error, now time.Time) {
 	p.lastAttempt = now
 	p.nextAttempt = now.Add(backoffAfter(p.attempts))
 	if err != nil {
-		p.lastErr = redactConnectErr(err).Error()
+		p.lastStatus = connectFailureStatus(err)
+		p.lastCause = redactConnectErr(err)
+		p.lastErr = p.lastCause.Error()
 	}
 }
 
@@ -191,6 +201,7 @@ func (m *Manager) PendingStatus() (examined int, pending []PendingServer) {
 			pending = append(pending, PendingServer{
 				ProjectID: projectID, Server: name, Since: p.since,
 				LastAttempt: p.lastAttempt, Attempts: p.attempts, LastError: p.lastErr,
+				HTTPStatus: p.lastStatus, Cause: p.lastCause,
 			})
 		}
 	}
@@ -207,15 +218,35 @@ func (m *Manager) PendingStatus() (examined int, pending []PendingServer) {
 // server: what is true, and that varying the arguments will not help.
 func (m *Manager) pendingMessage(projectID, serverName string) string {
 	m.mu.RLock()
+	defer m.mu.RUnlock()
 	p := m.pending[projectID][serverName]
-	m.mu.RUnlock()
 	if p == nil {
-		return fmt.Sprintf("MCP server %q not connected for project %q", serverName, projectID)
+		return m.notConnectedLocked(projectID, serverName)
 	}
 	return fmt.Sprintf("MCP server %q is configured for project %q but not connected (last error: %s; "+
 		"retrying in the background since %s) — this is a server fault, not a problem with the "+
 		"arguments, so retrying this call or varying its arguments will not help",
 		serverName, projectID, p.lastErr, p.since.UTC().Format(time.RFC3339))
+}
+
+// SetWithheld replaces the reasons configured servers are deliberately not
+// dialled (project → server → reason, e.g. "not connected, no grant: run
+// vornikctl mcp connect x -p p"; auth design §14 G1). The daemon sets it on
+// every wiring, beside SyncProjects.
+func (m *Manager) SetWithheld(withheld map[string]map[string]string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.withheld = withheld
+}
+
+// notConnectedLocked is the model-facing text for a server with no client
+// and no pending entry. The caller holds mu (read or write).
+func (m *Manager) notConnectedLocked(projectID, serverName string) string {
+	if why := m.withheld[projectID][serverName]; why != "" {
+		return fmt.Sprintf("MCP server %q is configured for project %q but %s — "+
+			"retrying this call or varying its arguments will not help", serverName, projectID, why)
+	}
+	return fmt.Sprintf("MCP server %q not connected for project %q", serverName, projectID)
 }
 
 // dialPending dials one pending server, serialised per (project, server)

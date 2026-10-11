@@ -3,6 +3,7 @@ package cli
 import (
 	"bytes"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -25,6 +26,7 @@ type connectDaemon struct {
 	grants    []map[string]any
 	revoked   []string
 	revokeKey []string // the X-API-Key each revoke carried
+	grantKey  []string // the X-API-Key each grant carried
 }
 
 func (d *connectDaemon) server(t *testing.T) *httptest.Server {
@@ -43,6 +45,7 @@ func (d *connectDaemon) server(t *testing.T) *httptest.Server {
 			var b map[string]any
 			_ = json.NewDecoder(r.Body).Decode(&b)
 			d.grants = append(d.grants, b)
+			d.grantKey = append(d.grantKey, r.Header.Get("X-API-Key"))
 			if d.grantCode != "" {
 				w.WriteHeader(http.StatusConflict)
 				_, _ = w.Write([]byte(`{"error":{"code":"` + d.grantCode + `","message":"no"}}`))
@@ -65,9 +68,9 @@ func (d *connectDaemon) server(t *testing.T) *httptest.Server {
 func newTestConnector(t *testing.T, harness string, d *connectDaemon, access keyAccess) (*connector, agentUser) {
 	t.Helper()
 	home := t.TempDir()
-	user := agentUser{home: home, configDir: filepath.Join(home, ".config"), getenv: func(string) string { return "" }, uid: os.Getuid()}
+	user := agentUser{home: home, configDir: filepath.Join(home, ".config"), getenv: func(string) string { return "" }, uid: os.Getuid(), gids: userGroups()}
 	srv := d.server(t)
-	c := newConnectorFor(harness, "", "/usr/bin/vornikctl")
+	c := newConnectorFor(harness, "", testBridge(t))
 	c.client, c.user, c.probe = NewClient(srv.URL, "sk-operator"), user, func(string) keyAccess { return access }
 	return c, user
 }
@@ -262,7 +265,7 @@ func TestAgentConnect_RefusalPrintedOnceAndNamesTheFlag(t *testing.T) {
 	d.host["daemon_uid"] = os.Getuid()
 	c, _ := newTestConnector(t, "codex", d, keyAbsent)
 	orig := newConnector
-	newConnector = func(string) (*connector, error) { return c, nil }
+	newConnector = func(string, connectOptions) (*connector, error) { return c, nil }
 	t.Cleanup(func() { newConnector = orig; rootCmd.SetOut(nil); rootCmd.SetErr(nil); rootCmd.SetArgs(nil) })
 	var out, errb bytes.Buffer
 	rootCmd.SetOut(&out)
@@ -419,5 +422,139 @@ func TestAgentConnect_RefusalWording(t *testing.T) {
 	var out bytes.Buffer
 	if err := c.connect(&out); err == nil || strings.Contains(out.String(), "runs as your OS user, so") || !strings.Contains(out.String(), "/var/lib/vornik/secrets/store.key") {
 		t.Fatalf("%v\n%s", err, out.String())
+	}
+}
+
+// testBridge is an executable stand-in for vornikctl that this user can run
+// (connect checks the recorded path, GitHub #99).
+func testBridge(t *testing.T) string {
+	t.Helper()
+	p := filepath.Join(t.TempDir(), "vornikctl")
+	if err := os.WriteFile(p, []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	return p
+}
+
+// GitHub #99 (2026-10-04 operator report): connect took the admin key only
+// from VORNIK_API_KEY or the stored sign-in, so the Hermes guide carried it
+// across sudo in the environment. --api-key-stdin reads it from a pipe: in
+// no argv, no environment, no history, and nothing connect writes.
+func TestAgentConnect_APIKeyStdinReadsKeyAndNotEnv(t *testing.T) {
+	const adminKey = "sk-admin-PIPED-CANARY"
+	d := defaultDaemon()
+	c, user := newTestConnector(t, "hermes", d, keyAbsent)
+	t.Setenv("VORNIK_API_KEY", "")
+	c.client.apiKey = ""
+	c.keyStdin, c.keyIn = true, strings.NewReader(adminKey+"\n")
+	var out bytes.Buffer
+	if err := c.connect(&out); err != nil {
+		t.Fatalf("connect: %v\n%s", err, out.String())
+	}
+	if len(d.grantKey) != 1 || d.grantKey[0] != adminKey {
+		t.Fatalf("the daemon saw %q, want the piped key", d.grantKey)
+	}
+	if strings.Contains(out.String(), adminKey) {
+		t.Fatal("the admin key was printed")
+	}
+	_ = filepath.Walk(user.home, func(p string, fi os.FileInfo, err error) error {
+		if err == nil && fi.Mode().IsRegular() {
+			if raw, _ := os.ReadFile(p); strings.Contains(string(raw), adminKey) {
+				t.Errorf("the admin key was stored in %s", p)
+			}
+		}
+		return nil
+	})
+}
+
+// A typed key would echo (vornikctl has no no-echo prompt), defeating the
+// point: a terminal on stdin is refused before anything is sent.
+func TestAgentConnect_APIKeyStdinRefusesTerminal(t *testing.T) {
+	d := defaultDaemon()
+	c, _ := newTestConnector(t, "hermes", d, keyAbsent)
+	orig := stdinIsTerminal
+	stdinIsTerminal = func(io.Reader) bool { return true }
+	t.Cleanup(func() { stdinIsTerminal = orig })
+	c.keyStdin, c.keyIn = true, strings.NewReader("")
+	err := c.connect(io.Discard)
+	if err == nil || !strings.Contains(err.Error(), "pipe") {
+		t.Fatalf("connect = %v, want a refusal naming the piped form", err)
+	}
+	if len(d.grants) != 0 {
+		t.Fatal("a key was minted")
+	}
+}
+
+func TestAgentConnect_APIKeyStdinRefusesEmptyLine(t *testing.T) {
+	d := defaultDaemon()
+	c, _ := newTestConnector(t, "hermes", d, keyAbsent)
+	c.keyStdin, c.keyIn = true, strings.NewReader("  \n")
+	if err := c.connect(io.Discard); err == nil || !strings.Contains(err.Error(), "empty") {
+		t.Fatalf("connect = %v, want an empty-key refusal", err)
+	}
+	if len(d.grants) != 0 {
+		t.Fatal("a key was minted")
+	}
+}
+
+// GitHub #99: connect recorded os.Executable() without checking that the
+// user whose config it writes can run it; Hermes then failed at every
+// start. The default path (no flag) is checked: a 0700 file whose owner is
+// not the connecting user is refused before anything is minted.
+func TestAgentConnect_RefusesVornikctlPathTargetUserCannotExecute(t *testing.T) {
+	d := defaultDaemon()
+	c, _ := newTestConnector(t, "hermes", d, keyAbsent)
+	if err := os.Chmod(c.bridge, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	c.user.uid, c.user.gids = os.Getuid()+4242, nil // not the owner, in none of its groups
+	err := c.connect(io.Discard)
+	if err == nil || !strings.Contains(err.Error(), c.bridge) {
+		t.Fatalf("connect = %v, want a refusal naming %s", err, c.bridge)
+	}
+	if len(d.grants) != 0 {
+		t.Fatal("a key was minted")
+	}
+	// Control: the owner can run it.
+	c.user.uid, c.user.gids = os.Getuid(), userGroups()
+	if err := c.connect(io.Discard); err != nil {
+		t.Fatalf("the owner was refused: %v", err)
+	}
+}
+
+// --vornikctl is resolved through symlinks and the resolved file is
+// recorded, so what connect checked is what Hermes runs (review b240
+// finding 5); a relative path is refused. The flag values arrive as
+// options, not package globals (finding 6).
+func TestAgentConnect_VornikctlFlagOverridesExecutable(t *testing.T) {
+	target := testBridge(t)
+	link := filepath.Join(t.TempDir(), "vornikctl-link")
+	if err := os.Symlink(target, link); err != nil {
+		t.Fatal(err)
+	}
+	want, err := filepath.EvalSymlinks(target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c, err := newConnector("hermes", connectOptions{vornikctl: link, keyStdin: true})
+	if err != nil || c.bridge != want || !c.keyStdin {
+		t.Fatalf("connector = %+v %v, want bridge %s and keyStdin", c, err, want)
+	}
+	if _, err := newConnector("hermes", connectOptions{vornikctl: "bin/vornikctl"}); err == nil || !strings.Contains(err.Error(), "absolute") {
+		t.Fatalf("a relative --vornikctl = %v, want refused", err)
+	}
+}
+
+// Review b240 finding 4: the piped key is bounded (4096 bytes) and may
+// carry no control characters.
+func TestAgentConnect_APIKeyStdinBoundsAndControlCharacters(t *testing.T) {
+	if _, err := readAPIKey(strings.NewReader(strings.Repeat("k", 4097))); err == nil || !strings.Contains(err.Error(), "4096") {
+		t.Fatalf("an oversized key = %v, want refused", err)
+	}
+	if _, err := readAPIKey(strings.NewReader("sk-vornik-a\x00b\n")); err == nil || !strings.Contains(err.Error(), "control") {
+		t.Fatalf("a key with a NUL = %v, want refused", err)
+	}
+	if k, err := readAPIKey(strings.NewReader(strings.Repeat("k", 4096))); err != nil || len(k) != 4096 {
+		t.Fatalf("a 4096-byte key = %d, %v; want accepted", len(k), err)
 	}
 }

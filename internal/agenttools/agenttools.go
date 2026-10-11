@@ -197,6 +197,13 @@ var Tools = []Tool{
 	{Name: "skill_fetch", AlwaysGranted: true, Advertise: AdvertiseWhenAPIURL},
 	{Name: "query_api", Acts: true, Advertise: AdvertiseWhenAPIURL},
 	{Name: "list_apis", Advertise: AdvertiseWhenAPIURL},
+	{Name: "forge_list_issues", Advertise: AdvertiseWhenAPIURL},
+	{Name: "forge_get_issue", Advertise: AdvertiseWhenAPIURL},
+	{Name: "forge_list_labels", Advertise: AdvertiseWhenAPIURL},
+	{Name: "forge_add_labels", Acts: true, Advertise: AdvertiseWhenAPIURL},
+	{Name: "forge_set_labels", Acts: true, Advertise: AdvertiseWhenAPIURL},
+	{Name: "forge_close_issue", Acts: true, Advertise: AdvertiseWhenAPIURL},
+
 	{
 		Name: "tool_search", Gate: GateExemptByDesign,
 		ExemptReason: "discovery tool — a role cannot ask for a tool it cannot see; " +

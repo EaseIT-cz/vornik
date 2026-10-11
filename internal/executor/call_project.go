@@ -14,6 +14,22 @@ import (
 	"vornik.io/vornik/internal/registry"
 )
 
+// publicCPCErrorMessage keeps provider/task details on private diagnostic
+// surfaces. Live events are replicated and visible to operators watching the
+// caller, so they carry only fixed text derived from the closed status value.
+func publicCPCErrorMessage(status string) string {
+	switch status {
+	case string(persistence.CPCStatusFailed):
+		return "callee task failed"
+	case string(persistence.CPCStatusRejected):
+		return "callee result rejected"
+	case string(persistence.CPCStatusTimedOut):
+		return "cross-project call timed out"
+	default:
+		return ""
+	}
+}
+
 // interProjectEnabledEnv is the feature-flag env name. When unset
 // or false, every call_project step fails with
 // CROSS_PROJECT_DISABLED — operators land the migration + code
@@ -386,7 +402,7 @@ func (e *Executor) resolveCrossProjectCallForTask(
 				CPCId:        cpcID,
 				Status:       status,
 				Summary:      summary,
-				ErrorMessage: errMsg,
+				ErrorMessage: publicCPCErrorMessage(status),
 				DurationMs:   dur.Milliseconds(),
 			})
 		}

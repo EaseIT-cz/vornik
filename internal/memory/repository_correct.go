@@ -82,14 +82,17 @@ type operatorCorrectionRow struct {
 // project_memory_chunks.refute_route (migration 218; GitHub #76, design 22
 // "Reinstating a refuted mirrored note"). The route is the refuter's
 // asserted label, not a daemon attestation that the mirror's forget ran:
-// mirror_forget and forget_command are honoured only from a hermes key in
-// chunk-id mode (companionToolMemoryCorrect). Only mirror_forget rows are
+// mirror_forget is honoured only from a client kind whose memory file
+// mirrors into Vornik, and forget_command from any key, both in chunk-id
+// mode (companionRefuteRoute; GitHub #119 item 6). device_forget is the
+// approver device's memory page, never a key. Only mirror_forget rows are
 // ever reinstated (ReinstateMirroredByHash).
 const (
 	RefuteRouteMirrorForget  = "mirror_forget"  // the Hermes mirror's own forget
-	RefuteRouteForgetCommand = "forget_command" // Hermes /vornik-forget
+	RefuteRouteForgetCommand = "forget_command" // a user's forget by id (/vornik-forget, or any harness)
 	RefuteRouteChatForget    = "chat_forget"    // the dispatcher's memory_forget
 	RefuteRouteMemoryCorrect = "memory_correct" // any other memory_correct
+	RefuteRouteDeviceForget  = "device_forget"  // the approver device's memory page
 )
 
 // MarkRefutedByIDs flips validation_status to 'refuted' for every

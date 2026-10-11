@@ -108,6 +108,14 @@ type APIMetrics struct {
 	// vornik_llm_exchange_record_failed_total — llm-exchange record/replay
 	// design §2.2.
 	LLMExchangeRecordFailedTotal *prometheus.CounterVec
+
+	// ChatProxyLengthCutoffsTotal counts chat-proxy responses that finished
+	// with finish_reason "length" (cut off at the output cap), by role and
+	// route model. Both labels are bounded by the calling project's swarm
+	// (lengthCutoffLabels): an undeclared role or model is "other".
+	// vornik_chat_proxy_length_cutoffs_total — GitHub #100,
+	// 09-agent-runtime-contract.md §8.4 (amendment 2026-10-08).
+	ChatProxyLengthCutoffsTotal *prometheus.CounterVec
 }
 
 // NewAPIMetrics creates and registers API metrics.
@@ -188,13 +196,19 @@ func NewAPIMetrics(reg *prometheus.Registry) *APIMetrics {
 			Name:      "llm_exchange_record_failed_total",
 			Help:      "Agent-step model exchanges the chat proxy could not record for an opted-in execution, by reason.",
 		}, []string{"reason"}),
+		ChatProxyLengthCutoffsTotal: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Namespace: "vornik",
+			Subsystem: "chat_proxy",
+			Name:      "length_cutoffs_total",
+			Help:      "Chat-proxy responses cut off at the output cap (finish_reason length), by role and model.",
+		}, []string{"role", "model"}),
 		BacklogDepositsTotal: prometheus.NewCounterVec(prometheus.CounterOpts{
 			Namespace: "vornik",
 			Name:      "backlog_deposits_total",
 			Help:      "backlog-deposit endpoint outcomes, by project and outcome (accepted/duplicate/secret/cap/cooldown/invalid).",
 		}, []string{"project", "outcome"}),
 	}
-	reg.MustRegister(m.RequestsTotal, m.RequestDuration, m.ActiveRequests, m.CostAttributionTotal, m.ExecutionsStuck, m.ApprovalsTotal, m.WebhookRelayReceivedTotal, m.NodeHeartbeatReceivedTotal, m.SupportReportGeneratedTotal, m.SupportReportBytesTotal, m.BacklogDepositsTotal, m.MCPResultGuardFindingsTotal, m.MCPResultGuardScanSeconds, m.LLMExchangeRecordFailedTotal)
+	reg.MustRegister(m.RequestsTotal, m.RequestDuration, m.ActiveRequests, m.CostAttributionTotal, m.ExecutionsStuck, m.ApprovalsTotal, m.WebhookRelayReceivedTotal, m.NodeHeartbeatReceivedTotal, m.SupportReportGeneratedTotal, m.SupportReportBytesTotal, m.BacklogDepositsTotal, m.MCPResultGuardFindingsTotal, m.MCPResultGuardScanSeconds, m.LLMExchangeRecordFailedTotal, m.ChatProxyLengthCutoffsTotal)
 	return m
 }
 
@@ -408,4 +422,13 @@ func (m *APIMetrics) RecordLLMExchangeRecordFailed(reason string) {
 		return
 	}
 	m.LLMExchangeRecordFailedTotal.WithLabelValues(reason).Inc()
+}
+
+// RecordChatProxyLengthCutoff counts one response cut off at the output cap;
+// nil-safe so a server built without metrics still serves.
+func (m *APIMetrics) RecordChatProxyLengthCutoff(role, model string) {
+	if m == nil || m.ChatProxyLengthCutoffsTotal == nil {
+		return
+	}
+	m.ChatProxyLengthCutoffsTotal.WithLabelValues(role, model).Inc()
 }

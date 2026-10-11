@@ -34,8 +34,12 @@ type CredentialSlot struct {
 	// Server is the OAuth server a kind=oauth slot connects.
 	Server string `json:"server,omitempty"`
 	// UsedBy names each server (or API) that references the credential, as
-	// "<name> at <host>".
+	// "<name> at <host>", or "<name> in <project> at <host>" for another
+	// project of the namespace (design §22.2.3 C5).
 	UsedBy []string `json:"used_by"`
+	// Account is the account the credential belongs to (C1 makes it one),
+	// omitted for the default account with no identity.
+	Account *AccountGrant `json:"account,omitempty"`
 }
 
 func lockCredential(ns, name string) string { return "credential:" + ns + "/" + name }
@@ -66,7 +70,7 @@ func (r *Renderer) requestCredential(st *State, raw json.RawMessage) Change {
 	server := ""
 	switch in.Kind {
 	case CredentialSecret:
-		usedBy = credentialUsers(p, ns, in.Name)
+		usedBy = credentialUsersInNamespace(st, p, ns, in.Name)
 	case CredentialOAuth:
 		for _, s := range p.Servers {
 			if s.OAuth && !strings.HasSuffix(s.Name, agentns.WriteSuffix) && OAuthCredentialName(s.Name) == in.Name {
@@ -88,13 +92,36 @@ func (r *Renderer) requestCredential(st *State, raw json.RawMessage) Change {
 	if in.Kind == CredentialOAuth {
 		how = "Tap Connect on this page to sign in there; your assistant will never see the sign-in."
 	}
+	// The account (design §22.2.3 C5): the credential's connections act as
+	// one account (C1); a rotation says whose key it replaces.
+	phrase, owner := credentialAccount(st, p, ns, in)
+	slot.Account = owner
+	accountClause := ""
+	if phrase != "" {
+		accountClause = " (" + phrase + ")"
+	}
+	rotation := ""
+	if in.Kind == CredentialSecret && st.CredentialSet[in.Name] {
+		label := "default"
+		if owner != nil {
+			label = owner.Label
+		}
+		rotation = " This replaces the key now stored for your " + label + " account; whichever account the new key belongs to is the one these connections will act as. Standing approvals that send through them are paused until you confirm them."
+	}
 	c := Change{
 		Class: Widening,
 		Slot:  slot,
 		Locks: []string{lockCredential(ns, in.Name)},
-		Sentence: "Your assistant (" + ns + ") asks you to add the credential " + in.Name + " for " + pid +
+		Sentence: "Your assistant (" + ns + ") asks you to add the credential " + in.Name + accountClause + " for " + pid +
 			", used by " + strings.Join(usedBy, ", ") + ", for: " + quoteShort(in.Purpose) +
-			". " + how,
+			". " + how + rotation,
+		accounts: map[string]string{},
+	}
+	if phrase != "" {
+		c.accounts[slotAccountKey] = phrase
+	}
+	if rotation != "" {
+		c.accounts[slotRotationKey] = strings.TrimSpace(rotation)
 	}
 	return c
 }
@@ -127,6 +154,4 @@ func hostOf(raw string) string {
 
 // OAuthCredentialName is the token slot of an OAuth server: OAUTH_ and the
 // server name upper-cased, dashes as underscores.
-func OAuthCredentialName(server string) string {
-	return "OAUTH_" + strings.ToUpper(strings.ReplaceAll(server, "-", "_"))
-}
+func OAuthCredentialName(server string) string { return agentns.OAuthSlot(server) }

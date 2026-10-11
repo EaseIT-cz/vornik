@@ -8,6 +8,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"html"
 	"net/http"
 	"strings"
@@ -151,8 +152,20 @@ func (s *agentAdminService) deviceOAuthCallback(w http.ResponseWriter, r *http.R
 	// The exchange runs inside the slot's effect (slotEffect), so a failure
 	// after the decision is recorded on the request.
 	state, code := strings.TrimSpace(q.Get("state")), strings.TrimSpace(q.Get("code"))
+	// The account the person signed in to (design §22.2.7, §22.2.14 item 2;
+	// GitHub #119 item 8). This closure is the provider identity's only
+	// writer and runs inside the slot's effect: before the token is stored,
+	// the old identity is cleared; after, the new one is written. So the
+	// identity shown is always the stored token's account or none, and a
+	// refused or failed decision writes nothing.
+	signedInAs, paused := "", 0
 	done := oauthCompletion{complete: func(ctx context.Context) error {
-		_, err := conn.Complete(ctx, state, code)
+		s.signInMu.Lock()
+		defer s.signInMu.Unlock()
+		_, err := conn.CompleteWithIdentity(context.WithValue(ctx, oauthPublicationResultKey{}, &paused), state, code, func(_ context.Context, idToken string) error {
+			signedInAs, _ = agentadmin.EmailFromIDToken(idToken)
+			return nil
+		})
 		return err
 	}}
 	err = s.devices.Decide(context.WithValue(ctx, oauthCompletionKey{}, done), d, reqID, sha, true)
@@ -165,7 +178,16 @@ func (s *agentAdminService) deviceOAuthCallback(w http.ResponseWriter, r *http.R
 		return
 	}
 	s.background(func() { s.afterOAuthConnected(context.WithoutCancel(ctx), slot) })
-	http.Redirect(w, r, "/ui/approve/?done=approved", http.StatusSeeOther)
+	// Say who signed in (design §22.2.7): the person chose the account at
+	// the provider, and this is the one place Vornik can tell them.
+	msg := "Vornik could not tell which account you signed in to; what your assistant said about this account was set aside."
+	if signedInAs != "" {
+		msg = "Signed in as " + signedInAs + "."
+	}
+	if paused > 0 {
+		msg += fmt.Sprintf(" %d standing approval(s) that send from this account were paused; confirm them on the Standing approvals page if this is still the same account.", paused)
+	}
+	page(http.StatusOK, "Connected", msg)
 }
 
 // afterOAuthConnected lists the newly connected server's tools and files
@@ -177,7 +199,7 @@ func (s *agentAdminService) afterOAuthConnected(ctx context.Context, slot *agent
 	}
 	for _, srv := range p.MCP.Servers {
 		if srv.Name == slot.Server {
-			s.fileServerTools(ctx, slot.Namespace, p.ID, srv.Name, srv.URL, srv.Auth, p.Permissions.Secrets)
+			s.fileServerTools(ctx, slot.Namespace, p.ID, srv.Name, srv.URL, srv.Transport, srv.Auth, p.Permissions.Secrets)
 		}
 	}
 }
@@ -190,4 +212,29 @@ func agentOAuthHTTP(projectID, serverURL string) *http.Client {
 		return nil
 	}
 	return agentDialGuard(serverURL).HTTPClient(mcpOAuthHTTPTimeout)
+}
+
+// priorSignIn reports whether the server already holds a token row (so a
+// sign-in replaces one) and the provider identity recorded for it, "" when
+// none was provider-reported (C7, design §22.2.6). The row is read only for
+// its existence; its tokens are not used.
+func (s *agentAdminService) priorSignIn(ctx context.Context, project, server, integration string) (bool, string, error) {
+	if s.c.repos == nil || s.c.repos.MCPOAuthTokens == nil {
+		return false, "", errors.New("no token store")
+	}
+	_, err := s.c.repos.MCPOAuthTokens.Get(ctx, project, server)
+	switch {
+	case errors.Is(err, persistence.ErrNotFound):
+		return false, "", nil
+	case err != nil:
+		return false, "", err
+	}
+	a, err := s.grants.GetIntegration(ctx, project, integration)
+	if err != nil {
+		return true, "", nil // no row to read the identity from: not provably the same account
+	}
+	if a.IdentitySource != persistence.IdentitySourceProvider {
+		return true, "", nil
+	}
+	return true, a.AccountIdentity, nil
 }

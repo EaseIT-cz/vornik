@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net/url"
 	"sort"
 	"strings"
 	"time"
@@ -79,6 +80,9 @@ type SetupProject struct {
 	Servers     []SetupServer     `json:"servers"`
 	APIs        []SetupAPI        `json:"apis"`
 	Credentials []SetupCredential `json:"credentials"`
+	// ConnectionsByHost groups the connections to a host the project
+	// reaches more than once (design §22.2.9).
+	ConnectionsByHost []SetupHost `json:"connections_by_host,omitempty"`
 	// NextSteps says what stands between the project and a runnable setup
 	// (design §19.2, §19.7 F2): a credential to enter, or one declined.
 	NextSteps []string `json:"next_steps,omitempty"`
@@ -91,6 +95,9 @@ type SetupCredential struct {
 	Kind   string     `json:"kind"`   // secret | oauth
 	Status string     `json:"status"` // missing | set | needs_reconnect
 	SetAt  *time.Time `json:"set_at,omitempty"`
+	// Account is the label of the account the credential belongs to (one,
+	// design §22.2.3 C1).
+	Account string `json:"account,omitempty"`
 }
 
 // SetupAPI is one REST API and its approval.
@@ -100,7 +107,23 @@ type SetupAPI struct {
 	Status       string   `json:"status"` // approved | not_approved
 	ReadMethods  []string `json:"read_methods,omitempty"`
 	WriteMethods []string `json:"proposable_write_methods,omitempty"`
+	// Host and Account (design §22.2.9).
+	Host    string       `json:"host"`
+	Account SetupAccount `json:"account"`
+	connectionCheck
 }
+
+// connectionCheck is when a connection was last tested with test_connection
+// and the result (design §6.2, GitHub #101): the newest probe audit row, or
+// "never" with a note, so a stored credential never reads as accepted.
+type connectionCheck struct {
+	LastCheckedAt *time.Time `json:"last_checked_at,omitempty"`
+	LastResult    string     `json:"last_result"`
+	CheckNote     string     `json:"check_note,omitempty"`
+}
+
+// neverCheckedNote is list_my_setup's note on a connection never tested.
+const neverCheckedNote = "not tested: a stored credential is not proof the provider accepts it; call test_connection"
 
 // SetupWorkflow is one workflow and whether it may run.
 type SetupWorkflow struct {
@@ -131,14 +154,45 @@ type SetupRun struct {
 
 // SetupServer is one integration and its approval.
 type SetupServer struct {
-	Name       string   `json:"name"`
-	URL        string   `json:"url"`
-	Status     string   `json:"status"` // approved | tools_pending | not_approved
+	Name   string `json:"name"`
+	URL    string `json:"url"`
+	Status string `json:"status"` // approved | tools_pending | not_approved
+	// Transport is the server's MCP transport (design §6.1).
+	Transport  string   `json:"transport"`
 	ReadTools  []string `json:"read_tools,omitempty"`
 	WriteTools []string `json:"proposable_write_tools,omitempty"`
 	// Note is why a server's tools were not filed for approval (design
 	// §19.8 F6: it does not offer a recipe's tools).
 	Note string `json:"note,omitempty"`
+	// Host and Account (design §22.2.9; GitHub #119 item 8): where the
+	// server is and which of the user's accounts it acts as.
+	Host    string       `json:"host"`
+	Account SetupAccount `json:"account"`
+	connectionCheck
+}
+
+// SetupAccount is a connection's account as the agent may see it: the
+// label, where its identity came from, and the identity only when the agent
+// itself described it; a provider-reported identity is never shown to the
+// agent (design §22.2.7).
+type SetupAccount struct {
+	Label          string `json:"label"`
+	IdentitySource string `json:"identity_source,omitempty"`
+	Identity       string `json:"identity,omitempty"`
+}
+
+// SetupHost is a host a project connects to more than once, with each
+// connection's account (design §22.2.9).
+type SetupHost struct {
+	Host        string                `json:"host"`
+	Connections []SetupHostConnection `json:"connections"`
+}
+
+// SetupHostConnection is one connection to a shared host.
+type SetupHostConnection struct {
+	Name    string       `json:"name"`
+	Kind    string       `json:"kind"` // mcp | api
+	Account SetupAccount `json:"account"`
 }
 
 // SetupRequest is one approval request, as the agent may see it.
@@ -198,7 +252,7 @@ func (s *agentAdminService) ListSetup(ctx context.Context, key *persistence.APIK
 			if strings.HasSuffix(srv.Name, agentns.WriteSuffix) {
 				continue // shown as its integration's proposable write tools
 			}
-			ss := SetupServer{Name: srv.Name, URL: srv.URL, Status: "not_approved"}
+			ss := SetupServer{Name: srv.Name, URL: srv.URL, Status: "not_approved", Transport: agentTransport(srv.Transport)}
 			if a, ok := st.Approvals[id][srv.Name]; ok && a.Live() {
 				ss.Status, ss.ReadTools, ss.WriteTools = "approved", a.Read, a.Write
 				if a.ReadPending {
@@ -206,6 +260,8 @@ func (s *agentAdminService) ListSetup(ctx context.Context, key *persistence.APIK
 					ss.Note = s.toolGap(id, srv.Name)
 				}
 			}
+			ss.connectionCheck = s.connectionCheckOf(ctx, id, srv.Name)
+			ss.Host, ss.Account = hostWords(srv.URL), setupAccount(srv.Account, st.Approvals[id][srv.Name])
 			sp.Servers = append(sp.Servers, ss)
 		}
 		for _, api := range p.APIs {
@@ -213,13 +269,26 @@ func (s *agentAdminService) ListSetup(ctx context.Context, key *persistence.APIK
 			if a, ok := st.Approvals[id][api.Name]; ok && a.Live() {
 				sa.Status, sa.ReadMethods, sa.WriteMethods = "approved", a.Read, a.Write
 			}
+			sa.connectionCheck = s.connectionCheckOf(ctx, id, api.Name)
+			sa.Host, sa.Account = hostWords(api.BaseURL), setupAccount(api.Account, st.Approvals[id][api.Name])
 			sp.APIs = append(sp.APIs, sa)
 		}
+		sp.ConnectionsByHost = connectionsByHost(sp)
+		credentialAccounts(p, sp.Credentials)
 		s.credentialSteps(ctx, ns, &sp)
 		v.Projects = append(v.Projects, sp)
 	}
 	if err := s.requestsOf(ctx, ns, &v); err != nil {
 		return SetupView{}, err
+	}
+	// The requests' sentences are the device's; the agent gets them with
+	// each provider-reported identity replaced (design §22.2.7, review 25bf
+	// finding 3).
+	hide := s.providerIdentityHider(ctx, ns)
+	for _, list := range [][]SetupRequest{v.Pending, v.Failed, v.Expired} {
+		for i := range list {
+			list[i].Sentence, list[i].Reason = hide(list[i].Sentence), hide(list[i].Reason)
+		}
 	}
 	v.Notifications = s.drainNotifications(ns)
 	return v, nil
@@ -385,7 +454,7 @@ func (s *agentAdminService) Describe(ctx context.Context, key *persistence.APIKe
 		HowToWork:     agentadmin.AdminGuidance(),
 		Verbs: []string{agentadmin.VerbCreateProject, agentadmin.VerbDefineSwarm, agentadmin.VerbDefineWorkflow,
 			agentadmin.VerbAddMCPServer, agentadmin.VerbAddAPI, agentadmin.VerbRequestCredential,
-			agentadmin.VerbSetBudget, agentadmin.VerbUpdateProject, agentadmin.VerbRemove, agentadmin.VerbInstallRecipe, agentadmin.VerbListRecipes,
+			agentadmin.VerbSetBudget, agentadmin.VerbUpdateProject, agentadmin.VerbRemove, agentadmin.VerbInstallRecipe, agentadmin.VerbListRecipes, agentadmin.VerbTestConnection,
 			"list_my_setup", "describe_installation"},
 		RoleBuiltins:  append(registry.BrokerSafeBuiltins(), agentadmin.QueryAPITool+" (read only, once the project has an approved API)"),
 		AlwaysGranted: agenttools.EveryRole(),
@@ -565,4 +634,65 @@ func groupDigits(n int) string {
 		s = s[:i] + "," + s[i:]
 	}
 	return s
+}
+
+// setupAccount is a connection's account for list_my_setup (design §22.2.9).
+func setupAccount(label string, a agentadmin.IntegrationApproval) SetupAccount {
+	out := SetupAccount{Label: agentns.AccountOf(label), IdentitySource: a.IdentitySource}
+	if a.IdentitySource == agentadmin.IdentityFromAgent {
+		out.Identity = a.AccountIdentity
+	}
+	return out
+}
+
+// hostWords is a URL's host (with port), lower-cased, for list_my_setup.
+func hostWords(raw string) string {
+	u, err := url.Parse(raw)
+	if err != nil || u.Host == "" {
+		return ""
+	}
+	return strings.ToLower(u.Host)
+}
+
+// connectionsByHost groups a project's connections by host, keeping only
+// the hosts it reaches more than once.
+func connectionsByHost(sp SetupProject) []SetupHost {
+	byHost := map[string][]SetupHostConnection{}
+	for _, s := range sp.Servers {
+		byHost[s.Host] = append(byHost[s.Host], SetupHostConnection{Name: s.Name, Kind: "mcp", Account: s.Account})
+	}
+	for _, a := range sp.APIs {
+		byHost[a.Host] = append(byHost[a.Host], SetupHostConnection{Name: a.Name, Kind: "api", Account: a.Account})
+	}
+	var out []SetupHost
+	for host, conns := range byHost {
+		if host != "" && len(conns) > 1 {
+			sort.Slice(conns, func(i, j int) bool { return conns[i].Name < conns[j].Name })
+			out = append(out, SetupHost{Host: host, Connections: conns})
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Host < out[j].Host })
+	return out
+}
+
+// credentialAccounts names the account of each credential: the label of the
+// connections that use it (one, by C1).
+func credentialAccounts(p *agentadmin.ProjectState, creds []SetupCredential) {
+	label := map[string]string{}
+	for _, s := range p.Servers {
+		if s.OAuth {
+			label[agentadmin.OAuthCredentialName(agentns.IntegrationOf(s.Name))] = agentns.AccountOf(s.Account)
+		}
+		if i := strings.LastIndex(s.AuthRef, "/"); i >= 0 && strings.HasPrefix(s.AuthRef, "secret://") {
+			label[s.AuthRef[i+1:]] = agentns.AccountOf(s.Account)
+		}
+	}
+	for _, a := range p.APIs {
+		if i := strings.LastIndex(a.AuthRef, "/"); i >= 0 && strings.HasPrefix(a.AuthRef, "secret://") {
+			label[a.AuthRef[i+1:]] = agentns.AccountOf(a.Account)
+		}
+	}
+	for i := range creds {
+		creds[i].Account = label[creds[i].Name]
+	}
 }

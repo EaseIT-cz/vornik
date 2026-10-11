@@ -77,3 +77,16 @@ surface it verbatim and give the operator-side fix:
 `vornikctl companion grant --skill-read` / `--skill-write` / `--skill-admin`
 (or `--skill-all`). Approval (`skill_admin`) is deliberately opt-in — a client
 can propose but not self-approve.
+
+## What Vornik remembers (`memory_list`)
+
+When the user asks what Vornik's memory holds about them or this project,
+call `mcp__vornik__memory_list` (a page at a time; `query` to search) and
+show each item's `short_id`, `age`, `source` and `origin` with its snippet.
+Offer the next page when `next_cursor` is set; never paste the whole memory.
+To forget an item, call `mcp__vornik__memory_correct` with its `id` in
+`chunk_ids` and `reason: "forget_command"`. To export everything, or to
+forget from their phone, give the user `export_url`: it opens only on their
+paired approver device, and the export never passes through you. On a
+daemon without the `companion-memory-list` capability, `recent_memory`
+lists the 20 newest instead.

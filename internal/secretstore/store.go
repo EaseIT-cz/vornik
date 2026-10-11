@@ -66,31 +66,40 @@ func check(ns, name string) error {
 
 // Put seals value and stores it under (ns, name).
 func (s *Store) Put(ctx context.Context, ns, name, kind string, value []byte, device string) error {
-	if err := check(ns, name); err != nil {
+	row, err := s.PreparePut(ns, name, kind, value, device)
+	if err != nil {
 		return err
 	}
+	return s.repo.Upsert(ctx, *row)
+}
+
+// PreparePut seals an agent-owned row without publishing it.
+func (s *Store) PreparePut(ns, name, kind string, value []byte, device string) (*persistence.AgentSecretRow, error) {
+	if err := check(ns, name); err != nil {
+		return nil, err
+	}
 	if kind != "secret" && kind != "oauth_token" {
-		return fmt.Errorf("secretstore: unknown kind %q", kind)
+		return nil, fmt.Errorf("secretstore: unknown kind %q", kind)
 	}
 	if len(value) == 0 {
 		// Source reads an empty value as unset; refuse it here so no row
 		// exists that reads as missing.
-		return fmt.Errorf("secretstore: empty value for %s/%s", ns, name)
+		return nil, fmt.Errorf("secretstore: empty value for %s/%s", ns, name)
 	}
 	a, err := s.aead(ns)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	nonce := make([]byte, a.NonceSize())
 	if _, err := rand.Read(nonce); err != nil {
-		return err
+		return nil, err
 	}
 	now := s.now()
-	return s.repo.Upsert(ctx, persistence.AgentSecretRow{
+	return &persistence.AgentSecretRow{
 		Namespace: ns, Name: name, Kind: kind,
 		Ciphertext: a.Seal(nil, nonce, value, []byte(ns+"/"+name)), Nonce: nonce,
 		CreatedByDevice: device, CreatedAt: now, UpdatedAt: now,
-	})
+	}, nil
 }
 
 // Get opens the credential at (ns, name).

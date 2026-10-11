@@ -34,6 +34,7 @@ import (
 	"vornik.io/vornik/internal/runtime"
 	"vornik.io/vornik/internal/safepath"
 	"vornik.io/vornik/internal/secrets"
+	"vornik.io/vornik/internal/stepoutcome"
 	"vornik.io/vornik/internal/toolbudget"
 	"vornik.io/vornik/internal/workspacelock"
 )
@@ -109,6 +110,9 @@ type TaskRepository interface {
 	Get(ctx context.Context, id string) (*persistence.Task, error)
 	Create(ctx context.Context, task *persistence.Task) error
 	Update(ctx context.Context, task *persistence.Task) error
+	// UpdateIfStatus is the failure finaliser's whole-row write, refused
+	// when the row left the allowed statuses (GitHub #303).
+	UpdateIfStatus(ctx context.Context, task *persistence.Task, allowed []persistence.TaskStatus) (bool, error)
 	Delete(ctx context.Context, id string) error
 	UpdateStatus(ctx context.Context, id string, status persistence.TaskStatus) error
 	GetChildren(ctx context.Context, parentTaskID string) ([]*persistence.Task, error)
@@ -2549,6 +2553,21 @@ retryLoop:
 				e.handleCancelled(ctx, task, execution)
 				return
 			}
+			if errors.Is(err, errTaskTerminal) {
+				// Another writer finished the task (operator CLOSE, a
+				// scheduler FAILED) while this run was between steps
+				// (05-scheduler.md §4.11). The task row is theirs: record
+				// the execution as cancelled and discard the run's worktree
+				// as a failed run does, but write no task status.
+				span.SetStatus(codes.Ok, "task finished outside this execution")
+				_ = cleanupWorktree(false)
+				// Sweep first, as handleCancelled does, so no step outcome
+				// is left pending behind a terminal execution (the
+				// orphaned-step-outcomes design).
+				e.sweepPendingOutcomes(context.WithoutCancel(ctx), execution.ID, string(stepoutcome.Cancelled))
+				_ = e.execRepo.UpdateStatus(context.WithoutCancel(ctx), execution.ID, persistence.ExecutionStatusCancelled)
+				return
+			}
 			span.AddEvent("container_start_failed", trace.WithAttributes(
 				attribute.String("error", err.Error()),
 				attribute.Int("attempt", attempts),
@@ -3040,36 +3059,10 @@ func (e *Executor) IsExecuting(taskID string) bool {
 	return exists
 }
 
-// TaskLogs returns best-effort logs for a running task. Ephemeral
-// containers are removed after step completion, so completed tasks fall
-// back to execution/task persisted errors at the API layer.
-func (e *Executor) TaskLogs(ctx context.Context, taskID string, tail int) (string, error) {
-	if taskID == "" {
-		return "", fmt.Errorf("task_id is required")
-	}
-
-	// Snapshot containerID under the lock — the runExecution goroutine writes
-	// it per-step under e.mu (executor.go), so reading it after Unlock is a
-	// data race (B2, audit 2026-07-03). Mirrors Cancel / pauseWithReason.
-	e.mu.Lock()
-	var containerID string
-	if handle := e.activeExecutions[taskID]; handle != nil {
-		containerID = handle.containerID
-	}
-	e.mu.Unlock()
-	if containerID != "" {
-		return e.runtime.Logs(ctx, containerID, tail)
-	}
-
-	container, err := e.runtime.GetContainerByTask(ctx, taskID)
-	if err != nil {
-		return "", err
-	}
-	if container == nil || container.ID == "" {
-		return "", fmt.Errorf("no container found for task %s", taskID)
-	}
-	return e.runtime.Logs(ctx, container.ID, tail)
-}
+// No TaskLogs accessor (GitHub #294, 2026-10-08): it ran `podman logs` for
+// REST, UI and support-report requests, against the process-spawn law. The
+// only container-log read is the step-failure capture in executeAgentStep;
+// request paths read api.HeldTaskLog (TestSpawnLaw_ContainerLogsReadOnlyOnStepFailure).
 
 // cleanupExecution removes the execution from active tracking and
 // syncs the active-execution gauge so it reflects reality.

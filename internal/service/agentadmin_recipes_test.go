@@ -150,6 +150,7 @@ func TestAgentAdmin_InstallRecipeEndToEnd(t *testing.T) {
 func TestAgentAdmin_InstallRecipeAsksOnlyForMissingCredentials(t *testing.T) {
 	f := newAgentAdminFixture(t)
 	ctx := context.Background()
+	mail := newFakeMCP(t, "Bearer "+credCanary, "gmail_get", "gmail_search", "gmail_send")
 	f.do(agentadmin.VerbCreateProject, agentadmin.CreateProjectInput{Slug: "personal", Purpose: "Personal automations"})
 	st, err := f.c.secretStoreForWrite()
 	if err != nil {
@@ -159,10 +160,26 @@ func TestAgentAdmin_InstallRecipeAsksOnlyForMissingCredentials(t *testing.T) {
 		t.Fatal(err)
 	}
 	res := f.do(agentadmin.VerbInstallRecipe, installInput("morning-brief", map[string]string{
-		"mail_server_url": "https://mail.invalid/mcp", "calendar_server_url": "https://cal.invalid/mcp"}))
+		"mail_server_url": mail.srv.URL, "calendar_server_url": "https://cal.invalid/mcp"}))
 	f.approve(res)
 	if got := f.pendingSlots(); len(got) != 1 || got["CALENDAR_TOKEN"] == "" {
 		t.Fatalf("credential requests: %v", got)
+	}
+	// GitHub #312 (2026-10-09): an already-stored credential skips its
+	// credential-slot request, but its newly installed read-pending server
+	// still needs the separate tools approval. Control: the stored secret is
+	// available when install approval applies; without the post-install
+	// tools-approval trigger, the server stays tools_pending indefinitely.
+	if f.c.Registry.GetProject("hermes--personal") == nil {
+		t.Fatal("install approval returned before the new project was visible in the registry")
+	}
+	f.svc.bg.Wait()
+	tools := pendingToolsRequest(t, f)
+	if !strings.Contains(tools.Sentence, "gmail_get, gmail_search") || strings.Contains(tools.Sentence, "gmail_send") {
+		t.Fatalf("tools approval is not restricted to the recipe read set: %s", tools.Sentence)
+	}
+	if got := mail.seen(); len(got) == 0 || got[0] != "Bearer "+credCanary {
+		t.Fatalf("the stored credential was not used for the approved server listing: %v", got)
 	}
 }
 

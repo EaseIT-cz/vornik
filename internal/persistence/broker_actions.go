@@ -56,13 +56,14 @@ var ErrBrokerActionNoTransition = errors.New("persistence: broker action not in 
 
 // BrokerAction is one proposed write.
 type BrokerAction struct {
-	ActionID   string
-	ProjectID  string
-	TaskID     string
-	APIKeyID   string // the front agent's key that delegated the task
-	WorkflowID string
-	ActionKind string // the workflow's proposes[].action
-	Tool       string // mcp__<server>__<tool>
+	AccountGuard AccountDecisionGuard `json:"-"`
+	ActionID     string
+	ProjectID    string
+	TaskID       string
+	APIKeyID     string // the front agent's key that delegated the task
+	WorkflowID   string
+	ActionKind   string // the workflow's proposes[].action
+	Tool         string // mcp__<server>__<tool>
 
 	// ArgsJSON is the canonical argument bytes and ArgsSHA256 their hash.
 	// Written only by Stage, and only while the row is unapprovable: from

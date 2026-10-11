@@ -17,6 +17,7 @@ import (
 	"database/sql"
 	"fmt"
 	"os"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -33,6 +34,26 @@ func envOrDefault(key, fallback string) string {
 	return fallback
 }
 
+func postgresTestPort(t *testing.T) int {
+	t.Helper()
+	port, err := strconv.Atoi(envOrDefault("POSTGRES_PORT", "5432"))
+	if err != nil || port < 1 || port > 65535 {
+		t.Fatal("POSTGRES_PORT must be an integer between 1 and 65535")
+	}
+	return port
+}
+
+func TestPostgresTestPort(t *testing.T) {
+	t.Setenv("POSTGRES_PORT", "")
+	if got := postgresTestPort(t); got != 5432 {
+		t.Fatalf("default port = %d", got)
+	}
+	t.Setenv("POSTGRES_PORT", "15439")
+	if got := postgresTestPort(t); got != 15439 {
+		t.Fatalf("configured port = %d", got)
+	}
+}
+
 // freshTestDB creates a per-test database with a unique name and returns a
 // DatabaseConfig pointed at it. Teardown is registered with t.Cleanup, so callers
 // do NOT get (and must not need) a cleanup callback — see the comment at the
@@ -44,7 +65,7 @@ func freshTestDB(t *testing.T) *config.DatabaseConfig {
 	t.Helper()
 	adminCfg := config.DatabaseConfig{
 		Host:     envOrDefault("POSTGRES_HOST", "localhost"),
-		Port:     5432,
+		Port:     postgresTestPort(t),
 		Name:     envOrDefault("POSTGRES_DB", "vornik_test"),
 		User:     envOrDefault("POSTGRES_USER", "vornik"),
 		Password: envOrDefault("POSTGRES_PASSWORD", "vornik"),
@@ -236,8 +257,9 @@ func TestFreshTestDB_DropsItsDatabase(t *testing.T) {
 	}
 
 	admin, err := sql.Open("postgres", fmt.Sprintf(
-		"host=%s port=5432 user=%s password=%s dbname=postgres sslmode=disable",
+		"host=%s port=%d user=%s password=%s dbname=postgres sslmode=disable",
 		envOrDefault("POSTGRES_HOST", "localhost"),
+		postgresTestPort(t),
 		envOrDefault("POSTGRES_USER", "swarmd"),
 		envOrDefault("POSTGRES_PASSWORD", "swarmd"),
 	))

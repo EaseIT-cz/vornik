@@ -2,14 +2,12 @@ package executor
 
 import (
 	"context"
-	"errors"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"vornik.io/vornik/internal/persistence"
-	"vornik.io/vornik/internal/runtime"
 )
 
 // TestShutdown_NilReceiver — defensive: callers may invoke
@@ -42,129 +40,6 @@ func TestShutdown_NoActiveExecutionsY(t *testing.T) {
 	assert.False(t, e.isShuttingDown(),
 		"Stop's reset path must clear shuttingDown so the executor is reusable after Shutdown's no-active fast-path")
 }
-
-// TestTaskLogs_EmptyTaskID — guard against passing through a
-// blank task_id to the runtime; the API surface for "tail logs"
-// must require an id.
-func TestTaskLogs_EmptyTaskID(t *testing.T) {
-	e, _, _, _, _ := setup()
-	_, err := e.TaskLogs(context.Background(), "", 100)
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "task_id is required")
-}
-
-// logRecordingRuntime extends MockRuntime to capture Logs calls
-// so we can assert the right containerID was used.
-type logRecordingRuntime struct {
-	*MockRuntime
-	lastContainerID string
-	lastTail        int
-	logsErr         error
-	logsOut         string
-}
-
-func (l *logRecordingRuntime) Logs(_ context.Context, containerID string, tail int) (string, error) {
-	l.lastContainerID = containerID
-	l.lastTail = tail
-	return l.logsOut, l.logsErr
-}
-
-// TestTaskLogs_LiveActiveExecution — when the executor has an
-// active execution for the task, TaskLogs uses the in-memory
-// handle's containerID and skips the runtime lookup. This is the
-// fast path for "tail logs while the task is running".
-func TestTaskLogs_ActiveExecution(t *testing.T) {
-	rt := &logRecordingRuntime{
-		MockRuntime: NewMockRuntime(),
-		logsOut:     "live log line 1\nlive log line 2",
-	}
-	er := NewMockExecRepo()
-	ar := NewMockArtifactRepo()
-	tr := NewMockTaskRepo()
-	e := NewWithOptions(rt, er, ar, tr, nil)
-
-	// Stash a handle directly so we exercise the active-path
-	// without standing up a real execution.
-	e.mu.Lock()
-	e.activeExecutions["t1"] = &executionHandle{taskID: "t1", containerID: "live-container-42"}
-	e.mu.Unlock()
-
-	out, err := e.TaskLogs(context.Background(), "t1", 50)
-	require.NoError(t, err)
-	assert.Contains(t, out, "live log line", "log content must surface from the runtime")
-	assert.Equal(t, "live-container-42", rt.lastContainerID,
-		"active path must use the handle's containerID")
-	assert.Equal(t, 50, rt.lastTail)
-}
-
-// TestTaskLogs_FallbackToRuntimeLookup — no active handle; the
-// helper falls back to GetContainerByTask and tails that container.
-func TestTaskLogs_RuntimeLookupFallback(t *testing.T) {
-	rt := &logRecordingRuntime{
-		MockRuntime: NewMockRuntime(),
-		logsOut:     "fallback log content",
-	}
-	rt.registerLiveContainer("t-fallback")
-	er := NewMockExecRepo()
-	ar := NewMockArtifactRepo()
-	tr := NewMockTaskRepo()
-	e := NewWithOptions(rt, er, ar, tr, nil)
-
-	out, err := e.TaskLogs(context.Background(), "t-fallback", 25)
-	require.NoError(t, err)
-	assert.Contains(t, out, "fallback log content")
-	assert.Equal(t, 25, rt.lastTail)
-}
-
-// TestTaskLogs_NoContainerFound — runtime returns (nil, nil)
-// meaning the container is gone (ephemeral, removed post-step).
-// The API must return a structured error, NOT empty string, so
-// the caller can render "logs unavailable" instead of "blank".
-func TestTaskLogs_NoContainerFound(t *testing.T) {
-	rt := &logRecordingRuntime{MockRuntime: NewMockRuntime()}
-	e := NewWithOptions(rt, NewMockExecRepo(), NewMockArtifactRepo(), NewMockTaskRepo(), nil)
-
-	_, err := e.TaskLogs(context.Background(), "t-missing", 10)
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "no container found")
-}
-
-// TestTaskLogs_GetContainerError — runtime lookup itself
-// errored (e.g. podman socket unavailable). The error must
-// propagate so the caller knows it's a runtime issue, not just
-// missing container.
-func TestTaskLogs_GetContainerError(t *testing.T) {
-	rt := &errorContainerRuntime{
-		err: errors.New("podman socket down"),
-	}
-	e := NewWithOptions(rt, NewMockExecRepo(), NewMockArtifactRepo(), NewMockTaskRepo(), nil)
-	_, err := e.TaskLogs(context.Background(), "t-err", 10)
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "podman socket down")
-}
-
-// errorContainerRuntime mirrors the MockRuntime surface but
-// makes GetContainerByTask return an error — the only path used
-// by TaskLogs's fallback branch.
-type errorContainerRuntime struct {
-	*MockRuntime
-	err error
-}
-
-func newErrorContainerRuntime(err error) *errorContainerRuntime {
-	return &errorContainerRuntime{MockRuntime: NewMockRuntime(), err: err}
-}
-
-func (e *errorContainerRuntime) GetContainerByTask(_ context.Context, _ string) (*runtime.Container, error) {
-	return nil, e.err
-}
-
-// reference newErrorContainerRuntime so the symbol stays live
-// for tests that don't call it directly through Go's unused-
-// detection. Constructor is exposed for future error-path tests
-// that want to compose the same error semantics into different
-// fixtures.
-var _ = newErrorContainerRuntime
 
 // TestStop_ResetsShuttingDownFlag — regression for the 2026-05-29
 // audit-agent finding: pre-fix Shutdown set shuttingDown=true and

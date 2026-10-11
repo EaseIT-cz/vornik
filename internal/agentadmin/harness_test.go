@@ -48,3 +48,17 @@ func TestHarnessClaimsFor_HermesStatesTheHostApprovalLimit(t *testing.T) {
 		t.Errorf("a non-Hermes harness is told about Hermes's approvals: %s", desktop)
 	}
 }
+
+// GitHub #86 / LLD 21 §D2 (2026-10-08, D6): the grant now accepts any
+// pattern-valid client kind, so an unlisted one must claim no more than a
+// shell-capable harness: its class and its claims are shell_capable's.
+func TestHarnessClass_UnknownKindIsShellCapable(t *testing.T) {
+	for _, kind := range []string{"goose", "generic", "claude-cli", "a1"} {
+		if got := HarnessClassOf(kind); got != HarnessShellCapable {
+			t.Errorf("HarnessClassOf(%q) = %s, want %s", kind, got, HarnessShellCapable)
+		}
+		if got, want := strings.Join(HarnessClaimsFor(kind), "|"), strings.Join(HarnessClaims(HarnessShellCapable), "|"); got != want {
+			t.Errorf("HarnessClaimsFor(%q) = %q, want the shell_capable claims", kind, got)
+		}
+	}
+}

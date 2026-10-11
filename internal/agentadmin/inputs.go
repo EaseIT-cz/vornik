@@ -50,13 +50,14 @@ type StepInput struct {
 
 // DefineWorkflowInput is define_workflow.
 type DefineWorkflowInput struct {
-	Project  string          `json:"project"`
-	Slug     string          `json:"slug"`
-	Purpose  string          `json:"purpose,omitempty"`
-	Steps    []StepInput     `json:"steps"`
-	Inputs   json.RawMessage `json:"inputs"`
-	Egress   json.RawMessage `json:"egress"`
-	Proposes json.RawMessage `json:"proposes,omitempty"`
+	Project   string          `json:"project"`
+	Slug      string          `json:"slug"`
+	Purpose   string          `json:"purpose,omitempty"`
+	Steps     []StepInput     `json:"steps"`
+	Inputs    json.RawMessage `json:"inputs"`
+	Egress    json.RawMessage `json:"egress"`
+	Proposes  json.RawMessage `json:"proposes,omitempty"`
+	Artifacts []string        `json:"artifacts,omitempty"`
 	// Schedule runs the workflow by itself (design §17); nil: on request
 	// only.
 	Schedule *ScheduleInput `json:"schedule,omitempty"`
@@ -84,6 +85,12 @@ type AddMCPServerInput struct {
 	URL        string       `json:"url"`
 	Auth       MCPAuthInput `json:"auth"`
 	WriteTools []string     `json:"write_tools,omitempty"`
+	// Transport is "streamable-http" (the default when empty) or "sse"
+	// (design §6.1, 2026-10-08).
+	Transport string `json:"transport,omitempty"`
+	// Account is which of the user's accounts the server acts as (design
+	// §22.2.1); nil is the default account.
+	Account *AccountInput `json:"account,omitempty"`
 }
 
 // SetBudgetInput is set_budget.
@@ -119,8 +126,7 @@ var (
 	credentialRe  = regexp.MustCompile(`^[A-Z][A-Z0-9_]{0,63}$`)
 	toolNameRe    = regexp.MustCompile(`^[A-Za-z0-9_.-]{1,128}$`)
 	scopeRe       = regexp.MustCompile(`^[A-Za-z0-9:._/-]{1,128}$`)
-	outPathRe     = regexp.MustCompile(`artifacts/out/[A-Za-z0-9_/-]([A-Za-z0-9._/-]*[A-Za-z0-9_/-])?`)
-	outIntentRe   = regexp.MustCompile(`(?i)\b(write|save|put|place|emit|output|produce|store|hand-?off)\b[^.!?\n]{0,60}\b(to|into|as|at)\s*$`)
+	outPathRe     = regexp.MustCompile(`artifacts/out/[A-Za-z0-9._/-]([A-Za-z0-9._/-]*[A-Za-z0-9_/-])?`)
 	maxTextRunes  = 8000
 	maxShortRunes = 300
 )
@@ -132,6 +138,18 @@ const (
 	ProjectRefRule = "The project's slug, or its full id <namespace>--<slug> as list_my_setup shows it."
 	NewSlugRule    = "A bare slug only (a full id is refused here): 2-32 chars: a-z, 0-9, single dashes."
 )
+
+// MCP transports an agent server may declare (design §6.1, 2026-10-08).
+const (
+	TransportStreamableHTTP = "streamable-http"
+	TransportSSE            = "sse"
+)
+
+// MCPTransportRule is the agent-facing statement of add_mcp_server's
+// transport input; the tool schema renders it (design §6.1).
+const MCPTransportRule = "Optional: how Vornik talks to the server. \"streamable-http\" (the default; MCP's current HTTP transport, one POST endpoint) " +
+	"or \"sse\" (the older transport: Vornik POSTs each request to <url>/message, any trailing /sse dropped). Use the one the server serves: " +
+	"a server that answers 404 to streamable HTTP but serves /sse is an SSE server."
 
 // ProjectSlug is projectSlug for callers outside the package that read a
 // verb's raw input (the service's pre-approval tool listing).

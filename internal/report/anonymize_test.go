@@ -543,3 +543,98 @@ func TestAnonymizeBody_PEMLabelAndEmptyMaterialForms(t *testing.T) {
 		t.Errorf("a bare marker must not consume the prose after it:\n%s", body)
 	}
 }
+
+// ---- NewLineScrubber (live-task-observation, Change 2026-10-08, C3) ----
+
+// GitHub #92 (2026-10-08): a secret in a log line is withheld, not truncated.
+// Agentic clients read daemon-held logs through the companion endpoint; the
+// report scrubber's redact-in-place is not enough there, because a partial
+// redaction of a split or unrecognised tail can still leak. Any finding
+// withholds the whole line.
+func TestLineScrubber_PlantedSecretIsWithheld(t *testing.T) {
+	scrub, err := NewLineScrubber("buildhost")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, line := range []string{
+		"auth ok token=ghp_" + strings.Repeat("a1B2c3", 6),
+		"key sk-ant-" + strings.Repeat("x9", 10) + " loaded",
+		"jwt eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.c2lnbmF0dXJl",
+		"-----BEGIN PRIVATE KEY----- MIIEvQIBADANBgkqhkiG9w0BAQEFAASC -----END PRIVATE KEY-----",
+		"aws AKIAABCDEFGHIJKLMNOP ok",
+	} {
+		out, withheld := scrub(line)
+		if !withheld {
+			t.Errorf("not withheld: %q -> %q", line, out)
+		}
+		if out != "" {
+			t.Errorf("a withheld line must return nothing, got %q", out)
+		}
+	}
+}
+
+// GitHub #92 (2026-10-08): identifiers are redacted the way vornikctl report does.
+func TestLineScrubber_HostPathIPEmailRedacted(t *testing.T) {
+	scrub, err := NewLineScrubber("buildhost")
+	if err != nil {
+		t.Fatal(err)
+	}
+	in := "on buildhost read /home/alice/x from 10.1.2.3 for a@b.cz"
+	out, withheld := scrub(in)
+	if withheld {
+		t.Fatalf("no secret here, got withheld for %q", in)
+	}
+	for _, want := range []string{"<host>", "<path>", "<ip>", "<email>"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("missing %s in %q", want, out)
+		}
+	}
+	for _, leak := range []string{"buildhost", "alice", "10.1.2.3", "a@b.cz"} {
+		if strings.Contains(out, leak) {
+			t.Errorf("%q leaked in %q", leak, out)
+		}
+	}
+}
+
+// GitHub #92 (2026-10-08): one implementation, not two. For lines without a
+// finding the line scrubber's output is exactly the report scrubber's.
+func TestLineScrubber_MatchesReportScrubber(t *testing.T) {
+	scrub, err := NewLineScrubber("buildhost")
+	if err != nil {
+		t.Fatal(err)
+	}
+	report, err := scrubber("buildhost")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, line := range []string{
+		"mcp: failed to connect",
+		"step report: missing prerequisite artifacts/out/draft.md",
+		"dial tcp 192.168.0.142:8080: connection refused",
+		"path ~/projects/acme/notes.md on BUILDHOST",
+		"core::fmt::Debug for exec_20260928151318_1c35d6b2b9cedb83",
+	} {
+		got, withheld := scrub(line)
+		if withheld {
+			t.Fatalf("unexpected withhold for %q", line)
+		}
+		if want := report(line); got != want {
+			t.Errorf("line %q: got %q, report scrubber gives %q", line, got, want)
+		}
+	}
+}
+
+// GitHub #92 (2026-10-08): fail closed. If the detector cannot be built there
+// is no scrubber, and the caller serves no companion view.
+func TestLineScrubber_FailsClosed(t *testing.T) {
+	orig := newDetector
+	newDetector = func() (*secrets.MultiDetector, error) { return nil, errors.New("boom") }
+	defer func() { newDetector = orig }()
+	scrub, err := NewLineScrubber("h")
+	if err == nil || scrub != nil {
+		t.Fatalf("want an error and no scrubber, got err=%v scrub=%v", err, scrub != nil)
+	}
+	if !errors.Is(err, errAnonymize) {
+		t.Errorf("want the static errAnonymize, got %v", err)
+	}
+}

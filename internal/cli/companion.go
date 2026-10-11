@@ -117,7 +117,7 @@ var companionKeysCmd = &cobra.Command{
 
 func init() {
 	companionGrantCmd.Flags().StringVarP(&companionGrantProject, "project", "p", "", "Project ID (required) — typically companion-<user>")
-	companionGrantCmd.Flags().StringVar(&companionGrantClient, "client", "", "Host LLM client: claude-code | codex | gemini-cli | opencode | hermes | openclaw (required)")
+	companionGrantCmd.Flags().StringVar(&companionGrantClient, "client", "", "Host LLM client: claude-code | codex | hermes | openclaw | claude-desktop | gemini-cli | opencode, or any other lowercase name (letters, digits, dashes; 2 to 32) for an assistant with no adapter (required)")
 	companionGrantCmd.Flags().StringVar(&companionGrantLabel, "label", "", "Operator-friendly session label (e.g. 'vadim/laptop')")
 	companionGrantCmd.Flags().StringVar(&companionGrantWorkflowsCSV, "workflows", "",
 		"Comma-separated workflow allowlist (omit for 'all project workflows')")
@@ -298,12 +298,47 @@ func runCompanionGrant(cmd *cobra.Command, args []string) error {
 		fmt.Printf("  expires_at: %s\n", out.ExpiresAt.UTC().Format(time.RFC3339))
 	}
 	fmt.Println()
+	// The daemon's record decides, not the flag (review b240 finding 7).
+	if out.ClientKind == "hermes" {
+		printHermesEnvTail(out, client.baseURL, memRead)
+		return nil
+	}
 	fmt.Println("Secret (shown ONCE — copy it now and paste it into your plugin's .mcp.json):")
 	fmt.Println()
 	fmt.Println("  " + out.Secret)
 	fmt.Println()
 	fmt.Println("Auth header: Authorization: Bearer <secret>")
 	return nil
+}
+
+// printHermesEnvTail ends a Hermes grant with the $HERMES_HOME/.env lines to
+// append (design 24, "Setup CLI gaps closed", GitHub #99). The token line is
+// chosen by the key's role as the daemon granted it: a key with memory is
+// the memory provider's (VORNIK_MEMORY_TOKEN), any other a broker key
+// (VORNIK_BROKER_TOKEN). When memory was asked for and not granted (a daemon
+// older than memory keys), the key is neither, so no token line is printed.
+func printHermesEnvTail(out companionGrantOutput, baseURL string, askedMemory bool) {
+	if askedMemory && !out.MemoryRead {
+		fmt.Println("The daemon did not grant memory to this key (it is older than memory keys; upgrade it).")
+		fmt.Println("It is not a Hermes memory key, so no .env line is printed. Secret (shown ONCE):")
+		fmt.Println()
+		fmt.Println("  " + out.Secret)
+		return
+	}
+	name := "VORNIK_BROKER_TOKEN"
+	if out.MemoryRead {
+		name = "VORNIK_MEMORY_TOKEN"
+	}
+	fmt.Println("Append these lines to $HERMES_HOME/.env (default ~/.hermes/.env), written as the")
+	fmt.Println("Hermes user with mode 0600, then restart Hermes. The secret is shown ONCE:")
+	fmt.Println()
+	fmt.Println("VORNIK_URL=" + baseURL)
+	fmt.Println(name + "=" + out.Secret)
+	fmt.Println()
+	fmt.Println("VORNIK_URL is the address this vornikctl used; a Hermes on another machine needs Vornik's https:// address.")
+	if out.MemoryRead && !out.DelegateDisabled {
+		fmt.Println("This memory key can also delegate; grant a Hermes memory key with --no-delegate.")
+	}
 }
 
 func runCompanionKeysList(cmd *cobra.Command, args []string) error {

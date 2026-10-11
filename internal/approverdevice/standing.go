@@ -117,9 +117,14 @@ func (s *Service) DecideGrant(ctx context.Context, d *Device, requestID, shownSH
 // StandingView is one grant on the Standing approvals page.
 type StandingView struct {
 	ID, Namespace, Workflow, Action, Key, State string
-	UsesLeft, MaxUses                           int
-	ExpiresAt                                   time.Time
-	Covered                                     []StandingCovered
+	// Account is the account the grant's writes send from (agent-administered
+	// design §22.2.6), "" when there is nothing to say.
+	Account                            string
+	MadeFor, NowAccount, ReaffirmToken string
+	AccountChanged                     bool
+	UsesLeft, MaxUses                  int
+	ExpiresAt                          time.Time
+	Covered                            []StandingCovered
 }
 
 // StandingCovered is one write a grant approved, with its outcome.
@@ -133,6 +138,7 @@ type StandingPages interface {
 	List(ctx context.Context) ([]StandingView, error)
 	// Change applies pause, unpause, revoke or confirm.
 	Change(ctx context.Context, id, verb string) error
+	Reaffirm(ctx context.Context, id, shown string) error
 }
 
 // SetStandingPages installs the Standing approvals page's backend.
@@ -178,7 +184,7 @@ func (s *Service) standingPage(w http.ResponseWriter, r *http.Request, rest stri
 		return
 	}
 	id, verb, ok := strings.Cut(rest, "/")
-	if !ok || id == "" || !brokergrants.Verbs[verb] || strings.Contains(verb, "/") {
+	if !ok || id == "" || (!brokergrants.Verbs[verb] && verb != "reaffirm") || strings.Contains(verb, "/") {
 		http.NotFound(w, r)
 		return
 	}
@@ -190,7 +196,17 @@ func (s *Service) standingPage(w http.ResponseWriter, r *http.Request, rest stri
 		s.renderStatus(w, http.StatusForbidden, "Refused", "This request did not come from this page.")
 		return
 	}
-	if err := p.Change(r.Context(), id, verb); err != nil {
+	var err error
+	if verb == "reaffirm" {
+		if r.ParseForm() != nil {
+			err = ErrNotDecidable
+		} else {
+			err = p.Reaffirm(r.Context(), id, r.PostForm.Get("shown"))
+		}
+	} else {
+		err = p.Change(r.Context(), id, verb)
+	}
+	if err != nil {
 		s.renderStatus(w, http.StatusConflict, "Not changed", "This standing approval is not in a state that allows that. Reload the page.")
 		return
 	}

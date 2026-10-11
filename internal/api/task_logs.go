@@ -8,6 +8,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"vornik.io/vornik/internal/persistence"
 )
 
 // GetTaskLogs handles GET /api/v1/projects/{projectId}/tasks/{taskId}/logs.
@@ -57,22 +59,36 @@ func (s *Server) taskLogs(ctx context.Context, projectID, taskID string, tail in
 		}
 	}
 
-	if s.taskLogSource != nil {
-		if logs, err := s.taskLogSource.TaskLogs(ctx, taskID, tail); err == nil && strings.TrimSpace(logs) != "" {
-			return trimLines(logs, tail), nil
-		}
-	}
-
-	logs, err := s.persistedTaskLogExcerpt(ctx, projectID, taskID)
+	// GitHub #294: daemon-held state only. This path used to ask the
+	// executor, which ran `podman logs` on the request (process-spawn law).
+	logs, err := s.heldTaskLog().TaskLogs(ctx, taskID, tail)
 	if err != nil {
 		return "", err
 	}
 	return trimLines(logs, tail), nil
 }
 
+// heldTaskLog is the server's daemon-held task log, built from its own
+// repositories and live subscriber.
+func (s *Server) heldTaskLog() HeldTaskLog {
+	h := HeldTaskLog{Tasks: s.taskRepo, Executions: s.executionRepo}
+	if s.liveSub != nil {
+		h.Live = s.liveSub
+	}
+	return h
+}
+
 func (s *Server) persistedTaskLogExcerpt(ctx context.Context, projectID, taskID string) (string, error) {
-	if s.executionRepo != nil {
-		exec, err := s.executionRepo.GetByTaskID(ctx, taskID)
+	return persistedTaskLogExcerpt(ctx, s.taskRepo, s.executionRepo, projectID, taskID)
+}
+
+// persistedTaskLogExcerpt is the newest execution's error, else its result
+// message, else the task's last_error, each only when it belongs to
+// projectID. One implementation for the companion task_logs tool and
+// HeldTaskLog.
+func persistedTaskLogExcerpt(ctx context.Context, tasks persistence.TaskRepository, execs persistence.ExecutionRepository, projectID, taskID string) (string, error) {
+	if execs != nil {
+		exec, err := execs.GetByTaskID(ctx, taskID)
 		if err == nil && exec != nil && exec.ProjectID == projectID {
 			if exec.ErrorMessage != nil && strings.TrimSpace(*exec.ErrorMessage) != "" {
 				return *exec.ErrorMessage, nil
@@ -82,13 +98,13 @@ func (s *Server) persistedTaskLogExcerpt(ctx context.Context, projectID, taskID 
 			}
 		}
 	}
-	if s.taskRepo != nil {
-		task, err := s.taskRepo.Get(ctx, taskID)
+	if tasks != nil {
+		task, err := tasks.Get(ctx, taskID)
 		if err == nil && task != nil && task.ProjectID == projectID && task.LastError != nil && strings.TrimSpace(*task.LastError) != "" {
 			return *task.LastError, nil
 		}
 	}
-	return "", fmt.Errorf("no logs available for task")
+	return "", errNoHeldTaskLog
 }
 
 func resultMessage(data []byte) string {

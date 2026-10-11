@@ -11,6 +11,8 @@ import (
 	"time"
 
 	"github.com/spf13/cobra"
+
+	"vornik.io/vornik/internal/mcpconnect"
 )
 
 // errMCPConnectIncomplete is returned when the CLI has already explained the outcome on stderr.
@@ -287,7 +289,14 @@ func runMCPOAuthStatus(_ *cobra.Command, args []string) error {
 		return nil
 	}
 	if !got.Connected {
-		fmt.Printf("%q is not connected for %s.\n", args[0], mcpScopeLabel())
+		// The same remedy string as the daemon log and the doctor (auth
+		// design §14, GitHub #91).
+		fmt.Printf("%q is not connected for %s: no grant is stored, so the daemon does not dial it.\n", args[0], mcpScopeLabel())
+		if cmd := mcpconnect.ConnectCommand(mcpProject, args[0]); strings.HasPrefix(cmd, "vornikctl ") {
+			fmt.Printf("  Run: %s\n", cmd)
+		} else {
+			fmt.Printf("  To connect it: %s\n", cmd)
+		}
 		return nil
 	}
 	if got.InheritedFrom != "" {

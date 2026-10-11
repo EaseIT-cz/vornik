@@ -126,6 +126,8 @@ type Service struct {
 	// Standing approvals page (broker write-actions design, tier 2).
 	offers   map[string]GrantOfferFunc
 	standing StandingPages
+	// memory backs the memory page (LLD 22, "Memory the user can see").
+	memory MemoryView
 }
 
 // applyLease bounds how long one holder may run an effect before another

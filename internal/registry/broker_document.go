@@ -74,7 +74,7 @@ func (b *WorkflowBroker) Documents() []BrokerDocument {
 		return nil
 	}
 	w := &brokerSchemaWalker{}
-	if err := w.walk("input_schema", b.InputSchema, 1); err != nil {
+	if err := w.walk("input_schema", b.InputSchema, unitMultiplier); err != nil {
 		return nil
 	}
 	sort.Slice(w.documents, func(i, j int) bool { return w.documents[i].Property < w.documents[j].Property })

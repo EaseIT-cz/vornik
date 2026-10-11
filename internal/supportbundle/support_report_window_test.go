@@ -350,9 +350,9 @@ func TestPerSectionCaps(t *testing.T) {
 	}
 }
 
-// TestEmptyVersionAndContainerLogs covers the empty-version fallback and
-// the empty-container-log early return.
-func TestEmptyVersionAndContainerLogs(t *testing.T) {
+// TestEmptyVersionAndTaskLog covers the empty-version fallback and
+// the empty-task-log early return.
+func TestEmptyVersionAndTaskLog(t *testing.T) {
 	b := &Builder{Detector: newTestDetector(t)} // empty version
 	req := Request{TaskID: "t1", MaxSize: 200 << 20}
 	res, err := b.Build(context.Background(), req)
@@ -362,9 +362,9 @@ func TestEmptyVersionAndContainerLogs(t *testing.T) {
 	if !strings.Contains(string(res.Files["version.txt"]), "unknown") {
 		t.Errorf("empty version should fall back to 'unknown': %q", res.Files["version.txt"])
 	}
-	// Empty container logs: no file written.
-	b.WriteContainerLogs(req, res, "   ")
-	if _, ok := res.Files["task/container_logs.txt"]; ok {
-		t.Error("blank container logs should not produce a file")
+	// Empty task log: no file written.
+	b.WriteTaskLog(req, res, "   ")
+	if _, ok := res.Files["task/task_log.txt"]; ok {
+		t.Error("a blank task log should not produce a file")
 	}
 }

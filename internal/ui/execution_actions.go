@@ -15,6 +15,7 @@ import (
 	"vornik.io/vornik/internal/api"
 	"vornik.io/vornik/internal/executor"
 	"vornik.io/vornik/internal/persistence"
+	"vornik.io/vornik/internal/taskcancel"
 )
 
 func (s *Server) ExecutionCancel(w http.ResponseWriter, r *http.Request, execID string) {
@@ -41,6 +42,16 @@ func (s *Server) ExecutionCancel(w http.ResponseWriter, r *http.Request, execID 
 	http.Redirect(w, r, fmt.Sprintf("/ui/executions/%s", execID), http.StatusSeeOther)
 }
 
+// cancelTeardown is the executor as the cancel primitive's Teardown, or nil
+// when none is wired — a nil interface must not become a non-nil Teardown
+// holding a nil value.
+func (s *Server) cancelTeardown() taskcancel.Teardown {
+	if s.executor == nil {
+		return nil
+	}
+	return s.executor
+}
+
 // cancelExecutionOne cancels a single execution (load → scope-check →
 // executor cancel if running → mark task + execution CANCELLED). Returns
 // false (skipped) when the execution is missing, scope-invisible, or the
@@ -57,26 +68,24 @@ func (s *Server) cancelExecutionOne(ctx context.Context, r *http.Request, execID
 	if exec.ProjectID != "" && !api.RequestAllowsProject(r, exec.ProjectID) {
 		return false
 	}
-	// ONE conditional write on the TASK row, gated on its live status
-	// (scheduler design §4.10): pre-fix this wrote CANCELLED unchecked, so a
-	// task that had finished was recorded as cancelled.
-	moved, err := s.taskRepo.TransitionConditional(ctx, exec.TaskID,
-		persistence.CancellableTaskStatuses(), persistence.TaskStatusCancelled, persistence.TransitionOpts{})
+	// The shared cancel primitive on the TASK row (05-scheduler.md §4.11): one
+	// conditional write gated on its live status (§4.10 — pre-fix this wrote
+	// CANCELLED unchecked), then teardown asked of the executor's live map
+	// (§4.7), the parent unblock and the child cascade. This site used to do
+	// the teardown but skip the last two (§4.11 site #4).
+	outcome, err := taskcancel.Cancel(ctx, s.taskRepo, s.cancelTeardown(), exec.TaskID,
+		persistence.CancellableTaskStatuses())
 	if err != nil {
 		s.logger.Warn().Err(err).Str("execution_id", execID).Str("task_id", exec.TaskID).
 			Msg("execution cancel: conditional CANCELLED write failed")
 		return false
 	}
-	if !moved {
+	if !outcome.Transitioned {
 		return false
 	}
-	// Teardown asked of the executor's live map, after the transition — not
-	// decided by an execution-status snapshot (05-scheduler.md §4.7).
-	if s.executor != nil {
-		if _, cerr := s.executor.CancelIfActive(exec.TaskID); cerr != nil {
-			s.logger.Warn().Err(cerr).Str("task_id", exec.TaskID).
-				Msg("execution cancel: container did not stop — it may still be running")
-		}
+	if outcome.TeardownErr != nil {
+		s.logger.Warn().Err(outcome.TeardownErr).Str("task_id", exec.TaskID).
+			Msg("execution cancel: container did not stop — it may still be running")
 	}
 	// The execution row carries no lease and is written only once the task
 	// gate passed; the task row is canonical (§4.10).

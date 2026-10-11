@@ -69,10 +69,14 @@ func NewConfig(enabled bool, trustedProxies []string, header string) (Config, er
 			if ip == nil {
 				return Config{}, fmt.Errorf("realip: invalid trusted proxy %q: not an IP or CIDR", raw)
 			}
-			if ip.To4() != nil {
-				raw += "/32"
-			} else {
+			// Choose the suffix by the literal's syntax, not its parsed
+			// form: an IPv4-mapped IPv6 literal (::ffff:a.b.c.d) has a
+			// non-nil To4, and "/32" on it parsed as the IPv6 network ::/32
+			// (GitHub #103, review 5e1a, 2026-10-08).
+			if strings.Contains(raw, ":") {
 				raw += "/128"
+			} else {
+				raw += "/32"
 			}
 		}
 		_, cidr, err := net.ParseCIDR(raw)

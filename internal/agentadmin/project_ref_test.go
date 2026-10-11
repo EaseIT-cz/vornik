@@ -55,7 +55,15 @@ func TestVerbs_AcceptAProjectsFullID(t *testing.T) {
 			return AddMCPServerInput{Project: ref, Name: "mail", URL: "https://mail.example/mcp", Auth: MCPAuthInput{Mode: "none"}}
 		}, finance},
 		{VerbSetBudget, func(ref string) any { return SetBudgetInput{Project: ref, MonthlyUSD: 1.5} }, finance},
-		{VerbAddAPI, func(ref string) any { a := fioAPI(); a.Project = ref; a.Name = "bank"; return a }, finance},
+		// The server above holds FIO_TOKEN at this host: the API shares it, one
+		// account (design §22.2.1, two credentials at one host need two labels).
+		{VerbAddAPI, func(ref string) any {
+			a := fioAPI()
+			a.Project = ref
+			a.Name = "bank"
+			a.Auth.Credential = "FIO_TOKEN"
+			return a
+		}, finance},
 		{VerbRequestCredential, func(ref string) any {
 			return RequestCredentialInput{Project: ref, Name: "FIO_TOKEN", Purpose: "read the balance", Kind: "secret"}
 		}, finance},

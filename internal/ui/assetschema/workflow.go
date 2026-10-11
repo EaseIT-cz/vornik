@@ -173,6 +173,9 @@ var WorkflowDeferredPaths = []string{
 	"broker.egress.schema",
 	"broker.egress.max_bytes",
 	"broker.egress.provenance",
+	// Additional whole-file reach (#318) stays YAML-only alongside the
+	// JSON egress contract and is approved through define_workflow.
+	"broker.egress.artifacts",
 	"broker.proposes",
 	// Agent schedules (agent-administered Vornik design §17): rendered by the
 	// agent admin verbs and approved on a device, never edited in a form.

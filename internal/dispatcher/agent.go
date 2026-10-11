@@ -25,6 +25,7 @@ import (
 	"vornik.io/vornik/internal/ratelimit"
 	"vornik.io/vornik/internal/registry"
 	"vornik.io/vornik/internal/sandboxtool"
+	"vornik.io/vornik/internal/taskcancel"
 )
 
 // AuditRepository is the subset of persistence.ToolAuditRepository used by the dispatcher.
@@ -613,6 +614,18 @@ func NewAgent(
 		logger:                a.logger,
 	}
 	return a
+}
+
+// SetTaskTeardown wires the executor that cancel_task hands to the shared
+// cancel primitive, so a chat cancel stops the running execution, unblocks a
+// waiting parent and cascades to children (05-scheduler.md §4.11, GitHub
+// #300). Writes through to the tool executor, which NewAgent built from a copy
+// of the agent's fields. Nil leaves the cancel as the row write only.
+func (a *Agent) SetTaskTeardown(td taskcancel.Teardown) {
+	if a == nil || a.toolExecutor == nil {
+		return
+	}
+	a.toolExecutor.taskTeardown = td
 }
 
 // SetChannelThreadReader wires the reader backing get_channel_thread. Late-bound

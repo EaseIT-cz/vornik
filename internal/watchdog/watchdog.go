@@ -46,6 +46,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/rs/zerolog"
 	"vornik.io/vornik/internal/persistence"
+	"vornik.io/vornik/internal/taskcancel"
 )
 
 // Action is the policy applied when the watchdog finds a stuck
@@ -270,9 +271,12 @@ type Watchdog struct {
 	taskRepo      TaskRepository        // optional; required only when Action=fail
 	outcomeRepo   StepOutcomeRepository // optional; nil skips the pending-outcome leg
 	parentSweeper ParentUnblockSweeper  // optional; nil skips the stuck-parent leg
-	logger        zerolog.Logger
-	metrics       *Metrics
-	now           func() time.Time
+	// taskTeardown is the cancel primitive's post-write work for the
+	// approval-timeout cancel (GitHub #304); nil writes only.
+	taskTeardown taskcancel.Teardown
+	logger       zerolog.Logger
+	metrics      *Metrics
+	now          func() time.Time
 	// leaderGate gates each scan on the elected leader so two
 	// daemons don't both detect + act on the same stuck row.
 	// Especially important when cfg.Action=fail — duplicate
@@ -563,14 +567,21 @@ func (w *Watchdog) sweepExpiredApprovals(ctx context.Context) {
 		if t == nil || !t.UpdatedAt.Before(cutoff) {
 			continue
 		}
-		moved, err := w.taskRepo.TransitionConditional(ctx, t.ID,
-			[]persistence.TaskStatus{persistence.TaskStatusAwaitingApproval},
-			persistence.TaskStatusCancelled, persistence.TransitionOpts{})
+		// Through the cancel primitive (05-scheduler §4.11, GitHub #304): once
+		// the row moved, the task's parent is unblocked and its children are
+		// cancelled. An approval-parked task has no live execution, so the
+		// teardown's stop is a no-op.
+		outcome, err := taskcancel.Cancel(ctx, w.taskRepo, w.taskTeardown, t.ID,
+			[]persistence.TaskStatus{persistence.TaskStatusAwaitingApproval})
 		if err != nil {
 			w.logger.Warn().Err(err).Str("task_id", t.ID).Msg("watchdog: approval-timeout cancel failed")
 			continue
 		}
-		if !moved {
+		if outcome.TeardownErr != nil {
+			w.logger.Warn().Err(outcome.TeardownErr).Str("task_id", t.ID).
+				Msg("watchdog: approval-timeout cancel could not stop an execution")
+		}
+		if !outcome.Transitioned {
 			// Approved (or otherwise moved on) since List read it: no longer
 			// awaiting approval, so the timeout no longer applies.
 			continue
@@ -650,6 +661,19 @@ func (w *Watchdog) reconcilePendingOutcomes(ctx context.Context) {
 		w.logger.Info().Int64("rows_swept", n).
 			Msg("watchdog: relabelled pending_validation outcomes under terminal executions")
 	}
+}
+
+// WithTaskTeardown wires what a cancel owes once the row moved (05-scheduler
+// §4.11; GitHub #304): the approval-timeout sweep cancels through
+// taskcancel.Cancel, which then unblocks the task's parent and cancels its
+// children. Nil keeps the write only (the stranded-parent sweep stays the
+// backstop). Chainable, like WithParentUnblockSweeper.
+func (w *Watchdog) WithTaskTeardown(td taskcancel.Teardown) *Watchdog {
+	if w == nil {
+		return w
+	}
+	w.taskTeardown = td
+	return w
 }
 
 // WithParentUnblockSweeper wires the stranded-parent backstop. Chainable so the

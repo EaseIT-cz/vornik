@@ -14,6 +14,7 @@ import (
 	"vornik.io/vornik/internal/persistence"
 	"vornik.io/vornik/internal/scheduler"
 	"vornik.io/vornik/internal/taintlineage"
+	"vornik.io/vornik/internal/taskcancel"
 )
 
 // Phase 24 of the conversational task lifecycle (LLD:
@@ -483,46 +484,29 @@ func (s *Server) AnswerCheckpoint(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Budget "abandon": cancel the parked task via a guarded conditional update
-	// (AWAITING_INPUT→CANCELLED). Same F2 race guard as the resume paths.
-	if budgetAbandon {
-		cancelled, cerr := s.taskRepo.TransitionConditional(r.Context(), taskID,
-			[]persistence.TaskStatus{persistence.TaskStatusAwaitingInput},
-			persistence.TaskStatusCancelled,
-			persistence.TransitionOpts{ClearLease: true},
-		)
+	// Budget "abandon", and taint-review "cancel" (blocking the tainted write):
+	// cancel the parked task (AWAITING_INPUT→CANCELLED), same F2 race guard as
+	// the resume paths, through the cancel primitive (05-scheduler §4.11,
+	// GitHub #304): the parent unblock and the child cascade after the write.
+	if budgetAbandon || taintCancel {
+		what := "budget abandon"
+		if taintCancel {
+			what = "taint cancel"
+		}
+		outcome, cerr := taskcancel.Cancel(r.Context(), s.taskRepo, s.cancelTeardown(), taskID,
+			[]persistence.TaskStatus{persistence.TaskStatusAwaitingInput})
 		if cerr != nil {
-			s.logger.Error().Err(cerr).Str("taskId", taskID).Msg("AnswerCheckpoint: budget abandon failed")
+			s.logger.Error().Err(cerr).Str("taskId", taskID).Msg("AnswerCheckpoint: " + what + " failed")
 			respondError(w, http.StatusInternalServerError, "INTERNAL_ERROR", "failed to cancel task")
 			return
 		}
-		if !cancelled {
+		if !outcome.Transitioned {
 			respondError(w, http.StatusConflict, "INVALID_STATE", "task is no longer awaiting input")
 			return
 		}
-		respondJSON(w, http.StatusOK, map[string]any{
-			"messageId": answer.ID,
-			"cancelled": true,
-		})
-		return
-	}
-
-	// Taint-review "cancel": block the tainted write by cancelling the parked
-	// task (AWAITING_INPUT→CANCELLED), same F2 race guard as budget abandon.
-	if taintCancel {
-		cancelled, cerr := s.taskRepo.TransitionConditional(r.Context(), taskID,
-			[]persistence.TaskStatus{persistence.TaskStatusAwaitingInput},
-			persistence.TaskStatusCancelled,
-			persistence.TransitionOpts{ClearLease: true},
-		)
-		if cerr != nil {
-			s.logger.Error().Err(cerr).Str("taskId", taskID).Msg("AnswerCheckpoint: taint cancel failed")
-			respondError(w, http.StatusInternalServerError, "INTERNAL_ERROR", "failed to cancel task")
-			return
-		}
-		if !cancelled {
-			respondError(w, http.StatusConflict, "INVALID_STATE", "task is no longer awaiting input")
-			return
+		if outcome.TeardownErr != nil {
+			s.logger.Error().Err(outcome.TeardownErr).Str("taskId", taskID).
+				Msg("AnswerCheckpoint: " + what + ": container did not stop — it may still be running")
 		}
 		respondJSON(w, http.StatusOK, map[string]any{
 			"messageId": answer.ID,
@@ -915,11 +899,28 @@ func (s *Server) simpleStatusFlip(
 		}
 	}
 
-	opts := persistence.TransitionOpts{}
-	if to == persistence.TaskStatusQueued {
-		opts.ClearLease = true
+	var (
+		ok  bool
+		err error
+	)
+	if to == persistence.TaskStatusCancelled {
+		// reject: through the cancel primitive (05-scheduler §4.11 site #20,
+		// GitHub #304): the parent unblock and the child cascade after the
+		// write.
+		var outcome taskcancel.Outcome
+		outcome, err = taskcancel.Cancel(r.Context(), s.taskRepo, s.cancelTeardown(), taskID, from)
+		ok = outcome.Transitioned
+		if outcome.TeardownErr != nil {
+			s.logger.Error().Err(outcome.TeardownErr).Str("taskId", taskID).
+				Msg(verb + ": container did not stop — it may still be running")
+		}
+	} else {
+		opts := persistence.TransitionOpts{}
+		if to == persistence.TaskStatusQueued {
+			opts.ClearLease = true
+		}
+		ok, err = s.taskRepo.TransitionConditional(r.Context(), taskID, from, to, opts)
 	}
-	ok, err := s.taskRepo.TransitionConditional(r.Context(), taskID, from, to, opts)
 	if err != nil {
 		s.logger.Error().Err(err).Str("taskId", taskID).Msg(verb + ": transition failed")
 		respondError(w, http.StatusInternalServerError, "INTERNAL_ERROR", "failed to "+verb+" task")

@@ -17,6 +17,7 @@ import (
 	"sync/atomic"
 	"syscall"
 	"time"
+	"vornik.io/vornik/internal/requestguard"
 
 	"github.com/rs/zerolog"
 
@@ -108,25 +109,36 @@ type stdioResult struct {
 	err    error
 }
 
-// Connect creates and initializes an MCP client for the given server config.
-// For stdio transport, it starts the subprocess. For SSE and
-// streamable-http, it validates the URL.
-func Connect(ctx context.Context, cfg ServerConfig, logger zerolog.Logger) (*Client, error) {
-	// Per-request HTTP timeout for SSE / streamable-http. Default 30s;
-	// a server may raise it (cfg.TimeoutSeconds) when its tools run long
-	// (e.g. scraper web_fetch against slow targets).
+// connectHTTPClient is the client Connect uses for SSE / streamable-http:
+// cfg.HTTPClient when set (the agent SSRF guard), else one with the
+// per-request timeout. Default 30s; a server may raise it
+// (cfg.TimeoutSeconds) when its tools run long (e.g. scraper web_fetch
+// against slow targets).
+func connectHTTPClient(cfg ServerConfig) *http.Client {
+	if cfg.HTTPClient != nil {
+		return cfg.HTTPClient
+	}
 	httpTimeout := 30 * time.Second
 	if cfg.TimeoutSeconds > 0 {
 		httpTimeout = time.Duration(cfg.TimeoutSeconds) * time.Second
 	}
-	httpClient := cfg.HTTPClient
-	if httpClient == nil {
-		httpClient = &http.Client{Timeout: httpTimeout}
+	return &http.Client{Timeout: httpTimeout}
+}
+
+// Connect creates and initializes an MCP client for the given server config.
+// For stdio transport, it starts the subprocess. For SSE and
+// streamable-http, it validates the URL.
+//
+// A config carrying NotDialledReason is refused before any I/O: a second gate
+// behind the callers that withhold it (auth design §14, GitHub #91).
+func Connect(ctx context.Context, cfg ServerConfig, logger zerolog.Logger) (*Client, error) {
+	if cfg.NotDialledReason != "" {
+		return nil, fmt.Errorf("mcp server %s not dialled: %s", cfg.Name, cfg.NotDialledReason)
 	}
 	c := &Client{
 		config:     cfg,
 		logger:     logger,
-		httpClient: httpClient,
+		httpClient: connectHTTPClient(cfg),
 		pending:    make(map[int64]chan stdioResult),
 	}
 
@@ -277,8 +289,13 @@ func (c *Client) CallTool(ctx context.Context, name string, args json.RawMessage
 			Str("server", c.config.Name).
 			Str("tool", name).
 			Msg("mcp: credential rejected — refreshing the grant and retrying once")
+		var rejected *CallError
+		actualRejection := errors.As(err, &rejected) && (rejected.Status == 401 || rejected.Status == 403)
 		c.config.AuthInvalidator(ctx)
 		resp, err = c.call(ctx, "tools/call", params)
+		if actualRejection {
+			err = requestguard.AfterRejection(err)
+		}
 		if err != nil {
 			c.logger.Error().Err(err).
 				Str("server", c.config.Name).
@@ -700,6 +717,9 @@ func (c *Client) notify(method string, params any) error {
 				Msg("mcp: streamable-http notify skipped — credential unavailable")
 			return nil
 		}
+		if err := requestguard.Validate(httpReq.Context()); err != nil {
+			return err
+		}
 		resp, err := c.httpClient.Do(httpReq)
 		if err != nil {
 			// Fire-and-forget: a missing ack must not fail Connect.
@@ -825,6 +845,9 @@ func (c *Client) callSSE(ctx context.Context, method string, params any) (json.R
 		httpReq.Header.Set("X-Execution-ID", v)
 	}
 
+	if err := requestguard.Validate(httpReq.Context()); err != nil {
+		return nil, err
+	}
 	resp, err := c.httpClient.Do(httpReq)
 	if err != nil {
 		return nil, fmt.Errorf("sse request: %w", err)
@@ -1041,6 +1064,9 @@ func (c *Client) callStreamableHTTP(ctx context.Context, method string, params a
 		return nil, err
 	}
 
+	if err := requestguard.Validate(httpReq.Context()); err != nil {
+		return nil, err
+	}
 	resp, err := c.httpClient.Do(httpReq)
 	if err != nil {
 		return nil, fmt.Errorf("streamable-http request: %w", err)

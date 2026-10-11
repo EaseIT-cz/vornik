@@ -27,6 +27,7 @@ import (
 	"vornik.io/vornik/internal/registry"
 	"vornik.io/vornik/internal/safepath"
 	"vornik.io/vornik/internal/sandboxtool"
+	"vornik.io/vornik/internal/taskcancel"
 	"vornik.io/vornik/internal/textsim"
 	"vornik.io/vornik/internal/untrusted"
 )
@@ -282,6 +283,10 @@ type ToolExecutor struct {
 	// container, backing get_channel_thread. Nil disables the tool — the
 	// lead is told the capability is unavailable rather than erroring.
 	channelThreads ChannelThreadReader
+	// taskTeardown is handed to cancel_task so a cancel stops the running
+	// execution, unblocks a waiting parent and cascades to children
+	// (05-scheduler.md §4.11, GitHub #300). Nil means the write only.
+	taskTeardown taskcancel.Teardown
 	// problemReports backs report_problem. Nil omits the tool from the
 	// catalogue rather than exposing one that always fails.
 	problemReports ProblemReportBuilder
@@ -1425,9 +1430,10 @@ func (te *ToolExecutor) cancelTask(ctx context.Context, argsJSON string, allowed
 	}
 
 	action := chat.Action{
-		Type:    chat.ActionCancelTask,
-		TaskID:  args.TaskID,
-		Confirm: true, // authorized above, and only there
+		Type:     chat.ActionCancelTask,
+		TaskID:   args.TaskID,
+		Confirm:  true, // authorized above, and only there
+		Teardown: te.taskTeardown,
 	}
 	result, err := chat.ExecuteAction(ctx, action, te.taskRepo, te.execRepo, nil)
 	if err != nil {

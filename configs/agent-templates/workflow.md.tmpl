@@ -10,6 +10,9 @@ broker:
     output: "result.json"
     max_bytes: {{.MaxBytes}}
     schema: {{.EgressSchema}}
+{{- if .Artifacts}}
+    artifacts: {{.Artifacts}}
+{{- end}}
 {{- if .Proposes}}
   proposes:
 {{- range .Proposes}}
@@ -54,6 +57,9 @@ Earlier steps' files are in `artifacts/out/`.
 {{end}}
 {{- if .Last}}
 Write `artifacts/out/result.json` with exactly the approved egress shape.
+{{- if $.Artifacts}}
+Also produce only these approved additional output files under `artifacts/out/`: {{$.Artifacts}}.
+{{- end}}
 {{- if $.Proposes}}
 To propose a change, also write a file with exactly this shape, its args
 matching the action's schema; each one waits for the user's approval:

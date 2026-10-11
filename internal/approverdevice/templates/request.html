@@ -1,5 +1,5 @@
 {{define "request.html"}}{{template "head" (page "Review" 0)}}
-<nav><a href="/ui/approve/">Approvals</a><a href="/ui/approve/standing">Standing approvals</a><a href="/ui/approve/devices">Devices</a></nav>
+{{template "nav" ""}}
 <h1>Review</h1>
 {{with .Notice}}<p class="err">{{.}}</p>{{end}}
 {{with .Desc}}<div class="card plain"><p class="summary">{{.Summary}}</p>

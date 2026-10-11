@@ -31,9 +31,11 @@ import (
 	"vornik.io/vornik/internal/forgereview"
 	"vornik.io/vornik/internal/llmspend"
 	"vornik.io/vornik/internal/mcp"
+	"vornik.io/vornik/internal/mcpconnect"
 	"vornik.io/vornik/internal/mediahandles"
 	"vornik.io/vornik/internal/mediakind"
 	"vornik.io/vornik/internal/memoryfirewall"
+	"vornik.io/vornik/internal/observability/logring"
 	"vornik.io/vornik/internal/onboarding"
 	"vornik.io/vornik/internal/persistence"
 	"vornik.io/vornik/internal/postmortem"
@@ -357,6 +359,8 @@ type MCPRegistrySource interface {
 }
 
 // TaskLogSource provides best-effort task logs for API/CLI/UI debugging.
+// HeldTaskLog is the one implementation a daemon wires (GitHub #294): an
+// implementation that spawns a process must not be wired to a request path.
 type TaskLogSource interface {
 	TaskLogs(ctx context.Context, taskID string, tail int) (string, error)
 }
@@ -579,6 +583,9 @@ type ForkExecutorResult struct {
 // Server handles HTTP API requests for the data plane.
 // This is the primary external interface for all execution-related traffic.
 type Server struct {
+	forgeIssueResolver ForgeIssueResolver
+	forgeIssueBudget   apiBudgetTracker
+
 	logger zerolog.Logger
 	// mcpOAuth serves the MCP OAuth connect endpoints. Nil = the endpoints
 	// answer 503 (no token store wired).
@@ -594,6 +601,7 @@ type Server struct {
 	executionQualityScores persistence.ExecutionQualityScoreRepository
 	artifactRepo           persistence.ArtifactRepository
 	artifactOpener         ArtifactOpener
+	artifactDownloads      artifactDownloadSigner
 	// taskWaitHub releases companion result(wait_seconds) long-polls on a
 	// task's terminal transition (broker design §6). nil: wait_seconds is
 	// accepted and answered immediately.
@@ -667,6 +675,25 @@ type Server struct {
 	// (e.g. vornik.example.com proxied to localhost:7070).
 	// Empty == same-origin only.
 	liveAllowedOrigins []string
+	// liveLogsState is the agent log path's state (scrubber, per-key limits,
+	// test seams), built once by liveLogs() (live-task-observation design,
+	// Change 2026-10-08, GitHub #92).
+	liveLogsState *liveLogState
+	liveLogsOnce  sync.Once
+
+	// Reuse of a recent read-only result (broker design §6b, GitHub #119
+	// item 9): the in-memory cache, built on first use, and the reach hash a
+	// reuse is pinned to (nil: reuse off, companion-result-reuse false).
+	resultReuse     *resultReuseCache
+	resultReuseOnce sync.Once
+	reuseReachHash  func(ctx context.Context, projectID, workflowID string) (string, error)
+	// daemonLogRing backs the daemon_log tool (Change 2026-10-08 C6); nil
+	// when not wired, and the tool then answers that it is unavailable.
+	daemonLogRing *logring.Ring
+	// diagMCPPending and diagMCPNoGrant override the doctor handlers' MCP
+	// sources for the doctor tool (tests); nil uses doctorHandlers'.
+	diagMCPPending func() (int, []mcp.PendingServer)
+	diagMCPNoGrant func() []mcpconnect.NoGrant
 	// hintRepo persists operator-injected hints for live
 	// executions (Feature #3 Phase C). nil → POST /executions/
 	// {id}/hints returns 503.
@@ -970,7 +997,13 @@ type Server struct {
 	// to kill -9. Atomic so the SIGTERM goroutine and every probe
 	// request can read/write it without taking a mutex on the
 	// hot path.
-	draining        atomic.Bool
+	draining atomic.Bool
+	// drainState is the bit's writer side: the operator drain lease
+	// (GitHub #290) and the permanent SIGTERM drain; see drain.go.
+	drainState
+	// inflight counts in-flight chat-proxy requests for the deploy idle
+	// gate (GitHub #97); see inflight.go.
+	inflight        longRequestCounter
 	rateLimiter     ratelimit.ProjectLimiter
 	queue           *queue.Queue
 	projectRegistry *registry.Registry
@@ -1052,7 +1085,6 @@ type Server struct {
 	// is called before exec.
 	gitReceiveGuards func(ctx context.Context, projectID string) error
 	executor         ExecutorInterface
-	taskLogSource    TaskLogSource
 	config           *config.Config
 	configSnapshot   *config.SnapshotHolder
 	stepPromptRepo   persistence.StepPromptRepository
@@ -1079,6 +1111,11 @@ type Server struct {
 	// field is unset, so deployments that don't run the memory
 	// subsystem (e.g. tests, minimal harnesses) continue to work.
 	memoryCompanion MemoryCompanionAdapter
+
+	// publicOrigin is the daemon's public origin (Config.PublicOrigin), read
+	// per call; memory_list's export_url is absolute when it is set (LLD 22,
+	// "Memory the user can see", GitHub #119 item 6).
+	publicOrigin func() string
 	// skillStore backs the knowledge-skill companion MCP tools
 	// (skill_propose/search/get/list/approve/reject). Nil-safe: those
 	// tools return "skill store not wired on this daemon" when unset,
@@ -1155,6 +1192,10 @@ type Server struct {
 	// instead of waiting for the post-step batch from result.json.
 	// nil makes the endpoint return 503; production always wires it.
 	toolAuditRepo persistence.ToolAuditRepository
+	// toolAuditOpaqueWarn fires once per process when toolAuditRepo cannot
+	// return the row it stored, so the live tool events withhold their I/O
+	// (GitHub #293; see tool_audit_handlers.go).
+	toolAuditOpaqueWarn sync.Once
 	// apiGatewayClient is the third-party API gateway seam behind the
 	// agent-facing query_api/list_apis endpoints (design
 	// https://docs.vornik.io
@@ -2419,20 +2460,12 @@ func (s *Server) BuildVersion() string {
 	return strings.TrimSpace(s.buildVersion)
 }
 
-// WithExecutor sets the executor.
+// WithExecutor sets the executor. It is never a log source: before GitHub
+// #294 this option type-asserted the executor's TaskLogs (podman logs) into
+// the task-log routes. They read HeldTaskLog now.
 func WithExecutor(e ExecutorInterface) ServerOption {
 	return func(s *Server) {
 		s.executor = e
-		if src, ok := e.(TaskLogSource); ok {
-			s.taskLogSource = src
-		}
-	}
-}
-
-// WithTaskLogSource sets the source used by task log endpoints.
-func WithTaskLogSource(src TaskLogSource) ServerOption {
-	return func(s *Server) {
-		s.taskLogSource = src
 	}
 }
 
@@ -2482,6 +2515,13 @@ func WithMemorySearcher(ms MemorySearcher) ServerOption {
 func WithMemoryCompanionAdapter(a MemoryCompanionAdapter) ServerOption {
 	return func(s *Server) {
 		s.memoryCompanion = a
+	}
+}
+
+// WithPublicOrigin wires the daemon's public origin, read per call.
+func WithPublicOrigin(fn func() string) ServerOption {
+	return func(s *Server) {
+		s.publicOrigin = fn
 	}
 }
 

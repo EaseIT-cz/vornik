@@ -30,6 +30,28 @@ func (s *Server) isAdminClassRequest(r *http.Request) bool {
 	return key != "" && s.isAdminClassKey(key)
 }
 
+// requireAdminClass gates a doctor route on isAdminClassRequest and writes the
+// refusal. Unlike requireAdminGate it answers the same in both editions: the
+// doctor ships in Community, where the admin surface answers 501.
+//
+// Auth off passes (the trusted local operator). Auth on with no server wired
+// fails CLOSED with 503: there is nothing to check the caller against.
+func (h *DoctorHandlers) requireAdminClass(w http.ResponseWriter, r *http.Request) bool {
+	if !IsAuthEnabledFromContext(r.Context()) {
+		return true
+	}
+	if h.server == nil {
+		respondError(w, http.StatusServiceUnavailable, "SERVICE_UNAVAILABLE", "server not wired; cannot authenticate")
+		return false
+	}
+	if !h.server.isAdminClassRequest(r) {
+		respondError(w, http.StatusForbidden, "ADMIN_SCOPE_REQUIRED",
+			"the doctor needs an admin-class key (admin.allowed_keys, with admin.enabled) or an admin session")
+		return false
+	}
+	return true
+}
+
 // IsBudgetCheckpoint reports whether a checkpoint message's metadata is a
 // per-task cost-governor budget decision (decision.kind == "budget"), so the
 // answer handlers (API + UI) can branch onto the resume-with-optional-top-up

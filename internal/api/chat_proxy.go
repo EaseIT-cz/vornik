@@ -395,6 +395,15 @@ func (s *Server) ChatCompletions(w http.ResponseWriter, r *http.Request) {
 	if resp.Model == "" {
 		resp.Model = provider.Model()
 	}
+	// Count a response cut off at the output cap, per role and route model
+	// (GitHub #100; 09-agent-runtime-contract.md §8.4). Both labels are
+	// bounded by the calling project's swarm (security review 2026-10-08):
+	// the role header and the request's model are caller-supplied, so an
+	// undeclared value is counted as "other", never as a new series.
+	if len(resp.Choices) > 0 && resp.Choices[0].FinishReason == "length" {
+		role, model := s.lengthCutoffLabels(projectID, r.Header.Get("X-Vornik-Role"), provider.Model())
+		s.apiMetrics.RecordChatProxyLengthCutoff(role, model)
+	}
 	// Surface the context-budget tier to the client via response
 	// header + bump the per-project counter. Computed off the actual
 	// prompt-token count the upstream provider reported, divided by

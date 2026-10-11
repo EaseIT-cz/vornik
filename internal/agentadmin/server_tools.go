@@ -99,7 +99,12 @@ func (r *Renderer) approveServerTools(st *State, raw json.RawMessage) (Change, e
 			Read: tools, Write: a.Write}}},
 	}
 	expect(st, c.ReadSet, projectPath(pid))
-	c.Sentence = "The server " + in.Server + " at " + hostOf(server.URL) + " is now connected for " + pid +
+	// The account it signed in as (design §22.2.5).
+	phrase := connectionPhrase(st, p, in.Server)
+	if phrase != "" {
+		c.accounts = map[string]string{in.Server: phrase}
+	}
+	c.Sentence = "The server " + in.Server + " at " + hostOf(server.URL) + asAccount(phrase) + " is now connected for " + pid +
 		" and offers these " + strconv.Itoa(len(tools)) + " tools: " + strings.Join(tools, ", ") +
 		". Allow your assistant (" + ns + ") to use them in this project?"
 	if len(a.Write) > 0 {

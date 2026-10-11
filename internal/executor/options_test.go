@@ -270,51 +270,6 @@ func TestCleanExcludesFor(t *testing.T) {
 	assert.Equal(t, []string{"operator"}, got)
 }
 
-// TestTaskLogs_RequiresID — entry-point validation. No repo / runtime
-// touch when the ID is empty.
-func TestTaskLogs_RequiresID(t *testing.T) {
-	e, _, _, _, _ := setup()
-	_, err := e.TaskLogs(context.Background(), "", 10)
-	assert.Error(t, err)
-}
-
-// TestTaskLogs_NoActiveExecutionFallsBackToContainerLookup — when
-// the task isn't in activeExecutions, TaskLogs queries the runtime
-// for a matching container. Without one, it returns a not-found
-// error so the operator sees the real reason.
-func TestTaskLogs_NoActiveExecutionFallsBackToContainerLookup(t *testing.T) {
-	e, rt, _, _, _ := setup()
-	_ = rt // MockRuntime.GetContainerByTask returns nil by default.
-	_, err := e.TaskLogs(context.Background(), "task-x", 10)
-	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "no container found")
-}
-
-// TestTaskLogs_ActiveExecutionUsesContainerID — when the task IS
-// active and has a containerID, TaskLogs calls runtime.Logs.
-func TestTaskLogs_ActiveExecutionUsesContainerID(t *testing.T) {
-	e, rt, _, _, _ := setup()
-	// Stuff in an active execution with a containerID.
-	e.mu.Lock()
-	e.activeExecutions["task-x"] = &executionHandle{taskID: "task-x", containerID: "c1"}
-	e.mu.Unlock()
-	_, err := e.TaskLogs(context.Background(), "task-x", 5)
-	assert.NoError(t, err)
-	_ = rt
-}
-
-// TestTaskLogs_RegisteredContainerLookupHit — no activeExecution,
-// but the runtime returns a registered container for the task —
-// runtime.Logs is called.
-func TestTaskLogs_RegisteredContainerLookupHit(t *testing.T) {
-	e, rt, _, _, _ := setup()
-	rt.registerLiveContainer("task-y")
-	out, err := e.TaskLogs(context.Background(), "task-y", 5)
-	assert.NoError(t, err)
-	// MockRuntime.Logs returns empty by default.
-	assert.Equal(t, "", out)
-}
-
 // TestPruneAllWorktrees_EmptyConfigIsNoop — no ProjectWorkspacePath
 // configured → early return.
 func TestPruneAllWorktrees_EmptyConfigIsNoop(t *testing.T) {

@@ -274,6 +274,9 @@ func (f *failingOnNthTaskRepo) Create(ctx context.Context, t *persistence.Task) 
 func (f *failingOnNthTaskRepo) Update(ctx context.Context, t *persistence.Task) error {
 	return f.inner.Update(ctx, t)
 }
+func (f *failingOnNthTaskRepo) UpdateIfStatus(ctx context.Context, t *persistence.Task, allowed []persistence.TaskStatus) (bool, error) {
+	return f.inner.UpdateIfStatus(ctx, t, allowed)
+}
 func (f *failingOnNthTaskRepo) GetChildren(ctx context.Context, parentID string) ([]*persistence.Task, error) {
 	return f.inner.GetChildren(ctx, parentID)
 }

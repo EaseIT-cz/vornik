@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"regexp"
 	"sort"
 	"strings"
 	"time"
@@ -49,6 +50,12 @@ var knownCompanionClients = map[string]bool{
 	// mcp-bridge (agent-administered Vornik plan P6.4).
 	"claude-desktop": true,
 }
+
+// companionClientKindRe is what a client kind must look like (GitHub #86): a
+// lowercase name of 2 to 32 characters. The closed knownCompanionClients set
+// used to be the check, so a typo failed loudly but a new harness needed a
+// daemon release; the generic harness contract chose the second.
+var companionClientKindRe = regexp.MustCompile(`^[a-z][a-z0-9-]{1,31}$`)
 
 // knownCompanionClientsList is the operator-facing enumeration in error
 // messages, derived so it cannot drift from the map.
@@ -187,9 +194,13 @@ func (s *Server) CompanionGrant(w http.ResponseWriter, r *http.Request) {
 		respondError(w, http.StatusBadRequest, "VALIDATION_ERROR", "clientKind is required")
 		return
 	}
-	if !knownCompanionClients[req.ClientKind] {
+	// Any pattern-valid kind is accepted (GitHub #86; LLD 21 §D2 "The generic
+	// harness contract"): a new harness needs no daemon change. An unlisted
+	// kind is classed shell_capable (agentadmin.HarnessClassOf), which claims
+	// less, never more. The known list stays for the error text.
+	if !companionClientKindRe.MatchString(req.ClientKind) {
 		respondError(w, http.StatusBadRequest, "UNKNOWN_CLIENT",
-			"clientKind must be one of: "+knownCompanionClientsList())
+			"clientKind must match "+companionClientKindRe.String()+" (known: "+knownCompanionClientsList()+")")
 		return
 	}
 	if req.AgentAdmin {

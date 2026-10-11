@@ -344,3 +344,26 @@ func TestMCPRow_NeverProbedIsNotAnAuthChallenge(t *testing.T) {
 		t.Errorf("never-probed must not read as an auth challenge:\n%s", html)
 	}
 }
+
+// GitHub #91 (2026-10-08), auth design §14 F2: a daemon oauth server with no
+// grant is not dialled but stays on the tab, in its own state (not
+// "unreachable"), with a working Connect resolved from config.
+func TestCPMCPRow_NotDialledNoGrantKeepsConnect(t *testing.T) {
+	reg := WithMCPRegistry(cpMCPRenderRegistry{servers: []mcp.ServerSnapshot{{
+		Name: "atlassian", Transport: "streamable-http", URL: "https://mcp.atlassian.com/v1/mcp/authv2",
+		NotDialled: true, Error: "not dialled: not connected, no grant: run vornikctl mcp connect atlassian",
+		LastCheckedAt: time.Now(),
+	}}})
+	html := renderCPMCP(t, reg, WithMCPOAuthAdmin(cpMCPRenderOAuth{
+		refs: map[string]mcpconnect.ServerRef{"atlassian": {ServerName: "atlassian", Auth: mcpauth.Auth{Mode: mcpauth.ModeOAuth}}},
+	}))
+	if !strings.Contains(html, ">not connected, no grant<") {
+		t.Error("the row does not show the not-dialled state")
+	}
+	if strings.Contains(html, ">unreachable<") {
+		t.Error("a not-dialled server is called unreachable")
+	}
+	if !strings.Contains(html, `value="connect"`) || strings.Contains(html, `disabled title=`) {
+		t.Error("the Connect button is missing or disabled")
+	}
+}

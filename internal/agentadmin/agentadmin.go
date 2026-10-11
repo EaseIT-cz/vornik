@@ -96,6 +96,9 @@ type Change struct {
 	Credentials []CredentialFollowUp
 	// reach is the workflow's reach signature, kept for the plain view.
 	reach *ReachSignature
+	// accounts maps an integration this change names to its account phrase
+	// (design §22.2.5), for the plain view; absent means nothing to say.
+	accounts map[string]string
 	// recipe is the recipe an install_recipe change installs, for the plain
 	// view.
 	recipe *Recipe
@@ -150,6 +153,14 @@ type IntegrationGrant struct {
 	Read        []string `json:"read,omitempty"`
 	Write       []string `json:"write,omitempty"`
 	ReadPending bool     `json:"read_pending,omitempty"`
+	// Transport is set only for a non-default MCP transport ("sse"), so the
+	// canonical document of every streamable-HTTP grant is unchanged
+	// (design §6.1, 2026-10-08).
+	Transport string `json:"transport,omitempty"`
+	// Account is the connection's account (design §22.2.2), set only when
+	// its label is not the default or an identity was given, so the
+	// canonical document of every default-account approval is unchanged.
+	Account *AccountGrant `json:"account,omitempty"`
 }
 
 // Narrowing is what an inert removal records: approvals it withdraws.

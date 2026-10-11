@@ -24,6 +24,7 @@ import (
 	"net/url"
 	"strings"
 	"time"
+	"vornik.io/vornik/internal/requestguard"
 
 	"github.com/rs/zerolog"
 
@@ -261,10 +262,13 @@ func (c *Client) do(httpReq *http.Request, api registry.ProjectAPI, secret strin
 		// change either, or forward credentials to another port or scheme.
 		return http.ErrUseLastResponse
 	}
+	if err := requestguard.Validate(httpReq.Context()); err != nil {
+		return apigateway.Response{}, err
+	}
 	resp, err := hc.Do(httpReq)
 	if err != nil {
 		c.Logger.Warn().Str("api", api.Name).Str("method", httpReq.Method).Str("host", host).Msg("agent api: request failed")
-		return apigateway.Response{}, fmt.Errorf("%w: the request did not complete", apigateway.ErrGatewayRequest)
+		return apigateway.Response{}, requestError{cause: err}
 	}
 	defer func() { _ = resp.Body.Close() }()
 	raw, _ := io.ReadAll(io.LimitReader(resp.Body, MaxBodyBytes+1))
@@ -276,6 +280,18 @@ func (c *Client) do(httpReq *http.Request, api registry.ProjectAPI, secret strin
 		Int("status", resp.StatusCode).Int("bytes", len(raw)).Msg("agent api: call")
 	return apigateway.Response{Status: resp.StatusCode, Body: body}, nil
 }
+
+// requestError is a request that did not complete. Its text is the one a
+// role has always seen, and never the cause's (which may name the URL); the
+// cause stays reachable through errors.As for the daemon's own use
+// (test_connection telling TLS from unreachable, design §6.2, GitHub #101).
+type requestError struct{ cause error }
+
+func (e requestError) Error() string {
+	return apigateway.ErrGatewayRequest.Error() + ": the request did not complete"
+}
+
+func (e requestError) Unwrap() []error { return []error{apigateway.ErrGatewayRequest, e.cause} }
 
 func contains(xs []string, x string) bool {
 	for _, v := range xs {

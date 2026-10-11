@@ -205,7 +205,9 @@ func (c *Container) buildPostMortemExplainer() ui.PostMortemExplainer {
 	if model == "" {
 		return nil
 	}
-	logSrc, _ := any(c.Executor).(postmortem.LogTailFetcher)
+	// The daemon-held task log, never the executor's container logs (GitHub
+	// #294: the post-mortem button ran podman logs on the request).
+	logSrc := c.heldTaskLog()
 	exp := &postmortem.Explainer{
 		Tasks:       c.repos.Tasks,
 		Executions:  c.repos.Executions,

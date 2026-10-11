@@ -57,9 +57,9 @@ func (s *Server) emitLLMCallFinished(ctx context.Context, executionID, model str
 	s.liveSub.Publish(ctx, executionID, livepubsub.KindLLMCallFinished, payload)
 }
 
-// emitLLMCallFinishedErr publishes llm_call_finished on the
-// failure path with the upstream error string. Token fields stay
-// zero — the call didn't complete.
+// emitLLMCallFinishedErr publishes a fixed public message on the failure path.
+// Upstream error strings can contain response bodies, URLs, or credentials;
+// detailed errors stay in the task's private diagnostic surfaces.
 func (s *Server) emitLLMCallFinishedErr(ctx context.Context, executionID, model string, err error, dur time.Duration) {
 	if s == nil || s.liveSub == nil {
 		return
@@ -69,7 +69,7 @@ func (s *Server) emitLLMCallFinishedErr(ctx context.Context, executionID, model 
 	}
 	errStr := ""
 	if err != nil {
-		errStr = err.Error()
+		errStr = "upstream model request failed"
 	}
 	s.liveSub.Publish(ctx, executionID, livepubsub.KindLLMCallFinished,
 		livepubsub.LLMCallFinishedPayload{

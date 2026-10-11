@@ -43,6 +43,11 @@ type ServerSnapshot struct {
 	// Error is the short human-readable reason Reachable is false.
 	// Empty on the happy path.
 	Error string `json:"error,omitempty"`
+	// NotDialled marks a server the daemon deliberately does not dial (an
+	// oauth server with no stored grant, auth design §14). A state of its
+	// own, not an overloaded Reachable=false (review 5fe0 F4); Error then
+	// reads "not dialled: <reason>".
+	NotDialled bool `json:"not_dialled,omitempty"`
 	// LastCheckedAt is the wall-clock time we last attempted (or
 	// completed) a refresh. The operator UI displays this so a
 	// long-stale row is obvious.
@@ -94,6 +99,10 @@ func NewRegistry(servers []ServerConfig, ttl time.Duration, logger zerolog.Logge
 	// this the operator's first page load (before RefreshAll fires)
 	// would look like the daemon has no servers configured.
 	for _, cfg := range r.servers {
+		if cfg.NotDialledReason != "" {
+			r.catalog[cfg.Name] = notDialledSnapshot(cfg, time.Now())
+			continue
+		}
 		r.catalog[cfg.Name] = ServerSnapshot{
 			Name:      cfg.Name,
 			Transport: cfg.Transport,
@@ -138,7 +147,11 @@ func (r *Registry) SetServers(servers []ServerConfig) {
 	r.servers = append([]ServerConfig(nil), servers...)
 	next := make(map[string]ServerSnapshot, len(servers))
 	for _, cfg := range r.servers {
-		if prev, ok := r.catalog[cfg.Name]; ok {
+		if cfg.NotDialledReason != "" {
+			next[cfg.Name] = notDialledSnapshot(cfg, time.Now())
+			continue
+		}
+		if prev, ok := r.catalog[cfg.Name]; ok && !prev.NotDialled {
 			// Carry the last known status, but track endpoint edits so a
 			// retargeted server does not keep reporting the old URL's health.
 			if prev.Transport == cfg.Transport && prev.URL == cfg.URL && prev.Command == cfg.Command {
@@ -274,6 +287,12 @@ func (r *Registry) spawnRefresh(ctx context.Context, cfg ServerConfig) {
 // not.
 func (r *Registry) refreshOne(ctx context.Context, cfg ServerConfig) {
 	now := time.Now()
+	if cfg.NotDialledReason != "" {
+		r.mu.Lock()
+		r.catalog[cfg.Name] = notDialledSnapshot(cfg, now)
+		r.mu.Unlock()
+		return
+	}
 	client, err := Connect(ctx, cfg, r.logger.With().Str("server", cfg.Name).Str("scope", "daemon").Logger())
 	snap := ServerSnapshot{
 		Name:          cfg.Name,
@@ -309,6 +328,30 @@ func (r *Registry) refreshOne(ctx context.Context, cfg ServerConfig) {
 	if err == nil {
 		_ = client.Close()
 	}
+}
+
+// notDialledSnapshot is the row of a server the daemon does not dial.
+func notDialledSnapshot(cfg ServerConfig, now time.Time) ServerSnapshot {
+	return ServerSnapshot{
+		Name: cfg.Name, Transport: cfg.Transport, URL: cfg.URL, Command: cfg.Command,
+		NotDialled: true, Error: "not dialled: " + cfg.NotDialledReason, LastCheckedAt: now,
+	}
+}
+
+// NotDialled lists the servers the daemon deliberately does not dial, from
+// the current configs, without triggering a refresh (auth design §14 F3:
+// the doctor reads current state).
+func (r *Registry) NotDialled() []string {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	var out []string
+	for _, cfg := range r.servers {
+		if cfg.NotDialledReason != "" {
+			out = append(out, cfg.Name)
+		}
+	}
+	sort.Strings(out)
+	return out
 }
 
 // shortenError caps the error string at 256 bytes so a hostile MCP

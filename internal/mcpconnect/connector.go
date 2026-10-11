@@ -73,6 +73,9 @@ type AuditSink interface {
 
 // Connector drives consent for one daemon.
 type Connector struct {
+	// PublishAccount atomically publishes supported account transitions; false uses operator behavior.
+	PublishAccount func(context.Context, *persistence.MCPOAuthToken, string, bool) (bool, error)
+
 	// Tokens persists grants. Required.
 	Tokens persistence.MCPOAuthTokenRepository
 	// Secrets resolves auth.client_secret_from. Required for confidential clients.
@@ -408,6 +411,16 @@ func (c *Connector) BeginWith(ctx context.Context, ref ServerRef, connectedBy st
 // Complete finishes an authorization from the callback: exchange the code, persist the grant,
 // and record the consent.
 func (c *Connector) Complete(ctx context.Context, state, code string) (*persistence.MCPOAuthToken, error) {
+	return c.CompleteWithIdentity(ctx, state, code, nil)
+}
+
+// CompleteWithIdentity is Complete with a hook that runs after the code
+// exchange succeeds and BEFORE the token is persisted, cached, recorded or
+// wired; it receives the response's raw id_token (agent-administered design
+// §22.2.14 item 2). A hook error is returned and none of those runs, so a
+// device sign-in can suspend the grants a replaced account held before the
+// new token is usable. A nil hook is Complete.
+func (c *Connector) CompleteWithIdentity(ctx context.Context, state, code string, before func(ctx context.Context, idToken string) error) (*persistence.MCPOAuthToken, error) {
 	c.mu.Lock()
 	c.reapExpiredLocked()
 	p := c.pending[state]
@@ -430,6 +443,11 @@ func (c *Connector) Complete(ctx context.Context, state, code string) (*persiste
 	tr, err := mcpauth.ExchangeCode(ctx, hc, p.Metadata, p.Creds, p.RedirectURI, code, p.PKCE)
 	if err != nil {
 		return nil, err
+	}
+	if before != nil {
+		if err := before(ctx, tr.IDToken); err != nil {
+			return nil, err
+		}
 	}
 
 	granted := tr.Scopes
@@ -455,13 +473,20 @@ func (c *Connector) Complete(ctx context.Context, state, code string) (*persiste
 		ConnectedBy: p.ConnectedBy,
 		ConnectedAt: time.Now().UTC(),
 	}
-	if err := c.Tokens.Upsert(ctx, tok); err != nil {
-		return nil, fmt.Errorf("mcpconnect: persist grant: %w", err)
+	handled := false
+	if c.PublishAccount != nil {
+		var err error
+		handled, err = c.PublishAccount(ctx, tok, tr.IDToken, false)
+		if err != nil {
+			return nil, fmt.Errorf("mcpconnect: persist grant: %w", err)
+		}
 	}
-	// Cache coherence rule 2: a freshly consented credential is served from
-	// cache immediately rather than costing one extra read on the first tool
-	// call after the operator connects.
-	c.primeCachedToken(tok.ProjectID, tok.ServerName, tok)
+	if !handled {
+		if err := c.Tokens.Upsert(ctx, tok); err != nil {
+			return nil, fmt.Errorf("mcpconnect: persist grant: %w", err)
+		}
+		c.primeCachedToken(tok.ProjectID, tok.ServerName, tok)
+	}
 	c.recordGrant(ctx, "mcp.oauth.connect", tok)
 	c.notifyGranted(tok.ProjectID, tok.ServerName)
 	return tok, nil
@@ -479,11 +504,20 @@ func (c *Connector) Disconnect(ctx context.Context, projectID, serverName, actor
 	if err != nil && !errors.Is(err, persistence.ErrNotFound) {
 		return err
 	}
-	if err := c.Tokens.Delete(ctx, projectID, serverName); err != nil {
-		return err
-	}
 	if existing == nil {
 		existing = &persistence.MCPOAuthToken{ProjectID: projectID, ServerName: serverName}
+	}
+	handled := false
+	if c.PublishAccount != nil {
+		handled, err = c.PublishAccount(ctx, existing, "", true)
+		if err != nil {
+			return err
+		}
+	}
+	if !handled {
+		if err := c.Tokens.Delete(ctx, projectID, serverName); err != nil {
+			return err
+		}
 	}
 	existing.ConnectedBy = actor
 	c.recordGrant(ctx, "mcp.oauth.disconnect", existing)

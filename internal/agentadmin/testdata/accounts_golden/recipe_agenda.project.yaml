@@ -1,0 +1,32 @@
+# Rendered by the agent admin verbs for namespace hermes. Do not edit
+# by hand: an edit here is refused by the next verb that touches this project
+# (the read set no longer matches) and may be refused at execution.
+projectId: "hermes--personal"
+displayName: "personal"
+description: "Personal automations"
+swarmId: "hermes--personal"
+defaultWorkflowId: "hermes--personal--start"
+defaultPriority: 50
+maxConcurrentTasks: 1
+
+broker: true
+
+budget:
+  monthly_hard_usd: 2
+
+mcp:
+  servers:
+    - name: "calendar"
+      transport: "streamable-http"
+      url: "https://cal.example/mcp"
+      auth:
+        mode: static
+        value_from: "secret://hermes/CALENDAR_TOKEN"
+        value_prefix: "Bearer "
+      broker_read_only: true
+      allowed_tools:
+        - "calendar_list_events"
+
+permissions:
+  secrets:
+    - "hermes/CALENDAR_TOKEN"

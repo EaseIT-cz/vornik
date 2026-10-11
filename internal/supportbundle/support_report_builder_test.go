@@ -255,7 +255,7 @@ func TestRedactionCoverage(t *testing.T) {
 		t.Fatalf("Build: %v", err)
 	}
 	// Inject container logs the way the handler does.
-	b.WriteContainerLogs(req, res, "container stderr: "+secretsByTag["container"]+"\n")
+	b.WriteTaskLog(req, res, "container stderr: "+secretsByTag["container"]+"\n")
 	// Re-finalize so REDACTION.txt/MANIFEST reflect the injected section.
 	b.Finalize(req, res)
 
@@ -284,7 +284,7 @@ func TestRedactionCoverage(t *testing.T) {
 	mustContainRedacted(t, res, "metrics.txt")
 	mustContainRedacted(t, res, "doctor.json")
 	mustContainRedacted(t, res, "health.json")
-	mustContainRedacted(t, res, "task/container_logs.txt")
+	mustContainRedacted(t, res, "task/task_log.txt")
 	mustContainRedacted(t, res, "task/blackbox_trace.json")
 	// Shipped text artifact present + redacted.
 	mustContainRedacted(t, res, "task/artifacts/art1-notes.txt")

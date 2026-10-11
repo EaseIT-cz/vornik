@@ -242,6 +242,36 @@ func (a *memoryCompanionAdapter) RecentMemory(ctx context.Context, projectID str
 	return out, nil
 }
 
+// ListMemory serves the companion memory_list tool (LLD 22, "Memory the
+// user can see", GitHub #119 item 6): one page of the project's live rows,
+// through the same firewall step RecentMemory runs, with the same request
+// context (purpose operational, role companion:<kind>, operator the key).
+func (a *memoryCompanionAdapter) ListMemory(ctx context.Context, in api.MemoryListRequest) (api.MemoryListPage, error) {
+	if a == nil || a.s == nil {
+		return api.MemoryListPage{}, nil
+	}
+	after, err := memory.DecodeChunkCursor(in.Cursor)
+	if err != nil {
+		return api.MemoryListPage{}, err
+	}
+	reqCtx := memoryfirewall.RequestContext{Purpose: memoryfirewall.PurposeOperational, Role: in.ActorKind, OperatorID: in.ActorID}
+	page, err := a.s.ListPageWithContext(ctx, in.ProjectID, after, in.Limit, reqCtx)
+	if err != nil {
+		return api.MemoryListPage{}, err
+	}
+	out := api.MemoryListPage{Examined: page.Examined, Entries: make([]api.MemoryListEntry, 0, len(page.Rows))}
+	if page.Next != nil {
+		out.NextCursor = memory.EncodeChunkCursor(*page.Next)
+	}
+	for _, r := range page.Rows {
+		out.Entries = append(out.Entries, api.MemoryListEntry{
+			ChunkID: r.ChunkID, TaskID: r.TaskID, SourceName: r.SourceName, ContentClass: r.ContentClass,
+			Content: r.Content, PolicyWarning: r.PolicyWarning, CreatedAt: r.CreatedAt,
+		})
+	}
+	return out, nil
+}
+
 // ListRepoScopes is a thin pass-through to the memory repo's
 // scope-inventory query. NULL-scoped chunks are emitted under the
 // empty-string bucket so the operator's client sees the leak surface.

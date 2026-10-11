@@ -8,6 +8,7 @@ import (
 	"sort"
 	"strings"
 
+	"vornik.io/vornik/internal/agentns"
 	"vornik.io/vornik/internal/approval"
 	"vornik.io/vornik/internal/registry"
 )
@@ -28,6 +29,12 @@ type ReachSignature struct {
 	Proposes     json.RawMessage           `json:"proposes"`
 	Schedule     string                    `json:"schedule"`
 	Documents    []registry.BrokerDocument `json:"documents,omitempty"`
+	// Accounts maps every integration the workflow reaches (by its roles'
+	// tools or its proposes) to its account label (design §22.2.4; GitHub
+	// #119 item 8). It is filled only when some label is not the default,
+	// so a workflow whose connections are all default hashes exactly as
+	// before accounts existed (operator decision F1/F4).
+	Accounts map[string]string `json:"accounts,omitempty"`
 }
 
 // SignatureOf computes a workflow's reach from LOADED config objects. The
@@ -83,7 +90,46 @@ func SignatureOf(p *registry.Project, sw *registry.Swarm, wf *registry.Workflow)
 	creds := credentialsOf(p, servers)
 	sig.Integrations = sortedKeys(servers)
 	sig.Credentials = sortedKeys(creds)
+	sig.Accounts = accountsOf(p, servers, wf.Broker.Proposes)
 	return sig, nil
+}
+
+// accountsOf maps the integrations a workflow reaches, by its roles' tools
+// (servers) and by its proposals, to their account labels; nil when every
+// one is the default (design §22.2.4).
+func accountsOf(p *registry.Project, servers map[string]bool, proposes []registry.BrokerProposal) map[string]string {
+	if p == nil {
+		return nil
+	}
+	reached := map[string]bool{}
+	for s := range servers {
+		reached[s] = true
+	}
+	for _, pr := range proposes {
+		if api, _, _, ok := pr.APITool(); ok {
+			reached["api:"+api] = true
+		} else if srv, _, ok := splitMCPTool(pr.Tool); ok {
+			reached[agentns.IntegrationOf(srv)] = true
+		}
+	}
+	out := map[string]string{}
+	named := false
+	for _, s := range p.MCP.Servers {
+		if s.Name == agentns.IntegrationOf(s.Name) && reached[s.Name] {
+			out[s.Name] = agentns.AccountOf(s.Account)
+			named = named || s.Account != ""
+		}
+	}
+	for _, a := range p.APIs {
+		if reached["api:"+a.Name] {
+			out["api:"+a.Name] = agentns.AccountOf(a.Account)
+			named = named || a.Account != ""
+		}
+	}
+	if !named {
+		return nil
+	}
+	return out
 }
 
 // Hash is the sha256 of the signature's canonical JSON.

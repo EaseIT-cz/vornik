@@ -176,3 +176,67 @@ func TestCPProposals_ServerError(t *testing.T) {
 		t.Fatal("expected error on 404")
 	}
 }
+
+// GitHub #285 (2026-10-08): journal resolve --keep|--restore. Exactly one
+// mode; the request carries it and the author.
+func TestCPJournalResolve_PostsModeAndAuthor(t *testing.T) {
+	var path string
+	var body map[string]any
+	cpHTTPStub(t, func(w http.ResponseWriter, r *http.Request) {
+		path = r.URL.Path
+		raw, _ := io.ReadAll(r.Body)
+		_ = json.Unmarshal(raw, &body)
+		_, _ = w.Write([]byte(`{"journalId":"caj_1","mode":"keep","state":"APPLIED","proposalStatus":"APPLIED","changed":true,"affectedProjects":["hermes--global-news"]}`))
+	})
+	t.Cleanup(func() { cpJournalKeep, cpJournalRestore, cpActor = false, false, "" })
+	cpJournalKeep, cpActor = true, "vadim"
+	out, err := captureStdoutFn(t, func() error { return runCPJournalResolve("caj_1") })
+	if err != nil {
+		t.Fatalf("resolve: %v", err)
+	}
+	if path != "/api/v1/operator/journal/caj_1/resolve" || body["mode"] != "keep" || body["actor"] != "vadim" {
+		t.Fatalf("request: %s %v", path, body)
+	}
+	if !strings.Contains(out, "APPLIED") || !strings.Contains(out, "hermes--global-news") {
+		t.Errorf("output: %q", out)
+	}
+}
+
+// GitHub #301 (2026-10-08): keeping the files of a REJECTED proposal closes
+// the row FAILED and leaves the proposal REJECTED; the CLI prints the
+// daemon's plain sentence so "FAILED" is not read as the resolve failing.
+func TestCPJournalResolve_PrintsTheMessage(t *testing.T) {
+	cpHTTPStub(t, func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`{"journalId":"caj_1","mode":"keep","state":"FAILED","proposalStatus":"REJECTED","changed":true,` +
+			`"outcome":"kept_unapproved","message":"Kept the files as they are; the proposal stays REJECTED.","affectedProjects":["hermes--global-news"]}`))
+	})
+	t.Cleanup(func() { cpJournalKeep, cpJournalRestore, cpActor = false, false, "" })
+	cpJournalKeep, cpActor = true, "vadim"
+	out, err := captureStdoutFn(t, func() error { return runCPJournalResolve("caj_1") })
+	if err != nil {
+		t.Fatalf("resolve: %v", err)
+	}
+	if !strings.Contains(out, "Kept the files as they are; the proposal stays REJECTED.") || !strings.Contains(out, "hermes--global-news") {
+		t.Errorf("output: %q", out)
+	}
+}
+
+func TestCPJournalResolve_ExactlyOneMode(t *testing.T) {
+	t.Cleanup(func() { cpJournalKeep, cpJournalRestore = false, false })
+	for _, c := range []struct{ keep, restore bool }{{false, false}, {true, true}} {
+		cpJournalKeep, cpJournalRestore = c.keep, c.restore
+		if err := runCPJournalResolve("caj_1"); err == nil || !strings.Contains(err.Error(), "exactly one") {
+			t.Fatalf("keep=%v restore=%v: %v", c.keep, c.restore, err)
+		}
+	}
+}
+
+func TestCPJournalList_RendersOpenRows(t *testing.T) {
+	cpHTTPStub(t, func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`{"rows":[{"id":"caj_1","proposalId":"cpp_1","state":"DRIFT","affectedProjects":["p1"],"failure":"drift: x"}],"count":1}`))
+	})
+	out, err := captureStdoutFn(t, func() error { return runCPJournalList(nil, nil) })
+	if err != nil || !strings.Contains(out, "caj_1") || !strings.Contains(out, "DRIFT") || !strings.Contains(out, "p1") {
+		t.Fatalf("list: %v %q", err, out)
+	}
+}

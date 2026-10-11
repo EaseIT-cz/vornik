@@ -124,6 +124,9 @@ func (c *Container) mcpDesiredServers() map[string][]mcp.ServerConfig {
 	daemonServers := indexMCPServersByName(c.daemonMCPServers())
 	desired := make(map[string][]mcp.ServerConfig)
 	var withheld []string
+	var noGrant []mcpconnect.NoGrant
+	withheldWhy := map[string]map[string]string{}
+	seen := map[string]bool{}
 	for _, p := range c.Registry.ListProjects() {
 		if len(p.MCP.Servers) == 0 {
 			continue
@@ -252,7 +255,18 @@ func (c *Container) mcpDesiredServers() map[string][]mcp.ServerConfig {
 			if authProjectID == "" {
 				scopeLabel = "project " + p.ID + " (credential at daemon scope)"
 			}
-			if !c.applyMCPAuth(&cfg, auth, grants, authProjectID, scopeLabel) {
+			if !c.applyMCPAuth(&cfg, auth, grants, authProjectID, scopeLabel, p.ID) {
+				continue
+			}
+			if cfg.NotDialledReason != "" {
+				// An oauth server with no grant is not dialled (auth design
+				// §14, GitHub #91); a consent re-wires it.
+				seen[mcpNoGrantKey(authProjectID, cfg)] = true
+				noGrant = append(noGrant, mcpconnect.NoGrant{ProjectID: p.ID, CredentialScope: authProjectID, Server: cfg.Name})
+				if withheldWhy[p.ID] == nil {
+					withheldWhy[p.ID] = map[string]string{}
+				}
+				withheldWhy[p.ID][cfg.Name] = cfg.NotDialledReason
 				continue
 			}
 			// An agent project's server is dialled through the SSRF guard
@@ -265,7 +279,12 @@ func (c *Container) mcpDesiredServers() map[string][]mcp.ServerConfig {
 	sort.Strings(withheld)
 	c.mcpWithheldMu.Lock()
 	c.mcpWithheld = withheld
+	c.mcpNoGrantProject = noGrant
 	c.mcpWithheldMu.Unlock()
+	c.pruneNoGrantWarned(true, seen)
+	if c.mcpManager != nil {
+		c.mcpManager.SetWithheld(withheldWhy)
+	}
 	return desired
 }
 
@@ -315,7 +334,7 @@ func mcpCredentialScope(projectID string, inheritedFromDaemon bool) string {
 // fail depending on which host ran it. Load-time validation stays syntactic and
 // this is where presence is enforced — with an ERROR naming the secret, which
 // is the diagnostic the operator needs either way.
-func (c *Container) applyMCPAuth(cfg *mcp.ServerConfig, auth mcpauth.Auth, grants mcpauth.Grants, projectID, scope string) bool {
+func (c *Container) applyMCPAuth(cfg *mcp.ServerConfig, auth mcpauth.Auth, grants mcpauth.Grants, projectID, scope string, consuming ...string) bool {
 	if auth.IsZero() {
 		return true
 	}
@@ -325,7 +344,7 @@ func (c *Container) applyMCPAuth(cfg *mcp.ServerConfig, auth mcpauth.Auth, grant
 		// mode: oauth resolves from the token store rather than from config —
 		// the credential is a grant a human gave, not a value an operator
 		// wrote. Delegated to the connector, which refreshes as needed.
-		return c.applyMCPOAuthToken(cfg, projectID, scope)
+		return c.applyMCPOAuthToken(cfg, projectID, scope, consuming...)
 	case err != nil:
 		// Never log the error's cause at a level that could carry a value:
 		// mcpauth guarantees its messages name fields and secret NAMES only.
@@ -335,6 +354,23 @@ func (c *Container) applyMCPAuth(cfg *mcp.ServerConfig, auth mcpauth.Auth, grant
 			Str("scope", scope).
 			Msg("MCP: refusing to register server — its auth block could not be resolved")
 		return false
+	}
+	consumer := projectID
+	if len(consuming) > 0 {
+		consumer = consuming[0]
+	}
+	if _, agent := agentns.FromID(consumer); agent && cfg.Transport != "stdio" && len(inj.Headers) > 0 {
+		cfg.AuthHeaders = nil
+		cfg.AuthEnv = inj.Env
+		transport := cfg.Transport
+		cfg.AuthHeaderProvider = func(_ context.Context) (map[string]string, error) {
+			current, err := mcpauth.Resolve(auth, transport, c.secretSource(), grants)
+			if err != nil {
+				return nil, err
+			}
+			return current.Headers, nil
+		}
+		return true
 	}
 	cfg.AuthHeaders = inj.Headers
 	cfg.AuthEnv = inj.Env
@@ -360,6 +396,7 @@ func configuredMCPProgram(cfg mcp.ServerConfig) spawn.ConfiguredCommand {
 func (c *Container) daemonMCPServerConfigs() []mcp.ServerConfig {
 	declared := c.daemonMCPServers()
 	servers := make([]mcp.ServerConfig, 0, len(declared))
+	seen := map[string]bool{}
 	for _, s := range declared {
 		cfg := mcp.ServerConfig{
 			Name:           s.Name,
@@ -377,8 +414,13 @@ func (c *Container) daemonMCPServerConfigs() []mcp.ServerConfig {
 		if !c.applyMCPAuth(&cfg, s.Auth, mcpauth.Grants{Unrestricted: true}, "", "daemon") {
 			continue
 		}
+		if cfg.NotDialledReason != "" {
+			// Kept in the catalog, not dialled (auth design §14).
+			seen[mcpNoGrantKey("", cfg)] = true
+		}
 		servers = append(servers, cfg)
 	}
+	c.pruneNoGrantWarned(false, seen)
 	return servers
 }
 
@@ -683,6 +725,9 @@ func (c *Container) initTelegram() error {
 		// Steering "Reject" taps cancel an approval task + cascade to its
 		// children (reuses Executor.CancelChildren).
 		botOpts = append(botOpts, telegram.WithChildCanceller(c.Executor))
+		// /cancel stops the running execution through the shared cancel
+		// primitive (05-scheduler.md §4.11, GitHub #300).
+		botOpts = append(botOpts, telegram.WithTaskTeardown(c.Executor))
 	}
 	// Operator-profile cross-channel linking (/link slash command).
 	// All three repos are required; missing any disables the
@@ -905,7 +950,9 @@ func (c *Container) initLogger() {
 	}
 
 	// Create logger with JSON output
-	c.Logger = zerolog.New(os.Stdout).With().
+	// The daemon-log ring's tap sits beside stdout from the first line
+	// (live-task-observation design, Change 2026-10-08 C6).
+	c.Logger = zerolog.New(c.rootLogWriter(os.Stdout)).With().
 		Timestamp().
 		Logger().
 		Level(level)
@@ -1015,7 +1062,13 @@ func (c *Container) collectDBMetrics() {
 // Note the asymmetry with mode: static, where an unresolvable secret WITHHOLDS the server. There
 // the credential is config an operator can fix in place; here it is a human consent that must be
 // given through a browser, and hiding the server would hide the thing they need to connect.
-func (c *Container) applyMCPOAuthToken(cfg *mcp.ServerConfig, projectID, scope string) bool {
+//
+// It returns true for every outcome but an unresolvable server ref, which is
+// also true: whether to dial is the caller's decision, read from
+// cfg.NotDialledReason (set on no grant, auth design §14). The project pass
+// withholds such a server, the daemon pass keeps it listed but not dialled,
+// and the agent tools listing refuses it with errServerNotDialled.
+func (c *Container) applyMCPOAuthToken(cfg *mcp.ServerConfig, projectID, scope string, consuming ...string) bool {
 	conn := c.mcpConnector()
 	if conn == nil {
 		c.Logger.Warn().
@@ -1024,12 +1077,12 @@ func (c *Container) applyMCPOAuthToken(cfg *mcp.ServerConfig, projectID, scope s
 			Msg("MCP: auth mode oauth is configured but no token store is wired — this server will connect unauthenticated")
 		return true
 	}
-	refName := cfg.Name
-	if _, agent := agentns.FromID(projectID); agent {
-		// A write entry signs in as its integration: one Connect, one
-		// token row under the base name (plan P4.3b).
-		refName = agentns.IntegrationOf(cfg.Name)
+	consumer := projectID
+	if len(consuming) > 0 {
+		consumer = consuming[0]
 	}
+	_, agentConsumer := agentns.FromID(consumer)
+	refName := mcpOAuthRefName(consumer, cfg.Name)
 	ref, ok := c.mcpServerRef(projectID, refName)
 	if !ok {
 		// Should not happen: the caller just read this server out of the same
@@ -1055,7 +1108,13 @@ func (c *Container) applyMCPOAuthToken(cfg *mcp.ServerConfig, projectID, scope s
 	cfg.AuthHeaderProvider = func(ctx context.Context) (map[string]string, error) {
 		ctx, cancel := context.WithTimeout(ctx, mcpOAuthHTTPTimeout)
 		defer cancel()
-		token, err := conn.CachedAccessToken(ctx, ref)
+		var token string
+		var err error
+		if agentConsumer {
+			token, err = conn.AccessToken(ctx, ref)
+		} else {
+			token, err = conn.CachedAccessToken(ctx, ref)
+		}
 		if err != nil {
 			return nil, err
 		}
@@ -1080,7 +1139,11 @@ func (c *Container) applyMCPOAuthToken(cfg *mcp.ServerConfig, projectID, scope s
 	// will pick that up without another rewire.
 	probeCtx, cancel := context.WithTimeout(context.Background(), mcpOAuthHTTPTimeout)
 	defer cancel()
-	switch token, err := conn.CachedAccessToken(probeCtx, ref); {
+	probeToken := conn.CachedAccessToken
+	if agentConsumer {
+		probeToken = conn.AccessToken
+	}
+	switch token, err := probeToken(probeCtx, ref); {
 	case errors.Is(err, mcpconnect.ErrNeedsReconnect):
 		c.Logger.Warn().
 			Str("server", cfg.Name).
@@ -1096,12 +1159,105 @@ func (c *Container) applyMCPOAuthToken(cfg *mcp.ServerConfig, projectID, scope s
 			Str("scope", scope).
 			Msg("MCP: could not read the OAuth grant at wiring time — the credential will be resolved per call")
 	case token == "":
-		c.Logger.Info().
-			Str("server", cfg.Name).
-			Str("scope", scope).
-			Msg("MCP: auth mode oauth is configured but this server is not connected yet — connecting unauthenticated (run: vornikctl mcp connect)")
+		// No grant, no dial (auth design §14, GitHub #91; supersedes §8
+		// note 1 for this case). The server used to be dialled
+		// unauthenticated: initialize 401'd and the client logged a WARN
+		// that read as a broken credential, on every reconnect and
+		// registry refresh. One WARN with the remedy, until the state
+		// changes; a consent re-wires it (OnGranted).
+		cfg.NotDialledReason = mcpconnect.NoGrantRemedy(projectID, refName)
+		if c.noteNoGrantWarned(mcpNoGrantKey(projectID, *cfg)) {
+			remedy := mcpconnect.ConnectCommand(projectID, refName)
+			if strings.HasPrefix(remedy, "vornikctl ") {
+				remedy = "run: " + remedy
+			}
+			c.Logger.Warn().
+				Str("server", cfg.Name).
+				Str("scope", scope).
+				Msg("MCP: auth mode oauth is configured but no grant is stored for " + scope + "; not connecting it until one is (" + remedy + ")")
+		}
+	default:
+		c.clearNoGrantWarned(mcpNoGrantKey(projectID, *cfg))
 	}
 	return true
+}
+
+// mcpOAuthRefName is the server name an oauth grant is stored under: an
+// agent write entry signs in as its integration (plan P4.3b).
+func mcpOAuthRefName(projectID, name string) string {
+	if _, agent := agentns.FromID(projectID); agent {
+		return agentns.IntegrationOf(name)
+	}
+	return name
+}
+
+// mcpNoGrantKey keys the WARN-once set: an explicit scope marker ("d" for a
+// grant at daemon scope, owned by the daemon pass; "p" for a project's own,
+// owned by the project pass; review 030f B2), the credential scope, the
+// grant name and the URL (auth design §14 item 2; a re-pointed URL warns
+// again). A project's name-only subscription to a daemon server resolves its
+// grant at daemon scope, so it shares the daemon pass's "d" key and is pruned
+// only by that pass.
+func mcpNoGrantKey(credentialScope string, cfg mcp.ServerConfig) string {
+	marker := "p"
+	if credentialScope == "" {
+		marker = "d"
+	}
+	return marker + "\x00" + credentialScope + "\x00" + mcpOAuthRefName(credentialScope, cfg.Name) + "\x00" + cfg.URL
+}
+
+// noteNoGrantWarned records key and reports whether it is new (so the WARN
+// is due).
+func (c *Container) noteNoGrantWarned(key string) bool {
+	c.mcpNoGrantMu.Lock()
+	defer c.mcpNoGrantMu.Unlock()
+	if c.mcpNoGrantWarned[key] {
+		return false
+	}
+	if c.mcpNoGrantWarned == nil {
+		c.mcpNoGrantWarned = map[string]bool{}
+	}
+	c.mcpNoGrantWarned[key] = true
+	return true
+}
+
+func (c *Container) clearNoGrantWarned(key string) {
+	c.mcpNoGrantMu.Lock()
+	defer c.mcpNoGrantMu.Unlock()
+	delete(c.mcpNoGrantWarned, key)
+}
+
+// pruneNoGrantWarned drops the keys a wiring pass owns and no longer saw:
+// the project pass owns project-scoped keys, the daemon pass daemon-scoped
+// ones (review 5fe0 F5), so a server removed and added back warns again.
+func (c *Container) pruneNoGrantWarned(projectScoped bool, seen map[string]bool) {
+	c.mcpNoGrantMu.Lock()
+	defer c.mcpNoGrantMu.Unlock()
+	own := "d\x00"
+	if projectScoped {
+		own = "p\x00"
+	}
+	for k := range c.mcpNoGrantWarned {
+		if !strings.HasPrefix(k, own) || seen[k] {
+			continue
+		}
+		delete(c.mcpNoGrantWarned, k)
+	}
+}
+
+// mcpNoGrant is the doctor's source (auth design §14 F3): current state
+// only, from the project pass's withheld list and the registry's
+// not-dialled servers, never the WARN-once set.
+func (c *Container) mcpNoGrant() []mcpconnect.NoGrant {
+	c.mcpWithheldMu.Lock()
+	out := append([]mcpconnect.NoGrant(nil), c.mcpNoGrantProject...)
+	c.mcpWithheldMu.Unlock()
+	if c.mcpRegistry != nil {
+		for _, name := range c.mcpRegistry.NotDialled() {
+			out = append(out, mcpconnect.NoGrant{Server: name})
+		}
+	}
+	return out
 }
 
 // roleToolCeiling resolves the ceiling (role allowedTools) for a task, for the

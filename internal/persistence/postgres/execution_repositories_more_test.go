@@ -13,6 +13,7 @@ import (
 func executionRows() *sqlmock.Rows {
 	return sqlmock.NewRows([]string{
 		"id", "task_id", "project_id", "workflow_id", "workflow_revision",
+		"workflow_snapshot",
 		"status", "current_step_id", "completed_steps", "state_snapshot",
 		"result", "error_message", "error_code", "started_at", "completed_at",
 		"created_at", "updated_at",
@@ -31,10 +32,10 @@ func TestExecutionRepositoryCreateDefaultsAndGet(t *testing.T) {
 
 	exec := &persistence.Execution{
 		ID: "exec-1", TaskID: "task-1", ProjectID: "proj-a", WorkflowID: "wf-1",
-		CompletedSteps: []string{"plan"}, StateSnapshot: []byte(`{"state":1}`),
+		CompletedSteps: []string{"plan"}, WorkflowSnapshot: []byte(`{"steps":[]}`), StateSnapshot: []byte(`{"state":1}`),
 	}
 	mock.ExpectExec(regexp.QuoteMeta("INSERT INTO executions")).
-		WithArgs(exec.ID, exec.TaskID, exec.ProjectID, exec.WorkflowID, "v1", persistence.ExecutionStatusPending, exec.CurrentStepID, sqlmock.AnyArg(), `{"state":1}`, nil, exec.ErrorMessage, exec.ErrorCode, exec.StartedAt, exec.CompletedAt, sqlmock.AnyArg(), sqlmock.AnyArg(), exec.ParentExecutionID, exec.ForkedFromStepID, exec.ForkedPromptOverride).
+		WithArgs(exec.ID, exec.TaskID, exec.ProjectID, exec.WorkflowID, "v1", exec.WorkflowSnapshot, persistence.ExecutionStatusPending, exec.CurrentStepID, sqlmock.AnyArg(), `{"state":1}`, nil, exec.ErrorMessage, exec.ErrorCode, exec.StartedAt, exec.CompletedAt, sqlmock.AnyArg(), sqlmock.AnyArg(), exec.ParentExecutionID, exec.ForkedFromStepID, exec.ForkedPromptOverride).
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	if err := repo.Create(context.Background(), exec); err != nil {
 		t.Fatalf("Create() error = %v", err)
@@ -52,6 +53,7 @@ func TestExecutionRepositoryCreateDefaultsAndGet(t *testing.T) {
 		WithArgs("exec-1").
 		WillReturnRows(executionRows().AddRow(
 			"exec-1", "task-1", "proj-a", "wf-1", "v1",
+			[]byte(`{"steps":[]}`),
 			persistence.ExecutionStatusFailed, stepID, "{plan,run}", []byte(`{"state":1}`),
 			[]byte(`{"ok":false}`), errMsg, errCode, started, completed, started, completed,
 			nil, nil, nil,
@@ -61,7 +63,7 @@ func TestExecutionRepositoryCreateDefaultsAndGet(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Get() error = %v", err)
 	}
-	if got.ID != "exec-1" || got.CurrentStepID == nil || *got.CurrentStepID != "plan" || len(got.CompletedSteps) != 2 {
+	if got.ID != "exec-1" || got.CurrentStepID == nil || *got.CurrentStepID != "plan" || len(got.CompletedSteps) != 2 || string(got.WorkflowSnapshot) != `{"steps":[]}` {
 		t.Fatalf("Get() = %#v", got)
 	}
 	if got.ErrorMessage == nil || *got.ErrorMessage != errMsg || got.StartedAt == nil || !got.StartedAt.Equal(started) {
@@ -156,6 +158,7 @@ func TestExecutionRepositoryListCountAndRoleQuality(t *testing.T) {
 		WithArgs(projectID, taskID, status, 10, 5).
 		WillReturnRows(executionRows().AddRow(
 			"exec-1", taskID, projectID, "wf-1", "v1",
+			nil,
 			status, nil, "{}", nil, nil, nil, nil, nil, nil, created, created,
 			nil, nil, nil,
 		))
@@ -167,6 +170,9 @@ func TestExecutionRepositoryListCountAndRoleQuality(t *testing.T) {
 	}
 	if len(list) != 1 || list[0].ID != "exec-1" {
 		t.Fatalf("List() = %#v", list)
+	}
+	if list[0].WorkflowSnapshot != nil {
+		t.Errorf("legacy execution without a workflow snapshot returned %q", list[0].WorkflowSnapshot)
 	}
 
 	mock.ExpectQuery(regexp.QuoteMeta("SELECT COUNT(*) FROM executions WHERE 1=1")).
@@ -213,6 +219,7 @@ func TestExecutionRepositoryGetByTaskIDs(t *testing.T) {
 	mock.ExpectQuery(regexp.QuoteMeta("SELECT DISTINCT ON (task_id)")).
 		WillReturnRows(executionRows().AddRow(
 			"exec-1", "task-1", "proj-a", "wf-1", "v1",
+			nil,
 			persistence.ExecutionStatusRunning, nil, "{}", nil, nil, nil, nil, nil, nil, created, created,
 			nil, nil, nil,
 		))
@@ -222,6 +229,9 @@ func TestExecutionRepositoryGetByTaskIDs(t *testing.T) {
 	}
 	if got["task-1"].ID != "exec-1" {
 		t.Fatalf("GetByTaskIDs() = %#v", got)
+	}
+	if got["task-1"].WorkflowSnapshot != nil {
+		t.Errorf("legacy execution without a workflow snapshot returned %q", got["task-1"].WorkflowSnapshot)
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatalf("unmet sql expectations: %v", err)

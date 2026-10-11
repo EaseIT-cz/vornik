@@ -6,9 +6,11 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"net/http"
 	"net/url"
 	"sort"
 	"strings"
+	"syscall"
 	"time"
 
 	"vornik.io/vornik/internal/agentadmin"
@@ -81,10 +83,25 @@ func (c *Container) listMCPTools(ctx context.Context, cfg mcp.ServerConfig) ([]s
 // errCredentialMissing means the server's credential is not stored yet.
 var errCredentialMissing = errors.New("the server's credential is not stored yet")
 
+// errServerNotDialled means the wiring marked the server not to be dialled
+// (an oauth server with no grant, auth design §14); the error carries the
+// reason (review 5ed3 A6).
+var errServerNotDialled = errors.New("the server is not dialled")
+
+// agentTransport is the client transport of an agent server: its declared
+// one, streamable-http when none (design §6.1).
+func agentTransport(t string) string {
+	if t == "" {
+		return agentadmin.TransportStreamableHTTP
+	}
+	return t
+}
+
 // serverConfigFor builds the connection config of an agent server with its
-// credential, resolved the way the MCP manager resolves it.
-func (c *Container) serverConfigFor(projectID, name, rawURL string, auth mcpauth.Auth, secrets []string) (mcp.ServerConfig, error) {
-	cfg := mcp.ServerConfig{Name: name, Transport: "streamable-http", URL: rawURL, ProjectID: projectID}
+// credential, resolved the way the MCP manager resolves it, over the
+// server's declared transport (design §6.1).
+func (c *Container) serverConfigFor(projectID, name, rawURL, transport string, auth mcpauth.Auth, secrets []string) (mcp.ServerConfig, error) {
+	cfg := mcp.ServerConfig{Name: name, Transport: agentTransport(transport), URL: rawURL, ProjectID: projectID}
 	if auth.EffectiveMode() == mcpauth.ModeStatic {
 		ref, _ := mcpauth.ParseSecretRef(auth.ValueFrom)
 		if _, ok := c.secretSource().Get(ref); !ok {
@@ -94,34 +111,87 @@ func (c *Container) serverConfigFor(projectID, name, rawURL string, auth mcpauth
 	if !c.applyMCPAuth(&cfg, auth, mcpGrantsFor(projectID, secrets), projectID, "project "+projectID) {
 		return cfg, errCredentialMissing
 	}
+	if cfg.NotDialledReason != "" {
+		return cfg, fmt.Errorf("%w: %s", errServerNotDialled, cfg.NotDialledReason)
+	}
 	return cfg, nil
 }
 
 // listingConfig is the connection the pre-approval listing makes. The project
 // is the slug or the full id, as the verb itself accepts, never ns--ns--x.
 func listingConfig(ns string, in agentadmin.AddMCPServerInput) mcp.ServerConfig {
-	return mcp.ServerConfig{Name: in.Name, Transport: "streamable-http", URL: in.URL, ProjectID: agentns.ID(ns, agentadmin.ProjectSlug(ns, in.Project))}
+	return mcp.ServerConfig{Name: in.Name, Transport: agentTransport(in.Transport), URL: in.URL, ProjectID: agentns.ID(ns, agentadmin.ProjectSlug(ns, in.Project))}
+}
+
+// wrongTransportHint is the refusal (and tools-pending note) for a server
+// that answered a streamable-HTTP initialize with 404 or 405 (design §6.1
+// item 4; reference host 2026-10-08, hermes--prague-venue-research). The
+// daemon never falls back to SSE by itself: the transport is part of what
+// the person approves.
+func wrongTransportHint(cfg mcp.ServerConfig, err error) string {
+	var ce *mcp.CallError
+	if cfg.Transport != agentadmin.TransportStreamableHTTP || !errors.As(err, &ce) ||
+		(ce.Status != http.StatusNotFound && ce.Status != http.StatusMethodNotAllowed) {
+		return ""
+	}
+	return fmt.Sprintf("the server at %s did not answer streamable HTTP (initialize returned %d); "+
+		"if it is an SSE server, call add_mcp_server again with transport \"sse\"; otherwise check the URL", cfg.URL, ce.Status)
+}
+
+// listFailureClass names why a listing failed, for the approval sentence
+// (design §6.1, review 03b6 finding 1). Never carries server bytes.
+func listFailureClass(err error) string {
+	var ce *mcp.CallError
+	var ne net.Error
+	switch {
+	case errors.As(err, &ce) && ce.Status != 0:
+		return fmt.Sprintf("HTTP %d", ce.Status)
+	case errors.Is(err, integrations.ErrDialRefused):
+		return "refused by the address guard"
+	case errors.Is(err, syscall.ECONNREFUSED):
+		return "connection refused"
+	case errors.Is(err, context.DeadlineExceeded) || (errors.As(err, &ne) && ne.Timeout()):
+		return "timed out"
+	default:
+		return "could not connect"
+	}
+}
+
+// unauthListing is the outcome of the pre-approval listing of an add.
+type unauthListing struct {
+	url    string
+	tools  []string
+	failed string // the failure's class, when the listing failed
+	refuse string // the refusal, when the server does not speak the transport
 }
 
 // advertiseUnauthenticated lists an add_mcp_server target BEFORE approval,
 // only when it carries no credential: listing a credentialed server first
 // would send a stored value to a URL no person has approved. The result
 // fills the verb's state, so the add asks for its tools in one approval.
-func (s *agentAdminService) advertiseUnauthenticated(ctx context.Context, ns string, input json.RawMessage) (string, []string) {
+// A streamable-HTTP 404/405 is a refusal with the transport hint; any other
+// failure is recorded by class, for the sentence (design §6.1).
+func (s *agentAdminService) advertiseUnauthenticated(ctx context.Context, ns string, input json.RawMessage) unauthListing {
 	var in agentadmin.AddMCPServerInput
 	if json.Unmarshal(input, &in) != nil || in.URL == "" {
-		return "", nil
+		return unauthListing{}
 	}
 	if in.Auth.Mode != "" && in.Auth.Mode != "none" {
-		return "", nil
+		return unauthListing{}
+	}
+	if in.Transport != "" && in.Transport != agentadmin.TransportStreamableHTTP && in.Transport != agentadmin.TransportSSE {
+		return unauthListing{} // the renderer refuses it, naming the allowed values
 	}
 	cfg := listingConfig(ns, in)
 	tools, err := s.c.listMCPTools(ctx, cfg)
 	if err != nil {
 		s.c.Logger.Info().Str("namespace", ns).Str("server", in.Name).Err(err).Msg("agent admin: could not list a new server's tools; it will be read-pending")
-		return "", nil
+		if hint := wrongTransportHint(cfg, err); hint != "" {
+			return unauthListing{refuse: agentadmin.VerbAddMCPServer + " refused: " + hint}
+		}
+		return unauthListing{url: in.URL, failed: listFailureClass(err)}
 	}
-	return in.URL, tools
+	return unauthListing{url: in.URL, tools: tools}
 }
 
 // afterCredentialStored files a tools approval for each read-pending server
@@ -136,7 +206,7 @@ func (s *agentAdminService) afterCredentialStored(ctx context.Context, ns, name 
 			if srv.Auth.ValueFrom != ref {
 				continue
 			}
-			s.fileServerTools(ctx, ns, p.ID, srv.Name, srv.URL, srv.Auth, p.Permissions.Secrets)
+			s.fileServerTools(ctx, ns, p.ID, srv.Name, srv.URL, srv.Transport, srv.Auth, p.Permissions.Secrets)
 		}
 	}
 }
@@ -144,18 +214,22 @@ func (s *agentAdminService) afterCredentialStored(ctx context.Context, ns, name 
 // fileServerTools lists one approved, read-pending server and files the
 // approval of what it listed. Nothing is filed when the listing fails or
 // lists nothing: the server stays read-pending, and the reason is logged.
-func (s *agentAdminService) fileServerTools(ctx context.Context, ns, projectID, server, rawURL string, auth mcpauth.Auth, secrets []string) {
+func (s *agentAdminService) fileServerTools(ctx context.Context, ns, projectID, server, rawURL, transport string, auth mcpauth.Auth, secrets []string) {
 	log := s.c.Logger.With().Str("namespace", ns).Str("project", projectID).Str("server", server).Logger()
 	a, err := s.grants.GetIntegration(ctx, projectID, server)
 	if err != nil || a.RemovedAt != nil || !a.ReadPending {
 		return
 	}
-	cfg, err := s.c.serverConfigFor(projectID, server, rawURL, auth, secrets)
+	cfg, err := s.c.serverConfigFor(projectID, server, rawURL, transport, auth, secrets)
 	if err != nil {
 		log.Info().Err(err).Msg("agent admin: the server cannot be listed yet")
 		return
 	}
 	tools, err := s.c.listMCPTools(ctx, cfg)
+	if hint := wrongTransportHint(cfg, err); hint != "" {
+		// Design §6.1 item 4: tools_pending says why (in memory).
+		s.setToolGap(projectID, server, hint)
+	}
 	if err != nil || len(tools) == 0 {
 		log.Warn().Err(err).Int("tools", len(tools)).Msg("agent admin: the connected server listed no usable tools; it stays read-pending")
 		return

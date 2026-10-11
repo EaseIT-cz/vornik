@@ -163,6 +163,11 @@ func (e *Executor) executeWorkflowAttempt(ctx context.Context, task *persistence
 	}
 
 	for {
+		// Step guard (05-scheduler.md §4.11, GitHub #300): a task whose row
+		// is already terminal gets no further step and no terminal outcome.
+		if stop, gerr := e.taskTerminalBeforeStep(ctx, task, execution, currentStepID); stop {
+			return "", nil, completedSteps, gerr
+		}
 		if terminal, ok := plan.workflow.Terminals[currentStepID]; ok {
 			cid, res, termErr := e.resolveTerminalOutcome(ctx, task, execution, terminal,
 				currentStepID, completedSteps, lastContainerID, lastResult, lastResultMessage, lastResultErr)
@@ -2766,7 +2771,19 @@ func (e *Executor) handleSuccess(ctx context.Context, task *persistence.Task, ex
 	// "RUNNING" Status to NotifyTaskCompleted, which rendered as
 	// "[Task X reached terminal status: LEASED.]" in the synthetic
 	// follow-up turn (see 2026-05-21 watchlist incident).
-	_ = e.taskRepo.UpdateStatus(ctx, task.ID, persistence.TaskStatusCompleted)
+	//
+	// The write is CONDITIONAL (05-scheduler.md §4.11, GitHub #300): it was a
+	// plain UpdateStatus, and on 2026-10-08 it wrote COMPLETED over a task a
+	// companion had cancelled minutes earlier. The PAUSED re-read above
+	// cannot close that race on its own — a cancel can land between the read
+	// and the write — so the write itself is gated on the row still being
+	// one this execution may finish.
+	if moved, terr := e.taskRepo.TransitionConditional(ctx, task.ID,
+		completableTaskStatuses, persistence.TaskStatusCompleted, persistence.TransitionOpts{}); terr == nil && !moved {
+		if e.deferToForeignTerminal(ctx, task, execution, "handleSuccess") {
+			return
+		}
+	}
 	task.Status = persistence.TaskStatusCompleted
 	// Staged proposals become visible in /inbox only now, and before any
 	// notification, so a front agent released by the completion always
@@ -3664,6 +3681,16 @@ func (e *Executor) handleFailure(ctx context.Context, task *persistence.Task, ex
 	// Leaving Status alone keeps the task LEASED until the scheduler
 	// makes the retry decision; the persistent visible-FAILED window
 	// disappears.
+	//
+	// Re-read before the whole-row write below (05-scheduler.md §4.11, GitHub
+	// #300): that write puts back the in-memory status — RUNNING/LEASED on the
+	// retry path — so a cancel or close that landed during the run would be
+	// overwritten and, on the retry path, re-queued. The write itself is
+	// conditional too (GitHub #303), which closes the few statements between
+	// this read and it.
+	if e.deferToForeignTerminal(ctx, task, execution, "handleFailure") {
+		return
+	}
 	task.LastError = &errorMsg
 	if errorClass != "" {
 		task.LastErrorClass = &errorClass
@@ -3684,7 +3711,22 @@ func (e *Executor) handleFailure(ctx context.Context, task *persistence.Task, ex
 			Msg("task: terminal FAILED — retry budget exhausted")
 		task.Status = persistence.TaskStatusFailed
 	}
-	_ = e.taskRepo.Update(ctx, task)
+	// The whole-row write lands only while the row is still the run's: every
+	// non-terminal status except PAUSED, the from-set handleSuccess uses
+	// (GitHub #303; 05-scheduler §4.11 amendment D4). Refused, the row was
+	// cancelled, closed, finished or paused by another writer after the
+	// re-read above; that writer owns the settle, the parent unblock and the
+	// notification, so this finaliser stands down. A write error keeps the
+	// old policy (the rest still runs), as with Update.
+	if wrote, werr := e.taskRepo.UpdateIfStatus(ctx, task, completableTaskStatuses); werr == nil && !wrote {
+		if !e.deferToForeignTerminal(ctx, task, execution, "handleFailure") {
+			e.logger.Warn().
+				Str("task_id", task.ID).
+				Str("execution_id", execution.ID).
+				Msg("handleFailure: row moved during the write; standing down")
+		}
+		return
+	}
 	// Settle the budget reservation only on the TERMINAL failure (retry
 	// exhausted). A task that will retry keeps its reservation — its spend
 	// is still in flight.
@@ -4488,4 +4530,114 @@ func resultJSON(fields map[string]any) json.RawMessage {
 		return json.RawMessage(`{"error":"step result could not be encoded"}`)
 	}
 	return b
+}
+
+// completableTaskStatuses is the from-set of handleSuccess's conditional
+// COMPLETED write: every non-terminal status except PAUSED, which is the
+// operator's and is honoured by the pause branch (05-scheduler.md §4.11).
+var completableTaskStatuses = []persistence.TaskStatus{
+	persistence.TaskStatusQueued,
+	persistence.TaskStatusLeased,
+	persistence.TaskStatusRunning,
+	persistence.TaskStatusPending,
+	persistence.TaskStatusWaitingForChildren,
+	persistence.TaskStatusAwaitingInput,
+	persistence.TaskStatusAwaitingExternal,
+	persistence.TaskStatusAwaitingApproval,
+}
+
+// deferToForeignTerminal re-reads the task row at a finaliser and reports
+// whether the finaliser must stand down because another writer already owns
+// the row's outcome (05-scheduler.md §4.11 "The finaliser guard", GitHub
+// #300). CANCELLED is finalised as a cancel; CLOSED, FAILED or COMPLETED
+// written elsewhere is left as it is, with the execution marked CANCELLED;
+// PAUSED is the operator's and is left alone. A read error or a live status
+// returns false and the finaliser proceeds as before.
+func (e *Executor) deferToForeignTerminal(ctx context.Context, task *persistence.Task, execution *persistence.Execution, site string) bool {
+	fresh, err := e.taskRepo.Get(context.WithoutCancel(ctx), task.ID)
+	if err != nil || fresh == nil {
+		return false
+	}
+	switch fresh.Status {
+	case persistence.TaskStatusCancelled:
+		e.logger.Info().
+			Str("task_id", task.ID).
+			Str("execution_id", execution.ID).
+			Str("site", site).
+			Msg("finaliser: task was cancelled during the run — recording the cancel, not this outcome")
+		// Detached like the other sub-case's write: the finaliser must
+		// complete whatever happened to the context that ran the steps.
+		e.handleCancelled(context.WithoutCancel(ctx), task, execution)
+		return true
+	case persistence.TaskStatusClosed, persistence.TaskStatusFailed, persistence.TaskStatusCompleted:
+		e.logger.Warn().
+			Str("task_id", task.ID).
+			Str("execution_id", execution.ID).
+			Str("site", site).
+			Str("status", string(fresh.Status)).
+			Msg("finaliser: task reached a terminal status outside this execution — leaving the row as it stands")
+		_ = e.execRepo.UpdateStatus(context.WithoutCancel(ctx), execution.ID, persistence.ExecutionStatusCancelled)
+		return true
+	case persistence.TaskStatusPaused:
+		e.logger.Info().
+			Str("task_id", task.ID).
+			Str("execution_id", execution.ID).
+			Str("site", site).
+			Msg("finaliser: task already PAUSED by operator — skipping terminal status write")
+		return true
+	}
+	return false
+}
+
+// errTaskTerminal stops a workflow whose task row another writer moved to
+// COMPLETED, FAILED or CLOSED mid-run. runExecution then marks the execution
+// CANCELLED and leaves the task row to the writer that set it.
+var errTaskTerminal = errors.New("task reached a terminal status outside this execution")
+
+// taskTerminalBeforeStep re-reads the task row before the workflow loop
+// dispatches its next step (or terminal), and reports whether the run must
+// stop. A cancel that only flipped the row — a path that did not tear the
+// execution down — must not let the executor go on starting containers,
+// spending model budget and calling connected APIs (GitHub #300, 2026-10-08:
+// a cancelled task's `recommend` step was dispatched three minutes after the
+// cancel). Design: 05-scheduler.md §4.11 "The step guard".
+//
+// Inside this loop every terminal status was written by someone else: the
+// executor writes RUNNING before the loop, a park (hand-off, children wait,
+// pause) ends the goroutine before another iteration, and the conversational
+// COMPLETED resting state is written after the loop returns.
+//
+// CANCELLED returns an error wrapping context.Canceled, which runExecution's
+// existing cancelled branch finalises through handleCancelled. COMPLETED,
+// FAILED and CLOSED return errTaskTerminal. A read error proceeds (fail
+// open): the guard is the second line, and a DB blip must not stop every
+// running workflow.
+func (e *Executor) taskTerminalBeforeStep(ctx context.Context, task *persistence.Task, execution *persistence.Execution, stepID string) (bool, error) {
+	if e.taskRepo == nil || task == nil {
+		return false, nil
+	}
+	fresh, err := e.taskRepo.Get(ctx, task.ID)
+	if err != nil || fresh == nil {
+		e.logger.Debug().Err(err).Str("task_id", task.ID).
+			Msg("workflow: step guard could not read the task row — proceeding")
+		return false, nil
+	}
+	switch fresh.Status {
+	case persistence.TaskStatusCancelled:
+		e.logger.Warn().
+			Str("task_id", task.ID).
+			Str("execution_id", execution.ID).
+			Str("step", stepID).
+			Msg("workflow: task was cancelled; not dispatching the next step")
+		return true, fmt.Errorf("task %s cancelled before step %s: %w", task.ID, stepID, context.Canceled)
+	case persistence.TaskStatusCompleted, persistence.TaskStatusFailed, persistence.TaskStatusClosed:
+		e.logger.Warn().
+			Str("task_id", task.ID).
+			Str("execution_id", execution.ID).
+			Str("step", stepID).
+			Str("status", string(fresh.Status)).
+			Msg("workflow: task reached a terminal status outside this execution; not dispatching the next step")
+		return true, fmt.Errorf("task %s is %s before step %s: %w", task.ID, fresh.Status, stepID, errTaskTerminal)
+	}
+	return false, nil
 }

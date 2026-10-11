@@ -1,0 +1,55 @@
+# Rendered by the agent admin verbs for namespace hermes. Do not edit
+# by hand: an edit here is refused by the next verb that touches this project
+# (the read set no longer matches) and may be refused at execution.
+projectId: "hermes--comms"
+displayName: "comms"
+description: "Monthly finance"
+swarmId: "hermes--comms"
+defaultWorkflowId: "hermes--comms--start"
+defaultPriority: 50
+maxConcurrentTasks: 1
+
+broker: true
+
+budget:
+  monthly_hard_usd: 2
+
+mcp:
+  servers:
+    - name: "mail"
+      transport: "streamable-http"
+      url: "https://mail.example/mcp"
+      auth:
+        mode: static
+        value_from: "secret://hermes/MAIL_TOKEN"
+        value_prefix: "Bearer "
+      broker_read_only: true
+      allowed_tools:
+        - "read_inbox"
+    - name: "mail-write"
+      transport: "streamable-http"
+      url: "https://mail.example/mcp"
+      auth:
+        mode: static
+        value_from: "secret://hermes/MAIL_TOKEN"
+        value_prefix: "Bearer "
+      broker_write: true
+      allowed_tools:
+        - "send"
+
+apis:
+  - name: "bank"
+    base_url: "https://bank.example"
+    auth:
+      header: "Authorization"
+      value_from: "secret://hermes/BANK_TOKEN"
+      prefix: "Bearer "
+    methods:
+      - "GET"
+      - "POST"
+    writes: true
+
+permissions:
+  secrets:
+    - "hermes/BANK_TOKEN"
+    - "hermes/MAIL_TOKEN"

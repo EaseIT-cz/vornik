@@ -42,20 +42,20 @@ func (r *ExecutionRepository) Create(ctx context.Context, execution *persistence
 
 	_, err := r.db.ExecContext(ctx, `
 		INSERT INTO executions (
-			id, task_id, project_id, workflow_id, workflow_revision,
+			id, task_id, project_id, workflow_id, workflow_revision, workflow_snapshot,
 			status, current_step_id, completed_steps, state_snapshot,
 			result, error_message, error_code, started_at, completed_at,
 			created_at, updated_at,
 			parent_execution_id, forked_from_step_id, forked_prompt_override
 		) VALUES (
-			$1, $2, $3, $4, $5,
-			$6, $7, $8, $9,
-			$10, $11, $12, $13, $14,
-			$15, $16,
-			$17, $18, $19
+			$1, $2, $3, $4, $5, $6,
+			$7, $8, $9, $10,
+			$11, $12, $13, $14, $15,
+			$16, $17,
+			$18, $19, $20
 		)
 	`,
-		execution.ID, execution.TaskID, execution.ProjectID, execution.WorkflowID, execution.WorkflowRevision,
+		execution.ID, execution.TaskID, execution.ProjectID, execution.WorkflowID, execution.WorkflowRevision, execution.WorkflowSnapshot,
 		execution.Status, execution.CurrentStepID, pq.Array(execution.CompletedSteps), jsonbValue(execution.StateSnapshot),
 		jsonbValue(execution.Result), execution.ErrorMessage, execution.ErrorCode, execution.StartedAt, execution.CompletedAt,
 		execution.CreatedAt, execution.UpdatedAt,
@@ -71,7 +71,7 @@ func (r *ExecutionRepository) Create(ctx context.Context, execution *persistence
 func (r *ExecutionRepository) Get(ctx context.Context, id string) (*persistence.Execution, error) {
 	row := r.db.QueryRowContext(ctx, `
 		SELECT id, task_id, project_id, workflow_id, workflow_revision,
-		       status, current_step_id, completed_steps, state_snapshot,
+		       workflow_snapshot, status, current_step_id, completed_steps, state_snapshot,
 		       result, error_message, error_code, started_at, completed_at,
 		       created_at, updated_at,
 		       parent_execution_id, forked_from_step_id, forked_prompt_override
@@ -85,7 +85,7 @@ func (r *ExecutionRepository) Get(ctx context.Context, id string) (*persistence.
 func (r *ExecutionRepository) GetByTaskID(ctx context.Context, taskID string) (*persistence.Execution, error) {
 	row := r.db.QueryRowContext(ctx, `
 		SELECT id, task_id, project_id, workflow_id, workflow_revision,
-		       status, current_step_id, completed_steps, state_snapshot,
+		       workflow_snapshot, status, current_step_id, completed_steps, state_snapshot,
 		       result, error_message, error_code, started_at, completed_at,
 		       created_at, updated_at,
 		       parent_execution_id, forked_from_step_id, forked_prompt_override
@@ -112,7 +112,7 @@ func (r *ExecutionRepository) GetByTaskIDs(ctx context.Context, taskIDs []string
 	rows, err := r.db.QueryContext(ctx, `
 		SELECT DISTINCT ON (task_id)
 		       id, task_id, project_id, workflow_id, workflow_revision,
-		       status, current_step_id, completed_steps, state_snapshot,
+		       workflow_snapshot, status, current_step_id, completed_steps, state_snapshot,
 		       result, error_message, error_code, started_at, completed_at,
 		       created_at, updated_at,
 		       parent_execution_id, forked_from_step_id, forked_prompt_override
@@ -542,6 +542,7 @@ func scanExecution(scanner interface {
 }) (*persistence.Execution, error) {
 	var (
 		execution            persistence.Execution
+		workflowSnapshot     []byte
 		currentStepID        sql.NullString
 		errorMessage         sql.NullString
 		errorCode            sql.NullString
@@ -555,7 +556,7 @@ func scanExecution(scanner interface {
 
 	err := scanner.Scan(
 		&execution.ID, &execution.TaskID, &execution.ProjectID, &execution.WorkflowID, &execution.WorkflowRevision,
-		&execution.Status, &currentStepID, &completedSteps, &execution.StateSnapshot,
+		&workflowSnapshot, &execution.Status, &currentStepID, &completedSteps, &execution.StateSnapshot,
 		&execution.Result, &errorMessage, &errorCode, &startedAt, &completedAt,
 		&execution.CreatedAt, &execution.UpdatedAt,
 		&parentExecutionID, &forkedFromStepID, &forkedPromptOverride,
@@ -567,6 +568,7 @@ func scanExecution(scanner interface {
 	if currentStepID.Valid {
 		execution.CurrentStepID = &currentStepID.String
 	}
+	execution.WorkflowSnapshot = workflowSnapshot
 	if errorMessage.Valid {
 		execution.ErrorMessage = &errorMessage.String
 	}
@@ -604,7 +606,7 @@ func jsonbValue(raw []byte) any {
 func (r *ExecutionRepository) List(ctx context.Context, filter persistence.ExecutionFilter) ([]*persistence.Execution, error) {
 	query := `
 		SELECT id, task_id, project_id, workflow_id, workflow_revision,
-		       status, current_step_id, completed_steps, state_snapshot,
+		       workflow_snapshot, status, current_step_id, completed_steps, state_snapshot,
 		       result, error_message, error_code, started_at, completed_at,
 		       created_at, updated_at,
 		       parent_execution_id, forked_from_step_id, forked_prompt_override

@@ -29,6 +29,9 @@ type mcpServerJSON struct {
 	Reachable bool                `json:"reachable"`
 	Tools     []mcpServerToolJSON `json:"tools"`
 	Error     string              `json:"error,omitempty"`
+	// NotDialled marks a server the daemon deliberately does not dial (an
+	// oauth server with no grant; auth design §14). Omitted when false.
+	NotDialled bool `json:"not_dialled,omitempty"`
 	// LastCheckedAt is ABSENT for a server the registry has not probed yet
 	// (every server for the moments after a restart — the first probe is
 	// async). It used to serialise the zero time as "0001-01-01T00:00:00Z",
@@ -80,6 +83,8 @@ func toJSON(s mcp.ServerSnapshot) mcpServerJSON {
 		Command:   s.Command,
 		Reachable: s.Reachable,
 		Error:     s.Error,
+
+		NotDialled: s.NotDialled,
 	}
 	if !s.LastCheckedAt.IsZero() {
 		checked := s.LastCheckedAt

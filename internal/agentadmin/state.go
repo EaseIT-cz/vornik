@@ -45,6 +45,10 @@ type State struct {
 	// Advertised maps an MCP server URL to the tools it advertised when the
 	// caller listed them for this verb call; absent means "could not list".
 	Advertised map[string][]string
+	// ListFailed maps a server URL to the class of its failed pre-approval
+	// listing ("connection refused", "HTTP 401", ...), so the approval
+	// sentence says why no tools were listed (design §6.1, review 03b6).
+	ListFailed map[string]string
 	// models is the operator's model catalogue (agent_admin.models), each
 	// entry classified against the live router when the state was read
 	// (design §18.6 item 2). Empty: no model is offered. It is set only by
@@ -54,6 +58,10 @@ type State struct {
 	// ApprovedDestinations holds the namespace's live (not removed) model
 	// destination approvals, "<sub-provider>@<endpoint host>".
 	ApprovedDestinations map[string]bool
+	// CredentialSet holds the namespace's credential NAMEs that have a stored
+	// value (status only, never a value), so a credential sentence can say
+	// that it replaces one (design §22.2.3 C5).
+	CredentialSet map[string]bool
 }
 
 // ProjectState is one agent project as loaded.
@@ -100,6 +108,12 @@ type ServerState struct {
 	Scopes []string
 	Write  bool
 	Tools  []string
+	// Transport is the server's MCP transport; "" means streamable-http
+	// (design §6.1, 2026-10-08).
+	Transport string
+	// Account is the connection's account label; "" is the default (design
+	// §22.2.1). A write sibling carries its base's.
+	Account string
 }
 
 // WorkflowState is one agent workflow as loaded.
@@ -121,6 +135,9 @@ type IntegrationApproval struct {
 	Write       []string
 	ReadPending bool
 	Removed     bool
+	// The connection's identity and where it came from (design §22.2.2);
+	// the label is the project file's.
+	AccountIdentity, IdentitySource string
 }
 
 // Live reports whether the approval is in force.

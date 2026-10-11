@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	mrand "math/rand"
+	"strings"
 	"sync"
 	"time"
 
@@ -18,6 +19,7 @@ import (
 	"go.opentelemetry.io/otel/codes"
 	"go.opentelemetry.io/otel/trace"
 	"vornik.io/vornik/internal/artifacts"
+	"vornik.io/vornik/internal/executor/livepubsub"
 	"vornik.io/vornik/internal/persistence"
 	"vornik.io/vornik/internal/runtime"
 )
@@ -177,6 +179,7 @@ type Scheduler struct {
 	tracer          trace.Tracer
 	runtime         RuntimeManager
 	execRepo        ExecutionRepository
+	livePub         LivePublisher
 	executor        Executor
 	artifactStore   *artifacts.Store
 	projectRegistry ProjectRegistry
@@ -281,6 +284,17 @@ func WithExecutionRepository(repo ExecutionRepository) Option {
 	return func(s *Scheduler) {
 		s.execRepo = repo
 	}
+}
+
+// LivePublisher is the live-observation publisher the scheduler reports
+// attempt_failed on (live-task-observation design, Change 2026-10-08 C5).
+type LivePublisher interface {
+	Publish(ctx context.Context, executionID, kind string, payload any) int64
+}
+
+// WithLivePublisher wires the publisher; nil publishes nothing.
+func WithLivePublisher(pub LivePublisher) Option {
+	return func(s *Scheduler) { s.livePub = pub }
 }
 
 // WithExecutor sets the standalone executor used for task dispatch.
@@ -810,8 +824,40 @@ func (s *Scheduler) dispatchViaExecutor(ctx context.Context, task *persistence.T
 				return dispatchPaused, ""
 			}
 		}
-		return dispatchFailed, fmt.Sprintf("task left executor in non-terminal status %s", current.Status)
+		return dispatchFailed, nonTerminalNotePrefix + string(current.Status)
 	}
+}
+
+// nonTerminalNotePrefix starts the scheduler's own note for a task the
+// executor left LEASED or RUNNING. releaseExecutorLease recognises its own
+// constant to look for the step error the execution row holds (GitHub #98);
+// it never parses text from anywhere else.
+const nonTerminalNotePrefix = "task left executor in non-terminal status "
+
+// nonTerminalDetail is the error stored for a task the executor left
+// non-terminal: "step <id>: <execution error>" when the newest execution holds
+// an error, else note unchanged (permanent-failure design, amendment
+// 2026-10-08). The class is still decided from note by the caller.
+func (s *Scheduler) nonTerminalDetail(taskID, note string) string {
+	if s.execRepo == nil || !strings.HasPrefix(note, nonTerminalNotePrefix) {
+		return note
+	}
+	ctx, cancel := context.WithTimeout(s.baseContext(), 5*time.Second)
+	defer cancel()
+	exec, err := s.execRepo.GetByTaskID(ctx, taskID)
+	if err != nil || exec == nil || exec.Status == persistence.ExecutionStatusPaused ||
+		exec.ErrorMessage == nil || strings.TrimSpace(*exec.ErrorMessage) == "" {
+		return note
+	}
+	msg := strings.TrimSpace(*exec.ErrorMessage)
+	if exec.CurrentStepID == nil || *exec.CurrentStepID == "" {
+		return msg
+	}
+	prefix := "step " + *exec.CurrentStepID
+	if strings.HasPrefix(msg, prefix) {
+		return msg
+	}
+	return prefix + ": " + msg
 }
 
 func (s *Scheduler) releaseExecutorLease(task *persistence.Task, outcome dispatchOutcome, errorMsg string) error {
@@ -862,7 +908,8 @@ func (s *Scheduler) releaseExecutorLease(task *persistence.Task, outcome dispatc
 		})
 	default:
 		status := persistence.TaskStatusFailed
-		return s.TaskCompleted(task.ID, taskLeaseID(task), false, errorMsgOrStatus(errorMsg, status))
+		note := errorMsgOrStatus(errorMsg, status)
+		return s.taskFailed(task.ID, taskLeaseID(task), note, s.nonTerminalDetail(task.ID, note))
 	}
 }
 
@@ -1050,18 +1097,28 @@ func (s *Scheduler) recoverExpiredLeases() {
 // Failed tasks are re-queued if persistence.TaskShouldRetry allows it — attempts
 // remain AND the failure class is not one that can never succeed on a re-run.
 func (s *Scheduler) TaskCompleted(taskID, leaseID string, success bool, errorMsg string) error {
-	s.decrementRunning()
-
 	if success {
+		s.decrementRunning()
 		return s.repo.ReleaseLease(s.baseContext(), taskID, leaseID, persistence.TaskStatusCompleted, persistence.ReleaseOptions{})
 	}
+	return s.taskFailed(taskID, leaseID, errorMsg, errorMsg)
+}
+
+// taskFailed releases a failed attempt. note is what the classifier reads;
+// detail is the error stored on the task. They differ only for a task the
+// executor left non-terminal, where detail names the failed step and note is
+// the scheduler's own text (GitHub #98): classifying the step's free text
+// would stamp classes such as BUDGET_BLOCKED from words in it.
+func (s *Scheduler) taskFailed(taskID, leaseID, note, detail string) error {
+	s.decrementRunning()
+	errorMsg := note // the classifier input; detail is what is stored
 
 	// Check if the task has retries remaining.
 	task, err := s.repo.Get(s.baseContext(), taskID)
 	if err != nil || task == nil {
 		// Can't look up the task — fail permanently.
 		return s.repo.ReleaseLease(s.baseContext(), taskID, leaseID, persistence.TaskStatusFailed, persistence.ReleaseOptions{
-			Error:      errorMsg,
+			Error:      detail,
 			ErrorClass: classifySchedulerFailure(nil, errorMsg),
 		})
 	}
@@ -1086,11 +1143,15 @@ func (s *Scheduler) TaskCompleted(taskID, leaseID string, success bool, errorMsg
 		class = *task.LastErrorClass
 	}
 	if persistence.TaskShouldRetry(attempt, maxAttempts, class) {
-		return s.repo.ReleaseLease(s.baseContext(), taskID, leaseID, persistence.TaskStatusQueued, persistence.ReleaseOptions{
+		err := s.repo.ReleaseLease(s.baseContext(), taskID, leaseID, persistence.TaskStatusQueued, persistence.ReleaseOptions{
 			Attempt:     attempt + 1,
 			MaxAttempts: maxAttempts,
-			Error:       errorMsg,
+			Error:       detail,
 		})
+		if err == nil {
+			s.publishAttemptFailed(taskID, attempt, class, true)
+		}
+		return err
 	}
 
 	// Terminal. Stamp a class so `task explain` and `playbook show` have something to
@@ -1100,10 +1161,43 @@ func (s *Scheduler) TaskCompleted(taskID, leaseID string, success bool, errorMsg
 	// drivers), which erased the executor's class until 2026-10-03 (permanent-failure
 	// design, amendment 2026-10-03). "" is the classifier's only defer signal.
 	cls := classifySchedulerFailure(task, errorMsg)
-	return s.repo.ReleaseLease(s.baseContext(), taskID, leaseID, persistence.TaskStatusFailed, persistence.ReleaseOptions{
-		Error:          errorMsg,
+	err = s.repo.ReleaseLease(s.baseContext(), taskID, leaseID, persistence.TaskStatusFailed, persistence.ReleaseOptions{
+		Error:          detail,
 		ErrorClass:     cls,
 		KeepErrorClass: cls == "",
+	})
+	if err == nil {
+		published := cls
+		if published == "" {
+			published = class
+		}
+		s.publishAttemptFailed(taskID, attempt, published, false)
+	}
+	return err
+}
+
+// publishAttemptFailed reports a released failed attempt on that attempt's
+// execution stream (live-task-observation design, Change 2026-10-08 C5). The
+// payload has no free text: the class is closed at the source, and anything
+// outside the task failure vocabulary is published as UNKNOWN. Best effort:
+// with no publisher, no execution repository or no execution, nothing is sent.
+func (s *Scheduler) publishAttemptFailed(taskID string, attempt int, class string, willRetry bool) {
+	if s.livePub == nil || s.execRepo == nil {
+		return
+	}
+	ctx, cancel := context.WithTimeout(s.baseContext(), 5*time.Second)
+	defer cancel()
+	exec, err := s.execRepo.GetByTaskID(ctx, taskID)
+	if err != nil || exec == nil {
+		return
+	}
+	class = livepubsub.ClosedTaskClass(class)
+	step := ""
+	if exec.CurrentStepID != nil {
+		step = *exec.CurrentStepID
+	}
+	s.livePub.Publish(ctx, exec.ID, livepubsub.KindAttemptFailed, livepubsub.AttemptFailedPayload{
+		Attempt: attempt, StepID: step, ErrorClass: class, WillRetry: willRetry,
 	})
 }
 

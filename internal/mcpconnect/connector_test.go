@@ -330,6 +330,46 @@ func TestBeginComplete_PersistsGrantAndRecordsConsent(t *testing.T) {
 	assert.False(t, rec.DaemonScope)
 }
 
+// GitHub #119 item 8 (2026-10-08): CompleteWithIdentity's hook runs after
+// the exchange and before the token is persisted, recorded or announced
+// (agent-administered design §22.2.14 item 2); a hook error leaves no grant,
+// no record, and the state consumed.
+func TestCompleteWithIdentity_HookRunsBeforePersistAndCanStopIt(t *testing.T) {
+	vendor := newOAuthServer(t, true, "read:x")
+	tokens := newFakeTokens()
+	audit := &fakeAudit{}
+	c := newConnector(t, tokens, audit, "https://v.example.com")
+	ref := ServerRef{ProjectID: "p1", ServerName: "s", URL: vendor.URL + "/mcp", Auth: mcpauth.Auth{Mode: mcpauth.ModeOAuth}}
+
+	begun, err := c.Begin(context.Background(), ref, "op")
+	require.NoError(t, err)
+	stop := errors.New("suspension failed")
+	calls := 0
+	_, err = c.CompleteWithIdentity(context.Background(), begun.State, "code", func(ctx context.Context, _ string) error {
+		calls++
+		pre, gerr := tokens.Get(ctx, "p1", "s")
+		require.ErrorIs(t, gerr, persistence.ErrNotFound, "the hook must run before the token is stored")
+		assert.Nil(t, pre)
+		return stop
+	})
+	require.ErrorIs(t, err, stop)
+	assert.Equal(t, 1, calls)
+	_, gerr := tokens.Get(context.Background(), "p1", "s")
+	require.ErrorIs(t, gerr, persistence.ErrNotFound, "a failed hook left a grant")
+	assert.Empty(t, audit.entries, "a failed hook recorded a consent")
+	_, err = c.Complete(context.Background(), begun.State, "code")
+	require.ErrorIs(t, err, ErrUnknownState)
+
+	// A hook that succeeds lets the completion persist as Complete does.
+	begun, err = c.Begin(context.Background(), ref, "op")
+	require.NoError(t, err)
+	tok, err := c.CompleteWithIdentity(context.Background(), begun.State, "code", func(context.Context, string) error { return nil })
+	require.NoError(t, err)
+	stored, err := tokens.Get(context.Background(), "p1", "s")
+	require.NoError(t, err)
+	assert.Equal(t, tok.AccessToken, stored.AccessToken)
+}
+
 // TestComplete_StateIsOneShot — a leaked callback URL must not be replayable.
 func TestComplete_StateIsOneShot(t *testing.T) {
 	vendor := newOAuthServer(t, true, "read:x")

@@ -67,7 +67,7 @@ def register(ctx) -> None:
             toolset="vornik",
             schema=schema,
             handler=handlers[schema["name"]],
-            check_fn=tools.available,
+            check_fn=tools.artifacts_available if schema["name"] in ("vornik_list_artifacts", "vornik_read_artifact") else tools.available,
         )
     ctx.register_hook("pre_llm_call", Digest(client))
     ctx.register_command("vornik-peek", handler=_peek(client), description="List recent Vornik broker tasks")
@@ -84,7 +84,7 @@ def register(ctx) -> None:
         # session commands the user types; no model tool forgets.
         commands = MemoryCommands(provider)
         ctx.register_command("vornik-memory", handler=commands.memory,
-                             description="List what Vornik's long-term memory keeps (optionally matching words)")
+                             description="List what Vornik's long-term memory keeps (words to search, more for the next page, export for the download link)")
         ctx.register_command("vornik-forget", handler=commands.forget,
                              description="Make Vornik forget one memory by the id /vornik-memory shows")
     # `hermes vornik connect|status`: a terminal subcommand a person types,

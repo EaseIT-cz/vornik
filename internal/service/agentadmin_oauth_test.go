@@ -36,6 +36,8 @@ type fakeOAuthMCP struct {
 	mu        sync.Mutex
 	exchanges int
 	bearers   []string
+	// idToken, when set, rides the token response (GitHub #119 item 8).
+	idToken string
 }
 
 func newFakeOAuthMCP(t *testing.T, tools ...string) *fakeOAuthMCP {
@@ -57,8 +59,13 @@ func newFakeOAuthMCP(t *testing.T, tools ...string) *fakeOAuthMCP {
 		case r.URL.Path == "/token":
 			f.mu.Lock()
 			f.exchanges++
+			idt := f.idToken
 			f.mu.Unlock()
-			_ = json.NewEncoder(w).Encode(map[string]any{"access_token": atCanary, "refresh_token": rtCanary, "expires_in": 3600, "scope": "read"})
+			body := map[string]any{"access_token": atCanary, "refresh_token": rtCanary, "expires_in": 3600, "scope": "read"}
+			if idt != "" {
+				body["id_token"] = idt
+			}
+			_ = json.NewEncoder(w).Encode(body)
 		case r.URL.Path == "/mcp":
 			f.mu.Lock()
 			f.bearers = append(f.bearers, r.Header.Get("Authorization"))
@@ -145,7 +152,7 @@ func TestAgentAdmin_OAuthServerConnectedFromThePhone(t *testing.T) {
 		t.Fatal("a cookieless callback decided the request")
 	}
 	rec := callback(true)
-	if rec.Code != http.StatusSeeOther || operatorCalls != 0 {
+	if rec.Code != http.StatusOK || operatorCalls != 0 { // the page says who signed in (GitHub #119 item 8)
 		t.Fatalf("callback: %d (operator handler called %d times) %s", rec.Code, operatorCalls, rec.Body.String())
 	}
 	if r, _ := f.c.repos.ApproverDevices.GetRequest(ctx, slot.ID); r.Status != persistence.ApprovalApproved || r.DecidedByDevice != f.device.ID {

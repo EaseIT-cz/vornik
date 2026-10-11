@@ -43,6 +43,21 @@ func TestCapabilities_CompanionAdminFollowsTheSetting(t *testing.T) {
 	require.False(t, capabilitiesAs(t, srv, "", false).Features["companion-admin"], "advertised with no service wired")
 }
 
+// GitHub #119 item 8 (2026-10-08): agent-accounts advertises the account
+// input of add_mcp_server and add_api (agent-administered design §22.2.9); a
+// bundle sends account only when it is true. It follows companion-admin.
+func TestCapabilities_AgentAccountsFollowsCompanionAdmin(t *testing.T) {
+	enabled := true
+	srv := &Server{logger: zerolog.Nop()}
+	srv.agentAdmin, srv.agentAdminEnabled = &fakeAgentAdmin{}, func() bool { return enabled }
+	require.True(t, capabilitiesAs(t, srv, "", false).Features["agent-accounts"])
+	enabled = false
+	require.False(t, capabilitiesAs(t, srv, "", false).Features["agent-accounts"])
+	srv.agentAdmin = nil
+	enabled = true
+	require.False(t, capabilitiesAs(t, srv, "", false).Features["agent-accounts"], "advertised with no service wired")
+}
+
 // Plan P6 amendment F1: the host facts vornikctl agent connect checks
 // (daemon UID, containerised, the store key's path, never its content) are
 // shown to an admin-class caller only. Control: the isAdminClassRequest

@@ -150,7 +150,12 @@ func TestBrokerDocument_ResultNeverReturnsTheDocument(t *testing.T) {
 		},
 	}
 	for _, tool := range []string{"result", "status", "list"} {
-		text, isErr := callTool(t, srv, raw, tool, map[string]any{"task_id": "t1"})
+		args := map[string]any{"task_id": "t1"}
+		if tool == "list" {
+			// list takes no task_id; the strict decode refuses it (GitHub #305).
+			args = map[string]any{}
+		}
+		text, isErr := callTool(t, srv, raw, tool, args)
 		require.False(t, isErr, text)
 		assert.NotContains(t, text, docSentinel, "%s returned document bytes", tool)
 		if tool != "result" {

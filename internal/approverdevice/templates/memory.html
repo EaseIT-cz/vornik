@@ -1,0 +1,47 @@
+{{define "memory.html"}}{{template "head" (page "Memory" 0)}}
+{{template "nav" "memory"}}
+<h1>Memory</h1>
+<p class="mut">What Vornik's memory holds. Forgetting here stops every assistant from recalling an item; the record stays until retention removes it. It does not change an assistant's own memory file.</p>
+<h2 class="summary">Your assistants' memory</h2>
+{{range .Assistants}}<div class="card">
+<p><a class="ref" href="/ui/approve/memory/{{.ID}}"><strong>{{.ID}}</strong></a></p>
+{{with .Holders}}<p class="mut">Used by {{range $i, $h := .}}{{if $i}}, {{end}}{{$h}}{{end}}.</p>{{end}}
+</div>
+{{else}}<div class="card"><p class="mut">No assistant has a memory key.</p></div>{{end}}
+<h2 class="summary">What your broker workflows learned</h2>
+<p class="mut">Never shown to an assistant. You can read and forget it here; it is not exported.</p>
+{{range .Broker}}<div class="card">
+<p><a class="ref" href="/ui/approve/memory/{{.ID}}"><strong>{{.ID}}</strong></a>{{with .Namespace}} <span class="mut">({{.}})</span>{{end}}</p>
+</div>
+{{else}}<div class="card"><p class="mut">No broker projects.</p></div>{{end}}
+{{template "foot"}}{{end}}
+
+{{define "memory_project.html"}}{{template "head" (page "Memory" 0)}}
+{{template "nav" "memory"}}
+<h1>{{.Project.ID}}</h1>
+{{with .Flash}}<p class="flash">Done: {{.}}.</p>{{end}}
+{{if eq .Project.Section 2}}<p class="mut">What broker workflows learned. Never shown to an assistant; read and forget only.</p>{{end}}
+<form method="get" action="/ui/approve/memory/{{.Project.ID}}"><input type="text" name="q" value="{{.Query}}" placeholder="Search" style="text-transform:none;letter-spacing:0"><button type="submit">Search</button></form>
+{{if .Project.Exportable}}<p><a class="act" href="/ui/approve/memory/{{.Project.ID}}/export?format=json">Export (JSON)</a><a class="act" href="/ui/approve/memory/{{.Project.ID}}/export?format=md">Export (Markdown)</a></p>{{end}}
+{{with .Withheld}}<p class="mut">{{.}} item(s) on this page are withheld by the memory firewall.</p>{{end}}
+{{range .Page.Items}}<div class="card">
+<p class="mut">{{.Age}} ago · {{.Origin}} · {{.Source}} · {{.ShortID}}</p>
+<pre>{{.Snippet}}</pre>
+{{with .PolicyWarning}}<p class="err">{{.}}</p>{{end}}
+<form method="post" action="/ui/approve/memory/{{$.Project.ID}}/forget"><input type="hidden" name="id" value="{{.ID}}"><button class="no" type="submit">Forget</button></form>
+</div>
+{{else}}<div class="card"><p class="mut">{{if .Query}}Nothing matches.{{else}}Nothing is kept.{{end}}</p></div>{{end}}
+{{with .Page.NextCursor}}<p><a class="act" href="/ui/approve/memory/{{$.Project.ID}}?cursor={{.}}">Older</a></p>{{end}}
+{{with .Sources}}<details><summary class="mut">Forget everything from one source</summary><ul>{{range .}}<li><a class="ref" href="/ui/approve/memory/{{$.Project.ID}}/forget-source?source={{.}}">{{.}}</a></li>{{end}}</ul></details>{{end}}
+{{template "foot"}}{{end}}
+
+{{define "memory_confirm.html"}}{{template "head" (page "Forget a source" 0)}}
+{{template "nav" "memory"}}
+<h1>Forget everything from this source?</h1>
+<div class="card">
+<p><strong>{{.Source}}</strong> in {{.Project.ID}}</p>
+<p>{{if .More}}{{.Count}} or more{{else}}{{.Count}}{{end}} item(s) will be forgotten. Every assistant stops recalling them. This cannot be undone here.</p>
+<form method="post" action="/ui/approve/memory/{{.Project.ID}}/forget-source"><input type="hidden" name="source" value="{{.Source}}"><button class="no" type="submit">Forget them</button></form>
+<p><a class="ref" href="/ui/approve/memory/{{.Project.ID}}">Back</a></p>
+</div>
+{{template "foot"}}{{end}}

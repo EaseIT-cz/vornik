@@ -40,7 +40,8 @@ func (c *Container) mcpConnector() *mcpconnect.Connector {
 			// An agent project's tokens are sealed into their row with the
 			// namespace key (agent-administered Vornik plan P4.4); operator
 			// projects' rows pass through unchanged.
-			Tokens: c.agentSealedTokens(),
+			Tokens:         c.agentSealedTokens(),
+			PublishAccount: c.publishOAuthAccount,
 			// Operator secrets resolve from the process environment (where the
 			// daemon's secrets dir lands at boot and projectdoctor writes);
 			// agent secrets (secret://<ns>/<NAME>) from the namespaced store

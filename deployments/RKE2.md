@@ -129,9 +129,6 @@ kubectl -n vornik rollout status statefulset/vornik-postgres
 # daemon logs — look for "migrations applied" lines
 kubectl -n vornik logs -f statefulset/vornik
 
-# in-pod health check — same checks as /api/v1/doctor
-kubectl -n vornik exec -it vornik-0 -- vornikctl doctor
-
 # pgvector extension check
 kubectl -n vornik exec -it vornik-postgres-0 -- \
   psql -U vornik -d vornik -c '\dx vector'
@@ -565,8 +562,8 @@ kubectl -n vornik get pods -l app.kubernetes.io/name=vornik
 # Worker is a StatefulSet — exec into pod -0 (or use the pod name directly).
 kubectl -n vornik exec -it statefulset/<release>-vornik-worker -- vornikctl cluster status
 
-# Per-node self-check (run on each tier)
-kubectl -n vornik exec -it <pod> -- vornikctl doctor feature cluster
+# Per-node self-check: run `vornikctl doctor feature cluster` from an
+# operator host configured with an admin-class API key.
 ```
 
 **Webhook → worker relay path:**

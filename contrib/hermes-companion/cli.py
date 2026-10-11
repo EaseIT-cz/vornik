@@ -46,6 +46,7 @@ def setup(parser) -> None:
     c = sub.add_parser("connect", help="Connect Hermes to Vornik as an administering agent (runs vornikctl agent connect hermes)")
     c.add_argument("--url", default=None, help="Vornik's URL (default: vornikctl's own, $VORNIK_API_URL)")
     c.add_argument("--dry-run", action="store_true", help="Check and print what would be done, change nothing")
+    c.add_argument("--vornikctl", default=None, help="Absolute path of the vornikctl to run and to record in Hermes's config (default: the one on PATH)")
     sub.add_parser("status", help="Show the configured Vornik URL, which tokens are set, and the daemon's capabilities")
     a = sub.add_parser("approvals", help="Answer Hermes's own approval prompts on your paired phone (on) or in Hermes again (off)")
     a.add_argument("state", choices=["on", "off"])
@@ -142,8 +143,22 @@ def approvals(args, load_config=None, set_value=None, unset_value=None, out=prin
     return 0
 
 
-def connect(args, which=shutil.which, run=subprocess.run, out=print) -> int:
-    exe = which("vornikctl")
+def connect(args, which=shutil.which, run=subprocess.run, out=print, is_executable=None) -> int:
+    if is_executable is None:
+        is_executable = approval._executable
+    named = getattr(args, "vornikctl", None)
+    if named:
+        # GitHub #99: run the named copy and record the same path, so the
+        # path Hermes runs at every start is one this user can execute.
+        if not os.path.isabs(named):
+            out("--vornikctl must be an absolute path, got %r" % named)
+            return 1
+        if not is_executable(named):
+            out("vornikctl at %s is not executable by this user. Install an executable copy (see %s) and name it." % (named, SETUP_GUIDE))
+            return 1
+        exe = named
+    else:
+        exe = which("vornikctl")
     if not exe:
         out("vornikctl is not installed. Install Vornik first: %s" % INSTALL_PAGE)
         out("Then run: hermes vornik connect")
@@ -153,6 +168,9 @@ def connect(args, which=shutil.which, run=subprocess.run, out=print) -> int:
         argv += ["--url", args.url]
     if getattr(args, "dry_run", False):
         argv.append("--dry-run")
+    if named:
+        # Only with the flag: an older vornikctl does not know --vornikctl.
+        argv += ["--vornikctl", named]
     try:
         # The child inherits the user's environment, which vornikctl needs for
         # VORNIK_API_URL and its operator credential. No Hermes approval or

@@ -63,7 +63,8 @@ const (
 	// artifact we redact + ship. Binary artifacts ship as metadata
 	// only (review #1) regardless of this.
 	maxTextArtifactBytes = 1 << 20 // 1 MiB
-	ContainerLogTail     = 2000    // lines
+	// TaskLogTail bounds the daemon-held task log's lines (GitHub #294).
+	TaskLogTail = 2000
 )
 
 // Repos is the narrow set of repositories the builder reads.
@@ -435,7 +436,6 @@ func (b *Builder) collectTask(ctx context.Context, req Request, res *Result) {
 	b.collectJudge(ctx, req, res, tid)
 	b.collectPostMortem(ctx, req, res, tid)
 	b.collectArtifacts(ctx, req, res, tid)
-	b.collectContainerLogs(ctx, req, res, tid)
 	b.collectBlackBoxTrace(ctx, req, res, tid)
 }
 
@@ -646,25 +646,17 @@ func (b *Builder) readArtifact(ctx context.Context, id string) ([]byte, string, 
 	return buf, sniffContentType(buf), nil
 }
 
-func (b *Builder) collectContainerLogs(ctx context.Context, req Request, res *Result, tid string) {
-	// Container logs are sourced via the Server's taskLogSource at the
-	// handler layer (the builder has no executor dependency). The
-	// handler injects them by calling writeContainerLogs. Nothing to
-	// do here when no logs were injected.
-	_ = ctx
-	_ = req
-	_ = res
-	_ = tid
-}
-
-// WriteContainerLogs lets the handler inject already-fetched container
-// log text (from taskLogSource) so it is redacted through the SAME
-// path as every other section.
-func (b *Builder) WriteContainerLogs(req Request, res *Result, logs string) {
+// WriteTaskLog lets the handler inject the daemon-held task log
+// (api.HeldTaskLog: the live hub replay plus the persisted error, which
+// carries the container-log tail captured when a step failed) so it is
+// redacted through the SAME path as every other section. GitHub #294: the
+// daemon reads no container log on a request, so this replaces
+// task/container_logs.txt.
+func (b *Builder) WriteTaskLog(req Request, res *Result, logs string) {
 	if strings.TrimSpace(logs) == "" {
 		return
 	}
-	b.writeText(req, res, "task/container_logs.txt", []byte(logs))
+	b.writeText(req, res, "task/task_log.txt", []byte(logs))
 }
 
 // ---- window sections ----

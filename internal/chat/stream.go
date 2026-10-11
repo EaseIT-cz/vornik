@@ -108,7 +108,7 @@ func (c *Client) CompleteWithToolsStream(ctx context.Context, messages []Message
 			Model:          c.model,
 			Messages:       messages,
 			Tools:          tools,
-			MaxTokens:      c.maxTokens,
+			MaxTokens:      EffectiveMaxTokens(ctx, c.maxTokens),
 			Options:        c.contextOptions(),
 			ResponseFormat: ResponseFormatStructFromContext(ctx),
 			PromptCacheKey: PromptCacheKeyFromContext(ctx),

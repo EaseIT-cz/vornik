@@ -56,6 +56,9 @@ func (r *taskRepoForDelegationTest) GetByIdempotencyKey(context.Context, string,
 func (r *taskRepoForDelegationTest) Update(context.Context, *persistence.Task) error {
 	panic("not used")
 }
+func (r *taskRepoForDelegationTest) UpdateIfStatus(context.Context, *persistence.Task, []persistence.TaskStatus) (bool, error) {
+	panic("not used")
+}
 func (r *taskRepoForDelegationTest) List(context.Context, persistence.TaskFilter) ([]*persistence.Task, error) {
 	panic("not used")
 }

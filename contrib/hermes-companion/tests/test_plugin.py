@@ -25,7 +25,7 @@ class RegisterTest(unittest.TestCase):
         with mock.patch.dict(os.environ, env, clear=True):
             ctx = FakeCtx()
             plugin.register(ctx)
-        self.assertEqual(sorted(ctx.tools), ["vornik_cancel", "vornik_catalog", "vornik_delegate", "vornik_result", "vornik_status"])
+        self.assertEqual(sorted(ctx.tools), ["vornik_cancel", "vornik_catalog", "vornik_delegate", "vornik_list_artifacts", "vornik_read_artifact", "vornik_result", "vornik_status"])
         self.assertIn("pre_llm_call", ctx.hooks)
         self.assertEqual(sorted(ctx.commands), ["vornik-peek", "vornik-result"])
         self.assertTrue(ctx.skills["vornik-broker"].exists())
@@ -383,14 +383,23 @@ class CatalogManifestTest(unittest.TestCase):
     def test_requires_hermes_is_the_certified_semver_floor(self):
         self.assertRegex(MANIFEST, r'(?m)^requires_hermes:\s*">=0\.21\.5"\s*$')
 
-    def test_all_seven_tools_are_declared(self):
+    def test_all_nine_tools_are_declared(self):
         # Rule 6: the memory provider's two tools are declared although they
         # register only with VORNIK_MEMORY_TOKEN set (review 8a55 F2).
         self.assertEqual(sorted(_yaml_list("provides_tools")), sorted([
             "vornik_catalog", "vornik_delegate", "vornik_result", "vornik_status",
-            "vornik_cancel", "vornik_recall", "vornik_remember"]))
+            "vornik_cancel", "vornik_list_artifacts", "vornik_read_artifact", "vornik_recall", "vornik_remember"]))
 
-    def test_version_is_0_11_3(self):
+    def test_version_is_0_19_0(self):
+        # 0.15.0: /vornik-memory pages through the daemon's memory_list and
+        # /vornik-memory export prints the approver-device link (#119 item 6).
+        # 0.14.0: the vornik-admin skill says every Vornik feature is a tool on
+        # the connection and a link a tool returns is shown to the user (#86).
+        # 0.13.0: the vornik-admin skill says to call test_connection after a
+        # credential is entered (#101); hermes vornik connect --vornikctl <path>
+        # runs that vornikctl and records the same path (#99).
+        # 0.12.0: the vornik-admin skill says to pass transport "sse" to
+        # add_mcp_server for an SSE server (agent-administered design §6.1).
         # 0.11.3: a forgotten Hermes memory added again is recallable; an
         # identical replace touches nothing, and memory_correct declares its
         # refute route (#76). 0.11.2: approvals on replaces a pin on a disconnected namespace (#77).
@@ -401,8 +410,15 @@ class CatalogManifestTest(unittest.TestCase):
         # before a change, and to ask the user to reconnect Vornik
         # (agent-administered design §18.14 finding 2). 0.9.0 was a role's
         # model from the catalogue (§18.6 item 2).
-        self.assertRegex(MANIFEST, r"(?m)^version:\s*0\.11\.3\s*$")
-        self.assertIn("0.11.3 — ", MANIFEST, "the description carries a changelog line for 0.11.3")
+        # 0.16.0: progress in the digest and max_age_seconds (GitHub #119 item 9).
+        self.assertRegex(MANIFEST, r"(?m)^version:\s*0\.19\.0\s*$")
+        self.assertIn("0.19.0 — ", MANIFEST, "the description carries a changelog line for 0.19.0")
+        self.assertIn("0.17.0 — ", MANIFEST, "the description carries a changelog line for 0.17.0")
+        self.assertIn("0.16.0 — ", MANIFEST, "the description carries a changelog line for 0.16.0")
+        self.assertIn("0.15.0 — ", MANIFEST, "earlier changelog lines stay")
+        self.assertIn("0.13.0 — ", MANIFEST, "earlier changelog lines stay")
+        self.assertIn("0.12.0 — ", MANIFEST, "earlier changelog lines stay")
+        self.assertIn("0.11.3 — ", MANIFEST, "earlier changelog lines stay")
         self.assertIn("0.11.2 — ", MANIFEST, "earlier changelog lines stay")
         self.assertIn("0.11.1 — ", MANIFEST, "earlier changelog lines stay")
         self.assertIn("0.11.0 — ", MANIFEST, "earlier changelog lines stay")
@@ -463,11 +479,12 @@ class FakeRun:
         return subprocess.CompletedProcess(argv, self.returncode)
 
 
-def _connect(url=None, dry_run=False, which="/usr/bin/vornikctl", run=None):
+def _connect(url=None, dry_run=False, which="/usr/bin/vornikctl", run=None, vornikctl=None, executable=True):
     out = []
     run = run or FakeRun()
-    rc = cli.connect(argparse.Namespace(url=url, dry_run=dry_run),
-                     which=lambda name: which, run=run, out=out.append)
+    rc = cli.connect(argparse.Namespace(url=url, dry_run=dry_run, vornikctl=vornikctl),
+                     which=lambda name: which, run=run, out=out.append,
+                     is_executable=lambda path: executable)
     return rc, run, "\n".join(out)
 
 
@@ -497,6 +514,35 @@ class ConnectTest(unittest.TestCase):
         self.assertEqual(rc, 3)
         self.assertIn("vornikctl auth login", out)
         self.assertIn("vornikctl pair-device", out)
+
+    # GitHub #99 (2026-10-04 operator report): hermes vornik connect could not
+    # name a vornikctl, so connect recorded whichever ran, often one in the
+    # operator's home that the Hermes user cannot execute. --vornikctl runs
+    # that copy and passes the same path on, so the path run is the path
+    # recorded (design 24, "Setup CLI gaps closed").
+    def test_connect_passes_vornikctl_path(self):
+        rc, run, _ = _connect(vornikctl="/usr/local/bin/vornikctl")
+        self.assertEqual(rc, 0)
+        argv = run.calls[0][0]
+        self.assertEqual(argv[0], "/usr/local/bin/vornikctl", "the named copy runs, not the one on PATH")
+        self.assertEqual(argv[1:4], ["agent", "connect", "hermes"])
+        self.assertEqual(argv[argv.index("--vornikctl") + 1], "/usr/local/bin/vornikctl")
+
+    def test_connect_refuses_relative_vornikctl_path(self):
+        rc, run, out = _connect(vornikctl="bin/vornikctl")
+        self.assertEqual(rc, 1)
+        self.assertEqual(run.calls, [])
+        self.assertIn("absolute", out)
+        rc, run, out = _connect(vornikctl="/opt/vornikctl", executable=False)
+        self.assertEqual(rc, 1)
+        self.assertEqual(run.calls, [])
+        self.assertIn("/opt/vornikctl", out)
+
+    def test_connect_without_vornikctl_flag_passes_nothing_new(self):
+        # An older vornikctl does not know --vornikctl; without the flag the
+        # argv is exactly what it was.
+        _, run, _ = _connect()
+        self.assertNotIn("--vornikctl", run.calls[0][0])
 
     def test_timeout_is_a_failure(self):
         rc, _, out = _connect(run=FakeRun(exc=subprocess.TimeoutExpired(["vornikctl"], 120)))

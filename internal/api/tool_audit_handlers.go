@@ -1,7 +1,9 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"time"
 
@@ -239,7 +241,8 @@ func (s *Server) IngestToolAudit(w http.ResponseWriter, r *http.Request) {
 		OutcomeClass: outcomeClass,
 		CreatedAt:    time.Now().UTC(),
 	}
-	if err := s.toolAuditRepo.Log(r.Context(), entry); err != nil {
+	stored, known, err := s.logToolAudit(r.Context(), entry)
+	if err != nil {
 		s.logger.Warn().
 			Err(err).
 			Str("audit_id", req.AuditID).
@@ -256,14 +259,55 @@ func (s *Server) IngestToolAudit(w http.ResponseWriter, r *http.Request) {
 	// already renders tool_call_started/finished). Fire-and-forget: Publish
 	// returns no error and must never block or fail the agent's ingest. The
 	// tool I/O is plain text, so JSON-encode it into the RawMessage fields.
+	//
+	// The I/O published is the STORED row's (GitHub #293): the redaction seam
+	// redacts the copy it stores, and until 2026-10-08 this published the raw
+	// request instead, so the live view and the live_events rows carried
+	// credentials the audit row did not. When the stored row is unknown the
+	// I/O is withheld rather than published raw.
 	if s.liveSub != nil && req.ExecutionID != "" {
-		inJSON, _ := json.Marshal(req.ToolInput)
-		outJSON, _ := json.Marshal(out)
+		var inJSON, outJSON json.RawMessage
+		if known {
+			inJSON, _ = json.Marshal(stored.ToolInput)
+			outJSON, _ = json.Marshal(stored.ToolOutput)
+		}
 		s.liveSub.Publish(r.Context(), req.ExecutionID, livepubsub.KindToolCallStarted,
-			livepubsub.ToolCallStartedPayload{StepID: req.StepID, CallID: req.AuditID, Tool: req.ToolName, InputJSON: inJSON})
+			livepubsub.ToolCallStartedPayload{StepID: stored.StepID, CallID: stored.ID, Tool: stored.ToolName, InputJSON: inJSON})
 		s.liveSub.Publish(r.Context(), req.ExecutionID, livepubsub.KindToolCallFinished,
-			livepubsub.ToolCallFinishedPayload{CallID: req.AuditID, OutputJSON: outJSON, DurationMs: clampedMs})
+			livepubsub.ToolCallFinishedPayload{CallID: stored.ID, OutputJSON: outJSON, DurationMs: stored.DurationMs})
 	}
 
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// toolAuditStoredLogger is the redaction seam's read-back: Log, returning the
+// entry it handed to the database (auditredact.Repo implements it).
+type toolAuditStoredLogger interface {
+	LogStored(ctx context.Context, entry *persistence.ToolAuditEntry) (*persistence.ToolAuditEntry, error)
+}
+
+// logToolAudit writes entry and reports what was stored. known is false when
+// the repository cannot say: then stored is the caller's entry, which only its
+// non-I/O fields may be trusted for, and the live events withhold the I/O.
+//
+// FAIL CLOSED, NOT RAW. A repository without the read-back cannot be told apart
+// from a redacting wrapper placed outside the seam; publishing the raw request
+// for it would silently reopen GitHub #293 (review-20261008-eb1b F1). In every
+// daemon build the outermost repository is an *auditredact.Repo, so this branch
+// is reached by test doubles and by a future misplaced wrapper, which the
+// once-per-process warning names.
+func (s *Server) logToolAudit(ctx context.Context, entry *persistence.ToolAuditEntry) (stored *persistence.ToolAuditEntry, known bool, err error) {
+	if sl, ok := s.toolAuditRepo.(toolAuditStoredLogger); ok {
+		stored, err = sl.LogStored(ctx, entry)
+		if stored == nil {
+			stored = entry
+		}
+		return stored, true, err
+	}
+	s.toolAuditOpaqueWarn.Do(func() {
+		s.logger.Warn().
+			Str("repository", fmt.Sprintf("%T", s.toolAuditRepo)).
+			Msg("tool audit ingest: repository cannot return the stored row; live tool events will withhold tool input and output")
+	})
+	return entry, false, s.toolAuditRepo.Log(ctx, entry)
 }

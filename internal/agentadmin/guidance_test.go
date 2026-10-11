@@ -9,7 +9,7 @@ import (
 // Plan P6.3: the guidance carries the rules an unskilled user's safety
 // leans on, and the bundle skills carry exactly the same text after their
 // frontmatter, so a bundle cannot drift from what the daemon serves.
-// Control: admin_guidance.md and the two SKILL.md files.
+// Control: admin_guidance.md and the three SKILL.md files.
 func TestAdminGuidance(t *testing.T) {
 	g := AdminGuidance()
 	for _, want := range []string{"describe_installation", "request_credential", "Never ask the user for a password",
@@ -28,7 +28,22 @@ func TestAdminGuidance(t *testing.T) {
 		RecipeRule, "list_recipes", "install_recipe",
 		// Design §18.6 item 2: a role's optional model from the catalogue,
 		// and what a remote one costs the user (an approval on the phone).
-		"a `model` from the catalogue", "remote", "once per destination"} {
+		"a `model` from the catalogue", "remote", "once per destination",
+		// Design §6.1 (reference host 2026-10-08: hermes--prague-venue-research
+		// scraper 404): an SSE server is declared, never guessed.
+		"`transport: \"sse\"`",
+		// Design §6.2 (GitHub #101, 2026-10-08): a stored credential is
+		// checked before a workflow leans on it.
+		"call `test_connection` for that connection before you define a workflow that uses it",
+		"a stored credential is not proof the provider accepts it",
+		// LLD 21 §D2 "The generic harness contract" (GitHub #86, 2026-10-08):
+		// a feature is a tool on the connection, and a link is the user's.
+		"Every Vornik feature is a tool on this connection", "show the link to the user",
+		// GitHub #119 item 9 (C5): progress while a task runs, and opt-in
+		// reuse of a recent read-only result.
+		"`progress`", "max_age_seconds", "not from `task_logs`",
+		// Broker program B10: an assistant must ask which account to use.
+		"Name the account"} {
 		if !strings.Contains(g, want) {
 			t.Errorf("the guidance does not say %q", want)
 		}

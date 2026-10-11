@@ -10,6 +10,7 @@ import (
 
 	"vornik.io/vornik/internal/persistence"
 	"vornik.io/vornik/internal/steering"
+	"vornik.io/vornik/internal/taskcancel"
 )
 
 // handleSteerCallback owns the `steer:*` callback namespace — the button
@@ -148,18 +149,24 @@ func (b *Bot) steerApprove(ctx context.Context, chatID int64, callbackID string,
 // steerReject cancels an AWAITING_APPROVAL task (and cascades to its children
 // when the canceller is wired).
 func (b *Bot) steerReject(ctx context.Context, chatID int64, callbackID string, msgID int64, task *persistence.Task) error {
-	ok, err := b.taskRepo.TransitionConditional(ctx, task.ID,
-		[]persistence.TaskStatus{persistence.TaskStatusAwaitingApproval, persistence.TaskStatusAwaitingInput},
-		persistence.TaskStatusCancelled,
-		persistence.TransitionOpts{ClearLease: true})
+	// Through the cancel primitive (05-scheduler §4.11, GitHub #304): once the
+	// row moved, the parent is unblocked and the children are cancelled. The
+	// lease is cleared by the write itself (a CANCELLED row holds none, §4.9).
+	outcome, err := taskcancel.Cancel(ctx, b.taskRepo, b.taskTeardown, task.ID,
+		[]persistence.TaskStatus{persistence.TaskStatusAwaitingApproval, persistence.TaskStatusAwaitingInput})
 	if err != nil {
 		return b.answerCallbackQuery(ctx, callbackID, "Could not reject: "+err.Error(), true)
 	}
-	if !ok {
+	if !outcome.Transitioned {
 		return b.answerCallbackQuery(ctx, callbackID, "This task was already handled or its state changed.", false)
 	}
-	// Downward cascade so the cancelled parent doesn't strand children.
-	if b.childCanceller != nil {
+	if outcome.TeardownErr != nil {
+		b.logger.Error().Err(outcome.TeardownErr).Str("task_id", task.ID).
+			Msg("steer reject: container did not stop — it may still be running")
+	}
+	// Without a teardown wired, the downward cascade is the child canceller's
+	// (the primitive cascades when it has one, and must not run twice).
+	if b.taskTeardown == nil && b.childCanceller != nil {
 		b.childCanceller.CancelChildren(ctx, task.ID)
 	}
 	if b.rescheduler != nil {

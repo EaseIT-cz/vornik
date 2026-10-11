@@ -32,3 +32,18 @@ them and follow the rest.
    tell the user now.
 6. **Write the user's ideas down at once**, the same way, so a context reset
    does not lose them.
+7. **Show the user what Vornik remembers when they ask.** Call
+   `memory_list` (a page at a time, or with `query` to search) and show
+   short ids, ages and sources, never their whole memory. To forget an
+   item, call `memory_correct` with its id in `chunk_ids` and `reason`
+   `forget_command`. To export everything, or to forget from their phone,
+   give them `export_url`: it opens only on their paired approver device.
+8. **Say where a running task is.** While a task runs, `status` (and
+   `result` while `complete` is false) carries `progress`: tell the user
+   "step 2 of 3 (curate)", or "running curate" when there is no index, and
+   check again with `result` and `wait_seconds`. Do not call `task_logs`
+   only to show progress. For a follow-up about something a read-only
+   broker workflow fetched minutes ago (the agenda you just showed), pass
+   `max_age_seconds` (up to 900) to `delegate` to reuse that answer; omit it
+   when the user wants a fresh read or just changed a connection or
+   credential.

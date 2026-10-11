@@ -23,6 +23,7 @@ import (
 	"vornik.io/vornik/internal/mcp"
 	"vornik.io/vornik/internal/persistence"
 	"vornik.io/vornik/internal/registry"
+	"vornik.io/vornik/internal/taskcancel"
 	"vornik.io/vornik/internal/taskcreate"
 )
 
@@ -822,6 +823,16 @@ type CancelTaskResponse struct {
 	CancelledAt string `json:"cancelledAt"`
 }
 
+// cancelTeardown is the executor as the cancel primitive's Teardown, or nil
+// when none is wired — a nil ExecutorInterface must not become a non-nil
+// Teardown holding a nil value.
+func (s *Server) cancelTeardown() taskcancel.Teardown {
+	if s.executor == nil {
+		return nil
+	}
+	return s.executor
+}
+
 // CancelTask handles POST /projects/{projectId}/tasks/{taskId}/cancel
 func (s *Server) CancelTask(w http.ResponseWriter, r *http.Request) {
 	projectID := extractProjectID(r)
@@ -870,20 +881,22 @@ func (s *Server) CancelTask(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Atomic conditional transition. The legacy code did
-	// read-status → check → write-CANCELLED in three steps; if a
-	// task COMPLETED between the read and write, the third step
-	// silently overwrote the terminal state. The new
-	// TransitionToCancelled gates the WRITE on the live status, so
-	// a racing terminal write wins. When the row didn't transition
-	// we re-fetch and report the actual current state.
-	transitioned, err := s.taskRepo.TransitionToCancelled(r.Context(), taskID)
+	// The shared cancel primitive (05-scheduler.md §4.11): the conditional
+	// write gated on the live status — a task that COMPLETED between the read
+	// above and the write keeps its outcome — then, only if the row moved,
+	// teardown asked of the executor's live map (§4.7: never of the status
+	// snapshot), the parent-unblock sweep (regression 2026-06-07) and the
+	// downward cascade to children. nil keeps TransitionToCancelled's set.
+	// The companion tool, UI, chat and Telegram cancels call the same
+	// function; the companion tool once had its own copy without the
+	// teardown (GitHub #300).
+	outcome, err := taskcancel.Cancel(r.Context(), s.taskRepo, s.cancelTeardown(), taskID, nil)
 	if err != nil {
 		s.logger.Error().Err(err).Str("taskId", taskID).Msg("failed to atomically cancel task")
 		respondError(w, http.StatusInternalServerError, "INTERNAL_ERROR", "Failed to cancel task")
 		return
 	}
-	if !transitioned {
+	if !outcome.Transitioned {
 		fresh, getErr := s.taskRepo.Get(r.Context(), taskID)
 		if getErr != nil {
 			respondError(w, http.StatusConflict, "INVALID_STATE", "Task is no longer in a cancellable state")
@@ -893,45 +906,13 @@ func (s *Server) CancelTask(w http.ResponseWriter, r *http.Request) {
 			fmt.Sprintf("Task transitioned to %s before cancellation took effect", fresh.Status))
 		return
 	}
-
-	// Transition succeeded — tear down the execution if the executor has one.
-	// Asked unconditionally, and answered by the executor's live map rather
-	// than by `task.Status` read at handler entry: that read is a snapshot,
-	// the transition above accepts LEASED and QUEUED too, and a task that
-	// reached RUNNING in between had its row cancelled with its container
-	// left alive — claimed by no row and sought by no reaper
-	// (05-scheduler.md §4.7). A failure is logged, not surfaced: the
-	// canonical state is the DB row, which is now CANCELLED.
-	tornDown := false
-	if s.executor != nil {
-		had, cerr := s.executor.CancelIfActive(taskID)
-		tornDown = had && cerr == nil
-		if cerr != nil {
-			s.logger.Error().Err(cerr).Str("taskId", taskID).
-				Msg("cancel: container did not stop — it may still be running")
-		}
+	// A teardown failure is logged, not surfaced: the canonical state is the
+	// DB row, which is now CANCELLED.
+	if outcome.TeardownErr != nil {
+		s.logger.Error().Err(outcome.TeardownErr).Str("taskId", taskID).
+			Msg("cancel: container did not stop — it may still be running")
 	}
-
-	// CANCELLED is terminal, so drive the parent-unblock sweep — for
-	// a non-running child (QUEUED/LEASED/PENDING) the executor's
-	// handleCancelled path never fires, so without this nudge a
-	// WAITING_FOR_CHILDREN parent waited for the cancelled child
-	// forever (regression 2026-06-07). Idempotent for the running
-	// case: the unblock core is TransitionConditional-gated, so the
-	// overlap with handleCancelled's own call is a clean no-op.
-	if s.executor != nil {
-		s.executor.NotifyChildTerminal(r.Context(), taskID)
-	}
-
-	// Downward cascade: a cancelled parent must not leave its children
-	// running. Walk the parent_task_id tree and cancel non-terminal
-	// children (idempotent, race-safe, recursive). Without this a
-	// cancelled parent left its route/delegation/checkpoint children
-	// RUNNING/QUEUED. Cross-project callees are handled separately via
-	// the CPC ledger, not this in-project relation.
-	if s.executor != nil {
-		s.executor.CancelChildren(r.Context(), taskID)
-	}
+	tornDown := outcome.TornDown
 
 	// Build response
 	resp := CancelTaskResponse{
@@ -1961,11 +1942,17 @@ func (s *Server) Livez(w http.ResponseWriter, r *http.Request) {
 // SetDraining flips the drain bit. Called from the SIGTERM handler in
 // container.Run before invoking shutdown() — once true, /readyz returns
 // 503 with {"status":"draining"} so load balancers stop sending new
-// requests during the grace window. There is no setter for false:
-// graceful shutdown is one-way (the next process start clears the bit
-// because it's a fresh in-memory flag).
+// requests during the grace window. Graceful shutdown is one-way (the next
+// process start clears the bit because it's a fresh in-memory flag): true is
+// BeginShutdownDrain, which also makes an operator drain (GitHub #290,
+// drain.go) permanent. false clears only an operator drain, never the
+// shutdown drain (GitHub #290 design review e381 #5).
 func (s *Server) SetDraining(v bool) {
-	s.draining.Store(v)
+	if v {
+		s.BeginShutdownDrain()
+		return
+	}
+	_ = s.EndOperatorDrain()
 }
 
 // IsDraining reports whether the daemon has begun graceful shutdown.

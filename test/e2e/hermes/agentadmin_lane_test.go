@@ -270,7 +270,8 @@ func (b *bridgeSession) delegate(t *testing.T, workflow string, inputs map[strin
 func TestA1_ProtocolLevel(t *testing.T) {
 	requireLaneAgentImage(t)
 	s := startStack(t)
-	s.llm.SetScripts(append(agentScripts(), digestScript(goodDigest()), replyScript())...)
+	holdA1 := make(chan struct{})
+	s.llm.SetScripts(append(append([]Script{heldSummary(holdA1)}, agentScripts()...), digestScript(goodDigest()), replyScript())...)
 	phone := pairPhone(t, s)
 
 	// The one command the user runs.
@@ -312,7 +313,7 @@ func TestA1_ProtocolLevel(t *testing.T) {
 	b.mustEffect(t, "define_workflow", map[string]any{"project": "finance", "slug": "summary", "purpose": "Monthly summary",
 		"steps": []map[string]any{{"name": "sum", "role": "reader", "instructions": summaryMarker + " Summarise the month's spending by category."}},
 		"inputs": map[string]any{"type": "object", "additionalProperties": false, "required": []string{"month"},
-			"properties": map[string]any{"month": map[string]any{"enum": []string{"previous", "hostile-schema", "hostile-secret"}}}},
+			"properties": map[string]any{"month": map[string]any{"enum": []string{"previous", "hostile-schema", "hostile-secret", heldMonth}}}},
 		"egress": map[string]any{"type": "object", "additionalProperties": false, "properties": map[string]any{
 			"month": map[string]any{"type": "string", "maxLength": 7}, "total": map[string]any{"type": "number"},
 			"top_categories": map[string]any{"type": "array", "maxItems": 5, "items": map[string]any{"type": "object", "additionalProperties": false,
@@ -327,6 +328,26 @@ func TestA1_ProtocolLevel(t *testing.T) {
 	out, _ := res["output"].(map[string]any)
 	if out == nil || out["total"] == nil || len(out) != 3 {
 		t.Fatalf("summary egress: %v", res)
+	}
+	// GitHub #119 item 9 (C6): reuse of this run, and progress of a held one.
+	laneProgressAgent(t, s, func(tool string, args map[string]any) (string, bool) {
+		text, isErr, err := b.Tool(tool, args)
+		if err != nil {
+			t.Fatalf("%s: %v", tool, err)
+		}
+		return text, isErr
+	}, wf, task, holdA1)
+
+	// GitHub #305 (2026-10-08), lane D DoD case: list names a project of the
+	// namespace (the bridge's home project is not finance), and an argument
+	// the tool does not declare is refused by name instead of dropped.
+	if text, isErr, err := b.Tool("list", map[string]any{"project": "finance"}); err != nil || isErr ||
+		!strings.Contains(text, `"project": "`+ns+`--finance"`) || !strings.Contains(text, task) {
+		t.Fatalf("list project finance: %s %v %v", text, isErr, err)
+	}
+	if text, isErr, err := b.Tool("list", map[string]any{"projekt": "finance"}); err != nil || !isErr ||
+		!strings.Contains(text, `unknown argument "projekt"`) {
+		t.Fatalf("list with an unknown argument must be refused by name: %s %v %v", text, isErr, err)
 	}
 
 	// The hostile producer (P8.2 §4). A field outside the schema is
@@ -693,7 +714,7 @@ func harnessScripts(s *stack, prefix, ns string) []Script {
 			tool("define_workflow", map[string]any{"project": "finance", "slug": "summary", "purpose": "Monthly summary",
 				"steps": []map[string]any{{"name": "sum", "role": "reader", "instructions": summaryMarker + " Summarise the month's spending by category."}},
 				"inputs": map[string]any{"type": "object", "additionalProperties": false, "required": []string{"month"},
-					"properties": map[string]any{"month": map[string]any{"enum": []string{"previous"}}}},
+					"properties": map[string]any{"month": map[string]any{"enum": []string{"previous", heldMonth}}}},
 				"egress": map[string]any{"type": "object", "additionalProperties": false, "properties": map[string]any{
 					"month": map[string]any{"type": "string", "maxLength": 7}, "total": map[string]any{"type": "number"},
 					"top_categories": map[string]any{"type": "array", "maxItems": 5, "items": map[string]any{"type": "object", "additionalProperties": false,
@@ -705,6 +726,31 @@ func harnessScripts(s *stack, prefix, ns string) []Script {
 			{ToolSuffix: prefix + "result", ArgsFrom: resultArgs},
 			{ToolSuffix: prefix + "result", ArgsFrom: resultArgs},
 		}, FinalFrom: func(last string) string { return "Summary: " + last }},
+		// GitHub #305 (2026-10-08), lane D DoD cases: list names a project of
+		// the namespace, and an undeclared argument is refused by name.
+		{Marker: "[A2-5]", Steps: []ScriptStep{
+			tool("list", map[string]any{"project": "finance"}),
+		}, FinalFrom: func(last string) string { return "Listed: " + last }},
+		{Marker: "[A2-6]", Steps: []ScriptStep{
+			tool("list", map[string]any{"projekt": "finance"}),
+		}, FinalFrom: func(last string) string { return "Refused: " + last }},
+	}
+}
+
+// assertListCases checks the [A2-5] and [A2-6] replies of a harness arm: the
+// list of the namespace's finance project, and the refusal of an undeclared
+// argument by name (GitHub #305). home is where the harness keeps what the
+// model received, searched when the reply alone does not carry it.
+func assertListCases(t *testing.T, ns, listed, refused, home string) {
+	t.Helper()
+	if want := ns + `--finance`; !strings.Contains(listed, want) && !dirContains(t, home, want) {
+		t.Fatalf("list project finance did not reach %s's project:\n%s", ns, listed)
+	}
+	// The harness may quote the tool's text inside its own JSON, so the
+	// quotes around the name can arrive escaped.
+	named := strings.Contains(refused, "unknown argument") && strings.Contains(refused, "projekt")
+	if !named && !dirContains(t, home, "unknown argument") {
+		t.Fatalf("list with an undeclared argument was not refused by name:\n%s", refused)
 	}
 }
 
@@ -777,6 +823,8 @@ func TestA2_Hermes(t *testing.T) {
 		t.Fatalf("Hermes did not get the summary: %q\n%s", r.Reply, tail(r.Stderr, 2000))
 	}
 	assertBankCalledWithKey(t, s)
+	assertListCases(t, "hermes", step("[A2-5]", "List the finance tasks.").Reply,
+		step("[A2-6]", "List the finance tasks again.").Reply, s.hermesHome)
 
 	// The bridge refuses its key file to any other user (review 8941 F2):
 	// run directly in the image as a UID that is neither root nor the key's
@@ -851,7 +899,8 @@ func TestA3_Codex(t *testing.T) {
 	}
 	t.Logf("certifying %s", strings.TrimSpace(string(ver)))
 	s := startStack(t)
-	s.llm.SetScripts(append(agentScripts(), digestScript(goodDigest()), replyScript())...)
+	holdA3 := make(chan struct{})
+	s.llm.SetScripts(append(append([]Script{heldSummary(holdA3)}, agentScripts()...), digestScript(goodDigest()), replyScript())...)
 	model := &ResponsesStub{Final: "Done.", Scripts: harnessScripts(s, "codex__", "codex")}
 	modelURL := fmt.Sprintf("http://127.0.0.1:%d/v1", serveLoopback(t, model))
 	phone := pairPhone(t, s)
@@ -893,6 +942,7 @@ wire_api = "responses"
 
 	var transcript strings.Builder
 	step := func(marker, prompt string) string {
+		model.evidence.reset()
 		cmd := exec.Command(codexBin, "exec", "--skip-git-repo-check", "--dangerously-bypass-approvals-and-sandbox", marker+" "+prompt)
 		cmd.Dir = env.home
 		cmd.Env = env.vars("CODEX_HOME=" + codexHome)
@@ -918,6 +968,12 @@ wire_api = "responses"
 		t.Fatalf("Codex did not get the summary:\n%s", reply)
 	}
 	assertBankCalledWithKey(t, s)
+	// GitHub #119 item 9 (C6): on Codex's own agent key, reuse of the run it
+	// just made and progress of a held one.
+	codexCall, codexDone := agentKeyCall(t, s, env, "codex", "codex--finance--summary")
+	laneProgressCodex(t, s, codexCall, "codex--finance--summary", codexDone, holdA3, model, step)
+	assertListCases(t, "codex", step("[A2-5]", "List the finance tasks."),
+		step("[A2-6]", "List the finance tasks again."), codexHome)
 
 	assertDeviceApprovals(t, s, phone, 1)
 	sweep := NewSweep([]string{BankKeyCanary, MailTokenCanary}, []string{RawRecordCanary, RawMailCanary})

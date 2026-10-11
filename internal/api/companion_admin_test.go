@@ -484,3 +484,73 @@ func TestAdminToolDefs_StateTheProjectReferenceRule(t *testing.T) {
 		t.Errorf("create_project.slug = %q", got)
 	}
 }
+
+// Design §6.1 (2026-10-08; reference host 2026-10-08:
+// hermes--prague-venue-research scraper 404): add_mcp_server's schema states
+// the transport rule and its two values, so an agent reads it before it
+// trips on it.
+func TestAdminToolDefs_StateTheTransportRule(t *testing.T) {
+	for _, d := range companionAdminToolDefs() {
+		if d.Name != agentadmin.VerbAddMCPServer {
+			continue
+		}
+		p, _ := d.InputSchema["properties"].(map[string]any)
+		f, _ := p["transport"].(map[string]any)
+		if f["description"] != agentadmin.MCPTransportRule {
+			t.Fatalf("transport description = %v", f["description"])
+		}
+		enum, _ := f["enum"].([]string)
+		if strings.Join(enum, ",") != "streamable-http,sse" {
+			t.Fatalf("transport enum = %v", f["enum"])
+		}
+		return
+	}
+	t.Fatal("no add_mcp_server tool")
+}
+
+// GitHub #119 item 8 (2026-10-08): add_mcp_server and add_api take an
+// optional account {label, identity} whose description is AccountRule, the
+// same text the renderer enforces (agent-administered design §22.2.1).
+func TestAdminToolDefs_StateTheAccountRule(t *testing.T) {
+	seen := 0
+	for _, d := range companionAdminToolDefs() {
+		if d.Name != agentadmin.VerbAddMCPServer && d.Name != agentadmin.VerbAddAPI {
+			continue
+		}
+		seen++
+		p, _ := d.InputSchema["properties"].(map[string]any)
+		a, _ := p["account"].(map[string]any)
+		if a["description"] != agentadmin.AccountRule || a["additionalProperties"] != false {
+			t.Fatalf("%s account schema = %v", d.Name, a)
+		}
+		props, _ := a["properties"].(map[string]any)
+		req, _ := a["required"].([]string)
+		if props["label"] == nil || props["identity"] == nil || strings.Join(req, ",") != "label" {
+			t.Fatalf("%s account fields = %v, required %v", d.Name, props, req)
+		}
+		if r, _ := d.InputSchema["required"].([]string); strings.Contains(strings.Join(r, ","), "account") {
+			t.Fatalf("%s: account must stay optional", d.Name)
+		}
+	}
+	if seen != 2 {
+		t.Fatalf("found %d of the two add verbs", seen)
+	}
+}
+
+// GitHub #119 item 8 (2026-10-08): install_recipe takes an optional account
+// whose description carries RecipeAccountsRule (design §22.2.8).
+func TestAdminToolDefs_InstallRecipeTakesAnAccount(t *testing.T) {
+	for _, d := range companionAdminToolDefs() {
+		if d.Name != agentadmin.VerbInstallRecipe {
+			continue
+		}
+		p, _ := d.InputSchema["properties"].(map[string]any)
+		a, _ := p["account"].(map[string]any)
+		desc, _ := a["description"].(string)
+		if !strings.Contains(desc, agentadmin.RecipeAccountsRule) {
+			t.Fatalf("install_recipe account = %v", a)
+		}
+		return
+	}
+	t.Fatal("no install_recipe tool")
+}

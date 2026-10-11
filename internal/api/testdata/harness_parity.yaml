@@ -1,0 +1,114 @@
+# HARNESS PARITY manifest (operator, 2026-10-08; LLD 21 §D2 "The generic
+# harness contract"). Read by internal/api/harness_parity_test.go.
+#
+# One entry per user-visible capability. Each names its tools (the daemon's
+# companion tools and agent-admin verbs) and, for each shipped bundle, the file
+# that teaches the capability and a string that file must contain. A bundle
+# without a surface needs an exemption with its reason. A tool in no capability
+# must be in `exempt` with its reason.
+#
+# A later feature adds its capability here in the change that adds the tool
+# (the bundle token order of the Hermes broker plan: D6, A5, C5, B10).
+capabilities:
+  - name: delegate-work
+    tools: [delegate, status, result, cancel, list, catalog]
+    bundles:
+      claude-code: {file: contrib/claude-code-companion/skills/delegate/SKILL.md, says: "delegate"}
+      codex:       {file: contrib/codex-companion/skills/delegate/SKILL.md, says: "delegate"}
+      hermes:      {file: contrib/hermes-companion/skills/vornik-broker/SKILL.md, says: "vornik_delegate"}
+
+  # GitHub #318: LLD15 section11 owns the completed-run output boundary.
+  - name: list-artifacts
+    tools: [list_artifacts]
+    bundles:
+      claude-code: {file: contrib/claude-code-companion/skills/delegate/SKILL.md, says: "mcp__vornik__list_artifacts"}
+      codex:       {file: contrib/codex-companion/skills/delegate/SKILL.md, says: "mcp__vornik__list_artifacts"}
+      hermes:      {file: contrib/hermes-companion/skills/vornik-broker/SKILL.md, says: "vornik_list_artifacts"}
+
+  # GitHub #318: LLD15 section11 owns the completed-run output boundary.
+  - name: read-artifact
+    tools: [read_artifact]
+    bundles:
+      claude-code: {file: contrib/claude-code-companion/skills/delegate/SKILL.md, says: "mcp__vornik__read_artifact"}
+      codex:       {file: contrib/codex-companion/skills/delegate/SKILL.md, says: "mcp__vornik__read_artifact"}
+      hermes:      {file: contrib/hermes-companion/skills/vornik-broker/SKILL.md, says: "vornik_read_artifact"}
+
+  - name: project-memory
+    tools: [recall, remember, recent_memory, memory_correct, list_scopes]
+    bundles:
+      claude-code: {file: contrib/claude-code-companion/commands/recall.md, says: "mcp__vornik__recall"}
+      codex:       {file: contrib/codex-companion/skills/delegate/SKILL.md, says: "recall"}
+      hermes:      {file: contrib/hermes-companion/memory_provider.py, says: "\"recall\""}
+
+  # GitHub #119 item 6 (A5): what Vornik remembers, paged; forget by id is
+  # memory_correct (project-memory above); export is the approver device's page.
+  # Depth differs by bundle (review 6ef9 F3): claude-code and codex are
+  # markdown skills, checked here at the "teaches the tool" level; Hermes's
+  # call sites and arguments are also pinned by testdata/bundle_tool_calls.json.
+  - name: memory-visible
+    tools: [memory_list]
+    bundles:
+      claude-code: {file: contrib/claude-code-companion/commands/memory.md, says: "mcp__vornik__memory_list"}
+      codex:       {file: contrib/codex-companion/skills/knowledge/SKILL.md, says: "mcp__vornik__memory_list"}
+      hermes:      {file: contrib/hermes-companion/memory_provider.py, says: "\"memory_list\""}
+
+  # GitHub #119 item 9 (C5): where a running task is. A field of status and
+  # result, not a tool: its tools are listed again here so the entry is
+  # checked against the bundles that must teach it.
+  - name: progress
+    tools: [status, result]
+    bundles:
+      claude-code: {file: contrib/claude-code-companion/skills/delegate/SKILL.md, says: "`progress`"}
+      codex:       {file: contrib/codex-companion/skills/delegate/SKILL.md, says: "`progress`"}
+      hermes:      {file: contrib/hermes-companion/skills/vornik-broker/SKILL.md, says: "`progress`"}
+
+  # GitHub #119 item 9 (C5): reuse of a recent read-only result, an argument
+  # of delegate (broker design 6b). Hermes's call site and argument are also
+  # pinned by testdata/bundle_tool_calls.json.
+  - name: result-reuse
+    tools: [delegate]
+    bundles:
+      claude-code: {file: contrib/claude-code-companion/skills/delegate/SKILL.md, says: "max_age_seconds"}
+      codex:       {file: contrib/codex-companion/skills/delegate/SKILL.md, says: "max_age_seconds"}
+      hermes:      {file: contrib/hermes-companion/skills/vornik-broker/SKILL.md, says: "max_age_seconds"}
+
+  - name: knowledge-skills
+    tools: [skill_propose, skill_search, skill_get, skill_list, skill_approve, skill_reject, skill_set_global]
+    bundles:
+      claude-code: {file: contrib/claude-code-companion/commands/skill-propose.md, says: "mcp__vornik__skill_propose"}
+      codex:       {file: contrib/codex-companion/skills/knowledge/SKILL.md, says: "mcp__vornik__skill_propose"}
+    exempt_bundles:
+      hermes: "deliberate: Hermes holds a broker-project key, whose tool allowlist (broker design §5.6, brokerProjectTools) refuses every skill tool, and a memory-only key; knowledge skills are for coding companions"
+
+  - name: identity
+    tools: [whoami]
+    bundles:
+      claude-code: {file: contrib/claude-code-companion/commands/whoami.md, says: "mcp__vornik__whoami"}
+      codex:       {file: contrib/codex-companion/README.md, says: "whoami"}
+    exempt_bundles:
+      hermes: "deliberate: whoami reports the key's repo_scope and database for a coding companion's RAG scope; Hermes's keys carry no repo scope, and its connect command records the namespace and project it set up"
+
+  - name: task-observation
+    tools: [task_logs, task_explain, daemon_log, doctor]
+    bundles:
+      claude-code: {file: contrib/claude-code-companion/skills/troubleshoot-vornik/SKILL.md, says: "task_logs"}
+      codex:       {file: contrib/codex-companion/skills/troubleshoot-vornik/SKILL.md, says: "task_logs"}
+      hermes:      {file: contrib/hermes-companion/skills/vornik-broker/SKILL.md, says: "task_logs"}
+
+  # GitHub #119 item 8 (B10): a connection to each account is named explicitly.
+  - name: accounts
+    tools: [add_mcp_server, add_api, install_recipe, test_connection, list_my_setup]
+    bundles:
+      claude-code: {file: contrib/claude-code-companion/skills/vornik-admin/SKILL.md, says: "Name the account"}
+      codex:       {file: contrib/codex-companion/skills/vornik-admin/SKILL.md, says: "Name the account"}
+      hermes:      {file: contrib/hermes-companion/skills/vornik-admin/SKILL.md, says: "Name the account"}
+
+  - name: agent-admin
+    tools: [describe_installation, list_my_setup, list_recipes, install_recipe, create_project, define_swarm, define_workflow, add_mcp_server, add_api, request_credential, set_budget, remove, update_project, test_connection]
+    bundles:
+      claude-code: {file: contrib/claude-code-companion/skills/vornik-admin/SKILL.md, says: "describe_installation"}
+      codex:       {file: contrib/codex-companion/skills/vornik-admin/SKILL.md, says: "describe_installation"}
+      hermes:      {file: contrib/hermes-companion/skills/vornik-admin/SKILL.md, says: "describe_installation"}
+
+exempt:
+  - {tool: report_problem, reason: "operator-facing: the report-problem skills of claude-code and codex drive vornikctl report rather than this tool; a Hermes user reports through the operator"}

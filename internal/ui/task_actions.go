@@ -13,6 +13,7 @@ import (
 	"vornik.io/vornik/internal/api"
 	"vornik.io/vornik/internal/executor"
 	"vornik.io/vornik/internal/persistence"
+	"vornik.io/vornik/internal/taskcancel"
 )
 
 // projectRouter dispatches project detail and project config editor requests.
@@ -47,43 +48,26 @@ func (s *Server) cancelOne(ctx context.Context, r *http.Request, taskID string) 
 	if !slices.Contains(cancellable, task.Status) {
 		return false
 	}
-	// ONE conditional write, gated on the live row. If the task reached an
-	// end state since the read, nothing happens: no teardown, no parent
-	// unblock (its own terminal transition owes that), no child cascade, no
-	// "cancelled" log line. The redirect target shows the row's real status.
-	moved, err := s.taskRepo.TransitionConditional(ctx, taskID,
-		cancellable, persistence.TaskStatusCancelled, persistence.TransitionOpts{})
+	// The shared cancel primitive (05-scheduler.md §4.11): ONE conditional
+	// write, gated on the live row; if the task reached an end state since the
+	// read, nothing happens — no teardown, no parent unblock (its own terminal
+	// transition owes that), no child cascade, no "cancelled" log line, and the
+	// redirect target shows the row's real status. Only when the row moved:
+	// teardown asked of the executor's live map (§4.7), the parent-unblock
+	// sweep (regression 2026-06-07) and the downward cascade.
+	outcome, err := taskcancel.Cancel(ctx, s.taskRepo, s.cancelTeardown(), taskID, cancellable)
 	if err != nil {
 		// Logged so an infrastructure failure is not indistinguishable from
 		// "the task already finished" (review a3d9 F4).
 		s.logger.Warn().Err(err).Str("task_id", taskID).Msg("cancel: conditional CANCELLED write failed")
 		return false
 	}
-	if !moved {
+	if !outcome.Transitioned {
 		return false
 	}
-	// Teardown AFTER the transition, asked of the executor — not of the
-	// status snapshot, which predates the write (05-scheduler.md §4.7).
-	if s.executor != nil {
-		if _, cerr := s.executor.CancelIfActive(taskID); cerr != nil {
-			s.logger.Warn().Err(cerr).Str("task_id", taskID).
-				Msg("cancel: container did not stop — it may still be running")
-		}
-	}
-	// CANCELLED is terminal, so drive the parent-unblock sweep —
-	// same wiring as the close path (uiCloseTask). For a non-running
-	// child the executor's handleCancelled never fires, so without
-	// this a WAITING_FOR_CHILDREN parent waited for the cancelled
-	// child forever (regression 2026-06-07).
-	if task.ParentTaskID != nil && *task.ParentTaskID != "" && s.executor != nil {
-		s.executor.NotifyChildTerminal(ctx, taskID)
-	}
-	// Downward cascade: cancel this task's own non-terminal children so a
-	// cancelled parent doesn't leave route/delegation/checkpoint children
-	// RUNNING/QUEUED. Idempotent + race-safe; mirrors the API CancelTask
-	// handler. Cross-project callees are handled via the CPC ledger.
-	if s.executor != nil {
-		s.executor.CancelChildren(ctx, taskID)
+	if outcome.TeardownErr != nil {
+		s.logger.Warn().Err(outcome.TeardownErr).Str("task_id", taskID).
+			Msg("cancel: container did not stop — it may still be running")
 	}
 	s.logger.Info().Str("task_id", taskID).Msg("task cancelled via UI")
 	return true

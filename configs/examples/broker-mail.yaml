@@ -1,6 +1,8 @@
 # Operator example — a BROKER project that holds mail access on behalf of a
 # front-end agent (Hermes Agent, OpenClaw, …) which must never hold the
-# credential itself. Drop into ~/.config/vornik/projects/<name>.yaml.
+# credential itself. Drop into ~/.config/vornik/configs/projects/<name>.yaml
+# (the daemon's default config tree). For the read-only part alone, scaffold
+# it instead: vornikctl init project broker-mail --template broker-mail
 #
 # The front agent gets a key on THIS project for delegation only:
 #   vornikctl companion grant -p broker-mail --client hermes --workflows mail-digest,mail-reply --budget-usd 5

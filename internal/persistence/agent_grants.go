@@ -26,6 +26,32 @@ type AgentIntegrationApproval struct {
 	ApprovedByDevice string
 	ApprovedAt       time.Time
 	RemovedAt        *time.Time
+	// The connection's account (agent-administered design §22.2.2; GitHub
+	// #119 item 8). AccountLabel is "default" for every connection added
+	// without one; UpsertIntegration writes the three only when the row is
+	// new or was removed (an add or a re-add), so a re-grant of a live row
+	// never changes its account. IdentitySource is "", "agent" (what the
+	// agent said) or "provider" (an OAuth sign-in's verified email, written
+	// only by SetIntegrationIdentity). An empty AccountLabel is stored as
+	// "default".
+	AccountLabel    string
+	AccountIdentity string
+	IdentitySource  string
+}
+
+// Account identity sources (agent-administered design §22.2.1).
+const (
+	AccountLabelDefault    = "default"
+	IdentitySourceAgent    = "agent"
+	IdentitySourceProvider = "provider"
+)
+
+// StoredAccountLabel is the label a repository writes: "default" for "".
+func (a AgentIntegrationApproval) StoredAccountLabel() string {
+	if a.AccountLabel == "" {
+		return AccountLabelDefault
+	}
+	return a.AccountLabel
 }
 
 // AgentWorkflowApproval is one workflow's approved reach signature.
@@ -70,6 +96,12 @@ type AgentGrantRepository interface {
 	ListIntegrations(ctx context.Context, namespace string) ([]AgentIntegrationApproval, error)
 	// MarkIntegrationRemoved withdraws an approval, keeping its history.
 	MarkIntegrationRemoved(ctx context.Context, projectID, integration string, at time.Time) error
+	// SetIntegrationIdentity records the provider identity of a live row
+	// (identity_source "provider"), or clears both identity columns when
+	// identity is "". It never touches the label. ErrNotFound when no live
+	// row matches. Its only caller is the OAuth slot effect (design
+	// §22.2.14 item 2).
+	SetIntegrationIdentity(ctx context.Context, projectID, integration, identity string) error
 
 	UpsertWorkflowReach(ctx context.Context, a AgentWorkflowApproval) error
 	// GetWorkflowReach returns ErrNotFound when the workflow has none.

@@ -14,6 +14,7 @@ import (
 
 	"vornik.io/vornik/internal/agentadmin"
 	"vornik.io/vornik/internal/agentns"
+	"vornik.io/vornik/internal/mcpauth"
 	"vornik.io/vornik/internal/persistence"
 	"vornik.io/vornik/internal/registry"
 )
@@ -116,6 +117,39 @@ func (s *agentAdminService) fileCredentialFollowUps(ctx context.Context, r persi
 		if _, err := s.fileRequest(ctx, persistence.ApprovalKindCredentialSlot, "",
 			approvalPayload{Change: ch.Rendered, Locks: ch.Locks, Slot: ch.Slot}, ch); err != nil {
 			log.Error().Err(err).Str("credential", f.Name).Msg("agent admin: filing the credential request after an install failed")
+		}
+	}
+}
+
+// fileStoredRecipeCredentialTools completes the second approval step for a
+// newly installed recipe server when its credential already existed before
+// the install. Missing credentials still flow through the credential-slot
+// request and afterCredentialStored trigger.
+func (s *agentAdminService) fileStoredRecipeCredentialTools(ctx context.Context, ns string, follow []agentadmin.CredentialFollowUp) {
+	for _, f := range follow {
+		if !s.credentialPresent(ctx, ns, f.Project, f.Name, f.Kind) {
+			continue
+		}
+		p := s.c.Registry.GetProject(f.Project)
+		if p == nil {
+			s.c.Logger.Warn().Str("namespace", ns).Str("project", f.Project).Msg("agent admin: stored recipe credential project is not loaded; tools approval was not filed")
+			continue
+		}
+		got, ok := agentns.FromID(p.ID)
+		if !ok || got != ns {
+			s.c.Logger.Warn().Str("namespace", ns).Str("project", f.Project).Msg("agent admin: stored recipe credential project is outside its namespace; tools approval was not filed")
+			continue
+		}
+		for _, srv := range p.MCP.Servers {
+			matches := false
+			if f.Kind == agentadmin.CredentialOAuth {
+				matches = srv.Auth.EffectiveMode() == mcpauth.ModeOAuth && agentadmin.OAuthCredentialName(srv.Name) == f.Name
+			} else {
+				matches = srv.Auth.ValueFrom == "secret://"+ns+"/"+f.Name
+			}
+			if matches {
+				s.fileServerTools(ctx, ns, p.ID, srv.Name, srv.URL, srv.Transport, srv.Auth, p.Permissions.Secrets)
+			}
 		}
 	}
 }
@@ -240,7 +274,9 @@ func (s *agentAdminService) recordToolRemovals(ctx context.Context, removals []a
 			}
 		}
 		a.ReadTools = keep
-		if err := s.grants.UpsertIntegration(ctx, *a); err != nil {
+		if publication := configPublication(ctx); publication != nil {
+			publication.rows.Integrations = append(publication.rows.Integrations, *a)
+		} else if err := s.grants.UpsertIntegration(ctx, *a); err != nil {
 			return err
 		}
 		kind := rm.Kind

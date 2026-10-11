@@ -111,6 +111,13 @@ type JournalPatch struct {
 // terminal transition and the proposal-ledger write it must land with.
 type JournalLedgerCommit struct {
 	JournalID string
+	// From is the state the row must be in: VERIFYING when empty (the apply
+	// path), or DRIFT (the resolve verb's --keep, design §12, GitHub #285).
+	// Any other value is ErrInvalidTransition before anything is written.
+	From string
+	// Failure, when non-empty, is written to the row's failure column (the
+	// resolve verb records how the row was resolved).
+	Failure string
 	// To is the journal's terminal state: JournalStateApplied, or
 	// JournalStatePendingRestart when every changed key is restart-only (§3).
 	To              string

@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -51,7 +52,23 @@ func (c *Container) brokerGrants() *brokergrants.Service {
 			}
 			return registry.BrokerProposal{}, false
 		},
-		ReachHash: c.standingReachHash,
+		ReachHash:     c.standingReachHash,
+		DecisionEpoch: c.accountDecisionEpoch,
+		AccountOf: func(ctx context.Context, a *persistence.BrokerAction) (string, string, bool) {
+			acct, ok := c.writeAccountOf(ctx, a.ProjectID, a.Tool)
+			identity := ""
+			if acct.source == "provider" {
+				identity = acct.identity
+			}
+			return acct.label, identity, ok
+		},
+		AccountConfirmed: func(ctx context.Context, a *persistence.BrokerAction) bool {
+			if _, agent := agentns.FromID(a.ProjectID); !agent {
+				return true // accounts are for agent-namespace connections (F3)
+			}
+			_, _, ok := c.writeAccount(ctx, a.ProjectID, a.Tool)
+			return ok
+		},
 		SealerForWrite: func() (brokergrants.Sealer, error) {
 			st, err := c.secretStoreForWrite()
 			if err != nil {
@@ -189,6 +206,22 @@ func (s standingDevice) List(ctx context.Context) ([]approverdevice.StandingView
 		sv := approverdevice.StandingView{ID: v.Grant.ID, Namespace: v.Grant.Namespace, Workflow: shortWorkflow(v.Grant.WorkflowID),
 			Action: strings.ReplaceAll(v.Grant.Action, "_", " "), Key: v.Key, State: v.State,
 			UsesLeft: v.Grant.UsesLeft, MaxUses: v.Grant.MaxUses, ExpiresAt: v.Grant.ExpiresAt.UTC()}
+
+		sv.MadeFor = standingStoredPhrase(v.Grant)
+		current, ok := s.currentAccount(ctx, v.Grant)
+		sv.Account = current.phrase
+		if !ok {
+			sv.Account = "an account that could not be confirmed"
+		}
+		sv.NowAccount = sv.Account
+		if ok && sv.NowAccount == "" {
+			sv.NowAccount = standingStoredPhrase(&persistence.BrokerStandingGrant{AccountLabel: current.label, AccountIdentity: current.identity})
+		}
+		sv.AccountChanged = !ok || v.Grant.AccountLabel == "" || standingAccountKey(v.Grant.AccountLabel, v.Grant.AccountIdentity) != standingAccountKey(current.label, current.identity)
+		if ok && sv.AccountChanged && v.State == "suspended" {
+			sv.ReaffirmToken = standingShown(v.Grant, current)
+		}
+
 		for _, a := range v.Covered {
 			at := a.CreatedAt
 			if a.DecidedAt != nil {
@@ -212,6 +245,25 @@ func (s standingDevice) Change(ctx context.Context, id, verb string) error {
 	}
 	if g.Namespace == "" {
 		return errors.New("an operator project's standing approval is changed in /inbox")
+	}
+	if verb == "confirm" {
+		guard, err := s.c.accountDecisionEpoch(ctx, g.Namespace)
+		if err != nil {
+			return approverdevice.ErrNotDecidable
+		}
+		current, ok := s.currentAccount(ctx, g)
+		if !ok || g.AccountLabel == "" || standingAccountKey(g.AccountLabel, g.AccountIdentity) != standingAccountKey(current.label, current.identity) {
+			return brokergrants.ErrAccountChanged
+		}
+		reach, err := s.c.standingReachHash(ctx, g.ProjectID, g.WorkflowID)
+		if err != nil {
+			return err
+		}
+		repo, ok := s.c.repos.BrokerGrants.(persistence.AccountGuardedGrants)
+		if !ok {
+			return approverdevice.ErrNotDecidable
+		}
+		return repo.ConfirmGuarded(ctx, id, reach, guard)
 	}
 	return svc.Change(ctx, id, verb)
 }
@@ -240,7 +292,7 @@ func (c *Container) approveActionWithGrant(ctx context.Context, pl actionPayload
 		if err == nil || errors.Is(err, persistence.ErrBrokerActionNoTransition) {
 			return err
 		}
-		c.Logger.Warn().Err(err).Str("action_id", pl.ActionID).Msg("standing grant not created; the write is approved on its own")
+		c.Logger.Warn().Err(err).Str("action_id", pl.ActionID).Msg("standing grant not created; attempting per-action approval without a standing grant")
 	}
 	return c.repos.BrokerActions.Approve(ctx, pl.ActionID, pl.ArgsSHA256, approver, time.Now().UTC())
 }
@@ -294,4 +346,77 @@ func (c *Container) startBrokerGrantTicker(ctx context.Context) {
 			}
 		}
 	}()
+}
+
+// currentAccount resolves the live proposal's connection. Only provider
+// identity can demand an additional device affirmation; cover ignores it.
+func (s standingDevice) currentAccount(ctx context.Context, g *persistence.BrokerStandingGrant) (writeAccountView, bool) {
+	if s.c.Registry == nil {
+		return writeAccountView{}, false
+	}
+	wf := s.c.Registry.GetWorkflow(g.WorkflowID)
+	if wf == nil || wf.Broker == nil {
+		return writeAccountView{}, false
+	}
+	for _, p := range wf.Broker.Proposes {
+		if p.Action == g.Action {
+			acct, ok := s.c.writeAccountOf(ctx, g.ProjectID, p.Tool)
+			if acct.source != "provider" {
+				acct.identity = ""
+			}
+			return acct, ok
+		}
+	}
+	return writeAccountView{}, false
+}
+func standingAccountKey(label, identity string) string { return label + "|" + identity }
+func standingShown(g *persistence.BrokerStandingGrant, current writeAccountView) string {
+	return fmt.Sprintf("%x", sha256.Sum256([]byte(g.ID+"|"+standingAccountKey(g.AccountLabel, g.AccountIdentity)+"|"+standingAccountKey(current.label, current.identity))))
+}
+func standingStoredPhrase(g *persistence.BrokerStandingGrant) string {
+	if g.AccountLabel == "" {
+		return "an account Vornik did not record"
+	}
+	if g.AccountIdentity == "" {
+		return "your " + g.AccountLabel + " account (not verified)"
+	}
+	return "your " + g.AccountLabel + " account (" + g.AccountIdentity + ")"
+}
+func (s standingDevice) Reaffirm(ctx context.Context, id, shown string) error {
+	svc := s.c.brokerGrants()
+	if svc == nil {
+		return approverdevice.ErrNotDecidable
+	}
+	g, err := svc.Get(ctx, id)
+	if err != nil || g.Namespace == "" || !g.Active || g.SuspendedAt == nil {
+		return approverdevice.ErrNotDecidable
+	}
+	guard, err := s.c.accountDecisionEpoch(ctx, g.Namespace)
+	if err != nil {
+		return approverdevice.ErrNotDecidable
+	}
+	current, ok := s.currentAccount(ctx, g)
+	if !ok || shown != standingShown(g, current) {
+		return approverdevice.ErrNotDecidable
+	}
+	reach, err := s.c.standingReachHash(ctx, g.ProjectID, g.WorkflowID)
+	if err != nil {
+		return approverdevice.ErrNotDecidable
+	}
+	repo, guarded := s.c.repos.BrokerGrants.(persistence.AccountGuardedGrants)
+	if !guarded {
+		return approverdevice.ErrNotDecidable
+	}
+	err = repo.ConfirmAccountGuarded(ctx, id, reach, g.AccountLabel, g.AccountIdentity, current.label, current.identity, guard)
+	if errors.Is(err, persistence.ErrBrokerGrantNoTransition) || errors.Is(err, persistence.ErrAccountTransition) {
+		return approverdevice.ErrNotDecidable
+	}
+	return err
+}
+
+func (c *Container) accountDecisionEpoch(ctx context.Context, ns string) (persistence.AccountDecisionGuard, error) {
+	if c.repos == nil || c.repos.AccountTransitions == nil {
+		return nil, persistence.ErrAccountTransition
+	}
+	return c.repos.AccountTransitions.ReadDecisionEpoch(ctx, ns)
 }

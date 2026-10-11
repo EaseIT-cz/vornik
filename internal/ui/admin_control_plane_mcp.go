@@ -50,9 +50,14 @@ type AdminCPMCPRow struct {
 	// on 2026-08-05 as "atlassian is offline again after the restart", when the
 	// server was fine and simply had not been contacted yet.
 	NeverChecked bool
-	Error        string
-	ToolCount    int
-	LastCheck    string
+	// NotDialled marks a server the daemon deliberately does not dial (an
+	// oauth server with no grant; auth design §14, GitHub #91). Its badge
+	// reads "not connected, no grant", never "unreachable": nothing is
+	// wrong with the server.
+	NotDialled bool
+	Error      string
+	ToolCount  int
+	LastCheck  string
 
 	// AuthMode is none | oauth | static | env (MCP server authentication
 	// design §7 item 3).
@@ -120,6 +125,7 @@ func (s *Server) buildCPMCP(ctx context.Context, data *AdminControlPlaneData) {
 		row := AdminCPMCPRow{
 			Name: srv.Name, Transport: srv.Transport, Endpoint: endpoint,
 			Reachable: srv.Reachable, Error: srv.Error, ToolCount: len(srv.Tools), LastCheck: last,
+			NotDialled: srv.NotDialled,
 		}
 		// A zero LastCheckedAt is the registry's "never probed" sentinel, so it
 		// is what separates "checking" from a real negative verdict.

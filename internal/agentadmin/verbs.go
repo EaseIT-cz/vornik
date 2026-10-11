@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"math"
+	"path"
 	"sort"
 	"strings"
 
@@ -170,6 +171,7 @@ const (
 type workflowData struct {
 	Namespace, ID, DisplayName, Description, Entrypoint string
 	InputSchema, EgressSchema                           string
+	Artifacts                                           string
 	MaxBytes                                            int
 	Steps                                               []stepData
 	Proposes                                            []proposeData
@@ -370,7 +372,7 @@ func rebindReach(st *State, p *ProjectState, sw *registry.Swarm, c *Change) ([]s
 			}
 			c.Grant.Workflows[wid] = h
 			c.Locks = append(c.Locks, lockWorkflow(wid))
-			changed = append(changed, fmt.Sprintf("%q would then reach %s", wid, reachPhrase(sig)))
+			changed = append(changed, fmt.Sprintf("%q would then reach %s", wid, reachPhrase(sig, reachAccounts(st, p, sig))))
 		}
 	}
 	return changed, nil
@@ -471,7 +473,19 @@ func (r *Renderer) defineWorkflow(st *State, raw json.RawMessage) (Change, error
 	if why != "" {
 		return refuse(verb, ns, "%s", why), nil
 	}
+	artifactJSON := ""
+	if len(in.Artifacts) > 0 {
+		b, e := json.Marshal(in.Artifacts)
+		if e != nil {
+			return Change{}, e
+		}
+		artifactJSON = string(b)
+		for i := range steps {
+			steps[i].Closing = "Write no other output except the declared artifact files."
+		}
+	}
 	data := workflowData{
+		Artifacts: artifactJSON,
 		Namespace: ns, ID: id, DisplayName: in.Slug, Description: describe(in.Purpose, "Workflow "+in.Slug+" of "+pid), Entrypoint: steps[0].Name,
 		InputSchema: inputSchema, EgressSchema: string(egressJSON), MaxBytes: egressDocBytes, Steps: steps, Proposes: proposes,
 		Schedule: schedule,
@@ -511,9 +525,13 @@ func workflowChange(st *State, p *ProjectState, wf *registry.Workflow, md string
 	if w, ok := st.Workflows[id]; !ok || w.ApprovedReach != hash {
 		c.Class = Widening
 		c.Grant.Workflows = map[string]string{id: hash}
+		c.accounts = reachAccounts(st, p, sig)
 		c.Sentence = fmt.Sprintf("Your assistant (%s) wants the project %q to run the workflow %q. "+
 			"It will return to your assistant: %s. It can reach %s.",
-			ns, pid, id, strings.Join(egressLines, "; "), reachPhrase(sig))
+			ns, pid, id, strings.Join(egressLines, "; "), reachPhrase(sig, c.accounts))
+		if len(wf.Broker.Egress.Artifacts) > 0 {
+			c.Sentence += " It also returns these whole-file outputs (including binary content): " + strings.Join(wf.Broker.Egress.Artifacts, ", ") + "."
+		}
 		c.Sentence += documentSentence(sig)
 		c.Sentence += proposeSentence(proposePhrases)
 		c.Sentence += scheduleSentence(id, wf.Broker.Schedule, st.Workflows[id])
@@ -565,9 +583,9 @@ func buildSteps(p *ProjectState, in []StepInput) ([]stepData, string) {
 		last := i+1 == len(in)
 		requireOutputGlob := ""
 		if !last {
-			requireOutputGlob = "artifacts/out/" + s.Name + ".md"
-			if other := conflictingOutputPath(s.Instructions, requireOutputGlob); other != "" {
-				return nil, fmt.Sprintf("step %s instructions name %q, but non-answer steps must write their hand-off to %q", s.Name, other, requireOutputGlob)
+			requireOutputGlob = handoffPath(s.Name)
+			if why := conflictingOutputPath(s.Name, s.Instructions, earlierHandoffs(in[:i])); why != "" {
+				return nil, why
 			}
 		}
 		steps = append(steps, stepData{Name: s.Name, Role: s.Role, Instructions: s.Instructions, Next: next,
@@ -576,18 +594,47 @@ func buildSteps(p *ProjectState, in []StepInput) ([]stepData, string) {
 	return steps, ""
 }
 
-func conflictingOutputPath(instructions, expected string) string {
-	for _, loc := range outPathRe.FindAllStringIndex(instructions, -1) {
-		p := instructions[loc[0]:loc[1]]
-		if p != expected {
-			before := instructions[:loc[0]]
-			if len(before) > 80 {
-				before = before[len(before)-80:]
-			}
-			if outIntentRe.MatchString(before) {
-				return p
-			}
+// handoffPath is the hand-off file a non-answer step writes (design §18.10).
+func handoffPath(step string) string { return "artifacts/out/" + step + ".md" }
+
+// earlierHandoffs are the hand-off files of the steps listed before a step.
+// A rendered workflow is a linear chain, so list order is run order; a
+// branching shape would need another "earlier" relation (review c3f3 F2).
+func earlierHandoffs(before []StepInput) []string {
+	out := make([]string, 0, len(before))
+	for _, s := range before {
+		out = append(out, handoffPath(s.Name))
+	}
+	return out
+}
+
+// conflictingOutputPath is the define-time and catalogue-load check of a
+// non-answer step's instructions (design §18.10a, GitHub #96 item 1): every
+// full artifacts/out/ path they name must be the step's own hand-off file
+// or an earlier step's. It is set membership, not a reading of the
+// surrounding words, which is what refused valid text and missed backticks,
+// colons, ./ and "in". It returns the refusal, or "".
+func conflictingOutputPath(step, instructions string, earlier []string) string {
+	own := handoffPath(step)
+	allowed := map[string]bool{own: true}
+	for _, e := range earlier {
+		allowed[e] = true
+	}
+	for _, p := range outPathRe.FindAllString(instructions, -1) {
+		// Compared after path.Clean, so ./ and ../ inside the path and a
+		// leading-dot name cannot step around the set (review 315a F1).
+		if allowed[path.Clean(p)] {
+			continue
 		}
+		why := fmt.Sprintf("step %s instructions name %q; a step may name only its own hand-off file %q", step, p, own)
+		if len(earlier) > 0 {
+			quoted := make([]string, len(earlier))
+			for i, e := range earlier {
+				quoted[i] = fmt.Sprintf("%q", e)
+			}
+			why += " or an earlier step's (" + strings.Join(quoted, ", ") + ")"
+		}
+		return why
 	}
 	return ""
 }
@@ -634,6 +681,9 @@ func (r *Renderer) addMCPServer(st *State, raw json.RawMessage) (Change, error) 
 	if err := checkURL(in.URL); err != nil {
 		return refuse(verb, ns, "%v", err), nil
 	}
+	if in.Transport != "" && in.Transport != TransportStreamableHTTP && in.Transport != TransportSSE {
+		return refuse(verb, ns, "transport %q must be %q (the default) or %q", in.Transport, TransportStreamableHTTP, TransportSSE), nil
+	}
 	writes := dedupSorted(in.WriteTools)
 	if len(writes) > 16 {
 		return refuse(verb, ns, "at most 16 write tools"), nil
@@ -648,7 +698,21 @@ func (r *Renderer) addMCPServer(st *State, raw json.RawMessage) (Change, error) 
 			return refuse(verb, ns, "%s already has a server named %q; remove it first", pid, in.Name), nil
 		}
 	}
-	server := ServerState{Name: in.Name, URL: in.URL}
+	// The account (design §22.2.1, §22.2.3; GitHub #119 item 8).
+	label, account, why := checkAccount(in.Account)
+	if why != "" {
+		return refuse(verb, ns, "%s", why), nil
+	}
+	if why := sameHostSameLabel(p, connection{name: in.Name, url: in.URL, label: agentns.AccountOf(label), oauth: in.Auth.Mode == "oauth",
+		authRef: staticRef(ns, in.Auth)}); why != "" {
+		return refuse(verb, ns, "%s", why), nil
+	}
+	if in.Auth.Mode == "oauth" {
+		if why := oauthSlotTaken(p, in.Name); why != "" {
+			return refuse(verb, ns, "%s", why), nil
+		}
+	}
+	server := ServerState{Name: in.Name, URL: in.URL, Transport: in.Transport, Account: label}
 	if in.Auth.Mode == "oauth" {
 		server.OAuth, server.Scopes = true, dedupSorted(in.Auth.Scopes)
 	}
@@ -656,10 +720,18 @@ func (r *Renderer) addMCPServer(st *State, raw json.RawMessage) (Change, error) 
 	if why != "" {
 		return refuse(verb, ns, "%s", why), nil
 	}
+	var sharers []connection
 	if credential != "" {
 		server.AuthRef = "secret://" + ns + "/" + credential
+		var why string
+		if why, sharers = credentialOwner(st, server.AuthRef, label); why != "" {
+			return refuse(verb, ns, "%s", why), nil
+		}
 	}
-	grant := IntegrationGrant{Project: pid, Name: in.Name, Kind: "mcp", URL: in.URL, Write: writes}
+	grant := IntegrationGrant{Project: pid, Name: in.Name, Kind: "mcp", URL: in.URL, Write: writes, Account: account}
+	if in.Transport == TransportSSE {
+		grant.Transport = TransportSSE
+	}
 	if why := grantAdvertised(st, in.URL, writes, &grant); why != "" {
 		return refuse(verb, ns, "%s", why), nil
 	}
@@ -670,7 +742,7 @@ func (r *Renderer) addMCPServer(st *State, raw json.RawMessage) (Change, error) 
 		// The broker_write sibling (P4.3b): no role may hold its tools; they
 		// are reachable only as a workflow's proposes, one tap per write.
 		next.Servers = append(next.Servers, ServerState{Name: in.Name + agentns.WriteSuffix, URL: in.URL,
-			AuthRef: server.AuthRef, OAuth: server.OAuth, Scopes: server.Scopes, Write: true, Tools: writes})
+			AuthRef: server.AuthRef, OAuth: server.OAuth, Scopes: server.Scopes, Write: true, Tools: writes, Transport: in.Transport, Account: label})
 	}
 	if credential != "" && !contains(p.Secrets, ns+"/"+credential) {
 		next.Secrets = append(append([]string(nil), p.Secrets...), ns+"/"+credential)
@@ -687,7 +759,11 @@ func (r *Renderer) addMCPServer(st *State, raw json.RawMessage) (Change, error) 
 		Grant:   Grant{Integrations: []IntegrationGrant{grant}},
 	}
 	expect(st, c.ReadSet, projectPath(pid))
-	c.Sentence = serverSentence(st, ns, pid, in, credential, grant)
+	phrase := addPhrase(p, in.Name, in.URL, account)
+	c.Sentence = serverSentence(st, ns, pid, in, credential, grant, phrase) + sharedCredentialSentence(credential, sharers)
+	if phrase != "" {
+		c.accounts = map[string]string{in.Name: phrase}
+	}
 	return c, nil
 }
 
@@ -722,9 +798,9 @@ func mcpCredential(a MCPAuthInput) (string, string) {
 
 // serverSentence states an add_mcp_server change, with the history of a
 // removed approval of the same name (plan amendment 2).
-func serverSentence(st *State, ns, pid string, in AddMCPServerInput, credential string, grant IntegrationGrant) string {
+func serverSentence(st *State, ns, pid string, in AddMCPServerInput, credential string, grant IntegrationGrant, phrase string) string {
 	var b strings.Builder
-	fmt.Fprintf(&b, "Your assistant (%s) wants the project %q to connect to the server %q at %s", ns, pid, in.Name, in.URL)
+	fmt.Fprintf(&b, "Your assistant (%s) wants the project %q to connect to the server %q at %s over %s%s", ns, pid, in.Name, in.URL, transportWords(in.Transport), asAccount(phrase))
 	if credential != "" {
 		fmt.Fprintf(&b, " using the credential %s", credential)
 	}
@@ -732,9 +808,15 @@ func serverSentence(st *State, ns, pid string, in AddMCPServerInput, credential 
 		fmt.Fprintf(&b, ", signing in with your account there (OAuth; asking for: %s)", listOrNone(dedupSorted(in.Auth.Scopes)))
 	}
 	b.WriteString(". ")
-	if grant.ReadPending {
+	switch class := st.ListFailed[in.URL]; {
+	case grant.ReadPending && class != "" && class != "HTTP 401" && class != "HTTP 403":
+		// Review 03b6 finding 1: an auth-none server that could not be
+		// reached was told it needed a sign-in. Nothing re-lists it after
+		// approval, so it gets no tools until it is added again.
+		fmt.Fprintf(&b, "The server did not list its tools: it could not be reached (%s). It gets no tools until it is added again once it is reachable.", class)
+	case grant.ReadPending:
 		b.WriteString("The server did not list its tools without signing in; you will be asked to approve its tools separately once it is connected.")
-	} else {
+	default:
 		fmt.Fprintf(&b, "It would be able to use these %d read tools: %s.", len(grant.Read), strings.Join(grant.Read, ", "))
 	}
 	if len(grant.Write) > 0 {
@@ -744,6 +826,14 @@ func serverSentence(st *State, ns, pid string, in AddMCPServerInput, credential 
 		fmt.Fprintf(&b, " Previously approved and then removed: %s at %s, read tools %s.", in.Name, prev.URL, listOrNone(prev.Read))
 	}
 	return b.String()
+}
+
+// transportWords names a transport in an approval sentence.
+func transportWords(t string) string {
+	if t == TransportSSE {
+		return "SSE"
+	}
+	return "streamable HTTP"
 }
 
 func (r *Renderer) setBudget(st *State, raw json.RawMessage) (Change, error) {
@@ -953,11 +1043,15 @@ func stillReferenced(servers []ServerState, ref string) bool {
 }
 
 // reachPhrase states a signature's reach in plain words.
-func reachPhrase(sig ReachSignature) string {
+func reachPhrase(sig ReachSignature, accounts map[string]string) string {
 	if len(sig.Integrations) == 0 {
 		return "nothing outside Vornik"
 	}
-	s := "the servers " + strings.Join(quoteAll(sig.Integrations), ", ")
+	named := quoteAll(sig.Integrations)
+	for i, n := range sig.Integrations {
+		named[i] += asAccount(accounts[n])
+	}
+	s := "the servers " + strings.Join(named, ", ")
 	if len(sig.Credentials) > 0 {
 		var names []string
 		for _, c := range sig.Credentials {

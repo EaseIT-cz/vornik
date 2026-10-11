@@ -176,8 +176,10 @@ func (m *mockCPCRepo) ClaimTimedOut(_ context.Context, now time.Time, limit int)
 			continue
 		}
 		r.Status = persistence.CPCStatusTimedOut
-		reason := "cross_project_call timeout elapsed before resolve"
-		r.ErrorMessage = &reason
+		if r.ErrorMessage == nil {
+			reason := "cross_project_call timeout elapsed before resolve"
+			r.ErrorMessage = &reason
+		}
 		cp := *r
 		out = append(out, &cp)
 		if len(out) >= limit && limit > 0 {

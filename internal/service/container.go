@@ -113,6 +113,7 @@ import (
 	"vornik.io/vornik/internal/memoryfirewall"
 	"vornik.io/vornik/internal/narrator"
 	"vornik.io/vornik/internal/observability"
+	"vornik.io/vornik/internal/observability/logring"
 	"vornik.io/vornik/internal/persistence"
 	"vornik.io/vornik/internal/pricing"
 	"vornik.io/vornik/internal/projectarchive"
@@ -280,6 +281,11 @@ type Container struct {
 	Watchdog         *watchdog.Watchdog
 	EffectiveCostMon *budget.EffectiveCostMonitor
 	HTTPServer       *http.Server
+	// AgentSocketServer serves the daemon's unix socket with only the agent
+	// route set (GitHub #95; cloudflare-real-ip-design.md §12). Built in
+	// initHTTPServer next to HTTPServer; nil when no socket is configured
+	// or before initHTTPServer runs.
+	AgentSocketServer *http.Server
 	// relayServer is the additional mTLS listener for the relay-ingress
 	// endpoint (POST /internal/v1/webhook-relay). Nil when the node does
 	// not run workers or relay_ingress is not configured (Slice B).
@@ -332,6 +338,10 @@ type Container struct {
 	// https://docs.vornik.io and
 	// editions-phase2c-gated-feature-relocation-design.md (Phase A).
 	logshipForwarder contracts.LogForwarder
+	// logRing is the daemon-log ring (live-task-observation design, Change
+	// 2026-10-08 C6); built once by daemonLogRing().
+	logRing     *logring.Ring
+	logRingOnce sync.Once
 	// ChatClient holds whichever chat provider is configured. Interface
 	// rather than a concrete *chat.Client so the subprocess-backed
 	// CLI provider (internal/chat/cli_client.go) can be plugged in
@@ -439,6 +449,15 @@ type Container struct {
 	// withheld (mcpDesiredServers), for the doctor. Guarded by mcpWithheldMu.
 	mcpWithheldMu sync.Mutex
 	mcpWithheld   []string
+	// mcpNoGrantProject lists project oauth servers the last resolution
+	// withheld for want of a grant (auth design §14, GitHub #91): current
+	// state, the doctor's source. Guarded by mcpWithheldMu.
+	mcpNoGrantProject []mcpconnect.NoGrant
+	// mcpNoGrantWarned gates the one WARN per (credential scope, server,
+	// URL). It only remembers what was logged and is never a report source
+	// (§14 F3). Guarded by mcpNoGrantMu.
+	mcpNoGrantMu     sync.Mutex
+	mcpNoGrantWarned map[string]bool
 	// mcpRegistry caches the daemon-level MCP server catalog
 	// declared by config.MCP.Servers. Distinct from mcpManager
 	// (which holds per-project active clients used by agents) —
@@ -872,6 +891,10 @@ type Container struct {
 	// sequence. Tests inject a spy here so the executor-before-HTTP
 	// ordering invariant can be asserted without a live HTTP server.
 	testHTTPShutdown httpShutdowner
+
+	// testSocketShutdown, when non-nil, stands in for AgentSocketServer in
+	// shutdown Phase 3 (the agent-socket ordering test).
+	testSocketShutdown httpShutdowner
 
 	// testAgentSocketServe, when non-nil, is called in place of the
 	// real serveAgentUnixSocket in Run(). Tests inject a spy here to
@@ -2000,16 +2023,22 @@ func (c *Container) serveAgentUnixSocket(errCh chan error) error {
 	if err != nil {
 		return fmt.Errorf("listen on unix socket %s: %w", sock, err)
 	}
-	// The socket exposes the same API as the TCP port; on a
-	// single-operator rootless host 0666 lets uid-mapped containers
-	// connect without ownership juggling (connect() needs write perm
-	// on the socket inode).
+	// 0666 lets uid-mapped containers connect without ownership juggling
+	// (connect() needs write perm on the socket inode). Since GitHub #95 the
+	// socket serves only the agent route set (AgentSocketServer, built in
+	// initHTTPServer), so the route list, not the inode mode, is the
+	// boundary. see LLD § https://docs.vornik.io §12
 	if err := os.Chmod(sock, 0o666); err != nil {
 		c.Logger.Warn().Err(err).Str("unix_socket", sock).Msg("chmod daemon unix socket")
 	}
+	srv := c.AgentSocketServer
+	if srv == nil {
+		_ = unixLn.Close()
+		return fmt.Errorf("unix socket %s: agent socket server not built", sock)
+	}
 	go func() {
-		c.Logger.Info().Str("unix_socket", sock).Msg("serving HTTP API on unix socket")
-		if err := c.HTTPServer.Serve(unixLn); err != nil && err != http.ErrServerClosed {
+		c.Logger.Info().Str("unix_socket", sock).Msg("serving the agent route set on unix socket")
+		if err := srv.Serve(unixLn); err != nil && err != http.ErrServerClosed {
 			errCh <- err
 		}
 	}()
@@ -2303,11 +2332,25 @@ func (c *Container) Run(ctx context.Context) error {
 // routers. The in-flight executor + scheduler keep working until
 // shutdown() actually stops them.
 func (c *Container) beginDrain() {
+	// The drain bit has two readers: /readyz (503 for load balancers) and,
+	// since GitHub #97, the chat-proxy wrapper (api.trackLongRequest), which
+	// refuses new chat requests with 503 DRAINING from this instant.
+	//
+	// GitHub #290: the deploy gate may have set the bit already through the
+	// operator drain (POST /api/v1/daemon/drain). BeginShutdownDrain makes it
+	// permanent (no expiry or undrain during shutdown) and, in the same
+	// critical section, says how long the bit had been set. Chat admission
+	// is refused from the bit itself; the grace only gives a /readyz reader
+	// time to notice, and /readyz has answered 503 for that long already, so
+	// only the remainder is slept. Phase 2 is unchanged.
+	// see LLD § https://docs.vornik.io §9
+	var already time.Duration
 	if c.apiServer != nil {
-		c.apiServer.SetDraining(true)
-		c.Logger.Info().Msg("graceful drain: /readyz returning 503; waiting for load balancer to notice")
+		already = c.apiServer.BeginShutdownDrain()
+		c.Logger.Info().Dur("drained_for", already).
+			Msg("graceful drain: /readyz returning 503; waiting for load balancer to notice")
 	}
-	grace := drainGracePeriod()
+	grace := drainGracePeriod() - already
 	if grace <= 0 {
 		return
 	}
@@ -2316,8 +2359,12 @@ func (c *Container) beginDrain() {
 	// during drain still escape via the default shutdown timeout
 	// inside shutdown().
 	c.Logger.Info().Dur("grace", grace).Msg("graceful drain: sleeping before shutdown")
-	time.Sleep(grace)
+	drainSleep(grace)
 }
+
+// drainSleep is beginDrain's grace sleep; a seam so a test measures no wall
+// time (GitHub #290).
+var drainSleep = time.Sleep
 
 // drainGracePeriod parses VORNIK_DRAIN_GRACE_SECONDS into a
 // time.Duration. Default 5s; negative → 0; capped at 30s so a
@@ -2435,13 +2482,24 @@ func (c *Container) shutdown() error {
 	// so we always stop within systemd's TimeoutStopSec rather than being
 	// SIGABRT-killed mid-drain (incident 2026-06-20).
 	// NOTE: must run AFTER the executor quiesces — see ORDERING INVARIANT above.
-	httpSrv := c.testHTTPShutdown // test hook; nil in production
-	if httpSrv == nil && c.HTTPServer != nil {
-		httpSrv = c.HTTPServer
+	// The agent unix socket has its own server since GitHub #95; it closes
+	// (and its inode is unlinked) in this same phase, in parallel with the
+	// TCP server, so the phase is still bounded by one httpShutdownBudget.
+	// see LLD § https://docs.vornik.io §12.2
+	var servers []httpShutdowner
+	if c.testHTTPShutdown != nil { // test hook; nil in production
+		servers = append(servers, c.testHTTPShutdown)
+	} else if c.HTTPServer != nil {
+		servers = append(servers, c.HTTPServer)
 	}
-	if httpSrv != nil {
-		c.Logger.Info().Msg("stopping HTTP server")
-		shutdownHTTPWithDeadline(ctx, httpSrv, httpShutdownBudget, c.Logger)
+	if c.testSocketShutdown != nil { // test hook; nil in production
+		servers = append(servers, c.testSocketShutdown)
+	} else if c.AgentSocketServer != nil {
+		servers = append(servers, c.AgentSocketServer)
+	}
+	if len(servers) > 0 {
+		c.Logger.Info().Int("servers", len(servers)).Msg("stopping HTTP server")
+		shutdownHTTPServers(ctx, httpShutdownBudget, c.Logger, servers...)
 	}
 
 	// Stop the mTLS relay-ingress listener (Slice B, job tier only).

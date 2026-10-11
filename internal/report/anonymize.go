@@ -213,11 +213,43 @@ func redactIPv6Token(tok string) string {
 	return tok
 }
 
+// LineScrubber scrubs one log line for an agentic client
+// (live-task-observation design, Change 2026-10-08, C3). withheld is true when
+// the line held anything secret-shaped; the caller then drops the whole line
+// or event, and scrubbed is "". Otherwise scrubbed is exactly what the report
+// scrubber produces for the line.
+type LineScrubber func(line string) (scrubbed string, withheld bool)
+
+// NewLineScrubber builds the line scrubber on the report scrubber (one
+// implementation, not two). It returns errAnonymize when the secret detector
+// cannot be built, so a caller fails closed.
+func NewLineScrubber(hostname string) (LineScrubber, error) {
+	det, err := newDetector()
+	if err != nil || det == nil {
+		return nil, errAnonymize
+	}
+	scrub := scrubberWith(det, hostname)
+	return func(line string) (string, bool) {
+		// Every net the report scrubber uses to find a secret, asked first and
+		// as a yes/no: a finding withholds the line instead of redacting in
+		// place, so no fragment of it leaves.
+		if rePEM.MatchString(line) || reJWT.MatchString(line) || reKeyShapes.MatchString(line) ||
+			len(det.Scan([]byte(line))) > 0 {
+			return "", true
+		}
+		return scrub(line), false
+	}, nil
+}
+
 func scrubber(hostname string) (func(string) string, error) {
 	det, err := newDetector()
 	if err != nil || det == nil {
 		return nil, errAnonymize
 	}
+	return scrubberWith(det, hostname), nil
+}
+
+func scrubberWith(det *secrets.MultiDetector, hostname string) func(string) string {
 	host := strings.TrimSpace(hostname)
 	var hostPattern *regexp.Regexp
 	if host != "" {
@@ -244,7 +276,7 @@ func scrubber(hostname string) (func(string) string, error) {
 		// Never let a stray newline/backtick break the markdown table/list.
 		s = strings.ReplaceAll(s, "\r", "")
 		return s
-	}, nil
+	}
 }
 
 // AnonymizeBody builds the PUBLIC-safe markdown issue body. Every interpolated

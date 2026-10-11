@@ -1,0 +1,29 @@
+projectId: "{{.projectId}}"
+displayName: "{{.displayName}}"
+description: "Read-only mail access for a front-end agent. Broker workflows only."
+swarmId: "broker-swarm"
+defaultWorkflowId: "mail-digest"
+defaultPriority: 50
+maxConcurrentTasks: 2
+
+broker: true
+
+mcp:
+  servers:
+    # Narrows the daemon-level google-workspace server and declares the
+    # narrowing read-only. Vornik cannot verify that claim: list only tools
+    # that change nothing.
+    - name: "google-workspace"
+      broker_read_only: true
+      allowed_tools:
+        - "time_getCurrentDate"
+        - "gmail_search"
+        - "gmail_get"
+
+permissions:
+  allowedTools:
+    - "current_time"
+    - "file_write"      # writes the workflow's own result file, not mail
+    - "mcp__google-workspace__time_getCurrentDate"
+    - "mcp__google-workspace__gmail_search"
+    - "mcp__google-workspace__gmail_get"

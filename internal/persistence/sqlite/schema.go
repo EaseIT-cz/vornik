@@ -754,6 +754,12 @@ CREATE TABLE IF NOT EXISTS approver_pairings (
 CREATE INDEX IF NOT EXISTS agent_approval_requests_pending ON agent_approval_requests (status, created_at);
 
 -- agent approval grants — migration 209 (agent-administered Vornik design §7)
+CREATE TABLE IF NOT EXISTS agent_account_transitions (
+ scope TEXT PRIMARY KEY, epoch BIGINT NOT NULL DEFAULT 0 CHECK(epoch >= 0),
+ busy BOOLEAN NOT NULL DEFAULT FALSE, owner TEXT NOT NULL DEFAULT '',
+ operation TEXT NOT NULL DEFAULT '', started_at TEXT NOT NULL DEFAULT ''
+);
+
 CREATE TABLE IF NOT EXISTS agent_integration_approvals (
     namespace           TEXT NOT NULL,
     project_id          TEXT NOT NULL,
@@ -766,6 +772,10 @@ CREATE TABLE IF NOT EXISTS agent_integration_approvals (
     approved_by_device  TEXT NOT NULL,
     approved_at         TEXT NOT NULL,
     removed_at          TEXT,
+    -- migration 219 (design §22.2.2); also in sqliteAdditiveColumns.
+    account_label       TEXT NOT NULL DEFAULT 'default',
+    account_identity    TEXT NOT NULL DEFAULT '',
+    identity_source     TEXT NOT NULL DEFAULT '' CHECK (identity_source IN ('', 'agent', 'provider')),
     PRIMARY KEY (project_id, integration)
 );
 CREATE INDEX IF NOT EXISTS agent_integration_approvals_ns ON agent_integration_approvals (namespace);
@@ -799,6 +809,8 @@ CREATE TABLE IF NOT EXISTS agent_model_provider_approvals (
 -- broker_actions — migration 202 (broker write-actions design §5.2)
 -- ============================================================
 CREATE TABLE IF NOT EXISTS broker_actions (
+ account_ns_epoch INTEGER CHECK(account_ns_epoch >= 0),
+ account_daemon_epoch INTEGER CHECK(account_daemon_epoch >= 0),
     action_id     TEXT PRIMARY KEY,
     project_id    TEXT NOT NULL,
     task_id       TEXT NOT NULL,
@@ -845,7 +857,10 @@ CREATE TABLE IF NOT EXISTS broker_standing_grants (
     paused                 INTEGER NOT NULL DEFAULT 0,
     suspended_at           TEXT,
     revoked_at             TEXT,
-    digest_through         TEXT NOT NULL
+    digest_through         TEXT NOT NULL,
+    -- migration 220 (design §22.2.16); also in sqliteAdditiveColumns.
+    account_label          TEXT NOT NULL DEFAULT '',
+    account_identity       TEXT NOT NULL DEFAULT ''
 );
 CREATE INDEX IF NOT EXISTS idx_broker_standing_grants_class ON broker_standing_grants (project_id, workflow_id, action);
 CREATE INDEX IF NOT EXISTS idx_broker_standing_grants_ns ON broker_standing_grants (namespace);

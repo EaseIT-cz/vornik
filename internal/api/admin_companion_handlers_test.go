@@ -138,17 +138,20 @@ func TestCompanionGrant_RejectsMissingClientKind(t *testing.T) {
 	assert.Contains(t, rec.Body.String(), "clientKind is required")
 }
 
+// A malformed clientKind is still UNKNOWN_CLIENT. A pattern-valid unlisted
+// one ("claude-cli") is accepted since GitHub #86 (LLD 21 §D2): the closed
+// list made a typo fail loudly, and it also made every new harness wait for
+// a daemon release; admin_companion_client_kind_test.go pins both sides.
 func TestCompanionGrant_RejectsUnknownClientKind(t *testing.T) {
 	srv, _ := newCompanionServer(t)
-	body := `{"projectId":"alpha","clientKind":"claude-cli"}`
+	body := `{"projectId":"alpha","clientKind":"Claude Code"}`
 
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/companion/grant", strings.NewReader(body))
 	rec := httptest.NewRecorder()
 	srv.CompanionGrant(rec, withAuthDisabled(req))
 
 	assert.Equal(t, http.StatusBadRequest, rec.Code)
-	assert.Contains(t, rec.Body.String(), "UNKNOWN_CLIENT",
-		"typo'd clientKind (claude-cli instead of claude-code) must fail loudly")
+	assert.Contains(t, rec.Body.String(), "UNKNOWN_CLIENT")
 }
 
 func TestCompanionGrant_RejectsUnknownProject(t *testing.T) {

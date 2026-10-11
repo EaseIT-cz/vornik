@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"vornik.io/vornik/internal/requestguard"
 )
 
 // ErrNotSent marks an error raised before a tool call left the daemon: a
@@ -43,10 +44,17 @@ func (m *Manager) CallToolOnce(ctx context.Context, projectID, qualifiedName, ar
 		}
 	}
 	if client == nil {
-		return "", false, fmt.Errorf("%w: MCP server %q not connected for project %q", ErrNotSent, serverName, projectID)
+		m.mu.RLock()
+		msg := m.notConnectedLocked(projectID, serverName)
+		m.mu.RUnlock()
+		return "", false, fmt.Errorf("%w: %s", ErrNotSent, msg)
 	}
 	result, err := client.CallTool(ctx, toolName, json.RawMessage(argsJSON))
 	if err != nil {
+		var refused *requestguard.Refusal
+		if errors.As(err, &refused) && !refused.AfterRejected {
+			return "", false, fmt.Errorf("%w: %w", ErrNotSent, err)
+		}
 		var limited *ToolRateLimitError
 		if errors.As(err, &limited) {
 			return "", false, fmt.Errorf("%w: %v", ErrNotSent, err)

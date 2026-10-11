@@ -375,3 +375,76 @@ func TestInitProjectFromTemplate_ConflictPrintsSuggestion(t *testing.T) {
 	assert.Contains(t, errMsg, "collide-2",
 		"error must suggest the next free projectId so the operator can --force or retry with the suggestion")
 }
+
+// brokerMailTree stages the REAL broker-mail template and, when withSwarm,
+// the shipped swarm and workflows it relies on, in a fresh config tree.
+func brokerMailTree(t *testing.T, withSwarm bool) string {
+	t.Helper()
+	configDir := t.TempDir()
+	copyFile := func(src, dst string) {
+		t.Helper()
+		b, err := os.ReadFile(filepath.Join("..", "..", src))
+		require.NoError(t, err)
+		require.NoError(t, os.MkdirAll(filepath.Dir(filepath.Join(configDir, dst)), 0o755))
+		require.NoError(t, os.WriteFile(filepath.Join(configDir, dst), b, 0o644))
+	}
+	entries, err := os.ReadDir(filepath.Join("..", "..", "configs", "project-templates", "broker-mail"))
+	require.NoError(t, err, "the broker-mail template must ship in configs/project-templates")
+	for _, e := range entries {
+		copyFile(filepath.Join("configs", "project-templates", "broker-mail", e.Name()),
+			filepath.Join("project-templates", "broker-mail", e.Name()))
+	}
+	require.NoError(t, os.MkdirAll(filepath.Join(configDir, "swarms"), 0o755))
+	require.NoError(t, os.MkdirAll(filepath.Join(configDir, "workflows"), 0o755))
+	if withSwarm {
+		copyFile("configs/swarms/broker-swarm.md", "swarms/broker-swarm.md")
+		copyFile("configs/workflows/mail-digest.md", "workflows/mail-digest.md")
+		copyFile("configs/workflows/mail-reply.md", "workflows/mail-reply.md")
+	}
+	return configDir
+}
+
+// GitHub #99 (2026-10-04 operator report): no verb scaffolded a broker
+// project, so the Hermes guide inlined the YAML. The broker-mail template
+// renders it, and init's pre-write validation loads it with the shipped
+// swarm and workflows.
+func TestInitProject_BrokerMailTemplateValidates(t *testing.T) {
+	t.Cleanup(resetTemplateFlags)
+	configDir := brokerMailTree(t, true)
+	initTemplate = "broker-mail"
+	initParams = []string{"projectId=broker-mail"}
+	cmd := &cobra.Command{}
+	cmd.SetOut(&bytes.Buffer{})
+	require.NoError(t, runInitProjectFromTemplate(cmd, []string{"broker-mail"}, configDir))
+	got, err := os.ReadFile(filepath.Join(configDir, "projects", "broker-mail.yaml"))
+	require.NoError(t, err)
+	body := string(got)
+	assert.Contains(t, body, "broker: true")
+	assert.Contains(t, body, "broker_read_only: true")
+	assert.Contains(t, body, `swarmId: "broker-swarm"`)
+	assert.NotContains(t, body, "gmail_send", "the template is read-only; the write path stays an opt-in")
+}
+
+// The template writes no swarm or workflow; without the shipped ones the
+// render is refused before anything is written.
+func TestInitProject_BrokerMailTemplateRefusedWithoutShippedSwarm(t *testing.T) {
+	t.Cleanup(resetTemplateFlags)
+	configDir := brokerMailTree(t, false)
+	initTemplate = "broker-mail"
+	initParams = []string{"projectId=broker-mail"}
+	cmd := &cobra.Command{}
+	cmd.SetOut(&bytes.Buffer{})
+	require.Error(t, runInitProjectFromTemplate(cmd, []string{"broker-mail"}, configDir))
+	_, err := os.Stat(filepath.Join(configDir, "projects", "broker-mail.yaml"))
+	assert.True(t, os.IsNotExist(err), "nothing may be written when validation fails")
+}
+
+// GitHub #99: the example said ~/.config/vornik/projects/; the daemon's
+// default tree is ~/.config/vornik/configs/projects/.
+func TestExampleBrokerMail_PathComment(t *testing.T) {
+	b, err := os.ReadFile(filepath.Join("..", "..", "configs", "examples", "broker-mail.yaml"))
+	require.NoError(t, err)
+	assert.Contains(t, string(b), "~/.config/vornik/configs/projects/")
+	assert.NotContains(t, string(b), "~/.config/vornik/projects/")
+	assert.Contains(t, string(b), "--template broker-mail")
+}

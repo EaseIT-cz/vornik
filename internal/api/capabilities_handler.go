@@ -170,8 +170,17 @@ func (s *Server) featureFlags() map[string]bool {
 		// older daemon both are absent and the plugin falls back to plain
 		// delegate + polling. companion-result-wait needs the wait hub, since
 		// without it wait_seconds is accepted and answered immediately.
-		"companion-broker":      s.apiKeyRepo != nil && s.projectRegistry != nil && s.taskCreator != nil && s.taskRepo != nil,
-		"companion-result-wait": s.taskRepo != nil && s.taskWaitHub != nil,
+		"companion-broker":        s.apiKeyRepo != nil && s.projectRegistry != nil && s.taskCreator != nil && s.taskRepo != nil,
+		"companion-result-wait":   s.taskRepo != nil && s.taskWaitHub != nil,
+		"companion-artifact-read": s.apiKeyRepo != nil && s.projectRegistry != nil && s.taskRepo != nil && s.executionRepo != nil && s.artifactRepo != nil && s.artifactOpener != nil,
+		// GitHub #119 item 9 (live-task-observation design, "Change
+		// 2026-10-08: progress while a task runs"): status and a non-terminal
+		// result carry progress. It needs the execution repository; the
+		// timestamps also need the live hub but the position does not.
+		"companion-progress": s.taskRepo != nil && s.executionRepo != nil,
+		// Broker design §6b (GitHub #119 item 9): delegate honours
+		// max_age_seconds. Needs the reach hash a reuse is pinned to.
+		"companion-result-reuse": s.taskRepo != nil && s.taskCreator != nil && s.reuseReachHash != nil,
 		// Broker write-actions design §8: result/status carry actions and
 		// catalog carries proposes; true only when writes are on and the
 		// store is wired.
@@ -183,6 +192,19 @@ func (s *Server) featureFlags() map[string]bool {
 		// key is offered the admin verbs. vornikctl agent connect refuses
 		// early when this is false.
 		"companion-admin": s.agentAdmin != nil && s.agentAdminEnabled != nil && s.agentAdminEnabled(),
+		// GitHub #305 (LLD 21 §A): every companion tool refuses an argument
+		// it does not declare, and list takes a project. A bundle sends
+		// project to list only when companion-list-project is advertised;
+		// an older daemon would drop it silently.
+		"companion-strict-args":  s.apiKeyRepo != nil,
+		"companion-list-project": s.apiKeyRepo != nil && s.taskRepo != nil,
+		// LLD 22, "Memory the user can see" (GitHub #119 item 6): memory_list
+		// is served. Bundles fall back to recent_memory when it is absent.
+		"companion-memory-list": s.memoryListAdapter() != nil,
+		// Agent-administered design §22.2.9 (GitHub #119 item 8):
+		// add_mcp_server and add_api accept an account; a bundle sends it
+		// only when this is true.
+		"agent-accounts": s.agentAdmin != nil && s.agentAdminEnabled != nil && s.agentAdminEnabled(),
 	}
 	return flags
 }

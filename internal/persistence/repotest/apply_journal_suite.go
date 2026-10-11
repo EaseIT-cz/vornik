@@ -34,6 +34,9 @@ func RunApplyJournalSuite(t *testing.T, journal persistence.ApplyJournalReposito
 	t.Run("MarkAppliedWithLedger_refuses_non_verifying_and_writes_nothing", func(t *testing.T) {
 		journalLedgerNotVerifying(t, journal, proposals)
 	})
+	t.Run("MarkAppliedWithLedger_from_DRIFT_only_when_asked", func(t *testing.T) {
+		journalLedgerFromDrift(t, journal, proposals)
+	})
 }
 
 // newTestJournal builds a PREPARED-shaped row for proposalID with one create
@@ -405,5 +408,55 @@ func journalLedgerNotVerifying(t *testing.T, journal persistence.ApplyJournalRep
 	p, _ := proposals.GetByID(ctx, pid)
 	if p.Status != persistence.ProposalStatusApproved || p.AppliedAt != nil {
 		t.Fatalf("ledger must be untouched when the journal refuses: %+v", p)
+	}
+}
+
+// GitHub #285 (2026-10-08): the resolve verb's --keep commits a DRIFT row
+// and its proposal together. MarkAppliedWithLedger accepted VERIFYING only;
+// From widens it to DRIFT for that one caller, and Failure records how the
+// row was resolved. With From empty a DRIFT row is still refused, so every
+// existing caller keeps the old contract.
+func journalLedgerFromDrift(t *testing.T, journal persistence.ApplyJournalRepository, proposals persistence.ProposalRepository) {
+	ctx := context.Background()
+	driftRow := func() (*persistence.ConfigApplyJournal, string) {
+		pid := approvedProposalFor(t, proposals)
+		row := verifyingJournalFor(t, journal, pid)
+		mustTransition(t, journal, row.ID, persistence.JournalStateVerifying, persistence.JournalStateReverting)
+		mustTransition(t, journal, row.ID, persistence.JournalStateReverting, persistence.JournalStateDrift)
+		return row, pid
+	}
+
+	row, pid := driftRow()
+	err := journal.MarkAppliedWithLedger(ctx, persistence.JournalLedgerCommit{
+		JournalID: row.ID, To: persistence.JournalStateApplied, ProposalID: pid, AppliedBy: "operator", Snapshot: "S",
+	})
+	if !errors.Is(err, persistence.ErrInvalidTransition) {
+		t.Fatalf("a DRIFT row without From must be refused as before, got %v", err)
+	}
+
+	err = journal.MarkAppliedWithLedger(ctx, persistence.JournalLedgerCommit{
+		JournalID: row.ID, From: persistence.JournalStateDrift, To: persistence.JournalStateApplied,
+		ProposalID: pid, AppliedBy: "operator", Snapshot: "S", Failure: "resolved keep by vadim: drift",
+	})
+	if err != nil {
+		t.Fatalf("MarkAppliedWithLedger(From DRIFT): %v", err)
+	}
+	j, _ := journal.Get(ctx, row.ID)
+	if j.State != persistence.JournalStateApplied || j.TerminalAt == nil || j.Failure != "resolved keep by vadim: drift" {
+		t.Fatalf("journal not terminal APPLIED with the resolution note: %+v", j)
+	}
+	p, _ := proposals.GetByID(ctx, pid)
+	if p.Status != persistence.ProposalStatusApplied || p.AppliedBy != "operator" {
+		t.Fatalf("ledger not APPLIED: %+v", p)
+	}
+
+	// Only VERIFYING and DRIFT are ledger sources.
+	other, opid := driftRow()
+	err = journal.MarkAppliedWithLedger(ctx, persistence.JournalLedgerCommit{
+		JournalID: other.ID, From: persistence.JournalStateReverting, To: persistence.JournalStateApplied,
+		ProposalID: opid, AppliedBy: "operator",
+	})
+	if !errors.Is(err, persistence.ErrInvalidTransition) {
+		t.Fatalf("From=REVERTING must be ErrInvalidTransition, got %v", err)
 	}
 }

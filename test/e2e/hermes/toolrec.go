@@ -53,7 +53,8 @@ func (b *bodyWatch) inspect(body []byte) {
 // re-samples retries (lane design, As built).
 type ToolRecorder struct {
 	bodyWatch
-	proxy *httputil.ReverseProxy
+	evidence callEvidence
+	proxy    *httputil.ReverseProxy
 
 	mu        sync.Mutex
 	attempt   int
@@ -66,7 +67,15 @@ func NewToolRecorder(upstream string) *ToolRecorder {
 	if err != nil {
 		panic(err)
 	}
-	return &ToolRecorder{proxy: httputil.NewSingleHostReverseProxy(u), attempt: 1, toolsSeen: map[string]bool{}}
+	r := &ToolRecorder{proxy: httputil.NewSingleHostReverseProxy(u), attempt: 1, toolsSeen: map[string]bool{}}
+	r.proxy.ModifyResponse = func(resp *http.Response) error {
+		if resp.Header.Get("Content-Encoding") != "" && resp.Header.Get("Content-Encoding") != "identity" {
+			return nil
+		}
+		resp.Body = &observingModelBody{ReadCloser: resp.Body, p: newModelCallParser(&r.evidence, strings.Contains(resp.Header.Get("Content-Type"), "text/event-stream"))}
+		return nil
+	}
+	return r
 }
 
 // SetAttempt tells the recorder which attempt of a step is running.
@@ -97,6 +106,7 @@ func (r *ToolRecorder) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 			return
 		}
 		r.inspect(body)
+		r.evidence.chatInput(body)
 		body = r.observe(body)
 		req.Body = io.NopCloser(bytes.NewReader(body))
 		req.ContentLength = int64(len(body))

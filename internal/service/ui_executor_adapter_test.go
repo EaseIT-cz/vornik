@@ -6,17 +6,18 @@ import (
 	"vornik.io/vornik/internal/ui"
 )
 
-// TestUIExecutorAdapter_ImplementsTaskLogSource pins the
-// regression discovered 2026-05-23: the adapter must satisfy
-// ui.TaskLogSource so ui.WithExecutor wires s.taskLogSource. If
-// this assertion ever returns false again, the live log panel
-// on /ui/tasks/{id} silently returns "No logs available yet."
-// for every task. The fix is a TaskLogs method that forwards
-// to the underlying *executor.Executor.
-func TestUIExecutorAdapter_ImplementsTaskLogSource(t *testing.T) {
+// TestUIExecutorAdapter_IsNotALogSource — GitHub #294 (2026-10-08). The
+// adapter used to forward TaskLogs to the executor so ui.WithExecutor would
+// wire it as the log panel's source (the 2026-05-23 empty-panel fix). That
+// ran `podman logs` every 2 s per open panel: a request-triggered spawn. The
+// panel's source is now the daemon-held task log, wired with
+// ui.WithTaskLogSource in initHTTPServer; the e2e
+// TestSpawnLaw_TaskLogRoutesRunNoPodman proves the panel still shows the
+// task's log on the real binary (so the 2026-05-23 regression stays covered).
+func TestUIExecutorAdapter_IsNotALogSource(t *testing.T) {
 	var a any = uiExecutorAdapter{}
-	if _, ok := a.(ui.TaskLogSource); !ok {
-		t.Fatalf("uiExecutorAdapter must implement ui.TaskLogSource — otherwise /ui/tasks/{id}/logs/stream returns the empty-fallback for every task")
+	if _, ok := a.(ui.TaskLogSource); ok {
+		t.Fatal("uiExecutorAdapter implements ui.TaskLogSource again: the UI log panel would run podman logs (GitHub #294)")
 	}
 }
 

@@ -29,7 +29,8 @@ var (
 	// ErrJournalDrift means a target matched neither its pre-image nor the
 	// intended content during recovery (§1.4). The file is left alone, the
 	// row parks in DRIFT, and its projects stay blocked until an operator
-	// resolves it with `vornikctl control-plane journal resolve`.
+	// resolves the row with `vornikctl control-plane journal resolve <id>
+	// --keep|--restore` (design §12, GitHub #285).
 	ErrJournalDrift = errors.New("control-plane: config target drifted under recovery; operator resolution required")
 	// ErrWriterFenced means the config-writer lease epoch was superseded
 	// between PREPARE and a write (§1.2); the apply aborted into recovery.
@@ -43,6 +44,10 @@ var (
 	// different deployment root than this engine's ConfigDir; it is left
 	// alone rather than reconciled against the wrong tree.
 	ErrJournalRootMismatch = errors.New("control-plane: apply journal deployment root does not match this config dir")
+	// ErrJournalDigestMismatch means the row's proposal no longer carries
+	// the content the row's op digest records, so the row cannot be checked
+	// against it (§12.2 as-built limit; a resolve refusal since #301).
+	ErrJournalDigestMismatch = errors.New("control-plane: proposal content no longer matches the journal's op digest")
 
 	// errCrashInjected is what the test crash point returns: the engine
 	// stops dead, exactly where a process crash would, with no further
@@ -506,26 +511,90 @@ func (e *ApplyEngine) restoreOne(ctx context.Context, row *persistence.ConfigApp
 		}
 		return nil
 	default:
-		return e.markDrift(ctx, row, ro.op.Path, cur, existed)
+		return e.markDrift(ctx, row, persistence.JournalStateReverting, ro.op.Path, cur, existed)
 	}
 }
 
-// markDrift parks the row in DRIFT naming the path and hash (§3) and returns
-// ErrJournalDrift. The file is not touched.
-func (e *ApplyEngine) markDrift(ctx context.Context, row *persistence.ConfigApplyJournal, rel string, cur []byte, existed bool) error {
+// markDrift parks the row in DRIFT naming the target path and hash (§3) and
+// returns ErrJournalDrift. The file is not touched. from is the row's actual
+// state: the revert path and reconcileApplying have already moved it to
+// REVERTING.
+func (e *ApplyEngine) markDrift(ctx context.Context, row *persistence.ConfigApplyJournal, from, rel string, cur []byte, existed bool) error {
 	have := "absent"
 	if existed {
 		have = hashBytes(cur)
 	}
-	failure := fmt.Sprintf("drift: %s is %s; matches neither pre-image nor intended content", rel, have)
+	return e.parkInDrift(ctx, row, from, rel, fmt.Sprintf("drift: %s is %s; matches neither pre-image nor intended content", rel, have))
+}
+
+// parkInDrift takes an open row from its actual state to DRIFT through
+// REVERTING (§3 has "any → REVERTING" and "REVERTING → DRIFT", and no other
+// edge into DRIFT), recording failure, and returns ErrJournalDrift. GitHub
+// #102: the read-set branch used to CAS REVERTING → DRIFT on a row that was
+// PREPARED, APPLYING or VERIFYING, which failed "invalid transition" at every
+// start and left the row open. No file is written here.
+func (e *ApplyEngine) parkInDrift(ctx context.Context, row *persistence.ConfigApplyJournal, from, rel, failure string) error {
+	if from != persistence.JournalStateReverting {
+		if terr := e.Journal.Transition(ctx, row.ID, from, persistence.JournalStateReverting,
+			persistence.JournalPatch{Failure: failure}); terr != nil {
+			return fmt.Errorf("journal %s→REVERTING: %w", from, terr)
+		}
+		// Crash seam between the two steps (review b240 finding 9): the row
+		// is then REVERTING with this failure, and the next start re-parks
+		// it (the read-set check runs before any revert).
+		if e.crash("parking") {
+			return errCrashInjected
+		}
+	}
 	if terr := e.Journal.Transition(ctx, row.ID, persistence.JournalStateReverting, persistence.JournalStateDrift,
 		persistence.JournalPatch{Failure: failure}); terr != nil {
 		return fmt.Errorf("journal →DRIFT: %w", terr)
 	}
 	e.Logger.Error().Str("journal_id", row.ID).Str("proposal_id", row.ProposalID).Str("path", rel).
 		Strs("blocked_projects", row.AffectedProjects).
-		Msg("control-plane: EXTERNAL DRIFT under recovery; file left alone, projects blocked until an operator resolves the journal")
+		Msg("control-plane: EXTERNAL DRIFT under recovery; files left alone, projects blocked until an operator runs: vornikctl control-plane journal resolve <id> --keep|--restore")
 	return fmt.Errorf("%w: %s", ErrJournalDrift, failure)
+}
+
+// parkReadSetDrift is recovery's answer to a read dependency that changed
+// since the proposal was computed (§10.3, §11). A PREPARED row with every
+// target still at its pre-image wrote nothing: PREPARED → FAILED and the
+// proposal auto-retired, as §4 does at lock time; nothing needs a person, so
+// it is not an error. Any other row may have written, so neither rolling
+// forward nor back is safe: it parks in DRIFT for an operator.
+func (e *ApplyEngine) parkReadSetDrift(ctx context.Context, row *persistence.ConfigApplyJournal, resolved []resolvedOp, drifted string) error {
+	cur, existed, _ := readIfExists(e.mustResolve(drifted))
+	have := "absent"
+	if existed {
+		have = hashBytes(cur)
+	}
+	failure := fmt.Sprintf("reconcile: read dependency %s changed since the proposal was computed (now %s)", drifted, have)
+	if row.State == persistence.JournalStatePrepared {
+		nothingWritten := true
+		for _, ro := range resolved {
+			st, err := targetStatus(ro)
+			if err != nil {
+				return err
+			}
+			if st != "pre" {
+				nothingWritten = false
+			}
+		}
+		if nothingWritten {
+			// The transition's error is returned, and only a row that did
+			// reach FAILED retires its proposal: a lost compare-and-set means
+			// another writer moved the row (review b240 finding 8).
+			if terr := e.Journal.Transition(ctx, row.ID, persistence.JournalStatePrepared, persistence.JournalStateFailed,
+				persistence.JournalPatch{Failure: failure + "; nothing was written", Terminal: true}); terr != nil {
+				return fmt.Errorf("journal PREPARED→FAILED: %w", terr)
+			}
+			e.autoRetireStale(ctx, row.ProposalID)
+			e.Logger.Info().Str("journal_id", row.ID).Str("proposal_id", row.ProposalID).Str("path", drifted).
+				Msg("control-plane: open journal FAILED at recovery: a read dependency changed before anything was written; proposal retired")
+			return nil
+		}
+	}
+	return e.parkInDrift(ctx, row, row.State, drifted, failure)
 }
 
 // resumeOpenJournal is the R8 retry: Apply found an open row for this
@@ -644,8 +713,7 @@ func (e *ApplyEngine) reconcileRow(ctx context.Context, row *persistence.ConfigA
 		if cerr != nil {
 			return fmt.Errorf("journal %s: read dependency unreadable during recovery: %w", row.ID, cerr)
 		}
-		cur, existed, _ := readIfExists(e.mustResolve(drifted))
-		return e.markDrift(ctx, row, drifted, cur, existed)
+		return e.parkReadSetDrift(ctx, row, resolved, drifted)
 	}
 	switch row.State {
 	case persistence.JournalStatePrepared:
@@ -688,7 +756,7 @@ func (e *ApplyEngine) resolvedFromJournal(ctx context.Context, row *persistence.
 	for _, jop := range row.Ops {
 		op, ok := byPath[jop.Path]
 		if !ok || hashBytes([]byte(op.Content)) != jop.ContentSHA256 {
-			return nil, nil, fmt.Errorf("journal %s: proposal content for %s no longer matches the op digest", row.ID, jop.Path)
+			return nil, nil, fmt.Errorf("%w: journal %s, %s", ErrJournalDigestMismatch, row.ID, jop.Path)
 		}
 		target, terr := e.resolveTarget(jop.Path)
 		if terr != nil {
@@ -767,7 +835,7 @@ func (e *ApplyEngine) reconcileApplying(ctx context.Context, row *persistence.Co
 				persistence.JournalPatch{Failure: "reconcile: " + ro.op.Path + " matches neither image"}); terr != nil {
 				return fmt.Errorf("journal →REVERTING: %w", terr)
 			}
-			return e.markDrift(ctx, row, ro.op.Path, cur, existed)
+			return e.markDrift(ctx, row, persistence.JournalStateReverting, ro.op.Path, cur, existed)
 		}
 	}
 	if terr := e.Journal.Transition(ctx, row.ID, persistence.JournalStateApplying, persistence.JournalStateVerifying, persistence.JournalPatch{}); terr != nil {

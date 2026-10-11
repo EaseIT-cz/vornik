@@ -33,6 +33,9 @@ type AgentItem struct {
 	Name   string
 	Status string
 	Detail string
+	// Checked is a connection's last test_connection result in words
+	// ("last tested <when>: <code>" or "not tested"; design §6.2).
+	Checked string
 }
 
 // AgentProject is one project of a namespace.

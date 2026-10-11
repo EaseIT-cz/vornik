@@ -157,6 +157,10 @@ type Recipe struct {
 	egress      map[string]any // the envelope merged in
 	egressJSON  string         // its canonical JSON
 	egressLines []string       // the plain-words field list
+	// account is the label of an install as another account (design
+	// §22.2.8), "" for the catalogue's own recipe; baseSlug is then the
+	// catalogue's workflow slug.
+	account, baseSlug string
 }
 
 // Catalogue is the loaded recipes, sorted by name.
@@ -288,26 +292,8 @@ func parseRecipe(body []byte, env Envelope) (*Recipe, error) {
 	if err := checkRecipeWorkflow(&r); err != nil {
 		return nil, err
 	}
-	egress, err := mergeEnvelope(env, &r)
-	if err != nil {
+	if err := r.finishEgress(env); err != nil {
 		return nil, err
-	}
-	r.egress = egress
-	canon, err := canonicalOf(egress)
-	if err != nil {
-		return nil, err
-	}
-	if len(canon) > maxEgressBytes {
-		return nil, fmt.Errorf("the merged egress schema is over %d bytes", maxEgressBytes)
-	}
-	r.egressJSON = string(canon)
-	lines, err := egressLinesOf(egress)
-	if err != nil {
-		return nil, fmt.Errorf("egress: %v", err)
-	}
-	r.egressLines = lines
-	if _, err := registry.CompileBrokerSchema(r.Name+"-egress", egress); err != nil {
-		return nil, fmt.Errorf("the merged egress schema does not compile: %v", err)
 	}
 	return &r, nil
 }
@@ -695,9 +681,12 @@ func checkRecipeSteps(r *Recipe) error {
 			return err
 		}
 		if i+1 < len(r.Workflow.Steps) {
-			expected := "artifacts/out/" + s.Name + ".md"
-			if other := conflictingOutputPath(s.Instructions, expected); other != "" {
-				return fmt.Errorf("step %s instructions name %q, but non-answer steps must write their hand-off to %q", s.Name, other, expected)
+			earlier := make([]string, 0, i)
+			for _, e := range r.Workflow.Steps[:i] {
+				earlier = append(earlier, handoffPath(e.Name))
+			}
+			if why := conflictingOutputPath(s.Name, s.Instructions, earlier); why != "" {
+				return errors.New(why)
 			}
 		}
 	}
@@ -813,8 +802,44 @@ func (r *Recipe) sortedVariableNames() []string {
 	return out
 }
 
-// RoleName is a recipe role's installed name (§19.7 F4).
-func (r *Recipe) RoleName(role string) string { return r.Name + "-" + role }
+// RoleName is a recipe role's installed name (§19.7 F4): <recipe>-<role>,
+// or <recipe>-<account>-<role> for an install as another account (design
+// §22.2.8).
+func (r *Recipe) RoleName(role string) string { return r.rolePrefix() + role }
+
+func (r *Recipe) rolePrefix() string {
+	if r.account != "" {
+		return r.Name + "-" + r.account + "-"
+	}
+	return r.Name + "-"
+}
+
+// finishEgress merges the envelope into the recipe's egress and computes
+// its canonical form, its plain-words lines and a compile check.
+func (r *Recipe) finishEgress(env Envelope) error {
+	egress, err := mergeEnvelope(env, r)
+	if err != nil {
+		return err
+	}
+	r.egress = egress
+	canon, err := canonicalOf(egress)
+	if err != nil {
+		return err
+	}
+	if len(canon) > maxEgressBytes {
+		return fmt.Errorf("the merged egress schema is over %d bytes", maxEgressBytes)
+	}
+	r.egressJSON = string(canon)
+	lines, err := egressLinesOf(egress)
+	if err != nil {
+		return fmt.Errorf("egress: %v", err)
+	}
+	r.egressLines = lines
+	if _, err := registry.CompileBrokerSchema(r.Name+"-egress", egress); err != nil {
+		return fmt.Errorf("the merged egress schema does not compile: %v", err)
+	}
+	return nil
+}
 
 // EgressJSON is the merged egress schema's canonical JSON.
 func (r *Recipe) EgressJSON() string { return r.egressJSON }

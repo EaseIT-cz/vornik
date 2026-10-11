@@ -5,11 +5,13 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"path"
 	"regexp"
 	"sort"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/santhosh-tekuri/jsonschema/v5"
 
@@ -217,6 +219,8 @@ func isBareJSONName(name string) bool {
 
 // BrokerEgress declares what a broker workflow may return.
 type BrokerEgress struct {
+	// Artifacts names additional approved whole-file outputs; empty denies all.
+	Artifacts []string `yaml:"artifacts,omitempty" json:"artifacts,omitempty"`
 	// Output is the ORIGINAL file name (before the executor's
 	// disambiguation suffix) of the OUTPUT artifact that is the egress.
 	Output string `yaml:"output" json:"output"`
@@ -263,11 +267,11 @@ func (b *WorkflowBroker) Validate() error {
 		return fmt.Errorf("broker.input_schema must be type: object")
 	}
 	w := &brokerSchemaWalker{}
-	if err := w.walk("input_schema", b.InputSchema, 1); err != nil {
+	if err := w.walk("input_schema", b.InputSchema, unitMultiplier); err != nil {
 		return err
 	}
 	if w.budget > BrokerUntrustedBudget {
-		return ruleError("input_schema", ruleBudget, fmt.Sprintf("this schema's budget is %d", w.budget))
+		return ruleError("input_schema", ruleBudget, budgetDetail(w.total))
 	}
 	compiled, err := CompileBrokerSchema("input_schema", b.InputSchema)
 	if err != nil {
@@ -332,6 +336,21 @@ func jsonDocument(v map[string]any) (any, error) {
 }
 
 func (b *WorkflowBroker) validateEgress() error {
+	if len(b.Egress.Artifacts) > 16 {
+		return fmt.Errorf("broker.egress.artifacts permits at most 16 names")
+	}
+	seen := map[string]bool{}
+	for _, name := range b.Egress.Artifacts {
+		if name == "" || strings.TrimSpace(name) != name || name == "." || name == ".." || strings.ContainsAny(name, `/\`) || strings.IndexFunc(name, unicode.IsControl) >= 0 || brokerTranscriptName.MatchString(name) || seen[name] || name == strings.TrimSpace(b.Egress.Output) {
+			return fmt.Errorf("broker.egress.artifacts must contain distinct bare additional output names")
+		}
+		for _, p := range b.Proposes {
+			if name == strings.TrimSpace(p.Output) {
+				return fmt.Errorf("broker.egress.artifacts cannot expose proposal outputs")
+			}
+		}
+		seen[name] = true
+	}
 	out := strings.TrimSpace(b.Egress.Output)
 	if out == "" {
 		return fmt.Errorf("broker.egress.output is required: name the one output file that may leave")
@@ -361,6 +380,9 @@ func (b *WorkflowBroker) validateEgress() error {
 	return nil
 }
 
+// Reserved executor transcript names are never additional deliverables.
+var brokerTranscriptName = regexp.MustCompile(`-response(?:-[0-9]{8}-[a-zA-Z0-9]+)?\.md$`)
+
 // UntrustedInputPaths lists the dotted paths (relative to the input object) of
 // every x-untrusted leaf, sorted. Delegate wraps those values in the
 // untrusted markers before they reach an agent.
@@ -372,7 +394,7 @@ func (b *WorkflowBroker) UntrustedInputPaths() []string {
 	// is judged by its path (broker design §18.1), and a walk rooted
 	// elsewhere would stop at the first document.
 	w := &brokerSchemaWalker{}
-	_ = w.walk("input_schema", b.InputSchema, 1)
+	_ = w.walk("input_schema", b.InputSchema, unitMultiplier)
 	sort.Strings(w.untrusted)
 	return w.untrusted
 }
@@ -418,7 +440,7 @@ func (b *WorkflowBroker) validateProposes() error {
 			return fmt.Errorf("%s.args_schema must be type: object", at)
 		}
 		w := &brokerSchemaWalker{args: true}
-		if err := w.walk(fmt.Sprintf("proposes[%d].args_schema", i), p.ArgsSchema, 1); err != nil {
+		if err := w.walk(fmt.Sprintf("proposes[%d].args_schema", i), p.ArgsSchema, unitMultiplier); err != nil {
 			return err
 		}
 		if _, err := CompileBrokerSchema(p.Action+"-args", p.ArgsSchema); err != nil {
@@ -431,9 +453,46 @@ func (b *WorkflowBroker) validateProposes() error {
 	return nil
 }
 
+// walkMultiplier is the product of the maxItems of every array enclosing a
+// node, kept twice (broker design §4.3, amended 2026-10-08, GitHub #96):
+// capped saturates one above the budget and is the only figure the load
+// decision reads (the 2026-10-03 overflow proof); real saturates at
+// math.MaxInt and feeds only the refusal's message. Never let the decision
+// read real: the two being equal under the budget does not make the
+// unclamped arithmetic part of the proof.
+type walkMultiplier struct{ capped, real int }
+
+// unitMultiplier is the multiplier at a schema's root.
+var unitMultiplier = walkMultiplier{capped: 1, real: 1}
+
+// saturatingMul and saturatingAdd pin to math.MaxInt instead of wrapping.
+// The walk passes only operands >= 1 (walkArray refuses maxItems < 1 and
+// walkString maxLength < 1 before any arithmetic); a negative operand, which
+// would mean that precondition broke, saturates rather than producing a
+// negative or wrapped figure (review 315a F2).
+func saturatingMul(a, b int) int {
+	if a < 0 || b < 0 {
+		return math.MaxInt
+	}
+	if a != 0 && b > math.MaxInt/a {
+		return math.MaxInt
+	}
+	return a * b
+}
+
+func saturatingAdd(a, b int) int {
+	if a < 0 || b < 0 || b > math.MaxInt-a {
+		return math.MaxInt
+	}
+	return a + b
+}
+
 // brokerSchemaWalker proves every string leaf is bounded.
 type brokerSchemaWalker struct {
+	// budget is the clamped untrusted total the decision reads; total is
+	// the same sum, unclamped and saturating, for the message only.
 	budget    int
+	total     int
 	untrusted []string
 	// documents and docBytes count the x-untrusted-document declarations
 	// (broker design §18), in their own budget.
@@ -446,7 +505,7 @@ type brokerSchemaWalker struct {
 	args bool
 }
 
-func (w *brokerSchemaWalker) walk(at string, node map[string]any, multiplier int) error {
+func (w *brokerSchemaWalker) walk(at string, node map[string]any, multiplier walkMultiplier) error {
 	for _, kw := range brokerRefusedKeywords {
 		if _, ok := node[kw]; ok {
 			return ruleError(at, ruleKeywords, kw+" found")
@@ -477,7 +536,7 @@ func (w *brokerSchemaWalker) walk(at string, node map[string]any, multiplier int
 	}
 }
 
-func (w *brokerSchemaWalker) walkObject(at string, node map[string]any, multiplier int) error {
+func (w *brokerSchemaWalker) walkObject(at string, node map[string]any, multiplier walkMultiplier) error {
 	if ap, ok := node["additionalProperties"].(bool); !ok || ap {
 		return ruleError(at, ruleObject, "")
 	}
@@ -504,7 +563,7 @@ func (w *brokerSchemaWalker) walkObject(at string, node map[string]any, multipli
 	return nil
 }
 
-func (w *brokerSchemaWalker) walkArray(at string, node map[string]any, multiplier int) error {
+func (w *brokerSchemaWalker) walkArray(at string, node map[string]any, multiplier walkMultiplier) error {
 	maxItems, ok := schemaInt(node["maxItems"])
 	if !ok || maxItems < 1 {
 		return ruleError(at, ruleArray, "no maxItems")
@@ -516,32 +575,39 @@ func (w *brokerSchemaWalker) walkArray(at string, node map[string]any, multiplie
 	// Only the untrusted-text budget uses this multiplier. Saturating one
 	// above its ceiling preserves the proof without overflowing nested arrays.
 	const capMultiplier = BrokerUntrustedBudget + 1
-	if multiplier > capMultiplier/maxItems {
-		multiplier = capMultiplier
+	if multiplier.capped > capMultiplier/maxItems {
+		multiplier.capped = capMultiplier
 	} else {
-		multiplier *= maxItems
+		multiplier.capped *= maxItems
 	}
+	multiplier.real = saturatingMul(multiplier.real, maxItems)
 	return w.walk(joinSchemaPath(at, "items"), items, multiplier)
 }
 
-func (w *brokerSchemaWalker) walkString(at string, node map[string]any, multiplier int) error {
+func (w *brokerSchemaWalker) walkString(at string, node map[string]any, multiplier walkMultiplier) error {
 	maxLen, hasMax := schemaInt(node["maxLength"])
 	if untrusted, _ := node["x-untrusted"].(bool); untrusted {
 		if !hasMax {
 			return ruleError(at, ruleUntrusted, "no maxLength")
 		}
+		// As walkArray does for maxItems: no arithmetic below runs on a
+		// maxLength under 1 (review 315a F2).
+		if maxLen < 1 {
+			return ruleError(at, ruleUntrusted, "maxLength must be at least 1")
+		}
 		limit := BrokerUntrustedStringMax
 		if w.args {
 			limit = BrokerArgsMaxBytesCeiling
 		}
-		if maxLen < 1 || maxLen > limit {
+		if maxLen > limit {
 			// The args_schema limit differs (w.args), so the detail states the
 			// limit that applies here.
 			return ruleError(at, ruleUntrusted, fmt.Sprintf("maxLength must be 1..%d here", limit))
 		}
 		// maxLen and multiplier are bounded here; saturate the sum too so
 		// repeated leaves cannot wrap it back below the input budget.
-		w.budget = min(BrokerUntrustedBudget+1, w.budget+maxLen*multiplier)
+		w.budget = min(BrokerUntrustedBudget+1, w.budget+maxLen*multiplier.capped)
+		w.total = saturatingAdd(w.total, saturatingMul(maxLen, multiplier.real))
 		w.untrusted = append(w.untrusted, untrustedPropertyPath(at))
 		return nil
 	}
@@ -558,6 +624,15 @@ func (w *brokerSchemaWalker) walkString(at string, node map[string]any, multipli
 		return nil
 	}
 	return ruleError(at, ruleString, "unconstrained string")
+}
+
+// budgetDetail states an over-budget schema's real total; a total that
+// saturated says so rather than printing a wrapped or clamped figure.
+func budgetDetail(total int) string {
+	if total == math.MaxInt {
+		return fmt.Sprintf("this schema's budget is more than %d", math.MaxInt)
+	}
+	return fmt.Sprintf("this schema's budget is %d", total)
 }
 
 func joinSchemaPath(at, next string) string {
@@ -843,7 +918,7 @@ func (p BrokerProposal) UntrustedArgPaths() []string {
 		return nil
 	}
 	w := &brokerSchemaWalker{args: true}
-	_ = w.walk("", p.ArgsSchema, 1)
+	_ = w.walk("", p.ArgsSchema, unitMultiplier)
 	sort.Strings(w.untrusted)
 	return w.untrusted
 }

@@ -45,6 +45,10 @@ func agentRuleRejections(cfg *ConfigSet, agentModels map[string]bool) {
 			delete(cfg.projects, id)
 		}
 	}
+	for id, err := range credentialAccountConflicts(cfg.projects) {
+		reject("project", id, err)
+		delete(cfg.projects, id)
+	}
 	for id, sw := range cfg.swarms {
 		err := checkReservedID(id)
 		if err == nil {
@@ -101,7 +105,17 @@ func checkAgentProject(id string, p *Project) error {
 		if len(p.APIs) > 0 {
 			return fmt.Errorf("project %q declares apis, which are for agent projects in this release; use gateway.providers", id)
 		}
+		// Accounts are for agent-namespace connections only (operator
+		// decision F3, agent-administered design §22.2.1).
+		for _, s := range p.MCP.Servers {
+			if s.Account != "" {
+				return fmt.Errorf("project %q server %q declares an account, which is for agent projects in this release", id, s.Name)
+			}
+		}
 		return nil
+	}
+	if err := checkAgentAccounts(id, p); err != nil {
+		return err
 	}
 	for _, a := range p.APIs {
 		if ref := strings.TrimSpace(a.Auth.ValueFrom); ref != "" {
@@ -217,8 +231,8 @@ func checkAgentWritePairs(id string, servers []MCPServerConfig) error {
 			continue
 		}
 		base, ok := byName[agentns.IntegrationOf(s.Name)]
-		if !ok || base.BrokerWrite || base.URL != s.URL || base.Auth.ValueFrom != s.Auth.ValueFrom {
-			return fmt.Errorf("agent project %q server %q: a write entry needs its read entry %q with the same URL and credential", id, s.Name, agentns.IntegrationOf(s.Name))
+		if !ok || base.BrokerWrite || base.URL != s.URL || base.Auth.ValueFrom != s.Auth.ValueFrom || base.Account != s.Account {
+			return fmt.Errorf("agent project %q server %q: a write entry needs its read entry %q with the same URL, credential and account", id, s.Name, agentns.IntegrationOf(s.Name))
 		}
 	}
 	return nil
@@ -246,4 +260,76 @@ func checkAgentSwarmModels(id string, sw *Swarm, agentModels map[string]bool) er
 		}
 	}
 	return nil
+}
+
+// checkAgentAccounts checks the account labels of an agent project's
+// connections (agent-administered design §22.2.1): each is absent or a
+// well-formed label. The write sibling's equality with its base is checked
+// with the write pairs.
+func checkAgentAccounts(id string, p *Project) error {
+	// C2 at load (lane B review 289c finding 1): two OAuth servers of a
+	// project never share a sign-in slot.
+	slots := map[string]string{}
+	for _, s := range p.MCP.Servers {
+		if s.Auth.Mode != "oauth" || strings.HasSuffix(s.Name, agentns.WriteSuffix) {
+			continue
+		}
+		slot := agentns.OAuthSlot(s.Name)
+		if other, ok := slots[slot]; ok {
+			return fmt.Errorf("agent project %q servers %q and %q share the sign-in %s", id, other, s.Name, slot)
+		}
+		slots[slot] = s.Name
+	}
+	for _, s := range p.MCP.Servers {
+		if s.Account != "" && !agentns.ValidAccountLabel(s.Account) {
+			return fmt.Errorf("agent project %q server %q: account %q is not an account label", id, s.Name, s.Account)
+		}
+	}
+	for _, a := range p.APIs {
+		if a.Account != "" && !agentns.ValidAccountLabel(a.Account) {
+			return fmt.Errorf("agent project %q API %q: account %q is not an account label", id, a.Name, a.Account)
+		}
+	}
+	return nil
+}
+
+// credentialAccountConflicts is rule C1 at load (agent-administered design
+// §22.2.3; lane B review aae3 finding 1): a credential of an agent namespace
+// belongs to one account label across the namespace. The renderer refuses
+// a second label when a connection is added; a file placed by another
+// route is caught here, and every project holding a conflicting binding is
+// rejected.
+func credentialAccountConflicts(projects map[string]*Project) map[string]error {
+	type use struct{ project, label string }
+	uses := map[string][]use{} // secret ref -> its uses
+	for id, p := range projects {
+		if _, agent := agentns.FromID(id); !agent {
+			continue
+		}
+		add := func(ref, label string) {
+			if ref = strings.TrimSpace(ref); strings.HasPrefix(ref, "secret://") {
+				uses[ref] = append(uses[ref], use{id, agentns.AccountOf(label)})
+			}
+		}
+		for _, s := range p.MCP.Servers {
+			add(s.Auth.ValueFrom, s.Account)
+		}
+		for _, a := range p.APIs {
+			add(a.Auth.ValueFrom, a.Account)
+		}
+	}
+	out := map[string]error{}
+	for ref, us := range uses {
+		labels := map[string]bool{}
+		for _, u := range us {
+			labels[u.label] = true
+		}
+		if len(labels) < 2 {
+			continue
+		}
+		for _, u := range us {
+			out[u.project] = fmt.Errorf("agent project %q binds the credential %s to more than one account; a credential belongs to one account", u.project, strings.TrimPrefix(ref, "secret://"))
+		}
+	}
+	return out
 }

@@ -19,13 +19,20 @@ func ProjectStateFrom(p *registry.Project, sw *registry.Swarm) *ProjectState {
 	for _, a := range p.APIs {
 		ps.APIs = append(ps.APIs, APIState{Name: a.Name, BaseURL: a.BaseURL, Header: a.Auth.Header,
 			QueryParam: a.Auth.QueryParam, AuthRef: strings.TrimSpace(a.Auth.ValueFrom), Prefix: a.Auth.Prefix,
-			Methods: append([]string(nil), a.Methods...), Writes: a.Writes})
+			Methods: append([]string(nil), a.Methods...), Writes: a.Writes,
+			// Loaded back so a verb that re-renders the project keeps it
+			// (design §22.2.1).
+			Account: a.Account})
 	}
 	for _, s := range p.MCP.Servers {
 		ps.Servers = append(ps.Servers, ServerState{
 			Name: s.Name, URL: s.URL, AuthRef: strings.TrimSpace(s.Auth.ValueFrom),
 			OAuth: s.Auth.Mode == "oauth", Scopes: append([]string(nil), s.Auth.Scopes...),
 			Write: s.BrokerWrite, Tools: append([]string(nil), s.AllowedTools...),
+			// Loaded back so a verb that re-renders the project keeps it
+			// (design §6.1).
+			Transport: s.Transport,
+			Account:   s.Account,
 		})
 	}
 	if sw != nil {

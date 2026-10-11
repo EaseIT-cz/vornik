@@ -63,7 +63,10 @@ func (m *mockTaskRepo) GetByIdempotencyKey(_ context.Context, projectID, idempot
 	return nil, persistence.ErrNotFound
 }
 func (m *mockTaskRepo) Update(context.Context, *persistence.Task) error { return nil }
-func (m *mockTaskRepo) Delete(context.Context, string) error            { return nil }
+func (m *mockTaskRepo) UpdateIfStatus(context.Context, *persistence.Task, []persistence.TaskStatus) (bool, error) {
+	return true, nil
+}
+func (m *mockTaskRepo) Delete(context.Context, string) error { return nil }
 func (m *mockTaskRepo) UpdateStatus(context.Context, string, persistence.TaskStatus) error {
 	return nil
 }

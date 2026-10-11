@@ -104,7 +104,18 @@ func (s *agentAdminService) storeCredential(ctx context.Context, pl approvalPayl
 	if err != nil {
 		return err
 	}
-	return st.Put(ctx, pl.Slot.Namespace, pl.Slot.Name, "secret", value, deviceID)
+	row, err := st.PreparePut(pl.Slot.Namespace, pl.Slot.Name, "secret", value, deviceID)
+	if err != nil {
+		return err
+	}
+	ticket, err := s.c.beginAccountTransition(ctx, persistence.AccountNamespaceScope(pl.Slot.Namespace), "static-credential")
+	if err != nil {
+		return err
+	}
+	if _, err = s.c.suspendNamespaceGrants(ctx, pl.Slot.Namespace); err != nil {
+		return err
+	}
+	return s.c.repos.AccountTransitions.Finish(ctx, ticket, persistence.AccountPublication{Secret: row})
 }
 
 // errorKind names an error's class without its text, which a lower layer

@@ -182,7 +182,10 @@ func TestStageBrokerActions_StoreErrorIsRetryableClass(t *testing.T) {
 // completedWriteRE is a syntactic heuristic, not a semantic one: a
 // COMPLETED write split across lines differently would not match. It fails
 // closed either way, because the scan also requires exactly two matches.
-var completedWriteRE = regexp.MustCompile(`UpdateStatus\([^)]*persistence\.TaskStatusCompleted\)|\}\s*,\s*persistence\.TaskStatusCompleted,`)
+// handleSuccess's write became a TransitionConditional over the named set
+// completableTaskStatuses on 2026-10-08 (GitHub #300, 05-scheduler §4.11), so
+// that form counts as a COMPLETED write too.
+var completedWriteRE = regexp.MustCompile(`UpdateStatus\([^)]*persistence\.TaskStatusCompleted\)|\}\s*,\s*persistence\.TaskStatusCompleted,|completableTaskStatuses,\s*persistence\.TaskStatusCompleted,`)
 
 // Every COMPLETED transition in this package stages before and promotes
 // after it, in the same function (design §5.1, review round 3 M2).

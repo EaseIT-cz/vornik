@@ -160,18 +160,23 @@ func TestServer_Readyz_DrainingReturns503(t *testing.T) {
 	assert.Contains(t, rec.Body.String(), "draining")
 }
 
-// TestServer_SetDrainingRoundtrip: the bit is a one-way switch from
-// the SIGTERM handler's perspective, but the setter accepts both
-// values for unit testing + future use (e.g. an admin "rollback drain"
-// CLI). IsDraining reads the cached atomic without taking a lock so
-// every /readyz request can call it.
+// TestServer_SetDrainingRoundtrip: the SIGTERM drain is a one-way switch.
+// GitHub #290 (2026-10-08, design review e381 #5): SetDraining(false) clears
+// an operator drain but never the shutdown drain, so no "reset" call can
+// re-open chat admission during shutdown. IsDraining reads the cached atomic
+// without taking a lock so every /readyz request can call it.
 func TestServer_SetDrainingRoundtrip(t *testing.T) {
 	server := NewServer(WithLogger(zerolog.Nop()))
 	assert.False(t, server.IsDraining(), "fresh server should not be draining")
+	_, err := server.BeginOperatorDrain(time.Minute)
+	assert.NoError(t, err)
+	assert.True(t, server.IsDraining())
+	server.SetDraining(false)
+	assert.False(t, server.IsDraining(), "false clears an operator drain")
 	server.SetDraining(true)
 	assert.True(t, server.IsDraining())
 	server.SetDraining(false)
-	assert.False(t, server.IsDraining())
+	assert.True(t, server.IsDraining(), "false must not clear the shutdown drain")
 }
 
 // TestServer_Readyz_RedactsErrorDetail guards the public-disclosure

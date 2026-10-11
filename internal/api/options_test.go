@@ -137,7 +137,6 @@ func TestServerOptions_NilReposZeroOutFields(t *testing.T) {
 		WithFillNotifier(nil),
 		WithChatProvider(nil),
 		WithExecutor(nil),
-		WithTaskLogSource(nil),
 		WithMCPExecutor(nil),
 	)
 	if s == nil {

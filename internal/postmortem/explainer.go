@@ -1,6 +1,6 @@
 // Package postmortem turns a failed task into a one-paragraph
 // operator-friendly explainer by joining step outcomes + tool
-// audit + container-log tail and asking a small LLM to
+// audit + the task log tail and asking a small LLM to
 // summarise. Idempotent per task — Generate caches the result
 // in task_post_mortems so a re-render of the failed-task UI
 // returns the cached row instead of burning another LLM call.
@@ -20,11 +20,11 @@ import (
 	"vornik.io/vornik/internal/pricing"
 )
 
-// LogTailFetcher is the narrow interface the explainer needs
-// for container-log access. The daemon's executor already
-// satisfies it via its TaskLogs method (api.TaskLogSource);
-// this re-typing keeps the postmortem package out of the api
-// import cycle.
+// LogTailFetcher is the narrow interface the explainer and the
+// renderer need for the task log. The daemon wires api.HeldTaskLog
+// (the live hub replay plus the persisted error), never a process:
+// GitHub #294 removed the executor's podman-logs accessor. This
+// re-typing keeps the postmortem package out of the api import cycle.
 type LogTailFetcher interface {
 	TaskLogs(ctx context.Context, taskID string, tail int) (string, error)
 }
@@ -53,7 +53,7 @@ type Explainer struct {
 	// model. Configurable so an operator running on a richer
 	// model can lift the cap.
 	MaxEvidenceBytes int
-	// LogTailLines bounds the container-log tail pulled into
+	// LogTailLines bounds the task log tail pulled into
 	// the prompt. 100 lines is the BACKLOG-stipulated value;
 	// most stack traces fit in 30, but giving the model the
 	// retry's preamble too usually helps it spot the
@@ -315,7 +315,7 @@ func (e *Explainer) gatherEvidence(ctx context.Context, task *persistence.Task) 
 	if e.Logs != nil {
 		log, err := e.Logs.TaskLogs(ctx, task.ID, tail)
 		if err == nil && strings.TrimSpace(log) != "" {
-			fmt.Fprintf(&b, "\nContainer log tail (last %d lines):\n", tail)
+			fmt.Fprintf(&b, "\nTask log tail (last %d lines):\n", tail)
 			b.WriteString(truncate(log, 4000))
 			b.WriteString("\n")
 		}

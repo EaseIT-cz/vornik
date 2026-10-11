@@ -112,7 +112,11 @@ Use --fix to automatically repair stale_leases, orphaned_watchers,
 stuck_executions, task_state_audit, orphan_fk_rows, orphan_worktrees,
 secrets_permissions, and dispatcher_role findings. Schema, runtime,
 security posture, pricing, and budget checks are diagnostic only
-because they require operator config changes or external runtime actions.`,
+because they require operator config changes or external runtime actions.
+
+With API authentication enabled, daemon-backed doctor requires an admin-class
+API key. A plain project or agent key is not sufficient. Use --offline when
+the daemon is unavailable or admin credentials are not configured locally.`,
 	RunE: runDoctor,
 }
 

@@ -156,8 +156,9 @@ type LLMCallStartedPayload struct {
 
 // LLMCallFinishedPayload fires when the chat proxy returns. On
 // success Tokens + DurationMs + CostUSD are set; on failure Err
-// carries the upstream error string and the token + cost fields
-// stay zero. The UI uses this to flip "agent thinking" → idle and
+// carries a fixed public-safe message (detailed errors remain on
+// private diagnostic surfaces) and the token + cost fields stay
+// zero. The UI uses this to flip "agent thinking" → idle and
 // to update the running cost counter live (2026-05-26 fix — the
 // step_completed event historically carried CostUSD=0 with the
 // reconciliation deferred to the spend dashboard, leaving the
@@ -237,4 +238,28 @@ type NarrationLinePayload struct {
 	Kind     string `json:"kind"`
 	Text     string `json:"text"`
 	Degraded bool   `json:"degraded,omitempty"`
+}
+
+// Kinds added for agentic log access (live-task-observation design, Change
+// 2026-10-08, GitHub #92).
+const (
+	// KindAttemptFailed is published by the scheduler on the failed attempt's
+	// execution stream when it releases the attempt (C5). It carries no free
+	// text: ErrorClass is closed at the source (a known task failure class,
+	// else UNKNOWN).
+	KindAttemptFailed = "attempt_failed"
+	// KindWithheld replaces, in an agent view, an event in which the scrubber
+	// found a secret (C2). Synthetic: never published.
+	KindWithheld = "withheld"
+	// KindOversize replaces, in a task_logs page, one event larger than the
+	// page budget, so the cursor still advances (C4). Synthetic.
+	KindOversize = "oversize"
+)
+
+// AttemptFailedPayload is attempt_failed's payload.
+type AttemptFailedPayload struct {
+	Attempt    int    `json:"attempt"`
+	StepID     string `json:"step_id"`
+	ErrorClass string `json:"error_class"`
+	WillRetry  bool   `json:"will_retry"`
 }

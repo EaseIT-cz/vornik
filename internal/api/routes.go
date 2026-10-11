@@ -378,6 +378,11 @@ func NewRouter(server *Server, cfg *config.Config) *Router {
 		mux.HandleFunc("/api/v1/operator/proposals", server.OperatorProposals)
 		mux.HandleFunc("/api/v1/operator/proposals/", server.OperatorProposalItem)
 		mux.HandleFunc("/api/v1/operator/diagnose", server.OperatorDiagnose)
+		// Config-apply journal: list open rows and resolve a DRIFT row
+		// (config-apply journal design §12, GitHub #285). Admin class only,
+		// gated inside the handler; both editions.
+		mux.HandleFunc("/api/v1/operator/journal", server.OperatorJournal)
+		mux.HandleFunc("/api/v1/operator/journal/", server.OperatorJournal)
 
 		// CE operator shell — account management (2026-09-13 identity work,
 		// review R1/R2). Community: NOT under /api/v1/admin/. Gated on
@@ -418,6 +423,7 @@ func NewRouter(server *Server, cfg *config.Config) *Router {
 		// even if AuthMiddleware's lighter check only verified the
 		// shape + active state.
 		mux.HandleFunc("/api/v1/mcp/companion", server.CompanionMCPHandler)
+		mux.HandleFunc(artifactDownloadPath, server.companionArtifactDownload)
 		// Hermes approval transport (design 2026-10-03 §4.3): an agent admin
 		// key files a Hermes approval request and long-polls its answer.
 		// AuthMiddleware admits only an agent admin key among companion keys
@@ -602,9 +608,12 @@ func NewRouter(server *Server, cfg *config.Config) *Router {
 		// same OpenAI-shaped ChatRequest/ChatResponse envelopes the
 		// agent containers already use. Streaming (stream:true) is
 		// still out of scope for this slice — handler 400s the request.
+		// The four long chat routes are counted while in flight and refused
+		// with 503 DRAINING once a drain starts, for the deploy idle gate
+		// (GitHub #97). see LLD § https://docs.vornik.io §8
 		if server.chatProvider != nil {
-			mux.HandleFunc("/api/v1/chat/completions", server.ChatCompletions)
-			mux.HandleFunc("/v1/chat/completions", server.ChatCompletions)
+			mux.HandleFunc("/api/v1/chat/completions", server.trackLongRequest(server.ChatCompletions))
+			mux.HandleFunc("/v1/chat/completions", server.trackLongRequest(server.ChatCompletions))
 			// Model discovery: aggregates ListModels across every chat
 			// sub-provider that supports it. Lives next to the proxy so
 			// "is this provider wired" is the same gate for both.
@@ -619,8 +628,8 @@ func NewRouter(server *Server, cfg *config.Config) *Router {
 			// match. Streaming uses NDJSON framing (one JSON document
 			// per line) which is Ollama's native shape.
 			mux.HandleFunc("/api/tags", server.OllamaTags)
-			mux.HandleFunc("/api/chat", server.OllamaChat)
-			mux.HandleFunc("/api/generate", server.OllamaGenerate)
+			mux.HandleFunc("/api/chat", server.trackLongRequest(server.OllamaChat))
+			mux.HandleFunc("/api/generate", server.trackLongRequest(server.OllamaGenerate))
 			mux.HandleFunc("/api/version", server.OllamaVersion)
 			mux.HandleFunc("/api/show", server.OllamaShow)
 			// Root handler: Ollama-native clients ping GET / before
@@ -632,6 +641,13 @@ func NewRouter(server *Server, cfg *config.Config) *Router {
 			// so the UI tree is unaffected.
 			mux.HandleFunc("/", server.OllamaRoot)
 		}
+		// In-flight long requests, read by the deploy idle gate through
+		// vornikctl daemon inflight (GitHub #97). Admin-class only.
+		mux.HandleFunc("/api/v1/daemon/inflight", server.DaemonInflight)
+		// The operator drain the gate sets BEFORE its last read, so no
+		// request can start uncounted before the restart (GitHub #290).
+		// POST drains (a TTL lease), DELETE undrains. Admin-class only.
+		mux.HandleFunc("/api/v1/daemon/drain", server.DaemonDrain)
 		// Failure-class playbook. Always available — the corpus is
 		// daemon-version-pinned metadata, no chat dependency.
 		mux.HandleFunc("/api/v1/playbook", server.Playbook)
@@ -1079,6 +1095,9 @@ func (s *Server) apiV1ProjectsHandler(w http.ResponseWriter, r *http.Request) {
 			s.ListWebhookEvents(w, r)
 			return
 		}
+	} else if remaining == "/forge/issues" || remaining == "/forge/issues/" {
+		s.AgentForgeIssues(w, r)
+		return
 	} else if remaining == "/api/query" || remaining == "/api/query/" {
 		// POST /api/query — agent-facing query_api (design
 		// 2026-07-21-query-api-task-agents-design.md §2). Project scope

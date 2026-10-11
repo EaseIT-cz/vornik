@@ -46,6 +46,10 @@ type Manager struct {
 	// the config needed to retry it (failed-connect recovery design). Swapped
 	// with clients by SyncProjects; guarded by mu.
 	pending map[string]map[string]*pendingServer
+	// withheld holds, per project and server, why a configured server is
+	// deliberately not dialled (an oauth server with no grant; auth design
+	// §14 G1), so a call against it says so. Guarded by mu.
+	withheld map[string]map[string]string
 	// now is the clock seam for backoff and alert thresholds.
 	now func() time.Time
 	// outageNotify sends the notify-only outage and recovery alerts; nil
@@ -148,11 +152,13 @@ func (m *Manager) SyncProjects(ctx context.Context, desired map[string][]ServerC
 				defer cancel()
 				client, err := connectFn(connectCtx, cfg, m.logger.With().Str("project", projectID).Logger())
 				if err != nil {
+					status := connectFailureStatus(err) // before redaction, which may drop the type
 					err = redactConnectErr(err)
 					m.logger.Error().
 						Err(err).
 						Str("project", projectID).
 						Str("server", cfg.Name).
+						Int("http_status", status).
 						Msg("mcp: failed to connect")
 					results <- dialResult{projectID: projectID, name: cfg.Name, cfg: cfg, err: err}
 					return
@@ -264,11 +270,13 @@ func (m *Manager) StartForProject(ctx context.Context, projectID string, servers
 		client, err := connectFn(connectCtx, cfg, m.logger.With().Str("project", projectID).Logger())
 		cancel()
 		if err != nil {
+			status := connectFailureStatus(err) // before redaction, which may drop the type
 			err = redactConnectErr(err)
 			m.logger.Error().
 				Err(err).
 				Str("project", projectID).
 				Str("server", cfg.Name).
+				Int("http_status", status).
 				Msg("mcp: failed to connect")
 			m.recordStartFailure(projectID, cfg, err, startGen)
 			continue
@@ -507,7 +515,7 @@ func (m *Manager) callOnce(ctx context.Context, projectID, serverName, toolName,
 		if m.pending[projectID][serverName] != nil {
 			return nil, fmt.Errorf("%w: %s for project %s", errServerPending, serverName, projectID)
 		}
-		return nil, fmt.Errorf("MCP server %q not connected for project %q", serverName, projectID)
+		return nil, errors.New(m.notConnectedLocked(projectID, serverName))
 	}
 	return client.CallTool(ctx, toolName, json.RawMessage(argsJSON))
 }
@@ -719,4 +727,16 @@ collect:
 		}
 	}
 	return freshPending, pending
+}
+
+// connectFailureStatus is the HTTP status of a connect failure when it is a
+// CallError carrying one, else 0. It is logged as http_status so the
+// daemon-log ring maps a refused dial to a closed connection code without
+// reading the error text (live-task-observation design, Change 2026-10-08 C6).
+func connectFailureStatus(err error) int {
+	var ce *CallError
+	if errors.As(err, &ce) {
+		return ce.Status
+	}
+	return 0
 }

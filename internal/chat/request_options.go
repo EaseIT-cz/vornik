@@ -80,10 +80,11 @@ func ResponseFormatStructFromContext(ctx context.Context) *ResponseFormat {
 }
 
 // WithRequestMaxTokens annotates ctx with a per-request output-token cap.
-// Wins over the Provider's construction-time WithRequestMaxTokens default
-// — operators set chat.router.<sub>.max_tokens for the global
-// ceiling and override per-request when a specific role needs more
-// or less headroom. 0 leaves the field unset (meaning "use the
+// Operators set chat.router.<sub>.max_tokens as the route's ceiling; the
+// per-request value may lower it (EffectiveMaxTokens: the smaller wins on
+// Client and the Claude subscription client). Bedrock alone lets the
+// per-request value win outright (GitHub #100, parked asymmetry;
+// 09-agent-runtime-contract.md §8.4). 0 leaves the field unset (meaning "use the
 // Provider default"); negatives are coerced to 0 so a malformed
 // payload doesn't accidentally raise the cap.
 func WithRequestMaxTokens(ctx context.Context, maxTokens int) context.Context {
@@ -91,6 +92,26 @@ func WithRequestMaxTokens(ctx context.Context, maxTokens int) context.Context {
 		return ctx
 	}
 	return context.WithValue(ctx, maxTokensContextKey{}, maxTokens)
+}
+
+// EffectiveMaxTokens is the output cap a non-Bedrock client sends: the
+// per-request value (MaxTokensFromContext) clamped to the route's
+// construction-time cap, so a role may lower the operator's ceiling but not
+// raise it. With no per-request value it is routeCap (0 = omit the field);
+// with no route cap (routeCap <= 0) it is the per-request value.
+// GitHub #100; see https://docs.vornik.io §8.4.
+func EffectiveMaxTokens(ctx context.Context, routeCap int) int {
+	req := MaxTokensFromContext(ctx)
+	switch {
+	case req <= 0:
+		return routeCap
+	case routeCap <= 0:
+		return req
+	case req < routeCap:
+		return req
+	default:
+		return routeCap
+	}
 }
 
 // MaxTokensFromContext returns the per-request max_tokens cap set

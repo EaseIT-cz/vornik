@@ -8982,4 +8982,58 @@ ALTER TABLE approver_devices DROP COLUMN IF EXISTS prev_token_hash;
  ALTER TABLE project_memory_chunks DROP COLUMN IF EXISTS refute_route;
  `,
 	},
+	{
+		Version: 219,
+		Name:    "agent_integration_account",
+		// GitHub #119 item 8: an agent connection's account (agent-administered
+		// design §22.2.2). Additive with defaults, so every existing row reads
+		// as the default account with no identity and no approval changes
+		// (operator decision F1/F4). identity_source is a closed set: ''
+		// (none), 'agent' (what the agent said) or 'provider' (an OAuth
+		// sign-in's verified email).
+		//
+		// Design: https://docs.vornik.io §22.2.2
+		Up: `
+ ALTER TABLE agent_integration_approvals ADD COLUMN IF NOT EXISTS account_label TEXT NOT NULL DEFAULT 'default';
+ ALTER TABLE agent_integration_approvals ADD COLUMN IF NOT EXISTS account_identity TEXT NOT NULL DEFAULT '';
+ ALTER TABLE agent_integration_approvals ADD COLUMN IF NOT EXISTS identity_source TEXT NOT NULL DEFAULT ''
+   CHECK (identity_source IN ('', 'agent', 'provider'));
+ `,
+		Down: `
+ ALTER TABLE agent_integration_approvals DROP COLUMN IF EXISTS identity_source;
+ ALTER TABLE agent_integration_approvals DROP COLUMN IF EXISTS account_identity;
+ ALTER TABLE agent_integration_approvals DROP COLUMN IF EXISTS account_label;
+ `,
+	},
+	{
+		Version: 220,
+		Name:    "broker_standing_grant_account",
+		// GitHub #119 item 8, operator decision 2026-10-09: a standing grant
+		// records the account it was made under (agent-administered design
+		// §22.2.16). Additive with defaults: every existing grant reads an
+		// empty label, "made before accounts were recorded".
+		//
+		// Design: https://docs.vornik.io §22.2.16
+		Up: `
+ ALTER TABLE broker_standing_grants ADD COLUMN IF NOT EXISTS account_label TEXT NOT NULL DEFAULT '';
+ ALTER TABLE broker_standing_grants ADD COLUMN IF NOT EXISTS account_identity TEXT NOT NULL DEFAULT '';
+ `,
+		Down: `
+ ALTER TABLE broker_standing_grants DROP COLUMN IF EXISTS account_identity;
+ ALTER TABLE broker_standing_grants DROP COLUMN IF EXISTS account_label;
+ `,
+	},
+	{Version: 221, Name: "agent_account_transitions",
+		// Design: https://docs.vornik.io §22.2.16
+		Up: `CREATE TABLE IF NOT EXISTS agent_account_transitions (
+ scope TEXT PRIMARY KEY, epoch BIGINT NOT NULL DEFAULT 0 CHECK(epoch >= 0),
+ busy BOOLEAN NOT NULL DEFAULT FALSE, owner TEXT NOT NULL DEFAULT '',
+ operation TEXT NOT NULL DEFAULT '', started_at TEXT NOT NULL DEFAULT ''
+);
+`, Down: `DROP TABLE IF EXISTS agent_account_transitions;`},
+	{Version: 222, Name: "broker_action_account_epochs",
+		// Design: https://docs.vornik.io §22.2.16
+		Up: `ALTER TABLE broker_actions ADD COLUMN IF NOT EXISTS account_ns_epoch BIGINT CHECK(account_ns_epoch >= 0);
+ ALTER TABLE broker_actions ADD COLUMN IF NOT EXISTS account_daemon_epoch BIGINT CHECK(account_daemon_epoch >= 0);`,
+		Down: `ALTER TABLE broker_actions DROP COLUMN IF EXISTS account_ns_epoch; ALTER TABLE broker_actions DROP COLUMN IF EXISTS account_daemon_epoch;`},
 }

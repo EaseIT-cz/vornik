@@ -11,6 +11,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -53,16 +54,45 @@ func New(baseURL, token string, reg apigateway.Registry, timeout time.Duration) 
 	// gateway host is the single explicit allowlist entry (design §5, C2).
 	guard := integrations.DialGuard{AllowedHosts: []string{u.Hostname()}}
 	hc := guard.HTTPClient(timeout)
-	// Refuse cross-host redirects: a 3xx Location to another host is never
-	// followed (design §5 / §3.2 redirect-echo defense).
+	// Follow only same-origin redirects (design §5.2). GitHub #96 (2026-10-04
+	// review): CheckRedirect compared only Hostname(), so a 3xx to the same
+	// host on another port or scheme was followed and Go re-sent the apikey
+	// header carrying the gateway token. A custom CheckRedirect replaces Go's
+	// default policy, so its ten-redirect cap is restated here.
 	base := *u
-	hc.CheckRedirect = func(req *http.Request, _ []*http.Request) error {
-		if req.URL.Hostname() != base.Hostname() {
+	hc.CheckRedirect = func(req *http.Request, via []*http.Request) error {
+		if len(via) >= 10 {
+			return errors.New("stopped after 10 redirects")
+		}
+		if req.URL.User != nil || !sameOrigin(&base, req.URL) {
 			return http.ErrUseLastResponse
 		}
 		return nil
 	}
 	return &Client{base: u, token: token, reg: reg, httpc: hc}, nil
+}
+
+// sameOrigin reports whether two URLs share scheme, host and port (the
+// scheme's default port applied, scheme and host compared without case):
+// the comparison of mcpauth's sameURLOrigin, kept here so the gateway client
+// does not depend on the auth package; both are tested on the same rows.
+func sameOrigin(a, b *url.URL) bool {
+	return strings.EqualFold(a.Scheme, b.Scheme) &&
+		strings.EqualFold(a.Hostname(), b.Hostname()) &&
+		effectivePort(a) == effectivePort(b)
+}
+
+func effectivePort(u *url.URL) string {
+	if p := u.Port(); p != "" {
+		return p
+	}
+	switch strings.ToLower(u.Scheme) {
+	case "https":
+		return "443"
+	case "http":
+		return "80"
+	}
+	return ""
 }
 
 // scrub removes the internal token from any string surfaced to the caller.

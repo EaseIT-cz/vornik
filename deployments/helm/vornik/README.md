@@ -184,9 +184,6 @@ Migrations run automatically on the new pod's startup. The `startupProbe` gives 
 # daemon logs
 kubectl -n vornik logs -f statefulset/vornik
 
-# in-pod doctor (same check set as /api/v1/doctor)
-kubectl -n vornik exec -it vornik-0 -- vornikctl doctor
-
 # force the daemon to re-read config files
 kubectl -n vornik exec -it vornik-0 -- vornikctl reload
 
@@ -199,3 +196,5 @@ Common issues:
 - **Agents fail with "failed to start container"** — the agent image isn't reachable from inside the vornik pod. In `privileged` mode the bundled podman pulls on demand; check registry auth and that the `agentImage.repository` points at your pushed tag.
 - **First-boot stuck in startupProbe** — DB migration is taking longer than 5 minutes, or pgvector extension creation failed. Check `kubectl logs` for `migrations` and `CREATE EXTENSION vector`.
 - **Privileged pods rejected** — your namespace enforces restricted PSA. Either switch to `runtimeMode: host-socket` (and accept node coupling) or label the namespace permissive.
+
+The in-pod CLI has no admin API key configured by the chart. Run `vornikctl doctor` from an operator host configured with an admin-class key, or use the pod logs and Kubernetes probes for deployment checks.

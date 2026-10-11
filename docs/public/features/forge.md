@@ -3,7 +3,15 @@ sources:
     - path: internal/forge/forge.go
       sha256: 8fe94fe7e928d7d2e18eaabf8d0b149db4210746cebe491ccb8202ab8e221c88
     - path: internal/forge/github/github.go
-      sha256: 1425739004234ca75a26d2102a1c9a245568a31cfda4326f995b99c5a7614c1b
+      sha256: 44e8cf74915ea21fcbb960f86e9c01e1a492578e4af2d973695ebd37bca39c9e
+    - path: internal/forge/issues.go
+      sha256: 35e1451ca0ab606fa2bf6b757ecd107442e4cecfb9dd5cb7af2f119d53a67fc8
+    - path: internal/forge/github/issues.go
+      sha256: 5b5a34768152049002f53616c6bf3b96036e49a9576babebf38877c905944a60
+    - path: internal/api/forge_issues.go
+      sha256: a84607a7ae1a9d87db12be298b1362f20ce29f45e6eb51b94945b0d61acb86c4
+    - path: internal/registry/project_forge_issues.go
+      sha256: bfa862fa81c1b1c42fbfd2e597f0c9140c49788c61753d46c71b92ccfed08bb1
 ---
 # Forge — GitHub automation
 
@@ -369,3 +377,70 @@ not *start* a review on its own.
   provider-neutral. Per-installation rate-limit buckets and PR inline
   (per-line) review comments are not yet implemented — reviews are posted at the
   PR level.
+
+## Issue triage through the App
+
+Task agents can inspect issues through `forge_list_issues`, `forge_get_issue`,
+and `forge_list_labels`. The daemon calls GitHub with the App's installation
+token; the agent receives bounded, marked untrusted text. Pull requests are
+excluded. The calling role must explicitly list each tool in `allowedTools`.
+
+Start with a report that proposes labels and duplicate references. With a
+configured `forge:` block, scope reads to your configured repo:
+
+```yaml
+forge:
+  provider: github
+  github:
+    app_id: 123456
+    installation_id: 78901234
+    private_key_path: /etc/vornik/secrets/forge-app.pem
+    repo: acme/service
+  issues:
+    repos: [acme/service]       # additional explicitly allowed repos
+    labels_enabled: false      # report first; no label changes
+    allowed_labels: [bug, enhancement, P1, P2, P3]
+    close_enabled: false
+```
+
+Configured `forge.github.repo`, legacy `github.repo`, and
+`github_app.repo_allowlist` also grant issue repo scope. An empty set grants
+nothing; clone remotes and task-provided repo names never expand access.
+
+After reviewing reports, enable `labels_enabled` and grant the writer role
+`forge_add_labels` and `forge_set_labels`. Every requested label must match
+`allowed_labels` exactly. Adding labels preserves all existing labels. Setting
+labels replaces the managed allowed labels and retains other labels observed
+at the time of the read. A human or another replica changing labels during the
+read/write interval can still race GitHub's replacement operation; coordinate
+label writers when retaining concurrently edited labels matters.
+
+Closing duplicates requires a separate `close_enabled: true` and the role tool
+`forge_close_issue`. Supply the source issue number, a different positive
+`duplicate_of` number in the same allowed repo, and an explanation. The daemon
+verifies both are issues, posts an explanation marked as automated triage, and
+closes the source as not planned. Retries recognize only markers posted through
+this same GitHub App. Closing refuses when the full comment set cannot be
+checked within the 100-comment cap. Both write opt-ins default to false.
+
+**Duplicate closing requires one active API instance.** Concurrent replicas
+can post duplicate explanations because GitHub comment creation has no
+idempotency key. Route closing requests to one instance in an HA deployment.
+Within that instance, close calls are serialized and retries/restarts reconcile
+the deterministic App-authored comment marker. This does not claim distributed
+exactly-once posting.
+
+Issue lists default to page 1 with 30 entries and accept at most page 10 and
+100 entries per page. Labels scan at most ten pages of 100. Issue and comment
+text is clipped to 16 KiB on a UTF-8 boundary; comments are capped at 100.
+Results report truncation and next-page information. Raw upstream pages over
+1 MiB are rejected instead of returning broken or silently partial JSON.
+
+Each write requires a durable pending tool-audit record before contacting
+GitHub, followed by a success or error record. Missing audit storage blocks the
+write. A result-audit failure reports uncertainty with the pending attempt
+retained. Audit metadata includes task, project, execution, operation, repo,
+issue, labels and an explanation hash; it does not store the explanation text.
+The App needs Issues read for reports and Issues write for changes. Boot checks
+warn independently of Contents permissions; grant the required permission and
+reaccept the installation if the warning appears.

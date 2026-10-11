@@ -67,7 +67,8 @@ func (c *Container) initLogship() error {
 	// every component's JSON line is also offered to the forwarder. Done here
 	// rather than in initLogger so the disabled path stays a plain
 	// zerolog.New(os.Stdout) with no wrapper.
-	c.Logger = c.Logger.Output(io.MultiWriter(os.Stdout, fwd.AppWriter(os.Stdout)))
+	// The daemon-log ring's tap (rootLogWriter) is kept beside stdout.
+	c.Logger = c.Logger.Output(io.MultiWriter(c.rootLogWriter(os.Stdout), fwd.AppWriter(os.Stdout)))
 
 	// Audit taps: decorate the admin + tool audit repos so a successful write
 	// also ships an audit Event.

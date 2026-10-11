@@ -44,6 +44,18 @@ hermes config set memory.provider vornik-companion   # use Vornik as long-term m
 hermes memory status                     # expect "installed" and "available"
 ```
 
+If the plugin is already installed, update it explicitly after upgrading
+Vornik:
+
+```bash
+hermes plugins update vornik-companion
+```
+
+Then restart Hermes (or its gateway) so the running process loads the new
+plugin tools. Updating the daemon does not update the plugin installed on the
+Hermes host. `hermes plugins install` is for first-time installation; it does
+not update an existing copy.
+
 Put the URL and keys in `$HERMES_HOME/.env` (default `~/.hermes/.env`, mode
 600), which Hermes loads at every start. An `export` in a shell never
 reaches a Hermes service or survives a reboot.
@@ -120,9 +132,9 @@ and for which namespace.
 
 | Surface | Name |
 |---|---|
-| Tools | `vornik_catalog`, `vornik_delegate`, `vornik_result`, `vornik_status`, `vornik_cancel` (broker setup only) |
+| Tools | `vornik_catalog`, `vornik_delegate`, `vornik_result`, `vornik_status`, `vornik_cancel` (broker setup only); `vornik_list_artifacts` and `vornik_read_artifact` when both daemon capabilities are present and the workflow explicitly approves artifact outputs |
 | Skill | `vornik-companion:vornik-broker`: when to broker and how to treat results |
-| Hook | `pre_llm_call`: announces finished broker tasks (ids and states only) |
+| Hook | `pre_llm_call`: announces finished broker tasks (ids and states only) and, since 0.16.0, where running ones are (step positions only) |
 | Commands | `/vornik-peek`, `/vornik-result <task_id>`; with memory: `/vornik-memory [words]`, `/vornik-forget <id>` |
 | CLI | `hermes vornik connect`, `hermes vornik status`, `hermes vornik approvals on\|off` |
 | Approval transport | `vornik`: Hermes's own approval prompts answered on the paired phone, once selected |
@@ -136,6 +148,14 @@ and for which namespace.
 age, where it came from, and the text. `/vornik-forget <id>` forgets that one
 item and tells you whether Vornik found it. You type these commands; the
 model cannot run them, and none of its tools can make Vornik forget.
+
+Since 0.15.0, on a Vornik that offers it, `/vornik-memory` pages through
+everything Vornik keeps (`/vornik-memory more` for the next page), and
+`/vornik-memory export` prints a link to the memory page on your paired
+approver device (your phone). There you can download everything as JSON or
+Markdown, forget items, and see what your broker workflows learned; none of
+it passes through the model. Forgetting there does not change Hermes's own
+`MEMORY.md`: if Hermes still holds the line, Vornik keeps it forgotten anyway.
 
 When Hermes removes or replaces an entry in its own memory (because you said
 "forget that" or corrected a fact), the plugin finds the copy it mirrored to
@@ -177,6 +197,13 @@ server-side only when it advertises `companion-result-wait`. Against an older
 daemon the tools and `/vornik-peek` stay hidden and nothing breaks. The flags
 are re-read every 10 minutes, so upgrading the daemon does not need a Hermes
 restart.
+
+Since 0.16.0: when the daemon advertises `companion-progress`, the digest
+says where up to three running broker tasks are ("step 2 of 3 (curate)"),
+once per change of step. When it advertises `companion-result-reuse`,
+`vornik_delegate` passes `max_age_seconds` so a follow-up about something a
+read-only workflow fetched minutes ago reuses that answer instead of running
+the workflow again; an older daemon never receives the argument.
 
 ## Proposed writes (0.2.0)
 
@@ -240,3 +267,21 @@ inside a pinned Hermes release against a Vornik daemon built from the tree and
 a local llama.cpp model. They need podman and about 17 GB of downloads the
 first time (the gpt-oss-20b model and the Hermes image). They are not part of
 CI; the maintainers run them before every version bump of this plugin.
+
+### Files from a completed run
+
+With an upgraded daemon and plugin, `vornik_list_artifacts` lists explicitly approved
+outputs using the completed result's `task_id` and `execution_id`.
+`vornik_read_artifact` takes one returned `artifact_id`: text is bounded and
+marked untrusted; a PDF or image returns a download link valid for five
+minutes. Relay that link immediately. The plugin does not download binary
+bytes into model context. The operator must declare additional file names
+in the workflow's `broker.egress.artifacts`; workflows with no declaration
+expose no additional files. Revoking the grant invalidates existing links.
+
+If these two tools do not appear in Hermes, check `hermes plugins list` for an
+available plugin update, run `hermes plugins update vornik-companion`, and
+restart Hermes. Then check `hermes vornik status` for the daemon's
+`companion-artifact-read` capability. The workflow still needs an approved
+`broker.egress.artifacts` list; updating the plugin or daemon does not widen
+that approval.

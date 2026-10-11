@@ -503,7 +503,7 @@ func TestRunDoctor_RejectsNonPOST(t *testing.T) {
 	h := NewDoctorHandlers(closedDB(t))
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/doctor", nil)
-	h.RunDoctor(rec, req)
+	h.RunDoctor(rec, authDisabledReq(req))
 	assert.Equal(t, http.StatusMethodNotAllowed, rec.Code)
 }
 
@@ -516,7 +516,7 @@ func TestRunDoctor_ReturnsReportShape(t *testing.T) {
 
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/doctor", nil)
-	h.RunDoctor(rec, req)
+	h.RunDoctor(rec, authDisabledReq(req))
 	require.Equal(t, http.StatusOK, rec.Code)
 
 	var report DoctorReport
@@ -544,7 +544,7 @@ func TestRunDoctor_FixQueryParamParsed(t *testing.T) {
 		t.Run("query="+q, func(t *testing.T) {
 			rec := httptest.NewRecorder()
 			req := httptest.NewRequest(http.MethodPost, "/api/v1/doctor"+q, nil)
-			h.RunDoctor(rec, req)
+			h.RunDoctor(rec, authDisabledReq(req))
 			require.Equal(t, http.StatusOK, rec.Code)
 			var report DoctorReport
 			require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &report))

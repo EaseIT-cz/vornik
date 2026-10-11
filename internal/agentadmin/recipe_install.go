@@ -27,6 +27,10 @@ type InstallRecipeInput struct {
 	Project   string                     `json:"project"`
 	Variables map[string]json.RawMessage `json:"variables,omitempty"`
 	Schedule  json.RawMessage            `json:"schedule,omitempty"`
+	// Account installs the recipe as another of the user's accounts (design
+	// §22.2.8): every name it renders gains the label; "" or "default" is
+	// the catalogue's own install.
+	Account string `json:"account,omitempty"`
 }
 
 // The classes of one needs entry against the project (§19.11).
@@ -110,12 +114,24 @@ func (r *Renderer) planInstall(st *State, in InstallRecipeInput, rec *Recipe, va
 		return nil, why
 	}
 	plan.schedule = sched
+	// Track new entries while planning so two different credentials introduced
+	// by one recipe cannot evade the per-project host/account rule by being
+	// classified against the same pre-install project snapshot.
+	planningProject := *p
+	planningProject.Servers = append([]ServerState(nil), p.Servers...)
+	planningProject.APIs = append([]APIState(nil), p.APIs...)
 	for _, n := range rec.Needs {
-		e, why := classifyEntry(st, p, n, substitute(n.URL, vars))
+		e, why := classifyEntry(st, &planningProject, n, substitute(n.URL, vars), rec.account)
 		if why != "" {
 			return nil, why
 		}
 		plan.entries = append(plan.entries, e)
+		if e.class == EntryNew {
+			planningProject.Servers = append(planningProject.Servers, ServerState{
+				Name: e.need.Name, URL: e.url, AuthRef: e.authRef, OAuth: e.oauth,
+				Account: agentns.AccountOf(rec.account),
+			})
+		}
 	}
 	return plan, ""
 }
@@ -139,6 +155,15 @@ func (r *Renderer) resolveInstall(ns string, raw json.RawMessage) (InstallRecipe
 	vars, why := resolveVariables(rec, in.Variables)
 	if why != "" {
 		return in, nil, nil, why
+	}
+	if in.Account != "" && in.Account != agentns.DefaultAccount {
+		if !agentns.ValidAccountLabel(in.Account) {
+			return in, nil, nil, "the account label must be a-z, 0-9 or dashes, start with a letter and be at most 32 characters"
+		}
+		var err error
+		if rec, err = rec.forAccount(r.cat.Envelope, in.Account); err != nil {
+			return in, nil, nil, err.Error()
+		}
 	}
 	return in, rec, vars, ""
 }
@@ -218,7 +243,7 @@ func installSchedule(rec *Recipe, vars map[string]string, raw json.RawMessage) (
 
 // classifyEntry decides one entry against the project's integration of the
 // same name (§19.8 F1, §19.9 F2, §19.10 F4).
-func classifyEntry(st *State, p *ProjectState, n RecipeNeed, url string) (entryPlan, string) {
+func classifyEntry(st *State, p *ProjectState, n RecipeNeed, url, account string) (entryPlan, string) {
 	e := entryPlan{need: n, url: url}
 	if n.Credential != nil {
 		switch n.Credential.Kind {
@@ -233,6 +258,9 @@ func classifyEntry(st *State, p *ProjectState, n RecipeNeed, url string) (entryP
 			return e, fmt.Sprintf("%s already has an API named %q; a recipe needs a server of that name. Remove it first, or install into another project", p.ID, n.Name)
 		}
 	}
+	if why, _ := credentialOwner(st, e.authRef, account); why != "" {
+		return e, why // C1 (design §22.2.3): a credential belongs to one account
+	}
 	var existing *ServerState
 	for i := range p.Servers {
 		if p.Servers[i].Name == n.Name {
@@ -241,7 +269,22 @@ func classifyEntry(st *State, p *ProjectState, n RecipeNeed, url string) (entryP
 	}
 	read := dedupSorted(n.ReadTools)
 	if existing == nil {
+		// C2 (design §22.2.3; security scan 2026-10-09, incident 1): a new
+		// OAuth server never shares a sign-in slot with another server.
+		if e.oauth {
+			if why := oauthSlotTaken(p, n.Name); why != "" {
+				return e, why
+			}
+		}
 		e.class = EntryNew
+		// Reused entries are exempt per §22.2.8; only new credentials need a
+		// fresh host/account collision check.
+		if why := sameHostSameLabelWithRemedy(p, connection{
+			name: n.Name, url: e.url, authRef: e.authRef, oauth: e.oauth,
+			label: agentns.AccountOf(account),
+		}, "set account on install_recipe to a distinct label"); why != "" {
+			return e, why
+		}
 		if n.Credential == nil {
 			if advertised, ok := st.Advertised[url]; ok && len(advertised) > 0 {
 				// The unauthenticated tool check, before any approval.
@@ -253,11 +296,24 @@ func classifyEntry(st *State, p *ProjectState, n RecipeNeed, url string) (entryP
 		}
 		return e, ""
 	}
-	if existing.URL != url {
+	return classifyReused(st, p, n, e, existing, read, account)
+}
+
+// classifyReused decides an entry whose server already exists in the
+// project: same URL, same credential, same account, a live approval.
+func classifyReused(st *State, p *ProjectState, n RecipeNeed, e entryPlan, existing *ServerState, read []string, account string) (entryPlan, string) {
+	if existing.URL != e.url {
 		return e, fmt.Sprintf("%s already has a server named %q at %s; remove it first, or install into another project", p.ID, n.Name, existing.URL)
 	}
 	if existing.AuthRef != e.authRef || existing.OAuth != e.oauth {
 		return e, fmt.Sprintf("%s already has a server named %q at %s with another credential; remove it first, or install into another project", p.ID, n.Name, existing.URL)
+	}
+	// A reused server must act as the install's account (design §22.2.8;
+	// security scan 2026-10-09, incident 1): an OAuth server has no
+	// credential name for C1 to compare, so the label is compared here, and
+	// the account the device approves is the one that is bound.
+	if got := agentns.AccountOf(existing.Account); got != agentns.AccountOf(account) {
+		return e, fmt.Sprintf("%s already has a server named %q that acts as your %s account; remove it first, or install into another project", p.ID, n.Name, got)
 	}
 	a, ok := st.Approvals[p.ID][n.Name]
 	if !ok || !a.Live() {
@@ -305,7 +361,7 @@ func (r *Renderer) renderInstall(st *State, plan *installPlan) (Change, error) {
 	const verb = VerbInstallRecipe
 	ns, p := st.Namespace, plan.p
 	next := nextProject(plan)
-	roles, dropped, why := nextRoles(plan.rec, p, plan.installed > 0)
+	roles, dropped, why := nextRoles(plan.rec, p, plan.installed > 0, installedWorkflowsOf(st, p.ID, plan.rec.Name))
 	if why != "" {
 		return refuse(verb, ns, "%s", why), nil
 	}
@@ -397,7 +453,15 @@ func composeInstall(st *State, plan *installPlan, out *renderedInstall) Change {
 		switch e.class {
 		case EntryNew, EntryToolsAdded, EntryToolsMixed:
 			widening = true
-			c.Grant.Integrations = append(c.Grant.Integrations, entryGrant(p.ID, e))
+			g := entryGrant(p.ID, e)
+			if rec.account != "" {
+				g.Account = &AccountGrant{Label: rec.account}
+				if c.accounts == nil {
+					c.accounts = map[string]string{}
+				}
+				c.accounts[g.Name] = accountWords(rec.account, "", "", true)
+			}
+			c.Grant.Integrations = append(c.Grant.Integrations, g)
 		}
 		if len(e.removed) > 0 {
 			c.Narrow.RemovedTools = append(c.Narrow.RemovedTools, ToolRemoval{Project: p.ID, Name: e.need.Name, Tools: e.removed, Kind: NarrowingRecipeTools})
@@ -410,7 +474,7 @@ func composeInstall(st *State, plan *installPlan, out *renderedInstall) Change {
 			c.Grant.Workflows = map[string]string{wid: hash}
 		}
 		c.Credentials = credentialFollowUps(rec, p.ID)
-		c.Sentence = installSentence(ns, rec, p.ID, plan, wid, out.wf, prev)
+		c.Sentence = installSentence(ns, rec, p.ID, plan, wid, out.wf, prev) + recipeSharedCredentials(st, plan)
 	case len(c.Narrow.RemovedTools) > 0:
 		c.Sentence = fmt.Sprintf("Your assistant (%s) updated %q in %s to version %d; %s.", ns, rec.Title, p.ID, rec.Version, removalPhrase(plan))
 	case len(c.Ops) == 0:
@@ -446,7 +510,7 @@ func nextProject(plan *installPlan) *ProjectState {
 		tools := dedupSorted(e.need.ReadTools)
 		switch e.class {
 		case EntryNew:
-			next.Servers = append(next.Servers, ServerState{Name: e.need.Name, URL: e.url, AuthRef: e.authRef, OAuth: e.oauth, Tools: tools})
+			next.Servers = append(next.Servers, ServerState{Name: e.need.Name, URL: e.url, AuthRef: e.authRef, OAuth: e.oauth, Tools: tools, Account: plan.rec.account})
 		case EntryToolsAdded, EntryToolsRemoved, EntryToolsMixed:
 			for i := range next.Servers {
 				if next.Servers[i].Name == e.need.Name {
@@ -467,7 +531,7 @@ func nextProject(plan *installPlan) *ProjectState {
 // <recipe>-<role> (§19.7 F4). An installed recipe's own roles are replaced;
 // any other role of the same full name is refused, so nothing is applied
 // (§19.8 test 5). It also returns the names of roles the install drops.
-func nextRoles(rec *Recipe, p *ProjectState, installed bool) ([]RoleSpec, []string, string) {
+func nextRoles(rec *Recipe, p *ProjectState, installed bool, installs []string) ([]RoleSpec, []string, string) {
 	mine := map[string]bool{}
 	for _, role := range rec.Team {
 		mine[rec.RoleName(role.Name)] = true
@@ -475,7 +539,7 @@ func nextRoles(rec *Recipe, p *ProjectState, installed bool) ([]RoleSpec, []stri
 	var out []RoleSpec
 	var dropped []string
 	for _, role := range p.Swarm.Roles {
-		ours := installed && strings.HasPrefix(role.Name, rec.Name+"-")
+		ours := installed && ownsRole(rec, installs, role.Name)
 		if ours {
 			if !mine[role.Name] {
 				dropped = append(dropped, role.Name)
@@ -519,7 +583,7 @@ func toolsStillHeld(plan *installPlan, roles []RoleSpec) string {
 		for _, t := range e.removed {
 			full := "mcp__" + e.need.Name + "__" + t
 			for _, role := range roles {
-				if strings.HasPrefix(role.Name, plan.rec.Name+"-") {
+				if ownsRole(plan.rec, nil, role.Name) {
 					continue
 				}
 				if contains(role.Tools, full) {
@@ -608,6 +672,9 @@ func installSentence(ns string, rec *Recipe, pid string, plan *installPlan, wid 
 	} else {
 		fmt.Fprintf(&b, "Your assistant (%s) wants to install %q (version %d) in %s", ns, rec.Title, rec.Version, pid)
 	}
+	if rec.account != "" {
+		b.WriteString(" for " + accountWords(rec.account, "", "", true))
+	}
 	var reads []string
 	for _, e := range plan.entries {
 		s := fmt.Sprintf("%s through the server %q at %s", e.need.Reads, e.need.Name, e.url)
@@ -690,6 +757,9 @@ type RecipeView struct {
 	// daemon-filled slots shown as <placeholders>.
 	Sentence  string          `json:"sentence"`
 	Installed []RecipeInstall `json:"installed"`
+	// Accounts says the recipe may be installed once per account (design
+	// §22.2.8).
+	Accounts string `json:"accounts"`
 }
 
 // RecipeVariableView is one variable.
@@ -725,6 +795,9 @@ type RecipeInstall struct {
 	Project  string `json:"project"`
 	Workflow string `json:"workflow"`
 	Version  int    `json:"version"`
+	// Account is the label of an install as another account; omitted for
+	// the catalogue's own install.
+	Account string `json:"account,omitempty"`
 }
 
 // ListRecipes is list_recipes for the namespace in st.
@@ -755,10 +828,12 @@ func (r *Renderer) ListRecipes(st *State) []RecipeView {
 			plan.entries = append(plan.entries, entryPlan{need: n, url: substitute(n.URL, placeholders), class: EntryNew})
 		}
 		v.Sentence = installSentenceTemplate(st.Namespace, rec, plan)
+		v.Accounts = RecipeAccountsRule
 		for _, id := range sortedWorkflowKeys(st) {
 			w := st.Workflows[id]
 			if name, version := InstalledRecipe(w.Loaded); name == rec.Name {
-				v.Installed = append(v.Installed, RecipeInstall{Project: w.Project, Workflow: id, Version: version})
+				v.Installed = append(v.Installed, RecipeInstall{Project: w.Project, Workflow: id, Version: version,
+					Account: accountOfInstall(rec, w.Project, id)})
 			}
 		}
 		out = append(out, v)
@@ -793,4 +868,30 @@ func sortedWorkflowKeys(st *State) []string {
 	}
 	sort.Strings(out)
 	return out
+}
+
+// recipeSharedCredentials is C4 for an install (design §22.2.3; security
+// scan 2026-10-09, incident 2): a credential another connection of the
+// namespace already names is said, with each connection that shares it, so
+// a person never approves, unknowingly, a server acting with a key entered
+// for another project. A server the install reuses is not "another".
+func recipeSharedCredentials(st *State, plan *installPlan) string {
+	var out strings.Builder
+	seen := map[string]bool{}
+	for _, e := range plan.entries {
+		if e.authRef == "" || seen[e.authRef] {
+			continue
+		}
+		seen[e.authRef] = true
+		_, sharers := credentialOwner(st, e.authRef, plan.rec.account)
+		var others []connection
+		for _, c := range sharers {
+			if c.project == plan.p.ID && c.name == e.need.Name {
+				continue
+			}
+			others = append(others, c)
+		}
+		out.WriteString(sharedCredentialSentence(strings.TrimPrefix(e.authRef, "secret://"+st.Namespace+"/"), others))
+	}
+	return out.String()
 }

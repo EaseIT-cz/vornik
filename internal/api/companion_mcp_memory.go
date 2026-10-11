@@ -127,7 +127,7 @@ func (s *Server) recordCompanionToolAudit(ctx context.Context, key *persistence.
 // (broker design 2026-09-29 §5.2).
 func companionAuditOutput(toolName, outcome, result string) string {
 	out := fmt.Sprintf("status=%s result_bytes=%d", outcome, len(result))
-	if toolName == "result" && result != "" {
+	if (toolName == "result" || toolName == "task_logs" || toolName == "read_artifact" || toolName == "list_artifacts" || toolName == "artifact_download") && result != "" {
 		sum := sha256.Sum256([]byte(result))
 		out += " sha256=" + hex.EncodeToString(sum[:])
 	}
@@ -464,8 +464,8 @@ func (s *Server) companionToolRecall(ctx context.Context, key *persistence.APIKe
 	}
 
 	var args recallArgs
-	if err := json.Unmarshal(raw, &args); err != nil {
-		return "", fmt.Errorf("invalid arguments: %w", err)
+	if err := decodeToolArgs("recall", raw, &args); err != nil {
+		return "", err
 	}
 	args.Query = strings.TrimSpace(args.Query)
 	args.Class = strings.TrimSpace(args.Class)
@@ -646,10 +646,8 @@ func (s *Server) companionToolRecentMemory(ctx context.Context, key *persistence
 	}
 
 	var args recentMemoryArgs
-	if len(raw) > 0 {
-		if err := json.Unmarshal(raw, &args); err != nil {
-			return "", fmt.Errorf("invalid arguments: %w", err)
-		}
+	if err := decodeToolArgs("recent_memory", raw, &args); err != nil {
+		return "", err
 	}
 	if args.Limit <= 0 {
 		args.Limit = 5
@@ -917,8 +915,8 @@ func (s *Server) companionToolRemember(ctx context.Context, key *persistence.API
 	}
 
 	var args rememberArgs
-	if err := json.Unmarshal(raw, &args); err != nil {
-		return "", fmt.Errorf("invalid arguments: %w", err)
+	if err := decodeToolArgs("remember", raw, &args); err != nil {
+		return "", err
 	}
 	args.Content = strings.TrimSpace(args.Content)
 	if args.Content == "" {
@@ -1082,17 +1080,34 @@ type correctArgs struct {
 // combination records memory_correct. Only mirror_forget rows are ever
 // reinstated, so a Claude Code or Codex key cannot mark a Hermes note as
 // one the mirror forgot.
+//
+// GitHub #119 item 6 (LLD 22, "Memory the user can see", change §2):
+// forget_command is honoured from ANY key in chunk-id mode, so a Claude or
+// Codex user's "forget this" is recorded as the user's forget. It grants
+// nothing memory_correct does not: only mirror_forget is ever reinstated,
+// and mirror_forget stays with the client kinds whose memory file mirrors
+// into Vornik (clientKindsWithMirror). device_forget is never accepted from
+// a key.
 func companionRefuteRoute(key *persistence.APIKey, reason string, chunkIDs []string) string {
-	if key != nil && key.ClientKind == "hermes" && len(chunkIDs) > 0 {
-		switch strings.TrimSpace(reason) {
-		case memory.RefuteRouteMirrorForget:
+	if key == nil || len(chunkIDs) == 0 {
+		return memory.RefuteRouteMemoryCorrect
+	}
+	switch strings.TrimSpace(reason) {
+	case memory.RefuteRouteMirrorForget:
+		if clientKindsWithMirror[key.ClientKind] {
 			return memory.RefuteRouteMirrorForget
-		case memory.RefuteRouteForgetCommand:
-			return memory.RefuteRouteForgetCommand
 		}
+	case memory.RefuteRouteForgetCommand:
+		return memory.RefuteRouteForgetCommand
 	}
 	return memory.RefuteRouteMemoryCorrect
 }
+
+// clientKindsWithMirror are the client kinds whose own memory file mirrors
+// into Vornik, so whose forget of a mirrored line may be undone by an
+// identical re-add (LLD 22, "Reinstating a refuted mirrored note"). A later
+// harness with a mirror is added here.
+var clientKindsWithMirror = map[string]bool{"hermes": true}
 
 type correctResultOut struct {
 	RefutedCount      int                `json:"refuted_count"`
@@ -1115,8 +1130,8 @@ func (s *Server) companionToolMemoryCorrect(ctx context.Context, key *persistenc
 		return "", errors.New("memory subsystem not wired on this daemon")
 	}
 	var args correctArgs
-	if err := json.Unmarshal(raw, &args); err != nil {
-		return "", fmt.Errorf("invalid arguments: %w", err)
+	if err := decodeToolArgs("memory_correct", raw, &args); err != nil {
+		return "", err
 	}
 	args.WrongClaim = strings.TrimSpace(args.WrongClaim)
 	args.Correction = strings.TrimSpace(args.Correction)

@@ -96,6 +96,9 @@ type stream struct {
 	nextSeq     int64
 	subscribers []*subscription
 	lastActive  time.Time
+	// activity is the per-execution summary ActivityReader serves (GitHub
+	// #119 item 9), updated in deliver under mu.
+	activity Activity
 }
 
 type subscription struct {
@@ -231,6 +234,7 @@ func (p *inProcessPublisher) deliver(s *stream, evt LiveEvent) {
 		s.ring[len(s.ring)-1] = evt
 	}
 	s.lastActive = evt.Timestamp
+	s.noteActivity(evt)
 	subs := append([]*subscription(nil), s.subscribers...)
 	s.mu.Unlock()
 

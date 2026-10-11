@@ -5,6 +5,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"testing"
 
@@ -364,4 +365,91 @@ func TestRunCompanionGrant_NoDelegate_RevokeFailureSaysRevokeByHand(t *testing.T
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "revoke it by hand")
 	assert.Contains(t, err.Error(), "k-old")
+}
+
+// GitHub #99 (2026-10-04 operator report): `companion grant --client hermes`
+// ended with "paste it into your plugin's .mcp.json", the coding-companion
+// instruction. A Hermes reads its tokens from $HERMES_HOME/.env, so the
+// grant prints the lines to append, the token named by the key's role.
+func hermesGrant(t *testing.T, response string, setFlags func()) string {
+	t.Helper()
+	t.Cleanup(func() {
+		resetCompanionFlags()
+		companionGrantMemoryAll, companionGrantMemoryWrite = false, false
+	})
+	srv, _ := captureGrantRequest(t, response)
+	t.Cleanup(srv.Close)
+	t.Setenv("VORNIK_API_URL", srv.URL)
+	t.Setenv("VORNIK_API_KEY", "test-admin-key")
+	companionGrantProject = "broker-mail"
+	companionGrantClient = "hermes"
+	if setFlags != nil {
+		setFlags()
+	}
+	out, err := captureStdoutFunc(t, func() error { return runCompanionGrant(nil, nil) })
+	require.NoError(t, err)
+	return out
+}
+
+func TestCompanionGrant_HermesPrintsEnvLinesForBrokerKey(t *testing.T) {
+	out := hermesGrant(t, `{"id":"k1","projectId":"broker-mail","clientKind":"hermes",
+		"secret":"sk-vornik-broker.SECRET","keyPrefix":"sk-vornik-br","createdAt":"2026-10-08T10:00:00Z"}`, nil)
+	assert.Contains(t, out, "VORNIK_URL="+os.Getenv("VORNIK_API_URL"))
+	assert.Contains(t, out, "VORNIK_BROKER_TOKEN=sk-vornik-broker.SECRET")
+	assert.Contains(t, out, ".env")
+	assert.NotContains(t, out, ".mcp.json")
+	assert.NotContains(t, out, "VORNIK_MEMORY_TOKEN=")
+}
+
+func TestCompanionGrant_HermesMemoryKeyPrintsMemoryToken(t *testing.T) {
+	out := hermesGrant(t, `{"id":"k1","projectId":"hermes-memory","clientKind":"hermes",
+		"secret":"sk-vornik-mem.SECRET","keyPrefix":"sk-vornik-me","memoryRead":true,"memoryWrite":true,
+		"delegateDisabled":true,"createdAt":"2026-10-08T10:00:00Z"}`, func() {
+		companionGrantMemoryAll, companionGrantNoDelegate = true, true
+	})
+	assert.Contains(t, out, "VORNIK_MEMORY_TOKEN=sk-vornik-mem.SECRET")
+	assert.NotContains(t, out, "VORNIK_BROKER_TOKEN=")
+	assert.NotContains(t, out, ".mcp.json")
+}
+
+// Mixed versions: a daemon older than memory keys ignores --memory-*, so a
+// key the operator meant for memory comes back without it. It is not a
+// broker key either: print no token line, say why.
+func TestCompanionGrant_HermesMemoryNotGrantedPrintsNoTokenLine(t *testing.T) {
+	out := hermesGrant(t, `{"id":"k1","projectId":"hermes-memory","clientKind":"hermes",
+		"secret":"sk-vornik-mem.SECRET","keyPrefix":"sk-vornik-me","createdAt":"2026-10-08T10:00:00Z"}`, func() {
+		companionGrantMemoryAll = true
+	})
+	assert.NotContains(t, out, "VORNIK_MEMORY_TOKEN=")
+	assert.NotContains(t, out, "VORNIK_BROKER_TOKEN=")
+	assert.Contains(t, out, "did not grant memory")
+}
+
+func TestCompanionGrant_HermesJSONOutputUnchanged(t *testing.T) {
+	out := hermesGrant(t, `{"id":"k1","projectId":"broker-mail","clientKind":"hermes",
+		"secret":"sk-vornik-broker.SECRET","keyPrefix":"sk-vornik-br","createdAt":"2026-10-08T10:00:00Z"}`, func() {
+		companionGrantJSON = true
+	})
+	var got map[string]any
+	require.NoError(t, json.Unmarshal([]byte(out), &got), "the --json output must stay one JSON document: %q", out)
+	assert.NotContains(t, out, "VORNIK_")
+}
+
+func TestCompanionGrant_ClaudeCodeOutputUnchanged(t *testing.T) {
+	out := hermesGrant(t, `{"id":"k1","projectId":"companion-me","clientKind":"claude-code",
+		"secret":"sk-vornik-cc.SECRET","keyPrefix":"sk-vornik-cc","createdAt":"2026-10-08T10:00:00Z"}`, func() {
+		companionGrantClient = "claude-code"
+	})
+	assert.Contains(t, out, "paste it into your plugin's .mcp.json")
+	assert.Contains(t, out, "  sk-vornik-cc.SECRET")
+	assert.NotContains(t, out, "VORNIK_")
+}
+
+// Review b240 finding 7: the .env tail follows the client the DAEMON
+// recorded, not the flag.
+func TestCompanionGrant_HermesTailFollowsTheDaemonsClientKind(t *testing.T) {
+	out := hermesGrant(t, `{"id":"k1","projectId":"x","clientKind":"claude-code",
+		"secret":"sk-vornik-x.SECRET","keyPrefix":"sk-vornik-x","createdAt":"2026-10-08T10:00:00Z"}`, nil)
+	assert.NotContains(t, out, "VORNIK_BROKER_TOKEN=")
+	assert.Contains(t, out, ".mcp.json")
 }

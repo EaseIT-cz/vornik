@@ -16,6 +16,7 @@ import (
 	"vornik.io/vornik/internal/persistence/sqlite/sqlitetest"
 	"vornik.io/vornik/internal/registry"
 
+	"github.com/prometheus/client_golang/prometheus/testutil"
 	"gopkg.in/yaml.v3"
 )
 
@@ -65,17 +66,19 @@ args_schema:
 `
 
 type env struct {
-	t       *testing.T
-	ctx     context.Context
-	svc     *brokergrants.Service
-	grants  persistence.BrokerGrantRepository
-	actions persistence.BrokerActionRepository
-	sealer  *fakeSealer
-	now     time.Time
-	reach   map[string]string
-	metrics *brokergrants.Metrics
-	props   map[string]registry.BrokerProposal
-	bounds  [3]int
+	epochs    persistence.AccountTransitionRepository
+	t         *testing.T
+	ctx       context.Context
+	svc       *brokergrants.Service
+	grants    persistence.BrokerGrantRepository
+	actions   persistence.BrokerActionRepository
+	sealer    *fakeSealer
+	now       time.Time
+	reach     map[string]string
+	metrics   *brokergrants.Metrics
+	props     map[string]registry.BrokerProposal
+	bounds    [3]int
+	accountOf func(context.Context, *persistence.BrokerAction) (string, string, bool)
 }
 
 func newEnv(t *testing.T) *env {
@@ -86,7 +89,7 @@ func newEnv(t *testing.T) *env {
 	if err := yamlUnmarshal(mailProposal, &p); err != nil {
 		t.Fatal(err)
 	}
-	e := &env{t: t, ctx: ctx, grants: sqlite.NewBrokerGrantRepository(db.DB), actions: sqlite.NewBrokerActionRepository(db.DB),
+	e := &env{epochs: sqlite.NewAccountTransitionRepository(db.DB), t: t, ctx: ctx, grants: sqlite.NewBrokerGrantRepository(db.DB), actions: sqlite.NewBrokerActionRepository(db.DB),
 		sealer: &fakeSealer{}, now: time.Now().UTC().Truncate(time.Second), reach: map[string]string{},
 		metrics: brokergrants.NewMetrics(), props: map[string]registry.BrokerProposal{"ns1--mail/send_reply": p, "ns1--other/send_reply": p},
 		bounds: [3]int{7, 20, 10}}
@@ -97,7 +100,7 @@ func newEnv(t *testing.T) *env {
 // rebuild builds the service over grants (a test may wrap the store).
 func (e *env) rebuild(grants persistence.BrokerGrantRepository) *brokergrants.Service {
 	return brokergrants.New(brokergrants.Config{
-		Grants: grants, Actions: e.actions,
+		DecisionEpoch: e.epochs.ReadDecisionEpoch, Grants: grants, Actions: e.actions, AccountOf: e.accountOf,
 		Proposal: func(wf, action string) (registry.BrokerProposal, bool) {
 			p, ok := e.props[wf+"/"+action]
 			return p, ok
@@ -444,6 +447,66 @@ func TestViews_ShowTheKeyAndCoveredActions(t *testing.T) {
 	}
 }
 
+// GitHub #93 (2026-10-08): Views classifies (the query) and labels
+// (unusable) with ONE instant: the caller's f.Now when set, else the
+// service clock. Before, the query took no instant and the labels read the
+// clock on their own.
+func TestViews_OneInstantForQueryAndLabels(t *testing.T) {
+	e := newEnv(t)
+	g := e.seed(`{"to":"a@x.com"}`, 7, 20)
+	views, err := e.svc.Views(e.ctx, persistence.BrokerGrantFilter{Namespace: "ns1"})
+	if err != nil || len(views) != 1 || views[0].Grant.ID != g.ID || views[0].State != "active" {
+		t.Fatalf("at the service clock: %+v %v", views, err)
+	}
+	later := e.now.Add(8 * 24 * time.Hour) // past the 7-day expiry
+	views, err = e.svc.Views(e.ctx, persistence.BrokerGrantFilter{Namespace: "ns1", Now: later})
+	if err != nil || len(views) != 1 || views[0].State != "expired" {
+		t.Fatalf("at the caller's instant the grant is dead and must be labelled so: %+v %v", views, err)
+	}
+}
+
+// recordingList captures the filter Views hands the store.
+type recordingList struct {
+	persistence.BrokerGrantRepository
+	got persistence.BrokerGrantFilter
+}
+
+func (r *recordingList) List(ctx context.Context, f persistence.BrokerGrantFilter) ([]*persistence.BrokerStandingGrant, error) {
+	r.got = f
+	return r.BrokerGrantRepository.List(ctx, f)
+}
+
+// Review b240 finding 3 (2026-10-08): the store sees the same UTC instant
+// the labels use, whatever zone the caller's Now is in.
+func TestViews_PassesTheUTCInstantToTheStore(t *testing.T) {
+	e := newEnv(t)
+	e.seed(`{"to":"a@x.com"}`, 7, 20)
+	rec := &recordingList{BrokerGrantRepository: e.grants}
+	svc := e.rebuild(rec)
+	east := e.now.In(time.FixedZone("UTC+5", 5*3600))
+	if _, err := svc.Views(e.ctx, persistence.BrokerGrantFilter{Namespace: "ns1", Now: east}); err != nil {
+		t.Fatal(err)
+	}
+	if rec.got.Now.Location() != time.UTC || !rec.got.Now.Equal(east) {
+		t.Fatalf("store got Now %v (%v), want the same instant in UTC", rec.got.Now, rec.got.Now.Location())
+	}
+}
+
+// Review b240 finding 2: a truncated live list is shown, not dropped, and
+// counted so an operator can see it happened.
+func TestViews_LiveTruncationIsCountedNotFatal(t *testing.T) {
+	e := newEnv(t)
+	e.seed(`{"to":"a@x.com"}`, 7, 20)
+	e.seed(`{"to":"b@x.com"}`, 7, 20)
+	views, err := e.svc.Views(e.ctx, persistence.BrokerGrantFilter{Namespace: "ns1", LiveCap: 1})
+	if err != nil || len(views) != 1 {
+		t.Fatalf("Views over the cap = %d views, %v; want the capped list and no error", len(views), err)
+	}
+	if got := testutil.ToFloat64(e.metrics.ListTruncatedCounter()); got != 1 {
+		t.Fatalf("list_truncated_total = %v, want 1", got)
+	}
+}
+
 func yamlUnmarshal(s string, v any) error { return yaml.Unmarshal([]byte(s), v) }
 
 // insertDeadGrants creates n expired grants of the class carrying the key of
@@ -466,6 +529,7 @@ func (e *env) insertDeadGrants(args string, n int, base time.Time) {
 			MaxUses: 1, UsesLeft: 1, ExpiresAt: base.Add(-time.Duration(i) * time.Minute), CreatedAt: e.now,
 			CreatedBy: "device:dev_1", SeedActionID: a.ActionID, ReachHashAtCreation: "reach-1", Active: true, DigestThrough: e.now,
 		}
+		g.DecisionGuard, _ = e.epochs.ReadDecisionEpoch(e.ctx, g.Namespace)
 		if err := e.grants.ApproveSeedAndCreate(e.ctx, a.ActionID, a.ArgsSHA256, "device:dev_1", g, 10, e.now); err != nil {
 			e.t.Fatalf("dead grant %d: %v", i, err)
 		}
@@ -515,5 +579,91 @@ func TestCover_DeadTailBoundaryLosesTheDiagnostic(t *testing.T) {
 	e2.insertDeadGrants(other, 199, e2.now.Add(-time.Hour))
 	if c, _ := e2.svc.Cover(e2.ctx, e2.action("ns1--mail", target)); c || e2.metrics.Miss("expired") != 1 {
 		t.Fatalf("inside the tail: want miss{expired} = 1, got %v", e2.metrics.Miss("expired"))
+	}
+}
+
+// GitHub #119 item 8: operator projects have no account authority; account
+// capture must not change their existing one-tap standing confirmation.
+func TestStandingGrant_OperatorConfirmUnchanged(t *testing.T) {
+	e := newEnv(t)
+	e.accountOf = func(context.Context, *persistence.BrokerAction) (string, string, bool) {
+		t.Fatal("operator grant consulted AccountOf")
+		return "", "", false
+	}
+	e.svc = e.rebuild(e.grants)
+	a := e.action("ns1--mail", `{"to":"a@x.com","body":"seed"}`)
+	// The action's project is immutable once staged: make an operator seed.
+	a.ActionID += "operator"
+	a.TaskID += "operator"
+	a.ProjectID = "assistant"
+	a.Status = persistence.BrokerActionStaged
+	if _, err := e.actions.Stage(e.ctx, a); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.actions.PromoteStaged(e.ctx, a.TaskID); err != nil {
+		t.Fatal(err)
+	}
+	a.Status = persistence.BrokerActionPending
+	g, err := e.svc.ApproveWithGrant(e.ctx, a, a.ArgsSHA256, "operator", 7, 20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if g.Namespace != "" || g.AccountLabel != "" || g.AccountIdentity != "" {
+		t.Fatalf("operator account: %+v", g)
+	}
+	if _, err := e.grants.Suspend(e.ctx, g.ID, e.now); err != nil {
+		t.Fatal(err)
+	}
+	e.reach[g.WorkflowID] = "new-reach"
+	if err := e.svc.Change(e.ctx, g.ID, "confirm"); err != nil {
+		t.Fatal(err)
+	}
+	got, err := e.grants.Get(e.ctx, g.ID)
+	if err != nil || got.SuspendedAt != nil || got.ReachHashAtCreation != "new-reach" {
+		t.Fatalf("operator confirm: %+v %v", got, err)
+	}
+}
+
+func TestStandingGrant_UnconfirmedAccountCreatesNoGrant(t *testing.T) {
+	for _, label := range []string{"", "work"} {
+		t.Run(label, func(t *testing.T) {
+			e := newEnv(t)
+			e.accountOf = func(context.Context, *persistence.BrokerAction) (string, string, bool) { return label, "", false }
+			e.svc = e.rebuild(e.grants)
+			a := e.action("ns1--mail", `{"to":"a@x.com","body":"seed"}`)
+			if _, err := e.svc.ApproveWithGrant(e.ctx, a, a.ArgsSHA256, "device", 7, 20); err == nil {
+				t.Fatal("unconfirmed account created grant")
+			}
+			if _, err := e.grants.Get(e.ctx, brokergrants.GrantID(a.ActionID)); !errors.Is(err, persistence.ErrNotFound) {
+				t.Fatalf("grant created: %v", err)
+			}
+			got := e.state(a.ActionID)
+			if got.Status != persistence.BrokerActionPending {
+				t.Fatalf("grant refusal changed seed: %s", got.Status)
+			}
+		})
+	}
+}
+
+// #119/§22.2.16: deterministic read→rotation→terminal interleaving.
+func TestStandingGrant_StaleEpochCreationRefused(t *testing.T) {
+	e := newEnv(t)
+	e.accountOf = func(ctx context.Context, _ *persistence.BrokerAction) (string, string, bool) {
+		ticket, err := e.epochs.Begin(ctx, persistence.AccountNamespaceScope("ns1"), "rotate", "oauth", e.now)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err = e.epochs.Abort(ctx, ticket); err != nil {
+			t.Fatal(err)
+		}
+		return "work", "provider@example.test", true
+	}
+	e.svc = e.rebuild(e.grants)
+	a := e.action("ns1--mail", `{"to":"a@example.test","body":"hello"}`)
+	if _, err := e.svc.ApproveWithGrant(e.ctx, a, a.ArgsSHA256, "device:dev_1", 1, 5); !errors.Is(err, persistence.ErrAccountTransition) {
+		t.Fatalf("stale creation accepted: %v", err)
+	}
+	if e.state(a.ActionID).Status != persistence.BrokerActionPending {
+		t.Fatal("stale grant partially approved its seed")
 	}
 }

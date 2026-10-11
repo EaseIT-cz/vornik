@@ -12,11 +12,14 @@ import (
 	"time"
 
 	"vornik.io/vornik/internal/agentadmin"
+	"vornik.io/vornik/internal/agentns"
 	"vornik.io/vornik/internal/apikey"
 	"vornik.io/vornik/internal/executor"
+	"vornik.io/vornik/internal/executor/livepubsub"
 	"vornik.io/vornik/internal/mcp"
 	"vornik.io/vornik/internal/persistence"
 	"vornik.io/vornik/internal/registry"
+	"vornik.io/vornik/internal/taskcancel"
 	"vornik.io/vornik/internal/taskcreate"
 )
 
@@ -210,7 +213,7 @@ func (s *Server) CompanionMCPHandler(w http.ResponseWriter, r *http.Request) {
 // rather than loaded from disk because the tool surface is small
 // and the schemas double as live documentation.
 func companionToolDefs() []mcpToolDef {
-	return []mcpToolDef{
+	return append([]mcpToolDef{
 		{
 			Name: "delegate",
 			Description: "Queue an async task on vornik. Returns immediately with a task_id, a numeric " +
@@ -239,6 +242,12 @@ func companionToolDefs() []mcpToolDef {
 							"token": map[string]any{"type": "string", "description": "Optional; sent back as Authorization: Bearer <token> so you can tell the push came from Vornik"},
 						},
 						"required": []string{"url"},
+					},
+					"max_age_seconds": map[string]any{
+						"type":        "integer",
+						"minimum":     0,
+						"maximum":     resultReuseMaxAgeSeconds,
+						"description": "Optional, broker workflows that propose no writes, when the daemon advertises companion-result-reuse: reuse this key's own completed run of the same workflow with the same inputs if it started at most this many seconds ago (0 to 900; more is treated as 900). The answer then carries reused: true and as_of, and no task is created. Omit it when the user asks for a fresh read or just changed a connection or credential.",
 					},
 					"task_type": map[string]any{
 						"type":        "string",
@@ -280,7 +289,7 @@ func companionToolDefs() []mcpToolDef {
 		},
 		{
 			Name:        "status",
-			Description: "Return current task status (QUEUED/LEASED/RUNNING/COMPLETED/FAILED/CANCELLED). For a broker workflow the raw error is never returned; error_class is one of failed, timeout, budget, egress_no_output, egress_oversize, egress_schema.",
+			Description: "Return current task status (QUEUED/LEASED/RUNNING/COMPLETED/FAILED/CANCELLED). For a broker workflow the raw error is never returned; error_class is one of failed, timeout, budget, egress_no_output, egress_oversize, egress_schema. While the task runs, progress gives the running step_id, its step_index of step_count, attempt, step_started_at and last_event_at; tell the user where it is from progress instead of calling task_logs.",
 			InputSchema: map[string]any{
 				"type":       "object",
 				"properties": map[string]any{"task_id": map[string]any{"type": "string"}},
@@ -288,8 +297,25 @@ func companionToolDefs() []mcpToolDef {
 			},
 		},
 		{
+			Name: "task_logs",
+			Description: "Read and follow a task's live log: its execution events (steps, tool calls, attempts), redacted for you, oldest first. " +
+				"Pass back next_cursor to continue; wait_seconds (0-25) holds the call until a new event arrives. " +
+				"complete is true once the task has finished and you have every event; a retried task moves to its newest attempt by itself. " +
+				"At most 64 KiB per call. For a broker workflow only step progress and closed error classes are shown.",
+			InputSchema: map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"task_id":      map[string]any{"type": "string"},
+					"cursor":       map[string]any{"type": "string", "description": "next_cursor from the previous call; omit for the newest events"},
+					"tail":         map[string]any{"type": "integer", "minimum": 1, "maximum": taskLogsMaxTail, "description": "without a cursor: how many of the newest events (default 50)"},
+					"wait_seconds": map[string]any{"type": "integer", "minimum": 0, "maximum": taskLogsMaxWaitSeconds},
+				},
+				"required": []string{"task_id"},
+			},
+		},
+		{
 			Name:        "result",
-			Description: "Return a completed task's output artifacts INLINE (non-transcript OUTPUT class; 64 KiB shared budget, truncated entries flagged). This is the only artifact-read surface a companion key has — companion keys cannot reach the REST API. Returns {complete:false} cleanly while the task is still in flight. For a broker workflow it returns only the declared egress document as `output`. wait_seconds (0-25) holds the call open until the task finishes.",
+			Description: "Return a completed task's output artifacts INLINE (non-transcript OUTPUT class; 64 KiB shared budget, truncated entries flagged). This is the only artifact-read surface a companion key has — companion keys cannot reach the REST API. Returns {complete:false} cleanly while the task is still in flight. For a broker workflow it returns only the declared egress document as `output`. wait_seconds (0-25) holds the call open until the task finishes. A {complete:false} answer carries the same progress object as status.",
 			InputSchema: map[string]any{
 				"type": "object",
 				"properties": map[string]any{
@@ -318,12 +344,14 @@ func companionToolDefs() []mcpToolDef {
 		},
 		{
 			Name:        "list",
-			Description: "List recent companion-delegated tasks for this key's project, newest first.",
+			Description: "List recent companion-delegated tasks, newest first: for this key's project, or, for an agent-admin key, any project of its namespace (project).",
 			InputSchema: map[string]any{
 				"type": "object",
 				"properties": map[string]any{
 					"limit":  map[string]any{"type": "integer", "minimum": 1, "maximum": 100, "default": 20},
 					"status": map[string]any{"type": "string", "description": "Optional filter: QUEUED, RUNNING, COMPLETED, FAILED, CANCELLED."},
+					"project": map[string]any{"type": "string", "description": "Optional. An agent-admin key: " +
+						agentadmin.ProjectRefRule + " Any other key: only its own project. Omit for this key's project."},
 				},
 			},
 		},
@@ -482,6 +510,26 @@ func companionToolDefs() []mcpToolDef {
 			},
 		},
 		{
+			Name: "memory_list",
+			Description: "List what Vornik's memory holds for this key's project, newest first, a page at a time: " +
+				"each item's id, short_id, age, source, origin (remembered, mirrored, ingested, learned_from_task) " +
+				"and a short snippet. Use it when the user asks what Vornik remembers about them. Pass next_cursor " +
+				"back as cursor for the next page; pass query to search instead (one page, no cursor). The whole " +
+				"project is listed whatever repo_scope the key defaults to. To forget an item, call memory_correct " +
+				"with its id and reason \"forget_command\". To export everything, or to forget from the phone, give " +
+				"the user export_url: it opens only on their paired approver device, and the export never passes " +
+				"through you. Never paste the user's whole memory into the conversation.",
+			InputSchema: map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"cursor": map[string]any{"type": "string", "description": "next_cursor from the previous page, unchanged."},
+					"limit":  map[string]any{"type": "integer", "minimum": 1, "maximum": memoryListMaxLimit, "default": memoryListDefaultLimit},
+					"query":  map[string]any{"type": "string", "description": "Optional: search instead of listing (the recall path)."},
+				},
+				"additionalProperties": false,
+			},
+		},
+		{
 			Name: "list_scopes",
 			Description: "Enumerate the distinct repo_scope values present in this key's project memory, with " +
 				"chunk counts per scope. NULL-scoped chunks appear under the empty-string bucket so you can see " +
@@ -525,7 +573,7 @@ func companionToolDefs() []mcpToolDef {
 					},
 					"reason": map[string]any{
 						"type":        "string",
-						"description": "Set by the Hermes plugin only; ignored for other clients. Records why the chunks were refuted (mirror_forget or forget_command, chunk_ids mode).",
+						"description": "Optional, chunk_ids mode only: why the chunks are refuted. \"forget_command\" when the user asked to forget these specific ids (any client). \"mirror_forget\" only for a client whose own memory file mirrors into Vornik (Hermes); from any other client it is recorded as a correction. Anything else, or claim mode, is recorded as a correction.",
 					},
 				},
 			},
@@ -625,7 +673,7 @@ func companionToolDefs() []mcpToolDef {
 				"required": []any{"id", "global"},
 			},
 		},
-	}
+	}, append(diagToolDefs(), artifactToolDefs()...)...)
 }
 
 // handleCompanionToolCall dispatches tools/call to the matching
@@ -702,13 +750,33 @@ func (s *Server) handleCompanionToolCall(w http.ResponseWriter, r *http.Request,
 		})
 		return
 	}
+	// Strict arguments (GitHub #305, LLD 21 §A): an argument the tool does
+	// not declare is refused here, naming it, instead of being dropped.
+	if argErr := checkCompanionToolArgs(params.Name, params.Arguments); argErr != nil {
+		s.recordCompanionToolAudit(ctx, key, params.Name, params.Arguments, "", argErr, time.Since(auditStart))
+		writeJSONRPCResult(w, id, mcpToolCallResult{
+			Content: []mcpToolContent{{Type: "text", Text: argErr.Error()}},
+			IsError: true,
+		})
+		return
+	}
 	switch params.Name {
+	case "list_artifacts", "read_artifact":
+		result, toolErr = s.companionToolArtifact(ctx, key, params.Name, params.Arguments)
 	case "delegate":
 		result, toolErr = s.companionToolDelegate(ctx, key, params.Arguments)
 	case "status":
 		result, toolErr = s.companionToolStatus(ctx, key, params.Arguments)
 	case "result":
 		result, toolErr = s.companionToolResult(ctx, key, params.Arguments)
+	case "task_logs":
+		result, toolErr = s.companionToolTaskLogs(ctx, key, params.Arguments)
+	case "task_explain":
+		result, toolErr = s.companionToolTaskExplain(ctx, key, params.Arguments)
+	case "daemon_log":
+		result, toolErr = s.companionToolDaemonLog(ctx, key, params.Arguments)
+	case "doctor":
+		result, toolErr = s.companionToolDoctor(ctx, key)
 	case "cancel":
 		result, toolErr = s.companionToolCancel(ctx, key, params.Arguments)
 	case "list":
@@ -729,6 +797,8 @@ func (s *Server) handleCompanionToolCall(w http.ResponseWriter, r *http.Request,
 		result, toolErr = s.companionToolListScopes(ctx, key)
 	case "memory_correct":
 		result, toolErr = s.companionToolMemoryCorrect(ctx, key, params.Arguments)
+	case "memory_list":
+		result, toolErr = s.companionToolMemoryList(ctx, key, params.Arguments)
 	case "skill_propose":
 		result, toolErr = s.companionToolSkillPropose(ctx, key, params.Arguments)
 	case "skill_search":
@@ -938,6 +1008,10 @@ type delegateArgs struct {
 	Inputs json.RawMessage `json:"inputs"`
 	// Notify asks for completion pushes (broker write-actions design §7a).
 	Notify *companionNotify `json:"notify"`
+	// MaxAgeSeconds opts into reuse of a recent read-only result (broker
+	// design §6b, GitHub #119 item 9); parsed into maxAge by parseMaxAge.
+	MaxAgeSeconds json.RawMessage `json:"max_age_seconds"`
+	maxAge        int
 }
 
 func (s *Server) companionToolDelegate(ctx context.Context, key *persistence.APIKey, raw json.RawMessage) (string, error) {
@@ -945,8 +1019,8 @@ func (s *Server) companionToolDelegate(ctx context.Context, key *persistence.API
 		return "", errors.New("task creator not wired on this daemon")
 	}
 	var args delegateArgs
-	if err := json.Unmarshal(raw, &args); err != nil {
-		return "", fmt.Errorf("invalid arguments: %w", err)
+	if err := decodeToolArgs("delegate", raw, &args); err != nil {
+		return "", err
 	}
 	args.Workflow = strings.TrimSpace(args.Workflow)
 	args.Prompt = strings.TrimSpace(args.Prompt)
@@ -954,6 +1028,11 @@ func (s *Server) companionToolDelegate(ctx context.Context, key *persistence.API
 	if args.Workflow == "" {
 		return "", errors.New("workflow is required")
 	}
+	maxAge, err := parseMaxAge(args.MaxAgeSeconds)
+	if err != nil {
+		return "", err
+	}
+	args.maxAge = maxAge
 
 	// Scope check: workflow must be in the key's allowlist when set.
 	// nil allowlist means "every workflow the project permits" — the
@@ -981,6 +1060,12 @@ func (s *Server) companionToolDelegate(ctx context.Context, key *persistence.API
 	// asked for by a broker-project key, takes the typed-input path.
 	if s.isBrokerProjectKey(key) || s.brokerWorkflowOf(args.Workflow) != nil {
 		return s.companionBrokerDelegate(ctx, key, args, args.Inputs)
+	}
+	if args.maxAge > 0 {
+		// Broker design §6b.1: a client must never believe in a reuse it
+		// did not get.
+		recordResultReuse("refused")
+		return "", fmt.Errorf("REUSE_NOT_ALLOWED: %s is not a broker workflow; only read-only broker workflows reuse results", args.Workflow)
 	}
 	if args.Prompt == "" {
 		return "", errors.New("prompt is required")
@@ -1328,8 +1413,8 @@ func (s *Server) companionToolStatus(ctx context.Context, key *persistence.APIKe
 		return "", errors.New("task repo not wired")
 	}
 	var args taskIDArg
-	if err := json.Unmarshal(raw, &args); err != nil {
-		return "", fmt.Errorf("invalid arguments: %w", err)
+	if err := decodeToolArgs("status", raw, &args); err != nil {
+		return "", err
 	}
 	args.TaskID = strings.TrimSpace(args.TaskID)
 	if args.TaskID == "" {
@@ -1357,7 +1442,16 @@ func (s *Server) companionToolStatus(ctx context.Context, key *persistence.APIKe
 		"created_at": task.CreatedAt.UTC().Format(time.RFC3339),
 		"attempt":    task.Attempt,
 	}
-	if wf := s.brokerWorkflowOf(derefString(task.WorkflowID)); wf != nil || s.isBrokerProjectKey(key) {
+	wf := s.brokerWorkflowOf(derefString(task.WorkflowID))
+	broker := s.brokerViewFor(key, task) // live design Change 2026-10-08 C2: one rule for every agent read path
+	if la := s.companionLastAttempt(ctx, task, broker); la != nil {
+		out["last_attempt"] = la
+	}
+	// GitHub #119 item 9: where a running task is (closed fields only).
+	if p := s.companionProgress(ctx, key, task); p != nil {
+		out["progress"] = p
+	}
+	if broker {
 		// Broker design §5.2: last_error can quote the content the task was
 		// processing, so a broker task — and ANY task read through a
 		// broker-project key (review-20260929-388f H1: an ordinary task left
@@ -1380,6 +1474,50 @@ func (s *Server) companionToolStatus(ctx context.Context, key *persistence.APIKe
 	return string(b), nil
 }
 
+// companionLastAttempt is status's last_attempt (design 21 §A, amended
+// 2026-10-08, GitHub #98): the previous attempt's failed step and class, read
+// from the newest FAILED execution, because the requeue clears the task's
+// class. nil before a first attempt has failed, or when the read fails. The
+// broker shape carries only the step id and a closed broker class.
+func (s *Server) companionLastAttempt(ctx context.Context, task *persistence.Task, broker bool) map[string]any {
+	terminalFailed := task.Status == persistence.TaskStatusFailed
+	if s.executionRepo == nil || (task.Attempt <= 1 && !terminalFailed) {
+		return nil
+	}
+	failed := persistence.ExecutionStatusFailed
+	taskID := task.ID
+	execs, err := s.executionRepo.List(ctx, persistence.ExecutionFilter{TaskID: &taskID, Status: &failed, PageSize: 1})
+	if err != nil {
+		s.logger.Warn().Err(err).Str("task_id", task.ID).Msg("companion status: last attempt read failed")
+		return nil
+	}
+	if len(execs) == 0 || execs[0] == nil {
+		return nil
+	}
+	exec := execs[0]
+	// A FAILED task's newest failure is its current attempt; in every other
+	// status (a retry queued or running, or one that went on to complete or was
+	// cancelled) the requeue has already incremented the counter.
+	attempt := task.Attempt
+	if !terminalFailed {
+		attempt--
+	}
+	// Closed at the source (review-20261008-5b0e F2): the executor writes
+	// EXECUTION_ERROR when it had no class, and nothing outside the task
+	// failure vocabulary is echoed.
+	class := livepubsub.ClosedTaskClass(derefString(exec.ErrorCode))
+	if broker {
+		// From the closed class, never the error text: substring matching the
+		// text made the class a one-bit oracle on it (review-20261008-a4ef F5).
+		class = brokerClassOfTaskClass(class)
+	}
+	return map[string]any{
+		"attempt":     attempt,
+		"failed_step": derefString(exec.CurrentStepID),
+		"error_class": class,
+	}
+}
+
 // ---- tool: result -------------------------------------------------
 
 // resultArgs is taskIDArg plus the bounded long-poll (broker design §6).
@@ -1393,8 +1531,8 @@ func (s *Server) companionToolResult(ctx context.Context, key *persistence.APIKe
 		return "", errors.New("task repo not wired")
 	}
 	var args resultArgs
-	if err := json.Unmarshal(raw, &args); err != nil {
-		return "", fmt.Errorf("invalid arguments: %w", err)
+	if err := decodeToolArgs("result", raw, &args); err != nil {
+		return "", err
 	}
 	args.TaskID = strings.TrimSpace(args.TaskID)
 	if args.TaskID == "" {
@@ -1423,10 +1561,14 @@ func (s *Server) companionToolResult(ctx context.Context, key *persistence.APIKe
 		if waitCapped {
 			out["wait_capped"] = true
 		}
+		if p := s.companionProgress(ctx, key, task); p != nil {
+			out["progress"] = p // GitHub #119 item 9
+		}
 		b, _ := json.MarshalIndent(out, "", "  ")
 		return string(b), nil
 	}
-	if wf := s.brokerWorkflowOf(derefString(task.WorkflowID)); wf != nil || s.isBrokerProjectKey(key) {
+	if s.brokerViewFor(key, task) {
+		wf := s.brokerWorkflowOf(derefString(task.WorkflowID))
 		// A broker-project key gets the broker shape for every task, so an
 		// ordinary task in its project (review-20260929-388f H1) cannot fall
 		// through to the raw inline-artifact path below.
@@ -1450,6 +1592,7 @@ func (s *Server) companionToolResult(ctx context.Context, key *persistence.APIKe
 	// registered and (b) the confinement blocks, a dead-end by
 	// construction (incident 2026-06-07: the architecture-review
 	// verdict was only recoverable via RAG recall).
+	s.completedArtifactRun(ctx, task, out)
 	out["artifacts"] = s.companionInlineArtifacts(ctx, task.ID)
 	b, _ := json.MarshalIndent(out, "", "  ")
 	return string(b), nil
@@ -1587,8 +1730,8 @@ func (s *Server) companionToolCancel(ctx context.Context, key *persistence.APIKe
 		return "", errors.New("task repo not wired")
 	}
 	var args cancelArgs
-	if err := json.Unmarshal(raw, &args); err != nil {
-		return "", fmt.Errorf("invalid arguments: %w", err)
+	if err := decodeToolArgs("cancel", raw, &args); err != nil {
+		return "", err
 	}
 	args.TaskID = strings.TrimSpace(args.TaskID)
 	if args.TaskID == "" {
@@ -1604,16 +1747,29 @@ func (s *Server) companionToolCancel(ctx context.Context, key *persistence.APIKe
 	if !keyCoversProject(key, task.ProjectID) {
 		return "", fmt.Errorf("task %s not found", args.TaskID)
 	}
-	transitioned, err := s.taskRepo.TransitionToCancelled(ctx, args.TaskID)
+	// The shared cancel primitive (05-scheduler.md §4.11, LLD 21 §A). This
+	// tool used to flip the row and stop there: the container ran on, the
+	// executor dispatched the next step, and the leftover execution held a
+	// scheduler slot (GitHub #300, 2026-10-08). nil keeps
+	// TransitionToCancelled's set, as before.
+	outcome, err := taskcancel.Cancel(ctx, s.taskRepo, s.cancelTeardown(), args.TaskID, nil)
 	if err != nil {
 		return "", fmt.Errorf("cancel: %w", err)
 	}
 	out := map[string]any{
 		"task_id":      args.TaskID,
-		"cancelled":    transitioned,
+		"cancelled":    outcome.Transitioned,
 		"reason_given": args.Reason,
+		"torn_down":    outcome.TornDown,
 	}
-	if !transitioned {
+	if outcome.TeardownErr != nil {
+		// The runtime's error carries host detail (socket paths); it is
+		// logged here and the client gets a fixed phrase.
+		s.logger.Error().Err(outcome.TeardownErr).Str("task_id", args.TaskID).
+			Msg("companion cancel: container did not stop — it may still be running")
+		out["teardown_error"] = companionTeardownFailedPhrase
+	}
+	if !outcome.Transitioned {
 		// Terminal state (or already cancelled). Idempotent per LLD;
 		// surface as a non-error so the host LLM doesn't retry.
 		out["note"] = "task was already terminal; cancel is a no-op"
@@ -1627,6 +1783,10 @@ func (s *Server) companionToolCancel(ctx context.Context, key *persistence.APIKe
 type listArgs struct {
 	Limit  int    `json:"limit"`
 	Status string `json:"status"`
+	// Project names the project to list (GitHub #305): an agent-admin key
+	// may name any project of its namespace (agentadmin.ProjectRefRule), any
+	// other key only its own. Empty is the key's own project.
+	Project string `json:"project"`
 }
 
 func (s *Server) companionToolList(ctx context.Context, key *persistence.APIKey, raw json.RawMessage) (string, error) {
@@ -1634,16 +1794,18 @@ func (s *Server) companionToolList(ctx context.Context, key *persistence.APIKey,
 		return "", errors.New("task repo not wired")
 	}
 	var args listArgs
-	if len(raw) > 0 {
-		if err := json.Unmarshal(raw, &args); err != nil {
-			return "", fmt.Errorf("invalid arguments: %w", err)
-		}
+	if err := decodeToolArgs("list", raw, &args); err != nil {
+		return "", err
 	}
 	if args.Limit <= 0 || args.Limit > 100 {
 		args.Limit = 20
 	}
 
-	projectID := key.ProjectID
+	// Resolved and refused before any task row is read (GitHub #305).
+	projectID, err := s.companionListProject(key, args.Project)
+	if err != nil {
+		return "", err
+	}
 	filter := persistence.TaskFilter{
 		ProjectID: &projectID,
 		PageSize:  args.Limit,
@@ -1678,11 +1840,38 @@ func (s *Server) companionToolList(ctx context.Context, key *persistence.APIKey,
 		})
 	}
 	b, _ := json.MarshalIndent(map[string]any{
-		"project": key.ProjectID,
+		"project": projectID,
 		"tasks":   rows,
 		"total":   len(rows),
 	}, "", "  ")
 	return string(b), nil
+}
+
+// companionListProject resolves list's project argument (GitHub #305; LLD 21
+// §A). Empty is the key's own project. An agent-admin key may name any
+// project of its namespace, by slug or full id (agentadmin.ProjectRefRule);
+// the namespace always comes from the key. Any other key may name only its
+// own project: refused rather than ignored, because an ignored argument is
+// the defect this replaces.
+func (s *Server) companionListProject(key *persistence.APIKey, raw string) (string, error) {
+	p := strings.TrimSpace(raw)
+	if p == "" {
+		return key.ProjectID, nil
+	}
+	if !key.AgentAdmin {
+		if p == key.ProjectID {
+			return p, nil
+		}
+		return "", fmt.Errorf("this key lists only its own project %q", key.ProjectID)
+	}
+	if ns, ok := agentns.FromID(p); ok && ns != key.AgentNamespace {
+		return "", fmt.Errorf("project %q is not in your namespace", p)
+	}
+	id := agentns.ID(key.AgentNamespace, agentadmin.ProjectSlug(key.AgentNamespace, p))
+	if !keyCoversProject(key, id) || s.projectRegistry == nil || s.projectRegistry.GetProject(id) == nil {
+		return "", fmt.Errorf("there is no project %q in your namespace", p)
+	}
+	return id, nil
 }
 
 // ---- tool: catalog ------------------------------------------------
@@ -1899,10 +2088,8 @@ func (s *Server) companionToolReportProblem(ctx context.Context, raw json.RawMes
 		return "", fmt.Errorf("problem reporting is not configured on this daemon")
 	}
 	var args reportProblemArgs
-	if len(raw) > 0 {
-		if err := json.Unmarshal(raw, &args); err != nil {
-			return "", fmt.Errorf("invalid arguments: %w", err)
-		}
+	if err := decodeToolArgs("report_problem", raw, &args); err != nil {
+		return "", err
 	}
 	symptom := strings.TrimSpace(args.Symptom)
 	if symptom == "" {
@@ -1982,10 +2169,8 @@ type whoamiArgs struct {
 // other companion tool handler, so the dispatch switch stays uniform.
 func (s *Server) companionToolWhoami(ctx context.Context, key *persistence.APIKey, raw json.RawMessage) (string, error) {
 	var args whoamiArgs
-	if len(raw) > 0 {
-		if err := json.Unmarshal(raw, &args); err != nil {
-			return "", fmt.Errorf("invalid arguments: %w", err)
-		}
+	if err := decodeToolArgs("whoami", raw, &args); err != nil {
+		return "", err
 	}
 	if s.isBrokerProjectKey(key) {
 		return brokerWhoami(key), nil
@@ -2106,3 +2291,8 @@ func writeJSONRPCError(w http.ResponseWriter, id json.RawMessage, code int, msg 
 		Error:   &jsonRPCError{Code: code, Message: msg},
 	})
 }
+
+// companionTeardownFailedPhrase is what the cancel tool says when a live
+// execution could not be stopped. Fixed text: the runtime error (socket paths,
+// host detail) is logged, never returned (LLD 21 §A, GitHub #300).
+const companionTeardownFailedPhrase = "the execution could not be stopped; it may still be running"

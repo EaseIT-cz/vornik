@@ -54,21 +54,32 @@ func summaryOf(c *Change) string {
 			return fmt.Sprintf("You are asked to sign in to %s for Vornik. Your assistant never sees your login.", c.Slot.Server)
 		}
 		s := fmt.Sprintf("You are asked to give Vornik the %s key", c.Slot.Name)
+		if phrase := c.accounts[slotAccountKey]; phrase != "" {
+			s = fmt.Sprintf("You are asked to give Vornik the key for %s, %s", phrase, c.Slot.Name)
+		}
 		if len(c.Slot.UsedBy) > 0 {
 			s += ", used by " + strings.Join(c.Slot.UsedBy, " and ")
 		}
-		return s + ". Your assistant never sees it."
+		s += ". Your assistant never sees it."
+		if r := c.accounts[slotRotationKey]; r != "" {
+			s += " " + r
+		}
+		return s
 	case VerbAddMCPServer, VerbAddAPI:
 		g := firstIntegration(c)
-		s := fmt.Sprintf("Your assistant wants to read from %s (%s). It can look at information there but cannot change anything.", g.Name, hostOf(g.URL))
+		s := fmt.Sprintf("Your assistant wants to read from %s (%s)%s. It can look at information there but cannot change anything.", g.Name, hostOf(g.URL), asAccount(c.accounts[g.Name]))
 		if len(g.Write) > 0 {
 			s += " It may also suggest changes there; nothing changes unless you approve each one."
+		}
+		if g.Transport == TransportSSE {
+			// Design §6.1: the person sees a non-default transport.
+			s += " Vornik talks to it over the older SSE protocol."
 		}
 		return s
 	case VerbApproveServerTools:
 		g := firstIntegration(c)
-		return fmt.Sprintf("Vornik listed what %s (%s) offers. Approving lets your assistant's skills read through: %s.",
-			g.Name, hostOf(g.URL), strings.Join(g.Read, ", "))
+		return fmt.Sprintf("Vornik listed what %s (%s)%s offers. Approving lets your assistant's skills read through: %s.",
+			g.Name, hostOf(g.URL), asAccount(c.accounts[g.Name]), strings.Join(g.Read, ", "))
 	case VerbDefineWorkflow:
 		return workflowSummary(c)
 	case VerbDefineSwarm:
@@ -125,7 +136,11 @@ func workflowSummary(c *Change) string {
 	if c.reach == nil || len(c.reach.Integrations) == 0 {
 		s += " It can only work with what you or your assistant give it; it cannot reach the internet or your accounts."
 	} else {
-		s += " It can read from " + strings.Join(c.reach.Integrations, ", ") + "."
+		var from []string
+		for _, n := range c.reach.Integrations {
+			from = append(from, n+asAccount(c.accounts[n]))
+		}
+		s += " It can read from " + strings.Join(from, ", ") + "."
 	}
 	// Broker design §18.4: the line saying what the agent can hand the team.
 	if c.reach != nil && len(c.reach.Documents) > 0 {
@@ -153,7 +168,7 @@ func recipeSummary(c *Change) string {
 	s := fmt.Sprintf("Your assistant wants to install '%s', a ready-made skill Vornik ships and tests.", c.recipe.Title)
 	var reads []string
 	for _, g := range c.Grant.Integrations {
-		reads = append(reads, fmt.Sprintf("%s (%s)", g.Name, hostOf(g.URL)))
+		reads = append(reads, fmt.Sprintf("%s (%s)%s", g.Name, hostOf(g.URL), asAccount(c.accounts[g.Name])))
 	}
 	if len(reads) == 0 && c.reach != nil {
 		reads = c.reach.Integrations

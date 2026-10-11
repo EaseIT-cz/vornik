@@ -121,15 +121,25 @@ func (r *Repo) ListForProject(ctx context.Context, projectID string) ([]*persist
 
 // Upsert seals an agent project's tokens.
 func (r *Repo) Upsert(ctx context.Context, tok *persistence.MCPOAuthToken) error {
-	ns, agent := namespaceOf(tok.ProjectID)
-	if !agent {
-		return r.MCPOAuthTokenRepository.Upsert(ctx, tok)
-	}
-	sealed, err := r.seal(ns, tok)
+	row, err := r.PrepareSealedToken(tok)
 	if err != nil {
 		return err
 	}
-	return r.MCPOAuthTokenRepository.Upsert(ctx, sealed)
+	return r.MCPOAuthTokenRepository.Upsert(ctx, row)
+}
+
+// PrepareSealedToken seals agent rows; non-agent rows retain operator representation.
+// No row or cache is published by this method.
+func (r *Repo) PrepareSealedToken(tok *persistence.MCPOAuthToken) (*persistence.MCPOAuthToken, error) {
+	if tok == nil {
+		return nil, errors.New("agenttokens: nil candidate")
+	}
+	ns, agent := namespaceOf(tok.ProjectID)
+	if !agent {
+		out := *tok
+		return &out, nil
+	}
+	return r.seal(ns, tok)
 }
 
 // SwapRefreshToken is the rotation guard for a sealed row (package doc).

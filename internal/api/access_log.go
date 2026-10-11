@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net"
 	"net/http"
+	"path"
 	"strings"
 	"time"
 
@@ -47,6 +48,10 @@ func AccessLogMiddleware(logger zerolog.Logger) func(http.Handler) http.Handler 
 			rw := &accessRecorder{ResponseWriter: w, status: http.StatusOK}
 			next.ServeHTTP(rw, r)
 			dur := time.Since(start)
+			query := r.URL.RawQuery
+			if path.Clean(r.URL.Path) == artifactDownloadPath {
+				query = "" // A signed URL is a bearer capability, never log its query.
+			}
 
 			ev := logger.Debug()
 			switch {
@@ -59,7 +64,7 @@ func AccessLogMiddleware(logger zerolog.Logger) func(http.Handler) http.Handler 
 			ev.
 				Str("method", r.Method).
 				Str("path", r.URL.Path).
-				Str("query", r.URL.RawQuery).
+				Str("query", query).
 				Str("remote", remoteAddr(r)).
 				Str("ua", truncateUA(r.UserAgent())).
 				Int("status", rw.status).

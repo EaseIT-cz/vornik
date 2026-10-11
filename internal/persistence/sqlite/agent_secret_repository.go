@@ -12,11 +12,11 @@ import (
 // SQLite. It mirrors the Postgres implementation; repotest.RunAgentSecretSuite
 // keeps the two honest.
 type AgentSecretRepository struct {
-	db *sql.DB
+	db persistence.DBTX
 }
 
 // NewAgentSecretRepository wires the repository.
-func NewAgentSecretRepository(db *sql.DB) *AgentSecretRepository {
+func NewAgentSecretRepository(db persistence.DBTX) *AgentSecretRepository {
 	return &AgentSecretRepository{db: db}
 }
 

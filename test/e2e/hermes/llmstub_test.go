@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 )
 
 func complete(t *testing.T, url string, msgs []map[string]any, tools []string) map[string]any {
@@ -148,5 +149,36 @@ func TestLLMStub_DynamicArgsAndFinal(t *testing.T) {
 	m = complete(t, srv.URL, []map[string]any{{"role": "user", "content": "go"}, {"role": "tool", "content": "a"}, {"role": "tool", "content": "done-7"}}, tools)
 	if m["content"] != "got done-7" {
 		t.Fatalf("final = %v", m["content"])
+	}
+}
+
+// GitHub #119 item 9 (C6): a script can hold its first answer until the lane
+// releases it, so a broker task is observably mid-step (progress) without a
+// sleep or a race.
+func TestLLMStub_HoldBlocksTheFirstAnswerUntilReleased(t *testing.T) {
+	hold := make(chan struct{})
+	stub := &LLMStub{Final: "free", Scripts: []Script{{Marker: "[HELD]", Final: "released", Hold: hold}}}
+	srv := httptest.NewServer(stub)
+	defer srv.Close()
+
+	got := make(chan map[string]any, 1)
+	go func() { got <- complete(t, srv.URL, []map[string]any{{"role": "user", "content": "[HELD] go"}}, nil) }()
+	select {
+	case m := <-got:
+		t.Fatalf("a held script answered before release: %v", m)
+	case <-time.After(150 * time.Millisecond):
+	}
+	// Another conversation is not held.
+	if m := complete(t, srv.URL, []map[string]any{{"role": "user", "content": "other"}}, nil); m["content"] != "free" {
+		t.Fatalf("unheld conversation: %v", m)
+	}
+	close(hold)
+	select {
+	case m := <-got:
+		if m["content"] != "released" {
+			t.Fatalf("after release: %v", m)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("the held answer never came after release")
 	}
 }

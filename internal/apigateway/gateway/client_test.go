@@ -250,10 +250,11 @@ func TestCall_ScrubsTokenInResponseBody(t *testing.T) {
 }
 
 func TestCall_CrossHostRedirectNotFollowed(t *testing.T) {
-	// The redirect gate keys on Hostname() (port-agnostic), so the refusal only
-	// triggers for a genuinely different host. If the client followed it, it
+	// The redirect gate follows only the base's origin (scheme, host and
+	// port; design §5.2, 2026-10-08). If the client followed this one, it
 	// would dial evil.example.com; instead the returned response is the 3xx
-	// itself (CheckRedirect → http.ErrUseLastResponse).
+	// itself (CheckRedirect → http.ErrUseLastResponse). Other-port and
+	// other-scheme cases are in redirect_origin_test.go.
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Location", "http://evil.example.com/exfil")
 		w.WriteHeader(http.StatusFound)

@@ -21,6 +21,9 @@ type Metrics struct {
 	revoked   prometheus.Counter
 	suspended prometheus.Counter
 	miss      *prometheus.CounterVec
+	// listTruncated counts Standing approvals pages whose live group hit
+	// the hard cap (review b240 finding 2).
+	listTruncated prometheus.Counter
 }
 
 // Miss reasons (round 4 F5): an action matched a grant but fell back to a
@@ -39,6 +42,10 @@ const (
 	// reach changed) but the store refused the suspension; it covered
 	// nothing (review f819).
 	MissSuspendFailed = "suspend_failed"
+	// MissAccountUnconfirmed: the account the write acts from could not be
+	// confirmed as the approved one (agent-administered design §22.2.6;
+	// GitHub #119 item 8); it covered nothing.
+	MissAccountUnconfirmed = "account_unconfirmed"
 )
 
 // NewMetrics builds the series, unregistered.
@@ -61,6 +68,9 @@ func NewMetrics() *Metrics {
 				"approval, by reason: revoked, paused, suspended, expired, used, key (the guarded decrement refused the key or class), " +
 				"unkeyed (the write's key could not be computed) or suspend_failed (a reach change could not be recorded). " +
 				"An action matching no grant is not counted."}, []string{"reason"}),
+		listTruncated: f.NewCounter(prometheus.CounterOpts{Namespace: "vornik", Subsystem: "broker", Name: "standing_grants_list_truncated_total",
+			Help: "Standing approvals pages that held more live grants than the list cap (persistence.BrokerGrantLiveListCap), so the page " +
+				"showed only the newest. Non-zero means a person cannot see every live grant on the page."}),
 	}
 }
 
@@ -75,7 +85,7 @@ func (m *Metrics) Attach(reg prometheus.Registerer) {
 		return
 	}
 	m.attached = true
-	for _, c := range []prometheus.Collector{m.live, m.paused, m.covered, m.revoked, m.suspended, m.miss} {
+	for _, c := range []prometheus.Collector{m.live, m.paused, m.covered, m.revoked, m.suspended, m.miss, m.listTruncated} {
 		_ = reg.Register(c)
 	}
 }
@@ -116,3 +126,12 @@ func (m *Metrics) recordMiss(reason string) {
 		m.miss.WithLabelValues(reason).Inc()
 	}
 }
+
+func (m *Metrics) recordListTruncated() {
+	if m != nil {
+		m.listTruncated.Inc()
+	}
+}
+
+// ListTruncatedCounter exposes the truncation counter to tests.
+func (m *Metrics) ListTruncatedCounter() prometheus.Counter { return m.listTruncated }

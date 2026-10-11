@@ -12,6 +12,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"gopkg.in/yaml.v3"
 )
 
 // Both companion bundles carry the SAME guidance change, so both bump.
@@ -32,6 +33,11 @@ type bundleBaseline struct {
 	// bumping the manifest fails TestCompanionBundles_SkillEditRequiresBump.
 	skill       string
 	skillSHA256 string
+	// yamlManifest: the manifest is YAML (the Hermes plugin.yaml), not JSON.
+	yamlManifest bool
+	// noNetworkRule: the bundle's pinned skill is not a prompt-delegate
+	// skill, so the unreachable-work rule (§4.2) does not apply to it.
+	noNetworkRule bool
 }
 
 var companionBundles = map[string]bundleBaseline{
@@ -39,13 +45,24 @@ var companionBundles = map[string]bundleBaseline{
 		manifest:        "../../contrib/claude-code-companion/.claude-plugin/plugin.json",
 		baselineVersion: "0.21.0",
 		skill:           "../../contrib/claude-code-companion/skills/delegate/SKILL.md",
-		skillSHA256:     "6925d3c888a6cac68fde59cd4f047287e43019cab7254f0b9cfefda34f9343db",
+		skillSHA256:     "d220955d288701c225d059fcb69dff1fe097f9ba71b101ab49f0286b812a8966",
 	},
 	"codex": {
 		manifest:        "../../contrib/codex-companion/.codex-plugin/plugin.json",
 		baselineVersion: "0.18.0+codex.20260904",
 		skill:           "../../contrib/codex-companion/skills/delegate/SKILL.md",
-		skillSHA256:     "0954c66eef61427dc1dd36e221341cb000a75969bb7e56e560393c9f4efbe7a7",
+		skillSHA256:     "32ea94e941ee3fac9dd5d52703ce829a0fd63983c0ed2ee0932a9462bd43e497",
+	},
+	// HARNESS PARITY (operator, 2026-10-08; LLD 21 §D2, D6): the Hermes bundle
+	// is version-checked like the other two. Its pinned skill is the broker
+	// skill, which delegates typed inputs, not prompts.
+	"hermes": {
+		manifest:        "../../contrib/hermes-companion/plugin.yaml",
+		baselineVersion: "0.13.0",
+		skill:           "../../contrib/hermes-companion/skills/vornik-broker/SKILL.md",
+		skillSHA256:     "aecf4972e334327aef5bd059aaefb5ba693578e75ec47dfd35cd2a2a36c99612",
+		yamlManifest:    true,
+		noNetworkRule:   true,
 	},
 }
 
@@ -54,9 +71,13 @@ func readManifestVersion(t *testing.T, path string) string {
 	raw, err := os.ReadFile(path)
 	require.NoErrorf(t, err, "read %s", path)
 	var m struct {
-		Version string `json:"version"`
+		Version string `json:"version" yaml:"version"`
 	}
-	require.NoError(t, json.Unmarshal(raw, &m))
+	if strings.HasSuffix(path, ".yaml") {
+		require.NoError(t, yaml.Unmarshal(raw, &m))
+	} else {
+		require.NoError(t, json.Unmarshal(raw, &m))
+	}
 	require.NotEmpty(t, m.Version)
 	return m.Version
 }
@@ -139,6 +160,9 @@ func TestCompanionBundles_SkillEditRequiresBump(t *testing.T) {
 // the refusal. Asserted positively on the substance, not on a heading.
 func TestCompanionBundles_DelegateSkillCarriesNetworkRule(t *testing.T) {
 	for name, b := range companionBundles {
+		if b.noNetworkRule {
+			continue
+		}
 		t.Run(name, func(t *testing.T) {
 			raw, err := os.ReadFile(b.skill)
 			require.NoError(t, err)

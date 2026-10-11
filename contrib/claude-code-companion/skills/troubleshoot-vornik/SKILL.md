@@ -76,6 +76,17 @@ vornikctl playbook show <CLASS>  # remediation for that error class
 vornikctl execution prompt <executionId> <stepId>   # what the step's model was TOLD
 ```
 
+**No host access? The same diagnosis through Vornik's tools.** When you hold
+only a companion or agent admin key, use these before asking anyone for host
+commands: `status` (the attempt number and, after a failed attempt, the step
+that failed and its error class), `task_logs` (the task's live events; pass
+back `next_cursor` to follow, `complete` is true when it has finished) and
+`task_explain` (the post-mortem and the playbook class). With an agent admin
+key, `daemon_log` shows your projects' daemon log lines (an MCP connect
+failure carries a code such as `auth_rejected`) and `doctor` shows which of
+your projects' MCP servers are not connected and why. Broker workflows show
+step progress and closed error classes only, by design.
+
 **Read the prompt before blaming the tool.** Since 2026-09-04 the daemon keeps
 each step's first model request — system prompt, user content, tools array —
 redacted, content-addressed, keyed from the step's outcome row. A step that

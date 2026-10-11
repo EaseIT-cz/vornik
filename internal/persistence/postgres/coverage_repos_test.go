@@ -47,11 +47,12 @@ func TestExecutionRepository_GetByTaskID(t *testing.T) {
 		WithArgs("task-1").
 		WillReturnRows(sqlmock.NewRows([]string{
 			"id", "task_id", "project_id", "workflow_id", "workflow_revision",
+			"workflow_snapshot",
 			"status", "current_step_id", "completed_steps", "state_snapshot",
 			"result", "error_message", "error_code", "started_at", "completed_at",
 			"created_at", "updated_at",
 			"parent_execution_id", "forked_from_step_id", "forked_prompt_override",
-		}).AddRow("e1", "task-1", "p", "wf", "v1",
+		}).AddRow("e1", "task-1", "p", "wf", "v1", []byte(`{"steps":[{"id":"snapshot"}]}`),
 			"RUNNING", nil, "{}", nil,
 			nil, nil, nil, nil, nil,
 			created, created,
@@ -63,6 +64,9 @@ func TestExecutionRepository_GetByTaskID(t *testing.T) {
 	}
 	if exec.ID != "e1" {
 		t.Errorf("ID = %q", exec.ID)
+	}
+	if string(exec.WorkflowSnapshot) != `{"steps":[{"id":"snapshot"}]}` {
+		t.Errorf("WorkflowSnapshot = %s", exec.WorkflowSnapshot)
 	}
 
 	mock.ExpectQuery(regexp.QuoteMeta("SELECT id, task_id, project_id, workflow_id")).

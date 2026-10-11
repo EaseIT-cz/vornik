@@ -13,11 +13,11 @@ import (
 // AgentGrantRepository implements persistence.AgentGrantRepository over
 // SQLite; repotest.RunAgentGrantSuite keeps it equal to the Postgres one.
 type AgentGrantRepository struct {
-	db *sql.DB
+	db persistence.DBTX
 }
 
 // NewAgentGrantRepository wires the repository.
-func NewAgentGrantRepository(db *sql.DB) *AgentGrantRepository {
+func NewAgentGrantRepository(db persistence.DBTX) *AgentGrantRepository {
 	return &AgentGrantRepository{db: db}
 }
 
@@ -39,21 +39,47 @@ func grantToolsFrom(s string) []string {
 
 // UpsertIntegration implements persistence.AgentGrantRepository.
 func (r *AgentGrantRepository) UpsertIntegration(ctx context.Context, a persistence.AgentIntegrationApproval) error {
+	// The account columns are written only when the row is new or was
+	// removed (an add or a re-add): a re-grant of a live row never changes
+	// its account (design §22.2.2). The CASE reads the row's removed_at
+	// before this statement clears it.
 	_, err := r.db.ExecContext(ctx, `
 		INSERT INTO agent_integration_approvals
-			(namespace, project_id, integration, kind, url, read_tools, write_tools, read_pending, approved_by_device, approved_at, removed_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)
+			(namespace, project_id, integration, kind, url, read_tools, write_tools, read_pending, approved_by_device, approved_at, removed_at,
+			 account_label, account_identity, identity_source)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?)
 		ON CONFLICT (project_id, integration) DO UPDATE SET
 			namespace = excluded.namespace, kind = excluded.kind, url = excluded.url,
 			read_tools = excluded.read_tools, write_tools = excluded.write_tools,
 			read_pending = excluded.read_pending, approved_by_device = excluded.approved_by_device,
-			approved_at = excluded.approved_at, removed_at = NULL`,
+			approved_at = excluded.approved_at, removed_at = NULL,
+			account_label = CASE WHEN agent_integration_approvals.removed_at IS NOT NULL THEN excluded.account_label ELSE agent_integration_approvals.account_label END,
+			account_identity = CASE WHEN agent_integration_approvals.removed_at IS NOT NULL THEN excluded.account_identity ELSE agent_integration_approvals.account_identity END,
+			identity_source = CASE WHEN agent_integration_approvals.removed_at IS NOT NULL THEN excluded.identity_source ELSE agent_integration_approvals.identity_source END`,
 		a.Namespace, a.ProjectID, a.Integration, a.Kind, a.URL, grantToolsJSON(a.ReadTools), grantToolsJSON(a.WriteTools),
-		boolToInt(a.ReadPending), a.ApprovedByDevice, sqliteTime(a.ApprovedAt))
+		boolToInt(a.ReadPending), a.ApprovedByDevice, sqliteTime(a.ApprovedAt),
+		a.StoredAccountLabel(), a.AccountIdentity, a.IdentitySource)
 	return err
 }
 
-const agentIntegrationCols = `namespace, project_id, integration, kind, url, read_tools, write_tools, read_pending, approved_by_device, approved_at, removed_at`
+// SetIntegrationIdentity implements persistence.AgentGrantRepository.
+func (r *AgentGrantRepository) SetIntegrationIdentity(ctx context.Context, projectID, integration, identity string) error {
+	res, err := r.db.ExecContext(ctx, `UPDATE agent_integration_approvals
+		SET account_identity = ?, identity_source = CASE WHEN ? = '' THEN '' ELSE 'provider' END
+		WHERE project_id = ? AND integration = ? AND removed_at IS NULL`,
+		identity, identity, projectID, integration)
+	if err != nil {
+		return err
+	}
+	if n, err := res.RowsAffected(); err != nil {
+		return err
+	} else if n == 0 {
+		return persistence.ErrNotFound
+	}
+	return nil
+}
+
+const agentIntegrationCols = `namespace, project_id, integration, kind, url, read_tools, write_tools, read_pending, approved_by_device, approved_at, removed_at, account_label, account_identity, identity_source`
 
 func scanAgentIntegration(s interface{ Scan(...interface{}) error }) (persistence.AgentIntegrationApproval, error) {
 	var (
@@ -63,7 +89,8 @@ func scanAgentIntegration(s interface{ Scan(...interface{}) error }) (persistenc
 		approved    sqlTime
 		removed     sqlNullTime
 	)
-	if err := s.Scan(&a.Namespace, &a.ProjectID, &a.Integration, &a.Kind, &a.URL, &read, &write, &pending, &a.ApprovedByDevice, &approved, &removed); err != nil {
+	if err := s.Scan(&a.Namespace, &a.ProjectID, &a.Integration, &a.Kind, &a.URL, &read, &write, &pending, &a.ApprovedByDevice, &approved, &removed,
+		&a.AccountLabel, &a.AccountIdentity, &a.IdentitySource); err != nil {
 		return a, err
 	}
 	a.ReadTools, a.WriteTools, a.ReadPending, a.ApprovedAt = grantToolsFrom(read), grantToolsFrom(write), pending != 0, approved.Time

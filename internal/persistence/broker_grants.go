@@ -54,10 +54,22 @@ var (
 	// ErrBrokerGrantNoTransition: a pause, unpause, revoke, suspend or
 	// confirm found the grant not in a state it applies to.
 	ErrBrokerGrantNoTransition = errors.New("persistence: standing grant not in a valid state for this change")
+	// ErrBrokerGrantFilterNoNow: List was called without a Now. Classifying
+	// by the zero time would call every unrevoked grant with uses left live
+	// and return them all uncapped (GitHub #93).
+	ErrBrokerGrantFilterNoNow = errors.New("persistence: broker grant filter has no Now")
+	// ErrBrokerGrantLiveTruncated: the scope holds more live grants than
+	// the filter's LiveCap; the rows returned are the first LiveCap live ones
+	// (newest first) and the dead tail. Callers show what they got and say
+	// the list is incomplete.
+	ErrBrokerGrantLiveTruncated = errors.New("persistence: too many live standing grants to list; the list is truncated")
 )
 
 // BrokerStandingGrant is one grant row (tier 2 revised, item 10).
 type BrokerStandingGrant struct {
+	// DecisionGuard is transient: captured before account/reach reads, never stored.
+	DecisionGuard AccountDecisionGuard
+
 	ID         string
 	ProjectID  string
 	Namespace  string // the agent namespace, "" for an operator project
@@ -83,6 +95,14 @@ type BrokerStandingGrant struct {
 	Paused              bool
 	SuspendedAt         *time.Time
 	RevokedAt           *time.Time
+	// AccountLabel and AccountIdentity are the account the grant was made
+	// under (agent-administered design §22.2.16, migration 220): the
+	// connection's label (never empty for an agent-namespace grant made
+	// after 220; "" means made before it, unknown) and its identity only
+	// when the provider reported it ("" means not verified). Operator
+	// grants record none.
+	AccountLabel    string
+	AccountIdentity string
 	// DigestThrough: covered actions decided up to here were counted in a
 	// digest already.
 	DigestThrough time.Time
@@ -112,8 +132,24 @@ const BrokerGrantAllAgentNamespaces = "*"
 type BrokerGrantFilter struct {
 	Namespace  string
 	ProjectIDs []string
-	Limit      int
+	// Limit caps the non-live tail (default 200); live grants are never
+	// capped (GitHub #93).
+	Limit int
+	// Now classifies live and non-live. The service layer sets it; a
+	// driver never reads the clock and refuses a zero Now
+	// (ErrBrokerGrantFilterNoNow).
+	Now time.Time
+	// LiveCap bounds the live group; 0 means BrokerGrantLiveListCap. Over it
+	// List returns the first LiveCap live rows, the dead tail, and
+	// ErrBrokerGrantLiveTruncated (review b240 finding 2).
+	LiveCap int
 }
+
+// BrokerGrantLiveListCap is the hard bound on one page's live grants. The
+// live set is already bounded per project at creation
+// (broker.standing_grants.max_live_per_project); this is the safety net for
+// a scope spanning many projects.
+const BrokerGrantLiveListCap = 10000
 
 // BrokerGrantRepository persists standing grants.
 type BrokerGrantRepository interface {
@@ -144,7 +180,15 @@ type BrokerGrantRepository interface {
 	// matcher derives those misses. GitHub #78: a plain ORDER BY expires_at
 	// LIMIT 200 hid a new live grant behind 200 dead ones.
 	ListForAction(ctx context.Context, projectID, workflowID, action string, now time.Time) ([]*BrokerStandingGrant, error)
-	// List lists grants for a page, newest first.
+	// List lists grants for a page: every live grant of the scope (active
+	// AND uses_left > 0 AND expires_at > f.Now; paused and suspended count
+	// as live), uncapped, newest first; then the non-live grants, newest
+	// first, at most f.Limit (default 200). The two sets are appended in
+	// that order and never re-sorted. A zero f.Now is
+	// ErrBrokerGrantFilterNoNow. More live grants than f.LiveCap (default
+	// BrokerGrantLiveListCap): the first LiveCap live rows and the dead tail
+	// come back WITH ErrBrokerGrantLiveTruncated. GitHub #93: one ORDER BY created_at LIMIT
+	// 200 hid an old live grant behind 200 newer dead ones.
 	List(ctx context.Context, f BrokerGrantFilter) ([]*BrokerStandingGrant, error)
 
 	// SetPaused pauses (or unpauses) an active grant.
@@ -156,6 +200,11 @@ type BrokerGrantRepository interface {
 	Suspend(ctx context.Context, id string, now time.Time) (bool, error)
 	// Confirm clears a suspension and re-pins the grant's reach hash.
 	Confirm(ctx context.Context, id, reachHash string) error
+	// ConfirmAccount clears a suspension, re-pins the reach hash and records
+	// the account the person reaffirmed, only while the grant is active,
+	// suspended and still holds the old account the page showed
+	// (design §22.2.16 item 4); ErrBrokerGrantNoTransition otherwise.
+	ConfirmAccount(ctx context.Context, id, reachHash, oldLabel, oldIdentity, newLabel, newIdentity string) error
 
 	// CountLive feeds the live and paused gauges, by project.
 	CountLive(ctx context.Context, now time.Time) ([]BrokerGrantCount, error)

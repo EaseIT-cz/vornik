@@ -15,6 +15,7 @@ import (
 	"errors"
 	"time"
 	"unicode/utf8"
+	"vornik.io/vornik/internal/requestguard"
 
 	"github.com/rs/zerolog"
 	"vornik.io/vornik/internal/approval"
@@ -182,7 +183,7 @@ func (w *Worker) Execute(ctx context.Context, actionID string) {
 			outcomeDoc("refused", reason))
 		return
 	}
-	callCtx, cancel := context.WithTimeout(ctx, w.cfg.Timeout)
+	callCtx, cancel := context.WithTimeout(withActionContext(ctx, a), w.cfg.Timeout)
 	defer cancel()
 	text, isErr, err := w.cfg.Caller.CallToolOnce(callCtx, a.ProjectID, a.Tool, string(a.ArgsJSON))
 	status, class := classify(callCtx, isErr, err)
@@ -228,6 +229,13 @@ func classify(callCtx context.Context, isToolError bool, err error) (string, str
 		return persistence.BrokerActionExecuted, persistence.BrokerOutcomeOK
 	case err == nil:
 		return persistence.BrokerActionFailed, persistence.BrokerOutcomeToolError
+	case requestguard.IsRefusal(err):
+		var refusal *requestguard.Refusal
+		errors.As(err, &refusal)
+		if refusal.AfterRejected {
+			return persistence.BrokerActionFailed, persistence.BrokerOutcomeToolError
+		}
+		return persistence.BrokerActionFailed, persistence.BrokerOutcomePreSendError
 	case errors.Is(err, mcp.ErrNotSent):
 		return persistence.BrokerActionFailed, persistence.BrokerOutcomePreSendError
 	case errors.Is(callCtx.Err(), context.DeadlineExceeded):

@@ -189,12 +189,45 @@ func TestAgentAdmin_ProposedWritesApprovedOnThePhone(t *testing.T) {
 // send time is refused at the worker's call seam, before anything is sent,
 // even if staging was bypassed.
 func TestActionCaller_ScansAtSend(t *testing.T) {
-	f := newAgentAdminFixture(t)
+	f := newAgentAdminFixtureWith(t, func(cfg *config.Config) { cfg.Broker.Writes = "on" })
+	ctx := context.Background()
 	ws := newWriteServer(t)
-	ac := actionCaller{c: f.c, mcp: f.c.mcpManager}
-	_, _, err := ac.CallToolOnce(context.Background(), "hermes--comms", "api:pay:POST:/payments", `{"note":"AKIAQWERTYUIOPASDFGH"}`)
-	if err == nil || !strings.Contains(err.Error(), "$.note") || strings.Contains(err.Error(), "AKIAQWERTYUIOPASDFGH") {
-		t.Fatalf("a key at send time: %v", err)
+	f.do(agentadmin.VerbCreateProject, agentadmin.CreateProjectInput{Slug: "comms", Purpose: "Payments"})
+	f.approve(f.do(agentadmin.VerbAddAPI, agentadmin.AddAPIInput{Project: "comms", Name: "pay", BaseURL: ws.srv.URL + "/api", Methods: []string{"POST"}, Writes: true}))
+	// Bypass the executor's staging scan while retaining a legitimate durable
+	// proposal/vector. Only the actual worker can supply the private action context.
+	args := []byte(`{"note":"AKIAQWERTYUIOPASDFGH"}`)
+	sum, err := approval.CanonicalSHA256(args)
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC()
+	a := &persistence.BrokerAction{ActionID: "send-scan", ProjectID: "hermes--comms", TaskID: "task-send-scan", WorkflowID: "payments", ActionKind: "pay", Tool: "api:pay:POST:/payments", ArgsJSON: args, ArgsSHA256: sum, Status: persistence.BrokerActionStaged, CreatedAt: now, ExpiresAt: now.Add(time.Hour)}
+	if _, err = f.c.repos.BrokerActions.Stage(ctx, a); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = f.c.repos.BrokerActions.PromoteStaged(ctx, a.TaskID); err != nil {
+		t.Fatal(err)
+	}
+	stored, err := f.c.repos.BrokerActions.Get(ctx, a.ActionID)
+	if err != nil || len(stored.AccountGuard) != 2 {
+		t.Fatalf("fresh persisted action: %+v %v", stored, err)
+	}
+	if err = f.c.repos.BrokerActions.Approve(ctx, stored.ActionID, stored.ArgsSHA256, "device", now); err != nil {
+		t.Fatal(err)
+	}
+	worker := f.c.newBrokerActionWorker()
+	if worker == nil {
+		t.Fatal("no action worker")
+	}
+	worker.Execute(ctx, stored.ActionID)
+	finished, err := f.c.repos.BrokerActions.Get(ctx, stored.ActionID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	outcome := string(finished.OutcomeJSON)
+	if finished.Status != persistence.BrokerActionFailed || finished.OutcomeClass != persistence.BrokerOutcomePreSendError || !strings.Contains(outcome, "$.note") || strings.Contains(outcome, "AKIAQWERTYUIOPASDFGH") {
+		t.Fatalf("a key at send time: %s/%s %s", finished.Status, finished.OutcomeClass, outcome)
 	}
 	if len(ws.seen()) != 0 {
 		t.Fatal("something was sent")

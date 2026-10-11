@@ -21,6 +21,9 @@ type AddAPIInput struct {
 	// Writes must be true exactly when Methods names a write; writes are
 	// proposable only (plan P4.8).
 	Writes bool `json:"writes,omitempty"`
+	// Account is which of the user's accounts the API acts as (design
+	// §22.2.1); nil is the default account.
+	Account *AccountInput `json:"account,omitempty"`
 }
 
 // APIAuthInput names where a credential is injected.
@@ -36,6 +39,9 @@ type APIState struct {
 	Name, BaseURL, Header, QueryParam, AuthRef, Prefix string
 	Methods                                            []string
 	Writes                                             bool
+	// Account is the connection's account label; "" is the default (design
+	// §22.2.1).
+	Account string
 }
 
 var (
@@ -96,6 +102,19 @@ func (r *Renderer) addAPI(st *State, raw json.RawMessage) (Change, error) {
 	if why != "" {
 		return refuse(verb, ns, "%s", why), nil
 	}
+	// The account (design §22.2.1, §22.2.3; GitHub #119 item 8).
+	label, account, why := checkAccount(in.Account)
+	if why != "" {
+		return refuse(verb, ns, "%s", why), nil
+	}
+	if why := sameHostSameLabel(p, connection{name: in.Name, url: api.BaseURL, label: agentns.AccountOf(label), authRef: api.AuthRef}); why != "" {
+		return refuse(verb, ns, "%s", why), nil
+	}
+	api.Account = label
+	why, sharers := credentialOwner(st, api.AuthRef, label)
+	if why != "" {
+		return refuse(verb, ns, "%s", why), nil
+	}
 	read, write, _ := apiMethods(in.Methods)
 	next := *p
 	next.APIs = append(append([]APIState(nil), p.APIs...), api)
@@ -111,10 +130,14 @@ func (r *Renderer) addAPI(st *State, raw json.RawMessage) (Change, error) {
 		ReadSet: map[string]string{},
 		Locks:   []string{lockProject(pid), projectPath(pid), lockIntegration(pid, in.Name)},
 		Class:   Widening,
-		Grant:   Grant{Integrations: []IntegrationGrant{{Project: pid, Name: in.Name, Kind: "api", URL: api.BaseURL, Read: read, Write: write}}},
+		Grant:   Grant{Integrations: []IntegrationGrant{{Project: pid, Name: in.Name, Kind: "api", URL: api.BaseURL, Read: read, Write: write, Account: account}}},
 	}
 	expect(st, c.ReadSet, projectPath(pid))
-	c.Sentence = apiSentence(ns, pid, in, read, write)
+	phrase := addPhrase(p, in.Name, api.BaseURL, account)
+	c.Sentence = apiSentence(ns, pid, in, read, write, phrase) + sharedCredentialSentence(in.Auth.Credential, sharers)
+	if phrase != "" {
+		c.accounts = map[string]string{in.Name: phrase}
+	}
 	return c, nil
 }
 
@@ -172,9 +195,9 @@ func apiStateFrom(ns string, in AddAPIInput) (APIState, string) {
 	return api, ""
 }
 
-func apiSentence(ns, pid string, in AddAPIInput, read, write []string) string {
+func apiSentence(ns, pid string, in AddAPIInput, read, write []string, phrase string) string {
 	var b strings.Builder
-	fmt.Fprintf(&b, "Your assistant (%s) wants the project %q to call the API %q at %s", ns, pid, in.Name, hostOf(in.BaseURL))
+	fmt.Fprintf(&b, "Your assistant (%s) wants the project %q to call the API %q at %s%s", ns, pid, in.Name, hostOf(in.BaseURL), asAccount(phrase))
 	if len(read) > 0 {
 		fmt.Fprintf(&b, " with %s", strings.Join(read, ", "))
 	}

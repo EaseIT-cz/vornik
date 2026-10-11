@@ -1,13 +1,13 @@
 ---
 sources:
     - path: internal/registry/project.go
-      sha256: b0f54f8e692116a4a5fd21e4913a1f3fafa521be71082d3928f26de9979c02ee
+      sha256: d6732b486d349c9dc265b3fd328c490750156b91fafe7febf538dcff04cbb989
     - path: internal/mcp/client.go
-      sha256: e6e63cb2816132187f2b0790a11d3e19857d44cc8fa1068db252ddddedfd1ff6
+      sha256: 5b9fe2c7a803ade40a74d2b5a3557016aec87759df27fce8366bdea2e928faad
     - path: internal/mcp/ratelimit.go
       sha256: 19ad0c64e2abd9d25e95971e1ba5e3cfe91f34852edeca6e4f9c70825b2e901d
     - path: internal/cli/mcp.go
-      sha256: de369186aea47ddb291a199cb73fb1e34b7b0e0823ccfcc859feb49568f4e28e
+      sha256: 7f07e2756c29c2288e9bc6ffe2983063df87fc73cb4d433f070bb46b505c4e24
 ---
 # Connect Your Tools (MCP)
 
@@ -48,7 +48,7 @@ mcp:
       url: "http://127.0.0.1:7081/sse"
 ```
 
-There are two transports:
+There are three transports:
 
 - **`stdio`** — the daemon launches `command` (with `args`) as a child process
   and speaks MCP over its stdin/stdout. Use this for tools you ship alongside
@@ -65,10 +65,21 @@ There are two transports:
   starting a subprocess each. If the relaunch itself fails — the command is
   gone, or it exits immediately — the tool call returns an error saying the
   server is not running, and the daemon log carries the launch failure.
-- **`sse`** — the daemon connects to a long-running server at `url` over HTTP.
-  Use this for tools that run as their own service.
+- **`streamable-http`** — MCP's current HTTP transport: the daemon POSTs each
+  request to the single endpoint at `url` and reads a JSON or event-stream
+  reply. Most hosted MCP servers speak this.
+- **`sse`** — the older HTTP transport: the daemon POSTs each request to `url`
+  with a trailing `/sse` removed and `/message` appended, and reads the reply.
+  Use this for a running service that serves `/sse` and `/message` rather than
+  one MCP endpoint. A server that answers a `streamable-http` request with 404
+  but serves `/sse` is an SSE server.
 
-`command`/`args`/`env` apply only to `stdio`; `url` applies only to `sse`.
+An assistant that sets up a server for you through Vornik's admin tools picks
+the transport the same way: `add_mcp_server` takes `"transport": "sse"` for an
+SSE server, and defaults to `streamable-http`.
+
+`command`/`args`/`env` apply only to `stdio`; `url` applies only to `sse` and
+`streamable-http`.
 
 ### `project_id` is supplied by the daemon
 
@@ -252,6 +263,15 @@ vornikctl mcp oauth-status atlassian -p my-project   # resource, scopes, expiry
 vornikctl mcp disconnect atlassian -p my-project     # deletes the stored grant
 ```
 
+**Until you connect it, the server is not dialled.** An `oauth` server with no
+stored grant has nothing to present, so the daemon does not contact it: it logs
+one warning naming the command (`vornikctl mcp connect <server>`, with
+`-p <project>` for a project's own server), and the doctor, `vornikctl mcp
+servers` and `vornikctl mcp oauth-status` all report it as `not connected, no
+grant`. A tool call against it says the same. Connecting wires it at once,
+without a reload or a restart. This is an unfinished setup step, not a fault,
+so it raises no alert.
+
 **Servers with no dynamic registration** (Slack, GitHub, Box) need a
 pre-registered client — set `client_id`, and `client_secret_from` when the
 vendor issued a secret. **Servers with no discovery at all** (Intercom) need
@@ -260,9 +280,10 @@ which case you are in rather than failing generically.
 
 **Refresh and reconnect.** The credential is resolved **per request**, so an
 access token refreshes shortly before it expires no matter how long the daemon
-has been running, and rotated refresh tokens are handled. If the vendor rejects
+has been running, and rotated refresh tokens are handled. On streamable HTTP, if the vendor rejects
 a token Vornik still believes in — a grant revoked in their console, say — the
-call is retried **once** after a forced refresh, and no more than once. If the
+call is retried **once** after a forced refresh, and no more than once. The
+legacy SSE transport reports the rejection without this retry. If the
 vendor revokes the grant outright, the server is flagged `needs_reconnect`: its
 calls fail rather than retrying forever, `mcp oauth-status` says so, and
 `mcp connect` fixes it. Disconnecting in Vornik does **not** revoke the
@@ -524,7 +545,7 @@ transport, its status, how many tools it advertises, and its endpoint. Remember
 that a server appearing here is **not** automatically available to a project —
 grant access by adding it to that project's `mcp.servers`.
 
-The status column has three values, and the third is easy to mistake for a
+The status column has four values, and the last two are easy to mistake for a
 fault:
 
 | Status | Meaning |
@@ -532,8 +553,9 @@ fault:
 | `reachable` | The last health probe connected and listed tools. |
 | `unreachable: <error>` | The last probe ran and failed, for the reason shown. |
 | `checking` | **No probe has run yet.** The first probe after a daemon start or a config reload is asynchronous, so every server reads `checking` for a moment. Re-run the command rather than troubleshooting the server. |
+| `not connected, no grant` | An `oauth` server nobody has connected yet. The daemon does not dial it until `vornikctl mcp connect <server>`; nothing is wrong with the server. In `--json` output it carries `"not_dialled": true`. |
 
-The same three states appear on the Control Plane → MCP tab, where `checking`
+The same four states appear on the Control Plane → MCP tab, where `checking`
 renders as a neutral "checking…" badge. In `--json` output, a server that has
 never been probed simply has no `last_checked_at` field.
 
@@ -577,7 +599,8 @@ vornikctl mcp call -p acme --tool mcp__scraper__web_fetch \
   (snake_case); the rate-limit map is `toolRateLimits` (camelCase). It's easy
   to get one wrong — the project will fail to load with a clear error if you
   do.
-- **`transport` is exactly `stdio` or `sse`.** Any other value is rejected.
+- **`transport` is exactly `stdio`, `sse` or `streamable-http`.** Any other
+  value is rejected.
 - **Rate-limit fields are `rps` and `burst`, both integers > 0.** A negative
   value is rejected at load time.
 - **Changes take effect on config reload** — you don't need to restart the

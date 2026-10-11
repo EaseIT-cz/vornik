@@ -764,7 +764,21 @@ func isCompanionAllowedPath(p string) bool {
 	case "/api/v1/mcp/companion", "/api/v1/capabilities":
 		return true
 	}
-	return false
+	return isCompanionLivePath(p)
+}
+
+// isCompanionLivePath is the one execution route a companion key may use:
+// /api/v1/executions/<id>/live, with <id> exactly one non-empty segment. No
+// trailing slash, no deeper path, no prefix match (live-task-observation
+// design, Change 2026-10-08 C1). The handler then scopes the execution with
+// keyCoversProject and answers a miss as an unknown id.
+func isCompanionLivePath(p string) bool {
+	rest, ok := strings.CutPrefix(p, "/api/v1/executions/")
+	if !ok {
+		return false
+	}
+	id, ok := strings.CutSuffix(rest, "/live")
+	return ok && id != "" && !strings.Contains(id, "/")
 }
 
 // APIKeyClientKindFromContext returns the DB-backed companion client
@@ -874,6 +888,8 @@ func lookupAPIKey(keys map[string][]string, presented string) ([]string, bool) {
 
 func isPublicEndpoint(path string) bool {
 	switch path {
+	case artifactDownloadPath:
+		return true // One signed, expiring, live-authorized artifact capability.
 	case "/livez", "/healthz", "/readyz", "/health/live", "/health/ready", "/metrics":
 		return true
 	case "/ui/login":

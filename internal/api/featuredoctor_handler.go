@@ -67,6 +67,9 @@ func (h *DoctorHandlers) ListFeatures(w http.ResponseWriter, r *http.Request) {
 		respondError(w, http.StatusMethodNotAllowed, "METHOD_NOT_ALLOWED", "use GET")
 		return
 	}
+	if !h.requireAdminClass(w, r) {
+		return
+	}
 	deps := h.buildFeatureDeps()
 	features := featuredoctor.Registry()
 	out := make([]featureStatusDTO, 0, len(features))
@@ -83,6 +86,9 @@ func (h *DoctorHandlers) ListFeatures(w http.ResponseWriter, r *http.Request) {
 func (h *DoctorHandlers) GetFeature(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		respondError(w, http.StatusMethodNotAllowed, "METHOD_NOT_ALLOWED", "use GET")
+		return
+	}
+	if !h.requireAdminClass(w, r) {
 		return
 	}
 	// Extract id from path: /api/v1/doctor/features/{id}

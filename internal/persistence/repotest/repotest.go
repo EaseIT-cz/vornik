@@ -775,6 +775,105 @@ func RunTaskRepositorySuite(t *testing.T, repo persistence.TaskRepository) {
 		}
 	})
 
+	// GitHub #303 (2026-10-08): the executor's failure finaliser writes the
+	// whole row only while the row is still the run's; a cancel, close or
+	// pause that landed first is not overwritten (05-scheduler §4.11,
+	// amendment D4).
+	allowedRun := []persistence.TaskStatus{persistence.TaskStatusLeased, persistence.TaskStatusRunning}
+	t.Run("UpdateIfStatus_refuses_when_status_moved", func(t *testing.T) {
+		task := newQueuedTask(uniqueID("proj"))
+		if err := repo.Create(ctx, task); err != nil {
+			t.Fatalf("Create: %v", err)
+		}
+		if ok, err := repo.TransitionToCancelled(ctx, task.ID); err != nil || !ok {
+			t.Fatalf("TransitionToCancelled: %v %v", ok, err)
+		}
+		before, err := repo.Get(ctx, task.ID)
+		if err != nil {
+			t.Fatalf("Get: %v", err)
+		}
+		stale := *before
+		stale.Status = persistence.TaskStatusFailed
+		msg := "boom"
+		stale.LastError = &msg
+		stale.Attempt = before.Attempt + 2
+		ok, err := repo.UpdateIfStatus(ctx, &stale, allowedRun)
+		if err != nil || ok {
+			t.Fatalf("UpdateIfStatus over a CANCELLED row = %v, %v; want false, nil", ok, err)
+		}
+		after, err := repo.Get(ctx, task.ID)
+		if err != nil {
+			t.Fatalf("Get: %v", err)
+		}
+		if after.Status != persistence.TaskStatusCancelled || after.LastError != nil || after.Attempt != before.Attempt || after.FailedAt != nil {
+			t.Fatalf("the refused write changed the row: status %s, last_error %v, attempt %d, failed_at %v",
+				after.Status, after.LastError, after.Attempt, after.FailedAt)
+		}
+	})
+
+	t.Run("UpdateIfStatus_unknown_id_is_false", func(t *testing.T) {
+		// A row-shaped task (Postgres validates the enum columns before it
+		// matches the WHERE), that was never created.
+		missing := newQueuedTask(uniqueID("proj"))
+		missing.CreationSource = persistence.TaskCreationSourceCompanion
+		ok, err := repo.UpdateIfStatus(ctx, missing, allowedRun)
+		if err != nil || ok {
+			t.Fatalf("UpdateIfStatus on a missing row = %v, %v; want false, nil", ok, err)
+		}
+	})
+
+	t.Run("UpdateIfStatus_writes_what_Update_writes", func(t *testing.T) {
+		project := uniqueID("proj")
+		viaUpdate, viaGuard := newQueuedTask(project), newQueuedTask(project)
+		for _, tk := range []*persistence.Task{viaUpdate, viaGuard} {
+			if err := repo.Create(ctx, tk); err != nil {
+				t.Fatalf("Create: %v", err)
+			}
+			if err := repo.UpdateStatus(ctx, tk.ID, persistence.TaskStatusRunning); err != nil {
+				t.Fatalf("UpdateStatus: %v", err)
+			}
+		}
+		mutate := func(id string) *persistence.Task {
+			t.Helper()
+			got, err := repo.Get(ctx, id)
+			if err != nil {
+				t.Fatalf("Get: %v", err)
+			}
+			msg, class, budget := "step failed", "TOOL_ERROR", 2.5
+			got.Status = persistence.TaskStatusFailed
+			got.LastError, got.LastErrorClass, got.BudgetUSD = &msg, &class, &budget
+			got.Attempt, got.MaxAttempts, got.Priority = 3, 4, 70
+			got.Payload = []byte(`{"k":"v"}`)
+			return got
+		}
+		if err := repo.Update(ctx, mutate(viaUpdate.ID)); err != nil {
+			t.Fatalf("Update: %v", err)
+		}
+		ok, err := repo.UpdateIfStatus(ctx, mutate(viaGuard.ID), allowedRun)
+		if err != nil || !ok {
+			t.Fatalf("UpdateIfStatus over a RUNNING row = %v, %v; want true, nil", ok, err)
+		}
+		a, _ := repo.Get(ctx, viaUpdate.ID)
+		b, _ := repo.Get(ctx, viaGuard.ID)
+		norm := func(x *persistence.Task) persistence.Task {
+			c := *x
+			c.ID, c.CreatedAt, c.UpdatedAt = "", time.Time{}, time.Time{}
+			if c.FailedAt != nil {
+				c.FailedAt = &time.Time{}
+			}
+			return c
+		}
+		// Everything Get reads back is the same; the guard is the only
+		// difference in the statement (failed_at's rule is shared, not read
+		// by Get on every driver).
+		if na, nb := norm(a), norm(b); !reflect.DeepEqual(na, nb) {
+			t.Fatalf("UpdateIfStatus wrote a different row than Update:\n update: %+v\n  guard: %+v", na, nb)
+		}
+		if b.Status != persistence.TaskStatusFailed || b.LastErrorClass == nil || *b.LastErrorClass != "TOOL_ERROR" || b.Attempt != 3 {
+			t.Fatalf("the guarded write did not land: %+v", b)
+		}
+	})
+
 	// Permanent-failure design, amendment 2026-10-03: the scheduler's terminal
 	// release passes an empty class when the executor already stamped a precise
 	// one, and ReleaseLease turned that empty class into NULL on both drivers,
@@ -3593,6 +3692,7 @@ func RunExecutionRepositorySuite(t *testing.T, repo persistence.ExecutionReposit
 
 	t.Run("Create_then_Get_round_trips", func(t *testing.T) {
 		e := newExec(t, uniqueID("task"), "proj-1", persistence.ExecutionStatusRunning)
+		e.WorkflowSnapshot = []byte(`{"steps":[{"id":"snapshot-contract"}]}`)
 		if err := repo.Create(ctx, e); err != nil {
 			t.Fatalf("Create: %v", err)
 		}
@@ -3602,6 +3702,28 @@ func RunExecutionRepositorySuite(t *testing.T, repo persistence.ExecutionReposit
 		}
 		if got.ID != e.ID || got.TaskID != e.TaskID || got.WorkflowID != e.WorkflowID {
 			t.Errorf("round-trip mismatch: got %+v want %+v", got, e)
+		}
+		if string(got.WorkflowSnapshot) != string(e.WorkflowSnapshot) {
+			t.Errorf("workflow snapshot round-trip = %s, want %s", got.WorkflowSnapshot, e.WorkflowSnapshot)
+		}
+	})
+
+	t.Run("Update_preserves_workflow_snapshot", func(t *testing.T) {
+		e := newExec(t, uniqueID("task"), "proj-1", persistence.ExecutionStatusRunning)
+		e.WorkflowSnapshot = []byte(`{"steps":[{"id":"preserved-snapshot"}]}`)
+		if err := repo.Create(ctx, e); err != nil {
+			t.Fatalf("Create: %v", err)
+		}
+		e.Status = persistence.ExecutionStatusPaused
+		if err := repo.Update(ctx, e); err != nil {
+			t.Fatalf("Update: %v", err)
+		}
+		got, err := repo.Get(ctx, e.ID)
+		if err != nil {
+			t.Fatalf("Get after Update: %v", err)
+		}
+		if string(got.WorkflowSnapshot) != string(e.WorkflowSnapshot) {
+			t.Errorf("Update cleared workflow snapshot: got %s, want %s", got.WorkflowSnapshot, e.WorkflowSnapshot)
 		}
 	})
 
@@ -3614,6 +3736,7 @@ func RunExecutionRepositorySuite(t *testing.T, repo persistence.ExecutionReposit
 		}
 		time.Sleep(2 * time.Millisecond)
 		second := newExecForTask(taskID, "p1", persistence.ExecutionStatusRunning)
+		second.WorkflowSnapshot = []byte(`{"steps":[{"id":"latest-snapshot"}]}`)
 		if err := repo.Create(ctx, second); err != nil {
 			t.Fatalf("Create second: %v", err)
 		}
@@ -3631,6 +3754,9 @@ func RunExecutionRepositorySuite(t *testing.T, repo persistence.ExecutionReposit
 		if got.TaskID != taskID {
 			t.Errorf("wrong task: got %s", got.TaskID)
 		}
+		if string(got.WorkflowSnapshot) != string(second.WorkflowSnapshot) {
+			t.Errorf("GetByTaskID workflow snapshot = %s, want %s", got.WorkflowSnapshot, second.WorkflowSnapshot)
+		}
 	})
 
 	t.Run("GetByTaskIDs_batch_keys_absent_for_no_execution", func(t *testing.T) {
@@ -3640,8 +3766,16 @@ func RunExecutionRepositorySuite(t *testing.T, repo persistence.ExecutionReposit
 		// has no seeded task row either since the contract is
 		// "absent from map when no execution row exists" — the
 		// FK only matters at execution insert, not at lookup.
-		_ = repo.Create(ctx, newExec(t, t1, "p", persistence.ExecutionStatusRunning))
-		_ = repo.Create(ctx, newExec(t, t2, "p", persistence.ExecutionStatusCompleted))
+		e1 := newExec(t, t1, "p", persistence.ExecutionStatusRunning)
+		e1.WorkflowSnapshot = []byte(`{"steps":[{"id":"batch-snapshot-1"}]}`)
+		e2 := newExec(t, t2, "p", persistence.ExecutionStatusCompleted)
+		e2.WorkflowSnapshot = []byte(`{"steps":[{"id":"batch-snapshot-2"}]}`)
+		if err := repo.Create(ctx, e1); err != nil {
+			t.Fatalf("Create t1: %v", err)
+		}
+		if err := repo.Create(ctx, e2); err != nil {
+			t.Fatalf("Create t2: %v", err)
+		}
 		got, err := repo.GetByTaskIDs(ctx, []string{t1, t2, tGhost})
 		if err != nil {
 			t.Fatalf("GetByTaskIDs: %v", err)
@@ -3655,6 +3789,12 @@ func RunExecutionRepositorySuite(t *testing.T, repo persistence.ExecutionReposit
 		}
 		if _, ok := got[t1]; !ok {
 			t.Errorf("task with execution must be present, missing: %s", t1)
+		}
+		if string(got[t1].WorkflowSnapshot) != string(e1.WorkflowSnapshot) {
+			t.Errorf("GetByTaskIDs t1 workflow snapshot = %s, want %s", got[t1].WorkflowSnapshot, e1.WorkflowSnapshot)
+		}
+		if string(got[t2].WorkflowSnapshot) != string(e2.WorkflowSnapshot) {
+			t.Errorf("GetByTaskIDs t2 workflow snapshot = %s, want %s", got[t2].WorkflowSnapshot, e2.WorkflowSnapshot)
 		}
 	})
 

@@ -70,16 +70,6 @@ func (a uiExecutorAdapter) CancelChildren(ctx context.Context, parentTaskID stri
 	a.e.CancelChildren(ctx, parentTaskID)
 }
 
-// TaskLogs surfaces container logs for the live SSE log panel on
-// /ui/tasks/{id}. Without this passthrough the UI's
-// ui.WithExecutor type-assertion to TaskLogSource fails, the
-// stream returns the "No logs available yet." fallback for every
-// task, and the operator sees nothing despite the agent
-// container actively emitting lines. (The API surface bypasses
-// this adapter and calls c.Executor.TaskLogs directly, which is
-// why /api/v1/projects/{p}/tasks/{id}/logs returned data while
-// /ui/tasks/{id}/logs/stream returned empty — diagnosed
-// 2026-05-23 on task_20260523231012_29a7e7fa321e6ea3.)
-func (a uiExecutorAdapter) TaskLogs(ctx context.Context, taskID string, tail int) (string, error) {
-	return a.e.TaskLogs(ctx, taskID, tail)
-}
+// No TaskLogs forward (GitHub #294, 2026-10-08): it ran podman logs for
+// the UI log panel. The panel reads api.HeldTaskLog, wired with
+// ui.WithTaskLogSource in initHTTPServer.

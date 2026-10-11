@@ -943,7 +943,8 @@ type ProjectForge struct {
 
 	// CI configures reading completed CI runs
 	// (2026-09-08-forge-ci-outcomes-design.md §8).
-	CI ProjectForgeCI `yaml:"ci"`
+	CI     ProjectForgeCI     `yaml:"ci"`
+	Issues ProjectForgeIssues `yaml:"issues" since:"2026.10.11"`
 	// GitLab ProjectGitLab `yaml:"gitlab"` // future sibling
 	// Gitea  ProjectGitea  `yaml:"gitea"`  // future sibling
 }
@@ -2196,6 +2197,11 @@ type MCPServerConfig struct {
 	// broker role may hold them: an agent never calls a write tool. Mutually
 	// exclusive with BrokerReadOnly. See the broker write-actions design §4.2.
 	BrokerWrite bool `yaml:"broker_write,omitempty"`
+	// Account is the label of the account this connection acts as, for an
+	// agent-namespace project only (agent-administered design §22.2.1;
+	// GitHub #119 item 8). Absent means the default account. The agent load
+	// rule checks its form and refuses it in an operator project.
+	Account string `yaml:"account,omitempty"`
 }
 
 // ProjectPermissions defines project-level access and permissions
@@ -2250,6 +2256,10 @@ func (p *Project) CompanionPushAllowed() []netip.Prefix {
 }
 
 func (p *Project) Validate(filename string) error {
+	if err := p.Forge.Issues.Validate(); err != nil {
+		return ProjectValidationError{File: filename, Field: "forge.issues", Message: err.Error()}
+	}
+
 	if p.Retention.MemoryIdleDays < 0 || p.Retention.MemoryIdleDays > 36500 {
 		return ProjectValidationError{File: filename, Field: "retention.memory_idle_days", Message: "must be between 0 (365-day default) and 36500"}
 	}

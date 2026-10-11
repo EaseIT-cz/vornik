@@ -33,6 +33,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"vornik.io/vornik/internal/mcpconnect"
 )
 
 const (
@@ -81,11 +83,23 @@ func (h *DoctorHandlers) checkConnectorAuth(ctx context.Context) DoctorCheck {
 		return DoctorCheck{Name: name, Status: "WARNING", Message: fmt.Sprintf("auth-failure query failed: %v", err)}
 	}
 
-	if len(grants) == 0 && len(failures) == 0 {
+	var noGrantItems []string
+	if h.mcpNoGrant != nil {
+		noGrantItems = connectorNoGrantItems(h.mcpNoGrant(), grants)
+	}
+	if len(grants) == 0 && len(failures) == 0 && len(noGrantItems) == 0 {
 		return DoctorCheck{Name: name, Status: "OK", Message: "no OAuth-backed MCP connectors are configured"}
 	}
 
 	items, worst := evaluateConnectorAuth(grants, failures, time.Now().UTC())
+	if len(noGrantItems) > 0 {
+		// Design §3.4's "no grant and declared: warn" row, built by auth
+		// design §14 (GitHub #91). An unfinished setup step, not a failure.
+		items = append(items, noGrantItems...)
+		if worst == "OK" {
+			worst = "WARNING"
+		}
+	}
 	if len(items) == 0 {
 		return DoctorCheck{
 			Name:    name,
@@ -208,11 +222,25 @@ func connectorLabel(projectID, server string) string {
 // condition without naming its cure is how the original incident stayed
 // invisible for two days.
 func connectorFixHint(projectID, server string) string {
-	cmd := "vornikctl mcp connect " + server
-	if projectID != "" {
-		cmd += " -p " + projectID
+	return "fix: " + mcpconnect.ConnectCommand(projectID, server)
+}
+
+// connectorNoGrantItems is the "no grant" row (auth design §14): one item
+// per (credential scope, server) withheld for want of a grant, skipping any
+// pair a grant row now exists for.
+func connectorNoGrantItems(noGrant []mcpconnect.NoGrant, grants []connectorGrantState) []string {
+	seen := map[string]bool{}
+	var items []string
+	for _, g := range noGrant {
+		key := g.CredentialScope + "\x00" + g.Server
+		if seen[key] || grantExists(grants, g.CredentialScope, g.Server) {
+			continue
+		}
+		seen[key] = true
+		items = append(items, connectorLabel(g.CredentialScope, g.Server)+": "+mcpconnect.NoGrantState+" — "+connectorFixHint(g.CredentialScope, g.Server))
 	}
-	return "fix: " + cmd
+	sort.Strings(items)
+	return items
 }
 
 // queryConnectorGrants reads the stored grants.

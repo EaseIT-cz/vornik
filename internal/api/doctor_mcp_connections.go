@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"vornik.io/vornik/internal/mcp"
+	"vornik.io/vornik/internal/mcpconnect"
 )
 
 // mcpPendingWarnAfter is how long a project server may be reconnecting
@@ -22,6 +23,13 @@ func (h *DoctorHandlers) SetMCPPendingSource(src func() (int, []mcp.PendingServe
 // does not define). Those are never dialled, so they are not pending.
 func (h *DoctorHandlers) SetMCPWithheldSource(src func() []string) {
 	h.mcpWithheld = src
+}
+
+// SetMCPNoGrantSource wires the oauth servers withheld for want of a grant
+// (auth design §14, GitHub #91), for mcp_project_connections and
+// connector_auth. Current state, never the daemon's WARN-once set.
+func (h *DoctorHandlers) SetMCPNoGrantSource(src func() []mcpconnect.NoGrant) {
+	h.mcpNoGrant = src
 }
 
 // checkMCPProjectConnections reports project MCP servers that are
@@ -62,6 +70,24 @@ func (h *DoctorHandlers) checkMCPProjectConnections() DoctorCheck {
 		scope += fmt.Sprintf("; %d withheld by configuration", len(withheld))
 		for _, w := range withheld {
 			items = append(items, w+" (withheld: fix the configuration; the daemon does not retry it)")
+		}
+	}
+	// Oauth servers with no grant are counted on their own: they are not
+	// dialled, so they are neither "examined clean" nor invisible (auth
+	// design §14 G2).
+	var noGrant []mcpconnect.NoGrant
+	if h.mcpNoGrant != nil {
+		for _, g := range h.mcpNoGrant() {
+			if g.ProjectID != "" {
+				noGrant = append(noGrant, g)
+			}
+		}
+	}
+	if len(noGrant) > 0 {
+		scope += fmt.Sprintf("; %d withheld until connected (no OAuth grant)", len(noGrant))
+		for _, g := range noGrant {
+			items = append(items, g.ProjectID+"/"+g.Server+": "+mcpconnect.NoGrantRemedy(g.CredentialScope, g.Server)+
+				" (withheld until connected; connecting re-wires it, no restart)")
 		}
 	}
 	if len(items) == 0 {

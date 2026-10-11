@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -113,14 +114,17 @@ func TestEmitLLMCallFinished_ModelFallsBackToResponse(t *testing.T) {
 	}
 }
 
-func TestEmitLLMCallFinishedErr_CarriesErrorString(t *testing.T) {
+func TestEmitLLMCallFinishedErr_DoesNotPublishUpstreamErrorText(t *testing.T) {
 	sub := &stubLiveSub{}
 	srv := &Server{liveSub: sub}
 	srv.emitLLMCallFinishedErr(context.Background(), "exec_1", "gpt-test",
-		errors.New("upstream: rate-limited"), 200*time.Millisecond)
+		errors.New("upstream response for https://api.example/?api_key=sk-live-secret failed"), 200*time.Millisecond)
 	payload := sub.published[0].payload.(livepubsub.LLMCallFinishedPayload)
-	if payload.Err != "upstream: rate-limited" {
-		t.Errorf("err string wrong: %q", payload.Err)
+	if payload.Err != "upstream model request failed" {
+		t.Errorf("unsafe or unexpected public error: %q", payload.Err)
+	}
+	if strings.Contains(payload.Err, "sk-live-secret") || strings.Contains(payload.Err, "api.example") {
+		t.Errorf("upstream error leaked into live event: %q", payload.Err)
 	}
 	if payload.PromptTokens != 0 || payload.CompletionTokens != 0 {
 		t.Errorf("error path should have zero tokens, got %+v", payload)

@@ -131,8 +131,8 @@ func (s *Server) companionToolSkillPropose(ctx context.Context, key *persistence
 		return "", errors.New("skill store not wired on this daemon")
 	}
 	var args skillProposeArgs
-	if err := json.Unmarshal(raw, &args); err != nil {
-		return "", fmt.Errorf("invalid arguments: %w", err)
+	if err := decodeToolArgs("skill_propose", raw, &args); err != nil {
+		return "", err
 	}
 	args.Name = strings.TrimSpace(args.Name)
 	args.Description = strings.TrimSpace(args.Description)
@@ -264,8 +264,8 @@ func (s *Server) companionToolSkillSearch(ctx context.Context, key *persistence.
 		return "", errors.New("skill store not wired on this daemon")
 	}
 	var args skillSearchArgs
-	if err := json.Unmarshal(raw, &args); err != nil {
-		return "", fmt.Errorf("invalid arguments: %w", err)
+	if err := decodeToolArgs("skill_search", raw, &args); err != nil {
+		return "", err
 	}
 	// Search surfaces usable skills by default (active + trusted).
 	skills, err := s.skillStore.List(ctx, key.ProjectID, persistence.SkillListFilter{
@@ -300,8 +300,8 @@ func (s *Server) companionToolSkillList(ctx context.Context, key *persistence.AP
 		return "", errors.New("skill store not wired on this daemon")
 	}
 	var args skillListArgs
-	if err := json.Unmarshal(raw, &args); err != nil {
-		return "", fmt.Errorf("invalid arguments: %w", err)
+	if err := decodeToolArgs("skill_list", raw, &args); err != nil {
+		return "", err
 	}
 	var maturities []string
 	if m := strings.TrimSpace(args.Maturity); m != "" {
@@ -342,8 +342,8 @@ func (s *Server) companionToolSkillGet(ctx context.Context, key *persistence.API
 		return "", errors.New("skill store not wired on this daemon")
 	}
 	var args skillGetArgs
-	if err := json.Unmarshal(raw, &args); err != nil {
-		return "", fmt.Errorf("invalid arguments: %w", err)
+	if err := decodeToolArgs("skill_get", raw, &args); err != nil {
+		return "", err
 	}
 	skill, err := s.resolveSkill(ctx, key, args.ID, args.Name, args.RepoScope)
 	if err != nil {
@@ -374,6 +374,15 @@ func (s *Server) companionToolSkillReject(ctx context.Context, key *persistence.
 	return s.skillModerate(ctx, key, raw, persistence.SkillMaturityRetired)
 }
 
+// skillModerateTool is the tool name skillModerate serves for a target
+// maturity, for the strict-argument error text.
+func skillModerateTool(target string) string {
+	if target == persistence.SkillMaturityActive {
+		return "skill_approve"
+	}
+	return "skill_reject"
+}
+
 func (s *Server) skillModerate(ctx context.Context, key *persistence.APIKey, raw json.RawMessage, target string) (string, error) {
 	if !key.SkillAdmin {
 		return "", errors.New("this key lacks skill_admin; approving/rejecting skills requires `vornikctl companion grant --skill-admin`")
@@ -382,8 +391,8 @@ func (s *Server) skillModerate(ctx context.Context, key *persistence.APIKey, raw
 		return "", errors.New("skill store not wired on this daemon")
 	}
 	var args skillModerateArgs
-	if err := json.Unmarshal(raw, &args); err != nil {
-		return "", fmt.Errorf("invalid arguments: %w", err)
+	if err := decodeToolArgs(skillModerateTool(target), raw, &args); err != nil {
+		return "", err
 	}
 	if strings.TrimSpace(args.ID) == "" {
 		return "", errors.New("id is required")
@@ -434,8 +443,8 @@ func (s *Server) companionToolSkillSetGlobal(ctx context.Context, key *persisten
 		return "", errors.New("skill store not wired on this daemon")
 	}
 	var args skillSetGlobalArgs
-	if err := json.Unmarshal(raw, &args); err != nil {
-		return "", fmt.Errorf("invalid arguments: %w", err)
+	if err := decodeToolArgs("skill_set_global", raw, &args); err != nil {
+		return "", err
 	}
 	if strings.TrimSpace(args.ID) == "" {
 		return "", errors.New("id is required")

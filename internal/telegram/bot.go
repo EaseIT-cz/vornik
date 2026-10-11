@@ -35,6 +35,7 @@ import (
 	"vornik.io/vornik/internal/safepath"
 	"vornik.io/vornik/internal/secrets"
 	"vornik.io/vornik/internal/sessionstore"
+	"vornik.io/vornik/internal/taskcancel"
 )
 
 // Common errors.
@@ -478,7 +479,10 @@ type Bot struct {
 	taskMessageRepo persistence.TaskMessageRepository
 	rescheduler     Rescheduler
 	childCanceller  ChildCanceller
-	notifTracker    *taskNotifTracker
+	// taskTeardown is what /cancel owes once the row moved (05-scheduler
+	// §4.11, GitHub #300). Nil means the write only.
+	taskTeardown taskcancel.Teardown
+	notifTracker *taskNotifTracker
 
 	// Operator-profile cross-channel linking (Phase A finalisation,
 	// 2026-05-25). When all three are wired, the /link command is
@@ -762,6 +766,15 @@ func WithPollerStateRepository(repo persistence.TelegramPollerStateRepository, b
 func WithRescheduler(r Rescheduler) BotOption {
 	return func(b *Bot) {
 		b.rescheduler = r
+	}
+}
+
+// WithTaskTeardown wires the executor so /cancel stops the running
+// execution, unblocks a waiting parent and cascades to children through the
+// shared cancel primitive (05-scheduler §4.11, GitHub #300). Optional.
+func WithTaskTeardown(td taskcancel.Teardown) BotOption {
+	return func(b *Bot) {
+		b.taskTeardown = td
 	}
 }
 

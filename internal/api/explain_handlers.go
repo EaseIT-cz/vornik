@@ -19,7 +19,8 @@ type explainResponse struct {
 
 // ExplainTask handles POST /api/v1/projects/{projectID}/tasks/{taskID}/explain.
 // Joins the task's failure context (LastError + class, step outcomes,
-// recent tool calls, container log tail) and renders an operator-friendly
+// recent tool calls, the daemon-held task log tail — GitHub #294: never
+// podman logs) and renders an operator-friendly
 // summary deterministically — no LLM call. The previous design called
 // an LLM here; the determinism collapse moved the prose-summarisation
 // to a static template + the failure-class playbook. Operators who

@@ -209,6 +209,7 @@ func (c *Container) initHTTPServer() error {
 		// same instance so taps and subscribers are zero-overhead
 		// in-process. nil-safe when c.livePub didn't initialise.
 		api.WithLiveSubscriber(c.livePub),
+		api.WithDaemonLogRing(c.daemonLogRing()), // daemon_log tool (GitHub #92)
 		// Feature #3 Phase C — hint endpoint repo. Wired only
 		// when migration 50 has run + the repos struct populated
 		// ExecutionHints; nil falls through to the handler's 503.
@@ -459,6 +460,9 @@ func (c *Container) initHTTPServer() error {
 	if c.repos != nil && c.repos.AgentGrants != nil {
 		apiOpts = append(apiOpts, api.WithAgentGrants(c.repos.AgentGrants))
 	}
+	// delegate's max_age_seconds (broker design §6b, GitHub #119 item 9): a
+	// reuse is pinned to the same reach hash a standing grant pins.
+	apiOpts = append(apiOpts, api.WithResultReuseReachHash(c.standingReachHash))
 	// delegate's notify and companion-push, exactly where the pusher runs
 	// (design §7a).
 	if c.companionPushWired() {
@@ -518,6 +522,7 @@ func (c *Container) initHTTPServer() error {
 	apiOpts = append(apiOpts, api.WithTaintEnforcementMode(c.taintDefaultMode()))
 	if c.Registry != nil {
 		apiOpts = append(apiOpts, api.WithProjectRegistry(c.Registry))
+		apiOpts = append(apiOpts, api.WithForgeIssueResolver(c.newForgeResolver()))
 		// Forge-job classifier for the generic webhook path: stamps a
 		// provider-neutral forge_job on tasks for forge-configured projects so
 		// the deterministic forge.* system steps need no free-text parsing.
@@ -855,6 +860,10 @@ func (c *Container) initHTTPServer() error {
 		); adapter != nil {
 			apiOpts = append(apiOpts, api.WithMemoryCompanionAdapter(adapter))
 		}
+		// memory_list's export_url (LLD 22, GitHub #119 item 6) is absolute
+		// when the daemon has a public origin; read per call so a reload
+		// that sets it takes effect.
+		apiOpts = append(apiOpts, api.WithPublicOrigin(func() string { return c.Config.PublicOrigin() }))
 		// Cache stats adapter — surfaces both Phase D embedding cache
 		// and Phase E response cache through one endpoint
 		// (/api/v1/memory/cache-stats) for the vornikctl CLI.
@@ -1189,16 +1198,14 @@ func (c *Container) initHTTPServer() error {
 		explainExecRepo := c.repos.Executions
 		explainAuditRepo := c.repos.ToolAudit
 		explainOutcomeRepo := c.repos.StepOutcomes
-		var explainLogs postmortem.LogTailFetcher
-		if ltf, ok := any(c.Executor).(postmortem.LogTailFetcher); ok {
-			explainLogs = ltf
-		}
+		// The log tail is the daemon-held task log, never the executor's
+		// container logs (GitHub #294: that ran podman logs on the request).
 		renderer := postmortem.NewRenderer(
 			explainTaskRepo,
 			explainExecRepo,
 			explainOutcomeRepo,
 			explainAuditRepo,
-			explainLogs,
+			c.heldTaskLog(),
 		)
 		apiOpts = append(apiOpts, api.WithExplainRenderer(renderer))
 	}
@@ -1774,6 +1781,7 @@ func (c *Container) initHTTPServer() error {
 			return c.mcpManager.PendingStatus()
 		})
 		dh.SetMCPWithheldSource(c.mcpWithheldServers)
+		dh.SetMCPNoGrantSource(c.mcpNoGrant)
 		if c.repos != nil && c.repos.LeaderLocks != nil {
 			dh.SetLeaderLockRepository(c.repos.LeaderLocks)
 			// Passed as a closure, evaluated per doctor run: the elector set
@@ -2303,6 +2311,8 @@ func (c *Container) initHTTPServer() error {
 	if c.Executor != nil {
 		uiOpts = append(uiOpts, ui.WithExecutor(uiExecutorAdapter{c.Executor}))
 	}
+	// The task log panel reads daemon-held state (GitHub #294).
+	uiOpts = append(uiOpts, ui.WithTaskLogSource(c.heldTaskLog()))
 	// Shared per-project workspace lock — same instance the executor +
 	// api server hold. The UI artifact-delete path takes it around its
 	// git add+commit so deletes serialise per project with execution.
@@ -2566,21 +2576,30 @@ func (c *Container) initHTTPServer() error {
 	// any auth / rate-limit / CSRF / audit code runs. All six historical
 	// client-IP derivations now read realip.ClientIPFromContext.
 	// see LLD § https://docs.vornik.io
-	rootHandler, err := c.wrapRealIP(mux)
+	// Built once per pass (it logs the startup warnings) and applied to both
+	// listeners: the TCP root and the unix socket (GitHub #95).
+	realIPMW, err := c.realIPMiddleware()
 	if err != nil {
 		return err
 	}
+	readTimeout := parseDuration(c.Config.Server.ReadTimeout, 30*time.Second)
 
 	server := &http.Server{
 		Addr:              c.Config.Server.Address,
-		Handler:           rootHandler,
-		ReadTimeout:       parseDuration(c.Config.Server.ReadTimeout, 30*time.Second),
+		Handler:           realIPMW(mux),
+		ReadTimeout:       readTimeout,
 		ReadHeaderTimeout: 10 * time.Second,
 		WriteTimeout:      writeTimeout,
 		IdleTimeout:       60 * time.Second,
 	}
-
 	c.HTTPServer = server
+
+	// The daemon unix socket gets its own server serving only the agent
+	// route set in front of the SAME mux (GitHub #95).
+	// see LLD § https://docs.vornik.io §12.2
+	if c.Config.Server.UnixSocket != "" {
+		c.AgentSocketServer = newAgentSocketServer(mux, realIPMW, readTimeout, writeTimeout)
+	}
 	return nil
 }
 
@@ -2728,20 +2747,25 @@ func (c *Container) adminUIOptions(deps adminUIDeps) []ui.ServerOption { //nolin
 	return opts
 }
 
-// wrapRealIP builds the trusted-proxy real-IP config from the daemon
+// realIPMiddleware builds the trusted-proxy real-IP config from the daemon
 // config (applying the deprecated api.rate_limit.per_ip.trusted_proxies
-// fallback) and wraps next with the resolver middleware. A malformed
-// trusted-proxy entry is a fail-at-load error — a typo in the trust list
-// is a security-relevant misconfiguration the operator must see at startup,
-// not discover via a spoofed lockout.
+// fallback), logs every startup warning, and returns the resolver
+// middleware. A malformed trusted-proxy entry is a fail-at-load error — a
+// typo in the trust list is a security-relevant misconfiguration the
+// operator must see at startup, not discover via a spoofed lockout.
 //
-// Startup warnings:
-//   - deprecated fallback in use → point operators at server.real_ip.
-//   - auth enabled but real_ip unconfigured → behind a tunnel every caller
-//     collapses to the proxy IP and the lockout becomes a foot-gun.
+// It is the ONLY production entry point: initHTTPServer calls it once per
+// pass and applies the result to both the TCP root and the unix-socket
+// handler, so a warning is logged once per pass, never once per listener
+// (GitHub #95; the former wrapRealIP wrapper was removed so a second caller
+// cannot log the warnings again).
+//
+// Startup warnings: the deprecated fallback; auth enabled with real_ip
+// unconfigured; an https public origin with real_ip unconfigured (T15);
+// each trusted_proxies entry wider than one address (#103).
 //
 // see LLD § https://docs.vornik.io
-func (c *Container) wrapRealIP(next http.Handler) (http.Handler, error) {
+func (c *Container) realIPMiddleware() (func(http.Handler) http.Handler, error) {
 	resolved := c.Config.ResolveRealIP()
 	cfg, err := realip.NewConfig(resolved.Enabled, resolved.TrustedProxies, resolved.Header)
 	if err != nil {
@@ -2767,6 +2791,20 @@ func (c *Container) wrapRealIP(next http.Handler) (http.Handler, error) {
 			Msg("public origin is https but server.real_ip is not configured, so X-Forwarded-Proto is ignored: pairing, approving and the session exchange will refuse plain http from the proxy and cookies lose Secure; enable server.real_ip and list the proxy host's own addresses in trusted_proxies")
 	}
 
+	// GitHub #103: every trusted peer may claim a client IP and HTTPS, so the
+	// rule is single addresses only. Warn (not refuse) per wider entry, but
+	// only when the list is in force.
+	// see LLD § https://docs.vornik.io §11.2
+	if cfg.Enabled {
+		for _, cidr := range cfg.TrustedProxies {
+			if ones, bits := cidr.Mask.Size(); ones < bits {
+				c.Logger.Warn().
+					Str("entry", cidr.String()).
+					Msg("server.real_ip.trusted_proxies entry is wider than one address: every host inside it may claim a client IP and HTTPS; list the proxy host's own addresses as /32 or /128 (loopback as 127.0.0.1/32 and ::1/128)")
+			}
+		}
+	}
+
 	if registry := c.observabilityRegistry(); registry != nil && c.realipMetrics == nil {
 		c.realipMetrics = realip.NewMetrics(registry)
 	}
@@ -2775,7 +2813,7 @@ func (c *Container) wrapRealIP(next http.Handler) (http.Handler, error) {
 		onUntrusted = c.realipMetrics.UntrustedHeaderTotal.Inc
 	}
 
-	return realip.Middleware(cfg, onUntrusted)(next), nil
+	return realip.Middleware(cfg, onUntrusted), nil
 }
 
 // parseDuration parses a duration string with a fallback default.
@@ -3137,4 +3175,17 @@ func (c *Container) classESlotStore() configassist.SlotStore {
 // (case-insensitive).
 func hasHTTPSScheme(origin string) bool {
 	return len(origin) >= len("https://") && strings.EqualFold(origin[:len("https://")], "https://")
+}
+
+// heldTaskLog is the one task log the daemon's request paths read: the live
+// hub replay plus the persisted excerpt, never a process (GitHub #294;
+// process-spawn-law design, "Change 2026-10-08"). The REST routes build
+// their own from the same repositories and publisher; the explain renderer,
+// the post-mortem explainer and the UI log panel are handed this one.
+func (c *Container) heldTaskLog() api.HeldTaskLog {
+	h := api.HeldTaskLog{Tasks: c.repos.Tasks, Executions: c.repos.Executions}
+	if c.livePub != nil {
+		h.Live = c.livePub
+	}
+	return h
 }

@@ -29,7 +29,7 @@ func TestFeatureStatusEndpoint_ListsSeedFeatures(t *testing.T) {
 	h := &DoctorHandlers{
 		featureDepsFunc: stubFeaturedoctorDeps,
 	}
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/doctor/features", nil)
+	req := authDisabledReq(httptest.NewRequest(http.MethodGet, "/api/v1/doctor/features", nil))
 	rec := httptest.NewRecorder()
 	h.ListFeatures(rec, req)
 	if rec.Code != http.StatusOK {
@@ -64,7 +64,7 @@ func TestFeatureStatusEndpoint_GetSingleFeature(t *testing.T) {
 	h := &DoctorHandlers{
 		featureDepsFunc: stubFeaturedoctorDeps,
 	}
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/doctor/features/auth", nil)
+	req := authDisabledReq(httptest.NewRequest(http.MethodGet, "/api/v1/doctor/features/auth", nil))
 	rec := httptest.NewRecorder()
 	h.GetFeature(rec, req)
 	if rec.Code != http.StatusOK {
@@ -86,7 +86,7 @@ func TestFeatureStatusEndpoint_GetNotFound(t *testing.T) {
 	h := &DoctorHandlers{
 		featureDepsFunc: stubFeaturedoctorDeps,
 	}
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/doctor/features/nonexistent", nil)
+	req := authDisabledReq(httptest.NewRequest(http.MethodGet, "/api/v1/doctor/features/nonexistent", nil))
 	rec := httptest.NewRecorder()
 	h.GetFeature(rec, req)
 	if rec.Code != http.StatusNotFound {
@@ -98,7 +98,7 @@ func TestFeatureStatusEndpoint_MethodNotAllowed(t *testing.T) {
 	h := &DoctorHandlers{
 		featureDepsFunc: stubFeaturedoctorDeps,
 	}
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/doctor/features", nil)
+	req := authDisabledReq(httptest.NewRequest(http.MethodPost, "/api/v1/doctor/features", nil))
 	rec := httptest.NewRecorder()
 	h.ListFeatures(rec, req)
 	if rec.Code != http.StatusMethodNotAllowed {
@@ -117,7 +117,7 @@ func TestFeatureStatusEndpoint_PrereqDetailPresent(t *testing.T) {
 		}
 	}
 	h := &DoctorHandlers{featureDepsFunc: stubDeps}
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/doctor/features/instinct", nil)
+	req := authDisabledReq(httptest.NewRequest(http.MethodGet, "/api/v1/doctor/features/instinct", nil))
 	rec := httptest.NewRecorder()
 	h.GetFeature(rec, req)
 	if rec.Code != http.StatusOK {

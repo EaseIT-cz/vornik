@@ -2,6 +2,7 @@ package integrations
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net"
 	"net/http"
@@ -90,12 +91,18 @@ func (g DialGuard) Dialer(host string) *net.Dialer {
 				return fmt.Errorf("dial guard: could not parse resolved address %q", address)
 			}
 			if isBlockedIP(ip) {
-				return fmt.Errorf("dial guard: refusing to dial private/loopback/link-local address %s (host %s)", ip, host)
+				return fmt.Errorf("%w private/loopback/link-local address %s (host %s)", ErrDialRefused, ip, host)
 			}
 			return nil
 		},
 	}
 }
+
+// ErrDialRefused is the guard's refusal of a private, loopback or
+// link-local address, so a caller can classify it without matching text
+// (agent-administered design §6.1, review 5ed3 A4). The message is
+// unchanged: "dial guard: refusing to dial private/loopback/... ".
+var ErrDialRefused = errors.New("dial guard: refusing to dial")
 
 func (g DialGuard) hostAllowed(host string) bool {
 	for _, h := range g.AllowedHosts {

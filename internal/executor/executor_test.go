@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -624,6 +625,19 @@ func (m *MockTaskRepo) Update(_ context.Context, task *persistence.Task) error {
 	m.mu.Unlock()
 	return nil
 }
+
+// UpdateIfStatus writes like Update while the stored status is one of
+// allowed (GitHub #303); a missing row is not written.
+func (m *MockTaskRepo) UpdateIfStatus(_ context.Context, task *persistence.Task, allowed []persistence.TaskStatus) (bool, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	cur, ok := m.tasks[task.ID]
+	if !ok || !slices.Contains(allowed, cur.Status) {
+		return false, nil
+	}
+	m.tasks[task.ID] = task
+	return true, nil
+}
 func (m *MockTaskRepo) GetChildren(_ context.Context, parentID string) ([]*persistence.Task, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -660,6 +674,15 @@ func (m *MockTaskRepo) Delete(_ context.Context, id string) error {
 	return nil
 }
 func (m *MockTaskRepo) AddTask(t *persistence.Task) { m.mu.Lock(); m.tasks[t.ID] = t; m.mu.Unlock() }
+
+// storedRow is a copy of t to store in a MockTaskRepo, so the stored row and
+// the in-memory task the executor mutates are two things, as with a
+// database. AddTask(t) aliases them: a write guarded on the stored status
+// (UpdateIfStatus, GitHub #303) then reads the in-memory value.
+func storedRow(t *persistence.Task) *persistence.Task {
+	cp := *t
+	return &cp
+}
 
 // ReleaseLease updates the task's status + retry-counters in
 // place. Mirrors the semantics of postgres TaskRepository's same
@@ -2053,8 +2076,8 @@ func TestExecutor_NilMetrics_NoOp(t *testing.T) {
 
 func TestExecutor_HandleFailure_NilMetrics(t *testing.T) {
 	e, _, er, _, tr := setup()
-	task := &persistence.Task{ID: "t2", ProjectID: "p1", CreatedAt: time.Now()}
-	tr.AddTask(task)
+	task := &persistence.Task{ID: "t2", ProjectID: "p1", Status: persistence.TaskStatusRunning, CreatedAt: time.Now()}
+	tr.AddTask(storedRow(task))
 	exec := &persistence.Execution{ID: "e2", TaskID: "t2", ProjectID: "p1"}
 	_ = er.Create(context.Background(), exec)
 

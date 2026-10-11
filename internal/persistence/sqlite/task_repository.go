@@ -155,11 +155,27 @@ func (r *TaskRepository) GetByIdempotencyKey(ctx context.Context, projectID, ide
 // before the write (scheduler design §4.9), as it sets UpdatedAt; on success
 // the struct matches the row.
 func (r *TaskRepository) Update(ctx context.Context, task *persistence.Task) error {
+	_, err := r.update(ctx, task, nil)
+	return err
+}
+
+// UpdateIfStatus is Update guarded by the row's current status (GitHub #303;
+// 05-scheduler §4.11): the same column set, plus AND status IN (allowed).
+// false, nil when no row matched.
+func (r *TaskRepository) UpdateIfStatus(ctx context.Context, task *persistence.Task, allowed []persistence.TaskStatus) (bool, error) {
+	if len(allowed) == 0 {
+		return false, fmt.Errorf("UpdateIfStatus: allowed statuses required")
+	}
+	return r.update(ctx, task, allowed)
+}
+
+// update is Update's statement; a non-nil allowed adds the status guard.
+func (r *TaskRepository) update(ctx context.Context, task *persistence.Task, allowed []persistence.TaskStatus) (bool, error) {
 	if task == nil {
-		return fmt.Errorf("task is nil")
+		return false, fmt.Errorf("task is nil")
 	}
 	if err := persistence.ValidateStoredTaskBudget(task.BudgetUSD); err != nil {
-		return err
+		return false, err
 	}
 	task.UpdatedAt = time.Now().UTC()
 	if persistence.TaskStatusHoldsNoLease(task.Status) {
@@ -168,7 +184,29 @@ func (r *TaskRepository) Update(ctx context.Context, task *persistence.Task) err
 		// (scheduler design §4.9, review 6fdb F1).
 		task.ClearLeaseFields()
 	}
-	_, err := r.db.ExecContext(ctx, `
+	guard := ""
+	var guardArgs []any
+	if allowed != nil {
+		guard = " AND status IN (" + strings.TrimSuffix(strings.Repeat("?,", len(allowed)), ",") + ")"
+		for _, s := range allowed {
+			guardArgs = append(guardArgs, string(s))
+		}
+	}
+	args := []any{
+		task.ProjectID, task.WorkflowID, task.IdempotencyKey, task.ParentTaskID, string(task.CreationSource),
+		nullableDelegationMode(task.DelegationMode), string(task.Status), task.Priority,
+		nullableBlob(task.Payload), sqliteStringArray(task.Dependencies),
+		task.LeaseID, sqliteTimePtr(task.LeasedAt), task.LeasedBy, sqliteTimePtr(task.LeaseExpiresAt),
+		task.Attempt, task.MaxAttempts, task.LastError, task.LastErrorClass,
+		task.BudgetUSD,
+		sqliteTime(task.UpdatedAt),
+		// failed_at's CASE: the NEW status, then the fallback instant (same
+		// as updated_at, so a row entering FAILED gets a coherent pair).
+		string(task.Status),
+		sqliteTime(task.UpdatedAt),
+		task.ID,
+	}
+	res, err := r.db.ExecContext(ctx, `
 		UPDATE tasks
 		SET project_id = ?,
 		    workflow_id = ?,
@@ -203,21 +241,15 @@ func (r *TaskRepository) Update(ctx context.Context, task *persistence.Task) err
 		    -- testing the column would ask what the task WAS, not what it
 		    -- is becoming.
 		    failed_at = CASE WHEN ? = 'FAILED' THEN COALESCE(failed_at, ?) ELSE NULL END
-		WHERE id = ?`,
-		task.ProjectID, task.WorkflowID, task.IdempotencyKey, task.ParentTaskID, string(task.CreationSource),
-		nullableDelegationMode(task.DelegationMode), string(task.Status), task.Priority,
-		nullableBlob(task.Payload), sqliteStringArray(task.Dependencies),
-		task.LeaseID, sqliteTimePtr(task.LeasedAt), task.LeasedBy, sqliteTimePtr(task.LeaseExpiresAt),
-		task.Attempt, task.MaxAttempts, task.LastError, task.LastErrorClass,
-		task.BudgetUSD,
-		sqliteTime(task.UpdatedAt),
-		// failed_at's CASE: the NEW status, then the fallback instant (same
-		// as updated_at, so a row entering FAILED gets a coherent pair).
-		string(task.Status),
-		sqliteTime(task.UpdatedAt),
-		task.ID,
-	)
-	return err
+		WHERE id = ?`+guard, append(args, guardArgs...)...)
+	if err != nil {
+		return false, err
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return false, err
+	}
+	return n > 0, nil
 }
 
 // Delete removes a task by ID. No error on missing rows.

@@ -297,7 +297,8 @@ type Repositories struct {
 	BrokerActions persistence.BrokerActionRepository
 	// BrokerGrants persists standing grants (broker write-actions design,
 	// tier 2): a person's approval of a declared class of writes.
-	BrokerGrants persistence.BrokerGrantRepository
+	BrokerGrants       persistence.BrokerGrantRepository
+	AccountTransitions persistence.AccountTransitionRepository
 	// AgentSecrets holds sealed agent credentials (agent-administered Vornik
 	// design §8.1); ciphertext only, the key lives on disk.
 	AgentSecrets persistence.AgentSecretRepository
@@ -484,6 +485,7 @@ func buildSQLiteRepositories(db *sql.DB) *Repositories {
 		WorkflowProposals:       sqlite.NewWorkflowProposalRepository(db),
 		BrokerActions:           sqlite.NewBrokerActionRepository(db),
 		BrokerGrants:            sqlite.NewBrokerGrantRepository(db),
+		AccountTransitions:      sqlite.NewAccountTransitionRepository(db),
 		AgentSecrets:            sqlite.NewAgentSecretRepository(db),
 		ApproverDevices:         sqlite.NewApproverDeviceRepository(db),
 		AgentGrants:             sqlite.NewAgentGrantRepository(db),
@@ -658,6 +660,7 @@ func Build(dbtx persistence.DBTX) *Repositories {
 		WorkflowProposals:              postgres.NewWorkflowProposalRepository(dbtx),
 		BrokerActions:                  postgres.NewBrokerActionRepository(dbtx),
 		BrokerGrants:                   postgres.NewBrokerGrantRepository(dbtx),
+		AccountTransitions:             postgres.NewAccountTransitionRepository(dbtx),
 		AgentSecrets:                   postgres.NewAgentSecretRepository(dbtx),
 		ApproverDevices:                postgres.NewApproverDeviceRepository(dbtx),
 		AgentGrants:                    postgres.NewAgentGrantRepository(dbtx),

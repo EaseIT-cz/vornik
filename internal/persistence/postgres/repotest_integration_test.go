@@ -1025,7 +1025,7 @@ func TestBrokerAction_PostgresContract(t *testing.T) {
 // connections.
 func TestBrokerGrant_PostgresContract(t *testing.T) {
 	db := newIntegrationDB(t)
-	repotest.RunBrokerGrantSuite(t, NewBrokerGrantRepository(db.DB), NewBrokerActionRepository(db.DB))
+	repotest.RunBrokerGrantSuite(t, NewBrokerGrantRepository(db.DB), NewBrokerActionRepository(db.DB), NewAccountTransitionRepository(db.DB))
 }
 
 // TestAgentSecret_PostgresContract — the agent secret table on the production
@@ -1040,6 +1040,45 @@ func TestAgentSecret_PostgresContract(t *testing.T) {
 func TestAgentGrant_PostgresContract(t *testing.T) {
 	db := newIntegrationDB(t)
 	repotest.RunAgentGrantSuite(t, NewAgentGrantRepository(db.DB))
+}
+
+// TestMigration219_IsAdditive — GitHub #119 item 8 (2026-10-08): migration
+// 219 adds the account columns to agent_integration_approvals with defaults,
+// so a row written with only the pre-219 columns reads as the default account
+// with no identity and keeps every other value (operator decision F1/F4).
+// Up is idempotent (ADD COLUMN IF NOT EXISTS) and is re-run here.
+func TestMigration219_IsAdditive(t *testing.T) {
+	db := newIntegrationDB(t)
+	var up string
+	for _, m := range persistence.DefaultMigrations {
+		if m.Version == 219 {
+			up = m.Up
+		}
+	}
+	if up == "" {
+		t.Fatal("migration 219 not found")
+	}
+	pid := "mig219-" + time.Now().Format("150405.000000") + "--comms"
+	if _, err := db.DB.Exec(`INSERT INTO agent_integration_approvals (namespace, project_id, integration, kind, url, read_tools, write_tools, read_pending, approved_by_device, approved_at)
+		VALUES ('mig219', $1, 'mail', 'mcp', 'https://mail.example/mcp', '["read_inbox"]', '["send"]', TRUE, 'dev_a', NOW())`, pid); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.DB.Exec(up); err != nil {
+		t.Fatalf("re-running migration 219: %v", err)
+	}
+	got, err := NewAgentGrantRepository(db.DB).GetIntegration(context.Background(), pid, "mail")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.AccountLabel != "default" || got.AccountIdentity != "" || got.IdentitySource != "" {
+		t.Fatalf("a pre-219 row reads account %q/%q/%q, want default with no identity", got.AccountLabel, got.AccountIdentity, got.IdentitySource)
+	}
+	if got.URL != "https://mail.example/mcp" || len(got.ReadTools) != 1 || len(got.WriteTools) != 1 || !got.ReadPending || got.ApprovedByDevice != "dev_a" {
+		t.Fatalf("migration 219 changed an existing value: %+v", got)
+	}
+	if _, err := db.DB.Exec(`UPDATE agent_integration_approvals SET identity_source = 'user' WHERE project_id = $1`, pid); err == nil {
+		t.Fatal("identity_source accepted a value outside '', agent, provider")
+	}
 }
 
 // TestAgentModelDestination_PostgresContract — agent_model_provider_approvals
@@ -1286,4 +1325,62 @@ func TestMigration203_MarksExistingRowsAsPushed(t *testing.T) {
 			t.Errorf("%s: pushed_state = %v, want %v", st, got, want)
 		}
 	}
+}
+
+// GitHub #119 item 8: migration 220 is additive and idempotent, and never
+// guesses the account of a standing grant written with the pre-220 columns.
+func TestMigration220_IsAdditive(t *testing.T) {
+	db := newIntegrationDB(t)
+	tx, err := db.DB.BeginTx(context.Background(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	// A session-local shadow table protects the shared integration database.
+	// Dropping the account columns makes the populated fixture genuinely
+	// pre-220; ALTER TABLE resolves pg_temp first on this pinned connection.
+	for _, q := range []string{
+		`CREATE TEMP TABLE broker_standing_grants (LIKE public.broker_standing_grants INCLUDING ALL) ON COMMIT DROP`,
+		`ALTER TABLE pg_temp.broker_standing_grants DROP COLUMN account_label`,
+		`ALTER TABLE pg_temp.broker_standing_grants DROP COLUMN account_identity`,
+		`SET LOCAL search_path = pg_temp`,
+	} {
+		if _, err := tx.Exec(q); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var beforeColumns int
+	if err := tx.QueryRow(`SELECT count(*) FROM pg_attribute WHERE attrelid = 'pg_temp.broker_standing_grants'::regclass AND attname IN ('account_label','account_identity') AND NOT attisdropped`).Scan(&beforeColumns); err != nil || beforeColumns != 0 {
+		t.Fatalf("fixture has %d account columns before migration: %v", beforeColumns, err)
+	}
+	var up string
+	for _, m := range persistence.DefaultMigrations {
+		if m.Version == 220 {
+			up = m.Up
+		}
+	}
+	if up == "" {
+		t.Fatal("migration 220 not found")
+	}
+	id := fmt.Sprintf("mig220-%d", time.Now().UnixNano())
+	if _, err := tx.Exec(`INSERT INTO broker_standing_grants (id,project_id,namespace,workflow_id,action,key_paths,key_values,key_hash,max_uses,uses_left,expires_at,created_at,created_by,seed_action_id,reach_hash_at_creation,digest_through) VALUES ($1,'hermes--comms','hermes','reply','send','["to"]','sealed','hash',5,3,NOW()+INTERVAL '1 day',NOW(),'dev_a',$1,'reach',NOW())`, id); err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 2; i++ {
+		if _, err := tx.Exec(up); err != nil {
+			t.Fatalf("migration 220 run %d: %v", i+1, err)
+		}
+	}
+	got, err := NewBrokerGrantRepository(tx).Get(context.Background(), id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.AccountLabel != "" || got.AccountIdentity != "" || got.ProjectID != "hermes--comms" || got.Namespace != "hermes" || got.WorkflowID != "reply" || got.Action != "send" || got.KeyHash != "hash" || got.KeyValuesSealed != "sealed" || got.MaxUses != 5 || got.UsesLeft != 3 || got.CreatedBy != "dev_a" || got.SeedActionID != id || got.ReachHashAtCreation != "reach" || !got.Active || got.Paused || got.SuspendedAt != nil {
+		t.Fatalf("migration changed legacy grant: %+v", got)
+	}
+}
+
+func TestQueuedAction_PostgresContract(t *testing.T) {
+	db := newIntegrationDB(t)
+	repotest.RunQueuedActionSuite(t, NewBrokerActionRepository(db.DB), NewBrokerGrantRepository(db.DB), NewAccountTransitionRepository(db.DB))
 }

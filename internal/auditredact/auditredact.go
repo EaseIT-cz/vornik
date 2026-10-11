@@ -126,11 +126,26 @@ func (r *Repo) BypassReason() Reason {
 // entries for other bookkeeping, and a redaction visible there would be a
 // surprise at a distance.
 func (r *Repo) Log(ctx context.Context, entry *persistence.ToolAuditEntry) error {
+	_, err := r.LogStored(ctx, entry)
+	return err
+}
+
+// LogStored is Log, and it also returns the entry it handed to the inner
+// repository: the redacted copy when something was redacted, otherwise the
+// caller's own entry. The returned pointer is read-only in every case.
+//
+// WHY. The realtime writer has sinks besides the row — it publishes the tool
+// I/O on the live stream — and until 2026-10-08 it built those from its raw
+// request after Log, so the row was redacted and the live event was not
+// (GitHub #293). Returning what was stored lets every sink carry the stored
+// row from one scan, rather than a writer scanning a second time.
+// Design: live-task-observation-design.md, "Amended 2026-10-08".
+func (r *Repo) LogStored(ctx context.Context, entry *persistence.ToolAuditEntry) (*persistence.ToolAuditEntry, error) {
 	if entry == nil {
 		// Not a row, so not part of the denominator. Counting it would inflate
 		// the coverage number with writes that never happened — the same
 		// species of wrong the census exists to fix.
-		return r.inner.Log(ctx, entry)
+		return entry, r.inner.Log(ctx, entry)
 	}
 	if r.detector == nil {
 		// The fail-open, counted. A Repo built by New with a nil detector
@@ -140,7 +155,7 @@ func (r *Repo) Log(ctx context.Context, entry *persistence.ToolAuditEntry) error
 			reason = ReasonDetectorNil
 		}
 		r.metrics.record(StatusSkipped, reason)
-		return r.inner.Log(ctx, entry)
+		return entry, r.inner.Log(ctx, entry)
 	}
 
 	inputFindings := r.detector.Scan([]byte(entry.ToolInput))
@@ -153,7 +168,7 @@ func (r *Repo) Log(ctx context.Context, entry *persistence.ToolAuditEntry) error
 		// from "nothing was examined" (Finding D): the sum over statuses is the
 		// coverage denominator.
 		r.metrics.record(StatusScanned, ReasonNone)
-		return r.inner.Log(ctx, entry)
+		return entry, r.inner.Log(ctx, entry)
 	}
 
 	combined := make([]secrets.Finding, 0, len(inputFindings)+len(outputFindings))
@@ -171,7 +186,7 @@ func (r *Repo) Log(ctx context.Context, entry *persistence.ToolAuditEntry) error
 		// redaction, not the signal.
 		r.log(entry, action, counts, "secrets: tool audit scanned — detect-only, row stored intact")
 		r.metrics.record(StatusDetectOnly, ReasonNone)
-		return r.inner.Log(ctx, entry)
+		return entry, r.inner.Log(ctx, entry)
 	default:
 		// Redact, and Block degrades to it: refusing to persist the row would
 		// lose more signal than the redaction does. Same degradation the
@@ -188,7 +203,7 @@ func (r *Repo) Log(ctx context.Context, entry *persistence.ToolAuditEntry) error
 		clean.ToolInput = string(secrets.Redact([]byte(entry.ToolInput), inputFindings))
 		clean.ToolOutput = string(secrets.Redact([]byte(entry.ToolOutput), outputFindings))
 		r.metrics.record(StatusRedacted, ReasonNone)
-		return r.inner.Log(ctx, &clean)
+		return &clean, r.inner.Log(ctx, &clean)
 	}
 }
 

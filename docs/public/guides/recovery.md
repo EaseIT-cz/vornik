@@ -3,7 +3,7 @@ sources:
     - path: internal/executor/retry_from_step.go
       sha256: 7f84117d157056ad1511802c021fcbf789ef14e7915e7ffe817534157df96fac
     - path: internal/ui/execution_actions.go
-      sha256: 63618626ba8c89217103f474846e2fb83b20656ce53780f9a0c83823423cdfb7
+      sha256: 4bc831fcd997c44a6310ae779ff1761921cbb3885f6b2a1b31c6bf4460ae59a2
 ---
 # Recovering failed work
 

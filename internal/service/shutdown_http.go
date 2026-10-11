@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"sync"
 	"time"
 
 	"github.com/rs/zerolog"
@@ -40,4 +41,25 @@ func shutdownHTTPWithDeadline(ctx context.Context, srv httpShutdowner, budget ti
 			Msg("HTTP graceful shutdown exceeded budget; force-closing remaining connections")
 		_ = srv.Close()
 	}
+}
+
+// shutdownHTTPServers shuts every given server down in parallel, each with
+// shutdownHTTPWithDeadline and the same budget, and waits for all of them, so
+// the phase takes the slower of them (bounded by one budget), not the sum.
+// Callers pass only non-nil servers. GitHub #95: the TCP server and the agent
+// socket server close together in shutdown Phase 3.
+// see LLD § https://docs.vornik.io §12.2
+func shutdownHTTPServers(ctx context.Context, budget time.Duration, logger zerolog.Logger, servers ...httpShutdowner) {
+	var wg sync.WaitGroup
+	for _, srv := range servers {
+		if srv == nil {
+			continue
+		}
+		wg.Add(1)
+		go func(s httpShutdowner) {
+			defer wg.Done()
+			shutdownHTTPWithDeadline(ctx, s, budget, logger)
+		}(srv)
+	}
+	wg.Wait()
 }

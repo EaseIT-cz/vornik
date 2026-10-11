@@ -21,6 +21,9 @@ type ProjectAPI struct {
 	// and HEAD). Writes are never called by a role: a workflow proposes
 	// them, one approval each (plan P4.8).
 	Writes bool `yaml:"writes,omitempty"`
+	// Account is the label of the account this API connection acts as
+	// (agent-administered design §22.2.1). Absent means the default account.
+	Account string `yaml:"account,omitempty"`
 }
 
 // ProjectAPIAuth injects one credential from a secret at call time. Header is

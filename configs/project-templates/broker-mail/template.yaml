@@ -1,0 +1,36 @@
+# Broker project template — a read-only mail broker for a front-end agent
+# (Hermes Agent and the like) that must never hold the mail credential
+# itself. Renders the project the Hermes setup guide used to inline
+# (design 24, "Setup CLI gaps closed", GitHub #99). It writes the project
+# only: broker-swarm, mail-digest and mail-reply ship with Vornik
+# (make install-config-assets), and init's pre-write validation refuses the
+# render when they are missing. The write path (gmail-send, mail-reply) is
+# an opt-in: see configs/examples/broker-mail.yaml.
+displayName: "Mail broker (read-only)"
+description: |
+  A broker project (broker: true) that holds read-only mail access on behalf
+  of a front-end agent. It narrows the daemon-level google-workspace MCP
+  server to three read tools and runs the mail-digest broker workflow.
+  Every key on it is broker-only: no memory, no skills.
+
+  After materialisation: reload the config, then grant the agent a key:
+  vornikctl companion grant -p <projectId> --client hermes --workflows mail-digest --budget-usd 5
+domain: "general"
+
+parameters:
+  - name: projectId
+    type: string
+    label: "Project ID"
+    description: "Lowercase letters, numbers, and hyphens only. Becomes the URL slug + config filename."
+    pattern: "[a-z0-9][a-z0-9-]{1,30}[a-z0-9]"
+    required: true
+  - name: displayName
+    type: string
+    label: "Display name"
+    description: "Human-readable name shown in the UI."
+    default: "Mail broker"
+    required: true
+
+files:
+  - source: project.yaml.tmpl
+    target: "projects/{{.projectId}}.yaml"

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 	"sync"
@@ -54,6 +55,10 @@ type agentAdminService struct {
 	configDir, configsDir string
 	// mu serialises verb calls: state read, render and filing are one unit.
 	mu sync.Mutex
+	// signInMu serialises device OAuth completions, from the prior sign-in
+	// read to the identity write, so the stored token and the recorded
+	// identity always come from one sign-in (lane B review 25bf finding 2).
+	signInMu sync.Mutex
 	// bg tracks detached work (a tools listing after a credential is
 	// stored), so a caller can wait for it.
 	bg sync.WaitGroup
@@ -68,6 +73,10 @@ type agentAdminService struct {
 	// approval signals, keyed by request namespace.
 	notificationsMu sync.Mutex
 	notifications   map[string][]SetupNotification
+	// limiter and testConnTimeout bound test_connection (design §6.2);
+	// a test shortens the timeout.
+	limiter         connLimiter
+	testConnTimeout time.Duration
 }
 
 // background runs fn detached and tracked.
@@ -223,22 +232,68 @@ func (p agentAdminProxy) EnsureHome(ctx context.Context, ns, clientKind string) 
 	return s.EnsureHome(ctx, ns, clientKind)
 }
 
-// Do runs one mutating verb for an agent admin key.
+// emailShaped matches an address, for the fail-closed redaction.
+var emailShaped = regexp.MustCompile(`[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+`)
+
+// Do runs one mutating verb for an agent admin key. Its sentence and reason
+// go back to the agent, so a provider-reported identity in them is replaced
+// (design §22.2.7; lane B review 25bf finding 3): the device's own copy of
+// the sentence keeps it.
 func (s *agentAdminService) Do(ctx context.Context, key *persistence.APIKey, verb string, input json.RawMessage) (AgentAdminResult, error) {
+	res, err := s.doVerb(ctx, key, verb, input)
+	if err == nil && key != nil {
+		hide := s.providerIdentityHider(ctx, key.AgentNamespace)
+		res.Sentence, res.Reason = hide(res.Sentence), hide(res.Reason)
+	}
+	return res, err
+}
+
+// providerIdentityHider replaces each provider-reported identity of the
+// namespace's connections with "verified by the provider". A read failure
+// hides nothing it cannot list, so it falls back to masking every
+// email-shaped string.
+func (s *agentAdminService) providerIdentityHider(ctx context.Context, ns string) func(string) string {
+	rows, err := s.grants.ListIntegrations(ctx, ns)
+	if err != nil {
+		return func(t string) string { return emailShaped.ReplaceAllString(t, "verified by the provider") }
+	}
+	var pairs []string
+	for _, a := range rows {
+		if a.IdentitySource == persistence.IdentitySourceProvider && a.AccountIdentity != "" {
+			pairs = append(pairs, a.AccountIdentity, "verified by the provider")
+		}
+	}
+	if len(pairs) == 0 {
+		return func(t string) string { return t }
+	}
+	return strings.NewReplacer(pairs...).Replace
+}
+
+// doVerb is Do before the agent-facing redaction.
+func (s *agentAdminService) doVerb(ctx context.Context, key *persistence.APIKey, verb string, input json.RawMessage) (AgentAdminResult, error) {
 	if key == nil || !key.AgentAdmin || !agentns.Valid(key.AgentNamespace) {
 		return AgentAdminResult{}, fmt.Errorf("not an agent admin key")
 	}
 	ns := key.AgentNamespace
+	// Capture before state/account/config reads. Defer a snapshot error until
+	// the rendered inert change actually needs a connection transition;
+	// unrelated verbs retain their prior availability during a busy scope.
+	vector, snapshotErr := s.c.accountDecisionEpoch(ctx, ns)
+	ctx = context.WithValue(ctx, configAccountSnapshotKey{}, configAccountSnapshot{vector: vector, err: snapshotErr})
 	if verb == agentadmin.VerbApproveServerTools {
 		// Daemon-internal (plan P4.3): the daemon files it after listing a
 		// connected server's tools; no key may.
 		return AgentAdminResult{Effect: EffectRefused, Reason: verb + " refused: not a verb you can call"}, nil
 	}
 	// Listing a new unauthenticated server is network I/O: before the lock.
-	var advertisedURL string
-	var advertised []string
+	var listing unauthListing
 	if verb == agentadmin.VerbAddMCPServer {
-		advertisedURL, advertised = s.advertiseUnauthenticated(ctx, ns, input)
+		listing = s.advertiseUnauthenticated(ctx, ns, input)
+		if listing.refuse != "" {
+			// Design §6.1 item 4: the server does not speak the declared
+			// transport; nothing is filed.
+			return AgentAdminResult{Effect: EffectRefused, Reason: listing.refuse}, nil
+		}
 	}
 	var recipeTargets map[string][]string
 	if verb == agentadmin.VerbInstallRecipe {
@@ -250,8 +305,14 @@ func (s *agentAdminService) Do(ctx context.Context, key *persistence.APIKey, ver
 	if err != nil {
 		return AgentAdminResult{}, err
 	}
-	if advertisedURL != "" {
-		st.Advertised[advertisedURL] = advertised
+	if listing.url != "" && listing.failed == "" {
+		st.Advertised[listing.url] = listing.tools
+	}
+	if listing.failed != "" {
+		if st.ListFailed == nil {
+			st.ListFailed = map[string]string{}
+		}
+		st.ListFailed[listing.url] = listing.failed
 	}
 	for url, tools := range recipeTargets {
 		st.Advertised[url] = tools
@@ -345,6 +406,15 @@ func (s *agentAdminService) fileProposal(ctx context.Context, actorKind, credent
 
 // applyInert approves an inert change as the system actor and applies it.
 func (s *agentAdminService) applyInert(ctx context.Context, p *persistence.ControlPlaneProposal, ch agentadmin.Change) (AgentAdminResult, error) {
+	var publication *configAccountPublication
+	if len(configAccountRefs(ch.Grant, ch.Narrow)) > 0 {
+		var err error
+		ctx, publication, err = s.c.beginConfigAccountTransition(ctx, ch.Namespace, configAccountRefs(ch.Grant, ch.Narrow))
+		if err != nil {
+			return AgentAdminResult{}, err
+		}
+	}
+
 	if err := s.proposals.SetStatus(ctx, p.ID, persistence.ProposalStatusApproved, AgentAdminInertActor); err != nil {
 		return AgentAdminResult{}, err
 	}
@@ -353,6 +423,11 @@ func (s *agentAdminService) applyInert(ctx context.Context, p *persistence.Contr
 	}
 	if err := s.recordNarrowing(ctx, ch.Narrow); err != nil {
 		return AgentAdminResult{}, err
+	}
+	if publication != nil {
+		if err := s.c.repos.AccountTransitions.Finish(ctx, publication.ticket, publication.rows); err != nil {
+			return AgentAdminResult{}, err
+		}
 	}
 	return AgentAdminResult{ChangeID: p.ID, Effect: EffectApplied, Sentence: ch.Sentence}, nil
 }
@@ -414,7 +489,30 @@ func (s *agentAdminService) recordNarrowing(ctx context.Context, n agentadmin.Na
 		return err
 	}
 	now := time.Now().UTC()
+	byNS := map[string][]agentadmin.IntegrationRef{}
 	for _, ref := range n.RemovedIntegrations {
+		if ns, ok := agentns.FromID(ref.Project); ok {
+			byNS[ns] = append(byNS[ns], ref)
+		}
+	}
+	// C6 (design §22.2.6; GitHub #119 item 8, review f2f0 item 7): the
+	// standing grants that wrote through a removed connection are suspended,
+	// so a same-name re-add under another account cannot inherit them. They
+	// are suspended before the approval is withdrawn, so a failure leaves
+	// the removal unrecorded and retryable, never a removed connection with
+	// grants still marked live (review 25bf finding 4).
+	if configPublication(ctx) == nil {
+		for ns, refs := range byNS {
+			if _, err := s.c.suspendGrantsThrough(ctx, ns, refs); err != nil {
+				return err
+			}
+		}
+	}
+	for _, ref := range n.RemovedIntegrations {
+		if publication := configPublication(ctx); publication != nil {
+			publication.rows.Removed = append(publication.rows.Removed, persistence.AccountIntegrationRemoval{ProjectID: ref.Project, Integration: ref.Name, At: now})
+			continue
+		}
 		if err := s.grants.MarkIntegrationRemoved(ctx, ref.Project, ref.Name, now); err != nil {
 			return err
 		}
@@ -504,6 +602,15 @@ func (s *agentAdminService) applyApproved(ctx context.Context, r persistence.Age
 	actor := "device:" + r.DecidedByDevice
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	var publication *configAccountPublication
+	if len(configAccountRefs(pl.Grant, pl.Narrow)) > 0 {
+		vector, snapshotErr := s.c.accountDecisionEpoch(ctx, r.Namespace)
+		ctx = context.WithValue(ctx, configAccountSnapshotKey{}, configAccountSnapshot{vector: vector, err: snapshotErr})
+		ctx, publication, err = s.c.beginConfigAccountTransition(ctx, r.Namespace, configAccountRefs(pl.Grant, pl.Narrow))
+		if err != nil {
+			return err
+		}
+	}
 	st, err := s.loadStateExcluding(ctx, r.Namespace, agentns.ID(r.Namespace, "home"), r.ID)
 	if err != nil {
 		return err
@@ -563,9 +670,23 @@ func (s *agentAdminService) applyApproved(ctx context.Context, r persistence.Age
 	if err := s.recordGrant(ctx, r, pl, st.CeilingUSD, ceiling); err != nil {
 		return err
 	}
+	if publication != nil {
+		if err := s.c.repos.AccountTransitions.Finish(ctx, publication.ticket, publication.rows); err != nil {
+			return err
+		}
+	}
 	// A recipe install's credentials are requested once it applied, each
 	// its own approval kind on the phone (design §19.2, §19.11).
 	s.fileCredentialFollowUps(ctx, r, pl.Credentials)
+	// A stored credential has no slot transition to trigger tools discovery.
+	// Complete the same second approval step asynchronously, after the new
+	// server and its read-pending grant are live (GitHub #312).
+	if len(pl.Credentials) > 0 {
+		bg := context.WithoutCancel(ctx)
+		ns := r.Namespace
+		follow := append([]agentadmin.CredentialFollowUp(nil), pl.Credentials...)
+		s.background(func() { s.fileStoredRecipeCredentialTools(bg, ns, follow) })
+	}
 	return nil
 }
 
@@ -684,11 +805,21 @@ func (s *agentAdminService) recordGrant(ctx context.Context, r persistence.Agent
 		at = *r.DecidedAt
 	}
 	for _, g := range pl.Grant.Integrations {
-		if err := s.grants.UpsertIntegration(ctx, persistence.AgentIntegrationApproval{
+		a := persistence.AgentIntegrationApproval{
 			Namespace: r.Namespace, ProjectID: g.Project, Integration: g.Name, Kind: g.Kind, URL: g.URL,
 			ReadTools: g.Read, WriteTools: g.Write, ReadPending: g.ReadPending,
 			ApprovedByDevice: r.DecidedByDevice, ApprovedAt: at,
-		}); err != nil {
+		}
+		// The account the device approved (design §22.2.2), never
+		// recomputed; the repository writes it only on an add or a re-add.
+		if g.Account != nil {
+			a.AccountLabel, a.AccountIdentity, a.IdentitySource = g.Account.Label, g.Account.Identity, g.Account.IdentitySource
+		}
+		if publication := configPublication(ctx); publication != nil {
+			publication.rows.Integrations = append(publication.rows.Integrations, a)
+			continue
+		}
+		if err := s.grants.UpsertIntegration(ctx, a); err != nil {
 			return err
 		}
 	}
@@ -791,8 +922,12 @@ func (s *agentAdminService) loadStateExcluding(ctx context.Context, ns, homeProj
 		}
 		st.Approvals[a.ProjectID][a.Integration] = agentadmin.IntegrationApproval{
 			Kind: a.Kind, URL: a.URL, Read: a.ReadTools, Write: a.WriteTools, ReadPending: a.ReadPending, Removed: a.RemovedAt != nil,
+			AccountIdentity: a.AccountIdentity, IdentitySource: a.IdentitySource,
 		}
 	}
+	// Which credentials are stored, names only, so a credential sentence
+	// can say it replaces one (design §22.2.3 C5).
+	st.CredentialSet = s.c.storedCredentials(ctx, ns)
 	// The model catalogue, classified against the live router now, and the
 	// namespace's live destination approvals (design §18.6 item 2).
 	st.UseModelCatalogue(s.c.agentModelSpecs(), s.c.modelRoute, s.c.modelPrice)

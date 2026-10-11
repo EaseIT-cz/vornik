@@ -269,9 +269,17 @@ func (s *Searcher) RecentWithContext(
 	if err != nil {
 		return nil, err
 	}
+	return s.firewallListedRows(ctx, projectID, rows, reqCtx), nil
+}
+
+// firewallListedRows is the firewall step every listing (not search) path
+// runs: recent_memory, memory_list and the approver device's memory page
+// (LLD 22, "Memory the user can see"). One implementation, so a listing
+// cannot drift from the decision recall makes.
+func (s *Searcher) firewallListedRows(ctx context.Context, projectID string, rows []RecentChunkRow, reqCtx memoryfirewall.RequestContext) []RecentChunkRow {
 	fw := s.firewallDeps()
 	if fw == nil || len(rows) == 0 {
-		return rows, nil
+		return rows
 	}
 
 	ids := make([]string, 0, len(rows))
@@ -285,7 +293,7 @@ func (s *Searcher) RecentWithContext(
 		// fail-open-with-warning posture; the operator sees it in
 		// the daemon logs.
 		s.logger.Warn().Err(perr).Msg("memoryfirewall: recent-memory policy load failed, returning unfiltered digest")
-		return rows, nil
+		return rows
 	}
 
 	mode := resolveMode(fw, projectID)
@@ -325,7 +333,7 @@ func (s *Searcher) RecentWithContext(
 		out = append(out, r)
 	}
 	fw.Metrics.ObserveEval(projectID, time.Since(evalStart))
-	return out, nil
+	return out
 }
 
 // chunkFromPolicyRow lifts a ChunkPolicyRow into the firewall's

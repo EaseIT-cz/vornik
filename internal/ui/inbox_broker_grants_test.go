@@ -41,6 +41,7 @@ func (plainSealer) Open(ns, label, sealed string) ([]byte, error) {
 }
 
 type grantUI struct {
+	epochs  persistence.AccountTransitionRepository
 	srv     *Server
 	actions persistence.BrokerActionRepository
 	grants  persistence.BrokerGrantRepository
@@ -65,8 +66,8 @@ args_schema:
 `), &p); err != nil {
 		t.Fatal(err)
 	}
-	g := &grantUI{actions: sqlite.NewBrokerActionRepository(db.DB), grants: sqlite.NewBrokerGrantRepository(db.DB)}
-	svc := brokergrants.New(brokergrants.Config{Grants: g.grants, Actions: g.actions,
+	g := &grantUI{epochs: sqlite.NewAccountTransitionRepository(db.DB), actions: sqlite.NewBrokerActionRepository(db.DB), grants: sqlite.NewBrokerGrantRepository(db.DB)}
+	svc := brokergrants.New(brokergrants.Config{DecisionEpoch: g.epochs.ReadDecisionEpoch, Grants: g.grants, Actions: g.actions,
 		Proposal: func(wf, action string) (registry.BrokerProposal, bool) {
 			return p, wf == "mail-reply" && action == "send_reply"
 		},
@@ -129,13 +130,16 @@ func TestInboxGrant_ApproveWithGrantCreatesItAndCovers(t *testing.T) {
 	if code := post(url.Values{"args_sha256": {"stale"}, "grant_days": {"7"}, "grant_uses": {"20"}}, ""); code != http.StatusSeeOther {
 		t.Fatalf("stale: %d", code)
 	}
-	if gs, _ := g.grants.List(context.Background(), persistence.BrokerGrantFilter{}); len(gs) != 0 {
+	if gs, err := g.grants.List(context.Background(), persistence.BrokerGrantFilter{Now: time.Now()}); err != nil || len(gs) != 0 {
 		t.Fatal("a stale hash created a grant")
 	}
 	if code := post(url.Values{"args_sha256": {seed.ArgsSHA256}, "grant_days": {"7"}, "grant_uses": {"20"}}, ""); code != http.StatusSeeOther {
 		t.Fatalf("approve-grant: %d", code)
 	}
-	gs, _ := g.grants.List(context.Background(), persistence.BrokerGrantFilter{})
+	gs, err := g.grants.List(context.Background(), persistence.BrokerGrantFilter{Now: time.Now()})
+	if err != nil {
+		t.Fatal(err)
+	}
 	if len(gs) != 1 || gs[0].Namespace != "" || gs[0].CreatedBy == "" {
 		t.Fatalf("grants = %+v", gs)
 	}
@@ -177,6 +181,7 @@ func TestInboxGrant_AgentProjectsAreDeviceOnly(t *testing.T) {
 		Action: "send_reply", KeyPaths: []string{"to"}, KeyValuesSealed: "sv1:x", KeyHash: "k", MaxUses: 5, UsesLeft: 5,
 		ExpiresAt: time.Now().Add(time.Hour), CreatedAt: time.Now(), CreatedBy: "device:d", SeedActionID: "ba_1",
 		ReachHashAtCreation: "r1", Active: true, DigestThrough: time.Now()}
+	agentGrant.DecisionGuard, _ = g.epochs.ReadDecisionEpoch(context.Background(), agentGrant.Namespace)
 	if err := g.grants.ApproveSeedAndCreate(context.Background(), "ba_1", a.ArgsSHA256, "device:d", agentGrant, 10, time.Now().UTC()); err != nil {
 		t.Fatal(err)
 	}

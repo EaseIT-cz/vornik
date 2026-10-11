@@ -16,6 +16,7 @@ import (
 // billing) past the pause, and on shutdown the next boot's pruneAllWorktrees
 // yanked the worktree from under the orphan. Cancel already snapshots the id
 // under the lock (executor.go); these two did not. Detectable under -race.
+// (TaskLogs was deleted with GitHub #294, 2026-10-08; its race test with it.)
 //
 // hammerContainerID keeps rewriting handle.containerID under e.mu for the
 // whole duration of the handler under test, so the unsynchronized read (if
@@ -72,19 +73,4 @@ func TestExecutor_PauseContainerIDNoRace(t *testing.T) {
 	<-done
 	require.NoError(t, err)
 	require.NotNil(t, status)
-}
-
-func TestExecutor_TaskLogsContainerIDNoRace(t *testing.T) {
-	e, _, _, _, tr := setup()
-	tr.AddTask(&persistence.Task{ID: "t1", ProjectID: "p1", CreatedAt: time.Now()})
-	e.mu.Lock()
-	h := &executionHandle{taskID: "t1", containerID: "c1"}
-	e.activeExecutions["t1"] = h
-	e.mu.Unlock()
-
-	stop, done := hammerContainerID(e, h)
-	_, err := e.TaskLogs(context.Background(), "t1", 10)
-	close(stop)
-	<-done
-	require.NoError(t, err)
 }

@@ -238,3 +238,49 @@ func TestTruncateUA(t *testing.T) {
 		t.Errorf("len(got) = %d, want clipped to ~201 with ellipsis", len(got))
 	}
 }
+
+// GitHub #318: the public download URL is a bearer capability. Its query
+// must never persist in local/forwarded HTTP access logs, even on refusal.
+func TestAccessLog_ArtifactCapabilityQueryWithheld(t *testing.T) {
+	var buf bytes.Buffer
+	handler := AccessLogMiddleware(zerolog.New(&buf))(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusForbidden) }))
+	handler.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, artifactDownloadPath+"?token=private-capability&extra=private", nil))
+	var doc map[string]any
+	if err := json.Unmarshal(buf.Bytes(), &doc); err != nil {
+		t.Fatal(err)
+	}
+	if doc["query"] != "" {
+		t.Fatalf("capability query leaked: %v", doc["query"])
+	}
+	if doc["path"] != artifactDownloadPath {
+		t.Fatal("missing safe route telemetry")
+	}
+}
+
+// Session audit of GitHub #318 (2026-10-11): ServeMux cleans repeated slashes
+// and dot segments before redirecting, while trailing-slash requests can be
+// refused. None of these route spellings may persist the bearer capability.
+func TestAccessLog_ArtifactCapabilityCanonicalPaths(t *testing.T) {
+	for _, route := range []string{
+		artifactDownloadPath,
+		"/api/v1/companion//artifact-download",
+		"/api/v1/companion/./artifact-download",
+		"/api/v1/companion/x/../artifact-download",
+		artifactDownloadPath + "/",
+	} {
+		t.Run(route, func(t *testing.T) {
+			var buf bytes.Buffer
+			mux := http.NewServeMux()
+			mux.HandleFunc(artifactDownloadPath, func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusForbidden) })
+			handler := AccessLogMiddleware(zerolog.New(&buf))(mux)
+			handler.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, route+"?token=private-capability&extra=private", nil))
+			var doc map[string]any
+			if err := json.Unmarshal(buf.Bytes(), &doc); err != nil {
+				t.Fatal(err)
+			}
+			if doc["query"] != "" || bytes.Contains(buf.Bytes(), []byte("private-capability")) {
+				t.Fatalf("capability query leaked on canonical route variant: %s", buf.String())
+			}
+		})
+	}
+}

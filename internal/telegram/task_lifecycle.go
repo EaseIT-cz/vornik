@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"vornik.io/vornik/internal/persistence"
+	"vornik.io/vornik/internal/taskcancel"
 )
 
 // Phase 28 of the conversational task lifecycle (LLD §5.2).
@@ -512,20 +513,28 @@ func (b *Bot) handleStatusCmd(ctx context.Context, userID int64, parts []string)
 	return sb.String()
 }
 
-// handleCancelCmd implements /cancel <id> — atomic conditional cancel via the
-// task repo (the scheduler/executor reaper tears down any running process).
+// handleCancelCmd implements /cancel <id> through the shared cancel primitive
+// (05-scheduler.md §4.11): the atomic conditional write, then — only if the
+// row moved — the executor stops the running execution, unblocks a waiting
+// parent and cascades to children. The comment here used to say "the
+// scheduler/executor reaper tears down any running process"; no such reaper
+// exists, and the container ran on (GitHub #300 audit, site #6).
 func (b *Bot) handleCancelCmd(ctx context.Context, userID int64, parts []string) string {
 	t, msg := b.loadScopedTask(ctx, userID, parts, "Usage: /cancel <task-id>")
 	if t == nil {
 		return msg
 	}
-	moved, err := b.taskRepo.TransitionToCancelled(ctx, t.ID)
+	outcome, err := taskcancel.Cancel(ctx, b.taskRepo, b.taskTeardown, t.ID, nil)
 	if err != nil {
 		b.logger.Error().Err(err).Str("task_id", t.ID).Msg("/cancel: transition failed")
 		return "Failed to cancel: " + err.Error()
 	}
-	if !moved {
+	if !outcome.Transitioned {
 		return fmt.Sprintf("Task %s is not in a cancellable state (status %s).", t.ID, t.Status)
+	}
+	if outcome.TeardownErr != nil {
+		b.logger.Error().Err(outcome.TeardownErr).Str("task_id", t.ID).
+			Msg("/cancel: container did not stop — it may still be running")
 	}
 	if b.rescheduler != nil {
 		b.rescheduler.Wake()

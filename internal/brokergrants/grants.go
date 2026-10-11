@@ -32,6 +32,9 @@ var ErrNotOffered = errors.New("brokergrants: that duration or count is not one 
 // ErrNotEligible means the action's workflow declares no standing for it.
 var ErrNotEligible = errors.New("brokergrants: this write cannot be approved for the future")
 
+// ErrAccountChanged requires an explicit device affirmation of the new account.
+var ErrAccountChanged = errors.New("brokergrants: the account changed; approve it for the account now shown")
+
 // Config wires a Service.
 type Config struct {
 	Grants  persistence.BrokerGrantRepository
@@ -51,6 +54,13 @@ type Config struct {
 	// Notify pushes a digest: ns is the agent namespace, "" for operator
 	// projects; n the covered writes since the last digest.
 	Notify func(ctx context.Context, ns string, n int)
+	// AccountConfirmed reports whether the account a write acts from is the
+	// approved one (agent-administered design §22.2.14 item 5; GitHub #119
+	// item 8). nil is "confirmed" (operator projects).
+	AccountConfirmed func(ctx context.Context, a *persistence.BrokerAction) bool
+	DecisionEpoch    func(context.Context, string) (persistence.AccountDecisionGuard, error)
+	// AccountOf captures the approved connection label and provider identity.
+	AccountOf func(ctx context.Context, a *persistence.BrokerAction) (label, identity string, ok bool)
 }
 
 // Service is the standing-grant logic over the store.
@@ -171,6 +181,19 @@ func GrantID(seedActionID string) string { return "bsg_" + seedActionID }
 // The key is computed by KeyOf, the one canonicalisation, over the action's
 // own arguments; its canonical JSON is sealed, its hash stored.
 func (s *Service) ApproveWithGrant(ctx context.Context, a *persistence.BrokerAction, shownSHA, approver string, days, uses int) (*persistence.BrokerStandingGrant, error) {
+	var guard persistence.AccountDecisionGuard
+	if a != nil {
+		if ns, agent := agentns.FromID(a.ProjectID); agent {
+			if s.cfg.DecisionEpoch == nil {
+				return nil, persistence.ErrAccountTransition
+			}
+			var err error
+			guard, err = s.cfg.DecisionEpoch(ctx, ns)
+			if err != nil {
+				return nil, err
+			}
+		}
+	}
 	o := s.Offer(a)
 	if o == nil {
 		return nil, ErrNotEligible
@@ -197,10 +220,18 @@ func (s *Service) ApproveWithGrant(ctx context.Context, a *persistence.BrokerAct
 	if err != nil {
 		return nil, err
 	}
+	label, identity := "", ""
+	if ns != "" && s.cfg.AccountOf != nil {
+		var ok bool
+		label, identity, ok = s.cfg.AccountOf(ctx, a)
+		if !ok || label == "" {
+			return nil, ErrNotEligible
+		}
+	}
 	now := s.now()
 	_, _, maxLive := s.cfg.Bounds()
 	g := &persistence.BrokerStandingGrant{
-		ID: id, ProjectID: a.ProjectID, Namespace: ns, WorkflowID: a.WorkflowID, Action: a.ActionKind,
+		DecisionGuard: guard, ID: id, ProjectID: a.ProjectID, Namespace: ns, AccountLabel: label, AccountIdentity: identity, WorkflowID: a.WorkflowID, Action: a.ActionKind,
 		KeyPaths: append([]string(nil), p.Standing.Key...), KeyValuesSealed: sealed, KeyHash: key.Hash,
 		MaxUses: uses, UsesLeft: uses, ExpiresAt: now.Add(time.Duration(days) * 24 * time.Hour), CreatedAt: now,
 		CreatedBy: approver, SeedActionID: a.ActionID, ReachHashAtCreation: reach, Active: true, DigestThrough: now,
@@ -241,6 +272,12 @@ func (s *Service) Cover(ctx context.Context, a *persistence.BrokerAction) (bool,
 	}
 	p, ok := s.proposal(a)
 	if !ok {
+		return false, nil
+	}
+	// A write whose account cannot be confirmed is never covered, before
+	// any key comparison (design §22.2.6).
+	if s.cfg.AccountConfirmed != nil && !s.cfg.AccountConfirmed(ctx, a) {
+		s.cfg.Metrics.recordMiss(MissAccountUnconfirmed)
 		return false, nil
 	}
 	key, err := KeyOf(p.Standing.Key, p.Destinations(), a.ArgsJSON)
@@ -378,9 +415,26 @@ func (s *Service) Confirm(ctx context.Context, id string) error {
 	if err != nil {
 		return err
 	}
+	var guard persistence.AccountDecisionGuard
+	if g.Namespace != "" {
+		if s.cfg.DecisionEpoch == nil {
+			return persistence.ErrAccountTransition
+		}
+		guard, err = s.cfg.DecisionEpoch(ctx, g.Namespace)
+		if err != nil {
+			return err
+		}
+	}
 	reach, err := s.cfg.ReachHash(ctx, g.ProjectID, g.WorkflowID)
 	if err != nil {
 		return err
+	}
+	if g.Namespace != "" {
+		repo, ok := s.cfg.Grants.(persistence.AccountGuardedGrants)
+		if !ok {
+			return persistence.ErrAccountTransition
+		}
+		return repo.ConfirmGuarded(ctx, id, reach, guard)
 	}
 	return s.cfg.Grants.Confirm(ctx, id, reach)
 }
@@ -417,13 +471,28 @@ type View struct {
 	Covered []*persistence.BrokerAction
 }
 
-// Views lists grants for a page, keys opened (the second opener).
+// Views lists grants for a page, keys opened (the second opener). One
+// instant classifies the rows (the query) and labels them (unusable), so a
+// grant listed as live is never labelled expired by a later clock read
+// (GitHub #93).
 func (s *Service) Views(ctx context.Context, f persistence.BrokerGrantFilter) ([]View, error) {
+	if f.Now.IsZero() {
+		f.Now = s.now()
+	}
+	now := f.Now.UTC()
+	f.Now = now // the store sees the instant the labels use (review b240 finding 3)
 	gs, err := s.cfg.Grants.List(ctx, f)
+	if errors.Is(err, persistence.ErrBrokerGrantLiveTruncated) {
+		// Show what fits rather than nothing, and make the gap visible: a
+		// warning and a counter (review b240 finding 2).
+		s.cfg.Logger.Warn().Int("live_cap", f.LiveCap).Str("namespace", f.Namespace).
+			Msg("standing approvals: more live grants than the list cap; the page shows only the newest")
+		s.cfg.Metrics.recordListTruncated()
+		err = nil
+	}
 	if err != nil {
 		return nil, err
 	}
-	now := s.now()
 	out := make([]View, 0, len(gs))
 	for _, g := range gs {
 		v := View{Grant: g, State: "active", Key: "(cannot be shown: the key could not be opened)"}

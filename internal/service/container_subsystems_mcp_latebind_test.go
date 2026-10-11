@@ -168,22 +168,19 @@ func TestProviderFailsWhenTheGrantNeedsReconnect(t *testing.T) {
 	}
 }
 
-// An oauth server the operator never connected still registers and still calls
-// unauthenticated, so its tools stay visible in every agent's catalog and the
-// operator can see what needs connecting (auth design §8).
-func TestUnconnectedOAuthServerStillRegisters(t *testing.T) {
+// An oauth server the operator never connected is NOT registered: superseded
+// 2026-10-08 by auth design §14 (GitHub #91). It used to register and dial
+// unauthenticated, and initialize 401'd with a WARN that read as a broken
+// credential. It is withheld with the remedy instead, and the doctor and
+// a call against it say so.
+func TestUnconnectedOAuthServerIsWithheld(t *testing.T) {
 	c := containerWithGrant(t, nil)
 
-	servers := c.mcpDesiredServers()["test-project"]
-	if len(servers) != 1 {
-		t.Fatalf("want the server registered, got %d", len(servers))
+	if servers := c.mcpDesiredServers()["test-project"]; len(servers) != 0 {
+		t.Fatalf("an oauth server with no grant was registered: %+v", servers)
 	}
-	got, err := servers[0].AuthHeaderProvider(context.Background())
-	if err != nil {
-		t.Fatalf("an unconnected server must not error: %v", err)
-	}
-	if len(got) != 0 {
-		t.Fatalf("want no credential, got %v", got)
+	if got := c.mcpNoGrant(); len(got) != 1 || got[0].Server != "atlassian" {
+		t.Fatalf("doctor source = %+v", got)
 	}
 }
 

@@ -19,7 +19,7 @@ import (
 
 // MCPOAuthTokenRepository is the SQLite implementation of the MCP OAuth token store.
 type MCPOAuthTokenRepository struct {
-	db *sql.DB
+	db persistence.DBTX
 
 	// refreshMu serialises WithRefreshLock in-process. SQLite is single-daemon by
 	// construction, so a mutex is the whole of the mutual exclusion the Postgres side gets
@@ -28,7 +28,7 @@ type MCPOAuthTokenRepository struct {
 }
 
 // NewMCPOAuthTokenRepository builds the repository.
-func NewMCPOAuthTokenRepository(db *sql.DB) *MCPOAuthTokenRepository {
+func NewMCPOAuthTokenRepository(db persistence.DBTX) *MCPOAuthTokenRepository {
 	return &MCPOAuthTokenRepository{db: db, refreshMu: make(chan struct{}, 1)}
 }
 

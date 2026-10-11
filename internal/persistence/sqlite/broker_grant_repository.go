@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"vornik.io/vornik/internal/agentns"
 	"vornik.io/vornik/internal/persistence"
 )
 
@@ -46,7 +47,7 @@ func (r *BrokerGrantRepository) at(stage string) {
 
 const brokerGrantColumns = `id, project_id, namespace, workflow_id, action, key_paths, key_values, key_hash,
 	max_uses, uses_left, expires_at, created_at, created_by, seed_action_id, reach_hash_at_creation,
-	active, paused, suspended_at, revoked_at, digest_through`
+	active, paused, suspended_at, revoked_at, digest_through, account_label, account_identity`
 
 // ApproveSeedAndCreate implements persistence.BrokerGrantRepository.
 func (r *BrokerGrantRepository) ApproveSeedAndCreate(ctx context.Context, actionID, shownArgsSHA256, approver string, g *persistence.BrokerStandingGrant, maxLive int, now time.Time) error {
@@ -55,11 +56,19 @@ func (r *BrokerGrantRepository) ApproveSeedAndCreate(ctx context.Context, action
 		return err
 	}
 	defer func() { _ = tx.Rollback() }()
+	a, err := guardedPendingAction(ctx, tx, actionID)
+	if err != nil {
+		return err
+	}
+	if ns, agent := agentns.FromID(a.ProjectID); agent && (g.ProjectID != a.ProjectID || g.Namespace != ns) {
+		return persistence.ErrAccountTransition
+	}
+
+	if err := checkAccountGuard(ctx, tx, g.Namespace, g.DecisionGuard); err != nil {
+		return err
+	}
 	// The seed's own guarded pending→approved, first (it takes the lock).
-	if err := transitionErr(tx.ExecContext(ctx, `
-		UPDATE broker_actions SET status = 'approved', approver = ?, decided_at = ?
-		WHERE action_id = ? AND status = 'pending' AND args_sha256 = ? AND expires_at > ?`,
-		approver, sqliteTime(now), actionID, shownArgsSHA256, sqliteTime(now))); err != nil {
+	if err := approveGuardedAction(ctx, tx, a, shownArgsSHA256, approver, now); err != nil {
 		return err
 	}
 	var live int
@@ -78,10 +87,10 @@ func (r *BrokerGrantRepository) ApproveSeedAndCreate(ctx context.Context, action
 		return err
 	}
 	if _, err := tx.ExecContext(ctx, `INSERT INTO broker_standing_grants (`+brokerGrantColumns+`)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, 0, NULL, NULL, ?)`,
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, 0, NULL, NULL, ?, ?, ?)`,
 		g.ID, g.ProjectID, g.Namespace, g.WorkflowID, g.Action, string(paths), g.KeyValuesSealed, g.KeyHash,
 		g.MaxUses, g.UsesLeft, sqliteTime(g.ExpiresAt), sqliteTime(g.CreatedAt), g.CreatedBy, g.SeedActionID,
-		g.ReachHashAtCreation, sqliteTime(g.DigestThrough)); err != nil {
+		g.ReachHashAtCreation, sqliteTime(g.DigestThrough), g.AccountLabel, g.AccountIdentity); err != nil {
 		return err
 	}
 	return tx.Commit()
@@ -97,10 +106,12 @@ func (r *BrokerGrantRepository) ApproveUnderGrant(ctx context.Context, actionID,
 		return err
 	}
 	defer func() { _ = tx.Rollback() }()
-	if err := transitionErr(tx.ExecContext(ctx, `
-		UPDATE broker_actions SET status = 'approved', approver = ?, decided_at = ?
-		WHERE action_id = ? AND status = 'pending' AND args_sha256 = ? AND expires_at > ?`,
-		persistence.BrokerGrantApprover(grantID), sqliteTime(now), actionID, argsSHA256, sqliteTime(now))); err != nil {
+	a, err := guardedPendingAction(ctx, tx, actionID)
+	if err != nil {
+		return err
+	}
+
+	if err := approveGuardedAction(ctx, tx, a, argsSHA256, persistence.BrokerGrantApprover(grantID), now); err != nil {
 		return err
 	}
 	r.at("action-approved")
@@ -154,26 +165,53 @@ func (r *BrokerGrantRepository) ListForAction(ctx context.Context, projectID, wo
 	return append(live, dead...), nil
 }
 
-// List implements persistence.BrokerGrantRepository.
+// List implements persistence.BrokerGrantRepository: for the filter's scope,
+// every live grant first (uncapped), then the f.Limit most recent non-live
+// ones, appended in that order and never re-sorted (GitHub #93: one query
+// ordered by created_at with LIMIT 200 hid an old live grant behind newer
+// dead ones).
 func (r *BrokerGrantRepository) List(ctx context.Context, f persistence.BrokerGrantFilter) ([]*persistence.BrokerStandingGrant, error) {
+	if f.Now.IsZero() {
+		return nil, persistence.ErrBrokerGrantFilterNoNow
+	}
 	limit := f.Limit
 	if limit <= 0 {
 		limit = 200
 	}
-	q := `SELECT ` + brokerGrantColumns + ` FROM broker_standing_grants WHERE namespace = ?`
-	args := []any{f.Namespace}
+	scope := `namespace = ?`
+	scopeArgs := []any{f.Namespace}
 	if f.Namespace == persistence.BrokerGrantAllAgentNamespaces {
-		q, args = `SELECT `+brokerGrantColumns+` FROM broker_standing_grants WHERE namespace <> ''`, nil
+		scope, scopeArgs = `namespace <> ''`, nil
 	}
 	if f.Namespace == "" && len(f.ProjectIDs) > 0 {
-		q += ` AND project_id IN (?` + strings.Repeat(", ?", len(f.ProjectIDs)-1) + `)`
+		scope += ` AND project_id IN (?` + strings.Repeat(", ?", len(f.ProjectIDs)-1) + `)`
 		for _, p := range f.ProjectIDs {
-			args = append(args, p)
+			scopeArgs = append(scopeArgs, p)
 		}
 	}
-	q += ` ORDER BY created_at DESC, id LIMIT ?`
-	args = append(args, limit)
-	return r.list(ctx, q, args...)
+	const live = `active = 1 AND uses_left > 0 AND expires_at > ?`
+	now := sqliteTime(f.Now)
+	liveCap := f.LiveCap
+	if liveCap <= 0 {
+		liveCap = persistence.BrokerGrantLiveListCap
+	}
+	liveArgs := append(append([]any{}, scopeArgs...), now, liveCap+1)
+	liveRows, err := r.list(ctx, `SELECT `+brokerGrantColumns+` FROM broker_standing_grants
+		WHERE `+scope+` AND `+live+` ORDER BY created_at DESC, id LIMIT ?`, liveArgs...)
+	if err != nil {
+		return nil, err
+	}
+	var truncated error
+	if len(liveRows) > liveCap {
+		liveRows, truncated = liveRows[:liveCap], persistence.ErrBrokerGrantLiveTruncated
+	}
+	deadArgs := append(append([]any{}, scopeArgs...), now, limit)
+	deadRows, err := r.list(ctx, `SELECT `+brokerGrantColumns+` FROM broker_standing_grants
+		WHERE `+scope+` AND NOT (`+live+`) ORDER BY created_at DESC, id LIMIT ?`, deadArgs...)
+	if err != nil {
+		return nil, err
+	}
+	return append(liveRows, deadRows...), truncated
 }
 
 // SetPaused implements persistence.BrokerGrantRepository.
@@ -197,9 +235,62 @@ func (r *BrokerGrantRepository) Suspend(ctx context.Context, id string, now time
 
 // Confirm implements persistence.BrokerGrantRepository.
 func (r *BrokerGrantRepository) Confirm(ctx context.Context, id, reachHash string) error {
-	return grantTransitionErr(r.db.ExecContext(ctx,
-		`UPDATE broker_standing_grants SET suspended_at = NULL, reach_hash_at_creation = ?
+	return r.ConfirmGuarded(ctx, id, reachHash, nil)
+}
+
+// ConfirmGuarded reaffirms a suspended grant under the supplied account generations.
+func (r *BrokerGrantRepository) ConfirmGuarded(ctx context.Context, id, reachHash string, guard persistence.AccountDecisionGuard) error {
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+	if err = r.confirmTransaction(ctx, tx, id, guard, func(x persistence.DBTX) error {
+		return grantTransitionErr(x.ExecContext(ctx,
+			`UPDATE broker_standing_grants SET suspended_at = NULL, reach_hash_at_creation = ?
 		 WHERE id = ? AND active = 1 AND suspended_at IS NOT NULL`, reachHash, id))
+	}); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+// ConfirmAccount implements persistence.BrokerGrantRepository; agent grants require a guard.
+func (r *BrokerGrantRepository) ConfirmAccount(ctx context.Context, id, reachHash, oldLabel, oldIdentity, newLabel, newIdentity string) error {
+	return r.ConfirmAccountGuarded(ctx, id, reachHash, oldLabel, oldIdentity, newLabel, newIdentity, nil)
+}
+
+// ConfirmAccountGuarded updates account metadata and reaffirms under guarded generations.
+func (r *BrokerGrantRepository) ConfirmAccountGuarded(ctx context.Context, id, reachHash, oldLabel, oldIdentity, newLabel, newIdentity string, guard persistence.AccountDecisionGuard) error {
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+	if err = r.confirmTransaction(ctx, tx, id, guard, func(x persistence.DBTX) error {
+		return grantTransitionErr(x.ExecContext(ctx,
+			`UPDATE broker_standing_grants SET suspended_at = NULL, reach_hash_at_creation = ?, account_label = ?, account_identity = ?
+		 WHERE id = ? AND active = 1 AND suspended_at IS NOT NULL AND account_label = ? AND account_identity = ?`,
+			reachHash, newLabel, newIdentity, id, oldLabel, oldIdentity))
+	}); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+// confirmTransaction locks epoch rows before the grant UPDATE, in the same transaction.
+func (r *BrokerGrantRepository) confirmTransaction(ctx context.Context, x persistence.DBTX, id string, guard persistence.AccountDecisionGuard, update func(persistence.DBTX) error) error {
+	var ns string
+	if err := x.QueryRowContext(ctx, `SELECT namespace FROM broker_standing_grants WHERE id=?`, id).Scan(&ns); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return persistence.ErrBrokerGrantNoTransition
+		}
+		return err
+	}
+	if err := checkAccountGuard(ctx, x, ns, guard); err != nil {
+		return err
+	}
+	return update(x)
 }
 
 // CountLive implements persistence.BrokerGrantRepository.
@@ -303,7 +394,7 @@ func scanBrokerGrant(s interface{ Scan(dest ...any) error }) (*persistence.Broke
 	)
 	if err := s.Scan(&g.ID, &g.ProjectID, &g.Namespace, &g.WorkflowID, &g.Action, &paths, &g.KeyValuesSealed, &g.KeyHash,
 		&g.MaxUses, &g.UsesLeft, &expires, &created, &g.CreatedBy, &g.SeedActionID, &g.ReachHashAtCreation,
-		&active, &paused, &suspended, &revoked, &digest); err != nil {
+		&active, &paused, &suspended, &revoked, &digest, &g.AccountLabel, &g.AccountIdentity); err != nil {
 		return nil, err
 	}
 	if err := json.Unmarshal([]byte(paths), &g.KeyPaths); err != nil {

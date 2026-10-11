@@ -192,6 +192,10 @@ type TokenResponse struct {
 	// Scopes is the GRANTED set, which may be narrower than requested. Stored so a silently
 	// reduced grant is visible rather than surfacing later as a puzzling 403.
 	Scopes string
+	// IDToken is the raw OpenID id_token, when the server sent one. It is
+	// never persisted; an agent project's device sign-in reads its verified
+	// email as the account's identity (agent-administered design §22.2.7).
+	IDToken string
 }
 
 // ExchangeCode trades an authorization code for tokens.
@@ -275,6 +279,7 @@ func postToken(ctx context.Context, client *http.Client, endpoint string, creds 
 		ExpiresIn    int64  `json:"expires_in"`
 		Scope        string `json:"scope"`
 		TokenType    string `json:"token_type"`
+		IDToken      string `json:"id_token"`
 	}
 	if err := json.Unmarshal(raw, &out); err != nil {
 		return TokenResponse{}, fmt.Errorf("mcpauth: parse token response: %w", err)
@@ -286,6 +291,7 @@ func postToken(ctx context.Context, client *http.Client, endpoint string, creds 
 		AccessToken:  out.AccessToken,
 		RefreshToken: out.RefreshToken,
 		Scopes:       out.Scope,
+		IDToken:      out.IDToken,
 	}
 	if out.ExpiresIn > 0 {
 		exp := time.Now().Add(time.Duration(out.ExpiresIn) * time.Second).UTC()

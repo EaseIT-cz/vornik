@@ -105,7 +105,7 @@ func TestHandleFailure_NotifiesOnTerminalAttempt(t *testing.T) {
 		MaxAttempts: 3,
 		CreatedAt:   time.Now(),
 	}
-	tr.AddTask(task)
+	tr.AddTask(storedRow(task))
 	exec := &persistence.Execution{
 		ID:        "e-final-1",
 		TaskID:    task.ID,
@@ -239,7 +239,7 @@ func TestHandleFailure_FiresJudgeOnTerminalFailure(t *testing.T) {
 		MaxAttempts: 3,
 		CreatedAt:   time.Now(),
 	}
-	tr.AddTask(task)
+	tr.AddTask(storedRow(task))
 	exec := &persistence.Execution{
 		ID:        "e-fail-final-1",
 		TaskID:    task.ID,
@@ -458,7 +458,7 @@ func TestHandleFailure_TerminalReachesCompletionObserverWithoutNotifier(t *testi
 	obs := &recordingNotifier{}
 	e.AddCompletionObserver(obs)
 	task := &persistence.Task{ID: "t-obs", ProjectID: "p1", Status: persistence.TaskStatusRunning, Attempt: 3, MaxAttempts: 3, CreatedAt: time.Now()}
-	tr.AddTask(task)
+	tr.AddTask(storedRow(task))
 	exec := &persistence.Execution{ID: "e-obs", TaskID: task.ID, ProjectID: task.ProjectID, Status: persistence.ExecutionStatusRunning}
 	require.NoError(t, er.Create(context.Background(), exec))
 

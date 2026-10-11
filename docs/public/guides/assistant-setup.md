@@ -1,13 +1,13 @@
 ---
 sources:
     - path: internal/cli/agent_connect.go
-      sha256: 9b7c42ca54f447562aefb465ae5daefa1808de670a33e91125c26a68f5220bf6
+      sha256: 734e810ae87fd744e0f9ca94c5f71ea792587c2dc0d137cccb7238bb15868b2c
     - path: internal/harnessconfig/harnessconfig.go
       sha256: 601958b2eed5b85284f43c80973d23b0bf9565a5d9e4db3fb42208ff69ea5984
     - path: internal/agentadmin/harness.go
       sha256: 330a8aaf3e48e5300155a68e10ae017b93d1e4acfb194622db080880cecb161e
     - path: internal/agentadmin/admin_guidance.md
-      sha256: 840b2e11c52a4be9611c0d84b193b0c29d44c9eac744b07ff0d36c10792ffbf9
+      sha256: 5ae414b8c956bc73278feb5bb989501aef98f8c0fc71af1279fb740d2e0dca25
 ---
 # Let your assistant set up Vornik
 
@@ -16,6 +16,7 @@ You can let an AI assistant (Hermes, Claude Desktop, Claude Code or Codex) build
 Vornik is the safety harness around it:
 
 - **The assistant never sees a credential.** When a service needs a password, token or sign-in, the assistant asks Vornik for it. You enter the value, or sign in, **on your own phone**, and Vornik stores it where the assistant cannot read it.
+- **A stored credential is checked, not assumed.** After you enter one, the assistant can ask Vornik to test that connection. Vornik makes one read-only request with the credential and tells the assistant only whether the service answered and accepted it, never what the service sent back.
 - **Nothing that widens its reach happens without you.** Each of these is an approval request on your phone, worded plainly:
   - connecting a service;
   - every credential;
@@ -31,6 +32,28 @@ Vornik is the safety harness around it:
 - **Ready-made workflows come first.** Vornik ships tested recipes: an inbox digest, an agenda and a morning brief (mail and calendar together). The assistant installs one into a project as a single change, which you approve once; your phone then asks for each credential it needs. Until a credential is entered the workflow is installed but does not run. A recipe's answer names its source for each item, says when the data was read, and tells "nothing arrived" apart from "could not read".
 
 What it does receive is what you asked for. If you ask "summarise my spending", the summary of your spending reaches the assistant: that output was approved, by you, when the workflow was.
+
+## Two accounts at one provider
+
+Tell the assistant which account you want to use, for example work or personal.
+Each account needs its own connection name, account label and credential name:
+`mail-work` with the label `work` and `MAIL_TOKEN_WORK`, and `mail-personal`
+with the label `personal` and `MAIL_TOKEN_PERSONAL`. Enter each credential only
+on your phone. An assistant should ask which account you mean whenever that
+is unclear.
+
+The account is selected when the workflow is set up. Check the account named
+on your phone before approving a connection, workflow or write. A standing
+approval to send from your work account does not approve writes from your
+personal account. Where the provider supplies an identity, the phone shows
+that bounded identity; a label supplied by the assistant is explicitly
+unverified and does not establish who owns a credential.
+
+After changing a connection or credential, ask for a fresh read. The assistant
+must omit `max_age_seconds` on that first call. Distinct configured account
+labels keep their recent results separate, but replacing a credential under
+the same label does not automatically invalidate an earlier result accepted
+for reuse.
 
 ## Before you start
 
@@ -72,6 +95,8 @@ Connect does five things:
 3. It stores the key in `~/.config/vornik/agents/<namespace>.key`. The file is readable by you only, and **no assistant config file ever contains the key**.
 4. It adds one MCP server entry, `vornik-<namespace>`, to the assistant's own config. The entry runs `vornikctl agent mcp-bridge` with Vornik's address, which relays the assistant's requests to Vornik using the key file. Connect keeps everything else in that file, comments included.
 5. It prints what it did and what to do next.
+
+For an assistant not in that list, use `vornikctl agent connect generic --print` (optionally `--client <name>` to record which assistant it is). It mints and stores the key the same way but edits no file: it prints the MCP entry as JSON for you to paste into your assistant's MCP configuration (the `vornik-<namespace>` entry that runs the bridge, and a streamable-HTTP form for an assistant that cannot run a command). The key is never printed. Vornik treats an assistant it has no adapter for as one that can run shell commands, so the shared-user check below applies.
 
 | Assistant | Config file connect edits |
 |---|---|
@@ -116,6 +141,10 @@ The assistant can run on your laptop while Vornik runs on a server.
   vornikctl agent connect claude-code --url https://vornik.example
   unset VORNIK_API_KEY
   ```
+
+  Or keep it out of the environment too: `read -rs K`, then
+  `printf '%s\n' "$K" | vornikctl agent connect claude-code --url https://vornik.example --api-key-stdin`
+  (a terminal on standard input is refused, since a typed key would be shown).
 
 - **Which name to use for Claude.**
   - `claude-code` for Claude Code, including routines created in the Claude desktop app's **Code** tab.

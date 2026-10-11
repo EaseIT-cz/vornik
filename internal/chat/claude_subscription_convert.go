@@ -145,7 +145,14 @@ func (c *ClaudeSubscriptionClient) buildRequestBodyCtx(ctx context.Context, mess
 		Content []contentBlock `json:"content"`
 	}
 
-	maxTokens := c.maxTokens
+	// The role's per-request cap, clamped to the route cap (GitHub #100,
+	// 09-agent-runtime-contract.md §8.4). With extended thinking the API
+	// requires max_tokens > budget_tokens, so a request value that would not
+	// clear the budget is ignored and the route's value is sent as before.
+	maxTokens := EffectiveMaxTokens(ctx, c.maxTokens)
+	if c.thinkingBudget > 0 && maxTokens <= c.thinkingBudget {
+		maxTokens = c.maxTokens
+	}
 	if maxTokens <= 0 {
 		maxTokens = claudeDefaultMaxTokens
 	}

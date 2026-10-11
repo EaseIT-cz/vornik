@@ -752,7 +752,7 @@ func (c *Client) Complete(ctx context.Context, messages []Message) (*ChatRespons
 	return c.doComplete(ctx, ChatRequest{
 		Model:     c.model,
 		Messages:  messages,
-		MaxTokens: c.maxTokens,
+		MaxTokens: EffectiveMaxTokens(ctx, c.maxTokens),
 		Options:   c.contextOptions(),
 	})
 }
@@ -781,7 +781,7 @@ func (c *Client) CompleteWithTools(ctx context.Context, messages []Message, tool
 		Model:     c.model,
 		Messages:  messages,
 		Tools:     tools,
-		MaxTokens: c.maxTokens,
+		MaxTokens: EffectiveMaxTokens(ctx, c.maxTokens),
 		Options:   c.contextOptions(),
 	})
 }

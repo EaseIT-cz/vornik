@@ -24,7 +24,9 @@ type tree struct {
 	ceiling   float64
 	homes     map[string]bool
 	advert    map[string][]string
-	writesOff bool
+	// listFailed is the class of each failed pre-approval listing (§6.1).
+	listFailed map[string]string
+	writesOff  bool
 	// pending are filed, undecided changes: their locks hold and their
 	// AddsUSD feed the conditional ceiling figure, as lockPending does.
 	pending []Change
@@ -32,6 +34,9 @@ type tree struct {
 	// approved model destinations (design §18.6 item 2).
 	models       map[string]CatalogueModel
 	destinations map[string]bool
+	// credentialSet is the namespace's stored credential names (design
+	// §22.2.3 C5), as the service reads them from the store.
+	credentialSet map[string]bool
 }
 
 func newTree(t *testing.T, ns string) *tree {
@@ -50,8 +55,8 @@ func (tr *tree) state() *State {
 	st := &State{
 		Namespace: tr.ns, DefaultBudgetUSD: 2, CeilingUSD: tr.ceiling, AgentImage: "ghcr.io/easeit-cz/vornik-agent:latest",
 		Projects: map[string]*ProjectState{}, Workflows: map[string]*WorkflowState{},
-		FileHashes: map[string]string{}, Locked: map[string]bool{}, Approvals: tr.approvals, Advertised: tr.advert,
-		WritesOn: !tr.writesOff, models: tr.models, ApprovedDestinations: tr.destinations,
+		FileHashes: map[string]string{}, Locked: map[string]bool{}, Approvals: tr.approvals, Advertised: tr.advert, ListFailed: tr.listFailed,
+		WritesOn: !tr.writesOff, models: tr.models, ApprovedDestinations: tr.destinations, CredentialSet: tr.credentialSet,
 	}
 	for _, c := range tr.pending {
 		for _, l := range c.Locks {
@@ -75,6 +80,10 @@ func (tr *tree) state() *State {
 	for path, content := range tr.files {
 		switch {
 		case strings.HasPrefix(path, "projects/"):
+			if st.ProjectYAML == nil {
+				st.ProjectYAML = map[string][]byte{}
+			}
+			st.ProjectYAML[path] = []byte(content) // update_project patches the source
 			var p registry.Project
 			if err := yaml.Unmarshal([]byte(content), &p); err != nil {
 				tr.t.Fatalf("%s does not parse: %v\n%s", path, err, content)
@@ -154,7 +163,16 @@ func (tr *tree) apply(c Change) {
 		if tr.approvals[g.Project] == nil {
 			tr.approvals[g.Project] = map[string]IntegrationApproval{}
 		}
-		tr.approvals[g.Project][g.Name] = IntegrationApproval{Kind: g.Kind, URL: g.URL, Read: g.Read, Write: g.Write, ReadPending: g.ReadPending}
+		prev, existed := tr.approvals[g.Project][g.Name]
+		a := IntegrationApproval{Kind: g.Kind, URL: g.URL, Read: g.Read, Write: g.Write, ReadPending: g.ReadPending}
+		// The account is written on an add or a re-add only (design §22.2.2).
+		switch {
+		case existed && !prev.Removed:
+			a.AccountIdentity, a.IdentitySource = prev.AccountIdentity, prev.IdentitySource
+		case g.Account != nil:
+			a.AccountIdentity, a.IdentitySource = g.Account.Identity, g.Account.IdentitySource
+		}
+		tr.approvals[g.Project][g.Name] = a
 	}
 	for id, h := range c.Grant.Workflows {
 		tr.reach[id] = h

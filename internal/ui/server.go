@@ -914,10 +914,10 @@ func WithProjectRegistry(r *registry.Registry) ServerOption {
 // WithExecutor sets the executor for task lifecycle control.
 func WithExecutor(e ExecutorInterface) ServerOption {
 	return func(s *Server) {
+		// Never a log source: before GitHub #294 this type-asserted the
+		// executor's TaskLogs (podman logs every 2 s per open log panel).
+		// The service wires the daemon-held log with WithTaskLogSource.
 		s.executor = e
-		if src, ok := e.(TaskLogSource); ok {
-			s.taskLogSource = src
-		}
 	}
 }
 

@@ -11,7 +11,7 @@ import (
 // SQLChunkLookup is the production ChunkLookup: a thin read over
 // project_memory_chunks that enforces project scope, repo_scope
 // (migration-75 semantics), and the chunk-retrieval visibility
-// posture (published lifecycle, non-refuted validation) so a graph
+// posture (published lifecycle, neither refuted nor superseded) so a graph
 // read can never surface a chunk that the chunk-search path would
 // hide.
 //
@@ -35,7 +35,7 @@ var _ ChunkLookup = (*SQLChunkLookup)(nil)
 // SearchOptions.RepoScope): empty repoScope returns every scope;
 // non-empty returns chunks whose repo_scope matches OR is the
 // cross-cutting '*' OR is uncategorized NULL. Lifecycle is pinned to
-// published + validation_status not refuted so the graph read posture
+// published, neither refuted nor superseded (GitHub #94), so the graph read posture
 // matches chunk retrieval. Chunks outside projectID are simply never
 // selected (the project_id = $1 predicate), which is the cross-project
 // guard at the SQL layer.
@@ -63,7 +63,7 @@ FROM project_memory_chunks
 WHERE project_id = $1
   AND id IN (` + strings.Join(placeholders, ",") + `)
   AND lifecycle_state = 'published'
-  AND validation_status <> 'refuted'`
+  AND validation_status NOT IN ('refuted','superseded')`
 
 	if repoScope != "" {
 		args = append(args, repoScope)

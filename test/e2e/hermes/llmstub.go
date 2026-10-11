@@ -32,6 +32,10 @@ type Script struct {
 	Final  string
 	// FinalFrom, when set, builds the final reply from the last tool result.
 	FinalFrom func(lastResult string) string
+	// Hold, when set, blocks the script's first answer (a request carrying no
+	// tool result yet) until the channel is closed or the request ends, so a
+	// lane can observe a task mid-step (GitHub #119 item 9, C6).
+	Hold <-chan struct{}
 }
 
 // LLMStub is a scripted OpenAI-compatible chat-completions server. It
@@ -43,9 +47,10 @@ type Script struct {
 // §3.2). It also serves deterministic /v1/embeddings.
 type LLMStub struct {
 	bodyWatch
-	Steps   []ScriptStep
-	Final   string
-	Scripts []Script
+	evidence callEvidence
+	Steps    []ScriptStep
+	Final    string
+	Scripts  []Script
 	// EmbeddingDim is the embedding width; 0 means 384.
 	EmbeddingDim int
 
@@ -130,6 +135,7 @@ func (s *LLMStub) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	body, _ := io.ReadAll(io.LimitReader(r.Body, 8<<20))
 	s.inspect(body)
+	s.evidence.chatInput(body)
 	var req chatRequest
 	if err := json.Unmarshal(body, &req); err != nil {
 		http.Error(w, "bad request", http.StatusBadRequest)
@@ -157,9 +163,10 @@ func (s *LLMStub) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	steps, final := s.Steps, s.Final
 	var finalFrom func(string) string
+	var hold <-chan struct{}
 	for _, sc := range s.Scripts {
 		if sc.Marker != "" && strings.Contains(all.String(), sc.Marker) {
-			steps, final, finalFrom = sc.Steps, sc.Final, sc.FinalFrom
+			steps, final, finalFrom, hold = sc.Steps, sc.Final, sc.FinalFrom, sc.Hold
 			break
 		}
 	}
@@ -167,7 +174,15 @@ func (s *LLMStub) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		final = finalFrom(last)
 	}
 	s.mu.Unlock()
+	if hold != nil && results == 0 {
+		select {
+		case <-hold:
+		case <-r.Context().Done():
+			return
+		}
+	}
 	msg, finish := s.reply(req, steps, results, last, final)
+	s.evidence.chatMessage(msg)
 	resp := map[string]any{
 		"id": "e2e", "object": "chat.completion", "model": req.Model,
 		"choices": []map[string]any{{"index": 0, "message": msg, "finish_reason": finish}},

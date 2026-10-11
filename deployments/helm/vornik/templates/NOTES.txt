@@ -75,7 +75,6 @@ Mode: single all-in-one
 Troubleshoot:
 
   kubectl -n {{ .Release.Namespace }} logs -f statefulset/{{ include "vornik.fullname" . }}
-  kubectl -n {{ .Release.Namespace }} exec -it {{ include "vornik.fullname" . }}-0 -- vornikctl doctor
 
 {{- else }}
 
@@ -181,8 +180,5 @@ Troubleshoot:
 
   # Webhook logs (relay client, HMAC verify)
   kubectl -n {{ .Release.Namespace }} logs -f deployment/{{ include "vornik.webhookFullname" . }}
-
-  # In-pod doctor (run on the worker tier)
-  kubectl -n {{ .Release.Namespace }} exec -it {{ include "vornik.workerFullname" . }}-0 -- vornikctl doctor
 
 {{- end }}{{/* cluster mode branch */}}

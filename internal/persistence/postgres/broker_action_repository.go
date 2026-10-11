@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"time"
 
+	"vornik.io/vornik/internal/agentns"
 	"vornik.io/vornik/internal/persistence"
 )
 
@@ -26,7 +27,7 @@ var _ persistence.BrokerActionRepository = (*BrokerActionRepository)(nil)
 
 const brokerActionColumns = `action_id, project_id, task_id, api_key_id, workflow_id, action_kind, tool,
 	args_json, args_sha256, status, approver, outcome_json, outcome_class,
-	created_at, expires_at, decided_at, executed_at`
+	created_at, expires_at, decided_at, executed_at, account_ns_epoch, account_daemon_epoch`
 
 // Stage upserts the (task_id, action_kind) row. The ON CONFLICT update is
 // guarded by the existing row's status, so a pending or later row keeps its
@@ -41,19 +42,46 @@ func (r *BrokerActionRepository) Stage(ctx context.Context, a *persistence.Broke
 	if a.CreatedAt.IsZero() {
 		a.CreatedAt = time.Now().UTC()
 	}
-	res, err := r.db.ExecContext(ctx, `
+	tx, owns, err := persistence.BeginTx(ctx, r.db, nil)
+	if err != nil {
+		return false, err
+	}
+	x := r.db
+	if owns {
+		defer func() { _ = tx.Rollback() }()
+		x = tx
+	}
+	var nsEpoch, daemonEpoch any
+	a.AccountGuard = nil
+	if ns, agent := agentns.FromID(a.ProjectID); agent && a.Status == persistence.BrokerActionStaged {
+		states, err := lockAccountStates(ctx, x, []string{persistence.AccountDaemonScope, persistence.AccountNamespaceScope(ns)})
+		if err != nil {
+			return false, err
+		}
+		for _, scope := range []string{persistence.AccountDaemonScope, persistence.AccountNamespaceScope(ns)} {
+			st := states[scope]
+			if st.busy || st.epoch < 0 {
+				return false, persistence.ErrAccountTransition
+			}
+			a.AccountGuard = append(a.AccountGuard, persistence.AccountEpoch{Scope: scope, Epoch: st.epoch})
+		}
+		daemonEpoch = a.AccountGuard[0].Epoch
+		nsEpoch = a.AccountGuard[1].Epoch
+	}
+	res, err := x.ExecContext(ctx, `
 		INSERT INTO broker_actions (`+brokerActionColumns+`)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, NULL, NULL, NULL, $11, $12, NULL, NULL)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, NULL, NULL, NULL, $11, $12, NULL, NULL, $13, $14)
 		ON CONFLICT (task_id, action_kind) DO UPDATE SET
 			args_json = excluded.args_json,
 			args_sha256 = excluded.args_sha256,
 			status = excluded.status,
 			tool = excluded.tool,
-			expires_at = excluded.expires_at
-		WHERE broker_actions.status IN ('staged', 'proposal_missing', 'proposal_invalid', 'discarded')`,
+			expires_at = excluded.expires_at,
+ account_ns_epoch=excluded.account_ns_epoch, account_daemon_epoch=excluded.account_daemon_epoch
+		WHERE broker_actions.project_id = excluded.project_id AND broker_actions.status IN ('staged', 'proposal_missing', 'proposal_invalid', 'discarded')`,
 		a.ActionID, a.ProjectID, a.TaskID, nullIfEmpty(a.APIKeyID), a.WorkflowID, a.ActionKind, a.Tool,
 		a.ArgsJSON, a.ArgsSHA256, a.Status,
-		a.CreatedAt, a.ExpiresAt)
+		a.CreatedAt, a.ExpiresAt, nsEpoch, daemonEpoch)
 	if err != nil {
 		return false, err
 	}
@@ -64,6 +92,11 @@ func (r *BrokerActionRepository) Stage(ctx context.Context, a *persistence.Broke
 	// A fresh insert and a permitted replacement both affect one row; the
 	// caller cannot tell them apart and does not need to. A refused
 	// replacement (row already pending or later) affects none.
+	if owns {
+		if err := tx.Commit(); err != nil {
+			return false, err
+		}
+	}
 	return n == 1, nil
 }
 
@@ -117,10 +150,26 @@ func (r *BrokerActionRepository) ListByStatus(ctx context.Context, projectID, st
 
 // Approve implements persistence.BrokerActionRepository.
 func (r *BrokerActionRepository) Approve(ctx context.Context, actionID, shownArgsSHA256, approver string, now time.Time) error {
-	return brokerTransitionErr(r.db.ExecContext(ctx, `
-		UPDATE broker_actions SET status = 'approved', approver = $1, decided_at = $2
-		WHERE action_id = $3 AND status = 'pending' AND args_sha256 = $4 AND expires_at > $5`,
-		approver, now, actionID, shownArgsSHA256, now))
+	tx, owns, err := persistence.BeginTx(ctx, r.db, nil)
+	if err != nil {
+		return err
+	}
+	x := r.db
+	if owns {
+		defer func() { _ = tx.Rollback() }()
+		x = tx
+	}
+	a, err := guardedPendingAction(ctx, x, actionID)
+	if err != nil {
+		return err
+	}
+	if err = approveGuardedAction(ctx, x, a, shownArgsSHA256, approver, now); err != nil {
+		return err
+	}
+	if owns {
+		return tx.Commit()
+	}
+	return nil
 }
 
 // Reject implements persistence.BrokerActionRepository.
@@ -258,14 +307,18 @@ func (r *BrokerActionRepository) list(ctx context.Context, query string, args ..
 
 func scanBrokerAction(s interface{ Scan(dest ...any) error }) (*persistence.BrokerAction, error) {
 	var (
+		nsEpoch, daemonEpoch           sql.NullInt64
 		a                              persistence.BrokerAction
 		apiKey, approver, outcomeClass sql.NullString
 		decided, executed              sql.NullTime
 	)
 	if err := s.Scan(&a.ActionID, &a.ProjectID, &a.TaskID, &apiKey, &a.WorkflowID, &a.ActionKind, &a.Tool,
 		&a.ArgsJSON, &a.ArgsSHA256, &a.Status, &approver, &a.OutcomeJSON, &outcomeClass,
-		&a.CreatedAt, &a.ExpiresAt, &decided, &executed); err != nil {
+		&a.CreatedAt, &a.ExpiresAt, &decided, &executed, &nsEpoch, &daemonEpoch); err != nil {
 		return nil, err
+	}
+	if ns, agent := agentns.FromID(a.ProjectID); agent && nsEpoch.Valid && daemonEpoch.Valid {
+		a.AccountGuard = persistence.AccountDecisionGuard{{Scope: persistence.AccountDaemonScope, Epoch: daemonEpoch.Int64}, {Scope: persistence.AccountNamespaceScope(ns), Epoch: nsEpoch.Int64}}
 	}
 	a.APIKeyID, a.Approver, a.OutcomeClass = apiKey.String, approver.String, outcomeClass.String
 	if decided.Valid {

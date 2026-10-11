@@ -310,6 +310,12 @@ func (c *Container) initDispatcher() {
 		taskRepo, execRepo, artifactRepo = c.repos.Tasks, c.repos.Executions, c.repos.Artifacts
 	}
 	c.Dispatcher = dispatcher.NewAgent(c.ChatClient, taskRepo, execRepo, artifactRepo, c.Registry, opts...)
+	// cancel_task stops the running execution through the shared cancel
+	// primitive (05-scheduler.md §4.11, GitHub #300). The executor is built in
+	// initScheduler, which runs before this.
+	if c.Executor != nil {
+		c.Dispatcher.SetTaskTeardown(c.Executor)
+	}
 
 	// Chat memory-write activation (slices 3+5). The gate is deny-by-default
 	// (a channel writes only if a project's memory.write_channels lists it);

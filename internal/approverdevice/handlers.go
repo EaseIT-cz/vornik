@@ -64,6 +64,13 @@ func Routes() []Route {
 		{http.MethodPost, "/ui/approve/apr_example/connect", true},
 		{http.MethodGet, "/ui/approve/standing", true},
 		{http.MethodPost, "/ui/approve/standing/bsg_example/revoke", true},
+		// The memory page (LLD 22, "Memory the user can see").
+		{http.MethodGet, "/ui/approve/memory", true},
+		{http.MethodGet, "/ui/approve/memory/proj_example", true},
+		{http.MethodPost, "/ui/approve/memory/proj_example/forget", true},
+		{http.MethodGet, "/ui/approve/memory/proj_example/forget-source", true},
+		{http.MethodPost, "/ui/approve/memory/proj_example/forget-source", true},
+		{http.MethodGet, "/ui/approve/memory/proj_example/export", true},
 	}
 }
 
@@ -308,6 +315,8 @@ func (s *Service) approveRouter(w http.ResponseWriter, r *http.Request) {
 		s.listPage(w, r)
 	case rest == "devices":
 		s.devicesPage(w, r)
+	case rest == "memory" || strings.HasPrefix(rest, "memory/"):
+		s.memoryRouter(w, r, strings.TrimPrefix(rest, "memory"))
 	case rest == "standing" || strings.HasPrefix(rest, "standing/"):
 		s.standingPage(w, r, strings.TrimPrefix(strings.TrimPrefix(rest, "standing"), "/"))
 	case strings.HasPrefix(rest, "devices/") && strings.HasSuffix(rest, "/revoke"):

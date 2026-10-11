@@ -2026,6 +2026,46 @@ handle_query_api() {
     printf '%s' "$api_body"
 }
 
+# Forge issue builtins (#319, github-app-channel-design issue triage extension) share the
+# project-scoped daemon gateway. Operation comes from the gated dispatch name,
+# never from arguments. Only typed capability arguments cross the boundary;
+# daemon checks scope, task/role attribution, write policy and output hygiene.
+handle_forge_issue() {
+    local operation="$1" params="$2" project_id execution_id req url out http_code response refusal
+    project_id=$(jq -r '.projectId // .project_id // ""' "$INPUT_FILE")
+    execution_id=$(vornik_execution_id)
+    if [ -z "${VORNIK_API_URL:-}" ] || [ -z "$project_id" ]; then
+        printf '{"error":"forge not available"}'
+        return
+    fi
+    req=$(printf '%s' "$params" | jq -c --arg operation "$operation" '
+        {operation:$operation, repo:.repo}
+        + (with_entries(select(.key == "number" or .key == "filter" or
+            .key == "labels" or .key == "duplicate_of" or .key == "explanation")))') || {
+        printf '{"error":"invalid forge arguments"}'; return;
+    }
+    vornik_resolve_url "${VORNIK_API_URL%/}/api/v1/projects/${project_id}/forge/issues"; url="$VORNIK_URL"
+    # VORNIK_CURL_OPT is the resolver's optional --unix-socket option pair.
+    # shellcheck disable=SC2086
+    out=$(printf '%s' "$req" | curl -sS --max-time 30 $VORNIK_CURL_OPT -X POST \
+        -w '\n%{http_code}' -H "Content-Type: application/json" \
+        -H "X-API-Key: ${VORNIK_API_KEY:-}" -H "X-Execution-ID: ${execution_id}" \
+        --data @- "$url" 2>/dev/null) || { printf '{"error":"forge request failed"}'; return; }
+    http_code="${out##*$'\n'}"
+    response="${out%$'\n'*}"
+    if [ "$http_code" != "200" ]; then
+        printf '{"error":"forge request failed (HTTP %s)"}' "${http_code:-000}"
+        return
+    fi
+    refusal=$(printf '%s' "$response" | jq -r '.refusal // ""' 2>/dev/null || true)
+    if [ -n "$refusal" ]; then
+        printf '%s' "$refusal"
+        return
+    fi
+    # Body already contains the daemon's untrusted wrapper and size cap.
+    printf '%s' "$response" | jq -er '.body | select(type == "string" and length > 0)' 2>/dev/null || printf '{"error":"invalid forge response"}'
+}
+
 # Handle list_apis tool call (provider discovery, LLD §3). GETs the
 # daemon's project-scoped /api/providers endpoint with an optional ?query=
 # filter. Same auth (X-API-Key) + X-Execution-ID header as query_api;
@@ -2327,6 +2367,9 @@ exec_tool() {
             ;;
         list_apis)
             handle_list_apis "$arguments"
+            ;;
+        forge_list_issues|forge_get_issue|forge_list_labels|forge_add_labels|forge_set_labels|forge_close_issue)
+            handle_forge_issue "${name#forge_}" "$arguments"
             ;;
         get_conversation_window)
             handle_get_conversation_window "$arguments"

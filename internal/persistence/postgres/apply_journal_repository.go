@@ -169,6 +169,16 @@ func (r *ApplyJournalRepository) MarkAppliedWithLedger(ctx context.Context, c pe
 		return fmt.Errorf("config apply journal: %w: ledger commit must end in APPLIED or PENDING_RESTART, got %q",
 			persistence.ErrInvalidTransition, c.To)
 	}
+	// From: VERIFYING (the apply path) unless the resolve verb asks for DRIFT
+	// (design §12, GitHub #285); nothing else is a ledger source.
+	from := c.From
+	if from == "" {
+		from = persistence.JournalStateVerifying
+	}
+	if from != persistence.JournalStateVerifying && from != persistence.JournalStateDrift {
+		return fmt.Errorf("config apply journal: %w: a ledger commit starts from VERIFYING or DRIFT, got %q",
+			persistence.ErrInvalidTransition, from)
+	}
 	tx, ok, err := persistence.BeginTx(ctx, r.db, nil)
 	if err != nil {
 		return err
@@ -180,9 +190,10 @@ func (r *ApplyJournalRepository) MarkAppliedWithLedger(ctx context.Context, c pe
 	}
 	now := time.Now().UTC()
 	res, err := exec.ExecContext(ctx, `UPDATE config_apply_journal
-		SET state = $1, generation_after = COALESCE($2, generation_after), updated_at = $3, terminal_at = $3
+		SET state = $1, generation_after = COALESCE($2, generation_after), failure = COALESCE($6, failure),
+		    updated_at = $3, terminal_at = $3
 		WHERE id = $4 AND state = $5`,
-		c.To, pgNullStr(c.GenerationAfter), now, c.JournalID, persistence.JournalStateVerifying)
+		c.To, pgNullStr(c.GenerationAfter), now, c.JournalID, from, pgNullStr(c.Failure))
 	if err != nil {
 		return mapDBError(err)
 	}

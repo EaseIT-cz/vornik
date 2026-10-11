@@ -1845,6 +1845,7 @@ semantic AS (
     SELECT id, row_number() OVER (ORDER BY embedding <=> $4::vector, id) AS rank
     FROM project_memory_chunks
     WHERE project_id = $1 AND embedding IS NOT NULL
+      AND validation_status NOT IN ('refuted','superseded')
       AND ` + r.expiryClause(projectID, "") + `
     ORDER BY embedding <=> $4::vector, id LIMIT 20
 ),
@@ -1857,6 +1858,7 @@ keyword AS (
     ) AS rank
     FROM project_memory_chunks, q
     WHERE project_id = $1 AND (tsv @@ q.strict_q OR tsv @@ q.relaxed_q)
+      AND validation_status NOT IN ('refuted','superseded')
       AND ` + r.expiryClause(projectID, "") + `
     LIMIT 20
 )
@@ -1905,6 +1907,7 @@ semantic AS (
     SELECT id, row_number() OVER (ORDER BY embedding <=> $4::vector, id) AS rank
     FROM project_memory_chunks
     WHERE project_id = $1 AND embedding IS NOT NULL
+      AND validation_status NOT IN ('refuted','superseded')
       AND `+r.expiryClause(projectID, "")+`
       AND ($5::timestamptz IS NULL OR COALESCE(event_time, created_at) >= $5::timestamptz)
       AND ($6::timestamptz IS NULL OR COALESCE(event_time, created_at) <= $6::timestamptz)
@@ -1920,6 +1923,7 @@ keyword AS (
     ) AS rank
     FROM project_memory_chunks, q
     WHERE project_id = $1 AND (tsv @@ q.strict_q OR tsv @@ q.relaxed_q)
+      AND validation_status NOT IN ('refuted','superseded')
       AND `+r.expiryClause(projectID, "")+`
       AND ($5::timestamptz IS NULL OR COALESCE(event_time, created_at) >= $5::timestamptz)
       AND ($6::timestamptz IS NULL OR COALESCE(event_time, created_at) <= $6::timestamptz)
@@ -2144,6 +2148,7 @@ SELECT c.id, c.project_id, COALESCE(c.task_id,''), c.source_name, c.content,
        ) ELSE false END AS series_superseded
 FROM project_memory_chunks c, q
 WHERE c.project_id = $1 AND (c.tsv @@ q.strict_q OR c.tsv @@ q.relaxed_q)
+  AND c.validation_status NOT IN ('refuted','superseded')
   AND `+r.expiryClause(projectID, "c.")+`
   AND ($4::timestamptz IS NULL OR COALESCE(c.event_time, c.created_at) >= $4::timestamptz)
   AND ($5::timestamptz IS NULL OR COALESCE(c.event_time, c.created_at) <= $5::timestamptz)
@@ -2226,9 +2231,11 @@ func pqStringArray(s []string) interface{} {
 }
 
 // KeywordSearch performs a full-text search using PostgreSQL tsvector.
-// Filters out chunks whose TTL has lapsed; the lifecycle/validation
-// filters are deliberately left off this legacy path (the
-// epoch-aware variant adds them).
+// Filters out chunks whose TTL has lapsed and, like every search
+// statement, refuted and superseded chunks (GitHub #94: this legacy
+// path used to return a refuted note). The lifecycle filter stays off
+// this path (design 22, "No search path returns a refuted or
+// superseded row": a known divergence).
 //
 // 2026.7.0 F7 — three-tier resilience: when the tsvector query
 // errors (extension dropped, malformed query, generated-column
@@ -2252,6 +2259,7 @@ SELECT c.id, c.project_id, COALESCE(c.task_id,''), c.source_name, c.content,
        c.is_alive, c.last_checked_at
 FROM project_memory_chunks c, q
 WHERE project_id = $1 AND (tsv @@ q.strict_q OR tsv @@ q.relaxed_q)
+  AND c.validation_status NOT IN ('refuted','superseded')
   AND ` + r.expiryClause(projectID, "c.") + `
 ORDER BY score DESC, c.id LIMIT $3`
 
@@ -2363,6 +2371,7 @@ SELECT id,
        (embedding IS NOT NULL) AS has_embedding
 FROM project_memory_chunks
 WHERE project_id = $1
+  AND ` + liveValidationPredicate + `
   AND ` + r.expiryClause(projectID, "") + `
   ` + scopeClause + `
 ORDER BY created_at DESC
@@ -2463,6 +2472,7 @@ SELECT c.id, c.project_id, COALESCE(c.task_id,''), c.source_name, c.content,
 FROM project_memory_chunks c
 WHERE c.project_id = $1 AND c.content ILIKE '%%' || $2 || '%%' ESCAPE '\'
   AND c.lifecycle_state = 'published'
+  AND c.validation_status NOT IN ('refuted','superseded')
   AND `+r.expiryClause(projectID, "c.")+`
   %s
 ORDER BY c.created_at DESC LIMIT $3`, strings.ReplaceAll(scopeFilterSQL(strictScope, 4), "repo_scope", "c.repo_scope"))
@@ -2490,6 +2500,7 @@ SELECT c.id, c.project_id, COALESCE(c.task_id,''), c.source_name, c.content,
 FROM project_memory_chunks c
 WHERE c.project_id = $1 AND c.content ILIKE '%%' || $2 || '%%' ESCAPE '\'
   AND c.lifecycle_state = 'published'
+  AND c.validation_status NOT IN ('refuted','superseded')
   AND `+r.expiryClause(projectID, "c.")+`
   AND ($4::timestamptz IS NULL OR COALESCE(c.event_time, c.created_at) >= $4::timestamptz)
   AND ($5::timestamptz IS NULL OR COALESCE(c.event_time, c.created_at) <= $5::timestamptz)

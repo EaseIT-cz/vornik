@@ -739,5 +739,10 @@ func TestCompanionPush_Contract(t *testing.T) {
 // never :memory:, so the concurrency cases race real connections.
 func TestBrokerGrant_Contract(t *testing.T) {
 	db := sqlitetest.File(t, "grants.db")
-	repotest.RunBrokerGrantSuite(t, sqlite.NewBrokerGrantRepository(db.DB), sqlite.NewBrokerActionRepository(db.DB))
+	repotest.RunBrokerGrantSuite(t, sqlite.NewBrokerGrantRepository(db.DB), sqlite.NewBrokerActionRepository(db.DB), sqlite.NewAccountTransitionRepository(db.DB))
+}
+
+func TestQueuedAction_Contract(t *testing.T) {
+	db := newTestDB(t)
+	repotest.RunQueuedActionSuite(t, sqlite.NewBrokerActionRepository(db.DB), sqlite.NewBrokerGrantRepository(db.DB), sqlite.NewAccountTransitionRepository(db.DB))
 }

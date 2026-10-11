@@ -44,7 +44,10 @@ current status (ok/ready/blocked/degraded/unknown).
 With an id argument, full prereq detail (including remediation hints for
 unmet prereqs) is shown for that feature.
 
-Exit code 1 when any feature is blocked or degraded.`,
+Exit code 1 when any feature is blocked or degraded.
+
+With API authentication enabled, this daemon-wide readiness view requires
+an admin-class API key.`,
 	// SilenceErrors prevents cobra from printing "Error: " when RunE
 	// returns a featureExitError (whose Error() is ""). SilenceUsage
 	// suppresses the usage printout on the same path — the blocked/

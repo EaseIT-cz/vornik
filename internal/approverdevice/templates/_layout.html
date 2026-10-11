@@ -60,4 +60,5 @@ nav a[aria-current=page]{background:var(--brand-500);border-color:var(--brand-50
 </style></head><body>
 <header><img src="/ui/static/icon.svg" alt=""><strong>Vornik approvals</strong></header>
 <main>{{end}}
+{{define "nav"}}<nav><a href="/ui/approve/"{{if eq . "approvals"}} aria-current="page"{{end}}>Approvals</a><a href="/ui/approve/standing"{{if eq . "standing"}} aria-current="page"{{end}}>Standing approvals</a><a href="/ui/approve/memory"{{if eq . "memory"}} aria-current="page"{{end}}>Memory</a><a href="/ui/approve/devices"{{if eq . "devices"}} aria-current="page"{{end}}>Devices</a></nav>{{end}}
 {{define "foot"}}</main></body></html>{{end}}

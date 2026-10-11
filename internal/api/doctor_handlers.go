@@ -16,6 +16,7 @@ import (
 	"vornik.io/vornik/internal/config"
 	"vornik.io/vornik/internal/featuredoctor"
 	"vornik.io/vornik/internal/mcp"
+	"vornik.io/vornik/internal/mcpconnect"
 	"vornik.io/vornik/internal/persistence"
 	"vornik.io/vornik/internal/pricing"
 	"vornik.io/vornik/internal/registry"
@@ -259,7 +260,11 @@ type DoctorHandlers struct {
 	mcpPending func() (int, []mcp.PendingServer)
 	// mcpWithheld lists servers withheld at config resolution.
 	mcpWithheld func() []string
-	mcpNow      func() time.Time
+	// mcpNoGrant lists oauth servers withheld for want of a grant (auth
+	// design §14): current state, read by mcp_project_connections and
+	// connector_auth.
+	mcpNoGrant func() []mcpconnect.NoGrant
+	mcpNow     func() time.Time
 
 	// wiredWorkerIDs reports the singleton workers THIS process actually
 	// constructed an elector for. It is what lets daemon_leader_locks_health
@@ -633,9 +638,16 @@ func (h *DoctorHandlers) RunReportReadOnly(ctx context.Context) DoctorReport {
 }
 
 // RunDoctor handles POST /api/v1/doctor?fix=true|false
+//
+// Admin-class only, with or without fix (GitHub #292; design
+// 2026-08-26-doctor-skipped-vs-ok-design.md §E8): the repairs act on every
+// project, and even the read-only report discloses other projects' task ids.
 func (h *DoctorHandlers) RunDoctor(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		respondError(w, http.StatusMethodNotAllowed, "METHOD_NOT_ALLOWED", "use POST")
+		return
+	}
+	if !h.requireAdminClass(w, r) {
 		return
 	}
 

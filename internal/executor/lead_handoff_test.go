@@ -180,6 +180,11 @@ func (f *fakeTaskRepo) OrphanChildren(_ context.Context, parentID string) (int, 
 	return n, nil
 }
 
+// UpdateIfStatus writes like Update; the lead hand-off tests never race it.
+func (f *fakeTaskRepo) UpdateIfStatus(ctx context.Context, t *persistence.Task, _ []persistence.TaskStatus) (bool, error) {
+	return true, f.Update(ctx, t)
+}
+
 func (f *fakeTaskRepo) Update(_ context.Context, t *persistence.Task) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()

@@ -73,7 +73,7 @@
                     </div>
                     <div>
                         <h3 class="text-xs uppercase tracking-wider text-gray-500 mb-1">Connections</h3>
-                        {{if .Integrations}}<ul class="space-y-0.5">{{range .Integrations}}<li><span class="font-mono">{{.Name}}</span> <span class="text-xs text-gray-500">{{.Status}}</span>{{if .Detail}}<div class="text-xs text-gray-500 break-all">{{.Detail}}</div>{{end}}</li>{{end}}</ul>{{else}}<p class="text-xs text-gray-500">none</p>{{end}}
+                        {{if .Integrations}}<ul class="space-y-0.5">{{range .Integrations}}<li><span class="font-mono">{{.Name}}</span> <span class="text-xs text-gray-500">{{.Status}}</span>{{if .Detail}}<div class="text-xs text-gray-500 break-all">{{.Detail}}</div>{{end}}{{if .Checked}}<div class="text-xs text-gray-500">{{.Checked}}</div>{{end}}</li>{{end}}</ul>{{else}}<p class="text-xs text-gray-500">none</p>{{end}}
                     </div>
                     <div>
                         <h3 class="text-xs uppercase tracking-wider text-gray-500 mb-1">Credentials</h3>

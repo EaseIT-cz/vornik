@@ -1,5 +1,5 @@
 {{define "group.html"}}{{template "head" (page "Review together" 0)}}
-<nav><a href="/ui/approve/">Approvals</a><a href="/ui/approve/standing">Standing approvals</a><a href="/ui/approve/devices">Devices</a></nav>
+{{template "nav" ""}}
 <h1>{{.Title}}</h1>
 <p class="mut">Tick the ones you approve or reject. Nothing is ticked for you, and each is checked against exactly what this page shows.</p>
 <form method="post" action="/ui/approve/group/{{.Key}}">

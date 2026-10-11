@@ -1487,6 +1487,11 @@ func (c *Container) initScheduler() error {
 		scheduler.WithExecutor(c.Executor),
 		scheduler.WithArtifactStore(artifactStore),
 	}
+	if c.livePub != nil {
+		// attempt_failed on the live stream (live-task-observation design,
+		// Change 2026-10-08 C5, GitHub #92).
+		schedulerOptions = append(schedulerOptions, scheduler.WithLivePublisher(c.livePub))
+	}
 	if registry := c.observabilityRegistry(); registry != nil {
 		schedulerOptions = append(schedulerOptions, scheduler.WithPrometheusRegistry(registry))
 	}
@@ -1565,6 +1570,9 @@ func (c *Container) initWatchdog() error {
 	// watchdog tick.
 	if c.Watchdog != nil && c.Executor != nil {
 		c.Watchdog = c.Watchdog.WithParentUnblockSweeper(c.Executor)
+		// The approval-timeout cancel goes through the cancel primitive
+		// with the executor as its teardown (05-scheduler §4.11, GitHub #304).
+		c.Watchdog = c.Watchdog.WithTaskTeardown(c.Executor)
 	}
 	// Pending-outcome backstop: SweepPending only covers the execution its
 	// caller is closing, so every path that terminalises a task's OTHER

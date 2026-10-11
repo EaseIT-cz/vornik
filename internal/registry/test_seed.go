@@ -35,3 +35,18 @@ func SeedWorkflowsForTest(r *Registry, workflows map[string]*Workflow) {
 	r.active.workflows = workflows
 	r.workflows = workflows
 }
+
+// SeedSwarmsForTest replaces the registry's active swarm map, the swarm
+// counterpart of SeedForTest.
+func SeedSwarmsForTest(r *Registry, swarms map[string]*Swarm) {
+	if r == nil {
+		return
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.active == nil {
+		r.active = &ConfigSet{}
+	}
+	r.active.swarms = swarms
+	r.swarms = swarms
+}

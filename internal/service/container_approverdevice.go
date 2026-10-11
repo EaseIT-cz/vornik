@@ -56,6 +56,11 @@ func (c *Container) approverDeviceService() *approverdevice.Service {
 		// page. Both read the container at call time.
 		svc.RegisterGrantOffer(persistence.ApprovalKindBrokerAction, c.grantOfferFor)
 		svc.SetStandingPages(c.standingDevicePages())
+		// The memory page (LLD 22, "Memory the user can see", GitHub #119
+		// item 6). The view reads the memory subsystem at call time.
+		if v := c.approverMemoryView(); v != nil {
+			svc.SetMemoryView(v)
+		}
 		c.approverDevices = svc
 	})
 	return c.approverDevices

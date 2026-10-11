@@ -300,11 +300,9 @@ func TestWindowSize_BedrockJSONSchemaRejectsMissingBody(t *testing.T) {
 // http (OpenAI-compat) provider applies max_tokens at construction
 // time via WithMaxTokens. The wire body must include the field.
 //
-// HTTP doesn't currently honour the *per-request* override (it
-// reads p.maxTokens directly), but the construction-time path is
-// what the dispatcher's chat.router.http.max_tokens config bills
-// against. The deferred per-request wiring is tracked in
-// internal/chat/request_options.go's docstring.
+// Since GitHub #100 (2026-10-08) a per-request value on the context is
+// honoured too, clamped to this cap (request_max_tokens_test.go); with no
+// per-request value the construction-time cap is what is sent, as here.
 func TestWindowSize_HTTPHonoursConstructionTimeMaxTokens(t *testing.T) {
 	var sentBody []byte
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

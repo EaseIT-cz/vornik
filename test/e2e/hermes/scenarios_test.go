@@ -98,7 +98,7 @@ func (l *laneRun) safety(step string, r hermesRun, approved bool) {
 }
 
 // step runs prompt up to 3 times until check passes (lane design §5).
-func (l *laneRun) step(name, prompt string, approved bool, check func(hermesRun) error) hermesRun {
+func (l *laneRun) step(name, prompt string, approved bool, check func(hermesRun) error, before ...func()) hermesRun {
 	l.t.Helper()
 	var last hermesRun
 	var err error
@@ -106,6 +106,9 @@ func (l *laneRun) step(name, prompt string, approved bool, check func(hermesRun)
 		l.attempts[name] = attempt
 		if l.s.hermesRec != nil {
 			l.s.hermesRec.SetAttempt(attempt)
+		}
+		for _, prepare := range before {
+			prepare()
 		}
 		last = runHermes(l.t, l.s, prompt)
 		l.safety(name, last, approved)
@@ -279,7 +282,7 @@ func catalogCalls(t *testing.T) int {
 func TestHermesLane(t *testing.T) {
 	s := startStack(t)
 	l := &laneRun{t: t, s: s, attempts: map[string]int{}, replies: map[string]string{}}
-	startHermesModel(t, s, append(hermesScripts(s), h3fScripts()...)...)
+	startHermesModel(t, s, append(append(append(hermesScripts(s), h3fScripts()...), h3gScripts()...), h9Scripts()...)...)
 	prepareHermesHome(t, s)
 
 	// H1 — the plugin's tools reach the model; catalog is called. Judged on
@@ -293,7 +296,7 @@ func TestHermesLane(t *testing.T) {
 	})
 	{
 		got := toolsOffered(s)
-		want := []string{"vornik_cancel", "vornik_catalog", "vornik_delegate", "vornik_recall", "vornik_remember", "vornik_result", "vornik_status"}
+		want := []string{"vornik_cancel", "vornik_catalog", "vornik_delegate", "vornik_list_artifacts", "vornik_read_artifact", "vornik_recall", "vornik_remember", "vornik_result", "vornik_status"}
 		var vornik []string
 		for _, n := range got {
 			if strings.HasPrefix(n, "vornik_") {
@@ -346,6 +349,11 @@ func TestHermesLane(t *testing.T) {
 	// Hermes's own memory, then forgotten, is refuted in Vornik and absent
 	// from a fresh session.
 	laneH3f(t, l)
+	// H3g — memory the user can see (GitHub #119 item 6).
+	laneH3g(t, l)
+	// H9 — progress while a task runs, and reuse of a recent result
+	// (GitHub #119 item 9).
+	laneH9(t, l)
 
 	// H2b — Vornik enforces the egress contract against a hostile producer.
 	hostile := goodDigest()

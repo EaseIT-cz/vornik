@@ -1,9 +1,9 @@
 ---
 sources:
     - path: internal/cli/agent_connect.go
-      sha256: 9b7c42ca54f447562aefb465ae5daefa1808de670a33e91125c26a68f5220bf6
+      sha256: 734e810ae87fd744e0f9ca94c5f71ea792587c2dc0d137cccb7238bb15868b2c
     - path: internal/agentadmin/admin_guidance.md
-      sha256: 840b2e11c52a4be9611c0d84b193b0c29d44c9eac744b07ff0d36c10792ffbf9
+      sha256: 5ae414b8c956bc73278feb5bb989501aef98f8c0fc71af1279fb740d2e0dca25
 ---
 # Acceptance check: an assistant sets up Vornik
 
@@ -52,6 +52,22 @@ It also checks the one thing the automated lane cannot: that a real model, promp
    - **Expected:** no file. Repeat for the mail token.
 8. Disconnect: `vornikctl agent disconnect <namespace>`. Ask the assistant anything about Vornik.
    - **Expected:** it can no longer reach Vornik, and its config no longer has the `vornik-<namespace>` entry.
+
+## Check two accounts at one provider
+
+If your test provider offers work and personal accounts, ask the assistant to
+connect both in the same project. Expect it to ask which account you mean,
+use distinct connection labels and credential names, and ask you to enter
+each credential on your phone. Check the account named before each approval.
+Approve a work reply with a standing approval, then request an equivalent
+personal reply: the personal reply must wait for its own approval.
+
+After changing either connection or credential, request a fresh read. The
+assistant must omit `max_age_seconds` on that first call. A credential changed
+under the same label does not automatically invalidate a previously reusable
+answer. Record this account check separately from the automated lane; it does
+not turn a scripted model or Claude protocol stand-in into a vendor-client
+plain-language acceptance result.
 
 ## Record the result
 

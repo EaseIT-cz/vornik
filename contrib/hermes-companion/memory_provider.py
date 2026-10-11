@@ -17,6 +17,7 @@ import json
 import logging
 import os
 import re
+import urllib.parse
 
 from .vornik_client import VornikClient, VornikError
 
@@ -48,6 +49,12 @@ NOTE_MAX_BYTES = 2048
 # (review 3cbd finding 5); recent_memory caps at 20 daemon-side.
 MEMORY_LIST_LIMIT = 20
 FORGET_RECALL_LIMIT = MEMORY_LIST_LIMIT
+# The daemon serves the paged memory_list (GitHub #119 item 6).
+MEMORY_LIST_FEATURE = "companion-memory-list"
+EXPORT_LINK_REFUSED = ("Vornik could not get the link to your approver device's memory page: the daemon "
+                       "answered a link that is not on the Vornik address this plugin uses, so it is not shown.")
+EXPORT_NEEDS_NEWER = ("Export needs a newer Vornik: this daemon does not offer memory_list and the approver "
+                      "device's memory page yet. Ask the operator to upgrade.")
 # Whole tokens, literal or JSON-escaped (a tool result is passed on as text).
 TOKEN_RE = re.compile(r" ?(?:⟦|\\u27e6)vm:[0-9a-f]{16}(?:⟧|\\u27e7)")
 # A token fragment ANYWHERE in a string (review 3cbd finding 3): an opening
@@ -123,6 +130,23 @@ REMEMBER_SCHEMA = {
                     "under about ten words); no secrets."),
     "parameters": {"type": "object", "properties": {"content": {"type": "string"}}, "required": ["content"]},
 }
+
+
+def _device_link(base_url, link) -> str:
+    """The approver device's page, only on the daemon this plugin talks to
+    (review 6ef9 F1): a path is joined to VORNIK_URL; an absolute link must
+    have VORNIK_URL's scheme and host; anything else, or a path that climbs
+    with "..", is refused ("")."""
+    base = urllib.parse.urlsplit(str(base_url or ""))
+    link = str(link or "").strip()
+    if not base.scheme or not base.netloc or ".." in link or "\\" in link:
+        return ""
+    if link.startswith("/") and not link.startswith("//"):
+        return "%s://%s%s" % (base.scheme, base.netloc, link)
+    u = urllib.parse.urlsplit(link)
+    if u.scheme == base.scheme and u.netloc == base.netloc and u.path.startswith("/"):
+        return link
+    return ""
 
 
 def _refusal(text) -> str:
@@ -342,6 +366,7 @@ class MemoryCommands:
         self.provider = provider
         self._now = now or (lambda: datetime.datetime.now(datetime.timezone.utc))
         self._ids = {}  # short id -> full chunk id, from the listings shown
+        self._cursor = ""  # memory_list's next_cursor, for /vornik-memory more
 
     def _line(self, row, field, now):
         chunk_id = str(row.get("chunk_id") or "")
@@ -354,6 +379,16 @@ class MemoryCommands:
 
     def memory(self, raw_args: str = "") -> str:
         words = str(raw_args or "").strip()
+        # 0.15.0 (GitHub #119 item 6, LLD 22 "Memory the user can see"): the
+        # daemon's paged memory_list when it advertises it; export is a link
+        # to the paired approver device, never fetched here.
+        listing = self.provider.client.supports(MEMORY_LIST_FEATURE)
+        if words.lower() == "export":
+            return self._export_link() if listing else EXPORT_NEEDS_NEWER
+        if listing:
+            return self._list(words)
+        if words.lower() == "more":
+            words = ""
         if words:
             text, err = self.provider._call("recall", {"query": words[:500], "limit": MEMORY_LIST_LIMIT})
             key, field = "hits", "content"
@@ -370,6 +405,58 @@ class MemoryCommands:
             return "Vornik holds nothing that matches." if words else "Vornik holds no memories yet."
         now = self._now()
         return "\n".join(self._line(r, field, now) for r in rows) + "\n\n/vornik-forget <id> forgets one."
+
+    def _list(self, words: str) -> str:
+        args = {"limit": MEMORY_LIST_LIMIT}
+        more = words.lower() == "more"
+        if more:
+            if not self._cursor:
+                return "There is no further page. /vornik-memory starts again from the newest."
+            args["cursor"] = self._cursor
+        elif words:
+            args["query"] = words[:500]
+        text, err = self.provider._call("memory_list", args)
+        if err:
+            return "Vornik memory is unavailable: %s" % strip_tokens(err)
+        try:
+            body = json.loads(text or "{}")
+            items = [r for r in (body.get("items") or []) if isinstance(r, dict)]
+        except (ValueError, AttributeError, TypeError):
+            return "Vornik returned an unreadable answer."
+        sent = args.get("cursor", "")
+        self._cursor = str(body.get("next_cursor") or "") if not words or more else ""
+        if more and self._cursor == sent:
+            # Review 6ef9 F2: a daemon that repeats the cursor it was sent
+            # cannot make /vornik-memory more loop.
+            self._cursor = ""
+        if not items:
+            if more:
+                return "There is no further page."
+            return "Vornik holds nothing that matches." if words else "Vornik holds no memories yet."
+        now = self._now()
+        rows = [{"chunk_id": r.get("id"), "created_at": r.get("created_at"), "source_name": r.get("source"),
+                 "snippet": r.get("snippet")} for r in items]
+        tail = "\n\n/vornik-forget <id> forgets one; /vornik-memory export gives the link to download everything."
+        if self._cursor:
+            tail += " /vornik-memory more shows the next page."
+        return "\n".join(self._line(r, "snippet", now) for r in rows) + tail
+
+    def _export_link(self) -> str:
+        text, err = self.provider._call("memory_list", {"limit": 1})
+        if err:
+            return "Vornik memory is unavailable: %s" % strip_tokens(err)
+        try:
+            url = str(json.loads(text or "{}").get("export_url") or "")
+        except (ValueError, AttributeError, TypeError):
+            url = ""
+        if not url:
+            return EXPORT_NEEDS_NEWER
+        url = _device_link(self.provider.client.base_url, url)
+        if not url:
+            return EXPORT_LINK_REFUSED
+        return ("Open %s on your paired approver device (your phone) to download everything Vornik keeps "
+                "for you, as JSON or Markdown, and to forget items there. The export is not shown here "
+                "and does not pass through the model." % url)
 
     def forget(self, raw_args: str = "") -> str:
         given = str(raw_args or "").strip().lower()

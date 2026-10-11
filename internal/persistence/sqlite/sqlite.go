@@ -333,6 +333,8 @@ var sqliteAdditiveColumns = []additiveColumn{
 	// (sqliteAdditiveBackfills).
 	{"a2a_push_configs", "pushed_state", `TEXT`},
 	{"broker_actions", "pushed_state", `TEXT`},
+	{"broker_actions", "account_ns_epoch", `INTEGER CHECK(account_ns_epoch >= 0)`},
+	{"broker_actions", "account_daemon_epoch", `INTEGER CHECK(account_daemon_epoch >= 0)`},
 	// Postgres migration 207 — the approval apply lease (agent-administered
 	// Vornik design §9.2; review 20261002-4de8 F2).
 	{"agent_approval_requests", "apply_holder", `TEXT`},
@@ -358,6 +360,16 @@ var sqliteAdditiveColumns = []additiveColumn{
 	// is "route not recorded" and "not a reinstate".
 	{"project_memory_chunks", "refute_route", `TEXT`},
 	{"memory_ingest_audit", "reinstated_chunk_id", `TEXT`},
+	// Postgres migration 219 — an agent connection's account (GitHub #119
+	// item 8; agent-administered design §22.2.2). Defaults make every
+	// existing row the default account with no identity.
+	{"agent_integration_approvals", "account_label", `TEXT NOT NULL DEFAULT 'default'`},
+	{"agent_integration_approvals", "account_identity", `TEXT NOT NULL DEFAULT ''`},
+	{"agent_integration_approvals", "identity_source", `TEXT NOT NULL DEFAULT '' CHECK (identity_source IN ('', 'agent', 'provider'))`},
+	// Postgres migration 220 — the account a standing grant was made under
+	// (operator decision 2026-10-09; design §22.2.16).
+	{"broker_standing_grants", "account_label", `TEXT NOT NULL DEFAULT ''`},
+	{"broker_standing_grants", "account_identity", `TEXT NOT NULL DEFAULT ''`},
 }
 
 // applyAdditiveColumns adds any registered column missing from an existing

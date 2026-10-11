@@ -3,6 +3,7 @@ package mocks
 
 import (
 	"context"
+	"errors"
 	"time"
 
 	"vornik.io/vornik/internal/persistence"
@@ -22,6 +23,9 @@ type MockTaskRepository struct {
 
 	// UpdateFunc is the function called for Update.
 	UpdateFunc func(ctx context.Context, task *persistence.Task) error
+
+	// UpdateIfStatusFunc is the function called for UpdateIfStatus.
+	UpdateIfStatusFunc func(ctx context.Context, task *persistence.Task, allowed []persistence.TaskStatus) (bool, error)
 
 	// DeleteFunc is the function called for Delete.
 	DeleteFunc func(ctx context.Context, id string) error
@@ -102,6 +106,7 @@ type MockTaskRepository struct {
 		Get                     int
 		GetByIdempotencyKey     int
 		Update                  int
+		UpdateIfStatus          int
 		Delete                  int
 		List                    int
 		UpdateStatus            int
@@ -164,6 +169,25 @@ func (m *MockTaskRepository) Update(ctx context.Context, task *persistence.Task)
 		return m.UpdateFunc(ctx, task)
 	}
 	return nil
+}
+
+// UpdateIfStatus implements TaskRepository. Without UpdateIfStatusFunc it
+// behaves as Update and reports the write landed.
+func (m *MockTaskRepository) UpdateIfStatus(ctx context.Context, task *persistence.Task, allowed []persistence.TaskStatus) (bool, error) {
+	m.CallCount.UpdateIfStatus++
+	m.LastCall.Task = task
+	if m.UpdateIfStatusFunc != nil {
+		return m.UpdateIfStatusFunc(ctx, task, allowed)
+	}
+	if len(allowed) == 0 {
+		// The drivers refuse an empty set; so does the mock
+		// (review-20261009-7123 F6).
+		return false, errors.New("UpdateIfStatus: allowed statuses required")
+	}
+	if m.UpdateFunc != nil {
+		return true, m.UpdateFunc(ctx, task)
+	}
+	return true, nil
 }
 
 // Delete implements TaskRepository.
@@ -379,6 +403,7 @@ func (m *MockTaskRepository) Reset() {
 		Get                     int
 		GetByIdempotencyKey     int
 		Update                  int
+		UpdateIfStatus          int
 		Delete                  int
 		List                    int
 		UpdateStatus            int

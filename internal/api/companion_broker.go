@@ -19,6 +19,7 @@ import (
 	"vornik.io/vornik/internal/agentadmin"
 
 	"vornik.io/vornik/internal/executor"
+	"vornik.io/vornik/internal/executor/livepubsub"
 	"vornik.io/vornik/internal/outputguard"
 	"vornik.io/vornik/internal/persistence"
 	"vornik.io/vornik/internal/registry"
@@ -39,23 +40,39 @@ import (
 // added later cannot silently become a second egress path; it has to be put
 // here, which means reading §5.6 first.
 var brokerProjectTools = map[string]bool{
-	"delegate": true,
-	"status":   true,
-	"result":   true,
-	"cancel":   true,
-	"list":     true,
-	"catalog":  true,
-	"whoami":   true,
+	"list_artifacts": true,
+	"read_artifact":  true,
+	"delegate":       true,
+	"status":         true,
+	"result":         true,
+	"cancel":         true,
+	"list":           true,
+	"catalog":        true,
+	"whoami":         true,
+	// task_logs serves a broker-project key the broker view only (live design
+	// Change 2026-10-08 C6b; broker design §5.6 row).
+	"task_logs": true,
+	// The diagnosis tools (live design Change 2026-10-08 C6b): broker shapes
+	// only; daemon_log and doctor also require an agent-admin key.
+	"task_explain": true,
+	"daemon_log":   true,
+	"doctor":       true,
 }
 
 // companionTaskTools are refused for a delegate_disabled (memory-only) key.
 var companionTaskTools = map[string]bool{
-	"delegate": true,
-	"status":   true,
-	"result":   true,
-	"cancel":   true,
-	"list":     true,
-	"catalog":  true,
+	"list_artifacts": true,
+	"read_artifact":  true,
+	"delegate":       true,
+	"task_logs":      true,
+	"task_explain":   true,
+	"daemon_log":     true,
+	"doctor":         true,
+	"status":         true,
+	"result":         true,
+	"cancel":         true,
+	"list":           true,
+	"catalog":        true,
 }
 
 // Result long-poll bounds (design §6).
@@ -102,6 +119,15 @@ func (s *Server) isBrokerProjectKey(key *persistence.APIKey) bool {
 func (s *Server) gateCompanionTool(key *persistence.APIKey, tool string) error {
 	if key.DelegateDisabled && companionTaskTools[tool] {
 		return fmt.Errorf("DELEGATE_DISABLED: this key is memory-only; %s is not available to it", tool)
+	}
+	if agentAdminOnlyTools[tool] && !key.AgentAdmin {
+		return errAgentAdminOnly(tool)
+	}
+	// GitHub #119 item 6 (LLD 22): an agent-admin key's memory is never the
+	// agent's memory. Refused by the key's kind, not left to its home
+	// project's registry entry and its absent memory_read flag.
+	if key.AgentAdmin && companionMemoryTools[tool] {
+		return fmt.Errorf("AGENT_ADMIN: %s is not available to an agent admin key; memory belongs to a memory key", tool)
 	}
 	if s.isBrokerProjectKey(key) && !brokerProjectTools[tool] {
 		return fmt.Errorf("BROKER_PROJECT: %s is not available to a key on a broker project", tool)
@@ -197,6 +223,23 @@ func (s *Server) companionBrokerDelegate(ctx context.Context, key *persistence.A
 	if err != nil {
 		return "", err
 	}
+	// Broker design §6b (GitHub #119 item 9): reuse of a recent read-only
+	// result, decided after every refusal and before the budget check.
+	reusable := len(wf.Broker.Proposes) == 0
+	if args.maxAge > 0 && !reusable {
+		recordResultReuse("refused")
+		return "", fmt.Errorf("REUSE_NOT_ALLOWED: %s proposes writes; its results are never reused", wf.ID)
+	}
+	var rk reuseKey
+	keyed := false
+	if reusable && s.reuseReachHash != nil {
+		rk, keyed = reuseKeyFor(key, project.ID, wf.ID, inputs)
+	}
+	if keyed && args.maxAge > 0 {
+		if out, hit := s.tryReuse(ctx, key, rk, project, wf, args.maxAge, args.Notify); hit {
+			return out, nil
+		}
+	}
 	if err := s.checkCompanionKeyBudget(ctx, key); err != nil {
 		return "", err
 	}
@@ -216,6 +259,9 @@ func (s *Server) companionBrokerDelegate(ctx context.Context, key *persistence.A
 			return "", fmt.Errorf("delegate failed: %s", ce.Message)
 		}
 		return "", fmt.Errorf("delegate failed: %w", err)
+	}
+	if keyed {
+		s.recordReuse(ctx, rk, task, project, wf)
 	}
 	out := map[string]any{
 		"task_id":     task.ID,
@@ -569,27 +615,18 @@ func guardBrokerEgress(doc any, provenance string) (any, int) {
 	return walk(doc), redactions
 }
 
-// classifyBrokerFailure maps a terminal task to the closed error enum without
-// echoing last_error (which can quote the content the task was processing).
-// The substring match is best-effort: a failure whose text merely mentions
-// "budget" is labelled budget. A mislabel stays inside the closed enum, so it
-// can never carry content (review-20260929-388f L2).
+// classifyBrokerFailure maps a terminal task to the closed broker error class
+// without echoing last_error (which can quote the content the task was
+// processing). The class comes from the stored, closed failure class column,
+// never from last_error's text: matching substrings of hidden text let a
+// caller learn, one bit per keyword, what that text contained (GitHub #299,
+// 2026-10-08; review-20261008-a4ef F5; broker design §5.2, amendment D1).
+// It is the mapping status.last_attempt and the live socket already use.
 func classifyBrokerFailure(task *persistence.Task) string {
 	if task.Status == persistence.TaskStatusCancelled {
 		return ""
 	}
-	msg := ""
-	if task.LastError != nil {
-		msg = strings.ToLower(*task.LastError)
-	}
-	switch {
-	case strings.Contains(msg, "budget"):
-		return brokerErrBudget
-	case strings.Contains(msg, "timeout"), strings.Contains(msg, "timed out"), strings.Contains(msg, "deadline exceeded"):
-		return brokerErrTimeout
-	default:
-		return brokerErrFailed
-	}
+	return brokerClassOfTaskClass(livepubsub.ClosedTaskClass(derefString(task.LastErrorClass)))
 }
 
 // companionBrokerResult is `result` for a broker task (design §5.1, §5.2a).
@@ -620,6 +657,7 @@ func (s *Server) companionBrokerResult(ctx context.Context, task *persistence.Ta
 			"redactions": 0,
 		},
 	}
+	s.completedArtifactRun(ctx, task, out)
 	egress := out["egress"].(map[string]any)
 	if task.Status != persistence.TaskStatusCompleted {
 		if class := classifyBrokerFailure(task); class != "" {

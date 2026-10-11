@@ -167,9 +167,19 @@ func (c *Container) verifyForgePermissions(ctx context.Context, resolver *forgeP
 		if err != nil {
 			c.Logger.Warn().Err(err).Str("project_id", p.ID).
 				Msg("forge: push access NOT verified — forge.open_change_request will fail to push branches until fixed")
-			continue
+		} else {
+			c.Logger.Info().Str("project_id", p.ID).Msg("forge: push access verified")
 		}
-		c.Logger.Info().Str("project_id", p.ID).Msg("forge: push access verified")
+		if reader, ok := provider.(forge.IssueReader); ok {
+			cctx, cancel := context.WithTimeout(ctx, 15*time.Second)
+			err := reader.VerifyIssueAccess(cctx, p.Forge.Issues.LabelsEnabled || p.Forge.Issues.CloseEnabled)
+			cancel()
+			if err != nil {
+				c.Logger.Warn().Err(err).Str("project_id", p.ID).Msg("forge: Issues access NOT verified — grant Issues permission and reaccept App installation")
+			} else {
+				c.Logger.Info().Str("project_id", p.ID).Msg("forge: Issues access verified")
+			}
+		}
 	}
 }
 

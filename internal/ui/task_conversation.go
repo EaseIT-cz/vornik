@@ -18,6 +18,7 @@ import (
 	"vornik.io/vornik/internal/persistence"
 	"vornik.io/vornik/internal/scheduler"
 	"vornik.io/vornik/internal/taintlineage"
+	"vornik.io/vornik/internal/taskcancel"
 )
 
 // Phase 26+27 of the conversational task lifecycle (LLD §5.1).
@@ -595,40 +596,10 @@ func (s *Server) uiAnswerCheckpoint(ctx context.Context, task *persistence.Task,
 		return "budget-raised"
 	}
 
-	// Budget "abandon": cancel via guarded conditional update.
-	if budgetAbandon {
-		cancelled, cerr := s.taskRepo.TransitionConditional(ctx, task.ID,
-			[]persistence.TaskStatus{persistence.TaskStatusAwaitingInput},
-			persistence.TaskStatusCancelled,
-			persistence.TransitionOpts{ClearLease: true})
-		if !cancelled {
-			if cerr != nil {
-				return "answer-failed"
-			}
-			return "checkpoint-stale"
-		}
-		if s.sseBus != nil {
-			s.sseBus.Publish(task.ID, SSEEvent{Kind: "status", Data: "CANCELLED"})
-		}
-		return "task-cancelled"
-	}
-
-	// Taint-review "cancel": block the write by cancelling the parked task.
-	if taintCancel {
-		cancelled, cerr := s.taskRepo.TransitionConditional(ctx, task.ID,
-			[]persistence.TaskStatus{persistence.TaskStatusAwaitingInput},
-			persistence.TaskStatusCancelled,
-			persistence.TransitionOpts{ClearLease: true})
-		if !cancelled {
-			if cerr != nil {
-				return "answer-failed"
-			}
-			return "checkpoint-stale"
-		}
-		if s.sseBus != nil {
-			s.sseBus.Publish(task.ID, SSEEvent{Kind: "status", Data: "CANCELLED"})
-		}
-		return "task-cancelled"
+	// Budget "abandon", and taint-review "cancel" (blocking the write):
+	// cancel the parked task.
+	if budgetAbandon || taintCancel {
+		return s.cancelParkedForAnswer(ctx, task.ID)
 	}
 
 	// Taint-review "allow" (admin-class, gated above): record the D7 latch for
@@ -848,6 +819,30 @@ func (s *Server) uiApproveTask(ctx context.Context, task *persistence.Task) stri
 		persistence.TaskStatusQueued, "approved", true)
 }
 
+// cancelParkedForAnswer cancels a task parked in AWAITING_INPUT for a
+// checkpoint answer (budget "abandon", taint-review "cancel") through the
+// cancel primitive (05-scheduler §4.11, GitHub #304): the conditional write,
+// then the parent unblock and the child cascade. The lease is cleared by the
+// write itself (a CANCELLED row holds none, §4.9).
+func (s *Server) cancelParkedForAnswer(ctx context.Context, taskID string) string {
+	outcome, err := taskcancel.Cancel(ctx, s.taskRepo, s.cancelTeardown(), taskID,
+		[]persistence.TaskStatus{persistence.TaskStatusAwaitingInput})
+	if err != nil {
+		return "answer-failed"
+	}
+	if !outcome.Transitioned {
+		return "checkpoint-stale"
+	}
+	if outcome.TeardownErr != nil {
+		s.logger.Error().Err(outcome.TeardownErr).Str("task_id", taskID).
+			Msg("checkpoint cancel: container did not stop — it may still be running")
+	}
+	if s.sseBus != nil {
+		s.sseBus.Publish(taskID, SSEEvent{Kind: "status", Data: "CANCELLED"})
+	}
+	return "task-cancelled"
+}
+
 // uiRejectTask declines an approval-gated task — it never runs.
 func (s *Server) uiRejectTask(ctx context.Context, task *persistence.Task) string {
 	return s.uiSimpleFlip(ctx, task,
@@ -870,11 +865,28 @@ func (s *Server) uiSimpleFlip(ctx context.Context, task *persistence.Task,
 	if err := s.taskMessageRepo.Insert(ctx, msg); err != nil {
 		return verb + "-failed"
 	}
-	opts := persistence.TransitionOpts{}
-	if to == persistence.TaskStatusQueued {
-		opts.ClearLease = true
+	var ok bool
+	if to == persistence.TaskStatusCancelled {
+		// A cancel goes through the primitive (05-scheduler §4.11, GitHub
+		// #304): the parent unblock and the child cascade after the write.
+		outcome, err := taskcancel.Cancel(ctx, s.taskRepo, s.cancelTeardown(), task.ID, from)
+		if err != nil {
+			// A failed write is not a stale row (review-20261009-7123 F3).
+			s.logger.Error().Err(err).Str("task_id", task.ID).Msg(verb + ": cancel failed")
+			return verb + "-failed"
+		}
+		ok = outcome.Transitioned
+		if outcome.TeardownErr != nil {
+			s.logger.Error().Err(outcome.TeardownErr).Str("task_id", task.ID).
+				Msg(verb + ": container did not stop — it may still be running")
+		}
+	} else {
+		opts := persistence.TransitionOpts{}
+		if to == persistence.TaskStatusQueued {
+			opts.ClearLease = true
+		}
+		ok, _ = s.taskRepo.TransitionConditional(ctx, task.ID, from, to, opts)
 	}
-	ok, _ := s.taskRepo.TransitionConditional(ctx, task.ID, from, to, opts)
 	if !ok {
 		return verb + "-stale"
 	}

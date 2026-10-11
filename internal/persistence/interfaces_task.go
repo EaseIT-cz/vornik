@@ -30,6 +30,14 @@ type TaskRepository interface {
 	// Update modifies an existing task.
 	Update(ctx context.Context, task *Task) error
 
+	// UpdateIfStatus is Update with a guard: the whole-row write lands only
+	// while the stored status is one of allowed, and reports whether it did
+	// (false, nil when no row matched). On false the in-memory task is stale;
+	// a caller that needs the row re-reads it with Get. The executor's
+	// failure finaliser uses it so a cancel, close or pause landing during
+	// the write is not overwritten (05-scheduler §4.11, GitHub #303).
+	UpdateIfStatus(ctx context.Context, task *Task, allowed []TaskStatus) (bool, error)
+
 	// Delete removes a task by ID.
 	Delete(ctx context.Context, id string) error
 

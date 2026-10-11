@@ -55,43 +55,20 @@ broker project (`broker: true`) refuses memory and skills on every key, so
 nothing Hermes delegates can be recalled later as raw text. Hermes's memory
 goes in an ordinary project whose key cannot delegate.
 
-As `vornik`, create the broker project in the daemon's projects directory
-(by default `~/.config/vornik/configs/projects/`; check
-`vornikctl config show` if you changed it). This one reads mail and never
-writes:
+As `vornik`, scaffold the broker project into the daemon's config tree (by
+default `~/.config/vornik/configs`; check `vornikctl config show` if you
+changed it). The `broker-mail` template reads mail and never writes:
 
-```yaml
-# ~/.config/vornik/configs/projects/broker-mail.yaml
-projectId: "broker-mail"
-displayName: "Mail broker"
-description: "Read-only mail access for Hermes. Broker workflows only."
-swarmId: "broker-swarm"
-defaultWorkflowId: "mail-digest"
-defaultPriority: 50
-maxConcurrentTasks: 2
-
-broker: true
-
-mcp:
-  servers:
-    # Narrows the daemon-level google-workspace server and declares the
-    # narrowing read-only. Vornik cannot verify that claim: list only tools
-    # that change nothing.
-    - name: "google-workspace"
-      broker_read_only: true
-      allowed_tools:
-        - "time_getCurrentDate"
-        - "gmail_search"
-        - "gmail_get"
-
-permissions:
-  allowedTools:
-    - "current_time"
-    - "file_write"      # writes the workflow's own result file, not mail
-    - "mcp__google-workspace__time_getCurrentDate"
-    - "mcp__google-workspace__gmail_search"
-    - "mcp__google-workspace__gmail_get"
+```bash
+vornikctl init project broker-mail --template broker-mail \
+    --config-dir ~/.config/vornik/configs
 ```
+
+It writes `projects/broker-mail.yaml`: `broker: true`, the daemon's
+`google-workspace` server narrowed to `gmail_search`, `gmail_get` and
+`time_getCurrentDate` and declared read-only, and `mail-digest` as its
+workflow. The full example, with the optional write path, is
+`configs/examples/broker-mail.yaml` in the Vornik source.
 
 It narrows a `google-workspace` MCP server that must already be configured
 at the daemon level with your mail account; see
@@ -128,7 +105,10 @@ vornikctl companion grant -p hermes-memory --client hermes \
     --memory-all --no-delegate
 ```
 
-Each prints its secret once. Grant nothing else to a Hermes key:
+Each prints its secret once, as the `.env` line Hermes needs:
+`VORNIK_BROKER_TOKEN=...` for the broker key, `VORNIK_MEMORY_TOKEN=...` for
+the memory key, each with a `VORNIK_URL=...` line. Grant nothing else to a
+Hermes key:
 
 - no `--skill-all` or other skill flags: the knowledge-skill store is for
   coding assistants;
@@ -160,7 +140,8 @@ sudo -u hermes -H sh -c 'umask 077; mkdir -p ~/.hermes; touch ~/.hermes/.env; ch
 (`sudo` drops your `EDITOR`; put another editor in place of `vi` if you
 prefer.)
 
-and add:
+and paste the lines the two `grant` commands printed (one `VORNIK_URL`
+line is enough):
 
 ```
 VORNIK_URL=http://localhost:8080
@@ -187,8 +168,20 @@ hermes vornik status        # URL, which tokens are set, the daemon's capabiliti
 hermes memory status        # expect "installed" and "available"
 ```
 
+For an existing installation, update the plugin separately after upgrading
+the daemon, then restart Hermes or its gateway so the process reloads its
+tools:
+
+```bash
+hermes plugins update vornik-companion
+```
+
 Restart Hermes (or its gateway) so it reads the new `.env`. Then ask it to
-list what it can run: it should name `mail-digest` and nothing else.
+list what it can run: it should name `mail-digest` and nothing else. To hand
+over a file from a completed task, Hermes also needs the plugin's
+`vornik_list_artifacts` and `vornik_read_artifact` tools; those appear only
+when the daemon advertises `companion-artifact-read` and the broker key is
+valid.
 
 ## Admin setup (opt-in)
 
@@ -208,7 +201,11 @@ sudo install -m 0755 "$(command -v vornikctl)" /usr/local/bin/vornikctl
 ```
 
 When you upgrade Vornik, replace the file at the same path; the recorded
-path then stays valid.
+path then stays valid. Install a real file there, not a symlink: connect
+records the file `--vornikctl /usr/local/bin/vornikctl` (below) resolves
+to, and refuses a path the
+user it runs as cannot execute, instead of writing an entry that fails at
+every start.
 
 **Connect needs the admin key once, from your terminal.** The sign-in from
 `vornikctl auth login` lives in `vornik`'s home, so `hermes`'s `vornikctl`
@@ -217,14 +214,17 @@ it is in neither a command line nor a shell history, and not in anything
 Hermes can read:
 
 ```bash
-read -rs VORNIK_API_KEY && export VORNIK_API_KEY     # paste the admin key
-# sudo drops your environment; --preserve-env carries this one variable
-sudo --preserve-env=VORNIK_API_KEY -u hermes -H \
-    /usr/local/bin/vornikctl agent connect hermes --dry-run
-sudo --preserve-env=VORNIK_API_KEY -u hermes -H \
-    /usr/local/bin/vornikctl agent connect hermes
-unset VORNIK_API_KEY
+read -rs K                                  # paste the admin key
+# printf is a shell builtin: the key is in no command line, environment
+# or history. The dry run reaches Vornik too, so it reads the key as well.
+printf '%s\n' "$K" | sudo -u hermes -H /usr/local/bin/vornikctl agent connect hermes \
+    --vornikctl /usr/local/bin/vornikctl --api-key-stdin --dry-run
+printf '%s\n' "$K" | sudo -u hermes -H /usr/local/bin/vornikctl agent connect hermes \
+    --vornikctl /usr/local/bin/vornikctl --api-key-stdin
+unset K
 ```
+
+`--api-key-stdin` refuses a terminal: a key typed there would be shown.
 
 Do not run `hermes vornik connect` with the admin key in Hermes's own
 environment: it passes its environment to `vornikctl`, and that environment
@@ -246,9 +246,10 @@ setup, follow [Vornik on another machine](assistant-setup.md#vornik-on-another-m
 |---|---|---|
 | `hermes vornik status` says a token is not set | It was exported in a shell, not written to `.env`, or Hermes was not restarted | Step 3, then restart Hermes |
 | Hermes says it has no Vornik tools | The daemon is older than the broker (no `companion-broker` capability), or Hermes hides plugin tools behind `tool_search` | Check `hermes vornik status`; for small local models, `hermes config set tools.tool_search.enabled off` |
+| Hermes cannot list or read completed-run files | Its installed plugin may predate artifact tools, the daemon may lack `companion-artifact-read`, or the workflow may not approve those filenames | Run `hermes plugins update vornik-companion` and restart Hermes; check `hermes vornik status`; ensure the workflow's approved `broker.egress.artifacts` names the files |
 | `vornikctl companion grant` refuses `--memory-all` | Memory on a broker project is refused by design | Grant memory on the separate memory project |
 | `vornikctl companion grant` says unauthorized | It ran without the admin key, for example as `hermes` | Run it as `vornik`, signed in |
-| Admin setup: the Vornik MCP entry fails at every Hermes start | The `vornikctl` path connect recorded is not executable by `hermes` | Install `vornikctl` in `/usr/local/bin` and connect again with that copy |
+| Admin setup: the Vornik MCP entry fails at every Hermes start | The `vornikctl` path connect recorded is not executable by `hermes` (connect now refuses such a path) | Install `vornikctl` in `/usr/local/bin` and connect again with `--vornikctl /usr/local/bin/vornikctl` (or `hermes vornik connect --vornikctl /usr/local/bin/vornikctl`) |
 | Admin setup: connect says it cannot reach Vornik, or is unauthorized | `hermes`'s `vornikctl` has no admin key, or a different URL | Pass the key as shown above; add `--url` if Vornik is not on `localhost:8080` |
 | A memory note is refused | Vornik refuses notes under about ten words | Write the fact as a full sentence with its context |
 

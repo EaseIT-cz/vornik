@@ -105,3 +105,23 @@ func TestSQLChunkLookup_DropsForeignProjectRow(t *testing.T) {
 		t.Fatalf("foreign project row leaked: %+v", got)
 	}
 }
+
+// GitHub #94 / review b240 finding 11 (2026-10-08): the graph arm hands
+// chunk content to recall and excluded refuted rows but not superseded
+// ones. It carries the full predicate every search statement carries.
+func TestSQLChunkLookup_ExcludesRefutedAndSuperseded(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+	mock.ExpectQuery(regexp.QuoteMeta("validation_status NOT IN ('refuted','superseded')")).
+		WithArgs("p", "c1").
+		WillReturnRows(sqlmock.NewRows([]string{"id", "project_id", "source_name", "content", "repo_scope"}))
+	if _, err := NewSQLChunkLookup(db).LookupChunks(context.Background(), "p", []string{"c1"}, ""); err != nil {
+		t.Fatalf("LookupChunks: %v", err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}

@@ -27,6 +27,11 @@ var shippedTemplateSamples = map[string]map[string][]string{
 		"projectId": {"smoke-comp"}, "displayName": {"Smoke"},
 		"defaultModel": {""},
 	},
+	// GitHub #99: the read-only mail broker (project only; relies on the
+	// shipped broker-swarm and mail-digest).
+	"broker-mail": {
+		"projectId": {"smoke-broker"}, "displayName": {"Smoke Broker"},
+	},
 	"report-pipeline": {
 		"projectId": {"smoke-report"}, "displayName": {"Smoke Report"},
 		"sources": {"https://example.com/feed-a", "https://example.com/feed-b"},

@@ -57,9 +57,11 @@ func TestCancelOne_CascadesToChildren(t *testing.T) {
 	}
 }
 
-// Cancelling a root task must not fire the notification — nothing to
-// unblock. Mirrors TestUICloseTask_NoNotifyForRootTask.
-func TestCancelOne_NoNotifyForRootTask(t *testing.T) {
+// A root task's cancel calls NotifyChildTerminal too: since 2026-10-08 every
+// cancel goes through the one primitive, which calls it unconditionally, and
+// the executor's sweep is a no-op for a task with no parent (05-scheduler.md
+// §4.11, GitHub #300). Before, cancelOne skipped the call for a root task.
+func TestCancelOne_RootTaskNotifyIsUnconditional(t *testing.T) {
 	repo := &mocks.MockTaskRepository{
 		GetFunc: func(_ context.Context, _ string) (*persistence.Task, error) {
 			return uiTask("root-1", persistence.TaskStatusQueued), nil
@@ -71,7 +73,7 @@ func TestCancelOne_NoNotifyForRootTask(t *testing.T) {
 	if !srv.cancelOne(context.Background(), httptest.NewRequest(http.MethodPost, "/", nil), "root-1") {
 		t.Fatal("cancelOne = false, want true")
 	}
-	if len(spy.calls) != 0 {
-		t.Errorf("NotifyChildTerminal calls = %v, want none for root task", spy.calls)
+	if len(spy.calls) != 1 || spy.calls[0] != "root-1" {
+		t.Errorf("NotifyChildTerminal calls = %v, want [root-1]", spy.calls)
 	}
 }

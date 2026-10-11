@@ -1,0 +1,1 @@
+{"action":"send_mail","action_id":"act_golden","args":{"subject":"hi","to":"bob@example.com"},"args_sha256":"sha-golden","project":"hermes--comms","task":"task_golden","tool":"mcp__mail-write__send","workflow":"hermes--comms--reply"}

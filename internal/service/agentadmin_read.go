@@ -206,6 +206,9 @@ type SetupRequest struct {
 	// the one it replaces (design §18.4 item 4).
 	ReRenderedAs string `json:"re_rendered_as,omitempty"`
 	ReRenderOf   string `json:"re_render_of,omitempty"`
+	// agentSupplied are the identities the request's payload records as
+	// the agent's own; the redaction leaves them (audit 2026-10-12 C).
+	agentSupplied []string
 }
 
 // ListSetup answers list_my_setup for an agent admin key.
@@ -282,12 +285,14 @@ func (s *agentAdminService) ListSetup(ctx context.Context, key *persistence.APIK
 		return SetupView{}, err
 	}
 	// The requests' sentences are the device's; the agent gets them with
-	// each provider-reported identity replaced (design §22.2.7, review 25bf
-	// finding 3).
+	// each provider-reported identity replaced, the ones a sentence named
+	// before a later sign-in included (design §22.2.7, review 25bf finding
+	// 3; audit 2026-10-12 finding C).
 	hide := s.providerIdentityHider(ctx, ns)
 	for _, list := range [][]SetupRequest{v.Pending, v.Failed, v.Expired} {
 		for i := range list {
-			list[i].Sentence, list[i].Reason = hide(list[i].Sentence), hide(list[i].Reason)
+			own := list[i].agentSupplied
+			list[i].Sentence, list[i].Reason = hide(list[i].Sentence, own), hide(list[i].Reason, own)
 		}
 	}
 	v.Notifications = s.drainNotifications(ns)
@@ -340,7 +345,7 @@ func (s *agentAdminService) requestsOf(ctx context.Context, ns string, v *SetupV
 	replacedBy := map[string]string{} // failed request → the one filed in its place (§18.4)
 	for _, r := range pending {
 		if r.Namespace == ns {
-			sr := SetupRequest{ID: r.ID, Sentence: r.Sentence, Created: r.CreatedAt}
+			sr := SetupRequest{ID: r.ID, Sentence: r.Sentence, Created: r.CreatedAt, agentSupplied: agentSuppliedIdentities(r.Rendered)}
 			var pl approvalPayload
 			if r.Kind == persistence.ApprovalKindWideningChange && json.Unmarshal(r.Rendered, &pl) == nil && pl.ReRenderOf != "" {
 				sr.ReRenderOf = pl.ReRenderOf
@@ -356,9 +361,10 @@ func (s *agentAdminService) requestsOf(ctx context.Context, ns string, v *SetupV
 	for _, r := range recent {
 		switch {
 		case r.ApplyError != "":
-			v.Failed = append(v.Failed, SetupRequest{ID: r.ID, Sentence: r.Sentence, Created: r.CreatedAt, Reason: r.ApplyError, ReRenderedAs: replacedBy[r.ID]})
+			v.Failed = append(v.Failed, SetupRequest{ID: r.ID, Sentence: r.Sentence, Created: r.CreatedAt, Reason: r.ApplyError, ReRenderedAs: replacedBy[r.ID],
+				agentSupplied: agentSuppliedIdentities(r.Rendered)})
 		case r.Status == persistence.ApprovalExpired:
-			v.Expired = append(v.Expired, SetupRequest{ID: r.ID, Sentence: r.Sentence, Created: r.CreatedAt})
+			v.Expired = append(v.Expired, SetupRequest{ID: r.ID, Sentence: r.Sentence, Created: r.CreatedAt, agentSupplied: agentSuppliedIdentities(r.Rendered)})
 		}
 	}
 	return nil

@@ -172,7 +172,13 @@ func (c *Container) verifyForgePermissions(ctx context.Context, resolver *forgeP
 		}
 		if reader, ok := provider.(forge.IssueReader); ok {
 			cctx, cancel := context.WithTimeout(ctx, 15*time.Second)
-			err := reader.VerifyIssueAccess(cctx, p.Forge.Issues.LabelsEnabled || p.Forge.Issues.CloseEnabled)
+			issues := p.Forge.Issues
+			if (issues.LabelsEnabled || issues.CloseEnabled) && !issues.WritesWithoutApproval {
+				// audit 2026-10-12 finding C: an opt-in without the operator's
+				// acceptance is inert; say so once rather than going quiet.
+				c.Logger.Warn().Str("project_id", p.ID).Msg("forge: issue writes are opted in (labels_enabled/close_enabled) but forge.issues.writes_without_approval is not set — every label/close write will be refused")
+			}
+			err := reader.VerifyIssueAccess(cctx, issues.WritesEffective())
 			cancel()
 			if err != nil {
 				c.Logger.Warn().Err(err).Str("project_id", p.ID).Msg("forge: Issues access NOT verified — grant Issues permission and reaccept App installation")

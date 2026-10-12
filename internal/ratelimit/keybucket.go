@@ -13,7 +13,7 @@ import (
 //
 // In-memory only — like the project-task limiter above, the
 // counter resets on daemon restart. The 8-gap rate-limit
-// hardening item in BACKLOG.md tracks the move to durable
+// hardening item (Enterprise tracker issue #252) tracks the move to durable
 // distributed state for multi-daemon SaaS deployments.
 //
 // Concurrency: each key's bucket has its own mutex so high-RPS

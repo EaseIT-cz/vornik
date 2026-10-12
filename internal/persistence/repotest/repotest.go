@@ -448,6 +448,27 @@ func RunArtifactSuite(t *testing.T, repo persistence.ArtifactRepository) {
 	t.Helper()
 	ctx := context.Background()
 
+	t.Run("ProducingStep_survives_every_read", func(t *testing.T) {
+		hash := uniqueID("hash-step")
+		project := uniqueID("project-step")
+		a := &persistence.Artifact{ID: uniqueID("art-step"), ProjectID: project, Name: "result.json", ArtifactClass: persistence.ArtifactClassOutput, StoragePath: "step/result.json", ContentHashSHA256: &hash, ProducingStepID: "answer"}
+		if err := repo.Create(ctx, a); err != nil {
+			t.Fatal(err)
+		}
+		got, err := repo.Get(ctx, a.ID)
+		if err != nil || got.ProducingStepID != "answer" {
+			t.Fatalf("Get: %+v %v", got, err)
+		}
+		got, err = repo.GetByHash(ctx, hash)
+		if err != nil || got.ProducingStepID != "answer" {
+			t.Fatalf("GetByHash: %+v %v", got, err)
+		}
+		rows, err := repo.List(ctx, persistence.ArtifactFilter{ProjectID: &project})
+		if err != nil || len(rows) != 1 || rows[0].ProducingStepID != "answer" {
+			t.Fatalf("List: %+v %v", rows, err)
+		}
+	})
+
 	t.Run("Create_then_Get_round_trips_artifact", func(t *testing.T) {
 		hash := uniqueID("hash")
 		size := int64(1024)
@@ -463,6 +484,7 @@ func RunArtifactSuite(t *testing.T, repo persistence.ArtifactRepository) {
 			MimeType:          &mime,
 			CreatedAt:         time.Now().UTC().Truncate(time.Millisecond),
 			Origin:            persistence.ArtifactOriginTaskOutput,
+			ProducingStepID:   "answer",
 		}
 		if err := repo.Create(ctx, a); err != nil {
 			t.Fatalf("Create: %v", err)
@@ -479,6 +501,9 @@ func RunArtifactSuite(t *testing.T, repo persistence.ArtifactRepository) {
 		}
 		if got.Origin != a.Origin {
 			t.Errorf("origin round-trip mismatch: got %q, want %q", got.Origin, a.Origin)
+		}
+		if got.ProducingStepID != a.ProducingStepID {
+			t.Errorf("producing step: got %q, want %q", got.ProducingStepID, a.ProducingStepID)
 		}
 	})
 
@@ -4201,6 +4226,29 @@ func RunExecutionRepositorySuite(t *testing.T, repo persistence.ExecutionReposit
 		}
 		if len(got) != 2 {
 			t.Fatalf("task filter returned %d rows, want 2", len(got))
+		}
+	})
+
+	t.Run("List_orders_newest_execution_first", func(t *testing.T) {
+		taskID := uniqueID("task")
+		seedTask(t, taskID, "p")
+		base := time.Date(2026, 10, 12, 0, 0, 0, 0, time.UTC)
+		older := newExecForTask(taskID, "p", persistence.ExecutionStatusCompleted)
+		older.CreatedAt = base
+		newer := newExecForTask(taskID, "p", persistence.ExecutionStatusCompleted)
+		newer.CreatedAt = base.Add(time.Minute)
+		if err := repo.Create(ctx, older); err != nil {
+			t.Fatal(err)
+		}
+		if err := repo.Create(ctx, newer); err != nil {
+			t.Fatal(err)
+		}
+		got, err := repo.List(ctx, persistence.ExecutionFilter{TaskID: &taskID, PageSize: 1})
+		if err != nil {
+			t.Fatalf("List: %v", err)
+		}
+		if len(got) != 1 || got[0].ID != newer.ID {
+			t.Fatalf("latest execution = %+v, want %s", got, newer.ID)
 		}
 	})
 }

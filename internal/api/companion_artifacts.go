@@ -1,9 +1,9 @@
 package api
 
 import (
+	"bytes"
 	"context"
 	"crypto/hmac"
-	"crypto/rand"
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
@@ -207,33 +207,56 @@ func (s *Server) companionToolArtifact(ctx context.Context, key *persistence.API
 	out["task_id"] = args.TaskID
 	out["execution_id"] = args.ExecutionID
 	if text {
-		if g.broker {
-			doc, _ := json.Marshal(string(b))
-			if why := s.egress.scanAgentDoc(egressscan.SurfaceEgressDoc, a.ProjectID, g.wf.ID, doc); why != "" {
-				return "", fmt.Errorf("egress_secret: %s", why)
-			}
-		}
-		out["content"] = untrusted.Wrap(string(b))
-		out["truncated"] = truncated
-		out["kind"] = "text"
+		err = s.artifactTextOut(g, a, b, truncated, out)
 	} else {
-		if a.SizeBytes == nil || *a.SizeBytes < 0 || *a.SizeBytes > artifactDownloadLimit || a.ContentHashSHA256 == nil {
-			return "", errArtifactUnavailable
-		}
-		expiry := time.Now().Add(5 * time.Minute)
-		token, e := s.signArtifactCapability(artifactCapability{key.ID, args.TaskID, args.ExecutionID, a.ID, expiry.Unix()})
-		if e != nil {
-			return "", errArtifactUnavailable
-		}
-		origin := ""
-		if s.publicOrigin != nil {
-			origin = strings.TrimRight(s.publicOrigin(), "/")
-		}
-		out["kind"] = "binary"
-		out["download_url"] = origin + artifactDownloadPath + "?token=" + url.QueryEscape(token)
-		out["expires_at"] = expiry.UTC().Format(time.RFC3339)
+		err = s.artifactBinaryOut(ctx, key, g, a, args, out)
+	}
+	if err != nil {
+		return "", err
 	}
 	return artifactJSON(out)
+}
+
+// artifactTextOut fills a text read; a broker view scans the exact bytes it
+// returns.
+func (s *Server) artifactTextOut(g *artifactGrant, a *persistence.Artifact, b []byte, truncated bool, out map[string]any) error {
+	if g.broker {
+		doc, _ := json.Marshal(string(b))
+		if why := s.egress.scanAgentDoc(egressscan.SurfaceEgressDoc, a.ProjectID, g.wf.ID, doc); why != "" {
+			return fmt.Errorf("egress_secret: %s", why)
+		}
+	}
+	out["content"] = untrusted.Wrap(string(b))
+	out["truncated"] = truncated
+	out["kind"] = "text"
+	return nil
+}
+
+// artifactBinaryOut mints the download link. Every byte a broker view serves
+// is scanned, binary included, so no text/binary classification is a way
+// around the scan (15-artifact-store.md, 2026-10-12); redemption scans again.
+func (s *Server) artifactBinaryOut(ctx context.Context, key *persistence.APIKey, g *artifactGrant, a *persistence.Artifact, args artifactArgs, out map[string]any) error {
+	if a.SizeBytes == nil || *a.SizeBytes < 0 || *a.SizeBytes > artifactDownloadLimit || a.ContentHashSHA256 == nil {
+		return errArtifactUnavailable
+	}
+	if g.broker {
+		if err := s.scanBrokerBinary(ctx, a, g.wf.ID); err != nil {
+			return err
+		}
+	}
+	expiry := time.Now().Add(5 * time.Minute)
+	token, e := s.signArtifactCapability(artifactCapability{key.ID, args.TaskID, args.ExecutionID, a.ID, expiry.Unix()})
+	if e != nil {
+		return errArtifactUnavailable
+	}
+	origin := ""
+	if s.publicOrigin != nil {
+		origin = strings.TrimRight(s.publicOrigin(), "/")
+	}
+	out["kind"] = "binary"
+	out["download_url"] = origin + artifactDownloadPath + "?token=" + url.QueryEscape(token)
+	out["expires_at"] = expiry.UTC().Format(time.RFC3339)
+	return nil
 }
 
 // artifactPayload never interprets binary bytes as text. A sniff is bounded to
@@ -255,12 +278,21 @@ func (s *Server) artifactPayload(ctx context.Context, a *persistence.Artifact, l
 	if e != nil && derefString(a.MimeType) != "" {
 		return nil, false, false, errArtifactUnavailable
 	}
-	if mt == "" || mt == "application/octet-stream" {
-		mt, _, _ = mime.ParseMediaType(http.DetectContentType(prefix))
+	// The stored MIME comes from the file extension, so it only says what the
+	// name CLAIMS. Text-ness is decided by the bytes (15-artifact-store.md,
+	// "Text is decided by content", audit 2026-10-12 finding E): text under a
+	// binary-looking name takes the text path and its secret scan, and is
+	// never handed out as an unscanned download. A declared-text MIME whose
+	// bytes are not text is still refused, never served as binary.
+	declaredText := strings.HasPrefix(mt, "text/") || mt == "application/json" || mt == "application/xml" || strings.HasSuffix(mt, "+json") || strings.HasSuffix(mt, "+xml")
+	notText := func() error {
+		if declaredText {
+			return errors.New("artifact is not valid UTF-8 text")
+		}
+		return nil
 	}
-	text := strings.HasPrefix(mt, "text/") || mt == "application/json" || mt == "application/xml" || strings.HasSuffix(mt, "+json") || strings.HasSuffix(mt, "+xml")
-	if !text {
-		return nil, false, false, nil
+	if !textBytes(prefix, true) {
+		return nil, false, false, notText()
 	}
 	tail, e := io.ReadAll(io.LimitReader(r, int64(limit+1-len(prefix))))
 	if e != nil {
@@ -275,16 +307,27 @@ func (s *Server) artifactPayload(ctx context.Context, a *persistence.Artifact, l
 			b = b[:len(b)-1]
 		}
 	}
-	if !utf8.Valid(b) || strings.ContainsRune(string(b), 0) {
-		return nil, false, false, errors.New("artifact is not valid UTF-8 text")
+	if !textBytes(b, false) {
+		return nil, false, false, notText()
 	}
 	return b, true, truncated, nil
 }
+
+// textBytes reports whether b is UTF-8 text with no NUL. partial allows an
+// incomplete final rune, for a prefix cut at an arbitrary byte.
+func textBytes(b []byte, partial bool) bool {
+	if bytes.IndexByte(b, 0) >= 0 {
+		return false
+	}
+	if partial {
+		for i := 0; i < utf8.UTFMax-1 && len(b) > 0 && !utf8.Valid(b); i++ {
+			b = b[:len(b)-1]
+		}
+	}
+	return utf8.Valid(b)
+}
 func (s *Server) signArtifactCapability(c artifactCapability) (string, error) {
-	s.artifactDownloads.once.Do(func() {
-		s.artifactDownloads.slots = make(chan struct{}, 4)
-		_, s.artifactDownloads.err = rand.Read(s.artifactDownloads.key[:])
-	})
+	s.artifactSlotsInit()
 	if s.artifactDownloads.err != nil {
 		return "", s.artifactDownloads.err
 	}
@@ -314,10 +357,7 @@ func (s *Server) decodeArtifactCapability(token string) (artifactCapability, err
 		return c, errArtifactUnavailable
 	}
 	// Initialize a fresh signing key on restart, never accepting an old token.
-	s.artifactDownloads.once.Do(func() {
-		s.artifactDownloads.slots = make(chan struct{}, 4)
-		_, s.artifactDownloads.err = rand.Read(s.artifactDownloads.key[:])
-	})
+	s.artifactSlotsInit()
 	if s.artifactDownloads.err != nil {
 		return c, errArtifactUnavailable
 	}
@@ -382,20 +422,8 @@ func (s *Server) companionArtifactDownload(w http.ResponseWriter, r *http.Reques
 		http.Error(w, callErr.Error(), http.StatusTooManyRequests)
 		return
 	}
-	_, isText, _, e := s.artifactPayload(r.Context(), a, artifactTextLimit)
-	if e != nil || isText {
-		fail()
-		return
-	}
-	reader, e := s.artifactOpener.Open(r.Context(), a.ID)
+	b, e := s.verifiedDownloadBytes(r.Context(), g, a)
 	if e != nil {
-		fail()
-		return
-	}
-	defer func() { _ = reader.Close() }()
-	b, e := io.ReadAll(io.LimitReader(reader, artifactDownloadLimit+1))
-	sum := sha256.Sum256(b)
-	if e != nil || int64(len(b)) != *a.SizeBytes || len(b) > artifactDownloadLimit || hex.EncodeToString(sum[:]) != *a.ContentHashSHA256 {
 		fail()
 		return
 	}
@@ -404,6 +432,32 @@ func (s *Server) companionArtifactDownload(w http.ResponseWriter, r *http.Reques
 	w.Header().Set("Content-Length", fmt.Sprint(len(b)))
 	result = string(b)
 	_, callErr = w.Write(b)
+}
+
+// verifiedDownloadBytes reads a binary artifact for redemption: never text,
+// exactly the stored size and hash, and for a broker view scanned again
+// (15-artifact-store.md, "Every served byte is scanned").
+func (s *Server) verifiedDownloadBytes(ctx context.Context, g *artifactGrant, a *persistence.Artifact) ([]byte, error) {
+	_, isText, _, e := s.artifactPayload(ctx, a, artifactTextLimit)
+	if e != nil || isText {
+		return nil, errArtifactUnavailable
+	}
+	reader, e := s.artifactOpener.Open(ctx, a.ID)
+	if e != nil {
+		return nil, errArtifactUnavailable
+	}
+	defer func() { _ = reader.Close() }()
+	b, e := io.ReadAll(io.LimitReader(reader, artifactDownloadLimit+1))
+	sum := sha256.Sum256(b)
+	if e != nil || int64(len(b)) != *a.SizeBytes || len(b) > artifactDownloadLimit || hex.EncodeToString(sum[:]) != *a.ContentHashSHA256 {
+		return nil, errArtifactUnavailable
+	}
+	if g.broker {
+		if err := s.scanBrokerBytes(a.ProjectID, g.wf.ID, b); err != nil {
+			return nil, err
+		}
+	}
+	return b, nil
 }
 
 // completedArtifactRun makes the required immutable run identity discoverable

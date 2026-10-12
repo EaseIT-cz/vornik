@@ -127,6 +127,40 @@ func (c *Container) standingReachHash(ctx context.Context, projectID, workflowID
 	return sig.Hash(), nil
 }
 
+// resultReuseReachHash is the reach a result reuse is pinned to (broker
+// design §6b.4 check 4; §6b.5 amendment 2026-10-12, audit finding B). For an
+// agent-namespace project it binds the standing reach to the namespace's
+// account generations (the daemon and ns:<namespace> scopes), so a
+// credential re-pointed to another principal under the same label and secret
+// name misses instead of being served for up to 900 s. A busy transition is
+// an error: the caller treats an uncomputable fingerprint as a miss that
+// records nothing. An operator project has no generation and keeps the
+// standing reach unchanged.
+func (c *Container) resultReuseReachHash(ctx context.Context, projectID, workflowID string) (string, error) {
+	reach, err := c.standingReachHash(ctx, projectID, workflowID)
+	if err != nil {
+		return "", err
+	}
+	ns, agent := agentns.FromID(projectID)
+	if !agent {
+		return reach, nil
+	}
+	guard, err := c.accountDecisionEpoch(ctx, ns)
+	if err != nil {
+		return "", fmt.Errorf("account generation: %w", err)
+	}
+	// Both scopes or nothing: hashing a subset would silently drop a fence.
+	if len(guard) != 2 || guard[0].Scope == guard[1].Scope {
+		return "", fmt.Errorf("account generation: want the daemon and namespace scopes for %q, got %d", ns, len(guard))
+	}
+	h := sha256.New()
+	h.Write([]byte("result-reuse-reach/v1\x00" + reach))
+	for _, e := range guard {
+		_, _ = fmt.Fprintf(h, "\x00%s=%d", e.Scope, e.Epoch) // a hash.Hash write never fails
+	}
+	return fmt.Sprintf("%x", h.Sum(nil)), nil
+}
+
 // coverPendingActions approves the task's pending actions a standing grant
 // covers, and kicks the worker for each. It returns how many were covered;
 // the rest go to the ordinary per-write approval. A failure covers nothing:

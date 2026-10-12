@@ -93,7 +93,7 @@ capabilities:
     bundles:
       claude-code: {file: contrib/claude-code-companion/skills/troubleshoot-vornik/SKILL.md, says: "task_logs"}
       codex:       {file: contrib/codex-companion/skills/troubleshoot-vornik/SKILL.md, says: "task_logs"}
-      hermes:      {file: contrib/hermes-companion/skills/vornik-broker/SKILL.md, says: "task_logs"}
+      hermes:      {file: contrib/hermes-companion/skills/vornik-broker/SKILL.md, says: "vornik_task_logs"}
 
   # GitHub #119 item 8 (B10): a connection to each account is named explicitly.
   - name: accounts
@@ -104,7 +104,7 @@ capabilities:
       hermes:      {file: contrib/hermes-companion/skills/vornik-admin/SKILL.md, says: "Name the account"}
 
   - name: agent-admin
-    tools: [describe_installation, list_my_setup, list_recipes, install_recipe, create_project, define_swarm, define_workflow, add_mcp_server, add_api, request_credential, set_budget, remove, update_project, test_connection]
+    tools: [describe_installation, list_my_setup, list_recipes, install_recipe, create_project, define_swarm, define_workflow, show_workflow, add_mcp_server, add_api, request_credential, set_budget, remove, update_project, test_connection]
     bundles:
       claude-code: {file: contrib/claude-code-companion/skills/vornik-admin/SKILL.md, says: "describe_installation"}
       codex:       {file: contrib/codex-companion/skills/vornik-admin/SKILL.md, says: "describe_installation"}

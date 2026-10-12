@@ -60,6 +60,9 @@ const (
 	RefusalProposalMissing        = "PROPOSAL_MISSING"
 	RefusalProposalContentChanged = "PROPOSAL_CONTENT_CHANGED"
 	RefusalProposalChanged        = "PROPOSAL_CHANGED"
+	// RefusalRestoreApplied: --restore on a row whose proposal the ledger
+	// already holds as APPLIED (§12.5.6, audit 2026-10-12 finding B).
+	RefusalRestoreApplied = "PROPOSAL_ALREADY_APPLIED"
 )
 
 // ResolveRefusal is resolve declining to act, with what to do about it. It
@@ -172,9 +175,21 @@ func (e *ApplyEngine) ResolveJournal(ctx context.Context, id, mode, actor string
 	}
 	res.ProposalStatusBefore = p.Status
 	note := resolvedNote(mode, actor) + row.Failure
-	if mode == ResolveKeep {
+	switch {
+	case mode == ResolveKeep:
 		err = e.resolveKeep(ctx, row, p, resolved, actor, note, res)
-	} else {
+	case p.Status == persistence.ProposalStatusApplied:
+		// The ledger holds this proposal as APPLIED; writing the pre-images
+		// back and closing REVERTED would leave the row and the ledger in
+		// disagreement (§3). APPLIED leaves only by a rollback, which needs
+		// the engine lock held here, so the status read is stable (§12.5.6,
+		// audit 2026-10-12 finding B).
+		return nil, &ResolveRefusal{Code: RefusalRestoreApplied,
+			Reason: fmt.Sprintf("journal %s's proposal %s is already APPLIED in the ledger, so restoring its pre-images "+
+				"would leave the files and the ledger disagreeing", row.ID, p.ID),
+			Remedy: "resolve with --keep (the row closes APPLIED, as the ledger already says), then, to undo the change, " +
+				"vornikctl control-plane rollback " + p.ID + ", which restores the pre-apply snapshot and records ROLLED_BACK"}
+	default:
 		err = e.resolveRestore(ctx, row, resolved, note, res)
 	}
 	if err != nil {
@@ -331,7 +346,9 @@ func rowMoved(row *persistence.ConfigApplyJournal) error {
 // the operator's consent to overwrite a hand edit, §5); a target this row
 // created is deleted only when it still holds exactly this row's content
 // (§6), otherwise it is left and named. Then Reload, and DRIFT → REVERTED;
-// the proposal stays APPROVED (§3).
+// the proposal is not written and stays in its status (APPROVED, or any
+// status the ledger does not hold as applied). An APPLIED proposal never
+// reaches here: ResolveJournal refuses it (§12.5.6).
 func (e *ApplyEngine) resolveRestore(ctx context.Context, row *persistence.ConfigApplyJournal, resolved []resolvedOp, note string, res *ResolveResult) error {
 	// Reverse op order, as revertJournaled: each target is decided on its
 	// own, so the order matters only for symmetry with the forward apply.

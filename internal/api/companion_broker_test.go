@@ -176,11 +176,15 @@ func brokerTask(t *testing.T, srv *Server, taskRepo *mocks.MockTaskRepository, s
 		return &persistence.Task{ID: "t1", ProjectID: "broker-acme", WorkflowID: &wf, Status: status, LastError: le, UpdatedAt: time.Now()}, nil
 	}
 	now := time.Now()
+	execID := "exec-current"
+	srv.executionRepo = &mocks.MockExecutionRepository{ListFunc: func(context.Context, persistence.ExecutionFilter) ([]*persistence.Execution, error) {
+		return []*persistence.Execution{{ID: execID}}, nil
+	}}
 	srv.artifactRepo = &mocks.MockArtifactRepository{
 		ListFunc: func(context.Context, persistence.ArtifactFilter) ([]*persistence.Artifact, error) {
 			return []*persistence.Artifact{
 				{ID: "a-raw", Name: "raw_mail-20260929-ab12.txt", ArtifactClass: persistence.ArtifactClassOutput, StoragePath: rawPath, CreatedAt: now},
-				{ID: "a-dig", Name: "digest-20260929-ab12.json", ArtifactClass: persistence.ArtifactClassOutput, StoragePath: digestPath, CreatedAt: now},
+				{ID: "a-dig", ExecutionID: &execID, ProducingStepID: "read", Name: "digest-20260929-ab12.json", ArtifactClass: persistence.ArtifactClassOutput, StoragePath: digestPath, CreatedAt: now},
 			}, nil
 		},
 	}

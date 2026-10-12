@@ -177,7 +177,7 @@ class ForgetByTokenTest(unittest.TestCase):
         self.assertEqual(d.args("memory_correct"), [{"chunk_ids": ["old"], "reason": "mirror_forget"}])
         self.assertEqual(d.args("remember")[0]["content"], "[user] " + new + " " + spec_token("user", new))
 
-    # GitHub #76 (2026-10-05 audit): an identical replace refuted the mirror and
+    # the re-add-forgotten-memory change (2026-10-05 audit): an identical replace refuted the mirror and
     # the re-remember was deduplicated, so the note vanished from recall.
     def test_identical_replace_touches_nothing(self):
         tok = spec_token("memory", self.ENTRY)
@@ -313,7 +313,7 @@ class MemoryCommandsTest(unittest.TestCase):
         c.memory("dentist")
         out = c.forget("0123456789ab")
         self.assertEqual(d.args("memory_correct"), [{"chunk_ids": [full], "reason": "forget_command"}])
-        # GitHub #76 (2026-10-05 audit), design 24 round 2: under strict D2 a
+        # the re-add-forgotten-memory change (2026-10-05 audit), design 24 round 2: under strict D2 a
         # /vornik-forget holds against identical text stored again.
         self.assertIn("Vornik will no longer recall this, even if the same text is stored again", out)
         self.assertNotIn("unless it is stored again", out)

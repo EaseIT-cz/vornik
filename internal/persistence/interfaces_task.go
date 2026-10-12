@@ -441,7 +441,8 @@ type ExecutionRepository interface {
 	// unconditional overwrite cannot be spelled by accident.
 	TransitionStatusConditional(ctx context.Context, id string, from []ExecutionStatus, to ExecutionStatus) (bool, error)
 
-	// List retrieves executions based on filter criteria.
+	// List retrieves executions based on filter criteria, newest first by
+	// CreatedAt. Callers may use PageSize: 1 to select the latest execution.
 	List(ctx context.Context, filter ExecutionFilter) ([]*Execution, error)
 
 	// Count returns the total number of executions matching the

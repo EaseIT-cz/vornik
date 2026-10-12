@@ -3,7 +3,7 @@
 package memory_test
 
 // Integration coverage for the Tier-3 "memory ingest → recall" journey
-// (https://docs.vornik.io) with project scoping, exercised end-to-end against a
+// (2026-06-20 journey coverage; shipped 6071ff1ea) with project scoping, exercised end-to-end against a
 // real PostgreSQL: content ingested for project A through the real
 // memory.Pipeline (gates → memory.Indexer → project_memory_chunks) is recalled for A
 // by the real memory.Searcher, but is NEVER returned for project B. The

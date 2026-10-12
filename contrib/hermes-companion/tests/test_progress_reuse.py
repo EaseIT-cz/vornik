@@ -1,4 +1,4 @@
-"""GitHub #119 item 9 (2026-10-08): progress while a broker task runs, and
+"""the progress and reuse change (2026-10-08): progress while a broker task runs, and
 opt-in reuse of a recent read-only result (live-task-observation design,
 "Change 2026-10-08: progress while a task runs" G5; broker design §6b)."""
 
@@ -113,3 +113,49 @@ class DelegateMaxAgeTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class DigestPruneTest(unittest.TestCase):
+    # audit 2026-10-12: Digest._positions gained an entry per running task and
+    # never lost it, and _announced kept every finished task id, so both grew
+    # for the life of the Hermes process (design 24, "Audit fixes (0.21.0)" F).
+    def test_finished_and_departed_tasks_are_pruned(self):
+        now = [0.0]
+        listing = {"rows": rows(("t1", "RUNNING"), ("t2", "RUNNING"))}
+
+        def status(args):
+            return ({"task_id": args["task_id"], "status": "RUNNING",
+                     "progress": {"step_id": "curate", "step_index": 1, "step_count": 2}}, False)
+
+        op = FakeOpener(features=PROGRESS_DAEMON, tools={"list": lambda a: (listing["rows"], False), "status": status})
+        d = Digest(client(op), clock=lambda: now[0])
+        d(is_first_turn=True)
+        self.assertEqual(sorted(d._positions), ["t1", "t2"])
+
+        now[0] += 120
+        listing["rows"] = rows(("t1", "COMPLETED"), ("t2", "RUNNING"))
+        self.assertIn("t1 (agenda): COMPLETED", d()["context"])
+        self.assertEqual(sorted(d._positions), ["t2"], "a finished task's position is dropped")
+        self.assertEqual(sorted(d._announced), ["t1"])
+        now[0] += 120
+        self.assertNotIn("t1 (agenda): COMPLETED", (d() or {}).get("context", ""),
+                         "a finished task still in the listing is announced once (review 2378 L3)")
+
+        now[0] += 120
+        listing["rows"] = rows(("t3", "RUNNING"))
+        d()
+        self.assertEqual(sorted(d._positions), ["t3"], "a task that left the listing is dropped")
+        self.assertEqual(sorted(d._announced), [], "an announced task that left the listing is dropped")
+
+    def test_a_failed_list_prunes_nothing(self):
+        now = [0.0]
+        listing = {"answer": (rows(("t1", "RUNNING")), False)}
+        op = FakeOpener(features=PROGRESS_DAEMON, tools={
+            "list": lambda a: listing["answer"],
+            "status": ({"task_id": "t1", "status": "RUNNING", "progress": {"step_id": "curate"}}, False)})
+        d = Digest(client(op), clock=lambda: now[0])
+        d(is_first_turn=True)
+        now[0] += 120
+        listing["answer"] = ("boom", True)
+        d()
+        self.assertEqual(sorted(d._positions), ["t1"])

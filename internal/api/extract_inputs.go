@@ -329,6 +329,27 @@ func mergeInputsIntoContext(raw json.RawMessage, results []inputArtifactResult) 
 // path-sanitisation branches directly.
 var _ = filepath.Base
 
+// requireScopeForDocumentPaths refuses input artifacts that declare a
+// document path when the delegation has no repo scope (memory-rollback-
+// supersession design A.2, amended 2026-10-12, audit finding H). A path is a
+// document's identity only within a scope: SupersedeDocument is a no-op
+// without one, so an unscoped re-ingest silently left every version live.
+// Inputs without a path need no scope.
+func requireScopeForDocumentPaths(inputs []InputArtifact, scope string) error {
+	if strings.TrimSpace(scope) != "" {
+		return nil
+	}
+	for i, in := range inputs {
+		if in.Path != "" {
+			return fmt.Errorf("inputArtifacts[%d] declares path %q but this delegation has no repo_scope, "+
+				"so a re-ingest could never replace the earlier version: pass repo_scope (the scope of the "+
+				"repository that holds the file, as /rag-ingest resolves it), or drop path for a file "+
+				"outside any repository", i, in.Path)
+		}
+	}
+	return nil
+}
+
 // maxDocumentPathBytes bounds an uploader-declared document path.
 const maxDocumentPathBytes = 512
 

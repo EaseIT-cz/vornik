@@ -172,7 +172,7 @@ var corpus = map[string]Entry{
 			"If a single provider is failing repeatedly, set a `modelFallback:` on the affected role to a different vendor.",
 		},
 		References: []string{
-			"Backlog item E (deferred): 'Provider-level rate-limit backpressure at the scheduler' would auto-pause new task starts during a wide outage.",
+			"Deferred (Enterprise tracker issue #153): 'Provider-level rate-limit backpressure at the scheduler' would auto-pause new task starts during a wide outage.",
 		},
 	},
 	persistence.TaskFailureClassRateLimited: {
@@ -336,7 +336,7 @@ var corpus = map[string]Entry{
 		},
 		References: []string{
 			"internal/secrets/secrets.go — pattern + allowlist corpus.",
-			"BACKLOG: 'Secret leak detection + prevention' (Phase 1 shipped 2026-04-XX, Phase 2 in flight).",
+			"Enterprise tracker issue #152: 'Secret leak detection + prevention' (open follow-ups).",
 		},
 	},
 

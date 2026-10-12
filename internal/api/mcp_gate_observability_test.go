@@ -15,7 +15,7 @@ import (
 // than wrong — but it was also INVISIBLE. A deployment running every MCP call
 // unrestricted looked exactly like one whose roles all resolve, and the backlog
 // asked for the gaps to be logged so the state is visible rather than merely
-// permitted (https://docs.vornik.io, MCP tool advertisement section, 2026-08-13).
+// permitted (MCP tool advertisement item, 2026-08-13; shipped by ef0c6f743).
 //
 // These tests pin the counter, not a refusal: the fail-open behaviour is
 // deliberate and unchanged here. What changes is that it can be seen.

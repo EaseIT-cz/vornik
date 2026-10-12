@@ -1,6 +1,6 @@
 """0.15.0: /vornik-memory pages through memory_list, and export is a device link.
 
-GitHub #119 item 6 (2026-10-08), LLD 22 "Memory the user can see": when the
+the memory-visible change (2026-10-08), LLD 22 "Memory the user can see": when the
 daemon advertises companion-memory-list, /vornik-memory lists through the
 daemon's paged memory_list (source and age from the daemon, tokens already
 stripped); /vornik-memory more shows the next page; /vornik-memory export
@@ -109,3 +109,63 @@ class MemoryListCommandTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+# audit 2026-10-12: correction chunks have ids chunk_YYYYMMDDhhmmss_<hex>, so
+# the plugin's 12-character prefix was "chunk_202610" for every one written in
+# October 2026; the short-id map kept only the last, and /vornik-forget's id
+# pattern rejected it (design 24 "Audit fixes (0.21.0)" B, design 22 "Short
+# ids for every id shape").
+import hashlib  # noqa: E402
+
+CORR_A = "chunk_20261012101500_00112233aabbccdd"
+CORR_B = "chunk_20261003080000_44556677eeff0011"
+
+
+def _sid(i):
+    return hashlib.sha256(i.encode()).hexdigest()[:12]
+
+
+def corr(i):
+    return dict(ITEM, id=i, short_id=_sid(i), snippet="[correction] " + i[-4:])
+
+
+class CorrectionRowIdsTest(unittest.TestCase):
+    def test_short_id_matches_the_daemon_rule(self):
+        from vornik_hermes.memory_provider import short_id
+        self.assertEqual(short_id("a" * 32), "a" * 12)
+        self.assertEqual(short_id(CORR_A), _sid(CORR_A))
+        self.assertNotEqual(short_id(CORR_A), short_id(CORR_B))
+
+    def test_two_correction_rows_list_and_forget_separately(self):
+        d = Daemon({"companion-memory-list": True},
+                   memory_list=lambda args: (page([corr(CORR_A), corr(CORR_B)]), False))
+        d.tools["memory_correct"] = ({"refuted_count": 1}, False)
+        c = cmds(d)
+        out = c.memory("")
+        self.assertIn(_sid(CORR_A), out)
+        self.assertIn(_sid(CORR_B), out)
+        self.assertNotIn("chunk_202610 ", out)
+        self.assertIn("Forgotten", c.forget(_sid(CORR_A)))
+        self.assertIn("Forgotten", c.forget(_sid(CORR_B)))
+        self.assertEqual([a["chunk_ids"] for a in d.args("memory_correct")], [[CORR_A], [CORR_B]])
+
+    def test_forget_takes_a_full_correction_id(self):
+        d = Daemon({"companion-memory-list": True})
+        d.tools["memory_correct"] = ({"refuted_count": 1}, False)
+        self.assertIn("Forgotten", cmds(d).forget(CORR_A))
+        self.assertEqual(d.args("memory_correct")[0]["chunk_ids"], [CORR_A])
+
+    def test_fallback_listing_computes_the_same_short_id(self):
+        # An older daemon (no memory_list): recent_memory rows carry no
+        # short_id, so the plugin computes it with the daemon's rule.
+        d = Daemon({})
+        d.tools["recent_memory"] = ({"entries": [
+            {"chunk_id": CORR_A, "source_name": "s", "snippet": "x", "created_at": "2026-10-09T11:00:00Z"},
+            {"chunk_id": CORR_B, "source_name": "s", "snippet": "y", "created_at": "2026-10-09T11:00:00Z"}]}, False)
+        d.tools["memory_correct"] = ({"refuted_count": 1}, False)
+        c = cmds(d)
+        out = c.memory("")
+        self.assertIn(_sid(CORR_A), out)
+        c.forget(_sid(CORR_B))
+        self.assertEqual(d.args("memory_correct")[0]["chunk_ids"], [CORR_B])

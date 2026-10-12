@@ -264,6 +264,8 @@ var sqliteAdditiveBackfills = map[string]string{
 // order as the corresponding Postgres migrations, so the two backends can be
 // diffed by eye.
 var sqliteAdditiveColumns = []additiveColumn{
+	// Postgres migration 223 — broker answer-step provenance (GitHub #90).
+	{"artifacts", "producing_step_id", `TEXT NOT NULL DEFAULT ''`},
 	{"project_skills", "proposed_at", `TEXT`},
 	{"project_skills", "proposal_date_estimated", `INTEGER NOT NULL DEFAULT 0`},
 	{"project_skill_versions", "proposed_at", `TEXT`},

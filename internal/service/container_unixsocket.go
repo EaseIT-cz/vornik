@@ -12,6 +12,9 @@ import (
 // 404 on the socket; the TCP listener is unaffected. The list is the
 // contract with the agent image: a new agent-side call to a daemon route is
 // added here and in the design, or it 404s over the socket.
+// TestAgentSocketAllowlist_CoversEveryAgentImageCall enforces it: it extracts
+// every daemon URL the agent entrypoint and mcp-bridge build and fails on one
+// this list refuses (audit 2026-10-12, the forge/issues route was missing).
 // see LLD § https://docs.vornik.io §12
 var agentSocketExactPaths = map[string]bool{
 	"/api/v1/internal/tool-audit":      true,
@@ -32,6 +35,7 @@ var agentSocketProjectSuffixes = [][]string{
 	{"api", "providers"},
 	{"mcp", "tools"},
 	{"mcp", "tools", "call"},
+	{"forge", "issues"},
 }
 
 // allowedAgentSocketPath reports whether p is one of the agent routes. A path

@@ -44,7 +44,7 @@ import (
 // checkWorkflowMDShape validates every WORKFLOW.md under the
 // configured config directory's `workflows/` subdir against the
 // agentskills.io / SKILL.md frontmatter shape. Phase 2 of the
-// WORKFLOW.md feature (see https://docs.vornik.io and
+// WORKFLOW.md feature (see
 // internal/registry/workflow_md_validate.go).
 func (h *DoctorHandlers) checkWorkflowMDShape() DoctorCheck {
 	const name = "workflow_md_shape"

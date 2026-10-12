@@ -915,7 +915,7 @@ type blockReport struct {
 //
 // TEMPORARY. The exit condition is structured columns on tool_audit_log
 // (status / final_url / block_reason as their own fields), filed in
-// https://docs.vornik.io. Delete this when they land. Note migration 168's
+// Enterprise tracker issue #202. Delete this when they land. Note migration 168's
 // outcome/outcome_class do NOT supersede it: those record whether the CALL
 // succeeded, not the scraper's per-fetch HTTP status.
 //

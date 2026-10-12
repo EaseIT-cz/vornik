@@ -14,6 +14,10 @@ import (
 // see LLD § https://docs.vornik.io §8
 type longRequestCounter struct {
 	chatProxy atomic.Int64
+	// admitSeam, when set (tests only), runs between the two halves of
+	// admission (the count and the drain-bit check) so a test interleaves
+	// a drain there deterministically (audit 2026-10-12, finding A).
+	admitSeam func()
 }
 
 // drainRetryAfterSeconds is the Retry-After a drain refusal carries: a
@@ -25,8 +29,23 @@ const drainRetryAfterSeconds = "30"
 // DRAINING and Retry-After; otherwise it is counted for its whole duration.
 // The decrement is deferred, so an error return, a client disconnect or a
 // panic recovered further out all leave the count right.
+//
+// Order matters (audit 2026-10-12, finding A): the request is counted FIRST
+// and the drain bit read SECOND; the gate sets the bit first and reads the
+// count second. Both are sequentially consistent atomics (Go memory model),
+// so in their single total order either the bit store precedes this load
+// (the request sees draining and is refused) or this load precedes the
+// store, and then the increment precedes the gate's count read, which sees
+// the request. A refused request is counted only until its deferred
+// decrement, which can make one gate read conservative, never wrong.
+// see LLD § https://docs.vornik.io §8.5a
 func (s *Server) trackLongRequest(h http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		s.inflight.chatProxy.Add(1)
+		defer s.inflight.chatProxy.Add(-1)
+		if s.inflight.admitSeam != nil {
+			s.inflight.admitSeam()
+		}
 		if s.draining.Load() {
 			taskID, ok := s.runningAgentTaskKey(r)
 			if !ok {
@@ -36,12 +55,10 @@ func (s *Server) trackLongRequest(h http.HandlerFunc) http.HandlerFunc {
 				return
 			}
 			// A running agent step is paused by shutdown Phase 2, not cut
-			// here; still counted below so the gate waits for it.
+			// here; it stays counted so the gate waits for it.
 			s.logger.Info().Str("task_id", taskID).
 				Msg("served during drain: running task key")
 		}
-		s.inflight.chatProxy.Add(1)
-		defer s.inflight.chatProxy.Add(-1)
 		h(w, r)
 	}
 }

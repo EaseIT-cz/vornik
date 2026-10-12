@@ -295,6 +295,9 @@ var ProjectDeferredPaths = []string{
 	// Issue triage grants are operator-reviewed YAML-only policy beside App credentials.
 	"forge.issues.repos", "forge.issues.labels_enabled",
 	"forge.issues.allowed_labels", "forge.issues.close_enabled",
+	// The operator's acceptance of unapproved issue writes (audit 2026-10-12,
+	// finding C) is YAML-only by design: no form, assistant or agent edits it.
+	"forge.issues.writes_without_approval",
 	// Email connector (IMAP/SMTP, secrets via env).
 	"email.imap_host", "email.imap_port", "email.imap_username", "email.imap_password_env",
 	"email.imap_mailbox", "email.smtp_host", "email.smtp_port", "email.smtp_username",

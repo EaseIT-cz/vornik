@@ -185,7 +185,7 @@ func parseCodexResponsesSSE(r io.Reader, onText StreamCallback) (*ChatResponse, 
 			applyFinalResponse(envelope.Response)
 
 		case "response.incomplete":
-			// BACKLOG 2026-10-03 (LLD 09 s8.4): generation stopped early.
+			// 2026-10-03 (LLD 09 s8.4; Enterprise tracker issue #100): generation stopped early.
 			// max_output_tokens is the output cap, reported as "length" so
 			// the agent refuses the partial text as an answer. Other
 			// reasons (e.g. content_filter) keep stop/tool_calls.

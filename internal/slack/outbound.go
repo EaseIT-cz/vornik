@@ -104,7 +104,7 @@ func (c *Channel) sendChatPostMessage(ctx context.Context, msg conversation.Chan
 	// Rate-limit gate keyed on team+channel — Slack's Tier-3 cap is
 	// per-channel. The keybucket primitive is in-memory; multi-daemon
 	// SaaS deployments will need durable state (tracked in
-	// https://docs.vornik.io alongside the rest of rate-limit hardening),
+	// Enterprise tracker issue #252 with the rest of rate-limit hardening),
 	// out of scope for this track.
 	if err := c.acquireOutboundToken(teamID, channelID, c.clock()); err != nil {
 		return "", err

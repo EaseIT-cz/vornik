@@ -11,6 +11,18 @@ type ProjectForgeIssues struct {
 	LabelsEnabled bool     `yaml:"labels_enabled" since:"2026.10.11"`
 	AllowedLabels []string `yaml:"allowed_labels" since:"2026.10.11"`
 	CloseEnabled  bool     `yaml:"close_enabled" since:"2026.10.11"`
+	// WritesWithoutApproval is the operator's explicit acceptance that a
+	// task agent, steered by untrusted issue text, may label and close
+	// issues with no human approval. Every write is refused without it
+	// (audit 2026-10-12; phone approval is design open question Q-FI1).
+	// see LLD § https://docs.vornik.io "Issue triage writes: prompt injection and approval (2026-10-12)"
+	WritesWithoutApproval bool `yaml:"writes_without_approval" since:"2026.10.12"`
+}
+
+// WritesEffective reports whether any issue write can actually happen: an
+// opt-in AND the operator's acceptance of unapproved writes.
+func (p ProjectForgeIssues) WritesEffective() bool {
+	return p.WritesWithoutApproval && (p.LabelsEnabled || p.CloseEnabled)
 }
 
 // Validate checks configured repo and label scopes.

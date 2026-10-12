@@ -49,7 +49,7 @@ NOTE_MAX_BYTES = 2048
 # (review 3cbd finding 5); recent_memory caps at 20 daemon-side.
 MEMORY_LIST_LIMIT = 20
 FORGET_RECALL_LIMIT = MEMORY_LIST_LIMIT
-# The daemon serves the paged memory_list (GitHub #119 item 6).
+# The daemon serves the paged memory_list (the memory-visible change).
 MEMORY_LIST_FEATURE = "companion-memory-list"
 EXPORT_LINK_REFUSED = ("Vornik could not get the link to your approver device's memory page: the daemon "
                        "answered a link that is not on the Vornik address this plugin uses, so it is not shown.")
@@ -75,7 +75,24 @@ FORGET_NONE = ("Vornik found nothing to forget under that id (it may already be 
 REASON_MIRROR_FORGET = "mirror_forget"
 REASON_FORGET_COMMAND = "forget_command"
 SHORT_ID = 12
-ID_RE = re.compile(r"^[0-9a-f]{%d,64}$" % SHORT_ID)
+# What /vornik-forget accepts: a short id or a content-hash id (lowercase hex),
+# or a full generated id such as a correction chunk's
+# chunk_YYYYMMDDhhmmss_<16 hex> (design 24, "Audit fixes (0.21.0)" B).
+ID_RE = re.compile(r"^(?:[0-9a-f]{%d,64}|[a-z]{1,16}_[0-9]{14}_[0-9a-f]{16})$" % SHORT_ID)
+_HEX_RE = re.compile(r"^[0-9a-f]{%d,}$" % SHORT_ID)
+_SHORT_RE = re.compile(r"^[0-9a-f]{%d}$" % SHORT_ID)
+
+
+def short_id(chunk_id) -> str:
+    """The daemon's short id (memory.ShortID, design 22 "Short ids for every
+    id shape"): a content-hash id's first 12 characters, else the first 12 hex
+    of the id's sha256, so correction ids from one month no longer collide."""
+    chunk_id = str(chunk_id or "")
+    if not chunk_id:
+        return ""
+    if _HEX_RE.match(chunk_id):
+        return chunk_id[:SHORT_ID]
+    return hashlib.sha256(chunk_id.encode("utf-8")).hexdigest()[:SHORT_ID]
 
 
 def _normalise(text) -> str:
@@ -277,7 +294,7 @@ class VornikMemoryProvider(MemoryProvider):
         previous = metadata.get("previous_content") if isinstance(metadata, dict) else None
         if (action == "replace" and isinstance(previous, str)
                 and _normalise(_mirrored_content(target, previous)) == _normalise(_mirrored_content(target, content))):
-            # GitHub #76: the mirror already holds this note (same text, same
+            # the re-add-forgotten-memory change: the mirror already holds this note (same text, same
             # token). Forgetting and re-storing it would refute the live copy;
             # do nothing (design 24, "Re-adding a forgotten memory (0.11.3)").
             return None
@@ -370,16 +387,21 @@ class MemoryCommands:
 
     def _line(self, row, field, now):
         chunk_id = str(row.get("chunk_id") or "")
-        self._ids[chunk_id[:SHORT_ID]] = chunk_id
+        # The daemon's short_id when memory_list sent a well-formed one, else
+        # the same rule computed here (the recall/recent_memory fallback).
+        short = str(row.get("short_id") or "")
+        if not _SHORT_RE.match(short):
+            short = short_id(chunk_id)
+        self._ids[short] = chunk_id
         text = _normalise(strip_tokens(row.get(field)))
         if len(text) > self.LINE_CHARS:
             text = text[:self.LINE_CHARS - 1] + "…"
-        return "%s  %4s  %s  %s" % (chunk_id[:SHORT_ID], _age(row.get("created_at"), now),
+        return "%s  %4s  %s  %s" % (short, _age(row.get("created_at"), now),
                                     row.get("source_name") or "?", text)
 
     def memory(self, raw_args: str = "") -> str:
         words = str(raw_args or "").strip()
-        # 0.15.0 (GitHub #119 item 6, LLD 22 "Memory the user can see"): the
+        # 0.15.0 (the memory-visible change, LLD 22 "Memory the user can see"): the
         # daemon's paged memory_list when it advertises it; export is a link
         # to the paired approver device, never fetched here.
         listing = self.provider.client.supports(MEMORY_LIST_FEATURE)
@@ -434,8 +456,8 @@ class MemoryCommands:
                 return "There is no further page."
             return "Vornik holds nothing that matches." if words else "Vornik holds no memories yet."
         now = self._now()
-        rows = [{"chunk_id": r.get("id"), "created_at": r.get("created_at"), "source_name": r.get("source"),
-                 "snippet": r.get("snippet")} for r in items]
+        rows = [{"chunk_id": r.get("id"), "short_id": r.get("short_id"), "created_at": r.get("created_at"),
+                 "source_name": r.get("source"), "snippet": r.get("snippet")} for r in items]
         tail = "\n\n/vornik-forget <id> forgets one; /vornik-memory export gives the link to download everything."
         if self._cursor:
             tail += " /vornik-memory more shows the next page."

@@ -114,21 +114,24 @@ func TestResolveFixItDoctorModel(t *testing.T) {
 
 func TestFixItDoctorAdapter_SessionScope(t *testing.T) {
 	sessions := newFakeFixItSessions()
-	sessions.rows["fix-1"] = &persistence.FixItSession{ID: "fix-1", OperatorID: "op1", ProjectID: "proj-a"}
+	sessions.rows["fix-1"] = &persistence.FixItSession{ID: "fix-1", OperatorID: "op1", ProjectID: "proj-a", FailureKind: "degraded_feature"}
 	svc := &fixitdoctor.Service{Sessions: sessions, Assembler: &fixitdoctor.Assembler{}, Chat: &fakeModelListingProvider{}}
 	adapter := newFixItDoctorAdapter(svc).(*fixItDoctorAdapter)
 
-	proj, ok, err := adapter.SessionScope(context.Background(), "fix-1", "op1")
-	if err != nil || !ok || proj != "proj-a" {
-		t.Fatalf("expected (proj-a, true, nil), got (%q, %v, %v)", proj, ok, err)
+	// audit 2026-10-12, finding C residual (doctor design §E8.8): the kind is
+	// returned so a resumed degraded_feature session with a project is still
+	// classified daemon-scope by the api and ui gates.
+	proj, kind, ok, err := adapter.SessionScope(context.Background(), "fix-1", "op1")
+	if err != nil || !ok || proj != "proj-a" || kind != "degraded_feature" {
+		t.Fatalf("expected (proj-a, degraded_feature, true, nil), got (%q, %q, %v, %v)", proj, kind, ok, err)
 	}
 
-	_, ok, err = adapter.SessionScope(context.Background(), "fix-1", "op-other")
+	_, _, ok, err = adapter.SessionScope(context.Background(), "fix-1", "op-other")
 	if err != nil || ok {
 		t.Fatalf("expected not-ok for a foreign operator, got ok=%v err=%v", ok, err)
 	}
 
-	_, ok, err = adapter.SessionScope(context.Background(), "ghost", "op1")
+	_, _, ok, err = adapter.SessionScope(context.Background(), "ghost", "op1")
 	if err != nil || ok {
 		t.Fatalf("expected not-ok for a missing session, got ok=%v err=%v", ok, err)
 	}

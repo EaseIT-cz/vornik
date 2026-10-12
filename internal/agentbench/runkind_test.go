@@ -13,7 +13,7 @@ import (
 // 2026.9.5-hard-cal` under a pre-registration declaring ["2026.9.4-rc",
 // "2026.9.5-d6"], because a single-arm pass could not be pre-registered at all
 // and nothing compared --arm to the declared arms. The journal carried a hash
-// committing to a comparison it was not part of (https://docs.vornik.io P2 2026-09-20).
+// committing to a comparison it was not part of (P2 filed 2026-09-20, closed 2026-09-23 by 89557cf9b).
 
 func calibrationPreReg() PreRegistration {
 	return PreRegistration{

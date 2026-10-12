@@ -134,6 +134,10 @@ func TestBrokerDocument_ResultNeverReturnsTheDocument(t *testing.T) {
 	require.NoError(t, os.WriteFile(review, []byte(`{"findings":["The cache is per tenant: confirm eviction."]}`), 0o600))
 	require.NoError(t, os.WriteFile(copied, []byte("copied: "+docSentinel), 0o600))
 	require.NoError(t, os.WriteFile(staged, []byte(docText()), 0o600))
+	executionID := "exec-doc-review"
+	srv.executionRepo = &mocks.MockExecutionRepository{ListFunc: func(context.Context, persistence.ExecutionFilter) ([]*persistence.Execution, error) {
+		return []*persistence.Execution{{ID: executionID}}, nil
+	}}
 	wf := "doc-review"
 	payload, _ := json.Marshal(map[string]any{"context": map[string]any{"broker_inputs": map[string]any{"design": docText()}}})
 	taskRepo.GetFunc = func(context.Context, string) (*persistence.Task, error) {
@@ -144,8 +148,8 @@ func TestBrokerDocument_ResultNeverReturnsTheDocument(t *testing.T) {
 		ListFunc: func(context.Context, persistence.ArtifactFilter) ([]*persistence.Artifact, error) {
 			return []*persistence.Artifact{
 				{ID: "a-doc", Name: "design.md", ArtifactClass: persistence.ArtifactClassInput, StoragePath: staged, CreatedAt: now},
-				{ID: "a-copy", Name: "notes-20261003-ab12.md", ArtifactClass: persistence.ArtifactClassOutput, StoragePath: copied, CreatedAt: now},
-				{ID: "a-rev", Name: "review-20261003-ab12.json", ArtifactClass: persistence.ArtifactClassOutput, StoragePath: review, CreatedAt: now},
+				{ID: "a-copy", ExecutionID: &executionID, ProducingStepID: "read", Name: "notes-20261003-ab12.md", ArtifactClass: persistence.ArtifactClassOutput, StoragePath: copied, CreatedAt: now},
+				{ID: "a-rev", ExecutionID: &executionID, ProducingStepID: "read", Name: "review-20261003-ab12.json", ArtifactClass: persistence.ArtifactClassOutput, StoragePath: review, CreatedAt: now},
 			}, nil
 		},
 	}

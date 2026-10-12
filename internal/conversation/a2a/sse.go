@@ -6,16 +6,17 @@ package a2a
 //
 // The translation is deliberately small in this slice:
 //
-//   livepubsub.Kind              →  A2A SSE event
-//   step_started, paused          →  event: status
-//   step_completed                →  event: status + (artifact)
-//   forked, project_spawned, …    →  event: status (informational)
-//   closed (synthetic terminator) →  event: status + final=true
+//   livepubsub.Kind                         →  A2A SSE event
+//   step_started, resumed, attempt_failed   →  event: status (working)
+//   step_completed                          →  event: status (completed)
+//   paused                                  →  event: status (input-required)
+//   closed (synthetic terminator)           →  answer artifact + status, final
+//   every other kind                        →  dropped
 //
-// LLM-token events are NOT proxied yet — A2A clients expect
-// coarse-grained status, not per-token streams. Per-token
-// streaming becomes meaningful when we expose a Chat-style
-// agent later; deferred.
+// Payloads are the lifecycle view only (livepubsub.ProjectLifecycle; live
+// design Change 2026-10-12, L1): the peer is external and reads no tool I/O,
+// identities, foreign project names or free text. The one artifact frame is
+// the task's answer on terminal (emitAnswerArtifact).
 
 import (
 	"context"
@@ -392,30 +393,22 @@ func startSSE(w http.ResponseWriter) {
 	w.WriteHeader(http.StatusOK)
 }
 
-// translateAndWrite converts one livepubsub event into the A2A
-// SSE event shape and writes it. The payload is JSON; the event
-// name follows the spec's vocabulary.
+// translateAndWrite converts one livepubsub event into the A2A SSE event
+// shape and writes it. The peer is an external agent, outside the operator's
+// trust boundary, so every event first passes the lifecycle view
+// (livepubsub.ProjectLifecycle; live-task-observation design, Change
+// 2026-10-12, L1; audit 2026-10-12 finding A): only step, pause, attempt and
+// close kinds, with only their allowlisted fields. Tool I/O, operator
+// identities, foreign project names, narration, outcome notes, the model and
+// cost never reach the peer, and a kind added later stays invisible until the
+// design adds it. The peer's answer is the terminal artifact
+// (emitAnswerArtifact), not an intermediate outcome frame.
 func translateAndWrite(w http.ResponseWriter, ev livepubsub.LiveEvent, taskID string, final bool) {
-	switch ev.Kind {
-	case livepubsub.KindStepStarted,
-		livepubsub.KindStepCompleted,
-		livepubsub.KindPaused,
-		livepubsub.KindResumed,
-		livepubsub.KindForked,
-		livepubsub.KindProjectSpawned,
-		livepubsub.KindClosed:
-		writeSSEStatus(w, statusFromKind(ev.Kind), taskID, final, ev.Payload)
-	case livepubsub.KindOutcomeRecorded:
-		// Outcome events carry structured agent output — promote
-		// to an A2A artifact part so consumers see the result
-		// envelope explicitly.
-		writeSSEArtifact(w, taskID, ev.Payload)
-	default:
-		// Unknown kinds become informational status events. The
-		// A2A client either understands the payload shape or
-		// ignores it.
-		writeSSEStatus(w, "running", taskID, final, ev.Payload)
+	projected, ok := livepubsub.ProjectLifecycle(ev)
+	if !ok {
+		return
 	}
+	writeSSEStatus(w, statusFromKind(projected.Kind), taskID, final, projected.Payload)
 }
 
 // writeSSEStatus emits one `event: status` frame.
@@ -473,10 +466,6 @@ func statusFromKind(kind string) string {
 		return "completed"
 	case livepubsub.KindPaused:
 		return "input-required"
-	case livepubsub.KindForked:
-		return "working"
-	case livepubsub.KindProjectSpawned:
-		return "working"
 	}
 	return "working"
 }

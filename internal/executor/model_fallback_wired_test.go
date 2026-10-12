@@ -41,8 +41,8 @@ func modelFallbackPlan(primary, fallback string) *executionPlan {
 }
 
 // TestModelFallback_LaunchesContainerWithFallbackModel is the wired,
-// end-to-end half of the in-execution model fallback (https://docs.vornik.io Tier-2
-// "LLM egress proxy + model-fallback"). The existing unit tests cover the
+// end-to-end half of the in-execution model fallback (Tier-2 "LLM egress
+// proxy + model-fallback" of the 2026-06-20 journey coverage; shipped 279a31fd9). The existing unit tests cover the
 // pieces in isolation — isModelShapedFailure classification (retry_test.go),
 // RecordModelFallback metrics (metrics_test.go), and that a fallback re-run
 // *happens* (fallback_recovery_cov_test.go asserts StartCalls>=2). None of

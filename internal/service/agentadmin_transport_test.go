@@ -78,6 +78,7 @@ func TestListingConfig_UsesTheDeclaredTransport(t *testing.T) {
 
 func TestAgentAdmin_SSEOnlyServer_RefusedWithTheHintThenAddedAsSSE(t *testing.T) {
 	f := newAgentAdminFixture(t)
+	showProbeOutcomes(t) // a public host's outcomes (audit 2026-10-12 finding G)
 	scraper := newSSEOnlyMCP(t, "fetch_page")
 	f.do(agentadmin.VerbCreateProject, agentadmin.CreateProjectInput{Slug: "venues", Purpose: "Venue research"})
 
@@ -123,6 +124,7 @@ func TestAgentAdmin_SSEOnlyServer_RefusedWithTheHintThenAddedAsSSE(t *testing.T)
 // needs a sign-in.
 func TestAgentAdmin_UnreachableServerSentenceNamesTheClass(t *testing.T) {
 	f := newAgentAdminFixture(t)
+	showProbeOutcomes(t) // a public host's outcomes (audit 2026-10-12 finding G)
 	l, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
@@ -136,6 +138,50 @@ func TestAgentAdmin_UnreachableServerSentenceNamesTheClass(t *testing.T) {
 	}
 	if strings.Contains(res.Sentence, "signing in") || !strings.Contains(res.Sentence, "could not be reached (connection refused)") {
 		t.Fatalf("sentence: %s", res.Sentence)
+	}
+}
+
+// showProbeOutcomes makes the loopback test servers count as public hosts,
+// for the tests of what a public host's listing outcome tells the agent.
+func showProbeOutcomes(t *testing.T) {
+	t.Helper()
+	prev := probeOutcomeVisible
+	probeOutcomeVisible = func(string) bool { return true }
+	t.Cleanup(func() { probeOutcomeVisible = prev })
+}
+
+// audit 2026-10-12: finding G (security). add_mcp_server lists an
+// agent-chosen URL before approval and the guard allows loopback, so a
+// synchronous 404/405 refusal and a per-class sentence made it an unattended
+// probe of the daemon host's loopback ports. A loopback 404 server and a
+// closed loopback port must now look the same to the agent.
+func TestAgentAdmin_LoopbackListingFailuresAreIndistinguishable(t *testing.T) {
+	f := newAgentAdminFixture(t)
+	notFound := httptest.NewServer(http.NotFoundHandler())
+	t.Cleanup(notFound.Close)
+	l, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	closed := "http://" + l.Addr().String()
+	_ = l.Close()
+	var sentences []string
+	for name, url := range map[string]string{"answers": notFound.URL, "closed": closed} {
+		f.do(agentadmin.VerbCreateProject, agentadmin.CreateProjectInput{Slug: name, Purpose: "Venue research"})
+		res := f.do(agentadmin.VerbAddMCPServer, agentadmin.AddMCPServerInput{Project: name, Name: "scraper", URL: url})
+		if res.Effect != agentadmin.EffectAwaiting {
+			t.Fatalf("%s: a loopback listing outcome was returned as a refusal: %+v", name, res)
+		}
+		s := strings.ReplaceAll(strings.ReplaceAll(res.Sentence, url, "URL"), `"hermes--`+name+`"`, "PROJECT")
+		for _, leak := range []string{"HTTP 4", "404", "refused", "timed out"} {
+			if strings.Contains(s, leak) {
+				t.Fatalf("%s: the sentence tells the agent %q: %s", name, leak, s)
+			}
+		}
+		sentences = append(sentences, s)
+	}
+	if sentences[0] != sentences[1] {
+		t.Fatalf("a loopback 404 and a closed port read differently:\n%s\n%s", sentences[0], sentences[1])
 	}
 }
 
@@ -179,6 +225,7 @@ func TestAgentAdmin_CredentialedServer404SetsTheHint(t *testing.T) {
 // Review 5ed3 A5: a 405 to the streamable-HTTP initialize is the same refusal.
 func TestAgentAdmin_StreamableHTTP405IsRefusedWithTheHint(t *testing.T) {
 	f := newAgentAdminFixture(t)
+	showProbeOutcomes(t) // a public host's outcomes (audit 2026-10-12 finding G)
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusMethodNotAllowed)
 	}))

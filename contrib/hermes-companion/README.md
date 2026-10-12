@@ -132,7 +132,7 @@ and for which namespace.
 
 | Surface | Name |
 |---|---|
-| Tools | `vornik_catalog`, `vornik_delegate`, `vornik_result`, `vornik_status`, `vornik_cancel` (broker setup only); `vornik_list_artifacts` and `vornik_read_artifact` when both daemon capabilities are present and the workflow explicitly approves artifact outputs |
+| Tools | `vornik_catalog`, `vornik_delegate`, `vornik_result`, `vornik_status`, `vornik_cancel`, and `vornik_task_logs` and `vornik_task_explain` to diagnose a stuck or failed task (broker setup only, when the daemon advertises `companion-progress`); `vornik_list_artifacts` and `vornik_read_artifact` when both daemon capabilities are present and the workflow explicitly approves artifact outputs |
 | Skill | `vornik-companion:vornik-broker`: when to broker and how to treat results |
 | Hook | `pre_llm_call`: announces finished broker tasks (ids and states only) and, since 0.16.0, where running ones are (step positions only) |
 | Commands | `/vornik-peek`, `/vornik-result <task_id>`; with memory: `/vornik-memory [words]`, `/vornik-forget <id>` |

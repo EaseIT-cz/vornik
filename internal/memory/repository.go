@@ -2399,7 +2399,8 @@ LIMIT $2`
 // project, newest first. Used by the 2026.7.0 F8 consolidator to
 // build a project-wide term-frequency gist without paying per-
 // chunk LLM cost. TTL-aware (same `expires_at` guard the search
-// paths apply); limit≤0 falls back to 1000 to bound memory use.
+// paths apply). Refuted/superseded rows cannot seed fresh consolidated
+// memory (GitHub #298); limit≤0 falls back to 1000 to bound memory use.
 func (r *Repository) ListChunkContents(ctx context.Context, projectID string, limit int) ([]string, error) {
 	if limit <= 0 {
 		limit = 1000
@@ -2408,6 +2409,7 @@ func (r *Repository) ListChunkContents(ctx context.Context, projectID string, li
 SELECT content
 FROM project_memory_chunks
 WHERE project_id = $1
+  AND ` + liveValidationPredicate + `
   AND ` + r.expiryClause(projectID, "") + `
 ORDER BY created_at DESC
 LIMIT $2`

@@ -48,7 +48,8 @@ func (r *failFirstRuntime) StartContainer(ctx context.Context, c *runtime.Contai
 }
 
 // TestRecoveryCheckpointRoundTrip_StructuredRerouteApplied is the Tier-1
-// recovery-checkpoint round-trip E2E (https://docs.vornik.io) for LLD §9.
+// recovery-checkpoint round-trip E2E (2026-06-20 journey coverage; shipped
+// 95cc5eccd) for LLD §9.
 //
 // Regression context: task_20260620123718_370df0973ac06941 — a 2-step
 // research workflow's writer failed; the operator answered "re-run, then

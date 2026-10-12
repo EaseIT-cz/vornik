@@ -1,7 +1,7 @@
 package dispatcher
 
 // Wired rate-limit test for the dispatcher's create_task tool path
-// (Tier 3, https://docs.vornik.io). Companion to
+// (Tier 3 of the 2026-06-20 journey coverage; shipped 9a1717e01). Companion to
 // api.TestRateLimit_SharedLimiter_BurstAndIsolation: that test drives
 // the burst->429 + isolation journey through the REST POST /tasks
 // handler; this one proves the SAME ratelimit.ProjectLimiter, once

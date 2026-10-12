@@ -101,9 +101,9 @@ func applyEmbedContext(sourceName, content string) string {
 // Caveat worth knowing: this recomputes the prefix, so it depends on
 // buildEmbedContext staying stable. Change that function and previously-cached
 // vectors become unreachable by BOTH keys — retained but never hit again, which is
-// what retention.embedding_cache_days exists to bound. A chunk-side
-// embed_input_hash column would remove that coupling; recorded in the backlog
-// rather than done here.
+// what retention.embedding_cache_days exists to bound. The chunk-side
+// embed_input_hash column (migration 150, cdca9da17) records the key at embed
+// time, removing that coupling for rows written since.
 func EmbedInputHash(sourceName, content string) string {
 	return ContentHash(applyEmbedContext(sourceName, content))
 }

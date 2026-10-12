@@ -74,8 +74,14 @@ func (s *stubAuditRepo) List(_ context.Context, filter persistence.ToolAuditFilt
 		if filter.TaskID != nil && e.TaskID != *filter.TaskID {
 			continue
 		}
+		if filter.ToolName != nil && e.ToolName != *filter.ToolName {
+			continue
+		}
 		cp := *e
 		out = append(out, &cp)
+		if filter.PageSize > 0 && len(out) == filter.PageSize {
+			break
+		}
 	}
 	return out, nil
 }
@@ -338,7 +344,7 @@ func TestAgentQueryAPI_BudgetReDerivedFromAudit(t *testing.T) {
 	for i := 0; i < maxAgentAPICallsPerTask; i++ {
 		payload, _ := json.Marshal(agentAPIAuditPayload{Kind: "query", Status: agentAPIStatusOK})
 		_ = audit.Log(context.Background(), &persistence.ToolAuditEntry{
-			ID: persistence.GenerateID("ta"), ProjectID: "proj", TaskID: "t1",
+			ID: persistence.GenerateID("ta"), ProjectID: "proj", TaskID: "t1", StepID: agentAPIAuditStepID,
 			ToolName: agentQueryToolName, ToolInput: string(payload),
 		})
 	}
@@ -590,7 +596,7 @@ func TestDeriveTaskAPISpend_FiltersByStatus(t *testing.T) {
 	add := func(status string, bytes int64) {
 		p, _ := json.Marshal(agentAPIAuditPayload{Kind: "query", Status: status, Bytes: bytes})
 		require.NoError(t, audit.Log(context.Background(), &persistence.ToolAuditEntry{
-			ID: persistence.GenerateID("ta"), ProjectID: "proj", TaskID: "t1",
+			ID: persistence.GenerateID("ta"), ProjectID: "proj", TaskID: "t1", StepID: agentAPIAuditStepID,
 			ToolName: agentQueryToolName, ToolInput: string(p),
 		}))
 	}
@@ -604,4 +610,79 @@ func TestDeriveTaskAPISpend_FiltersByStatus(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, 3, spend.calls, "only ok+refused rows consume a call slot")
 	assert.Equal(t, int64(150), spend.bytes, "only ok rows contribute bytes")
+}
+
+// agentAPIDaemonRow is a query_api/list_apis audit row as writeAgentAPIAudit
+// writes it.
+func agentAPIDaemonRow(t *testing.T, tool, status string, bytes int64) *persistence.ToolAuditEntry {
+	t.Helper()
+	p, err := json.Marshal(agentAPIAuditPayload{Kind: "query", Status: status, Bytes: bytes})
+	require.NoError(t, err)
+	return &persistence.ToolAuditEntry{TaskID: "t1", StepID: agentAPIAuditStepID, ToolName: tool, ToolInput: string(p), ToolOutput: status}
+}
+
+// audit 2026-10-12: deriveTaskAPISpend read ONE page (216 rows) of all the
+// task's audit rows; other tools' rows crowded the query_api/list_apis rows
+// off the page, so a rebuilt budget undercounted after a restart or eviction.
+func TestDeriveTaskAPISpend_NotCrowdedOutByOtherTools(t *testing.T) {
+	audit := &stubAuditRepo{}
+	other := func() {
+		for i := 0; i < agentAPIBudgetSeedPageSize+100; i++ {
+			audit.entries = append(audit.entries, &persistence.ToolAuditEntry{TaskID: "t1", ToolName: "file_read", ToolInput: `{"status":"ok"}`})
+		}
+	}
+	// Other-tool rows both before and after the API rows, so they crowd the
+	// API rows off a single page whichever end the store reads from (the
+	// stub returns oldest first, the drivers newest first).
+	other()
+	for i := 0; i < maxAgentAPICallsPerTask/2; i++ {
+		audit.entries = append(audit.entries, agentAPIDaemonRow(t, agentQueryToolName, agentAPIStatusOK, 10), agentAPIDaemonRow(t, agentListToolName, agentAPIStatusOK, 10))
+	}
+	other()
+	srv := &Server{logger: zerolog.Nop(), toolAuditRepo: audit}
+	spend, err := srv.deriveTaskAPISpend(context.Background(), "t1")
+	require.NoError(t, err)
+	assert.Equal(t, maxAgentAPICallsPerTask, spend.calls)
+	assert.Equal(t, int64(10*maxAgentAPICallsPerTask), spend.bytes)
+	var b apiBudgetTracker
+	_, ok := b.reserveCall("t1", func() (apiTaskSpend, error) { return srv.deriveTaskAPISpend(context.Background(), "t1") })
+	assert.False(t, ok, "rebuilt budget must refuse past the per-task ceiling")
+}
+
+// audit 2026-10-12: a page full of one tool's rows means the count cannot be
+// established from one page; the rebuilt budget is exhausted (fail closed).
+func TestDeriveTaskAPISpend_FullPageFailsClosed(t *testing.T) {
+	audit := &stubAuditRepo{}
+	for i := 0; i < agentAPIBudgetSeedPageSize; i++ {
+		audit.entries = append(audit.entries, agentAPIDaemonRow(t, agentQueryToolName, agentAPIStatusBudgetExceeded, 0))
+	}
+	srv := &Server{logger: zerolog.Nop(), toolAuditRepo: audit}
+	spend, err := srv.deriveTaskAPISpend(context.Background(), "t1")
+	require.NoError(t, err)
+	assert.GreaterOrEqual(t, spend.calls, maxAgentAPICallsPerTask)
+	assert.GreaterOrEqual(t, spend.bytes, maxAgentAPIBytesPerTask)
+	audit.entries = audit.entries[1:]
+	spend, err = srv.deriveTaskAPISpend(context.Background(), "t1")
+	require.NoError(t, err)
+	assert.Equal(t, apiTaskSpend{}, spend, "a page one short of full is counted, and budget_exceeded rows count nothing")
+}
+
+// audit 2026-10-12: only the daemon's own rows count. A row under the tool's
+// name from any other step (the entrypoint's per-call row, whose input is
+// the tool arguments, or a row posted to the tool-audit route with the task
+// key) must not count, and no row's byte figure may lower the total.
+func TestDeriveTaskAPISpend_OnlyDaemonRowsCountAndBytesNeverNegative(t *testing.T) {
+	audit := &stubAuditRepo{}
+	audit.entries = append(audit.entries,
+		agentAPIDaemonRow(t, agentQueryToolName, agentAPIStatusOK, 100),
+		agentAPIDaemonRow(t, agentQueryToolName, agentAPIStatusOK, -5_000_000),
+		&persistence.ToolAuditEntry{TaskID: "t1", StepID: "step-1", ToolName: agentQueryToolName, ToolInput: `{"provider":"x","status":"ok","bytes":-8000000}`},
+		&persistence.ToolAuditEntry{TaskID: "t1", StepID: "step-1", ToolName: agentQueryToolName, ToolInput: `{"provider":"maps","path":"/x"}`},
+		&persistence.ToolAuditEntry{TaskID: "t1", StepID: agentAPIAuditStepID, ToolName: agentListToolName, ToolInput: `{`},
+	)
+	srv := &Server{logger: zerolog.Nop(), toolAuditRepo: audit}
+	spend, err := srv.deriveTaskAPISpend(context.Background(), "t1")
+	require.NoError(t, err)
+	assert.Equal(t, 3, spend.calls, "two daemon ok rows and one corrupt daemon row (counted, fail closed)")
+	assert.Equal(t, int64(100), spend.bytes)
 }

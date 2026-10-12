@@ -70,10 +70,14 @@ func newReuseFixture(t *testing.T) *reuseFixture {
 	}
 	dir := t.TempDir()
 	digestPath := filepath.Join(dir, "digest.json")
+	executionID := "exec-reuse"
+	srv.executionRepo = &mocks.MockExecutionRepository{ListFunc: func(context.Context, persistence.ExecutionFilter) ([]*persistence.Execution, error) {
+		return []*persistence.Execution{{ID: executionID}}, nil
+	}}
 	srv.artifactRepo = &mocks.MockArtifactRepository{
 		ListFunc: func(context.Context, persistence.ArtifactFilter) ([]*persistence.Artifact, error) {
 			require.NoError(t, os.WriteFile(digestPath, []byte(f.digest), 0o600))
-			return []*persistence.Artifact{{ID: "a-dig", Name: "digest-20261008-ab12.json",
+			return []*persistence.Artifact{{ID: "a-dig", ExecutionID: &executionID, ProducingStepID: "read", Name: "digest-20261008-ab12.json",
 				ArtifactClass: persistence.ArtifactClassOutput, StoragePath: digestPath, CreatedAt: f.now}}, nil
 		},
 	}
@@ -358,6 +362,75 @@ func TestResultReuse_BoundedEntries(t *testing.T) {
 	assert.True(t, ok)
 	_, ok = c.get(reuseKey{keyID: "k", project: "p", workflow: "w", inputs: fmt.Sprintf("%064d", 2)})
 	assert.False(t, ok)
+}
+
+// audit 2026-10-12, finding C (implementation review F3): reuse on an
+// agent-admin key was covered only by the e2e lane. The key's own project is
+// <ns>--home, the task runs in <ns>--fin, so brokerProjectFor resolves the
+// owner from the workflow id and keyCoversProject (tryReuse check 1) accepts
+// it only through the agent-namespace branch. A key of another namespace is
+// refused before any lookup.
+func TestResultReuse_AgentAdminKeyReusesNamespaceWorkflow(t *testing.T) {
+	srv, _, tasks := newScheduleServer(t, seedScheduledRegistry(t, "previous"))
+	now := time.Date(2026, 10, 12, 9, 0, 0, 0, time.UTC)
+	stored := map[string]*persistence.Task{}
+	tasks.CreateFunc = func(_ context.Context, tk *persistence.Task) error {
+		tk.ID = fmt.Sprintf("task_a%d", len(stored)+1)
+		tk.CreatedAt = now
+		cp := *tk
+		stored[tk.ID] = &cp
+		return nil
+	}
+	tasks.GetFunc = func(_ context.Context, id string) (*persistence.Task, error) {
+		if tk, ok := stored[id]; ok {
+			cp := *tk
+			return &cp, nil
+		}
+		return nil, persistence.ErrNotFound
+	}
+	answer := filepath.Join(t.TempDir(), "result.json")
+	require.NoError(t, os.WriteFile(answer, []byte(`{"total":42}`), 0o600))
+	exec := "exec-agent"
+	srv.executionRepo = &mocks.MockExecutionRepository{ListFunc: func(context.Context, persistence.ExecutionFilter) ([]*persistence.Execution, error) {
+		return []*persistence.Execution{{ID: exec}}, nil
+	}}
+	srv.artifactRepo = &mocks.MockArtifactRepository{ListFunc: func(context.Context, persistence.ArtifactFilter) ([]*persistence.Artifact, error) {
+		return []*persistence.Artifact{{ID: "a-res", ExecutionID: &exec, ProducingStepID: "read", Name: "result-20261012-ab12.json",
+			ArtifactClass: persistence.ArtifactClassOutput, StoragePath: answer, CreatedAt: now}}, nil
+	}}
+	srv.reuseReachHash = func(context.Context, string, string) (string, error) { return "reach-agent", nil }
+	srv.resultReuseState().now = func() time.Time { return now.Add(30 * time.Second) }
+
+	key := &persistence.APIKey{ID: "akey-hermes", ProjectID: "hermes--home", Name: "hermes", ClientKind: "hermes",
+		AgentAdmin: true, AgentNamespace: "hermes"}
+	inputs := json.RawMessage(`{"month":"previous"}`)
+	ctx := context.Background()
+	first, err := srv.companionBrokerDelegate(ctx, key, delegateArgs{Workflow: "hermes--fin--digest"}, inputs)
+	require.NoError(t, err)
+	var out map[string]any
+	require.NoError(t, json.Unmarshal([]byte(first), &out))
+	id := out["task_id"].(string)
+	require.Equal(t, "hermes--fin", stored[id].ProjectID, "the task runs in the workflow's project, not the key's")
+	stored[id].Status = persistence.TaskStatusCompleted
+
+	second, err := srv.companionBrokerDelegate(ctx, key, delegateArgs{Workflow: "hermes--fin--digest", maxAge: 600}, inputs)
+	require.NoError(t, err)
+	out = nil
+	require.NoError(t, json.Unmarshal([]byte(second), &out))
+	assert.Equal(t, id, out["task_id"])
+	assert.Equal(t, true, out["reused"])
+	assert.Equal(t, "hermes--fin", out["project"])
+	assert.Equal(t, 1, tasks.CallCount.Create, "a hit creates no task")
+
+	// The agent branch of check 1: the same key id under another namespace
+	// does not cover the task, so the entry is a miss, never a cross-namespace hit.
+	foreign := *key
+	foreign.AgentNamespace = "codex"
+	assert.False(t, keyCoversProject(&foreign, "hermes--fin"))
+	assert.True(t, keyCoversProject(key, "hermes--fin"))
+	_, err = srv.companionBrokerDelegate(ctx, &foreign, delegateArgs{Workflow: "hermes--fin--digest", maxAge: 600}, inputs)
+	require.Error(t, err, "a key of another namespace must be refused before any reuse lookup")
+	assert.Equal(t, 1, tasks.CallCount.Create)
 }
 
 func TestCapabilities_AdvertisesResultReuse(t *testing.T) {

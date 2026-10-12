@@ -70,12 +70,16 @@ func (s *Server) companionProgress(ctx context.Context, key *persistence.APIKey,
 // execution's snapshot, else the live workflow only when its Hash() is the
 // revision the run pinned. nil otherwise (G2).
 //
-// The snapshot is read on its own when the row lacks it: the Postgres
-// GetByTaskID does not select workflow_snapshot (the SQLite one does), and in
-// the e2e run the stored workflow_revision did not match the live hash
-// either (inferred: it is not persisted past its "v1" default), so without
-// this read progress was absent on Postgres (GitHub #119 item 9, found by
-// the C6 e2e lane, 2026-10-09).
+// The snapshot is read on its own when the row lacks it. This was added
+// because the Postgres execution reads did not select workflow_snapshot and
+// the stored workflow_revision did not match the live hash either (inferred:
+// it is not persisted past its "v1" default), so progress was absent on
+// Postgres (GitHub #119 item 9, found by the C6 e2e lane, 2026-10-09).
+// Commit 5fca8363e made both drivers' reads select the snapshot, so the
+// separate read now only covers a repository that omits it and an execution
+// whose snapshot was written after the row was read; it is kept for those
+// (audit 2026-10-12, finding D: not provably dead, so only this comment
+// changed).
 func (s *Server) progressDefinition(ctx context.Context, exec *persistence.Execution) *registry.Workflow {
 	raw := exec.WorkflowSnapshot
 	if len(raw) == 0 && s.executionRepo != nil {

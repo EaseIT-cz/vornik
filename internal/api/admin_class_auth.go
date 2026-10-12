@@ -20,6 +20,17 @@ import (
 // preserves §3.1's no-self-serving-budget rule (a project key can't raise its
 // own task's ceiling).
 func (s *Server) isAdminClassRequest(r *http.Request) bool {
+	return IsAdminClassRequest(r, s.isAdminClassKey)
+}
+
+// IsAdminClassRequest is the one admin-class predicate behind
+// Server.isAdminClassRequest, exported so the ui package's Fix-It panel gates
+// on the same rule instead of a second implementation (doctor design §E8.8):
+// auth off, an admin browser session, or a presented key isAdminKey accepts
+// (the operator's admin.allowed_keys). Being UNSCOPED is not enough: a plain
+// static api.api_keys key is unscoped and is not admin-class. A nil
+// isAdminKey accepts no key.
+func IsAdminClassRequest(r *http.Request, isAdminKey func(string) bool) bool {
 	if !IsAuthEnabledFromContext(r.Context()) {
 		return true
 	}
@@ -27,7 +38,7 @@ func (s *Server) isAdminClassRequest(r *http.Request) bool {
 		return true
 	}
 	key := APIKeyFromContext(r.Context())
-	return key != "" && s.isAdminClassKey(key)
+	return key != "" && isAdminKey != nil && isAdminKey(key)
 }
 
 // requireAdminClass gates a doctor route on isAdminClassRequest and writes the

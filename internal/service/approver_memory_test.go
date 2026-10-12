@@ -178,3 +178,14 @@ func TestDeviceMemory_ExportReadsThroughTheFirewallAsAuditReview(t *testing.T) {
 	assert.Equal(t, approverMemoryRole, deviceRequest("dev_42").Role)
 	assert.EqualValues(t, "audit_review", deviceRequest("dev_42").Purpose)
 }
+
+// audit 2026-10-12: the device page showed the id's first 12 characters, the
+// same for every correction chunk of one month; it now shows memory.ShortID,
+// the short id memory_list shows (design 22, "Short ids for every id shape").
+func TestShapeDeviceItem_ShortIDMatchesMemoryList(t *testing.T) {
+	now := time.Now()
+	a := shapeDeviceItem("chunk_20261012101500_00112233aabbccdd", "", "", "x", "", now, now)
+	b := shapeDeviceItem("chunk_20261001000000_44556677eeff0011", "", "", "y", "", now, now)
+	assert.NotEqual(t, a.ShortID, b.ShortID)
+	assert.Equal(t, "0123456789ab", shapeDeviceItem("0123456789abcdef0123456789abcdef", "", "", "z", "", now, now).ShortID)
+}

@@ -117,11 +117,13 @@ The same holds for the operator-facing tooling: prefer the shipped skills and
   flight and read results between steps. Verify what comes back.
 - **Teams, not individuals.** A project is a domain, a workflow a capability,
   the swarm a team of roles with distinct jobs, tools and models.
-- **Park side tasks.** An off-goal bug or task is filed (backlog, with
-  evidence) or handed to a parallel agent or Vornik task; only production
-  breakage or a blocker interrupts the goal. Keep an ordered in-flight list.
-- **Write every operator idea down at once** (backlog or design), so a
-  compaction cannot lose it.
+- **Park side tasks.** An off-goal bug or task is filed, with evidence, as a
+  GitHub issue (or with the backlog_deposit tool, which lands in the inbox
+  that is swept into issues) or handed to a parallel agent or Vornik task;
+  only production breakage or a blocker interrupts the goal. Keep an ordered
+  in-flight list.
+- **Write every operator idea down at once** (a GitHub issue, the
+  backlog_deposit tool, or the design), so a compaction cannot lose it.
 - **Recall the design every time you touch one**, at minimum, not once per
   session.
 

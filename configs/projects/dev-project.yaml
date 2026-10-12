@@ -10,7 +10,7 @@ adaptiveCandidateWorkflows:
   - dev-pipeline
   - simple-workflow
 defaultPriority: 50 # 0-100; lower numbers run first
-maxConcurrentTasks: 1   # serial execution — prevents workspace clashes (see BACKLOG.md for git worktree parallelism)
+maxConcurrentTasks: 1   # serial execution — prevents workspace clashes
 
 autonomy:
   # OFF by default so a fresh install doesn't burn tokens unattended; enable in

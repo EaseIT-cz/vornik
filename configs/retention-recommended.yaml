@@ -22,7 +22,7 @@
 #     not tunable and must not be pruned.
 #   - extracted_documents has no window because the sweeper does not yet touch
 #     it. Extractions and their on-disk sections/keyframes therefore accumulate
-#     regardless of what you set here — a known gap, tracked in BACKLOG.md, not
+#     regardless of what you set here — a known gap, tracked in Enterprise tracker issue #144, not
 #     something this profile silently covers.
 #
 # see docs/legal/ropa.md §7 and

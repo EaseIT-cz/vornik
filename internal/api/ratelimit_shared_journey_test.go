@@ -1,7 +1,7 @@
 package api
 
 // Integration test for the per-project task-creation rate limit
-// (Tier 3, https://docs.vornik.io). The per-project sliding-window limiter
+// (Tier 3 of the 2026-06-20 journey coverage; shipped 9a1717e01). The per-project sliding-window limiter
 // in internal/ratelimit is SHARED — by design — between the REST
 // POST /tasks handler (via taskcreate.Creator), the dispatcher's
 // create_task tool, and autonomy, so a project can't burst past its

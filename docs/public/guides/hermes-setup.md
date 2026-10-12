@@ -181,7 +181,11 @@ list what it can run: it should name `mail-digest` and nothing else. To hand
 over a file from a completed task, Hermes also needs the plugin's
 `vornik_list_artifacts` and `vornik_read_artifact` tools; those appear only
 when the daemon advertises `companion-artifact-read` and the broker key is
-valid.
+valid. To look into a task that seems stuck or failed, the plugin (0.21.0 or
+later) has `vornik_task_logs` and `vornik_task_explain`; they show step
+progress and closed error classes only, never the task's own text. From
+0.21.1 they appear only when the daemon advertises `companion-progress`, so
+an older daemon does not offer calls it cannot answer.
 
 ## Admin setup (opt-in)
 

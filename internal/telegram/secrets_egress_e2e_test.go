@@ -16,7 +16,7 @@ import (
 )
 
 // secrets_egress_e2e_test.go — cross-layer E2E for the chat-reply
-// egress sink (Tier 1, https://docs.vornik.io: "secret redaction across
+// egress sink (Tier 1 of the 2026-06-20 journey coverage, shipped 06615ce61: "secret redaction across
 // persistence").
 //
 // Why this exists alongside secrets_redact_test.go: that file

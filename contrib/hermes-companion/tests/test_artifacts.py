@@ -1,4 +1,4 @@
-"""GitHub #318: the native plugin exposes the completed-run MCP boundary."""
+"""the completed-run artifact change: the native plugin exposes the completed-run MCP boundary."""
 import json
 import os
 import unittest

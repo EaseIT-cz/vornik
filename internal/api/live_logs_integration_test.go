@@ -150,6 +150,14 @@ func TestIntegration_LiveWebSocket_UpgradeAndFrame(t *testing.T) {
 // the underlying conn) — only on the close happening within
 // a bounded window.
 func TestIntegration_LiveWebSocket_TerminalExecutionClosesCleanly(t *testing.T) {
+	// audit 2026-10-12, finding B: this test sends no hello, and used to pass
+	// only because the 2 s hello read closed every no-hello socket. The close
+	// it means to pin is the terminal watch's (one quiet check after the
+	// execution is terminal), so it shortens that interval like the other
+	// terminal-watch tests.
+	origCheck := liveTerminalCheckEvery
+	liveTerminalCheckEvery = 50 * time.Millisecond
+	defer func() { liveTerminalCheckEvery = origCheck }()
 	exec := &persistence.Execution{
 		ID:        "exec_term",
 		TaskID:    "task_term",

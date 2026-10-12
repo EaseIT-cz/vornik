@@ -41,12 +41,36 @@ func agentDialGuard(rawURL string) integrations.DialGuard {
 	if err != nil {
 		return integrations.DialGuard{}
 	}
-	host := u.Hostname()
-	if ip := net.ParseIP(host); host == "localhost" || (ip != nil && ip.IsLoopback()) {
+	if host := u.Hostname(); loopbackHost(host) {
 		return integrations.DialGuard{AllowedHosts: []string{host}}
 	}
 	return integrations.DialGuard{}
 }
+
+// loopbackHost is agentDialGuard's loopback test: the name localhost or a
+// loopback IP literal.
+func loopbackHost(host string) bool {
+	ip := net.ParseIP(host)
+	return host == "localhost" || (ip != nil && ip.IsLoopback())
+}
+
+// loopbackAgentURL reports whether rawURL is one agentDialGuard allow-lists.
+// An unparsable URL counts as loopback, the side that tells the agent less.
+func loopbackAgentURL(rawURL string) bool {
+	u, err := url.Parse(rawURL)
+	return err != nil || loopbackHost(u.Hostname())
+}
+
+// probeOutcomeVisible reports whether the agent may learn how a
+// pre-approval listing of rawURL failed (design §6.1 item 4, amended
+// 2026-10-12, audit finding G). A loopback URL is dialled before any person
+// approved it, so its outcome classes would make add_mcp_server a port
+// probe of the daemon host: every failure there reads the same. A variable
+// so a test can treat its loopback server as a public host.
+var probeOutcomeVisible = func(rawURL string) bool { return !loopbackAgentURL(rawURL) }
+
+// uniformLoopbackFailure is the one failure class a loopback listing gets.
+const uniformLoopbackFailure = "could not connect"
 
 // guardAgentServer dials an agent project's server through agentDialGuard.
 // Operator projects keep today's client.
@@ -186,6 +210,9 @@ func (s *agentAdminService) advertiseUnauthenticated(ctx context.Context, ns str
 	tools, err := s.c.listMCPTools(ctx, cfg)
 	if err != nil {
 		s.c.Logger.Info().Str("namespace", ns).Str("server", in.Name).Err(err).Msg("agent admin: could not list a new server's tools; it will be read-pending")
+		if !probeOutcomeVisible(in.URL) {
+			return unauthListing{url: in.URL, failed: uniformLoopbackFailure}
+		}
 		if hint := wrongTransportHint(cfg, err); hint != "" {
 			return unauthListing{refuse: agentadmin.VerbAddMCPServer + " refused: " + hint}
 		}

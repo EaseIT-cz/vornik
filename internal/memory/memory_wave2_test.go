@@ -436,7 +436,7 @@ func TestW2MemChunkIDColonDelimiterDoesNotAlias(t *testing.T) {
 	// chunkID now escapes ':'/'\' within each segment, so a colon embedded in
 	// a field can no longer shift the delimiter boundary and alias two
 	// distinct tuples. (Pre-fix, both of these collapsed to "a:b:c:d:0" and
-	// hashed identically — see BACKLOG 2026-06-18.)
+	// hashed identically — fixed 2026-06-18 in 48c493979.)
 	a := chunkID("a", "b:c", "d", 0)
 	b := chunkID("a:b", "c", "d", 0)
 	if a == b {

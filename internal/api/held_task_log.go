@@ -28,8 +28,12 @@ import (
 // Caller precondition (review-20261008-1762 finding 2): it renders the
 // OPERATOR view, unscrubbed. Wire it only to routes that admit operator and
 // project-scoped keys, which already read the same view on
-// GET /api/v1/executions/{id}/live. Companion, broker and agent-admin keys
-// read through task_logs and task_explain, which project and scrub.
+// GET /api/v1/executions/{id}/live. Every caller outside that trust boundary
+// reads the hub through a projection instead (live design, Change 2026-10-12,
+// L0, the reader table): companion, broker and agent-admin keys through
+// projectLiveEvent (the live socket, task_logs; task_explain reads no hub
+// events at all, its renderer copy has a nil log fetcher), and an external A2A peer through livepubsub.ProjectLifecycle
+// (the A2A SSE bridge). None of them is wired to this type.
 type HeldTaskLog struct {
 	Tasks      persistence.TaskRepository
 	Executions persistence.ExecutionRepository

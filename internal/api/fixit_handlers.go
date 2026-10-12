@@ -36,6 +36,10 @@ type FixItConverseRequest struct {
 // Refusals:
 //   - doctor unwired → 503 FIXIT_DISABLED
 //   - missing message / missing ref on a new session → 400 VALIDATION_ERROR
+//   - daemon-scope session (no project; or a degraded_feature /
+//     failed_reload session, new or resumed, whatever its project) from a
+//     non-admin-class caller → 403 ADMIN_SCOPE_REQUIRED (doctor design
+//     §E8.7, §E8.8)
 //   - out-of-scope project → 404 NOT_FOUND
 //   - unknown/foreign session → 404 NOT_FOUND
 //   - closed session → 410 GONE
@@ -74,8 +78,17 @@ func (s *Server) FixItConverse(w http.ResponseWriter, r *http.Request) {
 	}
 
 	sessionID := strings.TrimSpace(body.SessionID)
-	projectID, ok := s.resolveFixItScope(w, r, sessionID, operatorID, &body)
+	projectID, kind, ok := s.resolveFixItScope(w, r, sessionID, operatorID, &body)
 	if !ok {
+		return
+	}
+	if FixItDaemonScope(kind, projectID) && !s.isAdminClassRequest(r) {
+		// audit 2026-10-12, finding C: a daemon-scope session grounds on
+		// daemon-wide state (featuredoctor.Diagnose, the reload error, or a
+		// task of any project), which GitHub #296 restricted to admin-class
+		// callers. Doctor design §E8.7.
+		respondError(w, http.StatusForbidden, "ADMIN_SCOPE_REQUIRED",
+			"a daemon-scope repair session needs an admin-class key (admin.allowed_keys, with admin.enabled) or an admin session")
 		return
 	}
 	if projectID != "" && !RequestAllowsProject(r, projectID) {
@@ -92,35 +105,62 @@ func (s *Server) FixItConverse(w http.ResponseWriter, r *http.Request) {
 	respondJSON(w, http.StatusOK, result)
 }
 
-// resolveFixItScope resolves the project the request must be scoped
-// to before Converse runs: for a resumed session, the session's OWN
-// project_id (via SessionScope) — never the request body's, so a
-// caller can't widen scope by pairing a valid session_id with a
-// different project_id; for a new session, the body's failure_kind/
-// failure_ref_id (required) plus its project_id. Writes an error
+// FixItDaemonScope reports whether a repair session grounds on daemon-wide
+// state and so needs an admin-class caller (doctor design §E8.7, §E8.8): any
+// session without a project, and any degraded_feature or failed_reload session
+// whatever project it names (features and reloads are daemon-scope; fix-it
+// design §7). For a RESUMED session pass the session row's kind and project
+// (SessionScope), never the request's. Exported so the /ui/fixit panel
+// classifies with the same rule.
+func FixItDaemonScope(failureKind, projectID string) bool {
+	if projectID == "" {
+		return true
+	}
+	// Update this list when fixitdoctor gains a daemon-scope FailureKind: an
+	// unlisted kind with a project id is treated as project-scoped.
+	switch failureKind {
+	case fixItKindDegradedFeature, fixItKindFailedReload:
+		return true
+	}
+	return false
+}
+
+// The fixitdoctor.FailureKind values the gate names; api does not import
+// fixitdoctor (see FixItDoctor).
+const (
+	fixItKindDegradedFeature = "degraded_feature"
+	fixItKindFailedReload    = "failed_reload"
+)
+
+// resolveFixItScope resolves the project and failure kind the request
+// must be gated on before Converse runs: for a resumed session, the
+// session's OWN project_id and kind (via SessionScope) — never the
+// request body's, so a caller can't widen scope by pairing a valid
+// session_id with a different project_id or kind; for a new session,
+// the body's failure_kind/failure_ref_id (required) plus its project_id. Writes an error
 // response and returns ok=false when the request should stop here.
-func (s *Server) resolveFixItScope(w http.ResponseWriter, r *http.Request, sessionID, operatorID string, body *FixItConverseRequest) (projectID string, ok bool) {
+func (s *Server) resolveFixItScope(w http.ResponseWriter, r *http.Request, sessionID, operatorID string, body *FixItConverseRequest) (projectID, failureKind string, ok bool) {
 	if sessionID != "" {
-		scopedProject, found, err := s.fixItDoctor.SessionScope(r.Context(), sessionID, operatorID)
+		scopedProject, scopedKind, found, err := s.fixItDoctor.SessionScope(r.Context(), sessionID, operatorID)
 		if err != nil {
 			s.logger.Error().Err(err).Str("session_id", sessionID).Msg("fixit session-scope lookup failed")
 			respondError(w, http.StatusBadGateway, "FIXIT_ERROR", "session lookup failed; see server logs")
-			return "", false
+			return "", "", false
 		}
 		if !found {
 			respondError(w, http.StatusNotFound, "NOT_FOUND", "session not found")
-			return "", false
+			return "", "", false
 		}
-		return scopedProject, true
+		return scopedProject, scopedKind, true
 	}
 	body.FailureKind = strings.TrimSpace(body.FailureKind)
 	body.FailureRefID = strings.TrimSpace(body.FailureRefID)
 	if body.FailureKind == "" || body.FailureRefID == "" {
 		respondError(w, http.StatusBadRequest, "VALIDATION_ERROR",
 			"failure_kind and failure_ref_id are required to start a new session")
-		return "", false
+		return "", "", false
 	}
-	return strings.TrimSpace(body.ProjectID), true
+	return strings.TrimSpace(body.ProjectID), body.FailureKind, true
 }
 
 // respondFixItConverseError maps a fixitdoctor.Service.Converse error

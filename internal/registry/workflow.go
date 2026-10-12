@@ -1821,19 +1821,94 @@ func findSwarmRole(swarm *Swarm, name string) *SwarmRole {
 	return nil
 }
 
-// AnswerSteps returns, sorted, the steps whose on_success is a terminal: the
-// steps that can end a run, and so the ones that write a broker workflow's
-// answer. A workflow define_workflow renders is a linear chain with exactly
-// one; an operator workflow may branch and have several. The agent step
-// template and the broker task prompt both take "the last step" from here
-// (agent-administered design §18.10), so they cannot disagree.
+// AnswerSteps returns, sorted, the steps that can end a run, and so the ones
+// that write a broker workflow's answer. A workflow define_workflow renders is
+// a linear chain with exactly one; an operator workflow may branch and have
+// several. The agent step template and the broker task prompt both take "the
+// last step" from here (agent-administered design §18.10), so they cannot
+// disagree.
+//
+// A step's success edges are its on_success, every gate target and every
+// on_outcome target; on_fail is not one. gate and approval steps are
+// pass-through: they write nothing, so they are never answer steps, and a
+// terminal they reach is credited to the steps routing into them (§18.10,
+// amendment 2026-10-12: counting on_success alone left a gate-routed broker
+// workflow with no answer step, and its answer was refused as
+// egress_no_output).
 func (w *Workflow) AnswerSteps() []string {
+	ends := map[string]bool{}    // pass-through step id -> reaches a terminal
+	walking := map[string]bool{} // cycle guard
+	var reachesEnd func(target string) bool
+	reachesEnd = func(target string) bool {
+		if _, ok := w.Terminals[target]; ok {
+			return true
+		}
+		st, ok := w.Steps[target]
+		if !ok || !isPassThroughStep(st.Type) {
+			return false
+		}
+		if v, done := ends[target]; done {
+			return v
+		}
+		if walking[target] {
+			return false
+		}
+		walking[target] = true
+		v := false
+		for _, next := range successEdges(st) {
+			if reachesEnd(next) {
+				v = true
+				break
+			}
+		}
+		walking[target] = false
+		ends[target] = v
+		return v
+	}
 	out := []string{}
 	for name, st := range w.Steps {
-		if _, ok := w.Terminals[st.OnSuccess]; ok {
-			out = append(out, name)
+		if isPassThroughStep(st.Type) {
+			continue
+		}
+		for _, next := range successEdges(st) {
+			if reachesEnd(next) {
+				out = append(out, name)
+				break
+			}
 		}
 	}
 	sort.Strings(out)
+	return out
+}
+
+// isPassThroughStep reports the step types that route without writing an
+// artifact: a gate evaluates the previous step's result, an approval waits
+// for a person. A future step type that writes no artifact must be added
+// here, or it would be counted as an answer step (review-20261012-dac5).
+func isPassThroughStep(typ string) bool {
+	switch strings.TrimSpace(typ) {
+	case "gate", "approval":
+		return true
+	}
+	return false
+}
+
+// successEdges lists every transition a step takes when it does not fail:
+// on_success, gate targets and on_outcome targets.
+func successEdges(st WorkflowStep) []string {
+	var out []string
+	if st.OnSuccess != "" {
+		out = append(out, st.OnSuccess)
+	}
+	for _, g := range st.Gates {
+		if g.Target != "" {
+			out = append(out, g.Target)
+		}
+	}
+	for _, t := range st.OnOutcome {
+		if t != "" {
+			out = append(out, t)
+		}
+	}
 	return out
 }

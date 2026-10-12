@@ -234,7 +234,7 @@ class ApprovalsCommandTest(unittest.TestCase):
                                set_value=broken, unset_value=lambda k: None, out=out.append)
         self.assertNotEqual(rc, 0)
 
-    # GitHub #77 (2026-10-05 audit): a pin on a disconnected namespace was kept and
+    # the approvals-pin change (2026-10-05 audit): a pin on a disconnected namespace was kept and
     # `on` reported success; every later prompt was then denied.
     def test_on_replaces_a_pin_on_a_disconnected_namespace(self):
         rc, writes, out = self.run_cmd(["approvals", "on"], hermes_config("hermes", pinned="gone"))

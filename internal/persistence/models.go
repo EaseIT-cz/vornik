@@ -524,6 +524,7 @@ type Execution struct {
 
 // Artifact represents a durable output or intermediate product.
 type Artifact struct {
+	ProducingStepID   string         `json:"producing_step_id,omitempty"`
 	ID                string         `json:"id"`
 	ProjectID         string         `json:"project_id"`
 	ExecutionID       *string        `json:"execution_id,omitempty"`

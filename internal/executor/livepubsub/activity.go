@@ -28,16 +28,13 @@ type ActivityReader interface {
 	Activity(executionID string) (Activity, bool)
 }
 
-// lifecycleKinds are the kinds the broker view keeps
-// (internal/api/live_projection.go brokerLiveFields, less the synthetic
-// closed and replay_gap frames). LastLifecycleAt moves only on these, so a
-// broker caller polling it cannot count tool or model calls.
-var lifecycleKinds = map[string]bool{
-	KindStepStarted:   true,
-	KindStepCompleted: true,
-	KindPaused:        true,
-	KindResumed:       true,
-	KindAttemptFailed: true,
+// activityLifecycleKind reports the kinds that move LastLifecycleAt: the
+// lifecycle view's kinds (ProjectLifecycle, lifecycle_view.go), less the
+// synthetic closed and replay_gap frames. Derived from the one allowlist
+// rather than mirrored, so a broker caller polling it cannot count tool or
+// model calls and the two cannot drift.
+func activityLifecycleKind(kind string) bool {
+	return LifecycleKind(kind) && kind != KindClosed && kind != KindReplayGap
 }
 
 // noteActivity updates the stream's summary for one delivered event. Called
@@ -46,7 +43,7 @@ func (s *stream) noteActivity(evt LiveEvent) {
 	if evt.Timestamp.After(s.activity.LastEventAt) {
 		s.activity.LastEventAt = evt.Timestamp
 	}
-	if !lifecycleKinds[evt.Kind] {
+	if !activityLifecycleKind(evt.Kind) {
 		return
 	}
 	if evt.Timestamp.After(s.activity.LastLifecycleAt) {

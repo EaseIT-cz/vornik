@@ -36,11 +36,11 @@ func (r *ArtifactRepository) Create(ctx context.Context, a *persistence.Artifact
 	_, err := r.db.ExecContext(ctx, `
 		INSERT INTO artifacts (
 			id, project_id, execution_id, task_id, name, artifact_class,
-			storage_path, size_bytes, content_hash_sha256, mime_type, created_at, origin
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			storage_path, size_bytes, content_hash_sha256, mime_type, created_at, origin, producing_step_id
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		a.ID, a.ProjectID, a.ExecutionID, a.TaskID, a.Name, a.ArtifactClass,
 		a.StoragePath, a.SizeBytes, a.ContentHashSHA256, a.MimeType, sqliteTime(a.CreatedAt),
-		a.Origin,
+		a.Origin, a.ProducingStepID,
 	)
 	return err
 }
@@ -63,7 +63,7 @@ func (r *ArtifactRepository) UpdateTaskID(ctx context.Context, artifactID, taskI
 func (r *ArtifactRepository) Get(ctx context.Context, id string) (*persistence.Artifact, error) {
 	row := r.db.QueryRowContext(ctx, `
 		SELECT id, project_id, execution_id, task_id, name, artifact_class,
-		       storage_path, size_bytes, content_hash_sha256, mime_type, created_at, origin
+		       storage_path, size_bytes, content_hash_sha256, mime_type, created_at, origin, producing_step_id
 		FROM artifacts WHERE id = ?`, id)
 	return scanSqliteArtifact(row)
 }
@@ -72,7 +72,7 @@ func (r *ArtifactRepository) Get(ctx context.Context, id string) (*persistence.A
 func (r *ArtifactRepository) GetByHash(ctx context.Context, hash string) (*persistence.Artifact, error) {
 	row := r.db.QueryRowContext(ctx, `
 		SELECT id, project_id, execution_id, task_id, name, artifact_class,
-		       storage_path, size_bytes, content_hash_sha256, mime_type, created_at, origin
+		       storage_path, size_bytes, content_hash_sha256, mime_type, created_at, origin, producing_step_id
 		FROM artifacts WHERE content_hash_sha256 = ?`, hash)
 	return scanSqliteArtifact(row)
 }
@@ -82,7 +82,7 @@ func (r *ArtifactRepository) List(ctx context.Context, filter persistence.Artifa
 	var b strings.Builder
 	b.WriteString(`
 		SELECT id, project_id, execution_id, task_id, name, artifact_class,
-		       storage_path, size_bytes, content_hash_sha256, mime_type, created_at, origin
+		       storage_path, size_bytes, content_hash_sha256, mime_type, created_at, origin, producing_step_id
 		FROM artifacts WHERE 1=1`)
 	args := make([]any, 0, 4)
 
@@ -152,7 +152,7 @@ func scanSqliteArtifact(scanner interface{ Scan(dest ...any) error }) (*persiste
 	err := scanner.Scan(
 		&a.ID, &a.ProjectID, &executionID, &taskID, &a.Name, &a.ArtifactClass,
 		&a.StoragePath, &sizeBytes, &contentHash, &mimeType, &createdAt,
-		&a.Origin,
+		&a.Origin, &a.ProducingStepID,
 	)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {

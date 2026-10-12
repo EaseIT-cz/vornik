@@ -27,6 +27,7 @@ type AgentAdminVerbs interface {
 	// TestConnectionJSON answers test_connection (design §6.2, GitHub #101):
 	// a read that probes one approved connection.
 	TestConnectionJSON(ctx context.Context, key *persistence.APIKey, input json.RawMessage) (any, error)
+	ShowWorkflowJSON(ctx context.Context, key *persistence.APIKey, input json.RawMessage) (any, error)
 	// ApprovedWorkflows is every approved workflow of the key's namespace,
 	// sorted: what catalog lists for an agent admin key (design §18.3).
 	ApprovedWorkflows(ctx context.Context, key *persistence.APIKey) ([]string, error)
@@ -74,7 +75,7 @@ func keyCoversProject(key *persistence.APIKey, project string) bool {
 // isAgentAdminTool reports whether name is an admin verb.
 func isAgentAdminTool(name string) bool {
 	return agentAdminMutating[name] || name == toolListMySetup || name == toolDescribeInstallation || name == agentadmin.VerbListRecipes ||
-		name == agentadmin.VerbTestConnection
+		name == agentadmin.VerbTestConnection || name == agentadmin.VerbShowWorkflow
 }
 
 // agentAdminOffered reports whether key may see and call the admin verbs.
@@ -188,6 +189,8 @@ func (s *Server) companionAdminTool(ctx context.Context, key *persistence.APIKey
 		out, err = s.agentAdmin.ListRecipesJSON(ctx, key)
 	case agentadmin.VerbTestConnection:
 		out, err = s.agentAdmin.TestConnectionJSON(ctx, key, args)
+	case agentadmin.VerbShowWorkflow:
+		out, err = s.agentAdmin.ShowWorkflowJSON(ctx, key, args)
 	default:
 		out, err = s.agentAdmin.Do(ctx, key, name, args)
 	}
@@ -234,6 +237,7 @@ func companionAdminToolDefs() []mcpToolDef {
 		"awaiting_approval means the user must approve on their phone at approval_url; tell them the sentence."
 	roleTools := "Each tool is a workspace/clock built-in (see describe_installation) or mcp__<server>__<tool> for a read tool of a server already approved for this project."
 	return []mcpToolDef{
+		{Name: agentadmin.VerbShowWorkflow, Description: "Read an owned project's active workflow definition: steps, prompts, schemas, schedule and limits. Read this before redefining a workflow; pending changes are not live. Returns an error when the project or workflow is missing or outside your namespace. No credentials or runtime settings.", InputSchema: obj(map[string]any{"project": str(agentadmin.ProjectRefRule), "slug": str("Workflow slug within the project.")}, "project", "slug")},
 		{Name: toolDescribeInstallation, Description: "Call this first. How to work with Vornik, what you may and may not do, what needs the user's approval on their phone, the models a role may choose, and your current setup.", InputSchema: obj(map[string]any{})},
 		{Name: toolListMySetup, Description: "Your projects, roles, workflows, servers, credentials (names only, never values), budgets, and requests awaiting approval, failed or expired. " +
 			"A credential's status set means the value is stored, not that the provider accepts it; test_connection checks that. " +

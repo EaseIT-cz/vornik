@@ -93,6 +93,13 @@ const (
 const (
 	agentQueryToolName = "query_api"
 	agentListToolName  = "list_apis"
+	// agentAPIAuditStepID marks the rows writeAgentAPIAudit writes; the
+	// budget rebuild counts only these (audit 2026-10-12). It has been set
+	// on every row since the endpoints were introduced (e7be21caa), so no
+	// legitimate row lacks it; a change that renames it or adds a second
+	// writer must keep deriveTaskAPISpend in step, or the rebuild
+	// undercounts (pinned by TestDeriveTaskAPISpend_OnlyDaemonRowsCount...).
+	agentAPIAuditStepID = "agent-api-endpoint"
 )
 
 // Audit status labels recorded in the attribution payload.
@@ -318,28 +325,26 @@ func (s *Server) toolResultMaxBytes() int {
 // deriveTaskAPISpend re-derives a task's spent budget from the persisted
 // audit rows (design §5c). A missing repository, empty task ID, or transient
 // store error fails closed: caching a zero seed would let a restart or storage
-// outage reset the task's call and byte ceilings. Only agent rows (our two tool
-// names, TaskID matched) are summed; chat rows carry an empty TaskID and are
-// excluded by the filter.
+// outage reset the task's call and byte ceilings. The rows are read per tool
+// name (taskToolAuditRows), so the task's other tool rows cannot crowd them
+// off the page; a full page rebuilds as exhausted (audit 2026-10-12). Only
+// the daemon's own rows (StepID agentAPIAuditStepID) count: the entrypoint's
+// per-call row under the same tool name carries the tool arguments, not the
+// attribution payload. Chat rows carry an empty TaskID and are excluded by
+// the filter.
 func (s *Server) deriveTaskAPISpend(ctx context.Context, taskID string) (apiTaskSpend, error) {
-	if s.toolAuditRepo == nil || taskID == "" {
-		return apiTaskSpend{}, errors.New("tool audit repository unavailable")
-	}
-	rows, err := s.toolAuditRepo.List(ctx, persistence.ToolAuditFilter{
-		TaskID:   &taskID,
-		PageSize: agentAPIBudgetSeedPageSize,
-	})
+	rows, complete, err := s.taskToolAuditRows(ctx, taskID, []string{agentQueryToolName, agentListToolName}, agentAPIBudgetSeedPageSize)
 	if err != nil {
 		s.logger.Warn().Err(err).Str("task_id", taskID).
 			Msg("agent api budget: audit re-derivation failed; refusing call")
 		return apiTaskSpend{}, err
 	}
+	if !complete {
+		return apiTaskSpend{calls: maxAgentAPICallsPerTask, bytes: maxAgentAPIBytesPerTask}, nil
+	}
 	var spend apiTaskSpend
 	for _, row := range rows {
-		if row == nil {
-			continue
-		}
-		if row.ToolName != agentQueryToolName && row.ToolName != agentListToolName {
+		if row.StepID != agentAPIAuditStepID {
 			continue
 		}
 		var p agentAPIAuditPayload
@@ -356,11 +361,15 @@ func (s *Server) deriveTaskAPISpend(ctx context.Context, taskID string) (apiTask
 		// budget_exceeded (ceiling already hit, never incremented) and oversize
 		// (rejected before reserveCall) did NOT — including them inflated the
 		// seed and could refuse legitimate calls after a restart. Bytes are
-		// added only for successful (ok) rows, matching addBytes.
+		// added only for successful (ok) rows, matching addBytes, and only
+		// when positive: a row posted through the tool-audit route with the
+		// task key can carry any figure (audit 2026-10-12).
 		switch p.Status {
 		case agentAPIStatusOK:
 			spend.calls++
-			spend.bytes += p.Bytes
+			if p.Bytes > 0 {
+				spend.bytes += p.Bytes
+			}
 		case agentAPIStatusRefused:
 			spend.calls++
 		default:
@@ -400,7 +409,7 @@ func (s *Server) writeAgentAPIAudit(ctx context.Context, projectID string, actx 
 		ProjectID:   projectID,
 		TaskID:      actx.taskID,
 		ExecutionID: actx.executionID,
-		StepID:      "agent-api-endpoint",
+		StepID:      agentAPIAuditStepID,
 		ToolName:    toolName,
 		ToolInput:   string(input),
 		ToolOutput:  p.Status,

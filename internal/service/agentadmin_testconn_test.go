@@ -369,13 +369,13 @@ func TestTestConnection_RefusesUnknownAndAmbiguousNames(t *testing.T) {
 	if _, err := f.testConn("nowhere", "fio"); err == nil {
 		t.Fatal("an unknown project was accepted")
 	}
-	// GitHub #286: add_mcp_server accepts an API's name today, so one name
-	// can be both; the probe refuses rather than guessing.
+	// GitHub #286: add_mcp_server refuses an API's name, so one name cannot
+	// become ambiguous across the two integration types.
 	api := newRecordingAPI(t, http.StatusOK)
 	f.addAPI("fio", api.srv.URL+"/v1", "", "GET")
-	f.approve(f.do(agentadmin.VerbAddMCPServer, agentadmin.AddMCPServerInput{Project: "finance", Name: "fio", URL: api.srv.URL + "/mcp"}))
-	if _, err := f.testConn("finance", "fio"); err == nil || !strings.Contains(err.Error(), "both an MCP server and an API") {
-		t.Fatalf("an ambiguous name: %v", err)
+	res := f.do(agentadmin.VerbAddMCPServer, agentadmin.AddMCPServerInput{Project: "finance", Name: "fio", URL: api.srv.URL + "/mcp"})
+	if res.Effect != "refused" || !strings.Contains(res.Reason, "already has a server or API named") {
+		t.Fatalf("an API name must be refused for an MCP server: %+v", res)
 	}
 }
 

@@ -998,8 +998,9 @@ func (s *Scheduler) recoverExpiredLeases() {
 			}
 		}
 
-		// Diagnostic snapshot — the lease recovery root cause is still
-		// unknown (queued in BACKLOG.md). Capture everything we'd need
+		// Diagnostic snapshot — added 2026-04 while the lease recovery
+		// root cause was unknown (that item closed 2026-04-22 with the
+		// lifecycle instrumentation, 3ca47547c). Capture everything we'd need
 		// to diagnose the next occurrence: lease identity, acquisition
 		// time, planned expiry, actual-vs-planned hold, attempt count.
 		// This runs at Warn so it surfaces in default-level logs even

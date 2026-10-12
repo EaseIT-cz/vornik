@@ -15,7 +15,7 @@ import (
 )
 
 // TestMCPEgress_AllowedToolsEnforcedDaemonSide is the Tier-1 egress
-// characterization (https://docs.vornik.io): it proves the allowed_tools gate is
+// characterization (2026-06-20 journey coverage; shipped 0b160dd4a): it proves the allowed_tools gate is
 // enforced *inside the daemon's MCP client*, before any JSON-RPC write
 // reaches the upstream server — not merely advertised to the agent.
 //

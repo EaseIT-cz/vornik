@@ -27,9 +27,9 @@ const FormatHeader = "<!-- vornik backlog v1 — markers: [ ] pending | [?] prop
 // So anything itemRE starts matching becomes executable work, for every
 // project, at once.
 //
-// Concretely: this project's own https://docs.vornik.io keeps its 48 real items as
+// Concretely: this project's own https://docs.vornik.io (now the deposit inbox) holds items as
 // `## [ ]` H2 headings and uses `- [ ]` only for sub-notes inside them, so
-// widening itemRE to accept headings would hand the autonomy loop 48 items it
+// widening itemRE to accept headings would hand the autonomy loop every item it
 // was never meant to run. That is why the 2026-08-26 companion-backlog-deposit
 // design normalises heading items to bullets on IMPORT, with its own parser,
 // rather than touching this one. See

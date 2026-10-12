@@ -1,8 +1,8 @@
 // Package tradingauth implements the HMAC request-authentication
 // scheme guarding the daemon's /api/v1/internal/trading-* endpoints.
 //
-// Backlog (https://docs.vornik.io, batch-2 Financials PRE-LIVE blockers):
-// "HMAC/mTLS on /internal/trading-*". These endpoints carry the
+// Origin: the batch-2 Financials PRE-LIVE blocker "HMAC/mTLS on
+// /internal/trading-*", shipped 2026-06-20 (08bc17356). These endpoints carry the
 // broker's order/fill/safety audit stream and serve the boot-time
 // rate-limit state replay. They were previously guarded by the
 // VORNIK_API_KEY bearer alone; a leaked key (or a same-host process

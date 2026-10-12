@@ -45,22 +45,22 @@ var companionBundles = map[string]bundleBaseline{
 		manifest:        "../../contrib/claude-code-companion/.claude-plugin/plugin.json",
 		baselineVersion: "0.21.0",
 		skill:           "../../contrib/claude-code-companion/skills/delegate/SKILL.md",
-		skillSHA256:     "d220955d288701c225d059fcb69dff1fe097f9ba71b101ab49f0286b812a8966",
+		skillSHA256:     "89116f8edce5bee5b4dd2ab9be0a1c5f65dc410166fb58a2184a5af2ff7be545",
 	},
 	"codex": {
 		manifest:        "../../contrib/codex-companion/.codex-plugin/plugin.json",
 		baselineVersion: "0.18.0+codex.20260904",
 		skill:           "../../contrib/codex-companion/skills/delegate/SKILL.md",
-		skillSHA256:     "32ea94e941ee3fac9dd5d52703ce829a0fd63983c0ed2ee0932a9462bd43e497",
+		skillSHA256:     "e5efbb66fee20140b390bc8def7f12f68af3842684039e3fc442b751006cc419",
 	},
 	// HARNESS PARITY (operator, 2026-10-08; LLD 21 §D2, D6): the Hermes bundle
 	// is version-checked like the other two. Its pinned skill is the broker
 	// skill, which delegates typed inputs, not prompts.
 	"hermes": {
 		manifest:        "../../contrib/hermes-companion/plugin.yaml",
-		baselineVersion: "0.13.0",
+		baselineVersion: "0.21.0",
 		skill:           "../../contrib/hermes-companion/skills/vornik-broker/SKILL.md",
-		skillSHA256:     "aecf4972e334327aef5bd059aaefb5ba693578e75ec47dfd35cd2a2a36c99612",
+		skillSHA256:     "6fcf28e7e89d4e30b71cf5d7a1a7f855ab34777b16349724595419d0eee4c0cd",
 		yamlManifest:    true,
 		noNetworkRule:   true,
 	},

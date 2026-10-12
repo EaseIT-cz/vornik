@@ -1437,13 +1437,15 @@ type evictionSweepCounts struct {
 // that case a no-op this run and a clean delete the next, instead of an error
 // every run forever.
 //
-// KNOWN LIMIT, stated rather than left to be discovered. The backlog item that
-// prompted this asks for evictions tied to a DATA-SUBJECT REQUEST to expire with
+// KNOWN LIMIT, stated rather than left to be discovered. The item that prompted
+// this ("The eviction audit tables have no retention horizon", 2026-08-21;
+// shipped 37c2e9ae8) also asks for evictions tied to a DATA-SUBJECT REQUEST to expire with
 // that request's own record. Nothing links them today — neither table carries a
 // request id and no producer writes one — so implementing that half would mean
 // inventing a column nothing fills, which is worse than the fixed horizon. The
 // horizon here is the operator-accountability one; the request-linked variant
-// needs the linkage first.
+// needs the linkage first (Enterprise tracker issue
+// #333).
 func (s *Sweeper) pruneEvictionEvidence(ctx context.Context, p Policy, now time.Time, previewOnly bool) (evictionSweepCounts, error) {
 	var out evictionSweepCounts
 	cutoff := now.AddDate(0, 0, -p.MemoryEvictionAuditDays)

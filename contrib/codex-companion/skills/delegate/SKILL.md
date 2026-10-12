@@ -202,7 +202,10 @@ the document's identity: re-ingesting the same path in the same `repo_scope`
 supersedes the earlier versions, so RAG serves only the newest. Take the
 `repo_scope` from the FILE's repository (`git -C <file's dir> config --get
 remote.origin.url`), not from your working directory, and send one repository's
-files per call. A file outside any repository gets no `path`.
+files per call. Always send `repo_scope` with a `path`: without a scope nothing
+supersedes, so the daemon refuses a delegation that carries a `path` and no
+`repo_scope` (unless the key has a default scope). A file outside any
+repository gets no `path`.
 
 You do NOT need to set `skip_auto_extract` for those workflows. The daemon
 derives it from `require_input_artifacts` and forces it on, because a workflow

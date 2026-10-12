@@ -198,6 +198,9 @@ func TestOperatorJournal_RefusalsAre409WithRemedy(t *testing.T) {
 			Remedy: "use the right daemon", Err: controlplane.ErrJournalRootMismatch}, controlplane.RefusalRootMismatch},
 		{"proposal moved", &controlplane.ResolveRefusal{Code: controlplane.RefusalProposalChanged, Reason: "moved",
 			Remedy: "retry", Err: persistence.ErrProposalNotApproved}, controlplane.RefusalProposalChanged},
+		// audit 2026-10-12, finding B: --restore on an APPLIED proposal.
+		{"restore applied", &controlplane.ResolveRefusal{Code: controlplane.RefusalRestoreApplied, Reason: "applied",
+			Remedy: "resolve with --keep, then rollback"}, controlplane.RefusalRestoreApplied},
 		// The exact #301 error, should it ever escape the engine bare: not a 500.
 		{"bare not approved", errors.Join(errors.New("journal DRIFT→APPLIED"), persistence.ErrProposalNotApproved),
 			controlplane.RefusalProposalChanged},

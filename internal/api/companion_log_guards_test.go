@@ -48,3 +48,13 @@ func TestCompanionAuditOutput_TaskLogsHasDigestNotContent(t *testing.T) {
 	assert.Contains(t, out, "result_bytes=")
 	assert.NotContains(t, out, "step_started")
 }
+
+// audit 2026-10-12 (finding C): broker design §6b.6 says the delegate audit
+// row's output carries `reused`; it carried only status and size, so an
+// operator could not tell a reused answer from a fresh run in the audit.
+func TestCompanionAuditOutput_DelegateRecordsReused(t *testing.T) {
+	assert.Contains(t, companionAuditOutput("delegate", "ok", `{"task_id":"t1","reused":true,"as_of":"x"}`), " reused=true")
+	assert.Contains(t, companionAuditOutput("delegate", "ok", `{"task_id":"t2","status":"QUEUED"}`), " reused=false")
+	assert.Contains(t, companionAuditOutput("delegate", "error: REUSE_NOT_ALLOWED", ""), " reused=false")
+	assert.NotContains(t, companionAuditOutput("status", "ok", `{"reused":true}`), "reused=")
+}

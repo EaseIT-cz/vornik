@@ -146,11 +146,9 @@ func (v *approverMemoryView) ready() (*memory.Searcher, *memory.Repository, erro
 }
 
 func shapeDeviceItem(id, taskID, source, content, warning string, createdAt, now time.Time) approverdevice.MemoryItemView {
-	short := id
-	if len(short) > 12 {
-		short = short[:12]
-	}
-	it := approverdevice.MemoryItemView{ID: id, ShortID: short, Source: strings.TrimSpace(memory.StripMirrorTokens(source)),
+	// The same short id memory_list shows (design 22, "Short ids for every
+	// id shape", audit 2026-10-12).
+	it := approverdevice.MemoryItemView{ID: id, ShortID: memory.ShortID(id), Source: strings.TrimSpace(memory.StripMirrorTokens(source)),
 		Origin: memory.OriginOf(taskID, source, content), Snippet: memory.Snippet(content, 240), PolicyWarning: warning}
 	if !createdAt.IsZero() {
 		it.Age = memory.HumanAge(now.Sub(createdAt))

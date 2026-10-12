@@ -57,15 +57,34 @@ func TestMergeInputsIntoContext_DocumentPaths(t *testing.T) {
 
 func delegateDocument(t *testing.T, artifacts []map[string]any) (map[string]any, string, bool, int) {
 	t.Helper()
+	return delegateDocumentScoped(t, "github.com/acme/widgets", false, "", artifacts)
+}
+
+// delegateDocumentScoped delegates with repo_scope (omitted when empty), on a
+// key with or without a default repo scope, in a project with projectDefault
+// as its repo_scope (empty: none).
+func delegateDocumentScoped(t *testing.T, scope string, keyDefault bool, projectDefault string, artifacts []map[string]any) (map[string]any, string, bool, int) {
+	t.Helper()
 	srv, keyRepo, taskRepo := newCompanionMCPServer(t)
 	srv.inputArtifactStore = &fakeInputArtifactStore{}
-	raw, _ := seedCompanionKey(t, keyRepo, "alpha", []string{"wf-artifacts"})
+	if projectDefault != "" {
+		p := srv.projectRegistry.GetProject("alpha")
+		require.NotNil(t, p)
+		p.RepoScope = projectDefault
+		require.Equal(t, projectDefault, srv.projectRegistry.GetProject("alpha").RepoScope)
+	}
+	var raw string
+	if keyDefault {
+		raw = seedCompanionKeyWithDefaultScope(t, keyRepo, "alpha")
+	} else {
+		raw, _ = seedCompanionKey(t, keyRepo, "alpha", []string{"wf-artifacts"})
+	}
+	args := map[string]any{"workflow": "wf-artifacts", "prompt": "ingest", "inputArtifacts": artifacts}
+	if scope != "" {
+		args["repo_scope"] = scope
+	}
 	req := withCompanionBearer(mcpRequest(t, "tools/call", map[string]any{
-		"name": "delegate",
-		"arguments": map[string]any{
-			"workflow": "wf-artifacts", "prompt": "ingest", "repo_scope": "github.com/acme/widgets",
-			"inputArtifacts": artifacts,
-		},
+		"name": "delegate", "arguments": args,
 	}), raw)
 	rec := httptest.NewRecorder()
 	srv.CompanionMCPHandler(rec, req)
@@ -98,4 +117,48 @@ func TestCompanionDelegate_RefusesABadDocumentPath(t *testing.T) {
 	require.True(t, isErr, "a path escaping the repository must be refused")
 	assert.Contains(t, text, "inputArtifacts[0]")
 	assert.Equal(t, 0, creates, "no task on a refused path")
+}
+
+// audit 2026-10-12 (finding H): two companion-rag-ingest delegations of the
+// same three design documents carried document paths but no repo_scope; both
+// versions stayed live, because SupersedeDocument does nothing without a
+// scope. A path with no effective scope is now refused before anything is
+// stored (memory-rollback-supersession design A.2, amended 2026-10-12).
+func TestCompanionDelegate_RefusesADocumentPathWithoutAScope(t *testing.T) {
+	_, text, isErr, creates := delegateDocumentScoped(t, "", false, "", []map[string]any{
+		{"name": "notes.md", "content": "aGVsbG8="},
+		{"name": "index.md", "content": "aGVsbG8=", "path": "docs/public/index.md"},
+	})
+	require.True(t, isErr, "a document path without a repo scope must be refused")
+	assert.Contains(t, text, "repo_scope")
+	assert.Contains(t, text, "inputArtifacts[1]")
+	assert.Equal(t, 0, creates, "no task on a refused delegation")
+}
+
+func TestCompanionDelegate_DocumentPathTakesTheKeysDefaultScope(t *testing.T) {
+	taskCtx, text, isErr, _ := delegateDocumentScoped(t, "", true, "", []map[string]any{
+		{"name": "index.md", "content": "aGVsbG8=", "path": "docs/public/index.md"},
+	})
+	require.False(t, isErr, text)
+	paths, _ := taskCtx["inputDocumentPaths"].(map[string]any)
+	assert.Len(t, paths, 1)
+}
+
+func TestCompanionDelegate_NoPathNeedsNoScope(t *testing.T) {
+	_, text, isErr, creates := delegateDocumentScoped(t, "", false, "", []map[string]any{
+		{"name": "notes.md", "content": "aGVsbG8="},
+	})
+	require.False(t, isErr, text)
+	assert.Equal(t, 1, creates)
+}
+
+// The executor stamps the project's repo_scope when the delegation has none
+// (memoryscope.Resolve), so a path in such a project is superseded and is
+// not refused.
+func TestCompanionDelegate_DocumentPathTakesTheProjectsDefaultScope(t *testing.T) {
+	_, text, isErr, creates := delegateDocumentScoped(t, "", false, "github.com/acme/widgets", []map[string]any{
+		{"name": "index.md", "content": "aGVsbG8=", "path": "docs/public/index.md"},
+	})
+	require.False(t, isErr, text)
+	assert.Equal(t, 1, creates)
 }

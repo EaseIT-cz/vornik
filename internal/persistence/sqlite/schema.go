@@ -153,7 +153,8 @@ CREATE TABLE IF NOT EXISTS artifacts (
     content_hash_sha256 TEXT,
     mime_type           TEXT,
     created_at          TEXT NOT NULL,
-    origin              TEXT NOT NULL DEFAULT 'unknown'
+    origin              TEXT NOT NULL DEFAULT 'unknown',
+    producing_step_id   TEXT NOT NULL DEFAULT ''
 );
 CREATE INDEX IF NOT EXISTS idx_artifacts_project   ON artifacts(project_id);
 CREATE INDEX IF NOT EXISTS idx_artifacts_execution ON artifacts(execution_id);

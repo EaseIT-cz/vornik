@@ -3,6 +3,7 @@ package postgres
 import (
 	"context"
 	"math"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -42,7 +43,15 @@ type accountState struct {
 
 // Every multi-row operation sorts by the SAME total lexical scope-key order.
 // daemon precedes ns: solely because those key prefixes sort that way.
-func lockAccountStates(ctx context.Context, x persistence.DBTX, scopes []string) (map[string]accountState, error) {
+//
+// A scope in exclusive is locked FOR UPDATE (the transaction advances or
+// clears it); every other scope FOR SHARE (it only reads it). FOR SHARE
+// conflicts with FOR UPDATE, so a decision and a transition on one row still
+// order against each other, while decisions in different namespaces no
+// longer serialise on the shared daemon row (design §22.2.16, change
+// 2026-10-12, audit finding D). No caller locks one row shared and later
+// exclusive in the same transaction: that upgrade could deadlock.
+func lockAccountStates(ctx context.Context, x persistence.DBTX, scopes []string, exclusive ...string) (map[string]accountState, error) {
 	scopes = append([]string(nil), scopes...)
 	sort.Strings(scopes)
 	out := make(map[string]accountState, len(scopes))
@@ -53,15 +62,22 @@ func lockAccountStates(ctx context.Context, x persistence.DBTX, scopes []string)
 		if _, err := x.ExecContext(ctx, `INSERT INTO agent_account_transitions(scope) VALUES ($1) ON CONFLICT(scope) DO NOTHING`, scope); err != nil {
 			return nil, err
 		}
+		mode := "FOR SHARE"
+		if slices.Contains(exclusive, scope) {
+			mode = "FOR UPDATE"
+		}
 		var s accountState
-		if err := x.QueryRowContext(ctx, `SELECT epoch,busy,owner FROM agent_account_transitions WHERE scope = $1 FOR UPDATE`, scope).Scan(&s.epoch, &s.busy, &s.owner); err != nil {
+		if err := x.QueryRowContext(ctx, `SELECT epoch,busy,owner FROM agent_account_transitions WHERE scope = $1 `+mode, scope).Scan(&s.epoch, &s.busy, &s.owner); err != nil {
 			return nil, err
 		}
 		out[scope] = s
 	}
 	return out, nil
 }
-func checkAccountGuard(ctx context.Context, x persistence.DBTX, ns string, guard persistence.AccountDecisionGuard) error {
+
+// checkAccountGuard validates a decision's captured epochs; exclusive names
+// the scope the caller goes on to advance in the same transaction.
+func checkAccountGuard(ctx context.Context, x persistence.DBTX, ns string, guard persistence.AccountDecisionGuard, exclusive ...string) error {
 	if ns == "" {
 		return nil
 	}
@@ -76,7 +92,7 @@ func checkAccountGuard(ctx context.Context, x persistence.DBTX, ns string, guard
 		return persistence.ErrAccountTransition
 	}
 	scopes := []string{persistence.AccountDaemonScope, persistence.AccountNamespaceScope(ns)}
-	states, err := lockAccountStates(ctx, x, scopes)
+	states, err := lockAccountStates(ctx, x, scopes, exclusive...)
 	if err != nil {
 		return err
 	}
@@ -123,7 +139,7 @@ func (r *AccountTransitionRepository) Begin(ctx context.Context, scope, owner, o
 	return
 }
 func beginAccountState(ctx context.Context, x persistence.DBTX, scope, owner, operation string, now time.Time) (ticket persistence.AccountTransitionTicket, err error) {
-	states, e := lockAccountStates(ctx, x, []string{scope})
+	states, e := lockAccountStates(ctx, x, []string{scope}, scope)
 	if e != nil {
 		return ticket, e
 	}
@@ -148,7 +164,7 @@ func (r *AccountTransitionRepository) Finish(ctx context.Context, t persistence.
 			}
 			scopes = append(scopes, persistence.AccountDaemonScope)
 		}
-		states, err := lockAccountStates(ctx, x, scopes)
+		states, err := lockAccountStates(ctx, x, scopes, t.Scope)
 		if err != nil {
 			return err
 		}
@@ -220,7 +236,7 @@ func (r *AccountTransitionRepository) BeginConfig(ctx context.Context, scope, ow
 	}
 	ns := strings.TrimPrefix(scope, "ns:")
 	err = r.transaction(ctx, func(x persistence.DBTX) error {
-		if e := checkAccountGuard(ctx, x, ns, guard); e != nil {
+		if e := checkAccountGuard(ctx, x, ns, guard, scope); e != nil {
 			return e
 		}
 		var e error

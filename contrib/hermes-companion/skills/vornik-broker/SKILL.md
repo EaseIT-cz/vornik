@@ -26,11 +26,12 @@ on your behalf. You get back a bounded result, never raw access.
    task finishes, and where running tasks are. Do not guess a time to
    finish: Vornik gives none.
    When a result names an account, say it.
-   For diagnosis, use `task_logs` when a task is still running but appears
-   stuck, or when you need its recent execution events; pass back `next_cursor`
-   to continue and stop when `complete` is true. Use `task_explain` after a
-   task fails or finishes unexpectedly to get its failure class and
-   post-mortem. These tools are for investigating a task, not for reporting
+   For diagnosis (when these two tools are offered; an older daemon does not
+   offer them), use `vornik_task_logs` when a task is still running but
+   appears stuck, or when you need its recent execution events; pass back
+   `next_cursor` as `cursor` to continue and stop when `complete` is true. Use
+   `vornik_task_explain` after a task fails or finishes unexpectedly to get its
+   failure class. These tools are for investigating a task, not for reporting
    ordinary step progress; use `progress` from `vornik_status` or
    `vornik_result` for that. `daemon_log` and `doctor` are available only on
    an agent-admin connection: use `daemon_log` to inspect your namespace's

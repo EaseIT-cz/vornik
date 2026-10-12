@@ -61,19 +61,6 @@ func (s *Server) liveViewFor(key *persistence.APIKey, task *persistence.Task) li
 	return liveViewCompanion
 }
 
-// brokerLiveFields is the broker view's complete allowlist: the kinds it
-// keeps and, for each, the only payload fields that survive. Every other kind
-// is dropped.
-var brokerLiveFields = map[string][]string{
-	livepubsub.KindStepStarted:   {"step_id", "role"},
-	livepubsub.KindStepCompleted: {"step_id", "outcome", "duration_ms"},
-	livepubsub.KindPaused:        {"pause_kind"},
-	livepubsub.KindResumed:       {},
-	livepubsub.KindAttemptFailed: {"attempt", "step_id", "error_class", "will_retry"},
-	livepubsub.KindClosed:        {},
-	livepubsub.KindReplayGap:     {"oldest_seq"},
-}
-
 // identityFields are blanked in the companion view: an operator's identity is
 // not the agent's to read.
 var identityFields = []string{"by", "created_by"}
@@ -103,28 +90,11 @@ func projectLiveEvent(evt livepubsub.LiveEvent, view liveView, scrub report.Line
 	return livepubsub.LiveEvent{}, false
 }
 
-// projectBroker keeps only the allowlisted kinds and, in them, only the
-// allowlisted fields; attempt_failed's class is mapped to the broker set.
+// projectBroker is the lifecycle view (livepubsub.ProjectLifecycle): the one
+// allowlist the broker view and the A2A peer share (live design, Change
+// 2026-10-12, L1).
 func projectBroker(evt livepubsub.LiveEvent) (livepubsub.LiveEvent, bool) {
-	fields, ok := brokerLiveFields[evt.Kind]
-	if !ok {
-		return livepubsub.LiveEvent{}, false
-	}
-	m, ok := payloadAsMap(evt.Payload)
-	if !ok {
-		return livepubsub.LiveEvent{}, false
-	}
-	kept := make(map[string]any, len(fields))
-	for _, f := range fields {
-		if v, has := m[f]; has {
-			kept[f] = v
-		}
-	}
-	if evt.Kind == livepubsub.KindAttemptFailed {
-		cls, _ := kept["error_class"].(string)
-		kept["error_class"] = brokerClassOfTaskClass(cls)
-	}
-	return withPayload(evt, kept), true
+	return livepubsub.ProjectLifecycle(evt)
 }
 
 // projectCompanion drops token deltas, withholds an event with any secret
@@ -163,13 +133,7 @@ func blankFields(m map[string]any, fields []string) {
 
 // brokerClassOfTaskClass maps a task failure class onto the closed broker set.
 func brokerClassOfTaskClass(class string) string {
-	switch class {
-	case persistence.TaskFailureClassTimeout, persistence.TaskFailureClassLeaseExpired:
-		return brokerErrTimeout
-	case persistence.TaskFailureClassBudgetBlocked:
-		return brokerErrBudget
-	}
-	return brokerErrFailed
+	return livepubsub.BrokerFailureClass(class)
 }
 
 // payloadAsMap normalises a payload (a typed struct from the in-process ring,

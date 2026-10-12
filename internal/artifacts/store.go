@@ -323,11 +323,22 @@ func (s *Store) Store(ctx context.Context, projectID, executionID, taskID, name,
 	if err != nil {
 		return nil, fmt.Errorf("invalid storage directory: %w", err)
 	}
+	// Step harvests retain immutable revisions, even when a later step or
+	// another output root produces the same logical name (GitHub #90).
+	if persistence.ArtifactStep(ctx) != "" {
+		storageDir, err = safepath.JoinUnder(storageDir, artifactID)
+		if err != nil {
+			return nil, fmt.Errorf("invalid artifact revision directory: %w", err)
+		}
+	}
 	storagePath, err := safepath.JoinUnder(storageDir, safeName)
 	if err != nil {
 		return nil, fmt.Errorf("invalid storage path: %w", err)
 	}
 	storageKey := filepath.ToSlash(filepath.Join(safeProjectID, safeExecutionID, safeName))
+	if persistence.ArtifactStep(ctx) != "" {
+		storageKey = filepath.ToSlash(filepath.Join(safeProjectID, safeExecutionID, artifactID, safeName))
+	}
 
 	// Determine MIME type up front so the secret-scan path knows
 	// whether the file is text-shaped (worth scanning) or a binary
@@ -363,6 +374,7 @@ func (s *Store) Store(ctx context.Context, projectID, executionID, taskID, name,
 		MimeType:          &mimeType,
 		CreatedAt:         time.Now(),
 		Origin:            persistence.ArtifactOriginTaskOutput,
+		ProducingStepID:   persistence.ArtifactStep(ctx),
 	}
 	if taskID != "" {
 		artifact.TaskID = &taskID

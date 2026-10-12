@@ -158,18 +158,20 @@ func (a *fixItDoctorAdapter) Rollback(ctx context.Context, sessionID, operatorID
 	}, nil
 }
 
-func (a *fixItDoctorAdapter) SessionScope(ctx context.Context, sessionID, operatorID string) (string, bool, error) {
+// SessionScope returns the session row's own project and failure kind: the
+// api and ui gates classify a resumed session by both (doctor design §E8.8).
+func (a *fixItDoctorAdapter) SessionScope(ctx context.Context, sessionID, operatorID string) (string, string, bool, error) {
 	row, err := a.svc.Sessions.Get(ctx, sessionID)
 	if err != nil {
 		if err == persistence.ErrNotFound {
-			return "", false, nil
+			return "", "", false, nil
 		}
-		return "", false, err
+		return "", "", false, err
 	}
 	if row == nil || row.OperatorID != operatorID {
-		return "", false, nil
+		return "", "", false, nil
 	}
-	return row.ProjectID, true, nil
+	return row.ProjectID, row.FailureKind, true, nil
 }
 
 func toAPIFixItResult(res *fixitdoctor.Result) *api.FixItResult {

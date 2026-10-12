@@ -13,8 +13,7 @@ package service
 // container_archive_sweeper.go (it's tied to the sweeper's
 // construction). This file owns the rest.
 //
-// See https://docs.vornik.io → "Horizontal scaling — multi-instance
-// deployment" + https://docs.vornik.io
+// See https://docs.vornik.io
 
 import (
 	"context"

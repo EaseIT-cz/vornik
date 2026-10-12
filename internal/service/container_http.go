@@ -192,7 +192,7 @@ func (c *Container) initHTTPServer() error {
 			}
 			return func(*api.Server) {}
 		}(),
-		// Companion report_problem verb (BACKLOG 2026-08-03): a companion user whose
+		// Companion report_problem verb (2026-08-03; shipped 0bbb680e3): a companion user whose
 		// daemon runs on ANOTHER host cannot reach `vornikctl report`, so the report
 		// path has to exist over MCP too. Same builder the chat tool uses — it collects
 		// NOTHING from the host, which is the ruling this ships under, and sharing it
@@ -461,8 +461,10 @@ func (c *Container) initHTTPServer() error {
 		apiOpts = append(apiOpts, api.WithAgentGrants(c.repos.AgentGrants))
 	}
 	// delegate's max_age_seconds (broker design §6b, GitHub #119 item 9): a
-	// reuse is pinned to the same reach hash a standing grant pins.
-	apiOpts = append(apiOpts, api.WithResultReuseReachHash(c.standingReachHash))
+	// reuse is pinned to the reach hash a standing grant pins and, for an
+	// agent namespace, to its account generations (§6b.5 amendment
+	// 2026-10-12).
+	apiOpts = append(apiOpts, api.WithResultReuseReachHash(c.resultReuseReachHash))
 	// delegate's notify and companion-push, exactly where the pusher runs
 	// (design §7a).
 	if c.companionPushWired() {
@@ -2058,6 +2060,10 @@ func (c *Container) initHTTPServer() error {
 	}
 	// CE operator shell (2026-09-13 review R1/R2): /ui/operator/accounts in
 	// both editions; the admin.allowed_keys list is its explicit capability.
+	// LOAD-BEARING for security too: the /ui/fixit panel's admin-class gate
+	// reads this list (api.IsAdminClassRequest), and it must stay the same
+	// c.Config.Admin the api server gets via WithAdminClassKeys above
+	// (doctor design §E8.8).
 	uiOpts = append(uiOpts, ui.WithOperatorCapability(c.Config.Admin))
 	// Name the Slack redemption command only when Slack is actually wired:
 	// the command is configurable, so a hardcoded one would tell some

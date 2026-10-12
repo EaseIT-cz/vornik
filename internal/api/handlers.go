@@ -21,6 +21,7 @@ import (
 	"vornik.io/vornik/internal/config"
 	"vornik.io/vornik/internal/executor"
 	"vornik.io/vornik/internal/mcp"
+	"vornik.io/vornik/internal/memoryscope"
 	"vornik.io/vornik/internal/persistence"
 	"vornik.io/vornik/internal/registry"
 	"vornik.io/vornik/internal/taskcancel"
@@ -376,6 +377,20 @@ func (s *Server) CreateTask(w http.ResponseWriter, r *http.Request) {
 		wf := (*registry.Workflow)(nil)
 		if s.projectRegistry != nil {
 			wf = s.projectRegistry.GetWorkflow(s.effectiveWorkflowID(projectID, req.WorkflowID))
+		}
+		// A document path needs the repo scope the ingest will stamp: the
+		// context's repo_scope, else the project's (memoryscope.Resolve).
+		// Without one nothing supersedes (memory-rollback-supersession design
+		// A.2, amended 2026-10-12; the same refusal as the companion delegate).
+		docScope := memoryscope.FromPayload(req.Context)
+		if docScope == "" && s.projectRegistry != nil {
+			if p := s.projectRegistry.GetProject(projectID); p != nil {
+				docScope = p.RepoScope
+			}
+		}
+		if err := requireScopeForDocumentPaths(req.InputArtifacts, docScope); err != nil {
+			respondError(w, http.StatusBadRequest, "VALIDATION_ERROR", err.Error())
+			return
 		}
 		results, err := s.processInputArtifactsWithOpts(r.Context(), projectID, req.InputArtifacts,
 			processInputArtifactsOpts{SkipAutoExtract: resolveSkipAutoExtract(false, wf)})

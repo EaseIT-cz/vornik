@@ -1,7 +1,7 @@
 ---
 sources:
     - path: docs/release-notes
-      sha256: f9ad5cf7bcd8fd60af574707be5765f77964bc2a76712f5a41116d1e8adafd1c
+      sha256: b8131b1994b45d80e995cebfce5dd0d49d3f0aa5b4283c1439c529cc4e0f69f5
 ---
 # Release Notes
 
@@ -44,7 +44,7 @@ behavior changes, and notable fixes. Internal-only changes are omitted.
       and `--ref main` uses the fetched `origin/main`.
     - **Rebuild the agent image** for the new `document_render` helper.
     - **Migrations 216–218** are additive and applied automatically.
-    - **Hermes companion plugin 0.11.3** (from 0.11.1).
+    - **Hermes companion plugin 0.20.0** (from 0.11.3).
     - **`vornikctl agent connect` exits 1 with one refusal line.** A script
       that matched "not connected" must match the new line or the exit code.
 
@@ -61,6 +61,10 @@ released.
   - Replacing a note with identical text no longer forgets it.
   - A note you forgot and add again is recallable again, when the forget came
     from Hermes's own forget path.
+  - The admin skill reads the active definition of an owned workflow before
+    editing it. Broker results accept only the declared output from an answer
+    step in the latest execution. Older completed runs may need a fresh run;
+    their files remain available through the artifact tools.
 - **Agent admin.**
   - `list_recipes` files the cover request every read owes.
   - `agent connect` states its refusal once.
@@ -70,6 +74,7 @@ released.
   - A role granted the `document_render` helper can convert staged Markdown to
     a PDF or HTML file.
   - Google document links are no longer redacted as high-entropy strings.
+  - Adding an MCP server with an existing API name is refused (#286).
 - **Approvals and devices.**
   - A lost pairing-poll response no longer unpairs the browser.
   - Paired devices get distinct default names, and the devices page shows the
@@ -85,6 +90,7 @@ released.
   - Guarded redirects stop after 10 hops.
   - Live task pages close dead websocket connections.
   - Skill reviews are bound to the revision they were shown.
+  - Memory consolidation skips refuted and superseded notes (#298).
 - **Redirect discovery.** A new skill investigates an unexpected public
   redirect and reports only what independent evidence supports. See
   [Discover and validate redirects](../guides/redirect-discovery.md).

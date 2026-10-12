@@ -693,10 +693,8 @@ func (r *Renderer) addMCPServer(st *State, raw json.RawMessage) (Change, error) 
 			return refuse(verb, ns, "write tool %q is not a tool name", t), nil
 		}
 	}
-	for _, s := range p.Servers {
-		if agentns.IntegrationOf(s.Name) == in.Name {
-			return refuse(verb, ns, "%s already has a server named %q; remove it first", pid, in.Name), nil
-		}
+	if integrationTaken(p, in.Name) {
+		return refuse(verb, ns, "%s already has a server or API named %q; remove it first", pid, in.Name), nil
 	}
 	// The account (design §22.2.1, §22.2.3; GitHub #119 item 8).
 	label, account, why := checkAccount(in.Account)

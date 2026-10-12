@@ -46,7 +46,7 @@ func wiredExecChain(lookup APIKeyLookup, exec *persistence.Execution) http.Handl
 }
 
 // TestCrossProjectIDOR_ExecutionReadScopedByKey is the Tier-1 IDOR
-// characterization (https://docs.vornik.io): a per-project API key scoped to
+// characterization (2026-06-20 journey coverage; shipped e79306f7e): a per-project API key scoped to
 // project A must be REJECTED when it reads an execution owned by
 // project B, and ALLOWED on an execution owned by project A. Both the
 // deny (cross) and allow (same) paths are asserted so the test proves

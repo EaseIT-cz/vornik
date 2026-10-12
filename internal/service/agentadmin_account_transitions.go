@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"time"
 
 	"vornik.io/vornik/internal/agentadmin"
@@ -71,15 +72,47 @@ func (c *Container) publishOAuthAccount(ctx context.Context, tok *persistence.MC
 		identity = ""
 	}
 	if agent {
-		if err = c.prepareNamespaceOAuthTransition(ctx, ns, tok, identity, disconnect, &p); err != nil {
-			return true, err
-		}
-	} else {
-		if err = c.suspendAllAgentGrants(ctx); err != nil {
-			return true, err
-		}
+		err = c.prepareNamespaceOAuthTransition(ctx, ns, tok, identity, disconnect, &p)
+	} else if err = c.suspendAllAgentGrants(ctx); err != nil {
+		err = keepBusy{err}
 	}
-	return true, c.repos.AccountTransitions.Finish(ctx, ticket, p)
+	if err == nil {
+		err = c.repos.AccountTransitions.Finish(ctx, ticket, p)
+	}
+	c.settleDatabaseTransition(ctx, ticket, err, "oauth-publication")
+	return true, err
+}
+
+// keepBusy marks a failed grant suspension: the design keeps the scope busy
+// for controlled recovery after it (§22.2.16 step 3 and review 663b), so
+// the exit does not Abort even though nothing was published. Recorded as an
+// open question in the 2026-10-12 change.
+type keepBusy struct{ error }
+
+func (k keepBusy) Unwrap() error { return k.error }
+
+// settleDatabaseTransition leaves a database-only transition (OAuth or
+// static credential) consistent after err (design §22.2.16, change
+// 2026-10-12, audit finding A): nil means Finish committed; a suspension
+// failure stays busy; any other error Aborts. A failed Finish rolled back
+// (nothing published, the Abort CAS matches) or committed with a lost
+// acknowledgement (busy already clear, the Abort CAS matches nothing).
+func (c *Container) settleDatabaseTransition(ctx context.Context, t persistence.AccountTransitionTicket, err error, operation string) {
+	var kb keepBusy
+	if err == nil || errors.As(err, &kb) {
+		return
+	}
+	c.abortAccountTransition(ctx, t, operation)
+}
+
+// abortAccountTransition clears a ticket whose holder proved it published
+// nothing. The epoch stays advanced and suspended grants stay suspended. A
+// failed Abort leaves the scope busy for controlled recovery.
+func (c *Container) abortAccountTransition(ctx context.Context, t persistence.AccountTransitionTicket, operation string) {
+	if err := c.repos.AccountTransitions.Abort(context.WithoutCancel(ctx), t); err != nil {
+		c.Logger.Error().Err(err).Str("scope", t.Scope).Str("operation", operation).
+			Msg("agent account: abort of an unpublished transition failed; the scope stays busy until controlled recovery or it already finished")
+	}
 }
 
 // configAccountPublication collects only named SQL metadata operations. The
@@ -87,6 +120,9 @@ func (c *Container) publishOAuthAccount(ctx context.Context, tok *persistence.MC
 type configAccountPublication struct {
 	ticket persistence.AccountTransitionTicket
 	rows   persistence.AccountPublication
+	// narrowed are the kinds of the tool removals collected into rows,
+	// counted once the change is published.
+	narrowed []string
 }
 type configAccountPublicationKey struct{}
 type configAccountSnapshotKey struct{}
@@ -141,21 +177,32 @@ func (c *Container) prepareNamespaceOAuthTransition(ctx context.Context, ns stri
 		return err
 	}
 	row, err := c.repos.AgentGrants.GetIntegration(ctx, tok.ProjectID, integration)
-	if err != nil {
+	live := err == nil && row.RemovedAt == nil
+	switch {
+	case err != nil && !errors.Is(err, persistence.ErrNotFound):
 		return err
+	case !live && !disconnect:
+		// Nothing to sign in to: refused, and the caller Aborts.
+		return fmt.Errorf("%w: %s/%s is not a live connection", persistence.ErrNotFound, tok.ProjectID, integration)
 	}
 	// This exact verified identity optimization applies only to namespace OAuth.
-	same := !disconnect && prior != nil && row.IdentitySource == "provider" && row.AccountIdentity != "" && row.AccountIdentity == identity
+	same := live && !disconnect && prior != nil && row.IdentitySource == "provider" && row.AccountIdentity != "" && row.AccountIdentity == identity
 	if !same {
 		var paused int
 		if paused, err = c.suspendGrantsThrough(ctx, ns, []agentadmin.IntegrationRef{{Project: tok.ProjectID, Name: integration}}); err != nil {
-			return err
+			return keepBusy{err}
 		}
 		if result, _ := ctx.Value(oauthPublicationResultKey{}).(*int); result != nil {
 			*result = paused
 		}
 	}
-	p.Identity = &persistence.AccountIdentityUpdate{ProjectID: tok.ProjectID, Integration: integration, Identity: identity}
+	// A removed or absent connection has no identity to clear: its row is
+	// never read, and a re-add writes its account afresh. Setting it would
+	// fail the whole publication (SetIntegrationIdentity matches live rows
+	// only) and keep the token of a Disconnect (audit 2026-10-12 finding B).
+	if live {
+		p.Identity = &persistence.AccountIdentityUpdate{ProjectID: tok.ProjectID, Integration: integration, Identity: identity}
+	}
 	return nil
 }
 

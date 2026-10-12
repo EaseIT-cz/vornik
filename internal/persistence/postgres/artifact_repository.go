@@ -34,15 +34,15 @@ func (r *ArtifactRepository) Create(ctx context.Context, artifact *persistence.A
 	_, err := r.db.ExecContext(ctx, `
 		INSERT INTO artifacts (
 			id, project_id, execution_id, task_id, name, artifact_class,
-			storage_path, size_bytes, content_hash_sha256, mime_type, created_at, origin
+			storage_path, size_bytes, content_hash_sha256, mime_type, created_at, origin, producing_step_id
 		) VALUES (
 			$1, $2, $3, $4, $5, $6,
-			$7, $8, $9, $10, $11, $12
+			$7, $8, $9, $10, $11, $12, $13
 		)
 	`,
 		artifact.ID, artifact.ProjectID, artifact.ExecutionID, artifact.TaskID, artifact.Name, artifact.ArtifactClass,
 		artifact.StoragePath, artifact.SizeBytes, artifact.ContentHashSHA256, artifact.MimeType, artifact.CreatedAt,
-		artifact.Origin,
+		artifact.Origin, artifact.ProducingStepID,
 	)
 	if err != nil {
 		return mapDBError(err)
@@ -77,7 +77,7 @@ func (r *ArtifactRepository) UpdateTaskID(ctx context.Context, artifactID, taskI
 func (r *ArtifactRepository) Get(ctx context.Context, id string) (*persistence.Artifact, error) {
 	row := r.db.QueryRowContext(ctx, `
 		SELECT id, project_id, execution_id, task_id, name, artifact_class,
-		       storage_path, size_bytes, content_hash_sha256, mime_type, created_at, origin
+		       storage_path, size_bytes, content_hash_sha256, mime_type, created_at, origin, producing_step_id
 		FROM artifacts
 		WHERE id = $1
 	`, id)
@@ -88,7 +88,7 @@ func (r *ArtifactRepository) Get(ctx context.Context, id string) (*persistence.A
 func (r *ArtifactRepository) GetByHash(ctx context.Context, hash string) (*persistence.Artifact, error) {
 	row := r.db.QueryRowContext(ctx, `
 		SELECT id, project_id, execution_id, task_id, name, artifact_class,
-		       storage_path, size_bytes, content_hash_sha256, mime_type, created_at, origin
+		       storage_path, size_bytes, content_hash_sha256, mime_type, created_at, origin, producing_step_id
 		FROM artifacts
 		WHERE content_hash_sha256 = $1
 	`, hash)
@@ -99,7 +99,7 @@ func (r *ArtifactRepository) GetByHash(ctx context.Context, hash string) (*persi
 func (r *ArtifactRepository) List(ctx context.Context, filter persistence.ArtifactFilter) ([]*persistence.Artifact, error) {
 	query := `
 		SELECT id, project_id, execution_id, task_id, name, artifact_class,
-		       storage_path, size_bytes, content_hash_sha256, mime_type, created_at, origin
+		       storage_path, size_bytes, content_hash_sha256, mime_type, created_at, origin, producing_step_id
 		FROM artifacts
 		WHERE 1=1
 	`
@@ -177,7 +177,7 @@ func scanArtifact(scanner interface {
 	err := scanner.Scan(
 		&artifact.ID, &artifact.ProjectID, &executionID, &taskID, &artifact.Name, &artifact.ArtifactClass,
 		&artifact.StoragePath, &sizeBytes, &contentHash, &mimeType, &artifact.CreatedAt,
-		&artifact.Origin,
+		&artifact.Origin, &artifact.ProducingStepID,
 	)
 	if err != nil {
 		if err == sql.ErrNoRows {

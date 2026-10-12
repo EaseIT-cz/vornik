@@ -1,7 +1,7 @@
 // Package email implements vornik's email conversation channel —
 // IMAP polling for inbound, SMTP for outbound (slice 1 of the
-// email-ingress rollout; see https://docs.vornik.io §Inbound integrations
-// and https://docs.vornik.io).
+// email-ingress rollout; see
+// https://docs.vornik.io).
 //
 // Slice 1 scope (today):
 //

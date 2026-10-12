@@ -649,14 +649,14 @@ func ValidateReleaseRunPlan(pre PreRegistration, arm ArmFields, taskTiers map[st
 // metric to pinned_case_validation and there is no other. That is the correct
 // state and matches this package's standing position that shipping code which
 // refuses beats blessing numbers it cannot justify. Grounding the numerator in
-// execution is filed as a feature in https://docs.vornik.io; when it lands, this
+// execution is Enterprise tracker issue #157; when it lands, this
 // refusal is what should be deleted.
 const ungroundedNumeratorRefusal = "pinned_case_validation cannot decide a release: its " +
 	"numerator is the SELF-REPORT of the agent under test (testing.cases[] is verifier-emitted " +
 	"and nothing in the scoring path executes the tests), and across 200 task runs and 2,585 " +
 	"case rows no case was ever reported failed. Its denominator is analyst-authored and varied " +
 	"8 to 18 on one task. Tripwire outcomes above still decide; the scored comparison does not. " +
-	"See https://docs.vornik.io, grounding the pinned-case numerator in execution"
+	"See Enterprise tracker issue #157, grounding the pinned-case numerator in execution"
 
 // EvaluateReleaseGate validates the evidence, lets the tripwire tier decide,
 // and then REFUSES rather than returning a scored verdict. See

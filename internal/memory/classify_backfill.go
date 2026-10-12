@@ -47,7 +47,8 @@ type ClassifyBackfiller struct {
 	// is reached. It resets on an empty page so newly-ingested rows are picked up.
 	// Not persisted: a restart re-walks from the oldest, which costs one wasted
 	// page and is self-correcting. The complete fix is a durable per-row
-	// "attempted" marker, which needs a migration and is noted in the backlog.
+	// "attempted" marker, which needs a migration (Enterprise tracker issue
+	// #330).
 	offset int
 
 	// projectOffsets is the equivalent cursor for operator-driven,

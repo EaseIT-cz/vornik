@@ -484,7 +484,10 @@ func TestEvaluateReleaseGate_RefusesAnUngroundedNumerator(t *testing.T) {
 	}
 	// The reason has to say WHY, or an operator reads it as one more missing
 	// artifact and goes looking for a calibration pass to run.
-	for _, want := range []string{"SELF-REPORT", "numerator", "https://docs.vornik.io"} {
+	// audit 2026-10-12: the reason pointed at a https://docs.vornik.io item that the
+	// 2026-10-08 bulk move turned into issue #157, a dangling pointer for the
+	// operator reading it; it must name the issue.
+	for _, want := range []string{"SELF-REPORT", "numerator", "issue #157"} {
 		if !strings.Contains(got.Reason, want) {
 			t.Fatalf("Reason = %q, want it to name %q", got.Reason, want)
 		}

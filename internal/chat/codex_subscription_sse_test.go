@@ -261,7 +261,7 @@ func TestParseCodexResponsesSSE_ScannerReadError(t *testing.T) {
 	assert.Contains(t, err.Error(), assert.AnError.Error())
 }
 
-// BACKLOG 2026-10-03 (LLD 09 s8.4): Codex cut-offs were reported as "stop" and passed as answers.
+// 2026-10-03 (LLD 09 s8.4; Enterprise tracker issue #100 item ii, shipped 756a60577): Codex cut-offs were reported as "stop" and passed as answers.
 func TestChooseFinishReason(t *testing.T) {
 	tests := []struct {
 		name         string
@@ -282,7 +282,7 @@ func TestChooseFinishReason(t *testing.T) {
 	}
 }
 
-// BACKLOG 2026-10-03 (LLD 09 s8.4): Codex cut-offs were reported as "stop" and passed as answers.
+// 2026-10-03 (LLD 09 s8.4; Enterprise tracker issue #100 item ii, shipped 756a60577): Codex cut-offs were reported as "stop" and passed as answers.
 func TestCodexResponsesSSE_IncompleteMaxOutputTokensIsLength(t *testing.T) {
 	sse := "event: response.output_text.delta\n" +
 		`data: {"type":"response.output_text.delta","delta":"partial"}` + "\n\n" +

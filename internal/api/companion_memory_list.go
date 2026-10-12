@@ -57,7 +57,6 @@ type MemoryListEntry struct {
 const (
 	memoryListDefaultLimit = 20
 	memoryListMaxLimit     = 100
-	memoryListShortID      = 12
 	// memoryListSnippetBytes matches recent_memory's bound.
 	memoryListSnippetBytes = recentMemorySnippetChars
 )
@@ -191,13 +190,11 @@ func (s *Server) companionToolMemoryList(ctx context.Context, key *persistence.A
 }
 
 func shapeMemoryListItem(e MemoryListEntry, now time.Time) memoryListItem {
-	short := e.ChunkID
-	if len(short) > memoryListShortID {
-		short = short[:memoryListShortID]
-	}
 	it := memoryListItem{
-		ID:            e.ChunkID,
-		ShortID:       short,
+		ID: e.ChunkID,
+		// Unique for every id shape (design 22, "Short ids for every id
+		// shape", audit 2026-10-12): a prefix collided for correction ids.
+		ShortID:       memory.ShortID(e.ChunkID),
 		Source:        strings.TrimSpace(memory.StripMirrorTokens(e.SourceName)),
 		Origin:        memory.OriginOf(e.TaskID, e.SourceName, e.Content),
 		ContentClass:  e.ContentClass,

@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"vornik.io/vornik/internal/api"
+	"vornik.io/vornik/internal/config"
 	"vornik.io/vornik/internal/persistence"
 )
 
@@ -48,6 +49,7 @@ type stubUIFixItDoctor struct {
 	openingErr     error
 	scopeProject   string
 	scopeOK        bool
+	scopeKind      string
 	scopeErr       error
 	lastArgs       []string
 
@@ -78,11 +80,11 @@ func (s *stubUIFixItDoctor) OpeningSummary(_ context.Context, _, _, _ string) (s
 	return s.openingSummary, nil
 }
 
-func (s *stubUIFixItDoctor) SessionScope(_ context.Context, _, _ string) (string, bool, error) {
+func (s *stubUIFixItDoctor) SessionScope(_ context.Context, _, _ string) (string, string, bool, error) {
 	if s.scopeErr != nil {
-		return "", false, s.scopeErr
+		return "", "", false, s.scopeErr
 	}
-	return s.scopeProject, s.scopeOK, nil
+	return s.scopeProject, s.scopeKind, s.scopeOK, nil
 }
 
 func (s *stubUIFixItDoctor) Apply(_ context.Context, sessionID, operatorID string, actionIndex int, secretValue string) (*api.FixItApplyResult, error) {
@@ -775,13 +777,21 @@ func TestFixItDoctorRollback_HappyPath(t *testing.T) {
 }
 
 func TestFixItCallerIsAdmin(t *testing.T) {
+	srv := newFixItUIAuthzServer(&stubUIFixItDoctor{})
 	admin := authDisabledUIRequest(httptest.NewRequest(http.MethodGet, "/", nil))
-	if !fixItCallerIsAdmin(admin) {
-		t.Error("an auth-disabled (unscoped) request should be admin-class")
+	if !srv.fixItCallerIsAdmin(admin) {
+		t.Error("an auth-disabled request should be admin-class")
 	}
 	scoped := scopedIdentityReq(httptest.NewRequest(http.MethodGet, "/", nil))
-	if fixItCallerIsAdmin(scoped) {
+	if srv.fixItCallerIsAdmin(scoped) {
 		t.Error("a project-scoped request should NOT be admin-class")
+	}
+	// audit 2026-10-12, finding C residual: unscoped is not admin-class.
+	if srv.fixItCallerIsAdmin(fixItUIKeyReq(t, httptest.NewRequest(http.MethodGet, "/", nil), fixItUIPlainKey)) {
+		t.Error("a plain static (unscoped) key should NOT be admin-class")
+	}
+	if !srv.fixItCallerIsAdmin(fixItUIKeyReq(t, httptest.NewRequest(http.MethodGet, "/", nil), fixItUIAdminKey)) {
+		t.Error("an admin.allowed_keys key should be admin-class")
 	}
 }
 
@@ -854,6 +864,204 @@ func TestSafeFixItLinkOutURL(t *testing.T) {
 	for url, want := range cases {
 		if got := safeFixItLinkOutURL(url); got != want {
 			t.Errorf("safeFixItLinkOutURL(%q) = %v, want %v", url, got, want)
+		}
+	}
+}
+
+// audit 2026-10-12, finding C residual (doctor design §E8.8): the panel's
+// daemon-scope check was "unscoped", not admin-class, so a plain static
+// api.api_keys key passed it. These requests go through the real
+// AuthMiddleware with a plain static key, a project-scoped static key and an
+// admin.allowed_keys key.
+const (
+	fixItUIPlainKey   = "fixit-ui-plain-static-key"
+	fixItUIProjectKey = "fixit-ui-project-static-key"
+	fixItUIAdminKey   = "fixit-ui-admin-key"
+)
+
+var fixItUIAdminCfg = config.AdminConfig{Enabled: true, AllowedKeys: []string{fixItUIAdminKey}}
+
+func fixItUIKeyReq(t *testing.T, req *http.Request, key string) *http.Request {
+	t.Helper()
+	req.Header.Set("Authorization", "Bearer "+key)
+	var captured *http.Request
+	api.AuthMiddleware(api.AuthConfig{
+		Enabled: true,
+		StaticAPIKeys: map[string][]string{
+			fixItUIPlainKey:   {},
+			fixItUIProjectKey: {"proj-mine"},
+			fixItUIAdminKey:   {},
+		},
+		AdminKeyChecker: fixItUIAdminCfg.IsAdminKey,
+	})(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+		captured = r
+	})).ServeHTTP(httptest.NewRecorder(), req)
+	if captured == nil {
+		t.Fatalf("auth middleware refused key %q", key)
+	}
+	return captured
+}
+
+func newFixItUIAuthzServer(stub *stubUIFixItDoctor) *Server {
+	return NewServer(WithFixItDoctor(stub), WithOperatorCapability(fixItUIAdminCfg))
+}
+
+func TestFixItDoctorPanel_StaticKeyIsNotAdminClass(t *testing.T) {
+	for _, tc := range []struct {
+		key  string
+		want bool
+	}{{fixItUIPlainKey, false}, {fixItUIProjectKey, false}, {fixItUIAdminKey, true}} {
+		stub := &stubUIFixItDoctor{openingSummary: "DAEMON-READINESS-SUMMARY"}
+		srv := newFixItUIAuthzServer(stub)
+		req := fixItUIKeyReq(t, httptest.NewRequest(http.MethodGet, "/ui/fixit/degraded_feature/auth", nil), tc.key)
+		rec := httptest.NewRecorder()
+		srv.FixItDoctorPanel(rec, req, "degraded_feature", "auth")
+		if rec.Code != http.StatusOK {
+			t.Fatalf("%s: expected 200, got %d", tc.key, rec.Code)
+		}
+		if got := strings.Contains(rec.Body.String(), "DAEMON-READINESS-SUMMARY"); got != tc.want {
+			t.Errorf("%s: daemon-scope opening summary rendered=%v, want %v", tc.key, got, tc.want)
+		}
+	}
+}
+
+func TestFixItDoctorApply_StaticKeyIsNotAdminClass(t *testing.T) {
+	for _, tc := range []struct {
+		key  string
+		want int
+	}{{fixItUIPlainKey, http.StatusNotFound}, {fixItUIAdminKey, http.StatusOK}} {
+		stub := &stubUIFixItDoctor{scopeProject: "", scopeOK: true}
+		srv := newFixItUIAuthzServer(stub)
+		form := url.Values{"session_id": {"fix-1"}}
+		req := httptest.NewRequest(http.MethodPost, "/ui/fixit/failed_reload/r/actions/0/apply", strings.NewReader(form.Encode()))
+		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		req = fixItUIKeyReq(t, req, tc.key)
+		rec := httptest.NewRecorder()
+		srv.FixItDoctorApply(rec, req, "failed_reload", "r", 0)
+		if rec.Code != tc.want {
+			t.Errorf("%s: apply on a daemon-scope session got %d, want %d", tc.key, rec.Code, tc.want)
+		}
+		if (len(stub.applyArgs) != 0) != (tc.want == http.StatusOK) {
+			t.Errorf("%s: Apply reached=%v", tc.key, len(stub.applyArgs) != 0)
+		}
+	}
+}
+
+// A NEW daemon-scope session on the message route: before the fix the UI had
+// no daemon-scope gate here at all (uiRequireProjectScope passes an empty
+// project), so even a project-scoped key opened one.
+func TestFixItDoctorMessage_DaemonScopeNeedsAdminClass(t *testing.T) {
+	for _, tc := range []struct {
+		name, key, kind, project string
+		want                     int
+	}{
+		{"plain key, no project", fixItUIPlainKey, "failed_task", "", http.StatusNotFound},
+		{"project key, no project", fixItUIProjectKey, "failed_task", "", http.StatusNotFound},
+		{"project key, degraded_feature in own project", fixItUIProjectKey, "degraded_feature", "proj-mine", http.StatusNotFound},
+		{"project key, failed_reload in own project", fixItUIProjectKey, "failed_reload", "proj-mine", http.StatusNotFound},
+		{"project key, failed_task in own project", fixItUIProjectKey, "failed_task", "proj-mine", http.StatusOK},
+		{"admin key, no project", fixItUIAdminKey, "degraded_feature", "", http.StatusOK},
+		{"auth off, no project", "", "degraded_feature", "", http.StatusOK},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			stub := &stubUIFixItDoctor{}
+			srv := newFixItUIAuthzServer(stub)
+			form := url.Values{"project": {tc.project}, "message": {"why"}}
+			req := httptest.NewRequest(http.MethodPost, "/ui/fixit/"+tc.kind+"/x/message", strings.NewReader(form.Encode()))
+			req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+			if tc.key == "" {
+				req = authDisabledUIRequest(req)
+			} else {
+				req = fixItUIKeyReq(t, req, tc.key)
+			}
+			rec := httptest.NewRecorder()
+			srv.FixItDoctorMessage(rec, req, tc.kind, "x")
+			if rec.Code != tc.want {
+				t.Fatalf("got %d, want %d: %s", rec.Code, tc.want, rec.Body.String())
+			}
+			if (stub.lastArgs != nil) != (tc.want == http.StatusOK) {
+				t.Fatalf("Converse reached=%v", stub.lastArgs != nil)
+			}
+		})
+	}
+}
+
+// audit 2026-10-12, finding C residual (doctor design §E8.8): a resumed
+// session is classified by its row's KIND as well as its project, so a
+// degraded_feature / failed_reload session opened with a project id is
+// daemon-scope on message, apply and rollback.
+func TestFixItDoctor_ResumedDaemonKindNeedsAdminClass(t *testing.T) {
+	post := func(path string, form url.Values, key string) *http.Request {
+		req := httptest.NewRequest(http.MethodPost, path, strings.NewReader(form.Encode()))
+		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		return fixItUIKeyReq(t, req, key)
+	}
+	routes := []struct {
+		name string
+		call func(srv *Server, key string) int
+	}{
+		{"message", func(srv *Server, key string) int {
+			rec := httptest.NewRecorder()
+			// The path kind is failed_task: the gate must use the session
+			// row's kind, never the path's (review-20261012-db5f F1).
+			srv.FixItDoctorMessage(rec, post("/ui/fixit/failed_task/x/message", url.Values{"session_id": {"fix-1"}, "message": {"again"}}, key), "failed_task", "x")
+			return rec.Code
+		}},
+		{"apply", func(srv *Server, key string) int {
+			rec := httptest.NewRecorder()
+			srv.FixItDoctorApply(rec, post("/ui/fixit/failed_task/x/actions/0/apply", url.Values{"session_id": {"fix-1"}}, key), "failed_task", "x", 0)
+			return rec.Code
+		}},
+		{"rollback", func(srv *Server, key string) int {
+			rec := httptest.NewRecorder()
+			srv.FixItDoctorRollback(rec, post("/ui/fixit/failed_task/x/actions/rollback", url.Values{"session_id": {"fix-1"}, "proposal_id": {"p1"}}, key), "failed_task", "x")
+			return rec.Code
+		}},
+	}
+	for _, rt := range routes {
+		for _, tc := range []struct {
+			kind, key string
+			want      int
+		}{
+			{"degraded_feature", fixItUIProjectKey, http.StatusNotFound},
+			{"failed_reload", fixItUIProjectKey, http.StatusNotFound},
+			{"degraded_feature", fixItUIPlainKey, http.StatusNotFound},
+			{"degraded_feature", fixItUIAdminKey, http.StatusOK},
+			{"failed_task", fixItUIProjectKey, http.StatusOK},
+			{"red_integration", fixItUIProjectKey, http.StatusOK},
+		} {
+			stub := &stubUIFixItDoctor{scopeProject: "proj-mine", scopeKind: tc.kind, scopeOK: true}
+			if got := rt.call(newFixItUIAuthzServer(stub), tc.key); got != tc.want {
+				t.Errorf("%s %s %s: got %d, want %d", rt.name, tc.kind, tc.key, got, tc.want)
+			}
+			reached := stub.lastArgs != nil || stub.applyArgs != nil || stub.rollbackArgs != nil
+			if reached != (tc.want == http.StatusOK) {
+				t.Errorf("%s %s %s: doctor reached=%v", rt.name, tc.kind, tc.key, reached)
+			}
+		}
+	}
+}
+
+// The panel GET does not resume a daemon-scope session's transcript for a
+// non-admin caller (it renders fresh, as for a foreign session id).
+func TestFixItDoctorPanel_ResumeDaemonKindNeedsAdminClass(t *testing.T) {
+	for _, tc := range []struct {
+		key  string
+		want bool
+	}{{fixItUIProjectKey, false}, {fixItUIAdminKey, true}} {
+		req := fixItUIKeyReq(t, httptest.NewRequest(http.MethodGet, "/ui/fixit/degraded_feature/auth?session=fix-1", nil), tc.key)
+		reader := &fakeFixItSessionReader{rows: map[string]*persistence.FixItSession{}}
+		srv := NewServer(WithFixItDoctor(&stubUIFixItDoctor{}), WithFixItSessionReader(reader), WithOperatorCapability(fixItUIAdminCfg))
+		op := srv.operatorIDForRequest(req)
+		if op == "" {
+			t.Fatalf("%s: no operator id", tc.key)
+		}
+		reader.rows["fix-1"] = &persistence.FixItSession{ID: "fix-1", OperatorID: op, FailureKind: "degraded_feature",
+			FailureRefID: "auth", ProjectID: "proj-mine", Transcript: []byte(`[{"role":"assistant","content":"DAEMON-TRANSCRIPT"}]`)}
+		rec := httptest.NewRecorder()
+		srv.FixItDoctorPanel(rec, req, "degraded_feature", "auth")
+		if got := strings.Contains(rec.Body.String(), "DAEMON-TRANSCRIPT"); got != tc.want {
+			t.Errorf("%s: resumed transcript rendered=%v, want %v (code %d)", tc.key, got, tc.want, rec.Code)
 		}
 	}
 }

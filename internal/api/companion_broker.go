@@ -88,9 +88,9 @@ const (
 
 // Broker error classes — the closed enum `status` and `result` share (§5.2).
 const (
-	brokerErrFailed         = "failed"
-	brokerErrTimeout        = "timeout"
-	brokerErrBudget         = "budget"
+	brokerErrFailed         = livepubsub.BrokerClassFailed
+	brokerErrTimeout        = livepubsub.BrokerClassTimeout
+	brokerErrBudget         = livepubsub.BrokerClassBudget
 	brokerErrEgressNoOutput = "egress_no_output"
 	brokerErrEgressOversize = "egress_oversize"
 	brokerErrEgressSchema   = "egress_schema"
@@ -533,11 +533,22 @@ type brokerEgress struct {
 // resolveBrokerEgress finds, reads and validates the declared egress
 // artifact. It never returns task content through errorClass.
 func (s *Server) resolveBrokerEgress(ctx context.Context, task *persistence.Task, wf *registry.Workflow) brokerEgress {
-	if s.artifactRepo == nil {
+	if s.artifactRepo == nil || s.executionRepo == nil {
 		return brokerEgress{errorClass: brokerErrEgressNoOutput}
 	}
 	taskID := task.ID
-	arts, err := s.artifactRepo.List(ctx, persistence.ArtifactFilter{TaskID: &taskID, PageSize: 200})
+	// ExecutionRepository.List guarantees newest-first, so PageSize 1 selects
+	// the latest attempt; a failed newer attempt must not expose an older answer.
+	execs, err := s.executionRepo.List(ctx, persistence.ExecutionFilter{TaskID: &taskID, PageSize: 1})
+	if err != nil || len(execs) == 0 || execs[0] == nil {
+		return brokerEgress{errorClass: brokerErrEgressNoOutput}
+	}
+	executionID := execs[0].ID
+	answerSteps := make(map[string]bool)
+	for _, id := range wf.AnswerSteps() {
+		answerSteps[id] = true
+	}
+	arts, err := s.artifactRepo.List(ctx, persistence.ArtifactFilter{TaskID: &taskID, ExecutionID: &executionID, PageSize: 200})
 	if err != nil {
 		s.logger.Warn().Err(err).Str("task_id", task.ID).Msg("broker egress: artifact listing failed")
 		return brokerEgress{errorClass: brokerErrEgressNoOutput}
@@ -545,6 +556,9 @@ func (s *Server) resolveBrokerEgress(ctx context.Context, task *persistence.Task
 	var pick *persistence.Artifact
 	for _, a := range arts {
 		if a == nil || a.ArtifactClass != persistence.ArtifactClassOutput {
+			continue
+		}
+		if a.ExecutionID == nil || *a.ExecutionID != executionID || !answerSteps[a.ProducingStepID] {
 			continue
 		}
 		if executor.OriginalArtifactName(a.Name) != wf.Broker.Egress.Output {

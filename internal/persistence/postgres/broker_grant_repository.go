@@ -182,7 +182,9 @@ func (r *BrokerGrantRepository) ListForAction(ctx context.Context, projectID, wo
 }
 
 // List implements persistence.BrokerGrantRepository: for the filter's scope,
-// every live grant first (uncapped), then the f.Limit most recent non-live
+// the live grants first (newest first, at most f.LiveCap, default
+// BrokerGrantLiveListCap; over it the first LiveCap come back with
+// ErrBrokerGrantLiveTruncated), then the f.Limit most recent non-live
 // ones, appended in that order and never re-sorted (GitHub #93: one query
 // ordered by created_at with LIMIT 200 hid an old live grant behind newer
 // dead ones).

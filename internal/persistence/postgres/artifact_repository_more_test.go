@@ -23,7 +23,7 @@ func newArtifactRepo(t *testing.T) (*ArtifactRepository, sqlmock.Sqlmock, func()
 func artifactRows() *sqlmock.Rows {
 	return sqlmock.NewRows([]string{
 		"id", "project_id", "execution_id", "task_id", "name", "artifact_class",
-		"storage_path", "size_bytes", "content_hash_sha256", "mime_type", "created_at", "origin",
+		"storage_path", "size_bytes", "content_hash_sha256", "mime_type", "created_at", "origin", "producing_step_id",
 	})
 }
 
@@ -34,7 +34,7 @@ func TestArtifactRepositoryGetAndGetByHash(t *testing.T) {
 	created := time.Date(2026, 5, 14, 12, 0, 0, 0, time.UTC)
 	rows := artifactRows().AddRow(
 		"art-1", "proj-a", "exec-1", "task-1", "output.json", persistence.ArtifactClassOutput,
-		"/tmp/output.json", int64(42), "sha256", "application/json", created, "task_output",
+		"/tmp/output.json", int64(42), "sha256", "application/json", created, "task_output", "answer",
 	)
 	mock.ExpectQuery(regexp.QuoteMeta("SELECT id, project_id, execution_id, task_id, name, artifact_class")).
 		WithArgs("art-1").
@@ -50,10 +50,13 @@ func TestArtifactRepositoryGetAndGetByHash(t *testing.T) {
 	if got.TaskID == nil || *got.TaskID != "task-1" || got.SizeBytes == nil || *got.SizeBytes != 42 {
 		t.Fatalf("Get() nullable fields = %#v", got)
 	}
+	if got.ProducingStepID != "answer" {
+		t.Fatalf("Get() producing step = %q", got.ProducingStepID)
+	}
 
 	rows = artifactRows().AddRow(
 		"art-2", "proj-a", nil, nil, "log.txt", persistence.ArtifactClassLog,
-		"/tmp/log.txt", nil, nil, nil, created, "unknown",
+		"/tmp/log.txt", nil, nil, nil, created, "unknown", "",
 	)
 	mock.ExpectQuery(regexp.QuoteMeta("SELECT id, project_id, execution_id, task_id, name, artifact_class")).
 		WithArgs("hash-2").
@@ -101,7 +104,7 @@ func TestArtifactRepositoryListFiltersAndPagination(t *testing.T) {
 		WithArgs(projectID, executionID, taskID, 10, 20).
 		WillReturnRows(artifactRows().AddRow(
 			"art-1", projectID, executionID, taskID, "output.json", persistence.ArtifactClassOutput,
-			"/tmp/output.json", int64(42), "sha256", "application/json", created, "task_output",
+			"/tmp/output.json", int64(42), "sha256", "application/json", created, "task_output", "",
 		))
 
 	got, err := repo.List(context.Background(), persistence.ArtifactFilter{

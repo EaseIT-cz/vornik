@@ -484,13 +484,16 @@ type FixItDoctor interface {
 	// is nothing to summarise; a non-nil error is a grounding-assembly
 	// failure the caller should log and degrade past (render the blank panel).
 	OpeningSummary(ctx context.Context, failureKind, failureRefID, projectID string) (string, error)
-	// SessionScope resolves an EXISTING session's own project_id, for
-	// the handler's scope gate — called BEFORE Converse so a caller
-	// can never widen scope by pairing a real session_id with a
-	// different project_id in the request body. ok=false when the
+	// SessionScope resolves an EXISTING session's own project_id and
+	// failure kind, for the handler's scope gate — called BEFORE
+	// Converse so a caller can never widen scope by pairing a real
+	// session_id with a different project_id in the request body. The
+	// kind lets the gate classify a resumed degraded_feature /
+	// failed_reload session as daemon-scope even when it carries a
+	// project (doctor design §E8.8, FixItDaemonScope). ok=false when the
 	// session doesn't exist or isn't owned by operatorID (handler
 	// treats identically to "not found" — no existence leak).
-	SessionScope(ctx context.Context, sessionID, operatorID string) (projectID string, ok bool, err error)
+	SessionScope(ctx context.Context, sessionID, operatorID string) (projectID, failureKind string, ok bool, err error)
 	// Apply dispatches ONE already-proposed action from sessionID's last
 	// envelope (task 3.3, fix-it-doctor-design.md §5.3/§5.4) —
 	// actionIndex indexes into that envelope's Actions slice. secretValue
@@ -498,7 +501,8 @@ type FixItDoctor interface {
 	// ignored for every other kind. Callers MUST scope-gate exactly like
 	// Converse: resolve the session's project via SessionScope first,
 	// check RequestAllowsProject (404 on mismatch), and additionally gate
-	// a daemon-scope session (empty project) to an admin caller before
+	// a daemon-scope session (FixItDaemonScope over the session's kind and
+	// project) to an admin-class caller (IsAdminClassRequest) before
 	// ever calling Apply — Apply itself does not re-derive HTTP-level
 	// caller identity/admin-ness.
 	Apply(ctx context.Context, sessionID, operatorID string, actionIndex int, secretValue string) (*FixItApplyResult, error)
@@ -585,6 +589,13 @@ type ForkExecutorResult struct {
 type Server struct {
 	forgeIssueResolver ForgeIssueResolver
 	forgeIssueBudget   apiBudgetTracker
+	// forgeIssueTaskLocks serialise each task's forge issue calls (striped
+	// by task id), so the one-repo check and its close cannot interleave
+	// with another forge call of the same task (audit 2026-10-12, C).
+	forgeIssueTaskLocks [forgeIssueLockStripes]sync.Mutex
+	// forgeIssueMarshalForTest replaces the Forge result encoder in tests
+	// only (audit 2026-10-12: the applied-write encode-failure seam).
+	forgeIssueMarshalForTest func(any) ([]byte, error)
 
 	logger zerolog.Logger
 	// mcpOAuth serves the MCP OAuth connect endpoints. Nil = the endpoints

@@ -223,14 +223,15 @@ func (s *Server) ExecutionLive(w http.ResponseWriter, r *http.Request, execution
 	ctx, cancel := context.WithTimeout(r.Context(), lifetime)
 	defer cancel()
 
-	// Pull the client hello with a brief read deadline. Absence
-	// or malformed JSON falls back to the query cursor, then 0.
-	hello := readLiveHello(ctx, conn, parseLiveLastSeqFromQuery(r))
-
-	// The protocol accepts no application messages after the cursor hello.
-	// Keep reading control frames so Ping can observe browser pongs and
-	// disconnects promptly cancel the stream and release its subscription.
-	ctx = conn.CloseRead(ctx)
+	// Wait briefly for the client hello. Absence or malformed JSON falls
+	// back to the query cursor, then 0, and the stream continues (audit
+	// 2026-10-12 finding B: the wait must not close the connection). The
+	// returned context ends when the client disconnects or sends a second
+	// application frame (issue #35); control frames keep being read so Ping
+	// observes pongs.
+	hello, readCtx, stopRead := startLiveReader(ctx, conn, parseLiveLastSeqFromQuery(r))
+	defer stopRead()
+	ctx = readCtx
 
 	events, unsub, err := s.liveSub.Subscribe(executionID, liveSubscribeFromSeq(hello.LastSeq))
 	if err != nil {
@@ -468,23 +469,53 @@ func liveSubscribeFromSeq(lastSeq int64) int64 {
 	return lastSeq + 1
 }
 
-// readLiveHello pulls the client's first frame (a JSON object
-// with last_seq) with a 2-second read deadline. Returns a
-// zero-value hello (full replay) on absence or parse error —
-// older clients that don't know about the protocol still see
-// the live stream from the beginning of the ring.
-func readLiveHello(ctx context.Context, conn *websocket.Conn, fallbackLastSeq int64) liveClientHello {
-	readCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
-	defer cancel()
-	_, body, err := conn.Read(readCtx)
-	if err != nil {
-		return liveClientHello{LastSeq: fallbackLastSeq}
+// liveHelloWait is how long the handler waits for the client's hello before
+// falling back to ?last_seq=, then 0. A variable only so tests can shorten it.
+var liveHelloWait = 2 * time.Second
+
+// startLiveReader owns the connection's read side for the whole stream (live
+// design, Change 2026-10-12, L2). One goroutine reads the first frame under
+// the stream context, with no deadline of its own: in coder/websocket an
+// expired read context closes the connection, which is how a client that sent
+// no hello used to be dropped at 2 s (audit 2026-10-12, finding B). The
+// handler waits for that frame up to liveHelloWait; on expiry it uses the
+// fallback cursor and the stream proceeds. After the first frame the same
+// goroutine hands over to conn.CloseRead, which keeps reading control frames
+// and refuses any later data frame (issue #35). A hello that arrives after the
+// window is read and ignored: the cursor is already fixed. A read error before
+// the hello (the client went away) cancels the returned context.
+//
+// Exactly one reader is active at any time: conn.Read, then CloseRead's.
+// stop cancels the context and so ends the goroutine.
+func startLiveReader(ctx context.Context, conn *websocket.Conn, fallbackLastSeq int64) (liveClientHello, context.Context, context.CancelFunc) {
+	readCtx, cancel := context.WithCancel(ctx)
+	first := make(chan []byte, 1)
+	go func() {
+		defer cancel()
+		_, body, err := conn.Read(readCtx)
+		if err != nil {
+			return
+		}
+		first <- body
+		<-conn.CloseRead(readCtx).Done()
+	}()
+	timer := time.NewTimer(liveHelloWait)
+	defer timer.Stop()
+	select {
+	case body := <-first:
+		return parseLiveHello(body, fallbackLastSeq), readCtx, cancel
+	case <-timer.C:
+	case <-readCtx.Done():
 	}
+	return liveClientHello{LastSeq: fallbackLastSeq}, readCtx, cancel
+}
+
+// parseLiveHello decodes the client's first frame (a JSON object with
+// last_seq). A body that is not that object falls back to the query cursor;
+// a negative cursor means a full replay.
+func parseLiveHello(body []byte, fallbackLastSeq int64) liveClientHello {
 	var hello liveClientHello
-	if jerr := json.Unmarshal(body, &hello); jerr != nil {
-		// Tolerant: also accept ?last_seq=N on the upgrade URL
-		// when the client can't ship a body before the server
-		// expects it.
+	if err := json.Unmarshal(body, &hello); err != nil {
 		return liveClientHello{LastSeq: fallbackLastSeq}
 	}
 	if hello.LastSeq < 0 {

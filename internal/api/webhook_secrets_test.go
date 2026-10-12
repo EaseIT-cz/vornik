@@ -21,7 +21,7 @@ import (
 
 // testWebhookRegistryWithAllowSecrets is a copy of testWebhookRegistry
 // that flips allow_secrets on the github source. Used to verify the
-// per-source opt-out pathway from BACKLOG.md line 346.
+// per-source opt-out pathway (secrets Phase 2, shipped 1e9e0ef49).
 func testWebhookRegistryWithAllowSecrets(t *testing.T) *registry.Registry {
 	t.Helper()
 	root := t.TempDir()

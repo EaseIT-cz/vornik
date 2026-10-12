@@ -520,8 +520,8 @@ func shortRev(rev string) string {
 // for display. Two identical strings, reported as a difference.
 //
 // A control that always alarms is a control that gets ignored, which is worse
-// than not having it: this check is what the packaged-EE backlog item relies
-// on to make a half-applied release visible.
+// than not having it: this check is what the packaged-EE image work (closed
+// 2026-09-02, 23deeea71) relies on to make a half-applied release visible.
 //
 // Prefix comparison, not equality, because the shorter form is by construction
 // a prefix of the longer. The dirty marker is stripped first — a dirty daemon

@@ -101,3 +101,15 @@ func TestClassifyFileEvent(t *testing.T) {
 		t.Fatalf("replaced file event itself is A; keys decide: %s", got.Class)
 	}
 }
+
+// audit 2026-10-12 finding C: the operator's acceptance of unapproved Forge
+// issue writes must stay at the most restrictive class, so the assistant can
+// never turn it on as tuning.
+func TestClassify_ForgeIssueWriteAcceptanceIsE(t *testing.T) {
+	for _, key := range []string{"forge.issues.writes_without_approval", "forge.issues.close_enabled", "forge.issues.labels_enabled"} {
+		bc := ClassifyChanges([]Change{{File: "projects/x.yaml", Key: key, Before: "false", After: "true"}})
+		if bc.Class != ClassE {
+			t.Errorf("%s: class %s, want E: %v", key, bc.Class, bc.Reasons())
+		}
+	}
+}

@@ -93,8 +93,9 @@ func TestResultHasExecutionToolCall(t *testing.T) {
 // The gate now requires the call to have produced something (a run that
 // printed nothing is no evidence a check ran) and, for run_shell, that the
 // command is not purely trivial. It is NOT a trust boundary — the agent
-// authors toolAudit inside the container (https://docs.vornik.io, "Do not let the
-// toolAudit fold be mistaken for a trust boundary") — it raises the cost of
+// authors toolAudit inside the container (the standing rule "Do not let the
+// toolAudit fold be mistaken for a trust boundary", retired from the backlog
+// 2026-10-06 in f044e43ee) — it raises the cost of
 // a sham from one token to a deliberate forgery.
 func TestResultHasExecutionToolCall_RequiresSubstantiveExecution(t *testing.T) {
 	cases := []struct {

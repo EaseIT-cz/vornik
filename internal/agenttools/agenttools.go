@@ -230,8 +230,10 @@ var UngatedPrefixes = []Prefix{{
 		"arrive identically), and re-implementing the daemon's four-shape matcher in jq " +
 		"would put a second copy of one security predicate in a second language — the " +
 		"anti-pattern that produced the 2026.8.1 bypass. The residual gap (both gates " +
-		"absent in a daemon resolution-gap state) is filed, not hidden: see the backlog " +
-		"and agent runtime contract LLD §7.1",
+		"absent in a daemon resolution-gap state) was measured rather than reasoned: the " +
+		"only bucket a container gate could enforce was empty in production " +
+		"(2026-09-19), so the container does not gate mcp__*; see agent runtime " +
+		"contract LLD §7.1",
 }}
 
 // mcpToolPrefix marks a tool name as MCP-provided. MCP tool names are

@@ -18,6 +18,7 @@ type stubFixItDoctor struct {
 	converseResult *FixItResult
 	scopeProject   string
 	scopeOK        bool
+	scopeKind      string
 	scopeErr       error
 }
 
@@ -38,11 +39,11 @@ func (s *stubFixItDoctor) OpeningSummary(_ context.Context, _, _, _ string) (str
 	return "", nil
 }
 
-func (s *stubFixItDoctor) SessionScope(_ context.Context, _, _ string) (string, bool, error) {
+func (s *stubFixItDoctor) SessionScope(_ context.Context, _, _ string) (string, string, bool, error) {
 	if s.scopeErr != nil {
-		return "", false, s.scopeErr
+		return "", "", false, s.scopeErr
 	}
-	return s.scopeProject, s.scopeOK, nil
+	return s.scopeProject, s.scopeKind, s.scopeOK, nil
 }
 
 func (s *stubFixItDoctor) Apply(_ context.Context, _, _ string, _ int, _ string) (*FixItApplyResult, error) {

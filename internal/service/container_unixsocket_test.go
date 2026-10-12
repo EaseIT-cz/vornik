@@ -130,14 +130,16 @@ func TestUnixSocket_AgentRoutesServed(t *testing.T) {
 		{http.MethodGet, "/api/v1/projects/p1/api/providers"},
 		{http.MethodGet, "/api/v1/projects/p1/mcp/tools"},
 		{http.MethodPost, "/api/v1/projects/p1/mcp/tools/call"},
+		// audit 2026-10-12: the Forge issue tool route was missing (404).
+		{http.MethodPost, "/api/v1/projects/p1/forge/issues"},
 		{http.MethodPost, "/api/v1/internal/tool-audit"},
 		{http.MethodPost, "/api/v1/internal/llm-usage"},
 		{http.MethodPost, "/api/v1/internal/backlog-deposit"},
 		{http.MethodPost, "/api/v1/chat/completions"},
 		{http.MethodPost, "/v1/chat/completions"},
 	}
-	if len(routes) != 13 {
-		t.Fatalf("the design lists 13 agent routes, the table has %d", len(routes))
+	if len(routes) != 14 {
+		t.Fatalf("the design lists 14 agent routes, the table has %d", len(routes))
 	}
 	for _, r := range routes {
 		if got := socketStatus(t, client, r.method, r.path); got != http.StatusOK {

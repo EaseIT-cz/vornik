@@ -7,7 +7,7 @@ sources:
     - path: internal/agentadmin/harness.go
       sha256: 330a8aaf3e48e5300155a68e10ae017b93d1e4acfb194622db080880cecb161e
     - path: internal/agentadmin/admin_guidance.md
-      sha256: 5ae414b8c956bc73278feb5bb989501aef98f8c0fc71af1279fb740d2e0dca25
+      sha256: 40ca639505548430e3633f03ef9a3721951e8273d78dace687a27571925c93b5
 ---
 # Let your assistant set up Vornik
 

@@ -157,10 +157,23 @@ func TestMemoryList_StripsMirrorTokens(t *testing.T) {
 	require.NotEmpty(t, out.Items)
 	it := out.Items[0]
 	assert.Equal(t, memory.OriginMirrored, it.Origin)
-	assert.Equal(t, it.ID[:min(12, len(it.ID))], it.ShortID)
+	assert.Equal(t, memory.ShortID(it.ID), it.ShortID)
 	assert.NotEmpty(t, it.Age)
 	assert.Equal(t, "companion:hermes:note", it.Source)
 	assert.Equal(t, "https://vornik.example/ui/approve/memory/alpha", out.ExportURL)
+}
+
+// audit 2026-10-12: short_id was the id's first 12 characters, so two
+// correction chunks (chunk_YYYYMMDDhhmmss_<hex>) from the same month shared
+// "chunk_202610" (design 22, "Short ids for every id shape").
+func TestMemoryList_CorrectionRowsGetDistinctShortIDs(t *testing.T) {
+	now := time.Date(2026, 10, 12, 10, 0, 0, 0, time.UTC)
+	a := shapeMemoryListItem(MemoryListEntry{ChunkID: "chunk_20261012101500_00112233aabbccdd", CreatedAt: now}, now)
+	b := shapeMemoryListItem(MemoryListEntry{ChunkID: "chunk_20261003080000_44556677eeff0011", CreatedAt: now}, now)
+	assert.NotEqual(t, a.ShortID, b.ShortID, "two correction rows from one month share a short id")
+	assert.Regexp(t, `^[0-9a-f]{12}$`, a.ShortID)
+	h := shapeMemoryListItem(MemoryListEntry{ChunkID: "0123456789abcdef0123456789abcdef", CreatedAt: now}, now)
+	assert.Equal(t, "0123456789ab", h.ShortID, "a hex id keeps the short id users have seen")
 }
 
 func TestMemoryList_OtherProjectUnreachable(t *testing.T) {

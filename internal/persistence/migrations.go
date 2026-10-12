@@ -2197,7 +2197,7 @@ DROP TABLE IF EXISTS intent_verdicts;
 		Version: 35,
 		Name:    "api_keys_rate_limit_columns",
 		// Per-API-key rate limits — first slice of the rate-limit
-		// hardening backlog item. Token-bucket primitive lives in
+		// hardening item (Enterprise tracker issue #252). Token-bucket primitive lives in
 		// internal/ratelimit/keybucket.go; AuthMiddleware reads
 		// these columns after a successful DB-key match. NULL on
 		// either column means "no limit configured" — request
@@ -2997,7 +2997,7 @@ ALTER TABLE execution_step_outcomes DROP COLUMN IF EXISTS context_source;
 	{
 		Version: 57,
 		Name:    "daemon_leader_locks",
-		// Horizontal-scaling prep for 2026.8.0 (BACKLOG MUST-HAVE).
+		// Horizontal-scaling prep for 2026.8.0 (a MUST-HAVE; shipped 8f1ab8637).
 		// Per-worker singleton lock table: only the holding daemon
 		// runs the worker; other replicas skip their tick.
 		//
@@ -3035,8 +3035,8 @@ DROP TABLE IF EXISTS daemon_leader_locks;
 	{
 		Version: 58,
 		Name:    "channel_sessions",
-		// Horizontal-scaling prep (BACKLOG MUST-HAVE follow-on to
-		// leader-election). Per-channel session state — conversation
+		// Horizontal-scaling prep (MUST-HAVE follow-on to
+		// leader-election; shipped 0f58f4642). Per-channel session state — conversation
 		// history + active project — moves out of per-process maps
 		// into Postgres so a rolling restart no longer drops user
 		// conversations and replicas can pick up traffic seamlessly.
@@ -6433,8 +6433,8 @@ ALTER TABLE project_memory_chunks DROP COLUMN IF EXISTS embed_input_hash;
 		//
 		// Nothing could detect that: no column recorded what the vendor has
 		// registered, so neither an origin change nor a path change was visible. The
-		// invalidation was specified and never implemented (recorded in BACKLOG
-		// 2026-08-04, surfaced by review-20260804-e230).
+		// invalidation was specified and never implemented (found 2026-08-04 by
+		// review-20260804-e230; this migration, 57c4f6cf8, closes it).
 		//
 		// Empty string = unknown, which is what every pre-migration row is. Unknown is
 		// deliberately NOT treated as a mismatch: dropping a working client because we
@@ -9036,4 +9036,8 @@ ALTER TABLE approver_devices DROP COLUMN IF EXISTS prev_token_hash;
 		Up: `ALTER TABLE broker_actions ADD COLUMN IF NOT EXISTS account_ns_epoch BIGINT CHECK(account_ns_epoch >= 0);
  ALTER TABLE broker_actions ADD COLUMN IF NOT EXISTS account_daemon_epoch BIGINT CHECK(account_daemon_epoch >= 0);`,
 		Down: `ALTER TABLE broker_actions DROP COLUMN IF EXISTS account_ns_epoch; ALTER TABLE broker_actions DROP COLUMN IF EXISTS account_daemon_epoch;`},
+	{Version: 223, Name: "artifact_producing_step",
+		// GitHub #90; artifact-store design: answer-step provenance.
+		Up:   `ALTER TABLE artifacts ADD COLUMN IF NOT EXISTS producing_step_id TEXT NOT NULL DEFAULT '';`,
+		Down: `ALTER TABLE artifacts DROP COLUMN IF EXISTS producing_step_id;`},
 }

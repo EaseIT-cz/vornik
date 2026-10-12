@@ -454,7 +454,8 @@ func sharedWorkflowResolver() *MockWorkflowResolver {
 }
 
 // TestShutdownResume_FullCycleResumesToCompleted is the Tier-2
-// (https://docs.vornik.io "Graceful shutdown + resume") end-to-end characterization
+// ("Graceful shutdown + resume", 2026-06-20 journey coverage; shipped
+// 92d25d78b) end-to-end characterization
 // the existing tests stop short of. The two existing halves each cover only
 // one hop:
 //

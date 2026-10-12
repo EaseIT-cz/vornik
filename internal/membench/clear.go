@@ -52,7 +52,7 @@ func (r ClearResult) Total() int64 { return r.Mentions + r.Edges + r.Entities + 
 // WHOLESALE IS RIGHT HERE AND WRONG IN PRODUCTION. A benchmark project holds
 // nothing worth keeping between runs. Erasing one subject in production must
 // NOT drop a project's graph — that case is per-derived-row and is tracked
-// separately (https://docs.vornik.io, Art 17 erasure).
+// separately (Enterprise tracker issue #115, Art 17 erasure).
 //
 // CALL ORDER. Only after CheckDestructiveTarget and VerifyWriteTarget both
 // pass: those are what prove the target is neither production nor a database

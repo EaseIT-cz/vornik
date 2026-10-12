@@ -236,3 +236,38 @@ func TestInflight_EndpointThroughRouterAdminAndNonAdminKey(t *testing.T) {
 		t.Fatalf("no key = %d, want 401", w.Code)
 	}
 }
+
+// audit 2026-10-12, finding A (admission race, the GitHub #290 failure in a
+// narrower window): trackLongRequest read the drain bit and only then
+// incremented the count. A request that read draining=false could be
+// overtaken by the gate's drain + in-flight read (0, exit 0, SIGTERM) and
+// then be counted and cut. The seam runs the gate's two steps between the
+// two halves of admission; the gate's read must see the request, or the
+// request must be refused.
+func TestInflight_DrainBetweenAdmissionHalvesIsNeverMissed(t *testing.T) {
+	stub := okStub()
+	s := &Server{logger: zerolog.Nop(), chatProvider: stub}
+	var gateRead int64 = -1
+	s.inflight.admitSeam = func() {
+		if _, err := s.BeginOperatorDrain(time.Minute); err != nil {
+			t.Errorf("drain: %v", err)
+		}
+		gateRead = s.InflightChatProxy()
+	}
+	t.Cleanup(func() { _ = s.EndOperatorDrain() })
+	w := httptest.NewRecorder()
+	s.trackLongRequest(s.ChatCompletions)(w, httptest.NewRequest(http.MethodPost, "/api/v1/chat/completions", chatBody()))
+
+	if gateRead == -1 {
+		t.Fatal("the admission seam did not run")
+	}
+	if gateRead == 0 && w.Code != http.StatusServiceUnavailable {
+		t.Fatalf("the gate read 0 in flight after its drain, yet the request was served (%d): it would be cut by the restart", w.Code)
+	}
+	if w.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status = %d, want 503 DRAINING for a request admitted across the drain", w.Code)
+	}
+	if got := s.InflightChatProxy(); got != 0 {
+		t.Fatalf("in-flight after the refusal = %d, want 0", got)
+	}
+}

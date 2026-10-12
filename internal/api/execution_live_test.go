@@ -8,6 +8,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/coder/websocket"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
 	"vornik.io/vornik/internal/executor/livepubsub"
 	"vornik.io/vornik/internal/persistence"
 )
@@ -170,14 +174,63 @@ func TestLiveSubscribeFromSeq(t *testing.T) {
 	}
 }
 
-// readLiveHello requires a real websocket connection for a full
-// test; the no-conn unit covers the helper's zero-value
-// fallback contract via its public usage.
-func TestLiveHelloFallback(t *testing.T) {
-	// Sanity check: zero-valued hello is the default.
-	hello := liveClientHello{}
-	if hello.LastSeq != 0 {
-		t.Errorf("default hello should be zero")
+// audit 2026-10-12, finding B: a client that sends no hello frame must keep
+// its stream. readLiveHello read the hello under a 2 s context, and in
+// coder/websocket v1.8.14 an expired read context closes the whole connection
+// (setupReadTimeout: context.AfterFunc(ctx, c.close)), so a no-hello client
+// was disconnected at 2 s instead of falling back to ?last_seq= then 0 (live
+// design A0.4; Change 2026-10-12 L2). The old TestLiveHelloFallback opened no
+// socket and could not see it.
+func TestLiveHelloFallback_NoHelloKeepsStream(t *testing.T) {
+	h := newLiveAgentHarness(t)
+	h.addExec("exec-a", "alpha", persistence.ExecutionStatusRunning)
+	h.pub.Publish(context.Background(), "exec-a", livepubsub.KindStepStarted, livepubsub.StepStartedPayload{StepID: "s1", Role: "w"})
+	conn, _, err := h.dial(t, "exec-a", liveOperatorKey)
+	require.NoError(t, err)
+	defer func() { _ = conn.Close(websocket.StatusNormalClosure, "") }()
+	// No hello. The first frame arrives only after the server has given up
+	// waiting for one (the hello window), from cursor 0.
+	first := readFrame(t, conn)
+	assert.Equal(t, livepubsub.KindStepStarted, first["kind"])
+	// The stream is live past the hello window: a new event still arrives.
+	h.pub.Publish(context.Background(), "exec-a", livepubsub.KindStepCompleted, livepubsub.StepCompletedPayload{StepID: "s1", Outcome: "ok"})
+	second := readFrame(t, conn)
+	assert.Equal(t, livepubsub.KindStepCompleted, second["kind"])
+}
+
+// audit 2026-10-12, finding B: with no hello, ?last_seq= is the cursor.
+func TestLiveHelloFallback_NoHelloUsesQueryCursor(t *testing.T) {
+	h := newLiveAgentHarness(t)
+	h.addExec("exec-a", "alpha", persistence.ExecutionStatusRunning)
+	// Seqs start at 0: s0 is seq 0, s1 seq 1, s2 seq 2; last_seq=1 serves s2 on.
+	for _, id := range []string{"s0", "s1", "s2"} {
+		h.pub.Publish(context.Background(), "exec-a", livepubsub.KindStepStarted, livepubsub.StepStartedPayload{StepID: id})
 	}
-	_ = context.Background()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	hdr := http.Header{"Origin": []string{h.hs.URL}, "Authorization": []string{"Bearer " + liveOperatorKey}}
+	conn, _, err := websocket.Dial(ctx, h.url("exec-a", "?last_seq=1"), &websocket.DialOptions{HTTPHeader: hdr})
+	require.NoError(t, err)
+	defer func() { _ = conn.Close(websocket.StatusNormalClosure, "") }()
+	frame := readFrame(t, conn)
+	assert.Equal(t, "s2", frame["payload"].(map[string]any)["step_id"], "events after the query cursor only")
+}
+
+// audit 2026-10-12, finding B (L2): a hello that arrives after the window is
+// the client's first frame, not a second one: it is ignored, not refused, and
+// the stream continues. The first event arriving proves the window has passed.
+func TestLiveHelloFallback_LateHelloIgnored(t *testing.T) {
+	prev := liveHelloWait
+	liveHelloWait = 50 * time.Millisecond
+	t.Cleanup(func() { liveHelloWait = prev })
+	h := newLiveAgentHarness(t)
+	h.addExec("exec-a", "alpha", persistence.ExecutionStatusRunning)
+	h.pub.Publish(context.Background(), "exec-a", livepubsub.KindStepStarted, livepubsub.StepStartedPayload{StepID: "s1"})
+	conn, _, err := h.dial(t, "exec-a", liveOperatorKey)
+	require.NoError(t, err)
+	defer func() { _ = conn.Close(websocket.StatusNormalClosure, "") }()
+	assert.Equal(t, livepubsub.KindStepStarted, readFrame(t, conn)["kind"])
+	sendHello(t, conn)
+	h.pub.Publish(context.Background(), "exec-a", livepubsub.KindStepCompleted, livepubsub.StepCompletedPayload{StepID: "s1"})
+	assert.Equal(t, livepubsub.KindStepCompleted, readFrame(t, conn)["kind"])
 }

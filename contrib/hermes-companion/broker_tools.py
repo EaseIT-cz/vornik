@@ -98,7 +98,36 @@ READ_ARTIFACT = {
     "parameters": {"type": "object", "properties": {**_RUN_PROPERTIES, "artifact_id": {"type": "string"}},
         "required": ["task_id", "execution_id", "artifact_id"], "additionalProperties": False},
 }
-SCHEMAS = [CATALOG, DELEGATE, RESULT, STATUS, CANCEL, LIST_ARTIFACTS, READ_ARTIFACT]
+# Task diagnosis (design 24, "Audit fixes (0.21.0)" A): the broker key may
+# call both, and the daemon serves it the broker view only (lifecycle events
+# and closed error classes, no free text). daemon_log and doctor stay with an
+# agent-admin connection.
+TASK_LOGS_MAX_TAIL = 500
+TASK_LOGS_MAX_WAIT_SECONDS = 25
+TASK_LOGS = {
+    "name": "vornik_task_logs",
+    "description": (
+        "Diagnose a broker task that seems stuck: its recent execution events (steps started and "
+        "completed, attempts, closed error classes), oldest first. Pass back next_cursor as cursor to "
+        "continue; stop when complete is true. wait_seconds (0-25) holds the call until a new event "
+        "arrives. Not for ordinary progress: vornik_status and vornik_result carry progress."),
+    "parameters": {"type": "object", "properties": {
+        "task_id": {"type": "string"},
+        "cursor": {"type": "string", "description": "next_cursor from the previous call; omit for the newest events"},
+        "tail": {"type": "integer", "minimum": 1, "maximum": TASK_LOGS_MAX_TAIL,
+                 "description": "without a cursor: how many of the newest events (default 50)"},
+        "wait_seconds": {"type": "integer", "minimum": 0, "maximum": TASK_LOGS_MAX_WAIT_SECONDS}},
+        "required": ["task_id"], "additionalProperties": False},
+}
+TASK_EXPLAIN = {
+    "name": "vornik_task_explain",
+    "description": (
+        "Explain why a broker task failed or finished unexpectedly: its failure class and the "
+        "playbook id for it. Call it after a task fails, not while it runs."),
+    "parameters": {"type": "object", "properties": {"task_id": {"type": "string"}},
+                   "required": ["task_id"], "additionalProperties": False},
+}
+SCHEMAS = [CATALOG, DELEGATE, RESULT, STATUS, CANCEL, LIST_ARTIFACTS, READ_ARTIFACT, TASK_LOGS, TASK_EXPLAIN]
 
 
 def _wrap(client: VornikClient, tool: str, args: dict, timeout=None) -> str:
@@ -188,7 +217,7 @@ class BrokerTools:
                 return json.dumps({"error": "max_age_seconds must be an integer from 0 to 900"})
             # 0 means no reuse (the same as leaving it out); above 900 is
             # clamped to 900, as the daemon does (broker design §6b.1). Sent
-            # only to a daemon that advertises it (GitHub #119 item 9): an
+            # only to a daemon that advertises it (the progress and reuse change): an
             # older one would refuse or ignore an unknown argument.
             max_age = min(max_age, 900)
             if max_age > 0 and self.client.supports("companion-result-reuse"):
@@ -252,8 +281,52 @@ class BrokerTools:
         call, error = self._artifact("read_artifact", args)
         return error if error else _wrap(self.client, "read_artifact", call)
 
+    def observation_available(self, *_args, **_kwargs) -> bool:
+        # A broker key reads task_logs and task_explain on daemons since
+        # 2026-10-08; companion-progress (2026-10-09) is the earliest flag
+        # every such daemon advertises. An older daemon hides both tools
+        # instead of offering calls that fail (audit 2026-10-12).
+        return self.available() and self.client.supports("companion-progress")
+
+    def _observation_error(self) -> str:
+        if not self.available():
+            return self._unavailable_error()
+        return "This Vornik daemon does not offer task diagnosis to a broker key (upgrade it)."
+
+    def task_logs(self, args: dict, **_kw) -> str:
+        if not self.observation_available():
+            return json.dumps({"error": self._observation_error()})
+        if not isinstance(args, dict):
+            return json.dumps({"error": "task_logs arguments must be an object"})
+        task_id = args.get("task_id")
+        if not isinstance(task_id, str) or not task_id.strip():
+            return json.dumps({"error": "task_id is required as a nonempty string"})
+        call = {"task_id": task_id.strip()}
+        if "cursor" in args:
+            if not isinstance(args["cursor"], str):
+                return json.dumps({"error": "cursor must be the next_cursor string from the previous call"})
+            if args["cursor"]:
+                call["cursor"] = args["cursor"]
+        for name, lower, upper in (("tail", 1, TASK_LOGS_MAX_TAIL), ("wait_seconds", 0, TASK_LOGS_MAX_WAIT_SECONDS)):
+            if name in args:
+                value = args[name]
+                if isinstance(value, bool) or not isinstance(value, int) or not lower <= value <= upper:
+                    return json.dumps({"error": "%s must be an integer from %d to %d" % (name, lower, upper)})
+                call[name] = value
+        return _wrap(self.client, "task_logs", call, timeout=call.get("wait_seconds", 0) + 15)
+
+    def task_explain(self, args: dict, **_kw) -> str:
+        if not self.observation_available():
+            return json.dumps({"error": self._observation_error()})
+        task_id = (args or {}).get("task_id") if isinstance(args, dict) else None
+        if not isinstance(task_id, str) or not task_id.strip():
+            return json.dumps({"error": "task_id is required as a nonempty string"})
+        return _wrap(self.client, "task_explain", {"task_id": task_id.strip()})
+
     def handlers(self):
         return {
+            "vornik_task_logs": self.task_logs,
+            "vornik_task_explain": self.task_explain,
             "vornik_catalog": self.catalog,
             "vornik_delegate": self.delegate,
             "vornik_result": self.result,

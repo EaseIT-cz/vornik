@@ -113,9 +113,11 @@ func (s *agentAdminService) storeCredential(ctx context.Context, pl approvalPayl
 		return err
 	}
 	if _, err = s.c.suspendNamespaceGrants(ctx, pl.Slot.Namespace); err != nil {
-		return err
+		return keepBusy{err} // design §22.2.16, review 663b: busy for controlled recovery
 	}
-	return s.c.repos.AccountTransitions.Finish(ctx, ticket, persistence.AccountPublication{Secret: row})
+	err = s.c.repos.AccountTransitions.Finish(ctx, ticket, persistence.AccountPublication{Secret: row})
+	s.c.settleDatabaseTransition(ctx, ticket, err, "static-credential")
+	return err
 }
 
 // errorKind names an error's class without its text, which a lower layer

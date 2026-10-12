@@ -1,5 +1,5 @@
 name: vornik-companion
-version: 0.19.0
+version: 0.21.1
 requires_hermes: ">=0.21.5"
 manifest_version: 2
 # Declared, not inferred: Hermes classifies an undeclared plugin whose
@@ -14,37 +14,45 @@ description: >-
   no credentials: work that touches mail, calendar, documents or accounts is
   delegated to operator-authored broker workflows on a Vornik daemon, which
   return a bounded, schema-validated result instead of raw access.
+  0.21.1 — vornik_task_logs and vornik_task_explain are offered only when the
+  daemon advertises companion-progress, so an older daemon no longer shows two
+  tools whose every call fails.
+  0.21.0 — vornik_task_logs and vornik_task_explain diagnose a broker task (the
+  broker skill named them before the plugin had them); /vornik-memory shows a
+  distinct short id for every memory, correction notes included, and
+  /vornik-forget forgets them; the digest no longer keeps state for tasks it
+  has finished reporting.
+  0.20.0 — the admin skill teaches show_workflow before redefining an existing workflow.
   0.19.0 — the broker skill teaches task_logs and task_explain for task
   diagnosis and daemon_log and doctor for agent-admin connections; the admin
-  skill names update_project (GitHub #310).
+  skill names update_project.
   0.18.0 — list and read approved completed-run artifacts; relay binary download
-  links without putting file bytes in model context (GitHub #318).
+  links without putting file bytes in model context.
   0.17.0 — the vornik-admin skill asks which account to use and gives each
   connection its own account label and credential name; the broker skill
   relays account names in results. The first read after a connection or
-  credential change stays fresh (GitHub #119 item 8).
+  credential change stays fresh.
   0.16.0 — the pre_llm_call digest says where running broker tasks are
   ("step 2 of 3 (curate)") when the daemon advertises companion-progress;
   vornik_delegate takes max_age_seconds, sent only when companion-result-reuse
   is advertised, to reuse a read-only answer fetched minutes ago; the
-  vornik-broker and vornik-admin skills teach both (GitHub #119 item 9).
+  vornik-broker and vornik-admin skills teach both.
   0.15.0 — /vornik-memory pages through the daemon's memory_list when it
   is advertised (/vornik-memory more for the next page), and
   /vornik-memory export prints the approver-device link to download or
-  forget everything (GitHub #119 item 6).
+  forget everything.
   0.14.0 — the vornik-admin skill says every Vornik feature is a tool on
-  the connection and that a link a tool returns is shown to the user
-  (GitHub #86).
+  the connection and that a link a tool returns is shown to the user.
   0.13.0 — the vornik-admin skill says to call test_connection after the
   user enters a credential, before defining a workflow that uses it; hermes
   vornik connect --vornikctl <path> runs that vornikctl and records the same
-  path, so Hermes's user can run what connect wrote (#99).
+  path, so Hermes's user can run what connect wrote.
   0.12.0 — the vornik-admin skill says to pass transport "sse" to
   add_mcp_server for an SSE server.
   0.11.3 — a memory Hermes forgot and adds again is recalled again; an
   identical replace no longer forgets the note; forgets declare their route,
-  and /vornik-forget holds against the same text stored again (#76).
-  0.11.2 — approvals on replaces a pin on a disconnected namespace (#77).
+  and /vornik-forget holds against the same text stored again.
+  0.11.2 — approvals on replaces a pin on a disconnected namespace.
   0.11.1 — the README leads with the broker setup (the default) and points
   to docs.vornik.io/guides/hermes-setup/, which covers Hermes and Vornik
   under separate OS users; documentation only.
@@ -93,7 +101,7 @@ license: Apache-2.0
 homepage: https://docs.vornik.io/features/companion/
 tags: [vornik, broker, memory, privacy]
 
-# All nine, although vornik_recall and vornik_remember come from the memory
+# All eleven, although vornik_recall and vornik_remember come from the memory
 # provider and register only with VORNIK_MEMORY_TOKEN set: the catalog's rule
 # 6 is about what the plugin can register, and Hermes's validator warns, not
 # fails, on a declared tool its env-less probe did not see (design 24,
@@ -106,6 +114,8 @@ provides_tools:
   - vornik_cancel
   - vornik_list_artifacts
   - vornik_read_artifact
+  - vornik_task_logs
+  - vornik_task_explain
   - vornik_recall
   - vornik_remember
 provides_hooks:

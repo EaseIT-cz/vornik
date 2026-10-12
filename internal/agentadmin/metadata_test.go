@@ -95,3 +95,17 @@ func TestDefineSwarmGrantsDocumentRendererButRefusesShell(t *testing.T) {
 		}
 	}
 }
+
+// audit 2026-10-12 finding C: update_project patches only the human-facing
+// metadata, so an assistant cannot use it to accept unapproved Forge issue
+// writes on its own project.
+func TestPatchProjectMetadata_IgnoresForgeIssueKeys(t *testing.T) {
+	src := []byte("projectId: hermes--news\nforge:\n  issues:\n    close_enabled: true\n    writes_without_approval: false\n")
+	got, err := patchProjectMetadata(src, map[string]string{"description": "Purpose", "forge.issues.writes_without_approval": "true", "forge": "x"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(got, "writes_without_approval: false") || strings.Contains(got, "writes_without_approval: true") {
+		t.Fatalf("metadata patch reached a forge key:\n%s", got)
+	}
+}

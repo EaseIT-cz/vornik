@@ -7,11 +7,11 @@ roles:
   - name: "lead"
     description: "Plans code tasks and schedules autonomous work"
     count: 1
-    # 2026-05-13: forced ephemeral. Warm containers bind-mount the
+    # 2026-05-13: forced ephemeral. Warm containers bind-mounted the
     # project workspace root (not the per-task worktree), so any
-    # shell-tool write from the lead pollutes the workspace root and
-    # blocks ephemeral tasks' worktree merges. See https://docs.vornik.io
-    # → "Warm-pool containers bypass worktree isolation".
+    # shell-tool write from the lead polluted the workspace root and
+    # blocked ephemeral tasks' worktree merges. Fixed since: warm
+    # containers get no project mount at all (S6-D5, 04072e055).
     runtimePolicy: "ephemeral"
     # Strategic planning — GLM-5 via Bedrock (rank 1 on open-LLM
     # leaderboard, $1.00/$3.20). Lead fires once per task and

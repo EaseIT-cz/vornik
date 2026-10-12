@@ -25,7 +25,7 @@ class RegisterTest(unittest.TestCase):
         with mock.patch.dict(os.environ, env, clear=True):
             ctx = FakeCtx()
             plugin.register(ctx)
-        self.assertEqual(sorted(ctx.tools), ["vornik_cancel", "vornik_catalog", "vornik_delegate", "vornik_list_artifacts", "vornik_read_artifact", "vornik_result", "vornik_status"])
+        self.assertEqual(sorted(ctx.tools), ["vornik_cancel", "vornik_catalog", "vornik_delegate", "vornik_list_artifacts", "vornik_read_artifact", "vornik_result", "vornik_status", "vornik_task_explain", "vornik_task_logs"])
         self.assertIn("pre_llm_call", ctx.hooks)
         self.assertEqual(sorted(ctx.commands), ["vornik-peek", "vornik-result"])
         self.assertTrue(ctx.skills["vornik-broker"].exists())
@@ -383,47 +383,34 @@ class CatalogManifestTest(unittest.TestCase):
     def test_requires_hermes_is_the_certified_semver_floor(self):
         self.assertRegex(MANIFEST, r'(?m)^requires_hermes:\s*">=0\.21\.5"\s*$')
 
-    def test_all_nine_tools_are_declared(self):
+    def test_all_eleven_tools_are_declared(self):
         # Rule 6: the memory provider's two tools are declared although they
-        # register only with VORNIK_MEMORY_TOKEN set (review 8a55 F2).
+        # register only with VORNIK_MEMORY_TOKEN set (review 8a55 F2). 0.21.0
+        # adds the two task-diagnosis tools (design 24, "Audit fixes" A).
         self.assertEqual(sorted(_yaml_list("provides_tools")), sorted([
             "vornik_catalog", "vornik_delegate", "vornik_result", "vornik_status",
-            "vornik_cancel", "vornik_list_artifacts", "vornik_read_artifact", "vornik_recall", "vornik_remember"]))
+            "vornik_cancel", "vornik_list_artifacts", "vornik_read_artifact", "vornik_task_logs",
+            "vornik_task_explain", "vornik_recall", "vornik_remember"]))
 
-    def test_version_is_0_19_0(self):
-        # 0.15.0: /vornik-memory pages through the daemon's memory_list and
-        # /vornik-memory export prints the approver-device link (#119 item 6).
-        # 0.14.0: the vornik-admin skill says every Vornik feature is a tool on
-        # the connection and a link a tool returns is shown to the user (#86).
-        # 0.13.0: the vornik-admin skill says to call test_connection after a
-        # credential is entered (#101); hermes vornik connect --vornikctl <path>
-        # runs that vornikctl and records the same path (#99).
-        # 0.12.0: the vornik-admin skill says to pass transport "sse" to
-        # add_mcp_server for an SSE server (agent-administered design §6.1).
-        # 0.11.3: a forgotten Hermes memory added again is recallable; an
-        # identical replace touches nothing, and memory_correct declares its
-        # refute route (#76). 0.11.2: approvals on replaces a pin on a disconnected namespace (#77).
-        # 0.11.1: the README leads with the broker setup and points to the
-        # Hermes setup guide (design 24, setup docs, 2026-10-04). 0.11.0: the vornik-admin skill says how to hand a workflow a
-        # document (broker design §18). 0.10.0: the vornik-admin skill tells the assistant that a client
-        # refusing a field describe_installation lists holds a tool list from
-        # before a change, and to ask the user to reconnect Vornik
-        # (agent-administered design §18.14 finding 2). 0.9.0 was a role's
-        # model from the catalogue (§18.6 item 2).
-        # 0.16.0: progress in the digest and max_age_seconds (GitHub #119 item 9).
-        self.assertRegex(MANIFEST, r"(?m)^version:\s*0\.19\.0\s*$")
-        self.assertIn("0.19.0 — ", MANIFEST, "the description carries a changelog line for 0.19.0")
-        self.assertIn("0.17.0 — ", MANIFEST, "the description carries a changelog line for 0.17.0")
-        self.assertIn("0.16.0 — ", MANIFEST, "the description carries a changelog line for 0.16.0")
-        self.assertIn("0.15.0 — ", MANIFEST, "earlier changelog lines stay")
-        self.assertIn("0.13.0 — ", MANIFEST, "earlier changelog lines stay")
-        self.assertIn("0.12.0 — ", MANIFEST, "earlier changelog lines stay")
-        self.assertIn("0.11.3 — ", MANIFEST, "earlier changelog lines stay")
-        self.assertIn("0.11.2 — ", MANIFEST, "earlier changelog lines stay")
-        self.assertIn("0.11.1 — ", MANIFEST, "earlier changelog lines stay")
-        self.assertIn("0.11.0 — ", MANIFEST, "earlier changelog lines stay")
-        self.assertIn("0.10.0 — ", MANIFEST, "earlier changelog lines stay")
-        self.assertIn("0.9.0 — ", MANIFEST, "earlier changelog lines stay")
+    def test_version_has_its_changelog_line_and_the_history_stays(self):
+        # The lead's baseline gate run, 2026-10-12: this test pinned 0.19.0
+        # and failed when 0.20.0 shipped. It now checks what a bump must keep
+        # true, so a later bump does not break it: the manifest version is
+        # semver, its changelog line exists, the changelog lines descend, and
+        # the earlier lines stay (design 24, "Audit fixes (0.21.0)" D).
+        m = re.search(r"(?m)^version:\s*(\d+)\.(\d+)\.(\d+)\s*$", MANIFEST)
+        self.assertIsNotNone(m, "version is major.minor.patch")
+        version = tuple(int(x) for x in m.groups())
+        self.assertGreaterEqual(version, (0, 21, 0))
+        listed = [tuple(int(x) for x in v) for v in
+                  re.findall(r"(?m)^  (\d+)\.(\d+)\.(\d+) —", MANIFEST)]
+        self.assertTrue(listed, "the description carries a changelog")
+        self.assertEqual(listed[0], version, "the newest changelog line is the manifest version")
+        self.assertEqual(listed, sorted(listed, reverse=True), "changelog lines descend without repeats")
+        self.assertEqual(len(listed), len(set(listed)))
+        for kept in ("0.20.0", "0.19.0", "0.17.0", "0.16.0", "0.15.0", "0.13.0", "0.12.0",
+                     "0.11.3", "0.11.2", "0.11.1", "0.11.0", "0.10.0", "0.9.0", "0.1.0"):
+            self.assertIn(kept + " — ", MANIFEST, "earlier changelog lines stay")
 
 
 class ReadmeSetupTest(unittest.TestCase):
@@ -515,7 +502,7 @@ class ConnectTest(unittest.TestCase):
         self.assertIn("vornikctl auth login", out)
         self.assertIn("vornikctl pair-device", out)
 
-    # GitHub #99 (2026-10-04 operator report): hermes vornik connect could not
+    # the setup CLI gaps change (2026-10-04 operator report): hermes vornik connect could not
     # name a vornikctl, so connect recorded whichever ran, often one in the
     # operator's home that the Hermes user cannot execute. --vornikctl runs
     # that copy and passes the same path on, so the path run is the path

@@ -57,6 +57,16 @@ def _result(tools: BrokerTools):
     return handler
 
 
+def _check_fn(tools, name):
+    """The availability check for one tool: each tool is offered only when
+    the daemon advertises what it needs."""
+    if name in ("vornik_list_artifacts", "vornik_read_artifact"):
+        return tools.artifacts_available
+    if name in ("vornik_task_logs", "vornik_task_explain"):
+        return tools.observation_available
+    return tools.available
+
+
 def register(ctx) -> None:
     client = _broker_client()
     tools = BrokerTools(client)
@@ -67,7 +77,7 @@ def register(ctx) -> None:
             toolset="vornik",
             schema=schema,
             handler=handlers[schema["name"]],
-            check_fn=tools.artifacts_available if schema["name"] in ("vornik_list_artifacts", "vornik_read_artifact") else tools.available,
+            check_fn=_check_fn(tools, schema["name"]),
         )
     ctx.register_hook("pre_llm_call", Digest(client))
     ctx.register_command("vornik-peek", handler=_peek(client), description="List recent Vornik broker tasks")

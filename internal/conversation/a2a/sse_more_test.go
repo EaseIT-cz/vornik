@@ -126,30 +126,36 @@ func TestTranslateAndWrite_StatusFrame(t *testing.T) {
 	}
 }
 
-func TestTranslateAndWrite_OutcomeBecomesArtifact(t *testing.T) {
+// audit 2026-10-12, finding A: outcome_recorded (class + free-text notes) is
+// no longer promoted to an artifact frame for the external peer; the answer
+// is the terminal artifact only (live design Change 2026-10-12, L1).
+func TestTranslateAndWrite_OutcomeIsDropped(t *testing.T) {
 	rec := httptest.NewRecorder()
-	ev := livepubsub.LiveEvent{Kind: livepubsub.KindOutcomeRecorded, Payload: map[string]any{"result": "ok"}}
+	ev := livepubsub.LiveEvent{Kind: livepubsub.KindOutcomeRecorded, Payload: map[string]any{"class": "ok", "notes": "private"}}
 	translateAndWrite(rec, ev, "t1", false)
-	body := rec.Body.String()
-	if !strings.HasPrefix(body, "event: artifact\n") {
-		t.Errorf("outcome_recorded must translate to an artifact frame, got:\n%s", body)
-	}
-	if strings.Contains(body, `"state"`) {
-		t.Errorf("artifact frame must not carry a status state field:\n%s", body)
+	if rec.Body.Len() != 0 {
+		t.Errorf("outcome_recorded must not reach the A2A peer, got:\n%s", rec.Body.String())
 	}
 }
 
-func TestTranslateAndWrite_UnknownKindIsRunningStatus(t *testing.T) {
+// audit 2026-10-12, finding A: an unknown kind was forwarded as a running
+// status carrying its raw payload; the lifecycle view drops it.
+func TestTranslateAndWrite_UnknownKindIsDropped(t *testing.T) {
 	rec := httptest.NewRecorder()
-	ev := livepubsub.LiveEvent{Kind: "totally_unknown", Payload: nil}
+	ev := livepubsub.LiveEvent{Kind: "totally_unknown", Payload: map[string]any{"secret": "x"}}
 	translateAndWrite(rec, ev, "t1", true)
-	body := rec.Body.String()
-	// Unknown kinds fall to the default arm: a status frame with "running".
-	if !strings.HasPrefix(body, "event: status\n") || !strings.Contains(body, `"state":"running"`) {
-		t.Errorf("unknown kind should emit a running status frame, got:\n%s", body)
+	if rec.Body.Len() != 0 {
+		t.Errorf("an unknown kind must not reach the A2A peer, got:\n%s", rec.Body.String())
 	}
-	if !strings.Contains(body, `"final":true`) {
-		t.Errorf("final flag should propagate, got:\n%s", body)
+}
+
+// The terminal frame keeps its final flag through the projection.
+func TestTranslateAndWrite_ClosedIsFinal(t *testing.T) {
+	rec := httptest.NewRecorder()
+	translateAndWrite(rec, livepubsub.LiveEvent{Kind: livepubsub.KindClosed}, "t1", true)
+	body := rec.Body.String()
+	if !strings.HasPrefix(body, "event: status\n") || !strings.Contains(body, `"final":true`) || !strings.Contains(body, `"state":"completed"`) {
+		t.Errorf("closed should emit a final completed status frame, got:\n%s", body)
 	}
 }
 

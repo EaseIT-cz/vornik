@@ -502,7 +502,8 @@ func NewRouter(server *Server, cfg *config.Config) *Router {
 		// KG re-flag — operator-driven backfill of isolated entities.
 		// Project-scoped; flips needs_graph_extraction = TRUE on chunks
 		// that produced zero edges so the KG worker reprocesses them.
-		// See https://docs.vornik.io §"KG ingestion pipeline".
+		// Shipped 2026-05-25 (1e3a248c7) for the KG under-extraction
+		// audit; `vornikctl memory regraph` drives it.
 		mux.HandleFunc("/api/v1/memory/regraph", server.MemoryRegraph)
 		mux.HandleFunc("/api/v1/executions/", server.apiV1ExecutionsHandler)
 		mux.HandleFunc("/api/v1/quality/executions", server.ExecutionQualityList)

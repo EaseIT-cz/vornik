@@ -14,7 +14,8 @@ import (
 	"vornik.io/vornik/internal/registry"
 )
 
-// Tier-2 autonomy-tick integration coverage (https://docs.vornik.io).
+// Tier-2 autonomy-tick integration coverage (2026-06-20 journey coverage;
+// shipped eb343b24b).
 //
 // These tests exercise the FULL evaluate() tick entry point — the
 // same path projectLoop drives on every poll — for the two

@@ -5,9 +5,9 @@ sources:
     - path: internal/dispatcher/tools.go
       sha256: 63c4fa8d20065c2a5df20c4c59fa81087b6e5cdb85a0f8d5a18ce6031e1d9c35
     - path: internal/dispatcher/agent.go
-      sha256: 68c37818feeeba939fa6a02b5da33b8fe402bba8d235b387bd41849cb6c73b5e
+      sha256: c835fa6ecab54a606f31ddf515668cf1c55b4ab0c57bd9bf5706f236f5908e8a
     - path: internal/email/channel.go
-      sha256: 38058785781c8f5dad5197c282de88501a07e81a192d3cec3c6715bd57fb8a6a
+      sha256: e68fa770d1d398450906ab8586d8c76f8cb5487bf05407c0614cdcc66a7ce64b
     - path: internal/slack/voice.go
       sha256: 74a85ffb02d275a6cdd24f40b43abdcb2c700d0a3923d23a1845b0df172c679f
     - path: internal/reminders/completion_notifier.go

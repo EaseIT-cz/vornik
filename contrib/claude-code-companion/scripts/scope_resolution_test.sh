@@ -158,6 +158,16 @@ else
   fail "--scope did not override, or dropped the path: $(cat "$tmp/out")"
 fi
 
+# --- audit 2026-10-12: an empty --scope with repository files is refused,
+# because a document path without a scope supersedes nothing (supersession
+# design A.2); the daemon refuses it too.
+run --scope '""' "$tmp/one/docs/public/index.md"
+if [ ! -s "$tmp/requests.jsonl" ] && grep -q "^error:.*repo_scope is empty" "$tmp/out"; then
+  pass "an empty --scope with document paths is refused before sending"
+else
+  fail "an empty --scope with document paths was sent: $(cat "$tmp/out")"
+fi
+
 # --- the same file named twice is sent once, not refused as loose.
 run "$tmp/one/docs/public/index.md" "$tmp/one/docs/public/index.md"
 if [ -s "$tmp/requests.jsonl" ] && [ "$(req | grep -o '"path"' | wc -l)" -eq 1 ]; then

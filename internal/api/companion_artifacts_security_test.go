@@ -46,7 +46,9 @@ func artifactFixture(t *testing.T, broker bool) (*Server, *memAPIKeyRepo, string
 		return &persistence.Execution{ID: execID, TaskID: taskID, ProjectID: "alpha", WorkflowID: wf, Status: persistence.ExecutionStatusCompleted}, nil
 	}}
 	mime := "application/pdf"
-	body := []byte("%PDF-1.7 retained binary")
+	// A real PDF's second line is a comment of high bytes so tools treat the
+	// file as binary; text-ness is decided by content (audit 2026-10-12, E).
+	body := []byte("%PDF-1.7\n%\xe2\xe3\xcf\xd3\nretained binary")
 	size := int64(len(body))
 	sum := sha256.Sum256(body)
 	hash := hex.EncodeToString(sum[:])
@@ -168,7 +170,9 @@ func TestCompanionArtifactScopeAndCurrentGrant(t *testing.T) {
 	}
 }
 func TestCompanionArtifactTextBoundsAndSecretGate(t *testing.T) {
-	for _, name := range []string{"html", "json", "xml", "sniff", "unknown_binary", "invalid_utf8", "nul", "truncated", "credential", "scanner_missing"} {
+	for _, name := range []string{"html", "json", "xml", "sniff", "unknown_binary", "invalid_utf8", "nul", "truncated", "credential", "scanner_missing",
+		"bin_name_text_secret", "pdf_name_text_secret", "yaml_name_text_secret", "bin_name_text", "pdf_name_text",
+		"json_mime_nul", "text_mime_binary_tail", "bin_name_cjk_over_limit"} {
 		t.Run(name, func(t *testing.T) {
 			s, _, raw, a, opener, _ := artifactFixture(t, true)
 			a.Name = "report.md"
@@ -186,6 +190,37 @@ func TestCompanionArtifactTextBoundsAndSecretGate(t *testing.T) {
 				a.MimeType = nil
 			case "unknown_binary":
 				mt = "application/unknown"
+				opener.body = []byte{0x89, 'P', 'N', 'G', 0x0d, 0x0a, 0x1a, 0x0a, 0x00}
+			// audit 2026-10-12, finding E: text-ness came from the stored MIME,
+			// which is derived from the file extension, so text under a
+			// binary-looking name was served as an unscanned download. Text
+			// is now decided by the bytes, whatever the name.
+			case "bin_name_text_secret", "bin_name_text":
+				a.Name = "dump.bin"
+				mt = "application/octet-stream"
+				s.projectRegistry.GetWorkflow("wf-alpha").Broker.Egress.Artifacts = []string{"dump.bin"}
+			case "pdf_name_text_secret", "pdf_name_text":
+				a.Name = "rendered.pdf"
+				mt = "application/pdf"
+			case "yaml_name_text_secret":
+				a.Name = "report.md"
+				mt = "application/x-yaml"
+			// A declared-text MIME whose bytes are not text is refused, never
+			// handed out as an unscanned binary download (review-20261012-87d6 F1).
+			case "json_mime_nul":
+				mt = "application/json"
+				opener.body = []byte(`{"a":"` + "\x00" + `"}`)
+			// Over 64 KiB of 3-byte runes under a binary name: the 65,536-byte
+			// cut lands inside a rune (65536 mod 3 = 1). The truncation rewinds
+			// to a rune boundary, so this stays text and scanned, never an
+			// unscanned download (review-20261012-8996 F1).
+			case "bin_name_cjk_over_limit":
+				a.Name = "dump.bin"
+				mt = "application/octet-stream"
+				s.projectRegistry.GetWorkflow("wf-alpha").Broker.Egress.Artifacts = []string{"dump.bin"}
+				opener.body = []byte(strings.Repeat("漢", 30000))
+			case "text_mime_binary_tail":
+				opener.body = append([]byte(strings.Repeat("plain text ", 100)), 0xff, 0xfe)
 			case "invalid_utf8":
 				opener.body = []byte{0xff}
 			case "nul":
@@ -197,9 +232,18 @@ func TestCompanionArtifactTextBoundsAndSecretGate(t *testing.T) {
 			case "scanner_missing":
 				s.egress = nil
 			}
+			if strings.HasSuffix(name, "_text_secret") {
+				opener.body = []byte("db:\n  password: x\nAuthorization: Bearer sk-" + strings.Repeat("a", 48) + "\n")
+			}
 			out, bad := artifactRead(t, s, raw)
-			if name == "invalid_utf8" || name == "nul" || name == "credential" || name == "scanner_missing" {
+			if strings.HasSuffix(name, "_text_secret") {
+				require.True(t, bad, "%s: text under a binary-looking name must be scanned, not minted a download link: %v", name, out)
+				require.Contains(t, out["error"], "egress_secret")
+				return
+			}
+			if name == "invalid_utf8" || name == "nul" || name == "credential" || name == "scanner_missing" || name == "json_mime_nul" || name == "text_mime_binary_tail" {
 				require.True(t, bad)
+				require.NotContains(t, out["error"], "download_url")
 				return
 			}
 			require.False(t, bad)
@@ -209,7 +253,7 @@ func TestCompanionArtifactTextBoundsAndSecretGate(t *testing.T) {
 			}
 			require.Equal(t, "text", out["kind"])
 			require.Contains(t, out["content"], "untrusted_content")
-			if name == "truncated" {
+			if name == "truncated" || name == "bin_name_cjk_over_limit" {
 				require.Equal(t, true, out["truncated"])
 				require.Less(t, len(out["content"].(string)), artifactTextLimit+200)
 			}

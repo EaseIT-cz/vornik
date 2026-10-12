@@ -220,3 +220,60 @@ func TestResolveJournal_RefusalsCarryCodeAndRemedy(t *testing.T) {
 		t.Fatalf("lock held = %v, want refusal %s wrapping ErrApplyInProgress", err, RefusalApplyInProgress)
 	}
 }
+
+// audit 2026-10-12, finding B: --restore never read the proposal's status.
+// #301 accepted that a DRIFT row's proposal may already be APPLIED; restore
+// then wrote the pre-images back and closed the row REVERTED while the
+// proposal, its ledger and its snapshot still said APPLIED, breaking §3's
+// invariant (a row and its ledger agree). Design §12.5.6: refuse, name
+// --keep and the ledger rollback, and change nothing.
+func TestResolveJournal_RestoreRefusedForAppliedProposal(t *testing.T) {
+	env, pid, id := driftCase(t)
+	forceProposalStatus(t, env, pid, persistence.ProposalStatusApplied)
+	before := proposalRow(t, env, pid)
+	disk := readFile(t, env.path("config.yaml"))
+
+	_, err := env.e.ResolveJournal(context.Background(), id, ResolveRestore, "vadim")
+	var ref *ResolveRefusal
+	if !errors.As(err, &ref) || ref.Code != RefusalRestoreApplied {
+		t.Fatalf("err = %v, want a ResolveRefusal %s", err, RefusalRestoreApplied)
+	}
+	if !strings.Contains(ref.Remedy, "--keep") || !strings.Contains(ref.Remedy, "rollback") {
+		t.Errorf("remedy does not name --keep and the rollback: %q", ref.Remedy)
+	}
+	if got := readFile(t, env.path("config.yaml")); got != disk {
+		t.Errorf("a refused restore wrote config.yaml: %q, was %q", got, disk)
+	}
+	if j := env.latestJournal(t, pid); j.State != persistence.JournalStateDrift || j.TerminalAt != nil {
+		t.Errorf("journal = %s terminal=%v, want it still DRIFT and open", j.State, j.TerminalAt)
+	}
+	after := proposalRow(t, env, pid)
+	if after.Status != before.Status || after.PreApplySnapshot != before.PreApplySnapshot || after.AppliedBy != before.AppliedBy {
+		t.Errorf("the proposal was written: before %+v after %+v", before, after)
+	}
+	// --keep is the way out the remedy names: the row closes APPLIED.
+	res, err := env.e.ResolveJournal(context.Background(), id, ResolveKeep, "vadim")
+	if err != nil || res.Outcome != ResolveOutcomeAlreadyApplied {
+		t.Fatalf("keep after the refusal = %+v, %v; want %s", res, err, ResolveOutcomeAlreadyApplied)
+	}
+}
+
+// The other non-APPROVED statuses keep restoring: the ledger does not hold
+// them as applied, so REVERTED agrees with it (audit 2026-10-12, finding B).
+func TestResolveJournal_RestoreUnapprovedProposalStillRestores(t *testing.T) {
+	for _, status := range []string{
+		persistence.ProposalStatusRejected,
+		persistence.ProposalStatusDraft,
+		persistence.ProposalStatusRolledBack,
+		persistence.ProposalStatusRegressed,
+	} {
+		t.Run(status, func(t *testing.T) {
+			env, pid, id := driftCase(t)
+			forceProposalStatus(t, env, pid, status)
+			res, err := env.e.ResolveJournal(context.Background(), id, ResolveRestore, "vadim")
+			if err != nil || res.State != persistence.JournalStateReverted || res.ProposalStatus != status {
+				t.Fatalf("restore = %+v, %v; want REVERTED with the proposal %s", res, err, status)
+			}
+		})
+	}
+}

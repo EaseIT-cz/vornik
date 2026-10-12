@@ -148,7 +148,7 @@ def connect(args, which=shutil.which, run=subprocess.run, out=print, is_executab
         is_executable = approval._executable
     named = getattr(args, "vornikctl", None)
     if named:
-        # GitHub #99: run the named copy and record the same path, so the
+        # the setup CLI gaps change: run the named copy and record the same path, so the
         # path Hermes runs at every start is one this user can execute.
         if not os.path.isabs(named):
             out("--vornikctl must be an absolute path, got %r" % named)

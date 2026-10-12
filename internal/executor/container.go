@@ -1048,7 +1048,7 @@ func (e *Executor) executeAgentStep(ctx context.Context, task *persistence.Task,
 	// re-registered as this step's. The snapshot is the
 	// load-bearing half (mtime is unreliable across worktree
 	// checkouts); stepStart is kept as a cheap pre-filter.
-	stepOutputs, _ := e.persistArtifacts(ctx, execution.ID, task.ProjectID, task.ID, workspaceDir, effectiveProjectDir, stepStart, preStepArtifactSnapshot)
+	stepOutputs, _ := e.persistArtifacts(persistence.WithArtifactStep(ctx, stepID), execution.ID, task.ProjectID, task.ID, workspaceDir, effectiveProjectDir, stepStart, preStepArtifactSnapshot)
 	// Hand the harvested store-backed outputs to the workflow loop so
 	// the next step's ephemeral container can re-stage them (task e9a5).
 	plan.stepOutputArtifacts = stepOutputs
@@ -2102,7 +2102,7 @@ func (e *Executor) executeWarmAgentStep(ctx context.Context, task *persistence.T
 	// through too — without this every warm-pool task would re-
 	// register every leftover under the project-persisted
 	// artifacts tree as ITS deliverable.
-	stepOutputs, err := e.persistArtifacts(ctx, execution.ID, task.ProjectID, task.ID, entry.WorkspaceDir, warmEffectiveProjectDir, stepStart, preStepArtifactSnapshot)
+	stepOutputs, err := e.persistArtifacts(persistence.WithArtifactStep(ctx, stepID), execution.ID, task.ProjectID, task.ID, entry.WorkspaceDir, warmEffectiveProjectDir, stepStart, preStepArtifactSnapshot)
 	if err != nil {
 		e.warmPool.Release(entry, false)
 		return "", nil, err

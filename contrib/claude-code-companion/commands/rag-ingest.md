@@ -245,6 +245,13 @@ def resolve_scope():
     return cwd_scope()
 
 repo_scope = resolve_scope()
+# A document path needs a scope: without one nothing supersedes, and the
+# daemon refuses the delegation (supersession design A.2, audit 2026-10-12).
+if doc_path and not repo_scope:
+    print("error: these files have document paths but repo_scope is empty (an empty --scope);")
+    print("without a scope a re-ingest cannot replace the earlier version.")
+    print("Pass --scope <the repository's scope>, or leave --scope out to take it from the repository.")
+    sys.exit(1)
 
 # Same 600 KiB soft cap as /upload (companion MCP body is 1 MiB
 # raw; base64 inflates 1.33x; ~25% headroom for JSON envelope).

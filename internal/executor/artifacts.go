@@ -355,7 +355,20 @@ func (e *Executor) persistArtifacts(ctx context.Context, executionID, projectID,
 	// cross-step staging (task e9a5). Keyed on the ORIGINAL name so the
 	// next step's role finds the file by its logical filename.
 	harvested := make([]map[string]string, 0, len(files))
+	seen := make(map[string]bool, len(files))
 	for _, f := range files {
+		// Unchanged staged inputs were removed by the pre-step gates above;
+		// now collapse identical same-name files from both output roots before
+		// disambiguation, without crossing harvests or task boundaries.
+		hash, err := hashFile(f.sourcePath)
+		if err != nil {
+			return nil, fmt.Errorf("artifact hash for %s: %w", f.name, err)
+		}
+		key := f.name + ":" + hash
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
 		entry, err := e.storeOneArtifact(ctx, executionID, projectID, taskID, f.name, f.sourcePath, now)
 		if err != nil {
 			return nil, err
@@ -394,13 +407,14 @@ func (e *Executor) storeOneArtifact(ctx context.Context, executionID, projectID,
 	var harvested map[string]string
 	if e.artifactRepo != nil {
 		artifact := &persistence.Artifact{
-			ID:            generateArtifactID(executionID),
-			ProjectID:     projectID,
-			ExecutionID:   &executionID,
-			Name:          disambiguated,
-			ArtifactClass: persistence.ArtifactClassOutput,
-			StoragePath:   sourcePath,
-			Origin:        persistence.ArtifactOriginTaskOutput,
+			ID:              generateArtifactID(executionID),
+			ProjectID:       projectID,
+			ExecutionID:     &executionID,
+			Name:            disambiguated,
+			ArtifactClass:   persistence.ArtifactClassOutput,
+			StoragePath:     sourcePath,
+			Origin:          persistence.ArtifactOriginTaskOutput,
+			ProducingStepID: persistence.ArtifactStep(ctx),
 		}
 		if taskID != "" {
 			artifact.TaskID = &taskID

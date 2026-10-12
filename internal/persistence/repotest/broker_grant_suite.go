@@ -24,12 +24,17 @@ func RunBrokerGrantSuite(t *testing.T, grants persistence.BrokerGrantRepository,
 	// ahead of a later run's grant under DigestDue's ORDER BY digest_through
 	// LIMIT 500 and would have failed Gauges_covered_list_and_digest again.
 	// Every subtest now revokes what it created (createGrant); this check
-	// fails the run if any live grant is left behind (a delta, so a shared DB
-	// that already holds other live grants is fine).
-	liveBefore := h.liveTotal(t)
+	// fails the run if any live grant is left behind.
+	//
+	// Audit 2026-10-12: the check used to be a delta of the DATABASE-WIDE live
+	// count, so another test's grants in the shared Postgres DB that expired or
+	// were revoked while this suite ran read as a negative leak ("left -2 live
+	// grants behind (before 2, after 0)" in the full integration lane; the suite
+	// passes alone). It now counts only the projects this suite created grants
+	// in: every subtest's project id is unique, so the count is exactly ours.
 	t.Cleanup(func() {
-		if after := h.liveTotal(t); after != liveBefore {
-			t.Errorf("the suite left %d live grants behind (before %d, after %d)", after-liveBefore, liveBefore, after)
+		if left := h.liveOwn(t); left != 0 {
+			t.Errorf("the suite left %d live grants behind in its own projects", left)
 		}
 	})
 	t.Run("MissContract", func(t *testing.T) { AssertMissRepo(t, "BrokerGrantRepository.Get", grants.Get) })
@@ -171,17 +176,25 @@ type standingHarness struct {
 	actions persistence.BrokerActionRepository
 	ctx     context.Context
 	now     time.Time
+
+	mu       sync.Mutex
+	projects map[string]bool // projects createGrant created a grant in
 }
 
-func (h *standingHarness) liveTotal(t *testing.T) int {
+// liveOwn counts the live grants in the projects this suite created grants in.
+func (h *standingHarness) liveOwn(t *testing.T) int {
 	t.Helper()
 	rows, err := h.grants.CountLive(h.ctx, time.Now().UTC())
 	if err != nil {
 		t.Fatal(err)
 	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
 	n := 0
 	for _, r := range rows {
-		n += int(r.Live)
+		if h.projects[r.ProjectID] {
+			n += int(r.Live)
+		}
 	}
 	return n
 }
@@ -199,6 +212,12 @@ func (h *standingHarness) createGrant(t *testing.T, seedActionID, seedHash strin
 			return err
 		}
 	}
+	h.mu.Lock()
+	if h.projects == nil {
+		h.projects = map[string]bool{}
+	}
+	h.projects[g.ProjectID] = true
+	h.mu.Unlock()
 	err := h.grants.ApproveSeedAndCreate(h.ctx, seedActionID, seedHash, "device:dev_1", g, limit, now)
 	id := g.ID
 	t.Cleanup(func() {

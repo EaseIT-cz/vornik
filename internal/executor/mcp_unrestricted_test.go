@@ -19,7 +19,8 @@ import (
 // container-side gate would silently strip their MCP access.
 //
 // Saying what is meant is the first half of closing that gap
-// (https://docs.vornik.io, MCP resolution-gap item; agent runtime contract §7.1). It is
+// (MCP resolution-gap item: this half shipped in ef0c6f743, the container
+// question closed on measurement in 2bf3bec53; agent runtime contract §7.1). It is
 // additive: an older agent image ignores the field.
 
 func permissionsOf(t *testing.T, raw []byte) map[string]any {

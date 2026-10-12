@@ -79,9 +79,13 @@ func replyTask(t *testing.T, srv *Server, taskRepo *mocks.MockTaskRepository, st
 	taskRepo.GetFunc = func(context.Context, string) (*persistence.Task, error) {
 		return &persistence.Task{ID: "t1", ProjectID: "broker-acme", WorkflowID: &wf, Status: status, UpdatedAt: time.Now()}, nil
 	}
+	execID := "exec-current"
+	srv.executionRepo = &mocks.MockExecutionRepository{ListFunc: func(context.Context, persistence.ExecutionFilter) ([]*persistence.Execution, error) {
+		return []*persistence.Execution{{ID: execID}}, nil
+	}}
 	srv.artifactRepo = &mocks.MockArtifactRepository{
 		ListFunc: func(context.Context, persistence.ArtifactFilter) ([]*persistence.Artifact, error) {
-			return []*persistence.Artifact{{ID: "a1", Name: "summary-20260930-ab12.json",
+			return []*persistence.Artifact{{ID: "a1", ExecutionID: &execID, ProducingStepID: "read", Name: "summary-20260930-ab12.json",
 				ArtifactClass: persistence.ArtifactClassOutput, StoragePath: summary, CreatedAt: time.Now()}}, nil
 		},
 	}

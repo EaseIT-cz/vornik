@@ -41,6 +41,9 @@ administering one: do not follow the rest of this; use Vornik's ordinary tools.
    to its provider, so the user approves it on their phone,
    once per destination (provider and host); say so before you ask.
    Keep the home project for your own scratch.
+   Before changing an existing workflow, call `show_workflow(project, slug)`
+   to read its active steps, prompts, schemas, schedule and limits. Pending
+   proposals are not live definitions.
    Steps hand work to each other only through files under `artifacts/out/`; only the last step writes `result.json`.
    Connecting a service takes two steps, each approved by the user: first
    `add_api` for a REST API or

@@ -137,12 +137,13 @@ func (s *Server) FixItDoctorPanel(w http.ResponseWriter, r *http.Request, kind, 
 	// Scope: a non-empty ProjectID was already RequestAllowsProject-checked by
 	// uiRequireProjectScope above, and the assembler additionally verifies the
 	// task belongs to that project. An EMPTY ProjectID bypasses that gate
-	// (uiRequireProjectScope short-circuits to true), so — mirroring the
-	// apply/message daemon-scope gate — the opening summary is fetched for an
-	// unscoped ProjectID only when the caller is admin-class. Otherwise the
-	// panel opens blank, exactly as before this fix.
+	// (uiRequireProjectScope short-circuits to true), and a degraded_feature /
+	// failed_reload summary is daemon-wide whatever the project, so —
+	// mirroring the apply/message daemon-scope gate — a daemon-scope summary
+	// is fetched only for an admin-class caller (doctor design §E8.8).
+	// Otherwise the panel opens blank.
 	if data.Configured && data.SessionID == "" && len(data.Turns) == 0 &&
-		(data.ProjectID != "" || fixItCallerIsAdmin(r)) {
+		(!api.FixItDaemonScope(data.Kind, data.ProjectID) || s.fixItCallerIsAdmin(r)) {
 		if summary := s.fixItOpeningSummary(r, data.Kind, data.RefID, data.ProjectID); summary != "" {
 			data.Turns = []fixItTurnView{{Role: "assistant", Content: summary}}
 		}
@@ -191,21 +192,27 @@ func (s *Server) populateFixItResume(r *http.Request, data *FixItPanelData, sid 
 	if row.FailureKind != data.Kind || row.FailureRefID != data.RefID {
 		return
 	}
+	// A daemon-scope session's transcript is daemon-wide state: a non-admin
+	// caller gets the fresh page, as for a foreign id (doctor design §E8.8).
+	if api.FixItDaemonScope(row.FailureKind, row.ProjectID) && !s.fixItCallerIsAdmin(r) {
+		return
+	}
 	data.SessionID = row.ID
 	data.ProjectID = row.ProjectID
 	data.Turns = decodeFixItTurns(row.Transcript)
 	data.RollbackID = latestRollbackID(row.AppliedActions)
 }
 
-// fixItCallerIsAdmin mirrors ui/integrations.go's integrationsCaller
-// convention exactly: an UNSCOPED request (admin session, auth-disabled
-// install, or an unscoped API key) is treated as admin-class; a
-// project-scoped session/key is not. Used to gate daemon-scope fixit
-// actions (an empty ProjectID) to admin-class callers only, per
-// fix-it-doctor-design.md §7 ("daemon-scope actions admin-only").
-func fixItCallerIsAdmin(r *http.Request) bool {
-	_, scoped := api.RequestScopedProjects(r)
-	return !scoped
+// fixItCallerIsAdmin gates daemon-scope fixit sessions (api.FixItDaemonScope)
+// to admin-class callers, per fix-it-doctor-design.md §7 ("daemon-scope
+// actions admin-only"). It is api.IsAdminClassRequest — the same predicate
+// POST /api/v1/fixit/converse uses — over admin.allowed_keys
+// (WithOperatorCapability, the c.Config.Admin block the api server's
+// admin-class keys come from). audit 2026-10-12, finding C residual (doctor
+// design §E8.8): this used to accept any UNSCOPED caller, so a plain static
+// api.api_keys key passed.
+func (s *Server) fixItCallerIsAdmin(r *http.Request) bool {
+	return api.IsAdminClassRequest(r, s.operatorCapability.IsAdminKey)
 }
 
 // fixItAppliedActionRow projects one fixit_sessions.applied_actions
@@ -291,14 +298,14 @@ func (s *Server) fixItDoctorRouter(w http.ResponseWriter, r *http.Request) {
 // a request-body project id — same convention as resolveFixItScope in
 // api/fixit_handlers.go), re-checks it against the caller's allowed
 // projects (404 on mismatch — no existence leak), and additionally
-// requires an admin-class caller for a daemon-scope session (empty
-// project). This is the SCOPE RE-CHECK ON EVERY APPLY the design's §5.4/
-// §7 calls for — Converse's own scope gate at session-open time is not
+// requires an admin-class caller for a daemon-scope session
+// (api.FixItDaemonScope over the session row's kind and project). This
+// is the SCOPE RE-CHECK ON EVERY APPLY the design's §5.4/§7 calls for — Converse's own scope gate at session-open time is not
 // sufficient by itself because the ref could be tampered (or the
 // caller's own grants revoked) between open and apply. Returns
 // ("", false) after already writing the 404/not-found response.
 func (s *Server) fixItScopeAndAdminGate(w http.ResponseWriter, r *http.Request, sessionID, operator string) (projectID string, ok bool) {
-	scopedProject, found, err := s.fixItDoctor.SessionScope(r.Context(), sessionID, operator)
+	scopedProject, scopedKind, found, err := s.fixItDoctor.SessionScope(r.Context(), sessionID, operator)
 	if err != nil || !found {
 		http.NotFound(w, r)
 		return "", false
@@ -306,7 +313,7 @@ func (s *Server) fixItScopeAndAdminGate(w http.ResponseWriter, r *http.Request, 
 	if !s.uiRequireProjectScope(w, r, scopedProject) {
 		return "", false
 	}
-	if scopedProject == "" && !fixItCallerIsAdmin(r) {
+	if api.FixItDaemonScope(scopedKind, scopedProject) && !s.fixItCallerIsAdmin(r) {
 		http.NotFound(w, r)
 		return "", false
 	}
@@ -343,15 +350,27 @@ func (s *Server) FixItDoctorMessage(w http.ResponseWriter, r *http.Request, kind
 
 	ctx := r.Context()
 
+	// The gate classifies by the session row's kind and project for a resumed
+	// session (never the form's), and by the URL kind and form project for a
+	// new one.
+	gateKind := kind
 	if sessionID != "" {
-		scopedProject, ok, err := s.fixItDoctor.SessionScope(ctx, sessionID, operator)
+		scopedProject, scopedKind, ok, err := s.fixItDoctor.SessionScope(ctx, sessionID, operator)
 		if err != nil || !ok {
 			http.NotFound(w, r)
 			return
 		}
 		projectID = scopedProject
+		gateKind = scopedKind
 	}
 	if !s.uiRequireProjectScope(w, r, projectID) {
+		return
+	}
+	// audit 2026-10-12, finding C residual (doctor design §E8.8): this route
+	// had no daemon-scope gate, so any caller could open or resume a session
+	// grounded on daemon-wide state.
+	if api.FixItDaemonScope(gateKind, projectID) && !s.fixItCallerIsAdmin(r) {
+		http.NotFound(w, r)
 		return
 	}
 
@@ -363,6 +382,7 @@ func (s *Server) FixItDoctorMessage(w http.ResponseWriter, r *http.Request, kind
 		return
 	}
 
+	// On a resumed session Converse ignores kind/refID and uses the row's.
 	result, err := s.fixItDoctor.Converse(ctx, sessionID, operator, kind, refID, projectID, message)
 	if err != nil {
 		s.renderFixItTranscript(w, FixItPanelData{

@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -242,31 +243,70 @@ var emailShaped = regexp.MustCompile(`[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+`)
 func (s *agentAdminService) Do(ctx context.Context, key *persistence.APIKey, verb string, input json.RawMessage) (AgentAdminResult, error) {
 	res, err := s.doVerb(ctx, key, verb, input)
 	if err == nil && key != nil {
+		// What the agent sent is its own: an identity it described stays.
 		hide := s.providerIdentityHider(ctx, key.AgentNamespace)
-		res.Sentence, res.Reason = hide(res.Sentence), hide(res.Reason)
+		own := emailShaped.FindAllString(string(input), -1)
+		res.Sentence, res.Reason = hide(res.Sentence, own), hide(res.Reason, own)
 	}
 	return res, err
 }
 
-// providerIdentityHider replaces each provider-reported identity of the
-// namespace's connections with "verified by the provider". A read failure
-// hides nothing it cannot list, so it falls back to masking every
+// hiddenAddress replaces an email-shaped string the agent did not supply.
+const hiddenAddress = "an address only you can see"
+
+// providerIdentityHider returns the agent-facing redaction (design §22.2.7,
+// amended 2026-10-12, audit finding C). Pass 1 replaces each provider
+// identity stored now with "verified by the provider". Pass 2 masks every
+// remaining email-shaped string except one the agent supplied: an
+// agent-sourced identity on a stored row, or one of own (the caller's
+// agent-supplied strings for this text). A provider identity is always
+// email-shaped (EmailFromIDToken), so pass 2 also covers every identity a
+// stored sentence names from an earlier sign-in. A read failure masks every
 // email-shaped string.
-func (s *agentAdminService) providerIdentityHider(ctx context.Context, ns string) func(string) string {
+func (s *agentAdminService) providerIdentityHider(ctx context.Context, ns string) func(text string, own []string) string {
 	rows, err := s.grants.ListIntegrations(ctx, ns)
 	if err != nil {
-		return func(t string) string { return emailShaped.ReplaceAllString(t, "verified by the provider") }
+		return func(t string, _ []string) string { return emailShaped.ReplaceAllString(t, "verified by the provider") }
 	}
 	var pairs []string
+	agentSupplied := map[string]bool{}
 	for _, a := range rows {
-		if a.IdentitySource == persistence.IdentitySourceProvider && a.AccountIdentity != "" {
+		switch {
+		case a.AccountIdentity == "":
+		case a.IdentitySource == persistence.IdentitySourceProvider:
 			pairs = append(pairs, a.AccountIdentity, "verified by the provider")
+		case a.IdentitySource == persistence.IdentitySourceAgent:
+			agentSupplied[a.AccountIdentity] = true
 		}
 	}
-	if len(pairs) == 0 {
-		return func(t string) string { return t }
+	current := strings.NewReplacer(pairs...)
+	return func(t string, own []string) string {
+		if len(pairs) > 0 {
+			t = current.Replace(t)
+		}
+		return emailShaped.ReplaceAllStringFunc(t, func(m string) string {
+			if agentSupplied[m] || slices.Contains(own, m) {
+				return m
+			}
+			return hiddenAddress
+		})
 	}
-	return strings.NewReplacer(pairs...).Replace
+}
+
+// agentSuppliedIdentities lists the identities a request's canonical
+// payload records as described by the agent itself.
+func agentSuppliedIdentities(rendered []byte) []string {
+	var pl approvalPayload
+	if json.Unmarshal(rendered, &pl) != nil {
+		return nil
+	}
+	var out []string
+	for _, g := range pl.Grant.Integrations {
+		if g.Account != nil && g.Account.Identity != "" && g.Account.IdentitySource == agentadmin.IdentityFromAgent {
+			out = append(out, g.Account.Identity)
+		}
+	}
+	return out
 }
 
 // doVerb is Do before the agent-facing redaction.
@@ -406,56 +446,161 @@ func (s *agentAdminService) fileProposal(ctx context.Context, actorKind, credent
 
 // applyInert approves an inert change as the system actor and applies it.
 func (s *agentAdminService) applyInert(ctx context.Context, p *persistence.ControlPlaneProposal, ch agentadmin.Change) (AgentAdminResult, error) {
-	var publication *configAccountPublication
 	if len(configAccountRefs(ch.Grant, ch.Narrow)) > 0 {
-		var err error
-		ctx, publication, err = s.c.beginConfigAccountTransition(ctx, ch.Namespace, configAccountRefs(ch.Grant, ch.Narrow))
-		if err != nil {
-			return AgentAdminResult{}, err
-		}
+		return s.applyInertTransition(ctx, p, ch)
 	}
-
 	if err := s.proposals.SetStatus(ctx, p.ID, persistence.ProposalStatusApproved, AgentAdminInertActor); err != nil {
 		return AgentAdminResult{}, err
 	}
-	if why := s.applyAndVerify(ctx, p.ID, AgentAdminInertActor, ch); why != "" {
+	if why, _ := s.applyAndVerify(ctx, p.ID, AgentAdminInertActor, ch, false); why != "" {
 		return AgentAdminResult{ChangeID: p.ID, Effect: EffectRefused, Reason: ch.Verb + " refused: " + why}, nil
 	}
 	if err := s.recordNarrowing(ctx, ch.Narrow); err != nil {
 		return AgentAdminResult{}, err
 	}
-	if publication != nil {
-		if err := s.c.repos.AccountTransitions.Finish(ctx, publication.ticket, publication.rows); err != nil {
-			return AgentAdminResult{}, err
+	return AgentAdminResult{ChangeID: p.ID, Effect: EffectApplied, Sentence: ch.Sentence}, nil
+}
+
+// applyInertTransition is applyInert for a change that touches a connection:
+// it runs inside a config account transition, and every exit leaves the
+// transition row consistent (design §22.2.16, change 2026-10-12, audit
+// finding A; see settleConfigTransition).
+func (s *agentAdminService) applyInertTransition(ctx context.Context, p *persistence.ControlPlaneProposal, ch agentadmin.Change) (AgentAdminResult, error) {
+	ctx, publication, err := s.c.beginConfigAccountTransition(ctx, ch.Namespace, configAccountRefs(ch.Grant, ch.Narrow))
+	if err != nil {
+		return AgentAdminResult{}, err
+	}
+	exit := configExitAbort
+	defer func() { s.c.settleConfigTransition(ctx, publication, exit) }()
+	if err = s.collectAccountRows(ctx, publication, nil, agentadmin.Grant{}, ch.Narrow); err != nil {
+		return AgentAdminResult{}, err
+	}
+	if err = s.proposals.SetStatus(ctx, p.ID, persistence.ProposalStatusApproved, AgentAdminInertActor); err != nil {
+		return AgentAdminResult{}, err
+	}
+	if why, unpublished := s.applyAndVerify(ctx, p.ID, AgentAdminInertActor, ch, false); why != "" {
+		if !unpublished {
+			exit = configExitKeepBusy
 		}
+		return AgentAdminResult{ChangeID: p.ID, Effect: EffectRefused, Reason: ch.Verb + " refused: " + why}, nil
+	}
+	// Published: busy clears with Finish or stays for recovery.
+	exit = configExitKeepBusy
+	if err = s.c.repos.AccountTransitions.Finish(ctx, publication.ticket, publication.rows); err != nil {
+		return AgentAdminResult{}, err
+	}
+	exit = configExitFinished
+	if err = s.recordNarrowing(ctx, ch.Narrow); err != nil {
+		return AgentAdminResult{}, err
 	}
 	return AgentAdminResult{ChangeID: p.ID, Effect: EffectApplied, Sentence: ch.Sentence}, nil
+}
+
+// configExit is how a config account transition's holder leaves it.
+type configExit int
+
+const (
+	// configExitAbort: nothing was published (the default on every early
+	// return); the deferred settle Aborts.
+	configExitAbort configExit = iota
+	// configExitKeepBusy: the files may be published, or Finish failed;
+	// busy stays for controlled recovery.
+	configExitKeepBusy
+	// configExitFinished: Finish committed.
+	configExitFinished
+)
+
+// settleConfigTransition applies a config transition's exit.
+func (c *Container) settleConfigTransition(ctx context.Context, p *configAccountPublication, exit configExit) {
+	if p == nil {
+		return
+	}
+	switch exit {
+	case configExitAbort:
+		c.abortAccountTransition(ctx, p.ticket, "connection-config")
+	case configExitKeepBusy:
+		c.Logger.Warn().Str("scope", p.ticket.Scope).
+			Msg("agent admin: a connection change may have published and did not finish; the scope stays busy for controlled recovery (design §22.2.16)")
+	}
+}
+
+// preWriteApplyErrors are the ApplyEngine.Apply sentinels whose every return
+// site precedes the first file write (audit 2026-10-12 finding A). An
+// ALLOWLIST: ErrStaleBase and ErrWriterFenced are absent because both also
+// return after a write.
+var preWriteApplyErrors = []error{
+	controlplane.ErrApplyInProgress, controlplane.ErrBusy, controlplane.ErrDaemonAckRequired,
+	controlplane.ErrReviewOnly, controlplane.ErrTooManyOps, controlplane.ErrContentTooLarge, controlplane.ErrScaffoldConflict,
 }
 
 // applyAndVerify applies an APPROVED proposal and confirms the result loaded.
 // The reload strips an invalid project with a warning, so "applied" alone is
 // not proof (plan P3 global rules). A miss rolls back. It returns why the
-// change did not take, or "".
-func (s *agentAdminService) applyAndVerify(ctx context.Context, id, actor string, ch agentadmin.Change) string {
+// change did not take, or "", and whether a refusal provably left the
+// configuration unpublished: a pre-write Apply error with no apply journal
+// open for the proposal beforehand (an open one is resumed and may return
+// anything), or a verify miss whose rollback succeeded. retryable keeps a
+// proposal refused for a running task APPROVED, for the approval tick's
+// retry; rejecting it made that retry fail as "the change is rejected"
+// (audit 2026-10-12 finding A).
+func (s *agentAdminService) applyAndVerify(ctx context.Context, id, actor string, ch agentadmin.Change, retryable bool) (string, bool) {
+	resumes := true
+	if s.engine.Journal == nil {
+		resumes = false
+	} else if _, jerr := s.engine.Journal.OpenForProposal(ctx, id); errors.Is(jerr, persistence.ErrNotFound) {
+		resumes = false
+	}
 	if err := s.engine.Apply(ctx, id, actor, false); err != nil {
-		_ = s.proposals.SetStatus(ctx, id, persistence.ProposalStatusRejected, actor)
+		if !retryable || !errors.Is(err, controlplane.ErrBusy) {
+			_ = s.proposals.SetStatus(ctx, id, persistence.ProposalStatusRejected, actor)
+		}
+		unpublished := !resumes && slices.ContainsFunc(preWriteApplyErrors, func(e error) bool { return errors.Is(err, e) })
 		switch {
 		case errors.Is(err, controlplane.ErrBusy):
-			return "a task of this project is running; try again when it finishes"
+			return "a task of this project is running; try again when it finishes", unpublished
 		case errors.Is(err, controlplane.ErrStaleBase):
-			return "a file this change was prepared against has changed; prepare it again"
+			return "a file this change was prepared against has changed; prepare it again", unpublished
 		case errors.Is(err, controlplane.ErrWriterFenced):
-			return "this Vornik node is not the one that changes configuration right now; try again shortly"
+			return "this Vornik node is not the one that changes configuration right now; try again shortly", unpublished
 		}
-		return "the change could not be applied: " + err.Error()
+		return "the change could not be applied: " + err.Error(), unpublished
 	}
 	if missing := s.verifyLoaded(ch); missing != "" {
 		if rerr := s.engine.Rollback(ctx, id); rerr != nil {
 			s.c.Logger.Error().Err(rerr).Str("proposal_id", id).Msg("agent admin: rollback after a failed verify failed")
+			return "Vornik could not load " + missing + "; rolling the change back failed", false
 		}
-		return "Vornik could not load " + missing + "; the change was rolled back"
+		return "Vornik could not load " + missing + "; the change was rolled back", true
 	}
-	return ""
+	return "", false
+}
+
+// collectAccountRows puts a config change's account metadata into its
+// publication BEFORE the external apply (design §22.2.16, change
+// 2026-10-12): the integration rows a grant records, the re-upserted rows of
+// a tool removal, and the removals. They are a function of the approved
+// payload and reads made while the namespace is busy, so after a verified
+// apply the only step left before busy clears is Finish. r is nil for an
+// inert change, which grants nothing.
+func (s *agentAdminService) collectAccountRows(ctx context.Context, p *configAccountPublication, r *persistence.AgentApprovalRequestRow, g agentadmin.Grant, n agentadmin.Narrowing) error {
+	if r != nil {
+		p.rows.Integrations = append(p.rows.Integrations, grantIntegrationRows(*r, g)...)
+	}
+	for _, rm := range n.RemovedTools {
+		a, ok, err := s.narrowedIntegration(ctx, rm)
+		if err != nil {
+			return err
+		}
+		if ok {
+			p.rows.Integrations = append(p.rows.Integrations, a)
+			p.narrowed = append(p.narrowed, rm.Kind)
+		}
+	}
+	now := time.Now().UTC()
+	for _, ref := range n.RemovedIntegrations {
+		p.rows.Removed = append(p.rows.Removed, persistence.AccountIntegrationRemoval{ProjectID: ref.Project, Integration: ref.Name, At: now})
+	}
+	return nil
 }
 
 // verifyLoaded checks every op's entity against the live registry.
@@ -485,6 +630,17 @@ func (s *agentAdminService) verifyLoaded(ch agentadmin.Change) string {
 // recordNarrowing withdraws approvals a removal makes moot. Grants are never
 // written here: only the widening_change effect writes them.
 func (s *agentAdminService) recordNarrowing(ctx context.Context, n agentadmin.Narrowing) error {
+	if publication := configPublication(ctx); publication != nil {
+		// Under a config account transition the account rows were collected
+		// before the apply and published by Finish (collectAccountRows);
+		// only the non-account writes remain (design §22.2.16, change
+		// 2026-10-12).
+		for _, kind := range publication.narrowed {
+			countNarrowing(kind)
+		}
+		publication.narrowed = nil
+		return s.deleteWorkflowReaches(ctx, n.RemovedWorkflows)
+	}
 	if err := s.recordToolRemovals(ctx, n.RemovedTools); err != nil {
 		return err
 	}
@@ -501,23 +657,21 @@ func (s *agentAdminService) recordNarrowing(ctx context.Context, n agentadmin.Na
 	// are suspended before the approval is withdrawn, so a failure leaves
 	// the removal unrecorded and retryable, never a removed connection with
 	// grants still marked live (review 25bf finding 4).
-	if configPublication(ctx) == nil {
-		for ns, refs := range byNS {
-			if _, err := s.c.suspendGrantsThrough(ctx, ns, refs); err != nil {
-				return err
-			}
+	for ns, refs := range byNS {
+		if _, err := s.c.suspendGrantsThrough(ctx, ns, refs); err != nil {
+			return err
 		}
 	}
 	for _, ref := range n.RemovedIntegrations {
-		if publication := configPublication(ctx); publication != nil {
-			publication.rows.Removed = append(publication.rows.Removed, persistence.AccountIntegrationRemoval{ProjectID: ref.Project, Integration: ref.Name, At: now})
-			continue
-		}
 		if err := s.grants.MarkIntegrationRemoved(ctx, ref.Project, ref.Name, now); err != nil {
 			return err
 		}
 	}
-	for _, wf := range n.RemovedWorkflows {
+	return s.deleteWorkflowReaches(ctx, n.RemovedWorkflows)
+}
+
+func (s *agentAdminService) deleteWorkflowReaches(ctx context.Context, workflows []string) error {
+	for _, wf := range workflows {
 		if err := s.grants.DeleteWorkflowReach(ctx, wf); err != nil {
 			return err
 		}
@@ -603,11 +757,24 @@ func (s *agentAdminService) applyApproved(ctx context.Context, r persistence.Age
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	var publication *configAccountPublication
+	// Every exit before a possible publication Aborts (design §22.2.16,
+	// change 2026-10-12, audit finding A); see settleConfigTransition.
+	exit := configExitAbort
 	if len(configAccountRefs(pl.Grant, pl.Narrow)) > 0 {
 		vector, snapshotErr := s.c.accountDecisionEpoch(ctx, r.Namespace)
 		ctx = context.WithValue(ctx, configAccountSnapshotKey{}, configAccountSnapshot{vector: vector, err: snapshotErr})
 		ctx, publication, err = s.c.beginConfigAccountTransition(ctx, r.Namespace, configAccountRefs(pl.Grant, pl.Narrow))
 		if err != nil {
+			return err
+		}
+		settleCtx := ctx
+		defer func() { s.c.settleConfigTransition(settleCtx, publication, exit) }()
+		if pl.Grant.Cover {
+			// A cover request names no connection; one that did would
+			// record account rows with no apply to fence.
+			return fmt.Errorf("%w: a cover request names a connection", approverdevice.ErrPermanent)
+		}
+		if err = s.collectAccountRows(ctx, publication, &r, pl.Grant, pl.Narrow); err != nil {
 			return err
 		}
 	}
@@ -658,7 +825,10 @@ func (s *agentAdminService) applyApproved(ctx context.Context, r persistence.Age
 				return err
 			}
 		}
-		if why := s.applyAndVerify(ctx, p.ID, actor, ch); why != "" {
+		if why, unpublished := s.applyAndVerify(ctx, p.ID, actor, ch, true); why != "" {
+			if !unpublished {
+				exit = configExitKeepBusy
+			}
 			if strings.HasPrefix(why, "a task of this project is running") {
 				return errors.New(why) // transient: the tick retries
 			}
@@ -667,13 +837,19 @@ func (s *agentAdminService) applyApproved(ctx context.Context, r persistence.Age
 	default:
 		return fmt.Errorf("%w: the change is %s", approverdevice.ErrPermanent, strings.ToLower(p.Status))
 	}
-	if err := s.recordGrant(ctx, r, pl, st.CeilingUSD, ceiling); err != nil {
-		return err
-	}
 	if publication != nil {
+		// Published (now or before a crash): busy clears with Finish, or
+		// stays for controlled recovery.
+		exit = configExitKeepBusy
 		if err := s.c.repos.AccountTransitions.Finish(ctx, publication.ticket, publication.rows); err != nil {
 			return err
 		}
+		exit = configExitFinished
+	}
+	// The non-account writes follow Finish: a failure here returns with
+	// busy clear, and the tick's retry finds the proposal APPLIED.
+	if err := s.recordGrant(ctx, r, pl, st.CeilingUSD, ceiling); err != nil {
+		return err
 	}
 	// A recipe install's credentials are requested once it applied, each
 	// its own approval kind on the phone (design §19.2, §19.11).
@@ -800,27 +976,15 @@ func (s *agentAdminService) changeOf(p *persistence.ControlPlaneProposal) (agent
 // when the apply raised it (from → to, CeilingAfter's decision); the absolute
 // ceiling_usd an old payload pinned is never written as is (§18.4).
 func (s *agentAdminService) recordGrant(ctx context.Context, r persistence.AgentApprovalRequestRow, pl approvalPayload, from, to float64) error {
-	at := time.Now().UTC()
-	if r.DecidedAt != nil {
-		at = *r.DecidedAt
-	}
-	for _, g := range pl.Grant.Integrations {
-		a := persistence.AgentIntegrationApproval{
-			Namespace: r.Namespace, ProjectID: g.Project, Integration: g.Name, Kind: g.Kind, URL: g.URL,
-			ReadTools: g.Read, WriteTools: g.Write, ReadPending: g.ReadPending,
-			ApprovedByDevice: r.DecidedByDevice, ApprovedAt: at,
-		}
-		// The account the device approved (design §22.2.2), never
-		// recomputed; the repository writes it only on an add or a re-add.
-		if g.Account != nil {
-			a.AccountLabel, a.AccountIdentity, a.IdentitySource = g.Account.Label, g.Account.Identity, g.Account.IdentitySource
-		}
-		if publication := configPublication(ctx); publication != nil {
-			publication.rows.Integrations = append(publication.rows.Integrations, a)
-			continue
-		}
-		if err := s.grants.UpsertIntegration(ctx, a); err != nil {
-			return err
+	at := approvedAt(r)
+	// Under a config account transition the integration rows were collected
+	// before the apply and published by Finish (design §22.2.16, change
+	// 2026-10-12); only the non-account writes below remain.
+	if configPublication(ctx) == nil {
+		for _, a := range grantIntegrationRows(r, pl.Grant) {
+			if err := s.grants.UpsertIntegration(ctx, a); err != nil {
+				return err
+			}
 		}
 	}
 	for wf, hash := range pl.Grant.Workflows {
@@ -848,6 +1012,33 @@ func (s *agentAdminService) recordGrant(ctx context.Context, r persistence.Agent
 		}
 	}
 	return s.recordNarrowing(ctx, pl.Narrow)
+}
+
+func approvedAt(r persistence.AgentApprovalRequestRow) time.Time {
+	if r.DecidedAt != nil {
+		return *r.DecidedAt
+	}
+	return time.Now().UTC()
+}
+
+// grantIntegrationRows are the integration approvals a grant records.
+func grantIntegrationRows(r persistence.AgentApprovalRequestRow, g agentadmin.Grant) []persistence.AgentIntegrationApproval {
+	at := approvedAt(r)
+	out := make([]persistence.AgentIntegrationApproval, 0, len(g.Integrations))
+	for _, i := range g.Integrations {
+		a := persistence.AgentIntegrationApproval{
+			Namespace: r.Namespace, ProjectID: i.Project, Integration: i.Name, Kind: i.Kind, URL: i.URL,
+			ReadTools: i.Read, WriteTools: i.Write, ReadPending: i.ReadPending,
+			ApprovedByDevice: r.DecidedByDevice, ApprovedAt: at,
+		}
+		// The account the device approved (design §22.2.2), never
+		// recomputed; the repository writes it only on an add or a re-add.
+		if i.Account != nil {
+			a.AccountLabel, a.AccountIdentity, a.IdentitySource = i.Account.Label, i.Account.Identity, i.Account.IdentitySource
+		}
+		out = append(out, a)
+	}
+	return out
 }
 
 // rejectApproved rejects the proposal behind a rejected request.

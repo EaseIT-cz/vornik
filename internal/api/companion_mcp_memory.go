@@ -131,6 +131,16 @@ func companionAuditOutput(toolName, outcome, result string) string {
 		sum := sha256.Sum256([]byte(result))
 		out += " sha256=" + hex.EncodeToString(sum[:])
 	}
+	if toolName == "delegate" {
+		// Broker design §6b.6: the delegate row says whether the answer was
+		// a reused earlier run (audit 2026-10-12). Only a reuse hit's answer
+		// carries "reused": true; a fresh run or a refusal is false.
+		var reply struct {
+			Reused bool `json:"reused"`
+		}
+		_ = json.Unmarshal([]byte(result), &reply)
+		out += fmt.Sprintf(" reused=%t", reply.Reused)
+	}
 	return out
 }
 

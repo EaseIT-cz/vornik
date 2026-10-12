@@ -331,8 +331,9 @@ type Agent struct {
 	// operators can answer "why did the bot do (or not do) X
 	// this turn?" without grepping journald. nil disables the
 	// layer cleanly — every turn still runs; just no audit row.
-	// See https://docs.vornik.io "Chat-layer observability" for the
-	// surface design.
+	// Shipped as "Chat-layer observability" (closed 2026-05-25,
+	// 1a54803b9); retention and redaction design:
+	// https://docs.vornik.io
 	chatAuditRepo persistence.ChatAuditRepository
 
 	// emailSender backs the send_email tool. nil disables the

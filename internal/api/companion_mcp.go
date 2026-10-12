@@ -270,7 +270,7 @@ func companionToolDefs() []mcpToolDef {
 							"properties": map[string]any{
 								"name":    map[string]any{"type": "string", "description": "Filename as it will land in the agent's /app/input/uploads/ directory."},
 								"content": map[string]any{"type": "string", "description": "Base64-encoded file bytes."},
-								"path":    map[string]any{"type": "string", "description": "Optional: the file's path relative to the root of the git repository that holds it, ending in name (e.g. docs/design/index.md). It is the document's identity for companion-rag-ingest: re-ingesting the same path in the same repo_scope supersedes the earlier versions, so RAG serves only the newest. Omit it for a file outside any repository."},
+								"path":    map[string]any{"type": "string", "description": "Optional: the file's path relative to the root of the git repository that holds it, ending in name (e.g. docs/design/index.md). It is the document's identity for companion-rag-ingest: re-ingesting the same path in the same repo_scope supersedes the earlier versions, so RAG serves only the newest. A path needs repo_scope (or the key's default scope): without one the delegation is refused. Omit it for a file outside any repository."},
 							},
 							"required": []string{"name", "content"},
 						},
@@ -289,7 +289,7 @@ func companionToolDefs() []mcpToolDef {
 		},
 		{
 			Name:        "status",
-			Description: "Return current task status (QUEUED/LEASED/RUNNING/COMPLETED/FAILED/CANCELLED). For a broker workflow the raw error is never returned; error_class is one of failed, timeout, budget, egress_no_output, egress_oversize, egress_schema. While the task runs, progress gives the running step_id, its step_index of step_count, attempt, step_started_at and last_event_at; tell the user where it is from progress instead of calling task_logs.",
+			Description: "Return current task status (QUEUED/LEASED/RUNNING/COMPLETED/FAILED/CANCELLED). For a broker workflow the raw error is never returned; error_class is one of failed, timeout, budget, egress_no_output, egress_oversize, egress_schema, egress_secret. While the task runs, progress gives the running step_id, its step_index of step_count, attempt, step_started_at and last_event_at; tell the user where it is from progress instead of calling task_logs.",
 			InputSchema: map[string]any{
 				"type":       "object",
 				"properties": map[string]any{"task_id": map[string]any{"type": "string"}},
@@ -1203,6 +1203,22 @@ func (s *Server) companionToolDelegate(ctx context.Context, key *persistence.API
 	// companion-rag-ingest workflow ghost-globbed for paths on the
 	// laptop that the agent container could never see.
 	if len(args.InputArtifacts) > 0 {
+		// A document path needs a repo scope (memory-rollback-supersession
+		// design A.2, amended 2026-10-12, audit finding H): SupersedeDocument
+		// does nothing without one, so two unscoped ingests of one document
+		// both stayed live. Refused before anything is stored.
+		// The scope the ingest will stamp: the delegation's (explicit, else
+		// the key default), else the project's repo_scope, which the executor
+		// falls back to (memoryscope.Resolve).
+		docScope := effectiveRepoScope(key, args.RepoScope)
+		if docScope == "" && s.projectRegistry != nil {
+			if p := s.projectRegistry.GetProject(key.ProjectID); p != nil {
+				docScope = p.RepoScope
+			}
+		}
+		if err := requireScopeForDocumentPaths(args.InputArtifacts, docScope); err != nil {
+			return "", err
+		}
 		if s.inputArtifactStore == nil {
 			return "", errors.New("inputArtifacts supplied but input-artifact store not configured on this daemon")
 		}
@@ -1226,7 +1242,7 @@ func (s *Server) companionToolDelegate(ctx context.Context, key *persistence.API
 				// only reachable via the companion-authed delegate — the caller
 				// cannot request it by setting a field (review M1). Safe today
 				// because the reviewer role has no egress tools; the durable
-				// egress control is a tracked follow-up (https://docs.vornik.io).
+				// egress control is a tracked follow-up (Enterprise tracker issue #152).
 				SkipSecretRedaction: isReviewClassWorkflow(args.Workflow),
 			})
 		if err != nil {

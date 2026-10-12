@@ -296,7 +296,7 @@ func TestHermesLane(t *testing.T) {
 	})
 	{
 		got := toolsOffered(s)
-		want := []string{"vornik_cancel", "vornik_catalog", "vornik_delegate", "vornik_list_artifacts", "vornik_read_artifact", "vornik_recall", "vornik_remember", "vornik_result", "vornik_status"}
+		want := []string{"vornik_cancel", "vornik_catalog", "vornik_delegate", "vornik_list_artifacts", "vornik_read_artifact", "vornik_recall", "vornik_remember", "vornik_result", "vornik_status", "vornik_task_explain", "vornik_task_logs"}
 		var vornik []string
 		for _, n := range got {
 			if strings.HasPrefix(n, "vornik_") {

@@ -260,32 +260,49 @@ func (c *Container) missingCredential(ctx context.Context, p *registry.Project, 
 // time, since a narrowing grants nothing.
 func (s *agentAdminService) recordToolRemovals(ctx context.Context, removals []agentadmin.ToolRemoval) error {
 	for _, rm := range removals {
-		a, err := s.grants.GetIntegration(ctx, rm.Project, rm.Name)
-		if errors.Is(err, persistence.ErrNotFound) {
-			continue
-		}
+		a, ok, err := s.narrowedIntegration(ctx, rm)
 		if err != nil {
 			return err
 		}
-		var keep []string
-		for _, t := range a.ReadTools {
-			if !containsString(rm.Tools, t) {
-				keep = append(keep, t)
-			}
+		if !ok {
+			continue
 		}
-		a.ReadTools = keep
-		if publication := configPublication(ctx); publication != nil {
-			publication.rows.Integrations = append(publication.rows.Integrations, *a)
-		} else if err := s.grants.UpsertIntegration(ctx, *a); err != nil {
+		if err := s.grants.UpsertIntegration(ctx, a); err != nil {
 			return err
 		}
-		kind := rm.Kind
-		if kind == "" {
-			kind = "unspecified"
-		}
-		agentAdminNarrowings.WithLabelValues(kind).Inc()
+		countNarrowing(rm.Kind)
 	}
 	return nil
+}
+
+// countNarrowing counts one withdrawn tool set by its kind.
+func countNarrowing(kind string) {
+	if kind == "" {
+		kind = "unspecified"
+	}
+	agentAdminNarrowings.WithLabelValues(kind).Inc()
+}
+
+// narrowedIntegration is rm's approval with rm's tools withdrawn, and counts
+// ok is false when there is no approval to narrow. Under a
+// config account transition collectAccountRows puts the row into the
+// publication instead of writing it (design §22.2.16, change 2026-10-12).
+func (s *agentAdminService) narrowedIntegration(ctx context.Context, rm agentadmin.ToolRemoval) (persistence.AgentIntegrationApproval, bool, error) {
+	a, err := s.grants.GetIntegration(ctx, rm.Project, rm.Name)
+	if errors.Is(err, persistence.ErrNotFound) {
+		return persistence.AgentIntegrationApproval{}, false, nil
+	}
+	if err != nil {
+		return persistence.AgentIntegrationApproval{}, false, err
+	}
+	var keep []string
+	for _, t := range a.ReadTools {
+		if !containsString(rm.Tools, t) {
+			keep = append(keep, t)
+		}
+	}
+	a.ReadTools = keep
+	return *a, true, nil
 }
 
 func containsString(xs []string, x string) bool {

@@ -149,5 +149,6 @@ func makeBotWithTransport(t *testing.T, target string) *Bot {
 	}
 	bot := makeBotForOptions(t)
 	bot.httpClient = hc
+	bot.SetAIDisclosure(alreadyDisclosed())
 	return bot
 }

@@ -42,8 +42,16 @@ printf '%s\n' "<body>" | \
     --kind bug|feature|optimisation|inefficiency|refactor \
     --priority P0|P1|P2|P3 \
     [--evidence "internal/api/foo.go:120"] \
+    [--found-at unit|integration|executor-e2e|e2e-lane|production|review] \
     [--dry-run]
 ```
+
+For a **bug**, pass `--found-at`: the level where it was found. `integration`
+means a real DB, git or HTTP handler; `executor-e2e` the real daemon loop;
+`e2e-lane` a real container lane; `production` a running install; `review` a
+code review or audit. Its regression test belongs at that level
+(ENGINEERING-TENETS §4.7); the item gets a `Found at: <level>` line, which the
+inbox sweep carries into the issue. Any other value exits 2.
 
 It finds the backlog by walking up from the cwd (`https://docs.vornik.io`, then
 `BACKLOG.md`), or takes `--file <path>`.

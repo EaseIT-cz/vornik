@@ -19,6 +19,14 @@ here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ep="$here/entrypoint.sh"
 if [ -n "${VORNIK_HELPER_DIR:-}" ]; then export PATH="$VORNIK_HELPER_DIR:$PATH"; fi
 if ! command -v vornik-agent-helper >/dev/null 2>&1; then
+  # #334 item 6 (CI pipeline design, amendment 2026-10-14): under make
+  # test-agent-shell (VORNIK_HELPER_DIR set) the helper was built for this
+  # run, so its absence means the suite would examine nothing: fail. Run by
+  # hand without it, the suite still skips with the reason.
+  if [ -n "${VORNIK_HELPER_DIR:-}" ]; then
+    echo "FAIL: vornik-agent-helper not found in VORNIK_HELPER_DIR=$VORNIK_HELPER_DIR (the suite would examine nothing)" >&2
+    exit 1
+  fi
   echo "SKIP: vornik-agent-helper not built (run via make test-agent-shell)"
   exit 0
 fi

@@ -4,6 +4,7 @@ package runtime
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"strconv"
@@ -59,8 +60,18 @@ type Manager struct {
 	// podmanPath is the path to the podman binary.
 	podmanPath string
 
-	// defaultTimeout is the default timeout for podman operations.
+	// defaultTimeout bounds every podman verb except run, pull and wait
+	// (outcome-quality LLD §S7 #8). Applied by podman(), the choke point.
 	defaultTimeout time.Duration
+
+	// imageTimeout bounds run and pull, which may transfer an image
+	// (outcome-quality LLD §S7 #8). Zero means defaultImageTimeout.
+	imageTimeout time.Duration
+
+	// execPodman runs one podman argv on the already-bounded context. nil
+	// means the spawn path (spawnPodman). A test seam: it lets a test read the
+	// deadline each verb gets without a real podman.
+	execPodman func(ctx context.Context, args []string) ([]byte, error)
 
 	// userNSMode is the configured Podman user namespace mode.
 	userNSMode string
@@ -110,6 +121,18 @@ type Manager struct {
 	// inspect`). A seam so tests need no podman.
 	imageLabelFunc func(ctx context.Context, image string) (imageID string, uidAgnostic bool, err error)
 
+	// imagePullFunc pulls the pinned agent image when its label could not be
+	// read because it is not local yet (D5 residual 2, GitHub #161). Nil uses
+	// pullAgentImage (`podman pull --quiet`, spawn-law Correction
+	// 2026-10-12). A seam so tests need no registry.
+	imagePullFunc func(ctx context.Context, image string) error
+	// versionProbe replaces the `podman version --format json` exec in
+	// verifyPodmanAvailable. Nil (the daemon) execs podman. A seam so unit
+	// tests that build a Manager never shell out to the host's podman (#127;
+	// runtime LLD, amendment 2026-10-12). Its result is judged exactly as the
+	// exec's is (podmanVersionUsable).
+	versionProbe func(ctx context.Context) ([]byte, error)
+
 	// synthLogged holds the image ids whose synthesised --user has been
 	// logged (R7: once per image id). The one piece of in-memory state the
 	// Manager keeps; losing it on restart only repeats a log line.
@@ -147,10 +170,29 @@ func WithPodmanPath(path string) ManagerOption {
 	}
 }
 
-// WithDefaultTimeout sets the default timeout for podman operations.
+// WithVersionProbe replaces the podman availability probe's exec with fn. It
+// receives the probe's bounded context (5 s) and returns what
+// `podman version --format json` would have: output and error, judged by
+// podmanVersionUsable. For tests; the daemon never sets it.
+func WithVersionProbe(fn func(ctx context.Context) ([]byte, error)) ManagerOption {
+	return func(m *Manager) {
+		m.versionProbe = fn
+	}
+}
+
+// WithDefaultTimeout sets the bound on every podman verb except run, pull
+// and wait (default 60s; outcome-quality LLD §S7 #8).
 func WithDefaultTimeout(d time.Duration) ManagerOption {
 	return func(m *Manager) {
 		m.defaultTimeout = d
+	}
+}
+
+// WithImageTimeout sets the bound on podman run and pull (default 15m;
+// outcome-quality LLD §S7 #8).
+func WithImageTimeout(d time.Duration) ManagerOption {
+	return func(m *Manager) {
+		m.imageTimeout = d
 	}
 }
 
@@ -270,6 +312,7 @@ func WithPrometheusRegistry(registry *prometheus.Registry) ManagerOption {
 func New(opts ...ManagerOption) (*Manager, error) {
 	m := &Manager{
 		defaultTimeout: 60 * time.Second,
+		imageTimeout:   defaultImageTimeout,
 		logger:         zerolog.Nop(),
 		// The daemon's identity, for the D5 resolver (R3).
 		daemonUID: os.Getuid(),
@@ -335,7 +378,13 @@ func (m *Manager) verifyPodmanAvailable() error {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	output, err := m.podman(ctx, "version", "--format", "json")
+	var output []byte
+	var err error
+	if m.versionProbe != nil {
+		output, err = m.versionProbe(ctx)
+	} else {
+		output, err = m.podman(ctx, "version", "--format", "json")
+	}
 	if err != nil && podmanVersionUsable(output, err) {
 		// Answered, then died. See podmanVersionUsable — refusing to start
 		// here cost the vornik-ee#66 E2E lane a full run.
@@ -750,6 +799,9 @@ func (m *Manager) readImageUIDAgnostic(ctx context.Context, image string) (strin
 	defer cancel()
 	out, err := m.podman(c, "image", "inspect", "--format", "{{.Id}}\t{{json .Labels}}", image)
 	if err != nil {
+		if isImageNotLocal(out) {
+			return "", false, fmt.Errorf("podman image inspect %s: %w (%s)", image, errImageNotLocal, strings.TrimSpace(string(out)))
+		}
 		return "", false, fmt.Errorf("podman image inspect %s: %w (%s)", image, err, strings.TrimSpace(string(out)))
 	}
 	id, raw, ok := strings.Cut(strings.TrimSpace(string(out)), "\t")
@@ -761,6 +813,28 @@ func (m *Manager) readImageUIDAgnostic(ctx context.Context, image string) (strin
 		return "", false, fmt.Errorf("podman image inspect %s: labels: %w", image, err)
 	}
 	return strings.TrimSpace(id), agentuser.UIDAgnostic(labels), nil
+}
+
+// errImageNotLocal: `podman image inspect` answered that the image is not in
+// local storage (podman's "image not known" / "no such image"), so a pull can
+// make the label readable. Any other inspect failure is not this error.
+var errImageNotLocal = errors.New("image is not in local storage")
+
+// isImageNotLocal recognises podman's answer for an absent image.
+func isImageNotLocal(output []byte) bool {
+	msg := strings.ToLower(string(output))
+	return strings.Contains(msg, "image not known") || strings.Contains(msg, "no such image")
+}
+
+// pullAgentImage is the default imagePullFunc: one `podman pull --quiet` of
+// the pinned image through spawn.PodmanControl, on the start's context (the
+// `podman run` it precedes would have pulled the same image, unbounded).
+func (m *Manager) pullAgentImage(ctx context.Context, image string) error {
+	out, err := m.podman(ctx, "pull", "--quiet", image)
+	if err != nil {
+		return fmt.Errorf("podman pull %s: %w (%s)", image, err, strings.TrimSpace(string(out)))
+	}
+	return nil
 }
 
 // synthesisedUser applies the D5 resolver (internal/agentuser, R3) to ONE
@@ -775,9 +849,10 @@ func (m *Manager) readImageUIDAgnostic(ctx context.Context, image string) (strin
 // The inspect runs on every label-eligible attempt rather than being cached
 // by image reference: a re-pull or retag gives a new image id, and the id can
 // only be learned by the same inspect. What is kept per image id is the R7
-// log line. An image that is not local yet (podman run would pull it) cannot
-// be inspected, so that one start falls back to the image's USER, as before
-// D5, with a warning naming why.
+// log line. An image that is not local yet (podman run would pull it) is
+// pulled first and inspected again (D5 residual 2, 2026-10-12, GitHub #161);
+// only when that pull or re-inspect fails does the start fall back to the
+// image's USER, as before D5, with a warning naming why.
 func (m *Manager) synthesisedUser(ctx context.Context, image, userns, attempt string) string {
 	if _, why := agentuser.Resolve(m.runAsUser, userns, m.rootless, false, m.daemonUID, m.daemonGID); why != agentuser.ReasonUnlabelled {
 		return ""
@@ -787,6 +862,23 @@ func (m *Manager) synthesisedUser(ctx context.Context, image, userns, attempt st
 		read = m.readImageUIDAgnostic
 	}
 	id, agnostic, err := read(ctx, image)
+	if errors.Is(err, errImageNotLocal) {
+		// D5 residual 2 (GitHub #161): the image is not local yet (first
+		// start after an alias change). podman run would pull it and run it
+		// as its baked uid; pull it first so the label decides the --user.
+		pull := m.imagePullFunc
+		if pull == nil {
+			pull = m.pullAgentImage
+		}
+		if perr := pull(ctx, image); perr != nil {
+			m.logger.Warn().Err(perr).
+				Str("image", image).
+				Str("attempt", attempt).
+				Msg("could not pull the agent image to read its uid-agnostic label (D5)")
+		} else {
+			id, agnostic, err = read(ctx, image)
+		}
+	}
 	if err != nil {
 		m.logger.Warn().Err(err).
 			Str("image", image).
@@ -858,7 +950,66 @@ func (m *Manager) runPodmanCommand(ctx context.Context, args []string) ([]byte, 
 // image and the flags this manager emits; every other verb is PodmanControl.
 // A refused argv returns the refusal and starts nothing. Output is combined,
 // as every caller here parses or reports both streams.
+//
+// It is also where every verb gets its bound (outcome-quality LLD §S7 #8,
+// GitHub #142): run and pull get imageTimeout, wait gets none (WaitForExit
+// bounds it by the step timeout), every other verb gets defaultTimeout. The
+// bound only shortens a call; a caller's tighter deadline is kept. When the
+// bound — not the caller — ended the call, the error names the verb and the
+// bound and wraps context.DeadlineExceeded.
 func (m *Manager) podman(ctx context.Context, args ...string) ([]byte, error) {
+	run := m.execPodman
+	if run == nil {
+		run = m.spawnPodman
+	}
+	verb := ""
+	if len(args) > 0 {
+		verb = args[0]
+	}
+	bound := m.podmanBound(verb)
+	if bound <= 0 {
+		return run(ctx, args)
+	}
+	bctx, cancel := context.WithTimeoutCause(ctx, bound, errPodmanBound)
+	defer cancel()
+	out, err := run(bctx, args)
+	if err != nil && ctx.Err() == nil && errors.Is(context.Cause(bctx), errPodmanBound) {
+		// The exec error is os/exec's "signal: killed", deliberately dropped:
+		// the step-outcome refiner reads that literal as a container kill
+		// (ClassContainerKilled), which this is not — the same reason
+		// WaitForExit keeps it out of its message.
+		err = fmt.Errorf("podman %s did not finish within %s (the runtime's bound for this verb): %w",
+			verb, bound, context.DeadlineExceeded)
+	}
+	return out, err
+}
+
+// defaultImageTimeout bounds podman run and pull when WithImageTimeout is not
+// set: both may transfer an image (about 1.3 GB for the agent image), so the
+// 60s control bound would fail a cold first start on a slow link. Half the
+// 30m default step timeout (outcome-quality LLD §S7 #8).
+const defaultImageTimeout = 15 * time.Minute
+
+// errPodmanBound is the cause podman() records on a call its own bound ended,
+// so it can tell its bound from the caller's deadline or cancel.
+var errPodmanBound = errors.New("podman verb bound")
+
+// podmanBound returns the bound podman() applies to verb; 0 means none.
+func (m *Manager) podmanBound(verb string) time.Duration {
+	switch verb {
+	case "wait":
+		return 0
+	case "run", "pull":
+		if m.imageTimeout > 0 {
+			return m.imageTimeout
+		}
+		return defaultImageTimeout
+	}
+	return m.defaultTimeout
+}
+
+// spawnPodman is the production execPodman.
+func (m *Manager) spawnPodman(ctx context.Context, args []string) ([]byte, error) {
 	var (
 		cmd *spawn.Cmd
 		err error
@@ -1222,6 +1373,21 @@ func (m *Manager) WaitForExit(ctx context.Context, containerID string, timeout t
 		// which shouldRetry already checks for FIRST — within-execution
 		// retry skipped, task-level retry gets a fresh wall-clock budget.
 		if ctxErr := ctx.Err(); ctxErr != nil {
+			// A cancelled caller (operator cancel, shutdown, lost lease) is
+			// not a timeout: its own message and counter label (LLD 08 §8,
+			// amended 2026-10-12; an operator cancel one minute into a 30m
+			// step read "timed out after 30m0s"). The chain still wraps
+			// ctxErr either way, so shouldRetry is unchanged.
+			if errors.Is(ctxErr, context.Canceled) {
+				m.recordPodmanError("wait_cancelled")
+				m.logger.Info().
+					Err(ctxErr).
+					Str("container_id", containerID).
+					Dur("timeout", timeout).
+					Str("subprocess_error", err.Error()).
+					Msg("podman wait cancelled by its caller — surfacing context error")
+				return -1, fmt.Errorf("podman wait cancelled before the %s timeout: %w", timeout, ctxErr)
+			}
 			m.recordPodmanError("wait_timeout")
 			m.logger.Warn().
 				Err(ctxErr).

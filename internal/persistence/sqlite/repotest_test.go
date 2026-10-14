@@ -680,6 +680,21 @@ func TestAgentModelDestination_Contract(t *testing.T) {
 	repotest.RunAgentModelDestinationSuite(t, sqlite.NewAgentGrantRepository(db.DB))
 }
 
+// TestAgentConnectorInstall_Contract — agent_connector_installs (GitHub
+// #314; agent-administered design §19.14.8 item 6), on a file database.
+func TestAgentConnectorInstall_Contract(t *testing.T) {
+	db := sqlitetest.File(t, "connectors.db")
+	repotest.RunAgentConnectorInstallSuite(t, sqlite.NewAgentGrantRepository(db.DB))
+}
+
+// TestAgentAdminRefusal_Contract — agent_admin_refusals (agent-administered
+// design §23.2, GitHub #172 (2026-10-13): refused agent-admin calls left no
+// row). A FILE database with the daemon's DSN, never :memory:.
+func TestAgentAdminRefusal_Contract(t *testing.T) {
+	db := sqlitetest.File(t, "refusals.db")
+	repotest.RunAgentAdminRefusalSuite(t, sqlite.NewAgentAdminRefusalRepository(db.DB))
+}
+
 // TestApproverDevice_Contract — approver devices, pairings and approval
 // requests (agent-administered Vornik design §9). A fresh database per
 // subtest: first-device semantics need an empty device set. It is a FILE
@@ -745,4 +760,51 @@ func TestBrokerGrant_Contract(t *testing.T) {
 func TestQueuedAction_Contract(t *testing.T) {
 	db := newTestDB(t)
 	repotest.RunQueuedActionSuite(t, sqlite.NewBrokerActionRepository(db.DB), sqlite.NewBrokerGrantRepository(db.DB), sqlite.NewAccountTransitionRepository(db.DB))
+}
+
+func TestChunkGraphExtraction_RestrictionContract(t *testing.T) {
+	db := newTestDB(t)
+	repotest.RunChunkGraphExtractionRestrictionSuite(t, sqlite.NewChunkGraphExtractionRepository(db.DB),
+		seedChunkForSuite(db), restrictChunkForSuite(db))
+}
+
+// restrictChunkForSuite seeds the Art 18 rows directly: the SQLite driver has no
+// subject-axis writer (design §4.16.3), only the tables the shared predicate reads.
+func restrictChunkForSuite(db *sqlite.DB) repotest.RestrictChunk {
+	return func(ctx context.Context, chunkID, projectID string, viaEntity bool) (func() error, error) {
+		subject := "ds_" + chunkID
+		now := time.Now().UTC().Format(time.RFC3339Nano)
+		table, row := "project_memory_chunks", chunkID
+		if viaEntity {
+			ent := "ent_" + chunkID
+			if _, err := db.ExecContext(ctx, `INSERT INTO knowledge_entities
+				(id, project_id, type, canonical_name, created_at, updated_at) VALUES (?, ?, 'PERSON', ?, ?, ?)`,
+				ent, projectID, "Person "+chunkID, now, now); err != nil {
+				return nil, err
+			}
+			if _, err := db.ExecContext(ctx, `INSERT INTO entity_mentions (chunk_id, entity_id, char_start)
+				VALUES (?, ?, 0)`, chunkID, ent); err != nil {
+				return nil, err
+			}
+			table, row = "knowledge_entities", ent
+		}
+		if _, err := db.ExecContext(ctx, `INSERT INTO data_subject_links
+			(subject_id, table_name, row_id, project_id, source, confidence, exclusivity, created_at)
+			VALUES (?, ?, ?, ?, 'operator_asserted', 'probable', 'exclusive', ?)`,
+			subject, table, row, projectID, now); err != nil {
+			return nil, err
+		}
+		rid := "dsx_" + chunkID
+		if _, err := db.ExecContext(ctx, `INSERT INTO data_subject_restrictions
+			(id, subject_id, request_id, ground, restricted_by, restricted_at)
+			VALUES (?, ?, ?, 'art18_1_a', 'suite', ?)`, rid, subject, "dsr_"+chunkID, now); err != nil {
+			return nil, err
+		}
+		return func() error {
+			_, err := db.ExecContext(context.Background(), `UPDATE data_subject_restrictions
+				SET lifted_at = ?, lifted_by = 'suite', lift_reason = 'test', subject_informed_at = ?
+				WHERE id = ?`, now, now, rid)
+			return err
+		}, nil
+	}
 }

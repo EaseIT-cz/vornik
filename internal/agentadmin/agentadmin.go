@@ -62,7 +62,10 @@ type Change struct {
 	Class     Class
 	// Reason is the refusal, in plain words for the agent to relay (§12).
 	Reason string
-	Ops    []FileOp
+	// Rule is a refusal's rule from RefusalRules (design §23.2): what the
+	// operator's ledger records instead of Reason, which quotes the input.
+	Rule string
+	Ops  []FileOp
 	// ReadSet is every file the change was rendered against: an op's target
 	// (its current hash, or ReadSetAbsent for a create) and every file it
 	// read. The apply engine refuses the change if any of them moved.
@@ -202,6 +205,9 @@ type Result struct {
 	// MissingTools is Change.MissingTools of a refusal, for the daemon's
 	// own callers; never sent to the agent.
 	MissingTools []string `json:"-"`
+	// Rule is a refusal's rule from RefusalRules (design §23.2), for the
+	// refusal ledger; never sent to the agent.
+	Rule string `json:"-"`
 }
 
 // Effects.
@@ -220,5 +226,6 @@ var ErrUnknownVerb = errors.New("agentadmin: unknown verb")
 
 // refuse builds a refused change; the reason is shown to the agent verbatim.
 func refuse(verb, ns, format string, a ...any) Change {
-	return Change{Verb: verb, Namespace: ns, Class: Refused, Reason: verb + " refused: " + fmt.Sprintf(format, a...)}
+	reason := verb + " refused: " + fmt.Sprintf(format, a...)
+	return Change{Verb: verb, Namespace: ns, Class: Refused, Reason: reason, Rule: refusalRule(reason)}
 }

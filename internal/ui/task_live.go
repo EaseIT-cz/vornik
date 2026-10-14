@@ -53,6 +53,11 @@ type LiveTaskPageData struct {
 	// open (false — admin/no-session, today's behaviour) or collapsed
 	// behind "Show technical details" (true — RoleUser).
 	IsRoleUser bool
+	// PauseText says why a PAUSED execution is paused and what releases it;
+	// empty otherwise. PauseKindTexts is the same table for the JS onPaused
+	// handler (outcome-quality LLD §S7 #13).
+	PauseText      string
+	PauseKindTexts map[string]string
 }
 
 // liveStepOutcomes loads the recorded step-outcome rows for an execution and
@@ -192,11 +197,13 @@ func (s *Server) TaskLive(w http.ResponseWriter, r *http.Request, taskID string)
 	}
 
 	data := LiveTaskPageData{
-		Title:       "Live — " + taskID,
-		CurrentPage: "tasks",
-		Task:        task,
-		Execution:   exec,
-		IsRoleUser:  isStoryDefaultViewer(r),
+		Title:          "Live — " + taskID,
+		CurrentPage:    "tasks",
+		Task:           task,
+		Execution:      exec,
+		IsRoleUser:     isStoryDefaultViewer(r),
+		PauseText:      executionPauseText(exec),
+		PauseKindTexts: pauseKindTexts,
 	}
 	if exec != nil {
 		data.CompletedSteps = exec.CompletedSteps
@@ -274,6 +281,8 @@ func (s *Server) ExecutionLive(w http.ResponseWriter, r *http.Request, execID st
 		Execution:      exec,
 		CompletedSteps: exec.CompletedSteps,
 		IsRoleUser:     isStoryDefaultViewer(r),
+		PauseText:      executionPauseText(exec),
+		PauseKindTexts: pauseKindTexts,
 	}
 	if exec.CurrentStepID != nil {
 		data.CurrentStep = *exec.CurrentStepID

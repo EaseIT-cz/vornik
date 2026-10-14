@@ -389,7 +389,7 @@ func (r *ApproverDeviceRepository) CreateRequest(ctx context.Context, q persiste
 	return insertApprovalRequest(ctx, r.db, q)
 }
 
-const approvalRequestCols = `id, namespace, kind, sentence, rendered, rendered_sha256, status, created_at, expires_at, decided_at, decided_by_device, applied_at, apply_attempts, apply_error, decided_choice`
+const approvalRequestCols = `id, namespace, kind, sentence, rendered, rendered_sha256, status, created_at, expires_at, decided_at, decided_by_device, applied_at, apply_attempts, apply_error, decided_choice, withdrawn_by, withdraw_reason`
 
 func scanApprovalRequest(s interface{ Scan(...interface{}) error }) (persistence.AgentApprovalRequestRow, error) {
 	var (
@@ -397,12 +397,14 @@ func scanApprovalRequest(s interface{ Scan(...interface{}) error }) (persistence
 		rendered             string
 		decided, applied     sql.NullTime
 		by, applyErr, choice sql.NullString
+		wBy, wReason         sql.NullString
 	)
 	if err := s.Scan(&q.ID, &q.Namespace, &q.Kind, &q.Sentence, &rendered, &q.RenderedSHA256, &q.Status,
-		&q.CreatedAt, &q.ExpiresAt, &decided, &by, &applied, &q.ApplyAttempts, &applyErr, &choice); err != nil {
+		&q.CreatedAt, &q.ExpiresAt, &decided, &by, &applied, &q.ApplyAttempts, &applyErr, &choice, &wBy, &wReason); err != nil {
 		return q, err
 	}
 	q.Rendered, q.DecidedByDevice, q.ApplyError, q.DecidedChoice = []byte(rendered), by.String, applyErr.String, choice.String
+	q.WithdrawnBy, q.WithdrawReason = wBy.String, wReason.String
 	if decided.Valid {
 		t := decided.Time
 		q.DecidedAt = &t
@@ -441,6 +443,27 @@ func (r *ApproverDeviceRepository) listRequests(ctx context.Context, where strin
 		out = append(out, q)
 	}
 	return out, mapDBError(rows.Err())
+}
+
+// WithdrawRequest implements persistence.ApproverDeviceRepository: one
+// statement guarded on status = 'pending', the guard Decide and the expiry
+// tick share, so exactly one of them transitions a row (design §9.2d,
+// GitHub #264).
+func (r *ApproverDeviceRepository) WithdrawRequest(ctx context.Context, id, by, reason string, now time.Time) error {
+	reason, err := persistence.ValidWithdrawal(by, reason)
+	if err != nil {
+		return err
+	}
+	res, err := r.db.ExecContext(ctx, `
+		UPDATE agent_approval_requests SET status = 'withdrawn', decided_at = $1, withdrawn_by = $2, withdraw_reason = $3
+		WHERE id = $4 AND status = 'pending'`, now, by, reason, id)
+	if err != nil {
+		return err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return fmt.Errorf("%w: %s", persistence.ErrApprovalNoTransition, id)
+	}
+	return nil
 }
 
 // ListPending implements persistence.ApproverDeviceRepository.

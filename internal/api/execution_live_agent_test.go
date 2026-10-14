@@ -35,9 +35,12 @@ type liveAgentHarness struct {
 	pub     livepubsub.Publisher
 	execs   map[string]*persistence.Execution
 	mu      sync.Mutex // guards execs: the terminal watcher reads them concurrently
+	// onGet, when set, runs on every execution read (under mu): a seam that
+	// tells a test the stream's watcher has ticked.
+	onGet func(id string)
 }
 
-func newLiveAgentHarness(t *testing.T) *liveAgentHarness {
+func newLiveAgentHarness(t *testing.T, opts ...ServerOption) *liveAgentHarness {
 	t.Helper()
 	reg := registry.New()
 	registry.SeedForTest(reg, map[string]*registry.Project{
@@ -50,6 +53,9 @@ func newLiveAgentHarness(t *testing.T) *liveAgentHarness {
 		GetFunc: func(_ context.Context, id string) (*persistence.Execution, error) {
 			h.mu.Lock()
 			defer h.mu.Unlock()
+			if h.onGet != nil {
+				h.onGet(id)
+			}
 			if e, ok := h.execs[id]; ok {
 				cp := *e
 				return &cp, nil
@@ -60,13 +66,13 @@ func newLiveAgentHarness(t *testing.T) *liveAgentHarness {
 	taskRepo := &mocks.MockTaskRepository{GetFunc: func(context.Context, string) (*persistence.Task, error) {
 		return nil, persistence.ErrNotFound
 	}}
-	h.srv = NewServer(
+	h.srv = NewServer(append([]ServerOption{
 		WithLogger(zerolog.Nop()),
 		WithLiveSubscriber(h.pub),
 		WithExecutionRepository(execRepo),
 		WithTaskRepository(taskRepo),
 		WithMetricsRegistry(prometheus.NewRegistry()),
-	)
+	}, opts...)...)
 	h.srv.apiKeyRepo = h.keyRepo
 	h.srv.projectRegistry = reg
 	cfg := &config.Config{}
@@ -248,10 +254,7 @@ func TestIsCompanionLivePath_ExactShapeOnly(t *testing.T) {
 // final {"kind":"closed"} frame, which the original design promised and
 // nothing sent.
 func TestExecutionLive_TerminalExecutionSendsClosed(t *testing.T) {
-	orig := liveTerminalCheckEvery
-	liveTerminalCheckEvery = 50 * time.Millisecond
-	defer func() { liveTerminalCheckEvery = orig }()
-	h := newLiveAgentHarness(t)
+	h := newLiveAgentHarness(t, fastTerminalCheck)
 	h.addExec("exec-a", "alpha", persistence.ExecutionStatusCompleted)
 	raw, _ := seedCompanionKey(t, h.keyRepo, "alpha", nil)
 	conn, _, err := h.dial(t, "exec-a", raw)

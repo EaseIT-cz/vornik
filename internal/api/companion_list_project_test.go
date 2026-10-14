@@ -30,6 +30,7 @@ type listFixture struct {
 	srv      *Server
 	keyRepo  *memAPIKeyRepo
 	listed   []string
+	calls    int
 	adminRaw string
 	plainRaw string
 }
@@ -46,12 +47,23 @@ func newListFixture(t *testing.T) *listFixture {
 	f := &listFixture{keyRepo: &memAPIKeyRepo{}}
 	taskRepo := &mocks.MockTaskRepository{
 		ListFunc: func(_ context.Context, filter persistence.TaskFilter) ([]*persistence.Task, error) {
-			p := *filter.ProjectID
-			f.listed = append(f.listed, p)
-			wf := "wf"
-			return []*persistence.Task{{ID: "task-of-" + p, ProjectID: p, WorkflowID: &wf,
-				Status: persistence.TaskStatusCompleted, CreationSource: persistence.TaskCreationSourceCompanion,
-				CreatedAt: time.Now()}}, nil
+			f.calls++
+			projects := filter.ProjectIDs
+			if filter.ProjectID != nil {
+				projects = []string{*filter.ProjectID}
+			}
+			var out []*persistence.Task
+			for i, p := range projects {
+				f.listed = append(f.listed, p)
+				wf := "wf"
+				out = append(out, &persistence.Task{ID: "task-of-" + p, ProjectID: p, WorkflowID: &wf,
+					Status: persistence.TaskStatusCompleted, CreationSource: persistence.TaskCreationSourceCompanion,
+					CreatedAt: time.Now().Add(-time.Duration(i) * time.Minute)})
+			}
+			if filter.PageSize > 0 && len(out) > filter.PageSize {
+				out = out[:filter.PageSize] // as the drivers' LIMIT does
+			}
+			return out, nil
 		},
 	}
 	f.srv = &Server{logger: zerolog.Nop(), apiKeyRepo: f.keyRepo, taskRepo: taskRepo, projectRegistry: reg}
@@ -140,6 +152,7 @@ func TestGetCapabilities_StrictArgsAndListProject(t *testing.T) {
 	f := decodeCapabilities(t, rec.Body.Bytes()).Features
 	assert.True(t, f["companion-strict-args"])
 	assert.True(t, f["companion-list-project"])
+	assert.True(t, f["companion-list-all-projects"], "GitHub #324: list(project: \"*\")")
 
 	bare := &Server{logger: zerolog.Nop()}
 	rec = httptest.NewRecorder()
@@ -148,6 +161,9 @@ func TestGetCapabilities_StrictArgsAndListProject(t *testing.T) {
 	v, ok := f["companion-list-project"]
 	assert.True(t, ok, "the flag must always be present")
 	assert.False(t, v, "a daemon with no companion endpoint does not advertise it")
+	v, ok = f["companion-list-all-projects"]
+	assert.True(t, ok, "the flag must always be present")
+	assert.False(t, v)
 }
 
 func sortedKeys(m map[string]any) []string {

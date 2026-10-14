@@ -21,20 +21,7 @@ import (
 // request applied, so a later failure could not be recorded). The value is
 // never logged and never placed in an error.
 func (s *agentAdminService) enterCredential(ctx context.Context, d *approverdevice.Device, r persistence.AgentApprovalRequestRow, shownSHA string, value []byte) error {
-	if r.Kind != persistence.ApprovalKindCredentialSlot {
-		return approverdevice.ErrNotDecidable
-	}
-	var pl approvalPayload
-	if json.Unmarshal(r.Rendered, &pl) != nil || pl.Slot == nil || pl.Slot.Namespace != r.Namespace || pl.Slot.Kind != agentadmin.CredentialSecret {
-		return approverdevice.ErrNotDecidable // an OAuth slot is filled by its sign-in only
-	}
-	if len(value) == 0 || len(value) > approverdevice.MaxValueBytes || !credentialHasVisibleContent(value) {
-		return approverdevice.ErrNotDecidable
-	}
-	err := s.devices.Decide(context.WithValue(ctx, enteredValueKey{}, value), d, r.ID, shownSHA, true)
-	if errors.Is(err, approverdevice.ErrPermanent) {
-		return approverdevice.ErrValueNotStored
-	}
+	pl, err := s.decideAndStoreCredential(ctx, d, r, shownSHA, value)
 	if err != nil {
 		return err
 	}
@@ -44,6 +31,34 @@ func (s *agentAdminService) enterCredential(ctx context.Context, d *approverdevi
 	bg := context.WithoutCancel(ctx)
 	s.background(func() { s.afterCredentialStored(bg, pl.Slot.Namespace, pl.Slot.Name) })
 	return nil
+}
+
+// decideAndStoreCredential is enterCredential without the detached tools
+// listing it schedules after: the checks, the decision and the store. The
+// device's connector confirm calls it alone, and approves the tools itself
+// in order (design §19.14.8 item 5e; review-20261013-99c9 F1).
+func (s *agentAdminService) decideAndStoreCredential(ctx context.Context, d *approverdevice.Device, r persistence.AgentApprovalRequestRow, shownSHA string, value []byte) (approvalPayload, error) {
+	var pl approvalPayload
+	if r.Kind != persistence.ApprovalKindCredentialSlot {
+		return pl, approverdevice.ErrNotDecidable
+	}
+	if json.Unmarshal(r.Rendered, &pl) != nil || pl.Slot == nil || pl.Slot.Namespace != r.Namespace || pl.Slot.Kind != agentadmin.CredentialSecret {
+		return pl, approverdevice.ErrNotDecidable // an OAuth slot is filled by its sign-in only
+	}
+	if !credentialValueAcceptable(value) {
+		return pl, approverdevice.ErrNotDecidable
+	}
+	err := s.devices.Decide(context.WithValue(ctx, enteredValueKey{}, value), d, r.ID, shownSHA, true)
+	if errors.Is(err, approverdevice.ErrPermanent) {
+		return pl, approverdevice.ErrValueNotStored
+	}
+	return pl, err
+}
+
+// credentialValueAcceptable is the value check a credential entry applies:
+// present, bounded, and not only whitespace or invisible characters.
+func credentialValueAcceptable(value []byte) bool {
+	return len(value) > 0 && len(value) <= approverdevice.MaxValueBytes && credentialHasVisibleContent(value)
 }
 
 func credentialHasVisibleContent(value []byte) bool {

@@ -87,7 +87,7 @@ func TestTickBacklog_WorkflowIDValid_CarriedAndFramed(t *testing.T) {
 		"the framing wrapper must never leak into the file")
 }
 
-// (b) workflow_id set + invalid: no task is created, a ParseError
+// (b) workflow_id set + invalid: no task is created, a WORKFLOW_INVALID
 // evaluation is recorded, and an ERROR is logged.
 func TestTickBacklog_WorkflowIDInvalid_SkipsTickAndLogsError(t *testing.T) {
 	// registry.Load only WARNS on a bad workflow_id (the project still
@@ -115,8 +115,12 @@ func TestTickBacklog_WorkflowIDInvalid_SkipsTickAndLogsError(t *testing.T) {
 
 	entries := evalRepo.snapshot()
 	require.Len(t, entries, 1)
-	assert.Equal(t, persistence.AutonomyOutcomeParseError, entries[0].Outcome)
-	assert.Contains(t, entries[0].Reason, "workflow_id not found: ghost-workflow")
+	// audit 2026-10-12 (GitHub #142, outcome-quality LLD §S1 R2): this was
+	// recorded as PARSE_ERROR ("LLM response unparseable"), which sends the
+	// operator to the model or the prompt; the fix is the project YAML.
+	assert.Equal(t, persistence.AutonomyOutcomeWorkflowInvalid, entries[0].Outcome)
+	assert.Contains(t, entries[0].Reason, "autonomy.workflow_id ghost-workflow is not a loaded workflow")
+	assert.Contains(t, entries[0].Reason, "fix the project's autonomy.workflow_id")
 
 	assert.Contains(t, logBuf.String(), `"level":"error"`, "must log at ERROR level")
 	assert.Contains(t, logBuf.String(), "ghost-workflow")

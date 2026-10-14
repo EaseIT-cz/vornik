@@ -289,7 +289,7 @@ func companionToolDefs() []mcpToolDef {
 		},
 		{
 			Name:        "status",
-			Description: "Return current task status (QUEUED/LEASED/RUNNING/COMPLETED/FAILED/CANCELLED). For a broker workflow the raw error is never returned; error_class is one of failed, timeout, budget, egress_no_output, egress_oversize, egress_schema, egress_secret. While the task runs, progress gives the running step_id, its step_index of step_count, attempt, step_started_at and last_event_at; tell the user where it is from progress instead of calling task_logs.",
+			Description: "Return current task status (QUEUED/LEASED/RUNNING/COMPLETED/FAILED/CANCELLED). For a broker workflow the raw error is never returned; error_class is one of failed, timeout, budget, egress_no_output, egress_oversize, egress_schema, egress_secret. While the task runs, progress gives the running step_id, its step_index of step_count, attempt, step_started_at and last_event_at; tell the user where it is from progress instead of calling task_logs. A QUEUED task whose project is held by an interrupted config change carries paused: the journal_id, since, a drift class and resolve, which says who decides (the operator; you cannot resolve it).",
 			InputSchema: map[string]any{
 				"type":       "object",
 				"properties": map[string]any{"task_id": map[string]any{"type": "string"}},
@@ -315,7 +315,7 @@ func companionToolDefs() []mcpToolDef {
 		},
 		{
 			Name:        "result",
-			Description: "Return a completed task's output artifacts INLINE (non-transcript OUTPUT class; 64 KiB shared budget, truncated entries flagged). This is the only artifact-read surface a companion key has — companion keys cannot reach the REST API. Returns {complete:false} cleanly while the task is still in flight. For a broker workflow it returns only the declared egress document as `output`. wait_seconds (0-25) holds the call open until the task finishes. A {complete:false} answer carries the same progress object as status.",
+			Description: "Return a completed task's output artifacts INLINE (non-transcript OUTPUT class; 64 KiB shared budget, truncated entries flagged). This is the only artifact-read surface a companion key has — companion keys cannot reach the REST API. Returns {complete:false} cleanly while the task is still in flight. For a broker workflow it returns only the declared egress document as `output`. wait_seconds (0-25) holds the call open until the task finishes. A {complete:false} answer carries the same progress object as status, and the same paused list when the project is held by an interrupted config change.",
 			InputSchema: map[string]any{
 				"type": "object",
 				"properties": map[string]any{
@@ -344,14 +344,14 @@ func companionToolDefs() []mcpToolDef {
 		},
 		{
 			Name:        "list",
-			Description: "List recent companion-delegated tasks, newest first: for this key's project, or, for an agent-admin key, any project of its namespace (project).",
+			Description: "List recent companion-delegated tasks, newest first: for this key's project, or, for an agent-admin key, any project of its namespace (project), or every project the key can see (project \"*\").",
 			InputSchema: map[string]any{
 				"type": "object",
 				"properties": map[string]any{
 					"limit":  map[string]any{"type": "integer", "minimum": 1, "maximum": 100, "default": 20},
 					"status": map[string]any{"type": "string", "description": "Optional filter: QUEUED, RUNNING, COMPLETED, FAILED, CANCELLED."},
 					"project": map[string]any{"type": "string", "description": "Optional. An agent-admin key: " +
-						agentadmin.ProjectRefRule + " Any other key: only its own project. Omit for this key's project."},
+						agentadmin.ProjectRefRule + " Any other key: only its own project. \"*\" lists every project this key can see. Omit for this key's project."},
 				},
 			},
 		},
@@ -722,6 +722,20 @@ func (s *Server) handleCompanionToolCall(w http.ResponseWriter, r *http.Request,
 	// the memory_*_audit tables (or task rows for delegate); this row
 	// is a thin index — tool name + duration + ok/error.
 	auditStart := time.Now()
+	// A repeated key is refused before ANY tool runs, the admin verbs
+	// included: decoding keeps its last value (struct fields matched
+	// case-insensitively) while the audit keeps the text as sent (security
+	// reviews of 6035e952d, 203f20ae9 and 730234736, 2026-10-14).
+	if dup, ok := duplicateArgKey(params.Arguments); ok {
+		dupErr := fmt.Errorf("%s: argument %q appears more than once; send each argument once", params.Name, dup)
+		s.recordCompanionToolAudit(ctx, key, params.Name, params.Arguments, "", dupErr, time.Since(auditStart))
+		s.recordAgentRefusal(ctx, key, params.Name, agentadmin.RuleInvalidArguments)
+		writeJSONRPCResult(w, id, mcpToolCallResult{
+			Content: []mcpToolContent{{Type: "text", Text: dupErr.Error()}},
+			IsError: true,
+		})
+		return
+	}
 	// The agent admin verbs (agent-administered Vornik §6) have their own
 	// gate: an agent admin key while agent_admin.enabled is on. To any other
 	// key they are the unknown tool a stranger gets.
@@ -744,16 +758,33 @@ func (s *Server) handleCompanionToolCall(w http.ResponseWriter, r *http.Request,
 	// the §5.6 allowlist — unknown tools included.
 	if gateErr := s.gateCompanionTool(key, params.Name); gateErr != nil {
 		s.recordCompanionToolAudit(ctx, key, params.Name, params.Arguments, "", gateErr, time.Since(auditStart))
+		s.recordAgentRefusal(ctx, key, params.Name, agentadmin.RuleToolNotOffered)
 		writeJSONRPCResult(w, id, mcpToolCallResult{
 			Content: []mcpToolContent{{Type: "text", Text: gateErr.Error()}},
 			IsError: true,
 		})
 		return
 	}
+	// Legacy arguments a shipped client sends (LLD 21 §A, 2026-10-14): each
+	// listed name is admitted and removed, or the call is refused. The audit
+	// keeps the arguments as sent.
+	sentArgs := params.Arguments
+	admitted, legacyErr := s.admitLegacyToolArgs(key, params.Name, params.Arguments)
+	if legacyErr != nil {
+		s.recordCompanionToolAudit(ctx, key, params.Name, sentArgs, "", legacyErr, time.Since(auditStart))
+		s.recordAgentRefusal(ctx, key, params.Name, agentadmin.RuleInvalidArguments)
+		writeJSONRPCResult(w, id, mcpToolCallResult{
+			Content: []mcpToolContent{{Type: "text", Text: legacyErr.Error()}},
+			IsError: true,
+		})
+		return
+	}
+	params.Arguments = admitted
 	// Strict arguments (GitHub #305, LLD 21 §A): an argument the tool does
 	// not declare is refused here, naming it, instead of being dropped.
 	if argErr := checkCompanionToolArgs(params.Name, params.Arguments); argErr != nil {
-		s.recordCompanionToolAudit(ctx, key, params.Name, params.Arguments, "", argErr, time.Since(auditStart))
+		s.recordCompanionToolAudit(ctx, key, params.Name, sentArgs, "", argErr, time.Since(auditStart))
+		s.recordAgentRefusal(ctx, key, params.Name, agentadmin.RuleInvalidArguments)
 		writeJSONRPCResult(w, id, mcpToolCallResult{
 			Content: []mcpToolContent{{Type: "text", Text: argErr.Error()}},
 			IsError: true,
@@ -814,10 +845,11 @@ func (s *Server) handleCompanionToolCall(w http.ResponseWriter, r *http.Request,
 	case "skill_set_global":
 		result, toolErr = s.companionToolSkillSetGlobal(ctx, key, params.Arguments)
 	default:
+		s.recordAgentRefusal(ctx, key, params.Name, agentadmin.RuleToolNotOffered)
 		writeJSONRPCError(w, id, -32601, "unknown tool: "+params.Name)
 		return
 	}
-	s.recordCompanionToolAudit(ctx, key, params.Name, params.Arguments, result, toolErr, time.Since(auditStart))
+	s.recordCompanionToolAudit(ctx, key, params.Name, sentArgs, result, toolErr, time.Since(auditStart))
 
 	if toolErr != nil {
 		// Recoverable tool error — surface as MCP tool content with
@@ -1260,6 +1292,7 @@ func (s *Server) companionToolDelegate(ctx context.Context, key *persistence.API
 		TaskType:          args.TaskType,
 		WorkflowID:        args.Workflow,
 		RawContext:        rawCtx,
+		GoalOrigin:        persistence.TaskGoalOriginCompanion,
 		CreationSource:    persistence.TaskCreationSourceCompanion,
 		CreatedByAPIKeyID: key.ID,
 	})
@@ -1486,6 +1519,8 @@ func (s *Server) companionToolStatus(ctx context.Context, key *persistence.APIKe
 	} else if task.LastError != nil && *task.LastError != "" {
 		out["last_error"] = *task.LastError
 	}
+	// GitHub #302: why a QUEUED task is held (both views, closed fields).
+	s.addPauseView(ctx, task, out)
 	b, _ := json.MarshalIndent(out, "", "  ")
 	return string(b), nil
 }
@@ -1580,6 +1615,7 @@ func (s *Server) companionToolResult(ctx context.Context, key *persistence.APIKe
 		if p := s.companionProgress(ctx, key, task); p != nil {
 			out["progress"] = p // GitHub #119 item 9
 		}
+		s.addPauseView(ctx, task, out) // GitHub #302
 		b, _ := json.MarshalIndent(out, "", "  ")
 		return string(b), nil
 	}
@@ -1766,9 +1802,11 @@ func (s *Server) companionToolCancel(ctx context.Context, key *persistence.APIKe
 	// The shared cancel primitive (05-scheduler.md §4.11, LLD 21 §A). This
 	// tool used to flip the row and stop there: the container ran on, the
 	// executor dispatched the next step, and the leftover execution held a
-	// scheduler slot (GitHub #300, 2026-10-08). nil keeps
-	// TransitionToCancelled's set, as before.
-	outcome, err := taskcancel.Cancel(ctx, s.taskRepo, s.cancelTeardown(), args.TaskID, nil)
+	// scheduler slot (GitHub #300, 2026-10-08). The from-set is the client
+	// surfaces' (operator decision 2026-10-13, GitHub #326): parked tasks
+	// cancel as from the UI; AWAITING_APPROVAL is answered, not cancelled.
+	outcome, err := taskcancel.Cancel(ctx, s.taskRepo, s.cancelTeardown(), args.TaskID,
+		persistence.ClientCancellableTaskStatuses())
 	if err != nil {
 		return "", fmt.Errorf("cancel: %w", err)
 	}
@@ -1786,9 +1824,17 @@ func (s *Server) companionToolCancel(ctx context.Context, key *persistence.APIKe
 		out["teardown_error"] = companionTeardownFailedPhrase
 	}
 	if !outcome.Transitioned {
-		// Terminal state (or already cancelled). Idempotent per LLD;
-		// surface as a non-error so the host LLM doesn't retry.
-		out["note"] = "task was already terminal; cancel is a no-op"
+		// Not an error, so the host LLM does not retry blindly. The note is
+		// phrased from a re-read of the row: "already terminal" was said for
+		// every refusal, including a task parked in a status the narrow set
+		// excludes (05-scheduler §4.11 "Amended 2026-10-12", GitHub #326).
+		if fresh, gerr := s.taskRepo.Get(ctx, args.TaskID); gerr == nil && fresh != nil {
+			out["status"] = string(fresh.Status)
+			out["note"] = taskcancel.RefusalReason(fresh.Status, persistence.ClientCancellableTaskStatuses())
+		} else {
+			out["status"] = "unknown"
+			out["note"] = "the task's current status could not be read; it was not cancelled"
+		}
 	}
 	b, _ := json.MarshalIndent(out, "", "  ")
 	return string(b), nil
@@ -1817,14 +1863,28 @@ func (s *Server) companionToolList(ctx context.Context, key *persistence.APIKey,
 		args.Limit = 20
 	}
 
-	// Resolved and refused before any task row is read (GitHub #305).
-	projectID, err := s.companionListProject(key, args.Project)
-	if err != nil {
-		return "", err
-	}
-	filter := persistence.TaskFilter{
-		ProjectID: &projectID,
-		PageSize:  args.Limit,
+	filter := persistence.TaskFilter{PageSize: args.Limit}
+	var projectID string
+	if strings.TrimSpace(args.Project) == companionListAllProjects {
+		// Every project the key covers, in one query (GitHub #324; LLD 21
+		// §A, "list(project: \"*\")"): an agent-admin key's delegations run
+		// in the project owning the workflow, not its home.
+		projectID = companionListAllProjects
+		ids := s.companionCoveredProjects(key)
+		if len(ids) == 0 {
+			// An empty ProjectIDs is "no constraint" to the repository:
+			// it would list every project on the daemon. Answer empty.
+			return companionListJSON(projectID, nil), nil
+		}
+		filter.ProjectIDs = ids
+	} else {
+		// Resolved and refused before any task row is read (GitHub #305).
+		var err error
+		projectID, err = s.companionListProject(key, args.Project)
+		if err != nil {
+			return "", err
+		}
+		filter.ProjectID = &projectID
 	}
 	if args.Status != "" {
 		st := persistence.TaskStatus(strings.ToUpper(strings.TrimSpace(args.Status)))
@@ -1855,12 +1915,43 @@ func (s *Server) companionToolList(ctx context.Context, key *persistence.APIKey,
 			"created_at": t.CreatedAt.UTC().Format(time.RFC3339),
 		})
 	}
+	return companionListJSON(projectID, rows), nil
+}
+
+// companionListAllProjects is list's "every project this key covers" value
+// (GitHub #324), advertised as companion-list-all-projects.
+const companionListAllProjects = "*"
+
+func companionListJSON(projectID string, rows []map[string]any) string {
+	if rows == nil {
+		rows = []map[string]any{}
+	}
 	b, _ := json.MarshalIndent(map[string]any{
 		"project": projectID,
 		"tasks":   rows,
 		"total":   len(rows),
 	}, "", "  ")
-	return string(b), nil
+	return string(b)
+}
+
+// companionCoveredProjects is what list(project: "*") lists: for an
+// agent-admin key every loaded project keyCoversProject accepts (its
+// namespace, home included); for any other key its own project, exactly what
+// list {} lists.
+func (s *Server) companionCoveredProjects(key *persistence.APIKey) []string {
+	if !key.AgentAdmin {
+		return []string{key.ProjectID}
+	}
+	if s.projectRegistry == nil {
+		return nil
+	}
+	var ids []string
+	for _, p := range s.projectRegistry.ListProjects() {
+		if p != nil && keyCoversProject(key, p.ID) {
+			ids = append(ids, p.ID)
+		}
+	}
+	return ids
 }
 
 // companionListProject resolves list's project argument (GitHub #305; LLD 21
@@ -2062,6 +2153,17 @@ func (s *Server) agentCatalogEntries(ctx context.Context, key *persistence.APIKe
 		return nil, fmt.Errorf("catalog: %w", err)
 	}
 	entries := make([]map[string]any, 0, len(ids))
+	// A connector the person installed from their device is marked, as
+	// list_my_setup marks it (design §19.14.3; GitHub #314). A read failure
+	// marks nothing: the marker is attribution, never a gate.
+	byDevice := map[string]bool{}
+	if s.agentGrants != nil {
+		if rows, err := s.agentGrants.ListConnectorInstalls(ctx, key.AgentNamespace); err == nil {
+			for _, r := range rows {
+				byDevice[r.WorkflowID] = true
+			}
+		}
+	}
 	for _, wfID := range ids {
 		owner := agentadmin.ProjectOfWorkflow(wfID)
 		if owner == "" || !keyCoversProject(key, owner) {
@@ -2073,6 +2175,9 @@ func (s *Server) agentCatalogEntries(ctx context.Context, key *persistence.APIKe
 		}
 		entry := s.catalogEntry(ctx, owner, s.projectRegistry.GetSwarm(project.SwarmID), wfID)
 		entry["project"] = owner
+		if byDevice[wfID] {
+			entry["installed_by"] = "device"
+		}
 		entries = append(entries, entry)
 	}
 	return entries, nil

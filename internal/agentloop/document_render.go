@@ -12,6 +12,8 @@ import (
 	"strings"
 	"time"
 	"unicode/utf8"
+
+	"vornik.io/vornik/internal/docrender"
 )
 
 // document_render runs only inside the agent image. The daemon's config
@@ -26,32 +28,13 @@ const (
 	documentPathCap   = 512
 )
 
-// This literal wrapper is the only Python program the tool can invoke.
-// WeasyPrint must never fetch any URL, even a local file or data URI.
-const documentPDFScript = `import sys
-from weasyprint import HTML, CSS
-def deny_url(url, *args, **kwargs):
-    raise ValueError("external resources are disabled")
-document = HTML(string=sys.stdin.read(), url_fetcher=deny_url)
-css = CSS(string="body { font-family: 'DejaVu Sans', sans-serif; }")
-sys.stdout.buffer.write(document.write_pdf(stylesheets=[css]))
-`
-
-// Pandoc applies these filters in order. Image captions become escaped text,
-// never raw HTML or a new link/resource node.
-const documentHTMLFilter = `local function drop(_) return {} end
-local function safe_link(el)
-  local target = el.target:lower()
-  if target:match("^#") or target:match("^https?://") or target:match("^mailto:") then
-    return el
-  end
-  return el.content
-end
-return {
-  {RawBlock = drop, RawInline = drop, Link = safe_link},
-  {Image = function(el) return pandoc.Str(pandoc.utils.stringify(el.caption)) end}
-}
-`
+// The reviewed renderer constants live in internal/docrender, shared with the
+// chat's render_document (#339 §0.3): the wrapper is the only Python program
+// the tool can invoke, and the filter is applied by pandoc in order.
+const (
+	documentPDFScript  = docrender.WeasyPrintScript
+	documentHTMLFilter = docrender.LuaFilter
+)
 
 type documentRenderArgs struct {
 	Path    string `json:"path"`
@@ -88,6 +71,10 @@ func documentFailure(format, stage string, err error) string {
 	}
 	return documentResult(documentRenderResult{Format: format, Stage: stage, Error: message})
 }
+
+// documentIsolate makes a renderer child network-off (#339 §0.3). A variable
+// only so a test can simulate the kernel refusing the namespace.
+var documentIsolate = isolateDocumentChild
 
 type documentRenderer struct {
 	command func(context.Context, string, ...string) *exec.Cmd
@@ -133,7 +120,7 @@ func renderDocumentWith(env Env, raw json.RawMessage, renderer documentRenderer)
 	if err := os.WriteFile(filterPath, []byte(documentHTMLFilter), 0600); err != nil {
 		return documentFailure(a.Format, "filter", err)
 	}
-	html, err := renderer.run(ctx, "/usr/bin/pandoc", []string{"--from=gfm", "--to=html5", "--standalone", "--lua-filter=" + filterPath}, content)
+	html, err := renderer.run(ctx, "/usr/bin/pandoc", []string{"--from=" + docrender.PandocFrom, "--to=html5", "--standalone", "--lua-filter=" + filterPath}, content)
 	if err != nil {
 		return documentFailure(a.Format, "pandoc", err)
 	}
@@ -222,6 +209,9 @@ func (b *boundedDocumentBuffer) Write(p []byte) (int, error) {
 
 func (r documentRenderer) run(ctx context.Context, program string, args []string, input []byte) ([]byte, error) {
 	cmd := r.command(ctx, program, args...)
+	if err := documentIsolate(cmd); err != nil {
+		return nil, err
+	}
 	cmd.Env = []string{"PATH=/usr/local/bin:/usr/bin:/bin", "LANG=C.UTF-8", "LC_ALL=C.UTF-8"}
 	cmd.Stdin = bytes.NewReader(input)
 	stdout := &boundedDocumentBuffer{limit: documentOutputCap}

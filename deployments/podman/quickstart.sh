@@ -57,12 +57,12 @@ REPO_URL="${VORNIK_REPO_URL:-https://github.com/EaseIT-cz/vornik}"
 # (`make quickstart-stamp-ref REF=<tag>`), so the PUBLISHED installer pins a
 # concrete release rather than a moving branch. Keep it a real, recent tag in
 # the repo. Override at runtime with VORNIK_REF (e.g. VORNIK_REF=main).
-DEFAULT_VORNIK_REF="2026.10.5"
+DEFAULT_VORNIK_REF="2026.10.6"
 REF="${VORNIK_REF:-$DEFAULT_VORNIK_REF}"
 DIR="${VORNIK_DIR:-$HOME/vornik}"
 HTTP_PORT="${VORNIK_HTTP_PORT:-8080}"
 PG_PORT="${POSTGRES_PORT:-5432}"
-GO_IMAGE="${VORNIK_GO_IMAGE:-docker.io/library/golang:1.25}"
+GO_IMAGE="${VORNIK_GO_IMAGE:-docker.io/library/golang:1.26.9}"
 
 c_blue=$'\033[1;36m'; c_yellow=$'\033[1;33m'; c_red=$'\033[1;31m'; c_green=$'\033[1;32m'; c_off=$'\033[0m'
 log()  { printf '%s==>%s %s\n' "$c_blue"   "$c_off" "$*"; }

@@ -90,6 +90,8 @@ func TestFireScheduledBroker(t *testing.T) {
 	require.NotEmpty(t, id)
 	task := tasks.LastCall.Task
 	require.Equal(t, persistence.TaskCreationSourceScheduled, task.CreationSource)
+	// GitHub #347: a broker goal is the front agent's inputs, third-party.
+	require.Equal(t, persistence.TaskGoalOriginBroker, task.GoalOrigin)
 	require.Equal(t, "hermes--fin", task.ProjectID)
 	require.NotNil(t, task.IdempotencyKey)
 	require.Equal(t, "sched:hermes--fin--digest:2026-11-01T08:00", *task.IdempotencyKey)

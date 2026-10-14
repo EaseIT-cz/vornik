@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/rs/zerolog"
+	"vornik.io/vornik/internal/aidisclosure"
 	"vornik.io/vornik/internal/conversation"
 	"vornik.io/vornik/internal/persistence"
 )
@@ -122,6 +123,9 @@ type Config struct {
 	// DefaultFiringGrace (or the VORNIK_REMINDERS_FIRING_GRACE
 	// override) at New time.
 	FiringGrace time.Duration
+	// Disclosure applies the Art 50 notice to reminder pushes (design
+	// 2026-07-28 §11.4, GitHub #342). Nil discloses with the compiled defaults.
+	Disclosure *aidisclosure.Service
 }
 
 // LeaderGate is the narrow contract the heartbeat consults
@@ -390,7 +394,9 @@ func (r *Runner) deliver(ctx context.Context, rem *persistence.Reminder) {
 		Text:      reminderBodyWithMarker(rem),
 		Timestamp: r.cfg.Clock(),
 	}
-	if _, err := ch.Send(ctx, msg); err != nil {
+	// Art 50: the reminder text is composed by the set_reminder tool (LLM), so
+	// it takes the shared disclosure path (GitHub #342).
+	if _, err := conversation.SendDisclosed(ctx, r.cfg.Disclosure, ch, msg, true); err != nil {
 		_ = r.cfg.Repo.MarkErrored(ctx, rem.ID, err.Error())
 		r.cfg.Logger.Warn().
 			Err(err).

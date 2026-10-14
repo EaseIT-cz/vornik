@@ -173,6 +173,9 @@ func TestEveryProviderReachingPackageIsClassified(t *testing.T) {
 // evidence that somebody checked a package that no longer exists.
 func TestProviderSpendRegistryHasNoStaleEntries(t *testing.T) {
 	found := packagesImportingProviderSDKs(t, moduleRoot(t))
+	// #334 item 6 (CI pipeline design, amendment 2026-10-14): an emptied
+	// registry had no entry to find stale and passed; 14 on 2026-10-14.
+	requireExamined(t, "provider-spend stale-entry law", "registry entries", len(providerSpendRegistry), 1)
 	for pkg := range providerSpendRegistry {
 		if _, ok := found[pkg]; !ok {
 			t.Errorf("providerSpendRegistry classifies %s, but it no longer imports a provider "+

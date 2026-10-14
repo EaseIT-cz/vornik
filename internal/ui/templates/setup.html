@@ -86,13 +86,13 @@
                                 <span class="text-xs uppercase tracking-wide text-gray-500">Chat endpoint (base URL)</span>
                                 <input type="text" id="chat-endpoint" name="endpoint" value="{{.Prefill.Endpoint}}"
                                        placeholder="http://localhost:11434/v1"
-                                       class="mt-1 w-full rounded-md border border-dark-700 bg-dark-900/50 px-3 py-2 text-gray-100">
+                                       class="mt-1 w-full rounded-md border border-control bg-dark-900/50 px-3 py-2 text-gray-100">
                             </label>
                             <label class="block">
                                 <span class="text-xs uppercase tracking-wide text-gray-500">API key</span>
                                 <input type="password" id="chat-api-key" name="api_key" value="{{.Prefill.APIKey}}"
                                        placeholder="sk-..."
-                                       class="mt-1 w-full rounded-md border border-dark-700 bg-dark-900/50 px-3 py-2 text-gray-100">
+                                       class="mt-1 w-full rounded-md border border-control bg-dark-900/50 px-3 py-2 text-gray-100">
                             </label>
                             <div class="block">
                                 <div class="flex items-center justify-between gap-2">
@@ -108,8 +108,8 @@
                                      list every invocable model. -->
                                 <input type="text" id="chat-model" name="model" value="{{.Prefill.Model}}"
                                        placeholder="gpt-4.1"
-                                       class="mt-1 w-full rounded-md border border-dark-700 bg-dark-900/50 px-3 py-2 text-gray-100">
-                                <select id="chat-model-select" class="hidden mt-1 w-full rounded-md border border-dark-700 bg-dark-900/50 px-3 py-2 text-gray-100"></select>
+                                       class="mt-1 w-full rounded-md border border-control bg-dark-900/50 px-3 py-2 text-gray-100">
+                                <select id="chat-model-select" class="hidden mt-1 w-full rounded-md border border-control bg-dark-900/50 px-3 py-2 text-gray-100"></select>
                                 <button type="button" id="model-manual-toggle"
                                         class="hidden mt-1 text-[11px] text-gray-500 hover:text-gray-300">Type a model ID manually</button>
                                 <p id="models-note" class="hidden mt-1 text-[11px] text-gray-500"></p>
@@ -318,30 +318,30 @@
                         (OpenAI-compatible <code>/v1/embeddings</code>).
                     </p>
                     <label class="flex items-center gap-2">
-                        <input type="checkbox" id="mem-enabled" {{if .MemoryPrefill.Enabled}}checked{{end}} class="rounded border-dark-700 bg-dark-900/50">
+                        <input type="checkbox" id="mem-enabled" {{if .MemoryPrefill.Enabled}}checked{{end}} class="rounded border-control bg-dark-900/50">
                         <span class="text-gray-200">Enable memory for this installation</span>
                     </label>
                     <div id="mem-fields" class="{{if not .MemoryPrefill.Enabled}}hidden {{end}}space-y-3">
                         <label class="block">
                             <span class="text-xs uppercase tracking-wide text-gray-500">Embedding endpoint (base URL)</span>
                             <input type="text" id="mem-endpoint" value="{{.MemoryPrefill.EmbeddingEndpoint}}" placeholder="http://localhost:11434/v1"
-                                   class="mt-1 w-full rounded-md border border-dark-700 bg-dark-900/50 px-3 py-2 text-gray-100">
+                                   class="mt-1 w-full rounded-md border border-control bg-dark-900/50 px-3 py-2 text-gray-100">
                         </label>
                         <label class="block">
                             <span class="text-xs uppercase tracking-wide text-gray-500">Embedding API key</span>
                             <input type="password" id="mem-api-key" value="{{.MemoryPrefill.EmbeddingAPIKey}}" placeholder="sk-… (leave blank to reuse none)"
-                                   class="mt-1 w-full rounded-md border border-dark-700 bg-dark-900/50 px-3 py-2 text-gray-100">
+                                   class="mt-1 w-full rounded-md border border-control bg-dark-900/50 px-3 py-2 text-gray-100">
                         </label>
                         <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
                             <label class="block">
                                 <span class="text-xs uppercase tracking-wide text-gray-500">Embedding model</span>
                                 <input type="text" id="mem-model" value="{{.MemoryPrefill.EmbeddingModel}}" placeholder="text-embedding-3-small"
-                                       class="mt-1 w-full rounded-md border border-dark-700 bg-dark-900/50 px-3 py-2 text-gray-100">
+                                       class="mt-1 w-full rounded-md border border-control bg-dark-900/50 px-3 py-2 text-gray-100">
                             </label>
                             <label class="block">
                                 <span class="text-xs uppercase tracking-wide text-gray-500">Dimension (blank = auto-detect)</span>
                                 <input type="number" id="mem-dimension" value="{{if .MemoryPrefill.EmbeddingDimension}}{{.MemoryPrefill.EmbeddingDimension}}{{end}}" placeholder="1536" min="1"
-                                       class="mt-1 w-full rounded-md border border-dark-700 bg-dark-900/50 px-3 py-2 text-gray-100">
+                                       class="mt-1 w-full rounded-md border border-control bg-dark-900/50 px-3 py-2 text-gray-100">
                             </label>
                         </div>
                     </div>
@@ -491,7 +491,7 @@
                     <form id="dispatcher-config-form" class="space-y-3">
                         <label class="block">
                             <span class="text-xs uppercase tracking-wide text-amber-100/70">Dispatcher project</span>
-                            <select id="dispatcher-project-id" class="mt-1 w-full max-w-xl rounded-md border border-amber-500/30 bg-dark-900/70 px-3 py-2 text-gray-100">
+                            <select id="dispatcher-project-id" class="mt-1 w-full max-w-xl rounded-md border border-control bg-dark-900/70 px-3 py-2 text-gray-100">
                                 {{range .ProjectOptions}}
                                 <option value="{{.ID}}">{{if .DisplayName}}{{.DisplayName}} — {{end}}{{.ID}}</option>
                                 {{end}}

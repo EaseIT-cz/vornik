@@ -24,12 +24,12 @@
                         <option value="7d"  {{if eq .WindowDays 7}}selected{{end}}>Last 7 days</option>
                         <option value="30d" {{if eq .WindowDays 30}}selected{{end}}>Last 30 days</option>
                     </select>
-                    <div class="inline-flex items-center gap-1 rounded-lg border border-dark-700 bg-dark-800 p-0.5" role="group" aria-label="Trading window">
+                    <div class="inline-flex items-center gap-1 rounded-lg border border-control bg-dark-800 p-0.5" role="group" aria-label="Trading window">
                         <button type="button" data-trading-window="24h" aria-pressed="{{if eq .WindowDays 1}}true{{else}}false{{end}}" class="px-2.5 py-1 text-xs rounded-md transition-colors {{if eq .WindowDays 1}}bg-brand-600/80 text-white{{else}}text-gray-400 hover:bg-dark-700 hover:text-gray-200{{end}}">1d</button>
                         <button type="button" data-trading-window="7d" aria-pressed="{{if eq .WindowDays 7}}true{{else}}false{{end}}" class="px-2.5 py-1 text-xs rounded-md transition-colors {{if eq .WindowDays 7}}bg-brand-600/80 text-white{{else}}text-gray-400 hover:bg-dark-700 hover:text-gray-200{{end}}">7d</button>
                         <button type="button" data-trading-window="30d" aria-pressed="{{if eq .WindowDays 30}}true{{else}}false{{end}}" class="px-2.5 py-1 text-xs rounded-md transition-colors {{if eq .WindowDays 30}}bg-brand-600/80 text-white{{else}}text-gray-400 hover:bg-dark-700 hover:text-gray-200{{end}}">30d</button>
                     </div>
-                    <select name="project" class="text-sm bg-dark-800 border border-dark-700 text-gray-200 rounded-md px-2 py-1.5">
+                    <select name="project" class="text-sm bg-dark-800 border border-control text-gray-200 rounded-md px-2 py-1.5">
                         {{range .ProjectsList}}
                         <option value="{{.}}" {{if eq . $.ProjectID}}selected{{end}}>{{.}}</option>
                         {{end}}

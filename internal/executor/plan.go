@@ -1268,6 +1268,7 @@ func (e *Executor) delegateSelectedWorkflow(ctx context.Context, parent *persist
 		WorkflowID:     &chosen,
 		ParentTaskID:   &parent.ID,
 		CreationSource: persistence.TaskCreationSourceRoute,
+		GoalOrigin:     persistence.TaskGoalOriginRoute,
 		// Rule 2: a SAME-PROJECT child inherits its parent's actor. Without
 		// this, a task tree loses its actor at the first hop — which is exactly
 		// how workflow_step reached 61 attributed rows out of 8,888.
@@ -1567,6 +1568,7 @@ func (e *Executor) createDelegatedTasks(ctx context.Context, parent *persistence
 			WorkflowID:     childWorkflowID, // nil = project default; pinned when the spec sets a workflow
 			ParentTaskID:   &parent.ID,
 			CreationSource: persistence.TaskCreationSourceDelegation,
+			GoalOrigin:     persistence.TaskGoalOriginDelegation,
 			// Rule 2, same-project delegation: still that person's work.
 			CreatedByActor: parent.CreatedByActor,
 			DelegationMode: &childMode,

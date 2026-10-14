@@ -20,6 +20,7 @@ import (
 	_ "github.com/lib/pq"
 
 	"vornik.io/vornik/internal/approval"
+	"vornik.io/vornik/internal/testutil/testenv"
 )
 
 // Agent-administered Vornik's DoD lane (plan P8, design §1, §13). These
@@ -94,7 +95,7 @@ func newAgentEnv(t *testing.T) agentEnv {
 }
 
 func (e agentEnv) vars(extra ...string) []string {
-	return cleanEnv(append([]string{"HOME=" + e.home, "XDG_CONFIG_HOME=" + e.cfg}, extra...)...)
+	return testenv.Clean(append([]string{"HOME=" + e.home, "XDG_CONFIG_HOME=" + e.cfg}, extra...)...)
 }
 
 // pairPhone prints a pairing code with the real command, as the operator
@@ -102,7 +103,7 @@ func (e agentEnv) vars(extra ...string) []string {
 func pairPhone(t *testing.T, s *stack) *Phone {
 	t.Helper()
 	cmd := exec.Command(s.ctl, "pair-device", "--label", "Lane phone")
-	cmd.Env = cleanEnv("VORNIK_CONFIG="+s.cfgPath, "VORNIK_CONFIGS_DIR="+filepath.Join(filepath.Dir(s.cfgPath), "configs"),
+	cmd.Env = testenv.Clean("VORNIK_CONFIG="+s.cfgPath, "VORNIK_CONFIGS_DIR="+filepath.Join(filepath.Dir(s.cfgPath), "configs"),
 		"VORNIK_DATA_DIR="+filepath.Join(s.dir, "data"))
 	out, err := cmd.CombinedOutput()
 	if err != nil {
@@ -658,11 +659,11 @@ func hermesAgentRun(t *testing.T, s *stack, ctl, prompt string) hermesRun {
 	// real install.
 	uid, gid := hermesUser(t)
 	run(t, "podman", "unshare", "chown", "-R", uid+":"+gid, filepath.Join(s.hermesHome, ".config"))
-	args := []string{"run", "--rm", "--network", "host",
-		"-v", s.hermesHome + ":/opt/data:Z",
-		"-v", ctl + ":/usr/local/bin/vornikctl:ro,Z",
+	args := hermesRunArgs(t, "--rm", "--network", "host",
+		"-v", s.hermesHome+":/opt/data:Z",
+		"-v", ctl+":/usr/local/bin/vornikctl:ro,Z",
 		"-e", "XDG_CONFIG_HOME=/opt/data/.config",
-		hermesImage, "hermes", "-z", prompt}
+		hermesImage, "hermes", "-z", prompt)
 	cmd := exec.Command("podman", args...)
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &stdout, &stderr
@@ -683,7 +684,7 @@ func buildStaticCtl(t *testing.T, s *stack) string {
 	out := filepath.Join(s.dir, "vornikctl-static")
 	cmd := exec.Command("go", "build", "-o", out, "./cmd/vornikctl")
 	cmd.Dir = repoRoot(t)
-	cmd.Env = cleanEnv("CGO_ENABLED=0")
+	cmd.Env = testenv.Clean("CGO_ENABLED=0")
 	if b, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("static vornikctl: %v\n%s", err, b)
 	}
@@ -776,10 +777,10 @@ func TestA2_Hermes(t *testing.T) {
 	ctl := buildStaticCtl(t, s)
 
 	// The one command, run as the user Hermes runs as: inside its image.
-	connect := exec.Command("podman", "run", "--rm", "--network", "host",
+	connect := exec.Command("podman", hermesRunArgs(t, "--rm", "--network", "host",
 		"-v", s.hermesHome+":/opt/data:Z", "-v", ctl+":/usr/local/bin/vornikctl:ro,Z",
 		"-e", "XDG_CONFIG_HOME=/opt/data/.config", "-e", "VORNIK_API_KEY="+s.adminKey,
-		hermesImage, "/usr/local/bin/vornikctl", "agent", "connect", "hermes", "--url", s.apiURL)
+		hermesImage, "/usr/local/bin/vornikctl", "agent", "connect", "hermes", "--url", s.apiURL)...)
 	out, err := connect.CombinedOutput()
 	_ = exec.Command("podman", "unshare", "chown", "-R", "0:0", s.hermesHome).Run()
 	if err != nil {
@@ -830,9 +831,9 @@ func TestA2_Hermes(t *testing.T) {
 	// run directly in the image as a UID that is neither root nor the key's
 	// owner. Which check refuses first (directory permissions, the open, or
 	// the owner check) depends on the modes; each refuses.
-	neg := exec.Command("podman", "run", "--rm", "--network", "host", "--user", "4242", "--entrypoint", "/usr/local/bin/vornikctl",
+	neg := exec.Command("podman", hermesRunArgs(t, "--rm", "--network", "host", "--user", "4242", "--entrypoint", "/usr/local/bin/vornikctl",
 		"-v", s.hermesHome+":/opt/data:Z", "-v", ctl+":/usr/local/bin/vornikctl:ro,Z",
-		"-e", "XDG_CONFIG_HOME=/opt/data/.config", hermesImage, "agent", "mcp-bridge", "--namespace", "hermes", "--url", s.apiURL)
+		"-e", "XDG_CONFIG_HOME=/opt/data/.config", hermesImage, "agent", "mcp-bridge", "--namespace", "hermes", "--url", s.apiURL)...)
 	negOut, negErr := neg.CombinedOutput()
 	_ = exec.Command("podman", "unshare", "chown", "-R", "0:0", s.hermesHome).Run()
 	if refused := regexp.MustCompile(`belongs to another user|permission denied|no key at`).Match(negOut); negErr == nil || !refused {
@@ -854,7 +855,7 @@ func TestA2_Hermes(t *testing.T) {
 func hermesUser(t *testing.T) (string, string) {
 	t.Helper()
 	id := func(flag string) string {
-		out, err := exec.Command("podman", "run", "--rm", "--entrypoint", "id", hermesImage, flag, "hermes").Output()
+		out, err := exec.Command("podman", hermesRunArgs(t, "--rm", "--entrypoint", "id", hermesImage, flag, "hermes")...).Output()
 		if err != nil {
 			t.Fatalf("id %s hermes: %v", flag, err)
 		}
@@ -892,7 +893,9 @@ func TestA3_Codex(t *testing.T) {
 	}
 	// The Responses contract the stub speaks was probed against this
 	// version; a pass certifies only it (review fe1e F7).
-	ver, _ := exec.Command(codexBin, "--version").Output()
+	verCmd := exec.Command(codexBin, "--version")
+	verCmd.Env = testenv.Clean()
+	ver, _ := verCmd.Output()
 	if !strings.HasPrefix(strings.TrimSpace(string(ver)), certifiedCodex) {
 		t.Fatalf("codex is %q, the lane was probed against %s: re-probe the Responses contract "+
 			"(design §13 as built) and update certifiedCodex", strings.TrimSpace(string(ver)), certifiedCodex)
@@ -1033,10 +1036,10 @@ func TestA2_HermesRealModel(t *testing.T) {
 	writeFile(t, cfgPath, strings.Replace(string(raw), `cli: ["vornik", "memory"]`, `cli: ["mcp-vornik-hermes"]`, 1))
 	phone := pairPhone(t, s)
 	ctl := buildStaticCtl(t, s)
-	connect := exec.Command("podman", "run", "--rm", "--network", "host",
+	connect := exec.Command("podman", hermesRunArgs(t, "--rm", "--network", "host",
 		"-v", s.hermesHome+":/opt/data:Z", "-v", ctl+":/usr/local/bin/vornikctl:ro,Z",
 		"-e", "XDG_CONFIG_HOME=/opt/data/.config", "-e", "VORNIK_API_KEY="+s.adminKey,
-		hermesImage, "/usr/local/bin/vornikctl", "agent", "connect", "hermes", "--url", s.apiURL)
+		hermesImage, "/usr/local/bin/vornikctl", "agent", "connect", "hermes", "--url", s.apiURL)...)
 	if out, err := connect.CombinedOutput(); err != nil {
 		t.Fatalf("connect: %v\n%s", err, out)
 	}

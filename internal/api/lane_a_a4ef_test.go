@@ -57,8 +57,7 @@ func TestDaemonLog_ForeignIDsOnCoveredLineDropped(t *testing.T) {
 // broker project mid-stream, the stream ends rather than keep the companion
 // view.
 func TestExecutionLive_AgentStreamEndsWhenViewChanges(t *testing.T) {
-	fastTerminalCheck(t)
-	h := newLiveAgentHarness(t)
+	h := newLiveAgentHarness(t, fastTerminalCheck)
 	h.addExec("exec-a", "alpha", persistence.ExecutionStatusRunning)
 	raw, _ := seedCompanionKey(t, h.keyRepo, "alpha", nil)
 	conn, _, err := h.dial(t, "exec-a", raw)

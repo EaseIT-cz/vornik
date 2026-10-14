@@ -53,6 +53,7 @@ import (
 
 	"vornik.io/vornik/internal/persistence"
 	sqliterepo "vornik.io/vornik/internal/persistence/sqlite"
+	"vornik.io/vornik/internal/testutil/testenv"
 )
 
 const (
@@ -90,13 +91,17 @@ const e2eStaticProject = "e2e-static"
 
 // TestMain builds the daemon, lays out a temp config tree, boots the
 // real binary, waits for readiness, runs the tests, then tears down.
-func TestMain(m *testing.M) {
+// TestMain runs the lane in the environment CI gives it: no inherited VORNIK_*
+// (GitHub #357, testing design 19 §11).
+func TestMain(m *testing.M) { os.Exit(testenv.Main(m, mainE2E)) }
+
+func mainE2E(m *testing.M) int {
 	code, err := runE2E(m)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "[e2e] setup failed:", err)
-		os.Exit(1)
+		return 1
 	}
-	os.Exit(code)
+	return code
 }
 
 func runE2E(m *testing.M) (int, error) {
@@ -154,7 +159,9 @@ func runE2E(m *testing.M) (int, error) {
 	logFile, _ := os.Create(filepath.Join(work, "daemon.log"))
 	daemon := exec.Command(binPath)
 	daemon.Dir = work
-	daemon.Env = append(os.Environ(),
+	// Its own data dir and no inherited VORNIK_*: a developer shell can export
+	// production's (GitHub #357, testing design 19 §11).
+	daemon.Env = testenv.Daemon(filepath.Join(work, "data"),
 		"VORNIK_CONFIG="+filepath.Join(work, "vornik.yaml"),
 		"VORNIK_CONFIGS_DIR="+configsTree,
 		"PATH="+spawnShimDir+string(os.PathListSeparator)+os.Getenv("PATH"),
@@ -300,10 +307,19 @@ func TestWizardCreateCommitLiveDelete(t *testing.T) {
 		t.Fatalf("delete-now via UI: HTTP %d, body=%s", resp.StatusCode, dn)
 	}
 
-	// After archive, the project detail reflects the archived lifecycle.
-	_, page = doReq(t, http.MethodGet, "/ui/projects/"+projectID, "", nil)
-	if !strings.Contains(strings.ToLower(page), "archiv") {
-		t.Errorf("project detail does not reflect archived state after delete-now via UI")
+	// Since #365 (2026-10-14) the UI's delete-now waits for the sweeper's
+	// outcome (LifecycleService.DeleteNowAndWait) instead of only rewinding
+	// the schedule, so the project is GONE when the request returns: it is
+	// absent from the API list and its detail page no longer renders it. The
+	// old assertion (detail still shows "archived") encoded the pre-#365
+	// asynchronous behaviour; it failed on CI run 38548969197.
+	_, list = doReq(t, http.MethodGet, "/api/v1/projects", "", nil)
+	if strings.Contains(list, projectID) {
+		t.Errorf("project %q still listed after delete-now via UI; want it deleted (#365)", projectID)
+	}
+	resp, page = doReq(t, http.MethodGet, "/ui/projects/"+projectID, "", nil)
+	if resp.StatusCode == http.StatusOK && strings.Contains(page, "E2E Wizard Project") {
+		t.Errorf("project detail still renders the deleted project (HTTP %d)", resp.StatusCode)
 	}
 }
 

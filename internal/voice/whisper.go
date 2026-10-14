@@ -9,6 +9,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -175,21 +176,24 @@ func NormaliseSpec(audio []byte) sandboxtool.Spec {
 	return sandboxtool.Spec{
 		Feature:    sandboxtool.FeatureVoiceSTT,
 		Entrypoint: "ffmpeg",
-		Args: []string{"-nostdin", "-loglevel", "error", "-threads", sandboxtool.FFmpegThreads, "-filter_threads", sandboxtool.FFmpegThreads,
-			"-i", "/in/voice",
-			"-threads", sandboxtool.FFmpegThreads, "-map", "0:a:0", "-map_metadata", "-1",
-			"-ac", "1", "-ar", "16000", "-acodec", "pcm_s16le",
-			"-fflags", "+bitexact", "-flags:a", "+bitexact", "-f", "wav", "/out/audio.wav"},
+		// The input guard pins the protocol and demuxer (GitHub #348).
+		Args: slices.Concat([]string{"-nostdin", "-loglevel", "error", "-threads", sandboxtool.FFmpegThreads, "-filter_threads", sandboxtool.FFmpegThreads},
+			sandboxtool.FFmpegInputGuard(),
+			[]string{"-i", "/in/voice",
+				"-threads", sandboxtool.FFmpegThreads, "-map", "0:a:0", "-map_metadata", "-1",
+				"-ac", "1", "-ar", "16000", "-acodec", "pcm_s16le",
+				"-fflags", "+bitexact", "-flags:a", "+bitexact", "-f", "wav", "/out/audio.wav"}),
 		Inputs: []sandboxtool.Input{{Name: "voice", Data: audio}},
 	}
 }
 
 // noAudioStream reports whether a failed normalise run was ffmpeg finding no
-// audio stream to map.
+// audio it can read: no audio stream to map, or a container outside the
+// input guard's demuxer allowlist (a PNG sent as a voice note, #348).
 func noAudioStream(err error) bool {
 	var re *sandboxtool.RunError
 	return errors.As(err, &re) && re.Outcome == sandboxtool.OutcomeFailed &&
-		strings.Contains(re.Detail, noAudioStreamMarker)
+		(strings.Contains(re.Detail, noAudioStreamMarker) || strings.Contains(re.Detail, notWhitelistedMarker))
 }
 
 // languageCode maps a BCP-47 hint ("en-US") to the short code whisper.cpp

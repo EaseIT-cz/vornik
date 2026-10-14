@@ -48,25 +48,25 @@
                             </label>
                             {{if .IsBool}}
                             <select id="f-{{.Path}}" name="{{.HTMLName}}" {{if .ReadOnly}}disabled{{end}}
-                                    class="w-full rounded-md bg-dark-900 border border-dark-600 px-3 py-2 text-sm text-gray-100 disabled:opacity-50">
+                                    class="w-full rounded-md bg-dark-900 border border-control px-3 py-2 text-sm text-gray-100 disabled:opacity-50">
                                 <option value="false" {{if eq $val "false"}}selected{{end}}>false</option>
                                 <option value="true" {{if eq $val "true"}}selected{{end}}>true</option>
                             </select>
                             {{else if .IsEnum}}
                             <select id="f-{{.Path}}" name="{{.HTMLName}}" {{if .ReadOnly}}disabled{{end}}
-                                    class="w-full rounded-md bg-dark-900 border border-dark-600 px-3 py-2 text-sm text-gray-100 disabled:opacity-50">
+                                    class="w-full rounded-md bg-dark-900 border border-control px-3 py-2 text-sm text-gray-100 disabled:opacity-50">
                                 {{if not .Required}}<option value="" {{if eq $val ""}}selected{{end}}>— unset —</option>{{end}}
                                 {{range .Enum}}<option value="{{.}}" {{if eq . $val}}selected{{end}}>{{.}}</option>{{end}}
                             </select>
                             {{else if .IsTextarea}}
                             <textarea id="f-{{.Path}}" name="{{.HTMLName}}" rows="3" {{if .ReadOnly}}disabled{{end}}
                                       placeholder="one per line"
-                                      class="w-full rounded-md bg-dark-900 border border-dark-600 px-3 py-2 text-sm text-gray-100 font-mono disabled:opacity-50">{{$val}}</textarea>
+                                      class="w-full rounded-md bg-dark-900 border border-control px-3 py-2 text-sm text-gray-100 font-mono disabled:opacity-50">{{$val}}</textarea>
                             {{else}}
                             <input id="f-{{.Path}}" type="{{.InputType}}" {{if .IsNumeric}}step="any"{{end}}
                                    name="{{.HTMLName}}" value="{{$val}}" {{if .ReadOnly}}disabled{{end}}
                                    {{if .Default}}placeholder="{{.Default}}"{{end}}
-                                   class="w-full rounded-md bg-dark-900 border border-dark-600 px-3 py-2 text-sm text-gray-100 disabled:opacity-50">
+                                   class="w-full rounded-md bg-dark-900 border border-control px-3 py-2 text-sm text-gray-100 disabled:opacity-50">
                             {{end}}
                             {{if .Help}}<p class="text-[11px] text-gray-500">{{.Help}}</p>{{end}}
                             {{if $err}}<p class="text-[11px] text-red-700 dark:text-red-300">{{$err}}</p>{{end}}

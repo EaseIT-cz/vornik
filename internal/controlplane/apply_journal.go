@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"vornik.io/vornik/internal/leaderelection"
 	"vornik.io/vornik/internal/persistence"
@@ -524,7 +525,7 @@ func (e *ApplyEngine) markDrift(ctx context.Context, row *persistence.ConfigAppl
 	if existed {
 		have = hashBytes(cur)
 	}
-	return e.parkInDrift(ctx, row, from, rel, fmt.Sprintf("drift: %s is %s; matches neither pre-image nor intended content", rel, have))
+	return e.parkInDrift(ctx, row, from, rel, fmt.Sprintf(driftPrefixEditedFile+"%s is %s; matches neither pre-image nor intended content", rel, have))
 }
 
 // parkInDrift takes an open row from its actual state to DRIFT through
@@ -550,6 +551,9 @@ func (e *ApplyEngine) parkInDrift(ctx context.Context, row *persistence.ConfigAp
 		persistence.JournalPatch{Failure: failure}); terr != nil {
 		return fmt.Errorf("journal →DRIFT: %w", terr)
 	}
+	if e.OnDrift != nil {
+		e.OnDrift(ctx, row.ID) // GitHub #302: file the approver-device card
+	}
 	e.Logger.Error().Str("journal_id", row.ID).Str("proposal_id", row.ProposalID).Str("path", rel).
 		Strs("blocked_projects", row.AffectedProjects).
 		Msg("control-plane: EXTERNAL DRIFT under recovery; files left alone, projects blocked until an operator runs: vornikctl control-plane journal resolve <id> --keep|--restore")
@@ -568,7 +572,7 @@ func (e *ApplyEngine) parkReadSetDrift(ctx context.Context, row *persistence.Con
 	if existed {
 		have = hashBytes(cur)
 	}
-	failure := fmt.Sprintf("reconcile: read dependency %s changed since the proposal was computed (now %s)", drifted, have)
+	failure := fmt.Sprintf(driftPrefixDependency+"%s changed since the proposal was computed (now %s)", drifted, have)
 	if row.State == persistence.JournalStatePrepared {
 		nothingWritten := true
 		for _, ro := range resolved {
@@ -660,21 +664,17 @@ func (e *ApplyEngine) Reconcile(ctx context.Context) error {
 // BlockedProjects returns the affected_projects of every DRIFT row — the
 // set the scheduler's admission keeps out of autonomy until an operator
 // resolves the journal (§5). affectedProjectsAll ("*") means every project.
+// It is the union of PauseReasons, so the gate and the agent view read one
+// source (§13.2).
 func (e *ApplyEngine) BlockedProjects(ctx context.Context) ([]string, error) {
-	if e.Journal == nil {
-		return nil, nil
-	}
-	rows, err := e.Journal.ListOpen(ctx)
+	reasons, err := e.PauseReasons(ctx)
 	if err != nil {
 		return nil, err
 	}
 	seen := map[string]bool{}
 	var out []string
-	for _, row := range rows {
-		if row.State != persistence.JournalStateDrift {
-			continue
-		}
-		for _, p := range row.AffectedProjects {
+	for _, r := range reasons {
+		for _, p := range r.Projects {
 			if !seen[p] {
 				seen[p] = true
 				out = append(out, p)
@@ -682,6 +682,92 @@ func (e *ApplyEngine) BlockedProjects(ctx context.Context) ([]string, error) {
 		}
 	}
 	return out, nil
+}
+
+// The two texts a DRIFT row's failure starts with (§13.1): markDrift's (a
+// target matches neither image) and parkReadSetDrift's (a read dependency
+// moved). The producers build their text from these, and driftClass reads
+// them back, so the two cannot drift apart (§13.2).
+const (
+	driftPrefixEditedFile = "drift: "
+	driftPrefixDependency = "reconcile: read dependency "
+)
+
+// Drift classes: why a row is in DRIFT, as a closed word an agent may see.
+const (
+	DriftEditedFile        = "edited_file"
+	DriftChangedDependency = "changed_dependency"
+	DriftUnknown           = "unknown"
+)
+
+// PauseReason is one DRIFT row as the pause it causes (§13.2): only
+// Vornik-generated or closed values, never the failure text or a path.
+type PauseReason struct {
+	JournalID string
+	// Since is the row's updated_at: when it entered DRIFT.
+	Since time.Time
+	// Projects is the row's affected_projects; "*" means every project.
+	Projects []string
+	// Drift is DriftEditedFile, DriftChangedDependency or DriftUnknown.
+	Drift string
+	// Files is the number of files the change writes.
+	Files int
+}
+
+// PauseReasons returns one reason per open DRIFT row, oldest first (ListOpen
+// orders by created_at). It is the single reader of the pause for the
+// scheduler gate (through BlockedProjects) and the agent tools (GitHub #302).
+func (e *ApplyEngine) PauseReasons(ctx context.Context) ([]PauseReason, error) {
+	if e.Journal == nil {
+		return nil, nil
+	}
+	rows, err := e.Journal.ListOpen(ctx)
+	if err != nil {
+		return nil, err
+	}
+	var out []PauseReason
+	for _, row := range rows {
+		if row.State != persistence.JournalStateDrift {
+			continue
+		}
+		out = append(out, PauseReason{
+			JournalID: row.ID,
+			Since:     row.UpdatedAt,
+			Projects:  append([]string(nil), row.AffectedProjects...),
+			Drift:     driftClass(row.Failure),
+			Files:     len(row.Ops),
+		})
+	}
+	return out, nil
+}
+
+// DriftPath is the config-root-relative path a DRIFT row's failure names
+// (the device card's summary, §13.3), or "" for any other text.
+func DriftPath(failure string) string {
+	for _, p := range []string{driftPrefixEditedFile, driftPrefixDependency} {
+		if rest, ok := strings.CutPrefix(failure, p); ok {
+			if f := strings.Fields(rest); len(f) > 0 {
+				return f[0]
+			}
+		}
+	}
+	return ""
+}
+
+// DriftClassOf maps a DRIFT row's failure text to its closed class; the
+// device card reads it here, so there is one classifier (§13.2).
+func DriftClassOf(failure string) string { return driftClass(failure) }
+
+// driftClass maps a DRIFT row's failure text to its closed class.
+func driftClass(failure string) string {
+	switch {
+	case strings.HasPrefix(failure, driftPrefixEditedFile):
+		return DriftEditedFile
+	case strings.HasPrefix(failure, driftPrefixDependency):
+		return DriftChangedDependency
+	default:
+		return DriftUnknown
+	}
 }
 
 // reconcileRow dispatches one open row by state (§5 table). DRIFT rows are

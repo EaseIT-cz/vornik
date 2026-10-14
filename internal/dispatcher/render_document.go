@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"vornik.io/vornik/internal/docrender"
 	"vornik.io/vornik/internal/outputguard"
 	"vornik.io/vornik/internal/safepath"
 	"vornik.io/vornik/internal/sandboxtool"
@@ -41,8 +42,13 @@ type renderDocumentArgs struct {
 // Formats vocabulary:
 //   - "md"   — writes content verbatim to <name>.md and delivers it
 //   - "html" — pandoc --standalone, in the agent image
-//   - "pdf"  — pandoc --pdf-engine=weasyprint, in the agent image
+//   - "pdf"  — pandoc to HTML, then WeasyPrint with a deny-all URL fetcher
+//     (docrender.SandboxPDFScript), in the agent image
 //   - "docx" — pandoc, in the agent image
+//
+// Every format reads GitHub-flavoured markdown with front matter off and the
+// shared Lua filter (internal/docrender, #339): raw HTML, images and
+// non-http(s)/mailto/fragment links never reach a converter.
 //
 // When the sandbox cannot render (no agent image configured, podman or the
 // image absent, a tool missing from it) the tool reports "rendering not
@@ -196,9 +202,14 @@ var errRenderUnavailable = errors.New("rendering not available in the agent imag
 // (https://docs.vornik.io, S4). The run
 // itself — limits, hardening, timeout, concurrency, scratch and metrics — is
 // the sandboxtool runner's, feature "render" (S5a). What this adds:
-//   - one fixed entrypoint, pandoc, with an argv built only from the format;
-//   - argv carries no user text: the content is /in/input.md and the title is
-//     /in/meta.yaml, both written by the daemon, and the output name is fixed.
+//   - one fixed entrypoint per format (pandoc, or python3 for PDF) with an
+//     argv built only from the format;
+//   - argv carries no user text: the content is /in/input.md, the title is
+//     /in/meta.yaml and the sanitizer is /in/sanitize.lua, all written by the
+//     daemon, and the output name is fixed;
+//   - the content sanitizer of the agent's document_render, shared through
+//     internal/docrender (https://docs.vornik.io
+//     render-tool-design.md §0.3, #339).
 type sandboxRenderer struct {
 	runner *sandboxtool.Runner
 }
@@ -207,17 +218,20 @@ func (te *ToolExecutor) sandbox() sandboxRenderer {
 	return sandboxRenderer{runner: te.sandboxRunner}
 }
 
-// pandocArgs is the whole of pandoc's argv for one format.
-func pandocArgs(format string) []string {
-	args := []string{"/in/input.md", "--metadata-file=/in/meta.yaml"}
-	switch format {
-	case "pdf":
-		args = append(args, "--pdf-engine=weasyprint")
-	case "html":
+// renderCommand is the whole of a format's entrypoint and argv. PDF does not
+// use pandoc's --pdf-engine=weasyprint: WeasyPrint's default fetcher reads
+// file: URLs (audit 2026-10-12, #339), so a fixed program renders pandoc's HTML
+// with a deny-all fetcher instead.
+func renderCommand(format string) (entrypoint string, args []string) {
+	if format == "pdf" {
+		return "python3", []string{"-I", "-c", docrender.SandboxPDFScript}
+	}
+	args = docrender.SandboxPandocArgs()
+	if format == "html" {
 		args = append(args, "--standalone")
 	}
-	// docx needs neither: pandoc writes a complete Word document natively.
-	return append(args, "-o", "/out/output."+format)
+	// docx needs no engine: pandoc writes a complete Word document natively.
+	return "pandoc", append(args, "-o", "/out/output."+format)
 }
 
 // render converts mdPath into outPath; format is "html", "pdf" or "docx".
@@ -234,11 +248,15 @@ func (r sandboxRenderer) render(ctx context.Context, mdPath, outPath, title, for
 	if err != nil {
 		return err
 	}
+	entrypoint, args := renderCommand(format)
 	res, err := r.runner.Run(ctx, sandboxtool.Spec{
 		Feature:    sandboxtool.FeatureRender,
-		Entrypoint: "pandoc",
-		Args:       pandocArgs(format),
-		Inputs:     []sandboxtool.Input{{Name: "input.md", Data: content}, {Name: "meta.yaml", Data: meta}},
+		Entrypoint: entrypoint,
+		Args:       args,
+		Inputs: []sandboxtool.Input{
+			{Name: "input.md", Data: content}, {Name: "meta.yaml", Data: meta},
+			{Name: "sanitize.lua", Data: []byte(docrender.LuaFilter)},
+		},
 	})
 	if err != nil {
 		var re *sandboxtool.RunError

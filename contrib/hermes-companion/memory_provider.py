@@ -15,10 +15,11 @@ import datetime
 import hashlib
 import json
 import logging
-import os
 import re
+import threading
 import urllib.parse
 
+from . import settings
 from .vornik_client import VornikClient, VornikError
 
 try:  # Present inside Hermes; absent in the plugin's own unit tests.
@@ -166,6 +167,11 @@ def _device_link(base_url, link) -> str:
     return ""
 
 
+# The rejecting gates a fuller restatement can genuinely pass: a note that is
+# too short or empty. Every other gate means "do not retry" (design 24, 0.21.6).
+RESTATE_GATES = frozenset({"min_content", "schema_match"})
+
+
 def _refusal(text) -> str:
     """The daemon answers a refused note with a result, not a tool error:
     {"decision": "REJECTED" | "QUARANTINED", "gates_failed": [...]}. Hermes e2e lane,
@@ -177,21 +183,87 @@ def _refusal(text) -> str:
     if not isinstance(result, dict):
         return ""
     decision = str(result.get("decision", "")).upper()
-    gates = ", ".join(str(g) for g in result.get("gates_failed") or []) or "unspecified"
+    failed = [str(g) for g in result.get("gates_failed") or []]
+    gates = ", ".join(failed) or "unspecified"
+    # Coaching is judged per gate (design 24, "Refusals judged per gate
+    # (0.21.6)", GitHub #380): "restate" only where more words can genuinely
+    # pass the gate; an allowlist, so a gate added later gets no coaching.
     if decision == "REJECTED":
-        return ("not stored: Vornik's memory gates refused the note (%s). Restate it as one full "
-                "sentence with its context and try again." % gates)
+        if "dedup_hash" in failed:
+            return ("nothing stored: Vornik already holds this exact note on record (dedup_hash). "
+                    "Do not store it again, reworded or not. vornik_remember only stores and never "
+                    "forgets; to forget something, remove it from your own memory.")
+        if failed and set(failed) <= RESTATE_GATES:
+            return ("not stored: Vornik's memory gates refused the note (%s). Restate it as one full "
+                    "sentence with its context and try again." % gates)
+        return ("not stored: Vornik's memory gates refused the note (%s). Do not reword it to get it "
+                "stored; tell the user it was not stored." % gates)
     if decision == "QUARANTINED":
-        return ("held for operator review (%s), not recallable until released. Restate it as one "
-                "full sentence with its context to store it now." % gates)
+        return ("not stored: held for operator review (%s) and will not be recalled. Do not reword it "
+                "to get it stored; tell the user it was not stored." % gates)
     return ""
+
+
+# Leaked tool-call syntax in a vornik_remember note (design 24, "A garbled
+# tool call is not stored (0.21.6)", GitHub #380): the model meant another
+# tool (Hermes's memory remove, in the incident) and its arguments came out
+# flattened into content. Three shapes, each one a model emits and prose does
+# not: a chat-format control token, a tool-argument key written as JSON, and
+# a JSON key whose opening quote is gone, followed directly by its value.
+_CHAT_MARKER_RE = re.compile(r"<\|(?:start|end|message|channel|call|return|constrain|im_start|im_end)\|>"
+                             r"|\bto=functions\.")
+_TOOL_ARG_KEY_RE = re.compile(r'"?\b(?:action|target|old_text|new_text|content|query)"\s*:\s*"')
+# The value must follow the colon directly: models write JSON compactly, and
+# prose that closes a quotation before a colon puts a space after it.
+_ORPHAN_KEY_RE = re.compile(r'(?:^|[^"\w])[A-Za-z_][A-Za-z0-9_]*":(?:"|\{|\[|-?\d|true\b|false\b|null\b)')
+# Shape 4 (design 24, amendment of the 4eb146337 release run): the memory
+# tool's own arguments as plain keys, whatever the punctuation. a: its
+# argument names old_text/new_text as a key; b: a memory action and a memory
+# target together (either alone is plausible prose).
+_MEMORY_ARG_NAME_RE = re.compile(r'\b(?:old_text|new_text)\b["\']?\s*[:=]', re.IGNORECASE)
+_MEMORY_ACTION_RE = re.compile(r'\baction\b["\']?\s*[:=]\s*["\']?(?:add|replace|remove)\b', re.IGNORECASE)
+# The target value is the memory tool's bare value: quoted, or ending the
+# text, a clause or the call ("target: memory buffer", "Target: user's
+# robot" are prose; review 6aa0 finding 1).
+_MEMORY_TARGET_RE = re.compile(
+    r'\btarget\b["\']?\s*[:=]\s*(?:"(?:memory|user)"|\'(?:memory|user)\'|(?:memory|user)'
+    r'(?=\s*(?:$|[,;}\]]|\.\s*$|\b(?:action|old_text|new_text|content)\b)))', re.IGNORECASE)
+
+GARBLED_REFUSAL = ("nothing stored: the note looked like a garbled tool call (it carries tool-call "
+                   "syntax), not something to remember. vornik_remember only stores and never forgets; "
+                   "to forget something, use your own memory tool. Tell the user nothing was stored.")
+
+
+def _garbled_tool_call(content) -> bool:
+    """True when content carries leaked tool-call syntax (design 24, "A
+    garbled tool call is not stored (0.21.6)")."""
+    text = str(content or "")
+    return bool(_CHAT_MARKER_RE.search(text) or _TOOL_ARG_KEY_RE.search(text)
+                or _ORPHAN_KEY_RE.search(text) or _MEMORY_ARG_NAME_RE.search(text)
+                or (_MEMORY_ACTION_RE.search(text) and _MEMORY_TARGET_RE.search(text)))
 
 
 class VornikMemoryProvider(MemoryProvider):
     def __init__(self, client: VornikClient = None):
-        self.client = client or VornikClient(os.environ.get("VORNIK_URL", ""), os.environ.get("VORNIK_MEMORY_TOKEN", ""))
+        # The active profile's URL and memory key, read at each use (design
+        # 24, 0.21.5); a key found to lack memory access is remembered per
+        # (URL, key), so another profile's key is not disabled with it.
+        self.client = client or VornikClient(
+            settings.getter(settings.URL), settings.getter(settings.MEMORY_TOKEN),
+            not_configured=lambda: settings.not_configured(settings.URL, settings.MEMORY_TOKEN))
         self.session_id = ""
-        self.disabled_reason = ""
+        self._disabled = {}
+        self._disabled_lock = threading.Lock()
+
+    @property
+    def disabled_reason(self) -> str:
+        with self._disabled_lock:
+            return self._disabled.get(self.client.identity(), "")
+
+    @disabled_reason.setter
+    def disabled_reason(self, reason: str) -> None:
+        with self._disabled_lock:
+            self._disabled[self.client.identity()] = reason
 
     @property
     def name(self) -> str:
@@ -221,6 +293,10 @@ class VornikMemoryProvider(MemoryProvider):
                 "vornik_remember to store a durable fact. Never store passwords, keys or other secrets.")
 
     def _call(self, tool: str, args: dict):
+        if not self.client.configured:
+            # Names what this profile lacks (review d927 F5), instead of a
+            # transport error from an empty URL.
+            return None, self.client.not_configured_message()
         if self.disabled_reason:
             return None, "vornik memory is disabled: " + self.disabled_reason
         try:
@@ -247,6 +323,9 @@ class VornikMemoryProvider(MemoryProvider):
             content = str(args.get("content", "")).strip()
             if not content:
                 return json.dumps({"error": "content is required"})
+            if _garbled_tool_call(content):
+                # Refused before sending: the daemon's gates would admit it.
+                return json.dumps({"error": GARBLED_REFUSAL})
             text, err = self._call("remember", {"content": content[:REMEMBER_MAX_CHARS]})
             if not err:
                 err = _refusal(text)

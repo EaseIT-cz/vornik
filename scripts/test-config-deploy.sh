@@ -71,7 +71,7 @@ fi
 # STRICT_CONFIG_DEPLOY=1. This is the copy-I/O guard the self-check exists for.
 # Skipped as root (chmod 500 doesn't block root writes -> would false-red). ---
 if [ "$(id -u)" -eq 0 ]; then
-	echo "skip - strict copy-I/O case (running as root; chmod 500 doesn't block root)"
+	echo "skip - strict copy-I/O case (running as root; chmod 500 doesn't block root; permission bits do not bind root; this case runs where the tests are not root, the CI runners included)"
 else
 	build_repo                                # repo role-library has coder.md, lead.md
 	TGT="$TMP/t3"; rm -rf "$TGT"; mkdir -p "$TGT/configs/role-library"
@@ -88,7 +88,7 @@ fi
 # --- Case 4 (review finding 4): partial copy of a canonical dir fails the
 # per-file self-check under strict (one file lands, another doesn't). ---
 if [ "$(id -u)" -eq 0 ]; then
-	echo "skip - partial-copy self-check case (running as root)"
+	echo "skip - partial-copy self-check case (running as root; permission bits do not bind root; this case runs where the tests are not root, the CI runners included)"
 else
 	build_repo
 	TGT="$TMP/t4"; rm -rf "$TGT"; mkdir -p "$TGT/configs/role-library"
@@ -516,7 +516,7 @@ fi
 # canonical file and rewrites no entry. Skipped as root (chmod 000 does not
 # stop root reading).
 if [ "$(id -u)" -eq 0 ]; then
-	echo "skip - unreadable ack store (running as root)"
+	echo "skip - unreadable ack store (running as root; permission bits do not bind root; this case runs where the tests are not root, the CI runners included)"
 else
 	build_repo
 	TGT="$TMP/h12"; rm -rf "$TGT"
@@ -552,7 +552,7 @@ fi
 # H14 (review 2733 F5): an update that cannot be written leaves the file and
 # its .origin entry as they were, with a WARN. Skipped as root.
 if [ "$(id -u)" -eq 0 ]; then
-	echo "skip - unwritable canonical update (running as root)"
+	echo "skip - unwritable canonical update (running as root; permission bits do not bind root; this case runs where the tests are not root, the CI runners included)"
 else
 	build_repo
 	TGT="$TMP/h14"; rm -rf "$TGT"

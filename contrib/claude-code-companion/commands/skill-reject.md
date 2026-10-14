@@ -1,6 +1,6 @@
 ---
 description: Reject or retire a vornik knowledge skill
-allowed-tools: mcp__vornik__skill_reject
+allowed-tools: mcp__plugin_vornik-companion_vornik__skill_reject
 argument-hint: <skill id> [reason]
 ---
 
@@ -8,7 +8,7 @@ argument-hint: <skill id> [reason]
 
 The user wants to reject or retire skill: **$ARGUMENTS**
 
-Call `mcp__vornik__skill_reject` with `id` (and an optional `reason`). This
+Call `mcp__plugin_vornik-companion_vornik__skill_reject` with `id` (and an optional `reason`). This
 retires the skill: terminal for a draft, or a revocation for an active/trusted
 one — after which it no longer injects or surfaces in search.
 

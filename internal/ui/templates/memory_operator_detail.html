@@ -68,17 +68,17 @@
                     <input type="hidden" name="action" value="set" />
                     <label class="block">
                         <span class="text-xs text-gray-500 font-mono">key</span>
-                        <select name="key" class="mt-1 w-full bg-dark-700 border border-dark-600 rounded px-2 py-1.5 text-sm text-gray-100 font-mono">
+                        <select name="key" class="mt-1 w-full bg-dark-700 border border-control rounded px-2 py-1.5 text-sm text-gray-100 font-mono">
                             {{range .AllowedKeys}}<option value="{{.}}">{{.}}</option>{{end}}
                         </select>
                     </label>
                     <label class="block sm:col-span-2">
                         <span class="text-xs text-gray-500 font-mono">value (empty removes key)</span>
-                        <input type="text" name="value" class="mt-1 w-full bg-dark-700 border border-dark-600 rounded px-2 py-1.5 text-sm text-gray-100 font-mono" />
+                        <input type="text" name="value" class="mt-1 w-full bg-dark-700 border border-control rounded px-2 py-1.5 text-sm text-gray-100 font-mono" />
                     </label>
                     <label class="block sm:col-span-4">
                         <span class="text-xs text-gray-500 font-mono">rationale (audited)</span>
-                        <input type="text" name="rationale" placeholder="why this change?" class="mt-1 w-full bg-dark-700 border border-dark-600 rounded px-2 py-1.5 text-sm text-gray-100" />
+                        <input type="text" name="rationale" placeholder="why this change?" class="mt-1 w-full bg-dark-700 border border-control rounded px-2 py-1.5 text-sm text-gray-100" />
                     </label>
                     <div class="sm:col-span-4">
                         <button type="submit" class="px-3 py-1.5 rounded bg-brand-600 hover:bg-brand-500 text-white text-sm font-medium">Save</button>
@@ -116,14 +116,14 @@
                 {{end}}
             </div>
 
-            <details class="bg-rose-950/20 border border-rose-900/40 rounded-xl p-5">
+            <details class="bg-rose-50 dark:bg-rose-950/20 border border-rose-900/40 rounded-xl p-5">
                 <summary class="text-sm font-medium text-rose-700 dark:text-rose-300 uppercase tracking-wider cursor-pointer">Danger zone — forget operator</summary>
                 <p class="mt-3 text-xs text-gray-400">Removes every profile field + notes for this operator. The dispatcher will treat their next chat turn as a fresh operator (no <code>&lt;operator_profile&gt;</code> block in the system prompt). Audit row recorded.</p>
                 <form method="POST" action="/ui/memory/operators/{{.Card.OperatorID}}" class="mt-3 flex items-end gap-3" onsubmit="return confirm('Forget all profile data for {{.Card.OperatorID}}?');">
                     <input type="hidden" name="action" value="forget" />
                     <label class="flex-1 block">
                         <span class="text-xs text-gray-500 font-mono">rationale</span>
-                        <input type="text" name="rationale" required placeholder="why are we forgetting this operator?" class="mt-1 w-full bg-dark-700 border border-dark-600 rounded px-2 py-1.5 text-sm text-gray-100" />
+                        <input type="text" name="rationale" required placeholder="why are we forgetting this operator?" class="mt-1 w-full bg-dark-700 border border-control rounded px-2 py-1.5 text-sm text-gray-100" />
                     </label>
                     <button type="submit" class="px-3 py-1.5 rounded bg-rose-700 hover:bg-rose-600 text-white text-sm font-medium">Forget</button>
                 </form>

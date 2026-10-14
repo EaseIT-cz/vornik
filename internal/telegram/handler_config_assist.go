@@ -159,6 +159,13 @@ func (b *Bot) runConfigAssistant(chatID, userID int64, projectID, intent, accoun
 		if strings.TrimSpace(reply) == "" {
 			reply = "The assistant finished without saying anything, which is a fault on this side. Nothing was applied."
 		}
+		// Art 50 (GitHub #342): the reply is LLM output sent outside
+		// ChannelReceiver, so the chat is disclosed to first.
+		if err := b.discloseChat(ctx, chatID); err != nil {
+			b.logger.Error().Err(err).Str("project_id", projectID).
+				Msg("telegram: AI notice could not be delivered; config assistant reply withheld")
+			return
+		}
 		if err := b.sendMessage(ctx, chatID, reply); err != nil {
 			b.logger.Error().Err(err).
 				Str("project_id", projectID).

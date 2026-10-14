@@ -1,56 +1,151 @@
 package sqlite
 
-// SQLite implementation of MemoryPolicyEvaluationRepository.
-// The Policy-Aware Memory Firewall is documented as Postgres-
-// only in v1; this stub exists so the SQLite backend can
-// satisfy the Repositories struct's invariant ("every field
-// non-nil"). Writes are no-ops, reads return empty.
+// SQLite implementation of MemoryPolicyEvaluationRepository — the memory
+// firewall's per-evaluation audit trail (postgres migration 80 + 102).
 //
-// Operators running SQLite see the firewall's CLI / UI
-// surfaces return empty data rather than panic. When the
-// SQLite path needs a real impl in the future, it lands here.
+// Until 2026-10-13 this was a stub that discarded every row (GitHub #355), so
+// the firewall's audit read empty on SQLite whatever had been evaluated. It is
+// now a real store with the Postgres semantics, pinned by
+// repotest.RunMemoryPolicyEvaluationSuite on both drivers. Note that nothing on
+// SQLite produces rows today: the firewall evaluates during memory recall, and
+// recall is Postgres-only (pgvector). The table records whatever is evaluated,
+// so it stops being a silent discard the day a SQLite recall path exists.
+//
+// see LLD § https://docs.vornik.io §4.19
 
 import (
 	"context"
 	"database/sql"
+	"errors"
+	"fmt"
+	"strings"
 	"time"
 
 	"vornik.io/vornik/internal/memoryfirewall"
 )
 
+// MemoryPolicyEvaluationRepository persists firewall evaluation rows.
 type MemoryPolicyEvaluationRepository struct {
 	db *sql.DB
 }
 
-// NewMemoryPolicyEvaluationRepository wires the SQLite stub.
-// db is unused today; kept in the signature so a real impl
-// can land without an API break.
+// NewMemoryPolicyEvaluationRepository wires the repository.
 func NewMemoryPolicyEvaluationRepository(db *sql.DB) *MemoryPolicyEvaluationRepository {
 	return &MemoryPolicyEvaluationRepository{db: db}
 }
 
-// BatchInsert is a no-op on SQLite — the audit table doesn't
-// exist there (migration 80 is Postgres-shaped). Writes log
-// nothing and return nil so the firewall audit writer's
-// flusher goroutine doesn't backpressure.
-func (r *MemoryPolicyEvaluationRepository) BatchInsert(_ context.Context, _ []memoryfirewall.EvaluationRow) error {
+const policyEvalColumns = `id, project_id, COALESCE(tenant_id, ''), chunk_id,
+       COALESCE(request_role, ''), COALESCE(request_purpose, ''),
+       COALESCE(request_operator, ''), COALESCE(trace_id, ''),
+       decision, COALESCE(policy_digest, ''), COALESCE(reason_detail, ''),
+       evaluated_at`
+
+// policyEvalLimit is the Postgres clamp: outside (0, 500] means 50.
+func policyEvalLimit(limit int) int {
+	if limit <= 0 || limit > 500 {
+		return 50
+	}
+	return limit
+}
+
+func nullIfBlank(s string) any {
+	if s == "" {
+		return nil
+	}
+	return s
+}
+
+// BatchInsert writes the rows in one multi-row INSERT. Empty input is a no-op.
+func (r *MemoryPolicyEvaluationRepository) BatchInsert(ctx context.Context, rows []memoryfirewall.EvaluationRow) error {
+	if r == nil || r.db == nil {
+		return errors.New("memory_policy_evaluations: not configured")
+	}
+	if len(rows) == 0 {
+		return nil
+	}
+	placeholders := make([]string, len(rows))
+	args := make([]any, 0, len(rows)*12)
+	for i, row := range rows {
+		placeholders[i] = "(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+		args = append(args,
+			row.ID, row.ProjectID, nullIfBlank(row.TenantID), row.ChunkID,
+			nullIfBlank(row.RequestRole), nullIfBlank(row.RequestPurpose),
+			nullIfBlank(row.RequestOperator), nullIfBlank(row.TraceID),
+			string(row.Decision), nullIfBlank(row.PolicyDigest), nullIfBlank(row.ReasonDetail),
+			sqliteTime(row.EvaluatedAt),
+		)
+	}
+	q := `INSERT INTO memory_policy_evaluations
+    (id, project_id, tenant_id, chunk_id, request_role, request_purpose,
+     request_operator, trace_id, decision, policy_digest, reason_detail, evaluated_at)
+VALUES ` + strings.Join(placeholders, ",")
+	if _, err := r.db.ExecContext(ctx, q, args...); err != nil {
+		return fmt.Errorf("memory_policy_evaluations: batch insert: %w", err)
+	}
 	return nil
 }
 
-// ListRecent returns an empty slice on SQLite.
-func (r *MemoryPolicyEvaluationRepository) ListRecent(_ context.Context, _, _ string, _ time.Time, _ int) ([]memoryfirewall.EvaluationRow, error) {
-	return nil, nil
+// ListRecent returns a project's rows evaluated at or after since, newest
+// first, optionally filtered to one decision.
+func (r *MemoryPolicyEvaluationRepository) ListRecent(ctx context.Context, projectID, decisionFilter string, since time.Time, limit int) ([]memoryfirewall.EvaluationRow, error) {
+	if r == nil || r.db == nil {
+		return nil, errors.New("memory_policy_evaluations: not configured")
+	}
+	q := `SELECT ` + policyEvalColumns + `
+FROM memory_policy_evaluations
+WHERE project_id = ? AND evaluated_at >= ? AND (? = '' OR decision = ?)
+ORDER BY evaluated_at DESC, id DESC
+LIMIT ?`
+	return r.list(ctx, "list", q, projectID, sqliteTime(since), decisionFilter, decisionFilter, policyEvalLimit(limit))
 }
 
-// ListByDigest returns an empty slice on SQLite (firewall is
-// Postgres-only in v1). Present so the SQLite backend satisfies the
-// MemoryPolicyEvaluationRepository interface after the digest
-// proof-verifier landed (drift-mitigation §8.3).
-func (r *MemoryPolicyEvaluationRepository) ListByDigest(_ context.Context, _ string, _ int) ([]memoryfirewall.EvaluationRow, error) {
-	return nil, nil
+// ListByDigest returns every row recorded under a policy digest, newest first.
+func (r *MemoryPolicyEvaluationRepository) ListByDigest(ctx context.Context, policyDigest string, limit int) ([]memoryfirewall.EvaluationRow, error) {
+	if r == nil || r.db == nil {
+		return nil, errors.New("memory_policy_evaluations: not configured")
+	}
+	q := `SELECT ` + policyEvalColumns + `
+FROM memory_policy_evaluations
+WHERE policy_digest = ?
+ORDER BY evaluated_at DESC, id DESC
+LIMIT ?`
+	return r.list(ctx, "list by digest", q, policyDigest, policyEvalLimit(limit))
 }
 
-// ListByChunk returns an empty slice on SQLite (firewall is Postgres-only).
-func (r *MemoryPolicyEvaluationRepository) ListByChunk(_ context.Context, _ string, _ int) ([]memoryfirewall.EvaluationRow, error) {
-	return nil, nil
+// ListByChunk returns one chunk's rows, newest first.
+func (r *MemoryPolicyEvaluationRepository) ListByChunk(ctx context.Context, chunkID string, limit int) ([]memoryfirewall.EvaluationRow, error) {
+	if r == nil || r.db == nil {
+		return nil, errors.New("memory_policy_evaluations: not configured")
+	}
+	q := `SELECT ` + policyEvalColumns + `
+FROM memory_policy_evaluations
+WHERE chunk_id = ?
+ORDER BY evaluated_at DESC, id DESC
+LIMIT ?`
+	return r.list(ctx, "list by chunk", q, chunkID, policyEvalLimit(limit))
+}
+
+func (r *MemoryPolicyEvaluationRepository) list(ctx context.Context, what, q string, args ...any) ([]memoryfirewall.EvaluationRow, error) {
+	rows, err := r.db.QueryContext(ctx, q, args...)
+	if err != nil {
+		return nil, fmt.Errorf("memory_policy_evaluations: %s: %w", what, err)
+	}
+	defer func() { _ = rows.Close() }()
+	var out []memoryfirewall.EvaluationRow
+	for rows.Next() {
+		var row memoryfirewall.EvaluationRow
+		var decision string
+		var at sqlTime
+		if err := rows.Scan(
+			&row.ID, &row.ProjectID, &row.TenantID, &row.ChunkID,
+			&row.RequestRole, &row.RequestPurpose, &row.RequestOperator, &row.TraceID,
+			&decision, &row.PolicyDigest, &row.ReasonDetail, &at,
+		); err != nil {
+			return nil, fmt.Errorf("memory_policy_evaluations: scan: %w", err)
+		}
+		row.Decision = memoryfirewall.EvaluationDecision(decision)
+		row.EvaluatedAt = at.Time
+		out = append(out, row)
+	}
+	return out, rows.Err()
 }

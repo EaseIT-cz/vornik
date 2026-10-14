@@ -263,13 +263,14 @@ exit 1
 	}
 }
 
-// A pull is outside the process-spawn law's closed set (design, "S1b-2, as
-// built"): PullImage had no caller and was deleted rather than given a kind,
-// and the manager's podman seam refuses the verb before any process starts.
+// The manager's podman seam refuses a pull of anything but the pinned agent
+// image, and an unpinned run, before any process starts. (Until 2026-10-12 it
+// refused every pull; the spawn law's "Correction 2026-10-12", GitHub #161,
+// admits a pull of the pinned image, which podman run already pulled.)
 func TestPodman_RefusesAPullAndAnUnpinnedRun(t *testing.T) {
 	marker := filepath.Join(t.TempDir(), "ran")
 	m := &Manager{podmanPath: writeFakePodman(t, "#!/usr/bin/env bash\ntouch "+marker+"\n")}
-	if _, err := m.podman(context.Background(), "pull", "ghcr.io/easeit-cz/vornik-agent:latest"); !errors.Is(err, spawn.ErrRefused) {
+	if _, err := m.podman(context.Background(), "pull", "docker.io/attacker/img:latest"); !errors.Is(err, spawn.ErrRefused) {
 		t.Fatalf("pull: want spawn.ErrRefused, got %v", err)
 	}
 	if _, err := m.StartContainer(context.Background(), &ContainerConfig{

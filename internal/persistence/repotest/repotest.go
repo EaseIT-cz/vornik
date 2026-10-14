@@ -722,6 +722,53 @@ func RunTaskRepositorySuite(t *testing.T, repo persistence.TaskRepository) {
 		}
 	})
 
+	// GitHub #347 (learning-loop design, amendment 2026-10-13): goal_origin is
+	// written once, by Create, and no update path may change it. Update
+	// rewrites creation_source and payload from the struct, so a column it
+	// listed would be forgeable after creation.
+	t.Run("GoalOrigin_round_trips_and_is_immutable", func(t *testing.T) {
+		project := uniqueID("proj")
+		task := newQueuedTask(project)
+		task.GoalOrigin = persistence.TaskGoalOriginWebhook
+		if err := repo.Create(ctx, task); err != nil {
+			t.Fatalf("Create: %v", err)
+		}
+		got, err := repo.Get(ctx, task.ID)
+		if err != nil {
+			t.Fatalf("Get: %v", err)
+		}
+		if got.GoalOrigin != persistence.TaskGoalOriginWebhook {
+			t.Fatalf("goal_origin round-trip: got %q want %q", got.GoalOrigin, persistence.TaskGoalOriginWebhook)
+		}
+		got.GoalOrigin = persistence.TaskGoalOriginREST
+		if err := repo.Update(ctx, got); err != nil {
+			t.Fatalf("Update: %v", err)
+		}
+		got.GoalOrigin = persistence.TaskGoalOriginREST
+		if _, err := repo.UpdateIfStatus(ctx, got, []persistence.TaskStatus{got.Status}); err != nil {
+			t.Fatalf("UpdateIfStatus: %v", err)
+		}
+		again, err := repo.Get(ctx, task.ID)
+		if err != nil {
+			t.Fatalf("Get after update: %v", err)
+		}
+		if again.GoalOrigin != persistence.TaskGoalOriginWebhook {
+			t.Errorf("goal_origin changed after creation: got %q want %q", again.GoalOrigin, persistence.TaskGoalOriginWebhook)
+		}
+		listed, err := repo.List(ctx, persistence.TaskFilter{IDs: []string{task.ID}})
+		if err != nil || len(listed) != 1 || listed[0].GoalOrigin != persistence.TaskGoalOriginWebhook {
+			t.Errorf("List must return goal_origin too: %v, %+v", err, listed)
+		}
+
+		unset := newQueuedTask(project)
+		if err := repo.Create(ctx, unset); err != nil {
+			t.Fatalf("Create without origin: %v", err)
+		}
+		if g, err := repo.Get(ctx, unset.ID); err != nil || g.GoalOrigin != "" {
+			t.Errorf("an unset goal_origin must read back empty (NULL): %v, %+v", err, g)
+		}
+	})
+
 	t.Run("Get_unknown_id_returns_ErrNotFound", func(t *testing.T) {
 		_, err := repo.Get(ctx, uniqueID("missing"))
 		if err == nil {
@@ -1423,6 +1470,39 @@ func RunTaskRepositorySuite(t *testing.T, repo persistence.TaskRepository) {
 		}
 		if len(got) != 1 || got[0].ID != trueDependent.ID {
 			t.Fatalf("GetDependents(%q) = %+v, want only %s", depID, got, trueDependent.ID)
+		}
+	})
+
+	// #334 audit 2026-10-14: the Postgres GetDependencies selected 31
+	// columns while scanTask reads 33, so every call failed; no suite
+	// case called it on a real database. This one does, on both drivers,
+	// and checks the two columns that were missing round-trip.
+	t.Run("GetDependencies_returns_the_full_row", func(t *testing.T) {
+		project := uniqueID("proj")
+		dep := newQueuedTask(project)
+		dep.GoalOrigin = persistence.TaskGoalOriginWebhook
+		actor := "user:repotest"
+		dep.CreatedByActor = &actor
+		if err := repo.Create(ctx, dep); err != nil {
+			t.Fatalf("Create dep: %v", err)
+		}
+		waiter := newQueuedTask(project)
+		waiter.Dependencies = []string{dep.ID}
+		if err := repo.Create(ctx, waiter); err != nil {
+			t.Fatalf("Create waiter: %v", err)
+		}
+		got, err := repo.GetDependencies(ctx, waiter.ID)
+		if err != nil {
+			t.Fatalf("GetDependencies: %v", err)
+		}
+		if len(got) != 1 || got[0].ID != dep.ID {
+			t.Fatalf("GetDependencies(%q) = %+v, want only %s", waiter.ID, got, dep.ID)
+		}
+		if got[0].GoalOrigin != persistence.TaskGoalOriginWebhook {
+			t.Errorf("goal_origin: got %q want %q", got[0].GoalOrigin, persistence.TaskGoalOriginWebhook)
+		}
+		if got[0].CreatedByActor == nil || *got[0].CreatedByActor != actor {
+			t.Errorf("created_by_actor: got %v want %q", got[0].CreatedByActor, actor)
 		}
 	})
 
@@ -5869,12 +5949,27 @@ func RunStepLatencySuite(t *testing.T, outcomes persistence.ExecutionStepOutcome
 	// "schema" degrades WITHOUT truncating.
 	recordOutcome(t, execA, "schema", "coder", "m1", 20_000, "ok", now)
 	recordOutcome(t, execA, "schema", "coder", "m1", 25_000, "schema_violation", now)
+	// "capped" timed out because the EXECUTION's wall clock ran out, not the
+	// step's timeout: degraded (no reclaim) but not a truncation (no raise) —
+	// audit 2026-10-12, GitHub #142, outcome-quality LLD §S7 #2: the shared
+	// label drove inert step-timeout raises.
+	{
+		d := int64(40_000)
+		if err := outcomes.Record(ctx, &persistence.ExecutionStepOutcome{
+			ID: uniqueID("oc"), ProjectID: project, TaskID: uniqueID("t"),
+			ExecutionID: execA, StepID: "capped", Role: "coder", Model: "m1",
+			Outcome: "timeout", ErrorClass: persistence.StepClassWallClockExceeded,
+			DurationMS: &d, RecordedAt: now,
+		}); err != nil {
+			t.Fatalf("Record: %v", err)
+		}
+	}
 
 	stats, err := outcomes.StepLatencyP95ByStep(ctx, now.Add(-time.Hour))
 	if err != nil {
 		t.Fatalf("StepLatencyP95ByStep: %v", err)
 	}
-	var implement, review, tail, truncated, schema *persistence.StepLatencyStat
+	var implement, review, tail, truncated, schema, capped *persistence.StepLatencyStat
 	for i := range stats {
 		s := &stats[i]
 		if s.ProjectID != project {
@@ -5891,6 +5986,8 @@ func RunStepLatencySuite(t *testing.T, outcomes persistence.ExecutionStepOutcome
 			truncated = s
 		case "schema":
 			schema = s
+		case "capped":
+			capped = s
 		}
 	}
 	if tail == nil || truncated == nil {
@@ -5912,6 +6009,15 @@ func RunStepLatencySuite(t *testing.T, outcomes persistence.ExecutionStepOutcome
 	if schema.DegradedCount != 1 || schema.TimeoutCount != 0 {
 		t.Errorf("schema Degraded/Timeout = (%d, %d), want (1, 0)",
 			schema.DegradedCount, schema.TimeoutCount)
+	}
+	// The execution's wall clock, not the step's timeout, ended "capped": a
+	// step-timeout raise cannot address it (outcome-quality LLD §S7 #2).
+	if capped == nil {
+		t.Fatalf("missing capped aggregation row: %+v", stats)
+	}
+	if capped.DegradedCount != 1 || capped.TimeoutCount != 0 {
+		t.Errorf("capped Degraded/Timeout = (%d, %d), want (1, 0): a wall-clock stop would drive an inert step-timeout raise",
+			capped.DegradedCount, capped.TimeoutCount)
 	}
 	if implement.DegradedCount != 0 {
 		t.Errorf("implement DegradedCount = %d, want 0 (all rows are ok)", implement.DegradedCount)

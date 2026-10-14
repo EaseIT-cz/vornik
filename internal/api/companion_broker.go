@@ -185,7 +185,7 @@ func (s *Server) brokerDelegable(key *persistence.APIKey, args delegateArgs) (*r
 		if key.AgentAdmin {
 			// One answer for "another namespace's" and "not an agent
 			// workflow": the agent learns only that it cannot delegate it.
-			return nil, nil, fmt.Errorf("BROKER_WORKFLOW: %q is not delegable with this key", args.Workflow)
+			return nil, nil, notDelegableError{workflow: args.Workflow}
 		}
 		return nil, nil, fmt.Errorf("BROKER_WORKFLOW: %q is a broker workflow and runs only in a broker project", args.Workflow)
 	}
@@ -217,6 +217,9 @@ func (s *Server) brokerDelegable(key *persistence.APIKey, args delegateArgs) (*r
 func (s *Server) companionBrokerDelegate(ctx context.Context, key *persistence.APIKey, args delegateArgs, rawInputs json.RawMessage) (string, error) {
 	wf, project, err := s.brokerDelegable(key, args)
 	if err != nil {
+		// Design §23.2 point 4: refused before it is queued. Later
+		// refusals (inputs, reuse, budget) are not recorded.
+		s.recordAgentRefusal(ctx, key, "delegate", delegateRefusalRule(err))
 		return "", err
 	}
 	inputs, err := validateBrokerInputs(wf, rawInputs)
@@ -325,6 +328,7 @@ func (s *Server) createBrokerTask(ctx context.Context, p brokerTaskParams) (*per
 		RawContext:        rawCtx,
 		CreationSource:    p.source,
 		CreatedByAPIKeyID: keyID,
+		GoalOrigin:        persistence.TaskGoalOriginBroker,
 		IdempotencyKey:    p.idemKey,
 	})
 }

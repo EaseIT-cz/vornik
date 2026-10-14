@@ -1,7 +1,7 @@
 ---
 sources:
     - path: docs/operator/storage-and-retention.md
-      sha256: 674a94db8705f06ad4e0f4b3248a26a71a9fed7ab84697456caac8e9d7333079
+      sha256: 8ab4607d847f20fd3ff15647ae93ed4e4ef186a7e8752c62d13778ae8c3eca46
 ---
 # Storage and Retention
 
@@ -99,7 +99,7 @@ retention:
   enabled: true            # default: false - opt in
   interval: "6h"
   task_llm_usage_days: 90  # cost history
-  tool_audit_days: 30      # tool/debug records
+  tool_audit_days: 180     # tool-call audit (never below 180, see below)
   tasks_days: 60           # finished tasks
   executions_days: 60      # finished executions
   artifacts_days: 60       # artifact records and their files
@@ -108,6 +108,16 @@ retention:
 ```
 
 What the defaults mean:
+
+- `tool_audit_days` never resolves below **180 days** (six months), whatever
+  the daemon or a project sets. That is the minimum the EU AI Act (Art 26(6))
+  asks deployers of high-risk AI systems to keep these logs. Raise the floor
+  with `tool_audit_floor_days`. To keep them for less — because another law
+  requires a shorter period, or because yours is not a high-risk deployment —
+  set `tool_audit_floor_override: true` and say which in
+  `tool_audit_floor_override_basis`; an override without a basis is ignored.
+  The record of a connected assistant's refused calls (shown on its page
+  under **Admin → Assistants**) is kept for the same time.
 
 - `memory_chunks_days: 0` keeps long-term memory forever, which is the right
   posture for most deployments. Long-term memory is product data, not
@@ -194,6 +204,26 @@ vornikctl retention --json
     Pruning artifacts removes both the database record and the underlying file
     (or object, on S3). It cannot be undone from within vornik — recovery
     means restoring from a backup. Run a preview first.
+
+### On SQLite
+
+Retention and `vornikctl retention` work on both database drivers. On
+SQLite every table the SQLite schema has is pruned on the same windows as on
+PostgreSQL. Three differences:
+
+- Pruning project memory (`memory_chunks_days`, per-class TTLs) and the
+  phone-approved idle-memory flow need PostgreSQL. Project memory itself is
+  PostgreSQL-only, so there is normally nothing to prune; if old memory ever
+  exists on SQLite, the sweep reports it as kept rather than deleting it.
+- Tables SQLite does not have (the response and embedding caches, the
+  memory-eviction audit) are skipped.
+- SQLite runs without foreign-key enforcement, so since 2026.10.6 vornik
+  applies the PostgreSQL cascade itself: deleting or pruning a task,
+  execution or artifact also deletes or clears its child rows. Child rows
+  left behind by deletes before 2026.10.6 are not cleaned up.
+- Since 2026.10.6, wiping an archived project (the grace-period wipe or
+  delete-now) works on SQLite too, and a wipe that fails says so instead of
+  reporting success.
 
 ---
 

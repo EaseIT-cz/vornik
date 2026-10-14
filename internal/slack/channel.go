@@ -150,8 +150,15 @@ func legacyAllowsSender(inst *installation, userID string) bool {
 // through it. The per-installation gate used to re-inline the matrix with a
 // locally built Legacy (review-20260914-3c36 F2): the two agreed only because
 // both happened to omit the same field.
+//
+// BOUNDED by authorizeBudget (GitHub #142 #11, outcome-quality LLD §S6), as the
+// configuration-assistant entrypoint already was: on context.Background() a
+// resolver that hangs held the speaker check, and the turn behind it, with no
+// bound. A resolver cut off by the budget reads as unavailable to the shim.
 func (c *Channel) authorize(userID string, legacy chatauth.Legacy) chatauth.Decision {
-	return c.authorizeCtx(context.Background(), userID, legacy)
+	ctx, cancel := context.WithTimeout(context.Background(), authorizeBudget)
+	defer cancel()
+	return c.authorizeCtx(ctx, userID, legacy)
 }
 
 // authorizeCtx is authorize with a caller-supplied deadline.

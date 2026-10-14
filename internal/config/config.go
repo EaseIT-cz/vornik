@@ -1604,7 +1604,24 @@ type RetentionConfig struct {
 	Interval string `yaml:"interval" doc:"How often the sweeper runs."`
 	// Default retention windows in days. Zero → compiled default.
 	TaskLLMUsageDays int `yaml:"task_llm_usage_days" doc:"Days to keep per-task LLM usage rows."`
-	ToolAuditDays    int `yaml:"tool_audit_days"`
+	ToolAuditDays    int `yaml:"tool_audit_days" doc:"Days to keep tool-call audit rows; clamped up to tool_audit_floor_days."`
+	// ToolAuditFloorDays is the minimum tool_audit_log window, overriding any
+	// lower daemon or project tool_audit_days. 0 → 180 (six months, EU AI Act
+	// Art 26(6)). A larger value raises the floor; a smaller one is ignored
+	// unless ToolAuditFloorOverride is set. Daemon-level only: a project cannot
+	// lower the deployer's floor. See retention.ResolveToolAuditFloor and
+	// https://docs.vornik.io
+	ToolAuditFloorDays int `yaml:"tool_audit_floor_days" doc:"Minimum days to keep tool-call audit rows (0 = 180, six months)." since:"2026.10.6"`
+	// ToolAuditFloorOverride lets ToolAuditFloorDays go below six months — for a
+	// deployer whom other Union or national law (Art 26(6) "unless provided
+	// otherwise") requires to keep these logs for less. Logged as a warning at
+	// every sweeper start.
+	ToolAuditFloorOverride bool `yaml:"tool_audit_floor_override" doc:"Allow tool_audit_floor_days below six months (logs a warning)." since:"2026.10.6"`
+	// ToolAuditFloorOverrideBasis says why six months does not apply: a Union or
+	// national law requiring a shorter period, or that this is not a high-risk
+	// (Annex III) deployment. Required: an override with an empty basis is
+	// refused and the six-month floor kept, so the config itself records WHY.
+	ToolAuditFloorOverrideBasis string `yaml:"tool_audit_floor_override_basis" doc:"Why six months does not apply (a law requiring less, or not a high-risk deployment); required for the override." since:"2026.10.6"`
 	// ChatAuditDays bounds chat_audit_log (and, by reference, the
 	// chat_system_prompts bodies it points at). Always-on; 0 → the
 	// compiled default of 90, which is deliberately longer than the tasks
@@ -1925,6 +1942,11 @@ type SchedulerConfig struct {
 	// reach it, which on slow hardware is the difference between a step that
 	// finishes and one killed mid-work. Empty keeps the 30m default.
 	DefaultStepTimeout string `yaml:"default_step_timeout" doc:"Ceiling for a step whose workflow declares no timeout. Empty = 30m."`
+	// ExecutionTimeout caps a whole execution whose workflow declares no
+	// maxWallClock; a workflow's own maxWallClock always wins. It was a 30m
+	// scheduler field nothing read (05-scheduler §4.12 C1, GitHub #142).
+	// Empty keeps the built-in behaviour: no cap.
+	ExecutionTimeout string `yaml:"execution_timeout" doc:"Ceiling for a whole execution whose workflow declares no maxWallClock (a workflow's own value always wins). Empty = no ceiling."`
 }
 
 // RuntimeConfig holds container runtime configuration.
@@ -1952,6 +1974,12 @@ type RuntimeConfig struct {
 	// roles that fetch dependencies). New installations ship "daemon-only".
 	// Values: "" | host | none | daemon-only.
 	DefaultNetwork string `yaml:"default_network" doc:"Default network policy for agent roles: host, none, or daemon-only (zero egress; requires server.unix_socket)."`
+
+	// ImageTimeout bounds a podman run or pull of the agent image, which may
+	// transfer the image (outcome-quality LLD §S7 #8, GitHub #142). Empty =
+	// 15m. Raise it on a slow registry link; every other podman verb but
+	// wait is bounded at 60s.
+	ImageTimeout string `yaml:"image_timeout" doc:"Bound on a podman run or pull of the agent image, which may download it (a Go duration). Empty = 15m. Raise it on a slow registry link."`
 
 	// AgentMemoryLimit caps each agent container's memory ("2GiB", "512MiB").
 	//

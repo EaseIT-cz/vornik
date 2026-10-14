@@ -275,12 +275,16 @@ emit_repo_scope_directive() {
 
 You are in the **\`${REPO_SCOPE}\`** repo. The companion project's RAG
 serves multiple repos for this operator — when you call any of:
-  - \`mcp__vornik__recall\`
-  - \`mcp__vornik__remember\`
-  - \`mcp__vornik__recent_memory\`
-  - \`mcp__vornik__delegate\`
+  - \`mcp__plugin_vornik-companion_vornik__recall\`
+  - \`mcp__plugin_vornik-companion_vornik__remember\`
+  - \`mcp__plugin_vornik-companion_vornik__recent_memory\`
+  - \`mcp__plugin_vornik-companion_vornik__delegate\`
 …pass \`repo_scope: "${REPO_SCOPE}"\` so deposits land tagged and
 recalls don't surface unrelated repos' chunks.
+
+These tools may arrive deferred (name only, no schema): load them with
+\`ToolSearch("select:mcp__plugin_vornik-companion_vornik__recall,mcp__plugin_vornik-companion_vornik__remember")\`
+(and any other you need) before the first call, or the call fails.
 
 Pass \`repo_scope: "*"\` instead when a deposit / recall genuinely
 spans repos (e.g. an operator-wide note about their toolchain).
@@ -338,9 +342,9 @@ procedure** this session — a troubleshooting flow, a non-obvious fix, a
 deploy/verify sequence worth doing the same way next time — proactively
 capture it as a vornik knowledge skill:
 
-1. First \`mcp__vornik__skill_search\` (repo_scope \`${REPO_SCOPE}\`) to
+1. First \`mcp__plugin_vornik-companion_vornik__skill_search\` (repo_scope \`${REPO_SCOPE}\`) to
    avoid duplicating an existing skill.
-2. If it's genuinely new, call \`mcp__vornik__skill_propose\` with a
+2. If it's genuinely new, call \`mcp__plugin_vornik-companion_vornik__skill_propose\` with a
    kebab-case \`name\`, a one-line \`description\` (WHEN to apply it), a
    Markdown \`body\` (the actual steps/checks/anti-patterns), and
    \`repo_scope: "${REPO_SCOPE}"\`.

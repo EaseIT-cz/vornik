@@ -78,6 +78,15 @@ type agentAdminService struct {
 	// a test shortens the timeout.
 	limiter         connLimiter
 	testConnTimeout time.Duration
+	// connectorStep and afterCredentialHook are test seams for the device's
+	// connector confirm (design §19.14.8 item 5; GitHub #314): the first sees
+	// each step before it runs and may fail it, the second counts entries
+	// into afterCredentialStored. Both nil in production.
+	connectorStep       func(step string) error
+	afterCredentialHook func()
+	// rollback undoes an applied proposal; nil means engine.Rollback. A test
+	// fails it to pin the double failure (design §23.4).
+	rollback func(ctx context.Context, id string) error
 }
 
 // background runs fn detached and tracked.
@@ -117,6 +126,11 @@ func (c *Container) agentAdmin() *agentAdminService {
 		}
 		return nil
 	}
+	// A connector the device will not offer says why, once per build
+	// (design §19.14.8 item 4).
+	for name, why := range r.Catalogue().Demoted() {
+		c.Logger.Warn().Str("recipe", name).Str("reason", why).Msg("agent admin: a connector is not offered on the device")
+	}
 	devices := c.approverDeviceService()
 	engine := c.newProposalApplier()
 	if devices == nil || engine == nil {
@@ -135,6 +149,8 @@ func (c *Container) agentAdmin() *agentAdminService {
 	devices.RegisterEffect(persistence.ApprovalKindWideningChange, s.applyApproved)
 	devices.RegisterOnReject(persistence.ApprovalKindWideningChange, s.rejectApproved)
 	devices.RegisterTerminalObserver(persistence.ApprovalKindWideningChange, s.recordApprovalNotification)
+	// A moot cover request is withdrawn (design §9.2d, GitHub #264).
+	devices.RegisterWithdrawable(persistence.ApprovalKindWideningChange)
 	// A credential slot's effect stores what its decision carried: the
 	// typed value or the sign-in (plan P4.2/P4.4, decide then store).
 	devices.RegisterEffect(persistence.ApprovalKindCredentialSlot, s.slotEffect)
@@ -323,7 +339,7 @@ func (s *agentAdminService) doVerb(ctx context.Context, key *persistence.APIKey,
 	if verb == agentadmin.VerbApproveServerTools {
 		// Daemon-internal (plan P4.3): the daemon files it after listing a
 		// connected server's tools; no key may.
-		return AgentAdminResult{Effect: EffectRefused, Reason: verb + " refused: not a verb you can call"}, nil
+		return AgentAdminResult{Effect: EffectRefused, Reason: verb + " refused: not a verb you can call", Rule: agentadmin.RuleVerbNotCallable}, nil
 	}
 	// Listing a new unauthenticated server is network I/O: before the lock.
 	var listing unauthListing
@@ -332,7 +348,7 @@ func (s *agentAdminService) doVerb(ctx context.Context, key *persistence.APIKey,
 		if listing.refuse != "" {
 			// Design §6.1 item 4: the server does not speak the declared
 			// transport; nothing is filed.
-			return AgentAdminResult{Effect: EffectRefused, Reason: listing.refuse}, nil
+			return AgentAdminResult{Effect: EffectRefused, Reason: listing.refuse, Rule: agentadmin.RuleTransportMismatch}, nil
 		}
 	}
 	var recipeTargets map[string][]string
@@ -369,12 +385,12 @@ func (s *agentAdminService) doVerb(ctx context.Context, key *persistence.APIKey,
 		return AgentAdminResult{}, err
 	}
 	if ch.Class == agentadmin.Refused {
-		return AgentAdminResult{Effect: EffectRefused, Reason: ch.Reason}, nil
+		return AgentAdminResult{Effect: EffectRefused, Reason: ch.Reason, Rule: ch.Rule}, nil
 	}
 	if why, err := s.spendingBlocked(st, ch, coverID); err != nil {
 		return AgentAdminResult{}, err
 	} else if why != "" {
-		return AgentAdminResult{Effect: EffectRefused, Reason: why}, nil
+		return AgentAdminResult{Effect: EffectRefused, Reason: why, Rule: agentadmin.RuleSpendingBlocked}, nil
 	}
 	if ch.Slot != nil {
 		return s.fileRequest(ctx, persistence.ApprovalKindCredentialSlot, "",
@@ -386,14 +402,20 @@ func (s *agentAdminService) doVerb(ctx context.Context, key *persistence.APIKey,
 		return AgentAdminResult{Effect: EffectApplied, Sentence: ch.Sentence}, nil
 	}
 	if len(ch.Ops) > 12 {
-		return AgentAdminResult{Effect: EffectRefused, Reason: verb + " refused: the change touches more than 12 files; remove the project's workflows first"}, nil
+		return AgentAdminResult{Effect: EffectRefused, Reason: verb + " refused: the change touches more than 12 files; remove the project's workflows first", Rule: agentadmin.RuleTooManyFiles}, nil
 	}
 	p, err := s.fileProposal(ctx, "companion:"+key.ClientKind, key.ID, ch)
 	if err != nil {
 		return AgentAdminResult{}, err
 	}
 	if ch.Class == agentadmin.Inert {
-		return s.applyInert(ctx, p, ch)
+		res, err := s.applyInert(ctx, p, ch)
+		if err == nil && res.Effect == EffectApplied && coverID != "" {
+			// A change that brought the sum within the limit withdraws the
+			// cover request in this verb, not the next (design §9.2d item 6).
+			s.withdrawMootCoverAfter(ctx, ns, key.ProjectID)
+		}
+		return res, err
 	}
 	return s.requestApproval(ctx, p, ch)
 }
@@ -408,6 +430,12 @@ func (s *agentAdminService) opRel(path string) string {
 }
 
 func (s *agentAdminService) fileProposal(ctx context.Context, actorKind, credentialID string, ch agentadmin.Change) (*persistence.ControlPlaneProposal, error) {
+	return s.fileProposalBy(ctx, "agent:"+ch.Namespace, actorKind, credentialID, ch)
+}
+
+// fileProposalBy files a change proposed by proposedBy: "agent:<ns>" for a
+// verb, "device:<id>" for a paired device's connector install (GitHub #314).
+func (s *agentAdminService) fileProposalBy(ctx context.Context, proposedBy, actorKind, credentialID string, ch agentadmin.Change) (*persistence.ControlPlaneProposal, error) {
 	ops := make([]map[string]string, 0, len(ch.Ops))
 	for _, op := range ch.Ops {
 		ops = append(ops, map[string]string{"op": op.Op, "path": s.opRel(op.Path), "content": op.Content})
@@ -435,7 +463,7 @@ func (s *agentAdminService) fileProposal(ctx context.Context, actorKind, credent
 		ID: persistence.GenerateID("cpp"), ProjectID: project,
 		Kind: persistence.ProposalKindScaffold, BlastRadius: persistence.ProposalScopeProject,
 		Title: truncate(ch.Sentence, 200), ApplyOps: string(rawOps), Evidence: string(evidence),
-		Status: persistence.ProposalStatusDraft, ProposedBy: "agent:" + ch.Namespace,
+		Status: persistence.ProposalStatusDraft, ProposedBy: proposedBy,
 		Entrypoint: "agent", ActorKind: actorKind, ActorCredentialID: credentialID,
 	}
 	if err := s.proposals.Create(ctx, p); err != nil {
@@ -453,12 +481,38 @@ func (s *agentAdminService) applyInert(ctx context.Context, p *persistence.Contr
 		return AgentAdminResult{}, err
 	}
 	if why, _ := s.applyAndVerify(ctx, p.ID, AgentAdminInertActor, ch, false); why != "" {
-		return AgentAdminResult{ChangeID: p.ID, Effect: EffectRefused, Reason: ch.Verb + " refused: " + why}, nil
+		return AgentAdminResult{ChangeID: p.ID, Effect: EffectRefused, Reason: ch.Verb + " refused: " + why, Rule: agentadmin.RuleApplyRefused}, nil
 	}
 	if err := s.recordNarrowing(ctx, ch.Narrow); err != nil {
-		return AgentAdminResult{}, err
+		// GitHub #172 item 3 (design §23.4): the files and the ledger row
+		// landed, the change's own record did not; undo the change.
+		return s.rollBackUnrecorded(ctx, p.ID, ch.Verb, err), nil
 	}
 	return AgentAdminResult{ChangeID: p.ID, Effect: EffectApplied, Sentence: ch.Sentence}, nil
+}
+
+// rollBackUnrecorded answers an inert change whose post-ledger write failed
+// (design §23.4): the change is rolled back through the engine, so a failed
+// record fails the change. If the rollback fails too, the change stays
+// applied and the answer says so. The rule is record_failed, not
+// apply_refused: the failure is the daemon's, so the refusal ledger and the
+// burst check do not count it against the agent (#334 audit 2026-10-14).
+func (s *agentAdminService) rollBackUnrecorded(ctx context.Context, id, verb string, cause error) AgentAdminResult {
+	rollback := s.rollback
+	if rollback == nil {
+		rollback = s.engine.Rollback
+	}
+	res := AgentAdminResult{ChangeID: id, Effect: EffectRefused, Rule: agentadmin.RuleRecordFailed,
+		Reason: verb + " refused: the change could not be recorded and was rolled back; try again"}
+	if rerr := rollback(ctx, id); rerr != nil {
+		s.c.Logger.Error().Err(cause).AnErr("rollback_error", rerr).Str("proposal_id", id).
+			Msg("agent admin: a change whose record failed could not be rolled back; it stays applied")
+		res.Reason = verb + " refused: the change could not be recorded; rolling it back failed, so it stays applied " +
+			"(the operator can roll it back with vornikctl control-plane rollback " + id + ")"
+		return res
+	}
+	s.c.Logger.Warn().Err(cause).Str("proposal_id", id).Msg("agent admin: a change whose record failed was rolled back")
+	return res
 }
 
 // applyInertTransition is applyInert for a change that touches a connection:
@@ -482,7 +536,7 @@ func (s *agentAdminService) applyInertTransition(ctx context.Context, p *persist
 		if !unpublished {
 			exit = configExitKeepBusy
 		}
-		return AgentAdminResult{ChangeID: p.ID, Effect: EffectRefused, Reason: ch.Verb + " refused: " + why}, nil
+		return AgentAdminResult{ChangeID: p.ID, Effect: EffectRefused, Reason: ch.Verb + " refused: " + why, Rule: agentadmin.RuleApplyRefused}, nil
 	}
 	// Published: busy clears with Finish or stays for recovery.
 	exit = configExitKeepBusy
@@ -491,7 +545,10 @@ func (s *agentAdminService) applyInertTransition(ctx context.Context, p *persist
 	}
 	exit = configExitFinished
 	if err = s.recordNarrowing(ctx, ch.Narrow); err != nil {
-		return AgentAdminResult{}, err
+		// Design §23.4: Finish has committed (busy is clear); the rollback is
+		// a plain engine rollback, leaving the connection configured with its
+		// approval recorded as removed: fail-closed.
+		return s.rollBackUnrecorded(ctx, p.ID, ch.Verb, err), nil
 	}
 	return AgentAdminResult{ChangeID: p.ID, Effect: EffectApplied, Sentence: ch.Sentence}, nil
 }
@@ -675,6 +732,11 @@ func (s *agentAdminService) deleteWorkflowReaches(ctx context.Context, workflows
 		if err := s.grants.DeleteWorkflowReach(ctx, wf); err != nil {
 			return err
 		}
+		// A removed workflow is no longer one a device installed (design
+		// §19.14.8 item 6): the row's one remover.
+		if err := s.grants.DeleteConnectorInstall(ctx, wf); err != nil {
+			return err
+		}
 	}
 	return nil
 }
@@ -696,6 +758,10 @@ type approvalPayload struct {
 	// Credentials are the credential requests an approved recipe install
 	// files next (design §19.9 F1).
 	Credentials []agentadmin.CredentialFollowUp `json:"credentials,omitempty"`
+	// Connector marks an OAuth credential_slot a device's connector install
+	// filed (design §19.14.10): its sign-in returns to the connector page,
+	// which approves the tools, so the callback files no tools request.
+	Connector string `json:"connector,omitempty"`
 }
 
 func (s *agentAdminService) requestApproval(ctx context.Context, p *persistence.ControlPlaneProposal, ch agentadmin.Change) (AgentAdminResult, error) {
@@ -709,30 +775,39 @@ func (s *agentAdminService) requestApproval(ctx context.Context, p *persistence.
 // never calls back into this service, so holding the lock across it orders
 // nothing new (review e1a4 F4), at the cost of holding it for one push.
 func (s *agentAdminService) fileRequest(ctx context.Context, kind, changeID string, payload approvalPayload, ch agentadmin.Change) (AgentAdminResult, error) {
-	raw, err := json.Marshal(payload)
+	row, err := requestRowOf(kind, payload, ch)
 	if err != nil {
 		return AgentAdminResult{}, err
-	}
-	canon, err := approval.Canonical(raw)
-	if err != nil {
-		return AgentAdminResult{}, err
-	}
-	sum, err := approval.CanonicalSHA256(canon)
-	if err != nil {
-		return AgentAdminResult{}, err
-	}
-	now := time.Now().UTC()
-	id := persistence.GenerateID("apr")
-	row := persistence.AgentApprovalRequestRow{
-		ID: id, Namespace: ch.Namespace, Kind: kind,
-		Sentence: ch.Sentence, Rendered: canon, RenderedSHA256: sum, Status: persistence.ApprovalPending,
-		CreatedAt: now, ExpiresAt: now.Add(approverdevice.RequestTTL),
 	}
 	if err := s.devices.FileRequest(ctx, row); err != nil {
 		return AgentAdminResult{}, err
 	}
+	id := row.ID
 	url := strings.TrimRight(s.c.Config.PublicOrigin(), "/") + "/ui/approve/" + id
 	return AgentAdminResult{ChangeID: changeID, Effect: EffectAwaiting, ApprovalURL: url, Sentence: ch.Sentence}, nil
+}
+
+// requestRowOf is a pending approval row carrying payload, canonical and
+// hashed, as fileRequest stores it.
+func requestRowOf(kind string, payload approvalPayload, ch agentadmin.Change) (persistence.AgentApprovalRequestRow, error) {
+	raw, err := json.Marshal(payload)
+	if err != nil {
+		return persistence.AgentApprovalRequestRow{}, err
+	}
+	canon, err := approval.Canonical(raw)
+	if err != nil {
+		return persistence.AgentApprovalRequestRow{}, err
+	}
+	sum, err := approval.CanonicalSHA256(canon)
+	if err != nil {
+		return persistence.AgentApprovalRequestRow{}, err
+	}
+	now := time.Now().UTC()
+	return persistence.AgentApprovalRequestRow{
+		ID: persistence.GenerateID("apr"), Namespace: ch.Namespace, Kind: kind,
+		Sentence: ch.Sentence, Rendered: canon, RenderedSHA256: sum, Status: persistence.ApprovalPending,
+		CreatedAt: now, ExpiresAt: now.Add(approverdevice.RequestTTL),
+	}, nil
 }
 
 // applyApproved is the widening_change effect. It is idempotent: an already

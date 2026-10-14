@@ -293,6 +293,8 @@ func TestCompanionMCP_Delegate_HappyPath_CreatesTaskWithCompanionSource(t *testi
 	require.NotNil(t, created)
 	assert.Equal(t, persistence.TaskCreationSourceCompanion, created.CreationSource,
 		"audit trail must record companion provenance — distinguishes from A2A")
+	// GitHub #347: the goal's origin is recorded for the skill distiller.
+	assert.Equal(t, persistence.TaskGoalOriginCompanion, created.GoalOrigin)
 	// Payload should carry the companion session marker so list()
 	// + later filters can identify who delegated this.
 	require.NotEmpty(t, created.Payload)
@@ -911,8 +913,8 @@ func TestCompanionMCP_Cancel_TerminalTask_NoOp(t *testing.T) {
 			Status: persistence.TaskStatusCompleted,
 		}, nil
 	}
-	// TransitionToCancelled returns (false, nil) for a terminal task.
-	taskRepo.TransitionToCancelledFunc = func(_ context.Context, _ string) (bool, error) {
+	// The conditional cancel write returns (false, nil) for a terminal task.
+	taskRepo.TransitionConditionalFunc = func(_ context.Context, _ string, _ []persistence.TaskStatus, _ persistence.TaskStatus, _ persistence.TransitionOpts) (bool, error) {
 		return false, nil
 	}
 
@@ -926,7 +928,8 @@ func TestCompanionMCP_Cancel_TerminalTask_NoOp(t *testing.T) {
 
 	text, isErr := decodeToolText(t, decodeJSONRPC(t, rec.Body.Bytes()))
 	require.False(t, isErr, "cancel on terminal task is idempotent — not an error")
-	assert.Contains(t, text, "no-op")
+	// Wording since 2026-10-12 (#326): the re-read status and the reason.
+	assert.Contains(t, text, "already COMPLETED; there is nothing to cancel")
 }
 
 func TestCompanionMCP_Catalog_ReturnsAllowedWorkflowsFromKey(t *testing.T) {

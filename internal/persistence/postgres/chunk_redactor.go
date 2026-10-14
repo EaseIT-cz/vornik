@@ -146,6 +146,11 @@ func (r *ChunkRedactorRepository) RedactChunk(
 		}, nil
 	}
 
+	// content_title is cleared in the same statement (5c design §4.5, 2026-10-12):
+	// it is an LLM summary of the OLD content, so a redacted chunk could otherwise
+	// keep a title naming the erased subject, and a rectified one a title restating
+	// the inaccuracy. The titler backfill (content_title IS NULL) regenerates it.
+	//
 	// The content update and the nulled embedding are ONE statement, so there is no
 	// instant at which the new text carries the old vector. Every vector query
 	// already guards `embedding IS NOT NULL`, so a nulled chunk is absent from
@@ -153,7 +158,7 @@ func (r *ChunkRedactorRepository) RedactChunk(
 	// search throughout, because tsv is a generated column and updates itself.
 	res, err := tx.ExecContext(ctx, `
 		UPDATE project_memory_chunks
-		   SET content = $3, content_hash = $4, embedding = NULL
+		   SET content = $3, content_hash = $4, embedding = NULL, content_title = NULL
 		 WHERE id = $1 AND content_hash = $2`,
 		chunkID, expectedHash, newContent, newHash)
 	if err != nil {

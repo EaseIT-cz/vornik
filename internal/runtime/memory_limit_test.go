@@ -421,6 +421,19 @@ func TestMemoryLimitMinorPaths(t *testing.T) {
 		}
 	})
 
+	// The exported reader the e2e lanes' memory preflight uses (Hermes e2e
+	// lane design, "Memory guardrails", incident 2026-10-14).
+	t.Run("ParseMeminfoField reads a named field and errors on an absent one", func(t *testing.T) {
+		sample := "MemTotal: 100 kB\nSwapTotal: 8 kB\nSwapFree: 3 kB\n"
+		got, err := ParseMeminfoField(strings.NewReader(sample), "SwapFree")
+		if err != nil || got != 3*1024 {
+			t.Fatalf("SwapFree = %d, %v; want %d", got, err, 3*1024)
+		}
+		if _, err := ParseMeminfoField(strings.NewReader(sample), "MemAvailable"); err == nil {
+			t.Fatal("an absent field read as a value")
+		}
+	})
+
 	// WithAgentMemoryLimit ignores non-positive input so a caller cannot
 	// accidentally unbound a manager by passing a computed zero.
 	t.Run("a non-positive option does not unbound a manager", func(t *testing.T) {

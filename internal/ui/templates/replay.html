@@ -329,7 +329,7 @@
         <div class="glass border border-dark-600 rounded-xl shadow-2xl max-w-lg w-full mx-4 overflow-hidden">
             <div class="px-5 py-3.5 border-b border-dark-700/60 flex items-center justify-between">
                 <h3 class="text-sm font-semibold text-gray-100">Fork from step <span id="fork-modal-step" class="font-mono text-amber-700 dark:text-amber-300"></span></h3>
-                <button type="button" onclick="closeForkModal()" class="text-gray-500 hover:text-gray-300">
+                <button type="button" onclick="closeForkModal()" class="text-gray-300 hover:text-gray-100" aria-label="Close">
                     <svg class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12"/></svg>
                 </button>
             </div>
@@ -337,7 +337,7 @@
                 <p class="text-xs text-gray-400">Spawns a new task that starts a fresh execution at this step. The source execution stays intact — fork is the "branch", not a replacement for retry.</p>
                 <label class="block text-xs">
                     <span class="text-gray-500 uppercase tracking-wider text-[10px]">Prompt override (optional)</span>
-                    <textarea id="fork-modal-prompt" rows="5" class="mt-1 w-full px-3 py-2 text-sm font-mono rounded-lg bg-dark-900 border border-dark-700 text-gray-100 focus:border-amber-500/60 focus:outline-none" placeholder="Prepended to the step's original prompt on the first iteration."></textarea>
+                    <textarea id="fork-modal-prompt" rows="5" class="mt-1 w-full px-3 py-2 text-sm font-mono rounded-lg bg-dark-900 border border-control text-gray-100 focus:border-amber-500/60 focus:outline-none" placeholder="Prepended to the step's original prompt on the first iteration."></textarea>
                 </label>
                 <div id="fork-modal-error" class="hidden text-xs text-rose-700 dark:text-rose-300 bg-rose-950/30 border border-rose-900/40 rounded px-3 py-2"></div>
             </div>

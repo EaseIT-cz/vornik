@@ -92,8 +92,15 @@
                         {{if .Lifecycle.Reason}}
                         <p class="text-xs mt-1 opacity-90 italic">"{{.Lifecycle.Reason}}"</p>
                         {{end}}
+                        {{if .Lifecycle.LastDeleteError}}
+                        <p class="text-xs mt-2 font-medium" data-testid="delete-failed">
+                            Deletion FAILED at <span class="font-mono">{{.Lifecycle.LastDeleteFailedAt}}</span>:
+                            <span class="font-mono break-all">{{.Lifecycle.LastDeleteError}}</span>.
+                            The project stays archived; the sweeper retries on its next tick.
+                        </p>
+                        {{end}}
                         <p class="text-[11px] mt-2 opacity-70">
-                            On deletion the sweeper removes the project YAML + PROJECT.md, every project-scoped DB row, and every artifact blob on disk. Once gone, this can't be undone.
+                            On deletion the sweeper removes the project YAML + PROJECT.md, the project's rows in every table the deletion list covers, and every artifact blob. Once gone, this can't be undone.
                         </p>
                     </div>
                     <div class="flex flex-col items-stretch gap-2 min-w-[140px]">
@@ -1493,7 +1500,7 @@
                               class="flex flex-col gap-2 min-w-[260px]">
                             <label class="block">
                                 <span class="block text-[11px] text-ink-500 uppercase tracking-wider mb-1">Grace period</span>
-                                <select name="grace" class="w-full bg-surface-900 border border-surface-600 text-ink-200 text-xs rounded-md px-2 py-1.5">
+                                <select name="grace" class="w-full bg-surface-900 border border-control text-ink-200 text-xs rounded-md px-2 py-1.5">
                                     {{range .Lifecycle.GracePresets}}
                                     <option value="{{.Value}}" {{if eq .Value "7d"}}selected{{end}}>{{.Label}}</option>
                                     {{end}}
@@ -1501,7 +1508,7 @@
                             </label>
                             <label class="block">
                                 <span class="block text-[11px] text-ink-500 uppercase tracking-wider mb-1">Reason (optional)</span>
-                                <input type="text" name="reason" placeholder="e.g. End of contract" class="w-full bg-surface-900 border border-surface-600 text-ink-200 text-xs rounded-md px-2 py-1.5">
+                                <input type="text" name="reason" placeholder="e.g. End of contract" class="w-full bg-surface-900 border border-control text-ink-200 text-xs rounded-md px-2 py-1.5">
                             </label>
                             <button type="submit" class="inline-flex items-center justify-center gap-1.5 px-3 py-2 text-xs font-medium rounded-md bg-rose-700/70 hover:bg-rose-600/80 text-rose-50 ring-1 ring-rose-700/50">
                                 <svg class="h-3.5 w-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6M1 7h22"/></svg>

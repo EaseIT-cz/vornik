@@ -3,6 +3,7 @@ package architecture
 import (
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 )
 
@@ -34,4 +35,19 @@ func moduleRoot(t *testing.T) string {
 		t.Fatalf("filepath.Abs: %v", err)
 	}
 	return abs
+}
+
+// skipNonModuleDir reports whether a law walking the module from root should
+// skip directory path (named name): every hidden directory below the root
+// (.git, .claude worktrees, and the CE export trees .vornik-export and
+// .vornik-public-clone, which hold OLDER copies of the source), vendor and
+// node_modules. audit 2026-10-13: three laws/checks in two days read those
+// untracked export copies and failed the gate on stale code (container-logs law
+// 2026-10-08, ci-release-policy and the test-env law 2026-10-13); a law adds its
+// own extra exclusions (testdata, build) on top of this one rule.
+func skipNonModuleDir(root, path, name string) bool {
+	if path == root {
+		return false
+	}
+	return strings.HasPrefix(name, ".") || name == "vendor" || name == "node_modules"
 }

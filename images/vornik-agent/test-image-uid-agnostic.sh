@@ -18,8 +18,15 @@ set -u
 
 IMAGE="${AGENT_IMAGE:-ghcr.io/easeit-cz/vornik-agent:latest}"
 
-command -v podman >/dev/null 2>&1 || { echo "SKIP: podman not available"; exit 0; }
-podman image exists "$IMAGE" 2>/dev/null || { echo "SKIP: $IMAGE not present locally"; exit 0; }
+# Under CI=true a missing podman FAILS (operator decision 2026-10-14, #334 item 6); outside CI it
+# stays a SKIP. An absent image stays a SKIP everywhere: the CI job that runs
+# the agent shell tests does not build it (CI pipeline design, amendment
+# 2026-10-14), and test-agent-shell counts the SKIP as a skip, not a pass.
+if ! command -v podman >/dev/null 2>&1; then
+  if [ "${CI:-}" = true ]; then echo "test-image-uid-agnostic: FAIL — podman is not on PATH and CI=true; in CI a missing tool is a failure, not a skip"; exit 1; fi
+  echo "SKIP: test-image-uid-agnostic: podman is not available (outside CI a missing tool is a skip)"; exit 0
+fi
+podman image exists "$IMAGE" 2>/dev/null || { echo "SKIP: test-image-uid-agnostic: $IMAGE not present locally"; exit 0; }
 
 # A uid the image cannot have baked. Deliberately not the host's either, so the
 # test proves uid-AGNOSTICISM rather than "it happens to match today".

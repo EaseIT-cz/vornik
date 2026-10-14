@@ -36,6 +36,11 @@ type hermesManifest struct {
 		Name   string `yaml:"name"`
 		Secret bool   `yaml:"secret"`
 	} `yaml:"optional_env"`
+	ConfigSchema map[string]struct {
+		Type     string `yaml:"type"`
+		Env      string `yaml:"env"`
+		Required *bool  `yaml:"required"`
+	} `yaml:"config_schema"`
 }
 
 func readHermesManifest(t *testing.T) hermesManifest {
@@ -81,7 +86,21 @@ func TestHermesCompanion_ManifestDeclaresWhatTheCodeRegisters(t *testing.T) {
 	assert.Contains(t, env, "VORNIK_URL")
 	assert.True(t, env["VORNIK_BROKER_TOKEN"], "the broker key is a secret")
 	assert.True(t, env["VORNIK_MEMORY_TOKEN"], "the memory key is a secret")
-	// The SemVer floor the Hermes e2e lane certifies (catalog rule 14).
+	// Catalogue rule 11 (hermes-agent#137179, 2026-10-14; design 24,
+	// "Settings through Hermes's secret scope (0.21.5)"): the three are
+	// declared in config_schema as profile secrets kept in the profile's .env
+	// (type secret, env: the name), none required, and the plugin reads them
+	// only with agent.secret_scope.get_secret.
+	schemaEnv := map[string]bool{}
+	for key, spec := range m.ConfigSchema {
+		assert.Equalf(t, "secret", spec.Type, "config_schema.%s is a profile secret", key)
+		require.NotNilf(t, spec.Required, "config_schema.%s states required", key)
+		assert.Falsef(t, *spec.Required, "config_schema.%s is optional: an admin setup needs none", key)
+		schemaEnv[spec.Env] = true
+	}
+	assert.Equal(t, map[string]bool{"VORNIK_URL": true, "VORNIK_BROKER_TOKEN": true, "VORNIK_MEMORY_TOKEN": true}, schemaEnv)
+	// The SemVer floor the Hermes e2e lane certifies (catalog rule 14), and
+	// the first Hermes whose every release has agent.secret_scope.
 	assert.Equal(t, ">=0.21.5", m.RequiresHermes)
 
 	lic, err := os.ReadFile(hermesPluginDir + "/LICENSE")

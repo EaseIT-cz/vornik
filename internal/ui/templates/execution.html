@@ -42,7 +42,7 @@
                     <form method="POST" action="/ui/executions/{{.Execution.ID}}/retry-from-step"
                           onsubmit="return confirm('Rerun this execution from the selected step? Downstream step outcomes from the original run will be marked as superseded.');"
                           class="flex items-center gap-1.5">
-                        <select name="step_id" class="px-2 py-1.5 text-xs font-mono rounded-lg bg-surface-700 border border-surface-600 text-ink-100" required>
+                        <select name="step_id" class="px-2 py-1.5 text-xs font-mono rounded-lg bg-surface-700 border border-control text-ink-100" required>
                             <option value="" disabled selected>Rerun from step…</option>
                             {{range .Execution.CompletedSteps}}
                             <option value="{{.}}">{{.}}</option>

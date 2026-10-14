@@ -26,6 +26,41 @@ type AgentRow struct {
 	LastUsed   string // "" when never
 	Projects   int
 	Pending    int
+	// Refused7d is the namespace's refused calls recorded in the last 7
+	// days (design §23.2, GitHub #172).
+	Refused7d int
+	// RefusedUnavailable: the count could not be read; the list says
+	// "refusals unavailable" instead of a number (#334 audit 2026-10-14).
+	RefusedUnavailable bool
+}
+
+// AgentRuleCount is one refusal rule's count.
+type AgentRuleCount struct {
+	Rule  string
+	Count int
+}
+
+// AgentRefusalRow is one recorded refusal: never the input.
+type AgentRefusalRow struct {
+	When  string
+	Verb  string
+	Rule  string
+	KeyID string
+}
+
+// AgentRefusals is a namespace's refusal ledger as the page shows it.
+type AgentRefusals struct {
+	// Total and ByRule cover the last 7 days.
+	Total  int
+	ByRule []AgentRuleCount
+	// Recent is the newest rows, at most 20.
+	Recent []AgentRefusalRow
+	// Unwritten is how many refusals were counted but not written since the
+	// daemon started (the hourly cap or a failed write).
+	Unwritten int
+	// Unavailable: the ledger could not be read. The section says so and
+	// shows no counts, never "no refusal" (#334 audit 2026-10-14).
+	Unavailable bool
 }
 
 // AgentItem is one workflow, integration or credential with its status.
@@ -68,6 +103,8 @@ type AgentPage struct {
 	// ("<sub-provider>@<host>", status approved or withdrawn; design §18.6
 	// item 2). Only this console withdraws one.
 	Models []AgentItem
+	// Refusals is the namespace's refused calls (design §23.2).
+	Refusals AgentRefusals
 }
 
 // AgentsSource is the service behind the pages.

@@ -14,6 +14,18 @@
           "maxLength": 500,
           "type": "string"
         },
+        "found_at": {
+          "description": "Optional, for a bug: the level at which you found it (unit test; integration test with a real DB, git or HTTP handler; executor-e2e daemon loop; e2e lane; production observation; review = a code review or audit). Its regression test belongs at that level",
+          "enum": [
+            "unit",
+            "integration",
+            "executor-e2e",
+            "e2e-lane",
+            "production",
+            "review"
+          ],
+          "type": "string"
+        },
         "kind": {
           "enum": [
             "bug",

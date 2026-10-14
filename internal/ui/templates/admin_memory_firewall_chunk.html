@@ -54,7 +54,7 @@
                 <div class="grid grid-cols-1 md:grid-cols-2 gap-3 text-xs">
                     <label class="block">
                         <span class="text-gray-400">Sensitivity tier</span>
-                        <select name="sensitivity_tier" class="mt-1 w-full bg-dark-900 border border-dark-700 rounded px-2 py-1 text-gray-100 font-mono">
+                        <select name="sensitivity_tier" class="mt-1 w-full bg-dark-900 border border-control rounded px-2 py-1 text-gray-100 font-mono">
                             <option value="">(leave unchanged)</option>
                             <option value="public" {{if eq .SensitivityTier "public"}}selected{{end}}>public</option>
                             <option value="internal" {{if eq .SensitivityTier "internal"}}selected{{end}}>internal</option>
@@ -66,25 +66,25 @@
                         <span class="text-gray-400">Tenant ID</span>
                         <input name="tenant_id" type="text" value="{{.TenantID}}"
                             placeholder="(empty to clear)"
-                            class="mt-1 w-full bg-dark-900 border border-dark-700 rounded px-2 py-1 text-gray-100 font-mono">
+                            class="mt-1 w-full bg-dark-900 border border-control rounded px-2 py-1 text-gray-100 font-mono">
                     </label>
                     <label class="block">
                         <span class="text-gray-400">Expires at (RFC3339)</span>
                         <input name="firewall_expires_at" type="text" value="{{.FirewallExpiresAt}}"
                             placeholder="e.g. 2026-12-31T23:59:59Z"
-                            class="mt-1 w-full bg-dark-900 border border-dark-700 rounded px-2 py-1 text-gray-100 font-mono">
+                            class="mt-1 w-full bg-dark-900 border border-control rounded px-2 py-1 text-gray-100 font-mono">
                     </label>
                     <label class="block">
                         <span class="text-gray-400">Permitted roles (CSV, empty = deny-all)</span>
                         <input name="permitted_roles" type="text" value="{{.PermittedRolesCSV}}"
                             placeholder="coder, analyst"
-                            class="mt-1 w-full bg-dark-900 border border-dark-700 rounded px-2 py-1 text-gray-100 font-mono">
+                            class="mt-1 w-full bg-dark-900 border border-control rounded px-2 py-1 text-gray-100 font-mono">
                     </label>
                     <label class="block md:col-span-2">
                         <span class="text-gray-400">Allowed purposes (CSV, empty = deny-all)</span>
                         <input name="allowed_purposes" type="text" value="{{.AllowedPurposesCSV}}"
                             placeholder="operational, audit_review"
-                            class="mt-1 w-full bg-dark-900 border border-dark-700 rounded px-2 py-1 text-gray-100 font-mono">
+                            class="mt-1 w-full bg-dark-900 border border-control rounded px-2 py-1 text-gray-100 font-mono">
                     </label>
                 </div>
 

@@ -28,6 +28,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -203,8 +204,10 @@ func (e *Extractor) sampleFrames(ctx context.Context, path string, interval, wan
 	res, err := e.sandbox.Run(ctx, sandboxtool.Spec{
 		Feature:    sandboxtool.FeatureVideo,
 		Entrypoint: "ffmpeg",
-		Args: []string{
+		// The input guard pins the protocol and demuxer (GitHub #348).
+		Args: slices.Concat([]string{
 			"-nostdin", "-loglevel", "error", "-threads", sandboxtool.FFmpegThreads, "-filter_threads", sandboxtool.FFmpegThreads,
+		}, sandboxtool.FFmpegInputGuard(), []string{
 			"-i", "/in/" + inputName, "-threads", sandboxtool.FFmpegThreads,
 			// The first frame, then the first at least interval seconds
 			// after the last one kept. fps=1/<interval> emitted no frame at
@@ -215,7 +218,7 @@ func (e *Extractor) sampleFrames(ctx context.Context, path string, interval, wan
 			"-frames:v", strconv.Itoa(wanted),
 			"-q:v", "3",
 			"/out/frame-%03d.jpg",
-		},
+		}),
 		Inputs: []sandboxtool.Input{{Name: inputName, Path: path}},
 	})
 	if err != nil {
@@ -335,13 +338,13 @@ func (e *Extractor) runFFprobe(ctx context.Context, path string) (*ffprobeOutput
 	res, err := e.sandbox.Run(ctx, sandboxtool.Spec{
 		Feature:    sandboxtool.FeatureVideo,
 		Entrypoint: "ffprobe",
-		Args: []string{
+		// The input guard pins the protocol and demuxer (GitHub #348).
+		Args: slices.Concat([]string{
 			"-v", "error",
 			"-print_format", "json",
 			"-show_format", "-show_streams",
 			"-o", "/out/probe.json",
-			"/in/" + inputName,
-		},
+		}, sandboxtool.FFmpegInputGuard(), []string{"/in/" + inputName}),
 		Inputs: []sandboxtool.Input{{Name: inputName, Path: path}},
 	})
 	if err != nil {

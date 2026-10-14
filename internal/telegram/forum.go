@@ -386,6 +386,12 @@ func (b *Bot) sendArtifactsToForum(ctx context.Context, taskID string, threadID 
 	if err != nil || len(artifacts) == 0 {
 		return
 	}
+	// Art 50 (GitHub #342): AI-generated files; a no-op when the forum chat
+	// was already disclosed to (the usual case: notifyForumThread did it).
+	if err := b.discloseForumThread(ctx, threadID); err != nil {
+		b.logger.Warn().Err(err).Str("task_id", taskID).Msg("forum: AI notice could not be delivered; artifacts withheld")
+		return
+	}
 	// The artifact list query uses the caller's ctx (cheap DB read).
 	// The actual uploads run under a detached context so Telegram's
 	// 429 retry_after (up to 60s) doesn't trip the parent's 30s
@@ -644,6 +650,13 @@ func (b *Bot) ensureTaskThread(ctx context.Context, task *persistence.Task) (int
 	// fresh brief — their lifecycle events arrive prefixed with the
 	// subtask label so the operator can tell them apart.
 	if brief := formatTaskBrief(root); brief != "" {
+		// Art 50 (GitHub #342): the brief may be the first thing a forum member
+		// reads from the system, and its prompt is often agent-composed.
+		if err := b.discloseForumThread(ctx, threadID); err != nil {
+			b.logger.Warn().Err(err).Int64("thread_id", threadID).
+				Msg("forum: AI notice could not be delivered; task brief withheld")
+			return threadID, root, nil
+		}
 		if _, err := b.sendForumMessage(ctx, threadID, brief); err != nil {
 			b.logger.Warn().
 				Err(err).
@@ -934,6 +947,12 @@ func (b *Bot) notifyForumThread(ctx context.Context, task *persistence.Task, suc
 	}
 	isSubtask := root.ID != task.ID
 	text := b.formatTaskEvent(ctx, task, success, message, isSubtask)
+	// Art 50 (GitHub #342): task result pushed outside ChannelReceiver.
+	if err := b.discloseForumThread(ctx, threadID); err != nil {
+		b.logger.Warn().Err(err).Str("task_id", task.ID).Int64("thread_id", threadID).
+			Msg("forum: AI notice could not be delivered; task event withheld")
+		return false
+	}
 	if _, err := b.sendForumMessage(ctx, threadID, text); err != nil {
 		b.logger.Warn().Err(err).Str("task_id", task.ID).Int64("thread_id", threadID).Msg("forum: sendForumMessage failed")
 		return false

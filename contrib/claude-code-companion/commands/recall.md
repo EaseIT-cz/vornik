@@ -1,6 +1,6 @@
 ---
 description: Semantic-search this project's RAG memory via vornik
-allowed-tools: mcp__vornik__recall
+allowed-tools: mcp__plugin_vornik-companion_vornik__recall
 argument-hint: <query>
 ---
 
@@ -8,7 +8,7 @@ argument-hint: <query>
 
 The user wants to know what vornik already knows about: **$ARGUMENTS**
 
-Call `mcp__vornik__recall` with `query=$ARGUMENTS`. Optional args you
+Call `mcp__plugin_vornik-companion_vornik__recall` with `query=$ARGUMENTS`. Optional args you
 can include when the user's intent is clear:
 
 - `limit` (default 10, max 50) — how many hits to consider.

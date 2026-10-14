@@ -93,7 +93,18 @@ func TestAgentSubprocessPrograms(t *testing.T) {
 				return true
 			}
 			if pkg, ok := sel.X.(*ast.Ident); ok && pkg.Name == "exec" && strings.HasPrefix(sel.Sel.Name, "Command") {
-				lit, ok := call.Args[0].(*ast.BasicLit)
+				// The program is the first argument of exec.Command and the
+				// second of exec.CommandContext (git calls are bounded since
+				// #142 #19); either way it must be the literal "git".
+				progIdx := 0
+				if sel.Sel.Name == "CommandContext" {
+					progIdx = 1
+				}
+				var lit *ast.BasicLit
+				ok := len(call.Args) > progIdx
+				if ok {
+					lit, ok = call.Args[progIdx].(*ast.BasicLit)
+				}
 				if e.Name() != "git_tools.go" || !ok || lit.Value != `"git"` {
 					t.Errorf("%s: direct spawn must use literal git", e.Name())
 				}

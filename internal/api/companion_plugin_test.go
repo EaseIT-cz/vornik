@@ -342,11 +342,32 @@ func TestCompanionPlugin_SlashCommandsHaveNoStrayBackticksInBashBlock(t *testing
 	entries, err := os.ReadDir(commandsDir)
 	require.NoError(t, err, "commands/ must exist for slash-command discovery")
 
+	// #334 item 6 (audit 2026-10-12): every command is model-driven today, so
+	// every subtest skipped and this check examined 0 bash blocks while
+	// passing. Zero blocks is a pass only when no command carries "!`"
+	// ANYWHERE (the parser below looks for it after a newline, so a block at
+	// the top of a file would be missed), and only over a non-empty directory.
+	bashBlocks, files := 0, 0
+	var unparsed []string
+	defer func() {
+		t.Logf("examined %d command file(s), %d bash block(s)", files, bashBlocks)
+		if files == 0 {
+			t.Error("examined 0 slash-command files; a check that looked at nothing has not passed")
+		}
+		if bashBlocks == 0 && len(unparsed) > 0 {
+			t.Errorf("%v carry a bash block this check did not parse (not after a newline); it examined nothing in them", unparsed)
+		}
+	}()
 	for _, e := range entries {
 		if e.IsDir() || !strings.HasSuffix(e.Name(), ".md") {
 			continue
 		}
 		name := e.Name()
+		files++
+		if raw, rerr := os.ReadFile(filepath.Join(commandsDir, name)); rerr == nil &&
+			strings.Contains(string(raw), "!`") && !strings.Contains(string(raw), "\n!`") {
+			unparsed = append(unparsed, name)
+		}
 		t.Run(name, func(t *testing.T) {
 			body, err := os.ReadFile(filepath.Join(commandsDir, name))
 			require.NoError(t, err)
@@ -361,6 +382,7 @@ func TestCompanionPlugin_SlashCommandsHaveNoStrayBackticksInBashBlock(t *testing
 				t.Skipf("no !`...` bash block in %s — model-driven command, nothing to lint", name)
 				return
 			}
+			bashBlocks++
 			// Advance past "\n!`" to point at the first byte of
 			// the bash body.
 			bodyStart := openIdx + len("\n!`")

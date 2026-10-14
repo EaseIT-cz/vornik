@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -513,6 +514,7 @@ func (s *Server) CreateTask(w http.ResponseWriter, r *http.Request) {
 		WorkflowID:        strPtr(workflowID),
 		IdempotencyKey:    idempotencyKey,
 		CreationSource:    persistence.TaskCreationSourceUser,
+		GoalOrigin:        persistence.TaskGoalOriginREST,
 		Status:            persistence.TaskStatusQueued,
 		Priority:          priority,
 		Payload:           payload,
@@ -586,6 +588,7 @@ func (s *Server) createTaskViaCreator(w http.ResponseWriter, r *http.Request, pr
 		IdempotencyKey:    strings.TrimSpace(req.IdempotencyKey),
 		RawContext:        req.Context,
 		CreatedByAPIKeyID: APIKeyIDFromContext(r.Context()),
+		GoalOrigin:        persistence.TaskGoalOriginREST,
 	})
 	if err != nil {
 		ce := taskcreate.AsError(err)
@@ -848,6 +851,13 @@ func (s *Server) cancelTeardown() taskcancel.Teardown {
 	return s.executor
 }
 
+// restCancelFastPath is the REST handler's read-time check: the statuses it
+// lets through to the conditional write. It is the write's own set, the
+// client surfaces' (operator decision 2026-10-13, GitHub #326, 05-scheduler
+// §4.11 "Amended 2026-10-13"), so a status cannot pass the read and fail the
+// write or the reverse; it used to refuse PAUSED, which the write accepted.
+var restCancelFastPath = persistence.ClientCancellableTaskStatuses()
+
 // CancelTask handles POST /projects/{projectId}/tasks/{taskId}/cancel
 func (s *Server) CancelTask(w http.ResponseWriter, r *http.Request) {
 	projectID := extractProjectID(r)
@@ -883,16 +893,11 @@ func (s *Server) CancelTask(w http.ResponseWriter, r *http.Request) {
 
 	// Check if task can be cancelled — fast path on the read so a
 	// terminal task gets a clear INVALID_STATE before we even try.
-	cancellableStatuses := map[persistence.TaskStatus]bool{
-		persistence.TaskStatusQueued:  true,
-		persistence.TaskStatusLeased:  true,
-		persistence.TaskStatusRunning: true,
-		persistence.TaskStatusPending: true,
-	}
-
-	if !cancellableStatuses[task.Status] {
+	if !slices.Contains(restCancelFastPath, task.Status) {
+		// The reason, not only the status (05-scheduler §4.11 "Amended
+		// 2026-10-12", GitHub #326). The set named is this fast path's own.
 		respondError(w, http.StatusBadRequest, "INVALID_STATE",
-			fmt.Sprintf("Task cannot be cancelled in status %s", task.Status))
+			"Task cannot be cancelled: "+taskcancel.RefusalReason(task.Status, restCancelFastPath))
 		return
 	}
 
@@ -901,11 +906,11 @@ func (s *Server) CancelTask(w http.ResponseWriter, r *http.Request) {
 	// above and the write keeps its outcome — then, only if the row moved,
 	// teardown asked of the executor's live map (§4.7: never of the status
 	// snapshot), the parent-unblock sweep (regression 2026-06-07) and the
-	// downward cascade to children. nil keeps TransitionToCancelled's set.
+	// downward cascade to children, over the same set as the fast path.
 	// The companion tool, UI, chat and Telegram cancels call the same
 	// function; the companion tool once had its own copy without the
 	// teardown (GitHub #300).
-	outcome, err := taskcancel.Cancel(r.Context(), s.taskRepo, s.cancelTeardown(), taskID, nil)
+	outcome, err := taskcancel.Cancel(r.Context(), s.taskRepo, s.cancelTeardown(), taskID, restCancelFastPath)
 	if err != nil {
 		s.logger.Error().Err(err).Str("taskId", taskID).Msg("failed to atomically cancel task")
 		respondError(w, http.StatusInternalServerError, "INTERNAL_ERROR", "Failed to cancel task")
@@ -917,8 +922,10 @@ func (s *Server) CancelTask(w http.ResponseWriter, r *http.Request) {
 			respondError(w, http.StatusConflict, "INVALID_STATE", "Task is no longer in a cancellable state")
 			return
 		}
+		// "Task transitioned to RUNNING before cancellation took effect" was
+		// false when the re-read showed a status the write accepts (#326).
 		respondError(w, http.StatusConflict, "INVALID_STATE",
-			fmt.Sprintf("Task transitioned to %s before cancellation took effect", fresh.Status))
+			"Task was not cancelled: "+taskcancel.RefusalReason(fresh.Status, restCancelFastPath))
 		return
 	}
 	// A teardown failure is logged, not surfaced: the canonical state is the

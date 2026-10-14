@@ -51,6 +51,12 @@ func TestLinkRowsAreOnlyWrittenThroughTheMergePath(t *testing.T) {
 	// believed.
 	write := regexp.MustCompile(`(?i)[A-Za-z]*links?\.Upsert\(ctx,`)
 
+	// #334 item 6 (CI pipeline design, amendment 2026-10-14): count what the
+	// walk read and require each allowed writer to be SEEN writing. Before,
+	// an empty walk passed, and so did a merge path whose writes had moved
+	// out from under the allowed names (the allowance then guarded nothing).
+	files := 0
+	seen := map[string]bool{}
 	err := filepath.Walk("..", func(path string, info os.FileInfo, werr error) error {
 		if werr != nil {
 			return werr
@@ -58,6 +64,7 @@ func TestLinkRowsAreOnlyWrittenThroughTheMergePath(t *testing.T) {
 		if info.IsDir() || !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
 			return nil
 		}
+		files++
 		src, rerr := os.ReadFile(path)
 		if rerr != nil {
 			return rerr
@@ -78,6 +85,9 @@ func TestLinkRowsAreOnlyWrittenThroughTheMergePath(t *testing.T) {
 				continue
 			}
 			wantPkg, ok := allowed[fn.name]
+			if ok {
+				seen[fn.name] = true
+			}
 			if !ok {
 				t.Errorf("%s: func %s writes an operator_identity_link row directly; "+
 					"route it through the merge path so chooseWinner's account-always-wins "+
@@ -93,6 +103,15 @@ func TestLinkRowsAreOnlyWrittenThroughTheMergePath(t *testing.T) {
 	})
 	if err != nil {
 		t.Fatalf("walk internal/: %v", err)
+	}
+	t.Logf("link-write contract: examined %d non-test Go files under internal/; %d of %d allowed writer(s) seen", files, len(seen), len(allowed))
+	if files < 500 {
+		t.Errorf("link-write contract: examined %d non-test Go files (floor 500); a contract that looked at nothing has not passed", files)
+	}
+	for name := range allowed {
+		if !seen[name] {
+			t.Errorf("allowed writer %s was not seen writing a link row: the merge path changed shape, so this allowance guards nothing; update the contract", name)
+		}
 	}
 }
 

@@ -113,3 +113,54 @@ func TestPhone(t *testing.T) {
 		t.Fatalf("approve with a grant: %v", dev.decisions)
 	}
 }
+
+// GitHub #337 (2026-10-12): Connect follows the device route's redirect to
+// the provider and the provider's redirect back to the callback, carrying
+// the flow cookie the device route set; a page without Connect is refused.
+func TestPhoneConnect(t *testing.T) {
+	var daemonURL string
+	provider := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/authorize" {
+			http.NotFound(w, r)
+			return
+		}
+		http.Redirect(w, r, daemonURL+"/auth/mcp/callback?code=c1&state="+r.URL.Query().Get("state"), http.StatusFound)
+	}))
+	defer provider.Close()
+	daemon := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/ui/approve/apr_o":
+			_, _ = fmt.Fprint(w, `<form method="post" action="/ui/approve/apr_o/connect"><input type="hidden" name="rendered_sha256" value="sha-o"></form>`)
+		case r.Method == http.MethodGet && r.URL.Path == "/ui/approve/apr_x":
+			_, _ = fmt.Fprint(w, `<form method="post" action="/ui/approve/apr_x"><input type="hidden" name="rendered_sha256" value="sha-x"></form>`)
+		case r.Method == http.MethodPost && r.URL.Path == "/ui/approve/apr_o/connect":
+			if r.PostFormValue("rendered_sha256") != "sha-o" {
+				http.Error(w, "stale", http.StatusConflict)
+				return
+			}
+			http.SetCookie(w, &http.Cookie{Name: "vornik_oauth_flow", Value: "flow-1", Path: "/auth/mcp/callback", HttpOnly: true})
+			http.Redirect(w, r, provider.URL+"/authorize?state=s1", http.StatusSeeOther)
+		case r.URL.Path == "/auth/mcp/callback":
+			if c, err := r.Cookie("vornik_oauth_flow"); err != nil || c.Value != "flow-1" || r.URL.Query().Get("code") != "c1" {
+				http.Error(w, "Open this on your phone", http.StatusForbidden)
+				return
+			}
+			_, _ = fmt.Fprint(w, "<h1>Connected</h1><p>Signed in as alice@home.example.</p>")
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer daemon.Close()
+	daemonURL = daemon.URL
+	p := NewPhone(daemon.URL)
+	page, err := p.Connect("apr_o")
+	if err != nil || !strings.Contains(page, "Signed in as alice@home.example") {
+		t.Fatalf("connect: %v %s", err, page)
+	}
+	if p.Shown["apr_o"] != "sha-o" {
+		t.Fatalf("shown = %q", p.Shown["apr_o"])
+	}
+	if _, err := p.Connect("apr_x"); err == nil {
+		t.Fatal("connected a request whose page offers no Connect")
+	}
+}

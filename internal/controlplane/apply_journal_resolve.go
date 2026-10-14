@@ -123,8 +123,18 @@ func (e *ApplyEngine) ListOpenJournal(ctx context.Context) ([]*persistence.Confi
 }
 
 // ResolveJournal resolves one DRIFT row (§12.2, §12.5). Every case where it
-// declines to act is a *ResolveRefusal carrying a remedy (§12.5.3).
+// declines to act is a *ResolveRefusal carrying a remedy (§12.5.3). After a
+// result (the idempotent repeat included) it runs OnResolved, outside the
+// locks, whichever door called it (§13.3, GitHub #302).
 func (e *ApplyEngine) ResolveJournal(ctx context.Context, id, mode, actor string) (*ResolveResult, error) {
+	res, err := e.resolveJournal(ctx, id, mode, actor)
+	if err == nil && res != nil && e.OnResolved != nil {
+		e.OnResolved(ctx, res.JournalID)
+	}
+	return res, err
+}
+
+func (e *ApplyEngine) resolveJournal(ctx context.Context, id, mode, actor string) (*ResolveResult, error) {
 	if mode != ResolveKeep && mode != ResolveRestore {
 		return nil, ErrResolveMode
 	}

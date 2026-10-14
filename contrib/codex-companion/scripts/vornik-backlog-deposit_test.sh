@@ -308,6 +308,46 @@ else
   bad "the grouped file was rewritten"
 fi
 
+# --- --found-at (ENGINEERING-TENETS §4.7, operator 2026-10-14) -------------
+# A bug's regression test sits at the level where it was found; the deposit
+# is where most bugs are first written down, so it records that level while
+# the finder still knows it. Companion deposit design §9.
+echo "--- --found-at renders a 'Found at:' line before Evidence ---"
+f="$(fixture foundat)"
+out="$(BODY="the body" run "$f" --title "A finding with a level" --found-at executor-e2e --evidence "x.go:1")"; rc=$?
+if [ $rc -eq 0 ] && grep -qx "Found at: executor-e2e" "$f"; then
+  ok "Found at line written"
+else
+  bad "rc=$rc out=$out"
+fi
+if [ "$(grep -n '^Found at: executor-e2e$' "$f" | cut -d: -f1)" -lt "$(grep -n '^Evidence: x.go:1$' "$f" | cut -d: -f1)" ] \
+   && [ "$(grep -n '^the body$' "$f" | cut -d: -f1)" -lt "$(grep -n '^Found at: ' "$f" | cut -d: -f1)" ]; then
+  ok "Found at sits after the body and before Evidence"
+else
+  bad "Found at is out of place"
+fi
+
+echo "--- every level in the vocabulary is accepted ---"
+for lvl in unit integration executor-e2e e2e-lane production review; do
+  f="$(fixture "lvl-$lvl")"
+  out="$(run "$f" --title "Level $lvl finding" --found-at "$lvl")"; rc=$?
+  if [ $rc -eq 0 ] && grep -qx "Found at: $lvl" "$f"; then ok "accepted: $lvl"; else bad "rc=$rc for $lvl — out=$out"; fi
+done
+
+echo "--- without --found-at, no Found at line ---"
+f="$(fixture nofoundat)"
+run "$f" --title "A finding without a level" >/dev/null
+if grep -q "^Found at:" "$f"; then bad "a Found at line appeared unasked"; else ok "no Found at line"; fi
+
+echo "--- an unknown level is a usage error and writes nothing ---"
+f="$(fixture badfoundat)"; cp "$f" "$TMP/badfoundat.orig"
+out="$(run "$f" --title "A finding with a bad level" --found-at staging)"; rc=$?
+if [ $rc -eq 2 ] && cmp -s "$f" "$TMP/badfoundat.orig" && printf '%s' "$out" | grep -q "executor-e2e"; then
+  ok "refused (rc=2), file untouched, message names the set"
+else
+  bad "rc=$rc out=$out"
+fi
+
 echo "---"
 echo "PASS: $pass passed, $fail failed"
 [ "$fail" -eq 0 ] || exit 1

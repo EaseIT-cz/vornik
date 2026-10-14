@@ -42,6 +42,59 @@ func TestDaemonInflight_PrintsCountAndExitsNonZeroWhenBusy(t *testing.T) {
 	if err := runDaemonInflight(daemonInflightCmd, nil); ExitCodeOf(err) != 0 {
 		t.Fatalf("idle exit code = %d (err %v), want 0", ExitCodeOf(err), err)
 	}
+
+	// GitHub #306 (2026-10-08, reference host after deploying 3ad00f711): busy
+	// also printed a bare "Error: " line from cobra, so a busy daemon read like
+	// a failure. Through the real command tree, busy is exit 2, the count line
+	// on stdout, and nothing on stderr; main prints only a non-empty message.
+	inflightServer(t, http.StatusOK, `{"chat_proxy":1,"total":1,"draining":false}`)
+	stdout, stderr, err := executeInflight(t)
+	if got := ExitCodeOf(err); got != 2 {
+		t.Fatalf("busy exit code via Execute = %d (err %v), want 2", got, err)
+	}
+	if err.Error() != "" {
+		t.Fatalf("busy error message = %q, want empty (main would print it)", err.Error())
+	}
+	if !strings.Contains(stdout, "in-flight chat-proxy requests: 1") {
+		t.Fatalf("busy stdout: %q", stdout)
+	}
+	if stderr != "" {
+		t.Fatalf("busy stderr = %q, want nothing (no bare \"Error: \" line)", stderr)
+	}
+}
+
+// executeInflight runs `daemon inflight` through rootCmd, as vornikctl's main
+// does, capturing cobra's stdout and stderr.
+func executeInflight(t *testing.T) (string, string, error) {
+	t.Helper()
+	var out, errb bytes.Buffer
+	rootCmd.SetOut(&out)
+	rootCmd.SetErr(&errb)
+	// An earlier SetOut on the subcommand would win over root's; clear it so
+	// the command writes to the buffers set on root.
+	daemonInflightCmd.SetOut(nil)
+	rootCmd.SetArgs([]string{"daemon", "inflight"})
+	t.Cleanup(func() { rootCmd.SetOut(nil); rootCmd.SetErr(nil); rootCmd.SetArgs(nil) })
+	err := Execute()
+	return out.String(), errb.String(), err
+}
+
+// GitHub #306: a real error still carries its message and exits 1, and cobra
+// does not print an "Error: " copy of it. That main then prints it exactly
+// once is pinned through the real main() in cmd/vornikctl
+// (TestMainDaemonInflight_RealErrorPrintedOnce).
+func TestDaemonInflight_RealErrorKeepsMessageWithoutCobraCopy(t *testing.T) {
+	inflightServer(t, http.StatusInternalServerError, `{"error":{"code":"X","message":"boom"}}`)
+	_, stderr, err := executeInflight(t)
+	if ExitCodeOf(err) != 1 {
+		t.Fatalf("exit code = %d (err %v), want 1", ExitCodeOf(err), err)
+	}
+	if !strings.Contains(err.Error(), "boom") {
+		t.Fatalf("error message %q lost the daemon's message", err.Error())
+	}
+	if strings.Contains(stderr, "Error:") {
+		t.Fatalf("cobra printed the error too (main prints it): %q", stderr)
+	}
 }
 
 func TestDaemonInflight_ErrorIsExitOne(t *testing.T) {

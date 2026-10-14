@@ -4,13 +4,15 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
-	"sync"
 	"time"
+
+	"vornik.io/vornik/internal/filelock"
 )
 
 // claudeOAuthTokenURL is the token-exchange endpoint Claude Code posts
@@ -58,7 +60,7 @@ type claudeOAuth struct {
 type claudeAuthManager struct {
 	path string
 
-	mu          sync.Mutex
+	mu          ctxMutex
 	cached      *claudeCreds
 	http        *http.Client
 	lastRefresh time.Time // guard against refresh storms under bursty load
@@ -147,7 +149,9 @@ func (m *claudeAuthManager) Token(ctx context.Context) (accessToken string, err 
 		return env, nil
 	}
 
-	m.mu.Lock()
+	if err := m.mu.LockContext(ctx, "claude credential refresh"); err != nil {
+		return "", err
+	}
 	defer m.mu.Unlock()
 
 	if m.cached == nil {
@@ -172,7 +176,7 @@ func (m *claudeAuthManager) Token(ctx context.Context) (accessToken string, err 
 		// not refresh concurrently. The interactive CLI does NOT take
 		// this lock; that race stays covered by the invalid_grant
 		// reload below.
-		err := withAuthFileLock(m.path, func() error {
+		err := withAuthFileLock(ctx, m.path, func() error {
 			// Under the lock, re-read: another lock-taking process
 			// may have rotated the token while we waited. If the disk
 			// copy is already fresh, adopt it and skip the network.
@@ -191,7 +195,13 @@ func (m *claudeAuthManager) Token(ctx context.Context) (accessToken string, err 
 					return m.cached.Oauth.AccessToken, nil
 				}
 			}
-			m.recordRefresh("failure")
+			// A refresh refused because another process held the lock is
+			// not a failed refresh; count it apart (code review b20f F2).
+			if errors.Is(err, filelock.ErrLockBusy) {
+				m.recordRefresh("lock_timeout")
+			} else {
+				m.recordRefresh("failure")
+			}
 			return "", fmt.Errorf("claude: refresh: %w", err)
 		}
 	}

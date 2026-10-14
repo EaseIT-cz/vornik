@@ -83,7 +83,7 @@ func turnTask(id, turnID string) *persistence.Task {
 }
 
 func notifierFor(ch conversation.Channel, rows map[string]*persistence.ChatAuditEntry) *chatCompletionNotifier {
-	return newChatCompletionNotifier(
+	n := newChatCompletionNotifier(
 		stubAudit{rows: rows},
 		nil, // no task getter: these tasks carry their own ChatTurnID
 		stubResolveChannel{byName: map[string]conversation.Channel{"slack": ch}},
@@ -92,6 +92,11 @@ func notifierFor(ch conversation.Channel, rows map[string]*persistence.ChatAudit
 		map[string]bool{"slack": true},
 		zerolog.Nop(),
 	)
+	// The chat these tests notify was already disclosed to in its originating
+	// turn, so the per-session Art 50 notice is not re-sent (GitHub #342);
+	// art50_outbound_test.go covers the never-disclosed case.
+	n.disclosure = alreadyDisclosedService()
+	return n
 }
 
 // CUSTOMER REPORT 2026-07-30 (remote installation): "vornik said on Slack it would
@@ -300,6 +305,7 @@ func TestChatCompletionNotifier_LinkSyntaxFollowsTheChannel(t *testing.T) {
 		// to assert the rendering follows the channel rather than being hardcoded.
 		map[string]bool{"telegram": true}, zerolog.Nop(),
 	)
+	n.disclosure = alreadyDisclosedService()
 
 	n.NotifyTaskCompleted(context.Background(), turnTask("task_43", "turn-1"), true, "")
 

@@ -36,7 +36,13 @@ func (m *Manager) CallToolOnce(ctx context.Context, projectID, qualifiedName, ar
 		// been sent, so the single call below keeps this method's contract. A
 		// reload that removes the client in between fails with ErrNotSent,
 		// which is still true (failed-connect recovery design, D3, F2).
-		if m.dialPending(projectID, serverName, true) == nil {
+		// The caller waits for the dial only until its own context ends
+		// (GitHub #142 #6); the dial carries on and heals for the next caller.
+		dialErr := m.awaitDial(ctx, func() error { return m.dialPending(projectID, serverName, true) })
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return "", false, fmt.Errorf("%w: the call ended (%w) while MCP server %q was being dialled", ErrNotSent, ctxErr, serverName)
+		}
+		if dialErr == nil {
 			client = m.resolveClient(projectID, serverName)
 		}
 		if client == nil {

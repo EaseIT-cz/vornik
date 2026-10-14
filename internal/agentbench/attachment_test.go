@@ -37,6 +37,7 @@ func TestDaemonRunner_AttachmentsAreStagedAsInputArtifacts(t *testing.T) {
 			} `json:"params"`
 		}
 		_ = json.Unmarshal(body, &envelope)
+		assertDeclaredArgs(t, envelope.Params.Name, envelope.Params.Arguments)
 		if envelope.Params.Name == "delegate" {
 			gotArgs = envelope.Params.Arguments
 			_, _ = w.Write([]byte(`{"result":{"content":[{"type":"text","text":"{\"task_id\":\"t-1\",\"status\":\"QUEUED\"}"}]}}`))
@@ -95,6 +96,7 @@ func TestDaemonRunner_NoAttachmentsSendsNoField(t *testing.T) {
 			} `json:"params"`
 		}
 		_ = json.Unmarshal(body, &envelope)
+		assertDeclaredArgs(t, envelope.Params.Name, envelope.Params.Arguments)
 		if envelope.Params.Name == "delegate" {
 			gotArgs = envelope.Params.Arguments
 		}

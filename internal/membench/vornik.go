@@ -162,12 +162,13 @@ func (v *VornikSystem) Recall(ctx context.Context, scope string, q Query) (Recal
 		"sufficient": !v.cfg.NoRerank,
 	}
 	if q.MaxTokens > 0 {
-		// The recall tool takes a result count, not a token budget. Convert with
-		// a conservative chars-per-token estimate and record the budget too, so
-		// the manifest shows the conversion happened rather than implying the
-		// systems were asked in the same units.
+		// The recall tool takes a result count, not a token budget, so the
+		// budget travels as a converted limit. The budget itself is recorded in
+		// the manifest (recall_params), never on the wire: recall does not
+		// declare max_tokens. Sending it was silently dropped until GitHub #305
+		// made the tools strict, and then refused on every recall of the
+		// 2026.10.6 release benchmark (design §13.26, 2026-10-14).
 		args["limit"] = tokenBudgetToLimit(q.MaxTokens)
-		args["max_tokens"] = q.MaxTokens
 	}
 	if !q.From.IsZero() {
 		args["from_date"] = q.From.UTC().Format(time.RFC3339)

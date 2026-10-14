@@ -1,6 +1,6 @@
 ---
 description: File an off-scope finding into this repo's backlog, with dedup and a secret scan
-argument-hint: "[--kind K] [--priority P] [--evidence E] <title>"
+argument-hint: "[--kind K] [--priority P] [--evidence E] [--found-at L] <title>"
 ---
 
 # Backlog deposit (this repository's backlog)
@@ -28,7 +28,14 @@ Two guards run that hand-editing loses:
 Write the BODY as you would write the item — multiple paragraphs, tables, code
 references. Structure is preserved.
 
-    /backlog-deposit --kind bug --priority P2 A truncated tool_output hides a successful fetch
+For a **bug**, pass `--found-at <level>`: where it was found, one of `unit`,
+`integration` (real DB, git or HTTP handler), `executor-e2e` (the real daemon
+loop), `e2e-lane`, `production` (seen on a running install) or `review` (a
+code review or audit). Its regression test belongs at that level
+(ENGINEERING-TENETS §4.7), and the line `Found at: <level>` is carried into
+the issue when the inbox is swept. Any other value exits 2.
+
+    /backlog-deposit --kind bug --priority P2 --found-at production A truncated tool_output hides a successful fetch
     /backlog-deposit --kind feature --priority P3 --evidence internal/api/foo.go:120 Add a resolved-config dump
 
 Exit codes: 3 = duplicate (re-run with `--allow-duplicate` if genuinely
@@ -43,7 +50,7 @@ body is prose you are writing — it cannot come from `$ARGUMENTS`:
 ```
 printf '%s\n' "<your multi-paragraph body>" | \
   "${CLAUDE_PLUGIN_ROOT}/scripts/vornik-backlog-deposit.sh" \
-    --title "<title>" --kind <kind> --priority <P> [--evidence "<e>"]
+    --title "<title>" --kind <kind> --priority <P> [--evidence "<e>"] [--found-at <level>]
 ```
 
 Run it with `--dry-run` first if you want to see the rendered item and the

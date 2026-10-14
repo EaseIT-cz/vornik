@@ -6,6 +6,7 @@ import (
 	"strings"
 	"sync"
 
+	"vornik.io/vornik/internal/aidisclosure"
 	"vornik.io/vornik/internal/chat"
 	"vornik.io/vornik/internal/conversation"
 	"vornik.io/vornik/internal/dispatcher"
@@ -44,6 +45,8 @@ type slackSessionStore struct {
 	maxHistory       int
 	maxHistoryTokens int
 	channel          *slack.Channel
+	// disclosure is handed to each per-thread file sender (Art 50, GitHub #342).
+	disclosure *aidisclosure.Service
 
 	mu      sync.Mutex
 	history map[string][]chat.Message
@@ -60,10 +63,25 @@ type slackSessionStore struct {
 type slackFileSender struct {
 	channel   *slack.Channel
 	sessionID string
+	// disclosure: Art 50 notice before a file reaches a chat that was never
+	// disclosed to — a scheduled report can (design §11.4, GitHub #342).
+	disclosure *aidisclosure.Service
 }
 
 func (s slackFileSender) SendArtifactFile(ctx context.Context, fileName string, content io.Reader, caption string) error {
-	_, err := s.channel.SendFile(ctx, s.sessionID, fileName, content, caption)
+	msg := conversation.ChannelMessage{SessionID: s.sessionID}
+	body, err := s.disclosure.Disclose(ctx, aidisclosure.Outbound{
+		Channel: s.channel.Name(), Scope: conversation.DisclosureScopeFor(s.channel, msg),
+		Body: caption, Authored: true,
+		SendNotice: func(ctx context.Context, text string) error {
+			_, err := s.channel.Send(ctx, conversation.ChannelMessage{SessionID: s.sessionID, Text: text})
+			return err
+		},
+	})
+	if err != nil {
+		return err
+	}
+	_, err = s.channel.SendFile(ctx, s.sessionID, fileName, content, body)
 	return err
 }
 
@@ -163,7 +181,7 @@ func (s *slackSessionStore) Load(ctx context.Context, msg conversation.ChannelMe
 		ActiveProject: s.projectID,
 	}
 	if s.channel != nil {
-		sess.FileSender = slackFileSender{channel: s.channel, sessionID: msg.SessionID}
+		sess.FileSender = slackFileSender{channel: s.channel, sessionID: msg.SessionID, disclosure: s.disclosure}
 	}
 	_, estimatedTokens := s.boundedHistory(history)
 	estimatedTokens += len(msg.Text) / 4

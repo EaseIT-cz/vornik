@@ -156,28 +156,42 @@ func TestBedrockCov_CompleteWithTools_RequestShape(t *testing.T) {
 	}
 }
 
-// TestBedrockCov_Complete_MaxTokens covers the InferenceConfig precedence:
-// the per-request ctx max_tokens wins over the construction-time default.
+// TestBedrockCov_Complete_MaxTokens covers the InferenceConfig precedence on
+// the wire: the per-request ctx max_tokens is clamped to the route cap
+// (construction-time maxTokens). Until issue #291 this test pinned the
+// bypass (cap 100, request 4096 sent 4096); a role may lower the cap, not
+// raise it.
 func TestBedrockCov_Complete_MaxTokens(t *testing.T) {
-	var gotBody map[string]any
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_ = json.NewDecoder(r.Body).Decode(&gotBody)
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(bedrockCovConverseJSON("ok", "end_turn", 1, 1, 2)))
-	}))
-	defer srv.Close()
+	for _, tc := range []struct {
+		name          string
+		routeCap, req int
+		want          float64
+	}{
+		{"above cap sends the cap", 100, 4096, 100},
+		{"below cap sends the request", 4096, 100, 100},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var gotBody map[string]any
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				_ = json.NewDecoder(r.Body).Decode(&gotBody)
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = w.Write([]byte(bedrockCovConverseJSON("ok", "end_turn", 1, 1, 2)))
+			}))
+			defer srv.Close()
 
-	p := &BedrockProvider{model: "m", region: "us-east-1", maxTokens: 100, client: bedrockCovRuntimeClient(t, srv.URL)}
-	ctx := WithRequestMaxTokens(context.Background(), 4096)
-	if _, err := p.Complete(ctx, []Message{{Role: "user", Content: "hi"}}); err != nil {
-		t.Fatalf("Complete: %v", err)
-	}
-	ic, ok := gotBody["inferenceConfig"].(map[string]any)
-	if !ok {
-		t.Fatalf("missing inferenceConfig: %+v", gotBody)
-	}
-	if got := ic["maxTokens"].(float64); got != 4096 {
-		t.Errorf("maxTokens = %v, want 4096 (ctx override)", got)
+			p := &BedrockProvider{model: "m", region: "us-east-1", maxTokens: tc.routeCap, client: bedrockCovRuntimeClient(t, srv.URL)}
+			ctx := WithRequestMaxTokens(context.Background(), tc.req)
+			if _, err := p.Complete(ctx, []Message{{Role: "user", Content: "hi"}}); err != nil {
+				t.Fatalf("Complete: %v", err)
+			}
+			ic, ok := gotBody["inferenceConfig"].(map[string]any)
+			if !ok {
+				t.Fatalf("missing inferenceConfig: %+v", gotBody)
+			}
+			if got := ic["maxTokens"].(float64); got != tc.want {
+				t.Errorf("maxTokens = %v, want %v", got, tc.want)
+			}
+		})
 	}
 }
 

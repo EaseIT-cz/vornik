@@ -724,6 +724,19 @@ func (c *Channel) handleRawMessage(ctx context.Context, raw RawMessage) {
 		// batch cap turned an infinite retry into inbox-wide head-of-line
 		// blocking). After maxDeliveryAttemptsPerMessage cycles we drop it
 		// loudly so the mailbox drains.
+		//
+		// A turn that ran out its own turn bound is NOT retried: the work
+		// takes longer than a turn allows, so each retry would re-time-out,
+		// hold this mailbox for another full bound and re-run the turn's tool
+		// side effects (outcome-quality LLD §S5 #5, GitHub #142).
+		if errors.Is(err, conversation.ErrTurnDeadline) {
+			c.logger.Error().Err(err).
+				Str("uid", raw.UID).
+				Msg("email: the chat turn for this message ran out its time limit; marking seen and not retrying (a retry would time out the same way)")
+			c.forgetDeliveryFailure(raw.UID)
+			c.markSeenBestEffort(ctx, raw.UID)
+			return
+		}
 		attempts := c.noteDeliveryFailure(raw.UID)
 		if attempts >= maxDeliveryAttemptsPerMessage {
 			c.logger.Error().Err(err).

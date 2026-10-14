@@ -72,7 +72,9 @@ func BrokerFailureClass(class string) string {
 	switch class {
 	case persistence.TaskFailureClassTimeout, persistence.TaskFailureClassLeaseExpired:
 		return BrokerClassTimeout
-	case persistence.TaskFailureClassBudgetBlocked:
+	case persistence.TaskFailureClassBudgetBlocked, persistence.TaskFailureClassPromptTokenBudget:
+		// PROMPT_TOKEN_BUDGET was BUDGET_BLOCKED before it had its own class
+		// (permanent-failure design §10.2); the broker label is unchanged.
 		return BrokerClassBudget
 	}
 	return BrokerClassFailed

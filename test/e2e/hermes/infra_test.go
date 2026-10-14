@@ -21,6 +21,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"vornik.io/vornik/internal/testutil/testenv"
 )
 
 // Pins (lane design §3). Changing one is a deliberate change that runs the
@@ -36,56 +38,6 @@ const (
 	rawMailSentinel  = "SENTINEL-RAWMAIL-7f3c1e"
 	invoiceMessageID = "msg-invoice-1"
 )
-
-// laneModel is one pinned model for Hermes. Hermes refuses a window below
-// 64K, so each is served at 65536 tokens; models trained for 32K get YaRN.
-// Only the default is the gate; the others are kept for the measurements
-// recorded in the lane design's As built section.
-type laneModel struct {
-	Name   string // the model name Hermes is configured with
-	URL    string
-	File   string
-	SHA256 string
-	Args   []string // extra llama-server arguments
-}
-
-var yarn64K = []string{"--rope-scaling", "yarn", "--rope-scale", "2", "--yarn-orig-ctx", "32768"}
-
-// qwen3Args: thinking off; on CPU its reasoning tokens cost minutes per
-// turn. (A q8_0 KV cache with flash attention cut memory but slowed prompt
-// processing from 21 to 4 tokens/s on the bring-up host, 2026-09-30.)
-var qwen3Args = append([]string{"--chat-template-kwargs", `{"enable_thinking":false}`}, yarn64K...)
-
-// laneModels are the candidates measured at bring-up (lane design, As
-// built). VORNIK_E2E_HERMES_LLM picks one; defaultLaneModel is the gate.
-var laneModels = map[string]laneModel{
-	"qwen2.5-3b": {
-		Name:   "qwen2.5-3b-instruct",
-		URL:    "https://huggingface.co/Qwen/Qwen2.5-3B-Instruct-GGUF/resolve/main/qwen2.5-3b-instruct-q4_k_m.gguf",
-		File:   "qwen2.5-3b-instruct-q4_k_m.gguf",
-		SHA256: "626b4a6678b86442240e33df819e00132d3ba7dddfe1cdc4fbb18e0a9615c62d",
-		Args:   yarn64K,
-	},
-	"qwen3-4b": {
-		Name:   "qwen3-4b",
-		URL:    "https://huggingface.co/Qwen/Qwen3-4B-GGUF/resolve/main/Qwen3-4B-Q4_K_M.gguf",
-		File:   "Qwen3-4B-Q4_K_M.gguf",
-		SHA256: "7485fe6f11af29433bc51cab58009521f205840f5b4ae3a32fa7f92e8534fdf5",
-		Args:   qwen3Args,
-	},
-	// The gate (operator's choice, 2026-09-30): a mixture of experts with
-	// about 3.6B active parameters, so it generates at small-model speed on
-	// CPU. Native 128K window; reasoning effort low keeps turns short.
-	"gpt-oss-20b": {
-		Name:   "gpt-oss-20b",
-		URL:    "https://huggingface.co/ggml-org/gpt-oss-20b-GGUF/resolve/main/gpt-oss-20b-MXFP4.gguf",
-		File:   "gpt-oss-20b-MXFP4.gguf",
-		SHA256: "27cd6c432c7672cb812a92f611cf3ba7bbc35928262bb1e1253ff4ee6ae35901",
-		Args:   []string{"--chat-template-kwargs", `{"reasoning_effort":"low"}`},
-	},
-}
-
-const defaultLaneModel = "gpt-oss-20b"
 
 // pickModel returns the model this run uses.
 func pickModel(t *testing.T) laneModel {
@@ -120,28 +72,12 @@ func cacheDir(t *testing.T) string {
 	return filepath.Join(home, ".cache", "vornik-e2e")
 }
 
-// cleanEnv is the ONLY environment the lane gives the processes it starts
-// (the daemon, vornikctl, go build). An operator's shell can carry
-// production VORNIK_* settings and secrets — this host's does — and a test
-// daemon that inherits VORNIK_CONFIGS_DIR loads the production projects:
-// their mail channels, MCP servers and autonomy loops (bring-up incident
-// 2026-09-30). So nothing is inherited except what building and running
-// need, and every VORNIK_* value is set by the lane itself.
-func cleanEnv(extra ...string) []string {
-	env := []string{"NO_PROXY=*", "no_proxy=*"}
-	for _, k := range []string{"PATH", "HOME", "USER", "LOGNAME", "LANG", "TMPDIR", "XDG_RUNTIME_DIR",
-		"GOPATH", "GOCACHE", "GOMODCACHE", "GOFLAGS", "GOTOOLCHAIN", "CONTAINER_HOST"} {
-		if v, ok := os.LookupEnv(k); ok {
-			env = append(env, k+"="+v)
-		}
-	}
-	return append(env, extra...)
-}
-
 // run executes a command and fails the test with its output on error.
 func run(t *testing.T, name string, args ...string) string {
 	t.Helper()
-	out, err := exec.Command(name, args...).CombinedOutput()
+	cmd := exec.Command(name, args...)
+	cmd.Env = testenv.Clean()
+	out, err := cmd.CombinedOutput()
 	if err != nil {
 		t.Fatalf("%s %s: %v\n%s", name, strings.Join(args, " "), err, tail(string(out), 4000))
 	}
@@ -191,6 +127,11 @@ func ensureModel(t *testing.T, m laneModel) string {
 		t.Fatal(err)
 	}
 	defer func() { _ = f.Close() }()
+	// The container's memory limit is sized from this size (lane design,
+	// "Memory guardrails"), so the basis is checked every run.
+	if st, err := f.Stat(); err != nil || st.Size() != m.FileBytes {
+		t.Fatalf("%s is not %d bytes (%v): FileBytes and the memory limit are sized from the pinned file", path, m.FileBytes, err)
+	}
 	h := sha256.New()
 	if _, err := io.Copy(h, f); err != nil {
 		t.Fatal(err)
@@ -243,12 +184,60 @@ func reapStaleContainers() {
 	}
 }
 
-// startContainer runs a detached container and removes it at cleanup.
-func startContainer(t *testing.T, name string, args ...string) {
+// requireMemory is the memory preflight for one stage (lane design, "Memory
+// guardrails", incident 2026-10-14): it fails the test, never skips, when the
+// host cannot hold what the stage adds plus the margin, unless
+// VORNIK_E2E_DEDICATED_HOST=1, which logs the finding as a warning.
+func requireMemory(t *testing.T, stage string, items ...memItem) {
+	t.Helper()
+	f, err := os.Open("/proc/meminfo")
+	var h hostMemory
+	if err == nil {
+		h, err = readHostMemory(f)
+		_ = f.Close()
+	}
+	override := os.Getenv(dedicatedHostEnv) == "1"
+	var foreign []string
+	var foreignErr error
+	if override {
+		// The override holds only on a host running nothing but this lane.
+		out, perr := exec.Command("podman", "ps", "--format", "json").Output()
+		var cs []podmanContainer
+		if perr == nil {
+			perr = json.Unmarshal(out, &cs)
+		}
+		if perr != nil {
+			foreignErr = fmt.Errorf("podman ps: %w", perr)
+		} else {
+			// The lane daemons' own agent containers are the lane's;
+			// "cannot tell" is foreign (amendment W8-AJ).
+			foreign = foreignContainers(cs, laneTaskOwner(directClient, registeredLaneDaemons()))
+		}
+	}
+	v := decideMemory(stage, h, err, items, override, foreign, foreignErr)
+	if !v.OK {
+		t.Fatal(v.Message)
+	}
+	if v.Overridden {
+		t.Log(v.Message)
+	}
+}
+
+// hermesRunArgs is the argv for one container of the Hermes image, after
+// that container's preflight.
+func hermesRunArgs(t *testing.T, args ...string) []string {
+	t.Helper()
+	requireMemory(t, "before a Hermes container", hermesStageItems()...)
+	return podmanRunArgs(memHermes, args...)
+}
+
+// startContainer runs a detached container, limited to limit bytes with no
+// swap, and removes it at cleanup.
+func startContainer(t *testing.T, name string, limit int64, args ...string) {
 	t.Helper()
 	// No "rm -f <name>": names are per run, and a fixed-name rm removed a
 	// live sibling's container (T10). Leftovers are reaped by label instead.
-	run(t, "podman", append(append([]string{"run", "-d", "--name", name}, laneLabels()...), args...)...)
+	run(t, "podman", podmanRunArgs(limit, append([]string{"-d", "--name", name}, args...)...)...)
 	t.Cleanup(func() {
 		if t.Failed() {
 			logs, _ := exec.Command("podman", "logs", "--tail", "80", name).CombinedOutput()
@@ -299,7 +288,7 @@ func startPostgres(t *testing.T) (port int, name string) {
 	ensureImage(t, pgvectorImage)
 	port = freePort(t)
 	name = pgContainerName()
-	startContainer(t, name, "-p", fmt.Sprintf("127.0.0.1:%d:5432", port),
+	startContainer(t, name, memPostgres, "-p", fmt.Sprintf("127.0.0.1:%d:5432", port),
 		"-e", "POSTGRES_USER=vornik", "-e", "POSTGRES_PASSWORD=vornik", "-e", "POSTGRES_DB=vornik",
 		pgvectorImage)
 	waitFor(t, "postgres", 90*time.Second, func() bool {
@@ -310,20 +299,29 @@ func startPostgres(t *testing.T) (port int, name string) {
 }
 
 // startLlama serves the pinned model with the 64K window Hermes requires.
+// laneMaxTokens is the per-reply bound for llama.cpp's -n and for the
+// ToolRecorder in front of it (lane design, "Amendment 2026-10-14 — a bound
+// on one model reply"); a bad override fails the run.
+func laneMaxTokens(t *testing.T) int {
+	t.Helper()
+	n, err := llamaMaxTokens(os.Getenv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return n
+}
+
 func startLlama(t *testing.T, m laneModel, modelDir string) string {
 	t.Helper()
 	ensureImage(t, llamaImage)
-	threads := os.Getenv("VORNIK_E2E_LLAMA_THREADS")
-	if threads == "" {
-		threads = "6"
-	}
 	port := freePort(t)
-	args := []string{"-p", fmt.Sprintf("127.0.0.1:%d:8080", port),
-		"-v", modelDir + ":/models:ro,Z", llamaImage,
-		"-m", "/models/" + m.File, "--jinja", "-c", "65536", "-np", "1",
-		"-t", threads, "--temp", "0", "--seed", "1", "--host", "0.0.0.0", "--port", "8080"}
+	threads, err := llamaThreads(os.Getenv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	args := llamaServerArgs(port, modelDir, llamaImage, m, threads, laneMaxTokens(t))
 	name := llamaContainerName()
-	startContainer(t, name, append(args, m.Args...)...)
+	startContainer(t, name, m.memLimit(), args...)
 	waitFor(t, "llama.cpp", 3*time.Minute, func() bool {
 		return exec.Command("podman", "exec", name, "curl", "-sf", "localhost:8080/health").Run() == nil
 	})
@@ -354,7 +352,7 @@ func buildBinaries(t *testing.T, dir string) (daemon, ctl string) {
 	for bin, pkg := range map[string]string{daemon: "./cmd/vornik", ctl: "./cmd/vornikctl"} {
 		cmd := exec.Command("go", "build", "-o", bin, pkg)
 		cmd.Dir = root
-		cmd.Env = cleanEnv()
+		cmd.Env = testenv.Clean()
 		if out, err := cmd.CombinedOutput(); err != nil {
 			t.Fatalf("go build %s: %v\n%s", pkg, err, out)
 		}
@@ -394,20 +392,29 @@ func copyFile(t *testing.T, from, to string) {
 // grantKey mints a companion key with the real vornikctl.
 func grantKey(t *testing.T, ctl, apiURL, adminKey string, args ...string) string {
 	t.Helper()
+	_, secret := grantKeyWithID(t, ctl, apiURL, adminKey, args...)
+	return secret
+}
+
+// grantKeyWithID is grantKey that also returns the key's id, which the
+// daemon's companion audit rows carry (task_id "companion:<id>").
+func grantKeyWithID(t *testing.T, ctl, apiURL, adminKey string, args ...string) (id, secret string) {
+	t.Helper()
 	cmd := exec.Command(ctl, append([]string{"companion", "grant", "--json"}, args...)...)
-	cmd.Env = cleanEnv("VORNIK_API_URL="+apiURL, "VORNIK_API_KEY="+adminKey)
+	cmd.Env = testenv.Clean("VORNIK_API_URL="+apiURL, "VORNIK_API_KEY="+adminKey)
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &stdout, &stderr
 	if err := cmd.Run(); err != nil {
 		t.Fatalf("vornikctl companion grant %v: %v\n%s", args, err, stderr.String())
 	}
 	var out struct {
+		ID     string `json:"id"`
 		Secret string `json:"secret"`
 	}
-	if err := json.Unmarshal(stdout.Bytes(), &out); err != nil || out.Secret == "" {
-		t.Fatalf("grant output has no secret: %v\n%s", err, stdout.String())
+	if err := json.Unmarshal(stdout.Bytes(), &out); err != nil || out.Secret == "" || out.ID == "" {
+		t.Fatalf("grant output has no id or secret: %v\n%s", err, stdout.String())
 	}
-	return out.Secret
+	return out.ID, out.Secret
 }
 
 // mcpCall is a direct companion MCP tools/call (used by the model-free

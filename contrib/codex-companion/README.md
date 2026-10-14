@@ -25,7 +25,9 @@ packaging is different.
   and a secret scan over content that is about to be committed. Client-side by
   design: the daemon must not write your checkout, and the daemon-side tool
   flattens an item to a single 600-character line. Byte-identical to the
-  Claude Code copy; a parity test fails the build on drift.
+  Claude Code copy; a parity test fails the build on drift. A bug deposit
+  can carry `--found-at <level>` (unit, integration, executor-e2e, e2e-lane,
+  production, review): its regression test belongs at that level.
 - The operator lifecycle skills, mirrored from the Claude Code bundle:
   `vornik-docs` (where the documentation lives, with the real site map, and
   `vornikctl --help` ahead of recall so Codex quotes flags that exist),
@@ -40,11 +42,39 @@ packaging is different.
 - The same companion bearer-key model as Claude Code, but minted with
   `--client=codex`.
 
-Codex plugins do not currently use the Claude Code plugin manifest shape for
-slash commands or SessionStart hooks. This adapter therefore does not ship the
-Claude `commands/` or `hooks/` directories. Codex should call MCP tools
-directly and, when file bytes are needed, stage them as `inputArtifacts` in the
-`delegate` tool call.
+This adapter does not ship Claude slash commands (`commands/`) or a
+SessionStart hook. Codex should call MCP tools directly and, when file bytes
+are needed, stage them as `inputArtifacts` in the `delegate` tool call.
+
+### The recall nudge (hooks/hooks.json)
+
+The bundle ships one hook: an offline, just-in-time nudge to recall a
+subsystem's design before reading its code. Codex has no file-read tool, so
+the hook reads the text of each shell command Codex runs and looks for paths
+given to a read program (`cat`, `head`, `tail`, `sed`, `rg`, `grep`, `find`,
+`ls` and a few others). It **parses** the text and never runs it. A command
+it cannot parse counts as nothing.
+
+- On the third read into one subsystem (for example `internal/executor`)
+  with no successful `recall` in the last 15 minutes, it adds one line of
+  context telling Codex to call `mcp__vornik__recall` for that subsystem's
+  design.
+- It fires once per subsystem per session, never blocks a command, makes no
+  network call, and keeps no file names, commands or queries: only
+  subsystem names, counters and a timestamp, under the plugin's data
+  directory.
+- Codex runs plugin hooks only after you trust them. At startup it shows
+  "Hooks need review"; choose to trust them to turn the nudge on, or continue
+  without trusting to leave it off.
+
+| Variable | Effect |
+|---|---|
+| `VORNIK_NUDGE=off` | silence the nudge |
+| `VORNIK_NUDGE_THRESHOLD` | reads into one subsystem before the nudge (default 3) |
+| `VORNIK_NUDGE_RECALL_WINDOW_S` | how long a recall suppresses it, in seconds (default 900) |
+
+Without `VORNIK_COMPANION_TOKEN` the hook stays silent, since the recall tool
+cannot work.
 
 ## Prerequisites
 

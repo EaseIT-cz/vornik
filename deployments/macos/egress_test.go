@@ -1,9 +1,12 @@
 package macos
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"os/exec"
+	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -55,19 +58,100 @@ func TestZeroEgressNetworkNoneCannotReachExternalHost(t *testing.T) {
 
 	// The actual invariant: the same image/command, but with --network=none,
 	// must FAIL — having just proven (above) that the image and command work
-	// and can reach the network when a device is present.
-	err := runWithTimeout(t, 15*time.Second, "podman", append([]string{"run", "--rm", "--network=none", image}, wgetArgs...)...)
-	if errors.Is(err, errCommandTimeout) {
-		t.Fatalf("%v — a --network=none container should be refused at once, not hang", err)
-	}
-	if err == nil {
+	// and can reach the network when a device is present. The command prints
+	// a start marker first, so a run is judged only once its command started
+	// (classifyNoNetworkRun; macOS design §6, amendment 2026-10-12).
+	script := "echo " + egressStartMarker + "; exec " + strings.Join(wgetArgs, " ")
+	out, err := runCaptured(t, 15*time.Second, "podman", "run", "--rm", "--network=none", image, "sh", "-c", script)
+	switch classifyNoNetworkRun(out, err) {
+	case egressRefused:
+		// Non-zero exit after the command started (typically wget's "bad
+		// address"/network-unreachable for a device-less netns): the
+		// expected, immediate refusal.
+	case egressReached:
 		t.Fatal("container with --network=none reached an external host — the zero-egress invariant is broken " +
 			"(no network device should mean no route to anywhere, external or not)")
+	case egressHungAfterStart:
+		t.Fatalf("%v — the command started in a --network=none container and then hung; it should be refused at once", err)
+	case egressNotStarted:
+		// The zero-egress invariant is NOT verified on this run: say so in
+		// the skip, so a lane where this recurs reads as unverified.
+		t.Skipf("the --network=none container never started its command (%v; output %q): podman did not get it "+
+			"running, which says nothing about egress — zero-egress NOT verified on this run", err, out)
 	}
-	// Non-zero exit (typically wget's "bad address"/network-unreachable for
-	// a device-less netns) is the expected, immediate failure — already
-	// distinguished from an unrelated tooling failure by the positive
-	// control above having succeeded.
+}
+
+// egressStartMarker is printed by the --network=none container before its
+// network attempt. `echo` is a shell builtin writing straight to the pipe
+// (no stdio buffering), so the marker is in the output iff the command ran.
+const egressStartMarker = "vornik-egress-probe-started"
+
+type egressVerdict int
+
+const (
+	egressRefused        egressVerdict = iota // started, then failed: the invariant holds
+	egressReached                             // exit 0: the invariant is broken
+	egressHungAfterStart                      // started, then hung past the bound
+	egressNotStarted                          // podman never reached the command: proves nothing
+)
+
+func (v egressVerdict) String() string {
+	return [...]string{"refused", "reached", "hung-after-start", "not-started"}[v]
+}
+
+// classifyNoNetworkRun judges a --network=none run from its output and error.
+// Exit 0 is a reach whatever the output: nothing else could make it succeed.
+func classifyNoNetworkRun(out string, err error) egressVerdict {
+	if err == nil {
+		return egressReached
+	}
+	if !strings.Contains(out, egressStartMarker) {
+		return egressNotStarted
+	}
+	if errors.Is(err, errCommandTimeout) {
+		return egressHungAfterStart
+	}
+	return egressRefused
+}
+
+// runCaptured is runWithTimeout with the command's combined output returned.
+func runCaptured(t *testing.T, timeout time.Duration, name string, arg ...string) (string, error) {
+	t.Helper()
+	var buf syncBuffer
+	cmd := exec.Command(name, arg...)
+	cmd.Stdout = &buf
+	cmd.Stderr = &buf
+	if err := cmd.Start(); err != nil {
+		return "", err
+	}
+	done := make(chan error, 1)
+	go func() { done <- cmd.Wait() }()
+	select {
+	case err := <-done:
+		return buf.String(), err
+	case <-time.After(timeout):
+		_ = cmd.Process.Kill()
+		<-done
+		return buf.String(), fmt.Errorf("%s %v: %w (%s)", name, arg, errCommandTimeout, timeout)
+	}
+}
+
+// syncBuffer is a bytes.Buffer safe for exec's copy goroutine and the reader.
+type syncBuffer struct {
+	mu sync.Mutex
+	b  bytes.Buffer
+}
+
+func (s *syncBuffer) Write(p []byte) (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.b.Write(p)
+}
+
+func (s *syncBuffer) String() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.b.String()
 }
 
 // runWithTimeout runs cmd and returns its error (nil on success). A command
@@ -107,5 +191,33 @@ func TestRunWithTimeoutReturnsTimeoutToTheCaller(t *testing.T) {
 	}
 	if err := runWithTimeout(t, 5*time.Second, "true"); err != nil {
 		t.Fatalf("a quick command: %v", err)
+	}
+}
+
+// audit 2026-10-12 (#126): the --network=none run hung past its 15 s limit
+// once under parallel `make test` load and passed alone. Its command is
+// `wget -T 3` to an IP literal, which cannot take 15 s, so the hang was podman
+// not reaching the command. Only a run whose command STARTED says anything
+// about egress (macOS design §6, amendment 2026-10-12).
+func TestClassifyNoNetworkRun(t *testing.T) {
+	timeout := fmt.Errorf("podman run: %w (15s)", errCommandTimeout)
+	exit1 := errors.New("exit status 1")
+	cases := []struct {
+		name string
+		out  string
+		err  error
+		want egressVerdict
+	}{
+		{"started, refused at once", egressStartMarker + "\nwget: bad address\n", exit1, egressRefused},
+		{"started, then hung", egressStartMarker + "\n", timeout, egressHungAfterStart},
+		{"never started, hung", "", timeout, egressNotStarted},
+		{"never started, podman failed", "Error: creating container storage\n", exit1, egressNotStarted},
+		{"reached the host", egressStartMarker + "\n<html>\n", nil, egressReached},
+		{"exit 0 without the marker is still a reach", "", nil, egressReached},
+	}
+	for _, c := range cases {
+		if got := classifyNoNetworkRun(c.out, c.err); got != c.want {
+			t.Errorf("%s: got %v, want %v", c.name, got, c.want)
+		}
 	}
 }

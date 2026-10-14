@@ -19,6 +19,29 @@ body:
     validations:
       required: true
 
+  # Found-at level (ENGINEERING-TENETS §4.7, 2026-10-14): a bug's regression
+  # test is written at the level where the bug was found, so the filing
+  # records it. The word in parentheses is the canonical token; the options
+  # are ordered by how likely a reporter is to pick them, not by level.
+  - type: dropdown
+    id: found_at
+    attributes:
+      label: Found at
+      description: |
+        Where was this bug first seen? Pick "production" if you saw it while
+        using Vornik. The fix adds a test at this level, so it cannot come back
+        the same way.
+      options:
+        - "production: while using a running install (production)"
+        - "an end-to-end test lane, a real container (e2e-lane)"
+        - "the daemon's executor loop in a test (executor-e2e)"
+        - "an integration test: real database, git or HTTP handler (integration)"
+        - "a unit test (unit)"
+        - "a code review or audit (review)"
+        - "not sure"
+    validations:
+      required: true
+
   - type: input
     id: host
     attributes:

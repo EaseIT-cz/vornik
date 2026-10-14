@@ -182,14 +182,14 @@ func TestExtract_RunsProbeAndFramesInTheSandbox(t *testing.T) {
 	}
 	probe, frames := specs[0], specs[1]
 	if probe.Feature != sandboxtool.FeatureVideo || probe.Entrypoint != "ffprobe" ||
-		strings.Join(probe.Args, " ") != "-v error -print_format json -show_format -show_streams -o /out/probe.json /in/video" {
+		strings.Join(probe.Args, " ") != "-v error -print_format json -show_format -show_streams -o /out/probe.json -protocol_whitelist file -format_whitelist mov,matroska,ogg,mp3,wav,flac,aac,avi,asf,mpegts,mpeg,flv,aiff,amr,caf /in/video" {
 		t.Fatalf("probe run = %+v", probe)
 	}
 	// Sampling selects the first frame, then one per interval. It used to be
 	// fps=1/<interval>, which emits NO frame from a clip shorter than the
 	// interval: the S5b e2e lane's 2 s clip sampled nothing (2026-09-26).
 	if frames.Feature != sandboxtool.FeatureVideo || frames.Entrypoint != "ffmpeg" ||
-		strings.Join(frames.Args, " ") != `-nostdin -loglevel error -threads 2 -filter_threads 2 -i /in/video -threads 2 -vf select=isnan(prev_selected_t)+gte(t-prev_selected_t\,60) -fps_mode vfr -frames:v 2 -q:v 3 /out/frame-%03d.jpg` {
+		strings.Join(frames.Args, " ") != `-nostdin -loglevel error -threads 2 -filter_threads 2 -protocol_whitelist file -format_whitelist mov,matroska,ogg,mp3,wav,flac,aac,avi,asf,mpegts,mpeg,flv,aiff,amr,caf -i /in/video -threads 2 -vf select=isnan(prev_selected_t)+gte(t-prev_selected_t\,60) -fps_mode vfr -frames:v 2 -q:v 3 /out/frame-%03d.jpg` {
 		t.Fatalf("frames run = %+v", frames)
 	}
 	for _, s := range specs {
@@ -328,6 +328,27 @@ func TestNameAndVersion(t *testing.T) {
 	e := New(nil)
 	if e.Name() != "vornik-extract-video" || e.Version() == "" {
 		t.Errorf("identity wrong: %s %s", e.Name(), e.Version())
+	}
+}
+
+// audit 2026-10-12 (GitHub #348): a DASH manifest uploaded as a video made the
+// probe and frames runs read a local file named inside it. Both runs carry the
+// input guard (file protocol, demuxer allowlist) immediately before the input.
+func TestExtract_ProbeAndFramesCarryTheInputGuard(t *testing.T) {
+	bins := fakeBins(t, probeJSON, 2)
+	if _, err := NewWithOptions(bins, 2, 5).Extract(context.Background(), srcFile(t)); err != nil {
+		t.Fatal(err)
+	}
+	guard := strings.Join(sandboxtool.FFmpegInputGuard(), " ")
+	specs := bins.Specs()
+	if len(specs) != 2 {
+		t.Fatalf("runs = %d", len(specs))
+	}
+	if args := strings.Join(specs[0].Args, " "); !strings.HasSuffix(args, guard+" /in/video") {
+		t.Errorf("probe argv %q lacks %q before its input", args, guard)
+	}
+	if args := strings.Join(specs[1].Args, " "); !strings.Contains(args, guard+" -i /in/video ") {
+		t.Errorf("frames argv %q lacks %q before -i", args, guard)
 	}
 }
 

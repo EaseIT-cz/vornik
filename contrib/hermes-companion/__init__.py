@@ -8,30 +8,49 @@ this directory's README.
 from __future__ import annotations
 
 import json
-import os
+import logging
 from pathlib import Path
 
-from . import approval, cli
+from . import approval, cli, settings
 from .broker_tools import SCHEMAS, BrokerTools
-from .digest import Digest
+from .digest import Digest, list_arguments
 from .memory_provider import MemoryCommands, VornikMemoryProvider
 from .vornik_client import VornikClient, VornikError
 
 
+log = logging.getLogger(__name__)
+
+
 def _broker_client() -> VornikClient:
-    return VornikClient(os.environ.get("VORNIK_URL", ""), os.environ.get("VORNIK_BROKER_TOKEN", ""))
+    # Read at each request through Hermes's secret scope, so every turn uses
+    # its own profile's URL and key (design 24, "Settings through Hermes's
+    # secret scope (0.21.5)"; catalogue rule 11).
+    return VornikClient(settings.getter(settings.URL), settings.getter(settings.BROKER_TOKEN),
+                        not_configured=lambda: settings.not_configured(settings.URL, settings.BROKER_TOKEN))
+
+
+def _memory_token_set() -> bool:
+    """Whether to register the memory provider. A multiplexing Hermes that
+    loads plugins with no profile scope bound makes get_secret raise; then
+    register it anyway, since is_available() decides per turn."""
+    try:
+        return bool(settings.get(settings.MEMORY_TOKEN))
+    except Exception as e:  # UnscopedSecretError, which this module cannot import by name
+        log.info("vornik-companion: no profile scope at registration (%s); the memory provider "
+                 "registers and checks its key on each turn", type(e).__name__)
+        return True
 
 
 def _peek(client: VornikClient):
     def handler(raw_args: str = "") -> str:
         if not client.configured:
-            return "Vornik is not configured (VORNIK_URL, VORNIK_BROKER_TOKEN)."
+            return client.not_configured_message()
         if not client.supports("companion-broker"):
             # Same gate as the tools: no broker surface on a daemon that does
             # not advertise it (review-20260929-9450 M4).
             return "This Vornik daemon does not support broker workflows (upgrade it)."
         try:
-            text, is_error = client.call("list", {}, timeout=10)
+            text, is_error = client.call("list", list_arguments(client), timeout=10)
         except VornikError as e:
             return "Vornik unreachable: %s" % e
         if is_error:
@@ -87,7 +106,7 @@ def register(ctx) -> None:
     # Agent-administered Vornik (plan P6.3): the admin tools arrive over the
     # MCP entry vornikctl agent connect hermes writes; this is how to use them.
     ctx.register_skill("vornik-admin", Path(__file__).parent / "skills" / "vornik-admin" / "SKILL.md")
-    if os.environ.get("VORNIK_MEMORY_TOKEN"):
+    if _memory_token_set():
         provider = VornikMemoryProvider()
         ctx.register_memory_provider(provider)
         # What Vornik keeps, and forgetting one item (design 24, 0.8.0): in-

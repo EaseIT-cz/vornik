@@ -1,6 +1,6 @@
 ---
 description: Find active/trusted vornik knowledge skills relevant to the current work
-allowed-tools: mcp__vornik__skill_search
+allowed-tools: mcp__plugin_vornik-companion_vornik__skill_search
 argument-hint: <topic / what you're trying to do>
 ---
 
@@ -8,7 +8,7 @@ argument-hint: <topic / what you're trying to do>
 
 The user wants approved know-how relevant to: **$ARGUMENTS**
 
-Call `mcp__vornik__skill_search`. Useful args:
+Call `mcp__plugin_vornik-companion_vornik__skill_search`. Useful args:
 
 - `query` — case-insensitive substring over name/description.
 - `repo_scope` — omit for the key default; the search returns the current

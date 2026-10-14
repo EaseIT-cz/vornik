@@ -338,6 +338,20 @@ var DegradedStepOutcomes = []string{"timeout", "schema_violation", "degenerate_l
 // only ones a timeout raise can address.
 var TimeoutStepOutcomes = []string{"timeout", "context_timeout"}
 
+// StepClassWallClockExceeded is stepoutcome.ClassWallClockExceeded, spelled
+// here so persistence does not import the taxonomy (pinned equal by a test in
+// the executor): the execution's wall clock, not the step's timeout, ended the
+// step (outcome-quality LLD §S7 #2).
+const StepClassWallClockExceeded = "wall_clock_exceeded"
+
+// CountsAsStepTruncation reports whether a step-outcome row counts toward the
+// truncation count that drives a step-timeout RAISE (TimeoutCount): a timeout
+// outcome, unless the execution's wall clock ended the step — raising the
+// step's timeout cannot address that (outcome-quality LLD §S7 #2).
+func CountsAsStepTruncation(outcome, class string) bool {
+	return IsTimeoutStepOutcome(outcome) && class != StepClassWallClockExceeded
+}
+
 // IsTimeoutStepOutcome reports whether outcome means the step was truncated.
 func IsTimeoutStepOutcome(outcome string) bool {
 	for _, d := range TimeoutStepOutcomes {

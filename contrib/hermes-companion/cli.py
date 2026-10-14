@@ -28,7 +28,7 @@ import os
 import shutil
 import subprocess
 
-from . import approval
+from . import approval, settings
 from .vornik_client import VornikClient
 
 # connect checks the daemon, mints a key and writes one config entry; it
@@ -189,8 +189,16 @@ def connect(args, which=shutil.which, run=subprocess.run, out=print, is_executab
     return proc.returncode
 
 
-def status(args, env=None, opener=None, out=print, load_config=None) -> int:
-    env = os.environ if env is None else env
+def status(args, values=None, opener=None, out=print, load_config=None) -> int:
+    # The settings come through Hermes's secret scope, like every other read
+    # (design 24, 0.21.5); `values` stands in for it in tests. In a terminal
+    # no scope is bound and Hermes reads this CLI profile's environment.
+    if values is None:
+        if not settings.supported():
+            out(settings.TOO_OLD)
+            return 1
+        values = {name: settings.get(name) for name in settings.NAMES}
+    env = values
     cfg = _safe_config(load_config)
     out("Approval transport registered: %s" % ("yes" if approval.registered() else "no (this Hermes has no approval-transport seam)"))
     out("Approval transport selected: %s" % ("yes" if approval.selected(cfg) else "no (hermes vornik approvals on)"))

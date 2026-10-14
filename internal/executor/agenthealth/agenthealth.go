@@ -23,6 +23,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/rs/zerolog"
+
 	"vornik.io/vornik/internal/chat"
 )
 
@@ -56,6 +58,7 @@ type Registry struct {
 	cfg     Config
 	reg     *sync.Map // model → *chat.Breaker
 	metrics MetricsSink
+	logger  zerolog.Logger
 }
 
 // NewRegistry constructs a registry. When Enabled is false the registry's
@@ -65,12 +68,21 @@ func NewRegistry(cfg Config) *Registry {
 	if cfg.Now == nil {
 		cfg.Now = time.Now
 	}
-	return &Registry{cfg: cfg, reg: &sync.Map{}}
+	return &Registry{cfg: cfg, reg: &sync.Map{}, logger: zerolog.Nop()}
 }
 
 // SetMetrics stores the observability sink (nil-safe). Call once at the
 // executor's SetMetrics timing.
 func (r *Registry) SetMetrics(m MetricsSink) { r.metrics = m }
+
+// SetLogger stores the logger a trip is reported on (outcome-quality LLD §S5
+// #16, GitHub #142: a trip used to be counted and logged nowhere). Call once,
+// beside SetMetrics.
+func (r *Registry) SetLogger(l zerolog.Logger) {
+	if r != nil {
+		r.logger = l
+	}
+}
 
 // ModelHealthSnapshot returns the live state of every agent-LLM breaker,
 // implementing chat.ModelHealthReporter so the doctor surfaces the agent
@@ -90,12 +102,16 @@ func (r *Registry) ModelHealthSnapshot() []chat.ModelHealthSnapshot {
 			return true
 		}
 		state, openedAt := b.Snapshot()
-		out = append(out, chat.ModelHealthSnapshot{
+		snap := chat.ModelHealthSnapshot{
 			Route:     "agent",
 			Model:     model,
 			State:     state,
 			OpenSince: openedAt,
-		})
+		}
+		if state != chat.CircuitClosed.Label() {
+			snap.TripReason = b.TripReason()
+		}
+		out = append(out, snap)
 		return true
 	})
 	return out
@@ -172,7 +188,11 @@ func (r *Registry) Record(model string, probe bool, err error) {
 		// succeeds), so the window is not reachable in practice — and the
 		// circuit STATE, which is what gates calls, is authoritative either
 		// way. Reviewed 2026-09-04 (review-20260904-bef3, finding 3).
-		r.incTrips(model, b.TripReason())
+		reason := b.TripReason()
+		r.incTrips(model, reason)
+		r.logger.Warn().Str("component", "agent-health").Str("model", model).
+			Str("trip_reason", reason).Str("remedy", chat.TripReasonRemedy(reason)).
+			Msg("agent model circuit opened: agent steps on this model fail over to the role's modelFallback until a probe succeeds")
 	}
 }
 

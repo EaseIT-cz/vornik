@@ -76,7 +76,7 @@
                             <tr class="text-left text-[11px] uppercase tracking-wider text-gray-500">
                                 <th class="px-3 py-2.5 font-medium">
                                     <input type="checkbox" id="exec-bulk-toggle-all" onchange="execBulkToggleAll(this.checked)"
-                                           class="form-checkbox h-3.5 w-3.5 rounded border-dark-600 bg-dark-700 text-brand-500" aria-label="Select all">
+                                           class="form-checkbox h-3.5 w-3.5 rounded border-control bg-dark-700 text-brand-500" aria-label="Select all">
                                 </th>
                                 <th class="px-5 py-2.5 font-medium">Execution</th>
                                 <th class="px-5 py-2.5 font-medium">Task</th>
@@ -94,7 +94,7 @@
                                 <td class="px-3 py-3">
                                     <input type="checkbox" form="exec-bulk-form" name="exec_ids" value="{{.ID}}"
                                            onclick="event.stopPropagation()" onchange="execBulkUpdateCount()"
-                                           class="form-checkbox h-3.5 w-3.5 rounded border-dark-600 bg-dark-700 text-brand-500" aria-label="Select execution">
+                                           class="form-checkbox h-3.5 w-3.5 rounded border-control bg-dark-700 text-brand-500" aria-label="Select execution">
                                 </td>
                                 <td class="px-5 py-3 text-[11px] font-mono text-gray-300" title="{{.ID}}">{{shortID .ID}}</td>
                                 <td class="px-5 py-3 text-[11px] font-mono text-gray-400">

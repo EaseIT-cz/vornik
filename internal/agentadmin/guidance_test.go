@@ -43,7 +43,10 @@ func TestAdminGuidance(t *testing.T) {
 		// reuse of a recent read-only result.
 		"`progress`", "max_age_seconds", "not from `task_logs`",
 		// Broker program B10: an assistant must ask which account to use.
-		"Name the account"} {
+		"Name the account",
+		// GitHub #314 (design §19.14.3, §19.14.8 item 8): a connector the
+		// user can install themselves, said only where list_recipes marks one.
+		"`connector: true`", "Connectors page"} {
 		if !strings.Contains(g, want) {
 			t.Errorf("the guidance does not say %q", want)
 		}

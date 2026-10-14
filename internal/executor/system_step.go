@@ -23,12 +23,78 @@ package executor
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
+	"time"
 
+	"vornik.io/vornik/internal/ctxerr"
 	"vornik.io/vornik/internal/persistence"
 	"vornik.io/vornik/internal/registry"
+	"vornik.io/vornik/internal/stepoutcome"
 )
+
+// errSystemStepTimeout is the cause a system step's own timeout records on
+// its context, so a failure can say which bound fired: the step's, or the
+// execution's (max_wall_clock / scheduler.execution_timeout).
+var errSystemStepTimeout = errors.New("system step timeout")
+
+// systemStepContext bounds a system handler by the step's timeout (its
+// declared `timeout:`, or the executor default). d <= 0 leaves it bounded by
+// the execution context alone, the pre-2026-10-13 behaviour. Outcome-quality
+// LLD §S5 #3 (GitHub #142).
+//
+// The bound is cooperative: a handler must pass ctx into its calls (all the
+// registered ones do). A handler that ignores it still hangs the step; it is
+// deliberately not abandoned on a goroutine, because routing to on_fail while
+// a push is still writing is worse than the hang.
+func systemStepContext(ctx context.Context, d time.Duration) (context.Context, context.CancelFunc) {
+	if d <= 0 {
+		return context.WithCancel(ctx)
+	}
+	return context.WithTimeoutCause(ctx, d, errSystemStepTimeout)
+}
+
+// systemStepFailure classifies a system handler's error by why the call
+// ended (ctxerr.Classify on the step's own context), returning the step
+// outcome, the error class and the error to record and route with.
+//
+//   - a deadline → timeout / context_timeout, naming which bound fired and,
+//     for the step's own, its value and the remedy; the error wraps
+//     context.DeadlineExceeded so shouldRetry declines it, as it declines a
+//     cold agent step's deadline;
+//   - a cancel → cancelled / context_cancelled;
+//   - anything else → gate_failed / handler_failed, unchanged.
+//
+// Must be called before the step context's cancel func runs. nil err returns
+// ("", "", nil).
+func systemStepFailure(stepCtx context.Context, err error, d time.Duration) (outcome, class string, out error) {
+	if err == nil {
+		return "", "", nil
+	}
+	switch ctxerr.Classify(stepCtx, err) {
+	case ctxerr.Timeout:
+		if !errors.Is(err, context.DeadlineExceeded) {
+			err = fmt.Errorf("%w: %w", err, context.DeadlineExceeded)
+		}
+		if errors.Is(context.Cause(stepCtx), errSystemStepTimeout) {
+			why := fmt.Sprintf("exceeded its %s step timeout (if the handler legitimately needs longer, raise the step's timeout)", d)
+			return string(stepoutcome.Timeout), stepoutcome.ClassContextTimeout, fmt.Errorf("%s: %w", why, err)
+		}
+		if wc := wallClockCauseOf(stepCtx); wc != nil {
+			// The execution's cap, not the step's timeout (outcome-quality
+			// LLD §S7 #2): its own class, the remedy names the cap, and the
+			// cause is in the chain so handleFailure does not name it twice.
+			return string(stepoutcome.Timeout), stepoutcome.ClassWallClockExceeded,
+				fmt.Errorf("was stopped because %w (raise the workflow's maxWallClock or scheduler.execution_timeout, not the step's timeout): %w", wc, err)
+		}
+		why := "was stopped by the execution's own deadline (the workflow's max_wall_clock or scheduler.execution_timeout)"
+		return string(stepoutcome.Timeout), stepoutcome.ClassContextTimeout, fmt.Errorf("%s: %w", why, err)
+	case ctxerr.Cancelled:
+		return string(stepoutcome.Cancelled), stepoutcome.ClassContextCancelled, fmt.Errorf("was cancelled: %w", err)
+	}
+	return string(stepoutcome.GateFailed), "handler_failed", err
+}
 
 // SystemHandler is the contract for `system`-typed workflow steps.
 // Implementations are pure-Go (no agent container, no LLM call).
@@ -41,6 +107,13 @@ type SystemHandler interface {
 	// Execute runs the handler. The returned SystemStepResult.Result
 	// is persisted as the step's LastResult and becomes the
 	// PrevResult of the next step in the workflow.
+	//
+	// CONTRACT: ctx carries the step's timeout (outcome-quality LLD §S5
+	// #3). Pass it into every blocking call — HTTP, git, subprocess
+	// (exec.CommandContext), database — and never substitute
+	// context.Background(). The bound is cooperative: a handler that drops
+	// ctx hangs its step past the timeout, because the executor does not
+	// abandon a handler that may still be writing.
 	Execute(ctx context.Context, in SystemStepInput) (SystemStepResult, error)
 }
 

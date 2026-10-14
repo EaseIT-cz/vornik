@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"vornik.io/vornik/internal/aidisclosure"
 	"vornik.io/vornik/internal/executor"
 	forgeapi "vornik.io/vornik/internal/forge"
 	"vornik.io/vornik/internal/registry"
@@ -178,10 +179,10 @@ func TestOpenChangeRequest_G6C_BothForgeSinksDiscloseIdentically(t *testing.T) {
 		t.Fatalf("review: %v", err)
 	}
 
-	if !strings.HasSuffix(prov.gotSpec.Body, discloseSuffix+noticeText()) {
+	if !strings.HasSuffix(prov.gotSpec.Body, aidisclosure.FooterSeparator+noticeText()) {
 		t.Errorf("PR body does not end with the shared notice:\n%s", prov.gotSpec.Body)
 	}
-	if !strings.HasSuffix(prov.gotReview.Body, discloseSuffix+noticeText()) {
+	if !strings.HasSuffix(prov.gotReview.Body, aidisclosure.FooterSeparator+noticeText()) {
 		t.Errorf("review body does not end with the shared notice:\n%s", prov.gotReview.Body)
 	}
 }

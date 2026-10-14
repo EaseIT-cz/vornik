@@ -74,7 +74,7 @@ func TestAutoCommitLeftoverChanges_CommitsUntracked(t *testing.T) {
 // leftover-changes helper's short-circuit.
 func TestAutoCommitTrackedChangesOnly_EmptyDir(t *testing.T) {
 	require.NotPanics(t, func() {
-		autoCommitTrackedChangesOnly(context.Background(), "", "task1", "", zerolog.Nop())
+		autoCommitTrackedChangesOnly(context.Background(), "", "task1", "", nil, zerolog.Nop())
 	})
 }
 
@@ -82,7 +82,7 @@ func TestAutoCommitTrackedChangesOnly_EmptyDir(t *testing.T) {
 // silently no-ops.
 func TestAutoCommitTrackedChangesOnly_NotARepo(t *testing.T) {
 	require.NotPanics(t, func() {
-		autoCommitTrackedChangesOnly(context.Background(), t.TempDir(), "task1", "", zerolog.Nop())
+		autoCommitTrackedChangesOnly(context.Background(), t.TempDir(), "task1", "", nil, zerolog.Nop())
 	})
 }
 
@@ -98,7 +98,7 @@ func TestAutoCommitTrackedChangesOnly_NoTrackedChanges(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "UNTRACKED.md"), []byte("x"), 0o644))
 
 	beforeOut, _ := exec.Command("git", "-C", dir, "rev-parse", "HEAD").Output()
-	autoCommitTrackedChangesOnly(context.Background(), dir, "task1", "", zerolog.Nop())
+	autoCommitTrackedChangesOnly(context.Background(), dir, "task1", "", nil, zerolog.Nop())
 	afterOut, _ := exec.Command("git", "-C", dir, "rev-parse", "HEAD").Output()
 	assert.Equal(t, strings.TrimSpace(string(beforeOut)), strings.TrimSpace(string(afterOut)),
 		"untracked-only changes must NOT trigger a commit (this is the tracked-only helper)")
@@ -116,7 +116,7 @@ func TestAutoCommitTrackedChangesOnly_CapturesTrackedModification(t *testing.T) 
 	require.NoError(t, os.WriteFile(readme, []byte("# changed\n"), 0o644))
 
 	beforeOut, _ := exec.Command("git", "-C", dir, "rev-parse", "HEAD").Output()
-	autoCommitTrackedChangesOnly(context.Background(), dir, "task-tracked-1", "", zerolog.Nop())
+	autoCommitTrackedChangesOnly(context.Background(), dir, "task-tracked-1", "", nil, zerolog.Nop())
 	afterOut, _ := exec.Command("git", "-C", dir, "rev-parse", "HEAD").Output()
 	assert.NotEqual(t, strings.TrimSpace(string(beforeOut)), strings.TrimSpace(string(afterOut)),
 		"tracked-file modification must trigger an auto-commit")

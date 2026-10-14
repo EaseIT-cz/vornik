@@ -14,6 +14,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"vornik.io/vornik/internal/testutil/testenv"
 )
 
 // stack is one run's Vornik side plus the Hermes model.
@@ -251,6 +253,9 @@ runtime:
   userns_mode: "keep-id"
   default_network: "daemon-only"
   project_workspace_path: %q
+  # Memory guardrails (lane design, 2026-10-14): unset, the daemon derives
+  # half the host over max_concurrent_tasks, about 15 GB per container here.
+  agent_memory_limit: %q
   agent_llm:
     model: %q
 mcp:
@@ -258,12 +263,15 @@ mcp:
 `, apiPort, filepath.Join(s.dir, "vornik.sock"), pgPort,
 		filepath.Join(s.dir, "artifacts"), filepath.Join(s.dir, "artifacts"),
 		s.adminKey, s.adminKey, llmURL, scriptedModel, llmURL, embeddingDim, agentImage(),
-		filepath.Join(s.dir, "workspaces"), scriptedModel)
+		filepath.Join(s.dir, "workspaces"), laneAgentMemoryLimit, scriptedModel)
 	if s.cfgEdit != nil {
 		cfg = s.cfgEdit(cfg)
 	}
+	// An extra file may name the stub mail servers, whose ports exist only
+	// now (the multiplexed-profile arm's second broker project).
+	stubs := strings.NewReplacer("{{MAIL_READ_URL}}", readURL, "{{MAIL_SEND_URL}}", sendURL)
 	for rel, content := range s.cfgFiles {
-		writeFile(t, filepath.Join(cfgDir, "configs", rel), content)
+		writeFile(t, filepath.Join(cfgDir, "configs", rel), stubs.Replace(content))
 	}
 	path := filepath.Join(cfgDir, "config.yaml")
 	writeFile(t, path, cfg)
@@ -283,6 +291,9 @@ func startStackWith(t *testing.T, edit func(string) string, files map[string]str
 	requirePodman(t)
 	s := &stack{dir: t.TempDir(), adminKey: randomKey(t), cfgEdit: edit, cfgFiles: files}
 	reapStaleContainers()
+	// Memory preflight (lane design, "Memory guardrails", incident
+	// 2026-10-14): Postgres, the daemon and the agent slots it will run.
+	requireMemory(t, "before the stack", stackStageItems()...)
 	pgPort, _ := startPostgres(t)
 	s.pgPort = pgPort
 
@@ -333,10 +344,13 @@ func startStackWith(t *testing.T, edit func(string) string, files map[string]str
 	waitFor(t, "the vornik daemon", 2*time.Minute, func() bool { return httpOK(s.apiURL + "/health") })
 	// Guard: the daemon must have loaded exactly the lane's projects. Any
 	// other project means it reached a real configuration; stop at once.
-	if got := listProjects(t, s.apiURL, s.adminKey); strings.Join(got, ",") != "assistant-memory,broker-mail" {
+	if got, want := listProjects(t, s.apiURL, s.adminKey), laneProjects(files); strings.Join(got, ",") != strings.Join(want, ",") {
 		_ = s.daemonCmd.Process.Kill()
 		t.Fatalf("the test daemon loaded projects %v, not only the lane's own: refusing to continue", got)
 	}
+	// The memory preflight asks this daemon whether an agent container's task
+	// is the lane's (lane design, "Memory guardrails", amendment W8-AJ).
+	t.Cleanup(registerLaneDaemon(laneDaemon{apiURL: s.apiURL, adminKey: s.adminKey}))
 
 	s.brokerKey = grantKey(t, ctl, s.apiURL, s.adminKey, "--project", "broker-mail", "--client", "hermes",
 		"--workflows", "mail-digest,mail-reply", "--budget-usd", "5")
@@ -345,11 +359,25 @@ func startStackWith(t *testing.T, edit func(string) string, files map[string]str
 	return s
 }
 
+// laneProjects is the project set the lane daemon must load: the lane's two
+// plus any project file an arm passes in files (projects/<id>.yaml; the
+// multiplexed-profile arm, lane design 2026-10-14). Sorted.
+func laneProjects(files map[string]string) []string {
+	ids := []string{"assistant-memory", "broker-mail"}
+	for rel := range files {
+		if strings.HasPrefix(rel, "projects/") && strings.HasSuffix(rel, ".yaml") {
+			ids = append(ids, strings.TrimSuffix(strings.TrimPrefix(rel, "projects/"), ".yaml"))
+		}
+	}
+	sort.Strings(ids)
+	return ids
+}
+
 // startDaemon starts the lane daemon with the allowlisted environment.
 func (s *stack) startDaemon(t *testing.T) {
 	t.Helper()
 	cmd := exec.Command(s.daemon)
-	cmd.Env = cleanEnv("VORNIK_CONFIG="+s.cfgPath, "VORNIK_CONFIGS_DIR="+filepath.Join(filepath.Dir(s.cfgPath), "configs"),
+	cmd.Env = testenv.Clean("VORNIK_CONFIG="+s.cfgPath, "VORNIK_CONFIGS_DIR="+filepath.Join(filepath.Dir(s.cfgPath), "configs"),
 		"VORNIK_DATA_DIR="+filepath.Join(s.dir, "data"))
 	cmd.Stdout, cmd.Stderr = s.daemonOut, s.daemonOut
 	if err := cmd.Start(); err != nil {

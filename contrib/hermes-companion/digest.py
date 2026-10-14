@@ -24,6 +24,15 @@ PROGRESS_TIMEOUT_SECONDS = 5
 STEP_ID_MAX = 64
 
 
+def list_arguments(client: VornikClient) -> dict:
+    """list's arguments for the digest and /vornik-peek: every project the
+    key can see when the daemon offers it (design 24, "The digest sees every
+    namespace project"). An agent-admin key's delegations run in the project
+    owning the workflow, which list {} (the home project) never shows. An
+    older daemon would refuse "*", so it gets {}."""
+    return {"project": "*"} if client.supports("companion-list-all-projects") else {}
+
+
 def _position(progress) -> str:
     """'step i of n (id)', or 'running id' off the success chain; '' when
     progress carries no declared step."""
@@ -60,7 +69,7 @@ class Digest:
                 return None
             self._last_check = now
         try:
-            text, is_error = self.client.call("list", {}, timeout=10)
+            text, is_error = self.client.call("list", list_arguments(self.client), timeout=10)
             if is_error:
                 return None
             rows = [r for r in (json.loads(text).get("tasks") or []) if isinstance(r, dict)]

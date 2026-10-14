@@ -186,6 +186,9 @@ func TestProjectCreateTaskSubmit_Valid_EnqueuesAndRedirects(t *testing.T) {
 	form.Set("workflowId", "build")
 	form.Set("taskType", "research")
 	form.Set("priority", "30")
+	// Forge: a posted goal_origin is ignored; the row says ui (GitHub #347;
+	// ui grants distillation without a key since 2026-10-13, review daf4 F2).
+	form.Set("goal_origin", "companion")
 
 	req := httptest.NewRequest(http.MethodPost, "/ui/projects/test-project/tasks/new", strings.NewReader(form.Encode()))
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
@@ -199,6 +202,10 @@ func TestProjectCreateTaskSubmit_Valid_EnqueuesAndRedirects(t *testing.T) {
 		t.Fatalf("Create calls = %d, want 1", repo.CallCount.Create)
 	}
 	created := repo.LastCall.Task
+	// GitHub #347: the signed-in operator wrote this goal in the form.
+	if created.GoalOrigin != persistence.TaskGoalOriginUI {
+		t.Errorf("GoalOrigin = %q, want %q", created.GoalOrigin, persistence.TaskGoalOriginUI)
+	}
 	if created.ProjectID != "test-project" {
 		t.Errorf("ProjectID = %q, want test-project", created.ProjectID)
 	}

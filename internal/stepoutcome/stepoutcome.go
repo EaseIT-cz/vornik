@@ -194,6 +194,14 @@ const (
 	ClassMissingOutput    = "missing_declared_output"
 	ClassContextCancelled = "context_cancelled"
 	ClassContextTimeout   = "context_timeout"
+	// ClassWallClockExceeded — the EXECUTION's wall-clock cap (the
+	// workflow's max_wall_clock, else scheduler.execution_timeout) ended the
+	// step, not the step's own timeout. Outcome stays Timeout (the step was
+	// truncated), but the remedy is the opposite one: raising the step's
+	// timeout is inert, so this class is kept out of the tune worker's
+	// truncation count and off the infra-retry allowlist (the execution's
+	// deadline has already passed). Outcome-quality LLD §S7 #2, GitHub #142.
+	ClassWallClockExceeded = "wall_clock_exceeded"
 	// ClassHallucinated — the post-step claim-grounding detector
 	// found a High-severity unsupported claim (URL never fetched,
 	// task/project ID that doesn't exist, etc.). The step is
@@ -384,6 +392,7 @@ var errorClasses = []string{
 	ClassMissingOutput,
 	ClassContextCancelled,
 	ClassContextTimeout,
+	ClassWallClockExceeded,
 	ClassHallucinated,
 	ClassBudgetTripwire,
 	ClassPromptTokenBudget,

@@ -32,6 +32,8 @@ import (
 	"syscall"
 	"testing"
 	"time"
+
+	"vornik.io/vornik/internal/testutil/testenv"
 )
 
 var (
@@ -42,13 +44,17 @@ var (
 	fakeHTTPURL  string
 )
 
-func TestMain(m *testing.M) {
+// TestMain runs the lane in the environment CI gives it: no inherited VORNIK_*
+// (GitHub #357, testing design 19 §11).
+func TestMain(m *testing.M) { os.Exit(testenv.Main(m, mainSpawnlaw)) }
+
+func mainSpawnlaw(m *testing.M) int {
 	code, err := run(m)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "[spawnlaw e2e]", err)
-		os.Exit(1)
+		return 1
 	}
-	os.Exit(code)
+	return code
 }
 
 func run(m *testing.M) (int, error) {
@@ -80,6 +86,7 @@ func run(m *testing.M) (int, error) {
 	fakePort := freePort()
 	fakeHTTPURL = fmt.Sprintf("http://127.0.0.1:%d/mcp", fakePort)
 	fakeSrv := exec.Command(fake, "-http", fmt.Sprintf("127.0.0.1:%d", fakePort))
+	fakeSrv.Env = testenv.Clean()
 	if err := fakeSrv.Start(); err != nil {
 		return 1, fmt.Errorf("start fake http mcp: %w", err)
 	}
@@ -111,7 +118,13 @@ func run(m *testing.M) (int, error) {
 	logFile, _ := os.Create(logPath)
 	daemon := exec.Command(daemonBin)
 	daemon.Dir = work
-	daemon.Env = append(os.Environ(), "VORNIK_CONFIG="+configFile, "VORNIK_CONFIGS_DIR="+configsTree)
+	// VORNIK_DATA_DIR is the test's own: the config names no
+	// project_workspace_path, so the workspace root falls back to
+	// $VORNIK_DATA_DIR/workspaces. Inheriting the shell's (production's) value
+	// made this daemon's startup prune delete live production worktrees
+	// (GitHub #357, executor design §9.5.4). No other VORNIK_* is inherited
+	// either (testing design 19 §11).
+	daemon.Env = testenv.Daemon(filepath.Join(work, "data"), "VORNIK_CONFIG="+configFile, "VORNIK_CONFIGS_DIR="+configsTree)
 	daemon.Stdout, daemon.Stderr = logFile, logFile
 	if err := daemon.Start(); err != nil {
 		return 1, fmt.Errorf("start daemon: %w", err)

@@ -61,6 +61,12 @@ func TestAPIKeyLookup_IsOnlyReachableThroughTheBundle(t *testing.T) {
 	// happen to assemble today would make the claim true of those two and
 	// unverified everywhere else — and a third assembler somewhere else is
 	// exactly what this exists to catch (review-20260915-b945, suggestion 3).
+	// #334 item 6 (CI pipeline design, amendment 2026-10-14): count the files
+	// and require BOTH assemblers to be seen. Before, an assembler that
+	// stopped calling WithAPIKeyLookup dropped out of the door check
+	// silently, and an empty walk passed.
+	files := 0
+	seen := map[string]bool{}
 	err := filepath.Walk("..", func(path string, info os.FileInfo, werr error) error {
 		if werr != nil {
 			return werr
@@ -68,6 +74,7 @@ func TestAPIKeyLookup_IsOnlyReachableThroughTheBundle(t *testing.T) {
 		if info.IsDir() || !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
 			return nil
 		}
+		files++
 		src, rerr := os.ReadFile(path)
 		if rerr != nil {
 			return rerr
@@ -77,6 +84,9 @@ func TestAPIKeyLookup_IsOnlyReachableThroughTheBundle(t *testing.T) {
 				continue
 			}
 			wantPkg, allowed := assemblers[fn.name]
+			if allowed {
+				seen[fn.name] = true
+			}
 			if !allowed {
 				t.Errorf("%s: func %s assembles an API-key auth chain by hand; only %v may, "+
 					"so the §5.0 disabled-owner door cannot be omitted",
@@ -100,6 +110,15 @@ func TestAPIKeyLookup_IsOnlyReachableThroughTheBundle(t *testing.T) {
 	})
 	if err != nil {
 		t.Fatalf("walk internal/: %v", err)
+	}
+	t.Logf("api-key door law: examined %d non-test Go files under internal/; %d of %d assembler(s) seen", files, len(seen), len(assemblers))
+	if files < 500 {
+		t.Errorf("api-key door law: examined %d non-test Go files (floor 500); a law that looked at nothing has not passed", files)
+	}
+	for name, pkg := range assemblers {
+		if !seen[name] {
+			t.Errorf("assembler %s (internal/%s) no longer calls WithAPIKeyLookup, so its door is unchecked; if it moved, update the allowlist", name, pkg)
+		}
 	}
 }
 

@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"testing"
 	"time"
@@ -77,4 +78,71 @@ func TestCompanionCatalog_AgentKeyListsItsNamespacesApprovedWorkflows(t *testing
 		"hermes--finance--spend": "hermes--finance",
 		"hermes--travel--plan":   "hermes--travel",
 	}, got)
+}
+
+// connectorInstallsOnly is a grants repository that answers only the
+// connector-install read.
+type connectorInstallsOnly struct {
+	persistence.AgentGrantRepository
+	rows []persistence.AgentConnectorInstall
+}
+
+func (c connectorInstallsOnly) ListConnectorInstalls(_ context.Context, ns string) ([]persistence.AgentConnectorInstall, error) {
+	var out []persistence.AgentConnectorInstall
+	for _, r := range c.rows {
+		if r.Namespace == ns {
+			out = append(out, r)
+		}
+	}
+	return out, nil
+}
+
+// GitHub #314 (2026-10-13; agent-administered design §19.14.3, §19.14.9
+// remaining item 3): catalog marks a workflow the person installed from
+// their device as installed_by device, as list_my_setup does; others carry
+// no marker, and another namespace's row marks nothing here.
+func TestCompanionCatalog_MarksDeviceInstalledConnectors(t *testing.T) {
+	srv, keys, _ := newCompanionMCPServer(t)
+	reg := registry.New()
+	broker := &registry.WorkflowBroker{
+		InputSchema: map[string]any{"type": "object"},
+		Egress:      registry.BrokerEgress{Output: "result.json", Schema: map[string]any{"type": "object"}},
+	}
+	registry.SeedForTest(reg, map[string]*registry.Project{
+		"hermes--home":     {ID: "hermes--home", Broker: true},
+		"hermes--personal": {ID: "hermes--personal", Broker: true},
+	})
+	registry.SeedWorkflowsForTest(reg, map[string]*registry.Workflow{
+		"hermes--personal--agenda": {ID: "hermes--personal--agenda", Broker: broker},
+		"hermes--personal--spend":  {ID: "hermes--personal--spend", Broker: broker},
+	})
+	srv.projectRegistry = reg
+	srv.agentAdmin, srv.agentAdminEnabled = &fakeAgentAdmin{approved: []string{"hermes--personal--agenda", "hermes--personal--spend"}}, func() bool { return true }
+	srv.agentGrants = connectorInstallsOnly{rows: []persistence.AgentConnectorInstall{
+		{WorkflowID: "hermes--personal--agenda", Namespace: "hermes", ProjectID: "hermes--personal", Connector: "agenda", DeviceID: "dev_a"},
+		{WorkflowID: "hermes--personal--spend", Namespace: "codex", ProjectID: "codex--personal", Connector: "x", DeviceID: "dev_a"},
+	}}
+	raw, err := apikey.Generate("hermes--home")
+	require.NoError(t, err)
+	require.NoError(t, keys.Create(t.Context(), &persistence.APIKey{
+		ID: "akey-agent", ProjectID: "hermes--home", Name: "hermes", KeyHash: apikey.Hash(raw),
+		KeyPrefix: apikey.DisplayPrefix(raw), ClientKind: "hermes", CreatedAt: time.Now().UTC(),
+		AgentAdmin: true, AgentNamespace: "hermes",
+	}))
+	resp := callAdminTool(t, srv, raw, "catalog")
+	require.Nil(t, resp.Error)
+	text, isErr := decodeToolText(t, resp)
+	require.False(t, isErr, text)
+	var out struct {
+		Workflows []struct {
+			ID          string `json:"id"`
+			InstalledBy string `json:"installed_by"`
+		} `json:"workflows"`
+	}
+	require.NoError(t, json.Unmarshal([]byte(text), &out))
+	got := map[string]string{}
+	for _, w := range out.Workflows {
+		got[w.ID] = w.InstalledBy
+	}
+	require.Equal(t, map[string]string{"hermes--personal--agenda": "device", "hermes--personal--spend": ""}, got)
 }

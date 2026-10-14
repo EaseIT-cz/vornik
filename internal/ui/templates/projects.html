@@ -13,6 +13,26 @@
                 {{if .Rows}}<span class="text-sm text-gray-500">{{len .Rows}} configured{{if gt .ArchivedCount 0}}, {{.ArchivedCount}} archived{{end}}</span>{{end}}
             </div>
 
+            {{/* Delete-now outcome banners (archival design section H,
+                 2026-10-14): the redirect after "Delete now" names what
+                 happened — deleted, deleted with residue, or still running. */}}
+            {{if .DeleteResidueID}}
+            <div role="alert" class="rounded-lg border border-amber-700/40 bg-amber-950/20 px-4 py-3 text-sm text-amber-600 dark:text-amber-200">
+                {{if and .DeleteResidueArtifacts .DeleteResidueReload}}Project {{.DeleteResidueID}} was deleted, but some of its artifact files could not be removed and the registry reload failed{{if .DeleteResidue}}: {{.DeleteResidue}}{{end}}. It stays listed as archived until the sweeper's next tick, which completes the deletion and retries the artifact files. Recorded in the audit log as project.delete.partial.
+                {{- else if .DeleteResidueReload}}Project {{.DeleteResidueID}} was deleted, but the registry reload failed{{if .DeleteResidue}}: {{.DeleteResidue}}{{end}}. Its data and configuration are gone; it stays listed as archived until the sweeper's next tick, which completes the deletion. Recorded in the audit log as project.delete.partial.
+                {{- else}}Project {{.DeleteResidueID}} was deleted, but some of its artifact files could not be removed{{if .DeleteResidue}}: {{.DeleteResidue}}{{end}}. They are recorded in the audit log as project.delete.partial.{{end}}
+            </div>
+            {{else if .DeletedID}}
+            <div role="status" class="rounded-lg border border-emerald-700/40 bg-emerald-950/20 px-4 py-3 text-sm text-emerald-600 dark:text-emerald-200">
+                Project {{.DeletedID}} was deleted.
+            </div>
+            {{end}}
+            {{if .DeletePendingID}}
+            <div role="status" class="rounded-lg border border-sky-700/40 bg-sky-950/20 px-4 py-3 text-sm text-sky-600 dark:text-sky-200">
+                Deletion of {{.DeletePendingID}} is still running; refresh this page to see whether it finished (a failure shows on the project's page).
+            </div>
+            {{end}}
+
             {{/* Wizard drafts banner (Feature #2 Phase C). Surfaces
                  when the operator has uncommitted wizard sessions.
                  Encourages finishing or abandoning the draft rather
@@ -32,7 +52,7 @@
             {{if .Rows}}
             <input id="project-search" type="search" placeholder="Filter projects… (Esc to clear)"
                    aria-label="Filter projects"
-                   class="w-full sm:w-96 px-3 py-2 text-sm rounded-lg bg-dark-800 border border-dark-700 focus:border-brand-500 focus:outline-none text-gray-200 placeholder-gray-500"
+                   class="w-full sm:w-96 px-3 py-2 text-sm rounded-lg bg-dark-800 border border-control focus:border-brand-500 focus:outline-none text-gray-200 placeholder-gray-500"
                    oninput="filterProjects(this.value)" onkeydown="if(event.key==='Escape'){this.value='';filterProjects('')}">
             {{end}}
 

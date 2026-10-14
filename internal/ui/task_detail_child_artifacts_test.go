@@ -165,6 +165,7 @@ func TestDeliverableSend_AcceptsDescendantArtifact(t *testing.T) {
 		WithArtifactRepository(artifactRepo),
 		WithChatAuditRepository(fakeChatAuditDS{row: row}),
 		WithChannelResolver(fakeResolverDS{byName: map[string]conversation.Channel{"slack": ch}}),
+		WithAIDisclosure(alreadyDisclosedUI()), // chat already disclosed in its turn
 	)
 
 	req := httptest.NewRequest(http.MethodPost,

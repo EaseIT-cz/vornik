@@ -203,13 +203,15 @@ func (g *githubTaskCreator) Create(ctx context.Context, ev github.TaskCreationEv
 		ID:             persistence.GenerateID("task"),
 		ProjectID:      g.project.ID,
 		CreationSource: persistence.TaskCreationSourceUser,
-		Status:         persistence.TaskStatusQueued,
-		Priority:       priority,
-		Payload:        payload,
-		Attempt:        1,
-		MaxAttempts:    3,
-		CreatedAt:      now,
-		UpdatedAt:      now,
+		// The issue or pull request author wrote the goal (GitHub #347).
+		GoalOrigin:  persistence.TaskGoalOriginGitHub,
+		Status:      persistence.TaskStatusQueued,
+		Priority:    priority,
+		Payload:     payload,
+		Attempt:     1,
+		MaxAttempts: 3,
+		CreatedAt:   now,
+		UpdatedAt:   now,
 	}
 	if workflowID != "" {
 		wf := workflowID

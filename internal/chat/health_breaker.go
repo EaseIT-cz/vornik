@@ -73,6 +73,22 @@ const (
 	TripReasonProbeFailed = "probe_failed"
 )
 
+// TripReasonRemedy says what a trip reason means and what an operator should
+// check, for the log line, the operator alert and the doctor line
+// (outcome-quality LLD §S5 #16, GitHub #142). An empty or unknown reason maps
+// to the empty string, so a caller can skip the suffix.
+func TripReasonRemedy(reason string) string {
+	switch reason {
+	case TripReasonRate:
+		return "a share of its recent calls failed: the provider is degraded; check its status page and the daemon's error log"
+	case TripReasonConsecutive:
+		return "every recent call failed: the endpoint has likely stopped answering; check that it is up and that its credential is still valid"
+	case TripReasonProbeFailed:
+		return "the recovery probe failed: the provider is still down; it probes again after the cooldown"
+	}
+	return ""
+}
+
 // Breaker is the per-(route, model) circuit-breaker state machine (LLD
 // 2026-07-11-model-health-circuit-breaker §5). It has no Provider coupling —
 // it just allows a call and folds its outcome — so the executor-side

@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"vornik.io/vornik/internal/aidisclosure"
 	"vornik.io/vornik/internal/conversation"
 	"vornik.io/vornik/internal/persistence"
 )
@@ -97,6 +98,8 @@ func newChatPushNarrator(t *testing.T, task *persistence.Task, row *persistence.
 		Tasks:      fakeTaskGetterCP{byID: map[string]*persistence.Task{task.ID: task}},
 		Audit:      fakeChatAuditCP{row: row},
 		Resolver:   res,
+		// Chats in these tests were disclosed to in their originating turn.
+		Disclosure: aidisclosure.New(aidisclosure.Config{}, servedAllCP{}),
 		ProjectSettings: func(string) ProjectNarratorSettings {
 			return ProjectNarratorSettings{ChatPush: chatPush}
 		},

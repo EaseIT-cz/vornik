@@ -17,7 +17,7 @@
                  Pure JS; no server round-trip. Survives the
                  10s hx-get refresh because the input value is
                  read directly from the DOM on each filter pass. */}}
-            <div class="glass rounded-xl border border-dark-700 px-4 py-2.5 flex items-center gap-3">
+            <div class="glass rounded-xl border border-control px-4 py-2.5 flex items-center gap-3">
                 <svg class="h-4 w-4 text-gray-500" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/></svg>
                 <input id="task-filter" type="text"
                        placeholder="Filter visible tasks by id, project, or summary text…"
@@ -179,12 +179,16 @@
                 <div class="px-5 py-2.5 border-b border-dark-700/60 flex items-center justify-between text-xs">
                     <div class="flex items-center gap-2">
                         <span class="text-gray-500 uppercase tracking-wider">View</span>
+                        {{/* Group boundary on --control-border (WCAG 1.4.11,
+                             ui-design-refresh-design.md §11.3). */}}
+                        <div class="inline-flex items-center gap-1 rounded-lg border border-control p-0.5" role="group" aria-label="Task list view">
                         <a href="{{.NestedURL}}"
                            hx-get="{{.NestedURL}}" hx-target="#task-content" hx-select="#task-content" hx-swap="outerHTML" hx-push-url="true"
                            class="px-2.5 py-1 rounded-md font-medium transition-colors {{if .Flat}}bg-dark-700 text-gray-400 hover:bg-dark-600 hover:text-gray-200{{else}}bg-brand-600/30 text-brand-200 ring-1 ring-brand-500{{end}}">Nested</a>
                         <a href="{{.FlatURL}}"
                            hx-get="{{.FlatURL}}" hx-target="#task-content" hx-select="#task-content" hx-swap="outerHTML" hx-push-url="true"
                            class="px-2.5 py-1 rounded-md font-medium transition-colors {{if .Flat}}bg-brand-600/30 text-brand-200 ring-1 ring-brand-500{{else}}bg-dark-700 text-gray-400 hover:bg-dark-600 hover:text-gray-200{{end}}">Flat</a>
+                        </div>
                     </div>
                     {{/* Shared page-size selector — matches /ui/audit etc.
                          Pass status/project_id/q/flat through so changing
@@ -212,7 +216,7 @@
                             <th scope="col" class="px-3 py-2.5 w-8 text-left">
                                 <input type="checkbox" id="bulk-toggle-all"
                                        onchange="bulkToggleAll(this.checked)"
-                                       class="form-checkbox h-3.5 w-3.5 rounded border-dark-600 bg-dark-700 text-brand-500" aria-label="Select all">
+                                       class="form-checkbox h-3.5 w-3.5 rounded border-control bg-dark-700 text-brand-500" aria-label="Select all">
                             </th>
                             {{template "sortHeader" (dict "Label" "ID"       "Key" "id"       "Active" .Sort "Dir" .Dir "BaseURL" .BaseURL "Align" "left")}}
                             {{template "sortHeader" (dict "Label" "Project"  "Key" "project"  "Active" .Sort "Dir" .Dir "BaseURL" .BaseURL "Align" "left")}}
@@ -231,7 +235,7 @@
                                 <td class="px-3 py-3 whitespace-nowrap">
                                     <input type="checkbox" form="bulk-form" name="task_ids" value="{{.ID}}"
                                            onchange="bulkUpdateCount()"
-                                           class="form-checkbox h-3.5 w-3.5 rounded border-dark-600 bg-dark-700 text-brand-500"
+                                           class="form-checkbox h-3.5 w-3.5 rounded border-control bg-dark-700 text-brand-500"
                                            aria-label="Select task {{shortID .ID}}">
                                 </td>
                                 <td class="px-5 py-3 whitespace-nowrap" style="{{indentStyle $meta.Depth}}">

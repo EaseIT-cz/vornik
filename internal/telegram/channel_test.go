@@ -473,12 +473,16 @@ func TestTelegramStream_AppendEditFails_SetsTerminated(t *testing.T) {
 	ts.minEditEvery = 0 // every Append flushes
 	ts.lastEdit = time.Time{}
 
-	// Cancel before Append fires so editMessageText sees a cancelled
-	// context and returns a transport error.
-	cancel()
+	// Take the API away before Append fires so editMessageText returns a
+	// transport error. (This used to cancel the stream's context; since
+	// #142 #20 edits run detached from the turn's context so a final flush
+	// survives a turn deadline, which is what
+	// TestTelegramStream_FinalEditLandsAfterTheTurnContextEnded pins.)
+	defer cancel()
+	server.Close()
 
 	if err := stream.Append("hello"); err == nil {
-		t.Fatal("Append returned nil after editMessageText was cancelled, want error")
+		t.Fatal("Append returned nil after editMessageText failed, want error")
 	}
 
 	// Subsequent Append returns the same sticky terminal error.
@@ -517,10 +521,12 @@ func TestTelegramStream_CloseEditFails(t *testing.T) {
 		t.Fatalf("Append (buffered): %v", err)
 	}
 
-	// Cancel before Close so the final-flush editMessageText fails.
-	cancel()
+	// Take the API away before Close so the final-flush editMessageText
+	// fails (a cancelled context no longer does, #142 #20).
+	defer cancel()
+	server.Close()
 	if _, err := stream.Close(); err == nil {
-		t.Error("Close returned nil after cancelled-ctx final flush, want error")
+		t.Error("Close returned nil after a failed final flush, want error")
 	}
 }
 

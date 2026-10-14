@@ -104,6 +104,7 @@ func (e *Executor) scheduleCheckpointFollowUp(ctx context.Context, parent *persi
 		WorkflowID:     parent.WorkflowID,
 		ParentTaskID:   &parentID,
 		CreationSource: persistence.TaskCreationSourceCheckpoint,
+		GoalOrigin:     persistence.TaskGoalOriginCheckpoint,
 		// Rule 5: a checkpoint CONTINUATION inherits the original actor, dated
 		// by its own creation — it is the same person's work, continued, and it
 		// counts in the period it actually ran.

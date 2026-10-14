@@ -373,6 +373,13 @@ type Session struct {
 // channel. Callers treat it as an auth-rejection signal.
 var ErrSpeakerUnknown = constError("conversation: speaker not known on this channel")
 
+// ErrTurnDeadline is wrapped by a Receiver's error when the turn ran out its
+// own turn bound (dispatcher.ChannelReceiver's TurnTimeout), as opposed to a
+// single call inside a live turn failing. A channel that retries failed turns
+// declines this one: the work took longer than a turn allows, so a retry is a
+// deterministic re-timeout (outcome-quality LLD §S5 #5, GitHub #142).
+var ErrTurnDeadline = constError("conversation: the chat turn ran out its time limit")
+
 // constError lets us define package-level error sentinels
 // without pulling errors.New into the package scope; matches
 // the pattern used elsewhere in vornik (e.g.

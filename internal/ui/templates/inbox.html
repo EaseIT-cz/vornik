@@ -43,13 +43,19 @@
                 </ul>
             </div>
             {{end}}
+            {{if .AgentApprovalsFailed}}
+            <div class="mb-4 space-y-2">
+                <h2 class="text-sm font-semibold text-gray-400 uppercase tracking-wide">Waiting on your approver device</h2>
+                <p class="rounded-lg border border-amber-600/40 bg-amber-500/10 px-3 py-2 text-xs text-amber-700 dark:text-amber-300">Could not load the requests waiting on your approver device, so they are not listed or counted here. They are still waiting there: open Vornik approvals on the phone you paired.</p>
+            </div>
+            {{end}}
             {{if or .Items .WebWrites .BrokerActions}}
                 <ul class="space-y-2">
                     {{range .BrokerActions}}{{template "brokerActionApprovalCard" .}}{{end}}
                     {{range .WebWrites}}{{template "webWriteApprovalCard" .}}{{end}}
                     {{range .Items}}{{template "inboxItemRow" .}}{{end}}
                 </ul>
-            {{else if not .AgentApprovals}}
+            {{else if not (or .AgentApprovals .AgentApprovalsFailed)}}
                 {{template "emptyState" (dict "Icon" "tasks" "Title" "All clear" "Hint" "Nothing needs your attention — no approvals, checkpoints, recent failures, or blocked tasks.")}}
             {{end}}
             {{with .StandingGrants}}
@@ -186,8 +192,8 @@
     {{with .Grant}}<form method="post" action="/ui/inbox/broker-action/{{$.ActionID}}/approve-grant" class="rounded-lg border border-dark-600 p-2 space-y-1.5 text-[11px] text-gray-300">
         <input type="hidden" name="args_sha256" value="{{$.ArgsSHA256}}">
         <div><span class="font-medium text-gray-100">Approve, and send future {{.Action}} to {{.Key}} without showing you their text</span>, for
-        <select name="grant_days" class="bg-dark-900">{{range .Days}}<option value="{{.}}">{{.}} day{{if ne . 1}}s{{end}}</option>{{end}}</select>,
-        at most <select name="grant_uses" class="bg-dark-900">{{range .Uses}}<option value="{{.}}">{{.}}</option>{{end}}</select> times.</div>
+        <select name="grant_days" class="bg-dark-900 border border-control rounded">{{range .Days}}<option value="{{.}}">{{.}} day{{if ne . 1}}s{{end}}</option>{{end}}</select>,
+        at most <select name="grant_uses" class="bg-dark-900 border border-control rounded">{{range .Uses}}<option value="{{.}}">{{.}}</option>{{end}}</select> times.</div>
         <div class="text-gray-500">Not shown to you before sending: {{range $i, $f := .Unreviewed}}{{if $i}}, {{end}}<span class="font-mono">{{$f}}</span>{{end}}. An address may reach several people (a mailing list).</div>
         <button type="submit" class="px-3 py-1.5 rounded-lg bg-emerald-700 hover:bg-emerald-600 text-white">Approve, and approve future writes like this</button>
     </form>{{end}}
@@ -373,7 +379,7 @@
                 <button type="submit" name="choice" value="{{.ID}}" class="flex-1 sm:flex-none px-4 py-2 text-xs font-medium rounded-lg bg-sky-600 hover:bg-sky-500 text-white transition-colors">{{.Label}}</button>
                 {{end}}
             {{else}}
-                <input type="text" name="content" placeholder="Your answer…" class="flex-1 min-w-0 bg-dark-700 border border-dark-600 rounded-lg px-3 py-2 text-xs text-gray-200">
+                <input type="text" name="content" placeholder="Your answer…" class="flex-1 min-w-0 bg-dark-700 border border-control rounded-lg px-3 py-2 text-xs text-gray-200">
                 <button type="submit" class="px-4 py-2 text-xs font-medium rounded-lg bg-sky-600 hover:bg-sky-500 text-white transition-colors">Answer</button>
             {{end}}
         </form>

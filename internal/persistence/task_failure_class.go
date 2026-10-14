@@ -23,6 +23,8 @@ func IsKnownTaskFailureClass(s string) bool {
 		TaskFailureClassLLMError,
 		TaskFailureClassMergeFailed,
 		TaskFailureClassOrphaned,
+		TaskFailureClassOutputCap,
+		TaskFailureClassPromptTokenBudget,
 		TaskFailureClassRateLimited,
 		TaskFailureClassRuntimeError,
 		TaskFailureClassSecretLeak,

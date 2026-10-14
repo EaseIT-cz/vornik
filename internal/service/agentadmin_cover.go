@@ -91,6 +91,9 @@ func waitingCover(ctx context.Context, repo persistence.ApproverDeviceRepository
 func (s *agentAdminService) ensureCover(ctx context.Context, st *agentadmin.State) (string, error) {
 	total := st.BudgetTotal()
 	if total <= st.CeilingUSD+1e-9 {
+		// Within the limit: a cover request still pending no longer applies
+		// (design §9.2d item 6, GitHub #264).
+		s.withdrawMootCovers(ctx, st.Namespace, total, st.CeilingUSD)
 		return "", nil
 	}
 	id, err := waitingCover(ctx, s.requests, st.Namespace)
@@ -150,6 +153,50 @@ func (s *agentAdminService) fileCover(ctx context.Context, ns string, total, cei
 		return "", err
 	}
 	return requestIDOfURL(res.ApprovalURL), nil
+}
+
+// coverWithdrawnReasonOf is the reason a moot cover request is withdrawn
+// with (design §9.2d item 6): daemon figures in a fixed template.
+func coverWithdrawnReasonOf(total, ceiling float64) string {
+	return "Your assistant's projects now add up to $" + agentadmin.FormatUSD(total) + " a month, within the $" +
+		agentadmin.FormatUSD(ceiling) + " limit. Nothing needs approving."
+}
+
+// withdrawMootCovers withdraws each pending cover request of the namespace,
+// whose sum is within its ceiling. The caller holds s.mu. A failure is
+// logged and the verb proceeds: the request stays pending and harmless
+// (approving it answers "nothing changed"), and withdrawing protects no
+// budget. An approved, unapplied cover request is not pending and is left to
+// applyCover's moot branch. A withdrawn one starts no cooldown
+// (coverCoolingDown reads rejected rows only).
+func (s *agentAdminService) withdrawMootCovers(ctx context.Context, ns string, total, ceiling float64) {
+	pending, err := s.requests.ListPending(ctx, s.now().UTC())
+	if err != nil {
+		s.c.Logger.Warn().Err(err).Str("namespace", ns).Msg("agent admin: list pending requests to withdraw a moot cover request")
+		return
+	}
+	for _, r := range pending {
+		if r.Namespace != ns || !isCover(r) {
+			continue
+		}
+		if _, err := s.devices.Withdraw(ctx, r.ID, AgentCoverActor, coverWithdrawnReasonOf(total, ceiling)); err != nil {
+			s.c.Logger.Warn().Err(err).Str("request_id", r.ID).Msg("agent admin: withdraw a moot cover request")
+		}
+	}
+}
+
+// withdrawMootCoverAfter re-reads the namespace after a change applied in
+// this verb and withdraws a cover request the change made moot. The caller
+// holds s.mu.
+func (s *agentAdminService) withdrawMootCoverAfter(ctx context.Context, ns, projectID string) {
+	st, err := s.loadState(ctx, ns, projectID)
+	if err != nil {
+		s.c.Logger.Warn().Err(err).Str("namespace", ns).Msg("agent admin: reload the namespace to withdraw a moot cover request")
+		return
+	}
+	if total := st.BudgetTotal(); total <= st.CeilingUSD+1e-9 {
+		s.withdrawMootCovers(ctx, ns, total, st.CeilingUSD)
+	}
 }
 
 // requestIDOfURL is the request ID an approval link ends in.

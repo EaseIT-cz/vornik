@@ -38,8 +38,15 @@ token_case "an unset expiry variable fails" "<unset>" 1
 token_case "an empty expiry variable fails" "" 1
 token_case "an unparseable expiry fails" 2026-13-01 1
 
-command -v gh >/dev/null 2>&1 || { echo "release-audit_test: SKIPPED — no gh"; exit 0; }
-gh auth status >/dev/null 2>&1 || { echo "release-audit_test: SKIPPED — gh not authenticated"; exit 0; }
+# Under CI=true a missing gh FAILS (operator decision 2026-10-14, #334 item 6): a gate that skips
+# on a missing tool in CI reports clean about what it never examined. Outside
+# CI it stays a SKIP. An unauthenticated gh stays a SKIP everywhere: the CI step
+# that runs this suite has no token (CI pipeline design, amendment 2026-10-14).
+if ! command -v gh >/dev/null 2>&1; then
+	if [ "${CI:-}" = true ]; then echo "release-audit_test: FAIL — gh is not on PATH and CI=true; in CI a missing tool is a failure, not a skip"; exit 1; fi
+	echo "SKIP: release-audit_test: gh is not on PATH (outside CI a missing tool is a skip)"; exit 0
+fi
+gh auth status >/dev/null 2>&1 || { echo "SKIP: release-audit_test: gh is not authenticated (no token reaches this suite)"; exit 0; }
 
 # The happy path must exit 0. Guard against the exact inversion above.
 out="$("$AUDIT" 1 2>&1)"; rc=$?

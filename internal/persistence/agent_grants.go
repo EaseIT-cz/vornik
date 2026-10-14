@@ -86,6 +86,21 @@ type AgentModelDestinationApproval struct {
 	RemovedAt        *time.Time
 }
 
+// AgentConnectorInstall records that a paired device installed a connector
+// (agent-administered design §19.14.8 item 6; GitHub #314): list_my_setup
+// shows such a workflow as installed_by device. One writer (the device's
+// connector confirm), one remover (the workflow's reach delete). It grants
+// nothing: it is attribution, not an approval.
+type AgentConnectorInstall struct {
+	WorkflowID   string
+	Namespace    string
+	ProjectID    string
+	Connector    string
+	AccountLabel string
+	DeviceID     string
+	InstalledAt  time.Time
+}
+
 // AgentGrantRepository persists the approval tables.
 type AgentGrantRepository interface {
 	// UpsertIntegration grants (or re-grants, clearing removed_at).
@@ -125,4 +140,12 @@ type AgentGrantRepository interface {
 	// reports whether a live row was withdrawn (false: absent or already
 	// removed).
 	MarkModelDestinationRemoved(ctx context.Context, namespace, destination string, at time.Time) (bool, error)
+
+	// UpsertConnectorInstall records (or replaces) a device's connector
+	// install of a workflow (design §19.14.8 item 6).
+	UpsertConnectorInstall(ctx context.Context, c AgentConnectorInstall) error
+	// ListConnectorInstalls returns a namespace's rows, by workflow.
+	ListConnectorInstalls(ctx context.Context, namespace string) ([]AgentConnectorInstall, error)
+	// DeleteConnectorInstall removes a workflow's row; none is not an error.
+	DeleteConnectorInstall(ctx context.Context, workflowID string) error
 }

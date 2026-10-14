@@ -163,7 +163,7 @@ func runSubjectErase(_ *cobra.Command, args []string) error {
 	// can widen coverage, and an erasure that reports success while prose
 	// records naming the subject survive is the exact failure §5.1 warns about.
 	if ids, idErr := deps.Repo.ListIdentifiers(ctx, req.SubjectID); idErr == nil {
-		warnIfKGUnresolved(ids, req.SubjectID)
+		warnIfKGUnresolved(ids, req)
 	}
 
 	if len(plan.Actions) == 0 {
@@ -342,7 +342,9 @@ func openErasureDeps(ctx context.Context) (*erasureDeps, func(), error) {
 		return nil, nil, fmt.Errorf("open database: %w", err)
 	}
 	closeFn := func() { _ = backend.Close() }
-	db, err := requirePostgresDB(backend, "subject erase")
+	db, err := requirePostgresSubjectVerb(backend, "subject erase",
+		"Art 17 erasure (the artifact cascade, chunk redaction with re-embed, the derived-graph "+
+			"repositories and the schema's ON DELETE cascades)")
 	if err != nil {
 		closeFn()
 		return nil, nil, err

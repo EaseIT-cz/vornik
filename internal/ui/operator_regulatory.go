@@ -32,8 +32,8 @@ import (
 )
 
 // RegulatoryRequests is the slice of the data-subject ledger the page reads.
-// Implemented by *postgres.DataSubjectRepository; nil on SQLite, which has no
-// ledger.
+// Implemented by subjectstore.Repository on both drivers (GitHub #355; until
+// 2026-10-13 it was Postgres-only and nil on SQLite).
 type RegulatoryRequests interface {
 	ListRequests(ctx context.Context, limit, offset int) ([]datasubject.Request, error)
 	ListLiveRequests(ctx context.Context) ([]datasubject.Request, error)
@@ -63,6 +63,14 @@ func WithRegulatoryLedgers(requests RegulatoryRequests, incidents RegulatoryInci
 	}
 }
 
+// WithProfileAuditRecorded says the operator profile-use audit is recorded on
+// this deployment (Postgres; its SQLite repository is a stub). It used to be
+// inferred from the request ledger being wired, which stopped being a proxy for
+// the driver when the ledger reached SQLite (GitHub #355).
+func WithProfileAuditRecorded() ServerOption {
+	return func(s *Server) { s.regProfileAuditRecorded = true }
+}
+
 const (
 	regulatoryPageSize       = 50
 	regulatoryDefaultDays    = 30
@@ -85,6 +93,9 @@ type regRequestRow struct {
 	Extended, Refused, ErasureGround, HashShort, HashFull   string
 	NotRetained                                             string
 	Overdue, Attention, HasReport                           bool
+	// Resolvable: the request is verified, so the resolution page
+	// (GDPR design §4.17) may search for its subject.
+	Resolvable bool
 }
 
 type regIncidentRow struct {
@@ -104,6 +115,7 @@ type regDisclosureRow struct {
 type OperatorRegulatoryData struct {
 	adminCommonData
 	RequestsRecorded, IncidentsRecorded bool
+	ProfileAuditRecorded                bool
 	AttentionRequests                   []regRequestRow
 	AttentionIncidents                  []regIncidentRow
 	Requests                            []regRequestRow
@@ -113,6 +125,7 @@ type OperatorRegulatoryData struct {
 	DisclosureDays                      int
 	RangeError                          string
 	DownloadsEnabled                    bool
+	ResolveEnabled                      bool
 	FirewallAvailable, EnterpriseAdmin  bool
 	Errors                              []string
 }
@@ -122,11 +135,19 @@ func (s *Server) operatorRegulatoryRouter(w http.ResponseWriter, r *http.Request
 		http.Error(w, "operator capability required", http.StatusForbidden)
 		return
 	}
+	rest := strings.Trim(strings.TrimPrefix(r.URL.Path, "/operator/regulatory"), "/")
+	// The resolution page (GDPR design §4.17) takes POST; everything else on
+	// the record is read-only.
+	if id, ok := strings.CutPrefix(rest, "requests/"); ok {
+		if id, isResolve := strings.CutSuffix(id, "/resolve"); isResolve && id != "" && !strings.Contains(id, "/") {
+			s.operatorSubjectResolve(w, r, id)
+			return
+		}
+	}
 	if r.Method != http.MethodGet {
 		http.Error(w, "GET required", http.StatusMethodNotAllowed)
 		return
 	}
-	rest := strings.Trim(strings.TrimPrefix(r.URL.Path, "/operator/regulatory"), "/")
 	if rest == "" {
 		s.OperatorRegulatory(w, r)
 		return
@@ -148,9 +169,13 @@ func (s *Server) OperatorRegulatory(w http.ResponseWriter, r *http.Request) {
 		adminCommonData:   adminCommonData{Title: "Regulatory record", CurrentPage: "regulatory", IsAdmin: true},
 		RequestsRecorded:  s.regRequests != nil,
 		IncidentsRecorded: s.regIncidents != nil,
-		DownloadsEnabled:  s.regRequests != nil && s.regAudit != nil,
-		FirewallAvailable: s.memoryPolicyEvaluations != nil,
-		EnterpriseAdmin:   s.enterpriseAdmin,
+		// Not inferred from the request ledger: that is wired on SQLite too
+		// since GitHub #355, and the profile-use audit is not.
+		ProfileAuditRecorded: s.regProfileAuditRecorded,
+		DownloadsEnabled:     s.regRequests != nil && s.regAudit != nil,
+		ResolveEnabled:       s.resolveWired() && s.regAudit != nil,
+		FirewallAvailable:    s.memoryPolicyEvaluations != nil,
+		EnterpriseAdmin:      s.enterpriseAdmin,
 	}
 	s.regulatoryRequests(ctx, r, now, &data)
 	s.regulatoryIncidents(ctx, r, now, &data)
@@ -265,7 +290,7 @@ func (s *Server) regulatoryDisclosures(ctx context.Context, r *http.Request, now
 // no attachment headers and no body.
 func (s *Server) operatorRegulatoryReport(w http.ResponseWriter, r *http.Request, id string) {
 	if s.regRequests == nil {
-		http.Error(w, "not recorded on this deployment: the SQLite backend has no subject-request ledger", http.StatusNotFound)
+		http.Error(w, "not recorded on this deployment: no subject-request ledger is wired", http.StatusNotFound)
 		return
 	}
 	if s.regAudit == nil {
@@ -343,7 +368,7 @@ func requestRow(req datasubject.Request, now time.Time) regRequestRow {
 		Refused: req.RefusedReason, ErasureGround: string(req.ErasureGround),
 		HashFull: req.ReportHash, HashShort: shortHashText(req.ReportHash),
 		Overdue: req.Overdue(now), Attention: req.NeedsAttention(now),
-		HasReport: req.ReportRetained,
+		HasReport: req.ReportRetained, Resolvable: req.MayProduceData(),
 	}
 	// Exports are not retained (operator decision 2026-09-25, design §4.1): a
 	// hash with no report is said out loud, never left as a blank cell.

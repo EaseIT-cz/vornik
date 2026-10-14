@@ -21,7 +21,7 @@ capabilities:
   - name: list-artifacts
     tools: [list_artifacts]
     bundles:
-      claude-code: {file: contrib/claude-code-companion/skills/delegate/SKILL.md, says: "mcp__vornik__list_artifacts"}
+      claude-code: {file: contrib/claude-code-companion/skills/delegate/SKILL.md, says: "mcp__plugin_vornik-companion_vornik__list_artifacts"}
       codex:       {file: contrib/codex-companion/skills/delegate/SKILL.md, says: "mcp__vornik__list_artifacts"}
       hermes:      {file: contrib/hermes-companion/skills/vornik-broker/SKILL.md, says: "vornik_list_artifacts"}
 
@@ -29,14 +29,14 @@ capabilities:
   - name: read-artifact
     tools: [read_artifact]
     bundles:
-      claude-code: {file: contrib/claude-code-companion/skills/delegate/SKILL.md, says: "mcp__vornik__read_artifact"}
+      claude-code: {file: contrib/claude-code-companion/skills/delegate/SKILL.md, says: "mcp__plugin_vornik-companion_vornik__read_artifact"}
       codex:       {file: contrib/codex-companion/skills/delegate/SKILL.md, says: "mcp__vornik__read_artifact"}
       hermes:      {file: contrib/hermes-companion/skills/vornik-broker/SKILL.md, says: "vornik_read_artifact"}
 
   - name: project-memory
     tools: [recall, remember, recent_memory, memory_correct, list_scopes]
     bundles:
-      claude-code: {file: contrib/claude-code-companion/commands/recall.md, says: "mcp__vornik__recall"}
+      claude-code: {file: contrib/claude-code-companion/commands/recall.md, says: "mcp__plugin_vornik-companion_vornik__recall"}
       codex:       {file: contrib/codex-companion/skills/delegate/SKILL.md, says: "recall"}
       hermes:      {file: contrib/hermes-companion/memory_provider.py, says: "\"recall\""}
 
@@ -48,7 +48,7 @@ capabilities:
   - name: memory-visible
     tools: [memory_list]
     bundles:
-      claude-code: {file: contrib/claude-code-companion/commands/memory.md, says: "mcp__vornik__memory_list"}
+      claude-code: {file: contrib/claude-code-companion/commands/memory.md, says: "mcp__plugin_vornik-companion_vornik__memory_list"}
       codex:       {file: contrib/codex-companion/skills/knowledge/SKILL.md, says: "mcp__vornik__memory_list"}
       hermes:      {file: contrib/hermes-companion/memory_provider.py, says: "\"memory_list\""}
 
@@ -75,7 +75,7 @@ capabilities:
   - name: knowledge-skills
     tools: [skill_propose, skill_search, skill_get, skill_list, skill_approve, skill_reject, skill_set_global]
     bundles:
-      claude-code: {file: contrib/claude-code-companion/commands/skill-propose.md, says: "mcp__vornik__skill_propose"}
+      claude-code: {file: contrib/claude-code-companion/commands/skill-propose.md, says: "mcp__plugin_vornik-companion_vornik__skill_propose"}
       codex:       {file: contrib/codex-companion/skills/knowledge/SKILL.md, says: "mcp__vornik__skill_propose"}
     exempt_bundles:
       hermes: "deliberate: Hermes holds a broker-project key, whose tool allowlist (broker design §5.6, brokerProjectTools) refuses every skill tool, and a memory-only key; knowledge skills are for coding companions"
@@ -83,7 +83,7 @@ capabilities:
   - name: identity
     tools: [whoami]
     bundles:
-      claude-code: {file: contrib/claude-code-companion/commands/whoami.md, says: "mcp__vornik__whoami"}
+      claude-code: {file: contrib/claude-code-companion/commands/whoami.md, says: "mcp__plugin_vornik-companion_vornik__whoami"}
       codex:       {file: contrib/codex-companion/README.md, says: "whoami"}
     exempt_bundles:
       hermes: "deliberate: whoami reports the key's repo_scope and database for a coding companion's RAG scope; Hermes's keys carry no repo scope, and its connect command records the namespace and project it set up"

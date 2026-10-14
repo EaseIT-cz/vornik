@@ -320,6 +320,10 @@ var controlVerbs = map[string]controlVerb{
 	"logs": {flags: map[string]agentFlag{"--tail": {value: true}}, target: true},
 }
 
+// pullFlags is `pull`'s whole grammar: quiet output only. No --authfile,
+// --creds, --tls-verify or registry override (spawn-law Correction 2026-10-12).
+var pullFlags = map[string]agentFlag{"--quiet": {}, "-q": {}}
+
 // PodmanControl accepts the daemon's podman verbs on its own containers and
 // the pinned image. The target's provenance is not checked here: container ids
 // come from the daemon's own podman output and labels (design, "not covered").
@@ -348,6 +352,19 @@ func PodmanControl(ctx context.Context, podmanPath string, argv []string) (*Cmd,
 		rest := argv[2+at:]
 		if len(rest) != 1 || !IsPinnedAgentImage(rest[0]) {
 			return nil, refuse(KindPodmanControl, "image inspect only of the pinned agent image")
+		}
+		return newCmd(ctx, KindPodmanControl, prog, argv), nil
+	case "pull":
+		// Correction 2026-10-12 (GitHub #161): a pull of the pinned agent
+		// image only, which `podman run` already pulls implicitly; the
+		// runtime pulls it first to read its uid-agnostic label (D5).
+		at, err := parseFlags(KindPodmanControl, argv[1:], pullFlags)
+		if err != nil {
+			return nil, err
+		}
+		rest := argv[1+at:]
+		if len(rest) != 1 || !IsPinnedAgentImage(rest[0]) {
+			return nil, refuse(KindPodmanControl, "pull only of the pinned agent image")
 		}
 		return newCmd(ctx, KindPodmanControl, prog, argv), nil
 	}

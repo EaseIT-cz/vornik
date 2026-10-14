@@ -11,6 +11,7 @@ import (
 
 	"github.com/rs/zerolog"
 	"vornik.io/vornik/internal/chat"
+	"vornik.io/vornik/internal/ctxerr"
 )
 
 // Manager owns MCP server connections scoped per project. Every project
@@ -213,13 +214,16 @@ func (m *Manager) SyncProjects(ctx context.Context, desired map[string][]ServerC
 	for projectID, byServer := range displaced {
 		for name, client := range byServer {
 			go func(projectID, name string, client *Client) {
-				if err := closer(client); err != nil {
-					m.logger.Warn().
-						Err(err).
-						Str("project", projectID).
-						Str("server", name).
-						Msg("mcp: close displaced client")
-				}
+				drainThenClose(client, drainBound(client), func(c *Client) error {
+					if err := closer(c); err != nil {
+						m.logger.Warn().
+							Err(err).
+							Str("project", projectID).
+							Str("server", name).
+							Msg("mcp: close displaced client")
+					}
+					return nil
+				})
 			}(projectID, name, client)
 		}
 	}
@@ -305,8 +309,11 @@ func (m *Manager) StartForProject(ctx context.Context, projectID string, servers
 		// If a client with this server name already exists, close it first.
 		// Otherwise the old process would leak while the new one replaces
 		// its entry in the map.
+		// Out of the lock and after its in-flight calls drain (GitHub #142):
+		// a stdio Close is I/O (kill + wait) and must not run under m.mu.
 		if old, exists := m.clients[projectID][cfg.Name]; exists {
-			_ = old.Close()
+			closer := closeFn
+			go drainThenClose(old, drainBound(old), closer)
 		}
 		m.clients[projectID][cfg.Name] = client
 		recovered := m.pending[projectID][cfg.Name]
@@ -427,36 +434,19 @@ func (m *Manager) Execute(ctx context.Context, projectID, qualifiedName, argsJSO
 	// and re-dialling would kill a working server, so the sentinel check has to
 	// stay narrow.
 	if errors.Is(err, ErrClientNotReading) {
-		m.logger.Warn().
-			Err(err).
-			Str("project", projectID).
-			Str("server", serverName).
-			Msg("mcp: connection is dead — re-dialling before failing the call")
-		if redialErr := m.redial(projectID, serverName); redialErr != nil {
-			m.logger.Error().
-				Err(redialErr).
-				Str("project", projectID).
-				Str("server", serverName).
-				Msg("mcp: re-dial failed; the server is down")
-			// Say this in terms the MODEL can act on. The raw wording ("no
-			// longer reading responses", "closed stdout before responding")
-			// reads like a malformed call, and on 2026-08-05 the assistant
-			// duly blamed its own arguments for an MCP subprocess that had
-			// exited.
-			return "", fmt.Errorf("MCP server %q is not running and could not be restarted (%v) — "+
-				"this is a server fault, not a problem with the arguments, so retrying "+
-				"this call or varying its arguments will not help", serverName, redialErr)
+		var fatal error
+		result, err, fatal = m.healAndMaybeReplay(ctx, err, projectID, serverName, toolName, qualifiedName, argsJSON)
+		if fatal != nil {
+			return "", fatal
 		}
-		m.logger.Info().
-			Str("project", projectID).
-			Str("server", serverName).
-			Msg("mcp: re-dial succeeded — retrying the tool call")
-		result, err = m.callOnce(ctx, projectID, serverName, toolName, argsJSON)
 	}
 	// A server whose dial failed gets one dial on use, off every lock:
 	// callOnce has returned and released its read lock (D3, F1).
 	if errors.Is(err, errServerPending) {
-		if dialErr := m.dialPending(projectID, serverName, true); dialErr == nil {
+		dialErr := m.awaitDial(ctx, func() error { return m.dialPending(projectID, serverName, true) })
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			err = fmt.Errorf("the call ended (%w) while MCP server %q was being dialled", ctxErr, serverName)
+		} else if dialErr == nil {
 			result, err = m.callOnce(ctx, projectID, serverName, toolName, argsJSON)
 		}
 		if errors.Is(err, errServerPending) {
@@ -472,6 +462,7 @@ func (m *Manager) Execute(ctx context.Context, projectID, qualifiedName, argsJSO
 			Str("server", serverName).
 			Str("tool", toolName).
 			Dur("duration", duration).
+			Str("cause", string(ctxerr.Classify(ctx, err))).
 			Msg("mcp: tool call failed")
 		return "", fmt.Errorf("MCP tool %s failed: %w", qualifiedName, err)
 	}
@@ -495,28 +486,125 @@ func (m *Manager) Execute(ctx context.Context, projectID, qualifiedName, argsJSO
 	return text, nil
 }
 
+// healAndMaybeReplay handles a call that failed on a dead stdio connection:
+// it re-dials and, when that is safe, replays the call once. A non-nil third
+// return ends Execute with that error (the caller left, the call may already
+// have run, or the server cannot be restarted).
+func (m *Manager) healAndMaybeReplay(ctx context.Context, err error, projectID, serverName, toolName, qualifiedName, argsJSON string) (*ToolResult, error, error) {
+	m.logger.Warn().
+		Err(err).
+		Str("project", projectID).
+		Str("server", serverName).
+		Msg("mcp: connection is dead — re-dialling before failing the call")
+	// Decided BEFORE the redial, on the client that held the call: a
+	// call the server may already have acted on is replayed only when
+	// the tool cannot change state (GitHub #142 #6).
+	mayHaveRun := errors.Is(err, ErrResponseLost) && m.toolMayMutate(projectID, serverName, toolName)
+	redialErr := m.awaitDial(ctx, func() error { return m.redial(projectID, serverName) })
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		// The caller left while the server was being restarted. The dial
+		// carries on in the background and heals the connection for the
+		// next caller; this call is not replayed.
+		return nil, nil, fmt.Errorf("MCP tool %s: the call ended (%w) while MCP server %q was being restarted; it was not repeated",
+			qualifiedName, ctxErr, serverName)
+	}
+	if redialErr == nil && mayHaveRun {
+		m.logger.Warn().
+			Str("project", projectID).
+			Str("server", serverName).
+			Str("tool", toolName).
+			Msg("mcp: re-dial succeeded, but the lost call can change state — not replaying it")
+		return nil, nil, fmt.Errorf("MCP tool %s: server %q stopped after it received this call and before it answered, "+
+			"so the call may have run. It was not repeated because %s can change state: check whether it took "+
+			"effect before calling it again (the server has been restarted)", qualifiedName, serverName, toolName)
+	}
+	if redialErr != nil {
+		m.logger.Error().
+			Err(redialErr).
+			Str("project", projectID).
+			Str("server", serverName).
+			Msg("mcp: re-dial failed; the server is down")
+		// Say this in terms the MODEL can act on. The raw wording ("no
+		// longer reading responses", "closed stdout before responding")
+		// reads like a malformed call, and on 2026-08-05 the assistant
+		// duly blamed its own arguments for an MCP subprocess that had
+		// exited.
+		return nil, nil, fmt.Errorf("MCP server %q is not running and could not be restarted (%v) — "+
+			"this is a server fault, not a problem with the arguments, so retrying "+
+			"this call or varying its arguments will not help", serverName, redialErr)
+	}
+	m.logger.Info().
+		Str("project", projectID).
+		Str("server", serverName).
+		Msg("mcp: re-dial succeeded — retrying the tool call")
+	result, err := m.callOnce(ctx, projectID, serverName, toolName, argsJSON)
+	return result, err, nil
+}
+
+// awaitDial runs a dial (redial or dial-on-use) and waits for it, or for the
+// caller's context, whichever ends first (GitHub #142 #6, outcome-quality
+// LLD §S6). The dial itself deliberately ignores the caller's context (see
+// redial): it heals the connection for whoever comes next and has its own
+// 30s bound, so the goroutine it runs on is bounded too. What the caller's
+// context now controls is only how long THIS caller waits for it.
+func (m *Manager) awaitDial(ctx context.Context, dial func() error) error {
+	done := make(chan error, 1)
+	go func() { done <- dial() }()
+	select {
+	case err := <-done:
+		return err
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+// toolMayMutate reports whether a tool on this server can change state, from
+// the server's advertised descriptor (annotations, then the name heuristic;
+// Tool.IsMutating). A tool the catalog does not list is judged by its name
+// alone, which treats anything not recognisably a read as mutating.
+func (m *Manager) toolMayMutate(projectID, serverName, toolName string) bool {
+	m.mu.RLock()
+	client := m.clients[projectID][serverName]
+	m.mu.RUnlock()
+	if client != nil {
+		for _, t := range client.Tools() {
+			if t.Name == toolName {
+				return t.IsMutating()
+			}
+		}
+	}
+	return Tool{Name: toolName}.IsMutating()
+}
+
 // callOnce resolves the client and makes exactly one tool call.
 //
-// The read lock is held across the whole CallTool so Close()/StartForProject
-// cannot free the client mid-call. Multiple callers still run concurrently
-// (RLock is shared); only shutdown and re-dial wait for in-flight calls to
-// drain — which is precisely why the re-dial happens BETWEEN two calls to this
-// helper rather than inside it. Taking the write lock while holding the read
-// lock would deadlock.
+// The read lock covers the map lookup only, NOT the call (GitHub #142,
+// mcp-transport-design "A stdio tool call is bounded, and the manager lock is
+// not held across it"). It used to be held across CallTool so a displaced
+// client could not be closed mid-call; but a waiting writer blocks every new
+// RLock, so one call that never returned plus one reload wedged every
+// project's MCP calls and the reload itself. The call is now marked in flight
+// on its client UNDER the read lock — so the mark happens before any writer's
+// swap — and the writers that displace a client close it through
+// drainThenClose, which waits for those marks. Re-dial still happens BETWEEN
+// two calls to this helper.
 func (m *Manager) callOnce(ctx context.Context, projectID, serverName, toolName, argsJSON string) (*ToolResult, error) {
 	m.mu.RLock()
-	defer m.mu.RUnlock()
 	byServer := m.clients[projectID]
 	var client *Client
 	if byServer != nil {
 		client = byServer[serverName]
 	}
 	if client == nil {
+		defer m.mu.RUnlock()
 		if m.pending[projectID][serverName] != nil {
 			return nil, fmt.Errorf("%w: %s for project %s", errServerPending, serverName, projectID)
 		}
 		return nil, errors.New(m.notConnectedLocked(projectID, serverName))
 	}
+	client.inflight.Add(1)
+	m.mu.RUnlock()
+	defer client.inflight.Done()
 	return client.CallTool(ctx, toolName, json.RawMessage(argsJSON))
 }
 
@@ -605,7 +693,7 @@ func (m *Manager) redial(projectID, serverName string) error {
 	// Out of band: stdio Close does Kill + Wait and can block on a subprocess
 	// that will not reap, and this runs on a live tool-call path.
 	if displaced != nil {
-		go func() { _ = closer(displaced) }()
+		go drainThenClose(displaced, drainBound(displaced), closer)
 	}
 	return nil
 }
@@ -739,4 +827,40 @@ func connectFailureStatus(err error) int {
 		return ce.Status
 	}
 	return 0
+}
+
+// drainThenClose closes a client the manager no longer routes to, once the
+// calls already routed to it have returned, or after bound, whichever comes
+// first. callOnce no longer holds the manager lock across a call (GitHub
+// #142), so a writer that displaces a client no longer waits for its in-flight
+// calls; this keeps the rule that a displaced call is not killed under it. The
+// calls are themselves bounded (the stdio bound, the HTTP timeout), so a call
+// still running at bound has already failed on its own timeout.
+//
+// Every in-flight mark was made under the manager's read lock, before the
+// writer's swap removed the client, so none can arrive after the wait starts.
+// Idempotent: a client displaced twice is waited on twice, and Close is
+// idempotent. Runs out of band (go drainThenClose(...)).
+func drainThenClose(c *Client, bound time.Duration, closer func(*Client) error) {
+	drained := make(chan struct{})
+	go func() {
+		c.inflight.Wait()
+		close(drained)
+	}()
+	timer := time.NewTimer(bound)
+	defer timer.Stop()
+	select {
+	case <-drained:
+	case <-timer.C:
+	}
+	_ = closer(c)
+}
+
+// drainBound is how long a displaced client may keep serving its in-flight
+// calls before it is closed: its own request bound.
+func drainBound(c *Client) time.Duration {
+	if c != nil && c.stdioTimeout > 0 {
+		return c.stdioTimeout
+	}
+	return defaultStdioTimeout
 }

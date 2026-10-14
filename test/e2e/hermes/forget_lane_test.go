@@ -15,6 +15,7 @@ package hermes
 
 import (
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/hex"
 	"fmt"
 	"os"
@@ -27,8 +28,6 @@ import (
 )
 
 const (
-	h3fFact      = "Svoboda"
-	promptH3fAdd = "Use your own memory tool, not Vornik, to save this to the user profile: my physiotherapist is Dr Svoboda at the Karlin rehabilitation clinic."
 	promptH3fDel = "Forget my physiotherapist: remove that entry from your memory with your memory tool."
 	promptH3fAsk = "Who is my physiotherapist? Check your Vornik long-term memory."
 )
@@ -47,10 +46,9 @@ func h3fScripts() []Script {
 	}
 }
 
-type memChunk struct{ id, status, content string }
-
-// memoryChunks reads the memory project's chunks mentioning text, straight
-// from the lane's Postgres (refuted rows included: recall hides them).
+// memoryChunks reads the memory project's chunks mentioning text ("" for
+// all), straight from the lane's Postgres (refuted rows included: recall
+// hides them).
 func memoryChunks(t *testing.T, text string) []memChunk {
 	t.Helper()
 	q := fmt.Sprintf(`SELECT id || chr(31) || coalesce(validation_status,'') || chr(31) || replace(content, chr(10), ' ')
@@ -66,6 +64,78 @@ FROM project_memory_chunks WHERE project_id = 'assistant-memory' AND content LIK
 		}
 	}
 	return rows
+}
+
+// memoryChunkRaw reads one chunk's content byte for byte (base64 through
+// psql), for the identical re-add that reinstates it.
+func memoryChunkRaw(t *testing.T, id string) string {
+	t.Helper()
+	q := fmt.Sprintf(`SELECT encode(convert_to(content, 'UTF8'), 'base64') FROM project_memory_chunks
+WHERE project_id = 'assistant-memory' AND id = '%s'`, id)
+	out, err := exec.Command("podman", "exec", pgContainerName(), "psql", "-U", "vornik", "-d", "vornik", "-tAc", q).Output()
+	if err != nil {
+		t.Fatalf("read chunk %s: %v", id, err)
+	}
+	raw, err := base64.StdEncoding.DecodeString(strings.Join(strings.Fields(string(out)), ""))
+	if err != nil || len(raw) == 0 {
+		t.Fatalf("read chunk %s: %v (%q)", id, err, tail(string(out), 200))
+	}
+	return string(raw)
+}
+
+// hermesMemoryFiles reads Hermes's two memory files; one that does not
+// exist is absent from the map.
+func hermesMemoryFiles(s *stack) map[string][]byte {
+	files := map[string][]byte{}
+	for _, name := range []string{"USER.md", "MEMORY.md"} {
+		if raw, err := os.ReadFile(filepath.Join(s.hermesHome, "memories", name)); err == nil {
+			files[name] = raw
+		}
+	}
+	return files
+}
+
+// h3fLaneOps are h3fResetAttempt's effects on the lane: the daemon's own
+// tools through the Hermes memory key (memory_correct to remove, an
+// identical remember to reinstate), and Hermes's files on the host (the
+// container has exited and the home is chowned back by runHermes).
+func h3fLaneOps(t *testing.T, s *stack) h3fResetOps {
+	return h3fResetOps{
+		chunks: func() []memChunk { return memoryChunks(t, "") },
+		refute: func(id string) error {
+			if text, isErr := mcpCall(t, s.apiURL, s.memoryKey, "memory_correct",
+				map[string]any{"chunk_ids": []string{id}, "reason": "forget_command"}); isErr {
+				return fmt.Errorf("memory_correct: %s", text)
+			}
+			return nil
+		},
+		files: func() map[string][]byte { return hermesMemoryFiles(s) },
+		restoreFiles: func(files map[string][]byte) error {
+			for _, name := range []string{"USER.md", "MEMORY.md"} {
+				path := filepath.Join(s.hermesHome, "memories", name)
+				raw, ok := files[name]
+				if !ok {
+					if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+						return err
+					}
+					continue
+				}
+				if err := os.WriteFile(path, raw, 0o644); err != nil {
+					return err
+				}
+			}
+			return nil
+		},
+		reinstate: func(content string) error {
+			text, isErr := mcpCall(t, s.apiURL, s.memoryKey, "remember", map[string]any{"content": content})
+			if isErr {
+				return fmt.Errorf("remember: %s", text)
+			}
+			t.Logf("H3f-forget: identical re-add answered %s", tail(text, 300))
+			return nil
+		},
+		logf: t.Logf,
+	}
 }
 
 // hermesEntry returns Hermes's own stored entry mentioning text, and its
@@ -141,7 +211,38 @@ func laneH3f(t *testing.T, l *laneRun) {
 	})
 	t.Logf("H3f: captured chunk %s carrying %s", mirrored.id, token)
 
+	// Every attempt starts from the state the step began with (lane design,
+	// "Amendment 2026-10-14 — H3f-forget retries start from the step's
+	// state", GitHub #380): before attempt 1 the state is recorded; before
+	// a retry, the notes naming the fact that the failed attempt left are
+	// removed (and logged), and Hermes's files and the mirrored chunk are
+	// put back. No reset follows the last attempt, so a re-store there
+	// still fails the step.
+	var start h3fStart
+	resetH3f := func() {
+		attempt := l.attempts["H3f-forget"]
+		if attempt == 1 {
+			start = h3fStart{ids: map[string]bool{}, files: hermesMemoryFiles(s), mirrored: mirrored}
+			for _, r := range memoryChunks(t, "") {
+				start.ids[r.id] = true
+			}
+			start.mirrored.content = memoryChunkRaw(t, mirrored.id)
+			return
+		}
+		if err := h3fResetAttempt(start, attempt-1, h3fLaneOps(t, s)); err != nil {
+			t.Fatalf("H3f-forget: %v", err)
+		}
+	}
 	l.step("H3f-forget", promptH3fDel, false, func(hermesRun) error {
+		// First, and on every attempt: a note naming the fact stored again
+		// (GitHub #380: the model called vornik_remember for the forget and a
+		// padded copy was admitted). It is the worst outcome, so it is named
+		// even when Hermes's own memory also still holds the entry, and a
+		// note re-stored by an earlier attempt fails every later one.
+		if restored := h3fRestored(memoryChunks(t, ""), mirrored.id); len(restored) > 0 {
+			return fmt.Errorf("the fact was stored in Vornik again after the forget (%d recallable note(s) name it besides the mirrored chunk %s): first %s (%q) %q",
+				len(restored), mirrored.id, restored[0].id, restored[0].status, tail(restored[0].content, 300))
+		}
 		if entry, _ := hermesEntry(t, s, h3fFact); entry != "" {
 			return fmt.Errorf("Hermes's own memory still holds %q", entry)
 		}
@@ -154,13 +255,12 @@ func laneH3f(t *testing.T, l *laneRun) {
 			}
 			return ok
 		})
-		for _, r := range memoryChunks(t, h3fFact) {
-			if r.id != mirrored.id && r.status != "refuted" {
-				return fmt.Errorf("another %s chunk is still recallable: %s (%s)", h3fFact, r.id, r.status)
-			}
+		if restored := h3fRestored(memoryChunks(t, ""), mirrored.id); len(restored) > 0 {
+			return fmt.Errorf("another note naming the fact is still recallable after the forget: %s (%q) %q",
+				restored[0].id, restored[0].status, tail(restored[0].content, 300))
 		}
 		return nil
-	})
+	}, resetH3f)
 	if hits := recallHits(t, s, "physiotherapist "+h3fFact); strings.Contains(hits, h3fFact) {
 		t.Fatalf("H3f: the forgotten note is still recalled: %s", tail(hits, 600))
 	}

@@ -1,9 +1,9 @@
 package persistence
 
 // MemoryPolicyEvaluationRepository persists per-retrieval
-// firewall audit rows (migration 80). Implemented by the
-// postgres backend; SQLite leaves it nil (the firewall is
-// postgres-only in v1).
+// firewall audit rows (migration 80). Implemented by both
+// backends with one contract (repotest.RunMemoryPolicyEvaluationSuite);
+// the SQLite one was a discarding stub until 2026-10-13 (GitHub #355).
 //
 // The internal/memoryfirewall.AuditWriter takes the
 // BatchInsert method (via the AuditSink interface there);

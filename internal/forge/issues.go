@@ -7,6 +7,8 @@ import (
 	"strings"
 	"time"
 	"unicode/utf8"
+
+	"vornik.io/vornik/internal/aidisclosure"
 )
 
 // Hard caps bound every issue API read.
@@ -96,6 +98,11 @@ type LabelList struct {
 type CloseIssueSpec struct {
 	DuplicateOf int    `json:"duplicate_of"`
 	Explanation string `json:"explanation"`
+	// Notice is the Art 50 publication notice the posted comment carries,
+	// filled by the daemon from its disclosure service — never from agent
+	// input, hence not JSON-bound. Empty means the compiled default (Art 50
+	// design 2026-07-28 §11.4, GitHub #342).
+	Notice aidisclosure.Notice `json:"-"`
 }
 
 var repoSegment = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.-]*$`)

@@ -185,7 +185,7 @@ func TestDeleteProjectData_MetricsWrappedDB_IsTransactional(t *testing.T) {
 	repo := NewProjectDataCleanupRepositoryWithoutCacheEviction(db)
 
 	mock.ExpectBegin()
-	for range persistence.ProjectDataTables {
+	for range persistence.ProjectDataTablesFor(true) {
 		mock.ExpectExec(regexp.QuoteMeta("DELETE FROM ")).
 			WithArgs("p1").
 			WillReturnResult(sqlmock.NewResult(0, 1))
@@ -196,8 +196,8 @@ func TestDeleteProjectData_MetricsWrappedDB_IsTransactional(t *testing.T) {
 	if err != nil {
 		t.Fatalf("DeleteProjectData under metrics wrapper: %v", err)
 	}
-	if stats.TablesCleared != len(persistence.ProjectDataTables) {
-		t.Errorf("TablesCleared = %d, want %d", stats.TablesCleared, len(persistence.ProjectDataTables))
+	if stats.TablesCleared != len(persistence.ProjectDataTablesFor(true)) {
+		t.Errorf("TablesCleared = %d, want %d", stats.TablesCleared, len(persistence.ProjectDataTablesFor(true)))
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatalf("DeleteProjectData was not transactional under metrics wrapper: %v", err)
@@ -229,7 +229,7 @@ func TestDeleteProjectData_AlreadyInTx_RunsDirect(t *testing.T) {
 	}
 	repo := NewProjectDataCleanupRepositoryWithoutCacheEviction(outerTx) // *sql.Tx -> BeginTx ok=false
 
-	for range persistence.ProjectDataTables {
+	for range persistence.ProjectDataTablesFor(true) {
 		mock.ExpectExec(regexp.QuoteMeta("DELETE FROM ")).
 			WithArgs("p1").
 			WillReturnResult(sqlmock.NewResult(0, 1))
@@ -240,8 +240,8 @@ func TestDeleteProjectData_AlreadyInTx_RunsDirect(t *testing.T) {
 	if err != nil {
 		t.Fatalf("DeleteProjectData in outer tx: %v", err)
 	}
-	if stats.TablesCleared != len(persistence.ProjectDataTables) {
-		t.Errorf("TablesCleared = %d, want %d", stats.TablesCleared, len(persistence.ProjectDataTables))
+	if stats.TablesCleared != len(persistence.ProjectDataTablesFor(true)) {
+		t.Errorf("TablesCleared = %d, want %d", stats.TablesCleared, len(persistence.ProjectDataTablesFor(true)))
 	}
 	if err := outerTx.Commit(); err != nil {
 		t.Fatalf("commit outer tx: %v", err)

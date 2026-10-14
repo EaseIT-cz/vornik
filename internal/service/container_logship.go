@@ -11,7 +11,6 @@ package service
 
 import (
 	"context"
-	"io"
 	"os"
 
 	"github.com/prometheus/client_golang/prometheus"
@@ -63,12 +62,15 @@ func (c *Container) initLogship() error {
 	fwd.Start()
 	c.logshipForwarder = fwd
 
-	// App-log tap: re-point the root logger at MultiWriter(stdout, tap) so
-	// every component's JSON line is also offered to the forwarder. Done here
-	// rather than in initLogger so the disabled path stays a plain
-	// zerolog.New(os.Stdout) with no wrapper.
+	// App-log tap: re-point the root logger at the forwarder's app writer
+	// wrapped around stdout, so every component's JSON line is also offered
+	// to the forwarder. Done here rather than in initLogger so the disabled
+	// path stays a plain zerolog.New(os.Stdout) with no wrapper.
 	// The daemon-log ring's tap (rootLogWriter) is kept beside stdout.
-	c.Logger = c.Logger.Output(io.MultiWriter(c.rootLogWriter(os.Stdout), fwd.AppWriter(os.Stdout)))
+	// The app writer IS the tee: it writes each line through to the writer it
+	// wraps, then offers it. Wrapping it in a MultiWriter with stdout as well
+	// wrote every line to stdout twice (GitHub #295).
+	c.Logger = c.Logger.Output(fwd.AppWriter(c.rootLogWriter(os.Stdout)))
 
 	// Audit taps: decorate the admin + tool audit repos so a successful write
 	// also ships an audit Event.

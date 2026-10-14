@@ -325,6 +325,159 @@ class ReviewRound2Test(unittest.TestCase):
         self.assertIn("error", out)
         self.assertIn("review", out["error"])
 
+    # GitHub #380, Hermes release lane H3f-forget (run 4400844a, 2026-10-14):
+    # asked to forget a fact, gpt-oss-20b called vornik_remember with it; the
+    # dedup_hash refusal said "Restate it ... and try again", the model padded
+    # the fact, Vornik admitted it, and the user was told "removed".
+    def _remember(self, result, content="The user's physiotherapist is Dr Svoboda."):
+        p = VornikMemoryProvider(client(FakeOpener(features=NEW_DAEMON, tools={"remember": (result, False)}), token="m"))
+        return json.loads(p.handle_tool_call("vornik_remember", {"content": content}))
+
+    def assertNoRetryCoaching(self, text):
+        low = text.lower()
+        for coaching in ("restate", "try again", "full sentence", "with its context"):
+            self.assertNotIn(coaching, low, text)
+
+    def test_duplicate_is_already_on_record_and_not_to_be_restated(self):
+        out = self._remember({"decision": "REJECTED", "rejected": 1, "gates_failed": ["dedup_hash"]})
+        self.assertIn("error", out)
+        self.assertIn("already", out["error"])
+        self.assertIn("not store it again", out["error"])
+        self.assertIn("never forgets", out["error"])
+        self.assertNoRetryCoaching(out["error"])
+
+    def test_duplicate_after_a_redaction_is_still_already_on_record(self):
+        out = self._remember({"decision": "REJECTED", "rejected": 1, "gates_failed": ["secret_scan", "dedup_hash"]})
+        self.assertIn("already", out["error"])
+        self.assertNoRetryCoaching(out["error"])
+
+    def test_too_short_note_keeps_its_restate_coaching(self):
+        out = self._remember({"decision": "REJECTED", "rejected": 1, "gates_failed": ["min_content"]}, "Dentist: Novak.")
+        self.assertIn("full sentence", out["error"])
+
+    def test_other_or_unknown_rejecting_gates_get_no_retry_coaching(self):
+        for gates in (["secret_scan"], ["provenance_complete"], ["secret_scan", "min_content"],
+                      ["some_future_gate"], []):
+            out = self._remember({"decision": "REJECTED", "rejected": 1, "gates_failed": gates})
+            self.assertIn("not stored", out["error"], gates)
+            self.assertNoRetryCoaching(out["error"])
+
+    def test_quarantine_gets_no_retry_coaching_and_no_release_promise(self):
+        # A companion deposit is quarantined only by a safety gate
+        # (secret_scan block, policy_match, prompt_injection, claim_audit_overlap):
+        # rewording it to get it stored is evading that gate. And a release in the
+        # console dismisses the row without storing it (internal/ui/memory.go).
+        for gates in (["secret_scan"], ["policy_match"], ["prompt_injection"], ["claim_audit_overlap"]):
+            out = self._remember({"decision": "QUARANTINED", "quarantined": 1, "gates_failed": gates})
+            self.assertIn("review", out["error"])
+            self.assertNotIn("until released", out["error"])
+            self.assertNoRetryCoaching(out["error"])
+
+    # GitHub #380, Hermes release lane H3f-forget (run at 02c6b5272,
+    # 2026-10-14): asked to forget, gpt-oss-20b emitted Hermes's memory
+    # remove under the name vornik_remember, its arguments flattened into
+    # content, and Vornik admitted the garble: the forgotten fact was stored
+    # again. This is that content, verbatim.
+    H380_GARBLED = ('my physiotherapist is Dr Svoboda at the Karlin rehabilitation clinic.  '
+                    'old_text":"my physiotherapist is Dr Svoboda at the Karlin rehabilitation clinic.  '
+                    'action":"remove","target":"memory"}')
+
+    # The release run at 4eb146337 (2026-10-14 19:47): the same mistake, the
+    # memory tool's arguments written as capitalised Key: value prose, which
+    # none of the first three shapes matched; Vornik stored it. Verbatim.
+    H380_KEY_VALUE = ('My physiotherapist is Dr Svoboda at the Karlin rehabilitation clinic. '
+                      'Action: remove Old_text: My physiotherapist is Dr Svoboda at the Karlin '
+                      'rehabilitation clinic. Target: memory')
+
+    GARBLED = [
+        H380_GARBLED,
+        H380_KEY_VALUE,
+        # shape 4a: the memory tool's argument names as a key, any case and punctuation
+        'Forget Dr Svoboda. old_text = My physiotherapist is Dr Svoboda',
+        'NEW_TEXT: The user sees a new physiotherapist now.',
+        # shape 4b: a memory action and a memory target together
+        "The user's physiotherapist is Dr Svoboda. action: remove, target: user",
+        "TARGET: 'memory' ACTION: 'add' The user likes tea.",
+        '{"action": "remove", "target": "user", "old_text": "Svoboda"}',
+        'The user\'s physiotherapist is Dr Svoboda. "action":"remove"',
+        'Dr Svoboda at the Karlin clinic old_text": "Dr Svoboda"',
+        '{"content": "The user\'s physiotherapist is Dr Svoboda."}',
+        'content":"The user\'s physiotherapist is Dr Svoboda."}',
+        'physiotherapist query":"Svoboda"',
+        # an orphan key: not a tool argument name, still leaked JSON
+        'note":"The user\'s physiotherapist is Dr Svoboda.","ttl":30',
+        '<|start|>assistant<|channel|>commentary to=functions.memory <|constrain|>json'
+        '<|message|>{"action":"remove"}<|call|>',
+        "The user's physiotherapist is Dr Svoboda at the Karlin clinic.<|end|>",
+        "to=functions.vornik_remember The user's physiotherapist is Dr Svoboda.",
+        "<|im_start|>assistant The user's physiotherapist is Dr Svoboda.<|im_end|>",
+    ]
+
+    # Ordinary notes a user plausibly asks to keep: quotes, colons, a URL,
+    # code, a JSON literal with ordinary keys. None may be refused.
+    PROSE = [
+        'My daughter said "I love you, Dad" before school today.',
+        'The user\'s standup is at 10:30 in the room called "Atlas": bring the laptop.',
+        "The user's bug tracker is https://example.com/issues?id=42&sort=desc#top and the wiki is http://wiki.local:8080/home.",
+        'The user prefers {"name": "Ada", "lang": "en"} style JSON literals in Python tests.',
+        'The user\'s staging config sets host: "db.local" and port: 5432.',
+        'The user\'s favourite line is "To be, or not to be": Hamlet, act 3.',
+        # a space after the colon is prose, not an orphan JSON key
+        'He called it "the end": "finally", the user said about the project.',
+        'The user\'s target for the action plan is "ship by May": the team agreed.',
+        'The user\'s shell alias is alias ll="ls -la" in ~/.bashrc.',
+        'The user formats logs with print(f"{key}: {value}") in Python.',
+        # shape 4's look-alikes: one memory key alone, or the words, not keys
+        'Action: remove the stale filter from the dashboard before Friday.',
+        'Target: user retention up 5% this quarter, the user said.',
+        'The user wants the old text of the contract kept for reference.',
+        'The user plans to replace the target memory module in the robot.',
+        # review 6aa0 finding 1: both labels in a structured note, but the
+        # target value goes on (not the memory tool's bare value)
+        'Remember: v2 - action: replace the old sensor; target: memory buffer doubled.',
+        "Action: replace the battery. Target: user's robot.",
+    ]
+
+    def test_garbled_tool_call_is_refused_before_it_is_sent(self):
+        op = FakeOpener(features=NEW_DAEMON, tools={"remember": ({"decision": "ADMITTED", "admitted": 1}, False)})
+        p = VornikMemoryProvider(client(op, token="m"))
+        out = json.loads(p.handle_tool_call("vornik_remember", {"content": self.H380_GARBLED}))
+        self.assertEqual([c for c in op.calls if c[0] == "remember"], [], "the garble reached the daemon")
+        kv = json.loads(p.handle_tool_call("vornik_remember", {"content": self.H380_KEY_VALUE}))
+        self.assertEqual([c for c in op.calls if c[0] == "remember"], [], "the Key: value garble reached the daemon")
+        self.assertIn("garbled tool call", kv.get("error", ""))
+        err = out["error"]
+        self.assertIn("nothing stored", err)
+        self.assertIn("garbled tool call", err)
+        self.assertIn("never forgets", err)
+        self.assertIn("own memory tool", err)
+        self.assertIn("tell the user nothing was stored", err.lower())
+        self.assertNoRetryCoaching(err)
+
+    def test_every_leaked_tool_call_shape_is_refused(self):
+        for content in self.GARBLED:
+            op = FakeOpener(features=NEW_DAEMON, tools={"remember": ({"decision": "ADMITTED", "admitted": 1}, False)})
+            p = VornikMemoryProvider(client(op, token="m"))
+            out = json.loads(p.handle_tool_call("vornik_remember", {"content": content}))
+            self.assertIn("garbled tool call", out.get("error", ""), content)
+            self.assertFalse([c for c in op.calls if c[0] == "remember"], content)
+
+    def test_prose_with_quotes_colons_urls_and_code_is_stored(self):
+        for content in self.PROSE:
+            op = FakeOpener(features=NEW_DAEMON, tools={"remember": ({"decision": "ADMITTED", "admitted": 1}, False)})
+            p = VornikMemoryProvider(client(op, token="m"))
+            out = json.loads(p.handle_tool_call("vornik_remember", {"content": content}))
+            self.assertNotIn("error", out, content)
+            self.assertEqual([c[1]["content"] for c in op.calls if c[0] == "remember"], [content])
+
+    def test_the_mirror_is_not_judged_by_the_tool_call_guard(self):
+        # The guard is on the model's tool only: Hermes's own entry is the
+        # user's text, mirrored as written.
+        op = FakeOpener(features=NEW_DAEMON, tools={"remember": ({"decision": "ADMITTED", "admitted": 1}, False)})
+        p = VornikMemoryProvider(client(op, token="m"))
+        p.on_memory_write("add", "user", 'The user\'s API uses {"action":"remove"} payloads.')
+        self.assertEqual(len([c for c in op.calls if c[0] == "remember"]), 1)
+
     def test_admitted_remember_is_passed_through(self):
         admitted = ({"decision": "ADMITTED", "admitted": 1}, False)
         p = VornikMemoryProvider(client(FakeOpener(features=NEW_DAEMON, tools={"remember": admitted}), token="m"))
@@ -426,6 +579,17 @@ class ReadmeSetupTest(unittest.TestCase):
 
     def test_points_to_the_hermes_setup_guide(self):
         self.assertIn("https://docs.vornik.io/guides/hermes-setup/", self.README)
+
+    def test_states_where_phone_approvals_do_not_reach(self):
+        # GitHub #129 (2026-10-13): Hermes consults an approval transport
+        # only in interactive CLI, gateway and ask-bridge sessions; cron,
+        # single-query (-q, -z) and unattended-platform sessions resolve from
+        # approvals.*_mode and never reach the phone. The approvals section
+        # must say so, or it promises approvals that never arrive.
+        start = self.README.index("### Answer Hermes's own approvals on your phone")
+        section = self.README[start:self.README.index("\n## ", start)]
+        for want in ("cron", "hermes chat -q", "hermes -z", "approvals.cron_mode", "never reach your phone"):
+            self.assertIn(want, section)
 
     def test_never_suggests_coding_companion_grants(self):
         self.assertNotIn("--skill-all", self.README.replace("no skill flags", ""))
@@ -543,7 +707,7 @@ class StatusTest(unittest.TestCase):
         out = []
         env = {"VORNIK_URL": "https://vornik.test", "VORNIK_BROKER_TOKEN": "sk-secret-broker",
                "VORNIK_MEMORY_TOKEN": ""}
-        rc = cli.status(argparse.Namespace(), env=env, opener=opener, out=out.append)
+        rc = cli.status(argparse.Namespace(), values=env, opener=opener, out=out.append)
         text = "\n".join(out)
         self.assertEqual(rc, 0)
         self.assertIn("https://vornik.test", text)
@@ -555,7 +719,7 @@ class StatusTest(unittest.TestCase):
     def test_unconfigured_opens_no_connection(self):
         opener = mock.Mock(side_effect=AssertionError("network used"))
         out = []
-        rc = cli.status(argparse.Namespace(), env={}, opener=opener, out=out.append)
+        rc = cli.status(argparse.Namespace(), values={}, opener=opener, out=out.append)
         opener.assert_not_called()
         self.assertEqual(rc, 1)
         self.assertIn("VORNIK_URL", "\n".join(out))

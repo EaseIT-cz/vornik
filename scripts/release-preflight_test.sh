@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
-[ -f "$ROOT/.goreleaser.enterprise.yaml" ] || exit 0
+# The Enterprise release path only; a CE tree (no enterprise goreleaser config)
+# has nothing to test, and says so rather than passing silently (#334 item 6).
+[ -f "$ROOT/.goreleaser.enterprise.yaml" ] || { echo "release-preflight_test: SKIP (no .goreleaser.enterprise.yaml: a Community tree, no EE release path)"; exit 0; }
 TMP=$(mktemp -d)
 trap 'rm -rf "$TMP"' EXIT
 mkdir "$TMP/bin"
@@ -13,6 +15,14 @@ cat > "$TMP/bin/gh" <<'GH'
 echo x >> "$CALLS"
 case "$*" in
   *actions/workflows*) [ "$SCENARIO" != no-ci ] && echo 123 || true ;;
+  # P6 (#118): the run counts only when its full-run job succeeded.
+  *actions/runs/*/jobs*)
+    case "$SCENARIO" in
+      scoped) : ;;
+      full-skipped) echo skipped ;;
+      full-failed) echo failure ;;
+      *) echo success ;;
+    esac ;;
   *releases/tags*)
     case "$SCENARIO" in
       published) echo '{"draft":false,"assets":[{"name":"checksums.txt.asc"},{"name":"checksums.txt"},{"name":"vornik-release.asc"},{"name":"a.rpm"},{"name":"a.deb"}]}' ;;
@@ -21,8 +31,9 @@ case "$*" in
       ratelimited) echo 'gh: API rate limit exceeded (HTTP 403)' >&2; exit 1 ;;
       flaky)
         # Two 503s, then the honest 404 of a release that does not exist yet.
-        # (Call 1 was the workflow-runs probe, so the 503s are calls 2 and 3.)
-        if [ "$(wc -l < "$CALLS")" -lt 4 ]; then
+        # (Calls 1 and 2 were the workflow-runs and full-run jobs probes, so
+        # the 503s are calls 3 and 4.)
+        if [ "$(wc -l < "$CALLS")" -lt 5 ]; then
           echo 'gh: Server Error (HTTP 503)' >&2; exit 1
         fi
         # Deliberately WITHOUT the parentheses, so the status parser is proven
@@ -46,7 +57,9 @@ bash "$ROOT/scripts/release-preflight.sh"
 grep -q 'published=false' "$GITHUB_OUTPUT"
 SCENARIO=published bash "$ROOT/scripts/release-preflight.sh"
 grep -q 'published=true' "$GITHUB_OUTPUT"
-for SCENARIO in no-ci partial forbidden; do
+# audit 2026-10-12 (#118): a successful run that was not full (no full-run
+# job, or one skipped or failed) is not evidence for a release.
+for SCENARIO in no-ci scoped full-skipped full-failed partial forbidden; do
  export SCENARIO
  if bash "$ROOT/scripts/release-preflight.sh" >/dev/null 2>&1; then echo "unexpected pass: $SCENARIO"; exit 1; fi
 done
@@ -68,7 +81,7 @@ if GPG_PRIVATE_KEY='' bash "$ROOT/scripts/release-preflight.sh" >/dev/null 2>&1;
 SCENARIO=flaky bash "$ROOT/scripts/release-preflight.sh" >/dev/null 2>&1 \
   || { echo 'transient 5xx was not retried'; exit 1; }
 grep -q 'published=false' "$GITHUB_OUTPUT" || { echo 'flaky run did not reach the 404 answer'; exit 1; }
-[ "$(wc -l < "$CALLS")" -ge 4 ] || { echo 'flaky run did not actually retry'; exit 1; }
+[ "$(wc -l < "$CALLS")" -ge 5 ] || { echo 'flaky run did not actually retry'; exit 1; }
 
 # A 5xx that never clears must still fail — retrying is not the same as
 # pretending the API answered.
@@ -89,7 +102,7 @@ fi
 # time and hides a misconfigured token behind a timeout.
 : > "$CALLS"
 if SCENARIO=forbidden bash "$ROOT/scripts/release-preflight.sh" >/dev/null 2>&1; then exit 1; fi
-[ "$(wc -l < "$CALLS")" -eq 2 ] || { echo "a permanent 403 must not be retried (calls: $(wc -l < "$CALLS"))"; exit 1; }
+[ "$(wc -l < "$CALLS")" -eq 3 ] || { echo "a permanent 403 must not be retried (calls: $(wc -l < "$CALLS"))"; exit 1; }
 
 # A connection error carries no HTTP status at all, and is transient.
 : > "$CALLS"

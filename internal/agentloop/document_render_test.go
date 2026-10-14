@@ -51,7 +51,9 @@ func stubDocumentRenderer(t *testing.T, mode string) documentRenderer {
 	return documentRenderer{timeout: time.Second, command: func(ctx context.Context, name string, args ...string) *exec.Cmd {
 		switch name {
 		case "/usr/bin/pandoc":
-			if len(args) != 4 || strings.Join(args[:3], " ") != "--from=gfm --to=html5 --standalone" || !strings.HasPrefix(args[3], "--lua-filter=") {
+			// audit 2026-10-12 (#339): front matter is off, so a document
+			// cannot set css/header-includes template variables.
+			if len(args) != 4 || strings.Join(args[:3], " ") != "--from=gfm-yaml_metadata_block --to=html5 --standalone" || !strings.HasPrefix(args[3], "--lua-filter=") {
 				t.Fatalf("unsafe pandoc argv: %v", args)
 			}
 			filter, err := os.ReadFile(strings.TrimPrefix(args[3], "--lua-filter="))

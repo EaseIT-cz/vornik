@@ -101,7 +101,7 @@ func TestLook_TokensMatchTheConsole(t *testing.T) {
 	} {
 		c := block(string(console), theme.console)
 		p := block(string(layout), theme.page)
-		for _, tok := range []string{"surface-900", "surface-800", "surface-600", "ink-100", "ink-300", "ink-500", "brand-500", "accent-500"} {
+		for _, tok := range []string{"surface-900", "surface-800", "surface-600", "ink-100", "ink-300", "ink-500", "brand-500", "accent-500", "control-border"} {
 			want := triple(c[tok])
 			if got := strings.ToLower(p[tok]); got != want {
 				t.Errorf("%s --%s = %q, console has %s", theme.page, tok, got, want)
@@ -143,6 +143,61 @@ func TestLook_EveryTokenDefinedAndUsed(t *testing.T) {
 			}
 		}
 	}
+}
+
+// audit 2026-10-12 (GitHub #164): the PWA's text/password inputs drew their
+// boundary with --surface-600 (1.2–1.5:1), under WCAG 1.4.11's 3:1. Every
+// visible control on the approval pages is a text/password input, a select or
+// a native checkbox, and the first two are bordered with --control-border
+// (ui-design-refresh-design.md §11.3).
+func TestLook_ControlsUseControlBorder(t *testing.T) {
+	layout, err := os.ReadFile("templates/_layout.html")
+	if err != nil {
+		t.Fatal(err)
+	}
+	css := string(layout)
+	for _, rule := range []string{
+		`input[type=text],input[type=password]{`,
+		`select{`,
+	} {
+		i := strings.Index(css, rule)
+		if i < 0 {
+			t.Errorf("_layout.html has no %q rule", rule)
+			continue
+		}
+		body := css[i : i+strings.Index(css[i:], "}")]
+		if !strings.Contains(body, "border:1px solid var(--control-border)") {
+			t.Errorf("%s does not border with --control-border: %s", rule, body)
+		}
+	}
+	files, _ := filepath.Glob("templates/*.html")
+	tag := regexp.MustCompile(`(?is)<(input|select|textarea)\b([^>]*)>`)
+	typ := regexp.MustCompile(`\btype="?([a-z]+)`)
+	seen := 0
+	for _, f := range files {
+		raw, _ := os.ReadFile(f)
+		for _, m := range tag.FindAllStringSubmatch(string(raw), -1) {
+			kind := strings.ToLower(m[1])
+			if kind == "input" {
+				kind = "text"
+				if tm := typ.FindStringSubmatch(m[2]); tm != nil {
+					kind = tm[1]
+				}
+			}
+			switch kind {
+			case "hidden":
+				continue
+			case "text", "password", "select", "checkbox":
+				seen++
+			default:
+				t.Errorf("%s: <%s> is not covered by a bordered rule", filepath.Base(f), kind)
+			}
+		}
+	}
+	if seen == 0 {
+		t.Error("scanned no visible controls; the scan has gone blind")
+	}
+	t.Logf("approval pages: %d visible controls examined", seen)
 }
 
 // Review 8a84 F7, e076 F4: the CSP is on every approval-route response,

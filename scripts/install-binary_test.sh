@@ -32,15 +32,19 @@ INSTALL="$ROOT/scripts/install-binary.sh"
 TMP=$(mktemp -d)
 trap 'rm -rf "$TMP"' EXIT
 
-# A real executable we can hold busy. Copying a static-ish system binary keeps
-# this hermetic — no compiler needed, and `sleep` is executing for the whole
-# window, which is exactly the ETXTBSY condition.
-cp /bin/sleep "$TMP/daemon"
+# A real executable we can hold busy: a copy of bash running `sleep 60; :`, so
+# the copy itself is executing (the trailing `:` stops bash exec'ing sleep)
+# for the whole window, which is exactly the ETXTBSY condition. Not a copy of
+# /bin/sleep: on Ubuntu 26.04 coreutils is the uutils multi-call binary, which
+# dispatches on argv[0] and exits at once as "daemon" ("unknown program"),
+# so the fixture was never running (self-hosted runner, run 38542085338,
+# 2026-10-14). bash does not care what it is called.
+cp "$(command -v bash)" "$TMP/daemon"
 chmod 755 "$TMP/daemon"
 printf '#!/bin/sh\necho new\n' > "$TMP/new-daemon"
 chmod 755 "$TMP/new-daemon"
 
-"$TMP/daemon" 60 &
+"$TMP/daemon" -c 'sleep 60; :' &
 BUSY_PID=$!
 trap 'kill "$BUSY_PID" 2>/dev/null || true; rm -rf "$TMP"' EXIT
 

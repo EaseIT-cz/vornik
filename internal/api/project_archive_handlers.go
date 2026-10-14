@@ -15,7 +15,10 @@ package api
 //
 //   POST /api/v1/projects/{id}/delete-now
 //     body: {}
-//     resp: {"status":"archived","scheduled_delete_at":"<~now>"}
+//     resp: 200 {"status":"deleted"} once the sweeper finished the wipe;
+//           500 DELETE_FAILED with the error when it failed;
+//           202 {"status":"deletion_pending",...} when no outcome arrived
+//           within the wait (GitHub #365).
 //
 // All three share the projectarchive.LifecycleService — same
 // YAML mutation, reload, and audit shape the UI emits.
@@ -49,6 +52,12 @@ type ArchiveResponse struct {
 	ScheduledDeleteAt string `json:"scheduled_delete_at,omitempty"`
 	Reason            string `json:"reason,omitempty"`
 	ArchivedBy        string `json:"archived_by,omitempty"`
+	// Warning accompanies status "deleted_with_errors": the project was
+	// removed but a later step was not done (archival design section H).
+	Warning string `json:"warning,omitempty"`
+	// ResidueSteps names the steps the warning is about ("artifacts",
+	// "reload"), so a client can word each one (section H.5, 2026-10-14).
+	ResidueSteps []string `json:"residue_steps,omitempty"`
 }
 
 // ProjectArchive handles POST /api/v1/projects/{id}/archive.
@@ -148,22 +157,56 @@ func (s *Server) ProjectDeleteNow(w http.ResponseWriter, r *http.Request, projec
 		return
 	}
 
-	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
+	// Wait for the sweeper's outcome so the caller learns whether the wipe
+	// worked: before GitHub #365 a failed wipe was answered 200 "archived"
+	// and only the log and the project.delete.failed audit row knew.
+	wait := s.deleteNowWait
+	if wait <= 0 {
+		wait = projectarchive.DefaultDeleteNowWait
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), wait+5*time.Second)
 	defer cancel()
-	if err := s.archiveService.ScheduleDeleteNow(ctx, projectID, true); err != nil {
+	now := time.Now().UTC()
+	res, err := s.archiveService.DeleteNowAndWait(ctx, projectID, true, wait)
+	if err != nil {
 		s.handleArchiveError(w, err)
 		return
 	}
 	s.writeArchiveAudit(ctx, r, "project.delete-now", projectID, map[string]any{
-		"scheduled_delete_at": time.Now().UTC().Format(time.RFC3339),
+		"scheduled_delete_at": now.Format(time.RFC3339),
+		"outcome":             string(res.State),
 	})
-	now := time.Now().UTC()
-	resp := ArchiveResponse{
-		ProjectID:         projectID,
-		Status:            "archived",
-		ScheduledDeleteAt: now.Format(time.RFC3339),
+	switch res.State {
+	case projectarchive.DeleteNowFailed:
+		respondError(w, http.StatusInternalServerError, "DELETE_FAILED",
+			fmt.Sprintf("project %q was NOT deleted: %v (it stays archived; the sweeper retries on its next tick)", projectID, res.Err))
+	case projectarchive.DeleteNowDeleted:
+		respondJSON(w, http.StatusOK, ArchiveResponse{ProjectID: projectID, Status: "deleted"})
+	case projectarchive.DeleteNowDeletedWithErrors:
+		// The project's DB rows and YAML are gone; a later step was not done:
+		// artifact blobs may remain, and/or the registry reload failed (the
+		// archived project then stays in the registry until the next tick
+		// completes the deletion). 200, not 500: the deletion happened and
+		// must not be retried or reported undone; the warning names each
+		// step (archival design section H, H.5).
+		steps := projectarchive.ResidueSteps(res.Err)
+		names := make([]string, 0, len(steps))
+		for _, st := range steps {
+			names = append(names, string(st))
+		}
+		respondJSON(w, http.StatusOK, ArchiveResponse{
+			ProjectID:    projectID,
+			Status:       string(projectarchive.DeleteNowDeletedWithErrors),
+			Warning:      projectarchive.ResidueWarning(res.Err) + " (recorded as project.delete.partial in the audit log)",
+			ResidueSteps: names,
+		})
+	default:
+		respondJSON(w, http.StatusAccepted, ArchiveResponse{
+			ProjectID:         projectID,
+			Status:            "deletion_pending",
+			ScheduledDeleteAt: now.Format(time.RFC3339),
+		})
 	}
-	respondJSON(w, http.StatusOK, resp)
 }
 
 // Note: per-project /archive, /unarchive, /delete-now subpaths

@@ -29,6 +29,7 @@ func TestQuickstartBuildsAgentImage(t *testing.T) {
 func TestShippedSwarmsQualifyAgentImage(t *testing.T) {
 	const bare = `"vornik-agent:latest"`
 	var offenders []string
+	scanned := 0
 	for _, root := range []string{"../../configs/swarms", "../../configs/project-templates"} {
 		err := filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
 			if err != nil {
@@ -41,6 +42,7 @@ func TestShippedSwarmsQualifyAgentImage(t *testing.T) {
 			if rerr != nil {
 				return rerr
 			}
+			scanned++
 			if strings.Contains(string(b), bare) {
 				offenders = append(offenders, path)
 			}
@@ -49,6 +51,12 @@ func TestShippedSwarmsQualifyAgentImage(t *testing.T) {
 		if err != nil {
 			t.Fatalf("walk %s: %v", root, err)
 		}
+	}
+	// #334 item 6 (audit 2026-10-12): empty swarm and template trees checked
+	// nothing and passed.
+	t.Logf("agent-image qualification law: examined %d swarm/template file(s)", scanned)
+	if scanned == 0 {
+		t.Fatal("agent-image qualification law: examined 0 files; a law that looked at nothing has not passed")
 	}
 	if len(offenders) > 0 {
 		t.Errorf("unqualified agent image %s found in %v — use ghcr.io/easeit-cz/vornik-agent:latest "+

@@ -297,7 +297,7 @@ func TestCoreAPI_CancelTask_TerminalStateRejected(t *testing.T) {
 		GetFunc: func(_ context.Context, id string) (*persistence.Task, error) {
 			return &persistence.Task{ID: id, ProjectID: "project-1", Status: persistence.TaskStatusCompleted}, nil
 		},
-		TransitionToCancelledFunc: func(_ context.Context, _ string) (bool, error) {
+		TransitionConditionalFunc: func(_ context.Context, _ string, _ []persistence.TaskStatus, _ persistence.TaskStatus, _ persistence.TransitionOpts) (bool, error) {
 			transitionCalled = true
 			return false, nil
 		},
@@ -323,7 +323,7 @@ func TestCoreAPI_CancelTask_RaceLostReturns409(t *testing.T) {
 		GetFunc: func(_ context.Context, id string) (*persistence.Task, error) {
 			return &persistence.Task{ID: id, ProjectID: "project-1", Status: persistence.TaskStatusRunning}, nil
 		},
-		TransitionToCancelledFunc: func(_ context.Context, _ string) (bool, error) {
+		TransitionConditionalFunc: func(_ context.Context, _ string, _ []persistence.TaskStatus, _ persistence.TaskStatus, _ persistence.TransitionOpts) (bool, error) {
 			return false, nil // row didn't transition
 		},
 	}

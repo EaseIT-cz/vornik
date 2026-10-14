@@ -92,19 +92,20 @@ func (r *TaskRepository) Create(ctx context.Context, task *persistence.Task) err
 			delegation_mode, status, priority, payload, dependencies,
 			lease_id, leased_at, leased_by, lease_expires_at,
 			attempt, max_attempts, last_error, last_error_class, created_at, updated_at,
-			chat_turn_id, budget_usd, created_by_api_key_id, created_by_actor
+			chat_turn_id, budget_usd, created_by_api_key_id, created_by_actor, goal_origin
 		) VALUES (
 			$1, $2, $3, $4, $5, $6,
 			$7, $8, $9, $10, $11,
 			$12, $13, $14, $15,
 			$16, $17, $18, $19, $20, $21,
-			$22, $23, $24, $25
+			$22, $23, $24, $25, $26
 		)`,
 		task.ID, task.ProjectID, task.WorkflowID, task.IdempotencyKey, task.ParentTaskID, task.CreationSource,
 		task.DelegationMode, task.Status, task.Priority, task.Payload, pq.Array(task.Dependencies),
 		task.LeaseID, task.LeasedAt, task.LeasedBy, task.LeaseExpiresAt,
 		task.Attempt, task.MaxAttempts, task.LastError, task.LastErrorClass, task.CreatedAt, task.UpdatedAt,
 		task.ChatTurnID, task.BudgetUSD, task.CreatedByAPIKeyID, task.CreatedByActor,
+		nullableGoalOrigin(task.GoalOrigin),
 	)
 	if err != nil {
 		return mapDBError(err)
@@ -120,7 +121,7 @@ func (r *TaskRepository) Get(ctx context.Context, id string) (*persistence.Task,
 		       delegation_mode, status, priority, payload, dependencies,
 		       lease_id, leased_at, leased_by, lease_expires_at,
 		       attempt, max_attempts, last_error, last_error_class, created_at, updated_at,
-		       brief_amended_at, current_phase, expected_by, closed_at, closed_by, message_count, open_checkpoint_id, chat_turn_id, budget_usd, created_by_api_key_id, created_by_actor
+		       brief_amended_at, current_phase, expected_by, closed_at, closed_by, message_count, open_checkpoint_id, chat_turn_id, budget_usd, created_by_api_key_id, created_by_actor, goal_origin
 		FROM tasks
 		WHERE id = $1
 	`, id)
@@ -135,7 +136,7 @@ func (r *TaskRepository) GetByIdempotencyKey(ctx context.Context, projectID, ide
 		       delegation_mode, status, priority, payload, dependencies,
 		       lease_id, leased_at, leased_by, lease_expires_at,
 		       attempt, max_attempts, last_error, last_error_class, created_at, updated_at,
-		       brief_amended_at, current_phase, expected_by, closed_at, closed_by, message_count, open_checkpoint_id, chat_turn_id, budget_usd, created_by_api_key_id, created_by_actor
+		       brief_amended_at, current_phase, expected_by, closed_at, closed_by, message_count, open_checkpoint_id, chat_turn_id, budget_usd, created_by_api_key_id, created_by_actor, goal_origin
 		FROM tasks
 		WHERE project_id = $1 AND idempotency_key = $2
 	`, projectID, idempotencyKey)
@@ -264,7 +265,7 @@ func (r *TaskRepository) List(ctx context.Context, filter persistence.TaskFilter
 		       delegation_mode, status, priority, payload, dependencies,
 		       lease_id, leased_at, leased_by, lease_expires_at,
 		       attempt, max_attempts, last_error, last_error_class, created_at, updated_at,
-		       brief_amended_at, current_phase, expected_by, closed_at, closed_by, message_count, open_checkpoint_id, chat_turn_id, budget_usd, created_by_api_key_id, created_by_actor
+		       brief_amended_at, current_phase, expected_by, closed_at, closed_by, message_count, open_checkpoint_id, chat_turn_id, budget_usd, created_by_api_key_id, created_by_actor, goal_origin
 		FROM tasks
 		WHERE 1=1
 	`
@@ -586,7 +587,7 @@ func (r *TaskRepository) ListRetryInFlight(ctx context.Context, projectIDs []str
 		       delegation_mode, status, priority, payload, dependencies,
 		       lease_id, leased_at, leased_by, lease_expires_at,
 		       attempt, max_attempts, last_error, last_error_class, created_at, updated_at,
-		       brief_amended_at, current_phase, expected_by, closed_at, closed_by, message_count, open_checkpoint_id, chat_turn_id, budget_usd, created_by_api_key_id, created_by_actor
+		       brief_amended_at, current_phase, expected_by, closed_at, closed_by, message_count, open_checkpoint_id, chat_turn_id, budget_usd, created_by_api_key_id, created_by_actor, goal_origin
 		FROM tasks
 		WHERE status IN ('QUEUED','LEASED','RUNNING')
 		  AND retry_requested_at IS NOT NULL
@@ -842,7 +843,7 @@ func (r *TaskRepository) LeaseTask(ctx context.Context, opts persistence.LeaseOp
 		          delegation_mode, status, priority, payload, dependencies,
 		          lease_id, leased_at, leased_by, lease_expires_at,
 		          attempt, max_attempts, last_error, last_error_class, created_at, updated_at,
-		       brief_amended_at, current_phase, expected_by, closed_at, closed_by, message_count, open_checkpoint_id, chat_turn_id, budget_usd, created_by_api_key_id, created_by_actor
+		       brief_amended_at, current_phase, expected_by, closed_at, closed_by, message_count, open_checkpoint_id, chat_turn_id, budget_usd, created_by_api_key_id, created_by_actor, goal_origin
 	`
 
 	row := r.db.QueryRowContext(ctx, query, args...)
@@ -951,7 +952,7 @@ func (r *TaskRepository) FindExpiredLeases(ctx context.Context, limit int) ([]*p
 		       delegation_mode, status, priority, payload, dependencies,
 		       lease_id, leased_at, leased_by, lease_expires_at,
 		       attempt, max_attempts, last_error, last_error_class, created_at, updated_at,
-		       brief_amended_at, current_phase, expected_by, closed_at, closed_by, message_count, open_checkpoint_id, chat_turn_id, budget_usd, created_by_api_key_id, created_by_actor
+		       brief_amended_at, current_phase, expected_by, closed_at, closed_by, message_count, open_checkpoint_id, chat_turn_id, budget_usd, created_by_api_key_id, created_by_actor, goal_origin
 		FROM tasks
 		WHERE status IN ('QUEUED', 'LEASED', 'RUNNING')
 		  AND lease_expires_at IS NOT NULL
@@ -1089,7 +1090,7 @@ func (r *TaskRepository) GetChildren(ctx context.Context, parentTaskID string) (
 		       delegation_mode, status, priority, payload, dependencies,
 		       lease_id, leased_at, leased_by, lease_expires_at,
 		       attempt, max_attempts, last_error, last_error_class, created_at, updated_at,
-		       brief_amended_at, current_phase, expected_by, closed_at, closed_by, message_count, open_checkpoint_id, chat_turn_id, budget_usd, created_by_api_key_id, created_by_actor
+		       brief_amended_at, current_phase, expected_by, closed_at, closed_by, message_count, open_checkpoint_id, chat_turn_id, budget_usd, created_by_api_key_id, created_by_actor, goal_origin
 		FROM tasks
 		WHERE parent_task_id = $1
 		ORDER BY created_at ASC
@@ -1157,16 +1158,18 @@ func (r *TaskRepository) CountChildrenForParents(ctx context.Context, parentTask
 
 // GetDependencies returns tasks that must complete before the given task.
 func (r *TaskRepository) GetDependencies(ctx context.Context, taskID string) ([]*persistence.Task, error) {
-	// Must select every column scanTask reads (29) — the eight
-	// trailing columns were missing, so any call errored with a
-	// scan-arity mismatch ("expected 29 destination arguments, not
-	// 21"). Mirrors GetDependents (bug sweep 2026-06-04).
+	// Must select every column scanTask reads (33). The list drifted
+	// twice: the 2026-06-04 bug sweep restored eight trailing columns,
+	// and the #334 audit 2026-10-14 found created_by_actor and
+	// goal_origin missing again, so every call failed with a
+	// scan-arity error. TestTaskSelectArityMatchesScanTask now checks
+	// every scanTask caller from the source, which sqlmock cannot.
 	rows, err := r.db.QueryContext(ctx, `
 		SELECT dep.id, dep.project_id, dep.workflow_id, dep.idempotency_key, dep.parent_task_id, dep.creation_source,
 		       dep.delegation_mode, dep.status, dep.priority, dep.payload, dep.dependencies,
 		       dep.lease_id, dep.leased_at, dep.leased_by, dep.lease_expires_at,
 		       dep.attempt, dep.max_attempts, dep.last_error, dep.last_error_class, dep.created_at, dep.updated_at,
-		       dep.brief_amended_at, dep.current_phase, dep.expected_by, dep.closed_at, dep.closed_by, dep.message_count, dep.open_checkpoint_id, dep.chat_turn_id, dep.budget_usd, dep.created_by_api_key_id
+		       dep.brief_amended_at, dep.current_phase, dep.expected_by, dep.closed_at, dep.closed_by, dep.message_count, dep.open_checkpoint_id, dep.chat_turn_id, dep.budget_usd, dep.created_by_api_key_id, dep.created_by_actor, dep.goal_origin
 		FROM tasks task
 		JOIN tasks dep ON dep.id = ANY(task.dependencies)
 		WHERE task.id = $1
@@ -1195,7 +1198,7 @@ func (r *TaskRepository) GetDependents(ctx context.Context, taskID string) ([]*p
 		       delegation_mode, status, priority, payload, dependencies,
 		       lease_id, leased_at, leased_by, lease_expires_at,
 		       attempt, max_attempts, last_error, last_error_class, created_at, updated_at,
-		       brief_amended_at, current_phase, expected_by, closed_at, closed_by, message_count, open_checkpoint_id, chat_turn_id, budget_usd, created_by_api_key_id, created_by_actor
+		       brief_amended_at, current_phase, expected_by, closed_at, closed_by, message_count, open_checkpoint_id, chat_turn_id, budget_usd, created_by_api_key_id, created_by_actor, goal_origin
 		FROM tasks
 		WHERE $1 = ANY(dependencies)
 		ORDER BY created_at ASC
@@ -1248,6 +1251,8 @@ func scanTask(scanner interface {
 		// Migration 148 — API key that authenticated task creation, when known.
 		createdByAPIKey sql.NullString
 		createdByActor  sql.NullString
+		// Migration 230 — the surface that wrote the goal (GitHub #347).
+		goalOrigin sql.NullString
 	)
 
 	err := scanner.Scan(
@@ -1256,7 +1261,7 @@ func scanTask(scanner interface {
 		&leaseID, &leasedAt, &leasedBy, &leaseExpiresAt,
 		&task.Attempt, &task.MaxAttempts, &lastError, &lastErrorClass, &task.CreatedAt, &task.UpdatedAt,
 		&briefAmendedAt, &currentPhase, &expectedBy, &closedAt, &closedBy, &messageCount, &openCheckpointID,
-		&chatTurnID, &budgetUSD, &createdByAPIKey, &createdByActor,
+		&chatTurnID, &budgetUSD, &createdByAPIKey, &createdByActor, &goalOrigin,
 	)
 	if err != nil {
 		return nil, mapDBError(err)
@@ -1330,6 +1335,7 @@ func scanTask(scanner interface {
 	if createdByActor.Valid {
 		task.CreatedByActor = &createdByActor.String
 	}
+	task.GoalOrigin = goalOrigin.String
 
 	return &task, nil
 }

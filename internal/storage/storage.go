@@ -308,6 +308,9 @@ type Repositories struct {
 	// AgentGrants holds what a device approved for agent namespaces:
 	// integrations, workflow reach, budget ceilings (design §7).
 	AgentGrants persistence.AgentGrantRepository
+	// AgentAdminRefusals records refused agent-admin calls (rule, never
+	// input; agent-administered design §23.2, GitHub #172).
+	AgentAdminRefusals persistence.AgentAdminRefusalRepository
 	// CompanionPushOutbox reads due companion pushes and records delivery
 	// (broker write-actions design §7a).
 	CompanionPushOutbox persistence.CompanionPushOutbox
@@ -395,16 +398,25 @@ func openSQLite(ctx context.Context, cfg config.DatabaseConfig) (*Backend, error
 		return nil, fmt.Errorf("storage: migrate sqlite: %w", err)
 	}
 
-	repos := buildSQLiteRepositories(db.DB)
+	return NewSQLiteBackend(db), nil
+}
+
+// NewSQLiteBackend is the Backend for an open SQLite database: its
+// repositories and its Close/Migrate/IsReady. It neither connects nor
+// migrates; openSQLite and OpenReadOnly call it after their own connect, and
+// internal/service unit tests call it on a copy of the migrated in-memory
+// test image (storage-abstraction design, "In-memory test databases",
+// 2026-10-14, #367).
+func NewSQLiteBackend(db *sqlite.DB) *Backend {
 	return &Backend{
 		Driver:  "sqlite",
 		DB:      db.DB,
 		PG:      nil, // SQLite — no postgres handle
-		Repos:   repos,
+		Repos:   buildSQLiteRepositories(db.DB),
 		Close:   db.Close,
 		Migrate: db.Migrate,
 		IsReady: db.IsReady,
-	}, nil
+	}
 }
 
 // buildSQLiteRepositories constructs the SQLite-backed Repositories
@@ -489,6 +501,7 @@ func buildSQLiteRepositories(db *sql.DB) *Repositories {
 		AgentSecrets:            sqlite.NewAgentSecretRepository(db),
 		ApproverDevices:         sqlite.NewApproverDeviceRepository(db),
 		AgentGrants:             sqlite.NewAgentGrantRepository(db),
+		AgentAdminRefusals:      sqlite.NewAgentAdminRefusalRepository(db),
 		CompanionPushOutbox:     sqlite.NewCompanionPushOutbox(db),
 		// Round 3 — memory + KG.
 		StepOutcomes:         sqlite.NewExecutionStepOutcomeRepository(db),
@@ -664,6 +677,7 @@ func Build(dbtx persistence.DBTX) *Repositories {
 		AgentSecrets:                   postgres.NewAgentSecretRepository(dbtx),
 		ApproverDevices:                postgres.NewApproverDeviceRepository(dbtx),
 		AgentGrants:                    postgres.NewAgentGrantRepository(dbtx),
+		AgentAdminRefusals:             postgres.NewAgentAdminRefusalRepository(dbtx),
 		CompanionPushOutbox:            postgres.NewCompanionPushOutbox(dbtx),
 		ExecutionNarration:             postgres.NewExecutionNarrationRepository(dbtx),
 	}
@@ -736,14 +750,7 @@ func OpenReadOnly(ctx context.Context, cfg config.DatabaseConfig) (*Backend, err
 		if err != nil {
 			return nil, fmt.Errorf("storage: connect sqlite: %w", err)
 		}
-		return &Backend{
-			Driver:  "sqlite",
-			DB:      db.DB,
-			Repos:   buildSQLiteRepositories(db.DB),
-			Close:   db.Close,
-			Migrate: db.Migrate,
-			IsReady: db.IsReady,
-		}, nil
+		return NewSQLiteBackend(db), nil
 	default:
 		return nil, fmt.Errorf("storage: unsupported database driver: %s", driver)
 	}

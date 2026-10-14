@@ -66,6 +66,7 @@ var doctorCheckConfigPointer = map[string]string{
 	"checkOrphanedWatchers":        "",
 	"checkOrphanFKRows":            "",
 	"checkOrphanWorktrees":         "",
+	"checkPreservedWork":           "",
 	"checkPodmanConfig":            "",
 	"checkPricingCoverage":         "",
 	"checkPricingDrift":            "",
@@ -85,6 +86,7 @@ var doctorCheckConfigPointer = map[string]string{
 	"checkSecretStoreKey":          "",
 	"checkApproverDevices":         "",
 	"checkAgentNamespaceBudget":    "",
+	"checkAgentRefusalBurst":       "",
 	"checkAgentModelCatalogue":     "", // config.yaml (agent_admin.models), not a deployed config file
 	"checkStuckBrokerActions":      "",
 	"checkMCPProjectConnections":   "",

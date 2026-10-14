@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"vornik.io/vornik/internal/imagemanifest"
 	"vornik.io/vornik/internal/registry"
 )
 
@@ -132,41 +133,83 @@ func (h *Checker) checkAgentImages(ctx context.Context) Check {
 	}
 
 	if len(missing) > 0 {
-		// Split by whether the missing reference can actually be pulled.
-		// A qualified ref (registry host, digest, or localhost/) is
-		// fetchable on first use, so it stays a WARNING. An unqualified
-		// short name is NOT: under `short-name-mode = enforced` (the host
-		// default) podman must prompt for a registry and, with no TTY, the
-		// run fails outright — every job using that swarm dies at container
-		// start. That is precisely the 2026-06-27 incident, where the
-		// swarmd→vornik rename left configs pointing at the unbuilt short
-		// name `swarmd-agent:latest`. Such a miss is an ERROR: it is broken
-		// now, not "will be pulled later".
-		var blocking []string
-		for _, m := range missing {
-			if imageIsUnqualified(m) {
-				blocking = append(blocking, m)
-			}
-		}
-		if len(blocking) > 0 {
-			sort.Strings(blocking)
-			return Check{
-				Name:    name,
-				Status:  "ERROR",
-				Message: fmt.Sprintf("%d agent image(s) missing AND unqualified — podman cannot resolve a short name without a TTY (short-name resolution enforced), so every job using these swarms will fail at container start. Build/tag the image locally or qualify the reference with a registry.", len(blocking)),
-				Items:   blocking,
-			}
-		}
-		sort.Strings(missing)
-		return Check{
-			Name:    name,
-			Status:  "WARNING",
-			Message: fmt.Sprintf("%d agent images not found locally (will be pulled on first use)", len(missing)),
-			Items:   missing,
-		}
+		return classifyMissingAgentImages(missing)
 	}
 
 	return Check{Name: name, Status: "OK", Message: fmt.Sprintf("all %d agent images available", len(images))}
+}
+
+// classifyMissingAgentImages rates the refs `podman image exists` did not find
+// (image-freshness design §18). Split by whether the missing reference can
+// actually be pulled:
+//
+//   - an unqualified short name cannot: under `short-name-mode = enforced`
+//     (the host default) podman must prompt for a registry and, with no TTY,
+//     the run fails outright — the 2026-06-27 incident, where the
+//     swarmd→vornik rename left configs pointing at the unbuilt short name
+//     `swarmd-agent:latest`;
+//   - a localhost/ ref cannot either: localhost/ is podman's namespace for
+//     images built or tagged on this host and no registry serves it (a pull
+//     dials https://localhost/v2/ and is refused). Rated a WARNING until
+//     2026-10-12, which is how a missing localhost/vornik-agent:bench failed a
+//     whole bench chunk at container start (GitHub #309);
+//   - a registry-qualified ref (host with '.' or ':', or a digest under one)
+//     is fetched on first use, so it stays a WARNING.
+//
+// Either unpullable kind is an ERROR listing every unpullable ref, with the
+// remedy for each kind present.
+func classifyMissingAgentImages(missing []string) Check {
+	const name = "agent_images"
+	var short, local []string
+	for _, m := range missing {
+		switch {
+		case imageIsUnqualified(m):
+			short = append(short, m)
+		case imageIsLocalOnly(m):
+			local = append(local, m)
+		}
+	}
+	if len(short)+len(local) > 0 {
+		var parts []string
+		if len(short) > 0 {
+			parts = append(parts, fmt.Sprintf("%d agent image(s) missing AND unqualified — podman cannot resolve a short name without a TTY (short-name resolution enforced), so every job using these swarms will fail at container start. Build/tag the image locally or qualify the reference with a registry.", len(short)))
+		}
+		if len(local) > 0 {
+			parts = append(parts, fmt.Sprintf("%d agent image(s) under localhost/ are missing — no registry serves localhost/, so podman cannot pull them and every job using these swarms will fail at container start. Build or tag them on this host: %s", len(local), localImageRemedy(local)))
+		}
+		blocking := append(append([]string{}, short...), local...)
+		sort.Strings(blocking)
+		return Check{Name: name, Status: "ERROR", Message: strings.Join(parts, " "), Items: blocking}
+	}
+	sorted := append([]string{}, missing...)
+	sort.Strings(sorted)
+	return Check{
+		Name:    name,
+		Status:  "WARNING",
+		Message: fmt.Sprintf("%d agent images not found locally (will be pulled on first use)", len(sorted)),
+		Items:   sorted,
+	}
+}
+
+// localImageRemedy names the commands that put a missing localhost/ image on
+// this host. For the agent image the build tag is known, so the exact pair is
+// printed; for anything else the generic build-or-tag form.
+func localImageRemedy(local []string) string {
+	generic := "`make install-images` builds every manifest image at its manifest tag; then `podman tag <built image> <ref>` for a ref the manifest does not name."
+	for _, ref := range local {
+		if strings.HasPrefix(ref, "localhost/vornik-agent:") || ref == "localhost/vornik-agent" {
+			return fmt.Sprintf("`make build-agent && podman tag %s %s` (the agent image builds as %s). Otherwise %s",
+				imagemanifest.AgentImageTag, ref, imagemanifest.AgentImageTag, generic)
+		}
+	}
+	return generic
+}
+
+// imageIsLocalOnly reports whether ref lives in podman's localhost/ namespace:
+// its first path segment is exactly "localhost". "localhost:5000/x" is a real
+// registry on a port and is NOT local-only.
+func imageIsLocalOnly(ref string) bool {
+	return strings.HasPrefix(ref, "localhost/")
 }
 
 // imageIsUnqualified reports whether ref is a container "short name" — an

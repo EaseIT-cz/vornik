@@ -175,25 +175,29 @@
                 {{template "spendCard" (dict "Label" "Month-to-date"  "USD" .Spend.MonthToDateUSD "Color" "purple")}}
             </div>
 
-            {{/* Cache savings tile — Phase E response cache + future
-                 Phase D embedding cache when pricing arrives. Hidden
-                 until the cache has at least one hit so a fresh
-                 install isn't dominated by a $0.00 placeholder.
-                 Sits between spend rows and the "right now" panel so
-                 the dollar saved sits visually next to the dollar
-                 spent — operator immediately sees the net. */}}
+            {{/* Response-cache card — Vornik's own Phase E response cache
+                 (calls answered from llm_response_cache without a
+                 provider). Hidden until the cache has at least one hit.
+                 Named for the cache it measures and its window, and
+                 drills down to the tile on /ui/spend that shows the same
+                 figures under the same labels: it is NOT the provider
+                 prompt-cache savings shown beside spend there, and its
+                 figures are not windowed (2026-10-14,
+                 local-llm-response-cache-design.md §Cache-savings figures
+                 on the console). */}}
             {{if .CacheSavings.Available}}
-            <div class="glass rounded-xl border border-emerald-700/40 overflow-hidden">
-                {{template "sectionHeader" (dict "Title" "LLM cache savings" "Href" "/ui/spend" "HrefLabel" "drill down →")}}
+            <div id="response-cache-card" class="glass rounded-xl border border-emerald-700/40 overflow-hidden">
+                {{template "sectionHeader" (dict "Title" "Response cache (served by Vornik)" "Href" "/ui/spend#response-cache" "HrefLabel" "drill down →")}}
                 <div class="px-5 py-4 grid grid-cols-2 gap-4 text-xs">
                     <div>
-                        <dt class="text-ink-500 uppercase tracking-wider text-[10px]">$ saved (lifetime)</dt>
-                        <dd class="text-3xl font-semibold text-emerald-700 dark:text-emerald-300 tabular-nums" title="Sum of hit_count × CostUSD(model, prompt_tokens, completion_tokens) across the Phase E response cache. Lifetime since first hit landed; not a 24h window.">{{fmtUSD .CacheSavings.TotalSavingsUSD}}</dd>
+                        <dt class="text-ink-500 uppercase tracking-wider text-[10px]">$ saved · all cached entries</dt>
+                        <dd class="text-3xl font-semibold text-emerald-700 dark:text-emerald-300 tabular-nums" title="Sum over every cached entry of hit_count × CostUSD(model, prompt_tokens, completion_tokens). Counts from when each entry was cached; entries unused for retention.response_cache_days are deleted with their counts, so this is not a lifetime total and not a 24h / 7d / 30d window. A lower bound: entries without token counts and un-priced models add hits but no dollars.">{{fmtUSD .CacheSavings.TotalSavingsUSD}}</dd>
                     </div>
                     <div>
-                        <dt class="text-ink-500 uppercase tracking-wider text-[10px]">LLM calls skipped</dt>
+                        <dt class="text-ink-500 uppercase tracking-wider text-[10px]">LLM calls skipped · all cached entries</dt>
                         <dd class="text-3xl font-semibold text-ink-100 tabular-nums">{{.CacheSavings.TotalHits}}</dd>
                     </div>
+                    <p class="col-span-2 text-[11px] text-ink-500">Calls Vornik answered itself, with no provider call. Separate from the provider prompt-cache savings shown with spend, which cover a 24h / 7d / 30d window.</p>
                 </div>
             </div>
             {{end}}
@@ -444,7 +448,7 @@
                         <h2 class="text-sm font-semibold text-ink-200">Model Leaderboard <span class="text-ink-500 font-normal">· last {{.WindowLabel}}</span></h2>
                         <p class="text-xs text-ink-500 mt-0.5">ranked by total cost</p>
                     </div>
-                    <div class="inline-flex items-center gap-1 rounded-lg border border-surface-600/70 bg-surface-800/60 p-0.5" role="group" aria-label="Leaderboard window">
+                    <div class="inline-flex items-center gap-1 rounded-lg border border-control bg-surface-800/60 p-0.5" role="group" aria-label="Leaderboard window">
                         <button type="button" data-leaderboard-window="1d" aria-pressed="{{if eq .WindowParam "1d"}}true{{else}}false{{end}}" class="px-2.5 py-1 text-xs rounded-md transition-colors {{if eq .WindowParam "1d"}}bg-accent-500/20 text-accent-300{{else}}text-ink-400 hover:bg-surface-700/70 hover:text-ink-200{{end}}">1d</button>
                         <button type="button" data-leaderboard-window="7d" aria-pressed="{{if eq .WindowParam "7d"}}true{{else}}false{{end}}" class="px-2.5 py-1 text-xs rounded-md transition-colors {{if eq .WindowParam "7d"}}bg-accent-500/20 text-accent-300{{else}}text-ink-400 hover:bg-surface-700/70 hover:text-ink-200{{end}}">7d</button>
                         <button type="button" data-leaderboard-window="30d" aria-pressed="{{if eq .WindowParam "30d"}}true{{else}}false{{end}}" class="px-2.5 py-1 text-xs rounded-md transition-colors {{if eq .WindowParam "30d"}}bg-accent-500/20 text-accent-300{{else}}text-ink-400 hover:bg-surface-700/70 hover:text-ink-200{{end}}">30d</button>

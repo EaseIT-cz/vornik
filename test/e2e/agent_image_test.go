@@ -21,6 +21,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"vornik.io/vornik/internal/testutil/testenv"
 )
 
 const (
@@ -148,7 +150,7 @@ func TestAgentImageSmokeBuildsAndRunsAsNonRoot(t *testing.T) {
 		"--volume", fmt.Sprintf("%s:/app/workspace:rw,Z", workspaceDir),
 		agentImageTag,
 	)
-	runCmd.Env = append(os.Environ(),
+	runCmd.Env = testenv.Clean(
 		// The entrypoint inspects these but short-circuits on
 		// CANCEL before actually calling out, so dummy values are
 		// fine.

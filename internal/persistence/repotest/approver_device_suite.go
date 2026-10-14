@@ -43,6 +43,36 @@ func RunApproverDeviceSuite(t *testing.T, repo persistence.ApproverDeviceReposit
 	t.Run("CreateRequestCapped_bounds_pending_and_recent", func(t *testing.T) { approverCappedCreate(t, newApproverHarness(t, fresh)) })
 	t.Run("CreateRequestCapped_two_concurrent_at_the_limit", func(t *testing.T) { approverCappedCreateConcurrent(t, newApproverHarness(t, fresh)) })
 	t.Run("ExpirePendingRows_returns_what_it_expired", func(t *testing.T) { approverExpirePendingRows(t, newApproverHarness(t, fresh)) })
+	// Agent-administered design §9.2d, GitHub #264.
+	t.Run("WithdrawRequest_is_one_guarded_transition", func(t *testing.T) { approverWithdraw(t, newApproverHarness(t, fresh)) })
+	t.Run("WithdrawRequest_and_the_expiry_tick_transition_once", func(t *testing.T) { approverWithdrawVsExpiry(t, newApproverHarness(t, fresh)) })
+	t.Run("WithdrawRequest_refuses_bad_input", func(t *testing.T) { approverWithdrawRefusesBadInput(t, newApproverHarness(t, fresh)) })
+	// Config-apply journal design §13.3, GitHub #302 (migration 227).
+	t.Run("Every_declared_kind_stores_and_decides_with_a_choice", func(t *testing.T) { approverEveryKindStores(t, newApproverHarness(t, fresh)) })
+}
+
+// approverEveryKindStores files one request of every kind in
+// persistence.ApprovalKinds, so a kind added to the list without widening the
+// kind CHECK on a driver fails here (GitHub #302: config_journal_drift,
+// migration 227), and decides the config_journal_drift one with a choice.
+func approverEveryKindStores(t *testing.T, h *approverHarness) {
+	for i, kind := range persistence.ApprovalKinds {
+		r := h.request(fmt.Sprintf("apr_kind%02d", i))
+		r.Kind = kind
+		if err := h.repo.CreateRequest(h.ctx, r); err != nil {
+			t.Fatalf("CreateRequest(%s): %v", kind, err)
+		}
+		if kind == persistence.ApprovalKindConfigJournalDrift {
+			if err := h.repo.DecideWithChoice(h.ctx, r.ID, r.RenderedSHA256, "dev_x", true, "restore", h.now); err != nil {
+				t.Fatalf("DecideWithChoice(%s): %v", kind, err)
+			}
+			got, err := h.repo.GetRequest(h.ctx, r.ID)
+			if err != nil || got.Status != persistence.ApprovalApproved || got.DecidedChoice != "restore" {
+				t.Fatalf("decided row = %+v, %v", got, err)
+			}
+		}
+	}
+	t.Logf("examined %d kinds", len(persistence.ApprovalKinds))
 }
 
 // approverBrokerActionKind: plan P4.8's broker_action kind is accepted on

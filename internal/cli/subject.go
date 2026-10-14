@@ -14,7 +14,7 @@ import (
 
 	"vornik.io/vornik/internal/config"
 	"vornik.io/vornik/internal/datasubject"
-	"vornik.io/vornik/internal/persistence/postgres"
+	"vornik.io/vornik/internal/persistence/subjectstore"
 	"vornik.io/vornik/internal/storage"
 )
 
@@ -163,7 +163,7 @@ func init() {
 	subjectEraseCmd.Flags().BoolVar(&subjectEraseYes, "yes", false,
 		"skip the confirmation prompt (erasure is irreversible)")
 	subjectLinkCmd.Flags().StringVar(&subjectLinkTable, "table", "", "table the row lives in (required)")
-	subjectLinkCmd.Flags().StringVar(&subjectLinkRow, "row", "", "row id (required)")
+	subjectLinkCmd.Flags().StringVar(&subjectLinkRow, "row", "", "row id (required; channel_sessions: <kind>/<session_id>)")
 	subjectLinkCmd.Flags().StringVar(&subjectLinkProject, "project", "", "project id, for project-scoped tables")
 	subjectLinkCmd.Flags().BoolVar(&subjectLinkShared, "shared", false,
 		"the row also concerns other people (content withheld under Art 15(4))")
@@ -173,8 +173,9 @@ func init() {
 	rootCmd.AddCommand(subjectCmd)
 }
 
-// openSubjectRepo wires the repository, or explains why it cannot.
-func openSubjectRepo(ctx context.Context) (*postgres.DataSubjectRepository, func(), error) {
+// openSubjectRepo wires the repository on either driver (GitHub #355), or
+// explains why it cannot.
+func openSubjectRepo(ctx context.Context) (*subjectstore.Repository, func(), error) {
 	cfg, _, err := config.Load()
 	if err != nil {
 		return nil, nil, fmt.Errorf("load config: %w", err)
@@ -183,12 +184,12 @@ func openSubjectRepo(ctx context.Context) (*postgres.DataSubjectRepository, func
 	if err != nil {
 		return nil, nil, fmt.Errorf("open database: %w", err)
 	}
-	db, err := requirePostgresDB(backend, "subject")
+	repo, err := subjectStoreFor(backend, "subject")
 	if err != nil {
 		_ = backend.Close()
 		return nil, nil, err
 	}
-	return postgres.NewDataSubjectRepository(db), func() { _ = backend.Close() }, nil
+	return repo, func() { _ = backend.Close() }, nil
 }
 
 func runSubjectCreate(_ *cobra.Command, _ []string) error {
@@ -450,7 +451,7 @@ func runSubjectExport(_ *cobra.Command, args []string) error {
 	}
 	fmt.Printf("\nrequest %s actioned; report hash %s\n", req.ID, hash)
 	fmt.Printf("%d item(s); %d withheld under Art 15(4)\n", len(exp.Items), countWithheld(exp))
-	warnIfKGUnresolved(ids, req.SubjectID)
+	warnIfKGUnresolved(ids, req)
 	return nil
 }
 
@@ -466,7 +467,12 @@ func runSubjectExport(_ *cobra.Command, args []string) error {
 // Printed AFTER the report rather than as a gate: refusing to export because an
 // optional widening step was skipped would put the Art 12(3) clock at risk over
 // a judgement that is the operator's to make.
-func warnIfKGUnresolved(ids []datasubject.Identifier, subjectID string) {
+//
+// resolve-kg needs a VERIFIED request (design §4.17.9): while this one still
+// is, the hint names it; once it has been actioned (an export), a widening run
+// needs a fresh verified request, and the hint says so rather than printing a
+// command that would be refused.
+func warnIfKGUnresolved(ids []datasubject.Identifier, req datasubject.Request) {
 	for _, id := range ids {
 		if id.Kind == datasubject.KindKGEntity {
 			return
@@ -474,7 +480,12 @@ func warnIfKGUnresolved(ids []datasubject.Identifier, subjectID string) {
 	}
 	fmt.Printf("\nNOTE: no knowledge-graph entity is bound to this subject, so records that name\n")
 	fmt.Printf("them only in prose were not covered. If they may be NAMED in ingested content:\n\n")
-	fmt.Printf("  vornikctl subject resolve-kg %s\n\n", subjectID)
+	if req.MayProduceData() {
+		fmt.Printf("  vornikctl subject resolve-kg %s --request %s\n\n", req.SubjectID, req.ID)
+	} else {
+		fmt.Printf("  vornikctl subject resolve-kg %s --request <a verified request for this subject>\n\n", req.SubjectID)
+		fmt.Printf("Request %s is %s; resolution runs only under a verified request.\n", req.ID, req.State)
+	}
 	fmt.Printf("It previews candidates and writes nothing until you name one.\n")
 }
 

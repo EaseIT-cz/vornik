@@ -191,7 +191,6 @@ func TestAPI_SubmitTask_AndRetrieveCompletedResult(t *testing.T) {
 	schedulerCfg := scheduler.DefaultConfig()
 	schedulerCfg.PollInterval = 25 * time.Millisecond
 	schedulerCfg.RecoveryInterval = time.Second
-	schedulerCfg.ExecutionTimeout = 2 * time.Second
 	rt := newFakeRuntimeManager()
 	exec := executor.NewWithOptions(
 		rt,

@@ -66,7 +66,7 @@ yet. Expect it to take longer than usual; that is the catch-up pass, not a hang.
 | Config | `~/.config/vornik/config.yaml` | `VORNIK_CONFIG` |
 | Database | rootless podman container `vornik-postgres`, db/user `vornik` | `VORNIK_PG_CONTAINER` / `VORNIK_PG_DB` / `VORNIK_PG_USER` |
 | UI/API port | `8080` | `VORNIK_HTTP_PORT` |
-| Build image | `docker.io/library/golang:1.25` | `VORNIK_GO_IMAGE` |
+| Build image | `docker.io/library/golang:1.26.9` | `VORNIK_GO_IMAGE` |
 
 Like the quickstart, it rebuilds `vornik` + `vornikctl` in an **ephemeral
 golang container** — no host Go toolchain required.

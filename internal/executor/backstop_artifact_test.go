@@ -292,6 +292,11 @@ func (f *fakeArtifactStore) Store(_ context.Context, projectID, executionID, tas
 	}, nil
 }
 
+// StoreFile records like Store, naming the descriptor's path (GitHub #359).
+func (f *fakeArtifactStore) StoreFile(ctx context.Context, projectID, executionID, taskID, name string, src *os.File) (*persistence.Artifact, error) {
+	return f.Store(ctx, projectID, executionID, taskID, name, src.Name())
+}
+
 // Retrieve satisfies the ArtifactStore interface for tests that
 // don't need to read; backstop tests verify the Store side only.
 func (f *fakeArtifactStore) Retrieve(_ context.Context, _ string) ([]byte, error) {

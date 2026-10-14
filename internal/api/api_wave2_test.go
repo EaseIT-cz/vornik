@@ -525,7 +525,7 @@ func w2OrphanFKDB(t *testing.T) *sql.DB {
 	stmts := []string{
 		`CREATE TABLE tasks (id TEXT PRIMARY KEY)`,
 		`CREATE TABLE task_llm_usage (id TEXT PRIMARY KEY, task_id TEXT, source TEXT, recorded_at TIMESTAMP)`,
-		`CREATE TABLE tool_audit_log (id TEXT PRIMARY KEY, task_id TEXT)`,
+		`CREATE TABLE tool_audit_log (id TEXT PRIMARY KEY, task_id TEXT, created_at TIMESTAMP NOT NULL DEFAULT '2000-06-01 00:00:00')`,
 		`CREATE TABLE task_watchers (task_id TEXT)`,
 		`INSERT INTO tasks (id) VALUES ('T1')`,
 		`INSERT INTO task_llm_usage (id, task_id, source) VALUES ('u1','T1','workflow_step')`,

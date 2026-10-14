@@ -61,19 +61,20 @@ func (a *sqliteStringArray) Scan(src interface{}) error {
 	return nil
 }
 
-// sqliteTimeLayout is the ONE text form of a SQLite timestamp: UTC, nine
-// fractional digits, "Z" — fixed width, so string order is time order.
-// SQLite compares these TEXT columns as strings. RFC3339Nano, the form used
-// until 2026-10-01, trims trailing zeros and its "Z" sorts above every digit,
-// so "…:05Z" sorted after "…:05.5Z" (SQLite timestamp ordering design).
-const sqliteTimeLayout = "2006-01-02T15:04:05.000000000Z"
+// The ONE text form of a SQLite timestamp is persistence.SQLiteTimeLayout:
+// UTC, nine fractional digits, "Z" — fixed width, so string order is time
+// order. SQLite compares these TEXT columns as strings. RFC3339Nano, the form
+// used until 2026-10-01, trims trailing zeros and its "Z" sorts above every
+// digit, so "…:05Z" sorted after "…:05.5Z" (SQLite timestamp ordering design).
+// The layout lives in internal/persistence (one definition) because the
+// retention sweeper binds thresholds against SQLite columns too (GitHub #360).
 
-// sqliteTime renders a time.Time in sqliteTimeLayout. modernc.org/sqlite
+// sqliteTime renders a time.Time in persistence.SQLiteTimeLayout. modernc.org/sqlite
 // doesn't auto-convert TEXT → time.Time on Scan, so the round-trip goes
 // through string at both ends — sqliteTime to encode + scanTime / sqlTime to
 // decode, which parse this form with the RFC3339Nano layout.
 func sqliteTime(t time.Time) string {
-	return t.UTC().Format(sqliteTimeLayout)
+	return persistence.SQLiteTime(t)
 }
 
 // sqliteTimePtr is the nullable companion; returns nil when t is

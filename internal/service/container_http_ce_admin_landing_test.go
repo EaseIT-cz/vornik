@@ -25,7 +25,7 @@ func TestNewContainer_CommunityAdminLandingHidesEESurfaces(t *testing.T) {
 	// every EE admin dep is nil regardless.
 	cfg := newComposerWiringTestConfig(t) // AuthEnabled defaults false
 
-	c, err := NewContainer(cfg, isolatedConfigPath(t))
+	c, err := newUnitTestContainer(t, cfg, isolatedConfigPath(t))
 	if err != nil {
 		t.Fatalf("NewContainer: unexpected error: %v", err)
 	}

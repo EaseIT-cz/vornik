@@ -95,6 +95,8 @@ func (s *SlackChannelsSubsystem) Start(ctx context.Context) error {
 		)
 		store.SetPersister(c.channelSessionPersister("slack"))
 		store.SetChannel(ch)
+		store.disclosure = c.AIDisclosure  // Art 50 notice before file sends (GitHub #342)
+		ch.SetAIDisclosure(c.AIDisclosure) // config-assistant replies (GitHub #342)
 		// Back get_channel_thread so the lead can pull an earlier thread in the
 		// same channel when a channel-level follow-up refers to one.
 		// Late-bound: stores are built here, after the dispatcher agent.

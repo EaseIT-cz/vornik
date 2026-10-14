@@ -35,6 +35,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/rs/zerolog"
@@ -410,7 +411,52 @@ type Channel struct {
 	// In-memory only: daemon restart clears it.
 	sessionsMu sync.Mutex
 	sessions   map[string]*sessionEntry
+
+	// Asynchronous mention turns (GitHub #142 #22, outcome-quality LLD §S6).
+	// A mention turn runs after the delivery is acknowledged, on a context
+	// detached from the request. turnsCtx is the parent every such turn is
+	// cancelled with: it ends when Start's context ends (daemon shutdown) or
+	// on Stop. inFlight counts running turns so shutdown can drain them.
+	// Built lazily by turnsParent, so a Channel constructed as a struct
+	// literal (tests, the service's orphan checks) is safe too.
+	turnsOnce   sync.Once
+	turnsCtx    context.Context
+	cancelTurns context.CancelCauseFunc
+	inFlight    sync.WaitGroup
+
+	// seenDeliveries de-duplicates mention deliveries by X-GitHub-Delivery,
+	// so a redelivery (GitHub's "Redeliver" button, or the API) does not run
+	// a second turn and post a second reply. In-memory and per daemon.
+	deliveriesMu   sync.Mutex
+	seenDeliveries map[string]time.Time
 }
+
+// errChannelStopping is the cause a running mention turn is cancelled with
+// when the channel stops (daemon shutdown).
+var errChannelStopping = errors.New("github-app channel stopping")
+
+// errAsyncTurnBackstop is the cause of the channel's own last-resort bound on
+// a mention turn. See asyncTurnBackstop.
+var errAsyncTurnBackstop = errors.New("github-app mention turn exceeded the channel backstop")
+
+// asyncTurnBackstop cancels a detached mention turn that is still running
+// this long after it started. It is a goroutine-leak guard, not the turn
+// bound: the production receiver (dispatcher.ChannelReceiver) bounds every
+// turn whose context has no deadline at TurnTimeout, 10m by default, and
+// names that bound in its error. The backstop is a cancel timer rather than
+// a deadline precisely so the receiver still sees "no deadline" and applies
+// its own, named bound first.
+const asyncTurnBackstop = 15 * time.Minute
+
+// deliveryDedupWindow is how long a mention delivery id is remembered.
+// GitHub lets an operator redeliver a delivery for days; a day covers the
+// realistic case (a delivery marked failed, redelivered the same day) at a
+// bounded memory cost (maxSeenDeliveries entries).
+const deliveryDedupWindow = 24 * time.Hour
+
+// maxSeenDeliveries caps the de-duplication set; the oldest entry is evicted
+// first.
+const maxSeenDeliveries = 4096
 
 // installation is the resolved internal form of an InstallationConfig
 // plus the per-installation outbound token cache. One per
@@ -510,6 +556,7 @@ func New(cfg Config) (*Channel, error) {
 		sessions:          make(map[string]*sessionEntry),
 		installations:     installs,
 		installationsByID: indexInstallations(installs),
+		seenDeliveries:    make(map[string]time.Time),
 	}
 	return c, nil
 }
@@ -663,6 +710,9 @@ func (c *Channel) Start(ctx context.Context, recv conversation.Receiver) error {
 	c.recvMu.Unlock()
 	c.verifyInstallationPermissions(ctx)
 	<-ctx.Done()
+	// Shutdown: cancel the mention turns still running and wait for them, so
+	// none outlives the daemon's subsystems (GitHub #142 #22).
+	c.stopTurns()
 	return ctx.Err()
 }
 
@@ -701,12 +751,123 @@ func (c *Channel) verifyInstallationPermissions(ctx context.Context) {
 	}
 }
 
-// Stop clears the Receiver binding. Idempotent.
-func (c *Channel) Stop() error {
+// waitInFlight blocks until every dispatched mention turn has returned. Used
+// by stopTurns, and by tests as a deterministic synchronisation point.
+func (c *Channel) waitInFlight() {
+	c.inFlight.Wait()
+}
+
+// stopTurns unbinds the receiver, cancels every running mention turn and
+// waits for them to return. Clearing c.recv under recvMu first is what makes
+// the Wait safe: handleIssueComment adds to inFlight under the same lock and
+// only while a receiver is bound, so no Add can race the Wait.
+func (c *Channel) stopTurns() {
 	c.recvMu.Lock()
 	c.recv = nil
 	c.recvMu.Unlock()
+	_, cancelTurns := c.turnsParent()
+	cancelTurns(errChannelStopping)
+	c.waitInFlight()
+}
+
+// Stop clears the Receiver binding, cancels running mention turns and waits
+// for them. Idempotent. A stopped channel is not restarted (it is built once
+// at boot), so the cancelled turn parent is never reused.
+func (c *Channel) Stop() error {
+	c.stopTurns()
 	return nil
+}
+
+// acceptDelivery records a mention delivery id and reports whether it is new.
+// An empty id (a delivery without the header) is always accepted: there is
+// nothing to de-duplicate on, and dropping it would silence a real mention.
+func (c *Channel) acceptDelivery(id string, now time.Time) bool {
+	if id == "" {
+		return true
+	}
+	c.deliveriesMu.Lock()
+	defer c.deliveriesMu.Unlock()
+	if c.seenDeliveries == nil {
+		c.seenDeliveries = make(map[string]time.Time)
+	}
+	cutoff := now.Add(-deliveryDedupWindow)
+	for seenID, seenAt := range c.seenDeliveries {
+		if seenAt.Before(cutoff) {
+			delete(c.seenDeliveries, seenID)
+		}
+	}
+	if _, dup := c.seenDeliveries[id]; dup {
+		return false
+	}
+	// When full, evict the entry remembered earliest (not an LRU: a still
+	// valid id can go first under a flood of 4096 deliveries in 24h).
+	if len(c.seenDeliveries) >= maxSeenDeliveries {
+		var oldestID string
+		var oldestAt time.Time
+		for seenID, seenAt := range c.seenDeliveries {
+			if oldestID == "" || seenAt.Before(oldestAt) {
+				oldestID, oldestAt = seenID, seenAt
+			}
+		}
+		delete(c.seenDeliveries, oldestID)
+	}
+	c.seenDeliveries[id] = now
+	return true
+}
+
+// forgetDelivery removes a delivery id after its turn failed or was dropped,
+// so an operator who redelivers it gets a retry rather than a silent
+// duplicate-drop.
+func (c *Channel) forgetDelivery(id string) {
+	if id == "" {
+		return
+	}
+	c.deliveriesMu.Lock()
+	delete(c.seenDeliveries, id)
+	c.deliveriesMu.Unlock()
+}
+
+// turnsParent returns the context every mention turn is cancelled with, and
+// its cancel, building them on first use.
+func (c *Channel) turnsParent() (context.Context, context.CancelCauseFunc) {
+	c.turnsOnce.Do(func() {
+		c.turnsCtx, c.cancelTurns = context.WithCancelCause(context.Background())
+	})
+	return c.turnsCtx, c.cancelTurns
+}
+
+// replyMarkerKey carries a mention turn's "a reply was posted" flag on its
+// context, so the turn's owner can tell a turn that failed before replying
+// (safe to retry on redelivery) from one that failed after (not safe: a
+// second comment). Send sets it; context values survive the receiver's
+// derived and detached contexts.
+type replyMarkerKey struct{}
+
+func withReplyMarker(ctx context.Context) (context.Context, *atomic.Bool) {
+	flag := &atomic.Bool{}
+	return context.WithValue(ctx, replyMarkerKey{}, flag), flag
+}
+
+func markReplied(ctx context.Context) {
+	if flag, ok := ctx.Value(replyMarkerKey{}).(*atomic.Bool); ok {
+		flag.Store(true)
+	}
+}
+
+// detachedTurnContext builds the context a mention turn runs on: the request's
+// values (trace ids, logger) without its cancellation, cancelled instead when
+// the channel stops or the backstop fires. It carries no deadline, so the
+// receiver's own turn bound applies (see asyncTurnBackstop).
+func (c *Channel) detachedTurnContext(reqCtx context.Context) (context.Context, func()) {
+	turnCtx, cancel := context.WithCancelCause(context.WithoutCancel(reqCtx))
+	parent, _ := c.turnsParent()
+	stopOnShutdown := context.AfterFunc(parent, func() { cancel(context.Cause(parent)) })
+	backstop := time.AfterFunc(asyncTurnBackstop, func() { cancel(errAsyncTurnBackstop) })
+	return turnCtx, func() {
+		backstop.Stop()
+		stopOnShutdown()
+		cancel(nil)
+	}
 }
 
 // Send posts an issue / PR comment via the GitHub REST API,
@@ -719,7 +880,11 @@ func (c *Channel) Stop() error {
 // Returns the GitHub comment ID as a decimal string so the
 // DispatcherReceiver can stash it for future InReplyTo threading.
 func (c *Channel) Send(ctx context.Context, msg conversation.ChannelMessage) (string, error) {
-	return c.sendIssueComment(ctx, msg.SessionID, msg.Text)
+	id, err := c.sendIssueComment(ctx, msg.SessionID, msg.Text)
+	if err == nil {
+		markReplied(ctx)
+	}
+	return id, err
 }
 
 // ListSessions returns a snapshot of every GitHub issue / PR that
@@ -1236,16 +1401,55 @@ func (c *Channel) handleIssueComment(ctx context.Context, event, delivery string
 			return
 		}
 	}
+	// ACK FIRST, THEN THE TURN (GitHub #142 #22, outcome-quality LLD §S6).
+	// This used to call Receive synchronously on the request context. GitHub
+	// stops waiting for a delivery after about 10 seconds and closes the
+	// connection; net/http then cancels r.Context(), so a turn longer than
+	// that was cancelled mid-way and the thread got no reply (unless a proxy
+	// in front happened to hold the upstream connection open). The handler
+	// now returns 200 at once and the turn runs on a detached context, the
+	// shape the Slack channel adopted on 2026-07-30 for its 3-second budget.
+	//
+	// Order: no receiver → drop, remember nothing (a later delivery of the
+	// same id with a receiver bound must run); duplicate id → ack, no turn;
+	// otherwise remember the id and launch. inFlight.Add happens under recvMu,
+	// and only while a receiver is bound, so it can never race stopTurns'
+	// Wait (which unbinds under the same lock first). acceptDelivery's
+	// check-and-remember is atomic under deliveriesMu.
 	c.recvMu.RLock()
 	recv := c.recv
-	c.recvMu.RUnlock()
 	if recv == nil {
+		c.recvMu.RUnlock()
 		c.logger.Warn().Str("delivery", delivery).Msg("github-app: @vornik mention received but no Receiver bound; dropping")
 		return
 	}
-	if err := recv.Receive(ctx, msg); err != nil {
-		c.logger.Warn().Err(err).Str("delivery", delivery).Msg("github-app: Receiver.Receive returned error")
+	if !c.acceptDelivery(delivery, time.Now()) {
+		c.recvMu.RUnlock()
+		c.logger.Info().Str("delivery", delivery).Str("project_id", inst.projectID).
+			Msg("github-app: duplicate @vornik mention delivery acknowledged; no second turn")
+		return
 	}
+	c.inFlight.Add(1)
+	c.recvMu.RUnlock()
+	turnCtx, release := c.detachedTurnContext(ctx)
+	turnCtx, replied := withReplyMarker(turnCtx)
+	go func() {
+		defer c.inFlight.Done()
+		defer release()
+		if err := recv.Receive(turnCtx, msg); err != nil {
+			// A failed turn may be retried by redelivering it, unless it
+			// already posted its reply: a redelivery would post a second
+			// comment (review-20261013-b982 #2).
+			if !replied.Load() {
+				c.forgetDelivery(delivery)
+			}
+			ev := c.logger.Warn().Err(err).Str("delivery", delivery)
+			if cause := context.Cause(turnCtx); cause != nil {
+				ev = ev.AnErr("turn_cause", cause)
+			}
+			ev.Msg("github-app: Receiver.Receive returned error")
+		}
+	}()
 }
 
 // handlePullRequestOpened fires on `pull_request.opened`. Honours

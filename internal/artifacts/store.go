@@ -298,6 +298,21 @@ func (s *Store) deriveKey(storagePath string) string {
 // `sendArtifactsToWatchers`) won't find the artifact, so callers should
 // always pass it when available.
 func (s *Store) Store(ctx context.Context, projectID, executionID, taskID, name, sourcePath string) (*persistence.Artifact, error) {
+	src, err := OpenRegularNoFollow(sourcePath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to scan artifact: read source: %w", err)
+	}
+	defer func() { _ = src.Close() }()
+	return s.StoreFile(ctx, projectID, executionID, taskID, name, src)
+}
+
+// StoreFile is Store reading the bytes from an already-open descriptor
+// instead of a path (GitHub #359, 15-artifact-store.md §13.3 H3). The
+// step-output harvest opens each file beneath its workspace root and hands
+// the descriptor here, so nothing between the harvest's check and the
+// store's read can re-resolve a path an agent is able to change. The
+// descriptor is read from its current offset to EOF; the caller closes it.
+func (s *Store) StoreFile(ctx context.Context, projectID, executionID, taskID, name string, src *os.File) (*persistence.Artifact, error) {
 	// Generate artifact ID
 	artifactID := persistence.GenerateID("artifact")
 
@@ -349,7 +364,7 @@ func (s *Store) Store(ctx context.Context, projectID, executionID, taskID, name,
 	// persistAndScan helper still owns the read/scan/redact logic;
 	// it returns the bytes to write, then we hand them to the
 	// backend in a single Put.
-	hash, size, body, err := s.scanForBackend(sourcePath, mimeType, projectID, taskID, safeName, true)
+	hash, size, body, err := s.scanForBackend(src, mimeType, projectID, taskID, safeName, true)
 	if err != nil {
 		return nil, fmt.Errorf("failed to scan artifact: %w", err)
 	}
@@ -446,7 +461,12 @@ func (s *Store) storeInput(ctx context.Context, projectID, name, sourcePath stri
 	storageKey := filepath.ToSlash(filepath.Join(safeProjectID, "inputs", safeArtifactID, safeName))
 
 	mimeType := detectMimeType(name)
-	hash, size, body, err := s.scanForBackend(sourcePath, mimeType, projectID, "", safeName, scan)
+	src, err := OpenRegularNoFollow(sourcePath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to scan input artifact: read source: %w", err)
+	}
+	defer func() { _ = src.Close() }()
+	hash, size, body, err := s.scanForBackend(src, mimeType, projectID, "", safeName, scan)
 	if err != nil {
 		return nil, fmt.Errorf("failed to scan input artifact: %w", err)
 	}
@@ -653,7 +673,7 @@ func assertUnderBase(base, path string) error {
 	return safepath.AssertUnder(base, path)
 }
 
-// scanForBackend reads sourcePath into memory, optionally runs the
+// scanForBackend reads src (an already-open source; GitHub #359) into memory, optionally runs the
 // secret-leak scan + redaction, and returns the bytes plus their
 // SHA-256 + size. The caller writes the bytes through whatever
 // FileBackend it has configured.
@@ -671,8 +691,8 @@ func assertUnderBase(base, path string) error {
 // redaction is an egress control; masking an operator-uploaded review artifact
 // on the way IN provides no leak protection and corrupts the content). All other
 // callers pass scan=true.
-func (s *Store) scanForBackend(srcPath, mimeType, projectID, taskID, name string, scan bool) (string, int64, []byte, error) {
-	body, err := os.ReadFile(srcPath)
+func (s *Store) scanForBackend(src io.Reader, mimeType, projectID, taskID, name string, scan bool) (string, int64, []byte, error) {
+	body, err := io.ReadAll(src)
 	if err != nil {
 		return "", 0, nil, fmt.Errorf("read source: %w", err)
 	}

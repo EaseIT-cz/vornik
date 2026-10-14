@@ -80,13 +80,14 @@ func ResponseFormatStructFromContext(ctx context.Context) *ResponseFormat {
 }
 
 // WithRequestMaxTokens annotates ctx with a per-request output-token cap.
-// Operators set chat.router.<sub>.max_tokens as the route's ceiling; the
-// per-request value may lower it (EffectiveMaxTokens: the smaller wins on
-// Client and the Claude subscription client). Bedrock alone lets the
-// per-request value win outright (GitHub #100, parked asymmetry;
-// 09-agent-runtime-contract.md §8.4). 0 leaves the field unset (meaning "use the
-// Provider default"); negatives are coerced to 0 so a malformed
-// payload doesn't accidentally raise the cap.
+// Operators set chat.router.<sub>.max_tokens (else chat.max_tokens) as the
+// route's ceiling; the per-request value may lower it, never raise it
+// (EffectiveMaxTokens: the smaller wins on Client, the Claude subscription
+// client and Bedrock; GitHub #100, #291; 09-agent-runtime-contract.md §8.4).
+// No Bedrock model is exempt. codex-subscription sends no cap and ignores the
+// value. 0 leaves the field unset (meaning "use the Provider default");
+// negatives are coerced to 0 so a malformed payload doesn't accidentally
+// raise the cap.
 func WithRequestMaxTokens(ctx context.Context, maxTokens int) context.Context {
 	if maxTokens <= 0 {
 		return ctx
@@ -94,12 +95,13 @@ func WithRequestMaxTokens(ctx context.Context, maxTokens int) context.Context {
 	return context.WithValue(ctx, maxTokensContextKey{}, maxTokens)
 }
 
-// EffectiveMaxTokens is the output cap a non-Bedrock client sends: the
+// EffectiveMaxTokens is the output cap every capping client sends: the
 // per-request value (MaxTokensFromContext) clamped to the route's
 // construction-time cap, so a role may lower the operator's ceiling but not
 // raise it. With no per-request value it is routeCap (0 = omit the field);
 // with no route cap (routeCap <= 0) it is the per-request value.
-// GitHub #100; see https://docs.vornik.io §8.4.
+// Client, the Claude subscription client and Bedrock all call it (GitHub
+// #100, #291); see https://docs.vornik.io §8.4.
 func EffectiveMaxTokens(ctx context.Context, routeCap int) int {
 	req := MaxTokensFromContext(ctx)
 	switch {

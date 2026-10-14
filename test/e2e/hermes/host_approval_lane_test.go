@@ -65,10 +65,10 @@ func hostActionRow(t *testing.T, db *sql.DB, marker string) (hostRow, error) {
 func runHostDriver(t *testing.T, s *stack, ctl, command string) (string, error) {
 	uid, gid := hermesUser(t)
 	run(t, "podman", "unshare", "chown", "-R", uid+":"+gid, filepath.Join(s.hermesHome, ".config"))
-	cmd := exec.Command("podman", "run", "--rm", "--network", "host",
+	cmd := exec.Command("podman", hermesRunArgs(t, "--rm", "--network", "host",
 		"-v", s.hermesHome+":/opt/data:Z", "-v", ctl+":/usr/local/bin/vornikctl:ro,Z",
 		"-e", "XDG_CONFIG_HOME=/opt/data/.config",
-		hermesImage, "python3", "/opt/data/host-driver.py", command)
+		hermesImage, "python3", "/opt/data/host-driver.py", command)...)
 	var out bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &out, &out
 	err := cmd.Run()
@@ -89,10 +89,10 @@ func TestA5_HermesHostApprovals(t *testing.T) {
 	phone := pairPhone(t, s)
 	ctl := buildStaticCtl(t, s)
 
-	connect := exec.Command("podman", "run", "--rm", "--network", "host",
+	connect := exec.Command("podman", hermesRunArgs(t, "--rm", "--network", "host",
 		"-v", s.hermesHome+":/opt/data:Z", "-v", ctl+":/usr/local/bin/vornikctl:ro,Z",
 		"-e", "XDG_CONFIG_HOME=/opt/data/.config", "-e", "VORNIK_API_KEY="+s.adminKey,
-		hermesImage, "/usr/local/bin/vornikctl", "agent", "connect", "hermes", "--url", s.apiURL)
+		hermesImage, "/usr/local/bin/vornikctl", "agent", "connect", "hermes", "--url", s.apiURL)...)
 	out, err := connect.CombinedOutput()
 	_ = exec.Command("podman", "unshare", "chown", "-R", "0:0", s.hermesHome).Run()
 	if err != nil {
@@ -114,9 +114,9 @@ func TestA5_HermesHostApprovals(t *testing.T) {
 	// config writer.
 	uid, gid := hermesUser(t)
 	run(t, "podman", "unshare", "chown", "-R", uid+":"+gid, s.hermesHome)
-	on := exec.Command("podman", "run", "--rm", "--network", "host",
+	on := exec.Command("podman", hermesRunArgs(t, "--rm", "--network", "host",
 		"-v", s.hermesHome+":/opt/data:Z", "-v", ctl+":/usr/local/bin/vornikctl:ro,Z",
-		"-e", "XDG_CONFIG_HOME=/opt/data/.config", hermesImage, "hermes", "vornik", "approvals", "on")
+		"-e", "XDG_CONFIG_HOME=/opt/data/.config", hermesImage, "hermes", "vornik", "approvals", "on")...)
 	onOut, onErr := on.CombinedOutput()
 	_ = exec.Command("podman", "unshare", "chown", "-R", "0:0", s.hermesHome).Run()
 	if b, _ := os.ReadFile(cfgPath); onErr != nil || !strings.Contains(string(b), "transport: vornik") || strings.Contains(string(b), "transport_fallback") {

@@ -28,6 +28,10 @@ import (
 type DaemonConfig struct {
 	BaseURL string
 	Token   string
+	// Project is the benchmark project the operator named. It is NOT sent to
+	// delegate (which declares no project; the key's project decides);
+	// VerifyKeyProject proves the key belongs to it before anything is
+	// cleared (agent-benchmark design §12.27, GitHub #378).
 	Project string
 	// PollInterval is how often a submitted task is checked. Defaults to 15s:
 	// benchmark tasks run for minutes, and polling faster spends request budget
@@ -43,6 +47,9 @@ type DaemonConfig struct {
 // DaemonTaskRunner submits benchmark tasks to a running daemon.
 type DaemonTaskRunner struct {
 	cfg DaemonConfig
+	// whoamiProject is the key's project_id from the last whoami reply, so
+	// VerifyKeyProject reads the same reply WriteTargetDatabase checked.
+	whoamiProject *string
 }
 
 // NewDaemonTaskRunner constructs the runner, applying defaults.
@@ -70,13 +77,65 @@ func NewDaemonTaskRunner(cfg DaemonConfig) *DaemonTaskRunner {
 // zero tables. An agent-benchmark run submits real tasks, so the same gap here
 // would write benchmark work into whatever the daemon is pointed at.
 func (d *DaemonTaskRunner) WriteTargetDatabase(ctx context.Context) (string, error) {
-	var reply struct {
-		Database string `json:"database"`
-	}
-	if err := d.call(ctx, "whoami", map[string]any{}, &reply); err != nil {
-		return "", fmt.Errorf("whoami: %w", err)
+	reply, err := d.whoami(ctx)
+	if err != nil {
+		return "", err
 	}
 	return reply.Database, nil
+}
+
+type whoamiReply struct {
+	Database  string `json:"database"`
+	ProjectID string `json:"project_id"`
+}
+
+func (d *DaemonTaskRunner) whoami(ctx context.Context) (whoamiReply, error) {
+	var reply whoamiReply
+	if err := d.call(ctx, "whoami", map[string]any{}, &reply); err != nil {
+		return whoamiReply{}, fmt.Errorf("whoami: %w", err)
+	}
+	project := reply.ProjectID
+	d.whoamiProject = &project
+	return reply, nil
+}
+
+// VerifyKeyProject refuses unless the companion key's project is the project
+// the operator named (agent-benchmark design §12.27, GitHub #378).
+//
+// WHY. delegate carries no project: every task runs in the KEY's project.
+// The pre-run clear and the trace reads use the NAMED project. With a key for
+// another project the run wiped one store, ran (and wrote memory) in the
+// other and recorded the arm under the first. Call it before anything
+// destructive. It reads the project from the whoami reply WriteTargetDatabase
+// already fetched, and asks whoami only when there is none.
+//
+// Fails closed: a reply with no project_id is refused, not waved through.
+func (d *DaemonTaskRunner) VerifyKeyProject(ctx context.Context) error {
+	want := strings.TrimSpace(d.cfg.Project)
+	if want == "" {
+		return fmt.Errorf("refusing to run: no benchmark project named, so there is " +
+			"nothing to check the companion key's project against")
+	}
+	if d.whoamiProject == nil {
+		if _, err := d.whoami(ctx); err != nil {
+			return fmt.Errorf("refusing to run: could not establish the companion key's "+
+				"project (%w); the run would clear project %q without knowing where its "+
+				"tasks land", err, want)
+		}
+	}
+	got := strings.TrimSpace(*d.whoamiProject)
+	if got == "" {
+		return fmt.Errorf("refusing to run: the daemon's whoami named no project for this "+
+			"companion key, so nothing proves its tasks would run in --project %q", want)
+	}
+	if got != want {
+		return fmt.Errorf("refusing to run: --project is %q but the companion key belongs to "+
+			"project %q. Every task would run (and write memory) in %q while %q's store is "+
+			"cleared and the results recorded as %q. Use a companion key for %q, or "+
+			"--project %q if that is really the benchmark project",
+			want, got, got, want, want, want, got)
+	}
+	return nil
 }
 
 // Run submits one task and waits for it to terminate.
@@ -89,10 +148,13 @@ func (d *DaemonTaskRunner) Run(ctx context.Context, spec TaskSpec) (TaskOutcome,
 		TaskID string `json:"task_id"`
 		Status string `json:"status"`
 	}
+	// No "project": delegate does not declare one; a companion key's task
+	// runs in the key's own project. The argument was silently dropped until
+	// GitHub #305 made the tools strict, then refused (2026-10-14), so the
+	// project this run lands in is the key's, as it always was.
 	args := map[string]any{
 		"workflow": spec.Workflow,
 		"prompt":   spec.Prompt,
-		"project":  d.cfg.Project,
 	}
 	// Only set the key when there is something to stage: delegate treats a
 	// present inputArtifacts as a staging attempt, and every prompt-only task

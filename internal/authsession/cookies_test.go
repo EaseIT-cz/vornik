@@ -29,6 +29,7 @@ func TestNoLiteralSessionCookieNames(t *testing.T) {
 	}
 
 	var offenders []string
+	scanned := 0
 	for _, dir := range []string{"internal", "cmd"} {
 		err := filepath.Walk(filepath.Join(root, dir), func(path string, info os.FileInfo, err error) error {
 			if err != nil || info.IsDir() || !strings.HasSuffix(path, ".go") {
@@ -43,6 +44,7 @@ func TestNoLiteralSessionCookieNames(t *testing.T) {
 			if readErr != nil {
 				return readErr
 			}
+			scanned++
 			for literal, constant := range forbidden {
 				if strings.Contains(string(body), literal) {
 					rel, _ := filepath.Rel(root, path)
@@ -54,6 +56,11 @@ func TestNoLiteralSessionCookieNames(t *testing.T) {
 		if err != nil {
 			t.Fatalf("walk %s: %v", dir, err)
 		}
+	}
+	// #334 item 6 (audit 2026-10-12): a denylist over no files reports clean.
+	t.Logf("cookie-literal law: examined %d non-test Go files", scanned)
+	if scanned < 100 {
+		t.Fatalf("cookie-literal law: examined %d files (floor 100); a law that looked at nothing has not passed", scanned)
 	}
 
 	if len(offenders) > 0 {

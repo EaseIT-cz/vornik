@@ -127,15 +127,19 @@ func (r *ArtifactRepository) List(ctx context.Context, filter persistence.Artifa
 }
 
 // Delete removes one artifact by ID. No error on missing rows.
+//
+// SQLite runs with foreign_keys(OFF): the artifact's children
+// (project_ingest_queue) are deleted explicitly, in one transaction, as the
+// Postgres cascade does (GitHub #361; retention design §6).
 func (r *ArtifactRepository) Delete(ctx context.Context, id string) error {
-	_, err := r.db.ExecContext(ctx, `DELETE FROM artifacts WHERE id = ?`, id)
+	_, err := persistence.SQLiteDeleteCascadingTx(ctx, r.db, "artifacts", `id = ?`, id)
 	return err
 }
 
-// DeleteByExecutionID removes every artifact for one execution.
+// DeleteByExecutionID removes every artifact for one execution, children
+// included, as Delete does (GitHub #361).
 func (r *ArtifactRepository) DeleteByExecutionID(ctx context.Context, executionID string) error {
-	_, err := r.db.ExecContext(ctx,
-		`DELETE FROM artifacts WHERE execution_id = ?`, executionID)
+	_, err := persistence.SQLiteDeleteCascadingTx(ctx, r.db, "artifacts", `execution_id = ?`, executionID)
 	return err
 }
 

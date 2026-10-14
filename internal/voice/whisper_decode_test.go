@@ -174,10 +174,46 @@ func TestWhisperLocalSTT_NoAudioStreamIsErrNoAudioStream(t *testing.T) {
 	if !errors.As(err, &re) {
 		t.Fatalf("the run error must stay wrapped: %v", err)
 	}
+	// A container outside the demuxer allowlist (#348's input guard) is not
+	// audio this pipeline can read either: a PNG sent as a voice note. Found
+	// by the full CI run on e9793140b (2026-10-14, e2e lane
+	// TestSandboxMediaE2E_UndecodableInputSaysWhy): since the allowlist, the
+	// PNG failed before the stream map and got the generic reply.
+	sb = printingTools{ffmpegErr: sandboxtest.Failed(sandboxtool.FeatureVoiceSTT,
+		"[png_pipe @ 0x6108588e6000] Format not on whitelist 'mov,matroska,ogg,mp3,wav'\n"+
+			"Error opening input file /in/voice.")}.fake(t)
+	if err := transcribeWith(t, sb); !errors.Is(err, ErrNoAudioStream) {
+		t.Fatalf("a demuxer outside the allowlist: err = %v, want ErrNoAudioStream", err)
+	}
 	// Any other decode failure is not "no audio stream".
 	sb = printingTools{ffmpegErr: sandboxtest.Failed(sandboxtool.FeatureVoiceSTT, "Invalid data found when processing input")}.fake(t)
 	if err := transcribeWith(t, sb); err == nil || errors.Is(err, ErrNoAudioStream) {
 		t.Fatalf("a generic decode failure: %v", err)
+	}
+}
+
+// audit 2026-10-12 (GitHub #348): the inbound voice note is untrusted; the
+// normalise run carries the input guard (file protocol, demuxer allowlist)
+// immediately before -i.
+func TestNormaliseSpec_CarriesTheInputGuard(t *testing.T) {
+	want := strings.Join(sandboxtool.FFmpegInputGuard(), " ") + " -i /in/voice "
+	if args := strings.Join(NormaliseSpec([]byte("x")).Args, " "); !strings.Contains(args, want) {
+		t.Fatalf("normalise argv %q lacks %q", args, want)
+	}
+}
+
+// audit 2026-10-12 (GitHub #348): the transcode input is Piper's own WAV, but
+// the rule has no exceptions: the guard precedes its pinned -f wav -i.
+func TestTranscodeSpec_CarriesTheInputGuard(t *testing.T) {
+	want := strings.Join(sandboxtool.FFmpegInputGuard(), " ") + " -f wav -i /in/speech.wav "
+	for _, format := range []string{"ogg-opus", "mp4-aac"} {
+		spec, _, err := TranscodeSpec(filepath.Join(t.TempDir(), "speech.wav"), format)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if args := strings.Join(spec.Args, " "); !strings.Contains(args, want) {
+			t.Errorf("%s argv %q lacks %q", format, args, want)
+		}
 	}
 }
 

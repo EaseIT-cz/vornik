@@ -241,11 +241,50 @@ func (completedTaskRepo) Get(_ context.Context, id string) (*persistence.Task, e
 	return &persistence.Task{ID: id, ProjectID: "p1", Status: persistence.TaskStatusCompleted}, nil
 }
 
-// ordinaryDistill wires e for an ordinary task on an ordinary project.
+// ordinaryDistill wires e for an ordinary task on an ordinary project whose
+// record proves it read nothing third-party: every task is a parentless root
+// created by a companion key, with one execution whose one completed step has
+// an audited, untainted row (learning-loop design, amendments 2026-10-12 and
+// 2026-10-12b).
 func ordinaryDistill(e *Executor) {
 	e.taskRepo = completedTaskRepo{NewMockTaskRepo()}
 	e.workflows = &MockWorkflowResolver{
 		projects:  map[string]*registry.Project{"p1": {ID: "p1", DefaultWorkflowID: "plain"}},
 		workflows: map[string]*registry.Workflow{"plain": {ID: "plain"}},
 	}
+	e.outcomeRepo = cleanStepOutcomes{&taintOutcomeRepo{}}
+	e.persistTaskRepo = rootTaskLister{}
+	e.execRepo = cleanExecutions{}
+}
+
+// cleanStepOutcomes reports one audited, untainted step row for every task.
+type cleanStepOutcomes struct{ *taintOutcomeRepo }
+
+func (cleanStepOutcomes) List(_ context.Context, f persistence.ExecutionStepOutcomeFilter) ([]*persistence.ExecutionStepOutcome, error) {
+	calls := 1
+	return []*persistence.ExecutionStepOutcome{{
+		TaskID: *f.TaskID, ExecutionID: "ex-" + *f.TaskID, StepID: "s", Role: "worker", ToolCallsUsed: &calls,
+	}}, nil
+}
+
+// cleanExecutions reports one execution per task whose one step is "s".
+type cleanExecutions struct{ ExecutionRepository }
+
+func (cleanExecutions) List(_ context.Context, f persistence.ExecutionFilter) ([]*persistence.Execution, error) {
+	return []*persistence.Execution{{ID: "ex-" + *f.TaskID, TaskID: *f.TaskID, CompletedSteps: []string{"s"}}}, nil
+}
+
+// rootTaskLister answers every task as a parentless root a companion key made
+// (goal_origin companion, amendment 2026-10-13).
+type rootTaskLister struct{ persistence.TaskRepository }
+
+func (rootTaskLister) List(_ context.Context, f persistence.TaskFilter) ([]*persistence.Task, error) {
+	key := "akey_test"
+	out := make([]*persistence.Task, 0, len(f.IDs))
+	for _, id := range f.IDs {
+		out = append(out, &persistence.Task{ID: id, ProjectID: "p1",
+			CreationSource: persistence.TaskCreationSourceCompanion, CreatedByAPIKeyID: &key,
+			GoalOrigin: persistence.TaskGoalOriginCompanion})
+	}
+	return out, nil
 }

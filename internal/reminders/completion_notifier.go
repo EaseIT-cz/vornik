@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/rs/zerolog"
+	"vornik.io/vornik/internal/aidisclosure"
 	"vornik.io/vornik/internal/conversation"
 	"vornik.io/vornik/internal/executor"
 	"vornik.io/vornik/internal/persistence"
@@ -36,6 +37,16 @@ type CompletionNotifier struct {
 	artifactReader ReminderArtifactReader
 	fileResolver   ReminderFileSenderResolver
 	childLister    ReminderChildTaskLister
+
+	// disclosure applies the Art 50 notice to the push (design 2026-07-28
+	// §11.4, GitHub #342). Nil discloses with the compiled defaults.
+	disclosure *aidisclosure.Service
+}
+
+// WithDisclosure wires the daemon's Art 50 disclosure service so the
+// per-session notice state is shared with ChannelReceiver.
+func WithDisclosure(d *aidisclosure.Service) CompletionOption {
+	return func(n *CompletionNotifier) { n.disclosure = d }
 }
 
 // ReminderChildTaskLister walks one level of the task tree. Satisfied by
@@ -132,9 +143,10 @@ func (n *CompletionNotifier) NotifyTaskCompleted(ctx context.Context, task *pers
 				Msg("reminders: output artifact delivery failed")
 		}
 	}
-	if _, err := ch.Send(ctx, conversation.ChannelMessage{
+	// Art 50: footer on email, notice-first on per-session chats (GitHub #342).
+	if _, err := conversation.SendDisclosed(ctx, n.disclosure, ch, conversation.ChannelMessage{
 		SessionID: rem.ChannelRef, Text: body, Timestamp: n.clock(),
-	}); err != nil {
+	}, true); err != nil {
 		metricTaskDeliverErrors.Inc()
 		_ = n.repo.MarkErrored(ctx, rem.ID, err.Error())
 		n.logger.Warn().Err(err).Str("reminder_id", rem.ID).Msg("reminders: task-kind send failed")

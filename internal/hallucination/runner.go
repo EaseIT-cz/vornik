@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strings"
 	"time"
 
 	"github.com/rs/zerolog"
@@ -79,6 +80,10 @@ type ChildLister interface {
 	GetChildren(ctx context.Context, parentTaskID string) ([]*persistence.Task, error)
 }
 
+// judgeWriteTimeout bounds the verdict and spend writes, which run detached
+// from the evaluation's context (GitHub #142, outcome-quality-design §S8 F4).
+const judgeWriteTimeout = 10 * time.Second
+
 // Run evaluates a single completed task and persists the
 // verdict. Idempotent: a verdict already on file for this task
 // short-circuits with a debug log, no second LLM call.
@@ -149,6 +154,11 @@ func (r *JudgeRunner) Run(ctx context.Context, task *persistence.Task) error {
 	}
 
 	in := JudgeInput{Task: task}
+	// evidenceGaps names each evidence fetch that failed. A verdict reached
+	// without it says so in its summary and is counted evidence_incomplete,
+	// so a fail on missing evidence does not read as a real hallucination
+	// (GitHub #142, outcome-quality-design §S8 F7).
+	var evidenceGaps []string
 
 	if r.Executions != nil {
 		taskID := task.ID
@@ -158,6 +168,7 @@ func (r *JudgeRunner) Run(ctx context.Context, task *persistence.Task) error {
 		})
 		if err != nil {
 			r.Logger.Warn().Err(err).Str("task_id", task.ID).Msg("judge: execution lookup failed")
+			evidenceGaps = append(evidenceGaps, "execution")
 		} else if len(execs) > 0 {
 			in.Execution = execs[0]
 			if len(execs[0].Result) > 0 {
@@ -178,6 +189,7 @@ func (r *JudgeRunner) Run(ctx context.Context, task *persistence.Task) error {
 		})
 		if err != nil {
 			r.Logger.Warn().Err(err).Str("task_id", task.ID).Msg("judge: audit fetch failed; proceeding with empty audit")
+			evidenceGaps = append(evidenceGaps, "tool audit")
 		} else {
 			in.AuditEntries = entries
 		}
@@ -190,6 +202,7 @@ func (r *JudgeRunner) Run(ctx context.Context, task *persistence.Task) error {
 		})
 		if err != nil {
 			r.Logger.Warn().Err(err).Str("task_id", task.ID).Msg("judge: artifact fetch failed; proceeding with empty list")
+			evidenceGaps = append(evidenceGaps, "artifacts")
 		} else {
 			in.Artifacts = arts
 		}
@@ -208,6 +221,11 @@ func (r *JudgeRunner) Run(ctx context.Context, task *persistence.Task) error {
 			r.Metrics.JudgeEvaluationsTotal.WithLabelValues(task.ProjectID, "abstain_no_config").Inc()
 		}
 		return nil
+	}
+
+	if len(evidenceGaps) > 0 {
+		verdict.Summary = "[evidence incomplete: the " + strings.Join(evidenceGaps, ", ") +
+			" fetch failed, so the judge saw less than the task produced] " + verdict.Summary
 	}
 
 	signalsBlob, _ := json.Marshal(verdict.Signals)
@@ -251,7 +269,13 @@ func (r *JudgeRunner) Run(ctx context.Context, task *persistence.Task) error {
 		CostUSD:    costUSD,
 		RecordedAt: time.Now().UTC(),
 	}
-	if err := r.Verdicts.Record(ctx, row); err != nil {
+	// The writes run on a detached, bounded context: a judge that used its
+	// whole evaluation ceiling (90s from the executor) left ctx spent, and
+	// the driver refused the verdict row, so the ceiling fired and the record
+	// said nothing (GitHub #142, outcome-quality-design §S8 F4).
+	writeCtx, cancelWrite := context.WithTimeout(context.WithoutCancel(ctx), judgeWriteTimeout)
+	defer cancelWrite()
+	if err := r.Verdicts.Record(writeCtx, row); err != nil {
 		// ErrDuplicateKey is benign — the runner is idempotent
 		// per task and a race that lands two writers on the
 		// same task is a rare edge.
@@ -259,7 +283,23 @@ func (r *JudgeRunner) Run(ctx context.Context, task *persistence.Task) error {
 			return nil
 		}
 		r.Logger.Warn().Err(err).Str("task_id", task.ID).Msg("judge: verdict persist failed")
+		if r.Metrics != nil {
+			r.Metrics.JudgeEvaluationsTotal.WithLabelValues(task.ProjectID, "persist_error").Inc()
+		}
 		return err
+	}
+	// A judge whose model call failed still records its abstain row (the
+	// UI shows it, and its summary names the error), but the evaluation is
+	// counted by the failure's cause, not as ok (§S8 F3).
+	evalOutcome := "ok"
+	if len(evidenceGaps) > 0 {
+		evalOutcome = "evidence_incomplete"
+	}
+	if metrics != nil && metrics.LLMFailure != "" {
+		evalOutcome = "llm_" + metrics.LLMFailure
+		r.Logger.Warn().Str("task_id", task.ID).Str("cause", metrics.LLMFailure).
+			Str("summary", verdict.Summary).
+			Msg("judge: the judge model call failed; recorded an abstain the judge did not decide")
 	}
 	r.Logger.Info().
 		Str("task_id", task.ID).
@@ -272,7 +312,7 @@ func (r *JudgeRunner) Run(ctx context.Context, task *persistence.Task) error {
 		Msg("judge: verdict recorded")
 
 	if r.Metrics != nil {
-		r.Metrics.JudgeEvaluationsTotal.WithLabelValues(task.ProjectID, "ok").Inc()
+		r.Metrics.JudgeEvaluationsTotal.WithLabelValues(task.ProjectID, evalOutcome).Inc()
 		r.Metrics.JudgeVerdictsTotal.WithLabelValues(task.ProjectID, roleTag, verdict.Decision).Inc()
 		r.Metrics.JudgeConfidence.WithLabelValues(task.ProjectID, roleTag, verdict.Decision).Observe(verdict.Confidence)
 		if costUSD > 0 {
@@ -296,7 +336,7 @@ func (r *JudgeRunner) Run(ctx context.Context, task *persistence.Task) error {
 		// RoleOverride: the judge tags its row with the role under test, not with
 		// a fixed identity. CostUSD is passed because it was already computed
 		// above against the judge's own model resolution.
-		r.Spend.Record(ctx, llmspend.Input{
+		r.Spend.Record(writeCtx, llmspend.Input{
 			ProjectID:           task.ProjectID,
 			Model:               model,
 			PromptTokens:        metrics.PromptTokens,

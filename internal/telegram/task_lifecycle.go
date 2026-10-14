@@ -524,13 +524,24 @@ func (b *Bot) handleCancelCmd(ctx context.Context, userID int64, parts []string)
 	if t == nil {
 		return msg
 	}
-	outcome, err := taskcancel.Cancel(ctx, b.taskRepo, b.taskTeardown, t.ID, nil)
+	// The client surfaces' from-set (operator decision 2026-10-13, GitHub
+	// #326): parked tasks cancel as from the UI; an approval is answered
+	// with approve/reject, not cancelled here.
+	from := persistence.ClientCancellableTaskStatuses()
+	outcome, err := taskcancel.Cancel(ctx, b.taskRepo, b.taskTeardown, t.ID, from)
 	if err != nil {
 		b.logger.Error().Err(err).Str("task_id", t.ID).Msg("/cancel: transition failed")
 		return "Failed to cancel: " + err.Error()
 	}
 	if !outcome.Transitioned {
-		return fmt.Sprintf("Task %s is not in a cancellable state (status %s).", t.ID, t.Status)
+		// Phrased from a re-read, not the snapshot loaded above, which is
+		// what is stale in the race (05-scheduler §4.11 "Amended
+		// 2026-10-12", GitHub #326).
+		fresh, gerr := b.taskRepo.Get(ctx, t.ID)
+		if gerr != nil || fresh == nil {
+			return fmt.Sprintf("Task %s was not cancelled; its current status could not be read.", t.ID)
+		}
+		return fmt.Sprintf("Task %s was not cancelled: %s.", t.ID, taskcancel.RefusalReason(fresh.Status, from))
 	}
 	if outcome.TeardownErr != nil {
 		b.logger.Error().Err(outcome.TeardownErr).Str("task_id", t.ID).

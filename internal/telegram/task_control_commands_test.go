@@ -68,8 +68,10 @@ func TestHandleCancelCmd(t *testing.T) {
 	}
 	t.Run("cancels", func(t *testing.T) {
 		repo := &mocks.MockTaskRepository{
-			GetFunc:                   getRunning,
-			TransitionToCancelledFunc: func(_ context.Context, _ string) (bool, error) { return true, nil },
+			GetFunc: getRunning,
+			TransitionConditionalFunc: func(_ context.Context, _ string, _ []persistence.TaskStatus, _ persistence.TaskStatus, _ persistence.TransitionOpts) (bool, error) {
+				return true, nil
+			},
 		}
 		bot := makeBotWithTaskRepo(t, repo)
 		if out := bot.handleCancelCmd(context.Background(), 0, []string{"/cancel", "task-1"}); !strings.Contains(out, "Cancelled") {
@@ -78,12 +80,43 @@ func TestHandleCancelCmd(t *testing.T) {
 	})
 	t.Run("not cancellable", func(t *testing.T) {
 		repo := &mocks.MockTaskRepository{
-			GetFunc:                   getRunning,
-			TransitionToCancelledFunc: func(_ context.Context, _ string) (bool, error) { return false, nil },
+			GetFunc: func(_ context.Context, id string) (*persistence.Task, error) {
+				// AWAITING_APPROVAL: the parked status /cancel still refuses
+				// after the #326 decision (2026-10-13).
+				return &persistence.Task{ID: id, ProjectID: "p", Status: persistence.TaskStatusAwaitingApproval}, nil
+			},
+			TransitionConditionalFunc: func(_ context.Context, _ string, _ []persistence.TaskStatus, _ persistence.TaskStatus, _ persistence.TransitionOpts) (bool, error) {
+				return false, nil
+			},
 		}
 		bot := makeBotWithTaskRepo(t, repo)
-		if out := bot.handleCancelCmd(context.Background(), 0, []string{"/cancel", "task-1"}); !strings.Contains(out, "not in a cancellable state") {
-			t.Errorf("expected not-cancellable message; got %q", out)
+		out := bot.handleCancelCmd(context.Background(), 0, []string{"/cancel", "task-1"})
+		if !strings.Contains(out, "AWAITING_APPROVAL") || !strings.Contains(out, "does not act on") {
+			t.Errorf("expected the status and the reason; got %q", out)
+		}
+	})
+	// audit 2026-10-12 (GitHub #326): the refusal named the pre-write
+	// snapshot's status. Get answers RUNNING for the scoped load, then the
+	// row's real status, COMPLETED; the reply must name COMPLETED.
+	t.Run("refusal names the current status, not the snapshot", func(t *testing.T) {
+		reads := 0
+		repo := &mocks.MockTaskRepository{
+			GetFunc: func(_ context.Context, id string) (*persistence.Task, error) {
+				reads++
+				st := persistence.TaskStatusRunning
+				if reads > 1 {
+					st = persistence.TaskStatusCompleted
+				}
+				return &persistence.Task{ID: id, ProjectID: "p", Status: st}, nil
+			},
+			TransitionConditionalFunc: func(_ context.Context, _ string, _ []persistence.TaskStatus, _ persistence.TaskStatus, _ persistence.TransitionOpts) (bool, error) {
+				return false, nil
+			},
+		}
+		bot := makeBotWithTaskRepo(t, repo)
+		out := bot.handleCancelCmd(context.Background(), 0, []string{"/cancel", "task-1"})
+		if !strings.Contains(out, "already COMPLETED") || strings.Contains(out, "RUNNING") {
+			t.Errorf("expected the re-read status COMPLETED; got %q", out)
 		}
 	})
 }
@@ -123,7 +156,7 @@ func TestTaskControl_ScopeDenied(t *testing.T) {
 		GetFunc: func(_ context.Context, id string) (*persistence.Task, error) {
 			return &persistence.Task{ID: id, ProjectID: "proj-b", Status: persistence.TaskStatusRunning}, nil
 		},
-		TransitionToCancelledFunc: func(_ context.Context, _ string) (bool, error) {
+		TransitionConditionalFunc: func(_ context.Context, _ string, _ []persistence.TaskStatus, _ persistence.TaskStatus, _ persistence.TransitionOpts) (bool, error) {
 			t.Fatal("cancel must not be attempted for an out-of-scope task")
 			return false, nil
 		},

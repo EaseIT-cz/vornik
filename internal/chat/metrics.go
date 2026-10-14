@@ -14,7 +14,7 @@ import (
 // — when calls fan into the queue we've already lost the model
 // distinction; what matters is whether the queue itself is the
 // bottleneck. The QueueCallsTotal counter carries an "outcome" label
-// (started|canceled) so operators can read the cancel rate without
+// (started|canceled|timeout) so operators can read the cancel rate without
 // scraping logs.
 type Metrics struct {
 	RequestsTotal   *prometheus.CounterVec
@@ -54,7 +54,9 @@ type Metrics struct {
 	// were invisible). provider = claude | codex; outcome =
 	// success | failure | invalid_grant_recovered (claude adopted a
 	// concurrent CLI's on-disk rotation) | quarantined (codex dead
-	// refresh token — only a re-login recovers).
+	// refresh token — only a re-login recovers) | lock_timeout (another
+	// process held the refresh lock until the wait ran out; outcome-quality
+	// LLD §S7 #10).
 	SubscriptionTokenRefreshTotal *prometheus.CounterVec
 
 	// ModelHealthState is the live circuit-breaker state per (route, model):
@@ -161,7 +163,7 @@ func NewMetrics(reg *prometheus.Registry) *Metrics {
 			Namespace: "vornik",
 			Subsystem: "chat",
 			Name:      "queue_calls_total",
-			Help:      "LLM calls that left the priority queue, by outcome (started=worker picked up; canceled=ctx done before start).",
+			Help:      "LLM calls that left the priority queue, by outcome (started=worker picked up; canceled=caller cancelled before start; timeout=deadline expired before start).",
 		}, []string{"outcome"}),
 		CacheCreationTokensTotal: prometheus.NewCounterVec(prometheus.CounterOpts{
 			Namespace: "vornik",
@@ -197,8 +199,8 @@ func NewMetrics(reg *prometheus.Registry) *Metrics {
 			Namespace: "vornik",
 			Subsystem: "chat",
 			Name:      "model_health_trips_total",
-			Help:      "Circuit-open transitions per (route, model).",
-		}, []string{"route", "model"}),
+			Help:      "Circuit-open transitions per (route, model), by reason (rate, consecutive, probe_failed).",
+		}, []string{"route", "model", "reason"}),
 		BestEffortDeadlines: prometheus.NewCounterVec(prometheus.CounterOpts{
 			Namespace: "vornik",
 			Subsystem: "chat",
@@ -222,7 +224,8 @@ func NewMetrics(reg *prometheus.Registry) *Metrics {
 			Subsystem: "chat",
 			Name:      "subscription_token_refresh_total",
 			Help: "Subscription-provider OAuth token-refresh outcomes. outcome = success | failure | " +
-				"invalid_grant_recovered (claude adopted a concurrent CLI's rotation) | quarantined (codex dead token).",
+				"invalid_grant_recovered (claude adopted a concurrent CLI's rotation) | quarantined (codex dead token) | " +
+				"lock_timeout (another process held the refresh lock until the wait ran out).",
 		}, []string{"provider", "outcome"}),
 		cacheRatioState: map[string]*cacheRatioState{},
 	}

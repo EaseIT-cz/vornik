@@ -101,6 +101,9 @@ func TestClassifyBackfiller_BackfillBatch_Mixed(t *testing.T) {
 	// c1 → UPDATE.
 	mock.ExpectExec("UPDATE project_memory_chunks").
 		WillReturnResult(sqlmock.NewResult(0, 1))
+	// c2 abstained → stamped classify_attempted_at (#330).
+	mock.ExpectExec("UPDATE project_memory_chunks SET classify_attempted_at").WithArgs("c2").
+		WillReturnResult(sqlmock.NewResult(0, 1))
 	// CountRemaining at end (one query against project_memory_chunks).
 	mock.ExpectQuery("FROM project_memory_chunks").
 		WillReturnRows(sqlmock.NewRows([]string{"role", "n"}).AddRow("writer", 0))
@@ -177,6 +180,8 @@ func TestClassifyBackfiller_BackfillBatch_WalksPastLLMAbstentions(t *testing.T) 
 	mock.ExpectQuery("FROM project_memory_chunks").WithArgs("p", 1, 0).
 		WillReturnRows(sqlmock.NewRows([]string{"id", "project_id", "source_name", "producer_role", "content"}).
 			AddRow("old", "p", "old.md", "unknown", "ambiguous"))
+	mock.ExpectExec("UPDATE project_memory_chunks SET classify_attempted_at").WithArgs("old").
+		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectQuery("FROM project_memory_chunks").
 		WillReturnRows(sqlmock.NewRows([]string{"role", "n"}).AddRow("unknown", 2))
 	first, err := bf.BackfillBatch(context.Background(), "p", 1)
@@ -320,7 +325,7 @@ func TestClassifyBackfiller_BackfillBatchAcrossProjects_MultiProject(t *testing.
 	})
 	defer cleanup()
 	mock.ExpectQuery("SELECT id, project_id").
-		WithArgs(5, 0).
+		WithArgs(5, 0, sqlmock.AnyArg()).
 		WillReturnRows(sqlmock.NewRows([]string{"id", "project_id", "source_name", "producer_role", "content"}).
 			AddRow("c1", "p-alpha", "alpha.md", "researcher", "alpha body").
 			AddRow("c2", "p-beta", "beta.md", "analyst", "beta body"))
@@ -361,6 +366,9 @@ func TestClassifyBackfiller_BackfillBatchAcrossProjects_PerRowErrorsRecorded(t *
 			AddRow("c4", "p-d", "delta.md", "dispatcher", "delta"))
 	// c1 succeeds → UPDATE.
 	mock.ExpectExec("UPDATE project_memory_chunks").WillReturnResult(sqlmock.NewResult(0, 1))
+	// c2 abstained → stamped classify_attempted_at (#330).
+	mock.ExpectExec("UPDATE project_memory_chunks SET classify_attempted_at").WithArgs("c2").
+		WillReturnResult(sqlmock.NewResult(0, 1))
 	// c4 persist fails.
 	mock.ExpectExec("UPDATE project_memory_chunks").WillReturnError(errors.New("disk full"))
 	// CountRemainingAll at end.

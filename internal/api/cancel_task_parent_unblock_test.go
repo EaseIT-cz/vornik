@@ -51,7 +51,7 @@ func TestServer_CancelTask_NotifiesParentUnblock(t *testing.T) {
 				CreatedAt:    time.Now(),
 			}, nil
 		},
-		TransitionToCancelledFunc: func(_ context.Context, _ string) (bool, error) {
+		TransitionConditionalFunc: func(_ context.Context, _ string, _ []persistence.TaskStatus, _ persistence.TaskStatus, _ persistence.TransitionOpts) (bool, error) {
 			return true, nil
 		},
 	}
@@ -86,7 +86,7 @@ func TestServer_CancelTask_CascadesToChildren(t *testing.T) {
 				CreatedAt: time.Now(),
 			}, nil
 		},
-		TransitionToCancelledFunc: func(_ context.Context, _ string) (bool, error) {
+		TransitionConditionalFunc: func(_ context.Context, _ string, _ []persistence.TaskStatus, _ persistence.TaskStatus, _ persistence.TransitionOpts) (bool, error) {
 			return true, nil
 		},
 	}

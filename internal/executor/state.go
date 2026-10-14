@@ -3,6 +3,7 @@ package executor
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"path/filepath"
 	"sort"
@@ -61,6 +62,12 @@ type executionState struct {
 	//                         drives this, not Recover).
 	//   "operator"          — manual vornikctl Pause; stays paused
 	//                         until vornikctl Resume.
+	//   "awaiting_approval" — an approval step is waiting for a
+	//                         human; resuming the execution grants
+	//                         it. Before 2026-10-13 this was recorded
+	//                         as "operator" (outcome-quality LLD §S7
+	//                         #13); Resume keys the approval on
+	//                         ApprovalPendingStep, so both resume.
 	//   ""                  — legacy / unknown; default to NOT
 	//                         auto-resuming so we don't surprise an
 	//                         operator who paused for a reason we
@@ -108,6 +115,17 @@ type executionState struct {
 	// window (the wake path reads but never mutates it). Nil for every
 	// non-parallel execution.
 	ParallelJoin *ParallelJoinState `json:"parallelJoin,omitempty"`
+	// StepHandoffs is, per succeeded agent step, the harvested output entries
+	// that step handed to the next one (the tagged plan.stepOutputArtifacts).
+	// The live handoff is in memory; this copy exists so an automatic resume
+	// (auto_resume.go, GitHub #123) can restage the last carried step's outputs
+	// for the step it resumes at. Written on every succeeded agent step; read
+	// only when AutoResumedFrom is set.
+	StepHandoffs map[string][]map[string]string `json:"stepHandoffs,omitempty"`
+	// AutoResumedFrom names the FAILED execution this one was seeded from by
+	// an automatic resume (permanent-failure design §8.3 D5). Empty for every
+	// other execution.
+	AutoResumedFrom string `json:"autoResumedFrom,omitempty"`
 }
 
 // ParallelJoinState is the descriptor-only record of an in-flight parallel
@@ -128,11 +146,20 @@ type ParallelJoinState struct {
 	BranchIDs []string `json:"branchIds,omitempty"`
 }
 
+// defaultResumeIOTimeout bounds Resume's database calls, which run under e.mu
+// (outcome-quality LLD §S7 #9): the upper end of the 5-10s budgets the
+// executor's other detached writes use.
+const defaultResumeIOTimeout = 10 * time.Second
+
 // Constants for the executionState.PausedReason field.
 const (
 	PauseReasonShutdown         = "shutdown"
 	PauseReasonAwaitingChildren = "awaiting_children"
 	PauseReasonOperator         = "operator"
+	// PauseReasonAwaitingApproval — an approval step is waiting for a
+	// human (outcome-quality LLD §S7 #13). Not auto-resumable: Recover's
+	// allowlist names only shutdown and retry_from_step.
+	PauseReasonAwaitingApproval = "awaiting_approval"
 	// PauseReasonRetryFromStep — operator clicked "Retry from
 	// step…" on a FAILED execution. The retry-from-step handler
 	// rewinds state.CurrentStepID + trims state.CompletedSteps to
@@ -397,11 +424,18 @@ func (e *Executor) pauseClaimedHandle(handle *executionHandle, reason string) (*
 	// agents drain in <5s); on miss, we fall through and let the
 	// caller proceed rather than stalling shutdown indefinitely.
 	if containerID != "" {
-		if err := e.runtime.StopContainer(context.Background(), containerID, false); err != nil {
+		// Each stop is bounded (outcome-quality LLD §S2 C9): on
+		// context.Background() a podman that does not answer held the
+		// pause, and with it a daemon shutdown, indefinitely.
+		stopCtx, stopCancel := containerCleanupContext()
+		if err := e.runtime.StopContainer(stopCtx, containerID, false); err != nil {
 			// Log but continue - container might already be stopped
 			// Use force stop as fallback
-			_ = e.runtime.StopContainer(context.Background(), containerID, true)
+			forceCtx, forceCancel := containerCleanupContext()
+			_ = e.runtime.StopContainer(forceCtx, containerID, true)
+			forceCancel()
 		}
+		stopCancel()
 		waitCtx, waitCancel := context.WithTimeout(context.Background(), 30*time.Second)
 		if _, err := e.runtime.WaitForExit(waitCtx, containerID, 30*time.Second); err != nil {
 			e.logger.Warn().
@@ -628,6 +662,10 @@ func (e *Executor) ResumeTask(taskID string) error {
 // This is also why claims have their own mutex: saveExecutionState consults
 // the claim registry, and it is reached from here with e.mu already held (see
 // pause_claim.go's locking note).
+//
+// Its database calls are bounded by resumeIOTimeout (default 10s) so a
+// database that stops answering cannot hold e.mu indefinitely
+// (outcome-quality LLD §S7 #9).
 func (e *Executor) Resume(taskID string) (*ResumeStatus, error) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
@@ -637,20 +675,41 @@ func (e *Executor) Resume(taskID string) (*ResumeStatus, error) {
 		return nil, fmt.Errorf("task %s is already being executed", taskID)
 	}
 
-	// Get the task
+	// Every database call below runs while e.mu is held, so each is bounded
+	// (outcome-quality LLD §S7 #9, GitHub #142): one call that never answered
+	// used to hold e.mu, and with it every Execute, Pause and Cancel, forever.
+	bound := e.resumeIOTimeout
+	if bound <= 0 {
+		bound = defaultResumeIOTimeout
+	}
 	taskCtx := e.ctx
 	if taskCtx == nil {
 		taskCtx = context.Background()
 	}
+	// One budget shared by every call, not one per call, so e.mu is held at
+	// most about `bound` in all (design review 0f02 #4).
+	deadline := time.Now().Add(bound)
+	taskCtx, cancelTask := context.WithDeadline(taskCtx, deadline)
+	defer cancelTask()
+	ioCtx, cancelIO := context.WithDeadline(context.Background(), deadline)
+	defer cancelIO()
+	bounded := func(err error) error {
+		if errors.Is(err, context.DeadlineExceeded) {
+			return fmt.Errorf("resume: the database did not answer within %s: %w", bound, err)
+		}
+		return err
+	}
+
+	// Get the task
 	task, err := e.taskRepo.Get(taskCtx, taskID)
 	if err != nil {
-		return nil, fmt.Errorf("failed to get task %s: %w", taskID, err)
+		return nil, fmt.Errorf("failed to get task %s: %w", taskID, bounded(err))
 	}
 
 	// Get execution record
-	exec, err := e.execRepo.GetByTaskID(context.Background(), taskID)
+	exec, err := e.execRepo.GetByTaskID(ioCtx, taskID)
 	if err != nil {
-		return nil, fmt.Errorf("failed to get execution record: %w", err)
+		return nil, fmt.Errorf("failed to get execution record: %w", bounded(err))
 	}
 
 	// Verify execution is paused
@@ -671,13 +730,13 @@ func (e *Executor) Resume(taskID string) (*ResumeStatus, error) {
 		state.ApprovalGrantedStep = state.ApprovalPendingStep
 		state.ApprovalPendingStep = ""
 		state.PausedReason = ""
-		if err := e.saveExecutionState(context.Background(), exec, state); err != nil {
-			return nil, fmt.Errorf("failed to persist approval resume state: %w", err)
+		if err := e.saveExecutionState(ioCtx, exec, state); err != nil {
+			return nil, fmt.Errorf("failed to persist approval resume state: %w", bounded(err))
 		}
 	} else if state.PausedReason == PauseReasonOperator {
 		state.PausedReason = ""
-		if err := e.saveExecutionState(context.Background(), exec, state); err != nil {
-			return nil, fmt.Errorf("failed to clear operator pause reason: %w", err)
+		if err := e.saveExecutionState(ioCtx, exec, state); err != nil {
+			return nil, fmt.Errorf("failed to clear operator pause reason: %w", bounded(err))
 		}
 	}
 
@@ -687,11 +746,11 @@ func (e *Executor) Resume(taskID string) (*ResumeStatus, error) {
 	}
 
 	// Update execution status to running
-	if err := e.execRepo.UpdateStatus(context.Background(), exec.ID, persistence.ExecutionStatusRunning); err != nil {
-		return nil, fmt.Errorf("failed to update execution status: %w", err)
+	if err := e.execRepo.UpdateStatus(ioCtx, exec.ID, persistence.ExecutionStatusRunning); err != nil {
+		return nil, fmt.Errorf("failed to update execution status: %w", bounded(err))
 	}
-	if err := e.taskRepo.UpdateStatus(context.Background(), taskID, persistence.TaskStatusRunning); err != nil {
-		return nil, fmt.Errorf("failed to update task status: %w", err)
+	if err := e.taskRepo.UpdateStatus(ioCtx, taskID, persistence.TaskStatusRunning); err != nil {
+		return nil, fmt.Errorf("failed to update task status: %w", bounded(err))
 	}
 
 	// Create new execution handle

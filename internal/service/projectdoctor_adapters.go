@@ -113,6 +113,7 @@ func (s *smokeRunner) Trigger(ctx context.Context, projectID, prompt string) (st
 		TaskType:       smokeTaskType,
 		Prompt:         prompt,
 		CreationSource: persistence.TaskCreationSourceUser,
+		GoalOrigin:     persistence.TaskGoalOriginDoctor,
 	})
 	if err != nil {
 		return "", err

@@ -6,12 +6,18 @@ package integration_test
 import (
 	"context"
 	"fmt"
+	"sync"
 	"time"
 
 	"vornik.io/vornik/internal/runtime"
 )
 
+// mu guards runs: since #142 the executor removes a container through a
+// bounded call that runs RemoveContainer on its own goroutine, so the map is
+// written concurrently with the test goroutine (race seen in
+// TestExecutor_RecoverRunningExecution, 2026-10-14).
 type mockRuntimeManager struct {
+	mu        sync.Mutex
 	runs      map[string]*mockRun
 	exitCode  int
 	exitDelay time.Duration
@@ -32,7 +38,9 @@ func (m *mockRuntimeManager) StartContainer(ctx context.Context, cfg *runtime.Co
 		started: time.Now(),
 	}
 	containerID := fmt.Sprintf("mock-container-%d", time.Now().UnixNano())
+	m.mu.Lock()
 	m.runs[containerID] = run
+	m.mu.Unlock()
 
 	if m.exitDelay > 0 {
 		go func() {
@@ -49,7 +57,7 @@ func (m *mockRuntimeManager) StartContainer(ctx context.Context, cfg *runtime.Co
 }
 
 func (m *mockRuntimeManager) StopContainer(ctx context.Context, containerID string, force bool) error {
-	if run, ok := m.runs[containerID]; ok {
+	if run, ok := m.run(containerID); ok {
 		select {
 		case <-run.done:
 		default:
@@ -64,7 +72,7 @@ func (m *mockRuntimeManager) InspectContainer(ctx context.Context, containerID s
 }
 
 func (m *mockRuntimeManager) WaitForExit(ctx context.Context, containerID string, timeout time.Duration) (int, error) {
-	if run, ok := m.runs[containerID]; ok {
+	if run, ok := m.run(containerID); ok {
 		if timeout <= 0 {
 			select {
 			case <-run.done:
@@ -87,6 +95,8 @@ func (m *mockRuntimeManager) WaitForExit(ctx context.Context, containerID string
 }
 
 func (m *mockRuntimeManager) GetContainerByTask(ctx context.Context, taskID string) (*runtime.Container, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	for id, run := range m.runs {
 		if run.taskID == taskID {
 			return &runtime.Container{
@@ -99,8 +109,18 @@ func (m *mockRuntimeManager) GetContainerByTask(ctx context.Context, taskID stri
 }
 
 func (m *mockRuntimeManager) RemoveContainer(ctx context.Context, containerID string, force bool) error {
+	m.mu.Lock()
 	delete(m.runs, containerID)
+	m.mu.Unlock()
 	return nil
+}
+
+// run looks one container up under the lock.
+func (m *mockRuntimeManager) run(containerID string) (*mockRun, bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	r, ok := m.runs[containerID]
+	return r, ok
 }
 
 func (m *mockRuntimeManager) Logs(ctx context.Context, containerID string, tail int) (string, error) {

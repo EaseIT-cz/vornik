@@ -581,7 +581,7 @@ func TestBuildStateContext_NoTasksAndNoContextFile(t *testing.T) {
 	m := New(nil, &registry.Registry{}, &mockTaskRepo{}, nil)
 	got, hasActive, err := m.buildStateContext(context.Background(), &registry.Project{ID: "p1"})
 	require.NoError(t, err)
-	assert.False(t, hasActive)
+	assert.False(t, hasActive.any())
 	assert.Contains(t, got, "No tasks have been created yet")
 }
 
@@ -631,7 +631,7 @@ func TestBuildStateContext_FlagsActiveTask(t *testing.T) {
 	m := New(nil, &registry.Registry{}, repo, nil)
 	got, hasActive, err := m.buildStateContext(context.Background(), &registry.Project{ID: "p1"})
 	require.NoError(t, err)
-	assert.True(t, hasActive, "RUNNING task must flip hasActive")
+	assert.True(t, hasActive.any(), "RUNNING task must flip hasActive")
 	assert.Contains(t, got, "Active/queued tasks")
 	assert.Contains(t, got, "in-flight tick")
 }
@@ -705,7 +705,7 @@ func TestBuildStateContext_ActiveBranchCreatedAtAndRFC3339Anchor(t *testing.T) {
 	m := New(nil, &registry.Registry{}, &mockTaskRepo{tasks: tasks}, nil)
 	got, hasActive, err := m.buildStateContext(context.Background(), &registry.Project{ID: "p1"})
 	require.NoError(t, err)
-	assert.True(t, hasActive)
+	assert.True(t, hasActive.any())
 	assert.Contains(t, got, created.Format(time.RFC3339), "active task line must carry its createdAt")
 	assert.Regexp(t, `Current time \(UTC\): \d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z`, got,
 		"current-time anchor must be RFC3339 UTC, not just a label")
@@ -958,7 +958,7 @@ func TestBuildStateContext_CompletedTasksWithoutExecutionRepo(t *testing.T) {
 
 	got, hasActive, err := m.buildStateContext(context.Background(), &registry.Project{ID: "p1"})
 	require.NoError(t, err)
-	assert.False(t, hasActive)
+	assert.False(t, hasActive.any())
 	assert.Contains(t, got, "nightly digest", "completed history must still render without an execution repo")
 	assert.NotContains(t, got, "result=", "no execution repo means no result enrichment, not a fabricated one")
 }

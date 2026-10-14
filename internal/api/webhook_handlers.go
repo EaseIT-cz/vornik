@@ -446,6 +446,7 @@ func (s *Server) createWebhookTask(ctx context.Context, project *registry.Projec
 		WorkflowID:     strPtr(workflowID),
 		IdempotencyKey: &idempotencyKey,
 		CreationSource: persistence.TaskCreationSourceUser,
+		GoalOrigin:     persistence.TaskGoalOriginWebhook,
 		// Rule 7: this path reaches enqueueVerifiedWebhook only after a SIGNATURE
 		// check, not an API key, so there is no person and no credential to name
 		// — the actor is the webhook source itself. Naming the source (rather

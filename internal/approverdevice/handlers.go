@@ -71,6 +71,13 @@ func Routes() []Route {
 		{http.MethodGet, "/ui/approve/memory/proj_example/forget-source", true},
 		{http.MethodPost, "/ui/approve/memory/proj_example/forget-source", true},
 		{http.MethodGet, "/ui/approve/memory/proj_example/export", true},
+		// The connector pages (GitHub #314; design §19.14.8 item 7).
+		{http.MethodGet, "/ui/approve/connectors", true},
+		{http.MethodGet, "/ui/approve/connectors/agenda", true},
+		{http.MethodPost, "/ui/approve/connectors/agenda", true},
+		{http.MethodPost, "/ui/approve/connectors/agenda/project", true},
+		{http.MethodPost, "/ui/approve/connectors/agenda/signin", true},
+		{http.MethodPost, "/ui/approve/connectors/agenda/finish", true},
 	}
 }
 
@@ -317,6 +324,8 @@ func (s *Service) approveRouter(w http.ResponseWriter, r *http.Request) {
 		s.devicesPage(w, r)
 	case rest == "memory" || strings.HasPrefix(rest, "memory/"):
 		s.memoryRouter(w, r, strings.TrimPrefix(rest, "memory"))
+	case rest == "connectors" || strings.HasPrefix(rest, "connectors/"):
+		s.connectorsRouter(w, r, strings.TrimPrefix(rest, "connectors"))
 	case rest == "standing" || strings.HasPrefix(rest, "standing/"):
 		s.standingPage(w, r, strings.TrimPrefix(strings.TrimPrefix(rest, "standing"), "/"))
 	case strings.HasPrefix(rest, "devices/") && strings.HasSuffix(rest, "/revoke"):
@@ -545,6 +554,12 @@ type requestData struct {
 	// Grant is the standing grant offered under Approve (broker
 	// write-actions design, tier 2), or nil.
 	Grant *GrantOffer
+	// Withdrawn: the daemon withdrew the request (design §9.2d); the page
+	// says so and why, and offers nothing to decide.
+	Withdrawn bool
+	// Choices is a registered choice kind's answers instead of approve and
+	// reject (choice_kind.go, GitHub #302).
+	Choices []Choice
 }
 
 func (s *Service) requestPage(w http.ResponseWriter, r *http.Request, id string) {
@@ -588,7 +603,11 @@ func (s *Service) requestDataCtx(ctx context.Context, req *persistence.AgentAppr
 	d := requestData{Req: req, Pretty: pretty.String(), Notice: notice, TakesValue: takesValue, Connect: connect, Desc: s.describe(*req), Host: host,
 		Pending: req.Status == persistence.ApprovalPending && now.Before(req.ExpiresAt),
 		Expired: req.Status == persistence.ApprovalExpired || (req.Status == persistence.ApprovalPending && !now.Before(req.ExpiresAt))}
-	if d.Pending && !takesValue && !connect && host == nil {
+	d.Withdrawn = req.Status == persistence.ApprovalWithdrawn
+	if host == nil {
+		d.Choices = s.pageChoices(*req)
+	}
+	if d.Pending && !takesValue && !connect && host == nil && d.Choices == nil {
 		d.Grant = s.grantOffer(ctx, *req)
 	}
 	return d
@@ -602,7 +621,7 @@ func (s *Service) decide(w http.ResponseWriter, r *http.Request, req *persistenc
 		s.render(w, http.StatusRequestEntityTooLarge, "request.html", s.requestData(req, "That was too long."))
 		return
 	}
-	if req.Kind == persistence.ApprovalKindHostAction {
+	if s.isChoiceKind(req.Kind) {
 		s.decideHost(w, r, req)
 		return
 	}
@@ -692,7 +711,7 @@ func (s *Service) decideHost(w http.ResponseWriter, r *http.Request, req *persis
 	d, _ := FromRequest(r)
 	choice := r.PostFormValue("decision")
 	offered := false
-	for _, c := range HostChoices(*req) {
+	for _, c := range s.choiceValues(*req) {
 		offered = offered || c == choice
 	}
 	if !offered {
@@ -734,6 +753,9 @@ func (s *Service) decideHost(w http.ResponseWriter, r *http.Request, req *persis
 	verdict := "allowed"
 	if choice == ChoiceDeny {
 		verdict = "denied"
+	}
+	if req.Kind != persistence.ApprovalKindHostAction {
+		verdict = "decided"
 	}
 	http.Redirect(w, r, "/ui/approve/?done="+verdict, http.StatusSeeOther)
 }

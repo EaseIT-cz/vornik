@@ -297,7 +297,9 @@ func (s *Server) DeliverableSend(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	if _, sendErr := res.Channel.Send(ctx, msg); sendErr != nil {
+	// Art 50 (GitHub #342): the deliverable is agent output pushed outside
+	// ChannelReceiver, so it takes the shared disclosure path.
+	if _, sendErr := conversation.SendDisclosed(ctx, s.aiDisclosure, res.Channel, msg, true); sendErr != nil {
 		s.logger.Warn().Err(sendErr).Str("task_id", taskID).Str("artifact_id", artifactID).
 			Str("channel", res.ChannelName).Msg("deliverable send: channel Send failed")
 		s.renderDeliverableSendResult(w, deliverableSendResult{

@@ -141,6 +141,13 @@ type Params struct {
 	// downstream task_llm_usage rows to power the spend-per-API-key UI.
 	CreatedByAPIKeyID string
 
+	// GoalOrigin is the creation surface that wrote the goal, a
+	// persistence.TaskGoalOrigin* CONSTANT chosen by the caller's code, never
+	// a request or payload value (learning-loop design, amendment 2026-10-13;
+	// GitHub #347). Empty is stored as NULL, which the skill distiller
+	// refuses.
+	GoalOrigin string
+
 	// Actor is WHO caused this task to exist, for the adoption leaderboard
 	// (LLD 2026-08-15 §3.1 rule 1). Zero means "not recorded", which is stored
 	// as NULL rather than guessed at — a wrong actor is worse than an absent
@@ -443,6 +450,7 @@ func (c *Creator) Create(ctx context.Context, p Params) (*persistence.Task, erro
 		UpdatedAt:         now,
 		CreatedByAPIKeyID: ptrIfNonEmpty(p.CreatedByAPIKeyID),
 		CreatedByActor:    ptrIfNonEmpty(resolveActor(p).String()),
+		GoalOrigin:        p.GoalOrigin,
 	}
 
 	// Atomic hard-cap reservation (trading-hardening §1): claim this task's

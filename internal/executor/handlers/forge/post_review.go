@@ -77,16 +77,9 @@ func NewPostReviewHandler(resolver ProviderResolver, disclosure Discloser) *Post
 	return &PostReviewHandler{resolver: resolver, disclosure: disclosure}
 }
 
-// discloseSuffix is the separator between the review and its notice. A rule plus
-// its own line so the notice survives being quoted into another thread, and so
-// it reads as a distinct statement rather than part of the reviewer's prose
-// (Art 50(5) "clear and distinguishable").
-const discloseSuffix = "\n\n---\n"
-
-// withDisclosure appends the Art 50(1) publication notice to a review body.
-func withDisclosure(body string, n aidisclosure.Notice) string {
-	return body + discloseSuffix + n.Text
-}
+// The review's notice is appended with aidisclosure.WithFooter — the one
+// spelling of the Art 50(5) "clear and distinguishable" rule shared by every
+// outbound (Art 50 design §11.4.2, GitHub #342); this file used to carry its own copy.
 
 // Name implements executor.SystemHandler.
 func (h *PostReviewHandler) Name() string { return "forge.post_review" }
@@ -334,7 +327,7 @@ func (h *PostReviewHandler) Execute(ctx context.Context, in executor.SystemStepI
 	if failing, blocked := h.approvalBlockedByCI(ctx, in.Task.ProjectID, job, event); blocked {
 		body = ciWithheldNotice(failing) + body
 		body = withRequestQuote(body, job)
-		body = withDisclosure(body, h.disclosure.PublicationNotice())
+		body = aidisclosure.WithFooter(body, h.disclosure.PublicationNotice())
 		// A COMMENT, not REQUEST_CHANGES. The prose says the change is fine;
 		// posting it under a rejecting state puts approving words in a
 		// rejecting envelope and a reader cannot tell which half to believe.
@@ -352,7 +345,7 @@ func (h *PostReviewHandler) Execute(ctx context.Context, in executor.SystemStepI
 	}
 
 	body = withRequestQuote(body, job)
-	body = withDisclosure(body, h.disclosure.PublicationNotice())
+	body = aidisclosure.WithFooter(body, h.disclosure.PublicationNotice())
 	if err := provider.PostReview(ctx, job.Repo, job.Number, forgeapi.ReviewSpec{Body: body, Event: event}); err != nil {
 		return executor.SystemStepResult{}, fmt.Errorf("%s: post review: %w", name, err)
 	}

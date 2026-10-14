@@ -123,13 +123,15 @@ func (g *githubTaskCreator) createCITask(ctx context.Context, ev github.TaskCrea
 		ID:             persistence.GenerateID("task"),
 		ProjectID:      g.project.ID,
 		CreationSource: persistence.TaskCreationSourceUser,
-		Status:         persistence.TaskStatusQueued,
-		Priority:       g.project.DefaultPriority,
-		Payload:        payload,
-		Attempt:        1,
-		MaxAttempts:    3,
-		CreatedAt:      now,
-		UpdatedAt:      now,
+		// The forge wrote what this goal carries (GitHub #347).
+		GoalOrigin:  persistence.TaskGoalOriginGitHubCI,
+		Status:      persistence.TaskStatusQueued,
+		Priority:    g.project.DefaultPriority,
+		Payload:     payload,
+		Attempt:     1,
+		MaxAttempts: 3,
+		CreatedAt:   now,
+		UpdatedAt:   now,
 	}
 	if workflowID != "" {
 		wf := workflowID

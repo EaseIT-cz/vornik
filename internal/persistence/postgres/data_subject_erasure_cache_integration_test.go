@@ -26,7 +26,7 @@ import (
 func TestIntegrationDeleteRow_EvictsTheChunksEmbeddingCacheEntry(t *testing.T) {
 	db := newIntegrationDB(t)
 	ctx := context.Background()
-	repo := &DataSubjectRepository{db: db.DB}
+	repo := NewDataSubjectRepository(db.DB)
 
 	const projectID = "erasure-cache-evict-test"
 	const sourceName = "integration-test"
@@ -105,7 +105,7 @@ func TestIntegrationDeleteRow_EvictsTheChunksEmbeddingCacheEntry(t *testing.T) {
 func TestIntegrationDeleteRow_NonChunkTableLeavesTheCacheAlone(t *testing.T) {
 	db := newIntegrationDB(t)
 	ctx := context.Background()
-	repo := &DataSubjectRepository{db: db.DB}
+	repo := NewDataSubjectRepository(db.DB)
 
 	unrelated := memory.ContentHash("an unrelated chunk that must keep its vector")
 	t.Cleanup(func() {

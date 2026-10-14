@@ -57,7 +57,7 @@ func diagToolDefs() []mcpToolDef {
 		{
 			Name: "task_explain",
 			Description: "Explain why a task failed: the task's status and failure class, each step's outcome and class, the failure-class playbook (cause and suggestions), and the last error, redacted for you. " +
-				"For a broker workflow only the closed error class and the playbook id. No model is called.",
+				"For a broker workflow only the closed error class and the playbook id. A task still waiting because its project is held by an interrupted config change carries paused, as status does. No model is called.",
 			InputSchema: map[string]any{
 				"type":       "object",
 				"properties": map[string]any{"task_id": map[string]any{"type": "string"}},
@@ -82,7 +82,7 @@ func diagToolDefs() []mcpToolDef {
 		{
 			Name: "doctor",
 			Description: "Agent admin keys only: your namespace's health. Each project's MCP servers that are not connected, " +
-				"with a closed reason code, and the tasks that failed in the last 24 hours by class. Read-only.",
+				"with a closed reason code, the tasks that failed in the last 24 hours by class, and paused_projects: projects held by an interrupted config change the operator must resolve (paused_unavailable when that could not be read). Read-only.",
 			InputSchema: map[string]any{"type": "object", "properties": map[string]any{}},
 		},
 	}
@@ -374,6 +374,7 @@ func (s *Server) companionToolTaskExplain(ctx context.Context, key *persistence.
 	if withheld > 0 {
 		recordLogWithheld("task_explain", withheld)
 	}
+	s.addPauseView(ctx, task, out) // GitHub #302
 	b, _ := json.MarshalIndent(out, "", "  ")
 	return string(b), nil
 }
@@ -459,9 +460,11 @@ func brokerExplain(ctx context.Context, s *Server, task *persistence.Task) strin
 	if task.LastErrorClass != nil {
 		playbook = livepubsub.ClosedTaskClass(*task.LastErrorClass)
 	}
-	b, _ := json.MarshalIndent(map[string]any{
+	out := map[string]any{
 		"task_id": task.ID, "status": string(task.Status), "error_class": class, "playbook_id": playbook,
-	}, "", "  ")
+	}
+	s.addPauseView(ctx, task, out) // GitHub #302: closed fields only
+	b, _ := json.MarshalIndent(out, "", "  ")
 	return string(b)
 }
 
@@ -522,8 +525,12 @@ func (s *Server) companionToolDoctor(ctx context.Context, key *persistence.APIKe
 		return fmt.Sprint(servers[i]["project"], servers[i]["server"]) < fmt.Sprint(servers[j]["project"], servers[j]["server"])
 	})
 	failed, truncated, scanErr := s.namespaceFailedByClass(ctx, key)
+	paused, pausedUnavailable := s.doctorPausedProjects(ctx, key)
 	recordLogToolOutcome("doctor", "ok")
 	b, _ := json.MarshalIndent(map[string]any{
+		// GitHub #302: projects held by an unresolved config apply.
+		"paused_projects":        paused,
+		"paused_unavailable":     pausedUnavailable,
 		"mcp_servers":            servers,
 		"failed_tasks_by_class":  failed,
 		"failed_tasks_truncated": truncated,

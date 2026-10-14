@@ -25,6 +25,7 @@ func (r *ChunkGraphExtractionRepository) FetchUnextracted(ctx context.Context, l
 		SELECT id, project_id, content
 		FROM project_memory_chunks
 		WHERE needs_graph_extraction = 1
+		  AND `+persistence.ChunkNotRestrictedSQL("project_memory_chunks.id")+`
 		ORDER BY created_at ASC
 		LIMIT ?`, limit)
 	if err != nil {

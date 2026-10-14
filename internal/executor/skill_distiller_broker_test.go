@@ -93,7 +93,10 @@ func (f *distillFixture) skipped(reason string) float64 {
 }
 
 func distillTask(project, workflow string, status persistence.TaskStatus) *persistence.Task {
-	t := &persistence.Task{ID: "t1", ProjectID: project, Status: status, Payload: []byte(`{"prompt":"x"}`)}
+	key := "akey_test"
+	t := &persistence.Task{ID: "t1", ProjectID: project, Status: status, Payload: []byte(`{"prompt":"x"}`),
+		CreationSource: persistence.TaskCreationSourceCompanion, CreatedByAPIKeyID: &key,
+		GoalOrigin: persistence.TaskGoalOriginCompanion}
 	if workflow != "" {
 		t.WorkflowID = &workflow
 	}
@@ -161,13 +164,16 @@ func TestDistiller_ProjectFlippedToBrokerBeforeEntryIsCaught(t *testing.T) {
 	}
 }
 
-// The residual (design §18.9 item 2, F1/F7): an ordinary task on an ordinary
-// project still distils, even if its agent read the web or a mailbox. Filed in
-// the backlog as "distil from provenance-tagged content only"; this test pins
-// the open behaviour so it cannot change silently in either direction.
+// An ordinary task on an ordinary project still distils when its steps read
+// nothing third-party. Until 2026-10-12 this pinned the residual of design
+// §18.9 item 2 (F1/F7): it distilled even if its agent had read the web or a
+// mailbox. GitHub #162 closed that (learning-loop design, amendment
+// 2026-10-12); skill_distiller_taint_test.go holds the refusals.
 func TestDistiller_OrdinaryTaskOnOrdinaryProjectStillDistils(t *testing.T) {
 	f := newDistillFixture(t)
-	if n := f.run(t, distillTask("ordinary", "", persistence.TaskStatusCompleted)); n != 1 {
+	w := f.wireTaint()
+	w.step(t, "t1", "file_read")
+	if n := f.runOrdinary(t, w, distillTask("ordinary", "", persistence.TaskStatusCompleted)); n != 1 {
 		t.Fatalf("an ordinary task must still be distilled; got %d drafts", n)
 	}
 }

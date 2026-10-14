@@ -229,21 +229,14 @@ func (c *Container) initRetention() {
 	}
 	sweeper := retention.New(c.DB, c.Logger.With().Str("component", "retention").Logger())
 
-	defaults := retention.Policy{
-		TaskLLMUsageDays:          cfg.TaskLLMUsageDays,
-		ToolAuditDays:             cfg.ToolAuditDays,
-		ChatAuditDays:             cfg.ChatAuditDays,
-		TasksDays:                 cfg.TasksDays,
-		ExecutionsDays:            cfg.ExecutionsDays,
-		ArtifactsDays:             cfg.ArtifactsDays,
-		TaskMessagesDays:          cfg.TaskMessagesDays,
-		MemoryChunksDays:          cfg.MemoryChunksDays,
-		MemoryIngestAuditDays:     cfg.MemoryIngestAuditDays,
-		MemoryPolicyEvalAllowDays: cfg.MemoryPolicyEvalAllowDays,
-		MemoryPolicyEvalBlockDays: cfg.MemoryPolicyEvalBlockDays,
-		MemoryEvictionAuditDays:   cfg.MemoryEvictionAuditDays,
-		ArtifactsRoot:             c.Config.Storage.ArtifactsPath,
+	// tool_audit_log six-month floor (AI Act Art 26(6)); a configuration that
+	// asks for less is reported once here, not on every tick.
+	toolAuditFloor, floorWarning := retention.ResolveToolAuditFloor(cfg.ToolAuditFloorDays, cfg.ToolAuditFloorOverride, cfg.ToolAuditFloorOverrideBasis)
+	if floorWarning != "" {
+		c.Logger.Warn().Int("tool_audit_floor_days", toolAuditFloor).Msg(floorWarning)
 	}
+
+	defaults := retention.DefaultsFromConfig(cfg, toolAuditFloor, c.Config.Storage.ArtifactsPath)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	c.retentionCancel = cancel
@@ -325,32 +318,19 @@ func (c *Container) runRetentionOnce(ctx context.Context, sweeper *retention.Swe
 		if p == nil {
 			continue
 		}
-		policy := retention.Resolve(p.ID, retention.Policy{
-			TaskLLMUsageDays:          p.Retention.TaskLLMUsageDays,
-			ToolAuditDays:             p.Retention.ToolAuditDays,
-			ChatAuditDays:             p.Retention.ChatAuditDays,
-			TasksDays:                 p.Retention.TasksDays,
-			ExecutionsDays:            p.Retention.ExecutionsDays,
-			ArtifactsDays:             p.Retention.ArtifactsDays,
-			TaskMessagesDays:          p.Retention.TaskMessagesDays,
-			MemoryChunksDays:          p.Retention.MemoryChunksDays,
-			MemoryRequireApproval:     p.Retention.MemoryRequireApproval,
-			MemoryIngestAuditDays:     p.Retention.MemoryIngestAuditDays,
-			MemoryPolicyEvalAllowDays: p.Retention.MemoryPolicyEvalAllowDays,
-			MemoryPolicyEvalBlockDays: p.Retention.MemoryPolicyEvalBlockDays,
-			MemoryEvictionAuditDays:   p.Retention.MemoryEvictionAuditDays,
-		}, defaults)
+		policy := retention.Resolve(p.ID, retention.ProjectOverrides(p.Retention), defaults)
 
 		counts, err := sweeper.Sweep(ctx, policy)
 		c.fileMemoryRetentionRequests(ctx, sweeper, p)
 		if err != nil {
 			c.Logger.Warn().Err(err).Str("project", p.ID).Msg("retention sweep partially failed")
 		}
-		if counts.TaskLLMUsage+counts.ToolAudit+counts.Tasks+counts.Executions+counts.Artifacts+counts.TaskMessages+counts.MemoryChunks+counts.MemoryExpired+counts.MemoryIngestAudit+counts.MemoryPolicyEvalAllow+counts.MemoryPolicyEvalBlock > 0 {
+		if counts.TaskLLMUsage+counts.ToolAudit+counts.AgentAdminRefusals+counts.Tasks+counts.Executions+counts.Artifacts+counts.TaskMessages+counts.MemoryChunks+counts.MemoryExpired+counts.MemoryIngestAudit+counts.MemoryPolicyEvalAllow+counts.MemoryPolicyEvalBlock > 0 {
 			c.Logger.Info().
 				Str("project", p.ID).
 				Int("llm_usage", counts.TaskLLMUsage).
 				Int("tool_audit", counts.ToolAudit).
+				Int("agent_admin_refusals", counts.AgentAdminRefusals).
 				Int("tasks", counts.Tasks).
 				Int("executions", counts.Executions).
 				Int("artifacts", counts.Artifacts).

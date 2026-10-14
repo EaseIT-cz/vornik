@@ -80,7 +80,7 @@ func TestSendArtifactsToWatchers_SendsToEachWatcher(t *testing.T) {
 	chatClient := chat.NewClient("https://example.com", "k", "m")
 	b, err := NewBot(BotConfig{Token: "tok", AllowUnlistedUsers: true}, chatClient,
 		WithArtifactRepository(repo),
-		WithHTTPClient(srv.Client()),
+		WithHTTPClient(srv.Client()), WithAIDisclosure(alreadyDisclosed()),
 	)
 	if err != nil {
 		t.Fatalf("NewBot: %v", err)
@@ -123,7 +123,7 @@ func TestSendArtifactsToWatchers_SendDocumentErrorContinues(t *testing.T) {
 	chatClient := chat.NewClient("https://example.com", "k", "m")
 	b, _ := NewBot(BotConfig{Token: "tok", AllowUnlistedUsers: true}, chatClient,
 		WithArtifactRepository(repo),
-		WithHTTPClient(srv.Client()),
+		WithHTTPClient(srv.Client()), WithAIDisclosure(alreadyDisclosed()),
 	)
 	b.baseURL = srv.URL
 

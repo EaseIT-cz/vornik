@@ -66,13 +66,13 @@ type Project struct {
 	// Every companion key on it is broker-only — no memory, no skills,
 	// broker workflows only — and broker workflows run nowhere else. See
 	// https://docs.vornik.io
-	Broker bool `yaml:"broker,omitempty" since:"2026.9.9"`
+	Broker bool `yaml:"broker,omitempty" since:"2026.10.1"`
 	// APIs are per-project REST providers (agent-administered Vornik
 	// design §8.3). Agent-namespace projects only in this release.
 	APIs []ProjectAPI `yaml:"apis,omitempty" since:"2026.10.2"`
 	// CompanionPush configures completion push for this project's companion
 	// tasks. See the broker write-actions design §7a.
-	CompanionPush CompanionPushConfig `yaml:"companion_push,omitempty" since:"2026.9.9"`
+	CompanionPush CompanionPushConfig `yaml:"companion_push,omitempty" since:"2026.10.1"`
 	// Budget caps LLM spend for this project. Zero values disable the cap.
 	Budget ProjectBudget `yaml:"budget"`
 	// Chat configures per-project chat behaviour. Currently only a system
@@ -944,7 +944,7 @@ type ProjectForge struct {
 	// CI configures reading completed CI runs
 	// (2026-09-08-forge-ci-outcomes-design.md §8).
 	CI     ProjectForgeCI     `yaml:"ci"`
-	Issues ProjectForgeIssues `yaml:"issues" since:"2026.10.11"`
+	Issues ProjectForgeIssues `yaml:"issues" since:"2026.10.6"`
 	// GitLab ProjectGitLab `yaml:"gitlab"` // future sibling
 	// Gitea  ProjectGitea  `yaml:"gitea"`  // future sibling
 }
@@ -1577,9 +1577,9 @@ type ProjectTradingRateLimit struct {
 // ProjectRetention controls per-project pruning thresholds in days.
 type ProjectRetention struct {
 	// MemoryRequireApproval protects automatic RAG deletion behind paired-phone approval.
-	MemoryRequireApproval bool `yaml:"memory_require_approval" since:"2026.10.7"`
+	MemoryRequireApproval bool `yaml:"memory_require_approval" since:"2026.10.5"`
 	// MemoryIdleDays defaults to 365 in approval mode; longer chunk TTLs win.
-	MemoryIdleDays   int `yaml:"memory_idle_days" since:"2026.10.7"`
+	MemoryIdleDays   int `yaml:"memory_idle_days" since:"2026.10.5"`
 	TaskLLMUsageDays int `yaml:"task_llm_usage_days"` // cost history; default 90
 	ToolAuditDays    int `yaml:"tool_audit_days"`     // debug data; default 30
 	ChatAuditDays    int `yaml:"chat_audit_days"`     // chat turns + their prompt bodies; default 90
@@ -2239,7 +2239,7 @@ type CompanionPushConfig struct {
 	// 100.64.0.0/10) that pushes for this project's tasks may reach. Empty:
 	// public addresses only. List the narrowest range that reaches the
 	// front agent.
-	AllowedCIDRs []string `yaml:"allowed_cidrs,omitempty" since:"2026.9.9"`
+	AllowedCIDRs []string `yaml:"allowed_cidrs,omitempty" since:"2026.10.1"`
 }
 
 // CompanionPushAllowed returns the parsed allowlist, or nil. Validate has

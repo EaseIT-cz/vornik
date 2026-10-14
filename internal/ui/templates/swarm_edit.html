@@ -52,12 +52,12 @@
                         <div>
                             <label class="block text-xs font-medium text-gray-300 mb-1.5" for="displayName">Display name</label>
                             <input type="text" name="displayName" id="displayName" value="{{.DisplayName}}"
-                                   class="w-full px-3 py-2 text-sm rounded-lg bg-dark-800 border border-dark-700 focus:border-brand-500 focus:outline-none text-gray-200">
+                                   class="w-full px-3 py-2 text-sm rounded-lg bg-dark-800 border border-control focus:border-brand-500 focus:outline-none text-gray-200">
                         </div>
                         <div>
                             <label class="block text-xs font-medium text-gray-300 mb-1.5" for="leadRole">Lead role</label>
                             <select name="leadRole" id="leadRole"
-                                    class="w-full px-3 py-2 text-sm rounded-lg bg-dark-800 border border-dark-700 focus:border-brand-500 focus:outline-none text-gray-200 font-mono">
+                                    class="w-full px-3 py-2 text-sm rounded-lg bg-dark-800 border border-control focus:border-brand-500 focus:outline-none text-gray-200 font-mono">
                                 <option value="" {{if eq .LeadRole ""}}selected{{end}}>(unset)</option>
                                 {{$current := .LeadRole}}
                                 {{range .RoleViews}}
@@ -69,7 +69,7 @@
                     <div>
                         <label class="block text-xs font-medium text-gray-300 mb-1.5" for="rolePrelude">Role prelude</label>
                         <textarea name="rolePrelude" id="rolePrelude" rows="4"
-                                  class="w-full px-3 py-2 text-sm rounded-lg bg-dark-800 border border-dark-700 focus:border-brand-500 focus:outline-none text-gray-200 leading-relaxed">{{.RolePrelude}}</textarea>
+                                  class="w-full px-3 py-2 text-sm rounded-lg bg-dark-800 border border-control focus:border-brand-500 focus:outline-none text-gray-200 leading-relaxed">{{.RolePrelude}}</textarea>
                         <p class="text-[11px] text-gray-500 mt-1">Prepended to every role's system prompt at runtime. Sits between the daemon's built-in safety prelude and the role body.</p>
                     </div>
                 </section>
@@ -92,13 +92,13 @@
                             <div>
                                 <label class="block text-[11px] font-medium text-gray-400 mb-1" for="{{.DescFieldName}}">Description</label>
                                 <input type="text" name="{{.DescFieldName}}" id="{{.DescFieldName}}" value="{{.Description}}"
-                                       class="w-full px-2 py-1.5 text-xs rounded bg-dark-800 border border-dark-700 focus:border-brand-500 focus:outline-none text-gray-200">
+                                       class="w-full px-2 py-1.5 text-xs rounded bg-dark-800 border border-control focus:border-brand-500 focus:outline-none text-gray-200">
                             </div>
                             <div>
                                 <label class="block text-[11px] font-medium text-gray-400 mb-1" for="{{.ModelFieldName}}">Model</label>
                                 {{if $.ModelOptions}}
                                 <select name="{{.ModelFieldName}}" id="{{.ModelFieldName}}"
-                                        class="w-full px-2 py-1.5 text-xs rounded bg-dark-800 border border-dark-700 focus:border-brand-500 focus:outline-none text-gray-200 font-mono">
+                                        class="w-full px-2 py-1.5 text-xs rounded bg-dark-800 border border-control focus:border-brand-500 focus:outline-none text-gray-200 font-mono">
                                     <option value="" {{if eq .Model ""}}selected{{end}}>(daemon default)</option>
                                     {{$mc := .Model}}
                                     {{range $.ModelOptions}}
@@ -108,14 +108,14 @@
                                 {{else}}
                                 <input type="text" name="{{.ModelFieldName}}" id="{{.ModelFieldName}}" value="{{.Model}}"
                                        placeholder="(daemon default)"
-                                       class="w-full px-2 py-1.5 text-xs rounded bg-dark-800 border border-dark-700 focus:border-brand-500 focus:outline-none text-gray-200 font-mono">
+                                       class="w-full px-2 py-1.5 text-xs rounded bg-dark-800 border border-control focus:border-brand-500 focus:outline-none text-gray-200 font-mono">
                                 {{end}}
                             </div>
                             <div>
                                 <label class="block text-[11px] font-medium text-gray-400 mb-1" for="{{.ModelFallbackFieldName}}">Fallback model</label>
                                 {{if $.ModelOptions}}
                                 <select name="{{.ModelFallbackFieldName}}" id="{{.ModelFallbackFieldName}}"
-                                        class="w-full px-2 py-1.5 text-xs rounded bg-dark-800 border border-dark-700 focus:border-brand-500 focus:outline-none text-gray-200 font-mono">
+                                        class="w-full px-2 py-1.5 text-xs rounded bg-dark-800 border border-control focus:border-brand-500 focus:outline-none text-gray-200 font-mono">
                                     <option value="" {{if eq .ModelFallback ""}}selected{{end}}>(none)</option>
                                     {{$fb := .ModelFallback}}
                                     {{range $.ModelOptions}}
@@ -125,7 +125,7 @@
                                 {{else}}
                                 <input type="text" name="{{.ModelFallbackFieldName}}" id="{{.ModelFallbackFieldName}}" value="{{.ModelFallback}}"
                                        placeholder="(none)"
-                                       class="w-full px-2 py-1.5 text-xs rounded bg-dark-800 border border-dark-700 focus:border-brand-500 focus:outline-none text-gray-200 font-mono">
+                                       class="w-full px-2 py-1.5 text-xs rounded bg-dark-800 border border-control focus:border-brand-500 focus:outline-none text-gray-200 font-mono">
                                 {{end}}
                                 <p class="text-[11px] text-gray-500 mt-1">Used when a step fails on the primary model with a model-shaped error (one retry).</p>
                             </div>
@@ -133,12 +133,12 @@
                         <div>
                             <label class="block text-[11px] font-medium text-gray-400 mb-1" for="{{.ToolsFieldName}}">Allowed tools (one per line)</label>
                             <textarea name="{{.ToolsFieldName}}" id="{{.ToolsFieldName}}" rows="3"
-                                      class="w-full px-2 py-1.5 text-xs rounded bg-dark-800 border border-dark-700 focus:border-brand-500 focus:outline-none text-gray-200 font-mono">{{.AllowedTools}}</textarea>
+                                      class="w-full px-2 py-1.5 text-xs rounded bg-dark-800 border border-control focus:border-brand-500 focus:outline-none text-gray-200 font-mono">{{.AllowedTools}}</textarea>
                         </div>
                         <div>
                             <label class="block text-xs font-medium text-gray-300 mb-1.5" for="{{.PromptFieldName}}">System prompt</label>
                             <textarea name="{{.PromptFieldName}}" id="{{.PromptFieldName}}" rows="10"
-                                      class="w-full px-3 py-2 text-sm rounded-lg bg-dark-800 border border-dark-700 focus:border-brand-500 focus:outline-none text-gray-200 font-mono leading-6">{{.SystemPrompt}}</textarea>
+                                      class="w-full px-3 py-2 text-sm rounded-lg bg-dark-800 border border-control focus:border-brand-500 focus:outline-none text-gray-200 font-mono leading-6">{{.SystemPrompt}}</textarea>
                         </div>
                         {{template "assistPanel" (dict
                             "Kind" "swarm_role"

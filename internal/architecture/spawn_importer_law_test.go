@@ -141,8 +141,10 @@ func TestSpawnLaw_OnlyNamedPackagesImportSpawn(t *testing.T) {
 		}
 		importers[rel] = use
 	}
+	// #334 item 6: a listing of nothing is not an absent package.
+	requireExamined(t, "spawn importer law", "module packages", examined, 100)
 	if !present[spawnImportPath] {
-		t.Skip("internal/spawn is absent from this edition")
+		absentFromEdition(t, root, "internal/spawn")
 	}
 	t.Logf("examined %d packages; %d import internal/spawn", examined, len(importers))
 	for _, v := range spawnImporterViolations(importers, present) {

@@ -1,17 +1,17 @@
 ---
 sources:
     - path: internal/dispatcher/render_document.go
-      sha256: a554dd5c00418182be9a080437ce53d6a351ec8d6a77af3ef8eea55678103318
+      sha256: b56577cedd74a94c78937e7148a7377f4275e3501f377d9bc53c0741d2962511
     - path: internal/dispatcher/tools.go
-      sha256: 63c4fa8d20065c2a5df20c4c59fa81087b6e5cdb85a0f8d5a18ce6031e1d9c35
+      sha256: fa7c53f0c31d418ed9921230bcf89306b5f7622a6073795ee6188a7446d55a7d
     - path: internal/dispatcher/agent.go
       sha256: c835fa6ecab54a606f31ddf515668cf1c55b4ab0c57bd9bf5706f236f5908e8a
     - path: internal/email/channel.go
-      sha256: e68fa770d1d398450906ab8586d8c76f8cb5487bf05407c0614cdcc66a7ce64b
+      sha256: 900fac5793862ee30e9333d08706c79db223b5013597fdd1c8b4516d8ef3247c
     - path: internal/slack/voice.go
       sha256: 74a85ffb02d275a6cdd24f40b43abdcb2c700d0a3923d23a1845b0df172c679f
     - path: internal/reminders/completion_notifier.go
-      sha256: 5f6fc7a55e4cda6c25cc13e1d3340dc185dff5e8af3118d7932faf9134f47efe
+      sha256: 4dc6437e79bc5706e8c42b9beebf136d793304d1c52cc58f961f2326771b984c
 ---
 # Artifacts & Outbound File Delivery
 
@@ -39,14 +39,22 @@ Parameters:
 
 | Parameter | Required | Description |
 |---|---|---|
-| `content` | yes | The markdown source, rendered verbatim. |
+| `content` | yes | The markdown source (GitHub-flavoured). Raw HTML, images and YAML front matter are dropped; see below. |
 | `name` | yes | Base filename, no extension (e.g. `quarterly-report`). |
 | `formats` | no | Any of `md`, `html`, `pdf`, `docx`. Defaults to `md`, `html` and `pdf`. |
 
 - **`md`** is always available — it's the source written to a file.
 - **`html`** is produced with `pandoc` in the agent image.
-- **`pdf`** is produced with `pandoc` + `weasyprint` in the agent image.
+- **`pdf`** is produced with `pandoc` + `weasyprint` in the agent image;
+  WeasyPrint is not allowed to load any URL or file.
 - **`docx`** (a Word document) is produced with `pandoc` in the agent image.
+- The markdown is read as GitHub-flavoured markdown and sanitized the same way
+  as the agents' `document_render` tool, so a document cannot make the renderer
+  read a local file, fetch a URL, or carry a script into the output: raw HTML
+  is dropped, every image becomes its alt text, YAML front matter is shown as
+  plain text, and links keep their target only for `http(s)`, `mailto` and
+  `#` anchors. Tables, footnotes, strikethrough and task lists render as usual.
+  Embed no images: there is no way to include one.
 - If the agent image isn't present locally (it is never pulled for this), or
   podman isn't available, the tool reports that rendering is not available
   rather than falling back to anything on the host. An `md` file you asked
@@ -82,6 +90,15 @@ bound fails. The agent image declares its tools in the
 declare (an image older than the release) reports "not available in the agent
 image" without starting anything, and `vornikctl doctor` runs every tool on a
 fixture to prove it works.
+
+**Which media containers are read.** ffmpeg and ffprobe read only the uploaded
+file itself, and only as one of these containers: MP4/M4A/MOV/3GP, Matroska
+and WebM, Ogg (including Opus voice notes), MP3, WAV, FLAC, ADTS AAC, AVI,
+ASF (WMA/WMV), MPEG-TS, MPEG-PS (VOB), FLV, AIFF, AMR and CAF. A playlist or
+manifest (HLS `.m3u8`, DASH `.mpd`, an ffmpeg concat list, SDP) is refused
+rather than followed, and so is any other container (WavPack, APE, MXF,
+RealMedia, raw AC-3/DTS): extraction fails with ffmpeg's "Format not on
+whitelist". Convert such a file to one of the formats above first.
 
 **Audio extraction changed in 2026.9.7.** It used to run OpenAI's Python
 `whisper` CLI on the host with its `turbo` model. It now runs whisper.cpp
@@ -138,6 +155,11 @@ scheduled task publishes OUTPUT artifacts, Vornik automatically attaches them
 to the original Telegram, Slack, or email destination before posting the
 completion summary. Scratch/intermediate files are never forwarded.
 
+Every scheduled update, reminder and delivered file says that an AI system
+produced it: on email each message ends with the AI-disclosure notice; on
+Telegram and Slack the chat gets the notice once, before the first update it
+receives, unless it was already told in an earlier conversation.
+
 Attachments are collected from the scheduled task **and any tasks it delegated
 to**. A scheduled prompt frequently runs a router workflow that hands the real
 work to a child task, and the deliverable is written there — collecting only
@@ -165,6 +187,10 @@ REST create-task path, or a Telegram / email attachment). The task then carries:
 - an `## ATTACHED FILES` block in the agent's prompt, naming each file;
 - the raw file **staged into the container** at `artifacts/in/<name>`, which is what an
   agent opens with an ordinary file read.
+
+Only files Vornik stored as artifacts **of the task's own project** are staged. A path you
+write into `context.inputFiles` yourself, or one that names another project's artifact, is
+not staged; attach the file instead, and Vornik stores it and fills in both fields.
 
 There is one wrinkle worth knowing, because it is the thing that bites: a **document**
 (PDF, EPUB, DOCX…) is normally *extracted* into project memory at upload time, and the

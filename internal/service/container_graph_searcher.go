@@ -5,6 +5,7 @@ import (
 
 	"vornik.io/vornik/internal/memory"
 	"vornik.io/vornik/internal/memory/graph"
+	"vornik.io/vornik/internal/persistence"
 )
 
 // newGraphSearcher builds the knowledge-graph READ surface
@@ -36,11 +37,16 @@ func (c *Container) newGraphSearcher() *graph.Searcher {
 		}
 	}
 
-	return graph.NewSearcher(
+	gs := graph.NewSearcher(
 		c.repos.KnowledgeEntities,
 		c.repos.KnowledgeEdges,
 		c.repos.EntityMentions,
 		graph.NewSQLChunkLookup(c.DB),
 		embed,
 	)
+	// GDPR Art 18 (#350): the Searcher refuses every read without this; it is
+	// installed here, by construction, for both the UI and the memory_search
+	// graph block. see https://docs.vornik.io §4.16.7
+	gs.SetRestrictionScreen(persistence.NewSQLRestrictionScreen(c.DB))
+	return gs
 }

@@ -1,9 +1,9 @@
 ---
 sources:
     - path: internal/registry/project.go
-      sha256: d6732b486d349c9dc265b3fd328c490750156b91fafe7febf538dcff04cbb989
+      sha256: 9bd6f186763374825317a2e08ab999ea37c0b919c64fcdfc3caf0c395ee14d6b
     - path: internal/mcp/client.go
-      sha256: 5b9fe2c7a803ade40a74d2b5a3557016aec87759df27fce8366bdea2e928faad
+      sha256: a7ad6c6cfb746ab718ba5229ab50ed5c6176dbf4b907a9657e06141561587849
     - path: internal/mcp/ratelimit.go
       sha256: 19ad0c64e2abd9d25e95971e1ba5e3cfe91f34852edeca6e4f9c70825b2e901d
     - path: internal/cli/mcp.go
@@ -59,7 +59,11 @@ There are three transports:
   don't rely on an MCP subprocess outliving its connection.
 
   If a stdio server exits or closes stdout on its own, the daemon **re-launches
-  it automatically** on the next tool call and retries that call once. You do
+  it automatically** on the next tool call and retries that call once. One
+  exception: when the server died while it was handling the call, and the tool
+  can change something (it is not a read), the call is **not** retried, because
+  the server may already have done it. The error says so; check whether the
+  action took effect before running it again. You do
   not need to restart the daemon to recover a crashed stdio server. Concurrent
   calls against a server that has just died share one relaunch rather than
   starting a subprocess each. If the relaunch itself fails — the command is
@@ -98,11 +102,14 @@ how you target a server from the CLI.
 
 ### Per-server request timeout
 
-`sse`/`streamable-http` servers use a **30-second** per-request timeout by
-default. If a server has tools that legitimately run longer — e.g. a scraper
-whose `web_fetch` hits slow or anti-bot sites — raise it with
+Every request to an MCP server has a time limit. `sse` and `streamable-http`
+servers use a **30-second** limit by default; `stdio` servers use
+**120 seconds**. If a server has tools that legitimately run longer, such as a
+scraper whose `web_fetch` hits slow or anti-bot sites, raise the limit with
 `timeout_seconds` so a slow call completes instead of failing with
-`context deadline exceeded`:
+`context deadline exceeded`. A call that hits the limit fails with an error
+naming the server. One slow or stuck server does not hold up calls to any
+other server.
 
 ```yaml
 mcp:
@@ -110,7 +117,7 @@ mcp:
     - name: "scraper"
       transport: "sse"
       url: "http://127.0.0.1:8787"
-      timeout_seconds: 90      # 0 or omitted = 30s default
+      timeout_seconds: 90      # 0 or omitted = the default (30s; 120s for stdio)
 ```
 
 ## Authenticating to a server

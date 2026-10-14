@@ -37,7 +37,7 @@
 # -----------------------------------------------------------------------
 # Stage 1: build Go binaries (vornik daemon + vornikctl CLI + mcp-bridge)
 # -----------------------------------------------------------------------
-FROM docker.io/library/golang:1.25@sha256:d7912cedddfa15b2900a8dfb7187df0af5ec2cb424a371139b5b352fd3e6b740 AS builder
+FROM docker.io/library/golang:1.26.9@sha256:d7722066f0b60ceccb6c0643cbed1f5f9e15506ac237146c95333504d7805d89 AS builder
 
 WORKDIR /src
 

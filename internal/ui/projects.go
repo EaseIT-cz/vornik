@@ -6,9 +6,11 @@ package ui
 import (
 	"context"
 	"net/http"
+	"strings"
 	"time"
 
 	"vornik.io/vornik/internal/api"
+	"vornik.io/vornik/internal/projectarchive"
 	"vornik.io/vornik/internal/registry"
 )
 
@@ -34,6 +36,18 @@ type ProjectsData struct {
 	// archived. The template renders a "N archived" footer
 	// summary when > 0.
 	ArchivedCount int
+	// Delete-now outcome banners (archival design section H, 2026-10-14),
+	// from the redirect's query: ?deleted=<id>, ?deleted=<id>&residue=1,
+	// ?delete_pending=<id>. DeleteResidue is the sweeper's residue text,
+	// shown only to a caller allowed to see that project.
+	DeletedID       string
+	DeleteResidueID string
+	DeleteResidue   string
+	// DeleteResidueArtifacts / DeleteResidueReload say which steps the
+	// residue names (?residue=artifacts,reload; section H.5).
+	DeleteResidueArtifacts bool
+	DeleteResidueReload    bool
+	DeletePendingID        string
 }
 
 // ProjectsListRow is one card in the projects grid. Wraps the
@@ -94,6 +108,7 @@ func (s *Server) Projects(w http.ResponseWriter, r *http.Request) {
 	// banner can't nag about drafts the operator can't resume when the
 	// wizard feature is off (no chat provider).
 	s.populateWizardDraftsBanner(r, &data)
+	s.populateDeleteOutcomeBanner(r, &data)
 
 	s.render(w, "projects.html", data)
 }
@@ -154,4 +169,38 @@ type wizardDraftSummary struct {
 // no spoofable fallback.
 func (s *Server) operatorIDForRequest(r *http.Request) string {
 	return api.RequestOperatorIDOrSingleTenant(r, s.singleTenantOperatorID)
+}
+
+// populateDeleteOutcomeBanner fills the delete-now outcome banners from the
+// redirect's query (archival design section H). The residue text comes from
+// the sweeper's last outcome for the project, never from the URL.
+func (s *Server) populateDeleteOutcomeBanner(r *http.Request, data *ProjectsData) {
+	q := r.URL.Query()
+	data.DeletePendingID = q.Get("delete_pending")
+	id := q.Get("deleted")
+	if id == "" {
+		return
+	}
+	if q.Get("residue") == "" {
+		data.DeletedID = id
+		return
+	}
+	data.DeleteResidueID = id
+	// Which steps were left undone (section H.5). "1" (and anything without a
+	// step) is the artifact wording section H first shipped.
+	for _, st := range strings.Split(q.Get("residue"), ",") {
+		if st == string(projectarchive.ResidueReload) {
+			data.DeleteResidueReload = true
+		} else {
+			data.DeleteResidueArtifacts = true
+		}
+	}
+	if !api.RequestAllowsProject(r, id) {
+		return
+	}
+	if rep, ok := s.archiveSweeper.(archiveOutcomeReporter); ok {
+		if o, ok := rep.LastOutcome(id); ok && o.Residue != nil {
+			data.DeleteResidue = o.Residue.Error()
+		}
+	}
 }

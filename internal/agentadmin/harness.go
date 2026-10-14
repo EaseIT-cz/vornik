@@ -21,15 +21,23 @@ func HarnessClassOf(clientKind string) string {
 }
 
 // HarnessClaimsFor is a client kind's claims: its class's row, and for
-// Hermes the limit of the approval transport (Hermes approval transport
-// design §3): Vornik is the surface and the record of Hermes's own
-// approvals, not the gate.
+// Hermes the limits of the approval transport (Hermes approval transport
+// design §3, and its amendment "Unattended sessions" of 2026-10-13): Vornik is the surface
+// and the record of Hermes's own approvals, not the gate, and Hermes's
+// unattended sessions never ask it.
 func HarnessClaimsFor(clientKind string) []string {
 	claims := HarnessClaims(HarnessClassOf(clientKind))
 	if clientKind == "hermes" {
 		claims = append(claims, "Not held by Vornik: when the user answers Hermes's own safety prompts on their phone "+
 			"(hermes vornik approvals on), Vornik shows Hermes's text and records the device's answer, but it cannot make Hermes obey; "+
-			"Hermes enforces it, and a modified Hermes, or one with the transport deselected, ignores the phone.")
+			"Hermes enforces it, and a modified Hermes, or one with the transport deselected, ignores the phone.",
+			// GitHub #129 (2026-10-13): Hermes asks a transport only in
+			// interactive CLI, gateway and ask-bridge sessions; final for 2026.10.6.
+			"Not reached by the phone: Hermes's cron jobs, single-query runs (hermes chat -q) and sessions on "+
+				"unattended platforms (webhook, api_server without a client that can answer) never ask anyone; they resolve "+
+				"from Hermes's approvals.*_mode settings (cron_mode, single_query_mode, unattended_mode; default deny), and "+
+				"hermes -z runs in Hermes's YOLO mode, so their safety prompts never reach the phone. Do not promise the user "+
+				"a phone approval for an unattended Hermes run.")
 	}
 	return claims
 }

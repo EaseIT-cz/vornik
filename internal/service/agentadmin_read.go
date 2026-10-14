@@ -28,6 +28,10 @@ type SetupView struct {
 	Pending    []SetupRequest `json:"awaiting_approval"`
 	Failed     []SetupRequest `json:"failed"`
 	Expired    []SetupRequest `json:"expired,omitempty"`
+	// Withdrawn are requests the daemon withdrew in the last 7 days because
+	// they no longer applied, each with its reason (design §9.2d, GitHub
+	// #264): nothing to re-propose.
+	Withdrawn []SetupRequest `json:"withdrawn,omitempty"`
 	// Notifications are advisory terminal approval signals since the last
 	// list_my_setup call for this namespace. The approval rows in this same
 	// response remain authoritative.
@@ -130,6 +134,9 @@ type SetupWorkflow struct {
 	ID       string         `json:"id"`
 	Approved bool           `json:"approved"`
 	Schedule *SetupSchedule `json:"schedule,omitempty"`
+	// InstalledBy is "device" for a connector the person installed from
+	// their paired device (design §19.14.3, §19.14.8 item 6), else omitted.
+	InstalledBy string `json:"installed_by,omitempty"`
 }
 
 // SetupSchedule is a workflow's schedule (design §17.4): what it is, whether
@@ -289,7 +296,7 @@ func (s *agentAdminService) ListSetup(ctx context.Context, key *persistence.APIK
 	// before a later sign-in included (design §22.2.7, review 25bf finding
 	// 3; audit 2026-10-12 finding C).
 	hide := s.providerIdentityHider(ctx, ns)
-	for _, list := range [][]SetupRequest{v.Pending, v.Failed, v.Expired} {
+	for _, list := range [][]SetupRequest{v.Pending, v.Failed, v.Expired, v.Withdrawn} {
 		for i := range list {
 			own := list[i].agentSupplied
 			list[i].Sentence, list[i].Reason = hide(list[i].Sentence, own), hide(list[i].Reason, own)
@@ -365,6 +372,9 @@ func (s *agentAdminService) requestsOf(ctx context.Context, ns string, v *SetupV
 				agentSupplied: agentSuppliedIdentities(r.Rendered)})
 		case r.Status == persistence.ApprovalExpired:
 			v.Expired = append(v.Expired, SetupRequest{ID: r.ID, Sentence: r.Sentence, Created: r.CreatedAt, agentSupplied: agentSuppliedIdentities(r.Rendered)})
+		case r.Status == persistence.ApprovalWithdrawn:
+			v.Withdrawn = append(v.Withdrawn, SetupRequest{ID: r.ID, Sentence: r.Sentence, Created: r.CreatedAt, Reason: r.WithdrawReason,
+				agentSupplied: agentSuppliedIdentities(r.Rendered)})
 		}
 	}
 	return nil
@@ -504,9 +514,18 @@ func harnessView(clientKind string) HarnessView {
 // when there is one (design §17.4).
 func (s *agentAdminService) workflowViews(ctx context.Context, st *agentadmin.State, p *agentadmin.ProjectState) []SetupWorkflow {
 	out := []SetupWorkflow{}
+	byDevice := map[string]bool{}
+	if rows, err := s.grants.ListConnectorInstalls(ctx, st.Namespace); err == nil {
+		for _, r := range rows {
+			byDevice[r.WorkflowID] = true
+		}
+	}
 	for _, wid := range sortedWorkflowIDs(st, p.ID) {
 		w := st.Workflows[wid]
 		sw := SetupWorkflow{ID: wid, Approved: w.ApprovedReach != "" && reachMatches(p, w)}
+		if byDevice[wid] {
+			sw.InstalledBy = "device"
+		}
 		if w.Loaded != nil && w.Loaded.Broker != nil && w.Loaded.Broker.Schedule != nil {
 			sw.Schedule = s.scheduleView(ctx, p.ID, wid, w.Loaded.Broker.Schedule, sw.Approved, time.Now())
 		}

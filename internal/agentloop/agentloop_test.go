@@ -15,7 +15,9 @@ import (
 
 // TestImportsAreLeaf — the package ships inside the agent image via
 // vornik-agent-helper; daemon code must not ride along. Only the standard
-// library and internal/agenttools may be imported.
+// library, internal/agenttools and internal/docrender (the renderer constants
+// shared with the chat's render_document, itself stdlib-only, #339) may be
+// imported.
 func TestImportsAreLeaf(t *testing.T) {
 	fset := token.NewFileSet()
 	entries, err := os.ReadDir(".")
@@ -32,8 +34,8 @@ func TestImportsAreLeaf(t *testing.T) {
 		}
 		for _, imp := range f.Imports {
 			p := strings.Trim(imp.Path.Value, `"`)
-			if strings.Contains(p, ".") && p != "vornik.io/vornik/internal/agenttools" {
-				t.Errorf("%s imports %s — agentloop is a leaf: stdlib and internal/agenttools only", e.Name(), p)
+			if strings.Contains(p, ".") && p != "vornik.io/vornik/internal/agenttools" && p != "vornik.io/vornik/internal/docrender" {
+				t.Errorf("%s imports %s — agentloop is a leaf: stdlib, internal/agenttools and internal/docrender only", e.Name(), p)
 			}
 		}
 	}

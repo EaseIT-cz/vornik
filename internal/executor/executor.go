@@ -18,6 +18,7 @@ import (
 	"go.opentelemetry.io/otel/codes"
 	"go.opentelemetry.io/otel/trace"
 	"vornik.io/vornik/internal/agentns"
+	"vornik.io/vornik/internal/backlogfile"
 	"vornik.io/vornik/internal/budget"
 	"vornik.io/vornik/internal/chat"
 	"vornik.io/vornik/internal/contracts"
@@ -198,6 +199,12 @@ type Config struct {
 	// DefaultTimeout is the default execution timeout.
 	DefaultTimeout time.Duration
 
+	// DefaultMaxWallClock caps a whole execution whose workflow sets no
+	// maxWallClock (or an unparseable one). A workflow's own value always
+	// wins. 0 = no cap. Fed from the daemon's scheduler.execution_timeout
+	// (05-scheduler §4.12 C1, GitHub #142).
+	DefaultMaxWallClock time.Duration
+
 	// MaxRetries is the maximum number of retry attempts for failed tasks.
 	MaxRetries int
 
@@ -339,6 +346,10 @@ type Executor struct {
 	// agents. Set by the container when the grant store is wired; gates the
 	// tool-budget prompt block so agents are never told about a tool they lack.
 	toolGrantsWired bool
+	// resumeIOTimeout bounds Resume's database calls, which run while it holds
+	// e.mu (outcome-quality LLD §S7 #9). Zero means defaultResumeIOTimeout. A
+	// test seam.
+	resumeIOTimeout time.Duration
 	warmPool        WarmPool
 	execRepo        ExecutionRepository
 	artifactRepo    ArtifactRepository
@@ -370,6 +381,11 @@ type Executor struct {
 	spend        llmspend.Recorder
 	reservRepo   persistence.BudgetReservationRepository
 	outcomeRepo  persistence.ExecutionStepOutcomeRepository
+	// retryModeFor returns the task retry mode for a failure class (GitHub
+	// #123, permanent-failure design §8.3 D1). nil means
+	// persistence.TaskRetryModeFor, whose table ships empty; tests set it to
+	// flip a class without touching the package table.
+	retryModeFor func(class string) persistence.TaskRetryMode
 	// stepPromptRepo stores what each step was told at its first model
 	// request (step-prompt persistence design). nil disables persistence:
 	// outcome rows then carry empty hashes, never an error.
@@ -655,6 +671,9 @@ type Executor struct {
 	// constructions (tests) get one lazily via wsLock(). Always reach it
 	// through wsLock(), never directly.
 	workspaceLock *workspacelock.Locker
+	// backlogStore is the process-wide BACKLOG.md store; nil = unlocked
+	// failed-terminal checkpoint (WithBacklogStore).
+	backlogStore *backlogfile.Store
 
 	// ctx and cancel control execution lifecycle.
 	ctx    context.Context
@@ -750,6 +769,10 @@ type executionHandle struct {
 // abstraction follow-up.
 type ArtifactStore interface {
 	Store(ctx context.Context, projectID, executionID, taskID, name, sourcePath string) (*persistence.Artifact, error)
+	// StoreFile stores the bytes of an already-open descriptor. The step-
+	// output harvest uses it so the store never re-opens a path an agent
+	// can change (GitHub #359, 15-artifact-store.md §13.3 H3).
+	StoreFile(ctx context.Context, projectID, executionID, taskID, name string, src *os.File) (*persistence.Artifact, error)
 	Retrieve(ctx context.Context, artifactID string) ([]byte, error)
 }
 
@@ -808,6 +831,24 @@ func WithWorkspaceLock(l *workspacelock.Locker) Option {
 			e.workspaceLock = l
 		}
 	}
+}
+
+// WithBacklogStore injects the process-wide backlogfile.Store (the SAME
+// instance the deposit handler and the autonomy manager use), so the
+// failed-terminal backlog checkpoint commits BACKLOG.md under the mutex every
+// writer of it takes (workspace-state hygiene design §4.2b). Omitted: the
+// checkpoint runs unlocked.
+func WithBacklogStore(s *backlogfile.Store) Option {
+	return func(e *Executor) { e.backlogStore = s }
+}
+
+// backlogLock returns the lock the failed-terminal checkpoint runs under for
+// projectID, or nil (unlocked) when no Store is wired.
+func (e *Executor) backlogLock(projectID string) func(func()) {
+	if e.backlogStore == nil {
+		return nil
+	}
+	return func(fn func()) { e.backlogStore.WithLock(projectID, fn) }
 }
 
 // WithToolAuditRepository sets the tool audit log repository.
@@ -1713,7 +1754,7 @@ func (e *Executor) Recover(ctx context.Context) error {
 		})
 		if err != nil {
 			e.logger.Warn().Err(err).Str("status", string(s)).
-				Msg("executor recovery: failed to enumerate executions for worktree-preserve set; pruning may delete in-flight worktrees")
+				Msg("executor recovery: failed to enumerate executions for worktree-preserve set; the prune still keeps every non-terminal task's worktree")
 			continue
 		}
 		for _, ex := range execs {
@@ -1724,8 +1765,10 @@ func (e *Executor) Recover(ctx context.Context) error {
 		}
 	}
 	// Prune stale worktree metadata left by a previous daemon run.
-	// Worktrees for tasks in `preserve` are kept untouched.
-	e.pruneAllWorktrees(ctx, preserve)
+	// Only this daemon's own terminal tasks lose their worktree; tasks in
+	// `preserve`, non-terminal tasks and tasks its database does not know are
+	// kept (executor design §9.5.5, GitHub #357).
+	e.pruneAllWorktrees(ctx, e.startupPruneDecider(preserve))
 	for _, status := range statuses {
 		s := status
 		executions, err := e.execRepo.List(ctx, persistence.ExecutionFilter{
@@ -1999,6 +2042,11 @@ func (e *Executor) ExecuteWithContext(ctx context.Context, taskID string) error 
 			Msg("fork: stamping execution lineage from task payload")
 	}
 
+	// A retry whose failed class is in `resume` mode starts at the failed
+	// step instead of the entrypoint (GitHub #123, permanent-failure design
+	// §8). The mode table ships empty, so today this never seeds anything.
+	e.seedAutoResume(ctx, task, execution)
+
 	if err := e.execRepo.Create(ctx, execution); err != nil {
 		return fmt.Errorf("failed to create execution record: %w", err)
 	}
@@ -2242,10 +2290,26 @@ func (e *Executor) runExecution(ctx context.Context, task *persistence.Task, exe
 	// proactive ceiling for "agent is making progress but the task
 	// will simply not finish in human-reasonable time." Empty = no
 	// cap (preserves the pre-feature behaviour for upgrades).
-	if plan != nil && plan.workflow != nil && plan.workflow.MaxWallClock != "" {
-		if d, perr := registry.WallClockCap(plan.workflow.MaxWallClock); d > 0 {
+	//
+	// When the workflow sets none (or an unparseable value), the daemon's
+	// scheduler.execution_timeout (Config.DefaultMaxWallClock) is the cap;
+	// a workflow's own value always wins, larger or smaller. Empty default =
+	// no cap, as before (05-scheduler §4.12 C1, GitHub #142).
+	if plan != nil && plan.workflow != nil {
+		d, source, perr := effectiveWallClock(plan.workflow.MaxWallClock, e.config.DefaultMaxWallClock)
+		if perr != nil {
+			e.logger.Warn().
+				Str("execution_id", execution.ID).
+				Str("workflow_id", plan.workflow.ID).
+				Str("max_wall_clock", plan.workflow.MaxWallClock).
+				Err(perr).
+				Msg("workflow MaxWallClock is set but unparseable — treating as unset")
+		}
+		if d > 0 {
 			var cancelDeadline context.CancelFunc
-			ctx, cancelDeadline = context.WithTimeout(ctx, d)
+			// With its cause, so a failure can tell the cap from a step's
+			// own timeout (outcome-quality LLD §S7 #2).
+			ctx, cancelDeadline = wallClockContext(ctx, d, source)
 			// Wrap the original cancelation so the deadline timer
 			// is released whether the goroutine exits via success,
 			// failure, or shutdown.
@@ -2253,14 +2317,8 @@ func (e *Executor) runExecution(ctx context.Context, task *persistence.Task, exe
 			e.logger.Debug().
 				Str("execution_id", execution.ID).
 				Dur("max_wall_clock", d).
+				Str("source", source).
 				Msg("execution wall-clock cap armed")
-		} else if perr != nil {
-			e.logger.Warn().
-				Str("execution_id", execution.ID).
-				Str("workflow_id", plan.workflow.ID).
-				Str("max_wall_clock", plan.workflow.MaxWallClock).
-				Err(perr).
-				Msg("workflow MaxWallClock is set but unparseable — treating as unset")
 		}
 	}
 
@@ -2307,6 +2365,9 @@ func (e *Executor) runExecution(ctx context.Context, task *persistence.Task, exe
 	// would leak the lock on panic, deadlocking every subsequent
 	// task on the same project).
 	useWorktrees := projectDir != ""
+	// An automatic resume adopts the worktree the failed attempt kept, or is
+	// reset to a plain rerun here (permanent-failure design §8.3 D3).
+	adoptKeptWorktree := e.adoptOrAbandonAutoResume(ctx, task, execution, plan, projectDir)
 	var workspaceErr error
 	func() {
 		if !useWorktrees {
@@ -2377,6 +2438,13 @@ func (e *Executor) runExecution(ctx context.Context, task *persistence.Task, exe
 			}
 		}
 
+		if adoptKeptWorktree {
+			// Verified by adoptOrAbandonAutoResume moments ago; the resumed
+			// step works where the failed one left off.
+			plan.worktreeDir = worktreePath(projectDir, task.ID)
+			return
+		}
+
 		// Create an isolated worktree for this task so parallel executions
 		// don't share the working tree. Each attempt gets a fresh worktree
 		// branched from HEAD; on success the branch is merged back.
@@ -2432,12 +2500,29 @@ func (e *Executor) runExecution(ctx context.Context, task *persistence.Task, exe
 		var mergeErr error
 		unlockCleanup := e.wsLock().Lock(task.ProjectID)
 		if success {
-			mergeErr = mergeWorktree(cleanupCtx, projectDir, plan.worktreeDir, task.ID, backlogFile, e.logger)
+			mergeErr = mergeWorktree(cleanupCtx, projectDir, plan.worktreeDir, task.ID, backlogFile, e.backlogLock(task.ProjectID), e.logger)
+			if mergeErr != nil {
+				// Pin the work to a ref no retry, prune or doctor fix
+				// deletes, under the same project lock, and raise the
+				// typed error that carries MERGE_FAILED (executor design
+				// §9.5.2, permanent-failure design §9.2 M1; #353, #354).
+				attempt := task.Attempt
+				if attempts > attempt {
+					attempt = attempts
+				}
+				mbe := &mergeBackError{err: mergeErr, projectDir: projectDir, worktreeDir: plan.worktreeDir}
+				mbe.preserved, mbe.pinErr = preserveFailedWork(cleanupCtx, projectDir, plan.worktreeDir, task.ID, attempt, time.Now(), e.logger)
+				e.metrics.RecordMergeBackPreserved(task.ProjectID, mbe.preserved, mbe.pinErr)
+				mergeErr = mbe
+			}
 		} else {
 			removeWorktree(cleanupCtx, projectDir, plan.worktreeDir, task.ID, e.logger)
 			// Discard the failed task's non-worktree tracked-file residue
 			// (the backlog marker is left for honest checkpointing). Design §4.2.
 			discardFailedTaskResidue(cleanupCtx, projectDir, backlogFile, task.ID, task.ProjectID, e.metrics, e.logger)
+			// Then commit the backlog file alone, so a failed task's
+			// deposits do not leave the clone dirty (§4.2b C, #307).
+			checkpointBacklogAtTerminal(cleanupCtx, projectDir, backlogFile, task.ID, e.backlogLock(task.ProjectID), e.logger)
 		}
 		unlockCleanup()
 		// Clear the pointer only when we actually removed the worktree.
@@ -2593,6 +2678,7 @@ retryLoop:
 					// (design §4.2 of the workspace-hygiene design), since the
 					// post-loop cleanup has no worktree left to key on.
 					discardFailedTaskResidue(ctx, projectDir, backlogFile, task.ID, task.ProjectID, e.metrics, e.logger)
+					checkpointBacklogAtTerminal(ctx, projectDir, backlogFile, task.ID, e.backlogLock(task.ProjectID), e.logger)
 					unlockRetry()
 					lastErr = newWorkspaceUnavailable("re-create the task's worktree before a retry", projectDir, wtErr)
 					e.logger.Error().Err(lastErr).Str("task_id", task.ID).
@@ -2644,10 +2730,13 @@ retryLoop:
 			// P1: Append MERGE_FAILED so the UI shows where it actually died
 			// and avoid "done" status when changes are orphaned.
 			execution.CompletedSteps = append(completedSteps, "MERGE_FAILED")
+			// The message says only what is true about the work: pinned
+			// at a ref, nothing to recover, or NOT pinned (executor design
+			// §9.5.2 P2). The old "worktree preserved … for manual
+			// recovery" held only until the retry removed the worktree.
 			e.handleFailure(ctx, task, execution, fmt.Errorf(
-				"agent steps succeeded but changes could not be merged to master: %w. "+
-					"worktree preserved at %s for manual recovery",
-				mergeErr, plan.worktreeDir,
+				"agent steps succeeded but changes could not be merged to master: %w. %s",
+				mergeErr, recoveryNote(mergeErr),
 			))
 			return
 		}
@@ -2673,14 +2762,31 @@ retryLoop:
 			// Merge of the partial work failed — fall back to the
 			// hard-failure path so the operator sees the merge error
 			// alongside the iteration-limit message.
-			e.logger.Warn().Err(mergeErr).Str("task_id", task.ID).
+			e.logger.Warn().Err(mergeErr).Str("task_id", task.ID).Str("recovery", recoveryNote(mergeErr)).
 				Msg("checkpoint: worktree merge failed after iteration-limit; treating as terminal failure")
+			// Say where the partial work is. mergeErr is the *mergeBackError
+			// cleanupWorktree(true) returned, already pinned. %v, not %w:
+			// the task's class stays the iteration limit (design §9.2 M1).
+			lastErr = fmt.Errorf("%w\n\nthe partial work could not be merged: %v. %s", lastErr, mergeErr, recoveryNote(mergeErr))
 			preserveWorkspace = false
 			mergeFailed = true
 			// cleanupWorktree(true) on merge failure leaves the worktree
 			// in place for manual recovery — do not call removeWorktree
 			// here.
 		}
+	} else if useWorktrees && plan.worktreeDir != "" && e.keepWorktreeForResume(task, lastErr, attempts) {
+		// The class resumes at the failed step on the next attempt, which
+		// must see this worktree (permanent-failure design §8.3 D3). Keep it;
+		// everything else cleanupWorktree(false) does to the project still
+		// runs. Never reached with the shipped (empty) mode table.
+		keepCtx, cancelKeep := context.WithTimeout(context.WithoutCancel(ctx), worktreeCleanupTimeout)
+		unlockKeep := e.wsLock().Lock(task.ProjectID)
+		discardFailedTaskResidue(keepCtx, projectDir, backlogFile, task.ID, task.ProjectID, e.metrics, e.logger)
+		checkpointBacklogAtTerminal(keepCtx, projectDir, backlogFile, task.ID, e.backlogLock(task.ProjectID), e.logger)
+		unlockKeep()
+		cancelKeep()
+		e.logger.Info().Str("task_id", task.ID).Str("worktree", plan.worktreeDir).
+			Msg("auto-resume: kept the failed attempt's worktree for the next attempt")
 	} else {
 		_ = cleanupWorktree(false)
 	}
@@ -2739,6 +2845,66 @@ retryLoop:
 	}
 }
 
+// liveExecutionStatuses are the execution statuses a cancel may move to
+// CANCELLED: anything not already terminal (05-scheduler §4.12 C4).
+var liveExecutionStatuses = []persistence.ExecutionStatus{
+	persistence.ExecutionStatusPending, persistence.ExecutionStatusRunning, persistence.ExecutionStatusPaused,
+}
+
+// Where an execution's wall-clock cap came from.
+const (
+	wallClockSourceWorkflow = "workflow maxWallClock"
+	wallClockSourceDefault  = "scheduler.execution_timeout"
+)
+
+// wallClockCause is the cause the execution's wall-clock cap records on the
+// execution context, so a step or task failure can tell the cap from the
+// step's own timeout (outcome-quality LLD §S7 #2, GitHub #142). Read it with
+// wallClockCauseOf.
+type wallClockCause struct {
+	d      time.Duration
+	source string
+}
+
+func (c *wallClockCause) Error() string {
+	return fmt.Sprintf("the execution's wall-clock cap (%s, from %s) ran out", c.d, c.source)
+}
+
+// wallClockContext arms the execution's wall-clock cap with its cause.
+func wallClockContext(ctx context.Context, d time.Duration, source string) (context.Context, context.CancelFunc) {
+	return context.WithTimeoutCause(ctx, d, &wallClockCause{d: d, source: source})
+}
+
+// wallClockCauseOf returns the cap's cause when the execution's wall-clock cap
+// is what ended ctx, else nil. ctx must still descend from the execution
+// context: a finaliser's detached context (context.WithoutCancel) has no
+// cause, so read it before detaching.
+func wallClockCauseOf(ctx context.Context) *wallClockCause {
+	if ctx == nil || ctx.Err() == nil {
+		return nil
+	}
+	var c *wallClockCause
+	if errors.As(context.Cause(ctx), &c) {
+		return c
+	}
+	return nil
+}
+
+// effectiveWallClock resolves the whole-execution cap: the workflow's
+// maxWallClock when it is set and parses to a positive duration, otherwise
+// the daemon default def (0 = none). perr reports an unparseable workflow
+// value, which is treated as unset (05-scheduler §4.12 C1).
+func effectiveWallClock(workflowValue string, def time.Duration) (d time.Duration, source string, perr error) {
+	d, perr = registry.WallClockCap(workflowValue)
+	if d > 0 {
+		return d, wallClockSourceWorkflow, perr
+	}
+	if def > 0 {
+		return def, wallClockSourceDefault, perr
+	}
+	return 0, "", perr
+}
+
 // Cancel stops a running execution.
 func (e *Executor) Cancel(taskID string) error {
 	// Snapshot the handle's mutable fields under the lock. Pre-fix
@@ -2765,9 +2931,16 @@ func (e *Executor) Cancel(taskID string) error {
 	// themselves draining.
 	dbCtx, dbCancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer dbCancel()
-	_ = e.taskRepo.UpdateStatus(dbCtx, taskID, persistence.TaskStatusCancelled)
+	// Conditional on a non-terminal status (05-scheduler §4.12 C4, GitHub
+	// #142). A canceller through taskcancel already moved the row, so these
+	// are refused no-ops for it; the watchdog's stuck-execution teardown runs
+	// after its FAILED write, which a plain write here used to rewrite as
+	// CANCELLED; and the renewal escalation can no longer write CANCELLED over
+	// a row that just reached COMPLETED (the race §4.11 left open).
+	_, _ = e.taskRepo.TransitionConditional(dbCtx, taskID, persistence.CancellableTaskStatuses(),
+		persistence.TaskStatusCancelled, persistence.TransitionOpts{})
 	if exec, err := e.execRepo.GetByTaskID(dbCtx, taskID); err == nil && exec != nil {
-		_ = e.execRepo.UpdateStatus(dbCtx, exec.ID, persistence.ExecutionStatusCancelled)
+		_, _ = e.execRepo.TransitionStatusConditional(dbCtx, exec.ID, liveExecutionStatuses, persistence.ExecutionStatusCancelled)
 	}
 	// Adaptive-route flows leave a PAUSED first execution that never
 	// finalises after the second execution drives the task to a
@@ -3277,7 +3450,15 @@ func (e *Executor) getStartTime(taskID string) time.Time {
 	return time.Now()
 }
 
+// isTaskCancelled reports whether the task row is CANCELLED.
+//
+// It is asked on the run loop's cancel branch, with the context the cancel has
+// just ended; a read on that context fails, so it always answered false and a
+// genuine operator cancel fell through to the failure path (outcome-quality
+// LLD §S1 D1). The read is detached and bounded.
 func (e *Executor) isTaskCancelled(ctx context.Context, taskID string) bool {
+	ctx, cancel := finaliserContext(ctx)
+	defer cancel()
 	task, err := e.taskRepo.Get(ctx, taskID)
 	return err == nil && task != nil && task.Status == persistence.TaskStatusCancelled
 }
@@ -3318,7 +3499,38 @@ func (e *Executor) cleanExcludesFor(projectID string) []string {
 	return out
 }
 
-func (e *Executor) pruneAllWorktrees(ctx context.Context, preserve map[string]struct{}) {
+// startupPruneDecider is the startup prune's ownership rule (executor design
+// §9.5.5 O1, GitHub #357): a worktree is removed only when this daemon's own
+// database knows its task and the task is terminal. In-flight tasks
+// (preserve), non-terminal tasks, unknown tasks (another daemon sharing the
+// workspace root, or a row deleted by hand) and lookup errors are all kept.
+func (e *Executor) startupPruneDecider(preserve map[string]struct{}) pruneDecider {
+	return func(ctx context.Context, taskID string) (bool, string) {
+		if _, inFlight := preserve[taskID]; inFlight {
+			return false, "in-flight execution will adopt this worktree"
+		}
+		if e.taskRepo == nil {
+			return false, "no task repository: ownership cannot be proven"
+		}
+		task, err := e.taskRepo.Get(ctx, taskID)
+		if errors.Is(err, persistence.ErrNotFound) || (err == nil && task == nil) {
+			e.logger.Warn().Str("task_id", taskID).
+				Msg("startup prune: worktree belongs to a task this daemon's database does not know — keeping it (another daemon may share this workspace root)")
+			return false, "task unknown to this daemon's database"
+		}
+		if err != nil {
+			return false, "task lookup failed: " + err.Error()
+		}
+		switch task.Status {
+		case persistence.TaskStatusCompleted, persistence.TaskStatusFailed,
+			persistence.TaskStatusCancelled, persistence.TaskStatusClosed:
+			return true, "task " + string(task.Status)
+		}
+		return false, "task " + string(task.Status) + " may run again"
+	}
+}
+
+func (e *Executor) pruneAllWorktrees(ctx context.Context, decide pruneDecider) {
 	if e.config.ProjectWorkspacePath == "" {
 		return
 	}
@@ -3341,7 +3553,7 @@ func (e *Executor) pruneAllWorktrees(ctx context.Context, preserve map[string]st
 		func() {
 			unlock := e.wsLock().Lock(entry.Name())
 			defer unlock()
-			pruneWorktrees(ctx, projectDir, e.logger, preserve)
+			pruneWorktrees(ctx, projectDir, e.logger, decide)
 		}()
 	}
 }

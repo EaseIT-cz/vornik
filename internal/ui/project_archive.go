@@ -12,6 +12,7 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"net/url"
 	"os"
 	"strconv"
 	"strings"
@@ -19,6 +20,7 @@ import (
 
 	"vornik.io/vornik/internal/fieldguard"
 	"vornik.io/vornik/internal/persistence"
+	"vornik.io/vornik/internal/projectarchive"
 	"vornik.io/vornik/internal/safepath"
 )
 
@@ -200,6 +202,38 @@ func (s *Server) ProjectDeleteNow(w http.ResponseWriter, r *http.Request, projec
 	}
 	if !p.IsArchived() {
 		http.Error(w, "project must be archived before delete-now (use /archive first)", http.StatusConflict)
+		return
+	}
+
+	// Wait for the wipe's outcome when the lifecycle service can report it,
+	// so a failed wipe lands the operator on the project page — whose banner
+	// names the error — instead of the list as if it had worked (GitHub #365).
+	if waiter, ok := s.archiveLifecycle.(archiveDeleteWaiter); ok {
+		wait := projectarchive.DefaultDeleteNowWait
+		ctx, cancel := context.WithTimeout(r.Context(), wait+5*time.Second)
+		defer cancel()
+		res, err := waiter.DeleteNowAndWait(ctx, projectID, p.IsArchived(), wait)
+		if err != nil {
+			http.Error(w, "failed to shorten grace: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+		s.writeProjectLifecycleAudit(r, "project.delete-now", projectID, map[string]any{
+			"scheduled_delete_at": time.Now().UTC().Format(time.RFC3339),
+			"outcome":             string(res.State),
+		})
+		switch res.State {
+		case projectarchive.DeleteNowFailed:
+			http.Redirect(w, r, "/ui/projects/"+projectID+"?delete_failed=1", http.StatusSeeOther)
+		case projectarchive.DeleteNowDeletedWithErrors:
+			// The project's YAML is gone, so its page would 404: the list
+			// carries the residue banner, worded per step (archival design
+			// section H, H.5).
+			http.Redirect(w, r, "/ui/projects?deleted="+url.QueryEscape(projectID)+"&residue="+residueQuery(res.Err), http.StatusSeeOther)
+		case projectarchive.DeleteNowPending:
+			http.Redirect(w, r, "/ui/projects?delete_pending="+url.QueryEscape(projectID), http.StatusSeeOther)
+		default:
+			http.Redirect(w, r, "/ui/projects?deleted="+url.QueryEscape(projectID), http.StatusSeeOther)
+		}
 		return
 	}
 
@@ -393,4 +427,19 @@ func parseGraceDuration(raw string) (time.Duration, error) {
 		return 0, fmt.Errorf("negative grace not allowed")
 	}
 	return d, nil
+}
+
+// residueQuery is the residue redirect parameter: the residue's steps,
+// comma-joined ("artifacts", "reload", "artifacts,reload"), or "1" when the
+// residue names no step (the value section H first shipped).
+func residueQuery(err error) string {
+	steps := projectarchive.ResidueSteps(err)
+	if len(steps) == 0 {
+		return "1"
+	}
+	names := make([]string, 0, len(steps))
+	for _, st := range steps {
+		names = append(names, string(st))
+	}
+	return strings.Join(names, ",")
 }

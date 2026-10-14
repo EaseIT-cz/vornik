@@ -77,8 +77,9 @@ type LogForwarder interface {
 	SetScopes(scopes []string)
 	// AppWriter returns the writer the root logger should be re-pointed at so
 	// every JSON log line is also offered to the forwarder. The returned
-	// writer tees to the forwarder; callers typically wrap it in
-	// io.MultiWriter(os.Stdout, fwd.AppWriter(os.Stdout)).
+	// writer is the tee: it writes each line through to out, then offers it.
+	// Point the logger at fwd.AppWriter(stdout) alone; wrapping it in
+	// io.MultiWriter(os.Stdout, ...) writes every line twice (GitHub #295).
 	AppWriter(out io.Writer) io.Writer
 	// DecorateAuditRepos wraps the Admin/Tool audit repositories so a
 	// successful audit write also ships an audit Event. Idempotent: safe to

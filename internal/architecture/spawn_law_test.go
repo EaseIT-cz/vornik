@@ -63,13 +63,29 @@ func TestSpawnLaw_DaemonCodeImportsOSExecOnlyWhereTheDesignPlacesIt(t *testing.T
 	}
 	root := filepath.Dir(strings.TrimSpace(string(out)))
 	module := depsGoList(t, root, "-m")[0]
+	spawnLawCheck(t, root, module, spawnLawDaemonMains)
+}
 
+// spawnLawCheck is the law over the given mains; the test above runs it over
+// spawnLawDaemonMains, and TestSpawnLaw_RefusesToPassOverNothing over a list
+// that resolves to nothing.
+func spawnLawCheck(t testing.TB, root, module string, mains []string) {
+	t.Helper()
 	importers := map[string]bool{} // packages in any daemon's graph that import os/exec
 	inGraph := map[string]bool{}
-	for _, main := range spawnLawDaemonMains {
+	resolved := 0
+	defer func() {
+		// #334 item 6: a main absent from this edition is skipped, but a law
+		// that resolved NO daemon main examined no graph and has not passed.
+		if requireExamined(t, "spawn law", "daemon main(s) of "+strings.Join(mains, ","), resolved, 1) {
+			requireExamined(t, "spawn law", "daemon-linked packages", len(inGraph), 50)
+		}
+	}()
+	for _, main := range mains {
 		if !depsGoListOK(root, "./"+main) {
 			continue // absent in this edition
 		}
+		resolved++
 		for _, line := range depsGoList(t, root, "-deps", "-f", `{{.ImportPath}} {{join .Imports " "}}`, "./"+main) {
 			fields := strings.Fields(line)
 			pkg := fields[0]
@@ -133,6 +149,13 @@ func TestSpawnLaw_HostDoctorIsVornikctlOnly(t *testing.T) {
 	}
 	root := filepath.Dir(strings.TrimSpace(string(out)))
 	module := depsGoList(t, root, "-m")[0]
+	hostDoctorCheck(t, root, module, spawnLawDaemonMains, "cmd/vornikctl")
+}
+
+// hostDoctorCheck is the law over the given daemon mains and the one main
+// allowed to link the host doctor.
+func hostDoctorCheck(t testing.TB, root, module string, mains []string, ctl string) {
+	t.Helper()
 	hostOnly := []string{module + "/internal/hostdoctor", module + "/internal/imagemanifest/hostprobe"}
 
 	links := func(main, pkg string) bool {
@@ -143,18 +166,27 @@ func TestSpawnLaw_HostDoctorIsVornikctlOnly(t *testing.T) {
 		}
 		return false
 	}
-	for _, main := range spawnLawDaemonMains {
+	resolved := 0
+	for _, main := range mains {
 		if !depsGoListOK(root, "./"+main) {
 			continue
 		}
+		resolved++
 		for _, pkg := range hostOnly {
 			if links(main, pkg) {
 				t.Errorf("%s links %s, which runs host programs: only vornikctl may", main, pkg)
 			}
 		}
 	}
-	if depsGoListOK(root, "./cmd/vornikctl") && !links("cmd/vornikctl", module+"/internal/hostdoctor") {
-		t.Error("cmd/vornikctl no longer links internal/hostdoctor: the host checks would run nowhere")
+	// #334 item 6: both editions ship a daemon main and vornikctl; a law that
+	// resolved neither examined nothing.
+	requireExamined(t, "host-doctor law", "daemon main(s)", resolved, 1)
+	if !depsGoListOK(root, "./"+ctl) {
+		t.Errorf("%s does not resolve: the host doctor's one allowed linker is gone, so this law examined nothing", ctl)
+		return
+	}
+	if !links(ctl, module+"/internal/hostdoctor") {
+		t.Error(ctl + " no longer links internal/hostdoctor: the host checks would run nowhere")
 	}
 }
 

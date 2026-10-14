@@ -139,7 +139,7 @@
                 </summary>
                 <form method="post" action="/ui/admin/workflow-proposals/{{.Proposal.ID}}/modify" class="px-5 py-4 space-y-3">
                     <p class="text-xs text-gray-500">Edit the architect's YAML, then save. The revised YAML replaces the proposal's content (pending only) so you can approve a tweaked version. Saving does NOT apply to disk.</p>
-                    <textarea name="proposal_yaml" rows="18" class="w-full bg-dark-900 border border-dark-600 text-gray-200 text-xs rounded-md px-3 py-2 font-mono">{{.Proposal.ProposalYAML}}</textarea>
+                    <textarea name="proposal_yaml" rows="18" class="w-full bg-dark-900 border border-control text-gray-200 text-xs rounded-md px-3 py-2 font-mono">{{.Proposal.ProposalYAML}}</textarea>
                     <button type="submit" class="bg-amber-600 hover:bg-amber-500 text-white text-sm font-medium px-4 py-2 rounded-md">Save modified YAML</button>
                 </form>
             </details>
@@ -163,7 +163,7 @@
                 <h2 class="text-sm font-semibold text-gray-300 uppercase tracking-wider">Decide</h2>
                 <label class="block">
                     <span class="block text-xs text-gray-500 uppercase tracking-wider mb-1">Notes (optional, recorded in audit)</span>
-                    <textarea name="notes" rows="3" class="w-full bg-dark-700 border border-dark-600 text-gray-200 text-sm rounded-md px-2 py-1.5 font-mono" placeholder="Why are you approving or rejecting?"></textarea>
+                    <textarea name="notes" rows="3" class="w-full bg-dark-700 border border-control text-gray-200 text-sm rounded-md px-2 py-1.5 font-mono" placeholder="Why are you approving or rejecting?"></textarea>
                 </label>
                 <div class="flex gap-3">
                     <button type="submit" name="status" value="approved"

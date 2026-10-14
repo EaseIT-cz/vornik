@@ -367,6 +367,10 @@ func humanizeClass(class string) string {
 		return "an expired lease"
 	case persistence.TaskFailureClassRuntimeError:
 		return "a runtime error"
+	case persistence.TaskFailureClassPromptTokenBudget:
+		return "the step's prompt-token budget"
+	case persistence.TaskFailureClassOutputCap:
+		return "the model's output cap"
 	case persistence.TaskFailureClassCancelled:
 		return "operator cancellation"
 	case persistence.TaskFailureClassOrphaned:

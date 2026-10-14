@@ -15,6 +15,7 @@ import (
 	"github.com/rs/zerolog"
 
 	"vornik.io/vornik/internal/netguard"
+	"vornik.io/vornik/internal/persistence"
 )
 
 // URLLivenessChecker walks project_memory_chunks, extracts URLs from
@@ -442,6 +443,7 @@ func (r *Repository) ListChunksForLivenessCheck(ctx context.Context, projectID s
 SELECT id, content
 FROM project_memory_chunks
 WHERE project_id = $1
+  AND ` + persistence.ChunkNotRestrictedSQL("project_memory_chunks.id") + `
 ORDER BY last_checked_at NULLS FIRST, created_at DESC`
 	args := []interface{}{projectID}
 	if limit > 0 {

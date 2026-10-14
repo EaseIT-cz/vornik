@@ -118,7 +118,7 @@
                             {{if $.AssignableKeys}}
                             <form method="post" action="/ui/operator/accounts/{{$row.UserID}}/assign-key" class="flex items-center gap-2">
                                 <select name="key_id" required
-                                        class="rounded bg-dark-800 border border-dark-600 px-2 py-1 text-xs text-gray-200 max-w-xs">
+                                        class="rounded bg-dark-800 border border-control px-2 py-1 text-xs text-gray-200 max-w-xs">
                                     <option value="">choose a key…</option>
                                     {{range $.AssignableKeys}}
                                         {{/*
@@ -220,7 +220,7 @@
             <form method="post" action="/ui/operator/accounts" class="glass rounded-xl border border-dark-700 px-4 py-3 flex flex-wrap items-end gap-3">
                 <div class="flex flex-col gap-1">
                     <label for="new-display-name" class="text-xs text-gray-500 uppercase tracking-wider">New account</label>
-                    <input id="new-display-name" name="display_name" required placeholder="display name" class="bg-dark-800 border border-dark-600 rounded-md px-2 py-1 text-sm text-gray-100">
+                    <input id="new-display-name" name="display_name" required placeholder="display name" class="bg-dark-800 border border-control rounded-md px-2 py-1 text-sm text-gray-100">
                 </div>
                 <fieldset class="flex items-center gap-3">
                     <legend class="sr-only">Role</legend>

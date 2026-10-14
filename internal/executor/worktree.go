@@ -583,7 +583,10 @@ func createWorktree(ctx context.Context, projectDir, taskID string, logger zerol
 // Returns nil when the merge succeeds OR when the branch had no commits
 // to merge (the no-op path — nothing was lost because there was nothing
 // to merge in the first place).
-func mergeWorktree(ctx context.Context, projectDir, worktreeDir, taskID, backlogFile string, logger zerolog.Logger) error {
+// withBacklogLock runs its argument under the backlog Store's per-project
+// mutex (Executor.backlogLock); nil runs the prelude's backlog checkpoint
+// unlocked (workspace-state hygiene design §4.2b, "B under the Store mutex").
+func mergeWorktree(ctx context.Context, projectDir, worktreeDir, taskID, backlogFile string, withBacklogLock func(func()), logger zerolog.Logger) error {
 	branch := worktreeBranch(taskID)
 
 	// Auto-commit any leftover dirty state in the worktree. Some roles
@@ -608,7 +611,7 @@ func mergeWorktree(ctx context.Context, projectDir, worktreeDir, taskID, backlog
 	// be committed. Using `git add -u` instead of `-A` captures
 	// modifications to already-tracked files while leaving untracked
 	// state alone.
-	autoCommitTrackedChangesOnly(ctx, projectDir, taskID, backlogFile, logger)
+	autoCommitTrackedChangesOnly(ctx, projectDir, taskID, backlogFile, withBacklogLock, logger)
 
 	// Refuse to merge into a dirty main checkout. Resetting here would
 	// make the merge succeed by destroying unrelated operator changes in
@@ -661,9 +664,11 @@ func mergeWorktree(ctx context.Context, projectDir, worktreeDir, taskID, backlog
 			Msg("git merge failed — changes remain in worktree branch; task will be marked FAILED")
 		// Abort any in-progress merge to leave projectDir clean.
 		_, _ = gitExec.combined(ctx, "-C", projectDir, "merge", "--abort")
-		// Preserve the worktree + branch for manual recovery. Don't call
-		// removeWorktree here — that would destroy the commits the
-		// operator needs to salvage.
+		// Leave the worktree + branch in place. Don't call removeWorktree
+		// here — that would destroy the commits the operator needs to
+		// salvage. They do NOT survive the task's retry or a restart: the
+		// caller (cleanupWorktree) pins them to refs/vornik/preserved/
+		// (preserveFailedWork, executor design §9.5.2, GitHub #354).
 		return fmt.Errorf("git merge of worktree branch %s failed: %s",
 			branch, strings.TrimSpace(string(out)))
 	}
@@ -782,16 +787,36 @@ func workspaceDirty(ctx context.Context, dir string) (bool, string) {
 		if path == ".worktrees" || strings.HasPrefix(path, ".worktrees/") || strings.Contains(path, " -> .worktrees/") {
 			continue
 		}
-		// .autonomy/ is an internal vornik directory (PROJECT_CONTEXT.md,
-		// CURRENT_TASK.md, etc.) that agents write during execution. Like
-		// .worktrees/, it must not block the post-task merge.
-		if path == ".autonomy" || strings.HasPrefix(path, ".autonomy/") {
+		// The DIRECTORY entries of vornikInternalPaths (.autonomy/: agent
+		// scratch such as PROJECT_CONTEXT.md, CURRENT_TASK.md) are internal
+		// and, like .worktrees/, must not block the post-task merge. Derived
+		// from the one definition of the set rather than hardcoded: the
+		// prelude stages only the FILE entries, so a directory entry that is
+		// not filtered here would be neither staged nor filtered and would
+		// re-create the standing merge block (GitHub #220; design §4.4a,
+		// 2026-10-13).
+		if isVornikInternalDirPath(path) {
 			continue
 		}
 		lines = append(lines, line)
 	}
 	status := strings.Join(lines, "\n")
 	return status != "", status
+}
+
+// isVornikInternalDirPath reports whether a porcelain path lies under (or is)
+// a directory entry of vornikInternalPaths. Porcelain collapses an untracked
+// directory to "dir/", and lists tracked changes as "dir/file".
+func isVornikInternalDirPath(path string) bool {
+	for _, p := range vornikInternalPaths {
+		if !strings.HasSuffix(p, "/") {
+			continue
+		}
+		if path == strings.TrimSuffix(p, "/") || strings.HasPrefix(path, p) {
+			return true
+		}
+	}
+	return false
 }
 
 // autoCommitLeftoverChanges commits any uncommitted state in the worktree
@@ -913,9 +938,11 @@ func autoCommitLeftoverChanges(ctx context.Context, worktreeDir, taskID string, 
 // subdirectory backlog path and a never-created COVERAGE_REPORT.md both cost
 // nothing.
 //
-// `.autonomy/` is deliberately NOT queried even though it is in
-// vornikInternalPaths: workspaceDirty already filters it, so it cannot block a
-// merge, and committing an agent scratch directory would be churn.
+// Directory entries (`.autonomy/`) are deliberately NOT queried even though
+// they are in vornikInternalPaths: workspaceDirty filters every directory entry
+// of the same list (isVornikInternalDirPath), so they cannot block a merge, and
+// committing an agent scratch directory would be churn. Files are staged here,
+// directories filtered there: one list, partitioned by the trailing slash.
 func untrackedVornikInternalPaths(ctx context.Context, dir, backlogRel string) []string {
 	names := make([]string, 0, len(vornikInternalPaths)+1)
 	seen := make(map[string]bool, len(vornikInternalPaths)+1)
@@ -980,7 +1007,14 @@ func stageUntrackedVornikInternal(ctx context.Context, dir, taskID string, paths
 		Msg("workspace-prelude auto-commit: staging untracked vornik-internal file(s) for checkpoint")
 }
 
-func autoCommitTrackedChangesOnly(ctx context.Context, dir, taskID, backlogFile string, logger zerolog.Logger) {
+// backlogPreludeReadHook, when non-nil, fires at B's backlog read point: after
+// the "nothing dirty" probe and before the first git command that stages the
+// backlog file. Test seam only (audit 2026-10-12, w2-6): it lets a test model
+// a backlogfile.Store writer interleaving with the read. Nil in production;
+// a test that sets it must not run in parallel.
+var backlogPreludeReadHook func()
+
+func autoCommitTrackedChangesOnly(ctx context.Context, dir, taskID, backlogFile string, withBacklogLock func(func()), logger zerolog.Logger) {
 	if dir == "" || !isGitRepo(dir) {
 		return
 	}
@@ -1019,6 +1053,25 @@ func autoCommitTrackedChangesOnly(ctx context.Context, dir, taskID, backlogFile 
 		}
 	}
 
+	// Everything from the first git read of the backlog file to the last
+	// commit runs under the backlog Store's per-project mutex, the one every
+	// BACKLOG.md writer takes: Store writes with os.WriteFile (truncate +
+	// rewrite), so an unlocked `git add` can stage a half-written file
+	// (audit 2026-10-12; design §4.2b "B under the Store mutex").
+	if withBacklogLock == nil {
+		withBacklogLock = func(fn func()) { fn() }
+	}
+	withBacklogLock(func() {
+		stageAndCommitPrelude(ctx, dir, taskID, backlogRel, untrackedInternal, logger)
+	})
+}
+
+// stageAndCommitPrelude is B's staging + commit body; the caller holds the
+// backlog lock.
+func stageAndCommitPrelude(ctx context.Context, dir, taskID, backlogRel string, untrackedInternal []string, logger zerolog.Logger) {
+	if backlogPreludeReadHook != nil {
+		backlogPreludeReadHook()
+	}
 	// Stage them BY NAME — never `git add -A`, which would absorb the
 	// operator's own untracked work and `.worktrees/`. This runs before
 	// `git add -u` and before the classification read below, because that read
@@ -1396,13 +1449,18 @@ func removeWorktree(ctx context.Context, projectDir, worktreeDir, taskID string,
 
 // pruneWorktrees runs `git worktree prune` to clean up stale worktree metadata
 // and then removes all orphaned `worktree/*` branches left from a previous
-// daemon run (e.g. crash, restart, or un-merged task). Branches whose task
-// ID is in `preserve` are retained — those represent in-flight executions
-// the recovery loop is about to adopt; pruning their worktree under the
-// recovered goroutine causes podman to fail the next step with `statfs: no
-// such file or directory` (T-4ae6, 2026-05-10).
+// daemon run (e.g. crash, restart, or un-merged task). A worktree is removed
+// only when decide says so; a nil decide removes nothing.
+//
+// GitHub #357 (executor design §9.5.4–§9.5.5): the prune used to remove every
+// branch whose task was not in an in-flight preserve set. A second daemon on
+// the same workspace root — an e2e daemon that inherited the shell's
+// VORNIK_DATA_DIR — had an empty set and removed live production worktrees
+// at its startup: all 8 prod MERGE_FAILED rows in the 30 days to 2026-10-12.
+// The decider (startupPruneDecider) removes only tasks THIS daemon's database
+// knows to be terminal. In-flight tasks stay too (T-4ae6, 2026-05-10).
 // Call once at executor startup before processing any tasks.
-func pruneWorktrees(ctx context.Context, projectDir string, logger zerolog.Logger, preserve map[string]struct{}) {
+func pruneWorktrees(ctx context.Context, projectDir string, logger zerolog.Logger, decide pruneDecider) {
 	if !isGitRepo(projectDir) {
 		return
 	}
@@ -1439,19 +1497,17 @@ func pruneWorktrees(ctx context.Context, projectDir string, logger zerolog.Logge
 			continue
 		}
 		taskID := strings.TrimPrefix(branch, "worktree/")
-		// preserve-set guard: tasks with an in-flight execution row
-		// in the DB are about to be adopted by recoverExecution.
-		// Their worktree must survive the prune.
-		if _, keep := preserve[taskID]; keep {
+		if remove, reason := decideOrKeep(ctx, decide, taskID); !remove {
 			logger.Info().
 				Str("project_dir", projectDir).
 				Str("branch", branch).
 				Str("task_id", taskID).
-				Msg("skipping worktree prune: in-flight execution will adopt this worktree")
+				Str("reason", reason).
+				Msg("skipping worktree prune")
 			continue
 		}
 		wtDir := worktreePath(projectDir, taskID)
-		if worktreeInUseByContainer(ctx, wtDir) {
+		if worktreeInUseByContainer(ctx, taskID) {
 			logger.Warn().
 				Str("project_dir", projectDir).
 				Str("branch", branch).
@@ -1469,53 +1525,74 @@ func pruneWorktrees(ctx context.Context, projectDir string, logger zerolog.Logge
 	// Second pass: orphan .worktrees/<id>/ directories with no matching
 	// branch. Branches get deleted first; a pre-existing directory without
 	// a branch is stale and would otherwise linger forever.
-	pruneOrphanWorktreeDirs(ctx, projectDir, logger)
+	pruneOrphanWorktreeDirs(ctx, projectDir, logger, decide)
+
+	// Third pass: the refs a failed merge-back pinned are kept across the
+	// removals above and expire here (executor design §9.5.2 P4).
+	prunePreservedWork(ctx, projectDir, time.Now(), PreservedWorkRetention, logger)
 }
 
-// worktreeInUseByContainer reports whether any running podman container
-// has worktreeDir bind-mounted. Used as a guard before removing a
-// worktree at startup: an orphaned agent container from a prior daemon
-// process can still hold the directory, and yanking the mount source
-// out from under it produces cascading "No such file or directory"
-// errors and a dead task with a missing result.json (regression
-// observed 2026-05-07 after a daemon rebuild).
+// pruneDecider says whether the startup prune may remove a task's worktree,
+// and why. See startupPruneDecider for the production rule.
+type pruneDecider func(ctx context.Context, taskID string) (remove bool, reason string)
+
+// decideOrKeep applies decide, treating a nil decider as "keep": the zero
+// value removes nothing.
+func decideOrKeep(ctx context.Context, decide pruneDecider, taskID string) (bool, string) {
+	if decide == nil {
+		return false, "no ownership decision available"
+	}
+	return decide(ctx, taskID)
+}
+
+// podmanPSRunning runs an allowlisted `podman ps` and returns its stdout. A
+// seam so tests never shell out.
+var podmanPSRunning = func(ctx context.Context, argv []string) (string, error) {
+	cmd, err := spawn.PodmanControl(ctx, "", argv)
+	if err != nil {
+		return "", err
+	}
+	out, err := cmd.Output()
+	return string(out), err
+}
+
+// worktreeInUseByContainer reports whether a running podman container belongs
+// to taskID (every agent container carries the vornik.taskId label). Used as
+// a guard before removing a worktree at startup: an orphaned agent container
+// from a prior daemon process can still hold the directory, and yanking the
+// mount source out from under it produces cascading "No such file or
+// directory" errors (regression observed 2026-05-07 after a daemon rebuild).
 //
-// Fail-open semantics: if podman isn't available or the inspection
-// fails, returns false so cleanup proceeds. The original "always
-// remove" behavior is preserved on hosts without podman, and on hosts
-// with podman the worst case is the same — the user already asked
-// for the worktree to be pruned.
+// GitHub #357: the guard used to compare the host worktree path against
+// `podman ps --format {{.Mounts}}`, which lists mount DESTINATIONS
+// (/app/workspace/project), so it never matched. It now asks by label.
 //
-// Substring match against the human-readable Mounts column is good
-// enough here: worktreeDir is a project-internal absolute path
-// (`<workspaces>/<project>/.worktrees/<taskID>`) and the taskID
-// component is unique enough to never collide with another mount
-// in practice.
-func worktreeInUseByContainer(ctx context.Context, worktreeDir string) bool {
-	if worktreeDir == "" {
+// Fail-open: if podman is unavailable or errors, returns false. The ownership
+// decider is the primary protection; this is the safety net.
+func worktreeInUseByContainer(ctx context.Context, taskID string) bool {
+	if taskID == "" {
 		return false
 	}
-	cmd, err := spawn.PodmanControl(ctx, "", []string{"ps",
+	out, err := podmanPSRunning(ctx, []string{"ps",
 		"--no-trunc",
 		"--filter", "status=running",
-		"--format", "{{.Mounts}}",
+		"--filter", "label=vornik.taskId=" + taskID,
+		"--format", "{{.ID}}",
 	})
 	if err != nil {
 		return false
 	}
-	out, err := cmd.CombinedOutput()
-	if err != nil {
-		return false
-	}
-	return strings.Contains(string(out), worktreeDir)
+	return strings.TrimSpace(out) != ""
 }
 
 // pruneOrphanWorktreeDirs walks <projectDir>/.worktrees/ and removes any
-// subdirectory that has no matching `worktree/<name>` branch in the repo.
-// The branch-list pass above is the primary cleanup; this handles the edge
-// case where a crash between branch delete and directory unlink left the
-// directory behind.
-func pruneOrphanWorktreeDirs(ctx context.Context, projectDir string, logger zerolog.Logger) {
+// subdirectory that has no matching `worktree/<name>` branch in the repo AND
+// whose task decide allows removing. The branch-list pass above is the
+// primary cleanup; this handles the edge case where a crash between branch
+// delete and directory unlink left the directory behind. A directory whose
+// task is not this daemon's is kept: after a foreign prune deleted the
+// branch, it is a live worktree (GitHub #357).
+func pruneOrphanWorktreeDirs(ctx context.Context, projectDir string, logger zerolog.Logger, decide pruneDecider) {
 	worktreesDir := filepath.Join(projectDir, ".worktrees")
 	entries, err := os.ReadDir(worktreesDir)
 	if err != nil {
@@ -1548,10 +1625,94 @@ func pruneOrphanWorktreeDirs(ctx context.Context, projectDir string, logger zero
 			continue
 		}
 		full := filepath.Join(worktreesDir, taskID)
+		if remove, reason := decideOrKeep(ctx, decide, taskID); !remove {
+			logger.Info().Str("dir", full).Str("reason", reason).
+				Msg("keeping branchless worktree directory at startup")
+			continue
+		}
 		if err := os.RemoveAll(full); err != nil {
 			logger.Warn().Err(err).Str("dir", full).Msg("failed to remove orphan worktree directory")
 		} else {
 			logger.Info().Str("dir", full).Msg("removed orphan worktree directory at startup")
 		}
 	}
+}
+
+// checkpointBacklogAtTerminal is step C of the workspace-hygiene design
+// (§4.2b, 2026-10-12, GitHub #307): at a failed or cancelled task's terminal,
+// after discardFailedTaskResidue, commit the backlog file ALONE so a failed
+// task's deposit (the agent's finding, valid whatever the task's outcome) does
+// not leave the shared clone dirty until some later merge prelude. On the
+// agent bench no later merge came, and the dirty BACKLOG.md blocked a
+// multi-day arm.
+//
+//   - tracked and dirty, or untracked and not ignored (a first deposit): commit
+//     with a pathspec, which takes only that path's working-tree content and
+//     leaves every other index entry (an operator's staged work) as it was. An
+//     untracked file is staged by name first: a pathspec commit refuses a path
+//     git has never seen;
+//   - ignored (a forge clone lists it in .git/info/exclude) or unresolvable
+//     (backlogFile == ""): nothing to do;
+//   - withLock runs the read-and-commit inside the backlog Store's per-project
+//     mutex, which every BACKLOG.md writer takes. The Store rewrites the file
+//     with os.WriteFile (truncate + write), so a git read outside it can commit
+//     a half-written file (review-20261012-16a3 H1). nil runs unlocked.
+//
+// Best-effort like A and B: a git failure logs and the terminal proceeds; the
+// file is then left dirty as before, and B still commits it at the next merge.
+func checkpointBacklogAtTerminal(ctx context.Context, projectDir, backlogFile, taskID string, withLock func(func()), logger zerolog.Logger) {
+	if projectDir == "" || backlogFile == "" || !isGitRepo(projectDir) {
+		return
+	}
+	rel, err := filepath.Rel(projectDir, backlogFile)
+	if err != nil || rel == "." || strings.HasPrefix(rel, "..") {
+		return
+	}
+	rel = filepath.ToSlash(rel)
+	if withLock == nil {
+		withLock = func(fn func()) { fn() }
+	}
+	withLock(func() {
+		// Untracked AND not ignored: ls-files --others --exclude-standard
+		// never lists an ignored path (§4.4a's intersection rule).
+		untracked := containsPath(untrackedVornikInternalPaths(ctx, projectDir, rel), rel)
+		if !untracked {
+			// Tracked: anything to commit? `diff --quiet HEAD -- <rel>` exits 1
+			// when the working tree differs from HEAD for that path.
+			if _, dirty := gitExec.combined(ctx, "-C", projectDir, "diff", "--quiet", "HEAD", "--", rel); dirty == nil {
+				return
+			}
+			if _, tracked := gitExec.combined(ctx, "-C", projectDir, "ls-files", "--error-unmatch", "--", rel); tracked != nil {
+				return // neither tracked nor stageable (ignored, or absent)
+			}
+		} else if out, aerr := gitExec.combined(ctx, "-C", projectDir, "add", "--", rel); aerr != nil {
+			logger.Warn().Str("task_id", taskID).Str("path", rel).
+				Str("output", strings.TrimSpace(string(out))).Err(aerr).
+				Msg("backlog terminal checkpoint: could not stage the untracked backlog file; the next merge prelude will")
+			return
+		}
+		out, cerr := gitExec.combined(ctx, "-C", projectDir,
+			"-c", "user.name=vornik-agent",
+			"-c", "user.email=agent@vornik.io",
+			"commit", "-q", "-m", "backlog: checkpoint at failed terminal of "+taskID, "--", rel)
+		if cerr != nil {
+			text := strings.TrimSpace(string(out))
+			if !strings.Contains(text, "nothing to commit") {
+				logger.Warn().Str("task_id", taskID).Str("path", rel).Str("output", text).Err(cerr).
+					Msg("backlog terminal checkpoint: commit failed; the next merge prelude will checkpoint it")
+			}
+			return
+		}
+		logger.Info().Str("task_id", taskID).Str("path", rel).
+			Msg("backlog terminal checkpoint: committed the failed task's backlog deposits")
+	})
+}
+
+func containsPath(paths []string, p string) bool {
+	for _, x := range paths {
+		if x == p {
+			return true
+		}
+	}
+	return false
 }

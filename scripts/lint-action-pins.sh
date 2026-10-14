@@ -28,12 +28,25 @@ cd "$(dirname "$0")/.." || exit 2
 
 # VORNIK_GITHUB_DIR overrides the tree, for scripts/test-lint-action-pins.sh.
 github_dir="${VORNIK_GITHUB_DIR:-.github}"
+# #334 item 6 (2026-10-13): a gate that examined nothing does not say OK. A
+# missing tree and a tree with no uses: lines both fail; the OK line names how
+# many references and files it examined.
 if [[ ! -d $github_dir ]]; then
-  echo "lint-action-pins: OK — no $github_dir to check"
-  exit 0
+  echo "lint-action-pins: FAIL — no $github_dir to check (examined 0 uses: references)" >&2
+  exit 1
 fi
 
 violations=0
+examined=0
+declare -A files_seen=()
+hits="$(mktemp)" || exit 2
+trap 'rm -f "$hits"' EXIT
+# grep exits 1 for "no match" (examined 0, caught below) and 2 for an error.
+grep -rnE --include='*.yml' --include='*.yaml' '^[[:space:]]*-?[[:space:]]*uses:' "$github_dir" >"$hits"
+if [[ $? -gt 1 ]]; then
+  echo "lint-action-pins: FAIL — grep could not read $github_dir" >&2
+  exit 2
+fi
 
 # `uses:` values, with their file and line, excluding comments.
 while IFS= read -r hit; do
@@ -41,6 +54,8 @@ while IFS= read -r hit; do
   rest="${hit#*:}"
   line="${rest%%:*}"
   value="${rest#*:}"
+  examined=$((examined + 1))
+  files_seen["$file"]=1
 
   # Strip the key, any quoting, and a trailing comment.
   ref="$(printf '%s' "$value" | sed -E 's/^[[:space:]]*-?[[:space:]]*uses:[[:space:]]*//; s/^["'"'"']//; s/["'"'"'][[:space:]]*$//; s/[[:space:]]+#.*$//')"
@@ -59,7 +74,12 @@ while IFS= read -r hit; do
     echo "lint-action-pins: $file:$line uses an unpinned action: $ref"
     violations=$((violations + 1))
   fi
-done < <(grep -rnE --include='*.yml' --include='*.yaml' '^[[:space:]]*-?[[:space:]]*uses:' "$github_dir" 2>/dev/null | grep -v '^[^:]*:[0-9]*:[[:space:]]*#')
+done < <(grep -v '^[^:]*:[0-9]*:[[:space:]]*#' "$hits")
+
+if (( examined == 0 )); then
+  echo "lint-action-pins: FAIL — examined 0 uses: references under $github_dir; a gate that looked at nothing has not passed" >&2
+  exit 1
+fi
 
 if (( violations > 0 )); then
   cat >&2 <<'EOF'
@@ -78,4 +98,4 @@ EOF
   exit 1
 fi
 
-echo "lint-action-pins: OK — every third-party action is pinned by digest"
+echo "lint-action-pins: OK — every third-party action is pinned by digest ($examined uses: reference(s) examined in ${#files_seen[@]} file(s))"

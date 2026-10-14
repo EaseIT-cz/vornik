@@ -130,6 +130,7 @@ type backlogDepositReq struct {
 	Detail      string `json:"detail"`
 	Evidence    string `json:"evidence"`
 	Regression  bool   `json:"regression"`
+	FoundAt     string `json:"found_at,omitempty"`
 }
 
 func postBacklogDeposit(t *testing.T, server *Server, req backlogDepositReq, ctxFn func(context.Context) context.Context) *httptest.ResponseRecorder {

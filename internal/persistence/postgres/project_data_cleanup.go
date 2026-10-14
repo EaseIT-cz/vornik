@@ -118,7 +118,7 @@ func (r *ProjectDataCleanupRepository) DeleteProjectData(ctx context.Context, pr
 		if err := r.runCacheEviction(ctx, r.db, projectID, &stats); err != nil {
 			return stats, err
 		}
-		for _, table := range persistence.ProjectDataTables {
+		for _, table := range persistence.ProjectDataTablesFor(true) {
 			n, err := deleteForProject(ctx, r.db, table, projectID)
 			if err != nil {
 				return stats, err
@@ -136,7 +136,7 @@ func (r *ProjectDataCleanupRepository) DeleteProjectData(ctx context.Context, pr
 		return stats, err
 	}
 
-	for _, table := range persistence.ProjectDataTables {
+	for _, table := range persistence.ProjectDataTablesFor(true) {
 		n, err := deleteForProject(ctx, tx, table, projectID)
 		if err != nil {
 			return stats, err

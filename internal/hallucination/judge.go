@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"vornik.io/vornik/internal/chat"
+	"vornik.io/vornik/internal/ctxerr"
 	"vornik.io/vornik/internal/llmjudge"
 	"vornik.io/vornik/internal/persistence"
 	"vornik.io/vornik/internal/pricing"
@@ -59,6 +60,12 @@ type JudgeMetrics struct {
 	// providers without prompt caching.
 	CacheCreationTokens int
 	CacheReadTokens     int
+	// LLMFailure is set when the judge's model call failed: the
+	// ctxerr.Classify cause ("timeout", "cancelled" or "error"). The
+	// verdict is then an abstain the judge did not decide, and the runner
+	// counts the evaluation llm_<cause>, not ok (GitHub #142,
+	// outcome-quality-design §S8 F3).
+	LLMFailure string
 }
 
 // Judge evaluates a completed task against its produced
@@ -215,7 +222,11 @@ func (j *LLMJudge) Evaluate(ctx context.Context, in JudgeInput) (*Verdict, *Judg
 	// "abstained: LLM error" rows that hid real signal.
 	resp, err := llmjudge.CompleteJudgeWithRetry(ctx, client, msgs, 3)
 	if err != nil {
-		return abstainVerdict("LLM error: " + err.Error()), &JudgeMetrics{Model: j.Model}, nil
+		// Still an abstain verdict (the judge decided nothing), but the
+		// metrics say why, so the runner does not count a dead model as a
+		// successful evaluation (GitHub #142, outcome-quality-design §S8 F3).
+		return abstainVerdict("LLM error: " + err.Error()),
+			&JudgeMetrics{Model: j.Model, LLMFailure: string(ctxerr.Classify(ctx, err))}, nil
 	}
 	metrics := &JudgeMetrics{
 		Model:               j.Model,

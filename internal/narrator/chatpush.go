@@ -122,7 +122,9 @@ func (n *Narrator) pushChatMilestone(ctx context.Context, kind triggerKind, st *
 		}
 	}
 
-	if _, err := res.Channel.Send(ctx, msg); err != nil {
+	// Art 50 (GitHub #342): narration is LLM-composed and pushed outside
+	// ChannelReceiver, so it takes the shared disclosure path.
+	if _, err := conversation.SendDisclosed(ctx, n.Disclosure, res.Channel, msg, true); err != nil {
 		n.Logger.Warn().Err(err).Str("task_id", st.taskID).Str("channel", res.ChannelName).
 			Msg("narrator: chat push send failed")
 		return

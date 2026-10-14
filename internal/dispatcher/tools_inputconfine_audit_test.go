@@ -142,6 +142,7 @@ func TestCreateTask_ArtifactIDBypassesConfinement(t *testing.T) {
 		byID: map[string]*persistence.Artifact{
 			"email-att-deadbeef": {
 				ID:          "email-att-deadbeef",
+				ProjectID:   "snake", // GitHub #351: an ID must name a row of the chat's project
 				Name:        "book.epub",
 				StoragePath: "/var/lib/vornik/artifacts/snake/inputs/x/book.epub",
 			},
@@ -176,11 +177,11 @@ func TestCreateTask_ArtifactIDBypassesConfinement(t *testing.T) {
 	}
 }
 
-// TestCreateTask_DefaultRootsAllowTempDir — when allowedInputRoots is
-// unset, the dispatcher derives os.TempDir() as a baseline root (where
-// channel uploads land). A path under it passes; a sibling path
-// outside it is still rejected.
-func TestCreateTask_DefaultRootsAllowTempDir(t *testing.T) {
+// TestCreateTask_DefaultRootsExcludeTempDir — superseded 2026-10-12 (GitHub
+// #351): with allowedInputRoots unset, the derived roots are the active
+// project's own (uploads dir, store subtree). A temp-dir upload used to pass;
+// it is now refused, and nothing reaches StoreInput.
+func TestCreateTask_DefaultRootsExcludeTempDir(t *testing.T) {
 	upload := filepath.Join(os.TempDir(), "confine-default-upload.bin")
 	if err := os.WriteFile(upload, []byte("x"), 0o644); err != nil {
 		t.Fatalf("seed upload: %v", err)
@@ -203,37 +204,11 @@ func TestCreateTask_DefaultRootsAllowTempDir(t *testing.T) {
 		"input_files": []string{upload},
 	}
 	argsJSON, _ := json.Marshal(args)
-	te.createTask(context.Background(), string(argsJSON), "snake", []string{"snake"}, 0)
-	if len(store.sources) != 1 {
-		t.Fatalf("TempDir upload should pass under default roots, got %d: %+v",
-			len(store.sources), store.sources)
-	}
-
-	// Now an outside-TempDir literal path with default roots is
-	// rejected. Build the path under the OS root so it is provably
-	// outside os.TempDir() regardless of how TMPDIR is configured on
-	// the build host (t.TempDir() itself lives under os.TempDir()).
-	tmpResolved := resolveRootForContainment(os.TempDir())
-	outside := filepath.Join(string(filepath.Separator), "etc", "vornik-confine-probe-secret.txt")
-	if _, under := confineInputFileSource(outside, []string{tmpResolved}); under {
-		t.Skipf("probe path %q unexpectedly under os.TempDir() %q", outside, tmpResolved)
-	}
-	// No file is written: the confinement gate runs before any read,
-	// so the reject must fire on the path alone.
-	store2 := &confineStubStore{}
-	te.artifactStore = store2
-	args2 := map[string]any{
-		"project_id":  "snake",
-		"type":        "feature",
-		"prompt":      "no",
-		"input_files": []string{outside},
-	}
-	argsJSON2, _ := json.Marshal(args2)
-	res := te.createTask(context.Background(), string(argsJSON2), "snake", []string{"snake"}, 0)
-	if len(store2.sources) != 0 {
-		t.Fatalf("outside-TempDir path reached StoreInput under default roots: %+v", store2.sources)
+	res := te.createTask(context.Background(), string(argsJSON), "snake", []string{"snake"}, 0)
+	if len(store.sources) != 0 {
+		t.Fatalf("a temp-dir upload reached StoreInput under default roots: %+v", store.sources)
 	}
 	if res.Content == "" {
-		t.Error("expected rejection message for outside-TempDir path")
+		t.Error("expected a rejection message")
 	}
 }

@@ -22,6 +22,7 @@ import (
 
 	"github.com/rs/zerolog"
 
+	"vornik.io/vornik/internal/aidisclosure"
 	"vornik.io/vornik/internal/chatorigin"
 	"vornik.io/vornik/internal/conversation"
 	"vornik.io/vornik/internal/persistence"
@@ -64,8 +65,24 @@ type Notifier struct {
 	enabled     bool
 	logger      zerolog.Logger
 
+	// disclosure applies the Art 50 notice to the prompt, which carries the
+	// agent's own question (Art 50 design 2026-07-28 §11.4, GitHub #342). Nil
+	// discloses with the compiled defaults.
+	disclosure *aidisclosure.Service
+
 	mu   sync.Mutex
 	sent map[string]time.Time // (taskID|state) -> last send, for dedup
+}
+
+// SetAIDisclosure wires the daemon's disclosure service so the per-session
+// notice state is shared with ChannelReceiver. Nil-receiver safe.
+func (n *Notifier) SetAIDisclosure(d *aidisclosure.Service) {
+	if n == nil {
+		return
+	}
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	n.disclosure = d
 }
 
 // New builds a Notifier. enabled=false (or a nil audit/resolver) yields a
@@ -145,7 +162,12 @@ func (n *Notifier) NotifySteeringRequired(ctx context.Context, task *persistence
 		}
 	}
 
-	if _, err := res.Channel.Send(ctx, msg); err != nil {
+	// Art 50 (GitHub #342): the prompt carries the agent's question and is
+	// pushed outside ChannelReceiver, so it takes the shared disclosure path.
+	n.mu.Lock()
+	disclosure := n.disclosure
+	n.mu.Unlock()
+	if _, err := conversation.SendDisclosed(ctx, disclosure, res.Channel, msg, true); err != nil {
 		n.logger.Warn().Err(err).Str("task_id", task.ID).Str("channel", res.ChannelName).
 			Msg("steering: outbound send failed")
 		return

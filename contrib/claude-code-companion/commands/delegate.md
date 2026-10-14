@@ -1,6 +1,6 @@
 ---
 description: Delegate work to a vornik companion workflow asynchronously
-allowed-tools: mcp__vornik__delegate, mcp__vornik__status, mcp__vornik__catalog
+allowed-tools: mcp__plugin_vornik-companion_vornik__delegate, mcp__plugin_vornik-companion_vornik__status, mcp__plugin_vornik-companion_vornik__catalog
 argument-hint: <workflow-id> "<prompt>"
 ---
 
@@ -38,9 +38,9 @@ The user's arguments are: `$ARGUMENTS`
 ## What to do
 
 1. If the user only gave a prompt (no workflow ID), call
-   `mcp__vornik__catalog` to see what workflows their key permits, then
+   `mcp__plugin_vornik-companion_vornik__catalog` to see what workflows their key permits, then
    ask the user which one to use (or pick the obvious match).
-2. Call `mcp__vornik__delegate` with the chosen `workflow` and `prompt`.
+2. Call `mcp__plugin_vornik-companion_vornik__delegate` with the chosen `workflow` and `prompt`.
 3. Report the `task_id` back with a one-line summary of what was queued
    and where the user will see the result (next session's digest or
    `/result <task_id>`).

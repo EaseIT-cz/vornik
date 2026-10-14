@@ -11,6 +11,8 @@ import (
 
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/rs/zerolog"
+
+	"vornik.io/vornik/internal/ctxerr"
 )
 
 // maxWarmEnvVars caps the pre-allocated capacity of a warm container's
@@ -388,7 +390,15 @@ func (p *WarmPool) WaitForTaskDone(ctx context.Context, entry *PoolEntry, timeou
 	for {
 		select {
 		case <-ctx.Done():
-			return nil, fmt.Errorf("warm container timed out waiting for task completion")
+			// Wrap ctx.Err() and name the cause, as WaitForExit does: the
+			// executor's shouldRetry declines both context errors, and the
+			// bare string this used to return made a spent step timeout look
+			// retryable and an operator cancel look like a timeout
+			// (outcome-quality LLD §S2 C2, GitHub #142).
+			if ctxerr.Classify(ctx, nil) == ctxerr.Cancelled {
+				return nil, fmt.Errorf("warm container wait cancelled before the %s timeout: %w", timeout, ctx.Err())
+			}
+			return nil, fmt.Errorf("warm container timed out waiting for task completion after %s: %w", timeout, ctx.Err())
 		case <-doneTicker.C:
 			if _, err := os.Stat(doneFile); err == nil {
 				data, err := os.ReadFile(resultFile)

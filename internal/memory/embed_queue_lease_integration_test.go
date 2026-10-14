@@ -33,14 +33,9 @@ import (
 func TestIntegration_EmbedQueue_ClaimDoesNotRemoveTheRow(t *testing.T) {
 	db := openIngestRecallDB(t)
 	repo := memory.NewRepository(db)
-	ctx := context.Background()
 	project, chunkID := seedQueuedChunk(t, db)
 
-	claimed, err := repo.DequeueEmbedBatch(ctx, 10)
-	if err != nil {
-		t.Fatalf("claim: %v", err)
-	}
-	if !containsChunk(claimed, chunkID) {
+	if !claimUntil(t, repo, chunkID) {
 		t.Fatalf("claim did not return the queued chunk %s", chunkID)
 	}
 
@@ -59,8 +54,8 @@ func TestIntegration_EmbedQueue_AckRemovesTheRow(t *testing.T) {
 	ctx := context.Background()
 	_, chunkID := seedQueuedChunk(t, db)
 
-	if _, err := repo.DequeueEmbedBatch(ctx, 10); err != nil {
-		t.Fatalf("claim: %v", err)
+	if !claimUntil(t, repo, chunkID) {
+		t.Fatalf("claim did not return the queued chunk %s", chunkID)
 	}
 	if err := repo.AckEmbedQueue(ctx, []string{chunkID}); err != nil {
 		t.Fatalf("ack: %v", err)
@@ -80,8 +75,8 @@ func TestIntegration_EmbedQueue_UnackedClaimIsReclaimable(t *testing.T) {
 	ctx := context.Background()
 	_, chunkID := seedQueuedChunk(t, db)
 
-	if _, err := repo.DequeueEmbedBatch(ctx, 10); err != nil {
-		t.Fatalf("first claim: %v", err)
+	if !claimUntil(t, repo, chunkID) {
+		t.Fatalf("first claim did not return the queued chunk %s", chunkID)
 	}
 	// Simulate the crash: the claim happened, nothing was acked. Age the claim past
 	// the reclaim window rather than sleeping through it.
@@ -91,11 +86,7 @@ func TestIntegration_EmbedQueue_UnackedClaimIsReclaimable(t *testing.T) {
 		t.Fatalf("age the claim: %v", err)
 	}
 
-	again, err := repo.DequeueEmbedBatch(ctx, 10)
-	if err != nil {
-		t.Fatalf("reclaim: %v", err)
-	}
-	if !containsChunk(again, chunkID) {
+	if !claimUntil(t, repo, chunkID) {
 		t.Errorf("an abandoned claim was NOT reclaimed; the chunk is orphaned exactly " +
 			"as it was before the lease existed")
 	}
@@ -106,23 +97,44 @@ func TestIntegration_EmbedQueue_UnackedClaimIsReclaimable(t *testing.T) {
 func TestIntegration_EmbedQueue_FreshClaimIsNotStolen(t *testing.T) {
 	db := openIngestRecallDB(t)
 	repo := memory.NewRepository(db)
-	ctx := context.Background()
 	_, chunkID := seedQueuedChunk(t, db)
 
-	if _, err := repo.DequeueEmbedBatch(ctx, 10); err != nil {
-		t.Fatalf("first claim: %v", err)
+	if !claimUntil(t, repo, chunkID) {
+		t.Fatalf("first claim did not return the queued chunk %s", chunkID)
 	}
-	second, err := repo.DequeueEmbedBatch(ctx, 10)
-	if err != nil {
-		t.Fatalf("second claim: %v", err)
-	}
-	if containsChunk(second, chunkID) {
+	if claimUntil(t, repo, chunkID) {
 		t.Error("a freshly claimed chunk was handed out again immediately — two " +
 			"workers would embed it in parallel every tick")
 	}
 }
 
 // --- helpers ---
+
+// claimUntil claims batches until one holds chunkID (true) or a claim comes
+// back empty (false). The Postgres lane shares one database across runs, and
+// other suites leave queue rows behind; a single claim of 10 takes the oldest
+// rows first, so it missed this test's fresh row once 10 leftovers had built up
+// (TestIntegration_EmbedQueue_ClaimDoesNotRemoveTheRow, gate-stamp 2026-10-14).
+// Leftover rows claimed on the way stay leased, which is the at-least-once
+// contract: they are reclaimed after the lease window.
+func claimUntil(t *testing.T, repo *memory.Repository, chunkID string) bool {
+	t.Helper()
+	ctx := context.Background()
+	for i := 0; i < 1000; i++ {
+		batch, err := repo.DequeueEmbedBatch(ctx, 10)
+		if err != nil {
+			t.Fatalf("claim: %v", err)
+		}
+		if containsChunk(batch, chunkID) {
+			return true
+		}
+		if len(batch) == 0 {
+			return false
+		}
+	}
+	t.Fatalf("claimUntil: queue did not drain in 1000 batches")
+	return false
+}
 
 // seedQueuedChunk inserts one chunk and queues it, returning (projectID, chunkID).
 // A unique project per call keeps parallel runs from seeing each other's rows, and

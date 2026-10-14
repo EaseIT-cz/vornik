@@ -241,7 +241,7 @@ func (s *telegramStream) Append(text string) error {
 	if time.Since(s.lastEdit) < s.minEditEvery {
 		return nil
 	}
-	if err := s.bot.editMessageText(s.ctx, s.chatID, s.messageID, s.buf); err != nil {
+	if err := s.edit(); err != nil {
 		s.terminated = err
 		return err
 	}
@@ -260,13 +260,30 @@ func (s *telegramStream) Close() (string, error) {
 		return "", s.terminated
 	}
 	if s.buf != "" {
-		if err := s.bot.editMessageText(s.ctx, s.chatID, s.messageID, s.buf); err != nil {
+		if err := s.edit(); err != nil {
 			s.terminated = err
 			return "", err
 		}
 	}
 	s.terminated = ErrStreamClosed
 	return strconv.FormatInt(s.messageID, 10), nil
+}
+
+// streamEditTimeout bounds one editMessageText call of a stream.
+const streamEditTimeout = 15 * time.Second
+
+// edit pushes the buffer to Telegram. Caller holds s.mu.
+//
+// The edit runs on the stream's context with its cancellation stripped and
+// its own bound (GitHub #142 #20, outcome-quality LLD §S6). It used to ride
+// the turn's context, so when the turn ran out its time limit the final
+// flush, and the notice that says the reply was cut off, were refused on the
+// expired context and the chat kept a partial preview that read like a
+// finished answer.
+func (s *telegramStream) edit() error {
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(s.ctx), streamEditTimeout)
+	defer cancel()
+	return s.bot.editMessageText(ctx, s.chatID, s.messageID, s.buf)
 }
 
 // ErrStreamClosed is the terminal sentinel returned by Append and

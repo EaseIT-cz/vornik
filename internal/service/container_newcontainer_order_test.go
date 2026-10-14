@@ -114,7 +114,7 @@ func enterpriseLikeProviders() ProviderSet {
 func TestNewContainer_ApplyOptionsBeforeInitLogship_OrderingRegression(t *testing.T) {
 	cfg := newContainerForOrderTest(t)
 
-	c, err := NewContainer(cfg, isolatedConfigPath(t), WithProviders(enterpriseLikeProviders()))
+	c, err := newUnitTestContainer(t, cfg, isolatedConfigPath(t), WithProviders(enterpriseLikeProviders()))
 	if err != nil {
 		t.Fatalf("NewContainer: unexpected error: %v", err)
 	}

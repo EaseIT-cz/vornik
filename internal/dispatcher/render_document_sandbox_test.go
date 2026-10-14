@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"vornik.io/vornik/internal/docrender"
 	"vornik.io/vornik/internal/sandboxtool"
 )
 
@@ -31,11 +32,12 @@ type renderCall struct {
 // writes the requested /out file into the host directory mounted there. The
 // runner's own inspect and rm calls are answered and not recorded.
 type fakeSandbox struct {
-	calls []renderCall
-	meta  string
-	fail  error
-	out   string
-	block bool // wait for the run's context to end, like a hung pandoc
+	calls   []renderCall
+	meta    string
+	filters []string // /in/sanitize.lua of each run ("" when absent)
+	fail    error
+	out     string
+	block   bool // wait for the run's context to end, like a hung pandoc
 }
 
 func (f *fakeSandbox) run(ctx context.Context, _ io.Reader, name string, args ...string) ([]byte, error) {
@@ -70,6 +72,11 @@ func (f *fakeSandbox) run(ctx context.Context, _ io.Reader, name string, args ..
 	}
 	if b, err := os.ReadFile(filepath.Join(inDir, "meta.yaml")); err == nil {
 		f.meta = string(b)
+	}
+	filter, _ := os.ReadFile(filepath.Join(inDir, "sanitize.lua"))
+	f.filters = append(f.filters, string(filter))
+	if outFile == "" && strings.Contains(strings.Join(args, " "), "--entrypoint python3") {
+		outFile = "output.pdf" // the sandbox PDF program's fixed output
 	}
 	return nil, os.WriteFile(filepath.Join(outDir, outFile), []byte("rendered"), 0o600)
 }
@@ -109,7 +116,7 @@ func TestRenderDocument_RendersOnlyInTheSandbox(t *testing.T) {
 		}
 		joined := strings.Join(c.args, " ")
 		for _, want := range []string{
-			"run", "--network=none", "--pull=never", "--entrypoint pandoc", testRenderImage,
+			"run", "--network=none", "--pull=never", testRenderImage,
 			// S5a: the render feature's limits and the fixed hardening.
 			"--memory=1073741824", "--memory-swap=1073741824", "--cpus=1", "--pids-limit=64",
 			"--cap-drop=ALL", "--security-opt=no-new-privileges", "--read-only",
@@ -241,5 +248,45 @@ func TestRenderDocument_TraversingNameIsRefused(t *testing.T) {
 	res := te.renderDocument(context.Background(), `{"content":"# Hi","name":"../../etc/cv","formats":["md","html"]}`, fs)
 	if !strings.Contains(res.Content, "invalid name") || len(fs.paths) != 0 || len(sb.calls) != 0 {
 		t.Fatalf("got %q, sent %v, runs %d", res.Content, fs.paths, len(sb.calls))
+	}
+}
+
+// audit 2026-10-12 (#339): render_document handed chat-supplied markdown to
+// pandoc unfiltered. Measured in the agent image under the sandbox's own
+// flags: the HTML kept <script> and <iframe>, the PDF (pandoc
+// --pdf-engine=weasyprint, WeasyPrint's default fetcher) rendered a file:
+// image, and the DOCX embedded /etc/passwd, /proc/self/mountinfo and
+// /proc/self/environ as media. Every format now reads with the shared
+// front-matter-off reader and the shared filter, and PDF renders through the
+// deny-all-fetcher program instead of a pandoc PDF engine.
+func TestRenderDocument_EveryFormatIsSanitized(t *testing.T) {
+	sb := &fakeSandbox{}
+	te := sandboxExecutor(t, sb)
+	res := te.renderDocument(context.Background(), `{"content":"# Hi","name":"cv","formats":["html","pdf","docx"]}`, &stubSenderRecording{})
+	if !strings.Contains(res.Content, "Delivered: cv.html, cv.pdf, cv.docx") {
+		t.Fatalf("got %q", res.Content)
+	}
+	if len(sb.calls) != 3 {
+		t.Fatalf("want one run per format, got %d", len(sb.calls))
+	}
+	pandocArgs := strings.Join(docrender.SandboxPandocArgs(), " ")
+	for i, format := range []string{"html", "pdf", "docx"} {
+		joined := strings.Join(sb.calls[i].args, " ")
+		if sb.filters[i] != docrender.LuaFilter {
+			t.Errorf("%s: /in/sanitize.lua is not the shared filter: %q", format, sb.filters[i])
+		}
+		if strings.Contains(joined, "--pdf-engine") {
+			t.Errorf("%s: a pandoc PDF engine uses WeasyPrint's default fetcher: %s", format, joined)
+		}
+		if format == "pdf" {
+			args := sb.calls[i].args
+			if !strings.Contains(joined, "--entrypoint python3") || args[len(args)-3] != "-I" || args[len(args)-2] != "-c" || args[len(args)-1] != docrender.SandboxPDFScript {
+				t.Errorf("pdf must run the deny-all-fetcher program: %s", joined)
+			}
+			continue
+		}
+		if !strings.Contains(joined, "--entrypoint pandoc") || !strings.Contains(joined, pandocArgs) {
+			t.Errorf("%s argv lacks the shared reader and filter (%s): %s", format, pandocArgs, joined)
+		}
 	}
 }

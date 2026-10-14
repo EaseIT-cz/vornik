@@ -1,0 +1,29 @@
+{
+  "description": "vornik-companion for Codex: recall-nudge.sh, an OFFLINE just-in-time nudge. PreToolUse(Bash) parses the shell command text (it never runs it) for paths a read program (cat, sed, rg, grep, find, ls, ...) was pointed at; on the 3rd read into one subsystem with no recent successful recall it tells the model to recall that subsystem's design. PostToolUse(mcp__vornik__recall) records that a recall returned. It fires once per subsystem per session, never blocks, makes no network call and keeps no content (LLD 23, Recall nudge for Codex, 2026-10-13). Codex runs it only after you trust it; set VORNIK_NUDGE=off to silence it.",
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"${PLUGIN_ROOT}/hooks/recall-nudge.sh\" observe",
+            "timeout": 5
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "mcp__vornik__recall",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"${PLUGIN_ROOT}/hooks/recall-nudge.sh\" recalled",
+            "timeout": 5
+          }
+        ]
+      }
+    ]
+  }
+}

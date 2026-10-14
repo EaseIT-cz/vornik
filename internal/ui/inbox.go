@@ -113,6 +113,9 @@ type InboxData struct {
 	// AgentApprovals wait on the approver device; listed with a link, never
 	// decided here (agent-administered design §9.2a item 3).
 	AgentApprovals []agentApprovalCard
+	// AgentApprovalsFailed: the operator's load of that list failed, so the
+	// page says so instead of hiding it or saying "All clear" (GitHub #167).
+	AgentApprovalsFailed bool
 }
 
 // NavAttentionCount implements navAttentionCounter (nav_model.go) so the
@@ -447,7 +450,7 @@ func (s *Server) Inbox(w http.ResponseWriter, r *http.Request) {
 	data.WebWrites = s.loadPendingWebWrites(r)
 	data.BrokerActions = s.loadPendingBrokerActions(r)
 	data.StandingGrants = s.loadStandingGrants(r)
-	data.AgentApprovals = s.loadAgentApprovals(r)
+	data.AgentApprovals, data.AgentApprovalsFailed = s.loadAgentApprovals(r)
 	if v := strings.TrimSpace(r.URL.Query().Get("refused")); v != "" {
 		data.BrokerRefused = strings.Split(v, ",")
 	}

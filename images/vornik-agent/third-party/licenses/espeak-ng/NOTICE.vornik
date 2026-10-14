@@ -1,0 +1,35 @@
+eSpeak NG, as shipped in /opt/piper of this image
+=================================================
+
+(Not an upstream file. espeak-ng has no NOTICE at this commit; the Vornik
+maintainers compiled this list from the copyright lines in the headers of
+src/libespeak-ng, src/espeak-ng.c, src/ucd-tools and src/speechPlayer at the
+commit below. The source files' own headers are authoritative.)
+
+Files: /opt/piper/libespeak-ng.so.1.52.0.1 (and its symlinks),
+       /opt/piper/espeak-ng, /opt/piper/espeak-ng-data/
+Source: https://github.com/rhasspy/espeak-ng
+        commit 0f65aa301e0d6bae5e172cc74197d32a6182200f
+        (a fork of https://github.com/espeak-ng/espeak-ng)
+Licence: GNU General Public License, version 3 or (at your option) any later
+         version. The full text is in COPYING in this directory.
+         COPYING.BSD2 covers the getopt compatibility code, COPYING.APACHE and
+         COPYING.UCD are the upstream repository's other licence files,
+         reproduced unmodified.
+
+Copyright notices, as they appear in the source files' headers:
+
+  Copyright (C) 2005 to 2015 by Jonathan Duddington
+  Copyright (C) 2010 by Nicolas Pitre
+  Copyright (C) 2007 Gilles Casse
+  Copyright (C) 2012-2021 Reece H. Dunn
+  Copyright (C) 2018-2022 Juho Hiltunen
+  Copyright (C) 2022 Ulrich Müller
+  Copyright 2014 NV Access Limited (speechPlayer)
+  and the other contributors named in the source files.
+
+This program is distributed in the hope that it will be useful, but WITHOUT
+ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS
+FOR A PARTICULAR PURPOSE. See the GNU General Public License for more details.
+
+Where to get the corresponding source: see /usr/share/licenses/SOURCE-OFFER.

@@ -1,7 +1,6 @@
 package storage
 
 import (
-	"context"
 	"errors"
 	"reflect"
 	"strings"
@@ -9,6 +8,7 @@ import (
 
 	"vornik.io/vornik/internal/config"
 	"vornik.io/vornik/internal/persistence"
+	"vornik.io/vornik/internal/persistence/sqlite/sqlitetest"
 )
 
 // stubDBTX satisfies persistence.DBTX with no-op methods so Build()
@@ -42,7 +42,7 @@ func TestOpen_DefaultsToPostgres(t *testing.T) {
 		User:    "vornik",
 		SSLMode: "disable",
 	}
-	_, err := Open(context.Background(), cfg)
+	_, err := Open(sqlitetest.Context(t), cfg)
 	if err == nil {
 		t.Fatal("expected an error when connecting to an unreachable host")
 	}
@@ -53,7 +53,7 @@ func TestOpen_DefaultsToPostgres(t *testing.T) {
 
 func TestOpen_SQLiteReturnsRepositories(t *testing.T) {
 	cfg := config.DatabaseConfig{Driver: "sqlite", Path: ":memory:"}
-	backend, err := Open(context.Background(), cfg)
+	backend, err := Open(sqlitetest.Context(t), cfg)
 	if err != nil {
 		t.Fatalf("Open(sqlite :memory:): %v", err)
 	}
@@ -80,7 +80,7 @@ func TestOpen_SQLiteReturnsRepositories(t *testing.T) {
 }
 
 func TestOpen_SQLiteFactoryLeaseSkipsBlockedRows(t *testing.T) {
-	ctx := context.Background()
+	ctx := sqlitetest.Context(t)
 	backend, err := Open(ctx, config.DatabaseConfig{Driver: "sqlite", Path: ":memory:"})
 	if err != nil {
 		t.Fatalf("Open(sqlite :memory:): %v", err)
@@ -129,7 +129,7 @@ func TestOpen_SQLiteFactoryLeaseSkipsBlockedRows(t *testing.T) {
 
 func TestOpen_RejectsUnknownDriver(t *testing.T) {
 	cfg := config.DatabaseConfig{Driver: "mysql"}
-	_, err := Open(context.Background(), cfg)
+	_, err := Open(sqlitetest.Context(t), cfg)
 	if err == nil {
 		t.Fatal("expected an error for unknown driver")
 	}

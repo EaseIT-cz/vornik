@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 
+	"vornik.io/vornik/internal/aidisclosure"
 	"vornik.io/vornik/internal/chatauth"
 	"vornik.io/vornik/internal/conversation"
 )
@@ -42,6 +43,11 @@ type ConfigAssistant interface {
 // SetConfigAssistant wires the chat entrypoint. Nil — the default — leaves
 // `config …` meaning nothing special, i.e. an ordinary prompt.
 func (c *Channel) SetConfigAssistant(a ConfigAssistant) { c.configAssistant = a }
+
+// SetAIDisclosure wires the daemon's Art 50 disclosure service (boot-time, like
+// SetConfigAssistant) so replies sent outside ChannelReceiver share its
+// per-person disclosure state (GitHub #342).
+func (c *Channel) SetAIDisclosure(d *aidisclosure.Service) { c.aiDisclosure = d }
 
 // configRequestFromSlashText returns the request when the slash text opens the
 // configuration assistant, and "" when it is an ordinary prompt.
@@ -260,13 +266,18 @@ func (c *Channel) sendConfigAssistReply(ctx context.Context, sessionID, userID, 
 	if c.clock != nil {
 		now = c.clock()
 	}
-	if _, err := c.Send(ctx, conversation.ChannelMessage{
+	// Art 50 (GitHub #342): the reply is the config assistant's LLM output,
+	// sent outside ChannelReceiver; the notice goes first, once per person in
+	// this channel (SpeakerID makes DisclosureScope the per-person key the
+	// receiver uses).
+	if _, err := conversation.SendDisclosed(ctx, c.aiDisclosure, c, conversation.ChannelMessage{
 		Source:    channelName,
 		SessionID: sessionID,
+		SpeakerID: userID,
 		ThreadID:  "slash:" + userID,
 		Text:      text,
 		Timestamp: now,
-	}); err != nil {
+	}, false); err != nil {
 		c.logger.Error().Err(err).
 			Str("slack_user_id", userID).
 			Msg("slack: config assistant produced a result that could not be delivered")

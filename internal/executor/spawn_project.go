@@ -345,6 +345,7 @@ func (e *Executor) seedInitialTask(
 		WorkflowID:     wfID,
 		ParentTaskID:   &parentTask.ID,
 		CreationSource: persistence.TaskCreationSourceDelegation,
+		GoalOrigin:     persistence.TaskGoalOriginSpawnProject,
 		// This row lands in the SPAWNED project, so the same tenancy reasoning
 		// as call_project applies: the parent's person must not appear on a
 		// different project's leaderboard. Design §3.1.4 puts project OWNERSHIP

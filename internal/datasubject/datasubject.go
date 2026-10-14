@@ -137,7 +137,7 @@ var linkableTables = map[LinkableTable]string{
 	TableProjectMemoryChunks: "RAG chunks derived from mail, documents, chat",
 	TableArtifacts:           "uploads; erasure composes with the artifact cascade",
 	TableExtractedDocuments:  "extraction of an upload, incl. OCR text and transcripts",
-	TableChannelSessions:     "per-channel session state keyed by speaker",
+	TableChannelSessions:     "per-channel conversation history, row id <kind>/<session_id>",
 	TableKnowledgeEntities:   "a PERSON entity IS data about that person",
 	TableOperatorProfile:     "structured profile the assistant keeps on a person",
 	TableUserIdentities:      "the identity mapping itself",
@@ -227,6 +227,11 @@ var UncoveredTable = map[string]string{
 		"ON DELETE CASCADE from it, and it is RESTRICT-pinned by the request ledger. An identifier is what " +
 		"makes a ledger entry resolvable to a person, so erasing it would blind the accountability record.",
 
+	"data_subject_restrictions": "Art 5(2) accountability — the record that an Art 18 restriction was imposed, " +
+		"on which ground, and when and why it was lifted, including the operator's Art 18(3) affirmation. Lifted " +
+		"rows are retained on the same ground: they are the evidence of how long the right was honoured. Retained " +
+		"under Art 17(3)(b) like data_subject_requests, and RESTRICT-pinned to it (added 2026-10-12, increment 6).",
+
 	"data_subject_links": "The working index, not the record. Links to an erased row are DELETED with that row " +
 		"(DataSubjectRepository.DeleteRow), because a link asserting 'this person appears in this row' is stale " +
 		"personal data once the row is gone. What was erased is preserved instead in " +
@@ -293,6 +298,12 @@ func (l Link) Validate() error {
 	}
 	if strings.TrimSpace(l.RowID) == "" {
 		return fmt.Errorf("datasubject: link row id is required")
+	}
+	if l.Table == TableChannelSessions {
+		// The primary key is (kind, session_id): a bare session id is ambiguous.
+		if _, _, err := ParseChannelSessionRowID(l.RowID); err != nil {
+			return err
+		}
 	}
 	want, err := DefaultConfidence(l.Source)
 	if err != nil {

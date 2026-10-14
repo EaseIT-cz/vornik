@@ -25,6 +25,7 @@ package retention
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -36,6 +37,7 @@ import (
 
 	"github.com/lib/pq"
 	"github.com/rs/zerolog"
+	msqlite "modernc.org/sqlite"
 
 	"vornik.io/vornik/internal/graphsweep"
 )
@@ -45,7 +47,10 @@ import (
 // the retention is a config change; shortening it is a policy decision.
 const (
 	DefaultTaskLLMUsageDays = 90
-	DefaultToolAuditDays    = 30
+	// DefaultToolAuditDays is the compiled tool_audit_log window. 180 since
+	// 2026-10-12 (was 30): a default below ToolAuditFloorDays would only ever
+	// be clamped up to it. See ToolAuditFloorDays.
+	DefaultToolAuditDays = 180
 	// DefaultChatAuditDays bounds chat_audit_log. 90, deliberately longer
 	// than DefaultTasksDays (60), so a task's origin row outlives by a month
 	// any task that could still need it for delivery — the reference guard in
@@ -135,7 +140,89 @@ const (
 	// to regardless of operator config. Protects against typos that
 	// would nuke fresh operational data.
 	MinimumFloorDays = 1
+
+	// ToolAuditFloorDays is the six-month minimum for tool_audit_log (EU AI
+	// Act Art 26(6): deployers keep automatically generated logs "of at least
+	// six months, unless provided otherwise in applicable Union or national
+	// law"). It overrides any lower daemon or project tool_audit_days. A
+	// deployer bound by such other law lowers it explicitly with
+	// retention.tool_audit_floor_override — see ResolveToolAuditFloor and
+	// https://docs.vornik.io
+	ToolAuditFloorDays = 180
 )
+
+// ResolveToolAuditFloor turns the daemon's retention.tool_audit_floor_days,
+// retention.tool_audit_floor_override and retention.tool_audit_floor_override_basis
+// into the effective floor, plus a warning for the operator log when the
+// configuration asked for less than six months.
+//
+//   - days >= six months                 → days (raising the floor needs no override)
+//   - days < six months, no override     → ToolAuditFloorDays; a lower value is ignored
+//   - override, but basis empty          → ToolAuditFloorDays; the override is refused
+//   - override with a basis              → days (MinimumFloorDays when days <= 0)
+//
+// The basis is required because there are only two legitimate reasons to keep
+// these logs for less than six months — other Union or national law requires a
+// shorter period (the Art 26(6) exception), or Art 26 does not bind this
+// deployment (not an Annex III high-risk use) — and the config must say which,
+// so the record of WHY outlives the log line (design §2.2).
+func ResolveToolAuditFloor(days int, override bool, basis string) (int, string) {
+	if days >= ToolAuditFloorDays {
+		return days, ""
+	}
+	if !override {
+		if days == 0 {
+			return ToolAuditFloorDays, ""
+		}
+		return ToolAuditFloorDays, fmt.Sprintf(
+			"retention.tool_audit_floor_days=%d ignored: below the %d-day (six-month, AI Act Art 26(6)) floor; "+
+				"set retention.tool_audit_floor_override: true and retention.tool_audit_floor_override_basis to lower it",
+			days, ToolAuditFloorDays)
+	}
+	if strings.TrimSpace(basis) == "" {
+		return ToolAuditFloorDays, fmt.Sprintf(
+			"retention.tool_audit_floor_override ignored: retention.tool_audit_floor_override_basis is empty — state why "+
+				"six months does not apply (a law requiring a shorter period, or not a high-risk deployment); keeping the %d-day floor",
+			ToolAuditFloorDays)
+	}
+	if days < MinimumFloorDays {
+		days = MinimumFloorDays
+	}
+	return days, fmt.Sprintf(
+		"tool_audit_log retention floor lowered to %d day(s), below the six-month AI Act Art 26(6) minimum, "+
+			"by retention.tool_audit_floor_override (basis: %q)", days, strings.TrimSpace(basis))
+}
+
+// EffectiveToolAuditFloor maps a resolved floor (ResolveToolAuditFloor's
+// result, or zero from a caller that never set one) to the floor in force.
+// Zero means ToolAuditFloorDays, so forgetting the floor keeps the log rather
+// than releasing it. Every path that deletes tool_audit_log rows by age — the
+// sweeper and the doctor orphan probe — goes through this one function.
+func EffectiveToolAuditFloor(floorDays int) int {
+	if floorDays > 0 {
+		return floorDays
+	}
+	return ToolAuditFloorDays
+}
+
+// toolAuditFloor is the effective floor carried on a Policy.
+func (p Policy) toolAuditFloor() int {
+	return EffectiveToolAuditFloor(p.ToolAuditFloorDays)
+}
+
+// toolAuditWindow is ToolAuditDays clamped up to the floor. Resolve and the
+// sweeper both call it, so a Policy built without Resolve still cannot prune
+// under the floor.
+func (p Policy) toolAuditWindow() int {
+	days := p.ToolAuditDays
+	if days < MinimumFloorDays {
+		days = MinimumFloorDays
+	}
+	if f := p.toolAuditFloor(); days < f {
+		days = f
+	}
+	return days
+}
 
 // Policy is the effective (resolved) retention window for one project.
 type Policy struct {
@@ -143,9 +230,14 @@ type Policy struct {
 	ProjectID             string
 	TaskLLMUsageDays      int
 	ToolAuditDays         int
-	TasksDays             int
-	ExecutionsDays        int
-	ArtifactsDays         int
+	// ToolAuditFloorDays is the minimum ToolAuditDays may resolve to. Read
+	// from the DEFAULTS policy only (a project cannot lower the deployer's
+	// floor); zero means ToolAuditFloorDays. Build it with
+	// ResolveToolAuditFloor.
+	ToolAuditFloorDays int
+	TasksDays          int
+	ExecutionsDays     int
+	ArtifactsDays      int
 	// TaskMessagesDays prunes task_messages by created_at when > 0.
 	// Zero means "no independent prune" — messages still cascade
 	// from their parent task.
@@ -204,6 +296,7 @@ func Resolve(projectID string, perProject, defaults Policy) Policy {
 		MemoryRequireApproval: perProject.MemoryRequireApproval,
 		TaskLLMUsageDays:      pick(perProject.TaskLLMUsageDays, defaults.TaskLLMUsageDays, DefaultTaskLLMUsageDays),
 		ToolAuditDays:         pick(perProject.ToolAuditDays, defaults.ToolAuditDays, DefaultToolAuditDays),
+		ToolAuditFloorDays:    defaults.ToolAuditFloorDays,
 		TasksDays:             pick(perProject.TasksDays, defaults.TasksDays, DefaultTasksDays),
 		ExecutionsDays:        pick(perProject.ExecutionsDays, defaults.ExecutionsDays, DefaultExecutionsDays),
 		ArtifactsDays:         pick(perProject.ArtifactsDays, defaults.ArtifactsDays, DefaultArtifactsDays),
@@ -213,6 +306,12 @@ func Resolve(projectID string, perProject, defaults Policy) Policy {
 		// promote a deliberately-zero value to MinimumFloorDays.
 		TaskMessagesDays: pickOptIn(perProject.TaskMessagesDays, defaults.TaskMessagesDays),
 		MemoryChunksDays: pickOptIn(perProject.MemoryChunksDays, defaults.MemoryChunksDays),
+		// Carried verbatim, never floored: negative is the legal-hold switch
+		// that disables the quarantined-graph purge, zero is the default at
+		// the purge (purgeQuarantinedGraph). #334 audit 2026-10-14: this
+		// field was not carried at all, so every sweep used the default and
+		// the documented -1 did nothing. A project has no override today.
+		GraphQuarantineDays: pickSigned(perProject.GraphQuarantineDays, defaults.GraphQuarantineDays),
 		// Always-on, like the cost-history window.
 		MemoryIngestAuditDays: pick(perProject.MemoryIngestAuditDays, defaults.MemoryIngestAuditDays, DefaultMemoryIngestAuditDays),
 		// Firewall audit trail — always-on, split allow/block windows.
@@ -231,9 +330,9 @@ func Resolve(projectID string, perProject, defaults Policy) Policy {
 	if out.TaskLLMUsageDays < MinimumFloorDays {
 		out.TaskLLMUsageDays = MinimumFloorDays
 	}
-	if out.ToolAuditDays < MinimumFloorDays {
-		out.ToolAuditDays = MinimumFloorDays
-	}
+	// tool_audit_log: the six-month floor (or the operator's override of it).
+	out.ToolAuditFloorDays = out.toolAuditFloor()
+	out.ToolAuditDays = out.toolAuditWindow()
 	if out.ChatAuditDays < MinimumFloorDays {
 		out.ChatAuditDays = MinimumFloorDays
 	}
@@ -266,6 +365,16 @@ func Resolve(projectID string, perProject, defaults Policy) Policy {
 		out.MemoryChunksDays = MinimumFloorDays
 	}
 	return out
+}
+
+// pickSigned returns perProject when it is set (non-zero, negative
+// included), else defaults: for a window whose negative value means
+// "disabled" (GraphQuarantineDays), which pickOptIn would drop.
+func pickSigned(perProject, defaults int) int {
+	if perProject != 0 {
+		return perProject
+	}
+	return defaults
 }
 
 // pickOptIn resolves opt-in (default-disabled) fields. Per-project
@@ -302,8 +411,11 @@ type Counts struct {
 
 	TaskLLMUsage int
 	ToolAudit    int
-	Tasks        int
-	Executions   int
+	// AgentAdminRefusals is the count of agent_admin_refusals rows pruned, on
+	// the tool_audit_log window (retention design §5, GitHub #172).
+	AgentAdminRefusals int
+	Tasks              int
+	Executions         int
 	// StepPrompts is the count of step_prompts rows no outcome row referenced
 	// any more (pruned after executions, since outcome rows go with them).
 	StepPrompts int
@@ -426,12 +538,98 @@ const linkCodeGraceDays = 7
 type Sweeper struct {
 	db     *sql.DB
 	logger zerolog.Logger
+	// now is the sweep's clock. time.Now unless a test fixes it (WithClock):
+	// placing a row on the threshold's own UTC date — the case the SQLite
+	// time-form defect needed — is only deterministic with a fixed clock.
+	now func() time.Time
+	// sqlite is true when db is a modernc SQLite handle (detected once, in
+	// New). It selects the statement shapes that differ between the drivers:
+	// the table-existence probe, the bound form of a threshold, the artifact
+	// batch delete, and the memory-store steps SQLite does not run.
+	// Everything else is one statement on both.
+	//
+	// see LLD § https://docs.vornik.io §4
+	sqlite bool
+}
+
+// ErrPostgresOnly is returned by the memory-store steps on SQLite: they need
+// row locks and the Postgres-array graph settlement, and the memory store
+// itself is Postgres-only (design §4.2 D5).
+var ErrPostgresOnly = errors.New("retention: this step needs database.driver=postgres")
+
+// isSQLite reports whether db was opened with modernc.org/sqlite — the one
+// SQLite driver the product ships. Anything else (lib/pq, a sqlmock handle) is
+// treated as Postgres, which is what the sweeper assumed before it knew about
+// SQLite at all.
+func isSQLite(db *sql.DB) bool {
+	if db == nil {
+		return false
+	}
+	_, ok := db.Driver().(*msqlite.Driver)
+	return ok
+}
+
+// bindTime renders a threshold as a query argument. Postgres binds the
+// time.Time. SQLite stores timestamps as TEXT in one fixed-width form and
+// compares them as strings, so the threshold must be bound in that form: a
+// bound time.Time renders "2026-04-16 01:02:03.5 +0000 UTC", whose space sorts
+// below the stored "T", and every row on the threshold's own date read as not
+// yet due (GitHub #360).
+func (s *Sweeper) bindTime(t time.Time) any {
+	if s.sqlite {
+		return persistence.SQLiteTime(t)
+	}
+	return t
+}
+
+// tableExists asks the driver's catalog whether table exists. The Postgres
+// statement is the to_regclass probe the sweeper has always run; SQLite has no
+// to_regclass and asks sqlite_master. table is always a package constant.
+func (s *Sweeper) tableExists(ctx context.Context, table string) (bool, error) {
+	var present bool
+	var err error
+	if s.sqlite {
+		err = s.db.QueryRowContext(ctx,
+			`SELECT EXISTS (SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = $1)`, table).Scan(&present)
+	} else {
+		err = s.db.QueryRowContext(ctx,
+			`SELECT to_regclass('public.`+table+`') IS NOT NULL`).Scan(&present)
+	}
+	if err != nil {
+		return false, fmt.Errorf("probe %s: %w", table, err)
+	}
+	return present, nil
+}
+
+// Option configures a Sweeper.
+type Option func(*Sweeper)
+
+// WithClock fixes the clock the sweep computes its thresholds from. For
+// tests; the daemon and the CLI use time.Now.
+func WithClock(now func() time.Time) Option {
+	return func(s *Sweeper) {
+		if now != nil {
+			s.now = now
+		}
+	}
 }
 
 // New constructs a Sweeper. A nil db returns a no-op; callers may still
 // invoke Sweep/Preview on it without a panic.
-func New(db *sql.DB, logger zerolog.Logger) *Sweeper {
-	return &Sweeper{db: db, logger: logger}
+func New(db *sql.DB, logger zerolog.Logger, opts ...Option) *Sweeper {
+	s := &Sweeper{db: db, logger: logger, now: time.Now, sqlite: isSQLite(db)}
+	for _, o := range opts {
+		o(s)
+	}
+	return s
+}
+
+// clock is the sweep's current time, in UTC.
+func (s *Sweeper) clock() time.Time {
+	if s.now == nil {
+		return time.Now().UTC()
+	}
+	return s.now().UTC()
 }
 
 // Sweep deletes rows older than the resolved windows for projectID.
@@ -494,6 +692,7 @@ func (s *Sweeper) runGlobal(ctx context.Context, p GlobalPolicy, previewOnly boo
 	}
 	var counts GlobalCounts
 	var firstErr error
+	now := s.clock()
 
 	// One line per table. The six blocks this replaced were the same
 	// warn-remember-continue shape copied out, which is where the complexity
@@ -502,7 +701,7 @@ func (s *Sweeper) runGlobal(ctx context.Context, p GlobalPolicy, previewOnly boo
 		if configured <= 0 {
 			configured = fallback
 		}
-		return time.Now().UTC().AddDate(0, 0, -configured)
+		return now.AddDate(0, 0, -configured)
 	}
 
 	// The two caches SKIP at zero: not pruning a performance artifact costs
@@ -545,13 +744,12 @@ func (s *Sweeper) runGlobal(ctx context.Context, p GlobalPolicy, previewOnly boo
 // guard is belt-and-braces on top of that: even a DRIFT row that somehow
 // acquired a terminal_at is refused.
 //
-// to_regclass guards a deployment whose migration 184 has not landed, the
-// same way the ratings sweep guards its table.
+// The existence probe guards a deployment whose migration 184 has not landed,
+// the same way the ratings sweep guards its table.
 func (s *Sweeper) pruneConfigApplyJournal(ctx context.Context, threshold time.Time, previewOnly bool) (int, error) {
-	var present bool
-	if err := s.db.QueryRowContext(ctx,
-		`SELECT to_regclass('public.config_apply_journal') IS NOT NULL`).Scan(&present); err != nil {
-		return 0, fmt.Errorf("probe config_apply_journal: %w", err)
+	present, err := s.tableExists(ctx, "config_apply_journal")
+	if err != nil {
+		return 0, err
 	}
 	if !present {
 		return 0, nil
@@ -594,14 +792,13 @@ func (s *Sweeper) runGlobalPrune(
 // windows, so a rating that expired with its execution would take the
 // comparison with it.
 //
-// to_regclass guards a deployment whose migration 179 has not landed, the same
-// way the cache sweeps guard theirs: an optional table's absence must not take
-// the whole retention cycle down.
+// The existence probe guards a deployment whose migration 179 has not landed,
+// the same way the cache sweeps guard theirs: an optional table's absence must
+// not take the whole retention cycle down.
 func (s *Sweeper) pruneExecutionRatings(ctx context.Context, threshold time.Time, previewOnly bool) (int, error) {
-	var present bool
-	if err := s.db.QueryRowContext(ctx,
-		`SELECT to_regclass('public.execution_ratings') IS NOT NULL`).Scan(&present); err != nil {
-		return 0, fmt.Errorf("probe execution_ratings: %w", err)
+	present, err := s.tableExists(ctx, "execution_ratings")
+	if err != nil {
+		return 0, err
 	}
 	if !present {
 		return 0, nil
@@ -610,13 +807,13 @@ func (s *Sweeper) pruneExecutionRatings(ctx context.Context, threshold time.Time
 		var n int
 		if err := s.db.QueryRowContext(ctx,
 			`SELECT COUNT(*) FROM execution_ratings WHERE created_at < $1`,
-			threshold).Scan(&n); err != nil {
+			s.bindTime(threshold)).Scan(&n); err != nil {
 			return 0, fmt.Errorf("count execution_ratings: %w", err)
 		}
 		return n, nil
 	}
 	res, err := s.db.ExecContext(ctx,
-		`DELETE FROM execution_ratings WHERE created_at < $1`, threshold)
+		`DELETE FROM execution_ratings WHERE created_at < $1`, s.bindTime(threshold))
 	if err != nil {
 		return 0, fmt.Errorf("delete execution_ratings: %w", err)
 	}
@@ -661,7 +858,7 @@ var globalCleanupTables = map[string]bool{
 }
 
 // pruneGlobalByThreshold hard-deletes rows from a global table whose rows match
-// `where` (with $1 = threshold), guarded by to_regclass so a deployment
+// `where` (with $1 = threshold), guarded by the existence probe (tableExists) so a deployment
 // missing the table is a no-op rather than a 500. Shared by the ui_sessions /
 // api_keys / link_codes cleanups, which differ only in the table and the
 // staleness predicate. previewOnly switches DELETE → COUNT.
@@ -672,10 +869,9 @@ func (s *Sweeper) pruneGlobalByThreshold(ctx context.Context, table, where strin
 	if !globalCleanupTables[table] {
 		return 0, fmt.Errorf("forbidden global cleanup table: %s", table)
 	}
-	var present bool
-	if err := s.db.QueryRowContext(ctx,
-		`SELECT to_regclass('public.`+table+`') IS NOT NULL`).Scan(&present); err != nil {
-		return 0, fmt.Errorf("probe %s: %w", table, err)
+	present, err := s.tableExists(ctx, table)
+	if err != nil {
+		return 0, err
 	}
 	if !present {
 		return 0, nil
@@ -683,12 +879,12 @@ func (s *Sweeper) pruneGlobalByThreshold(ctx context.Context, table, where strin
 	if previewOnly {
 		var n int
 		if err := s.db.QueryRowContext(ctx,
-			`SELECT COUNT(*) FROM `+table+` WHERE `+where, threshold).Scan(&n); err != nil {
+			`SELECT COUNT(*) FROM `+table+` WHERE `+where, s.bindTime(threshold)).Scan(&n); err != nil {
 			return 0, fmt.Errorf("count %s: %w", table, err)
 		}
 		return n, nil
 	}
-	res, err := s.db.ExecContext(ctx, `DELETE FROM `+table+` WHERE `+where, threshold)
+	res, err := s.db.ExecContext(ctx, `DELETE FROM `+table+` WHERE `+where, s.bindTime(threshold))
 	if err != nil {
 		return 0, fmt.Errorf("delete %s: %w", table, err)
 	}
@@ -727,13 +923,13 @@ func (s *Sweeper) pruneLinkCodes(ctx context.Context, threshold time.Time, previ
 // row that's still being served on every replay stays warm
 // indefinitely.
 func (s *Sweeper) pruneResponseCache(ctx context.Context, threshold time.Time, previewOnly bool) (int, error) {
-	// to_regclass guards against "older deployment without
+	// The existence probe guards against "older deployment without
 	// migration 47" — the sweeper shouldn't 500 the whole retention
-	// loop because the optional Phase E table isn't there.
-	var present bool
-	if err := s.db.QueryRowContext(ctx,
-		`SELECT to_regclass('public.llm_response_cache') IS NOT NULL`).Scan(&present); err != nil {
-		return 0, fmt.Errorf("probe llm_response_cache: %w", err)
+	// loop because the optional Phase E table isn't there. (SQLite has
+	// no such table at all.)
+	present, err := s.tableExists(ctx, "llm_response_cache")
+	if err != nil {
+		return 0, err
 	}
 	if !present {
 		return 0, nil
@@ -742,7 +938,7 @@ func (s *Sweeper) pruneResponseCache(ctx context.Context, threshold time.Time, p
 		var n int
 		err := s.db.QueryRowContext(ctx,
 			`SELECT COUNT(*) FROM llm_response_cache WHERE last_hit_at < $1`,
-			threshold).Scan(&n)
+			s.bindTime(threshold)).Scan(&n)
 		if err != nil {
 			return 0, fmt.Errorf("count llm_response_cache: %w", err)
 		}
@@ -750,7 +946,7 @@ func (s *Sweeper) pruneResponseCache(ctx context.Context, threshold time.Time, p
 	}
 	res, err := s.db.ExecContext(ctx,
 		`DELETE FROM llm_response_cache WHERE last_hit_at < $1`,
-		threshold)
+		s.bindTime(threshold))
 	if err != nil {
 		return 0, fmt.Errorf("delete llm_response_cache: %w", err)
 	}
@@ -780,7 +976,7 @@ func (s *Sweeper) run(ctx context.Context, p Policy, previewOnly bool) (Counts, 
 	var counts Counts
 	var firstErr error
 
-	now := time.Now().UTC()
+	now := s.clock()
 
 	// 1. task_llm_usage — cost history.
 	if n, err := s.pruneOlderThan(ctx,
@@ -801,7 +997,7 @@ func (s *Sweeper) run(ctx context.Context, p Policy, previewOnly bool) (Counts, 
 	if n, err := s.pruneOlderThan(ctx,
 		"tool_audit_log", "created_at",
 		"project_id = $2", p.ProjectID,
-		now.AddDate(0, 0, -p.ToolAuditDays),
+		now.AddDate(0, 0, -p.toolAuditWindow()), // floor re-applied: p may not have come through Resolve
 		previewOnly,
 	); err != nil {
 		s.warn("tool_audit_log", err)
@@ -810,6 +1006,22 @@ func (s *Sweeper) run(ctx context.Context, p Policy, previewOnly bool) (Counts, 
 		}
 	} else {
 		counts.ToolAudit = n
+	}
+
+	// 2b. agent_admin_refusals — follows tool_audit_log's window, floor
+	//     included (retention design §5; agent-administered design §23.2).
+	if n, err := s.pruneOlderThan(ctx,
+		"agent_admin_refusals", "created_at",
+		"project_id = $2", p.ProjectID,
+		now.AddDate(0, 0, -p.toolAuditWindow()),
+		previewOnly,
+	); err != nil {
+		s.warn("agent_admin_refusals", err)
+		if firstErr == nil {
+			firstErr = err
+		}
+	} else {
+		counts.AgentAdminRefusals = n
 	}
 
 	// 3. Artifacts — DB record + file on disk. Do this BEFORE tasks so
@@ -1079,7 +1291,7 @@ func (s *Sweeper) pruneTaskMessages(ctx context.Context, projectID string, thres
 			SELECT COUNT(*) FROM task_messages tm
 			JOIN tasks t ON t.id = tm.task_id
 			WHERE t.project_id = $1 AND tm.created_at < $2
-		`, projectID, threshold).Scan(&n)
+		`, projectID, s.bindTime(threshold)).Scan(&n)
 		if err != nil {
 			return 0, fmt.Errorf("count task_messages: %w", err)
 		}
@@ -1092,7 +1304,7 @@ func (s *Sweeper) pruneTaskMessages(ctx context.Context, projectID string, thres
 			JOIN tasks t ON t.id = tm.task_id
 			WHERE t.project_id = $1 AND tm.created_at < $2
 		)
-	`, projectID, threshold)
+	`, projectID, s.bindTime(threshold))
 	if err != nil {
 		return 0, fmt.Errorf("delete task_messages: %w", err)
 	}
@@ -1170,15 +1382,36 @@ func (s *Sweeper) pruneChunks(
 	if projectID == "" {
 		return 0, parked, nil
 	}
-	if previewOnly {
+	countEligible := func() (int, error) {
 		var n int
 		if err := s.db.QueryRowContext(ctx, `
 			SELECT COUNT(*) FROM project_memory_chunks
 			WHERE project_id = $1 AND `+where,
-			projectID, threshold).Scan(&n); err != nil {
-			return 0, parked, fmt.Errorf("count chunks for retention: %w", err)
+			projectID, s.bindTime(threshold)).Scan(&n); err != nil {
+			return 0, fmt.Errorf("count chunks for retention: %w", err)
 		}
-		return n, parked, nil
+		return n, nil
+	}
+	// SQLite: the batch below needs row locks (FOR UPDATE) and the graph
+	// settlement in graphsweep is written in Postgres array operators, so the
+	// chunk sweep does not run here (design §4.2 D5). It still EXAMINES: zero
+	// eligible rows is a clean answer, and any eligible row is reported as
+	// kept — in preview too, because a preview must not promise a deletion
+	// the sweep will not make.
+	if s.sqlite {
+		n, err := countEligible()
+		if err != nil {
+			return 0, parked, err
+		}
+		if n > 0 {
+			return 0, parked, fmt.Errorf("%d project_memory_chunks row(s) of project %q are past their retention horizon and were KEPT: %w (chunk retention settles the knowledge graph with Postgres arrays)",
+				n, projectID, ErrPostgresOnly)
+		}
+		return 0, parked, nil
+	}
+	if previewOnly {
+		n, err := countEligible()
+		return n, parked, err
 	}
 
 	// BATCHED, one transaction per batch.
@@ -1252,6 +1485,11 @@ func (s *Sweeper) pruneChunkBatch(
 	ctx context.Context, projectID, where string, threshold time.Time,
 ) (int, graphsweep.QuarantineCounts, error) {
 	var parked graphsweep.QuarantineCounts
+	if s.sqlite {
+		// Both callers refuse on SQLite before reaching here; this keeps a
+		// future caller from meeting a syntax error instead of the reason.
+		return 0, parked, ErrPostgresOnly
+	}
 
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -1265,7 +1503,7 @@ func (s *Sweeper) pruneChunkBatch(
 		SELECT id FROM project_memory_chunks
 		WHERE project_id = $1 AND `+where+`
 		ORDER BY id
-		LIMIT $3 FOR UPDATE`, projectID, threshold, chunkSweepBatchSize)
+		LIMIT $3 FOR UPDATE`, projectID, s.bindTime(threshold), chunkSweepBatchSize)
 	if err != nil {
 		return 0, parked, fmt.Errorf("collect chunks for retention: %w", err)
 	}
@@ -1306,7 +1544,7 @@ func (s *Sweeper) pruneChunkBatch(
 	deleted, err := scanIDs(ctx, tx, `
 		DELETE FROM project_memory_chunks
 		WHERE project_id = $1 AND id = ANY($3) AND `+where+`
-		RETURNING id`, projectID, threshold, ids)
+		RETURNING id`, projectID, s.bindTime(threshold), ids)
 	if err != nil {
 		return 0, parked, fmt.Errorf("delete chunks for retention: %w", err)
 	}
@@ -1343,6 +1581,25 @@ func (s *Sweeper) purgeQuarantinedGraph(
 	if p.GraphQuarantineDays < 0 {
 		return 0, nil
 	}
+	// SQLite: nothing can be parked. Parking happens only inside the chunk
+	// sweep's graph settlement, which does not run on SQLite (pruneChunks), and
+	// SQLite's knowledge graph has no quarantine columns to park into — so
+	// there is nothing to purge (design §4.2 D5). The second half is CHECKED,
+	// not assumed: if the columns ever appear on SQLite, a parking path may
+	// follow, and this step must then say it cannot purge rather than report a
+	// clean zero (review-20261013-fa9b finding 3).
+	if s.sqlite {
+		var cols int
+		if err := s.db.QueryRowContext(ctx, `
+			SELECT (SELECT COUNT(*) FROM pragma_table_info('knowledge_entities') WHERE name = 'quarantined_at')
+			     + (SELECT COUNT(*) FROM pragma_table_info('knowledge_edges') WHERE name = 'quarantined_at')`).Scan(&cols); err != nil {
+			return 0, fmt.Errorf("probe knowledge graph quarantine columns: %w", err)
+		}
+		if cols > 0 {
+			return 0, fmt.Errorf("the SQLite knowledge graph now has quarantine columns, but the quarantined-graph purge is not implemented for it: %w", ErrPostgresOnly)
+		}
+		return 0, nil
+	}
 	days := p.GraphQuarantineDays
 	if days == 0 {
 		days = DefaultGraphQuarantineDays
@@ -1367,7 +1624,7 @@ func (s *Sweeper) purgeQuarantinedGraph(
 			     WHERE project_id = $1 AND lifecycle_state = 'quarantined'
 			       AND quarantined_at IS NOT NULL AND quarantined_at < $2
 			       AND cardinality(source_chunks) = 0)
-		`, p.ProjectID, before).Scan(&n); err != nil {
+		`, p.ProjectID, s.bindTime(before)).Scan(&n); err != nil {
 			return 0, fmt.Errorf("count quarantined graph rows: %w", err)
 		}
 		return n, nil
@@ -1445,7 +1702,10 @@ type evictionSweepCounts struct {
 // inventing a column nothing fills, which is worse than the fixed horizon. The
 // horizon here is the operator-accountability one; the request-linked variant
 // needs the linkage first (Enterprise tracker issue
-// #333).
+// #333). Analysed 2026-10-13 in the GDPR rights LLD §4.18: an Art 17 erasure
+// writes no eviction rows at all (its evidence is the request's own
+// report_json), so there is nothing to link yet; the remaining choices are
+// operator decisions recorded there as Q1/Q2.
 func (s *Sweeper) pruneEvictionEvidence(ctx context.Context, p Policy, now time.Time, previewOnly bool) (evictionSweepCounts, error) {
 	var out evictionSweepCounts
 	cutoff := now.AddDate(0, 0, -p.MemoryEvictionAuditDays)
@@ -1494,6 +1754,7 @@ func (s *Sweeper) pruneOlderThan(ctx context.Context, table, tsCol, extraWhere s
 	allowedTables := map[string]bool{
 		"task_llm_usage":            true,
 		"tool_audit_log":            true,
+		"agent_admin_refusals":      true, // tool_audit_log's window — retention design §5
 		"tasks":                     true,
 		"executions":                true,
 		"step_prompts":              true,
@@ -1525,7 +1786,21 @@ func (s *Sweeper) pruneOlderThan(ctx context.Context, table, tsCol, extraWhere s
 		return 0, fmt.Errorf("forbidden timestamp column: %s", tsCol)
 	}
 
-	args := []any{threshold, extraWhereArg}
+	// SQLite: probe first. The SQLite schema does not carry every table the
+	// per-project steps name (memory_eviction_audit / _runs exist only on
+	// Postgres); an absent table holds no rows, so there is nothing to retain.
+	// Postgres does not probe: its tables are migration-guaranteed, and a
+	// missing one must keep failing loudly (design §4.2 D2).
+	if s.sqlite {
+		present, err := s.tableExists(ctx, table)
+		if err != nil {
+			return 0, err
+		}
+		if !present {
+			return 0, nil
+		}
+	}
+	args := []any{s.bindTime(threshold), extraWhereArg}
 	if previewOnly {
 		q := fmt.Sprintf("SELECT COUNT(*) FROM %s WHERE %s < $1 AND %s", table, tsCol, extraWhere)
 		var n int
@@ -1533,6 +1808,18 @@ func (s *Sweeper) pruneOlderThan(ctx context.Context, table, tsCol, extraWhere s
 			return 0, fmt.Errorf("count %s: %w", table, err)
 		}
 		return n, nil
+	}
+	// SQLite runs with foreign_keys(OFF): a parent with children in the
+	// cascade graph (tasks, executions) takes them with it explicitly, in one
+	// transaction, as Postgres's ON DELETE CASCADE / SET NULL does (GitHub
+	// #361; design §6). Postgres keeps the plain statement below.
+	if s.sqlite && persistence.SQLiteCascadeParent(table) {
+		n, err := persistence.SQLiteDeleteCascadingTx(ctx, s.db, table,
+			fmt.Sprintf("%s < $1 AND %s", tsCol, extraWhere), args...)
+		if err != nil {
+			return 0, fmt.Errorf("delete %s: %w", table, err)
+		}
+		return int(n), nil
 	}
 	q := fmt.Sprintf("DELETE FROM %s WHERE %s < $1 AND %s", table, tsCol, extraWhere)
 	res, err := s.db.ExecContext(ctx, q, args...)
@@ -1552,7 +1839,7 @@ func (s *Sweeper) pruneOlderThan(ctx context.Context, table, tsCol, extraWhere s
 func (s *Sweeper) pruneArtifacts(ctx context.Context, projectID string, threshold time.Time, root string, previewOnly bool) (filesRemoved int, rowsRemoved int, err error) {
 	rows, qErr := s.db.QueryContext(ctx,
 		`SELECT id, storage_path FROM artifacts WHERE project_id = $1 AND created_at < $2`,
-		projectID, threshold,
+		projectID, s.bindTime(threshold),
 	)
 	if qErr != nil {
 		return 0, 0, fmt.Errorf("query artifacts: %w", qErr)
@@ -1594,6 +1881,10 @@ func (s *Sweeper) pruneArtifacts(ctx context.Context, projectID string, threshol
 		return 0, 0, nil
 	}
 
+	if s.sqlite {
+		n, err := s.deleteArtifactsIn(ctx, toDelete)
+		return filesRemoved, n, err
+	}
 	// Batch DELETE by ID. One round-trip, no N+1.
 	res, err := s.db.ExecContext(ctx,
 		`DELETE FROM artifacts WHERE id = ANY($1)`, pq.Array(toDelete),
@@ -1606,6 +1897,35 @@ func (s *Sweeper) pruneArtifacts(ctx context.Context, projectID string, threshol
 		return filesRemoved, 0, fmt.Errorf("rows affected for artifacts: %w", err)
 	}
 	return filesRemoved, int(aff), nil
+}
+
+// sqliteDeleteBatch bounds the ids one SQLite artifact delete binds — far
+// under SQLite's bound-parameter limit (32766 since 3.32).
+const sqliteDeleteBatch = 500
+
+// deleteArtifactsIn is the SQLite artifact delete: SQLite has no array type
+// and no ANY, so the ids are bound as an IN list, in batches (design §4.2 D4).
+// Partial progress is returned with the error, as each batch commits alone.
+func (s *Sweeper) deleteArtifactsIn(ctx context.Context, ids []string) (int, error) {
+	total := 0
+	for start := 0; start < len(ids); start += sqliteDeleteBatch {
+		batch := ids[start:min(start+sqliteDeleteBatch, len(ids))]
+		marks := make([]string, len(batch))
+		args := make([]any, len(batch))
+		for i, id := range batch {
+			marks[i] = fmt.Sprintf("$%d", i+1)
+			args[i] = id
+		}
+		// The artifacts' children (project_ingest_queue) go with them, in
+		// the batch's transaction (GitHub #361; design §6).
+		aff, err := persistence.SQLiteDeleteCascadingTx(ctx, s.db, "artifacts",
+			`id IN (`+strings.Join(marks, ", ")+`)`, args...)
+		if err != nil {
+			return total, fmt.Errorf("delete artifacts: %w", err)
+		}
+		total += int(aff)
+	}
+	return total, nil
 }
 
 // pathWithinRoot returns true when path lives under root (cleaned form).

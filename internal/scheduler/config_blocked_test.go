@@ -55,8 +55,11 @@ func TestScheduler_DoesNotDispatchABlockedProject(t *testing.T) {
 	repo.mu.Lock()
 	got := repo.tasks["task_1"].Status
 	repo.mu.Unlock()
-	if got != persistence.TaskStatusPending {
-		t.Fatalf("a blocked task must go back to PENDING for a later tick, got %s", got)
+	// QUEUED, not PENDING (amended 2026-10-12, GitHub #142): the lease query
+	// takes only QUEUED and nothing re-queues a PENDING task that never
+	// reached the executor, so PENDING stranded it (05-scheduler §4.12 C6).
+	if got != persistence.TaskStatusQueued {
+		t.Fatalf("a blocked task must go back to QUEUED for a later tick, got %s", got)
 	}
 }
 

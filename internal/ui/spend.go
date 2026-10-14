@@ -466,7 +466,13 @@ func (s *Server) Spend(w http.ResponseWriter, r *http.Request) {
 	}
 
 	{
-		rows := s.roleModelSpendForScope(ctx, iter, since)
+		// Every (role, model) pair in the window, not the top 20: the
+		// prompt-cache savings and cache-token totals below are window
+		// totals shown beside "Total spend", so they must not inherit the
+		// leaderboard's display cap (W8-AD 2026-10-14, Bug B1 in
+		// local-llm-response-cache-design.md). The cap is applied to the
+		// displayed rows after the totals are taken.
+		rows := s.roleModelSpendForScope(ctx, iter, since, 0)
 		// Compute drift first so the leaderboard rows can join
 		// against it. Drift uses its own current/baseline windows
 		// (24h vs 7d) regardless of the page's selected window —
@@ -526,6 +532,9 @@ func (s *Server) Spend(w http.ResponseWriter, r *http.Request) {
 		// consistent.
 		data.TopRoleModels, data.TotalCacheCreationTokens, data.TotalCacheReadTokens, data.CacheHitRatioPct =
 			computeCacheHeadline(data.TopRoleModels)
+		if len(data.TopRoleModels) > roleModelLeaderboardCap {
+			data.TopRoleModels = data.TopRoleModels[:roleModelLeaderboardCap]
+		}
 	}
 
 	{
@@ -1082,11 +1091,18 @@ func (s *Server) sourceSpendForScope(ctx context.Context, iter []string, since t
 	return out
 }
 
-func (s *Server) roleModelSpendForScope(ctx context.Context, iter []string, since time.Time) []persistence.RoleModelSpend {
+// roleModelLeaderboardCap is the number of (role, model) rows the spend
+// page displays. It is a display cap only: totals are taken before it.
+const roleModelLeaderboardCap = 20
+
+// roleModelSpendForScope merges per-project AggregateByRoleModel rows across
+// iter, sorted by cost. limit > 0 caps both the per-project query and the
+// merged result; limit <= 0 returns every pair (needed for window totals).
+func (s *Server) roleModelSpendForScope(ctx context.Context, iter []string, since time.Time, limit int) []persistence.RoleModelSpend {
 	m := map[string]*persistence.RoleModelSpend{}
 	var order []string
 	for _, pid := range iter {
-		rows, err := s.llmUsageRepo.AggregateByRoleModel(ctx, since, time.Time{}, 20, pid)
+		rows, err := s.llmUsageRepo.AggregateByRoleModel(ctx, since, time.Time{}, limit, pid)
 		if err != nil {
 			s.logger.Warn().Err(err).Str("project_id", pid).Msg("spend: role/model leaderboard failed")
 			continue
@@ -1112,8 +1128,8 @@ func (s *Server) roleModelSpendForScope(ctx context.Context, iter []string, sinc
 		out = append(out, *m[k])
 	}
 	sort.SliceStable(out, func(i, j int) bool { return out[i].CostUSD > out[j].CostUSD })
-	if len(out) > 20 {
-		out = out[:20]
+	if limit > 0 && len(out) > limit {
+		out = out[:limit]
 	}
 	return out
 }

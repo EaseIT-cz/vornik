@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"vornik.io/vornik/internal/chat"
+	"vornik.io/vornik/internal/ctxerr"
 	"vornik.io/vornik/internal/persistence"
 )
 
@@ -89,7 +90,11 @@ func (e *Executor) maybeDistillSkill(ctx context.Context, task *persistence.Task
 	if e.distillerLLM == nil || e.skillRepo == nil || task == nil {
 		return
 	}
-	if reason, project, err := e.distillRefusal(ctx, task); reason != "" {
+	reason, project, proven, err := e.distillRefusal(ctx, task)
+	if reason != "" || proven == nil {
+		if reason == "" {
+			reason = "lookup_error"
+		}
 		e.logger.Info().Err(err).Str("task_id", task.ID).Str("project_id", project).
 			Str("reason", reason).Msg("skill distiller: task not distilled")
 		if e.metrics != nil {
@@ -97,6 +102,8 @@ func (e *Executor) maybeDistillSkill(ctx context.Context, task *persistence.Task
 		}
 		return
 	}
+	// From here on the distiller works only from the proven row.
+	task = proven
 	if !e.distillLimiter.allow(task.ProjectID, time.Now().UTC()) {
 		return
 	}
@@ -110,6 +117,18 @@ func (e *Executor) maybeDistillSkill(ctx context.Context, task *persistence.Task
 		{Role: "user", Content: user},
 	})
 	if err != nil || resp == nil || len(resp.Choices) == 0 {
+		// Logged and counted like every other skip here, so "the model is
+		// down" no longer looks like "nothing worth distilling"
+		// (outcome-quality LLD §S5 #18, GitHub #142).
+		skip := "llm_empty"
+		if err != nil {
+			skip = "llm_" + string(ctxerr.Classify(ctx, err))
+		}
+		e.logger.Warn().Err(err).Str("task_id", task.ID).Str("project_id", task.ProjectID).
+			Str("reason", skip).Msg("skill distiller: model call failed; task not distilled")
+		if e.metrics != nil {
+			e.metrics.RecordSkillDistillSkipped(skip)
+		}
 		return
 	}
 	cand, ok := parseDistillCandidate(resp.Choices[0].Message.Content)
@@ -206,30 +225,30 @@ func (e *Executor) maybeDistillSkill(ctx context.Context, task *persistence.Task
 // task of a broker project (broker §5.2b) are never distilled. Everything is
 // re-derived here, not taken from the caller: this runs in a goroutine after
 // the success path returns, so the row and the config may have moved since.
-func (e *Executor) distillRefusal(ctx context.Context, task *persistence.Task) (reason, project string, err error) {
+func (e *Executor) distillRefusal(ctx context.Context, task *persistence.Task) (reason, project string, proven *persistence.Task, err error) {
 	project = task.ProjectID
 	if e.taskRepo == nil {
-		return "lookup_error", project, errors.New("no task repository")
+		return "lookup_error", project, nil, errors.New("no task repository")
 	}
 	row, err := e.taskRepo.Get(ctx, task.ID)
 	if err != nil || row == nil {
 		// Fail closed, but apart from a real status change: a storage fault
 		// must not read as task churn (review f8b7 F4).
-		return "lookup_error", project, err
+		return "lookup_error", project, nil, err
 	}
 	project = row.ProjectID
 	if row.Status != persistence.TaskStatusCompleted {
-		return "not_completed", project, nil
+		return "not_completed", project, nil, nil
 	}
 	if e.workflows == nil {
-		return "unresolved", project, nil
+		return "unresolved", project, nil, nil
 	}
 	p := e.workflows.GetProject(row.ProjectID)
 	if p == nil {
-		return "unresolved", project, nil
+		return "unresolved", project, nil, nil
 	}
 	if p.Broker {
-		return "broker_project", project, nil
+		return "broker_project", project, nil, nil
 	}
 	workflowID := p.DefaultWorkflowID
 	if row.WorkflowID != nil && *row.WorkflowID != "" && *row.WorkflowID != "-" {
@@ -239,12 +258,20 @@ func (e *Executor) distillRefusal(ctx context.Context, task *persistence.Task) (
 	// than a project can: fail closed (review f8b7 F1).
 	wf := e.workflows.GetWorkflow(workflowID)
 	if wf == nil {
-		return "unresolved", project, nil
+		return "unresolved", project, nil, nil
 	}
 	if wf.Broker != nil {
-		return "broker_workflow", project, nil
+		return "broker_workflow", project, nil, nil
 	}
-	return "", project, nil
+	if r := distillSystemStepRefusal(wf); r != "" {
+		return r, project, nil, nil
+	}
+	if reason, err = e.distillTaintRefusal(ctx, row); reason != "" {
+		return reason, project, nil, err
+	}
+	// The proof is about THIS row; the caller distils from it, not from its
+	// own copy of the task (review a8a5 F11).
+	return "", project, row, nil
 }
 
 func parseDistillCandidate(raw string) (distillCandidate, bool) {

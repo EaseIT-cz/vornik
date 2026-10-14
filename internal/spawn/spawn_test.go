@@ -133,6 +133,12 @@ func TestPodmanControl_AcceptsTheDaemonsVerbs(t *testing.T) {
 		{"logs", "--tail", "5", "abc123"},
 		{"logs", "abc123"},
 		{"image", "inspect", "--format", `{{index .Labels "io.vornik.sandbox-tools"}}`, pinned},
+		// audit 2026-10-12 (GitHub #161, spawn-law "Correction 2026-10-12"):
+		// a pull of the pinned image, which podman run already pulls
+		// implicitly, so the D5 label can be read before the start.
+		{"pull", "--quiet", pinned},
+		{"pull", "-q", pinned},
+		{"pull", pinned},
 	} {
 		c, err := PodmanControl(ctx, "", argv)
 		accepted(t, c, err, strings.Join(argv, " "))
@@ -142,9 +148,20 @@ func TestPodmanControl_AcceptsTheDaemonsVerbs(t *testing.T) {
 func TestPodmanControl_RefusesEverythingElse(t *testing.T) {
 	ctx := context.Background()
 	for _, argv := range [][]string{
-		{"run", pinned},                   // run is PodmanAgent's
-		{"exec", "abc", "sh"},             // not a daemon verb
-		{"pull", pinned},                  // pulls are outside the closed set
+		{"run", pinned},       // run is PodmanAgent's
+		{"exec", "abc", "sh"}, // not a daemon verb
+		{"pull", "alpine"},    // pull only of the pinned image
+		{"pull", "docker.io/x/vornik-agent:latest"},
+		// review-20261012-a61a F2: the right repository name on a registry
+		// the daemon does not pull from is new reach, so it is refused.
+		{"pull", "--quiet", "docker.io/easeit-cz/vornik-agent:latest"},
+		{"pull", "--quiet", "quay.io/easeit-cz/vornik-agent:latest"},
+		{"pull", "--quiet", "ghcr.io/grinco/vornik-agent:latest"}, // legacy name: QualifyAgentImage maps it first
+		{"pull", "--authfile", "/tmp/a", pinned},                  // pull takes --quiet only
+		{"pull", "--tls-verify=false", pinned},
+		{"pull", "--creds", "u:p", pinned},
+		{"pull"},                          // exactly one target
+		{"pull", pinned, pinned},          // exactly one target
 		{"system", "reset"},               // only migrate
 		{"stop", "a", "b"},                // exactly one target
 		{"rm"},                            // no target

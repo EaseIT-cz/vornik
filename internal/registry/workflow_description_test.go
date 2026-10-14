@@ -103,11 +103,20 @@ func TestBundledWorkflowsCarryDescription(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read %s: %v", dir, err)
 	}
+	examined := 0
+	// #334 item 6 (audit 2026-10-12): an empty workflows dir passed.
+	defer func() {
+		t.Logf("examined %d bundled workflow(s)", examined)
+		if examined == 0 {
+			t.Errorf("examined 0 bundled workflows in %s; a check that looked at nothing has not passed", dir)
+		}
+	}()
 	for _, e := range entries {
 		name := e.Name()
 		if !strings.HasSuffix(name, ".md") {
 			continue
 		}
+		examined++
 		path := filepath.Join(dir, name)
 		data, err := os.ReadFile(path)
 		if err != nil {

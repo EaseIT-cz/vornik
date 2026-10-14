@@ -214,6 +214,19 @@ type ApplyEngine struct {
 	// and APPLIED lands with the ledger in one transaction. Nil keeps the
 	// legacy in-memory reverse path below byte-for-byte.
 	Journal persistence.ApplyJournalRepository
+	// OnDrift and OnResolved are optional, best-effort hooks (config-apply
+	// journal design §13.3, GitHub #302): OnDrift runs after a row parks in
+	// DRIFT, OnResolved after every ResolveJournal that returns a result
+	// (the idempotent repeat included). OnResolved runs outside the engine's
+	// locks. OnDrift runs INSIDE them: parkInDrift calls it with the config
+	// write lock and the engine lock held (#334 audit 2026-10-14 corrected
+	// the earlier "both outside" text), so an OnDrift hook must not block
+	// and must not re-enter the engine; hand slow work off (the wired hook
+	// in internal/service/journal_cards.go files its card on a goroutine).
+	// They return nothing: a hook cannot change a park or a resolve; it logs
+	// its own failures, and the 5-minute card sweep is the backstop.
+	OnDrift    func(ctx context.Context, journalID string)
+	OnResolved func(ctx context.Context, journalID string)
 	// LeaderGate is the config-writer lease (§1.2), consulted through
 	// leaderelection.DangerousWriteAllowed before write #1, before each
 	// subsequent write and before the terminal transition. Nil proceeds.

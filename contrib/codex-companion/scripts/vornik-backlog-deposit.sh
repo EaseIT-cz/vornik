@@ -31,6 +31,9 @@
 #   --kind    <k>      bug | feature | optimisation | inefficiency | refactor (default bug)
 #   --priority <P>     P0..P3 (default P2)
 #   --evidence <text>  optional; file:line or a task/exec id
+#   --found-at <level> optional; where the bug was found (ENGINEERING-TENETS
+#                      §4.7): unit | integration | executor-e2e | e2e-lane |
+#                      production | review
 #   --file    <path>   backlog file (default: nearest https://docs.vornik.io, then BACKLOG.md)
 #   --dry-run          print what would be written; touch nothing
 #   --allow-duplicate  deposit even if a similar title already exists
@@ -39,7 +42,7 @@
 # content refused, 5 no backlog file found.
 set -euo pipefail
 
-TITLE="" KIND="bug" PRIORITY="P2" EVIDENCE="" FILE="" DRY=0 ALLOW_DUP=0
+TITLE="" KIND="bug" PRIORITY="P2" EVIDENCE="" FOUND_AT="" FILE="" DRY=0 ALLOW_DUP=0
 while [ $# -gt 0 ]; do
   case "$1" in
     --title)           TITLE="${2:-}"; shift 2 ;;
@@ -49,7 +52,8 @@ while [ $# -gt 0 ]; do
     --file)            FILE="${2:-}"; shift 2 ;;
     --dry-run)         DRY=1; shift ;;
     --allow-duplicate) ALLOW_DUP=1; shift ;;
-    -h|--help)         sed -n '25,40p' "$0"; exit 0 ;;
+    --found-at)        FOUND_AT="${2:-}"; shift 2 ;;
+    -h|--help)         sed -n '25,42p' "$0"; exit 0 ;;
     *) echo "error: unknown argument: $1" >&2; exit 2 ;;
   esac
 done
@@ -63,6 +67,12 @@ esac
 case "$PRIORITY" in
   P0|P1|P2|P3) ;;
   *) echo "error: --priority must be P0|P1|P2|P3 (got '$PRIORITY')" >&2; exit 2 ;;
+esac
+# The level a bug was found at (ENGINEERING-TENETS §4.7, operator 2026-10-14):
+# its regression test belongs at that level. Companion deposit design §9.
+case "$FOUND_AT" in
+  ""|unit|integration|executor-e2e|e2e-lane|production|review) ;;
+  *) echo "error: --found-at must be unit|integration|executor-e2e|e2e-lane|production|review (got '$FOUND_AT')" >&2; exit 2 ;;
 esac
 
 # Locate the backlog by walking up from the cwd, so the command works from any
@@ -84,7 +94,7 @@ fi
 
 BODY="$(cat)"
 
-TITLE="$TITLE" KIND="$KIND" PRIORITY="$PRIORITY" EVIDENCE="$EVIDENCE" \
+TITLE="$TITLE" KIND="$KIND" PRIORITY="$PRIORITY" EVIDENCE="$EVIDENCE" FOUND_AT="$FOUND_AT" \
 BODY="$BODY" FILE="$FILE" DRY="$DRY" ALLOW_DUP="$ALLOW_DUP" python3 - <<'PYEOF'
 import os, re, sys, datetime
 
@@ -92,6 +102,7 @@ title    = os.environ["TITLE"].strip()
 kind     = os.environ["KIND"]
 priority = os.environ["PRIORITY"]
 evidence = os.environ["EVIDENCE"].strip()
+found_at = os.environ["FOUND_AT"]
 body     = os.environ["BODY"].rstrip()
 path     = os.environ["FILE"]
 dry      = os.environ["DRY"] == "1"
@@ -198,6 +209,9 @@ head = "## [ ] %s — %s (%s)" % (priority, title, date)
 parts = [head, ""]
 if body:
     parts.append(body)
+    parts.append("")
+if found_at:
+    parts.append("Found at: %s" % found_at)
     parts.append("")
 if evidence:
     parts.append("Evidence: %s" % evidence)

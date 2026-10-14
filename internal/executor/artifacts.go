@@ -5,18 +5,20 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"regexp"
 	"strings"
+	"syscall"
 	"time"
 
 	"vornik.io/vornik/internal/executor/livepubsub"
 	"vornik.io/vornik/internal/llmspend"
 	"vornik.io/vornik/internal/persistence"
-	"vornik.io/vornik/internal/safepath"
 	"vornik.io/vornik/internal/stepoutcome"
 	"vornik.io/vornik/internal/taintlineage"
 )
@@ -53,17 +55,20 @@ func (e *Executor) SnapshotArtifactDir(dir string) ArtifactDirSnapshot {
 	if dir == "" {
 		return out
 	}
-	entries, err := os.ReadDir(dir)
+	// One root descriptor for the listing and every open (GitHub #359 H4):
+	// a FIFO here used to hang step setup, and the hashes feed the
+	// post-step staleness gate.
+	root, err := os.OpenRoot(dir)
 	if err != nil {
 		return out
 	}
-	for _, entry := range entries {
+	defer func() { _ = root.Close() }()
+	for _, entry := range listHarvestDir(root, ".") {
 		if entry.IsDir() {
 			continue
 		}
-		path := filepath.Join(dir, entry.Name())
-		info, statErr := os.Stat(path)
-		if statErr != nil {
+		f, info, openErr := openHarvestFile(root, entry.Name())
+		if openErr != nil {
 			continue
 		}
 		if info.Size() > maxHashableBytes {
@@ -74,12 +79,14 @@ func (e *Executor) SnapshotArtifactDir(dir string) ArtifactDirSnapshot {
 			// harmless extra artifact rows; false negatives drop
 			// real outputs).
 			out[entry.Name()] = fmt.Sprintf("size:%d", info.Size())
+			_ = f.Close()
 			continue
 		}
-		h, err := hashFile(path)
+		h, err := hashOpenFile(f)
+		_ = f.Close()
 		if err != nil {
 			if e != nil {
-				e.logger.Debug().Err(err).Str("path", path).
+				e.logger.Debug().Err(err).Str("entry", entry.Name()).
 					Msg("artifacts: pre-step hash failed; will trust mtime gate")
 			}
 			continue
@@ -89,36 +96,112 @@ func (e *Executor) SnapshotArtifactDir(dir string) ArtifactDirSnapshot {
 	return out
 }
 
-// hashFile returns the SHA-256 hex digest of the file at path.
-// Streams the read so a large file doesn't blow up resident
-// memory; the caller (SnapshotArtifactDir) caps total size first
-// to bound the wall-clock cost.
-func hashFile(path string) (string, error) {
-	f, err := os.Open(path)
-	if err != nil {
+// hashOpenFile hashes f from its start and rewinds it, so the same
+// descriptor can then be handed to the store, whose StoreFile reads from
+// the current offset (GitHub #359 H2). Do not drop the final rewind.
+func hashOpenFile(f *os.File) (string, error) {
+	if _, err := f.Seek(0, io.SeekStart); err != nil {
 		return "", err
 	}
-	defer func() { _ = f.Close() }()
 	h := sha256.New()
 	if _, err := io.Copy(h, f); err != nil {
+		return "", err
+	}
+	if _, err := f.Seek(0, io.SeekStart); err != nil {
 		return "", err
 	}
 	return hex.EncodeToString(h.Sum(nil)), nil
 }
 
-// harvestedFile is one file the executor found during a step's
-// artifact scan: its on-disk name and the host path to read it from.
-type harvestedFile struct {
-	name       string
-	sourcePath string
+// openHarvestFile opens rel beneath root for the step-output harvest
+// (GitHub #359, 15-artifact-store.md §13.3 H1). root is opened ONCE per
+// harvest source and shared by the listing (listHarvestDir) and every open,
+// so the directory listed is the directory read. os.Root resolves every
+// component relative to the previous component's descriptor with
+// O_NOFOLLOW, follows a symlink only when it is relative and stays beneath
+// root, and refuses an absolute or escaping one; so a component swapped
+// for a symlink after the listing either still lands beneath root or the
+// open fails. O_NONBLOCK keeps a FIFO from blocking the open; the Fstat on
+// the opened descriptor must report a regular file. Every later decision
+// about the file reads this descriptor, never the path again.
+func openHarvestFile(root *os.Root, rel string) (*os.File, os.FileInfo, error) {
+	f, err := root.OpenFile(rel, os.O_RDONLY|syscall.O_NONBLOCK|syscall.O_CLOEXEC, 0)
+	if err != nil {
+		return nil, nil, err
+	}
+	info, err := f.Stat()
+	if err != nil {
+		_ = f.Close()
+		return nil, nil, err
+	}
+	if !info.Mode().IsRegular() {
+		_ = f.Close()
+		return nil, nil, fmt.Errorf("%s: not a regular file (%s)", rel, info.Mode().Type())
+	}
+	return f, info, nil
 }
 
-// collectProjectPersistedArtifacts walks source #3: the project-
+// logHarvestRootError makes a harvest source that could not be opened
+// visible (GitHub #359 review round 2): the source then yields no outputs,
+// which must not look like a step that produced none. A missing directory
+// is the ordinary "nothing here" case and stays quiet.
+func (e *Executor) logHarvestRootError(dir string, err error) {
+	if err == nil || errors.Is(err, fs.ErrNotExist) {
+		return
+	}
+	e.logger.Warn().Err(err).Str("root", dir).
+		Msg("artifacts: harvest root could not be opened; its outputs are not harvested")
+}
+
+// listHarvestDir lists rel beneath root (GitHub #359 H1): the directory is
+// opened through the same root as the files, so a directory swapped for a
+// symlink out of the root lists nothing. A missing or refused directory
+// lists nothing, as os.ReadDir's error did before.
+func listHarvestDir(root *os.Root, rel string) []os.DirEntry {
+	d, err := root.Open(rel)
+	if err != nil {
+		return nil
+	}
+	defer func() { _ = d.Close() }()
+	entries, err := d.ReadDir(-1)
+	if err != nil {
+		return nil
+	}
+	return entries
+}
+
+// harvestBeforeOpenHook is a test seam (GitHub #359): it runs between a
+// harvested entry's listing and the read of its bytes, so a test can swap
+// the entry deterministically. nil in production.
+var harvestBeforeOpenHook func(name string)
+
+// harvestedFile is one file the executor found during a step's
+// artifact scan: its on-disk name, the harvest root it was listed under
+// and its path beneath that root. The bytes are read only through
+// openHarvestFile(root, rel) (GitHub #359); sourcePath (root/rel) is a
+// label for logs and for the repo-only fallback row, never re-opened.
+type harvestedFile struct {
+	name       string
+	root       *os.Root
+	rel        string
+	sourcePath string
+	// snapshotKey names this file's pre-step hash in preStepSnapshot
+	// ("" = not snapshot-gated). projectTree marks source #3, which is
+	// also mtime-gated.
+	snapshotKey string
+	projectTree bool
+}
+
+func newHarvestedFile(root *os.Root, rel, name string) harvestedFile {
+	return harvestedFile{name: name, root: root, rel: rel, sourcePath: filepath.Join(root.Name(), rel)}
+}
+
+// collectProjectPersistedArtifacts lists source #3: the project-
 // persisted artifacts/out/ tree under effectiveProjectDir (the worktree,
 // or the project's persistent root in non-worktree fallback). This tree
 // survives across per-step containers and across tasks, so it is gated
-// twice to avoid registering stale files from prior tasks as this
-// step's output:
+// twice (in fileIsStale, from the opened descriptor) to avoid registering
+// stale files from prior tasks as this step's output:
 //
 //   - mtime gate: files modified before stepStart (minus 1s slack)
 //     belong to a prior task. Disabled when stepStart is zero.
@@ -130,78 +213,46 @@ type harvestedFile struct {
 // Extracted from persistArtifacts to keep that function within the
 // gocognit budget. See persistArtifacts' source-#3 comment for the full
 // 2026-05-18 path-correction history.
-func (e *Executor) collectProjectPersistedArtifacts(effectiveProjectDir string, stepStart time.Time, preStepSnapshot ArtifactDirSnapshot) []harvestedFile {
-	if effectiveProjectDir == "" {
-		return nil
-	}
-	mtimeCutoff := stepStart.Add(-1 * time.Second)
-	projectOutDir := filepath.Join(effectiveProjectDir, "artifacts", "out")
-	entries, err := os.ReadDir(projectOutDir)
-	if err != nil {
+func (e *Executor) collectProjectPersistedArtifacts(projectRoot *os.Root) []harvestedFile {
+	if projectRoot == nil {
 		return nil
 	}
 	var files []harvestedFile
-	for _, entry := range entries {
+	for _, entry := range listHarvestDir(projectRoot, filepath.Join("artifacts", "out")) {
 		if entry.IsDir() {
 			continue
 		}
-		safe, err := safepath.JoinUnder(effectiveProjectDir, "artifacts", "out", entry.Name())
-		if err != nil {
-			e.logger.Warn().Err(err).Str("entry", entry.Name()).
-				Msg("artifacts: refusing project-persisted entry that escapes its root")
-			continue
-		}
-		if e.projectPersistedFileIsStale(safe, entry.Name(), stepStart, mtimeCutoff, preStepSnapshot) {
-			continue
-		}
-		files = append(files, harvestedFile{name: entry.Name(), sourcePath: safe})
+		f := newHarvestedFile(projectRoot, filepath.Join("artifacts", "out", entry.Name()), entry.Name())
+		f.snapshotKey = entry.Name()
+		f.projectTree = true
+		files = append(files, f)
 	}
 	return files
 }
 
-// projectPersistedFileIsStale reports whether a file under the project-
-// persisted tree belongs to a prior task (mtime gate) or was inherited
-// unchanged via a worktree merge (content-hash gate) and so must NOT be
-// registered as this step's output. Split from
-// collectProjectPersistedArtifacts to keep the gate logic testable and
-// the caller's complexity low.
-func (e *Executor) projectPersistedFileIsStale(safe, name string, stepStart, mtimeCutoff time.Time, preStepSnapshot ArtifactDirSnapshot) bool {
-	// Mtime gate against cross-task pollution. Files predating this
-	// execution's stepStart belong to a prior task.
-	info, statErr := os.Stat(safe)
-	if statErr != nil {
-		e.logger.Debug().Err(statErr).Str("entry", name).
-			Msg("artifacts: project-persisted stat failed; skipping")
-		return true
-	}
-	if !stepStart.IsZero() && info.ModTime().Before(mtimeCutoff) {
+// fileIsStale reports whether a harvested file must NOT be registered as
+// this step's output, deciding from the opened descriptor (GitHub #359 H2):
+// a source-#3 file older than stepStart (mtime gate), or any snapshot-gated
+// file whose bytes equal its pre-step hash (an unchanged staged input,
+// T-b093f, or a file inherited unchanged via a worktree merge).
+func (e *Executor) fileIsStale(f harvestedFile, info os.FileInfo, hash string, stepStart time.Time, preStepSnapshot ArtifactDirSnapshot) bool {
+	if f.projectTree && !stepStart.IsZero() && info.ModTime().Before(stepStart.Add(-1*time.Second)) {
 		e.logger.Debug().
-			Str("entry", name).
+			Str("entry", f.name).
 			Time("mtime", info.ModTime()).
 			Time("step_start", stepStart).
 			Msg("artifacts: skipping project-persisted file predating step start")
 		return true
 	}
-	// Content-hash gate. The mtime filter above is a fast path but it is
-	// NOT sufficient on its own: per-task git worktrees set every
-	// checked-out file's mtime to the checkout time, so a file merged in
-	// from a prior task carries a "fresh" mtime even though its bytes are
-	// stale. Compare against the pre-step snapshot — if the bytes are
-	// identical, this step didn't write the file. Files absent from the
-	// snapshot are new-this-step and pass through.
-	if preStepSnapshot == nil {
+	if f.snapshotKey == "" || preStepSnapshot == nil {
 		return false
 	}
-	prevHash, seen := preStepSnapshot[name]
-	if !seen {
-		return false
-	}
-	curHash, err := hashFile(safe)
-	if err == nil && curHash == prevHash {
+	prevHash, seen := preStepSnapshot[f.snapshotKey]
+	if seen && prevHash == hash {
 		e.logger.Debug().
-			Str("entry", name).
-			Str("hash", curHash).
-			Msg("artifacts: skipping project-persisted file unchanged since step start (cross-task pollution from worktree merge)")
+			Str("entry", f.name).
+			Str("hash", hash).
+			Msg("artifacts: skipping file unchanged since step start")
 		return true
 	}
 	return false
@@ -245,57 +296,42 @@ func (e *Executor) projectPersistedFileIsStale(safe, name string, stepStart, mti
 func (e *Executor) persistArtifacts(ctx context.Context, executionID, projectID, taskID, workspaceDir, effectiveProjectDir string, stepStart time.Time, preStepSnapshot ArtifactDirSnapshot) ([]map[string]string, error) {
 	var files []harvestedFile
 
-	// 1. Standard artifact output directory. Resolve through safepath so a
+	// 1. Standard artifact output directory. Entries are only LISTED here;
+	// each is opened beneath workspaceDir by openHarvestFile below, so a
 	// symlink planted by the agent container (e.g. artifacts/out/foo ->
-	// /etc/passwd) cannot escape the workspace.
-	outDir := filepath.Join(workspaceDir, "artifacts", "out")
-	if entries, err := os.ReadDir(outDir); err == nil {
-		for _, entry := range entries {
+	// /etc/passwd), or swapped in after this listing while a warm
+	// container is still running, cannot be read (GitHub #359).
+	//
+	// Prior-step outputs are staged into this directory so the next role
+	// can read them. If the role left one byte-for-byte unchanged, it
+	// remains an input and must not be registered again as this step's
+	// output (T-b093f): snapshotKey "workspace:<name>". A modified
+	// same-name file is a genuine new revision and passes through.
+	//
+	// One root descriptor per source, opened here and shared by the listing
+	// and every open, so the tree listed is the tree read (#359 H1).
+	wsRoot, wsErr := os.OpenRoot(workspaceDir)
+	e.logHarvestRootError(workspaceDir, wsErr)
+	if wsErr == nil {
+		defer func() { _ = wsRoot.Close() }()
+		for _, entry := range listHarvestDir(wsRoot, filepath.Join("artifacts", "out")) {
 			if entry.IsDir() {
 				continue
 			}
-			safe, err := safepath.JoinUnder(workspaceDir, "artifacts", "out", entry.Name())
-			if err != nil {
-				e.logger.Warn().Err(err).Str("entry", entry.Name()).
-					Msg("artifacts: refusing entry that escapes workspace")
-				continue
-			}
-			// Prior-step outputs are staged into this directory so the next
-			// role can read them. If the role left one byte-for-byte unchanged,
-			// it remains an input and must not be registered again as this
-			// step's output (T-b093f). A modified same-name file is a genuine
-			// new revision and passes through.
-			if prevHash, staged := preStepSnapshot["workspace:"+entry.Name()]; staged {
-				if curHash, hashErr := hashFile(safe); hashErr == nil && curHash == prevHash {
-					continue
-				}
-			}
-			files = append(files, harvestedFile{
-				name:       entry.Name(),
-				sourcePath: safe,
-			})
+			f := newHarvestedFile(wsRoot, filepath.Join("artifacts", "out", entry.Name()), entry.Name())
+			f.snapshotKey = "workspace:" + entry.Name()
+			files = append(files, f)
 		}
-	}
 
-	// 2. Workspace root — agent-created files (e.g. via file_write tool).
-	// Skip internal/temp files and files that result from null tool arguments
-	// (jq -r on JSON null outputs the literal string "null").
-	if entries, err := os.ReadDir(workspaceDir); err == nil {
-		for _, entry := range entries {
+		// 2. Workspace root — agent-created files (e.g. via file_write tool).
+		// Skip internal/temp files and files that result from null tool
+		// arguments (jq -r on JSON null outputs the literal string "null").
+		for _, entry := range listHarvestDir(wsRoot, ".") {
 			name := entry.Name()
 			if entry.IsDir() || strings.HasPrefix(name, ".") || name == "null" {
 				continue
 			}
-			safe, err := safepath.JoinUnder(workspaceDir, name)
-			if err != nil {
-				e.logger.Warn().Err(err).Str("entry", name).
-					Msg("artifacts: refusing entry that escapes workspace")
-				continue
-			}
-			files = append(files, harvestedFile{
-				name:       name,
-				sourcePath: safe,
-			})
+			files = append(files, newHarvestedFile(wsRoot, name, name))
 		}
 	}
 
@@ -332,7 +368,14 @@ func (e *Executor) persistArtifacts(ctx context.Context, executionID, projectID,
 	// task would re-register every stale file under the tree as ITS
 	// artifact. 1s slack mirrors verify.go::verifyClaimedFiles to
 	// account for sub-second mtime resolution.
-	files = append(files, e.collectProjectPersistedArtifacts(effectiveProjectDir, stepStart, preStepSnapshot)...)
+	if effectiveProjectDir != "" {
+		projectRoot, err := os.OpenRoot(effectiveProjectDir)
+		e.logHarvestRootError(effectiveProjectDir, err)
+		if err == nil {
+			defer func() { _ = projectRoot.Close() }()
+			files = append(files, e.collectProjectPersistedArtifacts(projectRoot)...)
+		}
+	}
 
 	// Disambiguate every harvested filename before persisting so
 	// multiple tasks producing the same logical name (e.g. two
@@ -357,19 +400,7 @@ func (e *Executor) persistArtifacts(ctx context.Context, executionID, projectID,
 	harvested := make([]map[string]string, 0, len(files))
 	seen := make(map[string]bool, len(files))
 	for _, f := range files {
-		// Unchanged staged inputs were removed by the pre-step gates above;
-		// now collapse identical same-name files from both output roots before
-		// disambiguation, without crossing harvests or task boundaries.
-		hash, err := hashFile(f.sourcePath)
-		if err != nil {
-			return nil, fmt.Errorf("artifact hash for %s: %w", f.name, err)
-		}
-		key := f.name + ":" + hash
-		if seen[key] {
-			continue
-		}
-		seen[key] = true
-		entry, err := e.storeOneArtifact(ctx, executionID, projectID, taskID, f.name, f.sourcePath, now)
+		entry, err := e.harvestOne(ctx, executionID, projectID, taskID, f, now, stepStart, preStepSnapshot, seen)
 		if err != nil {
 			return nil, err
 		}
@@ -378,6 +409,41 @@ func (e *Executor) persistArtifacts(ctx context.Context, executionID, projectID,
 		}
 	}
 	return harvested, nil
+}
+
+// harvestOne opens one listed file beneath its root (GitHub #359 H1),
+// applies the staleness gates and the same-name/same-bytes collapse from
+// that descriptor (H2), and stores it from the same descriptor (H3). An
+// entry the opener refuses (an escaping or absolute symlink, a FIFO or other
+// non-regular file, a vanished file) is skipped with a warning, as the
+// path check that preceded #359 skipped an escaping entry.
+func (e *Executor) harvestOne(ctx context.Context, executionID, projectID, taskID string, f harvestedFile, now, stepStart time.Time, preStepSnapshot ArtifactDirSnapshot, seen map[string]bool) (map[string]string, error) {
+	if harvestBeforeOpenHook != nil {
+		harvestBeforeOpenHook(f.name)
+	}
+	src, info, err := openHarvestFile(f.root, f.rel)
+	if err != nil {
+		e.logger.Warn().Err(err).Str("entry", f.sourcePath).
+			Msg("artifacts: refusing entry that is not a regular file beneath its harvest root")
+		return nil, nil
+	}
+	defer func() { _ = src.Close() }()
+	hash, err := hashOpenFile(src)
+	if err != nil {
+		return nil, fmt.Errorf("artifact hash for %s: %w", f.name, err)
+	}
+	if e.fileIsStale(f, info, hash, stepStart, preStepSnapshot) {
+		return nil, nil
+	}
+	// Unchanged staged inputs were removed by the gate above; now collapse
+	// identical same-name files from both output roots before
+	// disambiguation, without crossing harvests or task boundaries.
+	key := f.name + ":" + hash
+	if seen[key] {
+		return nil, nil
+	}
+	seen[key] = true
+	return e.storeOneArtifact(ctx, executionID, projectID, taskID, f.name, f.sourcePath, src, now)
 }
 
 // storeOneArtifact persists a single harvested file through the
@@ -389,10 +455,12 @@ func (e *Executor) persistArtifacts(ctx context.Context, executionID, projectID,
 // artifactStore is wired, else the harvested host path on the repo-only
 // fallback. Split out of persistArtifacts to keep that function's
 // cognitive complexity within the gocognit budget.
-func (e *Executor) storeOneArtifact(ctx context.Context, executionID, projectID, taskID, name, sourcePath string, now time.Time) (map[string]string, error) {
+func (e *Executor) storeOneArtifact(ctx context.Context, executionID, projectID, taskID, name, sourcePath string, src *os.File, now time.Time) (map[string]string, error) {
 	disambiguated := disambiguateArtifactName(name, executionID, now)
 	if e.artifactStore != nil {
-		stored, err := e.artifactStore.Store(ctx, projectID, executionID, taskID, disambiguated, sourcePath)
+		// The store reads the descriptor the harvest opened and checked,
+		// never sourcePath (GitHub #359 H3).
+		stored, err := e.artifactStore.StoreFile(ctx, projectID, executionID, taskID, disambiguated, src)
 		if err != nil {
 			return nil, fmt.Errorf("artifact store failed for %s: %w", disambiguated, err)
 		}
@@ -756,6 +824,15 @@ func (e *Executor) recordStepOutcomeWithSignalsAndBudget(
 	if e.outcomeRepo == nil {
 		return
 	}
+	// The recorder is called from the step's own defer, on the step's
+	// context. When that context is what ended the step (a max_wall_clock cap,
+	// an operator cancel) the row was refused by the database and lost, so the
+	// timeout and cancelled classes went uncounted for exactly the steps they
+	// exist for (outcome-quality LLD §S2 C1, GitHub #142). Safe because
+	// nothing below derives a value from ctx's deadline: the budget columns
+	// come from the agentBudgetStamp argument.
+	ctx, cancelRecord := finaliserContext(ctx)
+	defer cancelRecord()
 	entry := &persistence.ExecutionStepOutcome{
 		ID:                 persistence.GenerateID("outc"),
 		ProjectID:          task.ProjectID,

@@ -32,6 +32,8 @@ import (
 	"strings"
 	"sync"
 	"testing"
+
+	"vornik.io/vornik/internal/testutil/testenv"
 )
 
 // spawnShimPrograms are the host programs the daemon's request path must not
@@ -213,7 +215,7 @@ func buildVornikctl(t *testing.T) string {
 func runVornikctl(t *testing.T, args ...string) string {
 	t.Helper()
 	cmd := exec.Command(buildVornikctl(t), args...)
-	cmd.Env = append(os.Environ(),
+	cmd.Env = testenv.Clean(
 		"VORNIK_API_URL="+httpBase,
 		"VORNIK_CONFIG="+e2eConfigFile,
 		"VORNIK_CONFIGS_DIR="+e2eConfigsTree,

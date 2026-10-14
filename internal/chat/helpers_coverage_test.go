@@ -1,6 +1,7 @@
 package chat
 
 import (
+	"context"
 	"errors"
 	"strings"
 	"testing"
@@ -87,7 +88,7 @@ func TestClassifyCLIError_MapsCanonicalShapes(t *testing.T) {
 		{errors.New("something else entirely"), "error"},
 	}
 	for _, c := range cases {
-		if got := classifyCLIError(c.err); got != c.want {
+		if got := classifyCLIError(context.Background(), c.err); got != c.want {
 			t.Errorf("classifyCLIError(%v) = %q, want %q", c.err, got, c.want)
 		}
 	}

@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 
 	"vornik.io/vornik/internal/agentbench"
@@ -40,7 +41,8 @@ func (w gitWorkspace) Prepare(ctx context.Context, spec agentbench.TaskSpec, rep
 		return "", err
 	}
 	if status != "" {
-		return "", fmt.Errorf("benchmark workspace %s has uncommitted entries; refusing to start %q on unknown state", w.dir, spec.ID)
+		return "", fmt.Errorf("benchmark workspace %s has uncommitted entries; refusing to start %q on unknown state:\n%s",
+			w.dir, spec.ID, w.describeDirt(ctx))
 	}
 	var present []string
 	for _, tg := range spec.Targets {
@@ -64,6 +66,76 @@ func (w gitWorkspace) Prepare(ctx context.Context, spec agentbench.TaskSpec, rep
 		}
 	}
 	return w.git(ctx, "rev-parse", "HEAD")
+}
+
+// maxDirtListed caps how many dirty entries a refusal lists; the total is
+// always stated.
+const maxDirtListed = 20
+
+// depositTaskRE matches the task id in a backlog deposit's trailer
+// ("(via task_..., <date>)", api.renderBacklogDepositLine).
+var depositTaskRE = regexp.MustCompile(`via (task_[0-9A-Za-z_]+)`)
+
+// describeDirt lists the workspace's uncommitted entries and, per entry, the
+// tasks named by "via task_..." trailers in its UNCOMMITTED lines: the diff
+// against HEAD for a tracked path, the content of an untracked one. Best
+// effort and diagnostic only (benchmark LLD §12.25 D4, GitHub #307): the
+// refusal has already been decided, this only says what to look at.
+func (w gitWorkspace) describeDirt(ctx context.Context) string {
+	out, err := exec.CommandContext(ctx, "git", "-C", w.dir, "status", "--porcelain", "-z", "-uall").Output()
+	if err != nil {
+		return "  (could not list the entries: " + err.Error() + ")"
+	}
+	var entries []string
+	fields := strings.Split(string(out), "\x00")
+	for i := 0; i < len(fields); i++ {
+		f := fields[i]
+		if len(f) < 4 {
+			continue
+		}
+		entries = append(entries, f)
+		if f[0] == 'R' || f[0] == 'C' {
+			i++ // a rename's source path follows as its own field
+		}
+	}
+	var b strings.Builder
+	for i, e := range entries {
+		if i == maxDirtListed {
+			fmt.Fprintf(&b, "  ... and %d more (%d in all)\n", len(entries)-maxDirtListed, len(entries))
+			break
+		}
+		code, path := e[:2], e[3:]
+		fmt.Fprintf(&b, "  %s %s  origin: %s\n", code, path, w.dirtOrigin(ctx, code, path))
+	}
+	return strings.TrimRight(b.String(), "\n")
+}
+
+func (w gitWorkspace) dirtOrigin(ctx context.Context, code, path string) string {
+	var text []byte
+	if code == "??" {
+		text, _ = os.ReadFile(filepath.Join(w.dir, path)) //nolint:gosec // a path git listed inside the workspace
+	} else {
+		diff, _ := exec.CommandContext(ctx, "git", "-C", w.dir, "diff", "HEAD", "--", path).Output()
+		var added []string
+		for _, line := range strings.Split(string(diff), "\n") {
+			if strings.HasPrefix(line, "+") && !strings.HasPrefix(line, "+++") {
+				added = append(added, line)
+			}
+		}
+		text = []byte(strings.Join(added, "\n"))
+	}
+	seen := map[string]bool{}
+	var tasks []string
+	for _, m := range depositTaskRE.FindAllStringSubmatch(string(text), -1) {
+		if !seen[m[1]] {
+			seen[m[1]] = true
+			tasks = append(tasks, m[1])
+		}
+	}
+	if len(tasks) == 0 {
+		return "origin unknown"
+	}
+	return strings.Join(tasks, ", ") + " (backlog deposit trailer)"
 }
 
 // Produced reports, per target, whether it is tracked at HEAD: the branch

@@ -289,7 +289,7 @@ class ApprovalsCommandTest(unittest.TestCase):
 
     def test_status_marks_a_stale_pin(self):
         out = []
-        cli.status(argparse.Namespace(), env={}, out=out.append, load_config=lambda: hermes_config("hermes", pinned="gone", selected=True))
+        cli.status(argparse.Namespace(), values={}, out=out.append, load_config=lambda: hermes_config("hermes", pinned="gone", selected=True))
         self.assertIn('"gone" (no longer connected)', "\n".join(out))
 
     def test_off_clears_the_selection_only(self):
@@ -300,7 +300,7 @@ class ApprovalsCommandTest(unittest.TestCase):
     def test_status_reports_the_transport(self):
         out = []
         approval._REGISTERED = True
-        rc = cli.status(argparse.Namespace(), env={}, out=out.append, load_config=lambda: hermes_config("hermes", selected=True))
+        rc = cli.status(argparse.Namespace(), values={}, out=out.append, load_config=lambda: hermes_config("hermes", selected=True))
         text = "\n".join(out)
         self.assertRegex(text, r"Approval transport registered:\s*yes")
         self.assertRegex(text, r"Approval transport selected:\s*yes")

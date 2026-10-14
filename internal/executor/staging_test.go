@@ -8,23 +8,22 @@ import (
 	"github.com/rs/zerolog"
 )
 
-// TestAllowedStagingRoots_TempDir — the OS temp dir is always
-// allowed; previous-step workspaces and /tmp Telegram fallbacks land
-// here, and dropping it would break every existing artifact pipeline.
-func TestAllowedStagingRoots_TempDir(t *testing.T) {
-	roots := allowedStagingRoots("", "", "")
-	if len(roots) != 1 {
-		t.Fatalf("expected 1 root (just tmp), got %d: %v", len(roots), roots)
+// TestAllowedStagingRoots_TempDirIsNotARoot — superseded 2026-10-12 (GitHub
+// #351, 15-artifact-store.md §13): the OS temp dir used to be always allowed,
+// which admitted every live execution's workspace of every project. With no
+// project there are no roots at all.
+func TestAllowedStagingRoots_TempDirIsNotARoot(t *testing.T) {
+	if roots := allowedStagingRoots("", "", ""); len(roots) != 0 {
+		t.Fatalf("expected no roots, got %v", roots)
 	}
-	tmp, _ := filepath.EvalSymlinks(os.TempDir())
-	if roots[0] != tmp && roots[0] != filepath.Clean(os.TempDir()) {
-		t.Fatalf("first root should be tmpdir, got %q", roots[0])
+	if roots := allowedStagingRoots("", "p", ""); len(roots) != 0 {
+		t.Fatalf("expected no roots without a store or workspace, got %v", roots)
 	}
 }
 
 // TestAllowedStagingRoots_ProjectUploads — when a project workspace
 // path and project ID are supplied, the per-project uploads/ dir
-// joins the allowlist. Legacy path; modern flows route through the
+// is a root. Legacy path; modern flows route through the
 // artifacts store, but in-flight retries from before the migration
 // may still reference workspace uploads.
 func TestAllowedStagingRoots_ProjectUploads(t *testing.T) {
@@ -34,40 +33,26 @@ func TestAllowedStagingRoots_ProjectUploads(t *testing.T) {
 		t.Fatal(err)
 	}
 	roots := allowedStagingRoots(dir, "myproj", "")
-	if len(roots) != 2 {
-		t.Fatalf("expected 2 roots (tmp + uploads), got %d: %v", len(roots), roots)
+	if len(roots) != 1 {
+		t.Fatalf("expected 1 root (uploads), got %d: %v", len(roots), roots)
 	}
 	resolved, _ := filepath.EvalSymlinks(uploads)
-	found := false
-	for _, r := range roots {
-		if r == resolved || r == uploads {
-			found = true
-		}
-	}
-	if !found {
+	if roots[0] != resolved && roots[0] != uploads {
 		t.Fatalf("uploads dir missing from roots: %v (wanted %q)", roots, resolved)
 	}
 }
 
-// TestAllowedStagingRoots_ArtifactsPath — durable INPUT artifacts
-// land here. Without this entry the dispatcher's snapshot-and-rewrite
-// flow produces task payloads pointing into the artifacts store, and
-// every staging attempt would be rejected at the security check.
+// TestAllowedStagingRoots_ArtifactsPath — durable INPUT artifacts land in
+// the store. Since GitHub #351 only the project's own subtree is a root.
 func TestAllowedStagingRoots_ArtifactsPath(t *testing.T) {
 	artDir := t.TempDir()
-	roots := allowedStagingRoots("", "", artDir)
-	if len(roots) != 2 {
-		t.Fatalf("expected 2 roots (tmp + artifacts), got %d: %v", len(roots), roots)
+	roots := allowedStagingRoots("", "p", artDir)
+	if len(roots) != 1 {
+		t.Fatalf("expected 1 root (store/p), got %d: %v", len(roots), roots)
 	}
-	resolved, _ := filepath.EvalSymlinks(artDir)
-	found := false
-	for _, r := range roots {
-		if r == resolved || r == artDir {
-			found = true
-		}
-	}
-	if !found {
-		t.Fatalf("artifacts root missing from roots: %v (wanted %q)", roots, resolved)
+	want := canonicalRoot(filepath.Join(artDir, "p"))
+	if roots[0] != want {
+		t.Fatalf("store root = %q, want the project subtree %q", roots[0], want)
 	}
 }
 
@@ -140,35 +125,39 @@ func TestResolveStagingSrc_EmptyPathRejected(t *testing.T) {
 func TestAllowedStagingRoots_NonExistentUploads(t *testing.T) {
 	dir := t.TempDir()
 	roots := allowedStagingRoots(dir, "newproj", "")
-	if len(roots) != 2 {
-		t.Fatalf("expected 2 roots even when uploads/ missing, got %d: %v", len(roots), roots)
+	if len(roots) != 1 {
+		t.Fatalf("expected 1 root even when uploads/ missing, got %d: %v", len(roots), roots)
 	}
 }
 
-// TestAllowedStagingRoots_AllThree — the production wiring: project
-// workspace + artifacts path. The full set must include all three
-// roots, and pathUnderAny must accept paths under each.
-func TestAllowedStagingRoots_AllThree(t *testing.T) {
+// TestAllowedStagingRoots_ProductionWiring — project workspace + artifacts
+// path: exactly the two project roots; paths under each pass, a temp-dir
+// file and another project's stored file do not (GitHub #351).
+func TestAllowedStagingRoots_ProductionWiring(t *testing.T) {
 	wsDir := t.TempDir()
 	artDir := t.TempDir()
 	uploads := filepath.Join(wsDir, "p", "uploads")
 	_ = os.MkdirAll(uploads, 0o755)
+	_ = os.MkdirAll(filepath.Join(artDir, "p", "inputs", "abc"), 0o755)
+	_ = os.MkdirAll(filepath.Join(artDir, "q", "exec"), 0o755)
 	roots := allowedStagingRoots(wsDir, "p", artDir)
-	if len(roots) != 3 {
-		t.Fatalf("expected 3 roots, got %d: %v", len(roots), roots)
+	if len(roots) != 2 {
+		t.Fatalf("expected 2 roots, got %d: %v", len(roots), roots)
 	}
-
-	tmpFile := filepath.Join(os.TempDir(), "x.dat")
-	uploadFile := filepath.Join(uploads, "y.dat")
-	artFile := filepath.Join(artDir, "p", "inputs", "abc", "z.dat")
-	for _, p := range []string{tmpFile, uploadFile, artFile} {
-		// Resolve as the staging code does so symlink farms don't
-		// flake the assertion.
+	canon := func(p string) string {
 		if resolved, err := filepath.EvalSymlinks(filepath.Dir(p)); err == nil {
-			p = filepath.Join(resolved, filepath.Base(p))
+			return filepath.Join(resolved, filepath.Base(p))
 		}
-		if !pathUnderAny(p, roots) {
+		return p
+	}
+	for _, p := range []string{filepath.Join(uploads, "y.dat"), filepath.Join(artDir, "p", "inputs", "abc", "z.dat")} {
+		if !pathUnderAny(canon(p), roots) {
 			t.Errorf("path %q should be allowed, roots=%v", p, roots)
+		}
+	}
+	for _, p := range []string{filepath.Join(os.TempDir(), "x.dat"), filepath.Join(artDir, "q", "exec", "z.dat")} {
+		if pathUnderAny(canon(p), roots) {
+			t.Errorf("path %q must NOT be allowed, roots=%v", p, roots)
 		}
 	}
 }

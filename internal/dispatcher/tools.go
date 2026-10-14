@@ -15,6 +15,7 @@ import (
 	"vornik.io/vornik/internal/budget"
 	"vornik.io/vornik/internal/chat"
 	"vornik.io/vornik/internal/config"
+	"vornik.io/vornik/internal/ctxerr"
 	"vornik.io/vornik/internal/executor"
 	"vornik.io/vornik/internal/idfmt"
 	"vornik.io/vornik/internal/memory"
@@ -49,14 +50,17 @@ type basePathProvider interface {
 // create_task `input_files` path is allowed to live under. When an
 // operator pins allowedInputRoots explicitly that set wins verbatim;
 // otherwise we derive the always-legitimate roots the dispatcher can
-// see: os.TempDir() (fallback landing spot for channel uploads),
+// see, all of them the ACTIVE PROJECT's own (GitHub #351, 2026-10-12,
+// 15-artifact-store.md §13.2 C5 — os.TempDir() and the whole store base
+// were roots before, which let a chat model launder another project's
+// stored file or a live execution's temp file into this project):
 // <projectWorkspacePath>/<projectID>/uploads/ (where Telegram/webchat
 // uploads land when an active project is set — must mirror both the
 // write side in telegram.handleMessage and the executor's
 // allowedStagingRoots, or channel uploads get rejected at create_task;
-// incident-telegram-upload-input-roots-20260712), and the artifact
-// store base path (where prior-task artifacts and freshly-snapshotted
-// inputs resolve to). Roots are symlink-resolved so the containment
+// incident-telegram-upload-input-roots-20260712), and the project's
+// subtree of the artifact store (<base>/<projectID>, where its prior-task
+// artifacts and snapshotted inputs live). Roots are symlink-resolved so the containment
 // check in confineInputFileSource compares like-for-like.
 func (te *ToolExecutor) inputFileSourceRoots(projectID string) []string {
 	if len(te.allowedInputRoots) > 0 {
@@ -66,20 +70,24 @@ func (te *ToolExecutor) inputFileSourceRoots(projectID string) []string {
 		}
 		return roots
 	}
-	roots := []string{resolveRootForContainment(os.TempDir())}
-	if te.projectWorkspacePath != "" && projectID != "" {
-		// Same construction as the Telegram upload write path:
-		// CleanPathComponent + JoinUnder, so a hostile projectID can't
-		// widen the root beyond the workspace tree.
-		if safeID, err := safepath.CleanPathComponent(projectID); err == nil {
-			if uploads, err := safepath.JoinUnder(te.projectWorkspacePath, safeID, "uploads"); err == nil {
-				roots = append(roots, resolveRootForContainment(uploads))
-			}
+	roots := []string{}
+	// Same construction as the Telegram upload write path:
+	// CleanPathComponent + JoinUnder, so a hostile projectID can't
+	// widen a root beyond its tree. No project, no roots.
+	safeID, err := safepath.CleanPathComponent(projectID)
+	if projectID == "" || err != nil || safeID != projectID {
+		return roots
+	}
+	if te.projectWorkspacePath != "" {
+		if uploads, err := safepath.JoinUnder(te.projectWorkspacePath, safeID, "uploads"); err == nil {
+			roots = append(roots, resolveRootForContainment(uploads))
 		}
 	}
 	if bp, ok := te.artifactStore.(basePathProvider); ok {
 		if base := bp.BasePath(); base != "" {
-			roots = append(roots, resolveRootForContainment(base))
+			if sub, err := safepath.JoinUnder(base, safeID); err == nil {
+				roots = append(roots, resolveRootForContainment(sub))
+			}
 		}
 	}
 	return roots
@@ -467,6 +475,10 @@ func (te *ToolExecutor) Execute(ctx context.Context, tc chat.ToolCall, activePro
 	return result
 }
 
+// toolAuditWriteTimeout bounds the detached audit write, the budget of the
+// executor's other detached writes.
+const toolAuditWriteTimeout = 5 * time.Second
+
 func (te *ToolExecutor) logAudit(ctx context.Context, tool, input, output, projectID string, dur time.Duration) {
 	if te.auditRepo == nil {
 		return
@@ -484,7 +496,12 @@ func (te *ToolExecutor) logAudit(ctx context.Context, tool, input, output, proje
 		DurationMs: persistence.ClampToolAuditDurationMs(dur.Milliseconds()),
 		CreatedAt:  time.Now(),
 	}
-	if err := te.auditRepo.Log(ctx, entry); err != nil {
+	// Detached and bounded: the call that used up the turn is the one whose
+	// row an operator most needs, and the turn context has just ended
+	// (outcome-quality LLD §S5 #7, GitHub #142).
+	writeCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), toolAuditWriteTimeout)
+	defer cancel()
+	if err := te.auditRepo.Log(writeCtx, entry); err != nil {
 		te.logger.Warn().Err(err).Str("tool", tool).Msg("dispatcher: failed to write audit entry")
 	}
 }
@@ -839,6 +856,17 @@ func (te *ToolExecutor) createTask(ctx context.Context, argsJSON string, activeP
 		for _, src := range args.InputFiles {
 			resolved, fromArtifactID := te.resolveInputFileSourceTracked(ctx, src)
 			if fromArtifactID {
+				// GitHub #351: an artifact ID names a row of the ACTIVE
+				// project only; another project's row is refused rather
+				// than snapshotted into this one.
+				if owner := te.inputArtifactProject(ctx, src); owner == "" || owner != project {
+					te.logger.Warn().Str("artifact_id", src).Str("project", project).
+						Str("artifact_project", owner).
+						Msg("dispatcher: create_task input_files names another project's artifact — rejecting")
+					return ToolResult{Content: fmt.Sprintf(
+						"Cannot create task: input_files entry %q is not an artifact of project %q. Use an artifact_id from this project's [Attached files] block.",
+						src, project)}
+				}
 				paths = append(paths, resolved)
 				continue
 			}
@@ -854,7 +882,7 @@ func (te *ToolExecutor) createTask(ctx context.Context, argsJSON string, activeP
 				// taught the LLM that channel uploads were unreachable
 				// and it confabulated workarounds to the operator.
 				return ToolResult{Content: fmt.Sprintf(
-					"Cannot create task: input_files entry %q is not an allowed input. Allowed inputs: an artifact_id (from an [Attached files] block), a channel-upload path under the active project's uploads/ directory, or a file under the system temp dir. Do NOT retry with a bare filename or a path outside those roots.",
+					"Cannot create task: input_files entry %q is not an allowed input. Allowed inputs: an artifact_id of this project (from an [Attached files] block), a channel-upload path under the active project's uploads/ directory, or a stored artifact path of this project. Do NOT retry with a bare filename or a path outside those roots.",
 					src)}
 			}
 			paths = append(paths, canonical)
@@ -866,13 +894,18 @@ func (te *ToolExecutor) createTask(ctx context.Context, argsJSON string, activeP
 				name := filepathBase(src)
 				art, err := te.artifactStore.StoreInput(ctx, project, name, src)
 				if err != nil {
+					// GitHub #351 (C5): the executor stages only paths that
+					// name an own-project artifact row, so passing the raw
+					// host path on would make this input vanish silently.
+					// Refuse visibly instead.
 					te.logger.Warn().
 						Err(err).
 						Str("source", src).
 						Str("project", project).
-						Msg("dispatcher: input snapshot failed — falling back to source path")
-					rewritten = append(rewritten, src)
-					continue
+						Msg("dispatcher: input snapshot failed — refusing create_task")
+					return ToolResult{Content: fmt.Sprintf(
+						"Cannot create task: input file %q could not be stored (%v). Retry, or create the task without it.",
+						name, err)}
 				}
 				rewritten = append(rewritten, art.StoragePath)
 				snapshottedArtifactIDs = append(snapshottedArtifactIDs, art.ID)
@@ -1326,6 +1359,19 @@ func (te *ToolExecutor) waitForTask(ctx context.Context, argsJSON string, allowe
 		}
 	}
 	deadline := time.Now().Add(timeout)
+	// Stop a reserve before the chat turn's own deadline, so the model gets
+	// the "still running" result while the turn can still use it. The UI and
+	// Telegram turns are 5m; the 600s default used to outlive them
+	// (outcome-quality LLD §S5 #7, GitHub #142). A context without a deadline
+	// keeps the tool's own timeout. An end already in the past means one read
+	// and no wait — never a negative wait.
+	turnBound := false
+	if turnEnd, ok := ctx.Deadline(); ok {
+		if end := turnEnd.Add(-waitForTaskTurnReserve); end.Before(deadline) {
+			deadline = end
+			turnBound = true
+		}
+	}
 	// Package-level vars so tests can shorten the fast-poll window
 	// without waiting 30 seconds. Production values: 2s fast, 5s
 	// slow after a 30s grace; the constants here mirror the
@@ -1337,7 +1383,7 @@ func (te *ToolExecutor) waitForTask(ctx context.Context, argsJSON string, allowe
 	for {
 		select {
 		case <-ctx.Done():
-			return ToolResult{Content: fmt.Sprintf("wait_for_task cancelled: %v", ctx.Err())}
+			return waitForTaskEnded(ctx, args.TaskID)
 		default:
 		}
 		task, err := te.taskRepo.Get(ctx, args.TaskID)
@@ -1353,6 +1399,12 @@ func (te *ToolExecutor) waitForTask(ctx context.Context, argsJSON string, allowe
 			return te.formatWaitResult(ctx, task)
 		}
 
+		if !time.Now().Before(deadline) && turnBound {
+			return ToolResult{Content: fmt.Sprintf(
+				"wait_for_task stopped waiting to leave this chat turn time to answer; task %s is still %s. "+
+					"Do not wait for it again in this turn: tell the user it is still running, and check it later with get_task_status.",
+				args.TaskID, task.Status)}
+		}
 		if time.Now().After(deadline) {
 			return ToolResult{Content: fmt.Sprintf(
 				"wait_for_task timed out after %s; task %s is still %s. Call get_task_status later or wait_for_task again with a longer timeout.",
@@ -1361,12 +1413,31 @@ func (te *ToolExecutor) waitForTask(ctx context.Context, argsJSON string, allowe
 		if time.Since(pollStart) > fastPollWindow {
 			pollInterval = waitForTaskSlowPoll
 		}
+		// Never sleep past the computed end.
+		sleep := pollInterval
+		if left := time.Until(deadline); left < sleep {
+			sleep = max(left, 0)
+		}
 		select {
 		case <-ctx.Done():
-			return ToolResult{Content: fmt.Sprintf("wait_for_task cancelled: %v", ctx.Err())}
-		case <-time.After(pollInterval):
+			return waitForTaskEnded(ctx, args.TaskID)
+		case <-time.After(sleep):
 		}
 	}
+}
+
+// waitForTaskTurnReserve is how long before the chat turn's deadline
+// wait_for_task stops waiting, leaving the turn time for its final model call.
+const waitForTaskTurnReserve = 60 * time.Second
+
+// waitForTaskEnded phrases a wait whose context ended, by why it ended: the
+// turn's time limit is not a cancel (outcome-quality LLD §S5 #7).
+func waitForTaskEnded(ctx context.Context, taskID string) ToolResult {
+	if ctxerr.Classify(ctx, nil) == ctxerr.Timeout {
+		return ToolResult{Content: fmt.Sprintf(
+			"wait_for_task stopped: this chat turn's time limit ran out while task %s was still running; check it later with get_task_status.", taskID)}
+	}
+	return ToolResult{Content: fmt.Sprintf("wait_for_task cancelled: %v", ctx.Err())}
 }
 
 // formatWaitResult builds the dispatcher-facing summary for a
@@ -2444,7 +2515,7 @@ func DispatcherTools() []chat.Tool {
 				Parameters: json.RawMessage(`{
 					"type":"object",
 					"properties":{
-						"content":{"type":"string","description":"Markdown source. Will be rendered verbatim — do not pre-process."},
+						"content":{"type":"string","description":"GitHub-flavoured markdown source; do not pre-process. Raw HTML, images and YAML front matter are dropped for safety (image alt text is kept)."},
 						"name":{"type":"string","description":"Base filename, no extension (e.g. 'CV-Senior-Lead-AI-MSD-20260518-en'). Used for every requested format."},
 						"formats":{"type":"array","items":{"type":"string","enum":["md","html","pdf","docx"]},"description":"Formats to render. Default is md + html + pdf; add docx for a Word document."}
 					},

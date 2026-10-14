@@ -1,6 +1,6 @@
 ---
 description: Set (or clear) a vornik knowledge skill's GLOBAL reach — a global skill injects into every project's roles
-allowed-tools: mcp__vornik__skill_set_global, mcp__vornik__skill_get, mcp__vornik__skill_list
+allowed-tools: mcp__plugin_vornik-companion_vornik__skill_set_global, mcp__plugin_vornik-companion_vornik__skill_get, mcp__plugin_vornik-companion_vornik__skill_list
 argument-hint: <skill id> [global|project]
 ---
 
@@ -16,7 +16,7 @@ approved.
 
 Parse `$ARGUMENTS` as `<skill id> [global|project]`. Default to **global** if
 only an id is given (promotion is the common case). Then call
-`mcp__vornik__skill_set_global` with `id=<the id>` and `global=true` (for
+`mcp__plugin_vornik-companion_vornik__skill_set_global` with `id=<the id>` and `global=true` (for
 `global`) or `global=false` (for `project`).
 
 Because a global skill fires everywhere, this is a deliberately privileged

@@ -41,6 +41,17 @@ func TestNoDirectExternalBaseURLReads(t *testing.T) {
 	}
 
 	var offenders []string
+	parsed := 0
+	// #334 item 6 (audit 2026-10-12): a missing internal/ or cmd/ was skipped
+	// and every parse error read as clean, so the guard could report "no
+	// direct reads" over zero files. It publishes how many it parsed and
+	// fails under a floor (checked after the walk).
+	defer func() {
+		t.Logf("ExternalBaseURL guard: examined %d parsed non-test Go files", parsed)
+		if parsed < 100 {
+			t.Errorf("ExternalBaseURL guard: examined %d files (floor 100); a guard that looked at nothing has not passed", parsed)
+		}
+	}()
 	for _, sub := range []string{"internal", "cmd"} {
 		base := filepath.Join(root, sub)
 		if _, err := os.Stat(base); err != nil {
@@ -71,6 +82,7 @@ func TestNoDirectExternalBaseURLReads(t *testing.T) {
 			if perr != nil {
 				return nil // unparseable files are not this test's business
 			}
+			parsed++
 			ast.Inspect(f, func(n ast.Node) bool {
 				sel, ok := n.(*ast.SelectorExpr)
 				if !ok || sel.Sel.Name != "ExternalBaseURL" {

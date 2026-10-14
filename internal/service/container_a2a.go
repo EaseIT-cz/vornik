@@ -53,5 +53,7 @@ func (a a2aTaskCreatorAdapter) Create(ctx context.Context, p a2a.TaskCreateParam
 		Priority:       p.Priority,
 		CreationSource: p.CreationSource,
 		ExtraContext:   p.ExtraContext,
+		// The adapter serves only the A2A surface: the caller wrote the goal.
+		GoalOrigin: persistence.TaskGoalOriginA2A,
 	})
 }

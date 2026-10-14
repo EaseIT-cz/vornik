@@ -350,11 +350,11 @@ func (s *Service) DecideChoice(ctx context.Context, d *Device, requestID, shownS
 	if err != nil {
 		return err
 	}
-	if r.Kind != persistence.ApprovalKindHostAction {
+	if !s.isChoiceKind(r.Kind) {
 		return ErrBadChoice
 	}
 	offered := false
-	for _, c := range HostChoices(*r) {
+	for _, c := range s.choiceValues(*r) {
 		offered = offered || c == choice
 	}
 	if !offered {
@@ -371,8 +371,10 @@ func (s *Service) DecideChoice(ctx context.Context, d *Device, requestID, shownS
 		}
 		return err
 	}
-	doc, _ := hostDoc(*r)
-	s.record(harnessOf(doc), choice)
+	if r.Kind == persistence.ApprovalKindHostAction {
+		doc, _ := hostDoc(*r)
+		s.record(harnessOf(doc), choice)
+	}
 	if !approve {
 		return nil
 	}

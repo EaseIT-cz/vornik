@@ -545,8 +545,8 @@ func TestMarkFailed_TaskUpdateErrorSurfaces(t *testing.T) {
 	w.now = func() time.Time { return now }
 
 	err := w.markFailed(context.Background(), runningExec("e1", "t1", "p1", now, 45*time.Minute), 45*time.Minute)
-	require.Error(t, err, "task Update error must surface")
-	assert.Contains(t, err.Error(), "task Update")
+	require.Error(t, err, "task write error must surface")
+	assert.Contains(t, err.Error(), "task transition")
 	assert.Len(t, exec.failures(), 1, "execution row was flipped before the Update error")
 }
 
@@ -629,6 +629,13 @@ type errOnUpdateTaskRepo struct{ *stubTaskRepo }
 
 func (r *errOnUpdateTaskRepo) Update(_ context.Context, _ *persistence.Task) error {
 	return errors.New("update failed")
+}
+
+// TransitionConditional fails too: since 2026-10-12 (GitHub #142, 05-scheduler
+// §4.12 C3) the stuck-execution task write is a conditional transition, not a
+// full-row Update.
+func (r *errOnUpdateTaskRepo) TransitionConditional(context.Context, string, []persistence.TaskStatus, persistence.TaskStatus, persistence.TransitionOpts) (bool, error) {
+	return false, errors.New("update failed")
 }
 
 // nilGetTaskRepo answers Get the way production does when the task vanished

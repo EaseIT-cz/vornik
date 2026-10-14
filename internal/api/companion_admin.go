@@ -192,7 +192,18 @@ func (s *Server) companionAdminTool(ctx context.Context, key *persistence.APIKey
 	case agentadmin.VerbShowWorkflow:
 		out, err = s.agentAdmin.ShowWorkflowJSON(ctx, key, args)
 	default:
-		out, err = s.agentAdmin.Do(ctx, key, name, args)
+		var res agentadmin.Result
+		res, err = s.agentAdmin.Do(ctx, key, name, args)
+		if err == nil && res.Effect == agentadmin.EffectRefused {
+			// Design §23.2 point 1: the rule is in hand only before the
+			// result is marshalled (it is json:"-").
+			rule := res.Rule
+			if rule == "" {
+				rule = agentadmin.RuleOther
+			}
+			s.recordAgentRefusal(ctx, key, name, rule)
+		}
+		out = res
 	}
 	if err != nil {
 		return "", fmt.Errorf("%s failed: %w", name, err)

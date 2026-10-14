@@ -448,7 +448,7 @@ func TestDeleteProject_AuditRowRecordsTheCacheEviction(t *testing.T) {
 	audit := &stubAudit{}
 	s := newSweeperForDeleteTest(t, del, audit)
 
-	if err := s.deleteProject(context.Background(), testDeletableProject()); err != nil {
+	if _, err := s.deleteProject(context.Background(), testDeletableProject()); err != nil {
 		t.Fatalf("deleteProject: %v", err)
 	}
 	if len(audit.rows) != 1 {
@@ -471,7 +471,7 @@ func TestDeleteProject_AuditRowSaysWhenEvictionNeverRan(t *testing.T) {
 	audit := &stubAudit{}
 	s := newSweeperForDeleteTest(t, del, audit)
 
-	if err := s.deleteProject(context.Background(), testDeletableProject()); err != nil {
+	if _, err := s.deleteProject(context.Background(), testDeletableProject()); err != nil {
 		t.Fatalf("deleteProject: %v", err)
 	}
 	got := auditPayload(t, audit.rows[0])
@@ -549,7 +549,7 @@ func TestDeleteProject_NoWarningWhenTheEvictionRanAndFoundNothing(t *testing.T) 
 	s := newSweeperForDeleteTest(t, del, audit)
 	s.cfg.Logger = zerolog.New(&logs)
 
-	if err := s.deleteProject(context.Background(), testDeletableProject()); err != nil {
+	if _, err := s.deleteProject(context.Background(), testDeletableProject()); err != nil {
 		t.Fatalf("deleteProject: %v", err)
 	}
 	if strings.Contains(logs.String(), "NO embedding-cache eviction") {
@@ -571,7 +571,7 @@ func TestDeleteProject_WarnsWhenTheEvictionNeverRan(t *testing.T) {
 	s := newSweeperForDeleteTest(t, del, audit)
 	s.cfg.Logger = zerolog.New(&logs)
 
-	if err := s.deleteProject(context.Background(), testDeletableProject()); err != nil {
+	if _, err := s.deleteProject(context.Background(), testDeletableProject()); err != nil {
 		t.Fatalf("deleteProject: %v", err)
 	}
 	if !strings.Contains(logs.String(), "NO embedding-cache eviction") {

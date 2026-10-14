@@ -190,7 +190,7 @@ func (c *CodexCLIClient) invoke(ctx context.Context, messages []Message, tools [
 
 	resp, rerr := c.runCodex(ctx, id, req)
 	if rerr != nil {
-		c.recordMetrics(start, classifyCLIError(rerr))
+		c.recordMetrics(start, classifyCLIError(ctx, rerr))
 		return nil, rerr
 	}
 	if tools != nil {
@@ -308,7 +308,7 @@ func (c *CodexCLIClient) runCodex(ctx context.Context, id uint64, req *codexRequ
 
 	// The process-spawn law's ConfiguredProgram kind: the program is the
 	// configured one; the per-call args, stdin and env are ours.
-	opts := spawn.ConfiguredOptions{Args: args}
+	opts := spawn.ConfiguredOptions{Args: args, WaitDelay: cliWaitDelay}
 	// Prepend the codex binary's directory to PATH so its node
 	// dependency is discoverable. systemd user services inherit a
 	// minimal PATH that doesn't include /home/linuxbrew/.linuxbrew/bin
@@ -366,6 +366,13 @@ func (c *CodexCLIClient) runCodex(ctx context.Context, id uint64, req *codexRequ
 	_ = stdout.Close()
 	waitErr := cmd.Wait()
 
+	// See CLIClient.runClaude: a call its bound ended names that cause
+	// (GitHub #142, outcome-quality-design §S8 F1).
+	if ctxErr := ctx.Err(); ctxErr != nil && (parseErr != nil || waitErr != nil) {
+		return nil, fmt.Errorf("codex: %s did not answer within %s: %w (stderr: %s)",
+			c.binary, c.timeout, ctxErr, truncate(stderr.String(), 500))
+	}
+
 	if parseErr != nil {
 		return nil, fmt.Errorf("codex: parse stdout: %w (stderr: %s)", parseErr, truncate(stderr.String(), 500))
 	}
@@ -386,7 +393,7 @@ func (c *CodexCLIClient) recordMetrics(start time.Time, status string) {
 	duration := time.Since(start).Seconds()
 	c.metrics.RequestsTotal.WithLabelValues(c.model, status).Inc()
 	c.metrics.RequestDuration.WithLabelValues(c.model).Observe(duration)
-	if status != "success" {
+	if statusCountsAsError(status) {
 		c.metrics.ErrorsTotal.WithLabelValues(c.model, status).Inc()
 	}
 }

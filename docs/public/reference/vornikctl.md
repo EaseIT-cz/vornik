@@ -775,6 +775,7 @@ Schema & storage:
   database_schema       Verify expected tables and indexes exist (incl. 2026.4.11+ additions)
   orphan_fk_rows        Detect orphan audit / watcher rows referencing missing tasks (cost-ledger rows are kept, reported)
   orphan_worktrees      .worktrees/ subdirs with no matching live task
+  preserved_work        Work a failed merge-back pinned to refs/vornik/preserved/ (recover or let expire)
   config_crlf           Config files with CRLF line endings (UI YAML-writer drift); --fix normalizes to LF
   config_template_drift Deployed configs that lack what this version's templates ship (preserve-existing
                         upgrades never apply a template fix); needs the installer's .templates baseline
@@ -800,6 +801,7 @@ Security:
   approver_devices      Agent approvals: a warning when an agent namespace exists with no paired device or no push
   agent_namespace_budget Agent namespaces whose project budgets sum above the approved ceiling, naming the waiting cover request
   agent_model_catalogue Agent role models: agent_admin.models entries not offered to agent roles (no route, a command-line provider, or remote without an exact price)
+  agent_refusal_burst   Agent namespaces with 20 or more refused agent-admin calls in the last hour (a loop or a probe); states how many it examined
 
 Models:
   model_health          Role-pinned models with high recent failure rate or
@@ -2638,6 +2640,14 @@ Skip the grace window — wipe an archived project on the next sweeper tick
 Rewind the scheduledDeleteAt timestamp to ~now and kick the
 archive-sweeper. The project's YAML, DB rows, and artifact
 blobs are wiped within seconds.
+
+The command waits (up to 20s) for the sweeper's outcome: it
+prints "Deleted" when the wipe finished, exits non-zero with
+the error when it failed (the project stays archived and is
+retried on the next tick), and says the wipe is still running
+when no outcome arrived in time. When the project was removed
+but some artifact files could not be deleted, it says so and
+exits 3 (the residue is audited as project.delete.partial).
 
 Requires the project to be archived first (use 'project
 archive' if it isn't). Cannot be undone.

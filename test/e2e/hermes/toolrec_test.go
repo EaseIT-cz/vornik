@@ -37,7 +37,7 @@ func postThrough(t *testing.T, h http.Handler, path, body string) map[string]any
 // record the tools it offered, so with a real model H1's tool-set check
 // never ran. The recorder sees them on the wire.
 func TestToolRecorderRecordsOfferedTools(t *testing.T) {
-	rec := NewToolRecorder(upstreamEcho(t).URL)
+	rec := NewToolRecorder(upstreamEcho(t).URL, 1024)
 	postThrough(t, rec, "/v1/chat/completions",
 		`{"model":"m","messages":[],"tools":[{"type":"function","function":{"name":"vornik_status"}},{"type":"function","function":{"name":"vornik_catalog"}}]}`)
 	got := strings.Join(rec.ToolsSeen(), ",")
@@ -51,7 +51,7 @@ func TestToolRecorderRecordsOfferedTools(t *testing.T) {
 // anything. The first attempt is forwarded unchanged; later attempts are
 // re-sampled with a per-attempt seed.
 func TestToolRecorderResamplesOnRetry(t *testing.T) {
-	rec := NewToolRecorder(upstreamEcho(t).URL)
+	rec := NewToolRecorder(upstreamEcho(t).URL, 1024)
 	first := postThrough(t, rec, "/v1/chat/completions", `{"model":"m","messages":[],"temperature":0}`)
 	if first["temperature"] != float64(0) || first["seed"] != nil {
 		t.Fatalf("attempt 1 was modified: %v", first)
@@ -64,7 +64,7 @@ func TestToolRecorderResamplesOnRetry(t *testing.T) {
 }
 
 func TestToolRecorderPassesOtherPathsThrough(t *testing.T) {
-	rec := NewToolRecorder(upstreamEcho(t).URL)
+	rec := NewToolRecorder(upstreamEcho(t).URL, 1024)
 	rec.SetAttempt(2)
 	out := postThrough(t, rec, "/v1/embeddings", `{"input":"x"}`)
 	if out["input"] != "x" || out["seed"] != nil {
@@ -80,7 +80,7 @@ func TestToolRecorderPassesOtherPathsThrough(t *testing.T) {
 // model only inside the completion request. Both model fronts watch the
 // request bodies for it.
 func TestToolRecorderWatchesRequestBodies(t *testing.T) {
-	rec := NewToolRecorder(upstreamEcho(t).URL)
+	rec := NewToolRecorder(upstreamEcho(t).URL, 1024)
 	rec.Watch("Svoboda")
 	postThrough(t, rec, "/v1/chat/completions", `{"messages":[{"role":"user","content":"who is my physio?"}]}`)
 	if rec.WatchSeen() {

@@ -859,6 +859,8 @@ func (c *Container) initTelegram() error {
 		return fmt.Errorf("failed to create telegram bot: %w", err)
 	}
 
+	// Art 50 (GitHub #342): pushes outside ChannelReceiver share its disclosure state.
+	bot.SetAIDisclosure(c.AIDisclosure)
 	c.TelegramBot = bot
 
 	// Phase 4 (oidc-identity-permissions-design §5.1/§5.3): route the bot's
@@ -958,6 +960,15 @@ func (c *Container) initLogger() {
 		Level(level)
 }
 
+// openDatabase is how initDatabase opens the backend: storage.Open, unless a
+// test replaced it with WithDatabaseOpener.
+func (c *Container) openDatabase() func(context.Context, config.DatabaseConfig) (*storage.Backend, error) {
+	if c.databaseOpener != nil {
+		return c.databaseOpener
+	}
+	return storage.Open
+}
+
 // initDatabase initializes the database connection.
 func (c *Container) initDatabase() error {
 	driver := c.Config.Database.Driver
@@ -971,7 +982,7 @@ func (c *Container) initDatabase() error {
 		Str("database", c.Config.Database.Name).
 		Msg("opening database backend")
 
-	backend, err := storage.Open(context.Background(), c.Config.Database)
+	backend, err := c.openDatabase()(context.Background(), c.Config.Database)
 	if err != nil {
 		return fmt.Errorf("failed to open database: %w", err)
 	}

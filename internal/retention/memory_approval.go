@@ -48,6 +48,12 @@ func idleEligibility(days int) string {
 // MemoryApprovalRequests proposes finite-TTL idle chunks, not deletes. Requests
 // of any status suppress re-asking for 30 days; stable IDs deduplicate replicas.
 func (s *Sweeper) MemoryApprovalRequests(ctx context.Context, projectID string, days int, now time.Time) ([]persistence.AgentApprovalRequestRow, error) {
+	if s.sqlite {
+		// Postgres-only: INTERVAL arithmetic and jsonb here, and the apply
+		// path is the chunk sweep's graph settlement. The container treats
+		// this error as "idle memory preserved" (design §4.2 D5).
+		return nil, ErrPostgresOnly
+	}
 	days = MemoryIdleDays(days)
 	if projectID == "" || days < 1 || days > 36500 {
 		return nil, errors.New("invalid memory idle retention policy")
@@ -55,7 +61,7 @@ func (s *Sweeper) MemoryApprovalRequests(ctx context.Context, projectID string, 
 	rows, err := s.db.QueryContext(ctx, `SELECT id,source_name,LEFT(content,240),content_hash,created_at,last_used_at,expires_at
  FROM project_memory_chunks WHERE project_id=$1 AND `+idleEligibility(days)+`
  AND NOT EXISTS (SELECT 1 FROM agent_approval_requests a WHERE a.kind='memory_retention' AND a.rendered::jsonb->>'project_id'=$1 AND a.rendered::jsonb->>'chunk_id'=project_memory_chunks.id AND a.created_at>$2 - INTERVAL '30 days')
- ORDER BY COALESCE(last_used_at,created_at),id LIMIT 20`, projectID, now)
+ ORDER BY COALESCE(last_used_at,created_at),id LIMIT 20`, projectID, s.bindTime(now))
 	if err != nil {
 		return nil, fmt.Errorf("find idle memory: %w", err)
 	}
@@ -89,6 +95,9 @@ func (s *Sweeper) MemoryApprovalRequests(ctx context.Context, projectID string, 
 // transaction. The phone decision, exact displayed read set and idle horizon
 // must still match; changed or used chunks produce no deletion.
 func (s *Sweeper) ApplyMemoryApproval(ctx context.Context, r persistence.AgentApprovalRequestRow, days int, now time.Time) (int, error) {
+	if s.sqlite {
+		return 0, ErrPostgresOnly
+	}
 	if r.Kind != persistence.ApprovalKindMemoryRetention || r.Status != persistence.ApprovalApproved || r.DecidedByDevice == "" {
 		return 0, errors.New("memory deletion requires a paired-device approval")
 	}

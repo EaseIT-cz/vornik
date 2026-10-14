@@ -786,6 +786,11 @@ func (b *Bot) handleAutopilot(ctx context.Context, chatID int64, parts []string)
 // single summary message, replacing the full history. This reduces token usage
 // while preserving conversational context.
 func (b *Bot) handleSummarize(ctx context.Context, chatID int64) error {
+	// Art 50 (GitHub #342): the reply below is raw LLM output sent outside
+	// ChannelReceiver, so the chat is disclosed to first (once per chat).
+	if err := b.discloseChat(ctx, chatID); err != nil {
+		return err
+	}
 	if b.llmClient == nil {
 		return b.sendMessage(ctx, chatID, "LLM client not available.")
 	}

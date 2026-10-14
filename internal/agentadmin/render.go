@@ -111,8 +111,16 @@ func (r *Renderer) Render(st *State, verb string, input json.RawMessage) (Change
 	default:
 		return Change{}, ErrUnknownVerb
 	}
-	if err != nil || c.Class == Refused {
+	if err != nil {
 		return c, err
+	}
+	if c.Class == Refused {
+		// Another namespace's ID is answered "there is no project" on
+		// purpose (§5); the ledger records what happened (§23.2).
+		if namesForeignNamespace(ns, input) {
+			c.Rule = RuleOutOfNamespace
+		}
+		return c, nil
 	}
 	c.Verb, c.Namespace = verb, ns
 	if lock := firstLocked(st, c.Locks); lock != "" {

@@ -39,6 +39,22 @@ var backlogDepositValidKinds = map[string]bool{
 	"refactor":     true,
 }
 
+// backlogDepositFoundAtLevels is the optional found_at vocabulary: the level
+// at which a bug was found (https://docs.vornik.io §4.7, operator
+// 2026-10-14). A bug's regression test belongs at that level, so a deposit
+// records it while the finder still knows it. "review" is a code review or
+// audit; a deposit is pre-triage, so it is accepted without the observed
+// level the fix's commit must name. Design: autonomous-dev-loop §C1,
+// amendment 2026-10-14.
+var backlogDepositFoundAtLevels = map[string]bool{
+	"unit":         true,
+	"integration":  true,
+	"executor-e2e": true,
+	"e2e-lane":     true,
+	"production":   true,
+	"review":       true,
+}
+
 // backlogDepositRequest is the wire shape for
 // POST /api/v1/internal/backlog-deposit. See https://docs.vornik.io
 // 2026-07-09-autonomous-dev-loop-design.md (design C1) for the full
@@ -54,6 +70,8 @@ type backlogDepositRequest struct {
 	Detail      string `json:"detail"`
 	Evidence    string `json:"evidence"`
 	Regression  bool   `json:"regression"`
+	// FoundAt is optional; empty renders nothing (backlogDepositFoundAtLevels).
+	FoundAt string `json:"found_at"`
 }
 
 // backlogDepositResponse is the wire shape of every 200 response.
@@ -157,7 +175,7 @@ func (s *Server) BacklogDeposit(w http.ResponseWriter, r *http.Request) {
 	}
 
 	now := time.Now().UTC()
-	line := renderBacklogDepositLine(req.Kind, title, req.Detail, req.Evidence, req.TaskID, now)
+	line := renderBacklogDepositLine(req.Kind, title, req.Detail, req.Evidence, req.FoundAt, req.TaskID, now)
 
 	// Secret-scan the RENDERED line (not the raw fields) — the trailer's
 	// task_id/evidence and the assembled detail are exactly what lands in
@@ -258,6 +276,8 @@ func backlogDepositFieldError(req backlogDepositRequest, title string) (msg stri
 		return fmt.Sprintf("evidence must be at most %d characters", backlogDepositMaxEvidenceLen), false
 	case !backlogDepositValidKinds[req.Kind]:
 		return fmt.Sprintf("kind must be one of bug|optimisation|inefficiency|refactor, got %q", req.Kind), false
+	case req.FoundAt != "" && !backlogDepositFoundAtLevels[req.FoundAt]:
+		return fmt.Sprintf("found_at must be one of unit|integration|executor-e2e|e2e-lane|production|review, got %q", req.FoundAt), false
 	default:
 		return "", true
 	}
@@ -371,10 +391,13 @@ func flattenWhitespace(s string) string {
 
 // renderBacklogDepositLine builds the exact BACKLOG.md item text
 // (everything after "- [?] "): `**[<kind>]** <title> — <detail>
-// (evidence: <evidence>; via <task_id>, <YYYY-MM-DD>)`. The evidence
-// segment is omitted cleanly when empty. detail is whitespace-
-// flattened and truncated to backlogDepositRenderedDetailCap chars.
-func renderBacklogDepositLine(kind, title, detail, evidence, taskID string, now time.Time) string {
+// (found at: <level>; evidence: <evidence>; via <task_id>, <YYYY-MM-DD>)`.
+// The found-at and evidence segments are omitted cleanly when empty. The
+// found-at segment sits first inside the trailer, where neither the title
+// parse (cut at the first " — ") nor backlogItemDateRE reads (2026-10-14).
+// detail is whitespace-flattened and truncated to
+// backlogDepositRenderedDetailCap chars.
+func renderBacklogDepositLine(kind, title, detail, evidence, foundAt, taskID string, now time.Time) string {
 	detail = flattenWhitespace(detail)
 	detail = textutil.TruncateBytes(detail, backlogDepositRenderedDetailCap)
 	evidence = flattenWhitespace(evidence)
@@ -382,10 +405,14 @@ func renderBacklogDepositLine(kind, title, detail, evidence, taskID string, now 
 
 	var trailer string
 	if evidence == "" {
-		trailer = fmt.Sprintf("(via %s, %s)", taskID, date)
+		trailer = fmt.Sprintf("via %s, %s)", taskID, date)
 	} else {
-		trailer = fmt.Sprintf("(evidence: %s; via %s, %s)", evidence, taskID, date)
+		trailer = fmt.Sprintf("evidence: %s; via %s, %s)", evidence, taskID, date)
 	}
+	if foundAt != "" {
+		trailer = "found at: " + foundAt + "; " + trailer
+	}
+	trailer = "(" + trailer
 	return fmt.Sprintf("**[%s]** %s — %s %s", kind, title, detail, trailer)
 }
 

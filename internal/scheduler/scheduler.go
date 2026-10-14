@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	mrand "math/rand"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -149,22 +150,37 @@ type Config struct {
 	// ArtifactStoragePath is the base path used for artifact persistence.
 	ArtifactStoragePath string
 
-	// ExecutionTimeout is the maximum time allowed for a single execution.
-	ExecutionTimeout time.Duration
+	// NOTE (2026-10-12, GitHub #142): an `ExecutionTimeout time.Duration`
+	// lived here (default 30m, forced positive in NewWithOptions) and was
+	// DELETED. Nothing read it and the daemon YAML could not reach it. The
+	// scheduler knows no workflow, so it cannot bound an execution without a
+	// second teardown path; the executor owns the execution context. The
+	// setting now binds there as the default wall-clock cap
+	// (`scheduler.execution_timeout` → executor.Config.DefaultMaxWallClock;
+	// a workflow's maxWallClock wins). Do not re-add it here. See
+	// https://docs.vornik.io §4.12 C1.
+
+	// AbandonedExecutionGrace bounds how long a dispatch keeps its global
+	// slot after the task row has left LEASED/RUNNING while the executor
+	// still reports the task live: a goroutine wedged in a call with no bound
+	// outlives the row its watchdog or canceller already finished. After the
+	// grace the slot is released without writing the row or tearing down
+	// again (05-scheduler §4.12 C5). Default 10m.
+	AbandonedExecutionGrace time.Duration
 }
 
 // DefaultConfig returns a Config with sensible defaults.
 func DefaultConfig() *Config {
 	return &Config{
-		MaxConcurrency:       10,
-		LeaseDurationSeconds: 300, // 5 minutes
-		PollInterval:         1 * time.Second,
-		RecoveryInterval:     30 * time.Second,
-		RecoveryBatchSize:    100,
-		RecoveryIdleGrace:    90 * time.Second,
-		PriorityFloor:        0,
-		ArtifactStoragePath:  "/var/lib/vornik/artifacts",
-		ExecutionTimeout:     30 * time.Minute,
+		MaxConcurrency:          10,
+		LeaseDurationSeconds:    300, // 5 minutes
+		PollInterval:            1 * time.Second,
+		RecoveryInterval:        30 * time.Second,
+		RecoveryBatchSize:       100,
+		RecoveryIdleGrace:       90 * time.Second,
+		PriorityFloor:           0,
+		ArtifactStoragePath:     "/var/lib/vornik/artifacts",
+		AbandonedExecutionGrace: defaultAbandonedExecutionGrace,
 	}
 }
 
@@ -236,6 +252,37 @@ type Scheduler struct {
 	// IsExecuting=false (e.g. between step transitions) doesn't
 	// re-queue a healthy task.
 	recoveryIdleSince map[string]time.Time
+
+	// now is the clock the dispatch watch loop and the config-blocked
+	// back-off read. A seam so tests advance time instead of sleeping.
+	now func() time.Time
+	// watchTicks returns the dispatch watch loop's tick channel and its stop
+	// function. A seam for the same reason.
+	watchTicks func() (<-chan time.Time, func())
+	// watchIterated, when set (tests only), is called once per watch-loop
+	// iteration, just before the loop waits for its next tick.
+	watchIterated func()
+	// blockedUntil holds, per project, when a config-blocked project may be
+	// leased again (05-scheduler §4.12 C6). Guarded by mu.
+	blockedUntil map[string]time.Time
+}
+
+// defaultAbandonedExecutionGrace is well above the longest legitimate tail
+// after a row leaves RUNNING: the 60s finaliser bound plus the 30s
+// container-cleanup bound (05-scheduler §4.12 C5).
+const defaultAbandonedExecutionGrace = 10 * time.Minute
+
+// configBlockedBackoff is how long a project whose dispatch was refused for an
+// unresolved config apply is left out of the lease query, so the 1s poll does
+// not lease and refuse its tasks on every tick (05-scheduler §4.12 C6).
+const configBlockedBackoff = 30 * time.Second
+
+// watchTickInterval is the dispatch watch loop's poll period.
+const watchTickInterval = 100 * time.Millisecond
+
+func defaultWatchTicks() (<-chan time.Time, func()) {
+	t := time.NewTicker(watchTickInterval)
+	return t.C, t.Stop
 }
 
 // Option is a functional option for configuring the Scheduler.
@@ -352,6 +399,9 @@ func NewWithOptions(repo TaskRepository, config *Config, opts ...Option) *Schedu
 		logger:            zerolog.Nop(),
 		recoveryIdleSince: make(map[string]time.Time),
 		wakeCh:            make(chan struct{}, 1),
+		now:               time.Now,
+		watchTicks:        defaultWatchTicks,
+		blockedUntil:      make(map[string]time.Time),
 	}
 
 	// Apply functional options
@@ -377,8 +427,8 @@ func NewWithOptions(repo TaskRepository, config *Config, opts ...Option) *Schedu
 	if s.config.ArtifactStoragePath == "" {
 		s.config.ArtifactStoragePath = "/var/lib/vornik/artifacts"
 	}
-	if s.config.ExecutionTimeout <= 0 {
-		s.config.ExecutionTimeout = 30 * time.Minute
+	if s.config.AbandonedExecutionGrace <= 0 {
+		s.config.AbandonedExecutionGrace = defaultAbandonedExecutionGrace
 	}
 
 	return s
@@ -621,6 +671,11 @@ func (s *Scheduler) leaseTaskWithContext(ctx context.Context) (*persistence.Task
 		// not "stop new work and let pending work finish".
 		opts.ExcludedProjects = s.projectRegistry.ArchivedProjectIDs()
 	}
+	// Config-blocked projects inside their back-off (§4.12 C6). Copied, not
+	// appended in place: the registry's slice is not ours to grow.
+	if backedOff := s.configBackedOffProjects(); len(backedOff) > 0 {
+		opts.ExcludedProjects = append(slices.Clone(opts.ExcludedProjects), backedOff...)
+	}
 
 	task, err := s.repo.LeaseTask(ctx, opts)
 	if err != nil {
@@ -675,14 +730,20 @@ func (s *Scheduler) dispatchTask(task *persistence.Task) {
 
 	// Config-apply admission (§1.4). A project with an unresolved journal row
 	// — half-applied, or externally drifted — must not execute against config
-	// nobody has resolved. The task goes back to PENDING rather than failing:
-	// the operator resolves the row and the next tick picks it up.
+	// nobody has resolved. The task goes back to QUEUED with the reason on the
+	// row, and the project is backed off so the poll does not lease and refuse
+	// it every tick; once the operator resolves the row it runs.
+	//
+	// It used to go back to PENDING with no reason. The lease query takes only
+	// QUEUED and nothing moves a PENDING task with no paused execution back, so
+	// the task never ran even after the journal was resolved (05-scheduler
+	// §4.12 as-built 6 and C6; GitHub #142, outcome-quality §S3 #14).
 	if s.configBlocked != nil {
 		if blocked, reason := s.configBlocked(task.ProjectID); blocked {
 			s.logger.Warn().Str("task_id", task.ID).Str("project_id", task.ProjectID).
 				Str("reason", reason).
 				Msg("scheduler: dispatch refused, the project's configuration apply is unresolved")
-			if err := s.releaseExecutorLease(task, dispatchPaused, reason); err != nil {
+			if err := s.releaseConfigBlocked(task, reason); err != nil {
 				span.RecordError(fmt.Errorf("blocked-project lease release failed: %w", err))
 			}
 			return
@@ -708,14 +769,45 @@ func (s *Scheduler) dispatchTask(task *persistence.Task) {
 	_ = s.completeTask(task, true, "")
 }
 
+// releaseConfigBlocked frees the slot of a dispatch refused for an unresolved
+// config apply, puts the task back to QUEUED with the reason and its remedy on
+// the row (attempt unchanged), and backs the project off for
+// configBlockedBackoff (05-scheduler §4.12 C6).
+func (s *Scheduler) releaseConfigBlocked(task *persistence.Task, reason string) error {
+	s.decrementRunning()
+	s.mu.Lock()
+	s.blockedUntil[task.ProjectID] = s.now().Add(configBlockedBackoff)
+	s.mu.Unlock()
+	return s.repo.ReleaseLease(s.baseContext(), task.ID, taskLeaseID(task), persistence.TaskStatusQueued, persistence.ReleaseOptions{
+		Error: "waiting: " + reason + ". Dispatch resumes on its own once the operator resolves the project's config apply journal",
+	})
+}
+
+// configBackedOffProjects lists the projects still inside their
+// config-blocked back-off, pruning the ones whose back-off has passed.
+func (s *Scheduler) configBackedOffProjects() []string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	now := s.now()
+	var out []string
+	for p, until := range s.blockedUntil {
+		if now.Before(until) {
+			out = append(out, p)
+			continue
+		}
+		delete(s.blockedUntil, p)
+	}
+	return out
+}
+
 func (s *Scheduler) dispatchViaExecutor(ctx context.Context, task *persistence.Task) (dispatchOutcome, string) {
 	if err := s.executor.ExecuteWithContext(ctx, task.ID); err != nil {
 		return dispatchFailed, err.Error()
 	}
 
-	ticker := time.NewTicker(100 * time.Millisecond)
-	defer ticker.Stop()
-	lastRenewal := time.Now()
+	ticks, stopTicks := s.watchTicks()
+	defer stopTicks()
+	lastRenewal := s.now()
 	// Lease-renewal jitter: every dispatch picks an independent
 	// interval in [base*0.75, base*1.25] where base = LeaseDuration/2.
 	// Without jitter, many tasks leased at the same tick (e.g. a
@@ -754,14 +846,33 @@ func (s *Scheduler) dispatchViaExecutor(ctx context.Context, task *persistence.T
 	// to answer — surfacing as "input requested, then cancelled instead
 	// of continuing."
 	leaseReleased := false
+	// releasedAt is when the loop first saw the row out of LEASED/RUNNING.
+	// A goroutine still live AbandonedExecutionGrace after that has outlived
+	// its row — wedged in a call with no bound after the watchdog or a
+	// canceller finished it — and the slot is released (§4.12 C5).
+	var releasedAt time.Time
 
 	for s.executor.IsExecuting(task.ID) {
-		if leaseID := taskLeaseID(task); !leaseReleased && leaseID != "" && time.Since(lastRenewal) >= renewInterval {
+		if leaseReleased {
+			if held := s.now().Sub(releasedAt); held >= s.config.AbandonedExecutionGrace {
+				s.logger.Error().
+					Str("task_id", task.ID).
+					Str("project_id", task.ProjectID).
+					Dur("held_after_row_left_running", held).
+					Msg("scheduler: the executor still reports this task live long after its row left RUNNING; " +
+						"releasing the slot without writing the row or tearing down again (the writer that moved the row owns both)")
+				if s.metrics != nil {
+					s.metrics.RecordAbandonedDispatch(task.ProjectID)
+				}
+				return dispatchTerminated, ""
+			}
+		}
+		if leaseID := taskLeaseID(task); !leaseReleased && leaseID != "" && s.now().Sub(lastRenewal) >= renewInterval {
 			err := s.repo.RenewLease(ctx, task.ID, leaseID, s.config.LeaseDurationSeconds)
 			switch {
 			case err == nil:
 				renewFailures = 0
-				lastRenewal = time.Now()
+				lastRenewal = s.now()
 			case errors.Is(err, persistence.ErrLeaseNotFound) && s.leaseClearedByTransition(ctx, task.ID):
 				// Deliberate lease-clear by a benign transition (or an
 				// operator cancel). Stop renewing; do NOT escalate.
@@ -769,6 +880,7 @@ func (s *Scheduler) dispatchViaExecutor(ctx context.Context, task *persistence.T
 					Str("task_id", task.ID).
 					Msg("scheduler: lease cleared by deliberate transition out of RUNNING/LEASED; stopping renewal without cancel")
 				leaseReleased = true
+				releasedAt = s.now()
 			default:
 				renewFailures++
 				s.logger.Warn().Err(err).
@@ -789,14 +901,17 @@ func (s *Scheduler) dispatchViaExecutor(ctx context.Context, task *persistence.T
 				// Schedule the next retry attempt sooner than the
 				// full renewInterval so we recover quickly after a
 				// transient blip.
-				lastRenewal = time.Now().Add(-renewInterval + time.Second)
+				lastRenewal = s.now().Add(-renewInterval + time.Second)
 			}
 		}
 
+		if s.watchIterated != nil {
+			s.watchIterated()
+		}
 		select {
 		case <-ctx.Done():
 			return dispatchInterrupted, ctx.Err().Error()
-		case <-ticker.C:
+		case <-ticks:
 		}
 	}
 

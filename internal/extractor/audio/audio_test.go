@@ -78,7 +78,7 @@ func TestExtract_NormalisesThenTranscribesInTheSandbox(t *testing.T) {
 	}
 	norm, whisper := specs[0], specs[1]
 	if norm.Feature != sandboxtool.FeatureAudio || norm.Entrypoint != "ffmpeg" ||
-		strings.Join(norm.Args, " ") != "-nostdin -loglevel error -threads 2 -filter_threads 2 -i /in/audio -threads 2 -ac 1 -ar 16000 -acodec pcm_s16le -f wav /out/audio.wav" ||
+		strings.Join(norm.Args, " ") != "-nostdin -loglevel error -threads 2 -filter_threads 2 -protocol_whitelist file -format_whitelist mov,matroska,ogg,mp3,wav,flac,aac,avi,asf,mpegts,mpeg,flv,aiff,amr,caf -i /in/audio -threads 2 -ac 1 -ar 16000 -acodec pcm_s16le -f wav /out/audio.wav" ||
 		len(norm.Inputs) != 1 || norm.Inputs[0].Name != "audio" || norm.Inputs[0].Path != audioPath {
 		t.Fatalf("normalise run = %+v", norm)
 	}
@@ -286,6 +286,20 @@ func TestDurationFromSegments(t *testing.T) {
 	}
 	if got := durationFromSegments(segs); got != 180.2 {
 		t.Errorf("durationFromSegments = %v; want 180.2", got)
+	}
+}
+
+// audit 2026-10-12 (GitHub #348): the normalise run reads untrusted media; it
+// carries the input guard (file protocol, demuxer allowlist) right before -i,
+// so a DASH or HLS manifest cannot make ffmpeg open what it names.
+func TestExtract_NormaliseRunCarriesTheInputGuard(t *testing.T) {
+	sb := fakeTools(t, whisperCppJSON)
+	if _, err := New(sb, writeModel(t)).Extract(context.Background(), extractor.Source{FilePath: writeAudio(t)}); err != nil {
+		t.Fatalf("Extract: %v", err)
+	}
+	want := strings.Join(sandboxtool.FFmpegInputGuard(), " ") + " -i /in/audio "
+	if args := strings.Join(sb.Specs()[0].Args, " "); !strings.Contains(args, want) {
+		t.Fatalf("normalise argv %q lacks %q", args, want)
 	}
 }
 

@@ -26,23 +26,24 @@
     animation: vornik-dot-pulse 1200ms ease-in-out infinite;
   }
   /* Scope-chip toggle (Upgrade #3 — 2026-05-26).
-     Inactive: gray ring. Active: accent fill. CSS lives here rather
-     than as a Tailwind utility so the active-state colour stays in
-     sync with the Send button's accent treatment. */
+     Theme tokens only (design §11.4 b, GitHub #335): the literal
+     Tailwind gray/sky colours this used failed AA in light (2.45 /
+     1.42 / 1.53:1). Text pairs are pinned per theme by
+     TestPalette_ScopeChipTextContrast. */
   .scope-chip {
-    color: rgb(156 163 175);              /* gray-400 */
-    background-color: rgb(15 23 42 / 0);  /* transparent */
-    border-color: rgb(55 65 81);          /* gray-700 */
+    color: rgb(var(--ink-400));
+    background-color: rgb(var(--surface-800) / 0);  /* transparent */
+    border-color: rgb(var(--control-border)); /* WCAG 1.4.11, design §11.3 */
     cursor: pointer;
   }
   .scope-chip:hover {
-    color: rgb(209 213 219);              /* gray-300 */
-    border-color: rgb(75 85 99);          /* gray-600 */
+    color: rgb(var(--ink-200));
+    border-color: rgb(var(--brand-400)); /* 3:1 on dark glass; brand-500 was 2.15 */
   }
   .scope-chip.active {
-    color: white;
-    background-color: rgb(2 132 199 / 0.30);  /* sky-600 / accent */
-    border-color: rgb(2 132 199 / 0.60);
+    color: rgb(var(--brand-50));
+    background-color: rgb(var(--brand-900) / 0.40);
+    border-color: rgb(var(--brand-400)); /* 3:1 on dark glass; brand-500 was 2.15 */
   }
 </style>
 <body class="bg-dark-900 text-gray-100 min-h-screen flex flex-col">
@@ -82,6 +83,10 @@
                                 </span>
                                 <span class="text-xs text-gray-500">Live observation</span>
                             </div>
+                            {{/* Why it is paused and what releases it
+                                 (outcome-quality LLD §S7 #13). Filled
+                                 server-side on load and by onPaused. */}}
+                            <p id="pause-reason" class="{{if not .PauseText}}hidden {{end}}text-xs text-amber-700 dark:text-amber-300 mb-1">{{.PauseText}}</p>
                             <h1 class="text-xl font-semibold text-gray-100">
                                 {{if .Task}}
                                     Task <span class="font-mono text-brand-300" title="{{.Task.ID}}">{{shortID .Task.ID}}</span>
@@ -243,7 +248,7 @@
                              - scope=exec  → POST /executions/{id}/hints (no step_id) */}}
                         <textarea id="steer-input" rows="3"
                                   placeholder="Course-correct the next step…"
-                                  class="w-full px-3 py-2 text-sm rounded-lg bg-dark-900 border border-dark-700 text-gray-100 focus:border-accent-500/60 focus:outline-none resize-none"></textarea>
+                                  class="w-full px-3 py-2 text-sm rounded-lg bg-dark-900 border border-control text-gray-100 focus:border-accent-500/60 focus:outline-none resize-none"></textarea>
                         <div class="flex items-center justify-between gap-2 flex-wrap">
                             <div class="flex items-center gap-1 text-[10px]" role="radiogroup" aria-label="Hint scope">
                                 <span class="text-gray-500 mr-1">when:</span>
@@ -295,11 +300,11 @@
                             <div class="mt-3 space-y-2">
                                 <label class="block text-[11px]">
                                     <span class="text-gray-500 uppercase tracking-wider text-[10px]">Step</span>
-                                    <select id="fork-inline-step" class="mt-1 w-full px-3 py-2 text-sm font-mono rounded-lg bg-dark-900 border border-dark-700 text-gray-100 focus:border-amber-500/60 focus:outline-none"></select>
+                                    <select id="fork-inline-step" class="mt-1 w-full px-3 py-2 text-sm font-mono rounded-lg bg-dark-900 border border-control text-gray-100 focus:border-amber-500/60 focus:outline-none"></select>
                                 </label>
                                 <label class="block text-[11px]">
                                     <span class="text-gray-500 uppercase tracking-wider text-[10px]">Prompt override <span class="text-gray-600 normal-case font-normal">(optional)</span></span>
-                                    <textarea id="fork-inline-prompt" rows="3" class="mt-1 w-full px-3 py-2 text-sm font-mono rounded-lg bg-dark-900 border border-dark-700 text-gray-100 focus:border-amber-500/60 focus:outline-none" placeholder="Prepended to the step's prompt on iteration 1 of the fork."></textarea>
+                                    <textarea id="fork-inline-prompt" rows="3" class="mt-1 w-full px-3 py-2 text-sm font-mono rounded-lg bg-dark-900 border border-control text-gray-100 focus:border-amber-500/60 focus:outline-none" placeholder="Prepended to the step's prompt on iteration 1 of the fork."></textarea>
                                 </label>
                                 <div class="flex items-center justify-end">
                                     <button id="fork-inline-submit" type="button" onclick="submitFork()" class="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg bg-amber-700 hover:bg-amber-600 text-white transition-colors disabled:opacity-40 disabled:cursor-not-allowed">
@@ -1378,15 +1383,31 @@
             loadHintHistory();
         }
 
+        // Why an execution is paused and what releases it, by pause kind
+        // (outcome-quality LLD §S7 #13): the same table the server renders.
+        const pauseKindTexts = {{.PauseKindTexts}};
+
+        function showPauseReason(kind) {
+            const el = document.getElementById('pause-reason');
+            if (!el) return;
+            const text = (pauseKindTexts && pauseKindTexts[kind])
+                || (kind ? 'Paused (reason: ' + kind + ').' : 'Paused (no reason was recorded).');
+            el.textContent = text;
+            el.classList.remove('hidden');
+        }
+
         function onPaused(p) {
             status = 'PAUSED';
             updateHeaderStatus(status);
+            showPauseReason(p && p.pause_kind);
             refreshSteeringButtons();
         }
 
         function onResumed(p) {
             status = 'RUNNING';
             updateHeaderStatus(status);
+            const el = document.getElementById('pause-reason');
+            if (el) { el.textContent = ''; el.classList.add('hidden'); }
             refreshSteeringButtons();
         }
 

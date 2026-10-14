@@ -760,6 +760,9 @@ type RecipeView struct {
 	// Accounts says the recipe may be installed once per account (design
 	// §22.2.8).
 	Accounts string `json:"accounts"`
+	// Connector says the user can install the recipe themselves from their
+	// paired device's Connectors page (design §19.14.8 item 6).
+	Connector bool `json:"connector"`
 }
 
 // RecipeVariableView is one variable.
@@ -829,6 +832,7 @@ func (r *Renderer) ListRecipes(st *State) []RecipeView {
 		}
 		v.Sentence = installSentenceTemplate(st.Namespace, rec, plan)
 		v.Accounts = RecipeAccountsRule
+		v.Connector = rec.IsConnector()
 		for _, id := range sortedWorkflowKeys(st) {
 			w := st.Workflows[id]
 			if name, version := InstalledRecipe(w.Loaded); name == rec.Name {

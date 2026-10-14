@@ -16,9 +16,19 @@ import (
 )
 
 // Open opens path (a file path, or ":memory:") with the fixture bound,
-// migrates it, and closes it when the test ends.
+// migrates it, and closes it when the test ends. A file path that does not
+// exist yet is created as a copy of the process's migrated template (see
+// template.go) instead of being migrated from empty; ":memory:" is a copy of
+// the process's migrated in-memory image (2026-10-14, #367); an existing file
+// is migrated in place, as before.
 func Open(t testing.TB, path string) *sqlite.DB {
 	t.Helper()
+	if path == ":memory:" {
+		return fromMemoryTemplate(t, memoryMigrated)
+	}
+	if usesTemplate(path) {
+		return fromTemplate(t, migrated, path)
+	}
 	db := Connect(t, path)
 	start := time.Now()
 	if err := db.Migrate(context.Background()); err != nil {
@@ -42,16 +52,35 @@ func Connect(t testing.TB, path string) *sqlite.DB {
 	return db
 }
 
-// Memory is a migrated in-memory database (one connection).
+// Memory is a migrated in-memory database (one connection): a copy of the
+// process's migrated in-memory image, checked to be at the latest schema
+// (2026-10-14, #367; a migrate per test under -race was most of
+// internal/service's and internal/persistence/sqlite's time).
 func Memory(t testing.TB) *sqlite.DB {
 	t.Helper()
 	return Open(t, ":memory:")
 }
 
-// File is a migrated database file named name in the test's temp directory.
+// File is a migrated database file named name in the test's temp directory: a
+// copy of the process's migrated template, checked to be at the latest schema
+// (2026-10-13; a fresh migrate per test made approverdevice take 842 s).
 func File(t testing.TB, name string) *sqlite.DB {
 	t.Helper()
 	return Open(t, filepath.Join(t.TempDir(), name))
+}
+
+// Context is the context a test passes to storage.Open / storage.OpenReadOnly.
+// Those build their sqlite.Config with no ConnectTimeout on purpose (the
+// caller's deadline owns the budget), so on context.Background() a test got
+// the daemon's 5 s default and timed out under parallel load (#126,
+// 2026-10-04/07). Its deadline is sqlite.FixtureConnectTimeout from now, and it
+// is cancelled when the test ends. It also bounds whatever else the test does
+// on it. Storage-abstraction design, "storage.Open in tests" (2026-10-12).
+func Context(t testing.TB) context.Context {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), sqlite.FixtureConnectTimeout)
+	t.Cleanup(cancel)
+	return ctx
 }
 
 // connect is the single open every helper goes through; ctx is a parameter

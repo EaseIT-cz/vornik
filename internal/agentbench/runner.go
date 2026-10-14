@@ -217,6 +217,8 @@ func (r *Runner) Run(ctx context.Context, cfg RunConfig) (Journal, error) {
 	// system under test — and on a prepaid plan the cost of that is measured in
 	// DAYS until reset, not dollars. Stop, and say why.
 	infraStreak := 0
+	// Every step outcome the run recorded, for NoModelReached below.
+	var runOutcomes []StepOutcome
 
 	for _, spec := range cfg.Tasks {
 		if infraStreak >= consecutiveInfraFailuresBeforeAbort {
@@ -244,7 +246,7 @@ func (r *Runner) Run(ctx context.Context, cfg RunConfig) (Journal, error) {
 				}
 				clearCommit = c
 			}
-			taskRun, records := r.runOnce(ctx, cfg, spec, repeat)
+			taskRun, records := r.runOnce(ctx, cfg, spec, repeat, &runOutcomes)
 			if r.Workspace != nil {
 				taskRun.ClearCommit = clearCommit
 				produced, perr := r.Workspace.Produced(ctx, spec)
@@ -278,6 +280,12 @@ func (r *Runner) Run(ctx context.Context, cfg RunConfig) (Journal, error) {
 				break
 			}
 		}
+	}
+	// A run that never reached the model is refused, not journaled: a journal
+	// on disk is what the reproduce script skips on re-run, and this one would
+	// describe the environment, not the agent (§12.25 D2, GitHub #309).
+	if reached, err := NoModelReached(j.Records, runOutcomes); reached {
+		return Journal{}, err
 	}
 	if infraStreak >= consecutiveInfraFailuresBeforeAbort {
 		// Marked, never silently truncated: a short journal that does not say it
@@ -339,7 +347,7 @@ func (r *Runner) scoreTaskRepeat(ctx context.Context, spec TaskSpec, repeat int,
 }
 
 // runOnce runs a task and returns one record per execution it produced.
-func (r *Runner) runOnce(ctx context.Context, cfg RunConfig, spec TaskSpec, repeat int) (TaskRun, []ExecutionRecord) {
+func (r *Runner) runOnce(ctx context.Context, cfg RunConfig, spec TaskSpec, repeat int, outcomes *[]StepOutcome) (TaskRun, []ExecutionRecord) {
 	taskRun := TaskRun{TaskID: spec.ID, Repeat: repeat}
 	outcome, err := r.Tasks.Run(ctx, spec)
 	if err != nil {
@@ -411,6 +419,9 @@ func (r *Runner) runOnce(ctx context.Context, cfg RunConfig, spec TaskSpec, repe
 		// while the query above used the ledger's.
 		rec.TaskID = spec.ID
 		rec.ExecutionID = execID
+		// Collected for the run-level "did anything reach the model"
+		// check (§12.25 D2).
+		*outcomes = append(*outcomes, stepOutcomes(traces)...)
 		// The daemon's verdict on the task wins over anything the store
 		// inferred: the store sees rows, not whether the work was accepted.
 		rec.Succeeded = outcome.Succeeded

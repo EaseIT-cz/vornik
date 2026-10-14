@@ -31,6 +31,12 @@ func TaskShouldRetry(attempt, maxAttempts int, class string) bool {
 	if IsTerminalFailureClass(class) {
 		return false
 	}
+	// A class the operator set to `fail` (retry_policy.go, design §8) ends
+	// here too. The table ships empty, so this changes nothing until a class
+	// is flipped; `resume` and `rerun` both fall through to the budget.
+	if TaskRetryModeFor(class) == TaskRetryFail {
+		return false
+	}
 	// MaxAttempts <= 0 means retries are disabled — this is the only attempt.
 	// Preserved from taskWillRetry, where a legacy row with an unset budget
 	// would otherwise read as "unlimited".

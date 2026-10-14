@@ -93,6 +93,7 @@ CREATE TABLE IF NOT EXISTS tasks (
     -- them. Powers the spend-per-API-key UI.
     created_by_api_key_id TEXT,
     created_by_actor TEXT,
+    goal_origin TEXT,
     UNIQUE (project_id, idempotency_key)
 );
 CREATE INDEX IF NOT EXISTS idx_tasks_project    ON tasks(project_id);
@@ -796,6 +797,20 @@ CREATE TABLE IF NOT EXISTS agent_namespace_budgets (
     updated_at          TEXT NOT NULL
 );
 
+-- refused agent-admin calls — migration 229 (agent-administered design
+-- §23.2, GitHub #172): who, what, which rule; never the input.
+CREATE TABLE IF NOT EXISTS agent_admin_refusals (
+    id          TEXT PRIMARY KEY,
+    project_id  TEXT NOT NULL,
+    namespace   TEXT NOT NULL,
+    key_id      TEXT NOT NULL,
+    verb        TEXT NOT NULL,
+    rule        TEXT NOT NULL,
+    created_at  TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_agent_admin_refusals_ns_created ON agent_admin_refusals (namespace, created_at);
+CREATE INDEX IF NOT EXISTS idx_agent_admin_refusals_project_created ON agent_admin_refusals (project_id, created_at);
+
 -- agent model destination approvals — migration 214 (agent-administered
 -- design §18.6 item 2 in detail)
 CREATE TABLE IF NOT EXISTS agent_model_provider_approvals (
@@ -806,6 +821,19 @@ CREATE TABLE IF NOT EXISTS agent_model_provider_approvals (
     removed_at          TEXT,
     PRIMARY KEY (namespace, destination)
 );
+
+-- agent connector installs — migration 226 (agent-administered design
+-- §19.14.8 item 6; GitHub #314)
+CREATE TABLE IF NOT EXISTS agent_connector_installs (
+    workflow_id    TEXT PRIMARY KEY,
+    namespace      TEXT NOT NULL,
+    project_id     TEXT NOT NULL,
+    connector      TEXT NOT NULL,
+    account_label  TEXT NOT NULL DEFAULT 'default',
+    device_id      TEXT NOT NULL,
+    installed_at   TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_agent_connector_installs_ns ON agent_connector_installs (namespace);
 
 -- broker_actions — migration 202 (broker write-actions design §5.2)
 -- ============================================================
@@ -982,6 +1010,132 @@ CREATE TABLE IF NOT EXISTS entity_mentions (
 CREATE INDEX IF NOT EXISTS idx_entity_mentions_entity ON entity_mentions(entity_id);
 
 -- ============================================================
+-- GDPR Art 18 restriction (postgres migrations 141 + 224; design
+-- 2026-07-29-gdpr-data-subject-rights-design.md §4.16.6). [Stale 2026-10-13:
+-- SQLite now has the subject writer and the whole store, below — §4.19,
+-- GitHub #355.] The SQLite driver has no subject-axis WRITER; these two
+-- tables exist so the ONE shared
+-- restriction predicate (persistence.ChunkNotRestrictedSQL) runs identically
+-- on both drivers in every chunk read that both drivers serve
+-- (graph-extraction FetchUnextracted). Empty unless something links a
+-- subject; then the predicate withholds exactly what it does on Postgres.
+-- ============================================================
+CREATE TABLE IF NOT EXISTS data_subject_links (
+    subject_id  TEXT NOT NULL,
+    table_name  TEXT NOT NULL,
+    row_id      TEXT NOT NULL,
+    project_id  TEXT,
+    source      TEXT NOT NULL,
+    confidence  TEXT NOT NULL,
+    exclusivity TEXT NOT NULL,
+    created_at  TEXT NOT NULL,
+    PRIMARY KEY (subject_id, table_name, row_id)
+);
+CREATE INDEX IF NOT EXISTS idx_ds_links_row ON data_subject_links(table_name, row_id);
+
+CREATE TABLE IF NOT EXISTS data_subject_restrictions (
+    id                  TEXT PRIMARY KEY,
+    subject_id          TEXT NOT NULL,
+    request_id          TEXT NOT NULL,
+    ground              TEXT NOT NULL
+        CHECK (ground IN ('art18_1_a','art18_1_b','art18_1_c','art18_1_d')),
+    restricted_by       TEXT NOT NULL,
+    restricted_at       TEXT NOT NULL,
+    lifted_at           TEXT,
+    lifted_by           TEXT,
+    lift_reason         TEXT,
+    lift_request_id     TEXT,
+    subject_informed_at TEXT,
+    CHECK (lifted_at IS NULL OR (lifted_by IS NOT NULL AND lift_reason IS NOT NULL
+                                 AND subject_informed_at IS NOT NULL))
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_ds_restrictions_one_active
+    ON data_subject_restrictions(subject_id) WHERE lifted_at IS NULL;
+
+-- ============================================================
+-- The rest of the GDPR subject store and the rights ledger (postgres
+-- migrations 141, 142, 144, 145; GitHub #355, design
+-- 2026-07-29-gdpr-data-subject-rights-design.md §4.19). Column-for-column with
+-- Postgres, timestamps as TEXT in the fixed-width form. No foreign keys: the
+-- DSN runs foreign_keys(OFF), so the cascade from a subject to its identifiers
+-- and links, the retention of a subject the ledger names, and the refusal of a
+-- child naming an unknown parent are stated by subjectstore.Repository, the one
+-- implementation both drivers run.
+-- ============================================================
+CREATE TABLE IF NOT EXISTS data_subjects (
+    id                TEXT PRIMARY KEY,
+    display_name      TEXT NOT NULL,
+    request_state     TEXT,
+    request_opened_at TEXT,
+    created_at        TEXT NOT NULL,
+    updated_at        TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_data_subjects_open_request
+    ON data_subjects(request_opened_at) WHERE request_state IS NOT NULL;
+
+CREATE TABLE IF NOT EXISTS data_subject_identifiers (
+    subject_id TEXT NOT NULL,
+    kind       TEXT NOT NULL,
+    value      TEXT NOT NULL,
+    source     TEXT NOT NULL,
+    confidence TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    PRIMARY KEY (subject_id, kind, value)
+);
+CREATE INDEX IF NOT EXISTS idx_ds_identifiers_lookup ON data_subject_identifiers(kind, value);
+
+CREATE TABLE IF NOT EXISTS data_subject_requests (
+    id              TEXT PRIMARY KEY,
+    subject_id      TEXT NOT NULL,
+    kind            TEXT NOT NULL,
+    state           TEXT NOT NULL,
+    opened_at       TEXT NOT NULL,
+    verified_by     TEXT,
+    verified_how    TEXT,
+    verified_at     TEXT,
+    extended        INTEGER NOT NULL DEFAULT 0,
+    extended_reason TEXT,
+    report_hash     TEXT,
+    refused_reason  TEXT,
+    updated_at      TEXT NOT NULL,
+    erasure_ground  TEXT,
+    report_json     TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_ds_requests_live
+    ON data_subject_requests(opened_at) WHERE state IN ('open', 'verified');
+CREATE INDEX IF NOT EXISTS idx_ds_requests_subject ON data_subject_requests(subject_id);
+
+-- ============================================================
+-- memory_policy_evaluations — the memory firewall's evaluation audit
+-- (postgres migrations 80 + 102; GitHub #355). Until 2026-10-13 the SQLite
+-- repository was a stub that discarded every row.
+-- ============================================================
+CREATE TABLE IF NOT EXISTS memory_policy_evaluations (
+    id               TEXT PRIMARY KEY,
+    project_id       TEXT NOT NULL,
+    tenant_id        TEXT,
+    chunk_id         TEXT NOT NULL,
+    request_role     TEXT,
+    request_purpose  TEXT,
+    request_operator TEXT,
+    trace_id         TEXT,
+    decision         TEXT NOT NULL,
+    policy_digest    TEXT,
+    reason_detail    TEXT,
+    evaluated_at     TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_policy_eval_project_recent
+    ON memory_policy_evaluations(project_id, evaluated_at DESC);
+CREATE INDEX IF NOT EXISTS idx_policy_eval_decision_recent
+    ON memory_policy_evaluations(decision, evaluated_at DESC) WHERE decision <> 'allow';
+CREATE INDEX IF NOT EXISTS idx_policy_eval_trace
+    ON memory_policy_evaluations(trace_id) WHERE trace_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_policy_eval_evaluated_at_allow
+    ON memory_policy_evaluations(evaluated_at) WHERE decision = 'allow';
+CREATE INDEX IF NOT EXISTS idx_policy_eval_chunk
+    ON memory_policy_evaluations(chunk_id, evaluated_at DESC);
+
+-- ============================================================
 -- project_memory_chunks — needed by ChunkGraphExtractionRepository
 -- + the round-1 MemoryRetrievalAudit gap. Slim schema (real
 -- daemon uses pgvector + full-text indexes; for tests we just
@@ -991,6 +1145,9 @@ CREATE TABLE IF NOT EXISTS project_memory_chunks (
     id                                 TEXT PRIMARY KEY,
     project_id                         TEXT NOT NULL,
     content                            TEXT NOT NULL DEFAULT '',
+    -- Postgres parity (GitHub #355): the Art 15 collector reads it. Nullable;
+    -- NULL reads as empty through the collector's COALESCE.
+    content_title                      TEXT,
     content_hash                       TEXT,
     -- Migration 150 parity: the embedding_cache key the embed actually used
     -- (hash of the CONTEXTUALISED input, not of content). Recorded so erasure
@@ -1025,6 +1182,13 @@ CREATE TABLE IF NOT EXISTS project_memory_chunks (
     -- sqlite CorpusEpochRepository's rollback restore pass runs
     -- against the same column shape.
     validation_status                  TEXT NOT NULL DEFAULT 'unverified',
+    -- Migration 23 parity (GitHub #349): the chunk lifecycle. Nothing on this
+    -- driver writes another value, which is exactly the Postgres state of a
+    -- never-transitioned chunk. Carried because graph.SQLChunkLookup runs on
+    -- both drivers and filters lifecycle_state = 'published'; without it every
+    -- graph ChunksMentioning errored here. Also in sqliteAdditiveColumns.
+    lifecycle_state                    TEXT NOT NULL DEFAULT 'published'
+        CHECK (lifecycle_state IN ('raw','staged','validated','published','quarantined','superseded')),
     -- Migration 218 parity: who refuted the row (mirror_forget,
     -- forget_command, chat_forget, memory_correct); NULL = not recorded.
     refute_route                       TEXT,
@@ -2280,15 +2444,16 @@ const executionQualityScoresTableSQL = `CREATE TABLE IF NOT EXISTS execution_qua
 // by schemaSQL and the table rebuild that widens an existing database's kind
 // CHECK (sqliteTableRebuilds). The broker_action kind (agent-administered
 // Vornik plan P4.8) and the host_action kind (Hermes approval transport
-// design §4.1) are the rebuilds' markers.
+// design §4.1) are the rebuilds' markers, as is the withdrawn status
+// (agent-administered design §9.2d, migration 228).
 const agentApprovalRequestsTableSQL = `CREATE TABLE IF NOT EXISTS agent_approval_requests (
     id                 TEXT PRIMARY KEY,
     namespace          TEXT NOT NULL DEFAULT '',
-    kind               TEXT NOT NULL CHECK (kind IN ('device_enrollment','widening_change','credential_slot','broker_action','host_action','memory_retention')),
+    kind               TEXT NOT NULL CHECK (kind IN ('device_enrollment','widening_change','credential_slot','broker_action','host_action','memory_retention','config_journal_drift')),
     sentence           TEXT NOT NULL,
     rendered           TEXT NOT NULL,
     rendered_sha256    TEXT NOT NULL,
-    status             TEXT NOT NULL CHECK (status IN ('pending','approved','rejected','expired')),
+    status             TEXT NOT NULL CHECK (status IN ('pending','approved','rejected','expired','withdrawn')),
     created_at         TEXT        NOT NULL,
     expires_at         TEXT        NOT NULL,
     decided_at         TEXT       ,
@@ -2301,5 +2466,8 @@ const agentApprovalRequestsTableSQL = `CREATE TABLE IF NOT EXISTS agent_approval
     -- migration 209: why an approved change could never apply
     apply_error        TEXT,
     -- migration 212: a host_action decision's scope (once, session, deny)
-    decided_choice     TEXT
+    decided_choice     TEXT,
+    -- migration 228: who withdrew a pending request, and why (design §9.2d)
+    withdrawn_by       TEXT,
+    withdraw_reason    TEXT
 )`

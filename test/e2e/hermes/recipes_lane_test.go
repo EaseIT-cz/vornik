@@ -5,12 +5,16 @@ package hermes
 import (
 	"encoding/json"
 	"fmt"
+	"net/url"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"regexp"
 	"strings"
 	"testing"
 	"time"
+
+	"vornik.io/vornik/test/standins"
 )
 
 // Agent-administered Vornik design §19.8 test 11 (recipes): each shipped
@@ -19,33 +23,134 @@ import (
 // the reference broker's tool names and returns an envelope-valid answer.
 // The daemon's own egress check (the answering step and result) is the
 // schema; this test checks the envelope's shape on what result returned.
+//
+// Amended 2026-10-12 (GitHub #337, Hermes lane design "Stand-in services for
+// the recipe path"): the servers are the stateful stand-ins of
+// test/standins, each holding two users' data; the recipe's credentials are
+// alice's. The arm also calls test_connection, checks that nothing of bob's
+// was read or answered, and that every connection the installs rendered
+// points at loopback.
 
-// CalendarTokenCanary is the calendar stub's bearer.
+// CalendarTokenCanary is alice's calendar bearer.
 const CalendarTokenCanary = "ghp_CANARYCALENDAR0123456789abcdefghijklm"
 
-// recipeMailStub offers the reference broker's read tools (configs/examples/
-// broker-mail.yaml) behind MailTokenCanary.
-func recipeMailStub() *MCPStub {
-	s := NewMCPStub("mail",
-		MCPTool{Name: "gmail_search", Handle: func(json.RawMessage) (string, bool) {
-			return `{"messages":[{"id":"r-1","from":"billing@acme.example","subject":"Invoice 4411","received_at":"2026-10-03T06:04:00Z"}]}`, false
-		}},
-		MCPTool{Name: "gmail_get", Handle: func(json.RawMessage) (string, bool) {
-			return `{"id":"r-1","from":"billing@acme.example","subject":"Invoice 4411","received_at":"2026-10-03T06:04:00Z","body":"Please pay invoice 4411. ` + RawMailCanary + `"}`, false
-		}},
-	)
-	s.Token = MailTokenCanary
+// Bob's bearers and the canary only bob's seeded message holds.
+const (
+	BobMailTokenCanary     = "ghp_CANARYBOBMAIL0123456789abcdefghijklmn"
+	BobCalendarTokenCanary = "ghp_CANARYBOBCAL0123456789abcdefghijklmno"
+	BobMailCanary          = "RAWMAIL-BOB-CANARY-4c2d"
+)
+
+// recipeMail is the mail stand-in offering the reference broker's read
+// tools (configs/examples/broker-mail.yaml): alice's mailbox holds the
+// invoice r-1 whose body carries RawMailCanary, behind MailTokenCanary;
+// bob's holds his own message behind his own token.
+func recipeMail() *standins.MCPServer {
+	store := standins.NewMailStore()
+	store.AddUser("alice", "alice@home.example")
+	store.AddUser("bob", "bob@work.example")
+	now := time.Now().UTC()
+	store.Deliver("alice", standins.Message{ID: "r-1", From: "billing@acme.example", Subject: "Invoice 4411",
+		Body: "Please pay invoice 4411. " + RawMailCanary, Received: now.Add(-2 * time.Hour), Unread: true})
+	store.Deliver("bob", standins.Message{ID: "b-1", From: "boss@work.example", Subject: "Quarterly plan",
+		Body: "Bob only. " + BobMailCanary, Received: now.Add(-time.Hour), Unread: true})
+	s := standins.NewMailMCP(store, func() time.Time { return time.Now().UTC() })
+	s.Token(MailTokenCanary, "alice")
+	s.Token(BobMailTokenCanary, "bob")
 	return s
 }
 
-func recipeCalendarStub() *MCPStub {
-	s := NewMCPStub("calendar",
-		MCPTool{Name: "calendar_list_events", Handle: func(json.RawMessage) (string, bool) {
-			return `{"events":[{"id":"e-1","start":"2026-10-03T09:00:00Z","end":"2026-10-03T09:30:00Z","summary":"Standup","attendees":4,"hangoutLink":"https://meet.example/x"}]}`, false
-		}},
-	)
-	s.Token = CalendarTokenCanary
+// recipeCalendar is the calendar stand-in: alice's standup e-1 at noon UTC
+// today (inside the day's window whenever the lane runs), bob's own event.
+func recipeCalendar() *standins.MCPServer {
+	store := standins.NewCalendarStore()
+	now := time.Now().UTC()
+	noon := time.Date(now.Year(), now.Month(), now.Day(), 12, 0, 0, 0, time.UTC)
+	store.AddEvent("alice", standins.Event{ID: "e-1", Title: "Standup", Start: noon, End: noon.Add(30 * time.Minute), Attendees: 4, Link: "https://meet.example/x"})
+	store.AddEvent("bob", standins.Event{ID: "e-9", Title: "Bob review", Start: noon, End: noon.Add(time.Hour), Attendees: 2})
+	s := standins.NewCalendarMCP(store, func() time.Time { return time.Now().UTC() })
+	s.Token(CalendarTokenCanary, "alice")
+	s.Token(BobCalendarTokenCanary, "bob")
 	return s
+}
+
+// testConnectionOK calls test_connection for a connection and requires the
+// closed answer {code: ok, http_status_class: 2xx, checked_at} and nothing
+// else (agent-administered design §6.2), plus exactly the keys in extra (an
+// OAuth connection names its account and that the provider reported the
+// identity, design §22.2.9).
+func testConnectionOK(t *testing.T, b *bridgeSession, project, name string, extra ...map[string]any) {
+	t.Helper()
+	text, isErr, err := b.Tool("test_connection", map[string]any{"project": project, "name": name})
+	if err != nil || isErr {
+		t.Fatalf("test_connection %s: %s %v %v", name, text, isErr, err)
+	}
+	var res map[string]any
+	if err := json.Unmarshal([]byte(text), &res); err != nil {
+		t.Fatalf("test_connection %s: not JSON: %s", name, text)
+	}
+	want := 3
+	for _, e := range extra {
+		for k, v := range e {
+			want++
+			if res[k] != v {
+				t.Fatalf("test_connection %s: %s is %v, want %v (%s)", name, k, res[k], v, text)
+			}
+		}
+	}
+	if len(res) != want || res["code"] != "ok" || res["http_status_class"] != "2xx" || res["checked_at"] == nil {
+		t.Fatalf("test_connection %s: %s", name, text)
+	}
+}
+
+// assertLoopbackOnly reads every project file under the lane's config tree
+// and fails when an MCP server or API URL is not loopback: a run that
+// reached a real provider cannot pass (GitHub #337, C5). It returns how many
+// URLs it examined, and fails on zero (a check over nothing proves nothing).
+func assertLoopbackOnly(t *testing.T, s *stack) int {
+	t.Helper()
+	dir := filepath.Join(filepath.Dir(s.cfgPath), "configs", "projects")
+	urlRe := regexp.MustCompile(`(?m)^\s*(?:-\s*)?(?:url|base_url|baseUrl|baseURL):\s*"?([^"\s]+)"?`)
+	n := 0
+	err := filepath.WalkDir(dir, func(path string, d os.DirEntry, err error) error {
+		if err != nil || d.IsDir() {
+			return err
+		}
+		b, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		for _, m := range urlRe.FindAllStringSubmatch(string(b), -1) {
+			n++
+			u, err := url.Parse(m[1])
+			if err != nil || (u.Hostname() != "127.0.0.1" && u.Hostname() != "localhost" && u.Hostname() != "::1") {
+				t.Errorf("%s names a non-loopback connection %q", path, m[1])
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n == 0 {
+		t.Fatalf("no connection URL found under %s: the egress guard examined nothing", dir)
+	}
+	return n
+}
+
+// assertOnlyUser fails when a stand-in recorded a call made with another
+// user's credential, or none at all with user's.
+func assertOnlyUser(t *testing.T, name string, s *standins.MCPServer, user string) {
+	t.Helper()
+	calls := s.Calls()
+	if len(calls) == 0 {
+		t.Fatalf("%s: never called: the credential was not exercised", name)
+	}
+	for _, c := range calls {
+		if c.User != user {
+			t.Fatalf("%s: a %s call with %s's credential", name, c.Tool, c.User)
+		}
+	}
 }
 
 // The scripted model's plans, keyed on each recipe step's own opening line.
@@ -165,7 +270,7 @@ func TestA4_Recipes(t *testing.T) {
 	requireLaneAgentImage(t)
 	s := startStack(t)
 	s.llm.SetScripts(recipeScripts()...)
-	mail, cal := recipeMailStub(), recipeCalendarStub()
+	mail, cal := recipeMail(), recipeCalendar()
 	mailURL := fmt.Sprintf("http://127.0.0.1:%d/mcp", serveLoopback(t, mail))
 	calURL := fmt.Sprintf("http://127.0.0.1:%d/mcp", serveLoopback(t, cal))
 	phone := pairPhone(t, s)
@@ -214,21 +319,49 @@ func TestA4_Recipes(t *testing.T) {
 		}
 		return out
 	}
-	envelopeValid(t, "inbox-digest", run("inbox-digest", map[string]any{"since": "24h"}), []string{"mail"}, []string{`mail\.google\.com`})
-	envelopeValid(t, "agenda", run("agenda", map[string]any{"range": "today"}), []string{"calendar"}, []string{`calendar\.google\.com`})
-	envelopeValid(t, "morning-brief", run("morning-brief", map[string]any{}), []string{"mail", "calendar"}, []string{`mail\.google\.com`, `calendar\.google\.com`})
+	// GitHub #337: the provider accepts each stored credential before any
+	// workflow relies on it, and every rendered connection is loopback.
+	testConnectionOK(t, b, "personal", "mail")
+	testConnectionOK(t, b, "personal", "calendar")
+	t.Logf("egress guard: %d connection URLs examined, all loopback", assertLoopbackOnly(t, s))
 
-	// The credentials reached the servers they belong to.
-	if countTool(mail, "gmail_get") == 0 || countTool(cal, "calendar_list_events") == 0 {
+	answers := map[string]map[string]any{
+		"inbox-digest":  run("inbox-digest", map[string]any{"since": "24h"}),
+		"agenda":        run("agenda", map[string]any{"range": "today"}),
+		"morning-brief": run("morning-brief", map[string]any{}),
+	}
+	envelopeValid(t, "inbox-digest", answers["inbox-digest"], []string{"mail"}, []string{`mail\.google\.com`})
+	envelopeValid(t, "agenda", answers["agenda"], []string{"calendar"}, []string{`calendar\.google\.com`})
+	envelopeValid(t, "morning-brief", answers["morning-brief"], []string{"mail", "calendar"}, []string{`mail\.google\.com`, `calendar\.google\.com`})
+	// Every answered id is one of alice's seeded items; none is bob's, and no
+	// answer carries a seeded body.
+	alice := map[string]bool{"r-1": true, "e-1": true}
+	for name, out := range answers {
+		for _, it := range out["items"].([]any) {
+			if id := plain(it.(map[string]any)["id"]); !alice[id] {
+				t.Fatalf("%s answered item %q, which is not alice's", name, id)
+			}
+		}
+		if j := mustJSON(out); strings.Contains(j, RawMailCanary) || strings.Contains(j, BobMailCanary) {
+			t.Fatalf("%s: a seeded body reached the answer", name)
+		}
+	}
+
+	// The credentials reached the servers they belong to, and selected
+	// alice's data only: no call was made with bob's.
+	if len(mail.CallsBy("alice")) == 0 || len(cal.CallsBy("alice")) == 0 {
 		t.Fatal("a recipe never read its server")
 	}
+	assertOnlyUser(t, "mail", mail, "alice")
+	assertOnlyUser(t, "calendar", cal, "alice")
 	if mail.Refused() != 0 || cal.Refused() != 0 {
 		t.Fatalf("a server refused the credential: mail %d, calendar %d", mail.Refused(), cal.Refused())
 	}
 	if text, _, _ := b.Tool("list_recipes", nil); strings.Count(text, `"project":"`+ns+`--personal"`) != 3 {
 		t.Fatalf("list_recipes does not show the three installs: %s", text)
 	}
-	if strings.Contains(b.Transcript(), RawMailCanary) || strings.Contains(b.Transcript(), MailTokenCanary) || strings.Contains(b.Transcript(), CalendarTokenCanary) {
+	if tr := b.Transcript(); strings.Contains(tr, RawMailCanary) || strings.Contains(tr, BobMailCanary) ||
+		strings.Contains(tr, MailTokenCanary) || strings.Contains(tr, CalendarTokenCanary) {
 		t.Fatal("a mail body or a credential reached the harness")
 	}
 }

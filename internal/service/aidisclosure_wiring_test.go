@@ -6,6 +6,8 @@ import (
 	"regexp"
 	"strings"
 	"testing"
+
+	"vornik.io/vornik/internal/testutil/repowalk"
 )
 
 // TestEveryChannelReceiverWiresTheAIDisclosure is a source-level guard.
@@ -73,6 +75,7 @@ func receiverLiteralsMissingField(t *testing.T, field string) []string {
 	literal := regexp.MustCompile(`&dispatcher\.ChannelReceiver\{`)
 
 	var offenders []string
+	found := 0
 	err := filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
 			return nil // unreadable tree entries aren't this test's business
@@ -82,10 +85,9 @@ func receiverLiteralsMissingField(t *testing.T, field string) []string {
 			// Skip dot-directories (.git, and the generated .vornik-export /
 			// .vornik-public-clone mirrors — those are build outputs, and
 			// scanning them would report the same five sites twice more).
-			if name != "." && strings.HasPrefix(name, ".") {
-				return filepath.SkipDir
-			}
-			if name == "node_modules" || name == "vendor" {
+			// The root is never skipped, whatever it is named: publish-ce runs
+			// this inside $SRC/.vornik-export (release 2026.10.6).
+			if repowalk.SkipDir(root, path, name) {
 				return filepath.SkipDir
 			}
 			return nil
@@ -98,7 +100,9 @@ func receiverLiteralsMissingField(t *testing.T, field string) []string {
 			return nil
 		}
 		text := string(src)
-		for _, loc := range literal.FindAllStringIndex(text, -1) {
+		locs := literal.FindAllStringIndex(text, -1)
+		found += len(locs)
+		for _, loc := range locs {
 			body, ok := compositeLiteralBody(text[loc[1]:])
 			if !ok {
 				continue
@@ -117,6 +121,12 @@ func receiverLiteralsMissingField(t *testing.T, field string) []string {
 	})
 	if err != nil {
 		t.Fatalf("walk: %v", err)
+	}
+	// #334 item 6 (audit 2026-10-12): zero ChannelReceiver literals (a renamed
+	// type, a tree the walk could not read) reported every channel wired.
+	t.Logf("ChannelReceiver literals examined: %d", found)
+	if found == 0 {
+		t.Fatal("examined 0 &dispatcher.ChannelReceiver{ literals; a law that looked at nothing has not passed")
 	}
 	return offenders
 }

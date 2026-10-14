@@ -1,13 +1,13 @@
 ---
 sources:
     - path: internal/service/container_scheduler.go
-      sha256: 0d88ff6df415d09f90934677adb0ee2e2e82216df90b661e00dee9f9b15be29b
+      sha256: 85ddb46aadf0458abfff65458535b59d1a718a1aa76c0eb8ca3adef1235d7dfa
     - path: internal/service/memory_adapter.go
       sha256: baeb39e5d0b16da77c177e84939d7fb7a26b6a81f40bdf05532f44b3267b681e
     - path: internal/memory/reranker.go
       sha256: 2db6fa73c81bedda7ce9728feead4d627380e97f84a88c94b9db63075f21c93a
     - path: internal/config/config.go
-      sha256: 0ad81da603132beb235857eaef8b15e21f331418de959cc44643a231bd195ebd
+      sha256: eea6e1cbae1550df837f6898c1b3cb05781338f0e2c8f1d0719dc513733454f6
 ---
 # Reference architecture
 
@@ -424,3 +424,114 @@ reports the same errors from the last attempt without triggering one.
 remediations attached, and a validator that re-implements them will drift from the
 product. Prefer routing to it over duplicating it. See
 [vornikctl](vornikctl.md) and [Feature doctor](../guides/feature-doctor.md).
+
+## Trust zones and invariants
+
+One page for three questions: where each credential lives, what an agent sandbox can
+reach, and what leaves the host and to whom. The arrows show who calls whom.
+
+```mermaid
+flowchart LR
+    subgraph FRONT["Front-ends and channels: authenticated, untrusted input"]
+        UI["Web UI and REST clients"]
+        CH["Telegram, Slack, mail, webhooks"]
+        CMP["Companion MCP clients, A2A peers"]
+    end
+    subgraph CP["Daemon control plane: trusted"]
+        API["HTTP API: auth, admin gate"]
+        EXE["Executor and scheduler"]
+        PRX["Model proxy /api/v1"]
+        GW["MCP gateway: per-role tool allowlist"]
+        ARTR["Artifact routes and input staging"]
+        SPW["Spawn law: closed program set"]
+    end
+    subgraph INF["Shared infrastructure: daemon access only"]
+        DB[("Database")]
+        SEC[("Secret store and config secrets")]
+        BLOB[("Artifact blobs, workspaces, git")]
+    end
+    subgraph SBX["Agent sandboxes: untrusted"]
+        AG["Agent container: rootless podman, per-task key"]
+        ONE["Sandbox one-shots: extractors, no network"]
+    end
+    subgraph EXT["External providers: third party"]
+        LLM["Model providers"]
+        TOOLS["MCP servers, APIs, brokers"]
+        FORGE["Git forges"]
+        NET["Open internet"]
+    end
+    UI --> API
+    CH --> API
+    CMP --> API
+    API --> EXE
+    API --> DB
+    EXE --> DB
+    EXE --> ARTR
+    ARTR --> BLOB
+    EXE -->|"argv built by the daemon"| SPW
+    SPW -->|"podman run, pinned image"| AG
+    SPW --> ONE
+    EXE -->|"per-execution copies, never the store"| AG
+    AG -->|"unix socket, route allowlist (daemon-only roles)"| PRX
+    AG -.->|"TCP with the per-task key (egress roles)"| API
+    AG -->|"tool calls, socket or TCP per role"| GW
+    PRX --> SEC
+    GW --> SEC
+    PRX --> LLM
+    GW --> TOOLS
+    EXE --> FORGE
+    AG -.->|"egress roles only"| NET
+    API -->|"outbound messages, Art 50 disclosure"| CH
+    classDef front fill:#fff4ce,stroke:#8a6d00,color:#3d3000
+    classDef trusted fill:#d8f3dc,stroke:#2d6a4f,color:#081c15
+    classDef infra fill:#dbe9f6,stroke:#1d4e89,color:#0b1f3a
+    classDef untrusted fill:#ffd6d6,stroke:#9d0208,color:#370617
+    classDef external fill:#e9e9e9,stroke:#555555,color:#1a1a1a
+    class UI,CH,CMP front
+    class API,EXE,PRX,GW,ARTR,SPW trusted
+    class DB,SEC,BLOB infra
+    class AG,ONE untrusted
+    class LLM,TOOLS,FORGE,NET external
+```
+
+Colour key: green is the trusted daemon control plane; blue is shared infrastructure
+only the daemon touches; red is the untrusted agent sandboxes; yellow is front-ends
+and channels (authenticated, but their content is untrusted); grey is third-party
+providers. A dashed line is a path only some roles have.
+
+### Invariants
+
+Each invariant below names the test that fails when it breaks. A statement with no
+failing test is a hope, so a row without one is not allowed: the
+`TestTrustZoneRegister_EveryInvariantNamesALiveTest` law reads this table and fails
+the build if a named test is renamed or deleted, or if the count below drifts.
+
+**13 invariants stated, 13 pinned by at least one test (34 test references)**: 9 hold as stated, 4 hold only for the
+scope given in the row (**SCOPED**), and 0 have a known gap that is being fixed
+(**GAP**). A pinned test proves the part it asserts. It does not prove the whole
+sentence, and the status column says where those differ.
+
+| ID | Invariant | Pinned by | Status |
+|---|---|---|---|
+| TZ-1 | Provider and connector credentials stay in the daemon. An agent run holds only its per-task key, plus any named secrets the operator explicitly grants its project. | `TestInjectPerTaskKey_OverridesVORNIK_LLM_API_KEY`; `TestInjectPerTaskKey_MintErrorRefusesStart`; `TestInjectWarmProjectKey_MintFailureRefuses`; `TestExecuteAgentStep_MintFailureNeverStartsContainer`; `TestExecuteWarmAgentStep_MintFailureNeverStartsWarm` | **HOLDS** (scope: with the per-task key minter wired, as in every production build, a failed mint refuses the step instead of falling back to a static key) |
+| TZ-2 | An agent on a daemon-only role reaches only the daemon socket routes on the agent allowlist; every other path is a 404. | `TestAgentSocketRoutes_AllowlistIsExact`; `TestAgentSocketAllowlist_CoversEveryAgentImageCall`; `TestUnixSocket_AdminAPIRouteRefused` | **SCOPED**: daemon-only roles. An egress role reaches the TCP API with its project-scoped key, and no route allowlist applies there |
+| TZ-3 | Agent sandboxes never reach artifact storage directly, only through the daemon's artifact routes. No daemon-owned host path (data dir, artifact store, secrets, config) is mounted into an agent; the runtime mounts exactly the declared per-execution set. | `TestTrustZone_AgentMountsAreExactlyTheDeclaredSet`; `TestW35_StagingRefusesAnotherProjectsArtifact`; `TestConfineTaskInputArtifacts_CallerPathsAreSelectorsAmongOwnRows`; `TestStageInputArtifacts_CrossProjectEntryPerProducer`; `TestCreateTask_InputFiles_RefusesAnotherProjectsArtifactID`; `TestExecuteWorkflowAttempt_TaskInputPathsAreConfinedToNamedRows`; `TestPersistArtifacts_SymlinkSwapAfterListingIsNotFollowed` | **HOLDS** (scope: an agent run can be handed its own project's stored artifacts, never another project's or a temp file; what a run leaves as output is read only from beneath its own workspace, so it cannot be another project's file) |
+| TZ-4 | Every model call an agent makes goes through the daemon's `/api/v1` proxy. | `TestBuildPreImageArgsDaemonOnlySocket`; `TestCheckAgentLLMTopology` | **SCOPED**: enforced for daemon-only and `none` roles, which have no other route. For egress roles it is unenforced configuration: `vornikctl doctor` (`agent_llm_topology`) reports a direct route as an ERROR but blocks nothing, and no test fails on one |
+| TZ-5 | A zero-egress role has no network device. A daemon-only role without a configured socket stays at `--network none` (fails closed), and an invalid default network falls back to daemon-only. | `TestBuildPreImageArgsDaemonOnlyFailClosed`; `TestWithDefaultNetworkInvalidFallsClosed` | **HOLDS** (an unset `runtime.default_network` means egress; zero egress is opt-in) |
+| TZ-6 | A per-task key works only for its own project: the model proxy refuses a cross-project task. | `TestChatCompletions_RejectsCrossProjectTaskID` | **HOLDS** |
+| TZ-7 | An agent's tool calls go through the daemon, which enforces the role's tool allowlist. | `TestMCPEgress_AllowedToolsEnforcedDaemonSide`; `TestServer_CallMCPTool_RoleAllowlistBlocksOutOfScopeTool` | **HOLDS** |
+| TZ-8 | The daemon spawns processes only through its one spawn package, from a closed set of programs, with argv the daemon builds. | `TestSpawnLaw_DaemonCodeImportsOSExecOnlyWhereTheDesignPlacesIt`; `TestSpawnLaw_OnlyNamedPackagesImportSpawn` | **HOLDS** |
+| TZ-9 | An agent container runs only the pinned agent image, from a closed flag grammar (no `--privileged`, `--cap-add`, `--device`), with every capability dropped and no new privileges. | `TestPodmanAgent_RefusesFlagsOutsideTheGrammar`; `TestPodmanAgent_RefusesAnImageThatIsNotThePinnedAgentImage`; `TestBuildPreImageArgsSetsHardeningFlags` | **HOLDS** |
+| TZ-10 | An agent cannot write the project's git state: `.git` is mounted read-only, and warm containers mount no project directory. | `TestS6Law_GitDirMountIsReadOnly`; `TestS6_WarmContainerMountsNoProjectDirectory` | **SCOPED**: covers writes; the read-only `.git` lets an agent read every branch of its own project, by design |
+| TZ-11 | Every outbound message to a person goes through the AI-disclosure path (EU AI Act Art 50). | `TestArt50Law_EveryOutboundSendGoesThroughTheDisclosurePath`; `TestArt50Law_CatchesAPlantedBypass` | **SCOPED**: the law checks sends through the named send methods in the packages it lists, by position rather than data flow |
+| TZ-12 | Admin routes require the admin gate. | `TestAdminHandlersRequireAdminGate` | **HOLDS** |
+| TZ-13 | Credentials entered for agent connections are stored encrypted, under a key file only the daemon's user can read. | `TestStore_CiphertextIsNotThePlaintext`; `TestLoadOrCreateKey_CreatesOnce0600` | **HOLDS** (scope: the credential store; `secrets/*.env` files are plaintext under file permissions) |
+
+What this table does **not** cover: host hardening outside vornik (the kernel, podman,
+SELinux policy), the database server's own access control, and model-provider
+behaviour. It is not an exhaustive list of boundaries either: properties observed
+without a test are not registered, for example that the agent step runs without a
+read-only root or a pids limit (the sandbox one-shots have both), and that container
+environment values, which the logs redact, are visible to host users through the
+process table and `podman inspect`. A container escape reaches the host kernel; optional microVM isolation
+is designed but not built.

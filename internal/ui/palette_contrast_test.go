@@ -132,7 +132,16 @@ func TestPalette_ContrastPerTheme(t *testing.T) {
 // Dark brand-400 is link text and too light to sit behind white text, so no
 // template may use it as a fill (design §11.2 Decision 5).
 func TestPalette_NoWhiteTextOnBrand400(t *testing.T) {
-	files, _ := os.ReadDir("templates")
+	// #334 item 6 (audit 2026-10-12): the ReadDir error was discarded, so a
+	// moved templates/ directory checked nothing and passed.
+	files, err := os.ReadDir("templates")
+	if err != nil {
+		t.Fatalf("read templates: %v", err)
+	}
+	t.Logf("brand-400 law: examined %d template file(s)", len(files))
+	if len(files) == 0 {
+		t.Fatal("brand-400 law: examined 0 templates; a law that looked at nothing has not passed")
+	}
 	re := regexp.MustCompile(`class="[^"]*\bbg-brand-400\b[^"]*"`)
 	for _, f := range files {
 		raw, err := os.ReadFile("templates/" + f.Name())
@@ -147,6 +156,74 @@ func TestPalette_NoWhiteTextOnBrand400(t *testing.T) {
 				t.Errorf("%s: bg-brand-400 with text-white: %s", f.Name(), m)
 			}
 		}
+	}
+}
+
+// glass returns the .glass fill (--glass-bg at --glass-bg-alpha) per theme,
+// parsed from the glass token blocks that follow the palette blocks.
+func glass(t *testing.T, src, header string) (rgb, float64) {
+	t.Helper()
+	g := strings.Index(src, "Glass surface system")
+	if g < 0 {
+		t.Fatal("glass token block not found")
+	}
+	toks := themeTokens(t, src[g:], header)
+	i := strings.Index(src[g:], header)
+	m := regexp.MustCompile(`--glass-bg-alpha:\s*([0-9.]+);`).FindStringSubmatch(src[g+i:])
+	if m == nil {
+		t.Fatalf("no --glass-bg-alpha after %q", header)
+	}
+	var a float64
+	if _, err := fmt.Sscanf(m[1], "%f", &a); err != nil {
+		t.Fatal(err)
+	}
+	return toks["glass-bg"], a
+}
+
+// audit 2026-10-12 (GitHub #164): form-control boundaries were drawn with
+// surface-700/600 (1.00–1.47:1), under WCAG 1.4.11's 3:1. --control-border
+// must clear 3:1 against every surface a control sits on, glass included
+// (design §11.3).
+func TestPalette_ControlBorderNonTextContrast(t *testing.T) {
+	src := partials(t)
+	for name, header := range map[string]string{
+		"light": `:root, [data-theme="light"] {`,
+		"dark":  `[data-theme="dark"] {`,
+	} {
+		m := themeTokens(t, src, header)
+		cb, ok := m["control-border"]
+		if !ok {
+			t.Errorf("%s: no --control-border token", name)
+			continue
+		}
+		gbg, ga := glass(t, src, header)
+		glassPage := over(gbg, m["surface-900"], ga)
+		bgs := map[string]rgb{
+			"surface-900":            m["surface-900"],
+			"surface-800":            m["surface-800"],
+			"surface-700":            m["surface-700"],
+			"glass over surface-900": glassPage,
+			"glass over surface-800": over(gbg, m["surface-800"], ga),
+			// Non-surface backdrops that hold a bordered control (backdrop
+			// scan, design §11.3 review 474e F1). Tailwind default colours.
+			"ink-900 (fixit_doctor field row)":               m["ink-900"],
+			"amber-500/5 glass panel over page (setup.html)": over(rgb{245, 158, 11}, glassPage, .05),
+			"rose danger zone over page (memory_operator_detail)": map[string]rgb{
+				"light": rgb{255, 241, 242},                         // bg-rose-50
+				"dark":  over(rgb{76, 5, 25}, m["surface-900"], .2), // dark:bg-rose-950/20
+			}[name],
+		}
+		for bn, bg := range bgs {
+			got := contrast(cb, bg)
+			if got < 3 {
+				t.Errorf("%s: control-border vs %s = %.3f:1, want >= 3:1", name, bn, got)
+				continue
+			}
+			t.Logf("%s: control-border vs %s = %.2f:1", name, bn, got)
+		}
+	}
+	if !strings.Contains(src, "control: 'rgb(var(--control-border) / <alpha-value>)'") {
+		t.Error("Tailwind config does not register the `control` colour, so border-control does not resolve")
 	}
 }
 

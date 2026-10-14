@@ -385,10 +385,7 @@ func runBenchAgentGold(cmd *cobra.Command, _ []string) error {
 		return err
 	}
 	defer closeDB()
-	if err := verifyDaemonTarget(cmd.Context(), runner); err != nil {
-		return err
-	}
-	if err := clearAgentBenchStore(cmd.Context()); err != nil {
+	if err := prepareBenchStore(cmd.Context(), runner, clearAgentBenchStore); err != nil {
 		return err
 	}
 
@@ -397,6 +394,7 @@ func runBenchAgentGold(cmd *cobra.Command, _ []string) error {
 	// it against a ground truth that does not exist yet would be circular.
 	r := &agentbench.Runner{Tasks: runner, Traces: store}
 	var observed []agentbench.UnrestrictedRun
+	var evidence goldEvidence
 	for _, spec := range agentbench.SortTasks(tasks) {
 		for i := 0; i < benchAgentRuns; i++ {
 			if workspace != nil {
@@ -408,7 +406,7 @@ func runBenchAgentGold(cmd *cobra.Command, _ []string) error {
 			if err != nil {
 				return fmt.Errorf("unrestricted run of %q: %w", spec.ID, err)
 			}
-			invoked, err := collectInvoked(cmd.Context(), store, outcome.TaskID, outcome.Executions)
+			invoked, err := collectInvoked(cmd.Context(), store, outcome.TaskID, outcome.Executions, outcome.Succeeded, &evidence)
 			if err != nil {
 				return err
 			}
@@ -419,6 +417,12 @@ func runBenchAgentGold(cmd *cobra.Command, _ []string) error {
 		}
 	}
 	_ = r
+	// A batch that never reached the model is not ground truth about the
+	// agent: refuse before writing, so the reproduce script repeats it
+	// instead of skipping it as recorded (§12.25 D2, GitHub #309).
+	if err := evidence.refuseIfNoModelReached(); err != nil {
+		return err
+	}
 
 	manifest, err := agentbench.BuildGold(benchAgentTaskSetHash, observed, benchAgentRuns)
 	if err == nil {
@@ -518,7 +522,26 @@ func countExcluded(m agentbench.GoldManifest) int {
 // recorded zero tools and every task was excluded as "invoked no tools" — a gold
 // set that looked deliberate and was empty. Same defect as the runner's, fixed
 // there first and missed here.
-func collectInvoked(ctx context.Context, store agentbench.TraceStore, taskID string, executions []string) ([]string, error) {
+// goldEvidence accumulates, across a gold batch, what the "did anything reach
+// the model" refusal reads (benchmark LLD §12.25 D2, GitHub #309): one record
+// per execution (its tokens and the task's verdict) and every step outcome.
+// The gold recorder does not go through Runner.Run, so it feeds the same
+// predicate from its own loop.
+type goldEvidence struct {
+	records  []agentbench.ExecutionRecord
+	outcomes []agentbench.StepOutcome
+}
+
+// refuseIfNoModelReached returns the agentbench.ErrNoModelReached refusal when
+// the batch measured nothing about the agent, nil otherwise.
+func (ev *goldEvidence) refuseIfNoModelReached() error {
+	if reached, err := agentbench.NoModelReached(ev.records, ev.outcomes); reached {
+		return err
+	}
+	return nil
+}
+
+func collectInvoked(ctx context.Context, store agentbench.TraceStore, taskID string, executions []string, succeeded bool, ev *goldEvidence) ([]string, error) {
 	if len(executions) == 0 {
 		found, err := store.Executions(ctx, taskID)
 		if err != nil {
@@ -532,12 +555,19 @@ func collectInvoked(ctx context.Context, store agentbench.TraceStore, taskID str
 	}
 	var invoked []string
 	for _, execID := range executions {
-		_, traces, err := store.Assemble(ctx, taskID, execID)
+		rec, traces, err := store.Assemble(ctx, taskID, execID)
 		if err != nil {
 			return nil, fmt.Errorf("assemble %s: %w", execID, err)
 		}
 		for _, tr := range traces {
 			invoked = append(invoked, tr.Invoked...)
+			if ev != nil {
+				ev.outcomes = append(ev.outcomes, tr.Outcomes...)
+			}
+		}
+		if ev != nil {
+			rec.TaskID, rec.ExecutionID, rec.Succeeded = taskID, execID, succeeded
+			ev.records = append(ev.records, rec)
 		}
 	}
 	return invoked, nil
@@ -609,10 +639,7 @@ func runBenchAgentRun(cmd *cobra.Command, _ []string) error {
 		return err
 	}
 	defer closeDB()
-	if err := verifyDaemonTarget(cmd.Context(), daemon); err != nil {
-		return err
-	}
-	if err := clearAgentBenchStore(cmd.Context()); err != nil {
+	if err := prepareBenchStore(cmd.Context(), daemon, clearAgentBenchStore); err != nil {
 		return err
 	}
 	if err := verifyModelWindow(cmd.Context(), cmd); err != nil {
@@ -898,6 +925,22 @@ func probeSet(haveGold bool) []agentbench.Probe {
 // what let a benchmark write production on 2026-08-12.
 func verifyDaemonTarget(ctx context.Context, daemon *agentbench.DaemonTaskRunner) error {
 	return membench.VerifyWriteTargetOf(ctx, "vornik daemon", daemon, benchAgentDatabase)
+}
+
+// prepareBenchStore is the pre-run sequence of both passes (design §12.27):
+// prove where the daemon writes, prove the companion key belongs to
+// --project (GitHub #378: a key for another project wiped one store and ran in
+// the other), then clear the benchmark store. Nothing destructive runs until
+// every check has passed. clearStore is a parameter so the ordering is testable
+// without a database.
+func prepareBenchStore(ctx context.Context, daemon *agentbench.DaemonTaskRunner, clearStore func(context.Context) error) error {
+	if err := verifyDaemonTarget(ctx, daemon); err != nil {
+		return err
+	}
+	if err := daemon.VerifyKeyProject(ctx); err != nil {
+		return err
+	}
+	return clearStore(ctx)
 }
 
 // clearAgentBenchStore resets the benchmark project's memory before a pass.

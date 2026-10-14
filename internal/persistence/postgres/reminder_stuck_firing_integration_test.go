@@ -40,7 +40,11 @@ func TestReclaimStuckFiring_ReturnsOldFiringRow(t *testing.T) {
 		_, _ = db.ExecContext(ctx, `DELETE FROM dispatcher_reminders WHERE id = $1`, rem.ID)
 	})
 
-	old := time.Now().Add(-1 * time.Hour).UTC()
+	// A fixed, ancient fired_at: the reclaim pages oldest first, and the
+	// integration database is shared across runs, so a row backdated by only
+	// an hour lost its place in the page to older leftovers (incident
+	// 2026-10-14: ten 'firing' rows left by the wipe suite filled LIMIT 10).
+	old := time.Date(2001, 1, 1, 0, 0, 0, 0, time.UTC)
 	backdateFiredAt(t, ctx, db, rem.ID, old)
 
 	cutoff := time.Now().Add(-15 * time.Minute)

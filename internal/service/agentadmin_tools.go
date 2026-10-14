@@ -224,6 +224,9 @@ func (s *agentAdminService) advertiseUnauthenticated(ctx context.Context, ns str
 // afterCredentialStored files a tools approval for each read-pending server
 // of ns that uses ns/name, now that it can be reached (plan P4.3 trigger).
 func (s *agentAdminService) afterCredentialStored(ctx context.Context, ns, name string) {
+	if s.afterCredentialHook != nil {
+		s.afterCredentialHook() // test seam (GitHub #314, review-20261013-99c9 F1)
+	}
 	ref := "secret://" + ns + "/" + name
 	for _, p := range s.c.Registry.ListProjects() {
 		if got, ok := agentns.FromID(p.ID); !ok || got != ns {

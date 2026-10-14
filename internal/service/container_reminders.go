@@ -57,13 +57,13 @@ func (r *containerReminderFileSenderResolver) ResolveReminderFileSender(channel,
 			}
 			teamID := strings.TrimSpace(r.c.SlackProjects[i].Slack.TeamID)
 			if teamID != "" && strings.HasPrefix(channelRef, teamID+"/") {
-				return slackFileSender{channel: ch, sessionID: channelRef}
+				return slackFileSender{channel: ch, sessionID: channelRef, disclosure: r.c.AIDisclosure}
 			}
 		}
 	case "email":
 		for _, ch := range r.c.EmailChannels {
 			if ch != nil {
-				return emailFileSender{ch: ch, sessionID: channelRef}
+				return emailFileSender{ch: ch, sessionID: channelRef, disclosure: r.c.AIDisclosure}
 			}
 		}
 	case "telegram":
@@ -142,10 +142,11 @@ func (c *Container) initReminders() *reminders.Runner {
 		return nil
 	}
 	return reminders.New(reminders.Config{
-		Repo:      c.repos.Reminders,
-		Resolver:  &containerChannelResolver{c: c},
-		AuditRepo: c.repos.AdminAudit,
-		Logger:    c.Logger.With().Str("component", "reminders").Logger(),
+		Repo:       c.repos.Reminders,
+		Resolver:   &containerChannelResolver{c: c},
+		AuditRepo:  c.repos.AdminAudit,
+		Disclosure: c.AIDisclosure, // Art 50 notice on reminder pushes (GitHub #342)
+		Logger:     c.Logger.With().Str("component", "reminders").Logger(),
 		// Creator is deliberately left nil here — c.taskCreator doesn't
 		// exist yet at this point in the boot sequence (initReminders
 		// runs before initHTTPServer constructs it). Task-kind
@@ -176,6 +177,7 @@ func (a *containerTaskCreator) CreateScheduledTask(ctx context.Context, p remind
 		TaskType:       p.TaskType,
 		Prompt:         p.Prompt,
 		CreationSource: persistence.TaskCreationSourceScheduled,
+		GoalOrigin:     persistence.TaskGoalOriginReminder,
 		IdempotencyKey: p.IdempotencyKey,
 		ExtraContext:   map[string]any{"scheduled_reminder_id": p.ReminderID},
 	})
@@ -208,6 +210,7 @@ func (c *Container) reminderCompletionNotifier() executor.CompletionNotifier {
 			c.repos.Tasks,
 		))
 	}
+	opts = append(opts, reminders.WithDisclosure(c.AIDisclosure)) // Art 50, GitHub #342
 	return reminders.NewCompletionNotifier(
 		c.repos.Reminders,
 		&containerChannelResolver{c: c},

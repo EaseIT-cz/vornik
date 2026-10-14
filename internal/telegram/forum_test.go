@@ -497,7 +497,7 @@ func newTestBotWithForum(t *testing.T, server *httptest.Server, opts ...BotOptio
 	t.Helper()
 	chatClient := chat.NewClient("https://api.example.com", "test-key", "gpt-4")
 	all := append([]BotOption{WithHTTPClient(server.Client())}, opts...)
-	bot, err := NewBot(BotConfig{Token: "t", AllowUnlistedUsers: true}, chatClient, all...)
+	bot, err := NewBot(BotConfig{Token: "t", AllowUnlistedUsers: true}, chatClient, append(all, WithAIDisclosure(alreadyDisclosed()))...)
 	if err != nil {
 		t.Fatalf("NewBot: %v", err)
 	}

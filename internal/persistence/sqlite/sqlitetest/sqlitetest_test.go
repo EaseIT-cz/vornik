@@ -106,11 +106,45 @@ func TestOpen_LogsASlowOpenAndMigrate(t *testing.T) {
 		t.Fatalf("a fast open logged %q", quiet.logs)
 	}
 
+	// An existing file is the path that still connects and migrates in place
+	// (":memory:" and a new file copy a migrated image since 2026-10-13/14).
+	// It is an already-migrated copy, so the re-migrate is cheap: a migrate
+	// from empty of a synchronous(FULL) file took 8.6 s under load and made
+	// the quiet half of this test flaky when it used one (2026-10-14).
+	existing := File(t, "existing.db")
+	var path string
+	if err := existing.QueryRowContext(context.Background(), `SELECT file FROM pragma_database_list WHERE name = 'main'`).Scan(&path); err != nil {
+		t.Fatal(err)
+	}
 	defer func(old time.Duration) { slowOpen = old }(slowOpen)
 	slowOpen = 0
 	slow := &recordingTB{TB: t}
-	Open(slow, ":memory:")
+	Open(slow, path)
 	if len(slow.logs) != 2 || !strings.Contains(slow.logs[0], "slow open") || !strings.Contains(slow.logs[1], "slow migrate") {
 		t.Fatalf("slow open/migrate logged %q, want one line for each", slow.logs)
+	}
+}
+
+// audit 2026-10-12: storage.Open in tests took the daemon's 5 s bound because
+// its caller passed context.Background() (#126). Context carries the fixture
+// bound, and it is that bound — not the 5 s default — that a storage open's
+// connect sees (connectContext prefers the caller's deadline).
+func TestContext_CarriesTheFixtureBoundAndEndsWithTheTest(t *testing.T) {
+	var ctx context.Context
+	t.Run("inner", func(t *testing.T) {
+		ctx = Context(t)
+		d, ok := ctx.Deadline()
+		if !ok {
+			t.Fatal("no deadline: a storage open would fall back to the daemon's 5 s")
+		}
+		if left := time.Until(d); left < sqlite.FixtureConnectTimeout-5*time.Second || left > sqlite.FixtureConnectTimeout {
+			t.Fatalf("deadline %s away, want about %s", left, sqlite.FixtureConnectTimeout)
+		}
+		if ctx.Err() != nil {
+			t.Fatalf("live context already done: %v", ctx.Err())
+		}
+	})
+	if ctx.Err() == nil {
+		t.Fatal("the context outlived its test")
 	}
 }

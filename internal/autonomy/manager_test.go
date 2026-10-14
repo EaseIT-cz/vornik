@@ -346,6 +346,8 @@ func TestCreateAutonomousTask_Basic(t *testing.T) {
 	assert.Equal(t, "test-proj", task.ProjectID)
 	assert.Equal(t, persistence.TaskStatusQueued, task.Status)
 	assert.Equal(t, persistence.TaskCreationSourceAutonomous, task.CreationSource)
+	// GitHub #347: the autonomy manager wrote this goal.
+	assert.Equal(t, persistence.TaskGoalOriginAutonomy, task.GoalOrigin)
 	assert.Equal(t, 50, task.Priority)
 	assert.Equal(t, 1, task.Attempt)
 	assert.Equal(t, 3, task.MaxAttempts)

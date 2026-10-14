@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"vornik.io/vornik/internal/config"
+	"vornik.io/vornik/internal/persistence/sqlite/sqlitetest"
 )
 
 // Review R6 / plan §7g: the SQLite branch must open with synchronous=FULL so
@@ -14,7 +15,7 @@ import (
 // leaving synchronous at the driver default (NORMAL under WAL) — this test
 // fails against that DSN.
 func TestSQLiteOpensWithSynchronousFull(t *testing.T) {
-	ctx := context.Background()
+	ctx := sqlitetest.Context(t)
 	b, err := Open(ctx, config.DatabaseConfig{Driver: "sqlite", Path: filepath.Join(t.TempDir(), "d.db")})
 	if err != nil {
 		t.Fatal(err)

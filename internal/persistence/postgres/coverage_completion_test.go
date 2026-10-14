@@ -59,6 +59,7 @@ func TestTaskGet_FullyPopulatedRow(t *testing.T) {
 		3.5,                // budget_usd
 		"key-abc",          // created_by_api_key_id
 		"api_key:key-abc",  // created_by_actor
+		"rest",             // goal_origin (migration 230, GitHub #347)
 	)
 
 	mock.ExpectQuery(regexp.QuoteMeta("FROM tasks WHERE id = $1")).
@@ -73,6 +74,9 @@ func TestTaskGet_FullyPopulatedRow(t *testing.T) {
 	// is what this test exists for, not value bookkeeping.
 	if out.WorkflowID == nil || *out.WorkflowID != "wf-1" {
 		t.Errorf("WorkflowID: %+v", out.WorkflowID)
+	}
+	if out.GoalOrigin != "rest" {
+		t.Errorf("GoalOrigin: %q", out.GoalOrigin)
 	}
 	if out.IdempotencyKey == nil || *out.IdempotencyKey != "key-1" {
 		t.Errorf("IdempotencyKey: %+v", out.IdempotencyKey)

@@ -222,12 +222,12 @@
                     <div class="flex items-center gap-2">
                         <button type="submit" name="verdict" value="up"
                                 aria-pressed="{{if eq .Rating.Verdict "up"}}true{{else}}false{{end}}"
-                                class="px-3 py-1.5 rounded-lg text-sm border {{if eq .Rating.Verdict "up"}}border-emerald-500 text-emerald-700 dark:text-emerald-400 bg-emerald-500/10{{else}}border-surface-600 text-ink-300{{end}}">
+                                class="px-3 py-1.5 rounded-lg text-sm border {{if eq .Rating.Verdict "up"}}border-emerald-500 text-emerald-700 dark:text-emerald-400 bg-emerald-500/10{{else}}border-control text-ink-300{{end}}">
                             Good
                         </button>
                         <button type="submit" name="verdict" value="down"
                                 aria-pressed="{{if eq .Rating.Verdict "down"}}true{{else}}false{{end}}"
-                                class="px-3 py-1.5 rounded-lg text-sm border {{if eq .Rating.Verdict "down"}}border-rose-500 text-rose-700 dark:text-rose-400 bg-rose-500/10{{else}}border-surface-600 text-ink-300{{end}}">
+                                class="px-3 py-1.5 rounded-lg text-sm border {{if eq .Rating.Verdict "down"}}border-rose-500 text-rose-700 dark:text-rose-400 bg-rose-500/10{{else}}border-control text-ink-300{{end}}">
                             Not good
                         </button>
                         {{if .Rating.Verdict}}
@@ -242,7 +242,7 @@
                         <input type="text" name="reason" maxlength="500"
                                value="{{.Rating.Reason}}"
                                placeholder="Optional — what made it good or not (max 500 chars)"
-                               class="w-full px-3 py-1.5 rounded-lg bg-surface-800 border border-surface-600 text-sm text-ink-200 placeholder:text-ink-600">
+                               class="w-full px-3 py-1.5 rounded-lg bg-surface-800 border border-control text-sm text-ink-200 placeholder:text-ink-600">
                     </label>
                     <p class="text-[11px] text-ink-600">
                         Your verdict on execution <code>{{.Rating.ExecutionID}}</code>. Changing it
@@ -287,7 +287,7 @@
                         {{end}}
                         <label for="taskAnswer" class="sr-only">Your answer</label>
                         <textarea name="content" id="taskAnswer" rows="3" placeholder="Your answer (optional details)..."
-                                  class="w-full bg-surface-900 border border-surface-600 rounded px-3 py-2 text-sm text-ink-200"></textarea>
+                                  class="w-full bg-surface-900 border border-control rounded px-3 py-2 text-sm text-ink-200"></textarea>
                         <div class="flex justify-end">
                             <button type="submit" class="bg-amber-600 hover:bg-amber-500 text-white text-sm font-medium px-4 py-1.5 rounded">Submit answer</button>
                         </div>
@@ -373,7 +373,7 @@
                     <input type="search" id="conv-search" placeholder="Search messages…"
                            autocomplete="off"
                            aria-label="Search messages"
-                           class="w-full bg-surface-900 border border-surface-600 rounded-lg px-3 py-1.5 text-sm text-ink-200 focus:border-brand-500 focus:outline-none"
+                           class="w-full bg-surface-900 border border-control rounded-lg px-3 py-1.5 text-sm text-ink-200 focus:border-brand-500 focus:outline-none"
                            oninput="convSearchFilter(this.value)" onkeydown="if(event.key==='Escape'){this.value='';convSearchFilter('');}">
                 </div>
                 <div id="conv-thread" class="px-5 py-4 space-y-3 max-h-[60vh] overflow-y-auto">
@@ -466,12 +466,12 @@
                     <form method="POST" action="/ui/tasks/{{.Task.ID}}/message" class="space-y-2" id="taskComposeFormDesktop">
                         <label for="taskComposeDesktop" class="sr-only">Message</label>
                         <textarea name="content" id="taskComposeDesktop" rows="2" placeholder="Send a message to the lead. Check the directive box to course-correct (requeues failed/cancelled tasks)."
-                                  class="w-full bg-surface-900 border border-surface-600 rounded px-3 py-2 text-sm text-ink-200" required></textarea>
+                                  class="w-full bg-surface-900 border border-control rounded px-3 py-2 text-sm text-ink-200" required></textarea>
                         <div class="flex items-center justify-between gap-3 flex-wrap">
                             <label class="text-xs text-ink-400 flex items-center gap-2 cursor-pointer select-none">
                                 <input type="checkbox" id="taskComposeAsDirectiveDesktop"
                                        onchange="document.getElementById('taskComposeFormDesktop').action = this.checked ? '/ui/tasks/{{.Task.ID}}/directive' : '/ui/tasks/{{.Task.ID}}/message'"
-                                       class="rounded border-surface-600 bg-surface-900 text-purple-800 dark:text-purple-500 focus:ring-purple-500/40">
+                                       class="rounded border-control bg-surface-900 text-purple-800 dark:text-purple-500 focus:ring-purple-500/40">
                                 <span>As a course correction (directive — requeues failed/cancelled tasks)</span>
                             </label>
                             <button type="submit" class="bg-brand-600 hover:bg-brand-500 text-white text-sm font-medium px-4 py-1.5 rounded">Send</button>
@@ -587,11 +587,11 @@
                     <div class="px-4 py-4 space-y-3">
                         <label for="taskComposeMobile" class="sr-only">Message</label>
                         <textarea name="content" id="taskComposeMobile" rows="4" autofocus placeholder="Send a message to the lead…"
-                                  class="w-full bg-surface-900 border border-surface-600 rounded-lg px-3 py-2 text-base text-ink-100" required></textarea>
+                                  class="w-full bg-surface-900 border border-control rounded-lg px-3 py-2 text-base text-ink-100" required></textarea>
                         <label class="text-xs text-ink-300 flex items-center gap-2 cursor-pointer select-none">
                             <input type="checkbox" id="taskComposeAsDirectiveMobile"
                                    onchange="document.getElementById('taskComposeFormMobile').action = this.checked ? '/ui/tasks/{{.Task.ID}}/directive' : '/ui/tasks/{{.Task.ID}}/message'"
-                                   class="h-4 w-4 rounded border-surface-600 bg-surface-900 text-purple-800 dark:text-purple-500 focus:ring-purple-500/40">
+                                   class="h-4 w-4 rounded border-control bg-surface-900 text-purple-800 dark:text-purple-500 focus:ring-purple-500/40">
                             <span>Course correction (directive)</span>
                         </label>
                     </div>
@@ -643,7 +643,7 @@
                     </div>
                     <label class="flex items-center gap-2 cursor-pointer">
                         <span class="text-xs text-ink-400">Auto-scroll</span>
-                        <input type="checkbox" id="autoscroll-toggle" class="form-checkbox h-3.5 w-3.5 text-brand-500 rounded border-surface-600 bg-surface-700" checked>
+                        <input type="checkbox" id="autoscroll-toggle" class="form-checkbox h-3.5 w-3.5 text-brand-500 rounded border-control bg-surface-700" checked>
                     </label>
                 </div>
                 {{/* Open the live SSE log stream only for non-
@@ -912,7 +912,7 @@
                             <textarea id="steer-failed-input" rows="3"
                                       {{if .SteerPrefill}}data-steer-prefill="{{.SteerPrefill}}"{{end}}
                                       placeholder="What should the next attempt do differently? e.g. &quot;Skip the headphones.com source — it's captcha-locked. Use Reuters for the news round-up.&quot;"
-                                      class="w-full px-3 py-2 text-sm rounded-lg bg-surface-900 border border-surface-600 text-ink-100 focus:border-accent-500/60 focus:outline-none resize-none"></textarea>
+                                      class="w-full px-3 py-2 text-sm rounded-lg bg-surface-900 border border-control text-ink-100 focus:border-accent-500/60 focus:outline-none resize-none"></textarea>
                             <div class="flex items-center justify-between gap-2 flex-wrap">
                                 <span class="text-[11px] text-ink-500">Hint is task-scoped: <span class="text-ink-400">it survives the retry and applies to the new execution's first step.</span></span>
                                 <div class="flex items-center gap-3">

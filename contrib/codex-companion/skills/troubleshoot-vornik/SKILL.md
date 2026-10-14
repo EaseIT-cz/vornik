@@ -80,7 +80,7 @@ vornikctl execution prompt <executionId> <stepId>   # what the step's model was 
 only a companion or agent admin key, use these before asking anyone for host
 commands: `status` (the attempt number and, after a failed attempt, the step
 that failed and its error class), `task_logs` (the task's live events; pass
-back `next_cursor` to follow, `complete` is true when it has finished) and
+back `next_cursor` as the `cursor` argument to follow, `complete` is true when it has finished) and
 `task_explain` (the post-mortem and the playbook class). With an agent admin
 key, `daemon_log` shows your projects' daemon log lines (an MCP connect
 failure carries a code such as `auth_rejected`) and `doctor` shows which of

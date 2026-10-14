@@ -26,12 +26,15 @@
 // operator cancelled live tasks thinking two were running in
 // parallel because the prior retry's execution row was still
 // RUNNING in the table). The "fail" action marks both the execution
-// row and the task row as terminal with class STUCK_EXECUTION; it
-// does NOT try to kill the in-flight goroutine (the executor's
-// Cancel API is the right tool for that, but a goroutine genuinely
-// hung in a syscall won't respond to it anyway). The eventual
-// unsticking — daemon restart, OS sigkill, or the goroutine
-// returning on its own — is out of scope for the watchdog itself.
+// row and the task row as terminal with class STUCK_EXECUTION and,
+// since 2026-10-12 (GitHub #142, 05-scheduler §4.12 C2/C3), names the
+// case — stuck (the task's lease is still renewed: a live goroutine not
+// advancing) or abandoned (no live lease: nothing is running it) — and
+// asks the executor to stop the execution through the cancel
+// primitive's post-write sequence (taskcancel.AfterTerminal). Until then
+// it did NOT try to stop anything. A goroutine genuinely hung in a call
+// with no bound still won't respond; the scheduler releases its slot
+// after AbandonedExecutionGrace (§4.12 C5).
 // Operators with legitimately long-running steps can opt back to
 // warn via WatchdogConfig in the daemon YAML.
 package watchdog
@@ -571,8 +574,14 @@ func (w *Watchdog) sweepExpiredApprovals(ctx context.Context) {
 		// the row moved, the task's parent is unblocked and its children are
 		// cancelled. An approval-parked task has no live execution, so the
 		// teardown's stop is a no-op.
-		outcome, err := taskcancel.Cancel(ctx, w.taskRepo, w.taskTeardown, t.ID,
-			[]persistence.TaskStatus{persistence.TaskStatusAwaitingApproval})
+		//
+		// The row records why and what to do (outcome-quality LLD §S5 #17,
+		// GitHub #142): without it the task read like an operator's cancel.
+		reason := approvalTimeoutReason(w.cfg.ApprovalTimeout)
+		class := persistence.TaskFailureClassCancelled
+		outcome, err := taskcancel.CancelWith(ctx, w.taskRepo, w.taskTeardown, t.ID,
+			[]persistence.TaskStatus{persistence.TaskStatusAwaitingApproval},
+			persistence.TransitionOpts{LastError: &reason, LastErrorClass: &class})
 		if err != nil {
 			w.logger.Warn().Err(err).Str("task_id", t.ID).Msg("watchdog: approval-timeout cancel failed")
 			continue
@@ -597,6 +606,17 @@ func (w *Watchdog) sweepExpiredApprovals(ctx context.Context) {
 	if expired > 0 && w.metrics != nil && w.metrics.approvalsExpired != nil {
 		w.metrics.approvalsExpired.Add(float64(expired))
 	}
+}
+
+// approvalTimeoutReason is the last_error an approval-timeout cancel records:
+// what happened, and the two things an operator can do about it.
+func approvalTimeoutReason(timeout time.Duration) string {
+	window := timeout.String()
+	if timeout > 0 && timeout%time.Hour == 0 {
+		window = fmt.Sprintf("%dh", int64(timeout/time.Hour))
+	}
+	return fmt.Sprintf("approval timed out: nobody approved or rejected this task within %s, so it was cancelled. "+
+		"Re-submit it to run it, or raise autonomy.approval_timeout_hours to give approvers longer.", window)
 }
 
 // reconcileOrphanPaused finalizes orphan PAUSED executions whose parent task
@@ -736,20 +756,86 @@ func (w *Watchdog) handleStuck(ctx context.Context, exec *persistence.Execution,
 	logEvent.Msg("watchdog: stuck execution detected — warn-only, row left RUNNING")
 }
 
-// markFailed flips both the execution and (when wired) the task row
-// to terminal with class STUCK_EXECUTION. Either side failing is
-// surfaced to the caller so the metric increment + the success-log
-// happen only on the all-or-nothing path.
-func (w *Watchdog) markFailed(ctx context.Context, exec *persistence.Execution, age time.Duration) error {
-	msg := fmt.Sprintf("watchdog: execution stuck — no checkpoint advance in %s (last update %s)",
+// Stuck-execution verdicts (05-scheduler §4.12 C2, GitHub #142). The task's
+// lease tells them apart: a dispatcher renews it only while its executor
+// reports the task live, so a lease still in the future means a live goroutine
+// whose checkpoint stopped advancing, and an absent or past lease means no
+// process holds the execution at all.
+const (
+	verdictStuck     = "stuck"
+	verdictAbandoned = "abandoned"
+	verdictUnknown   = "unknown" // no task row to read the lease from
+)
+
+// stuckFailableStatuses is the from-set of the stuck-execution task write:
+// the statuses in which an execution runs (LEASED, RUNNING), plus PENDING, the
+// status a task is left in when no dispatcher drives it any more (an approval
+// pause parks its execution PAUSED, so it is never listed here)
+// (05-scheduler §4.12 C3).
+var stuckFailableStatuses = []persistence.TaskStatus{
+	persistence.TaskStatusPending, persistence.TaskStatusLeased, persistence.TaskStatusRunning,
+}
+
+// stuckVerdict reads the verdict from the task row's lease at now.
+func stuckVerdict(task *persistence.Task, now time.Time) string {
+	if task == nil {
+		return verdictUnknown
+	}
+	if task.LeaseExpiresAt != nil && task.LeaseExpiresAt.After(now) {
+		return verdictStuck
+	}
+	return verdictAbandoned
+}
+
+// stuckReason is the failure text for a stuck execution. The prefix is kept
+// verbatim (logs and searches key on it); the rest says which case this is and
+// what to do (outcome-quality LLD §S2 C7; 05-scheduler §4.12 C2).
+func stuckReason(exec *persistence.Execution, age time.Duration, verdict string) string {
+	prefix := fmt.Sprintf("watchdog: execution stuck — no checkpoint advance in %s (last update %s). ",
 		age.Truncate(time.Second), exec.UpdatedAt.UTC().Format(time.RFC3339))
+	switch verdict {
+	case verdictAbandoned:
+		return prefix + "Its task holds no live lease, so nothing was running it (a daemon restart or crash " +
+			"left the row behind); retry the task if its work is still wanted"
+	case verdictStuck:
+		return prefix + "Its task's lease is still renewed, so the executor is alive but not advancing: " +
+			"the step, its model call or the executor stopped making progress; the execution was asked to stop. " +
+			"Check the step's container log and the model's health (vornikctl doctor) before retrying"
+	default:
+		return prefix + "The step, its model call or the executor stopped making progress; " +
+			"check the step's container log and the model's health (vornikctl doctor) before retrying"
+	}
+}
+
+// markFailed flips both the execution and (when wired) the task row
+// to terminal with class STUCK_EXECUTION, then — only when its task write
+// moved the row — tears the execution down through the cancel primitive's
+// post-write sequence (taskcancel.AfterTerminal, no child cascade): the live
+// container is asked to stop once and the parent unblock runs (05-scheduler
+// §4.12 C3, GitHub #142). Before 2026-10-12 it wrote the rows and nothing
+// else, so the container ran on and the scheduler slot stayed held.
+//
+// Either side failing is surfaced to the caller so the metric increment +
+// the success-log happen only on the all-or-nothing path.
+func (w *Watchdog) markFailed(ctx context.Context, exec *persistence.Execution, age time.Duration) error {
+	var (
+		task    *persistence.Task
+		taskErr error
+	)
+	if w.taskRepo != nil && exec.TaskID != "" {
+		task, taskErr = w.taskRepo.Get(ctx, exec.TaskID)
+	}
+	verdict := verdictUnknown
+	if taskErr == nil {
+		verdict = stuckVerdict(task, w.now())
+	}
+	msg := stuckReason(exec, age, verdict)
 	if err := w.execRepo.RecordFailure(ctx, exec.ID, msg, persistence.TaskFailureClassStuckExecution); err != nil {
 		return fmt.Errorf("execution RecordFailure: %w", err)
 	}
 	if w.taskRepo == nil || exec.TaskID == "" {
 		return nil
 	}
-	task, err := w.taskRepo.Get(ctx, exec.TaskID)
 	// The task vanished between the scan and this Get — deleted with its
 	// project, or pruned. There is nothing left to flip, and the execution row
 	// is already marked, so this is a clean finish and NOT an error.
@@ -762,14 +848,14 @@ func (w *Watchdog) markFailed(ctx context.Context, exec *persistence.Execution, 
 	// sweep, and never increments the detected/failed counters, so the stuck
 	// count under-reports. Found 2026-08-22 by tightening the package's task
 	// double, which had been answering a miss with (nil, nil).
-	if errors.Is(err, persistence.ErrNotFound) {
+	if errors.Is(taskErr, persistence.ErrNotFound) {
 		return nil
 	}
-	if err != nil {
+	if taskErr != nil {
 		// A real lookup failure. Best-effort task-side update; an execution row
 		// marked FAILED with a still-RUNNING task row will surface as a
 		// discrepancy in the UI which an operator can investigate.
-		return fmt.Errorf("task Get: %w", err)
+		return fmt.Errorf("task Get: %w", taskErr)
 	}
 	if task == nil {
 		return nil // depth: a future backend that answers a miss with a bare nil
@@ -779,16 +865,37 @@ func (w *Watchdog) markFailed(ctx context.Context, exec *persistence.Execution, 
 	// race with the executor's own handleFailure could land us
 	// here just after the task transitioned.
 	switch task.Status {
-	case persistence.TaskStatusCompleted, persistence.TaskStatusFailed, persistence.TaskStatusCancelled:
+	case persistence.TaskStatusCompleted, persistence.TaskStatusFailed,
+		persistence.TaskStatusCancelled, persistence.TaskStatusClosed:
 		return nil
 	}
-	task.Status = persistence.TaskStatusFailed
+	// Conditional, not a full-row Update: a status another writer set between
+	// the Get above and this write is not overwritten (05-scheduler §4.12 C3).
+	// From PENDING, LEASED or RUNNING only (stuckFailableStatuses).
+	// A task §6 recovery already re-queued, or one parked (AWAITING_*,
+	// WAITING_FOR_CHILDREN, PAUSED) behind a leftover RUNNING execution row,
+	// is not this scan's to fail; the full-row Update used to fail them too.
+	// The lease is kept on purpose — the dispatch's own release still decides
+	// retry or terminal on it when the goroutine returns.
 	errClass := persistence.TaskFailureClassStuckExecution
-	task.LastError = &msg
-	task.LastErrorClass = &errClass
-	if err := w.taskRepo.Update(ctx, task); err != nil {
-		return fmt.Errorf("task Update: %w", err)
+	moved, err := w.taskRepo.TransitionConditional(ctx, task.ID, stuckFailableStatuses,
+		persistence.TaskStatusFailed, persistence.TransitionOpts{LastError: &msg, LastErrorClass: &errClass})
+	if err != nil {
+		return fmt.Errorf("task transition: %w", err)
 	}
+	if !moved {
+		return nil // another writer finished the task; it owns the teardown
+	}
+	out := taskcancel.AfterTerminal(ctx, w.taskTeardown, task.ID, false)
+	ev := w.logger.Info()
+	if out.TeardownErr != nil {
+		ev = w.logger.Warn().Err(out.TeardownErr)
+	}
+	ev.Str("task_id", task.ID).
+		Str("execution_id", exec.ID).
+		Str("verdict", verdict).
+		Bool("torn_down", out.TornDown).
+		Msg("watchdog: stuck execution failed; teardown requested through the cancel primitive")
 	return nil
 }
 

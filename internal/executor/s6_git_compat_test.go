@@ -177,7 +177,7 @@ func TestS6Compat_GlobalExcludesHonouredByAutoCommitAndMergeBack(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(wt, "kept.txt"), []byte("kept\n"), 0o644))
 	require.NoError(t, os.WriteFile(filepath.Join(wt, "token.secret"), []byte("s3cret\n"), 0o644))
 
-	require.NoError(t, mergeWorktree(ctx, projectDir, wt, "task_s6_excludes", "", zerolog.Nop()))
+	require.NoError(t, mergeWorktree(ctx, projectDir, wt, "task_s6_excludes", "", nil, zerolog.Nop()))
 
 	tree := gitOut(t, projectDir, "git", "ls-tree", "-r", "--name-only", "HEAD")
 	assert.Contains(t, tree, "kept.txt")
@@ -203,7 +203,7 @@ cat
 	require.NoError(t, os.WriteFile(filepath.Join(wt, ".gitattributes"), []byte("*.dat filter=projlocal\n"), 0o644))
 	require.NoError(t, os.WriteFile(filepath.Join(wt, "x.dat"), []byte("payload\n"), 0o644))
 
-	require.NoError(t, mergeWorktree(ctx, projectDir, wt, "task_s6_localdriver", "", zerolog.Nop()))
+	require.NoError(t, mergeWorktree(ctx, projectDir, wt, "task_s6_localdriver", "", nil, zerolog.Nop()))
 
 	_, err = os.Stat(marker)
 	assert.NoError(t, err, "a filter defined in the project's own .git/config must run")

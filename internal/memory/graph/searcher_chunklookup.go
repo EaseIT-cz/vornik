@@ -58,12 +58,15 @@ func (l *SQLChunkLookup) LookupChunks(ctx context.Context, projectID string, chu
 	}
 
 	q := `
-SELECT id, project_id, source_name, content, COALESCE(repo_scope, '')
+SELECT id, project_id, COALESCE(source_name, ''), content, COALESCE(repo_scope, '')
 FROM project_memory_chunks
 WHERE project_id = $1
   AND id IN (` + strings.Join(placeholders, ",") + `)
   AND lifecycle_state = 'published'
-  AND validation_status NOT IN ('refuted','superseded')`
+  AND validation_status NOT IN ('refuted','superseded')
+  AND ` + persistence.ChunkNotRestrictedSQL("project_memory_chunks.id")
+	// ^ GDPR Art 18 (increment 6, #343): this read has no firewall seam, so a
+	// restricted chunk is excluded in SQL by the one shared predicate.
 
 	if repoScope != "" {
 		args = append(args, repoScope)

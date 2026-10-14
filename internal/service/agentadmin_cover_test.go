@@ -311,8 +311,10 @@ func TestAgentAdmin_CoverWhoseSumFellWhileWaiting(t *testing.T) {
 		f.forceOver(8)
 		f.read()
 		c := f.onePendingCover("after a read")
-		f.do(agentadmin.VerbSetBudget, agentadmin.SetBudgetInput{Project: "aa", MonthlyUSD: 1})
-		f.do(agentadmin.VerbSetBudget, agentadmin.SetBudgetInput{Project: "bb", MonthlyUSD: 1}) // $8
+		// Within the limit with no admin verb since (GitHub #264: an agent
+		// verb would have withdrawn it, design §9.2d): the operator raised
+		// the limit by hand, and the device approves before anything else.
+		f.setCeiling(10)
 		err := f.decide(c.ID, true)
 		if err == nil || !strings.Contains(err.Error(), "nothing changed") {
 			t.Fatalf("approving a moot cover: %v", err)
@@ -320,8 +322,8 @@ func TestAgentAdmin_CoverWhoseSumFellWhileWaiting(t *testing.T) {
 		if n := len(f.pendingCovers()); n != 0 {
 			t.Fatalf("%d cover requests waiting after a moot one, want 0", n)
 		}
-		if v := f.assertCovered("after the moot cover"); v.CeilingUSD != 8 {
-			t.Fatalf("ceiling $%v, want $8", v.CeilingUSD)
+		if v := f.assertCovered("after the moot cover"); v.CeilingUSD != 10 {
+			t.Fatalf("ceiling $%v, want $10", v.CeilingUSD)
 		}
 		if p, _ := f.c.repos.Proposals.GetByID(context.Background(), c.pl.ProposalID); p.Status != persistence.ProposalStatusRejected {
 			t.Fatalf("moot cover proposal is %s", p.Status)
@@ -335,11 +337,18 @@ func TestAgentAdmin_CoverWhoseSumFellWhileWaiting(t *testing.T) {
 // it never sets a limit below the sum.
 func TestAgentAdmin_CoverWhoseSumRoseWhileWaitingIsReFiled(t *testing.T) {
 	f := newAgentAdminFixture(t)
-	f.forceOver(8)
+	// The raise is requested while the limit is $20 and approved only once
+	// the cover request waits: since GitHub #264 a verb run while the sum is
+	// within the limit withdraws a waiting cover request (design §9.2d), so
+	// the raise must not be a verb made after the cover request was filed.
+	f.fill("aa", "bb", "cc", "dd", "ee")
+	f.setCeiling(20)
+	raise := f.do(agentadmin.VerbSetBudget, agentadmin.SetBudgetInput{Project: "aa", MonthlyUSD: 4})
+	f.setCeiling(8)
 	f.read()
 	c := f.onePendingCover("after a read")
 	f.setCeiling(20)
-	f.approve(f.do(agentadmin.VerbSetBudget, agentadmin.SetBudgetInput{Project: "aa", MonthlyUSD: 4})) // $12
+	f.approve(raise) // $12, applied by its effect (not a verb) while the cover request waits
 	f.setCeiling(8)
 	if err := f.decide(c.ID, true); err == nil {
 		t.Fatal("a cover request whose sum rose applied")

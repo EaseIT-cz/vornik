@@ -13,6 +13,7 @@ import (
 	"time"
 	"unicode/utf8"
 	"vornik.io/vornik/internal/agenttools"
+	"vornik.io/vornik/internal/aidisclosure"
 	"vornik.io/vornik/internal/forge"
 	"vornik.io/vornik/internal/outputguard"
 	"vornik.io/vornik/internal/persistence"
@@ -101,7 +102,7 @@ func (s *Server) AgentForgeIssues(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	result, err := applyForgeIssue(r.Context(), provider, reader, p.Forge.Issues, req)
+	result, err := applyForgeIssue(r.Context(), provider, reader, p.Forge.Issues, req, s.forgePublicationNotice())
 	if err != nil {
 		_ = s.logForgeIssueAudit(r.Context(), project, actx, tool, audit, "error")
 		respondJSON(w, 200, AgentQueryResponse{Refusal: "Forge issue operation failed; check daemon audit and App permissions"})
@@ -382,7 +383,17 @@ func (s *Server) forgeIssueCrossRepoRefusal(ctx context.Context, taskID, repo st
 	return ""
 }
 
-func applyForgeIssue(ctx context.Context, provider forge.ForgeProvider, reader forge.IssueReader, policy registry.ProjectForgeIssues, req forgeIssueRequest) (any, error) {
+// forgePublicationNotice is the Art 50 notice a forge comment the daemon posts
+// for an agent carries (GitHub #342). Unwired → the zero Notice, which the
+// provider resolves to the compiled default: still disclosed, never silent.
+func (s *Server) forgePublicationNotice() aidisclosure.Notice {
+	if s == nil || s.aiDisclosure == nil {
+		return aidisclosure.Notice{}
+	}
+	return s.aiDisclosure.PublicationNotice()
+}
+
+func applyForgeIssue(ctx context.Context, provider forge.ForgeProvider, reader forge.IssueReader, policy registry.ProjectForgeIssues, req forgeIssueRequest, notice aidisclosure.Notice) (any, error) {
 	var result any
 	var err error
 	switch req.Operation {
@@ -408,7 +419,7 @@ func applyForgeIssue(ctx context.Context, provider forge.ForgeProvider, reader f
 				err = writer.SetLabels(ctx, req.Repo, req.Number, policy.ManagedLabels(issue.Labels, req.Labels))
 			}
 		case "close_issue":
-			err = writer.CloseIssue(ctx, req.Repo, req.Number, forge.CloseIssueSpec{DuplicateOf: req.DuplicateOf, Explanation: req.Explanation})
+			err = writer.CloseIssue(ctx, req.Repo, req.Number, forge.CloseIssueSpec{DuplicateOf: req.DuplicateOf, Explanation: req.Explanation, Notice: notice})
 		}
 		result = map[string]bool{"applied": err == nil}
 	}

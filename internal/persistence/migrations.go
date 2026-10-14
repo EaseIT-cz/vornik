@@ -9040,4 +9040,180 @@ ALTER TABLE approver_devices DROP COLUMN IF EXISTS prev_token_hash;
 		// GitHub #90; artifact-store design: answer-step provenance.
 		Up:   `ALTER TABLE artifacts ADD COLUMN IF NOT EXISTS producing_step_id TEXT NOT NULL DEFAULT '';`,
 		Down: `ALTER TABLE artifacts DROP COLUMN IF EXISTS producing_step_id;`},
+	{
+		Version: 224,
+		Name:    "data_subject_restrictions",
+		// GDPR increment 6 (GitHub #343): Art 18 restriction of processing.
+		// Design: https://docs.vornik.io §4.16.1
+		//
+		// A ROW per restriction rather than a column on data_subjects: a
+		// restriction has a ground, a start, an end and an Art 18(3) duty at the
+		// end, and a LIFTED restriction is accountability evidence (Art 5(2)), so
+		// lifting updates the row and never deletes it. RESTRICT on both parents
+		// for the same reason the request ledger pins data_subjects.
+		//
+		// Enforcement is a live join over data_subject_links (see
+		// persistence.ChunkNotRestrictedSQL), never a flag stamped onto chunks, so
+		// the partial index below is the only index the screen needs: it answers
+		// "is this subject actively restricted" and enforces one active
+		// restriction per subject.
+		Up: `
+CREATE TABLE IF NOT EXISTS data_subject_restrictions (
+    id                  TEXT PRIMARY KEY,
+    subject_id          TEXT        NOT NULL REFERENCES data_subjects(id) ON DELETE RESTRICT,
+    request_id          TEXT        NOT NULL REFERENCES data_subject_requests(id) ON DELETE RESTRICT,
+    ground              TEXT        NOT NULL
+        CHECK (ground IN ('art18_1_a','art18_1_b','art18_1_c','art18_1_d')),
+    restricted_by       TEXT        NOT NULL,
+    restricted_at       TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    lifted_at           TIMESTAMPTZ,
+    lifted_by           TEXT,
+    lift_reason         TEXT,
+    lift_request_id     TEXT,
+    subject_informed_at TIMESTAMPTZ,
+    CHECK (lifted_at IS NULL OR (lifted_by IS NOT NULL AND lift_reason IS NOT NULL
+                                 AND subject_informed_at IS NOT NULL))
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_ds_restrictions_one_active
+    ON data_subject_restrictions (subject_id) WHERE lifted_at IS NULL;
+`,
+		Down: `
+DROP INDEX IF EXISTS idx_ds_restrictions_one_active;
+DROP TABLE IF EXISTS data_subject_restrictions;
+`,
+	},
+	{
+		Version: 225,
+		Name:    "chunks_classify_attempted_at",
+		// GitHub #330. Design: https://docs.vornik.io
+		// "Change, 2026-10-13 (#330)". When the classify backfill's model
+		// abstains on a row, the row is stamped, and the cross-project auto-loop
+		// skips it for memory.ClassifyRetryAfter — so neither a restart nor a
+		// cursor reset re-bills the same abstention. Nullable, no backfill: NULL
+		// means "never attempted", which is true of every existing row. No index:
+		// the predicate rides on the existing unclassified scan, and stamped rows
+		// are a subset of that already-filtered set.
+		//
+		// SQLite: deliberately absent — its slim project_memory_chunks has no
+		// content_class, so neither backfill query runs on that driver.
+		Up:   `ALTER TABLE project_memory_chunks ADD COLUMN IF NOT EXISTS classify_attempted_at TIMESTAMPTZ;`,
+		Down: `ALTER TABLE project_memory_chunks DROP COLUMN IF EXISTS classify_attempted_at;`,
+	},
+	{
+		Version: 226,
+		Name:    "agent_connector_installs",
+		// GitHub #314: a paired device installed a read-only connector; the
+		// workflow is shown installed_by device. Attribution, not an approval:
+		// one writer (the device's connector confirm), one remover (the
+		// workflow's reach delete). A separate table because the approval
+		// tables keep their one writer, the widening_change effect.
+		//
+		// Design: https://docs.vornik.io §19.14.8 item 6
+		Up: `
+CREATE TABLE IF NOT EXISTS agent_connector_installs (
+    workflow_id    TEXT PRIMARY KEY,
+    namespace      TEXT NOT NULL,
+    project_id     TEXT NOT NULL,
+    connector      TEXT NOT NULL,
+    account_label  TEXT NOT NULL DEFAULT 'default',
+    device_id      TEXT NOT NULL,
+    installed_at   TIMESTAMPTZ NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_agent_connector_installs_ns ON agent_connector_installs (namespace);
+`,
+		Down: `
+DROP INDEX IF EXISTS idx_agent_connector_installs_ns;
+DROP TABLE IF EXISTS agent_connector_installs;
+`,
+	},
+	{
+		Version: 227,
+		Name:    "agent_approval_requests_config_journal_drift",
+		// GitHub #302: the approver device gains a host-level card on which
+		// the operator keeps or restores an interrupted config apply (a DRIFT
+		// row in config_apply_journal). The kind CHECK, last widened by
+		// migration 217, gains config_journal_drift. Independent of 228 (the
+		// status CHECK). SQLite gets the same by the table rebuild
+		// (sqliteTableRebuilds, marker 'config_journal_drift').
+		//
+		// Design: https://docs.vornik.io §13.3
+		Up: `
+ALTER TABLE agent_approval_requests DROP CONSTRAINT IF EXISTS agent_approval_requests_kind_check;
+ALTER TABLE agent_approval_requests ADD CONSTRAINT agent_approval_requests_kind_check CHECK (kind IN ('device_enrollment','widening_change','credential_slot','broker_action','host_action','memory_retention','config_journal_drift'));
+`,
+		Down: `
+DELETE FROM agent_approval_requests WHERE kind = 'config_journal_drift';
+ALTER TABLE agent_approval_requests DROP CONSTRAINT IF EXISTS agent_approval_requests_kind_check;
+ALTER TABLE agent_approval_requests ADD CONSTRAINT agent_approval_requests_kind_check CHECK (kind IN ('device_enrollment','widening_change','credential_slot','broker_action','host_action','memory_retention'));
+`,
+	},
+	{
+		Version: 228,
+		Name:    "agent_approval_requests_withdrawn",
+		// GitHub #264: the daemon withdraws a pending approval request it knows
+		// no longer applies (the moot §18.4 F10 cover request; GitHub #302's
+		// config-apply card). A fifth, terminal status `withdrawn`, relaxing
+		// migration 206's inline status CHECK (Postgres's default name), and
+		// who withdrew it and why. decided_at holds the withdrawal time.
+		// SQLite gets the same by the table rebuild (sqliteTableRebuilds,
+		// marker 'withdrawn').
+		//
+		// Design: https://docs.vornik.io §9.2d
+		Up: `
+ALTER TABLE agent_approval_requests DROP CONSTRAINT IF EXISTS agent_approval_requests_status_check;
+ALTER TABLE agent_approval_requests ADD CONSTRAINT agent_approval_requests_status_check
+    CHECK (status IN ('pending','approved','rejected','expired','withdrawn'));
+ALTER TABLE agent_approval_requests ADD COLUMN IF NOT EXISTS withdrawn_by TEXT;
+ALTER TABLE agent_approval_requests ADD COLUMN IF NOT EXISTS withdraw_reason TEXT;
+`,
+		Down: `
+UPDATE agent_approval_requests SET status = 'expired' WHERE status = 'withdrawn';
+ALTER TABLE agent_approval_requests DROP COLUMN IF EXISTS withdraw_reason;
+ALTER TABLE agent_approval_requests DROP COLUMN IF EXISTS withdrawn_by;
+ALTER TABLE agent_approval_requests DROP CONSTRAINT IF EXISTS agent_approval_requests_status_check;
+ALTER TABLE agent_approval_requests ADD CONSTRAINT agent_approval_requests_status_check
+    CHECK (status IN ('pending','approved','rejected','expired'));
+`,
+	},
+	{
+		Version: 229,
+		Name:    "agent_admin_refusals",
+		// GitHub #172. Design: https://docs.vornik.io §23.2
+		// One row per refused call of an agent-admin key: who, what, which
+		// rule; never the reason text or any input. Retained on the
+		// tool_audit_log window by the per-project sweep (project_id is the
+		// key's home project). The index serves the page, the doctor burst
+		// check and the per-hour write cap. SQLite: the same table in schema.go.
+		Up: `
+CREATE TABLE IF NOT EXISTS agent_admin_refusals (
+    id          TEXT PRIMARY KEY,
+    project_id  TEXT NOT NULL,
+    namespace   TEXT NOT NULL,
+    key_id      TEXT NOT NULL,
+    verb        TEXT NOT NULL,
+    rule        TEXT NOT NULL,
+    created_at  TIMESTAMPTZ NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_agent_admin_refusals_ns_created ON agent_admin_refusals (namespace, created_at);
+CREATE INDEX IF NOT EXISTS idx_agent_admin_refusals_project_created ON agent_admin_refusals (project_id, created_at);
+`,
+		Down: `
+DROP INDEX IF EXISTS idx_agent_admin_refusals_project_created;
+DROP INDEX IF EXISTS idx_agent_admin_refusals_ns_created;
+DROP TABLE IF EXISTS agent_admin_refusals;
+`,
+	},
+	{
+		Version: 230,
+		Name:    "tasks_goal_origin",
+		// GitHub #347. Design: https://docs.vornik.io,
+		// amendment 2026-10-13. The creation surface that wrote the task's goal
+		// (persistence.TaskGoalOrigin*), so the skill distiller can refuse a
+		// goal a third party wrote. Written only by Create; no UPDATE names it.
+		// Nullable, no backfill: a NULL is "not recorded", which the distiller
+		// refuses. No index: it is read with the row. SQLite: the column in
+		// schema.go.
+		Up:   `ALTER TABLE tasks ADD COLUMN IF NOT EXISTS goal_origin TEXT;`,
+		Down: `ALTER TABLE tasks DROP COLUMN IF EXISTS goal_origin;`,
+	},
 }

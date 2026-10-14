@@ -510,6 +510,7 @@ func TestHandleWebhook_RejectsBadMethod(t *testing.T) {
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest(http.MethodGet, "/api/v1/github-app/webhook", nil)
 	ch.HandleWebhook(w, r)
+	ch.waitInFlight()
 	if w.Code != http.StatusMethodNotAllowed {
 		t.Errorf("Code = %d, want %d", w.Code, http.StatusMethodNotAllowed)
 	}
@@ -524,6 +525,7 @@ func TestHandleWebhook_RejectsBadSignature(t *testing.T) {
 	r.Header.Set("X-GitHub-Event", "ping")
 	w := httptest.NewRecorder()
 	ch.HandleWebhook(w, r)
+	ch.waitInFlight()
 	if w.Code != http.StatusUnauthorized {
 		t.Errorf("Code = %d, want %d", w.Code, http.StatusUnauthorized)
 	}
@@ -537,6 +539,7 @@ func TestHandleWebhook_RejectsMissingSignature(t *testing.T) {
 	r.Header.Set("X-GitHub-Event", "ping")
 	w := httptest.NewRecorder()
 	ch.HandleWebhook(w, r)
+	ch.waitInFlight()
 	if w.Code != http.StatusUnauthorized {
 		t.Errorf("Code = %d, want %d", w.Code, http.StatusUnauthorized)
 	}
@@ -551,6 +554,7 @@ func TestHandleWebhook_RejectsMalformedSignature(t *testing.T) {
 	r.Header.Set("X-GitHub-Event", "ping")
 	w := httptest.NewRecorder()
 	ch.HandleWebhook(w, r)
+	ch.waitInFlight()
 	if w.Code != http.StatusUnauthorized {
 		t.Errorf("Code = %d, want %d", w.Code, http.StatusUnauthorized)
 	}
@@ -564,6 +568,7 @@ func TestHandleWebhook_AcksRepoless(t *testing.T) {
 	r := signedRequest("shhh", "ping", "d-0", body)
 	w := httptest.NewRecorder()
 	ch.HandleWebhook(w, r)
+	ch.waitInFlight()
 	if w.Code != http.StatusOK {
 		t.Errorf("Code = %d, want %d", w.Code, http.StatusOK)
 	}
@@ -577,6 +582,7 @@ func TestHandleWebhook_RejectsDisallowedRepo(t *testing.T) {
 	r := signedRequest("shhh", "pull_request", "d-1", body)
 	w := httptest.NewRecorder()
 	ch.HandleWebhook(w, r)
+	ch.waitInFlight()
 	if w.Code != http.StatusForbidden {
 		t.Errorf("Code = %d, want %d", w.Code, http.StatusForbidden)
 	}
@@ -595,6 +601,7 @@ func TestHandleWebhook_RejectsMissingEvent(t *testing.T) {
 	r.Header.Set("X-Hub-Signature-256", sig)
 	w := httptest.NewRecorder()
 	ch.HandleWebhook(w, r)
+	ch.waitInFlight()
 	if w.Code != http.StatusBadRequest {
 		t.Errorf("Code = %d, want %d", w.Code, http.StatusBadRequest)
 	}
@@ -607,6 +614,7 @@ func TestHandleWebhook_RejectsInvalidJSON(t *testing.T) {
 	r := signedRequest("shhh", "issues", "d-2", body)
 	w := httptest.NewRecorder()
 	ch.HandleWebhook(w, r)
+	ch.waitInFlight()
 	if w.Code != http.StatusBadRequest {
 		t.Errorf("Code = %d, want %d", w.Code, http.StatusBadRequest)
 	}
@@ -625,6 +633,7 @@ func TestHandleWebhook_BodyTooLarge(t *testing.T) {
 	r := signedRequest("shhh", "issues", "d-3", body)
 	w := httptest.NewRecorder()
 	ch.HandleWebhook(w, r)
+	ch.waitInFlight()
 	if w.Code != http.StatusRequestEntityTooLarge && w.Code != http.StatusUnauthorized {
 		// The signature is computed over the full body, so verifySignature
 		// runs first; whether it succeeds depends on hmac math. Accept
@@ -654,6 +663,7 @@ func TestHandleWebhook_IssueComment_MentionDispatchesToReceiver(t *testing.T) {
 	r := signedRequest("shhh", "issue_comment", "d-mention", body)
 	w := httptest.NewRecorder()
 	ch.HandleWebhook(w, r)
+	ch.waitInFlight()
 
 	if w.Code != http.StatusOK {
 		t.Errorf("Code = %d, want 200", w.Code)
@@ -709,6 +719,7 @@ func TestHandleWebhook_PRComment_MentionDispatchesToReceiver(t *testing.T) {
 	r := signedRequest("shhh", "issue_comment", "d-pr", body)
 	w := httptest.NewRecorder()
 	ch.HandleWebhook(w, r)
+	ch.waitInFlight()
 
 	got := rx.copyGot()
 	if len(got) != 1 {
@@ -739,6 +750,7 @@ func TestHandleWebhook_IssueComment_NoMention_Discards(t *testing.T) {
 	r := signedRequest("shhh", "issue_comment", "d-no-mention", body)
 	w := httptest.NewRecorder()
 	ch.HandleWebhook(w, r)
+	ch.waitInFlight()
 
 	if w.Code != http.StatusOK {
 		t.Errorf("Code = %d, want 200", w.Code)
@@ -771,6 +783,7 @@ func TestHandleWebhook_IssueComment_DisallowedSender_Discards(t *testing.T) {
 	r := signedRequest("shhh", "issue_comment", "d-stranger", body)
 	w := httptest.NewRecorder()
 	ch.HandleWebhook(w, r)
+	ch.waitInFlight()
 
 	if w.Code != http.StatusOK {
 		t.Errorf("Code = %d, want 200 (we don't want GitHub to retry)", w.Code)
@@ -796,6 +809,7 @@ func TestHandleWebhook_IssueComment_NoReceiver_Logs(t *testing.T) {
 	r := signedRequest("shhh", "issue_comment", "d-noreceiver", body)
 	w := httptest.NewRecorder()
 	ch.HandleWebhook(w, r)
+	ch.waitInFlight()
 	if w.Code != http.StatusOK {
 		t.Errorf("Code = %d, want 200", w.Code)
 	}
@@ -821,6 +835,7 @@ func TestHandleWebhook_IssueComment_ReceiverErrorSwallowed(t *testing.T) {
 	r := signedRequest("shhh", "issue_comment", "d-rxerr", body)
 	w := httptest.NewRecorder()
 	ch.HandleWebhook(w, r)
+	ch.waitInFlight()
 	if w.Code != http.StatusOK {
 		t.Errorf("Code = %d, want 200 even on Receiver error", w.Code)
 	}
@@ -842,6 +857,7 @@ func TestHandleWebhook_IssueLabeled_OnTriggerLabel_Logged(t *testing.T) {
 	r := signedRequest("shhh", "issues", "d-lbl-ok", body)
 	w := httptest.NewRecorder()
 	ch.HandleWebhook(w, r)
+	ch.waitInFlight()
 	if w.Code != http.StatusOK {
 		t.Errorf("Code = %d, want 200", w.Code)
 	}
@@ -862,6 +878,7 @@ func TestHandleWebhook_IssueLabeled_OffTriggerLabel_Discarded(t *testing.T) {
 	r := signedRequest("shhh", "issues", "d-lbl-skip", body)
 	w := httptest.NewRecorder()
 	ch.HandleWebhook(w, r)
+	ch.waitInFlight()
 	if w.Code != http.StatusOK {
 		t.Errorf("Code = %d, want 200", w.Code)
 	}
@@ -881,6 +898,7 @@ func TestHandleWebhook_PullRequestOpened_Logged(t *testing.T) {
 	r := signedRequest("shhh", "pull_request", "d-pr-open", body)
 	w := httptest.NewRecorder()
 	ch.HandleWebhook(w, r)
+	ch.waitInFlight()
 	if w.Code != http.StatusOK {
 		t.Errorf("Code = %d, want 200", w.Code)
 	}
@@ -903,6 +921,7 @@ func TestHandleWebhook_PullRequestOpened_LabelGate_Discards(t *testing.T) {
 	r := signedRequest("shhh", "pull_request", "d-pr-skip", body)
 	w := httptest.NewRecorder()
 	ch.HandleWebhook(w, r)
+	ch.waitInFlight()
 	if w.Code != http.StatusOK {
 		t.Errorf("Code = %d, want 200", w.Code)
 	}
@@ -929,6 +948,7 @@ func TestHandleWebhook_PullRequestOpened_LabelGate_Accepts(t *testing.T) {
 	r := signedRequest("shhh", "pull_request", "d-pr-match", body)
 	w := httptest.NewRecorder()
 	ch.HandleWebhook(w, r)
+	ch.waitInFlight()
 	if w.Code != http.StatusOK {
 		t.Errorf("Code = %d, want 200", w.Code)
 	}
@@ -942,6 +962,7 @@ func TestHandleWebhook_UnknownEvent_Acks(t *testing.T) {
 	r := signedRequest("shhh", "release", "d-release", body)
 	w := httptest.NewRecorder()
 	ch.HandleWebhook(w, r)
+	ch.waitInFlight()
 	if w.Code != http.StatusOK {
 		t.Errorf("Code = %d, want 200 for unknown event", w.Code)
 	}
@@ -961,6 +982,7 @@ func TestHandleWebhook_IssuesLabeled_MalformedPayload_NilGuards(t *testing.T) {
 	r := signedRequest("shhh", "issues", "d-lbl-malformed", body)
 	w := httptest.NewRecorder()
 	ch.HandleWebhook(w, r)
+	ch.waitInFlight()
 	if w.Code != http.StatusOK {
 		t.Errorf("Code = %d, want 200 even on malformed payload", w.Code)
 	}
@@ -979,6 +1001,7 @@ func TestHandleWebhook_IssueComment_MalformedPayload_NilGuards(t *testing.T) {
 	r := signedRequest("shhh", "issue_comment", "d-cmt-malformed", body)
 	w := httptest.NewRecorder()
 	ch.HandleWebhook(w, r)
+	ch.waitInFlight()
 	if w.Code != http.StatusOK {
 		t.Errorf("Code = %d, want 200 even on malformed payload", w.Code)
 	}
@@ -998,6 +1021,7 @@ func TestHandleWebhook_PullRequestOpened_MalformedPayload_NilGuards(t *testing.T
 	r := signedRequest("shhh", "pull_request", "d-pr-malformed", body)
 	w := httptest.NewRecorder()
 	ch.HandleWebhook(w, r)
+	ch.waitInFlight()
 	if w.Code != http.StatusOK {
 		t.Errorf("Code = %d, want 200 even on malformed payload", w.Code)
 	}
@@ -1049,6 +1073,7 @@ func TestSessionIDFormat(t *testing.T) {
 		r := signedRequest("shhh", "issue_comment", fmt.Sprintf("d-%d", i), body)
 		w := httptest.NewRecorder()
 		ch.HandleWebhook(w, r)
+		ch.waitInFlight()
 	}
 	got := rx.copyGot()
 	if len(got) != 2 {
@@ -1072,6 +1097,7 @@ func TestHandleWebhook_HappyReadPath(t *testing.T) {
 	r := signedRequest("shhh", "ping", "d-read", body)
 	w := httptest.NewRecorder()
 	ch.HandleWebhook(w, r)
+	ch.waitInFlight()
 	if w.Code != http.StatusOK {
 		t.Errorf("Code = %d, want 200", w.Code)
 	}
@@ -1087,6 +1113,7 @@ func TestHandleWebhook_ReadBodyFails(t *testing.T) {
 	r.Header.Set("X-GitHub-Event", "ping")
 	w := httptest.NewRecorder()
 	ch.HandleWebhook(w, r)
+	ch.waitInFlight()
 	if w.Code != http.StatusBadRequest {
 		t.Errorf("Code = %d, want %d", w.Code, http.StatusBadRequest)
 	}

@@ -84,20 +84,55 @@ func TestInbox_ApproverDeviceRequestsAreNotAllClear(t *testing.T) {
 	}
 }
 
-// Review 20261003-6d79 F9: a failed list hides the section and adds nothing
-// to "Needs you", rather than failing the inbox.
-func TestInbox_ApproverDeviceListFailureHidesTheSection(t *testing.T) {
+// Review 20261003-6d79 F9: a failed list does not fail the inbox and adds
+// nothing to "Needs you". GitHub #167 (2026-10-13): it no longer hides the
+// section silently, and the page no longer says "All clear" about a list it
+// never read; it says the requests could not be loaded and are not counted
+// (agent-administered design §9.2a, change 2026-10-13). No error text.
+func TestInbox_ApproverDeviceListFailureSaysSo(t *testing.T) {
 	srv := NewServer(WithAgentApprovals(func(context.Context) ([]persistence.AgentApprovalRequestRow, error) {
-		return nil, errors.New("store down")
+		return nil, errors.New("store down: pq connection refused")
 	}))
 	rec := httptest.NewRecorder()
 	srv.Inbox(rec, httptest.NewRequest(http.MethodGet, "/ui/inbox", nil))
 	body := rec.Body.String()
-	if rec.Code != http.StatusOK || strings.Contains(body, "Waiting on your approver device") {
-		t.Fatalf("status %d; section shown on failure", rec.Code)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status %d", rec.Code)
+	}
+	for _, want := range []string{"Waiting on your approver device", "Could not load the requests waiting on your approver device",
+		"not listed or counted here", "open Vornik approvals on the phone you paired"} {
+		if !strings.Contains(body, want) {
+			t.Errorf("the failure note lacks %q", want)
+		}
+	}
+	if strings.Contains(body, "All clear") {
+		t.Error(`"All clear" shown about a list that failed to load`)
+	}
+	if strings.Contains(body, "pq connection refused") || strings.Contains(body, "store down") {
+		t.Error("the page shows the error text")
 	}
 	if !strings.Contains(body, `<span class="text-xs text-gray-500">0</span>`) {
 		t.Error("a failed list changed the count")
+	}
+}
+
+// GitHub #167 (2026-10-13), the open question resolved: a project-scoped
+// viewer never loads the list, so a failing store shows them nothing: no
+// note, no heading. A successful empty load shows no note either.
+func TestInbox_ApproverDeviceFailureNoteOnlyForTheOperatorsFailedLoad(t *testing.T) {
+	failing := NewServer(WithAgentApprovals(func(context.Context) ([]persistence.AgentApprovalRequestRow, error) {
+		return nil, errors.New("store down")
+	}))
+	rec := httptest.NewRecorder()
+	failing.Inbox(rec, scopedUIRequest(http.MethodGet, "/ui/inbox", []string{"p1"}))
+	if b := rec.Body.String(); strings.Contains(b, "Could not load the requests") || strings.Contains(b, "Waiting on your approver device") {
+		t.Fatal("a scoped viewer saw the approver-request section or its failure note")
+	}
+	empty := NewServer(WithAgentApprovals(func(context.Context) ([]persistence.AgentApprovalRequestRow, error) { return nil, nil }))
+	rec = httptest.NewRecorder()
+	empty.Inbox(rec, httptest.NewRequest(http.MethodGet, "/ui/inbox", nil))
+	if b := rec.Body.String(); strings.Contains(b, "Could not load the requests") || !strings.Contains(b, "All clear") {
+		t.Fatal("an empty, successful load showed the failure note or lost All clear")
 	}
 }
 

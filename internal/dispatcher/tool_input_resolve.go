@@ -43,3 +43,18 @@ func (te *ToolExecutor) resolveInputFileSource(ctx context.Context, src string) 
 	}
 	return art.StoragePath
 }
+
+// inputArtifactProject returns the project that owns artifact id, or ""
+// when the row cannot be read. Called only after resolveInputFileSource
+// confirmed id is a real row (GitHub #351: an artifact-ID input_files entry
+// must belong to the chat's active project).
+func (te *ToolExecutor) inputArtifactProject(ctx context.Context, id string) string {
+	if te == nil || te.artifactRepo == nil {
+		return ""
+	}
+	art, err := te.artifactRepo.Get(ctx, id)
+	if err != nil || art == nil {
+		return ""
+	}
+	return art.ProjectID
+}

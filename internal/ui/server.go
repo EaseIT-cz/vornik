@@ -33,6 +33,7 @@ import (
 	"vornik.io/vornik/internal/onboarding"
 	"vornik.io/vornik/internal/persistence"
 	"vornik.io/vornik/internal/pricing"
+	"vornik.io/vornik/internal/projectarchive"
 	"vornik.io/vornik/internal/projectdoctor"
 	"vornik.io/vornik/internal/ratelimit"
 	"vornik.io/vornik/internal/registry"
@@ -167,6 +168,20 @@ type boundedReloader interface {
 // overlapping kicks are safe.
 type ArchiveSweeper interface {
 	SweepNow(ctx context.Context)
+}
+
+// archiveOutcomeReporter is the optional part of an ArchiveSweeper that
+// reports a project's last deletion outcome (*projectarchive.Sweeper). The
+// archived banner uses it to show a failed wipe (GitHub #365).
+type archiveOutcomeReporter interface {
+	LastOutcome(projectID string) (projectarchive.DeleteOutcome, bool)
+}
+
+// archiveDeleteWaiter is the optional part of an ArchiveLifecycle that waits
+// for the wipe's outcome (LifecycleServiceAdapter). Without it delete-now
+// falls back to schedule-and-redirect.
+type archiveDeleteWaiter interface {
+	DeleteNowAndWait(ctx context.Context, projectID string, isArchived bool, wait time.Duration) (projectarchive.DeleteNowResult, error)
 }
 
 // ArchiveLifecycle is the narrow contract the UI uses to mutate
@@ -318,6 +333,17 @@ type Server struct {
 	regIncidents   RegulatoryIncidents
 	regDisclosures RegulatoryDisclosures
 	regAudit       persistence.AdminAuditRepository
+	// regProfileAuditRecorded: the operator profile-use audit is recorded here
+	// (Postgres only; WithProfileAuditRecorded).
+	regProfileAuditRecorded bool
+	// resolve* back the data-subject resolution page
+	// (/ui/operator/regulatory/requests/<id>/resolve, GDPR design §4.17).
+	// Any nil → "not recorded on this deployment".
+	resolveKG      SubjectResolveKG
+	resolveLinks   SubjectResolveLinks
+	resolveText    persistence.SubjectTextSearch
+	resolveScreen  persistence.RestrictionScreen
+	resolveLimiter *searchLimiter
 	// operatorCapability is admin.allowed_keys, accepted by the CE shell as
 	// an explicit operator capability in both editions.
 	operatorCapability config.AdminConfig
@@ -582,6 +608,9 @@ type Server struct {
 	// Zero-value means "no defaults wired" — the template fills
 	// in the hardcoded fallbacks (90/30/60/60/60 days).
 	retentionDefaults registry.ProjectRetention
+	// toolAuditFloorDays is the effective tool_audit_log floor shown
+	// on the retention panel; 0 → the six-month default.
+	toolAuditFloorDays int
 	// taskCreator is the shared task-creation core that backs the
 	// /ui/projects/{id}/tasks/new form. Same instance the REST
 	// API uses, so the two surfaces can't drift on validation /
@@ -1084,6 +1113,15 @@ func WithConfigsDir(dir string) ServerOption {
 func WithRetentionDefaults(defaults registry.ProjectRetention) ServerOption {
 	return func(s *Server) {
 		s.retentionDefaults = defaults
+	}
+}
+
+// WithToolAuditFloor wires the daemon's effective tool_audit_log
+// retention floor (retention.ResolveToolAuditFloor) so the retention
+// panel shows the window the sweeper will really use.
+func WithToolAuditFloor(days int) ServerOption {
+	return func(s *Server) {
+		s.toolAuditFloorDays = days
 	}
 }
 

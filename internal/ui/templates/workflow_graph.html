@@ -58,18 +58,18 @@
                 <form method="POST" action="/ui/workflows/{{.WorkflowID}}/graph/edge" class="glass rounded-xl border border-dark-700 p-4 space-y-2">
                     <h2 class="text-sm font-medium text-gray-300">Connect</h2>
                     <label class="block text-xs text-gray-500">From step
-                        <select name="src" data-connect-src class="mt-1 w-full bg-dark-800 border border-dark-700 rounded px-2 py-1 text-sm text-gray-200">
+                        <select name="src" data-connect-src class="mt-1 w-full bg-dark-800 border border-control rounded px-2 py-1 text-sm text-gray-200">
                             {{range .StepIDs}}<option value="{{.}}">{{.}}</option>{{end}}
                         </select>
                     </label>
                     <label class="block text-xs text-gray-500">Edge
-                        <select name="kind" class="mt-1 w-full bg-dark-800 border border-dark-700 rounded px-2 py-1 text-sm text-gray-200">
+                        <select name="kind" class="mt-1 w-full bg-dark-800 border border-control rounded px-2 py-1 text-sm text-gray-200">
                             <option value="success">on_success</option>
                             <option value="fail">on_fail</option>
                         </select>
                     </label>
                     <label class="block text-xs text-gray-500">To node
-                        <select name="dst" data-connect-dst class="mt-1 w-full bg-dark-800 border border-dark-700 rounded px-2 py-1 text-sm text-gray-200">
+                        <select name="dst" data-connect-dst class="mt-1 w-full bg-dark-800 border border-control rounded px-2 py-1 text-sm text-gray-200">
                             {{range .NodeIDs}}<option value="{{.}}">{{.}}</option>{{end}}
                         </select>
                     </label>
@@ -79,12 +79,12 @@
                 <form method="POST" action="/ui/workflows/{{.WorkflowID}}/graph/edge/delete" class="glass rounded-xl border border-dark-700 p-4 space-y-2">
                     <h2 class="text-sm font-medium text-gray-300">Remove edge</h2>
                     <label class="block text-xs text-gray-500">From step
-                        <select name="src" class="mt-1 w-full bg-dark-800 border border-dark-700 rounded px-2 py-1 text-sm text-gray-200">
+                        <select name="src" class="mt-1 w-full bg-dark-800 border border-control rounded px-2 py-1 text-sm text-gray-200">
                             {{range .StepIDs}}<option value="{{.}}">{{.}}</option>{{end}}
                         </select>
                     </label>
                     <label class="block text-xs text-gray-500">Edge
-                        <select name="kind" class="mt-1 w-full bg-dark-800 border border-dark-700 rounded px-2 py-1 text-sm text-gray-200">
+                        <select name="kind" class="mt-1 w-full bg-dark-800 border border-control rounded px-2 py-1 text-sm text-gray-200">
                             <option value="success">on_success</option>
                             <option value="fail">on_fail</option>
                         </select>
@@ -95,7 +95,7 @@
                 <form method="POST" action="/ui/workflows/{{.WorkflowID}}/graph/entrypoint" class="glass rounded-xl border border-dark-700 p-4 space-y-2">
                     <h2 class="text-sm font-medium text-gray-300">Entrypoint</h2>
                     <label class="block text-xs text-gray-500">First step
-                        <select name="id" class="mt-1 w-full bg-dark-800 border border-dark-700 rounded px-2 py-1 text-sm text-gray-200">
+                        <select name="id" class="mt-1 w-full bg-dark-800 border border-control rounded px-2 py-1 text-sm text-gray-200">
                             {{range .StepIDs}}<option value="{{.}}">{{.}}</option>{{end}}
                         </select>
                     </label>
@@ -106,10 +106,10 @@
                     <h2 class="text-sm font-medium text-gray-300">Add node</h2>
                     <p class="text-[11px] text-gray-500">Inserted on the chosen edge so it stays reachable. agent/plan inherit the source step's role; other types prompt for required fields in the form.</p>
                     <label class="block text-xs text-gray-500">New id
-                        <input name="id" class="mt-1 w-full bg-dark-800 border border-dark-700 rounded px-2 py-1 text-sm text-gray-200" placeholder="step id">
+                        <input name="id" class="mt-1 w-full bg-dark-800 border border-control rounded px-2 py-1 text-sm text-gray-200" placeholder="step id">
                     </label>
                     <label class="block text-xs text-gray-500">Type
-                        <select name="type" class="mt-1 w-full bg-dark-800 border border-dark-700 rounded px-2 py-1 text-sm text-gray-200">
+                        <select name="type" class="mt-1 w-full bg-dark-800 border border-control rounded px-2 py-1 text-sm text-gray-200">
                             <option value="agent">agent</option>
                             <option value="gate">gate</option>
                             <option value="approval">approval</option>
@@ -121,12 +121,12 @@
                         </select>
                     </label>
                     <label class="block text-xs text-gray-500">Insert from
-                        <select name="from" class="mt-1 w-full bg-dark-800 border border-dark-700 rounded px-2 py-1 text-sm text-gray-200">
+                        <select name="from" class="mt-1 w-full bg-dark-800 border border-control rounded px-2 py-1 text-sm text-gray-200">
                             {{range .StepIDs}}<option value="{{.}}">{{.}}</option>{{end}}
                         </select>
                     </label>
                     <label class="block text-xs text-gray-500">On edge
-                        <select name="fromKind" class="mt-1 w-full bg-dark-800 border border-dark-700 rounded px-2 py-1 text-sm text-gray-200">
+                        <select name="fromKind" class="mt-1 w-full bg-dark-800 border border-control rounded px-2 py-1 text-sm text-gray-200">
                             <option value="success">on_success</option>
                             <option value="fail">on_fail</option>
                         </select>
@@ -137,7 +137,7 @@
                 <form method="POST" action="/ui/workflows/{{.WorkflowID}}/graph/node/delete" class="glass rounded-xl border border-dark-700 p-4 space-y-2">
                     <h2 class="text-sm font-medium text-gray-300">Delete node</h2>
                     <label class="block text-xs text-gray-500">Step
-                        <select name="id" class="mt-1 w-full bg-dark-800 border border-dark-700 rounded px-2 py-1 text-sm text-gray-200">
+                        <select name="id" class="mt-1 w-full bg-dark-800 border border-control rounded px-2 py-1 text-sm text-gray-200">
                             {{range .StepIDs}}<option value="{{.}}">{{.}}</option>{{end}}
                         </select>
                     </label>
@@ -149,15 +149,15 @@
                     <p class="text-[11px] text-gray-500">A conditional transition on a gate-type step.</p>
                     <input type="hidden" name="kind" value="gate">
                     <label class="block text-xs text-gray-500">On step
-                        <select name="src" class="mt-1 w-full bg-dark-800 border border-dark-700 rounded px-2 py-1 text-sm text-gray-200">
+                        <select name="src" class="mt-1 w-full bg-dark-800 border border-control rounded px-2 py-1 text-sm text-gray-200">
                             {{range .StepIDs}}<option value="{{.}}">{{.}}</option>{{end}}
                         </select>
                     </label>
                     <label class="block text-xs text-gray-500">Condition
-                        <input name="condition" class="mt-1 w-full bg-dark-800 border border-dark-700 rounded px-2 py-1 text-sm text-gray-200" placeholder="review.approved == true">
+                        <input name="condition" class="mt-1 w-full bg-dark-800 border border-control rounded px-2 py-1 text-sm text-gray-200" placeholder="review.approved == true">
                     </label>
                     <label class="block text-xs text-gray-500">Target
-                        <select name="dst" class="mt-1 w-full bg-dark-800 border border-dark-700 rounded px-2 py-1 text-sm text-gray-200">
+                        <select name="dst" class="mt-1 w-full bg-dark-800 border border-control rounded px-2 py-1 text-sm text-gray-200">
                             {{range .NodeIDs}}<option value="{{.}}">{{.}}</option>{{end}}
                         </select>
                     </label>

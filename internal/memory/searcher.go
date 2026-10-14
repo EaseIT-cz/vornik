@@ -64,6 +64,10 @@ type Searcher struct {
 	// Routing-on searches (P3, §3.6). Nil disables the trace write —
 	// the verdict path itself never depends on it.
 	traceSink persistence.MemorySearchStageRepository
+	// restriction screens out chunks under a GDPR Art 18 restriction at the
+	// candidate fetch and the listing seam (restriction_screen.go). Installed by
+	// memory.New; nil only on a bare NewSearcher.
+	restriction RestrictionScreen
 }
 
 // defaultQueryEmbedTimeout bounds the query-embedding call on the
@@ -467,6 +471,12 @@ func (s *Searcher) searchInternal(ctx context.Context, projectID, query string, 
 		}
 	}
 	results, err := s.repo.HybridSearchWithEpochs(ctx, projectID, queryVec, keywordQuery, fetchLimit, activeEpochs, s.epochSource != nil, opts.FromDate, opts.ToDate, opts.RepoScope, opts.StrictScope)
+	// GDPR Art 18: drop restricted chunks HERE, before the role boost, the LLM
+	// reranker and every later pass — sending restricted text to a model is
+	// processing even if the result is dropped afterwards (§4.16.1).
+	if err == nil {
+		results, err = s.screenRestrictedResults(ctx, projectID, results)
+	}
 	// Role-based class boost: re-orders by per-role class affinity
 	// before the reranker sees the list. The reranker can still
 	// overrule the order, but the boost guarantees class-relevant

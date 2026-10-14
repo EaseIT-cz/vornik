@@ -66,6 +66,7 @@ args_schema:
 `
 
 type env struct {
+	db        *sqlite.DB
 	epochs    persistence.AccountTransitionRepository
 	t         *testing.T
 	ctx       context.Context
@@ -89,7 +90,7 @@ func newEnv(t *testing.T) *env {
 	if err := yamlUnmarshal(mailProposal, &p); err != nil {
 		t.Fatal(err)
 	}
-	e := &env{epochs: sqlite.NewAccountTransitionRepository(db.DB), t: t, ctx: ctx, grants: sqlite.NewBrokerGrantRepository(db.DB), actions: sqlite.NewBrokerActionRepository(db.DB),
+	e := &env{db: db, epochs: sqlite.NewAccountTransitionRepository(db.DB), t: t, ctx: ctx, grants: sqlite.NewBrokerGrantRepository(db.DB), actions: sqlite.NewBrokerActionRepository(db.DB),
 		sealer: &fakeSealer{}, now: time.Now().UTC().Truncate(time.Second), reach: map[string]string{},
 		metrics: brokergrants.NewMetrics(), props: map[string]registry.BrokerProposal{"ns1--mail/send_reply": p, "ns1--other/send_reply": p},
 		bounds: [3]int{7, 20, 10}}

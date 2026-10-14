@@ -39,25 +39,25 @@
                 <input type="hidden" name="tab" value="{{.Tab}}">
                 <label class="block">
                     <span class="block text-xs text-gray-500 uppercase tracking-wider mb-1">Project</span>
-                    <input type="text" name="project" value="{{.FilterProject}}" class="bg-dark-700 border border-dark-600 text-gray-200 text-xs rounded-md px-2 py-1 w-44">
+                    <input type="text" name="project" value="{{.FilterProject}}" class="bg-dark-700 border border-control text-gray-200 text-xs rounded-md px-2 py-1 w-44">
                 </label>
                 <label class="block">
                     <span class="block text-xs text-gray-500 uppercase tracking-wider mb-1">Actor kind</span>
-                    <input type="text" name="actor_kind" value="{{.FilterActorKind}}" placeholder="companion:claude-code" class="bg-dark-700 border border-dark-600 text-gray-200 text-xs rounded-md px-2 py-1 w-52">
+                    <input type="text" name="actor_kind" value="{{.FilterActorKind}}" placeholder="companion:claude-code" class="bg-dark-700 border border-control text-gray-200 text-xs rounded-md px-2 py-1 w-52">
                 </label>
                 <label class="block">
                     <span class="block text-xs text-gray-500 uppercase tracking-wider mb-1">Repo scope</span>
-                    <input type="text" name="repo_scope" value="{{.FilterRepoScope}}" placeholder="github.com/owner/repo" class="bg-dark-700 border border-dark-600 text-gray-200 text-xs rounded-md px-2 py-1 w-52">
+                    <input type="text" name="repo_scope" value="{{.FilterRepoScope}}" placeholder="github.com/owner/repo" class="bg-dark-700 border border-control text-gray-200 text-xs rounded-md px-2 py-1 w-52">
                 </label>
                 {{if eq .Tab "ingest"}}
                 <label class="block">
                     <span class="block text-xs text-gray-500 uppercase tracking-wider mb-1">Decision</span>
-                    <input type="text" name="decision" value="{{.FilterDecision}}" placeholder="admitted" class="bg-dark-700 border border-dark-600 text-gray-200 text-xs rounded-md px-2 py-1 w-32">
+                    <input type="text" name="decision" value="{{.FilterDecision}}" placeholder="admitted" class="bg-dark-700 border border-control text-gray-200 text-xs rounded-md px-2 py-1 w-32">
                 </label>
                 {{end}}
                 <label class="block">
                     <span class="block text-xs text-gray-500 uppercase tracking-wider mb-1">Since (YYYY-MM-DD)</span>
-                    <input type="text" name="since" value="{{.FilterSince}}" class="bg-dark-700 border border-dark-600 text-gray-200 text-xs rounded-md px-2 py-1 w-40">
+                    <input type="text" name="since" value="{{.FilterSince}}" class="bg-dark-700 border border-control text-gray-200 text-xs rounded-md px-2 py-1 w-40">
                 </label>
                 <input type="hidden" name="limit" value="{{.Limit}}">
                 <button class="bg-brand-500 hover:bg-brand-500 text-white text-xs font-medium px-3 py-1.5 rounded-md">Filter</button>

@@ -21,7 +21,10 @@ administering one: do not follow the rest of this; use Vornik's ordinary tools.
    `list_recipes` shows the ready-made, tested workflows Vornik ships (what
    each reads, returns and needs); `install_recipe` installs one into a
    project as a single change the user approves once, and then asks for its
-   credentials on their phone.
+   credentials on their phone. When `list_recipes` marks a recipe
+   `connector: true`, the user can also install it themselves, with one
+   approval, from the Connectors page of their phone's Vornik approvals; tell
+   them so.
    Otherwise, **build with the admin tools**: `create_project`, `update_project`,
    `define_swarm`, `define_workflow`, `add_mcp_server`, `add_api`,
    `request_credential`, `set_budget`, `remove`. Use `update_project` to

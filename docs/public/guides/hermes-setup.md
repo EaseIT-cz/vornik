@@ -150,7 +150,12 @@ VORNIK_MEMORY_TOKEN=<the hermes-memory secret>
 ```
 
 If Hermes runs with `HERMES_HOME` set to another directory (a service
-often does), edit `.env` there instead.
+often does), edit `.env` there instead. Each Hermes profile has its own
+`.env`, and a gateway that serves several profiles gives each one only its
+own: put the lines in the `.env` of every profile that should reach Vornik
+(`hermes -p <profile> config set VORNIK_URL …` writes one line there). The
+plugin (0.21.5 and later) reads them through Hermes, never from the
+process environment.
 
 `http://localhost:8080` is right when both users are on the same machine
 and Vornik listens on its default port. Plain `http` is only acceptable on

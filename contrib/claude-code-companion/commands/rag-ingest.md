@@ -413,6 +413,6 @@ output and report back to the user with:
   otherwise the SessionStart hook will surface the ingest digest next
   time).
 
-Do NOT call `mcp__vornik__delegate` again. The bash already did it; a
+Do NOT call `mcp__plugin_vornik-companion_vornik__delegate` again. The bash already did it; a
 second call would duplicate the task. If the bash output starts with
 `error:`, surface the error verbatim and stop.

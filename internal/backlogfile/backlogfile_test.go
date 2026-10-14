@@ -538,3 +538,33 @@ func TestRevertToPending_StripsAnnotationAndFlipsMarker(t *testing.T) {
 		t.Error("reverting an already-pending item should be a no-op")
 	}
 }
+
+// audit 2026-10-12: review-20261012-16a3 H1. The executor's failed-terminal
+// backlog checkpoint reads BACKLOG.md with git; Store writes it with
+// os.WriteFile (truncate + write), so the read must hold the same per-project
+// mutex every Store mutation takes, or it can commit a half-written file.
+func TestStore_WithLockHoldsTheProjectMutex(t *testing.T) {
+	s := NewStore()
+	ran := false
+	s.WithLock("p", func() {
+		ran = true
+		if s.lockFor("p").TryLock() {
+			t.Error("the project's mutex was free inside WithLock: a concurrent Append could tear the file")
+		}
+		if !s.lockFor("other").TryLock() {
+			t.Error("another project's mutex must be independent")
+		} else {
+			s.lockFor("other").Unlock()
+		}
+	})
+	if !ran {
+		t.Fatal("WithLock did not run fn")
+	}
+	if !s.lockFor("p").TryLock() {
+		t.Fatal("WithLock did not release the project's mutex")
+	}
+	s.lockFor("p").Unlock()
+	if err := s.Append(tempBacklogPath(t), "p", "item"); err != nil {
+		t.Fatal(err)
+	}
+}

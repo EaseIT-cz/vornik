@@ -24,6 +24,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/promauto"
 	"github.com/rs/zerolog"
 	"vornik.io/vornik/internal/persistence"
 	"vornik.io/vornik/internal/registry"
@@ -96,6 +98,102 @@ type Sweeper struct {
 	// runs against the same project would race on the YAML and DB.
 	mu       sync.Mutex
 	inflight bool
+
+	// Per-project deletion outcomes (GitHub #365): what the caller of
+	// delete-now, and the project banner, are told. outMu guards all four;
+	// outCh is closed and replaced on every record, waking WaitOutcome.
+	outMu    sync.Mutex
+	outSeq   uint64
+	outcomes map[string]DeleteOutcome
+	outCh    chan struct{}
+}
+
+// DeleteOutcome is the result of one attempt to delete a project: Err is nil
+// when every step of deleteProject succeeded. Seq orders outcomes across all
+// projects (a counter, not a clock), so a caller can wait for one recorded
+// after a point it captured.
+type DeleteOutcome struct {
+	Seq uint64
+	At  time.Time
+	Err error
+	// Residue is set, with Err nil, when the project itself was removed (its
+	// DB rows and YAML are gone) but a later step was not done: some artifact
+	// blobs could not be deleted, or the registry reload failed (archival
+	// design section H, 2026-10-14). The project no longer exists for the
+	// operator; nothing retries the blobs.
+	Residue error
+}
+
+// recordOutcome stores projectID's outcome and wakes every waiter. It is
+// called once per attempted project, after deleteProject returns — so after
+// the DB wipe, the artifact and YAML removal, the reload and the audit row:
+// "deleted" is never reported for a partly-done sequence.
+func (s *Sweeper) recordOutcome(projectID string, err, residue error) {
+	clock := s.cfg.Clock
+	if clock == nil {
+		clock = time.Now
+	}
+	s.outMu.Lock()
+	defer s.outMu.Unlock()
+	s.initOutcomesLocked()
+	s.outSeq++
+	o := DeleteOutcome{Seq: s.outSeq, At: clock(), Err: err}
+	if err == nil {
+		o.Residue = residue
+	}
+	s.outcomes[projectID] = o
+	close(s.outCh)
+	s.outCh = make(chan struct{})
+}
+
+func (s *Sweeper) initOutcomesLocked() {
+	if s.outcomes == nil {
+		s.outcomes = map[string]DeleteOutcome{}
+	}
+	if s.outCh == nil {
+		s.outCh = make(chan struct{})
+	}
+}
+
+// OutcomeSeq returns the sequence number of the latest recorded outcome. A
+// caller that wants the result of the deletion it is about to trigger reads it
+// BEFORE triggering, then passes it to WaitOutcome.
+func (s *Sweeper) OutcomeSeq() uint64 {
+	s.outMu.Lock()
+	defer s.outMu.Unlock()
+	return s.outSeq
+}
+
+// LastOutcome returns the most recent outcome recorded for projectID. Held in
+// memory only; the durable record is the project.deleted /
+// project.delete.failed audit row.
+func (s *Sweeper) LastOutcome(projectID string) (DeleteOutcome, bool) {
+	s.outMu.Lock()
+	defer s.outMu.Unlock()
+	o, ok := s.outcomes[projectID]
+	return o, ok
+}
+
+// WaitOutcome blocks until an outcome for projectID with Seq > afterSeq is
+// recorded, or ctx ends (false). Any attempt on the project after afterSeq
+// answers — the kicked sweep, or an hourly tick that reached it first: both
+// are attempts to delete that project, and the first to finish is its state.
+func (s *Sweeper) WaitOutcome(ctx context.Context, projectID string, afterSeq uint64) (DeleteOutcome, bool) {
+	for {
+		s.outMu.Lock()
+		s.initOutcomesLocked()
+		if o, ok := s.outcomes[projectID]; ok && o.Seq > afterSeq {
+			s.outMu.Unlock()
+			return o, true
+		}
+		ch := s.outCh
+		s.outMu.Unlock()
+		select {
+		case <-ch:
+		case <-ctx.Done():
+			return DeleteOutcome{}, false
+		}
+	}
 }
 
 // NewSweeper builds a Sweeper with defaults applied. Required
@@ -193,13 +291,14 @@ func (s *Sweeper) sweepOnce(ctx context.Context) {
 			continue
 		}
 		due++
-		if err := s.deleteProject(ctx, p); err != nil {
+		residue, err := s.deleteProject(ctx, p)
+		if err != nil {
 			s.cfg.Logger.Error().Err(err).Str("project_id", p.ID).Msg("archive-sweeper: delete failed")
 			s.audit(ctx, "project.delete.failed", p.ID, map[string]any{
 				"error": err.Error(),
 			})
-			continue
 		}
+		s.recordOutcome(p.ID, err, residue)
 	}
 	if due > 0 {
 		s.cfg.Logger.Info().Int("due", due).Msg("archive-sweeper: pass complete")
@@ -219,14 +318,22 @@ func (s *Sweeper) sweepOnce(ctx context.Context) {
 // Step 1 first so a half-wiped project keeps a YAML row that the
 // next sweeper tick can re-attempt against. Step 4 last so the
 // audit row writes against the project ID that just disappeared.
-func (s *Sweeper) deleteProject(ctx context.Context, p *registry.Project) error {
+//
+// err is a failure that leaves the project in place (DB wipe, YAML removal):
+// it stays archived and the next tick retries. residue is what was not done
+// once the project itself was removed — artifact blobs left behind, a failed
+// reload — answered as deleted_with_errors and audited as
+// project.delete.partial, never as project.delete.failed (archival design
+// section H, 2026-10-14).
+func (s *Sweeper) deleteProject(ctx context.Context, p *registry.Project) (residue, err error) {
 	stats := persistence.ProjectDataStats{}
-	var firstErr error
+	var artifactErr, reloadErr error
+	artifactBase := ""
 
 	if s.cfg.DataDeleter != nil {
 		st, err := s.cfg.DataDeleter.DeleteProjectData(ctx, p.ID)
 		if err != nil {
-			return fmt.Errorf("db wipe: %w", err)
+			return nil, fmt.Errorf("db wipe: %w", err)
 		}
 		stats = st
 	}
@@ -240,10 +347,7 @@ func (s *Sweeper) deleteProject(ctx context.Context, p *registry.Project) error 
 		// deletes each blob.
 		n, err := s.cfg.ArtifactWiper.DeleteProjectArtifacts(ctx, p.ID)
 		if err != nil {
-			s.cfg.Logger.Warn().Err(err).Str("project_id", p.ID).Int("deleted_before_error", n).Msg("archive-sweeper: artifact wipe failed (continuing)")
-			if firstErr == nil {
-				firstErr = fmt.Errorf("artifact wipe: %w", err)
-			}
+			artifactErr = &ResidueError{Step: ResidueArtifacts, Err: fmt.Errorf("artifact wipe: %w", err)}
 		}
 		artifactsCount = n
 		artifactsRemoved = n > 0
@@ -252,12 +356,10 @@ func (s *Sweeper) deleteProject(ctx context.Context, p *registry.Project) error 
 		// wire the sweeper without going through artifacts.Store
 		// (mostly test fixtures these days). Local filesystem
 		// only; S3 deployments need ArtifactWiper.
+		artifactBase = s.cfg.ArtifactBasePath
 		artDir := filepath.Join(s.cfg.ArtifactBasePath, p.ID)
 		if err := safeRemoveAll(artDir, s.cfg.ArtifactBasePath); err != nil {
-			s.cfg.Logger.Warn().Err(err).Str("project_id", p.ID).Str("artifact_dir", artDir).Msg("archive-sweeper: artifact wipe (fs) failed (continuing)")
-			if firstErr == nil {
-				firstErr = fmt.Errorf("artifact wipe: %w", err)
-			}
+			artifactErr = &ResidueError{Step: ResidueArtifacts, Err: fmt.Errorf("artifact wipe: %w", err)}
 		} else {
 			artifactsRemoved = true
 		}
@@ -265,15 +367,15 @@ func (s *Sweeper) deleteProject(ctx context.Context, p *registry.Project) error 
 
 	yamlRemoved, mdRemoved, err := s.removeProjectFiles(p.ID)
 	if err != nil {
-		return fmt.Errorf("yaml remove: %w (db_rows=%d artifact_dir_removed=%v)", err, stats.RowsDeleted, artifactsRemoved)
+		if artifactErr != nil {
+			return nil, fmt.Errorf("yaml remove: %w (db_rows=%d; also %v)", err, stats.RowsDeleted, artifactErr)
+		}
+		return nil, fmt.Errorf("yaml remove: %w (db_rows=%d artifact_dir_removed=%v)", err, stats.RowsDeleted, artifactsRemoved)
 	}
 
 	if s.cfg.Reload != nil {
 		if err := s.cfg.Reload(ctx); err != nil {
-			s.cfg.Logger.Warn().Err(err).Str("project_id", p.ID).Msg("archive-sweeper: registry reload after delete failed (continuing)")
-			if firstErr == nil {
-				firstErr = fmt.Errorf("reload: %w", err)
-			}
+			reloadErr = &ResidueError{Step: ResidueReload, Err: fmt.Errorf("reload: %w", err)}
 		}
 	}
 
@@ -281,28 +383,151 @@ func (s *Sweeper) deleteProject(ctx context.Context, p *registry.Project) error 
 	// claims, so the row says what happened to them. Both fields, always: a bare
 	// zero cannot distinguish "nothing was derived from this project" from "no
 	// evictor was wired and nobody looked".
-	if !stats.CacheEvictionRan && s.cfg.DataDeleter != nil {
+	// On SQLite there is no embedding_cache, so nothing derived was stored
+	// and the deleter says so (CacheEvictionNotApplicable, GitHub #365).
+	if !stats.CacheEvictionRan && !stats.CacheEvictionNotApplicable && s.cfg.DataDeleter != nil {
 		s.cfg.Logger.Warn().Str("project_id", p.ID).
 			Msg("archive-sweeper: project wiped with NO embedding-cache eviction; " +
 				"vectors derived from the deleted content remain")
 	}
 
 	s.audit(ctx, "project.deleted", p.ID, map[string]any{
-		"tables_cleared":            stats.TablesCleared,
-		"rows_deleted":              stats.RowsDeleted,
-		"cache_eviction_ran":        stats.CacheEvictionRan,
-		"cached_embeddings_evicted": stats.CachedEmbeddingsEvicted,
-		"artifacts_removed":         artifactsRemoved,
-		"artifacts_count":           artifactsCount,
-		"yaml_removed":              yamlRemoved,
-		"projectmd_removed":         mdRemoved,
-		"scheduled_delete_at":       yamlScheduledDeleteAtOf(p),
+		"tables_cleared":                stats.TablesCleared,
+		"rows_deleted":                  stats.RowsDeleted,
+		"cache_eviction_ran":            stats.CacheEvictionRan,
+		"cache_eviction_not_applicable": stats.CacheEvictionNotApplicable,
+		"cached_embeddings_evicted":     stats.CachedEmbeddingsEvicted,
+		"artifacts_removed":             artifactsRemoved,
+		"artifacts_count":               artifactsCount,
+		"yaml_removed":                  yamlRemoved,
+		"projectmd_removed":             mdRemoved,
+		"scheduled_delete_at":           yamlScheduledDeleteAtOf(p),
 	})
 
-	if firstErr != nil {
-		return firstErr
+	residue = errors.Join(artifactErr, reloadErr)
+	if residue != nil {
+		s.recordResidue(ctx, p.ID, artifactBase, artifactsCount, artifactErr, reloadErr)
 	}
-	return nil
+	return residue, nil
+}
+
+// ResidueStep names a deletion step left undone after the project was
+// removed (archival design section H.5).
+type ResidueStep string
+
+const (
+	// ResidueArtifacts means artifact blobs may remain under the project's key
+	// prefix. Nothing retries them once the project is gone.
+	ResidueArtifacts ResidueStep = "artifacts"
+	// ResidueReload means the registry reload after the YAML removal failed. The
+	// archived project stays in the in-memory registry, still due, so the
+	// next tick re-runs the (idempotent) deletion, reload included.
+	ResidueReload ResidueStep = "reload"
+)
+
+// ResidueError is one residue step's error. Error() is the wrapped error's
+// text unchanged ("artifact wipe: ..." / "reload: ..."), so logs and audit
+// rows read as before; the step is for the surfaces that word it.
+type ResidueError struct {
+	Step ResidueStep
+	Err  error
+}
+
+func (e *ResidueError) Error() string { return e.Err.Error() }
+func (e *ResidueError) Unwrap() error { return e.Err }
+
+// ErrResidueArtifacts and ErrResidueReload match, through errors.Is, a
+// residue that names that step, wherever it sits in a joined error.
+var (
+	ErrResidueArtifacts = errors.New("residue: artifacts")
+	ErrResidueReload    = errors.New("residue: reload")
+)
+
+// Is lets errors.Is find the step's sentinel.
+func (e *ResidueError) Is(target error) bool {
+	switch e.Step {
+	case ResidueArtifacts:
+		return target == ErrResidueArtifacts
+	case ResidueReload:
+		return target == ErrResidueReload
+	}
+	return false
+}
+
+// ResidueSteps lists the steps a residue error names, artifacts before
+// reload: a fixed order (by sentinel) that matches deleteProject's today. A
+// residue that carries no step (an older or foreign error) yields none.
+func ResidueSteps(err error) []ResidueStep {
+	var out []ResidueStep
+	if errors.Is(err, ErrResidueArtifacts) {
+		out = append(out, ResidueArtifacts)
+	}
+	if errors.Is(err, ErrResidueReload) {
+		out = append(out, ResidueReload)
+	}
+	return out
+}
+
+// ResidueWarning words a deleted_with_errors residue for the operator, per
+// step (archival design section H.5, 2026-10-14). The artifact wording is
+// the one section H shipped, kept byte-identical so an older vornikctl that
+// strips its prefix still prints it.
+func ResidueWarning(err error) string {
+	detail := ""
+	if err != nil {
+		detail = ": " + err.Error()
+	}
+	steps := ResidueSteps(err)
+	switch {
+	case len(steps) == 2:
+		return "project removed; artifact files may remain and the registry reload failed " +
+			"(the archived project stays listed until the sweeper's next tick, which " +
+			"completes the deletion and retries the artifact files)" + detail
+	case len(steps) == 1 && steps[0] == ResidueReload:
+		return "project removed; the registry reload failed, so the archived project stays " +
+			"listed until the sweeper's next tick, which completes the deletion" + detail
+	case len(steps) == 1 && steps[0] == ResidueArtifacts:
+		return "project removed; artifact files may remain" + detail
+	default:
+		return "project removed; a later deletion step was not done" + detail
+	}
+}
+
+// residueTotal counts deletions that removed the project but left a step
+// undone, by step (archival design section H). Artifacts left behind are
+// orphaned: nothing retries them once the project is gone.
+var residueTotal = promauto.NewCounterVec(prometheus.CounterOpts{
+	Namespace: "vornik", Name: "project_delete_residue_total",
+	Help: "Project deletions that removed the project but left a step undone, by step (artifacts: blobs may remain under the project's key prefix; reload: the registry reload failed and the next tick retries it). Each is audited as project.delete.partial.",
+}, []string{"step"})
+
+// recordResidue makes a residue findable later: an ERROR line naming the
+// prefix and base path, the residue counter, and the project.delete.partial
+// audit row — the durable record of which prefix holds orphaned blobs.
+func (s *Sweeper) recordResidue(ctx context.Context, projectID, artifactBase string, deletedBeforeErr int, artifactErr, reloadErr error) {
+	prefix := projectID + "/"
+	extras := map[string]any{
+		"error":           errors.Join(artifactErr, reloadErr).Error(),
+		"artifact_prefix": prefix,
+	}
+	if artifactErr != nil {
+		residueTotal.WithLabelValues("artifacts").Inc()
+		extras["artifacts_deleted_before_error"] = deletedBeforeErr
+		if artifactBase != "" {
+			extras["artifact_base"] = artifactBase
+		}
+		s.cfg.Logger.Error().Err(artifactErr).Str("project_id", projectID).
+			Str("artifact_prefix", prefix).Str("artifact_base", artifactBase).
+			Int("deleted_before_error", deletedBeforeErr).
+			Msg("archive-sweeper: project deleted but its artifact blobs were not all removed; they are orphaned under this prefix (audited as project.delete.partial)")
+	}
+	if reloadErr != nil {
+		residueTotal.WithLabelValues("reload").Inc()
+		extras["reload_error"] = reloadErr.Error()
+		s.cfg.Logger.Error().Err(reloadErr).Str("project_id", projectID).
+			Msg("archive-sweeper: project files removed but the registry reload failed; the next tick retries")
+	}
+	s.audit(ctx, "project.delete.partial", projectID, extras)
 }
 
 // removeProjectFiles unlinks the project YAML + companion

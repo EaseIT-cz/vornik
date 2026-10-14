@@ -14,7 +14,10 @@ long-term memory.
 | Setup | What Hermes can do | What it needs |
 |---|---|---|
 | **Broker** (the default) | Run the workflows your operator allowed, and get results | `VORNIK_URL` and `VORNIK_BROKER_TOKEN` (plus `VORNIK_MEMORY_TOKEN` for memory) |
-| **Admin** (opt-in) | Set up projects, workflows and connections on Vornik for you, each change approved on your phone | `hermes vornik connect` once; no environment variables |
+| **Admin** (opt-in) | Set up projects, workflows and connections on Vornik for you, each change approved on your phone | `hermes vornik connect` once; none of the three settings |
+
+Requires Hermes 0.21.5 or later. The plugin reads its three settings only
+through Hermes (`agent.secret_scope`), so each Hermes profile has its own.
 
 Start with the broker: it grants Hermes the least. The full walkthrough,
 including Vornik and Hermes under separate OS users on one machine, is
@@ -56,15 +59,27 @@ plugin tools. Updating the daemon does not update the plugin installed on the
 Hermes host. `hermes plugins install` is for first-time installation; it does
 not update an existing copy.
 
-Put the URL and keys in `$HERMES_HOME/.env` (default `~/.hermes/.env`, mode
-600), which Hermes loads at every start. An `export` in a shell never
-reaches a Hermes service or survives a reboot.
+Put the URL and keys in the Hermes profile's `.env`: `$HERMES_HOME/.env`
+(default `~/.hermes/.env`, mode 600) for the default profile, the profile's
+own directory for another one. Hermes loads it at every start. An `export`
+in a shell never reaches a Hermes service or survives a reboot, and a
+Hermes gateway that serves several profiles gives each profile only its own
+`.env`.
 
 ```
 VORNIK_URL=https://vornik.example.com    # http://localhost:8080 on the same machine
 VORNIK_BROKER_TOKEN=sk-vornik-…          # the broker-project key
 VORNIK_MEMORY_TOKEN=sk-vornik-…          # optional: the memory-project key
 ```
+
+`hermes config set VORNIK_URL https://vornik.example.com` writes the same
+line for you (`hermes -p <profile> config set …` for another profile); a
+value typed on a command line stays in your shell history, so prefer the
+editor for the two keys. In the Hermes Desktop the three appear under
+Settings > Plugins > vornik-companion. Since 0.21.5 the plugin reads them
+through Hermes's secret scope at every use, so a changed key is used on the
+next turn, and a missing one is named in the answer together with how to
+set it.
 
 Checked against Hermes v2026.9.24 (0.21.5) by the end-to-end tests in
 `test/e2e/hermes` of this repository.
@@ -127,6 +142,20 @@ flagged command, unless you also set
 `security.approval.transport_fallback: builtin` in Hermes's config.
 `hermes vornik status` says whether the transport is registered, selected,
 and for which namespace.
+
+**Unattended runs never reach your phone.** Hermes asks an approval
+transport only in an interactive terminal session, a chat gateway session,
+or an API session whose client can answer. Cron jobs, single-query runs
+(`hermes chat -q`) and sessions on unattended platforms (webhook, or
+`api_server` with no client that can answer) never ask anyone: they resolve
+each flagged command from Hermes's own `approvals.cron_mode`,
+`approvals.single_query_mode` and `approvals.unattended_mode` (each `deny`
+by default, so the command is refused at once). `hermes -z` asks nobody
+either: it also turns on Hermes's YOLO mode, so flagged commands run
+without a prompt, short of Hermes's hardline floor and your own
+`approvals.deny` rules. Turning the transport on changes nothing there.
+Checked against Hermes v2026.9.24 and Hermes `main` of 2026-10-12; this is
+the limit for Vornik 2026.10.6.
 
 ## What you get
 
@@ -235,9 +264,11 @@ rule 13):
 - **Memory:** when you select it as Hermes's memory provider, it mirrors
   Hermes's curated `MEMORY.md` and `USER.md` writes to Vornik, and has
   Vornik forget an entry Hermes removes or replaces.
-- **Credentials:** it reads `VORNIK_BROKER_TOKEN` and `VORNIK_MEMORY_TOKEN`
-  from the environment and nothing else. It stores no credential of its own
-  and never reads another tool's login.
+- **Credentials:** it reads `VORNIK_URL`, `VORNIK_BROKER_TOKEN` and
+  `VORNIK_MEMORY_TOKEN` through Hermes's secret scope
+  (`agent.secret_scope.get_secret`), the active profile's values, and
+  nothing else. It never reads `.env` or any other file for a credential,
+  stores no credential of its own and never reads another tool's login.
 - **Programs:** `hermes vornik connect`, which you type, runs your local
   `vornikctl` (`vornikctl agent connect hermes`) with a 120-second limit. That
   writes one MCP entry into Hermes's config and a key file only you can

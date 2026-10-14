@@ -78,7 +78,7 @@ func newAgentAdminFixtureWith(t *testing.T, adjust func(*config.Config)) *agentA
 	if err := os.WriteFile(path, rawCfg, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	c, err := NewContainer(cfg, path)
+	c, err := newUnitTestContainer(t, cfg, path)
 	if err != nil {
 		t.Fatal(err)
 	}

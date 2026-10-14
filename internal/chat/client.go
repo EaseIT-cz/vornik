@@ -14,6 +14,8 @@ import (
 	"time"
 
 	"github.com/rs/zerolog"
+
+	"vornik.io/vornik/internal/ctxerr"
 )
 
 // maxChatResponseBytes caps upstream chat completion response size to guard
@@ -464,7 +466,15 @@ type GatewayError struct {
 	Status  int    // HTTP status code (e.g. 500, 502, 429)
 	Message string // parsed error.message from the response body, when present
 	Body    string // truncated raw response body, for diagnostics
+
+	// cause is the provider error this was mapped from, when there is one
+	// (the Bedrock provider, #328). Nil for the HTTP provider's own
+	// constructions, in which case Unwrap returns nil and nothing changes.
+	cause error
 }
+
+// Unwrap exposes the mapped provider error, so errors.As/Is still reach it.
+func (g *GatewayError) Unwrap() error { return g.cause }
 
 // Error implements the error interface.
 func (g *GatewayError) Error() string {
@@ -911,8 +921,13 @@ func (c *Client) doComplete(ctx context.Context, req ChatRequest) (*ChatResponse
 			Str("model", c.model).
 			Dur("duration", time.Since(start)).
 			Msg("chat completion request failed")
-		c.recordMetrics(start, "error", nil)
-		return nil, fmt.Errorf("%w: %v", ErrRequestFailed, err)
+		// %w twice: the cause (context.Canceled / DeadlineExceeded / the
+		// transport error) must stay on the chain for the errors.Is consumers
+		// — IsUpstreamInfraError, CallStats, LoggingProvider. Outcome-quality
+		// LLD §S2 C4 (GitHub #142): %v here hid every caller cancel as a
+		// model failure.
+		c.recordMetrics(start, string(ctxerr.Classify(ctx, err)), nil)
+		return nil, fmt.Errorf("%w: %w", ErrRequestFailed, err)
 	}
 	defer func() { _ = resp.Body.Close() }()
 
@@ -926,6 +941,7 @@ func (c *Client) doComplete(ctx context.Context, req ChatRequest) (*ChatResponse
 			Str("url", url).
 			Dur("duration", time.Since(start)).
 			Msg("chat completion response read failed")
+		c.recordMetrics(start, string(ctxerr.Classify(ctx, err)), nil)
 		return nil, fmt.Errorf("failed to read response: %w", err)
 	}
 
@@ -1029,13 +1045,22 @@ func (c *Client) recordMetrics(start time.Time, status string, resp *ChatRespons
 	duration := time.Since(start).Seconds()
 	c.metrics.RequestsTotal.WithLabelValues(c.model, status).Inc()
 	c.metrics.RequestDuration.WithLabelValues(c.model).Observe(duration)
-	if status != "success" {
+	if statusCountsAsError(status) {
 		c.metrics.ErrorsTotal.WithLabelValues(c.model, status).Inc()
 	}
 	if resp != nil && resp.Usage.TotalTokens > 0 {
 		c.metrics.TokensUsed.WithLabelValues(c.model, "prompt").Add(float64(resp.Usage.PromptTokens))
 		c.metrics.TokensUsed.WithLabelValues(c.model, "completion").Add(float64(resp.Usage.CompletionTokens))
 	}
+}
+
+// statusCountsAsError reports whether a request-status label also counts in
+// errors_total. A caller cancel is a call but not a model failure (the
+// CallStats rule); a timeout is a failure and is counted. Shared by every
+// provider's recordMetrics so the HTTP and CLI providers apply one rule
+// (outcome-quality LLD §S2 C4, GitHub #142; code review 652d #2).
+func statusCountsAsError(status string) bool {
+	return status != "success" && status != string(ctxerr.Cancelled)
 }
 
 func truncateLogString(s string, limit int) string {

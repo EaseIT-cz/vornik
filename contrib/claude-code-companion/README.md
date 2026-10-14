@@ -31,11 +31,26 @@ plugs in without any vornik-side change.
   not write your checkout, and the daemon-side `backlog_deposit` tool renders
   one flattened line capped at 600 characters, which is the wrong shape for a
   backlog whose items carry tables and code references. Body arrives on stdin,
-  so structure survives.
+  so structure survives. A bug deposit can carry `--found-at <level>` (unit,
+  integration, executor-e2e, e2e-lane, production, review): its regression
+  test belongs at that level.
 - **SessionStart hook** — pulls every task that completed since your
   last session ended **and** the most recently-touched RAG entries in
   the project. The host LLM opens each session knowing what the swarm
   finished AND what the project just learned, without having to ask.
+- **Just-in-time recall nudge.** This is the `PreToolUse` hook on `Read`,
+  `Grep` and `Glob`.
+  - **When it fires:** on the third read into one subsystem (`internal/x`,
+    `src/x`, `cmd/x`, `pkg/x` or `contrib/x`) with no successful `recall` in
+    the last 15 minutes.
+  - **What it says:** one line telling the model to recall that subsystem's
+    design first.
+  - **Limits:** it fires at most once per subsystem per session, never blocks
+    a tool call, and makes no network call.
+  - **What it stores:** only subsystem names and one timestamp, under the
+    plugin's data directory.
+  - **Tuning:** `VORNIK_NUDGE=off` disables it. `VORNIK_NUDGE_THRESHOLD`
+    (default 3) and `VORNIK_NUDGE_RECALL_WINDOW_S` (default 900) tune it.
 - **`recall_hint` on every `delegate`** — when the key carries
   `memory_read`, the daemon runs a bounded semantic-neighbour check
   on the delegate prompt and attaches the strongest hits to the

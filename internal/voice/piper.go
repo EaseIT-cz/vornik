@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -208,8 +209,7 @@ func TranscodeSpec(wavPath, format string) (sandboxtool.Spec, string, error) {
 		// Piper's 22.05 kHz output. -application voip biases the
 		// encoder for speech latency over music fidelity.
 		output = "/out/reply.ogg"
-		args = []string{"-nostdin", "-loglevel", "error", "-threads", sandboxtool.FFmpegThreads, "-filter_threads", sandboxtool.FFmpegThreads,
-			"-f", "wav", "-i", "/in/speech.wav", "-threads", sandboxtool.FFmpegThreads,
+		args = []string{"-f", "wav", "-i", "/in/speech.wav", "-threads", sandboxtool.FFmpegThreads,
 			"-c:a", "libopus", "-b:a", "32k", "-application", "voip", "-ar", "48000", "-ac", "1",
 			"-f", "ogg", output}
 	case "mp4-aac":
@@ -217,13 +217,17 @@ func TranscodeSpec(wavPath, format string) (sandboxtool.Spec, string, error) {
 		// layout is kept from the stdout era: players accept it and it
 		// streams.
 		output = "/out/reply.m4a"
-		args = []string{"-nostdin", "-loglevel", "error", "-threads", sandboxtool.FFmpegThreads, "-filter_threads", sandboxtool.FFmpegThreads,
-			"-f", "wav", "-i", "/in/speech.wav", "-threads", sandboxtool.FFmpegThreads,
+		args = []string{"-f", "wav", "-i", "/in/speech.wav", "-threads", sandboxtool.FFmpegThreads,
 			"-c:a", "aac", "-b:a", "64k", "-ar", "44100", "-ac", "1",
 			"-movflags", "frag_keyframe+empty_moov+default_base_moof", "-f", "mp4", output}
 	default:
 		return sandboxtool.Spec{}, "", fmt.Errorf("voice: transcode: unsupported format %q", format)
 	}
+	// Input options, then the input guard (GitHub #348): Piper's WAV is
+	// trusted, but every ffmpeg run carries the guard so the rule has no
+	// exception.
+	args = slices.Concat([]string{"-nostdin", "-loglevel", "error", "-threads", sandboxtool.FFmpegThreads, "-filter_threads", sandboxtool.FFmpegThreads},
+		sandboxtool.FFmpegInputGuard(), args)
 	return sandboxtool.Spec{
 		Feature:    sandboxtool.FeatureVoiceTTS,
 		Entrypoint: "ffmpeg",

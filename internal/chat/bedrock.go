@@ -2,6 +2,7 @@ package chat
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"sync"
@@ -15,6 +16,8 @@ import (
 	bedrockdoc "github.com/aws/aws-sdk-go-v2/service/bedrockruntime/document"
 	bedrocktypes "github.com/aws/aws-sdk-go-v2/service/bedrockruntime/types"
 	"github.com/rs/zerolog"
+
+	"vornik.io/vornik/internal/ctxerr"
 )
 
 // BedrockProvider talks directly to AWS Bedrock's Converse API using
@@ -392,13 +395,10 @@ func (p *BedrockProvider) CompleteWithToolsStream(ctx context.Context, messages 
 		Messages: bedrockMsgs,
 		System:   system,
 	}
-	// Per-request max_tokens (from ctx) wins over construction-time
-	// default — same precedence as the non-streaming path.
-	streamMaxTokens := p.maxTokens
-	if reqMax := MaxTokensFromContext(ctx); reqMax > 0 {
-		streamMaxTokens = reqMax
-	}
-	if streamMaxTokens > 0 {
+	// Per-request max_tokens (from ctx) clamped to the route cap
+	// (p.maxTokens) — same precedence as the non-streaming path and every
+	// other client (EffectiveMaxTokens; GitHub #291, LLD 09 §8.4).
+	if streamMaxTokens := EffectiveMaxTokens(ctx, p.maxTokens); streamMaxTokens > 0 {
 		input.InferenceConfig = &bedrocktypes.InferenceConfiguration{
 			MaxTokens: aws.Int32(int32(streamMaxTokens)),
 		}
@@ -433,6 +433,13 @@ func (p *BedrockProvider) CompleteWithToolsStream(ctx context.Context, messages 
 		// single onText callback at the end.
 		dur := time.Since(start)
 		p.recordMetrics(dur, nil, err)
+		// A stream that failed because its context ended is not a model
+		// without ConverseStream support: the fallback would be a second
+		// full-length call on a context the caller has already given up
+		// (outcome-quality LLD §S2 C6, GitHub #142).
+		if cause := ctxerr.Classify(callCtx, err); cause == ctxerr.Cancelled || cause == ctxerr.Timeout {
+			return nil, fmt.Errorf("bedrock ConverseStream(%s): %w", p.model, err)
+		}
 		if p.logger.GetLevel() <= zerolog.DebugLevel {
 			p.logger.Debug().
 				Str("model", p.model).
@@ -464,7 +471,7 @@ func (p *BedrockProvider) CompleteWithToolsStream(ctx context.Context, messages 
 	}
 	p.recordMetrics(dur, usage, err)
 	if err != nil {
-		return nil, fmt.Errorf("bedrock ConverseStream(%s): %w", p.model, err)
+		return nil, bedrockGatewayError("ConverseStream", p.model, err)
 	}
 	return resp, nil
 }
@@ -668,7 +675,7 @@ func (p *BedrockProvider) complete(ctx context.Context, messages []Message, tool
 		// Surface AWS errors with enough shape to be actionable. The
 		// SDK wraps every error with operation context already; we
 		// add the model so the operator sees which call failed.
-		return nil, fmt.Errorf("bedrock Converse(%s): %w", p.model, err)
+		return nil, bedrockGatewayError("Converse", p.model, err)
 	}
 
 	msg, _ := out.Output.(*bedrocktypes.ConverseOutputMemberMessage)
@@ -718,6 +725,9 @@ func (p *BedrockProvider) complete(ctx context.Context, messages []Message, tool
 			Int64("duration_ms", dur.Milliseconds()).
 			Int("openai_messages_in", len(messages)).
 			Int("bedrock_messages_sent", len(input.Messages)).
+			// #329: the counters that explain the gap above (design
+			// chat-bedrock-conversion.md "Tool-result counters").
+			Func(func(e *zerolog.Event) { bedrockConversionCounters(messages, input.Messages).log(e) }).
 			Int("input_tokens", resp.Usage.PromptTokens).
 			Int("output_tokens", resp.Usage.CompletionTokens).
 			Str("finish_reason", resp.Choices[0].FinishReason).
@@ -736,8 +746,8 @@ func (p *BedrockProvider) complete(ctx context.Context, messages []Message, tool
 //
 // Honours, in order of precedence:
 //
-//   - ctx-level overrides (MaxTokensFromContext,
-//     ResponseFormatFromContext)
+//   - ctx-level overrides (ResponseFormatFromContext; MaxTokensFromContext
+//     clamped to p.maxTokens by EffectiveMaxTokens, GitHub #291)
 //   - construction-time options (p.maxTokens)
 //   - SDK defaults (when neither is set)
 //
@@ -866,16 +876,13 @@ func (p *BedrockProvider) buildConverseInput(ctx context.Context, messages []Mes
 }
 
 // applyMaxTokens stamps the effective max_tokens onto the input's
-// InferenceConfig. Per-request ctx override wins over the
-// construction-time default. Extracted from buildConverseInput so
-// the json_schema path doesn't have to duplicate the precedence
-// logic.
+// InferenceConfig: the per-request ctx value clamped to the route cap
+// (p.maxTokens), EffectiveMaxTokens like every other client, so a role may
+// lower the operator's ceiling but not raise it (GitHub #291; LLD 09 §8.4).
+// Extracted from buildConverseInput so the json_schema path doesn't have to
+// duplicate the precedence logic.
 func applyMaxTokens(ctx context.Context, p *BedrockProvider, input *bedrockruntime.ConverseInput) {
-	effectiveMaxTokens := p.maxTokens
-	if reqMax := MaxTokensFromContext(ctx); reqMax > 0 {
-		effectiveMaxTokens = reqMax
-	}
-	if effectiveMaxTokens > 0 {
+	if effectiveMaxTokens := EffectiveMaxTokens(ctx, p.maxTokens); effectiveMaxTokens > 0 {
 		input.InferenceConfig = &bedrocktypes.InferenceConfiguration{
 			MaxTokens: aws.Int32(int32(effectiveMaxTokens)),
 		}
@@ -964,8 +971,12 @@ func (p *BedrockProvider) recordMetrics(dur time.Duration, usage *bedrocktypes.T
 	}
 	status := "success"
 	if err != nil {
-		status = "error"
-		if m.ErrorsTotal != nil {
+		// Label by cause, and leave a caller cancel out of errors_total — the
+		// rule the HTTP and CLI providers share (outcome-quality LLD §S2 C4;
+		// code review 1662 #1). The errors_total error_type stays
+		// "bedrock_converse".
+		status = string(ctxerr.Classify(context.Background(), err))
+		if m.ErrorsTotal != nil && statusCountsAsError(status) {
 			m.ErrorsTotal.WithLabelValues(p.model, "bedrock_converse").Inc()
 		}
 	}
@@ -980,6 +991,83 @@ func (p *BedrockProvider) recordMetrics(dur time.Duration, usage *bedrocktypes.T
 			m.TokensUsed.WithLabelValues(p.model, "completion").Add(float64(out))
 		}
 	}
+}
+
+// bedrockGatewayError wraps a Bedrock API failure for the caller, typing it as
+// a *GatewayError when the failure carries a status (#328, design
+// chat-bedrock-conversion.md "Provider error typing").
+//
+// Every retry/health consumer keys on *GatewayError (dispatcher
+// prune-and-retry, IsUpstreamInfraError, llmjudge, the graph extractor); before
+// this, a Bedrock ThrottlingException reached none of them. The GatewayError is
+// returned at the TOP of the chain, because two of those consumers use a plain
+// type assertion, and it keeps the AWS error reachable via Unwrap.
+//
+// The status comes from the SDK's HTTP response error when there is one, and
+// otherwise from the typed event-stream exceptions that arrive mid-stream with
+// no HTTP status. Anything else (cancellation, deadline, transport failure with
+// no response) keeps the plain wrapping.
+func bedrockGatewayError(op, model string, err error) error {
+	wrapped := fmt.Errorf("bedrock %s(%s): %w", op, model, err)
+	status := 0
+	var sc interface{ HTTPStatusCode() int }
+	var throttled *bedrocktypes.ThrottlingException
+	var unavailable *bedrocktypes.ServiceUnavailableException
+	var serverErr *bedrocktypes.InternalServerException
+	switch {
+	case errors.As(err, &sc) && sc.HTTPStatusCode() > 0:
+		status = sc.HTTPStatusCode()
+	case errors.As(err, &throttled):
+		status = 429
+	case errors.As(err, &unavailable):
+		status = 503
+	case errors.As(err, &serverErr):
+		status = 500
+	}
+	if status < 400 {
+		return wrapped
+	}
+	return &GatewayError{Status: status, Message: wrapped.Error(), cause: wrapped}
+}
+
+// conversionCounters explains the message-count gap of one OpenAI → Bedrock
+// conversion (#329). tool_result_blocks_out must equal tool_msgs_in (I1: every
+// tool message becomes exactly one toolResult block); tool_results_merged is how
+// many tool messages were aggregated into an earlier tool-result turn.
+type conversionCounters struct {
+	systemIn, toolIn, toolBlocksOut, toolTurnsOut int
+}
+
+func bedrockConversionCounters(in []Message, out []bedrocktypes.Message) conversionCounters {
+	var c conversionCounters
+	for _, m := range in {
+		switch m.Role {
+		case "system":
+			c.systemIn++
+		case "tool":
+			c.toolIn++
+		}
+	}
+	for _, m := range out {
+		n := 0
+		for _, b := range m.Content {
+			if _, ok := b.(*bedrocktypes.ContentBlockMemberToolResult); ok {
+				n++
+			}
+		}
+		c.toolBlocksOut += n
+		if n > 0 {
+			c.toolTurnsOut++
+		}
+	}
+	return c
+}
+
+func (c conversionCounters) log(e *zerolog.Event) {
+	e.Int("system_msgs_in", c.systemIn).
+		Int("tool_msgs_in", c.toolIn).
+		Int("tool_result_blocks_out", c.toolBlocksOut).
+		Int("tool_results_merged", c.toolIn-c.toolTurnsOut)
 }
 
 // requestIDFromMetadata pulls the AWS request ID off the response

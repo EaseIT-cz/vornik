@@ -29,14 +29,20 @@
 # whole point of it existing alongside the Go one.
 #
 # Run: bash deployments/podman/update_test.sh
-set -euo pipefail
+set -Eeuo pipefail
+# No silent exit (#288, 2026-10-08): an errexit abort used to end the suite with
+# no output, so `make test` showed only "FAILED: update_test.sh". Every abort
+# that is not an explicit fail() now names its line and command. -E carries the
+# trap into functions.
+trap 'echo "FAIL: update_test.sh stopped by a failing command (exit $?) at line $LINENO: $BASH_COMMAND"' ERR
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 UPDATER="$HERE/vornik-update.sh"
 [ -f "$UPDATER" ] || { echo "FAIL: $UPDATER not found"; exit 1; }
 
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/vornik-update-test.XXXXXX")"
-trap 'rm -rf "$WORK"' EXIT
+FOREIGN=""
+trap 'rm -rf "$WORK" ${FOREIGN:+"$FOREIGN"}' EXIT
 
 # ---------------------------------------------------------------------------
 # The two script versions. "old" is the real shipped script; "new" models the
@@ -60,7 +66,10 @@ fi
 # exactly as the real one does.
 # ---------------------------------------------------------------------------
 REPO="$WORK/repo"
-mkdir -p "$REPO/.git" "$REPO/deployments/podman" "$REPO/.bin" "$WORK/bin" "$WORK/cfg" "$WORK/localbin" "$WORK/home"
+# The updater's private TMPDIR (audit 2026-10-12, #126): its re-exec copy goes
+# here, never into a directory concurrent runs share.
+PRIVATE_TMP="$WORK/tmp"
+mkdir -p "$PRIVATE_TMP" "$REPO/.git" "$REPO/deployments/podman" "$REPO/.bin" "$WORK/bin" "$WORK/cfg" "$WORK/localbin" "$WORK/home"
 cp "$WORK/old.sh" "$REPO/deployments/podman/vornik-update.sh"
 chmod +x "$REPO/deployments/podman/vornik-update.sh"
 printf 'listen: ":8080"\n' > "$WORK/cfg/config.yaml"
@@ -95,6 +104,10 @@ case "\$*" in
       # THE DEFECT UNDER TEST: checking out the target rewrites the script
       # that is running right now.
       cp "$WORK/new.sh" "$REPO/deployments/podman/vornik-update.sh"
+      # The copy the run executes from must exist in the private TMPDIR
+      # now, while it runs (it is made before anything else, so before the
+      # checkout); check 4 reads this record as its denominator.
+      ls -d "$PRIVATE_TMP"/vornik-update.* >> "$WORK/copies.log" 2>/dev/null
       touch "$WORK/.moved" ;;
   *"2026.9.8^{commit}"*)       echo ccccccc ;;
   *"dev^{commit}"*)            echo ddddddd ;;   # a branch named dev exists (review 8a63 F1)
@@ -158,12 +171,15 @@ printf '#!/usr/bin/env bash\nexit 0\n' > "$WORK/bin/curl"
 chmod +x "$WORK/bin/git" "$WORK/bin/podman" "$WORK/bin/systemctl" "$WORK/bin/curl"
 
 run_updater() {
-  rm -f "$WORK/.moved" "$WORK/order.log" "$WORK/deploy.args" "$WORK/podman-rm.log"; : > "$BUILD_LOG"
+  rm -f "$WORK/.moved" "$WORK/order.log" "$WORK/deploy.args" "$WORK/podman-rm.log" "$WORK/copies.log"; : > "$BUILD_LOG"
+  # Fresh per invocation, so one run's leftover cannot satisfy the next one's
+  # denominator (review 20261012-19ef F3).
+  rm -rf "$PRIVATE_TMP"; mkdir -p "$PRIVATE_TMP"
   rm -rf "$WORK/home"/vornik-upgrade-backup-*
   cp "$WORK/old.sh" "$REPO/deployments/podman/vornik-update.sh"
   chmod +x "$REPO/deployments/podman/vornik-update.sh"
   env -u VORNIK_UPDATE_REEXEC -u VORNIK_UPDATE_COPY_DIR \
-    PATH="${TEST_PATH:-$WORK/bin:$PATH}" HOME="$WORK/home" OBTAIN_MODE="${OBTAIN_MODE-}" BUILD_FAILS="${BUILD_FAILS-}" \
+    PATH="${TEST_PATH:-$WORK/bin:$PATH}" HOME="$WORK/home" TMPDIR="$PRIVATE_TMP" OBTAIN_MODE="${OBTAIN_MODE-}" BUILD_FAILS="${BUILD_FAILS-}" \
     VORNIK_DIR="$REPO" VORNIK_CONFIG="$WORK/cfg/config.yaml" VORNIK_BIN_DIR="$WORK/localbin" \
     bash "$REPO/deployments/podman/vornik-update.sh" "$@" > "$WORK/out" 2>&1 || true
 }
@@ -205,7 +221,7 @@ fi
 
 # HEAD moved during run 1; a second invocation now sees current == target.
 env -u VORNIK_UPDATE_REEXEC -u VORNIK_UPDATE_COPY_DIR \
-  PATH="$WORK/bin:$PATH" HOME="$WORK/home" \
+  PATH="$WORK/bin:$PATH" HOME="$WORK/home" TMPDIR="$PRIVATE_TMP" \
   VORNIK_DIR="$REPO" VORNIK_CONFIG="$WORK/cfg/config.yaml" VORNIK_BIN_DIR="$WORK/localbin" \
   bash "$REPO/deployments/podman/vornik-update.sh" --yes --no-build --check > "$WORK/out2" 2>&1 || true
 grep -q 'already at the target commit' "$WORK/out2" || \
@@ -225,9 +241,46 @@ echo 'update: --help works from the private copy — OK'
 
 # ---------------------------------------------------------------------------
 # 4. The private copy must not be left behind.
+#
+#    audit 2026-10-12 (#126): this check used to search the SHARED
+#    ${TMPDIR:-/tmp}, where a concurrent run's live copy matched and failed
+#    this run under parallel `make test`. Plant one, as that run would, and
+#    the check must still pass. The EXIT trap removes it.
 # ---------------------------------------------------------------------------
-leaked=$(find "${TMPDIR:-/tmp}" -maxdepth 1 -name 'vornik-update.*' -newer "$WORK/old.sh" 2>/dev/null | head -5)
-[ -z "$leaked" ] || fail "the re-exec copy was left behind: $leaked"
+FOREIGN="$(mktemp -d "${TMPDIR:-/tmp}/vornik-update.foreign-XXXXXX")"
+run_updater --yes --no-build
+[ -s "$WORK/copies.log" ] || fail "no re-exec copy was seen in the private TMPDIR during the run;
+      the leak check below would examine a directory the updater never used"
+# Fault injection for update_suite_reason_test.go (#288): UPDATE_TEST_FAULT
+# makes this suite abort here, deterministically, so that test can require the
+# abort to say why. "vanish" removes the directory the leak check is about to
+# list (a file vanishing under find, the incident's shape); "errexit" is any
+# command failing under set -e, inside a function.
+inject_fault() {
+  case "${UPDATE_TEST_FAULT:-}" in
+    vanish) rm -rf "$PRIVATE_TMP" ;;
+    errexit) false ;;
+  esac
+}
+inject_fault
+# The copies left in this run's private TMPDIR, into $WORK/leaked. Not a
+# pipeline in a command substitution: under pipefail a find that failed (its
+# directory vanished) ended the suite silently (#288). It fails with find's
+# own message instead.
+list_own_copies() {
+  find "$PRIVATE_TMP" -mindepth 1 -maxdepth 1 -name 'vornik-update.*' > "$WORK/leaked" 2> "$WORK/leaked.err" ||
+    fail "the leak check could not list $PRIVATE_TMP: $(cat "$WORK/leaked.err")"
+}
+list_own_copies
+[ ! -s "$WORK/leaked" ] || fail "the re-exec copy was left behind: $(head -5 "$WORK/leaked")"
+
+# The check must still see a copy that IS left behind (#288 acceptance): plant
+# one where this run's would be and list again.
+mkdir "$PRIVATE_TMP/vornik-update.planted-leak"
+list_own_copies
+grep -q 'vornik-update.planted-leak' "$WORK/leaked" ||
+  fail "the leak check did not report a copy left in the private TMPDIR; it would pass a real leak"
+rm -rf "$PRIVATE_TMP/vornik-update.planted-leak"
 
 echo 'update: the private copy is cleaned up — OK'
 

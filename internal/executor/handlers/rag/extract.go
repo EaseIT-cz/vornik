@@ -101,6 +101,12 @@ func (h *ExtractHandler) Execute(ctx context.Context, in executor.SystemStepInpu
 		if err != nil {
 			return executor.SystemStepResult{}, fmt.Errorf("rag.extract: load artifact %s: %w", artifactID, err)
 		}
+		// GitHub #351 (15-artifact-store.md §13.2 C4): inputArtifactIDs is
+		// caller-written on several create surfaces; never extract another
+		// project's artifact into this project.
+		if art == nil || art.ProjectID != in.Task.ProjectID {
+			return executor.SystemStepResult{}, fmt.Errorf("rag.extract: artifact %s is missing or belongs to another project; refused", artifactID)
+		}
 		mime := ""
 		if art.MimeType != nil {
 			mime = *art.MimeType

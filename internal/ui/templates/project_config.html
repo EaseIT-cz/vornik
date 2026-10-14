@@ -27,7 +27,7 @@
 
             <form method="POST" action="/ui/projects/{{.ProjectID}}/config" class="space-y-4">
                 <label for="yamlContent" class="sr-only">Project YAML</label>
-                <textarea name="content" id="yamlContent" spellcheck="false" class="w-full min-h-[70vh] rounded-lg border border-dark-700 bg-dark-950 px-4 py-3 text-sm text-gray-100 font-mono leading-6 outline-none focus:border-brand-500 focus:ring-1 focus:ring-brand-500" style="background-color: #020617;">{{.Content}}</textarea>
+                <textarea name="content" id="yamlContent" spellcheck="false" class="w-full min-h-[70vh] rounded-lg border border-control bg-dark-950 px-4 py-3 text-sm text-gray-100 font-mono leading-6 outline-none focus:border-brand-500 focus:ring-1 focus:ring-brand-500" style="background-color: #020617;">{{.Content}}</textarea>
                 <div class="flex items-center justify-end gap-3">
                     <a href="/ui/projects/{{.ProjectID}}" class="px-4 py-2 rounded-md bg-dark-700 text-gray-300 hover:bg-dark-600 text-sm font-medium">Cancel</a>
                     <button type="submit" class="inline-flex items-center gap-2 px-4 py-2 rounded-md bg-brand-600 text-white hover:bg-brand-500 text-sm font-medium">

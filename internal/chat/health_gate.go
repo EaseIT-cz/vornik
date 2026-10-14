@@ -26,13 +26,13 @@ type HealthGatedProvider struct {
 	// onChange is fired (edge-triggered) whenever a (route, model) circuit
 	// changes state — the alert/observability seam (LLD §7). Nil-safe; SHARED
 	// across WithModel clones so every clone reports to the same sink.
-	onChange func(route, model, state string)
+	onChange func(route, model, state, reason string)
 }
 
 // WithStateChangeHook returns h configured to call fn on every circuit state
 // transition (closed/half_open/open). Shared across WithModel clones. The
 // container wires this to the operator-alert path.
-func (h *HealthGatedProvider) WithStateChangeHook(fn func(route, model, state string)) *HealthGatedProvider {
+func (h *HealthGatedProvider) WithStateChangeHook(fn func(route, model, state, reason string)) *HealthGatedProvider {
 	h.onChange = fn
 	return h
 }
@@ -69,6 +69,19 @@ type ModelHealthSnapshot struct {
 	Model     string
 	State     string
 	OpenSince time.Time
+	// TripReason is why the circuit last opened (TripReasonRate,
+	// TripReasonConsecutive, TripReasonProbeFailed) while it is not closed;
+	// empty when closed (outcome-quality LLD §S5 #16).
+	TripReason string
+}
+
+// openTripReason is b's trip reason while the circuit is not closed; a closed
+// circuit's last trip is history, not why it is degraded now.
+func openTripReason(state string, b *Breaker) string {
+	if state == CircuitClosed.Label() {
+		return ""
+	}
+	return b.TripReason()
 }
 
 // ModelHealthReporter is implemented by providers that can expose their
@@ -99,7 +112,7 @@ func (h *HealthGatedProvider) ModelHealthSnapshot() []ModelHealthSnapshot {
 			route, model = key[:i], key[i+1:]
 		}
 		state, openedAt := b.Snapshot()
-		out = append(out, ModelHealthSnapshot{Route: route, Model: model, State: state, OpenSince: openedAt})
+		out = append(out, ModelHealthSnapshot{Route: route, Model: model, State: state, OpenSince: openedAt, TripReason: openTripReason(state, b)})
 		return true
 	})
 	return out
@@ -158,10 +171,14 @@ func (h *HealthGatedProvider) gate(ctx context.Context, call func() (*ChatRespon
 	newState, tripped, changed := b.Record(ok, probe)
 	h.setStateGauge(model, newState)
 	if tripped {
-		h.incTrips(model)
+		h.incTrips(model, b.TripReason())
 	}
 	if changed && h.onChange != nil {
-		h.onChange(h.routeName, model, newState.Label())
+		reason := ""
+		if newState == CircuitOpen {
+			reason = b.TripReason()
+		}
+		h.onChange(h.routeName, model, newState.Label(), reason)
 	}
 	return resp, err
 }
@@ -178,9 +195,9 @@ func (h *HealthGatedProvider) incBestEffortDeadline(model, site string) {
 	}
 }
 
-func (h *HealthGatedProvider) incTrips(model string) {
+func (h *HealthGatedProvider) incTrips(model, reason string) {
 	if h.metrics != nil && h.metrics.ModelHealthTrips != nil {
-		h.metrics.ModelHealthTrips.WithLabelValues(h.routeName, model).Inc()
+		h.metrics.ModelHealthTrips.WithLabelValues(h.routeName, model, reason).Inc()
 	}
 }
 

@@ -39,12 +39,13 @@ type ServerConfig struct {
 	// register integrations that work today. Strictness is declared where it is
 	// wanted rather than imposed where it is not.
 	RequireDeclaredTools bool `yaml:"require_declared_tools" json:"require_declared_tools,omitempty"`
-	// TimeoutSeconds overrides the per-request HTTP timeout for SSE /
-	// streamable-http transports (initialize, tools/list, tools/call). 0
-	// = the 30s default. Raise it for servers whose tools legitimately
-	// run long — e.g. the scraper's web_fetch against slow / anti-bot
-	// target sites, which was failing at the 30s default (context
-	// deadline exceeded). Stdio transport ignores this.
+	// TimeoutSeconds bounds every request to the server, on every
+	// transport (initialize, tools/list, tools/call). 0 = the default:
+	// 30s for SSE / streamable-http, 120s for stdio (defaultStdioTimeout).
+	// Raise it for servers whose tools legitimately run long — e.g. the
+	// scraper's web_fetch against slow / anti-bot target sites, which was
+	// failing at the 30s default (context deadline exceeded). Stdio
+	// ignored it, and had no bound at all, until 2026-10-12 (GitHub #142).
 	TimeoutSeconds int `yaml:"timeout_seconds" json:"timeout_seconds,omitempty"`
 	// Headers are attached to every SSE-transport HTTP request the
 	// Client makes (initialize, tools/list, tools/call). Populated

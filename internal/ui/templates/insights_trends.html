@@ -11,7 +11,7 @@
                 <h1 class="text-xl font-semibold text-gray-100">Trends</h1>
                 {{if .AllowedProjects}}
                 <form method="get" action="/ui/insights/trends" class="flex items-center gap-2">
-                    <select name="projectId" onchange="this.form.submit()" class="text-sm bg-dark-800 border border-dark-700 text-gray-200 rounded-md px-2 py-1.5">
+                    <select name="projectId" onchange="this.form.submit()" class="text-sm bg-dark-800 border border-control text-gray-200 rounded-md px-2 py-1.5">
                         <option value="">{{if .AllAccess}}All projects{{else}}All my projects{{end}}</option>
                         {{range .AllowedProjects}}
                         <option value="{{.}}" {{if eq . $.ProjectID}}selected{{end}}>{{.}}</option>

@@ -233,7 +233,7 @@ if not url_base or not token:
     sys.exit(1)
 url = url_base + "/api/v1/mcp/companion"
 
-# ---------- JSON-RPC call to mcp__vornik__delegate ----------
+# ---------- JSON-RPC call to the companion delegate tool ----------
 delegate_args = {
     "workflow": workflow,
     "prompt": prompt,
@@ -335,6 +335,6 @@ Then, if the run completed, report back to the user with:
   themselves, or just walk away — the SessionStart hook will surface
   the result digest next time).
 
-Do NOT call `mcp__vornik__delegate` again. The bash already did it; a
+Do NOT call `mcp__plugin_vornik-companion_vornik__delegate` again. The bash already did it; a
 second call would duplicate the task. If the bash output starts with
 `error:`, surface the error verbatim and stop.

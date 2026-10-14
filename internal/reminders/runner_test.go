@@ -228,7 +228,9 @@ func TestRunner_DeliversAndMarksFired(t *testing.T) {
 	if len(ch.sent) != 1 {
 		t.Fatalf("channel.Send count = %d, want 1", len(ch.sent))
 	}
-	if ch.sent[0] != "⏰ Reminder: deploy check" {
+	// The stub channel's name is unclassified, so it gets per-message cadence:
+	// the Art 50 notice rides as a footer (GitHub #342, CadenceFor default).
+	if ch.sent[0] != "⏰ Reminder: deploy check"+publicationFooter {
 		t.Errorf("body = %q", ch.sent[0])
 	}
 	if len(repo.fired) != 1 || repo.fired[0] != "rem_001" {

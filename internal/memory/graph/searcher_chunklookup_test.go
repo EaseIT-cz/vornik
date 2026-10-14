@@ -6,7 +6,32 @@ import (
 	"testing"
 
 	"github.com/DATA-DOG/go-sqlmock"
+
+	"vornik.io/vornik/internal/persistence"
 )
+
+// audit 2026-10-12 (GDPR increment 6, #343): ChunksMentioning reads chunk text
+// through this lookup with no firewall seam, so an Art 18 restriction must be in
+// the SQL itself — the shared predicate, not a local copy.
+func TestSQLChunkLookup_ExcludesRestrictedChunks(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	rows := sqlmock.NewRows([]string{"id", "project_id", "source_name", "content", "repo_scope"})
+	mock.ExpectQuery(regexp.QuoteMeta(persistence.ChunkNotRestrictedSQL("project_memory_chunks.id"))).
+		WithArgs("p", "c1").
+		WillReturnRows(rows)
+
+	if _, err := NewSQLChunkLookup(db).LookupChunks(context.Background(), "p", []string{"c1"}, ""); err != nil {
+		t.Fatalf("LookupChunks: %v", err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("the lookup does not carry the restriction predicate: %v", err)
+	}
+}
 
 func TestSQLChunkLookup_ProjectAndLifecycleFilter(t *testing.T) {
 	db, mock, err := sqlmock.New()

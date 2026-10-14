@@ -217,9 +217,12 @@ func TestCodexCompanionPlugin_ScopeDerivationGuidance(t *testing.T) {
 		"skill must describe stripping the trailing .git in normalization")
 }
 
+// TestCodexCompanionPlugin_NoClaudeOnlySurfaces — LLD 23 decision 2 was
+// reversed for hooks on 2026-10-13 (GitHub #246): the bundle ships the
+// recall-nudge hooks/hooks.json, and only that. Slash commands, the Claude
+// manifest and a SessionStart hook stay out.
 func TestCodexCompanionPlugin_NoClaudeOnlySurfaces(t *testing.T) {
 	for _, rel := range []string{
-		filepath.Join("hooks", "hooks.json"),
 		filepath.Join("hooks", "session-start.sh"),
 		"commands",
 		".claude-plugin",
@@ -229,6 +232,28 @@ func TestCodexCompanionPlugin_NoClaudeOnlySurfaces(t *testing.T) {
 		assert.Truef(t, os.IsNotExist(err),
 			"Codex plugin should not ship Claude-only surface %s; use MCP tools and skills instead", path)
 	}
+}
+
+// TestCodexCompanionPlugin_HooksAreOnlyTheRecallNudge — the one hook surface
+// the Codex bundle ships is the recall nudge (LLD 23 "Recall nudge for Codex
+// — 2026-10-13"): PreToolUse on Bash and PostToolUse on the recall tool.
+// Any other event (a SessionStart digest, say) is a new product decision.
+func TestCodexCompanionPlugin_HooksAreOnlyTheRecallNudge(t *testing.T) {
+	raw, err := os.ReadFile(filepath.Join(codexCompanionPluginDir, "hooks", "hooks.json"))
+	require.NoError(t, err)
+	var file map[string]json.RawMessage
+	require.NoError(t, json.Unmarshal(raw, &file))
+	for k := range file {
+		assert.Containsf(t, []string{"description", "hooks"}, k,
+			"Codex refuses unknown top-level keys in hooks.json (HooksFile deny_unknown_fields): %s", k)
+	}
+	var events map[string]json.RawMessage
+	require.NoError(t, json.Unmarshal(file["hooks"], &events))
+	keys := make([]string, 0, len(events))
+	for k := range events {
+		keys = append(keys, k)
+	}
+	assert.ElementsMatch(t, []string{"PreToolUse", "PostToolUse"}, keys)
 }
 
 // TestCodexCompanionPlugin_OperatorSkillTriad — the codex bundle must carry
@@ -271,6 +296,12 @@ func TestCodexCompanionPlugin_OperatorSkillsMirrorClaudeCode(t *testing.T) {
 			require.NoError(t, err)
 
 			normalized := strings.ReplaceAll(string(cc), "Teaches Claude how", "Teaches Codex how")
+			// Each harness names the companion's tools its own way: a Claude
+			// Code plugin install exposes mcp__plugin_vornik-companion_vornik__<tool>,
+			// Codex exposes mcp__vornik__<tool> (GitHub #362; companion
+			// hardening LLD §11.2). The tool name is the second allowed
+			// difference after the addressee.
+			normalized = strings.ReplaceAll(normalized, "mcp__plugin_vornik-companion_vornik__", "mcp__vornik__")
 			assert.Equalf(t, normalized, string(cx),
 				"codex copy of %q diverges from the claude-code original beyond the addressee — "+
 					"mirror the fix into both bundles", sk)

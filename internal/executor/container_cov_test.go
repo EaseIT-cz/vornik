@@ -53,23 +53,25 @@ func (containerCov_emptyKeyMinter) MintProjectScopedKey(_ context.Context, _, _ 
 }
 
 // TestContainerCov_InjectWarmProjectKey_EmptyKeyIsFailure covers the
-// "minted empty key, no error" branch — env left untouched, false.
+// "minted empty key, no error" branch. Audit 2026-10-12 (#352): it is a
+// refusal, and the static key is blanked rather than kept.
 func TestContainerCov_InjectWarmProjectKey_EmptyKeyIsFailure(t *testing.T) {
 	e := &Executor{apiKeyMinter: containerCov_emptyKeyMinter{}, logger: zerolog.Nop()}
 	roleEnv := map[string]string{"VORNIK_API_KEY": "static"}
-	ok := e.injectWarmProjectKey(context.Background(), "proj", "coder", roleEnv)
+	ok, err := e.injectWarmProjectKey(context.Background(), "proj", "coder", roleEnv)
 	assert.False(t, ok, "an empty minted key must be treated as a failure")
-	assert.Equal(t, "static", roleEnv["VORNIK_API_KEY"], "env must be untouched when the key is empty")
+	assert.Error(t, err, "an empty minted key refuses the warm start")
+	assert.Empty(t, roleEnv["VORNIK_API_KEY"], "the static key must not survive a refused mint")
 }
 
 // TestContainerCov_InjectWarmProjectKey_EmptyProjectIDGuard covers
-// the empty-projectID guard (returns false before any mint).
+// the empty-projectID guard (refuses before any mint; audit 2026-10-12, #352).
 func TestContainerCov_InjectWarmProjectKey_EmptyProjectIDGuard(t *testing.T) {
 	minter := &stubAPIKeyMinter{projectKey: "sk-x"}
 	e := &Executor{apiKeyMinter: minter, logger: zerolog.Nop()}
 	roleEnv := map[string]string{}
-	if ok := e.injectWarmProjectKey(context.Background(), "", "coder", roleEnv); ok {
-		t.Error("empty projectID must short-circuit to false")
+	if ok, err := e.injectWarmProjectKey(context.Background(), "", "coder", roleEnv); ok || err == nil {
+		t.Error("empty projectID must refuse with an error")
 	}
 	if len(minter.projectMintCalls) != 0 {
 		t.Error("no mint should be attempted with an empty projectID")
@@ -80,8 +82,8 @@ func TestContainerCov_InjectWarmProjectKey_EmptyProjectIDGuard(t *testing.T) {
 // nil-minter guard.
 func TestContainerCov_InjectWarmProjectKey_NilMinterGuard(t *testing.T) {
 	e := &Executor{apiKeyMinter: nil, logger: zerolog.Nop()}
-	if ok := e.injectWarmProjectKey(context.Background(), "proj", "coder", map[string]string{}); ok {
-		t.Error("nil minter must short-circuit to false")
+	if ok, err := e.injectWarmProjectKey(context.Background(), "proj", "coder", map[string]string{}); ok || err != nil {
+		t.Error("nil minter must short-circuit to false without an error")
 	}
 }
 
@@ -100,8 +102,8 @@ func (containerCov_errMinter) MintProjectScopedKey(_ context.Context, _, _ strin
 func TestContainerCov_InjectWarmProjectKey_MintErrorLogs(t *testing.T) {
 	e := &Executor{apiKeyMinter: containerCov_errMinter{}, logger: zerolog.Nop()}
 	roleEnv := map[string]string{"VORNIK_API_KEY": "static"}
-	if ok := e.injectWarmProjectKey(context.Background(), "proj", "coder", roleEnv); ok {
-		t.Error("mint error must yield false")
+	if ok, err := e.injectWarmProjectKey(context.Background(), "proj", "coder", roleEnv); ok || err == nil {
+		t.Error("mint error must yield false and an error")
 	}
 }
 

@@ -122,6 +122,15 @@ func (l *fakeChunkLookup) LookupChunks(_ context.Context, projectID string, ids 
 	return out, nil
 }
 
+// newTestSearcher builds a Searcher with an empty restriction screen (nothing
+// restricted). The restriction behaviour itself is pinned in
+// restriction_law_test.go; these tests cover scope, ordering and errors.
+func newTestSearcher(entities entityReader, edges edgeReader, mentions mentionReader, chunks ChunkLookup, embed EmbedFn) *Searcher {
+	s := NewSearcher(entities, edges, mentions, chunks, embed)
+	s.SetRestrictionScreen(&fakeRestrictionScreen{})
+	return s
+}
+
 func ent(id, proj, typ, name string) *persistence.KnowledgeEntity {
 	return &persistence.KnowledgeEntity{ID: id, ProjectID: proj, Type: typ, CanonicalName: name, LifecycleState: "published"}
 }
@@ -137,7 +146,7 @@ func TestFindEntities_ScopedToProject(t *testing.T) {
 		"a": ent("a", "projA", "VENDOR", "ACME"),
 		"b": ent("b", "projB", "VENDOR", "ACME"), // same name, other project
 	}}
-	s := NewSearcher(er, &searcherEdgeRepo{}, &searcherMentionRepo{}, nil, nil)
+	s := newTestSearcher(er, &searcherEdgeRepo{}, &searcherMentionRepo{}, nil, nil)
 
 	got, err := s.FindEntities(context.Background(), "projA", "ACME", []string{"VENDOR"}, 10)
 	if err != nil {
@@ -149,7 +158,7 @@ func TestFindEntities_ScopedToProject(t *testing.T) {
 }
 
 func TestFindEntities_EmptyGraph(t *testing.T) {
-	s := NewSearcher(&searcherEntityRepo{byID: map[string]*persistence.KnowledgeEntity{}}, &searcherEdgeRepo{}, &searcherMentionRepo{}, nil, nil)
+	s := newTestSearcher(&searcherEntityRepo{byID: map[string]*persistence.KnowledgeEntity{}}, &searcherEdgeRepo{}, &searcherMentionRepo{}, nil, nil)
 	got, err := s.FindEntities(context.Background(), "projA", "anything", nil, 10)
 	if err != nil {
 		t.Fatalf("FindEntities: %v", err)
@@ -166,7 +175,7 @@ func TestFindEntities_EmbeddingShortlistDedup(t *testing.T) {
 	}}
 	// embedder returns a vec → SimilarByEmbedding returns both VENDOR
 	// entities; "a" is already in via name match so it must not dup.
-	s := NewSearcher(er, &searcherEdgeRepo{}, &searcherMentionRepo{}, nil, fakeEmbedder)
+	s := newTestSearcher(er, &searcherEdgeRepo{}, &searcherMentionRepo{}, nil, fakeEmbedder)
 	got, err := s.FindEntities(context.Background(), "projA", "ACME", []string{"VENDOR"}, 10)
 	if err != nil {
 		t.Fatalf("FindEntities: %v", err)
@@ -186,14 +195,14 @@ func TestFindEntities_EmbeddingShortlistDedup(t *testing.T) {
 }
 
 func TestFindEntities_RequiresProject(t *testing.T) {
-	s := NewSearcher(&searcherEntityRepo{}, &searcherEdgeRepo{}, &searcherMentionRepo{}, nil, nil)
+	s := newTestSearcher(&searcherEntityRepo{}, &searcherEdgeRepo{}, &searcherMentionRepo{}, nil, nil)
 	if _, err := s.FindEntities(context.Background(), "", "q", nil, 5); err == nil {
 		t.Fatal("expected error for empty projectID")
 	}
 }
 
 func TestFindEntities_ListErrorPropagates(t *testing.T) {
-	s := NewSearcher(&searcherEntityRepo{listErr: errors.New("boom")}, &searcherEdgeRepo{}, &searcherMentionRepo{}, nil, nil)
+	s := newTestSearcher(&searcherEntityRepo{listErr: errors.New("boom")}, &searcherEdgeRepo{}, &searcherMentionRepo{}, nil, nil)
 	if _, err := s.FindEntities(context.Background(), "p", "q", nil, 5); err == nil {
 		t.Fatal("expected list error to propagate")
 	}
@@ -206,7 +215,7 @@ func TestFindEntities_EmbeddingErrorPropagates(t *testing.T) {
 	}
 	// query has no name match (so name pass returns nothing) but the
 	// embedding pass runs and errors → must propagate.
-	s := NewSearcher(er, &searcherEdgeRepo{}, &searcherMentionRepo{}, nil, fakeEmbedder)
+	s := newTestSearcher(er, &searcherEdgeRepo{}, &searcherMentionRepo{}, nil, fakeEmbedder)
 	if _, err := s.FindEntities(context.Background(), "p", "ACME", []string{"VENDOR"}, 5); err == nil {
 		t.Fatal("expected embedding error to propagate")
 	}
@@ -224,7 +233,7 @@ func TestFindEntities_EmbedderErrorSkipsPass(t *testing.T) {
 	}}
 	// Name match returns "a"; embedder errors → embedding pass skipped,
 	// name result still returned (no error surfaced to caller).
-	s := NewSearcher(er, &searcherEdgeRepo{}, &searcherMentionRepo{}, nil, erroringEmbedder)
+	s := newTestSearcher(er, &searcherEdgeRepo{}, &searcherMentionRepo{}, nil, erroringEmbedder)
 	got, err := s.FindEntities(context.Background(), "p", "ACME", []string{"VENDOR"}, 10)
 	if err != nil {
 		t.Fatalf("embedder error must not surface, got %v", err)
@@ -237,7 +246,7 @@ func TestFindEntities_EmbedderErrorSkipsPass(t *testing.T) {
 func TestFindEntities_SkipsNilRows(t *testing.T) {
 	// List returns a nil entry the searcher must defensively skip.
 	er := &nilRowEntityRepo{}
-	s := NewSearcher(er, &searcherEdgeRepo{}, &searcherMentionRepo{}, nil, nil)
+	s := newTestSearcher(er, &searcherEdgeRepo{}, &searcherMentionRepo{}, nil, nil)
 	got, err := s.FindEntities(context.Background(), "p", "x", nil, 10)
 	if err != nil {
 		t.Fatalf("FindEntities: %v", err)
@@ -266,7 +275,7 @@ func (r *simNilForeignRepo) SimilarByEmbedding(context.Context, string, string, 
 }
 
 func TestFindEntities_EmbeddingSkipsNilAndForeign(t *testing.T) {
-	s := NewSearcher(&simNilForeignRepo{}, &searcherEdgeRepo{}, &searcherMentionRepo{}, nil, fakeEmbedder)
+	s := newTestSearcher(&simNilForeignRepo{}, &searcherEdgeRepo{}, &searcherMentionRepo{}, nil, fakeEmbedder)
 	got, err := s.FindEntities(context.Background(), "p", "q", []string{"VENDOR"}, 10)
 	if err != nil {
 		t.Fatalf("FindEntities: %v", err)
@@ -284,7 +293,7 @@ func TestFindEntities_EmbeddingLoopHitsLimit(t *testing.T) {
 		"b": ent("b", "p", "VENDOR", "Beta"),
 		"c": ent("c", "p", "VENDOR", "Gamma"),
 	}}
-	s := NewSearcher(er, &searcherEdgeRepo{}, &searcherMentionRepo{}, nil, fakeEmbedder)
+	s := newTestSearcher(er, &searcherEdgeRepo{}, &searcherMentionRepo{}, nil, fakeEmbedder)
 	got, err := s.FindEntities(context.Background(), "p", "zzz-no-match", []string{"VENDOR"}, 1)
 	if err != nil {
 		t.Fatalf("FindEntities: %v", err)
@@ -302,7 +311,7 @@ func TestFindEntities_LimitCapAndNameHitStops(t *testing.T) {
 	}}
 	// limit 0 → clamps to default; limit 2 → stops after 2 name hits
 	// before the embedding pass.
-	s := NewSearcher(er, &searcherEdgeRepo{}, &searcherMentionRepo{}, nil, fakeEmbedder)
+	s := newTestSearcher(er, &searcherEdgeRepo{}, &searcherMentionRepo{}, nil, fakeEmbedder)
 	got, err := s.FindEntities(context.Background(), "p", "", []string{"VENDOR"}, 2)
 	if err != nil {
 		t.Fatalf("FindEntities: %v", err)
@@ -322,7 +331,7 @@ func TestGetEntity_SplitsEdgesByDirection(t *testing.T) {
 			edge("e2", "p", "c", "a", "OWNS"),     // incoming
 		},
 	}}
-	s := NewSearcher(er, edges, &searcherMentionRepo{}, nil, nil)
+	s := newTestSearcher(er, edges, &searcherMentionRepo{}, nil, nil)
 
 	got, out, in, err := s.GetEntity(context.Background(), "p", "a")
 	if err != nil {
@@ -346,7 +355,7 @@ func TestGetEntity_CrossProjectReturnsNil(t *testing.T) {
 	edges := &searcherEdgeRepo{byEntity: map[string][]*persistence.KnowledgeEdge{
 		"a": {edge("e1", "projB", "a", "b", "SUPPLIES")},
 	}}
-	s := NewSearcher(er, edges, &searcherMentionRepo{}, nil, nil)
+	s := newTestSearcher(er, edges, &searcherMentionRepo{}, nil, nil)
 
 	got, out, in, err := s.GetEntity(context.Background(), "projA", "a")
 	if err != nil {
@@ -367,7 +376,7 @@ func TestGetEntity_DropsForeignEdgeRows(t *testing.T) {
 			edge("e2", "OTHER", "a", "z", "LEAK"),
 		},
 	}}
-	s := NewSearcher(er, edges, &searcherMentionRepo{}, nil, nil)
+	s := newTestSearcher(er, edges, &searcherMentionRepo{}, nil, nil)
 	_, out, _, err := s.GetEntity(context.Background(), "p", "a")
 	if err != nil {
 		t.Fatalf("GetEntity: %v", err)
@@ -378,7 +387,7 @@ func TestGetEntity_DropsForeignEdgeRows(t *testing.T) {
 }
 
 func TestGetEntity_GetError(t *testing.T) {
-	s := NewSearcher(&searcherEntityRepo{getErr: errors.New("boom")}, &searcherEdgeRepo{}, &searcherMentionRepo{}, nil, nil)
+	s := newTestSearcher(&searcherEntityRepo{getErr: errors.New("boom")}, &searcherEdgeRepo{}, &searcherMentionRepo{}, nil, nil)
 	if _, _, _, err := s.GetEntity(context.Background(), "p", "a"); err == nil {
 		t.Fatal("expected get error to propagate")
 	}
@@ -387,14 +396,14 @@ func TestGetEntity_GetError(t *testing.T) {
 func TestGetEntity_EdgesError(t *testing.T) {
 	er := &searcherEntityRepo{byID: map[string]*persistence.KnowledgeEntity{"a": ent("a", "p", "X", "A")}}
 	edges := &searcherEdgeRepo{err: errors.New("edge boom")}
-	s := NewSearcher(er, edges, &searcherMentionRepo{}, nil, nil)
+	s := newTestSearcher(er, edges, &searcherMentionRepo{}, nil, nil)
 	if _, _, _, err := s.GetEntity(context.Background(), "p", "a"); err == nil {
 		t.Fatal("expected edges error to propagate")
 	}
 }
 
 func TestGetEntity_NotFound(t *testing.T) {
-	s := NewSearcher(&searcherEntityRepo{byID: map[string]*persistence.KnowledgeEntity{}}, &searcherEdgeRepo{}, &searcherMentionRepo{}, nil, nil)
+	s := newTestSearcher(&searcherEntityRepo{byID: map[string]*persistence.KnowledgeEntity{}}, &searcherEdgeRepo{}, &searcherMentionRepo{}, nil, nil)
 	got, _, _, err := s.GetEntity(context.Background(), "p", "missing")
 	if err != nil {
 		t.Fatalf("GetEntity: %v", err)
@@ -405,7 +414,7 @@ func TestGetEntity_NotFound(t *testing.T) {
 }
 
 func TestGetEntity_RequiresArgs(t *testing.T) {
-	s := NewSearcher(&searcherEntityRepo{}, &searcherEdgeRepo{}, &searcherMentionRepo{}, nil, nil)
+	s := newTestSearcher(&searcherEntityRepo{}, &searcherEdgeRepo{}, &searcherMentionRepo{}, nil, nil)
 	if _, _, _, err := s.GetEntity(context.Background(), "", "x"); err == nil {
 		t.Fatal("expected error for empty projectID")
 	}
@@ -428,7 +437,7 @@ func TestChunksMentioning_ScopeIsolation(t *testing.T) {
 		"c1": {ChunkID: "c1", ProjectID: "projA", Content: "ours"},
 		"c2": {ChunkID: "c2", ProjectID: "projB", Content: "theirs"}, // must be dropped
 	}}
-	s := NewSearcher(er, &searcherEdgeRepo{}, mentions, lookup, nil)
+	s := newTestSearcher(er, &searcherEdgeRepo{}, mentions, lookup, nil)
 
 	got, err := s.ChunksMentioning(context.Background(), "projA", "a", "", 10)
 	if err != nil {
@@ -452,7 +461,7 @@ func TestChunksMentioning_RepoScopeFilter(t *testing.T) {
 		"c2": {ChunkID: "c2", ProjectID: "p", RepoScope: "repoY"}, // wrong scope → dropped
 		"c3": {ChunkID: "c3", ProjectID: "p", RepoScope: "*"},     // cross-cutting → kept
 	}}
-	s := NewSearcher(er, &searcherEdgeRepo{}, mentions, lookup, nil)
+	s := newTestSearcher(er, &searcherEdgeRepo{}, mentions, lookup, nil)
 
 	got, err := s.ChunksMentioning(context.Background(), "p", "a", "repoX", 10)
 	if err != nil {
@@ -473,7 +482,7 @@ func TestChunksMentioning_CrossProjectEntityYieldsNothing(t *testing.T) {
 		"a": {{ChunkID: "c1", EntityID: "a"}},
 	}}
 	lookup := &fakeChunkLookup{chunks: map[string]MentionedChunk{"c1": {ChunkID: "c1", ProjectID: "projB"}}}
-	s := NewSearcher(er, &searcherEdgeRepo{}, mentions, lookup, nil)
+	s := newTestSearcher(er, &searcherEdgeRepo{}, mentions, lookup, nil)
 
 	got, err := s.ChunksMentioning(context.Background(), "projA", "a", "", 10)
 	if err != nil {
@@ -487,24 +496,24 @@ func TestChunksMentioning_CrossProjectEntityYieldsNothing(t *testing.T) {
 func TestChunksMentioning_ErrorPaths(t *testing.T) {
 	ctx := context.Background()
 	// required-arg guard
-	s0 := NewSearcher(&searcherEntityRepo{}, &searcherEdgeRepo{}, &searcherMentionRepo{}, &fakeChunkLookup{}, nil)
+	s0 := newTestSearcher(&searcherEntityRepo{}, &searcherEdgeRepo{}, &searcherMentionRepo{}, &fakeChunkLookup{}, nil)
 	if _, err := s0.ChunksMentioning(ctx, "", "a", "", 10); err == nil {
 		t.Fatal("expected error for empty projectID")
 	}
 	// entity Get error
-	s1 := NewSearcher(&searcherEntityRepo{getErr: errors.New("boom")}, &searcherEdgeRepo{}, &searcherMentionRepo{}, &fakeChunkLookup{}, nil)
+	s1 := newTestSearcher(&searcherEntityRepo{getErr: errors.New("boom")}, &searcherEdgeRepo{}, &searcherMentionRepo{}, &fakeChunkLookup{}, nil)
 	if _, err := s1.ChunksMentioning(ctx, "p", "a", "", 10); err == nil {
 		t.Fatal("expected entity get error to propagate")
 	}
 	er := &searcherEntityRepo{byID: map[string]*persistence.KnowledgeEntity{"a": ent("a", "p", "X", "A")}}
 	// mentions error
-	s2 := NewSearcher(er, &searcherEdgeRepo{}, &searcherMentionRepo{err: errors.New("m boom")}, &fakeChunkLookup{}, nil)
+	s2 := newTestSearcher(er, &searcherEdgeRepo{}, &searcherMentionRepo{err: errors.New("m boom")}, &fakeChunkLookup{}, nil)
 	if _, err := s2.ChunksMentioning(ctx, "p", "a", "", 10); err == nil {
 		t.Fatal("expected mentions error to propagate")
 	}
 	// lookup error (with at least one mention so we reach the lookup)
 	mr := &searcherMentionRepo{byEntity: map[string][]*persistence.EntityMention{"a": {{ChunkID: "c1", EntityID: "a"}}}}
-	s3 := NewSearcher(er, &searcherEdgeRepo{}, mr, &fakeChunkLookup{err: errors.New("l boom")}, nil)
+	s3 := newTestSearcher(er, &searcherEdgeRepo{}, mr, &fakeChunkLookup{err: errors.New("l boom")}, nil)
 	if _, err := s3.ChunksMentioning(ctx, "p", "a", "", 0); err == nil {
 		t.Fatal("expected lookup error to propagate")
 	}
@@ -513,13 +522,13 @@ func TestChunksMentioning_ErrorPaths(t *testing.T) {
 func TestSubgraph_ErrorPaths(t *testing.T) {
 	ctx := context.Background()
 	// seed Get error
-	s1 := NewSearcher(&searcherEntityRepo{getErr: errors.New("boom")}, &searcherEdgeRepo{}, &searcherMentionRepo{}, nil, nil)
+	s1 := newTestSearcher(&searcherEntityRepo{getErr: errors.New("boom")}, &searcherEdgeRepo{}, &searcherMentionRepo{}, nil, nil)
 	if _, err := s1.Subgraph(ctx, "p", []string{"a"}, 1); err == nil {
 		t.Fatal("expected seed get error to propagate")
 	}
 	// edges error during expansion
 	er := &searcherEntityRepo{byID: map[string]*persistence.KnowledgeEntity{"a": ent("a", "p", "X", "A")}}
-	s2 := NewSearcher(er, &searcherEdgeRepo{err: errors.New("e boom")}, &searcherMentionRepo{}, nil, nil)
+	s2 := newTestSearcher(er, &searcherEdgeRepo{err: errors.New("e boom")}, &searcherMentionRepo{}, nil, nil)
 	if _, err := s2.Subgraph(ctx, "p", []string{"a", "a", ""}, 1); err == nil {
 		t.Fatal("expected edges error to propagate")
 	}
@@ -528,12 +537,12 @@ func TestSubgraph_ErrorPaths(t *testing.T) {
 func TestChunksMentioning_EmptyAndNilLookup(t *testing.T) {
 	er := &searcherEntityRepo{byID: map[string]*persistence.KnowledgeEntity{"a": ent("a", "p", "VENDOR", "ACME")}}
 	// nil lookup → error
-	s := NewSearcher(er, &searcherEdgeRepo{}, &searcherMentionRepo{}, nil, nil)
+	s := newTestSearcher(er, &searcherEdgeRepo{}, &searcherMentionRepo{}, nil, nil)
 	if _, err := s.ChunksMentioning(context.Background(), "p", "a", "", 10); err == nil {
 		t.Fatal("expected error when chunk lookup not wired")
 	}
 	// no mentions → empty, no error
-	s2 := NewSearcher(er, &searcherEdgeRepo{}, &searcherMentionRepo{byEntity: map[string][]*persistence.EntityMention{}}, &fakeChunkLookup{}, nil)
+	s2 := newTestSearcher(er, &searcherEdgeRepo{}, &searcherMentionRepo{byEntity: map[string][]*persistence.EntityMention{}}, &fakeChunkLookup{}, nil)
 	got, err := s2.ChunksMentioning(context.Background(), "p", "a", "", 10)
 	if err != nil || len(got) != 0 {
 		t.Fatalf("expected empty no-error, got %v %+v", err, got)
@@ -551,7 +560,7 @@ func TestSubgraph_OneHop(t *testing.T) {
 	edges := &searcherEdgeRepo{byEntity: map[string][]*persistence.KnowledgeEdge{
 		"a": {edge("e1", "p", "a", "b", "SUPPLIES"), edge("e2", "p", "c", "a", "PICKED")},
 	}}
-	s := NewSearcher(er, edges, &searcherMentionRepo{}, nil, nil)
+	s := newTestSearcher(er, edges, &searcherMentionRepo{}, nil, nil)
 
 	sg, err := s.Subgraph(context.Background(), "p", []string{"a"}, 1)
 	if err != nil {
@@ -570,7 +579,7 @@ func TestSubgraph_OneHop(t *testing.T) {
 
 func TestSubgraph_ClampsHops(t *testing.T) {
 	er := &searcherEntityRepo{byID: map[string]*persistence.KnowledgeEntity{"a": ent("a", "p", "VENDOR", "ACME")}}
-	s := NewSearcher(er, &searcherEdgeRepo{byEntity: map[string][]*persistence.KnowledgeEdge{}}, &searcherMentionRepo{}, nil, nil)
+	s := newTestSearcher(er, &searcherEdgeRepo{byEntity: map[string][]*persistence.KnowledgeEdge{}}, &searcherMentionRepo{}, nil, nil)
 	sg, err := s.Subgraph(context.Background(), "p", []string{"a"}, 99)
 	if err != nil {
 		t.Fatalf("Subgraph: %v", err)
@@ -591,7 +600,7 @@ func TestSubgraph_DropsForeignSeedAndEdges(t *testing.T) {
 			edge("eLeak", "OTHER", "a", "x", "LEAK"), // foreign edge
 		},
 	}}
-	s := NewSearcher(er, edges, &searcherMentionRepo{}, nil, nil)
+	s := newTestSearcher(er, edges, &searcherMentionRepo{}, nil, nil)
 
 	// foreign seed "x" yields nothing; own seed "a" expands but the
 	// foreign edge is dropped.
@@ -622,7 +631,7 @@ func TestSubgraph_CycleTerminates(t *testing.T) {
 		"a": {edge("e1", "p", "a", "b", "REL")},
 		"b": {edge("e1", "p", "a", "b", "REL")},
 	}}
-	s := NewSearcher(er, edges, &searcherMentionRepo{}, nil, nil)
+	s := newTestSearcher(er, edges, &searcherMentionRepo{}, nil, nil)
 	sg, err := s.Subgraph(context.Background(), "p", []string{"a"}, 3)
 	if err != nil {
 		t.Fatalf("Subgraph: %v", err)
@@ -633,7 +642,7 @@ func TestSubgraph_CycleTerminates(t *testing.T) {
 }
 
 func TestSubgraph_RequiresProject(t *testing.T) {
-	s := NewSearcher(&searcherEntityRepo{}, &searcherEdgeRepo{}, &searcherMentionRepo{}, nil, nil)
+	s := newTestSearcher(&searcherEntityRepo{}, &searcherEdgeRepo{}, &searcherMentionRepo{}, nil, nil)
 	if _, err := s.Subgraph(context.Background(), "", []string{"a"}, 1); err == nil {
 		t.Fatal("expected error for empty projectID")
 	}

@@ -57,5 +57,21 @@ printf 'runs:\n  using: composite\n  steps:\n    - uses: "actions/cache@v4"\n' >
 out="$(run_lint)"; rc=$?
 if [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -q 'actions/cache@v4'; then pass "quoted unpinned ref in action.yml fails"; else fail "quoted unpinned ref in action.yml should fail (rc=$rc): $out"; fi
 
+# --- #334 item 6 (audit 2026-10-12): a gate that examined nothing must not say
+# OK. A missing tree printed "OK — no <dir> to check"; a tree with no uses:
+# lines printed "every third-party action is pinned". Both now fail, and the
+# OK line names how many references it examined. ---
+GH="$TMP/absent"
+out="$(run_lint)"; rc=$?
+if [ "$rc" -ne 0 ]; then pass "a missing .github tree fails (examined nothing)"; else fail "missing tree must fail (rc=$rc): $out"; fi
+fresh
+printf 'name: x\non: push\n' > "$GH/workflows/ci.yaml"
+out="$(run_lint)"; rc=$?
+if [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -q 'examined 0'; then pass "a tree with no uses: lines fails"; else fail "zero uses: lines must fail naming 0 (rc=$rc): $out"; fi
+fresh
+printf 'jobs:\n  b:\n    steps:\n      - uses: %s\n      - uses: ./.github/actions/setup-go\n' "$PIN" > "$GH/workflows/ci.yaml"
+out="$(run_lint)"; rc=$?
+if [ "$rc" -eq 0 ] && printf '%s' "$out" | grep -q '2 uses: reference(s) examined in 1 file'; then pass "the OK line prints its denominator"; else fail "OK line must print the denominator (rc=$rc): $out"; fi
+
 if [ "$fails" -ne 0 ]; then echo "test-lint-action-pins: $fails FAILED"; exit 1; fi
 echo "test-lint-action-pins: all cases passed"

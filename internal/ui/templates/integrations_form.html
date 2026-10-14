@@ -53,11 +53,11 @@
                     {{if .Secret}}
                     {{if .ConfiguredSecret}}<p class="text-[11px] text-ink-500">•••• already set — enter a new value to replace it</p>{{end}}
                     <input type="password" id="field-{{.Key}}" name="{{.Key}}" autocomplete="off"
-                           class="w-full px-3 py-1.5 text-xs rounded-lg bg-surface-900 border border-surface-600 focus:border-brand-500 focus:outline-none text-ink-200 font-mono"
+                           class="w-full px-3 py-1.5 text-xs rounded-lg bg-surface-900 border border-control focus:border-brand-500 focus:outline-none text-ink-200 font-mono"
                            {{if and .Required (not .ConfiguredSecret)}}required{{end}}>
                     {{else}}
                     <input type="text" id="field-{{.Key}}" name="{{.Key}}" value="{{.Value}}"
-                           class="w-full px-3 py-1.5 text-xs rounded-lg bg-surface-900 border border-surface-600 focus:border-brand-500 focus:outline-none text-ink-200 font-mono"
+                           class="w-full px-3 py-1.5 text-xs rounded-lg bg-surface-900 border border-control focus:border-brand-500 focus:outline-none text-ink-200 font-mono"
                            {{if .Required}}required{{end}}>
                     {{end}}
                     <div class="flex items-start justify-between gap-2">

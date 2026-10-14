@@ -17,6 +17,7 @@ import (
 	"sync/atomic"
 	"syscall"
 	"time"
+	"vornik.io/vornik/internal/ctxerr"
 	"vornik.io/vornik/internal/requestguard"
 
 	"github.com/rs/zerolog"
@@ -41,6 +42,14 @@ import (
 // google-workspace drive_search calls failed instantly and the assistant
 // concluded it had misclicked its own tool.
 var ErrClientNotReading = errors.New("mcp client is no longer reading responses")
+
+// ErrResponseLost marks a stdio call that was in flight when the server's
+// reader exited: the request may have reached the server and been acted on,
+// and the response is gone. It is always wrapped together with
+// ErrClientNotReading. A call refused by the dead latch before any write does
+// NOT carry it: that request never left the daemon. (GitHub #142 #6,
+// outcome-quality LLD §S6.)
+var ErrResponseLost = errors.New("the request may have reached the server, which stopped before answering")
 
 // ErrNoConfiguredProgram refuses a stdio server whose ServerConfig carries no
 // Program: stdio programs come only from the config files, minted into a
@@ -102,6 +111,13 @@ type Client struct {
 	// passes through with zero overhead. Populated in Connect from
 	// cfg.ToolRateLimits.
 	toolLimiter *ToolRateLimiter
+
+	// stdioTimeout bounds every stdio request (GitHub #142). Resolved at
+	// Connect from cfg.TimeoutSeconds, else defaultStdioTimeout.
+	stdioTimeout time.Duration
+	// inflight counts tool calls the manager has routed to this client and
+	// that have not returned; drainThenClose waits for it.
+	inflight sync.WaitGroup
 }
 
 type stdioResult struct {
@@ -125,6 +141,22 @@ func connectHTTPClient(cfg ServerConfig) *http.Client {
 	return &http.Client{Timeout: httpTimeout}
 }
 
+// defaultStdioTimeout bounds a stdio request when the server sets no
+// timeout_seconds. Stdio calls had no bound until 2026-10-12 (GitHub #142).
+// Measured over 2026-09-12..10-12 on the deployed daemon's two stdio servers
+// (1,143 calls): google-workspace max 4.4s, pagedrop max 0.74s; 120s is 27x
+// the slowest and leaves headroom for servers never measured
+// (mcp-transport-design, "A stdio tool call is bounded").
+const defaultStdioTimeout = 120 * time.Second
+
+// stdioCallTimeout resolves a server's stdio request bound.
+func stdioCallTimeout(cfg ServerConfig) time.Duration {
+	if cfg.TimeoutSeconds > 0 {
+		return time.Duration(cfg.TimeoutSeconds) * time.Second
+	}
+	return defaultStdioTimeout
+}
+
 // Connect creates and initializes an MCP client for the given server config.
 // For stdio transport, it starts the subprocess. For SSE and
 // streamable-http, it validates the URL.
@@ -136,10 +168,11 @@ func Connect(ctx context.Context, cfg ServerConfig, logger zerolog.Logger) (*Cli
 		return nil, fmt.Errorf("mcp server %s not dialled: %s", cfg.Name, cfg.NotDialledReason)
 	}
 	c := &Client{
-		config:     cfg,
-		logger:     logger,
-		httpClient: connectHTTPClient(cfg),
-		pending:    make(map[int64]chan stdioResult),
+		config:       cfg,
+		logger:       logger,
+		httpClient:   connectHTTPClient(cfg),
+		pending:      make(map[int64]chan stdioResult),
+		stdioTimeout: stdioCallTimeout(cfg),
 	}
 
 	switch cfg.Transport {
@@ -650,30 +683,77 @@ func (c *Client) callStdio(ctx context.Context, method string, params any) (json
 	}
 	data = append(data, '\n')
 
+	// Every stdio request is bounded (GitHub #142, mcp-transport-design "A
+	// stdio tool call is bounded"): by the caller's context and by the
+	// server's timeout_seconds or defaultStdioTimeout, whichever ends first.
+	callCtx := ctx
+	if c.stdioTimeout > 0 {
+		var cancel context.CancelFunc
+		callCtx, cancel = context.WithTimeout(ctx, c.stdioTimeout)
+		defer cancel()
+	}
+
 	respCh := make(chan stdioResult, 1)
 	c.pendingMu.Lock()
 	c.pending[id] = respCh
 	c.pendingMu.Unlock()
-
-	c.writeMu.Lock()
-	_, err = c.stdin.Write(data)
-	c.writeMu.Unlock()
-	if err != nil {
+	forget := func() {
 		c.pendingMu.Lock()
 		delete(c.pending, id)
 		c.pendingMu.Unlock()
-		return nil, fmt.Errorf("write to stdin: %w", err)
+	}
+
+	// The write honours the context. It runs in its own goroutine (still
+	// under writeMu, so frames never interleave); a server that stopped
+	// reading stdin fills the pipe and blocks it, and the caller must not
+	// block with it.
+	wrote := make(chan error, 1)
+	go func() {
+		c.writeMu.Lock()
+		_, werr := c.stdin.Write(data)
+		c.writeMu.Unlock()
+		wrote <- werr
+	}()
+	select {
+	case err = <-wrote:
+		if err != nil {
+			forget()
+			return nil, fmt.Errorf("write to stdin: %w", err)
+		}
+	case <-callCtx.Done():
+		forget()
+		if ctxerr.Classify(callCtx, nil) == ctxerr.Timeout {
+			// The request never finished sending, so the server never got it
+			// whole: a server that leaves a full pipe unread for the whole
+			// bound is not reading. Mark the client dead so the next call
+			// re-dials (which closes the process and fails this write, ending
+			// its goroutine) instead of queueing another writer on writeMu.
+			reason := fmt.Errorf("mcp server %s stopped reading its stdin", c.config.Name)
+			c.deadReason.Store(reason)
+			c.dead.Store(true)
+		}
+		return nil, c.stdioCallEnded(callCtx, method)
 	}
 
 	select {
 	case resp := <-respCh:
 		return resp.result, resp.err
-	case <-ctx.Done():
-		c.pendingMu.Lock()
-		delete(c.pending, id)
-		c.pendingMu.Unlock()
-		return nil, ctx.Err()
+	case <-callCtx.Done():
+		forget()
+		return nil, c.stdioCallEnded(callCtx, method)
 	}
+}
+
+// stdioCallEnded names why a stdio request ended without a response: the
+// bound expired (the server did not answer in time) or the caller cancelled.
+// The error wraps the context's error so errors.Is and ctxerr.Classify see
+// the cause (GitHub #142).
+func (c *Client) stdioCallEnded(callCtx context.Context, method string) error {
+	if ctxerr.Classify(callCtx, nil) == ctxerr.Cancelled {
+		return fmt.Errorf("%s to mcp server %s was cancelled by the caller: %w", method, c.config.Name, context.Canceled)
+	}
+	return fmt.Errorf("mcp server %s did not answer %s within %s: %w",
+		c.config.Name, method, c.stdioTimeout, context.DeadlineExceeded)
 }
 
 // notify sends a JSON-RPC notification (no id, no response expected).
@@ -774,7 +854,12 @@ func (c *Client) readStdioResponses() {
 	// Wrap with the sentinel so the calls ALREADY BLOCKED here get the same
 	// re-dial treatment as ones arriving later. Without this the in-flight
 	// callers — the ones that noticed first — would be the only ones not healed.
-	drainErr := fmt.Errorf("%w: %w", ErrClientNotReading, err)
+	//
+	// The in-flight callers also get ErrResponseLost (GitHub #142 #6): their
+	// request was registered, and may have been written and acted on, before
+	// the server died. The manager re-dials for them all the same, but must
+	// not replay a call that can change state.
+	drainErr := fmt.Errorf("%w: %w: %w", ErrClientNotReading, ErrResponseLost, err)
 
 	// Mark the client dead BEFORE draining pending — so any concurrent
 	// callStdio that registers between the drain and now sees the flag

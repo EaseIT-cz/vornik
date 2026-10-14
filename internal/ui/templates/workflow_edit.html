@@ -52,17 +52,17 @@
                         <div>
                             <label class="block text-xs font-medium text-gray-300 mb-1.5" for="displayName">Display name</label>
                             <input type="text" name="displayName" id="displayName" value="{{.DisplayName}}"
-                                   class="w-full px-3 py-2 text-sm rounded-lg bg-dark-800 border border-dark-700 focus:border-brand-500 focus:outline-none text-gray-200">
+                                   class="w-full px-3 py-2 text-sm rounded-lg bg-dark-800 border border-control focus:border-brand-500 focus:outline-none text-gray-200">
                         </div>
                         <div>
                             <label class="block text-xs font-medium text-gray-300 mb-1.5" for="version">Version</label>
                             <input type="text" name="version" id="version" value="{{.Version}}" placeholder="1.0.0"
-                                   class="w-full px-3 py-2 text-sm rounded-lg bg-dark-800 border border-dark-700 focus:border-brand-500 focus:outline-none text-gray-200 font-mono">
+                                   class="w-full px-3 py-2 text-sm rounded-lg bg-dark-800 border border-control focus:border-brand-500 focus:outline-none text-gray-200 font-mono">
                         </div>
                         <div>
                             <label class="block text-xs font-medium text-gray-300 mb-1.5" for="entrypoint">Entrypoint</label>
                             <select name="entrypoint" id="entrypoint"
-                                    class="w-full px-3 py-2 text-sm rounded-lg bg-dark-800 border border-dark-700 focus:border-brand-500 focus:outline-none text-gray-200 font-mono">
+                                    class="w-full px-3 py-2 text-sm rounded-lg bg-dark-800 border border-control focus:border-brand-500 focus:outline-none text-gray-200 font-mono">
                                 <option value="" {{if eq .Entrypoint ""}}selected{{end}}>(unset)</option>
                                 {{$current := .Entrypoint}}
                                 {{range .EntrypointOptions}}
@@ -75,7 +75,7 @@
                         <label class="block text-xs font-medium text-gray-300 mb-1.5" for="description">Description</label>
                         <textarea name="description" id="description" rows="3" maxlength="1024"
                                   placeholder="One-paragraph summary surfaced in dashboards and the workflow picker (≤1024 chars)."
-                                  class="w-full px-3 py-2 text-sm rounded-lg bg-dark-800 border border-dark-700 focus:border-brand-500 focus:outline-none text-gray-200 leading-6">{{.Description}}</textarea>
+                                  class="w-full px-3 py-2 text-sm rounded-lg bg-dark-800 border border-control focus:border-brand-500 focus:outline-none text-gray-200 leading-6">{{.Description}}</textarea>
                         <p class="text-[11px] text-gray-500 mt-1">Required by the <code class="text-gray-300">workflow_md_shape</code> doctor check. Keep it short — long prose belongs in the Markdown body.</p>
                     </div>
                 </section>
@@ -90,17 +90,17 @@
                         <div>
                             <label class="block text-xs font-medium text-gray-300 mb-1.5" for="maxStepVisits">Max step visits</label>
                             <input type="number" min="0" name="maxStepVisits" id="maxStepVisits" value="{{if .MaxStepVisits}}{{.MaxStepVisits}}{{end}}" placeholder="3"
-                                   class="w-full px-3 py-2 text-sm rounded-lg bg-dark-800 border border-dark-700 focus:border-brand-500 focus:outline-none text-gray-200 font-mono">
+                                   class="w-full px-3 py-2 text-sm rounded-lg bg-dark-800 border border-control focus:border-brand-500 focus:outline-none text-gray-200 font-mono">
                         </div>
                         <div>
                             <label class="block text-xs font-medium text-gray-300 mb-1.5" for="maxIterations">Max iterations</label>
                             <input type="number" min="0" name="maxIterations" id="maxIterations" value="{{if .MaxIterations}}{{.MaxIterations}}{{end}}" placeholder="20"
-                                   class="w-full px-3 py-2 text-sm rounded-lg bg-dark-800 border border-dark-700 focus:border-brand-500 focus:outline-none text-gray-200 font-mono">
+                                   class="w-full px-3 py-2 text-sm rounded-lg bg-dark-800 border border-control focus:border-brand-500 focus:outline-none text-gray-200 font-mono">
                         </div>
                         <div>
                             <label class="block text-xs font-medium text-gray-300 mb-1.5" for="maxWallClock">Max wall clock</label>
                             <input type="text" name="maxWallClock" id="maxWallClock" value="{{.MaxWallClock}}" placeholder="1h"
-                                   class="w-full px-3 py-2 text-sm rounded-lg bg-dark-800 border border-dark-700 focus:border-brand-500 focus:outline-none text-gray-200 font-mono">
+                                   class="w-full px-3 py-2 text-sm rounded-lg bg-dark-800 border border-control focus:border-brand-500 focus:outline-none text-gray-200 font-mono">
                         </div>
                     </div>
                 </section>
@@ -115,7 +115,7 @@
                         <label class="block text-xs font-medium text-gray-300 mb-1.5" for="cleanupArtifacts">Artifact paths to remove pre-run</label>
                         <textarea name="cleanupArtifacts" id="cleanupArtifacts" rows="4"
                                   placeholder="research.md&#10;deliverable.md&#10;summary.txt"
-                                  class="w-full px-3 py-2 text-sm rounded-lg bg-dark-800 border border-dark-700 focus:border-brand-500 focus:outline-none text-gray-200 font-mono leading-6">{{.CleanupArtifactsRaw}}</textarea>
+                                  class="w-full px-3 py-2 text-sm rounded-lg bg-dark-800 border border-control focus:border-brand-500 focus:outline-none text-gray-200 font-mono leading-6">{{.CleanupArtifactsRaw}}</textarea>
                     </div>
                 </section>
 
@@ -144,32 +144,32 @@
                             <div>
                                 <label class="block text-[11px] font-medium text-gray-400 mb-1" for="stepRole_{{.ID}}">Role</label>
                                 <input type="text" name="stepRole_{{.ID}}" id="stepRole_{{.ID}}" value="{{.Role}}"
-                                       class="w-full px-2 py-1.5 text-xs rounded bg-dark-800 border border-dark-700 focus:border-brand-500 focus:outline-none text-gray-200 font-mono">
+                                       class="w-full px-2 py-1.5 text-xs rounded bg-dark-800 border border-control focus:border-brand-500 focus:outline-none text-gray-200 font-mono">
                             </div>
                             <div>
                                 <label class="block text-[11px] font-medium text-gray-400 mb-1" for="stepOnSuccess_{{.ID}}">on_success</label>
                                 <input type="text" name="stepOnSuccess_{{.ID}}" id="stepOnSuccess_{{.ID}}" value="{{.OnSuccess}}"
                                        list="workflowTargets" placeholder="(none)"
-                                       class="w-full px-2 py-1.5 text-xs rounded bg-dark-800 border border-dark-700 focus:border-brand-500 focus:outline-none text-gray-200 font-mono">
+                                       class="w-full px-2 py-1.5 text-xs rounded bg-dark-800 border border-control focus:border-brand-500 focus:outline-none text-gray-200 font-mono">
                             </div>
                             <div>
                                 <label class="block text-[11px] font-medium text-gray-400 mb-1" for="stepOnFail_{{.ID}}">on_fail</label>
                                 <input type="text" name="stepOnFail_{{.ID}}" id="stepOnFail_{{.ID}}" value="{{.OnFail}}"
                                        list="workflowTargets" placeholder="(execution fail)"
-                                       class="w-full px-2 py-1.5 text-xs rounded bg-dark-800 border border-dark-700 focus:border-brand-500 focus:outline-none text-gray-200 font-mono">
+                                       class="w-full px-2 py-1.5 text-xs rounded bg-dark-800 border border-control focus:border-brand-500 focus:outline-none text-gray-200 font-mono">
                             </div>
                             <div>
                                 <label class="block text-[11px] font-medium text-gray-400 mb-1" for="stepTimeout_{{.ID}}">timeout</label>
                                 <input type="text" name="stepTimeout_{{.ID}}" id="stepTimeout_{{.ID}}" value="{{.Timeout}}"
                                        placeholder="30m"
-                                       class="w-full px-2 py-1.5 text-xs rounded bg-dark-800 border border-dark-700 focus:border-brand-500 focus:outline-none text-gray-200 font-mono">
+                                       class="w-full px-2 py-1.5 text-xs rounded bg-dark-800 border border-control focus:border-brand-500 focus:outline-none text-gray-200 font-mono">
                             </div>
                         </div>
                         {{if .IsAgent}}
                         <div>
                             <label class="block text-xs font-medium text-gray-300 mb-1.5" for="{{.PromptFieldName}}">Prompt</label>
                             <textarea name="{{.PromptFieldName}}" id="{{.PromptFieldName}}" rows="8"
-                                      class="w-full px-3 py-2 text-sm rounded-lg bg-dark-800 border border-dark-700 focus:border-brand-500 focus:outline-none text-gray-200 font-mono leading-6">{{.SystemPrompt}}</textarea>
+                                      class="w-full px-3 py-2 text-sm rounded-lg bg-dark-800 border border-control focus:border-brand-500 focus:outline-none text-gray-200 font-mono leading-6">{{.SystemPrompt}}</textarea>
                         </div>
                         {{template "assistPanel" (dict
                             "Kind" "workflow_step"

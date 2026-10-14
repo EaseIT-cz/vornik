@@ -67,8 +67,52 @@ if [ $rc -ne 0 ] && printf '%s' "$out" | grep -qi "reason"; then ok "an entry wi
 run --fail-on-skip --allow-skips "$tmp/absent.txt" "$tmp/skip.json"
 if [ $rc -ne 0 ]; then ok "an unreadable allow list fails"; else bad "absent list: rc=$rc out=$out"; fi
 
+# Host-conditional entries (CE export runbook, amendment 2026-10-12, #160).
+# audit 2026-10-12: the deps-install entries were reported STALE on a host
+# that had the agent image, were removed on that evidence, and the next
+# publish was refused on the runner that lacks it (run 37691997099).
+printf 'p.TestH\t@test-e2e-podman\tneeds the agent image\np.TestS\talways skips\n' > "$tmp/cond.txt"
+{ ev run p TestH; ev pass p TestH; ev run p TestS; ev skip p TestS; pkgev pass p; } > "$tmp/cond-ran.json"
+run --fail-on-skip --allow-skips "$tmp/cond.txt" "$tmp/cond-ran.json"
+if [ $rc -eq 0 ] && printf '%s' "$out" | grep -q "RAN p.TestH.*covered by test-e2e-podman" && ! printf '%s' "$out" | grep -q "STALE.*p.TestH"; then
+  ok "a host-conditional entry whose test ran is reported RAN, not STALE"; else bad "cond ran: rc=$rc out=$out"; fi
+{ ev run p TestH; ev skip p TestH; ev run p TestS; ev skip p TestS; pkgev pass p; } > "$tmp/cond-skip.json"
+run --fail-on-skip --allow-skips "$tmp/cond.txt" "$tmp/cond-skip.json"
+if [ $rc -eq 0 ] && ! printf '%s' "$out" | grep -q "STALE"; then ok "a host-conditional skip is allowed"; else bad "cond skip: rc=$rc out=$out"; fi
+{ ev run p TestA; ev pass p TestA; ev run p TestS; ev skip p TestS; pkgev pass p; } > "$tmp/cond-absent.json"
+run --fail-on-skip --allow-skips "$tmp/cond.txt" "$tmp/cond-absent.json"
+if [ $rc -eq 0 ] && printf '%s' "$out" | grep -q "STALE.*p.TestH"; then ok "a host-conditional entry whose test produced no event is STALE"; else bad "cond absent: rc=$rc out=$out"; fi
+{ ev run p TestS; ev pass p TestS; pkgev pass p; } > "$tmp/lanewide-ran.json"
+run --fail-on-skip --allow-skips "$tmp/cond.txt" "$tmp/lanewide-ran.json"
+if printf '%s' "$out" | grep -q "STALE.*p.TestS"; then ok "a lane-wide entry whose test passed is still STALE"; else bad "lanewide ran: rc=$rc out=$out"; fi
+{ ev run p TestA; ev pass p TestA; ev run p TestH; ev skip p TestH; pkgev pass p; } > "$tmp/h-skip.json"
+printf 'p.TestH\t@j\treason\n' > "$tmp/goodcond.txt"
+run --fail-on-skip --allow-skips "$tmp/goodcond.txt" "$tmp/h-skip.json"
+if [ $rc -eq 0 ]; then ok "the well-formed control for the malformed cases passes"; else bad "goodcond: rc=$rc out=$out"; fi
+for shape in 'p.TestH\t@\tno job' 'p.TestH\t@j\treason\textra' 'p.TestH\tjob-without-at\treason' 'p.TestH\t@j\t'; do
+  # shellcheck disable=SC2059 # the shape IS the format: its \t are the fields
+  printf "$shape\n" > "$tmp/badcond.txt"
+  run --fail-on-skip --allow-skips "$tmp/badcond.txt" "$tmp/h-skip.json"
+  if [ $rc -ne 0 ]; then ok "a malformed entry fails closed: $shape"; else bad "malformed $shape: rc=$rc out=$out"; fi
+done
+
 run "$tmp/missing.json"
 if [ $rc -ne 0 ]; then ok "an unreadable file fails"; else bad "missing: rc=$rc out=$out"; fi
+
+# --require (GitHub #337, Hermes lane design amendment 2026-10-12): a lane
+# that selects named tests with -run fails when one of them did not pass, so
+# a renamed test cannot leave the lane green on the others.
+run --require TestA --require TestB "$tmp/pass.json"
+if [ $rc -eq 0 ]; then ok "--require: every required test passed"; else bad "require pass: rc=$rc out=$out"; fi
+run --require TestA --require TestRenamed "$tmp/pass.json"
+if [ $rc -ne 0 ] && printf '%s' "$out" | grep -q "TestRenamed"; then ok "--require: a required test that never ran fails, named"; else bad "require absent: rc=$rc out=$out"; fi
+run --require TestS "$tmp/skip.json"
+if [ $rc -ne 0 ] && printf '%s' "$out" | grep -q "TestS"; then ok "--require: a required test that skipped fails"; else bad "require skip: rc=$rc out=$out"; fi
+printf '{"Action":"output","Package":"p","Test":"TestA","Output":"lane log line\\n"}\nnot json\n' > "$tmp/out.json"
+out=$(python3 "$SUM" --print-output "$tmp/out.json" 2>&1); rc=$?
+if [ $rc -eq 0 ] && [ "$out" = "lane log line" ]; then ok "--print-output prints the test log and nothing else"; else bad "print-output: rc=$rc out=$out"; fi
+run --require p.TestA "$tmp/pass.json"
+if [ $rc -eq 0 ]; then ok "--require: a package-qualified name matches"; else bad "require qualified: rc=$rc out=$out"; fi
 
 echo "$pass passed, $fail failed"
 [ $fail -eq 0 ]

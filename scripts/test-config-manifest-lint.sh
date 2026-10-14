@@ -86,6 +86,24 @@ else
 	fail "real repo should lint clean (rc=$rc); got: $out"
 fi
 
+# --- Case E (#334 item 6, audit 2026-10-12): an EMPTY configs/ classified
+# nothing and printed OK. It fails now, naming 0; the OK line counts. ---
+write_manifest "swarms" "evals"
+CFG="$TMP/emptycfg"; rm -rf "$CFG"; mkdir -p "$CFG"
+out="$(run_lint)"; rc=$?
+if [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -q 'examined 0'; then
+	pass "an empty configs/ fails (examined nothing)"
+else
+	fail "an empty configs/ must fail naming 0 (rc=$rc); got: $out"
+fi
+build_configs swarms
+out="$(run_lint)"; rc=$?
+if [ "$rc" -eq 0 ] && printf '%s' "$out" | grep -q '1 dir(s) and 1 file(s) classified'; then
+	pass "the OK line prints its denominator"
+else
+	fail "the OK line must count what it classified (rc=$rc); got: $out"
+fi
+
 echo ""
 if [ "$fails" -eq 0 ]; then echo "test-config-manifest-lint: ALL PASS"; exit 0; fi
 echo "test-config-manifest-lint: $fails case(s) failed"; exit 1

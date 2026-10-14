@@ -162,6 +162,9 @@ func (c *Container) initScheduler() error {
 	if registry := c.observabilityRegistry(); registry != nil {
 		runtimeOptions = append(runtimeOptions, runtime.WithPrometheusRegistry(registry))
 	}
+	if d := c.runtimeImageTimeout(); d > 0 {
+		runtimeOptions = append(runtimeOptions, runtime.WithImageTimeout(d))
+	}
 
 	// Agent containers ran unbounded until 2026-09-21: MemoryLimit was
 	// declared and plumbed to podman and set by nothing, so one agent taking
@@ -175,6 +178,10 @@ func (c *Container) initScheduler() error {
 	if memLimitErr != nil {
 		return memLimitErr
 	}
+
+	// Caller-supplied options last, so they win (WithRuntimeManagerOptions;
+	// only tests pass any).
+	runtimeOptions = append(runtimeOptions, c.runtimeManagerOptions...)
 
 	runtimeManager, err := runtime.New(runtimeOptions...)
 	if err != nil {
@@ -207,6 +214,12 @@ func (c *Container) initScheduler() error {
 				Msg("scheduler.default_step_timeout is not a positive duration — keeping the built-in default")
 		}
 	}
+
+	// The whole-execution default cap. The scheduler held a 30m ExecutionTimeout
+	// nothing read; it binds here, in the executor that owns the execution
+	// context, and only for a workflow that sets no maxWallClock
+	// (05-scheduler §4.12 C1, GitHub #142). Empty = no cap, as before.
+	executorConfig.DefaultMaxWallClock = c.defaultMaxWallClock()
 
 	// Dynamic per-role tool budget: resolve the daemon tool_budget block
 	// (defaults applied) into the executor's pre-resolved config. Disabled
@@ -383,6 +396,12 @@ func (c *Container) initScheduler() error {
 	// instance, injected below into the api/ui servers).
 	if c.WorkspaceLock != nil {
 		executorOpts = append(executorOpts, executor.WithWorkspaceLock(c.WorkspaceLock))
+	}
+	// The SAME backlog Store the deposit handler and the autonomy manager
+	// use, so the failed-terminal backlog checkpoint never reads a
+	// half-written BACKLOG.md (workspace-state hygiene design §4.2b).
+	if c.BacklogStore != nil {
+		executorOpts = append(executorOpts, executor.WithBacklogStore(c.BacklogStore))
 	}
 	if spawnCatalog != nil {
 		// Pass the concrete *templates.Catalog only when non-
@@ -1413,6 +1432,11 @@ func (c *Container) initScheduler() error {
 	}()
 	c.agentHealth = agentHealthReg
 	if agentHealthReg != nil {
+		// A trip is logged with its reason and remedy (outcome-quality LLD
+		// §S5 #16); before, it was counted and logged nowhere.
+		agentHealthReg.SetLogger(c.Logger)
+	}
+	if agentHealthReg != nil {
 		executorOpts = append(executorOpts, executor.WithAgentHealth(agentHealthReg))
 	}
 
@@ -1946,4 +1970,44 @@ func (c *Container) scaleLeaseForSpeed(baseSeconds int) int {
 		Float64("reference_tokens_per_sec", sat.ReferenceTokensPerSec).
 		Msg("lease timeout scaled for measured inference speed")
 	return scaled
+}
+
+// runtimeImageTimeout parses runtime.image_timeout, the bound on a podman run
+// or pull (outcome-quality LLD §S7 #8). Empty or invalid = 0, which keeps the
+// runtime's 15m default; invalid is logged.
+func (c *Container) runtimeImageTimeout() time.Duration {
+	if c == nil || c.Config == nil {
+		return 0
+	}
+	raw := c.Config.Runtime.ImageTimeout
+	if raw == "" {
+		return 0
+	}
+	d, err := time.ParseDuration(raw)
+	if err != nil || d <= 0 {
+		c.Logger.Warn().Str("image_timeout", raw).
+			Msg("runtime.image_timeout is not a positive duration — keeping the 15m default")
+		return 0
+	}
+	return d
+}
+
+// defaultMaxWallClock parses scheduler.execution_timeout, the whole-execution
+// cap for a workflow that sets no maxWallClock (05-scheduler §4.12 C1,
+// GitHub #142). Empty or invalid = 0, no cap; invalid is logged.
+func (c *Container) defaultMaxWallClock() time.Duration {
+	if c == nil || c.Config == nil {
+		return 0
+	}
+	raw := c.Config.Scheduler.ExecutionTimeout
+	if raw == "" {
+		return 0
+	}
+	d, err := time.ParseDuration(raw)
+	if err != nil || d <= 0 {
+		c.Logger.Warn().Str("execution_timeout", raw).
+			Msg("scheduler.execution_timeout is not a positive duration — no default wall-clock cap")
+		return 0
+	}
+	return d
 }

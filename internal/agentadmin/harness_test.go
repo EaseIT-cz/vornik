@@ -44,6 +44,15 @@ func TestHarnessClaimsFor_HermesStatesTheHostApprovalLimit(t *testing.T) {
 			t.Errorf("hermes claims miss %q: %s", want, hermes)
 		}
 	}
+	// GitHub #129 (2026-10-13): Hermes never consults an approval transport
+	// in cron, single-query (-q, -z) or unattended-platform sessions; an
+	// agent told only "answer on your phone" would promise the user approvals
+	// that never reach the phone. The claim names where they do not reach.
+	for _, want := range []string{"cron", "single-query", "approvals.*_mode", "never reach the phone"} {
+		if !strings.Contains(hermes, want) {
+			t.Errorf("hermes claims miss the unattended limit %q: %s", want, hermes)
+		}
+	}
 	if desktop := strings.Join(HarnessClaimsFor("claude-desktop"), " "); strings.Contains(desktop, "Hermes's own safety prompts") {
 		t.Errorf("a non-Hermes harness is told about Hermes's approvals: %s", desktop)
 	}

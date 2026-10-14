@@ -166,7 +166,7 @@ func render(override, compiledDefault, cfgURL string) Notice {
 }
 
 // Notice returns the rendered disclosure for this service.
-func (s *Service) Notice() Notice { return s.notice }
+func (s *Service) Notice() Notice { return s.orDefault().notice }
 
 // PublicationNotice returns the disclosure for surfaces that AUTHOR an artifact
 // — a forge review, a social post — rather than reply in a conversation.
@@ -176,7 +176,7 @@ func (s *Service) Notice() Notice { return s.notice }
 // and a per-artifact suppression rule is exactly the off-switch §5 refuses. The
 // published artifact carries the notice verbatim and is therefore its own Art 99
 // evidence, which is why these surfaces write no channel_disclosure_log row.
-func (s *Service) PublicationNotice() Notice { return s.publication }
+func (s *Service) PublicationNotice() Notice { return s.orDefault().publication }
 
 // Ensure reports whether this turn must carry the disclosure.
 //

@@ -41,6 +41,12 @@ func (r *recordingArtifactStore) Store(_ context.Context, _, _, _, name, sourceP
 	return &persistence.Artifact{Name: name, StoragePath: sourcePath}, nil
 }
 
+// StoreFile records the descriptor's path (GitHub #359: the harvest hands
+// the store an open descriptor; os.Root names it root/rel).
+func (r *recordingArtifactStore) StoreFile(ctx context.Context, projectID, executionID, taskID, name string, src *os.File) (*persistence.Artifact, error) {
+	return r.Store(ctx, projectID, executionID, taskID, name, src.Name())
+}
+
 // Retrieve satisfies the wider ArtifactStore interface that gained
 // a read method when the executor started routing memory-ingest
 // reads through the backend-aware Store. Tests in this file don't
@@ -1137,7 +1143,7 @@ func TestStoreOneArtifact_Origin_TaskOutput(t *testing.T) {
 		logger:       zerolog.Nop(),
 	}
 
-	entry, err := e.storeOneArtifact(context.Background(), "exec-1", "proj-1", "task-1", "output.md", src, time.Now())
+	entry, err := e.storeOneArtifact(context.Background(), "exec-1", "proj-1", "task-1", "output.md", src, nil, time.Now())
 	require.NoError(t, err)
 	require.NotNil(t, entry)
 

@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"vornik.io/vornik/internal/agentns"
+	"vornik.io/vornik/internal/aidisclosure"
 
 	"github.com/rs/zerolog"
 	"vornik.io/vornik/internal/budget"
@@ -509,7 +510,10 @@ type Bot struct {
 	// UNIQUE(chat_id, thread_id) is the durable guard.
 	forumChatID    int64
 	forumIconColor int
-	threadRepo     persistence.TelegramThreadRepository
+	// disclosure: Art 50 notice for pushes outside ChannelReceiver
+	// (disclosure.go; design 2026-07-28 §11.4, GitHub #342). Guarded by mu.
+	disclosure *aidisclosure.Service
+	threadRepo persistence.TelegramThreadRepository
 	// skillRepo backs the knowledge-skill approval surface (learning-
 	// loop §approval). Nil disables skill approve/reject callbacks +
 	// the review digest.
@@ -1781,6 +1785,16 @@ func (b *Bot) NotifyTaskCompleted(_ context.Context, task *persistence.Task, suc
 
 	for _, chatID := range chatIDs {
 		mode := b.getVerbosity(chatID)
+		// Art 50 (GitHub #342): the push carries a task result and may be the
+		// first thing this chat hears from the system. Disclose first; if the
+		// notice cannot be delivered, do not push undisclosed content.
+		if mode != "silent" {
+			if err := b.discloseChat(ctx, chatID); err != nil {
+				b.logger.Error().Err(err).Str("task_id", task.ID).Int64("chat_id", chatID).
+					Msg("notify: AI notice could not be delivered; completion push withheld")
+				continue
+			}
+		}
 		switch mode {
 		case "silent":
 			b.logger.Debug().Str("task_id", task.ID).Int64("chat_id", chatID).
@@ -2761,7 +2775,14 @@ func (b *Bot) sendDocumentFromReader(ctx context.Context, chatID int64, body io.
 }
 
 // SendDocument sends a file to a chat (implements FileSender interface).
+//
+// Art 50 (GitHub #342): every file this bot sends is AI-generated content, and
+// this is the public entry for watcher uploads, send_artifact and scheduled
+// reports alike, so the chat is disclosed to here, once, before the file.
 func (b *Bot) SendDocument(ctx context.Context, chatID int64, path, caption string) error {
+	if err := b.discloseChat(ctx, chatID); err != nil {
+		return err
+	}
 	return b.sendDocument(ctx, chatID, path, caption)
 }
 
@@ -2771,7 +2792,12 @@ func (b *Bot) SendDocument(ctx context.Context, chatID int64, path, caption stri
 // has no on-disk representation. fileName is the user-visible name
 // the Telegram client shows (use the artifact's recorded Name, not
 // its storage key).
+//
+// Art 50 (GitHub #342): disclosed first, as SendDocument.
 func (b *Bot) SendDocumentReader(ctx context.Context, chatID int64, body io.Reader, fileName, caption string) error {
+	if err := b.discloseChat(ctx, chatID); err != nil {
+		return err
+	}
 	return b.sendDocumentFromReader(ctx, chatID, body, fileName, caption)
 }
 

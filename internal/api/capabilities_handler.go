@@ -198,6 +198,10 @@ func (s *Server) featureFlags() map[string]bool {
 		// an older daemon would drop it silently.
 		"companion-strict-args":  s.apiKeyRepo != nil,
 		"companion-list-project": s.apiKeyRepo != nil && s.taskRepo != nil,
+		// GitHub #324 (LLD 21 §A, "list(project: \"*\")"): list takes "*",
+		// every project the key covers. The Hermes digest sends it only when
+		// advertised; an older daemon refuses "*" as an unknown project.
+		"companion-list-all-projects": s.apiKeyRepo != nil && s.taskRepo != nil,
 		// LLD 22, "Memory the user can see" (GitHub #119 item 6): memory_list
 		// is served. Bundles fall back to recent_memory when it is absent.
 		"companion-memory-list": s.memoryListAdapter() != nil,

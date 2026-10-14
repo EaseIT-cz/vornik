@@ -5,9 +5,9 @@ sources:
     - path: internal/harnessconfig/harnessconfig.go
       sha256: 601958b2eed5b85284f43c80973d23b0bf9565a5d9e4db3fb42208ff69ea5984
     - path: internal/agentadmin/harness.go
-      sha256: 330a8aaf3e48e5300155a68e10ae017b93d1e4acfb194622db080880cecb161e
+      sha256: 769bbb380005cce2f52c94afeeedb369483a8ba2575c1d38298f4150c3f2fdc5
     - path: internal/agentadmin/admin_guidance.md
-      sha256: 40ca639505548430e3633f03ef9a3721951e8273d78dace687a27571925c93b5
+      sha256: b84df1b489d0b74c3ab122225d799e8dc4bfe8fafd2e139bb44acd159b1d124b
 ---
 # Let your assistant set up Vornik
 
@@ -30,6 +30,7 @@ Vornik is the safety harness around it:
 - **Keys and tokens do not leak out through it.** Arguments, API requests, proposed writes and returned results are scanned for credential-shaped values. A finding refuses the call.
 
 - **Ready-made workflows come first.** Vornik ships tested recipes: an inbox digest, an agenda and a morning brief (mail and calendar together). The assistant installs one into a project as a single change, which you approve once; your phone then asks for each credential it needs. Until a credential is entered the workflow is installed but does not run. A recipe's answer names its source for each item, says when the data was read, and tells "nothing arrived" apart from "could not read".
+- **A connector you install yourself.** A recipe your operator has vetted as a read-only connector, with its server fixed, appears on the **Connectors** page of your paired phone. You pick the assistant and project, name the account and enter its key; one approval installs it, stores the key, allows exactly the tools the page lists, and then checks the connection. Your assistant sees it in its setup and can run it. Vornik ships no vetted connector: your operator vets a recipe by copying the `connector.yaml.example` beside it in the deployed recipe catalogue to `connector.yaml` and naming the server they reviewed. A connector that signs in with a provider (OAuth) takes two approvals: the first installs it and sends you to the provider to sign in; back on the page you see which account you signed in to and approve its tools.
 
 What it does receive is what you asked for. If you ask "summarise my spending", the summary of your spending reaches the assistant: that output was approved, by you, when the workflow was.
 
@@ -173,7 +174,7 @@ What this does and does not promise:
 - Hermes still decides and enforces. Vornik shows Hermes's text, records which phone answered and when, and hands the answer back. A modified Hermes, or one with the transport switched off, ignores the phone.
 - Only a paired phone can answer. The assistant's own key cannot, and neither can an operator key or a console session.
 - While it is on, an answer needs Vornik. If Vornik is down or unreachable, Hermes refuses every flagged command, unless you also set `security.approval.transport_fallback: builtin` in Hermes's config, in which case Hermes asks in its own prompt instead.
-- The phone answers questions Hermes asks while you, or a chat gateway, are present. Hermes's single-query mode (`hermes -z`) and cron jobs never ask: they follow their own `approvals.*_mode` settings.
+- The phone answers questions Hermes asks while you, or a chat gateway, are present: an interactive terminal session, a gateway chat, or an API session whose client can answer. Unattended runs never reach the phone. Cron jobs, single-query runs (`hermes chat -q`) and sessions on unattended platforms (webhook, or `api_server` with no client that can answer) never ask anyone: they follow Hermes's own `approvals.cron_mode`, `approvals.single_query_mode` and `approvals.unattended_mode` settings, each `deny` by default. `hermes -z` asks nobody either: it runs in Hermes's YOLO mode. This is the limit as of Vornik 2026.10.6, checked against Hermes's source on 2026-10-13; lifting it needs a change in Hermes itself.
 - At most 3 questions wait at once per assistant, and 30 an hour; beyond that Hermes is told no.
 
 ## See what an assistant has set up

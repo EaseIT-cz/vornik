@@ -99,6 +99,40 @@ func TestGitWorkspace_RefusesADirtyWorkspace(t *testing.T) {
 	}
 }
 
+// audit 2026-10-12: GitHub #307. A failed task's backlog deposit left one
+// uncommitted BACKLOG.md line in the bench workspace, and Prepare refused with
+// "has uncommitted entries", naming neither the path nor the task that left
+// it. The refusal now lists the dirty paths and, from each change's
+// "via task_..." deposit trailers, the origin task (benchmark LLD §12.25 D4).
+func TestGitWorkspace_PrepareNamesDirtyPathsAndOrigin(t *testing.T) {
+	dir := gitRepo(t)
+	commitFile(t, dir, "BACKLOG.md", "# Backlog\n\n- [?] old item (via task_20260901000000_aaaaaaaaaaaaaaaa, 2026-09-01)\n")
+	f, err := os.OpenFile(filepath.Join(dir, "BACKLOG.md"), os.O_APPEND|os.O_WRONLY, 0o644)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, _ = f.WriteString("- [?] **[bug]** x — y (via task_20260927075535_c5798f15038adcbc, 2026-09-27)\n")
+	_ = f.Close()
+	if err := os.WriteFile(filepath.Join(dir, "notes.txt"), []byte("scratch\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err = gitWorkspace{dir: dir}.Prepare(context.Background(), agentbench.TaskSpec{ID: "sw-01"}, 1)
+	if err == nil {
+		t.Fatal("a dirty workspace must be refused")
+	}
+	msg := err.Error()
+	for _, want := range []string{"BACKLOG.md", "task_20260927075535_c5798f15038adcbc", "notes.txt", "origin unknown"} {
+		if !strings.Contains(msg, want) {
+			t.Errorf("refusal does not name %q:\n%s", want, msg)
+		}
+	}
+	// The committed line's task is history, not the origin of the dirt.
+	if strings.Contains(msg, "task_20260901000000_aaaaaaaaaaaaaaaa") {
+		t.Errorf("refusal attributes the dirt to a task whose line was already committed:\n%s", msg)
+	}
+}
+
 // The rollup says whether "task success" means the tasks wrote their code.
 func TestWorkspaceLine(t *testing.T) {
 	var old agentbench.Journal

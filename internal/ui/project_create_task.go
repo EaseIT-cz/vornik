@@ -26,6 +26,7 @@ import (
 	"strconv"
 	"strings"
 
+	"vornik.io/vornik/internal/persistence"
 	"vornik.io/vornik/internal/registry"
 	"vornik.io/vornik/internal/taskcreate"
 )
@@ -186,6 +187,7 @@ func (s *Server) ProjectCreateTaskSubmit(w http.ResponseWriter, r *http.Request,
 		Prompt:     data.Prompt,
 		Priority:   data.Priority,
 		WorkflowID: data.WorkflowID,
+		GoalOrigin: persistence.TaskGoalOriginUI,
 	})
 	if err != nil {
 		// Map known reasons to HTTP statuses. Anything else

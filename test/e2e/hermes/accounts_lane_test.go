@@ -6,7 +6,6 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
-	"gopkg.in/yaml.v3"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -19,7 +18,10 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"gopkg.in/yaml.v3"
 	"vornik.io/vornik/internal/approval"
+	"vornik.io/vornik/internal/testutil/testenv"
 )
 
 // accountsReceived requires the exact emitted target, canonical arguments and
@@ -447,7 +449,7 @@ func accountsHermesClient(t *testing.T, s *stack) *accountsClient {
 	}
 	writeFile(t, cfgPath, strings.Replace(string(raw), `cli: ["vornik", "memory"]`, `cli: ["mcp-vornik-hermes"]`, 1))
 	ctl := buildStaticCtl(t, s)
-	connect := exec.Command("podman", "run", "--rm", "--network", "host", "-v", s.hermesHome+":/opt/data:Z", "-v", ctl+":/usr/local/bin/vornikctl:ro,Z", "-e", "XDG_CONFIG_HOME=/opt/data/.config", "-e", "VORNIK_API_KEY="+s.adminKey, hermesImage, "/usr/local/bin/vornikctl", "agent", "connect", "hermes", "--url", s.apiURL)
+	connect := exec.Command("podman", hermesRunArgs(t, "--rm", "--network", "host", "-v", s.hermesHome+":/opt/data:Z", "-v", ctl+":/usr/local/bin/vornikctl:ro,Z", "-e", "XDG_CONFIG_HOME=/opt/data/.config", "-e", "VORNIK_API_KEY="+s.adminKey, hermesImage, "/usr/local/bin/vornikctl", "agent", "connect", "hermes", "--url", s.apiURL)...)
 	if err := connect.Run(); err != nil {
 		t.Fatalf("Hermes connect failed: %v", err)
 	}
@@ -464,7 +466,7 @@ func accountsHermesClient(t *testing.T, s *stack) *accountsClient {
 		if err := exec.Command("podman", "unshare", "chown", "-R", uid+":"+gid, filepath.Join(s.hermesHome, ".config")).Run(); err != nil {
 			t.Fatalf("Hermes home ownership failed: %v", err)
 		}
-		cmd := exec.Command("podman", "run", "--rm", "--network", "host", "-v", s.hermesHome+":/opt/data:Z", "-v", ctl+":/usr/local/bin/vornikctl:ro,Z", "-e", "XDG_CONFIG_HOME=/opt/data/.config", hermesImage, "hermes", "-z", marker+" Perform this Vornik call and receive its result.")
+		cmd := exec.Command("podman", hermesRunArgs(t, "--rm", "--network", "host", "-v", s.hermesHome+":/opt/data:Z", "-v", ctl+":/usr/local/bin/vornikctl:ro,Z", "-e", "XDG_CONFIG_HOME=/opt/data/.config", hermesImage, "hermes", "-z", marker+" Perform this Vornik call and receive its result.")...)
 		var stdout, stderr bytes.Buffer
 		cmd.Stdout = &stdout
 		cmd.Stderr = &stderr
@@ -503,7 +505,9 @@ func accountsCodexClient(t *testing.T, s *stack) *accountsClient {
 	if err != nil {
 		t.Fatal("certified Codex required")
 	}
-	ver, err := exec.Command(bin, "--version").Output()
+	verCmd := exec.Command(bin, "--version")
+	verCmd.Env = testenv.Clean()
+	ver, err := verCmd.Output()
 	if err != nil || !strings.HasPrefix(strings.TrimSpace(string(ver)), certifiedCodex) {
 		t.Fatal("Codex version differs from certified contract")
 	}

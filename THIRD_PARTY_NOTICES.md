@@ -41,6 +41,42 @@ OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 ```
 
+## Third-party programs in the agent image
+
+Files: `images/vornik-agent/third-party/` (licence texts, copied unmodified
+from the upstream commits named there, plus two notices marked `.vornik`)
+Licence: each component's own, with the third-party notices it ships:
+
+- espeak-ng: GPL-3.0-or-later (`espeak-ng/COPYING`); its getopt
+  compatibility code is BSD-2-Clause (`COPYING.BSD2`), and the upstream
+  repository's other licence files, Apache-2.0 (`COPYING.APACHE`) and the
+  Unicode data licence (`COPYING.UCD`), are reproduced unmodified;
+  `NOTICE.vornik` lists its copyright holders.
+- onnxruntime: MIT (`onnxruntime/LICENSE`), plus the notices of the many
+  third-party components it incorporates, under their own licences
+  (`ThirdPartyNotices.txt`, unmodified from upstream).
+- piper and piper-phonemize: MIT; piper-phonemize compiles in nlohmann/json
+  (MIT, `nlohmann-json-LICENSE.vornik`) and uni-algo (public domain or MIT,
+  at the user's choice, `uni-algo-LICENSE.md`).
+- spdlog: MIT, with the fmt it bundles (MIT, `fmt-9.1.0-LICENSE.rst`).
+- libtashkeel and whisper.cpp: MIT.
+
+The agent image ships the rhasspy/piper text-to-speech bundle (piper,
+piper-phonemize, onnxruntime, espeak-ng and the libraries above) and
+whisper.cpp. Their licence texts and copyright notices are kept in that
+directory and installed in the image under `/usr/share/licenses/`;
+`SOURCE-OFFER` there names the exact upstream commits and where the
+corresponding source is. They are not reproduced here because they are not
+part of this source tree's programs.
+
+The piper source archive (`vornik-agent-third-party-source-piper-2023.11.14-2.tar`,
+attached to Vornik Community Edition release 2026.10.6 and later) is also
+the corresponding source for the agent images distributed before it with the
+same bundle: releases 2026.9.7, 2026.9.8, 2026.10.1, 2026.10.2, 2026.10.3,
+2026.10.4 and 2026.10.5, and every agent image built from the main branch
+since 2026-09-26, when the bundle entered the image. All of them carry piper
+release 2023.11.14-2, the only release the image has used.
+
 ## Adding a vendored file
 
 If you copy a third-party file into this tree, add a section here with the

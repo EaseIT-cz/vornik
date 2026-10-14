@@ -58,7 +58,7 @@ func TestCompanionCancel_TearsDownRunningExecution(t *testing.T) {
 		return &persistence.Task{ID: "t1", ProjectID: "alpha", Status: persistence.TaskStatusRunning}, nil
 	}
 	transitioned := false
-	taskRepo.TransitionToCancelledFunc = func(_ context.Context, _ string) (bool, error) {
+	taskRepo.TransitionConditionalFunc = func(_ context.Context, _ string, _ []persistence.TaskStatus, _ persistence.TaskStatus, _ persistence.TransitionOpts) (bool, error) {
 		transitioned = true
 		return true, nil
 	}
@@ -85,14 +85,16 @@ func TestCompanionCancel_RefusedTransitionTearsNothingDown(t *testing.T) {
 	taskRepo.GetFunc = func(_ context.Context, _ string) (*persistence.Task, error) {
 		return &persistence.Task{ID: "t1", ProjectID: "alpha", Status: persistence.TaskStatusCompleted}, nil
 	}
-	taskRepo.TransitionToCancelledFunc = func(_ context.Context, _ string) (bool, error) { return false, nil }
+	taskRepo.TransitionConditionalFunc = func(_ context.Context, _ string, _ []persistence.TaskStatus, _ persistence.TaskStatus, _ persistence.TransitionOpts) (bool, error) {
+		return false, nil
+	}
 	spy := &cancelTeardownSpy{hadExec: true}
 	srv.executor = spy
 
 	text, isErr := callTool(t, srv, raw, "cancel", map[string]any{"task_id": "t1"})
 	require.False(t, isErr, text)
 	assert.Empty(t, spy.calls, "a row that did not move owes no teardown")
-	assert.Contains(t, text, "no-op")
+	assert.Contains(t, text, "already COMPLETED")
 }
 
 // A live execution that could not be stopped is reported with a fixed phrase;
@@ -104,7 +106,9 @@ func TestCompanionCancel_TeardownFailureIsAFixedPhrase(t *testing.T) {
 	taskRepo.GetFunc = func(_ context.Context, _ string) (*persistence.Task, error) {
 		return &persistence.Task{ID: "t1", ProjectID: "alpha", Status: persistence.TaskStatusRunning}, nil
 	}
-	taskRepo.TransitionToCancelledFunc = func(_ context.Context, _ string) (bool, error) { return true, nil }
+	taskRepo.TransitionConditionalFunc = func(_ context.Context, _ string, _ []persistence.TaskStatus, _ persistence.TaskStatus, _ persistence.TransitionOpts) (bool, error) {
+		return true, nil
+	}
 	srv.executor = &cancelTeardownSpy{hadExec: true, stopFail: errors.New("dial unix /run/user/1001/podman/podman.sock: timeout")}
 
 	text, isErr := callTool(t, srv, raw, "cancel", map[string]any{"task_id": "t1"})

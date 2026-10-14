@@ -3,7 +3,10 @@ package persistence
 import (
 	"context"
 	"errors"
+	"strings"
 	"time"
+	"unicode"
+	"unicode/utf8"
 )
 
 // Approver devices, pairings and agent approval requests (agent-administered
@@ -70,17 +73,27 @@ const (
 	ApprovalKindHostAction = "host_action"
 	// ApprovalKindMemoryRetention authorizes a specific idle chunk deletion.
 	ApprovalKindMemoryRetention = "memory_retention"
+	// ApprovalKindConfigJournalDrift asks the operator to keep or restore an
+	// interrupted config apply (a DRIFT journal row); host level, filed only
+	// by the daemon (config-apply journal design §13.3, GitHub #302). Its
+	// decision carries a choice (DecidedChoice: keep or restore).
+	ApprovalKindConfigJournalDrift = "config_journal_drift"
 
 	ApprovalPending  = "pending"
 	ApprovalApproved = "approved"
 	ApprovalRejected = "rejected"
 	ApprovalExpired  = "expired"
+	// ApprovalWithdrawn ends a pending request the daemon knows no longer
+	// applies, before anyone decided it (agent-administered design §9.2d,
+	// GitHub #264). Terminal, like rejected and expired.
+	ApprovalWithdrawn = "withdrawn"
 )
 
 // ApprovalKinds is every kind the kind CHECK accepts (migration 212), for
 // tests that must cover each one (the §18.7 describer enumeration).
 var ApprovalKinds = []string{ApprovalKindDeviceEnrollment, ApprovalKindWideningChange,
-	ApprovalKindCredentialSlot, ApprovalKindBrokerAction, ApprovalKindHostAction, ApprovalKindMemoryRetention}
+	ApprovalKindCredentialSlot, ApprovalKindBrokerAction, ApprovalKindHostAction, ApprovalKindMemoryRetention,
+	ApprovalKindConfigJournalDrift}
 
 // AgentApprovalRequestRow is one thing a device is asked to decide.
 type AgentApprovalRequestRow struct {
@@ -104,6 +117,34 @@ type AgentApprovalRequestRow struct {
 	// "deny" for a host_action); "" for every kind decided by a plain
 	// approve or reject (Hermes approval transport design §4.2).
 	DecidedChoice string
+	// WithdrawnBy and WithdrawReason record a withdrawal (status
+	// withdrawn): the daemon actor and its one-sentence reason. DecidedAt is
+	// the withdrawal time; DecidedByDevice stays empty (design §9.2d).
+	WithdrawnBy    string
+	WithdrawReason string
+}
+
+// ErrBadWithdrawal refuses a withdrawal with no actor or a reason that is
+// empty, longer than MaxWithdrawReasonRunes, or holds a control character.
+var ErrBadWithdrawal = errors.New("approval request: a withdrawal needs an actor and a one-sentence reason")
+
+// MaxWithdrawReasonRunes bounds a withdrawal's reason.
+const MaxWithdrawReasonRunes = 300
+
+// ValidWithdrawal checks a withdrawal's actor and reason (design §9.2d; the
+// repository enforces it so every caller is held to it, review 0df6 F1). It
+// returns the trimmed reason.
+func ValidWithdrawal(by, reason string) (string, error) {
+	reason = strings.TrimSpace(reason)
+	if strings.TrimSpace(by) == "" || reason == "" || utf8.RuneCountInString(reason) > MaxWithdrawReasonRunes {
+		return "", ErrBadWithdrawal
+	}
+	for _, r := range by + reason {
+		if unicode.IsControl(r) {
+			return "", ErrBadWithdrawal
+		}
+	}
+	return reason, nil
 }
 
 // ErrApprovalNoTransition means Decide matched no pending, unexpired row with
@@ -228,6 +269,14 @@ type ApproverDeviceRepository interface {
 	// ListRecentByNamespace returns a namespace's requests created at or
 	// after since, newest first (an exact namespace match).
 	ListRecentByNamespace(ctx context.Context, namespace string, since time.Time) ([]AgentApprovalRequestRow, error)
+	// WithdrawRequest moves a pending request to withdrawn, recording by,
+	// reason and now (decided_at), in one statement guarded on status =
+	// 'pending' (no expires_at guard): a device decision, the expiry tick and
+	// a withdrawal each transition a row at most once between them. A miss
+	// (unknown, or not pending) is ErrApprovalNoTransition; a bad actor or
+	// reason is ErrBadWithdrawal (ValidWithdrawal). Nothing is written on
+	// either (design §9.2d, GitHub #264).
+	WithdrawRequest(ctx context.Context, id, by, reason string, now time.Time) error
 	// ExpirePending moves pending requests past expires_at to expired.
 	ExpirePending(ctx context.Context, now time.Time) (int, error)
 	// ExpirePendingRows is ExpirePending that returns the rows it expired, as

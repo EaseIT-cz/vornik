@@ -13,6 +13,7 @@ governs.
 | `contrib/hermes-companion/` | [Apache-2.0](contrib/hermes-companion/LICENSE) | Hermes Agent companion plugin. Same reasoning. |
 | `.claude-plugin/marketplace.json` | Apache-2.0 | The marketplace manifest that lists the plugin above. |
 | vendored third-party files | their own | Listed with copyright and licence text in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md). Go module dependencies are inventoried in the CycloneDX SBOM attached to each release. |
+| `images/vornik-agent/third-party/` | their own | Licence texts and the source offer for the third-party programs the agent image ships: the piper text-to-speech bundle (piper and onnxruntime MIT, **espeak-ng GPL-3.0-or-later**) and whisper.cpp (MIT). Installed in the image under `/usr/share/licenses/`. Vornik only runs these as separate programs. The corresponding source is attached to every release as `vornik-agent-third-party-source-piper-<version>.tar`, built by `scripts/third-party-source-archive.sh`. |
 
 Copyright in the Vornik code is held by EaseIT Labs s.r.o. (IČO 29865751,
 Czech Republic) and by contributors, who license their contributions under

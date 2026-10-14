@@ -200,6 +200,33 @@ between a deterministic gate and one that fires on noise.
 | `2026.10.1-55-gc800c23be` (2026.10.2) | 120 | all 6 | 0.9851 ±0.0000 | 0.9854 ±0.0000 | 0.9958 ±0.0000 | n=3 | `dcfeaf709dc5` |
 | `2026.10.1-77-gbb5238eb2` (2026.10.3) | 120 | all 6 | 0.9851 ±0.0000 | 0.9854 ±0.0000 | 0.9958 ±0.0000 | n=3 | `16a79559dd84` |
 | `2026.10.4-171-g2213d297b` (2026.10.5) | 120 | all 6 | 0.9851 ±0.0000 | 0.9854 ±0.0000 | 0.9958 ±0.0000 | n=3 | `d2ffc5b3e11e` |
+| `2026.10.5-535-g3a228c188` (2026.10.6) | 120 | all 6 | 0.9851 ±0.0000 | 0.9854 ±0.0000 | 0.9958 ±0.0000 | n=3 | `496e1e5efb22` |
+
+**The tenth row is 2026.10.6's release candidate** (`main` at `3a228c188`,
+an enterprise build), measured on 2026-10-14 on the memory-benchmark
+deployment, same embedder (`openai/qwen3-embedding:0.6b@1024d`), reranker
+off, cold corpus. Every metric is identical to 2026.10.5 to four decimal
+places across three deterministic runs, so **no regression**. The key is new
+(`496e1e5efb22`) and the only key field that moved is `daemon_revision`
+(checked field by field against 2026.10.5's manifest); dataset revision,
+`max_tokens`, item selection and embedder are unchanged. The run was
+required: the cycle makes the Article 18 restriction default-deny on every
+chunk read (knowledge-graph reads included), and makes every companion tool
+refuse an argument it does not declare (#305), which recall is. **The first
+attempt failed, and is part of this row's record.** At `aa2dc8d5d` every
+recall was refused at the harness's leakage probe, before any item was
+scored: the harness had always sent recall an undeclared `max_tokens`, which
+the daemon had silently dropped (harness design §13.26). The harness no longer
+sends it and the daemon accepts and ignores that one name from older
+harnesses; the daemon never read it, so this row is comparable with the rows
+above. Run 1 cleared 4 chunks rather than 1,897, because the failed attempt
+had cleared the store and written only its probe; runs 2 and 3 cleared 1,897
+as in every row since 2026.9.7. Each run starts from an empty store either
+way. **What it does NOT show:** the benchmark ingests into one unrestricted
+project, so no restricted chunk exists and the restriction filter is
+exercised only on its pass-through side; the refusal side is covered by the
+daemon's own tests on both database drivers. The run carries
+`retrieval_path_unverified`, as every row since the third does.
 
 **The ninth row is 2026.10.5's release candidate** (`main` at `2213d297b`,
 an enterprise build), measured on 2026-10-07 on the memory-benchmark
@@ -466,6 +493,7 @@ each is stated:
 | `2026.10.3` | **memory row only** | The memory open axis above, on the release candidate (`2026.10.1-77-gbb5238eb2`, n=3), identical to 2026.10.2. The cycle touched no ingestion, embedding, retrieval or scoring path (the macOS release check, the Hermes plugin's catalog readiness, EULA version 3). Stated late, with 2026.10.5's, rather than left as a silent gap. |
 | `2026.10.4` | none | No run was taken. The cycle changes no daemon-side ingestion, embedding, retrieval or scoring code: its memory changes are the Hermes plugin's forgetting (0.8.0), which calls the existing correction path from the client, plus tests (one measures a companion note as one chunk); the rest is broker grants, agent administration and approval transport. The axes stand where 2026.10.3's row left them, and 2026.10.5's row measures the tree that includes this cycle. Stated late, with 2026.10.5's, rather than left as a silent gap. |
 | `2026.10.5` | **memory row only** | The memory open axis above, on the release candidate (`2026.10.4-171-g2213d297b`, n=3), identical to 2026.10.3. The cycle changes the companion note ingest path (memory reinstate after a forget, the refute route) and makes recall record each returned result's use, so a waiver was not open to it. No agent row, for the reason stated under 2026.10.1: the arm's model endpoint is still unreachable. |
+| `2026.10.6` | **memory row only** | The memory open axis above, on the release candidate (`2026.10.5-535-g3a228c188`, n=3), identical to 2026.10.5. The cycle makes the Article 18 restriction default-deny on every chunk read and makes recall refuse undeclared arguments, so a waiver was not open to it. This entry records the memory row only; no agent row is published for this release in this table. |
 
 A missing row stated as missing is honest. An absent row is not — which is the whole
 reason this section exists.

@@ -68,7 +68,7 @@ no way to file a report through the companion at all.
 Use the MCP verb instead:
 
 ```
-mcp__vornik__report_problem  { "symptom": "<the user's own words>" }
+mcp__plugin_vornik-companion_vornik__report_problem  { "symptom": "<the user's own words>" }
 ```
 
 It returns `review_url` and the anonymized `body`. Two properties matter, and

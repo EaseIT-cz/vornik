@@ -18,6 +18,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"time"
 
 	"gopkg.in/yaml.v3"
 	"vornik.io/vornik/internal/fieldguard"
@@ -91,6 +92,12 @@ func (a *LifecycleServiceAdapter) Unarchive(ctx context.Context, projectID strin
 // ScheduleDeleteNow forwards to the underlying service.
 func (a *LifecycleServiceAdapter) ScheduleDeleteNow(ctx context.Context, projectID string, isArchived bool) error {
 	return a.Service.ScheduleDeleteNow(ctx, projectID, isArchived)
+}
+
+// DeleteNowAndWait forwards to the underlying service: delete-now that waits
+// for the wipe's outcome (GitHub #365).
+func (a *LifecycleServiceAdapter) DeleteNowAndWait(ctx context.Context, projectID string, isArchived bool, wait time.Duration) (projectarchive.DeleteNowResult, error) {
+	return a.Service.DeleteNowAndWait(ctx, projectID, isArchived, wait)
 }
 
 // LifecyclePatcher exposes the UI package's YAML patcher as the

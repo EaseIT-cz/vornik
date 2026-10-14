@@ -191,7 +191,8 @@ jobs:
     # withholds the darwin assets and says so in the notes, and nothing else.
     if: ${{ !cancelled() && needs.binaries.result == 'success' }}
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    # 20, not 10, since 2026-10-13: the third-party source step moves ~250 MB.
+    timeout-minutes: 20
     permissions:
       contents: write
     steps:
@@ -249,6 +250,16 @@ jobs:
               echo "- headings found:"
               grep -E '^## ' "$notes" | head -20 | sed 's/^/  - /'
             } >> "$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
+          # The draft marker ("Draft: not yet released.") is how an unreleased
+          # section says so while it is written; 2026.10.5 shipped it in the
+          # live body because nothing checked. Refuse it here, before any
+          # release exists (packaging design, Note 2026-10-14; the lint half is
+          # check-release-notes-sections.sh, whose DRAFT_MARKER is this same
+          # regex: change both together).
+          if grep -nE '(^|[^[:alnum:]_])Draft:' body.md; then
+            echo "::error::the '## $TAG' section in $notes still carries the draft marker (lines above); remove it before releasing"
             exit 1
           fi
           echo "bytes=$(wc -c < body.md)" >> "$GITHUB_OUTPUT"
@@ -317,3 +328,25 @@ jobs:
           else
             echo "macOS binaries WITHHELD: macos-check did not succeed" >> "$GITHUB_STEP_SUMMARY"
           fi
+
+      # The agent image ships the piper bundle, which carries espeak-ng
+      # (GPL-3.0-or-later); the image's /usr/share/licenses/SOURCE-OFFER points
+      # here for the corresponding source (GitHub #356, spawn-law design
+      # "Change 2026-10-13"). AFTER the binaries, so a failure here (a GitHub
+      # archive whose bytes changed is refused, never re-pinned) turns the job
+      # red without withholding them. Idempotent like the binaries: skipped
+      # when already attached, never replaced.
+      - name: Attach the agent image's third-party corresponding source
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          scripts/third-party-source-archive.sh --out third-party-src
+          existing="$(gh release view "$TAG" --json assets --jq '.assets[].name')"
+          for f in third-party-src/vornik-agent-third-party-source-*.tar third-party-src/vornik-agent-third-party-source-*.tar.sha256; do
+            n="$(basename "$f")"
+            if grep -qx "$n" <<<"$existing"; then continue; fi
+            gh release upload "$TAG" "$f" || gh release view "$TAG" --json assets --jq '.assets[].name' | grep -qx "$n"
+          done
+          echo "third-party source: $(cat third-party-src/*.sha256)" >> "$GITHUB_STEP_SUMMARY"

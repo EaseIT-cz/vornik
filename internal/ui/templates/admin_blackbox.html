@@ -40,7 +40,7 @@
                   onsubmit="event.preventDefault(); var v = this.task_id.value.trim(); if (v) window.location.href = '/ui/admin/blackbox/' + encodeURIComponent(v);">
                 <label class="block flex-1 max-w-xl">
                     <span class="block text-xs text-gray-500 uppercase tracking-wider mb-1">Task ID</span>
-                    <input type="text" name="task_id" value="{{.PrefilledTask}}" placeholder="e.g. T-20260524abc123" class="w-full bg-dark-700 border border-dark-600 text-gray-200 text-xs rounded-md px-2 py-1 font-mono" autofocus>
+                    <input type="text" name="task_id" value="{{.PrefilledTask}}" placeholder="e.g. T-20260524abc123" class="w-full bg-dark-700 border border-control text-gray-200 text-xs rounded-md px-2 py-1 font-mono" autofocus>
                 </label>
                 <button class="bg-brand-500 hover:bg-brand-500 text-white text-xs font-medium px-3 py-1.5 rounded-md">Open trace</button>
             </form>

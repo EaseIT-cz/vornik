@@ -39,7 +39,7 @@ func TestDeleteProjectData_EvictsCacheBeforeAnyDelete(t *testing.T) {
 	mock.ExpectExec(regexp.QuoteMeta("DELETE FROM embedding_cache")).
 		WithArgs("p1").
 		WillReturnResult(sqlmock.NewResult(0, 7))
-	for range persistence.ProjectDataTables {
+	for range persistence.ProjectDataTablesFor(true) {
 		mock.ExpectExec(regexp.QuoteMeta("DELETE FROM ")).
 			WithArgs("p1").
 			WillReturnResult(sqlmock.NewResult(0, 1))
@@ -73,7 +73,7 @@ func TestDeleteProjectData_NoEvictorReportsNotAttempted(t *testing.T) {
 	repo := NewProjectDataCleanupRepositoryWithoutCacheEviction(db)
 
 	mock.ExpectBegin()
-	for range persistence.ProjectDataTables {
+	for range persistence.ProjectDataTablesFor(true) {
 		mock.ExpectExec(regexp.QuoteMeta("DELETE FROM ")).
 			WithArgs("p1").
 			WillReturnResult(sqlmock.NewResult(0, 1))

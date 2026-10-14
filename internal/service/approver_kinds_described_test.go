@@ -24,6 +24,8 @@ func TestApproverKinds_EveryPhoneKindIsDescribed(t *testing.T) {
 		persistence.ApprovalKindWideningChange:  `{"change":{"plain":{"summary":"Your assistant wants a project.","level":"Low","reasons":["it reaches nothing"]}}}`,
 		persistence.ApprovalKindCredentialSlot:  `{"change":{"plain":{"summary":"You are asked for a key.","level":"Medium","reasons":["it stores a credential"]}}}`,
 		persistence.ApprovalKindBrokerAction:    `{"action_id":"ba_1","workflow":"hermes--mail--reply","action":"send_reply"}`,
+		// GitHub #302: the interrupted-config-apply card.
+		persistence.ApprovalKindConfigJournalDrift: `{"kind":"config_journal_drift","journal_id":"caj_1","projects":["alpha"],"drift":"edited_file","detail":"drift: projects/a.yaml is absent; matches neither pre-image nor intended content","files":["projects/a.yaml"],"choices":["keep","restore"]}`,
 	}
 	examined := 0
 	for _, kind := range persistence.ApprovalKinds {

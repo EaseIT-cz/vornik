@@ -69,7 +69,7 @@ func TestIngestInputArtifacts_CarriesDocumentPathsOntoTheQueue(t *testing.T) {
 		workflows: &MockWorkflowResolver{workflows: map[string]*registry.Workflow{
 			"companion-rag-ingest": {ID: "companion-rag-ingest", IngestInputArtifacts: true},
 		}},
-		logger: zerolog.Nop(),
+		artifactRepo: ownRowsOfP(), logger: zerolog.Nop(),
 	}
 	task := &persistence.Task{ID: "t", ProjectID: "p",
 		Payload: documentPayload(t, map[string]string{"in_a": "docs/guides/reference-architecture.md"})}
@@ -83,7 +83,7 @@ func TestIngestInputArtifacts_CarriesDocumentPathsOntoTheQueue(t *testing.T) {
 
 func TestIngestInputArtifacts_NoPathsMeansTodaysBehaviour(t *testing.T) {
 	q := &stubIngestQueue{}
-	e := &Executor{memoryIndexer: &stubMemoryIndexer{}, ingestQueue: q, logger: zerolog.Nop()}
+	e := &Executor{memoryIndexer: &stubMemoryIndexer{}, ingestQueue: q, artifactRepo: ownRowsOfP(), logger: zerolog.Nop()}
 	task := &persistence.Task{ID: "t", ProjectID: "p", Payload: documentPayload(t, nil)}
 	e.ingestInputArtifacts(context.Background(), task, &persistence.Execution{ID: "x"})
 	require.Len(t, q.items, 2)
@@ -96,7 +96,7 @@ func TestIngestInputArtifacts_NoPathsMeansTodaysBehaviour(t *testing.T) {
 func TestIngestInputArtifacts_SyncFallbackSupersedesAfterTheScopeStamp(t *testing.T) {
 	mi := &documentMemoryIndexer{}
 	store := &stubArtifactStore{bytesByID: map[string][]byte{"in_a": []byte("a"), "in_b": []byte("b")}}
-	e := &Executor{memoryIndexer: mi, artifactStore: store, logger: zerolog.Nop()}
+	e := &Executor{memoryIndexer: mi, artifactStore: store, artifactRepo: ownRowsOfP(), logger: zerolog.Nop()}
 	task := &persistence.Task{ID: "t", ProjectID: "p",
 		Payload: documentPayload(t, map[string]string{"in_a": "docs/guides/reference-architecture.md"})}
 	e.ingestInputArtifacts(context.Background(), task, &persistence.Execution{ID: "x"})
@@ -116,7 +116,7 @@ func TestIngestInputArtifacts_SyncFallbackSupersedesAfterTheScopeStamp(t *testin
 func TestIngestInputArtifacts_SyncFallbackFailsClosedWithoutTheDocumentMethod(t *testing.T) {
 	mi := &stubMemoryIndexer{}
 	store := &stubArtifactStore{bytesByID: map[string][]byte{"in_a": []byte("a"), "in_b": []byte("b")}}
-	e := &Executor{memoryIndexer: mi, artifactStore: store, logger: zerolog.Nop()}
+	e := &Executor{memoryIndexer: mi, artifactStore: store, artifactRepo: ownRowsOfP(), logger: zerolog.Nop()}
 	task := &persistence.Task{ID: "t", ProjectID: "p",
 		Payload: documentPayload(t, map[string]string{"in_a": "docs/a.md"})}
 	e.ingestInputArtifacts(context.Background(), task, &persistence.Execution{ID: "x"})

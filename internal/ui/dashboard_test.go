@@ -271,7 +271,7 @@ func TestDashboard_CacheTileVisibleWhenHitsExist(t *testing.T) {
 		t.Fatalf("dashboard returned %d, body: %s", rr.Code, rr.Body.String())
 	}
 	body := rr.Body.String()
-	if !strings.Contains(body, "LLM cache savings") {
+	if !strings.Contains(body, "Response cache (served by Vornik)") {
 		t.Errorf("expected cache tile heading, body:\n%s", body)
 	}
 	if !strings.Contains(body, "$1.23") {
@@ -290,7 +290,7 @@ func TestDashboard_CacheTileHiddenWhenNoHits(t *testing.T) {
 	if rr.Code != 200 {
 		t.Fatalf("dashboard returned %d", rr.Code)
 	}
-	if strings.Contains(rr.Body.String(), "LLM cache savings") {
+	if strings.Contains(rr.Body.String(), "Response cache (served by Vornik)") {
 		t.Error("cache tile must hide when no hits exist")
 	}
 }
@@ -303,7 +303,7 @@ func TestDashboard_CacheTileHiddenWhenUnwired(t *testing.T) {
 	if rr.Code != 200 {
 		t.Fatalf("dashboard returned %d", rr.Code)
 	}
-	if strings.Contains(rr.Body.String(), "LLM cache savings") {
+	if strings.Contains(rr.Body.String(), "Response cache (served by Vornik)") {
 		t.Error("cache tile must hide when responseCacheStats unwired")
 	}
 }

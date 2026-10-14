@@ -32,7 +32,7 @@ var depsInstallLinkAllowed = map[string]string{
 	"cmd/skills-site": "renders the CLI tree into the skills site at build time; runs no command",
 }
 
-func depsGoList(t *testing.T, dir string, args ...string) []string {
+func depsGoList(t testing.TB, dir string, args ...string) []string {
 	t.Helper()
 	cmd := exec.Command("go", append([]string{"list"}, args...)...)
 	cmd.Dir = dir
@@ -74,15 +74,30 @@ func TestDaemonMainsDoNotLinkTheDependencyInstaller(t *testing.T) {
 	}
 	// EVERY main under cmd/ except vornikctl, so a new daemon, sidecar or tool
 	// main cannot link the installer unnoticed (review-20260925-0325 F5).
-	for _, main := range depsGoList(t, root, "./cmd/...") {
+	// #334 item 6 (CI pipeline design, amendment 2026-10-14): count the mains
+	// and require every allowlisted main to be one of them, so a renamed
+	// renderer cannot leave a stale allowance that reads as a checked one.
+	mains := depsGoList(t, root, "./cmd/...")
+	seenAllowed := map[string]bool{}
+	for _, main := range mains {
 		if main == vornikctl {
 			continue
 		}
 		if _, ok := depsInstallLinkAllowed[strings.TrimPrefix(main, module+"/")]; ok {
+			seenAllowed[strings.TrimPrefix(main, module+"/")] = true
 			continue
 		}
 		if links(main) {
 			t.Errorf("%s links %s: only vornikctl may install dependencies (design §8.2)", main, installer)
+		}
+	}
+	requireExamined(t, "deps-install law", "mains under cmd/", len(mains), 3)
+	for name := range depsInstallLinkAllowed {
+		if !seenAllowed[name] {
+			absent := filepath.Join(root, filepath.FromSlash(name))
+			if _, err := os.Stat(absent); err == nil || enterpriseTree(root) {
+				t.Errorf("depsInstallLinkAllowed names %s, which is not a main under cmd/: remove the stale allowance", name)
+			}
 		}
 	}
 	if !links(vornikctl) {

@@ -129,11 +129,19 @@ func (v agentsView) row(ctx context.Context, ns string) (ui.AgentRow, SetupView,
 // ListAgents implements ui.AgentsSource.
 func (v agentsView) ListAgents(ctx context.Context) ([]ui.AgentRow, error) {
 	var out []ui.AgentRow
+	// One grouped count for every namespace (design §23.2). A failed read
+	// degrades to "refusals unavailable" on each row rather than failing the
+	// list (#334 audit 2026-10-14; the inbox does the same, #167).
+	refused, rerr := v.s.c.refusedCounts7d(ctx)
+	if rerr != nil {
+		v.s.c.Logger.Warn().Err(rerr).Msg("assistants page: refusal counts unavailable")
+	}
 	for _, ns := range v.namespaces() {
 		row, _, err := v.row(ctx, ns)
 		if err != nil {
 			return out, fmt.Errorf("%s: %w", ns, err)
 		}
+		row.Refused7d, row.RefusedUnavailable = refused[ns], rerr != nil
 		out = append(out, row)
 	}
 	return out, nil
@@ -164,6 +172,12 @@ func (v agentsView) DescribeAgent(ctx context.Context, ns string) (*ui.AgentPage
 		}
 		page.Models = append(page.Models, ui.AgentItem{Name: d.Destination, Status: status})
 	}
+	if page.Refusals, err = v.s.c.refusalsView(ctx, ns); err != nil {
+		// Degrade, do not fail the page (#334 audit 2026-10-14).
+		v.s.c.Logger.Warn().Err(err).Str("namespace", ns).Msg("assistants page: refusals unavailable")
+		page.Refusals = ui.AgentRefusals{Unavailable: true}
+	}
+	page.Row.Refused7d, page.Row.RefusedUnavailable = page.Refusals.Total, page.Refusals.Unavailable
 	return page, nil
 }
 

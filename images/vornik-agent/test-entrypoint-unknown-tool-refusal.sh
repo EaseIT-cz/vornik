@@ -27,6 +27,18 @@ pass=0; fail=0
 ok()  { pass=$((pass+1)); echo "  ok: $*"; }
 bad() { fail=$((fail+1)); echo "  FAIL: $*"; }
 
+# contains TEXT PATTERN [grep flags]: grep TEXT without a pipe. Under pipefail,
+# `printf '%s' "$text" | grep -q` is a false negative whenever grep -q exits on
+# its match before printf has written everything: printf takes SIGPIPE and the
+# pipeline fails. Full CI run on 98118f08f (2026-10-14) failed this script on
+# the 14 KB exec_tool body; a large body makes it certain.
+contains() { local text=$1 pat=$2; shift 2; grep -q "$@" -- "$pat" <<<"$text"; }
+
+echo "--- contains is not a pipe (a large body, match on its first line) ---"
+big="needle"$'\n'"$(printf '%.0ssome shell line of a large function body\n' {1..200000})"
+if contains "$big" needle; then ok "contains finds a match on the first line of a large body"; else bad "contains missed a first-line match: the SIGPIPE false negative"; fi
+unset big
+
 # Source just the refusal helpers out of the entrypoint. The script is a long
 # program with a main at the bottom; the functions under test are pure.
 # shellcheck disable=SC1090
@@ -39,12 +51,12 @@ export TOOLS_FILE="$tmp/.tools.json"
 
 echo "--- the refusal names what IS available ---"
 out="$(unknown_tool_refusal "glob")"
-if printf '%s' "$out" | grep -q "file_read" && printf '%s' "$out" | grep -q "run_shell"; then
+if contains "$out" "file_read" && contains "$out" "run_shell"; then
   ok "available tools are listed"
 else
   bad "refusal does not list the catalogue: $out"
 fi
-if printf '%s' "$out" | grep -qi "unknown tool"; then
+if contains "$out" "unknown tool" -i; then
   ok "still says it was unknown"
 else
   bad "refusal lost the 'unknown tool' phrasing: $out"
@@ -69,7 +81,7 @@ done
 
 echo "--- the fused refusal SAYS what it thinks was meant ---"
 out="$(unknown_tool_refusal "file_writepath")"
-if printf '%s' "$out" | grep -q "file_write"; then
+if contains "$out" "file_write"; then
   ok "names the likely intended tool"
 else
   bad "no correction hint for a fused name: $out"
@@ -104,7 +116,7 @@ for gatefn in tool_call_permitted is_builtin_tool allowed_builtin_tools_json; do
     bad "gate function ${gatefn} not found — the isolation test is looking at nothing"
     continue
   fi
-  if printf '%s' "$body" | grep -q 'canonical_tool_guess'; then
+  if contains "$body" 'canonical_tool_guess'; then
     bad "${gatefn} references canonical_tool_guess — a refusal HINT must never inform an AUTHORISATION decision (see 2026.8.1 allowlist bypass)"
   else
     ok "${gatefn} does not reference the guess"
@@ -115,7 +127,7 @@ done
 # call it only on the already-refused path.
 echo "--- the guess is reachable only after a refusal ---"
 exec_body="$(sed -n '/^exec_tool()/,/^}/p' "$ep")"
-if printf '%s' "$exec_body" | grep -q 'unknown_tool_refusal'; then
+if contains "$exec_body" 'unknown_tool_refusal'; then
   ok "exec_tool reaches the guess only via unknown_tool_refusal"
 else
   bad "exec_tool no longer routes through unknown_tool_refusal — re-check where the guess is used"

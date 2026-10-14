@@ -21,6 +21,7 @@ func callSites(t *testing.T, pattern string) map[string]int {
 	t.Helper()
 	re := regexp.MustCompile(pattern)
 	out := map[string]int{}
+	files := 0
 	err := filepath.WalkDir("..", func(path string, d os.DirEntry, err error) error {
 		if err != nil {
 			return err
@@ -34,6 +35,7 @@ func callSites(t *testing.T, pattern string) map[string]int {
 		if !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
 			return nil
 		}
+		files++
 		b, err := os.ReadFile(path)
 		if err != nil {
 			return err
@@ -45,6 +47,13 @@ func callSites(t *testing.T, pattern string) map[string]int {
 	})
 	if err != nil {
 		t.Fatal(err)
+	}
+	// #334 item 6 (CI pipeline design, amendment 2026-10-14): a pin that
+	// expects NO call site ("SetIntegrationIdentity") reads an empty walk as
+	// a pass, so the walk's size is the denominator and has a floor.
+	t.Logf("call-site pin %s: examined %d non-test Go files under internal/ (persistence excluded)", pattern, files)
+	if files < 500 {
+		t.Fatalf("call-site pin %s: examined %d files (floor 500); a pin that looked at nothing has not passed", pattern, files)
 	}
 	return out
 }

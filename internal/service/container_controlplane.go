@@ -451,6 +451,9 @@ func (c *Container) newProposalApplier() *controlplane.ApplyEngine {
 		},
 		Logger: c.Logger.With().Str("component", "control-plane").Str("engine", "apply").Logger(),
 	}
+	// File the approver-device card when a row parks in DRIFT, withdraw it
+	// when any door resolves the row (§13.3, GitHub #302).
+	c.journalCardHooks(engine)
 	// instinct_retire (2026-07-19-instinct-lift-measurement-design.md §4.5)
 	// is a KindApplier-managed kind — retiring/unretiring an instinct
 	// directly rather than rewriting a config file. Registered only when the
@@ -744,14 +747,18 @@ func (c *Container) configApplyBlockedGate() func(projectID string) (bool, strin
 		}
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
-		blocked, err := engine.BlockedProjects(ctx)
+		// PauseReasons, the reader the agent tools share (§13.2, GitHub
+		// #302), so the reason can name the row an operator resolves.
+		reasons, err := engine.PauseReasons(ctx)
 		if err != nil {
 			c.Logger.Warn().Err(err).Msg("config-apply blocked-project check failed; allowing dispatch")
 			return false, ""
 		}
-		for _, p := range blocked {
-			if p == projectID || p == "*" {
-				return true, "configuration apply unresolved (journal DRIFT) for " + p
+		for _, r := range reasons {
+			for _, p := range r.Projects {
+				if p == projectID || p == "*" {
+					return true, "configuration apply unresolved (journal " + r.JournalID + ", DRIFT) for " + p
+				}
 			}
 		}
 		return false, ""

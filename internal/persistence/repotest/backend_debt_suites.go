@@ -1310,3 +1310,72 @@ func RunTaskCredentialSuite(t *testing.T, repo persistence.TaskCredentialReposit
 		t.Errorf("empty task id: %v %v", none, err)
 	}
 }
+
+// ------------------------------------- GDPR Art 18 restriction on extraction
+
+// RestrictChunk puts chunkID under an active Art 18 restriction for a fresh
+// subject. viaEntity=false links the subject to the chunk directly;
+// viaEntity=true links the subject to a knowledge entity the chunk MENTIONS (the
+// binder's resolution rule). With viaEntity the linked entity's id is
+// RestrictedEntityID(chunkID), so a suite can ask about the entity too. It
+// returns a lift function.
+type RestrictChunk func(ctx context.Context, chunkID, projectID string, viaEntity bool) (lift func() error, err error)
+
+// RunChunkGraphExtractionRestrictionSuite pins that graph extraction, which sends
+// chunk text to a model, never fetches a chunk under an active Art 18
+// restriction — by either link route — and fetches it again once lifted.
+//
+// audit 2026-10-12 (security review of #343): FetchUnextracted carried no
+// restriction predicate on either driver.
+func RunChunkGraphExtractionRestrictionSuite(t *testing.T, repo persistence.ChunkGraphExtractionRepository, seed SeedChunk, restrict RestrictChunk) {
+	t.Helper()
+	ctx := context.Background()
+	project := uniqueID("proj")
+	direct, viaEnt, free := uniqueID("chunk"), uniqueID("chunk"), uniqueID("chunk")
+	base := time.Date(2026, 10, 12, 9, 0, 0, 0, time.UTC)
+	for i, id := range []string{direct, viaEnt, free} {
+		if err := seed(ctx, id, project, "content of "+id, true, base.Add(time.Duration(i)*time.Minute)); err != nil {
+			t.Fatalf("seed %s: %v", id, err)
+		}
+	}
+	fetched := func() map[string]bool {
+		t.Helper()
+		rows, err := repo.FetchUnextracted(ctx, 500)
+		if err != nil {
+			t.Fatalf("FetchUnextracted: %v", err)
+		}
+		got := map[string]bool{}
+		for _, r := range rows {
+			got[r.ID] = true
+		}
+		return got
+	}
+	liftDirect, err := restrict(ctx, direct, project, false)
+	if err != nil {
+		t.Fatalf("restrict direct: %v", err)
+	}
+	liftEnt, err := restrict(ctx, viaEnt, project, true)
+	if err != nil {
+		t.Fatalf("restrict via entity: %v", err)
+	}
+	got := fetched()
+	if got[direct] {
+		t.Error("a chunk linked to a restricted subject was fetched for extraction")
+	}
+	if got[viaEnt] {
+		t.Error("a chunk mentioning a restricted subject's entity was fetched for extraction")
+	}
+	if !got[free] {
+		t.Error("an unrestricted chunk must still be fetched")
+	}
+	if err := liftDirect(); err != nil {
+		t.Fatalf("lift: %v", err)
+	}
+	if err := liftEnt(); err != nil {
+		t.Fatalf("lift: %v", err)
+	}
+	got = fetched()
+	if !got[direct] || !got[viaEnt] {
+		t.Errorf("after the lift both chunks must be fetched again: direct=%v viaEntity=%v", got[direct], got[viaEnt])
+	}
+}

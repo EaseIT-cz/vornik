@@ -113,19 +113,37 @@ func TestSameOriginLadderHasOneImplementation(t *testing.T) {
 	_, here, _, _ := runtime.Caller(0)
 	root := filepath.Join(filepath.Dir(here), "..")
 	var offenders []string
-	_ = filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
-		if err != nil || info.IsDir() || !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
+	scanned := 0
+	// #334 item 6 (audit 2026-10-12): the walk's error and every read error
+	// were discarded, so an unreadable tree reported "no duplicate" over zero
+	// files. Errors fail now, and the law publishes how many files it read.
+	werr := filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+		if info.IsDir() || !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
 			return nil
 		}
 		if strings.Contains(path, string(filepath.Separator)+"approval"+string(filepath.Separator)) {
 			return nil
 		}
-		b, _ := os.ReadFile(path)
+		b, rerr := os.ReadFile(path)
+		if rerr != nil {
+			return rerr
+		}
+		scanned++
 		if strings.Contains(string(b), `case "same-origin", "same-site", "none":`) {
 			offenders = append(offenders, path)
 		}
 		return nil
 	})
+	if werr != nil {
+		t.Fatalf("walk %s: %v", root, werr)
+	}
+	t.Logf("same-origin ladder law: examined %d non-test Go files under internal/", scanned)
+	if scanned < 100 {
+		t.Fatalf("same-origin ladder law: examined %d files (floor 100); a law that looked at nothing has not passed", scanned)
+	}
 	if len(offenders) > 0 {
 		t.Fatalf("same-origin ladder duplicated outside internal/approval: %v — call approval.SameOrigin", offenders)
 	}

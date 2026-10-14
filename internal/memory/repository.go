@@ -440,12 +440,13 @@ func (r *Repository) DequeueEmbedBatch(ctx context.Context, limit int) ([]Memory
 	// crash between this commit and the embedding write leaves the chunk in the
 	// queue to be re-claimed instead of orphaning it. An abandoned claim ages past
 	// embedClaimReclaimAfter and becomes visible again.
-	const claimQ = `
+	claimQ := `
 UPDATE memory_embed_queue
 SET claimed_at = now()
 WHERE chunk_id IN (
     SELECT chunk_id FROM memory_embed_queue
-    WHERE claimed_at IS NULL OR claimed_at < now() - $2::interval
+    WHERE (claimed_at IS NULL OR claimed_at < now() - $2::interval)
+      AND ` + persistence.ChunkNotRestrictedSQL("memory_embed_queue.chunk_id") + `
     ORDER BY enqueued_at
     LIMIT $1
     FOR UPDATE SKIP LOCKED
@@ -518,7 +519,10 @@ func fetchChunksByIDsExec(ctx context.Context, q chunkQueryRunner, ids []string)
 SELECT id, project_id, COALESCE(task_id,''), COALESCE(artifact_id,''), source_name,
        chunk_index, content, content_hash, created_at
 FROM project_memory_chunks
-WHERE id IN (%s)`, strings.Join(placeholders, ","))
+WHERE id IN (%s)
+  AND `+persistence.ChunkNotRestrictedSQL("project_memory_chunks.id"), strings.Join(placeholders, ","))
+	// ^ GDPR Art 18: a restricted chunk is not sent to the embedding model.
+	// Belt to the claim predicate in DequeueEmbedBatch, which leaves it queued.
 
 	rows, err := q.QueryContext(ctx, query, args...)
 	if err != nil {
@@ -768,10 +772,11 @@ func (r *Repository) ListChunksMissingTitle(ctx context.Context, limit int) ([]T
 	if limit > 1000 {
 		limit = 1000
 	}
-	const q = `
+	q := `
 		SELECT id, project_id, source_name, content
 		FROM project_memory_chunks
 		WHERE content_title IS NULL
+		  AND ` + persistence.ChunkNotRestrictedSQL("project_memory_chunks.id") + `
 		ORDER BY created_at ASC
 		LIMIT $1`
 	rows, err := r.db.QueryContext(ctx, q, limit)
@@ -869,7 +874,7 @@ func (r *Repository) SampleChunksForViz(ctx context.Context, projectID string, a
 		WHERE project_id = $1
 		  AND lifecycle_state = 'published'
 		  AND validation_status NOT IN ('refuted','superseded')
-		  AND ` + r.expiryClause(projectID, "") + `
+		  AND ` + r.expiryClause(projectID, "") + " AND " + persistence.ChunkNotRestrictedSQL("project_memory_chunks.id") + `
 		  AND (epoch_id IS NULL OR epoch_id = ANY($2::text[]))
 		  ` + embedFilter + `
 		ORDER BY random()
@@ -1350,7 +1355,7 @@ func (r *Repository) ListUnclassifiedChunksFrom(ctx context.Context, projectID s
 	if limit > 1000 {
 		limit = 1000
 	}
-	const q = `
+	q := `
 SELECT id, project_id,
        COALESCE(source_name, ''),
        COALESCE(producer_role, ''),
@@ -1358,6 +1363,7 @@ SELECT id, project_id,
 FROM project_memory_chunks
 WHERE project_id = $1
   AND COALESCE(content_class, '') IN ('', 'unclassified')
+  AND ` + persistence.ChunkNotRestrictedSQL("project_memory_chunks.id") + `
 ORDER BY created_at ASC
 LIMIT $2 OFFSET $3`
 	if offset < 0 {
@@ -1420,19 +1426,23 @@ func (r *Repository) ListUnclassifiedChunksAcrossProjectsFrom(ctx context.Contex
 	if limit > 1000 {
 		limit = 1000
 	}
-	const q = `
+	q := `
 SELECT id, project_id,
        COALESCE(source_name, ''),
        COALESCE(producer_role, ''),
        content
 FROM project_memory_chunks
 WHERE COALESCE(content_class, '') IN ('', 'unclassified')
+  AND (classify_attempted_at IS NULL OR classify_attempted_at < NOW() - ($3::bigint || ' seconds')::interval)
+  AND ` + persistence.ChunkNotRestrictedSQL("project_memory_chunks.id") + `
 ORDER BY created_at ASC
 LIMIT $1 OFFSET $2`
 	if offset < 0 {
 		offset = 0
 	}
-	rows, err := r.db.QueryContext(ctx, q, limit, offset)
+	// #330: rows the model abstained on within ClassifyRetryAfter are skipped,
+	// durably, so neither a restart nor a cursor reset re-asks them.
+	rows, err := r.db.QueryContext(ctx, q, limit, offset, int64(ClassifyRetryAfter.Seconds()))
 	if err != nil {
 		return nil, fmt.Errorf("ListUnclassifiedChunksAcrossProjects: %w", err)
 	}
@@ -1468,6 +1478,22 @@ WHERE id = $1`
 	_, err := r.db.ExecContext(ctx, q, chunkID, newClass, int64(ttl.Seconds()))
 	if err != nil {
 		return fmt.Errorf("UpdateChunkClass: %w", err)
+	}
+	return nil
+}
+
+// MarkClassifyAttempted stamps classify_attempted_at on a row the model
+// abstained on (#330). Only abstentions are stamped: an LLM error is transient,
+// a paused batch never asked, and a classified row leaves the queue anyway.
+func (r *Repository) MarkClassifyAttempted(ctx context.Context, chunkID string) error {
+	// An error, not a silent no-op: the caller counts a nil return as "stamped,
+	// so it leaves the query", and nothing was written here (review F1).
+	if r == nil || r.db == nil || chunkID == "" {
+		return fmt.Errorf("MarkClassifyAttempted: not configured or empty chunk id")
+	}
+	if _, err := r.db.ExecContext(ctx,
+		`UPDATE project_memory_chunks SET classify_attempted_at = NOW() WHERE id = $1`, chunkID); err != nil {
+		return fmt.Errorf("MarkClassifyAttempted: %w", err)
 	}
 	return nil
 }
@@ -1846,7 +1872,7 @@ semantic AS (
     FROM project_memory_chunks
     WHERE project_id = $1 AND embedding IS NOT NULL
       AND validation_status NOT IN ('refuted','superseded')
-      AND ` + r.expiryClause(projectID, "") + `
+      AND ` + r.expiryClause(projectID, "") + " AND " + persistence.ChunkNotRestrictedSQL("project_memory_chunks.id") + `
     ORDER BY embedding <=> $4::vector, id LIMIT 20
 ),
 keyword AS (
@@ -1859,7 +1885,7 @@ keyword AS (
     FROM project_memory_chunks, q
     WHERE project_id = $1 AND (tsv @@ q.strict_q OR tsv @@ q.relaxed_q)
       AND validation_status NOT IN ('refuted','superseded')
-      AND ` + r.expiryClause(projectID, "") + `
+      AND ` + r.expiryClause(projectID, "") + " AND " + persistence.ChunkNotRestrictedSQL("project_memory_chunks.id") + `
     LIMIT 20
 )
 SELECT c.id, c.project_id, COALESCE(c.task_id,''), c.source_name, c.content,
@@ -1908,7 +1934,7 @@ semantic AS (
     FROM project_memory_chunks
     WHERE project_id = $1 AND embedding IS NOT NULL
       AND validation_status NOT IN ('refuted','superseded')
-      AND `+r.expiryClause(projectID, "")+`
+      AND `+r.expiryClause(projectID, "")+" AND "+persistence.ChunkNotRestrictedSQL("project_memory_chunks.id")+`
       AND ($5::timestamptz IS NULL OR COALESCE(event_time, created_at) >= $5::timestamptz)
       AND ($6::timestamptz IS NULL OR COALESCE(event_time, created_at) <= $6::timestamptz)
       %[1]s
@@ -1924,7 +1950,7 @@ keyword AS (
     FROM project_memory_chunks, q
     WHERE project_id = $1 AND (tsv @@ q.strict_q OR tsv @@ q.relaxed_q)
       AND validation_status NOT IN ('refuted','superseded')
-      AND `+r.expiryClause(projectID, "")+`
+      AND `+r.expiryClause(projectID, "")+" AND "+persistence.ChunkNotRestrictedSQL("project_memory_chunks.id")+`
       AND ($5::timestamptz IS NULL OR COALESCE(event_time, created_at) >= $5::timestamptz)
       AND ($6::timestamptz IS NULL OR COALESCE(event_time, created_at) <= $6::timestamptz)
       %[1]s
@@ -2022,7 +2048,7 @@ semantic AS (
     WHERE project_id = $1 AND embedding IS NOT NULL
       AND lifecycle_state = 'published'
       AND validation_status NOT IN ('refuted','superseded')
-      AND `+r.expiryClause(projectID, "")+`
+      AND `+r.expiryClause(projectID, "")+" AND "+persistence.ChunkNotRestrictedSQL("project_memory_chunks.id")+`
       AND (epoch_id IS NULL OR epoch_id = ANY($5::text[]))
       AND ($6::timestamptz IS NULL OR COALESCE(event_time, created_at) >= $6::timestamptz)
       AND ($7::timestamptz IS NULL OR COALESCE(event_time, created_at) <= $7::timestamptz)
@@ -2040,7 +2066,7 @@ keyword AS (
     WHERE project_id = $1 AND (tsv @@ q.strict_q OR tsv @@ q.relaxed_q)
       AND lifecycle_state = 'published'
       AND validation_status NOT IN ('refuted','superseded')
-      AND `+r.expiryClause(projectID, "")+`
+      AND `+r.expiryClause(projectID, "")+" AND "+persistence.ChunkNotRestrictedSQL("project_memory_chunks.id")+`
       AND (epoch_id IS NULL OR epoch_id = ANY($5::text[]))
       AND ($6::timestamptz IS NULL OR COALESCE(event_time, created_at) >= $6::timestamptz)
       AND ($7::timestamptz IS NULL OR COALESCE(event_time, created_at) <= $7::timestamptz)
@@ -2149,7 +2175,7 @@ SELECT c.id, c.project_id, COALESCE(c.task_id,''), c.source_name, c.content,
 FROM project_memory_chunks c, q
 WHERE c.project_id = $1 AND (c.tsv @@ q.strict_q OR c.tsv @@ q.relaxed_q)
   AND c.validation_status NOT IN ('refuted','superseded')
-  AND `+r.expiryClause(projectID, "c.")+`
+  AND `+r.expiryClause(projectID, "c.")+" AND "+persistence.ChunkNotRestrictedSQL("c.id")+`
   AND ($4::timestamptz IS NULL OR COALESCE(c.event_time, c.created_at) >= $4::timestamptz)
   AND ($5::timestamptz IS NULL OR COALESCE(c.event_time, c.created_at) <= $5::timestamptz)
   %s
@@ -2205,7 +2231,7 @@ FROM project_memory_chunks c, q
 WHERE c.project_id = $1 AND (c.tsv @@ q.strict_q OR c.tsv @@ q.relaxed_q)
   AND c.lifecycle_state = 'published'
   AND c.validation_status NOT IN ('refuted','superseded')
-  AND `+r.expiryClause(projectID, "c.")+`
+  AND `+r.expiryClause(projectID, "c.")+" AND "+persistence.ChunkNotRestrictedSQL("c.id")+`
   AND (c.epoch_id IS NULL OR c.epoch_id = ANY($4::text[]))
   AND ($5::timestamptz IS NULL OR COALESCE(c.event_time, c.created_at) >= $5::timestamptz)
   AND ($6::timestamptz IS NULL OR COALESCE(c.event_time, c.created_at) <= $6::timestamptz)
@@ -2260,7 +2286,7 @@ SELECT c.id, c.project_id, COALESCE(c.task_id,''), c.source_name, c.content,
 FROM project_memory_chunks c, q
 WHERE project_id = $1 AND (tsv @@ q.strict_q OR tsv @@ q.relaxed_q)
   AND c.validation_status NOT IN ('refuted','superseded')
-  AND ` + r.expiryClause(projectID, "c.") + `
+  AND ` + r.expiryClause(projectID, "c.") + " AND " + persistence.ChunkNotRestrictedSQL("c.id") + `
 ORDER BY score DESC, c.id LIMIT $3`
 
 	rows, err := r.db.QueryContext(ctx, q, projectID, queryText, limit, relaxedQueryText)
@@ -2372,7 +2398,7 @@ SELECT id,
 FROM project_memory_chunks
 WHERE project_id = $1
   AND ` + liveValidationPredicate + `
-  AND ` + r.expiryClause(projectID, "") + `
+  AND ` + r.expiryClause(projectID, "") + " AND " + persistence.ChunkNotRestrictedSQL("project_memory_chunks.id") + `
   ` + scopeClause + `
 ORDER BY created_at DESC
 LIMIT $2`
@@ -2411,8 +2437,11 @@ FROM project_memory_chunks
 WHERE project_id = $1
   AND ` + liveValidationPredicate + `
   AND ` + r.expiryClause(projectID, "") + `
+  AND ` + persistence.ChunkNotRestrictedSQL("project_memory_chunks.id") + `
 ORDER BY created_at DESC
 LIMIT $2`
+	// ^ GDPR Art 18 (increment 6): consolidation sends this text to a model
+	// with no firewall seam, so restricted chunks are excluded in SQL.
 	rows, err := r.db.QueryContext(ctx, q, projectID, limit)
 	if err != nil {
 		return nil, fmt.Errorf("list chunk contents: %w", err)
@@ -2475,7 +2504,7 @@ FROM project_memory_chunks c
 WHERE c.project_id = $1 AND c.content ILIKE '%%' || $2 || '%%' ESCAPE '\'
   AND c.lifecycle_state = 'published'
   AND c.validation_status NOT IN ('refuted','superseded')
-  AND `+r.expiryClause(projectID, "c.")+`
+  AND `+r.expiryClause(projectID, "c.")+" AND "+persistence.ChunkNotRestrictedSQL("c.id")+`
   %s
 ORDER BY c.created_at DESC LIMIT $3`, strings.ReplaceAll(scopeFilterSQL(strictScope, 4), "repo_scope", "c.repo_scope"))
 	rows, err := r.db.QueryContext(ctx, sql, projectID, escapeLikeWildcards(q), limit, nullableString(repoScope))
@@ -2503,7 +2532,7 @@ FROM project_memory_chunks c
 WHERE c.project_id = $1 AND c.content ILIKE '%%' || $2 || '%%' ESCAPE '\'
   AND c.lifecycle_state = 'published'
   AND c.validation_status NOT IN ('refuted','superseded')
-  AND `+r.expiryClause(projectID, "c.")+`
+  AND `+r.expiryClause(projectID, "c.")+" AND "+persistence.ChunkNotRestrictedSQL("c.id")+`
   AND ($4::timestamptz IS NULL OR COALESCE(c.event_time, c.created_at) >= $4::timestamptz)
   AND ($5::timestamptz IS NULL OR COALESCE(c.event_time, c.created_at) <= $5::timestamptz)
   %s
@@ -2530,7 +2559,7 @@ FROM project_memory_chunks c
 WHERE c.project_id = $1 AND c.content ILIKE '%%' || $2 || '%%' ESCAPE '\'
   AND c.lifecycle_state = 'published'
   AND c.validation_status NOT IN ('refuted','superseded')
-  AND `+r.expiryClause(projectID, "c.")+`
+  AND `+r.expiryClause(projectID, "c.")+" AND "+persistence.ChunkNotRestrictedSQL("c.id")+`
   AND (c.epoch_id IS NULL OR c.epoch_id = ANY($4::text[]))
   AND ($5::timestamptz IS NULL OR COALESCE(c.event_time, c.created_at) >= $5::timestamptz)
   AND ($6::timestamptz IS NULL OR COALESCE(c.event_time, c.created_at) <= $6::timestamptz)

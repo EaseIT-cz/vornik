@@ -18,6 +18,9 @@ package taskcancel
 import (
 	"context"
 	"errors"
+	"fmt"
+	"slices"
+	"strings"
 	"time"
 
 	"vornik.io/vornik/internal/persistence"
@@ -61,6 +64,47 @@ type Outcome struct {
 	TeardownErr error
 }
 
+// narrowStatuses is TransitionToCancelled's from-set, the one a nil from
+// means (both drivers' SQL IN list). Used only to phrase a refusal.
+var narrowStatuses = []persistence.TaskStatus{
+	persistence.TaskStatusPending, persistence.TaskStatusQueued, persistence.TaskStatusLeased,
+	persistence.TaskStatusRunning, persistence.TaskStatusPaused,
+}
+
+// RefusalReason phrases a cancel whose write did not move the row, from the
+// row's CURRENT status — re-read after the refused write, never the snapshot
+// taken before it (05-scheduler §4.10 F3; §4.11 "Amended 2026-10-12", GitHub
+// #326: the companion reply said "already terminal" for a parked task the
+// narrow set excludes). from is the set the caller passed to Cancel (nil =
+// TransitionToCancelled's).
+func RefusalReason(current persistence.TaskStatus, from []persistence.TaskStatus) string {
+	switch current {
+	case persistence.TaskStatusCompleted, persistence.TaskStatusFailed,
+		persistence.TaskStatusCancelled, persistence.TaskStatusClosed:
+		return fmt.Sprintf("the task is already %s; there is nothing to cancel", current)
+	}
+	if from == nil {
+		from = narrowStatuses
+	}
+	if slices.Contains(from, current) {
+		return fmt.Sprintf("the task's status changed while cancelling (now %s); it was left unchanged — try again", current)
+	}
+	if current == persistence.TaskStatusAwaitingApproval {
+		// Refused on purpose by the client surfaces (operator decision
+		// 2026-10-13, GitHub #326, §4.11 "Amended 2026-10-13").
+		return fmt.Sprintf("the task is %s, which this cancel does not act on: an approval is answered (approve or reject), not cancelled from here; it was left unchanged", current)
+	}
+	names := make([]string, len(from))
+	for i, s := range from {
+		names[i] = string(s)
+	}
+	list := names[0]
+	if n := len(names); n > 1 {
+		list = strings.Join(names[:n-1], ", ") + " or " + names[n-1]
+	}
+	return fmt.Sprintf("the task is %s, which this cancel does not act on (it cancels only %s tasks); it was left unchanged", current, list)
+}
+
 // postWriteTimeout bounds the work done after the write on the detached
 // context, so a wedged repository cannot hold a caller forever.
 const postWriteTimeout = 30 * time.Second
@@ -73,9 +117,10 @@ var ErrNoCancelledTransition = errors.New("taskcancel: a nil from-set needs a re
 // row, CancelIfActive, NotifyChildTerminal and CancelChildren, in that order.
 //
 // from is the set of statuses the caller is willing to cancel. nil keeps
-// TransitionToCancelled's own list (QUEUED, LEASED, RUNNING, PENDING, PAUSED),
-// which the REST, companion and Telegram surfaces use (§4.10 kept it narrow on
-// purpose); otherwise the write is TransitionConditional(from).
+// TransitionToCancelled's own list (QUEUED, LEASED, RUNNING, PENDING, PAUSED);
+// no production site passes nil since 2026-10-13, when the REST, companion and
+// Telegram surfaces moved to persistence.ClientCancellableTaskStatuses (GitHub
+// #326). Otherwise the write is TransitionConditional(from).
 //
 // td may be nil (no executor wired): the write still happens, and the
 // executor's step guard is what then stops further work.
@@ -83,6 +128,23 @@ var ErrNoCancelledTransition = errors.New("taskcancel: a nil from-set needs a re
 // The post-write calls run on a context detached from ctx: a client that hangs
 // up after the row moved must not abandon the teardown.
 func Cancel(ctx context.Context, repo Repo, td Teardown, taskID string, from []persistence.TaskStatus) (Outcome, error) {
+	return CancelWith(ctx, repo, td, taskID, from, persistence.TransitionOpts{})
+}
+
+// ErrOptsNeedFromSet reports options passed with a nil from-set: the narrow
+// TransitionToCancelled write takes none, and dropping them silently would
+// lose the reason the caller meant to record.
+var ErrOptsNeedFromSet = errors.New("taskcancel: transition options need an explicit from-set")
+
+// CancelWith is Cancel with options for the CANCELLED write — a caller that
+// cancels on the system's own initiative records why on the row (LastError,
+// LastErrorClass), so the task does not read like an operator's cancel. The
+// watchdog's approval timeout is the first such caller (outcome-quality LLD
+// §S5 #17, GitHub #142). Options need a non-nil from; see ErrOptsNeedFromSet.
+func CancelWith(ctx context.Context, repo Repo, td Teardown, taskID string, from []persistence.TaskStatus, opts persistence.TransitionOpts) (Outcome, error) {
+	if from == nil && opts != (persistence.TransitionOpts{}) {
+		return Outcome{}, ErrOptsNeedFromSet
+	}
 	var (
 		moved bool
 		err   error
@@ -95,14 +157,31 @@ func Cancel(ctx context.Context, repo Repo, td Teardown, taskID string, from []p
 		moved, err = tc.TransitionToCancelled(ctx, taskID)
 	} else {
 		moved, err = repo.TransitionConditional(ctx, taskID, from,
-			persistence.TaskStatusCancelled, persistence.TransitionOpts{})
+			persistence.TaskStatusCancelled, opts)
 	}
 	if err != nil || !moved {
 		return Outcome{}, err
 	}
-	out := Outcome{Transitioned: true}
+	out := AfterTerminal(ctx, td, taskID, true)
+	out.Transitioned = true
+	return out, nil
+}
+
+// AfterTerminal is what a terminal write owes once it moved the row: stop the
+// live execution (CancelIfActive), drive the parent unblock
+// (NotifyChildTerminal) and, when cascadeChildren is set, cancel the task's
+// children. Cancel calls it after its CANCELLED write; the watchdog calls it,
+// without the cascade, after its stuck-execution FAILED write (05-scheduler
+// §4.12 C3, GitHub #142), so there is one teardown sequence, not two.
+//
+// Call it only when the caller's own write moved the row. The post-write
+// calls run on a context detached from ctx, bounded by postWriteTimeout. td
+// nil does nothing. The returned Outcome's Transitioned is false; the caller
+// knows whether it transitioned.
+func AfterTerminal(ctx context.Context, td Teardown, taskID string, cascadeChildren bool) Outcome {
+	var out Outcome
 	if td == nil {
-		return out, nil
+		return out
 	}
 	had, terr := td.CancelIfActive(taskID)
 	out.TornDown = had && terr == nil
@@ -112,6 +191,8 @@ func Cancel(ctx context.Context, repo Repo, td Teardown, taskID string, from []p
 	postCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), postWriteTimeout)
 	defer cancel()
 	td.NotifyChildTerminal(postCtx, taskID)
-	td.CancelChildren(postCtx, taskID)
-	return out, nil
+	if cascadeChildren {
+		td.CancelChildren(postCtx, taskID)
+	}
+	return out
 }

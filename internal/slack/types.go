@@ -45,6 +45,7 @@ import (
 	"sync"
 	"time"
 
+	"vornik.io/vornik/internal/aidisclosure"
 	"vornik.io/vornik/internal/chatauth"
 
 	"github.com/rs/zerolog"
@@ -308,6 +309,10 @@ type Channel struct {
 	// prompt — the pre-feature behaviour, and the behaviour in every
 	// deployment that has not opened the entrypoint.
 	configAssistant ConfigAssistant
+	// aiDisclosure applies the Art 50 notice to replies this channel sends
+	// outside ChannelReceiver (config assistant; GitHub #342). Set once at boot
+	// via SetAIDisclosure. Nil discloses with the compiled defaults.
+	aiDisclosure *aidisclosure.Service
 	// configRuns holds the senders with an assistant run in flight — one each
 	// (review-20260915-8717 F5).
 	configRunsMu sync.Mutex

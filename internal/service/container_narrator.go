@@ -49,6 +49,7 @@ func (c *Container) initNarrator() {
 		Tasks:           c.repos.Tasks,
 		Audit:           c.repos.ChatAudit,
 		Resolver:        &containerChannelResolver{c: c},
+		Disclosure:      c.AIDisclosure, // Art 50, GitHub #342
 		ProjectSettings: c.narratorProjectSettings,
 		BaseURL:         c.Config.PublicOrigin(),
 	}

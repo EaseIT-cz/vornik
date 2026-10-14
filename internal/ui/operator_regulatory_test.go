@@ -189,8 +189,9 @@ func TestRegulatory_PageShowsTheClocksAndNoPersonalData(t *testing.T) {
 	}
 }
 
-// On SQLite the ledgers do not exist: say so, never render an empty table
-// that reads as "no requests" (design §5, F8).
+// With no ledger wired the page says so, never rendering an empty table that
+// reads as "no requests" (design §5, F8). Since GitHub #355 the request ledger
+// is wired on SQLite too, so this is the shape of a deployment with neither.
 func TestRegulatory_SQLiteSaysNotRecorded(t *testing.T) {
 	_, _, disc := regFixture(time.Now())
 	s := regServer(nil, nil, disc, &stubAdminAuditRepo{})
@@ -316,10 +317,35 @@ func TestRegulatory_ExportsSayTheyAreNotRetained(t *testing.T) {
 // (seen on the first deploy, 2026-09-25).
 func TestRegulatory_ProfileAuditSQLiteNoteOnlyOnSQLite(t *testing.T) {
 	reqs, incs, disc := regFixture(time.Now())
-	if body := regGet(regServer(reqs, incs, disc, &stubAdminAuditRepo{}), "/operator/regulatory", withAuthOff).Body.String(); strings.Contains(body, "Not recorded on SQLite") {
+	pg := NewServer(
+		WithRegulatoryLedgers(reqs, incs, disc, &stubAdminAuditRepo{}),
+		WithProfileAuditRecorded(),
+		WithOperatorCapability(config.AdminConfig{Enabled: true, AllowedKeys: []string{"sk-operator"}}),
+	)
+	if body := regGet(pg, "/operator/regulatory", withAuthOff).Body.String(); strings.Contains(body, "not recorded on the SQLite backend") {
 		t.Error("a Postgres-backed page must not print the SQLite gap")
 	}
 	if body := regGet(regServer(nil, nil, disc, &stubAdminAuditRepo{}), "/operator/regulatory", withAuthOff).Body.String(); !strings.Contains(body, "not recorded on the SQLite backend") {
 		t.Error("a SQLite-backed page must name the profile-use audit's gap")
+	}
+}
+
+// audit 2026-10-12 (GitHub #355): the subject-request ledger now exists on
+// SQLite, so a SQLite page (requests wired, incidents and the profile-use audit
+// not) shows the ledger and names only what is still not recorded there.
+func TestRegulatory_SQLiteShowsTheRequestLedger(t *testing.T) {
+	reqs, _, disc := regFixture(time.Now())
+	body := regGet(regServer(reqs, nil, disc, &stubAdminAuditRepo{}), "/operator/regulatory", withAuthOff).Body.String()
+	if !strings.Contains(body, "dsr-overdue") {
+		t.Error("the request ledger must render on SQLite")
+	}
+	if strings.Contains(body, "no subject-request ledger") {
+		t.Error("the page must not claim SQLite has no subject-request ledger")
+	}
+	if !strings.Contains(body, "no breach ledger") {
+		t.Error("the breach ledger is still Postgres-only and must say so")
+	}
+	if !strings.Contains(body, "not recorded on the SQLite backend") {
+		t.Error("the profile-use audit's SQLite gap must still be named")
 	}
 }

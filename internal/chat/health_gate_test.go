@@ -313,7 +313,7 @@ func TestBreaker_StateChangeHookFires(t *testing.T) {
 	g := newGate(inner, testCfg(), clk.now)
 	var mu sync.Mutex
 	var transitions []string
-	g.WithStateChangeHook(func(route, model, state string) {
+	g.WithStateChangeHook(func(route, model, state, _ string) {
 		mu.Lock()
 		transitions = append(transitions, route+"/"+model+"="+state)
 		mu.Unlock()

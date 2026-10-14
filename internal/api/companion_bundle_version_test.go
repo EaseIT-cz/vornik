@@ -45,7 +45,7 @@ var companionBundles = map[string]bundleBaseline{
 		manifest:        "../../contrib/claude-code-companion/.claude-plugin/plugin.json",
 		baselineVersion: "0.21.0",
 		skill:           "../../contrib/claude-code-companion/skills/delegate/SKILL.md",
-		skillSHA256:     "89116f8edce5bee5b4dd2ab9be0a1c5f65dc410166fb58a2184a5af2ff7be545",
+		skillSHA256:     "c05fe9c1f3eb4f30317dc756fd799af2cc50da56494f2ebaa9f014fa546c6fd9",
 	},
 	"codex": {
 		manifest:        "../../contrib/codex-companion/.codex-plugin/plugin.json",

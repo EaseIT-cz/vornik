@@ -186,6 +186,11 @@ func CheckRepoLookupRegistration(root string) ([]Finding, error) {
 	return findings, nil
 }
 
+// RepoLookupKeys is the denominator of CheckRepoLookupRegistration: the
+// lookups it examined. An empty result means the check looked at nothing
+// (#334 item 6, CI pipeline design amendment 2026-10-14).
+func RepoLookupKeys(root string) ([]string, error) { return scanInterfaceLookups(root) }
+
 // scanInterfaceLookups returns "<Interface>.<Method>" for every interface
 // method in the persistence package returning (*T, error).
 func scanInterfaceLookups(root string) ([]string, error) {

@@ -100,8 +100,10 @@ func TestSpawnLaw_AgentloopGitRunsOnlyInTheSandbox(t *testing.T) {
 		}
 		uses[rel] = ids
 	}
+	// #334 item 6: a listing of nothing is not an absent package.
+	requireExamined(t, "agentloop git law", "module packages", examined, 100)
 	if !present {
-		t.Skip("internal/agentloop is absent from this edition")
+		absentFromEdition(t, root, "internal/agentloop")
 	}
 	t.Logf("examined %d packages; %d import internal/agentloop", examined, importers)
 	for _, v := range agentloopDispatchViolations(uses) {

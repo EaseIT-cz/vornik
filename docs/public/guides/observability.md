@@ -3,7 +3,7 @@ sources:
     - path: internal/observability/metrics.go
       sha256: 71ab1bc0f72aea69510677c929b401a7ab7030c1371905197f6504c5a71c120b
     - path: internal/ui/spend.go
-      sha256: 9515335ba47d3962017c35e70226c679019bb0adaa4d207e327aa1676af907b3
+      sha256: 41775f83ae3f73e6d6a67e1e3a1a0aca7e72656fe9b2cfbcc4edf0a8f08c7407
     - path: internal/reminders/metrics.go
       sha256: bb22804ef50c44d048082968c16e51c5d729f4dafe5b1b892fe9719d0fc0fec6
 ---
@@ -19,7 +19,7 @@ endpoint for your own monitoring stack.
 
 The Web UI landing page (`/ui/`) is an operator front page of live tiles:
 active tasks (queued, leased, running), active chats, a countdown to the next
-[autonomy](autonomy.md) evaluation per project, lifetime cache savings, a memory
+[autonomy](autonomy.md) evaluation per project, the response cache's savings (calls Vornik answered itself, across all cached entries), a memory
 pipeline snapshot, and an **Inbox** tile for anything that needs you.
 
 ### Insight

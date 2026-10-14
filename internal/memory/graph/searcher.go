@@ -140,7 +140,25 @@ type Searcher struct {
 	// literal substring hit. Nil → name-match only (still correct,
 	// just less fuzzy).
 	embed EmbedFn
+	// restrictions is the GDPR Art 18 screen. REQUIRED: a Searcher without one
+	// refuses every read (design §4.16.7).
+	restrictions persistence.RestrictionScreen
 }
+
+// ErrRestrictionScreenMissing is returned by every read of a Searcher that has
+// no Art 18 restriction screen. There is no unscreened mode.
+var ErrRestrictionScreenMissing = errors.New("graph: no Art 18 restriction screen wired; refusing to read the knowledge graph")
+
+// SetRestrictionScreen installs the Art 18 screen. The container installs
+// persistence.SQLRestrictionScreen by construction (newGraphSearcher).
+func (s *Searcher) SetRestrictionScreen(r persistence.RestrictionScreen) {
+	if s != nil {
+		s.restrictions = r
+	}
+}
+
+// HasRestrictionScreen reports whether a screen is installed (wiring tests).
+func (s *Searcher) HasRestrictionScreen() bool { return s != nil && s.restrictions != nil }
 
 // NewSearcher builds a Searcher. entities/edges/mentions are
 // required; chunks and embed are optional (ChunksMentioning returns
@@ -167,7 +185,22 @@ func NewSearcher(
 // layer), then folds in an embedding shortlist when an embedder is
 // wired. Dedup by id, stable order: name matches before
 // embedding-only matches.
+//
+// GDPR Art 18 (#350): every entity found is run through the restriction screen
+// before it is returned; a restricted entity is withheld, and a failed screen
+// fails the call.
 func (s *Searcher) FindEntities(ctx context.Context, projectID, query string, types []string, limit int) ([]*persistence.KnowledgeEntity, error) {
+	if s.restrictions == nil {
+		return nil, ErrRestrictionScreenMissing
+	}
+	found, err := s.findEntitiesUnscreened(ctx, projectID, query, types, limit)
+	if err != nil {
+		return nil, err
+	}
+	return s.screenEntities(ctx, found)
+}
+
+func (s *Searcher) findEntitiesUnscreened(ctx context.Context, projectID, query string, types []string, limit int) ([]*persistence.KnowledgeEntity, error) {
 	if projectID == "" {
 		return nil, fmt.Errorf("graph.FindEntities: projectID required")
 	}
@@ -175,9 +208,7 @@ func (s *Searcher) FindEntities(ctx context.Context, projectID, query string, ty
 		limit = 50
 	}
 	query = strings.TrimSpace(query)
-
-	seen := make(map[string]struct{})
-	out := make([]*persistence.KnowledgeEntity, 0, limit)
+	acc := &entityAccumulator{projectID: projectID, limit: limit, seen: map[string]struct{}{}}
 
 	// 1. Name match (always; SQL-scoped to projectID + published).
 	nameMatches, err := s.entities.List(ctx, persistence.KnowledgeEntityFilter{
@@ -189,18 +220,8 @@ func (s *Searcher) FindEntities(ctx context.Context, projectID, query string, ty
 	if err != nil {
 		return nil, fmt.Errorf("graph.FindEntities name match: %w", err)
 	}
-	for _, e := range nameMatches {
-		if e == nil || e.ProjectID != projectID {
-			continue // defensive: List is scoped, but never trust a row's project
-		}
-		if _, dup := seen[e.ID]; dup {
-			continue
-		}
-		seen[e.ID] = struct{}{}
-		out = append(out, e)
-		if len(out) >= limit {
-			return out, nil
-		}
+	if acc.add(nameMatches) {
+		return acc.out, nil
 	}
 
 	// 2. Embedding shortlist (optional). One query per requested
@@ -208,32 +229,50 @@ func (s *Searcher) FindEntities(ctx context.Context, projectID, query string, ty
 	// type filter is given we skip the embedding pass: a typeless
 	// vector search over the whole catalog isn't what the repo
 	// exposes, and the name pass already covered the common UX.
-	if s.embed != nil && query != "" && len(types) > 0 {
-		vecs, embErr := s.embed(ctx, projectID, []string{query})
-		if embErr == nil && len(vecs) == 1 && len(vecs[0]) > 0 {
-			for _, t := range types {
-				sim, simErr := s.entities.SimilarByEmbedding(ctx, projectID, t, vecs[0], limit)
-				if simErr != nil {
-					return nil, fmt.Errorf("graph.FindEntities embedding match: %w", simErr)
-				}
-				for _, e := range sim {
-					if e == nil || e.ProjectID != projectID {
-						continue
-					}
-					if _, dup := seen[e.ID]; dup {
-						continue
-					}
-					seen[e.ID] = struct{}{}
-					out = append(out, e)
-					if len(out) >= limit {
-						return out, nil
-					}
-				}
-			}
+	if s.embed == nil || query == "" || len(types) == 0 {
+		return acc.out, nil
+	}
+	vecs, embErr := s.embed(ctx, projectID, []string{query})
+	if embErr != nil || len(vecs) != 1 || len(vecs[0]) == 0 {
+		return acc.out, nil
+	}
+	for _, t := range types {
+		sim, simErr := s.entities.SimilarByEmbedding(ctx, projectID, t, vecs[0], limit)
+		if simErr != nil {
+			return nil, fmt.Errorf("graph.FindEntities embedding match: %w", simErr)
+		}
+		if acc.add(sim) {
+			break
 		}
 	}
+	return acc.out, nil
+}
 
-	return out, nil
+// entityAccumulator dedups entities by id in arrival order, drops any row not
+// in projectID (defensive: the repos are scoped, but a row's project is never
+// trusted), and reports when limit is reached.
+type entityAccumulator struct {
+	projectID string
+	limit     int
+	seen      map[string]struct{}
+	out       []*persistence.KnowledgeEntity
+}
+
+func (a *entityAccumulator) add(es []*persistence.KnowledgeEntity) (full bool) {
+	for _, e := range es {
+		if e == nil || e.ProjectID != a.projectID {
+			continue
+		}
+		if _, dup := a.seen[e.ID]; dup {
+			continue
+		}
+		a.seen[e.ID] = struct{}{}
+		a.out = append(a.out, e)
+		if len(a.out) >= a.limit {
+			return true
+		}
+	}
+	return false
 }
 
 // GetEntity — see LLD §6.1. Loads the entity, verifies it belongs
@@ -241,6 +280,9 @@ func (s *Searcher) FindEntities(ctx context.Context, projectID, query string, ty
 // into outgoing (from == entity) and incoming (to == entity). Edges
 // are additionally project-checked.
 func (s *Searcher) GetEntity(ctx context.Context, projectID, entityID string) (*persistence.KnowledgeEntity, []*persistence.KnowledgeEdge, []*persistence.KnowledgeEdge, error) {
+	if s.restrictions == nil {
+		return nil, nil, nil, ErrRestrictionScreenMissing
+	}
 	if projectID == "" || entityID == "" {
 		return nil, nil, nil, fmt.Errorf("graph.GetEntity: projectID + entityID required")
 	}
@@ -255,10 +297,22 @@ func (s *Searcher) GetEntity(ctx context.Context, projectID, entityID string) (*
 	if ent == nil || ent.ProjectID != projectID {
 		return nil, nil, nil, nil
 	}
+	// A restricted entity answers exactly as a missing one (Art 18, #350): the
+	// read surface does not confirm the restricted person is in the graph.
+	kept, err := s.screenEntities(ctx, []*persistence.KnowledgeEntity{ent})
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	if len(kept) == 0 {
+		return nil, nil, nil, nil
+	}
 
 	edges, err := s.edges.EdgesForEntity(ctx, entityID, 0)
 	if err != nil {
 		return nil, nil, nil, fmt.Errorf("graph.GetEntity edges: %w", err)
+	}
+	if edges, err = s.screenEdges(ctx, edges); err != nil {
+		return nil, nil, nil, err
 	}
 	var outgoing, incoming []*persistence.KnowledgeEdge
 	for _, e := range edges {
@@ -288,6 +342,9 @@ func (s *Searcher) GetEntity(ctx context.Context, projectID, entityID string) (*
 // happen, but the table has no project_id column to enforce it)
 // can't leak content cross-project.
 func (s *Searcher) ChunksMentioning(ctx context.Context, projectID, entityID, repoScope string, limit int) ([]MentionedChunk, error) {
+	if s.restrictions == nil {
+		return nil, ErrRestrictionScreenMissing
+	}
 	if projectID == "" || entityID == "" {
 		return nil, fmt.Errorf("graph.ChunksMentioning: projectID + entityID required")
 	}
@@ -305,6 +362,12 @@ func (s *Searcher) ChunksMentioning(ctx context.Context, projectID, entityID, re
 	}
 	if ent == nil || ent.ProjectID != projectID {
 		return nil, nil // not ours / missing → no chunks, no leak
+	}
+	// A restricted entity has no mentioning chunks to list (Art 18, #350).
+	if kept, err := s.screenEntities(ctx, []*persistence.KnowledgeEntity{ent}); err != nil {
+		return nil, err
+	} else if len(kept) == 0 {
+		return nil, nil
 	}
 
 	mentions, err := s.mentions.ListByEntity(ctx, entityID, limit)
@@ -335,6 +398,11 @@ func (s *Searcher) ChunksMentioning(ctx context.Context, projectID, entityID, re
 	if err != nil {
 		return nil, fmt.Errorf("graph.ChunksMentioning lookup: %w", err)
 	}
+	// Defence in depth over SQLChunkLookup's own predicate: whatever ChunkLookup
+	// is wired, a restricted chunk is not returned (Art 18, #350).
+	if resolved, err = s.screenChunks(ctx, resolved); err != nil {
+		return nil, err
+	}
 
 	byID := make(map[string]MentionedChunk, len(resolved))
 	for _, c := range resolved {
@@ -358,6 +426,9 @@ func (s *Searcher) ChunksMentioning(ctx context.Context, projectID, entityID, re
 // nothing for that seed). The expansion is bounded by maxSubgraphHops
 // and by the per-entity edge cap inside EdgesForEntity.
 func (s *Searcher) Subgraph(ctx context.Context, projectID string, seedIDs []string, hops int) (*Subgraph, error) {
+	if s.restrictions == nil {
+		return nil, ErrRestrictionScreenMissing
+	}
 	if projectID == "" {
 		return nil, fmt.Errorf("graph.Subgraph: projectID required")
 	}
@@ -375,6 +446,7 @@ func (s *Searcher) Subgraph(ctx context.Context, projectID string, seedIDs []str
 	// the project. `loaded` tracks every entity id we've already
 	// pulled so we don't re-query in a cyclic graph.
 	frontier := make([]string, 0, len(seedIDs))
+	seeds := make([]*persistence.KnowledgeEntity, 0, len(seedIDs))
 	loaded := make(map[string]struct{})
 	for _, id := range seedIDs {
 		if id == "" {
@@ -391,8 +463,16 @@ func (s *Searcher) Subgraph(ctx context.Context, projectID string, seedIDs []str
 		if ent == nil || ent.ProjectID != projectID {
 			continue // foreign / missing seed: drop silently
 		}
-		entityByID[id] = ent
-		frontier = append(frontier, id)
+		seeds = append(seeds, ent)
+	}
+	// A restricted seed is dropped like a foreign one (Art 18, #350).
+	seeds, err := s.screenEntities(ctx, seeds)
+	if err != nil {
+		return nil, err
+	}
+	for _, ent := range seeds {
+		entityByID[ent.ID] = ent
+		frontier = append(frontier, ent.ID)
 	}
 
 	for depth := 0; depth < hops && len(frontier) > 0; depth++ {
@@ -401,6 +481,11 @@ func (s *Searcher) Subgraph(ctx context.Context, projectID string, seedIDs []str
 			edges, err := s.edges.EdgesForEntity(ctx, id, 0)
 			if err != nil {
 				return nil, fmt.Errorf("graph.Subgraph edges %s: %w", id, err)
+			}
+			// Withheld edges are not followed: BFS never reaches a node only
+			// through a restricted entity or restricted-only evidence.
+			if edges, err = s.screenEdges(ctx, edges); err != nil {
+				return nil, err
 			}
 			for _, e := range edges {
 				if e == nil || e.ProjectID != projectID {
@@ -420,6 +505,14 @@ func (s *Searcher) Subgraph(ctx context.Context, projectID string, seedIDs []str
 					}
 					loaded[neighbour] = struct{}{}
 					if ent == nil || ent.ProjectID != projectID {
+						continue
+					}
+					// Defence in depth: screenEdges already dropped every edge
+					// touching a restricted entity, so this only fires if the two
+					// disagree, and then the neighbour is withheld, not shown.
+					if kept, err := s.screenEntities(ctx, []*persistence.KnowledgeEntity{ent}); err != nil {
+						return nil, err
+					} else if len(kept) == 0 {
 						continue
 					}
 					entityByID[neighbour] = ent
@@ -446,4 +539,57 @@ func (s *Searcher) Subgraph(ctx context.Context, projectID string, seedIDs []str
 		return sg.Edges[i].ID < sg.Edges[j].ID
 	})
 	return sg, nil
+}
+
+// --- GDPR Art 18 restriction screen (GitHub #350, design §4.16.7) -----------
+//
+// The entity and edge rules live in persistence (ScreenRestrictedEntities,
+// ScreenRestrictedEdges) so the graph Searcher and memory.KGQueryExpander apply
+// one definition. These wrappers map a missing screen to the package's sentinel.
+
+func (s *Searcher) screenEntities(ctx context.Context, ents []*persistence.KnowledgeEntity) ([]*persistence.KnowledgeEntity, error) {
+	if s.restrictions == nil {
+		return nil, ErrRestrictionScreenMissing
+	}
+	out, err := persistence.ScreenRestrictedEntities(ctx, s.restrictions, ents)
+	if err != nil {
+		return nil, fmt.Errorf("graph: %w", err)
+	}
+	return out, nil
+}
+
+func (s *Searcher) screenEdges(ctx context.Context, edges []*persistence.KnowledgeEdge) ([]*persistence.KnowledgeEdge, error) {
+	if s.restrictions == nil {
+		return nil, ErrRestrictionScreenMissing
+	}
+	out, err := persistence.ScreenRestrictedEdges(ctx, s.restrictions, edges)
+	if err != nil {
+		return nil, fmt.Errorf("graph: %w", err)
+	}
+	return out, nil
+}
+
+// screenChunks drops restricted chunks from a ChunksMentioning result.
+func (s *Searcher) screenChunks(ctx context.Context, chunks []MentionedChunk) ([]MentionedChunk, error) {
+	if s.restrictions == nil {
+		return nil, ErrRestrictionScreenMissing
+	}
+	if len(chunks) == 0 {
+		return chunks, nil
+	}
+	ids := make([]string, len(chunks))
+	for i, c := range chunks {
+		ids[i] = c.ChunkID
+	}
+	restricted, err := s.restrictions.RestrictedChunks(ctx, ids)
+	if err != nil {
+		return nil, fmt.Errorf("graph: knowledge-graph read withheld because the processing-restriction check failed: %w", err)
+	}
+	kept := make([]MentionedChunk, 0, len(chunks))
+	for _, c := range chunks {
+		if !restricted[c.ChunkID] {
+			kept = append(kept, c)
+		}
+	}
+	return kept, nil
 }

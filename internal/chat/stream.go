@@ -11,6 +11,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"vornik.io/vornik/internal/ctxerr"
 )
 
 // StreamCallback is invoked with the accumulated text content during streaming.
@@ -153,8 +155,8 @@ func (c *Client) CompleteWithToolsStream(ctx context.Context, messages []Message
 	resp, err := streamClient.Do(httpReq)
 	if err != nil {
 		c.logger.Warn().Err(err).Str("url", url).Dur("duration", time.Since(start)).Msg("streaming request failed")
-		c.recordMetrics(start, "error", nil)
-		return nil, fmt.Errorf("%w: %v", ErrRequestFailed, err)
+		c.recordMetrics(start, string(ctxerr.Classify(ctx, err)), nil)
+		return nil, fmt.Errorf("%w: %w", ErrRequestFailed, err)
 	}
 	defer func() { _ = resp.Body.Close() }()
 
@@ -219,6 +221,7 @@ func (c *Client) CompleteWithToolsStream(ctx context.Context, messages []Message
 	lastFlush := time.Now()
 	flushInterval := 800 * time.Millisecond
 
+	sawDone := false
 	scanner := bufio.NewScanner(resp.Body)
 	// Default scanner cap is 64KB. A single SSE data: line for a
 	// large tool-call argument (computer_use, structured JSON
@@ -235,6 +238,7 @@ func (c *Client) CompleteWithToolsStream(ctx context.Context, messages []Message
 		}
 		data := strings.TrimPrefix(line, "data: ")
 		if data == "[DONE]" {
+			sawDone = true
 			break
 		}
 
@@ -308,6 +312,29 @@ func (c *Client) CompleteWithToolsStream(ctx context.Context, messages []Message
 			}
 			lastFlush = time.Now()
 		}
+	}
+
+	// A stream that stopped without its terminator is not a finished
+	// reply. bufio.Scanner reports a body cut off by a deadline, a cancel or
+	// a connection reset only through Err(); pre-fix nothing read it, so the
+	// partial text (or half-built tool-call arguments) came back as a
+	// success — the KG-extractor laundering shape on the chat path
+	// (outcome-quality LLD §S1 D3, GitHub #142). The caller's context is
+	// checked too: a cancel can surface as a clean EOF from the transport.
+	if serr := scanner.Err(); serr != nil || (!sawDone && ctx.Err() != nil) {
+		if serr == nil {
+			serr = ctx.Err()
+		}
+		cause := ctxerr.Classify(ctx, serr)
+		c.logger.Warn().
+			Err(serr).
+			Str("url", url).
+			Str("cause", string(cause)).
+			Dur("duration", time.Since(start)).
+			Int("partial_content_len", content.Len()).
+			Msg("streaming chat completion ended before the stream finished")
+		c.recordMetrics(start, string(cause), nil)
+		return nil, fmt.Errorf("%w: stream ended early: %w", ErrRequestFailed, serr)
 	}
 
 	// Final flush

@@ -1,9 +1,9 @@
 ---
 sources:
     - path: internal/autonomy/manager.go
-      sha256: adae608de34e54e60e42dd72489e4e7ac9aeffce86d7b26c441d29734e91a6f3
+      sha256: aaf354b23172fedda1e0e127586de165b4c354b1387a6a35b38ebab668315370
     - path: internal/registry/project.go
-      sha256: d6732b486d349c9dc265b3fd328c490750156b91fafe7febf538dcff04cbb989
+      sha256: 9bd6f186763374825317a2e08ab999ea37c0b919c64fcdfc3caf0c395ee14d6b
 ---
 # Autonomy — self-running projects
 
@@ -104,7 +104,9 @@ that are specific to it. On each tick, *before* any model cost is incurred, the
 loop checks — in order — the per-hour task cap, the shared rate limits, and the
 project's [spend caps](cost-and-caching.md#hard-spend-caps) (a hard-cap breach
 skips the tick entirely). It also **won't schedule on top of in-flight work**:
-if the project already has a queued or running task, the tick is skipped. And it
+if the project already has a queued or running task, or one awaiting approval,
+the tick is skipped. The recorded reason counts those tasks by status and, for
+an approval, says how to release it. And it
 **deduplicates** — an identical prompt that recently completed (within the
 duplicate window) won't be created again, so a steady loop doesn't pile up
 copies.
@@ -224,7 +226,9 @@ requires `github.repo` (and a working GitHub App installation; see
 [Forge](../features/forge.md)) on the project. Setting `autonomy.workflow_id`
 to a workflow that doesn't exist is loud, not silent: it's flagged at config
 load/reload, and the tick itself skips (recorded, not a silent fallback to
-the default workflow) rather than guessing.
+the default workflow) rather than guessing. The skip is recorded with outcome
+`WORKFLOW_INVALID` and a reason that names the missing workflow and the fix:
+correct `autonomy.workflow_id`, or load the workflow.
 
 Putting it together, a project with backlog autonomy pointed at draft PRs
 looks like:

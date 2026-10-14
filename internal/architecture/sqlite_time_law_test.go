@@ -58,6 +58,7 @@ func TestSQLiteTimestampsAreWrittenInOneForm(t *testing.T) {
 		t.Fatalf("load: %v", err)
 	}
 	var violations []string
+	examinedFiles := 0
 	for _, pkg := range pkgs {
 		for _, e := range pkg.Errors {
 			t.Fatalf("type-check %s: %v", pkg.PkgPath, e)
@@ -82,10 +83,15 @@ func TestSQLiteTimestampsAreWrittenInOneForm(t *testing.T) {
 			t.Fatalf("found %d DEFAULT CURRENT_TIMESTAMP columns in schema.go, want %d: update the count if the schema changed, or fix the parse (%v)", n, defaultedTimestampColumnCount, defaults)
 		}
 		for _, file := range pkg.Syntax {
+			examinedFiles++
 			name := filepath.Base(pkg.Fset.Position(file.Pos()).Filename)
 			violations = append(violations, sqliteTimeViolations(pkg.Fset, pkg.TypesInfo, file, name, defaults)...)
 		}
 	}
+	// #334 item 6 (CI pipeline design, amendment 2026-10-14): the
+	// schema-column denominator above sits inside the package loop, so a load
+	// that returned no package skipped it and passed over nothing.
+	requireExamined(t, "sqlite time law", "files of internal/persistence/sqlite", examinedFiles, 20)
 	sort.Strings(violations)
 	for _, v := range violations {
 		t.Error(v)
@@ -115,6 +121,89 @@ func defaultedTimestampColumns(schema string) map[string][]string {
 	return out
 }
 
+// timeBindViolations is the law's first rule on its own: a time.Time or
+// *time.Time bound to a query method, appended to an argument slice, or inside
+// a []any{...} literal spread into a query method. fix names the remedy.
+func timeBindViolations(info *types.Info, x *ast.CallExpr, at func(ast.Node) string, fix string) []string {
+	var out []string
+	isTime := func(e ast.Expr) bool {
+		if tv, ok := info.Types[e]; ok && tv.Type != nil {
+			s := tv.Type.String()
+			return s == "time.Time" || s == "*time.Time"
+		}
+		return false
+	}
+	sel, isSel := x.Fun.(*ast.SelectorExpr)
+	if isSel && sqliteQueryMethods[sel.Sel.Name] {
+		for i, arg := range x.Args {
+			if isTime(arg) {
+				out = append(out, at(arg)+": time.Time bound to "+sel.Sel.Name+"; "+fix)
+			}
+			if lit, ok := arg.(*ast.CompositeLit); ok && x.Ellipsis.IsValid() && i == len(x.Args)-1 {
+				for _, el := range lit.Elts {
+					if isTime(el) {
+						out = append(out, at(el)+": time.Time inside a spread argument literal; "+fix)
+					}
+				}
+			}
+		}
+	}
+	if id, ok := x.Fun.(*ast.Ident); ok && id.Name == "append" && len(x.Args) > 1 {
+		for _, arg := range x.Args[1:] {
+			if isTime(arg) {
+				out = append(out, at(arg)+": time.Time appended to a query argument slice; "+fix)
+			}
+		}
+	}
+	return out
+}
+
+// TestRetentionBindsThresholdsThroughBindTime extends the law's first rule to
+// internal/retention, the one package outside internal/persistence/sqlite that
+// builds SQL against a SQLite handle: the retention sweeper runs on whichever
+// driver the daemon opened. A threshold bound as a time.Time renders on SQLite
+// as "2026-04-16 01:02:03.5 +0000 UTC", whose space sorts below the stored
+// "T", so every row on the threshold's own date read as not yet due. The
+// sweeper binds through Sweeper.bindTime, which is the time.Time itself on
+// Postgres and the fixed form on SQLite.
+//
+// audit 2026-10-13 (GitHub #360); design
+// https://docs.vornik.io §4.2 D3.
+func TestRetentionBindsThresholdsThroughBindTime(t *testing.T) {
+	cfg := &packages.Config{Mode: packages.NeedName | packages.NeedFiles | packages.NeedSyntax |
+		packages.NeedTypes | packages.NeedTypesInfo}
+	pkgs, err := packages.Load(cfg, "vornik.io/vornik/internal/retention")
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	var violations []string
+	files := 0
+	for _, pkg := range pkgs {
+		for _, e := range pkg.Errors {
+			t.Fatalf("type-check %s: %v", pkg.PkgPath, e)
+		}
+		for _, file := range pkg.Syntax {
+			files++
+			name := filepath.Base(pkg.Fset.Position(file.Pos()).Filename)
+			at := func(n ast.Node) string { return name + ":" + strconv.Itoa(pkg.Fset.Position(n.Pos()).Line) }
+			ast.Inspect(file, func(n ast.Node) bool {
+				if call, ok := n.(*ast.CallExpr); ok {
+					violations = append(violations, timeBindViolations(pkg.TypesInfo, call, at, "pass s.bindTime(...)")...)
+				}
+				return true
+			})
+		}
+	}
+	// The denominator: a load that found no files would pass vacuously.
+	if files < 2 {
+		t.Fatalf("examined %d non-test files of internal/retention, want at least 2", files)
+	}
+	sort.Strings(violations)
+	for _, v := range violations {
+		t.Error(v)
+	}
+}
+
 func sqliteTimeViolations(fset *token.FileSet, info *types.Info, file *ast.File, name string, defaults map[string][]string) []string {
 	var out []string
 	at := func(n ast.Node) string { return name + ":" + strconv.Itoa(fset.Position(n.Pos()).Line) }
@@ -128,28 +217,8 @@ func sqliteTimeViolations(fset *token.FileSet, info *types.Info, file *ast.File,
 	ast.Inspect(file, func(n ast.Node) bool {
 		switch x := n.(type) {
 		case *ast.CallExpr:
+			out = append(out, timeBindViolations(info, x, at, "pass sqliteTime(...)")...)
 			sel, isSel := x.Fun.(*ast.SelectorExpr)
-			if isSel && sqliteQueryMethods[sel.Sel.Name] {
-				for i, arg := range x.Args {
-					if isTime(arg) {
-						out = append(out, at(arg)+": time.Time bound to "+sel.Sel.Name+"; pass sqliteTime(...)")
-					}
-					if lit, ok := arg.(*ast.CompositeLit); ok && x.Ellipsis.IsValid() && i == len(x.Args)-1 {
-						for _, el := range lit.Elts {
-							if isTime(el) {
-								out = append(out, at(el)+": time.Time inside a spread argument literal; pass sqliteTime(...)")
-							}
-						}
-					}
-				}
-			}
-			if id, ok := x.Fun.(*ast.Ident); ok && id.Name == "append" && len(x.Args) > 1 {
-				for _, arg := range x.Args[1:] {
-					if isTime(arg) {
-						out = append(out, at(arg)+": time.Time appended to a query argument slice; pass sqliteTime(...)")
-					}
-				}
-			}
 			if isSel && sel.Sel.Name == "Format" && name != "helpers.go" && len(x.Args) == 1 && isTime(sel.X) {
 				// The layout's constant value, however it is spelled:
 				// time.RFC3339Nano, a literal, or a local const all resolve

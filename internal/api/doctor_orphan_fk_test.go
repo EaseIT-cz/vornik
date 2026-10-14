@@ -8,6 +8,7 @@ import (
 
 	_ "modernc.org/sqlite" // in-memory DB for the orphan-FK probe
 
+	"vornik.io/vornik/internal/config"
 	"vornik.io/vornik/internal/persistence"
 
 	"github.com/stretchr/testify/assert"
@@ -31,7 +32,7 @@ func seedOrphanFKDB(t *testing.T) *sql.DB {
 	stmts := []string{
 		`CREATE TABLE tasks (id TEXT PRIMARY KEY)`,
 		`CREATE TABLE task_llm_usage (id TEXT PRIMARY KEY, task_id TEXT, source TEXT, recorded_at TIMESTAMP)`,
-		`CREATE TABLE tool_audit_log (id TEXT PRIMARY KEY, task_id TEXT)`,
+		`CREATE TABLE tool_audit_log (id TEXT PRIMARY KEY, task_id TEXT, created_at TIMESTAMP NOT NULL DEFAULT '2000-06-01 00:00:00')`,
 		`CREATE TABLE task_watchers (task_id TEXT)`,
 		`INSERT INTO tasks (id) VALUES ('T1')`,
 		// valid + NULL-background + true-orphan
@@ -214,6 +215,51 @@ func TestCheckOrphanFKRows_ARealOrphanBesideACompanionRow(t *testing.T) {
 	require.NoError(t, db.QueryRow(`SELECT COUNT(*) FROM tool_audit_log WHERE id='c1'`).Scan(&comp))
 	assert.Equal(t, 0, orphan, "the real orphan is removed")
 	assert.Equal(t, 1, comp, "the companion row survives")
+}
+
+// audit 2026-10-12: tasks are pruned at tasks_days (60 default, 90 in
+// production), after which every tool_audit_log row of the task reads as an
+// "orphan" — and --fix deleted it regardless of age, bypassing the six-month
+// tool_audit_log floor (AI Act Art 26(6), GitHub #117). A row younger than the
+// floor is the audit trail outliving its task, not garbage.
+func TestCheckOrphanFKRows_AuditOrphanInsideTheFloorSurvivesFix(t *testing.T) {
+	db := seedOrphanFKDB(t)
+	now := time.Now().UTC()
+	_, err := db.Exec(`INSERT INTO tool_audit_log (id, task_id, created_at) VALUES ('young','ghost',?), ('edge','ghost',?), ('old','ghost',?)`,
+		now.AddDate(0, 0, -90), now.AddDate(0, 0, -179), now.AddDate(0, 0, -200))
+	require.NoError(t, err)
+
+	h := &DoctorHandlers{db: db} // no config: the six-month default floor
+	fixed := h.checkOrphanFKRows(t.Context(), true)
+	assert.Equal(t, 1, fixed.Fixed, "only the row past the floor is removable")
+	var ids []string
+	rows, err := db.Query(`SELECT id FROM tool_audit_log WHERE task_id='ghost' ORDER BY id`)
+	require.NoError(t, err)
+	defer func() { _ = rows.Close() }()
+	for rows.Next() {
+		var id string
+		require.NoError(t, rows.Scan(&id))
+		ids = append(ids, id)
+	}
+	assert.Equal(t, []string{"edge", "young"}, ids)
+}
+
+// The doctor and the sweeper take the floor from the same resolution: with the
+// override (and its basis) at 30 days, a 90-day-old audit orphan is removable.
+func TestCheckOrphanFKRows_AuditOrphanFloorFollowsTheOverride(t *testing.T) {
+	db := seedOrphanFKDB(t)
+	_, err := db.Exec(`INSERT INTO tool_audit_log (id, task_id, created_at) VALUES ('young','ghost',?)`,
+		time.Now().UTC().AddDate(0, 0, -90))
+	require.NoError(t, err)
+	h := &DoctorHandlers{db: db}
+	cfg := &config.Config{}
+	cfg.Retention.ToolAuditFloorDays = 30
+	cfg.Retention.ToolAuditFloorOverride = true
+	cfg.Retention.ToolAuditFloorOverrideBasis = "national law X"
+	h.SetServerConfig(cfg)
+
+	fixed := h.checkOrphanFKRows(t.Context(), true)
+	assert.Equal(t, 1, fixed.Fixed)
 }
 
 // Design F5a: no real task id can begin "companion:" — task ids are

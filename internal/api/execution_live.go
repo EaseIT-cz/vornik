@@ -48,8 +48,15 @@ const (
 )
 
 // liveTerminalCheckEvery is how often a stream re-reads its execution to end
-// at terminal status. A package variable only so tests need not wait 15 s.
-var liveTerminalCheckEvery = livePingInterval
+// at terminal status. It is the server's own interval, fixed at construction
+// (WithLiveTerminalCheckInterval); no longer a package variable, which tests
+// wrote while an earlier test's watcher still read it (GitHub #364).
+func (s *Server) liveTerminalCheckEvery() time.Duration {
+	if s.liveCheckEvery > 0 {
+		return s.liveCheckEvery
+	}
+	return livePingInterval
+}
 
 // executionNotFound is the one answer for an unknown execution and, for an
 // agent key, for an execution in a project the key does not cover (C1: no
@@ -276,9 +283,22 @@ func (s *Server) streamLive(ctx context.Context, conn *websocket.Conn, events <-
 	// Terminal watch: the original design promised a final "closed" frame
 	// that nothing sent (A0.4). Once the execution is terminal and no event
 	// arrived during a whole check interval, the stream ends with one.
+	// The watcher never outlives this handler: it is cancelled and awaited
+	// on every return path (GitHub #364).
 	var lastEvent atomic.Int64
 	ended := make(chan liveEnd, 1)
-	go s.watchLiveStream(ctx, exec.ID, caller, &lastEvent, ended)
+	watchCtx, stopWatch := context.WithCancel(ctx)
+	watchDone := make(chan struct{})
+	s.liveWatchers.Add(1)
+	go func() {
+		defer close(watchDone)
+		defer s.liveWatchers.Add(-1)
+		s.watchLiveStream(watchCtx, exec.ID, caller, &lastEvent, ended)
+	}()
+	defer func() {
+		stopWatch()
+		<-watchDone
+	}()
 
 	w := liveWriter{conn: conn, exec: exec, caller: caller, scrub: s.liveLogs().scrub,
 		covers: func(p string) bool { return keyCoversProject(caller.key, p) }}
@@ -381,7 +401,7 @@ const (
 	liveEndRevoked
 )
 
-// watchLiveStream re-reads the execution every liveTerminalCheckEvery. For an
+// watchLiveStream re-reads the execution every s.liveTerminalCheckEvery(). For an
 // agent caller it re-authorises on every tick (review-20261008-f680 F1): the
 // key must still be active (not revoked or expired) and still cover the
 // execution's project, else the stream ends as NOT_FOUND. Any stream ends
@@ -391,14 +411,15 @@ const (
 // streams and 15 s ticks that is under 9 reads a second. An operator stream
 // reads only while quiet, as before.
 func (s *Server) watchLiveStream(ctx context.Context, executionID string, caller liveCaller, lastEvent *atomic.Int64, ended chan<- liveEnd) {
-	ticker := time.NewTicker(liveTerminalCheckEvery)
+	every := s.liveTerminalCheckEvery()
+	ticker := time.NewTicker(every)
 	defer ticker.Stop()
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case now := <-ticker.C:
-			quiet := now.Sub(time.Unix(0, lastEvent.Load())) >= liveTerminalCheckEvery
+			quiet := now.Sub(time.Unix(0, lastEvent.Load())) >= every
 			if caller.key == nil && !quiet {
 				// An operator stream needs no re-authorisation; while events
 				// flow it reads nothing (review-20261008-2892 finding 1).

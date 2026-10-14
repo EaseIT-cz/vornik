@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 
+	"vornik.io/vornik/internal/aidisclosure"
 	"vornik.io/vornik/internal/conversation"
 	"vornik.io/vornik/internal/dispatcher"
 	"vornik.io/vornik/internal/email"
@@ -16,6 +17,7 @@ import (
 // pair. *email.Channel satisfies this naturally — Send is its
 // public outbound API.
 type channelSendCloser interface {
+	Name() string
 	Send(ctx context.Context, msg conversation.ChannelMessage) (string, error)
 }
 
@@ -35,6 +37,9 @@ type channelSendCloser interface {
 type emailSenderAdapter struct {
 	channels []channelSendCloser
 	projects []*registry.Project
+	// disclosure renders the Art 50 notice every composed mail carries (Art 50
+	// design §11.4, GitHub #342). Nil discloses with the compiled defaults.
+	disclosure *aidisclosure.Service
 }
 
 // newEmailSender wraps the boot channel+project slices into a
@@ -42,11 +47,11 @@ type emailSenderAdapter struct {
 // so the dispatcher's send_email tool reports "not configured"
 // rather than silently swallowing calls — operators see the gap
 // in the LLM's reply instead of in a debugger.
-func newEmailSender(channels []channelSendCloser, projects []*registry.Project) dispatcher.EmailSender {
+func newEmailSender(channels []channelSendCloser, projects []*registry.Project, disclosure *aidisclosure.Service) dispatcher.EmailSender {
 	if len(channels) == 0 {
 		return nil
 	}
-	return &emailSenderAdapter{channels: channels, projects: projects}
+	return &emailSenderAdapter{channels: channels, projects: projects, disclosure: disclosure}
 }
 
 // SendEmail implements dispatcher.EmailSender. Looks up the
@@ -82,7 +87,10 @@ func (a *emailSenderAdapter) SendEmail(ctx context.Context, projectID string, re
 		msg.SessionID = req.InReplyTo
 		msg.InReplyTo = req.InReplyTo
 	}
-	return ch.Send(ctx, msg)
+	// Art 50: the composed mail is agent-authored and does not pass through
+	// ChannelReceiver, so it takes the shared outbound disclosure path (design
+	// §11.4, GitHub #342) — the publication notice as a footer in the body.
+	return conversation.SendDisclosed(ctx, a.disclosure, ch, msg, true)
 }
 
 // lookup finds the channel paired with projectID. Skips nil

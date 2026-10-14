@@ -3,6 +3,7 @@ package scheduler
 import (
 	"context"
 	"errors"
+	"slices"
 	"sync"
 	"testing"
 	"time"
@@ -102,6 +103,9 @@ func (m *MockTaskRepository) LeaseTask(ctx context.Context, opts persistence.Lea
 		if opts.ProjectID != "" && task.ProjectID != opts.ProjectID {
 			continue
 		}
+		if slices.Contains(opts.ExcludedProjects, task.ProjectID) {
+			continue
+		}
 		if bestTask == nil || task.Priority < bestTask.Priority ||
 			(task.Priority == bestTask.Priority && taskQueueTime(task).Before(taskQueueTime(bestTask))) {
 			bestTask = task
@@ -149,6 +153,13 @@ func (m *MockTaskRepository) RenewLease(ctx context.Context, taskID, leaseID str
 		return persistence.ErrNotFound
 	}
 	if task.LeaseID == nil || *task.LeaseID != leaseID {
+		return persistence.ErrLeaseNotFound
+	}
+	// The §4.6 status guard both drivers apply: a row that left the active
+	// set no longer renews (modelled 2026-10-12, GitHub #142).
+	switch task.Status {
+	case persistence.TaskStatusLeased, persistence.TaskStatusRunning, persistence.TaskStatusWaitingForChildren:
+	default:
 		return persistence.ErrLeaseNotFound
 	}
 	expiry := time.Now().Add(time.Duration(extendBySeconds) * time.Second)
@@ -1239,7 +1250,7 @@ func TestNew_NormalizesInvalidIntervals(t *testing.T) {
 	assert.Equal(t, time.Second, scheduler.config.PollInterval)
 	assert.Equal(t, 30*time.Second, scheduler.config.RecoveryInterval)
 	assert.Equal(t, 100, scheduler.config.RecoveryBatchSize)
-	assert.Equal(t, 30*time.Minute, scheduler.config.ExecutionTimeout)
+	assert.Equal(t, defaultAbandonedExecutionGrace, scheduler.config.AbandonedExecutionGrace)
 }
 
 func TestScheduler_TaskCompletedDoesNotUnderflowRunningCount(t *testing.T) {

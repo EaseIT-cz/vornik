@@ -14,6 +14,7 @@ package service
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"net/http"
 	"os"
@@ -40,6 +41,7 @@ import (
 	"vornik.io/vornik/internal/configassist"
 	"vornik.io/vornik/internal/configrecon"
 	"vornik.io/vornik/internal/conversation/a2a"
+	"vornik.io/vornik/internal/datasubject"
 	"vornik.io/vornik/internal/email"
 	"vornik.io/vornik/internal/executor"
 	"vornik.io/vornik/internal/featuredoctor"
@@ -51,6 +53,8 @@ import (
 	"vornik.io/vornik/internal/onboarding"
 	"vornik.io/vornik/internal/persistence"
 	"vornik.io/vornik/internal/persistence/postgres"
+	"vornik.io/vornik/internal/persistence/sqlite"
+	"vornik.io/vornik/internal/persistence/subjectstore"
 	"vornik.io/vornik/internal/postmortem"
 	"vornik.io/vornik/internal/projectdoctor"
 	"vornik.io/vornik/internal/ratelimit"
@@ -459,6 +463,10 @@ func (c *Container) initHTTPServer() error {
 	}
 	if c.repos != nil && c.repos.AgentGrants != nil {
 		apiOpts = append(apiOpts, api.WithAgentGrants(c.repos.AgentGrants))
+	}
+	// Refused agent-admin calls (agent-administered design §23.2, GitHub #172).
+	if l := c.agentRefusalLedger(); l != nil {
+		apiOpts = append(apiOpts, api.WithAgentRefusalLedger(l))
 	}
 	// delegate's max_age_seconds (broker design §6b, GitHub #119 item 9): a
 	// reuse is pinned to the reach hash a standing grant pins and, for an
@@ -1524,7 +1532,7 @@ func (c *Container) initHTTPServer() error {
 		// channels exist. The dispatcher agent was built earlier in
 		// boot (before channels), so we late-bind via SetEmailSender.
 		if c.Dispatcher != nil {
-			if sender := newEmailSender(adaptChannels(emChannels), emProjects); sender != nil {
+			if sender := newEmailSender(adaptChannels(emChannels), emProjects, c.AIDisclosure); sender != nil {
 				c.Dispatcher.SetEmailSender(sender)
 				c.Logger.Info().
 					Int("projects", len(emProjects)).
@@ -1771,6 +1779,10 @@ func (c *Container) initHTTPServer() error {
 			if c.repos.AgentGrants != nil {
 				// agent_namespace_budget (agent-administered design §18.4 F10).
 				dh.SetAgentNamespaceBudgets(c.agentNamespaceBudgets)
+				if c.repos.AgentAdminRefusals != nil {
+					// agent_refusal_burst (agent-administered design §23.2).
+					dh.SetAgentRefusalCounts(c.agentRefusalCounts)
+				}
 				dh.SetAgentModelCatalogue(c.agentModelCatalogueStatus)
 			}
 		}
@@ -2072,15 +2084,34 @@ func (c *Container) initHTTPServer() error {
 		uiOpts = append(uiOpts, ui.WithSlackLinkCommands(cmds))
 	}
 	// The regulatory record (regulatory record design §3): both editions, never
-	// behind the edition gate. The statutory ledgers are Postgres-only today, so
-	// on SQLite they stay nil and the page says "not recorded on this backend".
-	// The RESOLVED driver is used — an empty database.driver means postgres.
+	// behind the edition gate. The subject-request ledger runs on both drivers
+	// since GitHub #355 (GDPR design §4.19); the breach ledger, the profile-use
+	// audit and the console subject resolution are Postgres-only, so on SQLite
+	// those stay unwired and the page says so. The RESOLVED driver is used — an
+	// empty database.driver means postgres.
 	if c.repos != nil {
-		var regRequests ui.RegulatoryRequests
 		var regIncidents ui.RegulatoryIncidents
-		if c.DB != nil && c.backend != nil && c.backend.Driver == "postgres" {
-			regRequests = postgres.NewDataSubjectRepository(c.DB)
+		driver := ""
+		if c.backend != nil {
+			driver = c.backend.Driver
+		}
+		subjects := subjectLedgerFor(driver, c.DB)
+		var regRequests ui.RegulatoryRequests
+		if subjects != nil {
+			regRequests = subjects
+		}
+		if subjects != nil && driver == "postgres" {
 			regIncidents = postgres.NewIncidentRepository(c.DB)
+			uiOpts = append(uiOpts, ui.WithProfileAuditRecorded())
+			// Subject resolution in the console (GDPR design §4.17, #345):
+			// the CLI's resolver underneath, plus the free-text backstop and
+			// the shared Art 18 screen. Postgres-only: the KG subject
+			// index is (GDPR design §4.19.4).
+			uiOpts = append(uiOpts, ui.WithSubjectResolution(
+				&datasubject.KGResolver{Store: subjects, Index: postgres.NewDataSubjectKGIndex(c.DB)},
+				subjects,
+				persistence.NewSQLSubjectTextSearch(c.DB),
+				persistence.NewSQLRestrictionScreen(c.DB)))
 		}
 		var regDisclosures ui.RegulatoryDisclosures
 		if c.repos.ChannelDisclosure != nil {
@@ -2201,6 +2232,8 @@ func (c *Container) initHTTPServer() error {
 		ExecutionsDays:   c.Config.Retention.ExecutionsDays,
 		ArtifactsDays:    c.Config.Retention.ArtifactsDays,
 	}))
+	toolAuditFloor, _ := retention.ResolveToolAuditFloor(c.Config.Retention.ToolAuditFloorDays, c.Config.Retention.ToolAuditFloorOverride, c.Config.Retention.ToolAuditFloorOverrideBasis)
+	uiOpts = append(uiOpts, ui.WithToolAuditFloor(toolAuditFloor))
 	// Retention preview — dry-run estimate panel (P1 UI batch).
 	// Wraps a fresh retention.Sweeper (stateless; safe alongside
 	// the background sweeper goroutine) so the preview reflects
@@ -3194,4 +3227,22 @@ func (c *Container) heldTaskLog() api.HeldTaskLog {
 		h.Live = c.livePub
 	}
 	return h
+}
+
+// subjectLedgerFor is the GDPR data-subject store the daemon wires for the
+// regulatory record, on the RESOLVED driver: the store and ledger run on both
+// drivers since GitHub #355 (GDPR design §4.19). Nil when no database is open
+// or the driver is unknown, which the page reports as "not recorded".
+func subjectLedgerFor(driver string, db *sql.DB) *subjectstore.Repository {
+	if db == nil {
+		return nil
+	}
+	switch driver {
+	case "postgres":
+		return postgres.NewDataSubjectRepository(db)
+	case "sqlite":
+		return sqlite.NewDataSubjectRepository(db)
+	default:
+		return nil
+	}
 }

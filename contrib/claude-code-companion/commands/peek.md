@@ -1,11 +1,11 @@
 ---
 description: List your outstanding vornik delegations
-allowed-tools: mcp__vornik__list
+allowed-tools: mcp__plugin_vornik-companion_vornik__list
 ---
 
 # Peek at outstanding vornik tasks
 
-Call `mcp__vornik__list` to fetch every companion task this key has
+Call `mcp__plugin_vornik-companion_vornik__list` to fetch every companion task this key has
 delegated in the last 14 days. Render the result as a compact table with
 columns: `task_id`, `status`, `workflow`, `created_at`.
 

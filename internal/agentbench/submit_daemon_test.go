@@ -8,6 +8,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"vornik.io/vornik/internal/api"
 )
 
 // mcpReply wraps a payload the way the companion MCP surface does.
@@ -31,6 +33,12 @@ func mcpReply(t *testing.T, payload any) string {
 }
 
 // mcpServer replies to `delegate` once, then to `status` from a script.
+//
+// It refuses an argument the tool does not declare, with the daemon's own
+// check (api.CheckCompanionToolArgs). Until 2026-10-14 it read only the tool
+// name, so delegate's "project" (never declared; silently dropped before
+// GitHub #305, refused after) passed here while every submit against a
+// 2026.10.6 daemon would fail.
 func mcpServer(t *testing.T, statuses []map[string]any) (*httptest.Server, *[]string) {
 	t.Helper()
 	var seen []string
@@ -38,7 +46,8 @@ func mcpServer(t *testing.T, statuses []map[string]any) (*httptest.Server, *[]st
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var req struct {
 			Params struct {
-				Name string `json:"name"`
+				Name      string          `json:"name"`
+				Arguments json.RawMessage `json:"arguments"`
 			} `json:"params"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -47,6 +56,12 @@ func mcpServer(t *testing.T, statuses []map[string]any) (*httptest.Server, *[]st
 		seen = append(seen, req.Params.Name)
 
 		w.Header().Set("Content-Type", "application/json")
+		if err := api.CheckCompanionToolArgs(req.Params.Name, req.Params.Arguments); err != nil {
+			refused, _ := json.Marshal(map[string]any{"jsonrpc": "2.0", "id": 1, "result": map[string]any{
+				"isError": true, "content": []map[string]string{{"type": "text", "text": err.Error()}}}})
+			_, _ = w.Write(refused)
+			return
+		}
 		switch req.Params.Name {
 		case "delegate":
 			_, _ = w.Write([]byte(mcpReply(t, map[string]any{
@@ -65,6 +80,20 @@ func mcpServer(t *testing.T, statuses []map[string]any) (*httptest.Server, *[]st
 	}))
 	t.Cleanup(srv.Close)
 	return srv, &seen
+}
+
+// assertDeclaredArgs fails the test when a fake records a call whose
+// arguments the daemon would refuse (api.CheckCompanionToolArgs; GitHub #305
+// follow-up, 2026-10-14).
+func assertDeclaredArgs(t *testing.T, tool string, args map[string]any) {
+	t.Helper()
+	raw, err := json.Marshal(args)
+	if err != nil {
+		t.Fatalf("marshal %s arguments: %v", tool, err)
+	}
+	if err := api.CheckCompanionToolArgs(tool, raw); err != nil {
+		t.Errorf("the daemon would refuse this call: %v", err)
+	}
 }
 
 func testRunner(t *testing.T, srv *httptest.Server) *DaemonTaskRunner {
@@ -239,5 +268,25 @@ func TestDaemonTaskRunner_WriteTargetFailsClosed(t *testing.T) {
 	r := NewDaemonTaskRunner(DaemonConfig{BaseURL: srv.URL, Token: "tok", HTTPClient: srv.Client()})
 	if _, err := r.WriteTargetDatabase(context.Background()); err == nil {
 		t.Fatal("a daemon that could not report its write target was accepted")
+	}
+}
+
+// GitHub #378, review-20261014-281d suggestion: the key-project check fails
+// closed when whoami cannot be asked (no cached reply, daemon errors) and
+// when no benchmark project is named.
+func TestDaemonTaskRunner_KeyProjectFailsClosed(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer srv.Close()
+
+	r := NewDaemonTaskRunner(DaemonConfig{BaseURL: srv.URL, Token: "tok", Project: "bench", HTTPClient: srv.Client()})
+	err := r.VerifyKeyProject(context.Background())
+	if err == nil || !strings.Contains(err.Error(), `"bench"`) {
+		t.Fatalf("err = %v, want a refusal naming the project", err)
+	}
+	r = NewDaemonTaskRunner(DaemonConfig{BaseURL: srv.URL, Token: "tok", HTTPClient: srv.Client()})
+	if err := r.VerifyKeyProject(context.Background()); err == nil {
+		t.Fatal("no --project was accepted")
 	}
 }

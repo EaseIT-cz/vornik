@@ -129,7 +129,7 @@ func TestKGQueryExpander_NilGuards(t *testing.T) {
 		t.Fatal("missing repos")
 	}
 	// Empty project ID.
-	e = &KGQueryExpander{Entities: &fakeEntityRepo{}, Edges: &fakeEdgeRepo{}}
+	e = &KGQueryExpander{Restrictions: openScreen{}, Entities: &fakeEntityRepo{}, Edges: &fakeEdgeRepo{}}
 	if got := e.Expand(context.Background(), "", "q"); got != nil {
 		t.Fatal("empty project")
 	}
@@ -137,7 +137,7 @@ func TestKGQueryExpander_NilGuards(t *testing.T) {
 
 func TestKGQueryExpander_NoSeedsReturnsNil(t *testing.T) {
 	er := &fakeEntityRepo{byName: map[string][]*persistence.KnowledgeEntity{}}
-	e := &KGQueryExpander{Entities: er, Edges: &fakeEdgeRepo{}}
+	e := &KGQueryExpander{Restrictions: openScreen{}, Entities: er, Edges: &fakeEdgeRepo{}}
 	if got := e.Expand(context.Background(), "p", "alpha beta"); got != nil {
 		t.Fatalf("no seeds: %v", got)
 	}
@@ -160,7 +160,7 @@ func TestKGQueryExpander_AliasesAndNeighbors(t *testing.T) {
 	}
 	edr := &fakeEdgeRepo{byEntity: map[string][]*persistence.KnowledgeEdge{"ent-1": edges}}
 
-	e := &KGQueryExpander{Entities: er, Edges: edr}
+	e := &KGQueryExpander{Restrictions: openScreen{}, Entities: er, Edges: edr}
 	got := e.Expand(context.Background(), "p", "postgres backups")
 	sort.Strings(got)
 	want := []string{"pgsql", "postgresql", "wal archive"}
@@ -187,7 +187,7 @@ func TestKGQueryExpander_EdgesIncomingTreatedSymmetric(t *testing.T) {
 	}
 	edr := &fakeEdgeRepo{byEntity: map[string][]*persistence.KnowledgeEdge{"ent-1": edges}}
 
-	e := &KGQueryExpander{Entities: er, Edges: edr}
+	e := &KGQueryExpander{Restrictions: openScreen{}, Entities: er, Edges: edr}
 	got := e.Expand(context.Background(), "p", "foo")
 	if len(got) != 1 || got[0] != "bar" {
 		t.Fatalf("incoming edge not handled: %v", got)
@@ -196,7 +196,7 @@ func TestKGQueryExpander_EdgesIncomingTreatedSymmetric(t *testing.T) {
 
 func TestKGQueryExpander_DBErrorsToleratedSilently(t *testing.T) {
 	er := &fakeEntityRepo{listErr: errors.New("list down")}
-	e := &KGQueryExpander{Entities: er, Edges: &fakeEdgeRepo{}}
+	e := &KGQueryExpander{Restrictions: openScreen{}, Entities: er, Edges: &fakeEdgeRepo{}}
 	if got := e.Expand(context.Background(), "p", "postgres"); got != nil {
 		t.Fatalf("list err should yield nil: %v", got)
 	}
@@ -207,7 +207,7 @@ func TestKGQueryExpander_DBErrorsToleratedSilently(t *testing.T) {
 		},
 	}
 	edr2 := &fakeEdgeRepo{err: errors.New("edge down")}
-	e = &KGQueryExpander{Entities: er2, Edges: edr2}
+	e = &KGQueryExpander{Restrictions: openScreen{}, Entities: er2, Edges: edr2}
 	// Edges error → seed aliases still returned (none here), no panic.
 	if got := e.Expand(context.Background(), "p", "postgres"); len(got) != 0 {
 		t.Fatalf("edge err: %v", got)
@@ -215,7 +215,7 @@ func TestKGQueryExpander_DBErrorsToleratedSilently(t *testing.T) {
 }
 
 func TestKGQueryExpander_EmptyQueryReturnsNil(t *testing.T) {
-	e := &KGQueryExpander{Entities: &fakeEntityRepo{}, Edges: &fakeEdgeRepo{}}
+	e := &KGQueryExpander{Restrictions: openScreen{}, Entities: &fakeEntityRepo{}, Edges: &fakeEdgeRepo{}}
 	if got := e.Expand(context.Background(), "p", ""); got != nil {
 		t.Fatalf("empty query: %v", got)
 	}
@@ -236,7 +236,7 @@ func TestKGQueryExpander_NeighborGetErrorTolerated(t *testing.T) {
 		{ID: "e1", FromEntity: "ent-1", ToEntity: "missing-id"},
 	}
 	edr := &fakeEdgeRepo{byEntity: map[string][]*persistence.KnowledgeEdge{"ent-1": edges}}
-	e := &KGQueryExpander{Entities: er, Edges: edr}
+	e := &KGQueryExpander{Restrictions: openScreen{}, Entities: er, Edges: edr}
 	// Should not panic; should not add the missing neighbour.
 	got := e.Expand(context.Background(), "p", "seed")
 	if len(got) != 0 {
@@ -256,7 +256,7 @@ func TestKGQueryExpander_SkipsEdgeWithBlankOther(t *testing.T) {
 		nil,
 	}
 	edr := &fakeEdgeRepo{byEntity: map[string][]*persistence.KnowledgeEdge{"ent-1": edges}}
-	e := &KGQueryExpander{Entities: er, Edges: edr}
+	e := &KGQueryExpander{Restrictions: openScreen{}, Entities: er, Edges: edr}
 	if got := e.Expand(context.Background(), "p", "seed"); len(got) != 0 {
 		t.Fatalf("corrupt edges leaked: %v", got)
 	}
@@ -283,10 +283,97 @@ func TestKGQueryExpander_MaxSeedsAndNeighborsApplied(t *testing.T) {
 		},
 	}
 	edr := &fakeEdgeRepo{byEntity: edges}
-	e := &KGQueryExpander{Entities: er, Edges: edr, MaxSeeds: 1, MaxNeighbors: 1}
+	e := &KGQueryExpander{Restrictions: openScreen{}, Entities: er, Edges: edr, MaxSeeds: 1, MaxNeighbors: 1}
 	got := e.Expand(context.Background(), "p", "alpha beta gamma")
 	// Only the first seed ("alpha") + 1 neighbour expanded.
 	if len(got) != 1 {
 		t.Fatalf("expected 1 expansion term, got %v", got)
+	}
+}
+
+// openScreen restricts nothing.
+type openScreen struct{}
+
+func (openScreen) RestrictedEntities(context.Context, []string) (map[string]bool, error) {
+	return map[string]bool{}, nil
+}
+func (openScreen) RestrictedChunks(context.Context, []string) (map[string]bool, error) {
+	return map[string]bool{}, nil
+}
+
+// setScreen restricts fixed ids, or fails.
+type setScreen struct {
+	entities, chunks map[string]bool
+	err              error
+}
+
+func (s setScreen) RestrictedEntities(_ context.Context, ids []string) (map[string]bool, error) {
+	if s.err != nil {
+		return nil, s.err
+	}
+	out := map[string]bool{}
+	for _, id := range ids {
+		if s.entities[id] {
+			out[id] = true
+		}
+	}
+	return out, nil
+}
+func (s setScreen) RestrictedChunks(_ context.Context, ids []string) (map[string]bool, error) {
+	if s.err != nil {
+		return nil, s.err
+	}
+	out := map[string]bool{}
+	for _, id := range ids {
+		if s.chunks[id] {
+			out[id] = true
+		}
+	}
+	return out, nil
+}
+
+// audit 2026-10-12 (GitHub #350): KGQueryExpander, if ever wired, would put a
+// restricted subject's entity names (aliases, neighbours) into the recall query
+// — processing inside the recall path. It must screen its seeds, the edges it
+// follows and the neighbours it reaches, refuse without a screen, and expand
+// nothing when the screen fails.
+func TestKGQueryExpander_HonoursTheRestriction(t *testing.T) {
+	jane := &persistence.KnowledgeEntity{ID: "jane", ProjectID: "p", CanonicalName: "Jane Doe",
+		Aliases: []byte(`["jd"]`)}
+	acme := &persistence.KnowledgeEntity{ID: "acme", ProjectID: "p", CanonicalName: "Acme"}
+	beta := &persistence.KnowledgeEntity{ID: "beta", ProjectID: "p", CanonicalName: "Beta"}
+	delta := &persistence.KnowledgeEntity{ID: "delta", ProjectID: "p", CanonicalName: "Delta"}
+	er := &fakeEntityRepo{
+		byName: map[string][]*persistence.KnowledgeEntity{"jane": {jane}, "acme": {acme}},
+		byID:   map[string]*persistence.KnowledgeEntity{"jane": jane, "acme": acme, "beta": beta, "delta": delta},
+	}
+	edr := &fakeEdgeRepo{byEntity: map[string][]*persistence.KnowledgeEdge{
+		"jane": {{ID: "e0", FromEntity: "jane", ToEntity: "beta"}},
+		"acme": {
+			{ID: "e1", FromEntity: "jane", ToEntity: "acme"},
+			{ID: "e2", FromEntity: "acme", ToEntity: "beta", SourceChunks: []string{"c1"}},
+			{ID: "e4", FromEntity: "acme", ToEntity: "delta", SourceChunks: []string{"cR"}},
+		},
+	}}
+	screen := setScreen{entities: map[string]bool{"jane": true}, chunks: map[string]bool{"cR": true}}
+	e := &KGQueryExpander{Restrictions: screen, Entities: er, Edges: edr, MaxNeighbors: 5}
+
+	got := e.Expand(context.Background(), "p", "jane acme")
+	for _, term := range got {
+		switch term {
+		case "jane doe", "jd", "delta":
+			t.Errorf("expansion used restricted data: %q in %v", term, got)
+		}
+	}
+	if len(got) != 1 || got[0] != "beta" {
+		t.Errorf("expansion = %v, want only the unrestricted neighbour [beta]", got)
+	}
+
+	if got := (&KGQueryExpander{Entities: er, Edges: edr}).Expand(context.Background(), "p", "acme"); got != nil {
+		t.Errorf("no screen must mean no expansion, got %v", got)
+	}
+	failing := &KGQueryExpander{Restrictions: setScreen{err: errors.New("db down")}, Entities: er, Edges: edr}
+	if got := failing.Expand(context.Background(), "p", "acme"); got != nil {
+		t.Errorf("a failing screen must mean no expansion, got %v", got)
 	}
 }

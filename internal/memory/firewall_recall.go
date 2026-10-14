@@ -277,6 +277,8 @@ func (s *Searcher) RecentWithContext(
 // (LLD 22, "Memory the user can see"). One implementation, so a listing
 // cannot drift from the decision recall makes.
 func (s *Searcher) firewallListedRows(ctx context.Context, projectID string, rows []RecentChunkRow, reqCtx memoryfirewall.RequestContext) []RecentChunkRow {
+	// GDPR Art 18 first, independent of whether a firewall is wired or its mode.
+	rows = s.screenRestrictedRows(ctx, projectID, rows)
 	fw := s.firewallDeps()
 	if fw == nil || len(rows) == 0 {
 		return rows

@@ -18,11 +18,13 @@ import (
 func TestResolve_PerProjectWinsOverDefaults(t *testing.T) {
 	per := Policy{
 		TaskLLMUsageDays: 30,
-		ToolAuditDays:    7,
+		// Above the six-month tool-audit floor (2026-10-12), so precedence —
+		// not the floor — decides the value.
+		ToolAuditDays: 200,
 	}
 	defaults := Policy{
 		TaskLLMUsageDays: 90,
-		ToolAuditDays:    30,
+		ToolAuditDays:    365,
 		TasksDays:        60,
 		ExecutionsDays:   60,
 		ArtifactsDays:    60,
@@ -31,7 +33,7 @@ func TestResolve_PerProjectWinsOverDefaults(t *testing.T) {
 
 	// Per-project overrides win.
 	assert.Equal(t, 30, got.TaskLLMUsageDays)
-	assert.Equal(t, 7, got.ToolAuditDays)
+	assert.Equal(t, 200, got.ToolAuditDays)
 	// Per-project zeros inherit from defaults.
 	assert.Equal(t, 60, got.TasksDays)
 	assert.Equal(t, 60, got.ExecutionsDays)
@@ -590,6 +592,7 @@ func TestSweep_OptInFieldsOffSkipsExtraQueries(t *testing.T) {
 
 	mock.ExpectQuery("SELECT COUNT.*FROM task_llm_usage").WillReturnRows(sqlmock.NewRows([]string{"n"}).AddRow(0))
 	mock.ExpectQuery("SELECT COUNT.*FROM tool_audit_log").WillReturnRows(sqlmock.NewRows([]string{"n"}).AddRow(0))
+	mock.ExpectQuery("SELECT COUNT.*FROM agent_admin_refusals").WillReturnRows(sqlmock.NewRows([]string{"n"}).AddRow(0))
 	mock.ExpectQuery("SELECT id, storage_path FROM artifacts").
 		WillReturnRows(sqlmock.NewRows([]string{"id", "storage_path"}))
 	mock.ExpectQuery("SELECT COUNT.*FROM tasks").WillReturnRows(sqlmock.NewRows([]string{"n"}).AddRow(0))
@@ -642,6 +645,7 @@ func TestSweep_OptInFieldsOnIssuesExtraQueries(t *testing.T) {
 
 	mock.ExpectQuery("SELECT COUNT.*FROM task_llm_usage").WillReturnRows(sqlmock.NewRows([]string{"n"}).AddRow(0))
 	mock.ExpectQuery("SELECT COUNT.*FROM tool_audit_log").WillReturnRows(sqlmock.NewRows([]string{"n"}).AddRow(0))
+	mock.ExpectQuery("SELECT COUNT.*FROM agent_admin_refusals").WillReturnRows(sqlmock.NewRows([]string{"n"}).AddRow(0))
 	mock.ExpectQuery("SELECT id, storage_path FROM artifacts").
 		WillReturnRows(sqlmock.NewRows([]string{"id", "storage_path"}))
 	mock.ExpectQuery("SELECT COUNT.*FROM tasks").WillReturnRows(sqlmock.NewRows([]string{"n"}).AddRow(0))

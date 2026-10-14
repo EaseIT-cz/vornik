@@ -1,0 +1,14 @@
+# Corresponding source for the piper bundle in images/vornik-agent/Containerfile.
+# Read by scripts/third-party-source-archive.sh and checked by
+# images/vornik-agent/test-image-third-party-licences.sh. Bump with PIPER_RELEASE.
+# Design: https://docs.vornik.io,
+# "Change 2026-10-13 — the piper bundle's licences and its corresponding source".
+# sha256 is of the archive GitHub serves at codeload.github.com/<repo>/tar.gz/<commit>.
+# piper-release: 2023.11.14-2
+# name	repo	ref	commit	sha256
+espeak-ng	rhasspy/espeak-ng	master@2023-11-14	0f65aa301e0d6bae5e172cc74197d32a6182200f	37ebbabb010200be8ec26c61b770e93f964f4503a329d7d74c239a1a40051e43
+piper	rhasspy/piper	2023.11.14-2	38917ffd8c0e219c6581d73e07b30ef1d572fce1	4506521709cbad8ac355594005c8ff9aa0269f03f217bb6d512881f90ede1415
+piper-phonemize	rhasspy/piper-phonemize	2023.11.14-4	fccd4f335aa68ac0b72600822f34d84363daa2bf	625cc8f76b3ba2c0e0e7c7e47c1c5aaaf163df9b8296fcf42b9628231f3e264a
+onnxruntime	microsoft/onnxruntime	v1.14.1	c57cf374b67f72575546d7b4c69a1af4972e2b54	cc34e612b93063f50a4094b9b4f85e2fdf4f4fc4bf7da0fe75ffbefde7e27620
+spdlog	gabime/spdlog	v1.12.0	7e635fca68d014934b4af8a1cf874f63989352b7	1010aa76cdea700e8c693aa29e58ceb0ea51c8f020e2b15c81318e2c05562aec
+fmt	fmtlib/fmt	10.0.0	a0b8a92e3d1532361c2f7feb63babc5c18d00ef2	2da863d7d454814286c48ef90c9b461a5d27834f026ed9472eed53bd6abbc426

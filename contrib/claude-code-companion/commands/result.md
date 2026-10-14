@@ -1,6 +1,6 @@
 ---
 description: Pull the final result of a completed vornik task into context
-allowed-tools: mcp__vornik__result, mcp__vornik__status
+allowed-tools: mcp__plugin_vornik-companion_vornik__result, mcp__plugin_vornik-companion_vornik__status
 argument-hint: <task_id>
 ---
 
@@ -9,7 +9,7 @@ argument-hint: <task_id>
 The user wants the final output of task `$ARGUMENTS` pulled into your
 context window.
 
-Call `mcp__vornik__result` with `task_id=$ARGUMENTS`. Branch on the shape:
+Call `mcp__plugin_vornik-companion_vornik__result` with `task_id=$ARGUMENTS`. Branch on the shape:
 
 - **`complete: false`** — the task hasn't finished yet. Show the current
   status from the result and suggest the user retry in a bit, or use

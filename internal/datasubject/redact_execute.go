@@ -163,6 +163,13 @@ type collisionRetry struct {
 // of the plan, which is the only case the caller has to sequence.
 func (e *Executor) applyRedact(ctx context.Context, a Action, ids []string,
 	plan *ErasurePlan, res *ErasureResult) *collisionRetry {
+	// Defence in depth for 5d-0: Execute already deferred non-chunk tables, and
+	// the collision second pass only re-enters for chunks, but the chunk store
+	// must never be handed another table's row id.
+	if !redactableTable(a.Table) {
+		e.deferRedaction(a, res, reasonNoRedactionPath)
+		return nil
+	}
 	d := e.Redact
 	before, beforeHash, err := d.Redactor.LoadChunk(ctx, a.RowID)
 	if err != nil {

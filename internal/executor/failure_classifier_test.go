@@ -80,7 +80,10 @@ func TestClassifyExecutionFailure_StringBranches(t *testing.T) {
 		hint   string
 		expect string
 	}{
-		{"merge_failed", "could not merge worktree onto main", persistence.TaskFailureClassMergeFailed},
+		// No text produces MERGE_FAILED any more: the merge-back raises
+		// *mergeBackError (audit 2026-10-12, GitHub #353). This sentence now
+		// falls through every rule.
+		{"merge_text_is_not_a_class", "could not merge worktree onto main", persistence.TaskFailureClassUnknown},
 		{"gate_failed", "gate did not pass: has_approvals == true", persistence.TaskFailureClassGateFailed},
 		{"invalid_output_loop_beats_invalid_output", "shape retry loop cap hit — schema violation", persistence.TaskFailureClassInvalidOutputLoop},
 		{"invalid_output", "could not parse result.json — invalid json", persistence.TaskFailureClassInvalidOutput},

@@ -624,6 +624,9 @@ type Server struct {
 	// agent_admin.enabled live (agent-administered Vornik design §6).
 	agentAdmin        AgentAdminVerbs
 	agentAdminEnabled func() bool
+	// agentRefusals records refused agent-admin calls (design §23.2); nil
+	// records nothing.
+	agentRefusals *AgentRefusalLedger
 	// daemonHost is shown to admin-class callers in capabilities (plan P6.4).
 	daemonHost *DaemonHost
 	// approverDevices lets the agent admin grant refuse with no device.
@@ -678,6 +681,13 @@ type Server struct {
 	// liveSub powers GET /executions/{id}/live (Feature #3
 	// Phase B). nil → endpoint returns 503.
 	liveSub LiveSubscriber
+	// liveCheckEvery is how often a live stream's watcher re-reads its
+	// execution (live-task-observation design, "Change 2026-10-14", GitHub
+	// #364). Fixed at construction; zero means livePingInterval.
+	liveCheckEvery time.Duration
+	// liveWatchers counts running live-stream watchers, so a test can
+	// assert none outlives its stream (#364).
+	liveWatchers atomic.Int64
 	// liveAllowedOrigins are extra Origin patterns the live
 	// WebSocket handler accepts beyond same-host. The coder/
 	// websocket library always authorises the request host —
@@ -725,6 +735,11 @@ type Server struct {
 	// uses so both surfaces emit identical YAML mutations + audit
 	// rows. Nil leaves the endpoints at 503.
 	archiveService *projectarchive.LifecycleService
+
+	// deleteNowWait bounds how long delete-now waits for the sweeper's
+	// outcome (GitHub #365). Zero = projectarchive.DefaultDeleteNowWait;
+	// tests shorten it.
+	deleteNowWait time.Duration
 
 	// healingTriggerRepo backs the workflow-healing trigger admin
 	// endpoints (Black Box Phase B). Nil keeps endpoints at 503.
@@ -1699,6 +1714,19 @@ func WithSetupSecretsDir(dir string) ServerOption {
 func WithLiveSubscriber(sub LiveSubscriber) ServerOption {
 	return func(s *Server) {
 		s.liveSub = sub
+	}
+}
+
+// WithLiveTerminalCheckInterval sets how often each live stream re-reads its
+// execution to end at terminal status and to re-authorise an agent key. The
+// daemon leaves it at livePingInterval (15 s); tests shorten it on their own
+// server instead of writing a package variable (GitHub #364). d <= 0 keeps
+// the default.
+func WithLiveTerminalCheckInterval(d time.Duration) ServerOption {
+	return func(s *Server) {
+		if d > 0 {
+			s.liveCheckEvery = d
+		}
 	}
 }
 

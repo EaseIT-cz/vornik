@@ -151,8 +151,14 @@ type Recipe struct {
 	Team            []RecipeRole              `yaml:"team"`
 	Workflow        RecipeWorkflow            `yaml:"workflow"`
 	ScheduleDefault *RecipeSchedule           `yaml:"schedule_default"`
+	// Connector, when set, lets a paired device install the recipe
+	// (design §19.14, GitHub #314; connectors.go).
+	Connector *RecipeConnector `yaml:"connector"`
 
 	// Computed at load.
+	// demoted says why a connector block is not offered on the device
+	// (§19.14.8 item 4), "" when it is or there is none.
+	demoted     string
 	inputSchema string         // canonical JSON
 	egress      map[string]any // the envelope merged in
 	egressJSON  string         // its canonical JSON
@@ -220,6 +226,9 @@ func LoadCatalogue(fsys fs.FS) (*Catalogue, error) {
 		}
 		if r.Name != e.Name() {
 			return nil, fmt.Errorf("recipe %s: its name is %q; the directory and the name must be the same", e.Name(), r.Name)
+		}
+		if err := applyOperatorConnector(fsys, path.Join(recipesDir, e.Name(), connectorFile), r); err != nil {
+			return nil, fmt.Errorf("recipe %s: %w", e.Name(), err)
 		}
 		cat.Recipes = append(cat.Recipes, r)
 	}
@@ -290,6 +299,9 @@ func parseRecipe(body []byte, env Envelope) (*Recipe, error) {
 		return nil, err
 	}
 	if err := checkRecipeWorkflow(&r); err != nil {
+		return nil, err
+	}
+	if err := checkConnector(&r); err != nil {
 		return nil, err
 	}
 	if err := r.finishEgress(env); err != nil {

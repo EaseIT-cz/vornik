@@ -28,28 +28,60 @@ class VornikError(Exception):
 
 
 class VornikClient:
-    def __init__(self, base_url: str, token: str, timeout: float = 40.0, opener=None, clock=time.monotonic):
-        self.base_url = (base_url or "").rstrip("/")
-        self.token = token or ""
+    """``base_url`` and ``token`` are values, or zero-argument callables read
+    at every use: the plugin passes ``settings.getter(...)``, so each request
+    carries the active Hermes profile's URL and key (design 24, "Settings
+    through Hermes's secret scope (0.21.5)"). Cached capability flags are
+    kept per (URL, key), so one key's answer is never reused for another."""
+
+    def __init__(self, base_url, token, timeout: float = 40.0, opener=None, clock=time.monotonic,
+                 not_configured=None):
+        # not_configured(): the answer when the URL or key is unset, naming
+        # what is missing (settings.not_configured); a generic one otherwise.
+        self._not_configured = not_configured
+        self._base_url = base_url if callable(base_url) else (lambda v=base_url: v)
+        self._token = token if callable(token) else (lambda v=token: v)
         self.timeout = timeout
         self._open = opener or urllib.request.urlopen
-        self._caps = None
-        self._caps_at = 0.0
+        # (base_url, token) -> (flags, read at). Kept for the process
+        # lifetime; one entry per key in use (review d927 F3).
+        self._caps = {}
         self._clock = clock
         self._lock = threading.Lock()
         self._next_id = 0
 
     @property
-    def configured(self) -> bool:
-        return bool(self.base_url and self.token)
+    def base_url(self) -> str:
+        return (self._base_url() or "").rstrip("/")
 
-    def _request(self, method: str, path: str, body=None, timeout=None):
+    @property
+    def token(self) -> str:
+        return self._token() or ""
+
+    def identity(self):
+        """(URL, key) as resolved now: what per-key state is keyed by."""
+        return self.base_url, self.token
+
+    @property
+    def configured(self) -> bool:
+        base_url, token = self.identity()
+        return bool(base_url and token)
+
+    def not_configured_message(self) -> str:
+        if self._not_configured is not None:
+            text = self._not_configured()
+            if text:
+                return text
+        return "Vornik is not configured: the daemon URL or its key is not set."
+
+    def _request(self, method: str, path: str, body=None, timeout=None, identity=None):
+        base_url, token = identity or self.identity()
         data = None
-        headers = {"Authorization": "Bearer " + self.token, "Accept": "application/json"}
+        headers = {"Authorization": "Bearer " + token, "Accept": "application/json"}
         if body is not None:
             data = json.dumps(body).encode("utf-8")
             headers["Content-Type"] = "application/json"
-        req = urllib.request.Request(self.base_url + path, data=data, headers=headers, method=method)
+        req = urllib.request.Request(base_url + path, data=data, headers=headers, method=method)
         try:
             with self._open(req, timeout=timeout or self.timeout) as resp:
                 raw = resp.read()
@@ -65,20 +97,22 @@ class VornikClient:
     def capabilities(self) -> dict:
         """Feature flags, cached for CAPABILITIES_TTL_SECONDS. {} when
         unreachable, so an older or absent daemon reads as "nothing supported"."""
+        identity = self.identity()
         now = self._clock()
         with self._lock:
-            if self._caps is not None:
-                ttl = CAPABILITIES_TTL_SECONDS if self._caps else CAPABILITIES_NEGATIVE_TTL_SECONDS
-                if now - self._caps_at < ttl:
-                    return self._caps
+            cached = self._caps.get(identity)
+            if cached is not None:
+                caps, at = cached
+                ttl = CAPABILITIES_TTL_SECONDS if caps else CAPABILITIES_NEGATIVE_TTL_SECONDS
+                if now - at < ttl:
+                    return caps
         try:
-            body = self._request("GET", CAPABILITIES_PATH, timeout=10)
+            body = self._request("GET", CAPABILITIES_PATH, timeout=10, identity=identity)
             caps = body.get("features") or {}
         except VornikError:
             caps = {}
         with self._lock:
-            self._caps = caps
-            self._caps_at = now
+            self._caps[identity] = (caps, now)
         return caps
 
     def supports(self, feature: str) -> bool:

@@ -17,6 +17,7 @@ import (
 
 	"github.com/rs/zerolog"
 
+	"vornik.io/vornik/internal/aidisclosure"
 	"vornik.io/vornik/internal/chat"
 	"vornik.io/vornik/internal/chatorigin"
 	"vornik.io/vornik/internal/executor/livepubsub"
@@ -98,6 +99,9 @@ type Narrator struct {
 	Tasks    TaskGetter
 	Audit    chatorigin.ChatAuditLookup
 	Resolver chatorigin.ChannelResolver
+	// Disclosure applies the Art 50 notice to chat pushes (Art 50 design
+	// 2026-07-28 §11.4, GitHub #342). Nil discloses with compiled defaults.
+	Disclosure *aidisclosure.Service
 	// Artifacts backs the deliverable-led completion push (§5.7 point 4).
 	// Nil ⇒ completion push falls back to the plain narration text.
 	Artifacts ArtifactLister

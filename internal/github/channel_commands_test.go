@@ -60,6 +60,7 @@ func dispatchComment(t *testing.T, cfg Config, body, login, userType, assoc stri
 
 	w := httptest.NewRecorder()
 	ch.HandleWebhook(w, signedRequest("shhh", "issue_comment", delivery, commentBody(body, login, userType, assoc, isPR)))
+	ch.waitInFlight() // the mention turn runs after the ack (#142 #22)
 	if w.Code != http.StatusOK {
 		t.Fatalf("Code = %d, want 200", w.Code)
 	}

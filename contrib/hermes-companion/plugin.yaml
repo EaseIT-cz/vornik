@@ -1,5 +1,5 @@
 name: vornik-companion
-version: 0.21.1
+version: 0.21.6
 requires_hermes: ">=0.21.5"
 manifest_version: 2
 # Declared, not inferred: Hermes classifies an undeclared plugin whose
@@ -14,6 +14,29 @@ description: >-
   no credentials: work that touches mail, calendar, documents or accounts is
   delegated to operator-authored broker workflows on a Vornik daemon, which
   return a bounded, schema-validated result instead of raw access.
+  0.21.6 — a vornik_remember refused as a duplicate (dedup_hash) tells the
+  model the note is already on record and not to store it again, reworded
+  or not; only a too-short or empty note is coached to be restated, and a
+  quarantined note is reported as not stored. A vornik_remember whose
+  content carries leaked tool-call syntax (JSON tool arguments, chat-format
+  tokens, or the memory tool's own arguments as Key: value text) is refused
+  before it is sent, and the model is told to use its
+  own memory tool to forget (GitHub #380).
+  0.21.5 — VORNIK_URL, VORNIK_BROKER_TOKEN and VORNIK_MEMORY_TOKEN are read
+  through Hermes's secret scope (agent.secret_scope.get_secret) at each use,
+  never from the process environment, so a Hermes serving several profiles
+  gives each profile its own Vornik URL and keys; they are declared in
+  config_schema (the Desktop shows them under Settings > Plugins), and a
+  missing one is named in the answer with how to set it.
+  0.21.4 — the README states that Hermes's cron, single-query (-q, -z) and
+  unattended-platform sessions never reach the approval transport.
+  0.21.3 — the vornik-admin skill says the user can install a recipe that
+  list_recipes marks connector: true themselves, from the Connectors page of
+  their phone.
+  0.21.2 — the per-turn digest and /vornik-peek list every project the key
+  can see when the daemon advertises companion-list-all-projects, so a broker
+  task delegated into another project of an agent-admin namespace is reported
+  when it finishes instead of looking stuck running.
   0.21.1 — vornik_task_logs and vornik_task_explain are offered only when the
   daemon advertises companion-progress, so an older daemon no longer shows two
   tools whose every call fails.
@@ -124,7 +147,34 @@ provides_hooks:
 # Nothing is required: a broker setup sets VORNIK_URL and VORNIK_BROKER_TOKEN,
 # a memory setup adds VORNIK_MEMORY_TOKEN, and an admin setup (hermes vornik
 # connect) needs none of them. Unset, the broker tools stay hidden and nothing
-# opens a connection.
+# opens a connection. requires_env stays empty: it is documented as a load
+# gate, which would misstate the admin setup (design 24, 0.4.0 and 0.21.5).
+#
+# The three are read only with agent.secret_scope.get_secret (catalogue rule
+# 11), so each Hermes profile has its own. `type: secret` is the
+# config_schema type kept in the profile's .env, where get_secret reads;
+# VORNIK_URL is not a credential, but it is per profile too (design 24,
+# "Settings through Hermes's secret scope (0.21.5)").
+config_schema:
+  vornik_url:
+    type: secret
+    env: VORNIK_URL
+    required: false
+    label: Vornik URL
+    description: Base URL of the Vornik daemon, e.g. https://vornik.example.com (http only on loopback). Needed for the broker tools and the memory provider.
+  broker_token:
+    type: secret
+    env: VORNIK_BROKER_TOKEN
+    required: false
+    label: Vornik broker key
+    description: Companion key minted on a BROKER project (vornikctl companion grant -p <broker project> --client hermes --workflows ...). Enables the broker tools.
+  memory_token:
+    type: secret
+    env: VORNIK_MEMORY_TOKEN
+    required: false
+    label: Vornik memory key
+    description: Companion key on a separate memory project, minted with --memory-all --no-delegate. Enables the vornik memory provider.
+
 optional_env:
   - name: VORNIK_URL
     description: "Base URL of the Vornik daemon, e.g. https://vornik.example.com"

@@ -128,6 +128,16 @@ type Service struct {
 	standing StandingPages
 	// memory backs the memory page (LLD 22, "Memory the user can see").
 	memory MemoryView
+	// connectors backs the connector pages (GitHub #314; connectors.go).
+	connectors ConnectorPages
+	// withdrawable are the kinds the daemon may withdraw (design §9.2d).
+	withdrawable map[string]bool
+	// choices are the registered choice kinds (choice_kind.go, GitHub #302).
+	choices map[string]ChoicesFunc
+	// beforeTransition is the test seam between reading a request and its
+	// guarded transition, in Decide and Withdraw (withdraw.go seam). Nil in
+	// production.
+	beforeTransition func(op, id string)
 }
 
 // applyLease bounds how long one holder may run an effect before another
@@ -660,15 +670,19 @@ func (s *Service) Decide(ctx context.Context, d *Device, requestID, shownSHA str
 	if err != nil {
 		return err
 	}
-	if r.Kind == persistence.ApprovalKindHostAction {
+	if s.isChoiceKind(r.Kind) {
 		// A plain approve would lose the scope (Hermes approval transport
-		// design §4.2): DecideChoice answers these.
+		// design §4.2) or the choice (config_journal_drift, #302): every
+		// choice kind is answered through DecideChoice. #334 audit
+		// 2026-10-14: this refused only host_action, so a journal card
+		// could be approved with an empty choice.
 		return ErrChoiceRequired
 	}
 	fn, ok := s.effect(r.Kind)
 	if !ok {
 		return ErrUnknownKind
 	}
+	s.seam("decide", requestID)
 	if err := s.repo.Decide(ctx, requestID, shownSHA, d.ID, approve, s.now()); err != nil {
 		if errors.Is(err, persistence.ErrApprovalNoTransition) {
 			return ErrNotDecidable

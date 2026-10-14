@@ -140,7 +140,7 @@ func TestCodexAuth_withFileLock_RunsFnAndCreatesLockFile(t *testing.T) {
 	mgr := newCodexAuthManager(path)
 
 	ran := false
-	if err := mgr.withFileLock(func() error { ran = true; return nil }); err != nil {
+	if err := mgr.withFileLock(context.Background(), func() error { ran = true; return nil }); err != nil {
 		t.Fatalf("withFileLock: %v", err)
 	}
 	if !ran {
@@ -150,12 +150,12 @@ func TestCodexAuth_withFileLock_RunsFnAndCreatesLockFile(t *testing.T) {
 		t.Errorf("lock file not created: %v", err)
 	}
 	// Sequential re-acquire must succeed (lock released on return).
-	if err := mgr.withFileLock(func() error { return nil }); err != nil {
+	if err := mgr.withFileLock(context.Background(), func() error { return nil }); err != nil {
 		t.Errorf("second acquire failed (lock not released?): %v", err)
 	}
 	// fn error propagates.
 	sentinel := errors.New("boom")
-	if err := mgr.withFileLock(func() error { return sentinel }); !errors.Is(err, sentinel) {
+	if err := mgr.withFileLock(context.Background(), func() error { return sentinel }); !errors.Is(err, sentinel) {
 		t.Errorf("fn error should propagate; got %v", err)
 	}
 }

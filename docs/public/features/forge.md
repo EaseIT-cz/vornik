@@ -5,13 +5,13 @@ sources:
     - path: internal/forge/github/github.go
       sha256: 44e8cf74915ea21fcbb960f86e9c01e1a492578e4af2d973695ebd37bca39c9e
     - path: internal/forge/issues.go
-      sha256: 35e1451ca0ab606fa2bf6b757ecd107442e4cecfb9dd5cb7af2f119d53a67fc8
+      sha256: 26e007910abebbabf41b907c81741ae7d53680e9675bce1748785129f35e60c4
     - path: internal/forge/github/issues.go
-      sha256: 5b5a34768152049002f53616c6bf3b96036e49a9576babebf38877c905944a60
+      sha256: 1bf427bc8c7242fe6c878dfaaac875a145c94292338c861649a569d25fda7fc2
     - path: internal/api/forge_issues.go
-      sha256: 3da892dad45935c6e4064080443d6835e9665b9f60a0f46b7fadb66f8ccd4c7f
+      sha256: 4eb63a71b8ef21adf60cbf32b343e8fc7e5fdf27237f4cfa80dc2e62f7d2f311
     - path: internal/registry/project_forge_issues.go
-      sha256: 52a0ffd34534fdc8e66be8508d40748c3acbad3cfffe552143d4e5b994690304
+      sha256: e1639fb4d01fee3bd723f80b325cc47599ef6051f515fb6ed9a227d923e8e642
 ---
 # Forge — GitHub automation
 
@@ -419,7 +419,8 @@ label writers when retaining concurrently edited labels matters.
 Closing duplicates requires a separate `close_enabled: true` and the role tool
 `forge_close_issue`. Supply the source issue number, a different positive
 `duplicate_of` number in the same allowed repo, and an explanation. The daemon
-verifies both are issues, posts an explanation marked as automated triage, and
+verifies both are issues, posts an explanation marked as automated triage and
+ending with the AI-disclosure notice (`ai_disclosure.publication_text`), and
 closes the source as not planned. Retries recognize only markers posted through
 this same GitHub App. Closing refuses when the full comment set cannot be
 checked within the 100-comment cap. Both write opt-ins default to false.

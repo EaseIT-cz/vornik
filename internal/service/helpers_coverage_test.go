@@ -178,6 +178,29 @@ func TestResolvePolicy_DefaultsWhenNoRegistry(t *testing.T) {
 	}
 }
 
+// audit 2026-10-12: the admin-UI retention preview built its Policy by hand,
+// bypassing retention.Resolve — no compiled defaults (an unset window previewed
+// as "prune everything") and no tool_audit_log six-month floor (Art 26(6),
+// GitHub #117). It must show what the next sweep will do.
+func TestResolvePolicy_GoesThroughResolve_ToolAuditFloor(t *testing.T) {
+	a := newRetentionPreviewAdapter(retention.New(nil, zerolog.Nop()),
+		config.RetentionConfig{ToolAuditDays: 30}, "", nil).(*retentionPreviewAdapter)
+	if got := a.resolvePolicy("p").ToolAuditDays; got != retention.ToolAuditFloorDays {
+		t.Errorf("ToolAuditDays = %d, want the %d-day floor", got, retention.ToolAuditFloorDays)
+	}
+	unset := newRetentionPreviewAdapter(retention.New(nil, zerolog.Nop()),
+		config.RetentionConfig{}, "", nil).(*retentionPreviewAdapter)
+	if got := unset.resolvePolicy("p").TasksDays; got != retention.DefaultTasksDays {
+		t.Errorf("unset TasksDays = %d, want compiled default %d", got, retention.DefaultTasksDays)
+	}
+	// The override is honoured when the operator set it.
+	over := newRetentionPreviewAdapter(retention.New(nil, zerolog.Nop()),
+		config.RetentionConfig{ToolAuditDays: 30, ToolAuditFloorDays: 30, ToolAuditFloorOverride: true, ToolAuditFloorOverrideBasis: "national law X"}, "", nil).(*retentionPreviewAdapter)
+	if got := over.resolvePolicy("p").ToolAuditDays; got != 30 {
+		t.Errorf("override: ToolAuditDays = %d, want 30", got)
+	}
+}
+
 func TestAdaptChannels(t *testing.T) {
 	if got := adaptChannels(nil); got != nil {
 		t.Errorf("nil channels = %v, want nil", got)

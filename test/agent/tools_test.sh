@@ -296,6 +296,23 @@ assert_contains "backlog_deposit: body has step_id" "$args" '"step_id": "step-1"
 assert_contains "backlog_deposit: body has kind" "$args" '"kind": "bug"'
 assert_contains "backlog_deposit: body has title" "$args" '"title": "parseConfig crashes on empty file"'
 assert_contains "backlog_deposit: response returned verbatim" "$out" '{"status":"accepted"}'
+assert_not_contains "backlog_deposit: no found_at sent when the model set none" "$args" '"found_at"'
+unset VORNIK_API_URL VORNIK_API_KEY VORNIK_TASK_ID VORNIK_EXECUTION_ID
+teardown
+
+# Found-at level (operator, 2026-10-14; ENGINEERING-TENETS §4.7): the level a
+# bug was found at is forwarded to the daemon, which validates and renders it
+# (autonomous-dev-loop design §C1, amendment 2026-10-14).
+setup
+printf '{"projectId":"proj-1","config":{"permissions":{"allowedTools":["backlog_deposit"]}}}' > "$TMP/input/task.json"
+mock_curl_setup
+export VORNIK_API_URL="http://daemon.local"
+export VORNIK_API_KEY="secret-key"
+export VORNIK_TASK_ID="task-1"
+export VORNIK_EXECUTION_ID="exec-1"
+out=$(exec_tool backlog_deposit '{"kind":"bug","title":"cache collides","detail":"two projects share a key","found_at":"executor-e2e"}')
+args="$(cat "$CURL_ARGS_FILE")"
+assert_contains "backlog_deposit: found_at forwarded when set" "$args" '"found_at": "executor-e2e"'
 unset VORNIK_API_URL VORNIK_API_KEY VORNIK_TASK_ID VORNIK_EXECUTION_ID
 teardown
 

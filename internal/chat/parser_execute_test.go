@@ -469,3 +469,27 @@ func TestExecuteAction_GetStatus_GetError(t *testing.T) {
 }
 
 func stringPtr(s string) *string { return &s }
+
+// GitHub #347 (learning-loop design, amendment 2026-10-13): every chat
+// channel (Telegram, Slack, email, web chat, voice) creates tasks here, and
+// the goal is the chat model's, written after reading anything. An input map
+// claiming another origin is payload, never the marker.
+func TestExecuteAction_CreateTask_StampsChatGoalOrigin(t *testing.T) {
+	var created *persistence.Task
+	repo := &mocks.MockTaskRepository{
+		CreateFunc: func(_ context.Context, task *persistence.Task) error {
+			created = task
+			return nil
+		},
+	}
+	action := Action{
+		Type: ActionCreateTask, Project: "p1", Type_: "research",
+		Input: map[string]any{"goal_origin": "rest", "context": map[string]any{"prompt": "x"}},
+	}
+	if _, err := ExecuteAction(context.Background(), action, repo, nil, nil); err != nil {
+		t.Fatalf("ExecuteAction: %v", err)
+	}
+	if created == nil || created.GoalOrigin != persistence.TaskGoalOriginChat {
+		t.Fatalf("want goal_origin %q, got %+v", persistence.TaskGoalOriginChat, created)
+	}
+}

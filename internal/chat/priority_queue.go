@@ -6,6 +6,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"vornik.io/vornik/internal/ctxerr"
 )
 
 type priorityContextKey struct{}
@@ -210,11 +212,23 @@ func (q *providerQueue) do(ctx context.Context, run func(context.Context) (*Chat
 		if removed {
 			if m := q.metrics.Load(); m != nil {
 				m.QueueDepth.Dec()
-				m.QueueCallsTotal.WithLabelValues("canceled").Inc()
+				m.QueueCallsTotal.WithLabelValues(queueEndLabel(ctx)).Inc()
 			}
 		}
 		return nil, ctx.Err()
 	}
+}
+
+// queueEndLabel is the queue_calls_total outcome for a call that left the queue
+// because its context ended before a worker picked it up: "timeout" when its
+// deadline expired, "canceled" (the label's existing spelling) when the caller
+// went away. Pre-fix both were "canceled", so a saturated queue that let calls
+// time out read as callers abandoning them (outcome-quality LLD §S2, #142).
+func queueEndLabel(ctx context.Context) string {
+	if ctxerr.Classify(ctx, nil) == ctxerr.Timeout {
+		return "timeout"
+	}
+	return "canceled"
 }
 
 func (q *providerQueue) worker() {
@@ -249,7 +263,7 @@ func (q *providerQueue) pop() *queuedCall {
 		if call.canceled || call.ctx.Err() != nil {
 			if m := q.metrics.Load(); m != nil {
 				m.QueueDepth.Dec()
-				m.QueueCallsTotal.WithLabelValues("canceled").Inc()
+				m.QueueCallsTotal.WithLabelValues(queueEndLabel(call.ctx)).Inc()
 			}
 			continue
 		}

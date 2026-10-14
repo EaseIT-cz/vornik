@@ -292,7 +292,7 @@ func TestCompanionMCP_Cancel_HappyPath_Transitions(t *testing.T) {
 	taskRepo.GetFunc = func(_ context.Context, _ string) (*persistence.Task, error) {
 		return &persistence.Task{ID: "t1", ProjectID: "alpha", Status: persistence.TaskStatusRunning}, nil
 	}
-	taskRepo.TransitionToCancelledFunc = func(_ context.Context, _ string) (bool, error) {
+	taskRepo.TransitionConditionalFunc = func(_ context.Context, _ string, _ []persistence.TaskStatus, _ persistence.TaskStatus, _ persistence.TransitionOpts) (bool, error) {
 		return true, nil
 	}
 	text, isErr := cmcpCallTool(t, srv, raw, "cancel", map[string]any{"task_id": "t1", "reason": "stop"})
@@ -310,7 +310,7 @@ func TestCompanionMCP_Cancel_TransitionError(t *testing.T) {
 	taskRepo.GetFunc = func(_ context.Context, _ string) (*persistence.Task, error) {
 		return &persistence.Task{ID: "t1", ProjectID: "alpha", Status: persistence.TaskStatusRunning}, nil
 	}
-	taskRepo.TransitionToCancelledFunc = func(_ context.Context, _ string) (bool, error) {
+	taskRepo.TransitionConditionalFunc = func(_ context.Context, _ string, _ []persistence.TaskStatus, _ persistence.TaskStatus, _ persistence.TransitionOpts) (bool, error) {
 		return false, errors.New("txn aborted")
 	}
 	text, isErr := cmcpCallTool(t, srv, raw, "cancel", map[string]any{"task_id": "t1"})

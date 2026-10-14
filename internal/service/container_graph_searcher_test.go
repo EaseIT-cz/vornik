@@ -65,3 +65,24 @@ func TestNewGraphSearcher_BuildsWhenWired(t *testing.T) {
 		t.Fatal("expected non-nil searcher with embedder wired")
 	}
 }
+
+// audit 2026-10-12 (GitHub #350): the graph Searcher refuses every read without
+// an Art 18 restriction screen, so the production constructor must install one —
+// a forgotten setter would turn the UI KG pages and the memory_search graph block
+// dark, and this pins that it cannot be forgotten.
+func TestNewGraphSearcher_InstallsTheRestrictionScreen(t *testing.T) {
+	db, _, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+	c := &Container{DB: db, repos: &storage.Repositories{
+		KnowledgeEntities: postgres.NewKnowledgeEntityRepository(db),
+		KnowledgeEdges:    postgres.NewKnowledgeEdgeRepository(db),
+		EntityMentions:    postgres.NewEntityMentionRepository(db),
+	}}
+	gs := c.newGraphSearcher()
+	if gs == nil || !gs.HasRestrictionScreen() {
+		t.Fatal("newGraphSearcher must install the Art 18 restriction screen")
+	}
+}

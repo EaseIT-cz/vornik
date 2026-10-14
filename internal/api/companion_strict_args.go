@@ -7,6 +7,13 @@ import (
 	"fmt"
 	"reflect"
 	"strings"
+	"sync"
+	"unicode"
+
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/promauto"
+
+	"vornik.io/vornik/internal/persistence"
 )
 
 // decodeToolArgs decodes a companion tool's arguments strictly (LLD 21 §A,
@@ -132,4 +139,197 @@ func checkCompanionToolArgs(tool string, raw json.RawMessage) error {
 		return nil
 	}
 	return decodeToolArgs(tool, raw, newArgs())
+}
+
+// duplicateArgKey reports the first object key that appears more than once
+// within one JSON object, at any depth, compared case-insensitively as the
+// struct decode compares them, in a tool call's arguments. The
+// handler decodes arguments into Go maps and structs, where a repeated key
+// keeps its LAST value, while the companion tool audit stores the arguments
+// as sent; a repeated key would let what was decided and what was recorded
+// disagree (security review of 6035e952d, 2026-10-14). A repeated key is never
+// legitimate in a tool call, so the dispatcher refuses it before any other
+// argument check. Text it cannot tokenise is left to the strict decode.
+func duplicateArgKey(raw json.RawMessage) (string, bool) {
+	if len(bytes.TrimSpace(raw)) == 0 {
+		return "", false
+	}
+	dec := json.NewDecoder(bytes.NewReader(raw))
+	dec.UseNumber()
+	dup, err := firstRepeatedKey(dec)
+	if err != nil {
+		return "", false
+	}
+	return dup, dup != ""
+}
+
+// foldArgKey maps a key to a canonical case-folded form: two keys fold to
+// the same string exactly when bytes.EqualFold treats them as equal, which is
+// how encoding/json matches an object key to a struct field. Each rune becomes
+// the smallest rune of its unicode.SimpleFold orbit, so "Workflow", "WORKFLOW"
+// and "workflow" are one key, and the Kelvin sign (U+212A) is "k".
+func foldArgKey(key string) string {
+	return strings.Map(func(r rune) rune {
+		lowest := r
+		for f := unicode.SimpleFold(r); f != r; f = unicode.SimpleFold(f) {
+			if f < lowest {
+				lowest = f
+			}
+		}
+		return lowest
+	}, key)
+}
+
+// firstRepeatedKey consumes one JSON value from dec and returns the first key
+// repeated within any object in it, or "" when there is none.
+func firstRepeatedKey(dec *json.Decoder) (string, error) {
+	tok, err := dec.Token()
+	if err != nil {
+		return "", err
+	}
+	delim, ok := tok.(json.Delim)
+	if !ok {
+		return "", nil // a scalar holds no keys
+	}
+	seen := map[string]bool{}
+	for dec.More() {
+		if delim == '{' {
+			keyTok, err := dec.Token()
+			if err != nil {
+				return "", err
+			}
+			key, _ := keyTok.(string)
+			folded := foldArgKey(key)
+			if seen[folded] {
+				return key, nil
+			}
+			seen[folded] = true
+		}
+		dup, err := firstRepeatedKey(dec)
+		if err != nil || dup != "" {
+			return dup, err
+		}
+	}
+	_, err = dec.Token() // the closing } or ]
+	return "", err
+}
+
+// legacyArgRule decides one legacy argument: nil keeps the call (the name is
+// then removed), an error refuses it.
+type legacyArgRule func(key *persistence.APIKey, value json.RawMessage) error
+
+// companionLegacyToolArgs names the arguments a SHIPPED client sends that its
+// tool never declared (LLD 21 §A, "Strict arguments: the clients the census
+// missed", 2026-10-14). Before GitHub #305 the daemon dropped them silently;
+// after it, a 2026.10.5 client breaks on upgrade. Each entry is tied to the
+// client that sends it and is removed once that client is unsupported; it is
+// never a general escape (TestCompanionStrictArgs_LegacyArgsAreNotDeclared).
+//
+// POLICY: an entry is only for a shipped, versioned BINARY a user cannot
+// upgrade in step with the daemon, and names the last version that sends it.
+// Never for an argument a model composes from skill prose: a model reads the
+// refusal and retries, and tolerating it would bring back the silent drop
+// GitHub #305 removed.
+var companionLegacyToolArgs = map[string]map[string]legacyArgRule{
+	// vornikctl bench memory through 2026.10.5 (last sent by the 2026.10.6
+	// development tree before 2026-10-14) sends the token budget beside the
+	// converted limit. recall never read it; the result is bounded by limit,
+	// as it always was.
+	"recall": {"max_tokens": legacyRecallMaxTokens},
+	// vornikctl bench agent through 2026.10.5 (same boundary) sends its
+	// --project. delegate never read it: a key's delegation runs in the
+	// key's project.
+	"delegate": {"project": legacyDelegateProject},
+}
+
+func legacyRecallMaxTokens(_ *persistence.APIKey, value json.RawMessage) error {
+	var n json.Number
+	dec := json.NewDecoder(bytes.NewReader(value))
+	dec.UseNumber()
+	if err := dec.Decode(&n); err != nil || n == "" { // null decodes to ""
+		return errors.New(`recall: "max_tokens" is not a recall argument (recall takes limit, a result count); it is accepted only as a number, from an older vornikctl bench memory, and ignored`)
+	}
+	return nil
+}
+
+func legacyDelegateProject(key *persistence.APIKey, value json.RawMessage) error {
+	var p string
+	if err := json.Unmarshal(value, &p); err == nil && !key.AgentAdmin && p != "" && p == key.ProjectID {
+		return nil
+	}
+	if key.AgentAdmin {
+		return errors.New(`delegate: "project" is not a delegate argument; an agent-admin key's delegation runs in the project that owns the workflow`)
+	}
+	return fmt.Errorf(`delegate: "project" is not a delegate argument; this key's delegations run in its own project %q, and project is accepted (from an older vornikctl bench agent) only when it names that project`, key.ProjectID)
+}
+
+var (
+	companionLegacyArgOnce  sync.Once
+	companionLegacyArgTotal *prometheus.CounterVec
+)
+
+// companionLegacyArgCounter is vornik_companion_legacy_argument_total{tool,
+// argument, outcome}: outcome "ignored" (accepted and removed) or "refused".
+func companionLegacyArgCounter() *prometheus.CounterVec {
+	companionLegacyArgOnce.Do(func() {
+		companionLegacyArgTotal = promauto.NewCounterVec(prometheus.CounterOpts{
+			Namespace: "vornik", Subsystem: "companion", Name: "legacy_argument_total",
+			Help: "Companion tool calls carrying a legacy argument a shipped client sends but the tool never declared, by outcome (ignored, refused).",
+		}, []string{"tool", "argument", "outcome"})
+	})
+	return companionLegacyArgTotal
+}
+
+// admitLegacyToolArgs applies companionLegacyToolArgs to one call: it
+// returns the arguments with every accepted legacy name removed, or an error
+// refusing the call. Arguments it cannot read as an object are returned
+// unchanged for the strict decode to refuse.
+func (s *Server) admitLegacyToolArgs(key *persistence.APIKey, tool string, raw json.RawMessage) (json.RawMessage, error) {
+	rules, ok := companionLegacyToolArgs[tool]
+	if !ok || len(bytes.TrimSpace(raw)) == 0 {
+		return raw, nil
+	}
+	var obj map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &obj); err != nil {
+		return raw, nil
+	}
+	changed := false
+	for name, rule := range rules {
+		value, present := obj[name]
+		if !present {
+			continue
+		}
+		if err := rule(key, value); err != nil {
+			companionLegacyArgCounter().WithLabelValues(tool, name, "refused").Inc()
+			return nil, err
+		}
+		companionLegacyArgCounter().WithLabelValues(tool, name, "ignored").Inc()
+		s.logger.Warn().Str("tool", tool).Str("argument", name).Str("key_id", key.ID).
+			Str("client_kind", key.ClientKind).
+			Msg("companion: ignored a legacy argument an older client sends (LLD 21 §A, 2026-10-14); upgrade the client")
+		delete(obj, name)
+		changed = true
+	}
+	if !changed {
+		return raw, nil
+	}
+	out, err := json.Marshal(obj)
+	if err != nil {
+		return nil, fmt.Errorf("invalid arguments: %w", err)
+	}
+	return out, nil
+}
+
+// CheckCompanionToolArgs is the daemon's own argument check, exported for
+// in-repo CLIENT tests (GitHub #305 follow-up, LLD 21 §A amendment
+// 2026-10-14). A client's fake server calls it so the fake refuses exactly
+// what the daemon refuses: a fake that accepted any argument is how the
+// memory benchmark's recall "max_tokens" reached a release run unnoticed. It
+// reads the same registry the dispatcher uses, never a hand list. An unknown
+// tool is an error here (the dispatcher answers it separately).
+func CheckCompanionToolArgs(tool string, raw json.RawMessage) error {
+	if _, ok := companionToolArgs[tool]; !ok {
+		return fmt.Errorf("unknown tool: %s", tool)
+	}
+	return checkCompanionToolArgs(tool, raw)
 }

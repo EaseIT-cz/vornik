@@ -84,7 +84,7 @@
 #   VORNIK_HTTP_PORT     UI/API port                (default: 8080)
 #   VORNIK_PG_CONTAINER  postgres container         (default: vornik-postgres)
 #   VORNIK_PG_DB/USER    database name / role       (default: vornik / vornik)
-#   VORNIK_GO_IMAGE      build image                (default: docker.io/library/golang:1.25)
+#   VORNIK_GO_IMAGE      build image                (default: docker.io/library/golang:1.26.9)
 #
 set -euo pipefail
 
@@ -134,7 +134,7 @@ CONFIG="${VORNIK_CONFIG:-$HOME/.config/vornik/config.yaml}"
 SERVICE="${VORNIK_SERVICE:-vornik.service}"           # rootless *user* unit
 HTTP_PORT="${VORNIK_HTTP_PORT:-8080}"
 READYZ_URL="${VORNIK_READYZ_URL:-http://localhost:${HTTP_PORT}/readyz}"
-GO_IMAGE="${VORNIK_GO_IMAGE:-docker.io/library/golang:1.25}"
+GO_IMAGE="${VORNIK_GO_IMAGE:-docker.io/library/golang:1.26.9}"
 
 PG_CONTAINER="${VORNIK_PG_CONTAINER:-vornik-postgres}" # rootless podman container
 PG_DB="${VORNIK_PG_DB:-vornik}"

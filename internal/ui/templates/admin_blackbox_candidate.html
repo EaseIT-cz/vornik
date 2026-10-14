@@ -182,7 +182,7 @@
                 <form method="post" action="/ui/admin/blackbox/candidates/{{.Candidate.ID}}/run-trial" class="flex flex-wrap items-end gap-3">
                     <label class="block">
                         <span class="block text-xs text-gray-500 uppercase tracking-wider mb-1">Trial mode</span>
-                        <select name="mode" class="bg-dark-700 border border-dark-600 text-gray-200 text-xs rounded-md px-2 py-1.5 font-mono">
+                        <select name="mode" class="bg-dark-700 border border-control text-gray-200 text-xs rounded-md px-2 py-1.5 font-mono">
                             <option value="static">static (shape + policy validation — does not unlock promotion)</option>
                             <option value="replay">replay (non-production, side-effects blocked — gates promotion)</option>
                         </select>

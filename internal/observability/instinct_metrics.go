@@ -61,6 +61,13 @@ type InstinctMetrics struct {
 	// and decline-to-generalise cases simply don't bump it, so this tracks
 	// genuine LLM-derived candidates only.
 	DistillationsTotal prometheus.Counter
+	// DistillSkippedTotal counts clusters the distillation pass produced
+	// nothing for, by cause: declined (the model said NO PATTERN), unusable
+	// (an answer the cleaner rejected), empty (no choices), llm_timeout,
+	// llm_cancelled, llm_error. Before 2026-10-14 every one of these was
+	// silent, so a dead distill model read as one with nothing to say
+	// (GitHub #142, outcome-quality-design §S8 F5).
+	DistillSkippedTotal *prometheus.CounterVec
 
 	// ApplicationsTotal counts instinct applications (surfacings + their
 	// feedback) by surface and result. surface ∈ {failed_task_ui,
@@ -132,6 +139,12 @@ func NewInstinctMetrics(registerer prometheus.Registerer) *InstinctMetrics {
 			Name:      "distillations_total",
 			Help:      "Advisory instincts produced by the cheap-model distillation pass (cache hits and declines excluded).",
 		}),
+		DistillSkippedTotal: pa.NewCounterVec(prometheus.CounterOpts{
+			Namespace: instNamespace,
+			Subsystem: instSubsystem,
+			Name:      "distill_skipped_total",
+			Help:      "Clusters the distillation pass produced nothing for, by reason (declined|unusable|empty|llm_timeout|llm_cancelled|llm_error).",
+		}, []string{"reason"}),
 		ApplicationsTotal: pa.NewCounterVec(prometheus.CounterOpts{
 			Namespace: instNamespace,
 			Subsystem: instSubsystem,

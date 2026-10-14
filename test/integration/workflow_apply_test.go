@@ -30,6 +30,7 @@ import (
 
 	"vornik.io/vornik/internal/persistence"
 	"vornik.io/vornik/internal/persistence/postgres"
+	"vornik.io/vornik/internal/testutil/testenv"
 	"vornik.io/vornik/internal/workflowapply"
 )
 
@@ -102,6 +103,7 @@ func setupSourceRepoForWorkflow(t *testing.T, workflowID string) (sourceDir stri
 func mustRun(t *testing.T, name string, args ...string) {
 	t.Helper()
 	cmd := exec.Command(name, args...)
+	cmd.Env = testenv.Clean() // never the shell's VORNIK_* (testing design 19 §11)
 	if out, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("%s %v: %v: %s", name, args, err, out)
 	}

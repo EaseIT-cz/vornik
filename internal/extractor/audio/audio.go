@@ -34,6 +34,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	"vornik.io/vornik/internal/extractor"
@@ -107,8 +108,10 @@ func (e *Extractor) Extract(ctx context.Context, src extractor.Source) (extracto
 	norm, err := e.sandbox.Run(ctx, sandboxtool.Spec{
 		Feature:    sandboxtool.FeatureAudio,
 		Entrypoint: "ffmpeg",
-		Args: []string{"-nostdin", "-loglevel", "error", "-threads", sandboxtool.FFmpegThreads, "-filter_threads", sandboxtool.FFmpegThreads,
-			"-i", "/in/audio", "-threads", sandboxtool.FFmpegThreads, "-ac", "1", "-ar", "16000", "-acodec", "pcm_s16le", "-f", "wav", "/out/audio.wav"},
+		// The input guard pins the protocol and demuxer (GitHub #348).
+		Args: slices.Concat([]string{"-nostdin", "-loglevel", "error", "-threads", sandboxtool.FFmpegThreads, "-filter_threads", sandboxtool.FFmpegThreads},
+			sandboxtool.FFmpegInputGuard(),
+			[]string{"-i", "/in/audio", "-threads", sandboxtool.FFmpegThreads, "-ac", "1", "-ar", "16000", "-acodec", "pcm_s16le", "-f", "wav", "/out/audio.wav"}),
 		Inputs: []sandboxtool.Input{{Name: "audio", Path: src.FilePath}},
 	})
 	if err != nil {

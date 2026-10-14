@@ -55,7 +55,7 @@ func newCallbackRig(t *testing.T) *callbackRig {
 	t.Cleanup(rig.server.Close)
 
 	chatClient := chat.NewClient("https://api.example.com", "test-key", "gpt-4")
-	bot, err := NewBot(BotConfig{Token: "test-token", AllowUnlistedUsers: true}, chatClient, WithHTTPClient(rig.server.Client()))
+	bot, err := NewBot(BotConfig{Token: "test-token", AllowUnlistedUsers: true}, chatClient, WithHTTPClient(rig.server.Client()), WithAIDisclosure(alreadyDisclosed()))
 	require.NoError(t, err)
 	bot.baseURL = rig.server.URL
 	rig.bot = bot

@@ -3,6 +3,7 @@ package executor
 import (
 	"context"
 	"encoding/json"
+	"os"
 	"testing"
 
 	"github.com/rs/zerolog"
@@ -19,6 +20,9 @@ type stubArtifactStore struct {
 }
 
 func (s *stubArtifactStore) Store(_ context.Context, _, _, _, _, _ string) (*persistence.Artifact, error) {
+	return nil, nil
+}
+func (s *stubArtifactStore) StoreFile(_ context.Context, _, _, _, _ string, _ *os.File) (*persistence.Artifact, error) {
 	return nil, nil
 }
 func (s *stubArtifactStore) Retrieve(_ context.Context, id string) ([]byte, error) {
@@ -48,7 +52,7 @@ func TestIngestInputArtifacts_EnqueuesByID(t *testing.T) {
 		workflows: &MockWorkflowResolver{workflows: map[string]*registry.Workflow{
 			"companion-rag-ingest": {ID: "companion-rag-ingest", IngestInputArtifacts: true},
 		}},
-		logger: zerolog.Nop(),
+		artifactRepo: ownRowsOfP(), logger: zerolog.Nop(),
 	}
 	task := &persistence.Task{
 		ID: "t", ProjectID: "p",
@@ -78,7 +82,7 @@ func TestIngestInputArtifacts_SyncFallback(t *testing.T) {
 	e := &Executor{
 		memoryIndexer: mi,
 		artifactStore: store,
-		logger:        zerolog.Nop(),
+		artifactRepo:  ownRowsOfP(), logger: zerolog.Nop(),
 	}
 	task := &persistence.Task{
 		ID: "t", ProjectID: "p",
@@ -101,7 +105,7 @@ func TestIngestInputArtifacts_SyncFallback(t *testing.T) {
 func TestIngestInputArtifacts_NoInputs(t *testing.T) {
 	mi := &stubMemoryIndexer{}
 	q := &stubIngestQueue{}
-	e := &Executor{memoryIndexer: mi, ingestQueue: q, logger: zerolog.Nop()}
+	e := &Executor{memoryIndexer: mi, ingestQueue: q, artifactRepo: ownRowsOfP(), logger: zerolog.Nop()}
 	e.ingestInputArtifacts(context.Background(),
 		&persistence.Task{ID: "t", ProjectID: "p", Payload: []byte(`{"context":{}}`)},
 		&persistence.Execution{ID: "x", WorkflowID: "companion-rag-ingest"})

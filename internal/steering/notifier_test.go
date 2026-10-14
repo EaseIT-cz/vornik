@@ -7,6 +7,7 @@ import (
 
 	"github.com/rs/zerolog"
 
+	"vornik.io/vornik/internal/aidisclosure"
 	"vornik.io/vornik/internal/conversation"
 	"vornik.io/vornik/internal/persistence"
 )
@@ -79,7 +80,10 @@ func newNotifier(t *testing.T, row *persistence.ChatAuditEntry, ch *fakeChannel,
 	}
 	// nil task-getter + nil checkpoints: existing tests exercise the
 	// immediate-task, no-button path only.
-	return New(fakeAudit{row: row}, res, nil, nil, "https://vornik.example", enabled, zerolog.Nop()), ch
+	n := New(fakeAudit{row: row}, res, nil, nil, "https://vornik.example", enabled, zerolog.Nop())
+	// Chats in these tests were disclosed to in their originating turn.
+	n.SetAIDisclosure(aidisclosure.New(aidisclosure.Config{}, servedAllSteer{}))
+	return n, ch
 }
 
 // TestNotify_ChatOriginatedViaAncestor is the 2026-07-08 fix: a child task
@@ -97,6 +101,7 @@ func TestNotify_ChatOriginatedViaAncestor(t *testing.T) {
 	getter := fakeTaskGetter{byID: map[string]*persistence.Task{parentID: parent}}
 
 	n := New(fakeAudit{row: row}, res, getter, nil, "https://vornik.example", true, zerolog.Nop())
+	n.SetAIDisclosure(aidisclosure.New(aidisclosure.Config{}, servedAllSteer{})) // chat already disclosed
 	n.NotifySteeringRequired(context.Background(), child, string(persistence.TaskStatusAwaitingInput))
 
 	if len(ch.sent) != 1 {

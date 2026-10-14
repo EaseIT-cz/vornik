@@ -205,21 +205,27 @@ func TestClassifyAcrossProjects_CursorAdvancesPastAnAllAbstainedPage(t *testing.
 			AddRow("c1", "p", "a.md", "dispatcher", "one").
 			AddRow("c2", "p", "b.md", "dispatcher", "two")
 	}
-	mock.ExpectQuery("SELECT id, project_id").WithArgs(2, 0).WillReturnRows(page())
+	// Amended 2026-10-13 (#330): the abstained page is now STAMPED and drops
+	// out of the auto-loop's query, so the second sweep reads from offset 0
+	// and gets the rows behind it — the livelock stays closed, by the
+	// database rather than by the cursor. (Was: the second sweep read from
+	// offset 2.) The cursor still advances past rows that STAY; that is
+	// TestClassifyAcrossProjects_FailedStampStaysAndIsWalkedPast.
+	mock.ExpectQuery("SELECT id, project_id").WithArgs(2, 0, sqlmock.AnyArg()).WillReturnRows(page())
+	mock.ExpectExec("UPDATE project_memory_chunks SET classify_attempted_at").WithArgs("c1").WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec("UPDATE project_memory_chunks SET classify_attempted_at").WithArgs("c2").WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectQuery("SELECT COUNT").WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(2))
 	if _, err := bf.BackfillBatchAcrossProjects(context.Background(), 2); err != nil {
 		t.Fatal(err)
 	}
-	mock.ExpectQuery("SELECT id, project_id").WithArgs(2, 2).
-		WillReturnRows(sqlmock.NewRows([]string{"id", "project_id", "source_name", "producer_role", "content"}))
-	mock.ExpectQuery("SELECT id, project_id").WithArgs(2, 0).
+	mock.ExpectQuery("SELECT id, project_id").WithArgs(2, 0, sqlmock.AnyArg()).
 		WillReturnRows(sqlmock.NewRows([]string{"id", "project_id", "source_name", "producer_role", "content"}))
 	mock.ExpectQuery("SELECT COUNT").WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(2))
 	if _, err := bf.BackfillBatchAcrossProjects(context.Background(), 2); err != nil {
 		t.Fatal(err)
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
-		t.Fatalf("the second sweep must read from offset 2, past the abstained page: %v", err)
+		t.Fatalf("the abstained page must be stamped and the second sweep read from offset 0: %v", err)
 	}
 }
 
@@ -232,13 +238,13 @@ func TestClassifyAcrossProjects_CursorStaysOnAPausedPage(t *testing.T) {
 			AddRow("c1", "p", "a.md", "dispatcher", "one").
 			AddRow("c2", "p", "b.md", "dispatcher", "two")
 	}
-	mock.ExpectQuery("SELECT id, project_id").WithArgs(2, 0).WillReturnRows(page())
+	mock.ExpectQuery("SELECT id, project_id").WithArgs(2, 0, sqlmock.AnyArg()).WillReturnRows(page())
 	mock.ExpectQuery("SELECT COUNT").WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(2))
 	res, err := bf.BackfillBatchAcrossProjects(context.Background(), 2)
 	if err != nil || !res.Paused {
 		t.Fatalf("want a paused batch: %+v %v", res, err)
 	}
-	mock.ExpectQuery("SELECT id, project_id").WithArgs(2, 0).WillReturnRows(page())
+	mock.ExpectQuery("SELECT id, project_id").WithArgs(2, 0, sqlmock.AnyArg()).WillReturnRows(page())
 	mock.ExpectQuery("SELECT COUNT").WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(2))
 	if _, err := bf.BackfillBatchAcrossProjects(context.Background(), 2); err != nil {
 		t.Fatal(err)

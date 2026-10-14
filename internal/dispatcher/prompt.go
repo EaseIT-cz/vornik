@@ -136,8 +136,8 @@ HOW TO HELP — in order of preference
      If the operator supplies the markdown text themselves (CV body,
      report draft, README, meeting notes) and wants it rendered
      into HTML / PDF / etc., call render_document directly. It's
-     deterministic — pandoc/weasyprint run on the daemon host with
-     no agent container and no LLM creativity — and the files
+     deterministic — pandoc/weasyprint run in a short-lived,
+     network-less sandbox with no task and no LLM creativity — and the files
      stream straight to the chat. Do NOT route this through
      create_task → adaptive workflow → researcher → writer; that
      path is for tasks where the agents need to investigate or
@@ -521,8 +521,8 @@ func BuildLeadSystemPrompt(project *registry.Project, swarm *registry.Swarm, lea
      If the operator supplies the markdown text themselves (CV body,
      report draft, README, meeting notes) and wants it rendered
      into HTML / PDF / etc., call render_document directly. It's
-     deterministic — pandoc/weasyprint run on the daemon host with
-     no agent container and no LLM creativity — and the files
+     deterministic — pandoc/weasyprint run in a short-lived,
+     network-less sandbox with no task and no LLM creativity — and the files
      stream straight to the chat. Do NOT route this through
      create_task → adaptive workflow → researcher → writer; that
      path is for tasks where the agents need to investigate or

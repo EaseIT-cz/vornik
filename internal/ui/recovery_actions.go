@@ -168,6 +168,21 @@ func RecoveryActionsFor(class string, taskID string) []RecoveryAction {
 			},
 		)
 
+	case persistence.TaskFailureClassPromptTokenBudget,
+		persistence.TaskFailureClassOutputCap:
+		// A step limit, not money (permanent-failure design §10.2): the
+		// prompt-token budget is the step's, the output cap the role's max
+		// tokens or model. The fix is in the workflow/swarm, or a smaller task.
+		actions = append(actions,
+			RecoveryAction{
+				Label:   "Review workflow limits",
+				URL:     "/ui/workflows",
+				Method:  "GET",
+				Variant: "primary",
+				Tooltip: "A step limit stopped this task: raise the step's prompt-token budget or the role's max tokens, use another model, or split the task.",
+			},
+		)
+
 	case persistence.TaskFailureClassChildFailed:
 		// A delegated child failed. The parent's retry only makes
 		// sense after the child is investigated.

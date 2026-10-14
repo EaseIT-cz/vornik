@@ -74,7 +74,7 @@ func (c *Container) steeringNotifier() *steering.Notifier {
 	if c.repos.Messages != nil {
 		checkpoints = c.repos.Messages // enables decision-option buttons on steering prompts
 	}
-	return steering.New(
+	n := steering.New(
 		c.repos.ChatAudit,
 		&containerChannelResolver{c: c},
 		c.steeringTaskGetter(),
@@ -83,6 +83,8 @@ func (c *Container) steeringNotifier() *steering.Notifier {
 		enabled,
 		c.Logger.With().Str("component", "steering").Logger(),
 	)
+	n.SetAIDisclosure(c.AIDisclosure) // Art 50, GitHub #342
+	return n
 }
 
 // steeringTaskGetter returns the task repo the steering notifiers use to walk

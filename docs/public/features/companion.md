@@ -3,11 +3,11 @@ sources:
     - path: internal/api/companion_artifacts.go
       sha256: b5f389b1d084f5708807a7080bf034009dd78ec499487525e2ac4d3f38e0bbf8
     - path: internal/api/companion_mcp.go
-      sha256: 82a5bb28c6badcd8183855ab2d0341d6e22ffd33c4a8172cf5a30030710d9af4
+      sha256: f94d4e5d1dc786814d8f4ddb9cdd009419553d53a5152422e4cc80aea6aca7aa
     - path: contrib/claude-code-companion/.claude-plugin/plugin.json
-      sha256: 762d3242b030ff5e7b49dadc78e759f859227292c6616b30174f85a1f75c766c
+      sha256: 98d5cc4f38911b717bb44ed6dd3cf9ed48ec9d86f8ab30e7badac35825283936
     - path: contrib/codex-companion/.codex-plugin/plugin.json
-      sha256: be119c67f9653835b44a8d6ee14cb5be2b76cd3e555af11b1f063aaebe29ef61
+      sha256: e5d22fdccf70eede5989d980d2955cf301cd73693622476bad7bf5ca496844fa
 ---
 # Companion plugin
 
@@ -32,7 +32,7 @@ scoped key, so it never needs your admin credentials.
 
 ## The tools
 
-The companion exposes these MCP tools. Each refuses an argument it does not declare, naming it and the arguments it accepts, so a misspelt or unsupported argument is an error rather than silently ignored (daemons that advertise `companion-strict-args`).
+The companion exposes these MCP tools. Each refuses an argument it does not declare, naming it and the arguments it accepts, so a misspelt or unsupported argument is an error rather than silently ignored (daemons that advertise `companion-strict-args`). Two exceptions keep older `vornikctl bench` clients working: `recall` accepts and ignores `max_tokens` (a number), and `delegate` accepts `project` only when it names the key's own project, where the task runs anyway; any other `project` is refused. An argument sent twice in one call (`{"workflow":"a","workflow":"b"}`) is refused too, so the call that runs is always the call that is recorded.
 
 | Tool | Purpose |
 |------|---------|
@@ -45,7 +45,7 @@ The companion exposes these MCP tools. Each refuses an argument it does not decl
 | `whoami` | show this key's project, the repo scope your calls resolve to right now, the database this daemon writes (so a destructive tool can verify its target instead of trusting a name you typed), and this project's embedding readiness — how much of its memory is semantically searchable, plus the embed-queue depth, so a caller can wait for ingest to finish instead of querying a half-indexed corpus. Also reports the daemon's build revision and its resolved embedding model, which a benchmark needs to attribute a run to a release and to an embedding space. |
 | `report_problem` | build an anonymized problem report + prefilled issue URL for you to review and submit |
 | `delegate` | queue an async task on vornik; returns a task id and a poll hint. For a broker workflow that proposes no writes, `max_age_seconds` (up to 900) reuses your own run of the same workflow with the same inputs started at most that long ago, instead of running it again (`reused: true`, `as_of`) |
-| `status` | check a delegated task's status and attempt number; after a failed attempt it also names the step that failed and its error class, so you can see a retry is running. While the task runs it carries `progress`: the running step, its position (step 2 of 3) and when it started |
+| `status` | check a delegated task's status and attempt number; after a failed attempt it also names the step that failed and its error class, so you can see a retry is running. While the task runs it carries `progress`: the running step, its position (step 2 of 3) and when it started. A task held because an interrupted config change is waiting for the operator carries `paused`: the journal id, since when, and who resolves it (the operator, on their approver device or on the host; the assistant cannot) |
 | `task_logs` | read and follow a task's live log (steps, tool calls, attempts), redacted, page by page with a cursor; a call can wait up to 25 s for the next event, returns at most 64 KiB, and reports `complete` when the task has finished. A retried task moves to its newest attempt by itself |
 | `task_explain` | why a task failed: its failure class, each step's outcome, the failure-class playbook (cause and suggestions) and the last error, redacted. No model is called |
 | `daemon_log` | agent admin keys only: recent daemon log events about your own projects (task lifecycle, MCP connections): time, level, component, ids, the MCP server, a closed code such as `auth_rejected` for a refused connection, and the event's message when it is one of Vornik's own fixed messages. No free text from your tasks. At most the last hour |
@@ -53,8 +53,8 @@ The companion exposes these MCP tools. Each refuses an argument it does not decl
 | `result` | fetch a completed task's output inline; completed results include `execution_id` for retrieving that run's files; while the task runs, the same `progress` as `status` |
 | `list_artifacts` | list a completed run's permitted output files by `task_id` and `execution_id`; returns artifact IDs and metadata, never storage paths |
 | `read_artifact` | read a permitted output by task, execution and artifact ID; text inline, binary as a short-lived download URL |
-| `cancel` | cancel a task that hasn't finished: stops its running execution, so no further step runs and the project's next task can start |
-| `list` | list recent companion-created tasks for the project; an agent admin key may name another project of its own namespace with `project` (its slug or full id) |
+| `cancel` | cancel a task that hasn't finished, including one waiting on its child tasks or for input: stops its running execution, so no further step runs and the project's next task can start. A task awaiting approval is not cancelled here; it is approved or rejected |
+| `list` | list recent companion-created tasks for the project; an agent admin key may name another project of its own namespace with `project` (its slug or full id), or every project it can see with `project: "*"` (advertised as `companion-list-all-projects`) |
 | `catalog` | show which workflows this key may delegate to, with cost estimates and whether each can reach the network |
 | `skill_propose` | propose a knowledge skill (instructional know-how) as a draft (needs `skill_write`) |
 | `skill_search` | find active/trusted knowledge skills by scope, domain, role (needs `skill_read`) |
@@ -655,13 +655,32 @@ are exactly what needs restoring; the digest is a point-in-time list you have
 usually already acted on, and reprinting it would spend the context the
 compaction just freed. Run `/peek` if you want it back.
 
+Since plugin 0.44.0, the plugin also **nudges at the moment a code dive
+starts**.
+
+- On the third `Read`, `Grep` or `Glob` into one subsystem with no
+  successful `recall` in the last 15 minutes, Claude gets one line asking it
+  to recall that subsystem's design first. A subsystem is `internal/<name>`,
+  `src/<name>`, `cmd/<name>`, `pkg/<name>` or `contrib/<name>`.
+- The nudge fires at most once per subsystem per session.
+- It never blocks a tool call and makes no network call.
+- It stores only subsystem names and a timestamp in the plugin's data
+  directory.
+- Set `VORNIK_NUDGE=off` to turn it off. `VORNIK_NUDGE_THRESHOLD` and
+  `VORNIK_NUDGE_RECALL_WINDOW_S` tune it.
+- Codex gets the same nudge since codex-companion 0.41.0. Codex has no
+  file-read tool, so its hook reads the text of each shell command and counts
+  paths given to a read program (`cat`, `head`, `sed`, `rg`, `grep`, `find`,
+  `ls` and a few others). It parses the text and never runs it. Codex runs
+  the hook only after you trust it at the "Hooks need review" prompt.
+
 For Codex, install `codex-companion` from the bundled Codex marketplace at
 `<path>/.agents/plugins/marketplace.json`, or load the plugin directly from
 `<path>/contrib/codex-companion`. Do not install the Claude marketplace at
 `<path>/.claude-plugin/marketplace.json` into Codex; that package carries the
 Claude manifest and will not register the companion MCP server in Codex. The
-Codex plugin exposes the same MCP server and a Codex-native `delegate` skill,
-but no Claude-only slash commands or SessionStart hook. The bundled Codex MCP
+Codex plugin exposes the same MCP server, a Codex-native `delegate` skill and
+the recall nudge hook, but no Claude-only slash commands or SessionStart hook. The bundled Codex MCP
 entry targets `http://localhost:8080`; for a remote daemon, override the MCP
 entry locally:
 

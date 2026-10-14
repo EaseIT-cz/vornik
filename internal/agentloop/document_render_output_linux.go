@@ -5,6 +5,7 @@ package agentloop
 import (
 	"errors"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"syscall"
@@ -50,6 +51,23 @@ func writeRenderedDocument(root *os.Root, dst string, content []byte) error {
 			return writeErr
 		}
 		return closeErr
+	}
+	return nil
+}
+
+// isolateDocumentChild starts a renderer child in a fresh user and network
+// namespace: only a loopback interface, so pandoc and WeasyPrint are
+// network-off whatever the role's network mode (#339 §0.3). The helper's own
+// uid/gid map 1:1, so file ownership is unchanged. Where the kernel or seccomp
+// refuses an unprivileged user namespace the child fails to start and the
+// call reports it; there is no un-isolated fallback.
+func isolateDocumentChild(cmd *exec.Cmd) error {
+	uid, gid := os.Getuid(), os.Getgid()
+	cmd.SysProcAttr = &syscall.SysProcAttr{
+		Cloneflags:                 syscall.CLONE_NEWUSER | syscall.CLONE_NEWNET,
+		UidMappings:                []syscall.SysProcIDMap{{ContainerID: uid, HostID: uid, Size: 1}},
+		GidMappings:                []syscall.SysProcIDMap{{ContainerID: gid, HostID: gid, Size: 1}},
+		GidMappingsEnableSetgroups: false,
 	}
 	return nil
 }

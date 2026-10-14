@@ -12,6 +12,7 @@ import (
 	"vornik.io/vornik/internal/aidisclosure"
 	"vornik.io/vornik/internal/chat"
 	"vornik.io/vornik/internal/conversation"
+	"vornik.io/vornik/internal/ctxerr"
 	"vornik.io/vornik/internal/mediakind"
 	"vornik.io/vornik/internal/persistence"
 	"vornik.io/vornik/internal/registry"
@@ -91,7 +92,23 @@ type ChannelReceiver struct {
 	// the model authors (contrast internal/chat/parser.go:186). Nil disables the
 	// hook — a shared-scope write then never advances past PROPOSED.
 	MemoryWriteConfirmations persistence.ChatMemoryWriteConfirmationRepository
+
+	// TurnTimeout bounds a whole turn when the caller's context carries no
+	// deadline of its own (the email poll loop, the GitHub webhook). Zero
+	// means DefaultChannelTurnTimeout. A caller context that already has a
+	// deadline (UI, Telegram, Slack) is left alone. Outcome-quality LLD §S5
+	// #5, GitHub #142.
+	TurnTimeout time.Duration
 }
+
+// DefaultChannelTurnTimeout is the turn bound for a channel that sets none
+// and hands Receive a context without a deadline: 10m, the longest bound an
+// existing channel already chose (Slack's eventDispatchTimeout).
+const DefaultChannelTurnTimeout = 10 * time.Minute
+
+// errChannelTurnTimeout is the cause the receiver's own turn bound records,
+// so Receive can tell its own deadline from an inner call's.
+var errChannelTurnTimeout = errors.New("channel turn timeout")
 
 // DisclosureObserver receives Art 50 disclosure outcomes. Implemented by the
 // metrics layer; nil-safe at every call site.
@@ -207,6 +224,34 @@ func (r *ChannelReceiver) Receive(ctx context.Context, msg conversation.ChannelM
 	if r.Channel == nil {
 		return errors.New("dispatcher: ChannelReceiver.Channel is nil")
 	}
+
+	// Bound the whole turn when the caller did not (outcome-quality LLD §S5
+	// #5). Built per call, so every delivery attempt gets a fresh bound.
+	if _, has := ctx.Deadline(); !has {
+		limit := r.TurnTimeout
+		if limit <= 0 {
+			limit = DefaultChannelTurnTimeout
+		}
+		turnCtx, cancel := context.WithTimeoutCause(ctx, limit, errChannelTurnTimeout)
+		defer cancel()
+		if err := r.receive(turnCtx, msg); err != nil {
+			// Only this bound is the turn's deadline; an inner call that timed
+			// out inside a live turn stays an ordinary error.
+			if errors.Is(context.Cause(turnCtx), errChannelTurnTimeout) && ctx.Err() == nil {
+				if !errors.Is(err, context.DeadlineExceeded) {
+					err = fmt.Errorf("%w: %w", err, context.DeadlineExceeded)
+				}
+				return fmt.Errorf("%w (limit %s): %w", conversation.ErrTurnDeadline, limit, err)
+			}
+			return err
+		}
+		return nil
+	}
+	return r.receive(ctx, msg)
+}
+
+// receive is Receive's body, run under the turn's bound.
+func (r *ChannelReceiver) receive(ctx context.Context, msg conversation.ChannelMessage) error {
 
 	// ChannelSpecific is untrusted upstream metadata that rides back to
 	// the channel's Send; bound + strip it once here at ingest so every
@@ -473,6 +518,37 @@ func (r *ChannelReceiver) dispatch(ctx context.Context, sessionID string, req Re
 		}
 	}
 
+	// A FAILED TURN ENDS ITS PREVIEW WITH A NOTICE (GitHub #142 #20,
+	// outcome-quality LLD §S6). The partial text, or Telegram's "…"
+	// placeholder, already reached the user through onText; closing the
+	// stream without a word left it looking like a finished answer. The
+	// notice goes on the stream; if the stream is broken it goes out as one
+	// message, on a detached context because the turn's own may be the
+	// thing that ended.
+	if result.Err != nil {
+		notice := streamFailureNotice(ctx, result.Err, streamedText != "")
+		sendNotice := func() {
+			sendCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), streamFailureNoticeTimeout)
+			defer cancel()
+			r.sendReply(sendCtx, sessionID, strings.TrimSpace(notice))
+		}
+		if streamErr == nil {
+			streamErr = stream.Append(notice)
+		}
+		if streamErr != nil {
+			sendNotice()
+			_, _ = stream.Close()
+			return result
+		}
+		// A stream may buffer the append (Telegram coalesces edits), so the
+		// notice is shown only once Close's final edit succeeds. If that
+		// fails, send it as one message (review-20261013-383f #1).
+		if _, closeErr := stream.Close(); closeErr != nil {
+			sendNotice()
+		}
+		return result
+	}
+
 	_, closeErr := stream.Close()
 	if (streamErr != nil || closeErr != nil) && streamedText == "" {
 		// Stream finalisation failed — fall back to a one-shot Send
@@ -482,6 +558,36 @@ func (r *ChannelReceiver) dispatch(ctx context.Context, sessionID string, req Re
 		r.sendReply(ctx, sessionID, finalText)
 	}
 	return result
+}
+
+// streamFailureNoticeTimeout bounds the one-message fallback of the failure
+// notice, sent on a context detached from the (possibly ended) turn.
+const streamFailureNoticeTimeout = 15 * time.Second
+
+// streamFailureNotice is the line a failed streamed turn ends with. It says
+// that the reply failed and why, in terms the user can act on, and never
+// quotes the raw error (which can carry upstream bodies; the log has it).
+// partial says whether text was already shown above it.
+//
+// The cause comes from ctxerr.Classify on the turn's context: a finished
+// context means the turn itself ran out of time or was cancelled; a timeout
+// on a live context was one model call.
+func streamFailureNotice(ctx context.Context, err error, partial bool) string {
+	var why string
+	switch cause := ctxerr.Classify(ctx, err); {
+	case cause == ctxerr.Timeout && ctx.Err() != nil:
+		why = "this chat turn ran out its time limit"
+	case cause == ctxerr.Cancelled:
+		why = "the turn was cancelled"
+	case cause == ctxerr.Timeout:
+		why = "a model call timed out"
+	default:
+		why = "the model call failed"
+	}
+	if partial {
+		return "\n\n[This reply was cut off: " + why + ". The text above is incomplete; ask again to get a full answer.]"
+	}
+	return "[Sorry, I could not answer: " + why + ". Please try again.]"
 }
 
 // postprocess applies the optional ResultPostprocessor to the
@@ -522,40 +628,29 @@ func (r *ChannelReceiver) serveDisclosure(ctx context.Context, msg conversation.
 	// declare a coarser one — Slack's sessions are per-thread, but Art 50(1) is owed to
 	// a PERSON at their first interaction, not to each thread they open. The notice is
 	// still delivered to msg.SessionID below, because that is where they are reading.
+	// The scope resolution and the Ensure/send/Record sequence are the shared
+	// aidisclosure.Disclose primitive (design §11.4.2, GitHub #342), so a push
+	// outside this receiver and a turn through it agree on who was told.
 	sessionID := msg.SessionID
-	scope := sessionID
-	if scoper, ok := r.Channel.(conversation.DisclosureScoper); ok {
-		if declared := strings.TrimSpace(scoper.DisclosureScope(msg)); declared != "" {
-			scope = declared
-		}
-	}
-
-	notice, serve, err := r.Disclosure.Ensure(ctx, channel, scope)
+	_, err := r.Disclosure.Disclose(ctx, aidisclosure.Outbound{
+		Channel: channel,
+		Scope:   conversation.DisclosureScopeFor(r.Channel, msg),
+		SendNotice: func(ctx context.Context, text string) error {
+			_, sendErr := r.Channel.Send(ctx, conversation.ChannelMessage{
+				Source:    channel,
+				SessionID: sessionID,
+				Text:      text,
+			})
+			return sendErr
+		},
+		Served: func(c aidisclosure.Cadence) { r.observeDisclosureServed(channel, c.String()) },
+		Failed: func(stage string) { r.observeDisclosureFailure(channel, stage) },
+	})
 	if err != nil {
-		// Fail toward disclosure: serve is true on a read error.
-		r.observeDisclosureFailure(channel, "read")
-	}
-	if !serve {
-		return nil
-	}
-
-	if _, sendErr := r.Channel.Send(ctx, conversation.ChannelMessage{
-		Source:    channel,
-		SessionID: sessionID,
-		Text:      notice.Text,
-	}); sendErr != nil {
-		r.observeDisclosureFailure(channel, "send")
 		return fmt.Errorf(
 			"dispatcher: AI Act Art 50 disclosure could not be delivered on %s/%s; "+
 				"refusing to continue the turn undisclosed: %w",
-			channel, sessionID, sendErr)
-	}
-	r.observeDisclosureServed(channel, aidisclosure.CadencePerSession.String())
-
-	if recErr := r.Disclosure.Record(ctx, channel, scope, notice); recErr != nil {
-		// Already disclosed — the obligation is met. Only the Art 99
-		// evidence trail degraded, so observe it and carry on.
-		r.observeDisclosureFailure(channel, "write")
+			channel, sessionID, err)
 	}
 	return nil
 }
@@ -578,8 +673,9 @@ func (r *ChannelReceiver) disclosureFooter(text string) string {
 	r.observeDisclosureServed(channel, aidisclosure.CadencePerMessage.String())
 	// The "---" rule keeps the notice "clear and distinguishable from
 	// surrounding content" (Art 50(5)) as plain text, on every channel,
-	// without relying on markup a reader's client may not render.
-	return text + "\n\n---\n" + r.Disclosure.Notice().Text
+	// without relying on markup a reader's client may not render. Its one
+	// spelling is aidisclosure.WithFooter (design §11.4.2).
+	return aidisclosure.WithFooter(text, r.Disclosure.Notice())
 }
 
 func (r *ChannelReceiver) observeDisclosureServed(channel, cadence string) {

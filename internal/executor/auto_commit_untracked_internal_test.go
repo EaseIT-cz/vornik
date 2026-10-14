@@ -42,7 +42,7 @@ func TestAutoCommitTrackedChangesOnly_StagesUntrackedBacklogFile(t *testing.T) {
 	backlog := filepath.Join(dir, "BACKLOG.md")
 	require.NoError(t, os.WriteFile(backlog, []byte("- [ ] item\n"), 0o644))
 
-	autoCommitTrackedChangesOnly(context.Background(), dir, "task-1", backlog, zerolog.Nop())
+	autoCommitTrackedChangesOnly(context.Background(), dir, "task-1", backlog, nil, zerolog.Nop())
 
 	assert.Empty(t, strings.TrimSpace(gitStatusPorcelain(t, dir)),
 		"an untracked backlog file must be checkpointed, not left to block every later merge")
@@ -59,7 +59,7 @@ func TestAutoCommitTrackedChangesOnly_StagesOtherUntrackedInternalPaths(t *testi
 			dir := initGitRepoForTest(t)
 			require.NoError(t, os.WriteFile(filepath.Join(dir, name), []byte("x\n"), 0o644))
 
-			autoCommitTrackedChangesOnly(context.Background(), dir, "task-1", "", zerolog.Nop())
+			autoCommitTrackedChangesOnly(context.Background(), dir, "task-1", "", nil, zerolog.Nop())
 
 			dirty, detail := workspaceDirty(context.Background(), dir)
 			assert.False(t, dirty, "%s must not block the merge; dirty: %s", name, detail)
@@ -76,7 +76,7 @@ func TestAutoCommitTrackedChangesOnly_LeavesOperatorUntrackedFiles(t *testing.T)
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "BACKLOG.md"), []byte("- [ ] item\n"), 0o644))
 
 	autoCommitTrackedChangesOnly(context.Background(), dir, "task-1",
-		filepath.Join(dir, "BACKLOG.md"), zerolog.Nop())
+		filepath.Join(dir, "BACKLOG.md"), nil, zerolog.Nop())
 
 	status := gitStatusPorcelain(t, dir)
 	assert.Contains(t, status, "notes.txt",
@@ -94,7 +94,7 @@ func TestAutoCommitTrackedChangesOnly_NeverStagesWorktreesDir(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "BACKLOG.md"), []byte("- [ ] item\n"), 0o644))
 
 	autoCommitTrackedChangesOnly(context.Background(), dir, "task-1",
-		filepath.Join(dir, "BACKLOG.md"), zerolog.Nop())
+		filepath.Join(dir, "BACKLOG.md"), nil, zerolog.Nop())
 
 	out, err := exec.Command("git", "-C", dir, "ls-files").CombinedOutput()
 	require.NoError(t, err)
@@ -114,7 +114,7 @@ func TestAutoCommitTrackedChangesOnly_ExcludedPathStaysUncommitted(t *testing.T)
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "BACKLOG.md"), []byte("- [ ] item\n"), 0o644))
 
 	autoCommitTrackedChangesOnly(context.Background(), dir, "task-1",
-		filepath.Join(dir, "BACKLOG.md"), zerolog.Nop())
+		filepath.Join(dir, "BACKLOG.md"), nil, zerolog.Nop())
 
 	out, err := exec.Command("git", "-C", dir, "ls-files").CombinedOutput()
 	require.NoError(t, err)
@@ -129,7 +129,7 @@ func TestAutoCommitTrackedChangesOnly_BacklogOutsideRepoStagesNothing(t *testing
 	require.NoError(t, os.WriteFile(outside, []byte("- [ ] item\n"), 0o644))
 
 	assert.NotPanics(t, func() {
-		autoCommitTrackedChangesOnly(context.Background(), dir, "task-1", outside, zerolog.Nop())
+		autoCommitTrackedChangesOnly(context.Background(), dir, "task-1", outside, nil, zerolog.Nop())
 	})
 	out, err := exec.Command("git", "-C", dir, "ls-files").CombinedOutput()
 	require.NoError(t, err)
@@ -143,7 +143,7 @@ func TestAutoCommitTrackedChangesOnly_UntrackedBacklogLandsInCheckpointCommit(t 
 	backlog := filepath.Join(dir, "BACKLOG.md")
 	require.NoError(t, os.WriteFile(backlog, []byte("- [ ] item\n"), 0o644))
 
-	autoCommitTrackedChangesOnly(context.Background(), dir, "task-1", backlog, zerolog.Nop())
+	autoCommitTrackedChangesOnly(context.Background(), dir, "task-1", backlog, nil, zerolog.Nop())
 
 	out, err := exec.Command("git", "-C", dir, "log", "--format=%s", "-1").CombinedOutput()
 	require.NoError(t, err, "git log: %s", out)
@@ -163,7 +163,7 @@ func TestAutoCommitTrackedChangesOnly_StagesAwkwardBacklogNames(t *testing.T) {
 			backlog := filepath.Join(dir, name)
 			require.NoError(t, os.WriteFile(backlog, []byte("- [ ] item\n"), 0o644))
 
-			autoCommitTrackedChangesOnly(context.Background(), dir, "task-1", backlog, zerolog.Nop())
+			autoCommitTrackedChangesOnly(context.Background(), dir, "task-1", backlog, nil, zerolog.Nop())
 
 			dirty, detail := workspaceDirty(context.Background(), dir)
 			assert.False(t, dirty, "a quoted-path backlog file must still be checkpointed; dirty: %s", detail)
@@ -178,7 +178,7 @@ func TestAutoCommitTrackedChangesOnly_StagesBacklogInSubdirectory(t *testing.T) 
 	backlog := filepath.Join(dir, "docs", "BACKLOG.md")
 	require.NoError(t, os.WriteFile(backlog, []byte("- [ ] item\n"), 0o644))
 
-	autoCommitTrackedChangesOnly(context.Background(), dir, "task-1", backlog, zerolog.Nop())
+	autoCommitTrackedChangesOnly(context.Background(), dir, "task-1", backlog, nil, zerolog.Nop())
 
 	dirty, detail := workspaceDirty(context.Background(), dir)
 	assert.False(t, dirty, "a backlog file in a subdirectory must be checkpointed; dirty: %s", detail)
@@ -203,7 +203,7 @@ func TestAutoCommitTrackedChangesOnly_SplitsCheckpointAndRescueCommits(t *testin
 	backlog := filepath.Join(dir, "BACKLOG.md")
 	require.NoError(t, os.WriteFile(backlog, []byte("- [ ] item\n"), 0o644))
 
-	autoCommitTrackedChangesOnly(context.Background(), dir, "task-1", backlog, zerolog.Nop())
+	autoCommitTrackedChangesOnly(context.Background(), dir, "task-1", backlog, nil, zerolog.Nop())
 
 	subjects, err := exec.Command("git", "-C", dir, "log", "--format=%s", "-2").CombinedOutput()
 	require.NoError(t, err, "%s", subjects)
@@ -228,7 +228,7 @@ func TestAutoCommitTrackedChangesOnly_StagesNonDefaultBacklogName(t *testing.T) 
 	backlog := filepath.Join(dir, "NOTES.md")
 	require.NoError(t, os.WriteFile(backlog, []byte("- [ ] item\n"), 0o644))
 
-	autoCommitTrackedChangesOnly(context.Background(), dir, "task-1", backlog, zerolog.Nop())
+	autoCommitTrackedChangesOnly(context.Background(), dir, "task-1", backlog, nil, zerolog.Nop())
 
 	dirty, detail := workspaceDirty(context.Background(), dir)
 	assert.False(t, dirty, "a non-default backlog name must be checkpointed; dirty: %s", detail)
@@ -248,7 +248,7 @@ func TestAutoCommitTrackedChangesOnly_TrackedBacklogStillCheckpointed(t *testing
 	require.NoError(t, err, "%s", out)
 
 	require.NoError(t, os.WriteFile(backlog, []byte("- [x] one\n"), 0o644))
-	autoCommitTrackedChangesOnly(context.Background(), dir, "task-1", backlog, zerolog.Nop())
+	autoCommitTrackedChangesOnly(context.Background(), dir, "task-1", backlog, nil, zerolog.Nop())
 
 	dirty, detail := workspaceDirty(context.Background(), dir)
 	assert.False(t, dirty, "a tracked backlog modification must still be checkpointed; dirty: %s", detail)

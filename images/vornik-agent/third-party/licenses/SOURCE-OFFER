@@ -1,0 +1,83 @@
+Third-party components in the Vornik agent image, and where their source is
+===========================================================================
+
+This image contains programs that are not part of Vornik and are not covered
+by Vornik's licence. Each keeps its own licence; the texts and copyright
+notices are in the directories beside this file (/usr/share/licenses/).
+Vornik's own programs only run them as separate programs.
+
+1. The piper text-to-speech bundle, in /opt/piper
+-------------------------------------------------
+
+Release bundle: rhasspy/piper release 2023.11.14-2
+  https://github.com/rhasspy/piper/releases/tag/2023.11.14-2
+  piper_linux_x86_64.tar.gz  sha256 a50cb45f355b7af1f6d758c1b360717877ba0a398cc8cbe6d2a7a3a26e225992
+  piper_linux_aarch64.tar.gz sha256 fea0fd2d87c54dbc7078d0f878289f404bd4d6eea6e7444a77835d1537ab88eb
+The bundle is installed unmodified.
+
+It contains espeak-ng, licensed under GPL-3.0-or-later (licenses/espeak-ng/),
+dynamically linked with piper and piper-phonemize (MIT) and onnxruntime (MIT).
+
+The source code it was built from:
+
+  component        repository                 ref                commit
+  espeak-ng        rhasspy/espeak-ng          master (note)      0f65aa301e0d6bae5e172cc74197d32a6182200f
+  piper            rhasspy/piper              2023.11.14-2       38917ffd8c0e219c6581d73e07b30ef1d572fce1
+  piper-phonemize  rhasspy/piper-phonemize    2023.11.14-4       fccd4f335aa68ac0b72600822f34d84363daa2bf
+  onnxruntime      microsoft/onnxruntime      v1.14.1            c57cf374b67f72575546d7b4c69a1af4972e2b54
+  spdlog           gabime/spdlog              v1.12.0            7e635fca68d014934b4af8a1cf874f63989352b7
+  fmt              fmtlib/fmt                 10.0.0             a0b8a92e3d1532361c2f7feb63babc5c18d00ef2
+
+piper's build fetched piper-phonemize and espeak-ng from their default
+branches rather than from pinned commits. The two commits above are the
+branch heads at the time the 2023.11.14-2 release was built (2023-11-14; the
+espeak-ng commit itself is dated 2023-09-13), established from
+the repositories' history and checked against the bundle's own espeak-ng data
+files. The fmt 9.1.0 compiled into piper is the copy bundled inside spdlog
+(include/spdlog/fmt/bundled); fmt 10.0.0 is listed because piper's build
+fetches it. onnxruntime is listed at its tag's own tree; its git submodules
+(cmake/external) are not included and are named, at their pinned commits, by
+that tree's .gitmodules and cmake/deps.txt.
+
+Where to get it. Each repository above is public at
+https://github.com/<repository>/tree/<commit>. The same sources, as the
+unmodified GitHub archives of those commits with their sha256 checksums, are
+attached, free of charge, to every Vornik Community Edition release at
+https://github.com/EaseIT-cz/vornik/releases as
+
+  vornik-agent-third-party-source-piper-2023.11.14-2.tar
+
+One archive serves both architectures. It is produced by
+scripts/third-party-source-archive.sh in the Vornik Community Edition source
+(https://github.com/EaseIT-cz/vornik), which refuses an archive whose
+checksum differs.
+
+Earlier images. The archive is attached to release 2026.10.6 and later. It
+is also the corresponding source for the agent images distributed before it
+with the same bundle: releases 2026.9.7, 2026.9.8, 2026.10.1, 2026.10.2,
+2026.10.3, 2026.10.4 and 2026.10.5, and every agent image built from the
+main branch since 2026-09-26, when the bundle entered the image. All of them
+carry piper release 2023.11.14-2, the only release the image has used, so the
+archive above is their source too.
+
+Licences besides GPL-3.0-or-later and MIT. espeak-ng's getopt compatibility
+code is BSD-2-Clause (espeak-ng/COPYING.BSD2); espeak-ng/COPYING.APACHE and
+espeak-ng/COPYING.UCD are the upstream repository's other licence files.
+onnxruntime incorporates third-party components under their own licences,
+listed in onnxruntime/ThirdPartyNotices.txt. uni-algo, compiled into
+piper-phonemize, is public domain or MIT (piper-phonemize/uni-algo-LICENSE.md).
+
+2. whisper.cpp, in /usr/local/bin/whisper-cli
+---------------------------------------------
+
+Built from https://github.com/ggml-org/whisper.cpp at commit
+48f628a84833905ee4a0658ee6d4a5c915ce1997 (v1.8.7). MIT licence
+(licenses/whisper.cpp/).
+
+3. Everything else
+------------------
+
+The operating system packages come from Ubuntu 24.04; their copyright files
+are in /usr/share/doc/<package>/copyright and their source is in the Ubuntu
+archive (apt-get source <package>). The Go toolchain in /usr/local/go carries
+its own LICENSE.

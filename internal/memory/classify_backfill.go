@@ -45,10 +45,11 @@ type ClassifyBackfiller struct {
 	//
 	// Advancing by the number skipped walks past them, so every classifiable row
 	// is reached. It resets on an empty page so newly-ingested rows are picked up.
-	// Not persisted: a restart re-walks from the oldest, which costs one wasted
-	// page and is self-correcting. The complete fix is a durable per-row
-	// "attempted" marker, which needs a migration (Enterprise tracker issue
-	// #330).
+	// Not persisted, and since 2026-10-13 (#330) it no longer needs to be for
+	// abstentions: those are stamped classify_attempted_at and the auto-loop's
+	// query skips them for ClassifyRetryAfter. The cursor now only walks past
+	// rows that STAY in that query (LLM errors, failed stamps); a restart
+	// re-asks those, which is correct for transient failures.
 	offset int
 
 	// projectOffsets is the equivalent cursor for operator-driven,
@@ -61,6 +62,13 @@ type ClassifyBackfiller struct {
 	projectLocks   map[string]*sync.Mutex
 	projectOffsets map[string]int
 }
+
+// ClassifyRetryAfter is how long the cross-project auto-loop leaves a row the
+// model abstained on before asking again (#330; rag-ingest pipeline LLD,
+// "Change, 2026-10-13"). Not "never": a changed model, prompt or role map can
+// make an abstention classifiable, and a week bounds the re-ask cost at one
+// call per abstained row per week.
+const ClassifyRetryAfter = 7 * 24 * time.Hour
 
 // ClassifyBackfillResult summarises one BackfillBatch call. Same
 // shape as title-backfill's BackfillResult so the operator UI can
@@ -278,7 +286,7 @@ func (b *ClassifyBackfiller) BackfillBatchAcrossProjects(ctx context.Context, ba
 		// ambiguous. Counted as skipped so the operator sees how many
 		// rows neither path could resolve.
 		if class == "" || class == ClassUnclassified {
-			out.Skipped++
+			b.recordAbstention(ctx, out, row)
 			continue
 		}
 		policy := DefaultClassPolicies[class]
@@ -299,27 +307,46 @@ func (b *ClassifyBackfiller) BackfillBatchAcrossProjects(ctx context.Context, ba
 	} else {
 		out.Remaining = remaining
 	}
-	b.offset = nextCursor(b.offset, out)
+	// Stamped abstentions leave this sweep's query (#330), so only the rows
+	// that stay — Failed — are walked past.
+	b.offset = nextCursor(b.offset, out, out.Failed)
 	return out, nil
 }
 
+// recordAbstention stamps a row the model abstained on (#330) and counts it.
+// A stamp that does not persist leaves the row in the auto-loop's query, so it
+// is counted Failed — which is what the cross-project cursor walks past.
+func (b *ClassifyBackfiller) recordAbstention(ctx context.Context, out *ClassifyBackfillResult, row ClassifyBackfillRow) {
+	if err := b.Repo.MarkClassifyAttempted(ctx, row.ID); err != nil {
+		out.Failed++
+		if len(out.Errors) < 5 {
+			out.Errors = append(out.Errors, fmt.Sprintf("%s: stamp attempted: %v", row.ID, err))
+		}
+		b.Logger.Warn().Err(err).Str("chunk_id", row.ID).Str("project_id", row.ProjectID).
+			Msg("classify backfill: stamping an abstention failed")
+		return
+	}
+	out.Skipped++
+}
+
 // nextCursor is the sweep cursor after a batch, shared by both sweeps
-// (rag-ingest pipeline design, correction 2026-09-26). Any success resets it,
-// because updated rows leave the unclassified set and shift the offsets. A
-// batch that classified nothing advances past what it examined, so a page
-// nothing can place cannot block the rows behind it (the 2026-07-30
-// livelock). A PAUSED batch did not put its rows to the model, so the cursor
-// stays put rather than hiding them for a cycle.
-func nextCursor(offset int, out *ClassifyBackfillResult) int {
+// (rag-ingest pipeline design, correction 2026-09-26; amended 2026-10-13,
+// #330). Any success resets it, because updated rows leave the unclassified
+// set and shift the offsets. A batch that classified nothing advances past
+// the rows it examined that are STILL in its query (stayed), so a page nothing
+// can place cannot block the rows behind it (the 2026-07-30 livelock): that is
+// Processed for the per-project sweep, whose query keeps stamped rows, and
+// Failed for the cross-project sweep, whose query drops them. A PAUSED batch
+// did not put its rows to the model, so the cursor stays put rather than
+// hiding them for a cycle.
+func nextCursor(offset int, out *ClassifyBackfillResult, stayed int) int {
 	switch {
 	case out.Succeeded > 0:
 		return 0
 	case out.Paused:
 		return offset
-	case out.Processed > 0:
-		return offset + out.Processed
 	default:
-		return offset
+		return offset + stayed
 	}
 }
 
@@ -401,7 +428,7 @@ func (b *ClassifyBackfiller) BackfillBatch(ctx context.Context, projectID string
 		// ambiguous. Counted as skipped so the operator sees how many
 		// chunks neither path resolved.
 		if class == "" || class == ClassUnclassified {
-			out.Skipped++
+			b.recordAbstention(ctx, out, row)
 			continue
 		}
 		policy := DefaultClassPolicies[class]
@@ -427,7 +454,7 @@ func (b *ClassifyBackfiller) BackfillBatch(ctx context.Context, projectID string
 	// Deletions from successful updates shift the SQL offset. Restarting after
 	// any success is conservative but correct; advancing after a no-progress
 	// batch is what reaches rows that all preceding abstentions would hide.
-	b.projectOffsets[projectID] = nextCursor(offset, out)
+	b.projectOffsets[projectID] = nextCursor(offset, out, out.Processed)
 	return out, nil
 }
 

@@ -17,7 +17,8 @@ cleanup() { chmod -R u+rwx "$tmp" 2>/dev/null || true; rm -rf "$tmp"; }
 trap cleanup EXIT
 
 if [ "$(id -u)" = 0 ]; then
-  echo "skip - running as root: permission bits do not deny, so the preflight cannot be exercised"
+  # A skip, in CI too, and counted as one by test-agent-shell (operator decision 2026-10-14, #334 item 6).
+  echo "SKIP: test-entrypoint-mount-preflight: running as root: permission bits do not deny root, so the preflight cannot be exercised; it runs on any host where the tests are not root, the CI runners included"
   exit 0
 fi
 
@@ -52,7 +53,10 @@ run_preflight() {
     fail "$1: rc=$rc, want $2 (out: $out)"
     return
   fi
-  if [ -n "${3:-}" ] && ! printf '%s' "$out" | grep -qF "$3"; then
+  # A here-string, not a pipe: under pipefail grep -q exiting on its match
+  # can SIGPIPE printf and fail the pipeline (2026-10-14, the same false
+  # negative as test-entrypoint-unknown-tool-refusal.sh's contains).
+  if [ -n "${3:-}" ] && ! grep -qF -- "$3" <<<"$out"; then
     fail "$1: message does not name $3 (out: $out)"
     return
   fi

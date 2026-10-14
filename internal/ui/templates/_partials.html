@@ -172,6 +172,11 @@
                             800: 'rgb(var(--ink-800) / <alpha-value>)',
                             900: 'rgb(var(--ink-900) / <alpha-value>)'
                         },
+                        // Form-control boundary (WCAG 1.4.11, >= 3:1 on every
+                        // surface; ui-design-refresh-design.md §11.3). Use
+                        // `border border-control` on inputs/selects/textareas
+                        // and toggle groups, never a surface-* border.
+                        control: 'rgb(var(--control-border) / <alpha-value>)',
                         // Primary brand — varies per theme.
                         brand: {
                             50:  'rgb(var(--brand-50) / <alpha-value>)',
@@ -412,6 +417,9 @@
             --ink-700: 211 214 219; /* #D3D6DB */
             --ink-800: 232 233 236; /* #E8E9EC */
             --ink-900: 243 244 246; /* #F3F4F6 */
+            /* Form-control boundary: >= 3:1 vs page, card, raised and glass
+               (WCAG 1.4.11; design §11.3). Binding pair: page, 3.04:1. */
+            --control-border: 134 141 152; /* #868D98 */
             /* Brand — EaseIT blue (role-ordered, see above) */
             --brand-50: 11 52 90;  /* #0B345A */
             --brand-100: 14 67 116; /* #0E4374 */
@@ -454,6 +462,9 @@
             --ink-700: 55 65 81;  /* #374151 */
             --ink-800: 31 41 55;  /* #1F2937 */
             --ink-900: 11 14 19;  /* #0B0E13 */
+            /* Form-control boundary: >= 3:1 vs page, card, raised and glass
+               (WCAG 1.4.11; design §11.3). Binding pair: glass over card, 3.03:1. */
+            --control-border: 121 129 140; /* #79818C */
             /* Brand — EaseIT blue (400 is text only: white on it is 2.7:1) */
             --brand-50: 238 245 252; /* #EEF5FC */
             --brand-100: 214 232 250; /* #D6E8FA */
@@ -784,14 +795,18 @@
             -webkit-backdrop-filter: blur(var(--glass-blur));
             box-shadow: var(--glass-shadow), var(--glass-inner);
         }
-        /* Fallback: no backdrop-filter support → near-opaque surface. */
+        /* Fallback: no backdrop-filter support → near-opaque CARD surface.
+           Not --glass-bg: that is white in both themes (a veil), so dark
+           glass turned near-white under light text (ink-100 1.03:1). The
+           card colour is white in light (unchanged) and the dark card in
+           dark, so every pair pinned on surface-800 holds (design §11.4 a). */
         @supports not (backdrop-filter: blur(1px)) {
-            .glass { background: rgb(var(--glass-bg) / 0.92); }
+            .glass { background: rgb(var(--surface-800) / 0.92); }
         }
         /* Accessibility: respect reduced-transparency by dropping the blur. */
         @media (prefers-reduced-transparency: reduce) {
             .glass {
-                background: rgb(var(--glass-bg) / 0.96);
+                background: rgb(var(--surface-800) / 0.96); /* see fallback above */
                 backdrop-filter: none;
                 -webkit-backdrop-filter: none;
             }
@@ -1284,7 +1299,7 @@
 {{define "commandPalette"}}
 <dialog id="palette" class="rounded-xl border border-dark-700 bg-dark-800 backdrop:bg-black/50 backdrop:backdrop-blur-sm w-[90vw] max-w-2xl p-0 text-gray-100"
         aria-label="Command palette">
-    <div class="flex items-center gap-2 px-4 py-3 border-b border-dark-700">
+    <div class="flex items-center gap-2 px-4 py-3 border-b border-control">
         <svg class="h-4 w-4 text-gray-500" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" d="M21 21l-5.2-5.2M17 11a6 6 0 11-12 0 6 6 0 0112 0z"/></svg>
         <input id="palette-input" type="search" autocomplete="off" placeholder="Search tasks, projects, actions…"
                aria-label="Search tasks, projects, actions"
@@ -1489,7 +1504,7 @@ sortHeader renders a sortable <th>. Expects a dict:
     <label for="page-size-{{$param}}" class="text-gray-500 uppercase tracking-wider">Show</label>
     <select id="page-size-{{$param}}" name="{{$param}}"
             onchange="this.form.submit()"
-            class="bg-dark-700 border border-dark-600 text-gray-200 text-xs rounded-md px-2 py-1 hover:bg-dark-600 focus:border-brand-500 focus:outline-none">
+            class="bg-dark-700 border border-control text-gray-200 text-xs rounded-md px-2 py-1 hover:bg-dark-600 focus:border-brand-500 focus:outline-none">
         {{$cur := .Current}}
         {{range $val := .Options}}
         <option value="{{$val}}" {{if eq $val $cur}}selected{{end}}>{{$val}}</option>

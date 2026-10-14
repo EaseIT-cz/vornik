@@ -75,6 +75,19 @@ func (s *Store) lockFor(projectID string) *sync.Mutex {
 	return v.(*sync.Mutex)
 }
 
+// WithLock runs fn while holding projectID's mutex, the one every Store
+// mutation takes. For a reader outside the Store that must not observe a
+// half-written file: every write here is os.WriteFile (truncate + write).
+// The executor's failed-terminal backlog checkpoint commits the file under it
+// (workspace-state hygiene design §4.2b, 2026-10-12). fn must not call back
+// into the Store for the same project (the mutex is not reentrant).
+func (s *Store) WithLock(projectID string, fn func()) {
+	mu := s.lockFor(projectID)
+	mu.Lock()
+	defer mu.Unlock()
+	fn()
+}
+
 // Append adds a new proposed item ("- [?] <itemText>") to the end of
 // path, creating the file with FormatHeader if it doesn't exist yet.
 // itemText must not contain a newline — flattening multi-line

@@ -93,6 +93,7 @@ import (
 	"vornik.io/vornik/internal/config"
 	"vornik.io/vornik/internal/configrecon"
 	"vornik.io/vornik/internal/contracts"
+	"vornik.io/vornik/internal/controlplane"
 	"vornik.io/vornik/internal/dispatcher"
 	"vornik.io/vornik/internal/email"
 	"vornik.io/vornik/internal/executor"
@@ -161,7 +162,11 @@ type Container struct {
 	// agentAdminSvc is built by agentAdmin on its first success (agent
 	// admin verbs, §6); agentAdminMu guards it, agentAdminWarned paces the
 	// warning while the templates are missing.
-	agentAdminSvc     *agentAdminService
+	agentAdminSvc *agentAdminService
+	// agentRefusals is the refusal ledger (design §23.2), built once by
+	// agentRefusalLedger and shared by the API and the assistants page.
+	agentRefusals     *api.AgentRefusalLedger
+	agentRefusalsOnce sync.Once
 	agentAdminMu      sync.Mutex
 	agentAdminWarned  time.Time
 	secretStoreMu     sync.Mutex
@@ -665,7 +670,16 @@ type Container struct {
 	configWriterElector *leaderelection.Elector
 	configWriterOnce    sync.Once
 	configWriterRunOnce sync.Once
-	remindersElector    *leaderelection.Elector
+	// journalCardSweepOnce starts the config journal card sweep once
+	// (GitHub #302).
+	journalCardSweepOnce sync.Once
+	// journalCardResolveOverride replaces the engine's ResolveJournal in the
+	// config journal card effect; tests only (nil in production).
+	journalCardResolveOverride func(ctx context.Context, id, mode, actor string) (*controlplane.ResolveResult, error)
+	// journalCardAfterFile runs after the OnDrift hook's asynchronous filing;
+	// tests only (nil in production).
+	journalCardAfterFile func(journalID string)
+	remindersElector     *leaderelection.Elector
 	// Slice 2 — periodic janitor for ratelimit_counters when the
 	// postgres backend is selected. Idempotent sweeper; leader-
 	// elected so multi-replica deployments only run one query per
@@ -731,6 +745,15 @@ type Container struct {
 	buildDate string
 
 	providers ProviderSet
+
+	// runtimeManagerOptions are appended after the config-derived options
+	// when initScheduler builds the runtime manager, so they win. Set only by
+	// WithRuntimeManagerOptions; the daemon passes none.
+	runtimeManagerOptions []runtime.ManagerOption
+
+	// databaseOpener replaces storage.Open in initDatabase. Set only by
+	// WithDatabaseOpener; the daemon passes none (openDatabase).
+	databaseOpener func(context.Context, config.DatabaseConfig) (*storage.Backend, error)
 
 	// adminCapabilityLogged is set to true after the first
 	// initHTTPServer pass emits the capability="admin" log line.
@@ -1332,11 +1355,7 @@ func NewContainer(cfg *config.Config, configPath string, opts ...ContainerOption
 			}
 			skip := cbCfg.SkipClasses
 			if len(skip) == 0 {
-				skip = []string{
-					persistence.TaskFailureClassCancelled,
-					persistence.TaskFailureClassBudgetBlocked,
-					persistence.TaskFailureClassRateLimited,
-				}
+				skip = defaultCircuitBreakerSkipClasses()
 			}
 			cb := executor.NewCircuitBreakerForExecutor(c.repos.Tasks, c.Registry, c.TelegramBot, threshold, window, skip,
 				c.Logger.With().Str("component", "circuit_breaker").Logger())
@@ -2142,6 +2161,10 @@ func (c *Container) Run(ctx context.Context) error {
 	if err := c.ReconcileConfigApplyJournal(ctx); err != nil {
 		c.Logger.Error().Err(err).Msg("config apply journal reconciliation reported unresolved rows; affected config may be mid-apply — inspect before approving further changes")
 	}
+	// Every DRIFT row has its approver-device card, and a card whose row
+	// was resolved is withdrawn: now, and every five minutes (config-apply
+	// journal design §13.3, GitHub #302).
+	c.StartJournalCardSweep(ctx)
 
 	if c.capabilities().RunWorkers {
 		// Chat-provider readiness gate. Before the scheduler starts

@@ -1,6 +1,6 @@
 ---
 description: Propose a knowledge skill (instructional know-how) into vornik's skill store as a draft
-allowed-tools: mcp__vornik__skill_propose
+allowed-tools: mcp__plugin_vornik-companion_vornik__skill_propose
 argument-hint: <skill name + what it captures>
 ---
 
@@ -14,7 +14,7 @@ operator approves it, is served to vornik swarm roles and every companion
 client. It is NOT a `SWARM-SKILL.md` capability bundle (workflow + roles) and
 is unrelated to RAG memory — use `/remember` for facts, this for procedures.
 
-Call `mcp__vornik__skill_propose` with:
+Call `mcp__plugin_vornik-companion_vornik__skill_propose` with:
 
 - `name` — a kebab-case slug (e.g. `trace-bedrock-model-hang`). Unique within
   the repo scope.

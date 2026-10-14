@@ -33,18 +33,20 @@ regardless of whether a task was created; the outcome tells you why.
 Common outcomes:
   CREATED           task successfully enqueued
   NO_ACTION         lead decided no work needed
-  ACTIVE_TASKS      tick skipped because tasks were still running
+  ACTIVE_TASKS      tick skipped: tasks still running, queued or awaiting approval (the reason counts them)
   RATE_LIMITED      project or config per-minute / per-hour cap hit
   BUDGET_BLOCKED    project over its daily / monthly hard cap
-  LLM_ERROR         chat provider failed
+  LLM_ERROR         chat provider failed (an error answer: check the model's health)
+  LLM_TIMEOUT       the model call timed out: raise evaluate_timeout or chat.timeout, or use a faster model
   PARSE_ERROR       LLM response unparseable as a task
   WORKFLOW_INVALID  workflow or role mismatch (common n8n-agents bug class)
   TYPE_REJECTED     LLM picked a task type outside allowedTaskTypes
-  CIRCUIT_OPEN      too many recent failures — breaker tripped
+  CIRCUIT_OPEN      too many recent failures or cancels — breaker tripped
   DUPLICATE         same prompt as a recent task
   COOLDOWN          same prompt failed multiple times recently
   IDEMPOTENCY_HIT   identical idempotency key already present
   DB_ERROR          task persistence layer failed
+  LEADER_FENCED     another daemon holds the autonomy leader epoch; this one skipped the write
   ABORTED           eval cancelled by loop reload/shutdown (benign teardown)`,
 		RunE: runAutonomyEvaluations,
 	}

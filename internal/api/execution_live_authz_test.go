@@ -17,13 +17,9 @@ import (
 	"vornik.io/vornik/internal/registry"
 )
 
-// fastTerminalCheck shortens the stream re-check interval for one test.
-func fastTerminalCheck(t *testing.T) {
-	t.Helper()
-	orig := liveTerminalCheckEvery
-	liveTerminalCheckEvery = 50 * time.Millisecond
-	t.Cleanup(func() { liveTerminalCheckEvery = orig })
-}
+// fastTerminalCheck shortens the stream re-check interval on one test's own
+// server; no test writes a package variable (GitHub #364).
+var fastTerminalCheck = WithLiveTerminalCheckInterval(50 * time.Millisecond)
 
 // expectClosedNotFound reads until the server closes the socket and checks it
 // closed as NOT_FOUND (policy violation), not by the client or a timeout.
@@ -47,8 +43,7 @@ func expectClosedNotFound(t *testing.T, conn *websocket.Conn) {
 // socket was authorised only at entry. When the execution's project moves out
 // of the key's coverage mid-stream, the stream closes as NOT_FOUND.
 func TestExecutionLive_AgentStreamClosesWhenProjectReassigned(t *testing.T) {
-	fastTerminalCheck(t)
-	h := newLiveAgentHarness(t)
+	h := newLiveAgentHarness(t, fastTerminalCheck)
 	h.addExec("exec-a", "alpha", persistence.ExecutionStatusRunning)
 	raw, _ := seedCompanionKey(t, h.keyRepo, "alpha", nil)
 	conn, _, err := h.dial(t, "exec-a", raw)
@@ -65,8 +60,7 @@ func TestExecutionLive_AgentStreamClosesWhenProjectReassigned(t *testing.T) {
 // review-20261008-f680 finding 1 (HIGH), GitHub #92 (2026-10-08): a key
 // revoked mid-stream loses the stream on the next re-check.
 func TestExecutionLive_AgentStreamClosesWhenKeyRevoked(t *testing.T) {
-	fastTerminalCheck(t)
-	h := newLiveAgentHarness(t)
+	h := newLiveAgentHarness(t, fastTerminalCheck)
 	h.addExec("exec-a", "alpha", persistence.ExecutionStatusRunning)
 	raw, _ := seedCompanionKey(t, h.keyRepo, "alpha", nil)
 	conn, _, err := h.dial(t, "exec-a", raw)

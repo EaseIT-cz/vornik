@@ -131,7 +131,7 @@
                         <div class="flex flex-wrap items-center gap-3">
                             <label class="text-xs text-gray-400 flex items-center gap-2">
                                 Producer role:
-                                <select id="pipe-role" name="producer_role" class="bg-dark-700 border border-dark-600 rounded px-2 py-1 text-xs text-gray-200">
+                                <select id="pipe-role" name="producer_role" class="bg-dark-700 border border-control rounded px-2 py-1 text-xs text-gray-200">
                                     {{range .ProducerRoles}}
                                     <option value="{{.}}">{{.}}</option>
                                     {{end}}
@@ -139,11 +139,11 @@
                             </label>
                             <label class="text-xs text-gray-400 flex items-center gap-2">
                                 Source name:
-                                <input type="text" id="pipe-source" name="source_name" value="inspect.md" class="bg-dark-700 border border-dark-600 rounded px-2 py-1 text-xs text-gray-200 w-40"/>
+                                <input type="text" id="pipe-source" name="source_name" value="inspect.md" class="bg-dark-700 border border-control rounded px-2 py-1 text-xs text-gray-200 w-40"/>
                             </label>
                             <button type="submit" class="ml-auto px-3 py-1 bg-brand-600 hover:bg-brand-500 rounded text-xs text-white">Run gates ▶</button>
                         </div>
-                        <textarea id="pipe-content" name="content" rows="6" placeholder="Paste a chunk's content here…" class="w-full bg-dark-900 border border-dark-700 rounded p-2 text-xs text-gray-200 font-mono"></textarea>
+                        <textarea id="pipe-content" name="content" rows="6" placeholder="Paste a chunk's content here…" class="w-full bg-dark-900 border border-control rounded p-2 text-xs text-gray-200 font-mono"></textarea>
                     </form>
                     {{else}}
                     <p class="text-sm text-gray-500">Pipeline dry-runner not configured for this deployment.</p>
@@ -515,7 +515,7 @@
                 <div class="px-5 py-4 border-b border-dark-700/60">
                     <form id="mem-search-form" class="flex flex-wrap items-center gap-2">
                         <input type="search" id="mem-search-q" placeholder="e.g. &quot;World News&quot;, &quot;Alfie the Dog&quot;, or &quot;The Prague Castle&quot;"
-                            class="flex-1 min-w-[260px] bg-dark-900 border border-dark-700 rounded px-3 py-1.5 text-sm text-gray-200"
+                            class="flex-1 min-w-[260px] bg-dark-900 border border-control rounded px-3 py-1.5 text-sm text-gray-200"
                             autocomplete="off" />
                         {{if .RepoScopes}}
                         <!-- B-6 scope picker. Pinned uncategorized at top (operators
@@ -526,7 +526,7 @@
                              "match every chunk regardless of scope". -->
                         <label class="text-xs text-gray-400 flex items-center gap-2">
                             Scope:
-                            <select id="mem-search-scope" class="bg-dark-700 border border-dark-600 rounded px-2 py-1 text-xs text-gray-200 max-w-[260px]">
+                            <select id="mem-search-scope" class="bg-dark-700 border border-control rounded px-2 py-1 text-xs text-gray-200 max-w-[260px]">
                                 <option value="">All scopes</option>
                                 {{range .RepoScopes}}
                                 <option value="{{.Scope}}">{{if .Scope}}{{.Scope}}{{else}}&lt;uncategorized&gt;{{end}} ({{.Chunks}})</option>
@@ -536,7 +536,7 @@
                         {{end}}
                         <label class="text-xs text-gray-400 flex items-center gap-2">
                             Limit:
-                            <select id="mem-search-limit" class="bg-dark-700 border border-dark-600 rounded px-2 py-1 text-xs text-gray-200">
+                            <select id="mem-search-limit" class="bg-dark-700 border border-control rounded px-2 py-1 text-xs text-gray-200">
                                 <option value="10">10</option>
                                 <option value="20" selected>20</option>
                                 <option value="30">30</option>
@@ -1535,20 +1535,20 @@
                         <label class="block text-xs font-medium text-gray-300 mb-1.5" for="evict-chunks">Chunk IDs</label>
                         <textarea id="evict-chunks" name="chunks" rows="3" required
                                   placeholder="mc_abc123, mc_def456&#10;or one per line"
-                                  class="w-full px-3 py-2 text-xs font-mono rounded-lg bg-dark-900 border border-dark-700 focus:border-rose-500 focus:outline-none text-gray-200"></textarea>
+                                  class="w-full px-3 py-2 text-xs font-mono rounded-lg bg-dark-900 border border-control focus:border-rose-500 focus:outline-none text-gray-200"></textarea>
                         <p class="text-[11px] text-gray-500 mt-1">Comma- or newline-separated. Paste from the search panel or <code class="text-gray-400">vornikctl memory search</code>.</p>
                     </div>
                     <div>
                         <label class="block text-xs font-medium text-gray-300 mb-1.5" for="evict-reason">Reason (audit row)</label>
                         <input type="text" id="evict-reason" name="reason"
                                placeholder='GDPR DSAR 2026-05-20-12 / "operator: confirmed wrong ticker"'
-                               class="w-full px-3 py-2 text-xs rounded-lg bg-dark-900 border border-dark-700 focus:border-rose-500 focus:outline-none text-gray-200">
+                               class="w-full px-3 py-2 text-xs rounded-lg bg-dark-900 border border-control focus:border-rose-500 focus:outline-none text-gray-200">
                         <p class="text-[11px] text-gray-500 mt-1">Recorded verbatim on every <code class="text-gray-400">memory_eviction_audit</code> row. GDPR Art 30 ROPA hook.</p>
                     </div>
                     <div class="flex items-center justify-between gap-3 pt-2 border-t border-dark-700/40">
                         <label class="inline-flex items-center gap-2 text-xs text-gray-300">
                             <input type="checkbox" name="confirm" value="yes" required
-                                   class="form-checkbox h-3.5 w-3.5 rounded border-dark-600 bg-dark-700 text-rose-800 dark:text-rose-500 focus:ring-rose-500">
+                                   class="form-checkbox h-3.5 w-3.5 rounded border-control bg-dark-700 text-rose-800 dark:text-rose-500 focus:ring-rose-500">
                             I understand this is destructive and irreversible.
                         </label>
                         <button type="submit"

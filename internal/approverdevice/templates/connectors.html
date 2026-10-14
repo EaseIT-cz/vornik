@@ -1,0 +1,79 @@
+{{define "connectors.html"}}{{template "head" (page "Connectors" 0)}}
+{{template "nav" "connectors"}}
+<h1>Connectors</h1>
+<p class="mut">Read-only connections Vornik ships, each reviewed before release. Pick one to let an assistant read that service; you choose where, which account, and enter its key here. Nothing it reads is changed or sent anywhere else.</p>
+{{range .Connectors}}<div class="card">
+<p><strong>{{.Title}}</strong></p>
+{{range .Reads}}<p>Reads {{.Reads}} through {{.Host}}, with exactly: {{range $i, $t := .Tools}}{{if $i}}, {{end}}<code>{{$t}}</code>{{end}}.</p>{{end}}
+<p class="mut">Returns {{.ReturnsPlain}}.</p>
+{{with .Returns}}<details><summary class="mut">Every field it returns</summary><ul>{{range .}}<li>{{.}}</li>{{end}}</ul></details>{{end}}
+{{with .Installed}}<p class="mut">Installed: {{range $i, $x := .}}{{if $i}}; {{end}}{{$x}}{{end}}.</p>{{end}}
+<a class="act" href="/ui/approve/connectors/{{.Name}}">Set up {{.Title}}</a>
+</div>
+{{else}}<div class="card"><p class="mut">No connectors are offered on this daemon yet. Your assistant can still connect a service for you; you approve each step here.</p></div>{{end}}
+{{template "foot"}}{{end}}
+
+{{define "connector.html"}}{{template "head" (page .Connector.Title 0)}}
+{{template "nav" "connectors"}}
+<h1>{{.Connector.Title}}</h1>
+{{range .Connector.Reads}}<p>Reads {{.Reads}} through {{.Host}}, with exactly: {{range $i, $t := .Tools}}{{if $i}}, {{end}}<code>{{$t}}</code>{{end}}.</p>{{end}}
+<div class="card">
+<form method="get" action="/ui/approve/connectors/{{.Connector.Name}}">
+<p><label>Assistant <select name="namespace">{{range .Namespaces}}<option value="{{.Name}}"{{if eq .Name $.Choice.Namespace}} selected{{end}}>{{.Name}}</option>{{end}}</select></label></p>
+<p><label>Project <select name="project">{{range $ns := .Namespaces}}{{range .Projects}}<option value="{{.}}"{{if and (eq $ns.Name $.Choice.Namespace) (eq . $.Choice.Project)}} selected{{end}}>{{$ns.Name}}: {{.}}</option>{{end}}{{end}}<option value="{{.Connector.Name}}"{{if eq .Connector.Name .Choice.Project}} selected{{end}}>a new project: {{.Connector.Name}}</option></select></label></p>
+<p><label>Account <input type="text" name="account" value="{{.Choice.Account}}" placeholder="default" style="text-transform:none;letter-spacing:0"></label></p>
+<p class="mut">Name the account (work, personal) when you connect more than one at this provider.</p>
+{{range .Connector.Variables}}<p><label>{{.Name}} {{if .Values}}<select name="var_{{.Name}}">{{$cur := index $.Choice.Variables .Name}}{{$def := .Default}}{{range .Values}}<option value="{{.}}"{{if or (eq . $cur) (and (eq $cur "") (eq . $def))}} selected{{end}}>{{.}}</option>{{end}}</select>{{else}}<input type="text" name="var_{{.Name}}" value="{{index $.Choice.Variables .Name}}" placeholder="{{.Default}}" style="text-transform:none;letter-spacing:0">{{end}}</label></p>
+{{with .Help}}<p class="mut">{{.}}</p>{{end}}{{end}}
+<button type="submit">Show what I approve</button>
+</form>
+</div>
+{{with .Preview}}
+{{if .ProjectMissing}}<div class="card"><p>The project {{$.Choice.Project}} does not exist in {{$.Choice.Namespace}} yet.</p>
+<form method="post" action="/ui/approve/connectors/{{$.Connector.Name}}/project">
+<input type="hidden" name="namespace" value="{{$.Choice.Namespace}}"><input type="hidden" name="account" value="{{$.Choice.Account}}">
+{{range $k, $v := $.Choice.Variables}}<input type="hidden" name="var_{{$k}}" value="{{$v}}">{{end}}
+<button type="submit">Create the project {{$.Connector.Name}} in {{$.Choice.Namespace}}</button></form></div>
+{{else if .Refused}}<div class="card"><p class="err">{{.Refused}}</p></div>
+{{else}}<div class="card">
+<p class="summary">{{.Sentence}}</p>
+<form method="post" action="/ui/approve/connectors/{{$.Connector.Name}}">
+<input type="hidden" name="namespace" value="{{$.Choice.Namespace}}"><input type="hidden" name="project" value="{{$.Choice.Project}}"><input type="hidden" name="account" value="{{$.Choice.Account}}">
+{{range $k, $v := $.Choice.Variables}}<input type="hidden" name="var_{{$k}}" value="{{$v}}">{{end}}
+<input type="hidden" name="shown" value="{{.Shown}}">
+{{range .Credentials}}<p><label>{{.Name}} <input type="password" name="credential_{{.Name}}" autocomplete="off"></label></p>
+{{if .Stored}}<p class="mut">Already stored: leave it blank to keep it.</p>{{end}}{{end}}
+<button class="ok" type="submit">Approve and connect</button>
+</form>
+{{if .SignInAfter}}<p class="mut">This approval installs it. You then sign in at the provider, come back here, see which account you signed in to, and approve exactly the tools listed above in a second step.</p>
+{{else}}<p class="mut">This one approval installs it, stores the key and allows exactly the tools listed above. Then Vornik checks the connection.</p>{{end}}
+</div>{{end}}
+{{end}}
+{{with .Pending}}<div class="card">
+<p><strong>Still to finish in {{$.Choice.Namespace}}: {{$.Choice.Project}}</strong></p>
+{{range .SignIn}}<form method="post" action="/ui/approve/connectors/{{$.Connector.Name}}/signin">
+<input type="hidden" name="namespace" value="{{$.Choice.Namespace}}"><input type="hidden" name="project" value="{{$.Choice.Project}}"><input type="hidden" name="account" value="{{$.Choice.Account}}">
+<input type="hidden" name="server" value="{{.}}"><button type="submit">Sign in for {{.}}</button></form>{{end}}
+{{if .Ready}}<p class="summary">{{.Sentence}}</p>
+<form method="post" action="/ui/approve/connectors/{{$.Connector.Name}}/finish">
+<input type="hidden" name="namespace" value="{{$.Choice.Namespace}}"><input type="hidden" name="project" value="{{$.Choice.Project}}"><input type="hidden" name="account" value="{{$.Choice.Account}}">
+<input type="hidden" name="shown" value="{{.Shown}}"><button class="ok" type="submit">Approve the tools and connect</button></form>{{end}}
+</div>{{end}}
+{{template "foot"}}{{end}}
+
+{{define "connector_done.html"}}{{template "head" (page .Connector.Title 0)}}
+{{template "nav" "connectors"}}
+<h1>{{.Connector.Title}}</h1>
+{{with .Outcome}}
+{{if .Refused}}<div class="card"><p class="err">Not installed: {{.Refused}}</p>{{with .Sentence}}<p>What it would install now: {{.}}</p>{{end}}
+<a class="act" href="/ui/approve/connectors/{{$.Connector.Name}}">Review it again</a></div>
+{{else}}<div class="card">
+{{if .Failed}}<p class="err">Installed, but the {{.Failed}} step did not complete: {{.FailedWhy}}</p>
+{{if eq .Failed "sign-in"}}<p><a class="ref" href="/ui/approve/connectors/{{$.Connector.Name}}?namespace={{$.Choice.Namespace}}&amp;project={{$.Choice.Project}}&amp;account={{$.Choice.Account}}">Open this connector again</a> to sign in.</p>
+{{else}}<p>Ask your assistant ({{$.Choice.Namespace}}) to request the credential again; you approve it on the Approvals page.</p>{{end}}
+{{else}}<p class="flash">Installed and connected.</p>{{end}}
+{{range .Checks}}<p>Connection check for {{.Server}}: <strong>{{.Code}}</strong>{{if ne .Code "ok"}}. It stays installed; re-enter the key here, or ask your assistant to test it again.{{end}}</p>{{end}}
+<p class="mut">Your assistant ({{$.Choice.Namespace}}) sees it in its setup and can run it now.</p>
+</div>{{end}}
+{{end}}
+{{template "foot"}}{{end}}

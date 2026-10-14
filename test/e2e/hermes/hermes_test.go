@@ -76,12 +76,12 @@ type hermesRun struct {
 func runHermes(t *testing.T, s *stack, prompt string) hermesRun {
 	t.Helper()
 	modelEvidence(s).reset()
-	args := []string{"run", "--rm", "--network", "host",
-		"-v", s.hermesHome + ":/opt/data:Z",
-		"-e", "VORNIK_URL=" + s.hermesURL,
-		"-e", "VORNIK_BROKER_TOKEN=" + s.brokerKey,
-		"-e", "VORNIK_MEMORY_TOKEN=" + s.memoryKey,
-		hermesImage, "hermes", "-z", prompt}
+	args := hermesRunArgs(t, "--rm", "--network", "host",
+		"-v", s.hermesHome+":/opt/data:Z",
+		"-e", "VORNIK_URL="+s.hermesURL,
+		"-e", "VORNIK_BROKER_TOKEN="+s.brokerKey,
+		"-e", "VORNIK_MEMORY_TOKEN="+s.memoryKey,
+		hermesImage, "hermes", "-z", prompt)
 	cmd := exec.Command("podman", args...)
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &stdout, &stderr
@@ -134,7 +134,10 @@ func startHermesModel(t *testing.T, s *stack, scripts ...Script) {
 	}
 	ensureHermesImage(t)
 	m := pickModel(t)
+	// The incident 2026-10-14 stage, the lane's peak (lane design, "Memory
+	// guardrails").
+	requireMemory(t, "before llama.cpp", llamaStageItems(m)...)
 	s.hermesModelName = m.Name
-	s.hermesRec = NewToolRecorder(strings.TrimSuffix(startLlama(t, m, ensureModel(t, m)), "/v1"))
+	s.hermesRec = NewToolRecorder(strings.TrimSuffix(startLlama(t, m, ensureModel(t, m)), "/v1"), laneMaxTokens(t))
 	s.llamaURL = fmt.Sprintf("http://127.0.0.1:%d/v1", serveLoopback(t, s.hermesRec))
 }

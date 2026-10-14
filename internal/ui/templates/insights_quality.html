@@ -14,7 +14,7 @@
                 {{if .AllowedProjects}}
                 <form method="get" action="/ui/insights/quality" class="flex items-center gap-2">
                     <label for="quality-project" class="text-xs text-ink-500">Project</label>
-                    <select id="quality-project" name="projectId" onchange="this.form.submit()" class="px-2 py-1.5 text-xs rounded-lg bg-surface-700 border border-surface-600 text-ink-100">
+                    <select id="quality-project" name="projectId" onchange="this.form.submit()" class="px-2 py-1.5 text-xs rounded-lg bg-surface-700 border border-control text-ink-100">
                         <option value="">All allowed projects</option>
                         {{range .AllowedProjects}}<option value="{{.}}" {{if eq $.ProjectID .}}selected{{end}}>{{.}}</option>{{end}}
                     </select>

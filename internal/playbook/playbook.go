@@ -203,8 +203,8 @@ var corpus = map[string]Entry{
 		HumanMessage: "The agent's work conflicted with concurrent changes and couldn't be merged. Try again, or contact your administrator to resolve the conflict.",
 		Cause:        "The agent's worktree merge to the project's main branch failed — usually because the worktree had commits that conflict with concurrent main-branch state.",
 		Suggestions: []string{
-			"The worktree is preserved at `<projectDir>/.worktrees/<taskID>` for manual recovery — the commits live there.",
-			"Salvage manually: `cd <projectDir> && git merge worktree/<taskID> --no-ff` — usually a 3-way merge resolves it.",
+			"The task's work is pinned at the ref the task error names, `refs/vornik/preserved/<taskID>/<attempt>-<unix time>-<short commit>`; a retry or a daemon restart may remove the worktree, not the ref. `vornikctl doctor` lists every preserved ref (check preserved_work); refs expire 30 days after the failure.",
+			"Salvage manually: `git -C <projectDir> merge --no-ff <ref>` — usually a 3-way merge resolves it. If the error says the work could NOT be pinned, the worktree at `<projectDir>/.worktrees/<taskID>` is the only copy until the task is retried.",
 			"If concurrent task scheduling on the same project is the root cause, set scheduler concurrency to 1 for that project until the conflict pattern is understood.",
 		},
 	},
@@ -228,6 +228,27 @@ var corpus = map[string]Entry{
 			"Check `vornikctl project show <id>` for the configured cap and current spend.",
 			"Raise the cap in the project YAML (`autonomy.daily_hard_usd` / `autonomy.monthly_hard_usd`) if the spend was legitimate.",
 			"Investigate the per-role cost breakdown on `/ui/spend?project=<id>` — a runaway role is the usual culprit.",
+		},
+	},
+	persistence.TaskFailureClassPromptTokenBudget: {
+		Class:        persistence.TaskFailureClassPromptTokenBudget,
+		Scope:        ScopeTask,
+		HumanMessage: "A step ran out of room before it could finish: the conversation grew past the step's prompt-token limit. Contact your administrator, or try a smaller request.",
+		Cause:        "The agent stopped on its step prompt-token budget before a final answer, so the step did not produce its declared output. A step limit, not the project's spend cap (that is BUDGET_BLOCKED).",
+		Suggestions: []string{
+			"Read the task error: it names the step, the budget and the agent's cumulative prompt tokens.",
+			"Raise the step's prompt-token budget in the workflow, or split the task so each step reads less (large staged inputs are the usual cause).",
+			"A re-run often succeeds when the agent takes a shorter path; a repeat on the same input means the limit is too small for it.",
+		},
+	},
+	persistence.TaskFailureClassOutputCap: {
+		Class:        persistence.TaskFailureClassOutputCap,
+		Scope:        ScopeTask,
+		HumanMessage: "The model's answers kept getting cut off before they were complete. Contact your administrator — the role's output limit or model needs changing.",
+		Cause:        "The model's responses were cut off at the output token limit until the agent gave up (LLD 09 §8.4). Identical inputs usually reproduce it.",
+		Suggestions: []string{
+			"Raise the output token limit the model actually runs under: the smaller of the role's maxTokens and the route's cap (the route's own max_tokens, else chat.max_tokens). Raise the role's value, and the route's cap too if the role is already at it.",
+			"Use a model that spends less of its output on reasoning, or configure a model fallback for the role.",
 		},
 	},
 	persistence.TaskFailureClassWorkflowRole: {
@@ -292,6 +313,7 @@ var corpus = map[string]Entry{
 			"Check `vornikctl doctor` — podman_config surfaces rootless / userns issues that produce this class.",
 			"Confirm the agent image is pulled: `podman images | grep vornik-agent`.",
 			"Check `journalctl --user -u vornik | grep podman` for the runtime error around the failure timestamp.",
+			"A `statfs …/.worktrees/<task>: no such file or directory` start failure means the task's worktree vanished under it — check for a second daemon sharing the workspace root (GitHub #357).",
 		},
 	},
 	persistence.TaskFailureClassCancelled: {
@@ -612,6 +634,16 @@ var corpus = map[string]Entry{
 			"Check the model endpoint's latency before raising it; a slow self-hosted host is a different problem from a step that needs longer.",
 		},
 	},
+	stepoutcome.ClassWallClockExceeded: {
+		Class:        stepoutcome.ClassWallClockExceeded,
+		Scope:        ScopeStep,
+		HumanMessage: "The task as a whole ran out of time while this step was running.",
+		Cause:        "The execution's wall-clock cap — the workflow's maxWallClock, or scheduler.execution_timeout when the workflow sets none — expired during this step. The step's own timeout had not.",
+		Suggestions: []string{
+			"Raise the workflow's maxWallClock (or scheduler.execution_timeout), not the step's timeout: the cap bounds every step, so a larger step timeout changes nothing.",
+			"If the earlier steps used most of the cap, look at them first; the step that hit the cap is often not the slow one.",
+		},
+	},
 	stepoutcome.ClassHallucinated: {
 		Class:        stepoutcome.ClassHallucinated,
 		Scope:        ScopeStep,
@@ -746,7 +778,7 @@ var corpus = map[string]Entry{
 			"The commonest shape is a reasoning model spending the whole limit thinking, leaving no visible text at all.",
 		Suggestions: []string{
 			"Read the container log's `output cap:` lines: `content_bytes=0` means the limit went to reasoning; a non-empty content or `tool_calls_not_run` means the answer or a file body itself was too long.",
-			"Raise the limit the model actually runs under: the role's maxTokens on Bedrock; on every other route the daemon's chat.max_tokens or the route's own max_tokens, which the role's value does not override. Or pick a model (or modelFallback) that reasons less verbosely for this role.",
+			"Raise the limit the model actually runs under: the smaller of the role's maxTokens and the route's cap (the route's own max_tokens, else the daemon's chat.max_tokens), on every route that sends a cap (codex-subscription sends none). Raise the role's value, and the route's cap too if the role is already at it. Or pick a model (or modelFallback) that reasons less verbosely for this role.",
 			"If the step writes a large file, tell the role to write it in parts; the agent's nudge already suggests this, and a role prompt that asks for one huge write invites the cap.",
 			"`usage.output_cap_hits` in result.json shows steps that grazed the cap and recovered — a rising count on one role is this failure arriving.",
 		},

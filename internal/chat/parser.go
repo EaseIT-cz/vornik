@@ -307,6 +307,7 @@ func executeCreateTask(ctx context.Context, action Action, taskRepo persistence.
 		ID:             persistence.GenerateID("task"),
 		ProjectID:      action.Project,
 		CreationSource: persistence.TaskCreationSourceUser,
+		GoalOrigin:     persistence.TaskGoalOriginChat,
 		Status:         persistence.TaskStatusQueued,
 		Priority:       priority,
 		Attempt:        1,

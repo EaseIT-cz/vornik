@@ -131,6 +131,15 @@ func dbcovOpen(t *testing.T) *sql.DB {
 // keeps config.Validate happy without needing static API keys.
 func dbcovWriteConfig(t *testing.T, db config.DatabaseConfig) string {
 	t.Helper()
+	return dbcovWriteConfigWith(t, db, "")
+}
+
+// dbcovWriteConfigWith is dbcovWriteConfig plus extra top-level YAML
+// appended verbatim (a `retention:` block, say), so a test drives a
+// handler with the operator's configuration file rather than a
+// hand-built policy.
+func dbcovWriteConfigWith(t *testing.T, db config.DatabaseConfig, extra string) string {
+	t.Helper()
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.yaml")
 	yaml := fmt.Sprintf(`server:
@@ -148,7 +157,7 @@ storage:
 api:
   auth_enabled: false
 `, db.Host, db.Port, db.Name, db.User, db.Password, db.SSLMode,
-		filepath.Join(dir, "artifacts"))
+		filepath.Join(dir, "artifacts")) + extra
 	if err := os.WriteFile(path, []byte(yaml), 0o600); err != nil {
 		t.Fatalf("write config: %v", err)
 	}

@@ -43,9 +43,14 @@ retention:
   task_llm_usage_days: 180
 
   # Tool-call audit. Art 17(3)(b) accountability record — keep long enough to
-  # investigate an incident, and note the AI Act's own 6-month floor on
-  # tool_audit_log if you are a deployer under Art 26(6).
+  # investigate an incident. Vornik enforces a 180-day floor (AI Act Art 26(6),
+  # six months) on this window; see tool_audit_floor_days below.
   tool_audit_days: 365
+  # The floor itself. 0 = 180. Lowering it below six months needs
+  # tool_audit_floor_override: true AND tool_audit_floor_override_basis saying
+  # why six months does not apply (a law requiring less, or not a high-risk
+  # deployment).
+  tool_audit_floor_days: 0
 
   # --- Work records: contain personal data from correspondence ---
 

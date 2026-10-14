@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/rs/zerolog"
+	"vornik.io/vornik/internal/aidisclosure"
 	"vornik.io/vornik/internal/conversation"
 	"vornik.io/vornik/internal/persistence"
 )
@@ -29,6 +30,7 @@ func notifierWithButtons(t *testing.T, cp *persistence.TaskMessage) (*Notifier, 
 	ch := &fakeChannel{name: "telegram"}
 	res := fakeResolver{byName: map[string]conversation.Channel{"telegram": ch}}
 	n := New(fakeAudit{row: row}, res, nil, fakeCheckpointReader{cp: cp}, "https://vornik.example", true, zerolog.Nop())
+	n.SetAIDisclosure(aidisclosure.New(aidisclosure.Config{}, servedAllSteer{})) // chat already disclosed
 	return n, ch
 }
 

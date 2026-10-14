@@ -20,6 +20,7 @@ import (
 	"vornik.io/vornik/internal/persistence"
 	"vornik.io/vornik/internal/pricing"
 	"vornik.io/vornik/internal/registry"
+	"vornik.io/vornik/internal/retention"
 	"vornik.io/vornik/internal/version"
 )
 
@@ -186,6 +187,9 @@ type DoctorHandlers struct {
 	// §18.4 F10): each agent namespace's budget sum, ceiling and waiting
 	// cover request, read per doctor run. Nil leaves the check SKIPPED.
 	agentBudgets func(ctx context.Context) ([]AgentNamespaceBudgetStatus, error)
+	// agentRefusalCounts backs agent_refusal_burst (agent-administered design
+	// §23.2): per-namespace refusal counts since a time. Nil: SKIPPED.
+	agentRefusalCounts func(ctx context.Context, since time.Time) (map[string]int, error)
 	// agentModels classifies agent_admin.models now (agent_model_catalogue,
 	// agent-administered design §18.6 item 2).
 	agentModels func() AgentModelCatalogueStatus
@@ -327,6 +331,10 @@ type DoctorHandlers struct {
 	retentionKnown   bool
 	retentionEnabled bool
 	retentionWindows map[string]int
+	// toolAuditFloorDays is the resolved tool_audit_log floor
+	// (retention.ResolveToolAuditFloor); 0 → the six-month default. The
+	// orphan probe never deletes an audit row younger than it.
+	toolAuditFloorDays int
 	// The podman / image seams moved to internal/hostdoctor with their checks
 	// (process-spawn law, S2). daemonRevisionFunc stays: the report states the
 	// daemon's revision for vornikctl's host image-freshness check.
@@ -449,6 +457,8 @@ func (h *DoctorHandlers) SetServerConfig(cfg *config.Config) {
 	// would let a half-configured sweeper report as healthy.
 	h.retentionKnown = true
 	h.retentionEnabled = cfg.Retention.Enabled
+	h.toolAuditFloorDays, _ = retention.ResolveToolAuditFloor(cfg.Retention.ToolAuditFloorDays,
+		cfg.Retention.ToolAuditFloorOverride, cfg.Retention.ToolAuditFloorOverrideBasis)
 	h.retentionWindows = map[string]int{}
 	for key, days := range map[string]int{
 		"task_llm_usage_days":      cfg.Retention.TaskLLMUsageDays,
@@ -618,6 +628,7 @@ func (h *DoctorHandlers) RunReportReadOnly(ctx context.Context) DoctorReport {
 	report.Checks = append(report.Checks, h.checkSecretStoreKey(ctx, fix))
 	report.Checks = append(report.Checks, h.checkApproverDevices(ctx, fix))
 	report.Checks = append(report.Checks, h.checkAgentNamespaceBudget(ctx))
+	report.Checks = append(report.Checks, h.checkAgentRefusalBurst(ctx))
 	report.Checks = append(report.Checks, h.checkAgentModelCatalogue())
 	report.Checks = append(report.Checks, h.checkStuckBrokerActions(ctx))
 	report.Checks = append(report.Checks, h.checkMCPProjectConnections())
@@ -689,6 +700,7 @@ func (h *DoctorHandlers) RunDoctor(w http.ResponseWriter, r *http.Request) {
 	report.Checks = append(report.Checks, h.checkAutonomyBudgetGuard())
 	report.Checks = append(report.Checks, h.checkBudgetUtilisation(ctx))
 	report.Checks = append(report.Checks, h.checkOrphanWorktrees(fix))
+	report.Checks = append(report.Checks, h.checkPreservedWork())
 	report.Checks = append(report.Checks, h.checkSecretsPermissions(fix))
 	report.Checks = append(report.Checks, h.checkConfigSecretHygiene())
 	report.Checks = append(report.Checks, h.checkToolAuditRedaction())
@@ -716,6 +728,7 @@ func (h *DoctorHandlers) RunDoctor(w http.ResponseWriter, r *http.Request) {
 	report.Checks = append(report.Checks, h.checkSecretStoreKey(ctx, fix))
 	report.Checks = append(report.Checks, h.checkApproverDevices(ctx, fix))
 	report.Checks = append(report.Checks, h.checkAgentNamespaceBudget(ctx))
+	report.Checks = append(report.Checks, h.checkAgentRefusalBurst(ctx))
 	report.Checks = append(report.Checks, h.checkAgentModelCatalogue())
 	report.Checks = append(report.Checks, h.checkStuckBrokerActions(ctx))
 	report.Checks = append(report.Checks, h.checkMCPProjectConnections())
@@ -1114,7 +1127,14 @@ func (h *DoctorHandlers) checkOrphanFKRows(ctx context.Context, fix bool) Doctor
 		label     string
 		countSQL  string
 		deleteSQL string
+		args      []any
 	}
+	// tool_audit_log rows younger than the retention floor are the audit trail
+	// outliving its task (tasks are pruned at tasks_days, typically well under
+	// six months), not garbage — the same reasoning as the cost ledger below.
+	// Without this bound --fix bypassed the six-month floor (AI Act Art 26(6);
+	// audit 2026-10-12, https://docs.vornik.io §2.3).
+	auditFloorCutoff := time.Now().UTC().AddDate(0, 0, -retention.EffectiveToolAuditFloor(h.toolAuditFloorDays))
 	// A genuine orphan is a row that NAMES a task which no longer
 	// exists — a dangling reference left behind by a delete. A row
 	// whose task_id is NULL or '' is NOT task-scoped at all and must
@@ -1143,11 +1163,14 @@ func (h *DoctorHandlers) checkOrphanFKRows(ctx context.Context, fix bool) Doctor
 			countSQL: `SELECT COUNT(*) FROM tool_audit_log
 			           WHERE tool_audit_log.task_id IS NOT NULL AND tool_audit_log.task_id <> ''
 			             AND tool_audit_log.task_id NOT LIKE 'companion:%'
+			             AND tool_audit_log.created_at < $1
 			             AND NOT EXISTS (SELECT 1 FROM tasks WHERE tasks.id = tool_audit_log.task_id)`,
 			deleteSQL: `DELETE FROM tool_audit_log
 			            WHERE tool_audit_log.task_id IS NOT NULL AND tool_audit_log.task_id <> ''
 			              AND tool_audit_log.task_id NOT LIKE 'companion:%'
+			              AND tool_audit_log.created_at < $1
 			              AND NOT EXISTS (SELECT 1 FROM tasks WHERE tasks.id = tool_audit_log.task_id)`,
+			args: []any{auditFloorCutoff},
 		},
 		{
 			label: "task_watchers",
@@ -1165,7 +1188,7 @@ func (h *DoctorHandlers) checkOrphanFKRows(ctx context.Context, fix bool) Doctor
 	totalFixed := 0
 	for _, p := range probes {
 		var n int
-		if err := h.db.QueryRowContext(ctx, p.countSQL).Scan(&n); err != nil {
+		if err := h.db.QueryRowContext(ctx, p.countSQL, p.args...).Scan(&n); err != nil {
 			items = append(items, fmt.Sprintf("%s: probe failed: %v", p.label, err))
 			continue
 		}
@@ -1174,7 +1197,7 @@ func (h *DoctorHandlers) checkOrphanFKRows(ctx context.Context, fix bool) Doctor
 		}
 		totalOrphans += n
 		if fix {
-			res, err := h.db.ExecContext(ctx, p.deleteSQL)
+			res, err := h.db.ExecContext(ctx, p.deleteSQL, p.args...)
 			if err != nil {
 				items = append(items, fmt.Sprintf("%s: %d orphans (delete failed: %v)", p.label, n, err))
 				continue

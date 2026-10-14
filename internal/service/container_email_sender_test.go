@@ -25,6 +25,8 @@ type fakeChannelSender struct {
 	returnErr   error
 }
 
+func (f *fakeChannelSender) Name() string { return "email" }
+
 func (f *fakeChannelSender) Send(_ context.Context, msg conversation.ChannelMessage) (string, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -48,10 +50,10 @@ func (f *fakeChannelSender) snapshot() []conversation.ChannelMessage {
 // adapter so the dispatcher's send_email tool reports "not
 // configured" rather than the adapter silently swallowing calls.
 func TestNewEmailSender_NoChannels(t *testing.T) {
-	if got := newEmailSender(nil, nil); got != nil {
+	if got := newEmailSender(nil, nil, nil); got != nil {
 		t.Errorf("nil channels: got %v, want nil", got)
 	}
-	if got := newEmailSender([]channelSendCloser{}, []*registry.Project{}); got != nil {
+	if got := newEmailSender([]channelSendCloser{}, []*registry.Project{}, nil); got != nil {
 		t.Errorf("empty channels: got %v, want nil", got)
 	}
 }
@@ -68,6 +70,7 @@ func TestEmailSender_RoutesByProject(t *testing.T) {
 	sender := newEmailSender(
 		[]channelSendCloser{chA, chB},
 		[]*registry.Project{projA, projB},
+		nil,
 	)
 	if sender == nil {
 		t.Fatal("adapter unexpectedly nil")
@@ -98,6 +101,7 @@ func TestEmailSender_UnknownProject(t *testing.T) {
 	sender := newEmailSender(
 		[]channelSendCloser{ch},
 		[]*registry.Project{{ID: "proj-A"}},
+		nil,
 	)
 	_, err := sender.SendEmail(context.Background(), "proj-NOPE", dispatcher.EmailSendRequest{
 		To: "x@example.com", Subject: "hi", Body: "hello",
@@ -123,6 +127,7 @@ func TestEmailSender_BuildsChannelMessage(t *testing.T) {
 	sender := newEmailSender(
 		[]channelSendCloser{ch},
 		[]*registry.Project{{ID: "proj-A"}},
+		nil,
 	)
 	_, err := sender.SendEmail(context.Background(), "proj-A", dispatcher.EmailSendRequest{
 		To:      "bob@example.com",
@@ -162,6 +167,7 @@ func TestEmailSender_ChannelError(t *testing.T) {
 	sender := newEmailSender(
 		[]channelSendCloser{ch},
 		[]*registry.Project{{ID: "proj-A"}},
+		nil,
 	)
 	_, err := sender.SendEmail(context.Background(), "proj-A", dispatcher.EmailSendRequest{
 		To: "a@b.c", Subject: "x", Body: "y",
@@ -183,6 +189,7 @@ func TestEmailSender_InReplyToPropagates(t *testing.T) {
 	sender := newEmailSender(
 		[]channelSendCloser{ch},
 		[]*registry.Project{{ID: "proj-A"}},
+		nil,
 	)
 	_, err := sender.SendEmail(context.Background(), "proj-A", dispatcher.EmailSendRequest{
 		To:        "a@b.c",
@@ -208,6 +215,7 @@ func TestEmailSender_NilEntriesSkipped(t *testing.T) {
 	sender := newEmailSender(
 		[]channelSendCloser{nil, chA},
 		[]*registry.Project{nil, {ID: "proj-A"}},
+		nil,
 	)
 	if sender == nil {
 		t.Fatal("adapter unexpectedly nil")

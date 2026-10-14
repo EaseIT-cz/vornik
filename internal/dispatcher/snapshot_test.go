@@ -3,6 +3,7 @@ package dispatcher
 import (
 	"context"
 	"encoding/json"
+	"strings"
 	"testing"
 
 	"github.com/rs/zerolog"
@@ -313,11 +314,12 @@ func TestDispatcher_CreateTask_AutoExtractNilSummaryIsSilentSkip(t *testing.T) {
 	}
 }
 
-// TestDispatcher_CreateTask_SnapshotFailureFallsBack — when an
-// individual snapshot fails, the dispatcher must keep the original
-// host path for that file rather than dropping it. The user's input
-// shouldn't disappear because the artifacts subsystem hiccupped.
-func TestDispatcher_CreateTask_SnapshotFailureFallsBack(t *testing.T) {
+// TestDispatcher_CreateTask_SnapshotFailureRefuses — superseded 2026-10-12
+// (GitHub #351, 15-artifact-store.md §13.2 C5). A failed snapshot used to
+// keep the raw host path in the payload; the executor now stages only paths
+// that name an own-project artifact row, so that input would vanish
+// silently. create_task refuses instead and persists no task.
+func TestDispatcher_CreateTask_SnapshotFailureRefuses(t *testing.T) {
 	taskRepo := &capturingTaskRepo{MockTaskRepository: &mocks.MockTaskRepository{}}
 	store := &fakeInputStore{prefix: "/var/lib/vornik/artifacts", failOn: "broken.png"}
 
@@ -335,31 +337,13 @@ func TestDispatcher_CreateTask_SnapshotFailureFallsBack(t *testing.T) {
 		"input_files": []string{"/tmp/ok.jpg", "/tmp/broken.png"},
 	}
 	argsJSON, _ := json.Marshal(args)
-	te.createTask(context.Background(), string(argsJSON), "p", []string{"p"}, 0)
+	res := te.createTask(context.Background(), string(argsJSON), "p", []string{"p"}, 0)
 
-	if taskRepo.last == nil {
-		t.Fatal("task not persisted")
+	if taskRepo.last != nil {
+		t.Fatal("a task was persisted although one input could not be snapshotted")
 	}
-	var payload struct {
-		Context struct {
-			InputFiles       []string `json:"inputFiles"`
-			InputArtifactIDs []string `json:"inputArtifactIDs"`
-		} `json:"context"`
-	}
-	_ = json.Unmarshal(taskRepo.last.Payload, &payload)
-	if len(payload.Context.InputFiles) != 2 {
-		t.Fatalf("expected 2 input files preserved, got %d", len(payload.Context.InputFiles))
-	}
-	// First file snapshotted (storage path), second fell back to /tmp path.
-	if payload.Context.InputFiles[0] == "/tmp/ok.jpg" {
-		t.Error("first file should have been snapshotted to storage path")
-	}
-	if payload.Context.InputFiles[1] != "/tmp/broken.png" {
-		t.Errorf("second file should have fallen back to host path, got %q", payload.Context.InputFiles[1])
-	}
-	// Only one artifact ID recorded (the successful snapshot).
-	if len(payload.Context.InputArtifactIDs) != 1 {
-		t.Errorf("expected 1 artifact ID (successful snapshot only), got %d", len(payload.Context.InputArtifactIDs))
+	if !strings.Contains(res.Content, "broken.png") {
+		t.Errorf("the refusal should name the file, got %q", res.Content)
 	}
 }
 

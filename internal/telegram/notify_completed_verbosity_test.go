@@ -22,7 +22,7 @@ func newNotifyTestBot(t *testing.T, allowedUsers map[int64]UserAccess) (*Bot, *t
 	rec := newTelegramRecorder(t)
 	chatClient := chat.NewClient("https://example.com", "k", "m")
 	b, err := NewBot(BotConfig{Token: "tok", AllowedUsers: allowedUsers}, chatClient,
-		WithHTTPClient(rec.server.Client()),
+		WithHTTPClient(rec.server.Client()), WithAIDisclosure(alreadyDisclosed()),
 	)
 	if err != nil {
 		t.Fatalf("NewBot: %v", err)

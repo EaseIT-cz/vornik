@@ -49,6 +49,7 @@ var llmspendDisabledAllowlist = map[string]disabledUse{}
 func TestProductionDisabledUsesAreClassified(t *testing.T) {
 	root := moduleRoot(t)
 	found := map[string][]string{} // file -> collapsed lines
+	scanned := 0
 
 	for _, sub := range []string{"internal", "cmd"} {
 		base := filepath.Join(root, sub)
@@ -71,8 +72,9 @@ func TestProductionDisabledUsesAreClassified(t *testing.T) {
 			}
 			b, rerr := os.ReadFile(path)
 			if rerr != nil {
-				return nil
+				return rerr // #334 item 6: an unread file is not a clean one
 			}
+			scanned++
 			rel, _ := filepath.Rel(root, path)
 			rel = filepath.ToSlash(rel)
 			// The seam's own definition of Disabled is not a use of it.
@@ -98,6 +100,9 @@ func TestProductionDisabledUsesAreClassified(t *testing.T) {
 		}
 	}
 
+	// #334 item 6: a denylist over no files reports clean about everything.
+	requireExamined(t, "llmspend.Disabled law", "production Go files", scanned, 100)
+
 	files := make([]string, 0, len(found))
 	for f := range found {
 		files = append(files, f)
@@ -121,6 +126,10 @@ func TestProductionDisabledUsesAreClassified(t *testing.T) {
 // exists.
 func TestDisabledAllowlistHasNoStaleEntries(t *testing.T) {
 	root := moduleRoot(t)
+	// #334 item 6 (CI pipeline design, amendment 2026-10-14): an empty
+	// allowlist is the goal, so zero is an allowlisted zero; printed so the
+	// count is read, not mistaken for a check that ran over entries.
+	t.Logf("llmspend.Disabled stale-entry law: examined %d allowlist entr(ies) (zero is correct when no production code opts out)", len(llmspendDisabledAllowlist))
 	for f, use := range llmspendDisabledAllowlist {
 		if strings.TrimSpace(use.reason) == "" {
 			t.Errorf("%s: empty reason — an unexplained opt-out is indistinguishable from an accident", f)

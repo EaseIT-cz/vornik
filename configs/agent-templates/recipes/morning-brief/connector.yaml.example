@@ -1,0 +1,20 @@
+# Vetting this recipe as a connector (agent-administered design §19.14.11).
+#
+# Copy this file to connector.yaml beside recipe.yaml in the DEPLOYED tree
+# (~/.config/vornik/configs/agent-templates/recipes/morning-brief/), fill
+# both servers' URLs, who reviewed them and when, and reload: the paired
+# phone's Connectors page then offers "Morning brief (read)".
+#
+# Vornik ships no vetted server. On 2026-10-13 none was in evidence: each
+# server must speak streamable HTTP and offer the read tools this recipe
+# calls by exactly these names (mail: gmail_search and gmail_get; calendar:
+# calendar_list_events; Google's own Workspace server names the calendar
+# tool calendar_listEvents and runs over stdio, which a recipe cannot
+# reach). Vet the servers you will use: what each reads, that its tools are
+# read-only, where it sends data. recipe_version must equal the recipe's
+# version; a shipped upgrade demotes the connector until you vet it again.
+title: "Morning brief (read)"
+servers:
+  mail: {url: ""}
+  calendar: {url: ""}
+vetted: {by: "", at: "", recipe_version: 1}

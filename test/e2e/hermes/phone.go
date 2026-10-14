@@ -117,6 +117,34 @@ func (p *Phone) ApproveWithGrant(id string, days, uses int) error {
 	return p.decideForm(id, "approve_grant", url.Values{"grant_days": {fmt.Sprint(days)}, "grant_uses": {fmt.Sprint(uses)}})
 }
 
+// Connect taps Connect on an OAuth credential request (agent-administered
+// plan P4.4) and follows the whole sign-in as the phone's browser does: the
+// device route redirects to the provider's authorization endpoint, the
+// provider redirects back to the daemon's callback with the code, and the
+// flow cookie the device route set rides that last request. It returns the
+// callback page's text (it names the account signed in to). GitHub #337.
+func (p *Phone) Connect(id string) (string, error) {
+	page, err := p.get("/ui/approve/" + id)
+	if err != nil {
+		return "", err
+	}
+	m := shaRE.FindStringSubmatch(page)
+	if m == nil || !strings.Contains(page, `action="/ui/approve/`+id+`/connect"`) {
+		return "", fmt.Errorf("request %s: the page offers no Connect", id)
+	}
+	resp, err := p.post("/ui/approve/"+id+"/connect", url.Values{"rendered_sha256": {m[1]}})
+	if err != nil {
+		return "", err
+	}
+	defer func() { _ = resp.Body.Close() }()
+	b, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<16))
+	if resp.StatusCode != http.StatusOK || resp.Request.URL.Path != "/auth/mcp/callback" {
+		return "", fmt.Errorf("connecting %s: HTTP %d at %s: %s", id, resp.StatusCode, resp.Request.URL, b)
+	}
+	p.Shown[id] = m[1]
+	return string(b), nil
+}
+
 func (p *Phone) decide(id, decision, value string) error {
 	var extra url.Values
 	if value != "" {

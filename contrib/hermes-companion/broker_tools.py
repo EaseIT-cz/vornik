@@ -9,6 +9,7 @@ and otherwise answers at once, so an older daemon degrades to plain polling.
 from __future__ import annotations
 
 import json
+import threading
 
 from .vornik_client import VornikClient, VornikError
 
@@ -132,7 +133,7 @@ SCHEMAS = [CATALOG, DELEGATE, RESULT, STATUS, CANCEL, LIST_ARTIFACTS, READ_ARTIF
 
 def _wrap(client: VornikClient, tool: str, args: dict, timeout=None) -> str:
     if not client.configured:
-        return json.dumps({"error": "Vornik is not configured: set VORNIK_URL and VORNIK_BROKER_TOKEN"})
+        return json.dumps({"error": client.not_configured_message()})
     try:
         text, is_error = client.call(tool, args, timeout=timeout)
     except VornikError as e:
@@ -150,29 +151,41 @@ def _wrap(client: VornikClient, tool: str, args: dict, timeout=None) -> str:
 class BrokerTools:
     def __init__(self, client: VornikClient):
         self.client = client
-        self._broker_checked = False
-        self._broker_ready = False
-        self._broker_error = ""
+        # Whether a key is a broker key, per (URL, key): one profile's answer
+        # is never reused for another's key (design 24, 0.21.5).
+        # The lock guards the map, not a returned entry's fields: two calls for
+        # one key may both run the catalog check, which is harmless (review
+        # d927 F2). Entries live as long as the process; the set of keys in
+        # use (one per profile, plus rotations) is small.
+        self._broker = {}  # identity -> {"checked", "ready", "error"}
+        self._broker_lock = threading.Lock()
+
+    def _state(self):
+        identity = self.client.identity()
+        with self._broker_lock:
+            return self._broker.setdefault(identity, {"checked": False, "ready": False, "error": ""})
 
     def available(self, *_args, **_kwargs) -> bool:
         return self.client.configured and self.client.supports("companion-broker") and self._is_broker_key()
 
     def _unavailable_error(self) -> str:
         if not self.client.configured:
-            return "Vornik is not configured: set VORNIK_URL and VORNIK_BROKER_TOKEN"
+            return self.client.not_configured_message()
         if not self.client.supports("companion-broker"):
             return "This Vornik daemon does not support broker workflows (upgrade it)."
-        if not self._broker_checked and not self._broker_error:
+        state = self._state()
+        if not state["checked"] and not state["error"]:
             self._is_broker_key()
-        if not self._broker_ready:
-            return self._broker_error
+        if not state["ready"]:
+            return state["error"]
         return ""
 
     def _is_broker_key(self) -> bool:
-        if self._broker_checked:
-            return self._broker_ready
-        self._broker_ready = False
-        self._broker_error = (
+        state = self._state()
+        if state["checked"]:
+            return state["ready"]
+        state["ready"] = False
+        state["error"] = (
             "Vornik broker is not configured: VORNIK_BROKER_TOKEN must be a "
             "companion key on a broker project. Run vornik_catalog with that key "
             "or mint one with `vornikctl companion grant -p <broker-project> --client hermes ...`."
@@ -182,19 +195,19 @@ class BrokerTools:
         except VornikError as e:
             # Transport failures are often startup races; retry on the next
             # availability check instead of hiding broker tools until restart.
-            self._broker_error = str(e)
+            state["error"] = str(e)
             return False
         if is_error:
-            self._broker_error = text
+            state["error"] = text
             return False
         try:
             body = json.loads(text)
         except ValueError:
-            self._broker_error = "Vornik catalog returned a non-JSON response"
+            state["error"] = "Vornik catalog returned a non-JSON response"
             return False
-        self._broker_checked = True
-        self._broker_ready = bool(body.get("broker"))
-        return self._broker_ready
+        state["checked"] = True
+        state["ready"] = bool(body.get("broker"))
+        return state["ready"]
 
     def catalog(self, args: dict, **_kw) -> str:
         if not self.available():

@@ -118,6 +118,7 @@ vornik reads its configuration from `config.yaml`. The keys below are the custom
 |---|---|---|---|
 | `runtime.run_as_user` | string | Override the container user (uid, uid:gid, or user:group). Use to force non-root on root-default images. | `VORNIK_RUNTIME_RUN_AS_USER` |
 | `runtime.default_network` | string | Default network policy for agent roles: host, none, or daemon-only (zero egress; requires server.unix_socket). | — |
+| `runtime.image_timeout` | string | Bound on a podman run or pull of the agent image, which may download it (a Go duration). Empty = 15m. Raise it on a slow registry link. | — |
 | `runtime.agent_memory_limit` | string | Per-agent-container memory cap (e.g. 2GiB). Absent derives from host memory and concurrency; "none" disables the limit. | — |
 | `runtime.agent_llm.endpoint` | string | OpenAI-compatible base URL for the LLM agents call. Falls back to the chat section when empty. | — |
 | `runtime.agent_llm.api_key` | string | API key for the agent LLM endpoint. | — |
@@ -153,6 +154,7 @@ vornik reads its configuration from `config.yaml`. The keys below are the custom
 | `scheduler.speed_aware_timeouts.min_samples` | int | Steps required before a fitted profile is trusted at all. | — |
 | `scheduler.speed_aware_timeouts.window` | string | Rolling window the profile is fitted over. | — |
 | `scheduler.default_step_timeout` | string | Ceiling for a step whose workflow declares no timeout. Empty = 30m. | — |
+| `scheduler.execution_timeout` | string | Ceiling for a whole execution whose workflow declares no maxWallClock (a workflow's own value always wins). Empty = no ceiling. | — |
 
 ## watchdog
 
@@ -188,6 +190,10 @@ vornik reads its configuration from `config.yaml`. The keys below are the custom
 | `retention.enabled` | bool | Turn the background sweeper on. | — |
 | `retention.interval` | string | How often the sweeper runs. | — |
 | `retention.task_llm_usage_days` | int | Days to keep per-task LLM usage rows. | — |
+| `retention.tool_audit_days` | int | Days to keep tool-call audit rows; clamped up to tool_audit_floor_days. | — |
+| `retention.tool_audit_floor_days` | int | Minimum days to keep tool-call audit rows (0 = 180, six months). | — |
+| `retention.tool_audit_floor_override` | bool | Allow tool_audit_floor_days below six months (logs a warning). | — |
+| `retention.tool_audit_floor_override_basis` | string | Why six months does not apply (a law requiring less, or not a high-risk deployment); required for the override. | — |
 | `retention.tasks_days` | int | Days to keep task rows. | — |
 | `retention.executions_days` | int | Days to keep execution rows. | — |
 | `retention.artifacts_days` | int | Days to keep artifacts. | — |

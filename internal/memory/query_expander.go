@@ -29,6 +29,10 @@ type KGQueryExpander struct {
 	Entities persistence.KnowledgeEntityRepository
 	// Edges reads knowledge_edges. Required.
 	Edges persistence.KnowledgeEdgeRepository
+	// Restrictions is the GDPR Art 18 screen. REQUIRED: nil means no expansion,
+	// because an expansion term is a restricted person's name put into the
+	// recall query (design 2026-07-29-gdpr-data-subject-rights §4.16.7, #350).
+	Restrictions persistence.RestrictionScreen
 	// MaxSeeds caps how many entities a single query string can match
 	// as seed nodes. 0 → 3. The first MaxSeeds tokens that resolve
 	// against the entity table become seeds; subsequent tokens are
@@ -43,8 +47,12 @@ type KGQueryExpander struct {
 // Expand walks the graph and returns the extra terms. Failure-tolerant:
 // any DB error returns an empty expansion + no error so the search
 // still completes with the original query.
+//
+// GDPR Art 18 (#350): seeds, the edges followed and the neighbours reached are
+// screened; no screen, or a failing one, yields NO expansion (fail closed — the
+// search still runs on the original query).
 func (e *KGQueryExpander) Expand(ctx context.Context, projectID, query string) []string {
-	if e == nil || e.Entities == nil || e.Edges == nil || projectID == "" {
+	if e == nil || e.Entities == nil || e.Edges == nil || e.Restrictions == nil || projectID == "" {
 		return nil
 	}
 	maxSeeds := e.MaxSeeds
@@ -92,7 +100,8 @@ func (e *KGQueryExpander) Expand(ctx context.Context, projectID, query string) [
 		}
 	}
 
-	if len(seeds) == 0 {
+	seeds, err := persistence.ScreenRestrictedEntities(ctx, e.Restrictions, seeds)
+	if err != nil || len(seeds) == 0 {
 		return nil
 	}
 
@@ -117,6 +126,9 @@ func (e *KGQueryExpander) Expand(ctx context.Context, projectID, query string) [
 		if err != nil {
 			continue
 		}
+		if edges, err = persistence.ScreenRestrictedEdges(ctx, e.Restrictions, edges); err != nil {
+			return nil
+		}
 		neighborIDs := make([]string, 0, maxNeighbors)
 		for _, edge := range edges {
 			if edge == nil {
@@ -137,6 +149,13 @@ func (e *KGQueryExpander) Expand(ctx context.Context, projectID, query string) [
 		for _, nid := range neighborIDs {
 			ent, err := e.Entities.Get(ctx, nid)
 			if err != nil || ent == nil {
+				continue
+			}
+			kept, err := persistence.ScreenRestrictedEntities(ctx, e.Restrictions, []*persistence.KnowledgeEntity{ent})
+			if err != nil {
+				return nil
+			}
+			if len(kept) == 0 {
 				continue
 			}
 			name := strings.TrimSpace(ent.CanonicalName)

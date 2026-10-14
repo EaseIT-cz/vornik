@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 // oldAgentApprovalRequestsDDL is the table before the broker_action kind
@@ -171,5 +172,65 @@ func TestMigrate_RebuildsAgentApprovalRequestsForMemoryRetention(t *testing.T) {
 	var n int
 	if err = db.QueryRowContext(ctx, `SELECT COUNT(*) FROM agent_approval_requests WHERE id='apr_old70'`).Scan(&n); err != nil || n != 1 {
 		t.Fatalf("existing phone request lost: %d %v", n, err)
+	}
+}
+
+// memoryRetentionEraDDL is the table as migration 217 left it (no withdrawn
+// status, no withdrawal columns), verbatim.
+const memoryRetentionEraDDL = `CREATE TABLE IF NOT EXISTS agent_approval_requests (
+    id                 TEXT PRIMARY KEY,
+    namespace          TEXT NOT NULL DEFAULT '',
+    kind               TEXT NOT NULL CHECK (kind IN ('device_enrollment','widening_change','credential_slot','broker_action','host_action','memory_retention')),
+    sentence           TEXT NOT NULL,
+    rendered           TEXT NOT NULL,
+    rendered_sha256    TEXT NOT NULL,
+    status             TEXT NOT NULL CHECK (status IN ('pending','approved','rejected','expired')),
+    created_at         TEXT        NOT NULL,
+    expires_at         TEXT        NOT NULL,
+    decided_at         TEXT       ,
+    decided_by_device  TEXT,
+    applied_at         TEXT       ,
+    apply_holder       TEXT,
+    apply_lease_until  TEXT,
+    apply_attempts     INTEGER NOT NULL DEFAULT 0,
+    apply_error        TEXT,
+    decided_choice     TEXT
+)`
+
+// GitHub #264 (2026-10-13): an existing database learns the withdrawn status
+// and its two columns through the table rebuild (SQLite cannot extend a
+// CHECK in place); a request pending before the upgrade survives and can
+// then be withdrawn.
+func TestMigrate_RebuildsAgentApprovalRequestsForWithdrawal(t *testing.T) {
+	ctx := context.Background()
+	cfg := DefaultConfig()
+	cfg.Path = filepath.Join(t.TempDir(), "existing.db")
+	db, err := Connect(ctx, cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = db.Close() }()
+	db.SetMaxOpenConns(1)
+	if err = db.Migrate(ctx); err != nil {
+		t.Fatal(err)
+	}
+	for _, stmt := range []string{`DROP TABLE agent_approval_requests`, memoryRetentionEraDDL,
+		`INSERT INTO agent_approval_requests (id,kind,sentence,rendered,rendered_sha256,status,created_at,expires_at) VALUES ('apr_old264','widening_change','s','{}','h','pending','2026-10-01T00:00:00Z','2099-10-02T00:00:00Z')`} {
+		if _, err = db.ExecContext(ctx, stmt); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err = db.ExecContext(ctx, `UPDATE agent_approval_requests SET status='withdrawn' WHERE id='apr_old264'`); err == nil {
+		t.Fatal("precondition: the old CHECK must refuse withdrawn")
+	}
+	if err = db.Migrate(ctx); err != nil {
+		t.Fatal(err)
+	}
+	repo := NewApproverDeviceRepository(db.DB)
+	if err = repo.WithdrawRequest(ctx, "apr_old264", "system:test", "No longer needed.", time.Now()); err != nil {
+		t.Fatalf("withdraw after the rebuild: %v", err)
+	}
+	if r, gerr := repo.GetRequest(ctx, "apr_old264"); gerr != nil || r.Status != "withdrawn" || r.WithdrawReason != "No longer needed." {
+		t.Fatalf("the pre-upgrade row after withdrawal = %+v, %v", r, gerr)
 	}
 }

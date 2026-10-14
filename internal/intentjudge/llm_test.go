@@ -328,3 +328,38 @@ func TestRefine_MalformedResponseNotCached(t *testing.T) {
 		t.Errorf("malformed response should NOT be cached; got %d puts", cache.putN)
 	}
 }
+
+// tokenRecordingCache records the token counts the refiner stores
+// with each cached row, which is what the response cache prices its
+// "$ saved" figure from.
+type tokenRecordingCache struct {
+	fakeResponseCache
+	putPrompt, putCompletion int
+}
+
+func (f *tokenRecordingCache) Put(ctx context.Context, key, model, purpose, content string, p, c int) error {
+	f.putPrompt, f.putCompletion = p, c
+	return f.fakeResponseCache.Put(ctx, key, model, purpose, content, p, c)
+}
+
+// TestRefine_CacheMiss_StoresProviderTokens — W8-AD 2026-10-14
+// (console cache-savings figures, Bug B2 in
+// local-llm-response-cache-design.md): the refiner cached its answer with
+// prompt_tokens = completion_tokens = 0, so every later hit counted as an
+// "LLM call skipped" on the console but added $0 to "$ saved". The row must
+// carry the provider's reported usage so its hits are priced.
+func TestRefine_CacheMiss_StoresProviderTokens(t *testing.T) {
+	resp := respWith(`{"risk":"high","confidence":0.9,"recommendation":"deny","reasoning":"shell"}`)
+	resp.Usage.PromptTokens = 812
+	resp.Usage.CompletionTokens = 64
+	provider := &recordingProvider{stubProvider: stubProvider{resp: resp}}
+	cache := &tokenRecordingCache{fakeResponseCache: *newFakeResponseCache()}
+	r := &LLMRefiner{Provider: provider, Cache: cache}
+	if _, err := r.Refine(context.Background(), "run_shell", `{"cmd":"x"}`, Verdict{Risk: RiskMedium}); err != nil {
+		t.Fatalf("Refine: %v", err)
+	}
+	if cache.putPrompt != 812 || cache.putCompletion != 64 {
+		t.Errorf("cached row tokens = (%d, %d), want (812, 64): unpriced rows make the console's $ saved undercount",
+			cache.putPrompt, cache.putCompletion)
+	}
+}

@@ -45,7 +45,7 @@ func TestPruneWorktrees_PreservesInFlightTasks(t *testing.T) {
 	}
 
 	preserve := map[string]struct{}{preservedTask: {}}
-	pruneWorktrees(context.Background(), projectDir, logger, preserve)
+	pruneWorktrees(context.Background(), projectDir, logger, removeUnless(preserve))
 
 	// Preserved worktree must survive: directory present + branch present.
 	preservedDir := worktreePath(projectDir, preservedTask)
@@ -87,7 +87,7 @@ func TestPruneWorktrees_NilPreserveSafe(t *testing.T) {
 	if _, err := createWorktree(context.Background(), projectDir, taskID, logger); err != nil {
 		t.Fatalf("createWorktree: %v", err)
 	}
-	pruneWorktrees(context.Background(), projectDir, logger, nil)
+	pruneWorktrees(context.Background(), projectDir, logger, removeUnless(nil))
 
 	if _, err := os.Stat(worktreePath(projectDir, taskID)); !os.IsNotExist(err) {
 		t.Errorf("nil-preserve set should still prune orphans; dir survived: %v", err)

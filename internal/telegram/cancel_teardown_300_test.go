@@ -31,7 +31,9 @@ func TestHandleCancelCmd_TearsDownTheExecution(t *testing.T) {
 		GetFunc: func(_ context.Context, id string) (*persistence.Task, error) {
 			return &persistence.Task{ID: id, ProjectID: "p", Status: persistence.TaskStatusRunning}, nil
 		},
-		TransitionToCancelledFunc: func(_ context.Context, _ string) (bool, error) { return true, nil },
+		TransitionConditionalFunc: func(_ context.Context, _ string, _ []persistence.TaskStatus, _ persistence.TaskStatus, _ persistence.TransitionOpts) (bool, error) {
+			return true, nil
+		},
 	}
 	bot := makeBotWithTaskRepo(t, repo)
 	spy := &tgTeardownSpy{}

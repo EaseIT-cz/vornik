@@ -54,6 +54,12 @@ type Metrics struct {
 	// — the loop is per-daemon, not per-project.
 	LoopsTotal prometheus.Counter
 
+	// AbandonedDispatchesTotal counts dispatches that released their slot
+	// because the executor still reported the task live long after its row
+	// left RUNNING (05-scheduler §4.12 C5, GitHub #142). Each is a goroutine
+	// wedged in a call with no bound.
+	AbandonedDispatchesTotal *prometheus.CounterVec
+
 	// registry is the Prometheus registerer used for registering metrics.
 	registry prometheus.Registerer
 }
@@ -170,6 +176,15 @@ func NewMetrics(registerer prometheus.Registerer) *Metrics {
 				Help:      "Total scheduler loop iterations (one per scheduling pass: poll-interval tick or Wake()).",
 			},
 		),
+		AbandonedDispatchesTotal: promauto.With(registerer).NewCounterVec(
+			prometheus.CounterOpts{
+				Namespace: schedulerNamespace,
+				Subsystem: schedulerSubsystem,
+				Name:      "abandoned_dispatches_total",
+				Help:      "Dispatches that released their slot because the executor still reported the task live AbandonedExecutionGrace after its row left RUNNING.",
+			},
+			[]string{"project_id"},
+		),
 	}
 
 	return m
@@ -182,6 +197,15 @@ func (m *Metrics) RecordLoop() {
 		return
 	}
 	m.LoopsTotal.Inc()
+}
+
+// RecordAbandonedDispatch counts a dispatch that released the slot of a
+// goroutine that outlived its row. Nil-safe.
+func (m *Metrics) RecordAbandonedDispatch(projectID string) {
+	if m == nil || m.AbandonedDispatchesTotal == nil {
+		return
+	}
+	m.AbandonedDispatchesTotal.WithLabelValues(projectID).Inc()
 }
 
 // RecordLeaseAcquired increments the leases acquired counter.

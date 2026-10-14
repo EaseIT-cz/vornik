@@ -58,6 +58,32 @@ func (e retryableError) Unwrap() error {
 	return e.err
 }
 
+// containerNotStartedError marks a step failure that happened before the
+// step's container ran: a dependency-mount refusal or any startContainer
+// error (image pull, missing image, mount, OCI). The model was never asked
+// anything, so the agent breaker must not count it either way
+// (agent-llm-health-breaker LLD §4, 2026-10-12 row; GitHub #309). Error()
+// is the wrapped text unchanged, so step-outcome classification and the
+// retry ladder see exactly what they saw before.
+type containerNotStartedError struct {
+	err error
+	// runtimeStart: the container runtime failed to start the container
+	// (startContainer's error), as opposed to a dependency-mount refusal,
+	// which is configuration. Classified RUNTIME_ERROR from the type
+	// (permanent-failure design §10.2 K3).
+	runtimeStart bool
+}
+
+func (e *containerNotStartedError) Error() string { return e.err.Error() }
+func (e *containerNotStartedError) Unwrap() error { return e.err }
+
+// isContainerNotStarted reports whether err ended its step before the
+// container ran.
+func isContainerNotStarted(err error) bool {
+	var ns *containerNotStartedError
+	return errors.As(err, &ns)
+}
+
 func markRetryable(err error) error {
 	if err == nil {
 		return nil
@@ -352,7 +378,15 @@ func failedStepOutcome(ctx context.Context, err error, stops agentStops) (string
 	switch classifyStepOutcome(ctx, err) {
 	case "timeout":
 		// A named cause outranks the wall clock; see timeoutOutcomeAndClass.
-		return timeoutOutcomeAndClass(err)
+		outcome, class := timeoutOutcomeAndClass(err)
+		// Of the two clocks, the execution's cap is not the step's timeout:
+		// its remedy is the opposite one, so it gets its own class
+		// (outcome-quality LLD §S7 #2). ctx is the execution context the cap
+		// was armed on (executeAgentStep's), so its cause is visible here.
+		if class == stepoutcome.ClassContextTimeout && wallClockCauseOf(ctx) != nil {
+			class = stepoutcome.ClassWallClockExceeded
+		}
+		return outcome, class
 	case "cancelled":
 		return string(stepoutcome.Cancelled), stepoutcome.ClassContextCancelled
 	case "schema_violation":
@@ -808,7 +842,14 @@ func (e *Executor) executeAgentStep(ctx context.Context, task *persistence.Task,
 			return "", nil, reject
 		}
 		agentHealthProbe = probe
-		defer func() { e.agentHealth.Record(effectiveModel, agentHealthProbe, err) }()
+		defer func() {
+			// A step whose container never started did not reach the
+			// model: abstain, as for a chat-breaker reject (#309).
+			if isContainerNotStarted(err) {
+				return
+			}
+			e.agentHealth.Record(effectiveModel, agentHealthProbe, err)
+		}()
 	}
 
 	// Warm path: reuse a warm container if the role policy allows it.
@@ -986,7 +1027,13 @@ func (e *Executor) executeAgentStep(ctx context.Context, task *persistence.Task,
 		if shellTO := perCallTimeoutForStep(timeout, defaultAgentShellTimeout); shellTO > 0 {
 			extraEnv["VORNIK_SHELL_TIMEOUT"] = strconv.Itoa(int(shellTO.Seconds()))
 		}
-		if minted := e.injectPerTaskKey(ctx, task.ProjectID, task.ID, extraEnv); minted {
+		minted, keyErr := e.injectPerTaskKey(ctx, task.ProjectID, task.ID, extraEnv)
+		if keyErr != nil {
+			// GitHub #352: never start an agent on the static (possibly
+			// upstream) credential. Retried like any infrastructure error.
+			return "", nil, keyErr
+		}
+		if minted {
 			// Register revoke immediately after a successful mint so the
 			// defer fires on both success and failure paths of startContainer
 			// and everything that follows.
@@ -1007,11 +1054,11 @@ func (e *Executor) executeAgentStep(ctx context.Context, task *persistence.Task,
 		// without being marked retryable: retrying cannot install anything.
 		depMounts, depErr := e.dependencyMounts(task, plan, roleConfig.Runtime.Image)
 		if depErr != nil {
-			return "", nil, fmt.Errorf("project dependencies: %w", depErr)
+			return "", nil, &containerNotStartedError{err: fmt.Errorf("project dependencies: %w", depErr)}
 		}
 		containerID, err = e.startContainer(ctx, task, execution.ID, roleConfig.Runtime.Image, step.Role, inputDir, outputDir, workspaceDir, roleConfig, plan.worktreeDir, timeout, extraEnv, depMounts)
 		if err != nil {
-			return "", nil, markRetryable(fmt.Errorf("failed to start container: %w", err))
+			return "", nil, markRetryable(&containerNotStartedError{err: fmt.Errorf("failed to start container: %w", err), runtimeStart: true})
 		}
 		// Record the in-flight container so a daemon crash before this step's
 		// result is processed can re-attach to it on recovery instead of
@@ -1146,6 +1193,14 @@ func (e *Executor) executeAgentStep(ctx context.Context, task *persistence.Task,
 
 	// Trust result.json status field over exit code.
 	var agentError string
+	// agentCrashed: the agent reported nothing and the container exited
+	// non-zero (the exit-code fallback below). Classified RUNTIME_ERROR from
+	// the type, never from the log tail (permanent-failure design §9.2 M3).
+	agentCrashed := false
+	// agentStop: the agent-recorded stop that IS this failure's cause, carried
+	// on the error so the task class comes from it (permanent-failure design
+	// §10). Set only below, on the two paths where that holds.
+	agentStop := ""
 	// Block-mode secret-leak takes precedence over the agent's own
 	// COMPLETED/FAILED self-report: even a successful task whose
 	// output contained credentials must surface as a SECRET_LEAK
@@ -1163,6 +1218,7 @@ func (e *Executor) executeAgentStep(ctx context.Context, task *persistence.Task,
 		if json.Unmarshal(resultBytes, &resultStatus) == nil {
 			if agentError == "" && resultStatus.Status == "FAILED" {
 				agentError = "agent reported FAILED status: " + resultStatus.Message
+				agentStop = agentOutcome
 			}
 			// Agent-emitted outcome override. Clean exit
 			// (status=COMPLETED), but the agent chose to stop early for
@@ -1200,6 +1256,8 @@ func (e *Executor) executeAgentStep(ctx context.Context, task *persistence.Task,
 		agentError = fmt.Sprintf("container exited with code %d", exitCode)
 		if len(resultBytes) > 0 {
 			agentError = string(resultBytes)
+		} else {
+			agentCrashed = true
 		}
 	}
 
@@ -1255,6 +1313,7 @@ func (e *Executor) executeAgentStep(ctx context.Context, task *persistence.Task,
 		resultBytes = so.ResultBytes
 		if verdict.Refused && stepOutcomeExitTier[verdict.Participant] {
 			agentError = verdict.Reason
+			agentStop = so.CauseStop
 		}
 	}
 
@@ -1268,14 +1327,19 @@ func (e *Executor) executeAgentStep(ctx context.Context, task *persistence.Task,
 			logs = string(e.scanContainerLogsForSecrets(ctx, execution, stepID, []byte(logs)))
 			agentError += containerLogSection(logs)
 		}
-		if rmErr := e.runtime.RemoveContainer(context.Background(), containerID, true); rmErr != nil {
+		if rmErr := removeContainerBounded(e.runtime, containerID, true); rmErr != nil {
 			e.logger.Warn().Err(rmErr).Str("container_id", containerID).Msg("failed to remove container after agent failure")
 		}
-		return "", nil, newContainerExitError(exitCode, agentError)
+		if agentCrashed {
+			return "", nil, newContainerCrashError(exitCode, agentError)
+		}
+		exitErr := newContainerExitError(exitCode, agentError)
+		exitErr.agentStop = agentStop
+		return "", nil, exitErr
 	}
 
 	if verdict.Refused {
-		if rmErr := e.runtime.RemoveContainer(context.Background(), containerID, true); rmErr != nil {
+		if rmErr := removeContainerBounded(e.runtime, containerID, true); rmErr != nil {
 			e.logger.Warn().Err(rmErr).Str("container_id", containerID).Msg(stepOutcomeRemoveMsg[verdict.Participant])
 		}
 		return "", nil, so.Err
@@ -1284,7 +1348,7 @@ func (e *Executor) executeAgentStep(ctx context.Context, task *persistence.Task,
 	// Clean up the container immediately — we've read result.json and
 	// persisted artifacts. Leaving it running leaks resources across
 	// multi-step workflows (prior steps' containers were never removed).
-	_ = e.runtime.RemoveContainer(context.Background(), containerID, false)
+	_ = removeContainerBounded(e.runtime, containerID, false)
 
 	return containerID, resultBytes, nil
 }
@@ -2032,9 +2096,15 @@ func (e *Executor) executeWarmAgentStep(ctx context.Context, task *persistence.T
 		// projects, incl. broker place_order). Residual reported to the
 		// orchestrator: warm-path callers are project-scoped, not
 		// task-scoped, so B3's per-task audit binding does not constrain
-		// them. On mint failure we keep the static key (availability)
-		// and warn once per (project, role).
-		if !e.injectWarmProjectKey(ctx, task.ProjectID, roleConfig.Name, roleEnv) {
+		// them. On mint failure the warm start is REFUSED (GitHub #352,
+		// 2026-10-12; the static key is never baked in). Only a nil minter
+		// (no key repository) reaches the !ok branch below.
+		ok, keyErr := e.injectWarmProjectKey(ctx, task.ProjectID, roleConfig.Name, roleEnv)
+		if keyErr != nil {
+			// GitHub #352: a warm container is never started on the static key.
+			return "", nil, keyErr
+		}
+		if !ok {
 			if e.apiKeyMinter != nil && shouldWarnWarmStaticKey(task.ProjectID, roleConfig.Name) {
 				e.logger.Warn().
 					Str("project", task.ProjectID).
@@ -2191,12 +2261,39 @@ func (e *Executor) startContainer(ctx context.Context, task *persistence.Task, e
 	return containerID, nil
 }
 
+// perTaskKeyError is the refusal raised when an agent container cannot be
+// given its scoped credential (GitHub #352, 18-security-and-tenancy.md update
+// 2026-10-12). It is an infrastructure failure: classed RUNTIME_ERROR, wrapped
+// as not-started and retryable by the caller.
+type perTaskKeyError struct{ err error }
+
+func (e *perTaskKeyError) Error() string {
+	return "agent credential unavailable: " + e.err.Error() + "; the step was not started"
+}
+func (e *perTaskKeyError) Unwrap() error        { return e.err }
+func (e *perTaskKeyError) FailureClass() string { return persistence.TaskFailureClassRuntimeError }
+
+// refuseAgentCredential blanks both agent key variables in the override env
+// (so no later merge with the static AgentLLMEnv can restore the static key)
+// and returns the classed, not-started, retryable refusal.
+func refuseAgentCredential(envVars map[string]string, cause error) error {
+	envVars["VORNIK_API_KEY"] = ""
+	envVars["VORNIK_LLM_API_KEY"] = ""
+	return markRetryable(&containerNotStartedError{err: &perTaskKeyError{err: cause}})
+}
+
 // injectPerTaskKey mints a scoped per-task API key and overwrites both
 // VORNIK_API_KEY and VORNIK_LLM_API_KEY in envVars. Returns true when a
 // fresh key was minted so the caller can register a paired revokeTaskKey
-// defer. If the minter is nil or mint fails the env map is left unchanged
-// (static key passes through) and false is returned — availability beats
-// key freshness.
+// defer.
+//
+// Fail CLOSED (GitHub #352, 2026-10-12; supersedes "availability beats key
+// freshness"): with a minter wired, a mint error, an empty minted key or a
+// task without a project returns an error, and both key variables are
+// blanked. The static key it used to leave in place falls back to
+// chat.api_key, the upstream provider credential, when agent_llm.api_key is
+// unset. A nil minter (no key repository: unit tests, legacy static-only
+// wiring) returns (false, nil): there is no per-task key to inject.
 //
 // Finding B1(a): VORNIK_LLM_API_KEY is the credential the agent
 // entrypoint presents to the daemon's chat-completions proxy
@@ -2208,19 +2305,25 @@ func (e *Executor) startContainer(ctx context.Context, task *persistence.Task, e
 // leaves NO unscoped credential inside the container. The chat proxy
 // accepts a project-scoped key for the agent's own project
 // (chat_proxy.go → requestAllowsProject), so this is safe.
-func (e *Executor) injectPerTaskKey(ctx context.Context, projectID, taskID string, envVars map[string]string) bool {
-	if e.apiKeyMinter == nil || projectID == "" {
-		return false
+func (e *Executor) injectPerTaskKey(ctx context.Context, projectID, taskID string, envVars map[string]string) (bool, error) {
+	if e.apiKeyMinter == nil {
+		return false, nil
+	}
+	if projectID == "" {
+		return false, refuseAgentCredential(envVars, fmt.Errorf("task %s has no project to scope a per-task key to", taskID))
 	}
 	raw, err := e.apiKeyMinter.MintTaskKey(ctx, projectID, taskID)
+	if err == nil && raw == "" {
+		err = errors.New("minter returned an empty key")
+	}
 	if err != nil {
 		e.logger.Warn().Err(err).Str("task_id", taskID).
-			Msg("per-task key mint failed; falling back to static agent key")
-		return false
+			Msg("per-task key mint failed; refusing the step start (no static-key fallback)")
+		return false, refuseAgentCredential(envVars, fmt.Errorf("per-task key mint failed: %w", err))
 	}
 	envVars["VORNIK_API_KEY"] = raw
 	envVars["VORNIK_LLM_API_KEY"] = raw
-	return true
+	return true, nil
 }
 
 // warmProjectKeyMinter is an OPTIONAL capability on top of APIKeyMinter
@@ -2243,34 +2346,36 @@ type warmProjectKeyMinter interface {
 // injectWarmProjectKey mints a project-scoped key for a warm-pool
 // container and overwrites VORNIK_API_KEY + VORNIK_LLM_API_KEY in the
 // warm roleEnv (Finding B1(b)). Returns true when a fresh scoped key was
-// injected. When the minter is nil, doesn't implement
-// warmProjectKeyMinter, projectID is empty, or the mint fails, the env
-// is left unchanged and false is returned — availability beats key
-// freshness, exactly like the ephemeral injectPerTaskKey path.
+// injected.
 //
-// Without this, warm containers carry the unscoped static agent key as
-// both their daemon-callback credential AND their LLM-proxy credential,
-// which a prompt-injected agent can replay for cross-project writes and
-// mcp/tools/call (incl. broker place_order).
-func (e *Executor) injectWarmProjectKey(ctx context.Context, projectID, role string, roleEnv map[string]string) bool {
-	if e.apiKeyMinter == nil || projectID == "" {
-		return false
+// Fail CLOSED like injectPerTaskKey (GitHub #352, 2026-10-12): with a minter
+// wired, an empty project, a minter without the project-key capability, a
+// mint error or an empty key returns an error and blanks both key variables,
+// so a warm container never starts on the static key. A nil minter returns
+// (false, nil).
+func (e *Executor) injectWarmProjectKey(ctx context.Context, projectID, role string, roleEnv map[string]string) (bool, error) {
+	if e.apiKeyMinter == nil {
+		return false, nil
+	}
+	if projectID == "" {
+		return false, refuseAgentCredential(roleEnv, fmt.Errorf("warm role %s has no project to scope a key to", role))
 	}
 	pm, ok := e.apiKeyMinter.(warmProjectKeyMinter)
 	if !ok {
-		return false
+		return false, refuseAgentCredential(roleEnv, errors.New("the key minter cannot mint a project-scoped warm-pool key"))
 	}
 	raw, err := pm.MintProjectScopedKey(ctx, projectID, role)
-	if err != nil || raw == "" {
-		if err != nil {
-			e.logger.Warn().Err(err).Str("project", projectID).Str("role", role).
-				Msg("warm-pool project-scoped key mint failed; falling back to static agent key")
-		}
-		return false
+	if err == nil && raw == "" {
+		err = errors.New("minter returned an empty key")
+	}
+	if err != nil {
+		e.logger.Warn().Err(err).Str("project", projectID).Str("role", role).
+			Msg("warm-pool project-scoped key mint failed; refusing the warm start (no static-key fallback)")
+		return false, refuseAgentCredential(roleEnv, fmt.Errorf("warm-pool key mint failed: %w", err))
 	}
 	roleEnv["VORNIK_API_KEY"] = raw
 	roleEnv["VORNIK_LLM_API_KEY"] = raw
-	return true
+	return true, nil
 }
 
 // revokeTaskKey revokes the per-task key for taskID. It is safe to call
@@ -2347,18 +2452,18 @@ func (e *Executor) waitForCompletion(ctx context.Context, containerID string, ti
 }
 
 // allowedStagingRoots returns the host paths the artifact-staging code
-// will accept as legitimate sources for input_files. The roots are:
+// will accept as legitimate sources. Since GitHub #351 (2026-10-12,
+// 15-artifact-store.md §13) they are the TASK'S PROJECT's subtrees only:
 //
-//   - os.TempDir() — previous-step workspace dirs and /tmp-fallback
-//     Telegram uploads;
-//   - <projectWorkspacePath>/<projectID>/uploads/ — Telegram uploads
-//     that landed in the project-workspace tree (legacy path; the
-//     dispatcher now snapshots these into the artifact store, but
-//     the allowlist keeps backwards compat for in-flight retries
-//     that pre-date the snapshotting change);
-//   - <artifactStoragePath> — durable INPUT artifacts the dispatcher
-//     snapshotted on create_task. This is the load-bearing entry
-//     for retry survival.
+//   - <artifactStoragePath>/<projectID> — the project's stored inputs and
+//     outputs (layout <store>/<project>/inputs/... and
+//     <store>/<project>/<execution>/...). Load-bearing for retry survival.
+//   - <projectWorkspacePath>/<projectID>/uploads/ — legacy Telegram upload
+//     landing inside the project workspace.
+//
+// os.TempDir() and the whole store root are no longer roots: they admitted
+// every project's artifacts and every live execution's temp workspace. An
+// empty or unclean project id yields no roots, so nothing stages.
 //
 // stageInputArtifacts materialises the supplied artifacts into the
 // step's EPHEMERAL workspace and rewrites each art["path"] to the
@@ -2451,22 +2556,122 @@ func (e *Executor) stageInputArtifacts(workspaceDir string, arts []map[string]st
 // symlink farm.
 func allowedStagingRoots(projectWorkspacePath, projectID, artifactStoragePath string) []string {
 	roots := []string{}
-	add := func(p string) {
-		if p == "" {
-			return
-		}
-		if resolved, err := filepath.EvalSymlinks(p); err == nil {
-			roots = append(roots, resolved)
-		} else {
-			roots = append(roots, filepath.Clean(p))
+	safeID, err := safepath.CleanPathComponent(projectID)
+	if projectID == "" || err != nil || safeID != projectID {
+		return roots
+	}
+	if artifactStoragePath != "" {
+		if p, jErr := safepath.JoinUnder(artifactStoragePath, safeID); jErr == nil {
+			roots = append(roots, canonicalRoot(p))
 		}
 	}
-	add(os.TempDir())
-	if projectWorkspacePath != "" && projectID != "" {
-		add(filepath.Join(projectWorkspacePath, projectID, "uploads"))
+	if projectWorkspacePath != "" {
+		if p, jErr := safepath.JoinUnder(projectWorkspacePath, safeID, "uploads"); jErr == nil {
+			roots = append(roots, canonicalRoot(p))
+		}
 	}
-	add(artifactStoragePath)
 	return roots
+}
+
+// canonicalRoot resolves symlinks in a root (falling back to Clean when the
+// path does not exist yet) so containment compares like with like.
+func canonicalRoot(p string) string {
+	if resolved, err := filepath.EvalSymlinks(p); err == nil {
+		return resolved
+	}
+	return filepath.Clean(p)
+}
+
+// artifactRowGetter is the row lookup task-input confinement needs. The
+// executor's ArtifactRepository interface does not carry Get; the production
+// repository (persistence.ArtifactRepository) does, and the assertion below
+// keeps it that way.
+type artifactRowGetter interface {
+	Get(ctx context.Context, id string) (*persistence.Artifact, error)
+}
+
+var _ artifactRowGetter = persistence.ArtifactRepository(nil)
+
+// confineTaskInputArtifacts keeps only the task-input entries (E1, built from
+// context.inputFiles) whose path is the storage path of an artifact row named
+// in the same payload's context.inputArtifactIDs AND owned by the task's
+// project, and rewrites each kept entry's sourcePath to that row's path.
+//
+// GitHub #351 (15-artifact-store.md §13.2 C2): context.inputFiles is
+// caller-written on several create surfaces (REST without inline uploads,
+// companion, A2A, a chat model's input.context, copied payloads), so it is a
+// selector among the project's own rows, never a read instruction. Without a
+// repository that can look rows up, nothing stages (fail closed). The row's
+// task is not checked: router children and forks reuse the parent's inputs
+// within the project.
+func (e *Executor) confineTaskInputArtifacts(ctx context.Context, task *persistence.Task, arts []map[string]string) []map[string]string {
+	if len(arts) == 0 || task == nil {
+		return nil
+	}
+	getter, ok := e.artifactRepo.(artifactRowGetter)
+	if !ok || getter == nil || task.ProjectID == "" {
+		e.logger.Warn().Str("task_id", task.ID).Int("dropped", len(arts)).
+			Msg("input staging: no artifact row lookup available; task inputs not staged")
+		return nil
+	}
+	var p struct {
+		Context struct {
+			InputArtifactIDs []string `json:"inputArtifactIDs"`
+		} `json:"context"`
+	}
+	_ = json.Unmarshal(task.Payload, &p)
+	owned := map[string]string{} // canonical path -> row storage path
+	for _, id := range p.Context.InputArtifactIDs {
+		if strings.TrimSpace(id) == "" {
+			continue
+		}
+		row, err := getter.Get(ctx, id)
+		if err != nil || row == nil {
+			continue
+		}
+		if row.StoragePath == "" {
+			e.logger.Warn().Str("task_id", task.ID).Str("artifact_id", id).
+				Msg("input staging: artifact row has no storage path; not staged")
+			continue
+		}
+		if row.ProjectID != task.ProjectID {
+			e.logger.Warn().Str("task_id", task.ID).Str("artifact_id", id).
+				Str("task_project", task.ProjectID).Str("artifact_project", row.ProjectID).
+				Msg("input staging: refusing another project's artifact")
+			continue
+		}
+		owned[canonicalRoot(row.StoragePath)] = row.StoragePath
+	}
+	out := make([]map[string]string, 0, len(arts))
+	for _, art := range arts {
+		src := art["sourcePath"]
+		if src == "" {
+			src = art["path"] // the same fallback stageInputArtifacts applies
+		}
+		if src == "" {
+			continue
+		}
+		abs, err := filepath.Abs(src)
+		if err != nil {
+			continue
+		}
+		rowPath, ok := owned[canonicalRoot(abs)]
+		if !ok {
+			e.logger.Warn().Str("task_id", task.ID).Str("src_path", src).
+				Msg("input staging: task input names no artifact row of this project; not staged")
+			continue
+		}
+		kept := make(map[string]string, len(art))
+		for k, v := range art {
+			kept[k] = v
+		}
+		kept["sourcePath"] = rowPath
+		out = append(out, kept)
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
 }
 
 // resolveStagingSrc canonicalises an agent-supplied artifact source
@@ -2720,6 +2925,17 @@ const containerLogDelimiter = "\n\n--- Container Log ("
 type containerExitError struct {
 	exitCode int
 	msg      string
+	// crashed: the container exited non-zero and the agent reported nothing
+	// (no FAILED status, no result.json), so the message is the daemon's
+	// exit-code fallback. ClassifyExecutionFailure reads it as RUNTIME_ERROR
+	// (permanent-failure design §9.2 M3, GitHub #353).
+	crashed bool
+	// agentStop is the agentOutcome the agent recorded in result.json, set
+	// only where that stop IS the failure's cause: the agent reported FAILED
+	// with it, or the output-file contract refused leading with it.
+	// ClassifyExecutionFailure maps prompt_token_budget and output_cap to
+	// their own classes from it (permanent-failure design §10).
+	agentStop string
 }
 
 func newContainerExitError(exitCode int, msg string) *containerExitError {

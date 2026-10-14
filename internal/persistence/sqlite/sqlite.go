@@ -303,6 +303,12 @@ var sqliteAdditiveColumns = []additiveColumn{
 	{"control_plane_proposals", "actor_kind", `TEXT`},
 	{"control_plane_proposals", "actor_account_id", `TEXT`},
 	{"control_plane_proposals", "actor_credential_id", `TEXT`},
+	// Postgres migration 23 — the chunk lifecycle (GitHub #349; design
+	// 2026-07-29-gdpr-data-subject-rights-design.md §4.16.7). Long on the
+	// production table; the slim sqlite table never carried it, so the graph
+	// chunk lookup, which filters lifecycle_state = 'published' on both drivers,
+	// errored on every call here. Same default as Postgres; no backfill needed.
+	{"project_memory_chunks", "lifecycle_state", `TEXT NOT NULL DEFAULT 'published' CHECK (lifecycle_state IN ('raw','staged','validated','published','quarantined','superseded'))`},
 	// Postgres migration 190 — recurring-series membership on memory chunks
 	// (2026-09-16-retrieval-recency-design.md §6). Nullable, no backfill: NULL
 	// means "not part of a series", which every existing row is. schemaSQL
@@ -372,6 +378,15 @@ var sqliteAdditiveColumns = []additiveColumn{
 	// (operator decision 2026-10-09; design §22.2.16).
 	{"broker_standing_grants", "account_label", `TEXT NOT NULL DEFAULT ''`},
 	{"broker_standing_grants", "account_identity", `TEXT NOT NULL DEFAULT ''`},
+	// Not a new Postgres migration — content_title has long been on the
+	// production chunk table. The Art 15 collector reads it on both drivers
+	// since the subject store reached SQLite (GitHub #355; GDPR design §4.19).
+	// Nullable, no backfill: NULL reads as empty in the collector's COALESCE.
+	{"project_memory_chunks", "content_title", `TEXT`},
+	// Postgres migration 230 — the surface that wrote a task's goal (GitHub
+	// #347; learning-loop design, amendment 2026-10-13). Nullable, no
+	// backfill: NULL is "not recorded", which the skill distiller refuses.
+	{"tasks", "goal_origin", `TEXT`},
 }
 
 // applyAdditiveColumns adds any registered column missing from an existing
@@ -443,6 +458,13 @@ var sqliteTableRebuilds = []tableRebuild{
 	// NULL on every existing row.
 	{"agent_approval_requests", "'host_action'", agentApprovalRequestsTableSQL},
 	{"agent_approval_requests", "'memory_retention'", agentApprovalRequestsTableSQL},
+	// Postgres migration 228: agent_approval_requests learns the withdrawn
+	// status and withdrawn_by / withdraw_reason (agent-administered design
+	// §9.2d, GitHub #264); both columns start NULL on every existing row.
+	{"agent_approval_requests", "'withdrawn'", agentApprovalRequestsTableSQL},
+	// Postgres migration 227: agent_approval_requests learns
+	// config_journal_drift (config-apply journal design §13.3, GitHub #302).
+	{"agent_approval_requests", "'config_journal_drift'", agentApprovalRequestsTableSQL},
 }
 
 func (d *DB) applyTableRebuilds(ctx context.Context) error {

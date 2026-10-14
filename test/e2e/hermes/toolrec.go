@@ -49,25 +49,31 @@ func (b *bodyWatch) inspect(body []byte) {
 }
 
 // ToolRecorder sits between Hermes and llama.cpp. It records the tools
-// Hermes offers the model (Hermes's session store does not keep them) and
-// re-samples retries (lane design, As built).
+// Hermes offers the model (Hermes's session store does not keep them),
+// re-samples retries (lane design, As built) and bounds every reply
+// (amendment 2026-10-14, GitHub #380).
 type ToolRecorder struct {
 	bodyWatch
-	evidence callEvidence
-	proxy    *httputil.ReverseProxy
+	evidence  callEvidence
+	proxy     *httputil.ReverseProxy
+	maxTokens int
 
 	mu        sync.Mutex
 	attempt   int
 	toolsSeen map[string]bool
 }
 
-// NewToolRecorder forwards to upstream, an http://host:port base URL.
-func NewToolRecorder(upstream string) *ToolRecorder {
+// NewToolRecorder forwards to upstream, an http://host:port base URL, and
+// caps every completion request at maxTokens reply tokens (positive).
+func NewToolRecorder(upstream string, maxTokens int) *ToolRecorder {
 	u, err := url.Parse(upstream)
 	if err != nil {
 		panic(err)
 	}
-	r := &ToolRecorder{proxy: httputil.NewSingleHostReverseProxy(u), attempt: 1, toolsSeen: map[string]bool{}}
+	if maxTokens <= 0 {
+		panic("NewToolRecorder: maxTokens must be positive")
+	}
+	r := &ToolRecorder{proxy: httputil.NewSingleHostReverseProxy(u), maxTokens: maxTokens, attempt: 1, toolsSeen: map[string]bool{}}
 	r.proxy.ModifyResponse = func(resp *http.Response) error {
 		if resp.Header.Get("Content-Encoding") != "" && resp.Header.Get("Content-Encoding") != "identity" {
 			return nil
@@ -114,12 +120,12 @@ func (r *ToolRecorder) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 	r.proxy.ServeHTTP(w, req)
 }
 
-// observe records the offered tools and, on a retry, sets the sampling
-// temperature and a per-attempt seed. A body that is not a JSON object is
-// forwarded unchanged.
+// observe records the offered tools, bounds the reply, and, on a retry, sets
+// the sampling temperature and a per-attempt seed. A body that is not a JSON
+// object is forwarded unchanged (llama.cpp refuses it; its -n is the bound).
 func (r *ToolRecorder) observe(body []byte) []byte {
 	var req map[string]json.RawMessage
-	if json.Unmarshal(body, &req) != nil {
+	if json.Unmarshal(body, &req) != nil || req == nil {
 		return body
 	}
 	var tools []struct {
@@ -134,14 +140,40 @@ func (r *ToolRecorder) observe(body []byte) []byte {
 	}
 	attempt := r.attempt
 	r.mu.Unlock()
-	if attempt <= 1 {
-		return body
+	capReplyTokens(req, r.maxTokens)
+	if attempt > 1 {
+		req["temperature"], _ = json.Marshal(retryTemperature)
+		req["seed"], _ = json.Marshal(attempt)
 	}
-	req["temperature"], _ = json.Marshal(retryTemperature)
-	req["seed"], _ = json.Marshal(attempt)
 	out, err := json.Marshal(req)
 	if err != nil {
 		return body
 	}
 	return out
+}
+
+// replyBoundKeys are the names llama.cpp b11610 reads as one request's reply
+// bound (tools/server/server-schema.cpp: n_predict, aliases max_tokens and
+// max_completion_tokens). A request's bound replaces the server's -n there,
+// and Hermes retries a truncated tool call with max_tokens 4096*2^n, so the
+// lane's bound is enforced here, on every request.
+var replyBoundKeys = []string{"max_tokens", "max_completion_tokens", "n_predict"}
+
+// capReplyTokens leaves exactly one bound, max_tokens: the smallest
+// non-negative integer the request named, at most maxTokens; maxTokens when
+// it named none (or only -1, "unlimited", or a non-number).
+func capReplyTokens(req map[string]json.RawMessage, maxTokens int) {
+	bound := maxTokens
+	for _, k := range replyBoundKeys {
+		raw, ok := req[k]
+		if !ok {
+			continue
+		}
+		delete(req, k)
+		var n int
+		if json.Unmarshal(raw, &n) == nil && n >= 0 && n < bound {
+			bound = n
+		}
+	}
+	req["max_tokens"], _ = json.Marshal(bound)
 }

@@ -1,0 +1,19 @@
+# Vetting this recipe as a connector (agent-administered design §19.14.11).
+#
+# Copy this file to connector.yaml beside recipe.yaml in the DEPLOYED tree
+# (~/.config/vornik/configs/agent-templates/recipes/agenda/), fill the
+# server's URL, who reviewed it and when, and reload: the paired phone's
+# Connectors page then offers "Calendar (read)".
+#
+# Vornik ships no vetted server. On 2026-10-13 none was in evidence: the
+# server must speak streamable HTTP and offer the read tool this recipe
+# calls by exactly this name, calendar_list_events (Google's own Workspace
+# server names it calendar_listEvents and runs over stdio, which a recipe
+# cannot reach). Vet the server you will use: what it reads, that the tool
+# is read-only, where it sends data. recipe_version must equal the
+# recipe's version; a shipped upgrade demotes the connector until you vet
+# it again.
+title: "Calendar (read)"
+servers:
+  calendar: {url: ""}
+vetted: {by: "", at: "", recipe_version: 1}

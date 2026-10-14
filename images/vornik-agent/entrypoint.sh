@@ -269,6 +269,40 @@ byte_len() {
     printf '%s' "$1" | LC_ALL=C wc -c | tr -d ' '
 }
 
+# utf8_prefix MAX STRING prints the longest prefix of STRING that is at most
+# MAX bytes and does not end inside a UTF-8 sequence, whatever the locale.
+# The function-local LC_ALL=C makes ${#s} and ${s:0:n} byte operations; the
+# look-back finds the last lead byte in the final four and drops it with its
+# continuation bytes when the sequence it starts is incomplete. Input that is
+# not valid UTF-8 is not repaired, only never newly split (GitHub #174; agent
+# LLM cost-efficiency design §3a).
+utf8_prefix() {
+    local LC_ALL=C
+    local max="$1" s="$2" cut i b need
+    if [ "${#s}" -le "$max" ]; then
+        printf '%s' "$s"
+        return
+    fi
+    cut=${s:0:max}
+    i=${#cut}
+    while [ "$i" -gt 0 ] && [ $(( ${#cut} - i )) -lt 4 ]; do
+        printf -v b '%d' "'${cut:i-1:1}"
+        [ "$b" -lt 0 ] && b=$(( b + 256 ))
+        if [ "$b" -lt 128 ]; then
+            break
+        fi
+        if [ "$b" -ge 192 ]; then
+            if [ "$b" -ge 240 ]; then need=4; elif [ "$b" -ge 224 ]; then need=3; else need=2; fi
+            if [ $(( ${#cut} - i + 1 )) -lt "$need" ]; then
+                cut=${cut:0:i-1}
+            fi
+            break
+        fi
+        i=$(( i - 1 ))
+    done
+    printf '%s' "$cut"
+}
+
 # request_file_tokens prints the preflight token estimate of a built request
 # file: the same (bytes + 2) / 3 heuristic the loop logs, over the same string
 # the loop sends, so a reserve computed here and a call estimated there are in
@@ -809,7 +843,9 @@ OUTPUT_CAP_MAX_NUDGES=2
 # route applies its own construction-time cap (chat.max_tokens or the
 # sub-provider's), so LLM_MAX_TOKENS is not the cap the model ran under and a
 # usage comparison misfires both ways. Every route that can truncate maps it to
-# "length" except codex-subscription (backlog).
+# "length", codex-subscription included since 2026-10-07 (its parser maps a
+# response.incomplete with reason max_output_tokens to "length"; LLD 09 §8.4,
+# T8 amendment).
 response_hit_output_cap() {
     local fr
     fr=$(printf '%s' "$1" | jq -r '.choices[0].finish_reason // ""' 2>/dev/null)
@@ -1895,7 +1931,7 @@ handle_skill_fetch() {
 handle_backlog_deposit() {
     local params="$1"
     local project_id task_id execution_id role
-    local kind title detail evidence regression
+    local kind title detail evidence regression found_at
     local body url response
     project_id=$(jq -r '.projectId // .project_id // ""' "$INPUT_FILE")
     task_id="${VORNIK_TASK_ID:-}"
@@ -1913,6 +1949,9 @@ handle_backlog_deposit() {
     detail=$(printf '%s' "$params" | jq -r '.detail // ""')
     evidence=$(printf '%s' "$params" | jq -r '.evidence // ""')
     regression=$(printf '%s' "$params" | jq -r 'if has("regression") then (.regression == true) else false end')
+    # found_at (ENGINEERING-TENETS §4.7, 2026-10-14): the level the bug was
+    # found at; forwarded only when set, the daemon validates it.
+    found_at=$(printf '%s' "$params" | jq -r '.found_at // ""')
 
     body=$(jq -n \
         --arg pid "$project_id" \
@@ -1925,7 +1964,9 @@ handle_backlog_deposit() {
         --arg detail "$detail" \
         --arg evidence "$evidence" \
         --argjson regression "$regression" \
-        '{project_id:$pid, task_id:$tid, execution_id:$eid, step_id:$sid, role:$role, kind:$kind, title:$title, detail:$detail, evidence:$evidence, regression:$regression}')
+        --arg found_at "$found_at" \
+        '{project_id:$pid, task_id:$tid, execution_id:$eid, step_id:$sid, role:$role, kind:$kind, title:$title, detail:$detail, evidence:$evidence, regression:$regression}
+         + (if $found_at == "" then {} else {found_at:$found_at} end)')
 
     vornik_resolve_url "${VORNIK_API_URL%/}/api/v1/internal/backlog-deposit"; url="$VORNIK_URL"
 
@@ -2252,30 +2293,59 @@ AUDIT_OUTPUT_BUDGET="${VORNIK_AUDIT_OUTPUT_BUDGET:-3900}"
 
 truncate_tool_output_for_audit() {
     local body="$1" budget="${AUDIT_OUTPUT_BUDGET:-3900}" out
-    if [ "${#body}" -le "$budget" ]; then
+    # The budget is BYTES (the daemon's re-cap is a byte count), so every
+    # measure here is: byte_len, and jq's utf8bytelength over the JSON
+    # encoding. ${#…} and jq's length count characters under UTF-8 (#174).
+    if [ "$(byte_len "$body")" -le "$budget" ]; then
         printf '%s' "$body"
         return
     fi
     # jq exits non-zero for non-object input, which is the fallback signal.
+    # $room is what is left for the field's encoded content once the object
+    # with that field emptied and the 3-byte ellipsis are paid for. The field
+    # is then kept code point by code point at each one's encoded size
+    # (escapes included), examining at most $room of them: each costs >= 1.
     out=$(printf '%s' "$body" | jq -c --argjson budget "$budget" '
         if type == "object" then
           ( [ to_entries[] | select(.value | type == "string") ]
             | sort_by(.value | length) | reverse | .[0].key ) as $k
           | if $k == null then . else
-              ( (. | del(.[$k]) | tojson | length) ) as $rest
-              | ( $budget - $rest - 16 ) as $room
+              ( .[$k] = "" | tojson | utf8bytelength ) as $rest
+              | ( $budget - $rest - 3 ) as $room
               | if $room > 0
-                then .[$k] = (.[$k][0:$room] + "…")
+                then .[$k] = ( .[$k][0:$room] | explode
+                    | reduce .[] as $c ({s: [], n: 0, full: false};
+                        if .full then . else
+                          ( [$c] | implode | tojson | utf8bytelength - 2 ) as $w
+                          | if .n + $w > $room then .full = true
+                            else .s += [$c] | .n += $w end
+                        end)
+                    | .s | implode ) + "…"
                 else .[$k] = "…" end
             end
         else empty end' 2>/dev/null) || out=""
-    if [ -n "$out" ] && [ "${#out}" -le "$budget" ]; then
+    if [ -n "$out" ] && [ "$(byte_len "$out")" -le "$budget" ]; then
         printf '%s' "$out"
         return
     fi
-    # Not a JSON object, or the structural attempt could not fit — blind cut,
-    # exactly as before.
-    printf '%.*s' "$budget" "$body"
+    # Not a JSON object, or the structural attempt could not fit: blind cut,
+    # in bytes, never inside a UTF-8 sequence.
+    utf8_prefix "$budget" "$body"
+}
+
+# cap_shell_output OUTPUT prints run_shell's OUTPUT capped at 200 KB (see the
+# run_shell arm of exec_tool for why 200 KB). The cap and the reported total
+# are BYTES in every locale, and the cut never ends inside a UTF-8 sequence:
+# ${#…} counted characters under a UTF-8 locale (GitHub #174; agent LLM
+# cost-efficiency design §3a).
+cap_shell_output() {
+    local shell_out="$1" shell_len
+    shell_len=$(byte_len "$shell_out")
+    if [ "$shell_len" -gt 200000 ]; then
+        printf '%s\n\n[... truncated at 200KB, total %d bytes — pipe through grep/awk/tail to filter]' "$(utf8_prefix 200000 "$shell_out")" "$shell_len"
+    else
+        printf '%s' "$shell_out"
+    fi
 }
 
 # Execute a single tool call. Prints the result string.
@@ -2345,12 +2415,7 @@ exec_tool() {
                         shell_out=$(printf '%s\n\n[this failed because the workspace git metadata is READ-ONLY — git writes (add/commit/stash) cannot succeed here and retrying will fail identically. You do not need to commit: the harness commits everything left in the workspace when the step ends. Carry on with the actual task.]' "$shell_out")
                         ;;
                 esac
-                local shell_len=${#shell_out}
-                if [ "$shell_len" -gt 200000 ]; then
-                    printf '%.200000s\n\n[... truncated at 200KB, total %d bytes — pipe through grep/awk/tail to filter]' "$shell_out" "$shell_len"
-                else
-                    printf '%s' "$shell_out"
-                fi
+                cap_shell_output "$shell_out"
             fi
             ;;
         memory_search)
@@ -3534,7 +3599,7 @@ ${previous_result}
             _cap_calls=$(printf '%s' "$response" | jq -r '[.choices[0].message.tool_calls[]? | (.function.name // "?")] | join(",")')
             log "output cap: iteration=$iteration finish_reason=length completion_tokens=$_cap_ct requested_max_tokens=${LLM_MAX_TOKENS:-0} content_bytes=$_cap_bytes tool_calls_not_run=[${_cap_calls}] hit=$OUTPUT_CAP_HITS/$((OUTPUT_CAP_MAX_NUDGES + 1))"
             if [ "$OUTPUT_CAP_HITS" -gt "$OUTPUT_CAP_MAX_NUDGES" ]; then
-                write_result "FAILED" "Output cap: the model's response was cut off at its output token limit $OUTPUT_CAP_HITS times in this step (the last after $_cap_ct output tokens), so it never produced a complete answer. Raise the output token limit the model actually runs under (the role's maxTokens on Bedrock; on other routes the daemon's chat.max_tokens or the route's own max_tokens, which the role's value does not override), or use a model that spends less of its output on reasoning." "" "$(get_duration)" "output_cap"
+                write_result "FAILED" "Output cap: the model's response was cut off at its output token limit $OUTPUT_CAP_HITS times in this step (the last after $_cap_ct output tokens), so it never produced a complete answer. Raise the output token limit the model actually runs under (the smaller of the role's maxTokens and the route's cap, chat.router.<route>.max_tokens else chat.max_tokens: raise the role's value, and the route's cap too if the role is already at it; codex-subscription sends no cap), or use a model that spends less of its output on reasoning." "" "$(get_duration)" "output_cap"
                 log "failed (output cap)"
                 return 1
             fi

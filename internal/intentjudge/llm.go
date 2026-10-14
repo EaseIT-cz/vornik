@@ -176,6 +176,12 @@ in the reasoning field.`,
 	cacheKey := responseCacheKey(cacheModel, ResponseCachePurposeLLMRefiner, messages)
 	cacheHit := false
 	var content string
+	// promptTok / completionTok are the provider's reported usage for a
+	// miss; they go onto the cached row so the response cache can price
+	// this row's later hits ("$ saved" on the console). Zero here made
+	// every refiner hit an unpriced "call skipped" (W8-AD 2026-10-14,
+	// Bug B2 in local-llm-response-cache-design.md).
+	var promptTok, completionTok int
 	var elapsed time.Duration
 	if r.Cache != nil {
 		// Errors are swallowed — a broken cache must never stall
@@ -197,6 +203,7 @@ in the reasoning field.`,
 			return nil, fmt.Errorf("llmrefiner: empty response")
 		}
 		content = strings.TrimSpace(resp.Choices[0].Message.Content)
+		promptTok, completionTok = resp.Usage.PromptTokens, resp.Usage.CompletionTokens
 	}
 	// Models sometimes wrap JSON in ```json ... ``` despite the
 	// prompt telling them not to. Strip the fence so we don't
@@ -236,7 +243,7 @@ in the reasoning field.`,
 	// network round-trip AND the fence stripping. Put errors are
 	// swallowed — same broken-cache discipline as Get.
 	if r.Cache != nil && !cacheHit {
-		_ = r.Cache.Put(callCtx, cacheKey, cacheModel, ResponseCachePurposeLLMRefiner, content, 0, 0)
+		_ = r.Cache.Put(callCtx, cacheKey, cacheModel, ResponseCachePurposeLLMRefiner, content, promptTok, completionTok)
 	}
 	return &refined, nil
 }

@@ -7,6 +7,7 @@ import (
 	"crypto/sha256"
 	"encoding/json"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 )
@@ -256,6 +257,11 @@ type Task struct {
 	// spend-per-API-key UI (migration 148).
 	CreatedByAPIKeyID *string `json:"created_by_api_key_id,omitempty"`
 
+	// GoalOrigin is the creation surface that wrote the goal, one of the
+	// TaskGoalOrigin* constants (goal_origin.go). Empty is stored as NULL and
+	// read as unknown. Written only by Create; no update path touches it.
+	GoalOrigin string `json:"goal_origin,omitempty"`
+
 	// CreatedByActor is WHO caused this task to exist, as `<kind>:<id>` with
 	// kinds fixed at api_key / user / system / anonymous (internal/actor).
 	// Powers the adoption leaderboard (LLD 2026-08-15 §3.1).
@@ -333,8 +339,18 @@ const (
 	TaskFailureClassOrphaned      = "ORPHANED"
 	TaskFailureClassCancelled     = "CANCELLED"
 	TaskFailureClassRuntimeError  = "RUNTIME_ERROR"
-	TaskFailureClassUnknown       = "UNKNOWN"
-	TaskFailureClassLeaseExpired  = "LEASE_EXPIRED"
+	// TaskFailureClassPromptTokenBudget: the agent stopped on its step
+	// prompt-token budget before a final answer, and that stop is why the
+	// step failed. Raised from the recorded agentOutcome, never from text;
+	// distinct from BUDGET_BLOCKED, which is the project's SPEND cap
+	// (permanent-failure design §10, GitHub #353).
+	TaskFailureClassPromptTokenBudget = "PROMPT_TOKEN_BUDGET"
+	// TaskFailureClassOutputCap: the model's responses were cut off at the
+	// output token limit until the agent gave up (LLD 09 §8.4). Raised from
+	// the recorded agentOutcome (permanent-failure design §10).
+	TaskFailureClassOutputCap    = "OUTPUT_CAP"
+	TaskFailureClassUnknown      = "UNKNOWN"
+	TaskFailureClassLeaseExpired = "LEASE_EXPIRED"
 	// TaskFailureClassWorkflowDrift fires when an execution's stored
 	// workflow_revision no longer matches the live workflow YAML — the
 	// operator edited the file between start and resume, so the state
@@ -704,6 +720,20 @@ func CancellableTaskStatuses() []TaskStatus {
 		TaskStatusWaitingForChildren, TaskStatusAwaitingInput, TaskStatusAwaitingExternal,
 		TaskStatusPaused, TaskStatusAwaitingApproval,
 	}
+}
+
+// ClientCancellableTaskStatuses is the set the client cancel surfaces — the
+// companion MCP cancel (every key kind: companions, Hermes and the broker,
+// agent-admin keys), the REST CancelTask and Telegram /cancel — may move to
+// CANCELLED: CancellableTaskStatuses without AWAITING_APPROVAL. An approval is
+// answered (approve or reject), not cancelled out from under the approver on
+// those surfaces. Operator decision 2026-10-13, GitHub #326 (scheduler design
+// §4.11 "Amended 2026-10-13"). Derived by filtering so the two sets cannot
+// drift. Returns a fresh slice.
+func ClientCancellableTaskStatuses() []TaskStatus {
+	return slices.DeleteFunc(CancellableTaskStatuses(), func(s TaskStatus) bool {
+		return s == TaskStatusAwaitingApproval
+	})
 }
 
 // ClearLeaseFields nils the struct's lease fields, so a full-row write of a
@@ -1613,12 +1643,18 @@ type AutonomyEvaluation struct {
 // AutonomyOutcome values recorded in autonomy_evaluations.outcome.
 // Kept as plain strings so the enum can grow without a column migration.
 const (
-	AutonomyOutcomeCreated         = "CREATED"
-	AutonomyOutcomeNoAction        = "NO_ACTION"
-	AutonomyOutcomeRateLimited     = "RATE_LIMITED"
-	AutonomyOutcomeBudgetBlocked   = "BUDGET_BLOCKED"
-	AutonomyOutcomeActiveTasks     = "ACTIVE_TASKS"
-	AutonomyOutcomeLLMError        = "LLM_ERROR"
+	AutonomyOutcomeCreated       = "CREATED"
+	AutonomyOutcomeNoAction      = "NO_ACTION"
+	AutonomyOutcomeRateLimited   = "RATE_LIMITED"
+	AutonomyOutcomeBudgetBlocked = "BUDGET_BLOCKED"
+	AutonomyOutcomeActiveTasks   = "ACTIVE_TASKS"
+	AutonomyOutcomeLLMError      = "LLM_ERROR"
+	// AutonomyOutcomeLLMTimeout: the evaluation's model call ran out of
+	// time (the evaluate timeout, or the provider's own per-call timeout).
+	// Split from LLM_ERROR on 2026-10-14 because the remedy differs: raise
+	// the bound or use a faster model, not check the model's health
+	// (GitHub #142, outcome-quality-design §S8 F6).
+	AutonomyOutcomeLLMTimeout      = "LLM_TIMEOUT"
 	AutonomyOutcomeParseError      = "PARSE_ERROR"
 	AutonomyOutcomeWorkflowInvalid = "WORKFLOW_INVALID"
 	AutonomyOutcomeTypeRejected    = "TYPE_REJECTED"
@@ -1627,6 +1663,11 @@ const (
 	AutonomyOutcomeCooldown        = "COOLDOWN"
 	AutonomyOutcomeIdempotencyHit  = "IDEMPOTENCY_HIT"
 	AutonomyOutcomeDBError         = "DB_ERROR"
+	// AutonomyOutcomeLeaderFenced: another daemon holds the autonomy
+	// leader epoch, so this one skipped the write. Was filed as NO_ACTION
+	// ("lead decided no work needed") until 2026-10-13 (outcome-quality LLD
+	// §S7 #15).
+	AutonomyOutcomeLeaderFenced = "LEADER_FENCED"
 	// AutonomyOutcomePreCheckSkipped means the project's
 	// pre-LLM gate (autonomy.preCheck) refused this tick.
 	// e.g. "trading-rth" rejected the tick because market is

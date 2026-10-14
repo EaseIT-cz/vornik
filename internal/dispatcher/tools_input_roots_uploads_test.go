@@ -154,7 +154,9 @@ func TestInputFileSourceRoots_IncludesRealArtifactStoreBasePath(t *testing.T) {
 	te := &ToolExecutor{artifactStore: store, logger: zerolog.Nop()}
 
 	roots := te.inputFileSourceRoots("snake")
-	want := resolveRootForContainment(base)
+	// GitHub #351 (2026-10-12): the project's subtree of the store, not the
+	// whole base.
+	want := resolveRootForContainment(filepath.Join(base, "snake"))
 	for _, r := range roots {
 		if r == want {
 			return

@@ -43,7 +43,7 @@ REPO_CONFIGS="${VORNIK_REPO_CONFIGS_DIR:-$REPO_ROOT/configs}"
 # editing THIS list (a reviewed act), which is the anti-bypass (see header §2).
 KNOWN_NON_RUNTIME_IGNORES=(evals examples)
 
-# shellcheck source=scripts/config-deployable.sh
+# shellcheck source=scripts/config-deployable.sh disable=SC1091  # followed only with -x
 . "$MANIFEST"
 
 if [ ! -d "$REPO_CONFIGS" ]; then
@@ -52,6 +52,8 @@ if [ ! -d "$REPO_CONFIGS" ]; then
 fi
 
 violations=0
+ndirs=0
+nfiles=0
 viol() { echo "VIOLATION: $1" >&2; violations=$((violations+1)); }
 
 in_list() { # in_list <needle> <list-elem...>
@@ -64,6 +66,7 @@ in_list() { # in_list <needle> <list-elem...>
 # --- Invariant 1a: every configs/ directory is classified ---
 for d in "$REPO_CONFIGS"/*/; do
 	[ -d "$d" ] || continue
+	ndirs=$((ndirs+1))
 	name="$(basename "$d")"
 	if in_list "$name" "${CONFIG_DEPLOYABLE_DIRS[@]}"; then continue; fi
 	if in_list "$name" "${CONFIG_HOSTLOCAL_DIRS[@]}"; then continue; fi
@@ -74,6 +77,7 @@ done
 # --- Invariant 1b: every top-level configs/ file is deployable or ignored-glob ---
 for f in "$REPO_CONFIGS"/*; do
 	[ -f "$f" ] || continue
+	nfiles=$((nfiles+1))
 	base="$(basename "$f")"
 	if in_list "$base" "${CONFIG_DEPLOYABLE_FILES[@]}"; then continue; fi
 	matched=0
@@ -92,8 +96,13 @@ for name in "${CONFIG_IGNORED[@]}"; do
 	fi
 done
 
+# #334 item 6 (2026-10-13): a configs/ with nothing in it classified nothing.
+if [ $((ndirs + nfiles)) -eq 0 ]; then
+	viol "examined 0 entries under $REPO_CONFIGS; a gate that looked at nothing has not passed"
+fi
+
 if [ "$violations" -eq 0 ]; then
-	echo "config-manifest-lint: OK — every configs/ subtree is classified and CONFIG_IGNORED is a closed non-runtime set"
+	echo "config-manifest-lint: OK — every configs/ subtree is classified and CONFIG_IGNORED is a closed non-runtime set ($ndirs dir(s) and $nfiles file(s) classified)"
 	exit 0
 fi
 echo "" >&2

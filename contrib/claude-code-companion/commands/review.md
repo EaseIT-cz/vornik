@@ -1,6 +1,6 @@
 ---
 description: Async architectural review of the current branch's diff
-allowed-tools: mcp__vornik__delegate, Bash(git diff:*), Bash(git log:*)
+allowed-tools: mcp__plugin_vornik-companion_vornik__delegate, Bash(git diff:*), Bash(git log:*)
 ---
 
 # Async architectural review
@@ -52,7 +52,7 @@ a plain delegate prompt falls back to stale RAG chunks.
    at ~4000 lines via head/tail if needed — anything longer should
    probably be reviewed in chunks anyway.
 2. Run `git log --oneline main...HEAD` to capture the commit context.
-3. Call `mcp__vornik__delegate` with:
+3. Call `mcp__plugin_vornik-companion_vornik__delegate` with:
    - `workflow`: `"companion-architectural-review"`
    - `prompt`: a brief framing line ("Review this branch for
      architectural concerns") followed by the commit list and diff.

@@ -19,12 +19,13 @@ import (
 // false.
 func TestBuildRetentionPanel_AllDefaults(t *testing.T) {
 	project := &registry.Project{ID: "p"}
-	got := buildRetentionPanel(project, registry.ProjectRetention{})
+	got := buildRetentionPanel(project, registry.ProjectRetention{}, 0)
 	if got.TaskLLMUsageDays != 90 {
 		t.Errorf("TaskLLMUsageDays = %d, want 90 fallback", got.TaskLLMUsageDays)
 	}
-	if got.ToolAuditDays != 30 {
-		t.Errorf("ToolAuditDays = %d, want 30 fallback", got.ToolAuditDays)
+	// 180 since 2026-10-12: the compiled default sits at the six-month floor.
+	if got.ToolAuditDays != 180 {
+		t.Errorf("ToolAuditDays = %d, want 180 fallback", got.ToolAuditDays)
 	}
 	if got.TasksDays != 60 || got.ExecutionsDays != 60 || got.ArtifactsDays != 60 {
 		t.Errorf("Tasks/Executions/Artifacts: got %d/%d/%d, want 60/60/60",
@@ -53,12 +54,28 @@ func TestBuildRetentionPanel_DaemonDefaultsApply(t *testing.T) {
 		ExecutionsDays:   45,
 		ArtifactsDays:    45,
 	}
-	got := buildRetentionPanel(project, defaults)
+	got := buildRetentionPanel(project, defaults, 0)
 	if got.TaskLLMUsageDays != 120 {
 		t.Errorf("TaskLLMUsageDays = %d, want 120 (daemon default)", got.TaskLLMUsageDays)
 	}
 	if got.TaskLLMUsageIsOverride {
 		t.Error("daemon-default value must NOT be flagged as override")
+	}
+}
+
+// audit 2026-10-12: the panel showed the raw tool_audit_days (e.g. a daemon
+// default of 7) while the sweeper clamps it up to the six-month floor (AI Act
+// Art 26(6), GitHub #117). It must show the value the sweep will use.
+func TestBuildRetentionPanel_ToolAuditShowsFloor(t *testing.T) {
+	project := &registry.Project{ID: "p", Retention: registry.ProjectRetention{ToolAuditDays: 30}}
+	got := buildRetentionPanel(project, registry.ProjectRetention{ToolAuditDays: 7}, 0)
+	if got.ToolAuditDays != 180 {
+		t.Errorf("ToolAuditDays = %d, want 180 (floor)", got.ToolAuditDays)
+	}
+	// An operator-overridden floor of 14 lets the project's 30 stand.
+	got = buildRetentionPanel(project, registry.ProjectRetention{ToolAuditDays: 7}, 14)
+	if got.ToolAuditDays != 30 {
+		t.Errorf("ToolAuditDays = %d, want 30 under a 14-day floor", got.ToolAuditDays)
 	}
 }
 
@@ -76,7 +93,7 @@ func TestBuildRetentionPanel_ProjectOverridesWin(t *testing.T) {
 		TaskLLMUsageDays: 120,
 		ArtifactsDays:    45,
 	}
-	got := buildRetentionPanel(project, defaults)
+	got := buildRetentionPanel(project, defaults, 0)
 	if got.TaskLLMUsageDays != 365 {
 		t.Errorf("TaskLLMUsageDays = %d, want 365 (project override)", got.TaskLLMUsageDays)
 	}
@@ -99,7 +116,7 @@ func TestBuildRetentionPanel_ProjectOverridesWin(t *testing.T) {
 // project pointer returns hardcoded fallbacks rather than
 // panicking.
 func TestBuildRetentionPanel_NilProjectIsSafe(t *testing.T) {
-	got := buildRetentionPanel(nil, registry.ProjectRetention{})
+	got := buildRetentionPanel(nil, registry.ProjectRetention{}, 0)
 	if got.TaskLLMUsageDays != 90 {
 		t.Errorf("nil project: got TaskLLMUsageDays=%d, want 90 fallback", got.TaskLLMUsageDays)
 	}

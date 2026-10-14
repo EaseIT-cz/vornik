@@ -2,11 +2,14 @@ package agentloop
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os/exec"
 	"strconv"
 	"strings"
+	"time"
 )
 
 func init() {
@@ -21,25 +24,76 @@ func init() {
 // trailer's total is bytes.
 const gitOutputCap = 30000
 
-// runGit runs git in repo and returns stdout and stderr separately.
-func runGit(repo string, argv ...string) (stdout, stderr string, err error) {
-	cmd := exec.Command("git", argv...)
+// Every git call is bounded (GitHub #142 #19, outcome-quality LLD §S6 #19).
+// The tools used exec.Command with no context, so a git that never returned
+// (an external diff driver, a credential or fsmonitor helper, a wedged
+// filesystem) held the tool call until the container's step timeout killed
+// the whole step. gitCallTimeout is the per-call bound, the value the
+// document renderer beside these tools already uses; gitWaitDelay is how long
+// Run waits for a killed git's children (which may hold its output pipes)
+// before giving up on them. Variables only so the test can shorten them.
+var (
+	gitCallTimeout = 2 * time.Minute
+	gitWaitDelay   = 5 * time.Second
+)
+
+// gitCommand builds one bounded git invocation. The program stays the literal
+// "git" (TestAgentSubprocessPrograms).
+func gitCommand(ctx context.Context, repo string, argv []string) *exec.Cmd {
+	cmd := exec.CommandContext(ctx, "git", argv...)
 	cmd.Dir = repo
+	cmd.WaitDelay = gitWaitDelay
+	return cmd
+}
+
+// gitTimedOut names a call the bound cut off, or returns nil.
+func gitTimedOut(ctx context.Context, argv []string) error {
+	if ctx.Err() == nil {
+		return nil
+	}
+	sub := ""
+	if len(argv) > 0 {
+		sub = argv[0]
+	}
+	return fmt.Errorf("git %s timed out after %s: %w", sub, gitCallTimeout, ctx.Err())
+}
+
+// runGit runs git in repo and returns stdout and stderr separately. A call cut
+// off by its bound returns an error that says so, and the same text on stderr
+// (the git_log path shows stderr to the model).
+func runGit(repo string, argv ...string) (stdout, stderr string, err error) {
+	ctx, cancel := context.WithTimeout(context.Background(), gitCallTimeout)
+	defer cancel()
+	cmd := gitCommand(ctx, repo, argv)
 	var out, errb bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &out, &errb
 	err = cmd.Run()
+	if terr := gitTimedOut(ctx, argv); terr != nil {
+		errb.WriteString(terr.Error())
+		return out.String(), errb.String(), terr
+	}
 	return out.String(), errb.String(), err
 }
 
 // runGitMerged is `$( (cd repo && git …) 2>&1 || true )`: stdout and stderr
-// interleaved into one stream, trailing newlines stripped by the capture.
+// interleaved into one stream, trailing newlines stripped by the capture. A
+// call cut off by its bound ends with a line that says the output above it is
+// incomplete, so a truncated diff never reads as the whole diff.
 func runGitMerged(repo string, argv ...string) string {
-	cmd := exec.Command("git", argv...)
-	cmd.Dir = repo
+	ctx, cancel := context.WithTimeout(context.Background(), gitCallTimeout)
+	defer cancel()
+	cmd := gitCommand(ctx, repo, argv)
 	var both bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &both, &both
 	_ = cmd.Run()
-	return strings.TrimRight(both.String(), "\n")
+	text := strings.TrimRight(both.String(), "\n")
+	if terr := gitTimedOut(ctx, argv); terr != nil {
+		if text != "" {
+			text += "\n\n"
+		}
+		text += "ERROR: " + terr.Error() + "; any output above is incomplete"
+	}
+	return text
 }
 
 func capGitOutput(s string) string {
@@ -72,6 +126,9 @@ func gitStatus(env Env, raw json.RawMessage) string {
 		return "ERROR: not a git repository: " + repo
 	}
 	if _, _, err := runGit(repo, "rev-parse", "--git-dir"); err != nil {
+		if errors.Is(err, context.DeadlineExceeded) {
+			return "ERROR: " + err.Error()
+		}
 		return "ERROR: not a git repository: " + repo
 	}
 	branch, _, _ := runGit(repo, "rev-parse", "--abbrev-ref", "HEAD")

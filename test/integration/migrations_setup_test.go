@@ -15,6 +15,7 @@ import (
 
 	_ "github.com/lib/pq"
 	"vornik.io/vornik/internal/persistence"
+	"vornik.io/vornik/internal/testutil/testenv"
 )
 
 // CI bootstraps the test DB from deployments/postgres/schema/001_initial.sql,
@@ -42,7 +43,11 @@ import (
 
 var migrateOnce sync.Once
 
-func TestMain(m *testing.M) {
+// TestMain runs the suite in the environment CI gives it: no inherited
+// VORNIK_* except the test knobs (GitHub #357, testing design 19 §11).
+func TestMain(m *testing.M) { os.Exit(testenv.Main(m, mainIntegration)) }
+
+func mainIntegration(m *testing.M) int {
 	// CREATE DATABASE the integration target before any test (and
 	// before applyTestMigrations, which assumes the DB exists).
 	// Best-effort: if it fails we let applyTestMigrations surface
@@ -54,7 +59,7 @@ func TestMain(m *testing.M) {
 	purgeIntegrationOrphans()
 	code := m.Run()
 	purgeIntegrationOrphans()
-	os.Exit(code)
+	return code
 }
 
 // ensureIntegrationDB creates POSTGRES_DB (default

@@ -376,7 +376,7 @@ func (m *MockExecRepo) GetByTaskID(ctx context.Context, tid string) (*persistenc
 			return &cp, nil
 		}
 	}
-	return nil, errors.New("not found")
+	return nil, persistence.ErrNotFound
 }
 func (m *MockExecRepo) Update(ctx context.Context, e *persistence.Execution) error {
 	m.mu.Lock()

@@ -103,6 +103,13 @@ type Metrics struct {
 	// contract violation worth investigating (design §9 R1).
 	ResidueDiscardTotal *prometheus.CounterVec
 
+	// MergeBackPreservedTotal counts every merge-back failure once, by what
+	// became of its work: pinned to refs/vornik/preserved, nothing_to_pin
+	// (already on the project's HEAD), or pin_failed (the work survives only
+	// in the worktree). The sum over result is the merge-back failure count
+	// (executor design §9.5.6).
+	MergeBackPreservedTotal *prometheus.CounterVec
+
 	// PromptHashMismatchTotal counts step_prompt.json parts whose
 	// container-computed sha256 differed from the hash of the bytes the daemon
 	// stored (step-prompt persistence design §4). reason=redacted: the seam
@@ -326,7 +333,12 @@ type Metrics struct {
 	// the near-duplicate gate, labelled by the reason that matched, and tasks
 	// the distiller refused outright (broker_workflow, broker_project,
 	// not_completed, unresolved, lookup_error; agent-administered design
-	// §18.9). The rate is the operator's signal that the gate is doing work
+	// §18.9) or because it read third-party content (third_party_tools,
+	// third_party_lineage, third_party_system_step, taint_unreadable,
+	// taint_unrecorded, lineage_incomplete, lineage_unrecorded,
+	// step_unaudited, step_unrecorded, step_record_truncated,
+	// descendants_unbounded, goal_origin_unproven, task_inputs; learning-loop
+	// design, amendments 2026-10-12 and 2026-10-12b). The rate is the operator's signal that the gate is doing work
 	// rather than that the distiller has gone quiet.
 	SkillDistillSkippedTotal *prometheus.CounterVec
 
@@ -618,6 +630,15 @@ func NewMetrics(registerer prometheus.Registerer) *Metrics {
 			},
 			[]string{"project"},
 		),
+		MergeBackPreservedTotal: promauto.With(registerer).NewCounterVec(
+			prometheus.CounterOpts{
+				Namespace: executorNamespace,
+				Subsystem: executorSubsystem,
+				Name:      "merge_back_preserved_total",
+				Help:      "Merge-back failures by what became of the task's work: pinned (a refs/vornik/preserved ref was written), nothing_to_pin (already on the project's HEAD), pin_failed (survives only in the worktree until a retry or restart). The sum is the merge-back failure count; resets on restart. The doctor's preserved_work check lists the refs that exist now.",
+			},
+			[]string{"project", "result"},
+		),
 		TaskBudgetTierTotal: promauto.With(registerer).NewCounterVec(
 			prometheus.CounterOpts{
 				Namespace: executorNamespace,
@@ -847,7 +868,7 @@ func NewMetrics(registerer prometheus.Registerer) *Metrics {
 			prometheus.CounterOpts{
 				Namespace: "vornik",
 				Name:      "skill_distill_skipped_total",
-				Help:      "Auto-proposed skill drafts suppressed, by reason: a near-duplicate match reason, or a refused task (broker_workflow, broker_project, not_completed, unresolved, lookup_error).",
+				Help:      "Auto-proposed skill drafts suppressed, by reason: a near-duplicate match reason, or a refused task (broker_workflow, broker_project, not_completed, unresolved, lookup_error; the default-deny proof: third_party_system_step, taint_unreadable, lineage_incomplete, goal_origin_unrecorded, goal_third_party, goal_origin_unproven, descendants_unbounded, task_inputs, task_messages, taint_unrecorded, third_party_tools, lineage_unrecorded, third_party_lineage, step_unaudited, step_unrecorded, step_record_truncated), or a failed distiller model call (llm_error, llm_timeout, llm_cancelled, llm_empty).",
 			},
 			[]string{"reason"},
 		),
@@ -938,7 +959,7 @@ func (m *Metrics) RecordIngestSkippedProducerFailed(projectID, status string) {
 // RecordSkillDistillSkipped counts drafts the near-duplicate gate suppressed,
 // by the reason that matched, and tasks the distiller refused before calling
 // the model (broker_workflow, broker_project, not_completed, unresolved,
-// lookup_error). Without it, "the gate is working" and "the distiller
+// lookup_error, and the third-party-content refusals of GitHub #162). Without it, "the gate is working" and "the distiller
 // stopped proposing" look identical from outside.
 func (m *Metrics) RecordSkillDistillSkipped(reason string) {
 	if m == nil || m.SkillDistillSkippedTotal == nil {
@@ -1299,6 +1320,29 @@ func (m *Metrics) updateModelGaugesLocked(e *modelStatEntry) {
 	if e.ok > 0 {
 		m.ModelEffectiveCostUSD.WithLabelValues(e.role, e.model).Set(e.costUSD / float64(e.ok))
 	}
+}
+
+// The three results of MergeBackPreservedTotal.
+const (
+	MergeBackPreservedPinned       = "pinned"
+	MergeBackPreservedNothingToPin = "nothing_to_pin"
+	MergeBackPreservedPinFailed    = "pin_failed"
+)
+
+// RecordMergeBackPreserved counts one merge-back failure by the outcome of
+// preserveFailedWork (executor design §9.5.6).
+func (m *Metrics) RecordMergeBackPreserved(projectID string, pw PreservedWork, pinErr error) {
+	if m == nil || m.MergeBackPreservedTotal == nil {
+		return
+	}
+	result := MergeBackPreservedNothingToPin
+	switch {
+	case pinErr != nil:
+		result = MergeBackPreservedPinFailed
+	case pw.Ref != "":
+		result = MergeBackPreservedPinned
+	}
+	m.MergeBackPreservedTotal.WithLabelValues(projectID, result).Inc()
 }
 
 // RecordRetried increments the retried counter.

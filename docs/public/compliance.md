@@ -118,14 +118,15 @@ We would rather you read this from us than find it in a questionnaire.
 |---|---|---|
 | **Records of processing (Art 30)** | Mandatory document; does not yet exist | In preparation |
 | **Data processing agreement (Art 28)** | No standard processor terms to sign | In preparation |
-| **No data-subject identifier** | Access / erasure / portability requests cannot be scoped to one person — deletion works at project or record level, not per data subject | Engineering work scheduled |
+| **Per-subject rights are partial** | `vornikctl subject` handles access, portability, erasure, rectification (Art 16) and restriction (Art 18) for one person, but only over records the deployment has linked to that person. Rectification corrects memory records and knowledge-graph entities. Restriction withholds memory records and knowledge-graph entities (with the relations that involve them): transcripts, profiles and files stay in use, and the graph extractor can still compare a new mention against a restricted name. The limits are listed in §8 of the DPA template | Shipped 2026-10-12 (rectification, restriction); remaining limits documented |
 | **DPIA (Art 35)** | Not yet performed | In preparation |
 | **Retention off by default** | Personal data is kept indefinitely unless you enable the sweeper | Recommended profile + a startup warning being added |
 | **Breach notification (Art 33)** | No formalised controller-notification pipeline | Planned |
 
 The third row is the one to weigh if you are evaluating Vornik for personal
-data at scale. Deleting *a project* or *a record* works well today; deleting
-*everything about one person* requires manual work.
+data at scale. The per-person tools act on what the deployment has linked to a
+person. A record that mentions someone but was never identified as being about
+them is not reached, and the stores listed above need manual handling.
 
 ### Sub-processors
 

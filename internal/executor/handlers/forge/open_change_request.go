@@ -8,6 +8,7 @@ import (
 	"os"
 	"strings"
 
+	"vornik.io/vornik/internal/aidisclosure"
 	"vornik.io/vornik/internal/executor"
 	forgeapi "vornik.io/vornik/internal/forge"
 	"vornik.io/vornik/internal/persistence"
@@ -168,7 +169,7 @@ func (h *OpenChangeRequestHandler) Execute(ctx context.Context, in executor.Syst
 		// Same notice, same separator as forge.post_review: both sinks in this
 		// abstraction disclose identically, so the perimeter is one rule rather
 		// than a per-sink convention an auditor has to be walked through.
-		Body:   withDisclosure(bodyForJob(*job), h.disclosure.PublicationNotice()),
+		Body:   aidisclosure.WithFooter(bodyForJob(*job), h.disclosure.PublicationNotice()),
 		Labels: job.Labels,
 		Draft:  true,
 	})

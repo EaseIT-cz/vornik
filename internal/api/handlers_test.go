@@ -1628,10 +1628,10 @@ func TestServer_CancelTask_Success(t *testing.T) {
 				CreatedAt: now,
 			}, nil
 		},
-		// CancelTask now uses the atomic TransitionToCancelled
-		// transition rather than UpdateStatus directly, so the
-		// success path goes through TransitionToCancelledFunc.
-		TransitionToCancelledFunc: func(ctx context.Context, id string) (bool, error) {
+		// CancelTask writes through the atomic conditional transition
+		// (the client cancel set since GitHub #326), so the success path
+		// goes through TransitionConditionalFunc.
+		TransitionConditionalFunc: func(_ context.Context, _ string, _ []persistence.TaskStatus, _ persistence.TaskStatus, _ persistence.TransitionOpts) (bool, error) {
 			return true, nil
 		},
 	}
@@ -1653,7 +1653,7 @@ func TestServer_CancelTask_Success(t *testing.T) {
 // TestServer_CancelTask_TerminalRaceDoesNotOverwrite is the headline
 // post-audit behaviour: the handler reads the task as RUNNING, but
 // the task COMPLETED in the gap before the atomic transition. The
-// new TransitionToCancelled returns 0 rows; the handler must NOT
+// conditional cancel write returns 0 rows; the handler must NOT
 // then call UpdateStatus(CANCELLED) (which the legacy code did,
 // silently overwriting the COMPLETED terminal state). It must
 // surface 409 with the live status instead.
@@ -1674,7 +1674,7 @@ func TestServer_CancelTask_TerminalRaceDoesNotOverwrite(t *testing.T) {
 				Status: persistence.TaskStatusCompleted, Priority: 50, CreatedAt: now,
 			}, nil
 		},
-		TransitionToCancelledFunc: func(_ context.Context, _ string) (bool, error) {
+		TransitionConditionalFunc: func(_ context.Context, _ string, _ []persistence.TaskStatus, _ persistence.TaskStatus, _ persistence.TransitionOpts) (bool, error) {
 			return false, nil // race: task already terminal
 		},
 		UpdateStatusFunc: func(_ context.Context, _ string, _ persistence.TaskStatus) error {

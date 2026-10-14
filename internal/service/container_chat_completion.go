@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/rs/zerolog"
+	"vornik.io/vornik/internal/aidisclosure"
 	"vornik.io/vornik/internal/chatorigin"
 	"vornik.io/vornik/internal/conversation"
 	"vornik.io/vornik/internal/executor"
@@ -52,6 +53,10 @@ type chatCompletionNotifier struct {
 	// explicit allowlist, not "whatever resolves" — a channel that grows its own
 	// notifier must be removed from here in the same change.
 	channels map[string]bool
+
+	// disclosure applies the Art 50 notice to the push (design §11.4, GitHub
+	// #342). Nil discloses with the compiled defaults.
+	disclosure *aidisclosure.Service
 
 	logger zerolog.Logger
 
@@ -120,12 +125,14 @@ func (n *chatCompletionNotifier) NotifyTaskCompleted(
 
 	n.markSent(task.ID)
 	text := n.composeText(origin.ChannelName, task, success, message)
-	if _, err := origin.Channel.Send(ctx, conversation.ChannelMessage{
+	// Art 50: a push outside ChannelReceiver takes the shared disclosure path —
+	// footer on email, notice-first on Slack (design §11.4, GitHub #342).
+	if _, err := conversation.SendDisclosed(ctx, n.disclosure, origin.Channel, conversation.ChannelMessage{
 		Source:    origin.ChannelName,
 		SessionID: origin.SessionID,
 		Text:      text,
 		// SpeakerID empty: this is the daemon speaking, not a person.
-	}); err != nil {
+	}, true); err != nil {
 		n.logger.Warn().
 			Err(err).
 			Str("task_id", task.ID).
@@ -231,7 +238,7 @@ func (c *Container) chatCompletionSink() executor.CompletionNotifier {
 	if !enabled {
 		return nil
 	}
-	return newChatCompletionNotifier(
+	n := newChatCompletionNotifier(
 		c.repos.ChatAudit,
 		c.steeringTaskGetter(),
 		&containerChannelResolver{c: c},
@@ -256,4 +263,6 @@ func (c *Container) chatCompletionSink() executor.CompletionNotifier {
 		map[string]bool{"slack": true, "email": true},
 		c.Logger.With().Str("component", "chat-completion").Logger(),
 	)
+	n.disclosure = c.AIDisclosure
+	return n
 }

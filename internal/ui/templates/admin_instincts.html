@@ -38,7 +38,7 @@
                   class="glass rounded-xl border border-dark-700 px-4 py-3 flex flex-wrap items-end gap-3 text-sm">
                 <label class="block">
                     <span class="block text-xs text-gray-500 uppercase tracking-wider mb-1">Domain</span>
-                    <select name="domain" class="bg-dark-700 border border-dark-600 text-gray-200 text-xs rounded-md px-2 py-1 w-36">
+                    <select name="domain" class="bg-dark-700 border border-control text-gray-200 text-xs rounded-md px-2 py-1 w-36">
                         {{range .DomainOptions}}
                         <option value="{{.}}" {{if eq . $.FilterDomain}}selected{{end}}>{{if .}}{{.}}{{else}}any{{end}}</option>
                         {{end}}
@@ -46,7 +46,7 @@
                 </label>
                 <label class="block">
                     <span class="block text-xs text-gray-500 uppercase tracking-wider mb-1">Scope</span>
-                    <select name="scope" class="bg-dark-700 border border-dark-600 text-gray-200 text-xs rounded-md px-2 py-1 w-32">
+                    <select name="scope" class="bg-dark-700 border border-control text-gray-200 text-xs rounded-md px-2 py-1 w-32">
                         {{range .ScopeOptions}}
                         <option value="{{.}}" {{if eq . $.FilterScope}}selected{{end}}>{{if .}}{{.}}{{else}}any{{end}}</option>
                         {{end}}
@@ -54,7 +54,7 @@
                 </label>
                 <label class="block">
                     <span class="block text-xs text-gray-500 uppercase tracking-wider mb-1">Status</span>
-                    <select name="status" class="bg-dark-700 border border-dark-600 text-gray-200 text-xs rounded-md px-2 py-1 w-36">
+                    <select name="status" class="bg-dark-700 border border-control text-gray-200 text-xs rounded-md px-2 py-1 w-36">
                         {{range .StatusOptions}}
                         <option value="{{.}}" {{if eq . $.FilterStatus}}selected{{end}}>{{if .}}{{.}}{{else}}any{{end}}</option>
                         {{end}}
@@ -62,11 +62,11 @@
                 </label>
                 <label class="block">
                     <span class="block text-xs text-gray-500 uppercase tracking-wider mb-1">Project</span>
-                    <input type="text" name="project" value="{{.FilterProject}}" placeholder="e.g. assistant" class="bg-dark-700 border border-dark-600 text-gray-200 text-xs rounded-md px-2 py-1 w-40">
+                    <input type="text" name="project" value="{{.FilterProject}}" placeholder="e.g. assistant" class="bg-dark-700 border border-control text-gray-200 text-xs rounded-md px-2 py-1 w-40">
                 </label>
                 <label class="block">
                     <span class="block text-xs text-gray-500 uppercase tracking-wider mb-1">Min confidence</span>
-                    <input type="text" name="min_confidence" value="{{.FilterMinConf}}" placeholder="0.0-1.0" class="bg-dark-700 border border-dark-600 text-gray-200 text-xs rounded-md px-2 py-1 w-28">
+                    <input type="text" name="min_confidence" value="{{.FilterMinConf}}" placeholder="0.0-1.0" class="bg-dark-700 border border-control text-gray-200 text-xs rounded-md px-2 py-1 w-28">
                 </label>
                 <input type="hidden" name="limit" value="{{.Limit}}">
                 <button class="bg-brand-500 hover:bg-brand-500 text-white text-xs font-medium px-3 py-1.5 rounded-md">Filter</button>

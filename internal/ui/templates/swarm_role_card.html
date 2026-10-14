@@ -6,25 +6,25 @@
     </label>
     {{if .Field.IsBool}}
     <select name="{{.Name}}" {{if .Field.ReadOnly}}disabled{{end}}
-            class="w-full rounded-md bg-dark-900 border border-dark-600 px-3 py-2 text-sm text-gray-100 disabled:opacity-50">
+            class="w-full rounded-md bg-dark-900 border border-control px-3 py-2 text-sm text-gray-100 disabled:opacity-50">
         <option value="false" {{if eq .Value "false"}}selected{{end}}>false</option>
         <option value="true" {{if eq .Value "true"}}selected{{end}}>true</option>
     </select>
     {{else if .Field.IsEnum}}
     <select name="{{.Name}}" {{if .Field.ReadOnly}}disabled{{end}}
-            class="w-full rounded-md bg-dark-900 border border-dark-600 px-3 py-2 text-sm text-gray-100 disabled:opacity-50">
+            class="w-full rounded-md bg-dark-900 border border-control px-3 py-2 text-sm text-gray-100 disabled:opacity-50">
         {{if not .Field.Required}}<option value="" {{if eq .Value ""}}selected{{end}}>— unset —</option>{{end}}
         {{range .Field.Enum}}<option value="{{.}}" {{if eq . $.Value}}selected{{end}}>{{.}}</option>{{end}}
     </select>
     {{else if .Field.IsTextarea}}
     <textarea name="{{.Name}}" rows="3" {{if .Field.ReadOnly}}disabled{{end}}
               {{if .Field.IsStringList}}placeholder="one per line"{{end}}
-              class="w-full rounded-md bg-dark-900 border border-dark-600 px-3 py-2 text-sm text-gray-100 {{if .Field.IsStringList}}font-mono{{end}} disabled:opacity-50">{{.Value}}</textarea>
+              class="w-full rounded-md bg-dark-900 border border-control px-3 py-2 text-sm text-gray-100 {{if .Field.IsStringList}}font-mono{{end}} disabled:opacity-50">{{.Value}}</textarea>
     {{else}}
     <input type="{{.Field.InputType}}" {{if .Field.IsNumeric}}step="any"{{end}}
            name="{{.Name}}" value="{{.Value}}" {{if .Field.ReadOnly}}disabled{{end}}
            {{if .Field.Default}}placeholder="{{.Field.Default}}"{{end}}
-           class="w-full rounded-md bg-dark-900 border border-dark-600 px-3 py-2 text-sm text-gray-100 disabled:opacity-50">
+           class="w-full rounded-md bg-dark-900 border border-control px-3 py-2 text-sm text-gray-100 disabled:opacity-50">
     {{end}}
     {{if .Field.Help}}<p class="text-[11px] text-gray-500">{{.Field.Help}}</p>{{end}}
     {{if .Err}}<p class="text-[11px] text-red-700 dark:text-red-300">{{.Err}}</p>{{end}}

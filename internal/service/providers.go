@@ -15,6 +15,8 @@ import (
 	"vornik.io/vornik/internal/featuredoctor"
 	"vornik.io/vornik/internal/persistence"
 	"vornik.io/vornik/internal/registry"
+	"vornik.io/vornik/internal/runtime"
+	"vornik.io/vornik/internal/storage"
 	"vornik.io/vornik/internal/taskcreate"
 )
 
@@ -354,6 +356,28 @@ func WithBootProvenance(p *config.Provenance) ContainerOption {
 // features were live.
 func WithEdition(e string) ContainerOption {
 	return func(c *Container) { c.SetEdition(e) }
+}
+
+// WithRuntimeManagerOptions appends opts to the runtime manager's options,
+// after the ones initScheduler derives from config, so they take precedence.
+// For tests: internal/service unit tests pass runtime.WithVersionProbe and a
+// non-existent podman path through it so building a Container never execs the
+// host's podman (#127; runtime LLD, amendment 2026-10-12).
+func WithRuntimeManagerOptions(opts ...runtime.ManagerOption) ContainerOption {
+	return func(c *Container) {
+		c.runtimeManagerOptions = append(c.runtimeManagerOptions, opts...)
+	}
+}
+
+// WithDatabaseOpener replaces storage.Open as the way initDatabase opens the
+// database; everything initDatabase does after the open (Migrate, metrics,
+// repositories) is unchanged. For tests: internal/service unit tests pass an
+// opener that hands the container a copy of the migrated in-memory test image
+// instead of migrating a fresh :memory: database per boot, which was most of
+// the package's -race time (#367; storage-abstraction design, "In-memory test
+// databases", 2026-10-14). The daemon passes none.
+func WithDatabaseOpener(open func(context.Context, config.DatabaseConfig) (*storage.Backend, error)) ContainerOption {
+	return func(c *Container) { c.databaseOpener = open }
 }
 
 // applyOptions defaults c.providers to CommunityProviders then applies each

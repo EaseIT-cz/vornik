@@ -24,6 +24,7 @@ import (
 // Inter-participant edges, stated so a reorder is visibly wrong:
 //
 //	output_file_contract (1) writes GlobVerified          → plausibility (3) reads it
+//	output_file_contract (1) writes CauseStop             → the caller, onto the step's error
 //	hallucination_detector (6) writes HallucinationSignals, HallucinationDetail → the caller, onto the outcome row
 //	trading_floor (7) rewrites ResultBytes                → outcome_verifiers (8) and the caller
 //
@@ -45,7 +46,11 @@ type StepOutcome struct {
 	PreStepHEAD, PostStepHEAD   string
 
 	// Written by participants.
-	GlobVerified         bool
+	GlobVerified bool
+	// CauseStop is the agent-recorded stop the output-file contract led its
+	// refusal with ("" when it refused without one); the caller carries it
+	// onto the step's error for the task class (permanent-failure design §10).
+	CauseStop            string
 	HallucinationSignals []byte
 	HallucinationDetail  string
 	// Err is the refusing participant's own error value, returned to the
@@ -143,6 +148,7 @@ func (e *Executor) outputFileContractParticipant(_ context.Context, in *StepOutc
 			}
 			// No "you MUST write the file" here: telling a model to try harder
 			// is the wrong instruction when the thing it ran out of was budget.
+			in.CauseStop = cause
 			return pipeline.Verdict{Refused: true, Reason: reason}
 		}
 	}

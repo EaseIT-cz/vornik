@@ -197,6 +197,14 @@ func parseMemTotal(r io.Reader) (int64, error) {
 	return parseMemField(r, "MemTotal:")
 }
 
+// ParseMeminfoField returns one /proc/meminfo field (name without the colon,
+// e.g. "SwapFree") in bytes, read from r. An absent field is an error, never
+// zero. Exported for the e2e lanes' memory preflight (Hermes e2e lane design,
+// "Memory guardrails", 2026-10-14), so the tree keeps one meminfo parser.
+func ParseMeminfoField(r io.Reader, name string) (int64, error) {
+	return parseMemField(r, name+":")
+}
+
 // parseMemField pulls one kB-denominated field out of /proc/meminfo content.
 //
 // Split from the two exported readers so the parsing is testable without a

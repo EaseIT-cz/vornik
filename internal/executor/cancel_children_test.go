@@ -130,3 +130,51 @@ func TestCancelChildren_NilSafeAndNoChildren(t *testing.T) {
 	var nilExec *Executor
 	nilExec.CancelChildren(context.Background(), "x") // must not panic
 }
+
+// TestCancelChildren_LeavesParkedChildrenAlone — GitHub #326 (2026-10-13,
+// review-20261013-1da5 F7): once the companion, REST and Telegram cancels may
+// cancel a WAITING_FOR_CHILDREN parent, the cascade they trigger must leave a
+// child parked for the operator (AWAITING_APPROVAL, AWAITING_INPUT,
+// AWAITING_EXTERNAL) as it is, as the UI cancel always has. Pins the existing
+// cancellableChildStatuses scope; an invariant test, not a red-first one.
+func TestCancelChildren_LeavesParkedChildrenAlone(t *testing.T) {
+	parentID := "p326"
+	tasks := map[string]*persistence.Task{
+		"c-approval": {ID: "c-approval", ParentTaskID: &parentID, Status: persistence.TaskStatusAwaitingApproval},
+		"c-input":    {ID: "c-input", ParentTaskID: &parentID, Status: persistence.TaskStatusAwaitingInput},
+		"c-external": {ID: "c-external", ParentTaskID: &parentID, Status: persistence.TaskStatusAwaitingExternal},
+		"c-running":  {ID: "c-running", ParentTaskID: &parentID, Status: persistence.TaskStatusRunning},
+	}
+	repo := &mocks.MockTaskRepository{
+		GetChildrenFunc: func(_ context.Context, id string) ([]*persistence.Task, error) {
+			if id != parentID {
+				return nil, nil
+			}
+			return []*persistence.Task{tasks["c-approval"], tasks["c-input"], tasks["c-external"], tasks["c-running"]}, nil
+		},
+		TransitionConditionalFunc: func(_ context.Context, id string, from []persistence.TaskStatus, to persistence.TaskStatus, _ persistence.TransitionOpts) (bool, error) {
+			task := tasks[id]
+			for _, s := range from {
+				if task.Status == s {
+					task.Status = to
+					return true, nil
+				}
+			}
+			return false, nil
+		},
+	}
+	e := &Executor{logger: zerolog.Nop(), taskRepo: repo}
+	e.CancelChildren(context.Background(), parentID)
+
+	want := map[string]persistence.TaskStatus{
+		"c-approval": persistence.TaskStatusAwaitingApproval,
+		"c-input":    persistence.TaskStatusAwaitingInput,
+		"c-external": persistence.TaskStatusAwaitingExternal,
+		"c-running":  persistence.TaskStatusCancelled,
+	}
+	for id, st := range want {
+		if tasks[id].Status != st {
+			t.Errorf("%s = %s, want %s", id, tasks[id].Status, st)
+		}
+	}
+}

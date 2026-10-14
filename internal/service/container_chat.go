@@ -82,26 +82,47 @@ func resolveAgentHealthConfig(hc config.ChatHealthConfig) (chat.HealthConfig, bo
 // OPEN or recovers to CLOSED. Nil-safe on the notifier. Single-daemon here so
 // no leader gate; the operator-alert notifier is already deduped/rate-capped,
 // and a multi-replica leader gate is a tracked follow-up.
-func (c *Container) modelHealthStateChangeHook() func(route, model, state string) {
+//
+// reason is the trip reason on an open edge (empty otherwise); the log line
+// and the alert name it with its remedy (outcome-quality LLD §S5 #16, GitHub
+// #142).
+func (c *Container) modelHealthStateChangeHook() func(route, model, state, reason string) {
 	logger := c.Logger.With().Str("component", "chat").Str("subsystem", "model-health").Logger()
-	return func(route, model, state string) {
-		logger.Warn().Str("route", route).Str("model", model).Str("state", state).
-			Msg("chat: model-health circuit state change")
+	return func(route, model, state, reason string) {
+		ev := logger.Warn().Str("route", route).Str("model", model).Str("state", state)
+		if reason != "" {
+			ev = ev.Str("trip_reason", reason).Str("remedy", chat.TripReasonRemedy(reason))
+		}
+		ev.Msg("chat: model-health circuit state change")
 		n := c.operatorAlertNotifier()
 		if n == nil {
 			return
 		}
-		switch state {
-		case "open":
-			n.NotifyOperator(context.Background(),
-				"⚠️ model circuit opened",
-				fmt.Sprintf("Model %q on route %q is failing hard — its circuit opened and requests are now routing to the fallback. Investigate the provider; it will half-open probe automatically.", model, route))
-		case "closed":
-			n.NotifyOperator(context.Background(),
-				"✅ model circuit recovered",
-				fmt.Sprintf("Model %q on route %q recovered — its circuit closed and normal routing resumed.", model, route))
+		if title, body, ok := modelCircuitAlert(route, model, state, reason); ok {
+			n.NotifyOperator(context.Background(), title, body)
 		}
 	}
+}
+
+// modelCircuitAlert is the operator alert for a circuit transition: an open
+// or a recovered circuit alerts, a half-open one does not. An open alert
+// names the trip reason and its remedy when one is known.
+func modelCircuitAlert(route, model, state, reason string) (title, body string, ok bool) {
+	switch state {
+	case "open":
+		body = fmt.Sprintf("Model %q on route %q is failing hard — its circuit opened and requests are now routing to the fallback.", model, route)
+		if remedy := chat.TripReasonRemedy(reason); remedy != "" {
+			body += fmt.Sprintf(" Tripped by %s: %s.", reason, remedy)
+		} else {
+			body += " Investigate the provider."
+		}
+		body += " It will half-open probe automatically."
+		return "⚠️ model circuit opened", body, true
+	case "closed":
+		return "✅ model circuit recovered",
+			fmt.Sprintf("Model %q on route %q recovered — its circuit closed and normal routing resumed.", model, route), true
+	}
+	return "", "", false
 }
 
 func (c *Container) initChat() error {
@@ -199,7 +220,36 @@ func wrapOptionalWork(client chat.Provider, cfg config.ChatOptionalWorkConfig, l
 		Bool("all_models", cfg.Disabled).
 		Strs("models", cfg.DisabledModels).
 		Msg("chat: optional LLM work disabled (narration, memory titles/classes/narratives, reranking degrade without the model)")
+	// nil metrics HERE is deliberate, not a gap (#308): the registry does not
+	// exist yet at initChat. wireComponentMetrics calls SetMetrics on the
+	// finished client, and the gate, outermost, keeps them for its refusal
+	// counter. TestOptionalWorkGate_RefusalCountsOnServedRegistry pins that.
 	return chat.NewOptionalWorkGate(client, gcfg, nil)
+}
+
+// chatCallTimeout parses chat.timeout for the single-provider paths and
+// reports whether to apply it. Only a positive value applies: the providers
+// bound a call only when their timeout is positive, so passing "0s" through
+// removed the per-call bound entirely. A non-positive value keeps the
+// provider's default (chat.DefaultTimeout), as the router path already does,
+// and is logged once here, at startup (GitHub #142,
+// outcome-quality-design §S8 F2).
+func chatCallTimeout(raw string, logger zerolog.Logger) (time.Duration, bool) {
+	if raw == "" {
+		return 0, false
+	}
+	d, err := time.ParseDuration(raw)
+	if err != nil {
+		logger.Warn().Err(err).Str("chat.timeout", raw).Dur("using", chat.DefaultTimeout).
+			Msg("chat.timeout is not a duration; keeping the provider default")
+		return 0, false
+	}
+	if d <= 0 {
+		logger.Warn().Str("chat.timeout", raw).Dur("using", chat.DefaultTimeout).
+			Msg("chat.timeout is not positive; keeping the provider default so every LLM call stays bounded")
+		return 0, false
+	}
+	return d, true
 }
 
 // initChatHTTP configures the default OpenAI-compatible HTTP client.
@@ -215,10 +265,8 @@ func (c *Container) initChatHTTP(cfg config.ChatConfig) error {
 	}
 
 	opts := []chat.ClientOption{}
-	if cfg.Timeout != "" {
-		if timeout, err := time.ParseDuration(cfg.Timeout); err == nil {
-			opts = append(opts, chat.WithTimeout(timeout))
-		}
+	if timeout, ok := chatCallTimeout(cfg.Timeout, c.Logger); ok {
+		opts = append(opts, chat.WithTimeout(timeout))
 	}
 	if cfg.ContextSize > 0 {
 		opts = append(opts, chat.WithContextSize(cfg.ContextSize))
@@ -256,10 +304,8 @@ func (c *Container) initChatClaudeCLI(cfg config.ChatConfig) error {
 	// The program is minted here, from config (process-spawn law, reading 3;
 	// S1b-2): chat.cli_binary, or "claude" on PATH when it is empty.
 	opts = append(opts, chat.WithCLIBinary(spawn.NewConfiguredCommand(fallbackNonEmpty(cfg.CLIBinary, "claude"))))
-	if cfg.Timeout != "" {
-		if timeout, err := time.ParseDuration(cfg.Timeout); err == nil {
-			opts = append(opts, chat.WithCLITimeout(timeout))
-		}
+	if timeout, ok := chatCallTimeout(cfg.Timeout, c.Logger); ok {
+		opts = append(opts, chat.WithCLITimeout(timeout))
 	}
 
 	c.ChatClient = chat.NewCLIClient(cfg.Model, opts...)
@@ -397,10 +443,8 @@ func (c *Container) initChatCodexCLI(cfg config.ChatConfig) error {
 	// The program is minted here, from config (process-spawn law, reading 3;
 	// S1b-2): chat.cli_binary, or "codex" on PATH when it is empty.
 	opts = append(opts, chat.WithCodexBinary(spawn.NewConfiguredCommand(fallbackNonEmpty(cfg.CLIBinary, "codex"))))
-	if cfg.Timeout != "" {
-		if timeout, err := time.ParseDuration(cfg.Timeout); err == nil {
-			opts = append(opts, chat.WithCodexTimeout(timeout))
-		}
+	if timeout, ok := chatCallTimeout(cfg.Timeout, c.Logger); ok {
+		opts = append(opts, chat.WithCodexTimeout(timeout))
 	}
 
 	c.ChatClient = chat.NewCodexCLIClient(cfg.Model, opts...)

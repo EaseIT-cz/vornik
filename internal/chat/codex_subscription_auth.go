@@ -11,8 +11,9 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"sync"
 	"time"
+
+	"vornik.io/vornik/internal/filelock"
 )
 
 // codexRefreshSkew is how close to id_token expiry we proactively
@@ -65,7 +66,7 @@ type codexAuthToken struct {
 type codexAuthManager struct {
 	path string
 
-	mu          sync.Mutex
+	mu          ctxMutex
 	cached      *codexAuth
 	accountID   string    // cached JWT-derived id
 	expiresAt   time.Time // cached JWT exp
@@ -128,7 +129,9 @@ func newCodexAuthManager(path string) *codexAuthManager {
 // when the cached access token is within the configured skew of
 // expiry. Thread-safe.
 func (m *codexAuthManager) Token(ctx context.Context) (accessToken, accountID string, err error) {
-	m.mu.Lock()
+	if err := m.mu.LockContext(ctx, "codex credential refresh"); err != nil {
+		return "", "", err
+	}
 	defer m.mu.Unlock()
 
 	if m.cached == nil {
@@ -151,6 +154,12 @@ func (m *codexAuthManager) Token(ctx context.Context) (accessToken, accountID st
 	// don't yet have a decoded expiry (fresh load path).
 	if m.expiresAt.IsZero() || time.Until(m.expiresAt) < codexRefreshSkew {
 		if err := m.refreshLocked(ctx); err != nil {
+			// doRefreshPOST records the refresh's own outcomes; a refresh
+			// refused before it, because another process held the lock,
+			// is counted here (code review b20f F2).
+			if errors.Is(err, filelock.ErrLockBusy) {
+				m.recordRefresh("lock_timeout")
+			}
 			return "", "", fmt.Errorf("codex: refresh: %w", err)
 		}
 	}
@@ -282,7 +291,7 @@ func (m *codexAuthManager) refreshLocked(ctx context.Context) error {
 	// token (400 app_session_terminated — the failure this whole
 	// hardening pass fixes). An advisory flock on a sibling .lock file
 	// makes the read-rotate-write atomic across processes.
-	return m.withFileLock(func() error {
+	return m.withFileLock(ctx, func() error {
 		// Under the lock, re-read the on-disk auth: another process may
 		// have rotated the single-use token since we cached. Refreshing
 		// with our stale in-memory token would 400; adopting the disk
@@ -392,8 +401,8 @@ func isTerminalAuthStatus(code int) bool {
 // auth.json. Implementation lives in withAuthFileLock (extracted
 // 2026-06-07 so the claude manager shares it; see
 // subscription_auth_lock.go for the full semantics).
-func (m *codexAuthManager) withFileLock(fn func() error) error {
-	return withAuthFileLock(m.path, fn)
+func (m *codexAuthManager) withFileLock(ctx context.Context, fn func() error) error {
+	return withAuthFileLock(ctx, m.path, fn)
 }
 
 // saveLocked writes the current in-memory auth struct to disk

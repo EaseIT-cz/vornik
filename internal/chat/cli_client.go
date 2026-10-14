@@ -50,8 +50,16 @@ import (
 
 	"github.com/rs/zerolog"
 
+	"vornik.io/vornik/internal/ctxerr"
 	"vornik.io/vornik/internal/spawn"
 )
+
+// cliWaitDelay bounds how long a CLI provider call (claude or codex) waits,
+// after its context ended and the CLI was killed, for the CLI's output pipes
+// to close (exec.Cmd.WaitDelay). Without it a descendant that kept the stdout
+// pipe open hung the call forever, past its own timeout (GitHub #142,
+// outcome-quality-design §S8 F1). A var so tests can shorten it.
+var cliWaitDelay = 10 * time.Second
 
 // CLIClient is a Provider implementation that shells out to the
 // `claude` CLI binary. Construction is cheap; each request spawns a
@@ -207,7 +215,7 @@ func (c *CLIClient) ListModels(_ context.Context) ([]ModelInfo, error) {
 // (typically "command not found") becomes a readiness failure so
 // the daemon's startup gate can wait until the binary is reachable.
 func (c *CLIClient) Ping(ctx context.Context) error {
-	cmd, err := spawn.ConfiguredProgram(ctx, c.program, spawn.ConfiguredOptions{Args: []string{"--version"}})
+	cmd, err := spawn.ConfiguredProgram(ctx, c.program, spawn.ConfiguredOptions{Args: []string{"--version"}, WaitDelay: cliWaitDelay})
 	if err != nil {
 		return fmt.Errorf("cli binary %q: %w", c.binary, err)
 	}
@@ -283,7 +291,7 @@ func (c *CLIClient) invoke(ctx context.Context, messages []Message, tools []Tool
 
 	resp, rerr := c.runClaude(ctx, id, req)
 	if rerr != nil {
-		c.recordMetrics(start, classifyCLIError(rerr))
+		c.recordMetrics(start, classifyCLIError(ctx, rerr))
 		return nil, rerr
 	}
 	if tools != nil {
@@ -419,7 +427,7 @@ func (c *CLIClient) runClaude(ctx context.Context, id uint64, req *cliRequest) (
 	if c.effortLevel != "" {
 		env = append(env, "CLAUDE_CODE_EFFORT_LEVEL="+c.effortLevel)
 	}
-	cmd, err := spawn.ConfiguredProgram(ctx, c.program, spawn.ConfiguredOptions{Args: args, Env: env})
+	cmd, err := spawn.ConfiguredProgram(ctx, c.program, spawn.ConfiguredOptions{Args: args, Env: env, WaitDelay: cliWaitDelay})
 	if err != nil {
 		return nil, fmt.Errorf("cli: %w", err)
 	}
@@ -468,6 +476,14 @@ func (c *CLIClient) runClaude(ctx context.Context, id uint64, req *cliRequest) (
 	_ = stdout.Close()
 	waitErr := cmd.Wait()
 
+	// The call's own bound ended it (or its caller left): say so, wrapping
+	// the cause, rather than reporting the pipe error the kill and
+	// WaitDelay produced (GitHub #142, outcome-quality-design §S8 F1).
+	if ctxErr := ctx.Err(); ctxErr != nil && (parseErr != nil || waitErr != nil) {
+		return nil, fmt.Errorf("cli: %s did not answer within %s: %w (stderr: %s)",
+			c.binary, c.timeout, ctxErr, truncate(stderr.String(), 500))
+	}
+
 	if parseErr != nil {
 		return nil, fmt.Errorf("cli: parse stdout: %w (stderr: %s)", parseErr, truncate(stderr.String(), 500))
 	}
@@ -490,7 +506,7 @@ func (c *CLIClient) recordMetrics(start time.Time, status string) {
 	duration := time.Since(start).Seconds()
 	c.metrics.RequestsTotal.WithLabelValues(c.model, status).Inc()
 	c.metrics.RequestDuration.WithLabelValues(c.model).Observe(duration)
-	if status != "success" {
+	if statusCountsAsError(status) {
 		c.metrics.ErrorsTotal.WithLabelValues(c.model, status).Inc()
 	}
 }
@@ -784,9 +800,19 @@ func truncate(s string, n int) string {
 // classifyCLIError maps a subprocess error to a short metric label.
 // Kept aligned with the HTTP client's status labels ("error",
 // "timeout") so a single Grafana query works for both providers.
-func classifyCLIError(err error) string {
+//
+// The caller's context is read first (outcome-quality LLD §S2 C5, GitHub
+// #142): os/exec kills the child with "signal: killed" on a cancel as well as
+// on a deadline, so the string arm alone recorded every operator cancel as a
+// timeout. With the caller's context still live the string arms decide as
+// before: "signal: killed" stays "timeout" (usually the CLI's own inner
+// timeout; an OOM kill or an outside SIGKILL reads the same).
+func classifyCLIError(ctx context.Context, err error) string {
 	if err == nil {
 		return "success"
+	}
+	if ctx != nil && ctx.Err() != nil {
+		return string(ctxerr.Classify(ctx, err))
 	}
 	msg := err.Error()
 	switch {

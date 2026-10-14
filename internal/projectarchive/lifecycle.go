@@ -208,6 +208,84 @@ func (s *LifecycleService) ScheduleDeleteNow(ctx context.Context, projectID stri
 	return nil
 }
 
+// DeleteNowState is what DeleteNowAndWait can say about the wipe it kicked.
+type DeleteNowState string
+
+const (
+	// DeleteNowDeleted means the sweeper finished every step for the project.
+	DeleteNowDeleted DeleteNowState = "deleted"
+	// DeleteNowFailed means the sweeper attempted the project and failed; Err says
+	// why. The project stays archived and the next tick retries.
+	DeleteNowFailed DeleteNowState = "failed"
+	// DeleteNowDeletedWithErrors means the project was removed (DB rows and
+	// YAML gone) but a later step was not done; Err is that residue (archival
+	// design section H), and ResidueSteps(Err) says which: artifact blobs may
+	// remain under the project's prefix (nothing retries them), and/or the
+	// registry reload failed (the next tick completes the deletion). The
+	// project.delete.partial audit row records it. Word it with
+	// ResidueWarning.
+	DeleteNowDeletedWithErrors DeleteNowState = "deleted_with_errors"
+	// DeleteNowPending means no outcome within the wait (a long wipe, a replica
+	// that is not the leader, or a sweeper that cannot report). Never
+	// "deleted".
+	DeleteNowPending DeleteNowState = "pending"
+)
+
+// DeleteNowResult is DeleteNowAndWait's answer.
+type DeleteNowResult struct {
+	State DeleteNowState
+	Err   error
+}
+
+// DefaultDeleteNowWait bounds how long a delete-now request waits for the
+// sweeper's outcome before answering pending.
+const DefaultDeleteNowWait = 20 * time.Second
+
+// outcomeWaiter is the part of *Sweeper that reports outcomes; a Sweeper
+// without it (a test double, an older wiring) yields pending.
+type outcomeWaiter interface {
+	OutcomeSeq() uint64
+	WaitOutcome(ctx context.Context, projectID string, afterSeq uint64) (DeleteOutcome, bool)
+}
+
+// DeleteNowAndWait is ScheduleDeleteNow followed by a bounded wait for the
+// sweeper's outcome for this project, so the caller is told whether the wipe
+// worked (GitHub #365: a failed wipe used to be answered "scheduled" on every
+// surface).
+//
+// The outcome sequence is read BEFORE the YAML rewind and the kick: a wipe
+// fast enough to finish before this function reads it again is then still an
+// outcome "after" the captured point. Reading it after the kick would miss
+// that outcome and answer pending for a finished wipe (review F3).
+func (s *LifecycleService) DeleteNowAndWait(ctx context.Context, projectID string, isArchived bool, wait time.Duration) (DeleteNowResult, error) {
+	var w outcomeWaiter
+	var after uint64
+	if s != nil {
+		if ow, ok := s.Sweeper.(outcomeWaiter); ok {
+			w = ow
+			after = w.OutcomeSeq()
+		}
+	}
+	if err := s.ScheduleDeleteNow(ctx, projectID, isArchived); err != nil {
+		return DeleteNowResult{}, err
+	}
+	if w == nil || wait <= 0 {
+		return DeleteNowResult{State: DeleteNowPending}, nil
+	}
+	wctx, cancel := context.WithTimeout(ctx, wait)
+	defer cancel()
+	o, ok := w.WaitOutcome(wctx, projectID, after)
+	switch {
+	case !ok:
+		return DeleteNowResult{State: DeleteNowPending}, nil
+	case o.Err != nil:
+		return DeleteNowResult{State: DeleteNowFailed, Err: o.Err}, nil
+	case o.Residue != nil:
+		return DeleteNowResult{State: DeleteNowDeletedWithErrors, Err: o.Residue}, nil
+	}
+	return DeleteNowResult{State: DeleteNowDeleted}, nil
+}
+
 // ParseGraceDuration accepts "<N>d" (days), any
 // time.ParseDuration shape, "" / "default" → DefaultGraceDuration.
 // Centralised here so the UI form parser and the JSON API parser

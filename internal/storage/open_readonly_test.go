@@ -1,11 +1,11 @@
 package storage
 
 import (
-	"context"
 	"path/filepath"
 	"testing"
 
 	"vornik.io/vornik/internal/config"
+	"vornik.io/vornik/internal/persistence/sqlite/sqlitetest"
 )
 
 // A diagnostics collector must not move the schema. OpenReadOnly's SQLite
@@ -14,7 +14,7 @@ import (
 // the operator believed they were only collecting evidence
 // (support-bundle-in-CE design §4).
 func TestOpenReadOnly_SQLiteDoesNotMigrate(t *testing.T) {
-	ctx := context.Background()
+	ctx := sqlitetest.Context(t)
 	path := filepath.Join(t.TempDir(), "vornik.db")
 	cfg := config.DatabaseConfig{Driver: "sqlite", Path: path}
 
@@ -43,7 +43,7 @@ func TestOpenReadOnly_SQLiteDoesNotMigrate(t *testing.T) {
 // The contrast that gives the test above its meaning: Open DOES migrate, so
 // the two functions are not interchangeable.
 func TestOpen_SQLiteMigrates(t *testing.T) {
-	ctx := context.Background()
+	ctx := sqlitetest.Context(t)
 	path := filepath.Join(t.TempDir(), "vornik.db")
 
 	b, err := Open(ctx, config.DatabaseConfig{Driver: "sqlite", Path: path})

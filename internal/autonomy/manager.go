@@ -23,6 +23,7 @@ import (
 	"vornik.io/vornik/internal/backlogfile"
 	"vornik.io/vornik/internal/budget"
 	"vornik.io/vornik/internal/chat"
+	"vornik.io/vornik/internal/ctxerr"
 	forgeapi "vornik.io/vornik/internal/forge"
 	"vornik.io/vornik/internal/leaderelection"
 	"vornik.io/vornik/internal/persistence"
@@ -907,7 +908,7 @@ func (m *Manager) evaluate(parentCtx context.Context, project *registry.Project)
 	defer cancel()
 
 	// Gather current state: recent tasks and their results
-	stateContext, hasActive, err := m.buildStateContext(ctx, project)
+	stateContext, active, err := m.buildStateContext(ctx, project)
 	if err != nil {
 		m.recordEvaluation(parentCtx, evalRecord{
 			projectID: project.ID,
@@ -921,12 +922,12 @@ func (m *Manager) evaluate(parentCtx context.Context, project *registry.Project)
 	// Do not schedule new work while tasks are still queued or running.
 	// Wait for all in-flight work to complete before deciding what to do next,
 	// so the LLM has full context and can't create duplicate backlog entries.
-	if hasActive {
+	if active.any() {
 		m.logger.Debug().Str("project", project.ID).Msg("autonomous evaluation skipped: tasks still active")
 		m.recordEvaluation(parentCtx, evalRecord{
 			projectID: project.ID,
 			outcome:   persistence.AutonomyOutcomeActiveTasks,
-			reason:    "tasks still queued or running",
+			reason:    active.reason(),
 			start:     evalStart,
 		})
 		return nil
@@ -1046,10 +1047,28 @@ IMPORTANT RULES:
 		if m.metrics != nil {
 			m.metrics.ErrorsTotal.WithLabelValues(project.ID).Inc()
 		}
+		// A timeout (the evaluate timeout, or the provider's own per-call
+		// deadline under a live evaluation context) wants a different fix
+		// from a model that answered with an error, so it is its own
+		// outcome and names the bound (GitHub #142, §S8 F6).
+		outcome, reason := persistence.AutonomyOutcomeLLMError, err.Error()
+		if ctxerr.Classify(ctx, err) == ctxerr.Timeout {
+			outcome = persistence.AutonomyOutcomeLLMTimeout
+			// Name the bound that fired (review e0bf #2): the evaluation's
+			// own deadline when its context is spent, otherwise the
+			// provider's per-call timeout.
+			bound := fmt.Sprintf("the model's per-call timeout (chat.timeout) fired inside the %s evaluate timeout", timeout)
+			remedy := "raise chat.timeout, or use a faster model"
+			if ctx.Err() != nil {
+				bound = fmt.Sprintf("the evaluate timeout (%s) ran out", timeout)
+				remedy = "raise the project's autonomy evaluate_timeout, or use a faster model"
+			}
+			reason = fmt.Sprintf("autonomy evaluation timed out: %s: %v. Fix: %s", bound, err, remedy)
+		}
 		m.recordEvaluation(parentCtx, evalRecord{
 			projectID: project.ID,
-			outcome:   persistence.AutonomyOutcomeLLMError,
-			reason:    err.Error(),
+			outcome:   outcome,
+			reason:    reason,
 			start:     evalStart,
 		})
 		return fmt.Errorf("LLM call failed: %w", err)
@@ -1374,9 +1393,12 @@ func (m *Manager) tickBacklog(ctx context.Context, project *registry.Project, ev
 			Str("workflow_id", cfgWorkflowID).
 			Msg("backlog-mode tick: configured workflow_id not found — skipping tick")
 		m.recordEvaluation(ctx, evalRecord{
-			projectID:  project.ID,
-			outcome:    persistence.AutonomyOutcomeParseError,
-			reason:     "backlog-mode tick: workflow_id not found: " + cfgWorkflowID,
+			projectID: project.ID,
+			// WORKFLOW_INVALID, not PARSE_ERROR: the fix is the project
+			// YAML, not the model (outcome-quality LLD §S2 C8, GitHub #142).
+			outcome: persistence.AutonomyOutcomeWorkflowInvalid,
+			reason: "backlog-mode tick: autonomy.workflow_id " + cfgWorkflowID +
+				" is not a loaded workflow — fix the project's autonomy.workflow_id or load the workflow",
 			workflowID: cfgWorkflowID,
 			start:      evalStart,
 		})
@@ -1593,7 +1615,66 @@ func (m *Manager) reconcileBacklogItems(ctx context.Context, abs string, project
 	}
 }
 
-func (m *Manager) buildStateContext(ctx context.Context, project *registry.Project) (string, bool, error) {
+// activeTasks counts, by status, the tasks that hold an evaluation back, so
+// the ACTIVE_TASKS reason can say what it is waiting for — and, for an
+// approval, who can release it (outcome-quality LLD §S7 #15). Whether an
+// approval wait should hold the tick at all is open question Q15a.
+type activeTasks struct {
+	running, waitingForChildren, queued, pending, awaitingApproval int
+}
+
+func (a activeTasks) any() bool {
+	return a.running+a.waitingForChildren+a.queued+a.pending+a.awaitingApproval > 0
+}
+
+func (a activeTasks) reason() string {
+	var parts []string
+	add := func(n int, what string) {
+		if n > 0 {
+			parts = append(parts, fmt.Sprintf("%d %s", n, what))
+		}
+	}
+	add(a.running, "running")
+	add(a.waitingForChildren, "waiting for child tasks")
+	add(a.queued, "queued")
+	add(a.pending, "pending")
+	add(a.awaitingApproval, "awaiting approval")
+	r := "tasks still active (" + strings.Join(parts, ", ") + ")"
+	if a.awaitingApproval > 0 {
+		r += "; a task is waiting for approval: approve or reject it in the inbox (/ui/inbox) or with POST /api/v1/tasks/<id>/approve or /reject, to let autonomy continue"
+	}
+	return r
+}
+
+// countActiveTasks counts, by status, the tasks that hold an evaluation back.
+// It is the one definition of "active": buildStateContext derives its skip
+// decision from it, and the ACTIVE_TASKS reason reads the same counts from
+// the same read (code review b20f F3).
+func countActiveTasks(tasks []*persistence.Task) activeTasks {
+	var a activeTasks
+	for _, t := range tasks {
+		switch t.Status {
+		case persistence.TaskStatusRunning, persistence.TaskStatusLeased:
+			a.running++
+		case persistence.TaskStatusWaitingForChildren:
+			a.waitingForChildren++
+		case persistence.TaskStatusQueued:
+			a.queued++
+		case persistence.TaskStatusPending:
+			a.pending++
+		case persistence.TaskStatusAwaitingApproval:
+			a.awaitingApproval++
+		}
+	}
+	return a
+}
+
+// buildStateContext builds the lead's state narrative and counts the active
+// tasks (countActiveTasks) from the same read, so the skip decision and its
+// recorded reason cannot disagree (outcome-quality LLD §S7 #15).
+//
+//nolint:gocognit,funlen // Pre-existing narrative builder; §S7 #15 changed only its active-task return, not its shape.
+func (m *Manager) buildStateContext(ctx context.Context, project *registry.Project) (string, activeTasks, error) {
 	var b strings.Builder
 
 	// Captured once so every per-task age below is relative to a single
@@ -1651,7 +1732,7 @@ func (m *Manager) buildStateContext(ctx context.Context, project *registry.Proje
 		PageSize:  autonomyStateTaskPageSize,
 	})
 	if err != nil {
-		return "", false, err
+		return "", activeTasks{}, err
 	}
 
 	// Feed cadence observation. Deterministic, no LLM, no extra query —
@@ -1717,7 +1798,7 @@ func (m *Manager) buildStateContext(ctx context.Context, project *registry.Proje
 		}
 	}
 
-	var hasActive bool
+	active := countActiveTasks(tasks)
 	if len(tasks) == 0 {
 		b.WriteString("No tasks have been created yet for this project.\n")
 	} else {
@@ -1738,7 +1819,6 @@ func (m *Manager) buildStateContext(ctx context.Context, project *registry.Proje
 				failed = append(failed, t)
 			}
 		}
-		hasActive = len(inProgress) > 0 || len(queued) > 0
 
 		if len(inProgress) > 0 || len(queued) > 0 {
 			b.WriteString("Active/queued tasks (do NOT duplicate these):\n")
@@ -1843,7 +1923,7 @@ func (m *Manager) buildStateContext(ctx context.Context, project *registry.Proje
 		}
 	}
 
-	return b.String(), hasActive, nil
+	return b.String(), active, nil
 }
 
 // createAutonomousTask validates and inserts one autonomous task. It
@@ -2207,6 +2287,7 @@ func (m *Manager) createAutonomousTask(ctx context.Context, project *registry.Pr
 		ID:             persistence.GenerateID("task"),
 		ProjectID:      project.ID,
 		CreationSource: persistence.TaskCreationSourceAutonomous,
+		GoalOrigin:     persistence.TaskGoalOriginAutonomy,
 		// Rule 3: NEVER the operator who configured autonomy months ago, and
 		// never the actor of a task read for context. Crediting a person for
 		// what a cron did is the fastest way to make the leaderboard
@@ -2242,7 +2323,7 @@ func (m *Manager) createAutonomousTask(ctx context.Context, project *registry.Pr
 		leaderelection.LeaderFenceRejected("autonomy_manager")
 		m.recordEvaluation(ctx, evalRecord{
 			projectID:  project.ID,
-			outcome:    persistence.AutonomyOutcomeNoAction,
+			outcome:    persistence.AutonomyOutcomeLeaderFenced,
 			reason:     "leader epoch fence: " + reason,
 			taskType:   args.Type,
 			workflowID: effectiveWorkflowID,
@@ -2652,18 +2733,23 @@ func autonomyCircuitOpen(tasks []*persistence.Task) (string, bool) {
 	if len(terminal) > 12 {
 		terminal = terminal[:12]
 	}
-	failures := 0
-	completed := 0
+	failed, cancelled, completed := 0, 0, 0
 	for _, task := range terminal {
 		switch task.status {
 		case persistence.TaskStatusCompleted:
 			completed++
-		case persistence.TaskStatusFailed, persistence.TaskStatusCancelled:
-			failures++
+		case persistence.TaskStatusFailed:
+			failed++
+		case persistence.TaskStatusCancelled:
+			cancelled++
 		}
 	}
+	// A cancel still counts toward the trip (open question Q15b,
+	// outcome-quality LLD §S7 #15); the reason reports the two apart so an
+	// operator can tell failing work from work they stopped.
+	failures := failed + cancelled
 	if len(terminal) >= 8 && failures >= 6 && failures > completed*2 {
-		return fmt.Sprintf("recent autonomous completion ratio too low (%d failed/cancelled, %d completed)", failures, completed), true
+		return fmt.Sprintf("recent autonomous completion ratio too low (%d failed, %d cancelled, %d completed)", failed, cancelled, completed), true
 	}
 	return "", false
 }

@@ -201,6 +201,7 @@ func (f *Forker) Fork(ctx context.Context, sourceExecutionID string, req ForkReq
 		WorkflowID:     &workflowID,
 		ParentTaskID:   &parentTaskID,
 		CreationSource: persistence.TaskCreationSourceFork,
+		GoalOrigin:     persistence.TaskGoalOriginFork,
 		// Rule 6: a fork RE-EXECUTES someone's earlier work for analysis.
 		// Inheriting would make that person double-count work they did once.
 		CreatedByActor: actor.Ptr(actor.Counterfactual),

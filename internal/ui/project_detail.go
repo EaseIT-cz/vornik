@@ -203,6 +203,12 @@ type ProjectLifecyclePanel struct {
 	Overdue    bool
 	Reason     string
 	ArchivedBy string
+	// LastDeleteError / LastDeleteFailedAt: the sweeper's last attempt to
+	// delete this project failed (GitHub #365). Empty when it has not
+	// failed, or the daemon restarted since (the audit log keeps
+	// project.delete.failed).
+	LastDeleteError    string
+	LastDeleteFailedAt string
 	// GracePresets feeds the archive form's "grace period"
 	// dropdown — fixed list so operators don't have to type a
 	// duration.
@@ -321,6 +327,29 @@ type ReminderTileRow struct {
 	FireAt     string // "2026-05-24 09:00:00 MST"
 	Countdown  string // "in 6h 12m" / "due now"
 	OperatorID string
+}
+
+// projectLifecyclePanel is buildProjectLifecyclePanel plus the sweeper's last
+// failed attempt, when the wired sweeper reports one: without it a failed wipe
+// left the banner reading "due now (sweeper will pick up on next tick)"
+// indefinitely (GitHub #365).
+func (s *Server) projectLifecyclePanel(p *registry.Project) ProjectLifecyclePanel {
+	panel := buildProjectLifecyclePanel(p)
+	if !panel.IsArchived || p == nil {
+		return panel
+	}
+	rep, ok := s.archiveSweeper.(archiveOutcomeReporter)
+	if !ok {
+		return panel
+	}
+	if o, ok := rep.LastOutcome(p.ID); ok && o.Err != nil {
+		panel.LastDeleteError = o.Err.Error()
+		panel.LastDeleteFailedAt = o.At.Format("2006-01-02 15:04:05 MST")
+		if panel.Overdue {
+			panel.Countdown = "due now, but the last deletion attempt FAILED (retried on the next tick)"
+		}
+	}
+	return panel
 }
 
 // buildProjectLifecyclePanel renders the template-friendly view
@@ -485,7 +514,7 @@ func (s *Server) ProjectDetail(w http.ResponseWriter, r *http.Request) {
 		SpendSort:       spendSort,
 		SpendDir:        spendDir,
 		SpendBaseURL:    sortBaseURL(r),
-		Lifecycle:       buildProjectLifecyclePanel(project),
+		Lifecycle:       s.projectLifecyclePanel(project),
 		FlashArchived:   r.URL.Query().Get("archived") == "1",
 		FlashUnarchived: r.URL.Query().Get("unarchived") == "1",
 	}
@@ -585,7 +614,7 @@ func (s *Server) ProjectDetail(w http.ResponseWriter, r *http.Request) {
 	// Retention panel — applies the daemon defaults + project
 	// overrides so the operator can see what's kept and for how
 	// long. Pure-Go resolution; no DB / IO cost on the page.
-	data.Retention = buildRetentionPanel(project, s.retentionDefaults)
+	data.Retention = buildRetentionPanel(project, s.retentionDefaults, s.toolAuditFloorDays)
 
 	// Retention preview — what the next sweep WOULD prune. Bound
 	// at a short timeout because the COUNT queries hit per-table
@@ -1141,10 +1170,17 @@ func buildRateLimitPanel(ctx context.Context, repo persistence.APIKeyRepository,
 // Mirrors retention.Resolve's precedence but doesn't import the
 // retention package so the UI layer doesn't pull retention's
 // pq/sql deps. The duplication is small and well-tested.
-func buildRetentionPanel(project *registry.Project, defaults registry.ProjectRetention) RetentionPanel {
+//
+// toolAuditFloor is the daemon's effective tool_audit_log floor
+// (retention.ResolveToolAuditFloor); 0 means the six-month default.
+// The panel shows the CLAMPED value — what the sweep will use — so a
+// tool_audit_days below the floor does not read as in force (audit
+// 2026-10-12, GitHub #117).
+func buildRetentionPanel(project *registry.Project, defaults registry.ProjectRetention, toolAuditFloor int) RetentionPanel {
 	const (
 		defaultTaskLLMUsageDays = 90
-		defaultToolAuditDays    = 30
+		defaultToolAuditDays    = 180 // = retention.DefaultToolAuditDays
+		sixMonthToolAuditFloor  = 180 // = retention.ToolAuditFloorDays
 		defaultTasksDays        = 60
 		defaultExecutionsDays   = 60
 		defaultArtifactsDays    = 60
@@ -1165,6 +1201,12 @@ func buildRetentionPanel(project *registry.Project, defaults registry.ProjectRet
 	v, o := pick(pr.TaskLLMUsageDays, defaults.TaskLLMUsageDays, defaultTaskLLMUsageDays)
 	p := RetentionPanel{TaskLLMUsageDays: v, TaskLLMUsageIsOverride: o}
 	v, o = pick(pr.ToolAuditDays, defaults.ToolAuditDays, defaultToolAuditDays)
+	if toolAuditFloor <= 0 {
+		toolAuditFloor = sixMonthToolAuditFloor
+	}
+	if v < toolAuditFloor {
+		v = toolAuditFloor
+	}
 	p.ToolAuditDays, p.ToolAuditIsOverride = v, o
 	v, o = pick(pr.TasksDays, defaults.TasksDays, defaultTasksDays)
 	p.TasksDays, p.TasksIsOverride = v, o

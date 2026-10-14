@@ -96,6 +96,12 @@ var ErrNoAudioStream = errors.New("voice: the file has no audio stream")
 // one (review e6a7 F2).
 const noAudioStreamMarker = "matches no streams"
 
+// notWhitelistedMarker is ffmpeg's message when the input's container is not
+// in -format_whitelist (sandboxtool.FFmpegInputGuard, GitHub #348). Such a
+// file has no audio this pipeline reads, so it answers as ErrNoAudioStream.
+// ffmpeg's wording (7.x), not an API: re-check on an ffmpeg upgrade, as above.
+const notWhitelistedMarker = "Format not on whitelist"
+
 // toolOutputTail bounds how much of a tool's output an error carries.
 const toolOutputTail = 500
 

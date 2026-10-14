@@ -1,6 +1,6 @@
 ---
 description: Check status of a specific vornik task
-allowed-tools: mcp__vornik__status
+allowed-tools: mcp__plugin_vornik-companion_vornik__status
 argument-hint: <task_id>
 ---
 
@@ -8,7 +8,7 @@ argument-hint: <task_id>
 
 The user wants the current state of task `$ARGUMENTS`.
 
-Call `mcp__vornik__status` with `task_id=$ARGUMENTS`. Surface the result
+Call `mcp__plugin_vornik-companion_vornik__status` with `task_id=$ARGUMENTS`. Surface the result
 in plain English: which workflow it's running, what state it's in, when
 it was created, and any `last_error`.
 

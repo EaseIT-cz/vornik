@@ -1,6 +1,6 @@
 ---
 description: Fetch one vornik knowledge skill's full body
-allowed-tools: mcp__vornik__skill_get
+allowed-tools: mcp__plugin_vornik-companion_vornik__skill_get
 argument-hint: <skill name or id>
 ---
 
@@ -8,7 +8,7 @@ argument-hint: <skill name or id>
 
 The user wants the full body of: **$ARGUMENTS**
 
-Call `mcp__vornik__skill_get` with either `id`, or `name` + `repo_scope`
+Call `mcp__plugin_vornik-companion_vornik__skill_get` with either `id`, or `name` + `repo_scope`
 (names are unique only within a scope, so a bare name resolves against the
 key's scope). Render the body verbatim so the user can read or apply the
 procedure. If not found, say so and offer `/skill-search`.

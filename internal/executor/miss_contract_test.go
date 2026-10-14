@@ -30,6 +30,11 @@ func TestExecutorDoubles_MissContract(t *testing.T) {
 			return NewMockExecRepo().Get(ctx, "exec-absent")
 		})
 	})
+	t.Run("MockExecRepo.GetByTaskID", func(t *testing.T) {
+		repotest.AssertMiss(t, "ExecutionRepository.GetByTaskID", func() (*persistence.Execution, error) {
+			return NewMockExecRepo().GetByTaskID(ctx, "task-absent")
+		})
+	})
 	t.Run("MockTaskRepo.Get", func(t *testing.T) {
 		repotest.AssertMiss(t, "TaskRepository.Get", func() (*persistence.Task, error) {
 			return NewMockTaskRepo().Get(ctx, "task-absent")

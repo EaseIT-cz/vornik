@@ -40,6 +40,8 @@ import (
 	"strings"
 	"sync"
 	"testing"
+
+	"vornik.io/vornik/internal/testutil/testenv"
 )
 
 // migrateBin builds ./cmd/vornik-enterprise once for the process.
@@ -54,12 +56,16 @@ var (
 // dir (the binary is built once across tests via sync.Once, so per-test
 // t.Cleanup can't reach it). Defers nothing on a fatal build — the dir is
 // still removed.
-func TestMain(m *testing.M) {
+// TestMain runs the lane in the environment CI gives it: no inherited VORNIK_*
+// (GitHub #357, testing design 19 §11).
+func TestMain(m *testing.M) { os.Exit(testenv.Main(m, mainMigrate)) }
+
+func mainMigrate(m *testing.M) int {
 	code := m.Run()
 	if migrateBinDir != "" {
 		_ = os.RemoveAll(migrateBinDir)
 	}
-	os.Exit(code)
+	return code
 }
 
 func migrateBin(t *testing.T) string {
@@ -242,7 +248,8 @@ chat:
 		"--secrets-dir", secretsDir,
 		"--configs-dir", configsDir,
 	)
-	cmd.Env = append(os.Environ(), "PATH="+shimDir+":"+os.Getenv("PATH"))
+	// Its own data dir and no inherited VORNIK_* (GitHub #357, testing design 19 §11).
+	cmd.Env = testenv.Clean("VORNIK_DATA_DIR="+filepath.Join(eeRoot, "data"), "PATH="+shimDir+":"+os.Getenv("PATH"))
 	var out, errb bytes.Buffer
 	cmd.Stdout = &out
 	cmd.Stderr = &errb
@@ -322,6 +329,7 @@ func TestMigrateCE_E2E_PreflightFailsBlocksEE(t *testing.T) {
 	outCfg := filepath.Join(eeRoot, "vornik.yaml")
 	cmd := exec.Command(bin, "migrate-ce", "--from", ceUser, "--out", outCfg,
 		"--secrets-dir", filepath.Join(eeRoot, "secrets"), "--configs-dir", filepath.Join(eeRoot, "configs"))
+	cmd.Env = testenv.Clean("VORNIK_DATA_DIR=" + filepath.Join(eeRoot, "data"))
 	var out, errb bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &out, &errb
 	err = cmd.Run()

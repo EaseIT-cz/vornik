@@ -151,7 +151,7 @@ func TestIntegrationKGIndex_MentionChunksAreDistinct(t *testing.T) {
 func TestIntegrationReassignLinks_SurvivesRowsTheTargetAlreadyHas(t *testing.T) {
 	db := newIntegrationDB(t)
 	ctx := context.Background()
-	repo := &DataSubjectRepository{db: db.DB}
+	repo := NewDataSubjectRepository(db.DB)
 
 	const project = "kg-reassign-test"
 	resetKGFixture(t, db, project, "ds_real", "ds_ph", "ds_1", "ds_2")
@@ -203,7 +203,7 @@ func TestIntegrationReassignLinks_SurvivesRowsTheTargetAlreadyHas(t *testing.T) 
 
 func TestIntegrationReassignLinks_RefusesADegenerateMove(t *testing.T) {
 	db := newIntegrationDB(t)
-	repo := &DataSubjectRepository{db: db.DB}
+	repo := NewDataSubjectRepository(db.DB)
 	if _, err := repo.ReassignLinks(context.Background(), "ds_a", "ds_a"); err == nil {
 		t.Error("reassigning a subject onto itself must be refused, not silently delete its links")
 	}
@@ -215,7 +215,7 @@ func TestIntegrationReassignLinks_RefusesADegenerateMove(t *testing.T) {
 func TestIntegrationDeleteSubject_TakesIdentifiersAndLinksWithIt(t *testing.T) {
 	db := newIntegrationDB(t)
 	ctx := context.Background()
-	repo := &DataSubjectRepository{db: db.DB}
+	repo := NewDataSubjectRepository(db.DB)
 
 	if err := repo.CreateSubject(ctx, datasubject.Subject{ID: "ds_gone", DisplayName: "kg:ent_y"}); err != nil {
 		t.Fatalf("create: %v", err)

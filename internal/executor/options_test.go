@@ -81,7 +81,7 @@ func TestPruneAllWorktrees_LocksPerProject(t *testing.T) {
 	release := shared.Lock("proj-a")
 	done := make(chan struct{})
 	go func() {
-		e.pruneAllWorktrees(context.Background(), nil)
+		e.pruneAllWorktrees(context.Background(), removeUnless(nil))
 		close(done)
 	}()
 	select {
@@ -277,7 +277,7 @@ func TestPruneAllWorktrees_EmptyConfigIsNoop(t *testing.T) {
 	// Default config has no ProjectWorkspacePath in the test setup.
 	e.config.ProjectWorkspacePath = ""
 	assert.NotPanics(t, func() {
-		e.pruneAllWorktrees(context.Background(), nil)
+		e.pruneAllWorktrees(context.Background(), removeUnless(nil))
 	})
 }
 
@@ -286,7 +286,7 @@ func TestPruneAllWorktrees_ReadDirErrorIsSilentReturn(t *testing.T) {
 	// Pointing at a non-existent path → os.ReadDir errors → silent return.
 	e.config.ProjectWorkspacePath = "/var/no/such/directory/xyz123"
 	assert.NotPanics(t, func() {
-		e.pruneAllWorktrees(context.Background(), nil)
+		e.pruneAllWorktrees(context.Background(), removeUnless(nil))
 	})
 }
 
@@ -308,7 +308,7 @@ func TestPruneAllWorktrees_IteratesProjectDirs(t *testing.T) {
 	// No worktrees inside → pruneWorktrees no-ops on each. The
 	// outer loop's reachability is what we care about.
 	assert.NotPanics(t, func() {
-		e.pruneAllWorktrees(context.Background(), map[string]struct{}{"keep-id": {}})
+		e.pruneAllWorktrees(context.Background(), removeUnless(map[string]struct{}{"keep-id": {}}))
 	})
 }
 

@@ -26,7 +26,7 @@ func TestHostApprovalRoutes_RealMux(t *testing.T) {
 	cfg.API.APIKeys = []string{operator}
 	cfg.Admin.Enabled = true
 	cfg.Admin.AllowedKeys = []string{operator}
-	c, err := NewContainer(cfg, isolatedConfigPath(t))
+	c, err := newUnitTestContainer(t, cfg, isolatedConfigPath(t))
 	if err != nil {
 		t.Fatal(err)
 	}

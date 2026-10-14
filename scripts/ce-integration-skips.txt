@@ -2,11 +2,14 @@
 # its reason (CE export runbook, amendment 2026-10-01, D4). The export's
 # integration lane fails on any skip not listed here. Format:
 # <package>.<Test><TAB><reason>. An entry with no reason fails closed; an
-# entry whose test ran is reported stale, so remove it.
+# entry whose test ran is reported stale, so remove it. A HOST-CONDITIONAL
+# entry, <package>.<Test><TAB>@<ci-job-id><TAB><reason>, skips only where the
+# host lacks a prerequisite and names the EE CI job that runs it; one that ran
+# is reported RAN, not stale (CE export runbook, amendment 2026-10-12).
 vornik.io/vornik/internal/persistence/postgres.TestTaskJudgeVerdictRepository_Record	placeholder that always skips: it needs a driver-level mock for the SELECT EXISTS pre-flight
 vornik.io/vornik/internal/persistence/postgres.TestTaskJudgeVerdictRepository_Record_DefaultRecordedAt	placeholder that always skips, as above
 vornik.io/vornik/test/integration.TestDispatcherAnswersFromMemoryWithoutSchedulingTask	opt-in live dispatcher test (VORNIK_INTEGRATION); the public CI does not set it either
 vornik.io/vornik/internal/cli.TestBenchAgent_ShippedTaskSetLoads	reads the EE agent-benchmark task sets, which the export prunes
-vornik.io/vornik/internal/cli.TestIntegrationDepsInstall_WheelImportsInsideTheImage	needs podman and the agent image, which neither the public CI nor the export runner has; the EE integration lane skips it too, so no CI lane runs it today (filed). Passed on a host with the image, 2026-10-01. Restored 2026-10-08: removing it (67330070c) broke publish-ce run 37691997099 — "stale" on a host WITH the image is expected, not evidence
-vornik.io/vornik/internal/cli.TestIntegrationDepsInstall_SdistIsRefusedAndNeverBuilt	needs podman and the agent image, as above
-vornik.io/vornik/internal/cli.TestIntegrationDepsInstall_IncompleteLockfileIsRefused	needs podman and the agent image, as above
+vornik.io/vornik/internal/cli.TestIntegrationDepsInstall_WheelImportsInsideTheImage	@test-e2e-podman	needs podman and the agent image; skips on a host without the image (the publish-ce runner, the EE integration lane) and runs on one with it, which is not staleness. Runs with the image in EE CI job test-e2e-podman (make test-deps-install, fail-on-skip; #160)
+vornik.io/vornik/internal/cli.TestIntegrationDepsInstall_SdistIsRefusedAndNeverBuilt	@test-e2e-podman	needs podman and the agent image; skips on a host without the image (the publish-ce runner, the EE integration lane) and runs on one with it, which is not staleness. Runs with the image in EE CI job test-e2e-podman (make test-deps-install, fail-on-skip; #160)
+vornik.io/vornik/internal/cli.TestIntegrationDepsInstall_IncompleteLockfileIsRefused	@test-e2e-podman	needs podman and the agent image; skips on a host without the image (the publish-ce runner, the EE integration lane) and runs on one with it, which is not staleness. Runs with the image in EE CI job test-e2e-podman (make test-deps-install, fail-on-skip; #160)

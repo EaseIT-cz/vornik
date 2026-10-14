@@ -3,7 +3,7 @@ sources:
     - path: internal/runtime/container.go
       sha256: 8a77ed690d086af95ab0d3c3f49b76abf32d12c4bcc4e1bc03a067628b92bb9b
     - path: internal/runtime/manager.go
-      sha256: 24a93cedaf8b25716432880d555f8a0e12dcdc0fe783bc9dfb10cc860364249c
+      sha256: 6df2b3435e1fcd10fd88af979409614dde5dae27abfa05eb8ec81396cbbe932b
 ---
 # Zero-egress / local-first execution
 

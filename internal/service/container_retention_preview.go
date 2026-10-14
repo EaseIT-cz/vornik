@@ -61,52 +61,23 @@ func (a *retentionPreviewAdapter) Preview(ctx context.Context, projectID string)
 }
 
 // resolvePolicy merges the daemon-wide retention defaults with the
-// project's YAML overrides. Same shape the background sweeper
-// applies; centralised here so the preview shows exactly what the
-// next sweep would do. Per-project zero falls through to defaults,
-// per-project non-zero wins.
+// project's YAML overrides through retention.Resolve — the same function the
+// background sweeper and `vornikctl retention` use — so the preview shows
+// exactly what the next sweep would do: compiled defaults for unset windows,
+// the minimum floors, and the tool_audit_log six-month floor.
+//
+// audit 2026-10-12: this used to merge by hand and applied none of those, so
+// an unset window previewed as a threshold of "now" and a sub-floor
+// tool_audit_days previewed deletions the sweep would not make.
 func (a *retentionPreviewAdapter) resolvePolicy(projectID string) retention.Policy {
-	policy := retention.Policy{
-		ProjectID:        projectID,
-		TaskLLMUsageDays: a.defaults.TaskLLMUsageDays,
-		ToolAuditDays:    a.defaults.ToolAuditDays,
-		ChatAuditDays:    a.defaults.ChatAuditDays,
-		TasksDays:        a.defaults.TasksDays,
-		ExecutionsDays:   a.defaults.ExecutionsDays,
-		ArtifactsDays:    a.defaults.ArtifactsDays,
-		TaskMessagesDays: a.defaults.TaskMessagesDays,
-		MemoryChunksDays: a.defaults.MemoryChunksDays,
-		ArtifactsRoot:    a.artifactsRoot,
+	d := a.defaults
+	floor, _ := retention.ResolveToolAuditFloor(d.ToolAuditFloorDays, d.ToolAuditFloorOverride, d.ToolAuditFloorOverrideBasis)
+	defaults := retention.DefaultsFromConfig(d, floor, a.artifactsRoot)
+	var per retention.Policy
+	if a.registry != nil {
+		if p := a.registry.GetProject(projectID); p != nil {
+			per = retention.ProjectOverrides(p.Retention)
+		}
 	}
-	if a.registry == nil {
-		return policy
-	}
-	p := a.registry.GetProject(projectID)
-	if p == nil {
-		return policy
-	}
-	pr := p.Retention
-	policy.MemoryRequireApproval = pr.MemoryRequireApproval
-	if pr.TaskLLMUsageDays > 0 {
-		policy.TaskLLMUsageDays = pr.TaskLLMUsageDays
-	}
-	if pr.ToolAuditDays > 0 {
-		policy.ToolAuditDays = pr.ToolAuditDays
-	}
-	if pr.TasksDays > 0 {
-		policy.TasksDays = pr.TasksDays
-	}
-	if pr.ExecutionsDays > 0 {
-		policy.ExecutionsDays = pr.ExecutionsDays
-	}
-	if pr.ArtifactsDays > 0 {
-		policy.ArtifactsDays = pr.ArtifactsDays
-	}
-	if pr.TaskMessagesDays > 0 {
-		policy.TaskMessagesDays = pr.TaskMessagesDays
-	}
-	if pr.MemoryChunksDays > 0 {
-		policy.MemoryChunksDays = pr.MemoryChunksDays
-	}
-	return policy
+	return retention.Resolve(projectID, per, defaults)
 }

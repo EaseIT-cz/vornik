@@ -35,7 +35,13 @@ func ClassifyExecutionFailure(err error, hint string) string {
 		// Hint + message increases signal density; merge with a newline
 		// because neither half should contain one and the merged body
 		// is only pattern-matched below.
-		text = hint + "\n" + text
+		//
+		// The hint is cut at the log tail too. handleFailure passes the
+		// error's full message as the hint, so cutting only err let the
+		// 400-line tail back in: 25 of 34 MERGE_FAILED rows on prod in the
+		// 30 days to 2026-10-12 were container crashes whose tail said
+		// "worktree" and "fail" (GitHub #353, permanent-failure design §9.2 M2).
+		text = errorBeforeLogTail(hint) + "\n" + text
 	}
 	lowered := strings.ToLower(text)
 
@@ -76,6 +82,23 @@ func ClassifyExecutionFailure(err error, hint string) string {
 		return persistence.TaskFailureClassCancelled
 	}
 
+	// An agent container that exited non-zero without saying why is a
+	// runtime failure, decided from the type the exit-code fallback raises
+	// (design §9.2 M3). Its message is only "container exited with code N"
+	// plus a log tail, so no text rule could tell it apart honestly.
+	if isContainerCrash(err) {
+		return persistence.TaskFailureClassRuntimeError
+	}
+	// A container the runtime did not start, and a stop the agent recorded as
+	// the failure's cause, are facts the daemon held when it built the error
+	// (permanent-failure design §10.2 K1–K3). Text cannot produce these.
+	if c := classFromAgentStop(err); c != "" {
+		return c
+	}
+	if isRuntimeStartFailure(err) {
+		return persistence.TaskFailureClassRuntimeError
+	}
+
 	switch {
 	// Hallucinated-placement is matched FIRST because its surrounding
 	// verifier wrapper ("phase-2 verifier(s) failed: ...") also
@@ -100,8 +123,11 @@ func ClassifyExecutionFailure(err error, hint string) string {
 	// machinery would never see it.
 	case containsAny(lowered, "tool iteration limit", "tool iteration cap"):
 		return persistence.TaskFailureClassToolIterationLimit
-	case containsAny(lowered, "merge", "worktree") && containsAny(lowered, "fail", "could not"):
-		return persistence.TaskFailureClassMergeFailed
+	// No text rule produces MERGE_FAILED: the merge-back raises
+	// *mergeBackError, which names its class above. The substring rule
+	// that was here ("merge"/"worktree" + "fail"/"could not") matched
+	// container crashes and container start failures whose messages name a
+	// worktree path (GitHub #353, design §9.2 M1).
 	case containsAny(lowered, "gate ", "gate_failed", "condition", "gate did not pass"):
 		return persistence.TaskFailureClassGateFailed
 	// Loop-cap escalation must be matched BEFORE the generic

@@ -100,6 +100,9 @@ func New(cfg Config, db *sql.DB, logger zerolog.Logger) (*Manager, error) {
 	indexer := NewIndexer(cfg, repo, embedder,
 		logger.With().Str("component", "memory.indexer").Logger())
 	searcher := NewSearcher(cfg, repo, embedder)
+	// GDPR Art 18 (increment 6): installed here, by construction, so the
+	// production path cannot lose the restriction to a forgotten setter.
+	searcher.SetRestrictionScreen(repo)
 	worker := NewWorker(cfg, repo, embedder,
 		logger.With().Str("component", "memory.worker").Logger())
 

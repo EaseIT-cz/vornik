@@ -10,6 +10,8 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	_ "modernc.org/sqlite"
+
+	"vornik.io/vornik/internal/persistence"
 )
 
 // chatRetentionDB is a real (in-memory) database rather than sqlmock: what
@@ -42,7 +44,7 @@ CREATE TABLE tasks (
 func addChatTurn(t *testing.T, db *sql.DB, id string, age time.Duration, promptHash string) {
 	t.Helper()
 	_, err := db.Exec(`INSERT INTO chat_audit_log (id, ts, project_id, system_prompt_hash) VALUES (?, ?, 'p1', ?)`,
-		id, time.Now().UTC().Add(-age), promptHash)
+		id, persistence.SQLiteTime(time.Now().UTC().Add(-age)), promptHash) // the stored form (#360)
 	require.NoError(t, err)
 }
 

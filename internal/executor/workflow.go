@@ -114,8 +114,18 @@ func (e *Executor) executeWorkflowAttempt(ctx context.Context, task *persistence
 	stagingDecision := decideInputStaging(plan)
 	taskInputArtifacts := extractTaskInputArtifacts(task.Payload, e.config.MediaStageMaxBytes,
 		stagingDecision.force, requireInputStageMaxBytes)
+	// GitHub #351: a payload path is only a selector among the project's own
+	// artifact rows (15-artifact-store.md §13.2 C2).
+	taskInputArtifacts = e.confineTaskInputArtifacts(ctx, task, taskInputArtifacts)
 	e.observeInputStaging(task.ID, task.Payload, taskInputArtifacts, stagingDecision)
 	stepArtifacts = append(stepArtifacts, taskInputArtifacts...)
+	// An automatic resume starts mid-workflow with no in-memory handoff:
+	// restage the last carried step's outputs for the step it resumes at
+	// (GitHub #123, design §8.3 D4). Nil for every other execution.
+	stepArtifacts = append(stepArtifacts, autoResumeHandoff(state, completedSteps)...)
+	// ...and hand the resumed step the last carried step's message, as the
+	// in-memory loop would have; empty for every other execution.
+	lastResultMessage = autoResumePreviousMessage(state, completedSteps)
 
 	// Loop protection: track how many times each step is visited.
 	maxVisits := plan.workflow.MaxStepVisits
@@ -249,6 +259,10 @@ func (e *Executor) executeWorkflowAttempt(ctx context.Context, task *persistence
 				stepTimeout = d
 			}
 		}
+		// The declared (or default) value before any inference scaling: a
+		// system step does no inference, so it is bounded by this one
+		// (outcome-quality LLD §S5 #3).
+		nativeStepTimeout := stepTimeout
 		// Dynamic tool budget: scale the step's time budget by the same
 		// complexity factor as its iteration budget so the two move
 		// together (raise iterations → raise wall-clock; downscale a
@@ -653,6 +667,15 @@ func (e *Executor) executeWorkflowAttempt(ctx context.Context, task *persistence
 				state.StepResults = map[string]json.RawMessage{}
 			}
 			state.StepResults[currentStepID] = stepResultJSON(resultBytes)
+			// Checkpoint the handoff this step just gave the next one, so an
+			// automatic resume can restage it (GitHub #123, design §8.3 D4).
+			// stepArtifacts is (task inputs ⊕ this step's tagged outputs).
+			if len(stepArtifacts) > len(taskInputArtifacts) {
+				if state.StepHandoffs == nil {
+					state.StepHandoffs = map[string][]map[string]string{}
+				}
+				state.StepHandoffs[currentStepID] = cloneArtifactHandoffEntries(stepArtifacts[len(taskInputArtifacts):])
+			}
 			state.ApprovalPendingStep = ""
 			state.ApprovalGrantedStep = ""
 			if err := e.saveCheckpoint(ctx, execution, nextStepID, completedSteps, state); err != nil {
@@ -950,13 +973,22 @@ func (e *Executor) executeWorkflowAttempt(ctx context.Context, task *persistence
 			// Behind a panic barrier: a handler bug must fail THIS step, not the
 			// daemon. rag.index's nil dereference crash-looped bench 28 times on
 			// 2026-08-19 (see runSystemHandlerSafely).
-			sysResult, sysErr := runSystemHandlerSafely(ctx, handler, step.Handler, SystemStepInput{
+			//
+			// Bounded by the step's declared timeout, or the executor default
+			// (outcome-quality LLD §S5 #3, GitHub #142): the value was resolved
+			// above and, before 2026-10-13, never applied to a system step.
+			sysCtx, cancelSys := systemStepContext(ctx, nativeStepTimeout)
+			sysResult, sysErr := runSystemHandlerSafely(sysCtx, handler, step.Handler, SystemStepInput{
 				Task:       task,
 				Execution:  execution,
 				StepID:     currentStepID,
 				Step:       &step,
 				PrevResult: state.LastResult,
 			})
+			// Classify BEFORE cancelSys: cancelling first would make every
+			// failure read as a cancel.
+			sysOutcome, sysClass, sysErr := systemStepFailure(sysCtx, sysErr, nativeStepTimeout)
+			cancelSys()
 			if sysErr != nil && strings.Contains(sysErr.Error(), "panicked") {
 				// Loud, with the stack, because a panic is a bug rather than a
 				// data condition and the operator-facing error deliberately
@@ -970,7 +1002,7 @@ func (e *Executor) executeWorkflowAttempt(ctx context.Context, task *persistence
 			}
 			if sysErr != nil {
 				e.recordStepOutcome(ctx, task, execution, currentStepID, "system", step.Handler,
-					string(stepoutcome.GateFailed), "handler_failed", sysErr.Error(), nil, nil)
+					sysOutcome, sysClass, sysErr.Error(), nil, nil)
 				if step.OnFail != "" {
 					// Shutdown guard (Fix-2, 2026-06-21): abort on_fail routing
 					// during daemon teardown → PAUSED-for-resume, NOT FAILED.
@@ -2352,7 +2384,7 @@ func (e *Executor) runGateStep(
 // runApprovalStep handles an approval step. When approval was already
 // granted, it clears the approval state and returns the next step id with
 // paused=false — the caller advances via the shared append + checkpoint.
-// Otherwise it persists the operator-pause state, flips task/execution
+// Otherwise it persists the awaiting-approval pause state, flips task/execution
 // status to paused, and returns paused=true — the caller returns
 // errExecutionPaused. Extracted from the attempt loop (Track-B
 // decomposition); behaviour is identical. Mutates *state.
@@ -2377,14 +2409,17 @@ func (e *Executor) runApprovalStep(
 	state.CurrentStepID = currentStepID
 	state.CompletedSteps = append([]string{}, completedSteps...)
 	state.ApprovalPendingStep = currentStepID
-	// Approval pause reuses the operator-pause class so Recover() doesn't
-	// auto-resume; an operator must grant approval to move forward.
-	state.PausedReason = PauseReasonOperator
+	// Its own reason, not the operator's (outcome-quality LLD §S7 #13): the
+	// release is different (resuming the execution grants the approval), and
+	// a reader must be able to say so. Recover() still does not auto-resume it
+	// — its allowlist names only shutdown and retry_from_step.
+	state.PausedReason = PauseReasonAwaitingApproval
 	if err := e.saveExecutionState(ctx, execution, *state); err != nil {
 		return "", false, err
 	}
 	_ = e.taskRepo.UpdateStatus(ctx, task.ID, persistence.TaskStatusPending)
 	_ = e.execRepo.UpdateStatus(ctx, execution.ID, persistence.ExecutionStatusPaused)
+	e.emitPaused(ctx, execution.ID, PauseReasonAwaitingApproval)
 	return "", true, nil
 }
 
@@ -3211,7 +3246,31 @@ func (e *Executor) ingestInputArtifacts(ctx context.Context, task *persistence.T
 	execID := execution.ID
 
 	committed, failed := 0, 0
+	// GitHub #351 (15-artifact-store.md §13.2 C4): the IDs are caller-written
+	// on several create surfaces; only rows of the task's own project are
+	// ingested, and without a row lookup none are (fail closed).
+	getter, canCheck := e.artifactRepo.(artifactRowGetter)
 	for _, ref := range refs {
+		if !canCheck || getter == nil {
+			e.logger.Warn().Str("artifact_id", ref.ID).Str("task_id", task.ID).
+				Msg("memory: no artifact row lookup wired; input artifact not ingested (fail closed)")
+			failed++
+			continue
+		}
+		row, gErr := getter.Get(ctx, ref.ID)
+		if gErr != nil || row == nil {
+			e.logger.Warn().Err(gErr).Str("artifact_id", ref.ID).Str("task_id", task.ID).
+				Msg("memory: input artifact row unreadable; not ingested")
+			failed++
+			continue
+		}
+		if row.ProjectID != task.ProjectID {
+			e.logger.Warn().Str("artifact_id", ref.ID).Str("task_id", task.ID).
+				Str("task_project", task.ProjectID).Str("artifact_project", row.ProjectID).
+				Msg("memory: refusing to ingest another project's artifact")
+			failed++
+			continue
+		}
 		// Preferred: enqueue by artifact ID. The IngestWorker retrieves
 		// the stored bytes and runs IngestText asynchronously, carrying
 		// repo_scope through to chunk stamping — identical to the output
@@ -3573,8 +3632,62 @@ func (e *Executor) buildRecentActivityBlock(ctx context.Context, projectID strin
 	return sb.String()
 }
 
+// finaliserTimeout bounds the terminal-status writes a finaliser makes after
+// the execution context has ended. It sits well under the scheduler's 5-minute
+// lease, so a finaliser cannot outlive the lease and race the recovery loop,
+// and well above the 5-10s budgets the detached DB writes elsewhere use.
+const finaliserTimeout = 60 * time.Second
+
+// containerCleanupTimeout bounds a container stop or remove on the cleanup and
+// pause paths. 30s is the budget the wait-error path already used for its
+// force-remove, and covers a normal SIGTERM-to-exit cycle.
+const containerCleanupTimeout = 30 * time.Second
+
+// containerCleanupContext is a fresh, bounded context for a container stop or
+// remove that must run whatever state the step's own context is in
+// (outcome-quality LLD §S2 C9, GitHub #142).
+func containerCleanupContext() (context.Context, context.CancelFunc) {
+	return context.WithTimeout(context.Background(), containerCleanupTimeout)
+}
+
+// removeContainerBounded removes a container under containerCleanupContext.
+func removeContainerBounded(rt RuntimeManager, containerID string, force bool) error {
+	ctx, cancel := containerCleanupContext()
+	defer cancel()
+	return rt.RemoveContainer(ctx, containerID, force)
+}
+
+// finaliserContext detaches a finaliser from the execution context and bounds
+// it. The execution context is what a max_wall_clock cap or an operator cancel
+// ends; the finaliser's job is to record that ending, so it must not die with
+// it (outcome-quality LLD §S2 C1, GitHub #142). Values (trace span, request
+// metadata) are kept; cancellation and deadline are replaced by
+// finaliserTimeout. Shutdown does not cancel it: the shutdown path pauses and
+// returns before any finaliser runs, and a finaliser already running is waited
+// for by that pause (waitForExecutionCleanup, up to 30s) and is otherwise cut
+// off by process exit, as any in-flight write always was.
+func finaliserContext(ctx context.Context) (context.Context, context.CancelFunc) {
+	return context.WithTimeout(context.WithoutCancel(ctx), finaliserTimeout)
+}
+
 // handleFailure processes a failed execution.
+//
+// It runs on a detached, bounded context: it is reached with the execution
+// context already expired when a workflow's max_wall_clock fires, and every
+// write below was then refused by the database and discarded — the task
+// stayed RUNNING with no last_error (outcome-quality LLD §S1 D1).
 func (e *Executor) handleFailure(ctx context.Context, task *persistence.Task, execution *persistence.Execution, err error) {
+	// Name the execution's wall-clock cap when it is what ended the run, so
+	// the operator raises the cap and not a step timeout (outcome-quality LLD
+	// §S7 #2). Read before detaching: the finaliser context carries no cause.
+	// The cause goes into the chain (%w), so an error that already carries it
+	// — a system step's — is not prefixed twice (code review 3ea6 #3).
+	var named *wallClockCause
+	if wc := wallClockCauseOf(ctx); wc != nil && err != nil && !errors.As(err, &named) {
+		err = fmt.Errorf("%w: %w", wc, err)
+	}
+	ctx, cancelFinal := finaliserContext(ctx)
+	defer cancelFinal()
 	// Operator-pause guard. If the task has been flipped to PAUSED
 	// between the goroutine starting and reaching the failure
 	// finaliser (typical case: pause arrived after agent steps
@@ -3813,6 +3926,10 @@ func (e *Executor) taskWillRetry(task *persistence.Task) bool {
 }
 
 func (e *Executor) handleCancelled(ctx context.Context, task *persistence.Task, execution *persistence.Execution) {
+	// Reached with the context the cancel ended; its writes need one that
+	// can still write (outcome-quality LLD §S2 C1).
+	ctx, cancelFinal := finaliserContext(ctx)
+	defer cancelFinal()
 	duration := time.Since(e.getStartTime(task.ID))
 
 	// Cancelled executions still produced output up to the cancel point;
@@ -4576,7 +4693,11 @@ func (e *Executor) deferToForeignTerminal(ctx context.Context, task *persistence
 			Str("site", site).
 			Str("status", string(fresh.Status)).
 			Msg("finaliser: task reached a terminal status outside this execution — leaving the row as it stands")
-		_ = e.execRepo.UpdateStatus(context.WithoutCancel(ctx), execution.ID, persistence.ExecutionStatusCancelled)
+		// Conditional: the writer that finished the task may have recorded
+		// this execution too — the watchdog writes it FAILED
+		// (STUCK_EXECUTION) — and that record stands (05-scheduler §4.12 C4).
+		_, _ = e.execRepo.TransitionStatusConditional(context.WithoutCancel(ctx), execution.ID,
+			liveExecutionStatuses, persistence.ExecutionStatusCancelled)
 		return true
 	case persistence.TaskStatusPaused:
 		e.logger.Info().

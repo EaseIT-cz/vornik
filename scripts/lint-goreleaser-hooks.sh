@@ -27,11 +27,17 @@
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
+# GORELEASER_HOOKS_DIR overrides the directory, for lint-goreleaser-hooks_test.sh.
+cd "${GORELEASER_HOOKS_DIR:-.}"
 
 status=0
+examined=0
 
-for cfg in .goreleaser*.yaml; do
+# #334 item 6 (2026-10-13): .yml is a goreleaser config too, and a glob that
+# matches nothing is "examined 0", which fails below rather than printing OK.
+for cfg in .goreleaser*.yaml .goreleaser*.yml; do
     [ -e "$cfg" ] || continue
+    examined=$((examined + 1))
     # The before-hooks block only: from `before:` to the next top-level key.
     # Comment lines are stripped so the explanatory prose above a hook -- which
     # legitimately mentions dist/ -- cannot trip the check.
@@ -43,6 +49,11 @@ for cfg in .goreleaser*.yaml; do
         status=1
     fi
 done
+
+if [ "$examined" -eq 0 ]; then
+    echo "lint-goreleaser-hooks: FAIL — examined 0 goreleaser config(s) in $PWD; a gate that looked at nothing has not passed" >&2
+    exit 1
+fi
 
 if [ "$status" -ne 0 ]; then
     cat >&2 <<'MSG'
@@ -57,4 +68,4 @@ MSG
     exit 1
 fi
 
-echo "lint-goreleaser-hooks: OK — no before-hook writes into dist/"
+echo "lint-goreleaser-hooks: OK — no before-hook writes into dist/ ($examined config(s) examined)"

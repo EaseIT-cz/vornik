@@ -142,22 +142,13 @@ func runRetention(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("load registry from %s: %w", configsDir, err)
 	}
 
-	defaults := retention.Policy{
-		TaskLLMUsageDays:          cfg.Retention.TaskLLMUsageDays,
-		ToolAuditDays:             cfg.Retention.ToolAuditDays,
-		ChatAuditDays:             cfg.Retention.ChatAuditDays,
-		TasksDays:                 cfg.Retention.TasksDays,
-		ExecutionsDays:            cfg.Retention.ExecutionsDays,
-		ArtifactsDays:             cfg.Retention.ArtifactsDays,
-		TaskMessagesDays:          cfg.Retention.TaskMessagesDays,
-		MemoryChunksDays:          cfg.Retention.MemoryChunksDays,
-		MemoryIngestAuditDays:     cfg.Retention.MemoryIngestAuditDays,
-		MemoryPolicyEvalAllowDays: cfg.Retention.MemoryPolicyEvalAllowDays,
-		MemoryPolicyEvalBlockDays: cfg.Retention.MemoryPolicyEvalBlockDays,
-		ArtifactsRoot:             cfg.Storage.ArtifactsPath,
+	toolAuditFloor, floorWarning := retention.ResolveToolAuditFloor(cfg.Retention.ToolAuditFloorDays, cfg.Retention.ToolAuditFloorOverride, cfg.Retention.ToolAuditFloorOverrideBasis)
+	if floorWarning != "" {
+		fmt.Fprintln(os.Stderr, "warning: "+floorWarning)
 	}
+	defaults := retentionDefaults(cfg, toolAuditFloor)
 
-	db, err := requirePostgresDB(backend, "retention")
+	db, err := retentionDB(backend)
 	if err != nil {
 		return err
 	}
@@ -185,6 +176,7 @@ func runRetention(cmd *cobra.Command, args []string) error {
 		Project               string `json:"project"`
 		LLMUsage              int    `json:"llm_usage"`
 		ToolAudit             int    `json:"tool_audit"`
+		AgentAdminRefusals    int    `json:"agent_admin_refusals"`
 		Tasks                 int    `json:"tasks"`
 		Executions            int    `json:"executions"`
 		Artifacts             int    `json:"artifacts"`
@@ -213,20 +205,7 @@ func runRetention(cmd *cobra.Command, args []string) error {
 	var globalStepPrompts, globalChatPrompts, globalLLMExchanges int
 	rows := make([]projectCounts, 0, len(projects))
 	for _, p := range projects {
-		policy := retention.Resolve(p.ID, retention.Policy{
-			TaskLLMUsageDays:          p.Retention.TaskLLMUsageDays,
-			ToolAuditDays:             p.Retention.ToolAuditDays,
-			ChatAuditDays:             p.Retention.ChatAuditDays,
-			TasksDays:                 p.Retention.TasksDays,
-			ExecutionsDays:            p.Retention.ExecutionsDays,
-			ArtifactsDays:             p.Retention.ArtifactsDays,
-			TaskMessagesDays:          p.Retention.TaskMessagesDays,
-			MemoryChunksDays:          p.Retention.MemoryChunksDays,
-			MemoryRequireApproval:     p.Retention.MemoryRequireApproval,
-			MemoryIngestAuditDays:     p.Retention.MemoryIngestAuditDays,
-			MemoryPolicyEvalAllowDays: p.Retention.MemoryPolicyEvalAllowDays,
-			MemoryPolicyEvalBlockDays: p.Retention.MemoryPolicyEvalBlockDays,
-		}, defaults)
+		policy := retentionProjectPolicy(p, defaults)
 
 		var (
 			counts retention.Counts
@@ -241,6 +220,7 @@ func runRetention(cmd *cobra.Command, args []string) error {
 			Project:               p.ID,
 			LLMUsage:              counts.TaskLLMUsage,
 			ToolAudit:             counts.ToolAudit,
+			AgentAdminRefusals:    counts.AgentAdminRefusals,
 			Tasks:                 counts.Tasks,
 			Executions:            counts.Executions,
 			Artifacts:             counts.Artifacts,
@@ -292,12 +272,12 @@ func runRetention(cmd *cobra.Command, args []string) error {
 	}
 	fmt.Println()
 	tw := tabwriter.NewWriter(os.Stdout, 2, 4, 2, ' ', 0)
-	if _, err := fmt.Fprintln(tw, "project\tllm_usage\taudit\ttasks\texecutions\tartifacts\tfiles\ttask_msgs\tmem_chunks\tingest_audit\tfw_eval_allow\tfw_eval_block\tchat_audit"); err != nil {
+	if _, err := fmt.Fprintln(tw, "project\tllm_usage\taudit\trefusals\ttasks\texecutions\tartifacts\tfiles\ttask_msgs\tmem_chunks\tingest_audit\tfw_eval_allow\tfw_eval_block\tchat_audit"); err != nil {
 		return fmt.Errorf("write header: %w", err)
 	}
 	for _, row := range rows {
-		if _, err := fmt.Fprintf(tw, "%s\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%d\n",
-			row.Project, row.LLMUsage, row.ToolAudit, row.Tasks,
+		if _, err := fmt.Fprintf(tw, "%s\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%d\n",
+			row.Project, row.LLMUsage, row.ToolAudit, row.AgentAdminRefusals, row.Tasks,
 			row.Executions, row.Artifacts, row.ArtifactFiles,
 			row.TaskMessages, row.MemoryChunks, row.MemoryIngestAudit,
 			row.MemoryPolicyEvalAllow, row.MemoryPolicyEvalBlock,
@@ -340,4 +320,16 @@ type globalCounts struct {
 	StepPrompts       int `json:"step_prompts"`
 	ChatSystemPrompts int `json:"chat_system_prompts"`
 	LLMExchanges      int `json:"llm_exchanges"`
+}
+
+// retentionDefaults is the daemon-wide default policy `vornikctl retention`
+// sweeps with: the shared builder the daemon uses too (#334 audit
+// 2026-10-14; the hand-written copy here had lost MemoryEvictionAuditDays).
+func retentionDefaults(cfg *config.Config, toolAuditFloor int) retention.Policy {
+	return retention.DefaultsFromConfig(cfg.Retention, toolAuditFloor, cfg.Storage.ArtifactsPath)
+}
+
+// retentionProjectPolicy resolves one project's policy over defaults.
+func retentionProjectPolicy(p *registry.Project, defaults retention.Policy) retention.Policy {
+	return retention.Resolve(p.ID, retention.ProjectOverrides(p.Retention), defaults)
 }

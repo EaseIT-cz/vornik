@@ -10,6 +10,24 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// hashFile is a TEST helper: the SHA-256 hex digest of the regular file at
+// path, read through the harvest opener. Production code has no path-based
+// hash since GitHub #359 (review round 2): every harvest hash is taken from
+// a descriptor opened beneath a pinned root (hashOpenFile).
+func hashFile(path string) (string, error) {
+	root, err := os.OpenRoot(filepath.Dir(path))
+	if err != nil {
+		return "", err
+	}
+	defer func() { _ = root.Close() }()
+	f, _, err := openHarvestFile(root, filepath.Base(path))
+	if err != nil {
+		return "", err
+	}
+	defer func() { _ = f.Close() }()
+	return hashOpenFile(f)
+}
+
 // TestArtifactsCov_HashFile_OpenError covers hashFile's os.Open error branch.
 func TestArtifactsCov_HashFile_OpenError(t *testing.T) {
 	_, err := hashFile(filepath.Join(t.TempDir(), "does-not-exist"))

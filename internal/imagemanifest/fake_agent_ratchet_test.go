@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"vornik.io/vornik/internal/testutil/repowalk"
 )
 
 // repoRoot is defined in manifest_test.go.
@@ -114,6 +116,7 @@ func TestFakeAgentStaysDeleted(t *testing.T) {
 	needle := "fake" + "-agent"
 
 	var offenders []string
+	scanned := 0
 	err := filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
 		if err != nil {
 			return err
@@ -123,7 +126,9 @@ func TestFakeAgentStaysDeleted(t *testing.T) {
 			return relErr
 		}
 		if d.IsDir() {
-			if fakeAgentRatchetSkipDirs[d.Name()] || (d.Name() != "." && strings.HasPrefix(d.Name(), ".")) {
+			// The root is never skipped (repowalk.SkipDir): publish-ce runs this
+			// inside $SRC/.vornik-export (release 2026.10.6).
+			if path != root && (fakeAgentRatchetSkipDirs[d.Name()] || repowalk.SkipDir(root, path, d.Name())) {
 				return filepath.SkipDir
 			}
 			return nil
@@ -150,6 +155,7 @@ func TestFakeAgentStaysDeleted(t *testing.T) {
 		if bytes.IndexByte(body, 0) >= 0 {
 			return nil
 		}
+		scanned++
 		if strings.Contains(string(body), needle) {
 			offenders = append(offenders, filepath.ToSlash(rel))
 		}
@@ -157,6 +163,11 @@ func TestFakeAgentStaysDeleted(t *testing.T) {
 	})
 	if err != nil {
 		t.Fatalf("walk %s: %v", root, err)
+	}
+	// #334 item 6 (audit 2026-10-12): a denylist over no files reports clean.
+	t.Logf("fake-agent ratchet: examined %d source file(s)", scanned)
+	if scanned < 100 {
+		t.Fatalf("fake-agent ratchet: examined %d files (floor 100); a ratchet that looked at nothing has not passed", scanned)
 	}
 
 	if len(offenders) > 0 {

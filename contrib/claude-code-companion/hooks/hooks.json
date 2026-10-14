@@ -1,5 +1,5 @@
 {
-  "description": "vornik-companion SessionStart hooks. On a NEW session (startup/resume/clear/fork) it fetches a digest of recent delegations + project memory chunks and plants the standing directives (repo_scope auto-detected from the cwd's git remote, RAG-first, skill capture). On COMPACT it re-plants the directives only — compaction discards them at the point a long session has already lost the most context, and reprinting the delegation digest would spend the context the compaction just freed. Registered with explicit matchers because SessionStart has no `source` field on stdin: the matcher is the only way a hook learns why it fired.",
+  "description": "vornik-companion SessionStart hooks. On a NEW session (startup/resume/clear/fork) it fetches a digest of recent delegations + project memory chunks and plants the standing directives (repo_scope auto-detected from the cwd's git remote, RAG-first, skill capture). On COMPACT it re-plants the directives only — compaction discards them at the point a long session has already lost the most context, and reprinting the delegation digest would spend the context the compaction just freed. Registered with explicit matchers because SessionStart has no `source` field on stdin: the matcher is the only way a hook learns why it fired. PreToolUse(Read|Grep|Glob) and PostToolUse(recall) run recall-nudge.sh, an OFFLINE just-in-time nudge. On the 3rd read into one subsystem with no recent successful recall, it tells the model to recall that subsystem's design. It fires once per subsystem per session, never blocks, makes no network call and keeps no content (LLD 2026-08-20 companion hardening §10).",
   "hooks": {
     "SessionStart": [
       {
@@ -17,6 +17,30 @@
           {
             "type": "command",
             "command": "bash \"${CLAUDE_PLUGIN_ROOT}/hooks/session-start.sh\" --refresh"
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "Read|Grep|Glob",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"${CLAUDE_PLUGIN_ROOT}/hooks/recall-nudge.sh\" observe",
+            "timeout": 5
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "mcp__plugin_vornik-companion_vornik__recall|mcp__vornik__recall",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"${CLAUDE_PLUGIN_ROOT}/hooks/recall-nudge.sh\" recalled",
+            "timeout": 5
           }
         ]
       }

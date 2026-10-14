@@ -1,0 +1,17 @@
+# Vetting this recipe as a connector (agent-administered design §19.14.11).
+#
+# Copy this file to connector.yaml beside recipe.yaml in the DEPLOYED tree
+# (~/.config/vornik/configs/agent-templates/recipes/inbox-digest/), fill the
+# server's URL, who reviewed it and when, and reload: the paired phone's
+# Connectors page then offers "Mail digest (read)".
+#
+# Vornik ships no vetted server. On 2026-10-13 none was in evidence: the
+# server must speak streamable HTTP and offer the read tools this recipe
+# calls by exactly these names, gmail_search and gmail_get. Vet the server
+# you will use: what it reads, that both tools are read-only, where it sends
+# data. recipe_version must equal the recipe's version; a shipped upgrade
+# demotes the connector until you vet it again.
+title: "Mail digest (read)"
+servers:
+  mail: {url: ""}
+vetted: {by: "", at: "", recipe_version: 1}

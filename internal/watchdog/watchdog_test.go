@@ -3,6 +3,7 @@ package watchdog
 import (
 	"context"
 	"errors"
+	"slices"
 	"sync"
 	"testing"
 	"time"
@@ -141,10 +142,31 @@ func (s *stubTaskRepo) UpdateStatus(_ context.Context, id string, status persist
 	return nil
 }
 
-func (s *stubTaskRepo) TransitionConditional(_ context.Context, id string, from []persistence.TaskStatus, to persistence.TaskStatus, _ persistence.TransitionOpts) (bool, error) {
+func (s *stubTaskRepo) TransitionConditional(_ context.Context, id string, from []persistence.TaskStatus, to persistence.TaskStatus, opts persistence.TransitionOpts) (bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	current, ok := s.live[id]
+	// A row seeded with setTask is the stored row: the conditional write
+	// compares and writes it, and the write is logged with the full-row
+	// updates, as the stuck-execution fail path used Update until 2026-10-12
+	// (GitHub #142).
+	if stored, seeded := s.tasks[id]; !ok && seeded {
+		if !slices.Contains(from, stored.Status) {
+			return false, nil
+		}
+		cp := *stored
+		cp.Status = to
+		if opts.LastError != nil {
+			cp.LastError = opts.LastError
+		}
+		if opts.LastErrorClass != nil {
+			cp.LastErrorClass = opts.LastErrorClass
+		}
+		s.tasks[id] = &cp
+		logged := cp
+		s.updates = append(s.updates, &logged)
+		return true, nil
+	}
 	if !ok {
 		for _, t := range s.listResult {
 			if t != nil && t.ID == id {

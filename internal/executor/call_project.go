@@ -277,6 +277,7 @@ func (e *Executor) handleCallProjectStep(
 		WorkflowID:     &calleeWorkflowID,
 		ParentTaskID:   &task.ID,
 		CreationSource: persistence.TaskCreationSourceDelegation,
+		GoalOrigin:     persistence.TaskGoalOriginCallProject,
 		// Rule 2's BOUNDARY, and the reason the rule is scoped to same-project:
 		// this row lands in the CALLEE's project, behind the acceptCallsFrom
 		// consent boundary that exists to stop cross-project flows. Carrying the

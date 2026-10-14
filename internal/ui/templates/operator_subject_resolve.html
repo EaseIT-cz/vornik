@@ -1,0 +1,125 @@
+{{define "operator_subject_resolve.html"}}
+<!DOCTYPE html>
+<html lang="en">
+{{template "pageHead" .}}
+<body class="bg-dark-900 text-gray-100 min-h-screen flex flex-col">
+    {{template "nav" .}}
+
+    <main id="main" tabindex="-1" class="flex-1 max-w-7xl mx-auto w-full py-6 px-4 sm:px-6 lg:px-8 shell-offset">
+        <div class="space-y-6">
+            <div class="flex items-center gap-3">
+                {{template "navIconAudit"}}
+                <h1 class="text-xl font-semibold text-gray-100">Resolve data subject</h1>
+                <a href="/ui/operator/regulatory#requests" class="text-xs text-brand-400 hover:text-brand-300 ml-auto">← Regulatory record</a>
+            </div>
+
+            {{if .NotRecorded}}
+            <p class="text-sm text-gray-400">Not available on this deployment: subject resolution needs the knowledge-graph subject index, which is Postgres-only. The request ledger works on SQLite; link records with <code class="font-mono">vornikctl subject link</code>.</p>
+            {{else}}
+            <p class="text-xs text-gray-500">
+                Request <span class="font-mono">{{.RequestID}}</span> ({{.Right}}) for subject <span class="font-mono">{{.SubjectID}}</span>, “{{.SubjectName}}”.
+                This page shows personal data so that you can judge each candidate. Every search and every decision is recorded in the admin audit log;
+                the names you search for are not recorded — only how many and how long. Nothing here can be downloaded.
+            </p>
+
+            <section id="coverage" class="glass rounded-xl border border-dark-700 p-5 space-y-2">
+                <h2 class="text-base font-semibold text-gray-100">Coverage so far</h2>
+                <ul class="text-sm space-y-1">
+                    <li>{{if .KGBound}}A knowledge-graph entity is bound to this subject.{{else}}<strong>No knowledge-graph entity is bound</strong> to this subject, so records that only name them are not yet covered.{{end}}</li>
+                    <li>{{.OperatorLinks}} memory record(s) linked by an operator from free-text search.</li>
+                </ul>
+            </section>
+
+            {{range .Errors}}
+            <div class="glass rounded-xl border border-red-700/50 bg-red-900/20 px-4 py-2.5 text-sm text-red-200" role="alert">{{.}}</div>
+            {{end}}
+            {{if .Outcomes}}
+            <section aria-label="Decision outcomes" class="glass rounded-xl border border-dark-700 p-4">
+                <h2 class="text-sm font-semibold text-gray-100">Decisions applied</h2>
+                <ul class="text-xs space-y-1 font-mono">{{range .Outcomes}}<li>{{.}}</li>{{end}}</ul>
+            </section>
+            {{end}}
+
+            <form method="post" action="/ui/operator/regulatory/requests/{{.RequestID}}/resolve" class="space-y-6">
+                <section id="search" class="glass rounded-xl border border-dark-700 p-5 space-y-3">
+                    <h2 class="text-base font-semibold text-gray-100">Search</h2>
+                    <p class="text-xs text-gray-500">The subject's recorded name is always searched. Add up to five other names (a nickname, a former name), 3–100 characters each. The free-text search is lexical: it finds the literal name in stored memory records, case-insensitively, including records recall would not return (refuted, superseded, expired). It does not find pronouns, relationships ("my sister"), misspellings, or text in uploaded files and conversation transcripts. Records under an active Art 18 restriction are not searched.{{if .IsRestriction}} For this restriction request: a record that mentions this subject but is already restricted through ANOTHER subject is not proposed, so this restriction cannot be widened to it here.{{end}}</p>
+                    <div class="grid gap-2 sm:grid-cols-2">
+                        {{range $i, $n := .Names}}
+                        <label class="text-xs text-gray-300">Other name
+                            <input type="text" name="name" value="{{$n}}" maxlength="100" class="mt-1 block w-full bg-dark-700 border border-control text-gray-200 text-sm rounded-md px-2 py-1">
+                        </label>
+                        {{end}}
+                        <label class="text-xs text-gray-300">Other name
+                            <input type="text" name="name" value="" maxlength="100" autocomplete="off" class="mt-1 block w-full bg-dark-700 border border-control text-gray-200 text-sm rounded-md px-2 py-1">
+                        </label>
+                        <label class="text-xs text-gray-300">Project (optional; empty searches every project)
+                            <input type="text" name="project" value="{{.Project}}" class="mt-1 block w-full bg-dark-700 border border-control text-gray-200 text-sm rounded-md px-2 py-1">
+                        </label>
+                    </div>
+                    <button type="submit" name="action" value="search" class="bg-dark-700 border border-control text-gray-100 text-sm rounded-md px-3 py-1.5 hover:bg-dark-600">Search</button>
+                </section>
+
+                {{if .Searched}}
+                <section id="kg" class="glass rounded-xl border border-dark-700 p-5 space-y-3">
+                    <h2 class="text-base font-semibold text-gray-100">Knowledge-graph candidates</h2>
+                    <p class="text-xs text-gray-500">PERSON entities whose name or alias contains a searched name. A name cannot tell one person from another of the same name, and an entity carrying a name may not be a person at all: confirm only the ones that really are this subject. Confirming links the entity and every record that mentions it at “possible” confidence, as shared records.</p>
+                    {{if .KGWithheld}}<p class="text-sm text-red-200" role="alert">{{.KGWithheld}}</p>
+                    {{else if not .KG}}<p class="text-sm text-gray-400">No entity matches. That is an answer, not an error: try another name.</p>
+                    {{else}}
+                    {{if .KGCapped}}<p class="text-sm text-amber-300">More entities match than are shown: narrow the search with a project or a longer name.</p>{{end}}
+                    <ul class="space-y-2">{{range .KG}}
+                        <li class="kg-candidate border-t border-dark-700 pt-2 text-sm">
+                            {{if .Withheld}}
+                            <span class="font-mono">{{.EntityID}}</span> — held under an active restriction — details withheld. No action is available.
+                            {{else}}
+                            <div><span class="font-semibold">{{.Name}}</span>{{if .Aliases}} <span class="text-gray-400">(also: {{.Aliases}})</span>{{end}} — <span class="font-mono text-xs">{{.EntityID}}</span>, project {{.ProjectID}}, {{.Mentions}} record(s), matched on “{{.MatchedOn}}”. State: {{.State}}.</div>
+                            {{if .CanConfirm}}
+                            <fieldset class="mt-1 flex flex-wrap gap-3 text-xs text-gray-300">
+                                <legend class="sr-only">Decision for entity {{.EntityID}}</legend>
+                                <label class="inline-flex items-center gap-1"><input type="radio" name="kg:{{.EntityID}}" value="leave" checked class="border-control"> leave</label>
+                                {{if .Placeholder}}<label class="inline-flex items-center gap-1"><input type="radio" name="kg:{{.EntityID}}" value="adopt" class="border-control"> confirm and adopt the placeholder</label>
+                                {{else}}<label class="inline-flex items-center gap-1"><input type="radio" name="kg:{{.EntityID}}" value="confirm" class="border-control"> confirm: this is the subject</label>{{end}}
+                                <label class="inline-flex items-center gap-1"><input type="radio" name="kg:{{.EntityID}}" value="reject" class="border-control"> reject: not the subject</label>
+                            </fieldset>
+                            {{end}}
+                            {{end}}
+                        </li>{{end}}
+                    </ul>
+                    {{end}}
+                </section>
+
+                <section id="text" class="glass rounded-xl border border-dark-700 p-5 space-y-3">
+                    <h2 class="text-base font-semibold text-gray-100">Free-text candidates</h2>
+                    <p class="text-xs text-gray-500">Stored memory records containing a searched name, newest first, at most 50. Each shows only the text around the first match. Confirming records an operator link at “probable” confidence with unknown exclusivity, so the record is treated as SHARED: an access export lists it with its content withheld, and an erasure handles it by the request's Art 17(1) ground (deleted under (d)/(e), redacted with review otherwise). Rejecting records your decision in the audit log only; the record will be proposed again by a later search.</p>
+                    {{if .TextCapped}}<p class="text-sm text-amber-300">More matches exist than are shown: narrow the search with a project or a longer name.</p>{{end}}
+                    {{if not .Text}}<p class="text-sm text-gray-400">No stored record contains these names.</p>
+                    {{else}}
+                    <ul class="space-y-2">{{range .Text}}
+                        <li class="text-candidate border-t border-dark-700 pt-2 text-sm">
+                            <div class="text-xs text-gray-400"><span class="font-mono">{{.ChunkID}}</span>, project {{.ProjectID}}{{if .Created}}, {{.Created}}{{end}}{{if .OtherSubjects}}, also linked to {{.OtherSubjects}} other subject(s){{end}}{{if .LinkedSource}} — already linked to this subject ({{.LinkedSource}}){{end}}</div>
+                            {{if .SnippetWithheld}}<p class="text-gray-400">Snippet withheld: the match could not be located in the text.</p>
+                            {{else}}<p class="text-gray-200">{{.Pre}}<mark class="bg-amber-200 text-gray-900 px-0.5">{{.Match}}</mark>{{.Post}}</p>{{end}}
+                            {{if or .CanConfirm .CanUnlink}}
+                            <fieldset class="mt-1 flex flex-wrap gap-3 text-xs text-gray-300">
+                                <legend class="sr-only">Decision for record {{.ChunkID}}</legend>
+                                <label class="inline-flex items-center gap-1"><input type="radio" name="chunk:{{.ChunkID}}" value="leave" checked class="border-control"> leave</label>
+                                {{if .CanConfirm}}<label class="inline-flex items-center gap-1"><input type="radio" name="chunk:{{.ChunkID}}" value="confirm" class="border-control"> confirm: mentions the subject</label>
+                                <label class="inline-flex items-center gap-1"><input type="radio" name="chunk:{{.ChunkID}}" value="reject" class="border-control"> reject</label>{{end}}
+                                {{if .CanUnlink}}<label class="inline-flex items-center gap-1"><input type="radio" name="chunk:{{.ChunkID}}" value="unlink" class="border-control"> unlink (undo an operator confirm)</label>{{end}}
+                            </fieldset>
+                            {{end}}
+                        </li>{{end}}
+                    </ul>
+                    {{end}}
+                </section>
+
+                <button type="submit" name="action" value="apply" class="bg-dark-700 border border-control text-gray-100 text-sm rounded-md px-3 py-1.5 hover:bg-dark-600">Apply decisions</button>
+                {{end}}
+            </form>
+            {{end}}
+        </div>
+    </main>
+</body>
+</html>
+{{end}}

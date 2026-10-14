@@ -193,7 +193,7 @@ Anything more serious should go through the Helm chart in
 
 | Symptom | Likely cause | Fix |
 |---|---|---|
-| Build fails | Go 1.25 image pull blocked | Pre-pull: `podman pull docker.io/library/golang:1.25` |
+| Build fails | Go 1.26.9 image pull blocked | Pre-pull: `podman pull docker.io/library/golang:1.26.9` |
 | Immutable OS (Bazzite/Silverblue): "could not install" | no `dnf`; podman ships in the image | The installer auto-detects this: it skips already-present tools and installs the compose provider via `pip --user` (no root/reboot). If a core tool is genuinely missing: `sudo rpm-ostree install <pkg> && systemctl reboot`, or install Homebrew. |
 | `vornik.service` won't start | missing config / secrets | `journalctl --user -u vornik -e` — the loader prints which placeholders are empty |
 | `connection refused` to postgres | DB still starting | Wait 30 s; healthcheck has a 30 s `start_period` |

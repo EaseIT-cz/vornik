@@ -1,6 +1,6 @@
 ---
 description: Show which RAG project/scope this session is currently using
-allowed-tools: mcp__vornik__whoami
+allowed-tools: mcp__plugin_vornik-companion_vornik__whoami
 ---
 
 # Which vornik RAG project/scope am I in?
@@ -10,7 +10,7 @@ projects and repo scopes. This command answers "what scope are MY calls
 using right now" without relying on the SessionStart digest, which only
 fires once and may have scrolled out of context.
 
-Call `mcp__vornik__whoami` with no arguments. Report back plainly:
+Call `mcp__plugin_vornik-companion_vornik__whoami` with no arguments. Report back plainly:
 
 **Formatting: plain terminal markdown, one fact per line.** No HTML entities —
 `&nbsp;` and friends are rendered LITERALLY in the terminal, so a line built to
@@ -34,5 +34,5 @@ list is correct here.
 
 If the user wants the full list of scopes that exist in this project
 (not just the one currently in use), that's a different tool —
-`mcp__vornik__list_scopes` — which has no dedicated slash command yet.
+`mcp__plugin_vornik-companion_vornik__list_scopes` — which has no dedicated slash command yet.
 Call it directly if asked.

@@ -1,7 +1,7 @@
 ---
 sources:
     - path: docs/release-notes
-      sha256: b8131b1994b45d80e995cebfce5dd0d49d3f0aa5b4283c1439c529cc4e0f69f5
+      sha256: 717901292c8fc448767968a107e2e3be31e14df64ea5391bc3b1ea30435878e2
 ---
 # Release Notes
 
@@ -16,6 +16,179 @@ behavior changes, and notable fixes. Internal-only changes are omitted.
     new behavior; those are called out below.
 
 ---
+
+## 2026.10.6
+
+!!! warning "Upgrade requirements"
+    - **`vornikctl subject resolve-kg` needs `--request <request-id>`** naming
+      a verified request for the same subject.
+    - **Task input is staged only from the task's own project's artifacts.** A
+      deployment with no artifact store stages no task input.
+    - **A failed per-task key mint refuses the step** instead of starting the
+      agent with the static key.
+    - **Media extraction accepts 15 container formats** (mov, matroska, ogg,
+      mp3, wav, flac, aac, avi, asf, mpegts, mpeg, flv, aiff, amr, caf); any
+      other format fails extraction.
+    - **Building from source needs Go 1.26.9** (`go 1.26.0`, `toolchain go1.26.9`).
+    - **`retention.graph_quarantine_days` (including `-1`, a legal hold) and
+      `memory_eviction_audit_days` are now honoured.** Before this release
+      quarantined knowledge-graph rows were swept at 30 days and
+      `vornikctl retention --apply` used 365 days for eviction-audit rows,
+      whatever was configured.
+    - **Tool audit rows are kept at least 180 days.** A lower
+      `retention.tool_audit_days` behaves as 180 unless you set
+      `tool_audit_floor_override` with `tool_audit_floor_override_basis`.
+    - **The skill distiller drafts a skill only from a task it can prove read
+      no third-party content**, so expect few or no automatic drafts.
+    - **New bounds:** stdio MCP calls stop at the server's `timeout_seconds`
+      (default 120 s); podman run and pull stop at `runtime.image_timeout`
+      (default 15 m) and other podman verbs at 60 s; email and GitHub chat
+      turns stop at 10 m, and the email is then marked seen.
+    - **`scheduler.execution_timeout`** is now read as the ceiling for a
+      workflow with no `maxWallClock` (empty means none).
+    - **The unix socket serves only the agent routes**, `POST /api/v1/doctor`
+      and daemon-scope fix-it sessions need an admin-class key, and A2A peers
+      receive only the lifecycle view of live events.
+    - **Forge issue close and label writes** need
+      `forge.issues.writes_without_approval: true`.
+    - **Metrics:** `vornik_chat_requests_total{status="error"}` no longer
+      includes timeouts and cancels (now `timeout` and `cancelled`), and
+      `vornik_chat_model_health_trips_total` gains a `reason` label.
+    - **Failure classes:** `MERGE_FAILED` now comes only from the merge-back;
+      new classes `PROMPT_TOKEN_BUDGET`, `OUTPUT_CAP` and `wall_clock_exceeded`.
+    - **Migrations 219–230** are applied automatically; SQLite gains the GDPR
+      subject tables on the next start.
+    - **Rebuild the agent image** for the sandboxed `document_render` helper,
+      byte-correct tool-audit and shell-output caps, and the piper bundle's
+      licence texts and source offer.
+    - **The agent image's piper bundle carries espeak-ng (GPL-3.0-or-later).**
+      Each release attaches its corresponding source archive,
+      `vornik-agent-third-party-source-piper-2023.11.14-2.tar` with its
+      `.sha256`; keep it available if you redistribute the image.
+      The same archive is the corresponding source for the agent images of
+      releases 2026.9.7 to 2026.10.5 and for images built from `main` since
+      2026-09-26, which shipped the same piper bundle without licence texts
+      or a source offer.
+    - **Client cancels** (companion, Hermes, REST, Telegram `/cancel`) now
+      cancel tasks waiting for children, input or an external event, and REST
+      also cancels PAUSED tasks; a task awaiting approval is still refused.
+    - **Bedrock clamps a requested `max_tokens` to the route cap**, like every
+      other provider.
+    - **SQLite:** deletes now remove child rows as Postgres does, and the
+      retention sweeper now deletes there, so the first sweep can remove a
+      backlog of expired rows. Rows orphaned before this release are not
+      cleaned up.
+    - **The skill distiller also checks where a task's goal was created;**
+      tasks created before the upgrade are never distilled.
+    - **Deleting a project now also deletes its OAuth tokens, memory audit
+      rows, standing broker grants, tool grants, and workflow and integration
+      approvals.** Export any of these you must keep first. A project
+      re-created under a deleted project's ID no longer inherits its grants or
+      approvals.
+    - **SQLite: archived projects past their grace period are now wiped.**
+      Before this release the wipe failed and deleted nothing, so the first
+      sweep after the upgrade deletes every such project.
+    - **Project delete-now waits for the outcome:** the API answers
+      `deleted`, `deleted_with_errors` (with a warning and `residue_steps`
+      naming what remains: artifact files, or a registry reload the next
+      sweep completes), `DELETE_FAILED` (500) or `deletion_pending` (202),
+      and `vornikctl project delete-now` exits 0, 3 (removed with residue)
+      or 1 (not deleted).
+    - **Companion tool calls that repeat an argument key are refused**
+      (compared case-insensitively). Two argument names a 2026.10.5
+      `vornikctl bench` sends are still accepted and counted in
+      `vornik_companion_legacy_argument_total`; upgrade `vornikctl`.
+    - **A `chat.timeout` of `0s` or less no longer leaves model calls
+      unbounded;** the 300 s default applies.
+    - **Metrics and outcomes:** `vornik_judge_evaluations_total` no longer
+      counts a failed judge call as `ok`, and a timed-out autonomy evaluation
+      is the new outcome `LLM_TIMEOUT` instead of `LLM_ERROR`.
+    - **Companion bundles:** Claude Code 0.46.1, Codex 0.42.1, Hermes 0.21.6.
+    - **The Hermes plugin reads its settings through Hermes,** so a Hermes
+      gateway serving several profiles gives each profile its own Vornik URL
+      and keys.
+    - **The Hermes plugin no longer coaches a model to re-store a
+      duplicate:** a note refused as already stored now says so and that it
+      must not be stored again, so a forgotten fact is not re-stored
+      reworded; and a note carrying leaked tool-call syntax (a garbled
+      call meant for another tool) is refused before it reaches Vornik.
+    - **Hermes's unattended sessions never reach the phone.** Cron jobs,
+      `hermes chat -q` and webhook or `api_server` sessions with no client
+      that can answer follow Hermes's own `approvals.*_mode` settings, and
+      `hermes -z` runs in YOLO mode, so `hermes vornik approvals on` does not
+      reach them. This is the limit for this release; lifting it needs a
+      change in Hermes.
+    - **With a small local model, "forget" can still be stored instead.**
+      A model that sends Hermes's memory removal to Vornik as a new note,
+      with garbled arguments, is refused for the shapes the plugin knows,
+      but not for every shape. After asking Hermes to forget something,
+      check `/vornik-memory` and forget any stray note there. Newer
+      tool-calling models make this mistake far less often.
+
+A security, compliance and "no silent hang" release.
+
+- **Security.**
+  - Task input staging is confined to the task's own project.
+  - Step-output harvesting reads every file through one pinned directory.
+  - Document renderers cannot read local files, fetch, or run script.
+  - ffmpeg and ffprobe read only the uploaded file.
+  - Live tool-call events carry the redacted audit row.
+  - Broker artifact downloads are scanned byte for byte, and cached broker
+    answers are tied to the account that produced them.
+  - Gateway redirects stay on the same origin and are capped.
+  - The skill distiller refuses goals that came from third-party surfaces.
+  - A per-request `max_tokens` can no longer exceed the Bedrock route cap.
+  - A project re-created under a deleted project's ID inherits none of its
+    grants or approvals, and a deleted project's OAuth tokens are deleted.
+  - Approver-device choice cards can be answered only with a choice.
+  - A companion tool call that repeats an argument key is refused, so the
+    audit row always shows the arguments that ran.
+- **Compliance.**
+  - Every outbound send of agent-authored content carries the AI Act Art 50
+    notice; on Slack the notice and content go in one post.
+  - GDPR Art 18 restriction (`vornikctl subject restrict`,
+    `lift-restriction`) and Art 16 rectification run, and restriction also
+    covers knowledge-graph reads.
+  - A console page resolves a verified subject request, and the CLI applies the
+    same gates.
+  - The GDPR subject store and rights ledger work on SQLite, and the
+    retention sweeper runs correctly there.
+  - The agent image ships the licence texts and a source offer for its piper
+    speech bundle.
+- **Reliability.** Podman verbs, stdio MCP calls, system steps, repository
+  commands and chat turns are bounded, and a bound that fires is recorded with
+  its cause. A config-blocked task is re-queued, failed merge work is kept on a
+  preserved ref, and approval pauses say what releases them. A CLI model
+  provider call returns at its timeout even if a child process holds its
+  output, a failed or timed-out judge is no longer counted as a success, and
+  project deletion reports a partial or failed wipe instead of claiming
+  success.
+- **Hermes and companions.** Memory the user can see and forget, several
+  accounts per provider, progress and result reuse, file reads from completed
+  runs, and daemon-side GitHub issue triage. The paired approver device can
+  install a read-only connector the operator has vetted, resolve an
+  interrupted config apply, and shows requests the daemon withdrew; an
+  assistant is told why its project is paused. The Claude Code bundle now
+  names its tools as a plugin install exposes them, and the Claude Code and
+  Codex bundles add an offline recall nudge (`VORNIK_NUDGE=off` disables it).
+  A backlog deposit can record the level a bug was found at (`found_at`,
+  `--found-at`).
+- **Agent administration.** Refused agent-admin calls are recorded without
+  their inputs, counted, and shown on the assistants page. A daemon-side
+  failure to record a change is no longer counted as the assistant's refusal,
+  and a failed refusal read degrades the page instead of breaking it.
+- **Operator commands.** `vornikctl daemon drain`, `undrain` and `inflight`,
+  and `vornikctl control-plane journal list` and `resolve`; `vornikctl
+  retention` works on SQLite.
+- **Console.** Form controls meet WCAG 1.4.11 contrast in both themes. The
+  cache-savings figures name their cache and window: the spend page's
+  provider prompt-cache savings cover the page window and every role/model
+  pair, and the response cache served by Vornik covers all cached entries.
+- **Correction.** Four items earlier listed under 2026.10.5 ship in this
+  release; that section is marked. Five project keys carried a wrong
+  "since" release: `broker` and `companion_push` shipped in 2026.10.1, and
+  `retention.memory_require_approval` and `retention.memory_idle_days` in
+  2026.10.5.
 
 ## 2026.10.5
 
@@ -44,12 +217,12 @@ behavior changes, and notable fixes. Internal-only changes are omitted.
       and `--ref main` uses the fetched `origin/main`.
     - **Rebuild the agent image** for the new `document_render` helper.
     - **Migrations 216–218** are additive and applied automatically.
-    - **Hermes companion plugin 0.20.0** (from 0.11.3).
+    - **Hermes companion plugin 0.11.3** (from 0.11.1). *(Corrected 2026-10-13: an
+      earlier edit of this page named 0.20.0, which ships in 2026.10.6.)*
     - **`vornikctl agent connect` exits 1 with one refusal line.** A script
       that matched "not connected" must match the new line or the exit code.
 
-A brand, Hermes, approvals, memory and agent-admin release. Draft: not yet
-released.
+A brand, Hermes, approvals, memory and agent-admin release.
 
 - **New brand.** The console, app icons, favicons and the docs site move to the
   new Vornik mark and colour scheme. The new console colours meet WCAG AA
@@ -64,7 +237,8 @@ released.
   - The admin skill reads the active definition of an owned workflow before
     editing it. Broker results accept only the declared output from an answer
     step in the latest execution. Older completed runs may need a fresh run;
-    their files remain available through the artifact tools.
+    their files remain available through the artifact tools. *(Ships in
+    2026.10.6, not 2026.10.5; corrected 2026-10-13.)*
 - **Agent admin.**
   - `list_recipes` files the cover request every read owes.
   - `agent connect` states its refusal once.
@@ -74,7 +248,8 @@ released.
   - A role granted the `document_render` helper can convert staged Markdown to
     a PDF or HTML file.
   - Google document links are no longer redacted as high-entropy strings.
-  - Adding an MCP server with an existing API name is refused (#286).
+  - Adding an MCP server with an existing API name is refused (#286). *(Ships
+    in 2026.10.6; corrected 2026-10-13.)*
 - **Approvals and devices.**
   - A lost pairing-poll response no longer unpairs the browser.
   - Paired devices get distinct default names, and the devices page shows the
@@ -90,7 +265,8 @@ released.
   - Guarded redirects stop after 10 hops.
   - Live task pages close dead websocket connections.
   - Skill reviews are bound to the revision they were shown.
-  - Memory consolidation skips refuted and superseded notes (#298).
+  - Memory consolidation skips refuted and superseded notes (#298). *(Ships in
+    2026.10.6; corrected 2026-10-13.)*
 - **Redirect discovery.** A new skill investigates an unexpected public
   redirect and reports only what independent evidence supports. See
   [Discover and validate redirects](../guides/redirect-discovery.md).

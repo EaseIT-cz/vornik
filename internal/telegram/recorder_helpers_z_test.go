@@ -20,7 +20,7 @@ func newBotWithRecorder(t *testing.T, cfg BotConfig, opts ...BotOption) (*Bot, *
 	rec := newTelegramRecorder(t)
 	chatClient := chat.NewClient("https://example.com", "k", "m")
 	allOpts := append([]BotOption{WithHTTPClient(rec.server.Client())}, opts...)
-	bot, err := NewBot(cfg, chatClient, allOpts...)
+	bot, err := NewBot(cfg, chatClient, append(allOpts, WithAIDisclosure(alreadyDisclosed()))...)
 	if err != nil {
 		t.Fatalf("NewBot: %v", err)
 	}

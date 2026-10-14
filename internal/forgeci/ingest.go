@@ -487,7 +487,7 @@ func (g *Ingest) Comment(ctx context.Context, out *persistence.ForgeCIOutcome) (
 		return false, nil
 	}
 
-	body := renderCIComment(out) + "\n\n---\n" + g.disclosure.PublicationNotice().Text
+	body := aidisclosure.WithFooter(renderCIComment(out), g.disclosure.PublicationNotice())
 	if err := g.commenter.PostComment(ctx, out.Repo, out.Number, body); err != nil {
 		// Give the claim back so a redelivery retries. A missing comment is the
 		// failure this whole section exists to prevent, and holding a claim for

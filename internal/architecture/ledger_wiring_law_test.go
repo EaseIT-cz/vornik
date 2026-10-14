@@ -212,6 +212,9 @@ func TestEveryBillingComponentIsWired(t *testing.T) {
 		names = append(names, n)
 	}
 	sort.Strings(names)
+	// #334 item 6 (CI pipeline design, amendment 2026-10-14): an emptied
+	// registry looped zero times and passed; 11 entries on 2026-10-14.
+	requireExamined(t, "ledger wiring law", "registry entries", len(names), 1)
 
 	for _, name := range names {
 		e := ledgerWiringRegistry[name]
@@ -283,6 +286,17 @@ func TestEveryWiringSiteIsClassified(t *testing.T) {
 // the permanent guard for raw repository handoffs.
 func TestMigratedComponentsLeaveTheRegistry(t *testing.T) {
 	root := moduleRoot(t)
+	// #334 item 6 (amendment 2026-10-14): this law examines the BILLING
+	// entries, and TestNoBillerIsTextGuarded requires there to be none, so
+	// zero is its correct, permanent denominator. Allowlisted zero, stated
+	// here so the count is read rather than mistaken for coverage.
+	billers := 0
+	for _, e := range ledgerWiringRegistry {
+		if e.bills {
+			billers++
+		}
+	}
+	t.Logf("migrated-components law: examined %d billing entries of %d (zero by design: no biller may be text-guarded)", billers, len(ledgerWiringRegistry))
 	for name, e := range ledgerWiringRegistry {
 		if !e.bills {
 			continue
@@ -329,6 +343,9 @@ func TestMigratedComponentsLeaveTheRegistry(t *testing.T) {
 // classified) stays with them: a NEW component handed the usage repository still
 // has to declare which job it is doing.
 func TestNoBillerIsTextGuarded(t *testing.T) {
+	// #334 item 6 (amendment 2026-10-14): over an emptied registry "no
+	// biller" is vacuous.
+	requireExamined(t, "no-biller law", "registry entries", len(ledgerWiringRegistry), 1)
 	for name, e := range ledgerWiringRegistry {
 		if e.bills {
 			t.Errorf("%s is classified as BILLING via a raw repository wiring (%s).\n"+

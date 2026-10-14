@@ -5,6 +5,7 @@ import (
 	"io"
 	"sync"
 
+	"vornik.io/vornik/internal/aidisclosure"
 	"vornik.io/vornik/internal/chat"
 	"vornik.io/vornik/internal/conversation"
 	"vornik.io/vornik/internal/dispatcher"
@@ -19,8 +20,17 @@ import (
 // attachment — the email realisation of the channel-agnostic file-delivery
 // seam.
 type emailFileSender struct {
-	ch        *email.Channel
+	ch        emailFileTransport
 	sessionID string
+	// disclosure renders the Art 50 notice the file mail's body carries
+	// (design §11.4, GitHub #342). Nil discloses with the compiled defaults.
+	disclosure *aidisclosure.Service
+}
+
+// emailFileTransport is the slice of *email.Channel the file sender needs.
+type emailFileTransport interface {
+	Name() string
+	SendFile(ctx context.Context, sessionID, fileName string, content []byte, caption string) (string, error)
 }
 
 func (e emailFileSender) SendArtifactFile(ctx context.Context, fileName string, content io.Reader, caption string) error {
@@ -28,7 +38,15 @@ func (e emailFileSender) SendArtifactFile(ctx context.Context, fileName string, 
 	if err != nil {
 		return err
 	}
-	_, err = e.ch.SendFile(ctx, e.sessionID, fileName, data, caption)
+	// Art 50: the file is AI-generated and the mail carrying it is a standalone
+	// artifact, so its body carries the notice (design §11.4, GitHub #342).
+	body, err := e.disclosure.Disclose(ctx, aidisclosure.Outbound{
+		Channel: e.ch.Name(), Scope: e.sessionID, Body: caption, Authored: true,
+	})
+	if err != nil {
+		return err
+	}
+	_, err = e.ch.SendFile(ctx, e.sessionID, fileName, data, body)
 	return err
 }
 
@@ -57,6 +75,8 @@ type emailSessionStore struct {
 	// Used to build the per-thread FileSender so send_artifact can deliver
 	// files as email attachments. Nil disables the file tools.
 	channel *email.Channel
+	// disclosure is handed to each per-thread file sender (Art 50, GitHub #342).
+	disclosure *aidisclosure.Service
 
 	mu      sync.Mutex
 	history map[string][]chat.Message
@@ -113,7 +133,7 @@ func (s *emailSessionStore) Load(ctx context.Context, msg conversation.ChannelMe
 	// Bind the per-thread file sender so send_artifact / render_document can
 	// deliver files as threaded email attachments on this conversation.
 	if s.channel != nil {
-		sess.FileSender = emailFileSender{ch: s.channel, sessionID: msg.SessionID}
+		sess.FileSender = emailFileSender{ch: s.channel, sessionID: msg.SessionID, disclosure: s.disclosure}
 	}
 	if s.registry == nil || s.projectID == "" {
 		return sess, nil

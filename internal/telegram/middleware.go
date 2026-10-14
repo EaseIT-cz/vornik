@@ -44,8 +44,17 @@ func (b *Bot) legacyAccess(userID int64) chatauth.Legacy {
 }
 
 // authorize runs the OR-matrix for one Telegram user.
+//
+// BOUNDED by authorizeBudget (GitHub #142 #11, outcome-quality LLD §S6). It
+// used to run on context.Background(): every inbound update is authorised on
+// the poll loop, so a resolver that hangs (a partitioned database hangs where
+// a stopped one fails fast) stalled the whole bot. A resolver cut off by the
+// budget is an unavailable resolver, which the shim already handles (the
+// legacy list decides, ResolverUnavailable is set).
 func (b *Bot) authorize(userID int64) chatauth.Decision {
-	return b.authorizeCtx(context.Background(), userID)
+	ctx, cancel := context.WithTimeout(context.Background(), authorizeBudget)
+	defer cancel()
+	return b.authorizeCtx(ctx, userID)
 }
 
 // authorizeCtx is authorize with a caller-supplied deadline. See the Slack

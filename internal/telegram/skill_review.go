@@ -143,6 +143,11 @@ func (b *Bot) sendSkillReviewDigest(ctx context.Context) {
 		if !ua.Allowed {
 			continue
 		}
+		// Art 50 (GitHub #342): draft skills are agent-proposed text.
+		if err := b.discloseChat(ctx, chatID); err != nil {
+			b.logger.Warn().Err(err).Int64("chat_id", chatID).Msg("skill review: AI notice could not be delivered; digest withheld")
+			continue
+		}
 		if err := b.sendMessageWithMarkup(ctx, chatID, text, &markup); err != nil {
 			b.logger.Warn().Err(err).Int64("chat_id", chatID).Msg("skill review: digest send failed")
 		}

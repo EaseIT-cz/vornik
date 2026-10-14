@@ -31,7 +31,11 @@ restart. Requires an admin key.
 Exit codes: 0 when nothing is in flight, 2 when something is, 1 on any error.`,
 	Args:         cobra.NoArgs,
 	SilenceUsage: true,
-	RunE:         runDaemonInflight,
+	// main prints a non-empty error once; cobra printing it too gave a bare
+	// "Error: " line for busy (exit 2), so a busy daemon read like a failure,
+	// and every real error twice (GitHub #306; leader-lock release's fix).
+	SilenceErrors: true,
+	RunE:          runDaemonInflight,
 }
 
 func init() {

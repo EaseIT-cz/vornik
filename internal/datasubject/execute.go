@@ -189,6 +189,14 @@ func (e *Executor) Execute(ctx context.Context, plan *ErasurePlan) (*ErasureResu
 	}
 
 	for _, a := range plan.Actions {
+		// Store-level deferrals come first, before any store is touched and
+		// whatever the disposition (design §15.10).
+		if reason := deferredStoreReason(a); reason != "" {
+			res.Deferred = append(res.Deferred, DeferredAction{
+				Table: a.Table, RowID: a.RowID, Disposition: a.Disposition, Reason: reason,
+			})
+			continue
+		}
 		switch a.Disposition {
 		case DispositionDelete:
 			e.applyDelete(ctx, a, res)
@@ -253,6 +261,39 @@ func (e *Executor) Execute(ctx context.Context, plan *ErasurePlan) (*ErasureResu
 	}
 	return res, nil
 }
+
+// Reasons for the store-level deferrals (design §15.10). This text is what
+// the subject-facing report carries as the deferral detail.
+const (
+	// reasonNoRedactionPath: slice 5d-0. Only project_memory_chunks have a
+	// redaction path; a shared transcript row handed to the chunk redactor used
+	// to end FAILED ("memory chunk … not found") instead of deferred.
+	reasonNoRedactionPath = "no redaction path for this record type yet (removing one " +
+		"participant from a shared conversation is slice 5d, not yet shipped); it has NOT been changed"
+	// reasonLiveSession: a channel session is held in memory by the running
+	// daemon and saved again on its next message, so deleting or editing the
+	// stored copy from this process would be undone while reported as done.
+	reasonLiveSession = "this is live conversation state: the daemon holds the session in " +
+		"memory and saves it again on the next message, so changing the stored copy from here " +
+		"would not erase it; this record has NOT been changed and needs the session cleared " +
+		"through its channel or while the daemon is stopped"
+)
+
+// deferredStoreReason reports why an action must be deferred before any store is
+// touched, or "" when it may proceed.
+func deferredStoreReason(a Action) string {
+	if a.Table == TableChannelSessions {
+		return reasonLiveSession
+	}
+	if a.Disposition == DispositionRedact && !redactableTable(a.Table) {
+		return reasonNoRedactionPath
+	}
+	return ""
+}
+
+// redactableTable reports whether a table has a redaction path. Only memory
+// chunks do (slice 5c); transcripts wait on 5d (design §15.4).
+func redactableTable(t LinkableTable) bool { return t == TableProjectMemoryChunks }
 
 // applyDelete routes one delete to the right store and records the outcome.
 func (e *Executor) applyDelete(ctx context.Context, a Action, res *ErasureResult) {

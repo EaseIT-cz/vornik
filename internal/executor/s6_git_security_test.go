@@ -67,7 +67,7 @@ func TestS6Security_TamperedPointerRunsNothingAndTheCommitLands(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(wt, "agent.txt"), []byte("the agent's work\n"), 0o644))
 	fsm, hook := s6TamperPointer(t, wt)
 
-	require.NoError(t, mergeWorktree(ctx, projectDir, wt, "task_s6_tamper", "", zerolog.Nop()))
+	require.NoError(t, mergeWorktree(ctx, projectDir, wt, "task_s6_tamper", "", nil, zerolog.Nop()))
 
 	s6AssertAbsent(t, fsm, "the agent's core.fsmonitor ran on the host")
 	s6AssertAbsent(t, hook, "the agent's pre-commit hook ran on the host")
@@ -130,7 +130,7 @@ func TestS6Security_GlobalFilterNamedByTheWorktreeNeverRuns(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(wt, ".gitattributes"), []byte("* filter=agentpick\n"), 0o644))
 	require.NoError(t, os.WriteFile(filepath.Join(wt, "x.txt"), []byte("x\n"), 0o644))
 
-	require.NoError(t, mergeWorktree(ctx, projectDir, wt, "task_s6_gfilter", "", zerolog.Nop()))
+	require.NoError(t, mergeWorktree(ctx, projectDir, wt, "task_s6_gfilter", "", nil, zerolog.Nop()))
 
 	s6AssertAbsent(t, cleanM, "a globally defined clean filter ran for the agent")
 	s6AssertAbsent(t, smudgeM, "a globally defined smudge filter ran for the agent")
@@ -158,7 +158,7 @@ func TestS6Security_GlobalFilterNeverRunsOnProjectSideMergeBack(t *testing.T) {
 		require.NoErrorf(t, err, "agent-side git %v: %s", args, out)
 	}
 
-	require.NoError(t, mergeWorktree(ctx, projectDir, wt, "task_s6_gfmerge", "", zerolog.Nop()))
+	require.NoError(t, mergeWorktree(ctx, projectDir, wt, "task_s6_gfmerge", "", nil, zerolog.Nop()))
 
 	s6AssertAbsent(t, smudgeM, "the merge-back ran a globally defined smudge filter named by the agent")
 	s6AssertAbsent(t, cleanM, "the merge-back ran a globally defined clean filter named by the agent")

@@ -43,13 +43,13 @@
                     <div>
                         <label class="block text-xs font-medium text-gray-300 mb-1.5" for="displayName">Display name (optional)</label>
                         <input type="text" name="displayName" id="displayName" value="{{.DisplayName}}"
-                               class="w-full px-3 py-2 text-sm rounded-lg bg-dark-800 border border-dark-700 focus:border-brand-500 focus:outline-none text-gray-200">
+                               class="w-full px-3 py-2 text-sm rounded-lg bg-dark-800 border border-control focus:border-brand-500 focus:outline-none text-gray-200">
                         <p class="text-[11px] text-gray-500 mt-1">Overrides the project.yaml displayName when set. Empty means "inherit".</p>
                     </div>
                     <div>
                         <label class="block text-xs font-medium text-gray-300 mb-1.5" for="description">Hero description (optional)</label>
                         <textarea name="description" id="description" rows="3"
-                                  class="w-full px-3 py-2 text-sm rounded-lg bg-dark-800 border border-dark-700 focus:border-brand-500 focus:outline-none text-gray-200 leading-relaxed">{{.Description}}</textarea>
+                                  class="w-full px-3 py-2 text-sm rounded-lg bg-dark-800 border border-control focus:border-brand-500 focus:outline-none text-gray-200 leading-relaxed">{{.Description}}</textarea>
                         <p class="text-[11px] text-gray-500 mt-1">Free-form intro that surfaces on the project homepage.</p>
                     </div>
                 </section>
@@ -63,7 +63,7 @@
                     <div>
                         <label class="block text-xs font-medium text-gray-300 mb-1.5" for="goal">Goal <span class="text-rose-800 dark:text-rose-400">*</span></label>
                         <textarea name="goal" id="goal" rows="5" required
-                                  class="w-full px-3 py-2 text-sm rounded-lg bg-dark-800 border border-dark-700 focus:border-brand-500 focus:outline-none text-gray-200 leading-relaxed">{{.Goal}}</textarea>
+                                  class="w-full px-3 py-2 text-sm rounded-lg bg-dark-800 border border-control focus:border-brand-500 focus:outline-none text-gray-200 leading-relaxed">{{.Goal}}</textarea>
                         <p class="text-[11px] text-gray-500 mt-1">The high-level objective the swarm works toward.</p>
                         {{template "assistPanel" (dict
                             "Kind" "brief_section"
@@ -76,7 +76,7 @@
                     <div>
                         <label class="block text-xs font-medium text-gray-300 mb-1.5" for="audience">Audience <span class="text-rose-800 dark:text-rose-400">*</span></label>
                         <textarea name="audience" id="audience" rows="3" required
-                                  class="w-full px-3 py-2 text-sm rounded-lg bg-dark-800 border border-dark-700 focus:border-brand-500 focus:outline-none text-gray-200 leading-relaxed">{{.Audience}}</textarea>
+                                  class="w-full px-3 py-2 text-sm rounded-lg bg-dark-800 border border-control focus:border-brand-500 focus:outline-none text-gray-200 leading-relaxed">{{.Audience}}</textarea>
                         <p class="text-[11px] text-gray-500 mt-1">Who uses this project and how — drives audience-specific phrasing in prompt suggestions.</p>
                         {{template "assistPanel" (dict
                             "Kind" "brief_section"
@@ -89,7 +89,7 @@
                     <div>
                         <label class="block text-xs font-medium text-gray-300 mb-1.5" for="successCriteria">Success criteria <span class="text-rose-800 dark:text-rose-400">*</span></label>
                         <textarea name="successCriteria" id="successCriteria" rows="5" required
-                                  class="w-full px-3 py-2 text-sm rounded-lg bg-dark-800 border border-dark-700 focus:border-brand-500 focus:outline-none text-gray-200 leading-relaxed">{{.SuccessCriteria}}</textarea>
+                                  class="w-full px-3 py-2 text-sm rounded-lg bg-dark-800 border border-control focus:border-brand-500 focus:outline-none text-gray-200 leading-relaxed">{{.SuccessCriteria}}</textarea>
                         <p class="text-[11px] text-gray-500 mt-1">Bulleted list works well. What does "this project worked" look like?</p>
                         {{template "assistPanel" (dict
                             "Kind" "brief_section"
@@ -110,12 +110,12 @@
                     <div>
                         <label class="block text-xs font-medium text-gray-300 mb-1.5" for="outOfScope">Out of scope</label>
                         <textarea name="outOfScope" id="outOfScope" rows="3"
-                                  class="w-full px-3 py-2 text-sm rounded-lg bg-dark-800 border border-dark-700 focus:border-brand-500 focus:outline-none text-gray-200 leading-relaxed">{{.OutOfScope}}</textarea>
+                                  class="w-full px-3 py-2 text-sm rounded-lg bg-dark-800 border border-control focus:border-brand-500 focus:outline-none text-gray-200 leading-relaxed">{{.OutOfScope}}</textarea>
                     </div>
                     <div>
                         <label class="block text-xs font-medium text-gray-300 mb-1.5" for="riskCadence">Risk &amp; cadence</label>
                         <textarea name="riskCadence" id="riskCadence" rows="3"
-                                  class="w-full px-3 py-2 text-sm rounded-lg bg-dark-800 border border-dark-700 focus:border-brand-500 focus:outline-none text-gray-200 leading-relaxed">{{.RiskCadence}}</textarea>
+                                  class="w-full px-3 py-2 text-sm rounded-lg bg-dark-800 border border-control focus:border-brand-500 focus:outline-none text-gray-200 leading-relaxed">{{.RiskCadence}}</textarea>
                     </div>
                 </section>
 

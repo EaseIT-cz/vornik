@@ -4,11 +4,13 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"vornik.io/vornik/internal/aidisclosure"
 	"vornik.io/vornik/internal/api"
 	"vornik.io/vornik/internal/conversation"
 	"vornik.io/vornik/internal/persistence"
@@ -241,6 +243,10 @@ func TestDeliverableSend_SuccessAttachesViaArtifactID_EmailChannel(t *testing.T)
 	require.Len(t, msg.Attachments, 1)
 	assert.Equal(t, artifactID, msg.Attachments[0].ArtifactID, "attachment-capable channel must carry Attachment.ArtifactID")
 	assert.Equal(t, "ops@x.com", msg.ChannelSpecific["to"])
+	// audit 2026-10-12: GitHub #342 — the pushed deliverable is agent output and
+	// went out with Channel.Send, so the email carried no Art 50 notice.
+	assert.True(t, strings.HasSuffix(msg.Text, aidisclosure.FooterSeparator+(*aidisclosure.Service)(nil).PublicationNotice().Text),
+		"deliverable email must carry the AI notice footer, got %q", msg.Text)
 	assert.Contains(t, rec.Body.String(), "email", "confirmation fragment should name the destination channel")
 
 	got, err := reg.Gather()
@@ -281,6 +287,7 @@ func TestDeliverableSend_TextOnlyChannel_LinkInText(t *testing.T) {
 		WithArtifactRepository(artifactRepo),
 		WithChatAuditRepository(fakeChatAuditDS{row: row}),
 		WithChannelResolver(fakeResolverDS{byName: map[string]conversation.Channel{"telegram": ch}}),
+		WithAIDisclosure(alreadyDisclosedUI()), // chat already disclosed in its turn
 		WithWebUIBaseURL("https://vornik.example.com"),
 	)
 

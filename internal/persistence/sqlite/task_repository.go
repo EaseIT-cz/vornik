@@ -72,7 +72,7 @@ const taskSelectColumns = `id, project_id, workflow_id, idempotency_key, parent_
 		lease_id, leased_at, leased_by, lease_expires_at,
 		attempt, max_attempts, last_error, last_error_class, created_at, updated_at,
 		brief_amended_at, current_phase, expected_by, closed_at, closed_by, message_count, open_checkpoint_id,
-		chat_turn_id, budget_usd, created_by_api_key_id, created_by_actor`
+		chat_turn_id, budget_usd, created_by_api_key_id, created_by_actor, goal_origin`
 
 // Create inserts a new task row.
 func (r *TaskRepository) Create(ctx context.Context, task *persistence.Task) error {
@@ -110,8 +110,8 @@ func (r *TaskRepository) Create(ctx context.Context, task *persistence.Task) err
 			delegation_mode, status, priority, payload, dependencies,
 			lease_id, leased_at, leased_by, lease_expires_at,
 			attempt, max_attempts, last_error, last_error_class, created_at, updated_at,
-			chat_turn_id, budget_usd, created_by_api_key_id, created_by_actor
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			chat_turn_id, budget_usd, created_by_api_key_id, created_by_actor, goal_origin
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		task.ID, task.ProjectID, task.WorkflowID, task.IdempotencyKey, task.ParentTaskID, string(task.CreationSource),
 		nullableDelegationMode(task.DelegationMode), string(task.Status), task.Priority,
 		nullableBlob(task.Payload), sqliteStringArray(task.Dependencies),
@@ -119,6 +119,7 @@ func (r *TaskRepository) Create(ctx context.Context, task *persistence.Task) err
 		task.Attempt, task.MaxAttempts, task.LastError, task.LastErrorClass,
 		sqliteTime(task.CreatedAt), sqliteTime(task.UpdatedAt),
 		task.ChatTurnID, task.BudgetUSD, task.CreatedByAPIKeyID, task.CreatedByActor,
+		nullableGoalOrigin(task.GoalOrigin),
 	)
 	return err
 }
@@ -253,8 +254,12 @@ func (r *TaskRepository) update(ctx context.Context, task *persistence.Task, all
 }
 
 // Delete removes a task by ID. No error on missing rows.
+//
+// SQLite runs with foreign_keys(OFF), so the Postgres ON DELETE CASCADE /
+// SET NULL graph below a task is applied explicitly, in one transaction
+// (GitHub #361; retention design §6).
 func (r *TaskRepository) Delete(ctx context.Context, id string) error {
-	_, err := r.db.ExecContext(ctx, `DELETE FROM tasks WHERE id = ?`, id)
+	_, err := persistence.SQLiteDeleteCascadingTx(ctx, r.db, "tasks", `id = ?`, id)
 	return err
 }
 
@@ -1106,6 +1111,7 @@ func scanSqliteTask(scanner interface{ Scan(dest ...any) error }) (*persistence.
 		budgetUSD        sql.NullFloat64
 		createdByAPIKey  sql.NullString
 		createdByActor   sql.NullString
+		goalOrigin       sql.NullString // migration 230 parity (GitHub #347)
 	)
 	err := scanner.Scan(
 		&task.ID, &task.ProjectID, &workflowID, &idempotencyKey, &parentTaskID, &task.CreationSource,
@@ -1113,7 +1119,7 @@ func scanSqliteTask(scanner interface{ Scan(dest ...any) error }) (*persistence.
 		&leaseID, &leasedAt, &leasedBy, &leaseExpiresAt,
 		&task.Attempt, &task.MaxAttempts, &lastError, &lastErrorClass, &createdAt, &updatedAt,
 		&briefAmendedAt, &currentPhase, &expectedBy, &closedAt, &closedBy, &messageCount, &openCheckpointID,
-		&chatTurnID, &budgetUSD, &createdByAPIKey, &createdByActor,
+		&chatTurnID, &budgetUSD, &createdByAPIKey, &createdByActor, &goalOrigin,
 	)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
@@ -1197,6 +1203,7 @@ func scanSqliteTask(scanner interface{ Scan(dest ...any) error }) (*persistence.
 	if createdByActor.Valid {
 		task.CreatedByActor = &createdByActor.String
 	}
+	task.GoalOrigin = goalOrigin.String
 	return &task, nil
 }
 

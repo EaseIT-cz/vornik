@@ -62,6 +62,14 @@ INDIRECT=(
 
 fail=0
 
+# #334 item 6 (2026-10-13): an emptied list checks nothing and would print
+# "OK — 0 direct + 0 indirect". The suppressions in codeql-config.yml exist,
+# so a list that names none of them is a broken gate, not a clean tree.
+if [ "${#DIRECT[@]}" -eq 0 ] || [ "${#INDIRECT[@]}" -eq 0 ]; then
+  echo "lint-safepath: FAIL — examined ${#DIRECT[@]} direct + ${#INDIRECT[@]} indirect sinks; an empty list checks nothing."
+  exit 1
+fi
+
 for f in "${DIRECT[@]}"; do
   if [ ! -f "$f" ]; then
     echo "lint-safepath: $f is listed but no longer exists — update the list or the suppression."

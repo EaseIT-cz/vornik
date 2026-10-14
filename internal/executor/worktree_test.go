@@ -231,7 +231,7 @@ func TestMergeWorktree_AutoCommitsLeftoverChanges(t *testing.T) {
 		t.Fatalf("write PROJECT_CONTEXT.md: %v", err)
 	}
 
-	if err := mergeWorktree(ctx, projectDir, wtDir, taskID, "", logger); err != nil {
+	if err := mergeWorktree(ctx, projectDir, wtDir, taskID, "", nil, logger); err != nil {
 		t.Fatalf("mergeWorktree: %v", err)
 	}
 
@@ -335,7 +335,7 @@ func TestMergeWorktree_ResolvesAddAddConflictTakingTheirs(t *testing.T) {
 	mustGit("commit", "-m", "prior task output")
 
 	// add/add must auto-resolve (take theirs), not fail.
-	if err := mergeWorktree(ctx, projectDir, wtDir, taskID, "", logger); err != nil {
+	if err := mergeWorktree(ctx, projectDir, wtDir, taskID, "", nil, logger); err != nil {
 		t.Fatalf("mergeWorktree must auto-resolve add/add conflict, got: %v", err)
 	}
 	got, err := exec.Command("git", "-C", projectDir, "show", "HEAD:artifacts/out/research.md").Output()
@@ -386,7 +386,7 @@ func TestMergeWorktree_PreservesGenuineContentConflict(t *testing.T) {
 	mustGit("add", "-A")
 	mustGit("commit", "-m", "master edit")
 
-	err = mergeWorktree(ctx, projectDir, wtDir, taskID, "", logger)
+	err = mergeWorktree(ctx, projectDir, wtDir, taskID, "", nil, logger)
 	if err == nil {
 		t.Fatal("mergeWorktree must FAIL on a genuine modify/modify conflict, not auto-resolve it")
 	}
@@ -426,7 +426,7 @@ func TestMergeWorktree_RefusesDirtyMainWithoutResettingIt(t *testing.T) {
 		t.Fatalf("write dirty main file: %v", err)
 	}
 
-	err = mergeWorktree(ctx, projectDir, wtDir, taskID, "", logger)
+	err = mergeWorktree(ctx, projectDir, wtDir, taskID, "", nil, logger)
 	if err == nil || !strings.Contains(err.Error(), "main workspace has uncommitted changes") {
 		t.Fatalf("mergeWorktree error = %v, want dirty-main refusal", err)
 	}
@@ -505,7 +505,7 @@ func TestMergeWorktree_RescuesStrandedStagedTrackedChange(t *testing.T) {
 	// Pre-fix this would error with "main workspace has uncommitted
 	// changes". Post-fix: auto-commit the stranded change, then
 	// merge cleanly.
-	if err := mergeWorktree(ctx, projectDir, wtDir, taskID, "", logger); err != nil {
+	if err := mergeWorktree(ctx, projectDir, wtDir, taskID, "", nil, logger); err != nil {
 		t.Fatalf("mergeWorktree must rescue stranded staged tracked change, got: %v", err)
 	}
 
@@ -684,7 +684,7 @@ func TestMergeWorktree_SucceedsWithoutRepoIdentity(t *testing.T) {
 	// The fix: mergeWorktree passes -c user.name -c user.email inline,
 	// so the merge commit succeeds even though the repo has no configured
 	// identity.
-	if err := mergeWorktree(ctx, projectDir, wtDir, taskID, "", logger); err != nil {
+	if err := mergeWorktree(ctx, projectDir, wtDir, taskID, "", nil, logger); err != nil {
 		t.Fatalf("mergeWorktree returned error despite inline identity: %v", err)
 	}
 
@@ -747,7 +747,7 @@ func TestMergeWorktree_ErrorSignalsFailureToCaller(t *testing.T) {
 	must(projectDir, "git", "add", "-A")
 	must(projectDir, "git", "commit", "-m", "master edit")
 
-	if err := mergeWorktree(ctx, projectDir, wtDir, taskID, "", logger); err == nil {
+	if err := mergeWorktree(ctx, projectDir, wtDir, taskID, "", nil, logger); err == nil {
 		t.Fatalf("expected merge to fail on conflict, but got nil error")
 	}
 
@@ -779,7 +779,7 @@ func TestMergeWorktree_NoopMergeWhenNothingChanged(t *testing.T) {
 	// Do not touch the worktree — simulate a role that read some files
 	// and returned without writing anything (e.g. a planner that output
 	// only JSON to /app/output, never touched project/).
-	if err := mergeWorktree(ctx, projectDir, wtDir, taskID, "", logger); err != nil {
+	if err := mergeWorktree(ctx, projectDir, wtDir, taskID, "", nil, logger); err != nil {
 		t.Fatalf("mergeWorktree (noop): %v", err)
 	}
 
@@ -810,7 +810,7 @@ func TestPruneWorktrees_RemovesBranchWhenWorktreeDirIsGone(t *testing.T) {
 		t.Fatalf("remove worktree dir: %v", err)
 	}
 
-	pruneWorktrees(ctx, projectDir, logger, nil)
+	pruneWorktrees(ctx, projectDir, logger, removeUnless(nil))
 
 	branchOut, err := exec.Command("git", "-C", projectDir, "branch", "--list", worktreeBranch(taskID)).Output()
 	if err != nil {
@@ -849,7 +849,7 @@ func TestPruneWorktrees_RemovesDirectoryWhenBranchIsGone(t *testing.T) {
 		t.Fatalf("write orphan marker: %v", err)
 	}
 
-	pruneWorktrees(ctx, projectDir, logger, nil)
+	pruneWorktrees(ctx, projectDir, logger, removeUnless(nil))
 
 	if _, err := os.Stat(wtDir); !os.IsNotExist(err) {
 		t.Fatalf("orphan worktree dir survived startup prune: %v", err)
@@ -1623,7 +1623,7 @@ func TestAutoCommitTrackedChangesOnly_OnlyBacklog_CheckpointMessage(t *testing.T
 		t.Fatalf("write BACKLOG.md: %v", err)
 	}
 
-	autoCommitTrackedChangesOnly(context.Background(), projectDir, "task-B1", backlogPath, zerolog.Nop())
+	autoCommitTrackedChangesOnly(context.Background(), projectDir, "task-B1", backlogPath, nil, zerolog.Nop())
 
 	logOut, err := exec.Command("git", "-C", projectDir, "log", "--format=%s", "-3").Output()
 	if err != nil {
@@ -1664,7 +1664,7 @@ func TestAutoCommitTrackedChangesOnly_BacklogPlusOther_TwoCommits(t *testing.T) 
 		t.Fatalf("write stranded.txt: %v", err)
 	}
 
-	autoCommitTrackedChangesOnly(context.Background(), projectDir, "task-B2", backlogPath, zerolog.Nop())
+	autoCommitTrackedChangesOnly(context.Background(), projectDir, "task-B2", backlogPath, nil, zerolog.Nop())
 
 	logOut, err := exec.Command("git", "-C", projectDir, "log", "--format=%s", "-5").Output()
 	if err != nil {
@@ -1705,7 +1705,7 @@ func TestAutoCommitTrackedChangesOnly_OnlyOther_RescueMessage(t *testing.T) {
 		t.Fatalf("write stranded.txt: %v", err)
 	}
 
-	autoCommitTrackedChangesOnly(context.Background(), projectDir, "task-B3", "", zerolog.Nop())
+	autoCommitTrackedChangesOnly(context.Background(), projectDir, "task-B3", "", nil, zerolog.Nop())
 
 	logOut, err := exec.Command("git", "-C", projectDir, "log", "--format=%s", "-3").Output()
 	if err != nil {
@@ -1801,7 +1801,7 @@ func TestMergeWorktree_SuccessPath_CheckpointsBacklogMarker(t *testing.T) {
 		t.Fatalf("write worktree file: %v", err)
 	}
 
-	if err := mergeWorktree(context.Background(), projectDir, wtDir, taskID, backlogPath, zerolog.Nop()); err != nil {
+	if err := mergeWorktree(context.Background(), projectDir, wtDir, taskID, backlogPath, nil, zerolog.Nop()); err != nil {
 		t.Fatalf("mergeWorktree: %v", err)
 	}
 

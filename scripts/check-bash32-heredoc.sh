@@ -82,6 +82,7 @@ for f in "$@"; do
 done
 
 if [ "$status" -eq 0 ]; then
-  echo "check-bash32-heredoc: OK — no apostrophe-bearing heredoc inside a command substitution"
+  # The denominator (#334 item 6, CI pipeline design amendment 2026-10-14).
+  echo "check-bash32-heredoc: OK — no apostrophe-bearing heredoc inside a command substitution ($# file(s) examined)"
 fi
 exit "$status"

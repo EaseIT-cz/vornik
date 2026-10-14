@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"html"
 	"net/http"
+	"net/url"
 	"strings"
 
 	"vornik.io/vornik/internal/agentadmin"
@@ -177,7 +178,18 @@ func (s *agentAdminService) deviceOAuthCallback(w http.ResponseWriter, r *http.R
 		page(http.StatusConflict, "Already decided", "This request changed or was already decided. Nothing was connected.")
 		return
 	}
-	s.background(func() { s.afterOAuthConnected(context.WithoutCancel(ctx), slot) })
+	// A slot a device's connector install filed leaves the tools to the
+	// connector page's second confirm (design §19.14.10, review 7b97 F2):
+	// the marker is in the request the device decided, so an agent's
+	// request_credential, which never sets it, keeps its tools request.
+	var pl approvalPayload
+	connector := ""
+	if json.Unmarshal(req.Rendered, &pl) == nil {
+		connector = pl.Connector
+	}
+	if connector == "" {
+		s.background(func() { s.afterOAuthConnected(context.WithoutCancel(ctx), slot) })
+	}
 	// Say who signed in (design §22.2.7): the person chose the account at
 	// the provider, and this is the one place Vornik can tell them.
 	msg := "Vornik could not tell which account you signed in to; what your assistant said about this account was set aside."
@@ -187,7 +199,27 @@ func (s *agentAdminService) deviceOAuthCallback(w http.ResponseWriter, r *http.R
 	if paused > 0 {
 		msg += fmt.Sprintf(" %d standing approval(s) that send from this account were paused; confirm them on the Standing approvals page if this is still the same account.", paused)
 	}
+	if connector != "" {
+		ns, slug := slot.Namespace, strings.TrimPrefix(slot.Project, slot.Namespace+agentns.Separator)
+		account := ""
+		if a, err := s.grants.GetIntegration(ctx, slot.Project, slot.Server); err == nil {
+			account = a.StoredAccountLabel()
+		}
+		link := "/ui/approve/connectors/" + url.PathEscape(connector) + "?" + url.Values{"namespace": {ns}, "project": {slug}, "account": {account}}.Encode()
+		connectorPage(w, msg, link)
+		return
+	}
 	page(http.StatusOK, "Connected", msg)
+}
+
+// connectorPage is the callback's page for a connector's sign-in: who
+// signed in, and the link back to approve the tools (design §19.14.10).
+func connectorPage(w http.ResponseWriter, msg, link string) {
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.Header().Set("Cache-Control", "no-store")
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write([]byte("<!doctype html><meta name=viewport content=\"width=device-width\"><title>Signed in</title><h1>Signed in</h1><p>" +
+		html.EscapeString(msg) + "</p><p>One step left: <a href=\"" + html.EscapeString(link) + "\">approve the tools on the connector page</a>.</p>"))
 }
 
 // afterOAuthConnected lists the newly connected server's tools and files

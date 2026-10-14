@@ -405,6 +405,7 @@ func TestMultiInstall_SenderAllowlist_PerInstallation(t *testing.T) {
 		"comment": {"id": 2, "body": "@vornik-companion hi", "user": {"login": "alice"}}
 	}`)
 	ch.HandleWebhook(httptest.NewRecorder(), signedRequest("shhh", "issue_comment", "d-B-alice", bodyB))
+	ch.waitInFlight()
 
 	got := rx.copyGot()
 	if len(got) != 1 {

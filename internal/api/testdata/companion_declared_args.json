@@ -1,0 +1,154 @@
+{
+  "_comment": "GENERATED from internal/api/companion_strict_args.go companionToolArgs by TestCompanionDeclaredArgsManifest; regenerate with UPDATE_DECLARED_ARGS=1 go test ./internal/api -run TestCompanionDeclaredArgsManifest. Read by contrib/hermes-companion/tests/helpers.py.",
+  "tools": {
+    "cancel": [
+      "task_id",
+      "reason"
+    ],
+    "catalog": [],
+    "daemon_log": [
+      "project",
+      "task_id",
+      "since",
+      "limit"
+    ],
+    "delegate": [
+      "workflow",
+      "prompt",
+      "task_type",
+      "mode",
+      "repo_scope",
+      "inputArtifacts",
+      "skip_auto_extract",
+      "acknowledge_workflow_cannot_fetch",
+      "inputs",
+      "notify",
+      "max_age_seconds"
+    ],
+    "doctor": [],
+    "list": [
+      "limit",
+      "status",
+      "project"
+    ],
+    "list_artifacts": [
+      "task_id",
+      "execution_id",
+      "page_size",
+      "offset"
+    ],
+    "list_scopes": [],
+    "memory_correct": [
+      "wrong_claim",
+      "correction",
+      "max_refutes",
+      "repo_scope",
+      "chunk_ids",
+      "reason"
+    ],
+    "memory_list": [
+      "cursor",
+      "limit",
+      "query"
+    ],
+    "read_artifact": [
+      "task_id",
+      "execution_id",
+      "artifact_id"
+    ],
+    "recall": [
+      "query",
+      "limit",
+      "from_date",
+      "to_date",
+      "min_score",
+      "class",
+      "repo_scope",
+      "strict_scope",
+      "sufficient"
+    ],
+    "recent_memory": [
+      "limit",
+      "repo_scope",
+      "strict_scope",
+      "only_untagged"
+    ],
+    "remember": [
+      "content",
+      "source_name",
+      "class",
+      "ttl_days",
+      "event_time",
+      "repo_scope",
+      "tags"
+    ],
+    "report_problem": [
+      "symptom"
+    ],
+    "result": [
+      "task_id",
+      "wait_seconds"
+    ],
+    "skill_approve": [
+      "id",
+      "reason",
+      "expected_version"
+    ],
+    "skill_get": [
+      "id",
+      "name",
+      "repo_scope"
+    ],
+    "skill_list": [
+      "repo_scope",
+      "maturity",
+      "domain",
+      "limit"
+    ],
+    "skill_propose": [
+      "name",
+      "description",
+      "body",
+      "domain",
+      "tags",
+      "roles",
+      "repo_scope",
+      "author",
+      "global",
+      "supersedes",
+      "confirm_distinct"
+    ],
+    "skill_reject": [
+      "id",
+      "reason",
+      "expected_version"
+    ],
+    "skill_search": [
+      "query",
+      "repo_scope",
+      "domain",
+      "role",
+      "limit",
+      "strict_scope"
+    ],
+    "skill_set_global": [
+      "id",
+      "global"
+    ],
+    "status": [
+      "task_id"
+    ],
+    "task_explain": [
+      "task_id"
+    ],
+    "task_logs": [
+      "task_id",
+      "cursor",
+      "tail",
+      "wait_seconds"
+    ],
+    "whoami": [
+      "repo_scope"
+    ]
+  }
+}

@@ -1,0 +1,61 @@
+# lint-shell exclusions (#334 item 6; CI pipeline design, amendment 2026-10-14).
+#
+# lint-shell examines every tracked *.sh file plus the two extension-less
+# scripts the Makefile names, MINUS the files listed here. Each was outside
+# the old hand-picked list and carried shellcheck findings on 2026-10-14
+# (default severity, koalaman/shellcheck:stable). This is debt, not an
+# allowance: fix a file's findings and delete its line. A line naming a file
+# that is not tracked fails lint-shell, so the list cannot rot silently.
+#
+# path  # findings on 2026-10-14
+contrib/claude-code-companion/scripts/vornik-backlog-deposit_test.sh  # 14: 14 note
+contrib/codex-companion/scripts/vornik-backlog-deposit_test.sh  # 14: 14 note
+contrib/systemd/vornik-gateway-render.sh  # 1: 1 warning
+deployments/podman/quickstart.sh  # 2: 1 note, 1 warning
+deployments/podman/quickstart_test.sh  # 22: 22 note
+docs/marketing/brand/tools/sheet.sh  # 2: 2 error
+images/vornik-agent/entrypoint.sh  # 13: 13 note
+images/vornik-agent/test-entrypoint-mount-preflight.sh  # 1: 1 warning
+images/vornik-agent/test-entrypoint-prompt-token-budget.sh  # 1: 1 warning
+images/vornik-agent/test-entrypoint-result-merge.sh  # 4: 4 note
+images/vornik-agent/test-entrypoint-tool-free-router.sh  # 19: 19 note
+images/vornik-scraper-login/entrypoint.sh  # 3: 3 warning
+packaging/scripts/postinstall.sh  # 2: 1 note, 1 warning
+packaging/scripts/postinstall_detect_test.sh  # 1: 1 note
+scripts/agentbench-reproduce.sh  # 5: 5 note
+scripts/backport-ce-pr.sh  # 1: 1 note
+scripts/bench-reproduce.sh  # 1: 1 note
+scripts/ce-leak-scan.sh  # 1: 1 warning
+scripts/check-ce-compliance-parity-selftest_test.sh  # 2: 2 note
+scripts/config-deployable.sh  # 5: 5 warning
+scripts/config-lint.sh  # 1: 1 note
+scripts/docs-source-fingerprint_test.sh  # 5: 5 note
+scripts/export-public-ce.sh  # 24: 2 note, 22 warning
+scripts/infra.sh  # 4: 2 note, 2 warning
+scripts/migrate-ghcr-images_test.sh  # 6: 6 note
+scripts/postgres-init.sh  # 1: 1 warning
+scripts/run-suite_test.sh  # 9: 9 note
+scripts/test-config-deploy.sh  # 1: 1 note
+scripts/test-config-drift-check.sh  # 1: 1 warning
+test/agent/context_budget_test.sh  # 1: 1 note
+test/agent/degenerate_loop_nudge_test.sh  # 8: 8 note
+test/agent/plausibility_precheck_test.sh  # 3: 1 note, 2 warning
+test/agent/tool_gate_failclosed_test.sh  # 4: 2 note, 2 warning
+test/agent/tools_test.sh  # 1: 1 warning
+
+# Clean on their own, but they source an excluded file above
+# (images/vornik-agent/entrypoint.sh or scripts/config-deployable.sh), so
+# shellcheck cannot follow the source (SC1091) or sees its variables as unused
+# (SC2034). They leave this list with the file they source.
+images/vornik-agent/test-entrypoint-deferred-mcp.sh  # sources an excluded file
+images/vornik-agent/test-entrypoint-emit-tool-finalize.sh  # sources an excluded file
+images/vornik-agent/test-entrypoint-memory-peak.sh  # sources an excluded file
+images/vornik-agent/test-entrypoint-merge-never-loses.sh  # sources an excluded file
+images/vornik-agent/test-entrypoint-missing-prereq-message.sh  # sources an excluded file
+images/vornik-agent/test-entrypoint-query-api.sh  # sources an excluded file
+images/vornik-agent/test-entrypoint-recovery-prereq.sh  # sources an excluded file
+images/vornik-agent/test-entrypoint-response-format-tools.sh  # sources an excluded file
+images/vornik-agent/test-entrypoint-result-never-emptied.sh  # sources an excluded file
+images/vornik-agent/test-entrypoint-tool-result-hygiene.sh  # sources an excluded file
+scripts/config-deploy.sh  # sources an excluded file
+scripts/config-drift-check.sh  # sources an excluded file

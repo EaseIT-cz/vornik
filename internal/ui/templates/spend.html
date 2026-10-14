@@ -20,12 +20,12 @@
                         <option value="7d"  {{if eq .WindowDays 7}}selected{{end}}>Last 7 days</option>
                         <option value="30d" {{if eq .WindowDays 30}}selected{{end}}>Last 30 days</option>
                     </select>
-                    <div class="inline-flex items-center gap-1 rounded-lg border border-dark-700 bg-dark-800 p-0.5" role="group" aria-label="Spend window">
+                    <div class="inline-flex items-center gap-1 rounded-lg border border-control bg-dark-800 p-0.5" role="group" aria-label="Spend window">
                         <button type="button" data-spend-window="24h" aria-pressed="{{if eq .WindowDays 1}}true{{else}}false{{end}}" class="px-2.5 py-1 text-xs rounded-md transition-colors {{if eq .WindowDays 1}}bg-brand-600/80 text-white{{else}}text-gray-400 hover:bg-dark-700 hover:text-gray-200{{end}}">1d</button>
                         <button type="button" data-spend-window="7d" aria-pressed="{{if eq .WindowDays 7}}true{{else}}false{{end}}" class="px-2.5 py-1 text-xs rounded-md transition-colors {{if eq .WindowDays 7}}bg-brand-600/80 text-white{{else}}text-gray-400 hover:bg-dark-700 hover:text-gray-200{{end}}">7d</button>
                         <button type="button" data-spend-window="30d" aria-pressed="{{if eq .WindowDays 30}}true{{else}}false{{end}}" class="px-2.5 py-1 text-xs rounded-md transition-colors {{if eq .WindowDays 30}}bg-brand-600/80 text-white{{else}}text-gray-400 hover:bg-dark-700 hover:text-gray-200{{end}}">30d</button>
                     </div>
-                    <select name="project" class="text-sm bg-dark-800 border border-dark-700 text-gray-200 rounded-md px-2 py-1.5">
+                    <select name="project" class="text-sm bg-dark-800 border border-control text-gray-200 rounded-md px-2 py-1.5">
                         <option value="">{{if .AllAccess}}All projects{{else}}All my projects{{end}}</option>
                         {{range .ProjectsList}}
                         <option value="{{.}}" {{if eq . $.ProjectID}}selected{{end}}>{{.}}</option>
@@ -42,10 +42,10 @@
                     <div class="px-5 py-4">
                         <p class="text-xs font-medium text-gray-400 uppercase tracking-wider">Total spend · {{.WindowLabel}}</p>
                         <p class="mt-1.5 text-3xl font-bold text-accent-300 tabular-nums">{{fmtUSD .TotalUSD}}</p>
-                        {{/* Cache savings sub-line on the spend tile — visible only when prompt caching is observed (any Bedrock / Anthropic traffic in window). Frames the discount against the gross spend so operators see the deal they got, not just the bill. */}}
+                        {{/* Provider prompt-cache savings over the page window — visible only when prompt caching is observed. Named for the cache it measures and its window, because Vornik's own response cache (tile below, id=response-cache) is a different cache with no window (2026-10-14, local-llm-response-cache-design.md §Cache-savings figures on the console). Summed over every (role, model) pair in the window, not only the leaderboard's top 20. */}}
                         {{if gt .TotalCacheSavingsUSD 0.0}}
-                        <p class="mt-1 text-xs text-emerald-800 dark:text-emerald-400 tabular-nums" title="What cache reads WOULD have cost at the full input rate. Falls back to input × 0.10 when pricing.yaml doesn't enumerate cache rates explicitly.">
-                            saved {{fmtUSD .TotalCacheSavingsUSD}} via prompt cache
+                        <p class="mt-1 text-xs text-emerald-800 dark:text-emerald-400 tabular-nums" title="Provider prompt cache: the call still ran, but its repeated prompt prefix was billed at the cache-read rate. This is what those cache reads would have cost at the full input rate, over the {{.WindowLabel}} window. Falls back to input × 0.10 when pricing.yaml doesn't enumerate cache rates explicitly. Calls Vornik answered itself without a provider are counted separately in the Response cache tile below.">
+                            saved {{fmtUSD .TotalCacheSavingsUSD}} via provider prompt cache · {{.WindowLabel}}
                         </p>
                         {{end}}
                     </div>
@@ -69,8 +69,8 @@
                              hiding them makes a lower call count than stage count unexplainable. */}}
                         {{if gt .TotalCacheHits 0}}
                         <p class="mt-1 text-xs text-emerald-800 dark:text-emerald-400 tabular-nums"
-                           title="Stages served from the LLM response cache: no provider call, no cost. Excluded from the count above.">
-                            + {{.TotalCacheHits}} served from cache
+                           title="Knowledge-graph extraction stages served by Vornik's response cache in the {{.WindowLabel}} window: no provider call, no cost; excluded from the count above. Only the KG extractor records a per-stage hit; the page-wide count of calls the response cache skipped is in the Response cache tile below.">
+                            + {{.TotalCacheHits}} KG extractions served by Vornik's response cache
                         </p>
                         {{end}}
                     </div>
@@ -117,25 +117,32 @@
             </div>
             {{end}}
 
-            {{/* Phase E response cache tile — full-response memoisation
-                 for the memory background trio (Titler / Classifier /
-                 KG Extractor). Available=false renders nothing (i.e.
-                 disabled or migration 47 not applied). */}}
+            {{/* Phase E response cache tile — Vornik answers a repeated
+                 deterministic call (memory titler / classifier / KG
+                 extractor, instinct distiller, intent-judge refiner) from
+                 llm_response_cache without calling a provider. The
+                 dashboard's response-cache card drills down to this
+                 anchor and shows the same figures under the same labels.
+                 The figures have no window: hit_count is cumulative per
+                 cached entry and retention deletes cold entries, so they
+                 are "all cached entries", never "lifetime" (2026-10-14,
+                 local-llm-response-cache-design.md §Cache-savings figures
+                 on the console). Available=false renders nothing. */}}
             {{if .ResponseCacheAvailable}}
-            <div class="glass rounded-xl border border-dark-700 overflow-hidden">
+            <div id="response-cache" class="glass rounded-xl border border-dark-700 overflow-hidden scroll-mt-20">
                 <div class="px-5 py-3.5 border-b border-dark-700/60 flex items-baseline justify-between gap-2 flex-wrap">
-                    <h2 class="text-sm font-semibold text-gray-200">Response cache</h2>
-                    <span class="text-xs text-gray-500">postgres-backed · memory_titler / memory_classifier / memory_kg_extract</span>
+                    <h2 class="text-sm font-semibold text-gray-200">Response cache (served by Vornik)</h2>
+                    <span class="text-xs text-gray-500">all cached entries · not limited to the page window ({{.WindowLabel}}) or a project filter · separate from the provider prompt-cache savings above</span>
                 </div>
                 <div class="px-5 py-4 grid grid-cols-2 sm:grid-cols-5 gap-4 text-xs">
                     {{/* Savings is the headline metric — left-most, accent-coloured, larger text. Renders even at $0 (so operators on un-priced models see "no pricing wired" rather than a missing column). */}}
                     <div>
-                        <dt class="text-gray-500 uppercase tracking-wider text-[10px]">$ saved (lifetime)</dt>
-                        <dd class="text-3xl font-semibold {{if gt .ResponseCacheSavingsUSD 0.0}}text-accent-300{{else}}text-gray-500{{end}} tabular-nums" title="Sum across all rows of hit_count × CostUSD(model, prompt_tokens, completion_tokens). Zero means no pricing was wired or all hits landed on un-priced models — hit volume still counts.">{{fmtUSD .ResponseCacheSavingsUSD}}</dd>
+                        <dt class="text-gray-500 uppercase tracking-wider text-[10px]">$ saved · all cached entries</dt>
+                        <dd class="text-3xl font-semibold {{if gt .ResponseCacheSavingsUSD 0.0}}text-accent-300{{else}}text-gray-500{{end}} tabular-nums" title="Sum over every cached entry of hit_count × CostUSD(model, prompt_tokens, completion_tokens). Counts from when each entry was cached; entries unused for retention.response_cache_days are deleted with their counts, so this is not a lifetime total. A lower bound: entries stored without token counts (intent-judge refiner rows cached before 2026-10-14) and un-priced models add hits but no dollars.">{{fmtUSD .ResponseCacheSavingsUSD}}</dd>
                     </div>
                     <div>
-                        <dt class="text-gray-500 uppercase tracking-wider text-[10px]">Lifetime hits</dt>
-                        <dd class="text-2xl font-semibold text-gray-100 tabular-nums" title="Sum of hit_count across all rows — the lifetime count of LLM calls saved by the response cache.">{{.ResponseCacheHits}}</dd>
+                        <dt class="text-gray-500 uppercase tracking-wider text-[10px]">LLM calls skipped · all cached entries</dt>
+                        <dd class="text-2xl font-semibold text-gray-100 tabular-nums" title="Sum of hit_count over every cached entry: provider calls Vornik answered from its response cache. Counts from when each entry was cached; deleted entries take their counts with them.">{{.ResponseCacheHits}}</dd>
                     </div>
                     <div>
                         <dt class="text-gray-500 uppercase tracking-wider text-[10px]">Cached responses</dt>
@@ -147,7 +154,7 @@
                     </div>
                     <div>
                         <dt class="text-gray-500 uppercase tracking-wider text-[10px]">Distinct purposes</dt>
-                        <dd class="text-2xl font-semibold text-gray-100 tabular-nums" title="Expected range: 0–3 (one per memory background consumer wired today).">{{.ResponseCachePurposes}}</dd>
+                        <dd class="text-2xl font-semibold text-gray-100 tabular-nums" title="One per cache consumer: memory_titler, memory_classifier, memory_kg_extract, instinct_distill, intentjudge_llm_refiner (0–5).">{{.ResponseCachePurposes}}</dd>
                     </div>
                 </div>
             </div>

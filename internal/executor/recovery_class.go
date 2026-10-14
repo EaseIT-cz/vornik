@@ -18,7 +18,9 @@ import "vornik.io/vornik/internal/persistence"
 // https://docs.vornik.io §3-4.
 func recoveryFailureClass(execClass string) string {
 	switch execClass {
-	case persistence.TaskFailureClassBudgetBlocked:
+	// PROMPT_TOKEN_BUDGET reached this branch as BUDGET_BLOCKED before it had
+	// its own class (permanent-failure design §10.2): a cap hit mid-step.
+	case persistence.TaskFailureClassBudgetBlocked, persistence.TaskFailureClassPromptTokenBudget:
 		return "budget_exhausted"
 	case persistence.TaskFailureClassHallucinatedPlacement:
 		return "hallucination_flagged"

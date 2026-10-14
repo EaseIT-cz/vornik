@@ -5,52 +5,21 @@ set -euo pipefail
 [[ "${GITHUB_REF_NAME:-}" =~ ^v?20[0-9]{2}\.[0-9]+\.[0-9]+$ ]] || { echo '::error::Expected a calendar release tag'; exit 1; }
 test -n "${GPG_PRIVATE_KEY:-}" || { echo '::error::GPG_PRIVATE_KEY is required'; exit 1; }
 
-# A 4xx is an ANSWER. A 5xx, a 429 or a dropped connection is not.
-#
-# Both directions of getting this wrong are real, and they are not symmetric.
-# Treating a transient failure as an answer is the dangerous one: the
-# releases/tags probe below would read "no such release" out of a 503 and the
-# run would rebuild and re-publish over a release that already exists. Treating
-# it as fatal is merely expensive — but it strands a release mid-flight with no
-# way forward but a human re-run, which is the reliability gap this closes.
-#
-# So: retry the responses that carry no information, and fail fast on the ones
-# that do. A 403 is a permissions answer, not a hiccup — except GitHub's rate
-# limiter, which also speaks 403 and says so in the body, so that one case is
-# read out of the message rather than the status.
-GH_API_ATTEMPTS="${GH_API_ATTEMPTS:-5}"
-gh_api_retry() {
-  local out="$1"; shift
-  local err="$RUNNER_TEMP/release-api-error"
-  local attempt delay=2 status
-  for (( attempt = 1; attempt <= GH_API_ATTEMPTS; attempt++ )); do
-    if gh api "$@" > "$out" 2> "$err"; then
-      return 0
-    fi
-    # gh writes "gh: Not Found (HTTP 404)"; match the code with or without the
-    # parentheses so a message-format change cannot silently reclassify every
-    # answer as a retryable network error.
-    status="$(sed -n 's/.*HTTP \([0-9]\{3\}\).*/\1/p' "$err" | head -1)"
-    case "$status" in
-      429|5[0-9][0-9]) ;;                                        # transient
-      403) grep -qi 'rate limit' "$err" "$out" || return 1 ;;    # 403 = answer, unless throttled
-      '')  ;;                                                    # no status at all = network/DNS
-      *)   return 1 ;;                                           # 404 and friends are answers
-    esac
-    [[ "$attempt" -lt "$GH_API_ATTEMPTS" ]] || return 1
-    echo "::warning::GitHub API gave ${status:-no HTTP status}; retrying in ${delay}s (attempt ${attempt}/${GH_API_ATTEMPTS})"
-    sleep "$delay"
-    delay=$(( delay * 2 ))
-  done
-  return 1
-}
+# gh_api_retry (a 4xx is an answer; a 5xx, a 429 or a dropped connection is
+# not) and the "successful full CI run on this sha" query live in one place,
+# shared with the gate-stamp verifier that guards every CE publication (CE
+# export runbook, amendment 2026-10-12). The retry rationale is there.
+# shellcheck source=scripts/ci-full-run.sh
+. "$(dirname "${BASH_SOURCE[0]}")/ci-full-run.sh"
 
 sha=$(git rev-parse HEAD)
 runs="$RUNNER_TEMP/release-ci-runs"
-gh_api_retry "$runs" --paginate "repos/$GITHUB_REPOSITORY/actions/workflows/ci.yaml/runs?head_sha=$sha&status=success&per_page=100" \
-  --jq '.workflow_runs[] | select(.event == "push" or .event == "workflow_dispatch") | .id' \
+ci_full_run_ids "$GITHUB_REPOSITORY" "$sha" "$runs" \
   || { echo '::error::Cannot reach the GitHub API to verify CI for this commit; the release is NOT known to be unverified, only unverifiable. Re-run.'; exit 1; }
-test -s "$runs" || { echo '::error::Full CI has not passed for this commit. Wait then rerun; RELEASE.md documents local gates when quota is exhausted.'; exit 1; }
+# A FULL run: concluded success AND its full-run job succeeded (CI pipeline
+# design P6, #118). A scoped push run is not evidence for a release.
+test -s "$runs" || { echo '::error::No successful FULL CI run (one with a successful full-run job) on this commit. Dispatch one (gh workflow run ci.yaml --ref main), wait, then rerun; a scoped push run does not count. RELEASE.md documents local gates when quota is exhausted.'; exit 1; }
+echo "full CI run: $(head -1 "$runs")"
 response="$RUNNER_TEMP/release-existing.json"
 if gh_api_retry "$response" "repos/$GITHUB_REPOSITORY/releases/tags/$GITHUB_REF_NAME"; then
   if jq -e '.draft == false' "$response" >/dev/null; then

@@ -16,7 +16,7 @@ import (
 func TestPruneAllWorktrees_NoWorkspacePath(t *testing.T) {
 	e := &Executor{config: &Config{ProjectWorkspacePath: ""}, logger: zerolog.Nop()}
 	require.NotPanics(t, func() {
-		e.pruneAllWorktrees(context.Background(), nil)
+		e.pruneAllWorktrees(context.Background(), removeUnless(nil))
 	})
 }
 
@@ -30,7 +30,7 @@ func TestPruneAllWorktrees_NonExistentDir(t *testing.T) {
 		logger: zerolog.Nop(),
 	}
 	require.NotPanics(t, func() {
-		e.pruneAllWorktrees(context.Background(), nil)
+		e.pruneAllWorktrees(context.Background(), removeUnless(nil))
 	})
 }
 
@@ -50,7 +50,7 @@ func TestPruneAllWorktrees_WalksDirsSkipsFiles(t *testing.T) {
 		logger: zerolog.Nop(),
 	}
 	require.NotPanics(t, func() {
-		e.pruneAllWorktrees(context.Background(), map[string]struct{}{"t1": {}})
+		e.pruneAllWorktrees(context.Background(), removeUnless(map[string]struct{}{"t1": {}}))
 	})
 	// No assertions on the inner pruneWorktrees call (it bails out
 	// on non-git dirs); the relevant coverage is the outer loop
@@ -65,7 +65,7 @@ func TestPruneOrphanWorktreeDirs_NoWorktreesDir(t *testing.T) {
 	dir := t.TempDir()
 	initGitRepo(t, dir)
 	require.NotPanics(t, func() {
-		pruneOrphanWorktreeDirs(context.Background(), dir, zerolog.Nop())
+		pruneOrphanWorktreeDirs(context.Background(), dir, zerolog.Nop(), removeUnless(nil))
 	})
 }
 
@@ -77,6 +77,6 @@ func TestPruneOrphanWorktreeDirs_EmptyDir(t *testing.T) {
 	initGitRepo(t, dir)
 	require.NoError(t, os.MkdirAll(filepath.Join(dir, ".worktrees"), 0o755))
 	require.NotPanics(t, func() {
-		pruneOrphanWorktreeDirs(context.Background(), dir, zerolog.Nop())
+		pruneOrphanWorktreeDirs(context.Background(), dir, zerolog.Nop(), removeUnless(nil))
 	})
 }

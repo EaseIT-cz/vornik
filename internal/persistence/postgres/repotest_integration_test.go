@@ -1088,6 +1088,20 @@ func TestAgentModelDestination_PostgresContract(t *testing.T) {
 	repotest.RunAgentModelDestinationSuite(t, NewAgentGrantRepository(db.DB))
 }
 
+// TestAgentConnectorInstall_PostgresContract — agent_connector_installs
+// (GitHub #314; design §19.14.8 item 6) on the production lane.
+func TestAgentConnectorInstall_PostgresContract(t *testing.T) {
+	db := newIntegrationDB(t)
+	repotest.RunAgentConnectorInstallSuite(t, NewAgentGrantRepository(db.DB))
+}
+
+// TestAgentAdminRefusal_PostgresContract — agent_admin_refusals on the
+// production lane (design §23.2, GitHub #172).
+func TestAgentAdminRefusal_PostgresContract(t *testing.T) {
+	db := newIntegrationDB(t)
+	repotest.RunAgentAdminRefusalSuite(t, NewAgentAdminRefusalRepository(db.DB))
+}
+
 // TestApproverDevice_PostgresContract — approver devices on the production
 // lane. First-device semantics need an empty device set, which the shared
 // database cannot offer, so each subtest gets its own schema holding only
@@ -1096,19 +1110,52 @@ func TestAgentModelDestination_PostgresContract(t *testing.T) {
 func TestApproverDevice_PostgresContract(t *testing.T) {
 	shared := newIntegrationDB(t)
 	// The approver tables: created by 206, extended by 207, 209, 211 and 212
-	// (the Hermes approval transport's host_action kind and decided_choice)
-	// and 215 (rotation sharing and dead-value recognition, P1 2026-10-05).
+	// (the Hermes approval transport's host_action kind and decided_choice),
+	// 215 (rotation sharing and dead-value recognition, P1 2026-10-05), 217
+	// (the memory_retention kind), 227 (the config_journal_drift kind, GitHub
+	// #302) and 228 (the withdrawn status and its who/why columns, #264).
 	// Named, not "everything from 206 on": a later migration altering another
 	// table (208 alters api_keys) has nothing to alter in a fresh schema.
-	approverMigrations := map[int]bool{206: true, 207: true, 209: true, 211: true, 212: true, 215: true}
+	// partial: a migration that also alters a non-approver table contributes
+	// only its statements naming an approver table.
+	//
+	// Wave 6 (2026-10-13): this list missed 228 and then 217 + 227, and each
+	// miss surfaced only as constraint/column errors deep in the suite. The
+	// guard below fails up front, naming the migration, instead.
+	approverMigrations := map[int]bool{206: true, 207: true, 209: true, 211: true, 212: true, 215: true, 227: true, 228: true}
+	partial := map[int]bool{217: true}
+	approverTables := []string{"agent_approval_requests", "approver_devices", "approver_pairings"}
+	namesApproverTable := func(sql string) bool {
+		for _, tbl := range approverTables {
+			if strings.Contains(sql, tbl) {
+				return true
+			}
+		}
+		return false
+	}
 	var ups []string
 	for _, m := range persistence.DefaultMigrations {
-		if approverMigrations[m.Version] {
+		switch {
+		case approverMigrations[m.Version]:
 			ups = append(ups, m.Up)
+		case partial[m.Version]:
+			for _, stmt := range strings.Split(m.Up, ";") {
+				if namesApproverTable(stmt) {
+					ups = append(ups, stmt)
+				}
+			}
+		case m.Version >= 206 && namesApproverTable(m.Up):
+			t.Fatalf("migration %d (%s) changes an approver table but is not applied by this suite; add it to approverMigrations (or partial)", m.Version, m.Name)
 		}
 	}
-	if len(ups) != len(approverMigrations) {
-		t.Fatalf("approver migrations found %d of %d", len(ups), len(approverMigrations))
+	found := 0
+	for _, m := range persistence.DefaultMigrations {
+		if approverMigrations[m.Version] {
+			found++
+		}
+	}
+	if found != len(approverMigrations) {
+		t.Fatalf("approver migrations found %d of %d", found, len(approverMigrations))
 	}
 	repotest.RunApproverDeviceSuite(t, NewApproverDeviceRepository(shared.DB), func(t *testing.T) persistence.ApproverDeviceRepository {
 		schema := fmt.Sprintf("ad_%d", time.Now().UnixNano())

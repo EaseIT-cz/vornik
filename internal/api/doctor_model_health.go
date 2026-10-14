@@ -203,7 +203,7 @@ func (h *DoctorHandlers) checkModelCircuits() DoctorCheck {
 		case "open":
 			worst = "ERROR"
 			degraded = append(degraded, fmt.Sprintf("[ERROR] %s/%s OPEN since %s — router shedding to fallback",
-				s.Route, s.Model, s.OpenSince.Format(time.RFC3339)))
+				s.Route, s.Model, s.OpenSince.Format(time.RFC3339))+tripReasonSuffix(s.TripReason))
 		case "half_open":
 			if worst != "ERROR" {
 				worst = "WARNING"
@@ -251,7 +251,7 @@ func (h *DoctorHandlers) checkAgentModelCircuits() DoctorCheck {
 		case "open":
 			worst = "ERROR"
 			degraded = append(degraded, fmt.Sprintf("[ERROR] agent/%s OPEN since %s — agent steps failing over to role modelFallback",
-				s.Model, s.OpenSince.Format(time.RFC3339)))
+				s.Model, s.OpenSince.Format(time.RFC3339))+tripReasonSuffix(s.TripReason))
 		case "half_open":
 			if worst != "ERROR" {
 				worst = "WARNING"
@@ -605,4 +605,15 @@ func (h *DoctorHandlers) queryModelHealthStats(ctx context.Context) ([]modelHeal
 		out = append(out, *st)
 	}
 	return out, nil
+}
+
+// tripReasonSuffix names why an OPEN circuit opened and what to check
+// (outcome-quality LLD §S5 #16, GitHub #142). Empty when no reason is
+// recorded, so such a line keeps its old shape.
+func tripReasonSuffix(reason string) string {
+	remedy := chat.TripReasonRemedy(reason)
+	if remedy == "" {
+		return ""
+	}
+	return fmt.Sprintf(" (tripped: %s — %s)", reason, remedy)
 }

@@ -13,7 +13,9 @@ import (
 	"regexp"
 	"strings"
 	"time"
+
 	"unicode/utf8"
+	"vornik.io/vornik/internal/persistence"
 
 	"vornik.io/vornik/internal/memoryfirewall"
 )
@@ -160,7 +162,7 @@ SELECT id,
 FROM project_memory_chunks
 WHERE project_id = $1
   AND ` + liveValidationPredicate + `
-  AND ` + r.expiryClause(projectID, "") + `
+  AND ` + r.expiryClause(projectID, "") + " AND " + persistence.ChunkNotRestrictedSQL("project_memory_chunks.id") + `
   AND ($3::timestamptz IS NULL OR (created_at, id) < ($3::timestamptz, $4::text))
 ORDER BY created_at DESC, id DESC
 LIMIT $2`

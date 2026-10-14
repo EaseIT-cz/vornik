@@ -46,6 +46,9 @@ func (c *Container) approverDeviceService() *approverdevice.Service {
 		opts = append(opts, approverdevice.WithHTTPSRefusalRecorder(c.approverHTTPSMetrics.Record))
 		svc := approverdevice.New(c.repos.ApproverDevices, opts...)
 		svc.RegisterEffect(persistence.ApprovalKindMemoryRetention, c.applyMemoryRetention)
+		// The interrupted-config-apply card (config-apply journal design
+		// §13.3, GitHub #302).
+		c.registerJournalCards(svc)
 		svc.RegisterDescriber(persistence.ApprovalKindMemoryRetention, describeMemoryRetention)
 		// A host action's page leads with its §18.7 phrase at High (design
 		// §4.1). Registered here, not with the agent admin verbs: the
@@ -60,6 +63,12 @@ func (c *Container) approverDeviceService() *approverdevice.Service {
 		// item 6). The view reads the memory subsystem at call time.
 		if v := c.approverMemoryView(); v != nil {
 			svc.SetMemoryView(v)
+		}
+		// Read-only connectors the person installs (GitHub #314; agent-
+		// administered design §19.14.8 item 7). Resolved per call, as the
+		// assistants pages are.
+		if c.agentAdminWireable() {
+			svc.SetConnectorPages(lazyConnectorPages{c: c})
 		}
 		c.approverDevices = svc
 	})

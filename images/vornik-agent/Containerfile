@@ -22,7 +22,7 @@
 ARG VORNIK_UID=1000
 ARG VORNIK_GID=1000
 
-FROM golang:1.25@sha256:d7912cedddfa15b2900a8dfb7187df0af5ec2cb424a371139b5b352fd3e6b740 AS builder
+FROM golang:1.26.9@sha256:d7722066f0b60ceccb6c0643cbed1f5f9e15506ac237146c95333504d7805d89 AS builder
 WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download
@@ -161,7 +161,17 @@ RUN userdel --remove ubuntu 2>/dev/null || true \
 
 COPY --from=whisper /usr/local/bin/whisper-cli /usr/local/bin/whisper-cli
 COPY --from=piper /opt/piper /opt/piper
-RUN ln -s /opt/piper/piper /usr/local/bin/piper
+# The piper bundle carries espeak-ng (GPL-3.0-or-later) beside MIT piper and
+# onnxruntime, and ships no licence text of its own (GitHub #356). The texts,
+# copyright notices and SOURCE-OFFER (the exact upstream commits, and where
+# the corresponding source archive is) go to /usr/share/licenses, with the
+# offer also linked next to the binaries. A PIPER_RELEASE bump must update
+# images/vornik-agent/third-party/ in the same commit; pinned by
+# images/vornik-agent/test-image-third-party-licences.sh. Design:
+# 2026-09-26-process-spawn-law-design.md, "Change 2026-10-13".
+COPY images/vornik-agent/third-party/licenses/ /usr/share/licenses/
+RUN ln -s /opt/piper/piper /usr/local/bin/piper \
+ && ln -s /usr/share/licenses/SOURCE-OFFER /opt/piper/SOURCE-OFFER
 COPY --from=builder /bin/mcp-bridge /usr/local/bin/mcp-bridge
 COPY --from=builder /bin/vornik-agent-helper /usr/local/bin/vornik-agent-helper
 

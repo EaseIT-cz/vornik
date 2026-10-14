@@ -8,13 +8,16 @@ package service
 import (
 	"context"
 	"crypto/rand"
+	"database/sql"
 	"encoding/hex"
 	"fmt"
 	"os"
 
 	"vornik.io/vornik/internal/leaderelection"
 	"vornik.io/vornik/internal/memory"
+	"vornik.io/vornik/internal/persistence"
 	"vornik.io/vornik/internal/persistence/postgres"
+	"vornik.io/vornik/internal/persistence/sqlite"
 	"vornik.io/vornik/internal/projectarchive"
 )
 
@@ -69,6 +72,24 @@ func (c *Container) initArchiveLifecycle(patcher projectarchive.YAMLPatcher) *pr
 	}
 }
 
+// projectDataDeleterFor picks the archived-project wipe for the database
+// driver. Before GitHub #365 the Postgres deleter was wired on whatever c.DB
+// was; on SQLite it failed at the first Postgres-only table and rolled back,
+// deleting nothing.
+//
+// The cache evictor is supplied to the Postgres deleter here because this is
+// the layer that can import both: the key derivation lives in internal/memory,
+// which imports internal/persistence, so persistence cannot reach it. Without
+// it the wipe leaves behind the vectors computed from the project's text —
+// embedding_cache has no project_id column, so ProjectDataTables cannot reach
+// those rows. SQLite has no embedding_cache.
+func projectDataDeleterFor(driver string, db *sql.DB) persistence.ProjectDataDeleter {
+	if driver == "sqlite" {
+		return sqlite.NewProjectDataCleanupRepository(db)
+	}
+	return postgres.NewProjectDataCleanupRepository(db, memory.EvictProjectEmbeddingCache)
+}
+
 // initArchiveSweeper wires the project-archival deletion runner.
 // Returns nil when the required deps (registry + DB) aren't
 // available — the daemon still boots, just without auto-deletion
@@ -89,13 +110,7 @@ func (c *Container) initArchiveSweeper() *projectarchive.Sweeper {
 		c.Logger.Warn().Msg("archive-sweeper: DB not wired; skipping")
 		return nil
 	}
-	// The cache evictor is supplied here because this is the layer that can
-	// import both: the key derivation lives in internal/memory, which imports
-	// internal/persistence, so persistence cannot reach it. Without it the wipe
-	// leaves behind the vectors computed from the project's text —
-	// embedding_cache has no project_id column, so ProjectDataTables cannot
-	// reach those rows.
-	deleter := postgres.NewProjectDataCleanupRepository(c.DB, memory.EvictProjectEmbeddingCache)
+	deleter := projectDataDeleterFor(c.Config.Database.Driver, c.DB)
 	cfg := projectarchive.Config{
 		Registry:    c.Registry,
 		DataDeleter: deleter,

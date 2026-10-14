@@ -11,6 +11,7 @@ import (
 	"strconv"
 	"strings"
 	"unicode/utf8"
+	"vornik.io/vornik/internal/aidisclosure"
 	"vornik.io/vornik/internal/forge"
 	ghapp "vornik.io/vornik/internal/github"
 )
@@ -312,7 +313,14 @@ func (p *Provider) CloseIssue(ctx context.Context, repo string, number int, s fo
 		return fmt.Errorf("forge: issue already closed without this duplicate reference")
 	}
 	if !found {
-		body := marker + "\nDuplicate of #" + strconv.Itoa(s.DuplicateOf) + ".\n\n" + s.Explanation + "\n\nAutomated triage by Vornik."
+		// Art 50 (GitHub #342): the explanation is agent-authored, so the comment
+		// carries the publication notice like every other forge publication. The
+		// marker leads the body, so the idempotency check above is unaffected.
+		notice := s.Notice
+		if notice.Text == "" {
+			notice = (*aidisclosure.Service)(nil).PublicationNotice()
+		}
+		body := aidisclosure.WithFooter(marker+"\nDuplicate of #"+strconv.Itoa(s.DuplicateOf)+".\n\n"+s.Explanation+"\n\nAutomated triage by Vornik.", notice)
 		if _, err = p.issueREST(ctx, http.MethodPost, path+"/comments", map[string]string{"body": body}, nil); err != nil {
 			return err
 		}

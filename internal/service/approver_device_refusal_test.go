@@ -23,7 +23,7 @@ func TestApproverDeviceRoutes_RefuseEveryNonDeviceCredential(t *testing.T) {
 	cfg.API.APIKeys = []string{key}
 	cfg.Admin.Enabled = true
 	cfg.Admin.AllowedKeys = []string{key}
-	c, err := NewContainer(cfg, isolatedConfigPath(t))
+	c, err := newUnitTestContainer(t, cfg, isolatedConfigPath(t))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -125,7 +125,7 @@ func TestApproverDeviceRoutes_HostActionRefusesEveryNonDeviceCredential(t *testi
 	cfg.API.APIKeys = []string{key}
 	cfg.Admin.Enabled = true
 	cfg.Admin.AllowedKeys = []string{key}
-	c, err := NewContainer(cfg, isolatedConfigPath(t))
+	c, err := newUnitTestContainer(t, cfg, isolatedConfigPath(t))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -183,7 +183,7 @@ func TestApproverDeviceRoutes_PerIPBackstop(t *testing.T) {
 	}
 	cfg.API.RateLimit.PerIP.RPS = 1
 	cfg.API.RateLimit.PerIP.Burst = 2
-	c, err := NewContainer(cfg, isolatedConfigPath(t))
+	c, err := newUnitTestContainer(t, cfg, isolatedConfigPath(t))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -206,7 +206,7 @@ func TestApproverDeviceRoutes_PerIPBackstop(t *testing.T) {
 // the doctor reports it.
 func TestApproverDeviceService_PushFollowsTheAlertChannel(t *testing.T) {
 	cfg := newComposerWiringTestConfig(t)
-	c, err := NewContainer(cfg, isolatedConfigPath(t))
+	c, err := newUnitTestContainer(t, cfg, isolatedConfigPath(t))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -218,7 +218,7 @@ func TestApproverDeviceService_PushFollowsTheAlertChannel(t *testing.T) {
 	cfg2.SteeringNotificationsEnabled = true
 	cfg2.SteeringOperatorAlert.Channel = "email"
 	cfg2.SteeringOperatorAlert.Address = "operator@example.test"
-	c2, err := NewContainer(cfg2, isolatedConfigPath(t))
+	c2, err := newUnitTestContainer(t, cfg2, isolatedConfigPath(t))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -235,7 +235,7 @@ func TestApproverDeviceService_ChannelWithNotificationsOffDoesNotPush(t *testing
 	cfg.SteeringNotificationsEnabled = false
 	cfg.SteeringOperatorAlert.Channel = "email"
 	cfg.SteeringOperatorAlert.Address = "operator@example.test"
-	c, err := NewContainer(cfg, isolatedConfigPath(t))
+	c, err := newUnitTestContainer(t, cfg, isolatedConfigPath(t))
 	if err != nil {
 		t.Fatal(err)
 	}

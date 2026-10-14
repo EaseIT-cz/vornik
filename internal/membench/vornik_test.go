@@ -9,6 +9,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"vornik.io/vornik/internal/api"
 )
 
 // The vornik adapter (design §5.3, §5.5). Drives the companion MCP surface —
@@ -23,6 +25,12 @@ type mcpCall struct {
 
 // fakeCompanion is a stand-in for the daemon's /api/v1/mcp/companion endpoint.
 // It records what it was asked and replies with whatever the test queued.
+//
+// It refuses an argument the tool does not declare, with the daemon's own
+// check (api.CheckCompanionToolArgs), never a hand list. Until 2026-10-14 it
+// accepted anything, so the adapter's recall "max_tokens" passed every test
+// here while the strict daemon (GitHub #305) refused it on every recall of the
+// 2026.10.6 release benchmark (tmp-gotest/membench-2026.10.6.log).
 type fakeCompanion struct {
 	calls   []mcpCall
 	reply   func(name string, args map[string]any) (any, error)
@@ -40,8 +48,8 @@ func (f *fakeCompanion) handler(t *testing.T) http.HandlerFunc {
 		}
 		var req struct {
 			Params struct {
-				Name      string         `json:"name"`
-				Arguments map[string]any `json:"arguments"`
+				Name      string          `json:"name"`
+				Arguments json.RawMessage `json:"arguments"`
 			} `json:"params"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -49,9 +57,19 @@ func (f *fakeCompanion) handler(t *testing.T) http.HandlerFunc {
 			w.WriteHeader(http.StatusBadRequest)
 			return
 		}
-		f.calls = append(f.calls, mcpCall{Name: req.Params.Name, Args: req.Params.Arguments})
+		var args map[string]any
+		if len(req.Params.Arguments) > 0 {
+			if err := json.Unmarshal(req.Params.Arguments, &args); err != nil {
+				t.Errorf("adapter sent non-object arguments: %v", err)
+			}
+		}
+		f.calls = append(f.calls, mcpCall{Name: req.Params.Name, Args: args})
+		if err := api.CheckCompanionToolArgs(req.Params.Name, req.Params.Arguments); err != nil {
+			writeMCPError(w, err.Error())
+			return
+		}
 
-		payload, err := f.reply(req.Params.Name, req.Params.Arguments)
+		payload, err := f.reply(req.Params.Name, args)
 		if err != nil {
 			writeMCPError(w, err.Error())
 			return
@@ -250,13 +268,22 @@ func TestVornik_RecallSendsTokenBudget(t *testing.T) {
 	}}
 	sys := newVornikFixture(t, f)
 
+	// The fake refuses an undeclared argument the way the daemon does, so this
+	// call failing is the 2026.10.6 release-benchmark incident (2026-10-14):
+	// `recall: unknown argument "max_tokens"` on every recall.
 	if _, err := sys.Recall(context.Background(), "s", Query{Text: "q", MaxTokens: 2048}); err != nil {
 		t.Fatalf("Recall: %v", err)
 	}
 	args := f.calls[0].Args
-	if args["limit"] == nil && args["max_tokens"] == nil {
-		t.Error("recall sent neither a limit nor a token budget; the two systems " +
-			"would be asked for different amounts of context")
+	// recall takes a result count, never a token budget: the budget travels as
+	// the converted limit, and the budget itself is recorded in the manifest's
+	// recall_params (runner), not on the wire.
+	if got, _ := args["limit"].(float64); int(got) != tokenBudgetToLimit(2048) {
+		t.Errorf("limit = %v, want %d (the converted budget); the two systems "+
+			"would be asked for different amounts of context", args["limit"], tokenBudgetToLimit(2048))
+	}
+	if _, sent := args["max_tokens"]; sent {
+		t.Error("recall was sent max_tokens, which the tool does not declare")
 	}
 }
 

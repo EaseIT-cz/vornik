@@ -86,6 +86,18 @@ the fixed code has not been demonstrated.
 The same applies to a rare bug: make the interleaving deterministic (a seam, a
 hook) rather than relying on a 1-in-600 stochastic reproduction as the gate.
 
+**The test sits at the level where the bug was FOUND, or higher, never only
+below it** (operator, 2026-10-14), because every level below already passed.
+The levels, lowest first: `unit`; `integration` (real DB, git or HTTP
+handler); `executor-e2e` (the real daemon loop); `e2e-lane` (a real
+container); `production` (operator observation), which a test cannot reach,
+so it is compared as `e2e-lane`. A `review` or audit find also names the
+level where a user would observe it, and counts there. The fix's commit
+message says `Found at: <level>` and `Regression test at: <level> <test>`,
+plus `Lower because: <reason>` when the test sits lower; the local commit-msg
+hook (after `make install-hooks`) refuses a `fix:` commit without them.
+Canonical text: `https://docs.vornik.io` §4.7 to §4.9.
+
 ## 4. Say what is true
 
 - A number with no scope reads as a guarantee — publish what it does NOT cover.

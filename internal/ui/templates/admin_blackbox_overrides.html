@@ -41,15 +41,15 @@
                 <div class="grid grid-cols-1 md:grid-cols-3 gap-3">
                     <label class="block">
                         <span class="block text-xs text-gray-500 uppercase tracking-wider mb-1">Project</span>
-                        <input type="text" name="project" value="{{.PrefilledProject}}" required class="w-full bg-dark-700 border border-dark-600 text-gray-200 text-xs rounded-md px-2 py-1.5 font-mono">
+                        <input type="text" name="project" value="{{.PrefilledProject}}" required class="w-full bg-dark-700 border border-control text-gray-200 text-xs rounded-md px-2 py-1.5 font-mono">
                     </label>
                     <label class="block">
                         <span class="block text-xs text-gray-500 uppercase tracking-wider mb-1">Workflow</span>
-                        <input type="text" name="workflow" value="{{.PrefilledWorkflow}}" required class="w-full bg-dark-700 border border-dark-600 text-gray-200 text-xs rounded-md px-2 py-1.5 font-mono">
+                        <input type="text" name="workflow" value="{{.PrefilledWorkflow}}" required class="w-full bg-dark-700 border border-control text-gray-200 text-xs rounded-md px-2 py-1.5 font-mono">
                     </label>
                     <label class="block">
                         <span class="block text-xs text-gray-500 uppercase tracking-wider mb-1">Class</span>
-                        <select name="class" required class="w-full bg-dark-700 border border-dark-600 text-gray-200 text-xs rounded-md px-2 py-1.5 font-mono">
+                        <select name="class" required class="w-full bg-dark-700 border border-control text-gray-200 text-xs rounded-md px-2 py-1.5 font-mono">
                             {{range .ClassOptions}}
                             <option value="{{.}}" {{if eq . $.PrefilledClass}}selected{{end}}>{{.}}</option>
                             {{end}}
@@ -59,11 +59,11 @@
                 <div class="grid grid-cols-1 md:grid-cols-3 gap-3">
                     <label class="block">
                         <span class="block text-xs text-gray-500 uppercase tracking-wider mb-1">Threshold % (blank = unset)</span>
-                        <input type="text" name="threshold_pct" placeholder="e.g. 50" class="w-full bg-dark-700 border border-dark-600 text-gray-200 text-xs rounded-md px-2 py-1.5 font-mono">
+                        <input type="text" name="threshold_pct" placeholder="e.g. 50" class="w-full bg-dark-700 border border-control text-gray-200 text-xs rounded-md px-2 py-1.5 font-mono">
                     </label>
                     <label class="block">
                         <span class="block text-xs text-gray-500 uppercase tracking-wider mb-1">Mute for N hours</span>
-                        <input type="text" name="mute_hours" placeholder="e.g. 24" class="w-full bg-dark-700 border border-dark-600 text-gray-200 text-xs rounded-md px-2 py-1.5 font-mono">
+                        <input type="text" name="mute_hours" placeholder="e.g. 24" class="w-full bg-dark-700 border border-control text-gray-200 text-xs rounded-md px-2 py-1.5 font-mono">
                     </label>
                     <label class="flex items-end gap-2 text-xs text-gray-400 pb-1.5">
                         <input type="checkbox" name="clear_mute" value="1" class="rounded">
@@ -72,7 +72,7 @@
                 </div>
                 <label class="block">
                     <span class="block text-xs text-gray-500 uppercase tracking-wider mb-1">Notes (operator-facing)</span>
-                    <textarea name="notes" rows="2" placeholder="Why is this override in place?" class="w-full bg-dark-700 border border-dark-600 text-gray-200 text-xs rounded-md px-2 py-1.5 font-mono"></textarea>
+                    <textarea name="notes" rows="2" placeholder="Why is this override in place?" class="w-full bg-dark-700 border border-control text-gray-200 text-xs rounded-md px-2 py-1.5 font-mono"></textarea>
                 </label>
                 <div class="flex justify-end">
                     <button type="submit" class="bg-brand-600 hover:bg-brand-500 text-white text-sm font-medium px-4 py-2 rounded-md">

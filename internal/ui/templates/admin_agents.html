@@ -95,6 +95,33 @@
                 <ul class="space-y-1">{{range .Expired}}<li>{{.Sentence}} <span class="text-xs text-gray-500">{{.When}}</span></li>{{end}}</ul>
             </section>
             {{end}}
+
+            {{with .Refusals}}
+            <section class="glass rounded-xl border border-dark-700 p-4 text-sm space-y-2">
+                <h2 class="text-sm font-semibold text-gray-200">Refused calls</h2>
+                {{if .Unavailable}}
+                <p class="text-amber-400">Refusals unavailable: the refusal ledger could not be read just now. Reload to try again; the daemon log has the error.</p>
+                {{else if .Total}}
+                <p class="text-gray-300">{{.Total}} in the last 7 days, by rule:</p>
+                <ul class="flex flex-wrap gap-x-4 gap-y-1">{{range .ByRule}}<li><span class="font-mono">{{.Rule}}</span> {{.Count}}</li>{{end}}</ul>
+                {{else}}
+                <p class="text-gray-400">No refusal in the last 7 days.</p>
+                {{end}}
+                {{if .Unwritten}}
+                <p class="text-xs text-amber-400">{{.Unwritten}} more refusal(s) since the daemon started were counted but not written (at most 60 rows are written per hour, or the write failed). This count restarts with the daemon.</p>
+                {{end}}
+                {{if .Recent}}
+                <table class="min-w-full text-xs">
+                    <thead class="uppercase tracking-wider text-gray-500"><tr><th class="text-left pr-4 py-1">When</th><th class="text-left pr-4 py-1">Call</th><th class="text-left pr-4 py-1">Rule</th><th class="text-left py-1">Key</th></tr></thead>
+                    <tbody>{{range .Recent}}<tr class="border-t border-dark-700"><td class="pr-4 py-1">{{.When}}</td><td class="pr-4 py-1 font-mono">{{.Verb}}</td><td class="pr-4 py-1 font-mono">{{.Rule}}</td><td class="py-1 font-mono">{{.KeyID}}</td></tr>{{end}}</tbody>
+                </table>
+                {{end}}
+                <div class="text-xs text-gray-500 space-y-1">
+                    <p><span class="text-gray-400">Recorded:</span> refusals of calls made with this assistant's key: an admin verb answered "refused", a tool the key is not offered or a tool name Vornik does not know, an undeclared argument, and a delegate refused before it is queued (outside the namespace, no such workflow, not a broker workflow, not runnable, a prompt or file given). The call, the rule, the time and the key; never the input.</p>
+                    <p><span class="text-gray-400">Not recorded:</span> errors of the read verbs (show_workflow, test_connection, list_my_setup, describe_installation, list_recipes); a delegate refused after those checks (inputs that do not match the workflow, a result reuse, the key's budget, a notify address, the key's workflow list); "not found" answers of other tools (status, result, task_logs); internal errors; calls with an invalid or revoked key; admin verbs called while agent administration is off; and anything the assistant does outside Vornik.</p>
+                </div>
+            </section>
+            {{end}}
             {{end}}
             {{else if not .Rows}}
             {{if not .Error}}
@@ -106,7 +133,7 @@
             <div class="glass rounded-xl border border-dark-700 overflow-x-auto">
                 <table class="min-w-full text-sm">
                     <thead class="text-xs uppercase tracking-wider text-gray-500">
-                        <tr><th class="text-left px-4 py-2">Namespace</th><th class="text-left px-4 py-2">Assistant</th><th class="text-left px-4 py-2">Key</th><th class="text-left px-4 py-2">Last used</th><th class="text-right px-4 py-2">Projects</th><th class="text-right px-4 py-2">Waiting</th></tr>
+                        <tr><th class="text-left px-4 py-2">Namespace</th><th class="text-left px-4 py-2">Assistant</th><th class="text-left px-4 py-2">Key</th><th class="text-left px-4 py-2">Last used</th><th class="text-right px-4 py-2">Projects</th><th class="text-right px-4 py-2">Waiting</th><th class="text-right px-4 py-2">Refused (7 days)</th></tr>
                     </thead>
                     <tbody>
                         {{range .Rows}}
@@ -117,6 +144,7 @@
                             <td class="px-4 py-2">{{if .LastUsed}}{{.LastUsed}}{{else}}<span class="text-gray-500">never</span>{{end}}</td>
                             <td class="px-4 py-2 text-right">{{.Projects}}</td>
                             <td class="px-4 py-2 text-right">{{.Pending}}</td>
+                            <td class="px-4 py-2 text-right">{{if .RefusedUnavailable}}<span class="text-amber-400">refusals unavailable</span>{{else}}{{.Refused7d}}{{end}}</td>
                         </tr>
                         {{end}}
                     </tbody>

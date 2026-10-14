@@ -1,16 +1,44 @@
 """Load the plugin as a package (its directory name has a hyphen) and fake
 the HTTP layer, so the tests need neither Hermes nor a network."""
 
+import contextlib
+import contextvars
 import importlib.util
 import io
 import json
+import os
 import sys
+import types
 from pathlib import Path
 
 PLUGIN_DIR = Path(__file__).resolve().parent.parent
 
+# The daemon's declared arguments per companion tool, generated from the Go
+# registry the daemon checks every call against (internal/api
+# companionToolArgs; TestCompanionDeclaredArgsManifest keeps it current). The
+# fake daemon refuses what the real one refuses: a fake that accepted any
+# argument is how the memory benchmark's recall "max_tokens" passed its tests
+# and failed the 2026.10.6 release benchmark (GitHub #305 follow-up,
+# 2026-10-14).
+DECLARED_ARGS_PATH = PLUGIN_DIR.parent.parent / "internal" / "api" / "testdata" / "companion_declared_args.json"
+DECLARED_ARGS = json.loads(DECLARED_ARGS_PATH.read_text())["tools"]
+
+
+def undeclared_argument_error(name, args):
+    """The daemon's refusal for an undeclared argument, or None."""
+    if name not in DECLARED_ARGS:
+        return "unknown tool: " + name
+    declared = DECLARED_ARGS[name]
+    for field in (args or {}):
+        if field not in declared:
+            if not declared:
+                return "%s: unknown argument \"%s\"; this tool takes no arguments" % (name, field)
+            return "%s: unknown argument \"%s\"; this tool accepts: %s" % (name, field, ", ".join(declared))
+    return None
+
 
 def load_plugin():
+    install_fake_secret_scope()
     if "vornik_hermes" in sys.modules:
         return sys.modules["vornik_hermes"]
     spec = importlib.util.spec_from_file_location(
@@ -19,6 +47,64 @@ def load_plugin():
     sys.modules["vornik_hermes"] = mod
     spec.loader.exec_module(mod)
     return mod
+
+
+class FakeSecretScope(types.ModuleType):
+    """Hermes's ``agent.secret_scope`` as the plugin sees it (upstream main
+    0e427d78 and the e2e pin f97608f; design 24, "Settings through Hermes's
+    secret scope (0.21.5)"). A contextvar holds the active profile's mapping.
+    get_secret: with a scope, the profile's value, else ``default`` for a
+    routed profile (multiplexing) or ``os.environ`` (single profile); with no
+    scope, ``os.environ`` unless multiplexing is on, when it raises."""
+
+    class UnscopedSecretError(RuntimeError):
+        pass
+
+    def __init__(self):
+        super().__init__("agent.secret_scope")
+        self._scope = contextvars.ContextVar("fake_secret_scope", default=None)
+        self.multiplex = False
+        self.reads = []
+
+    def get_secret(self, name, default=None):
+        self.reads.append(name)
+        scope = self._scope.get()
+        if scope is not None:
+            if name in scope:
+                return scope[name]
+            return default if self.multiplex else os.environ.get(name, default)
+        if self.multiplex:
+            raise self.UnscopedSecretError("get_secret(%r) with no profile secret scope" % name)
+        return os.environ.get(name, default)
+
+    @contextlib.contextmanager
+    def profile(self, mapping, multiplex=True):
+        """Run the block as one routed profile's turn."""
+        token = self._scope.set(dict(mapping))
+        saved, self.multiplex = self.multiplex, multiplex
+        try:
+            yield
+        finally:
+            self._scope.reset(token)
+            self.multiplex = saved
+
+
+def install_fake_secret_scope():
+    """Every test runs as inside Hermes: ``agent.secret_scope`` importable.
+    With no scope bound and multiplexing off it reads ``os.environ``, as
+    Hermes does for a single profile, so the older tests keep their
+    ``mock.patch.dict(os.environ, ...)`` setup."""
+    current = sys.modules.get("agent.secret_scope")
+    if isinstance(current, FakeSecretScope):
+        return current
+    if "agent" not in sys.modules:
+        pkg = types.ModuleType("agent")
+        pkg.__path__ = []  # a package with no other submodules (agent.memory_provider stays absent)
+        sys.modules["agent"] = pkg
+    fake = FakeSecretScope()
+    sys.modules["agent.secret_scope"] = fake
+    sys.modules["agent"].secret_scope = fake
+    return fake
 
 
 class FakeResponse(io.BytesIO):
@@ -37,9 +123,15 @@ class FakeOpener:
         self.features = features
         self.tools = tools or {}
         self.calls = []
+        # Every request, capability probes included: (base URL, bearer).
+        self.requests = []
+        # Every refusal is also recorded: a plugin that swallows a tool
+        # error would otherwise hide a refused argument from its test.
+        self.refusals = []
 
     def __call__(self, req, timeout=None):
-        path = req.full_url.split("://", 1)[1].split("/", 1)[1]
+        host, path = req.full_url.split("://", 1)[1].split("/", 1)
+        self.requests.append((req.full_url.split("://", 1)[0] + "://" + host, req.headers.get("Authorization")))
         if path.endswith("capabilities"):
             if self.features is None:
                 import urllib.error
@@ -48,7 +140,12 @@ class FakeOpener:
         body = json.loads(req.data.decode())
         name, args = body["params"]["name"], body["params"]["arguments"]
         self.calls.append((name, args, timeout, req.headers.get("Authorization")))
-        answer = self.tools.get(name, ({"ok": True}, False))
+        refusal = undeclared_argument_error(name, args)
+        if refusal is not None:
+            self.refusals.append(refusal)
+            answer = (refusal, True)
+        else:
+            answer = self.tools.get(name, ({"ok": True}, False))
         if callable(answer):
             answer = answer(args)
         payload, is_error = answer

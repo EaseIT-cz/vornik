@@ -106,6 +106,18 @@ func (s *stubStream) Append(text string) error {
 	return nil
 }
 
+func (s *stubStream) setCloseErr(err error) {
+	s.mu.Lock()
+	s.closeErr = err
+	s.mu.Unlock()
+}
+
+func (s *stubStream) setAppendErr(err error) {
+	s.mu.Lock()
+	s.appendErr = err
+	s.mu.Unlock()
+}
+
 func (s *stubStream) Close() (string, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -129,6 +141,9 @@ type stubAgent struct {
 	// passed to the callback. Mirrors chat.StreamCallback semantics
 	// (accumulated text, not delta).
 	streamingTokens []string
+	// onAfterTokens, when set, runs after the tokens are streamed and
+	// before ProcessStreaming returns (a seam for breaking the stream).
+	onAfterTokens func()
 
 	lastReq      Request
 	processCalls int
@@ -153,6 +168,9 @@ func (a *stubAgent) ProcessStreaming(_ context.Context, req Request, onText chat
 		if onText != nil {
 			onText(tok)
 		}
+	}
+	if a.onAfterTokens != nil {
+		a.onAfterTokens()
 	}
 	return a.streamingResult
 }

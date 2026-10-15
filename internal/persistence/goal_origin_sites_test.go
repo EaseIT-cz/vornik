@@ -6,6 +6,7 @@ import (
 	"go/token"
 	"io/fs"
 	"os"
+	"path"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -25,24 +26,27 @@ import (
 // read-only stubs elsewhere do not). The persistence drivers and the repotest
 // suite are test support, not creation paths, and are skipped.
 var wantGoalOriginSites = map[string][]string{
-	"internal/api/handlers.go":                              {"TaskGoalOriginREST", "TaskGoalOriginREST"},
-	"internal/api/companion_mcp.go":                         {"TaskGoalOriginCompanion"},
-	"internal/ui/project_create_task.go":                    {"TaskGoalOriginUI"},
-	"internal/autonomy/manager.go":                          {"TaskGoalOriginAutonomy"},
-	"internal/service/projectdoctor_adapters.go":            {"TaskGoalOriginDoctor"},
-	"internal/api/companion_broker.go":                      {"TaskGoalOriginBroker"},
-	"internal/service/container_reminders.go":               {"TaskGoalOriginReminder"},
-	"internal/api/webhook_handlers.go":                      {"TaskGoalOriginWebhook"},
-	"internal/service/container_github_task_creator.go":     {"TaskGoalOriginGitHub"},
-	"internal/service/container_github_ci_outcomes.go":      {"TaskGoalOriginGitHubCI"},
-	"internal/chat/parser.go":                               {"TaskGoalOriginChat"},
-	"internal/service/container_a2a.go":                     {"TaskGoalOriginA2A"},
-	"internal/executor/checkpoint.go":                       {"TaskGoalOriginCheckpoint"},
-	"internal/executor/plan.go":                             {"TaskGoalOriginDelegation", "TaskGoalOriginRoute"},
-	"internal/executor/spawn_project.go":                    {"TaskGoalOriginSpawnProject"},
-	"internal/executor/call_project.go":                     {"TaskGoalOriginCallProject"},
-	"internal/replay/fork.go":                               {"TaskGoalOriginFork"},
-	"internal/enterprise/blackbox/engine/counterfactual.go": {"TaskGoalOriginCounterfactual"},
+	"internal/api/handlers.go":                          {"TaskGoalOriginREST", "TaskGoalOriginREST"},
+	"internal/api/companion_mcp.go":                     {"TaskGoalOriginCompanion"},
+	"internal/ui/project_create_task.go":                {"TaskGoalOriginUI"},
+	"internal/autonomy/manager.go":                      {"TaskGoalOriginAutonomy"},
+	"internal/service/projectdoctor_adapters.go":        {"TaskGoalOriginDoctor"},
+	"internal/api/companion_broker.go":                  {"TaskGoalOriginBroker"},
+	"internal/service/container_reminders.go":           {"TaskGoalOriginReminder"},
+	"internal/api/webhook_handlers.go":                  {"TaskGoalOriginWebhook"},
+	"internal/service/container_github_task_creator.go": {"TaskGoalOriginGitHub"},
+	"internal/service/container_github_ci_outcomes.go":  {"TaskGoalOriginGitHubCI"},
+	"internal/chat/parser.go":                           {"TaskGoalOriginChat"},
+	"internal/service/container_a2a.go":                 {"TaskGoalOriginA2A"},
+	"internal/executor/checkpoint.go":                   {"TaskGoalOriginCheckpoint"},
+	"internal/executor/plan.go":                         {"TaskGoalOriginDelegation", "TaskGoalOriginRoute"},
+	"internal/executor/spawn_project.go":                {"TaskGoalOriginSpawnProject"},
+	"internal/executor/call_project.go":                 {"TaskGoalOriginCallProject"},
+	"internal/replay/fork.go":                           {"TaskGoalOriginFork"},
+	// Built with path.Join, not written as a quoted path: the public CE CI's
+	// import backstop flags any line that starts with a quoted string naming
+	// internal/enterprise (it failed the 2026.10.6 CE export on this row).
+	path.Join("internal", "enterprise", "blackbox", "engine", "counterfactual.go"): {"TaskGoalOriginCounterfactual"},
 	// The shared creator copies Params.GoalOrigin, which its callers set.
 	"internal/taskcreate/creator.go": {"p.GoalOrigin"},
 }

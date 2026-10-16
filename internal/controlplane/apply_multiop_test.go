@@ -175,7 +175,7 @@ func TestApply_BaseHashStaleRefused(t *testing.T) {
 	p.Evidence = `{"base_hash":"deadbeef"}`
 	// Re-file as a fresh approved proposal carrying the stale base hash.
 	np := &persistence.ControlPlaneProposal{
-		ID: persistence.GenerateID("cpp"), ProjectID: "janka",
+		ID: persistence.GenerateID("cpp"), ProjectID: "family",
 		Kind: persistence.ProposalKindConfig, BlastRadius: persistence.ProposalScopeProject,
 		Title: "edit", ApplyTarget: "config.yaml", ApplyContent: newContent,
 		Evidence: `{"base_hash":"deadbeef"}`,
@@ -196,7 +196,7 @@ func TestApply_BaseHashMatchApplies(t *testing.T) {
 	// Correct base hash of the seeded oldContent.
 	sum := hashBytes([]byte(oldContent))
 	np := &persistence.ControlPlaneProposal{
-		ID: persistence.GenerateID("cpp"), ProjectID: "janka",
+		ID: persistence.GenerateID("cpp"), ProjectID: "family",
 		Kind: persistence.ProposalKindConfig, BlastRadius: persistence.ProposalScopeProject,
 		Title: "edit", ApplyTarget: "config.yaml", ApplyContent: newContent,
 		Evidence: `{"base_hash":"` + sum + `"}`,

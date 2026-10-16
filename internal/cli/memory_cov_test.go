@@ -15,7 +15,7 @@ import (
 
 func TestRunMemorySearch_Table(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/api/v1/projects/janka/memory/search" {
+		if r.URL.Path != "/api/v1/projects/family/memory/search" {
 			t.Errorf("unexpected path %s", r.URL.Path)
 		}
 		if r.URL.Query().Get("q") != "rate limits" || r.URL.Query().Get("limit") != "5" {
@@ -25,7 +25,7 @@ func TestRunMemorySearch_Table(t *testing.T) {
 	}))
 	defer srv.Close()
 	t.Setenv("VORNIK_API_URL", srv.URL)
-	memorySearchProject, memorySearchQuery, memorySearchLimit, memorySearchJSON = "janka", "rate limits", 5, false
+	memorySearchProject, memorySearchQuery, memorySearchLimit, memorySearchJSON = "family", "rate limits", 5, false
 	out, err := captureStdoutFunc(t, func() error { return runMemorySearch(memorySearchCmd, nil) })
 	if err != nil {
 		t.Fatalf("runMemorySearch: %v", err)

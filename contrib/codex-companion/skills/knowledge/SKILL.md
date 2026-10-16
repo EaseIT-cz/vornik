@@ -45,7 +45,7 @@ Tell the user it needs approval; don't imply it's live.
 ## Cross-project (global) skills
 
 By default a skill is project-scoped — it only injects into its home project's
-roles. To make a skill reach EVERY project (e.g. so the janka and assistant
+roles. To make a skill reach EVERY project (e.g. so the family and assistant
 autonomy roles pick up a procedure you captured here), either:
 
 - propose it with `global=true` (honored only on a fresh create), or

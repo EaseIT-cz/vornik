@@ -171,12 +171,12 @@ func TestPairDevice_NoOriginPrintsHTTPSPlaceholder(t *testing.T) {
 
 func TestPairDevice_PlainHTTPNonLoopbackWarns(t *testing.T) {
 	for origin, warn := range map[string]bool{
-		"http://192.168.0.142:8080": true,
-		"http://vornik.lan":         true,
-		"http://localhost:8080":     false,
-		"http://127.0.0.1:8080":     false,
-		"http://[::1]:8080":         false,
-		"https://vornik.example":    false,
+		"http://192.168.1.50:8080": true,
+		"http://vornik.lan":        true,
+		"http://localhost:8080":    false,
+		"http://127.0.0.1:8080":    false,
+		"http://[::1]:8080":        false,
+		"https://vornik.example":   false,
 	} {
 		var out bytes.Buffer
 		if err := pairDevice(context.Background(), newDeviceService(t), origin, true, "P", &out); err != nil {

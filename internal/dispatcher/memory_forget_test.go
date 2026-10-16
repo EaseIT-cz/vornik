@@ -21,16 +21,16 @@ func TestMemoryForget_HappyPath(t *testing.T) {
 		},
 	}
 	te := newTestExecutor(c)
-	args := `{"chunk_id":"chunk_x","project_id":"janka"}`
+	args := `{"chunk_id":"chunk_x","project_id":"family"}`
 
-	res := te.memoryForget(context.Background(), args, "janka", nil)
+	res := te.memoryForget(context.Background(), args, "family", nil)
 	body := res.Content
 	for _, want := range []string{"Evicted memory chunk", "chunk_x", "notes.md", "the stale fact"} {
 		if !strings.Contains(body, want) {
 			t.Errorf("output missing %q. body=%s", want, body)
 		}
 	}
-	if c.lastForgetID != "chunk_x" || c.lastForgetProj != "janka" {
+	if c.lastForgetID != "chunk_x" || c.lastForgetProj != "family" {
 		t.Errorf("passthrough wrong: id=%q proj=%q", c.lastForgetID, c.lastForgetProj)
 	}
 }
@@ -41,7 +41,7 @@ func TestMemoryForget_HappyPath(t *testing.T) {
 func TestMemoryForget_NoSuchChunk(t *testing.T) {
 	c := &memCorrector{forgetResult: nil}
 	te := newTestExecutor(c)
-	res := te.memoryForget(context.Background(), `{"chunk_id":"chunk_ghost","project_id":"janka"}`, "janka", nil)
+	res := te.memoryForget(context.Background(), `{"chunk_id":"chunk_ghost","project_id":"family"}`, "family", nil)
 	if !strings.Contains(res.Content, "nothing was evicted") {
 		t.Errorf("missing no-op notice: %s", res.Content)
 	}
@@ -54,7 +54,7 @@ func TestMemoryForget_NoSuchChunk(t *testing.T) {
 func TestMemoryForget_RejectsMissingChunkID(t *testing.T) {
 	te := newTestExecutor(&memCorrector{})
 	for _, args := range []string{`{}`, `{"chunk_id":"  "}`} {
-		res := te.memoryForget(context.Background(), args, "janka", nil)
+		res := te.memoryForget(context.Background(), args, "family", nil)
 		if !strings.Contains(res.Content, "chunk_id is required") {
 			t.Errorf("args %s: body = %q, want 'chunk_id is required'", args, res.Content)
 		}
@@ -64,7 +64,7 @@ func TestMemoryForget_RejectsMissingChunkID(t *testing.T) {
 // TestMemoryForget_DisabledMessage — no corrector wired.
 func TestMemoryForget_DisabledMessage(t *testing.T) {
 	te := newTestExecutor(nil)
-	res := te.memoryForget(context.Background(), `{"chunk_id":"c"}`, "janka", nil)
+	res := te.memoryForget(context.Background(), `{"chunk_id":"c"}`, "family", nil)
 	if !strings.Contains(res.Content, "not enabled") {
 		t.Errorf("body = %q, want disabled notice", res.Content)
 	}
@@ -76,7 +76,7 @@ func TestMemoryForget_DisabledMessage(t *testing.T) {
 func TestMemoryForget_ScopedProjectRejected(t *testing.T) {
 	c := &memCorrector{}
 	te := newTestExecutor(c)
-	res := te.memoryForget(context.Background(), `{"chunk_id":"c","project_id":"janka"}`, "snake", []string{"snake"})
+	res := te.memoryForget(context.Background(), `{"chunk_id":"c","project_id":"family"}`, "snake", []string{"snake"})
 	if !strings.Contains(res.Content, "not permitted") && !strings.Contains(res.Content, "not allowed") {
 		t.Errorf("expected scope rejection; body=%s", res.Content)
 	}
@@ -89,7 +89,7 @@ func TestMemoryForget_ScopedProjectRejected(t *testing.T) {
 func TestMemoryForget_ErrorReported(t *testing.T) {
 	c := &memCorrector{forgetErr: errors.New("DB down")}
 	te := newTestExecutor(c)
-	res := te.memoryForget(context.Background(), `{"chunk_id":"c","project_id":"janka"}`, "janka", nil)
+	res := te.memoryForget(context.Background(), `{"chunk_id":"c","project_id":"family"}`, "family", nil)
 	if !strings.Contains(res.Content, "Forget failed") || !strings.Contains(res.Content, "DB down") {
 		t.Errorf("error not surfaced: %s", res.Content)
 	}

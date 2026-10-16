@@ -11,6 +11,8 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+
+	"vornik.io/vornik/internal/testutil/repowalk"
 )
 
 // 05-scheduler §4.11, amendment D3 (GitHub #304, 2026-10-08): every non-test
@@ -126,7 +128,7 @@ func TestCancelledWritesGoThroughThePrimitive(t *testing.T) {
 				return err
 			}
 			if d.IsDir() {
-				if d.Name() == "testdata" || d.Name() == "vendor" {
+				if repowalk.SkipDir(filepath.Join(root, dir), path, d.Name(), "testdata") {
 					return filepath.SkipDir
 				}
 				return nil

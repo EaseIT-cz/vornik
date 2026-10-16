@@ -124,7 +124,7 @@ func TestRollback_MirrorsRestoredState(t *testing.T) {
 // container wires into ValidateChange.
 func TestRevalidateChange(t *testing.T) {
 	a := testActionizer(stdFiles())
-	ok := func(ev string) error { return a.RevalidateChange("janka", ev) }
+	ok := func(ev string) error { return a.RevalidateChange("family", ev) }
 	// Not an actionized proposal → nil.
 	if err := ok(`{"signal":"x"}`); err != nil {
 		t.Fatalf("no change key must pass: %v", err)

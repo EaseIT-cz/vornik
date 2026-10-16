@@ -124,7 +124,10 @@ func sufficiencyLoop(
 }
 
 // widenOptions grows the candidate pool for round N (N>=2) without touching
-// the query string: larger Limit (capped) and the lenient scope fallthrough.
+// the query string: a larger Limit (capped), nothing else. The caller's scope,
+// strict_scope included, is kept: relaxing it handed a strict caller the
+// NULL-scoped chunks it had excluded (GitHub #368, design 22 "Every search
+// path honours repo_scope and strict_scope").
 func widenOptions(base SearchOptions, round int) SearchOptions {
 	o := base
 	if o.Limit <= 0 {
@@ -134,7 +137,6 @@ func widenOptions(base SearchOptions, round int) SearchOptions {
 	if o.Limit > sufficiencyMaxRoundLimit {
 		o.Limit = sufficiencyMaxRoundLimit
 	}
-	o.StrictScope = false
 	return o
 }
 

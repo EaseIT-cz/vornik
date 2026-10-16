@@ -41,7 +41,7 @@ you can review with `vornikctl cp proposals`.
 
 ```bash
 # See what's waiting for you
-vornikctl cp proposals                 # add --status DRAFT / --project janka
+vornikctl cp proposals                 # add --status DRAFT / --project family
 
 # Inspect one (full diff + rationale)
 vornikctl cp show <proposal-id>
@@ -52,7 +52,7 @@ vornikctl cp reject  <proposal-id>
 
 # Raise one yourself
 vornikctl cp propose --title "bump scraper timeout" \
-    --project janka --kind config --blast-radius project \
+    --project family --kind config --blast-radius project \
     --diff '-timeout_seconds: 30
 +timeout_seconds: 90' --rationale "web_fetch timing out"
 

@@ -185,11 +185,7 @@ func TestDeleteProjectData_MetricsWrappedDB_IsTransactional(t *testing.T) {
 	repo := NewProjectDataCleanupRepositoryWithoutCacheEviction(db)
 
 	mock.ExpectBegin()
-	for range persistence.ProjectDataTablesFor(true) {
-		mock.ExpectExec(regexp.QuoteMeta("DELETE FROM ")).
-			WithArgs("p1").
-			WillReturnResult(sqlmock.NewResult(0, 1))
-	}
+	expectWipeStatements(mock)
 	mock.ExpectCommit()
 
 	stats, err := repo.DeleteProjectData(context.Background(), "p1")
@@ -229,11 +225,7 @@ func TestDeleteProjectData_AlreadyInTx_RunsDirect(t *testing.T) {
 	}
 	repo := NewProjectDataCleanupRepositoryWithoutCacheEviction(outerTx) // *sql.Tx -> BeginTx ok=false
 
-	for range persistence.ProjectDataTablesFor(true) {
-		mock.ExpectExec(regexp.QuoteMeta("DELETE FROM ")).
-			WithArgs("p1").
-			WillReturnResult(sqlmock.NewResult(0, 1))
-	}
+	expectWipeStatements(mock)
 	mock.ExpectCommit()
 
 	stats, err := repo.DeleteProjectData(context.Background(), "p1")

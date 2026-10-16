@@ -633,6 +633,7 @@ func (h *DoctorHandlers) RunReportReadOnly(ctx context.Context) DoctorReport {
 	report.Checks = append(report.Checks, h.checkStuckBrokerActions(ctx))
 	report.Checks = append(report.Checks, h.checkMCPProjectConnections())
 	report.Checks = append(report.Checks, h.checkUnclassifiedShare(ctx))
+	report.Checks = append(report.Checks, h.checkMemoryTextDamage(ctx))
 	appendTemplateDriftPointer(report.Checks)
 	issues := 0
 	for _, c := range report.Checks {
@@ -733,6 +734,7 @@ func (h *DoctorHandlers) RunDoctor(w http.ResponseWriter, r *http.Request) {
 	report.Checks = append(report.Checks, h.checkStuckBrokerActions(ctx))
 	report.Checks = append(report.Checks, h.checkMCPProjectConnections())
 	report.Checks = append(report.Checks, h.checkUnclassifiedShare(ctx))
+	report.Checks = append(report.Checks, h.checkMemoryTextDamage(ctx))
 	appendTemplateDriftPointer(report.Checks)
 
 	issues := 0
@@ -1827,7 +1829,7 @@ func (h *DoctorHandlers) checkSecretsPermissions(fix bool) DoctorCheck {
 				// Warn on world-readable dirs ONLY when they're a direct
 				// child of the secrets root — the per-project / per-service
 				// container whose name is itself identifying (e.g.
-				// secrets/assistant, secrets/janka). Anything deeper is
+				// secrets/assistant, secrets/family). Anything deeper is
 				// organisational scaffolding (linkedin/, profile/, etc.)
 				// and noisy to flag.
 				perm := info.Mode().Perm()

@@ -28,7 +28,7 @@ func TestQualityRepository_RoleAggregates(t *testing.T) {
 		WithArgs(since).
 		WillReturnRows(sqlmock.NewRows([]string{"project_id", "role", "total", "passing", "passing_prompt_tokens"}).
 			AddRow("assistant", "researcher", int64(100), int64(80), int64(800000)).
-			AddRow("janka", "researcher", int64(40), int64(30), int64(400000)))
+			AddRow("family", "researcher", int64(40), int64(30), int64(400000)))
 
 	got, err := repo.RoleQualityAggregates(context.Background(), since)
 	if err != nil {
@@ -105,7 +105,7 @@ func TestQualityRepository_RolePercentiles(t *testing.T) {
 			AddRow("assistant-swarm", "researcher", int64(835), int64(776253), int64(1857554)))
 
 	got, err := repo.RolePercentiles(context.Background(), since,
-		[]string{"assistant", "janka"}, []string{"assistant-swarm", "assistant-swarm"})
+		[]string{"assistant", "family"}, []string{"assistant-swarm", "assistant-swarm"})
 	if err != nil {
 		t.Fatalf("RolePercentiles: %v", err)
 	}

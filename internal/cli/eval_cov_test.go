@@ -85,7 +85,7 @@ func TestRunEval_AllPassNoWaitScoreboard(t *testing.T) {
 	evalCov_reset()
 	evalWait = false
 	fp := evalCov_writeSuite(t, evalSuite{
-		ProjectID: "janka",
+		ProjectID: "family",
 		Cases:     []evalCase{{Name: "smoke-1", Prompt: "do x"}, {Name: "smoke-2", Prompt: "do y"}},
 	})
 	evalFile = fp
@@ -107,7 +107,7 @@ func TestRunEval_AllPassJSON(t *testing.T) {
 	t.Setenv("VORNIK_API_URL", srv.URL)
 	evalCov_reset()
 	evalWait, evalJSON = false, true
-	evalProject = "janka"
+	evalProject = "family"
 	fp := evalCov_writeSuite(t, evalSuite{Cases: []evalCase{{Name: "c1", Prompt: "p"}}})
 	evalFile = fp
 	out, err := captureStdoutFunc(t, func() error { return runEval(evalRunCmd, []string{"sw"}) })

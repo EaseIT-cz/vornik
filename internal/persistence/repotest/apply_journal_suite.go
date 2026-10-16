@@ -48,7 +48,7 @@ func newTestJournal(proposalID string) *persistence.ConfigApplyJournal {
 		RequestID:        "req-" + proposalID,
 		OpDigest:         "sha256:ops",
 		DeploymentRoot:   "/deploy/configs",
-		AffectedProjects: []string{"assistant", "janka"},
+		AffectedProjects: []string{"assistant", "family"},
 		WriterEpoch:      7,
 		Ops: []persistence.JournalOp{
 			{Op: "create", Path: "projects/new.yaml", ContentSHA256: "aaaa"},

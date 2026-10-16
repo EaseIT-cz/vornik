@@ -27,7 +27,8 @@ func firingTaskReminder(t *testing.T, ctx context.Context, repo *ReminderReposit
 	if err := repo.Insert(ctx, rem); err != nil {
 		t.Fatalf("insert: %v", err)
 	}
-	due, err := repo.LeaseDue(ctx, time.Now(), 10)
+	// An unbounded page (#374): the row sorts last by fire_at among due rows earlier tests left, so a fixed page could miss it.
+	due, err := repo.LeaseDue(ctx, time.Now(), 1_000_000)
 	if err != nil || len(due) == 0 {
 		t.Fatalf("lease: %v n=%d", err, len(due))
 	}

@@ -11,7 +11,7 @@ sources:
     - path: internal/api/forge_issues.go
       sha256: 4eb63a71b8ef21adf60cbf32b343e8fc7e5fdf27237f4cfa80dc2e62f7d2f311
     - path: internal/registry/project_forge_issues.go
-      sha256: e1639fb4d01fee3bd723f80b325cc47599ef6051f515fb6ed9a227d923e8e642
+      sha256: 029c58c95573956387d132eafa8f27bba404d90d1c6e4b89614f68285b7c60d9
 ---
 # Forge — GitHub automation
 
@@ -194,6 +194,38 @@ write credentials, because it never has them.
    the review workflow, everything else to the issue workflow. Set
    `require_forge_event: true` on the source to drop deliveries that aren't
    actionable.
+
+   **Repository scope.** A webhook source acts only on events for the
+   project's own repositories: by default, the repositories named by
+   `forge.github.repo`, `github.repo`, `github_app.repo_allowlist` and
+   `forge.issues.repos` (compared case-insensitively against the
+   delivery's `repository.full_name`). This matters when one App is
+   installed on a whole organisation: every repository's events reach the
+   App's webhook, and without a scope another repository's labelled issue
+   would become a task in this project. Name the scope on the source to
+   make it explicit or different:
+
+   ```yaml
+   webhooks:
+     sources:
+       - name: github
+         repos: [acme/service]   # or ["*"] to accept every repository
+   ```
+
+   A delivery for a repository outside the scope is acknowledged, recorded
+   as `filtered` with the code `repo_not_in_scope` (see
+   `GET /api/v1/projects/{projectId}/webhooks/events`), logged as a warning, and counted in
+   `vornik_webhook_repo_scope_total{outcome="dropped"}`; the same counter's
+   `allowed`, `no_repository` and `unrestricted` outcomes count everything
+   else the check examined. Events with no repository (installation, ping)
+   are not judged by the scope; `filter` and `require_forge_event` still
+   apply to them. If a project has a forge integration but names no
+   repository anywhere, the daemon warns at startup that its source accepts
+   every repository.
+
+   *Upgrading:* a source on a project that names a repository but
+   deliberately receives events for other repositories needs `repos` set
+   (or `["*"]`) after this change.
 
 At startup the daemon verifies it can actually push for each Forge-configured
 project and warns you if it can't — so a misconfigured key surfaces immediately,

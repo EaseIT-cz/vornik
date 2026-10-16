@@ -4,6 +4,7 @@ package postgres
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"vornik.io/vornik/internal/memory"
@@ -56,6 +57,12 @@ func TestProjectDataTables_MatchPostgresCatalog(t *testing.T) {
 	}
 	t.Logf("project_id tables on Postgres: %d found; %d wiped, %d excluded with a reason, %d unaccounted",
 		len(scoped), wiped, excluded, len(scoped)-wiped-excluded)
+	// Archival design section J (GitHub #370): secret_redaction_audit is kept
+	// because it carries no content; a new column sends that back to review.
+	if got := strings.Join(repotest.TableColumns(t, db.DB, true, "secret_redaction_audit"), ","); got != repotest.SecretRedactionAuditKeptColumns {
+		t.Errorf("secret_redaction_audit columns = %s, want %s: re-review the wipe's kept decision (archival design J.2) before adding a column", got, repotest.SecretRedactionAuditKeptColumns)
+	}
+	repotest.CheckScrubComplement(t, db.DB, true)
 }
 
 // TestProjectDataTables_CascadeChildrenCovered: every ON DELETE CASCADE / SET

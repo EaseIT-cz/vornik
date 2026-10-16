@@ -719,6 +719,13 @@ type ProjectWebhookSource struct {
 	// a task with no forge_job. Use on a single GitHub webhook source that must
 	// act only on labeled issues + opened change requests.
 	RequireForgeEvent bool `yaml:"require_forge_event"`
+	// Repos is the source's repository scope ("owner/repo"; compared
+	// case-insensitively against the delivery's repository.full_name). Unset
+	// = the project's forge repos (Project.ForgeRepos); ["*"] = every
+	// repository. A delivery for a repository outside the scope is filtered
+	// before classification (GitHub #407).
+	// see LLD § https://docs.vornik.io "Generic webhook sources: repository scope (2026-10-16, GitHub #407)"
+	Repos []string `yaml:"repos,omitempty"`
 }
 
 // ProjectGitHubApp configures the per-project GitHub App
@@ -1365,7 +1372,7 @@ type ProjectSlack struct {
 	PostMessageBurst int `yaml:"post_message_burst"`
 
 	// SlashCommand is the slash command this deployment answers, e.g.
-	// "/vornik" (the default when unset) or "/holly" for a
+	// "/vornik" (the default when unset) or "/helper" for a
 	// differently-branded instance. A leading slash is optional; the
 	// resolver adds one. The value must match the command registered
 	// in the Slack app manifest — Slack decides what it sends, this
@@ -2546,6 +2553,13 @@ func (p *Project) Validate(filename string) error {
 				File:    filename,
 				Field:   fmt.Sprintf("webhooks.sources[%d].filter", i),
 				Message: `filter must reference an event field, e.g. "${action}=opened,labeled"`,
+			}
+		}
+		if msg := validateWebhookSourceRepos(src.Repos); msg != "" {
+			return ProjectValidationError{
+				File:    filename,
+				Field:   fmt.Sprintf("webhooks.sources[%d].repos", i),
+				Message: msg,
 			}
 		}
 	}

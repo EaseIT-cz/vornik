@@ -9,6 +9,8 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+
+	"vornik.io/vornik/internal/testutil/repowalk"
 )
 
 // This is the guard, and it is the part of the cost-accounting work with
@@ -238,7 +240,7 @@ func discoverCallSites(t *testing.T, root string) map[string]string {
 				return err
 			}
 			if info.IsDir() {
-				if info.Name() == "testdata" || info.Name() == "vendor" {
+				if repowalk.SkipDir(base, path, info.Name(), "testdata") {
 					return filepath.SkipDir
 				}
 				return nil

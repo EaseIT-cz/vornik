@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"vornik.io/vornik/internal/testutil/repowalk"
 )
 
 // repoRoot walks up from the package directory to the module root so the
@@ -69,55 +71,14 @@ func TestEveryManifestContainerfileExists(t *testing.T) {
 	}
 }
 
-// skipWalkDir decides whether the parity walk should descend into a directory.
-//
-// Build artifacts and vendored trees carry copies of the repo's own
-// Containerfiles; walking them would report every image twice.
-//
-// The root is NEVER skipped, however it is named. The export tree IS
-// `.vornik-export`, and `go test ./internal/imagemanifest/` runs inside it as
-// the CE publish gate ("manifest paths exist in the exported tree") — so
-// matching the root on its basename skipped the entire walk on the first
-// callback and reported "no Containerfiles" from a tree that had them. That
-// made the publish gate fail for a reason unrelated to what it gates
-// (regression from 22ff9ab8, caught at the 2026.9.0 release gate). A
-// verify-only export to any other path passed, which is what hid it.
-func skipWalkDir(path, root, name string) bool {
-	if path == root {
-		return false
-	}
-	switch name {
-	case ".git", "node_modules", ".vornik-export", ".vornik-public-clone",
-		// Git-ignored agent state: Claude Code places worktrees at
-		// .claude/worktrees/<id>, each a full checkout whose Containerfiles
-		// this walk would otherwise count as unmanifested (2026-09-26).
-		".claude":
-		return true
-	}
-	return false
-}
-
-// TestSkipWalkDir_NeverSkipsTheRoot is the regression guard for the above.
-func TestSkipWalkDir_NeverSkipsTheRoot(t *testing.T) {
-	const root = "/x/.vornik-export"
-	if skipWalkDir(root, root, ".vornik-export") {
-		t.Fatal("the walk root was skipped by its own basename: the parity walk " +
-			"reports an empty tree, and the CE publish gate fails for an unrelated reason")
-	}
-	if skipWalkDir("/x/.vornik-public-clone", "/x/.vornik-public-clone", ".vornik-public-clone") {
-		t.Fatal("same defect for the clone directory")
-	}
-	if !skipWalkDir("/x/.claude", "/x", ".claude") {
-		t.Fatal("agent worktrees under .claude/ are not part of the repository and must be skipped")
-	}
-	// Nested copies must still be skipped, or every image is counted twice.
-	if !skipWalkDir(root+"/.vornik-export", root, ".vornik-export") {
-		t.Fatal("a NESTED export tree must still be skipped")
-	}
-	if !skipWalkDir(root+"/.git", root, ".git") {
-		t.Fatal(".git must still be skipped")
-	}
-}
+// The parity walk's directory rule is repowalk.SkipDir (testing LLD §12): the
+// root is NEVER skipped, however it is named, because the export tree IS
+// `.vornik-export` and `go test ./internal/imagemanifest/` runs inside it as
+// the CE publish gate (2026.9.0: skipping the root by its basename reported
+// "no Containerfiles" from a tree that had them; skipWalkDir, 275a97ca7,
+// fixed it here, and the shared rule replaced it on 2026-10-15, #384).
+// Below the root every hidden directory is skipped: .git, the .claude
+// worktrees and nested export copies, which would count every image twice.
 
 // TestManifestParity is contract C4: every Containerfile in the repo appears
 // in the manifest or on the explicit exclusion list.
@@ -143,7 +104,7 @@ func TestManifestParity(t *testing.T) {
 			return err
 		}
 		if d.IsDir() {
-			if skipWalkDir(path, root, d.Name()) {
+			if repowalk.SkipDir(root, path, d.Name()) {
 				return filepath.SkipDir
 			}
 			return nil

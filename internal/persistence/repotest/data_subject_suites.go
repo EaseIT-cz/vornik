@@ -655,3 +655,229 @@ func listAllRequests(ctx context.Context, s DataSubjectStore) ([]datasubject.Req
 		}
 	}
 }
+
+// TranscriptSeeder writes the transcript rows the export-completeness suite
+// reads, with every column the collector is meant to export.
+type TranscriptSeeder interface {
+	// SeedChatTurnFull inserts a chat_audit_log row.
+	SeedChatTurnFull(ctx context.Context, id, projectID, userID, message, toolCallsJSON, signalsJSON string) error
+	// SeedTaskMessage inserts a task_messages row and the task it belongs to.
+	// An empty metadataJSON stores NULL.
+	SeedTaskMessage(ctx context.Context, id, projectID, authorID, content, metadataJSON string) error
+}
+
+// RunDataSubjectTranscriptExportSuite pins Art 15 export completeness for the
+// two transcript tables (design 2026-07-29-art17-redact-and-reembed §15.11.4,
+// slice 5d-E).
+//
+// audit 2026-10-16 (GitHub #344, W10-E): the collector read chat_audit_log as
+// user_message+response and task_messages as content only, so an exclusive
+// row's export left out the subject's tool-call arguments, the signals quoting
+// the reply, the metadata they supplied and who wrote the turn. Found at:
+// review/audit, observed by a subject in the export, so the test sits at the
+// export collector against a real database on both drivers.
+func RunDataSubjectTranscriptExportSuite(t *testing.T, s DataSubjectStore, seed TranscriptSeeder) {
+	t.Helper()
+	ctx := context.Background()
+	subj := mustSubject(ctx, t, s, "transcript-export")
+	proj := uniqueID("proj")
+
+	full, plain := uniqueID("chat"), uniqueID("chat")
+	if err := seed.SeedChatTurnFull(ctx, full, proj, "telegram:4242", "send it to my sister",
+		`[{"name":"send_mail","args":"{\"to\":\"anna.example@mail.test\"}","result":"inbox of carol.other@mail.test","error":"dave.other@mail.test bounced"}]`,
+		`[{"detector":"url_not_fetched","claim_value":"https://anna.example/cv","sentence":"I sent your CV to Anna."}]`); err != nil {
+		t.Fatalf("seed chat: %v", err)
+	}
+	if err := seed.SeedChatTurnFull(ctx, plain, proj, "", "just a question", "[]", ""); err != nil {
+		t.Fatalf("seed chat: %v", err)
+	}
+	msg, bare := uniqueID("msg"), uniqueID("msg")
+	if err := seed.SeedTaskMessage(ctx, msg, proj, "tg:4242", "please use the new address",
+		`{"reply_to_message_id":77,"reason":"moved to Main Street 5","chat_id":-100777,"custom":"erin.other@mail.test"}`); err != nil {
+		t.Fatalf("seed task message: %v", err)
+	}
+	if err := seed.SeedTaskMessage(ctx, bare, proj, "", "no metadata here", ""); err != nil {
+		t.Fatalf("seed task message: %v", err)
+	}
+
+	links := []datasubject.Link{
+		chatLink(full, proj, datasubject.SourceOperatorAsserted, datasubject.ConfidenceCertain),
+		chatLink(plain, proj, datasubject.SourceOperatorAsserted, datasubject.ConfidenceCertain),
+		{Table: datasubject.TableTaskMessages, RowID: msg, Source: datasubject.SourceOperatorAsserted,
+			Confidence: datasubject.ConfidenceCertain, Exclusivity: datasubject.ExclusiveRow},
+		{Table: datasubject.TableTaskMessages, RowID: bare, Source: datasubject.SourceOperatorAsserted,
+			Confidence: datasubject.ConfidenceCertain, Exclusivity: datasubject.ExclusiveRow},
+	}
+	for _, l := range links {
+		if err := s.AddLink(ctx, subj, l); err != nil {
+			t.Fatalf("AddLink %s: %v", l.Table, err)
+		}
+	}
+	items, err := s.CollectItems(ctx, subj, links)
+	if err != nil {
+		t.Fatalf("CollectItems: %v", err)
+	}
+	byRow := map[string]datasubject.Item{}
+	for _, it := range items {
+		byRow[it.RowID] = it
+	}
+	if len(byRow) != 4 {
+		t.Fatalf("collected %d items, want 4: %+v", len(byRow), items)
+	}
+
+	got := byRow[full].Content
+	for _, want := range []string{"send it to my sister", "telegram:4242", "anna.example@mail.test", "I sent your CV to Anna."} {
+		if !strings.Contains(got, want) {
+			t.Errorf("chat turn export is missing %q; content = %q", want, got)
+		}
+	}
+	// A tool's RESULT is external data (an API response, another person's
+	// mail) that the subject did not supply; it is withheld, while its
+	// arguments, the subject's own instruction, are kept (security review
+	// 2026-10-16).
+	for _, gone := range []string{"carol.other@mail.test", "dave.other@mail.test"} {
+		if strings.Contains(got, gone) {
+			t.Errorf("chat turn export carries a tool result %q: %q", gone, got)
+		}
+	}
+	if !strings.Contains(got, "[WITHHELD:tool_result]") {
+		t.Errorf("chat turn export does not mark the withheld tool result: %q", got)
+	}
+	// A turn with no tool calls, no signals and no speaker exports exactly as
+	// it did before 5d-E: an empty JSON default is not content.
+	if got := byRow[plain].Content; got != "just a question" {
+		t.Errorf("plain chat turn content = %q, want exactly %q", got, "just a question")
+	}
+
+	assertTaskMessageExport(t, byRow[msg].Content, byRow[bare].Content)
+	transcriptExportRedactsSecrets(ctx, t, s, seed, subj, proj)
+	transcriptExportFailsClosed(ctx, t, s, seed, subj, proj)
+}
+
+// transcriptExportFailsClosed pins the fail-closed rule (design §15.11.4a,
+// security review 2026-10-16 on b720b4ad2): a JSON column that is not exactly
+// one well-formed value of the writer's shape is withheld whole, so a second
+// value, a trailing comma or a wrapper object cannot carry a secret-named
+// value past the key-name rule.
+func transcriptExportFailsClosed(ctx context.Context, t *testing.T, s DataSubjectStore, seed TranscriptSeeder, subj, proj string) {
+	t.Helper()
+	chat, msg := uniqueID("chat"), uniqueID("msg")
+	if err := seed.SeedChatTurnFull(ctx, chat, proj, "", "near-json turn",
+		`[{"name":"x","args":"{}"}] {"password":"SECRETINT-ONE"}`,
+		`{"wrapped":[{"sentence":"SECRETINT-TWO"}]}`); err != nil {
+		t.Fatalf("seed chat: %v", err)
+	}
+	if err := seed.SeedTaskMessage(ctx, msg, proj, "", "near-json message",
+		// Postgres stores metadata as jsonb, which refuses near-JSON and folds
+		// duplicate keys on insert, so the driver-neutral case is a valid JSON
+		// value of the wrong shape; the near-JSON metadata cases are unit tests.
+		`["SECRETINT-THREE"]`); err != nil {
+		t.Fatalf("seed task message: %v", err)
+	}
+	links := []datasubject.Link{
+		chatLink(chat, proj, datasubject.SourceOperatorAsserted, datasubject.ConfidenceCertain),
+		{Table: datasubject.TableTaskMessages, RowID: msg, Source: datasubject.SourceOperatorAsserted,
+			Confidence: datasubject.ConfidenceCertain, Exclusivity: datasubject.ExclusiveRow},
+	}
+	for _, l := range links {
+		if err := s.AddLink(ctx, subj, l); err != nil {
+			t.Fatalf("AddLink: %v", err)
+		}
+	}
+	items, err := s.CollectItems(ctx, subj, links)
+	if err != nil {
+		t.Fatalf("CollectItems: %v", err)
+	}
+	if len(items) != 2 {
+		t.Fatalf("collected %d items, want 2", len(items))
+	}
+	for _, it := range items {
+		if strings.Contains(it.Content, "SECRETINT") {
+			t.Errorf("%s export carries a near-JSON secret: %q", it.Table, it.Content)
+		}
+		if !strings.Contains(it.Content, "[WITHHELD:") {
+			t.Errorf("%s export does not say a value was withheld: %q", it.Table, it.Content)
+		}
+	}
+}
+
+// assertTaskMessageExport pins the exported task_messages rows of
+// RunDataSubjectTranscriptExportSuite: author and allowed metadata kept,
+// unreviewed metadata withheld, a row with neither unchanged.
+func assertTaskMessageExport(t *testing.T, got, bare string) {
+	t.Helper()
+	for _, want := range []string{"please use the new address", "tg:4242", "Main Street 5", "[WITHHELD:unreviewed_fields]"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("task message export is missing %q; content = %q", want, got)
+		}
+	}
+	// Metadata keys outside the reviewed allowlist (caller-supplied JSON, a
+	// group chat id) may hold other people's data and are withheld by name.
+	for _, gone := range []string{"erin.other@mail.test", "-100777"} {
+		if strings.Contains(got, gone) {
+			t.Errorf("task message export carries an unreviewed metadata value %q: %q", gone, got)
+		}
+	}
+	if bare != "no metadata here" {
+		t.Errorf("bare task message content = %q, want exactly %q", bare, "no metadata here")
+	}
+}
+
+// transcriptExportRedactsSecrets pins the export-time secret scan over the JSON
+// columns 5d-E added (design §15.11.4, security review 2026-10-16). The
+// write-time chat-audit decorator redacts tool_calls_json only when a detector
+// is wired, never touches hallucination_signals_json, and task_messages has no
+// write-time scan at all, so a credential stored there would otherwise reach
+// the export file verbatim. Shapes: a vendor-prefixed token (detector) and a
+// credential under a secret-named JSON key (which the detector's key=value
+// rule cannot see in JSON syntax).
+func transcriptExportRedactsSecrets(ctx context.Context, t *testing.T, s DataSubjectStore, seed TranscriptSeeder, subj, proj string) {
+	t.Helper()
+	const (
+		pat     = "ghp_0123456789abcdefghijABCDEFGHIJ012345"
+		awsKey  = "AKIAABCDEFGHIJKLMNOP"
+		keyed   = "plain-looking-value-1234"
+		bearer  = "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJ4eXoifQ.c2lnbmF0dXJlLXZhbHVl"
+		visible = "deploy the site"
+	)
+	chat, msg := uniqueID("chat"), uniqueID("msg")
+	if err := seed.SeedChatTurnFull(ctx, chat, proj, "telegram:4242", visible,
+		`[{"name":"set_secret","args":"{\"value\":\"`+pat+`\",\"password\":\"`+keyed+`\"}"}]`,
+		`[{"detector":"x","claim_value":"`+awsKey+`","sentence":"your key is `+awsKey+`"}]`); err != nil {
+		t.Fatalf("seed chat: %v", err)
+	}
+	if err := seed.SeedTaskMessage(ctx, msg, proj, "tg:4242", visible,
+		`{"reason":"token `+pat+` and bearer `+bearer+`","reply_to_message_id":7}`); err != nil {
+		t.Fatalf("seed task message: %v", err)
+	}
+	links := []datasubject.Link{
+		chatLink(chat, proj, datasubject.SourceOperatorAsserted, datasubject.ConfidenceCertain),
+		{Table: datasubject.TableTaskMessages, RowID: msg, Source: datasubject.SourceOperatorAsserted,
+			Confidence: datasubject.ConfidenceCertain, Exclusivity: datasubject.ExclusiveRow},
+	}
+	for _, l := range links {
+		if err := s.AddLink(ctx, subj, l); err != nil {
+			t.Fatalf("AddLink: %v", err)
+		}
+	}
+	items, err := s.CollectItems(ctx, subj, links)
+	if err != nil {
+		t.Fatalf("CollectItems: %v", err)
+	}
+	if len(items) != 2 {
+		t.Fatalf("collected %d items, want 2", len(items))
+	}
+	for _, it := range items {
+		for _, secret := range []string{pat, awsKey, keyed, bearer} {
+			if strings.Contains(it.Content, secret) {
+				t.Errorf("%s export carries the secret %q verbatim: %q", it.Table, secret, it.Content)
+			}
+		}
+		if !strings.Contains(it.Content, "[REDACTED:") {
+			t.Errorf("%s export has no redaction marker: %q", it.Table, it.Content)
+		}
+		if !strings.Contains(it.Content, visible) {
+			t.Errorf("%s export lost the non-secret text: %q", it.Table, it.Content)
+		}
+	}
+}

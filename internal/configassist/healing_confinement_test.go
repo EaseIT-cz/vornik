@@ -6,6 +6,8 @@ import (
 	"regexp"
 	"strings"
 	"testing"
+
+	"vornik.io/vornik/internal/testutil/repowalk"
 )
 
 // TestSystemEntrypoint_HasExactlyOnePermittedAssembler_BySymbol is the
@@ -42,6 +44,9 @@ func TestSystemEntrypoint_HasExactlyOnePermittedAssembler_BySymbol(t *testing.T)
 	err := filepath.Walk("..", func(path string, info os.FileInfo, werr error) error {
 		if werr != nil {
 			return werr
+		}
+		if info.IsDir() && repowalk.SkipDir("..", path, info.Name()) {
+			return filepath.SkipDir
 		}
 		if info.IsDir() || !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
 			return nil

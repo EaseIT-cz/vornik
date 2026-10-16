@@ -33,11 +33,11 @@ func TestOperatorDiagnose_ReturnsVerdict(t *testing.T) {
 	}
 	s.diagnoser = fd
 	rec := httptest.NewRecorder()
-	s.OperatorDiagnose(rec, operatorReq(http.MethodPost, "/api/v1/operator/diagnose", `{"focus":"janka","propose":true}`))
+	s.OperatorDiagnose(rec, operatorReq(http.MethodPost, "/api/v1/operator/diagnose", `{"focus":"family","propose":true}`))
 	if rec.Code != http.StatusOK {
 		t.Fatalf("diagnose: want 200, got %d: %s", rec.Code, rec.Body.String())
 	}
-	if fd.lastFocus != "janka" || !fd.lastPropose {
+	if fd.lastFocus != "family" || !fd.lastPropose {
 		t.Errorf("engine not called with focus+propose: %+v", fd)
 	}
 	var out struct {
@@ -65,7 +65,7 @@ func TestOperatorDiagnose_RequiresFocus(t *testing.T) {
 func TestOperatorDiagnose_NotWired(t *testing.T) {
 	s := newProposalTestServer(t) // no diagnoser
 	rec := httptest.NewRecorder()
-	s.OperatorDiagnose(rec, operatorReq(http.MethodPost, "/api/v1/operator/diagnose", `{"focus":"janka"}`))
+	s.OperatorDiagnose(rec, operatorReq(http.MethodPost, "/api/v1/operator/diagnose", `{"focus":"family"}`))
 	if rec.Code != http.StatusServiceUnavailable {
 		t.Fatalf("unwired diagnoser must 503, got %d", rec.Code)
 	}

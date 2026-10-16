@@ -23,6 +23,8 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+
+	"vornik.io/vornik/internal/testutil/repowalk"
 )
 
 // testEnvTagSets are the build-tag sets a daemon-building test can hide under.
@@ -160,7 +162,7 @@ func TestTestEnvLaw_StartedProcessesGetAnExplicitEnvironment(t *testing.T) {
 			return err
 		}
 		if d.IsDir() {
-			if skipNonModuleDir(root, path, d.Name()) {
+			if repowalk.SkipDir(root, path, d.Name()) {
 				return filepath.SkipDir
 			}
 			return nil
@@ -392,7 +394,7 @@ func TestTestEnvLaw_OnlyTestsImportTestenv(t *testing.T) {
 			return err
 		}
 		if d.IsDir() {
-			if skipNonModuleDir(root, path, d.Name()) {
+			if repowalk.SkipDir(root, path, d.Name()) {
 				return filepath.SkipDir
 			}
 			return nil

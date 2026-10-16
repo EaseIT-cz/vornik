@@ -19,12 +19,12 @@ func TestFormatEvidence_HappyPath(t *testing.T) {
 	size := int64(1234)
 	payload, _ := json.Marshal(map[string]any{
 		"taskType": "research",
-		"context":  map[string]any{"prompt": "find the year janka was born"},
+		"context":  map[string]any{"prompt": "find the year family was born"},
 	})
 	in := JudgeInput{
 		Task: &persistence.Task{
 			ID:        "task_x",
-			ProjectID: "janka",
+			ProjectID: "family",
 			Payload:   payload,
 		},
 		Artifacts: []*persistence.Artifact{
@@ -33,17 +33,17 @@ func TestFormatEvidence_HappyPath(t *testing.T) {
 		AuditEntries: []*persistence.ToolAuditEntry{
 			{ToolName: "web_fetch", ToolInput: `{"url":"https://example.org"}`, ToolOutput: "200 OK"},
 		},
-		LastResultText: "Janka was born in 1985 per the linked source.",
+		LastResultText: "Alice was born in 1985 per the linked source.",
 	}
 	got := j.formatEvidence(in)
 
 	for _, want := range []string{
 		"Task ID: task_x",
-		"Project: janka",
+		"Project: family",
 		"Type: research",
-		"find the year janka was born",
+		"find the year family was born",
 		"Final summary text:",
-		"Janka was born in 1985",
+		"Alice was born in 1985",
 		"Artifacts:",
 		"research.md",
 		"Tool-call audit",

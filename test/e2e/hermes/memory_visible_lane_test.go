@@ -78,6 +78,7 @@ func laneH3g(t *testing.T, l *laneRun) {
 	if isErr || !strings.Contains(text, "ALLOW") {
 		t.Fatalf("H3g: remember through the memory key: %s", text)
 	}
+	assertNoDesignRecordNote(t, s)
 
 	claude := grantKey(t, s.ctl, s.apiURL, s.adminKey, "--project", "assistant-memory", "--client", "claude-code",
 		"--memory-read", "--no-delegate")
@@ -155,4 +156,33 @@ func laneH3g(t *testing.T, l *laneRun) {
 		return nil
 	})
 	t.Logf("H3g: listed by 3 keys, exported, forgotten on the device at %s", time.Now().UTC().Format(time.RFC3339))
+}
+
+// assertNoDesignRecordNote checks GitHub #387 (design 2026-07-12 §11.12) at
+// the level it was found: the Hermes memory key recalls without a repo scope,
+// and Hermes hands vornik_recall's whole result to the model, so the coding
+// note of design_record ("offer to write an as-built record") must not be in
+// it. The project-wide counts stay; the Hermes develop-with-memory skill reads
+// them.
+func assertNoDesignRecordNote(t *testing.T, s *stack) {
+	t.Helper()
+	text, isErr := mcpCall(t, s.apiURL, s.memoryKey, "recall", map[string]any{"query": "who is my piano teacher"})
+	if isErr {
+		t.Fatalf("H3g: recall through the memory key: %s", text)
+	}
+	var out struct {
+		DesignRecord map[string]any `json:"design_record"`
+	}
+	if err := json.Unmarshal([]byte(text), &out); err != nil {
+		t.Fatalf("H3g: recall: %v: %s", err, tail(text, 400))
+	}
+	if out.DesignRecord == nil {
+		t.Fatalf("H3g: an unscoped recall lost its project-wide design_record count: %s", tail(text, 400))
+	}
+	if scope := out.DesignRecord["repo_scope"]; scope != "" {
+		t.Fatalf("H3g: precondition: the Hermes memory key recalls unscoped, got repo_scope %v", scope)
+	}
+	if note, ok := out.DesignRecord["note"]; ok {
+		t.Fatalf("H3g: a personal-assistant recall carries design_record coding guidance: %v", note)
+	}
 }

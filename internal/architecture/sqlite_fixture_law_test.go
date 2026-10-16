@@ -11,6 +11,8 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+
+	"vornik.io/vornik/internal/testutil/repowalk"
 )
 
 // The SQLite fixture law (storage-abstraction design, "SQLite test fixtures",
@@ -262,8 +264,7 @@ func TestSQLiteFixtureLaw(t *testing.T) {
 			return err
 		}
 		if d.IsDir() {
-			name := d.Name()
-			if path != root && (strings.HasPrefix(name, ".") || name == "vendor" || name == "node_modules" || name == "testdata") {
+			if repowalk.SkipDir(root, path, d.Name(), "testdata") {
 				return filepath.SkipDir
 			}
 			return nil

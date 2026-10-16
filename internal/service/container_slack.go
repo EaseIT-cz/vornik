@@ -161,7 +161,7 @@ func resolveSlackConfig(p registry.ProjectSlack, projectID string) (slack.Config
 // type.
 //
 // Every one, not the first. The first cut returned a single command and an
-// operator running two Slack apps — /t800 and /holly — was told to use
+// operator running two Slack apps — /t800 and /helper — was told to use
 // whichever project happened to load first. A review had flagged the
 // single-command assumption as "likely fine (one workspace, one command) but
 // unasserted"; it was neither fine nor, as it turned out, true.

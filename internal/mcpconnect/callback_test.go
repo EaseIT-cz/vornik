@@ -209,11 +209,11 @@ func TestConnector_OnGrantedFiresOnConnectAndDisconnect(t *testing.T) {
 	}
 
 	c.notifyGranted("", "atlassian")
-	c.notifyGranted("janka", "slack")
+	c.notifyGranted("family", "slack")
 
 	mu.Lock()
 	defer mu.Unlock()
-	if len(calls) != 2 || calls[0] != "/atlassian" || calls[1] != "janka/slack" {
+	if len(calls) != 2 || calls[0] != "/atlassian" || calls[1] != "family/slack" {
 		t.Fatalf("hook calls = %v, want the daemon-scope and project-scope pair", calls)
 	}
 }

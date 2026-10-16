@@ -463,6 +463,12 @@ type recallResult struct {
 	// nothing. Three tier-2-only benchmark runs billed 30 cloud reranker calls
 	// on 2026-08-12 because no such report existed.
 	RetrievalMethod string `json:"retrieval_method"`
+	// DesignRecord counts the design-class hits that belong to the
+	// repository in hand (companion RAG-first guidance design §11.2, GitHub
+	// #382), so guidance can adapt to a sparsely documented project instead
+	// of reading another repository's leaked designs as its own. Omitted only
+	// under a class filter that cannot return designs.
+	DesignRecord *designRecord `json:"design_record,omitempty"`
 }
 
 func (s *Server) companionToolRecall(ctx context.Context, key *persistence.APIKey, raw json.RawMessage) (string, error) {
@@ -548,41 +554,68 @@ func (s *Server) companionToolRecall(ctx context.Context, key *persistence.APIKe
 		}
 	}
 
-	hits := make([]recallHit, 0, len(results))
-	for _, r := range results {
-		if args.MinScore > 0 && r.Score < args.MinScore {
-			continue
+	// filterHits applies min_score, the counterfactual exclusion and the
+	// class filter; design_record's strict recount (§11.14) uses it too, so
+	// both counts examine the same kind of hit.
+	filterHits := func(results []MemorySearchResult) []recallHit {
+		hits := make([]recallHit, 0, len(results))
+		for _, r := range results {
+			if args.MinScore > 0 && r.Score < args.MinScore {
+				continue
+			}
+			if cfExclude.IsChunkExcluded(r.ChunkID) {
+				continue
+			}
+			// LLD-22 `class` filter. MemorySearchResult now carries the
+			// chunk's ContentClass (populated by the search SQL), so a
+			// caller-supplied class narrows the result set to exactly that
+			// class. Case-insensitive match. A result whose ContentClass
+			// is empty (older repos without the column) is dropped under
+			// an explicit filter rather than leaked — the caller asked for
+			// a specific class and an unlabeled chunk isn't a confirmed
+			// match.
+			if args.Class != "" && !strings.EqualFold(r.ContentClass, args.Class) {
+				continue
+			}
+			hits = append(hits, recallHit{
+				ChunkID:          r.ChunkID,
+				Score:            r.Score,
+				Content:          r.Content,
+				SourceName:       r.SourceName,
+				TaskID:           r.TaskID,
+				ContentClass:     r.ContentClass,
+				IsAlive:          r.IsAlive,
+				LastCheckedAt:    r.LastCheckedAt,
+				RepoScope:        r.RepoScope,
+				Confidence:       r.Confidence,
+				ValidationStatus: r.ValidationStatus,
+				EventTime:        r.EventTime,
+				CreatedAt:        r.CreatedAt,
+			})
 		}
-		if cfExclude.IsChunkExcluded(r.ChunkID) {
-			continue
-		}
-		// LLD-22 `class` filter. MemorySearchResult now carries the
-		// chunk's ContentClass (populated by the search SQL), so a
-		// caller-supplied class narrows the result set to exactly that
-		// class. Case-insensitive match. A result whose ContentClass
-		// is empty (older repos without the column) is dropped under
-		// an explicit filter rather than leaked — the caller asked for
-		// a specific class and an unlabeled chunk isn't a confirmed
-		// match.
-		if args.Class != "" && !strings.EqualFold(r.ContentClass, args.Class) {
-			continue
-		}
-		hits = append(hits, recallHit{
-			ChunkID:          r.ChunkID,
-			Score:            r.Score,
-			Content:          r.Content,
-			SourceName:       r.SourceName,
-			TaskID:           r.TaskID,
-			ContentClass:     r.ContentClass,
-			IsAlive:          r.IsAlive,
-			LastCheckedAt:    r.LastCheckedAt,
-			RepoScope:        r.RepoScope,
-			Confidence:       r.Confidence,
-			ValidationStatus: r.ValidationStatus,
-			EventTime:        r.EventTime,
-			CreatedAt:        r.CreatedAt,
-		})
+		return hits
 	}
+	hits := filterHits(results)
+	// A crowded zero is recounted once with strict_scope: the same query,
+	// scope, limit and dates, plain Recall without sufficient, so no model
+	// call (GitHub #391, design §11.14).
+	recount := func() ([]recallHit, error) {
+		strictOpts := opts
+		strictOpts.StrictScope = true
+		strictOpts.Sufficient = false
+		rctx, cancel := context.WithTimeout(ctx, designRecountTimeout)
+		defer cancel()
+		strictResults, rerr := s.memoryCompanion.Recall(rctx, key.ProjectID, args.Query, strictOpts)
+		if rerr != nil {
+			// The record degrades to the crowded note; log it so the rate is
+			// visible (code review c12b N2).
+			s.logger.Warn().Err(rerr).Str("project_id", key.ProjectID).Str("repo_scope", opts.RepoScope).
+				Msg("companion recall: design_record strict recount failed")
+			return nil, rerr
+		}
+		return filterHits(strictResults), nil
+	}
+	designRec := buildDesignRecord(opts.RepoScope, args.Class, opts.StrictScope, hits, recount)
 	out := recallResult{
 		ProjectID: key.ProjectID,
 		Query:     args.Query,
@@ -591,6 +624,7 @@ func (s *Server) companionToolRecall(ctx context.Context, key *persistence.APIKe
 		ElapsedMS: time.Since(start).Milliseconds(),
 		// Observed, not requested: obs was filled in by the search path itself.
 		RetrievalMethod: obs.Method(),
+		DesignRecord:    designRec,
 	}
 	if verdict != nil {
 		out.RetrievalTrustVerdict = verdict.Verdict

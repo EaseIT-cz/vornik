@@ -34,7 +34,7 @@ import (
 // run in the shared vornik_test database (operator-noticed
 // 2026-05-17: $1100 in fake task_llm_usage cost and growing).
 // The DELETE pattern is intentionally LIKE-prefixed to those two
-// namespaces — real project IDs (assistant, snake, janka,
+// namespaces — real project IDs (assistant, snake, family,
 // ibkr-trader, ...) don't overlap.
 func TestMain(m *testing.M) {
 	// Bootstrap the dedicated integration database before any test
@@ -85,7 +85,7 @@ func TestMain(m *testing.M) {
 //   - IN ('p','p1','p2','proj-1','proj-2') — short literals
 //     hardcoded by repotest.go call sites that predate uniqueID().
 //
-// Real project IDs (assistant, snake, janka, ibkr-trader,
+// Real project IDs (assistant, snake, family, ibkr-trader,
 // companion-example, troubleshooter, headmatch, n8n-agents, vornik,
 // vornik-autocoder) and the `_external` attribution bucket are
 // multi-character and never overlap either shape.
@@ -127,7 +127,7 @@ func purgeRepotestLeftovers() error {
 	// AND the short literal IDs ("p", "p1", "p2", "proj-1") that
 	// ~30 repotest.go call sites pass straight through to Create().
 	// `_external` is the real attribution-fallback bucket — DO NOT
-	// match it. Real project IDs (assistant, snake, janka, ibkr-trader,
+	// match it. Real project IDs (assistant, snake, family, ibkr-trader,
 	// companion-example, …) are multi-character and don't start with
 	// `proj-` or `other-`, so the IN-list keeps a tight blast radius.
 	const cond = repotestLeftoverPredicate

@@ -62,8 +62,8 @@ Chrome via the noVNC web UI, logs in, then runs 'login stop' which
 tears down the sidecar and restarts the headless scraper.
 
 Examples:
-  vornikctl scraper login start --project=janka --profile=default
-  vornikctl scraper login start -p janka --url https://www.linkedin.com
+  vornikctl scraper login start --project=family --profile=default
+  vornikctl scraper login start -p family --url https://www.linkedin.com
   vornikctl scraper login stop`,
 	}
 	scraperLoginStartCmd = &cobra.Command{

@@ -1090,7 +1090,7 @@ func TestAuthSettings_Phase3_Validate(t *testing.T) {
 				c.Auth.ExternalBaseURL = "http://host:8080"
 				gh := validGitHub()
 				gh.OrgMemberRole = "user"
-				gh.OrgMemberProjects = []string{"janka"}
+				gh.OrgMemberProjects = []string{"family"}
 				c.Auth.Providers.GitHub = gh
 			},
 			wantError: true,
@@ -1115,7 +1115,7 @@ func TestAuthSettings_Phase3_Validate(t *testing.T) {
 				gh := validGitHub()
 				gh.Org = "easeit-cz"
 				gh.OrgMemberRole = "user"
-				gh.OrgMemberProjects = []string{"janka"}
+				gh.OrgMemberProjects = []string{"family"}
 				c.Auth.Providers.GitHub = gh
 			},
 			wantError: false,

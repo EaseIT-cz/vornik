@@ -16,10 +16,10 @@ import (
 func TestAnonymizeBody_NoLeaks(t *testing.T) {
 	in := BodyInput{
 		Version: "2026.7.4-60", Edition: "ce", OS: "linux", Arch: "amd64",
-		Hostname: "AI-PC", DaemonUp: false,
+		Hostname: "WS-0042", DaemonUp: false,
 		Symptom: "failed connecting to swarm at 192.0.2.10 or 2001:db8::1234, see /var/home/vadim/projects/vornik-marketing/logs; ping vadim@vornik.io",
 		Checks: []Check{
-			{Name: "database", Status: "fail", Message: "dial 10.88.0.4:5432 refused for /var/home/vadim/x on ai-pc"},
+			{Name: "database", Status: "fail", Message: "dial 10.88.0.4:5432 refused for /var/home/vadim/x on ws-0042"},
 			{Name: "config", Status: "fail", Message: "token=sk-abcdef0123456789abcdef leaked in config"},
 			// BARE key shapes (no `key=` context, below the 40-char entropy
 			// floor) — these slipped past secrets.Redact until reKeyShapes was
@@ -32,8 +32,8 @@ func TestAnonymizeBody_NoLeaks(t *testing.T) {
 		t.Fatalf("AnonymizeBody: %v", err)
 	}
 	for _, leak := range []string{
-		"vadim@vornik.io", "/var/home/vadim", "192.0.2.10", "10.88.0.4", "AI-PC",
-		"2001:db8::1234", "ai-pc",
+		"vadim@vornik.io", "/var/home/vadim", "192.0.2.10", "10.88.0.4", "WS-0042",
+		"2001:db8::1234", "ws-0042",
 		"sk-abcdef0123456789abcdef", "vadim",
 		// review-20260725-7530 #1/#2: the home-path TAIL (project dir) must not
 		// survive; the whole path collapses to <path>.
@@ -146,12 +146,12 @@ func TestAnonymizeBody_RendersScrubbedLogLines(t *testing.T) {
 		items = append(items, "filler error line")
 	}
 	items = append(items,
-		`{"level":"error","host":"AI-PC","msg":"dial 10.88.0.4:5432: refused for /var/home/vadim/p"}`,
+		`{"level":"error","host":"WS-0042","msg":"dial 10.88.0.4:5432: refused for /var/home/vadim/p"}`,
 		`{"level":"fatal","msg":"token=sk-abcdef0123456789abcdef rejected"}`,
 	)
 	body, err := AnonymizeBody(BodyInput{
 		Version: "2026.7.7", Edition: "community", BuildDate: "b",
-		OS: "linux", Arch: "amd64", Hostname: "AI-PC", DaemonUp: false,
+		OS: "linux", Arch: "amd64", Hostname: "WS-0042", DaemonUp: false,
 		Checks: []Check{{
 			Name: "journal", Status: "warn",
 			Message: "22 recent error/fatal line(s) in the daemon journal",
@@ -168,7 +168,7 @@ func TestAnonymizeBody_RendersScrubbedLogLines(t *testing.T) {
 		}
 	}
 	// …and scrubbed exactly like the rest of the body.
-	for _, leak := range []string{"AI-PC", "10.88.0.4", "/var/home/vadim", "sk-abcdef0123456789abcdef"} {
+	for _, leak := range []string{"WS-0042", "10.88.0.4", "/var/home/vadim", "sk-abcdef0123456789abcdef"} {
 		if strings.Contains(body, leak) {
 			t.Errorf("log line LEAKS %q into a public body:\n%s", leak, body)
 		}
@@ -401,7 +401,7 @@ func TestAnonymizeBody_ItemLeakClasses(t *testing.T) {
 		`{"level":"fatal","msg":"-----BEGIN OPENSSH PRIVATE KEY-----b3BlbnNzaC1rZXktdjEAAAAABG5vbmUAAAAEbm9uZQAAA"}`,
 	}
 	body, err := AnonymizeBody(BodyInput{
-		Version: "v", Edition: "community", Hostname: "AI-PC", DaemonUp: true,
+		Version: "v", Edition: "community", Hostname: "WS-0042", DaemonUp: true,
 		Checks: []Check{{Name: "journal", Status: "warn", Items: items}},
 	})
 	if err != nil {
@@ -427,12 +427,12 @@ func TestAnonymizeBody_ItemLeakClasses(t *testing.T) {
 // way to know a line vanished. The count must reflect what was actually RENDERED.
 func TestAnonymizeBody_OmittedCountIncludesLinesLostToScrubbing(t *testing.T) {
 	body, err := AnonymizeBody(BodyInput{
-		Version: "v", Edition: "community", Hostname: "AI-PC", DaemonUp: true,
+		Version: "v", Edition: "community", Hostname: "WS-0042", DaemonUp: true,
 		Checks: []Check{{Name: "journal", Status: "warn", Items: []string{
 			"real error line one",
-			"   ",    // blank
-			"AI-PC",  // scrubs to a bare <host> marker, still renderable
-			"\t\n  ", // whitespace only
+			"   ",     // blank
+			"WS-0042", // scrubs to a bare <host> marker, still renderable
+			"\t\n  ",  // whitespace only
 			"real error line two",
 		}}},
 	})
@@ -456,7 +456,7 @@ func TestAnonymizeBody_OmittedCountIncludesLinesLostToScrubbing(t *testing.T) {
 // whole feature exists to deliver, so it is a defect, not a safe default.
 func TestAnonymizeBody_PEMAdversarial(t *testing.T) {
 	body, err := AnonymizeBody(BodyInput{
-		Version: "v", Edition: "community", Hostname: "AI-PC", DaemonUp: true,
+		Version: "v", Edition: "community", Hostname: "WS-0042", DaemonUp: true,
 		// The symptom is scrubbed as ONE multi-line string, so it is where a
 		// newline-hungry residue regex would do its damage.
 		Symptom: "key dump follows\n" +
@@ -522,7 +522,7 @@ func TestPEMResidue_DoesNotEatFollowingLines(t *testing.T) {
 // the hyphen gap was the real one.
 func TestAnonymizeBody_PEMLabelAndEmptyMaterialForms(t *testing.T) {
 	body, err := AnonymizeBody(BodyInput{
-		Version: "v", Edition: "community", Hostname: "AI-PC", DaemonUp: true,
+		Version: "v", Edition: "community", Hostname: "WS-0042", DaemonUp: true,
 		Checks: []Check{{Name: "journal", Status: "warn", Items: []string{
 			// hyphenated label
 			`{"msg":"-----BEGIN ECDSA-PRIVATE-KEY-----HYPHENLABELkeymaterial0000-----END ECDSA-PRIVATE-KEY-----"}`,
@@ -610,7 +610,7 @@ func TestLineScrubber_MatchesReportScrubber(t *testing.T) {
 	for _, line := range []string{
 		"mcp: failed to connect",
 		"step report: missing prerequisite artifacts/out/draft.md",
-		"dial tcp 192.168.0.142:8080: connection refused",
+		"dial tcp 192.168.1.50:8080: connection refused",
 		"path ~/projects/acme/notes.md on BUILDHOST",
 		"core::fmt::Debug for exec_20260928151318_1c35d6b2b9cedb83",
 	} {

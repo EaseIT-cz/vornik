@@ -6,7 +6,7 @@ import (
 	"testing"
 )
 
-// pagedropTools are the four namespaced tools the assistant + janka projects
+// pagedropTools are the four namespaced tools the assistant + family projects
 // must grant agents permission to CALL (project permissions.allowedTools).
 var pagedropTools = []string{
 	"mcp__pagedrop__pagedrop_publish_page",
@@ -70,7 +70,7 @@ func hasAny(got, want []string) bool {
 }
 
 // TestPageDropGrant_ScopedToTwoProjects mirrors the shipped config shape:
-// assistant + janka grant the four pagedrop tools via permissions.allowedTools
+// assistant + family grant the four pagedrop tools via permissions.allowedTools
 // plus a name-only mcp.servers entry; a third project grants none.
 func TestPageDropGrant_ScopedToTwoProjects(t *testing.T) {
 	dir := t.TempDir()
@@ -89,7 +89,7 @@ permissions:
     - "mcp__pagedrop__pagedrop_list"
 `
 	writeProject(t, dir, "assistant", "projectId: assistant\nswarmId: assistant-swarm\ndefaultWorkflowId: adaptive\nmcp:\n  servers:\n    - name: pagedrop\n      allowed_tools:\n        - pagedrop_publish_page\n        - pagedrop_publish_doc\n        - pagedrop_republish\n        - pagedrop_list\npermissions:\n  allowedTools:\n    - \"mcp__pagedrop__pagedrop_publish_page\"\n    - \"mcp__pagedrop__pagedrop_publish_doc\"\n    - \"mcp__pagedrop__pagedrop_republish\"\n    - \"mcp__pagedrop__pagedrop_list\"\n")
-	writeProject(t, dir, "janka", "projectId: janka\nswarmId: janka-swarm\ndefaultWorkflowId: adaptive\nmcp:\n  servers:\n    - name: pagedrop\n      allowed_tools:\n        - pagedrop_publish_page\n        - pagedrop_publish_doc\n        - pagedrop_republish\n        - pagedrop_list\npermissions:\n  allowedTools:\n    - \"mcp__pagedrop__pagedrop_publish_page\"\n    - \"mcp__pagedrop__pagedrop_publish_doc\"\n    - \"mcp__pagedrop__pagedrop_republish\"\n    - \"mcp__pagedrop__pagedrop_list\"\n")
+	writeProject(t, dir, "family", "projectId: family\nswarmId: family-swarm\ndefaultWorkflowId: adaptive\nmcp:\n  servers:\n    - name: pagedrop\n      allowed_tools:\n        - pagedrop_publish_page\n        - pagedrop_publish_doc\n        - pagedrop_republish\n        - pagedrop_list\npermissions:\n  allowedTools:\n    - \"mcp__pagedrop__pagedrop_publish_page\"\n    - \"mcp__pagedrop__pagedrop_publish_doc\"\n    - \"mcp__pagedrop__pagedrop_republish\"\n    - \"mcp__pagedrop__pagedrop_list\"\n")
 	writeProject(t, dir, "ibkr-trader", "projectId: ibkr-trader\nswarmId: ibkr-trader-swarm\ndefaultWorkflowId: adaptive\npermissions:\n  allowedTools:\n    - \"place_order\"\n")
 	_ = granted
 
@@ -98,7 +98,7 @@ permissions:
 		t.Fatalf("LoadProjects: %v", err)
 	}
 
-	for _, name := range []string{"assistant", "janka"} {
+	for _, name := range []string{"assistant", "family"} {
 		p := projects[name]
 		if p == nil {
 			t.Fatalf("project %q not loaded", name)

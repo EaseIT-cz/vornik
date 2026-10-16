@@ -116,7 +116,7 @@ func TestIngestText_ResolverWithNoSeriesWritesNull(t *testing.T) {
 	mock.ExpectExec("INSERT INTO memory_embed_queue").
 		WillReturnResult(sqlmock.NewResult(0, 1))
 
-	if err := idx.IngestText(context.Background(), "janka", "task_2", "art_2", "s.md", "an ad-hoc task output"); err != nil {
+	if err := idx.IngestText(context.Background(), "family", "task_2", "art_2", "s.md", "an ad-hoc task output"); err != nil {
 		t.Fatalf("ingest: %v", err)
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {

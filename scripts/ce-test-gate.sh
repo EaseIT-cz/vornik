@@ -34,6 +34,47 @@ ce_check_publish_lanes() {
     return 0
 }
 
+# integration_lock_path prints the integration lock's path (D5), the one
+# both this lane and scripts/integration-db-lane.sh (make test-integration)
+# use, so they serialise on one file. It lives in XDG_RUNTIME_DIR (per-user,
+# 0700 by systemd); without one, in /tmp/vornik-<uid>, created 0700 and
+# refused unless it is a real directory this user owns with no access for
+# others. Never a shared /tmp name: a planted symlink there would let the
+# lock's open touch another file (security review 2026-10-15, #374).
+integration_lock_path() {
+    local dir="${XDG_RUNTIME_DIR:-}"
+    if [ -z "$dir" ]; then
+        dir="${INTEGRATION_LOCK_TMP:-/tmp}/vornik-$(id -u)"
+        if [ ! -e "$dir" ] && [ ! -L "$dir" ]; then
+            mkdir -m 700 "$dir" 2>/dev/null || [ -d "$dir" ] || {
+                echo "   cannot create the lock directory $dir" >&2
+                return 1
+            }
+        fi
+        if [ -L "$dir" ] || [ ! -d "$dir" ] || [ ! -O "$dir" ] \
+           || [ -n "$(find "$dir" -maxdepth 0 -perm /077 2>/dev/null)" ]; then
+            echo "   refusing the lock directory $dir: not a private directory owned by $(id -un)" >&2
+            return 1
+        fi
+    fi
+    printf '%s/vornik-integration-db.lock\n' "$dir"
+}
+
+# integration_lock_safe <path> refuses a lock path that is a symlink, or an
+# existing file this user does not own or that is not a regular file. The
+# lock is opened for append (>>), which never truncates.
+integration_lock_safe() {
+    local lock="$1"
+    if [ -L "$lock" ]; then
+        echo "   refusing the lock $lock: it is a symlink" >&2
+        return 1
+    fi
+    if [ -e "$lock" ] && { [ ! -f "$lock" ] || [ ! -O "$lock" ]; }; then
+        echo "   refusing the lock $lock: not a regular file owned by $(id -un)" >&2
+        return 1
+    fi
+}
+
 # ce_run_lane <unit|integration> <tree> [dsn] — runs one lane in the exported
 # tree, as the public CI runs it, and returns non-zero if it is red, ran
 # nothing, or (integration) skipped anything. The JSON stream is kept in
@@ -50,7 +91,9 @@ ce_run_lane() {
     if [ "$lane" = integration ]; then
         # D5: one integration run per database. make test-integration takes
         # the same lock, so the export never shares the database with it.
-        local lock="${CE_LOCK_FILE:-${XDG_RUNTIME_DIR:-/tmp}/vornik-integration-db.lock}"
+        local lock
+        lock="${CE_LOCK_FILE:-$(integration_lock_path)}" || return 1
+        integration_lock_safe "$lock" || return 1
         (
             flock -w "${CE_LOCK_WAIT:-1800}" 9 || {
                 echo "   another integration run holds $lock; not sharing the database with it" >&2
@@ -58,7 +101,7 @@ ce_run_lane() {
             }
             _ce_fresh_database "$tree" "$dsn" || exit 1
             _ce_exec_lane "$lane" "$tree" "$outdir" "$plan"
-        ) 9>"$lock"
+        ) 9>>"$lock"
         return $?
     fi
     _ce_exec_lane "$lane" "$tree" "$outdir" "$plan"

@@ -15,7 +15,7 @@ import (
 
 // TestBuildTradingPanel_DisabledWithoutBrokerServer — projects
 // without a `broker` MCP server skip the panel entirely. Most
-// projects (snake, janka, assistant) fall in this bucket.
+// projects (snake, family, assistant) fall in this bucket.
 func TestBuildTradingPanel_DisabledWithoutBrokerServer(t *testing.T) {
 	s := &Server{logger: zerolog.Nop()}
 	project := &registry.Project{

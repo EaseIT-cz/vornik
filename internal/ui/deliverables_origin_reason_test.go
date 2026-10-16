@@ -15,7 +15,7 @@ import (
 )
 
 // TestDeliverableSend_LostOriginRecord_DoesNotClaimNonChatOrigin pins the fix
-// for the 2026-08-05 misleading-message defect on janka-companion.
+// for the 2026-08-05 misleading-message defect on family-companion.
 //
 // The task WAS Slack-originated. Its chat_audit_log row had been lost (the
 // dispatcher's audit write ran on an expired turn context), so
@@ -35,11 +35,11 @@ func TestDeliverableSend_LostOriginRecord_DoesNotClaimNonChatOrigin(t *testing.T
 
 	// Child carries no turn id; the parent does. The lineage walk finds it.
 	child := &persistence.Task{
-		ID: taskID, ProjectID: "companion-janka",
+		ID: taskID, ProjectID: "companion-family",
 		ParentTaskID: &parentID, Status: persistence.TaskStatusCompleted,
 	}
 	parent := &persistence.Task{
-		ID: parentID, ProjectID: "companion-janka",
+		ID: parentID, ProjectID: "companion-family",
 		ChatTurnID: strpDS(parentTurn), Status: persistence.TaskStatusCompleted,
 	}
 	taskRepo := &mocks.MockTaskRepository{
@@ -54,7 +54,7 @@ func TestDeliverableSend_LostOriginRecord_DoesNotClaimNonChatOrigin(t *testing.T
 		},
 	}
 	artifact := &persistence.Artifact{
-		ID: artifactID, ProjectID: "companion-janka", TaskID: &taskID,
+		ID: artifactID, ProjectID: "companion-family", TaskID: &taskID,
 		Name: "report-20260805-9bac.html", ArtifactClass: persistence.ArtifactClassOutput,
 	}
 	artifactRepo := &mocks.MockArtifactRepository{

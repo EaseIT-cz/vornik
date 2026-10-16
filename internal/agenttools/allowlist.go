@@ -52,7 +52,7 @@ func BareToolName(name string) string {
 // project MCP tools declares that intent with mcp__* or the specific tools.
 //
 // Trading roles keep the strict intersection (listing mcp__broker__get_quote
-// still denies mcp__broker__place_order). Regression context: the janka
+// still denies mcp__broker__place_order). Regression context: the family
 // `researcher` listed only built-in tools and so could not call
 // mcp__scraper__web_fetch — every portal scan got a daemon-level FORBIDDEN,
 // starving the RAG (2026-06-20). The fix is to GRANT the tool in the role

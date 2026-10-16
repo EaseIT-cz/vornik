@@ -1344,7 +1344,7 @@ Operator surface for the knowledge-skill store.
 
 A knowledge skill authored in one project can be promoted to GLOBAL so it
 injects into every project's roles — e.g. a skill captured from a Claude
-companion session becomes available to the janka and assistant autonomy
+companion session becomes available to every other project's autonomy
 roles. Promotion does not change a skill's maturity; an approved skill
 stays approved.
 
@@ -1400,9 +1400,9 @@ this to prove a scraper / gmail / github connection is live without
 spinning up an agent container and paying for an LLM call.
 
 Examples:
-  vornikctl mcp tools -p janka
+  vornikctl mcp tools -p family
   vornikctl mcp servers
-  vornikctl mcp call -p janka --tool mcp__scraper__web_fetch \
+  vornikctl mcp call -p family --tool mcp__scraper__web_fetch \
       --args '{"url":"https://example.com","text_only":true,"max_bytes":2000}'
 
 (project_id is supplied by the daemon from -p, so don't pass it. allowed_hosts
@@ -1909,8 +1909,8 @@ detected person by construction regardless. This answers whether shared-scope
 
 Sampling frame (§7):
   - stratified by project; >=100 turns per stratum where available
-  - the dominant project is capped at 50% of the total sample (janka holds
-    ~95% of turns — an unstratified draw measures one person)
+  - the dominant project is capped at 50% of the total sample (one personal
+    project can hold ~95% of turns — an unstratified draw measures one person)
   - recent-only within --window
   - projects with <100 eligible turns are reported as a separate
     "insufficient_sample" bucket and are NOT screened or folded into the
@@ -2959,8 +2959,8 @@ NEVER pruned.
 
 Examples:
   vornikctl retention                          # preview all projects
-  vornikctl retention --project janka          # preview one project
-  vornikctl retention --project janka --apply  # actually prune janka
+  vornikctl retention --project family          # preview one project
+  vornikctl retention --project family --apply  # actually prune family
 
 
 ```
@@ -3301,7 +3301,15 @@ vornikctl task answer <taskId> [flags]
 
 Cancel a task
 
-Cancel a task by ID. Only tasks in QUEUED, LEASED, RUNNING, or PENDING status can be cancelled.
+Cancel a task by ID. Tasks in PENDING, QUEUED, LEASED, RUNNING,
+WAITING_FOR_CHILDREN, AWAITING_INPUT, AWAITING_EXTERNAL or PAUSED status can be
+cancelled.
+
+Cancelling a parent also cancels its descendants (children, their children,
+and so on) that are PENDING, QUEUED, LEASED, RUNNING or WAITING_FOR_CHILDREN,
+and stops their running containers. A descendant that is PAUSED or awaiting
+input, an external event or approval is not cancelled by the cascade; list
+them with 'vornikctl task list --active --all' and cancel them by ID.
 
 ```
 vornikctl task cancel <taskId> [flags]
@@ -3381,7 +3389,19 @@ vornikctl task get <taskId> [flags]
 
 List tasks
 
-List tasks for a project, optionally filtered by status.
+List tasks for a project, newest first, optionally filtered by status.
+
+Shows 20 tasks unless --limit or --all says otherwise. When more tasks match
+than are shown, the last line says so: "Showing 20 of 72 tasks; pass --all
+(or --limit N) to see the rest." --active lists every unfinished task
+(PENDING, QUEUED, LEASED, RUNNING, WAITING_FOR_CHILDREN, AWAITING_INPUT,
+AWAITING_EXTERNAL, PAUSED, AWAITING_APPROVAL), including parents waiting on
+their children. The PARENT column names the task a child was delegated from.
+
+Examples:
+  vornikctl task list -p my-project --active --all
+  vornikctl task list -p my-project --status QUEUED,WAITING_FOR_CHILDREN
+  vornikctl task list -p my-project --limit 100 --json
 
 ```
 vornikctl task list [flags]
@@ -3389,9 +3409,13 @@ vornikctl task list [flags]
 
 | Flag | Default | Description |
 |---|---|---|
+| `--active` | `false` | Every unfinished status, including parents in WAITING_FOR_CHILDREN (not with --status) |
+| `--all` | `false` | Show every matching task (pages through the API) |
 | `--json` | `false` | Output in JSON format |
+| `--limit` | `20` | Show at most N tasks |
+| `--offset` | `0` | Skip the first N matching tasks (the nextOffset of a --json run continues it) |
 | `-p`, `--project` |  | Project ID (required) |
-| `-s`, `--status` |  | Filter by status (PENDING, QUEUED, RUNNING, COMPLETED, FAILED, CANCELLED) |
+| `-s`, `--status` |  | Filter by status; a comma-separated list matches any (PENDING, QUEUED, LEASED, RUNNING, WAITING_FOR_CHILDREN, AWAITING_APPROVAL, AWAITING_INPUT, AWAITING_EXTERNAL, PAUSED, COMPLETED, FAILED, CANCELLED, CLOSED) |
 
 ## vornikctl task message
 
@@ -3468,7 +3492,7 @@ operator-friendly shortcut for the context.prompt payload shape every
 researcher role already reads; for custom shapes use --context-json.
 
 Examples:
-  vornikctl task submit -p janka --prompt "Summarise yesterday's scans"
+  vornikctl task submit -p family --prompt "Summarise yesterday's scans"
   vornikctl task submit -p snake --task-type feature --prompt "Implement X"
   vornikctl task submit -p n8n-agents --workflow adaptive --prompt "..." --priority 10
 

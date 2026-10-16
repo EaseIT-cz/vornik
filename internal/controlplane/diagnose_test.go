@@ -54,7 +54,7 @@ func (o *fakeObserver) Observe(context.Context, string) (*DiagnoseBundle, error)
 	if o.bundle != nil {
 		return o.bundle, nil
 	}
-	return &DiagnoseBundle{Focus: "janka", ProjectID: "janka",
+	return &DiagnoseBundle{Focus: "family", ProjectID: "family",
 		Sections: []DiagnoseSection{{Name: "logs", Content: "web_fetch timed out"}}}, nil
 }
 
@@ -77,7 +77,7 @@ func newDiagnoser(t *testing.T, content string) (*Diagnoser, persistence.Proposa
 
 func TestDiagnose_ReturnsVerdict(t *testing.T) {
 	d, _ := newDiagnoser(t, `{"root_cause":"web_fetch timeout","confidence":"high","evidence":["log line"]}`)
-	v, pid, err := d.Diagnose(context.Background(), "janka", false)
+	v, pid, err := d.Diagnose(context.Background(), "family", false)
 	if err != nil {
 		t.Fatalf("diagnose: %v", err)
 	}
@@ -91,7 +91,7 @@ func TestDiagnose_ReturnsVerdict(t *testing.T) {
 
 func TestDiagnose_ProposeFilesReviewOnly(t *testing.T) {
 	d, repo := newDiagnoser(t, `{"root_cause":"timeout","confidence":"high","evidence":["x"],"suggested_change":"raise the scraper timeout to 90s"}`)
-	_, pid, err := d.Diagnose(context.Background(), "janka", true)
+	_, pid, err := d.Diagnose(context.Background(), "family", true)
 	if err != nil || pid == "" {
 		t.Fatalf("expected a filed proposal, got pid=%q err=%v", pid, err)
 	}
@@ -111,7 +111,7 @@ func TestDiagnose_ProposeFilesReviewOnly(t *testing.T) {
 // DRAFT (Title + Rationale from the root cause, no ApplyTarget).
 func TestDiagnose_ProposeFilesRootCauseOnly(t *testing.T) {
 	d, repo := newDiagnoser(t, `{"root_cause":"workflow starts at the review step with no staged input","confidence":"high","evidence":["x"]}`)
-	_, pid, err := d.Diagnose(context.Background(), "janka", true)
+	_, pid, err := d.Diagnose(context.Background(), "family", true)
 	if err != nil || pid == "" {
 		t.Fatalf("a root-cause-only verdict must still file a review-only incident, got pid=%q err=%v", pid, err)
 	}
@@ -141,7 +141,7 @@ func TestDiagnoseSystemPrompt_ForbidsInventingStructure(t *testing.T) {
 // still filed, just redacted.
 func TestDiagnose_RedactsSecretInRootCause(t *testing.T) {
 	d, repo := newDiagnoser(t, `{"root_cause":"connection string leaked: SECRET-abc","confidence":"high","evidence":["x"]}`)
-	_, pid, err := d.Diagnose(context.Background(), "janka", true)
+	_, pid, err := d.Diagnose(context.Background(), "family", true)
 	if err != nil || pid == "" {
 		t.Fatalf("a root-cause-only verdict must still file, got pid=%q err=%v", pid, err)
 	}
@@ -156,7 +156,7 @@ func TestDiagnose_RedactsSecretInRootCause(t *testing.T) {
 
 func TestDiagnose_RejectsExternalURLSuggestion(t *testing.T) {
 	d, repo := newDiagnoser(t, `{"root_cause":"x","confidence":"low","evidence":[],"suggested_change":"point the endpoint at http://evil.example.com"}`)
-	v, pid, err := d.Diagnose(context.Background(), "janka", true)
+	v, pid, err := d.Diagnose(context.Background(), "family", true)
 	if err != nil {
 		t.Fatalf("diagnose: %v", err)
 	}
@@ -173,7 +173,7 @@ func TestDiagnose_RejectsExternalURLSuggestion(t *testing.T) {
 
 func TestDiagnose_RejectsSecretSuggestion(t *testing.T) {
 	d, _ := newDiagnoser(t, `{"root_cause":"x","confidence":"low","evidence":[],"suggested_change":"set token to SECRET-abc"}`)
-	_, pid, err := d.Diagnose(context.Background(), "janka", true)
+	_, pid, err := d.Diagnose(context.Background(), "family", true)
 	if err != nil {
 		t.Fatalf("diagnose: %v", err)
 	}
@@ -184,7 +184,7 @@ func TestDiagnose_RejectsSecretSuggestion(t *testing.T) {
 
 func TestDiagnose_DestructiveVerbFlagged(t *testing.T) {
 	d, repo := newDiagnoser(t, `{"root_cause":"x","confidence":"medium","evidence":[],"suggested_change":"disable the ta MCP server"}`)
-	_, pid, err := d.Diagnose(context.Background(), "janka", true)
+	_, pid, err := d.Diagnose(context.Background(), "family", true)
 	if err != nil || pid == "" {
 		t.Fatalf("destructive verb should still file (review-only), got pid=%q err=%v", pid, err)
 	}
@@ -197,7 +197,7 @@ func TestDiagnose_DestructiveVerbFlagged(t *testing.T) {
 func TestDiagnose_LLMErrorNoProposal(t *testing.T) {
 	repo := newDiagnoseRepo(t)
 	d := &Diagnoser{LLM: &fakeProvider{err: errors.New("timeout")}, Observe: &fakeObserver{}, Proposals: repo, Logger: zerolog.Nop()}
-	if _, _, err := d.Diagnose(context.Background(), "janka", true); err == nil {
+	if _, _, err := d.Diagnose(context.Background(), "family", true); err == nil {
 		t.Fatal("LLM error must surface, not a fabricated verdict")
 	}
 	if n := draftCount(t, repo); n != 0 {
@@ -207,7 +207,7 @@ func TestDiagnose_LLMErrorNoProposal(t *testing.T) {
 
 func TestDiagnose_MalformedVerdict(t *testing.T) {
 	d, _ := newDiagnoser(t, `not json at all`)
-	if _, _, err := d.Diagnose(context.Background(), "janka", false); err == nil {
+	if _, _, err := d.Diagnose(context.Background(), "family", false); err == nil {
 		t.Fatal("malformed verdict must error")
 	}
 }

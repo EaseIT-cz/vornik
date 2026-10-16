@@ -753,7 +753,7 @@ func (e *Executor) runLeadPlanning(
 	// (typically checkpoint=decision proposing alternatives).
 	// Emitting continue + a plan with role steps is a contract
 	// violation — re-spawning the same role that just failed produces
-	// the same failure (observed live on T-0833 / janka CV cascade).
+	// the same failure (observed live on T-0833 / family CV cascade).
 	//
 	// 2026-05-26 — corrective-hint retry: previously this path failed
 	// the step terminally on first violation. Mirrors the

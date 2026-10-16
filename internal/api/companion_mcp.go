@@ -411,9 +411,13 @@ func companionToolDefs() []mcpToolDef {
 				"`OR repo_scope IS NULL` clause — use strict_scope=true to drop them and see only properly-tagged " +
 				"results. Each hit's repo_scope field shows the chunk's actual scope (empty string = NULL-scoped). " +
 				"| USAGE: Prefer this BEFORE a deep code dive on design/architecture/roadmap/\"how does X work\" " +
-				"questions — the design/spec/decision-class chunks (LLDs) in project memory are the authoritative " +
-				"design record; read code only to verify a named file/flag/function still matches (RAG freezes " +
-				"facts at write time). Treat research/incident/companion notes as hypotheses to verify, not fact.",
+				"questions; read code only to verify a named file/flag/function still matches (RAG freezes facts " +
+				"at write time). The result's design_record counts the design-class (spec/decision) hits stored " +
+				"with this repo scope and not produced by a workflow (reviews are not designs): only those are " +
+				"this repository's design record; read its note. When it is 0, no design " +
+				"for the question was found here — do not claim one; work from the code. A design counts only " +
+				"when it was stored with the repo's scope. Treat research/incident/companion notes as hypotheses " +
+				"to verify, not fact.",
 			InputSchema: map[string]any{
 				"type": "object",
 				"properties": map[string]any{
@@ -1339,7 +1343,7 @@ func (s *Server) companionToolDelegate(ctx context.Context, key *persistence.API
 	// strongest hits to the response. The host LLM can surface the
 	// hint to the user as "vornik already knows X — still delegate?"
 	// before the task starts consuming swarm budget.
-	if hint := s.maybeBuildRecallHint(ctx, key, args.Prompt); hint != nil {
+	if hint := s.maybeBuildRecallHint(ctx, key, args.Prompt, effectiveRepoScope(key, args.RepoScope)); hint != nil {
 		out["recall_hint"] = hint
 	}
 	b, _ := json.MarshalIndent(out, "", "  ")
@@ -1390,7 +1394,12 @@ const (
 // adapter unwired, prompt too short, no strong hits, timeout, error).
 // Never returns an error: hint failures must be invisible to the
 // delegate caller. See LLD 22 §Roadmap fit (Phase 2 deliverable).
-func (s *Server) maybeBuildRecallHint(ctx context.Context, key *persistence.APIKey, prompt string) map[string]any {
+//
+// repoScope is the delegation's effective scope (effectiveRepoScope): the hint
+// draws on the same pool a default, lenient recall from that session does,
+// never on another repository's notes (GitHub #368, design 22 "Every search
+// path honours repo_scope and strict_scope", E3).
+func (s *Server) maybeBuildRecallHint(ctx context.Context, key *persistence.APIKey, prompt, repoScope string) map[string]any {
 	if key == nil || !key.MemoryRead {
 		return nil
 	}
@@ -1407,6 +1416,7 @@ func (s *Server) maybeBuildRecallHint(ctx context.Context, key *persistence.APIK
 		Limit:     recallHintSearchLimit,
 		ActorKind: companionActorKind(key),
 		ActorID:   key.ID,
+		RepoScope: repoScope,
 		// Context-assembly path: route through scored-sufficiency + reranking
 		// so the hint's score threshold reads calibrated [0,1] relevance. This
 		// is non-interactive (background delegate setup), so the rerank latency

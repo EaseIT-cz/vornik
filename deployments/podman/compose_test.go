@@ -52,7 +52,7 @@ func TestDepsComposeIsPostgresOnly(t *testing.T) {
 // TestPagedropViewBindIsNotAHardcodedHostIP — the view port used to publish on
 // the literal LAN address `192.0.2.10:8888`. A published port is bound at
 // container START and the address must already be on the host, so when the box
-// came back from the 2026-09-06 reboot on a different subnet (192.168.0.142)
+// came back from the 2026-09-06 reboot on a different subnet
 // that bind became impossible and aborted the whole restore:
 //
 //	Error: unable to start container ... rootlessport listen tcp

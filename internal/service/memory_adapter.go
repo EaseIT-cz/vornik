@@ -53,6 +53,15 @@ func newMemoryCompanionAdapter(s *memory.Searcher, p *memory.Pipeline, repo *mem
 	return &memoryCompanionAdapter{s: s, p: p, repo: repo, minRefuteScore: minRefuteScore}
 }
 
+// NewMemoryCompanionAdapterForTesting exposes the production adapter to the
+// pgvector integration lane (test/integration), so a companion tools/call is
+// tested through the real adapter, Searcher and database rather than a copy
+// of the adapter (GitHub #368). Test seam only; the daemon uses
+// newMemoryCompanionAdapter in container_http.go.
+func NewMemoryCompanionAdapterForTesting(s *memory.Searcher, p *memory.Pipeline, repo *memory.Repository, minRefuteScore float64) api.MemoryCompanionAdapter {
+	return newMemoryCompanionAdapter(s, p, repo, minRefuteScore)
+}
+
 // Recall delegates to memory.Searcher.Search. v1 ignores
 // FromDate/ToDate from RecallOptions — the simple Search() variant
 // is sufficient for the initial tool surface; pushing the temporal
@@ -423,7 +432,10 @@ func (a *memoryCompanionAdapter) Correct(ctx context.Context, in api.CorrectInpu
 			out.Refuted = append(out.Refuted, api.RefutedChunkInfo{ChunkID: id})
 		}
 	} else {
-		refuted, err := corrector.RefuteByClaim(ctx, in.ProjectID, in.WrongClaim, in.MaxRefutes)
+		// The claim search is scoped to the effective repo scope the handler
+		// resolved (GitHub #368, E4): a claim made in repository A never
+		// refutes repository B's chunk. Empty scope = project-wide, as before.
+		refuted, err := corrector.RefuteByClaimInScope(ctx, in.ProjectID, in.WrongClaim, in.RepoScope, in.MaxRefutes)
 		if err != nil {
 			return api.CorrectResult{}, err
 		}

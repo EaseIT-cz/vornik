@@ -19,7 +19,7 @@
 // task created any other way — chat, REST POST /tasks, an autonomy tick in any
 // of its three modes, Telegram/Slack/email — landed NULL, because nothing
 // supplied a default. A census of the live store found five projects at 100%
-// NULL (assistant 6739 chunks, janka 2776, vornik-marketing 266, ibkr-trader 85,
+// NULL (assistant 6739 chunks, family 2776, vornik-marketing 266, ibkr-trader 85,
 // headmatch 3): none of them had ever been written to through a companion call.
 package memoryscope
 

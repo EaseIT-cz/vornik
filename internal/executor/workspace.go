@@ -24,7 +24,7 @@ import (
 //     operator doc in this namespace MUST survive a
 //     cleanup — wiping it silently breaks the
 //     autonomy/USER-task split that depends on those
-//     files being present. Live evidence: janka's
+//     files being present. Live evidence: family's
 //     USER_GUIDANCE.md was wiped by this code path on
 //     2026-05-10 before this exclusion landed.
 //

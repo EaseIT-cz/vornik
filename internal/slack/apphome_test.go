@@ -71,7 +71,7 @@ func TestAppHomeOpened_PublishesAUsefulHomeView(t *testing.T) {
 	cfg.APIBaseURL = srv.URL
 	cfg.ChannelAllowlist = []string{"C03HTMUL2S1"}
 	cfg.SenderAllowlist = []string{"U_alice"}
-	cfg.SlashCommand = "/holly"
+	cfg.SlashCommand = "/helper"
 	ch := makeChannel(t, cfg, time.Now())
 
 	postSignedJSON(t, ch, cfg.SigningSecret, time.Now(), appHomeOpenedPayload("U_alice"))
@@ -91,7 +91,7 @@ func TestAppHomeOpened_PublishesAUsefulHomeView(t *testing.T) {
 	// The point of the surface is telling someone what this bot serves and how to reach
 	// it. A view that renders but says nothing useful is the placeholder with extra
 	// steps.
-	for _, want := range []string{"/holly", "C03HTMUL2S1"} {
+	for _, want := range []string{"/helper", "C03HTMUL2S1"} {
 		if !strings.Contains(view, want) {
 			t.Errorf("home view does not mention %q: %s", want, view)
 		}

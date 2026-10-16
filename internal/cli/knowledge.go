@@ -29,7 +29,7 @@ var knowledgeCmd = &cobra.Command{
 
 A knowledge skill authored in one project can be promoted to GLOBAL so it
 injects into every project's roles — e.g. a skill captured from a Claude
-companion session becomes available to the janka and assistant autonomy
+companion session becomes available to every other project's autonomy
 roles. Promotion does not change a skill's maturity; an approved skill
 stays approved.`,
 }

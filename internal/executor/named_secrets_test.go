@@ -10,13 +10,13 @@ func TestNamedSecretEnv_ProjectAllowlist(t *testing.T) {
 	e := &Executor{config: &Config{}}
 	e.config.NamedSecrets = []NamedSecret{
 		{Name: "BROKER_KEY", Value: "sek-broker", AllowedProjects: []string{"ibkr-trader"}},
-		{Name: "SHARED_KEY", Value: "sek-shared"},                                   // empty allowlist → all
-		{Name: "OTHER_KEY", Value: "sek-other", AllowedProjects: []string{"janka"}}, // not for ibkr
+		{Name: "SHARED_KEY", Value: "sek-shared"},                                    // empty allowlist → all
+		{Name: "OTHER_KEY", Value: "sek-other", AllowedProjects: []string{"family"}}, // not for ibkr
 		{Name: "", Value: "x"},     // skipped (no name)
 		{Name: "NOVAL", Value: ""}, // skipped (no value)
 	}
 
-	// ibkr-trader gets its own secret + the shared one, NOT janka's.
+	// ibkr-trader gets its own secret + the shared one, NOT family's.
 	got := e.namedSecretEnv("ibkr-trader")
 	if got["BROKER_KEY"] != "sek-broker" {
 		t.Errorf("allowed project must get BROKER_KEY, got %q", got["BROKER_KEY"])
@@ -35,12 +35,12 @@ func TestNamedSecretEnv_ProjectAllowlist(t *testing.T) {
 	}
 
 	// A different project gets the shared + its own, not ibkr's.
-	got2 := e.namedSecretEnv("janka")
+	got2 := e.namedSecretEnv("family")
 	if got2["OTHER_KEY"] != "sek-other" || got2["SHARED_KEY"] != "sek-shared" {
-		t.Errorf("janka should get OTHER_KEY + SHARED_KEY, got %+v", got2)
+		t.Errorf("family should get OTHER_KEY + SHARED_KEY, got %+v", got2)
 	}
 	if _, ok := got2["BROKER_KEY"]; ok {
-		t.Errorf("janka must NOT get ibkr-trader's BROKER_KEY")
+		t.Errorf("family must NOT get ibkr-trader's BROKER_KEY")
 	}
 
 	// No configured secrets → nil (no injection).

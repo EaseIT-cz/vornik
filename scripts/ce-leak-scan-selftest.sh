@@ -59,5 +59,29 @@ else
   echo "skip - the org cases: the denylist is not in this tree (it is pruned from the public export)"
 fi
 
+# 5. "allow:" entries (operator rule 2026-10-16): the published author address
+#    may stand, any other host under the same private domain still fails, and
+#    the mask does not clear a line that also carries a denied host. Throwaway
+#    tokens only: this self-test ships in the public export.
+adeny="$TMP/allow-deny.txt"
+printf '%s\n' 'corp.example' 'allow:author@corp.example' >"$adeny"
+allow_case() {
+  local name="$1" text="$2" want="$3" d
+  d="$(mktemp -d)"; printf '%s\n' "$text" >"$d/NOTES.md"
+  set +e; CE_DENYLIST="$adeny" "$SCAN" "$d" >/dev/null 2>&1; expect "$name" "$want" $?; set -e
+  rm -rf "$d"
+}
+allow_case "the allowed author address passes" "Contact author@corp.example" 0
+allow_case "the allowed address passes in any case" "Contact AUTHOR@Corp.Example" 0
+allow_case "another host under the domain fails" "url: https://mcp.corp.example/mcp" 1
+allow_case "the mask does not clear a line with a denied host" "author@corp.example runs mcp.corp.example" 1
+
+# 6. The clean line publishes its denominator: how many files were examined,
+#    not only how many leaks were found (tenets §4).
+den="$TMP/den"; mkdir -p "$den/a" "$den/b"; echo x >"$den/a/1.txt"; echo y >"$den/b/2.txt"; echo z >"$den/3.txt"
+set +e; out="$("$SCAN" "$den" 2>&1)"; set -e
+case "$out" in *"3 files examined"*) rc=0 ;; *) rc=1 ;; esac
+expect "clean output names the files examined (got: $out)" 0 "$rc"
+
 echo "ce-leak-scan self-test: $pass passed, $fail failed"
 [ "$fail" -eq 0 ]

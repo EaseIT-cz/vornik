@@ -6,13 +6,17 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"text/tabwriter"
 	"time"
 
 	"github.com/spf13/cobra"
+
+	"vornik.io/vornik/internal/persistence"
 )
 
 // Task responses from the API
@@ -24,11 +28,32 @@ type taskResponse struct {
 	Priority  int    `json:"priority"`
 	CreatedAt string `json:"createdAt"`
 	LastError string `json:"lastError,omitempty"`
+	// ParentTaskID is the delegating parent; empty for a top-level task or
+	// from a daemon older than GitHub #408.
+	ParentTaskID string `json:"parentTaskId,omitempty"`
 }
 
 type listTasksResponse struct {
 	Tasks []taskResponse `json:"tasks"`
 	Total int            `json:"total"`
+	// TotalUnknown: the daemon's count failed and Total is only the page
+	// length (GitHub #408); never read it as the whole set.
+	TotalUnknown bool `json:"totalUnknown,omitempty"`
+}
+
+// taskListOutput is `task list --json`. Tasks and Total keep their old
+// meaning; Shown, Truncated and NextOffset state the cut (GitHub #408):
+// NextOffset, present only when truncated, is the --offset that continues
+// the list.
+type taskListOutput struct {
+	Tasks      []taskResponse `json:"tasks"`
+	Total      int            `json:"total"`
+	Shown      int            `json:"shown"`
+	Truncated  bool           `json:"truncated"`
+	NextOffset *int           `json:"nextOffset,omitempty"`
+	// TotalUnknown: the daemon could not count the matches, so Total is a
+	// lower bound and Truncated says only whether the walk stopped early.
+	TotalUnknown bool `json:"totalUnknown,omitempty"`
 }
 
 type cancelTaskResponse struct {
@@ -54,16 +79,36 @@ var taskCmd = &cobra.Command{
 var taskListCmd = &cobra.Command{
 	Use:   "list",
 	Short: "List tasks",
-	Long:  "List tasks for a project, optionally filtered by status.",
-	RunE:  runTaskList,
+	Long: `List tasks for a project, newest first, optionally filtered by status.
+
+Shows 20 tasks unless --limit or --all says otherwise. When more tasks match
+than are shown, the last line says so: "Showing 20 of 72 tasks; pass --all
+(or --limit N) to see the rest." --active lists every unfinished task
+(PENDING, QUEUED, LEASED, RUNNING, WAITING_FOR_CHILDREN, AWAITING_INPUT,
+AWAITING_EXTERNAL, PAUSED, AWAITING_APPROVAL), including parents waiting on
+their children. The PARENT column names the task a child was delegated from.
+
+Examples:
+  vornikctl task list -p my-project --active --all
+  vornikctl task list -p my-project --status QUEUED,WAITING_FOR_CHILDREN
+  vornikctl task list -p my-project --limit 100 --json`,
+	RunE: runTaskList,
 }
 
 var taskCancelCmd = &cobra.Command{
 	Use:   "cancel <taskId>",
 	Short: "Cancel a task",
-	Long:  "Cancel a task by ID. Only tasks in QUEUED, LEASED, RUNNING, or PENDING status can be cancelled.",
-	Args:  cobra.ExactArgs(1),
-	RunE:  runTaskCancel,
+	Long: `Cancel a task by ID. Tasks in PENDING, QUEUED, LEASED, RUNNING,
+WAITING_FOR_CHILDREN, AWAITING_INPUT, AWAITING_EXTERNAL or PAUSED status can be
+cancelled.
+
+Cancelling a parent also cancels its descendants (children, their children,
+and so on) that are PENDING, QUEUED, LEASED, RUNNING or WAITING_FOR_CHILDREN,
+and stops their running containers. A descendant that is PAUSED or awaiting
+input, an external event or approval is not cancelled by the cascade; list
+them with 'vornikctl task list --active --all' and cancel them by ID.`,
+	Args: cobra.ExactArgs(1),
+	RunE: runTaskCancel,
 }
 
 var taskRetryCmd = &cobra.Command{
@@ -90,7 +135,7 @@ operator-friendly shortcut for the context.prompt payload shape every
 researcher role already reads; for custom shapes use --context-json.
 
 Examples:
-  vornikctl task submit -p janka --prompt "Summarise yesterday's scans"
+  vornikctl task submit -p family --prompt "Summarise yesterday's scans"
   vornikctl task submit -p snake --task-type feature --prompt "Implement X"
   vornikctl task submit -p n8n-agents --workflow adaptive --prompt "..." --priority 10`,
 	RunE: runTaskSubmit,
@@ -119,6 +164,10 @@ var (
 	taskListProject    string
 	taskListStatus     string
 	taskListJSON       bool
+	taskListLimit      int
+	taskListOffset     int
+	taskListAll        bool
+	taskListActive     bool
 	taskCancelProject  string
 	taskRetryProject   string
 	taskRetryResetFlag bool
@@ -143,8 +192,12 @@ var (
 func init() {
 	// task list flags
 	taskListCmd.Flags().StringVarP(&taskListProject, "project", "p", "", "Project ID (required)")
-	taskListCmd.Flags().StringVarP(&taskListStatus, "status", "s", "", "Filter by status (PENDING, QUEUED, RUNNING, COMPLETED, FAILED, CANCELLED)")
+	taskListCmd.Flags().StringVarP(&taskListStatus, "status", "s", "", "Filter by status; a comma-separated list matches any (PENDING, QUEUED, LEASED, RUNNING, WAITING_FOR_CHILDREN, AWAITING_APPROVAL, AWAITING_INPUT, AWAITING_EXTERNAL, PAUSED, COMPLETED, FAILED, CANCELLED, CLOSED)")
 	taskListCmd.Flags().BoolVar(&taskListJSON, "json", false, "Output in JSON format")
+	taskListCmd.Flags().IntVar(&taskListLimit, "limit", taskListDefaultLimit, "Show at most N tasks")
+	taskListCmd.Flags().IntVar(&taskListOffset, "offset", 0, "Skip the first N matching tasks (the nextOffset of a --json run continues it)")
+	taskListCmd.Flags().BoolVar(&taskListAll, "all", false, "Show every matching task (pages through the API)")
+	taskListCmd.Flags().BoolVar(&taskListActive, "active", false, "Every unfinished status, including parents in WAITING_FOR_CHILDREN (not with --status)")
 	_ = taskListCmd.MarkFlagRequired("project")
 
 	// task cancel flags
@@ -305,62 +358,202 @@ func runTaskGet(cmd *cobra.Command, args []string) error {
 	return nil
 }
 
-func runTaskList(cmd *cobra.Command, args []string) error {
-	client := ClientFromEnv()
+// taskListDefaultLimit is the rows `task list` shows without --limit/--all:
+// the API's own default page, so the default view is what it always was —
+// but it now says when it is cut (GitHub #408).
+const taskListDefaultLimit = 20
 
-	// Build URL with query parameters
-	path := fmt.Sprintf("/api/v1/projects/%s/tasks", taskListProject)
-	params := []string{}
-	if taskListStatus != "" {
-		params = append(params, fmt.Sprintf("status=%s", taskListStatus))
+// taskListAPIPage is the page size the CLI asks for while paging: the API's
+// maxPageSize. A var only so a test can force a multi-page walk; like the
+// task-list flag globals, it makes those tests unsafe under t.Parallel.
+var taskListAPIPage = 200
+
+// taskListActiveStatuses is --active: persistence.CancellableTaskStatuses,
+// every status an operator must CONSIDER before a cancel pass. It is not a
+// promise that each row is cancellable from this CLI — `task cancel` refuses
+// AWAITING_APPROVAL (answer it with approve/reject) — nor that cancelling a
+// parent reaches every descendant: the cascade skips PAUSED and AWAITING_*
+// children (cli-design.md "Amended 2026-10-16, GitHub #408").
+func taskListActiveStatuses() string {
+	sts := persistence.CancellableTaskStatuses()
+	names := make([]string, len(sts))
+	for i, st := range sts {
+		names[i] = string(st)
 	}
-	if len(params) > 0 {
-		path += "?" + params[0]
-		for i := 1; i < len(params); i++ {
-			path += "&" + params[i]
+	return strings.Join(names, ",")
+}
+
+// runTaskList lists a project's tasks and states the cut (GitHub #408,
+// cli-design.md "Amended 2026-10-16"): it pages the API until it has
+// --limit rows (or every row with --all), and when fewer rows are shown than
+// match, the footer says "Showing S of N tasks" instead of "Total: N".
+func runTaskList(cmd *cobra.Command, _ []string) error {
+	if err := validateTaskListFlags(cmd); err != nil {
+		return err
+	}
+	status := taskListStatus
+	if taskListActive {
+		status = taskListActiveStatuses()
+	}
+	out, err := collectTaskList(ClientFromEnv(), status)
+	if err != nil {
+		return err
+	}
+	if taskListJSON {
+		return json.NewEncoder(os.Stdout).Encode(out)
+	}
+	printTaskList(out)
+	return nil
+}
+
+func validateTaskListFlags(cmd *cobra.Command) error {
+	switch {
+	case taskListAll && cmd.Flags().Changed("limit"):
+		return fmt.Errorf("--all and --limit are mutually exclusive")
+	case taskListActive && taskListStatus != "":
+		return fmt.Errorf("--active and --status are mutually exclusive")
+	case !taskListAll && taskListLimit < 1:
+		return fmt.Errorf("--limit must be at least 1")
+	case taskListOffset < 0:
+		return fmt.Errorf("--offset must not be negative")
+	}
+	return nil
+}
+
+// collectTaskList walks the API's pages from --offset, de-duplicating by
+// task ID, and decides whether the result is cut.
+func collectTaskList(client *Client, status string) (taskListOutput, error) {
+	base := fmt.Sprintf("/api/v1/projects/%s/tasks", url.PathEscape(taskListProject))
+	var (
+		rows      []taskResponse
+		seen      = map[string]bool{}
+		total     int
+		offset    = taskListOffset
+		unknown   bool // a page's count failed: total is not the whole set
+		haveTotal bool // some page carried a real count
+		atEnd     bool // the walk reached the end of the matching rows
+	)
+	for {
+		want := taskListAPIPage
+		if !taskListAll {
+			want = min(taskListLimit-len(rows), taskListAPIPage)
+		}
+		q := url.Values{}
+		if status != "" {
+			q.Set("status", status)
+		}
+		q.Set("pageSize", strconv.Itoa(want))
+		q.Set("offset", strconv.Itoa(offset))
+		page, err := fetchTaskPage(client, base+"?"+q.Encode())
+		if err != nil {
+			return taskListOutput{}, err
+		}
+		// A real count is kept for the rest of the walk; a later page's
+		// fallback (the page length, when its count failed) never replaces
+		// it. With no real count yet, total is the position reached — a lower
+		// bound, flagged by unknown.
+		if page.TotalUnknown {
+			unknown = true
+			if !haveTotal {
+				total = max(total, offset+len(page.Tasks))
+			}
+		} else {
+			total, haveTotal = page.Total, true
+		}
+		for _, t := range page.Tasks {
+			if !seen[t.TaskID] {
+				seen[t.TaskID] = true
+				rows = append(rows, t)
+			}
+		}
+		offset += len(page.Tasks)
+		if taskPageIsLast(page, offset, want) {
+			atEnd = true
+			break
+		}
+		if !taskListAll && len(rows) >= taskListLimit {
+			break
 		}
 	}
 
-	resp, err := client.Get(path)
-	if err != nil {
-		return fmt.Errorf("failed to list tasks: %w", err)
+	out := taskListOutput{Tasks: rows, Total: total, Shown: len(rows), TotalUnknown: unknown}
+	if out.Tasks == nil {
+		out.Tasks = []taskResponse{}
 	}
-	defer func() { _ = resp.Body.Close() }()
-
-	if resp.StatusCode != http.StatusOK {
-		return ParseAPIError(resp)
+	// The cut is measured against what matches beyond --offset.
+	matching := max(total-taskListOffset, 0)
+	if (unknown && !atEnd) || (!unknown && len(rows) < matching) {
+		out.Truncated = true
+		next := offset
+		out.NextOffset = &next
 	}
+	return out, nil
+}
 
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return fmt.Errorf("failed to read response: %w", err)
+// taskPageIsLast: with a known total the walk ends on reaching it; with an
+// unknown one only an empty or short page proves the end.
+func taskPageIsLast(page listTasksResponse, offset, want int) bool {
+	if len(page.Tasks) == 0 {
+		return true
 	}
-
-	var result listTasksResponse
-	if err := json.Unmarshal(body, &result); err != nil {
-		return fmt.Errorf("failed to parse response: %w", err)
+	if page.TotalUnknown {
+		return len(page.Tasks) < want
 	}
+	return offset >= page.Total
+}
 
-	if taskListJSON {
-		return json.NewEncoder(os.Stdout).Encode(result)
-	}
-
-	// Table output
+// printTaskList renders the table and the footer that states the cut.
+func printTaskList(out taskListOutput) {
 	w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
-	_, _ = fmt.Fprintln(w, "TASK ID\tSTATUS\tTYPE\tPRIORITY\tCREATED AT")
-	for _, task := range result.Tasks {
-		_, _ = fmt.Fprintf(w, "%s\t%s\t%s\t%d\t%s\n",
-			task.TaskID,
-			task.Status,
-			task.TaskType,
-			task.Priority,
-			task.CreatedAt,
-		)
+	_, _ = fmt.Fprintln(w, "TASK ID\tSTATUS\tTYPE\tPRIORITY\tPARENT\tCREATED AT")
+	for _, task := range out.Tasks {
+		parent := task.ParentTaskID
+		if parent == "" {
+			parent = "-"
+		}
+		_, _ = fmt.Fprintf(w, "%s\t%s\t%s\t%d\t%s\t%s\n",
+			task.TaskID, task.Status, task.TaskType, task.Priority, parent, task.CreatedAt)
 	}
 	_ = w.Flush()
 
-	fmt.Printf("\nTotal: %d\n", result.Total)
-	return nil
+	switch {
+	case out.TotalUnknown:
+		more := "the list reached its end"
+		if out.Truncated {
+			more = "more may match; pass --all (or --limit N) to see the rest"
+		}
+		fmt.Printf("\nShowing %d tasks; the daemon could not count the total, so %s.\n", out.Shown, more)
+	case out.Truncated:
+		fmt.Printf("\nShowing %d of %d tasks; pass --all (or --limit N) to see the rest.\n",
+			out.Shown, max(out.Total-taskListOffset, 0))
+	case taskListOffset > 0:
+		// Every match from --offset on is shown; say how many that is, so
+		// "Total: 32" never sits under 22 rows.
+		fmt.Printf("\nTotal: %d (%d shown from offset %d)\n", out.Total, out.Shown, taskListOffset)
+	default:
+		fmt.Printf("\nTotal: %d\n", out.Total)
+	}
+}
+
+// fetchTaskPage GETs one page of the task list.
+func fetchTaskPage(client *Client, path string) (listTasksResponse, error) {
+	var page listTasksResponse
+	resp, err := client.Get(path)
+	if err != nil {
+		return page, fmt.Errorf("failed to list tasks: %w", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusOK {
+		return page, ParseAPIError(resp)
+	}
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return page, fmt.Errorf("failed to read response: %w", err)
+	}
+	if err := json.Unmarshal(body, &page); err != nil {
+		return page, fmt.Errorf("failed to parse response: %w", err)
+	}
+	return page, nil
 }
 
 func runTaskCancel(cmd *cobra.Command, args []string) error {

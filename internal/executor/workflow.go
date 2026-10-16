@@ -376,7 +376,7 @@ func (e *Executor) executeWorkflowAttempt(ctx context.Context, task *persistence
 			// the LLM call. Saves tokens, and (more importantly) closes
 			// off the failure mode where flash-tier models invent a
 			// "config missing" refusal instead of emitting the only
-			// valid pick. Observed live 2026-05-18 with janka project
+			// valid pick. Observed live 2026-05-18 with family project
 			// (candidates: [research], lead model: zai.glm-4.7-flash).
 			// Per-task cost governor step-boundary gate (LLD 2026-07-24 §3.3).
 			// Fires once per agent-step dispatch, before the step runs, at the
@@ -1797,7 +1797,7 @@ func perStepVisitCapExceeded(step registry.WorkflowStep, visits int) bool {
 //     routing result directly and skip the LLM call. Saves tokens and closes
 //     the failure mode where flash-tier models invent a "config missing"
 //     refusal instead of emitting the only valid pick (observed live
-//     2026-05-18 with janka project, lead zai.glm-4.7-flash).
+//     2026-05-18 with family project, lead zai.glm-4.7-flash).
 //   - otherwise: run the agent through the model-fallback retry layer.
 //
 // containerID is empty for the two synthesised paths (no container runs).

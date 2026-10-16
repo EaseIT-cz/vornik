@@ -63,7 +63,7 @@ ITEM`
 
 // isNoActionSentinel returns true when the planner's response is
 // the NO_ACTION no-op signal. The hard rule baked into autonomy
-// prompts (see janka's PROJECT_CONTEXT §5: "respond NO_ACTION
+// prompts (see family's PROJECT_CONTEXT §5: "respond NO_ACTION
 // instead of inventing slugs") tells the LLM to emit this literal
 // when no work is appropriate. Centralising the check fixes the
 // 2026-05-12 bug where a JSON-wrapped {"prompt": "NO_ACTION"}
@@ -680,7 +680,7 @@ func (m *Manager) projectLoop(ctx context.Context, project *registry.Project) {
 	// An operator who restarted the daemon a few times in an hour
 	// could rack up 5+ evals on a project configured for a 5h cadence
 	// — burning rate-limit budget on duplicate work and producing
-	// the symptom "janka scheduled 4 tasks in the last hour despite
+	// the symptom "family scheduled 4 tasks in the last hour despite
 	// 5h pollInterval" (operator-reported 2026-05-05).
 	//
 	// The data lives in autonomy_evaluations (every eval, terminal
@@ -1160,7 +1160,7 @@ IMPORTANT RULES:
 				// emitted {"prompt": "NO_ACTION"} (obeying the autonomy
 				// prompt's hard rule but wrapping in JSON) created a
 				// real task that wasted a worker iteration on a no-op
-				// prompt — observed 2026-05-12 on janka.
+				// prompt — observed 2026-05-12 on family.
 				if isNoActionSentinel(extracted.Prompt) {
 					if m.metrics != nil {
 						m.metrics.NoActionTotal.WithLabelValues(project.ID).Inc()

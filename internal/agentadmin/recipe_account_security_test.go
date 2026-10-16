@@ -1,6 +1,7 @@
 package agentadmin
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 )
@@ -50,13 +51,104 @@ func TestInstallRecipe_OAuthSlotCollisionRefused(t *testing.T) {
 	}
 }
 
-func TestInstallRecipe_RefusesDifferentDefaultCredentialAtSharedHost(t *testing.T) {
+// GitHub #402 (2026-10-16, design §22.2.17), inverting GitHub #316's
+// refusal: a recipe entry joining a host that a hand-added connection
+// reaches under the same label is the same account, said on the device
+// with how to decline, not refused. The other direction is kept: a
+// hand-added connection with a new credential at a host a recipe entry
+// reaches is refused (the agent chose that name).
+func TestInstallRecipe_JoinsHandAddedHostButHandAddedStillRefused(t *testing.T) {
 	tr := shippedTree(t)
 	tr.approveServer("personal", "calendar-manual", "https://cal.example/mcp")
 
+	c := tr.render(VerbInstallRecipe, agendaFor("https://cal.example/mcp/v2", ""))
+	tr.mustClass(c, Widening)
+	want := " calendar reaches cal.example, which calendar-manual already reaches as your default account (not verified): it will act as that same account, with its own credential. If that is another account, decline this and have your assistant install it with another account label."
+	if !strings.Contains(c.Sentence, want) {
+		t.Fatalf("joining a hand-added connection's host is not said:\n%s", c.Sentence)
+	}
+	if got := c.accounts["calendar"]; got != "your default account (not verified)" {
+		t.Fatalf("the plain view does not name the joining entry's account: %q", got)
+	}
+	tr.apply(c)
+
+	manual := tr.render(VerbAddMCPServer, AddMCPServerInput{Project: "personal", Name: "tasks", URL: "https://cal.example/tasks",
+		Auth: MCPAuthInput{Mode: "static", Credential: "TASKS_TOKEN"}})
+	if manual.Class != Refused || !strings.Contains(manual.Reason, "give this one another account label") {
+		t.Fatalf("a hand-added new credential next to a recipe entry: %s %q", manual.Class, manual.Reason)
+	}
+}
+
+// GitHub #402 review 4d33 finding 1: the disclosure is said exactly where
+// the removed refusal fired, so an entry with no credential (no account,
+// the refusal's early return) is never said.
+func TestInstallRecipe_NoCredentialEntryIsNotSaid(t *testing.T) {
+	tr := shippedTree(t)
+	// shippedTree builds a fresh catalogue per test, so this edit stays here.
+	tr.r.cat.Get("agenda").Needs[0].Credential = nil
+	tr.approveServer("personal", "calendar-manual", "https://cal.example/mcp")
+
+	c := tr.render(VerbInstallRecipe, agendaFor("https://cal.example/mcp/v2", ""))
+	tr.mustClass(c, Widening)
+	if strings.Contains(c.Sentence, "same account") || strings.Contains(c.Sentence, "one account") {
+		t.Fatalf("a no-credential entry was said as an account:\n%s", c.Sentence)
+	}
+	if _, ok := c.accounts["calendar"]; ok {
+		t.Fatalf("the plain view names an account for a no-credential entry: %v", c.accounts)
+	}
+}
+
+// GitHub #402 code review 7142 finding 1: the planning copy planInstall
+// keeps is what lets C2 (and the name lookup) see the install's earlier new
+// entries; #402 dropped it with the two-connections call, so two new OAuth
+// servers of one install sharing a sign-in slot were accepted.
+func TestInstallRecipe_NewOAuthEntriesShareNoSlot(t *testing.T) {
+	tr := shippedTree(t)
+	rec := tr.r.cat.Get("agenda")
+	rec.Needs[0].Name, rec.Needs[0].Credential = "cal-work", &RecipeCredential{Name: OAuthCredentialName("cal-work"), Kind: CredentialOAuth}
+	rec.Needs = append(rec.Needs, RecipeNeed{
+		Name: "cal_work", URL: "https://other.example/mcp", ReadTools: []string{"calendar_list_events"},
+		Credential: &RecipeCredential{Name: OAuthCredentialName("cal_work"), Kind: CredentialOAuth},
+	})
 	c := tr.render(VerbInstallRecipe, agendaFor("https://cal.example/mcp", ""))
-	if c.Class != Refused || !strings.Contains(c.Reason, "account") || !strings.Contains(c.Reason, "install_recipe") {
-		t.Fatalf("default recipe entry at a conflicting host: %s %q", c.Class, c.Reason)
+	if c.Class != Refused || !strings.Contains(c.Reason, "would share the sign-in OAUTH_CAL_WORK") {
+		t.Fatalf("two new OAuth servers of one install share a sign-in slot: %s %q", c.Class, c.Reason)
+	}
+}
+
+// GitHub #402 code review 7142 finding 3: when two needs of one install at
+// a host share a credential, "each with its own credential" would be
+// false; the sentence counts the credentials instead.
+func TestInstallRecipe_OneInstallSharedKeyIsCounted(t *testing.T) {
+	tr := shippedTree(t)
+	rec := tr.r.cat.Get("morning-brief")
+	rec.Needs = append(rec.Needs, RecipeNeed{
+		Name: "calendar2", URL: "https://gws.example/calendar2/mcp", ReadTools: []string{"calendar_list_events"},
+		Credential: &RecipeCredential{Name: "CALENDAR_TOKEN", Kind: CredentialSecret},
+	})
+	in := shippedVars("morning-brief")
+	in.Project = "personal"
+	in.Variables["mail_server_url"] = json.RawMessage(`"https://gws.example/mail/mcp"`)
+	in.Variables["calendar_server_url"] = json.RawMessage(`"https://gws.example/calendar/mcp"`)
+	c := tr.render(VerbInstallRecipe, in)
+	tr.mustClass(c, Widening)
+	if want := " mail, calendar and calendar2 reach gws.example as one account, your default account (not verified), with 2 credentials among them."; !strings.Contains(c.Sentence, want) {
+		t.Fatalf("a shared key within one install:\n%s\nwant %q", c.Sentence, want)
+	}
+}
+
+// GitHub #402 review 5ccb finding 4: the joined connection is named by its
+// own account words, so a provider-identified account is called by its
+// identity, never also "not verified".
+func TestInstallRecipe_JoinedConnectionKeepsItsIdentity(t *testing.T) {
+	tr := shippedTree(t)
+	tr.approveServer("personal", "calendar-manual", "https://cal.example/mcp")
+	tr.approvals["hermes--personal"]["calendar-manual"] = withAccount(tr.approvals["hermes--personal"]["calendar-manual"], "alice@corp.example", IdentityFromProvider)
+
+	c := tr.render(VerbInstallRecipe, agendaFor("https://cal.example/mcp/v2", ""))
+	tr.mustClass(c, Widening)
+	if !strings.Contains(c.Sentence, "which calendar-manual already reaches as your default account (alice@corp.example): it will act as that same account") {
+		t.Fatalf("the joined connection is not named by its identity:\n%s", c.Sentence)
 	}
 }
 
@@ -85,19 +177,32 @@ func TestInstallRecipe_SharedCredentialKeepsItsDefaultAccount(t *testing.T) {
 	}
 }
 
-func TestInstallRecipe_NewEntriesCheckSharedHostAgainstEarlierNeeds(t *testing.T) {
-	tr := shippedTree(t)
-	// shippedTree creates a fresh renderer and recipe catalogue per test, so
-	// this malformed needs pair cannot leak into another test's recipe source.
-	rec := tr.r.cat.Get("agenda")
-	rec.Needs = append(rec.Needs, RecipeNeed{
-		Name: "calendar-alt", URL: "https://cal.example/mcp", ReadTools: []string{"calendar_list_events"},
-		Credential: &RecipeCredential{Name: "CALENDAR_ALT_TOKEN", Kind: CredentialSecret},
-	})
-
-	c := tr.render(VerbInstallRecipe, agendaFor("https://cal.example/mcp", ""))
-	if c.Class != Refused || !strings.Contains(c.Reason, "account") || !strings.Contains(c.Reason, "install_recipe") {
-		t.Fatalf("recipe's second same-host credential: %s %q", c.Class, c.Reason)
+// GitHub #402 (2026-10-16, design §22.2.17), inverting GitHub #316's
+// intra-install refusal: morning-brief with mail and calendar on one host
+// was refused against its own first need. The needs of one install are one
+// account by construction (one label, 22.2.8); the sentence says so, with
+// declining as the recourse, under a non-default label too.
+func TestInstallRecipe_OneInstallIsOneAccount(t *testing.T) {
+	for _, label := range []string{"", "work"} {
+		tr := shippedTree(t)
+		in := shippedVars("morning-brief")
+		in.Project = "personal"
+		in.Account = label
+		in.Variables["mail_server_url"] = json.RawMessage(`"https://gws.example/mail/mcp"`)
+		in.Variables["calendar_server_url"] = json.RawMessage(`"https://gws.example/calendar/mcp"`)
+		c := tr.render(VerbInstallRecipe, in)
+		tr.mustClass(c, Widening)
+		mail, cal, phrase := "mail", "calendar", "your default account (not verified)"
+		if label != "" {
+			mail, cal, phrase = "mail-work", "calendar-work", "your work account (not verified)"
+		}
+		want := " " + mail + " and " + cal + " reach gws.example as one account, " + phrase + ", each with its own credential. If they are not one account, decline this."
+		if !strings.Contains(c.Sentence, want) {
+			t.Fatalf("label %q: the sentence does not say the needs are one account:\n%s\nwant %q", label, c.Sentence, want)
+		}
+		if c.accounts[cal] != phrase || c.accounts[mail] != phrase {
+			t.Fatalf("label %q: the plain view does not name the account: %v", label, c.accounts)
+		}
 	}
 }
 

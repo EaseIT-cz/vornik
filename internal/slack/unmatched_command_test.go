@@ -19,7 +19,7 @@ func TestUnmatchedCommands_RecordsLiteralAndCount(t *testing.T) {
 
 	r.record("/t800", t0)
 	r.record("/t800", t0.Add(3*time.Minute))
-	r.record("/holly", t0.Add(5*time.Minute))
+	r.record("/helper", t0.Add(5*time.Minute))
 
 	got := r.snapshot()
 	if len(got) != 2 {
@@ -33,8 +33,8 @@ func TestUnmatchedCommands_RecordsLiteralAndCount(t *testing.T) {
 	if !got[0].FirstSeen.Equal(t0) || !got[0].LastSeen.Equal(t0.Add(3*time.Minute)) {
 		t.Fatalf("window wrong: first=%v last=%v", got[0].FirstSeen, got[0].LastSeen)
 	}
-	if got[1].Command != "/holly" || got[1].Count != 1 {
-		t.Fatalf("want /holly x1 second, got %+v", got[1])
+	if got[1].Command != "/helper" || got[1].Count != 1 {
+		t.Fatalf("want /helper x1 second, got %+v", got[1])
 	}
 }
 

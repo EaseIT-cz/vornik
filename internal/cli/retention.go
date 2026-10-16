@@ -100,8 +100,8 @@ NEVER pruned.
 
 Examples:
   vornikctl retention                          # preview all projects
-  vornikctl retention --project janka          # preview one project
-  vornikctl retention --project janka --apply  # actually prune janka
+  vornikctl retention --project family          # preview one project
+  vornikctl retention --project family --apply  # actually prune family
 `,
 	RunE: runRetention,
 }

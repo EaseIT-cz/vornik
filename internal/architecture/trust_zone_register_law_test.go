@@ -37,6 +37,8 @@ import (
 	"regexp"
 	"strings"
 	"testing"
+
+	"vornik.io/vornik/internal/testutil/repowalk"
 )
 
 const (
@@ -202,8 +204,7 @@ func testDeclarations(t *testing.T, root string) (map[string][]string, int) {
 			return err
 		}
 		if d.IsDir() {
-			name := d.Name()
-			if p != root && (strings.HasPrefix(name, ".") || name == "vendor" || name == "node_modules") {
+			if repowalk.SkipDir(root, p, d.Name()) {
 				return filepath.SkipDir
 			}
 			return nil

@@ -604,7 +604,7 @@ telegram:
   #                                 /project into any project (no project-
   #                                 scoped tools available)
   #   "<id>": ["*"]                 wildcard over every project
-  #   "<id>": ["snake", "janka"]    scoped — user may only /project into
+  #   "<id>": ["snake", "family"]    scoped — user may only /project into
   #                                 the listed projects, and project-scoped
   #                                 tools (memory_search, read_artifact,
   #                                 mcp__*) refuse cross-project calls

@@ -60,18 +60,18 @@ func TestRunProjectList_JSONPassthrough(t *testing.T) {
 
 func TestRunProjectShow_PrettyPrints(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/api/v1/projects/janka/config" {
+		if r.URL.Path != "/api/v1/projects/family/config" {
 			t.Errorf("unexpected path %s", r.URL.Path)
 		}
-		_, _ = w.Write([]byte(`{"projectId":"janka","autonomy":{"enabled":true}}`))
+		_, _ = w.Write([]byte(`{"projectId":"family","autonomy":{"enabled":true}}`))
 	}))
 	defer srv.Close()
 	t.Setenv("VORNIK_API_URL", srv.URL)
-	out, err := captureStdoutFunc(t, func() error { return runProjectShow(projectShowCmd, []string{"janka"}) })
+	out, err := captureStdoutFunc(t, func() error { return runProjectShow(projectShowCmd, []string{"family"}) })
 	if err != nil {
 		t.Fatalf("runProjectShow: %v", err)
 	}
-	if !strings.Contains(out, "janka") || !strings.Contains(out, "\"enabled\": true") {
+	if !strings.Contains(out, "family") || !strings.Contains(out, "\"enabled\": true") {
 		t.Errorf("show output: %s", out)
 	}
 }

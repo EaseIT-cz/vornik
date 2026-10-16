@@ -21,7 +21,7 @@ import (
 func seedAppliedProposal(t *testing.T, repo persistence.ProposalRepository, applyContent, preApplySnapshot string, appliedAt time.Time) *persistence.ControlPlaneProposal {
 	t.Helper()
 	p := &persistence.ControlPlaneProposal{
-		ID: persistence.GenerateID("cpp"), ProjectID: "janka",
+		ID: persistence.GenerateID("cpp"), ProjectID: "family",
 		Kind: persistence.ProposalKindConfig, BlastRadius: persistence.ProposalScopeProject,
 		Title: "guard test", ApplyTarget: "config.yaml", ApplyContent: applyContent,
 		Status: persistence.ProposalStatusApplied, ProposedBy: "tester", Approver: "vadim",
@@ -191,7 +191,7 @@ func TestRollbackGuard_EqualTimestampTieBreak(t *testing.T) {
 	const content = "same-content\n"
 
 	pLow := &persistence.ControlPlaneProposal{
-		ID: "cpp_aaa", ProjectID: "janka", Kind: persistence.ProposalKindConfig,
+		ID: "cpp_aaa", ProjectID: "family", Kind: persistence.ProposalKindConfig,
 		BlastRadius: persistence.ProposalScopeProject, Title: "tie low",
 		ApplyTarget: "config.yaml", ApplyContent: content,
 		Status: persistence.ProposalStatusApplied, ProposedBy: "tester", Approver: "vadim",
@@ -201,7 +201,7 @@ func TestRollbackGuard_EqualTimestampTieBreak(t *testing.T) {
 		t.Fatalf("create low: %v", err)
 	}
 	pHigh := &persistence.ControlPlaneProposal{
-		ID: "cpp_bbb", ProjectID: "janka", Kind: persistence.ProposalKindConfig,
+		ID: "cpp_bbb", ProjectID: "family", Kind: persistence.ProposalKindConfig,
 		BlastRadius: persistence.ProposalScopeProject, Title: "tie high",
 		ApplyTarget: "config.yaml", ApplyContent: content,
 		Status: persistence.ProposalStatusApplied, ProposedBy: "tester", Approver: "vadim",
@@ -291,7 +291,7 @@ func TestRollbackGuard_CorruptApplyOpsFailsClosed(t *testing.T) {
 	at := time.Unix(1700000000, 0)
 
 	p := &persistence.ControlPlaneProposal{
-		ID: persistence.GenerateID("cpp"), ProjectID: "janka", Kind: persistence.ProposalKindConfig,
+		ID: persistence.GenerateID("cpp"), ProjectID: "family", Kind: persistence.ProposalKindConfig,
 		BlastRadius: persistence.ProposalScopeProject, Title: "corrupt ops",
 		ApplyTarget: "config.yaml", ApplyContent: "content\n", ApplyOps: "{not valid json",
 		Status: persistence.ProposalStatusApplied, ProposedBy: "tester", Approver: "vadim",

@@ -10,6 +10,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"vornik.io/vornik/internal/testutil/repowalk"
 )
 
 // GitHub #294 (2026-10-08), process-spawn-law design "Change 2026-10-08 — no
@@ -57,12 +59,9 @@ func TestSpawnLaw_ContainerLogsReadOnlyOnStepFailure(t *testing.T) {
 			// Hidden directories are never this module's source: .git, .claude
 			// worktrees, and the CE export trees (.vornik-export,
 			// .vornik-public-clone) that hold OLDER copies of the code and
-			// failed this law on the main checkout (2026-10-08 merge).
-			if path != root && strings.HasPrefix(d.Name(), ".") {
-				return filepath.SkipDir
-			}
-			switch d.Name() {
-			case "vendor", "node_modules", "testdata", "build":
+			// failed this law on the main checkout (2026-10-08 merge). The one
+			// rule (testing LLD §12) skips them and never the root.
+			if repowalk.SkipDir(root, path, d.Name(), "testdata", "build") {
 				return filepath.SkipDir
 			}
 			return nil

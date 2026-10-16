@@ -182,7 +182,7 @@ func (b *Bot) sendForumMessage(ctx context.Context, threadID int64, text string)
 //
 // 429 handling: a fan-out of N artifacts to one thread routinely
 // trips Telegram's per-chat rate limit (observed 2026-05-18 on
-// janka's 4-artifact CV delivery: all four sends got 429 +
+// family's 4-artifact CV delivery: all four sends got 429 +
 // retry_after=19s and were silently dropped). The method now
 // parses parameters.retry_after from a 429 body, sleeps that long,
 // and retries up to telegramSendRetries times before giving up.
@@ -397,7 +397,7 @@ func (b *Bot) sendArtifactsToForum(ctx context.Context, taskID string, threadID 
 	// 429 retry_after (up to 60s) doesn't trip the parent's 30s
 	// deadline mid-fan-out — pre-fix the first 429 wiped every
 	// subsequent document on the same task. Observed live
-	// 2026-05-18 11:48 on janka CV delivery (retry_after=35s vs
+	// 2026-05-18 11:48 on family CV delivery (retry_after=35s vs
 	// 30s parent ctx → 16 of 17 artifacts dropped).
 	uploadCtx, uploadCancel := artifactFanoutCtx()
 	defer uploadCancel()

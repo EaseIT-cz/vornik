@@ -31,7 +31,7 @@ func newTestChannelForInbound(t *testing.T, from string) *Channel {
 func TestBuildChannelMessageStripsQuotedTrailer(t *testing.T) {
 	ch := newTestChannelForInbound(t, "bot@vornik.io")
 	parsed := ParsedMessage{
-		From:      "janka@example.com",
+		From:      "family@example.com",
 		MessageID: "<m1@example.com>",
 		Subject:   "Re: add these books to rag",
 		Date:      time.Now(),
@@ -55,7 +55,7 @@ func TestBuildChannelMessageStripsQuotedTrailer(t *testing.T) {
 func TestBuildChannelMessageCarriesSubject(t *testing.T) {
 	ch := newTestChannelForInbound(t, "bot@vornik.io")
 	parsed := ParsedMessage{
-		From:      "janka@example.com",
+		From:      "family@example.com",
 		MessageID: "<m2@example.com>",
 		Subject:   "add these books to rag",
 		Body:      "",
@@ -73,14 +73,14 @@ func TestBuildChannelMessageCarriesSubject(t *testing.T) {
 func TestBuildChannelMessageCarriesSender(t *testing.T) {
 	ch := newTestChannelForInbound(t, "bot@vornik.io")
 	parsed := ParsedMessage{
-		From:      "janka@example.com",
+		From:      "family@example.com",
 		MessageID: "<m3@example.com>",
 		Body:      "I disagree with Vadim on the second point.",
 	}
 
 	msg := ch.buildChannelMessage(parsed, "uid-3", nil, nil)
 
-	if got := msg.ChannelSpecific[conversation.ChannelSpecificSender]; got != "janka@example.com" {
+	if got := msg.ChannelSpecific[conversation.ChannelSpecificSender]; got != "family@example.com" {
 		t.Errorf("ChannelSpecific[sender] = %q; want the From address", got)
 	}
 }
@@ -112,7 +112,7 @@ func TestPollerStripsQuotedTrailerEndToEnd(t *testing.T) {
 		"> You tried uploading an epub, which I don't know how to process.\r\n" +
 		"> Here is what I can do instead:\r\n> 1. Summarise it\r\n> 4. Add it to RAG\r\n"
 	imap := newFakeIMAP([]RawMessage{
-		{UID: "1", Body: sampleEmail("thread@b", "janka@external.test", "Re: add these books to rag", body)},
+		{UID: "1", Body: sampleEmail("thread@b", "family@external.test", "Re: add these books to rag", body)},
 	})
 	cfg.IMAPClient = imap
 	ch, err := New(cfg)

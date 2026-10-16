@@ -8,7 +8,7 @@ import (
 )
 
 // BACKLOG 2026-07-30: the slash command was compared literally to "/vornik", so a
-// differently-branded bot on another instance (Holly, in the same workspace) had to
+// differently-branded bot on another instance (Helper, in the same workspace) had to
 // answer /vornik regardless of its own name. The name belongs to the deployment.
 func TestResolveSlackConfig_SlashCommandNameIsPerProject(t *testing.T) {
 	t.Setenv("SLACK_SIGNING", "secret")
@@ -19,9 +19,9 @@ func TestResolveSlackConfig_SlashCommandNameIsPerProject(t *testing.T) {
 		want       string
 	}{
 		{"unset falls back to the product default", "", "/vornik"},
-		{"a custom name is honoured", "/holly", "/holly"},
-		{"a bare name gains the leading slash", "holly", "/holly"},
-		{"surrounding whitespace is trimmed", "  /holly  ", "/holly"},
+		{"a custom name is honoured", "/helper", "/helper"},
+		{"a bare name gains the leading slash", "helper", "/helper"},
+		{"surrounding whitespace is trimmed", "  /helper  ", "/helper"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			cfg, err := resolveSlackConfig(registry.ProjectSlack{

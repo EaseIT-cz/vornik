@@ -33,6 +33,44 @@ func TestDataSubjectCollectErase_Contract(t *testing.T) {
 		seedChatTurnForSuite(db), seedChunkForSuite(db))
 }
 
+// audit 2026-10-16 (GitHub #344, slice 5d-E): transcript exports omitted tool
+// arguments, signals, metadata and the author. Same suite as Postgres.
+func TestDataSubjectTranscriptExport_Contract(t *testing.T) {
+	db := newTestDB(t)
+	repotest.RunDataSubjectTranscriptExportSuite(t, sqlite.NewDataSubjectRepository(db.DB), sqliteTranscriptSeeder{db})
+}
+
+type sqliteTranscriptSeeder struct{ db *sqlite.DB }
+
+func (s sqliteTranscriptSeeder) SeedChatTurnFull(ctx context.Context, id, projectID, userID, message, toolCallsJSON, signalsJSON string) error {
+	_, err := s.db.ExecContext(ctx, `INSERT INTO chat_audit_log
+		(id, ts, project_id, user_id, user_message, tool_calls_json, hallucination_signals_json)
+		VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		id, time.Now().UTC().Format("2006-01-02T15:04:05.000000000Z"), projectID, userID, message, toolCallsJSON, signalsJSON)
+	return err
+}
+
+func (s sqliteTranscriptSeeder) SeedTaskMessage(ctx context.Context, id, projectID, authorID, content, metadataJSON string) error {
+	now := time.Now().UTC().Format("2006-01-02T15:04:05.000000000Z")
+	taskID := "task-" + id
+	if _, err := s.db.ExecContext(ctx, `INSERT INTO tasks (id, project_id, status, created_at, updated_at)
+		VALUES (?, ?, 'COMPLETED', ?, ?)`, taskID, projectID, now, now); err != nil {
+		return err
+	}
+	_, err := s.db.ExecContext(ctx, `INSERT INTO task_messages
+		(id, task_id, author_kind, author_id, message_kind, content, metadata, created_at)
+		VALUES (?, ?, 'operator', ?, 'message', ?, ?, ?)`,
+		id, taskID, nullIfEmptyText(authorID), content, nullIfEmptyText(metadataJSON), now)
+	return err
+}
+
+func nullIfEmptyText(s string) any {
+	if s == "" {
+		return nil
+	}
+	return s
+}
+
 func TestMemoryPolicyEvaluation_Contract(t *testing.T) {
 	repotest.RunMemoryPolicyEvaluationSuite(t, sqlite.NewMemoryPolicyEvaluationRepository(newTestDB(t).DB))
 }

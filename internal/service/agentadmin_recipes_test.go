@@ -145,6 +145,87 @@ func TestAgentAdmin_InstallRecipeEndToEnd(t *testing.T) {
 	}
 }
 
+// GitHub #402 (2026-10-16, design §22.2.17): morning-brief was refused when
+// its mail and calendar servers share one host, the ordinary case (Google's
+// servers, vornik-gws-mcp at /mail/mcp and /calendar/mcp): the
+// two-connections rule judged the install's calendar against its own mail.
+// The needs of one install are one account; the sentence says so, and the
+// install runs once both keys are entered and the tools approved.
+func TestAgentAdmin_InstallRecipeOneHostMailAndCalendar(t *testing.T) {
+	f := newAgentAdminFixture(t)
+	ctx := context.Background()
+	gws := newFakeMCP(t, "Bearer "+credCanary, "gmail_get", "gmail_search", "calendar_list_events")
+	host := strings.TrimPrefix(gws.srv.URL, "http://")
+	f.do(agentadmin.VerbCreateProject, agentadmin.CreateProjectInput{Slug: "personal", Purpose: "Personal automations"})
+
+	res := f.do(agentadmin.VerbInstallRecipe, installInput("morning-brief", map[string]string{
+		"mail_server_url": gws.srv.URL + "/mail/mcp", "calendar_server_url": gws.srv.URL + "/calendar/mcp"}))
+	if res.Effect != agentadmin.EffectAwaiting {
+		t.Fatalf("morning-brief on one host: %+v", res)
+	}
+	if want := " mail and calendar reach " + host + " as one account, your default account (not verified), each with its own credential. If they are not one account, decline this."; !strings.Contains(res.Sentence, want) {
+		t.Fatalf("the sentence does not say the two needs are one account:\n%s\nwant %q", res.Sentence, want)
+	}
+	f.approve(res)
+	const wid = "hermes--personal--morning-brief"
+	slots := f.pendingSlots()
+	if len(slots) != 2 || slots["MAIL_TOKEN"] == "" || slots["CALENDAR_TOKEN"] == "" {
+		t.Fatalf("credential requests after the approval: %v", slots)
+	}
+	// One key, then that server's tools, then the other: a tools approval
+	// filed while another waits in the same project is refused and not
+	// retried (a separate, host-independent gap, filed with #402's fix).
+	for _, server := range []struct{ cred, name string }{{"MAIL_TOKEN", "mail"}, {"CALENDAR_TOKEN", "calendar"}} {
+		req, _ := f.c.repos.ApproverDevices.GetRequest(ctx, slots[server.cred])
+		if err := f.svc.enterCredential(ctx, f.device, *req, req.RenderedSHA256, []byte(credCanary)); err != nil {
+			t.Fatal(err)
+		}
+		f.svc.bg.Wait()
+		tools := pendingToolsRequest(t, f)
+		if !strings.Contains(tools.Sentence, "The server "+server.name+" at ") {
+			t.Fatalf("the tools approval is not %s's: %s", server.name, tools.Sentence)
+		}
+		if err := f.decide(tools.ID, true); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := f.c.verifyAgentReach(ctx, "hermes--personal", wid); err != nil {
+		t.Fatalf("the one-host morning-brief is not runnable: %v", err)
+	}
+}
+
+// GitHub #402 (2026-10-16, design §22.2.17): inbox-digest, then agenda, in
+// one project on one host. The recipes name their credentials by need, so
+// the second is the same account as the first: said on the device, not
+// refused. A hand-added connection with a new credential at that host is
+// still refused (the agent chose that name; §22.2.1).
+func TestAgentAdmin_InstallRecipesShareAHostAsOneAccount(t *testing.T) {
+	f := newAgentAdminFixture(t)
+	gws := newFakeMCP(t, "Bearer "+credCanary, "gmail_get", "gmail_search", "calendar_list_events")
+	host := strings.TrimPrefix(gws.srv.URL, "http://")
+	f.do(agentadmin.VerbCreateProject, agentadmin.CreateProjectInput{Slug: "personal", Purpose: "Personal automations"})
+	f.approve(f.do(agentadmin.VerbInstallRecipe, installInput("inbox-digest", map[string]string{"mail_server_url": gws.srv.URL + "/mail/mcp"})))
+
+	res := f.do(agentadmin.VerbInstallRecipe, installInput("agenda", map[string]string{"calendar_server_url": gws.srv.URL + "/calendar/mcp"}))
+	if res.Effect != agentadmin.EffectAwaiting {
+		t.Fatalf("agenda next to inbox-digest on one host: %+v", res)
+	}
+	want := " calendar reaches " + host + ", which mail already reaches as your default account (not verified): it will act as that same account, with its own credential. If that is another account, decline this and have your assistant install it with another account label."
+	if !strings.Contains(res.Sentence, want) {
+		t.Fatalf("the sentence does not say it is the same account:\n%s\nwant %q", res.Sentence, want)
+	}
+	f.approve(res)
+	if slots := f.pendingSlots(); slots["CALENDAR_TOKEN"] == "" {
+		t.Fatalf("credential requests after the approval: %v", slots)
+	}
+
+	manual := f.do(agentadmin.VerbAddMCPServer, agentadmin.AddMCPServerInput{Project: "personal", Name: "tasks",
+		URL: gws.srv.URL + "/tasks/mcp", Auth: agentadmin.MCPAuthInput{Mode: "static", Credential: "TASKS_TOKEN"}})
+	if manual.Effect != agentadmin.EffectRefused || !strings.Contains(manual.Reason, "give this one another account label") {
+		t.Fatalf("a hand-added second credential at the host was not refused: %+v", manual)
+	}
+}
+
 // §19.9 F1, §19.11 F5: one request per credential that is not set; a
 // credential already entered is not asked for again.
 func TestAgentAdmin_InstallRecipeAsksOnlyForMissingCredentials(t *testing.T) {

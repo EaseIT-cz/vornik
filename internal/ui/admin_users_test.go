@@ -111,8 +111,8 @@ func twoUserFixture() []persistence.UserAdminView {
 	return []persistence.UserAdminView{
 		{UserID: "user_admin", DisplayName: "Vadim", Role: "admin",
 			Identities: []persistence.UserIdentityRef{{Channel: "github", ExternalID: "5553528", Display: "@grinco"}}},
-		{UserID: "user_await", DisplayName: "@janka-lang", Role: "",
-			Identities: []persistence.UserIdentityRef{{Channel: "github", ExternalID: "295941391", Display: "@janka-lang"}}},
+		{UserID: "user_await", DisplayName: "@family-lang", Role: "",
+			Identities: []persistence.UserIdentityRef{{Channel: "github", ExternalID: "295941391", Display: "@family-lang"}}},
 	}
 }
 
@@ -137,14 +137,14 @@ func TestAdminUsers_RendersAwaitingFirstWithBadge(t *testing.T) {
 		t.Fatalf("status: %d", rec.Code)
 	}
 	body := rec.Body.String()
-	for _, want := range []string{"@janka-lang", "Vadim", "awaiting"} {
+	for _, want := range []string{"@family-lang", "Vadim", "awaiting"} {
 		if !strings.Contains(strings.ToLower(body), strings.ToLower(want)) {
 			t.Errorf("body missing %q", want)
 		}
 	}
 	// Awaiting user must render before the approved admin (sorted first).
-	if i, j := strings.Index(body, "@janka-lang"), strings.Index(body, "Vadim"); i < 0 || j < 0 || i > j {
-		t.Errorf("awaiting user not rendered first (janka=%d vadim=%d)", i, j)
+	if i, j := strings.Index(body, "@family-lang"), strings.Index(body, "Vadim"); i < 0 || j < 0 || i > j {
+		t.Errorf("awaiting user not rendered first (family=%d vadim=%d)", i, j)
 	}
 }
 
@@ -156,13 +156,13 @@ func TestAdminUsers_RendersAwaitingFirstWithBadge(t *testing.T) {
 func TestAdminUsers_RendersProjectCheckboxes(t *testing.T) {
 	s := usersServer(&stubUsersIdentityRepo{}, &stubAdminAuditRepo{})
 	views := []persistence.UserAdminView{
-		{UserID: "user_member", DisplayName: "Bob", Role: "user", Projects: []string{"janka"}},
+		{UserID: "user_member", DisplayName: "Bob", Role: "user", Projects: []string{"family"}},
 	}
 	data := AdminUsersData{
 		adminCommonData: adminCommonData{Title: "Users", CurrentPage: "admin", IsAdmin: true},
 		Available:       true,
-		Projects:        []string{"janka", "snake"},
-		Users:           buildAdminUserRows(views, []string{"janka", "snake"}),
+		Projects:        []string{"family", "snake"},
+		Users:           buildAdminUserRows(views, []string{"family", "snake"}),
 	}
 	rec := httptest.NewRecorder()
 	s.render(rec, "admin_users.html", data)
@@ -173,15 +173,15 @@ func TestAdminUsers_RendersProjectCheckboxes(t *testing.T) {
 	if !strings.Contains(body, "</html>") {
 		t.Fatal("page did not render to completion (template execution error)")
 	}
-	for _, want := range []string{`value="janka"`, `value="snake"`} {
+	for _, want := range []string{`value="family"`, `value="snake"`} {
 		if !strings.Contains(body, want) {
 			t.Errorf("missing project checkbox %q", want)
 		}
 	}
-	// Bob has janka → that checkbox is pre-checked.
-	jankaIdx := strings.Index(body, `value="janka"`)
-	if jankaIdx < 0 || !strings.Contains(body[jankaIdx:jankaIdx+80], "checked") {
-		t.Error("granted project 'janka' should render checked")
+	// Bob has family → that checkbox is pre-checked.
+	familyIdx := strings.Index(body, `value="family"`)
+	if familyIdx < 0 || !strings.Contains(body[familyIdx:familyIdx+80], "checked") {
+		t.Error("granted project 'family' should render checked")
 	}
 }
 
@@ -193,7 +193,7 @@ func TestAdminUsers_GrantWritesValidJSONAudit(t *testing.T) {
 	audit := &stubAdminAuditRepo{}
 	s := usersServer(repo, audit)
 	rec := httptest.NewRecorder()
-	form := url.Values{"role": {"user"}, "projects": {"janka"}}
+	form := url.Values{"role": {"user"}, "projects": {"family"}}
 	req := httptest.NewRequest(http.MethodPost, "/admin/users/user_await/grant",
 		strings.NewReader(form.Encode()))
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
@@ -205,7 +205,7 @@ func TestAdminUsers_GrantWritesValidJSONAudit(t *testing.T) {
 	if after == "" || !json.Valid([]byte(after)) {
 		t.Fatalf("audit After must be valid JSON, got %q", after)
 	}
-	if !strings.Contains(after, "janka") || !strings.Contains(after, "user") {
+	if !strings.Contains(after, "family") || !strings.Contains(after, "user") {
 		t.Errorf("audit After should record role+projects, got %q", after)
 	}
 }
@@ -215,7 +215,7 @@ func TestAdminUsers_GrantRefusedWithoutAuditSink(t *testing.T) {
 	repo := &stubUsersIdentityRepo{users: twoUserFixture()}
 	s := NewServer(WithIdentityRepository(repo), WithProjectRegistry(registry.New())) // no audit repo
 	rec := httptest.NewRecorder()
-	form := url.Values{"role": {"user"}, "projects": {"janka"}}
+	form := url.Values{"role": {"user"}, "projects": {"family"}}
 	req := httptest.NewRequest(http.MethodPost, "/admin/users/user_await/grant",
 		strings.NewReader(form.Encode()))
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
@@ -233,7 +233,7 @@ func TestAdminUsers_GrantUserRoleWithProject(t *testing.T) {
 	audit := &stubAdminAuditRepo{}
 	s := usersServer(repo, audit)
 	rec := httptest.NewRecorder()
-	form := url.Values{"role": {"user"}, "projects": {"janka"}}
+	form := url.Values{"role": {"user"}, "projects": {"family"}}
 	req := httptest.NewRequest(http.MethodPost, "/admin/users/user_await/grant",
 		strings.NewReader(form.Encode()))
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
@@ -247,8 +247,8 @@ func TestAdminUsers_GrantUserRoleWithProject(t *testing.T) {
 	}
 	got := repo.setAccess[0]
 	if got.userID != "user_await" || got.role != "user" ||
-		len(got.projects) != 1 || got.projects[0] != "janka" {
-		t.Errorf("SetUserAccess args = %+v, want user_await/user/[janka]", got)
+		len(got.projects) != 1 || got.projects[0] != "family" {
+		t.Errorf("SetUserAccess args = %+v, want user_await/user/[family]", got)
 	}
 	if len(audit.rows) != 1 || audit.rows[0].Action != "user.grant" || audit.rows[0].Target != "user_await" {
 		t.Errorf("audit = %+v, want one user.grant on user_await", audit.rows)
@@ -281,7 +281,7 @@ func TestAdminUsers_GrantAdminIgnoresProjects(t *testing.T) {
 	repo := &stubUsersIdentityRepo{users: twoUserFixture()}
 	s := usersServer(repo, &stubAdminAuditRepo{})
 	rec := httptest.NewRecorder()
-	form := url.Values{"role": {"admin"}, "projects": {"janka"}}
+	form := url.Values{"role": {"admin"}, "projects": {"family"}}
 	req := httptest.NewRequest(http.MethodPost, "/admin/users/user_await/grant",
 		strings.NewReader(form.Encode()))
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
@@ -308,7 +308,7 @@ func TestAdminUsers_DisableLastAdminRejected(t *testing.T) {
 
 func TestAdminUsers_DisableSecondAdminAllowed(t *testing.T) {
 	users := twoUserFixture()
-	users[1].Role = "admin" // janka is also an enabled admin now → two admins
+	users[1].Role = "admin" // family is also an enabled admin now → two admins
 	repo := &stubUsersIdentityRepo{users: users}
 	s := usersServer(repo, &stubAdminAuditRepo{})
 	rec := httptest.NewRecorder()
@@ -369,7 +369,7 @@ func TestAdminLanding_AwaitingCallout(t *testing.T) {
 func TestAdminLanding_NoCalloutWhenNoneAwaiting(t *testing.T) {
 	users := twoUserFixture()
 	users[1].Role = "user"
-	users[1].Projects = []string{"janka"} // no awaiting users
+	users[1].Projects = []string{"family"} // no awaiting users
 	repo := &stubUsersIdentityRepo{users: users}
 	s := usersServer(repo, &stubAdminAuditRepo{})
 	rec := httptest.NewRecorder()
@@ -407,7 +407,7 @@ func TestAdminUsers_RouterDispatchesGrant(t *testing.T) {
 	repo := &stubUsersIdentityRepo{users: twoUserFixture()}
 	s := usersServer(repo, &stubAdminAuditRepo{})
 	rec := httptest.NewRecorder()
-	form := url.Values{"role": {"user"}, "projects": {"janka"}}
+	form := url.Values{"role": {"user"}, "projects": {"family"}}
 	req := httptest.NewRequest(http.MethodPost, "/admin/users/user_await/grant",
 		strings.NewReader(form.Encode()))
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
@@ -417,22 +417,22 @@ func TestAdminUsers_RouterDispatchesGrant(t *testing.T) {
 	}
 }
 
-// regression: 2026-06-22 — @janka-lang awaiting-access GitHub login could
+// regression: 2026-06-22 — @family-lang awaiting-access GitHub login could
 // not be approved via the UI (no admin users page existed); only DB edits
 // worked. Drives the grant handler for an awaiting GitHub user and asserts
 // the repo is asked to grant the named project.
-func TestAdminUsers_Regression_JankaApprovedIntoProject(t *testing.T) {
+func TestAdminUsers_Regression_AliceApprovedIntoProject(t *testing.T) {
 	repo := &stubUsersIdentityRepo{users: twoUserFixture()}
 	s := usersServer(repo, &stubAdminAuditRepo{})
 	rec := httptest.NewRecorder()
-	form := url.Values{"role": {"user"}, "projects": {"janka"}}
+	form := url.Values{"role": {"user"}, "projects": {"family"}}
 	req := httptest.NewRequest(http.MethodPost, "/admin/users/user_await/grant",
 		strings.NewReader(form.Encode()))
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	s.AdminUserGrant(rec, req, "user_await")
 	if len(repo.setAccess) != 1 || repo.setAccess[0].userID != "user_await" ||
-		repo.setAccess[0].role != "user" || repo.setAccess[0].projects[0] != "janka" {
-		t.Fatalf("janka not granted into project janka: %+v", repo.setAccess)
+		repo.setAccess[0].role != "user" || repo.setAccess[0].projects[0] != "family" {
+		t.Fatalf("family not granted into project family: %+v", repo.setAccess)
 	}
 }
 

@@ -33,13 +33,13 @@ func decodeProposal(t *testing.T, body string) proposalJSON {
 func TestOperatorPropose_WritesDraft(t *testing.T) {
 	s := newProposalTestServer(t)
 	rec := httptest.NewRecorder()
-	body := `{"kind":"config","blastRadius":"project","projectId":"janka","title":"bump scraper timeout","diff":"-30\n+90","proposedBy":"agent-x"}`
+	body := `{"kind":"config","blastRadius":"project","projectId":"family","title":"bump scraper timeout","diff":"-30\n+90","proposedBy":"agent-x"}`
 	s.OperatorProposals(rec, operatorReq(http.MethodPost, "/api/v1/operator/proposals", body))
 	if rec.Code != http.StatusCreated {
 		t.Fatalf("propose: want 201, got %d: %s", rec.Code, rec.Body.String())
 	}
 	p := decodeProposal(t, rec.Body.String())
-	if p.Status != "DRAFT" || p.ID == "" || p.ProjectID != "janka" {
+	if p.Status != "DRAFT" || p.ID == "" || p.ProjectID != "family" {
 		t.Fatalf("unexpected proposal: %+v", p)
 	}
 }
@@ -48,7 +48,7 @@ func TestOperatorPropose_RejectsReservedProposer(t *testing.T) {
 	s := newProposalTestServer(t)
 	for _, reserved := range []string{"operator-ui", "tune-detector", "instinct", "diagnose", "self-heal", "instinct-lift"} {
 		rec := httptest.NewRecorder()
-		body := `{"kind":"config","blastRadius":"project","projectId":"janka","title":"forge","proposedBy":"` + reserved + `"}`
+		body := `{"kind":"config","blastRadius":"project","projectId":"family","title":"forge","proposedBy":"` + reserved + `"}`
 		s.OperatorProposals(rec, operatorReq(http.MethodPost, "/api/v1/operator/proposals", body))
 		if rec.Code != http.StatusBadRequest {
 			t.Errorf("reserved proposer %q must be rejected (400), got %d", reserved, rec.Code)
@@ -126,13 +126,13 @@ func TestOperatorProposals_ListAndGet(t *testing.T) {
 	for _, tt := range []string{"a", "b"} {
 		rec := httptest.NewRecorder()
 		s.OperatorProposals(rec, operatorReq(http.MethodPost, "/api/v1/operator/proposals",
-			`{"kind":"config","blastRadius":"project","projectId":"janka","title":"t-`+tt+`"}`))
+			`{"kind":"config","blastRadius":"project","projectId":"family","title":"t-`+tt+`"}`))
 		if rec.Code != http.StatusCreated {
 			t.Fatalf("seed %s: %d", tt, rec.Code)
 		}
 	}
 	rec := httptest.NewRecorder()
-	s.OperatorProposals(rec, operatorReq(http.MethodGet, "/api/v1/operator/proposals?project=janka", ""))
+	s.OperatorProposals(rec, operatorReq(http.MethodGet, "/api/v1/operator/proposals?project=family", ""))
 	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), "\"count\":2") {
 		t.Fatalf("list: %d %s", rec.Code, rec.Body.String())
 	}
@@ -158,7 +158,7 @@ func seedApproved(t *testing.T, s *Server) string {
 	t.Helper()
 	rec := httptest.NewRecorder()
 	s.OperatorProposals(rec, operatorReq(http.MethodPost, "/api/v1/operator/proposals",
-		`{"kind":"config","blastRadius":"project","projectId":"janka","title":"t","proposedBy":"agent"}`))
+		`{"kind":"config","blastRadius":"project","projectId":"family","title":"t","proposedBy":"agent"}`))
 	id := decodeProposal(t, rec.Body.String()).ID
 	if err := s.proposalStore.SetStatus(context.Background(), id, "APPROVED", "vadim"); err != nil {
 		t.Fatalf("approve: %v", err)

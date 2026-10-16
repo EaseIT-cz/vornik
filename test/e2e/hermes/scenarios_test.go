@@ -31,9 +31,12 @@ const (
 	// date). The prompt is kept as is: the lane was qualified with it.
 	promptH3 = "Remember in your Vornik long-term memory, as one full sentence: my dentist is Dr Novak at the Vinohrady dental clinic, and appointments are booked by phone."
 	promptQ3 = "Who is my dentist? Check your Vornik long-term memory."
-	promptH4 = "Reply to the invoice email from acme.example received 2026-09-29T15:04:00Z: accept, and say we will pay on Friday. Use the Vornik mail-reply workflow and wait for its result."
-	promptQ5 = "Did my reply to the acme.example invoice go out? Check the Vornik task status."
-	promptH6 = "Delete all my emails."
+	// H3-dup (stub model only): H3's note again, byte for byte (lane design,
+	// "Amendment 2026-10-16 — H3-dup", GitHub #380).
+	promptH3Dup = "Store the dentist note in your Vornik long-term memory once more, exactly as before."
+	promptH4    = "Reply to the invoice email from acme.example received 2026-09-29T15:04:00Z: accept, and say we will pay on Friday. Use the Vornik mail-reply workflow and wait for its result."
+	promptQ5    = "Did my reply to the acme.example invoice go out? Check the Vornik task status."
+	promptH6    = "Delete all my emails."
 )
 
 // hermesScripts drive the stub model mode (never the release gate).
@@ -58,7 +61,10 @@ func hermesScripts(s *stack) []Script {
 			{ToolSuffix: "vornik_delegate", Args: map[string]any{"workflow": "mail-digest", "inputs": map[string]any{"since": "2026-09-29T00:00:00Z"}}},
 			{ToolSuffix: "vornik_result", ArgsFrom: func(last string) map[string]any { return map[string]any{"task_id": taskID(last)} }},
 		}, FinalFrom: echo},
-		{Marker: "Remember in your Vornik", Steps: []ScriptStep{{ToolSuffix: "vornik_remember", Args: map[string]any{"content": "The user's dentist is Dr Novak at the Vinohrady dental clinic, and appointments are booked by phone."}}}, Final: "Noted."},
+		{Marker: "Remember in your Vornik", Steps: []ScriptStep{{ToolSuffix: "vornik_remember", Args: map[string]any{"content": h3DentistNote}}}, Final: "Noted."},
+		// H3-dup: the same bytes again, so dedup_hash refuses it; the reply
+		// echoes the tool result the model was given (GitHub #380).
+		{Marker: "Store the dentist note", Steps: []ScriptStep{{ToolSuffix: "vornik_remember", Args: map[string]any{"content": h3DentistNote}}}, FinalFrom: echo},
 		{Marker: "Who is my dentist", Steps: []ScriptStep{{ToolSuffix: "vornik_recall", Args: map[string]any{"query": "dentist"}}}, FinalFrom: echo},
 		{Marker: "Reply to the invoice email", Steps: []ScriptStep{
 			{ToolSuffix: "vornik_delegate", Args: map[string]any{"workflow": "mail-reply", "inputs": map[string]any{
@@ -344,6 +350,26 @@ func TestHermesLane(t *testing.T) {
 		}
 		return nil
 	})
+
+	// H3-dup — a byte-for-byte duplicate is refused as already on record,
+	// with no retry coaching, and nothing is admitted (GitHub #380: the
+	// 0.21.5 coaching re-stored a fact the user asked to forget). Stub model
+	// only: a real model words H3's note its own way, so its repeat is not a
+	// byte duplicate.
+	if s.hermesModel != nil {
+		novakBefore := len(memoryChunks(t, "Novak"))
+		l.step("H3-dup", promptH3Dup, false, func(r hermesRun) error {
+			if err := h3DupProblem(r.Reply); err != nil {
+				return err
+			}
+			if n := len(memoryChunks(t, "Novak")); n != novakBefore {
+				return fmt.Errorf("the duplicate changed the notes naming Novak: %d before, %d after", novakBefore, n)
+			}
+			return nil
+		})
+	} else {
+		t.Log("H3-dup: skipped (stub model only; a real model's repeat of the note is not a byte duplicate)")
+	}
 
 	// H3f — forgetting reaches Vornik (design 24, 0.8.0): a fact saved in
 	// Hermes's own memory, then forgotten, is refuted in Vornik and absent

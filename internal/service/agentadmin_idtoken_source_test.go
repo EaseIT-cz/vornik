@@ -8,6 +8,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"vornik.io/vornik/internal/testutil/repowalk"
 )
 
 // GitHub #317/#119 item 8, design §22.2.16 (scan clarification GREEN 8964):
@@ -86,6 +88,9 @@ func TestIDToken_NeverAnAuthorizationInput(t *testing.T) {
 		err := filepath.WalkDir(filepath.Join("..", dir), func(path string, d os.DirEntry, err error) error {
 			if err != nil {
 				return err
+			}
+			if d.IsDir() && repowalk.SkipDir(filepath.Join("..", dir), path, d.Name()) {
+				return filepath.SkipDir
 			}
 			if !d.IsDir() && strings.HasSuffix(path, ".go") && !strings.HasSuffix(path, "_test.go") {
 				scopes[dir] = append(scopes[dir], path)

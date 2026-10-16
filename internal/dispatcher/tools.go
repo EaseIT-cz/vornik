@@ -715,7 +715,7 @@ func (te *ToolExecutor) createTask(ctx context.Context, argsJSON string, activeP
 	// not get the LLM stuck in a loop. Two failure modes were
 	// observed in production with the small dispatcher model
 	// (zai.glm-4.7-flash):
-	//   1. LLM passes type="feature" → rejected because janka's
+	//   1. LLM passes type="feature" → rejected because family's
 	//      AllowedTaskTypes is [research planning writing
 	//      comparison summary]; LLM drops type and retries.
 	//   2. LLM retries with no type at all → rejected by

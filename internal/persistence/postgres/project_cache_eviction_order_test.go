@@ -11,6 +11,19 @@ import (
 	"vornik.io/vornik/internal/persistence"
 )
 
+// expectWipeStatements expects, in order, every statement the Postgres wipe
+// runs for project "p1": one per listed table, plus the scrub of a
+// partly-wiped table's kept rows (archival design section J, GitHub #370).
+func expectWipeStatements(mock sqlmock.Sqlmock) {
+	for _, tb := range persistence.ProjectDataTablesFor(true) {
+		for _, stmt := range persistence.ProjectDataStatements(tb, "$1") {
+			mock.ExpectExec(regexp.QuoteMeta(stmt)).
+				WithArgs("p1").
+				WillReturnResult(sqlmock.NewResult(0, 1))
+		}
+	}
+}
+
 // The cache evictor must run INSIDE the wipe's transaction and BEFORE any
 // DELETE. The keys it needs are derived from the chunks' own source_name and
 // content, so after the DELETE there is nothing left to compute them from —
@@ -39,11 +52,7 @@ func TestDeleteProjectData_EvictsCacheBeforeAnyDelete(t *testing.T) {
 	mock.ExpectExec(regexp.QuoteMeta("DELETE FROM embedding_cache")).
 		WithArgs("p1").
 		WillReturnResult(sqlmock.NewResult(0, 7))
-	for range persistence.ProjectDataTablesFor(true) {
-		mock.ExpectExec(regexp.QuoteMeta("DELETE FROM ")).
-			WithArgs("p1").
-			WillReturnResult(sqlmock.NewResult(0, 1))
-	}
+	expectWipeStatements(mock)
 	mock.ExpectCommit()
 
 	stats, err := repo.DeleteProjectData(context.Background(), "p1")
@@ -73,11 +82,7 @@ func TestDeleteProjectData_NoEvictorReportsNotAttempted(t *testing.T) {
 	repo := NewProjectDataCleanupRepositoryWithoutCacheEviction(db)
 
 	mock.ExpectBegin()
-	for range persistence.ProjectDataTablesFor(true) {
-		mock.ExpectExec(regexp.QuoteMeta("DELETE FROM ")).
-			WithArgs("p1").
-			WillReturnResult(sqlmock.NewResult(0, 1))
-	}
+	expectWipeStatements(mock)
 	mock.ExpectCommit()
 
 	stats, err := repo.DeleteProjectData(context.Background(), "p1")

@@ -28,6 +28,19 @@ func TestCompanionRecallDescription_CarriesRAGFirstSteering(t *testing.T) {
 		"recall Description must carry the functional|USAGE separator (cross-client steering layer)")
 	assert.Contains(t, recall.Description, "BEFORE a deep code dive",
 		"recall Description must steer toward recall-before-code on design questions")
-	assert.True(t, strings.Contains(recall.Description, "authoritative design record"),
-		"recall Description must state the LLD-as-authoritative trust contract")
+	// GitHub #382, design §11.3: the unconditional "the LLDs in project
+	// memory are the authoritative design record" misled every project with
+	// no designs (review 97b7 B1). The clause is conditional on design_record.
+	assert.False(t, strings.Contains(recall.Description, "are the authoritative design record"),
+		"recall Description must not assert that project-memory designs exist")
+	assert.Contains(t, recall.Description, "design_record",
+		"recall Description must point at the per-recall design count")
+	assert.Contains(t, recall.Description, "do not claim one",
+		"recall Description must say what a zero means")
+	// GitHub #390, design §11.14 (code review c12b N1): a review is not the
+	// design it reviews, and the note carries the crowded-zero recount.
+	assert.Contains(t, recall.Description, "not produced by a workflow",
+		"recall Description must say workflow output does not count as a design")
+	assert.Contains(t, recall.Description, "read its note",
+		"recall Description must point at design_record's note")
 }

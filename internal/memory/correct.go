@@ -28,6 +28,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"time"
 
@@ -42,6 +43,23 @@ import (
 type correctorSearcher interface {
 	Search(ctx context.Context, projectID, query string, limit int) ([]SearchResult, error)
 }
+
+// scopedCorrectorSearcher is the optional surface a scoped claim search
+// needs (*Searcher satisfies it). A searcher without it cannot honour a
+// scope, so RefuteByClaimInScope refuses rather than search project-wide
+// (GitHub #368).
+type scopedCorrectorSearcher interface {
+	SearchWithOptions(ctx context.Context, projectID, query string, opts SearchOptions) ([]SearchResult, error)
+}
+
+// The production searcher must stay able to scope a claim search: a refactor
+// that drops SearchWithOptions fails here, at compile time, instead of turning
+// every scoped memory_correct into ErrScopedRefuteUnsupported (review b7bc).
+var _ scopedCorrectorSearcher = (*Searcher)(nil)
+
+// ErrScopedRefuteUnsupported is returned when a claim refute names a repo
+// scope but the Corrector's searcher cannot apply one.
+var ErrScopedRefuteUnsupported = errors.New("memory corrector: searcher cannot apply a repo scope; refusing a project-wide claim search")
 
 // DefaultMinRefuteScore is the fallback confidence floor RefuteByClaim
 // applies when the Corrector's MinRefuteScore is unset (<= 0). See the
@@ -129,7 +147,23 @@ type RefutedChunk struct {
 // how the dispatcher tool decides whether to tell the operator a
 // chunk was down-weighted; it MUST NOT claim an eviction when this
 // returns empty.
+//
+// RefuteByClaim searches the whole project; it is RefuteByClaimInScope
+// with an empty scope (the agent and Telegram paths, which have no repo
+// scope).
 func (c *Corrector) RefuteByClaim(ctx context.Context, projectID, wrongClaim string, maxRefutes int) ([]RefutedChunk, error) {
+	return c.RefuteByClaimInScope(ctx, projectID, wrongClaim, "", maxRefutes)
+}
+
+// RefuteByClaimInScope is RefuteByClaim with the claim search limited to
+// repoScope, lenient: the chunks scoped to it, the cross-cutting '*' ones
+// and the NULL-scoped ones, which is the pool a default recall with that
+// scope shows. An empty repoScope searches the whole project. GitHub #368
+// (design 22 "Every search path honours repo_scope and strict_scope", E4):
+// the companion memory_correct handler resolved the effective scope but the
+// claim search ignored it, so a claim made in repository A refuted
+// repository B's chunk.
+func (c *Corrector) RefuteByClaimInScope(ctx context.Context, projectID, wrongClaim, repoScope string, maxRefutes int) ([]RefutedChunk, error) {
 	if c == nil || c.Repo == nil || c.Searcher == nil {
 		return nil, fmt.Errorf("memory corrector: not configured")
 	}
@@ -143,7 +177,17 @@ func (c *Corrector) RefuteByClaim(ctx context.Context, projectID, wrongClaim str
 		maxRefutes = 20
 	}
 
-	hits, err := c.Searcher.Search(ctx, projectID, wrongClaim, maxRefutes)
+	var hits []SearchResult
+	var err error
+	if repoScope == "" {
+		hits, err = c.Searcher.Search(ctx, projectID, wrongClaim, maxRefutes)
+	} else {
+		scoped, ok := c.Searcher.(scopedCorrectorSearcher)
+		if !ok {
+			return nil, ErrScopedRefuteUnsupported
+		}
+		hits, err = scoped.SearchWithOptions(ctx, projectID, wrongClaim, SearchOptions{Limit: maxRefutes, RepoScope: repoScope, StrictScope: false})
+	}
 	if err != nil {
 		return nil, fmt.Errorf("memory corrector: search: %w", err)
 	}

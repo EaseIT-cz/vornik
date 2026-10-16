@@ -3,7 +3,7 @@ sources:
     - path: internal/service/container_scheduler.go
       sha256: 85ddb46aadf0458abfff65458535b59d1a718a1aa76c0eb8ca3adef1235d7dfa
     - path: internal/service/memory_adapter.go
-      sha256: baeb39e5d0b16da77c177e84939d7fb7a26b6a81f40bdf05532f44b3267b681e
+      sha256: 1f3fb17a4548603543d3c998c22e520f52cee6bb62ed347bfc7df043a5b0ce53
     - path: internal/memory/reranker.go
       sha256: 2db6fa73c81bedda7ce9728feead4d627380e97f84a88c94b9db63075f21c93a
     - path: internal/config/config.go

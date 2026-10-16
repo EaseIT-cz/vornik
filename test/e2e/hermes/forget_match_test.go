@@ -244,3 +244,31 @@ func TestH3fResetAttempt_KeepsNotesFromBeforeTheStep(t *testing.T) {
 		t.Errorf("a note from before the step was removed: %v", f.rows)
 	}
 }
+
+// GitHub #380, Hermes release lane H3f-forget (run 4400844a, 2026-10-14):
+// the plugin rendered a dedup_hash refusal as "Restate it ... and try again",
+// and the model re-stored a fact the user had asked to forget. H3-dup (lane
+// design, "Amendment 2026-10-16 — H3-dup") judges the tool result the model
+// is given for a byte-for-byte duplicate; the 0.21.5 text must fail it.
+func TestH3DupProblem_JudgesTheRefusalTheModelReads(t *testing.T) {
+	// H3-dup counts the chunks naming Novak to see that nothing was
+	// admitted; that count means nothing if the note stops naming him.
+	if !strings.Contains(h3DentistNote, "Novak") {
+		t.Fatalf("h3DentistNote no longer names Novak: %q", h3DentistNote)
+	}
+	const echo = "Here is what Vornik returned: "
+	pass := echo + `{"error": "nothing stored: Vornik already holds this exact note on record (dedup_hash). Do not store it again, reworded or not. vornik_remember only stores and never forgets; to forget something, remove it from your own memory."}`
+	if err := h3DupProblem(pass); err != nil {
+		t.Fatalf("the 0.21.6 refusal was judged a problem: %v", err)
+	}
+	for name, reply := range map[string]string{
+		"0.21.5 text (#380)":     echo + `{"error": "not stored: Vornik's memory gates refused the note (dedup_hash). Restate it as one full sentence with its context and try again."}`,
+		"admitted":               echo + `{"decision":"ALLOW","artifact_id":"a1","admitted":1,"quarantined":0,"rejected":0}`,
+		"empty":                  "",
+		"on record, but coached": echo + `{"error": "nothing stored: Vornik already holds this exact note on record. Do not store it again; try again with more context."}`,
+	} {
+		if h3DupProblem(reply) == nil {
+			t.Errorf("%s: judged clean: %q", name, reply)
+		}
+	}
+}

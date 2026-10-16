@@ -138,13 +138,13 @@ func TestOperatorAlert_SkipsChatOriginatedViaAncestor(t *testing.T) {
 }
 
 // TestOperatorAlert_PerProjectFanOut: alerts route to the operators with
-// access to the task's project (assistant → wildcard only; janka → wildcard +
-// janka-scoped), not a single fixed session.
+// access to the task's project (assistant → wildcard only; family → wildcard +
+// family-scoped), not a single fixed session.
 func TestOperatorAlert_PerProjectFanOut(t *testing.T) {
 	ch := &fakeChannel{name: "telegram"}
 	recips := fakeRecipients{
 		"assistant": {"559741208"},
-		"janka":     {"559741208", "8019099642"},
+		"family":    {"559741208", "8019099642"},
 	}
 	n, tg := newOperatorAlertR(t, ch, recips, OperatorAlertConfig{Channel: "telegram", Session: "fallback"}, true)
 
@@ -152,20 +152,20 @@ func TestOperatorAlert_PerProjectFanOut(t *testing.T) {
 	assistantTask.ID, assistantTask.ProjectID = "task_a", "assistant"
 	n.NotifySteeringRequired(context.Background(), assistantTask, string(persistence.TaskStatusAwaitingInput))
 
-	jankaTask := autonomyTask()
-	jankaTask.ID, jankaTask.ProjectID = "task_j", "janka"
-	n.NotifySteeringRequired(context.Background(), jankaTask, string(persistence.TaskStatusAwaitingInput))
+	familyTask := autonomyTask()
+	familyTask.ID, familyTask.ProjectID = "task_j", "family"
+	n.NotifySteeringRequired(context.Background(), familyTask, string(persistence.TaskStatusAwaitingInput))
 
 	got := map[string]int{}
 	for _, m := range tg.sent {
 		got[m.SessionID]++
 	}
-	// assistant → 1 (wildcard only); janka → 2 (wildcard + scoped).
+	// assistant → 1 (wildcard only); family → 2 (wildcard + scoped).
 	if got["559741208"] != 2 { // wildcard operator gets both
 		t.Errorf("wildcard operator should get both projects' alerts, got %d", got["559741208"])
 	}
-	if got["8019099642"] != 1 { // janka-scoped only for janka
-		t.Errorf("janka-scoped operator should get exactly janka's alert, got %d", got["8019099642"])
+	if got["8019099642"] != 1 { // family-scoped only for family
+		t.Errorf("family-scoped operator should get exactly family's alert, got %d", got["8019099642"])
 	}
 	if got["fallback"] != 0 {
 		t.Errorf("fallback session must not be used when per-project recipients resolve")

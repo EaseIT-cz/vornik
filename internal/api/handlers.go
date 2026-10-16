@@ -79,22 +79,36 @@ type CreateTaskResponse struct {
 
 // GetTaskResponse represents the response for task retrieval.
 type GetTaskResponse struct {
-	TaskID            string            `json:"taskId"`
-	Status            string            `json:"status"`
-	ProjectID         string            `json:"projectId"`
-	TaskType          string            `json:"taskType"`
-	Priority          int               `json:"priority"`
-	CreatedAt         string            `json:"createdAt"`
-	ActiveExecutionID string            `json:"activeExecutionId,omitempty"`
-	LastError         string            `json:"lastError,omitempty"`
-	LastErrorClass    string            `json:"lastErrorClass,omitempty"`
-	Links             map[string]string `json:"links"`
+	TaskID            string `json:"taskId"`
+	Status            string `json:"status"`
+	ProjectID         string `json:"projectId"`
+	TaskType          string `json:"taskType"`
+	Priority          int    `json:"priority"`
+	CreatedAt         string `json:"createdAt"`
+	ActiveExecutionID string `json:"activeExecutionId,omitempty"`
+	LastError         string `json:"lastError,omitempty"`
+	LastErrorClass    string `json:"lastErrorClass,omitempty"`
+	// ParentTaskID names the task this one was delegated from; omitted for a
+	// top-level task (GitHub #408: a QUEUED child must say whose it is).
+	ParentTaskID string            `json:"parentTaskId,omitempty"`
+	Links        map[string]string `json:"links"`
 }
 
 // ListTasksResponse represents the response for listing tasks.
+//
+// Offset, PageSize and NextOffset were added 2026-10-16 (GitHub #408,
+// 12-data-plane-api.md "Change 2026-10-16"): a client can tell the page it
+// got from the whole set and where the next page starts. NextOffset is
+// present only while offset+len(tasks) < total (or, with TotalUnknown,
+// while the page came back full). TotalUnknown is set when the count
+// failed and Total is only the page length. Tasks and Total are unchanged.
 type ListTasksResponse struct {
-	Tasks []GetTaskResponse `json:"tasks"`
-	Total int               `json:"total"`
+	Tasks        []GetTaskResponse `json:"tasks"`
+	Total        int               `json:"total"`
+	Offset       int               `json:"offset"`
+	PageSize     int               `json:"pageSize"`
+	NextOffset   *int              `json:"nextOffset,omitempty"`
+	TotalUnknown bool              `json:"totalUnknown,omitempty"`
 }
 
 // Scope-helper convention
@@ -688,6 +702,9 @@ func (s *Server) GetTask(w http.ResponseWriter, r *http.Request) {
 		ActiveExecutionID: activeExecutionID,
 		Links:             make(map[string]string),
 	}
+	if task.ParentTaskID != nil {
+		resp.ParentTaskID = *task.ParentTaskID
+	}
 	if task.LastError != nil {
 		resp.LastError = *task.LastError
 	}
@@ -753,20 +770,27 @@ func (s *Server) ListTasks(w http.ResponseWriter, r *http.Request) {
 	// value would otherwise reach the DB unchecked and bubble up as a
 	// generic 500 because the enum constraint fires server-side.
 	// Canonical enum values are UPPERCASE; we accept either case for
-	// operator convenience and normalise before comparing.
+	// operator convenience and normalise before comparing. A
+	// comma-separated list matches any of its statuses (GitHub #408:
+	// `vornikctl task list --active` asks for every unfinished status in
+	// one call); one value behaves as it always did.
 	if statusStr := r.URL.Query().Get("status"); statusStr != "" {
-		status := persistence.TaskStatus(strings.ToUpper(statusStr))
-		if !isKnownTaskStatus(status) {
+		statuses, bad := parseTaskStatusList(statusStr)
+		if bad != "" {
 			respondError(w, http.StatusBadRequest, "VALIDATION_ERROR",
-				"unknown status "+statusStr+"; valid: PENDING, QUEUED, LEASED, RUNNING, WAITING_FOR_CHILDREN, COMPLETED, FAILED, CANCELLED")
+				"unknown status "+bad+"; valid: "+knownTaskStatusNames())
 			return
 		}
-		filter.Status = &status
+		if len(statuses) == 1 {
+			filter.Status = &statuses[0]
+		} else {
+			filter.Statuses = statuses
+		}
 	}
 
 	// Retrieve tasks from repository
 	if s.taskRepo == nil {
-		respondJSON(w, http.StatusOK, ListTasksResponse{Tasks: []GetTaskResponse{}, Total: 0})
+		respondJSON(w, http.StatusOK, ListTasksResponse{Tasks: []GetTaskResponse{}, Total: 0, Offset: offset, PageSize: pageSize})
 		return
 	}
 
@@ -780,18 +804,31 @@ func (s *Server) ListTasks(w http.ResponseWriter, r *http.Request) {
 	// Total count ignores PageSize/Offset so paginated clients can
 	// tell when to stop. A Count failure is logged but not fatal —
 	// the page itself is still useful, and Total falls back to the
-	// page length to preserve the legacy shape.
+	// page length to preserve the legacy shape. TotalUnknown says so
+	// (GitHub #408): a fallback total that looks exact would let a client
+	// stop early and report the page as the whole set — the silent cut
+	// #408 removes — so the client is told, and NextOffset is offered
+	// whenever the page came back full.
 	total := len(tasks)
+	totalUnknown := false
 	if c, cerr := s.taskRepo.Count(r.Context(), filter); cerr != nil {
 		s.logger.Warn().Err(cerr).Msg("task count failed; falling back to page length for Total")
+		totalUnknown = true
 	} else {
 		total = int(c)
 	}
 
 	// Build response
 	resp := ListTasksResponse{
-		Tasks: make([]GetTaskResponse, 0, len(tasks)),
-		Total: total,
+		Tasks:        make([]GetTaskResponse, 0, len(tasks)),
+		Total:        total,
+		Offset:       offset,
+		PageSize:     pageSize,
+		TotalUnknown: totalUnknown,
+	}
+	next := offset + len(tasks)
+	if len(tasks) > 0 && (next < total || (totalUnknown && len(tasks) >= pageSize)) {
+		resp.NextOffset = &next
 	}
 
 	for _, task := range tasks {
@@ -808,6 +845,9 @@ func (s *Server) ListTasks(w http.ResponseWriter, r *http.Request) {
 		}
 		if task.LastErrorClass != nil {
 			taskResp.LastErrorClass = *task.LastErrorClass
+		}
+		if task.ParentTaskID != nil {
+			taskResp.ParentTaskID = *task.ParentTaskID
 		}
 
 		// Extract task type from payload
@@ -2241,23 +2281,64 @@ func isKnownExecutionStatus(v persistence.ExecutionStatus) bool {
 	return false
 }
 
+// knownTaskStatuses is every TaskStatus the persistence layer stores, in
+// lifecycle order. Until 2026-10-16 the list filter knew only the first
+// eight, so PAUSED, AWAITING_* and CLOSED were refused with a 400 (GitHub
+// #408).
+var knownTaskStatuses = []persistence.TaskStatus{
+	persistence.TaskStatusPending,
+	persistence.TaskStatusQueued,
+	persistence.TaskStatusLeased,
+	persistence.TaskStatusRunning,
+	persistence.TaskStatusWaitingForChildren,
+	persistence.TaskStatusAwaitingApproval,
+	persistence.TaskStatusAwaitingInput,
+	persistence.TaskStatusAwaitingExternal,
+	persistence.TaskStatusPaused,
+	persistence.TaskStatusCompleted,
+	persistence.TaskStatusFailed,
+	persistence.TaskStatusCancelled,
+	persistence.TaskStatusClosed,
+}
+
 // isKnownTaskStatus reports whether v is one of the TaskStatus enum
 // values the persistence layer accepts. Used by handlers that take a
 // status filter so a typo turns into a clean 400 instead of a 500 from
 // the DB check-constraint.
 func isKnownTaskStatus(v persistence.TaskStatus) bool {
-	switch v {
-	case persistence.TaskStatusPending,
-		persistence.TaskStatusQueued,
-		persistence.TaskStatusLeased,
-		persistence.TaskStatusRunning,
-		persistence.TaskStatusWaitingForChildren,
-		persistence.TaskStatusCompleted,
-		persistence.TaskStatusFailed,
-		persistence.TaskStatusCancelled:
-		return true
+	return slices.Contains(knownTaskStatuses, v)
+}
+
+// knownTaskStatusNames is knownTaskStatuses for an error message.
+func knownTaskStatusNames() string {
+	names := make([]string, len(knownTaskStatuses))
+	for i, s := range knownTaskStatuses {
+		names[i] = string(s)
 	}
-	return false
+	return strings.Join(names, ", ")
+}
+
+// parseTaskStatusList splits a comma-separated status filter, uppercases
+// and de-duplicates it, and returns the first unknown value (as given) in
+// bad. Empty elements are skipped.
+func parseTaskStatusList(raw string) (statuses []persistence.TaskStatus, bad string) {
+	for _, part := range strings.Split(raw, ",") {
+		part = strings.TrimSpace(part)
+		if part == "" {
+			continue
+		}
+		st := persistence.TaskStatus(strings.ToUpper(part))
+		if !isKnownTaskStatus(st) {
+			return nil, part
+		}
+		if !slices.Contains(statuses, st) {
+			statuses = append(statuses, st)
+		}
+	}
+	if len(statuses) == 0 {
+		return nil, raw
+	}
+	return statuses, ""
 }
 
 // marshalTaskPayload serialises a request struct for the task's Payload

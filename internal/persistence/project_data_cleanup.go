@@ -1,6 +1,9 @@
 package persistence
 
-import "context"
+import (
+	"context"
+	"strings"
+)
 
 // ProjectDataStats summarises what a wipe touched. Counts are
 // per-table best-effort — backends that can't report affected
@@ -186,6 +189,33 @@ var ProjectDataTables = []string{
 	"agent_integration_approvals",
 	"execution_tool_grants",
 
+	// Archival design section J (GitHub #370, 2026-10-16; the W8 census
+	// "UNREVIEWED 16"). Every remaining project table decided. Wholly wiped:
+	// group_projects is an authorisation (a group's grant on a deleted
+	// project must not open a re-created one); budget_reservations,
+	// forge_*, instincts and project_first_seen were inherited by a project
+	// re-created under the same ID; the rest hold content or the trail of
+	// executions this wipe removes. instincts' four children cascade
+	// (SQLiteCascadeGraph on SQLite); global instincts carry project_id ''
+	// and never match.
+	"blackbox_trace_cache",
+	"broker_actions",
+	"budget_reservations",
+	"fixit_sessions",
+	"forge_ci_outcomes",
+	"forge_pr_review_state",
+	"group_projects",
+	"instincts",
+	"project_first_seen",
+	"recovery_events",
+	"trading_fills_shadow",
+	"web_write_actions",
+	// Partly wiped (ProjectDataTablesPartial): the project's own skills, not
+	// its global ones; its project-radius proposals, with the others
+	// scrubbed of free text.
+	"project_skills",
+	"control_plane_proposals",
+
 	// project_wizard_sessions is intentionally NOT included:
 	// the table is operator-scoped (committed_project_id is the
 	// only project linkage, and uncommitted sessions have no
@@ -217,6 +247,108 @@ var ProjectDataTables = []string{
 	// (GitHub #370, operator decision 2026-10-14). Not revoked at the vendor:
 	// the wipe deletes the local copy only.
 	"mcp_oauth_tokens",
+
+	// LAST, and load-bearing: the GDPR index loses the links whose row this
+	// wipe removed, and its predicate asks whether the linked row still
+	// exists — true only once every table above is wiped (task_messages goes
+	// with tasks). Partly wiped; see ProjectDataTablesPartial. Section J.
+	"data_subject_links",
+}
+
+// DataSubjectLinkTablesWiped names the linkable tables of the subject axis
+// (datasubject.LinkableTables) whose rows the project wipe deletes — listed
+// above, or (task_messages) a cascade child of a listed table. The wipe
+// removes a data_subject_links row pointing into one of them once the row is
+// gone: erasure's rule is that a link goes with its row (datasubject.go,
+// subjectstore.DeleteRow). internal/datasubject's
+// TestDataSubjectLinkTablesWiped_MatchesTheWipe pins the list to the wipe.
+// Every one has a TEXT id that a link's row_id names.
+//
+// see LLD § https://docs.vornik.io "2026-10-16 — every project table decided"
+var DataSubjectLinkTablesWiped = []string{
+	"artifacts",
+	"chat_audit_log",
+	"extracted_documents",
+	"knowledge_entities",
+	"project_memory_chunks",
+	"task_messages",
+}
+
+// PartialWipe is how the wipe treats a table whose project rows it removes
+// only in part.
+type PartialWipe struct {
+	// Where is AND-ed to the project match of the DELETE: the rows it matches
+	// go. SQL text, a package constant with no placeholder, valid on both
+	// drivers.
+	Where string
+	// Keeps says which of the project's rows survive, and why.
+	Keeps string
+	// Scrub, when set, is a SET list (no placeholder) applied in the same
+	// transaction, before the delete, to the project's rows Where does not
+	// match: the kept rows lose the free text that could quote the project.
+	Scrub string
+	// MatchUnscoped widens the project match to rows with no project_id
+	// (Where must then select only rows that are provably this wipe's to
+	// remove).
+	MatchUnscoped bool
+}
+
+// ProjectDataTablesPartial names the tables of ProjectDataTables the wipe
+// removes only in part (archival design section J, GitHub #370). Each is
+// pinned by persistence.TestProjectDataTablesPartial_Pinned and seeded with a
+// remove row and a keep row by the repotest wipe suite.
+//
+// see LLD § https://docs.vornik.io "2026-10-16 — every project table decided"
+var ProjectDataTablesPartial = map[string]PartialWipe{
+	"project_skills": {
+		Where: "NOT is_global",
+		Keeps: "global skills (is_global): the operator promoted them to inject into every project's roles; " +
+			"deleting the authoring project must not silently remove know-how other projects use",
+	},
+	"control_plane_proposals": {
+		Where: "blast_radius = 'project'",
+		Keeps: "proposals whose blast radius (model, swarm, daemon) outlives the project: an applied one's " +
+			"pre_apply_snapshot is its only rollback and the row is its approval record; title, rationale and " +
+			"evidence are scrubbed because they can quote the project's tasks",
+		Scrub: "title = 'proposal of deleted project ' || project_id, rationale = '', evidence = ''",
+	},
+	"data_subject_links": {
+		Where: dataSubjectLinksGone(),
+		Keeps: "links to rows the wipe does not remove (channel_sessions, operator_profile, user_identities, " +
+			"or a row that still exists): a later erasure must still find the person there",
+		MatchUnscoped: true,
+	},
+}
+
+// dataSubjectLinksGone builds the data_subject_links predicate: the link
+// points into one of DataSubjectLinkTablesWiped and its row no longer exists.
+func dataSubjectLinksGone() string {
+	terms := make([]string, 0, len(DataSubjectLinkTablesWiped))
+	for _, tb := range DataSubjectLinkTablesWiped {
+		terms = append(terms, "(table_name = '"+tb+"' AND NOT EXISTS (SELECT 1 FROM "+tb+
+			" x WHERE x.id = data_subject_links.row_id))")
+	}
+	return strings.Join(terms, " OR ")
+}
+
+// ProjectDataStatements returns the statements the wipe runs for table, in
+// order, with ph the driver's placeholder for the one project-id argument
+// each takes ("?" or "$1"): a Scrub UPDATE when the table is partly wiped and
+// scrubs its kept rows, then the DELETE.
+func ProjectDataStatements(table, ph string) []string {
+	match := "project_id = " + ph
+	pw, partial := ProjectDataTablesPartial[table]
+	if !partial {
+		return []string{"DELETE FROM " + table + " WHERE " + match}
+	}
+	var out []string
+	if pw.Scrub != "" {
+		out = append(out, "UPDATE "+table+" SET "+pw.Scrub+" WHERE "+match+" AND NOT ("+pw.Where+")")
+	}
+	if pw.MatchUnscoped {
+		match = "(" + match + " OR project_id IS NULL)"
+	}
+	return append(out, "DELETE FROM "+table+" WHERE "+match+" AND ("+pw.Where+")")
 }
 
 // ProjectDataTablesPostgresOnly names the tables of ProjectDataTables the
@@ -238,6 +370,9 @@ var ProjectDataTablesPostgresOnly = map[string]bool{
 	"workflow_healing_overrides":       true,
 	"project_gists":                    true,
 	"dispatcher_reminders":             true,
+	// Section J (GitHub #370): two of the sixteen exist only on Postgres.
+	"blackbox_trace_cache": true,
+	"web_write_actions":    true,
 }
 
 // ProjectDataTablesSQLiteOnly names the tables of ProjectDataTables the
@@ -270,17 +405,24 @@ func ProjectDataTablesFor(postgres bool) []string {
 // the named parent — otherwise the excuse would hide an orphan.
 const NotWipedCascadePrefix = "removed with its parent (Postgres ON DELETE CASCADE; SQLiteCascadeGraph on SQLite): "
 
-// notWipedUnreviewed is the reason for a project-scoped table nobody has yet
-// decided the wipe should delete. Its rows outlive the project. The
-// disposition is an operator decision (archival LLD 2026-10-13 §E).
-const notWipedUnreviewed = "UNREVIEWED: left behind by the wipe; disposition open (archival LLD 2026-10-13 §E)"
+// NotWipedKeptPrefix starts the reason of a table whose project rows the wipe
+// keeps by decision. The rest of the reason says why. The kept set is pinned
+// by name (TestProjectScopedTablesNotWiped_EveryReasonDecided), so keeping a
+// table's rows past its project is a reviewed decision, never a default.
+// There is no third category: "UNREVIEWED" was retired by archival design
+// section J (GitHub #370, 2026-10-16).
+const NotWipedKeptPrefix = "kept: "
 
 // ProjectScopedTablesNotWiped is the other half of the denominator: every
 // table with a project_id column, on either driver, that ProjectDataTables
 // does not list, with the reason. The guard tests (one per driver) read every
 // base table with a project_id column from the live schema and fail on one in
 // neither ProjectDataTables nor this map, so a new project-scoped table cannot
-// be missed silently — it must be wiped or excluded here with a reason.
+// be missed silently — it must be wiped, partly wiped
+// (ProjectDataTablesPartial), or excluded here as a cascade child or with a
+// "kept:" reason.
+//
+// see LLD § https://docs.vornik.io "2026-10-16 — every project table decided"
 var ProjectScopedTablesNotWiped = map[string]string{
 	// Removed by the cascade from a wiped parent (Postgres ON DELETE CASCADE;
 	// SQLiteCascadeGraph on SQLite). They carry project_id but need no pass
@@ -290,20 +432,7 @@ var ProjectScopedTablesNotWiped = map[string]string{
 	"knowledge_edges":             NotWipedCascadePrefix + "knowledge_entities",
 	"workflow_healing_candidates": NotWipedCascadePrefix + "workflow_healing_triggers",
 
-	"blackbox_trace_cache":    notWipedUnreviewed,
-	"broker_actions":          notWipedUnreviewed,
-	"budget_reservations":     notWipedUnreviewed,
-	"control_plane_proposals": notWipedUnreviewed,
-	"data_subject_links":      notWipedUnreviewed,
-	"fixit_sessions":          notWipedUnreviewed,
-	"forge_ci_outcomes":       notWipedUnreviewed,
-	"forge_pr_review_state":   notWipedUnreviewed,
-	"group_projects":          notWipedUnreviewed,
-	"instincts":               notWipedUnreviewed,
-	"project_first_seen":      notWipedUnreviewed,
-	"project_skills":          notWipedUnreviewed,
-	"recovery_events":         notWipedUnreviewed,
-	"secret_redaction_audit":  notWipedUnreviewed,
-	"trading_fills_shadow":    notWipedUnreviewed,
-	"web_write_actions":       notWipedUnreviewed,
+	"secret_redaction_audit": NotWipedKeptPrefix + "the security record that a secret reached a sink in this " +
+		"project, the evidence for rotating a credential that lives on at its vendor; it holds ids, a sink " +
+		"name, a pattern name and a count, never the secret or any content (column set pinned by the guards)",
 }

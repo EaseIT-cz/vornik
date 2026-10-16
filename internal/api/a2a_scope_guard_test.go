@@ -26,7 +26,7 @@ func TestA2AScopeGuard_CrossProjectKey_Forbidden(t *testing.T) {
 	guard := a2aScopeGuard(passThroughOK)
 	req := httptest.NewRequest(http.MethodPost, "/a2a/v1/agents/companion-example/product-qa/tasks", nil)
 	// Key bound to a DIFFERENT project than the one in the path.
-	req = req.WithContext(ContextWithProjectScope(req.Context(), "janka"))
+	req = req.WithContext(ContextWithProjectScope(req.Context(), "family"))
 	rec := httptest.NewRecorder()
 
 	guard(rec, req)
@@ -70,7 +70,7 @@ func TestA2AScopeGuard_PublicCardBypassesProjectScope(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/a2a/v1/agents/companion-example/product-qa/card", nil)
 	// Discovery is intentionally credential-free, so a scoped key for a
 	// different project must not turn the published card into a 403.
-	req = req.WithContext(ContextWithProjectScope(req.Context(), "janka"))
+	req = req.WithContext(ContextWithProjectScope(req.Context(), "family"))
 	rec := httptest.NewRecorder()
 
 	guard(rec, req)

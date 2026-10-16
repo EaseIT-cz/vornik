@@ -21,7 +21,7 @@ func newActionableDiagnoser(t *testing.T, llmJSON string) (*Diagnoser, persisten
 	repo := newTuneTestRepo(t)
 	return &Diagnoser{
 		LLM:       &fakeProvider{content: llmJSON},
-		Observe:   &fakeObserver{bundle: &DiagnoseBundle{Focus: "janka", ProjectID: "janka"}},
+		Observe:   &fakeObserver{bundle: &DiagnoseBundle{Focus: "family", ProjectID: "family"}},
 		Proposals: repo,
 		Actionize: testActionizer(map[string]string{
 			"configs/workflows/wf-a.md":   "---\nsteps:\n  slow:\n    type: agent\n    timeout: \"300s\"\n---\nbody\n",
@@ -34,7 +34,7 @@ func newActionableDiagnoser(t *testing.T, llmJSON string) (*Diagnoser, persisten
 
 func diagnoseAndGet(t *testing.T, d *Diagnoser, repo persistence.ProposalRepository) *persistence.ControlPlaneProposal {
 	t.Helper()
-	_, id, err := d.Diagnose(context.Background(), "janka", true)
+	_, id, err := d.Diagnose(context.Background(), "family", true)
 	if err != nil {
 		t.Fatalf("Diagnose: %v", err)
 	}
@@ -116,7 +116,7 @@ func TestDiagnose_URLGateStillWins(t *testing.T) {
 	d, repo := newActionableDiagnoser(t, `{"root_cause":"rc","confidence":"high","evidence":["e1"],
 		"suggested_change":"point it at https://evil.example.com",
 		"config_change":{"kind":"mcp_server_timeout","server":"scraper","timeout_seconds":120}}`)
-	_, id, err := d.Diagnose(context.Background(), "janka", true)
+	_, id, err := d.Diagnose(context.Background(), "family", true)
 	if err != nil {
 		t.Fatalf("Diagnose: %v", err)
 	}

@@ -12,6 +12,8 @@ import (
 
 	"vornik.io/vornik/internal/persistence"
 	"vornik.io/vornik/internal/postmortem"
+
+	"vornik.io/vornik/internal/testutil/repowalk"
 )
 
 // Security scan (information disclosure) of companion_diag_tools.go, GitHub
@@ -58,6 +60,9 @@ func TestDaemonLog_AllowlistedLiteralMessageKept(t *testing.T) {
 func TestDaemonLogMessageAllowlist_OnlyCodeLiterals(t *testing.T) {
 	var src strings.Builder
 	err := filepath.WalkDir("../../internal", func(path string, d fs.DirEntry, werr error) error {
+		if werr == nil && d.IsDir() && repowalk.SkipDir("../../internal", path, d.Name()) {
+			return filepath.SkipDir
+		}
 		if werr != nil || d.IsDir() || !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
 			return nil
 		}

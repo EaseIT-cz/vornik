@@ -932,7 +932,7 @@ func TestMiddleware_PlainHTTPNonLoopbackIsRefusedWithTheReason(t *testing.T) {
 			t.Errorf("%s: refusal lacks the CSP", name)
 		}
 	}
-	lan := "192.168.0.142:8080"
+	lan := "192.168.1.50:8080"
 	refused("POST /ui/pair", do(http.MethodPost, "/ui/pair", lan, map[string]string{"Origin": "null"}))
 	refused("GET /ui/pair", do(http.MethodGet, "/ui/pair", lan, nil))
 	refused("GET /ui/pair/wait", do(http.MethodGet, "/ui/pair/wait", lan, nil))
@@ -952,7 +952,7 @@ func TestMiddleware_PlainHTTPNonLoopbackIsRefusedWithTheReason(t *testing.T) {
 	// T15 (2026-10-07, BACKLOG P2 "X-Forwarded-Proto is trusted from any
 	// sender"): a direct plain-http client forging the header is refused and
 	// counted, because its peer is not a trusted proxy.
-	refused("forged X-Forwarded-Proto", do(http.MethodPost, "/ui/pair", lan, map[string]string{"X-Forwarded-Proto": "https", "Origin": "https://192.168.0.142:8080"}))
+	refused("forged X-Forwarded-Proto", do(http.MethodPost, "/ui/pair", lan, map[string]string{"X-Forwarded-Proto": "https", "Origin": "https://192.168.1.50:8080"}))
 	if len(counted) != 6 {
 		t.Errorf("forged header not counted: %v", counted)
 	}
@@ -961,7 +961,7 @@ func TestMiddleware_PlainHTTPNonLoopbackIsRefusedWithTheReason(t *testing.T) {
 	pr.Host = lan
 	pr.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	pr.Header.Set("X-Forwarded-Proto", "https")
-	pr.Header.Set("Origin", "https://192.168.0.142:8080")
+	pr.Header.Set("Origin", "https://192.168.1.50:8080")
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, pr.WithContext(realip.WithTrustedPeer(pr.Context())))
 	if strings.Contains(w.Body.String(), "need HTTPS") {

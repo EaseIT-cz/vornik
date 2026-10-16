@@ -344,7 +344,7 @@ func TestAdminControlPlane_LatencyRowDiagnoseDeepLink(t *testing.T) {
 	seedLatency := func(t *testing.T) persistence.ProposalRepository {
 		repo := newProposalRepoUI(t)
 		p := &persistence.ControlPlaneProposal{
-			ID: "cpl-1", ProjectID: "janka", Kind: persistence.ProposalKindConfig,
+			ID: "cpl-1", ProjectID: "family", Kind: persistence.ProposalKindConfig,
 			BlastRadius: persistence.ProposalScopeProject, Title: "raise agent timeout",
 			Status: persistence.ProposalStatusDraft, ProposedBy: "tune-detector",
 			Evidence: `{"signal":"latency_p95_seconds","observed":42.1}`,
@@ -358,13 +358,13 @@ func TestAdminControlPlane_LatencyRowDiagnoseDeepLink(t *testing.T) {
 	ee := NewServer(WithProposalStore(seedLatency(t)), WithDiagnoser(&fakeUIDiagnoser{}))
 	body := getCPProposals(t, ee, "")
 	if !strings.Contains(body, "Diagnose ↗") ||
-		!strings.Contains(body, "section=diagnose&amp;focus=janka") {
+		!strings.Contains(body, "section=diagnose&amp;focus=family") {
 		t.Errorf("latency row missing the Diagnose deep-link: %s", body)
 	}
 	// The deep-link pre-fills the Diagnose form.
 	rec := httptest.NewRecorder()
-	ee.AdminControlPlane(rec, httptest.NewRequest(http.MethodGet, "/ui/admin/control-plane?section=diagnose&focus=janka", nil))
-	if !strings.Contains(rec.Body.String(), `value="janka"`) {
+	ee.AdminControlPlane(rec, httptest.NewRequest(http.MethodGet, "/ui/admin/control-plane?section=diagnose&focus=family", nil))
+	if !strings.Contains(rec.Body.String(), `value="family"`) {
 		t.Error("Diagnose form should pre-fill focus from the query param")
 	}
 
@@ -385,7 +385,7 @@ func TestAdminControlPlane_AckCheckboxDaemonAndSwarm(t *testing.T) {
 			ProposedBy: "agent", ApplyTarget: "config.yaml", ApplyContent: "x: 1\n",
 		}
 		if scope != persistence.ProposalScopeDaemon {
-			p.ProjectID = "janka"
+			p.ProjectID = "family"
 		}
 		if err := repo.Create(context.Background(), p); err != nil {
 			t.Fatalf("seed %s: %v", id, err)

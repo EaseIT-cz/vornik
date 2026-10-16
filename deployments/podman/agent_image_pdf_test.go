@@ -7,6 +7,8 @@ import (
 	"regexp"
 	"strings"
 	"testing"
+
+	"vornik.io/vornik/internal/testutil/repowalk"
 )
 
 // The shipped role prompts make a PROMISE about the agent image. Examples:
@@ -70,6 +72,9 @@ func TestShippedPromptsPromiseMatchesImage(t *testing.T) {
 		err := filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
 			if err != nil {
 				return err
+			}
+			if d.IsDir() && repowalk.SkipDir(root, path, d.Name()) {
+				return filepath.SkipDir
 			}
 			if d.IsDir() || (!strings.HasSuffix(path, ".md") && !strings.HasSuffix(path, ".tmpl")) {
 				return nil

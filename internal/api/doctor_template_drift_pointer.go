@@ -82,6 +82,7 @@ var doctorCheckConfigPointer = map[string]string{
 	"checkTaskStateAudit":          "",
 	"checkToolAuditRedaction":      "",
 	"checkUnclassifiedShare":       "",
+	"checkMemoryTextDamage":        "",
 	"checkWebWritesInsecure":       "",
 	"checkSecretStoreKey":          "",
 	"checkApproverDevices":         "",

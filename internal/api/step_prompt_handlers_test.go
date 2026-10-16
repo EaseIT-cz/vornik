@@ -52,7 +52,7 @@ func promptServer(t *testing.T) (*Server, *memPromptRepo, *stubStepOutcomeRepo) 
 	prompts := &memPromptRepo{bodies: map[string]string{}}
 	outcomes := &stubStepOutcomeRepo{}
 	s := NewServer(WithLogger(zerolog.Nop()),
-		WithExecutionRepository(&promptExecRepo{exec: &persistence.Execution{ID: "exec_1", ProjectID: "janka"}}),
+		WithExecutionRepository(&promptExecRepo{exec: &persistence.Execution{ID: "exec_1", ProjectID: "family"}}),
 		WithExecutionStepOutcomeRepository(outcomes),
 		WithStepPromptRepository(prompts))
 	return s, prompts, outcomes

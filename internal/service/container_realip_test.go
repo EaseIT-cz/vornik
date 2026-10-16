@@ -151,7 +151,7 @@ func TestWrapRealIP_HTTPSPublicOriginWithoutRealIPWarns(t *testing.T) {
 		}, false},
 		{"no public origin", func(*config.Config) {}, false},
 		{"http public origin", func(c *config.Config) {
-			c.Server.PublicBaseURL = "http://192.168.0.142:8080"
+			c.Server.PublicBaseURL = "http://192.168.1.50:8080"
 		}, false},
 	}
 	for _, tc := range cases {

@@ -9,6 +9,8 @@ import (
 	"testing"
 
 	"gopkg.in/yaml.v3"
+
+	"vornik.io/vornik/internal/testutil/repowalk"
 )
 
 // TestLeadRoleSystemPromptDoesNotContainWrongShape walks every
@@ -54,6 +56,9 @@ func TestLeadRoleSystemPromptDoesNotContainWrongShape(t *testing.T) {
 				return err
 			}
 			if info.IsDir() {
+				if repowalk.SkipDir(root, path, info.Name()) {
+					return filepath.SkipDir
+				}
 				return nil
 			}
 			// Only SWARM.md; skip backups, JSON, etc.
@@ -203,6 +208,9 @@ func TestRoleSystemPromptsDoNotConflictWithWorkflowStepShape(t *testing.T) {
 				return err
 			}
 			if info.IsDir() {
+				if repowalk.SkipDir(root, path, info.Name()) {
+					return filepath.SkipDir
+				}
 				return nil
 			}
 			if !strings.HasSuffix(path, ".md") {
@@ -296,6 +304,9 @@ func scanWorkflowStepShapePins(t *testing.T, repoRoot string) map[workflowConfli
 			return err
 		}
 		if info.IsDir() {
+			if repowalk.SkipDir(root, path, info.Name()) {
+				return filepath.SkipDir
+			}
 			return nil
 		}
 		if !strings.HasSuffix(path, ".md") {

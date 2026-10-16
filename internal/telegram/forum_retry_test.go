@@ -8,7 +8,7 @@ import (
 // TestParseTelegramRetryAfter covers the 429 backoff parser that
 // sendDocumentToForum reads to pace its retries. Pre-fix, 429s
 // fanning out 4 artifacts to one thread dropped every document
-// silently (observed 2026-05-18 on janka's CV delivery — the bot
+// silently (observed 2026-05-18 on family's CV delivery — the bot
 // logged "forum: failed to send artifact" four times and moved on,
 // leaving the operator empty-handed).
 func TestParseTelegramRetryAfter(t *testing.T) {

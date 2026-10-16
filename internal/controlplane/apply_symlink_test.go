@@ -31,7 +31,7 @@ func TestApply_RejectsSymlinkEscape(t *testing.T) {
 	}
 	ctx := context.Background()
 	p := &persistence.ControlPlaneProposal{
-		ID: persistence.GenerateID("cpp"), ProjectID: "janka",
+		ID: persistence.GenerateID("cpp"), ProjectID: "family",
 		Kind: persistence.ProposalKindConfig, BlastRadius: persistence.ProposalScopeProject,
 		Title: "escape", ApplyTarget: "escape/pwned", ApplyContent: "new",
 		Status: persistence.ProposalStatusDraft, ProposedBy: "tune-detector",

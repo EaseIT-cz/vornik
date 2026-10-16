@@ -1070,12 +1070,16 @@ type fakeMemoryCompanion struct {
 		ProjectID, Query string
 		Opts             RecallOptions
 	}
-	recallReturn      []MemorySearchResult
-	recallErr         error
-	rememberCalls     []RememberInput
-	rememberOut       RememberResult
-	rememberErr       error
-	recentMemoryCalls []struct {
+	recallReturn []MemorySearchResult
+	recallErr    error
+	// strictRecallReturn / strictRecallErr, when either is set, answer a
+	// Recall with StrictScope (design_record's crowded-zero recount, §11.14).
+	strictRecallReturn []MemorySearchResult
+	strictRecallErr    error
+	rememberCalls      []RememberInput
+	rememberOut        RememberResult
+	rememberErr        error
+	recentMemoryCalls  []struct {
 		ProjectID    string
 		Limit        int
 		RepoScope    string
@@ -1102,6 +1106,9 @@ func (f *fakeMemoryCompanion) Recall(_ context.Context, projectID, query string,
 		ProjectID, Query string
 		Opts             RecallOptions
 	}{projectID, query, opts})
+	if opts.StrictScope && (f.strictRecallReturn != nil || f.strictRecallErr != nil) {
+		return f.strictRecallReturn, f.strictRecallErr
+	}
 	if f.recallErr != nil {
 		return nil, f.recallErr
 	}

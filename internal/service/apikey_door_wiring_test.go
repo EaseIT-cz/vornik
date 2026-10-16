@@ -12,6 +12,8 @@ import (
 	"vornik.io/vornik/internal/api"
 	"vornik.io/vornik/internal/persistence"
 	"vornik.io/vornik/internal/storage"
+
+	"vornik.io/vornik/internal/testutil/repowalk"
 )
 
 // TestAPIKeyAuthOptions_CarriesTheDoorWheneverAccountsExist — the §5.0
@@ -70,6 +72,9 @@ func TestAPIKeyLookup_IsOnlyReachableThroughTheBundle(t *testing.T) {
 	err := filepath.Walk("..", func(path string, info os.FileInfo, werr error) error {
 		if werr != nil {
 			return werr
+		}
+		if info.IsDir() && repowalk.SkipDir("..", path, info.Name()) {
+			return filepath.SkipDir
 		}
 		if info.IsDir() || !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
 			return nil

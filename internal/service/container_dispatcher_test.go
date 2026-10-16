@@ -145,11 +145,11 @@ func setupProjectRegistryForBootWarnTest(t *testing.T, apiProvidersYAML string) 
 	if err := os.MkdirAll(projectsDir, 0o755); err != nil {
 		t.Fatalf("mkdir: %v", err)
 	}
-	yamlSrc := "projectId: \"janka\"\n" +
+	yamlSrc := "projectId: \"family\"\n" +
 		"swarmId: \"test-swarm\"\n" +
 		"defaultWorkflowId: \"test-workflow\"\n" +
 		apiProvidersYAML
-	if err := os.WriteFile(filepath.Join(projectsDir, "janka.yaml"), []byte(yamlSrc), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(projectsDir, "family.yaml"), []byte(yamlSrc), 0o644); err != nil {
 		t.Fatalf("write project: %v", err)
 	}
 
@@ -191,8 +191,8 @@ func TestInitDispatcher_WarnsUnknownAPIProviders(t *testing.T) {
 	if !strings.Contains(out, "headmatch-ats") {
 		t.Fatalf("expected boot warning naming the unknown provider %q, got log: %s", "headmatch-ats", out)
 	}
-	if !strings.Contains(out, "janka") {
-		t.Fatalf("expected boot warning to name the offending project %q, got log: %s", "janka", out)
+	if !strings.Contains(out, "family") {
+		t.Fatalf("expected boot warning to name the offending project %q, got log: %s", "family", out)
 	}
 }
 

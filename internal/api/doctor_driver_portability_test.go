@@ -64,6 +64,13 @@ func seedPortabilityDB(t *testing.T) *sql.DB {
 		// SKIPPED with the driver's "no such table" in its message, which the
 		// assertions below (rightly) refuse — the fixture's job is to let each
 		// check reach its SQL, so the guard tests the QUERY and not the fixture.
+		// memory_text_damage (GitHub #389) sweeps chunk text; one damaged
+		// live row makes it return a real WARNING verdict.
+		`CREATE TABLE project_memory_chunks (
+			id TEXT PRIMARY KEY, project_id TEXT NOT NULL, content TEXT NOT NULL DEFAULT '',
+			validation_status TEXT NOT NULL DEFAULT 'unverified',
+			lifecycle_state TEXT NOT NULL DEFAULT 'published')`,
+		`INSERT INTO project_memory_chunks (id, project_id, content) VALUES ('chunk-damaged', 'p1', 'x' || char(11) || 'y')`,
 		`CREATE TABLE security_incidents (
 			id TEXT PRIMARY KEY, detected_at TIMESTAMP, severity TEXT,
 			authority_notified_at TIMESTAMP, subjects_notified_at TIMESTAMP,
@@ -138,6 +145,7 @@ func TestDoctor_TheDatabaseBackedChecksReachTheirSQL(t *testing.T) {
 		{"stuck_executions", h.checkStuckExecutions(ctx, false), "stuck"},
 		{"task_state_audit", h.checkTaskStateAudit(ctx, false), ""},
 		{"fallback_rungs", h.checkFallbackRungs(ctx), ""},
+		{"memory_text_damage", h.checkMemoryTextDamage(ctx), "1 of 1 chunks examined"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

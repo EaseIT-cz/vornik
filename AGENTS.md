@@ -310,7 +310,7 @@ proposal lands as a `draft` and does not fire until approved (`skill_admin`).
 home project. Mark it **global** — `skill_propose global:true`, or
 `/skill-set-global <id>` / `vornikctl knowledge set-global <id>` — and it
 injects into **every** project's roles, so a procedure captured in your
-`companion-$USER` project reaches the autonomy roles (e.g. `janka`,
+`companion-$USER` project reaches the autonomy roles (e.g. `family`,
 `assistant`) too. Global drafts are labelled "affects ALL projects" wherever
 they're reviewed.
 

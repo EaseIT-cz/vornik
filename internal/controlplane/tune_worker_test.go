@@ -65,7 +65,7 @@ func newTuneWorker(repo persistence.ProposalRepository, m MetricsSource) *TuneWo
 
 func TestTune_ProposesOnSustainedBreach(t *testing.T) {
 	repo := newTuneTestRepo(t)
-	m := &fakeMetrics{ret: map[string]RateSample{"janka": {Failed: 8, Total: 10, Rate: 0.8}}}
+	m := &fakeMetrics{ret: map[string]RateSample{"family": {Failed: 8, Total: 10, Rate: 0.8}}}
 	w := newTuneWorker(repo, m)
 	ctx := context.Background()
 
@@ -91,7 +91,7 @@ func TestTune_ProposesOnSustainedBreach(t *testing.T) {
 
 func TestTune_ProposesOnSustainedLatencyBreach(t *testing.T) {
 	repo := newTuneTestRepo(t)
-	m := &fakeMetrics{lats: map[string]LatencySample{"janka": {P95Seconds: 420, Count: 8}}}
+	m := &fakeMetrics{lats: map[string]LatencySample{"family": {P95Seconds: 420, Count: 8}}}
 	w := newTuneWorker(repo, m)
 	ctx := context.Background()
 	w.tick(ctx)
@@ -104,15 +104,15 @@ func TestTune_ProposesOnSustainedLatencyBreach(t *testing.T) {
 		t.Fatalf("expected 1 latency proposal on the 3rd breach, got %d", n)
 	}
 	// The proposal must be the latency one (distinct from failed-rate).
-	ps, _ := repo.List(ctx, persistence.ProposalListFilter{ProjectID: "janka"})
-	if len(ps) != 1 || ps[0].Title != tuneLatencyTitle("janka") {
+	ps, _ := repo.List(ctx, persistence.ProposalListFilter{ProjectID: "family"})
+	if len(ps) != 1 || ps[0].Title != tuneLatencyTitle("family") {
 		t.Fatalf("expected the latency-titled proposal, got %+v", ps)
 	}
 }
 
 func TestTune_NoProposeBelowThreshold(t *testing.T) {
 	repo := newTuneTestRepo(t)
-	m := &fakeMetrics{ret: map[string]RateSample{"janka": {Failed: 2, Total: 10, Rate: 0.2}}}
+	m := &fakeMetrics{ret: map[string]RateSample{"family": {Failed: 2, Total: 10, Rate: 0.2}}}
 	w := newTuneWorker(repo, m)
 	for i := 0; i < 5; i++ {
 		w.tick(context.Background())
@@ -125,7 +125,7 @@ func TestTune_NoProposeBelowThreshold(t *testing.T) {
 func TestTune_NoProposeBelowMinSamples(t *testing.T) {
 	repo := newTuneTestRepo(t)
 	// 100% failed but only 2 samples — too few to act on.
-	m := &fakeMetrics{ret: map[string]RateSample{"janka": {Failed: 2, Total: 2, Rate: 1.0}}}
+	m := &fakeMetrics{ret: map[string]RateSample{"family": {Failed: 2, Total: 2, Rate: 1.0}}}
 	w := newTuneWorker(repo, m)
 	for i := 0; i < 5; i++ {
 		w.tick(context.Background())
@@ -137,16 +137,16 @@ func TestTune_NoProposeBelowMinSamples(t *testing.T) {
 
 func TestTune_BreachStreakResetsOnRecovery(t *testing.T) {
 	repo := newTuneTestRepo(t)
-	m := &fakeMetrics{ret: map[string]RateSample{"janka": {Failed: 8, Total: 10, Rate: 0.8}}}
+	m := &fakeMetrics{ret: map[string]RateSample{"family": {Failed: 8, Total: 10, Rate: 0.8}}}
 	w := newTuneWorker(repo, m)
 	ctx := context.Background()
 	w.tick(ctx)
 	w.tick(ctx) // 2 breaches
 	// Recovery tick resets the streak.
-	m.ret = map[string]RateSample{"janka": {Failed: 1, Total: 10, Rate: 0.1}}
+	m.ret = map[string]RateSample{"family": {Failed: 1, Total: 10, Rate: 0.1}}
 	w.tick(ctx)
 	// Back to breaching — needs 3 fresh consecutive again.
-	m.ret = map[string]RateSample{"janka": {Failed: 8, Total: 10, Rate: 0.8}}
+	m.ret = map[string]RateSample{"family": {Failed: 8, Total: 10, Rate: 0.8}}
 	w.tick(ctx)
 	w.tick(ctx)
 	if n := draftCount(t, repo); n != 0 {
@@ -173,7 +173,7 @@ func TestInstinct_ToolTimeoutProposesWithClampedSuggestion(t *testing.T) {
 	repo := newTuneTestRepo(t)
 	// p95 = 400s → ceil(400*1.5)=600 > 300 cap → clamped to 300.
 	m := &fakeMetrics{tools: []ToolLatencySample{
-		{Key: ProjectToolKey{Project: "janka", Tool: "web_fetch"}, P95Seconds: 400, Count: 10},
+		{Key: ProjectToolKey{Project: "family", Tool: "web_fetch"}, P95Seconds: 400, Count: 10},
 	}}
 	w := newTuneWorker(repo, m)
 	ctx := context.Background()
@@ -201,7 +201,7 @@ func TestInstinct_ToolTimeoutProposesWithClampedSuggestion(t *testing.T) {
 func TestInstinct_ToolBelowThresholdNeverFires(t *testing.T) {
 	repo := newTuneTestRepo(t)
 	m := &fakeMetrics{tools: []ToolLatencySample{
-		{Key: ProjectToolKey{Project: "janka", Tool: "shell"}, P95Seconds: 10, Count: 100},
+		{Key: ProjectToolKey{Project: "family", Tool: "shell"}, P95Seconds: 10, Count: 100},
 	}}
 	w := newTuneWorker(repo, m)
 	for i := 0; i < 5; i++ {
@@ -214,7 +214,7 @@ func TestInstinct_ToolBelowThresholdNeverFires(t *testing.T) {
 
 func TestInstinct_ToolBelowMinSamplesResetsStreak(t *testing.T) {
 	repo := newTuneTestRepo(t)
-	key := ProjectToolKey{Project: "janka", Tool: "web_fetch"}
+	key := ProjectToolKey{Project: "family", Tool: "web_fetch"}
 	m := &fakeMetrics{tools: []ToolLatencySample{{Key: key, P95Seconds: 400, Count: 10}}}
 	w := newTuneWorker(repo, m)
 	ctx := context.Background()
@@ -239,7 +239,7 @@ func TestInstinct_ToolBelowMinSamplesResetsStreak(t *testing.T) {
 func TestInstinct_ToolSignalDisabledByNegativeThreshold(t *testing.T) {
 	repo := newTuneTestRepo(t)
 	m := &fakeMetrics{tools: []ToolLatencySample{
-		{Key: ProjectToolKey{Project: "janka", Tool: "web_fetch"}, P95Seconds: 999, Count: 100},
+		{Key: ProjectToolKey{Project: "family", Tool: "web_fetch"}, P95Seconds: 999, Count: 100},
 	}}
 	w := newTuneWorker(repo, m)
 	w.ToolLatencyThresholdSeconds = -1 // disabled

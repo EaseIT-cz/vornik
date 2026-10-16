@@ -114,9 +114,12 @@ func (r *Renderer) planInstall(st *State, in InstallRecipeInput, rec *Recipe, va
 		return nil, why
 	}
 	plan.schedule = sched
-	// Track new entries while planning so two different credentials introduced
-	// by one recipe cannot evade the per-project host/account rule by being
-	// classified against the same pre-install project snapshot.
+	// Classify each need against the project plus the install's earlier new
+	// entries, so the per-project checks that read the project's servers (C2
+	// oauthSlotTaken, the name lookup) see them too (GitHub #316; kept by
+	// #402, code review 7142). The two-connections rule is no longer one of
+	// them: the install's sentence says it (recipeSameAccount, which reads
+	// plan.p, the project as loaded).
 	planningProject := *p
 	planningProject.Servers = append([]ServerState(nil), p.Servers...)
 	planningProject.APIs = append([]APIState(nil), p.APIs...)
@@ -277,14 +280,9 @@ func classifyEntry(st *State, p *ProjectState, n RecipeNeed, url, account string
 			}
 		}
 		e.class = EntryNew
-		// Reused entries are exempt per §22.2.8; only new credentials need a
-		// fresh host/account collision check.
-		if why := sameHostSameLabelWithRemedy(p, connection{
-			name: n.Name, url: e.url, authRef: e.authRef, oauth: e.oauth,
-			label: agentns.AccountOf(account),
-		}, "set account on install_recipe to a distinct label"); why != "" {
-			return e, why
-		}
+		// The two-connections rule does not refuse a recipe entry: another
+		// connection at its host under its label is said in the sentence
+		// (recipeSameAccount; design §22.2.17, GitHub #402).
 		if n.Credential == nil {
 			if advertised, ok := st.Advertised[url]; ok && len(advertised) > 0 {
 				// The unauthenticated tool check, before any approval.
@@ -474,7 +472,14 @@ func composeInstall(st *State, plan *installPlan, out *renderedInstall) Change {
 			c.Grant.Workflows = map[string]string{wid: hash}
 		}
 		c.Credentials = credentialFollowUps(rec, p.ID)
-		c.Sentence = installSentence(ns, rec, p.ID, plan, wid, out.wf, prev) + recipeSharedCredentials(st, plan)
+		same, phrases := recipeSameAccount(st, plan)
+		for name, phrase := range phrases {
+			if c.accounts == nil {
+				c.accounts = map[string]string{}
+			}
+			c.accounts[name] = phrase
+		}
+		c.Sentence = installSentence(ns, rec, p.ID, plan, wid, out.wf, prev) + recipeSharedCredentials(st, plan) + same
 	case len(c.Narrow.RemovedTools) > 0:
 		c.Sentence = fmt.Sprintf("Your assistant (%s) updated %q in %s to version %d; %s.", ns, rec.Title, p.ID, rec.Version, removalPhrase(plan))
 	case len(c.Ops) == 0:
@@ -872,6 +877,104 @@ func sortedWorkflowKeys(st *State) []string {
 	}
 	sort.Strings(out)
 	return out
+}
+
+// recipeSameAccount is the two-connections rule for an install (design
+// §22.2.17, GitHub #402): a recipe entry is not refused for sharing a host
+// with another connection under its label and another credential; the
+// sentence says the two are one account, and how to decline. It fires
+// exactly where sameAccountAtHost would have refused: a new entry with a
+// credential, against the project's connections and the install's other
+// new entries. connectionsOf skips write siblings, so none is said twice.
+// It returns the sentence and the plain view's account phrase per entry it
+// names. Every name in it is daemon-computed (§19.7 F3).
+func recipeSameAccount(st *State, plan *installPlan) (string, map[string]string) {
+	label := agentns.AccountOf(plan.rec.account)
+	phrase := accountWords(label, "", "", true)
+	hosts, news := newEntriesByHost(plan, label)
+	var b strings.Builder
+	phrases := map[string]string{}
+	for _, h := range hosts {
+		s, said := sameAccountAt(st, plan.p, h, news[h], phrase)
+		b.WriteString(s)
+		for _, n := range said {
+			phrases[n] = phrase
+		}
+	}
+	return b.String(), phrases
+}
+
+// newEntriesByHost groups an install's new credentialed entries by host,
+// hosts in entry order.
+func newEntriesByHost(plan *installPlan, label string) ([]string, map[string][]connection) {
+	var hosts []string
+	news := map[string][]connection{}
+	for _, e := range plan.entries {
+		c := connection{project: plan.p.ID, name: e.need.Name, url: e.url, authRef: e.authRef, oauth: e.oauth, label: label}
+		if e.class != EntryNew || c.credentialKey() == "" {
+			continue
+		}
+		h := hostKey(e.url)
+		if _, ok := news[h]; !ok {
+			hosts = append(hosts, h)
+		}
+		news[h] = append(news[h], c)
+	}
+	return hosts, news
+}
+
+// sameAccountAt is recipeSameAccount's sentence for one host h and the
+// install's new entries there, with the entries it names ("" and none when
+// there is nothing to say).
+func sameAccountAt(st *State, p *ProjectState, h string, news []connection, phrase string) (string, []string) {
+	seen := map[string]bool{}
+	var joined []connection
+	var joining []string
+	for _, n := range news {
+		others := sameAccountAtHost(p, n)
+		if len(others) > 0 {
+			joining = append(joining, n.name) // an entry sharing the existing credential is C4's, not this
+		}
+		for _, c := range others {
+			if !seen[c.name] {
+				seen[c.name] = true
+				joined = append(joined, c)
+			}
+		}
+	}
+	if len(joined) > 0 {
+		return joiningSentence(st, p, h, joining, joined), joining
+	}
+	keys := map[string]bool{}
+	var all []string
+	for _, n := range news {
+		keys[n.credentialKey()] = true
+		all = append(all, n.name)
+	}
+	if len(keys) < 2 {
+		return "", nil
+	}
+	own := ", each with its own credential"
+	if len(keys) < len(news) {
+		own = fmt.Sprintf(", with %d credentials among them", len(keys)) // two entries share a key (C4)
+	}
+	return fmt.Sprintf(" %s reach %s as one account, %s%s. If they are not one account, decline this.", joinWords(all), h, phrase, own), all
+}
+
+// joiningSentence says that the new entries joining at h act as the
+// account the existing connections there already act as, each named by its
+// own account words (its provider identity when it has one).
+func joiningSentence(st *State, p *ProjectState, h string, joining []string, joined []connection) string {
+	var as []string
+	for _, c := range joined {
+		a := st.Approvals[p.ID][c.name]
+		as = append(as, c.name+" already reaches as "+accountWords(c.label, a.AccountIdentity, a.IdentitySource, true))
+	}
+	const decline = " If that is another account, decline this and have your assistant install it with another account label."
+	if len(joining) == 1 {
+		return fmt.Sprintf(" %s reaches %s, which %s: it will act as that same account, with its own credential.", joining[0], h, joinWords(as)) + decline
+	}
+	return fmt.Sprintf(" %s reach %s, which %s: they will act as that same account, each with its own credential.", joinWords(joining), h, joinWords(as)) + decline
 }
 
 // recipeSharedCredentials is C4 for an install (design §22.2.3; security

@@ -456,7 +456,7 @@ func TestCreateAutonomousTask_EmptyPrompt(t *testing.T) {
 // check inside createAutonomousTask. Even if every upstream path
 // were to leak a NO_ACTION sentinel (literal or JSON-embedded),
 // the create_task method must suppress the task creation rather
-// than spawn a worker on a no-op prompt. The 2026-05-12 janka
+// than spawn a worker on a no-op prompt. The 2026-05-12 family
 // incident (task_20260512212548 created with prompt "NO_ACTION")
 // motivated this final guard.
 func TestCreateAutonomousTask_NoActionSentinel(t *testing.T) {
@@ -750,7 +750,7 @@ func TestGenerateTaskID(t *testing.T) {
 // TestProjectLoop_RunsInitialEvaluation pins the regression that
 // prompted the fix: every daemon restart used to push the first
 // evaluation out by the full pollInterval (60m for ibkr-trader,
-// 90m for snake, 5h for janka), so an operator who saw "tasks due
+// 90m for snake, 5h for family), so an operator who saw "tasks due
 // now" right after a restart had to wait the full interval before
 // the first scheduling pass. With the fix, the first evaluation
 // fires synchronously at loop start; the ticker covers
@@ -814,7 +814,7 @@ func TestProjectLoop_RunsInitialEvaluation(t *testing.T) {
 // fired its initial eval unconditionally. With 5 enabled projects
 // and ~10 reloads/restarts per debug session, that's 50 spurious
 // evals piling up against rate-limit gates — operator-reported
-// symptom: "janka scheduled 4 tasks in the last hour despite a
+// symptom: "family scheduled 4 tasks in the last hour despite a
 // 5h pollInterval".
 //
 // Now: when autonomy_evaluations has a row newer than `interval`,

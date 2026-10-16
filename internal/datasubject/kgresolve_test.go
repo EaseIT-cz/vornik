@@ -173,10 +173,10 @@ func TestKGResolver_CandidatesMatchNameAndAliases(t *testing.T) {
 	store.realSubject("ds_1", "Jane Doe")
 	idx := &fakeKGIndex{
 		entities: map[string][]KGEntity{
-			"janka": {
-				{ID: "ent_7f3", ProjectID: "janka", CanonicalName: "Jane Doe"},
-				{ID: "ent_2b8", ProjectID: "janka", CanonicalName: "Doe Industries"},
-				{ID: "ent_555", ProjectID: "janka", CanonicalName: "Someone Else"},
+			"family": {
+				{ID: "ent_7f3", ProjectID: "family", CanonicalName: "Jane Doe"},
+				{ID: "ent_2b8", ProjectID: "family", CanonicalName: "Doe Industries"},
+				{ID: "ent_555", ProjectID: "family", CanonicalName: "Someone Else"},
 			},
 			"headmatch": {
 				{ID: "ent_9a1", ProjectID: "headmatch", CanonicalName: "J. Doe", Aliases: []string{"Jane Doe"}},
@@ -223,9 +223,9 @@ func TestKGResolver_CandidatesMatchNameAndAliases(t *testing.T) {
 func TestKGResolver_CandidatesDoNotFilterLikelyFalsePositives(t *testing.T) {
 	store := newFakeStore()
 	store.realSubject("ds_1", "Jane Doe")
-	idx := &fakeKGIndex{entities: map[string][]KGEntity{"janka": {
-		{ID: "ent_7f3", ProjectID: "janka", CanonicalName: "Jane Doe"},
-		{ID: "ent_2b8", ProjectID: "janka", CanonicalName: "Doe Industries"},
+	idx := &fakeKGIndex{entities: map[string][]KGEntity{"family": {
+		{ID: "ent_7f3", ProjectID: "family", CanonicalName: "Jane Doe"},
+		{ID: "ent_2b8", ProjectID: "family", CanonicalName: "Doe Industries"},
 	}}}
 	got, err := testResolver(store, idx).Candidates(context.Background(), "ds_1", []string{"Doe"}, nil)
 	if err != nil {
@@ -248,8 +248,8 @@ func TestKGResolver_CandidatesUseExtraNames(t *testing.T) {
 	store := newFakeStore()
 	store.realSubject("ds_1", "Jane Doe")
 	idx := &fakeKGIndex{
-		entities: map[string][]KGEntity{"janka": {
-			{ID: "ent_nick", ProjectID: "janka", CanonicalName: "Janey"},
+		entities: map[string][]KGEntity{"family": {
+			{ID: "ent_nick", ProjectID: "family", CanonicalName: "Janey"},
 		}},
 	}
 	// The design's §5.1 false negative: a nickname the extractor never linked
@@ -276,11 +276,11 @@ func TestKGResolver_CandidatesClassifyBindingState(t *testing.T) {
 		Kind: KindKGEntity, Value: "ent_mine",
 		Source: SourceKGExtraction, Confidence: ConfidencePossible,
 	}}
-	idx := &fakeKGIndex{entities: map[string][]KGEntity{"janka": {
-		{ID: "ent_free", ProjectID: "janka", CanonicalName: "Jane Doe"},
-		{ID: "ent_mine", ProjectID: "janka", CanonicalName: "Jane Doe (work)"},
-		{ID: "ent_placeholder", ProjectID: "janka", CanonicalName: "Jane Doe (chat)"},
-		{ID: "ent_conflict", ProjectID: "janka", CanonicalName: "Jane Doe (other)"},
+	idx := &fakeKGIndex{entities: map[string][]KGEntity{"family": {
+		{ID: "ent_free", ProjectID: "family", CanonicalName: "Jane Doe"},
+		{ID: "ent_mine", ProjectID: "family", CanonicalName: "Jane Doe (work)"},
+		{ID: "ent_placeholder", ProjectID: "family", CanonicalName: "Jane Doe (chat)"},
+		{ID: "ent_conflict", ProjectID: "family", CanonicalName: "Jane Doe (other)"},
 	}}}
 	got, err := testResolver(store, idx).Candidates(context.Background(), "ds_1", []string{"Jane Doe"}, nil)
 	if err != nil {
@@ -311,7 +311,7 @@ func TestKGResolver_CandidatesSpanProjectsAndCanBeNarrowed(t *testing.T) {
 	store := newFakeStore()
 	store.realSubject("ds_1", "Jane Doe")
 	idx := &fakeKGIndex{entities: map[string][]KGEntity{
-		"janka":     {{ID: "ent_a", ProjectID: "janka", CanonicalName: "Jane Doe"}},
+		"family":    {{ID: "ent_a", ProjectID: "family", CanonicalName: "Jane Doe"}},
 		"headmatch": {{ID: "ent_b", ProjectID: "headmatch", CanonicalName: "Jane Doe"}},
 	}}
 	all, err := testResolver(store, idx).Candidates(context.Background(), "ds_1", nil, nil)
@@ -321,11 +321,11 @@ func TestKGResolver_CandidatesSpanProjectsAndCanBeNarrowed(t *testing.T) {
 	if len(all) != 2 {
 		t.Fatalf("want a candidate per project, got %d", len(all))
 	}
-	one, err := testResolver(store, idx).Candidates(context.Background(), "ds_1", nil, []string{"janka"})
+	one, err := testResolver(store, idx).Candidates(context.Background(), "ds_1", nil, []string{"family"})
 	if err != nil {
 		t.Fatalf("Candidates(project): %v", err)
 	}
-	if len(one) != 1 || one[0].Entity.ProjectID != "janka" {
+	if len(one) != 1 || one[0].Entity.ProjectID != "family" {
 		t.Errorf("--project did not narrow the search: %+v", one)
 	}
 }
@@ -336,7 +336,7 @@ func TestKGResolver_BindUnboundEntityLinksEveryMention(t *testing.T) {
 	store := newFakeStore()
 	store.realSubject("ds_1", "Jane Doe")
 	idx := &fakeKGIndex{
-		entities: map[string][]KGEntity{"janka": {{ID: "ent_7f3", ProjectID: "janka", CanonicalName: "Jane Doe"}}},
+		entities: map[string][]KGEntity{"family": {{ID: "ent_7f3", ProjectID: "family", CanonicalName: "Jane Doe"}}},
 		mentions: map[string][]string{"ent_7f3": {"chunk_a", "chunk_b", "chunk_c"}},
 	}
 	res, err := testResolver(store, idx).Bind(context.Background(), KGBindRequest{SubjectID: "ds_1", EntityID: "ent_7f3"})
@@ -368,8 +368,8 @@ func TestKGResolver_BindUnboundEntityLinksEveryMention(t *testing.T) {
 		if l.Exclusivity != SharedRow {
 			t.Errorf("exclusivity %q, want shared", l.Exclusivity)
 		}
-		if l.ProjectID != "janka" {
-			t.Errorf("project %q, want janka", l.ProjectID)
+		if l.ProjectID != "family" {
+			t.Errorf("project %q, want family", l.ProjectID)
 		}
 	}
 	// The identifier makes the entity discoverable from the subject, so a
@@ -389,7 +389,7 @@ func TestKGResolver_BindLinksTheEntityRowItself(t *testing.T) {
 	store := newFakeStore()
 	store.realSubject("ds_1", "Jane Doe")
 	idx := &fakeKGIndex{
-		entities: map[string][]KGEntity{"janka": {{ID: "ent_7f3", ProjectID: "janka", CanonicalName: "Jane Doe"}}},
+		entities: map[string][]KGEntity{"family": {{ID: "ent_7f3", ProjectID: "family", CanonicalName: "Jane Doe"}}},
 		mentions: map[string][]string{"ent_7f3": {"chunk_a"}},
 	}
 	if _, err := testResolver(store, idx).Bind(context.Background(),
@@ -405,7 +405,7 @@ func TestKGResolver_BindLinksTheEntityRowItself(t *testing.T) {
 	if entityLink == nil {
 		t.Fatal("no link to knowledge_entities: the subject's own entity row would survive an erasure")
 	}
-	if entityLink.RowID != "ent_7f3" || entityLink.ProjectID != "janka" {
+	if entityLink.RowID != "ent_7f3" || entityLink.ProjectID != "family" {
 		t.Errorf("entity link points at %s/%s", entityLink.ProjectID, entityLink.RowID)
 	}
 	// EXCLUSIVE, unlike the chunk links: a PERSON entity is about exactly one
@@ -424,7 +424,7 @@ func TestKGResolver_BindIsIdempotent(t *testing.T) {
 	store := newFakeStore()
 	store.realSubject("ds_1", "Jane Doe")
 	idx := &fakeKGIndex{
-		entities: map[string][]KGEntity{"janka": {{ID: "ent_7f3", ProjectID: "janka", CanonicalName: "Jane Doe"}}},
+		entities: map[string][]KGEntity{"family": {{ID: "ent_7f3", ProjectID: "family", CanonicalName: "Jane Doe"}}},
 		mentions: map[string][]string{"ent_7f3": {"chunk_a", "chunk_b"}},
 	}
 	r := testResolver(store, idx)
@@ -454,7 +454,7 @@ func TestKGResolver_BindRefusesAnEntityOwnedByAnotherRealSubject(t *testing.T) {
 		Kind: KindKGEntity, Value: "ent_x", Source: SourceKGExtraction, Confidence: ConfidencePossible,
 	}}
 	idx := &fakeKGIndex{
-		entities: map[string][]KGEntity{"janka": {{ID: "ent_x", ProjectID: "janka", CanonicalName: "Jane Doe"}}},
+		entities: map[string][]KGEntity{"family": {{ID: "ent_x", ProjectID: "family", CanonicalName: "Jane Doe"}}},
 		mentions: map[string][]string{"ent_x": {"chunk_a"}},
 	}
 	_, err := testResolver(store, idx).Bind(context.Background(), KGBindRequest{SubjectID: "ds_1", EntityID: "ent_x", Adopt: true})
@@ -478,11 +478,11 @@ func TestKGResolver_BindPlaceholderRequiresAdopt(t *testing.T) {
 	store.realSubject("ds_1", "Jane Doe")
 	store.placeholderFor("ent_7f3")
 	store.links["ds_ph"] = []Link{
-		{Table: TableProjectMemoryChunks, RowID: "chunk_old", ProjectID: "janka",
+		{Table: TableProjectMemoryChunks, RowID: "chunk_old", ProjectID: "family",
 			Source: SourceKGExtraction, Confidence: ConfidencePossible, Exclusivity: SharedRow},
 	}
 	idx := &fakeKGIndex{
-		entities: map[string][]KGEntity{"janka": {{ID: "ent_7f3", ProjectID: "janka", CanonicalName: "Jane Doe"}}},
+		entities: map[string][]KGEntity{"family": {{ID: "ent_7f3", ProjectID: "family", CanonicalName: "Jane Doe"}}},
 		mentions: map[string][]string{"ent_7f3": {"chunk_new"}},
 	}
 	r := testResolver(store, idx)
@@ -503,11 +503,11 @@ func TestKGResolver_BindAdoptsPlaceholder(t *testing.T) {
 	store.realSubject("ds_1", "Jane Doe")
 	store.placeholderFor("ent_7f3")
 	store.links["ds_ph"] = []Link{
-		{Table: TableProjectMemoryChunks, RowID: "chunk_old", ProjectID: "janka",
+		{Table: TableProjectMemoryChunks, RowID: "chunk_old", ProjectID: "family",
 			Source: SourceKGExtraction, Confidence: ConfidencePossible, Exclusivity: SharedRow},
 	}
 	idx := &fakeKGIndex{
-		entities: map[string][]KGEntity{"janka": {{ID: "ent_7f3", ProjectID: "janka", CanonicalName: "Jane Doe"}}},
+		entities: map[string][]KGEntity{"family": {{ID: "ent_7f3", ProjectID: "family", CanonicalName: "Jane Doe"}}},
 		mentions: map[string][]string{"ent_7f3": {"chunk_old", "chunk_new"}},
 	}
 	res, err := testResolver(store, idx).Bind(context.Background(), KGBindRequest{SubjectID: "ds_1", EntityID: "ent_7f3", Adopt: true})
@@ -550,7 +550,7 @@ func TestKGResolver_BindRefusesAPlaceholderThatGrewIdentifiers(t *testing.T) {
 		Source: SourceOperatorAsserted, Confidence: ConfidenceCertain,
 	})
 	idx := &fakeKGIndex{
-		entities: map[string][]KGEntity{"janka": {{ID: "ent_7f3", ProjectID: "janka", CanonicalName: "Jane Doe"}}},
+		entities: map[string][]KGEntity{"family": {{ID: "ent_7f3", ProjectID: "family", CanonicalName: "Jane Doe"}}},
 		mentions: map[string][]string{"ent_7f3": {"chunk_a"}},
 	}
 	_, err := testResolver(store, idx).Bind(context.Background(), KGBindRequest{SubjectID: "ds_1", EntityID: "ent_7f3", Adopt: true})
@@ -565,8 +565,8 @@ func TestKGResolver_BindRefusesAPlaceholderThatGrewIdentifiers(t *testing.T) {
 func TestKGResolver_BindRefusesAnEntityTheSearchNeverProposed(t *testing.T) {
 	store := newFakeStore()
 	store.realSubject("ds_1", "Jane Doe")
-	idx := &fakeKGIndex{entities: map[string][]KGEntity{"janka": {
-		{ID: "ent_7f3", ProjectID: "janka", CanonicalName: "Jane Doe"},
+	idx := &fakeKGIndex{entities: map[string][]KGEntity{"family": {
+		{ID: "ent_7f3", ProjectID: "family", CanonicalName: "Jane Doe"},
 	}}}
 	_, err := testResolver(store, idx).Bind(context.Background(), KGBindRequest{SubjectID: "ds_1", EntityID: "ent_typo"})
 	if err == nil {
@@ -584,7 +584,7 @@ func TestKGResolver_BindCoversEveryMentionBeyondTheOldCeiling(t *testing.T) {
 		many[i] = string(rune('a'+i)) + "_chunk"
 	}
 	idx := &fakeKGIndex{
-		entities: map[string][]KGEntity{"janka": {{ID: "ent_7f3", ProjectID: "janka", CanonicalName: "Jane Doe"}}},
+		entities: map[string][]KGEntity{"family": {{ID: "ent_7f3", ProjectID: "family", CanonicalName: "Jane Doe"}}},
 		mentions: map[string][]string{"ent_7f3": many},
 	}
 	r := &KGResolver{Store: store, Index: idx, MaxMentions: 3}
@@ -606,7 +606,7 @@ func TestKGResolver_BindSurfacesAPartialFailure(t *testing.T) {
 	store := newFakeStore()
 	store.realSubject("ds_1", "Jane Doe")
 	idx := &fakeKGIndex{
-		entities: map[string][]KGEntity{"janka": {{ID: "ent_7f3", ProjectID: "janka", CanonicalName: "Jane Doe"}}},
+		entities: map[string][]KGEntity{"family": {{ID: "ent_7f3", ProjectID: "family", CanonicalName: "Jane Doe"}}},
 		mentions: map[string][]string{"ent_7f3": {"chunk_a"}},
 	}
 	store.addLinkErr = errors.New("db down")

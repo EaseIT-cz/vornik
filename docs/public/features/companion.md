@@ -3,11 +3,11 @@ sources:
     - path: internal/api/companion_artifacts.go
       sha256: b5f389b1d084f5708807a7080bf034009dd78ec499487525e2ac4d3f38e0bbf8
     - path: internal/api/companion_mcp.go
-      sha256: f94d4e5d1dc786814d8f4ddb9cdd009419553d53a5152422e4cc80aea6aca7aa
+      sha256: 4459f049713b103a15fe7c98b334922f4a96399ecb2f577c2914e64eb1a35622
     - path: contrib/claude-code-companion/.claude-plugin/plugin.json
-      sha256: 98d5cc4f38911b717bb44ed6dd3cf9ed48ec9d86f8ab30e7badac35825283936
+      sha256: 8d16a892893c6400b39a97495bbb9a59a934fafa083400392c314ae7dad06d05
     - path: contrib/codex-companion/.codex-plugin/plugin.json
-      sha256: e5d22fdccf70eede5989d980d2955cf301cd73693622476bad7bf5ca496844fa
+      sha256: fa14dcc68d15ef5508524579b8da28439ec6366e9acf4f101c73441e942de4c4
 ---
 # Companion plugin
 
@@ -186,6 +186,23 @@ with no error at all. The skill then pins the apply loop — validate with
 and the restart-versus-reload boundary: systemd resolves the daemon's
 environment only at start, so unit and env-file edits need a restart.
 
+**`develop-with-memory`** (Claude Code, Codex, and Hermes with a memory key) —
+changing code in any repository: recall before reading code, design before
+changing it, keep memory current. Every `recall` answer carries a
+`design_record`: how many of the hits returned are design-class (spec or
+decision) chunks stored with this repository's scope and not produced by a
+workflow (a review of a design is not the design). When chunks with no scope
+crowd the results and none of the repository's own designs made the cut,
+Vornik counts again with the strict scope and says what that found. The skill trusts only
+those as the repository's design, so a project with few written designs is
+never told a design exists because another repository's ranked highly. Where
+there is none, it offers to write an as-built record of the part being
+changed, from its code, configuration and measured behaviour, have it reviewed
+(`companion-doc-review`), and only then ingest it with the repository's scope,
+one part at a time rather than in a whole-repository crawl. In Claude Code,
+`VORNIK_DESIGN_FIRST=off` leaves the design-first rules out for a repository
+that keeps its designs elsewhere.
+
 **`validate-install`** — checking a deployment against the
 [reference architecture](../reference/reference-architecture.md): the expected
 shape of a healthy install, and where yours diverges. Strictly read-only, which
@@ -273,6 +290,13 @@ Three scope values are worth distinguishing:
 NULL-scoped notes. `strict_scope=true` narrows to the current scope plus `"*"`
 only — handy for spotting NULL-scoped leaks or confirming a scope is actually
 populated.
+
+The scope holds on every path a recall can take, including the extra rounds
+Vornik runs when a first search finds too little: those rounds look further
+within your scope, never outside it. The same scope applies to `memory_correct`
+with a `wrong_claim`: it searches what a default `recall` from that repository
+shows, so a claim made in one repository never refutes another repository's
+note. The memory hint a `delegate` returns is drawn from the same scope.
 
 ```text
 /recall how does the scheduler lease tasks?

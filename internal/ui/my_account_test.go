@@ -316,8 +316,8 @@ func TestMyAccount_NamesOnlyChatCommandsThatExistHere(t *testing.T) {
 	// EVERY command, not the first. An operator running two Slack apps was
 	// told to use whichever project happened to load first, which is wrong
 	// for everyone in the other workspace.
-	both := newPanel("/t800", "/holly")
-	for _, want := range []string{"/t800 link ", "/holly link "} {
+	both := newPanel("/t800", "/helper")
+	for _, want := range []string{"/t800 link ", "/helper link "} {
 		if !strings.Contains(both, want) {
 			t.Errorf("a deployment answering two Slack commands did not name %q; "+
 				"whoever uses the other app is told to type something that does not work", want)

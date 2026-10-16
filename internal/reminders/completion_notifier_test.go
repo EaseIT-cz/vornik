@@ -99,7 +99,7 @@ func TestCompletionNotifierDeliversAndFinalizes(t *testing.T) {
 func TestCompletionNotifierDeliversOutputArtifacts(t *testing.T) {
 	rem := &persistence.Reminder{
 		ID: "rem_report", Kind: persistence.ReminderKindTask, Channel: "slack",
-		ChannelRef: "T123/D_JANKA#main", Content: "Research and write a report",
+		ChannelRef: "T123/D_ALICE#main", Content: "Research and write a report",
 	}
 	repo := newStubRepo()
 	repo.claim = rem

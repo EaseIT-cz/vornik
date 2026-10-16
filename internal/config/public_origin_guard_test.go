@@ -8,6 +8,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"vornik.io/vornik/internal/testutil/repowalk"
 )
 
 // One public origin, and exactly one way to read it.
@@ -62,7 +64,7 @@ func TestNoDirectExternalBaseURLReads(t *testing.T) {
 				return err
 			}
 			if info.IsDir() {
-				if info.Name() == "testdata" || info.Name() == "vendor" {
+				if repowalk.SkipDir(base, path, info.Name(), "testdata") {
 					return filepath.SkipDir
 				}
 				return nil

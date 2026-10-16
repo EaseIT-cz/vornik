@@ -2320,7 +2320,7 @@ DROP TABLE IF EXISTS admin_audit;
 		// /ui/admin/chat-audit operator surface. One row per inbound
 		// user message processed through the LLM tool loop — system
 		// prompt hash, model, tool calls, response excerpt, cost.
-		// Triggered by the 2026-05-18 janka CV-delivery investigation
+		// Triggered by the 2026-05-18 family CV-delivery investigation
 		// which took 20+ minutes of journald grepping to determine
 		// the dispatcher wasn't calling send_artifact at all.
 		//

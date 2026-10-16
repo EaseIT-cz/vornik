@@ -540,14 +540,14 @@ func TestSyncProjects_LateSuccessAfterAReloadIsClosed(t *testing.T) {
 func TestPendingServer_ConnectErrorURLPathIsRedacted(t *testing.T) {
 	swapDialSeams(t, func(context.Context, ServerConfig, zerolog.Logger) (*Client, error) {
 		return nil, fmt.Errorf("mcp initialize failed for ha: sse request: %w",
-			&url.Error{Op: "Post", URL: "http://192.168.33.131:8123/private_s3cr3tT0ken/message", Err: errors.New("connection refused")})
+			&url.Error{Op: "Post", URL: "http://192.168.1.60:8123/private_s3cr3tT0ken/message", Err: errors.New("connection refused")})
 	})
 	m := newPendingManager(newFakeClock())
 	m.SyncProjects(context.Background(), brokerDesired())
 	_, pending := m.PendingStatus()
 	require.Len(t, pending, 1)
 	require.NotContains(t, pending[0].LastError, "s3cr3tT0ken")
-	require.Contains(t, pending[0].LastError, "192.168.33.131:8123")
+	require.Contains(t, pending[0].LastError, "192.168.1.60:8123")
 	require.Contains(t, pending[0].LastError, "connection refused")
 }
 
@@ -668,7 +668,7 @@ func TestWaitForStartingServers_CloseReleasesTheWaiter(t *testing.T) {
 func TestConnectErrorLogLineIsRedacted(t *testing.T) {
 	swapDialSeams(t, func(context.Context, ServerConfig, zerolog.Logger) (*Client, error) {
 		return nil, fmt.Errorf("mcp initialize failed for ha: sse request: %w",
-			&url.Error{Op: "Post", URL: "http://192.168.33.131:8123/private_s3cr3tT0ken/message", Err: errors.New("connection refused")})
+			&url.Error{Op: "Post", URL: "http://192.168.1.60:8123/private_s3cr3tT0ken/message", Err: errors.New("connection refused")})
 	})
 	var buf bytes.Buffer
 	m := NewManager(zerolog.New(&buf))
@@ -677,7 +677,7 @@ func TestConnectErrorLogLineIsRedacted(t *testing.T) {
 	m.StartForProject(context.Background(), "p", []ServerConfig{{Name: "ha"}})
 	require.Contains(t, buf.String(), "failed to connect")
 	require.NotContains(t, buf.String(), "s3cr3tT0ken")
-	require.Contains(t, buf.String(), "192.168.33.131:8123")
+	require.Contains(t, buf.String(), "192.168.1.60:8123")
 }
 
 // A caller that goes away is not "a step that ran without tools".

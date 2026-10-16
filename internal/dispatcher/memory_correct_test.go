@@ -77,14 +77,14 @@ func newTestExecutor(c MemoryCorrector) *ToolExecutor {
 func TestMemoryCorrect_HappyPath(t *testing.T) {
 	c := &memCorrector{
 		refuted: []memory.RefutedChunk{
-			{ID: "chunk_a", SourceName: "cv-2024.md", Preview: "Janka, born 1985 …", Score: 0.72},
-			{ID: "chunk_b", SourceName: "cv-2023.md", Preview: "Janka 1985 …", Score: 0.61},
+			{ID: "chunk_a", SourceName: "cv-2024.md", Preview: "Alice, born 1985 …", Score: 0.72},
+			{ID: "chunk_b", SourceName: "cv-2023.md", Preview: "Alice 1985 …", Score: 0.61},
 		},
 	}
 	te := newTestExecutor(c)
-	args := `{"wrong_claim":"Janka was born in 1985","correction":"Janka was born in 1990.","project_id":"janka","max_refutes":5}`
+	args := `{"wrong_claim":"Alice was born in 1985","correction":"Alice was born in 1990.","project_id":"family","max_refutes":5}`
 
-	res := te.memoryCorrect(context.Background(), args, "janka", nil)
+	res := te.memoryCorrect(context.Background(), args, "family", nil)
 	body := res.Content
 	for _, want := range []string{
 		"Refuted 2 memory chunk",
@@ -98,13 +98,13 @@ func TestMemoryCorrect_HappyPath(t *testing.T) {
 		}
 	}
 	// Args passed through cleanly to the corrector.
-	if c.lastRefuteClaim != "Janka was born in 1985" {
+	if c.lastRefuteClaim != "Alice was born in 1985" {
 		t.Errorf("wrong_claim passthrough: %q", c.lastRefuteClaim)
 	}
-	if c.lastInsertText != "Janka was born in 1990." {
+	if c.lastInsertText != "Alice was born in 1990." {
 		t.Errorf("correction passthrough: %q", c.lastInsertText)
 	}
-	if c.lastRefuteProj != "janka" || c.lastInsertProj != "janka" {
+	if c.lastRefuteProj != "family" || c.lastInsertProj != "family" {
 		t.Errorf("project passthrough wrong: refute=%q insert=%q", c.lastRefuteProj, c.lastInsertProj)
 	}
 	if c.lastRefuteMax != 5 {
@@ -120,9 +120,9 @@ func TestMemoryCorrect_HappyPath(t *testing.T) {
 func TestMemoryCorrect_NoMatchesStillInsertsCorrection(t *testing.T) {
 	c := &memCorrector{refuted: nil}
 	te := newTestExecutor(c)
-	args := `{"wrong_claim":"unknown fact","correction":"Janka's real birthday is 1990-05-12.","project_id":"janka"}`
+	args := `{"wrong_claim":"unknown fact","correction":"Alice's real birthday is 1990-05-12.","project_id":"family"}`
 
-	res := te.memoryCorrect(context.Background(), args, "janka", nil)
+	res := te.memoryCorrect(context.Background(), args, "family", nil)
 	body := res.Content
 	if !strings.Contains(body, "nothing was down-weighted") {
 		t.Errorf("missing no-match notice: %s", body)
@@ -148,7 +148,7 @@ func TestMemoryCorrect_RejectsMissingArgs(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.args, func(t *testing.T) {
-			res := te.memoryCorrect(context.Background(), tc.args, "janka", nil)
+			res := te.memoryCorrect(context.Background(), tc.args, "family", nil)
 			if !strings.Contains(res.Content, tc.wantMsg) {
 				t.Errorf("body = %q, want substring %q", res.Content, tc.wantMsg)
 			}
@@ -168,8 +168,8 @@ func TestMemoryCorrect_PartialFailureReports(t *testing.T) {
 		insertErr: errors.New("DB connection lost"),
 	}
 	te := newTestExecutor(c)
-	args := `{"wrong_claim":"x","correction":"y","project_id":"janka"}`
-	res := te.memoryCorrect(context.Background(), args, "janka", nil)
+	args := `{"wrong_claim":"x","correction":"y","project_id":"family"}`
+	res := te.memoryCorrect(context.Background(), args, "family", nil)
 	for _, want := range []string{
 		"Refuted 1 chunk",
 		"insert failed",
@@ -187,7 +187,7 @@ func TestMemoryCorrect_PartialFailureReports(t *testing.T) {
 func TestMemoryCorrect_DisabledMessage(t *testing.T) {
 	te := newTestExecutor(nil)
 	res := te.memoryCorrect(context.Background(),
-		`{"wrong_claim":"x","correction":"y"}`, "janka", nil)
+		`{"wrong_claim":"x","correction":"y"}`, "family", nil)
 	if !strings.Contains(res.Content, "Memory correction is not enabled") {
 		t.Errorf("body = %q, want disabled notice", res.Content)
 	}
@@ -201,7 +201,7 @@ func TestMemoryCorrect_DisabledMessage(t *testing.T) {
 func TestMemoryCorrect_ScopedProjectRejected(t *testing.T) {
 	c := &memCorrector{}
 	te := newTestExecutor(c)
-	args := `{"wrong_claim":"x","correction":"y","project_id":"janka"}`
+	args := `{"wrong_claim":"x","correction":"y","project_id":"family"}`
 	res := te.memoryCorrect(context.Background(), args, "snake", []string{"snake"})
 	if !strings.Contains(res.Content, "not permitted") &&
 		!strings.Contains(res.Content, "not allowed") {

@@ -11,6 +11,8 @@ import (
 	"sort"
 	"strings"
 	"testing"
+
+	"vornik.io/vornik/internal/testutil/repowalk"
 )
 
 // GitHub #347 (learning-loop design, amendment 2026-10-13): the skill
@@ -88,7 +90,7 @@ func TestGoalOrigin_EveryCreationSiteStampsAConstant(t *testing.T) {
 			return werr
 		}
 		if d.IsDir() {
-			if skipGoalOriginDir(root, path, d.Name()) {
+			if repowalk.SkipDir(root, path, d.Name(), "testdata") {
 				return filepath.SkipDir
 			}
 			return nil
@@ -218,33 +220,8 @@ func keyValue(lit *ast.CompositeLit, key string) ast.Expr {
 
 func hasKey(lit *ast.CompositeLit, key string) bool { return keyValue(lit, key) != nil }
 
-// skipGoalOriginDir is the scan's directory rule: every hidden directory below
-// the root, vendor, node_modules and testdata. Hidden covers .git, .claude
-// worktrees and the CE export trees .vornik-export / .vornik-public-clone,
-// which hold copies of the source. The gate's parity lane creates those in the
-// same tree while this test runs, so a name list without them counted every
-// site three times (gate-stamp on 3f0ed9052, 2026-10-13: 60 literals against a
-// table of 21). Same rule as internal/architecture skipNonModuleDir.
-func skipGoalOriginDir(root, path, name string) bool {
-	if path == root {
-		return false
-	}
-	return strings.HasPrefix(name, ".") || name == "vendor" || name == "node_modules" || name == "testdata"
-}
-
-func TestSkipGoalOriginDir_SkipsHiddenTreesNotTheRoot(t *testing.T) {
-	root := filepath.Join(string(filepath.Separator), "repo")
-	for _, name := range []string{".git", ".claude", ".vornik-export", ".vornik-public-clone", ".anything", "vendor", "node_modules", "testdata"} {
-		if !skipGoalOriginDir(root, filepath.Join(root, name), name) {
-			t.Errorf("%s is walked; the scan must skip it", name)
-		}
-	}
-	for _, name := range []string{"internal", "cmd", "api"} {
-		if skipGoalOriginDir(root, filepath.Join(root, name), name) {
-			t.Errorf("%s is skipped; the scan must walk it", name)
-		}
-	}
-	if skipGoalOriginDir(root, root, filepath.Base(root)) {
-		t.Error("the root itself is skipped")
-	}
-}
+// The scan's directory rule is repowalk.SkipDir with testdata (testing LLD
+// §12): every hidden directory below the root (.git, .claude worktrees and the
+// CE export copies the gate's parity lane creates while this test runs, which
+// counted every site three times on 3f0ed9052, 2026-10-13: 60 literals against
+// a table of 21), vendor, node_modules and testdata; never the root.

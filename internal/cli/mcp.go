@@ -48,9 +48,9 @@ this to prove a scraper / gmail / github connection is live without
 spinning up an agent container and paying for an LLM call.
 
 Examples:
-  vornikctl mcp tools -p janka
+  vornikctl mcp tools -p family
   vornikctl mcp servers
-  vornikctl mcp call -p janka --tool mcp__scraper__web_fetch \
+  vornikctl mcp call -p family --tool mcp__scraper__web_fetch \
       --args '{"url":"https://example.com","text_only":true,"max_bytes":2000}'
 
 (project_id is supplied by the daemon from -p, so don't pass it. allowed_hosts

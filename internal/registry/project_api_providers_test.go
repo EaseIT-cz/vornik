@@ -19,7 +19,7 @@ func TestProjectPermissions_APIProvidersUnmarshal(t *testing.T) {
 		t.Fatalf("mkdir: %v", err)
 	}
 
-	yamlSrc := `projectId: "janka"
+	yamlSrc := `projectId: "family"
 swarmId: "test-swarm"
 defaultWorkflowId: "test-workflow"
 permissions:
@@ -27,7 +27,7 @@ permissions:
     - "maps"
     - "headmatch-ats"
 `
-	if err := os.WriteFile(filepath.Join(projectsDir, "janka.yaml"), []byte(yamlSrc), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(projectsDir, "family.yaml"), []byte(yamlSrc), 0o644); err != nil {
 		t.Fatalf("write project: %v", err)
 	}
 
@@ -36,9 +36,9 @@ permissions:
 		t.Fatalf("LoadProjects: %v", err)
 	}
 
-	p := projects["janka"]
+	p := projects["family"]
 	if p == nil {
-		t.Fatal("expected project \"janka\" to load")
+		t.Fatal("expected project \"family\" to load")
 	}
 	want := []string{"maps", "headmatch-ats"}
 	if len(p.Permissions.APIProviders) != len(want) {
@@ -95,7 +95,7 @@ func TestWarnUnknownAPIProviders_WarnsOnUnknownName(t *testing.T) {
 
 	projects := []*Project{
 		{
-			ID:          "janka",
+			ID:          "family",
 			Permissions: ProjectPermissions{APIProviders: []string{"maps", "headmatch-ats"}},
 		},
 	}
@@ -107,8 +107,8 @@ func TestWarnUnknownAPIProviders_WarnsOnUnknownName(t *testing.T) {
 	if !bytes.Contains(buf.Bytes(), []byte("headmatch-ats")) {
 		t.Fatalf("expected a warning naming the unknown provider %q, got log: %s", "headmatch-ats", out)
 	}
-	if !bytes.Contains(buf.Bytes(), []byte("janka")) {
-		t.Fatalf("expected the warning to name the offending project %q, got log: %s", "janka", out)
+	if !bytes.Contains(buf.Bytes(), []byte("family")) {
+		t.Fatalf("expected the warning to name the offending project %q, got log: %s", "family", out)
 	}
 	if bytes.Contains(buf.Bytes(), []byte(`"maps"`)) {
 		t.Errorf("registered provider %q should not be warned about, got log: %s", "maps", out)
@@ -123,7 +123,7 @@ func TestWarnUnknownAPIProviders_NoWarnWhenAllKnown(t *testing.T) {
 
 	projects := []*Project{
 		{
-			ID:          "janka",
+			ID:          "family",
 			Permissions: ProjectPermissions{APIProviders: []string{"maps"}},
 		},
 	}

@@ -24,10 +24,10 @@ func TestMarkRefutedByIDs_FlipsRowsAndIsIDORScoped(t *testing.T) {
 	repo := NewRepository(db)
 
 	mock.ExpectExec(regexp.QuoteMeta("SET validation_status = 'refuted'")).
-		WithArgs("janka", "", "chunk_1", "chunk_2").
+		WithArgs("family", "", "chunk_1", "chunk_2").
 		WillReturnResult(sqlmock.NewResult(0, 2))
 
-	n, err := repo.MarkRefutedByIDs(context.Background(), "janka",
+	n, err := repo.MarkRefutedByIDs(context.Background(), "family",
 		[]string{"chunk_1", "chunk_2"}, "")
 	if err != nil {
 		t.Fatalf("MarkRefutedByIDs: %v", err)
@@ -68,13 +68,13 @@ func TestInsertOperatorCorrection_LandsAsVerifiedDecision(t *testing.T) {
 	// empty string here to land NULL via the nullableString helper,
 	// preserving the legacy lenient-scope behaviour this test pinned.
 	mock.ExpectExec(regexp.QuoteMeta("INSERT INTO project_memory_chunks")).
-		WithArgs("chunk_1", "janka", "operator_correction_20260516", "Janka was born in 1990.", "deadbeef", nil).
+		WithArgs("chunk_1", "family", "operator_correction_20260516", "Alice was born in 1990.", "deadbeef", nil).
 		WillReturnResult(sqlmock.NewResult(0, 1))
 
 	err := repo.insertOperatorCorrection(context.Background(), &operatorCorrectionRow{
-		ID: "chunk_1", ProjectID: "janka",
+		ID: "chunk_1", ProjectID: "family",
 		SourceName: "operator_correction_20260516",
-		Content:    "Janka was born in 1990.", ContentHash: "deadbeef",
+		Content:    "Alice was born in 1990.", ContentHash: "deadbeef",
 	})
 	if err != nil {
 		t.Fatalf("insertOperatorCorrection: %v", err)
@@ -115,15 +115,15 @@ func TestListUnverifiedChunks_DefaultStatusesAreUnverifiedAndLegacy(t *testing.T
 	repo := NewRepository(db)
 
 	mock.ExpectQuery(regexp.QuoteMeta("FROM project_memory_chunks")).
-		WithArgs("janka", "unverified", "legacy", 100).
+		WithArgs("family", "unverified", "legacy", 100).
 		WillReturnRows(sqlmock.NewRows([]string{
 			"id", "source_name", "content_title", "content_class",
 			"validation_status", "producer_role", "preview", "created_at",
-		}).AddRow("chunk_1", "cv.md", "Janka CV", "research",
+		}).AddRow("chunk_1", "cv.md", "Alice CV", "research",
 			"unverified", "researcher",
-			"Janka was born in 1985.", "2026-05-15 12:00:00 UTC"))
+			"Alice was born in 1985.", "2026-05-15 12:00:00 UTC"))
 
-	rows, err := repo.ListUnverifiedChunks(context.Background(), "janka", nil, 0)
+	rows, err := repo.ListUnverifiedChunks(context.Background(), "family", nil, 0)
 	if err != nil {
 		t.Fatalf("ListUnverifiedChunks: %v", err)
 	}
@@ -177,21 +177,21 @@ func TestCorrector_RefuteByClaim_FlipsTopMatches(t *testing.T) {
 	repo := NewRepository(db)
 
 	mock.ExpectExec(regexp.QuoteMeta("SET validation_status = 'refuted'")).
-		WithArgs("janka", RefuteRouteMemoryCorrect, "chunk_a", "chunk_b").
+		WithArgs("family", RefuteRouteMemoryCorrect, "chunk_a", "chunk_b").
 		WillReturnResult(sqlmock.NewResult(0, 2))
 
 	c := NewCorrector(repo, &stubSearcher{results: []SearchResult{
-		{ChunkID: "chunk_a", SourceName: "cv-2024.md", Content: "Janka, born 1985 …", Score: 0.7},
-		{ChunkID: "chunk_b", SourceName: "cv-2023.md", Content: "Janka 1985 …", Score: 0.6},
+		{ChunkID: "chunk_a", SourceName: "cv-2024.md", Content: "Alice, born 1985 …", Score: 0.7},
+		{ChunkID: "chunk_b", SourceName: "cv-2023.md", Content: "Alice 1985 …", Score: 0.6},
 	}})
-	refuted, err := c.RefuteByClaim(context.Background(), "janka", "born 1985", 5)
+	refuted, err := c.RefuteByClaim(context.Background(), "family", "born 1985", 5)
 	if err != nil {
 		t.Fatalf("RefuteByClaim: %v", err)
 	}
 	if len(refuted) != 2 {
 		t.Fatalf("refuted = %d, want 2", len(refuted))
 	}
-	if refuted[0].Preview == "" || !strings.Contains(refuted[0].Preview, "Janka") {
+	if refuted[0].Preview == "" || !strings.Contains(refuted[0].Preview, "Alice") {
 		t.Errorf("preview missing: %+v", refuted[0])
 	}
 	if refuted[0].Score != 0.7 {
@@ -207,7 +207,7 @@ func TestCorrector_RefuteByClaim_NoMatchesIsNoop(t *testing.T) {
 	defer func() { _ = db.Close() }()
 	repo := NewRepository(db)
 	c := NewCorrector(repo, &stubSearcher{})
-	refuted, err := c.RefuteByClaim(context.Background(), "janka", "anything", 3)
+	refuted, err := c.RefuteByClaim(context.Background(), "family", "anything", 3)
 	if err != nil {
 		t.Fatalf("RefuteByClaim: %v", err)
 	}
@@ -227,7 +227,7 @@ func TestCorrector_RefuteByClaim_CapsAtTwentyMatches(t *testing.T) {
 	repo := NewRepository(db)
 	s := &stubSearcher{}
 	c := NewCorrector(repo, s)
-	_, _ = c.RefuteByClaim(context.Background(), "janka", "x", 1000)
+	_, _ = c.RefuteByClaim(context.Background(), "family", "x", 1000)
 	if s.lastLimit != 20 {
 		t.Errorf("limit cap broken: searcher saw limit=%d, want 20", s.lastLimit)
 	}
@@ -264,7 +264,7 @@ func TestCorrector_InsertCorrection_StoresVerifiedDecision(t *testing.T) {
 		WillReturnResult(sqlmock.NewResult(0, 1))
 
 	c := NewCorrector(NewRepository(db), &stubSearcher{})
-	id, err := c.InsertCorrection(context.Background(), "janka", "Janka was born in 1990.", "")
+	id, err := c.InsertCorrection(context.Background(), "family", "Alice was born in 1990.", "")
 	if err != nil {
 		t.Fatalf("InsertCorrection: %v", err)
 	}
@@ -289,9 +289,9 @@ func TestChunkIDsByScope_NullBucketAndNamedScope(t *testing.T) {
 	repo := NewRepository(db)
 
 	mock.ExpectQuery(regexp.QuoteMeta("repo_scope IS NULL")).
-		WithArgs("janka").
+		WithArgs("family").
 		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow("mc_1").AddRow("mc_2"))
-	ids, err := repo.ChunkIDsByScope(context.Background(), "janka", "", true)
+	ids, err := repo.ChunkIDsByScope(context.Background(), "family", "", true)
 	if err != nil {
 		t.Fatalf("null bucket: %v", err)
 	}
@@ -300,9 +300,9 @@ func TestChunkIDsByScope_NullBucketAndNamedScope(t *testing.T) {
 	}
 
 	mock.ExpectQuery(regexp.QuoteMeta("repo_scope = $2")).
-		WithArgs("janka", "github.com/acme/app").
+		WithArgs("family", "github.com/acme/app").
 		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow("mc_9"))
-	ids, err = repo.ChunkIDsByScope(context.Background(), "janka", "github.com/acme/app", false)
+	ids, err = repo.ChunkIDsByScope(context.Background(), "family", "github.com/acme/app", false)
 	if err != nil {
 		t.Fatalf("named scope: %v", err)
 	}
@@ -330,7 +330,7 @@ func TestCorrector_RefuteByClaim_BelowFloorRefutesNothing(t *testing.T) {
 	c := NewCorrector(repo, &stubSearcher{results: []SearchResult{
 		{ChunkID: "chunk_noise", SourceName: "unrelated.md", Content: "totally unrelated content", Score: 0.03},
 	}})
-	refuted, err := c.RefuteByClaim(context.Background(), "janka", "a claim that matches nothing well", 5)
+	refuted, err := c.RefuteByClaim(context.Background(), "family", "a claim that matches nothing well", 5)
 	if err != nil {
 		t.Fatalf("RefuteByClaim: %v", err)
 	}
@@ -351,13 +351,13 @@ func TestCorrector_RefuteByClaim_AboveFloorRefutes(t *testing.T) {
 	repo := NewRepository(db)
 
 	mock.ExpectExec(regexp.QuoteMeta("SET validation_status = 'refuted'")).
-		WithArgs("janka", RefuteRouteMemoryCorrect, "chunk_real").
+		WithArgs("family", RefuteRouteMemoryCorrect, "chunk_real").
 		WillReturnResult(sqlmock.NewResult(0, 1))
 
 	c := NewCorrector(repo, &stubSearcher{results: []SearchResult{
-		{ChunkID: "chunk_real", SourceName: "cv.md", Content: "Janka born 1985", Score: 0.42},
+		{ChunkID: "chunk_real", SourceName: "cv.md", Content: "Alice born 1985", Score: 0.42},
 	}})
-	refuted, err := c.RefuteByClaim(context.Background(), "janka", "born 1985", 5)
+	refuted, err := c.RefuteByClaim(context.Background(), "family", "born 1985", 5)
 	if err != nil {
 		t.Fatalf("RefuteByClaim: %v", err)
 	}
@@ -383,14 +383,14 @@ func TestCorrector_RefuteByClaim_JustAboveDefaultFloorRefutes(t *testing.T) {
 	// Only the 0.06 hit clears the default 0.05 floor; the 0.04 hit is
 	// left untouched, so exactly one id reaches the refute UPDATE.
 	mock.ExpectExec(regexp.QuoteMeta("SET validation_status = 'refuted'")).
-		WithArgs("janka", RefuteRouteMemoryCorrect, "chunk_edge").
+		WithArgs("family", RefuteRouteMemoryCorrect, "chunk_edge").
 		WillReturnResult(sqlmock.NewResult(0, 1))
 
 	c := NewCorrector(repo, &stubSearcher{results: []SearchResult{
 		{ChunkID: "chunk_edge", SourceName: "a.md", Content: "just over the line", Score: 0.06},
 		{ChunkID: "chunk_under", SourceName: "b.md", Content: "just under", Score: 0.04},
 	}})
-	refuted, err := c.RefuteByClaim(context.Background(), "janka", "claim", 5)
+	refuted, err := c.RefuteByClaim(context.Background(), "family", "claim", 5)
 	if err != nil {
 		t.Fatalf("RefuteByClaim: %v", err)
 	}
@@ -411,7 +411,7 @@ func TestCorrector_RefuteByClaim_MixedFloor(t *testing.T) {
 	repo := NewRepository(db)
 
 	mock.ExpectExec(regexp.QuoteMeta("SET validation_status = 'refuted'")).
-		WithArgs("janka", RefuteRouteMemoryCorrect, "chunk_hit"). // ONLY the above-floor id
+		WithArgs("family", RefuteRouteMemoryCorrect, "chunk_hit"). // ONLY the above-floor id
 		WillReturnResult(sqlmock.NewResult(0, 1))
 
 	c := NewCorrector(repo, &stubSearcher{results: []SearchResult{
@@ -419,7 +419,7 @@ func TestCorrector_RefuteByClaim_MixedFloor(t *testing.T) {
 		{ChunkID: "chunk_lo1", SourceName: "b.md", Content: "weak", Score: 0.02},
 		{ChunkID: "chunk_lo2", SourceName: "c.md", Content: "weak", Score: 0.01},
 	}})
-	refuted, err := c.RefuteByClaim(context.Background(), "janka", "claim", 5)
+	refuted, err := c.RefuteByClaim(context.Background(), "family", "claim", 5)
 	if err != nil {
 		t.Fatalf("RefuteByClaim: %v", err)
 	}
@@ -458,15 +458,15 @@ func TestCorrector_ForgetByID_MarksExactlyThatChunk(t *testing.T) {
 	repo := NewRepository(db)
 
 	mock.ExpectQuery(regexp.QuoteMeta("FROM project_memory_chunks")).
-		WithArgs("janka", "chunk_x").
+		WithArgs("family", "chunk_x").
 		WillReturnRows(sqlmock.NewRows([]string{"source_name", "content"}).
 			AddRow("notes.md", "the stale fact to forget"))
 	mock.ExpectExec(regexp.QuoteMeta("SET validation_status = 'refuted'")).
-		WithArgs("janka", RefuteRouteChatForget, "chunk_x").
+		WithArgs("family", RefuteRouteChatForget, "chunk_x").
 		WillReturnResult(sqlmock.NewResult(0, 1))
 
 	c := NewCorrector(repo, &stubSearcher{})
-	got, err := c.ForgetByID(context.Background(), "janka", "chunk_x")
+	got, err := c.ForgetByID(context.Background(), "family", "chunk_x")
 	if err != nil {
 		t.Fatalf("ForgetByID: %v", err)
 	}
@@ -492,12 +492,12 @@ func TestCorrector_ForgetByID_MissingChunkEvictsNothing(t *testing.T) {
 	repo := NewRepository(db)
 
 	mock.ExpectQuery(regexp.QuoteMeta("FROM project_memory_chunks")).
-		WithArgs("janka", "chunk_foreign").
+		WithArgs("family", "chunk_foreign").
 		WillReturnError(sql.ErrNoRows)
 	// No ExpectExec — a missing chunk must not trigger any UPDATE.
 
 	c := NewCorrector(repo, &stubSearcher{})
-	got, err := c.ForgetByID(context.Background(), "janka", "chunk_foreign")
+	got, err := c.ForgetByID(context.Background(), "family", "chunk_foreign")
 	if err != nil {
 		t.Fatalf("ForgetByID: %v", err)
 	}
@@ -533,18 +533,18 @@ func TestChunkPreviewByID_ProjectScopedLookup(t *testing.T) {
 	repo := NewRepository(db)
 
 	mock.ExpectQuery(regexp.QuoteMeta("WHERE project_id = $1 AND id = $2")).
-		WithArgs("janka", "chunk_1").
+		WithArgs("family", "chunk_1").
 		WillReturnRows(sqlmock.NewRows([]string{"source_name", "content"}).
 			AddRow("s.md", "body"))
-	src, content, found, err := repo.ChunkPreviewByID(context.Background(), "janka", "chunk_1")
+	src, content, found, err := repo.ChunkPreviewByID(context.Background(), "family", "chunk_1")
 	if err != nil || !found || src != "s.md" || content != "body" {
 		t.Fatalf("preview = (%q,%q,%v,%v)", src, content, found, err)
 	}
 
 	mock.ExpectQuery(regexp.QuoteMeta("WHERE project_id = $1 AND id = $2")).
-		WithArgs("janka", "nope").
+		WithArgs("family", "nope").
 		WillReturnError(sql.ErrNoRows)
-	_, _, found, err = repo.ChunkPreviewByID(context.Background(), "janka", "nope")
+	_, _, found, err = repo.ChunkPreviewByID(context.Background(), "family", "nope")
 	if err != nil || found {
 		t.Fatalf("missing chunk: found=%v err=%v, want found=false nil", found, err)
 	}

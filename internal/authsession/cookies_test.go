@@ -7,6 +7,8 @@ import (
 	"testing"
 
 	"vornik.io/vornik/internal/authsession"
+
+	"vornik.io/vornik/internal/testutil/repowalk"
 )
 
 // TestNoLiteralSessionCookieNames is the ratchet behind the centralisation.
@@ -32,6 +34,9 @@ func TestNoLiteralSessionCookieNames(t *testing.T) {
 	scanned := 0
 	for _, dir := range []string{"internal", "cmd"} {
 		err := filepath.Walk(filepath.Join(root, dir), func(path string, info os.FileInfo, err error) error {
+			if err == nil && info.IsDir() && repowalk.SkipDir(filepath.Join(root, dir), path, info.Name()) {
+				return filepath.SkipDir
+			}
 			if err != nil || info.IsDir() || !strings.HasSuffix(path, ".go") {
 				return err
 			}

@@ -126,27 +126,34 @@ func (c connection) credentialKey() string {
 // under distinct labels. Two connections that share one credential are one
 // account (rule C1) and may share its label; a connection with no
 // credential acts as no account and is not judged. It returns the refusal,
-// or "".
+// or "". It judges add_mcp_server and add_api only: a recipe install's new
+// entries are said instead (recipeSameAccount; design §22.2.17, GitHub
+// #402).
 func sameHostSameLabel(p *ProjectState, add connection) string {
-	return sameHostSameLabelWithRemedy(p, add, "give this one another account label")
-}
-
-// sameHostSameLabelWithRemedy shares the connection/account predicate while
-// letting verbs name their own input as the recovery path. Recipe installs
-// must direct the agent to install_recipe.account; single-connection verbs
-// retain their existing guidance.
-func sameHostSameLabelWithRemedy(p *ProjectState, add connection, remedy string) string {
-	key := add.credentialKey()
-	if key == "" {
+	others := sameAccountAtHost(p, add)
+	if len(others) == 0 {
 		return ""
 	}
-	host, want := hostKey(add.url), add.label
+	return fmt.Sprintf("this project already connects to %s as your %s account (%s); give this one another account label", hostKey(add.url), add.label, others[0].name)
+}
+
+// sameAccountAtHost is the two-connections predicate: p's connections at
+// add's host under add's label whose credential is another one (both
+// non-empty). A connection with no credential acts as no account, so
+// nothing is returned for it.
+func sameAccountAtHost(p *ProjectState, add connection) []connection {
+	key := add.credentialKey()
+	if key == "" {
+		return nil
+	}
+	var out []connection
+	host := hostKey(add.url)
 	for _, c := range connectionsOf(p) {
-		if hostKey(c.url) == host && c.label == want && c.credentialKey() != "" && c.credentialKey() != key {
-			return fmt.Sprintf("this project already connects to %s as your %s account (%s); %s", host, want, c.name, remedy)
+		if hostKey(c.url) == host && c.label == add.label && c.credentialKey() != "" && c.credentialKey() != key {
+			out = append(out, c)
 		}
 	}
-	return ""
+	return out
 }
 
 // reachAccounts maps each integration a workflow reaches to its account

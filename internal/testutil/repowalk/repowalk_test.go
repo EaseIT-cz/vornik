@@ -31,3 +31,21 @@ func TestSkipDir_SkipsHiddenVendorAndNodeModulesBelowTheRoot(t *testing.T) {
 		}
 	}
 }
+
+// GitHub #384/#366 (2026-10-15): the walkers that kept their own rule did so
+// for an extra name or two (testdata, build, dist, bin). The one rule takes
+// them as a per-caller list, and the root guard still wins over the list.
+func TestSkipDir_ExtraNamesAreSkippedBelowTheRootOnly(t *testing.T) {
+	root := "/src/testdata"
+	if SkipDir(root, root, "testdata", "testdata") {
+		t.Error("an extra name skipped the walk root")
+	}
+	for _, name := range []string{"testdata", "build"} {
+		if !SkipDir(root, filepath.Join(root, "pkg", name), name, "testdata", "build") {
+			t.Errorf("SkipDir(%s, extra) = false below the root, want true", name)
+		}
+	}
+	if SkipDir(root, filepath.Join(root, "pkg", "build"), "build") {
+		t.Error("an extra name applied without being passed")
+	}
+}

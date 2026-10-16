@@ -25,7 +25,7 @@ func scraperCov_reset() {
 
 func TestRunScraperLoginStart_RefusesNonLocalBindWithoutPassword(t *testing.T) {
 	scraperCov_reset()
-	scraperLoginProject = "janka"
+	scraperLoginProject = "family"
 	scraperLoginBind = "0.0.0.0"
 	scraperLoginPassword = "" // the unsafe combination
 

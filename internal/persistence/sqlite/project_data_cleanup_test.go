@@ -35,6 +35,27 @@ func TestProjectDataTables_MatchSQLiteSchema(t *testing.T) {
 	}, false)
 }
 
+// TestSecretRedactionAudit_KeptColumnsCarryNoContent: the project wipe keeps
+// secret_redaction_audit on the ground that it holds ids, a sink name, a
+// pattern name and a count, never the secret or any content (archival design
+// section J, GitHub #370; review round 1 asked for the claim to be pinned). A
+// new column fails here and sends the kept decision back to review.
+func TestSecretRedactionAudit_KeptColumnsCarryNoContent(t *testing.T) {
+	db := newTestDB(t)
+	got := repotest.TableColumns(t, db.DB, false, "secret_redaction_audit")
+	if strings.Join(got, ",") != repotest.SecretRedactionAuditKeptColumns {
+		t.Errorf("secret_redaction_audit columns = %v, want %s: the wipe keeps this table because it carries no content; re-review that (archival design J.2) before adding a column", got, repotest.SecretRedactionAuditKeptColumns)
+	}
+}
+
+// TestProjectDataWipe_ProposalScrubCoversTheComplement: the partial wipe of
+// control_plane_proposals relies on blast_radius being NOT NULL (archival
+// design J.3, GitHub #370).
+func TestProjectDataWipe_ProposalScrubCoversTheComplement(t *testing.T) {
+	db := newTestDB(t)
+	repotest.CheckScrubComplement(t, db.DB, false)
+}
+
 // TestProjectDataWipe_NoEmbeddingCacheOnSQLite pins the premise of
 // ProjectDataStats.CacheEvictionNotApplicable: if SQLite ever grows an
 // embedding_cache, the SQLite deleter must start evicting it.

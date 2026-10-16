@@ -27,7 +27,7 @@ Call `mcp__plugin_vornik-companion_vornik__skill_propose` with:
   skill injects into (empty = any role).
 - `global` — optional (default false). Set `global=true` to propose a
   CROSS-PROJECT skill: once approved it injects into EVERY project's roles, not
-  just this one — e.g. a procedure you want the janka and assistant autonomy
+  just this one — e.g. a procedure you want the family and assistant autonomy
   roles to pick up too. Only honored on a fresh create; use `/skill-set-global`
   to change reach on an existing skill. A global skill's approval prompt is
   labelled "affects ALL projects" so the operator decides knowingly.

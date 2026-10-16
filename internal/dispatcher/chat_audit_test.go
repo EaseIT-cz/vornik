@@ -104,12 +104,12 @@ func TestChatAuditTurn_HappyPath_PersistsRowAndPrompt(t *testing.T) {
 	turn.recordToolCall("create_task", "{\"x\":1}", "ok", "")
 	turn.recordToolCall("list_tasks", "{}", "", "boom")
 
-	turn.finish(context.Background(), Request{ChatID: 42, Project: "janka"}, Result{Text: "final answer"})
+	turn.finish(context.Background(), Request{ChatID: 42, Project: "family"}, Result{Text: "final answer"})
 
 	require.Len(t, repo.entries, 1)
 	e := repo.entries[0]
 	assert.Equal(t, "42", e.ChatID)
-	assert.Equal(t, "janka", e.ProjectID)
+	assert.Equal(t, "family", e.ProjectID)
 	assert.Equal(t, "lead", e.RoleUsed)
 	assert.Equal(t, "test-model", e.Model)
 	assert.Equal(t, "hello", e.UserMessage)

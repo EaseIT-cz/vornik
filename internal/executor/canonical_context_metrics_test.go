@@ -17,15 +17,15 @@ func TestRecordCanonicalContextLoaded(t *testing.T) {
 
 	m.RecordCanonicalContextLoaded("assistant", "dot_autonomy")
 	m.RecordCanonicalContextLoaded("assistant", "dot_autonomy")
-	m.RecordCanonicalContextLoaded("janka", "mixed")
+	m.RecordCanonicalContextLoaded("family", "mixed")
 	m.RecordCanonicalContextLoaded("ignored", "")      // skipped — empty source
 	m.RecordCanonicalContextLoaded("", "dot_autonomy") // empty project still records — project label IS valid
 
 	if got := testutil.ToFloat64(m.CanonicalContextLoadedTotal.WithLabelValues("assistant", "dot_autonomy")); got != 2 {
 		t.Errorf("assistant/dot_autonomy = %v, want 2", got)
 	}
-	if got := testutil.ToFloat64(m.CanonicalContextLoadedTotal.WithLabelValues("janka", "mixed")); got != 1 {
-		t.Errorf("janka/mixed = %v, want 1", got)
+	if got := testutil.ToFloat64(m.CanonicalContextLoadedTotal.WithLabelValues("family", "mixed")); got != 1 {
+		t.Errorf("family/mixed = %v, want 1", got)
 	}
 	// Empty-source guard: no series should have been created.
 	if got := testutil.ToFloat64(m.CanonicalContextLoadedTotal.WithLabelValues("ignored", "")); got != 0 {
@@ -42,7 +42,7 @@ func TestRecordCanonicalContextTruncated(t *testing.T) {
 	m.RecordCanonicalContextTruncated("assistant", "project")
 	m.RecordCanonicalContextTruncated("assistant", "project")
 	m.RecordCanonicalContextTruncated("assistant", "user")
-	m.RecordCanonicalContextTruncated("janka", "") // skipped — empty file
+	m.RecordCanonicalContextTruncated("family", "") // skipped — empty file
 
 	if got := testutil.ToFloat64(m.CanonicalContextTruncatedTotal.WithLabelValues("assistant", "project")); got != 2 {
 		t.Errorf("assistant/project = %v, want 2", got)

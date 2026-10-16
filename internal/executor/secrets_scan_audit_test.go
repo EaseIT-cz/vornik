@@ -12,7 +12,7 @@ import (
 // even when it overlaps a path-shaped JSON value — otherwise an agent has a
 // labeled channel to smuggle a secret past redaction by parking it in a
 // `storagePath`-style field. Entropy findings stay path-exempt (the
-// 2026-05-18 janka verifyClaimedFiles regression).
+// 2026-05-18 family verifyClaimedFiles regression).
 func TestFilterFindingsOutsidePathSpans_OnlyEntropyExempt(t *testing.T) {
 	span := secrets.Span{Start: 10, End: 50} // a path-shaped JSON value
 	findings := []secrets.Finding{

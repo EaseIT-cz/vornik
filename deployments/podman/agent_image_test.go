@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"vornik.io/vornik/internal/testutil/repowalk"
 )
 
 // TestQuickstartBuildsAgentImage — a fresh quickstart install must build
@@ -34,6 +36,9 @@ func TestShippedSwarmsQualifyAgentImage(t *testing.T) {
 		err := filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
 			if err != nil {
 				return err
+			}
+			if d.IsDir() && repowalk.SkipDir(root, path, d.Name()) {
+				return filepath.SkipDir
 			}
 			if d.IsDir() || (!strings.HasSuffix(path, ".md") && !strings.HasSuffix(path, ".tmpl")) {
 				return nil

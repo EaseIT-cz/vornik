@@ -43,7 +43,7 @@ func TestRecord_WritesTheRowShapeCallersUsedToHandRoll(t *testing.T) {
 
 	task := "task_1"
 	r.Record(context.Background(), Input{
-		ProjectID:    "janka",
+		ProjectID:    "family",
 		Model:        "m",
 		PromptTokens: 1000, CompletionTokens: 500,
 		TaskID: &task, StepID: "chunk_7",
@@ -57,7 +57,7 @@ func TestRecord_WritesTheRowShapeCallersUsedToHandRoll(t *testing.T) {
 	if row.Source != "memory_titler" || row.Role != "memory_titler" {
 		t.Errorf("source/role = %q/%q, want memory_titler for both", row.Source, row.Role)
 	}
-	if row.ProjectID != "janka" || row.StepID != "chunk_7" {
+	if row.ProjectID != "family" || row.StepID != "chunk_7" {
 		t.Errorf("attribution not carried: project=%q step=%q", row.ProjectID, row.StepID)
 	}
 	if row.TaskID == nil || *row.TaskID != "task_1" {
@@ -83,7 +83,7 @@ func TestRecord_ZeroValueRecorderIsLoud(t *testing.T) {
 	var zero Recorder // never constructed — exactly what "unwired" looks like
 	zero.sink = sink
 
-	zero.Record(context.Background(), Input{ProjectID: "janka", Model: "m", PromptTokens: 10})
+	zero.Record(context.Background(), Input{ProjectID: "family", Model: "m", PromptTokens: 10})
 
 	if sink.counts["__unset__"] != 1 {
 		t.Errorf("a zero-value Recorder recorded nothing and reported nothing (%v) — "+
@@ -101,7 +101,7 @@ func TestDisabled_WritesNothingAndSaysSo(t *testing.T) {
 	sink := &countingSink{}
 	r := Disabled()
 	r.sink = sink
-	r.Record(context.Background(), Input{ProjectID: "janka", Model: "m", PromptTokens: 10})
+	r.Record(context.Background(), Input{ProjectID: "family", Model: "m", PromptTokens: 10})
 
 	if len(sink.counts) != 0 {
 		t.Errorf("Disabled() must not count a failure: %v", sink.counts)
@@ -131,7 +131,7 @@ func TestRecord_LedgerFailureIsCountedNotSwallowed(t *testing.T) {
 	repo := &fakeRepo{err: errors.New("db down")}
 	r := New(repo, fixedPricing{}, "memory_embedder", "memory_embedder", WithFailureSink(sink))
 
-	r.Record(context.Background(), Input{ProjectID: "janka", Model: "m", PromptTokens: 42})
+	r.Record(context.Background(), Input{ProjectID: "family", Model: "m", PromptTokens: 42})
 
 	if sink.counts["memory_embedder"] != 1 {
 		t.Errorf("a failed ledger write was not counted: %v — an unalarmed silence is how "+
@@ -144,7 +144,7 @@ func TestRecord_LedgerFailureIsCountedNotSwallowed(t *testing.T) {
 func TestRecord_NoTokensWritesNothing(t *testing.T) {
 	repo := &fakeRepo{}
 	r := New(repo, fixedPricing{}, "s", "role")
-	r.Record(context.Background(), Input{ProjectID: "janka", Model: "m"})
+	r.Record(context.Background(), Input{ProjectID: "family", Model: "m"})
 	if len(repo.rows) != 0 {
 		t.Errorf("got %d rows for a zero-token call, want 0", len(repo.rows))
 	}
@@ -156,7 +156,7 @@ func TestRecord_TokensEstimatedSurvives(t *testing.T) {
 	repo := &fakeRepo{}
 	r := New(repo, fixedPricing{}, "memory_embedder", "memory_embedder")
 	r.Record(context.Background(), Input{
-		ProjectID: "janka", Model: "cohere.embed-v4",
+		ProjectID: "family", Model: "cohere.embed-v4",
 		PromptTokens: 4096, TokensEstimated: true,
 	})
 	if len(repo.rows) != 1 || !repo.rows[0].TokensEstimated {
@@ -170,7 +170,7 @@ func TestRecord_TokensEstimatedSurvives(t *testing.T) {
 func TestRecord_NilPricingStillRecordsTokens(t *testing.T) {
 	repo := &fakeRepo{}
 	r := New(repo, nil, "memory_embedder", "memory_embedder")
-	r.Record(context.Background(), Input{ProjectID: "janka", Model: "m", PromptTokens: 100})
+	r.Record(context.Background(), Input{ProjectID: "family", Model: "m", PromptTokens: 100})
 
 	if len(repo.rows) != 1 {
 		t.Fatalf("got %d rows, want 1", len(repo.rows))
@@ -207,7 +207,7 @@ func TestUpsert_ReplacesByStableID(t *testing.T) {
 
 	for _, tokens := range []int{100, 250} {
 		if err := r.Upsert(context.Background(), "tu_task_step_worker", Input{
-			ProjectID: "janka", Model: "m", PromptTokens: tokens,
+			ProjectID: "family", Model: "m", PromptTokens: tokens,
 		}); err != nil {
 			t.Fatalf("Upsert: %v", err)
 		}
@@ -251,7 +251,7 @@ func TestRow_OverridesAreCarried(t *testing.T) {
 	key := "akey_1"
 
 	if err := r.Upsert(context.Background(), "tu_2", Input{
-		ProjectID: "janka", Model: "m", PromptTokens: 10,
+		ProjectID: "family", Model: "m", PromptTokens: 10,
 		RoleOverride: "researcher", CostUSD: &cost, APIKeyID: &key, Iterations: 7,
 	}); err != nil {
 		t.Fatalf("Upsert: %v", err)
@@ -283,7 +283,7 @@ func TestRecord_CacheHitWritesAZeroTokenRow(t *testing.T) {
 	repo := &fakeRepo{}
 	r := New(repo, fixedPricing{}, "kg_extraction", "kg_extractor")
 
-	r.Record(context.Background(), Input{ProjectID: "janka", Model: "m", CacheHit: true})
+	r.Record(context.Background(), Input{ProjectID: "family", Model: "m", CacheHit: true})
 
 	if len(repo.rows) != 1 {
 		t.Fatalf("got %d rows, want 1 — a cached stage must stay visible, not vanish", len(repo.rows))

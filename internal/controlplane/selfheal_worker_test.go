@@ -52,7 +52,7 @@ func TestSelfHeal_OpensIncidentOnSustainedBreach(t *testing.T) {
 	diag := &fakeIncidentDiagnoser{repo: repo}
 	w := newSelfHeal(t, diag, repo)
 	m := w.Metrics.(*fakeMetrics)
-	m.ret = breach("janka")
+	m.ret = breach("family")
 	ctx := context.Background()
 	w.tick(ctx)
 	w.tick(ctx)
@@ -115,7 +115,7 @@ func TestSelfHeal_DiagnoserErrorFilesGenericProposal(t *testing.T) {
 	repo := newTuneTestRepo(t)
 	diag := &fakeIncidentDiagnoser{repo: repo, err: errors.New("LLM down")}
 	w := newSelfHeal(t, diag, repo)
-	w.Metrics.(*fakeMetrics).ret = breach("janka")
+	w.Metrics.(*fakeMetrics).ret = breach("family")
 	ctx := context.Background()
 	w.tick(ctx)
 	w.tick(ctx)
@@ -123,8 +123,8 @@ func TestSelfHeal_DiagnoserErrorFilesGenericProposal(t *testing.T) {
 	// No diagnosis proposal, but the generic failed-rate proposal must exist —
 	// tagged "self-heal" (not "tune-detector") so the open-incidents counter
 	// reflects it and the worker's own dedup matches on re-arm.
-	ps, _ := repo.List(ctx, persistence.ProposalListFilter{ProjectID: "janka"})
-	if len(ps) != 1 || ps[0].ProposedBy != "self-heal" || ps[0].Title != tuneFailedRateTitle("janka") {
+	ps, _ := repo.List(ctx, persistence.ProposalListFilter{ProjectID: "family"})
+	if len(ps) != 1 || ps[0].ProposedBy != "self-heal" || ps[0].Title != tuneFailedRateTitle("family") {
 		t.Fatalf("diagnoser error must fall back to the generic self-heal failed-rate proposal, got %+v", ps)
 	}
 }
@@ -154,12 +154,12 @@ func TestSelfHeal_SuccessButNoProposalStillCovers(t *testing.T) {
 	w := newSelfHeal(t, diag, repo)
 	alerts := 0
 	w.Alert = func(_, _ string) { alerts++ }
-	w.Metrics.(*fakeMetrics).ret = breach("janka")
+	w.Metrics.(*fakeMetrics).ret = breach("family")
 	ctx := context.Background()
 	w.tick(ctx)
 	w.tick(ctx)
 	w.tick(ctx)
-	ps, _ := repo.List(ctx, persistence.ProposalListFilter{ProjectID: "janka"})
+	ps, _ := repo.List(ctx, persistence.ProposalListFilter{ProjectID: "family"})
 	if len(ps) != 1 || ps[0].ProposedBy != "self-heal" {
 		t.Fatalf("a successful-but-non-filing diagnosis must file exactly one self-heal coverage proposal, got %+v", ps)
 	}
@@ -184,7 +184,7 @@ func TestSelfHeal_AlertNilSafe(t *testing.T) {
 	diag := &fakeIncidentDiagnoser{repo: repo}
 	w := newSelfHeal(t, diag, repo)
 	w.Alert = nil // no notifier
-	w.Metrics.(*fakeMetrics).ret = breach("janka")
+	w.Metrics.(*fakeMetrics).ret = breach("family")
 	ctx := context.Background()
 	// Must not panic and must still file the incident.
 	w.tick(ctx)
@@ -201,12 +201,12 @@ func TestSelfHeal_StreakResetsOnRecovery(t *testing.T) {
 	w := newSelfHeal(t, diag, repo)
 	m := w.Metrics.(*fakeMetrics)
 	ctx := context.Background()
-	m.ret = breach("janka")
+	m.ret = breach("family")
 	w.tick(ctx)
-	w.tick(ctx)                                                               // 2 breaches
-	m.ret = map[string]RateSample{"janka": {Failed: 1, Total: 10, Rate: 0.1}} // recovery
+	w.tick(ctx)                                                                // 2 breaches
+	m.ret = map[string]RateSample{"family": {Failed: 1, Total: 10, Rate: 0.1}} // recovery
 	w.tick(ctx)
-	m.ret = breach("janka")
+	m.ret = breach("family")
 	w.tick(ctx)
 	w.tick(ctx)
 	if diag.calls != 0 {

@@ -169,7 +169,7 @@ func TestScanContainerLogsForSecrets_DetectModeUnchanged(t *testing.T) {
 }
 
 // TestScanResultForSecrets_PreservesFilenamesInProducedFiles pins
-// the 2026-05-18 fix for the janka CV-delivery cascade. The entropy
+// the 2026-05-18 fix for the family CV-delivery cascade. The entropy
 // detector hit on a writer-emitted filename ("biocentrum-cv-…long
 // hash…-en.pdf") and the redactor turned it into "[REDACTED:entropy].pdf",
 // which then made verifyClaimedFiles look for /tmp/.../[REDACTED:

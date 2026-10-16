@@ -7,6 +7,8 @@ import (
 	"sort"
 	"strings"
 	"testing"
+
+	"vornik.io/vornik/internal/testutil/repowalk"
 )
 
 // GitHub #119 item 8 (2026-10-08): the writers of an approval's account and
@@ -27,7 +29,7 @@ func callSites(t *testing.T, pattern string) map[string]int {
 			return err
 		}
 		if d.IsDir() {
-			if path == filepath.Join("..", "persistence") {
+			if path == filepath.Join("..", "persistence") || repowalk.SkipDir("..", path, d.Name()) {
 				return filepath.SkipDir
 			}
 			return nil

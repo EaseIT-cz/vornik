@@ -30,6 +30,11 @@ const (
 	GatePolicyMatch     GateName = "policy_match"
 	GatePromptInjection GateName = "prompt_injection"
 
+	// GateTextDamage is the integrity gate (quarantine): invalid UTF-8 or a
+	// C0 control byte in the content — a damaged upload (GitHub #389,
+	// memory-ingest-paths.md §8).
+	GateTextDamage GateName = "text_damage"
+
 	// Completeness.
 	GateMinContent      GateName = "min_content"
 	GateTruncationCheck GateName = "truncation_check"
@@ -667,7 +672,8 @@ func wordCount(s string) int {
 // LLM-side gates (validator, supersession) outside of this helper.
 //
 // Ordering matters:
-//  1. SchemaMatch (refuse malformed)
+//  1. SchemaMatch (refuse malformed), then TextDamage (quarantine invalid
+//     UTF-8 / control bytes; GitHub #389, memory-ingest-paths.md §8.2c)
 //  2. ProvenanceComplete (refuse incomplete)
 //  3. ClassKnown (warn but don't refuse)
 //  4. SecretScan (redact-or-quarantine)
@@ -692,6 +698,7 @@ func RunStandardGates(c *IngestCandidate, cfg GateConfig, denyPatterns []string,
 	type gateFn func() GateOutcome
 	gates := []gateFn{
 		func() GateOutcome { return SchemaMatchGate(c) },
+		func() GateOutcome { return TextDamageGate(c) },
 		func() GateOutcome { return ProvenanceCompleteGate(c) },
 		func() GateOutcome { return ClassKnownGate(c) },
 		func() GateOutcome {

@@ -83,16 +83,11 @@ var fakeAgentExempt = func() map[string]bool {
 	return m
 }()
 
-// fakeAgentRatchetSkipDirs are trees this walk does not own. Every DOT-directory
-// is skipped too (see the walk): .git, build scratch like .e2ecov, and
-// .vornik-public-clone — the CE export's working clone, which is a checkout of
-// an older tree and would otherwise report this repo's own history as offences.
-var fakeAgentRatchetSkipDirs = map[string]bool{
-	"node_modules": true,
-	"vendor":       true,
-	"dist":         true,
-	"bin":          true,
-}
+// fakeAgentRatchetExtraSkips are build-output trees this walk does not own,
+// on top of the one rule (repowalk.SkipDir: every hidden directory below the
+// root, such as .git, build scratch like .e2ecov and the CE export's working
+// clone .vornik-public-clone, plus vendor and node_modules).
+var fakeAgentRatchetExtraSkips = []string{"dist", "bin"}
 
 // TestFakeAgentStaysDeleted is a ratchet: the `fake-agent` fixture was deleted
 // 2026-09-02 and must not come back by copy-paste.
@@ -128,7 +123,7 @@ func TestFakeAgentStaysDeleted(t *testing.T) {
 		if d.IsDir() {
 			// The root is never skipped (repowalk.SkipDir): publish-ce runs this
 			// inside $SRC/.vornik-export (release 2026.10.6).
-			if path != root && (fakeAgentRatchetSkipDirs[d.Name()] || repowalk.SkipDir(root, path, d.Name())) {
+			if repowalk.SkipDir(root, path, d.Name(), fakeAgentRatchetExtraSkips...) {
 				return filepath.SkipDir
 			}
 			return nil

@@ -31,11 +31,15 @@ class RegisterTest(unittest.TestCase):
         self.assertTrue(ctx.skills["vornik-broker"].exists())
         self.assertTrue(ctx.skills["vornik-admin"].exists())
         self.assertEqual(ctx.memory, [], "no memory provider without VORNIK_MEMORY_TOKEN")
+        # GitHub #382 (design 2026-07-12 §11.3): the development guidance needs
+        # vornik_recall, so it registers only with the memory provider.
+        self.assertNotIn("develop-with-memory", ctx.skills)
         with mock.patch.dict(os.environ, dict(env, VORNIK_MEMORY_TOKEN="m"), clear=True):
             ctx = FakeCtx()
             plugin.register(ctx)
         self.assertEqual(len(ctx.memory), 1)
         self.assertEqual(ctx.memory[0].name, "vornik")
+        self.assertTrue(ctx.skills["develop-with-memory"].exists())
 
 
 class CapabilityFallbackTest(unittest.TestCase):

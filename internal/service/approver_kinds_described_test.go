@@ -20,7 +20,7 @@ func TestApproverKinds_EveryPhoneKindIsDescribed(t *testing.T) {
 	svc := f.c.approverDeviceService()
 	now := time.Now().UTC()
 	rendered := map[string]string{
-		persistence.ApprovalKindMemoryRetention: `{"project_id":"companion-janka","chunk_id":"c70","source":"note","preview":"A stored preference","idle_days":365}`,
+		persistence.ApprovalKindMemoryRetention: `{"project_id":"companion-family","chunk_id":"c70","source":"note","preview":"A stored preference","idle_days":365}`,
 		persistence.ApprovalKindWideningChange:  `{"change":{"plain":{"summary":"Your assistant wants a project.","level":"Low","reasons":["it reaches nothing"]}}}`,
 		persistence.ApprovalKindCredentialSlot:  `{"change":{"plain":{"summary":"You are asked for a key.","level":"Medium","reasons":["it stores a credential"]}}}`,
 		persistence.ApprovalKindBrokerAction:    `{"action_id":"ba_1","workflow":"hermes--mail--reply","action":"send_reply"}`,

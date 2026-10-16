@@ -114,6 +114,49 @@ ci_full_run_ids() {
   return 0
 }
 
+# ci_completed_full_run_on REPO SHA BRANCH OUTFILE — write "<run id>
+# <conclusion>" of a COMPLETED full run on SHA to OUTFILE (empty when none).
+# The nightly's head check (CI pipeline design, amendment 2026-10-15, #376):
+# a nightly whose head already has one skips, red or green, because running
+# the same commit again repeats a known result.
+#   0  the API answered (OUTFILE may be empty)
+#   2  the API could not be reached; the caller must not read it as covered
+#
+# Two predicates, checked separately (review c4d4 F1): (a) the RUN concluded
+# success or failure, read from the listing — a cancelled or timed-out run
+# reached no verdict, even when its full-run job had already succeeded; and
+# (b) ci_run_is_full. (b) alone is not (a): P6 trusts ci_run_is_full only on
+# runs the listing already filtered to status=success. A success run is named
+# before a failure run, the newest within each (F5).
+ci_completed_full_run_on() {
+  local repo="$1" sha="$2" branch="$3" out="$4" cand line id concl rc failed="" lines=()
+  : > "$out" || return 2
+  [[ "$sha" =~ ^[0-9a-f]{40}$ ]] || return 0
+  cand="$(ci_full_run_tmp)" || return 2
+  if ! gh_api_retry "$cand" "repos/$repo/actions/workflows/ci.yaml/runs?head_sha=$sha&branch=$branch&status=completed&per_page=100" \
+      --jq '.workflow_runs[] | select(.event != "pull_request") | "\(.id) \(.conclusion)"'; then
+    rm -f "$cand"; return 2
+  fi
+  while IFS= read -r line; do lines+=("$line"); done < "$cand"
+  rm -f "$cand"
+  for line in ${lines[@]+"${lines[@]}"}; do
+    id="${line%% *}"; concl="${line#* }"
+    case "$concl" in
+      success) ;;
+      failure) [ -z "$failed" ] || continue ;;
+      *) continue ;;
+    esac
+    ci_run_is_full "$repo" "$id"; rc=$?
+    case "$rc" in
+      0) if [ "$concl" = success ]; then echo "$id success" > "$out"; return 0; fi
+         failed="$id" ;;
+      2) return 2 ;;
+    esac
+  done
+  [ -z "$failed" ] || echo "$failed failure" > "$out"
+  return 0
+}
+
 # ci_last_full_run_sha REPO BRANCH OUTFILE — the head sha of the newest
 # successful full CI run on BRANCH, looked for in the newest 200 successful
 # runs (the nightly's base, P5; review afd0 F9: past 200 the nightly runs

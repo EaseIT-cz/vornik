@@ -119,7 +119,7 @@ is configuration only:
 ```yaml
 runtime:
   agent_llm:
-    endpoint: "http://192.168.10.20:11434/v1"   # e.g. Ollama on the LAN
+    endpoint: "http://192.168.1.20:11434/v1"   # e.g. Ollama on the LAN
     model: "qwen3.6:35b"
     context_size: 262144
 ```

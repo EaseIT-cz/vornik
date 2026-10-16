@@ -8,6 +8,8 @@ import (
 	"sort"
 	"strings"
 	"testing"
+
+	"vornik.io/vornik/internal/testutil/repowalk"
 )
 
 // A `since:` tag must name a release that exists: one with a heading in the
@@ -44,6 +46,9 @@ func TestSinceTagsNameAPublishedRelease(t *testing.T) {
 	err = filepath.WalkDir("..", func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
+		}
+		if d.IsDir() && repowalk.SkipDir("..", path, d.Name()) {
+			return filepath.SkipDir
 		}
 		if d.IsDir() || !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
 			return nil

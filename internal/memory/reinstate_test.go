@@ -26,9 +26,9 @@ func TestMarkRefutedByIDs_RecordsRoute(t *testing.T) {
 	repo := NewRepository(db)
 	mock.ExpectExec(regexp.QuoteMeta("SET validation_status = 'refuted',")+
 		`\s+`+regexp.QuoteMeta("refute_route = NULLIF($2, '')")).
-		WithArgs("janka", RefuteRouteMirrorForget, "chunk_1").
+		WithArgs("family", RefuteRouteMirrorForget, "chunk_1").
 		WillReturnResult(sqlmock.NewResult(0, 1))
-	n, err := repo.MarkRefutedByIDs(context.Background(), "janka", []string{"chunk_1"}, RefuteRouteMirrorForget)
+	n, err := repo.MarkRefutedByIDs(context.Background(), "family", []string{"chunk_1"}, RefuteRouteMirrorForget)
 	if err != nil || n != 1 {
 		t.Fatalf("n=%d err=%v", n, err)
 	}

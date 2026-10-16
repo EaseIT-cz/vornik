@@ -56,10 +56,19 @@ plugs in without any vornik-side change.
   on the delegate prompt and attaches the strongest hits to the
   response. The host LLM surfaces "vornik already knows X — still
   delegate?" before swarm compute starts.
-- **Six skills:**
+- **Seven skills:**
   - `delegate` — when to reach for the companion rather than spending
     Claude's own tokens on a long task, and the "recall before delegate"
     rule that keeps memory-redundant work off the swarm.
+  - `develop-with-memory` — changing code in any repository: recall
+    before reading code, design before changing it, keep memory current.
+    It reads each recall's `design_record` (the design-class hits stored
+    with this repository's scope) instead of assuming a design exists, and
+    where there is none it offers an as-built record of the part being
+    changed, reviewed with `companion-doc-review`, then ingested with the
+    repository's scope. The SessionStart hook prints it at every session
+    start and after compaction; `VORNIK_DESIGN_FIRST=off` leaves the
+    design-first rules out for one repository.
   - `vornik-docs` — where the documentation lives, with the real site map
     and the rule that the installed CLI's own `--help` outranks recall.
     Guards against the characteristic failure: a confident, plausible,

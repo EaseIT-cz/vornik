@@ -87,10 +87,10 @@ overlapping finding masked. Sampling reads raw historical secrets, so like
 
 Examples:
   vornikctl secrets scan-history                          # dry-run, all projects
-  vornikctl secrets scan-history --project janka --since 30d
+  vornikctl secrets scan-history --project family --since 30d
   vornikctl secrets scan-history --sample 20 --rules entropy   # what does entropy match?
-  vornikctl secrets scan-history --project janka --apply  # redact the strong rules
-  vornikctl secrets scan-history --project janka --apply --rules all  # everything
+  vornikctl secrets scan-history --project family --apply  # redact the strong rules
+  vornikctl secrets scan-history --project family --apply --rules all  # everything
 `,
 	RunE: runSecretsScanHistory,
 }

@@ -311,7 +311,7 @@ conversation with `/summarize`.
 
 ## Approval before deleting unused project memory
 
-For a personal knowledge project such as `companion-janka`, add this block to
+For a personal knowledge project such as `companion-personal`, add this block to
 its **project YAML** in the configuration tree your daemon reads:
 
 ```yaml

@@ -15,10 +15,10 @@ import (
 // --- planSample (the §7 sampling frame) --------------------------------------
 
 func TestPlanSample_FloorCapAndInsufficientBucket(t *testing.T) {
-	// janka dominates (like prod ~95%); two other eligible strata; three tiny
+	// family dominates (like prod ~95%); two other eligible strata; three tiny
 	// projects below the floor; one empty-id bucket that must be dropped.
 	counts := map[string]int{
-		"janka":     26770,
+		"family":    26770,
 		"assistant": 768,
 		"_external": 342,
 		"small-a":   78,
@@ -33,22 +33,22 @@ func TestPlanSample_FloorCapAndInsufficientBucket(t *testing.T) {
 		byProj[sp.Project] = sp
 	}
 
-	// Dominant cap: janka may not exceed 50% of 800 = 400.
+	// Dominant cap: family may not exceed 50% of 800 = 400.
 	if plan.CapMax != 400 {
 		t.Errorf("CapMax = %d, want 400", plan.CapMax)
 	}
-	if byProj["janka"].Draw > 400 {
-		t.Errorf("janka draw %d exceeds the 50%% dominant cap (400)", byProj["janka"].Draw)
+	if byProj["family"].Draw > 400 {
+		t.Errorf("family draw %d exceeds the 50%% dominant cap (400)", byProj["family"].Draw)
 	}
 
 	// Every eligible stratum gets at least the floor of 100 (all have >=100).
-	for _, p := range []string{"janka", "assistant", "_external"} {
+	for _, p := range []string{"family", "assistant", "_external"} {
 		if byProj[p].Draw < 100 {
 			t.Errorf("stratum %s draw %d below the 100 floor", p, byProj[p].Draw)
 		}
 	}
 	// The whole budget is used when headroom allows (400+768cap? no: assistant
-	// avail 768 but cap 400, _external 342). janka=400, others fill remainder.
+	// avail 768 but cap 400, _external 342). family=400, others fill remainder.
 	if plan.TotalDraw != 800 {
 		t.Errorf("TotalDraw = %d, want 800 (budget fully allocatable here)", plan.TotalDraw)
 	}
@@ -212,7 +212,7 @@ func baseParams() calibrateParams {
 // --- dry-run: ZERO screener calls --------------------------------------------
 
 func TestRunCalibration_DryRunMakesNoScreenerCalls(t *testing.T) {
-	src := &fakeTurnSource{counts: map[string]int{"janka": 500, "assistant": 200}}
+	src := &fakeTurnSource{counts: map[string]int{"family": 500, "assistant": 200}}
 	scr := &fakeScreener{}
 	var buf bytes.Buffer
 	p := baseParams()
@@ -236,7 +236,7 @@ func TestRunCalibration_DryRunMakesNoScreenerCalls(t *testing.T) {
 }
 
 func TestRunCalibration_DryRunJSONShape(t *testing.T) {
-	src := &fakeTurnSource{counts: map[string]int{"janka": 500, "assistant": 200, "tiny": 5}}
+	src := &fakeTurnSource{counts: map[string]int{"family": 500, "assistant": 200, "tiny": 5}}
 	var buf bytes.Buffer
 	p := baseParams()
 	p.DryRun = true
@@ -265,10 +265,10 @@ func TestRunCalibration_TalliesAggregatesAndClassifies(t *testing.T) {
 	// Two eligible strata. Craft outcomes so the overall person-bearing new-rate
 	// crosses 30%.
 	src := &fakeTurnSource{
-		counts: map[string]int{"janka": 100, "assistant": 100},
+		counts: map[string]int{"family": 100, "assistant": 100},
 		byProject: map[string][]string{
-			// janka: 2 new, 1 amb, 1 match, 1 none, 1 err
-			"janka": {"new:a", "new:b", "amb:c", "match:d", "none:e", "err:f"},
+			// family: 2 new, 1 amb, 1 match, 1 none, 1 err
+			"family": {"new:a", "new:b", "amb:c", "match:d", "none:e", "err:f"},
 			// assistant: 1 new, 3 match, 1 none
 			"assistant": {"new:g", "match:h", "match:i", "match:j", "none:k"},
 		},
@@ -306,8 +306,8 @@ func TestRunCalibration_TalliesAggregatesAndClassifies(t *testing.T) {
 
 func TestRunCalibration_JSONReportShape(t *testing.T) {
 	src := &fakeTurnSource{
-		counts:    map[string]int{"janka": 100},
-		byProject: map[string][]string{"janka": {"match:a", "match:b", "none:c"}},
+		counts:    map[string]int{"family": 100},
+		byProject: map[string][]string{"family": {"match:a", "match:b", "none:c"}},
 	}
 	var buf bytes.Buffer
 	p := baseParams()
@@ -336,7 +336,7 @@ func TestRunCalibration_JSONReportShape(t *testing.T) {
 }
 
 func TestRunCalibration_NonDryRunRequiresScreener(t *testing.T) {
-	src := &fakeTurnSource{counts: map[string]int{"janka": 100}}
+	src := &fakeTurnSource{counts: map[string]int{"family": 100}}
 	var buf bytes.Buffer
 	if err := runCalibration(context.Background(), src, nil, baseParams(), &buf); err == nil {
 		t.Fatal("a non-dry-run without a screener must error")

@@ -92,15 +92,15 @@ func TestMemoryEvictAction_HappyPath(t *testing.T) {
 	form.Set("chunks", "chunk_1, chunk_2")
 	form.Set("reason", "GDPR DSAR 2026-05-20")
 	form.Set("confirm", "yes")
-	req := httptest.NewRequest(http.MethodPost, "/ui/memory/janka/evict", strings.NewReader(form.Encode()))
+	req := httptest.NewRequest(http.MethodPost, "/ui/memory/family/evict", strings.NewReader(form.Encode()))
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	rec := httptest.NewRecorder()
-	srv.MemoryEvictAction(rec, req, "janka")
+	srv.MemoryEvictAction(rec, req, "family")
 
 	if rec.Code != http.StatusSeeOther {
 		t.Errorf("status: got %d, want 303 (SeeOther); body=%q", rec.Code, rec.Body.String())
 	}
-	if ev.lastProject != "janka" {
+	if ev.lastProject != "family" {
 		t.Errorf("project filter mismatch: got %q", ev.lastProject)
 	}
 	if !reflect.DeepEqual(ev.lastIDs, []string{"chunk_1", "chunk_2"}) {
@@ -125,10 +125,10 @@ func TestMemoryEvictAction_NoConfirm(t *testing.T) {
 	form := url.Values{}
 	form.Set("chunks", "chunk_1")
 	// confirm intentionally omitted
-	req := httptest.NewRequest(http.MethodPost, "/ui/memory/janka/evict", strings.NewReader(form.Encode()))
+	req := httptest.NewRequest(http.MethodPost, "/ui/memory/family/evict", strings.NewReader(form.Encode()))
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	rec := httptest.NewRecorder()
-	srv.MemoryEvictAction(rec, req, "janka")
+	srv.MemoryEvictAction(rec, req, "family")
 
 	if rec.Code != http.StatusBadRequest {
 		t.Errorf("missing confirm: got %d, want 400", rec.Code)
@@ -148,10 +148,10 @@ func TestMemoryEvictAction_EmptyChunks(t *testing.T) {
 	form := url.Values{}
 	form.Set("chunks", "   ,   ,   ")
 	form.Set("confirm", "yes")
-	req := httptest.NewRequest(http.MethodPost, "/ui/memory/janka/evict", strings.NewReader(form.Encode()))
+	req := httptest.NewRequest(http.MethodPost, "/ui/memory/family/evict", strings.NewReader(form.Encode()))
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	rec := httptest.NewRecorder()
-	srv.MemoryEvictAction(rec, req, "janka")
+	srv.MemoryEvictAction(rec, req, "family")
 
 	if rec.Code != http.StatusBadRequest {
 		t.Errorf("empty chunks: got %d, want 400", rec.Code)
@@ -167,10 +167,10 @@ func TestMemoryEvictAction_NoEvictorWired(t *testing.T) {
 	form := url.Values{}
 	form.Set("chunks", "chunk_1")
 	form.Set("confirm", "yes")
-	req := httptest.NewRequest(http.MethodPost, "/ui/memory/janka/evict", strings.NewReader(form.Encode()))
+	req := httptest.NewRequest(http.MethodPost, "/ui/memory/family/evict", strings.NewReader(form.Encode()))
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	rec := httptest.NewRecorder()
-	srv.MemoryEvictAction(rec, req, "janka")
+	srv.MemoryEvictAction(rec, req, "family")
 
 	if rec.Code != http.StatusServiceUnavailable {
 		t.Errorf("no evictor wired: got %d, want 503", rec.Code)
@@ -187,10 +187,10 @@ func TestMemoryEvictAction_BackendError(t *testing.T) {
 	form := url.Values{}
 	form.Set("chunks", "chunk_1")
 	form.Set("confirm", "yes")
-	req := httptest.NewRequest(http.MethodPost, "/ui/memory/janka/evict", strings.NewReader(form.Encode()))
+	req := httptest.NewRequest(http.MethodPost, "/ui/memory/family/evict", strings.NewReader(form.Encode()))
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	rec := httptest.NewRecorder()
-	srv.MemoryEvictAction(rec, req, "janka")
+	srv.MemoryEvictAction(rec, req, "family")
 
 	if rec.Code != http.StatusInternalServerError {
 		t.Errorf("backend error: got %d, want 500", rec.Code)
@@ -207,9 +207,9 @@ func TestMemoryEvictAction_MethodNotAllowed(t *testing.T) {
 	ev := &stubMemoryEvictor{}
 	srv := NewServer(WithMemoryEvictor(ev))
 
-	req := httptest.NewRequest(http.MethodGet, "/ui/memory/janka/evict", nil)
+	req := httptest.NewRequest(http.MethodGet, "/ui/memory/family/evict", nil)
 	rec := httptest.NewRecorder()
-	srv.MemoryEvictAction(rec, req, "janka")
+	srv.MemoryEvictAction(rec, req, "family")
 
 	if rec.Code != http.StatusMethodNotAllowed {
 		t.Errorf("GET evict: got %d, want 405", rec.Code)

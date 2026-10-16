@@ -40,11 +40,10 @@ func (p *Project) ForgeIssueRepoAllowed(repo string) bool {
 	if p == nil || forge.ValidateIssueRepo(repo) != nil {
 		return false
 	}
-	repos := append([]string{}, p.Forge.Issues.Repos...)
-	repos = append(repos, p.Forge.GitHub.Repo, p.GitHub.Repo)
-	repos = append(repos, p.GitHubApp.RepoAllowlist...)
-	for _, allowed := range repos {
-		if forge.ValidateIssueRepo(allowed) == nil && strings.EqualFold(allowed, repo) {
+	// One set for "the repositories this project is scoped to", shared with
+	// the webhook repository scope (GitHub #407).
+	for _, allowed := range p.ForgeRepos() {
+		if strings.EqualFold(allowed, repo) {
 			return true
 		}
 	}

@@ -39,7 +39,7 @@ roles:
       #     under-powered on combined lead load.
       #   pre-2026-05-23: qwen.qwen3-235b-a22b-2507-v1:0 — strong
       #     but geo-blocked.
-      #   2026-05-18: gpt-oss-120b — too light; janka "config
+      #   2026-05-18: gpt-oss-120b — too light; family "config
       #     missing" fabrication on glm-4.7-flash same day.
       # gpt-5.4 (codex connector, plan-billed) remains the escape
       # hatch if both glm-5 and kimi-k2.5 misbehave.
@@ -150,7 +150,7 @@ roles:
             # the agent gets a graceful "wrap up" cue as it nears the cap.
             # 2026-07-23: 25 -> 40 for the vornik-marketing moltbook feed
             # (multi-endpoint /feed discovery + qualify + draft needs more room).
-            # SHARED across assistant/janka/vornik-marketing — only the ~5% tail
+            # SHARED across assistant/family/vornik-marketing — only the ~5% tail
             # (>25 iters) costs more; p50=7 unaffected. Cost-tuning control plane
             # may re-tune down per telemetry.
             VORNIK_MAX_TOOL_ITERATIONS: "40"
@@ -394,7 +394,7 @@ roles:
     # path/inline content given in the prompt) — deliberately NOT a memory_search
     # (RAG relevance-ranks across all accumulated memory and could blend stale or
     # hallucinated chunks into a fresh report). Config-only; shared by assistant +
-    # janka. Primary use: the `research-and-publish` workflow's final stage (same
+    # family. Primary use: the `research-and-publish` workflow's final stage (same
     # workspace → reads the fresh deliverable). Also runnable standalone via the
     # `publish` workflow to publish explicit content.
     - name: "publisher"
@@ -555,7 +555,7 @@ roles:
     # retrieval-friendly notes and writes them to an output artifact, which the
     # executor auto-ingests into project memory. For "remember/ingest this
     # document" requests — lighter than research (NO web fetch, no writer step)
-    # and clearly labelled. Shared by assistant + janka; used by the `ingest`
+    # and clearly labelled. Shared by assistant + family; used by the `ingest`
     # workflow, to which the dispatcher routes ingestion-intent requests.
     - name: "ingestor"
       description: "Structures a provided document into clean notes and stores them in memory (no web research)"
@@ -898,7 +898,7 @@ files fails the step.
 
 ### writer
 
-**CV / résumé / cover-letter grounding (Janka's job applications).**
+**CV / résumé / cover-letter grounding (a household member's job applications).**
 When the deliverable is a CV, résumé, or cover letter, your FIRST action
 is `file_read project/.autonomy/RESUME.md` — the operator-maintained
 AUTHORITATIVE résumé. It is the SINGLE SOURCE OF TRUTH for every career

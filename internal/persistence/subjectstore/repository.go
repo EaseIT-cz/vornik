@@ -3,6 +3,7 @@ package subjectstore
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"slices"
@@ -549,18 +550,31 @@ func (r *Repository) scanRequest(scan func(...any) error) (datasubject.Request, 
 type collectorSpec struct {
 	idCol       string
 	contentCols []string
-	projectCol  string // empty when the table is global
+	// jsonCols are the content columns holding JSON whose empty default
+	// ([], {}, null) is not content and is dropped like an empty string
+	// (design 2026-07-29-art17-redact-and-reembed §15.11.4). channel_sessions
+	// history is deliberately not one: its shipped export is unchanged.
+	jsonCols   []string
+	projectCol string // empty when the table is global
 	// originNote describes where such a row comes from, answering Art 14(2)(f).
 	originNote string
 }
 
 var collectorSpecs = map[datasubject.LinkableTable]collectorSpec{
+	// The transcript tables export every column that holds conversation text or
+	// who wrote it: the speaker, the tool-call arguments, the hallucination
+	// signals quoting the reply, and the message metadata (§15.11.4, #344).
 	datasubject.TableChatAuditLog: {
-		idCol: "id", contentCols: []string{"user_message", "response"}, projectCol: "project_id",
+		idCol: "id",
+		contentCols: []string{"user_message", "response", "user_id",
+			"tool_calls_json", "hallucination_signals_json"},
+		jsonCols:   []string{"tool_calls_json", "hallucination_signals_json"},
+		projectCol: "project_id",
 		originNote: "a chat turn you sent to this deployment",
 	},
 	datasubject.TableTaskMessages: {
-		idCol: "id", contentCols: []string{"content"},
+		idCol: "id", contentCols: []string{"content", "author_id", "metadata"},
+		jsonCols:   []string{"metadata"},
 		originNote: "a message in a task conversation",
 	},
 	datasubject.TableProjectMemoryChunks: {
@@ -634,10 +648,20 @@ func (r *Repository) CollectItems(ctx context.Context, subjectID string, links [
 			return nil, fmt.Errorf("subjectstore: collect %s/%s: %w", l.Table, l.RowID, err)
 		}
 		parts := make([]string, 0, len(vals))
-		for _, v := range vals {
-			if s, _ := v.(string); strings.TrimSpace(s) != "" {
-				parts = append(parts, s)
+		for i, v := range vals {
+			s, _ := v.(string)
+			if strings.TrimSpace(s) == "" {
+				continue
 			}
+			if slices.Contains(spec.jsonCols, cols[i]) {
+				if emptyJSONValue(s) {
+					continue
+				}
+				// These columns are not (all) scanned at write; the export is
+				// the last point to keep a credential out (export_redact.go).
+				s = redactExportJSON(cols[i], s)
+			}
+			parts = append(parts, s)
 		}
 
 		others, err := r.CountOtherSubjectsOnRow(ctx, subjectID, string(l.Table), l.RowID)
@@ -731,6 +755,28 @@ func (r *Repository) channelSessionKey(ctx context.Context, rowID string) (kind,
 			"exists under more than one kind (%s, ...) — re-link it as <kind>/<session_id>",
 			rowID, rowID, strings.Join(kinds, ", "))
 	}
+}
+
+// emptyJSONValue reports whether s is blank or a JSON empty array, empty object
+// or null, judged by parsing rather than by literal match so "[ ]" counts too.
+// Text that does not parse as JSON is content.
+func emptyJSONValue(s string) bool {
+	if strings.TrimSpace(s) == "" {
+		return true
+	}
+	var v any
+	if err := json.Unmarshal([]byte(s), &v); err != nil {
+		return false
+	}
+	switch x := v.(type) {
+	case nil:
+		return true
+	case []any:
+		return len(x) == 0
+	case map[string]any:
+		return len(x) == 0
+	}
+	return false
 }
 
 // coalesceAll wraps each column so a NULL scans as an empty string rather than

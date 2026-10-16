@@ -20,7 +20,7 @@ const (
 // descendantTaskIDs returns the ids of every task beneath rootID that belongs
 // to projectID, breadth first, excluding rootID itself.
 //
-// Why this exists (2026-08-05 janka-companion incident): a chat request became
+// Why this exists (2026-08-05 family-companion incident): a chat request became
 // a routing task that delegated the real work to a child. Everything the
 // operator wanted — a 31 KB report — was attached to the child, while the
 // parent owned two ~300-byte router responses. Every task-scoped artifact read

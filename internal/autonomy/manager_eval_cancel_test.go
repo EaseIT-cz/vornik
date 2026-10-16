@@ -41,7 +41,7 @@ func (f *fakeChatProvider) SetMetrics(*chat.Metrics) {}
 // evaluate() reaches the CompleteWithTools call.
 func llmEvalProject() *registry.Project {
 	return &registry.Project{
-		ID: "janka",
+		ID: "family",
 		Autonomy: registry.ProjectAutonomy{
 			Enabled:         true,
 			MaxTasksPerHour: 10,
@@ -50,7 +50,7 @@ func llmEvalProject() *registry.Project {
 	}
 }
 
-// TestEvaluate_CallerCancelIsBenignAborted is the Janka first-eval-
+// TestEvaluate_CallerCancelIsBenignAborted is the family project's first-eval-
 // after-reload fix: when the in-flight eval LLM call dies with
 // context.Canceled (autonomy loop torn down mid-eval by reload /
 // shutdown), the eval must record the benign ABORTED outcome, NOT
@@ -73,7 +73,7 @@ func TestEvaluate_CallerCancelIsBenignAborted(t *testing.T) {
 	entries := evalRepo.snapshot()
 	require.Len(t, entries, 1, "exactly one audit row for the aborted eval")
 	assert.Equal(t, persistence.AutonomyOutcomeAborted, entries[0].Outcome)
-	assert.Equal(t, float64(0), testutil.ToFloat64(metrics.ErrorsTotal.WithLabelValues("janka")),
+	assert.Equal(t, float64(0), testutil.ToFloat64(metrics.ErrorsTotal.WithLabelValues("family")),
 		"caller-cancel must NOT bump the error metric")
 }
 
@@ -97,6 +97,6 @@ func TestEvaluate_GenericLLMErrorStaysError(t *testing.T) {
 	entries := evalRepo.snapshot()
 	require.Len(t, entries, 1)
 	assert.Equal(t, persistence.AutonomyOutcomeLLMError, entries[0].Outcome)
-	assert.Equal(t, float64(1), testutil.ToFloat64(metrics.ErrorsTotal.WithLabelValues("janka")),
+	assert.Equal(t, float64(1), testutil.ToFloat64(metrics.ErrorsTotal.WithLabelValues("family")),
 		"a real LLM error must bump the error metric")
 }

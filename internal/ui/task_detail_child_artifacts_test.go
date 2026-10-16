@@ -14,7 +14,7 @@ import (
 	"vornik.io/vornik/internal/persistence/mocks"
 )
 
-// The 2026-08-05 janka-companion shape, reused by both tests below.
+// The 2026-08-05 family-companion shape, reused by both tests below.
 //
 // A Slack request became a routing task whose only artifacts were two ~300-byte
 // router responses. The router delegated the real work to a child task, which
@@ -22,19 +22,19 @@ import (
 // on task_id alone, so the operator saw only the two router scraps and
 // concluded the report had never been produced.
 const (
-	jankaParentTask = "task_20260805170431_955e423704153971"
-	jankaChildTask  = "task_20260805170522_ab6d9a44d42779b5"
-	jankaReportArt  = "artifact_20260805211355_e53565f9fca24670"
+	familyParentTask = "task_20260805170431_955e423704153971"
+	familyChildTask  = "task_20260805170522_ab6d9a44d42779b5"
+	familyReportArt  = "artifact_20260805211355_e53565f9fca24670"
 )
 
-func jankaLineage() (parent *persistence.Task, child *persistence.Task) {
+func familyLineage() (parent *persistence.Task, child *persistence.Task) {
 	turn := "chat_20260805170412_9dc37555d22e8c76"
 	parent = &persistence.Task{
-		ID: jankaParentTask, ProjectID: "companion-janka",
+		ID: familyParentTask, ProjectID: "companion-family",
 		ChatTurnID: &turn, Status: persistence.TaskStatusCompleted,
 	}
 	child = &persistence.Task{
-		ID: jankaChildTask, ProjectID: "companion-janka",
+		ID: familyChildTask, ProjectID: "companion-family",
 		ParentTaskID: &parent.ID, Status: persistence.TaskStatusCompleted,
 	}
 	return parent, child
@@ -42,19 +42,19 @@ func jankaLineage() (parent *persistence.Task, child *persistence.Task) {
 
 // routerArtifacts are what the PARENT task owns: the two tiny router responses.
 func routerArtifacts() []*persistence.Artifact {
-	pid := jankaParentTask
+	pid := familyParentTask
 	return []*persistence.Artifact{
 		{ID: "art_route", Name: "route-response-20260805-94d2.md", TaskID: &pid,
-			ProjectID: "companion-janka", ArtifactClass: persistence.ArtifactClassOutput},
+			ProjectID: "companion-family", ArtifactClass: persistence.ArtifactClassOutput},
 	}
 }
 
 // reportArtifact is what the CHILD task owns: the deliverable that matters.
 func reportArtifact() *persistence.Artifact {
-	cid := jankaChildTask
+	cid := familyChildTask
 	return &persistence.Artifact{
-		ID: jankaReportArt, Name: "report-20260805-9bac.html", TaskID: &cid,
-		ProjectID: "companion-janka", ArtifactClass: persistence.ArtifactClassOutput,
+		ID: familyReportArt, Name: "report-20260805-9bac.html", TaskID: &cid,
+		ProjectID: "companion-family", ArtifactClass: persistence.ArtifactClassOutput,
 	}
 }
 
@@ -63,7 +63,7 @@ func reportArtifact() *persistence.Artifact {
 // artifacts its delegated children produced, or the page claims the work
 // produced nothing but two router scraps.
 func TestTaskDetail_ListsDescendantArtifacts(t *testing.T) {
-	parent, child := jankaLineage()
+	parent, child := familyLineage()
 	report := reportArtifact()
 
 	taskRepo := &mocks.MockTaskRepository{
@@ -119,7 +119,7 @@ func TestTaskDetail_ListsDescendantArtifacts(t *testing.T) {
 	assert.Contains(t, body, "route-response-20260805-94d2.md", "the parent's own artifacts must still be listed")
 	assert.Contains(t, body, "report-20260805-9bac.html",
 		"the child's deliverable must be listed on the parent page — otherwise the real output is invisible")
-	assert.Contains(t, body, "/ui/tasks/"+parent.ID+"/artifacts/"+jankaReportArt+"/send",
+	assert.Contains(t, body, "/ui/tasks/"+parent.ID+"/artifacts/"+familyReportArt+"/send",
 		"the rolled-up child artifact must be sendable from the parent page")
 }
 
@@ -127,7 +127,7 @@ func TestTaskDetail_ListsDescendantArtifacts(t *testing.T) {
 // artifact whose task_id differed from the page's task, so even once the child
 // artifact is listed on the parent page, sending it 404'd.
 func TestDeliverableSend_AcceptsDescendantArtifact(t *testing.T) {
-	parent, child := jankaLineage()
+	parent, child := familyLineage()
 	report := reportArtifact()
 
 	taskRepo := &mocks.MockTaskRepository{
@@ -156,7 +156,7 @@ func TestDeliverableSend_AcceptsDescendantArtifact(t *testing.T) {
 		},
 	}
 	row := &persistence.ChatAuditEntry{
-		ID: "chat_20260805170412_9dc37555d22e8c76", ChatID: "slack:T03/D0B#main", ProjectID: "companion-janka",
+		ID: "chat_20260805170412_9dc37555d22e8c76", ChatID: "slack:T03/D0B#main", ProjectID: "companion-family",
 	}
 	ch := &fakeChannelDS{name: "slack"}
 
@@ -183,11 +183,11 @@ func TestDeliverableSend_AcceptsDescendantArtifact(t *testing.T) {
 // must NOT let a caller send an artifact from an unrelated task by guessing its
 // id.
 func TestDeliverableSend_UnrelatedTaskArtifact_StillNotFound(t *testing.T) {
-	parent, _ := jankaLineage()
+	parent, _ := familyLineage()
 	strangerID := "task_stranger"
 	stranger := &persistence.Artifact{
 		ID: "art_stranger", Name: "secret.md", TaskID: &strangerID,
-		ProjectID: "companion-janka", ArtifactClass: persistence.ArtifactClassOutput,
+		ProjectID: "companion-family", ArtifactClass: persistence.ArtifactClassOutput,
 	}
 
 	taskRepo := &mocks.MockTaskRepository{

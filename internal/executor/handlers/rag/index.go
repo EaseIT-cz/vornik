@@ -102,6 +102,10 @@ func (h *IndexHandler) Name() string { return "rag.index" }
 type indexResult struct {
 	Chunks    int `json:"chunks"`
 	Documents int `json:"documents"`
+	// RefusedDamaged names the extracted documents the Indexer refused as
+	// damaged text (memory.ErrDamagedText; GitHub #389,
+	// memory-ingest-paths.md §8.2d). Omitted when none.
+	RefusedDamaged []string `json:"refused_damaged,omitempty"`
 }
 
 // Execute implements executor.SystemHandler. Walks every
@@ -127,6 +131,7 @@ func (h *IndexHandler) Execute(ctx context.Context, in executor.SystemStepInput)
 	}
 
 	totalChunks := 0
+	var refused []string
 	for _, entry := range prev.Extracted {
 		doc, err := h.docRepo.Get(ctx, entry.ExtractedDocumentID)
 		if err != nil {
@@ -184,6 +189,13 @@ func (h *IndexHandler) Execute(ctx context.Context, in executor.SystemStepInput)
 			ctx, in.Task.ProjectID, in.Task.ID,
 			doc.SourceArtifactID, doc.ID, sections,
 		)
+		if errors.Is(err, memory.ErrDamagedText) {
+			// GitHub #389: one damaged document is skipped, not the batch.
+			// The Indexer stored nothing for it and logged why; the step
+			// result names it so the operator sees what was left out.
+			refused = append(refused, doc.ID)
+			continue
+		}
 		if err != nil {
 			return executor.SystemStepResult{}, fmt.Errorf("rag.index: ingest %s: %w", doc.ID, err)
 		}
@@ -219,8 +231,9 @@ func (h *IndexHandler) Execute(ctx context.Context, in executor.SystemStepInput)
 	}
 
 	resultBytes, err := json.Marshal(indexResult{
-		Chunks:    totalChunks,
-		Documents: len(prev.Extracted),
+		Chunks:         totalChunks,
+		Documents:      len(prev.Extracted),
+		RefusedDamaged: refused,
 	})
 	if err != nil {
 		return executor.SystemStepResult{}, fmt.Errorf("rag.index: marshal result: %w", err)

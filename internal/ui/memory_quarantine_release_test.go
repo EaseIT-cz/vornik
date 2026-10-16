@@ -40,7 +40,7 @@ func (s *stubQuarantineRepo) Get(_ context.Context, id string) (*persistence.Mem
 		return nil, s.getErr
 	}
 	if s.getReturn == nil {
-		return &persistence.MemoryQuarantineItem{ID: id, ProjectID: "janka"}, nil
+		return &persistence.MemoryQuarantineItem{ID: id, ProjectID: "family"}, nil
 	}
 	return s.getReturn, nil
 }
@@ -67,10 +67,10 @@ func TestMemoryQuarantineAction_ReleaseCallsMarkReleased(t *testing.T) {
 	form := url.Values{}
 	form.Set("id", "q_42")
 	form.Set("action", "release")
-	req := httptest.NewRequest(http.MethodPost, "/ui/memory/janka/quarantine", strings.NewReader(form.Encode()))
+	req := httptest.NewRequest(http.MethodPost, "/ui/memory/family/quarantine", strings.NewReader(form.Encode()))
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	rec := httptest.NewRecorder()
-	srv.MemoryQuarantineAction(rec, req, "janka")
+	srv.MemoryQuarantineAction(rec, req, "family")
 
 	if rec.Code != http.StatusSeeOther {
 		t.Errorf("status: got %d, want 303; body=%q", rec.Code, rec.Body.String())
@@ -93,10 +93,10 @@ func TestMemoryQuarantineAction_DropStillWorks(t *testing.T) {
 	form := url.Values{}
 	form.Set("id", "q_99")
 	form.Set("action", "drop")
-	req := httptest.NewRequest(http.MethodPost, "/ui/memory/janka/quarantine", strings.NewReader(form.Encode()))
+	req := httptest.NewRequest(http.MethodPost, "/ui/memory/family/quarantine", strings.NewReader(form.Encode()))
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	rec := httptest.NewRecorder()
-	srv.MemoryQuarantineAction(rec, req, "janka")
+	srv.MemoryQuarantineAction(rec, req, "family")
 
 	if rec.Code != http.StatusSeeOther {
 		t.Errorf("status: got %d, want 303; body=%q", rec.Code, rec.Body.String())
@@ -116,10 +116,10 @@ func TestMemoryQuarantineAction_ReleaseError(t *testing.T) {
 	form := url.Values{}
 	form.Set("id", "q_1")
 	form.Set("action", "release")
-	req := httptest.NewRequest(http.MethodPost, "/ui/memory/janka/quarantine", strings.NewReader(form.Encode()))
+	req := httptest.NewRequest(http.MethodPost, "/ui/memory/family/quarantine", strings.NewReader(form.Encode()))
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	rec := httptest.NewRecorder()
-	srv.MemoryQuarantineAction(rec, req, "janka")
+	srv.MemoryQuarantineAction(rec, req, "family")
 
 	if rec.Code != http.StatusInternalServerError {
 		t.Errorf("release error: got %d, want 500", rec.Code)
@@ -140,10 +140,10 @@ func TestMemoryQuarantineAction_UnknownAction(t *testing.T) {
 	form := url.Values{}
 	form.Set("id", "q_1")
 	form.Set("action", "release-with-overrides") // not a real action
-	req := httptest.NewRequest(http.MethodPost, "/ui/memory/janka/quarantine", strings.NewReader(form.Encode()))
+	req := httptest.NewRequest(http.MethodPost, "/ui/memory/family/quarantine", strings.NewReader(form.Encode()))
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	rec := httptest.NewRecorder()
-	srv.MemoryQuarantineAction(rec, req, "janka")
+	srv.MemoryQuarantineAction(rec, req, "family")
 
 	if rec.Code != http.StatusBadRequest {
 		t.Errorf("unknown action: got %d, want 400", rec.Code)

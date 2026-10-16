@@ -52,7 +52,7 @@ func TestResolve_PayloadWinsOverProjectDefault(t *testing.T) {
 
 func TestResolve_ProjectDefaultFillsSilence(t *testing.T) {
 	// THE REGRESSION. Before the default existed, this returned "" and the chunk
-	// landed NULL — the whole reason assistant/janka/vornik-marketing/ibkr-trader
+	// landed NULL — the whole reason assistant/family/vornik-marketing/ibkr-trader
 	// were 100% uncategorized.
 	for _, payload := range []string{``, `{}`, `{"context":{}}`, `{"context":{"repo_scope":"  "}}`, `{"bad":`} {
 		if got := Resolve([]byte(payload), "github.com/acme/default"); got != "github.com/acme/default" {

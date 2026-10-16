@@ -51,7 +51,7 @@ func TestBuildForStep_HappyPath(t *testing.T) {
 			},
 			{
 				ToolName:   "memory_search",
-				ToolInput:  `{"query":"janka"}`,
+				ToolInput:  `{"query":"family"}`,
 				ToolOutput: "[]",
 			},
 		},

@@ -31,7 +31,7 @@ func TestStripQuotedReply(t *testing.T) {
 		{
 			name: "outlook horizontal rule then From header",
 			in: "yes please\n\n________________________________\nFrom: Vornik <bot@vornik.io>\n" +
-				"Sent: 28 July 2026 15:04\nTo: janka\n\nearlier body\n",
+				"Sent: 28 July 2026 15:04\nTo: family\n\nearlier body\n",
 			want: "yes please",
 		},
 		{
@@ -103,8 +103,8 @@ func TestStripQuotedReply(t *testing.T) {
 		},
 		{
 			name: "no quoting is returned unchanged",
-			in:   "Please add these books to RAG.\n\nThanks,\nJanka",
-			want: "Please add these books to RAG.\n\nThanks,\nJanka",
+			in:   "Please add these books to RAG.\n\nThanks,\nAlice",
+			want: "Please add these books to RAG.\n\nThanks,\nAlice",
 		},
 		{
 			name: "body that merely mentions wrote is not truncated",

@@ -10,6 +10,8 @@ import (
 	"sort"
 	"strings"
 	"testing"
+
+	"vornik.io/vornik/internal/testutil/repowalk"
 )
 
 // Agent-administered design §18.6 item 2 in detail, round 3 F3 and review
@@ -28,6 +30,9 @@ func modelCallSites(t *testing.T, name string) []string {
 	err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
+		}
+		if d.IsDir() && repowalk.SkipDir(root, path, d.Name()) {
+			return filepath.SkipDir
 		}
 		if d.IsDir() || !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") || strings.Contains(path, "/repotest/") {
 			return nil

@@ -30,7 +30,7 @@ func notifierWithCheckpoint(cp *persistence.TaskMessage) *Notifier {
 }
 
 func task() *persistence.Task {
-	return &persistence.Task{ID: "task_20260806212011_77b90a7d0e1d0e47", ProjectID: "companion-janka"}
+	return &persistence.Task{ID: "task_20260806212011_77b90a7d0e1d0e47", ProjectID: "companion-family"}
 }
 
 // The reported bug: a decision checkpoint reached Slack with neither the

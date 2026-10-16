@@ -36,7 +36,7 @@ func prices(known ...string) ModelPricer {
 func testRoutes() routes {
 	return routes{
 		"qwen3:35b":           {SubProvider: "http", Endpoint: "http://127.0.0.1:11434/v1"},
-		"lan-model":           {SubProvider: "http", Endpoint: "http://192.168.0.142:8000/v1"},
+		"lan-model":           {SubProvider: "http", Endpoint: "http://192.168.1.50:8000/v1"},
 		"google/gemini-pro":   {SubProvider: "vertex", Endpoint: "https://aiplatform.googleapis.com/v1/projects/p/locations/global/endpoints/openapi"},
 		"google/gemini-flash": {SubProvider: "vertex", Endpoint: "https://aiplatform.googleapis.com/v1/projects/p/locations/global/endpoints/openapi"},
 		"claude-sonnet":       {SubProvider: "claude-cli", CLI: true},

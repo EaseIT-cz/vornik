@@ -114,9 +114,19 @@ func (r *Repository) pgvectorAvailable(ctx context.Context) bool {
 
 // UpsertChunks inserts chunks into project_memory_chunks, skipping duplicates
 // identified by (project_id, content_hash).
+//
+// Refuses the whole batch with ErrDamagedText when any chunk's content is
+// damaged text (GitHub #389, memory-ingest-paths.md §8.2b "structural
+// floor"): this and insertOperatorCorrection are the only writers of
+// project_memory_chunks, so a future caller inherits the guard.
 func (r *Repository) UpsertChunks(ctx context.Context, chunks []MemoryChunk) error {
 	if len(chunks) == 0 {
 		return nil
+	}
+	for i := range chunks {
+		if err := ScanTextDamage(chunks[i].Content).Err(chunks[i].SourceName); err != nil {
+			return err
+		}
 	}
 
 	// embed_input_hash is written HERE, at insert, rather than recomputed at
@@ -1892,7 +1902,10 @@ SELECT c.id, c.project_id, COALESCE(c.task_id,''), c.source_name, c.content,
        (COALESCE(1.0/(60 + s.rank), 0) + COALESCE(1.0/(60 + k.rank), 0))
            * (1 + COALESCE(c.utility_score, 0)) AS score,
        COALESCE(c.content_class, ''),
-       c.is_alive, c.last_checked_at
+       c.is_alive, c.last_checked_at,
+       -- Every search statement projects repo_scope, so every hit carries
+       -- its scope (GitHub #368; design_record counts by it).
+       COALESCE(c.repo_scope, '') AS repo_scope
 FROM project_memory_chunks c
 LEFT JOIN semantic s ON s.id = c.id
 LEFT JOIN keyword  k ON k.id = c.id
@@ -2282,7 +2295,8 @@ SELECT c.id, c.project_id, COALESCE(c.task_id,''), c.source_name, c.content,
         + ts_rank(c.tsv, q.strict_q)
         + (0.5 * ts_rank(c.tsv, q.relaxed_q))) * (1 + COALESCE(c.utility_score, 0)) AS score,
        COALESCE(c.content_class, ''),
-       c.is_alive, c.last_checked_at
+       c.is_alive, c.last_checked_at,
+       COALESCE(c.repo_scope, '') AS repo_scope
 FROM project_memory_chunks c, q
 WHERE project_id = $1 AND (tsv @@ q.strict_q OR tsv @@ q.relaxed_q)
   AND c.validation_status NOT IN ('refuted','superseded')
@@ -2499,7 +2513,8 @@ func (r *Repository) substringSearch(ctx context.Context, projectID, queryText s
 SELECT c.id, c.project_id, COALESCE(c.task_id,''), c.source_name, c.content,
        1.0 AS score,
        COALESCE(c.content_class, ''),
-       c.is_alive, c.last_checked_at
+       c.is_alive, c.last_checked_at,
+       COALESCE(c.repo_scope, '') AS repo_scope
 FROM project_memory_chunks c
 WHERE c.project_id = $1 AND c.content ILIKE '%%' || $2 || '%%' ESCAPE '\'
   AND c.lifecycle_state = 'published'
@@ -2527,7 +2542,8 @@ func (r *Repository) substringSearchTemporal(ctx context.Context, projectID, que
 SELECT c.id, c.project_id, COALESCE(c.task_id,''), c.source_name, c.content,
        1.0 AS score,
        COALESCE(c.content_class, ''),
-       c.is_alive, c.last_checked_at
+       c.is_alive, c.last_checked_at,
+       COALESCE(c.repo_scope, '') AS repo_scope
 FROM project_memory_chunks c
 WHERE c.project_id = $1 AND c.content ILIKE '%%' || $2 || '%%' ESCAPE '\'
   AND c.lifecycle_state = 'published'
@@ -2554,7 +2570,8 @@ func (r *Repository) substringSearchWithEpochsTemporal(ctx context.Context, proj
 SELECT c.id, c.project_id, COALESCE(c.task_id,''), c.source_name, c.content,
        1.0 AS score,
        COALESCE(c.content_class, ''),
-       c.is_alive, c.last_checked_at
+       c.is_alive, c.last_checked_at,
+       COALESCE(c.repo_scope, '') AS repo_scope
 FROM project_memory_chunks c
 WHERE c.project_id = $1 AND c.content ILIKE '%%' || $2 || '%%' ESCAPE '\'
   AND c.lifecycle_state = 'published'

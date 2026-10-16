@@ -251,7 +251,7 @@ func TestDashboardLearningTile_ScopedSessionSeesNoCounts(t *testing.T) {
 		WithOnboardingDetector(alreadyOnboardedDetector()),
 	)
 	req := httptest.NewRequest("GET", "/", nil)
-	req = req.WithContext(api.ContextWithProjectScope(req.Context(), "janka"))
+	req = req.WithContext(api.ContextWithProjectScope(req.Context(), "family"))
 	rr := httptest.NewRecorder()
 	srv.Handler().ServeHTTP(rr, req)
 	if rr.Code != 200 {

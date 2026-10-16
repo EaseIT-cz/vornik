@@ -73,7 +73,7 @@ func TestBuildProjectWorkflowWiring_HeadmatchShape(t *testing.T) {
 // id that doesn't resolve is flagged Unresolved.
 func TestBuildProjectWorkflowWiring_DedupAndUnresolved(t *testing.T) {
 	p := &registry.Project{
-		ID:                         "janka",
+		ID:                         "family",
 		DefaultWorkflowID:          "adaptive",
 		AdaptiveCandidateWorkflows: []string{"ghost-wf"},
 		Autonomy:                   registry.ProjectAutonomy{WorkflowID: "adaptive", Mode: "backlog"},

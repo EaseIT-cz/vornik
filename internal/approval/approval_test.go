@@ -9,6 +9,8 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+
+	"vornik.io/vornik/internal/testutil/repowalk"
 )
 
 // Broker write-actions design (2026-09-29) §5.3: one gate and one hash for
@@ -120,6 +122,9 @@ func TestSameOriginLadderHasOneImplementation(t *testing.T) {
 	werr := filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
 			return err
+		}
+		if info.IsDir() && repowalk.SkipDir(root, path, info.Name()) {
+			return filepath.SkipDir
 		}
 		if info.IsDir() || !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
 			return nil

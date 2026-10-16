@@ -12,6 +12,8 @@ import (
 	"sort"
 	"strings"
 	"testing"
+
+	"vornik.io/vornik/internal/testutil/repowalk"
 )
 
 // GitHub #342 (audit 2026-10-12), Art 50 disclosure design 2026-07-28 §11.4.5.
@@ -201,11 +203,7 @@ func TestArt50Law_EveryOutboundSendGoesThroughTheDisclosurePath(t *testing.T) {
 			return err
 		}
 		if d.IsDir() {
-			if path != root && strings.HasPrefix(d.Name(), ".") {
-				return filepath.SkipDir
-			}
-			switch d.Name() {
-			case "vendor", "node_modules", "testdata", "build":
+			if repowalk.SkipDir(root, path, d.Name(), "testdata", "build") {
 				return filepath.SkipDir
 			}
 			return nil

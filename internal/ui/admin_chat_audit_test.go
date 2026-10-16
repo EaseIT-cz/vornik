@@ -105,7 +105,7 @@ func TestAdminChatAudit_RendersRows(t *testing.T) {
 func TestAdminChatAudit_PageSizeSelectorPreservesFilters(t *testing.T) {
 	srv := NewServer(WithAdminChatAuditRepository(&fakeChatAudit{}))
 	req := httptest.NewRequest(http.MethodGet,
-		"/admin/chat-audit?chat=559741208&project=janka&since=2026-05-01&limit=50",
+		"/admin/chat-audit?chat=559741208&project=family&since=2026-05-01&limit=50",
 		nil)
 	rec := httptest.NewRecorder()
 	srv.AdminChatAudit(rec, req)
@@ -115,7 +115,7 @@ func TestAdminChatAudit_PageSizeSelectorPreservesFilters(t *testing.T) {
 		`action="/ui/admin/chat-audit"`,
 		`name="limit"`,
 		`name="chat" value="559741208"`,
-		`name="project" value="janka"`,
+		`name="project" value="family"`,
 		`name="since" value="2026-05-01"`,
 	} {
 		assert.Contains(t, body, want, "selector wiring missing %q", want)

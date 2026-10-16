@@ -54,8 +54,8 @@ func memoryCorrectDescriptor() chat.Tool {
 			Parameters: json.RawMessage(`{
 				"type":"object",
 				"properties":{
-					"wrong_claim":{"type":"string","description":"The factual claim that is wrong, phrased the way it currently appears in memory (e.g. 'Janka was born in 1985')."},
-					"correction":{"type":"string","description":"The correct fact, phrased as it should appear going forward (e.g. 'Janka was born in 1990'). One to three sentences; include context that distinguishes this claim from similar ones."},
+					"wrong_claim":{"type":"string","description":"The factual claim that is wrong, phrased the way it currently appears in memory (e.g. 'Alice was born in 1985')."},
+					"correction":{"type":"string","description":"The correct fact, phrased as it should appear going forward (e.g. 'Alice was born in 1990'). One to three sentences; include context that distinguishes this claim from similar ones."},
 					"project_id":{"type":"string","description":"Project ID (uses active project if omitted)."},
 					"max_refutes":{"type":"integer","description":"Cap on chunks to refute in one call. Default 3, max 20. Use 1 when correcting a specific stored claim; raise when the wrong fact is repeated across many sources."}
 				},

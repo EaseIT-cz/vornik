@@ -38,12 +38,12 @@ func TestSlackSessionStore_LoadEmptyHistory(t *testing.T) {
 // session with FileSender=nil and the model was truthfully told that artifact
 // sending was not configured.
 func TestSlackSessionStore_BindsFileSender(t *testing.T) {
-	store := newSlackSessionStore(nil, "janka")
+	store := newSlackSessionStore(nil, "family")
 	store.SetChannel(&slack.Channel{})
 	sess, err := store.Load(context.Background(), conversation.ChannelMessage{
-		SessionID: "T123/D_JANKA#main",
+		SessionID: "T123/D_ALICE#main",
 		Source:    "slack",
-		SpeakerID: "U_JANKA",
+		SpeakerID: "U_ALICE",
 	})
 	if err != nil {
 		t.Fatalf("Load: %v", err)

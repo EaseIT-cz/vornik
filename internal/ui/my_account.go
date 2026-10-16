@@ -44,7 +44,7 @@ func WithSessionUserResolver(f SessionUserResolver) ServerOption {
 // answer is the same defect as documenting a behaviour nothing implements.
 //
 // A slice, not one command: a deployment can run several Slack apps (an
-// operator here runs /t800 and /holly), and naming whichever loaded first
+// operator here runs /t800 and /helper), and naming whichever loaded first
 // tells most of them the wrong thing.
 func WithSlackLinkCommands(cmds []string) ServerOption {
 	return func(s *Server) {

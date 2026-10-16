@@ -53,7 +53,7 @@ const (
 	// needs tuning (§7).
 	nedCalAmbiguousTuneThreshold = 0.20
 	// nedCalDominantCapFrac caps any single project at this fraction of the
-	// total sample so the dominant project (janka, ~95% of turns) cannot make
+	// total sample so the dominant project (a personal one, ~95% of turns) cannot make
 	// the measurement a read of one person (§7).
 	nedCalDominantCapFrac = 0.50
 	// nedCalDefaultGraphModel mirrors the KG worker's code default for the
@@ -87,8 +87,8 @@ detected person by construction regardless. This answers whether shared-scope
 
 Sampling frame (§7):
   - stratified by project; >=100 turns per stratum where available
-  - the dominant project is capped at 50% of the total sample (janka holds
-    ~95% of turns — an unstratified draw measures one person)
+  - the dominant project is capped at 50% of the total sample (one personal
+    project can hold ~95% of turns — an unstratified draw measures one person)
   - recent-only within --window
   - projects with <100 eligible turns are reported as a separate
     "insufficient_sample" bucket and are NOT screened or folded into the
@@ -840,7 +840,7 @@ func loadCalibrationPricing(configPath string) *pricing.Table {
 // -----------------------------------------------------------------------------
 // chat_audit_log turn source (postgres) — the historical human-chat store.
 // Each row is one exchange; user_message is the human turn (design §7's ~23k
-// turns / janka ~95%). project_id scopes the resolver; ts is the timestamp.
+// turns, one personal project ~95%). project_id scopes the resolver; ts is the timestamp.
 // -----------------------------------------------------------------------------
 
 type chatAuditTurnSource struct{ db *sql.DB }

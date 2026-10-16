@@ -77,7 +77,7 @@ func TestJaccardTokenSimilarity(t *testing.T) {
 // strict-equality path missed it and a duplicate task hit the
 // queue. Post-fix, the second call is suppressed.
 func TestFindRecentDuplicateTask_DedupsParaphrasedRetry(t *testing.T) {
-	const projectID = "janka"
+	const projectID = "family"
 	firstPrompt := "Ingest Toby Sheldon's CV content into project memory (if any). Use tools from the /swarm/memory module."
 	secondPrompt := "Ingest Toby Sheldon's CV content into project memory. Use tools from the /swarm/memory module."
 

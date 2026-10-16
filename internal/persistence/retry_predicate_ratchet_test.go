@@ -6,6 +6,8 @@ import (
 	"regexp"
 	"strings"
 	"testing"
+
+	"vornik.io/vornik/internal/testutil/repowalk"
 )
 
 // TestNoSeventhRetrySpelling is the ratchet that stops the extraction being
@@ -46,6 +48,9 @@ func TestNoSeventhRetrySpelling(t *testing.T) {
 
 	for _, dir := range []string{"internal/scheduler", "internal/executor"} {
 		walkErr := filepath.Walk(filepath.Join(root, dir), func(path string, info os.FileInfo, err error) error {
+			if err == nil && info.IsDir() && repowalk.SkipDir(filepath.Join(root, dir), path, info.Name()) {
+				return filepath.SkipDir
+			}
 			if err != nil || info.IsDir() || !strings.HasSuffix(path, ".go") {
 				return err
 			}

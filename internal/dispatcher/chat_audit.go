@@ -217,7 +217,7 @@ func (t *chatAuditTurn) finish(ctx context.Context, req Request, result Result) 
 	// finished task, so losing the row makes the deliverable permanently
 	// unsendable: the narrator's completion push and the UI's "Send to
 	// chat" button both conclude the task never came from a chat at all.
-	// Nothing backfills it. A ten-minute Slack turn on janka-companion lost
+	// Nothing backfills it. A ten-minute Slack turn on family-companion lost
 	// its report this way.
 	//
 	// WithoutCancel keeps the context's values (tracing spans, logger) while

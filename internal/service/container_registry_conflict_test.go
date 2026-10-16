@@ -46,14 +46,14 @@ func seedRunningExecution(t *testing.T, execRepo persistence.ExecutionRepository
 }
 
 func TestCollectExecutionConflicts_ValueOnlyWorkflowChange(t *testing.T) {
-	// janka incident cpp_20260723033332: a reclaim-timeout edit to `research`
+	// family incident cpp_20260723033332: a reclaim-timeout edit to `research`
 	// while an execution references it must NOT conflict — value-only edits
 	// apply live. Only StructurallyChangedWorkflows conflict.
 	ctx := context.Background()
 	db := newConflictTestDB(t)
 	execRepo := sqlite.NewExecutionRepository(db.DB)
 	taskRepo := sqlite.NewTaskRepository(db.DB)
-	seedRunningExecution(t, execRepo, taskRepo, "exec1", "janka", "research") // helper: insert a RUNNING exec referencing workflow "research"
+	seedRunningExecution(t, execRepo, taskRepo, "exec1", "family", "research") // helper: insert a RUNNING exec referencing workflow "research"
 
 	valueOnly := registry.ConfigDiff{ChangedWorkflows: []string{"research"}}
 	conf, err := collectExecutionConflicts(ctx, execRepo, taskRepo, valueOnly)

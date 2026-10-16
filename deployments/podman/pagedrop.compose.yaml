@@ -1,5 +1,5 @@
 # PageDrop host service — self-hosted HTML page publisher for the assistant
-# and janka projects. Image is built from upstream by
+# and family projects. Image is built from upstream by
 # deployments/podman/pagedrop/sync.sh (run `make pagedrop-sync` first).
 #
 # Bring up / tear down under a DEDICATED compose project so it never
@@ -64,7 +64,7 @@ services:
       # replaced a hardcoded `192.0.2.10`. A published port is bound at
       # container start and MUST already exist on the host, so that literal
       # address became unbindable the moment the host's LAN address changed
-      # (2026-09-06: the box came back from a reboot on 192.168.0.142). podman
+      # (2026-09-06: the box came back from a reboot on another subnet). podman
       # failed with `cannot assign requested address`, which aborted
       # podman-restart.service for every container it had not yet reached.
       # 0.0.0.0 is always assignable, whatever the host's address is.

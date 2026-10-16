@@ -79,7 +79,9 @@ func TestReclaimStuckFiring_ExcludesRecentFiring(t *testing.T) {
 	})
 
 	cutoff := time.Now().Add(-15 * time.Minute)
-	stuck, err := repo.ReclaimStuckFiring(ctx, cutoff, 10)
+	// Unbounded (#374): this asserts ABSENCE, and the row would sort last by
+	// fired_at, so a fixed page could leave it out and pass having shown nothing.
+	stuck, err := repo.ReclaimStuckFiring(ctx, cutoff, 1_000_000)
 	if err != nil {
 		t.Fatalf("ReclaimStuckFiring: %v", err)
 	}
@@ -133,7 +135,9 @@ func TestClaimDeliveryRefreshesFiredAt_ExcludesFromStuckSweep(t *testing.T) {
 	// The same grace cutoff that would have caught the stale (1-hour-old)
 	// fired_at must NOT catch the row now that ClaimDelivery refreshed it.
 	cutoff := time.Now().Add(-15 * time.Minute)
-	stuck, err := repo.ReclaimStuckFiring(ctx, cutoff, 10)
+	// Unbounded (#374): this asserts ABSENCE, and the row would sort last by
+	// fired_at, so a fixed page could leave it out and pass having shown nothing.
+	stuck, err := repo.ReclaimStuckFiring(ctx, cutoff, 1_000_000)
 	if err != nil {
 		t.Fatalf("ReclaimStuckFiring: %v", err)
 	}
@@ -168,7 +172,9 @@ func TestReclaimStuckFiring_ExcludesAwaitingTask(t *testing.T) {
 	backdateFiredAt(t, ctx, db, rem.ID, time.Now().Add(-24*time.Hour).UTC())
 
 	cutoff := time.Now().Add(-15 * time.Minute)
-	stuck, err := repo.ReclaimStuckFiring(ctx, cutoff, 10)
+	// Unbounded (#374): this asserts ABSENCE, and the row would sort last by
+	// fired_at, so a fixed page could leave it out and pass having shown nothing.
+	stuck, err := repo.ReclaimStuckFiring(ctx, cutoff, 1_000_000)
 	if err != nil {
 		t.Fatalf("ReclaimStuckFiring: %v", err)
 	}

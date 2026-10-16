@@ -135,14 +135,14 @@ func TestCPDiagnose_PostsFocusAndRendersVerdict(t *testing.T) {
 		})
 	})
 	cpDiagnosePropose, cpDiagnoseJSON = true, false
-	out, err := captureStdoutFn(t, func() error { return runCPDiagnose("janka") })
+	out, err := captureStdoutFn(t, func() error { return runCPDiagnose("family") })
 	if err != nil {
 		t.Fatalf("diagnose: %v", err)
 	}
 	if path != "/api/v1/operator/diagnose" {
 		t.Errorf("path = %q", path)
 	}
-	if body["focus"] != "janka" || body["propose"] != true {
+	if body["focus"] != "family" || body["propose"] != true {
 		t.Errorf("wrong body: %v", body)
 	}
 	if !strings.Contains(out, "web_fetch timeout") || !strings.Contains(out, "cpp_9") {
@@ -158,7 +158,7 @@ func TestCPDiagnose_NoProposalMessage(t *testing.T) {
 		})
 	})
 	cpDiagnosePropose, cpDiagnoseJSON = true, false
-	out, err := captureStdoutFn(t, func() error { return runCPDiagnose("janka") })
+	out, err := captureStdoutFn(t, func() error { return runCPDiagnose("family") })
 	if err != nil {
 		t.Fatalf("diagnose: %v", err)
 	}

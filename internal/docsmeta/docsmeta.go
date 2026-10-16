@@ -49,17 +49,34 @@ var forbiddenPatterns = []*regexp.Regexp{
 	regexp.MustCompile(`vornik_[a-z]+_(?:total|seconds|count|bucket)`),
 }
 
+// AllowPrefix marks a denylist entry as an ALLOWED substring rather than a
+// forbidden one: every occurrence of it (case-insensitive) is masked out of a
+// line before the deny substrings are matched. It lets one exact identity
+// stand (a published author address) while every other string under the same
+// denied domain still fails. An allow entry is never itself a deny token.
+const AllowPrefix = "allow:"
+
 // ForbiddenHits returns human-readable descriptions of any lines in text that
 // match a structural IP marker or one of the extra denylist substrings
-// (matched case-insensitively). An empty result means the text is clean.
+// (matched case-insensitively). Entries prefixed AllowPrefix are masks, not
+// deny tokens (see AllowPrefix). An empty result means the text is clean.
 func ForbiddenHits(text string, denySubstrings []string) []string {
-	lower := make([]string, len(denySubstrings))
-	for i, s := range denySubstrings {
-		lower[i] = strings.ToLower(s)
+	var lower, allow []string
+	for _, s := range denySubstrings {
+		if rest, ok := strings.CutPrefix(s, AllowPrefix); ok {
+			if rest = strings.ToLower(strings.TrimSpace(rest)); rest != "" {
+				allow = append(allow, rest)
+			}
+			continue
+		}
+		lower = append(lower, strings.ToLower(s))
 	}
 	var hits []string
 	for n, line := range strings.Split(text, "\n") {
 		ll := strings.ToLower(line)
+		for _, a := range allow {
+			ll = strings.ReplaceAll(ll, a, " ")
+		}
 		for _, re := range forbiddenPatterns {
 			if m := re.FindString(line); m != "" {
 				hits = append(hits, fmt.Sprintf("line %d: %q (matched /%s/)", n+1, strings.TrimSpace(line), re.String()))

@@ -67,9 +67,16 @@ func (r *ProjectDataCleanupRepository) DeleteProjectData(ctx context.Context, pr
 		if persistence.SQLiteCascadeParent(table) {
 			n, err = persistence.SQLiteDeleteCascadingTx(ctx, q, table, "project_id = ?", projectID)
 		} else {
-			var res interface{ RowsAffected() (int64, error) }
-			res, err = q.ExecContext(ctx, "DELETE FROM "+table+" WHERE project_id = ?", projectID)
-			if err == nil {
+			// The table's statements: a partly-wiped table (archival design
+			// section J) scrubs its kept rows first, then the DELETE, whose
+			// count is the one reported (n holds the last statement's count;
+			// scrubbed rows are kept, not deleted, so they are not counted —
+			// the same as the Postgres deleter).
+			for _, stmt := range persistence.ProjectDataStatements(table, "?") {
+				var res interface{ RowsAffected() (int64, error) }
+				if res, err = q.ExecContext(ctx, stmt, projectID); err != nil {
+					break
+				}
 				if n, err = res.RowsAffected(); err != nil {
 					n, err = -1, nil
 				}

@@ -113,5 +113,14 @@ out=$(CE_LOCK_WAIT=1 STUB_MODE=pass ce_run_lane integration "$tmp/tree" "$DSN" 2
 wait "$holder"
 if [ $rc -ne 0 ] && printf '%s' "$out" | grep -q "$tmp/db.lock"; then ok "a second integration run waits on the lock, then fails naming it"; else bad "lock: rc=$rc out=$out"; fi
 
+# Security review 2026-10-15 (#374): the lock open must not follow a planted
+# symlink and truncate its target; `9>"$lock"` did.
+printf 'precious\n' > "$tmp/victim"; ln -s "$tmp/victim" "$tmp/sym.lock"
+: > "$tmp/psql.log"
+out=$(CE_LOCK_FILE="$tmp/sym.lock" STUB_MODE=pass ce_run_lane integration "$tmp/tree" "$DSN" 2>&1); rc=$?
+if [ $rc -ne 0 ] && [ "$(cat "$tmp/victim")" = precious ] && ! grep -q 'DROP DATABASE' "$tmp/psql.log"; then
+  ok "a symlinked lock path is refused and its target is not truncated"
+else bad "symlink lock: rc=$rc victim=$(cat "$tmp/victim") out=$out"; fi
+
 echo "$pass passed, $fail failed"
 [ $fail -eq 0 ]

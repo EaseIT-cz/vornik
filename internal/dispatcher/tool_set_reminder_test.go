@@ -151,14 +151,14 @@ func TestSetReminder_HappyPath_FireInSeconds(t *testing.T) {
 func TestSetReminder_SlackSession(t *testing.T) {
 	repo := &stubReminderRepo{}
 	te := newSetReminderExecutor(repo, nil)
-	ctx := WithOperatorID(context.Background(), "slack:U_JANKA")
+	ctx := WithOperatorID(context.Background(), "slack:U_ALICE")
 
 	res := te.setReminderForSession(
 		ctx,
 		`{"fire_in_seconds": 7200, "content": "research this and write report.pdf", "kind":"task"}`,
 		0,
-		"slack:T_TEAM/D_JANKA#main",
-		"janka", []string{"janka"},
+		"slack:T_TEAM/D_ALICE#main",
+		"family", []string{"family"},
 	)
 	if !strings.Contains(res.Content, "Scheduled update") {
 		t.Fatalf("response = %q, want scheduled update confirmation", res.Content)
@@ -167,13 +167,13 @@ func TestSetReminder_SlackSession(t *testing.T) {
 		t.Fatalf("repo row count = %d, want 1", len(repo.rows))
 	}
 	row := repo.rows[0]
-	if row.OperatorID != "slack:U_JANKA" {
+	if row.OperatorID != "slack:U_ALICE" {
 		t.Errorf("operator_id = %q", row.OperatorID)
 	}
 	if row.Channel != "slack" {
 		t.Errorf("channel = %q", row.Channel)
 	}
-	if row.ChannelRef != "T_TEAM/D_JANKA#main" {
+	if row.ChannelRef != "T_TEAM/D_ALICE#main" {
 		t.Errorf("channel_ref = %q", row.ChannelRef)
 	}
 }

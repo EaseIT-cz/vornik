@@ -538,25 +538,11 @@ func (s *Searcher) searchInternal(ctx context.Context, projectID, query string, 
 	if err == nil && s.spreadWindow && len(results) > 1 {
 		results = spreadAcrossWindow(results, opts.FromDate, opts.ToDate, limit)
 	}
-	// Migration 75 safety net: HybridSearchWithEpochs SQL applies the
-	// repo_scope filter when the epoch path is active, but the
-	// non-epoch + pgvector-unavailable fallbacks below it do not.
-	// Filter post-fetch so every code path honours the caller's scope.
-	// Cheap — the candidate set is already truncated to fetchLimit.
-	if err == nil && opts.RepoScope != "" && len(results) > 0 {
-		filtered := results[:0]
-		for _, r := range results {
-			// repo_scope from the chunk row is returned via the
-			// future SearchResult.RepoScope field (B-3 follow-on
-			// when scanSearchResults grows the column). Until then
-			// the post-search filter would have nothing to read,
-			// so the safety net is a no-op for the fallback paths
-			// — the main path's SQL filter is the contract.
-			_ = r
-			filtered = append(filtered, r)
-		}
-		results = filtered
-	}
+	// The repo_scope filter is applied in SQL by every statement a scoped
+	// request reaches (scopeFilterSQL), and nowhere else. A Go post-filter
+	// here was a documented no-op (GitHub #368); a working one would be a
+	// second implementation of the scope rule. Design 22, "Every search path
+	// honours repo_scope and strict_scope".
 
 	// Truncate post-rerank so the caller sees `limit` results.
 	if len(results) > limit {

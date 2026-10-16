@@ -25,12 +25,12 @@ func TestBuildExecutionsData_FormatsRows(t *testing.T) {
 	step := "research"
 	execs := []*persistence.Execution{
 		{
-			ID: "exec-running", TaskID: "task-1", ProjectID: "janka", WorkflowID: "research",
+			ID: "exec-running", TaskID: "task-1", ProjectID: "family", WorkflowID: "research",
 			Status: persistence.ExecutionStatusRunning, CurrentStepID: &step,
 			StartedAt: ptr(now.Add(-90 * time.Second)), // running 90s
 		},
 		{
-			ID: "exec-done", TaskID: "task-2", ProjectID: "janka", WorkflowID: "research",
+			ID: "exec-done", TaskID: "task-2", ProjectID: "family", WorkflowID: "research",
 			Status:    persistence.ExecutionStatusCompleted,
 			StartedAt: ptr(now.Add(-10 * time.Minute)), CompletedAt: ptr(now.Add(-7 * time.Minute)), // ran 3m
 		},

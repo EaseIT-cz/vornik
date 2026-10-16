@@ -131,7 +131,7 @@ RUN install -d -m 755 /etc/apt/keyrings \
 # (no LaTeX toolchain — ~150MB instead of ~1.5GB). fonts-dejavu is
 # the minimal sans/serif/mono trio weasyprint needs so PDFs don't
 # render as tofu when the markdown specifies no font. See
-# configs/swarms/{assistant,jankas}-swarm.yaml writer role.
+# configs/swarms/{assistant,family}-swarm.yaml writer role.
 
 # gcc + libc6-dev are required for CGO. Without them, `go test -race`
 # (which mandates CGO) fails with "cgo: C compiler not found".

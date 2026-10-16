@@ -73,7 +73,7 @@ models:
 
   # Ollama Cloud (https://ollama.com) — native (non-Bedrock) pricing,
   # used when chat.router.ollama_cloud is enabled — AND the http
-  # sub-provider (local Ollama at 192.168.192.168:11434), grouped
+  # sub-provider (local Ollama at 192.168.1.70:11434), grouped
   # together here since both serve the same bare Ollama-tag model IDs
   # (no vornik-added namespace — see
   # https://docs.vornik.io).
@@ -227,7 +227,7 @@ models:
   "nomic-embed-text-v2-moe:latest":   { input: 0.02, output: 0.0 } # ESTIMATE — Nomic v2 MoE has no commercial API tier (open-weight, self-host-only); reused OpenAI text-embedding-3-small as a comparable-class reference
   # memory.embedding_model — served from the LOCAL Ollama on the daemon host
   # (memory.embedding_endpoint: http://127.0.0.1:11434), which is a different
-  # instance from the 192.168.192.168 one the http block used to point at.
+  # instance from the 192.168.1.70 one the http block used to point at.
   # Added 2026-08-23: this is the single highest-frequency model in the
   # deployment (every memory write and every recall embeds) and it was
   # inheriting `default` at 1.00/3.00, so memory spend in the cost metrics was
@@ -353,7 +353,7 @@ models:
   # /api/tags), so a bogus entry doesn't just sit unused — it gets
   # surfaced to real clients as a selectable model. Root-caused a
   # production incident this way: Home Assistant's Ollama
-  # integration (192.168.192.168, via /api/chat) picked
+  # integration (192.168.1.70, via /api/chat) picked
   # "google/gemini-3-pro" off the catalog and got a 404 loop. The
   # "-preview resolves, bare doesn't" rule from the old comment also
   # turned out to be FALSE for several IDs (e.g. bare

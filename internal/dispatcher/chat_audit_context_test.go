@@ -73,7 +73,7 @@ func (s *ctxRespectingChatAuditRepo) GetPrompt(_ context.Context, _ string) (str
 }
 
 // TestChatAuditTurn_FinishSurvivesExpiredTurnContext pins the fix for the
-// 2026-08-05 lost-deliverable incident on janka-companion.
+// 2026-08-05 lost-deliverable incident on family-companion.
 //
 // A Slack-originated task (task_20260805170431_955e423704153971) produced a
 // finished report that never reached the requester. Root cause: the chat turn
@@ -104,7 +104,7 @@ func TestChatAuditTurn_FinishSurvivesExpiredTurnContext(t *testing.T) {
 	turn.finish(expired, Request{
 		OriginatingChannel:   "slack",
 		OriginatingSessionID: "T03/D0B#main",
-		Project:              "companion-janka",
+		Project:              "companion-family",
 	}, Result{Text: "done"})
 
 	require.Len(t, repo.entries, 1,

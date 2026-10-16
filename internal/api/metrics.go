@@ -77,6 +77,14 @@ type APIMetrics struct {
 	// missing — cluster-diagnostics LLD §3.3. vornik_webhook_relay_received_total.
 	WebhookRelayReceivedTotal prometheus.Counter
 
+	// WebhookRepoScopeTotal counts every generic-webhook delivery that reached
+	// the repository-scope gate, by project, source and outcome (allowed,
+	// dropped, no_repository, unrestricted): the four sum to the deliveries
+	// examined, so "dropped" has its denominator (GitHub #407,
+	// github-app-channel-design.md "Generic webhook sources: repository
+	// scope"). vornik_webhook_repo_scope_total.
+	WebhookRepoScopeTotal *prometheus.CounterVec
+
 	// NodeHeartbeatReceivedTotal counts node-heartbeat upserts received at
 	// the relay ingress (/internal/v1/node-heartbeat), labelled by the
 	// reporting node's profile. The always-on "DMZ nodes are heartbeating"
@@ -176,6 +184,11 @@ func NewAPIMetrics(reg *prometheus.Registry) *APIMetrics {
 			Name:      "webhook_relay_received_total",
 			Help:      "Webhook deliveries received at the job-tier mTLS relay ingress (the DMZ relay forwarding to this worker).",
 		}),
+		WebhookRepoScopeTotal: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Namespace: "vornik",
+			Name:      "webhook_repo_scope_total",
+			Help:      "Generic-webhook deliveries examined by the repository-scope gate, by project, source and outcome (allowed, dropped, no_repository, unrestricted).",
+		}, []string{"project", "source", "outcome"}),
 		NodeHeartbeatReceivedTotal: prometheus.NewCounterVec(prometheus.CounterOpts{
 			Namespace: "vornik",
 			Name:      "node_heartbeat_received_total",
@@ -208,7 +221,7 @@ func NewAPIMetrics(reg *prometheus.Registry) *APIMetrics {
 			Help:      "backlog-deposit endpoint outcomes, by project and outcome (accepted/duplicate/secret/cap/cooldown/invalid).",
 		}, []string{"project", "outcome"}),
 	}
-	reg.MustRegister(m.RequestsTotal, m.RequestDuration, m.ActiveRequests, m.CostAttributionTotal, m.ExecutionsStuck, m.ApprovalsTotal, m.WebhookRelayReceivedTotal, m.NodeHeartbeatReceivedTotal, m.SupportReportGeneratedTotal, m.SupportReportBytesTotal, m.BacklogDepositsTotal, m.MCPResultGuardFindingsTotal, m.MCPResultGuardScanSeconds, m.LLMExchangeRecordFailedTotal, m.ChatProxyLengthCutoffsTotal)
+	reg.MustRegister(m.RequestsTotal, m.RequestDuration, m.ActiveRequests, m.CostAttributionTotal, m.ExecutionsStuck, m.ApprovalsTotal, m.WebhookRelayReceivedTotal, m.WebhookRepoScopeTotal, m.NodeHeartbeatReceivedTotal, m.SupportReportGeneratedTotal, m.SupportReportBytesTotal, m.BacklogDepositsTotal, m.MCPResultGuardFindingsTotal, m.MCPResultGuardScanSeconds, m.LLMExchangeRecordFailedTotal, m.ChatProxyLengthCutoffsTotal)
 	return m
 }
 
@@ -232,6 +245,15 @@ func (m *APIMetrics) RecordWebhookRelayReceived() {
 		return
 	}
 	m.WebhookRelayReceivedTotal.Inc()
+}
+
+// RecordWebhookRepoScope counts one delivery examined by the webhook
+// repository-scope gate. Nil-safe.
+func (m *APIMetrics) RecordWebhookRepoScope(project, source, outcome string) {
+	if m == nil || m.WebhookRepoScopeTotal == nil {
+		return
+	}
+	m.WebhookRepoScopeTotal.WithLabelValues(project, source, outcome).Inc()
 }
 
 // RecordNodeHeartbeatReceived bumps the heartbeat-receipt counter for a

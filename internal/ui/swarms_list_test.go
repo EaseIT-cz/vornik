@@ -33,7 +33,7 @@ func TestBuildSwarmsData_RowsSortedWithRuntimeAndUsage(t *testing.T) {
 	}
 	usage := projectUsage{bySwarm: map[string][]string{
 		"dev-swarm":       {"autocoder"},
-		"assistant-swarm": {"assistant", "janka"},
+		"assistant-swarm": {"assistant", "family"},
 	}}
 
 	data := buildSwarmsData(swarms, usage)
@@ -67,7 +67,7 @@ func TestBuildSwarmsData_RowsSortedWithRuntimeAndUsage(t *testing.T) {
 	if asst.Runtime != "mixed" {
 		t.Errorf("assistant runtime = %q; want mixed", asst.Runtime)
 	}
-	if !reflect.DeepEqual(asst.UsedBy, []string{"assistant", "janka"}) {
-		t.Errorf("assistant usedby = %v; want [assistant janka]", asst.UsedBy)
+	if !reflect.DeepEqual(asst.UsedBy, []string{"assistant", "family"}) {
+		t.Errorf("assistant usedby = %v; want [assistant family]", asst.UsedBy)
 	}
 }

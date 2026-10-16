@@ -41,7 +41,7 @@ type FKEdge struct {
 // SQLiteCascadeGraph is the Postgres ON DELETE CASCADE / SET NULL graph below
 // every parent table SQLite code deletes from (tasks, executions, artifacts;
 // and, for the project wipe only, knowledge_entities and project_memory_chunks
-// — GitHub #365).
+// — GitHub #365 — and instincts — GitHub #370).
 // SQLite opens with foreign_keys(OFF) (sqlite.go, Connect), so none of these
 // fire there; sqliteDeleteCascading applies them explicitly. This list is the
 // ONE place the graph is written down for SQLite. It is checked against the
@@ -99,6 +99,15 @@ var SQLiteCascadeGraph = []FKEdge{
 	{Child: "memory_embed_queue", Column: "chunk_id", Parent: "project_memory_chunks", Action: FKCascade, PostgresOnly: true},
 	{Child: "memory_embed_dlq", Column: "chunk_id", Parent: "project_memory_chunks", Action: FKCascade, PostgresOnly: true},
 	{Child: "project_memory_quarantine", Column: "released_chunk_id", Parent: "project_memory_chunks", Action: FKSetNull, PostgresOnly: true},
+
+	// instincts: a parent the project wipe deletes from (archival design
+	// section J, GitHub #370, 2026-10-16). Both drivers declare these four
+	// ON DELETE CASCADE keys; SQLite does not enforce them. No retention step
+	// deletes instincts.
+	{Child: "instinct_evidence", Column: "instinct_id", Parent: "instincts", Action: FKCascade},
+	{Child: "instinct_applications", Column: "instinct_id", Parent: "instincts", Action: FKCascade},
+	{Child: "instinct_action_history", Column: "instinct_id", Parent: "instincts", Action: FKCascade},
+	{Child: "instinct_lift", Column: "instinct_id", Parent: "instincts", Action: FKCascade},
 }
 
 // SQLiteCascadeParent reports whether deleting from table has children in

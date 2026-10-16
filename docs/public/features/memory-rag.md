@@ -5,7 +5,7 @@ sources:
     - path: internal/memoryfirewall/evaluator.go
       sha256: e86f66f23ad5cd34f55b0bee562d59514951c709f0f9709b6684e34bfead55ed
     - path: internal/memory/gates.go
-      sha256: 3d86b8d69f3be22ba37450ea6a2d0703560f85bd230c779084cf1d68b7121c36
+      sha256: a620e067c64737b2b5a4cb1133a01aba6c4f96ed0b6118b61640ab6f1fcf03fe
 ---
 # Memory & RAG
 
@@ -110,6 +110,21 @@ Two ingest-side gates protect memory at write time:
   redacted (e.g. `[REDACTED:openai_key]`), and a deposit that's mostly secret is
   rejected outright rather than stored as a husk. The escape hatch
   `VORNIK_ALLOW_UNSCANNED_MEMORY` exists for deliberate, audited exceptions.
+
+## Damaged text is never stored
+
+Text that is not valid UTF-8, or that contains control bytes other than tab,
+newline, carriage return and form feed, is refused from memory on every
+ingest path. This is what a damaged upload looks like, for example base64 that
+was copied by hand or by a model and lost a character. A refused document
+stores nothing: a deposit through the ingest pipeline lands in quarantine, an
+uploaded document is skipped and logged, and a `document-ingest` run names it
+under `refused_damaged` in its index step's result. Re-send the file encoded
+by a tool.
+
+`vornikctl doctor` reports `memory_text_damage`: how many stored chunks were
+examined and how many of them hold damaged text, with the ids of any that are
+still recallable so you can forget them.
 
 ## Minimum length of a note
 

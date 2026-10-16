@@ -32,6 +32,8 @@ import (
 	"testing"
 
 	"vornik.io/vornik/internal/persistence"
+
+	"vornik.io/vornik/internal/testutil/repowalk"
 )
 
 // fakeRestrictionScreen answers from fixed sets, or fails.
@@ -326,6 +328,9 @@ func TestLaw_GraphReadsHonourTheRestriction_EveryCallSiteClassified(t *testing.T
 		err := filepath.Walk(filepath.Join(root, dir), func(path string, info os.FileInfo, err error) error {
 			if err != nil {
 				return err
+			}
+			if info.IsDir() && repowalk.SkipDir(filepath.Join(root, dir), path, info.Name()) {
+				return filepath.SkipDir
 			}
 			if info.IsDir() || !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
 				return nil

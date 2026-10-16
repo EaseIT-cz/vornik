@@ -605,8 +605,8 @@ func TestBuildAdminChatAuditURL(t *testing.T) {
 	}{
 		{"no filters", "", "", "/ui/admin/chat-audit"},
 		{"chat only", "559741208", "", "/ui/admin/chat-audit?chat=559741208"},
-		{"project only", "", "janka", "/ui/admin/chat-audit?project=janka"},
-		{"both filters", "559741208", "janka", "/ui/admin/chat-audit?chat=559741208&project=janka"},
+		{"project only", "", "family", "/ui/admin/chat-audit?project=family"},
+		{"both filters", "559741208", "family", "/ui/admin/chat-audit?chat=559741208&project=family"},
 		{"escapes special chars", "a b&c", "p?q", "/ui/admin/chat-audit?chat=a+b%26c&project=p%3Fq"},
 	}
 	for _, tc := range cases {

@@ -69,7 +69,7 @@ func TestDispatch_ConcurrentAppliesDoNotLostUpdate(t *testing.T) {
 
 func TestValidateFailureRef(t *testing.T) {
 	ok := []FailureRef{
-		{Kind: FailureKindFailedTask, ID: "task_20260717_abc", ProjectID: "janka"},
+		{Kind: FailureKindFailedTask, ID: "task_20260717_abc", ProjectID: "family"},
 		{Kind: FailureKindDegradedFeature, ID: "composer.enabled"}, // dotted key, no project
 		{Kind: FailureKindRedIntegration, ID: "slack:workspace-1", ProjectID: "p1"},
 	}

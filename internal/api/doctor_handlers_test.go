@@ -306,18 +306,18 @@ func TestCheckOrphanWorktrees_FixRemovesOnlyClassifiedOrphans(t *testing.T) {
 // naming the stale profile and the re-login command.
 func TestCheckScraperProfileFreshness_StaleWarns(t *testing.T) {
 	dir := t.TempDir()
-	// janka-default profile, cookie mtime 10 days old; cadence 7d
-	p := filepath.Join(dir, "janka", "janka-default", "Default", "Network")
+	// family-default profile, cookie mtime 10 days old; cadence 7d
+	p := filepath.Join(dir, "family", "family-default", "Default", "Network")
 	require.NoError(t, os.MkdirAll(p, 0o755))
 	cookie := filepath.Join(p, "Cookies")
 	require.NoError(t, os.WriteFile(cookie, []byte("x"), 0o644))
 	old := time.Now().Add(-10 * 24 * time.Hour)
 	require.NoError(t, os.Chtimes(cookie, old, old))
-	h := &DoctorHandlers{scraperProfileRoot: dir, loginRequired: map[string]time.Duration{"janka-default": 7 * 24 * time.Hour}}
+	h := &DoctorHandlers{scraperProfileRoot: dir, loginRequired: map[string]time.Duration{"family-default": 7 * 24 * time.Hour}}
 	got := h.checkScraperProfileFreshness(context.Background(), false)
 	require.Equal(t, "scraper_profile_freshness", got.Name)
 	require.Equal(t, "WARNING", got.Status)
-	require.Contains(t, got.Message, "janka-default")
+	require.Contains(t, got.Message, "family-default")
 	require.Contains(t, got.Message, "vornikctl scraper login")
 }
 
@@ -325,14 +325,14 @@ func TestCheckScraperProfileFreshness_StaleWarns(t *testing.T) {
 // must return OK.
 func TestCheckScraperProfileFreshness_FreshIsOK(t *testing.T) {
 	dir := t.TempDir()
-	// janka-default profile, cookie mtime 2 days old; cadence 7d — fresh
-	p := filepath.Join(dir, "janka", "janka-default", "Default", "Network")
+	// family-default profile, cookie mtime 2 days old; cadence 7d — fresh
+	p := filepath.Join(dir, "family", "family-default", "Default", "Network")
 	require.NoError(t, os.MkdirAll(p, 0o755))
 	cookie := filepath.Join(p, "Cookies")
 	require.NoError(t, os.WriteFile(cookie, []byte("x"), 0o644))
 	recent := time.Now().Add(-2 * 24 * time.Hour)
 	require.NoError(t, os.Chtimes(cookie, recent, recent))
-	h := &DoctorHandlers{scraperProfileRoot: dir, loginRequired: map[string]time.Duration{"janka-default": 7 * 24 * time.Hour}}
+	h := &DoctorHandlers{scraperProfileRoot: dir, loginRequired: map[string]time.Duration{"family-default": 7 * 24 * time.Hour}}
 	got := h.checkScraperProfileFreshness(context.Background(), false)
 	require.Equal(t, "scraper_profile_freshness", got.Name)
 	require.Equal(t, "OK", got.Status)

@@ -116,6 +116,11 @@ def register(ctx) -> None:
                              description="List what Vornik's long-term memory keeps (words to search, more for the next page, export for the download link)")
         ctx.register_command("vornik-forget", handler=commands.forget,
                              description="Make Vornik forget one memory by the id /vornik-memory shows")
+        # Development guidance for any repository (GitHub #382, design
+        # 2026-07-12 §11.3): its rules need vornik_recall, so it registers
+        # only with the memory provider.
+        ctx.register_skill("develop-with-memory",
+                           Path(__file__).parent / "skills" / "develop-with-memory" / "SKILL.md")
     # `hermes vornik connect|status`: a terminal subcommand a person types,
     # the plugin's only process spawn (design 24, catalog listing §3).
     ctx.register_cli_command("vornik", help="Connect Hermes to Vornik and check the connection",

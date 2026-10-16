@@ -27,7 +27,7 @@ func taskCov_reset() {
 
 func TestRunTaskSubmit_PromptShorthand(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/api/v1/projects/janka/tasks" {
+		if r.URL.Path != "/api/v1/projects/family/tasks" {
 			t.Errorf("unexpected path %s", r.URL.Path)
 		}
 		var body map[string]json.RawMessage
@@ -40,7 +40,7 @@ func TestRunTaskSubmit_PromptShorthand(t *testing.T) {
 	defer srv.Close()
 	t.Setenv("VORNIK_API_URL", srv.URL)
 	taskCov_reset()
-	taskSubmitProject, taskSubmitPrompt = "janka", "Summarise yesterday"
+	taskSubmitProject, taskSubmitPrompt = "family", "Summarise yesterday"
 	out, err := captureStdoutFunc(t, func() error { return runTaskSubmit(taskSubmitCmd, nil) })
 	if err != nil {
 		t.Fatalf("runTaskSubmit: %v", err)

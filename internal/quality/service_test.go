@@ -33,7 +33,7 @@ func TestServiceRefreshScoresBothTiersAndSetsGauges(t *testing.T) {
 	repo := &fakeRepo{
 		roles: []RoleAggregate{
 			{ProjectID: "assistant", Role: "researcher", Total: 60, Passing: 48, PromptTokens: 480_000},
-			{ProjectID: "janka", Role: "researcher", Total: 40, Passing: 32, PromptTokens: 320_000},
+			{ProjectID: "family", Role: "researcher", Total: 40, Passing: 32, PromptTokens: 320_000},
 		},
 		tasks: []TaskAggregate{
 			{ProjectID: "assistant", WorkflowID: "research", Total: 100, Passing: 80, PromptTokens: 8_000_000},
@@ -42,7 +42,7 @@ func TestServiceRefreshScoresBothTiersAndSetsGauges(t *testing.T) {
 	reg := prometheus.NewRegistry()
 	m := NewMetrics(reg)
 	swarmOf := func(p string) string {
-		if p == "assistant" || p == "janka" {
+		if p == "assistant" || p == "family" {
 			return "assistant-swarm"
 		}
 		return ""

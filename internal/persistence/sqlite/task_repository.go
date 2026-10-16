@@ -325,7 +325,7 @@ func (r *TaskRepository) List(ctx context.Context, filter persistence.TaskFilter
 		b.WriteString(" AND failed_at IS NOT NULL AND failed_at >= ?")
 		args = append(args, sqliteTime(*filter.FailedSince))
 	}
-	b.WriteString(" ORDER BY created_at DESC")
+	b.WriteString(" ORDER BY created_at DESC, id DESC")
 	if filter.PageSize > 0 {
 		b.WriteString(" LIMIT ?")
 		args = append(args, filter.PageSize)

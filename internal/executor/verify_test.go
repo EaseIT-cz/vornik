@@ -246,7 +246,7 @@ func TestVerifyClaimedFiles_AllAbsentSkipsCleanly(t *testing.T) {
 }
 
 // TestVerifyClaimedFiles_ProducedFilesInProjectDir_FalseNegative is the
-// regression guard for task be7e (janka jobspin-cz scan, 2026-06-20):
+// regression guard for task be7e (family jobspin-cz scan, 2026-06-20):
 //
 //   - The researcher wrote scan-jobspin-cz-2026-06-20.md and research.md via
 //     `file_write project/artifacts/out/<name>` (persisting into the project
@@ -294,7 +294,7 @@ func TestVerifyClaimedFiles_ProducedFilesInProjectDir_FalseNegative(t *testing.T
 		[]byte("response artifact"), 0o644,
 	))
 
-	// Exact claim shape the janka researcher produces:
+	// Exact claim shape the family researcher produces:
 	//   outputArtifacts path uses /app/workspace/artifacts/out/ prefix
 	//   produced_files uses bare relative paths without "project/" prefix
 	result := `{
@@ -315,7 +315,7 @@ func TestVerifyClaimedFiles_ProducedFilesInProjectDir_FalseNegative(t *testing.T
 	require.NoError(t, e.verifyClaimedFiles([]byte(result), ws, proj, stepStart),
 		"files in effectiveProjectDir must not be falsely reported missing "+
 			"when claimed with a bare relative path (no 'project/' prefix) — "+
-			"regression for task be7e (janka jobspin-cz 2026-06-20)")
+			"regression for task be7e (family jobspin-cz 2026-06-20)")
 }
 
 // TestVerifyClaimedFiles_GenuinelyMissingFileStillFails ensures the fix's

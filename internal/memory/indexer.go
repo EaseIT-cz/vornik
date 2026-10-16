@@ -202,6 +202,16 @@ func (idx *Indexer) ingestTextAt(ctx context.Context, projectID, taskID, artifac
 		return nil
 	}
 
+	// GitHub #389 (memory-ingest-paths.md §8.2b): refuse damaged text before
+	// the chunker repairs invalid UTF-8 to U+FFFD and hides the evidence. The
+	// Indexer is the one place every ingest path shares; the gated pipeline
+	// quarantines the same text earlier (text_damage), so this refusal is the
+	// backstop for the gate-less paths.
+	if err := ScanTextDamage(content).Err(sourceName); err != nil {
+		idx.logDamagedText(projectID, artifactID, sourceName, err)
+		return err
+	}
+
 	// Secret-leak scan before chunking. Memory chunks live forever
 	// and surface via similarity search — letting a credential into
 	// a chunk means letting it stay there for the project's lifetime.
@@ -392,6 +402,15 @@ func provenanceFromSourceName(s string) memoryfirewall.ProvenanceSource {
 	}
 }
 
+// logDamagedText records an Indexer refusal of damaged text (GitHub #389).
+func (idx *Indexer) logDamagedText(projectID, artifactID, sourceName string, err error) {
+	idx.logger.Warn().Err(err).
+		Str("project_id", projectID).
+		Str("artifact_id", artifactID).
+		Str("source_name", sourceName).
+		Msg("memory: damaged text refused; nothing stored (memory-ingest-paths.md §8)")
+}
+
 // IngestFile reads a file from disk and calls IngestText.
 func (idx *Indexer) IngestFile(ctx context.Context, projectID, taskID, artifactID, sourceName, filePath string) error {
 	data, err := os.ReadFile(filePath)
@@ -436,6 +455,17 @@ func (idx *Indexer) IngestExtractedSections(ctx context.Context, projectID, task
 	chunkOverlap := idx.cfg.ChunkOverlap
 	if chunkOverlap < 0 {
 		chunkOverlap = 0
+	}
+
+	// GitHub #389 (memory-ingest-paths.md §8.2b): check EVERY section before
+	// writing any, and refuse the whole document. The incident's damaged
+	// upload had clean-looking sections that still carried substitutions
+	// ("telemety"), so the sections that pass are not trustworthy either.
+	for _, sec := range sections {
+		if err := ScanTextDamage(sec.Content).Err(sec.SourceName); err != nil {
+			idx.logDamagedText(projectID, sourceArtifactID, sec.SourceName, err)
+			return 0, err
+		}
 	}
 
 	totalChunks := 0

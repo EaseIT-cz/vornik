@@ -1395,7 +1395,8 @@ func RunTaskRepositorySuite(t *testing.T, repo persistence.TaskRepository) {
 			t.Fatalf("Update stale lease: %v", err)
 		}
 
-		expired, err := repo.FindExpiredLeases(ctx, 10)
+		// An unbounded page (#374): older expiries earlier tests left sort first, so a fixed page could miss it.
+		expired, err := repo.FindExpiredLeases(ctx, 1_000_000)
 		if err != nil {
 			t.Fatalf("FindExpiredLeases: %v", err)
 		}
@@ -5680,12 +5681,15 @@ func RunPendingOutcomeBackstopSuite(t *testing.T, outcomes persistence.Execution
 	fresh := h.seedExec(t, persistence.ExecutionStatusCompleted, time.Minute)
 	h.seedPending(t, fresh)
 
-	n, err := sweeper.SweepPendingForTerminalExecutions(h.ctx, 10*time.Minute, 500)
+	// The sweep spans every project, so on the shared Postgres lane database
+	// rows earlier tests left can qualify too (#374): sweep them all, and judge
+	// this suite's three rows one by one below rather than by the count.
+	n, err := sweeper.SweepPendingForTerminalExecutions(h.ctx, 10*time.Minute, 1_000_000)
 	if err != nil {
 		t.Fatalf("SweepPendingForTerminalExecutions: %v", err)
 	}
-	if n != 1 {
-		t.Errorf("swept %d rows, want 1 (only the stranded one qualifies)", n)
+	if n < 1 {
+		t.Errorf("swept %d rows, want at least the stranded one", n)
 	}
 	if got := h.outcomeOf(t, stranded); got != string(stepoutcome.Orphaned) {
 		t.Errorf("stranded row = %q, want %q — a row under a terminal execution must never "+
@@ -5769,8 +5773,9 @@ func runTaskOrphanSweepCases(t *testing.T, outcomes persistence.ExecutionStepOut
 // beyond mislabelling: running twice, and being handed a non-positive batch.
 func runPendingOutcomeGuardCases(t *testing.T, h *pendingOutcomeFixture, sweeper pendingOutcomeSweeper) {
 	t.Helper()
-	// Idempotent: nothing left to do on a second pass.
-	again, err := sweeper.SweepPendingForTerminalExecutions(h.ctx, 10*time.Minute, 500)
+	// Idempotent: nothing left to do on a second pass. The first pass was
+	// unbounded, so no qualifying row is left anywhere in the table (#374).
+	again, err := sweeper.SweepPendingForTerminalExecutions(h.ctx, 10*time.Minute, 1_000_000)
 	if err != nil {
 		t.Fatalf("second sweep: %v", err)
 	}

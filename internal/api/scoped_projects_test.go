@@ -17,11 +17,11 @@ func TestRequestScopedProjects(t *testing.T) {
 	// Auth on + explicit projects → scoped, sorted.
 	rScoped := httptest.NewRequest("GET", "/", nil)
 	ctx := context.WithValue(context.Background(), authEnabledKey, true)
-	ctx = context.WithValue(ctx, projectIDKey, []string{"snake", "janka"})
+	ctx = context.WithValue(ctx, projectIDKey, []string{"snake", "family"})
 	rScoped = rScoped.WithContext(ctx)
 	got, ok := RequestScopedProjects(rScoped)
-	if !ok || len(got) != 2 || got[0] != "janka" || got[1] != "snake" {
-		t.Fatalf("scoped: got %v ok=%v, want [janka snake] true", got, ok)
+	if !ok || len(got) != 2 || got[0] != "family" || got[1] != "snake" {
+		t.Fatalf("scoped: got %v ok=%v, want [family snake] true", got, ok)
 	}
 
 	// Auth on + empty allowlist → legacy all-access (unscoped).

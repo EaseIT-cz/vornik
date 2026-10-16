@@ -15,6 +15,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"unicode/utf8"
 
 	"github.com/rs/zerolog"
 	"vornik.io/vornik/internal/extractor"
@@ -379,6 +380,52 @@ func TestDecodeArtifactContent_AcceptsMultipleEncodings(t *testing.T) {
 				t.Errorf("round-trip mismatch: %q vs %q", got, original)
 			}
 		})
+	}
+}
+
+// TestDecodeArtifactContent_DroppedCharacterDecodesSilently_389 pins the
+// as-built leniency behind GitHub #389 (memory-ingest-paths.md §8.1): a
+// base64 string with ONE character missing (a model transcribing base64 into
+// a delegate tool call) fails StdEncoding on length, then decodes WITHOUT
+// ERROR under the RawStdEncoding fallback. Everything after the missing
+// character comes back shifted by six bits: control bytes and invalid UTF-8
+// where the source had prose. That is the shape of the 2026-07-25 upload
+// (7,591 characters, length 3 mod 4).
+//
+// This is a characterization, not an endorsement: the guard lives at the
+// memory Indexer (text_damage, §8.2), and refusing at this boundary is open
+// decision §8.5(1)/(3). If the decoder is ever made strict, this test fails
+// and the §8.5 decision must be recorded as taken.
+func TestDecodeArtifactContent_DroppedCharacterDecodesSilently_389(t *testing.T) {
+	src := []byte("Endpoint: `https://telemetry.vornik.io`\n\n" +
+		"Example: https://telemetry.vornik.io/v1/collect.json?e=install_succeeded&sv=1\n" +
+		"Send anonymous telemetry? [Y/n/s=show details]\n")
+	for len(src)%3 != 0 {
+		src = append(src, '\n') // unpadded encoding, so one drop leaves length 3 mod 4
+	}
+	encoded := base64.StdEncoding.EncodeToString(src)
+	// Drop one character in the middle of the stream, as the incident did.
+	cut := len(encoded) / 2
+	damaged := encoded[:cut] + encoded[cut+1:]
+	if len(damaged)%4 != 3 {
+		t.Fatalf("fixture: damaged length %d must be 3 mod 4 (the incident's 7,591)", len(damaged))
+	}
+
+	got, err := decodeArtifactContent(damaged)
+	if err != nil {
+		t.Fatalf("as built, a one-character-short string decodes without error; got %v", err)
+	}
+	if !strings.HasPrefix(string(got), "Endpoint: `https://telemetry") {
+		t.Errorf("the prefix before the missing character must survive; got %q", got[:30])
+	}
+	ctl := 0
+	for _, b := range got {
+		if b < 0x20 && b != '\t' && b != '\n' && b != '\r' {
+			ctl++
+		}
+	}
+	if ctl == 0 && utf8.Valid(got) {
+		t.Errorf("the tail must come back as damaged bytes (controls or invalid UTF-8); got %q", got)
 	}
 }
 

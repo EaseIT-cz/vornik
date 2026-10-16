@@ -70,14 +70,14 @@ func TestIdentityRepository_ListUsers_Aggregates(t *testing.T) {
 	defer done()
 
 	base := sqlmock.NewRows([]string{"id", "display_name", "disabled", "created_at", "role", "project_id"}).
-		AddRow("user_await", "@janka-lang", false, ts("2026-06-22T18:18:41Z"), nil, nil).
+		AddRow("user_await", "@family-lang", false, ts("2026-06-22T18:18:41Z"), nil, nil).
 		AddRow("user_admin", "Vadim", false, ts("2026-06-05T21:22:50Z"), "admin", nil).
-		AddRow("user_member", "Bob", false, ts("2026-06-10T10:00:00Z"), "user", "janka").
+		AddRow("user_member", "Bob", false, ts("2026-06-10T10:00:00Z"), "user", "family").
 		AddRow("user_member", "Bob", false, ts("2026-06-10T10:00:00Z"), "user", "snake")
 	mock.ExpectQuery(regexp.QuoteMeta(listUsersBaseSQL)).WillReturnRows(base)
 
 	idents := sqlmock.NewRows([]string{"user_id", "channel", "external_id", "display"}).
-		AddRow("user_await", "github", "295941391", "@janka-lang").
+		AddRow("user_await", "github", "295941391", "@family-lang").
 		AddRow("user_admin", "github", "5553528", "Vadim Grinco (@grinco)")
 	mock.ExpectQuery(regexp.QuoteMeta(listUsersIdentSQL)).WillReturnRows(idents)
 
@@ -110,8 +110,8 @@ func TestIdentityRepository_ListUsers_Aggregates(t *testing.T) {
 		t.Errorf("admin sessions = %d, want 2", u.ActiveSessions)
 	}
 	if u := byID["user_member"]; u.Role != "user" || len(u.Projects) != 2 ||
-		u.Projects[0] != "janka" || u.Projects[1] != "snake" {
-		t.Errorf("member: role=%q projects=%v, want user/[janka snake]", u.Role, u.Projects)
+		u.Projects[0] != "family" || u.Projects[1] != "snake" {
+		t.Errorf("member: role=%q projects=%v, want user/[family snake]", u.Role, u.Projects)
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Errorf("expectations: %v", err)
@@ -124,7 +124,7 @@ func TestIdentityRepository_ListUsers_StarCollapses(t *testing.T) {
 	repo, mock, done := newIdentityMock(t)
 	defer done()
 	base := sqlmock.NewRows([]string{"id", "display_name", "disabled", "created_at", "role", "project_id"}).
-		AddRow("u1", "All", false, ts("2026-06-10T10:00:00Z"), "user", "janka").
+		AddRow("u1", "All", false, ts("2026-06-10T10:00:00Z"), "user", "family").
 		AddRow("u1", "All", false, ts("2026-06-10T10:00:00Z"), "user", "*")
 	mock.ExpectQuery(regexp.QuoteMeta(listUsersBaseSQL)).WillReturnRows(base)
 	mock.ExpectQuery(regexp.QuoteMeta(listUsersIdentSQL)).
@@ -162,7 +162,7 @@ func TestIdentityRepository_SetUserAccess_CreatesBackingGroup(t *testing.T) {
 	mock.ExpectExec(regexp.QuoteMeta(deleteProjectsSQL)).
 		WithArgs(sqlmock.AnyArg()).WillReturnResult(sqlmock.NewResult(0, 0))
 	mock.ExpectExec(regexp.QuoteMeta(insertProjectSQL)).
-		WithArgs(sqlmock.AnyArg(), "janka").WillReturnResult(sqlmock.NewResult(0, 1))
+		WithArgs(sqlmock.AnyArg(), "family").WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectExec(regexp.QuoteMeta(insertMemberSQL)).
 		WithArgs(sqlmock.AnyArg(), "user_await").WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectExec(regexp.QuoteMeta(clearAccessRevokedTestSQL)).
@@ -171,7 +171,7 @@ func TestIdentityRepository_SetUserAccess_CreatesBackingGroup(t *testing.T) {
 		WithArgs("user_await").WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectCommit()
 
-	if err := repo.SetUserAccess(context.Background(), "user_await", "user", []string{"janka"}); err != nil {
+	if err := repo.SetUserAccess(context.Background(), "user_await", "user", []string{"family"}); err != nil {
 		t.Fatalf("SetUserAccess: %v", err)
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
@@ -226,7 +226,7 @@ func TestIdentityRepository_SetUserAccess_UserRoleNoProjects(t *testing.T) {
 func TestIdentityRepository_SetUserAccess_BadRole(t *testing.T) {
 	repo, _, done := newIdentityMock(t)
 	defer done()
-	if err := repo.SetUserAccess(context.Background(), "u1", "superuser", []string{"janka"}); err == nil {
+	if err := repo.SetUserAccess(context.Background(), "u1", "superuser", []string{"family"}); err == nil {
 		t.Fatal("expected error for invalid role, got nil")
 	}
 }

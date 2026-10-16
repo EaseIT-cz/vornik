@@ -28,7 +28,7 @@ func TestProposalRepo_LiveApplyRoundTrip(t *testing.T) {
 		Status: persistence.ProposalStatusDraft, ProposedBy: "operator-ui", LiveApply: true,
 	}
 	gated := &persistence.ControlPlaneProposal{
-		ID: "cpp-gated", ProjectID: "janka", Kind: persistence.ProposalKindConfig, BlastRadius: persistence.ProposalScopeProject,
+		ID: "cpp-gated", ProjectID: "family", Kind: persistence.ProposalKindConfig, BlastRadius: persistence.ProposalScopeProject,
 		Title: "tune", ApplyTarget: "config.yaml", ApplyContent: "y",
 		Status: persistence.ProposalStatusDraft, ProposedBy: "tune-detector", // LiveApply defaults false
 	}

@@ -440,7 +440,7 @@ func TestRenderers_RejectPathTraversalIdents(t *testing.T) {
 	if _, err := a.RenderMCPServerTimeout("../p1", "scraper", 90); err == nil {
 		t.Fatal("dot-dot project id must be rejected")
 	}
-	if err := a.RevalidateChange("janka", `{"change":{"kind":"swarm_role_model","swarm":"../x","role":"coder","model":"new-model"}}`); err == nil {
+	if err := a.RevalidateChange("family", `{"change":{"kind":"swarm_role_model","swarm":"../x","role":"coder","model":"new-model"}}`); err == nil {
 		t.Fatal("revalidate must reject traversal idents too")
 	}
 	// A traversal ident inside FindMCPServerScope's project probe must not

@@ -120,9 +120,11 @@ func betterRound(cand, best RoutingVerdict) bool {
 }
 
 // widenRoutingOptions grows the candidate pool for widen round N without
-// touching the query string (so the cached query embedding is reused) and
-// relaxes scope. Routing stays set so the loop keeps its semantics, but the
-// widen calls searchInternal directly (no recursion).
+// touching the query string (so the cached query embedding is reused). The
+// caller's scope, strict_scope included, is kept (GitHub #368: relaxing it
+// returned NULL-scoped chunks to a strict recall whose verdict was low).
+// Routing stays set so the loop keeps its semantics, but the widen calls
+// searchInternal directly (no recursion).
 func widenRoutingOptions(base SearchOptions, round int) SearchOptions {
 	o := base
 	if o.Limit <= 0 {
@@ -132,7 +134,6 @@ func widenRoutingOptions(base SearchOptions, round int) SearchOptions {
 	if o.Limit > widenRoutingMaxLimit {
 		o.Limit = widenRoutingMaxLimit
 	}
-	o.StrictScope = false
 	return o
 }
 

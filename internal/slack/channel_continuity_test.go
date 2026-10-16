@@ -58,7 +58,7 @@ func TestBuildMessageChannelMessage_SessionKeying(t *testing.T) {
 				EventID: "Ev_" + tc.ts,
 				Event: &eventInner{
 					Type:        "message",
-					User:        "U_janka",
+					User:        "U_family",
 					Text:        "what did we decide?",
 					Channel:     "C_general",
 					Ts:          tc.ts,

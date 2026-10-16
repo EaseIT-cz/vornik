@@ -357,53 +357,40 @@ EOF
 SKILL_DIRECTIVE=$(emit_skill_directive)
 DIGEST=$(printf '%s\n%s' "$DIGEST" "$SKILL_DIRECTIVE")
 
-# ----- RAG-first directive (LLD 2026-07-12-companion-rag-first-guidance) -----
-# The "recall before spelunking code" rule used to live only in the operator's
-# per-user CLAUDE.md, so it didn't ship with the plugin and didn't help other
-# operators. Plant it here as a session-start default. It is a PREFERENCE, not
-# an unconditional hook — trivial literal lookups skip it. The trust boundary
-# is class-scoped (design/spec/decision chunks are authoritative; other content
-# is a hypothesis) so a poisoned chunk from a failed task isn't asserted as fact.
-# Function-wrapped for the same bash 3.2 reason as emit_skill_directive:
-# "doesn'''t" in the body below would otherwise break the parse.
-emit_rag_first_directive() {
-  cat <<'EOF'
-
-## vornik-companion: RAG-first — recall BEFORE reading code on design questions
-
-For any **design / architecture / roadmap / "how does X work" / "why is it
-built this way"** question — or a bug whose symptom or incident you suspect has
-been seen before — call `recall` BEFORE you start reading code. Treat
-**design / spec / decision-class** chunks (the LLDs in project memory) as the
-authoritative design record; read code only to verify a named file/flag/
-function a recalled note points at still matches (RAG freezes facts at write
-time). **Other content** (research, incident notes, companion notes) is a
-hypothesis to verify against current state — do not assert it as fact. Before
-trusting a recalled chunk as design truth, check its class/provenance.
-
-Trigger list (recall first):
-- "How does <subsystem> work?" / "Why is <feature> built this way?"
-- roadmap, status, architecture, or design-decision questions
-- a bug that doesn't reproduce, a surprise behavior, or an error that looks
-  like a known incident
-- before a deep code dive (>2-3 tool calls into one subsystem — a package,
-  module, or related file group under `internal/` or `src/`)
-
-Worked example: asked to fix a daemon bug, `recall "<subsystem> design"` returns
-the LLD naming the seam (file:line) + the rationale; you then read ONLY that
-file to confirm the symbol still exists, instead of reverse-engineering the
-architecture from a dozen files. The project-memory digest above (recent
-chunks) is a hint: if a recent chunk looks relevant, recall its topic.
-
-This is a preference, not a gate. If you know the exact file path and the query
-is a literal string search (grep/cat), skip recall. Anything involving
-architecture, history, or design rationale → recall first. For a failing unit
-test that points at a typo in a single file, fix directly — the RAG-first rule
-is for questions whose answer lives in design intent, not code syntax.
-EOF
+# ----- Developing with project memory (LLD 2026-07-12 §11, GitHub #382) -----
+# The RAG-first directive used to be a heredoc here saying "the LLDs in project
+# memory are the authoritative design record" - false in a project with no
+# designs (review 97b7 B1). It is now the develop-with-memory guidance: RAG
+# first, design first, keep memory current, an as-built bootstrap, all reading
+# recall's design_record count instead of assuming a design exists. The text
+# lives once, in internal/api/companion_dev_guidance.md; the skill carries it
+# between markers (a Go test compares them) and this hook prints that section.
+# VORNIK_DESIGN_FIRST=off drops part B (design first) for a repository that
+# keeps its designs elsewhere. A missing section prints the banner, never
+# nothing.
+DEV_GUIDANCE_MISSING_BANNER='vornik-companion: the develop-with-memory guidance is missing from its skill; reinstall the plugin'
+DESIGN_FIRST_OFF_LINE='vornik-companion: design-first rules (4 to 8) are off for this repository (VORNIK_DESIGN_FIRST=off).'
+emit_dev_guidance_directive() {
+  local skill="${VORNIK_DEV_SKILL:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/../skills/develop-with-memory/SKILL.md}"
+  local body=""
+  if [[ -r "$skill" ]]; then
+    # Print the section only when its end marker was seen: a truncated skill
+    # gets the banner, not everything after the start marker (review 7690 F6).
+    body="$(awk '/<!-- vornik-dev-guidance:end -->/{if (f) e=1; f=0} f{b=b $0 "\n"} /<!-- vornik-dev-guidance:start -->/{f=1} END{if (e) printf "%s", b}' "$skill")"
+  fi
+  if [[ -z "${body//[[:space:]]/}" ]]; then
+    printf '\n## %s\n' "$DEV_GUIDANCE_MISSING_BANNER"
+    return
+  fi
+  if [[ "${VORNIK_DESIGN_FIRST:-on}" == "off" ]]; then
+    body="$(printf '%s\n' "$body" | awk '/<!-- vornik-design-first:start -->/{s=1} !s{print} /<!-- vornik-design-first:end -->/{s=0}')"
+    printf '\n%s\n\n%s\n' "$body" "$DESIGN_FIRST_OFF_LINE"
+    return
+  fi
+  printf '\n%s\n' "$body"
 }
-RAG_FIRST_DIRECTIVE=$(emit_rag_first_directive)
-DIGEST=$(printf '%s\n%s' "$DIGEST" "$RAG_FIRST_DIRECTIVE")
+DEV_GUIDANCE_DIRECTIVE=$(emit_dev_guidance_directive)
+DIGEST=$(printf '%s\n%s' "$DIGEST" "$DEV_GUIDANCE_DIRECTIVE")
 
 # ----- Working alongside Vornik (companion guidance design §10) -----
 # The operator's rules for delegating to Vornik, for every agent. The text

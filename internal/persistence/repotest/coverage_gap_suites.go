@@ -992,7 +992,8 @@ func RunCrossProjectCallSuite(t *testing.T, repo persistence.CrossProjectCallRep
 		if err := repo.Create(ctx, c); err != nil {
 			t.Fatalf("Create: %v", err)
 		}
-		claimed, err := repo.ClaimTimedOut(ctx, time.Now().UTC(), 50)
+		// An unbounded page (#374): older timeouts earlier tests left sort first, so a fixed page could miss it.
+		claimed, err := repo.ClaimTimedOut(ctx, time.Now().UTC(), 1_000_000)
 		if err != nil {
 			t.Fatalf("ClaimTimedOut: %v", err)
 		}
@@ -1066,7 +1067,8 @@ func RunReminderSuite(t *testing.T, repo persistence.ReminderRepository) {
 		if err := repo.Insert(ctx, future); err != nil {
 			t.Fatalf("Insert future: %v", err)
 		}
-		leased, err := repo.LeaseDue(ctx, now, 10)
+		// An unbounded page (#374): the row sorts last by fire_at among due rows earlier tests left, so a fixed page could miss it.
+		leased, err := repo.LeaseDue(ctx, now, 1_000_000)
 		if err != nil {
 			t.Fatalf("LeaseDue: %v", err)
 		}

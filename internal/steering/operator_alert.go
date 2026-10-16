@@ -152,8 +152,8 @@ func (n *OperatorAlertNotifier) NotifySteeringRequired(ctx context.Context, task
 	}
 
 	// Fan out to the operators with access to THIS task's project (wildcard +
-	// project-scoped), so assistant tasks reach assistant operators, janka
-	// tasks reach janka operators, etc. Falls back to the configured session.
+	// project-scoped), so assistant tasks reach assistant operators, family
+	// tasks reach family operators, etc. Falls back to the configured session.
 	sessions := n.recipientSessions(task.ProjectID)
 	if len(sessions) == 0 {
 		n.logger.Debug().Str("task_id", task.ID).Str("project", task.ProjectID).

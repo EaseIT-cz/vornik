@@ -29,11 +29,15 @@ OUT="$(
 CTX="$(printf '%s' "$OUT" | jq -r '.hookSpecificOutput.additionalContext')"
 [[ -n "$CTX" && "$CTX" != "null" ]] || fail "no additionalContext in envelope: $OUT"
 
-grep -q "vornik-companion: RAG-first" <<<"$CTX" || fail "RAG-first heading missing from additionalContext"
-grep -q "recall\` BEFORE you start reading code" <<<"$CTX" || fail "recall-before-code rule missing"
-grep -q "Trigger list" <<<"$CTX" || fail "trigger list missing"
-grep -q "Worked example" <<<"$CTX" || fail "worked example missing"
-grep -q "authoritative design record" <<<"$CTX" || fail "authoritative-trust contract missing"
+# The RAG-first directive is the develop-with-memory guidance (design §11.3,
+# GitHub #382): it adapts to what memory holds and never asserts that a design
+# exists (review 97b7 B1), so the old unconditional sentence must be gone.
+grep -q "Developing with project memory" <<<"$CTX" || fail "develop-with-memory guidance missing from additionalContext"
+grep -q "Recall before reading code" <<<"$CTX" || fail "recall-before-code rule missing"
+grep -q "design_record" <<<"$CTX" || fail "the guidance does not read design_record"
+if grep -q "are the authoritative design record" <<<"$CTX"; then
+  fail "the unconditional authoritative-design sentence is still planted"
+fi
 # The repo-scope directive is a standing directive, planted on every path
 # (LLD 2026-07-12 §9).
 grep -q "vornik-companion: repo scope auto-detected" <<<"$CTX" || fail "repo-scope directive missing from the normal path"
@@ -64,7 +68,7 @@ CTX3="$(printf '%s' "$OUT3" | jq -r '.hookSpecificOutput.additionalContext')"
 grep -q "context refreshed after compaction" <<<"$CTX3" || fail "refresh banner missing"
 grep -q "vornik-companion: repo scope auto-detected" <<<"$CTX3" || fail "refresh dropped the repo-scope directive"
 grep -q 'repo_scope: "github.com/EaseIT-cz/vornik"' <<<"$CTX3" || fail "refresh repo-scope directive does not name the pinned scope"
-grep -q "vornik-companion: RAG-first" <<<"$CTX3" || fail "refresh dropped the RAG-first directive"
+grep -q "Developing with project memory" <<<"$CTX3" || fail "refresh dropped the develop-with-memory guidance"
 grep -q "capture reusable know-how as skills" <<<"$CTX3" || fail "refresh dropped the skill-capture directive"
 # The delegation digest is deliberately NOT reprinted on a refresh.
 if grep -q "delegation(s) finished since your last session" <<<"$CTX3"; then
@@ -95,5 +99,63 @@ rm -f "$TMPSKILL"
 CTX4="$(printf '%s' "$OUT4" | jq -r '.hookSpecificOutput.additionalContext')"
 [[ "$CTX4" == *"$BANNER"* ]] || fail "markers missing: the banner was not printed"
 [[ "$CTX4" != *"Delegate the user's work first"* ]] || fail "markers missing: a guidance body was printed anyway"
+
+# --- Case 5: the develop-with-memory guidance (design §11.3, GitHub #382).
+# Its body is the skill's marked section, byte for byte, on both paths;
+# VORNIK_DESIGN_FIRST=off prints that section minus part B, byte for byte, and
+# one line saying so (review eab1 F7); with the markers gone the hook prints
+# its named banner instead of nothing.
+DEVSKILL="$HERE/../skills/develop-with-memory/SKILL.md"
+DEVBODY="$(awk '/<!-- vornik-dev-guidance:end -->/{f=0} f{print} /<!-- vornik-dev-guidance:start -->/{f=1}' "$DEVSKILL")"
+[[ -n "$DEVBODY" ]] || fail "the develop-with-memory skill has no marked section"
+[[ "$CTX" == *"$DEVBODY"* ]] || fail "normal path: the dev guidance is not the skill's marked section"
+[[ "$CTX3" == *"$DEVBODY"* ]] || fail "refresh path: the dev guidance is not the skill's marked section"
+NOB="$(printf '%s\n' "$DEVBODY" | awk '/<!-- vornik-design-first:start -->/{s=1} !s{print} /<!-- vornik-design-first:end -->/{s=0}')"
+[[ "$NOB" != "$DEVBODY" ]] || fail "the marked section has no part B to drop"
+OUT5="$(
+  VORNIK_COMPANION_TOKEN="test-token" \
+  VORNIK_URL="http://127.0.0.1:1" \
+  VORNIK_REPO_SCOPE="github.com/EaseIT-cz/vornik" \
+  VORNIK_DESIGN_FIRST=off \
+  bash "$HOOK" --refresh 2>/dev/null
+)"
+CTX5="$(printf '%s' "$OUT5" | jq -r '.hookSpecificOutput.additionalContext')"
+[[ "$CTX5" == *"$NOB"* ]] || fail "design-first off: the body is not the marked section minus part B"
+[[ "$CTX5" != *"Write the as-built record"* ]] || fail "design-first off: part B was printed"
+DEVOFF="$(sed -n "s/^DESIGN_FIRST_OFF_LINE='\(.*\)'$/\1/p" "$HOOK")"
+[[ -n "$DEVOFF" ]] || fail "the hook defines no DESIGN_FIRST_OFF_LINE constant"
+[[ "$CTX5" == *"$DEVOFF"* ]] || fail "design-first off: the off line was not printed"
+[[ "$CTX" != *"$DEVOFF"* ]] || fail "design-first on: the off line was printed"
+DEVBANNER="$(sed -n "s/^DEV_GUIDANCE_MISSING_BANNER='\(.*\)'$/\1/p" "$HOOK")"
+[[ -n "$DEVBANNER" ]] || fail "the hook defines no DEV_GUIDANCE_MISSING_BANNER constant"
+TMPDEV="$(mktemp)"
+grep -v "vornik-dev-guidance:" "$DEVSKILL" >"$TMPDEV"
+OUT6="$(
+  VORNIK_COMPANION_TOKEN="test-token" \
+  VORNIK_URL="http://127.0.0.1:1" \
+  VORNIK_REPO_SCOPE="github.com/EaseIT-cz/vornik" \
+  VORNIK_DEV_SKILL="$TMPDEV" \
+  bash "$HOOK" --refresh 2>/dev/null
+)"
+rm -f "$TMPDEV"
+CTX6="$(printf '%s' "$OUT6" | jq -r '.hookSpecificOutput.additionalContext')"
+[[ "$CTX6" == *"$DEVBANNER"* ]] || fail "dev markers missing: the banner was not printed"
+[[ "$CTX6" != *"Recall before reading code"* ]] || fail "dev markers missing: a guidance body was printed anyway"
+# A truncated skill that keeps the start marker but lost the end marker must
+# print the banner too, not everything after the start marker (review 7690 F6).
+TMPDEV="$(mktemp)"
+grep -v "vornik-dev-guidance:end" "$DEVSKILL" >"$TMPDEV"
+printf 'trailing text that is not guidance\n' >>"$TMPDEV"
+OUT7="$(
+  VORNIK_COMPANION_TOKEN="test-token" \
+  VORNIK_URL="http://127.0.0.1:1" \
+  VORNIK_REPO_SCOPE="github.com/EaseIT-cz/vornik" \
+  VORNIK_DEV_SKILL="$TMPDEV" \
+  bash "$HOOK" --refresh 2>/dev/null
+)"
+rm -f "$TMPDEV"
+CTX7="$(printf '%s' "$OUT7" | jq -r '.hookSpecificOutput.additionalContext')"
+[[ "$CTX7" == *"$DEVBANNER"* ]] || fail "end marker missing: the banner was not printed"
+[[ "$CTX7" != *"trailing text that is not guidance"* ]] || fail "end marker missing: text after the start marker was printed"
 
 echo "PASS: session-start.sh emits every standing directive on both paths, skips the digest on --refresh, and degrades cleanly without a token"

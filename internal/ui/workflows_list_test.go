@@ -27,7 +27,7 @@ func TestBuildWorkflowsData_RowsSortedWithCountsAndUsage(t *testing.T) {
 		},
 	}
 	usage := projectUsage{byWorkflow: map[string][]string{
-		"research":     {"assistant", "janka"},
+		"research":     {"assistant", "family"},
 		"dev-pipeline": {"autocoder"},
 	}}
 
@@ -48,7 +48,7 @@ func TestBuildWorkflowsData_RowsSortedWithCountsAndUsage(t *testing.T) {
 	if research.Label != "Research" || research.StepCount != 3 || research.TerminalCount != 2 || research.Entrypoint != "research" {
 		t.Errorf("research row = %+v; want label Research, 3 steps, 2 terminals, entry research", research)
 	}
-	if !reflect.DeepEqual(research.UsedBy, []string{"assistant", "janka"}) {
-		t.Errorf("research usedby = %v; want [assistant janka]", research.UsedBy)
+	if !reflect.DeepEqual(research.UsedBy, []string{"assistant", "family"}) {
+		t.Errorf("research usedby = %v; want [assistant family]", research.UsedBy)
 	}
 }

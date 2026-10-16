@@ -28,16 +28,16 @@ func TestBuildChatGroundingContext_PullsToolCallsAndProjects(t *testing.T) {
 		{
 			Role:    "tool",
 			Name:    "list_projects",
-			Content: "Found 2 project(s):\n- janka (Janka)\n- snake (Snake)\n",
+			Content: "Found 2 project(s):\n- family (Family)\n- snake (Snake)\n",
 		},
 	}
-	gc := a.buildChatGroundingContext(t.Context(), msgs, []string{"janka", "snake"}, "janka")
+	gc := a.buildChatGroundingContext(t.Context(), msgs, []string{"family", "snake"}, "family")
 	require.NotNil(t, gc)
 	assert.Contains(t, gc.ToolCallNames, "mcp__scraper__web_fetch")
 	assert.Contains(t, gc.ToolCallNames, "list_projects")
 	assert.Contains(t, gc.FetchedURLs, "https://example.com/jobs",
 		"URL extracted from tool output must land in FetchedURLs lower-cased")
-	assert.Contains(t, gc.KnownProjectIDs, "janka")
+	assert.Contains(t, gc.KnownProjectIDs, "family")
 	assert.Contains(t, gc.KnownProjectIDs, "snake")
 	assert.Contains(t, gc.ToolOutputs, "Found 2 project(s)",
 		"tool output text must concatenate so the numeric-claim rule has substrate")
@@ -133,9 +133,9 @@ func TestBuildChatGroundingContext_CapturesAssistantToolCallArguments(t *testing
 // the project_id rule has at least the current project for membership.
 func TestBuildChatGroundingContext_ActiveProjectAlwaysInKnownProjectIDs(t *testing.T) {
 	a := &Agent{}
-	gc := a.buildChatGroundingContext(t.Context(), nil, nil, "janka")
+	gc := a.buildChatGroundingContext(t.Context(), nil, nil, "family")
 	require.NotNil(t, gc)
-	assert.Contains(t, gc.KnownProjectIDs, "janka")
+	assert.Contains(t, gc.KnownProjectIDs, "family")
 }
 
 // TestRetainBlockingSignals_EmptyInputReturnsNil — defensive pin.

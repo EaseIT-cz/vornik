@@ -34,10 +34,10 @@ func TestMemoryEvictAction_redirectCarriesWhatWasRemoved(t *testing.T) {
 	form.Set("chunks", "chunk_1, chunk_2")
 	form.Set("reason", "GDPR DSAR 2026-08-21")
 	form.Set("confirm", "yes")
-	req := httptest.NewRequest(http.MethodPost, "/ui/memory/janka/evict", strings.NewReader(form.Encode()))
+	req := httptest.NewRequest(http.MethodPost, "/ui/memory/family/evict", strings.NewReader(form.Encode()))
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	rec := httptest.NewRecorder()
-	srv.MemoryEvictAction(rec, req, "janka")
+	srv.MemoryEvictAction(rec, req, "family")
 
 	if rec.Code != http.StatusSeeOther {
 		t.Fatalf("status %d, want 303; body=%q", rec.Code, rec.Body.String())
@@ -46,7 +46,7 @@ func TestMemoryEvictAction_redirectCarriesWhatWasRemoved(t *testing.T) {
 	if err != nil {
 		t.Fatalf("parse Location: %v", err)
 	}
-	if loc.Path != "/ui/memory/janka" {
+	if loc.Path != "/ui/memory/family" {
 		t.Errorf("redirect path = %q, want the project's memory page", loc.Path)
 	}
 	q := loc.Query()
@@ -69,10 +69,10 @@ func TestMemoryEvictAction_failureCarriesNoReceipt(t *testing.T) {
 	form := url.Values{}
 	form.Set("chunks", "chunk_1")
 	form.Set("confirm", "yes")
-	req := httptest.NewRequest(http.MethodPost, "/ui/memory/janka/evict", strings.NewReader(form.Encode()))
+	req := httptest.NewRequest(http.MethodPost, "/ui/memory/family/evict", strings.NewReader(form.Encode()))
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	rec := httptest.NewRecorder()
-	srv.MemoryEvictAction(rec, req, "janka")
+	srv.MemoryEvictAction(rec, req, "family")
 
 	if rec.Code == http.StatusSeeOther {
 		t.Fatal("a failed eviction must surface, not redirect to a success banner")

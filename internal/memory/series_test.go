@@ -49,7 +49,7 @@ func TestDeriveSeriesKey_UndeclaredSlugFailsClosedAndWarns(t *testing.T) {
 	}
 }
 
-// 786 live tasks in janka and vornik-marketing take this path. Warning on them
+// 786 live tasks in family and vornik-marketing take this path. Warning on them
 // would fire a signal with no referent — a project that declares nothing cannot
 // have an *undeclared* slug — and would bury the case above.
 func TestDeriveSeriesKey_NoRegistryIsSilent(t *testing.T) {

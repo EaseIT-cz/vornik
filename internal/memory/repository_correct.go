@@ -197,6 +197,11 @@ func (r *Repository) insertOperatorCorrection(ctx context.Context, row *operator
 	if row == nil || row.ID == "" || row.ProjectID == "" || row.Content == "" {
 		return fmt.Errorf("memory repo: insertOperatorCorrection: missing required fields")
 	}
+	// GitHub #389 (memory-ingest-paths.md §8.2b): the other writer of
+	// project_memory_chunks gets the same floor as UpsertChunks.
+	if err := ScanTextDamage(row.Content).Err(row.SourceName); err != nil {
+		return err
+	}
 	const q = `
 INSERT INTO project_memory_chunks
     (id, project_id, source_name, chunk_index, content, content_hash,

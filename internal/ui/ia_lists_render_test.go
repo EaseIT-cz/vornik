@@ -46,14 +46,14 @@ func TestRenderSwarms_Empty(t *testing.T) {
 }
 
 func TestRenderWorkflows(t *testing.T) {
-	usage := projectUsage{byWorkflow: map[string][]string{"research": {"janka"}}}
+	usage := projectUsage{byWorkflow: map[string][]string{"research": {"family"}}}
 	data := buildWorkflowsData([]*registry.Workflow{
 		{ID: "research", DisplayName: "Research", Entrypoint: "research",
 			Steps:     map[string]registry.WorkflowStep{"research": {}},
 			Terminals: map[string]registry.WorkflowTerminal{"done": {}}},
 	}, usage)
 	out := renderIA(t, "workflows.html", data)
-	for _, want := range []string{"Research", "janka", "/ui/workflows/research/edit", "New workflow"} {
+	for _, want := range []string{"Research", "family", "/ui/workflows/research/edit", "New workflow"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("workflows.html missing %q", want)
 		}
@@ -64,7 +64,7 @@ func TestRenderExecutions(t *testing.T) {
 	now := time.Date(2026, 6, 9, 12, 0, 0, 0, time.UTC)
 	step := "research"
 	data := buildExecutionsData([]*persistence.Execution{
-		{ID: "exec-1", TaskID: "task-1", ProjectID: "janka", WorkflowID: "research",
+		{ID: "exec-1", TaskID: "task-1", ProjectID: "family", WorkflowID: "research",
 			Status: persistence.ExecutionStatusRunning, CurrentStepID: &step,
 			StartedAt: ptrTime(now.Add(-2 * time.Minute))},
 	}, now)

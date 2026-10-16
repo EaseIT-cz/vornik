@@ -92,7 +92,7 @@ func (e *Executor) verifyClaimedFiles(resultBytes []byte, workspaceDir, projectD
 			// doesn't have the file. persistArtifacts source #3 walks
 			// effectiveProjectDir/artifacts/out/ and WOULD have found it.
 			// Before declaring "does not exist", try the same relative portion
-			// under projectDir (incident be7e: janka jobspin-cz 2026-06-20
+			// under projectDir (incident be7e: family jobspin-cz 2026-06-20
 			// scan falsely failed after producing its output files).
 			if strings.HasPrefix(hostPath, workspaceDir+string(os.PathSeparator)) {
 				rel := strings.TrimPrefix(hostPath, workspaceDir+string(os.PathSeparator))

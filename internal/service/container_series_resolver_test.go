@@ -102,9 +102,9 @@ func TestSeriesResolver_DerivesADeclaredSlug(t *testing.T) {
 func TestSeriesResolver_ProjectWithoutFeedsIsSilent(t *testing.T) {
 	r := newSeriesResolver(
 		withPrompt("linkedin-jobs-cz: scan postings."),
-		feedProject(t, "janka"), // declares nothing
+		feedProject(t, "family"), // declares nothing
 		zerolog.Nop())
-	key, warn := r.SeriesKeyFor(context.Background(), "janka", "task_1")
+	key, warn := r.SeriesKeyFor(context.Background(), "family", "task_1")
 	if key != "" || warn {
 		t.Errorf("key=%q warn=%v — a project declaring no feeds must be silent", key, warn)
 	}

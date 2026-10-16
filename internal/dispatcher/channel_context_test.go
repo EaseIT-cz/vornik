@@ -91,14 +91,14 @@ func TestEnrichUserContent_PrependsSender(t *testing.T) {
 	msg := conversation.ChannelMessage{
 		Text: "I disagree with Vadim on the second point.",
 		ChannelSpecific: map[string]string{
-			conversation.ChannelSpecificSender:  "janka@example.com",
+			conversation.ChannelSpecificSender:  "family@example.com",
 			conversation.ChannelSpecificSubject: "Re: offsite plan",
 		},
 	}
 
 	got := enrichUserContent(msg)
 
-	if !strings.Contains(got, "From: janka@example.com") {
+	if !strings.Contains(got, "From: family@example.com") {
 		t.Errorf("sender missing; got:\n%s", got)
 	}
 	// Sender before subject: it frames who is speaking before what about.
@@ -115,9 +115,9 @@ func TestEnrichUserContent_PrependsSender(t *testing.T) {
 func TestEnrichUserContent_SenderOnly(t *testing.T) {
 	got := enrichUserContent(conversation.ChannelMessage{
 		Text:            "ping",
-		ChannelSpecific: map[string]string{conversation.ChannelSpecificSender: "janka@example.com"},
+		ChannelSpecific: map[string]string{conversation.ChannelSpecificSender: "family@example.com"},
 	})
-	if !strings.Contains(got, "From: janka@example.com") || !strings.Contains(got, "ping") {
+	if !strings.Contains(got, "From: family@example.com") || !strings.Contains(got, "ping") {
 		t.Errorf("want sender + body; got:\n%s", got)
 	}
 }
@@ -203,7 +203,7 @@ func TestReceiveThreadsChannelIdentity(t *testing.T) {
 	}
 
 	if err := recv.Receive(context.Background(), conversation.ChannelMessage{
-		SessionID: "s1", Text: "4", SpeakerID: "janka@example.com", Source: "email",
+		SessionID: "s1", Text: "4", SpeakerID: "family@example.com", Source: "email",
 	}); err != nil {
 		t.Fatalf("Receive: %v", err)
 	}

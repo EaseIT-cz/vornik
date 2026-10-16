@@ -167,7 +167,7 @@ func TestRecovery_PedanticSkipsRecoverHop(t *testing.T) {
 // the plan_step path; the unit-level enforcement (`runLeadPlanning`
 // returning a contract-violation error when recoveryContext != nil
 // and outcome is continue) is exercised by manual testing this
-// session (janka CV reflow). A proper integration test requires
+// session (family CV reflow). A proper integration test requires
 // the mock runtime to selectively fail one call and succeed the
 // next, which the current mock can't express — added to backlog as
 // follow-up.

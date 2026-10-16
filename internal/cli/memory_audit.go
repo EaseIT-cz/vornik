@@ -15,7 +15,7 @@ import (
 // `vornikctl memory audit` — list chunks that haven't been validated.
 // Companion to the dispatcher's memory_correct tool: the chat tool is
 // for in-the-moment "user just told me X is wrong" corrections; the
-// audit CLI is for batch operator sweeps ("which chunks in the janka
+// audit CLI is for batch operator sweeps ("which chunks in the family
 // project are still on validation_status='legacy' from before the
 // 2026-04 migration?"). Direct DB read, same pattern as memory dlq.
 

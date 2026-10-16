@@ -3,7 +3,7 @@ sources:
     - path: internal/ui/task_conversation.go
       sha256: 1487b9e4152a0448e224cf93a1791fe59ed8c7196b002c1b504a8dd5306e3e99
     - path: internal/registry/project.go
-      sha256: 9bd6f186763374825317a2e08ab999ea37c0b919c64fcdfc3caf0c395ee14d6b
+      sha256: 708b07a7761489e4c64817087dd9f25914af2470a52ccd1295b3e44911c33061
 ---
 # Approvals & human-in-the-loop
 
@@ -85,8 +85,8 @@ notification so it doesn't stall unseen (gated by
   **project**: the alert goes to the operators who have access to that task's
   project. On Telegram that's the users in `telegram.allowed_users` whose access
   covers the project (wildcard users plus users scoped to it) — so an
-  `assistant` task alerts the assistant operators, a `janka` task alerts the
-  janka operators. Configure the channel (and an optional catch-all fallback
+  `assistant` task alerts the assistant operators, a `family` task alerts the
+  family operators. Configure the channel (and an optional catch-all fallback
   recipient for projects that resolve to nobody) under `steering_operator_alert`.
 
 Every alert carries a deep link to the task so you can act on it in one tap.

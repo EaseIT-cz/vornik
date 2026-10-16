@@ -13,7 +13,7 @@ import "testing"
 // fail-open by omission (a deliberately-narrow built-in-only role must NOT
 // reach project MCP tools like broker place_order).
 //
-// Regression context (2026-06-20): the janka `researcher` listed only built-in
+// Regression context (2026-06-20): the family `researcher` listed only built-in
 // tools, so it could not call mcp__scraper__web_fetch and every portal scan got
 // a daemon-level FORBIDDEN → stale RAG. The fix is to GRANT the tool in the
 // role config (deployed + distributed presets), which the cases below pin.

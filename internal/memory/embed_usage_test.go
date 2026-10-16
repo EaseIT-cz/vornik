@@ -32,7 +32,7 @@ func embedderWithRecorder(t *testing.T, url string) (*Embedder, *fakeUsageRecord
 }
 
 func ingestScope() EmbedScope {
-	return EmbedScope{ProjectID: "janka", CallSite: EmbedCallSiteIngest}
+	return EmbedScope{ProjectID: "family", CallSite: EmbedCallSiteIngest}
 }
 
 // TestEmbedUsage_MeasuredTokensFromProvider: when the provider reports token
@@ -62,7 +62,7 @@ func TestEmbedUsage_MeasuredTokensFromProvider(t *testing.T) {
 	if row.Source != persistence.TaskLLMUsageSourceMemoryEmbedder {
 		t.Errorf("Source = %q, want %q", row.Source, persistence.TaskLLMUsageSourceMemoryEmbedder)
 	}
-	if row.ProjectID != "janka" {
+	if row.ProjectID != "family" {
 		t.Errorf("ProjectID = %q, want the scope's project", row.ProjectID)
 	}
 	// Retrieval- and ingest-side spend is not task-scoped; the reranker

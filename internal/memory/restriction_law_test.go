@@ -24,6 +24,8 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+
+	"vornik.io/vornik/internal/testutil/repowalk"
 )
 
 // restrictionExempt lists content reads that deliberately do NOT carry the
@@ -45,6 +47,7 @@ var restrictionExempt = map[string]string{
 	"internal/memory/repository_correct.go:ChunkPreviewByID":               "operator correction/forget flow shows the row it is about to act on",
 	"internal/memory/repository_correct.go:ListUnverifiedChunks":           "operator administration (vornikctl memory audit)",
 	"internal/retention/memory_approval.go:MemoryApprovalRequests":         "operator approval of a deletion; the approver must see what is deleted",
+	"internal/api/doctor_memory_text_damage.go:checkMemoryTextDamage":      "integrity sweep (GitHub #389): scans text in-process, returns only counts and chunk ids, sends no content onward",
 }
 
 // contentRead matches a SELECT whose text names the chunk's content or its
@@ -70,6 +73,9 @@ func TestLaw_EveryChunkContentReadCarriesTheRestrictionPredicate(t *testing.T) {
 		err := filepath.Walk(filepath.Join(root, dir), func(path string, info os.FileInfo, err error) error {
 			if err != nil {
 				return err
+			}
+			if info.IsDir() && repowalk.SkipDir(filepath.Join(root, dir), path, info.Name()) {
+				return filepath.SkipDir
 			}
 			if info.IsDir() || !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
 				return nil

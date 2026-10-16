@@ -136,3 +136,29 @@ func h3fStatus(rows []memChunk, id string) string {
 	}
 	return "missing"
 }
+
+// h3DentistNote is the note H3's script stores and H3-dup's repeats byte for
+// byte, so the daemon's dedup_hash gate refuses the repeat (lane design,
+// "Amendment 2026-10-16 — H3-dup", GitHub #380).
+const h3DentistNote = "The user's dentist is Dr Novak at the Vinohrady dental clinic, and appointments are booked by phone."
+
+// h3DupCoaching is the retry coaching the plugin must not give for a
+// duplicate: the words its own unit test forbids (assertNoRetryCoaching).
+var h3DupCoaching = []string{"restate", "try again", "full sentence", "with its context"}
+
+// h3DupProblem judges H3-dup's reply, which echoes the tool result Hermes
+// gave the scripted model for a byte-for-byte duplicate: it must say the
+// note is already on record and not to store it again, and coach no retry.
+// nil means the refusal is the one design 24 specifies (0.21.6 on).
+func h3DupProblem(reply string) error {
+	low := strings.ToLower(reply)
+	if !strings.Contains(low, "already holds this exact note") || !strings.Contains(low, "not store it again") {
+		return fmt.Errorf("the duplicate's tool result does not say the note is already on record and not to store it again")
+	}
+	for _, c := range h3DupCoaching {
+		if strings.Contains(low, c) {
+			return fmt.Errorf("the duplicate's tool result coaches a retry (%q): the #380 re-store", c)
+		}
+	}
+	return nil
+}

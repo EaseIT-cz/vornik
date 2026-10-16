@@ -224,3 +224,31 @@ func TestForbiddenHits_DenylistSubstringCaseInsensitive(t *testing.T) {
 		t.Fatal("denylist substring must match case-insensitively")
 	}
 }
+
+// An "allow:" denylist entry masks ONE exact substring before the deny match,
+// so a published author address may stand while every other host under the
+// same private domain still fails (operator rule 2026-10-16: the author
+// address is allowed, a private host name is not). Generic tokens only: this
+// test ships in the public export, the real tokens live in the pruned denylist.
+func TestForbiddenHits_AllowEntryMasksOnlyItsOwnSubstring(t *testing.T) {
+	deny := []string{"corp.example", "allow:author@corp.example"}
+	cases := []struct {
+		line string
+		want int
+	}{
+		{"Contact author@corp.example for the licence.", 0},
+		{"Contact AUTHOR@Corp.Example for the licence.", 0}, // case-insensitive, like the deny match
+		{"Point the client at https://mcp.corp.example/mcp.", 1},
+		{"author@corp.example runs mcp.corp.example", 1}, // the mask does not clear the line
+		{"Mail someone-else@corp.example.", 1},
+	}
+	for _, c := range cases {
+		if got := ForbiddenHits(c.line, deny); len(got) != c.want {
+			t.Errorf("ForbiddenHits(%q) = %v; want %d hit(s)", c.line, got, c.want)
+		}
+	}
+	// An allow entry is never itself a deny token.
+	if got := ForbiddenHits("allow:nothing here", []string{"allow:nothing"}); len(got) != 0 {
+		t.Errorf("an allow entry matched as a deny token: %v", got)
+	}
+}

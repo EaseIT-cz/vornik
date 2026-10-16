@@ -30,7 +30,7 @@ func TestHardEvict_HappyPath_TxSnapshotInsertDelete(t *testing.T) {
 	// project_id filter (IDOR guard) AND the FOR UPDATE clause
 	// (prevents concurrent edits between snapshot and delete).
 	mock.ExpectQuery(regexp.QuoteMeta("FROM project_memory_chunks")).
-		WithArgs("janka", "chunk_1", "chunk_2").
+		WithArgs("family", "chunk_1", "chunk_2").
 		WillReturnRows(sqlmock.NewRows([]string{
 			"id", "content_hash", "source_name", "content_class", "producer_role",
 		}).
@@ -60,7 +60,7 @@ func TestHardEvict_HappyPath_TxSnapshotInsertDelete(t *testing.T) {
 	// memory_embed_dlq + entity_mentions automatically — those
 	// rows aren't issued by HardEvict.
 	mock.ExpectExec(regexp.QuoteMeta("DELETE FROM project_memory_chunks")).
-		WithArgs("janka", "chunk_1", "chunk_2").
+		WithArgs("family", "chunk_1", "chunk_2").
 		WillReturnResult(sqlmock.NewResult(0, 2))
 	// One cache delete per distinct key the helper derived.
 	for i := 0; i < 3; i++ {
@@ -85,7 +85,7 @@ func TestHardEvict_HappyPath_TxSnapshotInsertDelete(t *testing.T) {
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectCommit()
 
-	res, err := repo.HardEvict(context.Background(), "janka",
+	res, err := repo.HardEvict(context.Background(), "family",
 		[]string{"chunk_1", "chunk_2"}, "GDPR DSAR 12", "operator-jane")
 	if err != nil {
 		t.Fatalf("HardEvict: %v", err)
@@ -139,13 +139,13 @@ func TestHardEvict_NoMatchingChunks_CommitsEmptyTx(t *testing.T) {
 	mock.ExpectExec(regexp.QuoteMeta("INSERT INTO memory_eviction_runs")).
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectQuery(regexp.QuoteMeta("FROM project_memory_chunks")).
-		WithArgs("janka", "ghost_1").
+		WithArgs("family", "ghost_1").
 		WillReturnRows(sqlmock.NewRows([]string{
 			"id", "content_hash", "source_name", "content_class", "producer_role",
 		}))
 	mock.ExpectCommit()
 
-	res, err := repo.HardEvict(context.Background(), "janka",
+	res, err := repo.HardEvict(context.Background(), "family",
 		[]string{"ghost_1"}, "stale id check", "tester")
 	if err != nil {
 		t.Fatalf("HardEvict: %v", err)
@@ -171,7 +171,7 @@ func TestHardEvict_EmptyInput_NoSQL(t *testing.T) {
 	defer func() { _ = db.Close() }()
 	repo := NewRepository(db)
 
-	res, err := repo.HardEvict(context.Background(), "janka", nil, "r", "by")
+	res, err := repo.HardEvict(context.Background(), "family", nil, "r", "by")
 	if err != nil || res != nil {
 		t.Errorf("nil chunks: res=%v err=%v, want (nil,nil)", res, err)
 	}
@@ -195,7 +195,7 @@ func TestHardEvict_AuditInsertFailure_RollsBack(t *testing.T) {
 	mock.ExpectExec(regexp.QuoteMeta("INSERT INTO memory_eviction_runs")).
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectQuery(regexp.QuoteMeta("FROM project_memory_chunks")).
-		WithArgs("janka", "chunk_1").
+		WithArgs("family", "chunk_1").
 		WillReturnRows(sqlmock.NewRows([]string{
 			"id", "content_hash", "source_name", "content_class", "producer_role",
 		}).AddRow("chunk_1", "h1", "s1", "c1", "r1"))
@@ -203,7 +203,7 @@ func TestHardEvict_AuditInsertFailure_RollsBack(t *testing.T) {
 		WillReturnError(errors.New("disk-full or constraint"))
 	mock.ExpectRollback()
 
-	_, err := repo.HardEvict(context.Background(), "janka",
+	_, err := repo.HardEvict(context.Background(), "family",
 		[]string{"chunk_1"}, "test", "tester")
 	if err == nil {
 		t.Fatalf("expected error from audit insert failure, got nil")
@@ -225,7 +225,7 @@ func TestHardEvict_DeleteFailure_RollsBackAudit(t *testing.T) {
 	mock.ExpectExec(regexp.QuoteMeta("INSERT INTO memory_eviction_runs")).
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectQuery(regexp.QuoteMeta("FROM project_memory_chunks")).
-		WithArgs("janka", "chunk_1").
+		WithArgs("family", "chunk_1").
 		WillReturnRows(sqlmock.NewRows([]string{
 			"id", "content_hash", "source_name", "content_class", "producer_role",
 		}).AddRow("chunk_1", "h", "s", "c", "r"))
@@ -240,11 +240,11 @@ func TestHardEvict_DeleteFailure_RollsBackAudit(t *testing.T) {
 	mock.ExpectExec(regexp.QuoteMeta("DELETE FROM project_memory_quarantine")).
 		WillReturnResult(sqlmock.NewResult(0, 0))
 	mock.ExpectExec(regexp.QuoteMeta("DELETE FROM project_memory_chunks")).
-		WithArgs("janka", "chunk_1").
+		WithArgs("family", "chunk_1").
 		WillReturnError(errors.New("connection reset"))
 	mock.ExpectRollback()
 
-	_, err := repo.HardEvict(context.Background(), "janka",
+	_, err := repo.HardEvict(context.Background(), "family",
 		[]string{"chunk_1"}, "test", "tester")
 	if err == nil {
 		t.Fatalf("expected error from DELETE failure, got nil")

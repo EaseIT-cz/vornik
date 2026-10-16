@@ -1079,14 +1079,14 @@ func TestScheduler_ProjectConcurrencyCountsWaitingForChildren(t *testing.T) {
 	now := time.Now()
 	mockRepo.AddTask(&persistence.Task{
 		ID:        "parent",
-		ProjectID: "janka",
+		ProjectID: "family",
 		Status:    persistence.TaskStatusWaitingForChildren,
 		Priority:  100,
 		CreatedAt: now,
 	})
 	mockRepo.AddTask(&persistence.Task{
-		ID:        "queued-janka",
-		ProjectID: "janka",
+		ID:        "queued-family",
+		ProjectID: "family",
 		Status:    persistence.TaskStatusQueued,
 		Priority:  100,
 		CreatedAt: now,
@@ -1100,27 +1100,27 @@ func TestScheduler_ProjectConcurrencyCountsWaitingForChildren(t *testing.T) {
 	})
 
 	scheduler := NewWithOptions(mockRepo, DefaultConfig(), WithProjectRegistry(staticProjectLimits{
-		limits: map[string]int{"janka": 1},
+		limits: map[string]int{"family": 1},
 	}))
 
 	task, err := scheduler.leaseTask()
 	require.NoError(t, err)
-	assert.Equal(t, "queued-other", task.ID, "janka should be blocked by its active waiting parent")
+	assert.Equal(t, "queued-other", task.ID, "family should be blocked by its active waiting parent")
 }
 
 func TestScheduler_ProjectConcurrencySkipsSecondHigherPriorityTaskInSameProject(t *testing.T) {
 	mockRepo := NewMockTaskRepository()
 	now := time.Now()
 	mockRepo.AddTask(&persistence.Task{
-		ID:        "janka-first",
-		ProjectID: "janka",
+		ID:        "family-first",
+		ProjectID: "family",
 		Status:    persistence.TaskStatusQueued,
 		Priority:  1,
 		CreatedAt: now,
 	})
 	mockRepo.AddTask(&persistence.Task{
-		ID:        "janka-second",
-		ProjectID: "janka",
+		ID:        "family-second",
+		ProjectID: "family",
 		Status:    persistence.TaskStatusQueued,
 		Priority:  1,
 		CreatedAt: now.Add(time.Second),
@@ -1134,12 +1134,12 @@ func TestScheduler_ProjectConcurrencySkipsSecondHigherPriorityTaskInSameProject(
 	})
 
 	scheduler := NewWithOptions(mockRepo, DefaultConfig(), WithProjectRegistry(staticProjectLimits{
-		limits: map[string]int{"janka": 1, "assistant": 1},
+		limits: map[string]int{"family": 1, "assistant": 1},
 	}))
 
 	first, err := scheduler.leaseTask()
 	require.NoError(t, err)
-	assert.Equal(t, "janka-first", first.ID)
+	assert.Equal(t, "family-first", first.ID)
 
 	second, err := scheduler.leaseTask()
 	require.NoError(t, err)

@@ -114,7 +114,7 @@ var pathKeyRe = regexp.MustCompile(`"(?:path|sourcePath|storagePath)"\s*:\s*"([^
 // the path unreadable and breaks downstream verification
 // (verifyClaimedFiles can't stat a file at /tmp/.../[REDACTED:entropy].pdf).
 //
-// Triggered by the 2026-05-18 janka CV-delivery cascade where the
+// Triggered by the 2026-05-18 family CV-delivery cascade where the
 // writer's produced_files paths got entropy-redacted, verification
 // failed, the recover step ran, its lead emitted a plan that
 // re-spawned writer, that writer's output got redacted again,
@@ -153,7 +153,7 @@ func filterFindingsOutsidePathSpans(findings []secrets.Finding, spans []secrets.
 		// Only ENTROPY findings are path-exempt. They legitimately
 		// collide with hash/timestamp-bearing path segments, and
 		// redacting those breaks verifyClaimedFiles (the 2026-05-18
-		// janka regression). Every deterministic, prefix-anchored
+		// family regression). Every deterministic, prefix-anchored
 		// pattern (aws_*, github_pat, jwt, connection_string,
 		// generic_kv, private_key_block, …) MUST still redact even
 		// inside a path field — those shapes never occur in a real

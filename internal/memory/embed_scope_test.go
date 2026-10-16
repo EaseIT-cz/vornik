@@ -31,13 +31,13 @@ func TestEmbedScope_Validate(t *testing.T) {
 	}{
 		{
 			name:    "project and call site set",
-			scope:   EmbedScope{ProjectID: "janka", CallSite: "memory.ingest"},
+			scope:   EmbedScope{ProjectID: "family", CallSite: "memory.ingest"},
 			wantErr: false,
 			because: "the ordinary case: attributable work",
 		},
 		{
 			name:    "missing call site",
-			scope:   EmbedScope{ProjectID: "janka"},
+			scope:   EmbedScope{ProjectID: "family"},
 			wantErr: true,
 			because: "a project alone cannot say WHICH path spent the money",
 		},
@@ -122,7 +122,7 @@ func TestEmbed_ValidScopeLeavesBehaviourUnchanged(t *testing.T) {
 
 	e := NewEmbedder(Config{EmbeddingEndpoint: srv.URL, EmbeddingModel: "m"})
 	vecs, err := e.Embed(context.Background(),
-		EmbedScope{ProjectID: "janka", CallSite: "memory.ingest"},
+		EmbedScope{ProjectID: "family", CallSite: "memory.ingest"},
 		[]string{"a", "b"})
 	if err != nil {
 		t.Fatalf("Embed: %v", err)
@@ -145,7 +145,7 @@ func TestEmbedQuery_CarriesAScope(t *testing.T) {
 
 	e := NewEmbedder(Config{EmbeddingEndpoint: srv.URL, EmbeddingModel: "m"})
 	vec, err := e.EmbedQuery(context.Background(),
-		EmbedScope{ProjectID: "janka", CallSite: EmbedCallSiteSearchQuery},
+		EmbedScope{ProjectID: "family", CallSite: EmbedCallSiteSearchQuery},
 		"what did we decide about retries")
 	if err != nil {
 		t.Fatalf("EmbedQuery: %v", err)

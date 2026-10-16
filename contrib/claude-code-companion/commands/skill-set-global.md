@@ -9,7 +9,7 @@ argument-hint: <skill id> [global|project]
 The user wants to change the reach of skill: **$ARGUMENTS**
 
 A **global** skill injects into EVERY project's roles, not just its home
-project — so a skill captured in this companion project can reach the janka
+project — so a skill captured in this companion project can reach the family
 and assistant autonomy roles. A **project-only** skill injects only into its
 home project. Changing reach does NOT change maturity: an approved skill stays
 approved.

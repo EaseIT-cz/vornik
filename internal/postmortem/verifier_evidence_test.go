@@ -128,7 +128,7 @@ func TestGatherEvidence_AssemblesAllSections(t *testing.T) {
 	errMsg := "phase-2 verifier(s) failed: verifier \"scan_min_entries\" (artifact_min_entries): no artifact matched pattern \"scan-*.md\"; expected at least one with ≥1 items"
 	task := &persistence.Task{
 		ID:          "task-1",
-		ProjectID:   "janka",
+		ProjectID:   "family",
 		Status:      persistence.TaskStatusFailed,
 		Attempt:     1,
 		MaxAttempts: 3,

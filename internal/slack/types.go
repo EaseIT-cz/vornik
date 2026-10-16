@@ -101,7 +101,7 @@ const (
 const defaultSlashCommand = "/vornik"
 
 // NormaliseSlashCommand trims the configured command and guarantees the single leading
-// slash Slack sends, so "holly", "/holly" and "  /holly " all resolve identically.
+// slash Slack sends, so "helper", "/helper" and "  /helper " all resolve identically.
 // Exported so the daemon's config resolver stores a canonical value and the operator
 // sees the same string in logs that Slack will send.
 func NormaliseSlashCommand(configured string) string {
@@ -205,7 +205,7 @@ type Config struct {
 
 	// SlashCommand is the slash command this deployment answers.
 	// Empty defaults to "/vornik"; a leading slash is optional. Exists
-	// because a differently-branded instance (Holly, sharing this
+	// because a differently-branded instance (Helper, sharing this
 	// workspace) registers its own command name in its Slack app and
 	// should not have to answer to another product's name.
 	SlashCommand string

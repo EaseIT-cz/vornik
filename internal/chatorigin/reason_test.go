@@ -16,7 +16,7 @@ import (
 //
 // ResolveForTurn flattened three distinct states into a bare `false`, and its
 // only consumer (ui.DeliverableSend) rendered them all as "This task wasn't
-// started from a chat channel — nothing to send to." On janka-companion that
+// started from a chat channel — nothing to send to." On family-companion that
 // sentence was actively wrong: the task WAS Slack-originated, but its
 // chat_audit_log row had been lost to an expired-context write. The operator
 // reasonably concluded parent-channel inheritance was missing and went looking
@@ -70,7 +70,7 @@ func TestResolveForTurn_ReasonDiscriminatesFailureModes(t *testing.T) {
 	})
 }
 
-// TestResolve_MissingAncestorRowReportsRecordMissing covers the exact janka
+// TestResolve_MissingAncestorRowReportsRecordMissing covers the exact family
 // shape end-to-end through Resolve: the child carries no ChatTurnID, the
 // lineage walk finds the parent's, and THAT row is the one that vanished.
 // Inheritance works; the record is gone. The reason must say so.

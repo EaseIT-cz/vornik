@@ -187,7 +187,7 @@ func TestKeyPath(t *testing.T) {
 func TestCheckEndpoint(t *testing.T) {
 	for u, ok := range map[string]bool{
 		"https://vornik.example": true, "http://127.0.0.1:8080": true, "http://localhost:8080": true, "http://[::1]:8080": true,
-		"http://192.168.0.142:8080": false, "http://vornik.example": false, "ftp://x": false, "not a url": false,
+		"http://192.168.1.50:8080": false, "http://vornik.example": false, "ftp://x": false, "not a url": false,
 	} {
 		if err := CheckEndpoint(u); (err == nil) != ok {
 			t.Errorf("CheckEndpoint(%q) = %v, want ok=%v", u, err, ok)

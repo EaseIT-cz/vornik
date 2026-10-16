@@ -298,6 +298,10 @@ func (c *Container) initDispatcher() {
 			knownProviders[name] = true
 		}
 		registry.WarnUnknownAPIProviders(c.Logger, c.Registry.ListProjects(), knownProviders)
+		// GitHub #407: a webhook source on a forge project with no
+		// repository scope accepts every repository an App installation
+		// reaches.
+		registry.WarnUnscopedWebhookSources(c.Logger, c.Registry.ListProjects())
 	}
 
 	// dispatcher.NewAgent accepts nil for any of the three repos;

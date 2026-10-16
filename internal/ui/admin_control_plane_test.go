@@ -41,7 +41,7 @@ func (f *fakeUIApplier) Rollback(_ context.Context, id string) error {
 func seedProposal(t *testing.T, repo persistence.ProposalRepository, id, title, status string, applyable bool, proposedBy string) {
 	t.Helper()
 	p := &persistence.ControlPlaneProposal{
-		ID: id, ProjectID: "janka", Kind: persistence.ProposalKindConfig,
+		ID: id, ProjectID: "family", Kind: persistence.ProposalKindConfig,
 		BlastRadius: persistence.ProposalScopeProject, Title: title,
 		Status: persistence.ProposalStatusDraft, ProposedBy: proposedBy,
 	}
@@ -98,7 +98,7 @@ func TestAdminControlPlane_DiffPreviewNotTruncated(t *testing.T) {
 		t.Fatalf("test fixture must exceed the old 600-char cap, got %d chars", len(fullDiff))
 	}
 	p := &persistence.ControlPlaneProposal{
-		ID: "d-long", ProjectID: "janka", Kind: persistence.ProposalKindConfig,
+		ID: "d-long", ProjectID: "family", Kind: persistence.ProposalKindConfig,
 		BlastRadius: persistence.ProposalScopeProject, Title: "long diff",
 		Status: persistence.ProposalStatusDraft, ProposedBy: "operator-ui",
 		ApplyTarget: "config.yaml", ApplyContent: "x: 1\n", Diff: fullDiff,
@@ -159,7 +159,7 @@ func TestAdminControlPlane_RendersAndEscapes(t *testing.T) {
 
 func TestAdminControlPlane_OverviewDefault(t *testing.T) {
 	repo := newProposalRepoUI(t)
-	seedProposal(t, repo, "d1", "high failed rate on janka", persistence.ProposalStatusDraft, false, "tune-detector")
+	seedProposal(t, repo, "d1", "high failed rate on family", persistence.ProposalStatusDraft, false, "tune-detector")
 	seedProposal(t, repo, "sh1", "Diagnose: web_fetch timeout", persistence.ProposalStatusDraft, false, "self-heal")
 
 	s := NewServer(WithProposalStore(repo))
@@ -371,7 +371,7 @@ func TestAdminControlPlaneDiagnose_RendersVerdict(t *testing.T) {
 		proposalID: "cpp_x",
 	}
 	s := NewServer(WithProposalStore(repo), WithDiagnoser(fd))
-	form := url.Values{"focus": {"janka"}, "propose": {"on"}}
+	form := url.Values{"focus": {"family"}, "propose": {"on"}}
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/admin/control-plane/diagnose", strings.NewReader(form.Encode()))
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
@@ -380,7 +380,7 @@ func TestAdminControlPlaneDiagnose_RendersVerdict(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status %d", rec.Code)
 	}
-	if fd.lastFocus != "janka" || !fd.lastProp {
+	if fd.lastFocus != "family" || !fd.lastProp {
 		t.Errorf("diagnoser not called with focus+propose: %+v", fd)
 	}
 	if !strings.Contains(body, "web_fetch timeout") || !strings.Contains(body, "cpp_x") {
@@ -391,7 +391,7 @@ func TestAdminControlPlaneDiagnose_RendersVerdict(t *testing.T) {
 func TestAdminControlPlaneDiagnose_NotWired(t *testing.T) {
 	repo := newProposalRepoUI(t)
 	s := NewServer(WithProposalStore(repo)) // no diagnoser
-	form := url.Values{"focus": {"janka"}}
+	form := url.Values{"focus": {"family"}}
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/admin/control-plane/diagnose", strings.NewReader(form.Encode()))
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
@@ -483,14 +483,14 @@ func TestAdminControlPlane_SupersededHidesRollback(t *testing.T) {
 	older := base
 	newer := base.Add(time.Minute)
 	mustCreate(t, repo, &persistence.ControlPlaneProposal{
-		ID: "p1", ProjectID: "janka", Kind: persistence.ProposalKindConfig,
+		ID: "p1", ProjectID: "family", Kind: persistence.ProposalKindConfig,
 		BlastRadius: persistence.ProposalScopeProject, Title: "older apply",
 		Status: persistence.ProposalStatusApplied, ProposedBy: "agent",
 		Approver: "human", AppliedBy: "human", ApplyTarget: "config.yaml",
 		AppliedAt: &older,
 	})
 	mustCreate(t, repo, &persistence.ControlPlaneProposal{
-		ID: "p2", ProjectID: "janka", Kind: persistence.ProposalKindConfig,
+		ID: "p2", ProjectID: "family", Kind: persistence.ProposalKindConfig,
 		BlastRadius: persistence.ProposalScopeProject, Title: "newer apply",
 		Status: persistence.ProposalStatusApplied, ProposedBy: "agent",
 		Approver: "human", AppliedBy: "human", ApplyTarget: "config.yaml",
@@ -521,14 +521,14 @@ func TestAdminControlPlane_DisjointTargetsKeepBothRollbacks(t *testing.T) {
 	older := base
 	newer := base.Add(time.Minute)
 	mustCreate(t, repo, &persistence.ControlPlaneProposal{
-		ID: "p1", ProjectID: "janka", Kind: persistence.ProposalKindConfig,
+		ID: "p1", ProjectID: "family", Kind: persistence.ProposalKindConfig,
 		BlastRadius: persistence.ProposalScopeProject, Title: "config apply",
 		Status: persistence.ProposalStatusApplied, ProposedBy: "agent",
 		Approver: "human", AppliedBy: "human", ApplyTarget: "config.yaml",
 		AppliedAt: &older,
 	})
 	mustCreate(t, repo, &persistence.ControlPlaneProposal{
-		ID: "p2", ProjectID: "janka", Kind: persistence.ProposalKindConfig,
+		ID: "p2", ProjectID: "family", Kind: persistence.ProposalKindConfig,
 		BlastRadius: persistence.ProposalScopeProject, Title: "other apply",
 		Status: persistence.ProposalStatusApplied, ProposedBy: "agent",
 		Approver: "human", AppliedBy: "human", ApplyTarget: "other.yaml",
@@ -556,14 +556,14 @@ func TestAdminControlPlane_EqualTimestampTieBreak(t *testing.T) {
 	repo := newProposalRepoUI(t)
 	at := time.Unix(1700000000, 0)
 	mustCreate(t, repo, &persistence.ControlPlaneProposal{
-		ID: "cpp_aaa", ProjectID: "janka", Kind: persistence.ProposalKindConfig,
+		ID: "cpp_aaa", ProjectID: "family", Kind: persistence.ProposalKindConfig,
 		BlastRadius: persistence.ProposalScopeProject, Title: "tie low",
 		Status: persistence.ProposalStatusApplied, ProposedBy: "agent",
 		Approver: "human", AppliedBy: "human", ApplyTarget: "config.yaml",
 		AppliedAt: &at,
 	})
 	mustCreate(t, repo, &persistence.ControlPlaneProposal{
-		ID: "cpp_bbb", ProjectID: "janka", Kind: persistence.ProposalKindConfig,
+		ID: "cpp_bbb", ProjectID: "family", Kind: persistence.ProposalKindConfig,
 		BlastRadius: persistence.ProposalScopeProject, Title: "tie high",
 		Status: persistence.ProposalStatusApplied, ProposedBy: "agent",
 		Approver: "human", AppliedBy: "human", ApplyTarget: "config.yaml",
@@ -594,7 +594,7 @@ func TestAdminControlPlane_EqualTimestampTieBreak(t *testing.T) {
 func TestAdminControlPlane_AutoRetiredLabel(t *testing.T) {
 	repo := newProposalRepoUI(t)
 	mustCreate(t, repo, &persistence.ControlPlaneProposal{
-		ID: "p1", ProjectID: "janka", Kind: persistence.ProposalKindConfig,
+		ID: "p1", ProjectID: "family", Kind: persistence.ProposalKindConfig,
 		BlastRadius: persistence.ProposalScopeProject, Title: "stale draft",
 		Status: persistence.ProposalStatusRejected, ProposedBy: "agent",
 		Approver: "system:auto-retire-stale",
@@ -666,7 +666,7 @@ func TestAdminControlPlane_ProposalDeepLinkShowsThatProposal(t *testing.T) {
 		{"cpp-target", "the linked one", persistence.ProposalStatusRejected},
 	} {
 		p := &persistence.ControlPlaneProposal{
-			ID: seed.id, ProjectID: "janka", Kind: persistence.ProposalKindConfig,
+			ID: seed.id, ProjectID: "family", Kind: persistence.ProposalKindConfig,
 			BlastRadius: persistence.ProposalScopeProject, Title: seed.title,
 			Status: persistence.ProposalStatusDraft, ProposedBy: "config-assistant",
 			ApplyTarget: "config.yaml", ApplyContent: "x: 1\n",

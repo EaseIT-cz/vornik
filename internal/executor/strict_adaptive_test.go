@@ -668,7 +668,7 @@ func TestStrictAdaptive_FailsAfterRetryStillBadPick(t *testing.T) {
 // TestStrictAdaptive_SingleCandidateShortCircuits — when the project's
 // adaptive candidate list contains exactly one entry, the route step
 // must auto-route to that workflow WITHOUT invoking the LLM. This
-// guards against the 2026-05-18 janka failure mode where a flash-tier
+// guards against the 2026-05-18 family failure mode where a flash-tier
 // model fabricated a "config missing — add adaptiveCandidateWorkflows.json"
 // refusal when asked to pick from a list of one.
 //

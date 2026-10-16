@@ -290,13 +290,14 @@ func TestRunStandardGates_ClaimAuditQuarantineShortCircuits(t *testing.T) {
 	if final.Gate != GateClaimAuditOverlap {
 		t.Errorf("expected gate %s, got %s", GateClaimAuditOverlap, final.Gate)
 	}
-	// Trail order: schema, provenance, class, secret, policy_match,
-	// prompt_injection, claim_audit_overlap → audit gate at slot 6.
-	if len(trail) < 7 {
+	// Trail order: schema, text_damage (GitHub #389), provenance, class,
+	// secret, policy_match, prompt_injection, claim_audit_overlap → audit
+	// gate at slot 7.
+	if len(trail) < 8 {
 		t.Fatalf("trail too short (%d): %+v", len(trail), trail)
 	}
-	if trail[6].Gate != GateClaimAuditOverlap {
-		t.Errorf("expected slot 6 gate %s, got %s", GateClaimAuditOverlap, trail[6].Gate)
+	if trail[7].Gate != GateClaimAuditOverlap {
+		t.Errorf("expected slot 7 gate %s, got %s", GateClaimAuditOverlap, trail[7].Gate)
 	}
 }
 

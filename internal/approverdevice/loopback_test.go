@@ -13,7 +13,7 @@ func TestIsLoopbackHost(t *testing.T) {
 		"localhost": true, "localhost:8080": true, "LOCALHOST.": true, "localhost.:8080": true,
 		"127.0.0.1": true, "127.0.0.1:80": true, "127.5.5.5:8080": true,
 		"[::1]": true, "[::ffff:127.0.0.1]:8080": true, "[::1]:8080": true, "::1": true,
-		"192.168.0.142:8080": false, "example.com": false, "localhost.evil.com": false,
+		"192.168.1.50:8080": false, "example.com": false, "localhost.evil.com": false,
 		"127.0.0.1.evil.com": false, "": false, "[fe80::1]:80": false, "foo.localhost": false,
 	} {
 		if got := isLoopbackHost(host); got != want {

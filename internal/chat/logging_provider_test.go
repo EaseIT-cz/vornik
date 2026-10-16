@@ -153,7 +153,7 @@ func TestLoggingProvider_ErrorLogsAtWarn(t *testing.T) {
 	}
 }
 
-// TestLoggingProvider_CallerCancelLogsAtDebugNotWarn covers the Janka
+// TestLoggingProvider_CallerCancelLogsAtDebugNotWarn covers the family project's
 // first-eval-after-reload noise fix: a context.Canceled error from the
 // inner provider is the CALLER's context being torn down (config
 // reload / autonomy-loop restart / daemon shutdown), not an LLM

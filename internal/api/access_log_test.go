@@ -195,13 +195,13 @@ func TestAccessLog_StripsPortFromRemoteAddr(t *testing.T) {
 	wrapped := AccessLogMiddleware(logger)(inner)
 
 	req := httptest.NewRequest(http.MethodGet, "/api/tags", nil)
-	req.RemoteAddr = "192.168.10.42:55214"
+	req.RemoteAddr = "192.168.1.42:55214"
 	rr := httptest.NewRecorder()
 	wrapped.ServeHTTP(rr, req)
 	var got map[string]any
 	_ = json.Unmarshal(buf.Bytes(), &got)
-	if got["remote"] != "192.168.10.42" {
-		t.Errorf("remote = %v, want 192.168.10.42 (port stripped)", got["remote"])
+	if got["remote"] != "192.168.1.42" {
+		t.Errorf("remote = %v, want 192.168.1.42 (port stripped)", got["remote"])
 	}
 }
 

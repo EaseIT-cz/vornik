@@ -167,22 +167,26 @@ func (r *ProjectDataCleanupRepository) runCacheEviction(ctx context.Context, tx 
 	return nil
 }
 
-// deleteForProject runs DELETE FROM <table> WHERE project_id = $1.
+// deleteForProject runs the table's wipe statements
+// (persistence.ProjectDataStatements): DELETE FROM <table> WHERE project_id =
+// $1, and for a partly-wiped table (archival design section J) its predicate
+// and, first, the scrub of its kept rows.
 // Table name validated against safeTableName before concatenation
 // (the inputs are source-controlled but defensive is cheap here).
-// Returns -1 for the row count when the driver doesn't report it.
+// Returns the DELETE's row count, -1 when the driver doesn't report it.
 func deleteForProject(ctx context.Context, exec persistence.DBTX, table, projectID string) (int64, error) {
 	if !safeTableName.MatchString(table) {
 		return 0, fmt.Errorf("project_cleanup: invalid table name %q", table)
 	}
-	q := "DELETE FROM " + table + " WHERE project_id = $1"
-	res, err := exec.ExecContext(ctx, q, projectID)
-	if err != nil {
-		return 0, fmt.Errorf("project_cleanup: delete from %s: %w", table, err)
-	}
-	n, err := res.RowsAffected()
-	if err != nil {
-		return -1, nil
+	var n int64
+	for _, q := range persistence.ProjectDataStatements(table, "$1") {
+		res, err := exec.ExecContext(ctx, q, projectID)
+		if err != nil {
+			return 0, fmt.Errorf("project_cleanup: delete from %s: %w", table, err)
+		}
+		if n, err = res.RowsAffected(); err != nil {
+			n = -1
+		}
 	}
 	return n, nil
 }

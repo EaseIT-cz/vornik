@@ -19,9 +19,9 @@ import (
 func actionableFiles() map[string]string {
 	return map[string]string{
 		// Step "slow" explicit timeout 300s; other step is faster.
-		"configs/workflows/wf-a.md":   "---\nworkflowId: wf-a\nsteps:\n  slow:\n    type: agent\n    role: coder\n    timeout: \"300s\"\n  quick:\n    type: gate\n    role: gate\n    timeout: \"60s\"\n---\nbody\n",
-		"config.yaml":                 "mcp:\n  servers:\n    - name: scraper\n      timeout_seconds: 60\n",
-		"configs/projects/janka.yaml": "projectId: \"janka\"\n",
+		"configs/workflows/wf-a.md":    "---\nworkflowId: wf-a\nsteps:\n  slow:\n    type: agent\n    role: coder\n    timeout: \"300s\"\n  quick:\n    type: gate\n    role: gate\n    timeout: \"60s\"\n---\nbody\n",
+		"config.yaml":                  "mcp:\n  servers:\n    - name: scraper\n      timeout_seconds: 60\n",
+		"configs/projects/family.yaml": "projectId: \"family\"\n",
 	}
 }
 
@@ -45,10 +45,10 @@ func tickN(w *TuneWorker, n int) {
 func TestTune_LatencyBreachFilesApplyableStepTimeout(t *testing.T) {
 	repo := newTuneTestRepo(t)
 	m := &fakeMetrics{
-		lats: map[string]LatencySample{"janka": {P95Seconds: 936, Count: 12}},
+		lats: map[string]LatencySample{"family": {P95Seconds: 936, Count: 12}},
 		steps: []StepLatencySample{
-			{Project: "janka", Workflow: "wf-a", Step: "slow", Role: "coder", Model: "m1", P95Seconds: 400, Count: 9},
-			{Project: "janka", Workflow: "wf-a", Step: "quick", Role: "gate", Model: "m2", P95Seconds: 50, Count: 9},
+			{Project: "family", Workflow: "wf-a", Step: "slow", Role: "coder", Model: "m1", P95Seconds: 400, Count: 9},
+			{Project: "family", Workflow: "wf-a", Step: "quick", Role: "gate", Model: "m2", P95Seconds: 50, Count: 9},
 		},
 	}
 	w := newTuneWorker(repo, m)
@@ -90,12 +90,12 @@ func TestTune_LatencyBreachFilesApplyableStepTimeout(t *testing.T) {
 func TestTune_LatencyBreachNotBindingStaysInformational(t *testing.T) {
 	repo := newTuneTestRepo(t)
 	m := &fakeMetrics{
-		lats: map[string]LatencySample{"janka": {P95Seconds: 400, Count: 12}},
+		lats: map[string]LatencySample{"family": {P95Seconds: 400, Count: 12}},
 		steps: []StepLatencySample{
 			// 200 is in the neutral band: < 0.8×300s (not binding, so the
 			// latency proposal stays informational) AND > 0.5×300s (not a
 			// reclaim candidate, so no reduction proposal muddies the count).
-			{Project: "janka", Workflow: "wf-a", Step: "slow", Role: "coder", Model: "m1", P95Seconds: 200, Count: 9},
+			{Project: "family", Workflow: "wf-a", Step: "slow", Role: "coder", Model: "m1", P95Seconds: 200, Count: 9},
 		},
 	}
 	w := newTuneWorker(repo, m)
@@ -120,10 +120,10 @@ func TestTune_LatencyBreachNotBindingStaysInformational(t *testing.T) {
 func TestTimeoutBindingThreshold_InclusiveBoundary(t *testing.T) {
 	repo := newTuneTestRepo(t)
 	m := &fakeMetrics{
-		lats: map[string]LatencySample{"janka": {P95Seconds: 400, Count: 12}},
+		lats: map[string]LatencySample{"family": {P95Seconds: 400, Count: 12}},
 		steps: []StepLatencySample{
 			// 240 = 0.8 × 300s exactly.
-			{Project: "janka", Workflow: "wf-a", Step: "slow", Role: "coder", Model: "m1", P95Seconds: 240, Count: 9},
+			{Project: "family", Workflow: "wf-a", Step: "slow", Role: "coder", Model: "m1", P95Seconds: 240, Count: 9},
 		},
 	}
 	w := newTuneWorker(repo, m)
@@ -139,7 +139,7 @@ func TestTimeoutBindingThreshold_InclusiveBoundary(t *testing.T) {
 // Attribution unavailable (no step rows) → today's generic informational text.
 func TestTune_LatencyBreachNoAttributionStaysGeneric(t *testing.T) {
 	repo := newTuneTestRepo(t)
-	m := &fakeMetrics{lats: map[string]LatencySample{"janka": {P95Seconds: 400, Count: 12}}}
+	m := &fakeMetrics{lats: map[string]LatencySample{"family": {P95Seconds: 400, Count: 12}}}
 	w := newTuneWorker(repo, m)
 	w.Actionize = testActionizer(actionableFiles())
 	tickN(w, 3)
@@ -173,7 +173,7 @@ func TestTune_SlowestStepDeterministicOrder(t *testing.T) {
 func TestInstinct_MCPToolTimeoutFilesApplyable(t *testing.T) {
 	repo := newTuneTestRepo(t)
 	m := &fakeMetrics{tools: []ToolLatencySample{
-		{Key: ProjectToolKey{Project: "janka", Tool: "mcp__scraper__web_fetch"}, P95Seconds: 90, Count: 9},
+		{Key: ProjectToolKey{Project: "family", Tool: "mcp__scraper__web_fetch"}, P95Seconds: 90, Count: 9},
 	}}
 	w := newTuneWorker(repo, m)
 	w.Actionize = testActionizer(actionableFiles())
@@ -197,7 +197,7 @@ func TestInstinct_MCPToolTimeoutFilesApplyable(t *testing.T) {
 func TestInstinct_BuiltinToolStaysInformational(t *testing.T) {
 	repo := newTuneTestRepo(t)
 	m := &fakeMetrics{tools: []ToolLatencySample{
-		{Key: ProjectToolKey{Project: "janka", Tool: "file_read"}, P95Seconds: 90, Count: 9},
+		{Key: ProjectToolKey{Project: "family", Tool: "file_read"}, P95Seconds: 90, Count: 9},
 	}}
 	w := newTuneWorker(repo, m)
 	w.Actionize = testActionizer(actionableFiles())
@@ -213,7 +213,7 @@ func TestInstinct_BuiltinToolStaysInformational(t *testing.T) {
 // failed-rate signal back without reconstruction (emergency-brake seam).
 func TestTune_SkipFailedRateIsLiveClosure(t *testing.T) {
 	repo := newTuneTestRepo(t)
-	m := &fakeMetrics{ret: map[string]RateSample{"janka": {Failed: 8, Total: 10, Rate: 0.8}}}
+	m := &fakeMetrics{ret: map[string]RateSample{"family": {Failed: 8, Total: 10, Rate: 0.8}}}
 	w := newTuneWorker(repo, m)
 	skip := true
 	w.SkipFailedRate = func() bool { return skip }
@@ -231,7 +231,7 @@ func TestTune_SkipFailedRateIsLiveClosure(t *testing.T) {
 // SelfHealWorker.Enabled gates ticks live and resets streaks while disabled.
 func TestSelfHeal_EnabledClosureGatesAndResets(t *testing.T) {
 	repo := newTuneTestRepo(t)
-	m := &fakeMetrics{ret: map[string]RateSample{"janka": {Failed: 8, Total: 10, Rate: 0.8}}}
+	m := &fakeMetrics{ret: map[string]RateSample{"family": {Failed: 8, Total: 10, Rate: 0.8}}}
 	enabled := false
 	diag := &fakeIncidentDiagnoser{repo: repo}
 	w := &SelfHealWorker{
@@ -269,12 +269,12 @@ func TestSelfHeal_EnabledClosureGatesAndResets(t *testing.T) {
 func TestTune_ApplyableUpgradeSupersedesInformationalDraft(t *testing.T) {
 	repo := newTuneTestRepo(t)
 	m := &fakeMetrics{
-		lats: map[string]LatencySample{"janka": {P95Seconds: 936, Count: 12}},
+		lats: map[string]LatencySample{"family": {P95Seconds: 936, Count: 12}},
 		steps: []StepLatencySample{
 			// Neutral band first: 200 is < 0.8×300s (not binding) AND
 			// > 0.5×300s (not a reclaim candidate) — isolates the
 			// informational-latency behavior this test asserts.
-			{Project: "janka", Workflow: "wf-a", Step: "slow", Role: "coder", Model: "m1", P95Seconds: 200, Count: 9},
+			{Project: "family", Workflow: "wf-a", Step: "slow", Role: "coder", Model: "m1", P95Seconds: 200, Count: 9},
 		},
 	}
 	w := newTuneWorker(repo, m)
@@ -333,7 +333,7 @@ func TestTune_TimeoutReclaimFilesReduction(t *testing.T) {
 		// truncate a run. See LLD 2026-08-10-canary-class-registry-step-outcome
 		// §6.1 and tune_reclaim_test.go for the floor's own tests.
 		steps: []StepLatencySample{
-			{Project: "janka", Workflow: "wf-a", Step: "slow", Role: "coder", Model: "m1", P95Seconds: 50, Count: 30},
+			{Project: "family", Workflow: "wf-a", Step: "slow", Role: "coder", Model: "m1", P95Seconds: 50, Count: 30},
 		},
 	}
 	w := newTuneWorker(repo, m)
@@ -368,7 +368,7 @@ func TestTune_TimeoutReclaimSkipsWhenNearTimeout(t *testing.T) {
 	m := &fakeMetrics{
 		// p95 200s vs 300s → ratio 0.67 > 0.5 reclaim threshold.
 		steps: []StepLatencySample{
-			{Project: "janka", Workflow: "wf-a", Step: "slow", Role: "coder", Model: "m1", P95Seconds: 200, Count: 9},
+			{Project: "family", Workflow: "wf-a", Step: "slow", Role: "coder", Model: "m1", P95Seconds: 200, Count: 9},
 		},
 	}
 	w := newTuneWorker(repo, m)

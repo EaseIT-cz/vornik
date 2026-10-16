@@ -29,7 +29,7 @@ func (s *stubScopeAuditRepo) List(_ context.Context, f persistence.ToolAuditFilt
 
 func TestRequestHasAllProjectAccess_Scope(t *testing.T) {
 	scoped := httptest.NewRequest("GET", "/", nil)
-	scoped = scoped.WithContext(api.ContextWithProjectScope(scoped.Context(), "janka"))
+	scoped = scoped.WithContext(api.ContextWithProjectScope(scoped.Context(), "family"))
 	if requestHasAllProjectAccess(scoped) {
 		t.Error("scoped session must NOT have all-project access")
 	}
@@ -47,14 +47,14 @@ func TestInsightsTrends_ScopedDefaultsToOwnProject(t *testing.T) {
 	repo := &stubScopeTaskRepo{byProject: map[string][]*persistence.Task{}}
 	s := NewServer(WithTaskRepository(repo))
 	req := httptest.NewRequest(http.MethodGet, "/insights/trends", nil)
-	req = req.WithContext(api.ContextWithProjectScope(req.Context(), "janka"))
+	req = req.WithContext(api.ContextWithProjectScope(req.Context(), "family"))
 	s.InsightsTrends(httptest.NewRecorder(), req)
 	if len(repo.calls) == 0 {
 		t.Fatal("expected a scoped task query")
 	}
 	for _, c := range repo.calls {
-		if c != "janka" {
-			t.Errorf("trends queried %q; scoped session must query only janka", c)
+		if c != "family" {
+			t.Errorf("trends queried %q; scoped session must query only family", c)
 		}
 	}
 }
@@ -94,7 +94,7 @@ func TestSpend_AllUnionsScopedProjects(t *testing.T) {
 	repo := &stubScopeSpendRepo{}
 	s := NewServer(WithLLMUsageRepository(repo))
 	req := httptest.NewRequest(http.MethodGet, "/ui/spend?window=7d", nil)
-	req = req.WithContext(api.ContextWithProjectScope(req.Context(), "janka", "snake"))
+	req = req.WithContext(api.ContextWithProjectScope(req.Context(), "family", "snake"))
 	s.Spend(httptest.NewRecorder(), req)
 	seen := map[string]bool{}
 	for _, c := range repo.sourceCalls {
@@ -103,7 +103,7 @@ func TestSpend_AllUnionsScopedProjects(t *testing.T) {
 		}
 		seen[c] = true
 	}
-	if !seen["janka"] || !seen["snake"] {
+	if !seen["family"] || !seen["snake"] {
 		t.Errorf("spend 'All' must union both projects; queried %v", repo.sourceCalls)
 	}
 }
@@ -118,15 +118,15 @@ func TestResolveProjectScope(t *testing.T) {
 		return rec, q, o, ok
 	}
 	// Scoped + All → union of the caller's projects (non-nil).
-	if _, q, o, ok := run([]string{"janka", "snake"}, ""); !ok || len(q) != 2 || len(o) != 2 {
+	if _, q, o, ok := run([]string{"family", "snake"}, ""); !ok || len(q) != 2 || len(o) != 2 {
 		t.Errorf("scoped/all: q=%v o=%v ok=%v, want both", q, o, ok)
 	}
 	// Scoped + explicit allowed → just that project.
-	if _, q, _, ok := run([]string{"janka", "snake"}, "snake"); !ok || len(q) != 1 || q[0] != "snake" {
+	if _, q, _, ok := run([]string{"family", "snake"}, "snake"); !ok || len(q) != 1 || q[0] != "snake" {
 		t.Errorf("scoped/explicit: q=%v ok=%v, want [snake]", q, ok)
 	}
 	// Scoped + explicit DISALLOWED → 403, ok=false.
-	if rec, _, _, ok := run([]string{"janka"}, "ibkr-trader"); ok || rec.Code != http.StatusForbidden {
+	if rec, _, _, ok := run([]string{"family"}, "ibkr-trader"); ok || rec.Code != http.StatusForbidden {
 		t.Errorf("scoped/disallowed: ok=%v code=%d, want 403", ok, rec.Code)
 	}
 	// All-access (star) + All → nil (global single query).
@@ -141,12 +141,12 @@ func TestResolveProjectScope(t *testing.T) {
 func TestInsightsTrends_AllUnionsScopedProjects(t *testing.T) {
 	base := time.Date(2026, 6, 22, 12, 0, 0, 0, time.UTC)
 	repo := &stubScopeTaskRepo{byProject: map[string][]*persistence.Task{
-		"janka": {tsk("j", "janka", base)},
-		"snake": {tsk("s", "snake", base)},
+		"family": {tsk("j", "family", base)},
+		"snake":  {tsk("s", "snake", base)},
 	}}
 	s := NewServer(WithTaskRepository(repo))
 	req := httptest.NewRequest(http.MethodGet, "/insights/trends", nil)
-	req = req.WithContext(api.ContextWithProjectScope(req.Context(), "janka", "snake"))
+	req = req.WithContext(api.ContextWithProjectScope(req.Context(), "family", "snake"))
 	s.InsightsTrends(httptest.NewRecorder(), req)
 	seen := map[string]bool{}
 	for _, c := range repo.calls {
@@ -155,7 +155,7 @@ func TestInsightsTrends_AllUnionsScopedProjects(t *testing.T) {
 		}
 		seen[c] = true
 	}
-	if !seen["janka"] || !seen["snake"] {
+	if !seen["family"] || !seen["snake"] {
 		t.Errorf("trends 'All' must union both projects; queried %v", repo.calls)
 	}
 }
@@ -166,14 +166,14 @@ func TestInsightsToolBudget_ScopedDefaultsToOwnProject(t *testing.T) {
 	repo := &stubScopeAuditRepo{}
 	s := NewServer(WithToolAuditRepository(repo))
 	req := httptest.NewRequest(http.MethodGet, "/insights/tool-budget", nil)
-	req = req.WithContext(api.ContextWithProjectScope(req.Context(), "janka"))
+	req = req.WithContext(api.ContextWithProjectScope(req.Context(), "family"))
 	s.InsightsToolBudget(httptest.NewRecorder(), req)
 	if len(repo.calls) == 0 {
 		t.Fatal("expected a scoped tool-audit query")
 	}
 	for _, c := range repo.calls {
-		if c != "janka" {
-			t.Errorf("tool-budget queried %q; scoped session must query only janka", c)
+		if c != "family" {
+			t.Errorf("tool-budget queried %q; scoped session must query only family", c)
 		}
 	}
 }
@@ -218,7 +218,7 @@ func tsk(id, project string, created time.Time) *persistence.Task {
 	return &persistence.Task{ID: id, ProjectID: project, CreatedAt: created}
 }
 
-// regression: 2026-06-22 — a project-scoped session (Janka) saw only "2
+// regression: 2026-06-22 — a project-scoped session (Alice) saw only "2
 // tasks" because the page fetched the latest N across ALL projects then
 // post-filtered to allowed ones, leaving only the handful of her rows
 // that landed in the global page. listTasksScoped must query per allowed
@@ -226,18 +226,18 @@ func tsk(id, project string, created time.Time) *persistence.Task {
 func TestListTasksScoped_MergesPerProjectNewestFirstCapped(t *testing.T) {
 	base := time.Date(2026, 6, 22, 12, 0, 0, 0, time.UTC)
 	repo := &stubScopeTaskRepo{byProject: map[string][]*persistence.Task{
-		"janka": {tsk("j1", "janka", base.Add(3*time.Minute)), tsk("j2", "janka", base.Add(1*time.Minute))},
-		"snake": {tsk("s1", "snake", base.Add(2*time.Minute))},
+		"family": {tsk("j1", "family", base.Add(3*time.Minute)), tsk("j2", "family", base.Add(1*time.Minute))},
+		"snake":  {tsk("s1", "snake", base.Add(2*time.Minute))},
 		// other tenant the scoped user must never see
 		"ibkr-trader": {tsk("x1", "ibkr-trader", base.Add(9*time.Minute))},
 	}}
 	s := NewServer(WithTaskRepository(repo))
 
-	got := s.listTasksScoped(context.Background(), []string{"janka", "snake"},
+	got := s.listTasksScoped(context.Background(), []string{"family", "snake"},
 		persistence.TaskFilter{PageSize: 10})
 
 	if len(got) != 3 {
-		t.Fatalf("merged tasks = %d, want 3 (janka+snake only)", len(got))
+		t.Fatalf("merged tasks = %d, want 3 (family+snake only)", len(got))
 	}
 	// Newest-first across projects: j1(+3) > s1(+2) > j2(+1).
 	if got[0].ID != "j1" || got[1].ID != "s1" || got[2].ID != "j2" {
@@ -288,19 +288,19 @@ func (s *stubScopeExecRepo) List(_ context.Context, f persistence.ExecutionFilte
 	return s.byProject[*f.ProjectID], nil
 }
 
-// regression: 2026-06-22 — a project-scoped session (Janka) saw only "3
+// regression: 2026-06-22 — a project-scoped session (Alice) saw only "3
 // executions" because the page fetched the latest N across ALL projects
 // then post-filtered, dropping her rows past the global page boundary.
 // listExecutionsScoped must query per allowed project and merge.
 func TestListExecutionsScoped_MergesPerProject(t *testing.T) {
 	base := time.Date(2026, 6, 22, 12, 0, 0, 0, time.UTC)
 	repo := &stubScopeExecRepo{byProject: map[string][]*persistence.Execution{
-		"janka":       {{ID: "e1", ProjectID: "janka", CreatedAt: base.Add(2 * time.Minute)}},
+		"family":      {{ID: "e1", ProjectID: "family", CreatedAt: base.Add(2 * time.Minute)}},
 		"snake":       {{ID: "e2", ProjectID: "snake", CreatedAt: base.Add(3 * time.Minute)}},
 		"ibkr-trader": {{ID: "x", ProjectID: "ibkr-trader", CreatedAt: base.Add(9 * time.Minute)}},
 	}}
 	s := NewServer(WithExecutionRepository(repo))
-	got := s.listExecutionsScoped(context.Background(), []string{"janka", "snake"},
+	got := s.listExecutionsScoped(context.Background(), []string{"family", "snake"},
 		persistence.ExecutionFilter{PageSize: 10})
 	if len(got) != 2 || got[0].ID != "e2" || got[1].ID != "e1" {
 		t.Fatalf("merged execs = %v, want [e2 e1] (snake newer)", got)
@@ -315,11 +315,11 @@ func TestListExecutionsScoped_MergesPerProject(t *testing.T) {
 func TestListTasksScoped_CapsToPageSize(t *testing.T) {
 	base := time.Date(2026, 6, 22, 12, 0, 0, 0, time.UTC)
 	repo := &stubScopeTaskRepo{byProject: map[string][]*persistence.Task{
-		"janka": {tsk("a", "janka", base.Add(4*time.Minute)), tsk("b", "janka", base.Add(3*time.Minute))},
-		"snake": {tsk("c", "snake", base.Add(2*time.Minute)), tsk("d", "snake", base.Add(1*time.Minute))},
+		"family": {tsk("a", "family", base.Add(4*time.Minute)), tsk("b", "family", base.Add(3*time.Minute))},
+		"snake":  {tsk("c", "snake", base.Add(2*time.Minute)), tsk("d", "snake", base.Add(1*time.Minute))},
 	}}
 	s := NewServer(WithTaskRepository(repo))
-	got := s.listTasksScoped(context.Background(), []string{"janka", "snake"},
+	got := s.listTasksScoped(context.Background(), []string{"family", "snake"},
 		persistence.TaskFilter{PageSize: 2})
 	if len(got) != 2 || got[0].ID != "a" || got[1].ID != "b" {
 		t.Fatalf("cap: got %d rows (%v), want 2 newest [a b]", len(got), got)

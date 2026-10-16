@@ -22,7 +22,7 @@ func baseWF() *Workflow {
 }
 
 func TestWorkflowChangeIsStructural_TuningOnly(t *testing.T) {
-	// janka incident cpp_20260723033332: a reclaim-timeout edit changes only
+	// family incident cpp_20260723033332: a reclaim-timeout edit changes only
 	// a step Timeout and must NOT read as structural (it can apply live).
 	a := baseWF()
 	b := baseWF()

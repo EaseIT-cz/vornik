@@ -28,6 +28,12 @@ packaging is different.
   Claude Code copy; a parity test fails the build on drift. A bug deposit
   can carry `--found-at <level>` (unit, integration, executor-e2e, e2e-lane,
   production, review): its regression test belongs at that level.
+- `develop-with-memory`, the same text as the Claude Code skill: recall
+  before reading code, design before changing it, keep memory current, and,
+  where a recall's `design_record` finds no design stored with this
+  repository's scope, an as-built record of the part being changed, reviewed,
+  then ingested. Codex loads it when the task matches; it has no session-start
+  channel.
 - The operator lifecycle skills, mirrored from the Claude Code bundle:
   `vornik-docs` (where the documentation lives, with the real site map, and
   `vornikctl --help` ahead of recall so Codex quotes flags that exist),

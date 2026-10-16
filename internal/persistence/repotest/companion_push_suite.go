@@ -29,7 +29,8 @@ func RunCompanionPushSuite(t *testing.T, h CompanionPushHarness) {
 
 func pushDueTask(t *testing.T, h CompanionPushHarness, taskID string) *persistence.TaskPushDue {
 	t.Helper()
-	due, err := h.Outbox.DueTaskPushes(context.Background(), 500)
+	// An unbounded page (#374): the row sorts last by created_at among due pushes earlier tests left, so a fixed page could miss it.
+	due, err := h.Outbox.DueTaskPushes(context.Background(), 1_000_000)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -113,7 +114,8 @@ func pushStageAction(t *testing.T, h CompanionPushHarness, taskID, kind string) 
 
 func pushDueAction(t *testing.T, h CompanionPushHarness, actionID string) *persistence.ActionPushDue {
 	t.Helper()
-	due, err := h.Outbox.DueActionPushes(context.Background(), 500)
+	// An unbounded page (#374): the row sorts last by created_at among due pushes earlier tests left, so a fixed page could miss it.
+	due, err := h.Outbox.DueActionPushes(context.Background(), 1_000_000)
 	if err != nil {
 		t.Fatal(err)
 	}

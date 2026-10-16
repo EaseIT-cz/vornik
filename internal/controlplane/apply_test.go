@@ -38,7 +38,7 @@ func approvedProposal(t *testing.T, scope string) (*ApplyEngine, persistence.Pro
 	}
 	ctx := context.Background()
 	p := &persistence.ControlPlaneProposal{
-		ID: persistence.GenerateID("cpp"), ProjectID: "janka",
+		ID: persistence.GenerateID("cpp"), ProjectID: "family",
 		Kind: persistence.ProposalKindConfig, BlastRadius: scope,
 		Title: "bump", ApplyTarget: "config.yaml", ApplyContent: newContent,
 		Status: persistence.ProposalStatusDraft, ProposedBy: "tune-detector",
@@ -101,7 +101,7 @@ func TestApply_ConfigSizedFileApplies(t *testing.T) {
 	}
 	ctx := context.Background()
 	p := &persistence.ControlPlaneProposal{
-		ID: persistence.GenerateID("cpp"), ProjectID: "janka",
+		ID: persistence.GenerateID("cpp"), ProjectID: "family",
 		Kind: persistence.ProposalKindConfig, BlastRadius: persistence.ProposalScopeProject,
 		Title: "add mcp server to a config-sized file", ApplyTarget: "config.yaml",
 		ApplyContent: big, Status: persistence.ProposalStatusDraft, ProposedBy: "operator-ui",
@@ -222,7 +222,7 @@ func TestApply_ReviewOnlyRefused(t *testing.T) {
 	// Re-create a review-only approved proposal instead (target is immutable
 	// via repo); simplest: new proposal with no target.
 	np := &persistence.ControlPlaneProposal{
-		ID: persistence.GenerateID("cpp"), ProjectID: "janka",
+		ID: persistence.GenerateID("cpp"), ProjectID: "family",
 		Kind: persistence.ProposalKindConfig, BlastRadius: persistence.ProposalScopeProject,
 		Title: "review only", Status: persistence.ProposalStatusDraft, ProposedBy: "tune-detector",
 	}
@@ -267,7 +267,7 @@ func TestApply_NotApprovedRefused(t *testing.T) {
 func TestApply_PathTraversalRefused(t *testing.T) {
 	e, repo, _, _ := approvedProposal(t, persistence.ProposalScopeProject)
 	np := &persistence.ControlPlaneProposal{
-		ID: persistence.GenerateID("cpp"), ProjectID: "janka",
+		ID: persistence.GenerateID("cpp"), ProjectID: "family",
 		Kind: persistence.ProposalKindConfig, BlastRadius: persistence.ProposalScopeProject,
 		Title: "evil", ApplyTarget: "../../etc/passwd", ApplyContent: "x",
 		Status: persistence.ProposalStatusDraft, ProposedBy: "x",
@@ -282,7 +282,7 @@ func TestApply_PathTraversalRefused(t *testing.T) {
 func TestApply_AbsolutePathRefused(t *testing.T) {
 	e, repo, _, _ := approvedProposal(t, persistence.ProposalScopeProject)
 	np := &persistence.ControlPlaneProposal{
-		ID: persistence.GenerateID("cpp"), ProjectID: "janka",
+		ID: persistence.GenerateID("cpp"), ProjectID: "family",
 		Kind: persistence.ProposalKindConfig, BlastRadius: persistence.ProposalScopeProject,
 		Title: "absolute", ApplyTarget: "/tmp/evil.yaml", ApplyContent: "x",
 		Status: persistence.ProposalStatusDraft, ProposedBy: "x",
@@ -368,7 +368,7 @@ func (f *fakeKindApplier) Rollback(_ context.Context, _ *persistence.ControlPlan
 func kindDispatchProposal(t *testing.T, repo persistence.ProposalRepository, kind, scope string) string {
 	t.Helper()
 	p := &persistence.ControlPlaneProposal{
-		ID: persistence.GenerateID("cpp"), ProjectID: "janka",
+		ID: persistence.GenerateID("cpp"), ProjectID: "family",
 		Kind: kind, BlastRadius: scope, Title: "retire i1",
 		Evidence: `{"instinct_id":"i1"}`, Status: persistence.ProposalStatusDraft, ProposedBy: "operator",
 	}

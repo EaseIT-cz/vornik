@@ -36,15 +36,15 @@ func TestListPublishedAgents_NonDefaultWorkflowBindsToItsProjects(t *testing.T) 
 	}
 	projects := []*registry.Project{
 		{ID: "companion-example", DefaultWorkflowID: "adaptive"},
-		{ID: "janka", DefaultWorkflowID: "adaptive"},
+		{ID: "family", DefaultWorkflowID: "adaptive"},
 	}
 	got := agentSet(publishGateHandler(projects, []*registry.Workflow{productQA}))
 
 	if !got["companion-example/product-qa"] {
 		t.Error("product-qa must publish under its bound project companion-example")
 	}
-	if got["janka/product-qa"] {
-		t.Error("product-qa must NOT publish under janka (cartesian leak)")
+	if got["family/product-qa"] {
+		t.Error("product-qa must NOT publish under family (cartesian leak)")
 	}
 }
 

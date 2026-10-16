@@ -45,7 +45,7 @@ func TestEvaluate_ATimedOutModelCallIsLLMTimeoutAndNamesTheRemedy(t *testing.T) 
 		"the provider's per-call timeout fired: the reason must name it")
 	assert.NotContains(t, entries[0].Reason, "evaluate_timeout",
 		"the evaluate timeout did not fire and must not be blamed")
-	assert.Equal(t, float64(1), testutil.ToFloat64(metrics.ErrorsTotal.WithLabelValues("janka")),
+	assert.Equal(t, float64(1), testutil.ToFloat64(metrics.ErrorsTotal.WithLabelValues("family")),
 		"the shared error counter still counts it")
 }
 

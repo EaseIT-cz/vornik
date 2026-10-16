@@ -20,6 +20,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -114,6 +115,9 @@ func (f *fakeExtractedDocRepo) Delete(_ context.Context, _ string) error { retur
 type fakeIndexer struct {
 	calls []indexerCall
 	err   error
+	// errFor fails only the named extracted documents (GitHub #389: one
+	// damaged document in a batch).
+	errFor map[string]error
 }
 
 type indexerCall struct {
@@ -140,6 +144,9 @@ func newTestArtifact(id, projectID, name, mime, storagePath string) *persistence
 func (f *fakeIndexer) IngestExtractedSections(_ context.Context, projectID, taskID, artifactID, docID string, sections []memory.ExtractedSection) (int, error) {
 	if f.err != nil {
 		return 0, f.err
+	}
+	if err := f.errFor[docID]; err != nil {
+		return 0, err
 	}
 	f.calls = append(f.calls, indexerCall{projectID, taskID, artifactID, docID, sections})
 	count := 0
@@ -378,6 +385,63 @@ func TestIndexHandler_IngestsExtractedSections(t *testing.T) {
 	require.NoError(t, json.Unmarshal(res.Result, &resultObj))
 	assert.Equal(t, 2, resultObj.Chunks)
 	assert.Equal(t, 1, resultObj.Documents)
+}
+
+// TestIndexHandler_SkipsADamagedDocumentAndIngestsTheRest — GitHub #389
+// (memory-ingest-paths.md §8.2d). The Indexer refuses a document whose text is
+// damaged (memory.ErrDamagedText). rag.index ingests several documents per
+// step; one damaged file must not fail the operator's whole batch. It is
+// skipped, named in the result, and the others are ingested.
+func TestIndexHandler_SkipsADamagedDocumentAndIngestsTheRest(t *testing.T) {
+	ctx := context.Background()
+	baseDir := t.TempDir()
+	docs := map[string]*persistence.ExtractedDocument{}
+	for _, id := range []string{"extdoc_bad", "extdoc_good"} {
+		storagePath := writeExtractedDoc(t, baseDir, id, []extractor.Section{
+			{SectionID: "01", Title: "One", Content: "Section text."},
+		})
+		outline, _ := json.Marshal([]extractor.OutlineEntry{{SectionID: "01", Title: "One", TextBytes: 13}})
+		docs[id] = &persistence.ExtractedDocument{
+			ID: id, ProjectID: "p1", SourceArtifactID: "art_" + id,
+			StoragePath: storagePath, OutlineBlob: outline, SectionCount: 1,
+		}
+	}
+	idx := &fakeIndexer{errFor: map[string]error{
+		"extdoc_bad": fmt.Errorf("wrapped: %w", memory.ErrDamagedText),
+	}}
+	h := NewIndexHandler(&fakeExtractedDocRepo{byID: docs}, idx)
+
+	prev, _ := json.Marshal(map[string]any{"extracted": []map[string]any{
+		{"artifact_id": "art_extdoc_bad", "extracted_document_id": "extdoc_bad"},
+		{"artifact_id": "art_extdoc_good", "extracted_document_id": "extdoc_good"},
+	}})
+	res, err := h.Execute(ctx, executor.SystemStepInput{
+		Task:       &persistence.Task{ID: "task_1", ProjectID: "p1"},
+		Execution:  &persistence.Execution{ID: "exec_1"},
+		StepID:     "index",
+		Step:       &registry.WorkflowStep{Type: "system", Handler: "rag.index"},
+		PrevResult: prev,
+	})
+	require.NoError(t, err, "one damaged document must not fail the batch")
+	require.Len(t, idx.calls, 1)
+	assert.Equal(t, "extdoc_good", idx.calls[0].DocID, "the clean document is still ingested")
+
+	var out struct {
+		Chunks    int      `json:"chunks"`
+		Documents int      `json:"documents"`
+		Refused   []string `json:"refused_damaged"`
+	}
+	require.NoError(t, json.Unmarshal(res.Result, &out))
+	assert.Equal(t, 1, out.Chunks)
+	assert.Equal(t, []string{"extdoc_bad"}, out.Refused, "the refused document is named in the step result")
+
+	// Any OTHER indexer error still fails the step, as before.
+	idx2 := &fakeIndexer{errFor: map[string]error{"extdoc_bad": errors.New("db down")}}
+	_, err = NewIndexHandler(&fakeExtractedDocRepo{byID: docs}, idx2).Execute(ctx, executor.SystemStepInput{
+		Task: &persistence.Task{ID: "task_1", ProjectID: "p1"}, Execution: &persistence.Execution{ID: "exec_1"},
+		StepID: "index", Step: &registry.WorkflowStep{Type: "system", Handler: "rag.index"}, PrevResult: prev,
+	})
+	require.Error(t, err, "a non-damage indexer error must still fail the step")
 }
 
 // TestIndexHandler_NoExtractedDocuments — running rag.index when

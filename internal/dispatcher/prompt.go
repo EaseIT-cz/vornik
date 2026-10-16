@@ -370,7 +370,7 @@ RESPONSE STYLE
 // correspondent who replies "4" to pick from a numbered list sends "4" plus a
 // quoted copy of the bot's own previous reply. With no idea what its own
 // address is, the lead read that quote as a third party's statement and
-// answered "I see bot@vornik.io said … — what did you want?" instead of acting
+// answered "I see bot@example.com said … — what did you want?" instead of acting
 // on the choice (incident 2026-07-28). The channel now strips the quoted
 // trailer, and this block is the backstop for quotes that survive stripping
 // (inline replies, unrecognised client formats).

@@ -139,7 +139,7 @@ func TestTaskIDNotFound_AllowsKnownID(t *testing.T) {
 // looks for "project 'name'" / "project_id=name" forms.
 func TestProjectIDNotFound_FlagsInventedProject(t *testing.T) {
 	gc := &GroundingContext{
-		KnownProjectIDs: map[string]struct{}{"janka": {}, "snake": {}},
+		KnownProjectIDs: map[string]struct{}{"family": {}, "snake": {}},
 	}
 	text := "Switched to project 'saascotorial' for this turn."
 	d := NewDefault()
@@ -203,7 +203,7 @@ func TestArtifactNotProduced_AllowedViaToolOutput(t *testing.T) {
 // the count could be downstream filtering, not fabrication.
 func TestNumericClaimMismatch_FlagsCountNotInOutputs(t *testing.T) {
 	gc := &GroundingContext{ToolOutputs: "scrape returned the following: <html>...</html>"}
-	text := "Found 12 listings matching Janka's profile."
+	text := "Found 12 listings matching Alice's profile."
 	d := NewDefault()
 	sigs := d.Scan(text, gc)
 	require.NotEmpty(t, sigs)

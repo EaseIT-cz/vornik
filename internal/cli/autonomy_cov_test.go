@@ -21,7 +21,7 @@ func autonomyCov_reset() {
 func TestRunAutonomyEvaluations_Table(t *testing.T) {
 	taskID := "task_20260601_abcd1234"
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/api/v1/projects/janka/autonomy/evaluations" {
+		if r.URL.Path != "/api/v1/projects/family/autonomy/evaluations" {
 			t.Errorf("unexpected path %s", r.URL.Path)
 		}
 		if r.URL.Query().Get("outcome") != "CREATED" || r.URL.Query().Get("limit") != "10" {
@@ -29,7 +29,7 @@ func TestRunAutonomyEvaluations_Table(t *testing.T) {
 		}
 		_ = json.NewEncoder(w).Encode(map[string]any{
 			"evaluations": []autonomyEvalRow{
-				{ID: "e1", ProjectID: "janka", Outcome: "CREATED", Reason: "ok", TaskID: &taskID, TaskType: "research", WorkflowID: "wf", DurationMs: 123},
+				{ID: "e1", ProjectID: "family", Outcome: "CREATED", Reason: "ok", TaskID: &taskID, TaskType: "research", WorkflowID: "wf", DurationMs: 123},
 			},
 			"total": 1,
 		})
@@ -37,7 +37,7 @@ func TestRunAutonomyEvaluations_Table(t *testing.T) {
 	defer srv.Close()
 	t.Setenv("VORNIK_API_URL", srv.URL)
 	autonomyCov_reset()
-	autonomyProject, autonomyOutcome, autonomyLimit = "janka", "CREATED", 10
+	autonomyProject, autonomyOutcome, autonomyLimit = "family", "CREATED", 10
 	out, err := captureStdoutFunc(t, func() error { return runAutonomyEvaluations(autonomyEvaluationsCmd, nil) })
 	if err != nil {
 		t.Fatalf("runAutonomyEvaluations: %v", err)

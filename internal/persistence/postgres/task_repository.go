@@ -329,7 +329,7 @@ func (r *TaskRepository) List(ctx context.Context, filter persistence.TaskFilter
 		argPos++
 	}
 
-	query += " ORDER BY created_at DESC"
+	query += " ORDER BY created_at DESC, id DESC"
 	if filter.PageSize > 0 {
 		query += fmt.Sprintf(" LIMIT $%d", argPos)
 		args = append(args, filter.PageSize)

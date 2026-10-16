@@ -175,6 +175,12 @@ func (s *Server) enqueueVerifiedWebhook(ctx context.Context, w http.ResponseWrit
 		respondError(w, http.StatusBadRequest, "VALIDATION_ERROR", "Webhook body must be a JSON object")
 		return
 	}
+	// Repository scope (GitHub #407): before the filter, the forge classifier,
+	// the review coordinator and the CI ingest, so an event about another
+	// repository leaves no state behind.
+	if s.dropOutOfScopeRepo(ctx, w, project, source, event, body, deliveryID) {
+		return
+	}
 	// Source-level filter: drop deliveries the operator doesn't want to act on
 	// (e.g. pull_request.synchronize) before any task is created. Acknowledged
 	// 200 so the provider doesn't retry; recorded as "filtered" for visibility.

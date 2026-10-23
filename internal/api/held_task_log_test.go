@@ -96,6 +96,7 @@ func TestGetTaskLogs_NeverAsksTheExecutor(t *testing.T) {
 		WithTaskRepository(f.taskRepo()), WithExecutionRepository(f.execRepo()),
 		WithLiveSubscriber(f.pub))
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/projects/project-1/tasks/task-1/logs", nil)
+	req = adminClassReq491(req) // GitHub #491: the operator, stated
 	rec := httptest.NewRecorder()
 	server.GetTaskLogs(rec, req)
 

@@ -299,6 +299,8 @@ func viewName(v liveView) string {
 		return "companion"
 	case liveViewOperator:
 		return "operator"
+	case liveViewScrubbed:
+		return "scrubbed"
 	default:
 		// Never served: projectLiveEvent drops everything for an unknown view.
 		return "unknown"
@@ -523,15 +525,10 @@ func (s *Server) addLogTail(ctx context.Context, page *taskLogPage, task *persis
 	if len(lines) > taskLogsDefaultTail {
 		lines = lines[len(lines)-taskLogsDefaultTail:]
 	}
-	withheld := 0
-	for _, l := range lines {
-		out, w := st.scrub(l)
-		if w {
-			out = "[withheld: secret]"
-			withheld++
-		}
-		page.LogTail = append(page.LogTail, out)
-	}
+	// The one scrub of a text (GitHub #440: shared with the held log's
+	// scrubbed view, the renderer and the post-mortem explainer).
+	scrubbed, withheld := report.ScrubLines(strings.Join(lines, "\n"), st.scrub)
+	page.LogTail = append(page.LogTail, strings.Split(scrubbed, "\n")...)
 	if withheld > 0 {
 		recordLogWithheld("task_logs", withheld)
 	}

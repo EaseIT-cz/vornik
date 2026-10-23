@@ -169,3 +169,129 @@ _ce_exec_lane() {
     fi
     [ "$rc" -eq 0 ] && [ "$src" -eq 0 ]
 }
+
+# ce_run_template_steps <template> <tree> <unit 0|1> <integ 0|1> — every step
+# of the public CI template, run against the exported tree (CE export
+# runbook, amendment 2026-10-17, GitHub #386). 2026.10.6's public CI went red
+# on an artifact-purity import grep the export never ran: it ran a
+# hand-picked copy of the template's checks. The plan comes from
+# `ce-test-lanes.py steps`, which fails closed on any step it cannot run
+# faithfully; ordinary run: steps run here verbatim, lane steps point at the
+# lane (unit/integ say whether it will run), and macos-* jobs are
+# approximated on Linux plus go vet for darwin. Prints one gate line per
+# step and the denominator; returns non-zero on any failure.
+ce_run_template_steps() {
+    local tpl="$1" tree="$2" unit="$3" integ="$4" work
+    local examined=0 setup=0 ran=0 skipped=0 failed=0 approx=0 macjobs=" "
+    work="$(mktemp -d)" || return 1
+    if ! python3 "$_CE_GATE_DIR/ce-test-lanes.py" "$tpl" steps --write-dir "$work" >/dev/null 2>"$work/plan.err"; then
+        echo "  FAIL template plan: the public CI template cannot be classified"
+        sed 's/^/    /' "$work/plan.err"
+        echo ">> TEMPLATE STEPS: examined=0 checks=0 run=0 skipped=0 failed=1 approximated=0 setup=0"
+        rm -rf "$work"
+        return 1
+    fi
+    local n cls job name shell label
+    while IFS=$'\t' read -r n cls job name shell; do
+        examined=$((examined + 1))
+        case "$cls" in
+            setup) setup=$((setup + 1)) ;;
+            unit-lane)
+                if [ "$unit" = 1 ]; then
+                    echo "  ok   template $job: $name (run by the unit lane below)"; ran=$((ran + 1))
+                else
+                    echo "  skip template $job: $name (the unit lane does not run: SKIP_TESTS=1)"; skipped=$((skipped + 1))
+                fi ;;
+            integration-lane|integration-schema)
+                if [ "$integ" = 1 ]; then
+                    if [ "$cls" = integration-lane ]; then
+                        echo "  ok   template $job: $name (run by the integration lane below)"
+                    else
+                        echo "  ok   template $job: $name (done by the integration lane's fresh database below)"
+                    fi
+                    ran=$((ran + 1))
+                else
+                    echo "  skip template $job: $name (the integration lane does not run: no CE_INTEGRATION_DSN, or SKIP_TESTS=1)"
+                    skipped=$((skipped + 1))
+                fi ;;
+            run|run-approx)
+                label="template $job: $name"
+                if [ "$cls" = run-approx ]; then
+                    label="$label (approximated on Linux)"; approx=$((approx + 1))
+                    case "$macjobs" in *" $job "*) ;; *) macjobs="$macjobs$job " ;; esac
+                fi
+                # run counts what was executed; failed is the part of it
+                # that went red.
+                ran=$((ran + 1))
+                _ce_exec_step "$tree" "$work/$n.sh" "$work/$n.env" "$shell" "$label" || failed=$((failed + 1)) ;;
+            *) echo "  FAIL template $job: $name (unknown class $cls)"; failed=$((failed + 1)) ;;
+        esac
+    done < "$work/index"
+    # macOS cannot run here; a darwin type-check of every package and its
+    # tests catches a darwin-only compile error. Not a template step: a gate
+    # line of its own, in neither examined nor run.
+    local -a base=()
+    _ce_step_env base
+    for job in $macjobs; do
+        if (cd "$tree" && env -i "${base[@]}" GOOS=darwin GOARCH=arm64 "${CE_GO_BIN:-go}" vet ./... >"$work/darwin-vet.log" 2>&1); then
+            echo "  ok   template $job: go vet for darwin (approximation)"
+        else
+            echo "  FAIL template $job: go vet for darwin (approximation)"
+            tail -15 "$work/darwin-vet.log" | sed 's/^/    /'
+            failed=$((failed + 1))
+        fi
+    done
+    rm -rf "$work"
+    local checks=$((examined - setup))
+    echo ">> TEMPLATE STEPS: examined=$examined checks=$checks run=$ran skipped=$skipped failed=$failed approximated=$approx setup=$setup"
+    echo "   public CI template: $ran of $checks checks run here ($approx approximated on Linux), $setup setup steps provided by this host"
+    [ "$failed" -eq 0 ]
+}
+
+# _ce_step_env <array name> — the clean environment a template step starts
+# from: the toolchain allow-list the lanes use, the stylesheet CLI's cache,
+# and the test-only pass-through word lists. Never the operator's VORNIK_*.
+_ce_step_env() {
+    local -n _into="$1"
+    local v
+    # shellcheck disable=SC2086 # the pass-through lists are word lists
+    for v in PATH HOME USER TMPDIR GOPATH GOCACHE GOMODCACHE GOTOOLCHAIN GOPROXY GOFLAGS XDG_CACHE_HOME ${CE_LANE_PASSTHROUGH:-} ${CE_STEP_PASSTHROUGH:-}; do
+        if [ -n "${!v:-}" ]; then _into+=("$v=${!v}"); fi
+    done
+}
+
+# _ce_exec_step <tree> <script> <envfile> <bash-e|bash-pipefail> <label> —
+# one run: step, verbatim, in the tree, as GitHub runs it (`bash -e`, or the
+# pipefail form for `shell: bash`), under env -i plus the template's env and
+# a fresh RUNNER_TEMP. The tree's git status (ignored files included) must be
+# the same afterwards: what is published must be what was verified. A
+# changed tree is a failure and is restored.
+_ce_exec_step() {
+    local tree="$1" script="$2" envfile="$3" shell="$4" label="$5" rt out rc before after
+    local -a base=() envs=() sh=(bash -e)
+    [ "$shell" = bash-pipefail ] && sh=(bash --noprofile --norc -eo pipefail)
+    _ce_step_env base
+    mapfile -d '' -t envs < "$envfile"
+    if ! before="$(git -C "$tree" status --porcelain --ignored --untracked-files=all 2>&1)"; then
+        echo "  FAIL $label (cannot read the exported tree's git status: $before)"
+        return 1
+    fi
+    rt="$(mktemp -d)" || return 1
+    out="$(cd "$tree" && env -i "${base[@]}" "${envs[@]}" RUNNER_TEMP="$rt" "${sh[@]}" "$script" 2>&1)"
+    rc=$?
+    rm -rf "$rt"
+    after="$(git -C "$tree" status --porcelain --ignored --untracked-files=all 2>&1)"
+    if [ "$after" != "$before" ]; then
+        git -C "$tree" checkout -q -- . 2>/dev/null
+        git -C "$tree" clean -fdxq -e .ce-test-lanes 2>/dev/null
+        echo "  FAIL $label (the step modified the exported tree; restored)"
+        diff <(printf '%s\n' "$before") <(printf '%s\n' "$after") | sed -n 's/^> /    /p'
+        return 1
+    fi
+    if [ "$rc" -ne 0 ]; then
+        echo "  FAIL $label (exit $rc)"
+        printf '%s\n' "$out" | tail -15 | sed 's/^/    /'
+        return 1
+    fi
+    echo "  ok   $label"
+}

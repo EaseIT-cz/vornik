@@ -248,7 +248,7 @@ jobs:
               echo "- tag: \`$TAG\`"
               echo "- file: \`$notes\` ($(wc -c < "$notes") bytes, sha256 $(sha256sum "$notes" | cut -c1-16))"
               echo "- headings found:"
-              grep -E '^## ' "$notes" | head -20 | sed 's/^/  - /'
+              grep -E '^## ' "$notes" | sed -n 1,20p | sed 's/^/  - /'
             } >> "$GITHUB_STEP_SUMMARY"
             exit 1
           fi
@@ -297,7 +297,7 @@ jobs:
             # that now attaches the macOS binaries retracts the line saying
             # they were withheld, so the release does not contradict its own
             # assets (review 20261002-0013 F1).
-            if [ "$MAC_OK" = true ] && gh release view "$TAG" --json body --jq .body | grep -qF "$marker"; then
+            if [ "$MAC_OK" = true ] && gh release view "$TAG" --json body --jq .body | grep -F "$marker" >/dev/null; then
               gh release edit "$TAG" --notes-file body.md
               echo "release $TAG: retracted the withheld-macOS line" >> "$GITHUB_STEP_SUMMARY"
             else
@@ -316,7 +316,7 @@ jobs:
             n="$(basename "$1")"
             grep -qx "$n" <<<"$existing" && return 0
             gh release upload "$TAG" "$1" && return 0
-            gh release view "$TAG" --json assets --jq '.assets[].name' | grep -qx "$n"
+            gh release view "$TAG" --json assets --jq '.assets[].name' | grep -x "$n" >/dev/null
           }
           for f in dist/vornik-linux-* dist/vornikctl-linux-* dist/checksums.txt dist/vornik.cdx.json; do
             attach "$f"
@@ -347,6 +347,6 @@ jobs:
           for f in third-party-src/vornik-agent-third-party-source-*.tar third-party-src/vornik-agent-third-party-source-*.tar.sha256; do
             n="$(basename "$f")"
             if grep -qx "$n" <<<"$existing"; then continue; fi
-            gh release upload "$TAG" "$f" || gh release view "$TAG" --json assets --jq '.assets[].name' | grep -qx "$n"
+            gh release upload "$TAG" "$f" || gh release view "$TAG" --json assets --jq '.assets[].name' | grep -x "$n" >/dev/null
           done
           echo "third-party source: $(cat third-party-src/*.sha256)" >> "$GITHUB_STEP_SUMMARY"

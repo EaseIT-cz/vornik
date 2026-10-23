@@ -3,6 +3,7 @@ package service
 import (
 	"errors"
 	"fmt"
+	"net/http"
 	"os"
 	"strings"
 
@@ -11,6 +12,7 @@ import (
 	"vornik.io/vornik/internal/forgeci"
 	"vornik.io/vornik/internal/forgereview"
 	"vornik.io/vornik/internal/github"
+	"vornik.io/vornik/internal/integrations/dialguard"
 	"vornik.io/vornik/internal/persistence"
 	"vornik.io/vornik/internal/registry"
 )
@@ -95,6 +97,20 @@ func buildGitHubChannelWithTaskCreator(
 	taskCreatorFor func(*registry.Project) github.TaskCreator,
 	logger zerolog.Logger,
 ) (*github.Channel, []*registry.Project, error) {
+	return buildGitHubChannelWithAllowedHosts(projects, taskCreatorFor, nil, logger)
+}
+
+// buildGitHubChannelWithAllowedHosts is buildGitHubChannelWithTaskCreator
+// with the operator's integrations.allowed_hosts, which the channel's REST
+// client dials through (GitHub #494, integrations-hub-design "Amendment
+// 2026-10-21 (#494)"): a GitHub Enterprise api_base_url on a private network
+// must be listed there.
+func buildGitHubChannelWithAllowedHosts(
+	projects []*registry.Project,
+	taskCreatorFor func(*registry.Project) github.TaskCreator,
+	allowedHosts []string,
+	logger zerolog.Logger,
+) (*github.Channel, []*registry.Project, error) {
 	var enabled []*registry.Project
 	for _, p := range projects {
 		if !p.GitHubApp.Enabled() {
@@ -116,6 +132,7 @@ func buildGitHubChannelWithTaskCreator(
 		if err != nil {
 			return nil, []*registry.Project{picked}, fmt.Errorf("project %q github_app: %w", picked.ID, err)
 		}
+		cfg.HTTPClient = githubAPIClient(cfg.APIBaseURL, allowedHosts)
 		if taskCreatorFor != nil {
 			if tc := taskCreatorFor(picked); tc != nil {
 				cfg.TaskCreator = tc
@@ -139,6 +156,7 @@ func buildGitHubChannelWithTaskCreator(
 	if err != nil {
 		return nil, enabled, fmt.Errorf("project %q github_app: %w", first.ID, err)
 	}
+	baseCfg.HTTPClient = githubAPIClient(baseCfg.APIBaseURL, allowedHosts)
 	installs := make([]github.InstallationConfig, 0, len(enabled))
 	installs = append(installs, installationConfigFromConfigWithTaskCreator(first.ID, baseCfg, taskCreatorFor, first))
 
@@ -172,6 +190,16 @@ func buildGitHubChannelWithTaskCreator(
 	fmt.Fprintf(os.Stderr, "vornik/service: github-app channel wired with %d installations: %s\n",
 		len(enabled), strings.Join(projectIDs(enabled), ","))
 	return ch, enabled, nil
+}
+
+// githubAPIClient is the GitHub App channel's REST client (GitHub #494,
+// integrations-hub-design "Amendment 2026-10-21 (#494)"). Before, the channel
+// fell back to http.DefaultClient, so api_base_url was dialled unguarded. A
+// loopback api_base_url (a test or local stub) is its own LoopbackHosts
+// entry; a private GitHub Enterprise must be in integrations.allowed_hosts.
+// Timeout 0, as DefaultClient had: the request's context bounds it.
+func githubAPIClient(apiBaseURL string, allowedHosts []string) *http.Client {
+	return dialguard.LoopbackURLGuard(apiBaseURL, allowedHosts).HTTPClient(0)
 }
 
 // installationConfigFromConfigWithTaskCreator combines the multi-

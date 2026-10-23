@@ -106,6 +106,9 @@ func (m *MockTaskRepository) LeaseTask(ctx context.Context, opts persistence.Lea
 		if slices.Contains(opts.ExcludedProjects, task.ProjectID) {
 			continue
 		}
+		if slices.Contains(opts.ExcludedTaskIDs, task.ID) {
+			continue
+		}
 		if bestTask == nil || task.Priority < bestTask.Priority ||
 			(task.Priority == bestTask.Priority && taskQueueTime(task).Before(taskQueueTime(bestTask))) {
 			bestTask = task

@@ -503,6 +503,15 @@ type Container struct {
 	// (default 1h). nil when LLMConsolidateEnabled is false or
 	// ChatClient is unavailable.
 	memoryLLMConsolidateWorker *memory.LLMConsolidateWorker
+	// memoryProvenanceSweeper re-checks provenance-verified chunks against
+	// each project's clone, hourly (design 22, amendment #482). Nil when no
+	// verifier is wired (no workspace root, or no verification repository).
+	memoryProvenanceSweeper *memory.ProvenanceSweeper
+	// provenanceAuto manages the automatic daemon-only provenance clones, one
+	// per repository scope (GitHub #506, design 22 C1); built once by
+	// provenanceAutoClones.
+	provenanceAuto     *memory.AutoClones
+	provenanceAutoOnce sync.Once
 
 	// narratorWorker is the Narrated Execution bus subscriber (task
 	// 2.1, https://docs.vornik.io). nil
@@ -1956,6 +1965,9 @@ func (c *Container) wireComponentMetrics() {
 		if c.memoryPipeline != nil {
 			c.memoryPipeline.SetMetrics(mems)
 		}
+		if c.memoryProvenanceSweeper != nil {
+			c.memoryProvenanceSweeper.Metrics = mems
+		}
 		if c.memoryTitleBackfiller != nil {
 			c.memoryTitleBackfiller.Metrics = mems
 		}
@@ -2299,6 +2311,11 @@ func (c *Container) Run(ctx context.Context) error {
 
 	// Start dedicated metrics server if a separate address is configured
 	if c.Observability != nil && c.Observability.Metrics != nil && c.Config.Metrics.Enabled {
+		// GitHub #494: the listener never authenticates, so it answers only
+		// the daemon's own Host names (DNS-rebinding guard).
+		if err := c.guardMetricsListener(); err != nil {
+			return err
+		}
 		go func() {
 			if err := c.Observability.Metrics.StartServer(ctx); err != nil {
 				errCh <- err

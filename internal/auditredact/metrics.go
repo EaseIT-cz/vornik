@@ -92,6 +92,84 @@ type Metrics struct {
 	// preAttachRows counts rows seen before the registry existed. Non-zero is
 	// not a normal state — see Attach.
 	preAttachRows int64
+
+	// The content-store seams (chat-audit design §9.2.1, GitHub #395):
+	// vornik_redaction_seam_rows_total{store, status, reason}. Same holder, for
+	// the same two-instance reason as the tool-audit family. Writes to these
+	// stores can precede Attach (the scheduler writes task_messages), so the
+	// pre-attach tally is drained without a warning.
+	seamVec     *prometheus.CounterVec
+	seamPending map[[3]string]int64
+	// seamTotals are the in-process totals the redaction_seams doctor check
+	// reads, so an operator without Prometheus still gets the denominator.
+	seamTotals map[[2]string]int64
+}
+
+// Content stores counted on vornik_redaction_seam_rows_total.
+const (
+	StoreChatAuditLog      = "chat_audit_log"
+	StoreChatSystemPrompts = "chat_system_prompts"
+	StoreStepPrompts       = "step_prompts"
+	StoreTaskMessages      = "task_messages"
+	// StoreExecutionStepOutcomes counts execution_step_outcomes Record writes,
+	// whose hallucination_signals column the seam scans (GitHub #425).
+	StoreExecutionStepOutcomes = "execution_step_outcomes"
+)
+
+// SeamStores lists every content store the seam family counts, in the order
+// the doctor reports them.
+var SeamStores = []string{StoreChatAuditLog, StoreChatSystemPrompts, StoreStepPrompts, StoreTaskMessages, StoreExecutionStepOutcomes}
+
+// SeamCount is one store's census since boot.
+type SeamCount struct {
+	Total, Scanned, Redacted, Skipped int64
+}
+
+// SeamTotals returns the per-store census since boot. Nil-safe.
+func (m *Metrics) SeamTotals() map[string]SeamCount {
+	out := map[string]SeamCount{}
+	if m == nil {
+		return out
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for k, n := range m.seamTotals {
+		c := out[k[0]]
+		c.Total += n
+		switch Status(k[1]) {
+		case StatusScanned:
+			c.Scanned += n
+		case StatusRedacted:
+			c.Redacted += n
+		case StatusSkipped:
+			c.Skipped += n
+		}
+		out[k[0]] = c
+	}
+	return out
+}
+
+// recordSeam counts one write into a content store. Nil-safe. A mutex rather
+// than the tool-audit family's lock-free path: these writes are per turn or per
+// message, and the totals map needs the lock anyway.
+func (m *Metrics) recordSeam(store string, status Status, reason Reason) {
+	if m == nil {
+		return
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.seamTotals == nil {
+		m.seamTotals = map[[2]string]int64{}
+	}
+	m.seamTotals[[2]string{store, string(status)}]++
+	if m.seamVec != nil {
+		m.seamVec.WithLabelValues(store, string(status), string(reason)).Inc()
+		return
+	}
+	if m.seamPending == nil {
+		m.seamPending = map[[3]string]int64{}
+	}
+	m.seamPending[[3]string{store, string(status), string(reason)}]++
 }
 
 // NewMetrics builds the registry-less holder. Safe to share across goroutines
@@ -147,6 +225,27 @@ func (m *Metrics) Attach(registerer prometheus.Registerer, logger *zerolog.Logge
 	}
 	m.pending = map[[2]string]int64{}
 	m.vec.Store(vec)
+
+	seam := promauto.With(registerer).NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: "vornik",
+			Name:      "redaction_seam_rows_total",
+			Help: "Writes to the content stores the redaction seam decorates, by {store, status, " +
+				"reason}. The SUM over status is the coverage denominator: every write is counted " +
+				"whether or not it was scanned. status=skipped is a fail-open census, NOT a " +
+				"refusal count. store = chat_audit_log|chat_system_prompts|step_prompts|" +
+				"task_messages; status = scanned|redacted|skipped; reason (skipped only) = " +
+				"secrets_disabled|detector_unavailable|detector_nil.",
+		},
+		[]string{"store", "status", "reason"},
+	)
+	for labels, n := range m.seamPending {
+		if n > 0 {
+			seam.WithLabelValues(labels[0], labels[1], labels[2]).Add(float64(n))
+		}
+	}
+	m.seamPending = nil
+	m.seamVec = seam
 }
 
 // PreAttachRows reports how many rows were counted before the registry

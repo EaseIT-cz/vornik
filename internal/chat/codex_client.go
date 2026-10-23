@@ -308,7 +308,7 @@ func (c *CodexCLIClient) runCodex(ctx context.Context, id uint64, req *codexRequ
 
 	// The process-spawn law's ConfiguredProgram kind: the program is the
 	// configured one; the per-call args, stdin and env are ours.
-	opts := spawn.ConfiguredOptions{Args: args, WaitDelay: cliWaitDelay}
+	opts := spawn.ConfiguredOptions{Args: args, WaitDelay: cliWaitDelay, ProcessGroup: true}
 	// Prepend the codex binary's directory to PATH so its node
 	// dependency is discoverable. systemd user services inherit a
 	// minimal PATH that doesn't include /home/linuxbrew/.linuxbrew/bin

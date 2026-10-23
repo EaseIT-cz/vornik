@@ -49,7 +49,7 @@
                 <form id="exec-bulk-form" method="POST" action="/ui/executions-bulk/cancel"
                       class="hidden md:flex glass rounded-xl border border-dark-700 px-4 py-2 items-center gap-2"
                       style="display:none"
-                      onsubmit="return confirm('Cancel selected executions?')">
+                      data-confirm="Cancel selected executions?">
                     <span id="exec-bulk-count" class="text-xs text-gray-400 mr-2" aria-live="polite" aria-atomic="true">0 selected</span>
                     <button type="submit" class="px-3 py-1 text-xs font-medium rounded-md bg-rose-700 hover:bg-rose-600 text-white">Cancel selected</button>
                     <button type="button" onclick="execBulkClear()" class="ml-auto px-3 py-1 text-xs font-medium rounded-md bg-dark-700 hover:bg-dark-600 text-gray-300">Clear</button>

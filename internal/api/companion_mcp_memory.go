@@ -323,8 +323,11 @@ type RememberInput struct {
 	Content    string
 	// Class is the LLD-22 `class` arg. Empty leaves the role-map
 	// classifier in charge (companion-prefixed producer role lands
-	// on `companion_note`). Non-empty replaces it; the gate stack's
-	// policy_match gate still validates the class is known.
+	// on `companion_note`). Non-empty replaces it, free-form: nothing on
+	// the path checks it against the known classes (policy_match only
+	// matches deny patterns against the content), so it is caller text
+	// and is wrapped wherever it reaches a model (untrusted-content
+	// wrapper design §1.4, 2026-10-21).
 	Class string
 	// TTLDays is the LLD-22 `ttl_days` arg. Zero leaves the class
 	// policy default in place; positive value overrides on a
@@ -411,6 +414,11 @@ type recallHit struct {
 	// non-empty value is the operator-supplied scope token, or
 	// '*' for cross-cutting. 2026-05-28 investigation closure.
 	RepoScope string `json:"repo_scope,omitempty"`
+	// Provenance says what provenance established for a companion-delegated
+	// document (#506 C7): verified, unavailable (no clone of its repository,
+	// trusted as before provenance checks), or unverified with the reason,
+	// such as a draft awaiting its push.
+	Provenance string `json:"provenance,omitempty"`
 	// Confidence / ValidationStatus are the P3 trust fields, populated
 	// ONLY under routing. omitempty keeps the non-routing recall hit
 	// byte-identical.
@@ -587,6 +595,7 @@ func (s *Server) companionToolRecall(ctx context.Context, key *persistence.APIKe
 				IsAlive:          r.IsAlive,
 				LastCheckedAt:    r.LastCheckedAt,
 				RepoScope:        r.RepoScope,
+				Provenance:       r.Provenance,
 				Confidence:       r.Confidence,
 				ValidationStatus: r.ValidationStatus,
 				EventTime:        r.EventTime,
@@ -1079,6 +1088,24 @@ type CorrectInput struct {
 	// migration 218; GitHub #76). companionToolMemoryCorrect sets it via
 	// companionRefuteRoute; empty means memory.RefuteRouteMemoryCorrect.
 	RefuteRoute string
+	// DryRun (claim mode only, GitHub #436) plans the claim refute and
+	// reports it without refuting anything or storing the correction.
+	DryRun bool
+	// ClientKind is the key's client kind: the correction is stored as a
+	// companion deposit under producer_role companion:<ClientKind>, the
+	// way remember() stores a note (GitHub #436 part 2).
+	ClientKind string
+}
+
+// SkippedChunkInfo is a claim-search hit memory_correct passed over, and
+// why (GitHub #436): protected_correction (an operator or companion correction, never refuted by claim; retire it
+// by chunk_ids), below_floor, over_cap or not_flipped. The ids are what a
+// caller retries with chunk_ids.
+type SkippedChunkInfo struct {
+	ChunkID          string  `json:"chunk_id"`
+	Score            float64 `json:"score"`
+	ValidationStatus string  `json:"validation_status,omitempty"`
+	Reason           string  `json:"reason"`
 }
 
 // RefutedChunkInfo is the per-row record of a chunk that was flipped to
@@ -1104,6 +1131,18 @@ type CorrectResult struct {
 	// authoritative.
 	ByID         bool
 	RefutedCount int
+	// Skipped and DryRun are the claim path's report (GitHub #436). Under
+	// DryRun, Refuted is what WOULD be refuted and nothing was written.
+	Skipped []SkippedChunkInfo
+	DryRun  bool
+	// CorrectionDecision is the pipeline's verdict on the correction
+	// (ALLOW, QUARANTINED, REJECTED; empty when none was given) and
+	// CorrectionGatesFailed the gates that fired (GitHub #436 part 2).
+	CorrectionDecision    string
+	CorrectionGatesFailed []string
+	// RefuteHeld: the correction was not admitted, so nothing was refuted
+	// (the correction is stored before the refute; review ee12 F1).
+	RefuteHeld bool
 }
 
 type correctArgs struct {
@@ -1114,6 +1153,7 @@ type correctArgs struct {
 	ChunkIDs   []string `json:"chunk_ids"`
 	// Reason is the Hermes plugin's declared refute route (GitHub #76).
 	Reason string `json:"reason"`
+	DryRun bool   `json:"dry_run"`
 }
 
 // companionRefuteRoute maps memory_correct's reason argument to the
@@ -1156,8 +1196,15 @@ var clientKindsWithMirror = map[string]bool{"hermes": true}
 type correctResultOut struct {
 	RefutedCount      int                `json:"refuted_count"`
 	Refuted           []RefutedChunkInfo `json:"refuted"`
+	WouldRefute       []RefutedChunkInfo `json:"would_refute,omitempty"`
+	Skipped           []SkippedChunkInfo `json:"skipped,omitempty"`
+	DryRun            bool               `json:"dry_run,omitempty"`
 	CorrectionChunkID string             `json:"correction_chunk_id,omitempty"`
-	Note              string             `json:"note,omitempty"`
+	// CorrectionDecision / CorrectionGatesFailed: the correction passes the
+	// remember() gates, so it can be quarantined or rejected (#436 part 2).
+	CorrectionDecision    string   `json:"correction_decision,omitempty"`
+	CorrectionGatesFailed []string `json:"correction_gates_failed,omitempty"`
+	Note                  string   `json:"note,omitempty"`
 }
 
 // companionToolMemoryCorrect handles the `memory_correct` MCP tool.
@@ -1186,6 +1233,9 @@ func (s *Server) companionToolMemoryCorrect(ctx context.Context, key *persistenc
 	if args.WrongClaim == "" && len(chunkIDs) == 0 {
 		return "", errors.New("provide wrong_claim (claim search) or chunk_ids (surgical by-id refute)")
 	}
+	if args.DryRun && len(chunkIDs) > 0 {
+		return "", errors.New("dry_run applies to wrong_claim mode only; chunk_ids already names exactly what would be refuted")
+	}
 	if len(args.Correction) > rememberMaxContentBytes {
 		return "", fmt.Errorf("correction exceeds %d bytes; deposit it via remember and refute separately", rememberMaxContentBytes)
 	}
@@ -1204,17 +1254,26 @@ func (s *Server) companionToolMemoryCorrect(ctx context.Context, key *persistenc
 		ActorID:     key.ID,
 		ChunkIDs:    chunkIDs,
 		RefuteRoute: companionRefuteRoute(key, args.Reason, chunkIDs),
+		DryRun:      args.DryRun,
+		ClientKind:  key.ClientKind,
 	})
 	if err != nil {
 		return "", fmt.Errorf("memory_correct failed: %w", err)
 	}
 
 	out := correctResultOut{
-		Refuted:           res.Refuted,
-		CorrectionChunkID: res.CorrectionChunkID,
+		Refuted:               res.Refuted,
+		CorrectionChunkID:     res.CorrectionChunkID,
+		CorrectionDecision:    res.CorrectionDecision,
+		CorrectionGatesFailed: res.CorrectionGatesFailed,
 	}
 	if out.Refuted == nil {
 		out.Refuted = []RefutedChunkInfo{}
+	}
+	if res.RefuteHeld {
+		out.Note = fmt.Sprintf("the correction was not stored (correction_decision %s), so nothing was refuted; fix the correction and call again", res.CorrectionDecision)
+		b, _ := json.MarshalIndent(out, "", "  ")
+		return string(b), nil
 	}
 	if res.ByID {
 		out.RefutedCount = res.RefutedCount
@@ -1222,10 +1281,21 @@ func (s *Server) companionToolMemoryCorrect(ctx context.Context, key *persistenc
 			out.Note = fmt.Sprintf("flipped %d of %d requested chunk_ids to refuted (others were already refuted/superseded or not in this project)", res.RefutedCount, len(chunkIDs))
 		}
 	} else {
-		out.RefutedCount = len(res.Refuted)
-		if out.RefutedCount == 0 {
+		out.Skipped = res.Skipped
+		switch {
+		case res.DryRun:
+			// GitHub #436: a dry run reports what it WOULD refute, never as
+			// refuted, and wrote nothing.
+			out.DryRun = true
+			out.WouldRefute = out.Refuted
+			out.Refuted = []RefutedChunkInfo{}
+			out.Note = "dry run: nothing was refuted and no correction was stored; would_refute is advisory (a real call searches again)"
+		case len(res.Refuted) == 0 && len(res.Skipped) > 0:
+			out.Note = "nothing refuted; skipped lists the matches passed over and why (a protected_correction is never refuted by a claim). To refute one of them, call memory_correct with its chunk_ids"
+		case len(res.Refuted) == 0:
 			out.Note = "no stored chunk matched wrong_claim closely enough to refute — nothing demoted (try chunk_ids for a surgical refute, or rephrase to match how the fact is stored)"
 		}
+		out.RefutedCount = len(out.Refuted)
 	}
 	b, _ := json.MarshalIndent(out, "", "  ")
 	return string(b), nil

@@ -15,6 +15,7 @@ import (
 	"vornik.io/vornik/internal/projectdeps"
 	"vornik.io/vornik/internal/projectdeps/install"
 	"vornik.io/vornik/internal/registry"
+	"vornik.io/vornik/internal/runtime"
 )
 
 // `vornikctl deps` (project dependency provisioning design §8, 2026-09-25).
@@ -106,6 +107,40 @@ type depsInstallInput struct {
 	// RoleImages maps each distinct role image to the roles that name it.
 	RoleImages map[string][]string
 	Wheelhouse string
+	// MemoryLimit bounds every install container, with no swap: the agents'
+	// own limit, resolved from the daemon's config by the daemon's rule
+	// (GitHub #428, design §8.6). 0 is unbounded. MemoryNote says which, and
+	// is printed before anything runs.
+	MemoryLimit int64
+	MemoryNote  string
+}
+
+// depsMemoryLimit resolves the install containers' bound from
+// runtime.agent_memory_limit with runtime.AgentMemoryLimitBytes, the rule the
+// daemon applies to its agents. An unreadable host total is not fatal, as for
+// the daemon: a derived limit is then unbounded, and the note says so. The
+// daemon's boot-time concurrency checks are not applied: they are about
+// max_concurrent_tasks agents at once, and an install is one container.
+func depsMemoryLimit(raw string, concurrency int, readTotal func() (int64, error)) (int64, string, error) {
+	total, totalErr := readTotal()
+	if totalErr != nil {
+		total = 0
+	}
+	limit, err := runtime.AgentMemoryLimitBytes(raw, concurrency, total)
+	if err != nil {
+		return 0, "", fmt.Errorf("runtime.agent_memory_limit: %w", err)
+	}
+	derived := strings.TrimSpace(raw) == ""
+	switch {
+	case limit > 0 && derived:
+		return limit, fmt.Sprintf("memory limit %s, no swap (runtime.agent_memory_limit, derived from host memory and scheduler.max_concurrent_tasks)", install.FormatMemory(limit)), nil
+	case limit > 0:
+		return limit, fmt.Sprintf("memory limit %s, no swap (runtime.agent_memory_limit)", install.FormatMemory(limit)), nil
+	case derived:
+		return 0, "memory limit: none, unbounded (runtime.agent_memory_limit is unset and host memory is unreadable)", nil
+	default:
+		return 0, fmt.Sprintf("memory limit: none, unbounded (runtime.agent_memory_limit is %q)", strings.TrimSpace(raw)), nil
+	}
 }
 
 func loadDepsInput(projectID string) (depsInstallInput, error) {
@@ -126,6 +161,10 @@ func loadDepsInputs(projectIDs []string) ([]depsInstallInput, error) {
 	cacheDir := cfg.Runtime.DependencyCacheDir()
 	if cacheDir == "" {
 		return nil, fmt.Errorf("no dependency cache: set runtime.dependency_cache_path (or runtime.project_workspace_path)")
+	}
+	memLimit, memNote, err := depsMemoryLimit(cfg.Runtime.AgentMemoryLimit, cfg.Scheduler.MaxConcurrentTasks, runtime.HostTotalMemory)
+	if err != nil {
+		return nil, err
 	}
 	configsDir := resolveConfigsDir(path)
 	if configsDir == "" {
@@ -156,6 +195,8 @@ func loadDepsInputs(projectIDs []string) ([]depsInstallInput, error) {
 			CacheDir:    cacheDir,
 			Entries:     project.Dependencies,
 			RoleImages:  map[string][]string{},
+			MemoryLimit: memLimit,
+			MemoryNote:  memNote,
 		}
 		if swarm != nil {
 			in.RoleImages = roleImagesOf(swarm)
@@ -211,7 +252,12 @@ func runDepsInstall(ctx context.Context, in depsInstallInput, run install.Runner
 		ids[img] = id
 		_, _ = fmt.Fprintf(out, "image %s  %s  (roles: %s)\n", img, id, strings.Join(in.RoleImages[img], ", "))
 	}
-	interp, err := install.ChooseInterpreter(ctx, run, images)
+	// The bound every install container runs under (GitHub #428, design
+	// §8.6), shown before anything runs in one.
+	if in.MemoryNote != "" {
+		_, _ = fmt.Fprintln(out, in.MemoryNote)
+	}
+	interp, err := install.ChooseInterpreter(ctx, run, images, in.MemoryLimit)
 	if err != nil {
 		return err
 	}
@@ -236,7 +282,7 @@ func runDepsInstall(ctx context.Context, in depsInstallInput, run install.Runner
 			_, _ = fmt.Fprintf(out, "already installed  %s  %s\n", p.Entry.Lockfile, p.Key)
 			continue
 		}
-		fetch := install.PipFetcher(run, images[0], p.LockfilePath, in.Wheelhouse)
+		fetch := install.PipFetcher(run, images[0], p.LockfilePath, in.Wheelhouse, in.MemoryLimit)
 		if _, err := install.Materialise(ctx, store, p.Key, fetch, meta); err != nil {
 			if in.Wheelhouse == "" {
 				_, _ = fmt.Fprintf(out, "an air-gapped host can install from a wheelhouse built on a connected one:\n  %s\nthen: vornikctl deps install %s --from ./wheelhouse\n",

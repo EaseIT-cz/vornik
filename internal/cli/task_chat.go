@@ -112,7 +112,7 @@ func init() {
 	taskCloseCmd.Flags().StringVar(&taskChatReason, "reason", "", "Optional closure reason")
 
 	for _, c := range []*cobra.Command{taskMessageCmd, taskDirectiveCmd, taskAnswerCmd, taskAmendCmd, taskCloseCmd} {
-		c.Flags().StringVar(&taskChatAuthor, "author", "", "Author identity (operator handle, defaults to OS user)")
+		c.Flags().StringVar(&taskChatAuthor, "author", "", "Display label, stored as client-supplied; the author of record is the authenticated key or session")
 	}
 	taskMessagesCmd.Flags().BoolVar(&taskChatJSON, "json", false, "Output in JSON format")
 

@@ -13,6 +13,7 @@ import (
 	"sort"
 	"strings"
 	"time"
+	"vornik.io/vornik/internal/actor"
 
 	"vornik.io/vornik/internal/agenttools"
 
@@ -538,6 +539,13 @@ func (s *Server) CreateTask(w http.ResponseWriter, r *http.Request) {
 		UpdatedAt:         time.Now(),
 		CreatedByAPIKeyID: strPtr(APIKeyIDFromContext(r.Context())),
 	}
+	// The principal (GitHub #482): a session user, the key, or the static
+	// key's hash; see taskCreatorActor.
+	if a := s.taskCreatorActor(r.Context()); !a.IsZero() {
+		task.CreatedByActor = actor.Ptr(a)
+	} else if kid := APIKeyIDFromContext(r.Context()); kid != "" {
+		task.CreatedByActor = actor.Ptr(actor.APIKey(kid))
+	}
 
 	// Persist task
 	if s.taskRepo != nil {
@@ -603,6 +611,7 @@ func (s *Server) createTaskViaCreator(w http.ResponseWriter, r *http.Request, pr
 		RawContext:        req.Context,
 		CreatedByAPIKeyID: APIKeyIDFromContext(r.Context()),
 		GoalOrigin:        persistence.TaskGoalOriginREST,
+		Actor:             s.taskCreatorActor(r.Context()),
 	})
 	if err != nil {
 		ce := taskcreate.AsError(err)
@@ -706,7 +715,8 @@ func (s *Server) GetTask(w http.ResponseWriter, r *http.Request) {
 		resp.ParentTaskID = *task.ParentTaskID
 	}
 	if task.LastError != nil {
-		resp.LastError = *task.LastError
+		errText := s.errorTextView(r) // GitHub #466
+		resp.LastError = errText(*task.LastError)
 	}
 	if task.LastErrorClass != nil {
 		resp.LastErrorClass = *task.LastErrorClass
@@ -831,6 +841,7 @@ func (s *Server) ListTasks(w http.ResponseWriter, r *http.Request) {
 		resp.NextOffset = &next
 	}
 
+	errText := s.errorTextView(r) // GitHub #466
 	for _, task := range tasks {
 		taskResp := GetTaskResponse{
 			TaskID:    task.ID,
@@ -841,7 +852,7 @@ func (s *Server) ListTasks(w http.ResponseWriter, r *http.Request) {
 			Links:     make(map[string]string),
 		}
 		if task.LastError != nil {
-			taskResp.LastError = *task.LastError
+			taskResp.LastError = errText(*task.LastError)
 		}
 		if task.LastErrorClass != nil {
 			taskResp.LastErrorClass = *task.LastErrorClass
@@ -1224,7 +1235,7 @@ func (s *Server) GetExecution(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	resp := buildExecutionResponse(exec)
+	resp := buildExecutionResponse(exec, s.errorTextView(r), s.storedResultView(r))
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
@@ -1343,6 +1354,12 @@ func (s *Server) ResumeExecution(w http.ResponseWriter, r *http.Request) {
 	}
 
 	resumeStatus, err := s.executor.Resume(exec.TaskID)
+	if errors.Is(err, executor.ErrResumeRefused) {
+		// A cancel (or another writer) moved the task first; nothing was
+		// resumed (GitHub #421). The message names the current status.
+		respondError(w, http.StatusConflict, "INVALID_STATE", err.Error())
+		return
+	}
 	if err != nil {
 		s.logger.Error().Err(err).Str("executionId", executionID).Msg("failed to resume execution")
 		respondError(w, http.StatusInternalServerError, "INTERNAL_ERROR", "Failed to resume execution")
@@ -1538,8 +1555,9 @@ func (s *Server) ListExecutions(w http.ResponseWriter, r *http.Request) {
 		Total:      total,
 	}
 
+	errText, resultView := s.errorTextView(r), s.storedResultView(r) // GitHub #466, #496
 	for _, exec := range executions {
-		resp.Executions = append(resp.Executions, buildExecutionResponse(exec))
+		resp.Executions = append(resp.Executions, buildExecutionResponse(exec, errText, resultView))
 	}
 
 	w.Header().Set("Content-Type", "application/json")
@@ -1550,7 +1568,10 @@ func (s *Server) ListExecutions(w http.ResponseWriter, r *http.Request) {
 }
 
 // buildExecutionResponse builds an execution response from an execution model.
-func buildExecutionResponse(exec *persistence.Execution) GetExecutionResponse {
+// errText is the caller's view of the persisted error text (errorTextView,
+// GitHub #466); resultView its view of the stored result, which on a failed
+// step carries the step's error (storedResultView, GitHub #496).
+func buildExecutionResponse(exec *persistence.Execution, errText func(string) string, resultView func([]byte) []byte) GetExecutionResponse {
 	resp := GetExecutionResponse{
 		ExecutionID: exec.ID,
 		TaskID:      exec.TaskID,
@@ -1567,7 +1588,7 @@ func buildExecutionResponse(exec *persistence.Execution) GetExecutionResponse {
 		resp.CompletedSteps = exec.CompletedSteps
 	}
 	if exec.ErrorMessage != nil {
-		resp.ErrorMessage = *exec.ErrorMessage
+		resp.ErrorMessage = errText(*exec.ErrorMessage)
 	}
 	if exec.ErrorCode != nil {
 		resp.ErrorCode = *exec.ErrorCode
@@ -1595,7 +1616,7 @@ func buildExecutionResponse(exec *persistence.Execution) GetExecutionResponse {
 	// Copy the persisted result blob as json.RawMessage so clients see
 	// the already-JSON-encoded object rather than a re-escaped string.
 	if len(exec.Result) > 0 {
-		resp.Result = json.RawMessage(exec.Result)
+		resp.Result = json.RawMessage(resultView(exec.Result))
 	}
 
 	return resp
@@ -1735,7 +1756,7 @@ func (s *Server) CallMCPTool(w http.ResponseWriter, r *http.Request) {
 
 	// Finding B2: enforce the calling role's allowedTools SERVER-SIDE.
 	// SwarmRole.AllowedTools was previously applied only via the
-	// container-side mcp.json, and per-task keys bind project (not
+	// container-side mcp.json (since removed, GitHub #498), and per-task keys bind project (not
 	// role), so a compromised narrow-role agent could invoke any tool
 	// the project enables (e.g. broker place_order). Intersect the
 	// role's allowlist here; refuse 403 when the tool isn't permitted.
@@ -1805,6 +1826,23 @@ func (s *Server) CallMCPTool(w http.ResponseWriter, r *http.Request) {
 	// can no longer produce a success-shaped task (2026-08-25 P0).
 	s.toolOutcomes.Record(executionID, req.Name, err)
 	if err != nil {
+		if errors.Is(err, mcp.ErrReadToolChangesThings) {
+			// The agent read re-judge refused it before anything was sent
+			// (agent-administered design §6.5, GitHub #413): a refusal, like
+			// the approval gate's, not a server fault.
+			s.agentToolCounts.Refused.Add(1)
+			respondError(w, http.StatusForbidden, "FORBIDDEN", err.Error())
+			return
+		}
+		if errors.Is(err, mcp.ErrReadSuspensionsUnread) || errors.Is(err, mcp.ErrReadListingStale) {
+			// Refused before anything was sent because nothing currently
+			// vouches for the tool: the held set is unread, or the server's
+			// listing could not be renewed (design §6.5, amendment #481). A
+			// state that clears by itself, so 503, not 403.
+			s.agentToolCounts.Refused.Add(1)
+			respondError(w, http.StatusServiceUnavailable, "UNAVAILABLE", err.Error())
+			return
+		}
 		if mcp.IsAuthFailure(err) {
 			// Named at Error, with the fix in the line, because this is the
 			// condition that used to be legible only inside a task's result
@@ -1841,7 +1879,8 @@ func (s *Server) CallMCPTool(w http.ResponseWriter, r *http.Request) {
 // FAIL-OPEN by design on every resolution gap (no taskID, no
 // execution/workflow/registry wired, role not found, or role declares no
 // allowedTools): the daemon's project gate (ProjectAuthMiddleware) and
-// the container-side mcp.json filter remain in force, and B2 only adds a
+// the server's own allowed_tools filter remain in force (the container-side
+// mcp.json filter went with the local fallback, GitHub #498), and B2 only adds a
 // SECOND server-side intersection for roles that opt in. Returning true
 // on a gap avoids breaking deployments that don't declare allowedTools
 // or run without the registry/execution repos (sqlite/dev). The

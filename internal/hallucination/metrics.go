@@ -29,7 +29,19 @@ type Metrics struct {
 	// and rule name. A spike on a specific detector identifies
 	// which class of failure is suddenly more frequent.
 	SignalsTotal *prometheus.CounterVec
+	// ScansSkippedTotal counts Phase 1 scans the detector did not run:
+	// reason no_prose (the result parsed but carried no prose field) or
+	// unparseable (the result did not unmarshal as a JSON object). Without
+	// it a skipped scan stored no signals and read as clean (GitHub #369,
+	// outcome-quality-design §S8.11 row 16b).
+	ScansSkippedTotal *prometheus.CounterVec
 }
+
+// Phase 1 scan-skip reasons for ScansSkippedTotal.
+const (
+	ScanSkippedNoProse     = "no_prose"
+	ScanSkippedUnparseable = "unparseable"
+)
 
 // NewMetrics builds and registers all hallucination-subsystem
 // metrics on the provided registry.
@@ -58,7 +70,7 @@ func NewMetrics(reg prometheus.Registerer) *Metrics {
 			Namespace: "vornik",
 			Subsystem: "judge",
 			Name:      "evaluations_total",
-			Help:      "Total judge evaluation attempts, labelled by outcome (ok|error|abstain_no_config|skipped_existing).",
+			Help:      "Total judge evaluation attempts, labelled by outcome (ok|evidence_incomplete|llm_timeout|llm_cancelled|llm_error|abstain_no_config|error|persist_error|skipped_existing|skipped_delegated|skipped_no_resolver|skipped_project_not_found).",
 		}, []string{"project_id", "outcome"}),
 		SignalsTotal: prometheus.NewCounterVec(prometheus.CounterOpts{
 			Namespace: "vornik",
@@ -66,6 +78,12 @@ func NewMetrics(reg prometheus.Registerer) *Metrics {
 			Name:      "signals_total",
 			Help:      "Total hallucination Phase-1 detector signals emitted.",
 		}, []string{"project_id", "severity", "detector"}),
+		ScansSkippedTotal: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Namespace: "vornik",
+			Subsystem: "hallucination",
+			Name:      "scans_skipped_total",
+			Help:      "Phase-1 detector scans not run on a step result, labelled by reason (no_prose|unparseable).",
+		}, []string{"project_id", "reason"}),
 	}
 	if reg != nil {
 		reg.MustRegister(
@@ -74,9 +92,19 @@ func NewMetrics(reg prometheus.Registerer) *Metrics {
 			m.JudgeCostUSDTotal,
 			m.JudgeEvaluationsTotal,
 			m.SignalsTotal,
+			m.ScansSkippedTotal,
 		)
 	}
 	return m
+}
+
+// ObserveScanSkipped counts one Phase 1 scan the detector did not run.
+// Nil-safe, like ObserveSignals.
+func (m *Metrics) ObserveScanSkipped(projectID, reason string) {
+	if m == nil || m.ScansSkippedTotal == nil {
+		return
+	}
+	m.ScansSkippedTotal.WithLabelValues(projectID, reason).Inc()
 }
 
 // ObserveSignals increments SignalsTotal for each entry in the

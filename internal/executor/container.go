@@ -555,6 +555,7 @@ func (e *Executor) executeAgentStep(ctx context.Context, task *persistence.Task,
 	// URL/ID claim — the operator's dashboard needs to distinguish.
 	var hallucinationDetail string
 	stepStartedAt := time.Now()
+	var inFlight *stepoutcome.InFlightStep
 	defer func() {
 		// Persist the richer outcome taxonomy. Success path writes
 		// pending_validation (or degenerate_loop when the detector
@@ -595,7 +596,11 @@ func (e *Executor) executeAgentStep(ctx context.Context, task *persistence.Task,
 		// a clean exit — see migration 169 and containerExitCodeFromError.
 		agentStamp.ContainerExitCode = containerExitCodeFromError(err)
 		e.recordStepOutcomeWithSignalsAndBudget(ctx, task, execution, stepID, step.Role, effectiveModel, outcome, errClass, errDetail, nil, &durMS, hallucinationSignalsBlob, agentStamp, taintStampVal)
+		e.clearInFlightStep(execution, inFlight)
 	}()
+	// The step the watchdog would record if this one hangs (§S8.8). Set
+	// again once the model is resolved, below.
+	inFlight = e.noteInFlightStep(execution, stepID, step.Role, "", stepStartedAt)
 
 	// Used by verifyClaimedModifications as the mtime floor: any file the
 	// agent claims to have modified must have an mtime >= stepStart (minus
@@ -786,23 +791,19 @@ func (e *Executor) executeAgentStep(ctx context.Context, task *persistence.Task,
 		return "", nil, fmt.Errorf("failed to write task input: %w", err)
 	}
 
-	// Write mcp.json only for local-subprocess fallback. In normal
-	// daemon-proxy mode, mcp-bridge uses VORNIK_API_URL and the agent
-	// container never needs a credentials-bearing MCP config file.
-	if plan.project != nil && len(plan.project.MCP.Servers) > 0 && shouldWriteMCPConfig(e.config.AgentLLMEnv) {
-		if mcpData, encErr := buildMCPConfig(plan.project.MCP.Servers); encErr == nil {
-			// 0o600 — mcp.json carries MCP server credentials.
-			_ = os.WriteFile(filepath.Join(inputDir, "mcp.json"), mcpData, 0o600)
-		} else {
-			e.logger.Warn().Err(encErr).Str("task_id", task.ID).Msg("failed to encode mcp.json — MCP tools unavailable for this step")
-		}
-	}
+	// No mcp.json: agent MCP goes only through the daemon (mcp-bridge
+	// relays to /api/v1/projects/{id}/mcp/*, where the approval rows and the
+	// read gates live). The local-subprocess fallback that wrote the
+	// project's servers, credentials expanded, into the container was
+	// removed (GitHub #498; agent-administered design §6.5, Amendment
+	// 2026-10-21 (#498)).
 
 	roleConfig, err = findSwarmRole(plan.swarm, step.Role)
 	if err != nil {
 		return "", nil, err
 	}
 	effectiveModel = e.effectiveRoleModelForTask(task, roleConfig)
+	inFlight = e.noteInFlightStep(execution, stepID, step.Role, effectiveModel, stepStartedAt)
 	// An agent role's model, checked before every attempt (agent-administered
 	// design §18.6 item 2, round 2 F2, review a125): the EFFECTIVE model, so a
 	// payload override is judged too, against the live route now. A role the
@@ -1836,7 +1837,10 @@ func (e *Executor) recordWarnViolationsOutcome(
 	}
 	finalized := time.Now().UTC()
 	row.FinalizedAt = &finalized
-	if err := e.outcomeRepo.Record(ctx, row); err != nil {
+	if e.watchdogOwnsStepRows(ctx, execution.ID, stepID, row.Outcome, row.ErrorClass) {
+		return
+	}
+	if err := e.recordOutcomeRow(ctx, row); err != nil {
 		e.logger.Warn().Err(err).
 			Str("execution_id", execution.ID).
 			Str("step", stepID).
@@ -1894,6 +1898,23 @@ func (e *Executor) runHallucinationDetector(ctx context.Context, task *persisten
 	// risk the v1 noise.
 	text := extractProseFromResult(resultBytes)
 	if text == "" {
+		// A skipped scan stores no signals, which reads as clean, so it is
+		// counted by its reason: the result did not unmarshal as a JSON
+		// object (extractProseFromResult's own parse), or it parsed with no
+		// prose. The stored blob stays nil (GitHub #369,
+		// outcome-quality-design §S8.11 row 16b).
+		reason := hallucination.ScanSkippedNoProse
+		var probe map[string]any
+		if json.Unmarshal(resultBytes, &probe) != nil {
+			reason = hallucination.ScanSkippedUnparseable
+		}
+		e.hallucinationMetrics.ObserveScanSkipped(task.ProjectID, reason)
+		e.logger.Debug().
+			Str("task_id", task.ID).
+			Str("project_id", task.ProjectID).
+			Str("step", stepID).
+			Str("reason", reason).
+			Msg("hallucination: detector scan skipped; no signals recorded")
 		return nil, "", nil
 	}
 
@@ -2392,54 +2413,6 @@ func (e *Executor) revokeTaskKey(taskID string) {
 		e.logger.Warn().Err(rErr).Str("task_id", taskID).
 			Msg("per-task key revoke failed; key will expire via expires_at")
 	}
-}
-
-// buildMCPConfig serialises project MCP servers into the mcp.json format consumed
-// by the mcp-bridge binary inside agent containers. Environment variable references
-// of the form ${VAR} in Env values are expanded using the host daemon's environment.
-// The `allowed_tools` field is passed through so the in-container mcp.Client
-// applies the same filter the host-side manager does — otherwise an agent could
-// see tools the project scope-restricted.
-func buildMCPConfig(servers []registry.MCPServerConfig) ([]byte, error) {
-	type mcpServerEntry struct {
-		Name         string            `json:"name"`
-		Transport    string            `json:"transport"`
-		Command      string            `json:"command,omitempty"`
-		Args         []string          `json:"args,omitempty"`
-		Env          map[string]string `json:"env,omitempty"`
-		URL          string            `json:"url,omitempty"`
-		AllowedTools []string          `json:"allowed_tools,omitempty"`
-	}
-	entries := make([]mcpServerEntry, 0, len(servers))
-	for _, s := range servers {
-		expanded := make(map[string]string, len(s.Env))
-		for k, v := range s.Env {
-			expanded[k] = expandMCPEnvSafe(v)
-		}
-		entries = append(entries, mcpServerEntry{
-			Name:         s.Name,
-			Transport:    s.Transport,
-			Command:      s.Command,
-			Args:         s.Args,
-			Env:          expanded,
-			URL:          s.URL,
-			AllowedTools: s.AllowedTools,
-		})
-	}
-	return json.Marshal(entries)
-}
-
-func shouldWriteMCPConfig(agentEnv map[string]string) bool {
-	return strings.TrimSpace(agentEnv["VORNIK_API_URL"]) == ""
-}
-
-func expandMCPEnvSafe(s string) string {
-	return os.Expand(s, func(name string) string {
-		if strings.HasPrefix(name, "VORNIK_") {
-			return ""
-		}
-		return os.Getenv(name)
-	})
 }
 
 // waitForCompletion waits for the container to finish.

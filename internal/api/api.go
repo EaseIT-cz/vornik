@@ -171,12 +171,15 @@ type MemoryTitleBackfiller interface {
 // here so the API surface stays stable even if the memory package
 // reshapes its internals.
 type MemoryTitleBackfillResult struct {
-	Processed int      `json:"processed"`
-	Succeeded int      `json:"succeeded"`
-	Failed    int      `json:"failed"`
-	Skipped   int      `json:"skipped"`
-	Remaining int      `json:"remaining"`
-	Errors    []string `json:"errors,omitempty"`
+	Processed int `json:"processed"`
+	Succeeded int `json:"succeeded"`
+	Failed    int `json:"failed"`
+	// PersistFailed: the subset of Failed that the store refused, not the
+	// model (GitHub #369, outcome-quality LLD §S8.11 7b).
+	PersistFailed int      `json:"persist_failed,omitempty"`
+	Skipped       int      `json:"skipped"`
+	Remaining     int      `json:"remaining"`
+	Errors        []string `json:"errors,omitempty"`
 	// Paused: the daemon has optional LLM work disabled for this model
 	// (chat.optional_work; breaker design §5.3d), so the batch stopped
 	// calling it. A caller looping on Remaining must stop on Paused.
@@ -194,13 +197,16 @@ type MemoryClassifyBackfiller interface {
 
 // MemoryClassifyBackfillResult mirrors memory.ClassifyBackfillResult.
 type MemoryClassifyBackfillResult struct {
-	Processed int      `json:"processed"`
-	Succeeded int      `json:"succeeded"`
-	Failed    int      `json:"failed"`
-	Skipped   int      `json:"skipped"`
-	Remaining int      `json:"remaining"`
-	Exhausted bool     `json:"exhausted,omitempty"`
-	Errors    []string `json:"errors,omitempty"`
+	Processed int `json:"processed"`
+	Succeeded int `json:"succeeded"`
+	Failed    int `json:"failed"`
+	// PersistFailed: the subset of Failed that the store refused, not the
+	// model (GitHub #369, outcome-quality LLD §S8.11 7b).
+	PersistFailed int      `json:"persist_failed,omitempty"`
+	Skipped       int      `json:"skipped"`
+	Remaining     int      `json:"remaining"`
+	Exhausted     bool     `json:"exhausted,omitempty"`
+	Errors        []string `json:"errors,omitempty"`
 	// Paused: the daemon has optional LLM work disabled for this model
 	// (chat.optional_work; breaker design §5.3d), so the batch stopped
 	// calling it. A caller looping on Remaining must stop on Paused.
@@ -218,6 +224,10 @@ type MemoryClassifyBackfillResult struct {
 // this structurally.
 type MemoryGraphReflagger interface {
 	ReflagChunksMissingEdges(ctx context.Context, projectID string, countOnly bool) (int, error)
+	// ReflagQuarantinedChunks drives POST /api/v1/memory/regraph/quarantined:
+	// quarantined chunks only, optionally one project and an error
+	// substring, counter reset on commit (knowledge-graph LLD §3.3b).
+	ReflagQuarantinedChunks(ctx context.Context, projectID, errorContains string, countOnly bool) ([]persistence.QuarantineReflagCount, error)
 }
 
 // WorkflowTelemetry drives GET /api/v1/admin/workflow-stats —
@@ -270,6 +280,29 @@ type MemoryGraphReflagResult struct {
 	ReFlagged int    `json:"reFlagged"`
 }
 
+// MemoryGraphQuarantineReflagRow is one project's row of the
+// /api/v1/memory/regraph/quarantined report: Quarantined is the denominator
+// (every quarantined chunk examined), Matched the selection, ReFlagged the
+// rows written (0 on a dry run).
+type MemoryGraphQuarantineReflagRow struct {
+	Project     string `json:"project,omitempty"`
+	Quarantined int    `json:"quarantined"`
+	Matched     int    `json:"matched"`
+	ReFlagged   int    `json:"reflagged"`
+}
+
+// MemoryGraphQuarantineReflagResult is the wire shape for POST
+// /api/v1/memory/regraph/quarantined. Project is empty for an all-projects
+// call; Projects lists every project holding a quarantined chunk in scope,
+// matched or not.
+type MemoryGraphQuarantineReflagResult struct {
+	Project       string                           `json:"project,omitempty"`
+	ErrorContains string                           `json:"errorContains,omitempty"`
+	DryRun        bool                             `json:"dryRun"`
+	Projects      []MemoryGraphQuarantineReflagRow `json:"projects"`
+	Totals        MemoryGraphQuarantineReflagRow   `json:"totals"`
+}
+
 // MemoryProjectStats is the per-project row returned by memory stats.
 // Mirrors memory.ProjectMemoryStats; kept in this package to avoid an
 // import cycle back into memory.
@@ -284,6 +317,10 @@ type MemoryProjectStats struct {
 // We define it here (mirroring memory.SearchResult) so the API package has no
 // import cycle with the memory package.
 type MemorySearchResult struct {
+	// Provenance says what provenance established for a companion-delegated
+	// document (#506 C7): "verified", "unavailable: …", "unverified: …", or
+	// "" when it does not apply (memory.ProvenanceLabel).
+	Provenance string  `json:"provenance,omitempty"`
 	ChunkID    string  `json:"chunk_id"`
 	ProjectID  string  `json:"project_id"`
 	TaskID     string  `json:"task_id"`

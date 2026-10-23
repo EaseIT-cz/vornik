@@ -100,17 +100,17 @@ req() { python3 -c "import json,sys; print(json.dumps(json.loads(open(sys.argv[1
 run "$tmp/one/docs/public/index.md" "$tmp/one/docs/guides/index.md"
 if [ -s "$tmp/requests.jsonl" ]; then
   args="$(req)"
-  if echo "$args" | grep -q '"repo_scope": "github.com/acme/one"'; then
+  if grep -q '"repo_scope": "github.com/acme/one"' <<<"$args"; then
     pass "scope resolved from the files' repository, run from outside it"
   else
     fail "scope not taken from the files' repository: $args"
   fi
-  if echo "$args" | grep -q '"path": "docs/public/index.md"' && echo "$args" | grep -q '"path": "docs/guides/index.md"'; then
+  if grep -q '"path": "docs/public/index.md"' <<<"$args" && grep -q '"path": "docs/guides/index.md"' <<<"$args"; then
     pass "each file carries its path in the repository"
   else
     fail "document paths missing: $args"
   fi
-  if echo "$args" | grep -q '"name": "index.md", "content": "[^"]*", "path": "docs/guides/index.md"'; then
+  if grep -q '"name": "index.md", "content": "[^"]*", "path": "docs/guides/index.md"' <<<"$args"; then
     pass "a file with a path keeps its real name, even when names collide"
   else
     fail "a colliding name was renamed although it carries a path: $args"
@@ -143,7 +143,7 @@ fi
 
 # --- only loose files: today's behaviour, no paths.
 run "$tmp/loose/d.md"
-if [ -s "$tmp/requests.jsonl" ] && ! req | grep -q '"path"'; then
+if [ -s "$tmp/requests.jsonl" ] && ! req | grep '"path"' >/dev/null; then
   pass "a file outside any repository is sent without a path"
 else
   fail "a loose file was not sent, or was sent with a path: $(cat "$tmp/out")"
@@ -151,8 +151,8 @@ fi
 
 # --- an explicit --scope still wins, and paths still come from the repository.
 run --scope github.com/acme/pinned "$tmp/one/docs/public/index.md"
-if [ -s "$tmp/requests.jsonl" ] && req | grep -q '"repo_scope": "github.com/acme/pinned"' \
-  && req | grep -q '"path": "docs/public/index.md"'; then
+if [ -s "$tmp/requests.jsonl" ] && req | grep '"repo_scope": "github.com/acme/pinned"' >/dev/null \
+  && req | grep '"path": "docs/public/index.md"' >/dev/null; then
   pass "--scope overrides the scope and keeps the path"
 else
   fail "--scope did not override, or dropped the path: $(cat "$tmp/out")"
@@ -192,18 +192,50 @@ fi
 
 # --- /upload: the files' shared repository gives the scope.
 run_upload companion-architectural-review '"review this"' "$tmp/one/docs/public/index.md"
-if [ -s "$tmp/requests.jsonl" ] && req | grep -q '"repo_scope": "github.com/acme/one"'; then
+if [ -s "$tmp/requests.jsonl" ] && req | grep '"repo_scope": "github.com/acme/one"' >/dev/null; then
   pass "/upload takes the scope from the files' repository, run from outside it"
 else
   fail "/upload did not take the files' repository scope: $(cat "$tmp/out")"
 fi
 
-# --- /upload: files from two repositories are legitimate; the cwd rule applies.
+# --- /upload: files from two repositories are legitimate; the cwd rule applies,
+# and the cwd is in no repository, so there is no scope. GitHub #385 (found in
+# production, list_scopes, 2026-10-15): this used to send "elsewhere", the
+# cwd's name, minting a scope per scratch directory (scratchpad, helpers, w2-2).
 run_upload companion-architectural-review '"review this"' "$tmp/one/docs/public/index.md" "$tmp/two/docs/c.md"
-if [ -s "$tmp/requests.jsonl" ] && req | grep -q '"repo_scope": "elsewhere"'; then
-  pass "/upload of files from two repositories falls back to the cwd, and is not refused"
+if [ -s "$tmp/requests.jsonl" ] && ! req | grep '"repo_scope"' >/dev/null; then
+  pass "/upload of files from two repositories, run outside any repository, sends no repo_scope and is not refused"
 else
-  fail "/upload of mixed files was refused or mis-scoped: $(cat "$tmp/out")"
+  fail "/upload of mixed files was refused or sent a repo_scope: $(cat "$tmp/out") $(req 2>/dev/null)"
+fi
+
+# --- GitHub #385: a loose file uploaded from outside any repository has no scope.
+run_upload companion-architectural-review '"review this"' "$tmp/loose/d.md"
+if [ -s "$tmp/requests.jsonl" ] && ! req | grep '"repo_scope"' >/dev/null; then
+  pass "/upload of a loose file from outside any repository sends no repo_scope"
+else
+  fail "/upload of a loose file sent a folder-name repo_scope: $(req 2>/dev/null) $(cat "$tmp/out")"
+fi
+
+# --- GitHub #385: the same for /rag-ingest's loose files.
+run "$tmp/loose/d.md"
+if [ -s "$tmp/requests.jsonl" ] && ! req | grep '"repo_scope"' >/dev/null; then
+  pass "/rag-ingest of a loose file from outside any repository sends no repo_scope"
+else
+  fail "/rag-ingest of a loose file sent a folder-name repo_scope: $(req 2>/dev/null) $(cat "$tmp/out")"
+fi
+if grep -q "^repo_scope: (none: outside any repository)" "$tmp/out"; then
+  pass "/rag-ingest prints that there is no scope"
+else
+  fail "/rag-ingest did not print the missing scope: $(cat "$tmp/out")"
+fi
+
+# --- GitHub #385: a pinned scope still applies outside a repository.
+run_upload companion-architectural-review '"review this"' --scope github.com/acme/pinned "$tmp/loose/d.md"
+if [ -s "$tmp/requests.jsonl" ] && req | grep '"repo_scope": "github.com/acme/pinned"' >/dev/null; then
+  pass "/upload --scope still pins a scope outside any repository"
+else
+  fail "/upload --scope was not honoured outside a repository: $(cat "$tmp/out")"
 fi
 
 [ "$fails" -eq 0 ] || exit 1

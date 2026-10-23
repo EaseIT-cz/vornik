@@ -124,12 +124,12 @@ func (n *CompletionNotifier) NotifyTaskCompleted(ctx context.Context, task *pers
 		return // not ours, already delivered, or a duplicate/HA callback
 	}
 	if n.resolver == nil {
-		_ = n.repo.MarkErrored(ctx, rem.ID, "no channel resolver wired")
+		n.undeliverable(ctx, rem, task.ID, "no_resolver", "no channel resolver wired")
 		return
 	}
 	ch := n.resolver.ResolveChannel(rem.Channel)
 	if ch == nil {
-		_ = n.repo.MarkErrored(ctx, rem.ID, "channel "+rem.Channel+" not configured")
+		n.undeliverable(ctx, rem, task.ID, "channel_not_configured", "channel "+rem.Channel+" not configured")
 		return
 	}
 	body := scheduledUpdateBody(rem, task, success, message)
@@ -148,7 +148,7 @@ func (n *CompletionNotifier) NotifyTaskCompleted(ctx context.Context, task *pers
 		SessionID: rem.ChannelRef, Text: body, Timestamp: n.clock(),
 	}, true); err != nil {
 		metricTaskDeliverErrors.Inc()
-		_ = n.repo.MarkErrored(ctx, rem.ID, err.Error())
+		n.markErrored(ctx, rem.ID, err.Error())
 		n.logger.Warn().Err(err).Str("reminder_id", rem.ID).Msg("reminders: task-kind send failed")
 		return
 	}
@@ -178,6 +178,24 @@ func (n *CompletionNotifier) NotifyTaskCompleted(ctx context.Context, task *pers
 			Action: "reminder.task_delivered", Target: rem.ID,
 			After: `{"task_id":"` + task.ID + `","success":` + boolLabel(success) + `}`,
 		})
+	}
+}
+
+// undeliverable records a task-kind outcome that has nowhere to go: a Warn,
+// a count by reason, and the row marked errored (outcome-quality LLD §S8.11
+// row 16d, GitHub #369).
+func (n *CompletionNotifier) undeliverable(ctx context.Context, rem *persistence.Reminder, taskID, reason, msg string) {
+	metricTaskUndeliverable.WithLabelValues(reason).Inc()
+	n.logger.Warn().Str("reminder_id", rem.ID).Str("task_id", taskID).Str("channel", rem.Channel).
+		Str("reason", reason).Msg("reminders: task-kind outcome undeliverable")
+	n.markErrored(ctx, rem.ID, msg)
+}
+
+// markErrored marks the reminder errored and Warns when that write itself
+// fails, which used to be discarded (§S8.11 row 16d).
+func (n *CompletionNotifier) markErrored(ctx context.Context, reminderID, msg string) {
+	if err := n.repo.MarkErrored(ctx, reminderID, msg); err != nil {
+		n.logger.Warn().Err(err).Str("reminder_id", reminderID).Msg("reminders: mark_errored failed")
 	}
 }
 

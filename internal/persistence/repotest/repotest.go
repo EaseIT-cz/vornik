@@ -1011,6 +1011,44 @@ func RunTaskRepositorySuite(t *testing.T, repo persistence.TaskRepository) {
 		}
 	})
 
+	// GitHub #363 (permanent-failure design §8.8 D4): the scheduler's retry
+	// hold reaches the lease query as ExcludedTaskIDs. A guard on the SQL
+	// only: the named task is skipped and the next is leased, and an empty
+	// list leases as before. The scheduler tests prove the list is filled.
+	t.Run("LeaseTask_ExcludedTaskIDs_skips_held_tasks", func(t *testing.T) {
+		project := uniqueID("proj")
+		held := newQueuedTask(project)
+		next := newQueuedTask(project)
+		held.CreatedAt = time.Now().UTC().Add(-time.Hour) // FIFO would pick it first
+		next.CreatedAt = time.Now().UTC()
+		if err := repo.Create(ctx, held); err != nil {
+			t.Fatalf("create held: %v", err)
+		}
+		if err := repo.Create(ctx, next); err != nil {
+			t.Fatalf("create next: %v", err)
+		}
+		opts := persistence.LeaseOptions{ProjectID: project, LeaseHolder: "h", LeaseDurationSeconds: 300,
+			ExcludedTaskIDs: []string{held.ID, uniqueID("absent")}}
+		got, err := repo.LeaseTask(ctx, opts)
+		if err != nil {
+			t.Fatalf("LeaseTask: %v", err)
+		}
+		if got.ID != next.ID {
+			t.Fatalf("a held task was leased: got %s, want %s", got.ID, next.ID)
+		}
+		if _, err := repo.LeaseTask(ctx, opts); !errors.Is(err, persistence.ErrNoTasksAvailable) {
+			t.Fatalf("with only the held task queued, the lease must find nothing; got %v", err)
+		}
+		opts.ExcludedTaskIDs = nil
+		got, err = repo.LeaseTask(ctx, opts)
+		if err != nil {
+			t.Fatalf("LeaseTask without holds: %v", err)
+		}
+		if got.ID != held.ID {
+			t.Fatalf("without holds the task must be leasable: got %s, want %s", got.ID, held.ID)
+		}
+	})
+
 	t.Run("Lease_then_Renew_then_Release_round_trip", func(t *testing.T) {
 		project := uniqueID("proj")
 		_ = repo.Create(ctx, newQueuedTask(project))
@@ -2586,6 +2624,58 @@ func RunTaskJudgeVerdictSuite(t *testing.T, repo persistence.TaskJudgeVerdictRep
 			t.Errorf("global ListRecent didn't include the recorded verdict")
 		}
 	})
+
+	// GitHub #369, outcome-quality LLD S8.11 row 8a: the verdict row carries
+	// why the judge did not decide on full evidence. Before the column, an
+	// llm_* or evidence_incomplete row was told apart only by a metric label
+	// and the summary text. Every read path returns it; a full-evidence row
+	// (FailureClass empty) reads back empty, i.e. NULL.
+	t.Run("FailureClass_round_trips_on_every_read_path", func(t *testing.T) {
+		failedTask := seedTaskRow(t, ctx, taskRepo)
+		failed := &persistence.TaskJudgeVerdict{
+			ID: uniqueID("jv"), ProjectID: project, TaskID: failedTask,
+			Role: "judge", Model: "claude-opus", Verdict: persistence.JudgeVerdictAbstain,
+			FailureClass: "llm_timeout",
+			RecordedAt:   time.Now().UTC(),
+		}
+		if err := repo.Record(ctx, failed); err != nil {
+			t.Fatalf("Record: %v", err)
+		}
+		got, err := repo.GetByTask(ctx, failedTask)
+		if err != nil {
+			t.Fatalf("GetByTask: %v", err)
+		}
+		if got.FailureClass != "llm_timeout" {
+			t.Errorf("GetByTask FailureClass = %q, want llm_timeout", got.FailureClass)
+		}
+		if full, err := repo.GetByTask(ctx, taskID); err != nil {
+			t.Fatalf("GetByTask full-evidence row: %v", err)
+		} else if full.FailureClass != "" {
+			t.Errorf("full-evidence row FailureClass = %q, want empty (NULL)", full.FailureClass)
+		}
+		check := func(name string, rows []*persistence.TaskJudgeVerdict) {
+			t.Helper()
+			for _, r := range rows {
+				if r.ID == failed.ID {
+					if r.FailureClass != "llm_timeout" {
+						t.Errorf("%s FailureClass = %q, want llm_timeout", name, r.FailureClass)
+					}
+					return
+				}
+			}
+			t.Errorf("%s did not return the failed verdict", name)
+		}
+		recent, err := repo.ListRecent(ctx, project, 100)
+		if err != nil {
+			t.Fatalf("ListRecent: %v", err)
+		}
+		check("ListRecent", recent)
+		since, err := repo.ListRecentSince(ctx, project, time.Now().Add(-time.Hour), 100)
+		if err != nil {
+			t.Fatalf("ListRecentSince: %v", err)
+		}
+		check("ListRecentSince", since)
+	})
 }
 
 // RunTaskPostMortemSuite — last-write-wins upsert contract.
@@ -3329,6 +3419,9 @@ func RunKnowledgeEntitySuite(t *testing.T, repo persistence.KnowledgeEntityRepos
 		}
 	})
 
+	// GitHub #449: NameLike is one rule on both drivers.
+	runKnowledgeEntityNameLikeCases(t, repo)
+
 	t.Run("UpdateLifecycle_flips_state", func(t *testing.T) {
 		if err := repo.UpdateLifecycle(ctx, ent.ID, "quarantined"); err != nil {
 			t.Fatalf("UpdateLifecycle: %v", err)
@@ -3425,11 +3518,11 @@ func RunKnowledgeEdgeSuite(t *testing.T, repo persistence.KnowledgeEdgeRepositor
 		}
 	})
 
-	// DropChunkFromSources is implementation-specific (postgres uses a
-	// single-statement CTE; SQLite walks rows in Go). The two
-	// backends behave subtly differently on whether the outer
-	// lifecycle-flip is visible to a subsequent List; per-backend
-	// tests cover that.
+	// GitHub #450: DropChunkFromSources does the same thing, and returns
+	// the same count, on both drivers. (Superseded 2026-10-21: this suite
+	// used to skip it as "implementation-specific", which is how the
+	// drivers came to disagree.)
+	runDropChunkFromSourcesCases(t, repo, entityRepo)
 }
 
 // RunMemoryQuarantineSuite — Insert + ListPending + MarkReleased +
@@ -4473,6 +4566,76 @@ func RunExtractedDocumentSuite(t *testing.T, repo persistence.ExtractedDocumentR
 		_ = repo.Upsert(ctx, d2)
 		if d1.ID == d2.ID {
 			t.Errorf("different versions must produce different rows; both IDs = %s", d1.ID)
+		}
+	})
+
+	// GitHub #422 (found at review, 2026-10-17): GetByArtifact ordered
+	// extractor_version as TEXT, so "1.9.0" outranked "1.10.0" and the cache
+	// checks missed on every call while agents read the stale extraction.
+	// "Latest" now means the most recently written row (extracted_at), which
+	// these three cases pin; each fails under the old ORDER BY
+	// extractor_version DESC. Versions of different extractor names are not
+	// comparable at all (the swarmd-to-vornik rename put both in production).
+	// Each case inserts the row it expects LAST in time FIRST, so an order by
+	// insertion (rowid, serial) cannot pass for an order by extracted_at.
+	// see LLD § https://docs.vornik.io 5.1.2
+	base := time.Now().UTC().Truncate(time.Millisecond)
+	t.Run("GetByArtifact_returns_1.10_written_after_1.9", func(t *testing.T) {
+		artifactID := uniqueID("art")
+		older := newDoc("p1", artifactID, "vornik-extract-pdf", "1.9.0")
+		older.ExtractedAt = base.Add(-time.Hour)
+		newer := newDoc("p1", artifactID, "vornik-extract-pdf", "1.10.0")
+		newer.ExtractedAt = base
+		for _, d := range []*persistence.ExtractedDocument{newer, older} {
+			if err := repo.Upsert(ctx, d); err != nil {
+				t.Fatalf("Upsert %s: %v", d.ExtractorVersion, err)
+			}
+		}
+		got, err := repo.GetByArtifact(ctx, artifactID)
+		if err != nil {
+			t.Fatalf("GetByArtifact: %v", err)
+		}
+		if got.ExtractorVersion != "1.10.0" || got.ID != newer.ID {
+			t.Errorf("GetByArtifact = %s (%s), want the 1.10.0 row written last (%s): "+
+				"extractor_version must not be ordered as text", got.ExtractorVersion, got.ID, newer.ID)
+		}
+	})
+	t.Run("GetByArtifact_returns_the_row_written_last_after_a_rollback", func(t *testing.T) {
+		artifactID := uniqueID("art")
+		upgraded := newDoc("p1", artifactID, "vornik-extract-pdf", "1.2.0")
+		upgraded.ExtractedAt = base.Add(-time.Hour)
+		rolledBack := newDoc("p1", artifactID, "vornik-extract-pdf", "1.1.0")
+		rolledBack.ExtractedAt = base
+		for _, d := range []*persistence.ExtractedDocument{rolledBack, upgraded} {
+			if err := repo.Upsert(ctx, d); err != nil {
+				t.Fatalf("Upsert %s: %v", d.ExtractorVersion, err)
+			}
+		}
+		got, err := repo.GetByArtifact(ctx, artifactID)
+		if err != nil {
+			t.Fatalf("GetByArtifact: %v", err)
+		}
+		if got.ID != rolledBack.ID {
+			t.Errorf("GetByArtifact = %s, want the 1.1.0 row the rolled-back extractor wrote last", got.ExtractorVersion)
+		}
+	})
+	t.Run("GetByArtifact_compares_rows_across_extractor_names_by_recency", func(t *testing.T) {
+		artifactID := uniqueID("art")
+		legacy := newDoc("p1", artifactID, "swarmd-extract-pdf", "0.2.0")
+		legacy.ExtractedAt = base
+		renamed := newDoc("p1", artifactID, "vornik-extract-pdf", "0.1.0")
+		renamed.ExtractedAt = base.Add(time.Minute)
+		for _, d := range []*persistence.ExtractedDocument{renamed, legacy} {
+			if err := repo.Upsert(ctx, d); err != nil {
+				t.Fatalf("Upsert %s: %v", d.ExtractorName, err)
+			}
+		}
+		got, err := repo.GetByArtifact(ctx, artifactID)
+		if err != nil {
+			t.Fatalf("GetByArtifact: %v", err)
+		}
+		if got.ID != renamed.ID {
+			t.Errorf("GetByArtifact = %s, want vornik-extract-pdf (written last)", got.ExtractorName)
 		}
 	})
 
@@ -5792,6 +5955,118 @@ func runPendingOutcomeGuardCases(t *testing.T, h *pendingOutcomeFixture, sweeper
 	}
 	if got := h.outcomeOf(t, old); got != "pending_validation" {
 		t.Errorf("limit=0 relabelled a row (%q) — a non-positive batch must be a no-op", got)
+	}
+}
+
+// stuckStepRecorder is the watchdog's insert for the step of an execution it
+// failed as stuck. Optional capability, like pendingOutcomeSweeper.
+type stuckStepRecorder interface {
+	RecordStuckStepOutcome(ctx context.Context, o *persistence.ExecutionStepOutcome, since time.Time) (bool, error)
+}
+
+// RunStuckStepOutcomeSuite pins the duplicate guard of the watchdog's step row
+// (outcome-quality-design §S8.8, GitHub #369; found at review): the row is not
+// written when the step already has one recorded at or after the last
+// checkpoint (the executor got there first), it is written when the only row
+// is older (an earlier visit of the same step), and a second write with the
+// same id writes nothing (one row per execution, however often the watchdog
+// retries).
+func RunStuckStepOutcomeSuite(t *testing.T, outcomes persistence.ExecutionStepOutcomeRepository, execs persistence.ExecutionRepository, tasks persistence.TaskRepository) {
+	t.Helper()
+	rec, ok := outcomes.(stuckStepRecorder)
+	if !ok {
+		t.Fatal("backend does not implement RecordStuckStepOutcome: the watchdog cannot record a stuck step")
+	}
+	h := newPendingOutcomeFixture(t, outcomes, execs, tasks)
+	checkpoint := time.Now().UTC().Add(-time.Hour).Truncate(time.Millisecond)
+	stuckRow := func(execID string) *persistence.ExecutionStepOutcome {
+		dur := int64(1234)
+		now := time.Now().UTC().Truncate(time.Millisecond)
+		return &persistence.ExecutionStepOutcome{
+			ID: "outc_stuck_" + execID, ProjectID: h.project, TaskID: uniqueID("t"),
+			ExecutionID: execID, StepID: "route", Role: "lead", Model: "m",
+			Outcome: "failed", ErrorClass: "stuck_execution", ErrorDetail: "watchdog: execution stuck",
+			DurationMS: &dur, FinalizedAt: &now, RecordedAt: now,
+		}
+	}
+	rowsFor := func(execID string) []*persistence.ExecutionStepOutcome {
+		t.Helper()
+		rows, err := outcomes.List(h.ctx, persistence.ExecutionStepOutcomeFilter{ExecutionID: &execID})
+		if err != nil {
+			t.Fatalf("List: %v", err)
+		}
+		return rows
+	}
+
+	// No row for the step: written, and a retry with the same id writes nothing.
+	fresh := h.seedExec(t, persistence.ExecutionStatusFailed, 0)
+	ins, err := rec.RecordStuckStepOutcome(h.ctx, stuckRow(fresh), checkpoint)
+	if err != nil || !ins {
+		t.Fatalf("first write: inserted=%v err=%v, want true, nil", ins, err)
+	}
+	ins, err = rec.RecordStuckStepOutcome(h.ctx, stuckRow(fresh), checkpoint)
+	if err != nil || ins {
+		t.Fatalf("second write with the same id: inserted=%v err=%v, want false, nil", ins, err)
+	}
+	got := rowsFor(fresh)
+	if len(got) != 1 {
+		t.Fatalf("rows = %d, want 1", len(got))
+	}
+	r := got[0]
+	if r.Outcome != "failed" || r.ErrorClass != "stuck_execution" || r.Role != "lead" || r.Model != "m" ||
+		r.DurationMS == nil || *r.DurationMS != 1234 || r.FinalizedAt == nil {
+		t.Errorf("row round-trip: %+v", r)
+	}
+
+	// The executor recorded the step after the checkpoint: the watchdog writes nothing.
+	raced := h.seedExec(t, persistence.ExecutionStatusFailed, 0)
+	h.seedPending(t, raced) // recorded now, after the checkpoint
+	ins, err = rec.RecordStuckStepOutcome(h.ctx, stuckRow(raced), checkpoint)
+	if err != nil || ins {
+		t.Fatalf("after the executor's row: inserted=%v err=%v, want false, nil", ins, err)
+	}
+	if n := len(rowsFor(raced)); n != 1 {
+		t.Fatalf("rows = %d, want only the executor's", n)
+	}
+
+	// The step's only row predates the checkpoint (an earlier visit): written.
+	looped := h.seedExec(t, persistence.ExecutionStatusFailed, 0)
+	h.seedPending(t, looped)
+	ins, err = rec.RecordStuckStepOutcome(h.ctx, stuckRow(looped), time.Now().UTC().Add(time.Minute))
+	if err != nil || !ins {
+		t.Fatalf("after an earlier visit's row: inserted=%v err=%v, want true, nil", ins, err)
+	}
+	if n := len(rowsFor(looped)); n != 2 {
+		t.Fatalf("rows = %d, want the earlier visit's and the watchdog's", n)
+	}
+	runStuckStepBoundary(t, h, rec, stuckRow)
+}
+
+// runStuckStepBoundary: a row recorded exactly at the checkpoint blocks the
+// watchdog's row (>=); one a microsecond before it does not. Both drivers
+// order timestamps exactly (SQLite as fixed-width nanosecond text).
+func runStuckStepBoundary(t *testing.T, h *pendingOutcomeFixture, rec stuckStepRecorder, stuckRow func(string) *persistence.ExecutionStepOutcome) {
+	t.Helper()
+	at := time.Now().UTC().Add(-time.Minute).Truncate(time.Microsecond)
+	edge := func(recordedAt time.Time) string {
+		t.Helper()
+		execID := h.seedExec(t, persistence.ExecutionStatusFailed, 0)
+		if err := h.outcomes.Record(h.ctx, &persistence.ExecutionStepOutcome{
+			ID: uniqueID("oc"), ProjectID: h.project, TaskID: uniqueID("t"),
+			ExecutionID: execID, StepID: "route", Role: "lead", Model: "m",
+			Outcome: "pending_validation", RecordedAt: recordedAt,
+		}); err != nil {
+			t.Fatalf("Record: %v", err)
+		}
+		return execID
+	}
+	onEdge := edge(at)
+	if ins, err := rec.RecordStuckStepOutcome(h.ctx, stuckRow(onEdge), at); err != nil || ins {
+		t.Fatalf("a row exactly at the checkpoint: inserted=%v err=%v, want false, nil", ins, err)
+	}
+	before := edge(at.Add(-time.Microsecond))
+	if ins, err := rec.RecordStuckStepOutcome(h.ctx, stuckRow(before), at); err != nil || !ins {
+		t.Fatalf("a row a microsecond before the checkpoint: inserted=%v err=%v, want true, nil", ins, err)
 	}
 }
 

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -137,9 +138,35 @@ func parseReadSet(evidence string) map[string]string {
 }
 
 // checkReadSet returns the first read dependency whose current bytes differ
-// from what the proposal grounded on (§4), or "" when every one holds.
+// from what the proposal grounded on (§4), or "" when every one holds. It is
+// the forward path's strict check: nothing has been written yet, so every
+// entry, the op's own targets included, must be at its recorded hash.
 func (e *ApplyEngine) checkReadSet(readSet map[string]string) (string, error) {
-	for rel, want := range readSet {
+	return e.checkReadSetAgainst(readSet, nil)
+}
+
+// checkReadSetAgainst is checkReadSet for recovery (§14.2, GitHub #446). own
+// holds the row's resolved ops: an entry whose RESOLVED path is one of their
+// targets also passes when the file is at that op's intended post-state,
+// because recovery runs over a tree the row's own writes may already have
+// reached. Both producers put their targets in the read set (pre-image hash,
+// or ABSENT for a create), so without this every crash after write #1 parked
+// the row in DRIFT and blocked its project. Matching is on the absolute path
+// both sides resolve through resolveTarget, never on the raw strings, and
+// Apply refuses two ops on one path, so each target names exactly one op.
+// Every other entry, and a target at neither state, fails as before.
+func (e *ApplyEngine) checkReadSetAgainst(readSet map[string]string, own []resolvedOp) (string, error) {
+	byTarget := make(map[string]resolvedOp, len(own))
+	for _, ro := range own {
+		byTarget[ro.target] = ro
+	}
+	rels := make([]string, 0, len(readSet))
+	for rel := range readSet {
+		rels = append(rels, rel)
+	}
+	sort.Strings(rels) // deterministic: the same row names the same path every start
+	for _, rel := range rels {
+		want := readSet[rel]
 		full, err := e.resolveTarget(rel)
 		if err != nil {
 			return "", err
@@ -147,6 +174,9 @@ func (e *ApplyEngine) checkReadSet(readSet map[string]string) (string, error) {
 		cur, existed, rerr := readIfExists(full)
 		if rerr != nil {
 			return "", fmt.Errorf("read dependency %s: %w", rel, rerr)
+		}
+		if ro, ok := byTarget[full]; ok && atIntended(ro.op, cur, existed) {
+			continue // this row's own write landed (§14.2)
 		}
 		if want == persistence.JournalReadSetAbsent {
 			if existed {
@@ -795,7 +825,11 @@ func (e *ApplyEngine) reconcileRow(ctx context.Context, row *persistence.ConfigA
 	// A changed dependency parks the row in DRIFT: an operator decides,
 	// because rolling forward and rolling back are both wrong when the
 	// premise changed.
-	if drifted, cerr := e.checkReadSet(row.ReadSet); cerr != nil || drifted != "" {
+	//
+	// The row's own targets are held to their recorded hash OR their intended
+	// content (§14.2, GitHub #446): an open row is one whose writes may have
+	// landed, and the apply's own write is not drift.
+	if drifted, cerr := e.checkReadSetAgainst(row.ReadSet, resolved); cerr != nil || drifted != "" {
 		if cerr != nil {
 			return fmt.Errorf("journal %s: read dependency unreadable during recovery: %w", row.ID, cerr)
 		}

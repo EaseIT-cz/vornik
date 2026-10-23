@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -76,12 +77,9 @@ type hermesRun struct {
 func runHermes(t *testing.T, s *stack, prompt string) hermesRun {
 	t.Helper()
 	modelEvidence(s).reset()
-	args := hermesRunArgs(t, "--rm", "--network", "host",
-		"-v", s.hermesHome+":/opt/data:Z",
-		"-e", "VORNIK_URL="+s.hermesURL,
-		"-e", "VORNIK_BROKER_TOKEN="+s.brokerKey,
-		"-e", "VORNIK_MEMORY_TOKEN="+s.memoryKey,
-		hermesImage, "hermes", "-z", prompt)
+	args := hermesRunArgs(t, slices.Concat([]string{"--rm", "--network", "host",
+		"-v", s.hermesHome + ":/opt/data:Z"}, hermesVornikEnv(s),
+		[]string{hermesImage, "hermes", "-z", prompt})...)
 	cmd := exec.Command("podman", args...)
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &stdout, &stderr
@@ -93,6 +91,34 @@ func runHermes(t *testing.T, s *stack, prompt string) hermesRun {
 		t.Logf("hermes -z exited: %v\n%s", err, tail(r.Stderr, 3000))
 	}
 	return r
+}
+
+// hermesVornikEnv is the plugin's settings as every lane Hermes run gets
+// them; the H0-skills probe uses the same, so the memory-gated skill
+// registers there exactly when it does in a run (lane design, H0-skills).
+func hermesVornikEnv(s *stack) []string {
+	return []string{
+		"-e", "VORNIK_URL=" + s.hermesURL,
+		"-e", "VORNIK_BROKER_TOKEN=" + s.brokerKey,
+		"-e", "VORNIK_MEMORY_TOKEN=" + s.memoryKey,
+	}
+}
+
+// probeHermesSkills runs skillsProbe in the Hermes image against the lane's
+// home, with the plugin settings a run gets, and returns what it printed
+// (lane design, "Amendment 2026-10-16 — H0-skills", GitHub #388).
+func probeHermesSkills(t *testing.T, s *stack) string {
+	t.Helper()
+	writeFile(t, filepath.Join(s.hermesHome, "skills-probe.py"), skillsProbe)
+	args := hermesRunArgs(t, slices.Concat([]string{"--rm", "--network", "host",
+		"-v", s.hermesHome + ":/opt/data:Z"}, hermesVornikEnv(s),
+		[]string{hermesImage, "python3", "/opt/data/skills-probe.py"})...)
+	out, err := exec.Command("podman", args...).CombinedOutput()
+	_ = exec.Command("podman", "unshare", "chown", "-R", "0:0", s.hermesHome).Run()
+	if err != nil {
+		t.Logf("skills probe exited: %v", err)
+	}
+	return string(out)
 }
 
 // TestHermesBringup is a discovery run, not a scenario: one prompt through

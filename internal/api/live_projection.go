@@ -13,13 +13,21 @@ import (
 type liveView int
 
 const (
-	// liveViewOperator is today's bytes, unchanged: every non-companion caller.
+	// liveViewOperator is today's bytes, unchanged: an admin-class
+	// non-companion caller (before GitHub #466, every non-companion caller).
 	liveViewOperator liveView = iota
 	// liveViewCompanion is the redacted view for an ordinary companion key.
 	liveViewCompanion
 	// liveViewBroker is lifecycle only: a broker task, a broker-project key,
 	// or a task in a broker project.
 	liveViewBroker
+	// liveViewScrubbed is the operator's content with secrets withheld: a
+	// non-companion caller that is not admin-class (a project key, a static
+	// non-admin key, a UI user session). llm_token is dropped, an event with
+	// any secret finding is withheld whole, every string is scrubbed;
+	// identities and project names are kept (GitHub #466; process-spawn-law
+	// design, "Amendment 2026-10-21 (#466)", D2).
+	liveViewScrubbed
 )
 
 // brokerViewFor is the one broker rule every agent read path shares (status,
@@ -86,8 +94,36 @@ func projectLiveEvent(evt livepubsub.LiveEvent, view liveView, scrub report.Line
 		return projectBroker(evt)
 	case liveViewCompanion:
 		return projectCompanion(evt, scrub, covers)
+	case liveViewScrubbed:
+		m, out, keep := scrubbedLivePayload(evt, scrub)
+		if m == nil {
+			return out, keep
+		}
+		return withPayload(evt, m), true
 	}
 	return livepubsub.LiveEvent{}, false
+}
+
+// scrubbedLivePayload is the withhold-and-scrub step the companion and the
+// scrubbed views share. It drops llm_token (a secret split across deltas is
+// seen by no per-event scan) and everything when scrub is nil (keep false);
+// it returns the withheld frame (m nil, keep true) when the scrubber
+// withholds the marshalled event or any string leaf or map key of its
+// payload (decided on the whole event first, so a secret split across two
+// fields is seen: review-20261008-fb6c F2); otherwise the scrubbed payload.
+func scrubbedLivePayload(evt livepubsub.LiveEvent, scrub report.LineScrubber) (map[string]any, livepubsub.LiveEvent, bool) {
+	if scrub == nil || evt.Kind == livepubsub.KindLLMToken {
+		return nil, livepubsub.LiveEvent{}, false
+	}
+	m, ok := payloadAsMap(evt.Payload)
+	if !ok {
+		return nil, livepubsub.LiveEvent{}, false
+	}
+	whole, _ := json.Marshal(m)
+	if _, withheld := scrub(string(whole)); withheld || scrubStrings(m, scrub) {
+		return nil, withheldEvent(evt), true
+	}
+	return m, livepubsub.LiveEvent{}, true
 }
 
 // projectBroker is the lifecycle view (livepubsub.ProjectLifecycle): the one
@@ -102,16 +138,9 @@ func projectBroker(evt livepubsub.LiveEvent) (livepubsub.LiveEvent, bool) {
 // fields is seen: review-20261008-fb6c F2), scrubs every string, and blanks
 // identities and foreign project names. No scrubber serves nothing.
 func projectCompanion(evt livepubsub.LiveEvent, scrub report.LineScrubber, covers func(string) bool) (livepubsub.LiveEvent, bool) {
-	if scrub == nil || evt.Kind == livepubsub.KindLLMToken {
-		return livepubsub.LiveEvent{}, false
-	}
-	m, ok := payloadAsMap(evt.Payload)
-	if !ok {
-		return livepubsub.LiveEvent{}, false
-	}
-	whole, _ := json.Marshal(m)
-	if _, withheld := scrub(string(whole)); withheld || scrubStrings(m, scrub) {
-		return withheldEvent(evt), true
+	m, out, keep := scrubbedLivePayload(evt, scrub)
+	if m == nil {
+		return out, keep
 	}
 	blankFields(m, identityFields)
 	if fields, ok := foreignProjectFields[evt.Kind]; ok {
@@ -157,40 +186,74 @@ func payloadAsMap(p any) (map[string]any, bool) {
 	return m, true
 }
 
-// scrubStrings scrubs every string leaf of v in place and reports whether any
-// leaf was withheld.
+// scrubStrings scrubs every string leaf AND every map key of v in place and
+// reports whether any was withheld. Keys are scanned because a payload such
+// as output_json can carry a secret as an object key, and the marshalled
+// form hides a key after a newline behind \n from the \b-anchored nets
+// (security review 2026-10-21, GitHub #440 lane W16-F: the walk scanned
+// values only).
 func scrubStrings(v any, scrub report.LineScrubber) bool {
+	return rewriteJSONStrings(v, func(s string) (string, bool) { return scrub(s) })
+}
+
+// rewriteJSONStrings replaces every map key and every string leaf of a
+// decoded JSON value in place with rewrite's output, and stops, reporting
+// true, the first time rewrite reports stop. It is the one walk behind the
+// live projection's whole-event withhold (scrubStrings) and the step
+// routes' per-line scrubbed view (scrubStoredText, GitHub #496), which
+// differ only in their leaf rule. A top-level string is not reachable here
+// (it is not addressable in v); callers handle it themselves.
+func rewriteJSONStrings(v any, rewrite func(string) (string, bool)) bool {
 	switch t := v.(type) {
 	case map[string]any:
+		if rewriteJSONKeys(t, rewrite) {
+			return true
+		}
 		for k, x := range t {
-			if s, ok := x.(string); ok {
-				out, withheld := scrub(s)
-				if withheld {
-					return true
-				}
-				t[k] = out
-				continue
-			}
-			if scrubStrings(x, scrub) {
+			out, stop := rewriteJSONElem(x, rewrite)
+			if stop {
 				return true
 			}
+			t[k] = out
 		}
 	case []any:
 		for i, x := range t {
-			if s, ok := x.(string); ok {
-				out, withheld := scrub(s)
-				if withheld {
-					return true
-				}
-				t[i] = out
-				continue
-			}
-			if scrubStrings(x, scrub) {
+			out, stop := rewriteJSONElem(x, rewrite)
+			if stop {
 				return true
 			}
+			t[i] = out
 		}
 	}
 	return false
+}
+
+// rewriteJSONKeys renames every key of m to rewrite's output.
+func rewriteJSONKeys(m map[string]any, rewrite func(string) (string, bool)) bool {
+	renames := map[string]string{}
+	for k := range m {
+		out, stop := rewrite(k)
+		if stop {
+			return true
+		}
+		if out != k {
+			renames[k] = out
+		}
+	}
+	for from, to := range renames {
+		m[to] = m[from]
+		delete(m, from)
+	}
+	return false
+}
+
+// rewriteJSONElem is one element's new value: a string leaf rewritten, any
+// other value walked in place.
+func rewriteJSONElem(x any, rewrite func(string) (string, bool)) (any, bool) {
+	if s, ok := x.(string); ok {
+		return rewrite(s)
+	}
+	return x, rewriteJSONStrings(x, rewrite)
 }
 
 func withPayload(evt livepubsub.LiveEvent, payload map[string]any) livepubsub.LiveEvent {

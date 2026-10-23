@@ -43,6 +43,10 @@ func RunRetentionSweepSuite(t *testing.T, db *sql.DB, seedTime func(time.Time) a
 		f.t = t
 		f.globalSteps()
 	})
+	t.Run("derived copies: blackbox_trace_cache, project_gists (#394)", func(t *testing.T) {
+		f.t = t
+		f.derivedCopies()
+	})
 }
 
 type retentionFixture struct {
@@ -232,4 +236,100 @@ func (f *retentionFixture) globalSteps() {
 		t.Errorf("SweepGlobal: %v", err)
 	}
 	f.verify()
+}
+
+// derivedCopies pins the two derived-copy horizons of GitHub #394 (retention
+// design §8.2.1, §8.2.2), on the compiled defaults (zero GlobalPolicy): a
+// blackbox trace older than one day and a gist not refreshed for seven days
+// are deleted, and a narrative not rewritten for seven days is cleared under
+// a term row that stays.
+//
+// Found at: review (the Art 17 copies inventory, design 2026-07-29 §15.11.2);
+// observed at integration — the rows outlived every source they were derived
+// from because nothing deleted them.
+//
+// Both tables are Postgres-only. On SQLite the steps must be no-ops that report
+// zero examined rather than errors.
+//
+// see LLD § https://docs.vornik.io §8
+func (f *retentionFixture) derivedCopies() {
+	t := f.t
+	ctx := context.Background()
+	sw := f.sweeper()
+
+	var present bool
+	if err := f.db.QueryRowContext(ctx,
+		`SELECT EXISTS (SELECT 1 FROM sqlite_master WHERE name = 'blackbox_trace_cache')`).Scan(&present); err == nil {
+		// SQLite: neither table exists, so neither step may fail or count.
+		g, err := sw.SweepGlobal(ctx, retention.GlobalPolicy{})
+		if err != nil {
+			t.Fatalf("SweepGlobal on SQLite: %v", err)
+		}
+		if present || g.BlackboxTraceCacheExamined != 0 || g.ProjectGistsExamined != 0 ||
+			g.BlackboxTraceCache != 0 || g.ProjectGists != 0 || g.ProjectGistNarratives != 0 {
+			t.Fatalf("SQLite has no derived-copy tables; got present=%v counts=%+v", present, g)
+		}
+		return
+	}
+
+	trace := func(name string, at time.Time, keep bool) {
+		id := uniqueID(name)
+		f.seed("blackbox_trace_cache", "task_id", id, keep, `INSERT INTO blackbox_trace_cache
+			(task_id, project_id, trace_digest, schema_ver, payload, assembled_at, expires_at)
+			VALUES ($1, 'ret-bb', 'digest', 1, '{"events":["a transcript line"]}', $2, $3)`,
+			id, f.seedTime(at), f.seedTime(at.Add(24*time.Hour)))
+	}
+	trace("bb-2d", f.daysAgo(2), false)
+	trace("bb-25h", f.now.Add(-25*time.Hour), false)
+	trace("bb-23h", f.now.Add(-23*time.Hour), true)
+	trace("bb-1h", f.now.Add(-time.Hour), true)
+
+	gist := func(name string, generated time.Time, narrativeAt any, keep bool) string {
+		id := uniqueID(name)
+		f.seed("project_gists", "project_id", id, keep, `INSERT INTO project_gists
+			(project_id, terms_json, chunks_scanned, generated_at, duration_ms,
+			 narrative, narrative_model, narrative_generated_at)
+			VALUES ($1, '[{"term":"alice","count":3}]', 3, $2, 1, 'Alice wrote about her appointment.', 'm', $3)`,
+			id, f.seedTime(generated), narrativeAt)
+		return id
+	}
+	gist("gist-8d", f.daysAgo(8), f.seedTime(f.daysAgo(8)), false)
+	gist("gist-6d", f.daysAgo(6), f.seedTime(f.daysAgo(6)), true)
+	staleNarrative := gist("gist-fresh-stale-narrative", f.now.Add(-10*time.Minute), f.seedTime(f.daysAgo(8)), true)
+	freshNarrative := gist("gist-fresh-fresh-narrative", f.now.Add(-10*time.Minute), f.seedTime(f.now.Add(-time.Hour)), true)
+
+	pre, err := sw.PreviewGlobal(ctx, retention.GlobalPolicy{})
+	if err != nil {
+		t.Fatalf("PreviewGlobal: %v", err)
+	}
+	// Denominators (CLAUDE.md §4): every seeded row was examined.
+	if pre.BlackboxTraceCacheExamined < 4 || pre.ProjectGistsExamined < 4 {
+		t.Errorf("examined counts must include the seeded rows: %+v", pre)
+	}
+	if pre.BlackboxTraceCache < 2 || pre.ProjectGists < 1 || pre.ProjectGistNarratives < 1 {
+		t.Errorf("preview must count the due rows: %+v", pre)
+	}
+	g, err := sw.SweepGlobal(ctx, retention.GlobalPolicy{})
+	if err != nil {
+		t.Fatalf("SweepGlobal: %v", err)
+	}
+	if g.BlackboxTraceCache < 2 || g.ProjectGists < 1 || g.ProjectGistNarratives < 1 {
+		t.Errorf("sweep must report what it removed: %+v", g)
+	}
+	f.verify()
+
+	narrative := func(id string) (string, bool) {
+		var n sql.NullString
+		if err := f.db.QueryRowContext(ctx, `SELECT narrative FROM project_gists WHERE project_id = $1`, id).Scan(&n); err != nil {
+			t.Fatalf("read narrative %s: %v", id, err)
+		}
+		return n.String, n.Valid
+	}
+	if text, ok := narrative(staleNarrative); ok {
+		t.Errorf("a narrative not rewritten for 7 days must be cleared, still %q", text)
+	}
+	if _, ok := narrative(freshNarrative); !ok {
+		t.Errorf("a narrative rewritten an hour ago must be kept")
+	}
+	_, _ = f.db.ExecContext(ctx, `DELETE FROM project_gists WHERE project_id IN ($1, $2)`, staleNarrative, freshNarrative)
 }

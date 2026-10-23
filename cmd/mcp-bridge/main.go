@@ -3,21 +3,17 @@
 // mcp-bridge is a small helper that runs inside agent containers, giving them
 // access to MCP (Model Context Protocol) servers defined in the project config.
 //
-// Two modes, selected automatically:
+// It only relays. VORNIK_API_URL and VORNIK_PROJECT_ID name the daemon and
+// the project; discover and call are forwarded to the daemon's
+// /api/v1/projects/{id}/mcp/* endpoints. The daemon holds the per-project MCP
+// clients, their credentials, the approval rows and the read gates (§6.4,
+// §6.5 of the agent-administered design), so every call is judged there and
+// the agent image needs no node/npm and no secrets.
 //
-//  1. Daemon-proxy mode (preferred, scales to multi-tenant):
-//     When VORNIK_API_URL and VORNIK_PROJECT_ID are set, the bridge forwards
-//     discover and call requests to the vornik daemon's
-//     /api/v1/projects/{id}/mcp/* endpoints. The daemon already holds
-//     persistent per-project MCP clients with their credentials — the agent
-//     piggybacks on those, so the agent image doesn't need node/npm or
-//     bind-mounted secrets, and there's no per-task cold-start cost.
-//
-//  2. Local-subprocess mode (fallback):
-//     Reads mcp.json (path: $MCP_CONFIG or /app/input/mcp.json) and spawns
-//     the configured command directly. Works when the daemon isn't
-//     reachable but requires the subprocess command to be runnable inside
-//     the agent container. Kept for back-compat and tests.
+// Without VORNIK_API_URL the bridge refuses every verb and starts nothing.
+// The local-subprocess mode that read mcp.json and ran its own MCP manager
+// inside the container, with none of the daemon's gates, was removed
+// (GitHub #498; design §6.5, Amendment 2026-10-21 (#498)).
 //
 // Subcommands:
 //
@@ -40,15 +36,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/rs/zerolog"
 	"vornik.io/vornik/internal/chat"
-	"vornik.io/vornik/internal/mcp"
-	"vornik.io/vornik/internal/spawn"
 )
 
 const (
-	defaultMCPConfigPath = "/app/input/mcp.json"
-
 	envAPIURL    = "VORNIK_API_URL"
 	envProjectID = "VORNIK_PROJECT_ID"
 	// VORNIK_API_KEY is the bearer the executor injects for
@@ -86,58 +77,36 @@ func run() error {
 		return fmt.Errorf("usage: mcp-bridge <discover|call> [args...]")
 	}
 
-	logger := zerolog.New(os.Stderr).With().Timestamp().Str("component", "mcp-bridge").Logger()
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 
-	// Daemon-proxy mode takes precedence when both env vars are set.
-	// The daemon owns the persistent MCP clients; the agent just forwards.
-	if apiURL := os.Getenv(envAPIURL); apiURL != "" {
-		projectID := os.Getenv(envProjectID)
-		if projectID == "" {
-			return fmt.Errorf("%s is set but %s is empty — daemon-proxy mode requires both", envAPIURL, envProjectID)
-		}
-		switch os.Args[1] {
-		case "discover":
-			return httpDiscover(ctx, apiURL, projectID)
-		case "call":
-			if len(os.Args) < 4 {
-				return fmt.Errorf("usage: mcp-bridge call <qualifiedName> <argsJSON>")
-			}
-			return httpCall(ctx, apiURL, projectID, os.Args[2], os.Args[3])
-		default:
-			return fmt.Errorf("unknown subcommand %q — use discover or call", os.Args[1])
-		}
+	// The daemon owns the MCP clients and judges every call; the agent
+	// just forwards. No daemon URL: refuse, there is no local mode (#498).
+	apiURL := os.Getenv(envAPIURL)
+	if apiURL == "" {
+		return errNoDaemonURL
 	}
-
-	// Fallback: local subprocess mode. Reads mcp.json and spawns.
-	cfgPath := os.Getenv("MCP_CONFIG")
-	if cfgPath == "" {
-		cfgPath = defaultMCPConfigPath
+	projectID := os.Getenv(envProjectID)
+	if projectID == "" {
+		return fmt.Errorf("%s is set but %s is empty — daemon-proxy mode requires both", envAPIURL, envProjectID)
 	}
-	servers, err := loadConfig(cfgPath)
-	if err != nil {
-		return fmt.Errorf("load config %s: %w", cfgPath, err)
-	}
-
-	// Local mode uses a synthetic projectID — the Manager API is
-	// project-keyed, but this binary doesn't interact with cross-project
-	// routing. "local" keeps the map consistent.
-	const localProjectID = "local"
 	switch os.Args[1] {
 	case "discover":
-		return cmdDiscover(ctx, localProjectID, servers, logger)
+		return httpDiscover(ctx, apiURL, projectID)
 	case "call":
 		if len(os.Args) < 4 {
 			return fmt.Errorf("usage: mcp-bridge call <qualifiedName> <argsJSON>")
 		}
-		return cmdCall(ctx, localProjectID, servers, os.Args[2], os.Args[3], logger)
+		return httpCall(ctx, apiURL, projectID, os.Args[2], os.Args[3])
 	default:
 		return fmt.Errorf("unknown subcommand %q — use discover or call", os.Args[1])
 	}
 }
 
-// --- daemon-proxy mode ---
+// errNoDaemonURL is the refusal without VORNIK_API_URL. It names the variable
+// so the entrypoint's log says what is missing.
+var errNoDaemonURL = fmt.Errorf("%s is not set: mcp-bridge only relays MCP calls to the Vornik daemon, "+
+	"which holds the approvals and the credentials (the local mcp.json mode was removed, GitHub #498)", envAPIURL)
 
 // daemonHTTP returns the base URL and HTTP client to reach the daemon.
 // When VORNIK_API_URL uses the unix:// scheme — the daemon-only network
@@ -264,55 +233,4 @@ func httpCall(ctx context.Context, apiURL, projectID, qualifiedName, argsJSON st
 	}
 	fmt.Print(wrap.Text)
 	return nil
-}
-
-// --- local subprocess mode ---
-
-func cmdDiscover(ctx context.Context, projectID string, servers []mcp.ServerConfig, logger zerolog.Logger) error {
-	mgr := mcp.NewManager(logger)
-	mgr.StartForProject(ctx, projectID, servers)
-	defer mgr.Close()
-
-	tools := mgr.Tools(projectID)
-	if tools == nil {
-		tools = []chat.Tool{}
-	}
-	enc := json.NewEncoder(os.Stdout)
-	enc.SetIndent("", "  ")
-	return enc.Encode(tools)
-}
-
-func cmdCall(ctx context.Context, projectID string, servers []mcp.ServerConfig, qualifiedName, argsJSON string, logger zerolog.Logger) error {
-	mgr := mcp.NewManager(logger)
-	mgr.StartForProject(ctx, projectID, servers)
-	defer mgr.Close()
-
-	result, err := mgr.Execute(ctx, projectID, qualifiedName, argsJSON)
-	if err != nil {
-		return err
-	}
-	fmt.Print(result)
-	return nil
-}
-
-// loadConfig reads an mcp.json file (array of ServerConfig).
-func loadConfig(path string) ([]mcp.ServerConfig, error) {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return nil, err
-	}
-	var servers []mcp.ServerConfig
-	if err := json.Unmarshal(data, &servers); err != nil {
-		return nil, fmt.Errorf("parse mcp.json: %w", err)
-	}
-	// This file is the bridge's config, inside the sandbox: its stdio
-	// programs are minted here, as the daemon's config loader mints its own
-	// (process-spawn law, reading 3; S1b-2). ServerConfig.Program is never
-	// decoded from JSON.
-	for i := range servers {
-		if servers[i].Transport == "stdio" {
-			servers[i].Program = spawn.NewConfiguredCommand(servers[i].Command, servers[i].Args...)
-		}
-	}
-	return servers, nil
 }

@@ -60,7 +60,7 @@ run_preflight() {
     fail "$1: message does not name $3 (out: $out)"
     return
   fi
-  if ls -A "$tmp/output" "$tmp/workspace" 2>/dev/null | grep -q preflight; then
+  if ls -A "$tmp/output" "$tmp/workspace" 2>/dev/null | grep preflight >/dev/null; then
     fail "$1: a probe file was left behind"
     return
   fi

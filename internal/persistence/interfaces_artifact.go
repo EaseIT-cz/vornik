@@ -57,14 +57,17 @@ type ExtractedDocumentRepository interface {
 	// minutes on 2026-08-19 (7f0b5337).
 	Get(ctx context.Context, id string) (*ExtractedDocument, error)
 
-	// GetByArtifact returns the most-recent extraction for the given
-	// source artifact across all extractors, or (nil, ErrNotFound)
+	// GetByArtifact returns the most recently written extraction (latest
+	// extracted_at, ties by id) for the given source artifact across all
+	// extractors, or (nil, ErrNotFound)
 	// when no extraction has been recorded. See internal/persistence/misscontract. Callers for
 	// which "never extracted" is an ordinary answer translate that
 	// error rather than surfacing it — see api.documentTools, whose
 	// message tells the agent to run extract first.
-	// When multiple extractor versions exist for the same
-	// source, the highest-version row wins (semver-ish lexical sort).
+	// The extractor version takes no part in the choice: a rolled-back
+	// extractor's newer row wins over a higher version's older one, which is
+	// what the cache checks need (GitHub #422; document-extraction-design.md
+	// 5.1.2).
 	GetByArtifact(ctx context.Context, sourceArtifactID string) (*ExtractedDocument, error)
 
 	// ListByProject returns extracted documents for a project,

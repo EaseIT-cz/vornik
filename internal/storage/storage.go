@@ -130,11 +130,14 @@ type Repositories struct {
 	// exercises; the sqlite path leaves it nil and the panel that consumes it
 	// is nil-safe, so a sqlite deployment loses the panel rather than showing
 	// an empty one. Left explicit rather than silently divergent.
-	CapabilityUsage     persistence.CapabilityUsageRepository
-	MemorySearchStage   persistence.MemorySearchStageRepository
-	CorpusEpochs        persistence.CorpusEpochRepository
-	MemoryQuarantine    persistence.MemoryQuarantineRepository
-	IngestQueue         persistence.IngestQueueRepository
+	CapabilityUsage   persistence.CapabilityUsageRepository
+	MemorySearchStage persistence.MemorySearchStageRepository
+	CorpusEpochs      persistence.CorpusEpochRepository
+	MemoryQuarantine  persistence.MemoryQuarantineRepository
+	IngestQueue       persistence.IngestQueueRepository
+	// MemoryVerification holds provenance records and the audited, recoverable
+	// changes of chunk verification state (design 22, amendment #482).
+	MemoryVerification  persistence.MemoryVerificationRepository
 	AutonomyEvaluations persistence.AutonomyEvaluationRepository
 	LLMUsage            persistence.TaskLLMUsageRepository
 	BudgetReservations  persistence.BudgetReservationRepository
@@ -341,6 +344,13 @@ type Repositories struct {
 // it after metrics come online so the metrics-wrapped DBTX flows
 // through every repo — see Repositories rebuild logic in
 // internal/service.
+//
+// MigratedAtOpen is true only when the open that built the Backend has
+// already run Migrate to the latest schema and would have failed had it
+// not (openSQLite). initDatabase then skips its own Migrate, which would
+// re-run a schema no-op on the same database (#418, storage-abstraction
+// design, "The second SQLite migrate at boot", 2026-10-17). Postgres opens
+// and NewSQLiteBackend leave it false.
 type Backend struct {
 	Driver          string
 	DB              *sql.DB
@@ -350,6 +360,7 @@ type Backend struct {
 	Close           func() error
 	Migrate         func(ctx context.Context) error
 	IsReady         func(ctx context.Context) error
+	MigratedAtOpen  bool
 }
 
 // Open dispatches to the configured driver, establishes the
@@ -398,7 +409,9 @@ func openSQLite(ctx context.Context, cfg config.DatabaseConfig) (*Backend, error
 		return nil, fmt.Errorf("storage: migrate sqlite: %w", err)
 	}
 
-	return NewSQLiteBackend(db), nil
+	backend := NewSQLiteBackend(db)
+	backend.MigratedAtOpen = true // migrated just above, or returned the error
+	return backend, nil
 }
 
 // NewSQLiteBackend is the Backend for an open SQLite database: its
@@ -514,6 +527,7 @@ func buildSQLiteRepositories(db *sql.DB) *Repositories {
 		CorpusEpochs:         sqlite.NewCorpusEpochRepository(db),
 		MemoryQuarantine:     sqlite.NewMemoryQuarantineRepository(db),
 		IngestQueue:          sqlite.NewIngestQueueRepository(db),
+		MemoryVerification:   sqlite.NewMemoryVerificationRepository(db),
 		ExecutionNarration:   sqlite.NewExecutionNarrationRepository(db),
 		// Scratchpads already wired above; TaskScratchpadRepository
 		// is the only remaining piece (see persistence interfaces).
@@ -638,6 +652,7 @@ func Build(dbtx persistence.DBTX) *Repositories {
 		CorpusEpochs:                   postgres.NewCorpusEpochRepository(dbtx),
 		MemoryQuarantine:               postgres.NewMemoryQuarantineRepository(dbtx),
 		IngestQueue:                    postgres.NewIngestQueueRepository(dbtx),
+		MemoryVerification:             postgres.NewMemoryVerificationRepository(dbtx),
 		AutonomyEvaluations:            postgres.NewAutonomyEvaluationRepository(dbtx),
 		LLMUsage:                       postgres.NewTaskLLMUsageRepository(dbtx),
 		BudgetReservations:             postgres.NewBudgetReservationRepository(dbtx),

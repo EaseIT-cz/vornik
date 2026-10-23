@@ -67,6 +67,16 @@ type Executor interface {
 	Cancel(taskID string) error
 }
 
+// RetryHoldSource is implemented by an executor that knows, for a failed
+// attempt it left for the scheduler to retry, a time before which the retry
+// cannot succeed: the moment the model circuit that rejected it can admit a
+// call (permanent-failure design §8.8, GitHub #363). Asserted on the
+// scheduler's Executor at the point of use, so an executor that does not
+// implement it holds nothing. A miss is (zero, false): no hold.
+type RetryHoldSource interface {
+	RetryNotBefore(taskID string) (time.Time, bool)
+}
+
 // ProjectRegistry provides read-only access to project scheduling
 // metadata: concurrency caps + priorities. Both feed the lease query
 // — concurrency caps gate eligibility (LLD §4.1), priorities order
@@ -265,6 +275,10 @@ type Scheduler struct {
 	// blockedUntil holds, per project, when a config-blocked project may be
 	// leased again (05-scheduler §4.12 C6). Guarded by mu.
 	blockedUntil map[string]time.Time
+	// retryHeldUntil holds, per task, when a retry requeued after an open
+	// model circuit may be leased (permanent-failure design §8.8 D3). The
+	// config-blocked back-off's mechanism, keyed by task. Guarded by mu.
+	retryHeldUntil map[string]time.Time
 }
 
 // defaultAbandonedExecutionGrace is well above the longest legitimate tail
@@ -380,6 +394,18 @@ func WithProjectRegistry(reg ProjectRegistry) Option {
 	}
 }
 
+// WithClock replaces the scheduler's clock: the one the dispatch watch, the
+// config-blocked back-off (§4.12 C6) and the retry hold (permanent-failure
+// design §8.8) read. A seam for tests that share one clock with the
+// executor's circuit breaker; nil keeps time.Now.
+func WithClock(now func() time.Time) Option {
+	return func(s *Scheduler) {
+		if now != nil {
+			s.now = now
+		}
+	}
+}
+
 // New creates a new Scheduler instance.
 // For backward compatibility, this constructor uses default options.
 func New(repo TaskRepository, config *Config) *Scheduler {
@@ -402,6 +428,7 @@ func NewWithOptions(repo TaskRepository, config *Config, opts ...Option) *Schedu
 		now:               time.Now,
 		watchTicks:        defaultWatchTicks,
 		blockedUntil:      make(map[string]time.Time),
+		retryHeldUntil:    make(map[string]time.Time),
 	}
 
 	// Apply functional options
@@ -676,12 +703,25 @@ func (s *Scheduler) leaseTaskWithContext(ctx context.Context) (*persistence.Task
 	if backedOff := s.configBackedOffProjects(); len(backedOff) > 0 {
 		opts.ExcludedProjects = append(slices.Clone(opts.ExcludedProjects), backedOff...)
 	}
+	// Retries held until their model's circuit can admit a call (§8.8 D3).
+	opts.ExcludedTaskIDs = s.retryHeldTasks()
 
 	task, err := s.repo.LeaseTask(ctx, opts)
 	if err != nil {
 		span.RecordError(err)
 		span.SetStatus(codes.Error, err.Error())
 		return nil, err
+	}
+	// The exclusion list above was read before the query ran. A retry hold
+	// taken in between (taskFailed holds, then releases the task QUEUED) is
+	// not in it, so the query can lease the task the hold was for. Put it
+	// back unchanged; the next poll excludes it (§8.8 D3).
+	if s.retryHeld(task.ID) {
+		if relErr := s.putBackHeld(ctx, task); relErr != nil {
+			s.logger.Warn().Err(relErr).Str("task_id", task.ID).
+				Msg("scheduler: could not put back a retry leased inside its hold; lease recovery will requeue it")
+		}
+		return nil, persistence.ErrNoTasksAvailable
 	}
 
 	// Record lease acquisition metrics
@@ -798,6 +838,69 @@ func (s *Scheduler) configBackedOffProjects() []string {
 		delete(s.blockedUntil, p)
 	}
 	return out
+}
+
+// retryHeldTasks lists the tasks whose retry hold has not yet passed,
+// pruning the ones that have (permanent-failure design §8.8 D3).
+func (s *Scheduler) retryHeldTasks() []string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	now := s.now()
+	var out []string
+	for id, until := range s.retryHeldUntil {
+		if now.Before(until) {
+			out = append(out, id)
+			continue
+		}
+		delete(s.retryHeldUntil, id)
+	}
+	return out
+}
+
+// retryHeld reports whether taskID is inside its retry hold now.
+func (s *Scheduler) retryHeld(taskID string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	until, ok := s.retryHeldUntil[taskID]
+	return ok && s.now().Before(until)
+}
+
+// putBackHeld returns a task leased inside its retry hold to QUEUED as it
+// was: attempt, error and class unchanged (an empty Attempt keeps the
+// column; KeepErrorClass keeps the class).
+func (s *Scheduler) putBackHeld(ctx context.Context, task *persistence.Task) error {
+	opts := persistence.ReleaseOptions{KeepErrorClass: true}
+	if task.LastError != nil {
+		opts.Error = *task.LastError
+	}
+	return s.repo.ReleaseLease(ctx, task.ID, taskLeaseID(task), persistence.TaskStatusQueued, opts)
+}
+
+// holdRetry asks the executor when the retry of taskID can first succeed and,
+// when that is after now, holds the task out of the lease query until then.
+// It returns the suffix the release appends to the stored error, so the
+// QUEUED task says why it is not running, or "" when nothing is held. Called
+// BEFORE the release to QUEUED, so a poll that starts after the release
+// excludes the task; one already in flight is caught by the check after
+// LeaseTask (permanent-failure design §8.8 D3 and §8.8.4, GitHub #363).
+func (s *Scheduler) holdRetry(taskID string) string {
+	src, ok := s.executor.(RetryHoldSource)
+	if !ok {
+		return ""
+	}
+	until, ok := src.RetryNotBefore(taskID)
+	now := s.now()
+	if !ok || !until.After(now) {
+		return ""
+	}
+	s.mu.Lock()
+	s.retryHeldUntil[taskID] = until
+	s.mu.Unlock()
+	s.logger.Info().Str("task_id", taskID).Time("held_until", until).
+		Dur("hold", until.Sub(now)).
+		Msg("scheduler: retry held until the model's circuit can admit a call")
+	return "; retry held until " + until.UTC().Format(time.RFC3339) +
+		": the model's circuit cannot admit a call before then"
 }
 
 func (s *Scheduler) dispatchViaExecutor(ctx context.Context, task *persistence.Task) (dispatchOutcome, string) {
@@ -1259,10 +1362,12 @@ func (s *Scheduler) taskFailed(taskID, leaseID, note, detail string) error {
 		class = *task.LastErrorClass
 	}
 	if persistence.TaskShouldRetry(attempt, maxAttempts, class) {
+		// The hold is taken before the release, which makes the task leasable.
+		held := s.holdRetry(taskID)
 		err := s.repo.ReleaseLease(s.baseContext(), taskID, leaseID, persistence.TaskStatusQueued, persistence.ReleaseOptions{
 			Attempt:     attempt + 1,
 			MaxAttempts: maxAttempts,
-			Error:       detail,
+			Error:       detail + held,
 		})
 		if err == nil {
 			s.publishAttemptFailed(taskID, attempt, class, true)

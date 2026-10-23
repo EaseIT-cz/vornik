@@ -66,7 +66,7 @@ yet. Expect it to take longer than usual; that is the catch-up pass, not a hang.
 | Config | `~/.config/vornik/config.yaml` | `VORNIK_CONFIG` |
 | Database | rootless podman container `vornik-postgres`, db/user `vornik` | `VORNIK_PG_CONTAINER` / `VORNIK_PG_DB` / `VORNIK_PG_USER` |
 | UI/API port | `8080` | `VORNIK_HTTP_PORT` |
-| Build image | `docker.io/library/golang:1.26.9` | `VORNIK_GO_IMAGE` |
+| Build image | `docker.io/library/golang:1.26.10` | `VORNIK_GO_IMAGE` |
 
 Like the quickstart, it rebuilds `vornik` + `vornikctl` in an **ephemeral
 golang container** — no host Go toolchain required.
@@ -140,8 +140,17 @@ cd ~/vornik/deployments/podman
    such as new templates, and never changes a file you have), and starts it.
    Because the unit is `Type=notify`, systemd reports "ready" only after DB
    migrations applied and health checks passed.
-6. **Verify** — polls `/readyz`, prints the DB migration version bump, runs
-   `doctor`.
+6. **Verify** — polls `/readyz`, prints the DB migration version bump, then
+   runs the newly installed `vornikctl doctor` against the upgraded daemon and
+   prints its report. The doctor is a warning only: a finding (or a doctor that
+   cannot finish within 300 s) never turns a successful upgrade into a failed
+   one; the script names the command to re-run. (Since 2026-10-17, #415: before
+   that this step was documented and never ran.)
+7. **Prune older database dumps** (since 2026-10-16, #394) — appends
+   `upgrade_completed_at=<UTC>` to this run's `STATE.txt`, then runs the new
+   `vornikctl retention upgrade-dumps --dir "$HOME" --apply`. See
+   [Database dumps are pruned](#database-dumps-are-pruned) below. A failure
+   here is a warning; the upgrade has already succeeded.
 
 If a running/leased task is in flight, the script warns before the cutover
 (the restart interrupts it) — pass `--yes` to proceed anyway in automation.
@@ -237,6 +246,41 @@ commit, `STATE.txt` says `unknown` and the printed rollback has no
 `pre_upgrade_commit` from the git checkout, so after an interrupted run and a
 `--force` re-run they name the release you were upgrading **to**. For such a
 backup, ignore `STATE.txt` and use `$BK/vornik.prev -version`.
+
+### Database dumps are pruned
+
+Each dump is a **full copy of the database**. Kept forever, every dump would
+undo, inside itself, every data-subject erasure made after it. So since
+2026-10-16 (#394) the dumps are pruned:
+
+- at most the **newest 2** dumps are kept (`retention.upgrade_dump_keep`);
+- a dump is removed **14 days after the upgrade that wrote it succeeded**
+  (`retention.upgrade_dump_grace_days`) — so the full DB restore above is
+  available for two weeks after an upgrade. After that, roll back with the
+  binaries (they are kept) rather than a restore, which would throw away two
+  weeks of data anyway;
+- the dump of an upgrade that **did not succeed** (no `upgrade_completed_at` in
+  its `STATE.txt`) is kept while it is the newest one: it is the way back. Once
+  a later upgrade runs, it ages out 14 days after that run started.
+
+Only the `.dump` file goes. The `*.prev` binaries, `config.yaml` and
+`STATE.txt` stay, and `STATE.txt` records `dump_pruned_at=<UTC> reason=<keep|grace>`.
+The script applies this at the end of every successful upgrade; the daemon's
+retention sweeper applies the same rules between upgrades when
+`retention.enabled` is on. `vornikctl doctor` reports dumps past the policy as
+`upgrade_dumps`.
+
+```bash
+vornikctl retention upgrade-dumps            # preview what would go
+vornikctl retention upgrade-dumps --apply    # prune now
+```
+
+**Backups from before this change** carry no completion stamp. They are pruned
+by the same rules (each counts as superseded when the next newer backup
+started) at the next upgrade or sweep. Preview first if you want to keep one:
+move it out of the `vornik-upgrade-backup-*` layout and it is left alone. To
+take database copies you keep for longer, use `vornikctl backup` and your own
+retention.
 
 
 ## Optional: a daily "update available" check

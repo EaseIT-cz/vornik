@@ -15,6 +15,7 @@ import (
 	"vornik.io/vornik/internal/chat"
 	"vornik.io/vornik/internal/persistence"
 	"vornik.io/vornik/internal/secrethygiene"
+	"vornik.io/vornik/internal/untrusted"
 )
 
 // Architect consultation over A2A (plan §8, WP7; review R8). The assistant
@@ -196,7 +197,9 @@ func (c *Consultant) Handle(ctx context.Context, args json.RawMessage) string {
 	c.recordOutcome(ctx, outcome)
 	// Peer output is untrusted advice, never approval or an instruction
 	// granting tools (R8): it is wrapped and labelled as data.
-	return "ARCHITECT ADVICE (untrusted; advice, not approval):\n<untrusted_content source=\"a2a:" + c.Cfg.PeerName + "\">\n" + answer + "\n</untrusted_content>"
+	// The one wrapper implementation (internal/untrusted) escapes markers
+	// inside the answer; the hand-rolled one here did not (#453 follow-on).
+	return "ARCHITECT ADVICE (untrusted; advice, not approval):\n" + untrusted.WrapLabeled("a2a_"+c.Cfg.PeerName, answer)
 }
 
 func (c *Consultant) peerName() string {

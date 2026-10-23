@@ -441,8 +441,11 @@ func TestRunner_CommittedUsesTheConfiguredLimits(t *testing.T) {
 func TestRun_MetricsCountEveryOutcome(t *testing.T) {
 	reg := prometheus.NewRegistry()
 	f := &fakePodman{produces: "output.html"}
+	// Only the blocking run may time out. A short timeout on every run made
+	// the ok and failed runs flake into "timeout" under CI's race and
+	// coverage load (Unit Tests on 9ea4688df: runs{render,timeout} = 2).
 	r := newRunner(t, f, func(c *Config) {
-		c.Timeouts = map[Feature]time.Duration{FeatureRender: 20 * time.Millisecond}
+		c.Timeouts = map[Feature]time.Duration{FeatureRender: time.Minute}
 	})
 	r.SetMetrics(NewMetrics(reg))
 
@@ -452,9 +455,11 @@ func TestRun_MetricsCountEveryOutcome(t *testing.T) {
 	}
 	res.Close()
 	f.block = make(chan struct{})
+	r.cfg.Timeouts = map[Feature]time.Duration{FeatureRender: 20 * time.Millisecond}
 	if _, err := r.Run(context.Background(), renderSpec()); err == nil {
 		t.Fatal("want a timeout")
 	}
+	r.cfg.Timeouts = map[Feature]time.Duration{FeatureRender: time.Minute}
 	f.block = nil
 	f.runErr, f.runOut = errors.New("exit status 1"), "pandoc: bad input"
 	if _, err := r.Run(context.Background(), renderSpec()); err == nil {

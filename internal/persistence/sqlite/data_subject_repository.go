@@ -29,6 +29,9 @@ func SubjectStoreDialect() subjectstore.Dialect {
 		MapErr:          mapIdentityDBError,
 		EmbedCacheKey:   nil,
 		ChannelSessions: false,
+		// No blackbox_trace_cache table on SQLite; an erasure reports the
+		// eviction "not applicable" (Art 17 design §15.12).
+		TraceCache: false,
 	}
 }
 

@@ -93,6 +93,19 @@ type Change struct {
 	// recipe tools the server does not offer (design §19.8 F6): the typed
 	// signal list_my_setup's note is built from (review 20261003-6b46 F2).
 	MissingTools []string
+	// Withheld are the advertised tools Vornik's classifier calls mutating
+	// that were not named in write_tools, so they are not approved as reads
+	// (design §6.4, GitHub #405): on a refusal, why nothing was filed; on a
+	// filed change, what the sentence says was left out. The typed signal
+	// list_my_setup's note is built from.
+	Withheld []string
+	// LockedOn and LockedByRequest, on a refusal because a waiting request
+	// holds one of the change's locks, name that lock and the holding
+	// request's id ("" when unknown): the typed signal the daemon records a
+	// waiting tools approval from (design §19.15, GitHub #409). Empty on
+	// every other refusal.
+	LockedOn        string
+	LockedByRequest string
 	// Credentials are the credential requests a recipe install files after
 	// its approval applies, one per credential (design §19.9): the ones
 	// still missing then are requested on the phone.
@@ -205,6 +218,14 @@ type Result struct {
 	// MissingTools is Change.MissingTools of a refusal, for the daemon's
 	// own callers; never sent to the agent.
 	MissingTools []string `json:"-"`
+	// Withheld is Change.Withheld (design §6.4), for the daemon's own
+	// callers; never sent to the agent (its sentence or reason says it).
+	Withheld []string `json:"-"`
+	// LockedByRequest is Change.LockedByRequest of a refusal by a held lock
+	// (design §19.15); with WaitingOnLock set, for the daemon's own callers;
+	// never sent to the agent.
+	LockedByRequest string `json:"-"`
+	WaitingOnLock   bool   `json:"-"`
 	// Rule is a refusal's rule from RefusalRules (design §23.2), for the
 	// refusal ledger; never sent to the agent.
 	Rule string `json:"-"`

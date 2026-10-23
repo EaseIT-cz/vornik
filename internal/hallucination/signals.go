@@ -14,7 +14,11 @@
 // says it created, counts it says it found.
 package hallucination
 
-import "time"
+import (
+	"time"
+
+	"vornik.io/vornik/internal/textutil"
+)
 
 // Severity grades how serious a finding is. The executor blocks
 // only on `High`; lower severities surface in the UI but don't
@@ -128,7 +132,10 @@ func truncate(s string, n int) string {
 	if len(s) <= n {
 		return s
 	}
-	return s[:n] + "…"
+	// Rune-safe (GitHub #414, chat-audit retention and redaction design
+	// §10.2.4): a byte slice split a multi-byte rune, which encoding/json
+	// then stored as U+FFFD.
+	return textutil.TruncateBytes(s, n) + "…"
 }
 
 // MaxClaimValueBytes / MaxSentenceBytes bound the JSONB blob.

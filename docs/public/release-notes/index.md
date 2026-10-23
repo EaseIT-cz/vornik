@@ -1,7 +1,7 @@
 ---
 sources:
     - path: docs/release-notes
-      sha256: 717901292c8fc448767968a107e2e3be31e14df64ea5391bc3b1ea30435878e2
+      sha256: b80c61cf33751e6dd4fd4192e2152afaa86cbc044308f6e38ae610fd8d72324e
 ---
 # Release Notes
 
@@ -16,6 +16,143 @@ behavior changes, and notable fixes. Internal-only changes are omitted.
     new behavior; those are called out below.
 
 ---
+
+## 2026.10.7
+
+!!! warning "Upgrade requirements"
+    - **Existing installs: give the database its own password.** A fresh
+      quickstart generates a per-install database password. An install that
+      kept a volume with no known password now stops and writes nothing,
+      instead of continuing on the shipped default, and the bundled compose
+      files refuse to start without `POSTGRES_PASSWORD`. Three doctor
+      checks report a weak, reused or network-exposed database credential:
+      `db_credential_strength`, `db_listen_exposure` and `credential_reuse`.
+    - **The operator surface needs an admin-class key** (403
+      `OPERATOR_CAPABILITY_REQUIRED`). This covers config reads and reload,
+      the memory firewall, operator profiles, the operator audit,
+      control-plane changes, setup and the project wizard. Add any
+      `api.api_keys` entry that needs them to `admin.allowed_keys`. Auth-off
+      installs and the quickstart key are already admin-class.
+    - **Logs and error text follow the key's scope.** A project-scoped key
+      reads a scrubbed view of its own project's logs, explain output and
+      error fields. An unscoped key that is not admin-class reads none
+      (403 `PROJECT_SCOPE_REQUIRED`).
+    - **Agent keys reach only the routes the agent image calls,** and get
+      403 `AGENT_KEY_NOT_OPERATOR` on every other route.
+    - **Operator-typed URLs dial through the SSRF guard,** redirects refused:
+      the MCP Test probe, MCP OAuth, the GitHub App API base and broker
+      fetches. Add a LAN or loopback server's hostname to
+      `integrations.allowed_hosts`.
+    - **With auth off, the daemon answers only its own names.** When
+      `api.auth_enabled` is false (including `api.auth_dry_run`), the HTTP
+      listener refuses, with 403, a request whose `Host` is not an IP
+      address, `localhost`, `host.containers.internal`, the host of
+      `server.public_base_url` or `auth.external_base_url`, or a name listed
+      in the new `server.accepted_hosts`. This stops a web page from reading
+      daemon answers through DNS rebinding. A cross-site POST is refused
+      too, and `Sec-Fetch-Site: none` no longer counts as same-origin.
+      If you reach an auth-off daemon by a LAN name, for example the
+      machine's hostname or a router DNS name, add that name to
+      `server.accepted_hosts`. Installs with auth on are unchanged.
+    - **Generic webhook sources accept only the project's own repositories.**
+      Set `webhooks.sources[].repos` to choose; `["*"]` accepts every
+      repository. An event from another repository is answered 200,
+      filtered, and recorded as `repo_not_in_scope`.
+    - **A tool the MCP classifier calls mutating is never approved as a
+      read,** and an approved read tool whose server later marks it as
+      changing things is suspended until you approve it again on the device.
+      Agent read servers are listed again every
+      `mcp.agent_read_relist_interval` (default 15m).
+    - **Agent containers get no swap** (`--memory-swap` equals `--memory`).
+      Raise `runtime.agent_memory_limit` if a role needs more memory.
+      **Pull or rebuild the `vornik-agent` image:** its local MCP fallback is
+      removed, and MCP tools are discovered only through the daemon.
+    - **Companion notes no longer verify themselves.** A companion's
+      `remember` of a decision or spec is stored unverified, with a finite
+      lifetime. A companion-delegated ingest is verified when its bytes match
+      the committed file at the same path on the repository's trusted branch
+      (its default branch unless the project names another). List the
+      hash ids of your own admin keys in `admin.operator_key_ids` so the
+      tasks they start count as yours.
+    - **Derived copies of transcripts expire:** black-box traces after 1 day,
+      project gists after 7 days, and of `vornik-update.sh` database dumps
+      the newest 2 are kept (keys under `retention.*`). Copy any dump you
+      want to keep before upgrading.
+    - **The console no longer loads a third-party CDN,** and it sends a
+      Content-Security-Policy that allows no source outside its own origin.
+    - **`vornikctl task list` shows 20 tasks by default and says so;** use
+      `--limit`, `--all`, `--offset` or `--active`. `/ui/tasks` pages past
+      100 rows.
+    - **Building from source needs Go 1.26.10.**
+
+A security release, and memory you can trust across repositories.
+
+- **Security.**
+  - Agent keys are confined to the agent routes, and an agent can no longer
+    post as the operator or cancel and retry other tasks.
+  - Logs, error text, step output and chat status tools serve a scrubbed view
+    to non-admin callers. The scrubber sees through layered encodings.
+  - The post-mortem explainer sends only the scrubbed log to its model
+    provider.
+  - Only a running task's own agent may summarize its thread, and a summary
+    never hides an operator message. A conversation's author is the signed-in
+    caller, never a client-supplied id.
+  - The untrusted-content wrapper escapes in a form the model sees, and agent
+    memory search wraps every writer-controlled field.
+  - A memory correction from a companion can no longer refute the operator's
+    own correction.
+  - Control-plane crash recovery no longer mistakes an apply's own writes for
+    drift, and every rollback holds the config-writer lock.
+  - Every transcript write is scanned for secrets before it is stored, and
+    `vornikctl secrets scan-history` covers task messages and step signals.
+- **Memory.**
+  - Provenance verification works with no configuration for every
+    repository a project ingests from on github.com, gitlab.com,
+    bitbucket.org or codeberg.org. The daemon keeps its own blob-less clone
+    of each one, and a repository it cannot clone keeps its earlier trust,
+    labelled unavailable. A file ingested before it is pushed is checked again
+    over the following hour.
+  - Each companion recall hit carries a `provenance` label: verified,
+    unavailable, or why it is unverified.
+  - `repo_scope` holds on every recall path.
+  - Damaged text never becomes a memory chunk, and the doctor's
+    `memory_text_damage` check finds any already stored.
+  - Knowledge-graph extraction no longer quarantines a chunk for a split
+    character, an unknown resolver id or a transient provider error.
+    `vornikctl memory regraph --quarantined` re-queues the quarantined ones.
+- **Compliance.**
+  - The GDPR Art 15 transcript export covers every text column, withholds
+    third parties' fields and redacts secrets.
+  - An Art 17 erasure also evicts the black-box trace cache.
+  - The doctor watches the Art 12(3) response deadline.
+- **Reliability.**
+  - A retry after `MODEL_UNHEALTHY` waits until the model's circuit can
+    admit a call.
+  - Cancelling a parent ends every unfinished descendant, paused and
+    awaiting ones included, and a resume that races a cancel does nothing.
+  - A model provider that never answers no longer hangs its caller, and a
+    CLI provider's timeout kills its whole process group.
+  - Silent-failure sites in fifteen subsystems now log and count what they
+    drop.
+  - Deleting a project now removes its rows from every project table.
+- **Scheduled work can start from the latest code.** A project that sets
+  `workspace.refresh_before_work: true` has its workspace reset to
+  `origin/<branch>` before each task from a task-kind reminder, a broker
+  schedule or autonomy, the same reset a forge task already gets. Commits
+  that exist only in the workspace are kept in a `refs/vornik/discarded/*`
+  ref. `workspace.refresh_branch` picks the branch (default: the
+  workspace's current branch). Every attempt is counted in
+  `vornik_executor_workspace_refresh_total{project, source, outcome}`. Off
+  by default, and refused together with `autonomy.mode: backlog`, which
+  refreshes on its own. See [Autonomy](../guides/autonomy.md#refreshing-the-workspace-before-scheduled-work).
+- **Companions.** Claude Code 0.47.4, Codex 0.43.2 and Hermes 0.22.1. The
+  plugins ship develop-with-memory guidance that adapts to projects with
+  few written designs. Outside a git repository they send no repository
+  scope.
+- **Operator commands and console.** `vornikctl task list` pages, with a
+  PARENT column. `/ui/tasks` pages past 100 rows. The task page shows
+  Pause on desktop and Cancel on mobile. The footer links to these release
+  notes. `vornik-update.sh` runs the doctor, as it said it did.
 
 ## 2026.10.6
 

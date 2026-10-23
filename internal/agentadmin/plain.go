@@ -71,6 +71,7 @@ func summaryOf(c *Change) string {
 		if len(g.Write) > 0 {
 			s += " It may also suggest changes there; nothing changes unless you approve each one."
 		}
+		s += withheldPlain(c)
 		if g.Transport == TransportSSE {
 			// Design §6.1: the person sees a non-default transport.
 			s += " Vornik talks to it over the older SSE protocol."
@@ -79,7 +80,7 @@ func summaryOf(c *Change) string {
 	case VerbApproveServerTools:
 		g := firstIntegration(c)
 		return fmt.Sprintf("Vornik listed what %s (%s)%s offers. Approving lets your assistant's skills read through: %s.",
-			g.Name, hostOf(g.URL), asAccount(c.accounts[g.Name]), strings.Join(g.Read, ", "))
+			g.Name, hostOf(g.URL), asAccount(c.accounts[g.Name]), strings.Join(g.Read, ", ")) + withheldPlain(c)
 	case VerbDefineWorkflow:
 		return workflowSummary(c)
 	case VerbDefineSwarm:
@@ -95,6 +96,15 @@ func summaryOf(c *Change) string {
 		return fmt.Sprintf("Your assistant wants a bigger budget for '%s'. %s", projectOfLocks(c), spendPhrase(c))
 	}
 	return genericSummary
+}
+
+// withheldPlain is the plain clause for tools withheld as changes (design
+// §6.4, GitHub #405); empty when none were.
+func withheldPlain(c *Change) string {
+	if len(c.Withheld) == 0 {
+		return ""
+	}
+	return " It also offers tools that change things; those are not included."
 }
 
 // remoteModelSummary is §18.7's remote-model phrase (design §18.6 item 2):

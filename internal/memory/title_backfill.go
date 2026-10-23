@@ -45,7 +45,10 @@ type BackfillResult struct {
 	Processed int `json:"processed"`
 	Succeeded int `json:"succeeded"`
 	Failed    int `json:"failed"`
-	Skipped   int `json:"skipped"` // empty content / titler returned ""
+	// PersistFailed: the subset of Failed whose title was generated but
+	// could not be stored (GitHub #369, §S8.11 7b).
+	PersistFailed int `json:"persist_failed,omitempty"`
+	Skipped       int `json:"skipped"` // empty content / titler returned ""
 	// Paused: optional LLM work is disabled for the titler's model, so the
 	// batch stopped calling it (breaker design §5.3d). Not a failure.
 	Paused    bool     `json:"paused,omitempty"`
@@ -156,8 +159,8 @@ func (b *TitleBackfiller) runOnce(ctx context.Context, batchSize int) *BackfillR
 			}
 			return backfillCounts{
 				Processed: r.Processed, Succeeded: r.Succeeded,
-				Failed: r.Failed, Skipped: r.Skipped, Remaining: r.Remaining,
-				Paused: r.Paused,
+				Failed: r.Failed, PersistFailed: r.PersistFailed, Skipped: r.Skipped,
+				Remaining: r.Remaining, Paused: r.Paused,
 			}, nil
 		},
 	).withPaused(&b.optionalPaused))
@@ -166,7 +169,8 @@ func (b *TitleBackfiller) runOnce(ctx context.Context, batchSize int) *BackfillR
 	}
 	return &BackfillResult{
 		Processed: counts.Processed, Succeeded: counts.Succeeded,
-		Failed: counts.Failed, Skipped: counts.Skipped, Remaining: counts.Remaining,
+		Failed: counts.Failed, PersistFailed: counts.PersistFailed,
+		Skipped: counts.Skipped, Remaining: counts.Remaining,
 	}
 }
 
@@ -216,6 +220,7 @@ func (b *TitleBackfiller) BackfillBatch(ctx context.Context, batchSize int) (*Ba
 		}
 		if uerr := b.Repo.UpdateContentTitle(ctx, row.ID, title); uerr != nil {
 			out.Failed++
+			out.PersistFailed++
 			if len(out.Errors) < 5 {
 				out.Errors = append(out.Errors, fmt.Sprintf("%s: persist: %v", row.ID, uerr))
 			}

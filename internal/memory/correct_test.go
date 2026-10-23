@@ -24,7 +24,7 @@ func TestMarkRefutedByIDs_FlipsRowsAndIsIDORScoped(t *testing.T) {
 	repo := NewRepository(db)
 
 	mock.ExpectExec(regexp.QuoteMeta("SET validation_status = 'refuted'")).
-		WithArgs("family", "", "chunk_1", "chunk_2").
+		WithArgs("family", "", ValidatorRoleProvenance, "chunk_1", "chunk_2").
 		WillReturnResult(sqlmock.NewResult(0, 2))
 
 	n, err := repo.MarkRefutedByIDs(context.Background(), "family",
@@ -176,9 +176,8 @@ func TestCorrector_RefuteByClaim_FlipsTopMatches(t *testing.T) {
 	defer func() { _ = db.Close() }()
 	repo := NewRepository(db)
 
-	mock.ExpectExec(regexp.QuoteMeta("SET validation_status = 'refuted'")).
-		WithArgs("family", RefuteRouteMemoryCorrect, "chunk_a", "chunk_b").
-		WillReturnResult(sqlmock.NewResult(0, 2))
+	expectClaimFacts(mock, "family", chunkFact{"chunk_a", "worker", "unverified", ""}, chunkFact{"chunk_b", "worker", "unverified", ""})
+	expectClaimRefute(mock, "family", []string{"chunk_a", "chunk_b"}, "chunk_a", "chunk_b")
 
 	c := NewCorrector(repo, &stubSearcher{results: []SearchResult{
 		{ChunkID: "chunk_a", SourceName: "cv-2024.md", Content: "Alice, born 1985 …", Score: 0.7},
@@ -228,8 +227,8 @@ func TestCorrector_RefuteByClaim_CapsAtTwentyMatches(t *testing.T) {
 	s := &stubSearcher{}
 	c := NewCorrector(repo, s)
 	_, _ = c.RefuteByClaim(context.Background(), "family", "x", 1000)
-	if s.lastLimit != 20 {
-		t.Errorf("limit cap broken: searcher saw limit=%d, want 20", s.lastLimit)
+	if s.lastLimit != 20+claimRefuteOverFetch {
+		t.Errorf("limit cap broken: searcher saw limit=%d, want 20+%d (the cap, then the #436 over-fetch)", s.lastLimit, claimRefuteOverFetch)
 	}
 }
 
@@ -350,9 +349,8 @@ func TestCorrector_RefuteByClaim_AboveFloorRefutes(t *testing.T) {
 	defer func() { _ = db.Close() }()
 	repo := NewRepository(db)
 
-	mock.ExpectExec(regexp.QuoteMeta("SET validation_status = 'refuted'")).
-		WithArgs("family", RefuteRouteMemoryCorrect, "chunk_real").
-		WillReturnResult(sqlmock.NewResult(0, 1))
+	expectClaimFacts(mock, "family", chunkFact{"chunk_real", "worker", "unverified", ""})
+	expectClaimRefute(mock, "family", []string{"chunk_real"}, "chunk_real")
 
 	c := NewCorrector(repo, &stubSearcher{results: []SearchResult{
 		{ChunkID: "chunk_real", SourceName: "cv.md", Content: "Alice born 1985", Score: 0.42},
@@ -382,9 +380,8 @@ func TestCorrector_RefuteByClaim_JustAboveDefaultFloorRefutes(t *testing.T) {
 
 	// Only the 0.06 hit clears the default 0.05 floor; the 0.04 hit is
 	// left untouched, so exactly one id reaches the refute UPDATE.
-	mock.ExpectExec(regexp.QuoteMeta("SET validation_status = 'refuted'")).
-		WithArgs("family", RefuteRouteMemoryCorrect, "chunk_edge").
-		WillReturnResult(sqlmock.NewResult(0, 1))
+	expectClaimFacts(mock, "family", chunkFact{"chunk_edge", "worker", "unverified", ""})
+	expectClaimRefute(mock, "family", []string{"chunk_edge"}, "chunk_edge")
 
 	c := NewCorrector(repo, &stubSearcher{results: []SearchResult{
 		{ChunkID: "chunk_edge", SourceName: "a.md", Content: "just over the line", Score: 0.06},
@@ -410,9 +407,8 @@ func TestCorrector_RefuteByClaim_MixedFloor(t *testing.T) {
 	defer func() { _ = db.Close() }()
 	repo := NewRepository(db)
 
-	mock.ExpectExec(regexp.QuoteMeta("SET validation_status = 'refuted'")).
-		WithArgs("family", RefuteRouteMemoryCorrect, "chunk_hit"). // ONLY the above-floor id
-		WillReturnResult(sqlmock.NewResult(0, 1))
+	expectClaimFacts(mock, "family", chunkFact{"chunk_hit", "worker", "unverified", ""})
+	expectClaimRefute(mock, "family", []string{"chunk_hit"}, "chunk_hit")
 
 	c := NewCorrector(repo, &stubSearcher{results: []SearchResult{
 		{ChunkID: "chunk_hit", SourceName: "a.md", Content: "strong match", Score: 0.11},
@@ -462,7 +458,7 @@ func TestCorrector_ForgetByID_MarksExactlyThatChunk(t *testing.T) {
 		WillReturnRows(sqlmock.NewRows([]string{"source_name", "content"}).
 			AddRow("notes.md", "the stale fact to forget"))
 	mock.ExpectExec(regexp.QuoteMeta("SET validation_status = 'refuted'")).
-		WithArgs("family", RefuteRouteChatForget, "chunk_x").
+		WithArgs("family", RefuteRouteChatForget, "", "chunk_x").
 		WillReturnResult(sqlmock.NewResult(0, 1))
 
 	c := NewCorrector(repo, &stubSearcher{})

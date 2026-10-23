@@ -1123,8 +1123,9 @@ func TestExecutor_Pause_NoActiveExecution(t *testing.T) {
 func TestExecutor_Resume(t *testing.T) {
 	e, _, er, _, tr := setup()
 
-	// Add task and paused execution
-	tr.AddTask(&persistence.Task{ID: "t1", ProjectID: "p1", CreatedAt: time.Now()})
+	// Add task and paused execution. The task reads PAUSED, as every pause
+	// writes it: Resume refuses any other status (GitHub #421).
+	tr.AddTask(&persistence.Task{ID: "t1", ProjectID: "p1", Status: persistence.TaskStatusPaused, CreatedAt: time.Now()})
 	exec := &persistence.Execution{ID: "e1", TaskID: "t1", Status: persistence.ExecutionStatusPaused}
 	_ = er.Create(context.Background(), exec)
 
@@ -1518,7 +1519,7 @@ func TestExecutor_ResumeGoroutineIsTrackedByStop(t *testing.T) {
 			},
 		},
 	})
-	tr.AddTask(&persistence.Task{ID: "t-resume", ProjectID: "p1", CreatedAt: time.Now()})
+	tr.AddTask(&persistence.Task{ID: "t-resume", ProjectID: "p1", Status: persistence.TaskStatusPaused, CreatedAt: time.Now()})
 	require.NoError(t, er.Create(context.Background(), &persistence.Execution{
 		ID:         "exec-resume",
 		TaskID:     "t-resume",

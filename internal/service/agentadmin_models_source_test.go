@@ -9,6 +9,7 @@ import (
 	"runtime"
 	"sort"
 	"strings"
+	"sync"
 	"testing"
 
 	"vornik.io/vornik/internal/testutil/repowalk"
@@ -20,13 +21,39 @@ import (
 // only the operator console sets removed_at. A new caller of either fails
 // here until the design says otherwise.
 
+// modelCallIndex maps a callee name to every "<dir>/<file>:<enclosing func>"
+// that calls a function or method of that name in non-test code under
+// internal/. It is built once per test process (#418: eleven walks of
+// 2127 files cost ~50 s under -race) and only read after.
+var modelCallIndex struct {
+	once         sync.Once
+	walks, files int
+	sites        map[string][]string
+	err          error
+}
+
 // modelCallSites returns "<dir>/<file>:<enclosing func>" for every non-test
-// call to a function or method named name under internal/.
+// call to a function or method named name under internal/, sorted.
 func modelCallSites(t *testing.T, name string) []string {
 	t.Helper()
+	modelCallIndex.once.Do(buildModelCallIndex)
+	if modelCallIndex.err != nil {
+		t.Fatal(modelCallIndex.err)
+	}
+	return append([]string(nil), modelCallIndex.sites[name]...)
+}
+
+func buildModelCallIndex() {
+	modelCallIndex.walks++
 	_, here, _, _ := runtime.Caller(0)
 	root := filepath.Dir(filepath.Dir(here)) // internal/
-	seen := map[string]bool{}
+	seen := map[string]map[string]bool{}
+	note := func(callee, site string) {
+		if seen[callee] == nil {
+			seen[callee] = map[string]bool{}
+		}
+		seen[callee][site] = true
+	}
 	err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
@@ -41,6 +68,7 @@ func modelCallSites(t *testing.T, name string) []string {
 		if perr != nil {
 			return perr
 		}
+		modelCallIndex.files++
 		rel, _ := filepath.Rel(root, path)
 		for _, decl := range f.Decls {
 			fn, ok := decl.(*ast.FuncDecl)
@@ -54,13 +82,9 @@ func modelCallSites(t *testing.T, name string) []string {
 				}
 				switch f := call.Fun.(type) {
 				case *ast.Ident:
-					if f.Name == name {
-						seen[rel+":"+fn.Name.Name] = true
-					}
+					note(f.Name, rel+":"+fn.Name.Name)
 				case *ast.SelectorExpr:
-					if f.Sel.Name == name {
-						seen[rel+":"+fn.Name.Name] = true
-					}
+					note(f.Sel.Name, rel+":"+fn.Name.Name)
 				}
 				return true
 			})
@@ -68,14 +92,18 @@ func modelCallSites(t *testing.T, name string) []string {
 		return nil
 	})
 	if err != nil {
-		t.Fatal(err)
+		modelCallIndex.err = err
+		return
 	}
-	out := make([]string, 0, len(seen))
-	for k := range seen {
-		out = append(out, k)
+	modelCallIndex.sites = make(map[string][]string, len(seen))
+	for callee, sites := range seen {
+		out := make([]string, 0, len(sites))
+		for k := range sites {
+			out = append(out, k)
+		}
+		sort.Strings(out)
+		modelCallIndex.sites[callee] = out
 	}
-	sort.Strings(out)
-	return out
 }
 
 func pinModelCallers(t *testing.T, name string, want ...string) {
@@ -83,6 +111,29 @@ func pinModelCallers(t *testing.T, name string, want ...string) {
 	sort.Strings(want)
 	if got := modelCallSites(t, name); strings.Join(got, "\n") != strings.Join(want, "\n") {
 		t.Errorf("%s is called from:\n  %s\nwant exactly:\n  %s", name, strings.Join(got, "\n  "), strings.Join(want, "\n  "))
+	}
+}
+
+// #418 (2026-10-17, lane W13-A): the four TestSource_* laws below called
+// modelCallSites eleven times, and each call parsed every non-test .go file
+// under internal/ again (about 4.5 s a walk under -race; 49.9 s for the four
+// at load ~24). The tree is now parsed once per test process and every call is
+// answered from that index (storage-abstraction design, "The second SQLite
+// migrate at boot, and the source-law walks", 2026-10-17).
+func TestModelCallSites_ParsesTheTreeOnce(t *testing.T) {
+	first := modelCallSites(t, "recordGrant")
+	_ = modelCallSites(t, "UpsertModelDestination")
+	again := modelCallSites(t, "recordGrant")
+	if modelCallIndex.walks != 1 {
+		t.Fatalf("internal/ was walked %d times for three lookups, want once per process", modelCallIndex.walks)
+	}
+	if strings.Join(first, ",") != strings.Join(again, ",") {
+		t.Fatalf("the same lookup answered %v then %v", first, again)
+	}
+	// The denominator: an index of a few files proves nothing about the tree.
+	t.Logf("call-site index: %d files parsed, %d callee names", modelCallIndex.files, len(modelCallIndex.sites))
+	if modelCallIndex.files < 1000 || len(modelCallIndex.sites) < 1000 {
+		t.Fatalf("index built from %d files, %d names: too little to judge", modelCallIndex.files, len(modelCallIndex.sites))
 	}
 }
 

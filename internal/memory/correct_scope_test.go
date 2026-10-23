@@ -3,7 +3,6 @@ package memory
 import (
 	"context"
 	"errors"
-	"regexp"
 	"testing"
 
 	"github.com/DATA-DOG/go-sqlmock"
@@ -37,9 +36,8 @@ func (s *optsSearcher) SearchWithOptions(_ context.Context, _, _ string, opts Se
 func TestCorrector_RefuteByClaimInScope_SearchesTheScope(t *testing.T) {
 	db, mock, _ := sqlmock.New()
 	defer func() { _ = db.Close() }()
-	mock.ExpectExec(regexp.QuoteMeta("SET validation_status = 'refuted'")).
-		WithArgs("p", RefuteRouteMemoryCorrect, "chunk_a").
-		WillReturnResult(sqlmock.NewResult(0, 1))
+	expectClaimFacts(mock, "p", chunkFact{"chunk_a", "worker", "unverified", ""})
+	expectClaimRefute(mock, "p", []string{"chunk_a"}, "chunk_a")
 	s := &optsSearcher{stubSearcher: stubSearcher{results: []SearchResult{{ChunkID: "chunk_a", Content: "x", Score: 0.9}}}}
 	c := NewCorrector(NewRepository(db), s)
 
@@ -49,8 +47,8 @@ func TestCorrector_RefuteByClaimInScope_SearchesTheScope(t *testing.T) {
 	if s.lastOpts == nil {
 		t.Fatal("a scoped claim search used the unscoped Search")
 	}
-	if s.lastOpts.RepoScope != "github.com/example/repo-a" || s.lastOpts.StrictScope || s.lastOpts.Limit != 5 {
-		t.Errorf("scoped search options = %+v, want the scope, lenient, limit 5", *s.lastOpts)
+	if s.lastOpts.RepoScope != "github.com/example/repo-a" || s.lastOpts.StrictScope || s.lastOpts.Limit != 5+claimRefuteOverFetch {
+		t.Errorf("scoped search options = %+v, want the scope, lenient, limit 5 plus the #436 over-fetch", *s.lastOpts)
 	}
 	if s.plainCalls != 0 {
 		t.Errorf("unscoped Search called %d time(s) alongside the scoped one", s.plainCalls)

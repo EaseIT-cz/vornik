@@ -80,13 +80,6 @@ func embedForCalibration(t *testing.T, texts []string) [][]float32 {
 	return vecs
 }
 
-func min(a, b int) int {
-	if a < b {
-		return a
-	}
-	return b
-}
-
 func TestSkillCosineCalibration(t *testing.T) {
 	fixtures := []*persistence.Skill{
 		fxInfraReview, fxVerifyTests, fxSecReview, fxMemReview,

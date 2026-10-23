@@ -769,6 +769,19 @@ var corpus = map[string]Entry{
 			"Retrying by hand does not help while the circuit is open, and the ladder deliberately does not: it fast-rejects and fails over instead.",
 		},
 	},
+	stepoutcome.ClassStuckExecution: {
+		Class:        stepoutcome.ClassStuckExecution,
+		Scope:        ScopeStep,
+		HumanMessage: "This step stopped making progress, so the task was stopped and marked failed.",
+		Cause: "The watchdog found the execution with no checkpoint advance for longer than watchdog.stuck_threshold (30m by default) while this step was in flight, failed it (task class STUCK_EXECUTION) and recorded this row for the step. " +
+			"Outcome failed means the task's lease was still renewed: the executor was alive and the step, its model call or its container stopped advancing. " +
+			"Outcome orphaned means nothing was running it (a daemon restart or crash left it behind), so the step's real outcome is unknown and it is left out of quality stats (outcome-quality-design §S8.8).",
+		Suggestions: []string{
+			"For outcome failed, read the step's container log and check the model's health (`vornikctl doctor`) before retrying; the error detail carries the watchdog's reason and the last checkpoint time.",
+			"For outcome orphaned, look for a daemon restart at that time; retry the task if its work is still wanted.",
+			"A step that legitimately runs longer than the threshold needs a larger watchdog.stuck_threshold, or watchdog.action: warn.",
+		},
+	},
 	stepoutcome.ClassOutputCap: {
 		Class:        stepoutcome.ClassOutputCap,
 		Scope:        ScopeStep,

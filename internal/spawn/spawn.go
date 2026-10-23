@@ -32,6 +32,7 @@ import (
 	"io"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"syscall"
@@ -140,6 +141,37 @@ func (c *Cmd) Kill() error {
 	return c.c.Process.Kill()
 }
 
+// KillGroup SIGKILLs the started process's process group, for a process
+// started with ConfiguredOptions.ProcessGroup (pgid == its pid), and falls
+// back to killing the process alone when the group signal fails (the group is
+// gone, or the process was started without its own group). It was the MCP
+// client's killGroup until 2026-10-17 (GitHub #369, outcome-quality §S8.8):
+// one implementation, used by the MCP client's Close and by ConfiguredProgram's
+// Cancel.
+func (c *Cmd) KillGroup() error {
+	if c == nil || c.c == nil || c.c.Process == nil {
+		return errors.New("spawn: kill group: process not started")
+	}
+	return killGroup(c.c.Process.Pid, c.c.Process.Kill)
+}
+
+// killGroup SIGKILLs process group pid, falling back to killOne when the
+// group signal fails.
+func killGroup(pid int, killOne func() error) error {
+	// Refuse degenerate PIDs: negating pid 0 signals the DAEMON'S OWN process
+	// group (kill(0, SIGKILL) is a self-DoS) and a released process's pid -1
+	// would negate to kill(1). Neither can follow a successful Start, but the
+	// blast radius of getting this wrong is the whole daemon, so the guard is
+	// unconditional.
+	if pid <= 0 {
+		return nil
+	}
+	if err := syscall.Kill(-pid, syscall.SIGKILL); err != nil {
+		return killOne()
+	}
+	return nil
+}
+
 // --- podman ---
 
 // LookPodman resolves podman on PATH.
@@ -179,6 +211,20 @@ func IsPinnedAgentImage(ref string) bool {
 		ref = ref[:colon]
 	}
 	return pinnedRepositories[ref]
+}
+
+// MemoryLimitFlags is the one builder of an agent-image container's memory
+// flags, shared by runtime.Manager and the sandbox runner (runtime-manager
+// design 08, "Change 2026-10-17", GitHub #379). --memory alone lets podman give
+// the container swap up to the limit (cgroup v2 memory.swap.max = limit), so
+// the swap total is always set equal to the limit: no swap. A non-positive
+// limit means unbounded and emits neither flag.
+func MemoryLimitFlags(bytes int64) []string {
+	if bytes <= 0 {
+		return nil
+	}
+	n := strconv.FormatInt(bytes, 10)
+	return []string{"--memory=" + n, "--memory-swap=" + n}
 }
 
 // agentFlag describes one `podman run` flag of the closed grammar: whether it
@@ -530,9 +576,12 @@ func gitWorkspace(ctx context.Context, dir string, dirs GitDirs, args []string) 
 
 // WithGitHTTPAuthHeader passes an HTTP header to git's transport through
 // GIT_CONFIG_* (http.extraheader), never argv or disk, and disables the
-// credential prompt. Only for a GitWorkspace push or fetch.
+// credential prompt. Only for a GitWorkspace push or fetch, or a
+// GitProvenance fetch or clone (#506 C3).
 func (c *Cmd) WithGitHTTPAuthHeader(header string) error {
-	if c.kind != KindGitWorkspace || (c.gitSub != "push" && c.gitSub != "fetch") {
+	workspace := c.kind == KindGitWorkspace && (c.gitSub == "push" || c.gitSub == "fetch")
+	provenance := c.kind == KindGitProvenance && (c.gitSub == "fetch" || c.gitSub == "clone")
+	if !workspace && !provenance {
 		return refuse(c.kind, "an HTTP auth header is only for a git push or fetch")
 	}
 	c.c.Env = append(c.c.Env,
@@ -639,6 +688,12 @@ func ConfiguredProgram(ctx context.Context, cc ConfiguredCommand, opts Configure
 	c.c.Dir = opts.Dir
 	if opts.ProcessGroup {
 		c.c.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+		// The context's end kills the whole group, not only the leader
+		// (exec's default Cancel), so a helper the program forked does not
+		// outlive a timed-out call (GitHub #369, outcome-quality §S8.8). A
+		// caller that must not tie the process to a request passes
+		// context.Background(), and this never fires for it.
+		c.c.Cancel = c.KillGroup
 	}
 	c.c.WaitDelay = opts.WaitDelay
 	return c, nil

@@ -5,9 +5,11 @@ package persistence
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"sort"
 	"sync"
+	"time"
 )
 
 // Migration represents a single database schema migration.
@@ -40,6 +42,15 @@ func NewMigrationRunner(db *sql.DB) *MigrationRunner {
 	}
 }
 
+// NewMigrationRunnerFor is NewMigrationRunner over an explicit migration
+// list instead of DefaultMigrations. It is the seam a test in another
+// package uses to drive Run against a real server with a migration of its
+// own (GitHub #424: test/integration cancels a slow one mid-statement).
+// The daemon never calls it.
+func NewMigrationRunnerFor(db *sql.DB, migrations []Migration) *MigrationRunner {
+	return &MigrationRunner{db: db, migrations: migrations}
+}
+
 // migrationLockKey is the bigint passed to pg_advisory_lock to
 // serialise migration runs across daemon processes. Picked once
 // (0x73776D64_6D696772 == "swmdmigr" in ASCII) and frozen —
@@ -56,9 +67,36 @@ const migrationLockKey int64 = 0x73776D646D696772
 // migrations (both pods read version N, both try to apply N+1).
 // The advisory lock is session-scoped so it auto-releases if the
 // daemon crashes mid-migration.
+//
+// When Run fails after its context ended, the error says so: how long after
+// Run started, how many of the pending migrations were applied, and
+// context.Cause(ctx). The server's own answer to a cancelled statement
+// ("pq: canceling statement due to user request") names no context, so
+// without this a caller's deadline reads like a server fault (GitHub #424).
 func (r *MigrationRunner) Run(ctx context.Context) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+
+	start := time.Now()
+	var applied, pending int
+	err := r.run(ctx, &applied, &pending)
+	if err == nil || ctx.Err() == nil {
+		return err
+	}
+	elapsed := time.Since(start).Round(time.Millisecond)
+	if cause := context.Cause(ctx); !errors.Is(cause, ctx.Err()) {
+		// A named cause (WithTimeoutCause, WithCancelCause): keep ctx.Err()
+		// in the chain too, so errors.Is(err, context.DeadlineExceeded) holds.
+		return fmt.Errorf("%w; the context ended (%w) %s after Run started, with %d of %d pending migrations applied: %w",
+			err, ctx.Err(), elapsed, applied, pending, cause)
+	}
+	return fmt.Errorf("%w; the context ended %s after Run started, with %d of %d pending migrations applied: %w",
+		err, elapsed, applied, pending, ctx.Err())
+}
+
+// run is Run's body. It counts the migrations it finds pending and the ones
+// it applies into *pending and *done, for Run's error.
+func (r *MigrationRunner) run(ctx context.Context, done, pending *int) error {
 
 	// Cross-process serialisation. pg_advisory_lock blocks until
 	// the lock is available — when a rolling deploy lands two
@@ -104,11 +142,14 @@ func (r *MigrationRunner) Run(ctx context.Context) error {
 	// migrations. Sorting by version respects inter-migration dependencies
 	// (a migration may FK or index a table created by an earlier one) and
 	// ensures none are skipped on ordering grounds.
-	for _, m := range pendingMigrations(applied, r.migrations) {
+	todo := pendingMigrations(applied, r.migrations)
+	*pending = len(todo)
+	for _, m := range todo {
 		if err := r.applyMigration(ctx, m); err != nil {
 			return fmt.Errorf("failed to apply migration %d (%s): %w", m.Version, m.Name, err)
 		}
 		applied[m.Version] = true
+		*done++
 	}
 
 	return nil
@@ -9215,5 +9256,132 @@ DROP TABLE IF EXISTS agent_admin_refusals;
 		// schema.go.
 		Up:   `ALTER TABLE tasks ADD COLUMN IF NOT EXISTS goal_origin TEXT;`,
 		Down: `ALTER TABLE tasks DROP COLUMN IF EXISTS goal_origin;`,
+	},
+	{
+		Version: 231,
+		Name:    "blackbox_trace_cache_generation",
+		// GitHub #415 item 3, security review 2026-10-17. Design:
+		// https://docs.vornik.io
+		// §15.12.1. An Art 17 erasure bumps this one-row generation and
+		// evicts blackbox_trace_cache in the same transaction; a cache Put
+		// inserts only while the generation it read before assembling still
+		// matches, under FOR SHARE, so an assembly that straddled the erasure
+		// cannot re-cache erased data. No project_id: global, outside the
+		// project-wipe census. SQLite has no trace cache, so no SQLite schema.
+		Up: `
+CREATE TABLE IF NOT EXISTS blackbox_trace_cache_generation (
+    id         SMALLINT PRIMARY KEY CHECK (id = 1),
+    generation BIGINT NOT NULL
+);
+INSERT INTO blackbox_trace_cache_generation (id, generation) VALUES (1, 0)
+ON CONFLICT (id) DO NOTHING;
+`,
+		Down: `DROP TABLE IF EXISTS blackbox_trace_cache_generation;`,
+	},
+	{
+		Version: 232,
+		Name:    "task_judge_verdicts_failure_class",
+		// GitHub #369 item 8. Design: https://docs.vornik.io
+		// §S8.11 row 8a. Why the judge did not decide on full evidence: the
+		// value the runner counts as the evaluation's outcome (llm_timeout,
+		// llm_cancelled, llm_error, evidence_incomplete, not_configured).
+		// Nullable, no backfill: NULL is an evaluation on full evidence, and
+		// every row written before this reads NULL, as before. No index: it is
+		// read with the row. SQLite: the column in schema.go and an
+		// sqliteAdditiveColumns entry.
+		Up:   `ALTER TABLE task_judge_verdicts ADD COLUMN IF NOT EXISTS failure_class TEXT;`,
+		Down: `ALTER TABLE task_judge_verdicts DROP COLUMN IF EXISTS failure_class;`,
+	},
+	{
+		Version: 233,
+		Name:    "agent_integration_suspended_tools",
+		// GitHub #481 (operator decision A7). Design:
+		// https://docs.vornik.io
+		// §6.5, amendment 2026-10-21 (#481). The approved read tools the MCP
+		// manager suspended because their server described them as tools that
+		// change things: sticky, written only by SuspendIntegrationTools and
+		// reset only by UpsertIntegration's re-add of a removed row (which the
+		// person approves on the device). Defaults: nothing suspended, so no
+		// backfill. No index: read with the row, and the manager's load scans
+		// the (small) live set. SQLite: the columns in schema.go and
+		// sqliteAdditiveColumns.
+		Up: `
+ALTER TABLE agent_integration_approvals ADD COLUMN IF NOT EXISTS suspended_tools TEXT NOT NULL DEFAULT '[]';
+ALTER TABLE agent_integration_approvals ADD COLUMN IF NOT EXISTS suspended_at TIMESTAMPTZ;
+`,
+		Down: `
+ALTER TABLE agent_integration_approvals DROP COLUMN IF EXISTS suspended_at;
+ALTER TABLE agent_integration_approvals DROP COLUMN IF EXISTS suspended_tools;
+`,
+	},
+	{
+		Version: 234,
+		Name:    "memory_provenance_verification",
+		// GitHub #482. Design: https://docs.vornik.io
+		// "Amendment 2026-10-21 (#482)". A companion-delegated chunk is
+		// verified only by provenance: memory_chunk_provenance holds what
+		// the verifier saw for one document version (the CHECK makes a
+		// verified record carry its evidence); memory_verification_events
+		// is the audited bulk change (backfill, sweep, restore) and
+		// memory_verification_backup the prior state of every chunk one
+		// changed, so no change of verification state is an in-place
+		// overwrite. New tables only: nothing existing is rewritten.
+		// SQLite: the same tables in schema.go.
+		Up: `
+CREATE TABLE IF NOT EXISTS memory_chunk_provenance (
+    project_id       TEXT NOT NULL,
+    artifact_id      TEXT NOT NULL,
+    repo_scope       TEXT NOT NULL DEFAULT '',
+    document_path    TEXT NOT NULL DEFAULT '',
+    commit_sha       TEXT NOT NULL DEFAULT '',
+    content_blob_sha TEXT NOT NULL DEFAULT '',
+    origin_blob_sha  TEXT NOT NULL DEFAULT '',
+    state            TEXT NOT NULL CHECK (state IN ('verified','stale','unverified')),
+    reason           TEXT NOT NULL DEFAULT '',
+    checked_at       TIMESTAMPTZ NOT NULL,
+    verified_at      TIMESTAMPTZ,
+    created_at       TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    PRIMARY KEY (project_id, artifact_id),
+    CONSTRAINT memory_chunk_provenance_verified_has_evidence CHECK (
+        state <> 'verified' OR (
+            reason = '' AND verified_at IS NOT NULL AND commit_sha <> ''
+            AND content_blob_sha <> '' AND content_blob_sha = origin_blob_sha))
+);
+
+CREATE TABLE IF NOT EXISTS memory_verification_events (
+    id                TEXT PRIMARY KEY,
+    project_id        TEXT NOT NULL,
+    kind              TEXT NOT NULL CHECK (kind IN ('backfill','sweep','restore')),
+    actor             TEXT NOT NULL,
+    reason            TEXT NOT NULL DEFAULT '',
+    restores_event_id TEXT,
+    examined          INTEGER NOT NULL DEFAULT 0,
+    unchanged         INTEGER NOT NULL DEFAULT 0,
+    verified          INTEGER NOT NULL DEFAULT 0,
+    deverified        INTEGER NOT NULL DEFAULT 0,
+    skipped           INTEGER NOT NULL DEFAULT 0,
+    created_at        TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_memory_verification_events_project
+    ON memory_verification_events (project_id, created_at DESC);
+
+CREATE TABLE IF NOT EXISTS memory_verification_backup (
+    event_id             TEXT NOT NULL REFERENCES memory_verification_events(id) ON DELETE CASCADE,
+    chunk_id             TEXT NOT NULL,
+    project_id           TEXT NOT NULL,
+    prior_status         TEXT NOT NULL,
+    prior_validator_role TEXT,
+    new_status           TEXT NOT NULL,
+    new_validator_role   TEXT,
+    PRIMARY KEY (event_id, chunk_id)
+);
+CREATE INDEX IF NOT EXISTS idx_memory_verification_backup_project
+    ON memory_verification_backup (project_id);
+`,
+		Down: `
+DROP TABLE IF EXISTS memory_verification_backup;
+DROP TABLE IF EXISTS memory_verification_events;
+DROP TABLE IF EXISTS memory_chunk_provenance;
+`,
 	},
 }

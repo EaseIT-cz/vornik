@@ -122,12 +122,12 @@ fi
 # The floor is DERIVED from the index rather than hardcoded, so curating an
 # older release into its own section lowers it automatically and nobody has to
 # remember to edit a constant here.
-FLOOR="$(grep -oE '^## 20[0-9]{2}\.[0-9]+\.[0-9]+' "$INDEX" | sed 's/^## //' | sort -V | head -1)"
+FLOOR="$(grep -oE '^## 20[0-9]{2}\.[0-9]+\.[0-9]+' "$INDEX" | sed 's/^## //' | sort -V | sed -n 1p)"
 [ -n "$FLOOR" ] || { echo "::error::$INDEX has no release sections at all"; exit 1; }
 
 older_than_floor() {
 	[ "$1" = "$FLOOR" ] && return 1
-	[ "$(printf '%s\n%s\n' "$1" "$FLOOR" | sort -V | head -1)" = "$1" ]
+	[ "$(printf '%s\n%s\n' "$1" "$FLOOR" | sort -V | sed -n 1p)" = "$1" ]
 }
 
 missing=0
@@ -167,7 +167,7 @@ done
 # intended top-level heading, not a nested one — it ends the last real section
 # rather than truncating it. Anything ELSE at this level does truncate.
 ALLOWED='^[0-9]+:## (20[0-9][0-9]\.|Release Notes|Earlier releases)'
-if grep -nE '^## ' "$INDEX" | grep -qvE "$ALLOWED"; then
+if grep -nE '^## ' "$INDEX" | grep -vE "$ALLOWED" >/dev/null; then
 	echo "::error::$INDEX has a '## ' heading that is not a release section:"
 	grep -nE '^## ' "$INDEX" | grep -vE "$ALLOWED" | sed 's/^/    /'
 	echo "    A nested '## ' truncates the extracted release body. Use '### ' for subsections."

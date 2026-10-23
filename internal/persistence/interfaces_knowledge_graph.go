@@ -7,6 +7,7 @@ package persistence
 
 import (
 	"context"
+	"sort"
 )
 
 // KnowledgeEntityRepository persists typed nouns derived from the
@@ -79,10 +80,13 @@ type KnowledgeEdgeRepository interface {
 	// UpdateLifecycle flips an edge's lifecycle_state.
 	UpdateLifecycle(ctx context.Context, id, newState string) error
 
-	// DropChunkFromSources removes a chunk_id from every edge's
-	// source_chunks array. Cascade worker calls this when a chunk
-	// is quarantined / refuted; edges left with empty source_chunks
-	// get lifecycle flipped to quarantined.
+	// DropChunkFromSources removes every occurrence of chunkID (exact,
+	// case-sensitive) from every edge's source_chunks; an edge left with
+	// none is set to quarantined in the same write. Returns the number of
+	// edges whose source_chunks changed, quarantined or not — the same
+	// count on both drivers (GitHub #450; KG design §5.1). One statement,
+	// so atomic. No caller yet: the cascade worker it was written for is
+	// not built.
 	DropChunkFromSources(ctx context.Context, chunkID string) (int, error)
 }
 
@@ -138,7 +142,7 @@ type ChunkGraphExtractionRepository interface {
 	// chunk marked done; making it an honest failure without a counter would
 	// instead re-attempt the same ~83% of chunks every tick at a full token
 	// budget. A quarantined chunk is re-flagged deliberately (vornikctl memory
-	// regraph) once the cause is fixed.
+	// regraph --quarantined, ReflagQuarantinedChunks) once the cause is fixed.
 	RecordExtractionFailure(ctx context.Context, chunkID, reason string, maxAttempts int) (attempts int, quarantined bool, err error)
 
 	// PendingCount reports how many chunks still need extraction.
@@ -175,6 +179,58 @@ type ChunkGraphExtractionRepository interface {
 	// the count of chunks that WOULD be re-flagged — used by
 	// --dry-run and the daemon's CLI probe.
 	ReflagChunksMissingEdges(ctx context.Context, projectID string, countOnly bool) (int, error)
+
+	// ReflagQuarantinedChunks gives QUARANTINED chunks (needs_graph_extraction
+	// cleared AND graph_extraction_attempts > 0 — the worker's failure bound
+	// was reached) back to the KG worker with a fresh attempt budget: one
+	// UPDATE sets needs_graph_extraction = TRUE and graph_extraction_attempts
+	// = 0, re-checking the quarantine predicate itself, so a chunk that is not
+	// quarantined is never touched. graph_extraction_error is kept.
+	//
+	// projectID "" selects every project. errorContains, when non-empty,
+	// narrows to chunks whose graph_extraction_error contains it as a
+	// literal, case-sensitive substring (never LIKE: the two drivers
+	// disagree on its case rule and its wildcards).
+	//
+	// Returns one row per project holding at least one quarantined chunk —
+	// the denominator (Quarantined) beside the selection (Matched) — and, when
+	// countOnly is false, ReFlagged: the rows the UPDATE wrote. The census and
+	// the UPDATE run in one transaction. Knowledge-graph LLD §3.3b
+	// (2026-10-16, after #284).
+	ReflagQuarantinedChunks(ctx context.Context, projectID, errorContains string, countOnly bool) ([]QuarantineReflagCount, error)
+}
+
+// QuarantineReflagCount is one project's row of a ReflagQuarantinedChunks
+// report. Quarantined counts every quarantined chunk examined; Matched the
+// ones whose error matched; ReFlagged the ones written (0 on a count-only
+// call). Under READ COMMITTED ReFlagged can exceed Matched by a chunk the
+// worker quarantined between the census and the UPDATE.
+type QuarantineReflagCount struct {
+	ProjectID   string
+	Quarantined int
+	Matched     int
+	ReFlagged   int
+}
+
+// MergeQuarantineReflag folds the UPDATE's per-project row counts into the
+// census, both drivers' one assembly. A project the UPDATE wrote but the census
+// did not see (quarantined between the two statements) is still reported, so
+// the ReFlagged total is always the number of rows written. Sorted by project.
+func MergeQuarantineReflag(census []QuarantineReflagCount, reflagged map[string]int) []QuarantineReflagCount {
+	out := make([]QuarantineReflagCount, 0, len(census)+len(reflagged))
+	seen := make(map[string]bool, len(census))
+	for _, c := range census {
+		c.ReFlagged = reflagged[c.ProjectID]
+		seen[c.ProjectID] = true
+		out = append(out, c)
+	}
+	for p, n := range reflagged {
+		if !seen[p] {
+			out = append(out, QuarantineReflagCount{ProjectID: p, ReFlagged: n})
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].ProjectID < out[j].ProjectID })
+	return out
 }
 
 // KGStats is the snapshot used by the UI / dashboards to render

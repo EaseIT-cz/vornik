@@ -15,7 +15,9 @@ import (
 	"net"
 	"net/url"
 	"regexp"
+	"strconv"
 	"strings"
+	"unicode/utf8"
 
 	"vornik.io/vornik/internal/secrets"
 	"vornik.io/vornik/internal/version"
@@ -229,16 +231,101 @@ func NewLineScrubber(hostname string) (LineScrubber, error) {
 		return nil, errAnonymize
 	}
 	scrub := scrubberWith(det, hostname)
+	found := func(s string) bool {
+		return rePEM.MatchString(s) || reJWT.MatchString(s) || reKeyShapes.MatchString(s) ||
+			len(det.Scan([]byte(s))) > 0
+	}
 	return func(line string) (string, bool) {
 		// Every net the report scrubber uses to find a secret, asked first and
 		// as a yes/no: a finding withholds the line instead of redacting in
 		// place, so no fragment of it leaves.
-		if rePEM.MatchString(line) || reJWT.MatchString(line) || reKeyShapes.MatchString(line) ||
-			len(det.Scan([]byte(line))) > 0 {
+		if found(line) {
 			return "", true
+		}
+		// GitHub #466 (process-spawn-law design, "Amendment 2026-10-21
+		// (#466)", D5): a key behind a literal escape sequence (x\nghp_..., a
+		// quoted JSON error body) follows a letter, which defeats the
+		// \b-anchored nets and the detector. The line is asked again in its
+		// encodedVariants; a finding in any form withholds it, so this only
+		// ever withholds more.
+		if strings.ContainsAny(line, `\%&`) {
+			variants, exhausted := encodedVariants(line)
+			if exhausted {
+				return "", true // still decoding at the bound: fail closed
+			}
+			for _, v := range variants {
+				if found(v) {
+					return "", true
+				}
+			}
 		}
 		return scrub(line), false
 	}, nil
+}
+
+// reEscapeSeq matches one encoded character as text: a backslash escape
+// with any run of backslashes before it (so a doubly escaped "\\n", JSON
+// quoted inside JSON, is one match), whether a known escape (\uHHHH,
+// \UHHHHHHHH, \xHH, a C octal \NNN) or a backslash before any other
+// character (\a, \e, \_: the word boundary falls between the backslash and
+// the letter, not before the key; adversarial review 2026-10-21); or a
+// percent-encoded byte (%0A, %3D, %20, as in a quoted URL or form body).
+var reEscapeSeq = regexp.MustCompile(`\\+(?:u[0-9a-fA-F]{4}|U[0-9a-fA-F]{8}|x[0-9a-fA-F]{2}|[0-7]{1,3}|.)|%[0-9a-fA-F]{2}`)
+
+// reDecodeSeq matches one encoded character this package decodes: a JSON/C
+// \uHHHH, \UHHHHHHHH or \xHH, a percent-encoded byte, an HTML numeric
+// character reference, or a JSON escape of '/', '"' or '\'. Each match is
+// decoded on its own, so a malformed '%' or '\' elsewhere on the line never
+// stops the rest from decoding (coordinator security review 2026-10-21: a
+// whole-line url.PathUnescape failed on one stray '%' and skipped every
+// decode, fail-open).
+var reDecodeSeq = regexp.MustCompile(`\\u([0-9a-fA-F]{4})|\\U([0-9a-fA-F]{8})|\\x([0-9a-fA-F]{2})|%([0-9a-fA-F]{2})|&#[xX]([0-9a-fA-F]{1,8});?|&#([0-9]{1,10});?|\\([/"\\])`)
+
+// maxDecodeLayers bounds how many encodings encodedVariants peels off a
+// line; one still changing after the bound is withheld (fail closed), the
+// rule the untrusted wrapper's decodeLayers applies to a '<' (#453). That
+// decoder is not reused: it decodes one character at a position for marker
+// detection and reads an over-cap sequence as '<', where this check needs
+// the whole decoded line.
+const maxDecodeLayers = 4
+
+// decodeOnce decodes every encoded character of s one layer deep.
+func decodeOnce(s string) string {
+	return reDecodeSeq.ReplaceAllStringFunc(s, func(m string) string {
+		sub := reDecodeSeq.FindStringSubmatch(m)
+		for i, base := range []int{16, 16, 16, 16, 16, 10} {
+			if sub[i+1] == "" {
+				continue
+			}
+			n, err := strconv.ParseUint(sub[i+1], base, 32)
+			if err != nil || n > utf8.MaxRune {
+				return " " // too large to name a character: a separator
+			}
+			return string(rune(n))
+		}
+		return sub[7] // \/, \", \\
+	})
+}
+
+// encodedVariants are the forms of line the withhold test also asks
+// (GitHub #466, process-spawn-law design "Amendment 2026-10-21 (#466)", D5):
+// the line with every encoded character replaced by a space (a key BEHIND an
+// escape), and each decoded layer, up to maxDecodeLayers, as is (an escape
+// INSIDE a key) and with its encoded characters replaced by a space (%255Cn
+// decodes to %5Cn, then \n). exhausted is true when the line still changes
+// after the last layer.
+func encodedVariants(line string) (variants []string, exhausted bool) {
+	variants = []string{reEscapeSeq.ReplaceAllString(line, " ")}
+	cur := line
+	for i := 0; i < maxDecodeLayers; i++ {
+		next := decodeOnce(cur)
+		if next == cur {
+			return variants, false
+		}
+		cur = next
+		variants = append(variants, cur, reEscapeSeq.ReplaceAllString(cur, " "))
+	}
+	return variants, decodeOnce(cur) != cur
 }
 
 func scrubber(hostname string) (func(string) string, error) {

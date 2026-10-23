@@ -5,8 +5,11 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/rs/zerolog"
 
+	"vornik.io/vornik/internal/brokeractions"
 	"vornik.io/vornik/internal/config"
 	"vornik.io/vornik/internal/mcp"
 	"vornik.io/vornik/internal/persistence"
@@ -73,6 +76,23 @@ func TestBrokerActionWorkerConfig_ReadsTheGatesAtCallTime(t *testing.T) {
 	}
 	cfg.OnUnscanned()
 	cfg.OnFinishError(nil, "executed")
+}
+
+// GitHub #369, outcome-quality LLD S8.11 rows 14b and 14c: the worker's
+// OnRefused hook is wired to vornik_broker_actions_refused_total{reason}.
+func TestBrokerActionWorkerConfig_RefusalsFeedTheRefusedCounter(t *testing.T) {
+	c := newBrokerActionContainer()
+	cfg := c.brokerActionWorkerConfig()
+	if cfg.OnRefused == nil {
+		t.Fatal("the refusal hook must be wired")
+	}
+	reg := prometheus.NewRegistry()
+	c.brokerActionMetrics.Attach(reg, nil)
+	cfg.OnRefused(brokeractions.RefusedArgsHashMismatch)
+	cfg.OnRefused(brokeractions.RefusedClaimError)
+	if n, err := testutil.GatherAndCount(reg, "vornik_broker_actions_refused_total"); err != nil || n != 2 {
+		t.Fatalf("refused series = %d, %v; want 2", n, err)
+	}
 }
 
 func TestBrokerActionRedactor(t *testing.T) {

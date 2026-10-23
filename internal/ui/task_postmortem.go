@@ -32,6 +32,13 @@ func (s *Server) TaskPostMortemGenerate(w http.ResponseWriter, r *http.Request, 
 		http.Error(w, "task id required", http.StatusBadRequest)
 		return
 	}
+	// GitHub #491: the explainer reads the task's error text and its answer
+	// is that text's summary; an unscoped caller that is not admin-class
+	// gets neither, decided before the task lookup and before Generate.
+	if api.ErrorTextAccessFor(r, s.operatorCapability.IsAdminKey) == api.ErrorTextDenied {
+		api.RespondProjectScopeRequired(w)
+		return
+	}
 	if s.postMortemExplainer == nil {
 		http.Error(w, "post-mortem explainer not configured on this daemon", http.StatusServiceUnavailable)
 		return

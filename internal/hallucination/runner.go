@@ -256,6 +256,25 @@ func (r *JudgeRunner) Run(ctx context.Context, task *persistence.Task) error {
 	if metrics != nil && r.Pricing != nil && (metrics.PromptTokens > 0 || metrics.CompletionTokens > 0) {
 		costUSD = r.Pricing.CostUSD(model, metrics.PromptTokens, metrics.CompletionTokens)
 	}
+	// The evaluation's outcome is decided before the row is written, so the
+	// row's failure_class and the counted outcome are one value (GitHub #369,
+	// outcome-quality-design §S8.11 rows 8a, 8b). A judge whose model call
+	// failed still records its abstain row (the UI shows it, and its summary
+	// names the error), but the evaluation is counted by the failure's cause,
+	// not as ok (§S8 F3). An unconfigured judge's abstain was never put to a
+	// model: it is counted abstain_no_config and recorded not_configured.
+	evalOutcome := "ok"
+	failureClass := ""
+	if len(evidenceGaps) > 0 {
+		evalOutcome, failureClass = "evidence_incomplete", "evidence_incomplete"
+	}
+	if metrics != nil && metrics.LLMFailure != "" {
+		evalOutcome = "llm_" + metrics.LLMFailure
+		failureClass = evalOutcome
+	}
+	if metrics != nil && metrics.NotConfigured {
+		evalOutcome, failureClass = "abstain_no_config", "not_configured"
+	}
 	row := &persistence.TaskJudgeVerdict{
 		ID:         persistence.GenerateID("judge"),
 		ProjectID:  task.ProjectID,
@@ -268,6 +287,8 @@ func (r *JudgeRunner) Run(ctx context.Context, task *persistence.Task) error {
 		Summary:    verdict.Summary,
 		CostUSD:    costUSD,
 		RecordedAt: time.Now().UTC(),
+		// Empty (stored NULL) for an evaluation on full evidence.
+		FailureClass: failureClass,
 	}
 	// The writes run on a detached, bounded context: a judge that used its
 	// whole evaluation ceiling (90s from the executor) left ctx spent, and
@@ -288,15 +309,7 @@ func (r *JudgeRunner) Run(ctx context.Context, task *persistence.Task) error {
 		}
 		return err
 	}
-	// A judge whose model call failed still records its abstain row (the
-	// UI shows it, and its summary names the error), but the evaluation is
-	// counted by the failure's cause, not as ok (§S8 F3).
-	evalOutcome := "ok"
-	if len(evidenceGaps) > 0 {
-		evalOutcome = "evidence_incomplete"
-	}
 	if metrics != nil && metrics.LLMFailure != "" {
-		evalOutcome = "llm_" + metrics.LLMFailure
 		r.Logger.Warn().Str("task_id", task.ID).Str("cause", metrics.LLMFailure).
 			Str("summary", verdict.Summary).
 			Msg("judge: the judge model call failed; recorded an abstain the judge did not decide")

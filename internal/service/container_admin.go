@@ -9,11 +9,11 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"sort"
 	"time"
 
 	"vornik.io/vornik/internal/api"
 	"vornik.io/vornik/internal/mcp"
-	"vornik.io/vornik/internal/registry"
 	"vornik.io/vornik/internal/ui"
 )
 
@@ -186,53 +186,52 @@ func (a *adminMCPInventory) Snapshot() ui.AdminMCPSnapshot {
 	}
 }
 
-// adminMCPRefresher re-dials every project's MCP servers. The
-// daemon doesn't expose a RefreshAll today; we synthesise one by
-// walking the registry's projects and re-running StartForProject
-// for each. The Manager closes the old client first before
-// re-dialling, so this is safe to re-invoke at any time.
+// adminMCPRefresher re-dials every project's MCP servers (the admin MCP
+// page's refresh). It holds no config builder of its own: desired is the
+// container's mcpDesiredServers, the one builder daemon start and every
+// reload use, so a refreshed server gets the same credential, withholding,
+// daemon inheritance and agent SSRF dial guard (agent-administered design
+// §6.6; GitHub #429, where a hand-built copy here dropped all of them). The
+// Manager closes the old client after re-dialling, so this is safe to
+// re-invoke at any time.
 type adminMCPRefresher struct {
-	m *mcp.Manager
-	r *registry.Registry
+	m       *mcp.Manager
+	desired func() map[string][]mcp.ServerConfig
 }
 
-func newAdminMCPRefresher(m *mcp.Manager, r *registry.Registry) ui.MCPRefresher {
-	if m == nil || r == nil {
+// newAdminMCPRefresher is the refresher the admin MCP page is wired with.
+func (c *Container) newAdminMCPRefresher() ui.MCPRefresher {
+	if c.Registry == nil {
 		return nil
 	}
-	return &adminMCPRefresher{m: m, r: r}
+	return newAdminMCPRefresher(c.mcpManager, c.mcpDesiredServers)
 }
 
-// RefreshAll walks every project in the registry and rebuilds its
-// MCP catalog from current config. Returns the first error it hits
-// so the operator sees a precise failure rather than a silent partial
-// success; the manager itself already log-and-continues on per-server
-// failures, so the only way RefreshAll itself returns an error is
-// when one of the underlying dials panics — which the manager
-// catches and reports.
-func (a *adminMCPRefresher) RefreshAll(ctx context.Context) error {
-	if a.r == nil || a.m == nil {
-		return fmt.Errorf("mcp refresh: registry or manager not wired")
+func newAdminMCPRefresher(m *mcp.Manager, desired func() map[string][]mcp.ServerConfig) ui.MCPRefresher {
+	if m == nil || desired == nil {
+		return nil
 	}
-	for _, p := range a.r.ListProjects() {
-		// Convert registry.MCPServerConfig to mcp.ServerConfig.
-		// Registry-side has its own type to keep the YAML schema
-		// stable; the manager wants its package-local shape.
-		servers := make([]mcp.ServerConfig, 0, len(p.MCP.Servers))
-		for _, s := range p.MCP.Servers {
-			cfg := mcp.ServerConfig{
-				Name:           s.Name,
-				Transport:      s.Transport,
-				Command:        s.Command,
-				Args:           s.Args,
-				Env:            s.Env,
-				URL:            s.URL,
-				AllowedTools:   s.AllowedTools,
-				TimeoutSeconds: s.TimeoutSeconds,
-			}
-			cfg.Program = configuredMCPProgram(cfg)
-			servers = append(servers, cfg)
-		}
+	return &adminMCPRefresher{m: m, desired: desired}
+}
+
+// RefreshAll re-dials every project's servers from current config, in
+// project order, through StartForProject (re-dial in place; dropping a
+// project is the reload's job). A project whose every server is withheld
+// has an empty list and is not dialled, as at a reload. The manager
+// log-and-continues on per-server failures, so the only error is an
+// unwired refresher.
+func (a *adminMCPRefresher) RefreshAll(ctx context.Context) error {
+	if a.desired == nil || a.m == nil {
+		return fmt.Errorf("mcp refresh: config builder or manager not wired")
+	}
+	desired := a.desired()
+	ids := make([]string, 0, len(desired))
+	for id := range desired {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+	for _, id := range ids {
+		servers := desired[id]
 		if len(servers) == 0 {
 			continue
 		}
@@ -240,7 +239,7 @@ func (a *adminMCPRefresher) RefreshAll(ctx context.Context) error {
 		// each individual dial at 30s internally so this is a safety
 		// belt for the surrounding loop.
 		dialCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
-		a.m.StartForProject(dialCtx, p.ID, servers)
+		a.m.StartForProject(dialCtx, id, servers)
 		cancel()
 	}
 	return nil

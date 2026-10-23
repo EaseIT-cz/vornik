@@ -148,6 +148,50 @@ func isRetryableLLMErr(err error) bool {
 	return false
 }
 
+// isTransientProviderErr reports whether a pipeline error is a provider
+// AVAILABILITY failure — throttling, overload, an unreachable endpoint — as
+// opposed to a failure the chunk itself can cause. The worker does not count
+// such a failure toward the chunk's quarantine bound (within
+// MaxTransientRetries; knowledge-graph LLD §3.3c, GitHub #419).
+//
+// Deliberately narrower than isRetryableLLMErr, which answers a different
+// question (is it worth another try inside this call?) and so also retries
+// EOF, i/o timeouts and deadlines. Those, and a 500, can be caused by the
+// request: a chunk too large for the per-chunk timeout fails the same way
+// every time and must still reach quarantine.
+func isTransientProviderErr(err error) bool {
+	if err == nil {
+		return false
+	}
+	var ge *chat.GatewayError
+	if errors.As(err, &ge) {
+		switch ge.Status {
+		case 429, 502, 503, 504:
+			return true
+		}
+		return false
+	}
+	msg := err.Error()
+	for _, hint := range []string{
+		"StatusCode: 429",
+		"StatusCode: 502",
+		"StatusCode: 503",
+		"StatusCode: 504",
+		"ThrottlingException",
+		"ServiceUnavailableException",
+		"TooManyRequestsException",
+		"RESOURCE_EXHAUSTED",
+		"queue is full",
+		"connection refused",
+		"connection reset",
+	} {
+		if strings.Contains(msg, hint) {
+			return true
+		}
+	}
+	return false
+}
+
 // stripJSONFence pulls a JSON value out of a model response that
 // may be wrapped in ```json fences or padded with prose. Returns
 // the trimmed inner string. Tolerant by design — small models

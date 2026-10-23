@@ -40,6 +40,34 @@ type ArtifactEraser interface {
 	EraseArtifact(ctx context.Context, artifactID string) (ArtifactErasureCounts, error)
 }
 
+// TraceCacheEvictor evicts the assembled black-box traces (blackbox_trace_cache)
+// after an erasure has changed their source rows.
+//
+// GitHub #415 item 3 (design 2026-07-29-art17-redact-and-reembed §15.12): each
+// cached trace is a JSONB copy of a task's messages and audit rows, served for
+// 24 h and kept until the retention sweep (indefinitely with retention off), and
+// no erasure reached it. The subject's data reaches a trace through rows that
+// carry no subject link, so no query can name the affected traces; the evictor
+// therefore removes them all. They are memoization: a later view re-assembles.
+//
+// applicable is false on a driver that has no such table (SQLite), which is not
+// a failure.
+type TraceCacheEvictor interface {
+	EvictAssembledTraces(ctx context.Context) (evicted int, applicable bool, err error)
+}
+
+// Values of ErasureResult.AssembledTraceCache.
+const (
+	TraceCacheEvicted       = "evicted"
+	TraceCacheNotApplicable = "not_applicable"
+	TraceCacheNotWired      = "not_wired"
+	TraceCacheFailed        = "failed"
+)
+
+// TableBlackboxTraceCache names the derived cache in a FailedAction. It is not a
+// linkable table: nothing links a subject to a cached trace.
+const TableBlackboxTraceCache LinkableTable = "blackbox_trace_cache"
+
 // ArtifactErasureCounts is what one artifact's cascade removed.
 //
 // It carries the DERIVED-graph counts alongside the chunk count because an
@@ -70,6 +98,11 @@ type Executor struct {
 	// DEFERRED with the capability-missing reason — never silently skipped, and
 	// never treated as an error, because a missing capability is not a fault.
 	Redact *RedactDeps
+	// Traces evicts the assembled-trace cache once the actions have run. Nil
+	// falls back to Rows when Rows implements TraceCacheEvictor (the subject
+	// store does), so the production executor cannot be wired without it by
+	// omission; an executor with neither reports TraceCacheNotWired.
+	Traces TraceCacheEvictor
 }
 
 // DeferredAction is a planned action this slice could not perform.
@@ -120,6 +153,13 @@ type ErasureResult struct {
 	DerivedGraphEntitiesDeleted int `json:"derived_graph_entities_deleted"`
 	DerivedGraphEdgesDeleted    int `json:"derived_graph_edges_deleted"`
 	QuarantinedCopiesDeleted    int `json:"quarantined_copies_deleted"`
+
+	// AssembledTracesEvicted counts blackbox_trace_cache rows removed after the
+	// actions ran (design §15.12). AssembledTraceCache says whether that ran:
+	// TraceCacheEvicted, TraceCacheNotApplicable (no such table on this
+	// driver), TraceCacheNotWired, or TraceCacheFailed (also in Failed).
+	AssembledTracesEvicted int    `json:"assembled_traces_evicted"`
+	AssembledTraceCache    string `json:"assembled_trace_cache"`
 
 	// Redacted are shared rows rewritten to remove the subject while preserving
 	// the other subjects the row concerns.
@@ -250,6 +290,10 @@ func (e *Executor) Execute(ctx context.Context, plan *ErasurePlan) (*ErasureResu
 		}
 	}
 
+	// After every action, whatever its outcome: a partial erasure still changed
+	// rows a cached trace may hold (design §15.12, GitHub #415 item 3).
+	e.evictAssembledTraces(ctx, res)
+
 	// An error means something WENT WRONG. A deferred redaction did not go wrong
 	// — it is a capability this slice does not have yet, and erroring on it would
 	// make every shared-row erasure look like a malfunction. The guard against
@@ -294,6 +338,35 @@ func deferredStoreReason(a Action) string {
 // redactableTable reports whether a table has a redaction path. Only memory
 // chunks do (slice 5c); transcripts wait on 5d (design §15.4).
 func redactableTable(t LinkableTable) bool { return t == TableProjectMemoryChunks }
+
+// evictAssembledTraces runs the trace-cache evictor and records what it did. A
+// failure is a FailedAction: the cache still holds a copy of erased data, so the
+// erasure is incomplete exactly as if a row had failed.
+func (e *Executor) evictAssembledTraces(ctx context.Context, res *ErasureResult) {
+	ev := e.Traces
+	if ev == nil {
+		ev, _ = e.Rows.(TraceCacheEvictor)
+	}
+	if ev == nil {
+		res.AssembledTraceCache = TraceCacheNotWired
+		return
+	}
+	n, applicable, err := ev.EvictAssembledTraces(ctx)
+	switch {
+	case err != nil:
+		res.AssembledTraceCache = TraceCacheFailed
+		res.Failed = append(res.Failed, FailedAction{
+			Table: TableBlackboxTraceCache, RowID: "*",
+			Err: "evicting the cached black-box traces, which may hold copies of the erased " +
+				"records, failed: " + err.Error(),
+		})
+	case !applicable:
+		res.AssembledTraceCache = TraceCacheNotApplicable
+	default:
+		res.AssembledTraceCache = TraceCacheEvicted
+		res.AssembledTracesEvicted = n
+	}
+}
 
 // applyDelete routes one delete to the right store and records the outcome.
 func (e *Executor) applyDelete(ctx context.Context, a Action, res *ErasureResult) {

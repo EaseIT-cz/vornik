@@ -157,7 +157,7 @@
                                         <input type="hidden" name="key_id" value="{{.ID}}"/>
                                         <button type="submit"
                                                 class="text-xs text-amber-700 dark:text-amber-300 hover:text-amber-600 dark:text-amber-200 px-2 py-1 rounded transition-colors"
-                                                onclick="return confirm('Rotate {{.Name}}? The old key will be revoked.');">
+                                                data-confirm="Rotate {{.Name}}? The old key will be revoked.">
                                             rotate
                                         </button>
                                     </form>
@@ -166,7 +166,7 @@
                                         <input type="hidden" name="key_id" value="{{.ID}}"/>
                                         <button type="submit"
                                                 class="text-xs text-red-700 dark:text-red-300 hover:text-red-600 dark:text-red-200 px-2 py-1 rounded transition-colors"
-                                                onclick="return confirm('Revoke {{.Name}}? Cannot be undone.');">
+                                                data-confirm="Revoke {{.Name}}? Cannot be undone.">
                                             revoke
                                         </button>
                                     </form>

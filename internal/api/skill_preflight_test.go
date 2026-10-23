@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"strings"
 	"testing"
 
@@ -17,15 +18,19 @@ type stubSkillEmbedder struct {
 	vectors map[string][]float32
 	calls   int
 	fail    bool
+	// failProject fails only that project's calls (the backfill embeds one
+	// call per project).
+	failProject string
 }
 
 func (e *stubSkillEmbedder) Model() string { return e.model }
 
-func (e *stubSkillEmbedder) Embed(_ context.Context, _ string, texts []string) ([][]float32, error) {
+func (e *stubSkillEmbedder) Embed(_ context.Context, projectID string, texts []string) ([][]float32, error) {
 	e.calls++
-	if e.fail {
-		// Mirrors the real contract: nil, nil on failure, never an error.
-		return nil, nil
+	if e.fail || (e.failProject != "" && projectID == e.failProject) {
+		// Mirrors the real contract since GitHub #369 item 5: no vectors and an
+		// error (it was nil, nil).
+		return nil, errors.New("embed http_status: HTTP 503")
 	}
 	out := make([][]float32, len(texts))
 	for i, t := range texts {
@@ -409,4 +414,27 @@ func seedNearDuplicate(t *testing.T, s *Server) *persistence.Skill {
 		t.Fatalf("seed: %v", err)
 	}
 	return sk
+}
+
+// TestBackfill369_OneProjectsEmbedFailureDoesNotStopTheOthers: GitHub #369 item
+// 5 turned the embedder's (nil, nil) degrade into an error. The backfill embeds
+// one call per project and treated a project's degrade as "leave its slots
+// empty, go on"; an error stopped the whole backfill. It must stay per-project
+// best effort (outcome-quality §S8.10 change 7).
+func TestBackfill369_OneProjectsEmbedFailureDoesNotStopTheOthers(t *testing.T) {
+	s := newSkillTestServer(t)
+	s.skillEmbedder = &stubSkillEmbedder{
+		model:       "stub-v1",
+		failProject: "proj-a",
+		vectors:     map[string][]float32{"b-skill\nfrom b": {0, 1, 0}},
+	}
+	a := &persistence.Skill{ID: "sk-a", ProjectID: "proj-a", Name: "a-skill", Description: "from a"}
+	b := &persistence.Skill{ID: "sk-b", ProjectID: "proj-b", Name: "b-skill", Description: "from b"}
+	s.backfillSkillEmbeddings(context.Background(), "stub-v1", []*persistence.Skill{a, b})
+	if len(a.Embedding) != 0 {
+		t.Errorf("proj-a failed but got an embedding: %v", a.Embedding)
+	}
+	if len(b.Embedding) == 0 || b.EmbeddingModel != "stub-v1" {
+		t.Errorf("proj-b was not backfilled after proj-a's failure: embedding=%v model=%q", b.Embedding, b.EmbeddingModel)
+	}
 }

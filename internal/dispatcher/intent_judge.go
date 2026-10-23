@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/rs/zerolog"
+	"vornik.io/vornik/internal/ctxerr"
 	"vornik.io/vornik/internal/intentjudge"
 	"vornik.io/vornik/internal/persistence"
 )
@@ -74,6 +75,9 @@ func WithIntentJudge(repo intentVerdictRepo, refiner *intentjudge.LLMRefiner, re
 // `spawnAsync` is the goroutine launcher. Production passes nil
 // (uses `go fn()`); tests pass a synchronous runner so the
 // refinement assertion lands deterministically.
+//
+// `metrics` counts every path in vornik_dispatcher_intent_judge_total
+// {outcome}; nil is safe (GitHub #369, outcome-quality LLD §S8.11 row 10a).
 func (c *intentJudgeConfig) evaluate(
 	ctx context.Context,
 	projectID string,
@@ -82,6 +86,7 @@ func (c *intentJudgeConfig) evaluate(
 	toolName, argsJSON string,
 	spawnAsync func(fn func()),
 	logger zerolog.Logger,
+	metrics *Metrics,
 ) intentjudge.Verdict {
 	if c == nil || c.Repo == nil {
 		return intentjudge.Verdict{}
@@ -98,8 +103,9 @@ func (c *intentJudgeConfig) evaluate(
 	// failed: missing project id" on every such call (log noise + a
 	// guaranteed-failing round-trip), not a real failure.
 	if strings.TrimSpace(projectID) == "" {
-		logger.Debug().Str("tool", toolName).
+		logger.Info().Str("tool", toolName).
 			Msg("intent judge: no project context; skipping verdict persistence")
+		metrics.intentJudge("no_project")
 		return heuristic
 	}
 
@@ -127,8 +133,10 @@ func (c *intentJudgeConfig) evaluate(
 	if err := c.Repo.Insert(ctx, row); err != nil {
 		logger.Warn().Err(err).Str("tool", toolName).
 			Msg("intent judge: insert failed")
+		metrics.intentJudge("insert_failed")
 		return heuristic
 	}
+	metrics.intentJudge("recorded")
 
 	// Async LLM refinement, gated by RefineMinRisk. The
 	// dispatcher's tool call has already fired by the time the
@@ -148,8 +156,10 @@ func (c *intentJudgeConfig) evaluate(
 			defer cancel()
 			refined, err := c.Refiner.Refine(refineCtx, toolName, argsJSON, heuristic)
 			if err != nil {
-				logger.Warn().Err(err).Str("tool", toolName).
+				outcome := "refine_" + string(ctxerr.Classify(refineCtx, err))
+				logger.Warn().Err(err).Str("tool", toolName).Str("outcome", outcome).
 					Msg("intent judge: LLM refinement failed")
+				metrics.intentJudge(outcome)
 				return
 			}
 			risk := string(refined.Risk)
@@ -167,7 +177,10 @@ func (c *intentJudgeConfig) evaluate(
 			if err := c.Repo.UpdateLLMRefinement(refineCtx, row); err != nil {
 				logger.Warn().Err(err).Str("tool", toolName).
 					Msg("intent judge: refinement upsert failed")
+				metrics.intentJudge("refine_upsert_failed")
+				return
 			}
+			metrics.intentJudge("refined")
 		})
 	}
 

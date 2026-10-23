@@ -47,6 +47,10 @@ type Dialect struct {
 	// SQLite ChannelSessionRepository is a stub (sessions live in process
 	// memory), so a channel_sessions link there names a row that does not exist.
 	ChannelSessions bool
+	// TraceCache reports whether the driver has the blackbox_trace_cache table
+	// an erasure evicts (Postgres, migration 68). False on SQLite, which has no
+	// such table; there EvictAssembledTraces reports "not applicable".
+	TraceCache bool
 }
 
 func (d Dialect) mapErr(err error) error {

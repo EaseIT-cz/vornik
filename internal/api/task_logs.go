@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"strconv"
@@ -10,6 +11,7 @@ import (
 	"time"
 
 	"vornik.io/vornik/internal/persistence"
+	"vornik.io/vornik/internal/report"
 )
 
 // GetTaskLogs handles GET /api/v1/projects/{projectId}/tasks/{taskId}/logs.
@@ -21,11 +23,23 @@ func (s *Server) GetTaskLogs(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// GitHub #491: an unscoped caller that is not admin-class reads no log,
+	// decided before the scrubber is consulted.
+	if s.errorTextAccess(r) == ErrorTextDenied {
+		RespondProjectScopeRequired(w)
+		return
+	}
+
 	tail := parseTailParam(r, 200)
 	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
 	defer cancel()
 
-	logs, err := s.taskLogs(ctx, projectID, taskID, tail)
+	held, err := s.taskLogView(r)
+	if err != nil {
+		respondLogScrubberUnavailable(w)
+		return
+	}
+	logs, err := s.taskLogs(ctx, held, projectID, taskID, tail)
 	if err != nil {
 		respondError(w, http.StatusNotFound, "NOT_FOUND", err.Error())
 		return
@@ -48,7 +62,7 @@ func parseTailParam(r *http.Request, fallback int) int {
 	return tail
 }
 
-func (s *Server) taskLogs(ctx context.Context, projectID, taskID string, tail int) (string, error) {
+func (s *Server) taskLogs(ctx context.Context, held HeldTaskLog, projectID, taskID string, tail int) (string, error) {
 	if s.taskRepo != nil {
 		task, err := s.taskRepo.Get(ctx, taskID)
 		if err != nil || task == nil {
@@ -61,11 +75,67 @@ func (s *Server) taskLogs(ctx context.Context, projectID, taskID string, tail in
 
 	// GitHub #294: daemon-held state only. This path used to ask the
 	// executor, which ran `podman logs` on the request (process-spawn law).
-	logs, err := s.heldTaskLog().TaskLogs(ctx, taskID, tail)
+	logs, err := held.TaskLogs(ctx, taskID, tail)
 	if err != nil {
 		return "", err
 	}
 	return trimLines(logs, tail), nil
+}
+
+// taskLogView is the held task log a request reads (GitHub #440;
+// process-spawn-law design, "Amendment 2026-10-21 (#439, #440)", C3): the
+// operator view for an admin-class caller (isAdminClassRequest: auth off, an
+// admin session, an admin.allowed_keys key), the scrubbed view for every
+// other caller. It errors when the scrubbed view is needed and the scrubber
+// could not be built; the route then serves nothing. GitHub #491: it also
+// errors for an ErrorTextDenied caller, so a caller that skipped the route's
+// own check still reads nothing.
+func (s *Server) taskLogView(r *http.Request) (HeldTaskLog, error) {
+	held := s.heldTaskLog()
+	switch s.errorTextAccess(r) {
+	case ErrorTextOperator:
+		return held, nil
+	case ErrorTextScrubbed:
+		return held.ScrubbedView(s.liveLogs().scrub)
+	default:
+		return HeldTaskLog{}, errUnscopedCaller
+	}
+}
+
+// errUnscopedCaller is taskLogView's refusal of an ErrorTextDenied caller.
+var errUnscopedCaller = errors.New("the caller is not scoped to a project")
+
+// errorTextView is how a request reads a persisted error text (a task's
+// last_error, an execution's error_message; GitHub #466, process-spawn-law
+// design, "Amendment 2026-10-21 (#466)", D1): unchanged for an admin-class
+// caller, report.ScrubLines with the server's scrubber for every other. With
+// no scrubber ScrubLines withholds every line, so the read is still served
+// and nothing raw is. GitHub #491 (design K2): an ErrorTextDenied caller
+// reads the constant UnscopedWithheldText in place of the whole field.
+func (s *Server) errorTextView(r *http.Request) func(string) string {
+	switch s.errorTextAccess(r) {
+	case ErrorTextOperator:
+		return func(t string) string { return t }
+	case ErrorTextScrubbed:
+		return s.scrubbedErrorText
+	default:
+		return WithheldUnscoped
+	}
+}
+
+// scrubbedErrorText is the scrubbed view of one persisted error text: the
+// view every caller that is not admin-class reads, and the only one a
+// companion key reads (D3).
+func (s *Server) scrubbedErrorText(text string) string {
+	out, _ := report.ScrubLines(text, s.liveLogs().scrub)
+	return out
+}
+
+// respondLogScrubberUnavailable is the fail-closed answer of a route that
+// would serve the scrubbed view and has no scrubber.
+func respondLogScrubberUnavailable(w http.ResponseWriter) {
+	respondError(w, http.StatusServiceUnavailable, "LOG_SCRUBBER_UNAVAILABLE",
+		"the task log is unavailable to this caller: the log scrubber could not be built")
 }
 
 // heldTaskLog is the server's daemon-held task log, built from its own

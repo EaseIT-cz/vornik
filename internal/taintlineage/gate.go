@@ -71,6 +71,10 @@ type Decision struct {
 //	contentReview = RequiresReview || HasUnknown      // suppressible by the latch
 //	walkReview    = !WalkComplete                     // NEVER suppressible (D6)
 //	park          = walkReview || (contentReview && !latchMatches)
+//
+// #441: latchMatches is false whenever the rollup holds an Ungradable step:
+// its content was never showable, so no allow can have reviewed it, and its
+// record contributes nothing to the latch key that a re-run could change.
 func Decide(mode Mode, roll TaskTaint, latchHashes []string) Decision {
 	d := Decision{
 		Mode:          mode,
@@ -90,7 +94,7 @@ func Decide(mode Mode, roll TaskTaint, latchHashes []string) Decision {
 		contentReview := roll.RequiresReview || roll.HasUnknown
 		walkReview := !roll.WalkComplete
 		d.RequiresReview = contentReview || walkReview
-		latched := latchMatches(roll.SourceSetHash, latchHashes)
+		latched := !roll.Ungradable && latchMatches(roll.SourceSetHash, latchHashes)
 		d.Park = walkReview || (contentReview && !latched)
 		return d
 	default: // advisory

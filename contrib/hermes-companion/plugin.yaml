@@ -1,5 +1,5 @@
 name: vornik-companion
-version: 0.22.0
+version: 0.22.1
 requires_hermes: ">=0.21.5"
 manifest_version: 2
 # Declared, not inferred: Hermes classifies an undeclared plugin whose
@@ -14,6 +14,9 @@ description: >-
   no credentials: work that touches mail, calendar, documents or accounts is
   delegated to operator-authored broker workflows on a Vornik daemon, which
   return a bounded, schema-validated result instead of raw access.
+  0.22.1 — the vornik_remember description and the README state the note
+  floor Vornik applies, three words and ten characters, instead of "about
+  ten words", so a short fact is not padded (GitHub #392).
   0.22.0 — with a memory token, a develop-with-memory skill teaches how to
   change code in any repository: recall before reading code, design before
   changing it, keep memory current, and, where vornik_recall's design_record

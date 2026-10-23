@@ -332,9 +332,9 @@ missing=""
 for dir in "${CONFIG_DEPLOYABLE_DIRS[@]}"; do
 	[ -d "$REPO_CONFIGS/$dir" ] || continue
 	# skip dirs with no repo content — an empty repo subtree ships nothing
-	[ -n "$(find "$REPO_CONFIGS/$dir" -type f 2>/dev/null | head -1)" ] || continue
+	[ -n "$(find "$REPO_CONFIGS/$dir" -type f 2>/dev/null | sed -n 1p)" ] || continue
 	if config_is_tunable "$dir"; then
-		[ -n "$(find "$DEST/$dir" -type f 2>/dev/null | head -1)" ] || missing="$missing $dir/"
+		[ -n "$(find "$DEST/$dir" -type f 2>/dev/null | sed -n 1p)" ] || missing="$missing $dir/"
 	else
 		while IFS= read -r rel; do
 			rel="${rel#./}"

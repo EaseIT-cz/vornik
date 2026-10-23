@@ -41,7 +41,7 @@ services:
     environment:
       POSTGRES_DB:       ${POSTGRES_DB:-vornik}
       POSTGRES_USER:     ${POSTGRES_USER:-vornik}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-vornik_dev_password}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in deployments/podman/.env - the quickstart generates one}
       # PGDATA under a subdir avoids lost+found collisions on some
       # filesystems and mirrors what the Helm chart does.
       PGDATA: /var/lib/postgresql/data/pgdata

@@ -136,6 +136,15 @@ const (
 	// have mis-applied. A row that is not terminal — in flight, or DRIFT
 	// waiting for an operator — is never pruned, whatever its age.
 	DefaultConfigApplyJournalDays = 30
+	// DefaultBlackboxTraceCacheDays bounds blackbox_trace_cache: one day, the
+	// cache's own TTL (engine.DefaultCacheTTL). A row past it is never served.
+	// GitHub #394; design 2026-10-12-tool-audit-retention-floor §8.2.1.
+	DefaultBlackboxTraceCacheDays = 1
+	// DefaultProjectGistsDays bounds project_gists: a week without a refresh
+	// (the term loop runs every 10 minutes, the narrative loop hourly) means
+	// the loop no longer covers the project or the narrative. GitHub #394;
+	// design §8.2.2.
+	DefaultProjectGistsDays = 7
 	// MinimumFloorDays is the absolute minimum any window can be pinned
 	// to regardless of operator config. Protects against typos that
 	// would nuke fresh operational data.
@@ -511,6 +520,19 @@ type GlobalCounts struct {
 	// ConfigApplyJournal is how many TERMINAL config-apply journal rows aged
 	// past their post-terminal horizon. Open rows are never counted.
 	ConfigApplyJournal int
+	// BlackboxTraceCache is how many assembled black-box traces aged past
+	// BlackboxTraceCacheDays; BlackboxTraceCacheExamined is how many rows the
+	// table held before the step (the denominator). GitHub #394.
+	BlackboxTraceCache         int
+	BlackboxTraceCacheExamined int
+	// ProjectGists is how many gists went unrefreshed past ProjectGistsDays
+	// and were deleted; ProjectGistNarratives is how many narratives went
+	// unrewritten past it and were cleared (their term rows kept);
+	// ProjectGistsExamined is how many rows the table held before the step.
+	// GitHub #394.
+	ProjectGists          int
+	ProjectGistNarratives int
+	ProjectGistsExamined  int
 }
 
 // uiSessionGraceDays is the fixed window kept after a session
@@ -670,6 +692,14 @@ type GlobalPolicy struct {
 	// terminal_at. Zero → DefaultConfigApplyJournalDays, NOT skipped, for the
 	// same reason as ExecutionRatingsDays: the journal design states a horizon.
 	ConfigApplyJournalDays int
+	// BlackboxTraceCacheDays bounds blackbox_trace_cache on assembled_at.
+	// Zero → DefaultBlackboxTraceCacheDays, NOT skipped: a trace past the
+	// cache's own TTL is never served, so keeping it serves nothing.
+	BlackboxTraceCacheDays int
+	// ProjectGistsDays bounds project_gists: a row not refreshed for the
+	// window is deleted, a narrative not rewritten for it is cleared. Zero →
+	// DefaultProjectGistsDays, NOT skipped.
+	ProjectGistsDays int
 }
 
 // SweepGlobal prunes non-project-scoped tables (caches, ratings, and the
@@ -730,7 +760,120 @@ func (s *Sweeper) runGlobal(ctx context.Context, p GlobalPolicy, previewOnly boo
 	s.runGlobalPrune(ctx, "config_apply_journal", days(p.ConfigApplyJournalDays, DefaultConfigApplyJournalDays), previewOnly,
 		s.pruneConfigApplyJournal, &counts.ConfigApplyJournal, &firstErr)
 
+	// Derived copies of transcript text (GitHub #394, design §8.2.1/§8.2.2):
+	// always on, zero is the default. Each reports its denominator.
+	s.runGlobalPrune(ctx, "blackbox_trace_cache", days(p.BlackboxTraceCacheDays, DefaultBlackboxTraceCacheDays), previewOnly,
+		func(ctx context.Context, threshold time.Time, previewOnly bool) (int, error) {
+			n, examined, err := s.pruneBlackboxTraceCache(ctx, threshold, previewOnly)
+			counts.BlackboxTraceCacheExamined = examined
+			return n, err
+		}, &counts.BlackboxTraceCache, &firstErr)
+	s.runGlobalPrune(ctx, "project_gists", days(p.ProjectGistsDays, DefaultProjectGistsDays), previewOnly,
+		func(ctx context.Context, threshold time.Time, previewOnly bool) (int, error) {
+			n, narratives, examined, err := s.pruneProjectGists(ctx, threshold, previewOnly)
+			counts.ProjectGistNarratives = narratives
+			counts.ProjectGistsExamined = examined
+			return n, err
+		}, &counts.ProjectGists, &firstErr)
+
 	return counts, firstErr
+}
+
+// countRows returns how many rows table holds; table is a package constant.
+func (s *Sweeper) countRows(ctx context.Context, table string) (int, error) {
+	var n int
+	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM `+table).Scan(&n); err != nil {
+		return 0, fmt.Errorf("count %s: %w", table, err)
+	}
+	return n, nil
+}
+
+// pruneBlackboxTraceCache deletes assembled black-box traces older than the
+// threshold (GitHub #394, design §8.2.1). Each row is a copy of a task's
+// messages and audit rows; past the cache's 24-hour TTL it is never served
+// (engine.Cache.Get treats it as a miss), and before this step nothing
+// deleted it. Postgres only: on SQLite the table does not exist and the step
+// reports zero examined.
+func (s *Sweeper) pruneBlackboxTraceCache(ctx context.Context, threshold time.Time, previewOnly bool) (pruned, examined int, err error) {
+	present, err := s.tableExists(ctx, "blackbox_trace_cache")
+	if err != nil || !present {
+		return 0, 0, err
+	}
+	if examined, err = s.countRows(ctx, "blackbox_trace_cache"); err != nil {
+		return 0, 0, err
+	}
+	if previewOnly {
+		if err := s.db.QueryRowContext(ctx,
+			`SELECT COUNT(*) FROM blackbox_trace_cache WHERE assembled_at < $1`,
+			s.bindTime(threshold)).Scan(&pruned); err != nil {
+			return 0, examined, fmt.Errorf("count blackbox_trace_cache: %w", err)
+		}
+		return pruned, examined, nil
+	}
+	res, err := s.db.ExecContext(ctx,
+		`DELETE FROM blackbox_trace_cache WHERE assembled_at < $1`, s.bindTime(threshold))
+	if err != nil {
+		return 0, examined, fmt.Errorf("delete blackbox_trace_cache: %w", err)
+	}
+	aff, err := res.RowsAffected()
+	if err != nil {
+		return 0, examined, fmt.Errorf("rows affected for blackbox_trace_cache: %w", err)
+	}
+	return int(aff), examined, nil
+}
+
+// pruneProjectGists bounds project_gists on the two clocks a row carries
+// (GitHub #394, design §8.2.2):
+//
+//   - a gist whose term loop has not refreshed it since the threshold
+//     (generated_at) is deleted — the loop no longer covers that project;
+//   - a narrative not rewritten since the threshold (narrative_generated_at)
+//     is cleared, its term row kept. The narrative loop never clears one
+//     itself: an empty sample keeps the previous text, so after an erasure
+//     that emptied the corpus this is what removes it.
+//
+// Narratives are cleared first, so a row that is about to be deleted is not
+// also counted as a cleared narrative. Postgres only.
+func (s *Sweeper) pruneProjectGists(ctx context.Context, threshold time.Time, previewOnly bool) (deleted, narratives, examined int, err error) {
+	present, err := s.tableExists(ctx, "project_gists")
+	if err != nil || !present {
+		return 0, 0, 0, err
+	}
+	if examined, err = s.countRows(ctx, "project_gists"); err != nil {
+		return 0, 0, 0, err
+	}
+	t := s.bindTime(threshold)
+	const staleNarrative = `narrative_generated_at < $1 AND generated_at >= $1`
+	if previewOnly {
+		if err := s.db.QueryRowContext(ctx,
+			`SELECT COUNT(*) FROM project_gists WHERE `+staleNarrative, t).Scan(&narratives); err != nil {
+			return 0, 0, examined, fmt.Errorf("count project_gists narratives: %w", err)
+		}
+		if err := s.db.QueryRowContext(ctx,
+			`SELECT COUNT(*) FROM project_gists WHERE generated_at < $1`, t).Scan(&deleted); err != nil {
+			return 0, narratives, examined, fmt.Errorf("count project_gists: %w", err)
+		}
+		return deleted, narratives, examined, nil
+	}
+	res, err := s.db.ExecContext(ctx, `UPDATE project_gists
+		SET narrative = NULL, narrative_model = NULL, narrative_generated_at = NULL
+		WHERE `+staleNarrative, t)
+	if err != nil {
+		return 0, 0, examined, fmt.Errorf("clear project_gists narratives: %w", err)
+	}
+	aff, err := res.RowsAffected()
+	if err != nil {
+		return 0, 0, examined, fmt.Errorf("rows affected for project_gists narratives: %w", err)
+	}
+	narratives = int(aff)
+	res, err = s.db.ExecContext(ctx, `DELETE FROM project_gists WHERE generated_at < $1`, t)
+	if err != nil {
+		return 0, narratives, examined, fmt.Errorf("delete project_gists: %w", err)
+	}
+	if aff, err = res.RowsAffected(); err != nil {
+		return 0, narratives, examined, fmt.Errorf("rows affected for project_gists: %w", err)
+	}
+	return int(aff), narratives, examined, nil
 }
 
 // pruneConfigApplyJournal bounds config_apply_journal on the row's OWN

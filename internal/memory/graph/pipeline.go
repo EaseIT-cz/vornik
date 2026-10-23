@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 
 	"vornik.io/vornik/internal/llmspend"
 	"vornik.io/vornik/internal/persistence"
@@ -115,6 +116,13 @@ type PipelineMetrics struct {
 	MentionsWithoutSpan int
 	EdgesUpserted       int
 	EdgesDropped        int
+	// EdgePropertiesDropped counts kept edges whose model-written properties
+	// did not decode as JSON and were stored as none (LLD §3.3a), so a
+	// relationship model emitting malformed properties is visible.
+	EdgePropertiesDropped int
+	// AliasAddFailed counts merge aliases whose write failed (GitHub #369,
+	// §S8.11 6e); the alias is lost, the match stands.
+	AliasAddFailed int
 }
 
 // chunkInput is the minimal slice of memory.MemoryChunk the
@@ -203,10 +211,20 @@ func (p *Pipeline) RunChunk(ctx context.Context, chunk ChunkInput) (*PipelineMet
 			entityIDByCand[i] = res.MatchID
 			metrics.EntitiesMatched++
 			for _, alias := range res.MergeAliases {
+				// Model-written and persisted (LLD §3.3a, GitHub #284).
+				// Write-only: nothing matches or dedups on aliases.
+				alias = strings.TrimSpace(storableText(alias))
 				if alias == "" {
 					continue
 				}
-				_ = p.Entities.AddAlias(ctx, res.MatchID, alias)
+				if aerr := p.Entities.AddAlias(ctx, res.MatchID, alias); aerr != nil {
+					// The alias is lost, the match stands; counted so a
+					// failing write is visible (GitHub #369, §S8.11 6e).
+					metrics.AliasAddFailed++
+					if p.Metrics != nil {
+						p.Metrics.SkippedTotal.WithLabelValues("alias_add_failed").Inc()
+					}
+				}
 			}
 		case "new":
 			key := sameChunkKey{Type: c.Type, Name: c.Name}
@@ -342,12 +360,20 @@ func (p *Pipeline) RunChunk(ctx context.Context, chunk ChunkInput) (*PipelineMet
 			continue
 		}
 		score := ve.Score
+		// Properties are the one model output held undecoded
+		// (json.RawMessage), so they can carry raw invalid bytes as well as
+		// \u0000, which Postgres JSONB refuses (LLD §3.3a, GitHub #284). An
+		// undecodable document is dropped and the edge kept.
+		props, ok := storableJSON(ve.Proposal.Properties)
+		if !ok {
+			metrics.EdgePropertiesDropped++
+		}
 		edge := &persistence.KnowledgeEdge{
 			ProjectID:    chunk.ProjectID,
 			FromEntity:   ve.Proposal.From,
 			ToEntity:     ve.Proposal.To,
 			Predicate:    ve.Proposal.Predicate,
-			Properties:   ve.Proposal.Properties,
+			Properties:   props,
 			SourceChunks: []string{chunk.ID},
 			ExtractedBy:  metrics.relationshipModel(),
 			Confidence:   score,
@@ -512,6 +538,7 @@ func (p *Pipeline) emitStageTokens(m *PipelineMetrics) {
 		p.Metrics.StageTokensTotal.WithLabelValues("resolver", "output").Add(float64(m.Resolve.CompletionTokens))
 		p.Metrics.ResolverDecisionsTotal.WithLabelValues("short_circuit").Add(float64(m.Resolve.ShortCircuited))
 		p.Metrics.ResolverDecisionsTotal.WithLabelValues("llm").Add(float64(m.Resolve.LLMResolved))
+		p.Metrics.ResolverDecisionsTotal.WithLabelValues("invalid_match_id").Add(float64(m.Resolve.InvalidMatchIDs))
 	}
 	if m.Relations != nil {
 		p.Metrics.StageTokensTotal.WithLabelValues("relationship", "input").Add(float64(m.Relations.PromptTokens))

@@ -2,6 +2,8 @@ package service
 
 import (
 	"context"
+
+	"vornik.io/vornik/internal/config"
 )
 
 // startMCPReconnector runs the MCP manager's failed-connect reconnector
@@ -19,4 +21,12 @@ func (c *Container) startMCPReconnector(ctx context.Context) {
 		})
 	}
 	go c.mcpManager.RunReconnector(ctx)
+	// The periodic re-list of agent read servers (agent-administered design
+	// §6.5, amendment #481; operator decision A7): every node, like the
+	// reconnector, since each dials its own clients.
+	interval := config.DefaultAgentReadRelistInterval
+	if c.Config != nil {
+		interval = c.Config.MCP.AgentReadRelist()
+	}
+	go c.mcpManager.RunAgentReadRelist(ctx, interval)
 }

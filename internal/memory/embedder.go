@@ -42,6 +42,10 @@ type Embedder struct {
 
 	bedrockClient  bedrockRuntimeEmbedClient
 	bedrockInitErr error
+
+	// metrics carries EmbedFailuresTotal; nil for an embedder built outside the
+	// memory manager (onboarding validator, doctor probe, calibration CLI).
+	metrics *Metrics
 }
 
 type bedrockRuntimeEmbedClient interface {
@@ -225,8 +229,16 @@ func (e *Embedder) Dimension() int {
 
 // Embed sends texts to the configured embedding backend in batches of up to
 // 512 and returns one []float32 per input text preserving order.
-// Returns nil, nil when the backend is not configured or any network/HTTP error
-// occurs so callers can degrade gracefully.
+//
+// For one or more inputs it returns either one non-empty vector per input and
+// no error, or no vectors and an *EmbedError whose Reason names the cause (not
+// configured, timeout, HTTP status, dimension mismatch, ...; see embed_error.go).
+// It never returns (nil, nil) for a non-empty input: that degrade let callers
+// store or skip without knowing why (outcome-quality §S8.10, GitHub #369 item 5).
+// Zero inputs return (nil, nil), checked before configuration: zero vectors is
+// the complete answer and nothing failed. Callers still degrade gracefully;
+// they now do it knowing the cause, and every failure is counted on
+// vornik_memory_embed_failures_total{call_site,reason}.
 //
 // scope says who the call is billed to and is required — see EmbedScope. An
 // invalid scope returns an ERROR, deliberately not the (nil, nil) degrade: a
@@ -241,40 +253,56 @@ func (e *Embedder) Embed(ctx context.Context, scope EmbedScope, texts []string) 
 	if err := scope.Validate(); err != nil {
 		return nil, err
 	}
-	if !e.configured() || len(texts) == 0 {
+	if len(texts) == 0 {
 		return nil, nil
 	}
+	vecs, err := e.embed(ctx, scope, texts)
+	if err != nil {
+		e.countFailure(scope, err)
+		return nil, err
+	}
+	return vecs, nil
+}
 
-	result := make([][]float32, len(texts))
-
-	var misses []string
-	var missIndices []int
-	if e.Cache != nil && e.cfg.EmbeddingModel != "" {
-		misses = make([]string, 0, len(texts))
-		missIndices = make([]int, 0, len(texts))
-		for i, t := range texts {
-			hash := ContentHash(t)
-			if vec, ok, err := e.Cache.Get(ctx, hash, e.cfg.EmbeddingModel); err == nil && ok {
-				// A dimension change under the same model id must invalidate the
-				// old cache row; returning it guarantees the later pgvector write
-				// fails every time.
-				if e.cfg.EmbeddingDimension <= 0 || len(vec) == e.cfg.EmbeddingDimension {
-					result[i] = vec
-					continue
-				}
-			}
-			misses = append(misses, t)
-			missIndices = append(missIndices, i)
-		}
-		if len(misses) == 0 {
-			return result, nil
-		}
-	} else {
-		misses = texts
+// cacheLookup fills result from the embedding cache and returns the texts that
+// missed, with their positions in texts. Without a cache (or a model id to key
+// it by) every text is a miss.
+func (e *Embedder) cacheLookup(ctx context.Context, texts []string) (result [][]float32, misses []string, missIndices []int) {
+	result = make([][]float32, len(texts))
+	if e.Cache == nil || e.cfg.EmbeddingModel == "" {
 		missIndices = make([]int, len(texts))
 		for i := range texts {
 			missIndices[i] = i
 		}
+		return result, texts, missIndices
+	}
+	misses = make([]string, 0, len(texts))
+	missIndices = make([]int, 0, len(texts))
+	for i, t := range texts {
+		if vec, ok, err := e.Cache.Get(ctx, ContentHash(t), e.cfg.EmbeddingModel); err == nil && ok {
+			// A dimension change under the same model id must invalidate the
+			// old cache row; returning it guarantees the later pgvector write
+			// fails every time.
+			if e.cfg.EmbeddingDimension <= 0 || len(vec) == e.cfg.EmbeddingDimension {
+				result[i] = vec
+				continue
+			}
+		}
+		misses = append(misses, t)
+		missIndices = append(missIndices, i)
+	}
+	return result, misses, missIndices
+}
+
+// embed is Embed after validation, uncounted, so EmbedQuery's paths count once.
+func (e *Embedder) embed(ctx context.Context, scope EmbedScope, texts []string) ([][]float32, error) {
+	if !e.configured() {
+		return nil, embedFail(EmbedReasonNotConfigured, nil)
+	}
+
+	result, misses, missIndices := e.cacheLookup(ctx, texts)
+	if len(misses) == 0 {
+		return result, nil
 	}
 
 	for start := 0; start < len(misses); start += maxEmbedBatch {
@@ -286,10 +314,16 @@ func (e *Embedder) Embed(ctx context.Context, scope EmbedScope, texts []string) 
 
 		vecs, err := e.embedBatch(ctx, scope, batch)
 		if err != nil {
-			return nil, nil
+			// Typed at the deepest site that could tell the cause; anything
+			// untyped from below is a provider-call failure.
+			if _, typed := EmbedFailureReason(err); !typed {
+				err = embedCallFail(ctx, err)
+			}
+			return nil, err
 		}
-		if vecs == nil {
-			return nil, nil
+		if len(vecs) != len(batch) {
+			return nil, &EmbedError{Reason: EmbedReasonPartialResponse,
+				Detail: fmt.Sprintf("%d vectors for %d texts", len(vecs), len(batch))}
 		}
 		for i, v := range vecs {
 			outIdx := missIndices[start+i]
@@ -381,6 +415,15 @@ func (e *Embedder) recordEmbedUsage(ctx context.Context, scope EmbedScope, promp
 // unexported so the assignment is a method call the wiring law can find.
 func (e *Embedder) SetSpend(r llmspend.Recorder) { e.spend = r }
 
+// SetHTTPClient replaces the client of the OpenAI-compatible path. The setup
+// probe passes a guarded one (GitHub #502, S3); the Bedrock path signs its
+// own SDK requests and does not use it. Nil keeps the default.
+func (e *Embedder) SetHTTPClient(c *http.Client) {
+	if c != nil {
+		e.client = c
+	}
+}
+
 // embedBatch calls the configured backend for a single batch and returns one
 // vector per text.
 func (e *Embedder) embedBatch(ctx context.Context, scope EmbedScope, texts []string) ([][]float32, error) {
@@ -394,13 +437,13 @@ func (e *Embedder) embedBatchOpenAICompat(ctx context.Context, scope EmbedScope,
 	reqBody := embeddingRequest{Model: e.cfg.EmbeddingModel, Input: texts}
 	b, err := json.Marshal(reqBody)
 	if err != nil {
-		return nil, fmt.Errorf("marshal embedding request: %w", err)
+		return nil, embedFail(EmbedReasonRequest, fmt.Errorf("marshal embedding request: %w", err))
 	}
 
 	url := strings.TrimRight(e.cfg.EmbeddingEndpoint, "/") + "/v1/embeddings"
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(b))
 	if err != nil {
-		return nil, fmt.Errorf("create embedding request: %w", err)
+		return nil, embedFail(EmbedReasonRequest, fmt.Errorf("create embedding request: %w", err))
 	}
 	req.Header.Set("Content-Type", "application/json")
 	if e.cfg.EmbeddingAPIKey != "" {
@@ -409,11 +452,11 @@ func (e *Embedder) embedBatchOpenAICompat(ctx context.Context, scope EmbedScope,
 
 	resp, err := e.client.Do(req)
 	if err != nil {
-		return nil, nil
+		return nil, embedCallFail(ctx, err)
 	}
 	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusOK {
-		return nil, nil
+		return nil, &EmbedError{Reason: EmbedReasonHTTPStatus, Status: resp.StatusCode}
 	}
 
 	body, err := io.ReadAll(io.LimitReader(resp.Body, maxEmbeddingResponseBytes))
@@ -422,7 +465,7 @@ func (e *Embedder) embedBatchOpenAICompat(ctx context.Context, scope EmbedScope,
 		// no token count and no text-independent way to know what was billed —
 		// so estimate from the request we sent rather than record nothing.
 		e.recordEmbedUsage(ctx, scope, estimateEmbedTokens(texts), true)
-		return nil, nil
+		return nil, embedFail(EmbedReasonReadBody, err)
 	}
 
 	// BILL FIRST. The status was 200, so the provider charged; everything below
@@ -449,10 +492,10 @@ func (e *Embedder) embedBatchOpenAICompat(ctx context.Context, scope EmbedScope,
 
 	var embResp embeddingResponse
 	if err := json.Unmarshal(body, &embResp); err != nil {
-		return nil, nil
+		return nil, embedFail(EmbedReasonDecode, err)
 	}
 	if embResp.Error != nil {
-		return nil, nil
+		return nil, &EmbedError{Reason: EmbedReasonProviderError, Detail: embResp.Error.Message}
 	}
 
 	vecs := make([][]float32, len(texts))
@@ -460,25 +503,32 @@ func (e *Embedder) embedBatchOpenAICompat(ctx context.Context, scope EmbedScope,
 	dimension := e.cfg.EmbeddingDimension
 	for _, d := range embResp.Data {
 		if d.Index >= 0 && d.Index < len(vecs) {
-			if seen[d.Index] || len(d.Embedding) == 0 {
-				return nil, nil
+			if seen[d.Index] {
+				return nil, &EmbedError{Reason: EmbedReasonMalformedResponse,
+					Detail: fmt.Sprintf("index %d answered twice", d.Index)}
+			}
+			if len(d.Embedding) == 0 {
+				return nil, &EmbedError{Reason: EmbedReasonEmptyVector,
+					Detail: fmt.Sprintf("index %d", d.Index)}
 			}
 			if dimension == 0 {
 				dimension = len(d.Embedding)
 			}
 			if len(d.Embedding) != dimension {
-				return nil, nil
+				return nil, &EmbedError{Reason: EmbedReasonDimensionMismatch,
+					Got: len(d.Embedding), Want: dimension}
 			}
 			vecs[d.Index] = d.Embedding
 			seen[d.Index] = true
 		}
 	}
-	for _, ok := range seen {
+	for i, ok := range seen {
 		if !ok {
 			// A partial response cannot be aligned with the input batch. Passing
 			// nil slots onward turns an upstream protocol error into corrupt
 			// persisted state.
-			return nil, nil
+			return nil, &EmbedError{Reason: EmbedReasonPartialResponse,
+				Detail: fmt.Sprintf("no vector for index %d of %d", i, len(texts))}
 		}
 	}
 	return vecs, nil
@@ -486,7 +536,7 @@ func (e *Embedder) embedBatchOpenAICompat(ctx context.Context, scope EmbedScope,
 
 func (e *Embedder) embedBatchBedrock(ctx context.Context, scope EmbedScope, texts []string) ([][]float32, error) {
 	if e.bedrockInitErr != nil || e.bedrockClient == nil {
-		return nil, nil
+		return nil, embedFail(EmbedReasonBackendInit, e.bedrockInitErr)
 	}
 	// Cohere accepts a batch per call; Titan is one text per call. Batching is not
 	// just tidier — the serial Titan loop is why a 3,187-chunk ingest is slow.
@@ -498,8 +548,11 @@ func (e *Embedder) embedBatchBedrock(ctx context.Context, scope EmbedScope, text
 		// One row per Titan call, because Titan bills per call — the loop is
 		// N charges, not one.
 		vec, err := e.embedOneBedrock(ctx, scope, text)
-		if err != nil || len(vec) == 0 {
-			return nil, nil
+		if err != nil {
+			return nil, err
+		}
+		if len(vec) == 0 {
+			return nil, &EmbedError{Reason: EmbedReasonEmptyVector, Detail: "titan"}
 		}
 		vecs[i] = vec
 	}
@@ -522,7 +575,7 @@ func (e *Embedder) embedBatchCohere(ctx context.Context, scope EmbedScope, texts
 			OutputDimension: e.cfg.EmbeddingDimension,
 		})
 		if err != nil {
-			return nil, err
+			return nil, embedFail(EmbedReasonRequest, err)
 		}
 		res, err := e.bedrockClient.InvokeModel(ctx, &bedrockruntime.InvokeModelInput{
 			ModelId:     aws.String(e.cfg.EmbeddingModel),
@@ -531,7 +584,7 @@ func (e *Embedder) embedBatchCohere(ctx context.Context, scope EmbedScope, texts
 			Body:        body,
 		})
 		if err != nil {
-			return nil, err
+			return nil, embedCallFail(ctx, err)
 		}
 		// Cohere's embed response carries NO token count, so this is the
 		// estimate-and-flag path. Recorded before the body is parsed: Bedrock
@@ -539,11 +592,18 @@ func (e *Embedder) embedBatchCohere(ctx context.Context, scope EmbedScope, texts
 		e.recordEmbedUsage(ctx, scope, estimateEmbedTokens(texts[start:end]), true)
 		var resp bedrockCohereEmbeddingResponse
 		if err := json.Unmarshal(res.Body, &resp); err != nil {
-			return nil, err
+			return nil, embedFail(EmbedReasonDecode, err)
 		}
 		if len(resp.Embeddings.Float) != end-start {
-			return nil, fmt.Errorf("cohere returned %d vectors for %d texts",
-				len(resp.Embeddings.Float), end-start)
+			return nil, &EmbedError{Reason: EmbedReasonPartialResponse,
+				Detail: fmt.Sprintf("cohere returned %d vectors for %d texts",
+					len(resp.Embeddings.Float), end-start)}
+		}
+		for i, v := range resp.Embeddings.Float {
+			if len(v) == 0 {
+				return nil, &EmbedError{Reason: EmbedReasonEmptyVector,
+					Detail: fmt.Sprintf("cohere index %d", start+i)}
+			}
 		}
 		out = append(out, resp.Embeddings.Float...)
 	}
@@ -565,22 +625,43 @@ func (e *Embedder) EmbedQuery(ctx context.Context, scope EmbedScope, query strin
 	if err := scope.Validate(); err != nil {
 		return nil, err
 	}
-	if !e.configured() || strings.TrimSpace(query) == "" {
+	// An empty query is zero inputs: nothing to embed, nothing failed.
+	if strings.TrimSpace(query) == "" {
 		return nil, nil
 	}
-	if e.usesBedrock() && e.usesCohere() {
-		vecs, err := e.embedBatchCohere(ctx, scope, []string{query}, embedSearchQuery)
-		if err != nil {
-			return nil, err
-		}
-		if len(vecs) == 0 {
-			return nil, nil
-		}
-		return vecs[0], nil
-	}
-	vecs, err := e.Embed(ctx, scope, []string{query})
-	if err != nil || len(vecs) == 0 {
+	vec, err := e.embedQuery(ctx, scope, query)
+	if err != nil {
+		e.countFailure(scope, err)
 		return nil, err
+	}
+	return vec, nil
+}
+
+// embedQuery is EmbedQuery after validation, uncounted.
+func (e *Embedder) embedQuery(ctx context.Context, scope EmbedScope, query string) ([]float32, error) {
+	if !e.configured() {
+		return nil, embedFail(EmbedReasonNotConfigured, nil)
+	}
+	var vecs [][]float32
+	var err error
+	if e.usesBedrock() && e.usesCohere() {
+		if e.bedrockInitErr != nil || e.bedrockClient == nil {
+			return nil, embedFail(EmbedReasonBackendInit, e.bedrockInitErr)
+		}
+		vecs, err = e.embedBatchCohere(ctx, scope, []string{query}, embedSearchQuery)
+	} else {
+		vecs, err = e.embed(ctx, scope, []string{query})
+	}
+	if err != nil {
+		return nil, err
+	}
+	// Unreachable: both paths fail on a count mismatch or an empty vector.
+	// Kept typed so it can never read as (nil, nil).
+	if len(vecs) != 1 {
+		return nil, &EmbedError{Reason: EmbedReasonPartialResponse, Detail: "no vector for the query"}
+	}
+	if len(vecs[0]) == 0 {
+		return nil, &EmbedError{Reason: EmbedReasonEmptyVector, Detail: "query"}
 	}
 	return vecs[0], nil
 }
@@ -589,14 +670,15 @@ func (e *Embedder) embedOneBedrock(ctx context.Context, scope EmbedScope, text s
 	if !strings.HasPrefix(strings.TrimSpace(e.cfg.EmbeddingModel), "amazon.titan-embed-text") {
 		// Cohere goes through embedBatchCohere; anything else is a mis-set model id
 		// and must fail loudly rather than produce garbage vectors.
-		return nil, fmt.Errorf("unsupported Bedrock embedding model %q", e.cfg.EmbeddingModel)
+		return nil, embedFail(EmbedReasonUnsupportedModel,
+			fmt.Errorf("unsupported Bedrock embedding model %q", e.cfg.EmbeddingModel))
 	}
 	body, err := json.Marshal(bedrockTitanEmbeddingRequest{
 		InputText:  text,
 		Dimensions: e.cfg.EmbeddingDimension,
 	})
 	if err != nil {
-		return nil, err
+		return nil, embedFail(EmbedReasonRequest, err)
 	}
 	out, err := e.bedrockClient.InvokeModel(ctx, &bedrockruntime.InvokeModelInput{
 		ModelId:     aws.String(e.cfg.EmbeddingModel),
@@ -605,13 +687,13 @@ func (e *Embedder) embedOneBedrock(ctx context.Context, scope EmbedScope, text s
 		Body:        body,
 	})
 	if err != nil {
-		return nil, err
+		return nil, embedCallFail(ctx, err)
 	}
 	var resp bedrockTitanEmbeddingResponse
 	if err := json.Unmarshal(out.Body, &resp); err != nil {
 		// Charged, unusable. Estimate rather than lose the spend.
 		e.recordEmbedUsage(ctx, scope, estimateEmbedTokens([]string{text}), true)
-		return nil, err
+		return nil, embedFail(EmbedReasonDecode, err)
 	}
 	if resp.InputTextTokenCount > 0 {
 		e.recordEmbedUsage(ctx, scope, resp.InputTextTokenCount, false)

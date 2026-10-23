@@ -840,9 +840,12 @@ type KnowledgeEntityFilter struct {
 	ProjectID string
 	Types     []string // empty = all
 	Lifecycle []string // default = ["published"]
-	NameLike  string   // ILIKE % wrap
-	Limit     int
-	Offset    int
+	// NameLike is a literal substring of canonical_name, case-insensitive
+	// for ASCII A-Z only; %, _ and \ match themselves; "" = no filter.
+	// One rule on both drivers (GitHub #449; KG design §6.1).
+	NameLike string
+	Limit    int
+	Offset   int
 }
 
 // KnowledgeEdge is a typed relationship between two entities.
@@ -2294,6 +2297,13 @@ type TaskJudgeVerdict struct {
 	Summary    string    `json:"summary,omitempty"`
 	CostUSD    float64   `json:"cost_usd"`
 	RecordedAt time.Time `json:"recorded_at"`
+	// FailureClass names why the judge did not decide on full evidence:
+	// llm_timeout, llm_cancelled, llm_error, evidence_incomplete or
+	// not_configured — the same value the runner counts as the evaluation's
+	// outcome. Empty (stored NULL) for an evaluation on full evidence and for
+	// every row written before migration 232 (GitHub #369,
+	// outcome-quality-design.md §S8.11 row 8a).
+	FailureClass string `json:"failure_class,omitempty"`
 }
 
 // Verdict literal values. Stored as plain strings so ad-hoc

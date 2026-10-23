@@ -18,6 +18,7 @@ import (
 	"vornik.io/vornik/internal/persistence"
 	"vornik.io/vornik/internal/playbook"
 	"vornik.io/vornik/internal/registry"
+	"vornik.io/vornik/internal/report"
 )
 
 type TaskDetailData struct {
@@ -65,6 +66,9 @@ type TaskDetailData struct {
 	// Phase 26+27 — conversational task lifecycle. Empty/disabled
 	// when taskMessageRepo isn't wired.
 	Conversation TaskConversationView
+	// Controls is which status controls the page offers, decided once for
+	// both the desktop header row and the phone action bar (GitHub #375).
+	Controls TaskStatusControls
 	// Notice carries the toast banner text from the action redirect
 	// (e.g. "answer-sent"). Empty unless the URL has ?notice=...
 	Notice string
@@ -601,7 +605,109 @@ func (s *Server) TaskDetail(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if data.Task != nil {
+		data.Controls = taskStatusControls(data.Task.Status, s.taskMessageRepo != nil)
+	}
+	s.scrubTaskDetailErrors(r, &data)
 	s.render(w, "task_detail.html", data)
+}
+
+// errorTextFor is how r reads a persisted error text on the task and
+// execution pages (GitHub #466; process-spawn-law design, "Amendment
+// 2026-10-21 (#466)", D4): unchanged for an admin-class caller,
+// report.ScrubLines with the UI's scrubber for every other (no scrubber:
+// every line withheld). nil means unchanged. GitHub #491 (design K2): an
+// unscoped caller that is not admin-class reads api.UnscopedWithheldText in
+// place of each whole field.
+func (s *Server) errorTextFor(r *http.Request) func(string) string {
+	switch api.ErrorTextAccessFor(r, s.operatorCapability.IsAdminKey) {
+	case api.ErrorTextOperator:
+		return nil
+	case api.ErrorTextScrubbed:
+		return func(t string) string {
+			out, _ := report.ScrubLines(t, s.errorTextScrubber)
+			return out
+		}
+	default:
+		return api.WithheldUnscoped
+	}
+}
+
+// errorTextOrRaw is errorTextFor with the admin-class view spelled out as
+// the identity, for row builders that always apply a view (a step outcome's
+// error_detail on the execution, replay and live pages).
+func (s *Server) errorTextOrRaw(r *http.Request) func(string) string {
+	if view := s.errorTextFor(r); view != nil {
+		return view
+	}
+	return func(t string) string { return t }
+}
+
+// scrubbedTask returns a copy of t whose LastError went through view.
+func scrubbedTask(t *persistence.Task, view func(string) string) *persistence.Task {
+	if t == nil || t.LastError == nil {
+		return t
+	}
+	cp := *t
+	le := view(*t.LastError)
+	cp.LastError = &le
+	return &cp
+}
+
+// resultViewFor is the request's view of an execution's stored result, the
+// last step's result.json, which on a failed step carries its error (GitHub
+// #496, design V5): the one API mapping (api.StoredResultView) with the
+// scrubber the error text uses.
+func (s *Server) resultViewFor(r *http.Request) func([]byte) []byte {
+	return api.StoredResultView(api.ErrorTextAccessFor(r, s.operatorCapability.IsAdminKey), s.errorTextScrubber)
+}
+
+// scrubbedExecution returns a copy of e whose ErrorMessage went through view
+// and whose Result went through resultView (GitHub #496).
+func scrubbedExecution(e *persistence.Execution, view func(string) string, resultView func([]byte) []byte) *persistence.Execution {
+	if e == nil {
+		return e
+	}
+	cp := *e
+	if e.ErrorMessage != nil {
+		em := view(*e.ErrorMessage)
+		cp.ErrorMessage = &em
+	}
+	if len(e.Result) > 0 {
+		cp.Result = resultView(e.Result)
+	}
+	return &cp
+}
+
+// scrubTaskDetailErrors replaces, for a caller that is not admin-class, the
+// task, each execution and the stored post-mortem with copies whose error
+// text is scrubbed. The repositories' rows are not modified.
+func (s *Server) scrubTaskDetailErrors(r *http.Request, data *TaskDetailData) {
+	view := s.errorTextFor(r)
+	if view == nil {
+		return
+	}
+	data.Task = scrubbedTask(data.Task, view)
+	resultView := s.resultViewFor(r)
+	current, replaced := data.Execution, false
+	if len(data.Executions) > 0 {
+		execs := make([]*persistence.Execution, len(data.Executions))
+		for i, e := range data.Executions {
+			execs[i] = scrubbedExecution(e, view, resultView)
+			if e == current {
+				data.Execution, replaced = execs[i], true
+			}
+		}
+		data.Executions = execs
+	}
+	if !replaced {
+		data.Execution = scrubbedExecution(current, view, resultView)
+	}
+	if data.PostMortem != nil {
+		pm := *data.PostMortem
+		pm.Summary = view(pm.Summary)
+		data.PostMortem = &pm
+	}
 }
 
 // learnedRemediationsForTask returns the (advisory) continuous-learning

@@ -72,7 +72,7 @@
                                         <input type="hidden" name="path" value="{{.RelPath}}"/>
                                         <button type="submit"
                                                 class="text-xs text-red-700 dark:text-red-300 hover:text-red-600 dark:text-red-200 px-2 py-1 rounded transition-colors"
-                                                onclick="return confirm('Delete {{.RelPath}}? This removes the file from disk.');">
+                                                data-confirm="Delete {{.RelPath}}? This removes the file from disk.">
                                             delete
                                         </button>
                                     </form>

@@ -23,8 +23,8 @@ func TestNewEmbedder_ClientTimeoutWired(t *testing.T) {
 func TestEmbed_EmptyEndpointOrTexts(t *testing.T) {
 	e := NewEmbedder(Config{})
 	got, err := e.Embed(context.Background(), EmbedScope{ProjectID: "p1", CallSite: EmbedCallSiteIngest}, []string{"x"})
-	if got != nil || err != nil {
-		t.Fatalf("empty endpoint: got %v err %v", got, err)
+	if r, _ := EmbedFailureReason(err); got != nil || r != EmbedReasonNotConfigured {
+		t.Fatalf("empty endpoint: got %v err %v, want not_configured (#369 item 5)", got, err)
 	}
 	e2 := NewEmbedder(Config{EmbeddingEndpoint: "http://x"})
 	got, err = e2.Embed(context.Background(), EmbedScope{ProjectID: "p1", CallSite: EmbedCallSiteIngest}, nil)
@@ -112,8 +112,8 @@ func TestEmbed_NetworkErrorDegrades(t *testing.T) {
 	srv.Close()
 	e := NewEmbedder(Config{EmbeddingEndpoint: url, EmbeddingModel: "m"})
 	got, err := e.Embed(context.Background(), EmbedScope{ProjectID: "p1", CallSite: EmbedCallSiteIngest}, []string{"x"})
-	if got != nil || err != nil {
-		t.Fatalf("expected nil,nil on network error; got %v %v", got, err)
+	if r, _ := EmbedFailureReason(err); got != nil || r != EmbedReasonTransport {
+		t.Fatalf("expected a transport error on network error (#369 item 5); got %v %v", got, err)
 	}
 }
 
@@ -124,8 +124,8 @@ func TestEmbed_Non200Degrades(t *testing.T) {
 	defer srv.Close()
 	e := NewEmbedder(Config{EmbeddingEndpoint: srv.URL, EmbeddingModel: "m"})
 	got, err := e.Embed(context.Background(), EmbedScope{ProjectID: "p1", CallSite: EmbedCallSiteIngest}, []string{"x"})
-	if got != nil || err != nil {
-		t.Fatalf("expected nil,nil on 500; got %v %v", got, err)
+	if r, _ := EmbedFailureReason(err); got != nil || r != EmbedReasonHTTPStatus {
+		t.Fatalf("expected an http_status error on 500 (#369 item 5); got %v %v", got, err)
 	}
 }
 
@@ -209,8 +209,8 @@ func TestEmbed_MissingOrDuplicateIndexesDegradeTheWholeBatch(t *testing.T) {
 			defer srv.Close()
 			e := NewEmbedder(Config{EmbeddingEndpoint: srv.URL, EmbeddingModel: "m"})
 			got, err := e.Embed(context.Background(), EmbedScope{ProjectID: "p1", CallSite: EmbedCallSiteIngest}, []string{"a", "b"})
-			if err != nil || got != nil {
-				t.Fatalf("got=%v err=%v, want graceful whole-batch degradation", got, err)
+			if err == nil || got != nil {
+				t.Fatalf("got=%v err=%v, want whole-batch failure with a typed error", got, err)
 			}
 		})
 	}
@@ -237,8 +237,8 @@ func TestEmbed_WrongDimensionResponseAndCacheEntriesAreRejected(t *testing.T) {
 
 	bad := NewEmbedder(Config{EmbeddingEndpoint: srv.URL, EmbeddingModel: "m", EmbeddingDimension: 3})
 	got, err = bad.Embed(context.Background(), EmbedScope{ProjectID: "p1", CallSite: EmbedCallSiteIngest}, []string{"x"})
-	if err != nil || got != nil {
-		t.Fatalf("wrong provider dimension got=%v err=%v, want degradation", got, err)
+	if r, _ := EmbedFailureReason(err); got != nil || r != EmbedReasonDimensionMismatch {
+		t.Fatalf("wrong provider dimension got=%v err=%v, want dimension_mismatch", got, err)
 	}
 }
 

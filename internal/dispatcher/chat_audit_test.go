@@ -15,6 +15,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"vornik.io/vornik/internal/auditredact"
 	"vornik.io/vornik/internal/chat"
 	"vornik.io/vornik/internal/hallucination"
 	"vornik.io/vornik/internal/persistence"
@@ -223,23 +224,26 @@ func TestChatTurnIDContext(t *testing.T) {
 	assert.Empty(t, ChatTurnIDFromContext(nil))
 }
 
-func TestTruncateForAudit(t *testing.T) {
+// The cut moved to the redaction seam (auditredact.Cut, chat-audit design
+// §9.2.5, GitHub #395); these cases pin that it kept truncateForAudit's
+// behaviour, including the 2026-05-21 rune-boundary fix.
+func TestAuditCutKeepsTruncateForAuditBehaviour(t *testing.T) {
 	t.Run("short stays intact", func(t *testing.T) {
-		assert.Equal(t, "abc", truncateForAudit("abc", 100))
+		assert.Equal(t, "abc", auditredact.Cut("abc", 100))
 	})
 	t.Run("zero limit returns input", func(t *testing.T) {
-		assert.Equal(t, "abc", truncateForAudit("abc", 0))
+		assert.Equal(t, "abc", auditredact.Cut("abc", 0))
 	})
 	t.Run("negative limit returns input", func(t *testing.T) {
-		assert.Equal(t, "abc", truncateForAudit("abc", -1))
+		assert.Equal(t, "abc", auditredact.Cut("abc", -1))
 	})
 	t.Run("limit shorter than suffix → hard chop", func(t *testing.T) {
-		out := truncateForAudit(strings.Repeat("a", 50), 5)
+		out := auditredact.Cut(strings.Repeat("a", 50), 5)
 		assert.Equal(t, "aaaaa", out)
 		assert.Len(t, out, 5)
 	})
 	t.Run("normal truncation appends suffix", func(t *testing.T) {
-		out := truncateForAudit(strings.Repeat("a", 200), 50)
+		out := auditredact.Cut(strings.Repeat("a", 200), 50)
 		assert.Len(t, out, 50)
 		assert.True(t, strings.HasSuffix(out, "…(truncated)"))
 	})
@@ -256,7 +260,7 @@ func TestTruncateForAudit(t *testing.T) {
 		// the suffix join.
 		body := strings.Repeat("a", 498) + "📊" + strings.Repeat("b", 100)
 		// Cap below the body so truncation fires.
-		out := truncateForAudit(body, 500)
+		out := auditredact.Cut(body, 500)
 		require.True(t, utf8.ValidString(out), "output must be valid UTF-8: %q", out)
 		assert.True(t, strings.HasSuffix(out, "…(truncated)"))
 	})
@@ -264,7 +268,7 @@ func TestTruncateForAudit(t *testing.T) {
 		// Each "あ" is 3 bytes. 200 of them = 600 bytes. Limit 100
 		// must NOT split the last "あ" in the prefix.
 		body := strings.Repeat("あ", 200)
-		out := truncateForAudit(body, 100)
+		out := auditredact.Cut(body, 100)
 		assert.True(t, utf8.ValidString(out), "output must be valid UTF-8: %q", out)
 		assert.True(t, strings.HasSuffix(out, "…(truncated)"))
 	})
@@ -272,27 +276,11 @@ func TestTruncateForAudit(t *testing.T) {
 		// Limit smaller than the suffix forces the hard-chop branch.
 		// Even there, the prefix must respect rune boundaries.
 		body := strings.Repeat("あ", 50)
-		out := truncateForAudit(body, 5)
+		out := auditredact.Cut(body, 5)
 		assert.True(t, utf8.ValidString(out), "output must be valid UTF-8: %q", out)
 		// 5 bytes can fit exactly one 3-byte rune, not two.
 		assert.LessOrEqual(t, len(out), 5)
 	})
-}
-
-// TestSafeUTF8Prefix — direct exercise of the helper because
-// truncateForAudit exposes only the combined truncate+suffix
-// behaviour and we want the rune-walk fast paths pinned.
-func TestSafeUTF8Prefix(t *testing.T) {
-	assert.Equal(t, "", safeUTF8Prefix("", 5))
-	assert.Equal(t, "", safeUTF8Prefix("abc", 0))
-	assert.Equal(t, "", safeUTF8Prefix("abc", -1))
-	assert.Equal(t, "abc", safeUTF8Prefix("abc", 99))
-	assert.Equal(t, "ab", safeUTF8Prefix("abc", 2))
-	// 3-byte rune; fits only if n ≥ 3.
-	assert.Equal(t, "", safeUTF8Prefix("あ", 2))
-	assert.Equal(t, "あ", safeUTF8Prefix("あい", 3))
-	assert.Equal(t, "あ", safeUTF8Prefix("あい", 5))
-	assert.Equal(t, "あい", safeUTF8Prefix("あい", 6))
 }
 
 func TestModelFromResponse(t *testing.T) {

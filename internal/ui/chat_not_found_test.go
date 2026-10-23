@@ -21,6 +21,7 @@ func TestChatPostMessage_ProjectNotInRegistryReturns404(t *testing.T) {
 	form.Set("prompt", "hi")
 	req := httptest.NewRequest(http.MethodPost, "/projects/ghost/chat/messages",
 		strings.NewReader(form.Encode()))
+	req = asOperator491(req) // GitHub #491: the operator, stated
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	rec := httptest.NewRecorder()
 	server.ChatPostMessage(rec, req, "ghost")

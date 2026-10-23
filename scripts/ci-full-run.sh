@@ -47,7 +47,7 @@ gh_api_retry() {
     # gh writes "gh: Not Found (HTTP 404)"; match the code with or without the
     # parentheses so a message-format change cannot silently reclassify every
     # answer as a retryable network error.
-    status="$(sed -n 's/.*HTTP \([0-9]\{3\}\).*/\1/p' "$err" | head -1)"
+    status="$(sed -n 's/.*HTTP \([0-9]\{3\}\).*/\1/p' "$err" | sed -n 1p)"
     # shellcheck disable=SC2034  # read by the callers that source this file
     GH_API_LAST_STATUS="$status"
     case "$status" in

@@ -117,7 +117,7 @@
                                 <td class="px-4 py-2 text-[11px] text-rose-700 dark:text-rose-300 max-w-sm truncate font-mono" title="{{.ErrorMessage}}">{{.ErrorMessage}}</td>
                                 <td class="px-4 py-2 whitespace-nowrap text-right">
                                     {{if not .IsTerminal}}
-                                    <form method="post" action="/ui/admin/cpc/{{.ID}}/cancel" onsubmit="return confirm('Force-cancel cross-project call {{.ID}}? The caller\'s on_fail branch will fire.');" class="inline-flex items-center gap-1">
+                                    <form method="post" action="/ui/admin/cpc/{{.ID}}/cancel" data-confirm="Force-cancel cross-project call {{.ID}}? The caller's on_fail branch will fire." class="inline-flex items-center gap-1">
                                         <input type="hidden" name="filter_status" value="{{$.FilterStatus}}">
                                         <input type="hidden" name="filter_caller" value="{{$.FilterCaller}}">
                                         <input type="hidden" name="filter_callee" value="{{$.FilterCallee}}">

@@ -106,8 +106,12 @@ if not paths:
 #   3. else auto-detect from the git remote.origin.url of the repository
 #      that holds ALL the files, when they share one; otherwise of the cwd
 #   4. else repo toplevel basename (local-only repo)
-#   5. else current folder basename (not a git repo — never empty, so
-#      the scope never degrades to "none"/project-wide)
+#   5. else NO scope: neither the files nor the cwd are in a git repository.
+#      repo_scope is omitted and the daemon applies the key's default scope,
+#      else project-wide. A folder name is not a repository identity: this
+#      tier used to be the cwd's basename and minted a scope per scratch
+#      directory (GitHub #385, LLD 21 "Repository scope outside a git
+#      repository").
 # Step 3 looks at the files first (memory rollback x supersession design,
 # amendment 2026-09-26): uploads run from a helper directory outside any
 # repository were scoped with that directory's name, and scoped recall could
@@ -149,20 +153,19 @@ def resolve_scope():
         )
         url = out.stdout.strip()
     except (subprocess.SubprocessError, FileNotFoundError):
-        return os.path.basename(os.getcwd())
+        return ""
     if not url:
         # No remote — fall back to repo basename for the rare local-only
-        # case, then to the current folder name when this isn't a git
-        # repo at all. Mirrors session-start.sh's resolve_repo_scope.
+        # case; no scope when this isn't a git repo at all (GitHub #385).
+        # Mirrors session-start.sh's resolve_repo_scope.
         try:
             top = subprocess.run(
                 ["git", "rev-parse", "--show-toplevel"],
                 capture_output=True, text=True, timeout=2, check=False, cwd=git_cwd,
             )
-            base = os.path.basename(top.stdout.strip())
-            return base or os.path.basename(os.getcwd())
+            return os.path.basename(top.stdout.strip()) if top.returncode == 0 else ""
         except (subprocess.SubprocessError, FileNotFoundError):
-            return os.path.basename(os.getcwd())
+            return ""
     # Normalise to the token shape session-start.sh produces.
     for suf in (".git",):
         if url.endswith(suf):

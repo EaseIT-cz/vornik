@@ -104,10 +104,10 @@
                         </p>
                     </div>
                     <div class="flex flex-col items-stretch gap-2 min-w-[140px]">
-                        <form method="post" action="/ui/projects/{{.Project.ID}}/unarchive" onsubmit="return confirm('Restore {{.Project.ID}} to active? The grace period and reason will be cleared.');">
+                        <form method="post" action="/ui/projects/{{.Project.ID}}/unarchive" data-confirm="Restore {{.Project.ID}} to active? The grace period and reason will be cleared.">
                             <button type="submit" class="w-full inline-flex items-center justify-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-md bg-emerald-700/60 hover:bg-emerald-600/70 text-emerald-50 ring-1 ring-emerald-600/40">Unarchive</button>
                         </form>
-                        <form method="post" action="/ui/projects/{{.Project.ID}}/delete-now" onsubmit="return confirm('Delete {{.Project.ID}} now? This wipes config, DB rows, and artifact blobs immediately. Cannot be undone.');">
+                        <form method="post" action="/ui/projects/{{.Project.ID}}/delete-now" data-confirm="Delete {{.Project.ID}} now? This wipes config, DB rows, and artifact blobs immediately. Cannot be undone.">
                             <button type="submit" class="w-full inline-flex items-center justify-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-md bg-rose-700/70 hover:bg-rose-600/80 text-rose-50 ring-1 ring-rose-600/40">Delete now</button>
                         </form>
                     </div>
@@ -1466,7 +1466,7 @@
                             </p>
                         </div>
                         <form method="post" action="/ui/reminders/{{.ID}}/cancel"
-                              onsubmit="return confirm('Cancel reminder {{.ID}}?');">
+                              data-confirm="Cancel reminder {{.ID}}?">
                             <button type="submit" class="text-[11px] font-medium px-2.5 py-1 rounded-md bg-surface-700 hover:bg-surface-600 text-ink-200">Cancel</button>
                         </form>
                     </li>
@@ -1496,7 +1496,7 @@
                             </p>
                         </div>
                         <form method="post" action="/ui/projects/{{.Project.ID}}/archive"
-                              onsubmit="return confirm('Archive {{.Project.ID}}? New tasks will be blocked immediately and the project will be hard-deleted after the grace period.');"
+                              data-confirm="Archive {{.Project.ID}}? New tasks will be blocked immediately and the project will be hard-deleted after the grace period."
                               class="flex flex-col gap-2 min-w-[260px]">
                             <label class="block">
                                 <span class="block text-[11px] text-ink-500 uppercase tracking-wider mb-1">Grace period</span>

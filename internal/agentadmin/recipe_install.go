@@ -56,6 +56,10 @@ type entryPlan struct {
 	// pending: the existing approval still waits for its tools.
 	pending bool
 	write   []string
+	// heldAgain: read tools a removed approval of this server held as
+	// changing things, which this new entry approves as reads again
+	// (design §6.5, amendment #481).
+	heldAgain []string
 }
 
 // installPlan is everything an install renders from.
@@ -280,6 +284,9 @@ func classifyEntry(st *State, p *ProjectState, n RecipeNeed, url, account string
 			}
 		}
 		e.class = EntryNew
+		if prev, ok := st.Approvals[p.ID][n.Name]; ok && prev.Removed {
+			e.heldAgain = intersect(read, prev.Suspended)
+		}
 		// The two-connections rule does not refuse a recipe entry: another
 		// connection at its host under its label is said in the sentence
 		// (recipeSameAccount; design §22.2.17, GitHub #402).
@@ -288,6 +295,11 @@ func classifyEntry(st *State, p *ProjectState, n RecipeNeed, url, account string
 				// The unauthenticated tool check, before any approval.
 				if missing := minus(read, advertised); len(missing) > 0 {
 					return e, fmt.Sprintf("the server at %s does not offer %s; this recipe needs %s", url, strings.Join(missing, ", "), joinWords(read))
+				}
+				// GitHub #405 (design §6.4 item 6): the listing's verdict
+				// decides; a recipe never approves a write as a read.
+				if changes := minus(read, st.AdvertisedReads[url]); len(changes) > 0 {
+					return e, fmt.Sprintf("the server at %s offers %s as a tool that changes things; this recipe only reads", url, strings.Join(changes, ", "))
 				}
 				e.listed = true
 			}
@@ -323,6 +335,14 @@ func classifyReused(st *State, p *ProjectState, n RecipeNeed, e entryPlan, exist
 		return e, ""
 	}
 	e.added, e.removed = minus(read, a.Read), minus(dedupSorted(a.Read), read)
+	// GitHub #405 (design §6.4 item 6, review 923e): when the reused server
+	// was listed, an added read the listing calls mutating is refused, as
+	// at a new install.
+	if reads, listed := st.AdvertisedReads[e.url]; listed {
+		if changes := minus(e.added, reads); len(changes) > 0 {
+			return e, fmt.Sprintf("the server at %s offers %s as a tool that changes things; this recipe only reads", e.url, strings.Join(changes, ", "))
+		}
+	}
 	switch {
 	case len(e.added) > 0 && len(e.removed) > 0:
 		e.class = EntryToolsMixed
@@ -686,6 +706,9 @@ func installSentence(ns string, rec *Recipe, pid string, plan *installPlan, wid 
 		switch e.class {
 		case EntryNew:
 			s += fmt.Sprintf(" (it works with a server that offers %s)", joinWords(dedupSorted(e.need.ReadTools)))
+			if len(e.heldAgain) > 0 {
+				s += fmt.Sprintf(" (Vornik had stopped %s on that server because it said they change things; this lets them run as reads again)", joinWords(e.heldAgain))
+			}
 		case EntryToolsAdded:
 			s += fmt.Sprintf(", now also with %s", joinWords(e.added))
 		case EntryToolsMixed:

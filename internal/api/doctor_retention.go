@@ -76,5 +76,18 @@ func (h *DoctorHandlers) checkRetentionEnabled() DoctorCheck {
 				"the system and the one most often missed."}
 	}
 
+	// The embedding cache holds vectors of recall QUERIES under the hash of
+	// their own text — often a person's name — and no erasure path can find
+	// them, so a time window is the only bound on that data (Art 17 redact
+	// design §4.4a; GDPR design §4.20). Only where the cache is written:
+	// memory.embedding_cache_enabled on, and not SQLite (no embedding_cache).
+	if _, ok := h.retentionWindows["embedding_cache_days"]; !ok && h.embeddingCacheApplies {
+		return DoctorCheck{Name: name, Status: "WARNING",
+			Message: msg + " — but embedding_cache_days is UNSET, so cached embeddings of recall " +
+				"queries (which often name a person) are kept indefinitely. No erasure can reach " +
+				"them, so a window is the only storage limit on them; see " +
+				"<config-dir>/configs/retention-recommended.yaml."}
+	}
+
 	return DoctorCheck{Name: name, Status: "OK", Message: msg}
 }

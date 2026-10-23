@@ -69,8 +69,10 @@ var SQLiteCascadeGraph = []FKEdge{
 	{Child: "telegram_task_threads", Column: "task_id", Parent: "tasks", Action: FKCascade},
 	{Child: "task_credentials", Column: "task_id", Parent: "tasks", Action: FKCascade},
 	// Declared by the baseline schema (deployments/postgres/schema/
-	// 001_initial.sql), not a migration; SQLite's chunk table has no task_id.
-	{Child: "project_memory_chunks", Column: "task_id", Parent: "tasks", Action: FKSetNull, PostgresOnly: true},
+	// 001_initial.sql), not a migration. SQLite's chunk table carries the
+	// column since design 22 amendment #482 (the verification repository
+	// reads it), without the key; the emulation applies the same SET NULL.
+	{Child: "project_memory_chunks", Column: "task_id", Parent: "tasks", Action: FKSetNull},
 
 	// executions
 	{Child: "artifacts", Column: "execution_id", Parent: "executions", Action: FKCascade},
@@ -99,6 +101,10 @@ var SQLiteCascadeGraph = []FKEdge{
 	{Child: "memory_embed_queue", Column: "chunk_id", Parent: "project_memory_chunks", Action: FKCascade, PostgresOnly: true},
 	{Child: "memory_embed_dlq", Column: "chunk_id", Parent: "project_memory_chunks", Action: FKCascade, PostgresOnly: true},
 	{Child: "project_memory_quarantine", Column: "released_chunk_id", Parent: "project_memory_chunks", Action: FKSetNull, PostgresOnly: true},
+
+	// Memory verification (migration 234, design 22 amendment #482): an
+	// event's backup rows go with the event.
+	{Child: "memory_verification_backup", Column: "event_id", Parent: "memory_verification_events", Action: FKCascade},
 
 	// instincts: a parent the project wipe deletes from (archival design
 	// section J, GitHub #370, 2026-10-16). Both drivers declare these four

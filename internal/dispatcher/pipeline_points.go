@@ -29,9 +29,11 @@ type ToolCallInput struct {
 }
 
 // ToolOutcome is the post-tool point's output. Result is the tool's answer as
-// executed — its Content is PRE-guard and is what the audit records; Content
-// is what the model sees — post-guard; Warning is non-nil when the guard found
-// something, and the loop appends it to the turn's warnings.
+// executed — its Content is PRE-guard; Content is what the model sees —
+// post-guard, and since 2026-10-16 also what the chat audit records, so the
+// guard's HIGH redaction reaches the stored row (chat-audit retention and
+// redaction design §9.2.4, GitHub #395); Warning is non-nil when the guard
+// found something, and the loop appends it to the turn's warnings.
 type ToolOutcome struct {
 	Result  ToolResult
 	Content string
@@ -109,7 +111,7 @@ func (a *Agent) intentJudgeParticipant(ctx context.Context, in ToolCallInput) pi
 		chatIDPtr = &id
 	}
 	v := a.intentJudge.evaluate(ctx, in.ActiveProject, nil, nil, chatIDPtr,
-		in.Tool, in.Arguments, nil, a.logger)
+		in.Tool, in.Arguments, nil, a.logger, a.metrics)
 	a.logger.Info().
 		Str("tool", in.Tool).
 		Str("risk", string(v.Risk)).
@@ -121,8 +123,8 @@ func (a *Agent) intentJudgeParticipant(ctx context.Context, in ToolCallInput) pi
 
 // outputGuardParticipant runs the tool, then rewrites what the model will see
 // through the guard with the result's provenance. HIGH findings are redacted
-// in place (when configured); every severity rides back as a warning. The
-// audit keeps the pre-guard bytes in Result.
+// in place (when configured); every severity rides back as a warning. Result
+// keeps the pre-guard bytes; the chat audit records Content (§9.2.4).
 func (a *Agent) outputGuardParticipant(ctx context.Context, in ToolCallInput, next pipeline.Next[ToolCallInput, ToolOutcome]) (ToolOutcome, error) {
 	out, err := next(ctx, in)
 	if err != nil || a.outputGuard == nil {

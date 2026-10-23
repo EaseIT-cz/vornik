@@ -162,17 +162,40 @@ func matches(msg Message, query string, now time.Time) (bool, error) {
 	return true, nil
 }
 
-// NewMailMCP serves store as a Gmail-shaped MCP server (the reference
-// Google Workspace server's tool names): gmail_search, gmail_get, and the
-// write gmail_send. now is the clock newer_than is measured against.
+// NewMailMCP serves store as a Gmail-shaped MCP server with the reference
+// Google Workspace server's read tools, by their names and argument names
+// (gemini-cli workspace extension 089927e, workspace-server/src/index.ts;
+// GitHub #404): gmail_search {query, maxResults, pageToken, labelIds,
+// includeSpamTrash} and gmail_get {messageId, format}; and the stand-in's
+// own write gmail_send, which imitates no reference shape. now is the clock
+// newer_than is measured against.
 func NewMailMCP(store *MailStore, now func() time.Time) *MCPServer {
 	search := func(user string, args json.RawMessage) (any, error) {
 		var in struct {
-			Query      string `json:"query"`
-			MaxResults int    `json:"max_results"`
+			Query            string   `json:"query"`
+			MaxResults       int      `json:"maxResults"`
+			PageToken        string   `json:"pageToken"`
+			LabelIDs         []string `json:"labelIds"`
+			IncludeSpamTrash bool     `json:"includeSpamTrash"` // nothing is spam or trash here
 		}
 		if err := decode(args, &in); err != nil {
 			return nil, err
+		}
+		if in.MaxResults < 0 {
+			return nil, errors.New("invalid_argument: maxResults must not be negative")
+		}
+		if in.PageToken != "" {
+			return nil, errors.New("invalid_argument: unknown pageToken (the stand-in returns every match on one page)")
+		}
+		unreadOnly := false
+		for _, l := range in.LabelIDs {
+			switch l {
+			case "INBOX":
+			case "UNREAD":
+				unreadOnly = true
+			default:
+				return nil, errors.New("invalid_argument: label " + strconv.Quote(l) + " is not imitated (INBOX and UNREAD are)")
+			}
 		}
 		msgs := store.Inbox(user)
 		sort.SliceStable(msgs, func(i, j int) bool { return msgs[i].Received.After(msgs[j].Received) })
@@ -182,7 +205,7 @@ func NewMailMCP(store *MailStore, now func() time.Time) *MCPServer {
 			if err != nil {
 				return nil, err
 			}
-			if ok {
+			if ok && (!unreadOnly || m.Unread) {
 				out = append(out, map[string]any{"id": m.ID, "from": m.From, "subject": m.Subject, "received_at": m.Received.UTC().Format(time.RFC3339)})
 			}
 			if in.MaxResults > 0 && len(out) == in.MaxResults {
@@ -193,18 +216,34 @@ func NewMailMCP(store *MailStore, now func() time.Time) *MCPServer {
 	}
 	get := func(user string, args json.RawMessage) (any, error) {
 		var in struct {
-			ID string `json:"id"`
+			MessageID string `json:"messageId"`
+			Format    string `json:"format"`
 		}
 		if err := decode(args, &in); err != nil {
 			return nil, err
 		}
+		if in.MessageID == "" {
+			return nil, errors.New("invalid_argument: messageId is required")
+		}
+		withBody := true
+		switch in.Format {
+		case "", "full", "raw": // raw is not RFC 2822 bytes here
+		case "minimal", "metadata":
+			withBody = false
+		default:
+			return nil, errors.New("invalid_argument: format must be minimal, full, raw or metadata")
+		}
 		for _, m := range store.Inbox(user) {
-			if m.ID == in.ID {
-				return map[string]any{"id": m.ID, "from": m.From, "to": m.To, "subject": m.Subject,
-					"received_at": m.Received.UTC().Format(time.RFC3339), "unread": m.Unread, "body": m.Body}, nil
+			if m.ID == in.MessageID {
+				out := map[string]any{"id": m.ID, "from": m.From, "to": m.To, "subject": m.Subject,
+					"received_at": m.Received.UTC().Format(time.RFC3339), "unread": m.Unread}
+				if withBody {
+					out["body"] = m.Body
+				}
+				return out, nil
 			}
 		}
-		return nil, errors.New("not_found: no message " + strconv.Quote(in.ID))
+		return nil, errors.New("not_found: no message " + strconv.Quote(in.MessageID))
 	}
 	send := func(user string, args json.RawMessage) (any, error) {
 		var in struct {
@@ -228,8 +267,11 @@ func NewMailMCP(store *MailStore, now func() time.Time) *MCPServer {
 	str := map[string]any{"type": "string"}
 	return NewMCPServer("mail",
 		Tool{Name: "gmail_search", Description: "Search the mailbox.", Handle: search,
-			InputSchema: obj(map[string]any{"query": str, "max_results": map[string]any{"type": "integer"}})},
-		Tool{Name: "gmail_get", Description: "Read one message.", Handle: get, InputSchema: obj(map[string]any{"id": str}, "id")},
+			InputSchema: obj(map[string]any{"query": str, "maxResults": map[string]any{"type": "integer", "minimum": 0},
+				"pageToken": str, "labelIds": map[string]any{"type": "array", "items": str},
+				"includeSpamTrash": map[string]any{"type": "boolean"}})},
+		Tool{Name: "gmail_get", Description: "Read one message.", Handle: get, InputSchema: obj(map[string]any{"messageId": str,
+			"format": map[string]any{"enum": []string{"minimal", "full", "raw", "metadata"}}}, "messageId")},
 		Tool{Name: "gmail_send", Description: "Send a message.", Write: true, Handle: send,
 			InputSchema: obj(map[string]any{"to": str, "subject": str, "body": str, "in_reply_to": str}, "to")},
 	)

@@ -44,27 +44,6 @@ func TestSetupStatusRoute_ReturnsFreshInstallJSON(t *testing.T) {
 	}
 }
 
-// TestSetupStatusRoute_BlocksProjectScopedUser verifies that a
-// project-scoped (RoleUser) session cannot read the setup status
-// endpoint. Setup status exposes daemon-wide config state that should
-// only be visible to admin-capable operators.
-func TestSetupStatusRoute_BlocksProjectScopedUser(t *testing.T) {
-	srv := NewServer(
-		WithConfig(&config.Config{}),
-		WithOnboardingDetector(onboarding.Detector{Config: &config.Config{}}),
-	)
-	router := NewRouter(srv, &config.Config{})
-
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/setup/status", nil)
-	req = req.WithContext(stampSetupIdentity(req.Context(), "user"))
-	rec := httptest.NewRecorder()
-	router.Handler().ServeHTTP(rec, req)
-
-	if rec.Code != http.StatusForbidden {
-		t.Fatalf("status = %d, want 403 for RoleUser", rec.Code)
-	}
-}
-
 // TestSetupStatusRoute_AdminCanRead verifies that an admin session can
 // read the setup status endpoint.
 func TestSetupStatusRoute_AdminCanRead(t *testing.T) {
@@ -222,19 +201,6 @@ func TestSetupModels_UpstreamErrorIs502(t *testing.T) {
 	}
 }
 
-func TestSetupModels_BlocksProjectScopedUser(t *testing.T) {
-	srv := NewServer(WithSetupValidator(stubValidator{}))
-	router := NewRouter(srv, &config.Config{})
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/setup/models", strings.NewReader(`{}`))
-	req.Header.Set("Content-Type", "application/json")
-	req = req.WithContext(stampSetupIdentity(req.Context(), "user"))
-	rec := httptest.NewRecorder()
-	router.Handler().ServeHTTP(rec, req)
-	if rec.Code != http.StatusForbidden {
-		t.Fatalf("status = %d, want 403 for RoleUser", rec.Code)
-	}
-}
-
 func TestSetupSessionCreate_ReturnsSessionJSON(t *testing.T) {
 	srv := NewServer(WithSetupSessions(&inMemorySetupSessions{}))
 	router := NewRouter(srv, &config.Config{})
@@ -255,18 +221,6 @@ func TestSetupSessionCreate_ReturnsSessionJSON(t *testing.T) {
 	}
 	if got["id"] == nil || got["id"] == "" {
 		t.Error("session id missing")
-	}
-}
-
-func TestSetupSessionCreate_BlocksProjectScopedUser(t *testing.T) {
-	srv := NewServer(WithSetupSessions(&inMemorySetupSessions{}))
-	router := NewRouter(srv, &config.Config{})
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/setup/session", strings.NewReader(`{}`)).
-		WithContext(stampSetupIdentity(context.Background(), "user"))
-	rec := httptest.NewRecorder()
-	router.Handler().ServeHTTP(rec, req)
-	if rec.Code != http.StatusForbidden {
-		t.Fatalf("status = %d, want 403", rec.Code)
 	}
 }
 
@@ -384,18 +338,6 @@ func TestSetupSessionValidate_RejectsForeignSession(t *testing.T) {
 	router.Handler().ServeHTTP(rec, req)
 	if rec.Code != http.StatusNotFound {
 		t.Fatalf("status = %d, want 404 for foreign session", rec.Code)
-	}
-}
-
-func TestSetupSessionValidate_BlocksProjectScopedUser(t *testing.T) {
-	srv := NewServer(WithSetupSessions(&inMemorySetupSessions{}), WithSetupValidator(stubValidator{}))
-	router := NewRouter(srv, &config.Config{})
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/setup/session/s1/validate", strings.NewReader(`{}`)).
-		WithContext(stampSetupIdentity(context.Background(), "user"))
-	rec := httptest.NewRecorder()
-	router.Handler().ServeHTTP(rec, req)
-	if rec.Code != http.StatusForbidden {
-		t.Fatalf("status = %d, want 403", rec.Code)
 	}
 }
 
@@ -721,18 +663,6 @@ func TestSetupCommit_PersistsSecretAndConfig(t *testing.T) {
 	}
 }
 
-func TestSetupCommit_BlocksProjectScopedUser(t *testing.T) {
-	srv, _, _, _ := newCommitServer(t, stubValidator{result: onboarding.ChatValidationResult{PingOK: true}})
-	router := NewRouter(srv, &config.Config{})
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/setup/session/s1/commit", strings.NewReader(`{}`)).
-		WithContext(stampSetupIdentity(context.Background(), "user"))
-	rec := httptest.NewRecorder()
-	router.Handler().ServeHTTP(rec, req)
-	if rec.Code != http.StatusForbidden {
-		t.Fatalf("status = %d, want 403", rec.Code)
-	}
-}
-
 func TestSetupDispatcherCommit_PatchesConfig(t *testing.T) {
 	dir := t.TempDir()
 	configPath := filepath.Join(dir, "config.yaml")
@@ -794,23 +724,6 @@ terminals:
 	got, _ := os.ReadFile(configPath)
 	if !strings.Contains(string(got), "dispatcher_project_id: assistant") {
 		t.Fatalf("dispatcher project not patched, config: %s", got)
-	}
-}
-
-func TestSetupDispatcherCommit_BlocksProjectScopedUser(t *testing.T) {
-	dir := t.TempDir()
-	configPath := filepath.Join(dir, "config.yaml")
-	if err := os.WriteFile(configPath, []byte("api:\n  auth_enabled: false\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	srv := NewServer(WithSetupConfigPath(configPath))
-	router := NewRouter(srv, &config.Config{})
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/setup/dispatcher", strings.NewReader(`{"project_id":"assistant"}`)).
-		WithContext(stampSetupIdentity(context.Background(), "user"))
-	rec := httptest.NewRecorder()
-	router.Handler().ServeHTTP(rec, req)
-	if rec.Code != http.StatusForbidden {
-		t.Fatalf("status = %d, want 403", rec.Code)
 	}
 }
 

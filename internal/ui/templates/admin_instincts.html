@@ -136,7 +136,7 @@
                                 </td>
                                 <td class="px-4 py-2 whitespace-nowrap text-right">
                                     {{if not .IsRetired}}
-                                    <form method="post" action="/ui/admin/instincts/{{.ID}}/retire" onsubmit="return confirm('Retire instinct {{.ID}}? It stays for audit but is removed from advisory surfaces.');" class="inline-flex items-center gap-1">
+                                    <form method="post" action="/ui/admin/instincts/{{.ID}}/retire" data-confirm="Retire instinct {{.ID}}? It stays for audit but is removed from advisory surfaces." class="inline-flex items-center gap-1">
                                         <input type="hidden" name="filter_domain" value="{{$.FilterDomain}}">
                                         <input type="hidden" name="filter_scope" value="{{$.FilterScope}}">
                                         <input type="hidden" name="filter_project" value="{{$.FilterProject}}">

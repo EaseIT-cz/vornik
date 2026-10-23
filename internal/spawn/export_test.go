@@ -20,3 +20,15 @@ func resetRootsForTest(t *testing.T) {
 // SetGitGlobalConfigForTest registers path as the composed global config for
 // one test and returns the restore func.
 func SetGitGlobalConfigForTest(path string) func() { return RegisterGitGlobalConfig(path) }
+
+// unregisterProvenanceRootForTest removes a root a test registered.
+func unregisterProvenanceRootForTest(dir string) {
+	provRootsMu.Lock()
+	defer provRootsMu.Unlock()
+	for i, r := range provRoots {
+		if r == dir {
+			provRoots = append(provRoots[:i], provRoots[i+1:]...)
+			return
+		}
+	}
+}

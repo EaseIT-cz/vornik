@@ -88,3 +88,37 @@ func TestClusterUIConfigsMountIsWritable(t *testing.T) {
 		t.Error("cluster.compose.yaml: the UI node's configs mount must be writable (rw,Z) so UI project creation/edits persist")
 	}
 }
+
+// TestComposeHasNoDatabasePasswordFallback — GitHub #412 (found at: production,
+// 2026-10-16: a production database on a shared, guessable password). A
+// compose file that falls back to a constant initialises a volume with it the
+// first time someone runs `compose up` without an .env; the fallback must be
+// an error instead. Design: 2026-10-21-installation-credential-hygiene-design.md §2.1 D2.
+func TestComposeHasNoDatabasePasswordFallback(t *testing.T) {
+	for _, name := range []string{"deps.compose.yaml", "cluster.compose.yaml"} {
+		compose := readCompose(t, name)
+		if strings.Contains(compose, "vornik_dev_password") {
+			t.Errorf("%s still carries the constant vornik_dev_password", name)
+		}
+		if strings.Contains(compose, "${POSTGRES_PASSWORD:-") || strings.Contains(compose, "${POSTGRES_PASSWORD-") {
+			t.Errorf("%s gives POSTGRES_PASSWORD a default; it must fail when unset", name)
+		}
+		if !strings.Contains(compose, "${POSTGRES_PASSWORD:?") {
+			t.Errorf("%s must require POSTGRES_PASSWORD with ${POSTGRES_PASSWORD:?...}", name)
+		}
+	}
+}
+
+// TestComposePostgresBindsLoopbackByDefault pins the exact publish lines: the
+// database is reachable off-host only when the operator sets the BIND variable
+// (#412 item 2; the reference host listened on 0.0.0.0:5432).
+func TestComposePostgresBindsLoopbackByDefault(t *testing.T) {
+	for name, want := range map[string]string{
+		"deps.compose.yaml":    `"${POSTGRES_BIND:-127.0.0.1}:${POSTGRES_PORT:-5432}:5432"`,
+		"cluster.compose.yaml": `"${CLUSTER_POSTGRES_BIND:-127.0.0.1}:${CLUSTER_POSTGRES_PORT:-5433}:5432"`,
+	} {
+		if !strings.Contains(readCompose(t, name), want) {
+			t.Errorf("%s: Postgres must publish as %s", name, want)
+		}
+	}
+}

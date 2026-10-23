@@ -448,6 +448,9 @@ func companionToolDefs() []mcpToolDef {
 			Description: "Deposit a note into this key's project memory (LLD 22). Runs the standard gate stack " +
 				"(secret_scan + dedup + min_content + ...). Default class is companion_note (30-day TTL); pass " +
 				"`class` (e.g. \"spec\", \"decision\", \"diagnostic\") and `ttl_days` to override per deposit. " +
+				"The class is a label: whatever it is, a deposit lands unverified, at companion confidence (at most 0.3), " +
+				"with a finite expiry (the class TTL, else 30 days, unless ttl_days). A companion note never becomes " +
+				"verified or the design record by itself; ingest a design as a document through a workflow instead. " +
 				"Content cap: 64 KiB per call — larger payloads should be uploaded as an artifact and ingested " +
 				"through the agent path (or via the companion-rag-ingest workflow).",
 			InputSchema: map[string]any{
@@ -547,8 +550,10 @@ func companionToolDefs() []mcpToolDef {
 			Description: "Refute a wrong/stale fact in this project's memory and (optionally) deposit the correction. " +
 				"Two targeting modes: (a) `wrong_claim` — hybrid-search the claim and refute the top matches " +
 				"(`max_refutes` cap); or (b) `chunk_ids` — surgically refute exactly those chunk ids. Prefer chunk_ids " +
-				"(from a prior recall) when authoritative corrections already exist, since a claim search would rank " +
-				"those corrections highest and refute THEM instead of the stale chunk. Refuted chunks are auto-excluded " +
+				"(from a prior recall) when you know the stale chunk. A claim search never refutes an operator " +
+				"correction (a chunk a previous memory_correct stored); it lists such matches, and any it passed over, " +
+				"in `skipped` with a reason, so you can refute one deliberately by chunk_ids. `dry_run` (claim mode) " +
+				"shows what would be refuted and writes nothing. Refuted chunks are auto-excluded " +
 				"from future recall. If `correction` is given it's stored as a verified, authoritative chunk. Requires " +
 				"a memory_write-scoped key. Scoped to this key's project only.",
 			InputSchema: map[string]any{
@@ -578,6 +583,10 @@ func companionToolDefs() []mcpToolDef {
 					"reason": map[string]any{
 						"type":        "string",
 						"description": "Optional, chunk_ids mode only: why the chunks are refuted. \"forget_command\" when the user asked to forget these specific ids (any client). \"mirror_forget\" only for a client whose own memory file mirrors into Vornik (Hermes); from any other client it is recorded as a correction. Anything else, or claim mode, is recorded as a correction.",
+					},
+					"dry_run": map[string]any{
+						"type":        "boolean",
+						"description": "Optional, wrong_claim mode only: return would_refute and skipped without refuting anything or storing the correction. Advisory: a real call searches again.",
 					},
 				},
 			},
@@ -1527,7 +1536,7 @@ func (s *Server) companionToolStatus(ctx context.Context, key *persistence.APIKe
 			out["actions"] = actions
 		}
 	} else if task.LastError != nil && *task.LastError != "" {
-		out["last_error"] = *task.LastError
+		out["last_error"] = s.scrubbedErrorText(*task.LastError) // GitHub #466 D3
 	}
 	// GitHub #302: why a QUEUED task is held (both views, closed fields).
 	s.addPauseView(ctx, task, out)
@@ -1645,7 +1654,7 @@ func (s *Server) companionToolResult(ctx context.Context, key *persistence.APIKe
 		"finished": task.UpdatedAt.UTC().Format(time.RFC3339),
 	}
 	if task.LastError != nil && *task.LastError != "" {
-		out["last_error"] = *task.LastError
+		out["last_error"] = s.scrubbedErrorText(*task.LastError) // GitHub #466 D3
 	}
 	// Inline the result body. Companion keys are confined to this
 	// endpoint (isCompanionAllowedPath), so the MCP response is the

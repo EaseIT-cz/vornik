@@ -20,6 +20,7 @@ import (
 func TestExplainTask_NotConfigured(t *testing.T) {
 	srv := &Server{}
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/projects/p1/tasks/t1/explain", nil)
+	req = adminClassReq491(req) // GitHub #491: the operator, stated
 	rec := httptest.NewRecorder()
 	srv.ExplainTask(rec, req, "p1", "t1")
 	if rec.Code != http.StatusServiceUnavailable {
@@ -43,6 +44,7 @@ func TestExplainTask_MethodNotAllowed(t *testing.T) {
 func TestExplainTask_ValidationMissingIDs(t *testing.T) {
 	srv := &Server{explainRenderer: &postmortem.Renderer{}}
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/projects//tasks//explain", nil)
+	req = adminClassReq491(req) // GitHub #491: the operator, stated
 	rec := httptest.NewRecorder()
 	srv.ExplainTask(rec, req, "", "")
 	if rec.Code != http.StatusBadRequest {
@@ -59,6 +61,7 @@ func TestExplainTask_ProjectMismatch_Returns404(t *testing.T) {
 	renderer := postmortem.NewRenderer(taskRepo, nil, nil, nil, nil)
 	srv := &Server{taskRepo: taskRepo, explainRenderer: renderer}
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/projects/p1/tasks/t1/explain", nil)
+	req = adminClassReq491(req) // GitHub #491: the operator, stated
 	rec := httptest.NewRecorder()
 	srv.ExplainTask(rec, req, "p1", "t1")
 	if rec.Code != http.StatusNotFound {
@@ -75,6 +78,7 @@ func TestExplainTask_NotFoundFromRenderer(t *testing.T) {
 	renderer := postmortem.NewRenderer(taskRepo, nil, nil, nil, nil)
 	srv := &Server{explainRenderer: renderer}
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/projects/p1/tasks/t1/explain", nil)
+	req = adminClassReq491(req) // GitHub #491: the operator, stated
 	rec := httptest.NewRecorder()
 	srv.ExplainTask(rec, req, "p1", "t1")
 	if rec.Code != http.StatusNotFound {
@@ -91,6 +95,7 @@ func TestExplainTask_RendererInternalError(t *testing.T) {
 	renderer := postmortem.NewRenderer(taskRepo, nil, nil, nil, nil)
 	srv := &Server{explainRenderer: renderer}
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/projects/p1/tasks/t1/explain", nil)
+	req = adminClassReq491(req) // GitHub #491: the operator, stated
 	rec := httptest.NewRecorder()
 	srv.ExplainTask(rec, req, "p1", "t1")
 	if rec.Code != http.StatusInternalServerError {
@@ -110,6 +115,7 @@ func TestExplainTask_HappyPath(t *testing.T) {
 	renderer := postmortem.NewRenderer(taskRepo, nil, nil, nil, nil)
 	srv := &Server{taskRepo: taskRepo, explainRenderer: renderer}
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/projects/p1/tasks/t1/explain", nil)
+	req = adminClassReq491(req) // GitHub #491: the operator, stated
 	rec := httptest.NewRecorder()
 	srv.ExplainTask(rec, req, "p1", "t1")
 	if rec.Code != http.StatusOK {

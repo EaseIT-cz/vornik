@@ -40,6 +40,7 @@ func TestTaskPostMortemGenerate_MissingID(t *testing.T) {
 func TestTaskPostMortemGenerate_NoExplainerWired(t *testing.T) {
 	srv := NewServer()
 	req := httptest.NewRequest(http.MethodPost, "/ui/tasks/t1/post-mortem", nil)
+	req = asOperator491(req) // GitHub #491: the operator, stated
 	rec := httptest.NewRecorder()
 	srv.TaskPostMortemGenerate(rec, req, "t1")
 	if rec.Code != http.StatusServiceUnavailable {
@@ -58,6 +59,7 @@ func TestTaskPostMortemGenerate_TaskNotFound(t *testing.T) {
 		WithTaskRepository(repo),
 	)
 	req := httptest.NewRequest(http.MethodPost, "/ui/tasks/t1/post-mortem", nil)
+	req = asOperator491(req) // GitHub #491: the operator, stated
 	rec := httptest.NewRecorder()
 	srv.TaskPostMortemGenerate(rec, req, "t1")
 	if rec.Code != http.StatusNotFound {
@@ -82,6 +84,7 @@ func TestTaskPostMortemGenerate_GenerateError_RedirectsWithError(t *testing.T) {
 	form := url.Values{"force_refresh": []string{"true"}}
 	req := httptest.NewRequest(http.MethodPost, "/ui/tasks/t1/post-mortem",
 		strings.NewReader(form.Encode()))
+	req = asOperator491(req) // GitHub #491: the operator, stated
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	rec := httptest.NewRecorder()
 	srv.TaskPostMortemGenerate(rec, req, "t1")
@@ -108,6 +111,7 @@ func TestTaskPostMortemGenerate_Generated(t *testing.T) {
 		}),
 	)
 	req := httptest.NewRequest(http.MethodPost, "/ui/tasks/t1/post-mortem", nil)
+	req = asOperator491(req) // GitHub #491: the operator, stated
 	rec := httptest.NewRecorder()
 	srv.TaskPostMortemGenerate(rec, req, "t1")
 	if rec.Code != http.StatusSeeOther {
@@ -134,6 +138,7 @@ func TestTaskPostMortemGenerate_Cached(t *testing.T) {
 		}),
 	)
 	req := httptest.NewRequest(http.MethodPost, "/ui/tasks/t1/post-mortem", nil)
+	req = asOperator491(req) // GitHub #491: the operator, stated
 	rec := httptest.NewRecorder()
 	srv.TaskPostMortemGenerate(rec, req, "t1")
 	if rec.Code != http.StatusSeeOther {

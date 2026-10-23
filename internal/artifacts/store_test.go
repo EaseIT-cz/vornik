@@ -99,6 +99,10 @@ func TestNewFallsBackToRelativeArtifactsDirOnPermissionError(t *testing.T) {
 		t.Skip("permission fallback test is unix-specific")
 	}
 
+	// The fallback is ./artifacts: run in a directory of the test's own
+	// (GitHub #426), never the package's source directory.
+	t.Chdir(t.TempDir())
+
 	root := t.TempDir()
 	blocked := filepath.Join(root, "blocked")
 	require.NoError(t, os.Mkdir(blocked, 0555))
@@ -107,7 +111,32 @@ func TestNewFallsBackToRelativeArtifactsDirOnPermissionError(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "./artifacts", store.basePath)
 
-	_ = os.RemoveAll("./artifacts")
+	// GitHub #426 (found at: unit, a go test ./... lane): the fallback is
+	// relative to the working directory, which go test sets to this
+	// package's source directory, so this test made internal/artifacts/artifacts
+	// and a concurrent walk of internal/ (chat's TestRegistryHasNoStaleEntries)
+	// failed on it vanishing. The directory must resolve outside the module.
+	abs, err := filepath.Abs(store.basePath)
+	require.NoError(t, err)
+	if rel, err := filepath.Rel(moduleRootFromSource(t), abs); err == nil && filepath.IsLocal(rel) {
+		t.Errorf("the fallback artifacts directory %s is inside the source tree (%s)", abs, rel)
+	}
+}
+
+// moduleRootFromSource finds the module root from this file's own path, so
+// the answer does not depend on the working directory a test sets.
+func moduleRootFromSource(t *testing.T) string {
+	t.Helper()
+	_, file, _, ok := runtime.Caller(0)
+	require.True(t, ok)
+	for dir := filepath.Dir(file); ; dir = filepath.Dir(dir) {
+		if _, err := os.Stat(filepath.Join(dir, "go.mod")); err == nil {
+			return dir
+		}
+		if filepath.Dir(dir) == dir {
+			t.Fatalf("no go.mod above %s", file)
+		}
+	}
 }
 
 func TestWithRepository(t *testing.T) {

@@ -251,7 +251,7 @@
                         meta.className = 'mb-3 text-xs text-gray-400';
                         var ttl = data.ttlDays > 0 ? (data.ttlDays + ' days') : 'never';
                         var ror = data.roleOfRecordEligible
-                            ? ' · role-of-record → would land verified'
+                            ? ' · role-of-record → would land verified, unless the task is companion-delegated (then only provenance verifies it)'
                             : '';
                         meta.textContent =
                             'Classified as: ' + (data.class || 'unclassified') +
@@ -1384,7 +1384,7 @@
                                 </td>
                                 <td class="px-3 py-2">
                                     {{if .IsTargetForRollback}}
-                                    <form method="POST" action="/ui/memory/{{$.ProjectID}}/rollback" class="inline" onsubmit="return confirm('Roll back to epoch {{.ID}}? Newer active epochs will become invisible to default search.');">
+                                    <form method="POST" action="/ui/memory/{{$.ProjectID}}/rollback" class="inline" data-confirm="Roll back to epoch {{.ID}}? Newer active epochs will become invisible to default search.">
                                         <input type="hidden" name="to" value="{{.ID}}">
                                         <input type="hidden" name="reason" value="UI rollback">
                                         <button class="text-amber-800 dark:text-amber-400 hover:text-amber-700 dark:text-amber-300 text-xs underline">Roll back to here</button>
@@ -1447,13 +1447,13 @@
                                 <td class="px-3 py-2 text-gray-400">{{.FailureDetail}}</td>
                                 <td class="px-3 py-2 text-gray-500 max-w-md truncate" title="{{.Preview}}">{{.Preview}}</td>
                                 <td class="px-3 py-2 whitespace-nowrap">
-                                    <form method="POST" action="/ui/memory/{{$.ProjectID}}/quarantine" class="inline" onsubmit="return confirm('Drop quarantine row {{.ID}}? This is permanent — the chunk will never reach memory.');">
+                                    <form method="POST" action="/ui/memory/{{$.ProjectID}}/quarantine" class="inline" data-confirm="Drop quarantine row {{.ID}}? This is permanent — the chunk will never reach memory.">
                                         <input type="hidden" name="id" value="{{.ID}}">
                                         <input type="hidden" name="action" value="drop">
                                         <button class="text-rose-800 dark:text-rose-400 hover:text-rose-700 dark:text-rose-300 text-xs underline">Drop</button>
                                     </form>
                                     <span class="text-gray-700 mx-1">·</span>
-                                    <form method="POST" action="/ui/memory/{{$.ProjectID}}/quarantine" class="inline" onsubmit="return confirm('Release quarantine row {{.ID}}? This clears it from the pending list without re-inserting the chunk into memory.');">
+                                    <form method="POST" action="/ui/memory/{{$.ProjectID}}/quarantine" class="inline" data-confirm="Release quarantine row {{.ID}}? This clears it from the pending list without re-inserting the chunk into memory.">
                                         <input type="hidden" name="id" value="{{.ID}}">
                                         <input type="hidden" name="action" value="release">
                                         <button class="text-emerald-800 dark:text-emerald-400 hover:text-emerald-700 dark:text-emerald-300 text-xs underline">Release</button>
@@ -1530,7 +1530,7 @@
                     </p>
                 </div>
                 <form method="POST" action="/ui/memory/{{.ProjectID}}/evict" class="px-5 py-4 space-y-3"
-                      onsubmit="return confirm('Permanently delete the listed chunks?\nThis cascades + writes audit tombstones.\nIrreversible.');">
+                      data-confirm="Permanently delete the listed chunks?&#10;This cascades + writes audit tombstones.&#10;Irreversible.">
                     <div>
                         <label class="block text-xs font-medium text-gray-300 mb-1.5" for="evict-chunks">Chunk IDs</label>
                         <textarea id="evict-chunks" name="chunks" rows="3" required

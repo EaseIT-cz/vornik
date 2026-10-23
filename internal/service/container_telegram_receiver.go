@@ -35,6 +35,10 @@ func (c *Container) wireTelegramReceiver() *dispatcher.ChannelReceiver {
 		Media:                    c.mediaSight(),
 		DisclosureMetrics:        c.disclosureObserver(),
 		MemoryWriteConfirmations: c.chatMemoryConfirmations(),
+		// #480: an admin-linked speaker in their own private chat reads the
+		// task tools' error text raw; every other turn reads it scrubbed.
+		OperatorView:  c.TelegramBot.OperatorView,
+		TaskPrincipal: c.TelegramBot.TaskPrincipal, // #499
 	}
 	c.TelegramBot.SetReceiver(receiver)
 	c.Logger.Info().Msg("telegram channel-receiver wired (slice 2 of ConversationChannel rollout)")

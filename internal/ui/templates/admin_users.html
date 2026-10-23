@@ -65,7 +65,7 @@
                                 <form method="post" action="/ui/admin/users/{{$row.UserID}}/revoke-identity" class="inline">
                                     <input type="hidden" name="channel" value="{{.Channel}}">
                                     <input type="hidden" name="external_id" value="{{.ExternalID}}">
-                                    <button class="text-red-800 dark:text-red-400 hover:text-red-700 dark:text-red-300 text-xs" title="unlink this identity" onclick="return confirm('Unlink {{.Channel}}:{{.ExternalID}}? They will provision fresh on next login.')">unlink</button>
+                                    <button class="text-red-800 dark:text-red-400 hover:text-red-700 dark:text-red-300 text-xs" title="unlink this identity" data-confirm="Unlink {{.Channel}}:{{.ExternalID}}? They will provision fresh on next login.">unlink</button>
                                 </form>
                             {{else}}<span class="text-gray-600">none</span>{{end}}
                         </div>
@@ -99,7 +99,7 @@
                         <div class="flex flex-wrap items-center gap-2 border-t border-dark-700/40 pt-3">
                             {{if not $row.Awaiting}}
                             <form method="post" action="/ui/admin/users/{{$row.UserID}}/revoke-access" class="inline">
-                                <button class="text-xs text-gray-400 hover:text-gray-200 px-2 py-1 rounded-md border border-dark-600" onclick="return confirm('Revoke all access for {{$row.DisplayName}}? They return to awaiting access.')">Revoke access</button>
+                                <button class="text-xs text-gray-400 hover:text-gray-200 px-2 py-1 rounded-md border border-dark-600" data-confirm="Revoke all access for {{$row.DisplayName}}? They return to awaiting access.">Revoke access</button>
                             </form>
                             {{end}}
                             {{if $row.Disabled}}
@@ -108,7 +108,7 @@
                             </form>
                             {{else}}
                             <form method="post" action="/ui/admin/users/{{$row.UserID}}/disable" class="inline">
-                                <button class="text-xs text-red-800 dark:text-red-400 hover:text-red-700 dark:text-red-300 px-2 py-1 rounded-md border border-dark-600" onclick="return confirm('Disable {{$row.DisplayName}}? Active sessions are revoked immediately.')">Disable</button>
+                                <button class="text-xs text-red-800 dark:text-red-400 hover:text-red-700 dark:text-red-300 px-2 py-1 rounded-md border border-dark-600" data-confirm="Disable {{$row.DisplayName}}? Active sessions are revoked immediately.">Disable</button>
                             </form>
                             {{end}}
                         </div>

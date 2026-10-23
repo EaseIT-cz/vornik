@@ -95,9 +95,13 @@ func (r *ExtractedDocumentRepository) Get(ctx context.Context, id string) (*pers
 	return scanExtractedDocumentSQLite(row)
 }
 
-// GetByArtifact returns the highest-extractor-version row for the
-// source artifact. Lexical sort on extractor_version — same caveat
-// as the postgres repo; semver-strict ordering needs a numeric col.
+// GetByArtifact returns the row written most recently for the source
+// artifact, across every extractor name. The version string takes no part
+// in the order: it was ordered as TEXT, so "1.9.0" outranked "1.10.0"
+// (GitHub #422), and versions of different extractors are not comparable.
+// Ties on extracted_at fall to id DESC, deterministic and meaningless.
+//
+// see LLD § https://docs.vornik.io 5.1.2
 func (r *ExtractedDocumentRepository) GetByArtifact(ctx context.Context, sourceArtifactID string) (*persistence.ExtractedDocument, error) {
 	row := r.db.QueryRowContext(ctx, `
 		SELECT id, project_id, source_artifact_id, extractor_name, extractor_version,
@@ -106,7 +110,7 @@ func (r *ExtractedDocumentRepository) GetByArtifact(ctx context.Context, sourceA
 		       status, extracted_at
 		FROM extracted_documents
 		WHERE source_artifact_id = ?
-		ORDER BY extractor_version DESC, extracted_at DESC
+		ORDER BY extracted_at DESC, id DESC
 		LIMIT 1
 	`, sourceArtifactID)
 	return scanExtractedDocumentSQLite(row)

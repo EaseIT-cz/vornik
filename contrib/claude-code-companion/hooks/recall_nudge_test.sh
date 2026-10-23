@@ -41,7 +41,11 @@ BASH_BIN="$(command -v bash)"
 run_hook() {
   local mode="$1" json="$2"
   shift 2
-  printf '%s' "$json" | env PATH="$ALLOW" VORNIK_COMPANION_TOKEN="test-token" "$@" "$BASH_BIN" "$HOOK" "$mode"
+  # stdin from a process substitution, not a pipe: the hook may exit before
+  # reading it (unknown mode, opt-out), and under pipefail the writer's
+  # SIGPIPE then made the run report 141 although the hook exited 0
+  # (stamp 1bcfe9c62, 2026-10-21; the #383 hazard). Exact bytes are kept.
+  env PATH="$ALLOW" VORNIK_COMPANION_TOKEN="test-token" "$@" "$BASH_BIN" "$HOOK" "$mode" < <(printf '%s' "$json")
 }
 
 # pre SESSION TOOL INPUT_JSON — a PreToolUse payload.
@@ -182,7 +186,7 @@ fi
 if grep -rqE 'run[0-9]?\.go|m[0-9]\.go|doc\.go|secret-recall-query-text|test-token' "$CLAUDE_PLUGIN_DATA"; then
   fail "case7: state file content holds a file name, query or token"
 fi
-if find "$CLAUDE_PLUGIN_DATA" -name '*.go*' | grep -q .; then
+if find "$CLAUDE_PLUGIN_DATA" -name '*.go*' | grep . >/dev/null; then
   fail "case7: a state file name holds a source file name"
 fi
 

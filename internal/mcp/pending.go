@@ -305,6 +305,7 @@ func (m *Manager) dialPending(projectID, serverName string, onUse bool) error {
 		return err
 	}
 	reconnectAttempts().WithLabelValues(projectID, serverName, "connected").Inc()
+	m.judgeListing(projectID, client) // design §6.5 item 4, amendment #481
 	if recovered, ok := m.installRecovered(projectID, serverName, client, gen); ok {
 		m.onRecovered(projectID, serverName, recovered)
 		return nil

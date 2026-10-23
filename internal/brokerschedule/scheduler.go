@@ -188,7 +188,17 @@ func (s *Scheduler) consider(ctx context.Context, e Entry, now, prev time.Time) 
 	}
 	s.countMissed(e, loc, now, prev)
 	slot, err := cronexpr.NextFireAtIn(e.Cron, now.Add(-s.cfg.Window), loc)
-	if err != nil || slot.After(now) || !slot.After(e.ApprovedAt) {
+	if err != nil {
+		// A cron that does not parse used to read as "not due yet", with no
+		// log and no count: say so once, as the timezone branch does
+		// (GitHub #369, outcome-quality LLD §S8.11 row 14a).
+		if s.countOnce(ReasonError, e.WorkflowID+":cron", now) {
+			s.cfg.Logger.Warn().Err(err).Str("workflow", e.WorkflowID).Str("cron", e.Cron).
+				Msg("broker schedule: the cron expression does not parse; the schedule cannot run")
+		}
+		return
+	}
+	if slot.After(now) || !slot.After(e.ApprovedAt) {
 		return
 	}
 	key := SlotKey(e.WorkflowID, slot, loc)

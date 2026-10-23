@@ -263,12 +263,13 @@ func (r *TaskRepository) Delete(ctx context.Context, id string) error {
 	return err
 }
 
-// List returns tasks matching filter, newest-first.
-func (r *TaskRepository) List(ctx context.Context, filter persistence.TaskFilter) ([]*persistence.Task, error) {
-	var b strings.Builder
-	b.WriteString(`SELECT ` + taskSelectColumns + ` FROM tasks WHERE 1=1`)
-	args := make([]any, 0, 3)
-
+// appendTaskFilterWhere writes the TaskFilter predicates (each prefixed with
+// " AND ") to b and returns args extended with their values. List and Count
+// both call it, so a field one honours the other honours too: Count once
+// applied only ProjectID and Status/Statuses, and a windowed or project-set
+// count disagreed with the list it was the total of (GitHub #411). Paging is
+// the caller's.
+func appendTaskFilterWhere(b *strings.Builder, args []any, filter persistence.TaskFilter) []any {
 	if filter.ProjectID != nil {
 		b.WriteString(" AND project_id = ?")
 		args = append(args, *filter.ProjectID)
@@ -325,6 +326,14 @@ func (r *TaskRepository) List(ctx context.Context, filter persistence.TaskFilter
 		b.WriteString(" AND failed_at IS NOT NULL AND failed_at >= ?")
 		args = append(args, sqliteTime(*filter.FailedSince))
 	}
+	return args
+}
+
+// List returns tasks matching filter, newest-first.
+func (r *TaskRepository) List(ctx context.Context, filter persistence.TaskFilter) ([]*persistence.Task, error) {
+	var b strings.Builder
+	b.WriteString(`SELECT ` + taskSelectColumns + ` FROM tasks WHERE 1=1`)
+	args := appendTaskFilterWhere(&b, make([]any, 0, 3), filter)
 	b.WriteString(" ORDER BY created_at DESC, id DESC")
 	if filter.PageSize > 0 {
 		b.WriteString(" LIMIT ?")
@@ -391,29 +400,12 @@ func (r *TaskRepository) ListRetryInFlight(ctx context.Context, projectIDs []str
 	return tasks, rows.Err()
 }
 
-// Count mirrors List's WHERE clauses without LIMIT/OFFSET.
+// Count mirrors List's WHERE clauses without LIMIT/OFFSET: both build them
+// with appendTaskFilterWhere (GitHub #411).
 func (r *TaskRepository) Count(ctx context.Context, filter persistence.TaskFilter) (int64, error) {
 	var b strings.Builder
 	b.WriteString(`SELECT COUNT(*) FROM tasks WHERE 1=1`)
-	args := make([]any, 0, 2)
-	if filter.ProjectID != nil {
-		b.WriteString(" AND project_id = ?")
-		args = append(args, *filter.ProjectID)
-	}
-	if len(filter.Statuses) > 0 {
-		b.WriteString(" AND status IN (")
-		for i, s := range filter.Statuses {
-			if i > 0 {
-				b.WriteString(", ")
-			}
-			b.WriteString("?")
-			args = append(args, string(s))
-		}
-		b.WriteString(")")
-	} else if filter.Status != nil {
-		b.WriteString(" AND status = ?")
-		args = append(args, string(*filter.Status))
-	}
+	args := appendTaskFilterWhere(&b, make([]any, 0, 2), filter)
 	var total int64
 	if err := r.db.QueryRowContext(ctx, b.String(), args...).Scan(&total); err != nil {
 		return 0, err
@@ -661,6 +653,16 @@ func (r *TaskRepository) LeaseTask(ctx context.Context, opts persistence.LeaseOp
 		b.WriteString(" AND project_id NOT IN (" + placeholders + ")")
 		for _, pid := range opts.ExcludedProjects {
 			args = append(args, pid)
+		}
+	}
+	// Retry holds (permanent-failure design §8.8): a task requeued after an
+	// open model circuit is skipped until the circuit can admit a call.
+	if len(opts.ExcludedTaskIDs) > 0 {
+		placeholders := strings.Repeat("?,", len(opts.ExcludedTaskIDs))
+		placeholders = placeholders[:len(placeholders)-1]
+		b.WriteString(" AND id NOT IN (" + placeholders + ")")
+		for _, id := range opts.ExcludedTaskIDs {
+			args = append(args, id)
 		}
 	}
 	// Dependency gating belongs in SQL, not in a bounded candidate

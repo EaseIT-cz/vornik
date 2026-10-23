@@ -295,12 +295,9 @@ func (c *Container) runRetentionOnce(ctx context.Context, sweeper *retention.Swe
 	// ExecutionRatingsDays is the opposite: 0 means the compiled 400-day
 	// default, not "keep forever". A named struct rather than three positional
 	// ints, so that difference is visible here rather than only in the sweeper.
-	globalPolicy := retention.GlobalPolicy{
-		ResponseCacheDays:    c.Config.Retention.ResponseCacheDays,
-		EmbeddingCacheDays:   c.Config.Retention.EmbeddingCacheDays,
-		ExecutionRatingsDays: c.Config.Retention.ExecutionRatingsDays,
-	}
-	if g, err := sweeper.SweepGlobal(ctx, globalPolicy); err != nil {
+	globalPolicy, dumpPolicy := retention.GlobalFromConfig(c.Config.Retention)
+	g, err := sweeper.SweepGlobal(ctx, globalPolicy)
+	if err != nil {
 		c.Logger.Warn().Err(err).Msg("retention global sweep partially failed")
 	} else if g.ResponseCache > 0 || g.EmbeddingCache > 0 || g.ExecutionRatings > 0 {
 		c.Logger.Info().
@@ -309,6 +306,7 @@ func (c *Container) runRetentionOnce(ctx context.Context, sweeper *retention.Swe
 			Int("embedding_cache", g.EmbeddingCache).
 			Msg("retention global sweep pruned rows")
 	}
+	c.logDerivedCopySweep(g, dumpPolicy)
 
 	if c.Registry == nil {
 		return

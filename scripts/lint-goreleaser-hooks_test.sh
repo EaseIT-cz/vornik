@@ -23,11 +23,11 @@ printf 'before:\n  hooks:\n    - sh -c "echo x > dist/x"\nbuilds: []\n' >"$TMP/b
 printf 'before:\n  hooks:\n    - sh -c "echo x > dist/x"\nbuilds: []\n' >"$TMP/yml/.goreleaser.yml"
 
 out="$(run "$TMP/ok")"; rc=$?
-[ "$rc" -eq 0 ] && printf '%s' "$out" | grep -q '1 config(s) examined' && pass "a clean config passes and is counted" || fail "clean: rc=$rc $out"
+[ "$rc" -eq 0 ] && grep -q '1 config(s) examined' <<<"$out" && pass "a clean config passes and is counted" || fail "clean: rc=$rc $out"
 out="$(run "$TMP/bad")"; rc=$?
 [ "$rc" -ne 0 ] && pass "a before-hook writing into dist/ fails" || fail "bad: rc=$rc $out"
 out="$(run "$TMP/none")"; rc=$?
-[ "$rc" -ne 0 ] && printf '%s' "$out" | grep -q 'examined 0' && pass "no goreleaser config fails, naming 0" || fail "none must fail: rc=$rc $out"
+[ "$rc" -ne 0 ] && grep -q 'examined 0' <<<"$out" && pass "no goreleaser config fails, naming 0" || fail "none must fail: rc=$rc $out"
 out="$(run "$TMP/yml")"; rc=$?
 [ "$rc" -ne 0 ] && pass "a .goreleaser.yml config is examined too" || fail ".yml not examined: rc=$rc $out"
 

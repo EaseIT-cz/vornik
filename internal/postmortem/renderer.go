@@ -7,6 +7,7 @@ import (
 
 	"vornik.io/vornik/internal/persistence"
 	"vornik.io/vornik/internal/playbook"
+	"vornik.io/vornik/internal/report"
 )
 
 // Renderer produces a deterministic, operator-friendly explanation
@@ -35,6 +36,21 @@ type Renderer struct {
 	Outcomes   persistence.ExecutionStepOutcomeRepository
 	Audits     persistence.ToolAuditRepository
 	Logs       LogTailFetcher
+	// Scrub, when set, passes every free-text input (last_error, each step's
+	// error_detail, each tool row's input and output, the log tail) through
+	// report.ScrubLines BEFORE it is cut, so the inputs and the summary built
+	// from them hold no secret-shaped line (GitHub #440). Nil renders the
+	// operator view, unchanged.
+	Scrub report.LineScrubber
+}
+
+// clean scrubs s when the renderer carries a scrubber; else returns it as is.
+func (r *Renderer) clean(s string) string {
+	if r.Scrub == nil || s == "" {
+		return s
+	}
+	out, _ := report.ScrubLines(s, r.Scrub)
+	return out
 }
 
 // NewRenderer constructs a Renderer with the given dependencies.
@@ -129,7 +145,7 @@ func (r *Renderer) Render(ctx context.Context, taskID string) (*RenderResult, er
 		TaskStatus: string(task.Status),
 	}
 	if task.LastError != nil {
-		in.LastError = truncateRunes(*task.LastError, 1500)
+		in.LastError = truncateRunes(r.clean(*task.LastError), 1500)
 	}
 	if task.LastErrorClass != nil {
 		in.LastErrorClass = *task.LastErrorClass
@@ -162,7 +178,7 @@ func (r *Renderer) Render(ctx context.Context, taskID string) (*RenderResult, er
 					Model:       o.Model,
 					Outcome:     o.Outcome,
 					ErrorClass:  o.ErrorClass,
-					ErrorDetail: truncateRunes(o.ErrorDetail, 400),
+					ErrorDetail: truncateRunes(r.clean(o.ErrorDetail), 400),
 				})
 			}
 		}
@@ -177,8 +193,8 @@ func (r *Renderer) Render(ctx context.Context, taskID string) (*RenderResult, er
 				in.RecentTools = append(in.RecentTools, ToolBrief{
 					StepID:     a.StepID,
 					ToolName:   a.ToolName,
-					Input:      truncateRunes(a.ToolInput, 200),
-					Output:     truncateRunes(a.ToolOutput, 400),
+					Input:      truncateRunes(r.clean(a.ToolInput), 200),
+					Output:     truncateRunes(r.clean(a.ToolOutput), 400),
 					DurationMS: a.DurationMs,
 				})
 			}
@@ -186,7 +202,7 @@ func (r *Renderer) Render(ctx context.Context, taskID string) (*RenderResult, er
 	}
 	if r.Logs != nil {
 		if logs, lerr := r.Logs.TaskLogs(ctx, taskID, 100); lerr == nil {
-			in.LogTail = truncateRunes(logs, 4000)
+			in.LogTail = truncateRunes(r.clean(logs), 4000)
 		}
 	}
 

@@ -4,6 +4,8 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+
+	"vornik.io/vornik/internal/textutil"
 )
 
 // Concrete claim extractors. Each returns the literal value
@@ -81,7 +83,7 @@ func findSentence(text string, idx int) string {
 	}
 	s := strings.TrimSpace(text[start:end])
 	if len(s) > MaxSentenceBytes {
-		s = s[:MaxSentenceBytes] + "…"
+		s = textutil.TruncateBytes(s, MaxSentenceBytes) + "…" // rune-safe, GitHub #414
 	}
 	return s
 }
@@ -495,7 +497,7 @@ func schemaWrapperInToolInput(input string) (string, bool) {
 	return "", false
 }
 
-// truncateForSignal trims a string to n runes for the Detail
+// truncateForSignal trims a string to n bytes, on a rune boundary, for the Detail
 // field of a Signal. Tool inputs can be large JSON blobs and
 // the signal store doesn't need the full body — operators just
 // need enough context to recognise the shape.
@@ -503,7 +505,7 @@ func truncateForSignal(s string, n int) string {
 	if len(s) <= n {
 		return s
 	}
-	return s[:n] + "…"
+	return textutil.TruncateBytes(s, n) + "…" // rune-safe, GitHub #414
 }
 
 // isHallucinatedToolName reports whether `name` matches one of

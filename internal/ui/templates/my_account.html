@@ -80,7 +80,7 @@
                                 <td class="px-3 py-2 text-gray-400">{{.Channel}}</td>
                                 <td class="px-3 py-2 text-gray-400 font-mono">{{if .Display}}{{.Display}}{{else}}{{.ExternalID}}{{end}}</td>
                                 <td class="px-3 py-2 text-right">
-                                    <form method="POST" action="/ui/account/unlink" onsubmit="return confirm('Unlink {{.Channel}} {{.ExternalID}} from your account?')">
+                                    <form method="POST" action="/ui/account/unlink" data-confirm="Unlink {{.Channel}} {{.ExternalID}} from your account?">
                                         <input type="hidden" name="channel" value="{{.Channel}}">
                                         <input type="hidden" name="externalId" value="{{.ExternalID}}">
                                         <button type="submit" class="text-gray-400 hover:text-gray-200">Unlink</button>

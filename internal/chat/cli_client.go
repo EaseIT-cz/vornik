@@ -58,7 +58,10 @@ import (
 // after its context ended and the CLI was killed, for the CLI's output pipes
 // to close (exec.Cmd.WaitDelay). Without it a descendant that kept the stdout
 // pipe open hung the call forever, past its own timeout (GitHub #142,
-// outcome-quality-design §S8 F1). A var so tests can shorten it.
+// outcome-quality-design §S8 F1). Since 2026-10-17 (GitHub #369, §S8.8) every
+// CLI launch also runs in its own process group, which the context's end kills
+// whole, so a forked helper dies with the CLI; WaitDelay stays the backstop for
+// a descendant that left the group. A var so tests can shorten it.
 var cliWaitDelay = 10 * time.Second
 
 // CLIClient is a Provider implementation that shells out to the
@@ -215,7 +218,7 @@ func (c *CLIClient) ListModels(_ context.Context) ([]ModelInfo, error) {
 // (typically "command not found") becomes a readiness failure so
 // the daemon's startup gate can wait until the binary is reachable.
 func (c *CLIClient) Ping(ctx context.Context) error {
-	cmd, err := spawn.ConfiguredProgram(ctx, c.program, spawn.ConfiguredOptions{Args: []string{"--version"}, WaitDelay: cliWaitDelay})
+	cmd, err := spawn.ConfiguredProgram(ctx, c.program, spawn.ConfiguredOptions{Args: []string{"--version"}, WaitDelay: cliWaitDelay, ProcessGroup: true})
 	if err != nil {
 		return fmt.Errorf("cli binary %q: %w", c.binary, err)
 	}
@@ -427,7 +430,7 @@ func (c *CLIClient) runClaude(ctx context.Context, id uint64, req *cliRequest) (
 	if c.effortLevel != "" {
 		env = append(env, "CLAUDE_CODE_EFFORT_LEVEL="+c.effortLevel)
 	}
-	cmd, err := spawn.ConfiguredProgram(ctx, c.program, spawn.ConfiguredOptions{Args: args, Env: env, WaitDelay: cliWaitDelay})
+	cmd, err := spawn.ConfiguredProgram(ctx, c.program, spawn.ConfiguredOptions{Args: args, Env: env, WaitDelay: cliWaitDelay, ProcessGroup: true})
 	if err != nil {
 		return nil, fmt.Errorf("cli: %w", err)
 	}

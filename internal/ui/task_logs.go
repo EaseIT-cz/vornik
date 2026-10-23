@@ -17,6 +17,13 @@ func (s *Server) TaskLogsStream(w http.ResponseWriter, r *http.Request, taskID s
 		http.NotFound(w, r)
 		return
 	}
+	// GitHub #491: an unscoped caller that is not admin-class reads no log,
+	// decided before the task lookup and before the stream opens.
+	access := api.ErrorTextAccessFor(r, s.operatorCapability.IsAdminKey)
+	if access == api.ErrorTextDenied {
+		api.RespondProjectScopeRequired(w)
+		return
+	}
 	// Project-scope check before opening the stream. A scoped key
 	// for project A must not subscribe to project B's logs. Load
 	// the task once up front to get project_id; if it can't be
@@ -50,9 +57,17 @@ func (s *Server) TaskLogsStream(w http.ResponseWriter, r *http.Request, taskID s
 		return nil
 	}
 
+	// GitHub #440: the operator view (and its raw error_message fallback) is
+	// for an admin-class caller only; everyone else reads the scrubbed view.
+	operator := access == api.ErrorTextOperator
 	last := ""
 	for {
-		text := s.fetchTaskLogs(r.Context(), taskID, 200)
+		var text string
+		if operator {
+			text = s.fetchTaskLogs(r.Context(), taskID, 200)
+		} else {
+			text = s.fetchScrubbedTaskLogs(r.Context(), taskID, 200)
+		}
 		if text != last {
 			// A write error almost always means the client has gone away.
 			// Without this check the loop would keep polling until the next
@@ -86,6 +101,20 @@ func (s *Server) fetchTaskLogs(ctx context.Context, taskID string, tail int) str
 			if exec.ErrorMessage != nil && strings.TrimSpace(*exec.ErrorMessage) != "" {
 				return trimLogLines(*exec.ErrorMessage, tail)
 			}
+		}
+	}
+	return "No logs available yet."
+}
+
+// fetchScrubbedTaskLogs is fetchTaskLogs for a caller that is not
+// admin-class: the scrubbed source only, with neither raw fallback. No source,
+// or no log, reads "No logs available yet.".
+func (s *Server) fetchScrubbedTaskLogs(ctx context.Context, taskID string, tail int) string {
+	if s.scrubbedTaskLogSource != nil {
+		logCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+		defer cancel()
+		if logs, err := s.scrubbedTaskLogSource.TaskLogs(logCtx, taskID, tail); err == nil && strings.TrimSpace(logs) != "" {
+			return trimLogLines(logs, tail)
 		}
 	}
 	return "No logs available yet."

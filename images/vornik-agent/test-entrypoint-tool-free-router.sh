@@ -111,7 +111,7 @@ d="$(RUN_CASE_BUDGET=50 run_case toolfree-budget "$tf_task")"
 calls=$(find "$d/calls" -name 'req-*' | wc -l)
 [ "$calls" = "1" ] && ok "tool-free step under a budget made one LLM call" \
   || { bad "tool-free step under a budget made $calls LLM calls"; cat "$d/main.log" >&2; }
-if grep -q -i "finalization" "$d/main.log" || jq -r '.messages[].content // ""' "$d/calls/req-1.json" | grep -q -i "tool phase is over"; then
+if grep -q -i "finalization" "$d/main.log" || jq -r '.messages[].content // ""' "$d/calls/req-1.json" | grep -i "tool phase is over" >/dev/null; then
   bad "the budget finalization path ran on a tool-free step"
 else ok "no budget finalization on a tool-free step"; fi
 [ "$(jq -r '.selected_workflow // ""' "$d/out/result.json" 2>/dev/null)" = "research-and-publish" ] && ok "budgeted route still returns selected_workflow" \

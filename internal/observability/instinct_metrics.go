@@ -69,6 +69,13 @@ type InstinctMetrics struct {
 	// (GitHub #142, outcome-quality-design §S8 F5).
 	DistillSkippedTotal *prometheus.CounterVec
 
+	// SubpassSkippedTotal counts extraction-tick sub-passes that failed and
+	// were skipped, by pass: tool_audit (the tool-audit query), retrieval_audit
+	// (the retrieval-audit query), apply (one extraction's upsert). The tick
+	// outcome is unchanged — progressed still means the tick changed
+	// something (outcome-quality LLD §S8.11 row 13c, GitHub #369).
+	SubpassSkippedTotal *prometheus.CounterVec
+
 	// ApplicationsTotal counts instinct applications (surfacings + their
 	// feedback) by surface and result. surface ∈ {failed_task_ui,
 	// lead_recovery, architect_evidence}; result ∈ {accepted, rejected,
@@ -145,6 +152,12 @@ func NewInstinctMetrics(registerer prometheus.Registerer) *InstinctMetrics {
 			Name:      "distill_skipped_total",
 			Help:      "Clusters the distillation pass produced nothing for, by reason (declined|unusable|empty|llm_timeout|llm_cancelled|llm_error).",
 		}, []string{"reason"}),
+		SubpassSkippedTotal: pa.NewCounterVec(prometheus.CounterOpts{
+			Namespace: instNamespace,
+			Subsystem: instSubsystem,
+			Name:      "subpass_skipped_total",
+			Help:      "Instinct extraction-tick sub-passes that failed and were skipped, by pass (tool_audit|retrieval_audit|apply). The tick outcome is unchanged.",
+		}, []string{"pass"}),
 		ApplicationsTotal: pa.NewCounterVec(prometheus.CounterOpts{
 			Namespace: instNamespace,
 			Subsystem: instSubsystem,

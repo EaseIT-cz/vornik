@@ -14,7 +14,10 @@
 // cost-per-LLM-roundtrip.
 package stepoutcome
 
-import "sort"
+import (
+	"sort"
+	"time"
+)
 
 // Outcome is the string form stored in execution_step_outcomes.outcome.
 // Kept as a typed string rather than an int enum so DB values remain
@@ -308,6 +311,15 @@ const (
 	// https://docs.vornik.io
 	ClassModelUnhealthy = "model_unhealthy"
 
+	// ClassStuckExecution — the watchdog failed the execution while this step
+	// was in flight: no checkpoint advance within its stuck threshold
+	// (outcome-quality-design §S8.8, GitHub #369). Written only by the
+	// watchdog, on outcome failed (a live goroutine that stopped advancing)
+	// or orphaned (nothing was running it). Not in errorClasses: that list is
+	// what a step's retry.on may name, and no retry ever sees this row (its
+	// execution is already terminal).
+	ClassStuckExecution = "stuck_execution"
+
 	// ClassOutputCap — the agent failed the step because the model's
 	// responses were cut off at the output token limit (finish_reason=length)
 	// three times, after two nudges.
@@ -317,6 +329,27 @@ const (
 	// to the model. LLD 09 §8.4; unclassified-step-outcome design §13.
 	ClassOutputCap = "output_cap"
 )
+
+// The role column the executor writes for a non-agent step: a system step
+// records role "system" with its handler as the model, a gate step role
+// "gate" with no model. The executor's system and gate record sites
+// (executor/workflow.go) and the watchdog's fallback (§S8.8) both use these,
+// so there is one spelling.
+const (
+	RoleSystem = "system"
+	RoleGate   = "gate"
+)
+
+// InFlightStep is the agent step an execution is running, as the executor
+// knows it while the step runs: the step id as attempted (a retry or a model
+// fallback carries its suffix), the role, the effective model and the start
+// time. The watchdog reads it to record the step it fails (§S8.8).
+type InFlightStep struct {
+	StepID    string
+	Role      string
+	Model     string
+	StartedAt time.Time
+}
 
 // IsTerminal reports whether an outcome value is final — i.e., not
 // PendingValidation. Used by the terminal-state sweep to decide which

@@ -1,0 +1,17 @@
+/* Input for the console stylesheet (scripts/tailwind-css.sh): the same three
+   layers the Play CDN compiled. */
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* The Play CDN's preflight coloured placeholders with Tailwind's default
+   gray-400 (#9ca3af); a CLI build resolves the same rule through this config's
+   gray family (the ink tokens) and renders them darker. Keep the console's
+   look as it was (GitHub #165 changes where the CSS is built, not the palette;
+   web-ui-design.md "Self-hosted Tailwind and the console CSP"). */
+@layer base {
+    input::placeholder,
+    textarea::placeholder {
+        color: #9ca3af;
+    }
+}

@@ -40,6 +40,9 @@ var doctorCheckConfigPointer = map[string]string{
 	"checkAgentModelCircuits":      "",
 	"checkAPIKeyStrength":          "",
 	"checkAPISecurityPosture":      "",
+	"checkDBCredentialStrength":    "", // config.yaml / env secrets (#412)
+	"checkDBListenExposure":        "", // host sockets (#412)
+	"checkCredentialReuse":         "", // config.yaml / env secrets (#412)
 	"checkAutonomyBudgetGuard":     "",
 	"checkBreachDeadlines":         "",
 	"checkBudgetUtilisation":       "",
@@ -79,8 +82,10 @@ var doctorCheckConfigPointer = map[string]string{
 	"checkSlackSlashCommand":       "",
 	"checkStaleLeases":             "",
 	"checkStuckExecutions":         "",
+	"checkSubjectRequestDeadlines": "",
 	"checkTaskStateAudit":          "",
 	"checkToolAuditRedaction":      "",
+	"checkRedactionSeams":          "",
 	"checkUnclassifiedShare":       "",
 	"checkMemoryTextDamage":        "",
 	"checkWebWritesInsecure":       "",
@@ -88,9 +93,12 @@ var doctorCheckConfigPointer = map[string]string{
 	"checkApproverDevices":         "",
 	"checkAgentNamespaceBudget":    "",
 	"checkAgentRefusalBurst":       "",
+	"checkAgentChangeStaysApplied": "",
 	"checkAgentModelCatalogue":     "", // config.yaml (agent_admin.models), not a deployed config file
+	"checkProvenanceClone":         "", // project memory.provenance_clone; a daemon-only clone, not a deployed config file
 	"checkStuckBrokerActions":      "",
 	"checkMCPProjectConnections":   "",
+	"checkAgentReadRejudge":        "",
 	"checkWorkspaceCanonical":      "",
 }
 

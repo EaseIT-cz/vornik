@@ -144,8 +144,8 @@ RECALL_SCHEMA = {
 REMEMBER_SCHEMA = {
     "name": "vornik_remember",
     "description": ("Store a durable fact about the user or an ongoing matter in your long-term memory in Vornik. "
-                    "One fact per call, written as a full sentence with its context (Vornik refuses notes "
-                    "under about ten words); no secrets."),
+                    "One fact per call, written as a full sentence with its context "
+                    "(Vornik refuses a note shorter than three words and ten characters); no secrets."),
     "parameters": {"type": "object", "properties": {"content": {"type": "string"}}, "required": ["content"]},
 }
 

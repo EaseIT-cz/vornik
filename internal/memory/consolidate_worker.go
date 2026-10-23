@@ -2,6 +2,7 @@ package memory
 
 import (
 	"context"
+	"errors"
 	"time"
 
 	"github.com/rs/zerolog"
@@ -116,12 +117,21 @@ func (w *ConsolidateWorker) tick(ctx context.Context) {
 		}
 		return
 	}
-	progressed, failed := 0, 0
+	progressed, failed, fenced := 0, 0, 0
 	for _, pid := range projects {
 		if ctx.Err() != nil {
 			return
 		}
-		if err := w.consolidateOne(ctx, pid); err != nil {
+		err := w.consolidateOne(ctx, pid)
+		if errors.Is(err, errLeaderFenced) {
+			// Nothing was written: not "ok" (GitHub #369, §S8.11 13b).
+			fenced++
+			if w.Metrics != nil {
+				w.Metrics.ConsolidateProjectsTotal.WithLabelValues(pid, "fenced").Inc()
+			}
+			continue
+		}
+		if err != nil {
 			failed++
 			if w.Metrics != nil {
 				w.Metrics.ConsolidateProjectsTotal.WithLabelValues(pid, "errored").Inc()
@@ -144,12 +154,20 @@ func (w *ConsolidateWorker) tick(ctx context.Context) {
 		if w.Metrics != nil {
 			w.Metrics.ConsolidateTicksTotal.WithLabelValues("errored").Inc()
 		}
+	case fenced > 0:
+		if w.Metrics != nil {
+			w.Metrics.ConsolidateTicksTotal.WithLabelValues("fenced").Inc()
+		}
 	default:
 		if w.Metrics != nil {
 			w.Metrics.ConsolidateTicksTotal.WithLabelValues("idle").Inc()
 		}
 	}
 }
+
+// errLeaderFenced: the leader-epoch fence refused the write; the project
+// was skipped, nothing was written (GitHub #369, §S8.11 13b).
+var errLeaderFenced = errors.New("leader epoch fence: write skipped")
 
 // consolidateOne runs the library against one project and
 // upserts the resulting gist. The duration measurement spans
@@ -166,7 +184,7 @@ func (w *ConsolidateWorker) consolidateOne(ctx context.Context, projectID string
 		w.Logger.Warn().Str("reason", reason).Str("project", projectID).
 			Msg("memory_consolidate: leader epoch fence — skipping gist consolidation")
 		leaderelection.LeaderFenceRejected("memory_consolidate")
-		return nil
+		return errLeaderFenced
 	}
 	start := time.Now()
 	gist, err := w.Consolid.ConsolidateProject(ctx, projectID, w.ScanLimit)

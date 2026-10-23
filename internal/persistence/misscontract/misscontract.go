@@ -124,30 +124,35 @@ var Contract = map[string]MissBehavior{
 	"KnowledgeEntityRepository.Get":               MissErrNotFound, // *KnowledgeEntity
 	"MCPOAuthTokenRepository.Get":                 MissErrNotFound, // *MCPOAuthToken
 	"MemoryQuarantineRepository.Get":              MissErrNotFound, // *MemoryQuarantineItem
-	"OperatorIdentityLinkRepository.Get":          MissErrNotFound, // *OperatorIdentityLink
-	"OperatorProfileRepository.Get":               MissErrNotFound, // *OperatorProfile
-	"ProjectSpawnRepository.GetBySpawnedProject":  MissErrNotFound, // *ProjectSpawn
-	"ProjectWizardSessionRepository.Get":          MissErrNotFound, // *ProjectWizardSession
-	"ProposalRepository.GetByID":                  MissErrNotFound, // *ControlPlaneProposal
-	"ProposalRepository.GetByIdempotencyKey":      MissErrNotFound, // *ControlPlaneProposal — "" never matches (legacy NULL)
-	"ReminderRepository.Get":                      MissErrNotFound, // *Reminder
-	"SkillRepository.GetByID":                     MissErrNotFound, // *Skill
-	"SkillRepository.Get":                         MissErrNotFound, // *Skill
-	"TaskJudgeVerdictRepository.GetByTask":        MissErrNotFound, // *TaskJudgeVerdict
-	"TaskMessageRepository.GetOpenCheckpoint":     MissErrNotFound, // *TaskMessage
-	"TaskPostMortemRepository.Get":                MissErrNotFound, // *TaskPostMortem
-	"TaskRepository.GetByIdempotencyKey":          MissErrNotFound, // *Task
-	"TaskRepository.Get":                          MissErrNotFound, // *Task
-	"TaskScratchpadRepository.Get":                MissErrNotFound, // *TaskScratchpad
-	"TelegramPollerStateRepository.Get":           MissErrNotFound, // *TelegramPollerState
-	"TelegramThreadRepository.GetByTask":          MissErrNotFound, // *TelegramTaskThread
-	"TelegramThreadRepository.GetByThread":        MissErrNotFound, // *TelegramTaskThread
-	"UISessionRepository.GetActiveByTokenHash":    MissErrNotFound, // *UISession
-	"WebWriteRepo.Get":                            MissErrNotFound, // *WebWriteAction
-	"WorkflowHealingCandidateRepository.Get":      MissErrNotFound, // *HealingCandidate
-	"WorkflowHealingTrialRepository.Get":          MissErrNotFound, // *HealingTrial
-	"WorkflowHealingTriggerRepository.Get":        MissErrNotFound, // *HealingTrigger
-	"WorkflowProposalRepository.Get":              MissErrNotFound, // *WorkflowProposal
+	// GitHub #482: no provenance record (an ingest that was never checked)
+	// and no such event are ordinary answers, read by the sweep and the
+	// backfill verb as "nothing here".
+	"MemoryVerificationRepository.GetProvenance":        MissNilNil,      // *ChunkProvenance
+	"MemoryVerificationRepository.GetVerificationEvent": MissNilNil,      // *MemoryVerificationEvent
+	"OperatorIdentityLinkRepository.Get":                MissErrNotFound, // *OperatorIdentityLink
+	"OperatorProfileRepository.Get":                     MissErrNotFound, // *OperatorProfile
+	"ProjectSpawnRepository.GetBySpawnedProject":        MissErrNotFound, // *ProjectSpawn
+	"ProjectWizardSessionRepository.Get":                MissErrNotFound, // *ProjectWizardSession
+	"ProposalRepository.GetByID":                        MissErrNotFound, // *ControlPlaneProposal
+	"ProposalRepository.GetByIdempotencyKey":            MissErrNotFound, // *ControlPlaneProposal — "" never matches (legacy NULL)
+	"ReminderRepository.Get":                            MissErrNotFound, // *Reminder
+	"SkillRepository.GetByID":                           MissErrNotFound, // *Skill
+	"SkillRepository.Get":                               MissErrNotFound, // *Skill
+	"TaskJudgeVerdictRepository.GetByTask":              MissErrNotFound, // *TaskJudgeVerdict
+	"TaskMessageRepository.GetOpenCheckpoint":           MissErrNotFound, // *TaskMessage
+	"TaskPostMortemRepository.Get":                      MissErrNotFound, // *TaskPostMortem
+	"TaskRepository.GetByIdempotencyKey":                MissErrNotFound, // *Task
+	"TaskRepository.Get":                                MissErrNotFound, // *Task
+	"TaskScratchpadRepository.Get":                      MissErrNotFound, // *TaskScratchpad
+	"TelegramPollerStateRepository.Get":                 MissErrNotFound, // *TelegramPollerState
+	"TelegramThreadRepository.GetByTask":                MissErrNotFound, // *TelegramTaskThread
+	"TelegramThreadRepository.GetByThread":              MissErrNotFound, // *TelegramTaskThread
+	"UISessionRepository.GetActiveByTokenHash":          MissErrNotFound, // *UISession
+	"WebWriteRepo.Get":                                  MissErrNotFound, // *WebWriteAction
+	"WorkflowHealingCandidateRepository.Get":            MissErrNotFound, // *HealingCandidate
+	"WorkflowHealingTrialRepository.Get":                MissErrNotFound, // *HealingTrial
+	"WorkflowHealingTriggerRepository.Get":              MissErrNotFound, // *HealingTrigger
+	"WorkflowProposalRepository.Get":                    MissErrNotFound, // *WorkflowProposal
 }
 
 // Excluded names methods that match a lookup's shape — (*T, error) — but are
@@ -158,7 +163,9 @@ var Excluded = map[string]string{
 	"ChunkGraphExtractionRepository.Stats":         "aggregate over a set; always produces a value",
 	"MemoryRetrievalAuditRepository.FeedbackStats": "aggregate over a set; always produces a value",
 	"SkillRepository.Upsert":                       "a write that returns the stored row, not a lookup",
-	"TaskRepository.LeaseTask":                     "a queue poll: an empty queue is the common case, not a miss",
+	"MemoryVerificationRepository.RestoreVerificationEvent": "a write that returns the restore event it recorded, " +
+		"not a lookup; an unknown event id is an error",
+	"TaskRepository.LeaseTask": "a queue poll: an empty queue is the common case, not a miss",
 	// APIKeyRepository answers with its own ErrAPIKeyNotFound sentinel, which
 	// is a standalone errors.New and NOT persistence.ErrNotFound — so this
 	// two-value vocabulary cannot describe it. Neither method invents a third

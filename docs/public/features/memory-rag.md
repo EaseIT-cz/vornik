@@ -5,7 +5,7 @@ sources:
     - path: internal/memoryfirewall/evaluator.go
       sha256: e86f66f23ad5cd34f55b0bee562d59514951c709f0f9709b6684e34bfead55ed
     - path: internal/memory/gates.go
-      sha256: a620e067c64737b2b5a4cb1133a01aba6c4f96ed0b6118b61640ab6f1fcf03fe
+      sha256: 4ea49cb16b73d12acd00677de69f002cb47943ffd4a1795ca1d8a6a69d6a567b
 ---
 # Memory & RAG
 

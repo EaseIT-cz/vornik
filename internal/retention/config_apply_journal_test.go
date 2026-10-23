@@ -62,6 +62,7 @@ func TestSweepGlobal_PrunesOnlyTerminalJournalRows(t *testing.T) {
 		WithArgs(sqlmock.AnyArg(), "DRIFT").
 		WillReturnResult(sqlmock.NewResult(0, 4))
 
+	expectDerivedCopiesAbsent(mock)
 	counts, err := s.SweepGlobal(context.Background(), GlobalPolicy{})
 	if err != nil {
 		t.Fatalf("SweepGlobal: %v", err)
@@ -92,6 +93,7 @@ func TestSweepGlobal_JournalZeroDaysMeansTheDefaultHorizon(t *testing.T) {
 		WithArgs(withinOf{want: want, tolerance: time.Minute}, "DRIFT").
 		WillReturnResult(sqlmock.NewResult(0, 0))
 
+	expectDerivedCopiesAbsent(mock)
 	if _, err := s.SweepGlobal(context.Background(), GlobalPolicy{ConfigApplyJournalDays: 0}); err != nil {
 		t.Fatalf("SweepGlobal: %v", err)
 	}
@@ -114,6 +116,7 @@ func TestSweepGlobal_TolerantOfAnAbsentJournalTable(t *testing.T) {
 	mock.ExpectQuery(regexp.QuoteMeta("SELECT to_regclass('public.config_apply_journal')")).
 		WillReturnRows(sqlmock.NewRows([]string{"present"}).AddRow(false))
 
+	expectDerivedCopiesAbsent(mock)
 	counts, err := s.SweepGlobal(context.Background(), GlobalPolicy{})
 	if err != nil {
 		t.Fatalf("SweepGlobal errored on an absent table: %v", err)

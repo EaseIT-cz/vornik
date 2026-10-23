@@ -104,7 +104,10 @@ func dbcovOpen(t *testing.T) *sql.DB {
 			SSLMode:        cfg.SSLMode,
 			ConnectTimeout: 10 * time.Second,
 		}
-		mctx, mcancel := context.WithTimeout(context.Background(), 2*time.Minute)
+		// The cause names this harness in the migration runner's error if
+		// the budget ends mid-chain (GitHub #424).
+		mctx, mcancel := context.WithTimeoutCause(context.Background(), 2*time.Minute,
+			fmt.Errorf("internal/cli integration harness migration budget of %s ran out", 2*time.Minute))
 		defer mcancel()
 		pg, err := postgres.Connect(mctx, pgCfg)
 		if err != nil {

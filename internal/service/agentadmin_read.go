@@ -169,7 +169,9 @@ type SetupServer struct {
 	ReadTools  []string `json:"read_tools,omitempty"`
 	WriteTools []string `json:"proposable_write_tools,omitempty"`
 	// Note is why a server's tools were not filed for approval (design
-	// §19.8 F6: it does not offer a recipe's tools).
+	// §19.8 F6: it does not offer a recipe's tools), or which advertised
+	// tools were withheld as ones that change things (design §6.4, GitHub
+	// #405), shown for an approved server too.
 	Note string `json:"note,omitempty"`
 	// Host and Account (design §22.2.9; GitHub #119 item 8): where the
 	// server is and which of the user's accounts it acts as.
@@ -265,9 +267,11 @@ func (s *agentAdminService) ListSetup(ctx context.Context, key *persistence.APIK
 			ss := SetupServer{Name: srv.Name, URL: srv.URL, Status: "not_approved", Transport: agentTransport(srv.Transport)}
 			if a, ok := st.Approvals[id][srv.Name]; ok && a.Live() {
 				ss.Status, ss.ReadTools, ss.WriteTools = "approved", a.Read, a.Write
+				// An approved server's note names tools withheld as changes
+				// (design §6.4 item 4); a pending one's says why it waits.
+				ss.Note = joinNotes(s.toolGap(id, srv.Name), suspendedNote(s.c.suspendedReads(id, srv.Name)), heldNote(s.c.heldReads(id, srv.Name)))
 				if a.ReadPending {
 					ss.Status = "tools_pending"
-					ss.Note = s.toolGap(id, srv.Name)
 				}
 			}
 			ss.connectionCheck = s.connectionCheckOf(ctx, id, srv.Name)

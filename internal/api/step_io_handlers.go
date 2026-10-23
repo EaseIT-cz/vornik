@@ -2,6 +2,7 @@ package api
 
 import (
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"strings"
@@ -20,15 +21,19 @@ func (s *Server) GetExecutionStepResult(w http.ResponseWriter, r *http.Request, 
 }
 
 // GetExecutionStepIO serves one of the two files at the container boundary
-// as stored (step-I/O persistence design §5): part is StepPromptInput
-// (the task.json the executor handed the container) or StepPromptResult
-// (the result.json the daemon read back). The body is the stored bytes
-// verbatim — redacted at write, so served as-is; a reader must not treat a
-// [REDACTED:…] marker as what the container saw. Scope is the execution's
-// project, through the same check every execution read applies.
+// (step-I/O persistence design §5): part is StepPromptInput (the task.json
+// the executor handed the container) or StepPromptResult (the result.json
+// the daemon read back). An admin-class caller reads the stored bytes
+// verbatim (redacted at write; a reader must not treat a [REDACTED:…] marker
+// as what the container saw); a scoped caller reads the scrubbed view and an
+// unscoped caller that is not admin-class nothing (GitHub #496,
+// stepTextView). Scope is the execution's project, through the same check
+// every execution read applies.
 //
 // Status codes, in the order they are decided: 405 on anything but GET;
-// 404 NOT_FOUND for an unknown execution; 403 across projects; 404
+// 400 without a step; 403 PROJECT_SCOPE_REQUIRED or 503
+// LOG_SCRUBBER_UNAVAILABLE (stepTextView); 404 NOT_FOUND for an unknown
+// execution; 403 across projects; 404
 // <PART>_NOT_RECORDED when the newest outcome row for the step carries no
 // hash — suffixed _NO_CONTAINER when the row says no container ran, so a
 // client can tell "nothing to record" from "not recorded"; 410 GONE when the
@@ -40,6 +45,12 @@ func (s *Server) GetExecutionStepIO(w http.ResponseWriter, r *http.Request, exec
 	}
 	if stepID == "" {
 		respondError(w, http.StatusBadRequest, "VALIDATION_ERROR", "stepId is required")
+		return
+	}
+	// GitHub #496: the view comes from the one per-access mapping, decided
+	// before any store is read.
+	view, scrubbed, ok := s.stepTextView(w, r)
+	if !ok {
 		return
 	}
 	if s.executionRepo == nil || s.stepOutcomeRepo == nil || s.stepPromptRepo == nil {
@@ -97,8 +108,17 @@ func (s *Server) GetExecutionStepIO(w http.ResponseWriter, r *http.Request, exec
 		respondError(w, http.StatusInternalServerError, "INTERNAL_ERROR", "Failed to read "+string(part))
 		return
 	}
-	w.Header().Set("Content-Type", "application/json")
-	w.Header().Set("X-Vornik-Content-Hash", hash)
+	body, contentType := view(p.Body), "application/json"
+	if scrubbed && !json.Valid([]byte(body)) {
+		// A stored body that was not JSON is served scrubbed as text.
+		contentType = "text/plain; charset=utf-8"
+	}
+	w.Header().Set("Content-Type", contentType)
+	// The hash of the stored bytes goes with the stored bytes only
+	// (stepHashView; X-Vornik-View says which view this is).
+	if h := stepHashView(scrubbed, hash); h != "" {
+		w.Header().Set("X-Vornik-Content-Hash", h)
+	}
 	w.WriteHeader(http.StatusOK)
-	_, _ = w.Write([]byte(p.Body))
+	_, _ = w.Write([]byte(body))
 }

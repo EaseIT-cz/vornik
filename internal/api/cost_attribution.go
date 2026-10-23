@@ -6,7 +6,21 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"vornik.io/vornik/internal/auditredact"
 )
+
+// boundedUA is the User-Agent as the cost-attribution warners log it and key
+// their rate limit on (chat-audit retention and redaction design §11.2.3,
+// GitHub #425). The caller chooses the header, so it is made valid UTF-8,
+// free of control bytes (no log-line injection) and at most
+// auditredact.IdentityLimit bytes; "(missing)" when nothing is left.
+func boundedUA(r *http.Request) string {
+	if ua := auditredact.BoundIdentity(r.Header.Get("User-Agent")); ua != "" {
+		return ua
+	}
+	return "(missing)"
+}
 
 // AttributionSource describes which input the project ID for a
 // cost row was derived from. Surfaced on the persistence row so
@@ -135,10 +149,7 @@ func (s *Server) maybeWarnLegacyHeaderShadowed(w http.ResponseWriter, r *http.Re
 		}
 	})
 	ww := s.legacyHeaderShadowedWarner
-	ua := r.Header.Get("User-Agent")
-	if ua == "" {
-		ua = "(missing)"
-	}
+	ua := boundedUA(r)
 	key := r.URL.Path + "\x00" + ua
 	ww.mu.Lock()
 	last, seen := ww.lastFor[key]
@@ -205,10 +216,7 @@ func (s *Server) warnOnAnonymousAttribution(r *http.Request, attribution Attribu
 		}
 	})
 	w := s.anonAttrWarner
-	ua := r.Header.Get("User-Agent")
-	if ua == "" {
-		ua = "(missing)"
-	}
+	ua := boundedUA(r)
 	key := r.URL.Path + "\x00" + ua
 	w.mu.Lock()
 	last, seen := w.lastFor[key]

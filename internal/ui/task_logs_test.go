@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"vornik.io/vornik/internal/api"
 	"vornik.io/vornik/internal/persistence"
 	"vornik.io/vornik/internal/persistence/mocks"
 )
@@ -109,8 +110,8 @@ func TestTaskLogsStream_BlankTaskID404(t *testing.T) {
 func TestTaskLogsStream_ImmediateContextCancelExits(t *testing.T) {
 	srv := NewServer(WithTaskLogSource(&stubLogSource{text: "hi"}))
 	ctx, cancel := context.WithCancel(context.Background())
-	cancel() // already cancelled
-	req := httptest.NewRequestWithContext(ctx, "GET", "/tasks/t1/logs", nil)
+	cancel()                                                                                                    // already cancelled
+	req := httptest.NewRequestWithContext(api.ContextWithAuthEnabled(ctx, false), "GET", "/tasks/t1/logs", nil) // GitHub #491: the operator, stated
 	rec := httptest.NewRecorder()
 	srv.TaskLogsStream(rec, req, "t1")
 	// The handler returned; that's the assertion. Body shape

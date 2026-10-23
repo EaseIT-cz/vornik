@@ -30,14 +30,14 @@ printf '# Release Notes\n\n## 2026.9.1\n\n- a change\n' >"$tmp/n6/index.md"
 printf 'notes\n' >"$tmp/n6/notes/2026.9.1.md"
 
 out="$(bash "$script" "$tmp/n6/notes" "$tmp/n6/index.md" 2>&1)"; rc=$?
-[ "$rc" -eq 0 ] && printf '%s' "$out" | grep -q 'OK — 1 release(s)' && pass "a covered release passes and is counted" || fail "covered: rc=$rc $out"
+[ "$rc" -eq 0 ] && grep -q 'OK — 1 release(s)' <<<"$out" && pass "a covered release passes and is counted" || fail "covered: rc=$rc $out"
 out="$(bash "$script" "$tmp/n6/missing" "$tmp/n6/index.md" 2>&1)"; rc=$?
 [ "$rc" -ne 0 ] && pass "a missing notes directory fails" || fail "missing dir must fail: rc=$rc $out"
 out="$(bash "$script" "$tmp/n6/empty" "$tmp/n6/index.md" 2>&1)"; rc=$?
-[ "$rc" -ne 0 ] && printf '%s' "$out" | grep -q 'examined 0' && pass "an empty notes directory fails, naming 0" || fail "empty dir must fail: rc=$rc $out"
+[ "$rc" -ne 0 ] && grep -q 'examined 0' <<<"$out" && pass "an empty notes directory fails, naming 0" || fail "empty dir must fail: rc=$rc $out"
 printf 'notes\n' >"$tmp/n6/notes/2026.9.2.md"
 out="$(bash "$script" "$tmp/n6/notes" "$tmp/n6/index.md" 2>&1)"; rc=$?
-[ "$rc" -ne 0 ] && printf '%s' "$out" | grep -q "no '## 2026.9.2' section" && pass "a release with no section fails" || fail "missing section: rc=$rc $out"
+[ "$rc" -ne 0 ] && grep -q "no '## 2026.9.2' section" <<<"$out" && pass "a release with no section fails" || fail "missing section: rc=$rc $out"
 
 # --- 2. draft marker ---
 # fixture NAME RELDATE_1_1 SECTION_1_1_TEXT

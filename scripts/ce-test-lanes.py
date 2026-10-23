@@ -8,6 +8,11 @@ workflow, rather than copied into the export where they would drift.
 
   ce-test-lanes.py TEMPLATE unit
   ce-test-lanes.py TEMPLATE integration --dsn postgres://USER:PASS@HOST[:PORT]/vornik_integration_test
+  ce-test-lanes.py TEMPLATE steps
+
+`steps` (amendment 2026-10-17, GitHub #386) prints the whole template as a
+plan, {"examined": M, "steps": [...]}, each step classed setup, unit-lane,
+integration-lane, integration-schema, run or run-approx; see plan_steps.
 
 Prints JSON {"argv": [...], "env": {...}} with -json added after `go test`.
 Fails closed (exit 1, reason on stderr) on: unparsable YAML, a missing job or
@@ -18,6 +23,7 @@ vornik_integration_test (the name the suites' reset guard insists on).
 """
 import argparse
 import json
+import re
 import shlex
 import sys
 from urllib.parse import unquote, urlsplit
@@ -89,11 +95,147 @@ def looks_like_db_key(k):
     return k.startswith("POSTGRES_") or k.startswith("PG") or k.endswith("_DATABASE_URL")
 
 
+# --- steps: the whole template as a plan (CE export runbook, amendment
+# 2026-10-17, GitHub #386). 2026.10.6's public CI went red on an import grep
+# the export never ran: the export ran a hand-picked copy of the template's
+# checks. This plan lets it run every step instead, and it fails closed on any
+# step it cannot run faithfully, so a new kind of step stops the export rather
+# than being silently left out.
+SETUP_ACTIONS = ("actions/checkout@", "actions/setup-go@")
+JOB_KEYS = {"runs-on", "steps", "services", "name", "env", "permissions", "timeout-minutes"}
+STEP_KEYS = {"name", "run", "uses", "with", "env", "shell", "id"}
+SCHEMA_APPLY = "psql -f deployments/postgres/schema/001_initial.sql"
+RUNNER_CTX = re.compile(r"GITHUB_[A-Z0-9_]*|RUNNER_(?!TEMP\b)[A-Z0-9_]+")
+
+
+def str_env(where, env):
+    if env is None:
+        return {}
+    if not isinstance(env, dict):
+        die(f"{where}: env is not a mapping")
+    out = {}
+    for k, v in env.items():
+        v = "" if v is None else str(v)
+        if "${{" in v:
+            die(f"{where}: env {k} holds an expression this host cannot evaluate: {v!r}")
+        out[str(k)] = v
+    return out
+
+
+def plan_steps(doc):
+    if not isinstance(doc, dict) or not isinstance(doc.get("jobs"), dict) or not doc["jobs"]:
+        die("the template has no jobs")
+    if "defaults" in doc:
+        die("the template sets workflow-level defaults, which the plan cannot honour")
+    wf_env = str_env("workflow", doc.get("env"))
+    # The steps the lanes run are the ones the lane modes select, by the same
+    # function, so the plan and the lanes cannot disagree about them.
+    unit_job = "build-test"
+    unit_step = find_step(doc, unit_job, None) if unit_job in doc["jobs"] else None
+    integ_step = None
+    if "integration" in doc["jobs"]:
+        integ_step = find_step(doc, "integration", "Integration tests")
+    plan = []
+    for job, spec in doc["jobs"].items():
+        if not isinstance(spec, dict):
+            die(f"job {job!r} is not a mapping")
+        extra = set(spec) - JOB_KEYS
+        if extra:
+            die(f"job {job!r} uses {sorted(extra)}, which the plan cannot honour")
+        runs_on = spec.get("runs-on")
+        if not isinstance(runs_on, str):
+            die(f"job {job!r} has no single runs-on label")
+        if runs_on.startswith("ubuntu-"):
+            native = True
+        elif runs_on.startswith("macos-"):
+            native = False
+        else:
+            die(f"job {job!r} runs on {runs_on!r}; only ubuntu-* (run here) and macos-* (approximated) are known")
+        services = "services" in spec
+        if services and not (job == "integration" and integ_step is not None):
+            die(f"job {job!r} declares services but is not the integration lane's job")
+        job_env = {**wf_env, **str_env(f"job {job!r}", spec.get("env"))}
+        steps = spec.get("steps")
+        if not isinstance(steps, list) or not steps:
+            die(f"job {job!r} has no steps")
+        for i, st in enumerate(steps):
+            where = f"job {job!r} step {i + 1}"
+            if not isinstance(st, dict):
+                die(f"{where} is not a mapping")
+            extra = set(st) - STEP_KEYS
+            if extra:
+                die(f"{where} uses {sorted(extra)}, which the plan cannot honour")
+            shell = st.get("shell")
+            if shell is not None and shell != "bash":
+                die(f"{where} uses shell {shell!r}; only bash is run here")
+            name = st.get("name")
+            entry = {"job": job, "index": i + 1}
+            if "uses" in st:
+                if "run" in st:
+                    die(f"{where} has both uses and run")
+                uses = str(st["uses"])
+                if not uses.startswith(SETUP_ACTIONS):
+                    die(f"{where} uses {uses!r}; only {', '.join(SETUP_ACTIONS)} are known (provided by this host)")
+                entry.update(name=name or uses.split("@", 1)[0], **{"class": "setup"})
+                plan.append(entry)
+                continue
+            run = st.get("run")
+            if not isinstance(run, str) or not run.strip():
+                die(f"{where} has neither run nor uses")
+            if "${{" in run:
+                die(f"{where} run: holds an expression this host cannot evaluate")
+            # The runner context this host does not provide (review
+            # 2026-10-17 F3.1): only RUNNER_TEMP is set for a step.
+            ctx = RUNNER_CTX.search(run)
+            if ctx:
+                die(f"{where} run: reads {ctx.group(0)}, runner context this host does not provide")
+            env = {**job_env, **str_env(where, st.get("env"))}
+            label = name or run.strip().splitlines()[0]
+            if st is unit_step:
+                cls = "unit-lane"
+            elif st is integ_step:
+                cls = "integration-lane"
+            elif services:
+                if SCHEMA_APPLY not in run:
+                    die(f"{where} ({label!r}) is in the services job but is neither the integration lane nor the base-schema step")
+                cls = "integration-schema"
+            else:
+                cls = "run" if native else "run-approx"
+            entry.update({"name": label, "class": cls, "run": run, "env": env,
+                          "shell": "bash-pipefail" if shell == "bash" else "bash-e",
+                          "runs_on": runs_on})
+            plan.append(entry)
+    return {"examined": len(plan), "steps": plan}
+
+
+def write_plan(plan, d):
+    """The plan as ce_run_template_steps reads it, with no shell parsing of
+    template text: DIR/index holds one tab-separated line per step (n, class,
+    job, name, shell); DIR/<n>.sh the run: text verbatim; DIR/<n>.env the
+    step's environment as NUL-terminated K=V entries."""
+    import os
+    with open(os.path.join(d, "index"), "w", encoding="utf-8") as ix:
+        for n, s in enumerate(plan["steps"]):
+            f = [str(n), s["class"], s["job"], s["name"], s.get("shell", "")]
+            if any(c in x for x in f for c in "\t\n\0"):
+                die(f"job {s['job']!r} step {s['index']}: its name holds a tab or newline")
+            if "run" in s:
+                with open(os.path.join(d, f"{n}.sh"), "w", encoding="utf-8") as fh:
+                    fh.write(s["run"])
+                for k, v in s["env"].items():
+                    if "\0" in k or "\0" in v or "=" in k:
+                        die(f"job {s['job']!r} step {s['index']}: env {k!r} cannot be passed")
+                with open(os.path.join(d, f"{n}.env"), "w", encoding="utf-8") as fh:
+                    fh.write("".join(f"{k}={v}\0" for k, v in s["env"].items()))
+            ix.write("\t".join(f) + "\n")
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("template")
-    ap.add_argument("lane", choices=["unit", "integration"])
+    ap.add_argument("lane", choices=["unit", "integration", "steps"])
     ap.add_argument("--dsn")
+    ap.add_argument("--write-dir", help="steps: also write the plan for ce_run_template_steps")
     a = ap.parse_args()
     try:
         import yaml
@@ -105,6 +247,12 @@ def main():
     except (OSError, yaml.YAMLError) as e:
         die(f"cannot read {a.template}: {e}")
 
+    if a.lane == "steps":
+        plan = plan_steps(doc)
+        if a.write_dir:
+            write_plan(plan, a.write_dir)
+        print(json.dumps(plan))
+        return
     if a.lane == "unit":
         step = find_step(doc, "build-test", None)
         print(json.dumps({"argv": argv_of(step["run"]), "env": {}}))

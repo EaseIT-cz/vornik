@@ -115,7 +115,7 @@ func TestDeviceMemoryView_RefusesAnUnlistedProjectBeforeAnyRead(t *testing.T) {
 func TestDeviceMemory_ForgetRecordsDeviceRoute(t *testing.T) {
 	v, mock, audit := memoryViewFixture(t)
 	mock.ExpectExec(regexp.QuoteMeta("UPDATE project_memory_chunks")).
-		WithArgs("hermes-memory", memory.RefuteRouteDeviceForget, "c1").
+		WithArgs("hermes-memory", memory.RefuteRouteDeviceForget, "", "c1").
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	n, err := v.Forget(context.Background(), "hermes-memory", "c1", "dev_42")
 	require.NoError(t, err)
@@ -138,12 +138,12 @@ func TestDeviceMemory_ForgetSourceRefutesEveryPageWithTheDeviceRoute(t *testing.
 	}
 	mock.ExpectQuery(regexp.QuoteMeta("AND source_name = $2")).WithArgs("hermes-memory", "companion:hermes:note", "", memory.ListPageMax).WillReturnRows(idRows)
 	mock.ExpectExec(regexp.QuoteMeta("UPDATE project_memory_chunks")).
-		WithArgs(append([]driver.Value{"hermes-memory", memory.RefuteRouteDeviceForget}, ids...)...).
+		WithArgs(append([]driver.Value{"hermes-memory", memory.RefuteRouteDeviceForget, ""}, ids...)...).
 		WillReturnResult(sqlmock.NewResult(0, int64(memory.ListPageMax)))
 	mock.ExpectQuery(regexp.QuoteMeta("AND source_name = $2")).WithArgs("hermes-memory", "companion:hermes:note", ids[len(ids)-1], memory.ListPageMax).
 		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow("zz"))
 	mock.ExpectExec(regexp.QuoteMeta("UPDATE project_memory_chunks")).
-		WithArgs("hermes-memory", memory.RefuteRouteDeviceForget, "zz").
+		WithArgs("hermes-memory", memory.RefuteRouteDeviceForget, "", "zz").
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	n, err := v.ForgetSource(context.Background(), "hermes-memory", "companion:hermes:note", "dev_42")
 	require.NoError(t, err)

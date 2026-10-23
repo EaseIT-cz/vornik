@@ -69,7 +69,15 @@ type ResolveMetrics struct {
 	ShortCircuited int
 	// LLMResolved is the count of candidates the LLM decided.
 	LLMResolved int
+	// InvalidMatchIDs counts model "match" decisions whose match_id was
+	// empty or named no entity of the project, downgraded to "ambiguous"
+	// (LLD §3.3c, GitHub #419).
+	InvalidMatchIDs int
 }
+
+// ReasonInvalidMatchID is the Resolution.Reason of a model "match" whose
+// match_id names no entity of the project (LLD §3.3c, GitHub #419).
+const ReasonInvalidMatchID = "resolver match_id not an entity of this project"
 
 // Resolver implements Stage 2 of the KG pipeline: deduplication
 // of extractor output against the existing knowledge_entities
@@ -153,7 +161,28 @@ func (r *Resolver) Resolve(ctx context.Context, projectID string, cands []Candid
 	if err != nil {
 		return nil, metrics, err
 	}
+	shown := make(map[string]struct{})
+	for _, hits := range catalogs {
+		for _, h := range hits {
+			if h != nil && h.ID != "" {
+				shown[h.ID] = struct{}{}
+			}
+		}
+	}
 	for idx, res := range llmRes {
+		res.MatchID = strings.TrimSpace(res.MatchID)
+		if res.Decision == "match" && !r.matchIDIsEntity(ctx, projectID, res.MatchID, shown) {
+			// GitHub #419: the model's match_id was used as the entity id
+			// unverified. Production read back real catalog ids with digits
+			// dropped or changed; Postgres refused the mention insert (an FK
+			// violation, reported as "not found") and quarantined the chunk,
+			// SQLite stored links to nothing. Not repaired to the row it
+			// resembles (a wrong link is worse than none) and not minted as
+			// "new" (the duplicate the resolver exists to prevent): the
+			// design's "cannot decide" bucket.
+			res = Resolution{Decision: "ambiguous", Reason: ReasonInvalidMatchID}
+			metrics.InvalidMatchIDs++
+		}
 		out[idx] = res
 	}
 	metrics.LLMResolved = len(needsLLM)
@@ -163,6 +192,24 @@ func (r *Resolver) Resolve(ctx context.Context, projectID string, cands []Candid
 		metrics.Model = llmMetrics.Model
 	}
 	return out, metrics, nil
+}
+
+// matchIDIsEntity reports whether a model-written match_id names an entity of
+// the project: a catalog row shown in this call (read from the table in this
+// pass, so no query), or else a row Get returns with the same project_id. The
+// fallback keeps a match to a real entity the model was not shown in this
+// call. A Get error of any kind rejects the match: the chunk then completes
+// with the candidate as ambiguous rather than failing on a link it cannot
+// make (LLD §3.3c).
+func (r *Resolver) matchIDIsEntity(ctx context.Context, projectID, id string, shown map[string]struct{}) bool {
+	if id == "" {
+		return false
+	}
+	if _, ok := shown[id]; ok {
+		return true
+	}
+	e, err := r.Entities.Get(ctx, id)
+	return err == nil && e != nil && e.ProjectID == projectID
 }
 
 // shortlist embeds the candidate name (when an embedder is wired)

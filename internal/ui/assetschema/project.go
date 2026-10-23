@@ -213,6 +213,11 @@ var ProjectDeferredPaths = []string{
 	// durable memory writes (chat memory-write design §5.1); YAML-only like the
 	// other allowlists so granting a channel is a deliberate config edit.
 	"memory.write_channels",
+	// Daemon-only provenance clone and its trusted branch (GitHub #499,
+	// design 22 part 8g) — the trust root for companion-delegated design
+	// chunks; YAML-only so moving the trust root is a deliberate config edit.
+	"memory.provenance_clone",
+	"memory.provenance_branch",
 	// Broker-project flag (privileged-work broker design 2026-09-29) — turns
 	// every key on the project broker-only; a deliberate config edit, not a
 	// checkbox.
@@ -330,6 +335,10 @@ var ProjectDeferredPaths = []string{
 	// Git-over-HTTPS workspace access (Task 3.2). Surfaced in the
 	// project-detail Git-access panel; set via raw YAML.
 	"git.enabled",
+	// Pre-work refresh from origin (executor design §9.6, GitHub #400) — makes
+	// the clone origin's and moves workspace-only commits off HEAD before each
+	// scheduled task; YAML-only so opting in is a deliberate config edit.
+	"workspace.refresh_before_work", "workspace.refresh_branch",
 	// Narrated Execution per-project opt-in/opt-out (task 2.3,
 	// https://docs.vornik.io §5.7/§9 Q3).
 	// Mirrors hallucinationJudge.enabled above — a bare bool toggle with

@@ -105,9 +105,7 @@ SELECT c.id, c.project_id, c.content, CAST(c.created_at AS TEXT),
 // It runs in Go BEFORE the SQL applies LOWER, which is safe because the three
 // escaped characters are ASCII and LOWER leaves them unchanged — do not move
 // the escaping into SQL.
-func escapeLikeTerm(s string) string {
-	return strings.NewReplacer(`\`, `\\`, `%`, `\%`, `_`, `\_`).Replace(s)
-}
+func escapeLikeTerm(s string) string { return EscapeLike(s) }
 
 // FindMentions implements SubjectTextSearch.
 func (s *SQLSubjectTextSearch) FindMentions(ctx context.Context, q SubjectTextQuery) ([]SubjectTextMention, error) {

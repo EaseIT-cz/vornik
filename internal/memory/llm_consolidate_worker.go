@@ -112,12 +112,12 @@ func (w *LLMConsolidateWorker) tick(ctx context.Context) {
 		w.recordTickOutcome("idle")
 		return
 	}
-	progressed, failed := 0, 0
+	progressed, failed, fenced := 0, 0, 0
 	for _, pid := range projects {
 		if ctx.Err() != nil {
 			return
 		}
-		err := w.processOne(ctx, pid)
+		outcome, err := w.processOne(ctx, pid)
 		if errors.Is(err, chat.ErrOptionalWorkDisabled) {
 			// Optional LLM work is off for the narrative model (breaker design
 			// §5.3d). Every project would be refused alike: end the tick, and
@@ -127,31 +127,49 @@ func (w *LLMConsolidateWorker) tick(ctx context.Context) {
 			w.recordTickOutcome("idle")
 			return
 		}
-		if err != nil {
+		w.recordProjectOutcome(pid, outcome)
+		switch {
+		case err != nil:
 			failed++
-			w.recordProjectOutcome(pid, "errored")
-			w.Logger.Warn().Err(err).Str("project", pid).
+			w.Logger.Warn().Err(err).Str("project", pid).Str("outcome", outcome).
 				Msg("llm-consolidate worker: project failed")
-			continue
+		case outcome == narrativeOutcomeFenced:
+			fenced++
+		case outcome == narrativeOutcomeOK:
+			progressed++
 		}
-		progressed++
-		w.recordProjectOutcome(pid, "ok")
 	}
 	switch {
 	case progressed > 0:
 		w.recordTickOutcome("progressed")
 	case failed > 0:
 		w.recordTickOutcome("errored")
+	case fenced > 0:
+		w.recordTickOutcome(narrativeOutcomeFenced)
 	default:
 		w.recordTickOutcome("idle")
 	}
 }
 
+// The outcomes of one project's narrative pass, the label of
+// narrative_projects_total (GitHub #369, outcome-quality LLD §S8.11 7c, 13b):
+// a store failure and a model failure want different remedies, and a pass
+// that wrote nothing is not "ok".
+const (
+	narrativeOutcomeOK       = "ok"
+	narrativeOutcomeErrored  = "errored" // a store failure: gist read, sample, upsert
+	narrativeOutcomeLLMError = "llm_error"
+	narrativeOutcomeFenced   = "fenced" // the leader-epoch fence refused the write
+	narrativeOutcomeNoGist   = "no_gist"
+	narrativeOutcomeEmpty    = "empty"
+)
+
 // processOne pulls the existing gist + a chunk sample, calls the
-// NarrativeWriter, writes the narrative back. Returns
-// ErrGistNotFound translated to nil (the LLM-free worker hasn't
-// caught up; skipping is the right behaviour, not an error).
-func (w *LLMConsolidateWorker) processOne(ctx context.Context, projectID string) error {
+// NarrativeWriter, writes the narrative back, and reports its outcome. A
+// missing gist (the LLM-free worker hasn't caught up) is no_gist, not an
+// error. An error is returned only with errored or llm_error (the optional-
+// work refusal is passed through for the tick to end on).
+func (w *LLMConsolidateWorker) processOne(ctx context.Context, projectID string) (string, error) {
 	// Leader-epoch fence (review B1): guard the LLM call + narrative write
 	// against a stale (TTL-expired-then-resumed) leader that the IsLeader
 	// tick gate would still wave through. VerifyEpoch fails closed on a
@@ -162,40 +180,40 @@ func (w *LLMConsolidateWorker) processOne(ctx context.Context, projectID string)
 		w.Logger.Warn().Str("reason", reason).Str("project", projectID).
 			Msg("memory_llm_consolidate: leader epoch fence — skipping narrative pass")
 		leaderelection.LeaderFenceRejected("memory_llm_consolidate")
-		return nil
+		return narrativeOutcomeFenced, nil
 	}
 	start := time.Now()
 	gist, err := w.Repo.GetGist(ctx, projectID)
 	if errors.Is(err, ErrGistNotFound) {
 		// LLM-free worker hasn't filled the row yet for this
-		// project; skip silently — next tick will retry.
-		return nil
+		// project; skip — next tick will retry.
+		return narrativeOutcomeNoGist, nil
 	}
 	if err != nil {
-		return err
+		return narrativeOutcomeErrored, err
 	}
 	sample, err := w.buildSample(ctx, projectID)
 	if err != nil {
-		return err
+		return narrativeOutcomeErrored, err
 	}
 	narrative, err := w.Writer.Write(ctx, gist.Terms, sample, projectID)
 	if err != nil {
-		return err
+		return narrativeOutcomeLLMError, err
 	}
 	if narrative == "" {
 		// Writer returned empty without error — no usable summary.
 		// Don't overwrite an existing narrative with empty bytes;
 		// the prior tick's text remains valid until we have a
 		// better one.
-		return nil
+		return narrativeOutcomeEmpty, nil
 	}
 	if err := w.Repo.UpsertNarrative(ctx, projectID, narrative, w.Writer.Model, time.Now().UTC()); err != nil {
-		return err
+		return narrativeOutcomeErrored, err
 	}
 	if w.Metrics != nil {
 		w.Metrics.NarrativeDurationSeconds.WithLabelValues(projectID).Observe(time.Since(start).Seconds())
 	}
-	return nil
+	return narrativeOutcomeOK, nil
 }
 
 // buildSample fetches up to SampleSize chunks for the project,

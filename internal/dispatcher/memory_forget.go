@@ -89,11 +89,13 @@ func (te *ToolExecutor) memoryForget(ctx context.Context, argsJSON, activeProjec
 	}
 
 	var b strings.Builder
-	fmt.Fprintf(&b, "Evicted memory chunk %s (source=%s) from project %s — it will no longer surface in memory_search or recall. The soft-evict is reversible.\n",
-		evicted.ID, evicted.SourceName, project)
-	if evicted.Preview != "" {
+	// source_name is caller-controlled (#456): it goes inside the wrapper
+	// with the preview, never on the daemon's own line.
+	fmt.Fprintf(&b, "Evicted memory chunk %s from project %s — it will no longer surface in memory_search or recall. The soft-evict is reversible.\n",
+		evicted.ID, project)
+	if body := memoryChunkBody(evicted.SourceName, "", "", evicted.Preview); body != "" {
 		b.WriteString("  evicted content: ")
-		b.WriteString(untrusted.WrapLabeled("evicted_preview", evicted.Preview))
+		b.WriteString(untrusted.WrapLabeled("evicted_preview", body))
 		b.WriteString("\n")
 	}
 	return ToolResult{Content: b.String(), Provenance: outputguard.ProvenanceFirstParty}

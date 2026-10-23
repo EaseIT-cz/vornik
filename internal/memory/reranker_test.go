@@ -171,7 +171,9 @@ func TestBuildRerankPrompt(t *testing.T) {
 	if !strings.Contains(got, "QUERY:\nhow to ship") {
 		t.Fatal("missing query")
 	}
-	if !strings.Contains(got, "[0] (source: alpha.md)") || !strings.Contains(got, "[1] (source: beta.md)") {
+	// #456 (2026-10-21): the source line sits inside the candidate's wrapper.
+	if !strings.Contains(got, "[0]\n<untrusted_content source=\"candidate\">\n(source: alpha.md)") ||
+		!strings.Contains(got, "[1]\n<untrusted_content source=\"candidate\">\n(source: beta.md)") {
 		t.Fatalf("missing index/source labels: %q", got)
 	}
 	// Long candidate truncated at snippet cap.

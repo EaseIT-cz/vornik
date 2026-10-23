@@ -72,6 +72,14 @@ func TestVersionIsBoundedToReleaseIdentifiers(t *testing.T) {
 		{"2026.7.4-112-g29df3bdb", "dev", "git describe commit fingerprint must collapse"},
 		{"2026.7.4-112-g29df3bdb-dirty", "dev", "dirty build fingerprint must collapse"},
 		{"2026.7.4+dev", "dev", "build metadata is unbounded, so collapse it"},
+		// #371 moved the grammar to version.IsTaggedRelease; these rows pin
+		// that the accepted set did not move with it (they pass on both sides).
+		{"2026.09.01", "2026.09.01", "leading zeros were accepted and still are"},
+		{"2026.7.5-rc.1", "2026.7.5-rc.1", "dotted pre-release is still bounded"},
+		{"2026.7.4-dirty", "dev", "a dirty tagged build is not the release"},
+		{"2026.7.5-rc", "dev", "a pre-release with no number is not a release"},
+		{"2026.7.4-dev", "dev", "an unlisted suffix is not a release"},
+		{"dev+g44e675c12", "dev", "the VCS fallback version collapses"},
 		{"", "unknown", "missing version stays unknown"},
 		{"bad version /home/alice", "unknown", "unsafe charset stays unknown"},
 	} {

@@ -95,21 +95,21 @@
                                     <div class="inline-flex items-center gap-1.5">
                                         {{if .CanPause}}
                                         <form method="post" action="/ui/reminders/{{.ID}}/pause"
-                                              onsubmit="return confirm('Pause reminder {{.ID}}?');"
+                                              data-confirm="Pause reminder {{.ID}}?"
                                               class="inline-flex">
                                             <button type="submit" class="text-[11px] font-medium px-2.5 py-1 rounded-md bg-dark-700 hover:bg-dark-600 text-amber-700 dark:text-amber-300 ring-1 ring-dark-600">Pause</button>
                                         </form>
                                         {{end}}
                                         {{if .CanResume}}
                                         <form method="post" action="/ui/reminders/{{.ID}}/resume"
-                                              onsubmit="return confirm('Resume reminder {{.ID}}?');"
+                                              data-confirm="Resume reminder {{.ID}}?"
                                               class="inline-flex">
                                             <button type="submit" class="text-[11px] font-medium px-2.5 py-1 rounded-md bg-dark-700 hover:bg-dark-600 text-emerald-700 dark:text-emerald-300 ring-1 ring-dark-600">Resume</button>
                                         </form>
                                         {{end}}
                                         {{if not .IsTerminal}}
                                         <form method="post" action="/ui/reminders/{{.ID}}/cancel"
-                                              onsubmit="return confirm('Cancel reminder {{.ID}}?');"
+                                              data-confirm="Cancel reminder {{.ID}}?"
                                               class="inline-flex">
                                             <button type="submit" class="text-[11px] font-medium px-2.5 py-1 rounded-md bg-dark-700 hover:bg-dark-600 text-gray-200 ring-1 ring-dark-600">Cancel</button>
                                         </form>
@@ -117,7 +117,7 @@
                                         <span class="text-[11px] text-gray-600 italic">terminal</span>
                                         {{end}}
                                         <form method="post" action="/ui/reminders/{{.ID}}/delete"
-                                              onsubmit="return confirm('Permanently delete reminder {{.ID}}? This cannot be undone.');"
+                                              data-confirm="Permanently delete reminder {{.ID}}? This cannot be undone."
                                               class="inline-flex">
                                             <button type="submit" class="text-[11px] font-medium px-2.5 py-1 rounded-md bg-rose-900/40 hover:bg-rose-900/60 text-rose-600 dark:text-rose-200 ring-1 ring-rose-700/40" title="Permanently remove this row">Delete</button>
                                         </form>

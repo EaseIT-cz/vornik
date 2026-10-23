@@ -1,24 +1,28 @@
-// Phase 42 — minimal service worker.
+// Console service worker (Phase 42; rewritten for GitHub #416).
 //
-// Goal: install-to-home-screen on iOS Safari + Android Chrome,
-// plus a tiny offline-shell so a network blip doesn't return a
-// browser error page. Data fetches (HTMX swaps, dashboard polls)
-// fall through to network and FAIL fast — we don't pretend to
-// have offline data; the offline shell exists only to keep the
-// last-rendered page paintable while reconnect is in progress.
+// Goal: install-to-home-screen on iOS Safari + Android Chrome, and a cache of
+// the static assets under /ui/static/.
 //
-// Caching strategy:
-//   - Static assets (/ui/static/*): cache-first, revalidate.
-//   - Page navigations: network-first, fall back to the cached
-//     last-rendered version of the same path.
-//   - Everything else (API, /metrics, etc.): network-only.
+// It caches NO page and no per-user response. Cache Storage is per origin and
+// per browser profile, not per session: a cached page outlives logout and is
+// readable by the next person who uses the profile, and the Cache API ignores
+// Cache-Control: no-store. Everything except /ui/static/* (navigations, HTMX
+// swaps, /api/v1/, SSE) is left to the network untouched.
+//
+// /ui/static/* is auth-exempt and holds nothing per user. It is served
+// cache-first; only ok, same-origin responses are stored, so a 404 or 500 is
+// never pinned. The daemon serves this script with __VORNIK_STATIC_VERSION__
+// replaced by a hash of the embedded static tree, so a release that changes
+// any static file changes these bytes: the browser installs the new worker,
+// which drops every older cache on activate.
+//
+// web-ui-design.md "The console service worker, the CSP plan and the
+// placeholder colour — 2026-10-17 (#416)".
 
-const VERSION = 'v1';
+const VERSION = '__VORNIK_STATIC_VERSION__';
 const STATIC_CACHE = `vornik-static-${VERSION}`;
-const PAGES_CACHE = `vornik-pages-${VERSION}`;
 
 const STATIC_PRECACHE = [
-  '/ui/',
   '/ui/static/htmx.min.js',
   '/ui/static/htmx-ext-sse.js',
   '/ui/static/manifest.webmanifest',
@@ -38,11 +42,7 @@ self.addEventListener('install', (event) => {
 self.addEventListener('activate', (event) => {
   event.waitUntil(
     caches.keys().then((keys) =>
-      Promise.all(
-        keys
-          .filter((k) => k !== STATIC_CACHE && k !== PAGES_CACHE)
-          .map((k) => caches.delete(k))
-      )
+      Promise.all(keys.filter((k) => k !== STATIC_CACHE).map((k) => caches.delete(k)))
     )
   );
   self.clients.claim();
@@ -53,36 +53,15 @@ self.addEventListener('fetch', (event) => {
   if (req.method !== 'GET') return;
   const url = new URL(req.url);
   if (url.origin !== self.location.origin) return;
+  if (!url.pathname.startsWith('/ui/static/')) return;
 
-  // Static assets: cache-first.
-  if (url.pathname.startsWith('/ui/static/')) {
-    event.respondWith(
-      caches.match(req).then((hit) => hit || fetch(req).then((res) => {
+  event.respondWith(
+    caches.match(req).then((hit) => hit || fetch(req).then((res) => {
+      if (res.ok && res.type === 'basic') {
         const copy = res.clone();
-        caches.open(STATIC_CACHE).then((c) => c.put(req, copy));
-        return res;
-      }))
-    );
-    return;
-  }
-
-  // Page navigations: network-first, cache as fallback. HTMX
-  // partial swaps (`HX-Request: true`) skip the cache to avoid
-  // confusing the swap target with a stale outerHTML.
-  if (req.mode === 'navigate' && url.pathname.startsWith('/ui/')) {
-    event.respondWith(
-      fetch(req)
-        .then((res) => {
-          const copy = res.clone();
-          caches.open(PAGES_CACHE).then((c) => c.put(req, copy));
-          return res;
-        })
-        .catch(() => caches.match(req))
-    );
-    return;
-  }
-
-  // Everything else: network-only. Don't cache /api/v1/, /metrics,
-  // /readyz, HTMX partial swaps. Failing fast surfaces the network
-  // error to the user; pretending to have data would mislead.
+        event.waitUntil(caches.open(STATIC_CACHE).then((c) => c.put(req, copy)));
+      }
+      return res;
+    }))
+  );
 });

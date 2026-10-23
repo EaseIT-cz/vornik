@@ -26,6 +26,7 @@ import (
 	"vornik.io/vornik/internal/pricing"
 	"vornik.io/vornik/internal/ratelimit"
 	"vornik.io/vornik/internal/registry"
+	"vornik.io/vornik/internal/report"
 	"vornik.io/vornik/internal/safepath"
 	"vornik.io/vornik/internal/sandboxtool"
 	"vornik.io/vornik/internal/taskcancel"
@@ -246,6 +247,11 @@ type ToolResult struct {
 	// Dispatcher-composed builtins set ProvenanceFirstParty so that
 	// injection-class output guard rules are skipped on their results.
 	Provenance outputguard.Provenance
+	// auditScrub is set by a tool that served a stored error text raw on an
+	// operator-view turn: the tool audit row, which a project-scoped key can
+	// read, then stores report.ScrubLines of the content, never the raw
+	// result (process-spawn-law design, "Amendment 2026-10-21 (#480)", J2b).
+	auditScrub bool
 }
 
 // TaskWatchFunc is a callback to register a chat for task completion notifications.
@@ -353,18 +359,21 @@ type ToolExecutor struct {
 	// operator can re-trigger via the manual /extract endpoint.
 	attachmentAutoExtractTimeout time.Duration
 	watchFunc                    TaskWatchFunc
-	mcpManager                   MCPExecutor
-	auditRepo                    AuditRepository
-	memory                       MemorySearcher                          // nil when memory subsystem is disabled
-	graphSearcher                GraphSearcher                           // nil disables the KG block in memory_search (chunk-only)
-	memoryCorrector              MemoryCorrector                         // nil when memory corrector isn't wired
-	llmUsageRepo                 persistence.TaskLLMUsageRepository      // nil disables budget enforcement
-	reservRepo                   persistence.BudgetReservationRepository // nil disables atomic budget reservation
-	rateLimiter                  ratelimit.ProjectLimiter                // nil disables rate-limit enforcement
-	budgetNotifier               budget.Notifier                         // nil disables telegram alerts on budget breach
-	pricing                      *pricing.Table                          // nil disables forecast cold-start pricing fallback
-	defaultModel                 string                                  // VORNIK_LLM_MODEL fallback; empty disables forecast for unmodelled steps
-	followupRegistrar            FollowupRegistrar                       // nil disables auto-resume after task completion
+	// errorScrub scrubs a stored error text for a turn that is not an
+	// operator-view turn (errorTextView; #480).
+	errorScrub        report.LineScrubber
+	mcpManager        MCPExecutor
+	auditRepo         AuditRepository
+	memory            MemorySearcher                          // nil when memory subsystem is disabled
+	graphSearcher     GraphSearcher                           // nil disables the KG block in memory_search (chunk-only)
+	memoryCorrector   MemoryCorrector                         // nil when memory corrector isn't wired
+	llmUsageRepo      persistence.TaskLLMUsageRepository      // nil disables budget enforcement
+	reservRepo        persistence.BudgetReservationRepository // nil disables atomic budget reservation
+	rateLimiter       ratelimit.ProjectLimiter                // nil disables rate-limit enforcement
+	budgetNotifier    budget.Notifier                         // nil disables telegram alerts on budget breach
+	pricing           *pricing.Table                          // nil disables forecast cold-start pricing fallback
+	defaultModel      string                                  // VORNIK_LLM_MODEL fallback; empty disables forecast for unmodelled steps
+	followupRegistrar FollowupRegistrar                       // nil disables auto-resume after task completion
 	// channelFollowupRegistrars routes per-channel follow-up
 	// registrations. Keyed by channel name (matches
 	// conversation.Channel.Name()). Empty/nil means "no channel
@@ -471,7 +480,11 @@ func (te *ToolExecutor) Execute(ctx context.Context, tc chat.ToolCall, activePro
 
 	start := time.Now()
 	result := te.execute(ctx, tc, activeProject, allowedProjects, chatID, sessionKey, fs)
-	te.logAudit(ctx, name, args, result.Content, activeProject, time.Since(start))
+	auditOut := result.Content
+	if result.auditScrub {
+		auditOut, _ = report.ScrubLines(auditOut, te.errorScrub)
+	}
+	te.logAudit(ctx, name, args, auditOut, activeProject, time.Since(start))
 	return result
 }
 
@@ -1136,6 +1149,8 @@ func (te *ToolExecutor) createTask(ctx context.Context, argsJSON string, activeP
 		// "leave task.ChatTurnID nil", which is the correct
 		// "untrackable origin" case for API-initiated work.
 		ChatTurnID: ChatTurnIDFromContext(ctx),
+		// The channel's attribution of the turn (#499): never model text.
+		CreatorActor: taskPrincipalFromContext(ctx),
 	}
 	// Atomic hard-cap reservation gate (trading-hardening §1): the read-only
 	// budget.Check above is best-effort; this makes the chat-create path
@@ -1224,8 +1239,9 @@ func (te *ToolExecutor) getTaskStatus(ctx context.Context, argsJSON string, allo
 	}
 
 	action := chat.Action{
-		Type:   chat.ActionGetStatus,
-		TaskID: args.TaskID,
+		Type:      chat.ActionGetStatus,
+		TaskID:    args.TaskID,
+		ErrorView: te.errorTextView(ctx), // #480: scrubbed unless an operator-view turn
 	}
 	result, err := chat.ExecuteAction(ctx, action, te.taskRepo, te.execRepo, nil)
 	if err != nil {
@@ -1241,7 +1257,7 @@ func (te *ToolExecutor) getTaskStatus(ctx context.Context, argsJSON string, allo
 		result.Message += te.taskArtifactInventory(ctx, task.ID, 50)
 	}
 	// ThirdParty: result.Message can embed exec.ErrorMessage / agent-derived text (chat/parser.go:496) — must be injection-scanned.
-	return ToolResult{Content: result.Message, Provenance: outputguard.ProvenanceThirdParty}
+	return ToolResult{Content: result.Message, Provenance: outputguard.ProvenanceThirdParty, auditScrub: operatorViewFromContext(ctx)}
 }
 
 // dedupeArtifactRows collapses repeated registrations of the same harvested
@@ -1450,7 +1466,9 @@ func (te *ToolExecutor) formatWaitResult(ctx context.Context, task *persistence.
 	fmt.Fprintf(&sb, "Task %s reached status %s.\n", idfmt.Short(task.ID), task.Status)
 
 	if task.LastError != nil && *task.LastError != "" {
-		errMsg := *task.LastError
+		// Redact before truncate (#480): a secret straddling the cut would
+		// leave a fragment no net matches.
+		errMsg := te.errorTextView(ctx)(*task.LastError)
 		if len(errMsg) > 1500 {
 			errMsg = errMsg[:1500] + "…"
 		}
@@ -1481,7 +1499,7 @@ func (te *ToolExecutor) formatWaitResult(ctx context.Context, task *persistence.
 	}
 
 	// ThirdParty: embeds task.LastError which is agent-/execution-derived text — must be injection-scanned.
-	return ToolResult{Content: sb.String(), Provenance: outputguard.ProvenanceThirdParty}
+	return ToolResult{Content: sb.String(), Provenance: outputguard.ProvenanceThirdParty, auditScrub: operatorViewFromContext(ctx)}
 }
 
 func (te *ToolExecutor) cancelTask(ctx context.Context, argsJSON string, allowedProjects []string) ToolResult {
@@ -1862,7 +1880,9 @@ func (te *ToolExecutor) memorySearch(ctx context.Context, argsJSON, activeProjec
 		// id= is a stable handle the model can pass to memory_forget to
 		// deterministically evict this exact chunk (no fuzzy re-search).
 		// Daemon-generated, so it sits OUTSIDE the untrusted wrapper.
-		fmt.Fprintf(&b, "[%d] id=%s  source=%s  score=%.2f\n", i+1, r.ChunkID, r.SourceName, r.Score)
+		// source_name is NOT (#456): a companion remember call sets it
+		// free-form, so it moves inside the hit's wrapper below.
+		fmt.Fprintf(&b, "[%d] id=%s  score=%.2f\n", i+1, r.ChunkID, r.Score)
 		// Per-hit trust tokens (P3, Routing only): daemon-generated, outside
 		// the untrusted wrapper. Only under Routing so the legacy per-hit line
 		// stays parse-stable for any consumer.
@@ -1891,7 +1911,7 @@ func (te *ToolExecutor) memorySearch(ctx context.Context, argsJSON, activeProjec
 		if len(content) > 800 {
 			content = content[:800] + "…"
 		}
-		b.WriteString(untrusted.WrapLabeled("memory_hit", content))
+		b.WriteString(untrusted.WrapLabeled("memory_hit", memoryChunkBody(r.SourceName, r.ContentClass, r.RepoScope, content)))
 		b.WriteString("\n\n")
 	}
 

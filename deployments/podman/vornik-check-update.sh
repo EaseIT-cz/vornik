@@ -21,7 +21,7 @@ git -C "$REPO_DIR" fetch --tags --prune origin >/dev/null 2>&1 \
   || { echo "vornik-check-update: git fetch failed" >&2; exit 1; }
 
 CURRENT="$(git -C "$REPO_DIR" rev-parse HEAD)"
-LATEST_TAG="$(git -C "$REPO_DIR" tag -l --sort=-creatordate | head -1)"
+LATEST_TAG="$(git -C "$REPO_DIR" tag -l --sort=-creatordate | sed -n 1p)"
 [[ -n "$LATEST_TAG" ]] || { echo "vornik-check-update: no tags found" >&2; exit 1; }
 LATEST_COMMIT="$(git -C "$REPO_DIR" rev-parse "${LATEST_TAG}^{commit}")"
 

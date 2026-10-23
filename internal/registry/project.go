@@ -4,6 +4,7 @@ package registry
 import (
 	"net/netip"
 	"vornik.io/vornik/internal/agentns"
+	"vornik.io/vornik/internal/memoryscope"
 
 	"errors"
 	"fmt"
@@ -159,6 +160,10 @@ type Project struct {
 	// explicitly enable per-project. See
 	// https://docs.vornik.io
 	Git ProjectGit `yaml:"git"`
+	// Workspace controls what the executor does to the project's clone before
+	// a task's worktree is branched off it. See ProjectWorkspace and
+	// https://docs.vornik.io §9.6 (GitHub #400).
+	Workspace ProjectWorkspace `yaml:"workspace,omitempty" since:"2026.10.7"`
 	// Forge configures the provider-discriminated forge automation (issue →
 	// change request, CR reviews) used by the forge.* system steps. Provider
 	// selects github|gitlab|gitea. For GitHub the top-level `github:` block above
@@ -1081,6 +1086,72 @@ type ProjectGit struct {
 	Enabled bool `yaml:"enabled"`
 }
 
+// ProjectWorkspace is the per-project pre-work refresh opt-in (executor design
+// 06-executor.md §9.6, GitHub #400). Off by default: only forge tasks reset the
+// clone to origin. With RefreshBeforeWork, a SCHEDULED (task-kind reminder,
+// broker schedule) or AUTONOMOUS task that is not a forge task gets the forge
+// path's own reset (fetch, back up local-only commits, reset --hard
+// origin/<branch>) before its worktree is branched.
+type ProjectWorkspace struct {
+	// RefreshBeforeWork opts the project in. The clone then becomes origin's,
+	// as on a forge project: a commit that reached only the workspace is moved
+	// off HEAD (kept in a refs/vornik/discarded ref) at the next scheduled task.
+	RefreshBeforeWork bool `yaml:"refresh_before_work" since:"2026.10.7"`
+	// RefreshBranch names the branch to reset to. Empty uses the clone's
+	// current branch; a detached HEAD is then skipped, never guessed.
+	RefreshBranch string `yaml:"refresh_branch,omitempty" since:"2026.10.7"`
+}
+
+// validate applies §9.6's three rules. autonomyMode is the project's
+// normalized autonomy mode.
+func (w ProjectWorkspace) validate(filename, autonomyMode string) error {
+	if w.RefreshBranch != "" {
+		if !w.RefreshBeforeWork {
+			return ProjectValidationError{File: filename, Field: "workspace.refresh_branch",
+				Message: "is set but workspace.refresh_before_work is not true, so it would do nothing"}
+		}
+		if reason := plainBranchNameProblem(w.RefreshBranch); reason != "" {
+			return ProjectValidationError{File: filename, Field: "workspace.refresh_branch",
+				Message: fmt.Sprintf("%q is not a plain branch name: %s", w.RefreshBranch, reason)}
+		}
+	}
+	if w.RefreshBeforeWork && autonomyMode == AutonomyModeBacklog {
+		return ProjectValidationError{File: filename, Field: "workspace.refresh_before_work",
+			Message: "cannot be combined with autonomy.mode: backlog, whose tick already refreshes the workspace and keeps its consumption marks across that refresh; a second reset at task start could drop them and re-run an item"}
+	}
+	return nil
+}
+
+// plainBranchNameProblem returns why name is not a plain branch name, or ""
+// when it is. Stricter than git check-ref-format where it matters here: the
+// name is an argument to `git fetch origin <name>`, so a leading "-" (read as
+// an option) is refused first. The rest mirrors check-ref-format: no
+// whitespace or control characters, no leading or trailing "/", no trailing
+// ".lock" or ".", no "..", "//" or "@{", and none of ~ ^ : ? * [ \.
+func plainBranchNameProblem(name string) string {
+	switch {
+	case strings.HasPrefix(name, "-"):
+		return `it starts with "-", which git would read as an option`
+	case strings.HasPrefix(name, "/") || strings.HasSuffix(name, "/"):
+		return `it starts or ends with "/"`
+	case strings.HasSuffix(name, ".lock") || strings.HasSuffix(name, "."):
+		return `it ends with ".lock" or "."`
+	case strings.Contains(name, "..") || strings.Contains(name, "//") || strings.Contains(name, "@{"):
+		return `it contains "..", "//" or "@{"`
+	case name == "@":
+		return `"@" is not a branch`
+	}
+	for _, r := range name {
+		if r <= ' ' || r == 0x7f {
+			return "it contains whitespace or a control character"
+		}
+		if strings.ContainsRune(`~^:?*[\`, r) {
+			return `it contains one of ~ ^ : ? * [ \`
+		}
+	}
+	return ""
+}
+
 // ResolveForge returns the effective provider-neutral forge.Config for the
 // project and whether forge automation is enabled. Resolution order:
 //
@@ -1431,6 +1502,98 @@ type ProjectMemory struct {
 	// not check (design §5.6.5). Personal-scope writes are fine on any
 	// listed channel.
 	WriteChannels []string `yaml:"write_channels"`
+
+	// ProvenanceClone is an absolute path to a clone of the project's
+	// repository that only the daemon reads (GitHub #499, operator decision
+	// A18; design 22, "Amendment 2026-10-21 (#482)", part 8g). The memory
+	// provenance verifier reads it instead of the project workspace, and the
+	// hourly provenance sweep fetches its trusted branch. It must exist, be
+	// a non-bare clone, and have an origin whose normalised URL is
+	// repo_scope; it must not lie under the project workspace root (where
+	// agents' worktrees live). Empty: the verifier reads the workspace and
+	// nothing is fetched.
+	ProvenanceClone string `yaml:"provenance_clone,omitempty" since:"2026.10.7"`
+	// ProvenanceBranch names the clone's trusted branch. Empty uses
+	// workspace.refresh_branch; either way it is checked against the
+	// clone's origin/HEAD.
+	ProvenanceBranch string `yaml:"provenance_branch,omitempty" since:"2026.10.7"`
+}
+
+// TrustedBranch is the configured branch memory provenance trusts:
+// memory.provenance_branch, else workspace.refresh_branch, else "".
+func (p *Project) TrustedBranch() string {
+	if p == nil {
+		return ""
+	}
+	if b := strings.TrimSpace(p.Memory.ProvenanceBranch); b != "" {
+		return b
+	}
+	return strings.TrimSpace(p.Workspace.RefreshBranch)
+}
+
+// validateProvenanceClone is the strict loader's check of
+// memory.provenance_clone (#499): an absolute path to an existing, non-bare
+// clone whose origin is the project's repo_scope. It reads files only; it
+// runs no git.
+func (p *Project) validateProvenanceClone(filename string) error {
+	path := strings.TrimSpace(p.Memory.ProvenanceClone)
+	if b := strings.TrimSpace(p.Memory.ProvenanceBranch); b != "" {
+		if reason := plainBranchNameProblem(b); reason != "" {
+			return ProjectValidationError{File: filename, Field: "memory.provenance_branch",
+				Message: fmt.Sprintf("%q is not a plain branch name: %s", b, reason)}
+		}
+	}
+	if path == "" {
+		return nil
+	}
+	field := "memory.provenance_clone"
+	if !filepath.IsAbs(path) {
+		return ProjectValidationError{File: filename, Field: field, Message: fmt.Sprintf("%q is not an absolute path", path)}
+	}
+	if strings.TrimSpace(p.RepoScope) == "" || p.RepoScope == "*" {
+		return ProjectValidationError{File: filename, Field: field, Message: "needs repo_scope set to the clone's repository"}
+	}
+	fi, err := os.Stat(path)
+	if err != nil || !fi.IsDir() {
+		return ProjectValidationError{File: filename, Field: field, Message: fmt.Sprintf("%q is not an existing directory", path)}
+	}
+	gfi, err := os.Lstat(filepath.Join(path, ".git"))
+	if err != nil || !gfi.IsDir() {
+		return ProjectValidationError{File: filename, Field: field,
+			Message: fmt.Sprintf("%q is not a non-bare clone (no .git directory)", path)}
+	}
+	url, err := gitConfigOriginURL(filepath.Join(path, ".git", "config"))
+	if err != nil || url == "" {
+		return ProjectValidationError{File: filename, Field: field, Message: fmt.Sprintf("%q has no origin remote", path)}
+	}
+	if got := memoryscope.NormalizeRemote(url); got != p.RepoScope {
+		return ProjectValidationError{File: filename, Field: field,
+			Message: fmt.Sprintf("the clone's origin is %q, not repo_scope %q", got, p.RepoScope)}
+	}
+	return nil
+}
+
+// gitConfigOriginURL reads [remote "origin"] url from a git config file.
+func gitConfigOriginURL(path string) (string, error) {
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return "", err
+	}
+	in := false
+	for _, raw := range strings.Split(string(b), "\n") {
+		line := strings.TrimSpace(raw)
+		if strings.HasPrefix(line, "[") {
+			in = strings.EqualFold(strings.Join(strings.Fields(line), " "), `[remote "origin"]`)
+			continue
+		}
+		if !in {
+			continue
+		}
+		if k, v, ok := strings.Cut(line, "="); ok && strings.EqualFold(strings.TrimSpace(k), "url") {
+			return strings.TrimSpace(v), nil
+		}
+	}
+	return "", nil
 }
 
 // GrantsMemoryWrite reports whether this project has granted the named
@@ -2269,6 +2432,12 @@ func (p *Project) Validate(filename string) error {
 
 	if p.Retention.MemoryIdleDays < 0 || p.Retention.MemoryIdleDays > 36500 {
 		return ProjectValidationError{File: filename, Field: "retention.memory_idle_days", Message: "must be between 0 (365-day default) and 36500"}
+	}
+	if err := p.Workspace.validate(filename, p.NormalizedAutonomyMode()); err != nil {
+		return err
+	}
+	if err := p.validateProvenanceClone(filename); err != nil {
+		return err
 	}
 	if _, err := companionpush.ParseAllowedCIDRs(p.CompanionPush.AllowedCIDRs); err != nil {
 		return ProjectValidationError{File: filename, Field: "companion_push.allowed_cidrs", Message: err.Error()}

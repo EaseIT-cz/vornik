@@ -280,10 +280,13 @@ scoped recall. The bare deposit without `repo_scope` is the
 "explicit project-wide" opt-out and is rare; default to
 the detected scope.
 
-If no SessionStart directive was emitted (the operator opened
-Claude outside a git repo, or the daemon was offline at session
-start), call without `repo_scope` — the daemon falls back to
-project-wide behaviour, same as pre-migration-75 sessions.
+If the SessionStart hook says there is no repository scope (the
+operator opened Claude outside a git repo), or emitted no scope
+directive at all, call without `repo_scope` — the daemon applies
+the key's default scope, else project-wide behaviour, same as
+pre-migration-75 sessions. Never make up a scope from a folder
+name: a folder is not a repository, and its notes would be
+invisible to every scoped recall.
 
 ## Two adjacent tools — `recall` and `remember`
 

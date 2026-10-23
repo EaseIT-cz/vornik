@@ -101,7 +101,7 @@ run_case() {
 calls_of() { find "$1/calls" -name 'req-*' | wc -l; }
 rfield() { jq -r "$2" "$1/out/result.json" 2>/dev/null || true; }
 # req_mentions DIR N TEXT — request N carries a message containing TEXT.
-req_mentions() { [ -f "$1/calls/req-$2.json" ] && jq -r '.messages[].content // ""' "$1/calls/req-$2.json" | grep -q "$3"; }
+req_mentions() { [ -f "$1/calls/req-$2.json" ] && jq -r '.messages[].content // ""' "$1/calls/req-$2.json" | grep "$3" >/dev/null; }
 
 # --- 1. The incident: a capped, empty answer is not the final answer ---------
 d="$(mktemp -d)"

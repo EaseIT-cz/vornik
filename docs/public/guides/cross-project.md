@@ -7,7 +7,7 @@ sources:
     - path: internal/executor/a2a_call.go
       sha256: 138a2e550e367a72f367669faa9fbeaa52691e74f1146a615ab12637fe51b165
     - path: internal/registry/project.go
-      sha256: 708b07a7761489e4c64817087dd9f25914af2470a52ccd1295b3e44911c33061
+      sha256: 438282a14b6e55cf685243941018f913c0acbce35f70ea190b878644695f67e6
 ---
 # Cross-project orchestration & agent federation
 

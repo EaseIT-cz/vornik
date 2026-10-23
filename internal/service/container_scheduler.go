@@ -329,8 +329,9 @@ func (c *Container) initScheduler() error {
 		executorConfig.AgentLLMEnv = make(map[string]string)
 	}
 	// Agent-side helpers call back to the daemon for project-scoped MCP
-	// proxying. Keep this independent from memory so MCP does not fall
-	// back to credentials-bearing /app/input/mcp.json when memory is off.
+	// proxying, the only MCP path an agent has (the credentials-bearing
+	// /app/input/mcp.json fallback was removed, GitHub #498). Keep this
+	// independent from memory: without it a role gets no MCP tools.
 	executorConfig.AgentLLMEnv["VORNIK_API_URL"] = agentCallbackURL(c.Config.Server.Address)
 
 	// Project-scoped named secrets: map the daemon config's per-secret
@@ -913,9 +914,16 @@ func (c *Container) initScheduler() error {
 			auditLookup := newAuditLookupFunc(c.repos.ToolAudit)
 			artifactsRepo := c.repos.Artifacts
 			memIngestAuditRepo := c.repos.MemoryIngestAudit
+			provenanceCfg := c.memoryProvenanceConfig()
 			pipeline := memory.NewPipeline(mgr.Indexer, memory.PipelineConfig{
-				Quarantine: c.memoryQuarantineRepo,
-				Epochs:     c.corpusEpochRepo,
+				// GitHub #482 (design 22, "Amendment 2026-10-21 (#482)"): an
+				// agent role in a companion-delegated task is verified only
+				// by provenance.
+				CompanionDelegated: provenanceCfg.CompanionDelegated,
+				Provenance:         provenanceCfg.Provenance,
+				RecordProvenance:   provenanceCfg.RecordProvenance,
+				Quarantine:         c.memoryQuarantineRepo,
+				Epochs:             c.corpusEpochRepo,
 				ChunkExists: func(ctx context.Context, projectID, hash string) (bool, error) {
 					return memRepoForChunkExists.ChunkExistsByHash(ctx, projectID, hash)
 				},
@@ -1059,6 +1067,20 @@ func (c *Container) initScheduler() error {
 			})
 			c.ingestWorker.SetPipeline(pipeline)
 			c.memoryPipeline = pipeline
+			if provenanceCfg.Verifier != nil && provenanceCfg.Repo != nil {
+				c.memoryProvenanceSweeper = &memory.ProvenanceSweeper{
+					Store:    provenanceCfg.Repo,
+					Verifier: provenanceCfg.Verifier,
+					Interval: memory.DefaultProvenanceSweepInterval,
+					Logger:   c.Logger.With().Str("component", "memory").Str("worker", "provenance_sweep").Logger(),
+					Clones:   c.provenanceClones,
+					// #506 C9: a version that verifies after its ingest
+					// retires its predecessor.
+					Supersede: func(ctx context.Context, projectID, scope, path string) (int, error) {
+						return memRepoForChunkExists.SupersedeDocument(ctx, projectID, scope, path, "")
+					},
+				}
+			}
 			// Wire the searcher's epoch filter so reads honour
 			// the active set + legacy fallback.
 			mgr.Searcher.SetEpochSource(func(ctx context.Context, projectID string) ([]string, error) {
@@ -1597,6 +1619,9 @@ func (c *Container) initWatchdog() error {
 		// The approval-timeout cancel goes through the cancel primitive
 		// with the executor as its teardown (05-scheduler §4.11, GitHub #304).
 		c.Watchdog = c.Watchdog.WithTaskTeardown(c.Executor)
+		// The step a stuck-fail records is named by the executor when it is
+		// running it (outcome-quality §S8.8, GitHub #369).
+		c.Watchdog = c.Watchdog.WithInFlightStepSource(c.Executor)
 	}
 	// Pending-outcome backstop: SweepPending only covers the execution its
 	// caller is closing, so every path that terminalises a task's OTHER
@@ -1617,6 +1642,15 @@ func (c *Container) initWatchdog() error {
 			c.Logger.Warn().
 				Msg("watchdog: step-outcome backend does not implement the pending-outcome sweep — " +
 					"rows left at pending_validation by a superseded execution will not be reconciled")
+		}
+		// The step row a stuck-fail writes (outcome-quality §S8.8, GitHub
+		// #369). Logged when absent, like the sweep above.
+		if rec, ok := c.repos.StepOutcomes.(watchdog.StuckStepRecorder); ok {
+			c.Watchdog = c.Watchdog.WithStuckStepRecorder(rec)
+		} else {
+			c.Logger.Warn().
+				Msg("watchdog: step-outcome backend does not implement RecordStuckStepOutcome — " +
+					"a step the watchdog fails as stuck will have no step-outcome row")
 		}
 	}
 	// Budget-reservation sweep backstop (trading-hardening §1): settle

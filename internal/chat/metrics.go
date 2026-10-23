@@ -80,6 +80,13 @@ type Metrics struct {
 	// Label names mirror vornik_executor_model_fallback_total for cross-source
 	// dashboard aggregation.
 	ModelFallbackTotal *prometheus.CounterVec
+	// CallsAbandonedTotal counts calls the CeilingProvider abandoned because
+	// the provider did not return after its context ended, per (model,
+	// cause): ceiling | caller_deadline | caller_cancelled. AbandonedCallsInFlight
+	// is how many of those calls' goroutines have not yet returned: the
+	// leak, measured (outcome-quality LLD §S8.9, GitHub #369).
+	CallsAbandonedTotal    *prometheus.CounterVec
+	AbandonedCallsInFlight prometheus.Gauge
 
 	cacheRatioMu    sync.Mutex
 	cacheRatioState map[string]*cacheRatioState
@@ -227,6 +234,18 @@ func NewMetrics(reg *prometheus.Registry) *Metrics {
 				"invalid_grant_recovered (claude adopted a concurrent CLI's rotation) | quarantined (codex dead token) | " +
 				"lock_timeout (another process held the refresh lock until the wait ran out).",
 		}, []string{"provider", "outcome"}),
+		CallsAbandonedTotal: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Namespace: "vornik",
+			Subsystem: "chat",
+			Name:      "calls_abandoned_total",
+			Help:      "LLM calls abandoned because the provider did not return after its context ended, per (model, cause): ceiling | caller_deadline | caller_cancelled.",
+		}, []string{"model", "cause"}),
+		AbandonedCallsInFlight: prometheus.NewGauge(prometheus.GaugeOpts{
+			Namespace: "vornik",
+			Subsystem: "chat",
+			Name:      "abandoned_calls_in_flight",
+			Help:      "Abandoned LLM calls whose provider call has not yet returned (goroutines held by a provider that ignores its context).",
+		}),
 		cacheRatioState: map[string]*cacheRatioState{},
 	}
 	reg.MustRegister(
@@ -236,6 +255,7 @@ func NewMetrics(reg *prometheus.Registry) *Metrics {
 		m.CacheHitRatio, m.CacheDollarsSavedTotal,
 		m.SubscriptionTokenRefreshTotal,
 		m.ModelHealthState, m.ModelHealthTrips, m.BestEffortDeadlines, m.OptionalWorkRefused, m.ModelFallbackTotal,
+		m.CallsAbandonedTotal, m.AbandonedCallsInFlight,
 	)
 	return m
 }

@@ -2,7 +2,6 @@ package service
 
 import (
 	"fmt"
-	"net/http"
 	"os"
 	"sort"
 	"strings"
@@ -10,6 +9,7 @@ import (
 
 	"github.com/rs/zerolog"
 
+	"vornik.io/vornik/internal/integrations/dialguard"
 	"vornik.io/vornik/internal/registry"
 	"vornik.io/vornik/internal/slack"
 	"vornik.io/vornik/internal/voice"
@@ -79,11 +79,16 @@ func buildSlackChannelForProject(p *registry.Project, stt voice.STTProvider, tts
 	if err != nil {
 		return nil, fmt.Errorf("project %q slack: %w", p.ID, err)
 	}
-	// Production HTTPClient comes from Go's stdlib default; tests
-	// inject via the channel's Config seam directly (buildSlackChannelForProject
-	// is bypassed by tests that need a stub Slack API server).
+	// Production HTTPClient dials through the shared SSRF guard (GitHub
+	// #494, integrations-hub-design "Amendment 2026-10-21 (#494)"): it was
+	// http.DefaultClient, and the channel also downloads file URLs a Slack
+	// event names. Slack's API and file hosts are public, so no allowlist
+	// entry applies. Timeout 0, as before: each request's context bounds it.
+	// Tests inject via the channel's Config seam directly
+	// (buildSlackChannelForProject is bypassed by tests that need a stub
+	// Slack API server).
 	cfg.Logger = channelLogger(logger, "slack", p.ID)
-	cfg.HTTPClient = http.DefaultClient
+	cfg.HTTPClient = dialguard.DialGuard{}.HTTPClient(0)
 	// Voice round-trip: the channel adapter is nil-safe per
 	// direction, so a nil STT/TTS just keeps the pre-voice text-only
 	// path active for that direction.

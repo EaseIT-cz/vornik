@@ -131,9 +131,9 @@ func (s *Server) backfillSkillEmbeddings(ctx context.Context, model string, cand
 // project keeps each usage row honest; a single-project batch still makes
 // exactly one call.
 //
-// Returns (nil, err) on the first failing group — the caller treats a
-// length mismatch or error as "skip the backfill", which is the pre-existing
-// degrade behaviour.
+// A group whose call fails leaves its slots empty and the others are still
+// embedded (per-project best effort; the caller skips an empty slot). The
+// error return is kept for the signature and is always nil today.
 func (s *Server) embedByProject(ctx context.Context, skills []*persistence.Skill, texts []string) ([][]float32, error) {
 	// First-seen project order keeps the call sequence deterministic; a map
 	// walk would vary it run to run.
@@ -155,7 +155,15 @@ func (s *Server) embedByProject(ctx context.Context, skills []*persistence.Skill
 		}
 		vecs, err := s.skillEmbedder.Embed(ctx, projectID, group)
 		if err != nil {
-			return nil, err
+			// Per-project best effort (outcome-quality §S8.10 change 7): this
+			// project's slots stay empty and fall back to lexical; the next
+			// project is still embedded. The embedder's (nil, nil) degrade, which
+			// this loop used to receive here, did exactly that; since GitHub #369
+			// item 5 the same failure is an error (and is counted by the
+			// embedder), so returning would stop every other project's backfill.
+			// This package does not import internal/memory, so every error is
+			// treated alike.
+			continue
 		}
 		for j, idx := range idxs {
 			if j < len(vecs) {

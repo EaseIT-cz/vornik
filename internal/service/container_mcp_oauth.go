@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"vornik.io/vornik/internal/agenttokens"
+	"vornik.io/vornik/internal/integrations/dialguard"
 	"vornik.io/vornik/internal/mcpconnect"
 	"vornik.io/vornik/internal/registry"
 )
@@ -36,6 +37,7 @@ func (c *Container) mcpConnector() *mcpconnect.Connector {
 		if c.repos.AdminAudit != nil {
 			audit = c.repos.AdminAudit
 		}
+		oauthFallback, oauthPerServer := c.mcpOAuthClients()
 		c.mcpOAuth = &mcpconnect.Connector{
 			// An agent project's tokens are sealed into their row with the
 			// namespace key (agent-administered Vornik plan P4.4); operator
@@ -49,7 +51,7 @@ func (c *Container) mcpConnector() *mcpconnect.Connector {
 			// container per lookup, so a store created after boot is seen.
 			Secrets: c.secretSource(),
 			Audit:   audit,
-			HTTP:    &http.Client{Timeout: mcpOAuthHTTPTimeout},
+			HTTP:    oauthFallback,
 			// Read LIVE rather than captured: the connector is built once at
 			// boot, and setting public_base_url then reloading config must be
 			// enough — an operator should not have to restart the daemon to
@@ -73,7 +75,7 @@ func (c *Container) mcpConnector() *mcpconnect.Connector {
 			OnGranted: c.onMCPGrantChanged,
 			// An agent project's server names its authorization server in
 			// its own metadata: those calls go through the SSRF guard (P4.4).
-			HTTPFor: agentOAuthHTTP,
+			HTTPFor: oauthPerServer,
 			Logger:  c.Logger.With().Str("component", "mcp-oauth").Logger(),
 		}
 		// §7.2a boot sweep: a redirect URI that changed while the daemon was down
@@ -233,4 +235,27 @@ func (c *Container) mcpServerRef(projectID, serverName string) (mcpconnect.Serve
 		return ref, true
 	}
 	return mcpconnect.ServerRef{}, false
+}
+
+// mcpOAuthClients returns the connector's HTTP clients: the fallback, and the
+// per-server function it consults first. Both dial through the shared guard
+// (GitHub #494, integrations-hub-design "Amendment 2026-10-21 (#494)"): the
+// server's own metadata names the authorization, token and registration
+// endpoints, so a plain client let a public MCP server point the daemon's
+// code exchange at a private address. An operator project's server may use
+// the operator's integrations.allowed_hosts and its own loopback URL host; an
+// agent project's server only its own loopback URL host (agentOAuthHTTP).
+func (c *Container) mcpOAuthClients() (*http.Client, func(projectID, serverURL string) *http.Client) {
+	var allowed []string
+	if c.Config != nil {
+		allowed = c.Config.Integrations.AllowedHosts
+	}
+	fallback := dialguard.DialGuard{AllowedHosts: append([]string(nil), allowed...)}.HTTPClient(mcpOAuthHTTPTimeout)
+	perServer := func(projectID, serverURL string) *http.Client {
+		if h := agentOAuthHTTP(projectID, serverURL); h != nil {
+			return h
+		}
+		return dialguard.LoopbackURLGuard(serverURL, allowed).HTTPClient(mcpOAuthHTTPTimeout)
+	}
+	return fallback, perServer
 }

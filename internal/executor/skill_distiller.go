@@ -84,7 +84,8 @@ func (l *skillDistillLimiter) allow(project string, now time.Time) bool {
 
 // maybeDistillSkill runs the distiller for a successfully-completed task.
 // Best-effort and nil-safe: any miss (no LLM wired, rate-limited, model
-// says skip, parse error, duplicate) simply proposes nothing. Intended
+// says skip, parse error, duplicate) proposes nothing, and each is logged and
+// counted on skill_distill_skipped_total{reason} (GitHub #369). Intended
 // to run async so it never delays task completion.
 func (e *Executor) maybeDistillSkill(ctx context.Context, task *persistence.Task, result string) {
 	if e.distillerLLM == nil || e.skillRepo == nil || task == nil {
@@ -105,10 +106,12 @@ func (e *Executor) maybeDistillSkill(ctx context.Context, task *persistence.Task
 	// From here on the distiller works only from the proven row.
 	task = proven
 	if !e.distillLimiter.allow(task.ProjectID, time.Now().UTC()) {
+		e.distillSkipped(task, "rate_limited", nil)
 		return
 	}
 	goal := strings.TrimSpace(taskGoal(task))
 	if goal == "" && strings.TrimSpace(result) == "" {
+		e.distillSkipped(task, "empty_input", nil)
 		return
 	}
 	user := "TASK GOAL:\n" + truncateForDistill(goal, 4000) + "\n\nTASK RESULT:\n" + truncateForDistill(result, 6000)
@@ -132,12 +135,18 @@ func (e *Executor) maybeDistillSkill(ctx context.Context, task *persistence.Task
 		return
 	}
 	cand, ok := parseDistillCandidate(resp.Choices[0].Message.Content)
-	if !ok || cand.Skip {
+	if !ok {
+		e.distillSkipped(task, "unparseable", nil)
+		return
+	}
+	if cand.Skip {
+		e.distillSkipped(task, "model_skip", nil)
 		return
 	}
 	cand.Name = strings.TrimSpace(cand.Name)
 	cand.Description = strings.TrimSpace(cand.Description)
 	if cand.Name == "" || cand.Description == "" || strings.TrimSpace(cand.Body) == "" {
+		e.distillSkipped(task, "incomplete_candidate", nil)
 		return
 	}
 	if len(cand.Body) > skillDistillBodyCap {
@@ -152,9 +161,17 @@ func (e *Executor) maybeDistillSkill(ctx context.Context, task *persistence.Task
 	// `prague-restaurants-feed-refresh` differ by one character, and the
 	// second was proposed, approved, and never fired once while the first
 	// accumulated 23 firings.
-	existing, _ := e.skillRepo.List(ctx, task.ProjectID, persistence.SkillListFilter{})
+	existing, lerr := e.skillRepo.List(ctx, task.ProjectID, persistence.SkillListFilter{})
+	if lerr != nil {
+		// Propose anyway, as the near-duplicate check below does on an
+		// outage: the repository's own name-conflict check still catches an
+		// exact duplicate at Create (GitHub #369).
+		e.logger.Warn().Err(lerr).Str("task_id", task.ID).Str("project_id", task.ProjectID).
+			Msg("skill distiller: exact-name check failed; proposing anyway")
+	}
 	for _, s := range existing {
 		if strings.EqualFold(s.Name, cand.Name) {
+			e.distillSkipped(task, "duplicate_name", nil)
 			return
 		}
 	}
@@ -211,10 +228,32 @@ func (e *Executor) maybeDistillSkill(ctx context.Context, task *persistence.Task
 	}
 
 	if err := e.skillRepo.Create(ctx, skill); err != nil {
-		return // conflict / error → propose nothing
+		if errors.Is(err, persistence.ErrSkillNameConflict) {
+			e.distillSkipped(task, "duplicate_name", nil)
+		} else {
+			e.distillSkipped(task, "persist_error", err)
+		}
+		return
 	}
 	e.logger.Info().Str("skill_id", skill.ID).Str("name", skill.Name).
 		Str("task_id", task.ID).Msg("skill distiller: proposed draft from completed task")
+}
+
+// distillSkipped logs and counts one post-gate return of the distiller
+// (GitHub #369, outcome-quality LLD §S8.11 row D), so "the model said skip"
+// and "the run never reached the model" are told apart. The reasons a broken
+// model, prompt or store produces log at Warn; the ordinary ones at Info.
+func (e *Executor) distillSkipped(task *persistence.Task, reason string, err error) {
+	ev := e.logger.Info()
+	switch reason {
+	case "unparseable", "incomplete_candidate", "persist_error":
+		ev = e.logger.Warn()
+	}
+	ev.Err(err).Str("task_id", task.ID).Str("project_id", task.ProjectID).
+		Str("reason", reason).Msg("skill distiller: nothing proposed")
+	if e.metrics != nil {
+		e.metrics.RecordSkillDistillSkipped(reason)
+	}
 }
 
 // distillRefusal names why a task must not be distilled, or "" when it may

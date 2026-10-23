@@ -406,6 +406,7 @@ func TestServer_GetTaskLogs_FallsBackToExecutionError(t *testing.T) {
 	}
 	server := NewServer(WithLogger(zerolog.Nop()), WithTaskRepository(taskRepo), WithExecutionRepository(execRepo))
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/projects/project-1/tasks/task-1/logs?tail=2", nil)
+	req = adminClassReq491(req) // GitHub #491: the operator, stated
 	rec := httptest.NewRecorder()
 
 	server.GetTaskLogs(rec, req)
@@ -875,6 +876,7 @@ func TestServer_GetTask_IncludesLastError(t *testing.T) {
 	)
 
 	req := httptest.NewRequest(http.MethodGet, "/projects/project-1/tasks/task-1", nil)
+	req = adminClassReq491(req) // GitHub #491: the operator, stated
 	rec := httptest.NewRecorder()
 
 	server.GetTask(rec, req)

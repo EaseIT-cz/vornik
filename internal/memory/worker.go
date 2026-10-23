@@ -137,6 +137,8 @@ func (w *Worker) processBatch(ctx context.Context) {
 
 	embedStart := time.Now()
 	vecs, err := w.embedBatchByProject(ctx, chunks, texts)
+	// vecs == nil with no error is unreachable since #369 item 5 (the embedder
+	// answers a non-empty input with vectors or a typed error); kept defensive.
 	if err != nil || vecs == nil {
 		if len(chunks) > 1 {
 			w.logger.Warn().
@@ -153,19 +155,12 @@ func (w *Worker) processBatch(ctx context.Context) {
 		// DLQ so we keep track of them and auto-retry after the
 		// endpoint recovers. Don't re-enqueue in-place: the worker
 		// would hammer a dead endpoint until someone noticed.
-		errMsg := ""
-		if err != nil {
-			errMsg = err.Error()
-		}
 		w.logger.Warn().
 			Err(err).
 			Int("batch_size", len(chunks)).
 			Msg("memory worker: embedding failed — moving batch to DLQ")
 		for _, c := range chunks {
-			retryAfter := time.Now().Add(w.dlqBackoff(0))
-			if derr := w.repo.DLQMove(ctx, c.ID, c.ProjectID, "embedding_failed", errMsg, retryAfter); derr != nil {
-				w.logger.Warn().Err(derr).Str("chunk_id", c.ID).Msg("memory worker: DLQ move failed")
-			}
+			w.dlqEmbedFailure(ctx, c, err)
 		}
 		// The DLQ owns these from here, so release the queue rows. Without this the
 		// claim would age out and re-deliver chunks the DLQ is already retrying.
@@ -188,7 +183,9 @@ func (w *Worker) processBatch(ctx context.Context) {
 			// Model skipped this chunk (returned fewer vectors than
 			// inputs). Park in DLQ with retry_count = -1 since the
 			// empty response is usually a content-too-large signal
-			// that won't resolve on retry.
+			// that won't resolve on retry. Defensive since #369 item 5:
+			// the embedder now fails such a batch with a typed
+			// partial_response / empty_vector error, handled above.
 			retryAfter := time.Now().Add(24 * time.Hour)
 			if derr := w.repo.DLQMove(ctx, c.ID, c.ProjectID, "empty_embedding", "embedder returned no vector for this chunk", retryAfter); derr != nil {
 				w.logger.Warn().Err(derr).Str("chunk_id", c.ID).Msg("memory worker: DLQ move (empty) failed")
@@ -233,22 +230,7 @@ func (w *Worker) processBatch(ctx context.Context) {
 		// failures log + move on; the viz falls back to markdown
 		// heading then source_name. Nil-safe when titler isn't
 		// wired (e.g. ChatClient disabled).
-		if w.titler != nil {
-			title, err := w.titler.Title(ctx, c.Content, c.ProjectID, c.ID)
-			if err != nil {
-				w.logger.Debug().
-					Err(err).
-					Str("chunk_id", c.ID).
-					Msg("memory worker: title generation failed — leaving NULL")
-			} else if title != "" {
-				if uerr := w.repo.UpdateContentTitle(ctx, c.ID, title); uerr != nil {
-					w.logger.Warn().
-						Err(uerr).
-						Str("chunk_id", c.ID).
-						Msg("memory worker: content_title persist failed")
-				}
-			}
-		}
+		w.titleChunk(ctx, c.ID, c.ProjectID, c.Content)
 	}
 	// Acknowledge every chunk whose outcome is now durable. Deliberately AFTER the
 	// per-chunk loop: each path above either stored an embedding or parked the chunk
@@ -327,14 +309,16 @@ func (w *Worker) embedBatchByProject(ctx context.Context, chunks []MemoryChunk, 
 		vecs, err := w.embedder.Embed(ctx,
 			EmbedScope{ProjectID: projectID, CallSite: EmbedCallSiteIngest}, group)
 		if err != nil {
+			// Fail the whole batch rather than storing a partial result: the
+			// caller's retry-individually path re-tries every chunk, and
+			// half-written vectors would leave the rest silently unindexed.
 			return nil, err
 		}
-		if vecs == nil {
-			// The degrade signal. Fail the whole batch rather than storing a
-			// partial result: the caller's retry-individually path re-tries every
-			// chunk, and half-written vectors would leave the rest silently
-			// unindexed.
-			return nil, nil
+		if len(vecs) != len(group) {
+			// Unreachable since #369 item 5 (Embed returns one vector per input
+			// or a typed error); kept as an error, never as a silent success.
+			return nil, &EmbedError{Reason: EmbedReasonPartialResponse,
+				Detail: fmt.Sprintf("embedder returned %d vectors for %d texts", len(vecs), len(group))}
 		}
 		for j, idx := range idxs {
 			if j < len(vecs) {
@@ -351,18 +335,15 @@ func (w *Worker) processIndividually(ctx context.Context, chunks []MemoryChunk) 
 		vecs, err := w.embedder.Embed(ctx,
 			EmbedScope{ProjectID: c.ProjectID, CallSite: EmbedCallSiteIngest},
 			[]string{text})
-		if err != nil || len(vecs) == 0 || len(vecs[0]) == 0 {
+		if err == nil && (len(vecs) == 0 || len(vecs[0]) == 0) {
+			// Unreachable since #369 item 5; never a silent success.
+			err = &EmbedError{Reason: EmbedReasonPartialResponse, Detail: "embedder returned no vectors"}
+		}
+		if err != nil {
 			if w.metrics != nil {
 				w.metrics.EmbedBatchesTotal.WithLabelValues("error").Inc()
 			}
-			errMsg := "embedder returned no vectors"
-			if err != nil {
-				errMsg = err.Error()
-			}
-			retryAfter := time.Now().Add(w.dlqBackoff(0))
-			if derr := w.repo.DLQMove(ctx, c.ID, c.ProjectID, "embedding_failed", errMsg, retryAfter); derr != nil {
-				w.logger.Warn().Err(derr).Str("chunk_id", c.ID).Msg("memory worker: DLQ move failed")
-			}
+			w.dlqEmbedFailure(ctx, c, err)
 			continue
 		}
 		w.persistEmbeddedChunk(ctx, c, vecs[0], ContentHash(text))
@@ -372,6 +353,35 @@ func (w *Worker) processIndividually(ctx context.Context, chunks []MemoryChunk) 
 	// batch embed failed, which is exactly when a restart is most likely, so
 	// forgetting it would leave the orphaning hazard alive on the retry path.
 	w.ackEmbedQueue(ctx, chunks)
+}
+
+// dlqEmbedFailure moves one chunk whose embed call failed into the DLQ, with the
+// typed cause as last_error (outcome-quality §S8.10, GitHub #369 item 5: it was
+// empty, or "embedder returned no vectors"). A dimension mismatch is parked like
+// the worker's own dimension check parks it: retrying cannot fix a config/model
+// mismatch. Every other cause keeps the back-off, so a key fixed or an endpoint
+// back is picked up by the replay.
+func (w *Worker) dlqEmbedFailure(ctx context.Context, c MemoryChunk, err error) {
+	msg := ""
+	if err != nil {
+		msg = err.Error()
+	}
+	if reason, _ := EmbedFailureReason(err); reason == EmbedReasonDimensionMismatch {
+		w.logger.Warn().Err(err).Str("model", w.cfg.EmbeddingModel).Str("chunk_id", c.ID).
+			Msg("memory worker: embedding dimension mismatch — parking in DLQ")
+		if derr := w.repo.DLQMove(ctx, c.ID, c.ProjectID, "dimension_mismatch", msg, time.Now().Add(24*time.Hour)); derr != nil {
+			w.logger.Warn().Err(derr).Str("chunk_id", c.ID).Msg("memory worker: DLQ move (dim) failed")
+		}
+		// Park = retry_count -1: the replay never picks it up again, unlike the
+		// 24h retry_after alone.
+		if perr := w.repo.DLQPark(ctx, c.ID); perr != nil {
+			w.logger.Warn().Err(perr).Str("chunk_id", c.ID).Msg("memory worker: DLQ park (dim) failed")
+		}
+		return
+	}
+	if derr := w.repo.DLQMove(ctx, c.ID, c.ProjectID, "embedding_failed", msg, time.Now().Add(w.dlqBackoff(0))); derr != nil {
+		w.logger.Warn().Err(derr).Str("chunk_id", c.ID).Msg("memory worker: DLQ move failed")
+	}
 }
 
 // embedInputHash is the embedding_cache key the vector was stored under — the hash of

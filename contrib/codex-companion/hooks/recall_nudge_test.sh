@@ -342,7 +342,7 @@ fi
 if grep -rqE '[a-z][0-9]*\.go|\.md|with space|secret-recall-query-text|test-token|rg -n|sed -n|cat ' "$PLUGIN_DATA"; then
   fail "case7: state file content holds a file name, command, query or token"
 fi
-if find "$PLUGIN_DATA" -name '*.go*' | grep -q .; then
+if find "$PLUGIN_DATA" -name '*.go*' | grep . >/dev/null; then
   fail "case7: a state file name holds a source file name"
 fi
 

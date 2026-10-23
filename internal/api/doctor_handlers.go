@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"net"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -144,10 +145,19 @@ type DoctorHandlers struct {
 	serverAddress     string
 	apiAuthEnabled    bool
 	apiKeys           []string
-	pricingPath       string
-	artifactsRoot     string
-	workspacesRoot    string
-	gatewayURL        string
+	// dbCreds and secretRefs back the #412 checks db_credential_strength,
+	// db_listen_exposure and credential_reuse (doctor_db_credentials.go);
+	// procNetReadFunc, interfaceAddrsFunc and lookupHostFunc are their seams
+	// (nil ⇒ /proc, net.InterfaceAddrs, the default resolver).
+	dbCreds            dbCredentialSnapshot
+	secretRefs         []secretRef
+	procNetReadFunc    func(path string) ([]byte, error)
+	interfaceAddrsFunc func() ([]net.IP, error)
+	lookupHostFunc     func(ctx context.Context, host string) ([]string, error)
+	pricingPath        string
+	artifactsRoot      string
+	workspacesRoot     string
+	gatewayURL         string
 	// agentLLMEndpoint and unixSocketPath back checkAgentLLMTopology, the
 	// fresh-install "Invalid API key" guard (F2b): agents mint per-task keys
 	// that only the daemon's own /api/v1 proxy accepts, and an empty
@@ -190,9 +200,21 @@ type DoctorHandlers struct {
 	// agentRefusalCounts backs agent_refusal_burst (agent-administered design
 	// §23.2): per-namespace refusal counts since a time. Nil: SKIPPED.
 	agentRefusalCounts func(ctx context.Context, since time.Time) (map[string]int, error)
+	// agentReadVerdicts backs agent_read_tools_rejudged (agent-administered
+	// design §6.5, GitHub #413). Nil: SKIPPED.
+	agentReadVerdicts func() ([]mcp.ReadEntryVerdict, []string)
+	// agentReadHolds is the held set's store and re-list state (amendment
+	// #481); nil omits it from the check.
+	agentReadHolds func() mcp.ReadHoldState
+	// agentRollbackFailures backs agent_change_stays_applied
+	// (agent-administered design §23.9). Nil: SKIPPED.
+	agentRollbackFailures func(ctx context.Context) (AgentRollbackFailures, error)
 	// agentModels classifies agent_admin.models now (agent_model_catalogue,
 	// agent-administered design §18.6 item 2).
 	agentModels func() AgentModelCatalogueStatus
+	// provenanceClones reports the daemon-only provenance clones
+	// (memory_provenance_clone, GitHub #499). Nil = SKIPPED.
+	provenanceClones func() []ProvenanceCloneStatus
 
 	// systemHandlerNames is the set of system-step handler names the
 	// role-library doctor check accepts as valid tool entries. Wired
@@ -228,6 +250,13 @@ type DoctorHandlers struct {
 	toolAuditRedactionKnown  bool
 	toolAuditRedactionReason auditredact.Reason
 	toolAuditRedactionAction string
+
+	// how the container wired the content-store redaction seams, and where to
+	// read their live census (SetRedactionSeams, GitHub #395).
+	redactionSeamsKnown bool
+	redactionSeamReason auditredact.Reason
+	redactionSeamStores []string
+	redactionSeamCensus func() map[string]auditredact.SeamCount
 
 	// dispatcherProjectID is telegram.dispatcher_project_id at boot.
 	// When non-empty, checkDispatcherRole validates the chosen
@@ -331,6 +360,10 @@ type DoctorHandlers struct {
 	retentionKnown   bool
 	retentionEnabled bool
 	retentionWindows map[string]int
+	// embeddingCacheApplies is true when memory.embedding_cache_enabled is on
+	// and the driver is not SQLite: only then is embedding_cache written, so
+	// only then is an unset embedding_cache_days a finding (GDPR design §4.20).
+	embeddingCacheApplies bool
 	// toolAuditFloorDays is the resolved tool_audit_log floor
 	// (retention.ResolveToolAuditFloor); 0 → the six-month default. The
 	// orphan probe never deletes an audit row younger than it.
@@ -341,6 +374,10 @@ type DoctorHandlers struct {
 	// daemonRevisionFunc reports the commit this daemon was built from.
 	// Nil ⇒ version.BuildRevision with the -dirty suffix applied.
 	daemonRevisionFunc func() string
+
+	// subjectRequests backs checkSubjectRequestDeadlines (GDPR Art 12(3)).
+	// Wired by the container on the resolved driver; nil → SKIPPED.
+	subjectRequests SubjectRequestLedger
 }
 
 // SetAPIMetrics wires the registered APIMetrics so the
@@ -443,6 +480,7 @@ func (h *DoctorHandlers) SetServerConfig(cfg *config.Config) {
 	h.serverAddress = cfg.Server.Address
 	h.apiAuthEnabled = cfg.API.AuthEnabled
 	h.apiKeys = append(h.apiKeys[:0], cfg.API.APIKeys...)
+	h.snapshotDBCredentials(cfg)
 	h.artifactsRoot = cfg.Storage.ArtifactsPath
 	h.workspacesRoot = cfg.Runtime.ProjectWorkspacePath
 	h.webWritesMode, _ = cfg.Web.WritesMode() // invalid values fail Validate() at startup
@@ -457,6 +495,9 @@ func (h *DoctorHandlers) SetServerConfig(cfg *config.Config) {
 	// would let a half-configured sweeper report as healthy.
 	h.retentionKnown = true
 	h.retentionEnabled = cfg.Retention.Enabled
+	// The cache is written only when it is switched on, and only off SQLite
+	// (an empty driver means postgres, the config default).
+	h.embeddingCacheApplies = cfg.Database.Driver != "sqlite" && cfg.Memory.EmbeddingCacheEnabled
 	h.toolAuditFloorDays, _ = retention.ResolveToolAuditFloor(cfg.Retention.ToolAuditFloorDays,
 		cfg.Retention.ToolAuditFloorOverride, cfg.Retention.ToolAuditFloorOverrideBasis)
 	h.retentionWindows = map[string]int{}
@@ -470,6 +511,7 @@ func (h *DoctorHandlers) SetServerConfig(cfg *config.Config) {
 		"task_messages_days":       cfg.Retention.TaskMessagesDays,
 		"memory_chunks_days":       cfg.Retention.MemoryChunksDays,
 		"memory_ingest_audit_days": cfg.Retention.MemoryIngestAuditDays,
+		"embedding_cache_days":     cfg.Retention.EmbeddingCacheDays,
 	} {
 		if days > 0 {
 			h.retentionWindows[key] = days
@@ -621,6 +663,7 @@ func (h *DoctorHandlers) RunReportReadOnly(ctx context.Context) DoctorReport {
 	report.Checks = append(report.Checks, h.checkProjectDependencies())
 	report.Checks = append(report.Checks, h.checkRetentionEnabled())
 	report.Checks = append(report.Checks, h.checkBreachDeadlines(ctx))
+	report.Checks = append(report.Checks, h.checkSubjectRequestDeadlines(ctx))
 	report.Checks = append(report.Checks, h.checkModelRouteCoverage())
 	report.Checks = append(report.Checks, h.checkScraperProfileFreshness(ctx, fix))
 	report.Checks = append(report.Checks, h.checkGatewayHealthy(ctx, fix))
@@ -629,9 +672,12 @@ func (h *DoctorHandlers) RunReportReadOnly(ctx context.Context) DoctorReport {
 	report.Checks = append(report.Checks, h.checkApproverDevices(ctx, fix))
 	report.Checks = append(report.Checks, h.checkAgentNamespaceBudget(ctx))
 	report.Checks = append(report.Checks, h.checkAgentRefusalBurst(ctx))
+	report.Checks = append(report.Checks, h.checkAgentChangeStaysApplied(ctx))
 	report.Checks = append(report.Checks, h.checkAgentModelCatalogue())
+	report.Checks = append(report.Checks, h.checkProvenanceClone())
 	report.Checks = append(report.Checks, h.checkStuckBrokerActions(ctx))
 	report.Checks = append(report.Checks, h.checkMCPProjectConnections())
+	report.Checks = append(report.Checks, h.checkAgentReadRejudge())
 	report.Checks = append(report.Checks, h.checkUnclassifiedShare(ctx))
 	report.Checks = append(report.Checks, h.checkMemoryTextDamage(ctx))
 	appendTemplateDriftPointer(report.Checks)
@@ -696,6 +742,9 @@ func (h *DoctorHandlers) RunDoctor(w http.ResponseWriter, r *http.Request) {
 	report.Checks = append(report.Checks, h.checkAgentLLMAPIKey(ctx))
 	report.Checks = append(report.Checks, h.checkAPISecurityPosture())
 	report.Checks = append(report.Checks, h.checkAPIKeyStrength())
+	report.Checks = append(report.Checks, h.checkDBCredentialStrength())
+	report.Checks = append(report.Checks, h.checkDBListenExposure(ctx))
+	report.Checks = append(report.Checks, h.checkCredentialReuse())
 	report.Checks = append(report.Checks, h.checkPricingCoverage())
 	report.Checks = append(report.Checks, h.checkPricingDrift())
 	report.Checks = append(report.Checks, h.checkAutonomyBudgetGuard())
@@ -705,6 +754,7 @@ func (h *DoctorHandlers) RunDoctor(w http.ResponseWriter, r *http.Request) {
 	report.Checks = append(report.Checks, h.checkSecretsPermissions(fix))
 	report.Checks = append(report.Checks, h.checkConfigSecretHygiene())
 	report.Checks = append(report.Checks, h.checkToolAuditRedaction())
+	report.Checks = append(report.Checks, h.checkRedactionSeams())
 	report.Checks = append(report.Checks, h.checkDispatcherRole(fix))
 	report.Checks = append(report.Checks, h.checkWorkspaceCanonical())
 	report.Checks = append(report.Checks, h.checkCostAttribution())
@@ -722,6 +772,7 @@ func (h *DoctorHandlers) RunDoctor(w http.ResponseWriter, r *http.Request) {
 	report.Checks = append(report.Checks, h.checkProjectDependencies())
 	report.Checks = append(report.Checks, h.checkRetentionEnabled())
 	report.Checks = append(report.Checks, h.checkBreachDeadlines(ctx))
+	report.Checks = append(report.Checks, h.checkSubjectRequestDeadlines(ctx))
 	report.Checks = append(report.Checks, h.checkModelRouteCoverage())
 	report.Checks = append(report.Checks, h.checkScraperProfileFreshness(ctx, fix))
 	report.Checks = append(report.Checks, h.checkGatewayHealthy(ctx, fix))
@@ -730,9 +781,12 @@ func (h *DoctorHandlers) RunDoctor(w http.ResponseWriter, r *http.Request) {
 	report.Checks = append(report.Checks, h.checkApproverDevices(ctx, fix))
 	report.Checks = append(report.Checks, h.checkAgentNamespaceBudget(ctx))
 	report.Checks = append(report.Checks, h.checkAgentRefusalBurst(ctx))
+	report.Checks = append(report.Checks, h.checkAgentChangeStaysApplied(ctx))
 	report.Checks = append(report.Checks, h.checkAgentModelCatalogue())
+	report.Checks = append(report.Checks, h.checkProvenanceClone())
 	report.Checks = append(report.Checks, h.checkStuckBrokerActions(ctx))
 	report.Checks = append(report.Checks, h.checkMCPProjectConnections())
+	report.Checks = append(report.Checks, h.checkAgentReadRejudge())
 	report.Checks = append(report.Checks, h.checkUnclassifiedShare(ctx))
 	report.Checks = append(report.Checks, h.checkMemoryTextDamage(ctx))
 	appendTemplateDriftPointer(report.Checks)

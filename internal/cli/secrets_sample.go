@@ -10,6 +10,7 @@ import (
 	"strings"
 	"unicode/utf8"
 
+	"vornik.io/vornik/internal/auditredact"
 	"vornik.io/vornik/internal/secrets"
 )
 
@@ -82,8 +83,12 @@ func parseRuleSelection(spec string, corpus []secrets.Pattern) (ruleSelection, e
 // validRuleNames is the corpus plus entropy, which is a detector MODE rather
 // than a Pattern and so is absent from EffectivePatterns — but is nonetheless
 // the single largest finding type, and the one an operator most needs to name.
+//
+// secret_field (the key-name rule) and cut_token (the edge-run rule) are the
+// transcript seams' two non-pattern rules (chat-audit design §10.2.1).
 func validRuleNames(corpus []secrets.Pattern) map[string]bool {
-	valid := map[string]bool{secrets.FindingTypeEntropy: true}
+	valid := map[string]bool{secrets.FindingTypeEntropy: true,
+		auditredact.FindingSecretField: true, auditredact.FindingCutToken: true}
 	for _, p := range corpus {
 		valid[p.Name] = true
 	}
@@ -105,7 +110,12 @@ func (s ruleSelection) selects(findingType string) bool {
 	case s.all:
 		return true
 	case s.strong:
-		return !secrets.IsHeuristicType(findingType)
+		// cut_token is heuristic too: it fires on any long token-like run at
+		// a cut edge, benign or not, which is right at write time and wrong
+		// for an irreversible rewrite of history under the default
+		// (chat-audit design §10.2.1). secret_field fires on an exact key
+		// name and stays strong.
+		return !secrets.IsHeuristicType(findingType) && findingType != auditredact.FindingCutToken
 	default:
 		return s.names[findingType]
 	}

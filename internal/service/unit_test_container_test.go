@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"fmt"
 	"go/ast"
 	"go/parser"
 	"go/token"
@@ -51,7 +52,13 @@ func unitTestRuntimeOptions() []runtime.ManagerOption {
 func unitTestDatabaseOpener(t testing.TB) func(context.Context, config.DatabaseConfig) (*storage.Backend, error) {
 	return func(_ context.Context, dc config.DatabaseConfig) (*storage.Backend, error) {
 		if dc.Driver == "sqlite" && dc.Path == ":memory:" {
-			return storage.NewSQLiteBackend(sqlitetest.Memory(t)), nil
+			// Memory hands out only a copy carrying the migrated image's
+			// fingerprint, so it was migrated at open, as openSQLite's is
+			// (#418): the boot then skips initDatabase's Migrate, as a
+			// SQLite daemon's does.
+			be := storage.NewSQLiteBackend(sqlitetest.Memory(t))
+			be.MigratedAtOpen = true
+			return be, nil
 		}
 		// The fixture law requires a sanctioned context on a test's
 		// storage.Open (initDatabase passes context.Background()).
@@ -212,6 +219,60 @@ func TestNewUnitTestContainer_DatabaseIsAMigratedCopyOfItsOwn(t *testing.T) {
 	}
 	if n != 0 {
 		t.Fatal("a row written to one unit-test container's database appeared in another's")
+	}
+}
+
+// #418 (2026-10-17, lane W13-A): internal/service ran at 408-564 s under
+// -race (the 10-minute package timeout under load); initDatabase's second
+// Migrate of a database its open had already migrated was 21 % of the
+// package's CPU profile (313 boots). initDatabase now skips it when the
+// backend says the open migrated (storage-abstraction design, "The second
+// SQLite migrate at boot", 2026-10-17). Found at: unit (make test's lane).
+func TestInitDatabase_MigratesOnlyWhenTheOpenDidNot(t *testing.T) {
+	for _, migrated := range []bool{true, false} {
+		t.Run(fmt.Sprintf("migrated_at_open=%v", migrated), func(t *testing.T) {
+			calls := 0
+			open := func(_ context.Context, _ config.DatabaseConfig) (*storage.Backend, error) {
+				be := storage.NewSQLiteBackend(sqlitetest.Memory(t))
+				inner := be.Migrate
+				be.Migrate = func(ctx context.Context) error { calls++; return inner(ctx) }
+				be.MigratedAtOpen = migrated
+				return be, nil
+			}
+			if _, err := newUnitTestContainer(t, newComposerWiringTestConfig(t), isolatedConfigPath(t), WithDatabaseOpener(open)); err != nil {
+				t.Fatal(err)
+			}
+			want := 1
+			if migrated {
+				want = 0
+			}
+			if calls != want {
+				t.Fatalf("initDatabase called Migrate %d times with MigratedAtOpen=%v, want %d", calls, migrated, want)
+			}
+		})
+	}
+}
+
+// The unit-test opener's backends say they were migrated at open: the
+// in-memory copy because Memory hands out only a copy carrying the migrated
+// image's fingerprint, the file database because storage.Open migrated it.
+// So a unit-test boot takes the same skip a SQLite daemon's boot takes (#418).
+func TestUnitTestDatabaseOpener_BackendsAreMigratedAtOpen(t *testing.T) {
+	for name, dc := range map[string]config.DatabaseConfig{
+		"memory": {Driver: "sqlite", Path: ":memory:"},
+		"file":   {Driver: "sqlite", Path: filepath.Join(t.TempDir(), "boot.db")},
+	} {
+		be, err := unitTestDatabaseOpener(t)(sqlitetest.Context(t), dc)
+		if err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		t.Cleanup(func() { _ = be.Close() })
+		if !be.MigratedAtOpen {
+			t.Fatalf("%s: the unit-test backend does not say it was migrated at open", name)
+		}
+		if err := be.IsReady(context.Background()); err != nil {
+			t.Fatalf("%s: claims migrated but is not at the latest schema: %v", name, err)
+		}
 	}
 }
 

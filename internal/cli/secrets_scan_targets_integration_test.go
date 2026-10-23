@@ -206,7 +206,7 @@ func TestScanChatAuditHistory_RedactsInPlace(t *testing.T) {
 	}
 	t.Cleanup(func() { _, _ = db.Exec(`DELETE FROM chat_audit_log WHERE id = $1`, id) })
 
-	res, err := scanChatAuditHistory(ctx, db, scanTargetsDetector(t), project, time.Time{}, true, allRules(), 0)
+	res, err := scanChatAuditHistory(ctx, postgresScanEnv(db), scanTargetsDetector(t), project, time.Time{}, true, allRules(), 0)
 	if err != nil {
 		t.Fatalf("scanChatAuditHistory: %v", err)
 	}

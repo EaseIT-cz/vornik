@@ -26,6 +26,7 @@ import (
 // returns false whenever VORNIK_API_URL is set — the normal daemon-proxy mode),
 // so filtering it would have saved nothing in the deployment that motivated the
 // change. GET /projects/{id}/mcp/tools is what the agent's mcp-bridge reads.
+// (The fallback and buildMCPConfig were since removed, GitHub #498.)
 
 func tools(names ...string) []chat.Tool {
 	out := make([]chat.Tool, 0, len(names))

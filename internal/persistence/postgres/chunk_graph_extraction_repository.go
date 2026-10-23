@@ -194,3 +194,86 @@ func (r *ChunkGraphExtractionRepository) ReflagChunksMissingEdges(ctx context.Co
 	}
 	return int(n), nil
 }
+
+// quarantineSelectPG is the quarantine predicate plus the optional project
+// filter ($1, "" = every project). It matches idx_chunks_graph_quarantined.
+const quarantineSelectPG = `needs_graph_extraction = FALSE
+		  AND graph_extraction_attempts > 0
+		  AND ($1::text = '' OR project_id = $1::text)`
+
+// errorMatchPG is the literal, case-sensitive substring match on the stored
+// error ($2, "" = every error). strpos, not LIKE: no wildcards, and the same
+// case rule as SQLite's instr (knowledge-graph LLD §3.3b).
+const errorMatchPG = `($2::text = '' OR strpos(graph_extraction_error, $2::text) > 0)`
+
+// ReflagQuarantinedChunks — see persistence.ChunkGraphExtractionRepository.
+// The census and the UPDATE share one transaction; the UPDATE re-checks the
+// quarantine predicate, so a chunk that is not quarantined when it runs is
+// never written.
+func (r *ChunkGraphExtractionRepository) ReflagQuarantinedChunks(ctx context.Context, projectID, errorContains string, countOnly bool) ([]persistence.QuarantineReflagCount, error) {
+	tx, owns, err := persistence.BeginTx(ctx, r.db, nil)
+	if err != nil {
+		return nil, mapDBError(err)
+	}
+	x := r.db
+	if owns {
+		defer func() { _ = tx.Rollback() }()
+		x = tx
+	}
+	rows, err := x.QueryContext(ctx, `
+		SELECT project_id, count(*), count(*) FILTER (WHERE `+errorMatchPG+`)
+		FROM   project_memory_chunks
+		WHERE  `+quarantineSelectPG+`
+		GROUP  BY project_id
+		ORDER  BY project_id`, projectID, errorContains)
+	if err != nil {
+		return nil, mapDBError(err)
+	}
+	var census []persistence.QuarantineReflagCount
+	for rows.Next() {
+		var c persistence.QuarantineReflagCount
+		if err := rows.Scan(&c.ProjectID, &c.Quarantined, &c.Matched); err != nil {
+			_ = rows.Close()
+			return nil, mapDBError(err)
+		}
+		census = append(census, c)
+	}
+	if err := rows.Err(); err != nil {
+		_ = rows.Close()
+		return nil, mapDBError(err)
+	}
+	_ = rows.Close()
+	if countOnly {
+		return persistence.MergeQuarantineReflag(census, nil), nil
+	}
+	upd, err := x.QueryContext(ctx, `
+		UPDATE project_memory_chunks
+		SET    needs_graph_extraction    = TRUE,
+		       graph_extraction_attempts = 0
+		WHERE  `+quarantineSelectPG+`
+		  AND  `+errorMatchPG+`
+		RETURNING project_id`, projectID, errorContains)
+	if err != nil {
+		return nil, mapDBError(err)
+	}
+	written := map[string]int{}
+	for upd.Next() {
+		var p string
+		if err := upd.Scan(&p); err != nil {
+			_ = upd.Close()
+			return nil, mapDBError(err)
+		}
+		written[p]++
+	}
+	if err := upd.Err(); err != nil {
+		_ = upd.Close()
+		return nil, mapDBError(err)
+	}
+	_ = upd.Close()
+	if owns {
+		if err := tx.Commit(); err != nil {
+			return nil, mapDBError(err)
+		}
+	}
+	return persistence.MergeQuarantineReflag(census, written), nil
+}

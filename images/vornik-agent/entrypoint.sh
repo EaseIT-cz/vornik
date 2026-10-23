@@ -42,7 +42,7 @@ output_contract_satisfied() {
     [ -z "${REQUIRE_OUTPUT_GLOB:-}" ] && return 0
     local matches
     # shellcheck disable=SC2086 # the glob must expand
-    matches=$(cd "$WORKSPACE" 2>/dev/null && ls -1 $REQUIRE_OUTPUT_GLOB 2>/dev/null | head -1)
+    matches=$(cd "$WORKSPACE" 2>/dev/null && ls -1 $REQUIRE_OUTPUT_GLOB 2>/dev/null | sed -n 1p)
     [ -n "$matches" ]
 }
 
@@ -1876,7 +1876,10 @@ handle_memory_search() {
         return
     fi
 
-    url="${VORNIK_MEM_URL}/api/v1/projects/${project_id}/memory/search?limit=${limit}"
+    # wrap=untrusted (#454): the daemon wraps every caller-controlled chunk
+    # field (content, source_name, content_class, repo_scope) in
+    # <untrusted_content> markers before this tool prints the response.
+    url="${VORNIK_MEM_URL}/api/v1/projects/${project_id}/memory/search?wrap=untrusted&limit=${limit}"
     encoded_q=$(printf '%s' "$query" | jq -Rr @uri)
     url="${url}&q=${encoded_q}"
     vornik_resolve_url "$url"; url="$VORNIK_URL"
@@ -2987,12 +2990,13 @@ ${previous_result}
     touch "$expanded_mcp_tools_file"
     touch "$pinned_mcp_tools_file"
 
-    # Discover MCP tools from the daemon proxy when available, otherwise
-    # from project config written by the executor to /app/input/mcp.json.
+    # Discover MCP tools through the daemon only: mcp-bridge relays to it,
+    # and the daemon judges every call. There is no local mcp.json mode
+    # (GitHub #498), so without VORNIK_API_URL the step gets no MCP tools.
     printf '[]' > "$mcp_tools_file"
     if [ "${TOOL_FREE:-0}" = "1" ]; then
         log "tool-free step: no tools offered, MCP discovery skipped"
-    elif command -v mcp-bridge >/dev/null 2>&1 && { [ -n "${VORNIK_API_URL:-}" ] || [ -f "/app/input/mcp.json" ]; }; then
+    elif command -v mcp-bridge >/dev/null 2>&1 && [ -n "${VORNIK_API_URL:-}" ]; then
         log "MCP: discovering tools"
         if mcp_out=$(mcp-bridge discover 2>/tmp/mcp_discover_err); then
             printf '%s' "$mcp_out" > "$mcp_tools_file"
@@ -4041,7 +4045,7 @@ ${previous_result}
 
             if [ "$tc_cache_hit" = "0" ]; then
                 debug "tool: $tc_name (id=$tc_id)"
-                tool_result=$(exec_tool "$tc_name" "$tc_args" 2>&1 | head -c "$TOOL_RESULT_MAX_BYTES")
+                tool_result=$(exec_tool "$tc_name" "$tc_args" 2>&1 | head -c "$TOOL_RESULT_MAX_BYTES") # sigpipe-ok: the cap; stopping an oversized tool output is the point, and the image runs without pipefail
                 # Advisory near-repeat warning: the call RAN and its real
                 # result is preserved — only a note is appended. Unlike the
                 # exact-repeat nudge we cannot substitute the previous result,

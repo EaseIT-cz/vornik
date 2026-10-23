@@ -29,7 +29,7 @@ models:
   # Z.ai (GLM)
   zai.glm-4.7-flash:  { input: 0.07, output: 0.40 }
   zai.glm-4.7:        { input: 0.60, output: 2.20 }
-  zai.glm-5:          { input: 1.00, output: 3.20 }
+  zai.glm-5.3:        { input: 1.68, output: 5.28 } # Bedrock GLM 5.3 Global CRIS; US CRIS: 1.848/5.808
 
   # DeepSeek
   deepseek.v3.2:   { input: 0.62, output: 1.85 }

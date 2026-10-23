@@ -340,6 +340,32 @@ func TestPendingLocksRefuse(t *testing.T) {
 	}
 }
 
+// GitHub #409 (design §19.15 item 1): a lock refusal names its lock and the
+// holding request in typed fields, so the service records a waiting tools
+// approval without parsing the refusal's text; any other refusal leaves
+// them empty.
+func TestRender_LockRefusalIsTyped(t *testing.T) {
+	tr := newTree(t, "hermes")
+	tr.project("finance")
+	st := tr.state()
+	lock := lockProject("hermes--finance")
+	st.Locked[lock] = true
+	st.LockedBy = map[string]string{lock: "apr_1 (widening_change)"}
+	raw, _ := json.Marshal(SetBudgetInput{Project: "finance", MonthlyUSD: 1})
+	c, err := tr.r.Render(st, VerbSetBudget, raw)
+	if err != nil || c.Class != Refused || c.LockedOn != lock || c.LockedByRequest != "apr_1" {
+		t.Fatalf("held by a known request: %+v %v", c, err)
+	}
+	delete(st.LockedBy, lock)
+	if c, _ = tr.r.Render(st, VerbSetBudget, raw); c.Class != Refused || c.LockedOn != lock || c.LockedByRequest != "" {
+		t.Fatalf("held by an unknown request: %+v", c)
+	}
+	raw, _ = json.Marshal(SetBudgetInput{Project: "nowhere", MonthlyUSD: 1})
+	if c, _ = tr.r.Render(st, VerbSetBudget, raw); c.Class != Refused || c.LockedOn != "" || c.LockedByRequest != "" {
+		t.Fatalf("a refusal that is not a lock names a lock: %+v", c)
+	}
+}
+
 func TestLaterVerbsRefusedInThisRelease(t *testing.T) {
 	tr := newTree(t, "hermes")
 	for _, v := range []string{VerbAddAPI, VerbRequestCredential} {

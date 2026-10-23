@@ -31,9 +31,20 @@ import (
 // Three is deliberately low. The failures this bounds are systemic — a
 // truncating model, a wedged gateway — not flaky ones, so extra attempts buy
 // nothing and cost a full token budget each. Requeueing is a deliberate
-// operator gesture (`vornikctl memory regraph`) after the cause is fixed,
+// operator gesture (`vornikctl memory regraph --quarantined`, which also resets
+// the counter; knowledge-graph LLD §3.3b) after the cause is fixed,
 // which is also when a re-run has any chance of a different answer.
 const MaxExtractionAttempts = 3
+
+// MaxTransientRetries bounds how many consecutive transient provider failures
+// of one chunk (isTransientProviderErr: 429/502/503/504, throttling, refused
+// or reset connections) the worker absorbs WITHOUT counting them toward
+// MaxExtractionAttempts. A provider outage is not a defect of the chunk and
+// must not quarantine it (GitHub #419: 24 chunks quarantined by Bedrock 503s);
+// but an uncounted retry must not become an unbounded one, so after this many
+// the next failure counts as any other. In-process only: a restart grants a
+// chunk this many again (knowledge-graph LLD §3.3c).
+const MaxTransientRetries = 10
 
 type Worker struct {
 	source   persistence.ChunkGraphExtractionRepository
@@ -58,6 +69,14 @@ type Worker struct {
 	lastTick       time.Time
 	lastProcessed  int
 	lastFailed     int
+
+	// transientFailures counts, per chunk id, the uncounted transient
+	// failures since the chunk's last success or non-transient failure.
+	// runOne runs on several goroutines under runParallel, hence the mutex.
+	// Bounded by the flagged set: an entry is deleted on success, on a
+	// non-transient failure and on quarantine.
+	transientMu       sync.Mutex
+	transientFailures map[string]int
 }
 
 // LeaderGate is the narrow contract Worker uses to skip drain
@@ -276,7 +295,7 @@ func (w *Worker) tick(ctx context.Context) {
 	chunks, err := w.source.FetchUnextracted(ctx, w.cfg.BatchSize)
 	if err != nil {
 		w.logger.Warn().Err(err).Msg("KG worker: FetchUnextracted failed")
-		w.recordTickWithFailures(1)
+		w.recordTickWithFailures(1, tripReasonFetchError)
 		return
 	}
 	if len(chunks) == 0 {
@@ -301,7 +320,7 @@ func (w *Worker) tick(ctx context.Context) {
 	}
 
 	if failed > 0 {
-		w.recordTickWithFailuresStats(failed, processed)
+		w.recordTickWithFailuresStats(failed, processed, tripReasonChunkFailures)
 		w.logger.Warn().
 			Int("processed", processed).
 			Int("failed", failed).
@@ -333,6 +352,26 @@ func (w *Worker) runOne(ctx context.Context, c persistence.ChunkForExtraction) b
 		if w.metrics != nil {
 			w.metrics.ChunksExtractedTotal.WithLabelValues("failed").Inc()
 		}
+		// A provider outage is not the chunk's fault: absorb it without
+		// spending an attempt, up to MaxTransientRetries in a row (GitHub
+		// #419, LLD §3.3c). It still returns false, so the circuit breaker
+		// sees the outage exactly as before.
+		transient := isTransientProviderErr(err)
+		if transient && w.absorbTransient(c.ID) {
+			w.logger.Warn().Err(err).
+				Str("chunk_id", c.ID).
+				Str("project_id", c.ProjectID).
+				Msg("KG worker: transient provider failure; not counted toward quarantine, chunk stays flagged")
+			return false
+		}
+		// A non-transient failure resets the uncounted budget (the chunk
+		// reached the model, so the provider was up); a transient one past
+		// the budget keeps it spent, so from here every further transient
+		// failure counts and the chunk reaches quarantine in
+		// MaxExtractionAttempts more.
+		if !transient {
+			w.forgetTransient(c.ID)
+		}
 		// Count the failure and quarantine the chunk once it has burned
 		// MaxExtractionAttempts. Without the bound, a systemic failure —
 		// truncation being the one that prompted this — re-attempts the same
@@ -344,6 +383,7 @@ func (w *Worker) runOne(ctx context.Context, c persistence.ChunkForExtraction) b
 			w.logger.Warn().Err(rErr).Str("chunk_id", c.ID).
 				Msg("KG worker: could not record extraction failure; chunk stays flagged")
 		case quarantined:
+			w.forgetTransient(c.ID)
 			if w.metrics != nil {
 				w.metrics.ChunksExtractedTotal.WithLabelValues("quarantined").Inc()
 			}
@@ -355,7 +395,7 @@ func (w *Worker) runOne(ctx context.Context, c persistence.ChunkForExtraction) b
 				Str("project_id", c.ProjectID).
 				Int("attempts", attempts).
 				Msg("KG worker: chunk quarantined after repeated extraction failures; " +
-					"re-flag with `vornikctl memory regraph` once the cause is fixed")
+					"re-flag with `vornikctl memory regraph --quarantined` once the cause is fixed")
 		default:
 			w.logger.Warn().Err(err).
 				Str("chunk_id", c.ID).
@@ -365,6 +405,7 @@ func (w *Worker) runOne(ctx context.Context, c persistence.ChunkForExtraction) b
 		}
 		return false
 	}
+	w.forgetTransient(c.ID)
 	if mErr := w.source.MarkExtracted(ctx, c.ID); mErr != nil {
 		if w.metrics != nil {
 			w.metrics.ChunksExtractedTotal.WithLabelValues("failed").Inc()
@@ -377,15 +418,46 @@ func (w *Worker) runOne(ctx context.Context, c persistence.ChunkForExtraction) b
 	if w.metrics != nil {
 		w.metrics.ChunksExtractedTotal.WithLabelValues("success").Inc()
 	}
-	w.logger.Debug().
-		Str("chunk_id", c.ID).
+	// A chunk that quarantined an ambiguous entity or lost an alias write
+	// is logged at Info, not Debug (GitHub #369, §S8.11 6d, 6e).
+	ev := w.logger.Debug()
+	if m.EntitiesAmbiguous > 0 || m.AliasAddFailed > 0 {
+		ev = w.logger.Info()
+	}
+	ev.Str("chunk_id", c.ID).
 		Int("entities_created", m.EntitiesCreated).
 		Int("entities_matched", m.EntitiesMatched).
 		Int("entities_ambiguous", m.EntitiesAmbiguous).
+		Int("alias_add_failed", m.AliasAddFailed).
 		Int("edges_upserted", m.EdgesUpserted).
 		Int("edges_dropped", m.EdgesDropped).
 		Msg("KG worker: chunk extracted")
 	return true
+}
+
+// absorbTransient records one uncounted transient failure of the chunk and
+// reports true while the chunk is within MaxTransientRetries; past it, it
+// reports false and the caller counts the failure.
+func (w *Worker) absorbTransient(chunkID string) bool {
+	w.transientMu.Lock()
+	defer w.transientMu.Unlock()
+	if w.transientFailures[chunkID] >= MaxTransientRetries {
+		return false
+	}
+	if w.transientFailures == nil {
+		w.transientFailures = map[string]int{}
+	}
+	w.transientFailures[chunkID]++
+	return true
+}
+
+// forgetTransient drops the chunk's uncounted-failure count: on success, on a
+// non-transient failure and on quarantine, so the map holds only flagged
+// chunks whose most recent failures were transient.
+func (w *Worker) forgetTransient(chunkID string) {
+	w.transientMu.Lock()
+	defer w.transientMu.Unlock()
+	delete(w.transientFailures, chunkID)
 }
 
 // runParallel runs MaxParallel pipeline calls concurrently using
@@ -445,11 +517,19 @@ func (w *Worker) recordTickClean(processed, failed int) {
 	w.lastFailed = failed
 }
 
-func (w *Worker) recordTickWithFailures(failed int) {
-	w.recordTickWithFailuresStats(failed, 0)
+// Breaker trip causes, the label of circuit_tripped_total: the cause of the
+// tick that tripped it (GitHub #369, outcome-quality LLD §S8.11 7f). A failed
+// fetch wants the database looked at; failed chunks want the KG models.
+const (
+	tripReasonFetchError    = "fetch_error"
+	tripReasonChunkFailures = "chunk_failures"
+)
+
+func (w *Worker) recordTickWithFailures(failed int, reason string) {
+	w.recordTickWithFailuresStats(failed, 0, reason)
 }
 
-func (w *Worker) recordTickWithFailuresStats(failed, processed int) {
+func (w *Worker) recordTickWithFailuresStats(failed, processed int, reason string) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	w.consecutiveBad++
@@ -459,11 +539,12 @@ func (w *Worker) recordTickWithFailuresStats(failed, processed int) {
 	if w.consecutiveBad >= w.cfg.CircuitBreakerThreshold {
 		w.pausedUntil = time.Now().Add(w.cfg.CircuitBreakerPause)
 		if w.metrics != nil {
-			w.metrics.CircuitTrippedTotal.Inc()
+			w.metrics.CircuitTrippedTotal.WithLabelValues(reason).Inc()
 		}
 		w.logger.Error().
 			Int("consecutive_bad", w.consecutiveBad).
 			Int("last_failed_count", failed).
+			Str("reason", reason).
 			Dur("pause_for", w.cfg.CircuitBreakerPause).
 			Msg("KG worker: circuit breaker tripped — pausing drain loop")
 	}

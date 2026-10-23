@@ -3,6 +3,8 @@ package api
 import (
 	"strings"
 	"testing"
+
+	"vornik.io/vornik/internal/config"
 )
 
 // The warning must name the article and the consequence, not just report a flag.
@@ -75,5 +77,67 @@ func TestCheckRetentionEnabled_UnwiredSkips(t *testing.T) {
 	got := (&DoctorHandlers{}).checkRetentionEnabled()
 	if got.Status != "SKIPPED" {
 		t.Errorf("status = %q, want SKIPPED", got.Status)
+	}
+}
+
+// GitHub #115 status audit (2026-10-21, GDPR design §4.20): docs/legal/ropa.md
+// says the doctor warns when embedding_cache_days is unset, and the Art 17
+// redact design §4.4a calls that window not optional, because recall queries
+// cached under their own hash are reached by no erasure path. The check never
+// looked at it, so a sweeper with memory_chunks_days set reported OK while the
+// embedding cache was kept for ever.
+func TestCheckRetentionEnabled_MissingEmbeddingCacheWindowWarns(t *testing.T) {
+	h := &DoctorHandlers{
+		retentionKnown: true, retentionEnabled: true, embeddingCacheApplies: true,
+		retentionWindows: map[string]int{"tasks_days": 365, "memory_chunks_days": 730},
+	}
+	got := h.checkRetentionEnabled()
+	if got.Status != "WARNING" {
+		t.Fatalf("status = %q (%s), want WARNING", got.Status, got.Message)
+	}
+	if !strings.Contains(got.Message, "embedding_cache_days is UNSET") {
+		t.Errorf("message should name the missing window: %s", got.Message)
+	}
+}
+
+// On SQLite no embedder runs and the table does not exist, so the window does
+// not apply and its absence is not a finding.
+func TestCheckRetentionEnabled_EmbeddingCacheWindowNotRequiredOnSQLite(t *testing.T) {
+	h := &DoctorHandlers{
+		retentionKnown: true, retentionEnabled: true, embeddingCacheApplies: false,
+		retentionWindows: map[string]int{"memory_chunks_days": 730},
+	}
+	if got := h.checkRetentionEnabled(); got.Status != "OK" {
+		t.Fatalf("status = %q (%s), want OK", got.Status, got.Message)
+	}
+}
+
+// The window applies only where the cache is written: the cache switched on,
+// and a driver other than SQLite (empty means postgres). Review round 1 of
+// §4.20: a Postgres deployment with the cache off holds no cached rows, so a
+// warning there would be false.
+func TestSetServerConfig_EmbeddingCacheWindowAppliesOnlyWhereTheCacheIsWritten(t *testing.T) {
+	cases := []struct {
+		driver  string
+		enabled bool
+		want    bool
+	}{
+		{"", true, true}, {"postgres", true, true}, {"sqlite", true, false},
+		{"postgres", false, false}, {"", false, false},
+	}
+	for _, tc := range cases {
+		cfg := &config.Config{}
+		cfg.Database.Driver = tc.driver
+		cfg.Memory.EmbeddingCacheEnabled = tc.enabled
+		cfg.Retention.EmbeddingCacheDays = 30
+		h := NewDoctorHandlers(nil)
+		h.SetServerConfig(cfg)
+		if h.embeddingCacheApplies != tc.want {
+			t.Errorf("driver %q cache=%v: embeddingCacheApplies = %v, want %v",
+				tc.driver, tc.enabled, h.embeddingCacheApplies, tc.want)
+		}
+		if h.retentionWindows["embedding_cache_days"] != 30 {
+			t.Errorf("driver %q: embedding_cache_days must be recorded as a configured window", tc.driver)
+		}
 	}
 }

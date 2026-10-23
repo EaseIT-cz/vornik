@@ -91,7 +91,23 @@ func (s *Server) resolveLiveCaller(w http.ResponseWriter, r *http.Request, exec 
 			respondError(w, http.StatusForbidden, "FORBIDDEN", "Access denied to project")
 			return liveCaller{}, false
 		}
-		return liveCaller{view: liveViewOperator, release: func() {}}, true
+		switch s.errorTextAccess(r) {
+		case ErrorTextOperator:
+			return liveCaller{view: liveViewOperator, release: func() {}}, true
+		case ErrorTextDenied:
+			// GitHub #491: an unscoped caller that is not admin-class reads
+			// no stream, decided before the scrubber's nil check.
+			RespondProjectScopeRequired(w)
+			return liveCaller{}, false
+		}
+		// GitHub #466 (process-spawn-law design, "Amendment 2026-10-21
+		// (#466)", D2): every other non-agent caller reads the scrubbed view;
+		// with no scrubber it reads nothing.
+		if s.liveLogs().scrub == nil {
+			respondError(w, http.StatusServiceUnavailable, "LIVE_UNAVAILABLE", "the log scrubber could not be built, so no log is served")
+			return liveCaller{}, false
+		}
+		return liveCaller{view: liveViewScrubbed, release: func() {}}, true
 	}
 	// Agent keys are not browsers (review-20261008-f680 F7): an agent request
 	// that also carries a browser session cookie is refused, and the upgrade

@@ -102,11 +102,11 @@ var taskCancelCmd = &cobra.Command{
 WAITING_FOR_CHILDREN, AWAITING_INPUT, AWAITING_EXTERNAL or PAUSED status can be
 cancelled.
 
-Cancelling a parent also cancels its descendants (children, their children,
-and so on) that are PENDING, QUEUED, LEASED, RUNNING or WAITING_FOR_CHILDREN,
-and stops their running containers. A descendant that is PAUSED or awaiting
-input, an external event or approval is not cancelled by the cascade; list
-them with 'vornikctl task list --active --all' and cancel them by ID.`,
+Cancelling a parent also cancels every unfinished descendant (children, their
+children, and so on): PENDING, QUEUED, LEASED, RUNNING, WAITING_FOR_CHILDREN,
+PAUSED, AWAITING_INPUT, AWAITING_EXTERNAL and AWAITING_APPROVAL ones alike, and
+stops their running containers. Each records that it was cancelled with its
+ancestor. Finished descendants are left as they are.`,
 	Args: cobra.ExactArgs(1),
 	RunE: runTaskCancel,
 }
@@ -371,9 +371,9 @@ var taskListAPIPage = 200
 // taskListActiveStatuses is --active: persistence.CancellableTaskStatuses,
 // every status an operator must CONSIDER before a cancel pass. It is not a
 // promise that each row is cancellable from this CLI — `task cancel` refuses
-// AWAITING_APPROVAL (answer it with approve/reject) — nor that cancelling a
-// parent reaches every descendant: the cascade skips PAUSED and AWAITING_*
-// children (cli-design.md "Amended 2026-10-16, GitHub #408").
+// AWAITING_APPROVAL (answer it with approve/reject). Cancelling a parent does
+// reach every descendant in this set (GitHub #410, 05-scheduler §4.11
+// "Amended 2026-10-17"); cli-design.md "Amended 2026-10-16, GitHub #408".
 func taskListActiveStatuses() string {
 	sts := persistence.CancellableTaskStatuses()
 	names := make([]string, len(sts))

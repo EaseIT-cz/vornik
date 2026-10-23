@@ -346,7 +346,7 @@
           "refId": "C"
         },
         {
-          "expr": "rate(vornik_memory_graph_circuit_tripped_total[5m])",
+          "expr": "sum(rate(vornik_memory_graph_circuit_tripped_total[5m]))",
           "legendFormat": "circuit trips/s",
           "refId": "D"
         }

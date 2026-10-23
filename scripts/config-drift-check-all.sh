@@ -49,7 +49,7 @@ discover_trees() {
 	for unit in $units; do
 		# A unit template or a stray socket has no Environment; skip quietly.
 		env_line="$(systemctl --user show -p Environment "$unit" 2>/dev/null || true)"
-		tree="$(printf '%s' "$env_line" | tr ' ' '\n' | sed -n 's/^VORNIK_CONFIGS_DIR=//p' | head -1)"
+		tree="$(printf '%s' "$env_line" | tr ' ' '\n' | sed -n 's/^VORNIK_CONFIGS_DIR=//p' | sed -n 1p)"
 		[ -n "$tree" ] || tree="$DEFAULT_TREE"
 		printf '%s\n' "$tree"
 		found=1

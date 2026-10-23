@@ -250,6 +250,72 @@ func (s *Server) MemoryRegraph(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// MemoryRegraphQuarantined handles POST
+// /api/v1/memory/regraph/quarantined?[project=P]&[error_contains=S]&[dry_run=true].
+// Gives QUARANTINED chunks (the KG worker's failure bound reached) back to the
+// worker with their attempt counter reset — never a chunk that is not
+// quarantined — and reports, per project, the quarantined chunks examined,
+// the ones whose error contains S, and the ones re-flagged. Knowledge-graph
+// LLD §3.3b (2026-10-16): the recovery for the chunks #284 quarantined, which
+// the edge-less /regraph could not target.
+//
+// Authorisation is regraph's: a named project passes requestAllowsProject.
+// Without one the call spans every project, so a project-scoped key is
+// refused, as window-mode support reports are (resolveWindowScope).
+func (s *Server) MemoryRegraphQuarantined(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		respondError(w, http.StatusMethodNotAllowed, "METHOD_NOT_ALLOWED", "only POST is supported")
+		return
+	}
+	if s.memoryGraphReflagger == nil {
+		respondError(w, http.StatusServiceUnavailable, "MEMORY_REGRAPH_DISABLED",
+			"KG re-flag endpoint not wired on this deployment")
+		return
+	}
+	q := r.URL.Query()
+	projectID := q.Get("project")
+	errorContains := q.Get("error_contains")
+	dryRun := q.Get("dry_run") == "true"
+	if projectID == "" {
+		if _, scoped := requestScopedProjectSet(r); scoped {
+			respondError(w, http.StatusForbidden, "GLOBAL_KEY_REQUIRED",
+				"re-flagging quarantined chunks of every project needs a key that is not project-scoped; pass project")
+			return
+		}
+	} else if !requestAllowsProject(r, projectID) {
+		respondError(w, http.StatusForbidden, "FORBIDDEN", "project not allowed")
+		return
+	}
+
+	rows, err := s.memoryGraphReflagger.ReflagQuarantinedChunks(r.Context(), projectID, errorContains, dryRun)
+	if err != nil {
+		s.logger.Warn().Err(err).Str("project", projectID).Msg("memory regraph quarantined: reflag failed")
+		respondError(w, http.StatusInternalServerError, "REGRAPH_ERROR", "regraph failed")
+		return
+	}
+	out := MemoryGraphQuarantineReflagResult{
+		Project:       projectID,
+		ErrorContains: errorContains,
+		DryRun:        dryRun,
+		Projects:      make([]MemoryGraphQuarantineReflagRow, 0, len(rows)),
+	}
+	for _, c := range rows {
+		out.Projects = append(out.Projects, MemoryGraphQuarantineReflagRow{
+			Project: c.ProjectID, Quarantined: c.Quarantined, Matched: c.Matched, ReFlagged: c.ReFlagged,
+		})
+		out.Totals.Quarantined += c.Quarantined
+		out.Totals.Matched += c.Matched
+		out.Totals.ReFlagged += c.ReFlagged
+	}
+	if !dryRun && out.Totals.ReFlagged > 0 {
+		s.logger.Info().Str("project", projectID).Str("error_contains", errorContains).
+			Int("reflagged", out.Totals.ReFlagged).Int("matched", out.Totals.Matched).
+			Int("quarantined", out.Totals.Quarantined).
+			Msg("memory regraph quarantined: chunks re-flagged with attempts reset")
+	}
+	respondJSON(w, http.StatusOK, out)
+}
+
 // memorySearchResponse is the JSON response for GET /api/v1/projects/{id}/memory/search.
 // The routing fields (Verdict/Guidance/Basis) are emitted only when the
 // searcher supports confidence-based retrieval routing (P3); with routing off
@@ -347,6 +413,13 @@ func (s *Server) MemorySearch(w http.ResponseWriter, r *http.Request) {
 		results = []MemorySearchResult{}
 	}
 
+	// #454 / #456: a model-facing caller gets every caller-controlled
+	// chunk field wrapped. See wrapMemoryResultsForModel.
+	toModel := memorySearchCallerIsModel(r)
+	if toModel {
+		wrapMemoryResultsForModel(results)
+	}
+
 	resp := memorySearchResponse{Results: results}
 	if verdict != nil {
 		resp.RetrievalTrustVerdict = verdict.Verdict
@@ -358,5 +431,13 @@ func (s *Server) MemorySearch(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
-	_ = json.NewEncoder(w).Encode(resp)
+	enc := json.NewEncoder(w)
+	// A model-facing body goes to the model as printed (handle_memory_search
+	// does not decode it). Without HTML escaping the wrapper's markers reach
+	// it as the literal tags the Prelude names rather than < escapes;
+	// the content was already escaped by untrusted.WrapLabeled, which also
+	// folds <-style spellings (security review 2026-10-21). Operator
+	// callers keep the default encoding, byte for byte.
+	enc.SetEscapeHTML(!toModel)
+	_ = enc.Encode(resp)
 }

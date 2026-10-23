@@ -6,6 +6,8 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/rs/zerolog"
 	"vornik.io/vornik/internal/chat"
 	"vornik.io/vornik/internal/intentjudge"
@@ -52,7 +54,7 @@ func TestEvaluate_HeuristicOnly_PersistsRow(t *testing.T) {
 
 	v := cfg.evaluate(context.Background(), "assistant", nil, nil, nil,
 		"run_shell", `{"cmd":"echo hi"}`,
-		runSync, zerolog.Nop())
+		runSync, zerolog.Nop(), nil)
 
 	if v.Tier != intentjudge.TierHeuristic {
 		t.Errorf("Tier = %q, want heuristic", v.Tier)
@@ -82,7 +84,7 @@ func TestEvaluate_InsertFailureReturnsHeuristic(t *testing.T) {
 	cfg := &intentJudgeConfig{Repo: repo, RefineMinRisk: intentjudge.RiskMedium}
 
 	v := cfg.evaluate(context.Background(), "p", nil, nil, nil,
-		"run_shell", `{}`, runSync, zerolog.Nop())
+		"run_shell", `{}`, runSync, zerolog.Nop(), nil)
 	if v.Risk == "" {
 		t.Errorf("heuristic verdict missing despite insert failure: %+v", v)
 	}
@@ -103,7 +105,7 @@ func TestEvaluate_RefinerRunsAsync(t *testing.T) {
 
 	cfg.evaluate(context.Background(), "p", nil, nil, nil,
 		"run_shell", `{"cmd":"rm -rf /etc"}`,
-		runSync, zerolog.Nop())
+		runSync, zerolog.Nop(), nil)
 
 	if len(repo.inserted) != 1 {
 		t.Fatalf("inserted rows = %d, want 1", len(repo.inserted))
@@ -139,7 +141,7 @@ func TestEvaluate_RefinerSkippedBelowFloor(t *testing.T) {
 
 	cfg.evaluate(context.Background(), "p", nil, nil, nil,
 		"current_time", `{}`, // current_time is a known-benign tool
-		runSync, zerolog.Nop())
+		runSync, zerolog.Nop(), nil)
 
 	if len(repo.refined) != 0 {
 		t.Errorf("refined = %d, want 0 (below RefineMinRisk floor)", len(repo.refined))
@@ -156,7 +158,7 @@ func TestEvaluate_RefinerSkippedBelowFloor(t *testing.T) {
 // checking a.intentJudge first.
 func TestEvaluate_NilConfigSafe(t *testing.T) {
 	var cfg *intentJudgeConfig
-	v := cfg.evaluate(context.Background(), "p", nil, nil, nil, "t", "{}", runSync, zerolog.Nop())
+	v := cfg.evaluate(context.Background(), "p", nil, nil, nil, "t", "{}", runSync, zerolog.Nop(), nil)
 	if v.Risk != "" {
 		t.Errorf("nil config returned non-empty verdict: %+v", v)
 	}
@@ -267,7 +269,7 @@ func TestEvaluate_NoProjectSkipsPersistence(t *testing.T) {
 	// projectID is whitespace-only (global tool, e.g. list_projects).
 	v := cfg.evaluate(context.Background(), "  ", nil, nil, nil,
 		"list_projects", `{}`,
-		runSync, zerolog.Nop())
+		runSync, zerolog.Nop(), nil)
 
 	if v.Tier != intentjudge.TierHeuristic {
 		t.Errorf("Tier = %q, want heuristic verdict still returned", v.Tier)
@@ -278,4 +280,66 @@ func TestEvaluate_NoProjectSkipsPersistence(t *testing.T) {
 	if len(repo.refined) != 0 {
 		t.Errorf("no-project call must NOT run the async refiner; refined = %d", len(repo.refined))
 	}
+}
+
+// TestEvaluate_CountsEveryOutcome — GitHub #369, outcome-quality LLD S8.11
+// row 10a. Every intent-judge path was a Debug or a Warn with no metric, so
+// the NULL LLM columns of an intent_verdicts row read as "never refined"
+// whether the refiner was skipped, timed out or failed to persist. Each path
+// now counts vornik_dispatcher_intent_judge_total{outcome}.
+func TestEvaluate_CountsEveryOutcome(t *testing.T) {
+	refineJSON := `{"risk":"high","confidence":0.9,"recommendation":"review","reasoning":"x"}`
+	cases := []struct {
+		name    string
+		project string
+		repo    *memIntentVerdictRepo
+		refiner *intentjudge.LLMRefiner
+		want    map[string]float64
+	}{
+		{"no project", " ", &memIntentVerdictRepo{}, nil,
+			map[string]float64{"no_project": 1}},
+		{"insert failed", "p", &memIntentVerdictRepo{failInsert: true}, nil,
+			map[string]float64{"insert_failed": 1}},
+		{"recorded only", "p", &memIntentVerdictRepo{}, nil,
+			map[string]float64{"recorded": 1}},
+		{"refined", "p", &memIntentVerdictRepo{},
+			&intentjudge.LLMRefiner{Provider: &stubProvider{resp: respWith(refineJSON)}},
+			map[string]float64{"recorded": 1, "refined": 1}},
+		{"refine error", "p", &memIntentVerdictRepo{},
+			&intentjudge.LLMRefiner{Provider: &stubProvider{err: errors.New("upstream 500")}},
+			map[string]float64{"recorded": 1, "refine_error": 1}},
+		{"refine timeout", "p", &memIntentVerdictRepo{},
+			&intentjudge.LLMRefiner{Provider: &stubProvider{err: context.DeadlineExceeded}},
+			map[string]float64{"recorded": 1, "refine_timeout": 1}},
+		{"refine cancelled", "p", &memIntentVerdictRepo{},
+			&intentjudge.LLMRefiner{Provider: &stubProvider{err: context.Canceled}},
+			map[string]float64{"recorded": 1, "refine_cancelled": 1}},
+		{"refine upsert failed", "p", &memIntentVerdictRepo{failRefine: true},
+			&intentjudge.LLMRefiner{Provider: &stubProvider{resp: respWith(refineJSON)}},
+			map[string]float64{"recorded": 1, "refine_upsert_failed": 1}},
+	}
+	all := []string{"recorded", "no_project", "insert_failed", "refined",
+		"refine_timeout", "refine_cancelled", "refine_error", "refine_upsert_failed"}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			m := NewMetrics(prometheus.NewRegistry())
+			cfg := &intentJudgeConfig{Repo: c.repo, Refiner: c.refiner, RefineMinRisk: intentjudge.RiskLow}
+			cfg.evaluate(context.Background(), c.project, nil, nil, nil,
+				"run_shell", `{"cmd":"rm -rf /etc"}`, runSync, zerolog.Nop(), m)
+			for _, o := range all {
+				got := testutil.ToFloat64(m.IntentJudgeTotal.WithLabelValues(o))
+				if got != c.want[o] {
+					t.Errorf("intent_judge_total{outcome=%q} = %v, want %v", o, got, c.want[o])
+				}
+			}
+		})
+	}
+}
+
+// TestEvaluate_NilMetricsSafe — row 10a: evaluate with no metrics wired
+// (tests, telemetry off) must not panic on any path.
+func TestEvaluate_NilMetricsSafe(_ *testing.T) {
+	cfg := &intentJudgeConfig{Repo: &memIntentVerdictRepo{failInsert: true}, RefineMinRisk: intentjudge.RiskLow}
+	cfg.evaluate(context.Background(), "p", nil, nil, nil, "t", "{}", runSync, zerolog.Nop(), nil)
+	cfg.evaluate(context.Background(), "", nil, nil, nil, "t", "{}", runSync, zerolog.Nop(), nil)
 }

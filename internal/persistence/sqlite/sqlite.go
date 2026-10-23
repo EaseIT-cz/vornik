@@ -327,6 +327,13 @@ var sqliteAdditiveColumns = []additiveColumn{
 	{"project_memory_chunks", "source_name", `TEXT`},
 	{"project_memory_chunks", "artifact_id", `TEXT`},
 	{"project_memory_chunks", "expires_at", `TEXT`},
+	// Who wrote a chunk, who verified it, and its task: long on the Postgres
+	// table (migration 23 and the original chunk shape). The verification
+	// repository (design 22, amendment #482) reads and writes them on both
+	// drivers. Nullable, no backfill.
+	{"project_memory_chunks", "producer_role", `TEXT`},
+	{"project_memory_chunks", "validator_role", `TEXT`},
+	{"project_memory_chunks", "task_id", `TEXT`},
 	// Postgres migration 200 — a document ingest's path in its repository
 	// (memory rollback x supersession design, amendment 2026-09-26). Nullable,
 	// no backfill: NULL means "not a document ingest".
@@ -374,6 +381,11 @@ var sqliteAdditiveColumns = []additiveColumn{
 	{"agent_integration_approvals", "account_label", `TEXT NOT NULL DEFAULT 'default'`},
 	{"agent_integration_approvals", "account_identity", `TEXT NOT NULL DEFAULT ''`},
 	{"agent_integration_approvals", "identity_source", `TEXT NOT NULL DEFAULT '' CHECK (identity_source IN ('', 'agent', 'provider'))`},
+	// Postgres migration 233 — an approved agent read tool the daemon
+	// suspended, sticky until a re-add (agent-administered design §6.5,
+	// amendment #481). Defaults: nothing suspended.
+	{"agent_integration_approvals", "suspended_tools", `TEXT NOT NULL DEFAULT '[]'`},
+	{"agent_integration_approvals", "suspended_at", `TEXT`},
 	// Postgres migration 220 — the account a standing grant was made under
 	// (operator decision 2026-10-09; design §22.2.16).
 	{"broker_standing_grants", "account_label", `TEXT NOT NULL DEFAULT ''`},
@@ -387,6 +399,10 @@ var sqliteAdditiveColumns = []additiveColumn{
 	// #347; learning-loop design, amendment 2026-10-13). Nullable, no
 	// backfill: NULL is "not recorded", which the skill distiller refuses.
 	{"tasks", "goal_origin", `TEXT`},
+	// Postgres migration 232 — why the judge did not decide on full evidence
+	// (GitHub #369; outcome-quality-design §S8.11 row 8a). Nullable, no
+	// backfill: NULL is an evaluation on full evidence.
+	{"task_judge_verdicts", "failure_class", `TEXT`},
 }
 
 // applyAdditiveColumns adds any registered column missing from an existing

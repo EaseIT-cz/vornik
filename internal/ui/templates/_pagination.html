@@ -1,26 +1,31 @@
 {{/*
   Reusable pagination controls. Pass a ui.Paginator:
       {{template "pagination" .Paginator}}
-  Renders nothing for an empty list. Prev/Next preserve all other
-  query params (status filters, etc.) via the URLs built in Go.
+  Renders nothing for an empty list with a known total. Prev/Next preserve
+  all other query params (status filters, etc.) via the URLs built in Go.
+  Accessibility (#335 conventions, web-ui-design.md #411 item 9): a labelled
+  <nav> landmark; visible text names with the glyphs aria-hidden; rel on the
+  links; disabled controls are spans marked aria-disabled; control boundaries
+  on the --control-border token; no inline handlers. The summary is not a
+  live region: pages that auto-refresh would re-announce it.
 */}}
 {{define "pagination"}}
-{{if gt .Total 0}}
-<div class="flex items-center justify-between mt-3 text-[11px] text-gray-400">
-  <span>Showing {{.Start}}–{{.End}} of {{.Total}}</span>
+{{if or (gt .Total 0) .Unknown}}
+<nav aria-label="{{if .Label}}{{.Label}}{{else}}Pagination{{end}}" class="flex flex-wrap items-center justify-between gap-x-3 gap-y-1 mt-3 text-[11px] text-gray-400">
+  <span>{{if .Unknown}}{{if gt .End 0}}Showing {{.Start}}–{{.End}}; the total could not be counted{{else}}No rows on this page; the total could not be counted{{end}}{{else}}Showing {{.Start}}–{{.End}} of {{.Total}}{{if .Noun}} {{.Noun}}{{end}}{{end}}</span>
   <div class="flex items-center gap-2">
     {{if .HasPrev}}
-    <a href="{{.PrevURL}}" class="tap px-2 py-1 rounded-md border border-dark-700 hover:border-dark-600 text-gray-300">‹ Prev</a>
+    <a href="{{.PrevURL}}" rel="prev" class="tap inline-flex items-center px-2 py-1 rounded-md border border-control hover:border-dark-600 text-gray-300"><span aria-hidden="true">‹ </span>Prev</a>
     {{else}}
-    <span class="px-2 py-1 rounded-md border border-dark-800 text-gray-600">‹ Prev</span>
+    <span aria-disabled="true" class="tap inline-flex items-center px-2 py-1 rounded-md border border-dark-800 text-gray-600"><span aria-hidden="true">‹ </span>Prev</span>
     {{end}}
-    <span>Page {{.Page}} / {{.Pages}}</span>
+    <span>Page {{.Page}}{{if not .Unknown}} / {{.Pages}}{{end}}</span>
     {{if .HasNext}}
-    <a href="{{.NextURL}}" class="tap px-2 py-1 rounded-md border border-dark-700 hover:border-dark-600 text-gray-300">Next ›</a>
+    <a href="{{.NextURL}}" rel="next" class="tap inline-flex items-center px-2 py-1 rounded-md border border-control hover:border-dark-600 text-gray-300">Next<span aria-hidden="true"> ›</span></a>
     {{else}}
-    <span class="px-2 py-1 rounded-md border border-dark-800 text-gray-600">Next ›</span>
+    <span aria-disabled="true" class="tap inline-flex items-center px-2 py-1 rounded-md border border-dark-800 text-gray-600">Next<span aria-hidden="true"> ›</span></span>
     {{end}}
   </div>
-</div>
+</nav>
 {{end}}
 {{end}}

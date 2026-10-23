@@ -857,6 +857,17 @@ func (e *ApplyEngine) Rollback(ctx context.Context, id string) error {
 	if p.Status != persistence.ProposalStatusApplied {
 		return persistence.ErrProposalNotApplied
 	}
+	// A ROLLBACK IS A WRITE, and this one was the only writer in the engine
+	// that never consulted the config-writer lease (GitHub #447, 2026-10-21;
+	// journal design §14.3). The canary guard calls it under a DIFFERENT
+	// lease, so in a two-daemon deployment the daemon that is not the config
+	// writer restored pre-images over a tree the writer owns, with no journal
+	// row for the writer to recover from. The rule is §10.1's: a process
+	// without the lease does not write in either direction. Checked before
+	// any mutation, kind-applier and file paths alike.
+	if isFenced, reason := e.fenced(ctx); isFenced {
+		return fmt.Errorf("%w: %s (rollback refused; nothing was written, the proposal stays APPLIED)", ErrWriterFenced, reason)
+	}
 	if ka := e.kindApplier(p.Kind); ka != nil {
 		if err := ka.Rollback(ctx, p); err != nil {
 			return err
@@ -877,6 +888,14 @@ func (e *ApplyEngine) Rollback(ctx context.Context, id string) error {
 	}
 	if p.PreApplySnapshot == "" {
 		return ErrSnapshotMissing
+	}
+	// Again immediately before the first file write, after rollbackUnsafe's
+	// ledger reads, so the check-to-write window is as short as the forward
+	// path's (§14.3). The ledger write after the restore is deliberately not
+	// fenced: there is no journal row to leave for the writer, and refusing it
+	// would leave APPLIED over a tree at the pre-image (stated residual).
+	if isFenced, reason := e.fenced(ctx); isFenced {
+		return fmt.Errorf("%w: %s (rollback refused; nothing was written, the proposal stays APPLIED)", ErrWriterFenced, reason)
 	}
 	if err := e.restoreSnapshot(p); err != nil {
 		return err

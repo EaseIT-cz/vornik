@@ -254,20 +254,43 @@ func TestBuildPreImageArgsCarriesTheMemoryLimit(t *testing.T) {
 		return strings.Join(m.buildPreImageArgs(config), " ")
 	}
 
+	// GitHub #379 (2026.10.6 delta audit #334): --memory alone lets podman
+	// give the container swap up to the limit (memory.swap.max = limit), so
+	// an agent filled host swap before its OOM kill. Every bounded argv must
+	// carry --memory-swap equal to --memory, whichever path set the limit.
+	swapless := func(t *testing.T, args string, limit int64) {
+		t.Helper()
+		n := strconv.FormatInt(limit, 10)
+		if !strings.Contains(" "+args+" ", " --memory-swap="+n+" ") {
+			t.Fatalf("argv has no --memory-swap=%s, so podman allows swap up to the limit (#379): %s", n, args)
+		}
+		if !strings.Contains(" "+args+" ", " --memory="+n+" ") {
+			t.Fatalf("argv has no --memory=%s: %s", n, args)
+		}
+		if c := strings.Count(args, "--memory"); c != 2 {
+			t.Fatalf("argv carries %d --memory* flags, want exactly 2: %s", c, args)
+		}
+	}
+
 	t.Run("the manager default reaches podman for a bare config", func(t *testing.T) {
 		m := &Manager{agentMemoryLimit: 2 * gib}
-		args := joined(m, &ContainerConfig{Role: "coder"})
-		if !strings.Contains(args, "--memory "+strconv.FormatInt(2*gib, 10)) {
-			t.Fatalf("argv has no --memory for the manager default: %s", args)
-		}
+		swapless(t, joined(m, &ContainerConfig{Role: "coder"}), 2*gib)
 	})
 
 	t.Run("a per-container override wins", func(t *testing.T) {
 		m := &Manager{agentMemoryLimit: 2 * gib}
-		args := joined(m, &ContainerConfig{Role: "coder", MemoryLimit: 4 * gib})
-		if !strings.Contains(args, "--memory "+strconv.FormatInt(4*gib, 10)) {
-			t.Fatalf("argv ignored the override: %s", args)
-		}
+		swapless(t, joined(m, &ContainerConfig{Role: "coder", MemoryLimit: 4 * gib}), 4*gib)
+	})
+
+	t.Run("a per-container override under an unbounded default", func(t *testing.T) {
+		m := &Manager{}
+		swapless(t, joined(m, &ContainerConfig{Role: "coder", MemoryLimit: 3 * gib}), 3*gib)
+	})
+
+	// The warm pool starts its containers through the same builder.
+	t.Run("a warm-pool container is swapless too", func(t *testing.T) {
+		m := &Manager{agentMemoryLimit: 2 * gib}
+		swapless(t, joined(m, &ContainerConfig{Role: "coder", LifecyclePolicy: PolicyWarm}), 2*gib)
 	})
 
 	// The escape hatch has to actually escape: no manager limit means no flag,

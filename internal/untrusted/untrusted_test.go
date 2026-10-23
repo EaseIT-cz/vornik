@@ -26,7 +26,8 @@ func TestWrapNeutralisesEmbeddedCloseTag(t *testing.T) {
 	if strings.Contains(inner, closeTag) {
 		t.Fatalf("wrapped inner content still contains raw close tag: %q", inner)
 	}
-	if !strings.Contains(inner, "<\u200b/untrusted_content>") {
+	// #453: the escape is visible (&lt;), no longer a zero-width space.
+	if !strings.Contains(inner, "&lt;/untrusted_content>") {
 		t.Fatalf("wrapped inner content missing neutralised close tag: %q", inner)
 	}
 }

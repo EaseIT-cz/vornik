@@ -34,7 +34,11 @@ func TestSameOrigin_Ladder(t *testing.T) {
 	}{
 		{"same-origin", map[string]string{"Sec-Fetch-Site": "same-origin"}, true},
 		{"same-site", map[string]string{"Sec-Fetch-Site": "same-site"}, true},
-		{"none (typed URL)", map[string]string{"Sec-Fetch-Site": "none"}, true},
+		// GitHub #448: none (no initiating page) is not a same-origin signal;
+		// it falls through to the Origin rung.
+		{"none (typed URL) without Origin", map[string]string{"Sec-Fetch-Site": "none"}, false},
+		{"none with a matching Origin", map[string]string{"Sec-Fetch-Site": "none", "Origin": "http://vornik.test"}, true},
+		{"none with a foreign Origin", map[string]string{"Sec-Fetch-Site": "none", "Origin": "http://evil.test"}, false},
 		{"cross-site", map[string]string{"Sec-Fetch-Site": "cross-site", "Origin": "http://vornik.test"}, false},
 		{"origin matches host", map[string]string{"Origin": "http://vornik.test"}, true},
 		{"origin differs", map[string]string{"Origin": "http://evil.test"}, false},
@@ -137,8 +141,19 @@ func TestSameOriginLadderHasOneImplementation(t *testing.T) {
 			return rerr
 		}
 		scanned++
-		if strings.Contains(string(b), `case "same-origin", "same-site", "none":`) {
-			offenders = append(offenders, path)
+		// GitHub #494 (cloudflare-real-ip-design amendment, change item 4):
+		// the law matched one exact spelling of the ladder, so a copy spelled
+		// differently passed. Any non-comment line naming a Sec-Fetch-Site
+		// verdict literal outside internal/approval is a second ladder.
+		for _, line := range strings.Split(string(b), "\n") {
+			trimmed := strings.TrimSpace(line)
+			if strings.HasPrefix(trimmed, "//") {
+				continue
+			}
+			if strings.Contains(trimmed, `"cross-site"`) || strings.Contains(trimmed, `"same-origin"`) || strings.Contains(trimmed, `"same-site"`) {
+				offenders = append(offenders, path)
+				break
+			}
 		}
 		return nil
 	})
@@ -151,6 +166,99 @@ func TestSameOriginLadderHasOneImplementation(t *testing.T) {
 	}
 	if len(offenders) > 0 {
 		t.Fatalf("same-origin ladder duplicated outside internal/approval: %v — call approval.SameOrigin", offenders)
+	}
+	// The law must also see the ladder where it lives, so it fails if the
+	// ladder moves out of this package rather than passing over nothing.
+	own, err := os.ReadFile(filepath.Join(filepath.Dir(here), "approval.go"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(own), `"cross-site"`) || !strings.Contains(string(own), `"same-origin"`) || !strings.Contains(string(own), `"same-site"`) {
+		t.Fatal("same-origin ladder law: internal/approval/approval.go no longer holds the ladder's literals; update the law with the ladder")
+	}
+}
+
+// GitHub #494 (review abd2 F3): CrossSiteWrite exempts a request carrying
+// X-API-Key or a non-Basic Authorization header because a cross-site page
+// cannot set either without a CORS preflight, and the daemon grants none. A
+// later Access-Control-Allow-* header anywhere would open that exemption
+// silently, so its absence is pinned here.
+func TestNoCORSAllowHeaderOutsideTests_Issue494(t *testing.T) {
+	_, here, _, _ := runtime.Caller(0)
+	repoRoot := filepath.Join(filepath.Dir(here), "..", "..")
+	var offenders []string
+	scanned := 0
+	for _, dir := range []string{"internal", "cmd"} {
+		root := filepath.Join(repoRoot, dir)
+		werr := filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
+			if err != nil {
+				return err
+			}
+			if info.IsDir() && repowalk.SkipDir(root, path, info.Name()) {
+				return filepath.SkipDir
+			}
+			if info.IsDir() || !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
+				return nil
+			}
+			b, rerr := os.ReadFile(path)
+			if rerr != nil {
+				return rerr
+			}
+			scanned++
+			if strings.Contains(string(b), "Access-Control-Allow") {
+				offenders = append(offenders, path)
+			}
+			return nil
+		})
+		if werr != nil {
+			t.Fatalf("walk %s: %v", root, werr)
+		}
+	}
+	t.Logf("CORS law: examined %d non-test Go files under internal/ and cmd/", scanned)
+	if scanned < 100 {
+		t.Fatalf("CORS law: examined %d files (floor 100); a law that looked at nothing has not passed", scanned)
+	}
+	if len(offenders) > 0 {
+		t.Fatalf("Access-Control-Allow-* set in %v: approval.CrossSiteWrite's header-credential exemption assumes no CORS grant; revisit it before granting one", offenders)
+	}
+}
+
+// GitHub #494 (2026-10-21, cloudflare-real-ip-design "Amendment 2026-10-21
+// (#494, #448)", change item 2): the auth-off CSRF rule. An unsafe method
+// that carries a browser origin signal, fails the ladder and carries no
+// header-borne credential is a cross-site write.
+func TestCrossSiteWrite_Issue494(t *testing.T) {
+	cases := []struct {
+		name    string
+		method  string
+		headers map[string]string
+		want    bool
+	}{
+		{"cross-site POST", http.MethodPost, map[string]string{"Sec-Fetch-Site": "cross-site"}, true},
+		{"foreign Origin POST", http.MethodPost, map[string]string{"Origin": "http://evil.test"}, true},
+		{"Origin null (sandboxed frame)", http.MethodPost, map[string]string{"Origin": "null"}, true},
+		{"none without Origin", http.MethodPost, map[string]string{"Sec-Fetch-Site": "none"}, true},
+		{"cross-site PUT", http.MethodPut, map[string]string{"Sec-Fetch-Site": "cross-site"}, true},
+		{"cross-site DELETE", http.MethodDelete, map[string]string{"Origin": "http://evil.test"}, true},
+		{"cross-site with Basic", http.MethodPost, map[string]string{"Sec-Fetch-Site": "cross-site", "Authorization": "Basic YXBpOng="}, true},
+		// Review d85e F1: same-site is true for another port of the same IP
+		// or host (a page on 127.0.0.1:3000 posting to 127.0.0.1:8080), so the
+		// auth-off gate requires same-ORIGIN.
+		{"same-site (another port)", http.MethodPost, map[string]string{"Sec-Fetch-Site": "same-site"}, true},
+		{"same-site with Origin equal to Host", http.MethodPost, map[string]string{"Sec-Fetch-Site": "same-site", "Origin": "http://vornik.test"}, true},
+		{"no browser signal (CLI)", http.MethodPost, nil, false},
+		{"same-origin", http.MethodPost, map[string]string{"Sec-Fetch-Site": "same-origin"}, false},
+		{"Origin equals Host", http.MethodPost, map[string]string{"Origin": "http://vornik.test"}, false},
+		{"cross-site with X-API-Key", http.MethodPost, map[string]string{"Sec-Fetch-Site": "cross-site", "X-API-Key": "k"}, false},
+		{"cross-site with Bearer", http.MethodPost, map[string]string{"Sec-Fetch-Site": "cross-site", "Authorization": "Bearer k"}, false},
+		{"cross-site GET", http.MethodGet, map[string]string{"Sec-Fetch-Site": "cross-site"}, false},
+		{"cross-site HEAD", http.MethodHead, map[string]string{"Sec-Fetch-Site": "cross-site"}, false},
+		{"cross-site OPTIONS", http.MethodOptions, map[string]string{"Sec-Fetch-Site": "cross-site"}, false},
+	}
+	for _, tc := range cases {
+		if got := CrossSiteWrite(req(tc.method, tc.headers)); got != tc.want {
+			t.Errorf("%s: CrossSiteWrite = %v, want %v", tc.name, got, tc.want)
+		}
 	}
 }
 

@@ -27,7 +27,7 @@
             <div class="flex items-center justify-between gap-3">
                 <p class="text-xs text-gray-500">{{len .Sessions}} active session{{if ne (len .Sessions) 1}}s{{end}}. Terminating a session signs that browser out immediately. Your own current session is protected.</p>
                 <form method="post" action="/ui/admin/users/{{.UserID}}/sessions/terminate-all">
-                    <button class="text-xs text-red-800 dark:text-red-400 hover:text-red-700 dark:text-red-300 px-2 py-1 rounded-md border border-dark-600" onclick="return confirm('Terminate all other sessions for this user?')">Terminate all</button>
+                    <button class="text-xs text-red-800 dark:text-red-400 hover:text-red-700 dark:text-red-300 px-2 py-1 rounded-md border border-dark-600" data-confirm="Terminate all other sessions for this user?">Terminate all</button>
                 </form>
             </div>
 

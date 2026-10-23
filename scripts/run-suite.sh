@@ -26,7 +26,7 @@ if [ "$rc" -ne 0 ]; then
   # assertion followed by more output than the tail keeps must not be lost
   # behind it. Then the tail, for context and for a suite that marks nothing.
   echo "FAILED: $suite (exit $rc)"
-  fails="$(grep -nE '(^|[[:space:]])(FAIL|FAILED|ERROR)([[:space:]:]|$)' "$log" | head -n 50)"
+  fails="$(grep -nE '(^|[[:space:]])(FAIL|FAILED|ERROR)([[:space:]:]|$)' "$log" | sed -n 1,50p)"
   if [ -n "$fails" ]; then
     echo "  FAIL lines in its output:"
     printf '%s\n' "$fails" | sed 's/^/  | /'

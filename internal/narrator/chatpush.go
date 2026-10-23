@@ -88,8 +88,16 @@ func (n *Narrator) pushChatMilestone(ctx context.Context, kind triggerKind, st *
 	if n.Tasks == nil || n.Audit == nil || n.Resolver == nil {
 		return
 	}
+	// Each skip below is counted (outcome-quality LLD §S8.11 row 11c, GitHub
+	// #369): a lookup error and a missing task used to return silently.
 	task, err := n.Tasks.Get(ctx, st.taskID)
-	if err != nil || task == nil {
+	if err != nil {
+		n.Logger.Warn().Err(err).Str("task_id", st.taskID).Msg("narrator: chat push task lookup failed; not pushed")
+		n.metricDropped("chatpush_lookup_error")
+		return
+	}
+	if task == nil {
+		n.metricDropped("chatpush_task_missing")
 		return
 	}
 	// SHARED with internal/steering's Notifier via internal/chatorigin — a
@@ -127,6 +135,7 @@ func (n *Narrator) pushChatMilestone(ctx context.Context, kind triggerKind, st *
 	if _, err := conversation.SendDisclosed(ctx, n.Disclosure, res.Channel, msg, true); err != nil {
 		n.Logger.Warn().Err(err).Str("task_id", st.taskID).Str("channel", res.ChannelName).
 			Msg("narrator: chat push send failed")
+		n.metricDropped("chatpush_send_error")
 		return
 	}
 	n.Logger.Debug().Str("task_id", st.taskID).Str("channel", res.ChannelName).Str("kind", string(kind)).

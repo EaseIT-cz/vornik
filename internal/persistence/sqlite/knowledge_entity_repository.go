@@ -127,8 +127,12 @@ func (r *KnowledgeEntityRepository) List(ctx context.Context, filter persistence
 		}
 	}
 	if filter.NameLike != "" {
-		b.WriteString(" AND canonical_name LIKE ?")
-		args = append(args, "%"+filter.NameLike+"%")
+		// GitHub #449: a literal substring, ASCII-case-insensitive — the
+		// same rule as the Postgres driver (KG design §6.1 amendment
+		// 2026-10-21). lower() is ASCII-only in SQLite; lowering both sides
+		// keeps the rule under PRAGMA case_sensitive_like.
+		b.WriteString(` AND lower(canonical_name) LIKE ? ESCAPE '\'`)
+		args = append(args, persistence.LikeContainsFold(filter.NameLike))
 	}
 	b.WriteString(" ORDER BY canonical_name ASC LIMIT ? OFFSET ?")
 	args = append(args, limit, filter.Offset)

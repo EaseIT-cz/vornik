@@ -3,7 +3,8 @@
 <h1>Waiting for you</h1>
 {{with .Flash}}<p class="flash">Done: {{.}}.</p>{{end}}
 {{with .Refused}}<p class="err">Not decided, because it changed after you opened it or was already decided: {{range $i, $id := .}}{{if $i}}, {{end}}<a class="ref" href="/ui/approve/{{$id}}">{{$id}}</a>{{end}}. Review it again.</p>{{end}}
-{{range .Groups}}<div class="card"><p>{{.Count}} waiting: {{.Title}}</p><a class="act" href="/ui/approve/group/{{.Key}}">Review together</a></div>
+{{range .Withheld}}<div class="card"><p>{{.}}</p></div>
+{{end}}{{range .Groups}}<div class="card"><p>{{.Count}} waiting: {{.Title}}</p><a class="act" href="/ui/approve/group/{{.Key}}">Review together</a></div>
 {{end}}
 {{range .Pending}}<div class="card"><p>{{.Sentence}}</p><p class="mut">{{when .CreatedAt}}</p><a class="act" href="/ui/approve/{{.ID}}">Review</a></div>
 {{else}}{{if not .Groups}}<div class="card"><p class="mut">Nothing is waiting for a decision.</p></div>{{end}}{{end}}

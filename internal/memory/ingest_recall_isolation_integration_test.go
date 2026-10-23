@@ -130,7 +130,10 @@ func openIngestRecallDB(t *testing.T) *sql.DB {
 			ingestRecallMigrateErr = cfgErr
 			return
 		}
-		mctx, mcancel := context.WithTimeout(context.Background(), 2*time.Minute)
+		// The cause names this harness in the migration runner's error if
+		// the budget ends mid-chain (GitHub #424).
+		mctx, mcancel := context.WithTimeoutCause(context.Background(), 2*time.Minute,
+			errors.New("internal/memory isolation harness migration budget of 2m0s ran out"))
 		defer mcancel()
 		pg, connErr := postgres.Connect(mctx, pgCfg)
 		if connErr != nil {

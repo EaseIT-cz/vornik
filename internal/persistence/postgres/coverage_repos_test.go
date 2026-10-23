@@ -234,9 +234,9 @@ func TestTaskJudgeVerdictRepository_RecordAndQuery(t *testing.T) {
 		WithArgs("t1").
 		WillReturnRows(sqlmock.NewRows([]string{
 			"id", "project_id", "task_id", "role", "model", "verdict",
-			"confidence", "signals", "summary", "cost_usd", "recorded_at",
+			"confidence", "signals", "summary", "cost_usd", "recorded_at", "failure_class",
 		}).AddRow("tv-1", "p1", "t1", "judge", "m", "pass",
-			0.9, []byte(`{"s":1}`), "ok", 0.001, now))
+			0.9, []byte(`{"s":1}`), "ok", 0.001, now, "llm_timeout"))
 	got, err := repo.GetByTask(context.Background(), "t1")
 	if err != nil {
 		t.Fatalf("GetByTask: %v", err)
@@ -246,6 +246,10 @@ func TestTaskJudgeVerdictRepository_RecordAndQuery(t *testing.T) {
 	}
 	if len(got.Signals) == 0 {
 		t.Error("Signals should be populated")
+	}
+	// GitHub #369, outcome-quality LLD S8.11 row 8a.
+	if got.FailureClass != "llm_timeout" {
+		t.Errorf("FailureClass = %q, want llm_timeout", got.FailureClass)
 	}
 
 	// GetByTask missing.
@@ -261,15 +265,17 @@ func TestTaskJudgeVerdictRepository_RecordAndQuery(t *testing.T) {
 		WithArgs("p1", 50).
 		WillReturnRows(sqlmock.NewRows([]string{
 			"id", "project_id", "task_id", "role", "model", "verdict",
-			"confidence", "signals", "summary", "cost_usd", "recorded_at",
+			"confidence", "signals", "summary", "cost_usd", "recorded_at", "failure_class",
 		}).AddRow("tv-1", "p1", "t1", "judge", "m", "pass",
-			0.9, []byte("{}"), "ok", 0.001, now))
+			0.9, []byte("{}"), "ok", 0.001, now, nil))
 	out, err := repo.ListRecent(context.Background(), "p1", 0)
 	if err != nil {
 		t.Fatalf("ListRecent: %v", err)
 	}
 	if len(out) != 1 {
 		t.Errorf("len = %d", len(out))
+	} else if out[0].FailureClass != "" {
+		t.Errorf("NULL failure_class read as %q, want empty", out[0].FailureClass)
 	}
 
 	// ListRecent global.
@@ -277,7 +283,7 @@ func TestTaskJudgeVerdictRepository_RecordAndQuery(t *testing.T) {
 		WithArgs(5).
 		WillReturnRows(sqlmock.NewRows([]string{
 			"id", "project_id", "task_id", "role", "model", "verdict",
-			"confidence", "signals", "summary", "cost_usd", "recorded_at",
+			"confidence", "signals", "summary", "cost_usd", "recorded_at", "failure_class",
 		}))
 	if _, err := repo.ListRecent(context.Background(), "", 5); err != nil {
 		t.Fatalf("ListRecent global: %v", err)

@@ -13,6 +13,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"vornik.io/vornik/internal/memory"
+	"vornik.io/vornik/internal/memoryscope"
 )
 
 // Legacy document cleanup (memory rollback x supersession design,
@@ -200,30 +201,9 @@ func checkoutScope(root string) (string, error) {
 	return normalizeRemote(strings.TrimSpace(string(url))), nil
 }
 
-// normalizeRemote turns a git remote URL into the host/path scope token, with
-// the same rules as the companion plugin's normalize_remote: strip ".git",
-// the scheme, and a leading "user@", then "host:path" becomes "host/path".
-func normalizeRemote(url string) string {
-	url = strings.TrimSuffix(url, ".git")
-	for _, pre := range []string{"https://", "http://", "ssh://"} {
-		url = strings.TrimPrefix(url, pre)
-	}
-	if at := strings.Index(url, "@"); at > 0 {
-		sep := -1
-		for _, i := range []int{strings.Index(url, ":"), strings.Index(url, "/")} {
-			if i != -1 && (sep == -1 || i < sep) {
-				sep = i
-			}
-		}
-		if sep == -1 || at < sep {
-			url = url[at+1:]
-		}
-	}
-	if i := strings.Index(url, ":"); i != -1 && !strings.Contains(url[:i], "/") {
-		url = url[:i] + "/" + url[i+1:]
-	}
-	return url
-}
+// normalizeRemote is memoryscope.NormalizeRemote, the companion plugin's rule
+// (moved there for the provenance verifier, design 22 amendment #482).
+func normalizeRemote(url string) string { return memoryscope.NormalizeRemote(url) }
 
 var (
 	legacyDocsProject  string

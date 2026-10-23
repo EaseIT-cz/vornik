@@ -33,7 +33,7 @@ func TestStateCov_ResumeTaskWrapsResumeError(t *testing.T) {
 // exits immediately).
 func TestStateCov_ResumeTaskHappyPathReturnsNil(t *testing.T) {
 	e, _, er, _, tr := setup()
-	tr.AddTask(&persistence.Task{ID: "t1", ProjectID: "p1", CreatedAt: time.Now()})
+	tr.AddTask(&persistence.Task{ID: "t1", ProjectID: "p1", Status: persistence.TaskStatusPaused, CreatedAt: time.Now()})
 	_ = er.Create(context.Background(), &persistence.Execution{
 		ID: "e1", TaskID: "t1", Status: persistence.ExecutionStatusPaused,
 	})
@@ -75,7 +75,7 @@ func TestStateCov_ResumeGetByTaskIDError(t *testing.T) {
 // specific of the resume-state arms).
 func TestStateCov_ResumeApprovalPendingBranch(t *testing.T) {
 	e, _, er, _, tr := setup()
-	tr.AddTask(&persistence.Task{ID: "t1", ProjectID: "p1", CreatedAt: time.Now()})
+	tr.AddTask(&persistence.Task{ID: "t1", ProjectID: "p1", Status: persistence.TaskStatusPending, CreatedAt: time.Now()})
 	_ = er.Create(context.Background(), &persistence.Execution{
 		ID:            "e1",
 		TaskID:        "t1",
@@ -107,7 +107,7 @@ func TestStateCov_ResumeApprovalPendingBranch(t *testing.T) {
 // a later Recover() doesn't treat it as still operator-parked.
 func TestStateCov_ResumeOperatorPausedClearsReason(t *testing.T) {
 	e, _, er, _, tr := setup()
-	tr.AddTask(&persistence.Task{ID: "t1", ProjectID: "p1", CreatedAt: time.Now()})
+	tr.AddTask(&persistence.Task{ID: "t1", ProjectID: "p1", Status: persistence.TaskStatusPaused, CreatedAt: time.Now()})
 	_ = er.Create(context.Background(), &persistence.Execution{
 		ID:            "e1",
 		TaskID:        "t1",

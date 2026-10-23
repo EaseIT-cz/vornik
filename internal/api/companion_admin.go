@@ -289,7 +289,8 @@ func companionAdminToolDefs() []mcpToolDef {
 					"credential": str("For static: the credential NAME (A-Z, 0-9, _). The user enters its value on their phone; you never see it."),
 					"scopes":     map[string]any{"type": "array", "maxItems": 20, "items": map[string]any{"type": "string"}, "description": "For oauth: the scopes to ask for."}}, "mode"),
 				"write_tools": map[string]any{"type": "array", "maxItems": 16, "items": map[string]any{"type": "string"},
-					"description": "Optional: the server's tools that change something (send, delete, pay). No role can call them; a workflow can only propose them, and the user approves each change on their phone."},
+					"description": "Optional: the server's tools that change something (send, delete, pay). No role can call them; a workflow can only propose them, and the user approves each change on their phone. " +
+						"A tool Vornik judges to change something that you do not name here is not approved at all, never as a read."},
 				"transport": map[string]any{"type": "string", "enum": []string{agentadmin.TransportStreamableHTTP, agentadmin.TransportSSE},
 					"description": agentadmin.MCPTransportRule},
 				"account": accountSchema()}, "project", "name", "url", "auth")},

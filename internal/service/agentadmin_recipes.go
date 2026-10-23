@@ -71,18 +71,18 @@ func (p agentAdminProxy) ListRecipesJSON(ctx context.Context, key *persistence.A
 // F6): listing a credentialed server first would send a stored value to a
 // URL no person approved. A server that cannot be listed stays unlisted and
 // its tools are approved after it connects.
-func (s *agentAdminService) advertiseRecipeTargets(ctx context.Context, ns string, input json.RawMessage) map[string][]string {
-	out := map[string][]string{}
+func (s *agentAdminService) advertiseRecipeTargets(ctx context.Context, ns string, input json.RawMessage) map[string]toolListing {
+	out := map[string]toolListing{}
 	for _, url := range s.renderer.RecipeListTargets(ns, input) {
 		if _, done := out[url]; done {
 			continue
 		}
-		tools, err := s.c.listMCPTools(ctx, mcpServerConfigFor(ns, url))
+		listed, err := s.c.listMCPTools(ctx, mcpServerConfigFor(ns, url))
 		if err != nil {
 			s.c.Logger.Info().Str("namespace", ns).Err(err).Msg("agent admin: could not list a recipe server's tools; its tools will be approved after it connects")
 			continue
 		}
-		out[url] = tools
+		out[url] = listed
 	}
 	return out
 }
@@ -294,6 +294,13 @@ func (s *agentAdminService) narrowedIntegration(ctx context.Context, rm agentadm
 	}
 	if err != nil {
 		return persistence.AgentIntegrationApproval{}, false, err
+	}
+	if a.RemovedAt != nil {
+		// A removed approval is not narrowed: re-upserting it would clear
+		// removed_at (a grant nobody approved) and, by the re-add rule, its
+		// held read tools (design §6.5, amendment #481, round 1 F1). Only
+		// a device-decided grant may write a removed row.
+		return persistence.AgentIntegrationApproval{}, false, nil
 	}
 	var keep []string
 	for _, t := range a.ReadTools {

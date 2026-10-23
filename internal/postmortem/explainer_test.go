@@ -109,6 +109,7 @@ func TestExplainer_ReturnsCachedRowOnSecondCall(t *testing.T) {
 	repo := &recordingPostMortemRepo{cached: cached}
 	chatStub := &stubChat{}
 	exp := &Explainer{
+		Scrub:       passScrub, // GitHub #439: Generate requires a scrubber
 		Tasks:       &stubTaskRepo{task: &persistence.Task{ID: "task-1", ProjectID: "p1"}},
 		PostMortems: repo,
 		Chat:        chatStub,
@@ -137,6 +138,7 @@ func TestExplainer_ForceRefreshSkipsCache(t *testing.T) {
 		resp: makeChatResponse("fresh explainer", 100, 30),
 	}
 	exp := &Explainer{
+		Scrub:       passScrub, // GitHub #439: Generate requires a scrubber
 		Tasks:       &stubTaskRepo{task: &persistence.Task{ID: "task-1", ProjectID: "p1"}},
 		PostMortems: repo,
 		Chat:        chatStub,
@@ -174,6 +176,7 @@ func TestExplainer_PromptIncludesEvidence(t *testing.T) {
 		resp: makeChatResponse("summary", 0, 0),
 	}
 	exp := &Explainer{
+		Scrub:       passScrub, // GitHub #439: Generate requires a scrubber
 		Tasks:       &stubTaskRepo{task: task},
 		PostMortems: &recordingPostMortemRepo{},
 		Chat:        chatStub,
@@ -200,6 +203,7 @@ func TestExplainer_PromptIncludesEvidence(t *testing.T) {
 func TestExplainer_PropagatesLLMError(t *testing.T) {
 	chatStub := &stubChat{err: errors.New("upstream 503 from chat provider")}
 	exp := &Explainer{
+		Scrub:       passScrub, // GitHub #439: Generate requires a scrubber
 		Tasks:       &stubTaskRepo{task: &persistence.Task{ID: "task-1", ProjectID: "p1"}},
 		PostMortems: &recordingPostMortemRepo{},
 		Chat:        chatStub,
@@ -221,6 +225,7 @@ func TestExplainer_RefusesEmptyResponse(t *testing.T) {
 	}
 	repo := &recordingPostMortemRepo{}
 	exp := &Explainer{
+		Scrub:       passScrub, // GitHub #439: Generate requires a scrubber
 		Tasks:       &stubTaskRepo{task: &persistence.Task{ID: "task-1", ProjectID: "p1"}},
 		PostMortems: repo,
 		Chat:        chatStub,
@@ -249,6 +254,7 @@ func TestExplainer_UsageRowInheritsTaskAPIKeyAttribution(t *testing.T) {
 	creator := "akey-creator"
 	usage := &recordingUsageRecorder{}
 	exp := &Explainer{
+		Scrub: passScrub, // GitHub #439: Generate requires a scrubber
 		Tasks: &stubTaskRepo{task: &persistence.Task{
 			ID: "task-1", ProjectID: "p1", CreatedByAPIKeyID: &creator,
 		}},

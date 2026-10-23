@@ -186,10 +186,17 @@ func Test_GetConfig_DeniesProjectScopedTenant(t *testing.T) {
 
 func Test_GetConfig_AllowsOperator(t *testing.T) {
 	server := NewServer(WithLogger(zerolog.Nop()), WithConfig(&config.Config{}))
-	// Auth enabled, no project scope = all-access operator/admin key.
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/config", nil)
-	req = req.WithContext(context.WithValue(req.Context(), authEnabledKey, true))
+	// An admin-class caller (an admin session) reads the config.
+	req := adminClassReq491(httptest.NewRequest(http.MethodGet, "/api/v1/config", nil))
 	rec := httptest.NewRecorder()
 	server.GetConfig(rec, req)
 	assert.Equal(t, http.StatusOK, rec.Code)
+
+	// GitHub #495: auth enabled with no project scope and no admin
+	// capability is not the operator; it was admitted before.
+	req = httptest.NewRequest(http.MethodGet, "/api/v1/config", nil)
+	req = req.WithContext(context.WithValue(req.Context(), authEnabledKey, true))
+	rec = httptest.NewRecorder()
+	server.GetConfig(rec, req)
+	assert.Equal(t, http.StatusForbidden, rec.Code)
 }

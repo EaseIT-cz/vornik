@@ -6,6 +6,7 @@ import (
 	"math"
 	"path"
 	"sort"
+	"strconv"
 	"strings"
 
 	"vornik.io/vornik/internal/agentns"
@@ -62,6 +63,11 @@ func ProjectOfWorkflow(workflowID string) string {
 func lockProject(id string) string             { return "project:" + id }
 func lockWorkflow(id string) string            { return "workflow:" + id }
 func lockIntegration(project, n string) string { return "integration:" + project + "/" + n }
+
+// LockIntegration is the lock a change to one integration of a project
+// holds, for the daemon to compare with a request's locks without parsing
+// one (design §19.15 item 3, GitHub #409).
+func LockIntegration(project, server string) string { return lockIntegration(project, server) }
 
 func (r *Renderer) createProject(st *State, raw json.RawMessage) (Change, error) {
 	const verb = VerbCreateProject
@@ -730,7 +736,8 @@ func (r *Renderer) addMCPServer(st *State, raw json.RawMessage) (Change, error) 
 	if in.Transport == TransportSSE {
 		grant.Transport = TransportSSE
 	}
-	if why := grantAdvertised(st, in.URL, writes, &grant); why != "" {
+	withheld, why := grantAdvertised(st, in.URL, writes, &grant)
+	if why != "" {
 		return refuse(verb, ns, "%s", why), nil
 	}
 	server.Tools = grant.Read
@@ -755,14 +762,28 @@ func (r *Renderer) addMCPServer(st *State, raw json.RawMessage) (Change, error) 
 		Locks:   []string{lockProject(pid), projectPath(pid), lockIntegration(pid, in.Name)},
 		Class:   Widening,
 		Grant:   Grant{Integrations: []IntegrationGrant{grant}},
+		// GitHub #405 (design §6.4): named in the sentence and the plain
+		// summary.
+		Withheld: withheld,
 	}
 	expect(st, c.ReadSet, projectPath(pid))
 	phrase := addPhrase(p, in.Name, in.URL, account)
-	c.Sentence = serverSentence(st, ns, pid, in, credential, grant, phrase) + sharedCredentialSentence(credential, sharers)
+	c.Sentence = serverSentence(st, ns, pid, in, credential, grant, phrase, withheld) + sharedCredentialSentence(credential, sharers)
 	if phrase != "" {
 		c.accounts = map[string]string{in.Name: phrase}
 	}
 	return c, nil
+}
+
+// heldAgainSentence tells the person which tools a re-add approves as reads
+// again after Vornik had stopped them as tools that change things (design
+// §6.5, amendment #481): the re-add is the re-approval, so it says so.
+func heldAgainSentence(tools []string) string {
+	if len(tools) == 0 {
+		return ""
+	}
+	return " Vornik had stopped " + strings.Join(tools, ", ") + " on that server because the server said they change things; " +
+		"approving this lets them run as reads again."
 }
 
 // mcpCredential returns the credential NAME an auth block binds, or why it
@@ -796,7 +817,7 @@ func mcpCredential(a MCPAuthInput) (string, string) {
 
 // serverSentence states an add_mcp_server change, with the history of a
 // removed approval of the same name (plan amendment 2).
-func serverSentence(st *State, ns, pid string, in AddMCPServerInput, credential string, grant IntegrationGrant, phrase string) string {
+func serverSentence(st *State, ns, pid string, in AddMCPServerInput, credential string, grant IntegrationGrant, phrase string, withheld []string) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "Your assistant (%s) wants the project %q to connect to the server %q at %s over %s%s", ns, pid, in.Name, in.URL, transportWords(in.Transport), asAccount(phrase))
 	if credential != "" {
@@ -816,12 +837,14 @@ func serverSentence(st *State, ns, pid string, in AddMCPServerInput, credential 
 		b.WriteString("The server did not list its tools without signing in; you will be asked to approve its tools separately once it is connected.")
 	default:
 		fmt.Fprintf(&b, "It would be able to use these %d read tools: %s.", len(grant.Read), strings.Join(grant.Read, ", "))
+		b.WriteString(withheldSentence(withheld))
 	}
 	if len(grant.Write) > 0 {
 		fmt.Fprintf(&b, " It could also propose changes with: %s. Each change will be shown to you for approval before it is made.", strings.Join(grant.Write, ", "))
 	}
 	if prev, ok := st.Approvals[pid][in.Name]; ok && prev.Removed {
 		fmt.Fprintf(&b, " Previously approved and then removed: %s at %s, read tools %s.", in.Name, prev.URL, listOrNone(prev.Read))
+		b.WriteString(heldAgainSentence(intersect(grant.Read, prev.Suspended)))
 	}
 	return b.String()
 }
@@ -1102,43 +1125,74 @@ func contains(xs []string, x string) bool {
 	return false
 }
 
-// splitWrites returns the advertised tools minus the write tools, or why a
-// write tool is refused: one the server does not offer (§7.3).
-func splitWrites(advertised, writes []string) ([]string, string) {
+// splitWrites splits the advertised tools into the reads (the ones the
+// classifier called read-only, minus the write tools) and the withheld (the
+// rest, minus the write tools), or says why a write tool is refused: one the
+// server does not offer (§7.3).
+//
+// GitHub #405 (design §6.4): reads is the classifier's verdict, computed by
+// the service from the listing. A tool absent from it, whether judged
+// mutating or not judged at all, is never approved as a read (fail closed).
+func splitWrites(advertised, writes, reads []string) (read, withheld []string, why string) {
 	for _, w := range writes {
 		if !contains(advertised, w) {
-			return nil, fmt.Sprintf("the server does not offer the write tool %q", w)
+			return nil, nil, fmt.Sprintf("the server does not offer the write tool %q", w)
 		}
 	}
-	var read []string
 	for _, t := range advertised {
-		if !contains(writes, t) {
+		switch {
+		case contains(writes, t):
+		case contains(reads, t):
 			read = append(read, t)
+		default:
+			withheld = append(withheld, t)
 		}
 	}
-	return read, ""
+	return read, withheld, ""
 }
 
-// grantAdvertised fills a new server's read tools from what it advertised
-// (minus its write tools), or marks it read-pending when it was not listed.
-func grantAdvertised(st *State, url string, writes []string, grant *IntegrationGrant) string {
+// onlyChangesWhy is the refusal when withholding would leave nothing to
+// approve and no write tools were declared (design §6.4 item 5).
+func onlyChangesWhy(host string, withheld []string) string {
+	return "the server at " + host + " offers only tools that change things (" + strings.Join(withheld, ", ") +
+		"), which are never approved as reads; to let a workflow propose them, add it again naming them in write_tools"
+}
+
+// withheldSentence is the approval sentence's clause naming the tools that
+// were not approved as reads (design §6.4 item 4).
+func withheldSentence(withheld []string) string {
+	if len(withheld) == 0 {
+		return ""
+	}
+	return " It also offers " + strconv.Itoa(len(withheld)) + " tools that change things, which are not included: " +
+		strings.Join(withheld, ", ") + ". Your assistant can ask for them only as changes you approve one by one (by adding the server again with write_tools)."
+}
+
+// grantAdvertised fills a new server's read tools from what it advertised,
+// minus its write tools and every tool the classifier did not call
+// read-only (design §6.4), or marks it read-pending when it was not listed.
+// It returns the withheld tools, or why the add is refused.
+func grantAdvertised(st *State, url string, writes []string, grant *IntegrationGrant) ([]string, string) {
 	advertised, listed := st.Advertised[url]
 	if !listed || len(advertised) == 0 {
 		grant.ReadPending = true
-		return ""
+		return nil, ""
 	}
 	tools := dedupSorted(advertised)
 	for _, t := range tools {
 		if !toolNameRe.MatchString(t) {
-			return "the server advertises a tool with an unusable name"
+			return nil, "the server advertises a tool with an unusable name"
 		}
 	}
-	read, why := splitWrites(tools, writes)
+	read, withheld, why := splitWrites(tools, writes, st.AdvertisedReads[url])
 	if why != "" {
-		return why
+		return nil, why
+	}
+	if len(read) == 0 && len(writes) == 0 {
+		return nil, onlyChangesWhy(hostOf(url), withheld)
 	}
 	grant.Read = read
-	return ""
+	return withheld, ""
 }
 
 // QueryAPITool is the task agent's REST tool (plan P4.5).

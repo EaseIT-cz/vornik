@@ -353,7 +353,10 @@ func TestExecutionDetail_AdaptiveWithRoutingDecision(t *testing.T) {
 			}, nil
 		},
 	}))
-	req := httptest.NewRequest(http.MethodGet, "/executions/exec-r", nil)
+	// The operator (auth off): since #496 the routing reason is read from
+	// the caller's view of the stored result, and a request with no
+	// principal is denied it (#491).
+	req := asOperator491(httptest.NewRequest(http.MethodGet, "/executions/exec-r", nil))
 	rec := httptest.NewRecorder()
 	srv.ExecutionDetail(rec, req)
 	require.Equal(t, http.StatusOK, rec.Code)

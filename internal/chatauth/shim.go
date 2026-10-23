@@ -80,6 +80,18 @@ type Decision struct {
 	ResolverUnavailable bool
 }
 
+// AdminLinked reports whether the speaker resolved to an admin-class
+// principal: an identity linked to a Vornik account whose role is admin,
+// the same role of the same principal that admits an admin UI session
+// (authsession). A legacy-allowlist grant (no principal), an unknown or
+// disabled identity and an unavailable resolver are all false. It is the one
+// chat-side admin predicate (process-spawn-law design, "Amendment 2026-10-21
+// (#480)", J3); a caller that also needs the audience to be that speaker
+// alone checks that itself (J4).
+func (d Decision) AdminLinked() bool {
+	return d.Allowed && d.Principal != nil && d.Principal.Role == authz.RoleAdmin
+}
+
 // Metrics is the shim's counter.
 //
 // It is a HOLDER that can outlive the registry, not a counter built against

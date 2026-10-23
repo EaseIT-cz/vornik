@@ -1,11 +1,15 @@
 package dispatcher
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/prometheus/client_golang/prometheus/testutil"
+	"github.com/rs/zerolog"
 
 	"vornik.io/vornik/internal/datasubject"
 	"vornik.io/vornik/internal/memory"
@@ -298,4 +302,48 @@ func TestSetChatMemoryNED_WritesThroughToTheToolExecutor(t *testing.T) {
 	var nilA *Agent
 	nilA.SetChatMemoryNED(nil)
 	(&Agent{}).SetChatMemoryNED(nil)
+}
+
+// TestRememberSharedNED_RefusalsAreCountedAndBlockLogged — GitHub #369,
+// outcome-quality LLD S8.11 row 10b. A NED block returned its refusal with no
+// log and no metric (only the error branch Warned). Both verdicts now count
+// vornik_chat_memory_ned_refusals_total{verdict}, and a block logs at Info
+// with the project and the NUMBER of blocked persons, never their names.
+func TestRememberSharedNED_RefusalsAreCountedAndBlockLogged(t *testing.T) {
+	blockBefore := testutil.ToFloat64(chatMemoryNEDRefusals.WithLabelValues("block"))
+	errBefore := testutil.ToFloat64(chatMemoryNEDRefusals.WithLabelValues("error"))
+
+	var logBuf bytes.Buffer
+	gate := nedGate(
+		&fakeNEDExtractor{cands: []graph.Candidate{personCand("Carol")}},
+		&fakeNEDResolver{resns: []graph.Resolution{{Decision: "new"}}},
+	)
+	confirms := newFakeConfirmRepo(nil)
+	te := sharedNEDExecutor(confirms, newFakeAuditRepo(nil), &fakeChatMemoryWriter{}, &fakeLinker{}, gate)
+	te.logger = zerolog.New(&logBuf)
+	content := "Carol is joining the security team"
+	seedAck(confirms, content)
+	te.remember(sharedCtx(), `{"content":"`+content+`","scope":"shared"}`, "proj-x")
+
+	if got := testutil.ToFloat64(chatMemoryNEDRefusals.WithLabelValues("block")) - blockBefore; got != 1 {
+		t.Errorf("ned_refusals_total{verdict=block} delta = %v, want 1", got)
+	}
+	logged := logBuf.String()
+	if !strings.Contains(logged, `"level":"info"`) || !strings.Contains(logged, `"project":"proj-x"`) ||
+		!strings.Contains(logged, `"blocked_persons":1`) {
+		t.Errorf("a NED block must log at Info with project and blocked_persons=1; got %q", logged)
+	}
+	if strings.Contains(logged, "Carol") {
+		t.Errorf("the block log must never carry a blocked person's name; got %q", logged)
+	}
+
+	confirms2 := newFakeConfirmRepo(nil)
+	te2 := sharedNEDExecutor(confirms2, newFakeAuditRepo(nil), &fakeChatMemoryWriter{}, &fakeLinker{},
+		nedGate(&fakeNEDExtractor{err: errors.New("model timeout")}, &fakeNEDResolver{}))
+	content2 := "something that might name a person"
+	seedAck(confirms2, content2)
+	te2.remember(sharedCtx(), `{"content":"`+content2+`","scope":"shared"}`, "proj-x")
+	if got := testutil.ToFloat64(chatMemoryNEDRefusals.WithLabelValues("error")) - errBefore; got != 1 {
+		t.Errorf("ned_refusals_total{verdict=error} delta = %v, want 1", got)
+	}
 }

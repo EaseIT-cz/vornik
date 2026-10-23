@@ -7,8 +7,8 @@ import (
 	"time"
 )
 
-// GitHub #337 (2026-10-12): the calendar answers calendar_list_events the
-// way the agenda and morning-brief recipes call it, per user, against an
+// GitHub #337 (2026-10-12): the calendar answers calendar_list_events (the
+// recipes' spelling) with the reference server's arguments (GitHub #404), per user, against an
 // injected clock; the CRM is the generic read-and-write server.
 
 func seededCalendar() *CalendarStore {
@@ -36,31 +36,53 @@ func eventIDs(r eventsResult) string {
 	return strings.Join(out, ",")
 }
 
-func TestCalendarMCP_RangesArePerUserAndAgainstTheClock(t *testing.T) {
+func TestCalendarMCP_WindowsArePerUserAndAgainstTheClock(t *testing.T) {
 	s := NewCalendarMCP(seededCalendar(), fixedNow)
 	s.Token("tok-alice", "alice")
 	srv := httptest.NewServer(s)
 	defer srv.Close()
 	alice := dial(t, srv.URL, "tok-alice")
 
+	// GitHub #404 (2026-10-17): the reference calendar.listEvents arguments,
+	// calendarId required, timeMin defaulting to now, timeMax optional.
 	for _, c := range []struct {
 		args map[string]any
 		want string
 	}{
-		{map[string]any{"range": "today"}, "e-1"},
-		{map[string]any{"range": "tomorrow"}, "e-2"},
-		{map[string]any{"range": "week"}, "e-1,e-2,e-3"},
-		{map[string]any{"timeMin": "2026-10-13T00:00:00Z", "timeMax": "2026-10-20T00:00:00Z"}, "e-2,e-3"},
-		{map[string]any{}, "e-1"}, // no range: today
+		{map[string]any{"calendarId": "primary", "timeMin": "2026-10-12T00:00:00Z", "timeMax": "2026-10-13T00:00:00Z"}, "e-1"},
+		{map[string]any{"calendarId": "primary", "timeMin": "2026-10-13T00:00:00Z", "timeMax": "2026-10-14T00:00:00Z"}, "e-2"},
+		{map[string]any{"calendarId": "alice@home.example", "timeMin": "2026-10-13T00:00:00Z", "timeMax": "2026-10-20T00:00:00Z"}, "e-2,e-3"},
+		{map[string]any{"calendarId": "primary"}, "e-1,e-2,e-3"},                            // from now (08:00), no upper bound
+		{map[string]any{"calendarId": "primary", "timeMax": "2026-10-13T00:00:00Z"}, "e-1"}, // from now
+		{map[string]any{"calendarId": "primary", "timeMin": "2026-10-14T00:00:00Z"}, "e-3"}, // no upper bound
+		{map[string]any{"calendarId": "primary", "eventTypes": []string{"default"}}, "e-1,e-2,e-3"},
+		{map[string]any{"calendarId": "primary", "eventTypes": []string{"focusTime"}}, ""},
+		{map[string]any{"calendarId": "primary", "attendeeResponseStatus": []string{}}, "e-1,e-2,e-3"},
 	} {
 		var r eventsResult
-		call(t, alice, "calendar_list_events", c.args, &r)
+		if text, isErr := call(t, alice, "calendar_list_events", c.args, &r); isErr {
+			t.Fatalf("%v refused: %s", c.args, text)
+		}
 		if got := eventIDs(r); got != c.want {
 			t.Errorf("%v = %q, want %q", c.args, got, c.want)
 		}
 	}
-	if _, isErr := call(t, alice, "calendar_list_events", map[string]any{"range": "fortnight"}, nil); !isErr {
-		t.Fatal("an unknown range was accepted")
+	for _, args := range []map[string]any{
+		{}, // calendarId is required
+		{"calendarId": ""},
+		{"calendarId": "primary", "range": "today"}, // the stand-in's old name
+		{"calendarId": "primary", "timeMin": "yesterday"},
+		{"calendarId": "primary", "timeMin": "2026-10-13T00:00:00Z", "timeMax": "2026-10-12T00:00:00Z"},
+		{"calendarId": "primary", "timeMin": "2026-10-13T00:00:00Z", "timeMax": "2026-10-13T00:00:00Z"}, // an empty window
+		{"calendarId": "primary", "eventTypes": []string{"meeting"}},
+		{"calendarId": "primary", "attendeeResponseStatus": []string{"accepted"}}, // not imitated
+	} {
+		if text, isErr := call(t, alice, "calendar_list_events", args, nil); !isErr {
+			t.Errorf("%v accepted: %s", args, text)
+		}
+	}
+	if n := len(s.Failed()); n != 8 {
+		t.Fatalf("Failed() = %d calls, want the 8 refused ones", n)
 	}
 }
 

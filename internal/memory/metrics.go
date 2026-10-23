@@ -21,6 +21,10 @@ type Metrics struct {
 	EmbedBatchesTotal     *prometheus.CounterVec
 	EmbeddingsStoredTotal *prometheus.CounterVec
 	EmbedDuration         prometheus.Histogram
+	// EmbedFailuresTotal counts embedder calls that produced no vectors, by
+	// call site (the EmbedScope's CallSite) and reason (embed_error.go).
+	// GitHub #369 item 5: these were (nil, nil) and counted nowhere.
+	EmbedFailuresTotal *prometheus.CounterVec
 
 	// Search
 	SearchesTotal        *prometheus.CounterVec
@@ -141,11 +145,37 @@ type Metrics struct {
 	// 4 — validator-bypass observability).
 	PipelineRoleOfRecordVerifiedTotal *prometheus.CounterVec
 
+	// PipelineProvenanceChecksTotal counts the role-of-record decisions of
+	// companion-delegated ingests (design 22, amendment #482), by outcome:
+	// "verified", the provenance reason that refused it, "not_document"
+	// (an output with no document path), or "origin_unknown" (the task
+	// lookup failed and the ingest was treated as delegated). The
+	// denominator is every such ingest, verified or not.
+	PipelineProvenanceChecksTotal *prometheus.CounterVec
+
+	// ProvenanceFetchTotal counts the hourly sweep's fetches of the trusted
+	// branch into each daemon-only provenance clone (GitHub #499), by
+	// outcome: ok, no_clone, no_branch, timeout, failed.
+	ProvenanceFetchTotal *prometheus.CounterVec
+
 	// URL liveness recheck — labelled by project + alive=true|false.
 	// Drives operator dashboards for "dead-URL rate" and powers the
 	// alert "any chunk's URL just went dead" so memory hits stay
 	// trustworthy as the indexed corpus ages.
 	URLLivenessTotal *prometheus.CounterVec
+
+	// SkippedTotal counts a memory step that failed and was skipped or
+	// allowed past, by site and a reason chosen by remedy (outcome-quality
+	// LLD §S8.11, GitHub #369). No project label. Use RecordSkipped.
+	SkippedTotal *prometheus.CounterVec
+}
+
+// RecordSkipped counts one skipped or allowed-past memory step. Nil-safe.
+func (m *Metrics) RecordSkipped(site, reason string) {
+	if m == nil || m.SkippedTotal == nil {
+		return
+	}
+	m.SkippedTotal.WithLabelValues(site, reason).Inc()
 }
 
 // NewMetrics registers and returns all memory metrics.
@@ -208,6 +238,15 @@ func NewMetrics(registerer prometheus.Registerer) *Metrics {
 				Help:      "Latency of one embedding batch API call.",
 				Buckets:   []float64{0.05, 0.1, 0.25, 0.5, 1, 2, 5, 10, 30},
 			},
+		),
+		EmbedFailuresTotal: promauto.With(registerer).NewCounterVec(
+			prometheus.CounterOpts{
+				Namespace: memNamespace,
+				Subsystem: memSubsystem,
+				Name:      "embed_failures_total",
+				Help:      "Embedder calls (Embed / EmbedQuery) that returned no vectors, by call site and reason (outcome-quality §S8.10).",
+			},
+			[]string{"call_site", "reason"},
 		),
 		RecencyDemotedTotal: promauto.With(registerer).NewCounterVec(
 			prometheus.CounterOpts{
@@ -365,7 +404,7 @@ func NewMetrics(registerer prometheus.Registerer) *Metrics {
 				Namespace: memNamespace,
 				Subsystem: memSubsystem,
 				Name:      "title_backfill_chunks_total",
-				Help:      "Chunks the auto title-backfill loop processed, labelled by per-chunk status (succeeded | failed | skipped).",
+				Help:      "Chunks the auto title-backfill loop processed, labelled by per-chunk status (succeeded | failed: the model | persist_failed: the store | skipped).",
 			},
 			[]string{"status"},
 		),
@@ -391,7 +430,7 @@ func NewMetrics(registerer prometheus.Registerer) *Metrics {
 				Namespace: memNamespace,
 				Subsystem: memSubsystem,
 				Name:      "classify_backfill_chunks_total",
-				Help:      "Chunks the auto classify-backfill loop processed, labelled by per-chunk status (succeeded | failed | skipped).",
+				Help:      "Chunks the auto classify-backfill loop processed, labelled by per-chunk status (succeeded | failed: the model | persist_failed: the store | skipped).",
 			},
 			[]string{"status"},
 		),
@@ -408,7 +447,7 @@ func NewMetrics(registerer prometheus.Registerer) *Metrics {
 				Namespace: memNamespace,
 				Subsystem: memSubsystem,
 				Name:      "consolidate_ticks_total",
-				Help:      "Periodic LLM-free gist ticks, labelled by outcome (idle | progressed | errored).",
+				Help:      "Periodic LLM-free gist ticks, labelled by outcome (idle | progressed | errored | fenced: every project skipped by the leader-epoch fence).",
 			},
 			[]string{"outcome"},
 		),
@@ -417,7 +456,7 @@ func NewMetrics(registerer prometheus.Registerer) *Metrics {
 				Namespace: memNamespace,
 				Subsystem: memSubsystem,
 				Name:      "consolidate_projects_total",
-				Help:      "Projects processed by the gist loop, labelled by outcome (ok | errored).",
+				Help:      "Projects processed by the gist loop, labelled by outcome (ok | errored | fenced).",
 			},
 			[]string{"project_id", "outcome"},
 		),
@@ -445,7 +484,7 @@ func NewMetrics(registerer prometheus.Registerer) *Metrics {
 				Namespace: memNamespace,
 				Subsystem: memSubsystem,
 				Name:      "narrative_ticks_total",
-				Help:      "Periodic LLM-tier narrative ticks, labelled by outcome (idle | progressed | errored).",
+				Help:      "Periodic LLM-tier narrative ticks, labelled by outcome (idle | progressed | errored | fenced).",
 			},
 			[]string{"outcome"},
 		),
@@ -454,7 +493,7 @@ func NewMetrics(registerer prometheus.Registerer) *Metrics {
 				Namespace: memNamespace,
 				Subsystem: memSubsystem,
 				Name:      "narrative_projects_total",
-				Help:      "Projects processed by the narrative loop, labelled by outcome (ok | errored).",
+				Help:      "Projects processed by the narrative loop, labelled by outcome (ok | errored: a store failure | llm_error: the narrative model failed | fenced | no_gist | empty).",
 			},
 			[]string{"project_id", "outcome"},
 		),
@@ -531,6 +570,24 @@ func NewMetrics(registerer prometheus.Registerer) *Metrics {
 			},
 			[]string{"project_id", "content_class", "producer_role"},
 		),
+		PipelineProvenanceChecksTotal: promauto.With(registerer).NewCounterVec(
+			prometheus.CounterOpts{
+				Namespace: memNamespace,
+				Subsystem: memSubsystem,
+				Name:      "pipeline_provenance_checks_total",
+				Help:      "Companion-delegated ingests that would have been role-of-record, by outcome: verified, the provenance reason that refused it, not_document, or origin_unknown (design 22, amendment #482).",
+			},
+			[]string{"project_id", "outcome"},
+		),
+		ProvenanceFetchTotal: promauto.With(registerer).NewCounterVec(
+			prometheus.CounterOpts{
+				Namespace: memNamespace,
+				Subsystem: memSubsystem,
+				Name:      "provenance_fetch_total",
+				Help:      "Fetches of the trusted branch into a daemon-only provenance clone (memory.provenance_clone), by outcome: ok, no_clone, no_branch, timeout, failed (GitHub #499).",
+			},
+			[]string{"project_id", "outcome"},
+		),
 		URLLivenessTotal: promauto.With(registerer).NewCounterVec(
 			prometheus.CounterOpts{
 				Namespace: memNamespace,
@@ -539,6 +596,15 @@ func NewMetrics(registerer prometheus.Registerer) *Metrics {
 				Help:      "URL liveness recheck outcomes, labelled by project and alive=true|false.",
 			},
 			[]string{"project", "alive"},
+		),
+		SkippedTotal: promauto.With(registerer).NewCounterVec(
+			prometheus.CounterOpts{
+				Namespace: memNamespace,
+				Subsystem: memSubsystem,
+				Name:      "skipped_total",
+				Help:      "Memory steps that failed and were skipped or allowed past, by site (inline_title, dedup_lookup, query_expander, classifier, rerank, quarantine_write, claim_audit) and reason (outcome-quality LLD S8.11).",
+			},
+			[]string{"site", "reason"},
 		),
 	}
 }

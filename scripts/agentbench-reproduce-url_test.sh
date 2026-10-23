@@ -18,8 +18,8 @@ script="$here/agentbench-reproduce.sh"
 run() { env -i PATH="$PATH" HOME="$HOME" "$@" bash "$script" 2>&1 || true; }
 
 out=$(run VORNIK_URL=http://127.0.0.1:8090 VORNIK_API_URL=http://127.0.0.1:8080)
-echo "$out" | grep -q "VORNIK_API_URL" || fail "unequal addresses must be refused: $out"
-if ! echo "$out" | grep -q "8080" || ! echo "$out" | grep -q "8090"; then
+grep -q "VORNIK_API_URL" <<<"$out" || fail "unequal addresses must be refused: $out"
+if ! grep -q "8080" <<<"$out" || ! grep -q "8090" <<<"$out"; then
 	fail "the refusal must name both addresses: $out"
 fi
 
@@ -27,8 +27,8 @@ pass_check() {
 	local label="$1"; shift
 	local o
 	o=$(run "$@")
-	echo "$o" | grep -q "VORNIK_COMPANION_TOKEN" || fail "$label: the guard must pass and the next check be reached: $o"
-	if echo "$o" | grep -q "VORNIK_API_URL"; then fail "$label: must not be refused: $o"; fi
+	grep -q "VORNIK_COMPANION_TOKEN" <<<"$o" || fail "$label: the guard must pass and the next check be reached: $o"
+	if grep -q "VORNIK_API_URL" <<<"$o"; then fail "$label: must not be refused: $o"; fi
 }
 pass_check "only VORNIK_URL" VORNIK_URL=http://127.0.0.1:8090
 pass_check "equal" VORNIK_URL=http://127.0.0.1:8090 VORNIK_API_URL=http://127.0.0.1:8090

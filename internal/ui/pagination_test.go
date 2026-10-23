@@ -81,3 +81,36 @@ func TestParsePageParam(t *testing.T) {
 		}
 	}
 }
+
+// GitHub #411 item 4: a failed count is never a total. The unknown-total
+// paginator names the rows shown, claims no total, and offers Next only while
+// pages come back full.
+func TestNewUnknownTotalPaginator(t *testing.T) {
+	q := url.Values{"status": {"QUEUED"}, "page": {"2"}}
+	full := NewUnknownTotalPaginator(2, 20, 20, "/ui/tasks", q)
+	if !full.Unknown || full.Total != 0 || full.Start != 21 || full.End != 40 {
+		t.Fatalf("full page: %+v", full)
+	}
+	if !full.HasPrev || !full.HasNext || full.NextURL != "/ui/tasks?page=3&status=QUEUED" || full.PrevURL != "/ui/tasks?page=1&status=QUEUED" {
+		t.Errorf("full page controls: %+v", full)
+	}
+	short := NewUnknownTotalPaginator(3, 20, 7, "/ui/tasks", q)
+	if short.HasNext || short.End != 47 {
+		t.Errorf("a short page still offers Next or miscounts: %+v", short)
+	}
+	empty := NewUnknownTotalPaginator(0, 0, 0, "/ui/tasks", nil)
+	if empty.Page != 1 || empty.PerPage != defaultPerPage || empty.Start != 0 || empty.End != 0 || empty.HasNext {
+		t.Errorf("empty: %+v", empty)
+	}
+}
+
+// GitHub #411 item 6: a status cell keeps the page size, view and project
+// (escaped), never a page or a window.
+func TestTasksTileQS(t *testing.T) {
+	if got := tasksTileQS(50, false, ""); got != "&limit=50" {
+		t.Errorf("got %q", got)
+	}
+	if got := tasksTileQS(20, true, "a b&c"); got != "&limit=20&flat=1&project_id=a+b%26c" {
+		t.Errorf("got %q", got)
+	}
+}

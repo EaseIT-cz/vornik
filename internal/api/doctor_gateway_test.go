@@ -5,8 +5,39 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 )
+
+// GitHub #494 item 1 (2026-10-21, integrations-hub-design "Amendment
+// 2026-10-21 (#494)", change item 1): the gateway check refused a
+// non-loopback URL by its host string, then sent the GET through
+// http.DefaultClient, which follows redirects with no dial check. A gateway
+// answering 302 to another address made the doctor fetch it. The check now
+// dials through the shared guard with redirects refused: a 3xx is "reachable"
+// and no second request leaves the daemon.
+func TestCheckGatewayHealthy_DoesNotFollowRedirect_Issue494(t *testing.T) {
+	var second atomic.Int32
+	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		second.Add(1)
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer target.Close()
+	gw := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, target.URL+"/latest/meta-data", http.StatusFound)
+	}))
+	defer gw.Close()
+
+	h := &DoctorHandlers{}
+	h.SetGatewayURL(gw.URL)
+	c := h.checkGatewayHealthy(context.Background(), false)
+	if c.Status != "OK" {
+		t.Errorf("status = %q, want OK (a 3xx is a response; msg=%q)", c.Status, c.Message)
+	}
+	if n := second.Load(); n != 0 {
+		t.Fatalf("the redirect target received %d request(s); the doctor must not follow a gateway redirect", n)
+	}
+}
 
 func TestCheckGatewayHealthy_SkippedWhenUnconfigured(t *testing.T) {
 	h := &DoctorHandlers{}

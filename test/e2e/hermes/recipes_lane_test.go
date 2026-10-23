@@ -153,14 +153,35 @@ func assertOnlyUser(t *testing.T, name string, s *standins.MCPServer, user strin
 	}
 }
 
+// todayEventsArgs are the reference calendar.listEvents arguments for
+// today UTC, the window the seeded e-1 sits in (GitHub #404: the stand-in
+// takes calendarId, timeMin and timeMax, as the reference does, not range).
+func todayEventsArgs() map[string]any {
+	now := time.Now().UTC()
+	day := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, time.UTC)
+	return map[string]any{"calendarId": "primary", "timeMin": day.Format(time.RFC3339),
+		"timeMax": day.Add(24 * time.Hour).Format(time.RFC3339)}
+}
+
+// assertNoFailedCall fails when a stand-in answered a call with a tool
+// error. GitHub #404: the scripted model writes the same answer whether a
+// read worked or not, so without this the lane passed with argument names
+// the stand-in refused.
+func assertNoFailedCall(t *testing.T, name string, s *standins.MCPServer) {
+	t.Helper()
+	for _, c := range s.Failed() {
+		t.Fatalf("%s: %s %s was refused: %s", name, c.Tool, c.Args, c.Err)
+	}
+}
+
 // The scripted model's plans, keyed on each recipe step's own opening line.
 func recipeScripts() []Script {
 	write := func(doc any) ScriptStep {
 		return ScriptStep{ToolSuffix: "file_write", Args: map[string]any{"path": "artifacts/out/result.json", "content": mustJSON(doc)}}
 	}
 	search := ScriptStep{ToolSuffix: "gmail_search", Args: map[string]any{"query": "newer_than:1d"}}
-	get := ScriptStep{ToolSuffix: "gmail_get", Args: map[string]any{"id": "r-1"}}
-	events := ScriptStep{ToolSuffix: "calendar_list_events", Args: map[string]any{"range": "today"}}
+	get := ScriptStep{ToolSuffix: "gmail_get", Args: map[string]any{"messageId": "r-1"}}
+	events := ScriptStep{ToolSuffix: "calendar_list_events", Args: todayEventsArgs()}
 	message := map[string]any{"source": "mail", "id": "r-1", "link": "https://mail.google.com/mail/u/0/#inbox/r-1",
 		"received_at": "2026-10-03T06:04:00Z", "from_domain": "acme.example", "category": "invoice", "needs_reply": true,
 		"one_line": "An invoice from acme.example is due."}
@@ -354,6 +375,8 @@ func TestA4_Recipes(t *testing.T) {
 	}
 	assertOnlyUser(t, "mail", mail, "alice")
 	assertOnlyUser(t, "calendar", cal, "alice")
+	assertNoFailedCall(t, "mail", mail)
+	assertNoFailedCall(t, "calendar", cal)
 	if mail.Refused() != 0 || cal.Refused() != 0 {
 		t.Fatalf("a server refused the credential: mail %d, calendar %d", mail.Refused(), cal.Refused())
 	}

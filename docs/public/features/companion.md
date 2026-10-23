@@ -3,11 +3,11 @@ sources:
     - path: internal/api/companion_artifacts.go
       sha256: b5f389b1d084f5708807a7080bf034009dd78ec499487525e2ac4d3f38e0bbf8
     - path: internal/api/companion_mcp.go
-      sha256: 4459f049713b103a15fe7c98b334922f4a96399ecb2f577c2914e64eb1a35622
+      sha256: 01f7c494025657d6195f169c81e7ebb2a4cc9e2374b08862a043d2685b0632c4
     - path: contrib/claude-code-companion/.claude-plugin/plugin.json
-      sha256: 8d16a892893c6400b39a97495bbb9a59a934fafa083400392c314ae7dad06d05
+      sha256: fe435769be41a8c3e942c07fa28ffe22cf4f4a1195fb830ab56d9c8e1a34c68b
     - path: contrib/codex-companion/.codex-plugin/plugin.json
-      sha256: fa14dcc68d15ef5508524579b8da28439ec6366e9acf4f101c73441e942de4c4
+      sha256: 62fb3bb870d2c062594c6e4b4c8508db76a4a9cbe9f1f59b4d9f1126bfed5140
 ---
 # Companion plugin
 
@@ -45,7 +45,7 @@ The companion exposes these MCP tools. Each refuses an argument it does not decl
 | `whoami` | show this key's project, the repo scope your calls resolve to right now, the database this daemon writes (so a destructive tool can verify its target instead of trusting a name you typed), and this project's embedding readiness — how much of its memory is semantically searchable, plus the embed-queue depth, so a caller can wait for ingest to finish instead of querying a half-indexed corpus. Also reports the daemon's build revision and its resolved embedding model, which a benchmark needs to attribute a run to a release and to an embedding space. |
 | `report_problem` | build an anonymized problem report + prefilled issue URL for you to review and submit |
 | `delegate` | queue an async task on vornik; returns a task id and a poll hint. For a broker workflow that proposes no writes, `max_age_seconds` (up to 900) reuses your own run of the same workflow with the same inputs started at most that long ago, instead of running it again (`reused: true`, `as_of`) |
-| `status` | check a delegated task's status and attempt number; after a failed attempt it also names the step that failed and its error class, so you can see a retry is running. While the task runs it carries `progress`: the running step, its position (step 2 of 3) and when it started. A task held because an interrupted config change is waiting for the operator carries `paused`: the journal id, since when, and who resolves it (the operator, on their approver device or on the host; the assistant cannot) |
+| `status` | check a delegated task's status and attempt number; after a failed attempt it also names the step that failed and its error class, so you can see a retry is running. Outside a broker project a failed task's last error is included, redacted: a line that holds a secret reads `[withheld: secret]` (`result` returns it the same way). While the task runs it carries `progress`: the running step, its position (step 2 of 3) and when it started. A task held because an interrupted config change is waiting for the operator carries `paused`: the journal id, since when, and who resolves it (the operator, on their approver device or on the host; the assistant cannot) |
 | `task_logs` | read and follow a task's live log (steps, tool calls, attempts), redacted, page by page with a cursor; a call can wait up to 25 s for the next event, returns at most 64 KiB, and reports `complete` when the task has finished. A retried task moves to its newest attempt by itself |
 | `task_explain` | why a task failed: its failure class, each step's outcome, the failure-class playbook (cause and suggestions) and the last error, redacted. No model is called |
 | `daemon_log` | agent admin keys only: recent daemon log events about your own projects (task lifecycle, MCP connections): time, level, component, ids, the MCP server, a closed code such as `auth_rejected` for a refused connection, and the event's message when it is one of Vornik's own fixed messages. No free text from your tasks. At most the last hour |
@@ -298,6 +298,15 @@ with a `wrong_claim`: it searches what a default `recall` from that repository
 shows, so a claim made in one repository never refutes another repository's
 note. The memory hint a `delegate` returns is drawn from the same scope.
 
+A `wrong_claim` never refutes a correction an earlier `memory_correct`
+stored, even when the claim matches it best. The result lists every match it
+passed over in `skipped`, with the reason (`protected_correction`,
+`below_floor`, `over_cap`), so the assistant can refute one deliberately with
+`chunk_ids`. Pass `dry_run: true` to see what a claim would refute without
+changing anything. A `correction` is stored the way `remember` stores a
+note, through the same checks (a credential in it is redacted), and the
+result says whether it was stored (`correction_decision`).
+
 ```text
 /recall how does the scheduler lease tasks?
 /remember the broker API rejects fractional shares with error 10243 — keep shares whole
@@ -306,6 +315,13 @@ note. The memory hint a `delegate` returns is drawn from the same scope.
 Notes go through vornik's full ingest pipeline (secret scanning, dedup, policy),
 and large content should be sent through the ingest workflow rather than a single
 `remember` call.
+
+A note's `class` is a label. Whatever class you give it (`spec`, `decision` or
+another), a `remember` note lands unverified, at companion confidence (at most
+0.3), and expires: after the class's own lifetime, or 30 days for `spec` and
+`decision`, unless you set `ttl_days`. A note never becomes verified or part of
+the design record on its own. To make a design authoritative, ingest the document
+through the ingest workflow.
 
 ### Re-ingesting a document
 

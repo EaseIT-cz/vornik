@@ -255,71 +255,36 @@ func (r *KnowledgeEdgeRepository) UpdateLifecycle(ctx context.Context, id, newSt
 	return err
 }
 
-// DropChunkFromSources walks every edge whose source_chunks contains
-// chunkID, removes it from the array, and flips the lifecycle to
-// quarantined when the array empties. SQLite has no array_remove,
-// so we Get → mutate → write back per matched row.
+// DropChunkFromSources — see persistence.KnowledgeEdgeRepository. One UPDATE,
+// the same shape as the Postgres driver (GitHub #450; KG design §5.1
+// amendment 2026-10-21): json_each does what array_remove / ANY do there.
+// Exact membership, not LIKE (which read _ and % in an id as wildcards);
+// json_group_array keeps json_each order, so survivors keep their order.
+// RowsAffected is the number of edges whose source_chunks changed.
 func (r *KnowledgeEdgeRepository) DropChunkFromSources(ctx context.Context, chunkID string) (int, error) {
 	if chunkID == "" {
 		return 0, fmt.Errorf("DropChunkFromSources: chunk_id required")
 	}
-	// Find matching edges via LIKE on the JSON-encoded array.
-	rows, err := r.db.QueryContext(ctx,
-		`SELECT id, source_chunks FROM knowledge_edges WHERE source_chunks LIKE ?`,
-		`%"`+chunkID+`"%`)
+	res, err := r.db.ExecContext(ctx, `
+		UPDATE knowledge_edges
+		SET source_chunks = (SELECT json_group_array(j.value)
+		                       FROM json_each(knowledge_edges.source_chunks) AS j
+		                      WHERE j.value <> ?1),
+		    lifecycle_state = CASE
+		        WHEN EXISTS (SELECT 1 FROM json_each(knowledge_edges.source_chunks) AS j
+		                      WHERE j.value <> ?1)
+		        THEN lifecycle_state ELSE 'quarantined' END
+		WHERE EXISTS (SELECT 1 FROM json_each(knowledge_edges.source_chunks) AS j
+		               WHERE j.value = ?1)`,
+		chunkID)
 	if err != nil {
 		return 0, err
 	}
-	type match struct {
-		id     string
-		chunks []string
+	n, err := res.RowsAffected()
+	if err != nil {
+		return 0, err
 	}
-	var matches []match
-	for rows.Next() {
-		var (
-			id     string
-			chunks sqliteStringArray
-		)
-		if err := rows.Scan(&id, &chunks); err != nil {
-			_ = rows.Close()
-			return 0, err
-		}
-		matches = append(matches, match{id: id, chunks: []string(chunks)})
-	}
-	_ = rows.Close()
-
-	updated := 0
-	for _, m := range matches {
-		newChunks := make([]string, 0, len(m.chunks))
-		for _, c := range m.chunks {
-			if c != chunkID {
-				newChunks = append(newChunks, c)
-			}
-		}
-		// Skip rows where chunkID wasn't actually present (LIKE
-		// substring false-positive on a longer id).
-		if len(newChunks) == len(m.chunks) {
-			continue
-		}
-		updated++
-		if len(newChunks) == 0 {
-			_, err := r.db.ExecContext(ctx, `
-				UPDATE knowledge_edges
-				SET source_chunks = ?, lifecycle_state = 'quarantined'
-				WHERE id = ?`, sqliteStringArray(newChunks), m.id)
-			if err != nil {
-				return 0, err
-			}
-			continue
-		}
-		_, err := r.db.ExecContext(ctx,
-			`UPDATE knowledge_edges SET source_chunks = ? WHERE id = ?`,
-			sqliteStringArray(newChunks), m.id)
-		if err != nil {
-			return 0, err
-		}
-	}
-	return updated, nil
+	return int(n), nil
 }
 
 const knowledgeEdgeSelect = `

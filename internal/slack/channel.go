@@ -177,6 +177,46 @@ func (c *Channel) authorizeCtx(ctx context.Context, userID string, legacy chatau
 	return c.identityShim.Authorize(ctx, "slack", userID, legacy)
 }
 
+// OperatorView is the dispatcher.ChannelReceiver hook that decides whether a
+// turn's audience is one admin-linked principal alone, the only case in
+// which the task tools hand the model a task's stored error text raw
+// (process-spawn-law design, "Amendment 2026-10-21 (#480)", J3 and J4). Both
+// must hold:
+//   - the session is a direct message: the channel id in the adapter-built
+//     session id "<team>/<channel>#..." starts with "D" (a channel, a private
+//     channel and a group DM are shared: their members see every reply and
+//     share the stored history);
+//   - the speaker resolves, through the identity shim, to an admin principal
+//     (chatauth.Decision.AdminLinked). A sender-allowlist grant is not one.
+//
+// It reads only SessionID and SpeakerID, never ChannelSpecific.
+func (c *Channel) OperatorView(ctx context.Context, msg conversation.ChannelMessage) bool {
+	if c == nil || c.identityShim == nil || strings.TrimSpace(msg.SpeakerID) == "" {
+		return false
+	}
+	if !isDirectMessageSession(msg.SessionID) {
+		return false
+	}
+	authCtx, cancel := context.WithTimeout(ctx, authorizeBudget)
+	defer cancel()
+	return c.authorizeCtx(authCtx, msg.SpeakerID, c.legacySenderAccess(msg.SpeakerID)).AdminLinked()
+}
+
+// isDirectMessageSession reports whether a session id "<team>/<channel>#..."
+// names a DM channel (Slack's "D..." channel id convention).
+func isDirectMessageSession(sessionID string) bool {
+	hash := strings.Index(sessionID, "#")
+	if hash < 0 {
+		return false
+	}
+	container := sessionID[:hash]
+	slash := strings.Index(container, "/")
+	if slash <= 0 || slash != strings.LastIndex(container, "/") {
+		return false
+	}
+	return strings.HasPrefix(container[slash+1:], "D")
+}
+
 // authorizeSpeaker runs the OR-matrix for one Slack user id, channel-wide.
 func (c *Channel) authorizeSpeaker(userID string) chatauth.Decision {
 	return c.authorize(userID, c.legacySenderAccess(userID))

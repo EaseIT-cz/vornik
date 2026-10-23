@@ -232,6 +232,11 @@ func TestLoadTaskSiblings_TaskNotInList(t *testing.T) {
 	assert.Equal(t, "", next)
 }
 
+// Note (GitHub #375): this test asserts on the WHOLE body, so the desktop
+// header row satisfies its "mobile" assertions; until #375 the bar was not
+// even rendered here (no task-message repository). The layout-scoped check is
+// TestTaskDetail_BothLayoutsOfferTheStatusControls_375.
+//
 // TestTaskDetail_MobileBarHasLifecycleActions pins mobile/desktop
 // feature parity for the action bar — operator reported 2026-05-23
 // that phone view was missing Retry / Watch live / Cancel. The

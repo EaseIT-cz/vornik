@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"strings"
 )
 
 // Refusals, each mapped to one HTTP status by WriteError.
@@ -45,9 +46,15 @@ const Unauthenticated = "unauthenticated"
 // equals the request host, otherwise refuse. The daemon's CSRF middleware
 // (internal/api isCSRFSafe) and every approval handler call this; there is no
 // second copy.
+//
+// Amended 2026-10-21 (GitHub #448, cloudflare-real-ip-design "Amendment
+// 2026-10-21 (#494, #448)"): Sec-Fetch-Site "none" means no page initiated
+// the request (a typed URL, a bookmark). That is not a same-origin signal, so
+// it, like any value other than the three below, falls through to the Origin
+// rung.
 func SameOrigin(r *http.Request) bool {
 	switch r.Header.Get("Sec-Fetch-Site") {
-	case "same-origin", "same-site", "none":
+	case "same-origin", "same-site":
 		return true
 	case "cross-site":
 		return false
@@ -64,6 +71,55 @@ func SameOrigin(r *http.Request) bool {
 		return false
 	}
 	return parsed.Host == r.Host
+}
+
+// CrossSiteWrite reports whether r is a state-changing request a browser sent
+// on behalf of another site: an unsafe method, a browser origin signal
+// (Sec-Fetch-Site or Origin present), the ladder refused, and no header-borne
+// credential. The ladder here is same-ORIGIN: same-site does not pass
+// (sameOriginStrict). It is the CSRF gate of a daemon with api.auth_enabled false
+// (GitHub #494, cloudflare-real-ip-design "Amendment 2026-10-21 (#494,
+// #448)"), where no credential tells a browser from a CLI: a request without
+// either header is not a browser's, and is not refused.
+//
+// X-API-Key and a non-Basic Authorization header exempt the request because a
+// cross-site page cannot set them without a CORS preflight, which the daemon
+// never grants. Basic does not: a browser attaches cached Basic credentials to
+// a cross-site form POST.
+func CrossSiteWrite(r *http.Request) bool {
+	switch r.Method {
+	case http.MethodGet, http.MethodHead, http.MethodOptions:
+		return false
+	}
+	if r.Header.Get("Sec-Fetch-Site") == "" && r.Header.Get("Origin") == "" {
+		return false
+	}
+	if r.Header.Get("X-API-Key") != "" {
+		return false
+	}
+	if a := strings.TrimSpace(r.Header.Get("Authorization")); a != "" && !hasBasicScheme(a) {
+		return false
+	}
+	return !sameOriginStrict(r)
+}
+
+// sameOriginStrict is SameOrigin without its same-site rung (review d85e F1):
+// Sec-Fetch-Site same-site is true for another port of the same IP or host,
+// such as a page on 127.0.0.1:3000 posting to the daemon on 127.0.0.1:8080.
+// The auth-on cookie path keeps same-site because its double-submit token
+// closes that; with auth off nothing does.
+func sameOriginStrict(r *http.Request) bool {
+	if r.Header.Get("Sec-Fetch-Site") == "same-site" {
+		return false
+	}
+	return SameOrigin(r)
+}
+
+// hasBasicScheme reports whether an Authorization value uses the Basic scheme
+// (case-insensitive, RFC 7235).
+func hasBasicScheme(v string) bool {
+	scheme, _, _ := strings.Cut(v, " ")
+	return strings.EqualFold(scheme, "Basic")
 }
 
 // CheckRequest is the first half of the gate, run before any row is read:

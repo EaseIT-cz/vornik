@@ -77,8 +77,12 @@ type ClassifyBackfillResult struct {
 	Processed int `json:"processed"`
 	Succeeded int `json:"succeeded"`
 	Failed    int `json:"failed"`
-	Skipped   int `json:"skipped"` // classifier returned unclassified
-	Remaining int `json:"remaining"`
+	// PersistFailed: the subset of Failed that the store refused rather than
+	// the model: a classification, or an abstention's attempt stamp, that
+	// could not be written (GitHub #369, §S8.11 7b).
+	PersistFailed int `json:"persist_failed,omitempty"`
+	Skipped       int `json:"skipped"` // classifier returned unclassified
+	Remaining     int `json:"remaining"`
 	// Exhausted means this sweep reached the end of the current queue. Remaining
 	// can still be non-zero: those rows were deliberately left unclassified
 	// because the model abstained. It lets the CLI finish an exhaustive pass
@@ -199,8 +203,8 @@ func (b *ClassifyBackfiller) runOnce(ctx context.Context, batchSize int) *Classi
 			}
 			return backfillCounts{
 				Processed: r.Processed, Succeeded: r.Succeeded,
-				Failed: r.Failed, Skipped: r.Skipped, Remaining: r.Remaining,
-				Paused: r.Paused,
+				Failed: r.Failed, PersistFailed: r.PersistFailed, Skipped: r.Skipped,
+				Remaining: r.Remaining, Paused: r.Paused,
 			}, nil
 		},
 	).withPaused(&b.optionalPaused))
@@ -209,7 +213,8 @@ func (b *ClassifyBackfiller) runOnce(ctx context.Context, batchSize int) *Classi
 	}
 	return &ClassifyBackfillResult{
 		Processed: counts.Processed, Succeeded: counts.Succeeded,
-		Failed: counts.Failed, Skipped: counts.Skipped, Remaining: counts.Remaining,
+		Failed: counts.Failed, PersistFailed: counts.PersistFailed,
+		Skipped: counts.Skipped, Remaining: counts.Remaining,
 	}
 }
 
@@ -251,6 +256,7 @@ func (b *ClassifyBackfiller) BackfillBatchAcrossProjects(ctx context.Context, ba
 		if byRole, pol := ClassifyByRole(row.ProducerRole); byRole != ClassUnclassified {
 			if uerr := b.Repo.UpdateChunkClass(ctx, row.ID, string(byRole), pol.TTL); uerr != nil {
 				out.Failed++
+				out.PersistFailed++
 				if len(out.Errors) < 5 {
 					out.Errors = append(out.Errors, fmt.Sprintf("%s: persist: %v", row.ID, uerr))
 				}
@@ -289,9 +295,12 @@ func (b *ClassifyBackfiller) BackfillBatchAcrossProjects(ctx context.Context, ba
 			b.recordAbstention(ctx, out, row)
 			continue
 		}
-		policy := DefaultClassPolicies[class]
+		// Producer-aware TTL: a companion note the classifier places in
+		// spec/decision must not become never-expiring (GitHub #435).
+		policy := EffectiveClassPolicy(class, row.ProducerRole)
 		if uerr := b.Repo.UpdateChunkClass(ctx, row.ID, string(class), policy.TTL); uerr != nil {
 			out.Failed++
+			out.PersistFailed++
 			if len(out.Errors) < 5 {
 				out.Errors = append(out.Errors, fmt.Sprintf("%s: persist: %v", row.ID, uerr))
 			}
@@ -319,6 +328,7 @@ func (b *ClassifyBackfiller) BackfillBatchAcrossProjects(ctx context.Context, ba
 func (b *ClassifyBackfiller) recordAbstention(ctx context.Context, out *ClassifyBackfillResult, row ClassifyBackfillRow) {
 	if err := b.Repo.MarkClassifyAttempted(ctx, row.ID); err != nil {
 		out.Failed++
+		out.PersistFailed++
 		if len(out.Errors) < 5 {
 			out.Errors = append(out.Errors, fmt.Sprintf("%s: stamp attempted: %v", row.ID, err))
 		}
@@ -395,6 +405,7 @@ func (b *ClassifyBackfiller) BackfillBatch(ctx context.Context, projectID string
 		if byRole, pol := ClassifyByRole(row.ProducerRole); byRole != ClassUnclassified {
 			if uerr := b.Repo.UpdateChunkClass(ctx, row.ID, string(byRole), pol.TTL); uerr != nil {
 				out.Failed++
+				out.PersistFailed++
 				if len(out.Errors) < 5 {
 					out.Errors = append(out.Errors, fmt.Sprintf("%s: persist: %v", row.ID, uerr))
 				}
@@ -431,9 +442,12 @@ func (b *ClassifyBackfiller) BackfillBatch(ctx context.Context, projectID string
 			b.recordAbstention(ctx, out, row)
 			continue
 		}
-		policy := DefaultClassPolicies[class]
+		// Producer-aware TTL: a companion note the classifier places in
+		// spec/decision must not become never-expiring (GitHub #435).
+		policy := EffectiveClassPolicy(class, row.ProducerRole)
 		if uerr := b.Repo.UpdateChunkClass(ctx, row.ID, string(class), policy.TTL); uerr != nil {
 			out.Failed++
+			out.PersistFailed++
 			if len(out.Errors) < 5 {
 				out.Errors = append(out.Errors, fmt.Sprintf("%s: persist: %v", row.ID, uerr))
 			}

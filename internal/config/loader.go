@@ -466,6 +466,9 @@ func (c *Config) Validate() error {
 	// A doctor threshold outside its range produces a check that can never
 	// fire, which is indistinguishable from the check not existing — the exact
 	// invisibility the config seam was added to remove. Fail the boot instead.
+	if err := c.Admin.ValidateOperatorKeyIDs(); err != nil {
+		return err
+	}
 	if err := c.Doctor.Thresholds.Validate(); err != nil {
 		return err
 	}
@@ -641,6 +644,9 @@ func (c *Config) Validate() error {
 		return err
 	}
 	if err := c.ControlPlane.CostTuningCanary.Validate(); err != nil {
+		return err
+	}
+	if err := c.MCP.Validate(); err != nil {
 		return err
 	}
 	if err := c.ControlPlane.CostTuningAutoApply.Validate(); err != nil {

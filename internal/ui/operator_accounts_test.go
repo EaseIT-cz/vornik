@@ -265,7 +265,7 @@ func TestOperatorStubLinkCodes_MissContract(t *testing.T) {
 
 // TestOperatorKeyActions_AreNotAdminGated is the CE/EE property for the
 // surface added in this build. Identity is a COMMUNITY feature: its operator
-// routes live in the CE operator shell behind requireOperatorCapability, not
+// routes live in the CE operator shell behind requireOperatorScope (requireOperatorCapability until #495), not
 // behind the Enterprise admin gate, because /ui/admin/* answers 501
 // EDITION_UNSUPPORTED in Community.
 //

@@ -1,6 +1,9 @@
 package memory
 
-import "time"
+import (
+	"strings"
+	"time"
+)
 
 // ContentClass enumerates the vornik-wide built-in classes for
 // memory chunks. Adding a class here is a vornik-side change;
@@ -46,11 +49,13 @@ type ClassPolicy struct {
 	// TTL after which chunks of this class expire. Zero means
 	// never expire.
 	TTL time.Duration
-	// RoleOfRecord — when the producer role's swarm config has
-	// this set true, chunks of this class land at
-	// validation_status='verified' immediately, bypassing the
-	// LLM validator. See design §6 (Pillar 2.9 MDM "system of
-	// record" pattern).
+	// RoleOfRecordEligible — when true, an AGENT role's chunks of
+	// this class land at validation_status='verified' immediately,
+	// bypassing the LLM validator (design §6, Pillar 2.9 MDM "system
+	// of record"). No swarm-config per-role flag exists: the class
+	// alone decides for agent roles. A companion or chat deposit is
+	// never role-of-record whatever its class — read the flag through
+	// EffectiveClassPolicy, never directly (GitHub #435).
 	RoleOfRecordEligible bool
 }
 
@@ -301,4 +306,59 @@ func IsValidClass(s string) bool {
 		return true
 	}
 	return false
+}
+
+// EffectiveClassPolicy is the policy a chunk of class written by
+// producerRole actually gets. It is the one place the pipeline reads a
+// class's authority from (candidate confidence, default expiry, the
+// role-of-record shortcut, the dry-run inspector); callers must not read
+// DefaultClassPolicies directly for those decisions (GitHub #435, design 22
+// "A companion deposit never certifies itself").
+//
+// An agent role gets DefaultClassPolicies[class] unchanged. A deliberate
+// human deposit (a companion or chat producer) may carry any class LABEL but
+// none of the class's authority: it is never role-of-record, its confidence
+// is at most the companion_note default, and its TTL is never zero (the class
+// TTL when it has one, else the companion_note TTL). Before this, a
+// companion remember with class "decision" landed verified, at 0.9 confidence,
+// never expiring, with the companion recorded as its own validator.
+func EffectiveClassPolicy(class ContentClass, producerRole string) ClassPolicy {
+	return EffectiveClassPolicyFor(class, producerRole, false)
+}
+
+// EffectiveClassPolicyFor is EffectiveClassPolicy for a chunk whose task is
+// known. companionDelegated is true when the task, or a task on its parent
+// chain, was created by a companion: then an agent role is never
+// role-of-record either, because the companion chose the workflow and so the
+// role (GitHub #482, design 22 "Amendment 2026-10-21 (#482)"). Such a chunk is
+// verified only by provenance. Confidence and TTL are unchanged by delegation.
+// The decision names rag-ingester and reviewer; the rule covers every role,
+// since naming two would leave architect, analyst, lead, feasibility and
+// risk-officer verifying a companion's work.
+func EffectiveClassPolicyFor(class ContentClass, producerRole string, companionDelegated bool) ClassPolicy {
+	pol := DefaultClassPolicies[class]
+	if companionDelegated {
+		pol.RoleOfRecordEligible = false
+	}
+	if !isDeliberateHumanDeposit(producerRole) {
+		return pol
+	}
+	note := DefaultClassPolicies[ClassCompanionNote]
+	pol.RoleOfRecordEligible = false
+	if pol.DefaultConfidence > note.DefaultConfidence {
+		pol.DefaultConfidence = note.DefaultConfidence
+	}
+	if pol.TTL <= 0 {
+		pol.TTL = note.TTL
+	}
+	return pol
+}
+
+// isDeliberateHumanDeposit is the authority cap's producer predicate. It
+// matches on the bare "companion:" / "chat:" prefix, deliberately looser
+// than the provenance gate's kind-shape check (hasKindPrefix): a malformed
+// client kind must fail CLOSED here (capped), never fall through to an
+// agent role's role-of-record policy (design review 5caa F3).
+func isDeliberateHumanDeposit(role string) bool {
+	return strings.HasPrefix(role, "companion:") || strings.HasPrefix(role, "chat:")
 }

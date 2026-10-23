@@ -4,6 +4,7 @@ package config
 import (
 	"crypto/sha256"
 	"crypto/subtle"
+	"encoding/hex"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -1063,8 +1064,12 @@ type IntegrationsConfig struct {
 	// permitted to bypass the probe/save SSRF guard's private/loopback/
 	// link-local block, for self-hosted operators who run e.g. an
 	// internal IMAP host or MCP server. Empty/absent (default) blocks
-	// every private range outright — see design §6.
-	AllowedHosts []string `yaml:"allowed_hosts" json:"allowed_hosts" doc:"Hostnames allowed to bypass the Integrations Hub's private-range SSRF guard for probes/saves. Empty = block all private/loopback/link-local destinations (secure default)."`
+	// every private range outright — see design §6. Since 2026-10-21
+	// (GitHub #433/#434) the same list governs the control-plane MCP Test
+	// probe and the trading panel's broker /caps fetch. Since GitHub #494 it
+	// also governs an operator project's MCP OAuth flow and the GitHub App
+	// channel's API base.
+	AllowedHosts []string `yaml:"allowed_hosts" json:"allowed_hosts" doc:"Hostnames allowed to bypass the daemon's private-range SSRF guard for operator-initiated dials: Integrations Hub probes/saves, the control-plane MCP Test probe, an operator project's MCP OAuth flow and the GitHub App API base. Empty = block all private/loopback/link-local destinations (secure default)."`
 }
 
 // BlackboxConfig tunes the counterfactual replay engine.
@@ -1101,6 +1106,45 @@ type MCPConfig struct {
 	// "sink" tool's HTML arg are re-injected into that call's images arg.
 	// Empty/omitted => disabled.
 	MediaHandles *MediaHandlesConfig `yaml:"media_handles,omitempty"`
+	// AgentReadRelistInterval is how often each connected agent read
+	// server is listed again so a descriptor change between reloads is
+	// judged (agent-administered design §6.5, amendment #481; operator
+	// decision A7). Empty means 15m; read at daemon start.
+	AgentReadRelistInterval string `yaml:"agent_read_relist_interval,omitempty" doc:"How often each connected agent-namespace MCP read server is listed again, so a tool its server now marks as changing things is suspended between reloads (Go duration, 1m to 24h). Empty means 15m. Read at daemon start: a change takes a restart."`
+}
+
+// Bounds and default of mcp.agent_read_relist_interval (design §6.5,
+// amendment #481). There is no "off": the re-list is a security control.
+const (
+	DefaultAgentReadRelistInterval = 15 * time.Minute
+	minAgentReadRelistInterval     = time.Minute
+	maxAgentReadRelistInterval     = 24 * time.Hour
+)
+
+// AgentReadRelist returns the re-list interval: the default when empty.
+// Validate has refused anything else unusable, so a parse failure here
+// also falls back to the default.
+func (c MCPConfig) AgentReadRelist() time.Duration {
+	d := parseDurationOr(c.AgentReadRelistInterval, DefaultAgentReadRelistInterval)
+	if d < minAgentReadRelistInterval || d > maxAgentReadRelistInterval {
+		return DefaultAgentReadRelistInterval
+	}
+	return d
+}
+
+// Validate refuses an unparseable re-list interval or one outside 1m..24h.
+func (c MCPConfig) Validate() error {
+	if c.AgentReadRelistInterval == "" {
+		return nil
+	}
+	d, err := time.ParseDuration(c.AgentReadRelistInterval)
+	if err != nil {
+		return fmt.Errorf("mcp.agent_read_relist_interval: invalid duration %q: %w", c.AgentReadRelistInterval, err)
+	}
+	if d < minAgentReadRelistInterval || d > maxAgentReadRelistInterval {
+		return fmt.Errorf("mcp.agent_read_relist_interval must be between %s and %s, got %q", minAgentReadRelistInterval, maxAgentReadRelistInterval, c.AgentReadRelistInterval)
+	}
+	return nil
 }
 
 // MediaHandlesConfig configures the daemon-side media-handle mechanism
@@ -1324,6 +1368,60 @@ type AdminConfig struct {
 	// key string the caller presented. Membership in this list is
 	// what flips the rendered "Admin" nav link on for an operator.
 	AllowedKeys []string `yaml:"allowed_keys"`
+	// OperatorKeyIDs names which admin-class static keys are the
+	// operator's own (GitHub #499, operator decision A19): a task started
+	// with one counts as the operator's for memory verification (design 22,
+	// "Amendment 2026-10-21 (#482)", part 8a). Each entry is the first 16
+	// hex digits of the key's SHA-256 (`printf %s "$KEY" | sha256sum | cut
+	// -c1-16`), never the key. The broker's and the A2A adapter's keys stay
+	// out of this list and stay untrusted. Each must match a key in
+	// allowed_keys.
+	OperatorKeyIDs []string `yaml:"operator_key_ids,omitempty" since:"2026.10.7" doc:"Hash ids (first 16 hex digits of SHA-256) of the admin keys that are the operator's own; tasks they start count as the operator's for memory verification. Leave the broker's and the A2A keys out."`
+}
+
+// KeyHashID is a key's id: the first 16 hex digits of its SHA-256.
+func KeyHashID(key string) string {
+	sum := sha256.Sum256([]byte(key))
+	return hex.EncodeToString(sum[:])[:16]
+}
+
+// IsOperatorKeyID reports whether a static key's hash id is listed in
+// OperatorKeyIDs. False when the admin surface is off.
+func (a AdminConfig) IsOperatorKeyID(id string) bool {
+	if !a.Enabled || id == "" {
+		return false
+	}
+	for _, k := range a.OperatorKeyIDs {
+		if k == id {
+			return true
+		}
+	}
+	return false
+}
+
+// IsOperatorKey reports whether a presented static key is the operator's own:
+// an admin key whose hash id OperatorKeyIDs lists. The one predicate the REST
+// API, the UI form and the UI chat stamp a task's principal with.
+func (a AdminConfig) IsOperatorKey(key string) bool {
+	return a.IsAdminKey(key) && a.IsOperatorKeyID(KeyHashID(key))
+}
+
+// ValidateOperatorKeyIDs refuses an id that is not 16 lowercase hex digits or
+// that names no key in AllowedKeys.
+func (a AdminConfig) ValidateOperatorKeyIDs() error {
+	known := map[string]bool{}
+	for _, k := range a.AllowedKeys {
+		known[KeyHashID(k)] = true
+	}
+	for _, id := range a.OperatorKeyIDs {
+		if len(id) != 16 || strings.Trim(id, "0123456789abcdef") != "" {
+			return fmt.Errorf("admin.operator_key_ids: %q is not 16 lowercase hex digits (the first 16 of the key's SHA-256)", id)
+		}
+		if !known[id] {
+			return fmt.Errorf("admin.operator_key_ids: %q names no key in admin.allowed_keys", id)
+		}
+	}
+	return nil
 }
 
 // IsAdminKey reports whether the supplied API key is in the
@@ -1709,6 +1807,25 @@ type RetentionConfig struct {
 	// re-embed on next use). Set a window on deployments where the table
 	// grows large; 30d mirrors the response-cache recommendation.
 	EmbeddingCacheDays int `yaml:"embedding_cache_days" doc:"Days to keep cached embeddings before evicting cold entries (0 = keep forever; 30d recommended if the table grows large)."`
+	// BlackboxTraceCacheDays bounds blackbox_trace_cache, the assembled
+	// traces of the black box (each a copy of a task's messages and audit
+	// rows). Always on; zero → 1 day, the cache's own TTL — a row past it is
+	// never served. GitHub #394; retention design §8.2.1.
+	BlackboxTraceCacheDays int `yaml:"blackbox_trace_cache_days" doc:"Days to keep assembled black-box traces (0 = 1 day, the cache TTL)."`
+	// ProjectGistsDays bounds project_gists: a gist the consolidation loop has
+	// not refreshed for this long is deleted, and a narrative not rewritten for
+	// this long is cleared. Always on; zero → 7 days. GitHub #394; retention
+	// design §8.2.2.
+	ProjectGistsDays int `yaml:"project_gists_days" doc:"Days a project gist or its narrative may go unrefreshed before it is removed (0 = 7)."`
+	// UpgradeDumpKeep is how many vornik-update.sh database dumps are kept at
+	// most (newest first). Zero → 2. UpgradeDumpGraceDays removes a dump this
+	// many days after the upgrade that wrote it succeeded (or after a newer
+	// upgrade ran, for a run that did not). Zero → 14. UpgradeDumpDir is the
+	// directory holding the vornik-upgrade-backup-* directories; empty → the
+	// daemon user's home. GitHub #394; retention design §8.2.3.
+	UpgradeDumpKeep      int    `yaml:"upgrade_dump_keep" doc:"Upgrade database dumps kept at most, newest first (0 = 2)."`
+	UpgradeDumpGraceDays int    `yaml:"upgrade_dump_grace_days" doc:"Days an upgrade database dump is kept after its upgrade succeeded (0 = 14)."`
+	UpgradeDumpDir       string `yaml:"upgrade_dump_dir" doc:"Directory holding the vornik-upgrade-backup-* directories (empty = the daemon user's home)."`
 }
 
 // ServerConfig holds HTTP server configuration.
@@ -1739,6 +1856,13 @@ type ServerConfig struct {
 	// Example: https://vornik.example.com
 	// Required only when any project enables git.enabled. Empty = no clone URL shown.
 	PublicBaseURL string `yaml:"public_base_url" doc:"Public origin (scheme://host[:port]) for git clone/push HTTPS URLs; used only to render the clone URL on the project page."`
+	// AcceptedHosts lists the extra Host names the daemon's unauthenticated
+	// surfaces answer: the DNS-rebinding guard (GitHub #465). Every route
+	// when api.auth_enabled is false; since GitHub #494 also the metrics
+	// endpoints whenever they need no credential, in every auth mode.
+	// see LLD § https://docs.vornik.io "Amendment 2026-10-21 (#465)"
+	// see LLD § https://docs.vornik.io "Amendment 2026-10-21 (#494, #448)"
+	AcceptedHosts []string `yaml:"accepted_hosts" json:"accepted_hosts" doc:"Extra Host names the daemon answers on its unauthenticated surfaces: every route when api.auth_enabled is false, and the metrics endpoints whenever they need no credential (DNS-rebinding guard). IP literals, localhost and the public base URL's host are always accepted."`
 }
 
 // RealIPConfig is the trusted-proxy real-client-IP policy consumed by the
@@ -2003,7 +2127,7 @@ type RuntimeConfig struct {
 	// podman, and never set by anything — so every agent container ran with
 	// the whole host available, and one agent taking 2.99 GB took the box
 	// down on 2026-09-20.
-	AgentMemoryLimit string `yaml:"agent_memory_limit" doc:"Per-agent-container memory cap (e.g. 2GiB). Absent derives from host memory and concurrency; \"none\" disables the limit."`
+	AgentMemoryLimit string `yaml:"agent_memory_limit" doc:"Per-agent-container memory cap (e.g. 2GiB); a bounded container gets no swap. Absent derives from host memory and concurrency; \"none\" disables the limit."`
 
 	// AgentLLM configures the LLM endpoint injected into agent containers
 	// as environment variables. When empty, values fall back to the chat.*

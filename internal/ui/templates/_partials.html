@@ -58,7 +58,6 @@
     <link rel="icon" type="image/x-icon" href="/ui/static/favicon.ico">
     <link rel="apple-touch-icon" sizes="180x180" href="/ui/static/apple-touch-icon.png">
     <title>{{.Title}} - Vornik</title>
-    <script src="https://cdn.tailwindcss.com"></script>
     {{/* The ONE sender of the double-submit CSRF token (internal/ui/csrf_client.js;
          CE human-login LLD §6.3). Before htmx and every page script, so htmx
          requests, the fetch API and POST forms all carry it. Inline, not
@@ -66,16 +65,16 @@
          it every mutating console action is refused 403 (P1, 2026-09-28). */}}
     <script>{{csrfClientScript}}</script>
     {{/* HTMX is vendored under /ui/static/ so the dashboard works offline
-         and the CDN can't break the UI. Tailwind stays on the CDN — a
-         self-hosted build needs a node toolchain we don't ship. */}}
+         and no CDN can break the UI. Tailwind is a prebuilt same-origin
+         stylesheet, linked at the end of this head (GitHub #165). */}}
     <script src="/ui/static/htmx.min.js"></script>
     <script src="/ui/static/htmx-ext-sse.js"></script>
     <script>
       // Phase 42 — register the service worker once per page load.
-      // The SW serves the offline shell + caches static assets;
-      // it never serves stale data (API requests fall through to
-      // network). Best-effort: registration failure logs but
-      // doesn't break the UI.
+      // It caches /ui/static/ assets only, never a page or an API
+      // response; the daemon sends Service-Worker-Allowed: /ui/ on the
+      // script so the /ui/ scope is admitted (GitHub #416). Best-effort:
+      // registration failure logs but doesn't break the UI.
       if ('serviceWorker' in navigator) {
         window.addEventListener('load', function() {
           navigator.serviceWorker.register('/ui/static/sw.js', { scope: '/ui/' })
@@ -84,129 +83,11 @@
       }
     </script>
     <script>
-        // Two themes live in the same page, switched at runtime by
-        // setting `data-theme="light"` or `data-theme="dark"` on
-        // <html>. Token values are CSS custom properties (defined in
-        // the inline <style> block below) so a single attribute flip
-        // re-paints every surface, accent, and text colour without
-        // touching the rendered markup.
-        //
-        // Themes:
-        //   Both themes follow the EaseIT Labs Brand Manual v1.2 (design:
-        //   ui-design-refresh-design.md §11): navy ink, EaseIT blue, signal
-        //   green; light = Paper surfaces, dark = the manual's dark tokens.
-        //
-        // Conventions baked into the token system:
-        //   * `dark-*` tokens are the SURFACE tier scale (page, card,
-        //     raised, border). The name is preserved for historical
-        //     reasons — it does NOT mean "dark colour".
-        //   * `gray-*` tokens are the INK tier. gray-100 = primary
-        //     text, gray-600 = disabled. Whether that maps to a
-        //     bright or dark hex value depends on the active theme.
-        //   * Status colours (amber=warning, rose=error, emerald=
-        //     success, violet=token-info, purple=paused) remain
-        //     Tailwind defaults — they are semantic signals, not
-        //     brand identity, and operators learn them once.
-        tailwind.config = {
-            // Wire `dark:` variants to our data-theme attribute so
-            // class strings like `text-brand-700 dark:text-brand-300`
-            // resolve based on the operator's theme choice (not the
-            // OS preference, which Tailwind's default 'media' mode
-            // would lock us into).
-            darkMode: ['selector', '[data-theme="dark"]'],
-            theme: {
-                extend: {
-                    fontFamily: {
-                        sans: ['Manrope', 'system-ui', '-apple-system', 'sans-serif'],
-                        display: ['"Space Grotesk"', 'Manrope', 'system-ui', 'sans-serif'],
-                        mono: ['ui-monospace', '"SF Mono"', '"Cascadia Code"', 'Menlo', 'Consolas', 'monospace'],
-                    },
-                    colors: {
-                        // Surface tiers (page → card → raised → border).
-                        dark: {
-                            900: 'rgb(var(--surface-900) / <alpha-value>)',
-                            800: 'rgb(var(--surface-800) / <alpha-value>)',
-                            700: 'rgb(var(--surface-700) / <alpha-value>)',
-                            600: 'rgb(var(--surface-600) / <alpha-value>)'
-                        },
-                        // Ink tier (semantically: 100 = primary text,
-                        // 600 = disabled). Tailwind's `gray` is the
-                        // most-used class family in the templates, so
-                        // overriding it lets every existing text-gray-*
-                        // use participate in theming without a sed.
-                        gray: {
-                            100: 'rgb(var(--ink-100) / <alpha-value>)',
-                            200: 'rgb(var(--ink-200) / <alpha-value>)',
-                            300: 'rgb(var(--ink-300) / <alpha-value>)',
-                            400: 'rgb(var(--ink-400) / <alpha-value>)',
-                            500: 'rgb(var(--ink-500) / <alpha-value>)',
-                            600: 'rgb(var(--ink-600) / <alpha-value>)',
-                            700: 'rgb(var(--ink-700) / <alpha-value>)',
-                            800: 'rgb(var(--ink-800) / <alpha-value>)',
-                            900: 'rgb(var(--ink-900) / <alpha-value>)'
-                        },
-                        // Explicit semantic aliases (ui-per-page-polish).
-                        // `surface` == the --surface-* tier (SAME vars as
-                        // `dark` above); `ink` == the --ink-* tier (SAME
-                        // vars as `gray`). Registered so the clearer
-                        // `bg-surface-*` / `text-ink-*` class names actually
-                        // resolve under the Tailwind CDN JIT. The four
-                        // re-tiered pages (dashboard/task_detail/
-                        // project_detail/execution) use these names; the rest
-                        // of the templates still use dark/gray (identical
-                        // vars). MUST stay in sync with the dark/gray blocks.
-                        surface: {
-                            900: 'rgb(var(--surface-900) / <alpha-value>)',
-                            800: 'rgb(var(--surface-800) / <alpha-value>)',
-                            700: 'rgb(var(--surface-700) / <alpha-value>)',
-                            600: 'rgb(var(--surface-600) / <alpha-value>)'
-                        },
-                        ink: {
-                            100: 'rgb(var(--ink-100) / <alpha-value>)',
-                            200: 'rgb(var(--ink-200) / <alpha-value>)',
-                            300: 'rgb(var(--ink-300) / <alpha-value>)',
-                            400: 'rgb(var(--ink-400) / <alpha-value>)',
-                            500: 'rgb(var(--ink-500) / <alpha-value>)',
-                            600: 'rgb(var(--ink-600) / <alpha-value>)',
-                            700: 'rgb(var(--ink-700) / <alpha-value>)',
-                            800: 'rgb(var(--ink-800) / <alpha-value>)',
-                            900: 'rgb(var(--ink-900) / <alpha-value>)'
-                        },
-                        // Form-control boundary (WCAG 1.4.11, >= 3:1 on every
-                        // surface; ui-design-refresh-design.md §11.3). Use
-                        // `border border-control` on inputs/selects/textareas
-                        // and toggle groups, never a surface-* border.
-                        control: 'rgb(var(--control-border) / <alpha-value>)',
-                        // Primary brand — varies per theme.
-                        brand: {
-                            50:  'rgb(var(--brand-50) / <alpha-value>)',
-                            100: 'rgb(var(--brand-100) / <alpha-value>)',
-                            200: 'rgb(var(--brand-200) / <alpha-value>)',
-                            300: 'rgb(var(--brand-300) / <alpha-value>)',
-                            400: 'rgb(var(--brand-400) / <alpha-value>)',
-                            500: 'rgb(var(--brand-500) / <alpha-value>)',
-                            600: 'rgb(var(--brand-600) / <alpha-value>)',
-                            700: 'rgb(var(--brand-700) / <alpha-value>)',
-                            800: 'rgb(var(--brand-800) / <alpha-value>)',
-                            900: 'rgb(var(--brand-900) / <alpha-value>)'
-                        },
-                        // Secondary accent — varies per theme.
-                        accent: {
-                            50:  'rgb(var(--accent-50) / <alpha-value>)',
-                            100: 'rgb(var(--accent-100) / <alpha-value>)',
-                            200: 'rgb(var(--accent-200) / <alpha-value>)',
-                            300: 'rgb(var(--accent-300) / <alpha-value>)',
-                            400: 'rgb(var(--accent-400) / <alpha-value>)',
-                            500: 'rgb(var(--accent-500) / <alpha-value>)',
-                            600: 'rgb(var(--accent-600) / <alpha-value>)',
-                            700: 'rgb(var(--accent-700) / <alpha-value>)',
-                            800: 'rgb(var(--accent-800) / <alpha-value>)',
-                            900: 'rgb(var(--accent-900) / <alpha-value>)'
-                        }
-                    }
-                }
-            }
-        }
+        // Theme tokens are CSS custom properties defined in the inline
+        // <style> block below; the Tailwind colour families that read them
+        // (dark/gray = surface/ink, brand, accent, control) and the dark:
+        // selector live in internal/ui/tailwind/tailwind.config.js, compiled
+        // into /ui/static/tailwind.css (GitHub #165).
         // Pages that poll for status (task/execution detail) gate their
         // hx-trigger on `!document.body.classList.contains('poll-stopped')`.
         // The server-side handlers send `HX-Trigger: stopPolling` once the
@@ -214,6 +95,34 @@
         // stop further polls instead of needing per-page JS.
         document.body && document.body.addEventListener('stopPolling',
             () => document.body.classList.add('poll-stopped'));
+
+        // A form with data-confirm="…" asks before it submits. One
+        // delegated listener (capture phase, so it runs before htmx)
+        // instead of an inline onsubmit per form: a later move of the
+        // console CSP to nonces cannot cover handler attributes
+        // (13-control-plane-web-ui.md, GitHub #375).
+        document.addEventListener('submit', function (e) {
+            var f = e.target;
+            var msg = f && f.getAttribute && f.getAttribute('data-confirm');
+            if (msg && !window.confirm(msg)) {
+                e.preventDefault();
+                e.stopImmediatePropagation();
+            }
+        }, true);
+        // The same for a button or link with data-confirm="…": asked on
+        // click, so a cancelled submit button never submits its form and
+        // a cancelled link never navigates. A form's own data-confirm is
+        // left to the submit listener above, so a click inside such a
+        // form asks once, at submit (web-ui-design.md, #416 §C phase 2).
+        document.addEventListener('click', function (e) {
+            var el = e.target && e.target.closest && e.target.closest('[data-confirm]');
+            if (!el || el.tagName === 'FORM') return;
+            var msg = el.getAttribute('data-confirm');
+            if (msg && !window.confirm(msg)) {
+                e.preventDefault();
+                e.stopImmediatePropagation();
+            }
+        }, true);
 
         // Sort persistence. When the URL omits `sort`, fall back to the
         // user's last choice for this page (kept in localStorage). When
@@ -932,6 +841,11 @@
         [data-theme="dark"] .alert-spend { color: #E4D4F7; background: rgb(150 110 220 / 0.16); border-color: rgb(176 134 232 / 0.42); }
         [data-theme="dark"] .alert-spend .alert-icon { background: rgb(150 110 220 / 0.28); color: #D6BDF2; }
     </style>
+    {{/* The prebuilt Tailwind stylesheet (internal/ui/tailwind, `make ui-css`;
+         GitHub #165). LAST in <head>, after the inline <style>, where the Play
+         CDN appended its <style>, so the cascade order is unchanged. The ?v=
+         content hash keys the service worker's cache-first copy. */}}
+    <link rel="stylesheet" href="{{tailwindCSSHref}}">
 </head>
 {{end}}
 
@@ -1203,7 +1117,7 @@
             <span class="text-[10px] leading-none max-w-full truncate px-0.5">{{.MobileLabel}}</span>
         </button>
         {{end}}
-        <form method="POST" action="/ui/logout" data-signout class="{{if not (hasSessionFlag .)}}hidden {{end}}flex-1 min-w-0" onsubmit="return confirm('Sign out?')">
+        <form method="POST" action="/ui/logout" data-signout class="{{if not (hasSessionFlag .)}}hidden {{end}}flex-1 min-w-0" data-confirm="Sign out?">
             <button type="submit" class="flex flex-col items-center justify-center gap-0.5 tap text-gray-400 w-full h-full" aria-label="Sign out">
                 <svg class="h-5 w-5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1"/></svg>
                 <span class="text-[10px] leading-none max-w-full truncate px-0.5">Sign out</span>
@@ -1421,12 +1335,12 @@
      the old brand-colour footer clashed with the glass/dark shell and was
      redundant with the rail. Kept as an empty define so the ~60
      {{template "pageFooter"}} call sites don't all need editing. */}}
-{{/* pageFooter — subtle daemon-version chrome linking to the changelog. Renders
+{{/* pageFooter — subtle daemon-version chrome linking to the release notes. Renders
      nothing when appVersion is empty (e.g. unset in tests). appVersion is a
      server-bound FuncMap entry (see NewServer), so no page data threading. */}}
 {{define "pageFooter"}}{{with appVersion}}
 <footer class="mt-8 pb-4 px-4 text-right text-xs text-ink-500 border-t border-ink-500/10 pt-3">
-    <a href="https://docs.vornik.io/changelog" target="_blank" rel="noopener"
+    <a href="https://docs.vornik.io/release-notes/" target="_blank" rel="noopener"
        title="Release notes" class="hover:text-ink-300 hover:underline">Vornik {{.}}</a>
 </footer>{{end}}{{end}}
 
@@ -1678,7 +1592,10 @@ Expects a dict:
 {{define "statusFilterCell"}}
 {{- $isActive := eq .Active .Status -}}
 {{- $href := "/ui/tasks" -}}
-{{- if .Status -}}
+{{- if .Href -}}
+  {{- /* A cell that is not one status (the Active set, #411) passes its own link. */ -}}
+  {{- $href = .Href -}}
+{{- else if .Status -}}
   {{- $href = printf "/ui/tasks?status=%s%s%s" .Status .LimitQS .FlatQS -}}
 {{- else -}}
   {{- /* "All" cell: clear status; keep nested/flat + page size. */ -}}
@@ -1687,7 +1604,7 @@ Expects a dict:
 <a href="{{$href}}" hx-get="{{$href}}" hx-target="#task-content" hx-select="#task-content" hx-swap="outerHTML" hx-push-url="true"
    class="block text-center px-2 py-2 rounded-lg ring-1 transition-colors {{if $isActive}}{{.ActiveBg}}{{else}}bg-dark-900/60 ring-dark-700 hover:ring-dark-600 hover:bg-dark-900{{end}}"
    aria-current="{{if $isActive}}page{{else}}false{{end}}"
-   aria-label="Filter to {{.Label}} ({{.Count}})">
+   aria-label="Filter to {{.Label}} ({{.Count}})"{{if .Title}} title="{{.Title}}"{{end}}>
     <div class="text-xl font-bold {{.CountColor}} tabular-nums">{{.Count}}</div>
     <div class="text-[11px] {{if $isActive}}text-gray-200{{else}}text-gray-500{{end}} mt-0.5">{{.Label}}</div>
 </a>

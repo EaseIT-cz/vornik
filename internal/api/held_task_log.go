@@ -10,6 +10,7 @@ import (
 
 	"vornik.io/vornik/internal/executor/livepubsub"
 	"vornik.io/vornik/internal/persistence"
+	"vornik.io/vornik/internal/report"
 )
 
 // HeldTaskLog is the one task log a request may read: state the daemon
@@ -25,10 +26,12 @@ import (
 // executor captured when a step failed; else the result message; else the
 // task's last_error). Nil fields degrade to whatever the others hold.
 //
-// Caller precondition (review-20261008-1762 finding 2): it renders the
-// OPERATOR view, unscrubbed. Wire it only to routes that admit operator and
-// project-scoped keys, which already read the same view on
-// GET /api/v1/executions/{id}/live. Every caller outside that trust boundary
+// Caller precondition (review-20261008-1762 finding 2): with Scrub nil it
+// renders the OPERATOR view, unscrubbed, which only an admin-class caller
+// reads (GitHub #440, 2026-10-21: the logs and explain routes and the UI log
+// panel serve ScrubbedView to every other caller, and the post-mortem
+// explainer reads only ScrubbedView, #439). Before #440 this paragraph said
+// project-scoped keys read the operator view too. Every caller outside that trust boundary
 // reads the hub through a projection instead (live design, Change 2026-10-12,
 // L0, the reader table): companion, broker and agent-admin keys through
 // projectLiveEvent (the live socket, task_logs; task_explain reads no hub
@@ -45,6 +48,28 @@ type HeldTaskLog struct {
 	// finding 3). The UI and CLI keep the cap for readability; they are not
 	// redacted.
 	Uncapped bool
+	// Scrub, when set, makes TaskLogs return the SCRUBBED view: each hub
+	// line rendered whole, passed through the scrubber, and only then capped
+	// (redact before truncate), and the persisted excerpt scrubbed line by
+	// line; a withheld line reads report.WithheldLine. Set it through
+	// ScrubbedView, which refuses a nil scrubber, so asking for the scrubbed
+	// view can never yield the operator view (process-spawn-law design,
+	// "Amendment 2026-10-21 (#439, #440)", C2). Nil is the operator view.
+	Scrub report.LineScrubber
+}
+
+// errNoLogScrubber is returned when the scrubbed view is asked for and no
+// scrubber could be built.
+var errNoLogScrubber = errors.New("the log scrubber could not be built")
+
+// ScrubbedView returns h reading the scrubbed view with scrub. A nil scrub is
+// an error: the caller then serves nothing rather than the operator view.
+func (h HeldTaskLog) ScrubbedView(scrub report.LineScrubber) (HeldTaskLog, error) {
+	if scrub == nil {
+		return HeldTaskLog{}, errNoLogScrubber
+	}
+	h.Scrub = scrub
+	return h, nil
 }
 
 const (
@@ -94,7 +119,11 @@ func (h HeldTaskLog) TaskLogs(ctx context.Context, taskID string, tail int) (str
 		if len(lines) > 0 {
 			lines = append(lines, heldLogPersistedMarker)
 		}
-		lines = append(lines, strings.Split(strings.TrimRight(excerpt, "\n"), "\n")...)
+		excerpt = strings.TrimRight(excerpt, "\n")
+		if h.Scrub != nil {
+			excerpt, _ = report.ScrubLines(excerpt, h.Scrub)
+		}
+		lines = append(lines, strings.Split(excerpt, "\n")...)
 	}
 	if len(lines) == 0 {
 		return "", errNoHeldTaskLog
@@ -118,9 +147,36 @@ func (h HeldTaskLog) hubLines(executionID string) []string {
 	defer cancel()
 	var out []string
 	for _, evt := range drainLive(ch, nil) {
-		if line, ok := heldLogLine(evt, h.Uncapped); ok {
-			out = append(out, line)
+		if h.Scrub == nil {
+			if line, ok := heldLogLine(evt, h.Uncapped); ok {
+				out = append(out, line)
+			}
+			continue
 		}
+		// Redact before truncate: scrub every string of the payload as it is
+		// (JSON escaping would put \n, \t or < before a key and defeat
+		// the \b-anchored nets: adversarial review 2026-10-21, W16-F finding
+		// 1), then render whole, scrub the line, then cap.
+		if evt.Kind == livepubsub.KindLLMToken {
+			continue // skipped in both views
+		}
+		if evt.Payload != nil {
+			m, okMap := payloadAsMap(evt.Payload)
+			if !okMap || scrubStrings(m, h.Scrub) {
+				out = append(out, report.WithheldLine)
+				continue
+			}
+			evt = withPayload(evt, m)
+		}
+		line, ok := heldLogLine(evt, true)
+		if !ok {
+			continue
+		}
+		line, _ = report.ScrubLines(line, h.Scrub)
+		if !h.Uncapped {
+			line = capHeldLine(line)
+		}
+		out = append(out, line)
 	}
 	return out
 }
@@ -154,6 +210,16 @@ func heldLogLine(evt livepubsub.LiveEvent, uncapped bool) (string, bool) {
 		payload = truncateUTF8(payload, heldLogPayloadCap) + "…"
 	}
 	return strings.TrimRight(ts+" "+evt.Kind+" "+payload, " "), true
+}
+
+// capHeldLine bounds a scrubbed line as heldLogLine bounds an operator one:
+// the "<time> <kind> " prefix plus heldLogPayloadCap bytes of payload.
+func capHeldLine(line string) string {
+	const prefixAllowance = 64 // RFC3339 time + the longest kind name
+	if len(line) <= heldLogPayloadCap+prefixAllowance {
+		return line
+	}
+	return truncateUTF8(line, heldLogPayloadCap+prefixAllowance) + "…"
 }
 
 // truncateUTF8 cuts s to at most n bytes without splitting a rune.

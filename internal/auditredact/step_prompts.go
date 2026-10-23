@@ -20,18 +20,52 @@ import (
 // and a scan at each writer is a scan the next writer forgets. Every code path
 // that rebuilds the repository set must re-apply this decoration; that was the
 // live lesson of 2026-08-20.
+//
+// Since 2026-10-16 it is always installed — with a bypass reason when scanning
+// is off or the detector failed to build — and counts every Save on
+// vornik_redaction_seam_rows_total, because an absent decorator cannot count
+// the prompts it lets through (chat-audit retention and redaction design
+// §9.2.1, GitHub #395 review 902b F1).
 type StepPrompts struct {
 	inner    persistence.StepPromptRepository
 	detector secrets.Detector
 	audit    persistence.SecretRedactionAuditRepository
 	logger   *zerolog.Logger
+
+	bypassReason Reason
+	metrics      *Metrics
 }
 
-// NewStepPrompts wraps inner. A nil detector is a pass-through, so CE paths
-// and tests that never wire secret scanning still persist prompts.
+// NewStepPrompts wraps inner. A nil detector is a pass-through, counted as
+// skipped with reason detector_nil, so CE paths and tests that never wire
+// secret scanning still persist prompts.
 func NewStepPrompts(inner persistence.StepPromptRepository, detector secrets.Detector, audit persistence.SecretRedactionAuditRepository, logger *zerolog.Logger) *StepPrompts {
 	return &StepPrompts{inner: inner, detector: detector, audit: audit, logger: logger}
 }
+
+// NewStepPromptsBypassed is the decorator installed when scanning is off or
+// the detector failed to build: a counted pass-through.
+func NewStepPromptsBypassed(inner persistence.StepPromptRepository, reason Reason, logger *zerolog.Logger) *StepPrompts {
+	return &StepPrompts{inner: inner, bypassReason: reason, logger: logger}
+}
+
+// SetMetrics injects the shared census holder.
+func (s *StepPrompts) SetMetrics(m *Metrics) { s.metrics = m }
+
+// BypassReason reports why this decorator scans nothing, or ReasonNone.
+func (s *StepPrompts) BypassReason() Reason {
+	if s == nil {
+		return ReasonNone
+	}
+	return s.bypassReason
+}
+
+// Scans reports whether this decorator has a detector — what the container's
+// exchange redactor needs to know before handing its RedactText out.
+func (s *StepPrompts) Scans() bool { return s != nil && s.detector != nil }
+
+// Inner returns the wrapped repository, for the container's bypass upgrade.
+func (s *StepPrompts) Inner() persistence.StepPromptRepository { return s.inner }
 
 // RedactText scans body and returns it with every finding replaced by a
 // [REDACTED:type] marker, plus the per-type counts. The body-level entry point
@@ -49,11 +83,24 @@ func (s *StepPrompts) RedactText(body string) (string, map[string]int) {
 
 // Save redacts, then stores; the returned hash is of what was stored.
 func (s *StepPrompts) Save(ctx context.Context, part persistence.StepPromptPart, body string) (string, error) {
+	if s.detector == nil {
+		reason := s.bypassReason
+		if reason == ReasonNone {
+			reason = ReasonDetectorNil
+		}
+		s.metrics.recordSeam(StoreStepPrompts, StatusSkipped, reason)
+		return s.inner.Save(ctx, part, body)
+	}
 	clean, counts := s.RedactText(body)
-	if len(counts) > 0 && s.logger != nil {
-		s.logger.Warn().Str("part", string(part)).Interface("by_type", counts).
-			Str("checkpoint", secrets.CheckpointToolAudit).
-			Msg("secrets: step prompt scanned — redacting before persist")
+	if len(counts) > 0 {
+		if s.logger != nil {
+			s.logger.Warn().Str("part", string(part)).Interface("by_type", counts).
+				Str("checkpoint", secrets.CheckpointToolAudit).
+				Msg("secrets: step prompt scanned — redacting before persist")
+		}
+		s.metrics.recordSeam(StoreStepPrompts, StatusRedacted, ReasonNone)
+	} else {
+		s.metrics.recordSeam(StoreStepPrompts, StatusScanned, ReasonNone)
 	}
 	s.record(ctx, counts)
 	return s.inner.Save(ctx, part, clean)

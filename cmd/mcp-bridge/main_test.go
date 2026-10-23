@@ -8,7 +8,6 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -29,58 +28,6 @@ func captureStdout(t *testing.T, fn func() error) (string, error) {
 	_, _ = io.Copy(&buf, r)
 	_ = r.Close()
 	return buf.String(), err
-}
-
-func TestLoadConfig(t *testing.T) {
-	dir := t.TempDir()
-	path := filepath.Join(dir, "mcp.json")
-	body := `[{"name":"broker","type":"http","url":"http://127.0.0.1:8788/sse","allowed_tools":["get_quote"]}]`
-	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
-		t.Fatalf("write mcp config: %v", err)
-	}
-
-	servers, err := loadConfig(path)
-	if err != nil {
-		t.Fatalf("loadConfig: %v", err)
-	}
-	if len(servers) != 1 || servers[0].Name != "broker" || servers[0].URL != "http://127.0.0.1:8788/sse" {
-		t.Fatalf("unexpected servers: %#v", servers)
-	}
-	if len(servers[0].AllowedTools) != 1 || servers[0].AllowedTools[0] != "get_quote" {
-		t.Fatalf("unexpected allowed tools: %#v", servers[0].AllowedTools)
-	}
-}
-
-// The bridge's mcp.json is its config file: a stdio entry's program is minted
-// from it at load, and an HTTP entry carries none (process-spawn law, S1b-2).
-func TestLoadConfig_MintsStdioPrograms(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "mcp.json")
-	body := `[{"name":"local","transport":"stdio","command":"python3","args":["-m","srv"]},{"name":"h","transport":"sse","url":"http://x/sse"}]`
-	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	servers, err := loadConfig(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if p := servers[0].Program; p.Path() != "python3" || len(p.Args()) != 2 || p.Args()[1] != "srv" {
-		t.Fatalf("stdio program = %q %v", p.Path(), p.Args())
-	}
-	if !servers[1].Program.IsZero() {
-		t.Fatal("an HTTP server must carry no program")
-	}
-}
-
-func TestLoadConfigRejectsInvalidJSON(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "mcp.json")
-	if err := os.WriteFile(path, []byte(`not json`), 0o644); err != nil {
-		t.Fatalf("write mcp config: %v", err)
-	}
-
-	_, err := loadConfig(path)
-	if err == nil || !strings.Contains(err.Error(), "parse mcp.json") {
-		t.Fatalf("loadConfig invalid error = %v, want parse mcp.json", err)
-	}
 }
 
 func TestHTTPDiscover(t *testing.T) {

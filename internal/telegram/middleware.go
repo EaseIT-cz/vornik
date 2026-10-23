@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"vornik.io/vornik/internal/chatauth"
+	"vornik.io/vornik/internal/conversation"
 )
 
 // SetIdentityShim wires the Phase-4 compatibility shim
@@ -67,6 +68,37 @@ func (b *Bot) authorizeCtx(ctx context.Context, userID int64) chatauth.Decision 
 		return chatauth.Decision{Allowed: legacy.Allowed, Projects: legacy.Projects}
 	}
 	return b.identityShim.Authorize(ctx, "telegram", strconv.FormatInt(userID, 10), legacy)
+}
+
+// OperatorView is the dispatcher.ChannelReceiver hook that decides whether a
+// turn's audience is one admin-linked principal alone, the only case in
+// which the task tools hand the model a task's stored error text raw
+// (process-spawn-law design, "Amendment 2026-10-21 (#480)", J3 and J4). All
+// three must hold:
+//   - the turn has a human speaker (a synthesised follow-up has none);
+//   - the chat is that speaker's private chat (a private chat's id is the
+//     user's id; a group's is negative), since a group's members see every
+//     reply and share the history the tool result is stored in;
+//   - the speaker resolves, through the identity shim, to an admin principal
+//     (chatauth.Decision.AdminLinked). A legacy-allowlist grant is not one.
+//
+// It reads only the adapter-built SessionID and SpeakerID, never
+// ChannelSpecific.
+func (b *Bot) OperatorView(ctx context.Context, msg conversation.ChannelMessage) bool {
+	if b == nil || b.identityShim == nil || msg.SpeakerID == "" {
+		return false
+	}
+	userID, err := strconv.ParseInt(msg.SpeakerID, 10, 64)
+	if err != nil || userID <= 0 {
+		return false
+	}
+	chatID, err := strconv.ParseInt(msg.SessionID, 10, 64)
+	if err != nil || chatID != userID {
+		return false
+	}
+	authCtx, cancel := context.WithTimeout(ctx, authorizeBudget)
+	defer cancel()
+	return b.authorizeCtx(authCtx, userID).AdminLinked()
 }
 
 // IsAllowed reports whether the user may interact with the bot at

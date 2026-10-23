@@ -194,9 +194,13 @@ def scope_of_repo(top):
     return normalize_remote(url) if url else os.path.basename(top)
 
 def cwd_scope():
-    # Files outside any repository: the old working-directory rule.
+    # Files outside any repository: the working directory's repository, and
+    # NO scope when it is in none (GitHub #385). A folder name is not a
+    # repository identity: this used to return the cwd's basename and minted
+    # a scope per scratch directory. Loose files carry no document path, so
+    # an empty scope here is never refused.
     top = git(["rev-parse", "--show-toplevel"], os.getcwd())
-    return scope_of_repo(top) if top else os.path.basename(os.getcwd())
+    return scope_of_repo(top) if top else ""
 
 # Which repository holds each file, and the file's path inside it. Real paths
 # on both sides, so a symlinked home directory cannot produce a path that
@@ -307,7 +311,7 @@ if not url_base or not token:
     print("(the same env the .mcp.json plugin config uses — see contrib/claude-code-companion/README.md)")
     sys.exit(1)
 
-print(f"repo_scope: {repo_scope}")
+print(f"repo_scope: {repo_scope or '(none: outside any repository)'}")
 for f in files:
     if "path" in f:
         print(f"  {f['path']}")

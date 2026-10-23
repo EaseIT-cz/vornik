@@ -172,11 +172,11 @@ func TestEmbedder_CacheHitsShortCircuit(t *testing.T) {
 }
 
 func TestEmbedder_NoCacheNoCacheCall(t *testing.T) {
-	// Cache=nil + endpoint="" → Embed returns nil, nil; no panic.
+	// Cache=nil + endpoint="" → Embed returns not_configured (#369 item 5); no panic.
 	e := &Embedder{cfg: Config{EmbeddingModel: "test-model"}}
 	out, err := e.Embed(context.Background(), EmbedScope{ProjectID: "p1", CallSite: EmbedCallSiteIngest}, []string{"x"})
-	if err != nil {
-		t.Errorf("err: %v", err)
+	if r, _ := EmbedFailureReason(err); r != EmbedReasonNotConfigured {
+		t.Errorf("err: %v, want not_configured", err)
 	}
 	if out != nil {
 		t.Errorf("expected nil result with empty endpoint, got %v", out)
@@ -192,8 +192,8 @@ func TestEmbedder_CacheRequiresModel(t *testing.T) {
 	cache := newFakeEmbedCache()
 	e := NewEmbedder(Config{})
 	e.Cache = cache
-	if _, err := e.Embed(context.Background(), EmbedScope{ProjectID: "p1", CallSite: EmbedCallSiteIngest}, []string{"x"}); err != nil {
-		t.Fatalf("Embed: %v", err)
+	if _, err := e.Embed(context.Background(), EmbedScope{ProjectID: "p1", CallSite: EmbedCallSiteIngest}, []string{"x"}); err == nil {
+		t.Fatalf("Embed: unconfigured embedder returned no error (#369 item 5)")
 	}
 	if cache.gets != 0 {
 		t.Errorf("expected zero cache lookups when EmbeddingModel is empty, got %d", cache.gets)

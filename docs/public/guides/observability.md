@@ -1,11 +1,11 @@
 ---
 sources:
     - path: internal/observability/metrics.go
-      sha256: 71ab1bc0f72aea69510677c929b401a7ab7030c1371905197f6504c5a71c120b
+      sha256: 234ef6f7682e18b68f3c23409f7bc920b2b90fe2615860b22f1a5cb032599b9d
     - path: internal/ui/spend.go
       sha256: 41775f83ae3f73e6d6a67e1e3a1a0aca7e72656fe9b2cfbcc4edf0a8f08c7407
     - path: internal/reminders/metrics.go
-      sha256: bb22804ef50c44d048082968c16e51c5d729f4dafe5b1b892fe9719d0fc0fec6
+      sha256: 7585889dc820b2e0cd021a52d78a25533d9642ffec45d4dc56373d502df067dc
 ---
 # Observability
 
@@ -131,6 +131,15 @@ main-port endpoint requires the admin key or a dedicated scrape token; the
 separate `metrics.addr` listener is the intended scrape target — bind it to a
 trusted interface.
 
+Every `/metrics` that answers without a credential (the dedicated listener
+always, and the main-port endpoint unless `require_admin` is set with auth on)
+serves only requests addressed to an IP address, `localhost`, the daemon's
+public base URL host, or a name listed in `server.accepted_hosts`. This stops
+a web page from reading your metrics through DNS rebinding. If your scraper
+reaches vornik by another name (for example a compose service name such as
+`vornik:9090`), add that name to `server.accepted_hosts`; otherwise the scrape
+gets `403`.
+
 The exported metrics cover, in plain terms:
 
 - **Task and execution lifecycle** — active, started, completed, failed,
@@ -150,7 +159,8 @@ The exported metrics cover, in plain terms:
   or in cooldown).
 - **Scheduled updates (task-kind reminders)** — task-kind fires per project,
   outcome deliveries by success/failure, fires skipped because the prior run
-  was still going, delivery-time channel-send failures, and stuck-`firing`
+  was still going, delivery-time channel-send failures, outcomes that had
+  nowhere to go (no channel resolver, or the channel not configured), and stuck-`firing`
   rows the crash-recovery sweep reclaims. See the
   [vornikctl reference](../reference/vornikctl.md) (`reminders` group) for the
   `text` vs `task` kinds and pause/resume.

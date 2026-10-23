@@ -65,7 +65,7 @@ type LiveTaskPageData struct {
 // non-live execution-detail projection but returns only the fields the live
 // timeline renders. Best-effort: a nil repo or a load error yields no seed
 // rows (the JS layer still fills the live timeline from the WebSocket).
-func (s *Server) liveStepOutcomes(ctx context.Context, executionID string) []StepOutcomeRow {
+func (s *Server) liveStepOutcomes(ctx context.Context, executionID string, detailView func(string) string) []StepOutcomeRow {
 	if s.outcomeRepo == nil || executionID == "" {
 		return nil
 	}
@@ -97,7 +97,7 @@ func (s *Server) liveStepOutcomes(ctx context.Context, executionID string) []Ste
 			Model:        o.Model,
 			Outcome:      o.Outcome,
 			ErrorClass:   o.ErrorClass,
-			ErrorDetail:  o.ErrorDetail,
+			ErrorDetail:  detailView(o.ErrorDetail),
 			OutcomeClass: outcomeCSSClass(o.Outcome),
 		}
 		out = append(out, row)
@@ -210,7 +210,7 @@ func (s *Server) TaskLive(w http.ResponseWriter, r *http.Request, taskID string)
 		if exec.CurrentStepID != nil {
 			data.CurrentStep = *exec.CurrentStepID
 		}
-		data.Outcomes = s.liveStepOutcomes(ctx, exec.ID)
+		data.Outcomes = s.liveStepOutcomes(ctx, exec.ID, s.errorTextOrRaw(r)) // GitHub #466
 		data.StoryLines = s.storyLines(ctx, exec.ID)
 	}
 	s.render(w, "task_live.html", data)
@@ -287,7 +287,7 @@ func (s *Server) ExecutionLive(w http.ResponseWriter, r *http.Request, execID st
 	if exec.CurrentStepID != nil {
 		data.CurrentStep = *exec.CurrentStepID
 	}
-	data.Outcomes = s.liveStepOutcomes(ctx, exec.ID)
+	data.Outcomes = s.liveStepOutcomes(ctx, exec.ID, s.errorTextOrRaw(r)) // GitHub #466
 	data.StoryLines = s.storyLines(ctx, exec.ID)
 	s.render(w, "task_live.html", data)
 }

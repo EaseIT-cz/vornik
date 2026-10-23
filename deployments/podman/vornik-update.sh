@@ -25,7 +25,12 @@
 #      edited or acknowledged), starts it. Because the unit is Type=notify,
 #      systemd only reports "ready" AFTER the DB migrations applied and health
 #      checks passed.
-#   6. Verifies /readyz, prints the DB migration version bump, runs doctor.
+#   6. Verifies /readyz, prints the DB migration version bump, runs the
+#      installed `vornikctl doctor` (bounded at 300 s; a finding is a warning,
+#      never a failed update).
+#   7. Stamps the backup's STATE.txt as completed and prunes older database
+#      dumps through the new vornikctl (keep 2; each kept 14 days after its
+#      upgrade; retention.upgrade_dump_keep / upgrade_dump_grace_days).
 #
 # Every Vornik migration to date is additive (CREATE/ADD ... IF NOT EXISTS),
 # so an upgrade does not drop data. A full DB dump is still taken every run;
@@ -84,7 +89,7 @@
 #   VORNIK_HTTP_PORT     UI/API port                (default: 8080)
 #   VORNIK_PG_CONTAINER  postgres container         (default: vornik-postgres)
 #   VORNIK_PG_DB/USER    database name / role       (default: vornik / vornik)
-#   VORNIK_GO_IMAGE      build image                (default: docker.io/library/golang:1.26.9)
+#   VORNIK_GO_IMAGE      build image                (default: docker.io/library/golang:1.26.10)
 #
 set -euo pipefail
 
@@ -134,7 +139,7 @@ CONFIG="${VORNIK_CONFIG:-$HOME/.config/vornik/config.yaml}"
 SERVICE="${VORNIK_SERVICE:-vornik.service}"           # rootless *user* unit
 HTTP_PORT="${VORNIK_HTTP_PORT:-8080}"
 READYZ_URL="${VORNIK_READYZ_URL:-http://localhost:${HTTP_PORT}/readyz}"
-GO_IMAGE="${VORNIK_GO_IMAGE:-docker.io/library/golang:1.26.9}"
+GO_IMAGE="${VORNIK_GO_IMAGE:-docker.io/library/golang:1.26.10}"
 
 PG_CONTAINER="${VORNIK_PG_CONTAINER:-vornik-postgres}" # rootless podman container
 PG_DB="${VORNIK_PG_DB:-vornik}"
@@ -216,7 +221,7 @@ fi
 [[ -d "$REPO_DIR/.git" ]] || die "source checkout not found at $REPO_DIR (set VORNIK_DIR, or install via the quickstart first)"
 [[ -f "$CONFIG" ]]        || die "config not found at $CONFIG"
 systemctl --user cat "$SERVICE" >/dev/null 2>&1 || die "user unit $SERVICE not found"
-podman ps --format '{{.Names}}' | grep -qx "$PG_CONTAINER" \
+podman ps --format '{{.Names}}' | grep -x "$PG_CONTAINER" >/dev/null \
   || die "postgres container '$PG_CONTAINER' is not running (set VORNIK_PG_CONTAINER, or bring deps up: (cd $REPO_DIR/deployments/podman && podman compose -f deps.compose.yaml up -d))"
 
 CURRENT_COMMIT="$(git -C "$REPO_DIR" rev-parse --short HEAD)"
@@ -227,7 +232,7 @@ git -C "$REPO_DIR" fetch --tags --prune origin >/dev/null 2>&1 || die "git fetch
 
 # Default target = newest tag by creation date.
 if [[ -z "$TARGET_REF" ]]; then
-  TARGET_REF="$(git -C "$REPO_DIR" tag -l --sort=-creatordate | head -1)"
+  TARGET_REF="$(git -C "$REPO_DIR" tag -l --sort=-creatordate | sed -n 1p)"
   [[ -n "$TARGET_REF" ]] || die "no tags found; pass --ref <tag-or-commit> (e.g. --ref origin/main)"
 fi
 # A bare branch name must not select a stale local branch after a fetch (#64).
@@ -253,7 +258,7 @@ TARGET_COMMIT="$(git -C "$REPO_DIR" rev-parse --short "$TARGET_REF^{commit}")"
 # exactly the guessed rollback target this exists to prevent.
 installed_version() {
   [[ -x "$BIN_DIR/vornik" ]] || return 0
-  "$BIN_DIR/vornik" -version 2>/dev/null | head -1 | awk '{print $2}'
+  "$BIN_DIR/vornik" -version 2>/dev/null | sed -n 1p | awk '{print $2}'
 }
 commit_of_version() {
   local v="$1" c
@@ -517,7 +522,7 @@ fi
 #    A static binary that can't even print its version is broken (bad build,
 #    arch mismatch); catching it here means we never swap it in.
 # ---------------------------------------------------------------------------
-NEW_VER_LINE="$("$REPO_DIR/.bin/vornik" -version 2>&1 | head -1 || true)"
+NEW_VER_LINE="$("$REPO_DIR/.bin/vornik" -version 2>&1 | sed -n 1p || true)"
 grep -qi vornik <<<"$NEW_VER_LINE" || die "new binary failed its -version smoke check: '$NEW_VER_LINE' (nothing swapped)"
 log "New binary: $NEW_VER_LINE"
 
@@ -539,7 +544,7 @@ log "New binary: $NEW_VER_LINE"
 #     config dir): a preflight that blocks upgrades because it cannot evaluate
 #     itself is worse than the drift it looks for.
 # ---------------------------------------------------------------------------
-if "$REPO_DIR/.bin/vornikctl" doctor --help 2>&1 | grep -q -- --offline; then
+if "$REPO_DIR/.bin/vornikctl" doctor --help 2>&1 | grep -- --offline >/dev/null; then
     CLASS_OUT="$("$REPO_DIR/.bin/vornikctl" doctor --offline --json 2>/dev/null || true)"
     if grep -q '"config_class_compat"' <<<"$CLASS_OUT" 2>/dev/null; then
         if python3 - "$CLASS_OUT" <<'PYEOF' 2>/dev/null; then
@@ -633,11 +638,17 @@ if [[ "$ready" != 1 ]]; then
   die "readiness check failed"
 fi
 
+# The upgrade succeeded. Say so in the backup's own record: a dump whose run
+# never got here carries no stamp, and the pruner below keeps the newest such
+# dump as the rollback point of a failed upgrade (#394, retention design
+# §8.2.3).
+echo "upgrade_completed_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$BK/STATE.txt"
+
 NEW_DBVER="$(pg 'SELECT max(version) FROM migrations;')"
 echo
 log "Upgrade complete."
 echo "  /readyz : ready"
-echo "  version : $("$BIN_DIR/vornikctl" version 2>&1 | head -1)"
+echo "  version : $("$BIN_DIR/vornikctl" version 2>&1 | sed -n 1p)"
 echo "  DB migr : v${CURRENT_DBVER:-?} -> v${NEW_DBVER:-?}"
 echo "  backup  : $BK"
 echo
@@ -649,3 +660,43 @@ rollback_checkout echo
 echo "  systemctl --user start $SERVICE"
 echo "  # full DB restore (only if a migration ever misbehaves):"
 echo "  #   podman exec -i $PG_CONTAINER pg_restore -U $PG_USER -d $PG_DB --clean < $BK/$DUMP"
+echo "  # (this dump is kept for retention.upgrade_dump_grace_days, default 14,"
+echo "  #  after today; the binaries above are kept)"
+
+# Step 6's doctor (#415 item 1, 2026-10-17). The header and UPDATING.md said
+# this step runs doctor; until now nothing did. It runs the INSTALLED
+# vornikctl against the daemon that just reported ready, so its findings are
+# the new release's view of this install. Warning only: the cutover has
+# happened and readiness passed, so a finding is something to look at, never a
+# reason to report the upgrade as failed (and the operator may have checks
+# that warn by design, such as a pinned image). Bounded, because a doctor that
+# hangs must not hold the update open; image-freshness design §21.
+echo
+log "Running vornikctl doctor against the upgraded daemon (bounded at 300 s; warnings do not fail the update)"
+doctor_cmd=("$BIN_DIR/vornikctl" doctor)
+if command -v timeout >/dev/null 2>&1; then
+  doctor_cmd=(timeout 300 "${doctor_cmd[@]}")
+fi
+if "${doctor_cmd[@]}"; then
+  log "doctor: no findings"
+else
+  doctor_rc=$?
+  warn "doctor reported findings or could not finish (exit $doctor_rc); the upgrade itself succeeded."
+  warn "  re-run: $BIN_DIR/vornikctl doctor"
+fi
+
+# ---------------------------------------------------------------------------
+# 7. Prune older database dumps (#394). Each dump is a full copy of the
+#    database, so an erasure made after it is undone in it. The policy (keep
+#    the newest retention.upgrade_dump_keep, default 2; remove one
+#    retention.upgrade_dump_grace_days, default 14, after its upgrade) lives in
+#    ONE place, the vornikctl just installed; this script only calls it, on the
+#    directory it writes backups to. A failure here is a warning: the upgrade
+#    has already succeeded. Design: 2026-10-12-tool-audit-retention-floor §8.2.3.
+# ---------------------------------------------------------------------------
+echo
+log "Pruning older upgrade database dumps"
+if ! "$BIN_DIR/vornikctl" retention upgrade-dumps --dir "$HOME" --apply; then
+  warn "pruning older upgrade dumps failed; the upgrade itself succeeded. Re-run by hand:"
+  warn "  $BIN_DIR/vornikctl retention upgrade-dumps --dir $HOME --apply"
+fi

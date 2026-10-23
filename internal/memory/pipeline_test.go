@@ -392,6 +392,9 @@ func TestIngestArtifact_AdmittedHappy_RoleOfRecord(t *testing.T) {
 		WithArgs("p", string(ClassDecision), "t", "a", "s.md", "s-________-____.md", "").
 		WillReturnResult(sqlmock.NewResult(0, 2))
 
+	// An operator's task: role-of-record applies (an unwired origin hook
+	// now counts as companion-delegated, round-3 review B1).
+	p.cfg.CompanionDelegated = func(context.Context, string) (bool, error) { return false, nil }
 	stats, err := p.IngestArtifact(context.Background(), "p", "t", "a", "s.md", "reviewer", "exec", body, 0, "")
 	if err != nil {
 		t.Fatal(err)

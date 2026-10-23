@@ -9,6 +9,8 @@ import (
 
 	_ "modernc.org/sqlite" // the CE default driver, and the one this file is about
 
+	"vornik.io/vornik/internal/persistence/sqlite"
+
 	"github.com/stretchr/testify/require"
 )
 
@@ -75,6 +77,15 @@ func seedPortabilityDB(t *testing.T) *sql.DB {
 			id TEXT PRIMARY KEY, detected_at TIMESTAMP, severity TEXT,
 			authority_notified_at TIMESTAMP, subjects_notified_at TIMESTAMP,
 			status TEXT)`,
+		// The data-subject request ledger (GDPR design §4.20, #115): one
+		// verified request opened 40 days ago, so subject_request_deadlines
+		// reaches its SQL through the SQLite dialect and finds it overdue.
+		`CREATE TABLE data_subject_requests (
+			id TEXT PRIMARY KEY, subject_id TEXT NOT NULL, kind TEXT NOT NULL, state TEXT NOT NULL,
+			opened_at TEXT NOT NULL, extended INTEGER NOT NULL DEFAULT 0)`,
+		`INSERT INTO data_subject_requests (id, subject_id, kind, state, opened_at)
+			VALUES ('dsr_portable', 'ds_portable', 'access', 'verified',
+			        strftime('%Y-%m-%dT%H:%M:%fZ', 'now', '-40 days'))`,
 	}
 	for _, stmt := range stmts {
 		_, err := db.Exec(stmt)
@@ -106,7 +117,9 @@ func seedPortabilityDB(t *testing.T) *sql.DB {
 // report a driver error as its verdict, and a check that opts out on this
 // driver must say the driver is why.
 func TestDoctor_EveryCheckRunsOnSQLite(t *testing.T) {
-	h := NewDoctorHandlers(seedPortabilityDB(t))
+	db := seedPortabilityDB(t)
+	h := NewDoctorHandlers(db)
+	h.SetSubjectRequestLedger(sqlite.NewDataSubjectRepository(db))
 	report := h.RunReportReadOnly(context.Background())
 	require.NotEmpty(t, report.Checks, "the report must contain checks")
 
@@ -133,7 +146,9 @@ func TestDoctor_EveryCheckRunsOnSQLite(t *testing.T) {
 // inside its own test. So the four DB-backed checks are named here and must
 // each return a REAL verdict against the seeded rows.
 func TestDoctor_TheDatabaseBackedChecksReachTheirSQL(t *testing.T) {
-	h := NewDoctorHandlers(seedPortabilityDB(t))
+	db := seedPortabilityDB(t)
+	h := NewDoctorHandlers(db)
+	h.SetSubjectRequestLedger(sqlite.NewDataSubjectRepository(db))
 	ctx := context.Background()
 
 	cases := []struct {
@@ -146,6 +161,7 @@ func TestDoctor_TheDatabaseBackedChecksReachTheirSQL(t *testing.T) {
 		{"task_state_audit", h.checkTaskStateAudit(ctx, false), ""},
 		{"fallback_rungs", h.checkFallbackRungs(ctx), ""},
 		{"memory_text_damage", h.checkMemoryTextDamage(ctx), "1 of 1 chunks examined"},
+		{"subject_request_deadlines", h.checkSubjectRequestDeadlines(ctx), "past the gdpr art 12(3) response deadline"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

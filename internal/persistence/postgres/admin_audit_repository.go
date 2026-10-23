@@ -158,7 +158,4 @@ func textOrNull(s string) any {
 // escapeLikePrefix doubles every LIKE wildcard metacharacter so the
 // supplied prefix is matched literally. ESCAPE clauses aren't needed
 // because postgres treats backslash as the default escape character.
-func escapeLikePrefix(in string) string {
-	r := strings.NewReplacer("\\", "\\\\", "%", "\\%", "_", "\\_")
-	return r.Replace(in)
-}
+func escapeLikePrefix(in string) string { return persistence.EscapeLike(in) }

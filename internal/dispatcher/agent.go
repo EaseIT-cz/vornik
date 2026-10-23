@@ -24,6 +24,7 @@ import (
 	"vornik.io/vornik/internal/pricing"
 	"vornik.io/vornik/internal/ratelimit"
 	"vornik.io/vornik/internal/registry"
+	"vornik.io/vornik/internal/report"
 	"vornik.io/vornik/internal/sandboxtool"
 	"vornik.io/vornik/internal/taskcancel"
 )
@@ -141,6 +142,20 @@ type Request struct {
 	// limit) pair should set this via chat.HeadroomPct so the
 	// histogram is meaningful.
 	ContextHeadroomPct float64
+
+	// OperatorView is true only when the channel established, by its
+	// authoritative check, that this turn's audience is one admin-linked
+	// principal alone (process-spawn-law design, "Amendment 2026-10-21
+	// (#480)", J3 and J4). The task tools then hand the model a task's
+	// stored error text raw; otherwise they hand it the scrubbed view. The
+	// zero value is the scrubbed view.
+	OperatorView bool
+
+	// TaskPrincipal is the created_by_actor create_task stamps on a task
+	// this turn creates (GitHub #499): the channel's own attribution of the
+	// speaker, e.g. `user:<id>` for a speaker linked to an admin account in
+	// a direct conversation. Empty records no principal.
+	TaskPrincipal string
 }
 
 // Result is returned by Process after the tool-calling loop completes.
@@ -185,10 +200,14 @@ type Agent struct {
 	// WithDeferredToolThreshold from chat.deferred_tool_threshold.
 	deferredToolThreshold int
 	watchFunc             TaskWatchFunc
-	auditRepo             AuditRepository
-	memory                MemorySearcher
-	graphSearcher         GraphSearcher
-	memoryCorrector       MemoryCorrector
+	// errorScrub is the line scrubber the task tools apply to a stored
+	// error text on a turn that is not an operator-view turn
+	// (WithErrorTextScrubber; #480). Nil withholds every line.
+	errorScrub      report.LineScrubber
+	auditRepo       AuditRepository
+	memory          MemorySearcher
+	graphSearcher   GraphSearcher
+	memoryCorrector MemoryCorrector
 	// spend BILLS chat turns; llmUsageRepo is the same table READ for budget
 	// enforcement in the tool executor (budget.Check / ForecastTask). Two fields
 	// because they are two different jobs — conflating them is what made the
@@ -582,6 +601,7 @@ func NewAgent(
 		attachmentAutoExtractor:      a.attachmentAutoExtractor,
 		attachmentAutoExtractTimeout: 60 * time.Second,
 		watchFunc:                    a.watchFunc,
+		errorScrub:                   a.errorScrub,
 		mcpManager:                   a.mcpManager,
 		auditRepo:                    a.auditRepo,
 		memory:                       a.memory,

@@ -8,14 +8,31 @@
 // credential a request carries selects whose. Every MCP tools/call is
 // recorded with its user, its tool and its raw argument bytes.
 //
-// They are fixtures, not providers. What each does NOT imitate, so a green
-// lane is not read as "verified against the real provider":
+// They are fixtures, not providers. What the mail and calendar servers DO
+// imitate (GitHub #404, 2026-10-17): the read tools of the reference Google
+// Workspace server (gemini-cli workspace extension 089927e,
+// workspace-server/src/index.ts) by their argument names, gmail_search
+// {query, maxResults, pageToken, labelIds, includeSpamTrash}, gmail_get
+// {messageId, format} and calendar.listEvents {calendarId (required),
+// timeMin, timeMax, attendeeResponseStatus, eventTypes}; and their tool
+// names, except that the calendar tool keeps the recipes' spelling
+// calendar_list_events where the reference's is calendar_listEvents. An
+// argument a stand-in cannot honour is refused as invalid_argument, never
+// ignored. The writes (gmail_send, calendar_create_event) imitate no
+// reference shape.
 //
-//   - mail MCP: Gmail's full query grammar, labels, threads, pagination,
-//     MIME parts and attachments, quota and rate-limit answers (429), the
-//     real server's result shape beyond the fields the recipes name.
-//   - calendar MCP: recurring events, time zones other than UTC, free/busy,
-//     attendees' responses, Google Calendar's REST API or CalDAV.
+// What each does NOT imitate, so a green lane is not read as "verified
+// against the real provider":
+//
+//   - mail MCP: Gmail's full query grammar, labels other than INBOX and
+//     UNREAD, spam and trash, threads, pagination (any pageToken is refused),
+//     MIME parts and attachments, the raw format's RFC 2822 bytes, quota and
+//     rate-limit answers (429), the real server's result shape beyond the
+//     fields the recipes name.
+//   - calendar MCP: several calendars (every calendarId names the user's
+//     one), recurring events, time zones other than UTC, event types other
+//     than default, free/busy, attendees' responses, Google Calendar's REST
+//     API or CalDAV.
 //   - CRM MCP: any real CRM's schema, search semantics or permissions.
 //   - OAuth: a login or consent page, scopes enforced per tool, token
 //     revocation, signed id_tokens and JWKS, provider error pages, expiry
@@ -54,6 +71,10 @@ type Call struct {
 	Tool  string
 	Args  json.RawMessage // the bytes as sent, never re-encoded
 	Write bool
+	// Err is the tool error the call was answered with, empty when it
+	// succeeded (GitHub #404: a lane that never looked at it passed with
+	// arguments the stand-in refused).
+	Err string
 }
 
 // MCPServer is an MCP server over streamable HTTP with JSON replies.
@@ -107,6 +128,18 @@ func (s *MCPServer) Writes() []Call {
 	var out []Call
 	for _, c := range s.Calls() {
 		if c.Write {
+			out = append(out, c)
+		}
+	}
+	return out
+}
+
+// Failed returns the recorded calls answered with a tool error (a misnamed
+// or invalid argument, a message that is not the caller's, ...), in order.
+func (s *MCPServer) Failed() []Call {
+	var out []Call
+	for _, c := range s.Calls() {
+		if c.Err != "" {
 			out = append(out, c)
 		}
 	}
@@ -211,19 +244,22 @@ func (s *MCPServer) callTool(user, name string, args json.RawMessage) any {
 		if t.Name != name {
 			continue
 		}
-		s.mu.Lock()
-		s.calls = append(s.calls, Call{User: user, Tool: name, Args: append(json.RawMessage(nil), args...), Write: t.Write})
-		s.mu.Unlock()
+		call := Call{User: user, Tool: name, Args: append(json.RawMessage(nil), args...), Write: t.Write}
 		if len(args) == 0 || string(args) == "null" {
 			args = json.RawMessage(`{}`)
 		}
 		out, err := t.Handle(user, args)
 		if err != nil {
 			text = err.Error()
-			break
+			call.Err = text
+		} else {
+			b, _ := json.Marshal(out)
+			text, isErr = string(b), false
 		}
-		b, _ := json.Marshal(out)
-		text, isErr = string(b), false
+		s.mu.Lock()
+		s.calls = append(s.calls, call)
+		s.mu.Unlock()
+		break
 	}
 	return map[string]any{"content": []map[string]any{{"type": "text", "text": text}}, "isError": isErr}
 }

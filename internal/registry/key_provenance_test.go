@@ -45,22 +45,37 @@ func TestBaselineHasNoKeysTheSchemaDropped(t *testing.T) {
 // A key that declares a release is reported as newer than an earlier one, and a
 // key that predates tracking never is.
 func TestProjectKeysNewerThan(t *testing.T) {
-	// Nothing is tagged yet, so every query is empty — and that is the honest
-	// answer rather than a guess. This test is here so the FIRST tagged field
-	// is exercised by it rather than being the first to find out.
-	if got := ProjectKeysNewerThan("2026.9.5"); len(got) != 0 {
-		for _, k := range got {
-			if k.Since == "" {
-				t.Fatalf("an untagged key was reported as newer: %+v", k)
-			}
+	got, err := ProjectKeysNewerThan("2026.9.5")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, k := range got {
+		if k.Since == "" {
+			t.Fatalf("an untagged key was reported as newer: %+v", k)
 		}
 	}
 	// An empty release means "everything with a declared since", which is what
 	// `vornikctl` prints when the operator does not name one.
-	for _, k := range ProjectKeysNewerThan("") {
+	all, err := ProjectKeysNewerThan("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, k := range all {
 		if k.Since == "" {
 			t.Fatalf("untagged key in the unfiltered list: %+v", k)
 		}
+	}
+	// #371: across a month boundary the comparison is numeric. Every tagged key
+	// is newer than a release before all of them, so nothing may be dropped.
+	early, err := ProjectKeysNewerThan("2026.9.0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(early) != len(all) {
+		t.Fatalf("newer than 2026.9.0: %d keys, want all %d tagged keys", len(early), len(all))
+	}
+	if _, err := ProjectKeysNewerThan("dev+g44e675c12"); err == nil {
+		t.Fatal("a dev+g build version was accepted as a release")
 	}
 }
 

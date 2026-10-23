@@ -60,6 +60,7 @@ import (
 	"vornik.io/vornik/internal/ratelimit"
 	"vornik.io/vornik/internal/registry"
 	"vornik.io/vornik/internal/replay"
+	"vornik.io/vornik/internal/report"
 	"vornik.io/vornik/internal/retention"
 	"vornik.io/vornik/internal/slack"
 	"vornik.io/vornik/internal/taskcreate"
@@ -1439,11 +1440,14 @@ func (c *Container) initHTTPServer() error {
 	// Nil when there is no repo set (early boot, tests): both paths then
 	// degrade to always-enqueue rather than to silence.
 	ghReview := c.forgeReviewCoordinator()
-	ghChannel, ghEnabledProjects, err := buildGitHubChannelWithTaskCreator(
+	// The channel's REST client dials through the shared guard with the
+	// operator's integrations.allowed_hosts (GitHub #494).
+	ghChannel, ghEnabledProjects, err := buildGitHubChannelWithAllowedHosts(
 		ghProjects,
 		taskCreatorFromRepo(ghTaskRepo, ghReview, nil,
 			c.Logger.With().Str("component", "github_task_creator").Logger(),
 			c.ciIngestForProject),
+		c.Config.Integrations.AllowedHosts,
 		c.Logger,
 	)
 	if err != nil {
@@ -1697,6 +1701,13 @@ func (c *Container) initHTTPServer() error {
 	var doctorH *api.DoctorHandlers
 	if c.DB != nil {
 		dh := api.NewDoctorHandlers(c.DB)
+		// subject_request_deadlines (GDPR Art 12(3), design §4.20): the same
+		// driver-resolved ledger the regulatory page reads.
+		backendDriver := ""
+		if c.backend != nil {
+			backendDriver = c.backend.Driver
+		}
+		wireDoctorSubjectLedger(dh, backendDriver, c.DB)
 		if c.Registry != nil {
 			dh.SetConfigDir(c.Registry.GetConfigDir())
 		}
@@ -1738,6 +1749,9 @@ func (c *Container) initHTTPServer() error {
 		// daemon is scanning" are exactly the two things this check exists to
 		// tell apart.
 		dh.SetToolAuditRedaction(c.toolAuditRedactionState())
+		// The content-store seams' half of the same census (GitHub #395).
+		seamReason, seamStores := c.redactionSeamsState()
+		dh.SetRedactionSeams(seamReason, seamStores, c.auditRedactMetrics.SeamTotals)
 		dh.SetConfigPath(c.ConfigPath)
 		dh.SetPricingPath(resolvePricingPath(c.ConfigPath))
 		// Live model-call outcomes for model_calls_live. initChat (container.go:843)
@@ -1783,7 +1797,12 @@ func (c *Container) initHTTPServer() error {
 					// agent_refusal_burst (agent-administered design §23.2).
 					dh.SetAgentRefusalCounts(c.agentRefusalCounts)
 				}
+				if c.repos.AdminAudit != nil && c.repos.Proposals != nil {
+					// agent_change_stays_applied (agent-administered design §23.9).
+					dh.SetAgentRollbackFailures(c.agentChangesStayingApplied)
+				}
 				dh.SetAgentModelCatalogue(c.agentModelCatalogueStatus)
+				dh.SetProvenanceClones(c.provenanceCloneStatus)
 			}
 		}
 		// Read c.mcpManager at call time: the manager is created by initMCP,
@@ -1795,6 +1814,21 @@ func (c *Container) initHTTPServer() error {
 			return c.mcpManager.PendingStatus()
 		})
 		dh.SetMCPWithheldSource(c.mcpWithheldServers)
+		// agent_read_tools_rejudged (agent-administered design §6.5, GitHub
+		// #413): read c.mcpManager at call time, as above.
+		dh.SetAgentReadVerdicts(func() ([]mcp.ReadEntryVerdict, []string) {
+			if c.mcpManager == nil {
+				return nil, nil
+			}
+			return c.mcpManager.AgentReadVerdicts()
+		})
+		// The held set's store and the re-list (amendment #481).
+		dh.SetAgentReadHolds(func() mcp.ReadHoldState {
+			if c.mcpManager == nil {
+				return mcp.ReadHoldState{}
+			}
+			return c.mcpManager.ReadHoldState()
+		})
 		dh.SetMCPNoGrantSource(c.mcpNoGrant)
 		if c.repos != nil && c.repos.LeaderLocks != nil {
 			dh.SetLeaderLockRepository(c.repos.LeaderLocks)
@@ -2352,6 +2386,17 @@ func (c *Container) initHTTPServer() error {
 	}
 	// The task log panel reads daemon-held state (GitHub #294).
 	uiOpts = append(uiOpts, ui.WithTaskLogSource(c.heldTaskLog()))
+	// GitHub #440: a non-admin-class caller reads the scrubbed view. With no
+	// scrubber nothing is wired, and the panel serves that caller no log.
+	if scrub, err := c.logScrubber(); err == nil {
+		if scrubbed, serr := c.heldTaskLog().ScrubbedView(scrub); serr == nil {
+			uiOpts = append(uiOpts, ui.WithScrubbedTaskLogSource(scrubbed))
+		}
+		// GitHub #466 D4: the task and execution pages' error text.
+		uiOpts = append(uiOpts, ui.WithErrorTextScrubber(scrub))
+	} else {
+		c.Logger.Warn().Err(err).Msg("ui: the log scrubber could not be built; the task log panel serves non-admin callers no log")
+	}
 	// Shared per-project workspace lock — same instance the executor +
 	// api server hold. The UI artifact-delete path takes it around its
 	// git add+commit so deletes serialise per project with execution.
@@ -2623,9 +2668,15 @@ func (c *Container) initHTTPServer() error {
 	}
 	readTimeout := parseDuration(c.Config.Server.ReadTimeout, 30*time.Second)
 
+	// GitHub #465: with auth off the TCP root also checks Host (DNS-rebinding
+	// guard); the unix socket below keeps realIPMW(mux) unwrapped.
+	rootHandler, err := c.tcpRootHandler(realIPMW(mux))
+	if err != nil {
+		return err
+	}
 	server := &http.Server{
 		Addr:              c.Config.Server.Address,
-		Handler:           realIPMW(mux),
+		Handler:           rootHandler,
 		ReadTimeout:       readTimeout,
 		ReadHeaderTimeout: 10 * time.Second,
 		WriteTimeout:      writeTimeout,
@@ -2780,7 +2831,7 @@ func (c *Container) adminUIOptions(deps adminUIDeps) []ui.ServerOption { //nolin
 		opts = append(
 			opts,
 			ui.WithAdminMCPInventory(newAdminMCPInventory(c.mcpManager)),
-			ui.WithAdminMCPRefresher(newAdminMCPRefresher(c.mcpManager, c.Registry)),
+			ui.WithAdminMCPRefresher(c.newAdminMCPRefresher()),
 		)
 	}
 	return opts
@@ -3229,10 +3280,29 @@ func (c *Container) heldTaskLog() api.HeldTaskLog {
 	return h
 }
 
+// logScrubber builds the line scrubber the held log's scrubbed view and the
+// post-mortem explainer use: report.NewLineScrubber, the one the agent log
+// tools build (GitHub #439, #440). It errors when the detector cannot be
+// built; every caller then fails closed.
+func (c *Container) logScrubber() (report.LineScrubber, error) {
+	host, _ := os.Hostname()
+	return report.NewLineScrubber(host)
+}
+
 // subjectLedgerFor is the GDPR data-subject store the daemon wires for the
 // regulatory record, on the RESOLVED driver: the store and ledger run on both
 // drivers since GitHub #355 (GDPR design §4.19). Nil when no database is open
 // or the driver is unknown, which the page reports as "not recorded".
+// wireDoctorSubjectLedger gives the doctor's Art 12(3) deadline check the ledger
+// subjectLedgerFor resolves, so the doctor and the regulatory page read one
+// ledger chosen once. An unknown driver or no database leaves the check
+// SKIPPED; the nil test keeps a typed-nil repository out of the interface.
+func wireDoctorSubjectLedger(dh *api.DoctorHandlers, driver string, db *sql.DB) {
+	if l := subjectLedgerFor(driver, db); l != nil {
+		dh.SetSubjectRequestLedger(l)
+	}
+}
+
 func subjectLedgerFor(driver string, db *sql.DB) *subjectstore.Repository {
 	if db == nil {
 		return nil

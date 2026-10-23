@@ -41,6 +41,7 @@ package watchdog
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"sync"
@@ -49,6 +50,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/rs/zerolog"
 	"vornik.io/vornik/internal/persistence"
+	"vornik.io/vornik/internal/stepoutcome"
 	"vornik.io/vornik/internal/taskcancel"
 )
 
@@ -103,6 +105,22 @@ type StepOutcomeRepository interface {
 	// execution is already terminal, oldest-first within a bounded batch, and
 	// returns how many it relabelled. Idempotent.
 	SweepPendingForTerminalExecutions(ctx context.Context, olderThan time.Duration, limit int) (int64, error)
+}
+
+// StuckStepRecorder writes the row for the step of an execution the watchdog
+// failed as stuck (outcome-quality-design §S8.8, GitHub #369). Optional: when
+// nil, no step row is written (as before 2026-10-17).
+type StuckStepRecorder interface {
+	// RecordStuckStepOutcome inserts o unless a row for (execution, step) was
+	// recorded at or after since, or o.ID exists; reports whether it inserted.
+	RecordStuckStepOutcome(ctx context.Context, o *persistence.ExecutionStepOutcome, since time.Time) (bool, error)
+}
+
+// InFlightStepSource is what the executor knows about the agent step an
+// execution is running in this process. Optional: without it (or when it does
+// not know the execution) the watchdog reads the step from the execution row.
+type InFlightStepSource interface {
+	InFlightStep(executionID string) (stepoutcome.InFlightStep, bool)
 }
 
 // ParentUnblockSweeper re-checks parents stranded in WAITING_FOR_CHILDREN.
@@ -227,6 +245,11 @@ type Metrics struct {
 	// non-zero rate means some terminal path is still not sweeping its own
 	// rows, which is the defect this backstop was added to contain.
 	pendingOutcomesSwept prometheus.Counter
+	// stuckStepOutcomes counts, by result, the step-outcome row a stuck-fail
+	// writes for the step that hung (outcome-quality §S8.8): recorded,
+	// already_recorded (the step had a row since the checkpoint), no_step, or
+	// error. Every stuck-fail with a recorder wired lands in one.
+	stuckStepOutcomes *prometheus.CounterVec
 }
 
 // NewMetrics registers watchdog counters on the provided registry.
@@ -261,7 +284,11 @@ func NewMetrics(reg prometheus.Registerer) *Metrics {
 			Help: "Number of step-outcome rows relabelled from pending_validation because their execution was already terminal.",
 		}),
 	}
-	reg.MustRegister(m.detected, m.failed, m.orphansSwept, m.approvalsExpired, m.reservationsSwept, m.pendingOutcomesSwept)
+	m.stuckStepOutcomes = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name: "vornik_watchdog_stuck_step_outcomes_total",
+		Help: "Step-outcome rows for the step of an execution the watchdog failed as stuck, by result: recorded, already_recorded (the step had a row since its last checkpoint), no_step (no step in flight), error.",
+	}, []string{"result"})
+	reg.MustRegister(m.detected, m.failed, m.orphansSwept, m.approvalsExpired, m.reservationsSwept, m.pendingOutcomesSwept, m.stuckStepOutcomes)
 	return m
 }
 
@@ -274,6 +301,10 @@ type Watchdog struct {
 	taskRepo      TaskRepository        // optional; required only when Action=fail
 	outcomeRepo   StepOutcomeRepository // optional; nil skips the pending-outcome leg
 	parentSweeper ParentUnblockSweeper  // optional; nil skips the stuck-parent leg
+	// stuckSteps writes the step row for a stuck-fail; inFlight names the step
+	// (§S8.8). Both optional.
+	stuckSteps StuckStepRecorder
+	inFlight   InFlightStepSource
 	// taskTeardown is the cancel primitive's post-write work for the
 	// approval-timeout cancel (GitHub #304); nil writes only.
 	taskTeardown taskcancel.Teardown
@@ -696,6 +727,27 @@ func (w *Watchdog) WithTaskTeardown(td taskcancel.Teardown) *Watchdog {
 	return w
 }
 
+// WithStuckStepRecorder wires the step row a stuck-fail writes (§S8.8).
+// Chainable; nil keeps the as-built behaviour (no step row).
+func (w *Watchdog) WithStuckStepRecorder(r StuckStepRecorder) *Watchdog {
+	if w == nil {
+		return w
+	}
+	w.stuckSteps = r
+	return w
+}
+
+// WithInFlightStepSource wires the executor's knowledge of the agent step an
+// execution is running, for the stuck step row's step, role and model.
+// Chainable; nil falls back to the execution row.
+func (w *Watchdog) WithInFlightStepSource(s InFlightStepSource) *Watchdog {
+	if w == nil {
+		return w
+	}
+	w.inFlight = s
+	return w
+}
+
 // WithParentUnblockSweeper wires the stranded-parent backstop. Chainable so the
 // daemon can opt in without changing New's signature.
 func (w *Watchdog) WithParentUnblockSweeper(sweeper ParentUnblockSweeper) *Watchdog {
@@ -833,6 +885,10 @@ func (w *Watchdog) markFailed(ctx context.Context, exec *persistence.Execution, 
 	if err := w.execRepo.RecordFailure(ctx, exec.ID, msg, persistence.TaskFailureClassStuckExecution); err != nil {
 		return fmt.Errorf("execution RecordFailure: %w", err)
 	}
+	// The step that hung gets its row before the teardown is asked for, so
+	// the executor's late row (the step returning because it was stopped)
+	// finds the execution already failed and is not written (§S8.8).
+	w.recordStuckStep(ctx, exec, verdict, msg)
 	if w.taskRepo == nil || exec.TaskID == "" {
 		return nil
 	}
@@ -897,6 +953,131 @@ func (w *Watchdog) markFailed(ctx context.Context, exec *persistence.Execution, 
 		Bool("torn_down", out.TornDown).
 		Msg("watchdog: stuck execution failed; teardown requested through the cancel primitive")
 	return nil
+}
+
+// Results of the stuck step row (vornik_watchdog_stuck_step_outcomes_total).
+const (
+	stuckStepRecorded        = "recorded"
+	stuckStepAlreadyRecorded = "already_recorded"
+	stuckStepNoStep          = "no_step"
+	stuckStepError           = "error"
+)
+
+// stuckStepOf names the step of exec that was in flight: the executor's own
+// record when this process runs it, else the execution row's current step,
+// with its role from the workflow snapshot (outcome-quality §S8.8).
+func (w *Watchdog) stuckStepOf(exec *persistence.Execution) (stepoutcome.InFlightStep, bool) {
+	if w.inFlight != nil {
+		if s, ok := w.inFlight.InFlightStep(exec.ID); ok && s.StepID != "" {
+			return s, true
+		}
+	}
+	if exec.CurrentStepID == nil || *exec.CurrentStepID == "" {
+		return stepoutcome.InFlightStep{}, false
+	}
+	s := stepoutcome.InFlightStep{StepID: *exec.CurrentStepID}
+	s.Role, s.Model = snapshotStepRole(exec.WorkflowSnapshot, s.StepID)
+	return s, true
+}
+
+// snapshotStepRole reads a step's role from the execution's workflow snapshot
+// (the workflow marshalled as JSON at execution start), spelled as the
+// executor records it: an agent or plan step its role and no model (the
+// model is resolved only while the step runs), a system step "system" with
+// its handler, a gate step "gate". Empty when the snapshot is absent or does
+// not name the step.
+func snapshotStepRole(snapshot []byte, stepID string) (role, model string) {
+	if len(snapshot) == 0 {
+		return "", ""
+	}
+	var wf struct {
+		Steps map[string]struct {
+			Type    string
+			Role    string
+			Handler string
+		}
+	}
+	if json.Unmarshal(snapshot, &wf) != nil {
+		return "", ""
+	}
+	st, ok := wf.Steps[stepID]
+	if !ok {
+		return "", ""
+	}
+	switch st.Type {
+	case "system":
+		return stepoutcome.RoleSystem, st.Handler
+	case "gate":
+		return stepoutcome.RoleGate, ""
+	}
+	return st.Role, ""
+}
+
+// recordStuckStep writes the row for the step of exec that was in flight when
+// the watchdog failed it (outcome-quality-design §S8.8, GitHub #369): outcome
+// failed for a stuck execution (a live goroutine that stopped advancing),
+// orphaned when nothing was running it, class stuck_execution. At most one row
+// per execution (its id), and none when the step already has a row since the
+// last checkpoint. Best-effort: a failure is logged and counted, and the
+// caller still fails the task.
+func (w *Watchdog) recordStuckStep(ctx context.Context, exec *persistence.Execution, verdict, reason string) {
+	if w.stuckSteps == nil {
+		return
+	}
+	step, ok := w.stuckStepOf(exec)
+	if !ok {
+		w.countStuckStep(stuckStepNoStep)
+		w.logger.Info().Str("execution_id", exec.ID).
+			Msg("watchdog: stuck execution had no step in flight; no step-outcome row written")
+		return
+	}
+	outcome := stepoutcome.Failed
+	if verdict != verdictStuck {
+		outcome = stepoutcome.Orphaned
+	}
+	now := w.now()
+	row := &persistence.ExecutionStepOutcome{
+		ID:          "outc_stuck_" + exec.ID,
+		ProjectID:   exec.ProjectID,
+		TaskID:      exec.TaskID,
+		ExecutionID: exec.ID,
+		StepID:      step.StepID,
+		Role:        step.Role,
+		Model:       step.Model,
+		Outcome:     string(outcome),
+		ErrorClass:  stepoutcome.ClassStuckExecution,
+		ErrorDetail: reason,
+		FinalizedAt: &now,
+		RecordedAt:  now,
+	}
+	if !step.StartedAt.IsZero() {
+		d := now.Sub(step.StartedAt).Milliseconds()
+		row.DurationMS = &d
+	}
+	inserted, err := w.stuckSteps.RecordStuckStepOutcome(ctx, row, exec.UpdatedAt)
+	ev := w.logger.Info()
+	result := stuckStepRecorded
+	switch {
+	case err != nil:
+		result = stuckStepError
+		ev = w.logger.Warn().Err(err)
+	case !inserted:
+		result = stuckStepAlreadyRecorded
+	}
+	w.countStuckStep(result)
+	ev.Str("execution_id", exec.ID).
+		Str("step", step.StepID).
+		Str("role", step.Role).
+		Str("model", step.Model).
+		Str("outcome", string(outcome)).
+		Str("result", result).
+		Msg("watchdog: step-outcome row for the stuck execution's step")
+}
+
+func (w *Watchdog) countStuckStep(result string) {
+	if w.metrics != nil && w.metrics.stuckStepOutcomes != nil {
+		w.metrics.stuckStepOutcomes.WithLabelValues(result).Inc()
+	}
 }
 
 // markSeen records (id, updatedAt) and returns true when this is the

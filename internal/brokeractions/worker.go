@@ -50,6 +50,13 @@ type Config struct {
 	// OnFinishError is told when an outcome could not be recorded; the row
 	// stays executing for an operator. Optional.
 	OnFinishError func(a *persistence.BrokerAction, status string)
+	// OnRefused is told each time the worker refuses an action before
+	// sending it, with its reason code: writes_off, tool_undeclared,
+	// args_hash_mismatch (a re-check failed; the row is finished
+	// pre_send_error), or claim_error (the claim itself failed; the row is
+	// untouched). Optional (GitHub #369, outcome-quality LLD §S8.11 rows 14b
+	// and 14c).
+	OnRefused func(reason string)
 	// Gauge receives the stuck-row counts after each sweep. Optional.
 	Gauge func([]persistence.BrokerActionStuck)
 	// OnTransition is told about each terminal outcome (the push hook).
@@ -168,7 +175,15 @@ func (w *Worker) Execute(ctx context.Context, actionID string) {
 		}
 	}()
 	won, err := w.cfg.Repo.ClaimForExecution(ctx, actionID, w.cfg.Now())
-	if err != nil || !won {
+	if err != nil {
+		// Not a lost race: the store failed the claim. The row is untouched
+		// and the next sweep retries the claim.
+		w.cfg.Logger.Warn().Err(err).Str("action_id", actionID).Str("reason", RefusedClaimError).
+			Msg("broker actions: claim failed; the next sweep retries it")
+		w.refused(RefusedClaimError)
+		return
+	}
+	if !won {
 		return // not approved, expired, or another worker has it
 	}
 	a, err := w.cfg.Repo.Get(ctx, actionID)
@@ -178,7 +193,16 @@ func (w *Worker) Execute(ctx context.Context, actionID string) {
 		w.cfg.Logger.Error().Err(err).Str("action_id", actionID).Msg("broker actions: claimed row could not be read")
 		return
 	}
-	if reason := w.recheck(a); reason != "" {
+	if code, reason := w.recheck(a); code != "" {
+		ev := w.cfg.Logger.Warn()
+		msg := "broker actions: refused before sending"
+		if code == RefusedArgsHashMismatch {
+			ev = w.cfg.Logger.Error()
+			msg = "broker actions: refused before sending: stored arguments do not match the approved hash, possible tampering"
+		}
+		ev.Str("action_id", a.ActionID).Str("project", a.ProjectID).Str("tool", a.Tool).
+			Str("reason", code).Str("detail", reason).Msg(msg)
+		w.refused(code)
 		w.finish(ctx, a, persistence.BrokerActionFailed, persistence.BrokerOutcomePreSendError,
 			outcomeDoc("refused", reason))
 		return
@@ -205,20 +229,36 @@ func (w *Worker) redact(s string) string {
 	return string(w.cfg.Redact([]byte(s)))
 }
 
-// recheck returns why the action may not be sent now, or "".
-func (w *Worker) recheck(a *persistence.BrokerAction) string {
+// Refusal reason codes, the label values of vornik_broker_actions_refused_total.
+const (
+	RefusedWritesOff        = "writes_off"
+	RefusedToolUndeclared   = "tool_undeclared"
+	RefusedArgsHashMismatch = "args_hash_mismatch"
+	RefusedClaimError       = "claim_error"
+)
+
+// refused tells OnRefused, if set.
+func (w *Worker) refused(reason string) {
+	if w.cfg.OnRefused != nil {
+		w.cfg.OnRefused(reason)
+	}
+}
+
+// recheck returns the reason code and text for why the action may not be
+// sent now, or two empty strings.
+func (w *Worker) recheck(a *persistence.BrokerAction) (code, reason string) {
 	if w.cfg.WritesOn == nil || !w.cfg.WritesOn() {
-		return "broker.writes is off"
+		return RefusedWritesOff, "broker.writes is off"
 	}
 	if w.cfg.ToolDeclared != nil {
 		if err := w.cfg.ToolDeclared(a.ProjectID, a.Tool); err != nil {
-			return "tool no longer declared as a broker write: " + err.Error()
+			return RefusedToolUndeclared, "tool no longer declared as a broker write: " + err.Error()
 		}
 	}
 	if sum, err := approval.CanonicalSHA256(a.ArgsJSON); err != nil || sum != a.ArgsSHA256 {
-		return "stored arguments no longer match the approved hash"
+		return RefusedArgsHashMismatch, "stored arguments no longer match the approved hash"
 	}
-	return ""
+	return "", ""
 }
 
 // classify maps one call to its terminal state (design §5.4 step 4). When in

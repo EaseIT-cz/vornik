@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"vornik.io/vornik/internal/integrations"
 	"vornik.io/vornik/internal/persistence"
 	"vornik.io/vornik/internal/registry"
 	"vornik.io/vornik/internal/trading"
@@ -284,6 +285,13 @@ func (s *Server) buildTradingPanel(ctx context.Context, project *registry.Projec
 // unbounded and counts safety events over the fixed last-24h window
 // (the legacy project-detail behavior). The account snapshot, caps, and
 // 30d soak rollup are point-in-time / fixed-period and ignore `since`.
+// tradingCapsFetchTimeout bounds the live /caps fetch on a page render.
+const tradingCapsFetchTimeout = 3 * time.Second
+
+// tradingCapsMaxBytes bounds the /caps body the panel reads (GitHub #433).
+// Measured 2026-10-21 on the reference host: 1,657 bytes; 1 MiB is ~600x that.
+const tradingCapsMaxBytes = 1 << 20
+
 func (s *Server) buildTradingPanelWindow(ctx context.Context, project *registry.Project, since time.Time) TradingPanel {
 	url := brokerURL(project)
 	if url == "" {
@@ -291,7 +299,7 @@ func (s *Server) buildTradingPanelWindow(ctx context.Context, project *registry.
 	}
 	panel := TradingPanel{Enabled: true, FetchedAt: time.Now().UTC()}
 
-	fetchCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
+	fetchCtx, cancel := context.WithTimeout(ctx, tradingCapsFetchTimeout)
 	defer cancel()
 
 	target := fmt.Sprintf("%s/caps?project=%s", url, project.ID)
@@ -308,7 +316,19 @@ func (s *Server) buildTradingPanelWindow(ctx context.Context, project *registry.
 	if hdr := projectCapsHeader(project); hdr != "" {
 		req.Header.Set("X-Project-Caps", hdr)
 	}
-	resp, err := http.DefaultClient.Do(req)
+	// GitHub #433 (2026-10-21, trading-dashboard-design §10): the broker URL
+	// is configuration, fetched on every page render, so it dials through the
+	// shared guard (the URL's own loopback host, or a host the operator lists
+	// in integrations.allowed_hosts; anything else must be public) and never
+	// follows a redirect, which would carry X-Project-Caps to a second host.
+	// The loopback default is safe only because the broker URL is not
+	// free-form: an operator project's mcp.servers is written only by an
+	// admin (uiRequireAdminMutation on the config save and form), and an
+	// agent project's servers are approved by a person and dialled by the
+	// MCP manager under this same rule (agentDialGuard). Code review fd9f F1.
+	client := integrations.LoopbackURLGuard(url, s.integrationsDialGuard().AllowedHosts).
+		NoRedirectHTTPClient(tradingCapsFetchTimeout)
+	resp, err := client.Do(req)
 	if err != nil {
 		panel.BrokerError = fmt.Sprintf("dial: %v", err)
 		return panel
@@ -327,7 +347,12 @@ func (s *Server) buildTradingPanelWindow(ctx context.Context, project *registry.
 		Portfolio  map[string]any `json:"portfolio"`
 		PortfolioE string         `json:"portfolio_error"`
 	}
-	if err := json.NewDecoder(resp.Body).Decode(&raw); err != nil {
+	body, err := integrations.ReadBoundedBody(resp.Body, tradingCapsMaxBytes)
+	if err != nil {
+		panel.BrokerError = err.Error()
+		return panel
+	}
+	if err := json.Unmarshal(body, &raw); err != nil {
 		panel.BrokerError = fmt.Sprintf("decode: %v", err)
 		return panel
 	}

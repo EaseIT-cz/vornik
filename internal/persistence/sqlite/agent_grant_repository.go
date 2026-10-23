@@ -42,7 +42,10 @@ func (r *AgentGrantRepository) UpsertIntegration(ctx context.Context, a persiste
 	// The account columns are written only when the row is new or was
 	// removed (an add or a re-add): a re-grant of a live row never changes
 	// its account (design §22.2.2). The CASE reads the row's removed_at
-	// before this statement clears it.
+	// before this statement clears it. The suspended read tools follow the
+	// same rule (design §6.5, amendment #481): a re-add, which the person
+	// approves on the device, starts with none; any other upsert keeps them,
+	// and none is ever taken from a.
 	_, err := r.db.ExecContext(ctx, `
 		INSERT INTO agent_integration_approvals
 			(namespace, project_id, integration, kind, url, read_tools, write_tools, read_pending, approved_by_device, approved_at, removed_at,
@@ -55,7 +58,9 @@ func (r *AgentGrantRepository) UpsertIntegration(ctx context.Context, a persiste
 			approved_at = excluded.approved_at, removed_at = NULL,
 			account_label = CASE WHEN agent_integration_approvals.removed_at IS NOT NULL THEN excluded.account_label ELSE agent_integration_approvals.account_label END,
 			account_identity = CASE WHEN agent_integration_approvals.removed_at IS NOT NULL THEN excluded.account_identity ELSE agent_integration_approvals.account_identity END,
-			identity_source = CASE WHEN agent_integration_approvals.removed_at IS NOT NULL THEN excluded.identity_source ELSE agent_integration_approvals.identity_source END`,
+			identity_source = CASE WHEN agent_integration_approvals.removed_at IS NOT NULL THEN excluded.identity_source ELSE agent_integration_approvals.identity_source END,
+			suspended_tools = CASE WHEN agent_integration_approvals.removed_at IS NOT NULL THEN '[]' ELSE agent_integration_approvals.suspended_tools END,
+			suspended_at = CASE WHEN agent_integration_approvals.removed_at IS NOT NULL THEN NULL ELSE agent_integration_approvals.suspended_at END`,
 		a.Namespace, a.ProjectID, a.Integration, a.Kind, a.URL, grantToolsJSON(a.ReadTools), grantToolsJSON(a.WriteTools),
 		boolToInt(a.ReadPending), a.ApprovedByDevice, sqliteTime(a.ApprovedAt),
 		a.StoredAccountLabel(), a.AccountIdentity, a.IdentitySource)
@@ -79,24 +84,33 @@ func (r *AgentGrantRepository) SetIntegrationIdentity(ctx context.Context, proje
 	return nil
 }
 
-const agentIntegrationCols = `namespace, project_id, integration, kind, url, read_tools, write_tools, read_pending, approved_by_device, approved_at, removed_at, account_label, account_identity, identity_source`
+const agentIntegrationCols = `namespace, project_id, integration, kind, url, read_tools, write_tools, read_pending, approved_by_device, approved_at, removed_at, account_label, account_identity, identity_source, suspended_tools, suspended_at`
 
 func scanAgentIntegration(s interface{ Scan(...interface{}) error }) (persistence.AgentIntegrationApproval, error) {
 	var (
 		a           persistence.AgentIntegrationApproval
 		read, write string
+		suspended   string
 		pending     int64
 		approved    sqlTime
 		removed     sqlNullTime
+		suspendedAt sqlNullTime
 	)
 	if err := s.Scan(&a.Namespace, &a.ProjectID, &a.Integration, &a.Kind, &a.URL, &read, &write, &pending, &a.ApprovedByDevice, &approved, &removed,
-		&a.AccountLabel, &a.AccountIdentity, &a.IdentitySource); err != nil {
+		&a.AccountLabel, &a.AccountIdentity, &a.IdentitySource, &suspended, &suspendedAt); err != nil {
 		return a, err
 	}
 	a.ReadTools, a.WriteTools, a.ReadPending, a.ApprovedAt = grantToolsFrom(read), grantToolsFrom(write), pending != 0, approved.Time
 	if removed.Valid {
 		t := removed.Time
 		a.RemovedAt = &t
+	}
+	if a.SuspendedTools = grantToolsFrom(suspended); len(a.SuspendedTools) == 0 {
+		a.SuspendedTools = nil
+	}
+	if suspendedAt.Valid {
+		t := suspendedAt.Time
+		a.SuspendedAt = &t
 	}
 	return a, nil
 }
@@ -116,6 +130,77 @@ func (r *AgentGrantRepository) GetIntegration(ctx context.Context, projectID, in
 // ListIntegrations implements persistence.AgentGrantRepository.
 func (r *AgentGrantRepository) ListIntegrations(ctx context.Context, namespace string) ([]persistence.AgentIntegrationApproval, error) {
 	rows, err := r.db.QueryContext(ctx, `SELECT `+agentIntegrationCols+` FROM agent_integration_approvals WHERE namespace = ? ORDER BY project_id, integration`, namespace)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+	var out []persistence.AgentIntegrationApproval
+	for rows.Next() {
+		a, err := scanAgentIntegration(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, a)
+	}
+	return out, rows.Err()
+}
+
+// suspendCASAttempts bounds SuspendIntegrationTools' compare-and-set
+// retries; each lost race means another writer changed the row.
+const suspendCASAttempts = 5
+
+// SuspendIntegrationTools implements persistence.AgentGrantRepository. A
+// compare-and-set, not a transaction: r.db may already be one (design §6.5,
+// amendment #481). approved_at is compared as the stored text, read back
+// unchanged, so the CAS cannot miss on a formatting difference.
+func (r *AgentGrantRepository) SuspendIntegrationTools(ctx context.Context, projectID, integration string, tools []string, listedAt time.Time) error {
+	for range suspendCASAttempts {
+		var (
+			have, approvedRaw string
+			suspendedRaw      sql.NullString
+		)
+		err := r.db.QueryRowContext(ctx, `SELECT suspended_tools, approved_at, suspended_at FROM agent_integration_approvals
+			WHERE project_id = ? AND integration = ? AND removed_at IS NULL`, projectID, integration).Scan(&have, &approvedRaw, &suspendedRaw)
+		if errors.Is(err, sql.ErrNoRows) {
+			return persistence.ErrNotFound
+		}
+		if err != nil {
+			return err
+		}
+		var approved sqlTime
+		if err := approved.Scan(approvedRaw); err != nil {
+			return err
+		}
+		if approved.Time.After(listedAt) {
+			return persistence.ErrStaleListing
+		}
+		next := grantToolsJSON(persistence.UnionSuspendedTools(grantToolsFrom(have), tools))
+		if next == have {
+			return nil
+		}
+		at := sqliteTime(listedAt)
+		if suspendedRaw.Valid && suspendedRaw.String != "" {
+			at = suspendedRaw.String
+		}
+		res, err := r.db.ExecContext(ctx, `UPDATE agent_integration_approvals SET suspended_tools = ?, suspended_at = ?
+			WHERE project_id = ? AND integration = ? AND removed_at IS NULL AND suspended_tools = ? AND approved_at = ?`,
+			next, at, projectID, integration, have, approvedRaw)
+		if err != nil {
+			return err
+		}
+		if n, err := res.RowsAffected(); err != nil {
+			return err
+		} else if n == 1 {
+			return nil
+		}
+	}
+	return errors.New("persistence: suspend read tools: the row kept changing")
+}
+
+// ListSuspendedIntegrations implements persistence.AgentGrantRepository.
+func (r *AgentGrantRepository) ListSuspendedIntegrations(ctx context.Context) ([]persistence.AgentIntegrationApproval, error) {
+	rows, err := r.db.QueryContext(ctx, `SELECT `+agentIntegrationCols+` FROM agent_integration_approvals
+		WHERE removed_at IS NULL AND suspended_tools <> '[]' ORDER BY project_id, integration`)
 	if err != nil {
 		return nil, err
 	}

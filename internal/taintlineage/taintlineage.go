@@ -13,9 +13,14 @@
 // Correctness anchors (do not weaken without re-reading the LLD):
 //   - Used = MaxSeverity != SeverityNone — Unknown counts as used (F3), so an
 //     Unknown-only step is covered by the partial index and trips HasUnknown.
-//   - RequiresReview (stored on the row) = MaxSeverity == SeverityHigh —
-//     Unknown does NOT set it (kept quiet in advisory; the GATE escalates
-//     Unknown in enforce, D8).
+//   - RequiresReview (stored on the row) = ANY call graded High (#441: not
+//     MaxSeverity == High, because Unknown orders above High and a step that
+//     called both would lose its High). An Unknown-only step does NOT set it
+//     (kept quiet in advisory; the GATE escalates Unknown in enforce, D8).
+//   - Severity classes are OR-ed, never decided by the maximum (#441): the
+//     rollup reads every source, and a step whose severity cannot be
+//     established is Ungradable, which parks in enforce and is never cleared
+//     by a latch (nothing about it could have been shown to a reviewer).
 //   - SourceSetHash is SHA-256 over the FULL, pre-cap, deduped lineage source
 //     set (F-cap/F2) — a safety control, never a fast hash, never the capped
 //     16.
@@ -89,8 +94,8 @@ type Source struct {
 type StepTaint struct {
 	Used           bool     `json:"used"`            // Used = MaxSeverity != SeverityNone (F3)
 	MaxSeverity    Severity `json:"max_severity"`    //
-	RequiresReview bool     `json:"requires_review"` // MaxSeverity == SeverityHigh (Unknown handled at gate, D8)
-	Sources        []Source `json:"sources"`         // bounded, deduped (display/storage)
+	RequiresReview bool     `json:"requires_review"` // any call graded High (#441; Unknown handled at gate, D8)
+	Sources        []Source `json:"sources"`         // bounded, deduped (display/storage), most severe first when capped
 	// DroppedSources is the count of distinct sources dropped by the MaxSources
 	// cap, so the caller can log the drop (never silent, §4.1).
 	DroppedSources int `json:"dropped_sources,omitempty"`
@@ -100,6 +105,12 @@ type StepTaint struct {
 	// latch key — closing the per-step-grain C1/F-cap hole. Empty for an
 	// untainted (SeverityNone) step.
 	FullHash string `json:"full_hash,omitempty"`
+	// Ungradable marks a reconstructed step whose severity cannot be
+	// established from its record (undecodable or empty blob, an out-of-range
+	// severity, or a legacy capped blob with no full-set hash). The rollup
+	// treats it as Unknown and the gate never lets a latch clear it (#441).
+	// Never persisted.
+	Ungradable bool `json:"-"`
 }
 
 // ToolCall is the minimal shape Classify needs — the audited tool name and
@@ -158,6 +169,9 @@ func Classify(calls []ToolCall) StepTaint {
 		if sev > st.MaxSeverity {
 			st.MaxSeverity = sev
 		}
+		if sev == SeverityHigh {
+			st.RequiresReview = true // any High call, whatever else ran (#441)
+		}
 		if sev == SeverityNone {
 			continue // first-party builtins contribute no source entry
 		}
@@ -170,13 +184,16 @@ func Classify(calls []ToolCall) StepTaint {
 		full = append(full, Source{Tool: c.Tool, Ref: ref, Severity: sev})
 	}
 	st.Used = st.MaxSeverity != SeverityNone
-	st.RequiresReview = st.MaxSeverity == SeverityHigh
 	// FullHash is over the FULL pre-cap deduped set — computed BEFORE the
 	// MaxSources cap so the latch key reflects sources this step dropped (M1).
 	st.FullHash = HashSources(full)
 	if len(full) > MaxSources {
+		// Keep the most severe sources (stable in call order within a class),
+		// so the stored list never hides the class that decides (#441 G4).
+		kept := append([]Source(nil), full...)
+		sort.SliceStable(kept, func(i, j int) bool { return kept[i].Severity > kept[j].Severity })
 		st.DroppedSources = len(full) - MaxSources
-		st.Sources = append([]Source(nil), full[:MaxSources]...)
+		st.Sources = kept[:MaxSources]
 	} else {
 		st.Sources = full
 	}
@@ -313,15 +330,18 @@ func truncateRef(ref string) string {
 // dropped by the per-step MaxSources cap. Serialized by NewSourcesBlob and read
 // back by StepTaintFromBlob, which also accepts the legacy bare-[]Source shape.
 type SourcesBlob struct {
-	FullHash string   `json:"full_hash,omitempty"`
-	Dropped  int      `json:"dropped,omitempty"`
-	Sources  []Source `json:"sources"`
+	FullHash string `json:"full_hash,omitempty"`
+	Dropped  int    `json:"dropped,omitempty"`
+	// MaxSeverity is the step's true maximum over EVERY call, before the cap
+	// (#441 G4). Absent (0) on rows written before #441.
+	MaxSeverity Severity `json:"max_severity,omitempty"`
+	Sources     []Source `json:"sources"`
 }
 
 // NewSourcesBlob builds the persisted blob for a classified step (M1). The
 // executor marshals this into the untrusted_sources JSONB column.
 func NewSourcesBlob(st StepTaint) SourcesBlob {
-	return SourcesBlob{FullHash: st.FullHash, Dropped: st.DroppedSources, Sources: st.Sources}
+	return SourcesBlob{FullHash: st.FullHash, Dropped: st.DroppedSources, MaxSeverity: st.MaxSeverity, Sources: st.Sources}
 }
 
 // StepTaintFromBlob reconstructs the rollup-relevant StepTaint from a persisted
@@ -337,15 +357,48 @@ func NewSourcesBlob(st StepTaint) SourcesBlob {
 // legacy bare-[]Source array; when no full_hash is present it computes one over
 // the available (capped) sources as a fallback, so the latch remains
 // deterministic (M1).
+//
+// Grading (#441): the step's severity is the maximum of the recorded
+// max_severity, the stored flag and every decoded source, and High is set by
+// any High source as well as by the flag. A step whose severity cannot be
+// established is Ungradable (see StepTaint.Ungradable): no decodable source,
+// a severity outside Low..Unknown, or a legacy capped blob (dropped > 0) with
+// neither max_severity nor a full-set hash. A legacy capped blob WITH a
+// full-set hash but no max_severity is graded Unknown: its dropped sources'
+// severity is unknown, but the latch key covers them.
 func StepTaintFromBlob(blob []byte, requiresReview bool) StepTaint {
 	st := StepTaint{Used: true, RequiresReview: requiresReview, MaxSeverity: SeverityNone}
-	sources, fullHash, dropped := decodeSourcesBlob(blob)
+	sources, fullHash, dropped, recordedMax := decodeSourcesBlob(blob)
 	st.Sources = sources
 	st.DroppedSources = dropped
+	if len(sources) == 0 {
+		st.Ungradable = true
+	}
 	for _, s := range sources {
+		if !sourceSeverityValid(s.Severity) {
+			st.Ungradable = true
+			continue
+		}
 		if s.Severity > st.MaxSeverity {
 			st.MaxSeverity = s.Severity
 		}
+		if s.Severity == SeverityHigh {
+			st.RequiresReview = true
+		}
+	}
+	switch {
+	case recordedMax == SeverityNone:
+		if dropped > 0 {
+			if fullHash == "" {
+				st.Ungradable = true
+			} else {
+				st.MaxSeverity = SeverityUnknown // legacy capped row: dropped severities unknown
+			}
+		}
+	case !sourceSeverityValid(recordedMax):
+		st.Ungradable = true
+	case recordedMax > st.MaxSeverity:
+		st.MaxSeverity = recordedMax
 	}
 	if fullHash != "" {
 		st.FullHash = fullHash
@@ -361,30 +414,71 @@ func StepTaintFromBlob(blob []byte, requiresReview bool) StepTaint {
 
 // decodeSourcesBlob parses either the SourcesBlob object shape or the legacy
 // bare-[]Source array. Returns (sources, fullHash, dropped).
-func decodeSourcesBlob(blob []byte) ([]Source, string, int) {
+func decodeSourcesBlob(blob []byte) ([]Source, string, int, Severity) {
 	if len(blob) == 0 {
-		return nil, "", 0
+		return nil, "", 0, SeverityNone
 	}
 	var obj SourcesBlob
 	if err := json.Unmarshal(blob, &obj); err == nil && (obj.FullHash != "" || obj.Sources != nil) {
-		return obj.Sources, obj.FullHash, obj.Dropped
+		return obj.Sources, obj.FullHash, obj.Dropped, obj.MaxSeverity
 	}
 	var arr []Source
 	if err := json.Unmarshal(blob, &arr); err == nil {
-		return arr, "", 0
+		return arr, "", 0, SeverityNone
 	}
-	return nil, "", 0
+	return nil, "", 0, SeverityNone
+}
+
+// sourceSeverityValid reports whether a recorded source severity is one the
+// classifier can produce for a source (Low, High or Unknown; None sources are
+// never recorded).
+func sourceSeverityValid(s Severity) bool {
+	return s >= SeverityLow && s <= SeverityUnknown
+}
+
+// gradeStep ORs a step's severity classes (#441): High if the stored flag,
+// the maximum or ANY source is High; Unknown if the maximum or any source is
+// Unknown, or the step cannot be graded. Never a switch on the maximum, which
+// let Unknown (ordered above High) hide High.
+func gradeStep(s StepTaint) (high, unknown, ungradable bool) {
+	ungradable = s.Ungradable
+	if s.Used && s.MaxSeverity == SeverityNone && len(s.Sources) == 0 {
+		ungradable = true
+	}
+	if s.MaxSeverity < SeverityNone || s.MaxSeverity > SeverityUnknown {
+		ungradable = true
+	}
+	high = s.RequiresReview || s.MaxSeverity == SeverityHigh
+	unknown = s.MaxSeverity == SeverityUnknown
+	for _, src := range s.Sources {
+		switch {
+		case src.Severity == SeverityHigh:
+			high = true
+		case src.Severity == SeverityUnknown:
+			unknown = true
+		case !sourceSeverityValid(src.Severity):
+			ungradable = true
+		}
+	}
+	if ungradable {
+		unknown = true
+	}
+	return high, unknown, ungradable
 }
 
 // TaskTaint is the lineage rollup a write gate consults (§4.1).
 type TaskTaint struct {
 	Tainted        bool
-	RequiresReview bool     // any lineage step SeverityHigh
-	HasUnknown     bool     // any lineage step SeverityUnknown (gate escalates in enforce, D8)
-	WalkComplete   bool     // false → enforce fail-closed (D6)
-	Sources        []Source // lineage union, re-bounded to MaxSources — DISPLAY only
-	TotalSources   int      // FULL pre-cap distinct source count (surfaced when > len(Sources), F-cap)
-	SourceSetHash  string   // SHA-256 over the FULL pre-cap distinct source set (D7 latch key)
+	RequiresReview bool // any lineage step SeverityHigh
+	HasUnknown     bool // any lineage step SeverityUnknown (gate escalates in enforce, D8)
+	WalkComplete   bool // false → enforce fail-closed (D6)
+	// Ungradable: some lineage step's severity cannot be established from its
+	// record (#441). Its content could not be shown to a reviewer, so the gate
+	// never lets a latch clear it.
+	Ungradable    bool
+	Sources       []Source // lineage union, re-bounded to MaxSources (most severe first) — DISPLAY only
+	TotalSources  int      // FULL pre-cap distinct source count (surfaced when > len(Sources), F-cap)
+	SourceSetHash string   // SHA-256 over the FULL pre-cap distinct source set (D7 latch key)
 }
 
 // Rollup unions the writing task's own step taints with its walked ancestors'
@@ -407,12 +501,11 @@ func Rollup(ownSteps, ancestorSteps []StepTaint, walkComplete bool) TaskTaint {
 			if s.Used {
 				tt.Tainted = true
 			}
-			switch s.MaxSeverity {
-			case SeverityHigh:
-				tt.RequiresReview = true
-			case SeverityUnknown:
-				tt.HasUnknown = true
-			}
+			// OR the classes; never switch on the maximum (#441).
+			high, unknown, ungradable := gradeStep(s)
+			tt.RequiresReview = tt.RequiresReview || high
+			tt.HasUnknown = tt.HasUnknown || unknown
+			tt.Ungradable = tt.Ungradable || ungradable
 			droppedSum += s.DroppedSources
 			h := s.FullHash
 			if h == "" {
@@ -446,7 +539,10 @@ func Rollup(ownSteps, ancestorSteps []StepTaint, walkComplete bool) TaskTaint {
 	// order-independent + collision-resistant.
 	tt.SourceSetHash = hashStepHashes(stepHashes)
 	if len(full) > MaxSources {
+		// Most severe first, so the checkpoint never hides the source that
+		// caused the park behind lower-severity ones (#441 G5).
 		display := sortSources(full)
+		sort.SliceStable(display, func(i, j int) bool { return display[i].Severity > display[j].Severity })
 		tt.Sources = display[:MaxSources]
 	} else {
 		tt.Sources = full
@@ -458,8 +554,11 @@ func Rollup(ownSteps, ancestorSteps []StepTaint, walkComplete bool) TaskTaint {
 // encoding is canonical + order-independent:
 //   - each source's Ref is truncated to MaxRefLen BEFORE hashing (so a re-run
 //     that changes only a beyond-MaxRefLen tail does not change the hash);
-//   - entries are sorted by (Tool, Ref);
-//   - each field is length-prefixed so ("ab","c") and ("a","bc") never collide.
+//   - entries are sorted by (Tool, Ref, Severity);
+//   - each field is length-prefixed so ("ab","c") and ("a","bc") never collide;
+//   - each source's Severity is part of the key (#441 G1), so a latch granted
+//     on a set reviewed at one severity never matches the same set graded
+//     differently (a classifier promotion between park and re-run).
 //
 // The hash is over the FULL pre-cap deduped set the caller passes — never the
 // MaxSources-capped display list — so an overflow source still re-parks (F-cap).
@@ -473,7 +572,7 @@ func HashSources(sources []Source) string {
 	seen := make(map[string]Source, len(sources))
 	for _, s := range sources {
 		ref := truncateRef(s.Ref)
-		key := s.Tool + "\x00" + ref
+		key := s.Tool + "\x00" + ref + "\x00" + strconv.Itoa(int(s.Severity))
 		if _, dup := seen[key]; !dup {
 			seen[key] = Source{Tool: s.Tool, Ref: ref, Severity: s.Severity}
 		}
@@ -487,6 +586,7 @@ func HashSources(sources []Source) string {
 	for _, s := range canon {
 		writeLenPrefixed(h, s.Tool)
 		writeLenPrefixed(h, s.Ref)
+		writeLenPrefixed(h, strconv.Itoa(int(s.Severity)))
 	}
 	return hex.EncodeToString(h.Sum(nil))
 }
@@ -535,6 +635,9 @@ func sortSourcesInPlace(s []Source) {
 		if s[i].Tool != s[j].Tool {
 			return s[i].Tool < s[j].Tool
 		}
-		return s[i].Ref < s[j].Ref
+		if s[i].Ref != s[j].Ref {
+			return s[i].Ref < s[j].Ref
+		}
+		return s[i].Severity < s[j].Severity
 	})
 }

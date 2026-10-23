@@ -110,6 +110,20 @@ type Metrics struct {
 	// (executor design §9.5.6).
 	MergeBackPreservedTotal *prometheus.CounterVec
 
+	// WorkspaceRefreshTotal counts every task eligible for the opt-in pre-work
+	// refresh (workspace.refresh_before_work, a SCHEDULED or AUTONOMOUS
+	// non-forge task) once, by outcome. The sum over outcome is the number of
+	// eligible tasks (executor design §9.6, GitHub #400).
+	WorkspaceRefreshTotal *prometheus.CounterVec
+
+	// StepOutcomeAfterWatchdogTotal counts step-outcome rows the executor met
+	// after the watchdog had failed their execution as stuck
+	// (outcome-quality-design §S8.8, GitHub #369), by when it saw it:
+	// before_insert (the row was not written; the watchdog's row stands) or
+	// after_insert (the watchdog failed the execution between the executor's
+	// check and its insert: a possible duplicate, an upper bound).
+	StepOutcomeAfterWatchdogTotal *prometheus.CounterVec
+
 	// PromptHashMismatchTotal counts step_prompt.json parts whose
 	// container-computed sha256 differed from the hash of the bytes the daemon
 	// stored (step-prompt persistence design §4). reason=redacted: the seam
@@ -639,6 +653,24 @@ func NewMetrics(registerer prometheus.Registerer) *Metrics {
 			},
 			[]string{"project", "result"},
 		),
+		WorkspaceRefreshTotal: promauto.With(registerer).NewCounterVec(
+			prometheus.CounterOpts{
+				Namespace: executorNamespace,
+				Subsystem: executorSubsystem,
+				Name:      "workspace_refresh_total",
+				Help:      "Tasks eligible for the opt-in pre-work refresh (workspace.refresh_before_work; scheduled or autonomous, not forge), by outcome: refreshed, or why not (no_origin, fetch_failed, reset_failed, not_git, skipped_has_children, skipped_resume, skipped_backlog_mode, skipped_no_branch). Anything but refreshed means the task ran on the clone's existing HEAD. Resets on restart.",
+			},
+			[]string{"project", "source", "outcome"},
+		),
+		StepOutcomeAfterWatchdogTotal: promauto.With(registerer).NewCounterVec(
+			prometheus.CounterOpts{
+				Namespace: executorNamespace,
+				Subsystem: executorSubsystem,
+				Name:      "step_outcome_after_watchdog_total",
+				Help:      "Step-outcome rows met after the watchdog failed their execution as stuck, by when: before_insert (not written; the watchdog's stuck_execution row stands) or after_insert (written; the watchdog failed the execution in between, so the step may have two rows). Resets on restart.",
+			},
+			[]string{"when"},
+		),
 		TaskBudgetTierTotal: promauto.With(registerer).NewCounterVec(
 			prometheus.CounterOpts{
 				Namespace: executorNamespace,
@@ -868,7 +900,7 @@ func NewMetrics(registerer prometheus.Registerer) *Metrics {
 			prometheus.CounterOpts{
 				Namespace: "vornik",
 				Name:      "skill_distill_skipped_total",
-				Help:      "Auto-proposed skill drafts suppressed, by reason: a near-duplicate match reason, or a refused task (broker_workflow, broker_project, not_completed, unresolved, lookup_error; the default-deny proof: third_party_system_step, taint_unreadable, lineage_incomplete, goal_origin_unrecorded, goal_third_party, goal_origin_unproven, descendants_unbounded, task_inputs, task_messages, taint_unrecorded, third_party_tools, lineage_unrecorded, third_party_lineage, step_unaudited, step_unrecorded, step_record_truncated), or a failed distiller model call (llm_error, llm_timeout, llm_cancelled, llm_empty).",
+				Help:      "Auto-proposed skill drafts suppressed, by reason: a near-duplicate match reason, or a refused task (broker_workflow, broker_project, not_completed, unresolved, lookup_error; the default-deny proof: third_party_system_step, taint_unreadable, lineage_incomplete, goal_origin_unrecorded, goal_third_party, goal_origin_unproven, descendants_unbounded, task_inputs, task_messages, taint_unrecorded, third_party_tools, lineage_unrecorded, third_party_lineage, step_unaudited, step_unrecorded, step_record_truncated), or a failed distiller model call (llm_error, llm_timeout, llm_cancelled, llm_empty), or a post-gate return (rate_limited, empty_input, model_skip, unparseable, incomplete_candidate, duplicate_name, persist_error; GitHub #369).",
 			},
 			[]string{"reason"},
 		),
@@ -1343,6 +1375,28 @@ func (m *Metrics) RecordMergeBackPreserved(projectID string, pw PreservedWork, p
 		result = MergeBackPreservedPinned
 	}
 	m.MergeBackPreservedTotal.WithLabelValues(projectID, result).Inc()
+}
+
+// Outcomes of WorkspaceRefreshTotal (executor design §9.6). The first five are
+// what rebaseProjectToOrigin returns; the skips are decided before it runs.
+const (
+	WorkspaceRefreshRefreshed   = "refreshed"
+	WorkspaceRefreshNotGit      = "not_git"
+	WorkspaceRefreshNoOrigin    = "no_origin"
+	WorkspaceRefreshFetchFailed = "fetch_failed"
+	WorkspaceRefreshResetFailed = "reset_failed"
+	WorkspaceRefreshHasChildren = "skipped_has_children"
+	WorkspaceRefreshResume      = "skipped_resume"
+	WorkspaceRefreshBacklogMode = "skipped_backlog_mode"
+	WorkspaceRefreshNoBranch    = "skipped_no_branch"
+)
+
+// RecordWorkspaceRefresh counts one eligible task's pre-work refresh outcome.
+func (m *Metrics) RecordWorkspaceRefresh(projectID, source, outcome string) {
+	if m == nil || m.WorkspaceRefreshTotal == nil {
+		return
+	}
+	m.WorkspaceRefreshTotal.WithLabelValues(projectID, source, outcome).Inc()
 }
 
 // RecordRetried increments the retried counter.

@@ -20,6 +20,7 @@
 package agenthealth
 
 import (
+	"errors"
 	"sync"
 	"time"
 
@@ -206,4 +207,63 @@ func (r *Registry) incTrips(model, reason string) {
 	if r != nil && r.metrics != nil {
 		r.metrics.IncTrips(model, reason)
 	}
+}
+
+// The basis of a NextAdmission answer, for the log line that reports a hold.
+const (
+	// AdmissionHalfOpenAt: the model's circuit is OPEN and the answer is the
+	// end of its cooldown, when the next caller probes.
+	AdmissionHalfOpenAt = "half_open_at"
+	// AdmissionProbeInFlight: the circuit is HALF_OPEN, a probe is running
+	// and its outcome is unknown; the answer is one cooldown from now.
+	AdmissionProbeInFlight = "probe_in_flight"
+	// AdmissionBackoff: the failure carries the MODEL_UNHEALTHY marker but
+	// no circuit of this registry names its time (the typed error was
+	// flattened to text, it came from the chat-router breaker, or this
+	// registry has no breaker for the model); the answer is one cooldown
+	// from now.
+	AdmissionBackoff = "backoff"
+)
+
+// NextAdmission answers when a call that failed with err can next be
+// admitted, for the retry hold (permanent-failure design §8.8.2 D1, GitHub
+// #363): a retry dispatched before then meets the same open circuit.
+//
+// ok is false — no hold — when the registry is nil or disabled, when err is
+// not a MODEL_UNHEALTHY failure (chat.IsModelUnhealthyFailure, the shared
+// predicate), when the model's circuit is CLOSED now, or when the answer is
+// not after now. The time is read from the breaker as it stands, never from
+// the error's OpenSince, which a failed probe may have overtaken. Every
+// answer is clamped to at most one OpenCooldown from now. It never creates
+// a breaker.
+func (r *Registry) NextAdmission(err error) (at time.Time, basis string, ok bool) {
+	if r == nil || !r.cfg.Enabled || !chat.IsModelUnhealthyFailure(err) {
+		return time.Time{}, "", false
+	}
+	now := r.cfg.Now()
+	limit := now.Add(r.cfg.Health.OpenCooldown)
+	at, basis = limit, AdmissionBackoff
+	var mue *chat.ModelUnhealthyError
+	if errors.As(err, &mue) && mue.Route == "agent" {
+		if v, found := r.reg.Load(mue.Model); found {
+			if b, isBreaker := v.(*chat.Breaker); isBreaker {
+				halfOpen, state := b.HalfOpenAt()
+				switch state {
+				case chat.CircuitClosed:
+					return time.Time{}, "", false
+				case chat.CircuitOpen:
+					at, basis = halfOpen, AdmissionHalfOpenAt
+				default:
+					basis = AdmissionProbeInFlight
+				}
+			}
+		}
+	}
+	if at.After(limit) {
+		at = limit
+	}
+	if !at.After(now) {
+		return time.Time{}, "", false
+	}
+	return at, basis, true
 }

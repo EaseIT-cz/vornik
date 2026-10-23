@@ -7,7 +7,7 @@ import (
 )
 
 // TestPageFooterVersionLink verifies the daemon version renders in the footer as
-// a changelog link when WithVersion is set, and that an unset version renders
+// a release-notes link when WithVersion is set, and that an unset version renders
 // nothing (graceful). The version reaches the template via the server-bound
 // "appVersion" FuncMap entry — no page data threading.
 func TestPageFooterVersionLink(t *testing.T) {
@@ -20,8 +20,14 @@ func TestPageFooterVersionLink(t *testing.T) {
 	if !strings.Contains(out, "Vornik 2026.7.4-52-gebe09761") {
 		t.Errorf("footer must show the version, got: %q", out)
 	}
-	if !strings.Contains(out, `href="https://docs.vornik.io/changelog"`) {
-		t.Errorf("footer must link to the changelog, got: %q", out)
+	// #397 (operator, production 2026-10-16): the footer linked to
+	// https://docs.vornik.io/changelog, which returns 404; the release notes
+	// live at /release-notes/. This assertion pinned the dead URL before.
+	if !strings.Contains(out, `href="https://docs.vornik.io/release-notes/"`) {
+		t.Errorf("footer must link to the release notes, got: %q", out)
+	}
+	if strings.Contains(out, "docs.vornik.io/changelog") {
+		t.Errorf("footer must not link to the removed changelog page, got: %q", out)
 	}
 	if !strings.Contains(out, `rel="noopener"`) {
 		t.Errorf("external link must carry rel=noopener, got: %q", out)

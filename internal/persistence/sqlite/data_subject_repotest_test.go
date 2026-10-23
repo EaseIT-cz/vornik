@@ -106,6 +106,23 @@ func TestDataSubjectStore_ReconciledOnExistingDatabase(t *testing.T) {
 	repotest.RunMemoryPolicyEvaluationSuite(t, sqlite.NewMemoryPolicyEvaluationRepository(db.DB))
 }
 
+// GitHub #415 item 3 (Art 17 design §15.12): an erasure evicts the assembled
+// black-box trace cache. SQLite has no such table, so the same suite asserts
+// the erasure completes and reports the eviction "not applicable".
+func TestDataSubjectTraceCacheEviction_Contract(t *testing.T) {
+	db := newTestDB(t)
+	repotest.RunDataSubjectTraceCacheEvictionSuite(t, sqlite.NewDataSubjectRepository(db.DB),
+		seedChatTurnForSuite(db), noTraceCache{})
+}
+
+type noTraceCache struct{}
+
+func (noTraceCache) Supported() bool { return false }
+func (noTraceCache) SeedAssembledTrace(context.Context, string, string, string) error {
+	return nil
+}
+func (noTraceCache) CountAssembledTraces(context.Context, string) (int, error) { return 0, nil }
+
 func seedChatTurnForSuite(db *sqlite.DB) repotest.SeedChatTurn {
 	return func(ctx context.Context, id, projectID, message string) error {
 		_, err := db.ExecContext(ctx, `INSERT INTO chat_audit_log (id, ts, project_id, user_message)

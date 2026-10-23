@@ -5,13 +5,13 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
 	"sort"
 	"strings"
 	"sync"
 	"time"
 
+	"vornik.io/vornik/internal/integrations/dialguard"
 	"vornik.io/vornik/internal/registry"
 )
 
@@ -191,7 +191,15 @@ func fetchQuote(ctx context.Context, brokerURL, projectID, symbol string) (*prew
 	if projectID != "" {
 		req.Header.Set("X-Project-ID", projectID)
 	}
-	resp, err := http.DefaultClient.Do(req)
+	// GitHub #465 (2026-10-21, trading-dashboard-design "Amendment 2026-10-21
+	// (#465)"): the shared guard, not http.DefaultClient. The URL's own
+	// loopback host is dialled, any other host must resolve to a public
+	// address, and a redirect is never followed, so no second request (and no
+	// X-Project-ID) leaves the daemon. Timeout 0: the caller's context deadline
+	// is the bound, as before.
+	client := dialguard.LoopbackURLGuard(brokerURL, nil).NoRedirectHTTPClient(0)
+	defer client.CloseIdleConnections()
+	resp, err := client.Do(req)
 	if err != nil {
 		return nil, err
 	}
@@ -199,7 +207,7 @@ func fetchQuote(ctx context.Context, brokerURL, projectID, symbol string) (*prew
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("broker returned %d", resp.StatusCode)
 	}
-	raw, err := io.ReadAll(io.LimitReader(resp.Body, 64*1024))
+	raw, err := dialguard.ReadBoundedBody(resp.Body, 64*1024)
 	if err != nil {
 		return nil, err
 	}

@@ -19,6 +19,7 @@ type Metrics struct {
 	finished     *prometheus.CounterVec
 	finishFailed prometheus.Counter
 	unscanned    *prometheus.CounterVec
+	refused      *prometheus.CounterVec
 }
 
 // NewMetrics returns an unattached holder.
@@ -67,6 +68,15 @@ func (m *Metrics) Attach(registerer prometheus.Registerer, logger *zerolog.Logge
 		Help: "Tool responses stored as broker-action outcomes without a secret scan, by reason: " +
 			"secrets_disabled (secret scanning is off) or detector_unavailable (it is on but its " +
 			"detector failed to build). Zero with actions finishing means every outcome was scanned.",
+	}, []string{"reason"})
+	m.refused = f.NewCounterVec(prometheus.CounterOpts{
+		Namespace: "vornik",
+		Subsystem: "broker",
+		Name:      "actions_refused_total",
+		Help: "Broker write actions the worker refused before sending, by reason: writes_off, " +
+			"tool_undeclared and args_hash_mismatch (a re-check failed; the action finished " +
+			"pre_send_error; args_hash_mismatch is possible tampering) and claim_error (the store " +
+			"failed the claim; the row is untouched and the next sweep retries it).",
 	}, []string{"reason"})
 	if logger != nil {
 		logger.Debug().Msg("broker actions: metrics attached")
@@ -125,6 +135,20 @@ func (m *Metrics) RecordUnscanned(reason string) {
 	}
 	m.mu.Lock()
 	c := m.unscanned
+	m.mu.Unlock()
+	if c != nil {
+		c.WithLabelValues(reason).Inc()
+	}
+}
+
+// RecordRefused counts one action refused before sending, by reason (GitHub
+// #369, outcome-quality LLD §S8.11 rows 14b and 14c).
+func (m *Metrics) RecordRefused(reason string) {
+	if m == nil {
+		return
+	}
+	m.mu.Lock()
+	c := m.refused
 	m.mu.Unlock()
 	if c != nil {
 		c.WithLabelValues(reason).Inc()

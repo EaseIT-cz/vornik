@@ -90,6 +90,90 @@ func TestCLIClient_ADescendantHoldingStdoutDoesNotHangTheCall(t *testing.T) {
 	})
 }
 
+// GitHub #369 item 3 (2026-10-17, outcome-quality-design §S8.8, §S8.3 #3):
+// found at review (the §S8 census; F1's cost column), observed at the provider
+// call. F1 made the call return, but the helper the CLI forked lived on: the
+// kill reached the CLI only, so every timed-out call leaked one process. The
+// timeout now kills the CLI's process group. cliWaitDelay is set far above
+// the assertion window, so a return inside it is the group kill's doing, not
+// WaitDelay's.
+func assertTimeoutKillsDescendant(t *testing.T, name string, pidFile string, call func() error) {
+	t.Helper()
+	old := cliWaitDelay
+	cliWaitDelay = 30 * time.Second
+	t.Cleanup(func() { cliWaitDelay = old })
+	start := time.Now()
+	done := make(chan error, 1)
+	go func() { done <- call() }()
+	select {
+	case err := <-done:
+		if !errors.Is(err, context.DeadlineExceeded) {
+			t.Errorf("%s: err = %v, want it to wrap context.DeadlineExceeded", name, err)
+		}
+		if took := time.Since(start); took > 5*time.Second {
+			t.Errorf("%s: returned after %s: only WaitDelay returned it, the descendant was not killed", name, took)
+		}
+	case <-time.After(20 * time.Second):
+		t.Fatalf("%s: the call did not return within 20s of its 300ms timeout, before the 30s wait delay: "+
+			"the descendant holding stdout was not killed with the CLI (GitHub #369)", name)
+	}
+	b, err := os.ReadFile(pidFile)
+	if err != nil {
+		t.Fatalf("%s: the fake CLI recorded no descendant pid: %v", name, err)
+	}
+	pid, err := strconv.Atoi(strings.TrimSpace(string(b)))
+	if err != nil || pid <= 0 {
+		t.Fatalf("%s: bad descendant pid %q", name, b)
+	}
+	deadline := time.Now().Add(3 * time.Second)
+	for processRunning(pid) {
+		if time.Now().After(deadline) {
+			t.Fatalf("%s: descendant %d is still running after the call returned: "+
+				"the timeout killed the CLI but not its process group (GitHub #369)", name, pid)
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+}
+
+// processRunning reports whether pid is alive and not a zombie.
+func processRunning(pid int) bool {
+	if syscall.Kill(pid, 0) != nil {
+		return false
+	}
+	b, err := os.ReadFile(filepath.Join("/proc", strconv.Itoa(pid), "stat"))
+	if err != nil {
+		return false
+	}
+	// The state field follows the parenthesised command name.
+	s := string(b)
+	if i := strings.LastIndexByte(s, ')'); i >= 0 && i+2 < len(s) {
+		return s[i+2] != 'Z'
+	}
+	return true
+}
+
+func TestCLIClient_ATimedOutCallKillsItsDescendant(t *testing.T) {
+	bin := writeOrphaningCLI(t)
+	c := NewCLIClient("model-x",
+		WithCLIBinary(spawn.NewConfiguredCommand(bin)),
+		WithCLITimeout(300*time.Millisecond))
+	assertTimeoutKillsDescendant(t, "claude cli", filepath.Join(filepath.Dir(bin), "child.pid"), func() error {
+		_, err := c.Complete(context.Background(), []Message{{Role: "user", Content: "hi"}})
+		return err
+	})
+}
+
+func TestCodexCLIClient_ATimedOutCallKillsItsDescendant(t *testing.T) {
+	bin := writeOrphaningCLI(t)
+	c := NewCodexCLIClient("model-x",
+		WithCodexBinary(spawn.NewConfiguredCommand(bin)),
+		WithCodexTimeout(300*time.Millisecond))
+	assertTimeoutKillsDescendant(t, "codex cli", filepath.Join(filepath.Dir(bin), "child.pid"), func() error {
+		_, err := c.Complete(context.Background(), []Message{{Role: "user", Content: "hi"}})
+		return err
+	})
+}
+
 func TestCodexCLIClient_ADescendantHoldingStdoutDoesNotHangTheCall(t *testing.T) {
 	withShortCLIWaitDelay(t)
 	bin := writeOrphaningCLI(t)

@@ -45,6 +45,13 @@ type State struct {
 	// Advertised maps an MCP server URL to the tools it advertised when the
 	// caller listed them for this verb call; absent means "could not list".
 	Advertised map[string][]string
+	// AdvertisedReads maps the same URL to the subset of its advertised
+	// tools Vornik's classifier (mcp.Tool.IsMutating, judged by the service
+	// on the full descriptor) calls read-only (design §6.4, GitHub #405).
+	// FAIL CLOSED: an advertised tool absent from it is treated as one that
+	// changes things and is never approved as a read. Filled only by the
+	// service from its own listing, never from verb input.
+	AdvertisedReads map[string][]string
 	// ListFailed maps a server URL to the class of its failed pre-approval
 	// listing ("connection refused", "HTTP 401", ...), so the approval
 	// sentence says why no tools were listed (design §6.1, review 03b6).
@@ -135,6 +142,10 @@ type IntegrationApproval struct {
 	Write       []string
 	ReadPending bool
 	Removed     bool
+	// Suspended are the read tools the daemon held as changing things on
+	// this approval (design §6.5, amendment #481); a re-add's sentence
+	// names those it would approve as reads again.
+	Suspended []string
 	// The connection's identity and where it came from (design §22.2.2);
 	// the label is the project file's.
 	AccountIdentity, IdentitySource string

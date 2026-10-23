@@ -55,6 +55,10 @@ func (m *Manager) CallToolOnce(ctx context.Context, projectID, qualifiedName, ar
 		m.mu.RUnlock()
 		return "", false, fmt.Errorf("%w: %s", ErrNotSent, msg)
 	}
+	// The agent read re-judge (design §6.5, GitHub #413): nothing is sent.
+	if err := m.agentReadGate(projectID, serverName, toolName, client); err != nil {
+		return "", false, fmt.Errorf("%w: %w", ErrNotSent, err)
+	}
 	result, err := client.CallTool(ctx, toolName, json.RawMessage(argsJSON))
 	if err != nil {
 		var refused *requestguard.Refusal

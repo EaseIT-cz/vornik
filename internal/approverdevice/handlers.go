@@ -348,6 +348,27 @@ type listData struct {
 	Flash   string
 	Refused []string
 	Notify  string
+	// Withheld are the daemon's lines for suspended agent read tools
+	// (design §6.5 item 6).
+	Withheld []string
+}
+
+// SetWithheldTools installs the source of the Approvals page's withheld
+// lines (agent-administered design §6.5 item 6, GitHub #413).
+func (s *Service) SetWithheldTools(fn func(ctx context.Context) []string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.withheldTools = fn
+}
+
+func (s *Service) withheldLines(ctx context.Context) []string {
+	s.mu.RLock()
+	fn := s.withheldTools
+	s.mu.RUnlock()
+	if fn == nil {
+		return nil
+	}
+	return fn(ctx)
 }
 
 // listGroup is one group of two or more requests reviewed together.
@@ -373,7 +394,7 @@ func (s *Service) listPage(w http.ResponseWriter, r *http.Request) {
 		refused = strings.Split(v, ",")
 	}
 	s.render(w, http.StatusOK, "list.html", listData{Device: d, Pending: singles, Groups: groups,
-		Flash: r.URL.Query().Get("done"), Refused: refused, Notify: s.notifyLine()})
+		Flash: r.URL.Query().Get("done"), Refused: refused, Notify: s.notifyLine(), Withheld: s.withheldLines(r.Context())})
 }
 
 // groupPending splits pending requests into groups of two or more (by their

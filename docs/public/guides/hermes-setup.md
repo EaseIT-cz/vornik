@@ -260,7 +260,7 @@ setup, follow [Vornik on another machine](assistant-setup.md#vornik-on-another-m
 | `vornikctl companion grant` says unauthorized | It ran without the admin key, for example as `hermes` | Run it as `vornik`, signed in |
 | Admin setup: the Vornik MCP entry fails at every Hermes start | The `vornikctl` path connect recorded is not executable by `hermes` (connect now refuses such a path) | Install `vornikctl` in `/usr/local/bin` and connect again with `--vornikctl /usr/local/bin/vornikctl` (or `hermes vornik connect --vornikctl /usr/local/bin/vornikctl`) |
 | Admin setup: connect says it cannot reach Vornik, or is unauthorized | `hermes`'s `vornikctl` has no admin key, or a different URL | Pass the key as shown above; add `--url` if Vornik is not on `localhost:8080` |
-| A memory note is refused | Vornik refuses notes under about ten words | Write the fact as a full sentence with its context |
+| A memory note is refused | Vornik refuses a note shorter than three words and ten characters ("Dr Novak"); the plugin tells Hermes nothing was stored | Write the fact as a full sentence with its context ("My dentist is Dr Novak.") |
 
 More on the plugin itself, including what it does on your machine and how
 forgetting works, is on its catalog page in the Hermes plugin catalog and in

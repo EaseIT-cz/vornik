@@ -32,8 +32,13 @@ type Metrics struct {
 	ExtractionDuration prometheus.Histogram
 	// Circuit-breaker events. The worker pauses for a cooldown
 	// after CircuitBreakerThreshold consecutive failed ticks; this
-	// counter increments each time the breaker trips.
-	CircuitTrippedTotal prometheus.Counter
+	// counter increments each time the breaker trips, labelled by the
+	// cause of the tick that tripped it: fetch_error (FetchUnextracted
+	// failed) or chunk_failures (chunks failed) — GitHub #369, §S8.11 7f.
+	CircuitTrippedTotal *prometheus.CounterVec
+	// SkippedTotal counts a graph write that failed and was skipped, by
+	// reason (alias_add_failed) — GitHub #369, §S8.11 6e.
+	SkippedTotal *prometheus.CounterVec
 
 	// Per-stage token attribution for cost dashboards. Labels:
 	// stage (extractor|resolver|relationship|validator), kind
@@ -129,13 +134,23 @@ func NewMetrics(reg prometheus.Registerer) *Metrics {
 				Buckets:   []float64{1, 5, 10, 30, 60, 120, 300, 600},
 			},
 		),
-		CircuitTrippedTotal: promauto.With(reg).NewCounter(
+		CircuitTrippedTotal: promauto.With(reg).NewCounterVec(
 			prometheus.CounterOpts{
 				Namespace: graphNamespace,
 				Subsystem: graphSubsystem,
 				Name:      "circuit_tripped_total",
-				Help:      "Times the KG worker's failure circuit-breaker has tripped.",
+				Help:      "Times the KG worker's failure circuit-breaker has tripped, by the cause of the tick that tripped it: fetch_error (the chunk fetch failed) or chunk_failures (chunks failed).",
 			},
+			[]string{"reason"},
+		),
+		SkippedTotal: promauto.With(reg).NewCounterVec(
+			prometheus.CounterOpts{
+				Namespace: graphNamespace,
+				Subsystem: graphSubsystem,
+				Name:      "skipped_total",
+				Help:      "Graph writes that failed and were skipped, by reason (alias_add_failed).",
+			},
+			[]string{"reason"},
 		),
 		StageTokensTotal: promauto.With(reg).NewCounterVec(
 			prometheus.CounterOpts{
@@ -151,7 +166,7 @@ func NewMetrics(reg prometheus.Registerer) *Metrics {
 				Namespace: graphNamespace,
 				Subsystem: graphSubsystem,
 				Name:      "extractor_outcomes_total",
-				Help:      "Per-chunk extractor outcome. truncated = the model never answered (cut off at the token ceiling; an infrastructure fault — a bigger model or cap makes it worse, lower the reasoning effort). empty_response = it answered and found no entities. dropped_all_invalid = all candidates filtered. produced = >=1 candidate kept.",
+				Help:      "Per-chunk extractor outcome. truncated = the model never answered (cut off at the token ceiling; an infrastructure fault — a bigger model or cap makes it worse, lower the reasoning effort). empty_response = it answered and found no entities. dropped_all_invalid = all candidates filtered. produced = >=1 candidate kept. no_choices, parse_error = an unusable answer; llm_timeout, llm_cancelled, llm_error = the call failed.",
 			},
 			[]string{"outcome"},
 		),
@@ -160,7 +175,7 @@ func NewMetrics(reg prometheus.Registerer) *Metrics {
 				Namespace: graphNamespace,
 				Subsystem: graphSubsystem,
 				Name:      "resolver_decisions_total",
-				Help:      "Resolver outcomes: short_circuit (gate) vs llm (model) vs ambiguous.",
+				Help:      "Resolver outcomes: short_circuit (gate) vs llm (model) vs ambiguous; invalid_match_id counts model matches naming no entity of the project, downgraded to ambiguous (GitHub #419).",
 			},
 			[]string{"outcome"},
 		),

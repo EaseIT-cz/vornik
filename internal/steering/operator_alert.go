@@ -7,11 +7,25 @@ import (
 	"sync"
 	"time"
 
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/promauto"
 	"github.com/rs/zerolog"
 
 	"vornik.io/vornik/internal/conversation"
 	"vornik.io/vornik/internal/persistence"
 )
+
+// operatorAlertTotal counts every operator-alert attempt by kind (steering =
+// NotifySteeringRequired, operator = NotifyOperator) and outcome (sent,
+// no_outbound, no_recipients, send_failed). An alert meant to go
+// that could not used to be a Debug line or an uncounted Warn (GitHub #369,
+// outcome-quality LLD §S8.11 row 12).
+var operatorAlertTotal = promauto.NewCounterVec(prometheus.CounterOpts{
+	Namespace: "vornik",
+	Subsystem: "steering",
+	Name:      "operator_alert_total",
+	Help:      "Operator alerts by kind (steering, operator) and outcome (sent, no_outbound, no_recipients, send_failed).",
+}, []string{"kind", "outcome"})
 
 // OperatorAlertConfig is the fallback recipient for steering on tasks that
 // have NO originating chat — the autonomy loop's own tasks. The shipped
@@ -146,8 +160,9 @@ func (n *OperatorAlertNotifier) NotifySteeringRequired(ctx context.Context, task
 
 	ch := n.resolver.ResolveChannel(n.cfg.Channel)
 	if ch == nil {
-		n.logger.Debug().Str("task_id", task.ID).Str("channel", n.cfg.Channel).
+		n.logger.Warn().Str("task_id", task.ID).Str("channel", n.cfg.Channel).
 			Msg("operator-alert: configured channel has no outbound; skipping")
+		operatorAlertTotal.WithLabelValues("steering", "no_outbound").Inc()
 		return
 	}
 
@@ -156,8 +171,9 @@ func (n *OperatorAlertNotifier) NotifySteeringRequired(ctx context.Context, task
 	// tasks reach family operators, etc. Falls back to the configured session.
 	sessions := n.recipientSessions(task.ProjectID)
 	if len(sessions) == 0 {
-		n.logger.Debug().Str("task_id", task.ID).Str("project", task.ProjectID).
+		n.logger.Warn().Str("task_id", task.ID).Str("project", task.ProjectID).
 			Msg("operator-alert: no recipients for project; skipping")
+		operatorAlertTotal.WithLabelValues("steering", "no_recipients").Inc()
 		return
 	}
 
@@ -177,9 +193,11 @@ func (n *OperatorAlertNotifier) NotifySteeringRequired(ctx context.Context, task
 		if _, err := ch.Send(ctx, msg); err != nil {
 			n.logger.Warn().Err(err).Str("task_id", task.ID).Str("channel", n.cfg.Channel).
 				Str("session", session).Msg("operator-alert: outbound send failed")
+			operatorAlertTotal.WithLabelValues("steering", "send_failed").Inc()
 			continue
 		}
 		n.markSent(dedupKey, state)
+		operatorAlertTotal.WithLabelValues("steering", "sent").Inc()
 		n.logger.Info().Str("task_id", task.ID).Str("project", task.ProjectID).
 			Str("channel", n.cfg.Channel).Str("session", session).Str("state", state).
 			Msg("operator-alert: notified operator of ownerless task")
@@ -197,7 +215,8 @@ func (n *OperatorAlertNotifier) NotifyOperator(ctx context.Context, subject, bod
 	}
 	ch := n.resolver.ResolveChannel(n.cfg.Channel)
 	if ch == nil {
-		n.logger.Debug().Str("channel", n.cfg.Channel).Msg("operator-alert: configured channel has no outbound; skipping")
+		n.logger.Warn().Str("channel", n.cfg.Channel).Msg("operator-alert: configured channel has no outbound; skipping")
+		operatorAlertTotal.WithLabelValues("operator", "no_outbound").Inc()
 		return
 	}
 	text := subject
@@ -210,7 +229,10 @@ func (n *OperatorAlertNotifier) NotifyOperator(ctx context.Context, subject, bod
 	}
 	if _, err := ch.Send(ctx, msg); err != nil {
 		n.logger.Warn().Err(err).Str("channel", n.cfg.Channel).Msg("operator-alert: outbound send failed")
+		operatorAlertTotal.WithLabelValues("operator", "send_failed").Inc()
+		return
 	}
+	operatorAlertTotal.WithLabelValues("operator", "sent").Inc()
 }
 
 func (n *OperatorAlertNotifier) recentlySent(recipientKey, state string) bool {

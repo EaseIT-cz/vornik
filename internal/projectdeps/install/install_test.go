@@ -65,7 +65,7 @@ func TestImageID_NeverPullsAndRefusesAnAbsentImage(t *testing.T) {
 
 func TestProbe_TripleAndRefusals(t *testing.T) {
 	f := &fakeRunner{answers: map[string]func([]string) ([]byte, error){"run": probeAnswer("cpython-312 x86_64 glibc-2.39")}}
-	got, err := Probe(context.Background(), f.run, "vornik-agent:latest")
+	got, err := Probe(context.Background(), f.run, "vornik-agent:latest", 0)
 	if err != nil || got != "cpython-312 x86_64 glibc-2.39" {
 		t.Fatalf("probe = %q, %v", got, err)
 	}
@@ -79,7 +79,7 @@ func TestProbe_TripleAndRefusals(t *testing.T) {
 	bad := &fakeRunner{answers: map[string]func([]string) ([]byte, error){
 		"run": func([]string) ([]byte, error) { return []byte("exec: python3: not found"), errors.New("exit 127") },
 	}}
-	if _, err := Probe(context.Background(), bad.run, "alpine:3"); err == nil || !strings.Contains(err.Error(), "alpine:3") {
+	if _, err := Probe(context.Background(), bad.run, "alpine:3", 0); err == nil || !strings.Contains(err.Error(), "alpine:3") {
 		t.Fatalf("a failed probe must refuse naming the image, got %v", err)
 	}
 }
@@ -96,12 +96,12 @@ func TestChooseInterpreter(t *testing.T) {
 			return nil, errors.New("unknown image")
 		},
 	}}
-	if got, err := ChooseInterpreter(context.Background(), f.run, []string{"a:1", "b:1"}); err != nil || got != "cpython-312 x86_64 glibc-2.39" {
+	if got, err := ChooseInterpreter(context.Background(), f.run, []string{"a:1", "b:1"}, 0); err != nil || got != "cpython-312 x86_64 glibc-2.39" {
 		t.Fatalf("agreeing images: %q %v", got, err)
 	}
 	for _, other := range []string{"cpython-312 aarch64 glibc-2.39", "cpython-311 x86_64 glibc-2.39", "cpython-312 x86_64 musl-1.2"} {
 		triples["b:1"] = other
-		if _, err := ChooseInterpreter(context.Background(), f.run, []string{"a:1", "b:1"}); err == nil ||
+		if _, err := ChooseInterpreter(context.Background(), f.run, []string{"a:1", "b:1"}, 0); err == nil ||
 			!strings.Contains(err.Error(), "a:1") || !strings.Contains(err.Error(), "b:1") {
 			t.Errorf("%q vs the first must refuse naming both images, got %v", other, err)
 		}
@@ -111,7 +111,7 @@ func TestChooseInterpreter(t *testing.T) {
 func TestPipFetcher_Argv(t *testing.T) {
 	lock := "/srv/ws/proj/requirements.lock"
 	f := &fakeRunner{}
-	if err := PipFetcher(f.run, "vornik-agent:latest", lock, "")(context.Background(), "/cache/.staging-1"); err != nil {
+	if err := PipFetcher(f.run, "vornik-agent:latest", lock, "", 0)(context.Background(), "/cache/.staging-1"); err != nil {
 		t.Fatal(err)
 	}
 	a := f.calls[0].args
@@ -137,7 +137,7 @@ func TestPipFetcher_Argv(t *testing.T) {
 	}
 
 	off := &fakeRunner{}
-	if err := PipFetcher(off.run, "vornik-agent:latest", lock, "/mnt/wheels")(context.Background(), "/cache/.staging-2"); err != nil {
+	if err := PipFetcher(off.run, "vornik-agent:latest", lock, "/mnt/wheels", 0)(context.Background(), "/cache/.staging-2"); err != nil {
 		t.Fatal(err)
 	}
 	b := off.calls[0].args
@@ -154,7 +154,7 @@ func TestPipFetcher_SurfacesPipsOwnDiagnostics(t *testing.T) {
 			return []byte("ERROR: Could not find a version that satisfies the requirement (only binary)"), errors.New("exit status 1")
 		},
 	}}
-	err := PipFetcher(f.run, "img", "/p/requirements.lock", "")(context.Background(), t.TempDir())
+	err := PipFetcher(f.run, "img", "/p/requirements.lock", "", 0)(context.Background(), t.TempDir())
 	if err == nil || !strings.Contains(err.Error(), "only binary") {
 		t.Fatalf("pip's diagnostic must reach the operator, got %v", err)
 	}
@@ -276,7 +276,7 @@ func TestValidImageRef(t *testing.T) {
 		if _, err := ImageID(context.Background(), f.run, bad); err == nil || len(f.calls) != 0 {
 			t.Errorf("%q: ImageID must refuse before running anything (calls %v)", bad, f.calls)
 		}
-		if err := PipFetcher(f.run, bad, "/p/requirements.lock", "")(context.Background(), t.TempDir()); err == nil || len(f.calls) != 0 {
+		if err := PipFetcher(f.run, bad, "/p/requirements.lock", "", 0)(context.Background(), t.TempDir()); err == nil || len(f.calls) != 0 {
 			t.Errorf("%q: the fetch must refuse before running anything", bad)
 		}
 	}
@@ -330,7 +330,7 @@ func TestMountSourcesAndLockfileConfinement(t *testing.T) {
 			t.Errorf("%q must be refused as a mount source", bad)
 		}
 		f := &fakeRunner{}
-		if err := PipFetcher(f.run, "img", bad, "")(context.Background(), "/cache/.staging"); err == nil || len(f.calls) != 0 {
+		if err := PipFetcher(f.run, "img", bad, "", 0)(context.Background(), "/cache/.staging"); err == nil || len(f.calls) != 0 {
 			t.Errorf("%q: the fetch must refuse before running anything", bad)
 		}
 	}

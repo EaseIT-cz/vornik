@@ -47,13 +47,29 @@ type ExportItem struct {
 	InArt20  bool   `json:"portable"`
 }
 
+// ExportIdentifier is one identifier the deployment holds for the subject, as
+// it appears in the report. Art 15(1) gives the subject the personal data
+// itself, and the identifiers (an address, a channel id) are personal data; the
+// source and confidence say how each was learned, as for every item.
+type ExportIdentifier struct {
+	Kind       string `json:"kind"`
+	Value      string `json:"value"`
+	Source     string `json:"source"`
+	Confidence string `json:"confidence"`
+}
+
 // Export is the Art 15 / Art 20 report.
 type Export struct {
-	SubjectID   string       `json:"subject_id"`
-	RequestID   string       `json:"request_id"`
-	Kind        string       `json:"kind"`
-	Identifiers []Identifier `json:"-"`
-	Items       []ExportItem `json:"items"`
+	SubjectID string `json:"subject_id"`
+	RequestID string `json:"request_id"`
+	Kind      string `json:"kind"`
+	// Identifiers lists what the deployment holds that identifies the
+	// subject. Until 2026-10-21 this field was tagged json:"-": the CLI
+	// filled it and the serialiser dropped it, so the report the subject
+	// received omitted it (GDPR design §4.20, #115). Set it with
+	// SetIdentifiers.
+	Identifiers []ExportIdentifier `json:"identifiers"`
+	Items       []ExportItem       `json:"items"`
 	// MethodsRun names the binders that contributed, so the subject learns HOW
 	// the search was performed rather than being handed a bare result.
 	MethodsRun []string `json:"identification_methods"`
@@ -61,6 +77,18 @@ type Export struct {
 	Limitations []string `json:"limitations"`
 	// RetainedCategories names data NOT produced or erased, with its ground.
 	RetainedCategories map[string]string `json:"retained_categories,omitempty"`
+}
+
+// SetIdentifiers records the subject's identifiers on the report, in the
+// emitted shape. An empty set is emitted as an empty list, so "none held" is
+// stated rather than absent.
+func (e *Export) SetIdentifiers(ids []Identifier) {
+	e.Identifiers = make([]ExportIdentifier, 0, len(ids))
+	for _, id := range ids {
+		e.Identifiers = append(e.Identifiers, ExportIdentifier{
+			Kind: id.Kind, Value: id.Value, Source: string(id.Source), Confidence: string(id.Confidence),
+		})
+	}
 }
 
 // ErrNotVerified is returned when an export is attempted before the identity

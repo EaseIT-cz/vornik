@@ -1,6 +1,7 @@
 package brokeractions
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -29,12 +30,16 @@ type fakeRepo struct {
 	sweeps    []string
 	getErr    error
 	finishErr error
+	claimErr  error
 	expired   int64
 }
 
 func (f *fakeRepo) ClaimForExecution(_ context.Context, id string, _ time.Time) (bool, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if f.claimErr != nil {
+		return false, f.claimErr
+	}
 	a := f.rows[id]
 	if a == nil || a.Status != persistence.BrokerActionApproved {
 		return false, nil
@@ -411,4 +416,81 @@ func TestWorker_OnChangeAfterFinishAndExpiry(t *testing.T) {
 	if changes != 2 {
 		t.Fatalf("a sweep that expired nothing must not signal, changes = %d", changes)
 	}
+}
+
+// GitHub #369, outcome-quality LLD S8.11 rows 14b and 14c. pre_send_error
+// covered three causes (writes off, an undeclared tool, a stored-argument
+// hash mismatch: possible tampering) with the reason only in the outcome JSON,
+// and a ClaimForExecution error read as a lost race with no log and no count.
+// Each refusal now reaches Config.OnRefused with its reason code, a hash
+// mismatch logs at Error, the others and a claim error at Warn; the outcome
+// class stays pre_send_error.
+func TestExecute_RefusalsAreReportedByReason(t *testing.T) {
+	cases := []struct {
+		reason, level, text string
+		mutate              func(w *Worker, a *persistence.BrokerAction)
+	}{
+		{"writes_off", "warn", "broker.writes is off",
+			func(w *Worker, _ *persistence.BrokerAction) { w.cfg.WritesOn = func() bool { return false } }},
+		{"tool_undeclared", "warn", "tool no longer declared as a broker write: not broker_write",
+			func(w *Worker, _ *persistence.BrokerAction) {
+				w.cfg.ToolDeclared = func(string, string) error { return errors.New("not broker_write") }
+			}},
+		{"args_hash_mismatch", "error", "stored arguments no longer match the approved hash",
+			func(_ *Worker, a *persistence.BrokerAction) { a.ArgsJSON = []byte(`{"to":"attacker@evil.test"}`) }},
+	}
+	for _, tc := range cases {
+		t.Run(tc.reason, func(t *testing.T) {
+			row := approvedRow(t, `{"to":"jana@example.com"}`)
+			repo := &fakeRepo{rows: map[string]*persistence.BrokerAction{"act-1": row}}
+			w := newWorker(repo, &fakeCaller{})
+			var buf bytes.Buffer
+			w.cfg.Logger = zerolog.New(&buf)
+			var refused []string
+			w.cfg.OnRefused = func(reason string) { refused = append(refused, reason) }
+			tc.mutate(w, row)
+			w.Execute(context.Background(), "act-1")
+			if len(refused) != 1 || refused[0] != tc.reason {
+				t.Fatalf("OnRefused = %v, want [%s]", refused, tc.reason)
+			}
+			got := repo.rows["act-1"]
+			if got.OutcomeClass != persistence.BrokerOutcomePreSendError || !strings.Contains(string(got.OutcomeJSON), tc.text) {
+				t.Fatalf("row = %s/%s", got.OutcomeClass, got.OutcomeJSON)
+			}
+			if !strings.Contains(buf.String(), `"level":"`+tc.level+`"`) || !strings.Contains(buf.String(), `"reason":"`+tc.reason+`"`) {
+				t.Fatalf("want a %s log with reason %s, got %q", tc.level, tc.reason, buf.String())
+			}
+			if tc.reason == "args_hash_mismatch" && !strings.Contains(buf.String(), "possible tampering") {
+				t.Fatalf("a hash mismatch must say possible tampering: %q", buf.String())
+			}
+		})
+	}
+}
+
+func TestExecute_ClaimErrorIsReportedNotALostRace(t *testing.T) {
+	repo := &fakeRepo{rows: map[string]*persistence.BrokerAction{"act-1": approvedRow(t, `{}`)}, claimErr: errors.New("db gone")}
+	caller := &fakeCaller{}
+	w := newWorker(repo, caller)
+	var buf bytes.Buffer
+	w.cfg.Logger = zerolog.New(&buf)
+	var refused []string
+	w.cfg.OnRefused = func(reason string) { refused = append(refused, reason) }
+	w.Execute(context.Background(), "act-1")
+	if len(refused) != 1 || refused[0] != "claim_error" || len(caller.calls) != 0 {
+		t.Fatalf("OnRefused = %v, calls = %v", refused, caller.calls)
+	}
+	if !strings.Contains(buf.String(), `"level":"warn"`) {
+		t.Fatalf("a claim error must Warn, got %q", buf.String())
+	}
+	// A lost race (claim returns false, no error) is not a refusal.
+	repo.claimErr = nil
+	repo.rows["act-1"].Status = persistence.BrokerActionExecuted
+	w.Execute(context.Background(), "act-1")
+	if len(refused) != 1 {
+		t.Fatalf("a lost claim must not be reported, OnRefused = %v", refused)
+	}
+	// Nil hook is safe.
+	w.cfg.OnRefused = nil
+	repo.claimErr = errors.New("db gone")
+	w.Execute(context.Background(), "act-1")
 }

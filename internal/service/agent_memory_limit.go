@@ -105,15 +105,17 @@ func resolveAgentMemoryLimit(raw string, concurrency int, totalBytes, availableB
 	// to the zero value, so the escape hatch needs its own spelling or the
 	// shipped default becomes unreachable. Found while testing this function,
 	// not in review.
-	if strings.TrimSpace(raw) == "" {
-		return runtime.DeriveAgentMemoryLimit(totalBytes, concurrency), "", nil
-	}
-
-	limit, err := runtime.ParseMemoryLimit(raw)
+	// The bytes come from the one shared rule (runtime.AgentMemoryLimitBytes,
+	// also used by `vornikctl deps install`, #428); the checks below are the
+	// daemon's own, about max_concurrent_tasks agents at once.
+	limit, err := runtime.AgentMemoryLimitBytes(raw, concurrency, totalBytes)
 	if err != nil {
 		// FATAL, never warn-and-continue: a bad value that fell back to
 		// unbounded would reproduce the defect this limit exists to remove.
 		return 0, "", err
+	}
+	if strings.TrimSpace(raw) == "" {
+		return limit, "", nil // derived: cannot overcommit, never refuses
 	}
 	if limit == 0 {
 		// An explicit "none"/"unbounded". No product to check, and the

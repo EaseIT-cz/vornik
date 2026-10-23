@@ -156,7 +156,7 @@
             <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
                 <form method="post" action="/ui/admin/blackbox/triggers/{{.Trigger.ID}}/dismiss"
                       class="glass rounded-xl border border-dark-700 px-5 py-4 space-y-3"
-                      onsubmit="return confirm('Dismiss this trigger? The detector will re-open a new row if the regression persists.');">
+                      data-confirm="Dismiss this trigger? The detector will re-open a new row if the regression persists.">
                     <h2 class="text-sm font-semibold text-gray-300 uppercase tracking-wider">Dismiss</h2>
                     <p class="text-xs text-gray-500">
                         Mark the regression as expected (deploy under load, A/B test, intentional cost lift). The row transitions to <code class="font-mono text-gray-400">dismissed</code> and the detector becomes free to fire a new trigger for the same workflow.
@@ -170,7 +170,7 @@
                 {{if .CanGenerate}}
                 <form method="post" action="/ui/admin/blackbox/triggers/{{.Trigger.ID}}/generate-candidate"
                       class="glass rounded-xl border border-dark-700 px-5 py-4 space-y-3"
-                      onsubmit="return confirm('Generate a workflow candidate from this trigger? Runs synchronously — this can take 10-30s if the assistant is called.');">
+                      data-confirm="Generate a workflow candidate from this trigger? Runs synchronously — this can take 10-30s if the assistant is called.">
                     <h2 class="text-sm font-semibold text-gray-300 uppercase tracking-wider">Generate candidate</h2>
                     <p class="text-xs text-gray-500">
                         One click — nothing to type. The project, the workflow, the evidence executions and the intent (which metric regressed, against which baseline and threshold) all come off this trigger. A deterministic structural recipe is tried first; the config assistant handles what recipes cannot. On success the trigger transitions to <code class="font-mono text-gray-400">generated_candidate</code> with the proposal ID stamped, and you're taken to the proposal to approve / reject.

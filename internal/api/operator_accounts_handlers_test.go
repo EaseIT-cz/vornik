@@ -162,7 +162,7 @@ func newAccountsServer(t *testing.T) (*Server, *accountsStubRepo, *accountsStubA
 	repo, audit := newAccountsStubRepo(), &accountsStubAudit{}
 	cfg := config.DefaultConfig()
 	cfg.Admin = config.AdminConfig{Enabled: true, AllowedKeys: []string{"sk-operator"}}
-	s := NewServer(WithLogger(zerolog.Nop()), WithConfig(cfg), WithAccountsService(authz.NewAccounts(repo, audit)))
+	s := NewServer(WithLogger(zerolog.Nop()), WithConfig(cfg), WithAdminClassKeys(cfg.Admin), WithAccountsService(authz.NewAccounts(repo, audit)))
 	return s, repo, audit
 }
 

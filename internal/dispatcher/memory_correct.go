@@ -142,10 +142,11 @@ func (te *ToolExecutor) memoryCorrect(ctx context.Context, argsJSON, activeProje
 	} else {
 		fmt.Fprintf(&b, "Refuted %d memory chunk(s) for %q in project %s:\n", len(refuted), args.WrongClaim, project)
 		for i, r := range refuted {
-			fmt.Fprintf(&b, "  [%d] %s  (score=%.2f, source=%s)\n", i+1, r.ID, r.Score, r.SourceName)
-			if r.Preview != "" {
+			// source_name is caller-controlled (#456): inside the wrapper.
+			fmt.Fprintf(&b, "  [%d] %s  (score=%.2f)\n", i+1, r.ID, r.Score)
+			if body := memoryChunkBody(r.SourceName, "", "", r.Preview); body != "" {
 				b.WriteString("       ")
-				b.WriteString(untrusted.WrapLabeled("refuted_preview", r.Preview))
+				b.WriteString(untrusted.WrapLabeled("refuted_preview", body))
 				b.WriteString("\n")
 			}
 		}

@@ -118,8 +118,14 @@ func (r *KnowledgeEntityRepository) List(ctx context.Context, filter persistence
 		pos++
 	}
 	if filter.NameLike != "" {
-		q += fmt.Sprintf(` AND canonical_name ILIKE $%d`, pos)
-		args = append(args, "%"+filter.NameLike+"%")
+		// GitHub #449: a literal substring, ASCII-case-insensitive — the
+		// same rule as the SQLite driver (KG design §6.1 amendment
+		// 2026-10-21). The C-collation conjunct IS the rule (lower() folds
+		// ASCII only under "C", whatever the database locale); the ILIKE
+		// conjunct only lets the planner use the canonical_name trigram
+		// index, and being AND-ed it cannot widen the match. Never OR them.
+		q += fmt.Sprintf(` AND canonical_name ILIKE $%d ESCAPE '\' AND lower(canonical_name COLLATE "C") LIKE $%d ESCAPE '\'`, pos, pos)
+		args = append(args, persistence.LikeContainsFold(filter.NameLike))
 		pos++
 	}
 	q += fmt.Sprintf(` ORDER BY canonical_name ASC LIMIT $%d OFFSET $%d`, pos, pos+1)

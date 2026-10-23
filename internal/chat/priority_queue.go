@@ -66,9 +66,15 @@ func (p *QueuedProvider) CompleteWithTools(ctx context.Context, messages []Messa
 	})
 }
 
+// CompleteWithToolsStream fences the callback: do answers the caller as soon
+// as its context ends while the worker may still run the call, so the late
+// chunks of that call must not reach the answered caller (outcome-quality
+// LLD §S8.9 item 3, GitHub #369). The fence closes before this returns.
 func (p *QueuedProvider) CompleteWithToolsStream(ctx context.Context, messages []Message, tools []Tool, onText StreamCallback) (*ChatResponse, error) {
+	fence, fenced := newStreamFence(onText)
+	defer fence.close()
 	return p.queue.do(ctx, func(runCtx context.Context) (*ChatResponse, error) {
-		return p.provider.CompleteWithToolsStream(runCtx, messages, tools, onText)
+		return p.provider.CompleteWithToolsStream(runCtx, messages, tools, fenced)
 	})
 }
 

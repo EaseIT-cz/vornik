@@ -15,7 +15,6 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
-	"syscall"
 	"time"
 	"vornik.io/vornik/internal/ctxerr"
 	"vornik.io/vornik/internal/requestguard"
@@ -80,6 +79,15 @@ type Client struct {
 	pending   map[int64]chan stdioResult
 	reqID     atomic.Int64
 	tools     []Tool // filtered by config.AllowedTools when that's non-empty
+	// verdictOnce builds mutating, the classifier's verdict on tools, once
+	// (agent read re-judge, agent-administered design §6.5): tools never
+	// changes after Connect, so neither does the verdict.
+	verdictOnce sync.Once
+	mutating    map[string]bool
+	// listedAt is when tools was listed (amendment #481: the re-list's age
+	// and the stale-listing refusal). Zero only for a client not built by
+	// Connect (tests).
+	listedAt time.Time
 
 	// waitOnce serialises cmd.Wait() across the reaper goroutine and
 	// any Close caller. The Wait contract is "call exactly once" —
@@ -209,6 +217,7 @@ func Connect(ctx context.Context, cfg ServerConfig, logger zerolog.Logger) (*Cli
 	}
 
 	// Discover available tools.
+	c.listedAt = time.Now()
 	tools, err := c.listTools(ctx)
 	if err != nil {
 		_ = c.Close()
@@ -385,29 +394,15 @@ func (c *Client) Close() error {
 // killProcessGroup SIGKILLs the stdio subprocess's process group
 // (startStdio ran it with Setpgid, so pgid == child pid), falling back
 // to a single-process kill when the group signal fails (e.g. the group
-// is already gone, or the process was started without Setpgid).
+// is already gone, or the process was started without Setpgid). The kill
+// itself, with its degenerate-pid guard, is spawn.Cmd.KillGroup since
+// 2026-10-17 (GitHub #369): one implementation, shared with the CLI
+// providers' timeout.
 func (c *Client) killProcessGroup() error {
 	if c.cmd == nil || !c.cmd.Started() {
 		return nil
 	}
-	return killGroup(c.cmd.Pid(), c.cmd.Kill)
-}
-
-// killGroup SIGKILLs process group pid, falling back to killOne when the
-// group signal fails.
-func killGroup(pid int, killOne func() error) error {
-	// Refuse degenerate PIDs: negating Pid 0 signals the DAEMON'S OWN
-	// process group (kill(0, SIGKILL) = self-DoS) and a released
-	// process's Pid -1 would negate to kill(1). Neither can follow a
-	// successful Start, but the blast radius of getting this wrong is
-	// the whole daemon — guard unconditionally.
-	if pid <= 0 {
-		return nil
-	}
-	if err := syscall.Kill(-pid, syscall.SIGKILL); err != nil {
-		return killOne()
-	}
-	return nil
+	return c.cmd.KillGroup()
 }
 
 // waitForSubprocess collapses concurrent cmd.Wait() callers to a

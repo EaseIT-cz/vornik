@@ -185,22 +185,21 @@ func (s *Server) retryOne(ctx context.Context, r *http.Request, taskID string) b
 	if task.ProjectID != "" && !api.RequestAllowsProject(r, task.ProjectID) {
 		return false
 	}
-	switch task.Status {
-	case persistence.TaskStatusFailed, persistence.TaskStatusCancelled, persistence.TaskStatusCompleted:
-		// retriable
-	case persistence.TaskStatusPending:
-		// PENDING is a stuck-waiting state, not strictly terminal,
-		// but tasks land here when (a) a paused execution's resume
-		// signal never arrives, or (b) a retry-from-step + scheduler
-		// retry race leaves the task with no live dispatcher driving
-		// it. Operator-observed 2026-05-16 on
-		// task_20260516015931_2c9658cb6a103380 — after 5 of 6
-		// attempts, status stayed PENDING and the scheduler's
-		// lease-pickup query (WHERE status = 'QUEUED') silently
-		// skipped it forever. Allow operator-initiated retry as the
-		// safety net: the operator clicked, they know what they want.
-		// retriable
-	default:
+	// The set is uiRequeueableTaskStatuses, which also decides whether the
+	// page offers Requeue (taskStatusControls, GitHub #375).
+	//
+	// FAILED / CANCELLED / COMPLETED are terminal and retriable.
+	// PENDING is a stuck-waiting state, not strictly terminal,
+	// but tasks land here when (a) a paused execution's resume
+	// signal never arrives, or (b) a retry-from-step + scheduler
+	// retry race leaves the task with no live dispatcher driving
+	// it. Operator-observed 2026-05-16 on
+	// task_20260516015931_2c9658cb6a103380 — after 5 of 6
+	// attempts, status stayed PENDING and the scheduler's
+	// lease-pickup query (WHERE status = 'QUEUED') silently
+	// skipped it forever. Allow operator-initiated retry as the
+	// safety net: the operator clicked, they know what they want.
+	if !slices.Contains(uiRequeueableTaskStatuses(), task.Status) {
 		return false
 	}
 	attempt := task.Attempt + 1

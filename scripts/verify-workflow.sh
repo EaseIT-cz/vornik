@@ -155,7 +155,7 @@ if [ -z "$EXECUTION_ID" ]; then
     EXECUTION_ID=$(
         _curl --fail "$VORNIK_URL/api/v1/projects/$PROJECT/executions" \
             | jq -r ".executions[] | select(.taskId==\"$TASK_ID\") | .executionId" \
-            | head -1
+            | sed -n 1p
     )
 fi
 

@@ -6,10 +6,12 @@ import (
 	"testing"
 	"time"
 
+	"vornik.io/vornik/internal/auditredact"
 	"vornik.io/vornik/internal/persistence"
 	"vornik.io/vornik/internal/persistence/repotest"
 	"vornik.io/vornik/internal/persistence/sqlite"
 	"vornik.io/vornik/internal/persistence/sqlite/sqlitetest"
+	"vornik.io/vornik/internal/secrets"
 )
 
 // newTestDB spins up a fresh in-memory SQLite database, applies the
@@ -151,6 +153,14 @@ func TestArtifactRepository_Contract(t *testing.T) {
 func TestTaskRepository_Contract(t *testing.T) {
 	db := newTestDB(t)
 	repotest.RunTaskRepositorySuite(t, sqlite.NewTaskRepository(db.DB))
+}
+
+// TestTaskRepository_CountMirrorsList — GitHub #411: Count is the denominator
+// the /ui/tasks "Showing X–Y of M" line prints, so it must select what List
+// selects for every TaskFilter field. The Postgres half runs the same suite.
+func TestTaskRepository_CountMirrorsList(t *testing.T) {
+	db := newTestDB(t)
+	repotest.RunTaskCountMirrorsListSuite(t, sqlite.NewTaskRepository(db.DB))
 }
 
 // TestAPIKeyRepository_Contract — security-critical lookup contract.
@@ -454,6 +464,16 @@ func TestExecutionNarrationRepository_Contract(t *testing.T) {
 // (2026-08-18): a row under an already-terminal execution must never stay
 // pending_validation, while a live or just-terminal execution's rows are left
 // for their own consumer/terminal path to finalize.
+// TestStuckStepOutcome_Contract — the watchdog's step row and its duplicate
+// guard (outcome-quality-design §S8.8, GitHub #369).
+func TestStuckStepOutcome_Contract(t *testing.T) {
+	db := newTestDB(t)
+	repotest.RunStuckStepOutcomeSuite(t,
+		sqlite.NewExecutionStepOutcomeRepository(db.DB),
+		sqlite.NewExecutionRepository(db.DB),
+		sqlite.NewTaskRepository(db.DB))
+}
+
 func TestPendingOutcomeBackstop_Contract(t *testing.T) {
 	db := newTestDB(t)
 	repotest.RunPendingOutcomeBackstopSuite(t,
@@ -555,6 +575,14 @@ func TestStepPrompt_Contract(t *testing.T) {
 	repotest.RunStepPromptSuite(t, sqlite.NewStepPromptRepository(db.DB), sqlite.NewExecutionStepOutcomeRepository(db.DB))
 }
 
+// TestStepOutcomeSeam425_SQLite — the write-time secret seam on
+// execution_step_outcomes.hallucination_signals (GitHub #425, chat-audit
+// retention and redaction design §11.2.1).
+func TestStepOutcomeSeam425_SQLite(t *testing.T) {
+	db := newTestDB(t)
+	repotest.RunStepOutcomeSeamSuite(t, sqlite.NewExecutionStepOutcomeRepository(db.DB), decorateStepOutcomes425)
+}
+
 // seedChunkForSuite is the SQLite half of repotest.SeedChunk: chunks are
 // cross-table state with backend-specific required columns, so each contract
 // file supplies its own raw insert (backend-contract coverage design §8).
@@ -590,6 +618,18 @@ func TestChatAudit_Contract(t *testing.T) {
 func TestChunkGraphExtraction_Contract(t *testing.T) {
 	db := newTestDB(t)
 	repotest.RunChunkGraphExtractionSuite(t, sqlite.NewChunkGraphExtractionRepository(db.DB), seedChunkForSuite(db))
+}
+
+// Knowledge-graph LLD §3.3b (after #284): targeted re-flag of quarantined chunks.
+func TestChunkGraphQuarantineReflag_Contract(t *testing.T) {
+	db := newTestDB(t)
+	repotest.RunChunkGraphQuarantineReflagSuite(t, sqlite.NewChunkGraphExtractionRepository(db.DB), seedChunkForSuite(db),
+		func(ctx context.Context, id string) (bool, int, error) {
+			var needs, attempts int
+			err := db.QueryRowContext(ctx, `SELECT needs_graph_extraction, graph_extraction_attempts
+				FROM project_memory_chunks WHERE id = ?`, id).Scan(&needs, &attempts)
+			return needs == 1, attempts, err
+		})
 }
 
 func TestClusterNode_Contract(t *testing.T) {
@@ -807,4 +847,10 @@ func restrictChunkForSuite(db *sqlite.DB) repotest.RestrictChunk {
 			return err
 		}, nil
 	}
+}
+
+// decorateStepOutcomes425 wraps a production outcome repository in the #425
+// seam; both backends satisfy auditredact.StepOutcomeStore.
+func decorateStepOutcomes425(inner persistence.ExecutionStepOutcomeRepository, det secrets.Detector) persistence.ExecutionStepOutcomeRepository {
+	return auditredact.NewStepOutcomes(inner.(auditredact.StepOutcomeStore), det, nil, nil)
 }

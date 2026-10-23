@@ -99,6 +99,22 @@ type ChannelReceiver struct {
 	// deadline (UI, Telegram, Slack) is left alone. Outcome-quality LLD §S5
 	// #5, GitHub #142.
 	TurnTimeout time.Duration
+
+	// OperatorView decides, per inbound turn, whether the turn's audience is
+	// one admin-linked principal alone, which is the only case in which the
+	// task tools hand the model a task's stored error text raw
+	// (process-spawn-law design, "Amendment 2026-10-21 (#480)", J3 and J4).
+	// The channel sets it from its own authority: the UI from the request's
+	// admin-class answer, Telegram and Slack from chatauth.Decision.AdminLinked
+	// plus a private-chat or DM check. Never from msg.ChannelSpecific. Nil
+	// means false: every turn reads the scrubbed view (e-mail, GitHub).
+	OperatorView func(ctx context.Context, msg conversation.ChannelMessage) bool
+
+	// TaskPrincipal attributes the inbound turn for the tasks it creates
+	// (GitHub #499, operator decision A19): the channel's own identity check
+	// decides, never message text. Nil, or "", leaves those tasks
+	// unattributed, which memory verification does not trust.
+	TaskPrincipal func(ctx context.Context, msg conversation.ChannelMessage) string
 }
 
 // DefaultChannelTurnTimeout is the turn bound for a channel that sets none
@@ -326,6 +342,8 @@ func (r *ChannelReceiver) receive(ctx context.Context, msg conversation.ChannelM
 		OriginatingChannel:   r.Channel.Name(),
 		OriginatingSessionID: msg.SessionID,
 		OperatorID:           operatorID,
+		OperatorView:         r.OperatorView != nil && r.OperatorView(ctx, msg),
+		TaskPrincipal:        r.taskPrincipal(ctx, msg),
 	}
 
 	result := r.dispatch(ctx, msg.SessionID, req)
@@ -919,3 +937,11 @@ func humanBytes(n int64) string {
 // Compile-time guard: *ChannelReceiver satisfies the conversation
 // Receiver contract.
 var _ conversation.Receiver = (*ChannelReceiver)(nil)
+
+// taskPrincipal is the channel's attribution of a turn, or "".
+func (r *ChannelReceiver) taskPrincipal(ctx context.Context, msg conversation.ChannelMessage) string {
+	if r == nil || r.TaskPrincipal == nil {
+		return ""
+	}
+	return r.TaskPrincipal(ctx, msg)
+}

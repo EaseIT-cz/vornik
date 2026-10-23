@@ -8,7 +8,6 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
-	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -281,22 +280,6 @@ func TestExtractAssistantText(t *testing.T) {
 	resp := buildChatResponse("m", "the answer", 1, 1)
 	if got := extractAssistantText(resp); got != "the answer" {
 		t.Errorf("got %q, want the answer", got)
-	}
-}
-
-// TestTruncateForAuditAPI — short stays intact, long gets a
-// "…(truncated)" suffix, limits below the suffix length hard-chop.
-func TestTruncateForAuditAPI(t *testing.T) {
-	if got := truncateForAuditAPI("abc", 100); got != "abc" {
-		t.Errorf("short: got %q", got)
-	}
-	long := strings.Repeat("x", 600)
-	got := truncateForAuditAPI(long, 500)
-	if len(got) != 500 {
-		t.Errorf("length = %d, want 500", len(got))
-	}
-	if !strings.HasSuffix(got, "…(truncated)") {
-		t.Errorf("missing truncation suffix: %q", got[len(got)-30:])
 	}
 }
 

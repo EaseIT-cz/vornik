@@ -93,6 +93,7 @@ func TestChatPostMessage_DispatchesAndRendersReply(t *testing.T) {
 	form := url.Values{}
 	form.Set("prompt", "what's up?")
 	req := httptest.NewRequest(http.MethodPost, "/projects/p1/chat/messages", strings.NewReader(form.Encode()))
+	req = asOperator491(req) // GitHub #491: the operator, stated
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	// Seed a session cookie so the same store bucket is hit on
 	// the re-render.
@@ -124,6 +125,7 @@ func TestChatPostMessage_EmptyPromptRendersError(t *testing.T) {
 	form := url.Values{}
 	form.Set("prompt", "   ")
 	req := httptest.NewRequest(http.MethodPost, "/projects/p1/chat/messages", strings.NewReader(form.Encode()))
+	req = asOperator491(req) // GitHub #491: the operator, stated
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	req.AddCookie(&http.Cookie{Name: chatSessionCookie, Value: "test-session"})
 
@@ -168,6 +170,7 @@ func TestChatPostMessage_DispatcherErrorSurfacedInBanner(t *testing.T) {
 	form := url.Values{}
 	form.Set("prompt", "hi")
 	req := httptest.NewRequest(http.MethodPost, "/projects/p1/chat/messages", strings.NewReader(form.Encode()))
+	req = asOperator491(req) // GitHub #491: the operator, stated
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	req.AddCookie(&http.Cookie{Name: chatSessionCookie, Value: "test-session-err"})
 
@@ -282,7 +285,8 @@ func TestChatPage_RendersTierBadgeWhenBudgetSet(t *testing.T) {
 	// Pre-seed history that consumes ~80% of the budget — DEGRADING.
 	store := server.chatStoreFor("p1")
 	store.ContextBudget = 1_000 // re-stamp since the store was lazily made before the field change
-	require.NoError(t, store.Append(context.Background(), channelMsg("sess-tier"),
+	// The store keys a member (non-admin) view's history by chatHistoryKey (#480).
+	require.NoError(t, store.Append(context.Background(), channelMsg(chatHistoryKey("sess-tier", false)),
 		dispatcherResultWith([]chat.Message{
 			{Role: "user", Content: strings.Repeat("x", 3_200)}, // 800 tokens
 		})))

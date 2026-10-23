@@ -52,7 +52,10 @@ type recordingLine struct {
 // GetExecutionStepExchanges serves the step's recorded exchanges in seq
 // order, as JSON or — with ?format=jsonl — as the recording file a replay
 // server loads. An unrecorded step is an empty list, not a 404: the project
-// may not have opted in.
+// may not have opted in. GitHub #496: each request and response body is the
+// stored one for an admin-class caller and scrubbed for a scoped caller (in
+// both branches); an unscoped caller that is not admin-class is refused
+// (stepTextView).
 func (s *Server) GetExecutionStepExchanges(w http.ResponseWriter, r *http.Request, executionID, stepID string) {
 	if r.Method != http.MethodGet {
 		respondError(w, http.StatusMethodNotAllowed, "METHOD_NOT_ALLOWED", "use GET")
@@ -60,6 +63,12 @@ func (s *Server) GetExecutionStepExchanges(w http.ResponseWriter, r *http.Reques
 	}
 	if stepID == "" {
 		respondError(w, http.StatusBadRequest, "VALIDATION_ERROR", "stepId is required")
+		return
+	}
+	// The view comes from the one per-access mapping, decided before any
+	// store is read.
+	view, scrubbed, ok := s.stepTextView(w, r)
+	if !ok {
 		return
 	}
 	if s.executionRepo == nil || s.llmExchangeRepo == nil {
@@ -89,8 +98,8 @@ func (s *Server) GetExecutionStepExchanges(w http.ResponseWriter, r *http.Reques
 		w.WriteHeader(http.StatusOK)
 		enc := json.NewEncoder(w)
 		for _, x := range rows {
-			line := recordingLine{Seq: x.Seq, Iteration: x.Iteration, RequestHash: x.RequestHash, Redactions: x.Redactions,
-				Request: rawOrNull(x.RequestJSON), Response: rawOrNull(x.ResponseJSON)}
+			line := recordingLine{Seq: x.Seq, Iteration: x.Iteration, RequestHash: stepHashView(scrubbed, x.RequestHash), Redactions: x.Redactions,
+				Request: rawOrNull(view(x.RequestJSON)), Response: rawOrNull(view(x.ResponseJSON))}
 			line.Usage.PromptTokens, line.Usage.CompletionTokens = x.PromptTokens, x.CompletionTokens
 			_ = enc.Encode(line)
 		}
@@ -98,12 +107,13 @@ func (s *Server) GetExecutionStepExchanges(w http.ResponseWriter, r *http.Reques
 	}
 	resp := ExchangesResponse{ExecutionID: executionID, StepID: stepID, Exchanges: make([]ExchangeRow, 0, len(rows))}
 	for _, x := range rows {
+		reqBody, respBody := view(x.RequestJSON), view(x.ResponseJSON)
 		resp.Exchanges = append(resp.Exchanges, ExchangeRow{
-			Seq: x.Seq, Iteration: x.Iteration, Model: x.Model, RequestHash: x.RequestHash,
+			Seq: x.Seq, Iteration: x.Iteration, Model: x.Model, RequestHash: stepHashView(scrubbed, x.RequestHash),
 			PromptTokens: x.PromptTokens, CompletionTokens: x.CompletionTokens, DurationMs: x.DurationMs, Redactions: x.Redactions,
-			FinishReason: finishReasonOf(x.ResponseJSON),
+			FinishReason: finishReasonOf(respBody),
 			RecordedAt:   x.RecordedAt.UTC().Format("2006-01-02T15:04:05Z07:00"),
-			Request:      rawOrNull(x.RequestJSON), Response: rawOrNull(x.ResponseJSON),
+			Request:      rawOrNull(reqBody), Response: rawOrNull(respBody),
 		})
 	}
 	respondJSON(w, http.StatusOK, resp)

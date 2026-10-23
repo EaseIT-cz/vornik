@@ -66,6 +66,7 @@ type fakeEntityRepoForPipeline struct {
 	inserted   []persistence.KnowledgeEntity
 	addAliased []struct{ ID, Alias string }
 	idCounter  atomic.Int32
+	aliasErr   error // GitHub #369: a failing AddAlias
 }
 
 func (f *fakeEntityRepoForPipeline) Insert(_ context.Context, e *persistence.KnowledgeEntity) error {
@@ -88,7 +89,7 @@ func (f *fakeEntityRepoForPipeline) Insert(_ context.Context, e *persistence.Kno
 }
 func (f *fakeEntityRepoForPipeline) AddAlias(_ context.Context, id, alias string) error {
 	f.addAliased = append(f.addAliased, struct{ ID, Alias string }{id, alias})
-	return nil
+	return f.aliasErr
 }
 
 // scriptedFake returns a fixed reply per stage. Useful when one

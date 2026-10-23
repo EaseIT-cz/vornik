@@ -95,7 +95,7 @@ func mustJSON(v any) string {
 func digestScript(digest map[string]any) Script {
 	return Script{Marker: digestMarker, Final: "Digest written.", Steps: []ScriptStep{
 		{ToolSuffix: "gmail_search", Args: map[string]any{"query": "newer_than:1d"}},
-		{ToolSuffix: "gmail_get", Args: map[string]any{"id": invoiceMessageID}},
+		{ToolSuffix: "gmail_get", Args: map[string]any{"messageId": invoiceMessageID}},
 		{ToolSuffix: "file_write", Args: map[string]any{"path": "artifacts/out/digest.json", "content": mustJSON(digest)}},
 	}}
 }
@@ -114,7 +114,7 @@ func replyScript() Script {
 	summary := map[string]any{"found": true, "drafted": true, "one_line": "Confirms payment of invoice 4411 on Friday."}
 	return Script{Marker: replyMarker, Final: "Reply drafted.", Steps: []ScriptStep{
 		{ToolSuffix: "gmail_search", Args: map[string]any{"query": "from:acme.example"}},
-		{ToolSuffix: "gmail_get", Args: map[string]any{"id": invoiceMessageID}},
+		{ToolSuffix: "gmail_get", Args: map[string]any{"messageId": invoiceMessageID}},
 		{ToolSuffix: "file_write", Args: map[string]any{"path": "artifacts/out/reply-proposal.json", "content": mustJSON(proposal)}},
 		{ToolSuffix: "file_write", Args: map[string]any{"path": "artifacts/out/reply-summary.json", "content": mustJSON(summary)}},
 	}}

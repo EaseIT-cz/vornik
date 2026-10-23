@@ -232,6 +232,13 @@ type LeaseOptions struct {
 	// dispatch even if its tasks were created before the archive
 	// flipped. Empty / nil disables the filter.
 	ExcludedProjects []string
+
+	// ExcludedTaskIDs is the list of task IDs the lease query must skip:
+	// the scheduler's retry holds, tasks requeued after a MODEL_UNHEALTHY
+	// reject that may not run before their model's circuit can admit a call
+	// (permanent-failure design §8.8, GitHub #363). Empty / nil disables the
+	// filter, so a lease without a hold runs the query it always ran.
+	ExcludedTaskIDs []string
 }
 
 // ReleaseOptions configures task lease release behavior.

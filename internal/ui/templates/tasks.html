@@ -28,7 +28,7 @@
 
             <div id="task-content" class="space-y-4"
                  {{/* Auto-refresh the table when filter shows non-terminal tasks. */}}
-                 {{if or (eq .Status "RUNNING") (eq .Status "QUEUED") (eq .Status "PENDING") (eq .Status "LEASED") (eq .Status "WAITING_FOR_CHILDREN")}}
+                 {{if or .ActiveFilter (eq .Status "RUNNING") (eq .Status "QUEUED") (eq .Status "PENDING") (eq .Status "LEASED") (eq .Status "WAITING_FOR_CHILDREN")}}
                  hx-get="{{.BaseURL}}"
                  hx-trigger="every 10s"
                  hx-target="#task-content"
@@ -44,9 +44,12 @@
                  the old design carried are folded into this tile + the
                  task-list tile's header below, so the page lands on
                  one density rather than four. */}}
-            {{$flatQS := ""}}{{if .Flat}}{{$flatQS = "&flat=1"}}{{end}}
-            {{$limitQS := printf "&limit=%d" .Limit}}
-            {{$active := .Status}}
+            {{/* TileQS carries limit, flat and project_id (the cells'
+                 counts are the project's; #411 item 6). The partial's
+                 FlatQS/LimitQS keys stay for its other callers. */}}
+            {{$flatQS := ""}}
+            {{$limitQS := .TileQS}}
+            {{$active := .Status}}{{if .ActiveFilter}}{{$active = "ACTIVE"}}{{end}}
             <div class="glass rounded-xl border border-dark-700">
                 <div class="px-5 py-3 border-b border-dark-700/60 flex items-center justify-between">
                     <h2 class="text-sm font-semibold text-gray-200 flex items-center gap-2">
@@ -67,10 +70,13 @@
                 <div class="px-3 py-3 space-y-3">
                     <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2">
                         {{template "statusFilterCell" (dict "Label" "All" "Status" "" "Active" $active "Count" .TotalCount "CountColor" "text-gray-100" "ActiveBg" "bg-brand-600/30 ring-brand-500" "FlatQS" $flatQS "LimitQS" $limitQS)}}
+                        {{/* The CLI's `task list --active` set
+                             (persistence.CancellableTaskStatuses), #411. */}}
+                        {{template "statusFilterCell" (dict "Label" "Active (unfinished)" "Status" "ACTIVE" "Href" .ActiveURL "Title" "Every unfinished status, the same set as vornikctl task list --active" "Active" $active "Count" .ActiveCount "CountColor" "text-gray-100" "ActiveBg" "bg-brand-600/30 ring-brand-500" "FlatQS" $flatQS "LimitQS" $limitQS)}}
                     </div>
                     <div class="grid grid-cols-1 lg:grid-cols-3 gap-3">
                         <div>
-                            <div class="text-[10px] uppercase tracking-wider text-accent-400 mb-1.5 px-1">Active · running through the swarm</div>
+                            <div class="text-[10px] uppercase tracking-wider text-accent-400 mb-1.5 px-1">In flight · running through the swarm</div>
                             <div class="grid grid-cols-2 gap-2">
                                 {{template "statusFilterCell" (dict "Label" "Queued"    "Status" "QUEUED"               "Active" $active "Count" (index .StatusCounts "QUEUED")               "CountColor" "text-amber-800 dark:text-amber-400"  "ActiveBg" "bg-amber-500/20 ring-amber-400" "FlatQS" $flatQS "LimitQS" $limitQS)}}
                                 {{template "statusFilterCell" (dict "Label" "Running"   "Status" "RUNNING"              "Active" $active "Count" (index .StatusCounts "RUNNING")              "CountColor" "text-accent-400" "ActiveBg" "bg-accent-500/20 ring-accent-400" "FlatQS" $flatQS "LimitQS" $limitQS)}}
@@ -114,6 +120,17 @@
                 <button type="submit" formaction="/ui/tasks-bulk/close"  class="px-3 py-1 text-xs font-medium rounded-md bg-amber-700 hover:bg-amber-600 text-white">Close selected</button>
                 <button type="button" onclick="bulkClear()" class="ml-auto px-3 py-1 text-xs font-medium rounded-md bg-dark-700 hover:bg-dark-600 text-gray-300">Clear</button>
             </form>
+
+            {{/* The list states its cut (#411): "Showing X–Y of M tasks"
+                 and Prev/Next for both layouts, above them. What stays
+                 page-local is said here too. */}}
+            {{template "pagination" .Paginator}}
+            {{if or .Query .SortLocal}}
+            <p class="text-[11px] text-gray-500">
+                {{if .Query}}{{.QueryMatches}} of these match “{{.Query}}” (the search covers this page only).{{end}}
+                {{if .SortLocal}}Rows are sorted within this page; the pages follow creation time, newest first.{{end}}
+            </p>
+            {{end}}
 
             {{/* Phase 35 — phone-first list view.
                  < md:  vertical card stack (88px tall, full-width
@@ -206,6 +223,9 @@
                             "project_id" .ProjectID
                             "q" .Query
                             "flat" $flatVal
+                            "active" (or (and .ActiveFilter "1") "")
+                            "updated_within" .UpdatedWithin
+                            "failed_within" .FailedWithin
                             "sort" .Sort
                             "dir" .Dir))}}
                 </div>

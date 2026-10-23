@@ -16,6 +16,9 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 COMPOSE_FILE="${PROJECT_ROOT}/deployments/podman/deps.compose.yaml"
+DEPS_ENV="${PROJECT_ROOT}/deployments/podman/.env"
+# shellcheck source=scripts/dev-db-password.sh
+. "${SCRIPT_DIR}/dev-db-password.sh"
 
 # Colors for output
 RED='\033[0;31m'
@@ -61,7 +64,7 @@ create_pod() {
         log_info "Creating vornik-infra pod..."
         podman pod create \
             --name vornik-infra \
-            --publish 5432:5432 \
+            --publish "${POSTGRES_BIND:-127.0.0.1}:5432:5432" \
             --label vornik.managed=true \
             --label vornik.environment=development
         log_info "Pod 'vornik-infra' created"
@@ -88,7 +91,7 @@ start_postgres() {
     
     cd "${PROJECT_ROOT}/deployments/podman"
     
-    if podman ps --format '{{.Names}}' | grep -q '^vornik-postgres$'; then
+    if podman ps --format '{{.Names}}' | grep '^vornik-postgres$' >/dev/null; then
         log_info "PostgreSQL container already running"
     else
         podman-compose -f deps.compose.yaml up -d
@@ -128,10 +131,10 @@ print_connection_info() {
     echo "  Port:     5432"
     echo "  Database: vornik"
     echo "  User:     vornik"
-    echo "  Password: vornik_dev_password"
+    echo "  Password: POSTGRES_PASSWORD in ${DEPS_ENV} (0600; not printed)"
     echo ""
     echo "  Connection string:"
-    echo "    postgresql://vornik:vornik_dev_password@localhost:5432/vornik?sslmode=disable"
+    echo "    postgresql://vornik:<POSTGRES_PASSWORD>@localhost:5432/vornik?sslmode=disable"
     echo ""
     echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
     echo ""
@@ -161,6 +164,11 @@ main() {
     echo ""
     
     check_dependencies
+
+    # Before the volume exists: a fresh volume gets a generated password, an
+    # existing one must be named (GitHub #412). Compose reads it from the env.
+    POSTGRES_PASSWORD="$(resolve_dev_db_password "$DEPS_ENV")" || exit 1
+    export POSTGRES_PASSWORD
     
     if [[ "$create_pod_flag" == "true" ]]; then
         create_pod

@@ -112,7 +112,8 @@ func TestEmbedUsage_EstimatedWhenProviderReportsNoTokens(t *testing.T) {
 // and the reason recording is placed where it is.
 //
 // A 200 with a body the vector parser cannot use means the provider charged and
-// we got nothing usable. Embed correctly degrades to (nil, nil) — but the spend
+// we got nothing usable. Embed returns no vectors and a typed decode error
+// (§S8.10, GitHub #369 item 5; it was (nil, nil) before) — but the spend
 // is real and must still appear. If this test fails, the embed path has the exact
 // defect the KG extractor and the reranker each shipped once.
 func TestEmbedUsage_RecordedEvenWhenTheResponseIsUnusable(t *testing.T) {
@@ -125,8 +126,8 @@ func TestEmbedUsage_RecordedEvenWhenTheResponseIsUnusable(t *testing.T) {
 
 	e, rec := embedderWithRecorder(t, srv.URL)
 	vecs, err := e.Embed(context.Background(), ingestScope(), []string{"hello"})
-	if err != nil {
-		t.Fatalf("Embed should degrade, not error: %v", err)
+	if r, _ := EmbedFailureReason(err); r != EmbedReasonDecode {
+		t.Fatalf("Embed should fail with reason decode, got %v", err)
 	}
 	if vecs != nil {
 		t.Errorf("expected the degrade path (nil vectors), got %v", vecs)
@@ -256,8 +257,8 @@ func TestEmbedUsage_TransportFailureRecordsNothing(t *testing.T) {
 
 			e, rec := embedderWithRecorder(t, srv.URL)
 			vecs, err := e.Embed(context.Background(), ingestScope(), []string{"hello"})
-			if err != nil {
-				t.Fatalf("Embed should degrade quietly, not error: %v", err)
+			if r, _ := EmbedFailureReason(err); r != EmbedReasonHTTPStatus {
+				t.Fatalf("Embed should fail with reason http_status (#369 item 5), got %v", err)
 			}
 			if vecs != nil {
 				t.Errorf("expected the degrade path, got %v", vecs)

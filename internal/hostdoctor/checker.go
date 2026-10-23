@@ -13,8 +13,10 @@ package hostdoctor
 
 import (
 	"context"
+	"time"
 
 	"vornik.io/vornik/internal/imagemanifest"
+	"vornik.io/vornik/internal/retention"
 )
 
 // Check is one host check's verdict, in the same JSON shape as the daemon's
@@ -106,6 +108,12 @@ type Checker struct {
 	// pinned agent image.
 	sandboxEnv       *SandboxEnv
 	sandboxProbeFunc func(ctx context.Context, env SandboxEnv) sandboxOutcome
+
+	// upgradeDumps is the policy checkUpgradeDumps reports against
+	// (WithUpgradeDumps); nil means the compiled defaults. nowFunc is its
+	// clock seam; nil ⇒ time.Now.
+	upgradeDumps *retention.UpgradeDumpPolicy
+	nowFunc      func() time.Time
 }
 
 // New builds a Checker for the host. daemonRevision is the daemon's build
@@ -130,5 +138,6 @@ func (h *Checker) Run(ctx context.Context) []Check {
 		h.checkAgentImageUID(ctx),
 		h.checkImageFreshness(ctx),
 		h.checkSandboxTools(ctx),
+		h.checkUpgradeDumps(ctx),
 	}
 }

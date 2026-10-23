@@ -246,7 +246,10 @@ func (r *SkillRepository) List(ctx context.Context, projectID string, f persiste
 		b.WriteString(` AND domain = ` + next(f.Domain))
 	}
 	if f.Role != "" {
-		b.WriteString(` AND (roles = '[]' OR roles LIKE ` + next(`%"`+f.Role+`"%`) + `)`)
+		// Exact, case-sensitive membership: the role's JSON encoding as a
+		// literal substring, the same rule as the SQLite driver. Not LIKE:
+		// the role is caller-supplied (W16-I, #449 sweep; skill store §4).
+		b.WriteString(` AND (roles = '[]' OR strpos(roles, ` + next(persistence.JSONElementNeedle(f.Role)) + `) > 0)`)
 	}
 	b.WriteString(` ORDER BY updated_at DESC`)
 	if f.Limit > 0 {

@@ -52,48 +52,80 @@ func (c *CalendarStore) Events(user string) []Event {
 	return out
 }
 
-// window is the [from, to) a calendar_list_events call asks for.
-func window(now time.Time, rng, tMin, tMax string) (time.Time, time.Time, error) {
-	if tMin != "" || tMax != "" {
-		from, err1 := time.Parse(time.RFC3339, tMin)
-		to, err2 := time.Parse(time.RFC3339, tMax)
-		if err1 != nil || err2 != nil || !to.After(from) {
-			return time.Time{}, time.Time{}, errors.New("invalid_argument: timeMin and timeMax must be RFC 3339, timeMax after timeMin")
+// window is the [from, to) a calendar_list_events call asks for, as the
+// reference calendar.listEvents reads it: timeMin defaults to now, and an
+// absent timeMax leaves the window open (to is the zero time).
+func window(now time.Time, tMin, tMax string) (time.Time, time.Time, error) {
+	from, to := now, time.Time{}
+	if tMin != "" {
+		t, err := time.Parse(time.RFC3339, tMin)
+		if err != nil {
+			return time.Time{}, time.Time{}, errors.New("invalid_argument: timeMin must be RFC 3339")
 		}
-		return from, to, nil
+		from = t
 	}
-	day := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, time.UTC)
-	switch rng {
-	case "", "today":
-		return day, day.Add(24 * time.Hour), nil
-	case "tomorrow":
-		return day.Add(24 * time.Hour), day.Add(48 * time.Hour), nil
-	case "week":
-		return day, day.Add(7 * 24 * time.Hour), nil
+	if tMax != "" {
+		t, err := time.Parse(time.RFC3339, tMax)
+		if err != nil || !t.After(from) {
+			return time.Time{}, time.Time{}, errors.New("invalid_argument: timeMax must be RFC 3339 and after timeMin")
+		}
+		to = t
 	}
-	return time.Time{}, time.Time{}, errors.New("invalid_argument: range must be today, tomorrow or week")
+	return from, to, nil
 }
 
+// eventTypes are the reference's calendar.listEvents event types; every
+// stand-in event is "default".
+var eventTypes = []string{"default", "focusTime", "outOfOffice", "workingLocation", "birthday", "fromGmail"}
+
 // NewCalendarMCP serves store as the calendar MCP server the agenda and
-// morning-brief recipes call: calendar_list_events, and the write
-// calendar_create_event. now is the clock the ranges are measured against.
+// morning-brief recipes call: calendar_list_events (the recipes' spelling;
+// the reference's is calendar_listEvents) with the reference
+// calendar.listEvents arguments {calendarId (required), timeMin, timeMax,
+// attendeeResponseStatus, eventTypes} (GitHub #404), and the stand-in's own
+// write calendar_create_event, which imitates no reference shape. now is the
+// clock an absent timeMin is measured against.
 func NewCalendarMCP(store *CalendarStore, now func() time.Time) *MCPServer {
 	list := func(user string, args json.RawMessage) (any, error) {
 		var in struct {
-			Range   string `json:"range"`
-			TimeMin string `json:"timeMin"`
-			TimeMax string `json:"timeMax"`
+			CalendarID             string   `json:"calendarId"`
+			TimeMin                string   `json:"timeMin"`
+			TimeMax                string   `json:"timeMax"`
+			AttendeeResponseStatus []string `json:"attendeeResponseStatus"`
+			EventTypes             []string `json:"eventTypes"`
 		}
 		if err := decode(args, &in); err != nil {
 			return nil, err
 		}
-		from, to, err := window(now().UTC(), in.Range, in.TimeMin, in.TimeMax)
+		// Any calendar id names the user's one calendar: several calendars
+		// are not imitated.
+		if strings.TrimSpace(in.CalendarID) == "" {
+			return nil, errors.New("invalid_argument: calendarId is required")
+		}
+		if len(in.AttendeeResponseStatus) > 0 {
+			return nil, errors.New("invalid_argument: attendeeResponseStatus is not imitated by the stand-in")
+		}
+		wantDefault := len(in.EventTypes) == 0
+		for _, et := range in.EventTypes {
+			known := false
+			for _, k := range eventTypes {
+				known = known || et == k
+			}
+			if !known {
+				return nil, errors.New("invalid_argument: unknown event type " + strconv.Quote(et))
+			}
+			wantDefault = wantDefault || et == "default"
+		}
+		from, to, err := window(now().UTC(), in.TimeMin, in.TimeMax)
 		if err != nil {
 			return nil, err
 		}
 		out := []map[string]any{}
+		if !wantDefault {
+			return map[string]any{"events": out}, nil
+		}
 		for _, e := range store.Events(user) {
-			if e.Start.Before(to) && e.End.After(from) {
+			if (to.IsZero() || e.Start.Before(to)) && e.End.After(from) {
 				out = append(out, map[string]any{"id": e.ID, "summary": e.Title, "start": e.Start.UTC().Format(time.RFC3339),
 					"end": e.End.UTC().Format(time.RFC3339), "location": e.Location, "description": e.Description,
 					"hangoutLink": e.Link, "attendees": e.Attendees})
@@ -121,9 +153,11 @@ func NewCalendarMCP(store *CalendarStore, now func() time.Time) *MCPServer {
 	}
 	str := map[string]any{"type": "string"}
 	return NewMCPServer("calendar",
-		Tool{Name: "calendar_list_events", Description: "List events in a range.", Handle: list,
-			InputSchema: map[string]any{"type": "object", "additionalProperties": false, "properties": map[string]any{
-				"range": map[string]any{"enum": []string{"today", "tomorrow", "week"}}, "timeMin": str, "timeMax": str}}},
+		Tool{Name: "calendar_list_events", Description: "List events of a calendar between timeMin (default now) and timeMax.", Handle: list,
+			InputSchema: map[string]any{"type": "object", "additionalProperties": false, "required": []string{"calendarId"}, "properties": map[string]any{
+				"calendarId": str, "timeMin": str, "timeMax": str,
+				"attendeeResponseStatus": map[string]any{"type": "array", "items": str},
+				"eventTypes":             map[string]any{"type": "array", "items": map[string]any{"enum": eventTypes}}}}},
 		Tool{Name: "calendar_create_event", Description: "Create an event.", Write: true, Handle: create,
 			InputSchema: map[string]any{"type": "object", "additionalProperties": false, "required": []string{"title", "start", "end"},
 				"properties": map[string]any{"title": str, "start": str, "end": str, "location": str}}},

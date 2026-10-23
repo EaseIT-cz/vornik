@@ -5,10 +5,13 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
-	"regexp"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"unicode/utf8"
+
+	"github.com/rs/zerolog"
+	zlog "github.com/rs/zerolog/log"
 
 	"vornik.io/vornik/internal/secrets"
 )
@@ -101,80 +104,52 @@ var metadataExportKeys = map[string]bool{
 	"summarized_message_count": true,
 }
 
-// secretKeyWords are the key segments whose value is treated as a credential
-// whatever it looks like. A key is split into segments on non-alphanumerics
-// and at lower→upper case changes ("accessToken" → access, token), so
-// "author_id" or "max_tokens" do not match while "api_key", "apiKey" and
-// "X-Auth-Token" do.
-var secretKeyWords = map[string]bool{
-	"password": true, "passwd": true, "passphrase": true, "pass": true, "pwd": true,
-	"secret": true, "token": true, "apikey": true, "auth": true, "authorization": true,
-	"bearer": true, "cookie": true, "credential": true, "credentials": true,
-	"signature": true, "privatekey": true, "otp": true,
-}
-
-// secretKeyPairs are two-segment names that form a credential name.
-var secretKeyPairs = map[[2]string]bool{
-	{"api", "key"}: true, {"private", "key"}: true, {"access", "key"}: true,
-	{"session", "id"}: true, {"session", "key"}: true, {"client", "secret"}: true,
-}
-
-var keySegmentSplit = regexp.MustCompile(`[^A-Za-z0-9]+|([a-z0-9])([A-Z])`)
-
-// tokenCountQualifiers precede "token(s)" in a key that counts model tokens
-// (max_tokens, prompt_tokens), which is not a credential.
-var tokenCountQualifiers = map[string]bool{
-	"max": true, "prompt": true, "completion": true, "total": true, "input": true,
-	"output": true, "num": true, "cached": true, "reasoning": true,
-}
-
-// singular drops one plural "s" so "tokens", "apiKeys" and "passwords" match
-// (review c2d9 F1). "pass" and "credentials" are listed as they are.
-func singular(s string) string {
-	if len(s) > 3 && strings.HasSuffix(s, "s") && !strings.HasSuffix(s, "ss") {
-		return strings.TrimSuffix(s, "s")
-	}
-	return s
-}
-
-// isSecretKeyName reports whether a (decoded) JSON object key names a
-// credential.
-func isSecretKeyName(k string) bool {
-	segs := strings.Fields(strings.ToLower(keySegmentSplit.ReplaceAllString(k, "${1} ${2}")))
-	for i, raw := range segs {
-		s := singular(raw)
-		prev := ""
-		if i > 0 {
-			prev = segs[i-1]
-		}
-		if s == "token" && tokenCountQualifiers[prev] {
-			continue
-		}
-		if secretKeyWords[raw] || secretKeyWords[s] {
-			return true
-		}
-		if i > 0 && secretKeyPairs[[2]string{prev, s}] {
-			return true
-		}
-	}
-	return false
-}
-
-var (
-	exportDetectorOnce sync.Once
-	exportDetector     secrets.Detector
-)
-
 // defaultExportDetector builds the default-pattern detector once. The patterns
 // are constants, so an error is a programming error; the detector is then nil
-// and only the structural rules apply.
-func defaultExportDetector() secrets.Detector {
-	exportDetectorOnce.Do(func() {
-		if d, err := secrets.NewMultiDetector(secrets.Config{}); err == nil {
-			exportDetector = d
-		}
-	})
-	return exportDetector
+// and every transcript JSON column is withheld (redactExportJSON fails closed).
+var defaultExportDetector = onceExportDetector(func() (secrets.Detector, error) {
+	d, err := secrets.NewMultiDetector(secrets.Config{})
+	if err != nil {
+		// Never return a typed-nil *MultiDetector inside the interface: it
+		// would read as a detector and the export would scan with nothing.
+		return nil, err
+	}
+	return d, nil
+})
+
+// exportLogger is where a detector build failure is reported. Until
+// 2026-10-16 the failure was discarded: the export withheld every column as
+// secret_scanner_unavailable and nothing said why (chat-audit retention and
+// redaction design §9.2.6, GitHub #395). The container injects its logger at
+// boot; until then, and in tests, the zerolog global logger is used.
+var exportLogger atomic.Pointer[zerolog.Logger]
+
+// SetExportLogger sets the logger an export detector build failure goes to.
+func SetExportLogger(l *zerolog.Logger) { exportLogger.Store(l) }
+
+// onceExportDetector memoises build, and logs its failure ONCE, at ERROR.
+func onceExportDetector(build func() (secrets.Detector, error)) func() secrets.Detector {
+	var (
+		once sync.Once
+		det  secrets.Detector
+	)
+	return func() secrets.Detector {
+		once.Do(func() {
+			d, err := build()
+			if err != nil || d == nil {
+				l := exportLogger.Load()
+				if l == nil {
+					l = &zlog.Logger
+				}
+				l.Error().Err(err).Msg("subjectstore: the Art 15 export secret detector failed to build; " +
+					"every transcript JSON column (tool_calls_json, hallucination_signals_json, " +
+					"task_messages.metadata) will be withheld as [WITHHELD:secret_scanner_unavailable]")
+				return
+			}
+			det = d
+		})
+		return det
+	}
 }
 
 // redactExportText replaces every detector finding in s with its marker.
@@ -451,7 +426,7 @@ func redactJSONValue(d secrets.Detector, v any) any {
 		out := make(map[string]any, len(x))
 		for k, val := range x {
 			key := redactExportText(d, k)
-			if isSecretKeyName(k) && val != nil {
+			if secrets.IsSecretKeyName(k) && val != nil {
 				// The whole value goes, container or not: a credential nested
 				// one level down under an innocuous key is still a credential.
 				out[key] = redactedSecretField

@@ -42,10 +42,11 @@ func (r *TaskJudgeVerdictRepository) Record(ctx context.Context, v *persistence.
 	_, err := r.db.ExecContext(ctx, `
 		INSERT INTO task_judge_verdicts (
 			id, project_id, task_id, role, model, verdict,
-			confidence, signals, summary, cost_usd, recorded_at
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			confidence, signals, summary, cost_usd, recorded_at, failure_class
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		v.ID, v.ProjectID, v.TaskID, v.Role, v.Model, v.Verdict,
 		v.Confidence, nullableBlob(v.Signals), v.Summary, v.CostUSD, sqliteTime(v.RecordedAt),
+		nullableString(v.FailureClass),
 	)
 	return err
 }
@@ -54,7 +55,7 @@ func (r *TaskJudgeVerdictRepository) Record(ctx context.Context, v *persistence.
 func (r *TaskJudgeVerdictRepository) GetByTask(ctx context.Context, taskID string) (*persistence.TaskJudgeVerdict, error) {
 	row := r.db.QueryRowContext(ctx, `
 		SELECT id, project_id, task_id, role, model, verdict,
-		       confidence, signals, summary, cost_usd, recorded_at
+		       confidence, signals, summary, cost_usd, recorded_at, failure_class
 		FROM task_judge_verdicts WHERE task_id = ?
 		ORDER BY recorded_at DESC LIMIT 1`, taskID)
 	return scanJudgeVerdict(row)
@@ -71,7 +72,7 @@ func (r *TaskJudgeVerdictRepository) ListRecentSince(ctx context.Context, projec
 	var b strings.Builder
 	b.WriteString(`
 		SELECT id, project_id, task_id, role, model, verdict,
-		       confidence, signals, summary, cost_usd, recorded_at
+		       confidence, signals, summary, cost_usd, recorded_at, failure_class
 		FROM task_judge_verdicts
 		WHERE recorded_at >= ?`)
 	args := []any{sqliteTime(since)}
@@ -109,7 +110,7 @@ func (r *TaskJudgeVerdictRepository) ListRecent(ctx context.Context, projectID s
 	if projectID != "" {
 		rows, err = r.db.QueryContext(ctx, `
 			SELECT id, project_id, task_id, role, model, verdict,
-			       confidence, signals, summary, cost_usd, recorded_at
+			       confidence, signals, summary, cost_usd, recorded_at, failure_class
 			FROM task_judge_verdicts
 			WHERE project_id = ?
 			ORDER BY recorded_at DESC
@@ -117,7 +118,7 @@ func (r *TaskJudgeVerdictRepository) ListRecent(ctx context.Context, projectID s
 	} else {
 		rows, err = r.db.QueryContext(ctx, `
 			SELECT id, project_id, task_id, role, model, verdict,
-			       confidence, signals, summary, cost_usd, recorded_at
+			       confidence, signals, summary, cost_usd, recorded_at, failure_class
 			FROM task_judge_verdicts
 			ORDER BY recorded_at DESC
 			LIMIT ?`, limit)
@@ -140,12 +141,13 @@ func (r *TaskJudgeVerdictRepository) ListRecent(ctx context.Context, projectID s
 func scanJudgeVerdict(scanner interface{ Scan(dest ...any) error }) (*persistence.TaskJudgeVerdict, error) {
 	v := &persistence.TaskJudgeVerdict{}
 	var (
-		signals    sql.NullString
-		recordedAt sqlTime
+		signals      sql.NullString
+		failureClass sql.NullString
+		recordedAt   sqlTime
 	)
 	err := scanner.Scan(
 		&v.ID, &v.ProjectID, &v.TaskID, &v.Role, &v.Model, &v.Verdict,
-		&v.Confidence, &signals, &v.Summary, &v.CostUSD, &recordedAt,
+		&v.Confidence, &signals, &v.Summary, &v.CostUSD, &recordedAt, &failureClass,
 	)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
@@ -157,5 +159,6 @@ func scanJudgeVerdict(scanner interface{ Scan(dest ...any) error }) (*persistenc
 		v.Signals = []byte(signals.String)
 	}
 	v.RecordedAt = recordedAt.Time
+	v.FailureClass = failureClass.String
 	return v, nil
 }

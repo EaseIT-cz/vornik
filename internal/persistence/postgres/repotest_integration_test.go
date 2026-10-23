@@ -11,8 +11,10 @@ import (
 	"testing"
 	"time"
 
+	"vornik.io/vornik/internal/auditredact"
 	"vornik.io/vornik/internal/persistence"
 	"vornik.io/vornik/internal/persistence/repotest"
+	"vornik.io/vornik/internal/secrets"
 )
 
 // Postgres-side wiring of the backend-agnostic repository contract
@@ -587,6 +589,13 @@ func TestTaskRepository_PostgresContract(t *testing.T) {
 	repotest.RunTaskRepositorySuite(t, NewTaskRepository(db.DB))
 }
 
+// TestTaskRepository_PostgresCountMirrorsList — GitHub #411, the Postgres half
+// of the Count-mirrors-List contract (see the SQLite twin).
+func TestTaskRepository_PostgresCountMirrorsList(t *testing.T) {
+	db := newIntegrationDB(t)
+	repotest.RunTaskCountMirrorsListSuite(t, NewTaskRepository(db.DB))
+}
+
 // TestAPIKeyRepository_PostgresContract — security-critical lookup
 // contract. Same suite that runs against SQLite.
 func TestAPIKeyRepository_PostgresContract(t *testing.T) {
@@ -904,6 +913,16 @@ func TestPendingOutcomeBackstop_PostgresContract(t *testing.T) {
 		NewTaskRepository(db.DB))
 }
 
+// TestStuckStepOutcome_PostgresContract — same contract as the SQLite case
+// (outcome-quality-design §S8.8, GitHub #369).
+func TestStuckStepOutcome_PostgresContract(t *testing.T) {
+	db := newIntegrationDB(t)
+	repotest.RunStuckStepOutcomeSuite(t,
+		NewExecutionStepOutcomeRepository(db.DB),
+		NewExecutionRepository(db.DB),
+		NewTaskRepository(db.DB))
+}
+
 func TestStepLatency_PostgresContract(t *testing.T) {
 	db := newIntegrationDB(t)
 	repotest.RunStepLatencySuite(t,
@@ -1215,6 +1234,13 @@ func TestStepPrompt_PostgresContract(t *testing.T) {
 	repotest.RunStepPromptSuite(t, NewStepPromptRepository(db.DB), NewExecutionStepOutcomeRepository(db.DB))
 }
 
+// TestStepOutcomeSeam425_Postgres — the same seam on the production lane,
+// where hallucination_signals is jsonb (GitHub #425, design §11.2.1).
+func TestStepOutcomeSeam425_Postgres(t *testing.T) {
+	db := newIntegrationDB(t)
+	repotest.RunStepOutcomeSeamSuite(t, NewExecutionStepOutcomeRepository(db.DB), decorateStepOutcomes425)
+}
+
 // seedChunkForSuite is the Postgres half of repotest.SeedChunk (backend-contract
 // coverage design §8): chunks carry backend-specific required columns, so the
 // raw insert lives here rather than in the shared suite.
@@ -1246,6 +1272,21 @@ func TestChatAudit_PostgresContract(t *testing.T) {
 func TestChunkGraphExtraction_PostgresContract(t *testing.T) {
 	db := newIntegrationDB(t)
 	repotest.RunChunkGraphExtractionSuite(t, NewChunkGraphExtractionRepository(db.DB), seedChunkForSuite(db))
+}
+
+// Knowledge-graph LLD §3.3b (after #284): targeted re-flag of quarantined
+// chunks. Found at: production (Postgres); the integration lane is the
+// driver the 1,760 chunks live on.
+func TestChunkGraphQuarantineReflag_PostgresContract(t *testing.T) {
+	db := newIntegrationDB(t)
+	repotest.RunChunkGraphQuarantineReflagSuite(t, NewChunkGraphExtractionRepository(db.DB), seedChunkForSuite(db),
+		func(ctx context.Context, id string) (bool, int, error) {
+			var needs bool
+			var attempts int
+			err := db.DB.QueryRowContext(ctx, `SELECT needs_graph_extraction, graph_extraction_attempts
+				FROM project_memory_chunks WHERE id = $1`, id).Scan(&needs, &attempts)
+			return needs, attempts, err
+		})
 }
 
 func TestClusterNode_PostgresContract(t *testing.T) {
@@ -1430,4 +1471,10 @@ func TestMigration220_IsAdditive(t *testing.T) {
 func TestQueuedAction_PostgresContract(t *testing.T) {
 	db := newIntegrationDB(t)
 	repotest.RunQueuedActionSuite(t, NewBrokerActionRepository(db.DB), NewBrokerGrantRepository(db.DB), NewAccountTransitionRepository(db.DB))
+}
+
+// decorateStepOutcomes425 wraps a production outcome repository in the #425
+// seam; both backends satisfy auditredact.StepOutcomeStore.
+func decorateStepOutcomes425(inner persistence.ExecutionStepOutcomeRepository, det secrets.Detector) persistence.ExecutionStepOutcomeRepository {
+	return auditredact.NewStepOutcomes(inner.(auditredact.StepOutcomeStore), det, nil, nil)
 }

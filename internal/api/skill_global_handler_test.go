@@ -11,10 +11,11 @@ import (
 )
 
 // operatorReq builds a request that passes requireOperatorScope: auth
-// enabled, no project scope (the single-operator / all-access path).
+// enabled and an admin session. Before GitHub #495 it carried no principal
+// at all (auth on, no project scope), which the gate admitted; an unscoped
+// caller is not an operator, so the operator is now named.
 func operatorReq(method, path, body string) *http.Request {
-	req := httptest.NewRequest(method, path, strings.NewReader(body))
-	return req.WithContext(context.WithValue(req.Context(), authEnabledKey, true))
+	return adminClassReq491(httptest.NewRequest(method, path, strings.NewReader(body)))
 }
 
 func TestSkillSetGlobalHTTP_FlipsBothDirections(t *testing.T) {

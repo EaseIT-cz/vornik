@@ -138,7 +138,8 @@ Branch on the `decision` line printed above:
 - **`QUARANTINED`** — admitted but flagged; show `gates_failed` verbatim. Operator
   can release via `/api/v1/projects/{p}/memory/quarantine/<id>/release`.
 - **`REJECTED`** — refused. Usually `secret_scan` (scrub first — do NOT retry raw),
-  `min_content` (<64 chars / 10 words — pad with context), or `dedup_hash`
+  `min_content` (a note shorter than three words and ten characters — restate
+  it as a full sentence), or `dedup_hash`
   (already stored). Relay which gate caught it.
 
 If the response says `this key lacks memory_write`, surface it verbatim and point

@@ -168,6 +168,19 @@ func (b *Breaker) OpenSince() time.Time {
 	return b.openedAt
 }
 
+// HalfOpenAt returns the breaker's state and, when it is OPEN, the moment
+// the cooldown ends and the next Allow may probe, read together under the
+// lock. For any other state the time is zero. Read by the retry hold
+// (permanent-failure design §8.8.2 D1), which waits for that moment.
+func (b *Breaker) HalfOpenAt() (time.Time, CircuitState) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.state != CircuitOpen {
+		return time.Time{}, b.state
+	}
+	return b.openedAt.Add(b.cfg.OpenCooldown), b.state
+}
+
 // Snapshot returns the breaker's current state label and OPEN timestamp
 // under the lock — the read path for the doctor's live-circuit line.
 func (b *Breaker) Snapshot() (state string, openedAt time.Time) {

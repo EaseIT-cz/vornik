@@ -269,7 +269,11 @@ func (s *CPCTimeoutScanner) wakeCallerForTimeout(ctx context.Context, cpc *persi
 	if task.Status != persistence.TaskStatusWaitingForChildren {
 		return
 	}
-	if err := s.executor.taskRepo.UpdateStatus(ctx, cpc.CallerTaskID, persistence.TaskStatusQueued); err != nil {
+	// Conditional (GitHub #421): a cancel landing between the read above and
+	// this write must not be overwritten with QUEUED, or the caller runs.
+	if _, err := s.executor.taskRepo.TransitionConditional(ctx, cpc.CallerTaskID,
+		[]persistence.TaskStatus{persistence.TaskStatusWaitingForChildren},
+		persistence.TaskStatusQueued, persistence.TransitionOpts{}); err != nil {
 		s.executor.logger.Warn().Err(err).
 			Str("caller_task_id", cpc.CallerTaskID).
 			Msg("cpc timeout scanner: failed to re-queue caller task; scheduler recovery will pick it up")

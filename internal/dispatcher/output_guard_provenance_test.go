@@ -273,6 +273,9 @@ func TestGetTaskStatus_InjectionInStatusMessage_IsRedacted(t *testing.T) {
 		}, nil
 	}
 	te := newExecutor(withTaskRepo(taskRepo), withExecRepo(execRepo))
+	// The non-admin view since #480: the line scrubber keeps a line that
+	// holds no secret, so the injection phrase still reaches the guard.
+	te.errorScrub = testLineScrubber480(t)
 
 	// 1. Verify the handler tags the result as ThirdParty.
 	res := te.getTaskStatus(context.Background(), `{"task_id":"t1"}`, nil)

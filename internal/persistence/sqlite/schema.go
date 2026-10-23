@@ -371,7 +371,8 @@ CREATE TABLE IF NOT EXISTS task_judge_verdicts (
     signals     BLOB,
     summary     TEXT NOT NULL DEFAULT '',
     cost_usd    REAL NOT NULL DEFAULT 0,
-    recorded_at TEXT NOT NULL
+    recorded_at TEXT NOT NULL,
+    failure_class TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_judge_verdicts_project_recorded ON task_judge_verdicts(project_id, recorded_at DESC);
 
@@ -778,6 +779,9 @@ CREATE TABLE IF NOT EXISTS agent_integration_approvals (
     account_label       TEXT NOT NULL DEFAULT 'default',
     account_identity    TEXT NOT NULL DEFAULT '',
     identity_source     TEXT NOT NULL DEFAULT '' CHECK (identity_source IN ('', 'agent', 'provider')),
+    -- migration 233 (design §6.5, amendment #481); also in sqliteAdditiveColumns.
+    suspended_tools     TEXT NOT NULL DEFAULT '[]',
+    suspended_at        TEXT,
     PRIMARY KEY (project_id, integration)
 );
 CREATE INDEX IF NOT EXISTS agent_integration_approvals_ns ON agent_integration_approvals (namespace);
@@ -1227,6 +1231,12 @@ CREATE TABLE IF NOT EXISTS project_memory_chunks (
     -- fixture: "absent TTL" and "zero time" are the same bits to a careless
     -- scanner, and they mean opposite things to the curve.
     expires_at                         TEXT,
+    -- Postgres parity (design 22, amendment #482): the producer, the
+    -- validator and the task, read by the verification repository. Also in
+    -- sqliteAdditiveColumns.
+    producer_role                      TEXT,
+    validator_role                     TEXT,
+    task_id                            TEXT,
     -- A recorded supersession epoch only makes sense on a superseded
     -- chunk (the restore pass keys on both). The reverse is NOT an
     -- invariant: a chunk superseded with no tracked epoch (empty epochID,
@@ -1235,6 +1245,55 @@ CREATE TABLE IF NOT EXISTS project_memory_chunks (
     CHECK (superseded_in_epoch IS NULL OR validation_status = 'superseded')
 );
 CREATE INDEX IF NOT EXISTS idx_chunks_project_needs ON project_memory_chunks(project_id, needs_graph_extraction);
+
+-- Postgres migration 234 (design 22, amendment #482): provenance records and
+-- the audited, recoverable changes of chunk verification state.
+CREATE TABLE IF NOT EXISTS memory_chunk_provenance (
+    project_id       TEXT NOT NULL,
+    artifact_id      TEXT NOT NULL,
+    repo_scope       TEXT NOT NULL DEFAULT '',
+    document_path    TEXT NOT NULL DEFAULT '',
+    commit_sha       TEXT NOT NULL DEFAULT '',
+    content_blob_sha TEXT NOT NULL DEFAULT '',
+    origin_blob_sha  TEXT NOT NULL DEFAULT '',
+    state            TEXT NOT NULL CHECK (state IN ('verified','stale','unverified')),
+    reason           TEXT NOT NULL DEFAULT '',
+    checked_at       TEXT NOT NULL,
+    verified_at      TEXT,
+    created_at       TEXT NOT NULL,
+    PRIMARY KEY (project_id, artifact_id),
+    CHECK (state <> 'verified' OR (
+        reason = '' AND verified_at IS NOT NULL AND commit_sha <> ''
+        AND content_blob_sha <> '' AND content_blob_sha = origin_blob_sha))
+);
+CREATE TABLE IF NOT EXISTS memory_verification_events (
+    id                TEXT PRIMARY KEY,
+    project_id        TEXT NOT NULL,
+    kind              TEXT NOT NULL CHECK (kind IN ('backfill','sweep','restore')),
+    actor             TEXT NOT NULL,
+    reason            TEXT NOT NULL DEFAULT '',
+    restores_event_id TEXT,
+    examined          INTEGER NOT NULL DEFAULT 0,
+    unchanged         INTEGER NOT NULL DEFAULT 0,
+    verified          INTEGER NOT NULL DEFAULT 0,
+    deverified        INTEGER NOT NULL DEFAULT 0,
+    skipped           INTEGER NOT NULL DEFAULT 0,
+    created_at        TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_memory_verification_events_project
+    ON memory_verification_events (project_id, created_at DESC);
+CREATE TABLE IF NOT EXISTS memory_verification_backup (
+    event_id             TEXT NOT NULL REFERENCES memory_verification_events(id) ON DELETE CASCADE,
+    chunk_id             TEXT NOT NULL,
+    project_id           TEXT NOT NULL,
+    prior_status         TEXT NOT NULL,
+    prior_validator_role TEXT,
+    new_status           TEXT NOT NULL,
+    new_validator_role   TEXT,
+    PRIMARY KEY (event_id, chunk_id)
+);
+CREATE INDEX IF NOT EXISTS idx_memory_verification_backup_project
+    ON memory_verification_backup (project_id);
 CREATE INDEX IF NOT EXISTS idx_chunks_project_time ON project_memory_chunks(project_id, created_at);
 -- Migration 200: SupersedeDocument filters one document's chunks by
 -- (project, scope, source_name).

@@ -3,6 +3,7 @@ package onboarding
 import (
 	"context"
 	"errors"
+	"net/http"
 	"strings"
 	"time"
 
@@ -68,6 +69,7 @@ func NewMemoryValidator() MemoryValidator {
 	return MemoryValidator{
 		probe: func(ctx context.Context, cfg memory.Config) ([]float32, error) {
 			emb := memory.NewEmbedder(cfg)
+			emb.SetHTTPClient(setupProbeHTTPClient(15 * time.Second))
 			// Billed to infrastructure, not to a project: a reachability probe
 			// has no tenant to charge. Recorded rather than skipped — "too small
 			// to bill" is the judgement that left embedding spend invisible.
@@ -131,10 +133,20 @@ func (v MemoryValidator) Validate(ctx context.Context, p MemoryConfigProposal) M
 		BedrockRegion:      p.BedrockRegion,
 		EmbeddingDimension: p.EmbeddingDimension,
 	})
+	// GitHub #369 item 5 (outcome-quality §S8.10): the real embedder now names
+	// its cause. A dimension mismatch means the endpoint answered — it is the
+	// advisory below, not an outage — and an HTTP 401/403 is a rejected key.
+	// Through the old (nil, nil) both read as "unreachable".
+	returned := len(vec)
+	var embErr *memory.EmbedError
+	if errors.As(err, &embErr) && embErr.Reason == memory.EmbedReasonDimensionMismatch {
+		returned, err = embErr.Got, nil
+	}
 	if err != nil {
 		name := "embedding_unreachable"
 		remediation := "Check the embedding base URL and that it is reachable from the daemon host."
-		if isAuthError(err) {
+		rejected := embErr != nil && (embErr.Status == http.StatusUnauthorized || embErr.Status == http.StatusForbidden)
+		if rejected || isAuthError(err) {
 			name = "embedding_key_rejected"
 			remediation = "The embedding API key was rejected. Verify the key has access to this endpoint."
 		} else if errors.Is(probeCtx.Err(), context.DeadlineExceeded) {
@@ -151,8 +163,8 @@ func (v MemoryValidator) Validate(ctx context.Context, p MemoryConfigProposal) M
 	}
 
 	result.EmbeddingOK = true
-	result.ReturnedDimension = len(vec)
-	result.DimensionMatches = p.EmbeddingDimension == len(vec)
+	result.ReturnedDimension = returned
+	result.DimensionMatches = p.EmbeddingDimension == returned
 	if p.EmbeddingDimension > 0 && !result.DimensionMatches {
 		result.Failures = append(result.Failures, CheckFailure{
 			Name:     "dimension_mismatch",

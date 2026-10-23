@@ -596,7 +596,7 @@ func (p connectorPages) pendingOf(ctx context.Context, name string, c approverde
 				}
 			}
 		}
-		raw, _ := json.Marshal(agentadmin.ApproveServerToolsInput{Project: pid, Server: server, Tools: tools})
+		raw, _ := json.Marshal(agentadmin.ApproveServerToolsInput{Project: pid, Server: server, Tools: tools, Reads: readsByName(tools)}) // design §6.4 item 2
 		ch, err := s.renderer.Render(st, agentadmin.VerbApproveServerTools, raw)
 		if err != nil {
 			return "", nil, nil, err
@@ -817,7 +817,7 @@ func (p connectorPages) approveTools(ctx context.Context, d *approverdevice.Devi
 			}
 		}
 	}
-	raw, _ := json.Marshal(agentadmin.ApproveServerToolsInput{Project: projectID, Server: server, Tools: tools})
+	raw, _ := json.Marshal(agentadmin.ApproveServerToolsInput{Project: projectID, Server: server, Tools: tools, Reads: readsByName(tools)}) // design §6.4 item 2
 	ch, err := s.renderer.Render(st, agentadmin.VerbApproveServerTools, raw)
 	if err != nil || ch.Class != agentadmin.Widening {
 		s.mu.Unlock()

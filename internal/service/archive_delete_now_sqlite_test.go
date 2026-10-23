@@ -16,6 +16,7 @@ import (
 	"vornik.io/vornik/internal/projectarchive"
 	"vornik.io/vornik/internal/registry"
 	"vornik.io/vornik/internal/storage"
+	"vornik.io/vornik/internal/testutil/testwait"
 	"vornik.io/vornik/internal/ui"
 )
 
@@ -106,7 +107,7 @@ func TestArchiveDeleteNow_SQLiteWipesThroughTheDaemonWiring_365(t *testing.T) {
 	go func() { defer close(done); c.archiveSweeper.Run(runCtx) }()
 	t.Cleanup(func() { cancel(); <-done })
 
-	res, err := lc.DeleteNowAndWait(ctx, "doomed", true, 20*time.Second)
+	res, err := lc.DeleteNowAndWait(ctx, "doomed", true, testwait.ForOutcome(t))
 	if err != nil {
 		t.Fatalf("DeleteNowAndWait: %v", err)
 	}

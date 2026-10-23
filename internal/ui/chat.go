@@ -26,6 +26,7 @@ import (
 	"time"
 
 	"vornik.io/vornik/internal/aidisclosure"
+	"vornik.io/vornik/internal/api"
 	"vornik.io/vornik/internal/chat"
 	"vornik.io/vornik/internal/conversation"
 	"vornik.io/vornik/internal/dispatcher"
@@ -159,10 +160,11 @@ type ChatPageData struct {
 	// chat-disabled.
 	Disabled bool
 
-	// SessionID surfaces the cookie value to the template so a
-	// hidden form input round-trips it (defence-in-depth: if a
-	// browser drops the cookie mid-session, the form post still
-	// names the right history bucket).
+	// SessionID is the chat cookie's value, rendered into a hidden
+	// form input. The handlers read the cookie only, never that
+	// field; the history bucket is chatHistoryKey of the cookie and
+	// the request's own view (#480; the earlier comment claimed a
+	// form fallback that nothing implements).
 	SessionID string
 
 	// ContextTier is the lowercase tier name ("peak" / "good" /
@@ -196,6 +198,14 @@ func (s *Server) ChatPage(w http.ResponseWriter, r *http.Request, projectID stri
 // turn synchronously, and re-renders the chat page with the
 // updated history.
 func (s *Server) ChatPostMessage(w http.ResponseWriter, r *http.Request, projectID string) {
+	// GitHub #491: the dispatcher's status tools put the task's raw
+	// last_error and error_message into the model's context, and its answer
+	// is shown to the caller; an unscoped caller that is not admin-class gets
+	// no turn, decided before the form is read or the dispatcher called.
+	if api.ErrorTextAccessFor(r, s.operatorCapability.IsAdminKey) == api.ErrorTextDenied {
+		api.RespondProjectScopeRequired(w)
+		return
+	}
 	if err := r.ParseForm(); err != nil {
 		http.Error(w, "Failed to parse form: "+err.Error(), http.StatusBadRequest)
 		return
@@ -223,6 +233,12 @@ func (s *Server) ChatPostMessage(w http.ResponseWriter, r *http.Request, project
 	}
 
 	store := s.chatStoreFor(projectID)
+	// #480 (process-spawn-law design, "Amendment 2026-10-21 (#480)", J4):
+	// an admin-class request reads the task tools' error text raw, and its
+	// turns read and write a history of their own, so a later non-admin
+	// session in this browser never replays an admin turn's raw tool results.
+	operatorView := s.chatOperatorView(r)
+	historyKey := chatHistoryKey(data.SessionID, operatorView)
 	channel := webchat.New(projectID, conversation.Speaker{
 		ID:          "web-chat:" + data.SessionID,
 		DisplayName: "Web operator",
@@ -235,6 +251,17 @@ func (s *Server) ChatPostMessage(w http.ResponseWriter, r *http.Request, project
 		DisclosureMetrics:        s.disclosureMetrics,
 		Media:                    s.mediaSight,
 		MemoryWriteConfirmations: s.chatMemoryConfirmations,
+		OperatorView: func(context.Context, conversation.ChannelMessage) bool {
+			return operatorView
+		},
+		// #499: the web chat's tasks carry the request's principal (the
+		// presented key first, then the session user).
+		TaskPrincipal: func(context.Context, conversation.ChannelMessage) string {
+			if a := s.uiSessionActor(r); !a.IsZero() {
+				return a.String()
+			}
+			return ""
+		},
 		ResultPostprocessor: func(result dispatcher.Result) string {
 			// Append the deliverable-links block when the
 			// dispatcher's turn referenced a task that produced
@@ -258,7 +285,7 @@ func (s *Server) ChatPostMessage(w http.ResponseWriter, r *http.Request, project
 
 	inbound := conversation.ChannelMessage{
 		Source:    channel.Name(),
-		SessionID: data.SessionID,
+		SessionID: historyKey,
 		SpeakerID: data.SessionID,
 		Text:      prompt,
 		Timestamp: time.Now(),
@@ -268,8 +295,30 @@ func (s *Server) ChatPostMessage(w http.ResponseWriter, r *http.Request, project
 	}
 	// Refresh history from the store so the rendered page shows
 	// the user's new prompt + the assistant reply.
-	data.History = mergeDisclosureIntoHistory(store.History(data.SessionID), channel, s.aiDisclosure)
+	data.History = mergeDisclosureIntoHistory(store.History(historyKey), channel, s.aiDisclosure)
 	s.render(w, "chat.html", data)
+}
+
+// chatOperatorView is the web chat's admin-linked check: the one HTTP
+// admin-class predicate (auth off, an admin session, or an
+// admin.allowed_keys key), as the log panel and the task page use (#480 J3).
+func (s *Server) chatOperatorView(r *http.Request) bool {
+	return api.IsAdminClassRequest(r, s.operatorCapability.IsAdminKey)
+}
+
+// chatHistoryKey is the session-store key of a chat turn's history: the
+// cookie under a "member:" prefix for a scrubbed turn and under an
+// "operator:" prefix for an admin-class turn. The two views never share a
+// history (#480 J4). Both are prefixed because the cookie is the browser's
+// to set: with one view keyed by the bare cookie, a non-admin could set the
+// cookie to the other view's key and load it (self-review of 5a3f98e95). A
+// key of one prefix is never a key of the other, whatever the cookie holds.
+// History stored before #480 under the bare cookie is loaded by neither.
+func chatHistoryKey(cookie string, operatorView bool) string {
+	if operatorView {
+		return "operator:" + cookie
+	}
+	return "member:" + cookie
 }
 
 // mergeDisclosureIntoHistory prepends the EU AI Act Art 50(1) notice to the
@@ -324,7 +373,7 @@ func (s *Server) chatPageData(r *http.Request, projectID string) ChatPageData {
 	if err == nil && cookie.Value != "" {
 		data.SessionID = cookie.Value
 		store := s.chatStoreFor(projectID)
-		data.History = store.History(data.SessionID)
+		data.History = store.History(chatHistoryKey(data.SessionID, s.chatOperatorView(r)))
 	}
 	// Tier badge: surface the current band + exact headroom for
 	// the rendered history. Only fires when the deployment

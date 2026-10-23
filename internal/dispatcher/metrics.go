@@ -91,6 +91,23 @@ type Metrics struct {
 	// a generic failure bucket would leave a misdeclared model and a
 	// too-tight size cap looking identical.
 	MediaHandoverTotal *prometheus.CounterVec
+
+	// IntentJudgeTotal counts every intent-judge evaluation by outcome:
+	// recorded, no_project, insert_failed, refined, refine_timeout,
+	// refine_cancelled, refine_error, refine_upsert_failed. The
+	// intent_verdicts row leaves its LLM columns NULL for every failed or
+	// skipped refinement alike; this series tells them apart.
+	//
+	// see LLD § https://docs.vornik.io §S8.11 row 10a
+	IntentJudgeTotal *prometheus.CounterVec
+}
+
+// intentJudge records one intent-judge outcome. Nil-safe.
+func (m *Metrics) intentJudge(outcome string) {
+	if m == nil || m.IntentJudgeTotal == nil {
+		return
+	}
+	m.IntentJudgeTotal.WithLabelValues(outcome).Inc()
 }
 
 // MediaAttachment records one attachment's disposition. Nil-safe.
@@ -222,6 +239,15 @@ func NewMetrics(registerer prometheus.Registerer) *Metrics {
 				Help:      "Media attachments handed to a specialist instead of perceived inline, by kind and reason.",
 			},
 			[]string{"kind", "reason"},
+		),
+		IntentJudgeTotal: auto.NewCounterVec(
+			prometheus.CounterOpts{
+				Namespace: "vornik",
+				Subsystem: "dispatcher",
+				Name:      "intent_judge_total",
+				Help:      "Intent-judge evaluations by outcome (recorded, no_project, insert_failed, refined, refine_timeout, refine_cancelled, refine_error, refine_upsert_failed).",
+			},
+			[]string{"outcome"},
 		),
 		OutputGuardScanDuration: auto.NewHistogramVec(
 			prometheus.HistogramOpts{

@@ -31,8 +31,23 @@ type PipelineConfig struct {
 	// design 22, "Reinstating a refuted mirrored note".
 	ReinstateMirrored func(ctx context.Context, projectID, contentHash, producerRole string) (string, error)
 	StampEpoch        func(ctx context.Context, projectID, artifactID, epochID string) error
-	SecretsDetector   secrets.Detector
-	SecretsActions    map[string]secrets.Action
+	// CompanionDelegated reports whether a task, or a task on its parent
+	// chain, was created by a companion. The role-of-record shortcut asks
+	// it: an agent role in a companion-delegated task is never
+	// role-of-record, and is verified only by provenance (design 22,
+	// "Amendment 2026-10-21 (#482)"). An error counts as delegated (fail
+	// closed). Wired to persistence's CompanionDelegatedTasks, the same
+	// query the operator backfill uses. Nil keeps the earlier behaviour
+	// (unit tests); the daemon's wiring always sets it.
+	CompanionDelegated func(ctx context.Context, taskID string) (bool, error)
+	// Provenance verifies a companion-delegated document ingest against the
+	// project's own clone. Nil: nothing is provenance-verified.
+	Provenance ProvenanceChecker
+	// RecordProvenance writes the verifier's record. It runs BEFORE the
+	// chunks are stamped, so there is never a stamp without a record.
+	RecordProvenance func(ctx context.Context, rec *persistence.ChunkProvenance) error
+	SecretsDetector  secrets.Detector
+	SecretsActions   map[string]secrets.Action
 	// DenyPatterns seeds the substring deny-list PolicyMatchGate enforces.
 	// It is published into the hot-reloadable gateOverrides snapshot at
 	// NewPipeline time; thereafter the live value is swapped via UpdateGates
@@ -287,7 +302,10 @@ type DryRunResult struct {
 	// Policy bundle the chunk would have been stamped with.
 	Policy ClassPolicy
 	// RoleOfRecordEligible mirrors policy.RoleOfRecordEligible —
-	// callers surface this as "would land verified" in the UI.
+	// callers surface this as "would land verified" in the UI. The
+	// inspector has no task, so this does not account for companion
+	// delegation: a companion-delegated ingest of the same candidate is
+	// verified only by provenance (GitHub #482), and the UI label says so.
 	RoleOfRecordEligible bool
 	// PostRedactContent carries any post-secret-redaction content
 	// so the operator can see what the corpus would actually have
@@ -329,7 +347,10 @@ func (p *Pipeline) DryRun(
 func (p *Pipeline) DryRunWithExecution(
 	projectID, sourceName, producerRole, ingestExecutionID, content string,
 ) DryRunResult {
-	class, policy := ClassifyByRole(producerRole)
+	class, _ := ClassifyByRole(producerRole)
+	// The inspector reports what the pipeline would do, so it reads the
+	// same producer-aware policy (GitHub #435).
+	policy := EffectiveClassPolicy(class, producerRole)
 	cand := &IngestCandidate{
 		ProjectID:          projectID,
 		SourceArtifactID:   "dry-run",
@@ -576,6 +597,12 @@ func (p *Pipeline) IngestArtifactWithOptions(
 	if p.indexer == nil {
 		return stats, errors.New("pipeline has no indexer")
 	}
+	// Refused before any write (GitHub #436): the operator-correction role
+	// is reserved, and PatchPolicyByArtifact refuses it too, so an ingest
+	// can never mint a chunk the claim refute path protects.
+	if producerRole == ProducerRoleOperatorCorrection {
+		return stats, ErrReservedProducerRole
+	}
 
 	// Phase 2: artifact = single candidate. Phase 4 may sub-divide
 	// into per-section candidates so the validator can score
@@ -623,21 +650,26 @@ func (p *Pipeline) IngestArtifactWithOptions(
 			// visible in the daemon log without raising the global
 			// level. The chunk still ingests as unclassified; the
 			// auto-backfill loop will retry later.
+			reason := classifierSkipReason(ctx, lerr)
 			p.logger.Warn().Err(lerr).
 				Str("project_id", projectID).
 				Str("source_name", sourceName).
-				Msg("inline classifier fallback: LLM error; storing chunk as unclassified for backfill")
+				Str("reason", reason).
+				Msg("inline classifier fallback: classification failed; storing chunk as unclassified for backfill")
+			p.cfg.Metrics.RecordSkipped(skipSiteClassifier, reason)
 		}
 	}
 	cand := &IngestCandidate{
-		ProjectID:          projectID,
-		SourceArtifactID:   artifactID,
-		SourceName:         sourceName,
-		ProducerRole:       producerRole,
-		IngestExecutionID:  ingestExecutionID,
-		Content:            content,
-		ProposedClass:      class,
-		ProposedConfidence: DefaultClassPolicies[class].DefaultConfidence,
+		ProjectID:         projectID,
+		SourceArtifactID:  artifactID,
+		SourceName:        sourceName,
+		ProducerRole:      producerRole,
+		IngestExecutionID: ingestExecutionID,
+		Content:           content,
+		ProposedClass:     class,
+		// Producer-aware: a companion or chat deposit never carries a
+		// spec/decision class's confidence (GitHub #435).
+		ProposedConfidence: EffectiveClassPolicy(class, producerRole).DefaultConfidence,
 		TTLOverride:        opts.TTLOverride,
 		RepoScope:          opts.RepoScope,
 		EventTime:          opts.EventTime,
@@ -708,6 +740,7 @@ func (p *Pipeline) IngestArtifactWithOptions(
 					Str("execution_id", cand.IngestExecutionID).
 					Int("claims", len(extracted)).
 					Msg("pipeline: claim audit lookup failed; gate falls back to allow")
+				p.cfg.Metrics.RecordSkipped(skipSiteClaimAudit, "lookup_error")
 			} else {
 				cand.ClaimAuditResults = results
 			}
@@ -715,6 +748,18 @@ func (p *Pipeline) IngestArtifactWithOptions(
 	}
 
 	final, trail := RunStandardGates(cand, p.gateConfigSnapshot(), p.denyPatternsSnapshot(), sourceSizeBytes, dedupFn)
+
+	// A dedup lookup that failed allows (as built) and records why only in
+	// the gate's Detail, which is logged on a reject alone: say so here
+	// (GitHub #369, §S8.11 6b).
+	for _, g := range trail {
+		if g.Gate == GateDedupHash && g.Action == GateAllow && g.Detail != "" {
+			p.logger.Warn().Str("project_id", projectID).Str("artifact_id", artifactID).
+				Str("detail", g.Detail).Msg("pipeline: dedup lookup failed; candidate allowed without the duplicate check")
+			p.cfg.Metrics.RecordSkipped(skipSiteDedupLookup, "error")
+			break // one dedup gate per ingest; count it once
+		}
+	}
 
 	// Track which gates had non-allow outcomes for observability.
 	gatesFiredSeen := make(map[string]bool)
@@ -764,8 +809,10 @@ func (p *Pipeline) IngestArtifactWithOptions(
 				Str("artifact_id", artifactID).
 				Str("gate", string(final.Gate)).
 				Msg("pipeline: failed to write quarantine row")
-		}
-		if p.cfg.Metrics != nil {
+			// Counted as a failed write, not as quarantined: no row
+			// exists for an operator to review (GitHub #369, §S8.11 13a).
+			p.cfg.Metrics.RecordSkipped(skipSiteQuarantineWrite, "error")
+		} else if p.cfg.Metrics != nil {
 			p.cfg.Metrics.PipelineQuarantinedTotal.WithLabelValues(projectID, string(final.Gate)).Inc()
 		}
 		return stats, nil
@@ -819,7 +866,28 @@ func (p *Pipeline) IngestArtifactWithOptions(
 		// system-of-record pattern: the workflow gate that
 		// admitted the chunk (e.g. reviewer-approved commit) is
 		// itself the verification.
-		policy := DefaultClassPolicies[cand.ProposedClass]
+		//
+		// Only for an agent producer. A companion or chat deposit has
+		// no workflow gate behind it, so it is never role-of-record
+		// whatever class it was labelled: before GitHub #435 a
+		// companion remember with class "decision" was stamped verified
+		// with the companion recorded as its own validator.
+		//
+		// Nor for an agent role in a companion-delegated task (GitHub #482,
+		// design 22 "Amendment 2026-10-21 (#482)"): the companion chose the
+		// workflow, so the role's authority is the companion's. Such a chunk
+		// is verified only by provenance, below.
+		// Only a chunk that would otherwise be role-of-record needs the
+		// question asked: provenance replaces the role's authority, it does
+		// not add authority a class never had.
+		eligible := EffectiveClassPolicy(cand.ProposedClass, cand.ProducerRole).RoleOfRecordEligible
+		delegated := eligible && p.companionDelegated(ctx, projectID, taskID, cand.ProducerRole)
+		policy := EffectiveClassPolicyFor(cand.ProposedClass, cand.ProducerRole, delegated)
+		if delegated && p.indexer != nil {
+			if p.verifyProvenance(ctx, projectID, artifactID, sourceName, content, opts) {
+				stats.Verified++
+			}
+		}
 		if policy.RoleOfRecordEligible && p.indexer != nil {
 			if vErr := p.indexer.MarkVerifiedByArtifact(ctx, projectID, artifactID, cand.ProducerRole); vErr != nil {
 				p.logger.Warn().Err(vErr).
@@ -934,12 +1002,16 @@ func (p *Pipeline) recordQuarantine(ctx context.Context, c *IngestCandidate, fin
 // Phase 4 will move this into the indexer itself (new IngestText
 // signature), eliminating the second round-trip.
 func (p *Pipeline) backfillClassMetadata(ctx context.Context, c *IngestCandidate) error {
-	pol := DefaultClassPolicies[c.ProposedClass]
+	pol := EffectiveClassPolicy(c.ProposedClass, c.ProducerRole)
 	ttl := pol.TTL
-	if c.TTLOverride != nil {
+	if c.TTLOverride != nil && (*c.TTLOverride > 0 || !isDeliberateHumanDeposit(c.ProducerRole)) {
 		// Caller-supplied override beats the class default. Zero
 		// duration means "no expiry" — matches the policy convention
-		// where TTL=0 produces a nil expires_at on the chunk.
+		// where TTL=0 produces a nil expires_at on the chunk. A
+		// companion or chat deposit never gets "no expiry": a zero
+		// override keeps the capped policy TTL (GitHub #435; the
+		// remember schema already refuses ttl_days < 1, this holds
+		// the guarantee here rather than upstream, review 5caa F5).
 		ttl = *c.TTLOverride
 	}
 	var expiresAt *time.Time
@@ -1126,6 +1198,41 @@ func (p *Pipeline) IngestCompanionNote(
 	repoScope string,
 	eventTime time.Time,
 ) (CompanionIngestResult, error) {
+	return p.ingestCompanionDeposit(ctx, "companion", projectID, clientKind, keyID, sourceName, content, class, ttlDays, repoScope, eventTime)
+}
+
+// CompanionCorrectionArtifactPrefix is the synthetic artifact-id prefix of
+// a companion memory_correct correction. The daemon mints every artifact
+// id, so no caller can give a remember() note this prefix: together with a
+// companion producer role it marks the chunk as a correction a claim refute
+// never refutes (GitHub #436, design 22 "Amendment 2026-10-21 (#436)",
+// part 2).
+const CompanionCorrectionArtifactPrefix = "companioncorrection"
+
+// IngestCompanionCorrection stores the correction a companion memory_correct
+// call carries. It is a companion deposit and goes through exactly the
+// pipeline remember() uses (secret scan, text-damage floor, the gate stack,
+// the companion authority cap), labelled decision; before GitHub #436's
+// part 2 it went through Corrector.InsertCorrection and landed verified,
+// 0.95, never expiring, with no secret scan. Only the artifact-id prefix
+// differs from a note.
+func (p *Pipeline) IngestCompanionCorrection(
+	ctx context.Context,
+	projectID, clientKind, keyID, content, repoScope string,
+) (CompanionIngestResult, error) {
+	return p.ingestCompanionDeposit(ctx, CompanionCorrectionArtifactPrefix, projectID, clientKind, keyID,
+		"companion:"+clientKind+":correction", content, ClassDecision, 0, repoScope, time.Time{})
+}
+
+func (p *Pipeline) ingestCompanionDeposit(
+	ctx context.Context,
+	artifactPrefix string,
+	projectID, clientKind, keyID, sourceName, content string,
+	class ContentClass,
+	ttlDays int,
+	repoScope string,
+	eventTime time.Time,
+) (CompanionIngestResult, error) {
 	if p == nil {
 		return CompanionIngestResult{}, errors.New("pipeline is nil")
 	}
@@ -1139,7 +1246,7 @@ func (p *Pipeline) IngestCompanionNote(
 		return CompanionIngestResult{}, fmt.Errorf("IngestCompanionNote: ttl_days must be <= %d", maxCompanionNoteTTLDays)
 	}
 
-	artifactID := persistence.GenerateID("companion")
+	artifactID := persistence.GenerateID(artifactPrefix)
 	ingestExec := persistence.GenerateID("companion")
 	producerRole := "companion:" + clientKind
 

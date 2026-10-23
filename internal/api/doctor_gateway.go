@@ -2,26 +2,15 @@ package api
 
 import (
 	"context"
-	"net"
 	"net/http"
 	"net/url"
 	"time"
+
+	"vornik.io/vornik/internal/integrations/dialguard"
 )
 
-// isLoopbackHost reports whether host (a bare URL hostname, no port) is a
-// loopback destination: the literal "localhost" or any IP in the loopback
-// range (127.0.0.0/8, ::1). Kept local to internal/api to avoid importing
-// internal/integrations or apigateway/gateway (which would form an import
-// cycle); it is defense-in-depth over the config.Validate loopback rule.
-func isLoopbackHost(host string) bool {
-	if host == "localhost" {
-		return true
-	}
-	if ip := net.ParseIP(host); ip != nil {
-		return ip.IsLoopback()
-	}
-	return false
-}
+// gatewayCheckTimeout bounds the doctor's gateway probe.
+const gatewayCheckTimeout = 3 * time.Second
 
 // checkGatewayHealthy pings the local API gateway. SKIPPED when unconfigured so
 // a daemon without the gateway isn't marked unhealthy (design §9 doctor
@@ -32,23 +21,29 @@ func (h *DoctorHandlers) checkGatewayHealthy(ctx context.Context, _ bool) Doctor
 	if h == nil || h.gatewayURL == "" {
 		return DoctorCheck{Name: name, Status: "SKIPPED", Message: "API gateway not configured; skipping"}
 	}
-	// review B1: never GET a non-loopback host, even with the short-timeout
-	// client below. The gateway is a loopback-only local sidecar; a
-	// non-loopback gatewayURL is misconfiguration, and probing it would make
-	// the doctor itself perform an SSRF. Reject on the parsed host BEFORE
-	// dialing (config.Validate enforces the same rule at startup; this is
-	// defense-in-depth).
-	if u, err := url.Parse(h.gatewayURL); err != nil || !isLoopbackHost(u.Hostname()) {
+	// review B1: never GET a non-loopback host. The gateway is a
+	// loopback-only local sidecar; a non-loopback gatewayURL is
+	// misconfiguration, and probing it would make the doctor itself perform
+	// an SSRF. Reject on the parsed host BEFORE dialing (config.Validate
+	// enforces the same rule at startup; this is defense-in-depth).
+	if u, err := url.Parse(h.gatewayURL); err != nil || !dialguard.IsLoopbackHost(u.Hostname()) {
 		return DoctorCheck{Name: name, Status: "ERROR", Message: "gateway address must be loopback"}
 	}
-	ctx, cancel := context.WithTimeout(ctx, 3*time.Second)
+	ctx, cancel := context.WithTimeout(ctx, gatewayCheckTimeout)
 	defer cancel()
 	// Hit the gateway base URL and treat any HTTP response as "reachable".
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, h.gatewayURL, nil)
 	if err != nil {
 		return DoctorCheck{Name: name, Status: "ERROR", Message: "gateway URL invalid: " + err.Error()}
 	}
-	resp, err := http.DefaultClient.Do(req)
+	// GitHub #494 (integrations-hub-design "Amendment 2026-10-21 (#494)"):
+	// http.DefaultClient followed a gateway's redirect to any address. The
+	// shared guard dials only the URL's own loopback host (which must resolve
+	// to loopback), and a 3xx comes back as the response: reachable, with no
+	// second request.
+	client := dialguard.LoopbackURLGuard(h.gatewayURL, nil).NoRedirectHTTPClient(gatewayCheckTimeout)
+	defer client.CloseIdleConnections()
+	resp, err := client.Do(req)
 	if err != nil {
 		return DoctorCheck{Name: name, Status: "ERROR", Message: "gateway unreachable: " + err.Error()}
 	}

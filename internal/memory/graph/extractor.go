@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	"vornik.io/vornik/internal/chat"
+	"vornik.io/vornik/internal/ctxerr"
 	"vornik.io/vornik/internal/persistence"
 )
 
@@ -103,6 +104,13 @@ const (
 	// A truncation is an infrastructure failure and the chunk is NOT
 	// marked extracted for it.
 	ExtractOutcomeTruncated = "truncated"
+	// ExtractOutcomeNoChoices — the provider answered with no choices.
+	// ExtractOutcomeParseError — the answer was not the JSON array asked
+	// for. The LLM-call failures are llm_timeout, llm_cancelled and
+	// llm_error (ctxerr.Classify). Before GitHub #369 (§S8.11 7e) these
+	// left no sample at all.
+	ExtractOutcomeNoChoices  = "no_choices"
+	ExtractOutcomeParseError = "parse_error"
 )
 
 // Extractor runs Stage 1 of the KG pipeline: pure named-entity
@@ -218,7 +226,8 @@ func (e *Extractor) Extract(ctx context.Context, content string) ([]Candidate, *
 		return nil, m, err
 	}
 	if err != nil {
-		return nil, &ExtractMetrics{Model: e.Model}, fmt.Errorf("extractor LLM call failed: %w", err)
+		return nil, &ExtractMetrics{Model: e.Model, Outcome: "llm_" + string(ctxerr.Classify(ctx, err))},
+			fmt.Errorf("extractor LLM call failed: %w", err)
 	}
 	metrics := &ExtractMetrics{
 		Model:            e.Model,
@@ -229,12 +238,14 @@ func (e *Extractor) Extract(ctx context.Context, content string) ([]Candidate, *
 		metrics.Model = resp.Model
 	}
 	if len(resp.Choices) == 0 {
+		metrics.Outcome = ExtractOutcomeNoChoices
 		return nil, metrics, fmt.Errorf("extractor returned no choices")
 	}
 	rawResp := resp.Choices[0].Message.Content
 	raw := stripJSONFence(rawResp)
 	cands, err := parseCandidates(raw)
 	if err != nil {
+		metrics.Outcome = ExtractOutcomeParseError
 		return nil, metrics, fmt.Errorf("extractor JSON parse: %w", err)
 	}
 	if e.Cache != nil && cacheKey != "" {
@@ -329,27 +340,45 @@ func validateCandidates(in []Candidate, content string) []Candidate {
 	out := make([]Candidate, 0, len(in))
 	contentLen := len(content)
 	for _, c := range in {
+		// Model-written text is made storable here, before the resolver, so
+		// the name it matches, the same-chunk dedup key and the stored
+		// canonical_name are one string (LLD §3.3a, GitHub #284). A name of
+		// only NULs and spaces is empty after this and dropped below.
+		c.Type = storableText(c.Type)
 		if !isKnownEntityType(c.Type) {
 			continue
 		}
-		c.Name = strings.TrimSpace(c.Name)
+		c.Name = strings.TrimSpace(storableText(c.Name))
 		if c.Name == "" {
 			continue
 		}
-		if c.CharStart < 0 || c.CharEnd < c.CharStart || c.CharEnd > contentLen {
+		c.Subtype = strings.TrimSpace(storableText(c.Subtype))
+		switch {
+		case c.CharStart < 0 || c.CharEnd < c.CharStart || c.CharEnd > contentLen ||
+			!onRuneBoundary(content, c.CharStart) || !onRuneBoundary(content, c.CharEnd):
 			// Out-of-range offsets — keep the entity and drop the span. The
 			// orchestrator still writes the mention row; only the offsets go.
 			// It used to skip the write entirely for these, which severed the
 			// entity→chunk link that deletion paths rely on to tell a live
 			// entity from a stranded one.
+			//
+			// An offset inside a multi-byte character is out of range in the
+			// same sense (GitHub #284): the prompt asks for byte offsets,
+			// models count characters, and the slice of a clean chunk then
+			// cuts a character in half. Postgres refused that surface and
+			// quarantined 1,760 chunks; SQLite stored the broken bytes. The
+			// span is dropped, not re-anchored: a guessed position is worse
+			// than "position unknown".
 			c.CharStart = 0
 			c.CharEnd = 0
 			c.Surface = ""
-		} else if c.CharEnd > c.CharStart {
-			actual := content[c.CharStart:c.CharEnd]
-			if c.Surface == "" || c.Surface != actual {
-				c.Surface = actual
-			}
+		case c.CharEnd > c.CharStart:
+			c.Surface = storableText(content[c.CharStart:c.CharEnd])
+		default:
+			// No span: the model's own surface only reaches the resolver
+			// prompt (a mention without a span stores none), but it is
+			// model text all the same.
+			c.Surface = storableText(c.Surface)
 		}
 		out = append(out, c)
 	}

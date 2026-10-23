@@ -13,6 +13,7 @@ import (
 	"vornik.io/vornik/internal/playbook"
 	"vornik.io/vornik/internal/registry"
 	"vornik.io/vornik/internal/stepoutcome"
+	"vornik.io/vornik/internal/untrusted"
 )
 
 // gitHEAD returns the current HEAD commit SHA for a git repository at dir.
@@ -1395,12 +1396,25 @@ func buildPlanningPromptWithContext(
 		b.WriteString("=== Conversation thread (most recent last) ===\n")
 		// Cap at last 30 visible messages to bound prompt size;
 		// older content lives in scratchpad summary or in the
-		// thread_summary notes still rendered above.
+		// thread_summary notes rendered in this same loop.
 		start := 0
 		if len(visible) > 30 {
 			start = len(visible) - 30
 		}
+		preludeShown := false
 		for _, m := range visible[start:] {
+			if isThreadSummary(m) {
+				// GitHub #431 (§16.2.3): a summary is model-written text
+				// about other model output; it reaches the lead as data.
+				if !preludeShown {
+					b.WriteString(untrusted.Prelude + "\n")
+					preludeShown = true
+				}
+				fmt.Fprintf(&b, "[%s] %s (%s, thread_summary):\n%s\n",
+					m.CreatedAt.Format("2006-01-02 15:04"), m.AuthorKind, m.MessageKind,
+					untrusted.WrapLabeled("thread_summary", oneLine(m.Content)))
+				continue
+			}
 			fmt.Fprintf(&b, "[%s] %s (%s): %s\n",
 				m.CreatedAt.Format("2006-01-02 15:04"),
 				m.AuthorKind, m.MessageKind, oneLine(m.Content))
@@ -1514,10 +1528,24 @@ func oneLine(s string) string {
 // into a single summary `note`. The `note` itself stays in the
 // rendered thread (so the lead sees what was summarized), while
 // the original messages drop out of the prompt window.
+//
+// GitHub #431 (§16.2.2): only a lead-authored note whose metadata.kind is
+// thread_summary counts, and it hides a message only when that message is in
+// the loaded slice, is agent-authored (lead or role:*), and is no newer than
+// the note. An operator or system message is never hidden, whoever wrote the
+// note and whenever, so a row written before the writer was locked down is
+// neutralised here too.
+// see LLD § https://docs.vornik.io §16.2
 func summarizedMessageIDs(messages []*persistence.TaskMessage) map[string]bool {
+	byID := make(map[string]*persistence.TaskMessage, len(messages))
+	for _, m := range messages {
+		if m != nil {
+			byID[m.ID] = m
+		}
+	}
 	hide := make(map[string]bool)
 	for _, m := range messages {
-		if m == nil || m.MessageKind != persistence.TaskMessageKindNote || len(m.Metadata) == 0 {
+		if !isThreadSummary(m) {
 			continue
 		}
 		var meta struct {
@@ -1527,10 +1555,28 @@ func summarizedMessageIDs(messages []*persistence.TaskMessage) map[string]bool {
 			continue
 		}
 		for _, id := range meta.SummarizedIDs {
+			target := byID[id]
+			if target == nil || target.ID == m.ID || !persistence.TaskMessageAuthorIsAgent(target.AuthorKind) ||
+				target.CreatedAt.After(m.CreatedAt) {
+				continue
+			}
 			hide[id] = true
 		}
 	}
 	return hide
+}
+
+// isThreadSummary reports whether m is a summarize_thread note: lead-authored,
+// kind note, metadata.kind thread_summary (GitHub #431).
+func isThreadSummary(m *persistence.TaskMessage) bool {
+	if m == nil || m.MessageKind != persistence.TaskMessageKindNote ||
+		m.AuthorKind != persistence.TaskMessageAuthorLead || len(m.Metadata) == 0 {
+		return false
+	}
+	var meta struct {
+		Kind string `json:"kind"`
+	}
+	return json.Unmarshal(m.Metadata, &meta) == nil && meta.Kind == "thread_summary"
 }
 
 // planRoleResolution captures the post-validation view of a

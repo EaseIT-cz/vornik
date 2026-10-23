@@ -16,6 +16,7 @@ import (
 	"strings"
 	"testing"
 
+	"vornik.io/vornik/internal/auth"
 	"vornik.io/vornik/internal/persistence"
 	"vornik.io/vornik/internal/persistence/mocks"
 )
@@ -308,11 +309,14 @@ func TestPostTaskMessage_AuthorAndMetadataPassThrough(t *testing.T) {
 		t.Fatalf("inserts: got %d, want 1", len(msgRepo.inserts))
 	}
 	m := msgRepo.inserts[0]
-	if m.AuthorID == nil || *m.AuthorID != "alice" {
-		t.Errorf("authorID: got %v, want alice", m.AuthorID)
+	// GitHub #432: a client authorId is never the author of record. With no
+	// authenticated principal on this request, author_id stays empty and the
+	// value is kept only as the client-supplied label.
+	if m.AuthorID != nil {
+		t.Errorf("authorID: got %q, want nil (no principal; the client value is only a label)", *m.AuthorID)
 	}
-	if string(m.Metadata) == "" {
-		t.Errorf("metadata not passed through: %s", string(m.Metadata))
+	if !strings.Contains(string(m.Metadata), `"a":1`) || !strings.Contains(string(m.Metadata), `"`+ClientSuppliedAuthorKey+`":"alice"`) {
+		t.Errorf("metadata must keep the caller's keys and carry the label: %s", string(m.Metadata))
 	}
 }
 
@@ -708,8 +712,10 @@ func TestCloseTask_HappyPath(t *testing.T) {
 	}
 	var body map[string]any
 	_ = json.NewDecoder(rec.Body).Decode(&body)
-	if body["closedBy"] != "alice" {
-		t.Errorf("closedBy: got %v, want alice", body["closedBy"])
+	// GitHub #432: the closer is never the client's authorId; with no
+	// principal on the request the default stands.
+	if body["closedBy"] != "operator" {
+		t.Errorf("closedBy: got %v, want operator", body["closedBy"])
 	}
 }
 
@@ -771,6 +777,21 @@ func TestCloseTask_InsertError(t *testing.T) {
 
 // --- SummarizeThread --------------------------------------------------
 
+// tcAgentReq authenticates req as the executor's per-task key of tcTaskID:
+// since GitHub #431 the only caller SummarizeThread admits.
+func tcAgentReq(req *http.Request) *http.Request {
+	row := &persistence.APIKey{ID: "key-tc", ProjectID: tcProjectID, Name: persistence.TaskKeyNamePrefix + tcTaskID, CreatedBy: executorKeyCreator}
+	return req.WithContext(context.WithValue(req.Context(), identityKey, &auth.Identity{Extra: map[string]any{auth.ExtraDBKeyRow: row}}))
+}
+
+// tcLeadThread lists m1 and m2 as lead messages of tcTaskID.
+func tcLeadThread(_ context.Context, _ persistence.TaskMessageFilter) ([]*persistence.TaskMessage, error) {
+	return []*persistence.TaskMessage{
+		{ID: "m1", TaskID: tcTaskID, AuthorKind: persistence.TaskMessageAuthorLead},
+		{ID: "m2", TaskID: tcTaskID, AuthorKind: persistence.TaskMessageAuthorLead},
+	}, nil
+}
+
 func TestSummarizeThread_MethodNotAllowed(t *testing.T) {
 	srv := tcServer(&mocks.MockTaskRepository{}, &tcStubMessageRepo{})
 	req := httptest.NewRequest(http.MethodGet, tcURL("/summarize"), nil)
@@ -801,7 +822,7 @@ func TestSummarizeThread_MissingSummary(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, tcURL("/summarize"),
 		strings.NewReader(`{"messageIds":["m1"],"summary":""}`))
 	rec := httptest.NewRecorder()
-	srv.SummarizeThread(rec, req)
+	srv.SummarizeThread(rec, tcAgentReq(req))
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("status: got %d", rec.Code)
 	}
@@ -817,7 +838,7 @@ func TestSummarizeThread_MissingMessageIDs(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, tcURL("/summarize"),
 		strings.NewReader(`{"summary":"x"}`))
 	rec := httptest.NewRecorder()
-	srv.SummarizeThread(rec, req)
+	srv.SummarizeThread(rec, tcAgentReq(req))
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("status: got %d", rec.Code)
 	}
@@ -829,12 +850,12 @@ func TestSummarizeThread_HappyPath_DefaultsLead(t *testing.T) {
 			return tcTask(persistence.TaskStatusRunning), nil
 		},
 	}
-	msgRepo := &tcStubMessageRepo{}
+	msgRepo := &tcStubMessageRepo{listFn: tcLeadThread}
 	srv := tcServer(taskRepo, msgRepo)
 	req := httptest.NewRequest(http.MethodPost, tcURL("/summarize"),
 		strings.NewReader(`{"messageIds":["m1","m2"],"summary":"compressed text"}`))
 	rec := httptest.NewRecorder()
-	srv.SummarizeThread(rec, req)
+	srv.SummarizeThread(rec, tcAgentReq(req))
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status: got %d, body=%s", rec.Code, rec.Body.String())
 	}
@@ -857,6 +878,7 @@ func TestSummarizeThread_InsertError(t *testing.T) {
 		},
 	}
 	msgRepo := &tcStubMessageRepo{
+		listFn: tcLeadThread,
 		insertFn: func(_ context.Context, _ *persistence.TaskMessage) error {
 			return errors.New("insert failed")
 		},
@@ -865,7 +887,7 @@ func TestSummarizeThread_InsertError(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, tcURL("/summarize"),
 		strings.NewReader(`{"messageIds":["m1"],"summary":"x"}`))
 	rec := httptest.NewRecorder()
-	srv.SummarizeThread(rec, req)
+	srv.SummarizeThread(rec, tcAgentReq(req))
 	if rec.Code != http.StatusInternalServerError {
 		t.Fatalf("status: got %d", rec.Code)
 	}

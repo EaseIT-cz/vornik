@@ -308,6 +308,27 @@ var graphReadExempt = map[string]string{
 		"would mint a second, unlinked entity for the same person (design §4.16.7 residual + open question)",
 	"internal/memory/graph/pipeline.go:insertEntityIdempotent": "extraction WRITE path: the unique-key lookup must find " +
 		"the existing (restricted) entity or the insert duplicates it",
+	// GitHub #284: the shared driver-contract suite reads back the rows the
+	// extraction pipeline it drives just wrote. Test harness code (repotest is
+	// imported only by the drivers' tests), no product caller, no restricted
+	// subject in its fixtures.
+	"internal/persistence/repotest/graph_pipeline_text_suite.go:runCutSpanCase": "test harness: driver-contract " +
+		"suite reads back its own extraction writes (GitHub #284)",
+	"internal/persistence/repotest/graph_pipeline_text_suite.go:runNULCase": "test harness: driver-contract " +
+		"suite reads back its own extraction writes (GitHub #284)",
+	// GitHub #419 (knowledge-graph LLD §3.3c): the resolver verifies a model
+	// match_id before the pipeline links the chunk to it. Same write path and
+	// same reason as shortlist: hiding a restricted entity here would mint a
+	// second, unlinked entity for the same person. Nothing read is returned
+	// to a person or a model; the result is a yes/no on the id.
+	"internal/memory/graph/resolver.go:matchIDIsEntity": "extraction WRITE path: verifies a model match_id " +
+		"names an entity of the project before it is linked (GitHub #419)",
+	"internal/persistence/repotest/graph_pipeline_match_suite.go:assertLinksReal": "test harness: driver-contract " +
+		"suite reads back its own extraction writes (GitHub #419)",
+	"internal/persistence/repotest/graph_pipeline_match_suite.go:runDamagedMatchIDCase": "test harness: driver-contract " +
+		"suite reads back its own extraction writes (GitHub #419)",
+	"internal/persistence/repotest/graph_pipeline_match_suite.go:runRealMatchIDOutsideCatalogCase": "test harness: " +
+		"driver-contract suite reads back its own extraction writes (GitHub #419)",
 }
 
 func graphRepoRoot(t *testing.T) string {
@@ -422,8 +443,8 @@ func TestLaw_GraphReadsHonourTheRestriction_EveryCallSiteClassified(t *testing.T
 }
 
 const (
-	pinnedGraphReadSites = 15
-	pinnedGraphReadFuncs = 7
+	pinnedGraphReadSites = 28
+	pinnedGraphReadFuncs = 13
 )
 
 // The sweep's method list is closed, so a NEW read method on a graph repository

@@ -201,6 +201,27 @@ between a deterministic gate and one that fires on noise.
 | `2026.10.1-77-gbb5238eb2` (2026.10.3) | 120 | all 6 | 0.9851 ±0.0000 | 0.9854 ±0.0000 | 0.9958 ±0.0000 | n=3 | `16a79559dd84` |
 | `2026.10.4-171-g2213d297b` (2026.10.5) | 120 | all 6 | 0.9851 ±0.0000 | 0.9854 ±0.0000 | 0.9958 ±0.0000 | n=3 | `d2ffc5b3e11e` |
 | `2026.10.5-535-g3a228c188` (2026.10.6) | 120 | all 6 | 0.9851 ±0.0000 | 0.9854 ±0.0000 | 0.9958 ±0.0000 | n=3 | `496e1e5efb22` |
+| `2026.10.6-439-g67cafb8e9` (2026.10.7) | 120 | all 6 | 0.9851 ±0.0000 | 0.9854 ±0.0000 | 0.9958 ±0.0000 | n=3 | `9d32bf3c9a33` |
+
+**The eleventh row is 2026.10.7's release candidate** (`main` at
+`67cafb8e9`, an enterprise build), measured on 2026-10-23 on the
+memory-benchmark deployment, same embedder
+(`openai/qwen3-embedding:0.6b@1024d`), reranker off, cold corpus: each run
+cleared the store (1,897 chunks, as in every row since 2026.9.7). Every metric
+is identical to 2026.10.6 to four decimal places across three deterministic
+runs, so **no regression**. The key is new (`9d32bf3c9a33`) and the only
+fields that moved are `daemon_revision` and `harness_revision` (checked field
+by field against 2026.10.6's manifest); dataset revision, `max_tokens`, item
+selection and embedder are unchanged. The run was required: the cycle makes
+every recall path honour the repository scope and adds a provenance label to
+each recall hit, read from the store. **What it does NOT show:** the harness
+deposits with class `research` through `remember`, so this cycle's changes to
+how `decision` and `spec` deposits and companion-delegated ingests are
+trusted are not on its path; they are covered by the daemon's own tests on
+both database drivers. The scope change is on its path: each item is
+deposited and recalled under its own repository scope with `strict_scope`,
+so every recall excludes the other items' chunks. The run carries
+`retrieval_path_unverified`, as every row since the third does.
 
 **The tenth row is 2026.10.6's release candidate** (`main` at `3a228c188`,
 an enterprise build), measured on 2026-10-14 on the memory-benchmark
@@ -494,6 +515,7 @@ each is stated:
 | `2026.10.4` | none | No run was taken. The cycle changes no daemon-side ingestion, embedding, retrieval or scoring code: its memory changes are the Hermes plugin's forgetting (0.8.0), which calls the existing correction path from the client, plus tests (one measures a companion note as one chunk); the rest is broker grants, agent administration and approval transport. The axes stand where 2026.10.3's row left them, and 2026.10.5's row measures the tree that includes this cycle. Stated late, with 2026.10.5's, rather than left as a silent gap. |
 | `2026.10.5` | **memory row only** | The memory open axis above, on the release candidate (`2026.10.4-171-g2213d297b`, n=3), identical to 2026.10.3. The cycle changes the companion note ingest path (memory reinstate after a forget, the refute route) and makes recall record each returned result's use, so a waiver was not open to it. No agent row, for the reason stated under 2026.10.1: the arm's model endpoint is still unreachable. |
 | `2026.10.6` | **memory row only** | The memory open axis above, on the release candidate (`2026.10.5-535-g3a228c188`, n=3), identical to 2026.10.5. The cycle makes the Article 18 restriction default-deny on every chunk read and makes recall refuse undeclared arguments, so a waiver was not open to it. This entry records the memory row only; no agent row is published for this release in this table. |
+| `2026.10.7` | **memory row only** | The memory open axis above, on the release candidate (`2026.10.6-439-g67cafb8e9`, n=3), identical to 2026.10.6. The cycle changes the recall paths (repository scope on every path, a provenance label on every hit), so a waiver was not open to it. This entry records the memory row only; no agent row is published for this release in this table. |
 
 A missing row stated as missing is honest. An absent row is not — which is the whole
 reason this section exists.

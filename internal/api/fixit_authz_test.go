@@ -98,7 +98,7 @@ func TestFixItConverseAuthz_DaemonScopeIsAdminClassOnly(t *testing.T) {
 			}{{"project", keys.projectKey}, {"task", keys.taskKey}, {"plain-static", doctorAuthzStaticKey}} {
 				rec := fixItAuthzPost(h, body, tc.key)
 				require.Equalf(t, http.StatusForbidden, rec.Code, "%s: %s", tc.name, rec.Body.String())
-				require.Contains(t, rec.Body.String(), "ADMIN_SCOPE_REQUIRED", tc.name)
+				require.Contains(t, rec.Body.String(), forbiddenCode467(tc.key == keys.taskKey), tc.name)
 			}
 			require.Zero(t, called, "a non-admin caller must never reach Converse")
 			rec := fixItAuthzPost(h, body, doctorAuthzAdminKey)

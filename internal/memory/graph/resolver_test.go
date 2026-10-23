@@ -16,6 +16,10 @@ import (
 type fakeEntityRepo struct {
 	similar []*persistence.KnowledgeEntity
 	listed  []*persistence.KnowledgeEntity
+	// byID answers Get, which the resolver calls to verify a model
+	// match_id outside the catalog it showed (LLD §3.3c, GitHub #419).
+	byID    map[string]*persistence.KnowledgeEntity
+	gets    []string
 	gotProj string
 	gotType string
 }
@@ -23,8 +27,12 @@ type fakeEntityRepo struct {
 func (f *fakeEntityRepo) Insert(context.Context, *persistence.KnowledgeEntity) error {
 	panic("not used")
 }
-func (f *fakeEntityRepo) Get(context.Context, string) (*persistence.KnowledgeEntity, error) {
-	panic("not used")
+func (f *fakeEntityRepo) Get(_ context.Context, id string) (*persistence.KnowledgeEntity, error) {
+	f.gets = append(f.gets, id)
+	if e, ok := f.byID[id]; ok {
+		return e, nil
+	}
+	return nil, persistence.ErrNotFound
 }
 func (f *fakeEntityRepo) GetByCanonical(context.Context, string, string, string) (*persistence.KnowledgeEntity, error) {
 	panic("not used")

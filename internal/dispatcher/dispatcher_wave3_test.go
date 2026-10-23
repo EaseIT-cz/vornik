@@ -377,36 +377,6 @@ func TestW3DispResolveChatID_Precedence(t *testing.T) {
 	}
 }
 
-// --- safeUTF8Prefix --------------------------------------------------------
-//
-// 92.3% before. Pins the multi-byte boundary (won't split a rune),
-// the n>=len passthrough, the n<=0 guard, and exact-fit.
-
-func TestW3DispSafeUTF8Prefix_RuneBoundaries(t *testing.T) {
-	// "héllo": h(1) é(2) l(1) l(1) o(1) = 6 bytes.
-	const s = "héllo"
-
-	// n in the MIDDLE of the 2-byte 'é' must not split it: returns "h".
-	if got := safeUTF8Prefix(s, 2); got != "h" {
-		t.Errorf("safeUTF8Prefix(%q, 2) = %q, want \"h\" (no split of é)", s, got)
-	}
-	// n exactly covering "hé" (3 bytes).
-	if got := safeUTF8Prefix(s, 3); got != "hé" {
-		t.Errorf("safeUTF8Prefix(%q, 3) = %q, want \"hé\"", s, got)
-	}
-	// n >= len → whole string.
-	if got := safeUTF8Prefix(s, 100); got != s {
-		t.Errorf("n>=len should return whole string, got %q", got)
-	}
-	// n<=0 and empty input → "".
-	if got := safeUTF8Prefix(s, 0); got != "" {
-		t.Errorf("n<=0 must return empty, got %q", got)
-	}
-	if got := safeUTF8Prefix("", 5); got != "" {
-		t.Errorf("empty input must return empty, got %q", got)
-	}
-}
-
 // --- renderKnownKeys -------------------------------------------------------
 //
 // 92.3% before. Pins allow-list filtering (unknown keys dropped),

@@ -2,23 +2,43 @@ package ui
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"fmt"
 	"html"
 	"net/http"
+	neturl "net/url"
 	"strings"
 	"time"
 
 	"github.com/rs/zerolog"
 
+	"vornik.io/vornik/internal/integrations"
 	"vornik.io/vornik/internal/mcp"
 	"vornik.io/vornik/internal/mcpauth"
+	"vornik.io/vornik/internal/persistence"
 )
 
 // mcpProbeReachability classifies what an unauthenticated initialize says
-// about an endpoint. Package var so tests can substitute a fake and do no
-// network.
-var mcpProbeReachability = func(ctx context.Context, url string) (mcpauth.ReachabilityVerdict, error) {
-	return mcpauth.ProbeReachability(ctx, nil, url)
+// about an endpoint, over client (the probe's guarded client, GitHub #434).
+// Package var so tests can substitute a fake and do no network.
+var mcpProbeReachability = mcpauth.ProbeReachability
+
+// mcpProbeGuardHint is appended to a dial-guard refusal so the operator knows
+// the refusal is policy, and how to test an internal server deliberately.
+const mcpProbeGuardHint = " The probe does not dial private, loopback or link-local addresses. " +
+	"To test an internal server, list its host under integrations.allowed_hosts in config.yaml."
+
+// probeErrorText renders a connect error for the fragment: capped, with the
+// guard hint when the dial guard refused the target. errors.Is where the wrap
+// chain keeps ErrDialRefused; its fixed message otherwise (the mcp client
+// formats some transport errors with %v).
+func probeErrorText(err error) string {
+	msg := shortenProbeError(err.Error())
+	if isDialRefusal(err) {
+		msg += mcpProbeGuardHint
+	}
+	return msg
 }
 
 // Control-plane hub — MCP-servers tab: pre-commit PROBE (backlog #4
@@ -74,8 +94,8 @@ func (s *Server) AdminControlPlaneMCPProbe(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	// Same secret-literal guard as the add form — don't invite pasting a raw
-	// token into the probe. ${ENV} placeholders pass (and expand at connect
-	// where the daemon env provides them).
+	// token into the probe. ${ENV} placeholders pass; the probe does not
+	// expand them in a URL (the mcp client expands only a stdio server's env).
 	for _, v := range []string{url, command} {
 		if s.hasSecretLiteral(v) {
 			s.renderMCPProbe(w, false, "Use a ${ENV_VAR} placeholder, not a literal secret, in the URL/command.", nil)
@@ -83,12 +103,25 @@ func (s *Server) AdminControlPlaneMCPProbe(w http.ResponseWriter, r *http.Reques
 		}
 	}
 
+	// GitHub #434 (2026-10-21, control-plane hub design §11): both legs dial
+	// through the Integrations Hub probers' guard (private, loopback and
+	// link-local refused after DNS resolution unless the host is listed in
+	// integrations.allowed_hosts), with redirects refused. The URL is
+	// free-form and unsaved, so loopback is not allow-listed by default.
+	guard := s.integrationsDialGuard()
+	// GitHub #465: every probe that gets this far dials, and leaves one
+	// admin_audit row with its outcome (control-plane hub design, "Amendment
+	// 2026-10-21 (#465)"). allowlisted is the guard's own match.
+	audit := probeAudit{transport: transport, target: probeAuditTarget(url), allowlisted: guard.Allows(probeURLHost(url))}
+	defer func() { s.writeMCPProbeAudit(r, audit) }()
 	cfg := mcp.ServerConfig{
-		Name:      "probe",
-		Transport: transport,
-		URL:       url,
-		Command:   command,
+		Name:       "probe",
+		Transport:  transport,
+		URL:        url,
+		Command:    command,
+		HTTPClient: guard.NoRedirectHTTPClient(mcpProbeTimeout),
 	}
+	challengeClient := guard.NoRedirectHTTPClient(mcpChallengeTimeout)
 	// When the operator has already declared this an oauth server, classify
 	// FIRST and skip the connect entirely. That connect carries no
 	// credentials, so it cannot succeed — and against a vendor that holds the
@@ -98,9 +131,10 @@ func (s *Server) AdminControlPlaneMCPProbe(w http.ResponseWriter, r *http.Reques
 	// way versus 15s of hanging followed by the same verdict.
 	if strings.TrimSpace(r.FormValue("auth_mode")) == "oauth" && url != "" {
 		challengeCtx, challengeCancel := context.WithTimeout(r.Context(), mcpChallengeTimeout)
-		verdict, perr := mcpProbeReachability(challengeCtx, url)
+		verdict, perr := mcpProbeReachability(challengeCtx, challengeClient, url)
 		challengeCancel()
 		if perr == nil && verdict == mcpauth.ReachabilityAuthRequired {
+			audit.outcome = "auth_required"
 			s.renderMCPProbeAuthRequired(w)
 			return
 		}
@@ -131,16 +165,21 @@ func (s *Server) AdminControlPlaneMCPProbe(w http.ResponseWriter, r *http.Reques
 		// a disconnected client still cancels it.
 		if url != "" {
 			challengeCtx, challengeCancel := context.WithTimeout(r.Context(), mcpChallengeTimeout)
-			verdict, perr := mcpProbeReachability(challengeCtx, url)
+			verdict, perr := mcpProbeReachability(challengeCtx, challengeClient, url)
 			challengeCancel()
 			if perr == nil && verdict == mcpauth.ReachabilityAuthRequired {
+				audit.outcome = "auth_required"
 				s.renderMCPProbeAuthRequired(w)
 				return
 			}
 		}
+		audit.outcome = "unreachable"
+		if isDialRefusal(err) {
+			audit.outcome = "refused"
+		}
 		// Anything else is a real reachability failure (down, wrong URL, TLS,
 		// or a WAF 403 with no challenge — design §2.2 F3).
-		s.renderMCPProbe(w, false, shortenProbeError(err.Error()), nil)
+		s.renderMCPProbe(w, false, probeErrorText(err), nil)
 		return
 	}
 	tools := client.Tools()
@@ -150,7 +189,78 @@ func (s *Server) AdminControlPlaneMCPProbe(w http.ResponseWriter, r *http.Reques
 	for _, t := range tools {
 		names = append(names, t.Name)
 	}
+	audit.outcome, audit.tools = "reachable", len(names)
 	s.renderMCPProbe(w, true, "", names)
+}
+
+// probeAudit is what one MCP Test probe records (GitHub #465).
+type probeAudit struct {
+	transport   string
+	target      string
+	outcome     string
+	tools       int
+	allowlisted bool
+}
+
+// probeAuditTarget reduces the probed URL to its origin, scheme://host[:port].
+// The path, userinfo, query and fragment can each carry a credential the
+// secret-literal check never sees (it does not fire on a value containing "/"
+// or ":", and every probed URL starts with http:// or https://), so none of
+// them reaches the audit row (review 2f07 finding 2).
+func probeAuditTarget(raw string) string {
+	u, err := neturl.Parse(raw)
+	if err != nil || u.Host == "" || u.Scheme == "" {
+		return "(unparsable)"
+	}
+	return (&neturl.URL{Scheme: u.Scheme, Host: u.Host}).String()
+}
+
+// probeURLHost is the probed URL's hostname as the dial guard sees it.
+func probeURLHost(raw string) string {
+	u, err := neturl.Parse(raw)
+	if err != nil {
+		return ""
+	}
+	return u.Hostname()
+}
+
+// isDialRefusal recognises the dial guard's refusal the way probeErrorText
+// does: errors.Is where the wrap chain keeps it, its fixed message otherwise.
+func isDialRefusal(err error) bool {
+	return errors.Is(err, integrations.ErrDialRefused) || strings.Contains(err.Error(), integrations.ErrDialRefused.Error())
+}
+
+// writeMCPProbeAudit writes the probe's admin_audit row. Best-effort like its
+// siblings (writeProjectSaveAudit): a failed insert is logged and does not
+// change the fragment. The insert outlives a client that disconnected.
+func (s *Server) writeMCPProbeAudit(r *http.Request, a probeAudit) {
+	if s.adminAuditRepo == nil || a.outcome == "" {
+		return
+	}
+	principal := adminPrincipal(r)
+	if principal == "" || principal == "unknown" {
+		principal = "ui-admin"
+	}
+	after, err := json.Marshal(struct {
+		Transport   string `json:"transport"`
+		Outcome     string `json:"outcome"`
+		Tools       int    `json:"tools"`
+		Allowlisted bool   `json:"allowlisted"`
+	}{a.transport, a.outcome, a.tools, a.allowlisted})
+	if err != nil {
+		return
+	}
+	if err := s.adminAuditRepo.Insert(context.WithoutCancel(r.Context()), &persistence.AdminAuditEntry{
+		Principal: principal,
+		Source:    "ui",
+		Action:    "control_plane.mcp.probe",
+		Target:    a.target,
+		After:     string(after),
+		IP:        clientIP(r),
+		UserAgent: r.UserAgent(),
+	}); err != nil {
+		s.logger.Warn().Err(err).Msg("mcp probe: admin audit insert failed")
+	}
 }
 
 // renderMCPProbeAuthRequired reports a server that is reachable and correctly

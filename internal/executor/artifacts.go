@@ -699,6 +699,68 @@ func (e *Executor) recordLLMUsageFromResult(ctx context.Context, task *persisten
 	}
 }
 
+// watchdogFailedStuck reports whether the execution row says the watchdog
+// failed it as stuck: FAILED with error_code STUCK_EXECUTION, a code only the
+// watchdog writes and retry-from-step clears. A read error answers false (fail
+// open: record as before).
+func (e *Executor) watchdogFailedStuck(ctx context.Context, executionID string) bool {
+	if e.execRepo == nil || executionID == "" {
+		return false
+	}
+	ex, err := e.execRepo.Get(ctx, executionID)
+	if err != nil || ex == nil {
+		return false
+	}
+	return ex.Status == persistence.ExecutionStatusFailed && ex.ErrorCode != nil &&
+		*ex.ErrorCode == persistence.TaskFailureClassStuckExecution
+}
+
+// watchdogOwnsStepRows is the executor's half of the stuck-step duplicate
+// guard (outcome-quality-design §S8.8, GitHub #369). Once the watchdog has
+// failed an execution as stuck, its stuck_execution row is the record of the
+// step that hung, and a row the executor would write afterwards (the step
+// returning because the teardown stopped it) would sit beside it calling the
+// hang a cancel. Reports true, logged and counted, when the row must not be
+// written. Ordered for the teardown case: the watchdog's execution write
+// commits before it asks for the stop that makes the step return.
+func (e *Executor) watchdogOwnsStepRows(ctx context.Context, executionID, stepID, outcome, errorClass string) bool {
+	if !e.watchdogFailedStuck(ctx, executionID) {
+		return false
+	}
+	e.logger.Info().
+		Str("execution_id", executionID).
+		Str("step", stepID).
+		Str("outcome", outcome).
+		Str("error_class", errorClass).
+		Msg("step outcome: not recorded, the watchdog failed this execution as stuck and its row records the step")
+	if e.metrics != nil && e.metrics.StepOutcomeAfterWatchdogTotal != nil {
+		e.metrics.StepOutcomeAfterWatchdogTotal.WithLabelValues("before_insert").Inc()
+	}
+	return true
+}
+
+// recordOutcomeRow inserts one step-outcome row and then checks, once, whether
+// the watchdog failed the execution as stuck between the guard's read and the
+// insert. That interleaving is the guard's stated residual (§S8.8): the step
+// may now have two rows, so it is logged at Warn and counted after_insert, an
+// upper bound (the watchdog may have found this row and written none).
+func (e *Executor) recordOutcomeRow(ctx context.Context, row *persistence.ExecutionStepOutcome) error {
+	if err := e.outcomeRepo.Record(ctx, row); err != nil {
+		return err
+	}
+	if e.watchdogFailedStuck(ctx, row.ExecutionID) {
+		e.logger.Warn().
+			Str("execution_id", row.ExecutionID).
+			Str("step", row.StepID).
+			Str("outcome", row.Outcome).
+			Msg("step outcome: possible duplicate step-outcome row, the watchdog failed this execution as stuck while the row was being written")
+		if e.metrics != nil && e.metrics.StepOutcomeAfterWatchdogTotal != nil {
+			e.metrics.StepOutcomeAfterWatchdogTotal.WithLabelValues("after_insert").Inc()
+		}
+	}
+	return nil
+}
+
 // recordStepOutcome persists an outcome row for a completed step.
 // Outcome="pending_validation" (the common case) is expected to be
 // finalized by the next step's consumer; the finalization paths live
@@ -889,7 +951,10 @@ func (e *Executor) recordStepOutcomeWithSignalsAndBudget(
 	entry.PromptHashes = e.persistStepPrompt(ctx, execution.ID, stepID, budget.StepPrompt)
 	io := e.persistStepIO(ctx, execution.ID, stepID, budget.StepIO)
 	entry.PromptHashes.Input, entry.PromptHashes.Result = io.Input, io.Result
-	if err := e.outcomeRepo.Record(ctx, entry); err != nil {
+	if e.watchdogOwnsStepRows(ctx, execution.ID, stepID, outcome, errorClass) {
+		return
+	}
+	if err := e.recordOutcomeRow(ctx, entry); err != nil {
 		e.logger.Warn().Err(err).
 			Str("execution_id", execution.ID).
 			Str("step", stepID).

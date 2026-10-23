@@ -34,6 +34,10 @@ func (f *fakeChunkGraph) PendingCount(context.Context) (int, error) { return 0, 
 func (f *fakeChunkGraph) Stats(context.Context) (*persistence.KGStats, error) {
 	return f.stats, nil
 }
+func (f *fakeChunkGraph) ReflagQuarantinedChunks(context.Context, string, string, bool) ([]persistence.QuarantineReflagCount, error) {
+	return nil, nil
+}
+
 func (f *fakeChunkGraph) ReflagChunksMissingEdges(context.Context, string, bool) (int, error) {
 	return 0, nil
 }

@@ -266,7 +266,10 @@ func (s *Server) ExecutionDetail(w http.ResponseWriter, r *http.Request) {
 		// executions and legacy free-form runs leave Routing nil
 		// and the panel doesn't render.
 		if exec.WorkflowID == "adaptive" && len(exec.Result) > 0 {
-			data.Routing = parseRoutingDecision(exec.Result)
+			// GitHub #496: the reason is text from the stored result, so
+			// it is parsed from the caller's view of it (a denied
+			// caller's view is a JSON string, so no panel renders).
+			data.Routing = parseRoutingDecision(s.resultViewFor(r)(exec.Result))
 			// Look up the child task to render a link from the
 			// parent's page. GetChildren returns []Task; for
 			// strict-adaptive we expect exactly one child (the
@@ -336,6 +339,7 @@ func (s *Server) ExecutionDetail(w http.ResponseWriter, r *http.Request) {
 				data.Outcomes = make([]StepOutcomeRow, 0, len(rows))
 				data.OutcomeByStep = make(map[string]StepOutcomeRow, len(rows))
 				data.StepColorByID = make(map[string]string, len(rows))
+				detailView := s.errorTextOrRaw(r) // GitHub #466: error_detail as the caller may read it
 				for _, o := range rows {
 					row := StepOutcomeRow{
 						StepID:      o.StepID,
@@ -343,7 +347,7 @@ func (s *Server) ExecutionDetail(w http.ResponseWriter, r *http.Request) {
 						Model:       o.Model,
 						Outcome:     o.Outcome,
 						ErrorClass:  o.ErrorClass,
-						ErrorDetail: o.ErrorDetail,
+						ErrorDetail: detailView(o.ErrorDetail),
 					}
 					if o.PromptHashes != (persistence.StepPromptHashes{}) {
 						row.PromptURL = "/api/v1/executions/" + url.PathEscape(o.ExecutionID) + "/steps/" + url.PathEscape(o.StepID) + "/prompt"
@@ -391,6 +395,11 @@ func (s *Server) ExecutionDetail(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// GitHub #466 D4: a caller that is not admin-class reads the execution's
+	// error text scrubbed, from a copy.
+	if view := s.errorTextFor(r); view != nil {
+		data.Execution = scrubbedExecution(data.Execution, view, s.resultViewFor(r)) // #496: the result too
+	}
 	s.render(w, "execution.html", data)
 }
 

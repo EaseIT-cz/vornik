@@ -50,12 +50,12 @@ out="$(run 2026.10.2)"; rc=$?
 [ "$rc" -eq 0 ] && git -C "$TMP/ce.git" rev-parse -q --verify refs/tags/2026.10.2 >/dev/null \
   && ok "the tag is pushed" || bad "the tag was not pushed (rc=$rc): $out"
 grep -q "$SECRET" "$TMP/.vornik-public-clone/.git/config" && bad "the token was written to .git/config" || ok "the token is not in .git/config"
-printf '%s' "$out" | grep -q "$SECRET" && bad "the token appeared in the output" || ok "the token is not in the output"
+grep -q "$SECRET" <<<"$out" && bad "the token appeared in the output" || ok "the token is not in the output"
 
 grep -qx "verify $EE_SHA" "$TMP/stub.log" && ok "the tag re-verifies the sync commit's Source-Commit" || bad "stub not asked about $EE_SHA: $(cat "$TMP/stub.log" 2>/dev/null)"
 
 out="$(run 2026.10.2)"; rc=$?
-[ "$rc" -eq 0 ] && printf '%s' "$out" | grep -q "already exists" && ok "a re-run leaves an existing tag" || bad "a re-run did not leave the tag (rc=$rc): $out"
+[ "$rc" -eq 0 ] && grep -q "already exists" <<<"$out" && ok "a re-run leaves an existing tag" || bad "a re-run did not leave the tag (rc=$rc): $out"
 
 ( cd "$TMP/.vornik-public-clone" && git -c user.email=t@e -c user.name=t commit -q --allow-empty -m next )
 before="$(git -C "$TMP/ce.git" rev-parse refs/tags/2026.10.2)"
@@ -67,7 +67,7 @@ run 2026.10.2 >/dev/null
 # gate stamp, so it must not receive a release tag.
 out="$(run 2026.10.3)"; rc=$?
 [ "$rc" -ne 0 ] && ! git -C "$TMP/ce.git" rev-parse -q --verify refs/tags/2026.10.3 >/dev/null \
-  && printf '%s' "$out" | grep -q "not a sync commit" \
+  && grep -q "not a sync commit" <<<"$out" \
   && ok "a HEAD that is not a sync commit is not tagged" || bad "a non-sync HEAD was tagged (rc=$rc): $out"
 
 # security review 2026-10-12: a sync commit is tagged only when its
@@ -82,7 +82,7 @@ out="$(STUB_MODE=silent run 2026.10.4)"; rc=$?
   && ok "a verifier that prints no evidence does not let a tag through" || bad "silent verifier tagged (rc=$rc): $out"
 ( cd "$TMP/.vornik-public-clone" && git -c user.email=t@e -c user.name=t commit -q --allow-empty -m "sync: export CE from vornik-enterprise@abcdef1" )
 out="$(run 2026.10.5)"; rc=$?
-[ "$rc" -ne 0 ] && ! git -C "$TMP/ce.git" rev-parse -q --verify refs/tags/2026.10.5 >/dev/null && printf '%s' "$out" | grep -q "Source-Commit" \
+[ "$rc" -ne 0 ] && ! git -C "$TMP/ce.git" rev-parse -q --verify refs/tags/2026.10.5 >/dev/null && grep -q "Source-Commit" <<<"$out" \
   && ok "a sync commit without a Source-Commit trailer is not tagged" || bad "trailer-less sync commit tagged (rc=$rc): $out"
 
 ( cd "$TMP/.vornik-public-clone" && git -c user.email=t@e -c user.name=t commit -q --allow-empty -m "$SYNC_MSG" )

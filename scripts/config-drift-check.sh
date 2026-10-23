@@ -94,7 +94,7 @@ if [ "${1:-}" = "--missed-template-changes" ]; then
 			| grep -vE '^(#|$)' || true)"
 		[ -n "$behaviour" ] || continue
 		missed=$((missed + 1))
-		if printf '%s\n' "$acked" | grep -qxF "$rel"; then
+		if grep -qxF "$rel" <<<"$acked"; then
 			echo "ACKNOWLEDGED: $rel carries template changes deliberately not deployed"
 			continue
 		fi

@@ -138,6 +138,7 @@ func TestGatherEvidence_AssemblesAllSections(t *testing.T) {
 	execTime := time.Now()
 	errBody := "execution exploded"
 	exp := &Explainer{
+		Scrub: passScrub, // GitHub #439: Generate requires a scrubber
 		Executions: &fakeExecutions{exec: &persistence.Execution{
 			ID:             "exec-1",
 			Status:         persistence.ExecutionStatusFailed,
@@ -178,6 +179,7 @@ func TestGatherEvidence_AssemblesAllSections(t *testing.T) {
 func TestGatherEvidence_HandlesEmptySources(t *testing.T) {
 	task := &persistence.Task{ID: "t-empty", ProjectID: "p"}
 	exp := &Explainer{
+		Scrub:      passScrub,                                       // GitHub #439: Generate requires a scrubber
 		Executions: &fakeExecutions{},                               // no execution
 		Outcomes:   &fakeOutcomes{err: errors.New("outcomes down")}, // error swallowed
 		Audits:     &fakeAudits{err: errors.New("audits down")},     // error swallowed
@@ -201,6 +203,7 @@ func TestGatherEvidence_EvidenceCapTruncates(t *testing.T) {
 		Payload:   []byte(`{"taskType":"x","context":{"prompt":"` + strings.Repeat("A", 2000) + `"}}`),
 	}
 	exp := &Explainer{
+		Scrub:            passScrub, // GitHub #439: Generate requires a scrubber
 		MaxEvidenceBytes: 200,
 		Logger:           zerolog.Nop(),
 	}

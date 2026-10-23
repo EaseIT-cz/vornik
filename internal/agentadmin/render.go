@@ -124,13 +124,18 @@ func (r *Renderer) Render(st *State, verb string, input json.RawMessage) (Change
 	}
 	c.Verb, c.Namespace = verb, ns
 	if lock := firstLocked(st, c.Locks); lock != "" {
+		var locked Change
 		if by := st.LockedBy[lock]; by != "" {
 			if done, ok := credentialAlreadyRequested(verb, ns, lock, by, &c); ok {
 				return done, nil
 			}
-			return refuse(verb, ns, "%s is part of a change waiting for approval, request %s; approve or reject that one first", lock, by), nil
+			locked = refuse(verb, ns, "%s is part of a change waiting for approval, request %s; approve or reject that one first", lock, by)
+			locked.LockedByRequest, _, _ = strings.Cut(by, " (") // "<id> (<kind>)", lockPending's form
+		} else {
+			locked = refuse(verb, ns, "%s is part of a change waiting for approval; approve or reject that one first", lock)
 		}
-		return refuse(verb, ns, "%s is part of a change waiting for approval; approve or reject that one first", lock), nil
+		locked.LockedOn = lock // design §19.15 item 1 (GitHub #409)
+		return locked, nil
 	}
 	c.Plain = explain(st, &c)
 	if err := attachRendered(&c, input); err != nil {

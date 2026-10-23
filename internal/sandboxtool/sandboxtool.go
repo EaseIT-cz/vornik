@@ -790,26 +790,29 @@ func copyCapped(src, dst string, limit int64) error {
 
 // argv is the one fixed shape every sandbox one-shot takes (§7.2).
 func (r *Runner) argv(spec Spec, name, inDir, outDir string) []string {
-	mem := strconv.FormatInt(r.Memory(spec.Feature), 10)
 	args := []string{
 		"run", "--name", name, "--label", RunLabel + "=" + r.scope,
 		"--network=none", "--pull=never", "--userns=keep-id",
 		"--cap-drop=ALL", "--security-opt=no-new-privileges",
 		"--read-only", "--tmpfs", "/tmp:rw,size=256m",
-		"--memory=" + mem, "--memory-swap=" + mem,
-		"--pids-limit=64", "--cpus=" + r.CPUs(spec.Feature),
+	}
+	// --memory=N --memory-swap=N (no swap), from the one builder the runtime
+	// manager shares (runtime-manager design 08, "Change 2026-10-17", #379).
+	args = append(args, spawn.MemoryLimitFlags(r.Memory(spec.Feature))...)
+	args = append(args,
+		"--pids-limit=64", "--cpus="+r.CPUs(spec.Feature),
 		// No single file may outgrow the feature's output cap; the kernel
 		// refuses the write (S5b review residual R1).
-		"--ulimit", "fsize=" + strconv.FormatInt(r.MaxOutput(spec.Feature), 10),
+		"--ulimit", "fsize="+strconv.FormatInt(r.MaxOutput(spec.Feature), 10),
 		// A read-only root has no writable home; tools that cache (fontconfig
 		// under weasyprint) get /tmp.
 		"-e", "HOME=/tmp", "-e", "XDG_CACHE_HOME=/tmp",
 		// OpenMP (tesseract) sizes its pool by the host's cores; cap it to
 		// the CPU share so its threads fit the pids bound.
-		"-e", "OMP_THREAD_LIMIT=" + threadLimit(r.CPUs(spec.Feature)),
-		"-v", inDir + ":/in:ro,Z",
-		"-v", outDir + ":/out:Z",
-	}
+		"-e", "OMP_THREAD_LIMIT="+threadLimit(r.CPUs(spec.Feature)),
+		"-v", inDir+":/in:ro,Z",
+		"-v", outDir+":/out:Z",
+	)
 	if spec.ModelDir != "" {
 		args = append(args, "-v", spec.ModelDir+":/models:ro,Z")
 	}

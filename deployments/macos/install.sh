@@ -43,7 +43,7 @@ die()  { printf '%s xx%s %s\n' "$c_red"    "$c_off" "$*" >&2; exit 1; }
 # this name, in any state. Re-running install.sh must reuse it rather than
 # create a duplicate.
 vm_exists() {
-  limactl list --format '{{.Name}}' 2>/dev/null | grep -qx "$1"
+  limactl list --format '{{.Name}}' 2>/dev/null | grep -x "$1" >/dev/null
 }
 
 # pick_arch — map the mac host's `uname -m` to the guest image arch. Guest
@@ -88,7 +88,7 @@ HTTP_PORT="${VORNIK_HTTP_PORT:-8080}"
 VM_CPUS="${VORNIK_VM_CPUS:-4}"
 VM_MEM="${VORNIK_VM_MEM:-8GiB}"
 VM_DISK="${VORNIK_VM_DISK:-60GiB}"
-REF="${VORNIK_REF:-2026.10.6}"
+REF="${VORNIK_REF:-2026.10.7}"
 QUICKSTART_URL="${VORNIK_QUICKSTART_URL:-https://raw.githubusercontent.com/EaseIT-cz/vornik/${REF}/deployments/podman/quickstart.sh}"
 QUICKSTART_SHA256_URL="${VORNIK_QUICKSTART_SHA256_URL:-${QUICKSTART_URL}.sha256}"
 SHIM_BIN_DIR="${VORNIK_SHIM_BIN_DIR:-$HOME/.local/bin}"

@@ -222,7 +222,8 @@ func TestPalette_ControlBorderNonTextContrast(t *testing.T) {
 			t.Logf("%s: control-border vs %s = %.2f:1", name, bn, got)
 		}
 	}
-	if !strings.Contains(src, "control: 'rgb(var(--control-border) / <alpha-value>)'") {
+	// The Tailwind config moved out of pageHead into internal/ui/tailwind (#165).
+	if !strings.Contains(tailwindConfigSource(t), "control: 'rgb(var(--control-border) / <alpha-value>)'") {
 		t.Error("Tailwind config does not register the `control` colour, so border-control does not resolve")
 	}
 }

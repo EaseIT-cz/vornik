@@ -56,3 +56,23 @@ func ProjectOverrides(pr registry.ProjectRetention) Policy {
 		MemoryEvictionAuditDays:   pr.MemoryEvictionAuditDays,
 	}
 }
+
+// GlobalFromConfig is the one mapping from the `retention:` block to the
+// global sweep's horizons and the upgrade-dump policy (GitHub #394, design
+// 2026-10-12-tool-audit-retention-floor §8.2.4), shared by the daemon
+// sweeper, `vornikctl retention upgrade-dumps` and the upgrade_dumps doctor
+// check. ConfigApplyJournalDays has no config key and stays at its default.
+// TestGlobalFromConfig_CopiesEveryKey guards it.
+func GlobalFromConfig(rc config.RetentionConfig) (GlobalPolicy, UpgradeDumpPolicy) {
+	return GlobalPolicy{
+			ResponseCacheDays:      rc.ResponseCacheDays,
+			EmbeddingCacheDays:     rc.EmbeddingCacheDays,
+			ExecutionRatingsDays:   rc.ExecutionRatingsDays,
+			BlackboxTraceCacheDays: rc.BlackboxTraceCacheDays,
+			ProjectGistsDays:       rc.ProjectGistsDays,
+		}, UpgradeDumpPolicy{
+			Root:      rc.UpgradeDumpDir,
+			Keep:      rc.UpgradeDumpKeep,
+			GraceDays: rc.UpgradeDumpGraceDays,
+		}
+}

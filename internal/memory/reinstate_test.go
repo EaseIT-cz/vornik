@@ -26,7 +26,7 @@ func TestMarkRefutedByIDs_RecordsRoute(t *testing.T) {
 	repo := NewRepository(db)
 	mock.ExpectExec(regexp.QuoteMeta("SET validation_status = 'refuted',")+
 		`\s+`+regexp.QuoteMeta("refute_route = NULLIF($2, '')")).
-		WithArgs("family", RefuteRouteMirrorForget, "chunk_1").
+		WithArgs("family", RefuteRouteMirrorForget, ValidatorRoleProvenance, "chunk_1").
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	n, err := repo.MarkRefutedByIDs(context.Background(), "family", []string{"chunk_1"}, RefuteRouteMirrorForget)
 	if err != nil || n != 1 {
@@ -180,7 +180,7 @@ func TestCorrector_RefuteByIDs_RecordsTheRoute(t *testing.T) {
 		}
 		c := NewCorrector(NewRepository(db), nil)
 		mock.ExpectExec(regexp.QuoteMeta("SET validation_status = 'refuted'")).
-			WithArgs("p", want, "c1").WillReturnResult(sqlmock.NewResult(0, 1))
+			WithArgs("p", want, sparedValidator(want), "c1").WillReturnResult(sqlmock.NewResult(0, 1))
 		if n, err := c.RefuteByIDs(context.Background(), "p", []string{"c1"}, route); err != nil || n != 1 {
 			t.Fatalf("route %q: n=%d err=%v", route, n, err)
 		}
@@ -203,17 +203,18 @@ func TestMarkRefutedByIDs_OneStatementStrictestRouteWins(t *testing.T) {
 	stmt := regexp.QuoteMeta(`SET validation_status = 'refuted',
 		    refute_route = NULLIF($2, '')
 		WHERE project_id = $1
-		  AND id IN ($3)
+		  AND id IN ($4)
+		  AND NOT ($3 <> '' AND validation_status = 'verified' AND COALESCE(validator_role, '') = $3)
 		  AND (validation_status NOT IN ('refuted', 'superseded')
 		       OR (validation_status = 'refuted'
 		           AND refute_route = 'mirror_forget'
 		           AND $2 <> 'mirror_forget'))`)
-	for _, route := range []string{RefuteRouteMemoryCorrect, RefuteRouteMirrorForget, ""} {
+	for _, route := range []string{RefuteRouteMemoryCorrect, RefuteRouteMirrorForget, "", RefuteRouteForgetCommand} {
 		db, mock, err := sqlmock.New()
 		if err != nil {
 			t.Fatal(err)
 		}
-		mock.ExpectExec(stmt).WithArgs("p", route, "c1").WillReturnResult(sqlmock.NewResult(0, 1))
+		mock.ExpectExec(stmt).WithArgs("p", route, sparedValidator(route), "c1").WillReturnResult(sqlmock.NewResult(0, 1))
 		n, err := NewRepository(db).MarkRefutedByIDs(context.Background(), "p", []string{"c1"}, route)
 		if err != nil || n != 1 {
 			t.Fatalf("route %q: n=%d err=%v", route, n, err)
@@ -255,5 +256,26 @@ func TestIngestCompanionNote_ReinstateAfterRedactAuditsNoGateFailed(t *testing.T
 	}
 	if len(events) != 1 || events[0].Decision != "admitted" || events[0].GateFailed != "" || events[0].ReinstatedChunkID != "chunk_old" {
 		t.Fatalf("audit = %+v", events)
+	}
+}
+
+// sparedValidator is the validator a by-id refute on this route spares: a
+// forget spares nothing, every other route spares a provenance-verified
+// chunk (design review 565b F1).
+func sparedValidator(route string) string {
+	if isForgetRoute(route) {
+		return ""
+	}
+	return ValidatorRoleProvenance
+}
+
+func TestIsForgetRoute(t *testing.T) {
+	for route, want := range map[string]bool{
+		RefuteRouteForgetCommand: true, RefuteRouteChatForget: true, RefuteRouteDeviceForget: true,
+		RefuteRouteMemoryCorrect: false, RefuteRouteMirrorForget: false, "": false,
+	} {
+		if isForgetRoute(route) != want {
+			t.Errorf("isForgetRoute(%q) = %v, want %v", route, !want, want)
+		}
 	}
 }

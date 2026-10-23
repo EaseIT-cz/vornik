@@ -130,6 +130,10 @@ type Service struct {
 	memory MemoryView
 	// connectors backs the connector pages (GitHub #314; connectors.go).
 	connectors ConnectorPages
+	// withheldTools lists the agent read tools the daemon suspended because
+	// their server now says they change things (agent-administered design
+	// §6.5 item 6, GitHub #413); nil shows none.
+	withheldTools func(ctx context.Context) []string
 	// withdrawable are the kinds the daemon may withdraw (design §9.2d).
 	withdrawable map[string]bool
 	// choices are the registered choice kinds (choice_kind.go, GitHub #302).

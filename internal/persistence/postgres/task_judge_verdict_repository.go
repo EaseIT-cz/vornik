@@ -52,10 +52,11 @@ func (r *TaskJudgeVerdictRepository) Record(ctx context.Context, v *persistence.
 	_, err := r.db.ExecContext(ctx, `
 		INSERT INTO task_judge_verdicts (
 		    id, project_id, task_id, role, model, verdict,
-		    confidence, signals, summary, cost_usd, recorded_at
-		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
+		    confidence, signals, summary, cost_usd, recorded_at, failure_class
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)`,
 		v.ID, v.ProjectID, v.TaskID, v.Role, v.Model, v.Verdict,
 		v.Confidence, nullableJSONB(v.Signals), v.Summary, v.CostUSD, recordedAt,
+		nullableStringIfEmpty(v.FailureClass),
 	)
 	return mapDBError(err)
 }
@@ -65,20 +66,22 @@ func (r *TaskJudgeVerdictRepository) Record(ctx context.Context, v *persistence.
 func (r *TaskJudgeVerdictRepository) GetByTask(ctx context.Context, taskID string) (*persistence.TaskJudgeVerdict, error) {
 	row := r.db.QueryRowContext(ctx, `
 		SELECT id, project_id, task_id, role, model, verdict,
-		       confidence, signals, summary, cost_usd, recorded_at
+		       confidence, signals, summary, cost_usd, recorded_at, failure_class
 		FROM task_judge_verdicts WHERE task_id = $1
 		ORDER BY recorded_at DESC LIMIT 1`, taskID)
 	v := &persistence.TaskJudgeVerdict{}
 	var signals []byte
+	var failureClass sql.NullString
 	if err := row.Scan(
 		&v.ID, &v.ProjectID, &v.TaskID, &v.Role, &v.Model, &v.Verdict,
-		&v.Confidence, &signals, &v.Summary, &v.CostUSD, &v.RecordedAt,
+		&v.Confidence, &signals, &v.Summary, &v.CostUSD, &v.RecordedAt, &failureClass,
 	); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, persistence.ErrNotFound
 		}
 		return nil, mapDBError(err)
 	}
+	v.FailureClass = failureClass.String
 	if len(signals) > 0 {
 		v.Signals = signals
 	}
@@ -97,7 +100,7 @@ func (r *TaskJudgeVerdictRepository) ListRecentSince(ctx context.Context, projec
 	}
 	query := `
 		SELECT id, project_id, task_id, role, model, verdict,
-		       confidence, signals, summary, cost_usd, recorded_at
+		       confidence, signals, summary, cost_usd, recorded_at, failure_class
 		FROM task_judge_verdicts
 		WHERE recorded_at >= $1`
 	args := []any{since}
@@ -119,12 +122,14 @@ func (r *TaskJudgeVerdictRepository) ListRecentSince(ctx context.Context, projec
 	for rows.Next() {
 		v := &persistence.TaskJudgeVerdict{}
 		var signals []byte
+		var failureClass sql.NullString
 		if err := rows.Scan(
 			&v.ID, &v.ProjectID, &v.TaskID, &v.Role, &v.Model, &v.Verdict,
-			&v.Confidence, &signals, &v.Summary, &v.CostUSD, &v.RecordedAt,
+			&v.Confidence, &signals, &v.Summary, &v.CostUSD, &v.RecordedAt, &failureClass,
 		); err != nil {
 			return nil, err
 		}
+		v.FailureClass = failureClass.String
 		if len(signals) > 0 {
 			v.Signals = signals
 		}
@@ -139,7 +144,7 @@ func (r *TaskJudgeVerdictRepository) ListRecent(ctx context.Context, projectID s
 	}
 	query := `
 		SELECT id, project_id, task_id, role, model, verdict,
-		       confidence, signals, summary, cost_usd, recorded_at
+		       confidence, signals, summary, cost_usd, recorded_at, failure_class
 		FROM task_judge_verdicts`
 	args := make([]any, 0, 2)
 	if projectID != "" {
@@ -164,12 +169,14 @@ func (r *TaskJudgeVerdictRepository) ListRecent(ctx context.Context, projectID s
 	for rows.Next() {
 		v := &persistence.TaskJudgeVerdict{}
 		var signals []byte
+		var failureClass sql.NullString
 		if err := rows.Scan(
 			&v.ID, &v.ProjectID, &v.TaskID, &v.Role, &v.Model, &v.Verdict,
-			&v.Confidence, &signals, &v.Summary, &v.CostUSD, &v.RecordedAt,
+			&v.Confidence, &signals, &v.Summary, &v.CostUSD, &v.RecordedAt, &failureClass,
 		); err != nil {
 			return nil, err
 		}
+		v.FailureClass = failureClass.String
 		if len(signals) > 0 {
 			v.Signals = signals
 		}

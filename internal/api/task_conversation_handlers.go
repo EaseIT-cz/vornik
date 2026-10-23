@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
 	"errors"
@@ -9,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"vornik.io/vornik/internal/auditredact"
 	"vornik.io/vornik/internal/budget"
 	"vornik.io/vornik/internal/executor"
 	"vornik.io/vornik/internal/persistence"
@@ -164,6 +166,9 @@ func (s *Server) PostTaskMessage(w http.ResponseWriter, r *http.Request) {
 		respondError(w, http.StatusServiceUnavailable, "TASK_LIFECYCLE_DISABLED", reason)
 		return
 	}
+	if refuseAgentTaskKey(w, r) { // §17.6, GitHub #463
+		return
+	}
 	task, _, taskID := s.taskFromRequest(w, r)
 	if task == nil {
 		return
@@ -187,9 +192,10 @@ func (s *Server) PostTaskMessage(w http.ResponseWriter, r *http.Request) {
 		respondError(w, http.StatusBadRequest, "VALIDATION_ERROR", "content required")
 		return
 	}
-	if len(req.Content) > maxMessageContentBytes {
-		req.Content = req.Content[:maxMessageContentBytes]
-	}
+	// The cap comes before the redaction seam scans, so it must not hand the
+	// seam the head of a credential whose tail it cut, nor split a rune
+	// (chat-audit retention and redaction design §9.2.5, GitHub #395).
+	req.Content = auditredact.CutBeforeScan(req.Content, maxMessageContentBytes)
 
 	msg := &persistence.TaskMessage{
 		TaskID:      taskID,
@@ -198,11 +204,19 @@ func (s *Server) PostTaskMessage(w http.ResponseWriter, r *http.Request) {
 		Content:     req.Content,
 		CreatedAt:   time.Now().UTC(),
 	}
-	if req.AuthorID != "" {
-		msg.AuthorID = &req.AuthorID
+	// The server names the author; the caller's authorId is only a bounded
+	// label in metadata (task-lifecycle design §17, GitHub #432).
+	principal, label := TaskMessageAuthor(r.Context(), req.AuthorID)
+	if principal != "" {
+		msg.AuthorID = &principal
 	}
-	if len(req.Metadata) > 0 {
-		msg.Metadata = []byte(req.Metadata)
+	meta, err := WithClientAuthorLabel([]byte(req.Metadata), label)
+	if err != nil {
+		respondError(w, http.StatusBadRequest, "VALIDATION_ERROR", err.Error())
+		return
+	}
+	if len(meta) > 0 {
+		msg.Metadata = meta
 	}
 	if err := s.taskMessageRepo.Insert(r.Context(), msg); err != nil {
 		s.logger.Error().Err(err).Str("taskId", taskID).Msg("PostTaskMessage: insert failed")
@@ -292,6 +306,9 @@ func (s *Server) AnswerCheckpoint(w http.ResponseWriter, r *http.Request) {
 	}
 	if reason, ok := s.taskConversationReady(); !ok {
 		respondError(w, http.StatusServiceUnavailable, "TASK_LIFECYCLE_DISABLED", reason)
+		return
+	}
+	if refuseAgentTaskKey(w, r) { // §17.6, GitHub #463
 		return
 	}
 	task, _, taskID := s.taskFromRequest(w, r)
@@ -402,6 +419,10 @@ func (s *Server) AnswerCheckpoint(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
+	principal, label := TaskMessageAuthor(r.Context(), req.AuthorID)
+	if label != "" {
+		metaMap[ClientSuppliedAuthorKey] = label
+	}
 	metaBytes, _ := json.Marshal(metaMap)
 
 	if strings.TrimSpace(req.Content) == "" && req.Choice == "" {
@@ -434,8 +455,10 @@ func (s *Server) AnswerCheckpoint(w http.ResponseWriter, r *http.Request) {
 		Metadata:    metaBytes,
 		CreatedAt:   time.Now().UTC(),
 	}
-	if req.AuthorID != "" {
-		answer.AuthorID = &req.AuthorID
+	// The server names the author; the caller's authorId is only a label
+	// (task-lifecycle design §17, GitHub #432).
+	if principal != "" {
+		answer.AuthorID = &principal
 	}
 	if err := s.taskMessageRepo.Insert(r.Context(), answer); err != nil {
 		s.logger.Error().Err(err).Str("taskId", taskID).Msg("AnswerCheckpoint: insert failed")
@@ -582,6 +605,9 @@ func (s *Server) AmendBrief(w http.ResponseWriter, r *http.Request) {
 		respondError(w, http.StatusServiceUnavailable, "TASK_LIFECYCLE_DISABLED", reason)
 		return
 	}
+	if refuseAgentTaskKey(w, r) { // §17.6, GitHub #463
+		return
+	}
 	task, _, taskID := s.taskFromRequest(w, r)
 	if task == nil {
 		return
@@ -607,10 +633,15 @@ func (s *Server) AmendBrief(w http.ResponseWriter, r *http.Request) {
 	if req.Reason != "" {
 		body = req.Reason + "\n\n---\n\n" + body
 	}
-	meta, _ := json.Marshal(map[string]any{
+	principal, label := TaskMessageAuthor(r.Context(), req.AuthorID)
+	amendMeta := map[string]any{
 		"kind":   "brief_amendment",
 		"reason": req.Reason,
-	})
+	}
+	if label != "" {
+		amendMeta[ClientSuppliedAuthorKey] = label
+	}
+	meta, _ := json.Marshal(amendMeta)
 	msg := &persistence.TaskMessage{
 		TaskID:      taskID,
 		AuthorKind:  persistence.TaskMessageAuthorOperator,
@@ -619,8 +650,9 @@ func (s *Server) AmendBrief(w http.ResponseWriter, r *http.Request) {
 		Metadata:    meta,
 		CreatedAt:   time.Now().UTC(),
 	}
-	if req.AuthorID != "" {
-		msg.AuthorID = &req.AuthorID
+	// The server names the author (task-lifecycle design §17, GitHub #432).
+	if principal != "" {
+		msg.AuthorID = &principal
 	}
 	if err := s.taskMessageRepo.Insert(r.Context(), msg); err != nil {
 		s.logger.Error().Err(err).Str("taskId", taskID).Msg("AmendBrief: insert failed")
@@ -747,6 +779,9 @@ func (s *Server) CloseTask(w http.ResponseWriter, r *http.Request) {
 		respondError(w, http.StatusServiceUnavailable, "TASK_LIFECYCLE_DISABLED", reason)
 		return
 	}
+	if refuseAgentTaskKey(w, r) { // §17.6, GitHub #463
+		return
+	}
 	task, _, taskID := s.taskFromRequest(w, r)
 	if task == nil {
 		return
@@ -764,7 +799,9 @@ func (s *Server) CloseTask(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// System message recording the closure (operator-attributed).
-	closer := req.AuthorID
+	// The closer is the authenticated principal; the caller's authorId is
+	// only a label (task-lifecycle design §17, GitHub #432).
+	closer, label := TaskMessageAuthor(r.Context(), req.AuthorID)
 	if closer == "" {
 		closer = "operator"
 	}
@@ -772,11 +809,15 @@ func (s *Server) CloseTask(w http.ResponseWriter, r *http.Request) {
 	if body == "" {
 		body = "closed by operator"
 	}
-	meta, _ := json.Marshal(map[string]any{
+	closeMeta := map[string]any{
 		"kind":     "task_closed",
 		"closedBy": closer,
 		"reason":   req.Reason,
-	})
+	}
+	if label != "" {
+		closeMeta[ClientSuppliedAuthorKey] = label
+	}
+	meta, _ := json.Marshal(closeMeta)
 	msg := &persistence.TaskMessage{
 		TaskID:      taskID,
 		AuthorKind:  persistence.TaskMessageAuthorSystem,
@@ -838,6 +879,9 @@ func (s *Server) simpleStatusFlip(
 	}
 	if reason, ok := s.taskConversationReady(); !ok {
 		respondError(w, http.StatusServiceUnavailable, "TASK_LIFECYCLE_DISABLED", reason)
+		return
+	}
+	if refuseAgentTaskKey(w, r) { // §17.6, GitHub #463
 		return
 	}
 	task, _, taskID := s.taskFromRequest(w, r)
@@ -957,7 +1001,7 @@ func (s *Server) simpleStatusFlip(
 type SummarizeThreadRequest struct {
 	MessageIDs []string `json:"messageIds"`
 	Summary    string   `json:"summary"`
-	AuthorID   string   `json:"authorId,omitempty"` // defaults to "lead"
+	AuthorID   string   `json:"authorId,omitempty"` // a label only (§17, GitHub #432)
 }
 
 // SummarizeThread handles POST /tasks/{id}/summarize.
@@ -968,9 +1012,11 @@ type SummarizeThreadRequest struct {
 // with the task as a `note`. Subsequent prompt-building filters
 // out the original messages in favour of the summary.
 //
-// Authority: this endpoint is called by an agent inside a
-// container, not by an operator. The author_kind is fixed to
-// "lead" (the only non-operator producer of summaries).
+// Authority (GitHub #431): only the executor's per-task key of THIS task,
+// while the task is RUNNING or LEASED, may call it; a summary may name only
+// agent-authored (lead / role:*) messages of this task, and only ever adds a
+// row. The author_kind is fixed to "lead".
+// see LLD § https://docs.vornik.io §16.2
 func (s *Server) SummarizeThread(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		respondError(w, http.StatusMethodNotAllowed, "METHOD_NOT_ALLOWED", "")
@@ -982,6 +1028,11 @@ func (s *Server) SummarizeThread(w http.ResponseWriter, r *http.Request) {
 	}
 	task, _, taskID := s.taskFromRequest(w, r)
 	if task == nil {
+		return
+	}
+	if boundTaskID, ok := s.runningAgentTaskKey(r); !ok || boundTaskID != taskID {
+		respondError(w, http.StatusForbidden, "FORBIDDEN",
+			"summarize is an agent-only call: it needs the per-task key of this running task")
 		return
 	}
 	var req SummarizeThreadRequest
@@ -996,19 +1047,28 @@ func (s *Server) SummarizeThread(w http.ResponseWriter, r *http.Request) {
 		respondError(w, http.StatusBadRequest, "VALIDATION_ERROR", "messageIds required (at least one)")
 		return
 	}
-	if len(req.Summary) > maxMessageContentBytes {
-		req.Summary = req.Summary[:maxMessageContentBytes]
+	ids, status, code, detail := s.summarizableMessageIDs(r.Context(), taskID, req.MessageIDs)
+	if status != 0 {
+		respondError(w, status, code, detail)
+		return
 	}
+	req.MessageIDs = ids
+	// Same pre-seam cap as PostTaskMessage (§9.2.5, GitHub #395).
+	req.Summary = auditredact.CutBeforeScan(req.Summary, maxMessageContentBytes)
 
-	authorID := req.AuthorID
+	authorID, label := TaskMessageAuthor(r.Context(), req.AuthorID) // §17, GitHub #432
 	if authorID == "" {
 		authorID = "lead"
 	}
-	meta, _ := json.Marshal(map[string]any{
+	summaryMeta := map[string]any{
 		"kind":                     "thread_summary",
 		"summarized_message_ids":   req.MessageIDs,
 		"summarized_message_count": len(req.MessageIDs),
-	})
+	}
+	if label != "" {
+		summaryMeta[ClientSuppliedAuthorKey] = label
+	}
+	meta, _ := json.Marshal(summaryMeta)
 
 	msg := &persistence.TaskMessage{
 		TaskID:      taskID,
@@ -1030,6 +1090,53 @@ func (s *Server) SummarizeThread(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// maxSummarizedMessageIDs bounds one summarize call's id list (§16.2.2).
+const maxSummarizedMessageIDs = 200
+
+// summarizeLookupLimit is the repositories' List ceiling: an id outside the
+// first this-many rows of the task is unknown, so the check fails closed.
+const summarizeLookupLimit = 500
+
+// summarizableMessageIDs de-duplicates ids and checks that each names an
+// agent-authored (lead or role:*) message of taskID (GitHub #431, §16.2.2).
+// A non-zero status refuses the whole call; the detail names counts only.
+func (s *Server) summarizableMessageIDs(ctx context.Context, taskID string, ids []string) ([]string, int, string, string) {
+	seen := make(map[string]bool, len(ids))
+	out := make([]string, 0, len(ids))
+	for _, id := range ids {
+		if !seen[id] {
+			seen[id] = true
+			out = append(out, id)
+		}
+	}
+	if len(out) > maxSummarizedMessageIDs {
+		return nil, http.StatusBadRequest, "VALIDATION_ERROR",
+			fmt.Sprintf("messageIds: at most %d per call", maxSummarizedMessageIDs)
+	}
+	msgs, err := s.taskMessageRepo.List(ctx, persistence.TaskMessageFilter{TaskID: taskID, Limit: summarizeLookupLimit})
+	if err != nil {
+		s.logger.Error().Err(err).Str("taskId", taskID).Msg("SummarizeThread: message lookup failed")
+		return nil, http.StatusInternalServerError, "INTERNAL_ERROR", "failed to read the thread"
+	}
+	author := make(map[string]string, len(msgs))
+	for _, m := range msgs {
+		if m != nil && m.TaskID == taskID {
+			author[m.ID] = m.AuthorKind
+		}
+	}
+	refused := 0
+	for _, id := range out {
+		if !persistence.TaskMessageAuthorIsAgent(author[id]) {
+			refused++
+		}
+	}
+	if refused > 0 {
+		return nil, http.StatusBadRequest, "INVALID_MESSAGE_IDS",
+			fmt.Sprintf("%d of %d messageIds do not name a lead or role message of this task; a summary never hides an operator or system message", refused, len(out))
+	}
+	return out, 0, "", ""
+}
+
 // extractCheckpointID pulls /messages/{id}/answer's id out of the URL.
 func extractCheckpointID(r *http.Request) string {
 	// Path shape: /api/v1/projects/{p}/tasks/{t}/messages/{id}/answer
@@ -1040,4 +1147,18 @@ func extractCheckpointID(r *http.Request) string {
 		}
 	}
 	return ""
+}
+
+// refuseAgentTaskKey answers 403 when an agent's per-task key calls a route
+// that writes as the operator (message, directive, answer, amend, close,
+// pause, resume, approve, reject). The agent image only reads the thread and
+// writes summaries; an agent that "speaks as the operator" is a prompt
+// injection path to its own lead (task-lifecycle design §17.6, GitHub #463).
+func refuseAgentTaskKey(w http.ResponseWriter, r *http.Request) bool {
+	if !IsAgentKey(r.Context()) {
+		return false
+	}
+	respondError(w, http.StatusForbidden, "AGENT_KEY_NOT_OPERATOR",
+		"an agent's key cannot write as the operator")
+	return true
 }

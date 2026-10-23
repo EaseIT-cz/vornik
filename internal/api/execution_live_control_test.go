@@ -35,7 +35,7 @@ func liveControlConnection(t *testing.T) (*websocket.Conn, *liveControlSubscribe
 	srv := newLiveServer(t, sub, &persistence.Execution{ID: "exec_1", ProjectID: "p1"})
 	serverCtx, serverCancel := context.WithCancel(context.Background())
 	hs := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		srv.ExecutionLive(w, r.WithContext(serverCtx), "exec_1")
+		srv.ExecutionLive(w, adminClassReq491(r.WithContext(serverCtx)), "exec_1") // GitHub #491: the operator, stated
 	}))
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()

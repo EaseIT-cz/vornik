@@ -21,11 +21,12 @@ import (
 func TestSummarizedMessageIDs_HidesSummarizedOriginals(t *testing.T) {
 	now := time.Now().UTC()
 	messages := []*persistence.TaskMessage{
-		{ID: "msg-1", MessageKind: persistence.TaskMessageKindMessage, Content: "old 1", CreatedAt: now},
-		{ID: "msg-2", MessageKind: persistence.TaskMessageKindMessage, Content: "old 2", CreatedAt: now},
-		{ID: "msg-3", MessageKind: persistence.TaskMessageKindMessage, Content: "kept", CreatedAt: now},
+		{ID: "msg-1", AuthorKind: "lead", MessageKind: persistence.TaskMessageKindMessage, Content: "old 1", CreatedAt: now},
+		{ID: "msg-2", AuthorKind: "role:researcher", MessageKind: persistence.TaskMessageKindMessage, Content: "old 2", CreatedAt: now},
+		{ID: "msg-3", AuthorKind: "lead", MessageKind: persistence.TaskMessageKindMessage, Content: "kept", CreatedAt: now},
 		{
 			ID:          "note-1",
+			AuthorKind:  "lead",
 			MessageKind: persistence.TaskMessageKindNote,
 			Content:     "summary of msg-1 + msg-2",
 			Metadata:    []byte(`{"kind":"thread_summary","summarized_message_ids":["msg-1","msg-2"]}`),
@@ -48,14 +49,44 @@ func TestSummarizedMessageIDs_HidesSummarizedOriginals(t *testing.T) {
 
 func TestSummarizedMessageIDs_MultipleNotesAggregate(t *testing.T) {
 	messages := []*persistence.TaskMessage{
-		{ID: "a", MessageKind: persistence.TaskMessageKindNote,
-			Metadata: []byte(`{"summarized_message_ids":["x","y"]}`)},
-		{ID: "b", MessageKind: persistence.TaskMessageKindNote,
-			Metadata: []byte(`{"summarized_message_ids":["z"]}`)},
+		{ID: "x", AuthorKind: "lead"}, {ID: "y", AuthorKind: "lead"}, {ID: "z", AuthorKind: "lead"},
+		{ID: "a", AuthorKind: "lead", MessageKind: persistence.TaskMessageKindNote,
+			Metadata: []byte(`{"kind":"thread_summary","summarized_message_ids":["x","y"]}`)},
+		{ID: "b", AuthorKind: "lead", MessageKind: persistence.TaskMessageKindNote,
+			Metadata: []byte(`{"kind":"thread_summary","summarized_message_ids":["z"]}`)},
 	}
 	hide := summarizedMessageIDs(messages)
 	if !hide["x"] || !hide["y"] || !hide["z"] {
 		t.Errorf("notes from multiple summaries must aggregate; got %v", hide)
+	}
+}
+
+// GitHub #431 (§16.2.2): a summary never hides an operator or system
+// message, a newer message, or itself; and only a lead-authored
+// thread_summary note counts at all.
+func TestSummarizedMessageIDs_431_OnlyOlderAgentMessagesAreHidden(t *testing.T) {
+	now := time.Now().UTC()
+	note := func(id, author, kind string, ids string) *persistence.TaskMessage {
+		return &persistence.TaskMessage{ID: id, AuthorKind: author, MessageKind: persistence.TaskMessageKindNote, CreatedAt: now,
+			Metadata: []byte(`{"kind":"` + kind + `","summarized_message_ids":[` + ids + `]}`)}
+	}
+	messages := []*persistence.TaskMessage{
+		{ID: "op", AuthorKind: "operator", MessageKind: persistence.TaskMessageKindMessage, CreatedAt: now.Add(-time.Minute)},
+		{ID: "dir", AuthorKind: "operator", MessageKind: persistence.TaskMessageKindDirective, CreatedAt: now.Add(-time.Minute)},
+		{ID: "ans", AuthorKind: "operator", MessageKind: persistence.TaskMessageKindAnswer, CreatedAt: now.Add(-time.Minute)},
+		{ID: "sys", AuthorKind: "system", MessageKind: persistence.TaskMessageKindSystem, CreatedAt: now.Add(-time.Minute)},
+		{ID: "emptyauthor", MessageKind: persistence.TaskMessageKindMessage, CreatedAt: now.Add(-time.Minute)},
+		{ID: "bareprefix", AuthorKind: "role:", MessageKind: persistence.TaskMessageKindMessage, CreatedAt: now.Add(-time.Minute)},
+		{ID: "old-lead", AuthorKind: "lead", MessageKind: persistence.TaskMessageKindMessage, CreatedAt: now.Add(-time.Minute)},
+		{ID: "newer-lead", AuthorKind: "lead", MessageKind: persistence.TaskMessageKindMessage, CreatedAt: now.Add(time.Minute)},
+		{ID: "role-only", AuthorKind: "role:writer", MessageKind: persistence.TaskMessageKindMessage, CreatedAt: now.Add(-time.Minute)},
+		note("s1", "lead", "thread_summary", `"op","dir","ans","sys","emptyauthor","bareprefix","old-lead","newer-lead","s1","missing"`),
+		note("forged-operator-note", "operator", "thread_summary", `"role-only"`),
+		note("other-kind", "lead", "external_wait", `"role-only"`),
+	}
+	hide := summarizedMessageIDs(messages)
+	if len(hide) != 1 || !hide["old-lead"] {
+		t.Fatalf("only the older lead message may be hidden; got %v", hide)
 	}
 }
 
@@ -76,10 +107,11 @@ func TestSummarizedMessageIDs_MalformedMetadataSkipped(t *testing.T) {
 	// Bad JSON / wrong shape on a note must not crash the prompt
 	// build — the whole prompt-rendering path is best-effort.
 	messages := []*persistence.TaskMessage{
-		{ID: "a", MessageKind: persistence.TaskMessageKindNote, Metadata: []byte(`not-json`)},
-		{ID: "b", MessageKind: persistence.TaskMessageKindNote, Metadata: nil},
-		{ID: "c", MessageKind: persistence.TaskMessageKindNote,
-			Metadata: []byte(`{"summarized_message_ids":["x"]}`)},
+		{ID: "x", AuthorKind: "lead"},
+		{ID: "a", AuthorKind: "lead", MessageKind: persistence.TaskMessageKindNote, Metadata: []byte(`not-json`)},
+		{ID: "b", AuthorKind: "lead", MessageKind: persistence.TaskMessageKindNote, Metadata: nil},
+		{ID: "c", AuthorKind: "lead", MessageKind: persistence.TaskMessageKindNote,
+			Metadata: []byte(`{"kind":"thread_summary","summarized_message_ids":["x"]}`)},
 	}
 	hide := summarizedMessageIDs(messages)
 	if !hide["x"] {
@@ -90,10 +122,10 @@ func TestSummarizedMessageIDs_MalformedMetadataSkipped(t *testing.T) {
 func TestBuildPlanningPrompt_FiltersSummarizedAndShowsNote(t *testing.T) {
 	now := time.Now().UTC()
 	messages := []*persistence.TaskMessage{
-		{ID: "old-msg", AuthorKind: "operator", MessageKind: persistence.TaskMessageKindMessage, Content: "ANCIENT_CONTENT", CreatedAt: now},
+		{ID: "old-msg", AuthorKind: "lead", MessageKind: persistence.TaskMessageKindMessage, Content: "ANCIENT_CONTENT", CreatedAt: now},
 		{ID: "summary", AuthorKind: "lead", MessageKind: persistence.TaskMessageKindNote,
 			Content:   "DIGESTED_SUMMARY",
-			Metadata:  []byte(`{"summarized_message_ids":["old-msg"]}`),
+			Metadata:  []byte(`{"kind":"thread_summary","summarized_message_ids":["old-msg"]}`),
 			CreatedAt: now,
 		},
 		{ID: "recent", AuthorKind: "operator", MessageKind: persistence.TaskMessageKindMessage, Content: "RECENT_LINE", CreatedAt: now},

@@ -6,10 +6,10 @@ package integration_test
 import (
 	"context"
 	"database/sql"
+	"flag"
 	"fmt"
 	"os"
 	"path/filepath"
-	"sync"
 	"testing"
 	"time"
 
@@ -36,18 +36,20 @@ import (
 // just open a connection — the schema is in place by the time any
 // test body executes.
 //
-// Failure mode: if migrations can't run (DB down, mismatched user,
-// etc.) we emit a diagnostic and skip the run rather than running
-// the suite against a stale schema. CI surfaces the migration error
-// via this output and the subsequent test failures.
-
-var migrateOnce sync.Once
+// Failure mode: a database that cannot be reached is reported and the
+// tests run, each failing in connectDB with the connection error. A
+// migration chain that fails (#424: its budget ran out mid-chain) exits
+// the package with status 1 before any test runs, printing the runner's
+// error, which names the budget when that is what ended it.
 
 // TestMain runs the suite in the environment CI gives it: no inherited
 // VORNIK_* except the test knobs (GitHub #357, testing design 19 §11).
 func TestMain(m *testing.M) { os.Exit(testenv.Main(m, mainIntegration)) }
 
 func mainIntegration(m *testing.M) int {
+	// The migration budget follows -test.timeout, so read the test flags
+	// now (the testing package allows flag.Parse in TestMain).
+	flag.Parse()
 	// CREATE DATABASE the integration target before any test (and
 	// before applyTestMigrations, which assumes the DB exists).
 	// Best-effort: if it fails we let applyTestMigrations surface
@@ -55,7 +57,9 @@ func mainIntegration(m *testing.M) int {
 	if err := ensureIntegrationDB(); err != nil {
 		fmt.Fprintf(os.Stderr, "test/integration: bootstrap DB failed: %v\n", err)
 	}
-	migrateOnce.Do(applyTestMigrations)
+	if !applyTestMigrations(migrationBudget(packageTimeout())) {
+		return 1
+	}
 	purgeIntegrationOrphans()
 	code := m.Run()
 	purgeIntegrationOrphans()
@@ -243,12 +247,17 @@ func purgeIntegrationOrphans() {
 	}
 }
 
-func applyTestMigrations() {
+// applyTestMigrations replays the migration chain and reports whether the
+// schema is complete. A false return makes TestMain exit 1 before any test
+// runs (#424: a half-built schema turned one cancelled migration into 40-odd
+// unrelated failures). A database it cannot reach returns true: the tests'
+// own connectDB then fails each one with the connection error, as before.
+func applyTestMigrations(budget time.Duration) bool {
 	dbURL := getTestDBURL()
 	db, err := sql.Open("postgres", dbURL)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "test/integration: open DB for migrations failed: %v\n", err)
-		return
+		return true
 	}
 	defer func() { _ = db.Close() }()
 
@@ -256,14 +265,61 @@ func applyTestMigrations() {
 	defer pingCancel()
 	if err := db.PingContext(pingCtx); err != nil {
 		fmt.Fprintf(os.Stderr, "test/integration: ping DB before migrations failed: %v\n", err)
-		return
+		return true
 	}
 
-	runCtx, runCancel := context.WithTimeout(context.Background(), 60*time.Second)
-	defer runCancel()
-	runner := persistence.NewMigrationRunner(db)
-	if err := runner.Run(runCtx); err != nil {
+	if err := runMigrations(persistence.NewMigrationRunner(db), budget); err != nil {
 		fmt.Fprintf(os.Stderr, "test/integration: migration runner failed: %v\n", err)
-		return
+		fmt.Fprintln(os.Stderr, "test/integration: the schema is incomplete; not running the tests against it (GitHub #424)")
+		return false
 	}
+	return true
+}
+
+// migrationBudget is how long TestMain gives the migration chain, given the
+// package's -test.timeout: the timeout minus a reserve for the tests (half
+// the timeout, at most 2 minutes), so 8 minutes under go test's default 10.
+// A zero timeout (none) means no deadline.
+//
+// GitHub #424: the budget was a fixed 60 s. Since #374 the lane recreates
+// the database every run, so the whole chain (229 migrations, about 1.9 s on
+// a quiet host) replays inside it, and with other gate runs loading the host
+// it ran out at migrations 13, 141 and 202 on three runs. Any fixed number
+// is a guess about host load; the package timeout is the bound the run has.
+func migrationBudget(timeout time.Duration) time.Duration {
+	if timeout <= 0 {
+		return 0
+	}
+	reserve := min(timeout/2, 2*time.Minute)
+	return timeout - reserve
+}
+
+// packageTimeout reads this test binary's -test.timeout. TestMain has parsed
+// the flags (flag.Parse) before calling it.
+func packageTimeout() time.Duration {
+	f := flag.Lookup("test.timeout")
+	if f == nil {
+		return 0
+	}
+	if g, ok := f.Value.(flag.Getter); ok {
+		if d, ok := g.Get().(time.Duration); ok {
+			return d
+		}
+	}
+	return 0
+}
+
+// runMigrations runs runner under budget (0: no deadline). The deadline's
+// cause names the budget, and MigrationRunner.Run puts the cause, the
+// elapsed time and the progress into its error, so a run the budget cuts
+// short says who cut it (#424).
+func runMigrations(runner *persistence.MigrationRunner, budget time.Duration) error {
+	ctx := context.Background()
+	if budget > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeoutCause(ctx, budget, fmt.Errorf(
+			"test/integration migration budget of %s (package -timeout %s) ran out", budget, packageTimeout()))
+		defer cancel()
+	}
+	return runner.Run(ctx)
 }

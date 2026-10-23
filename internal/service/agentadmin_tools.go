@@ -18,6 +18,7 @@ import (
 	"vornik.io/vornik/internal/integrations"
 	"vornik.io/vornik/internal/mcp"
 	"vornik.io/vornik/internal/mcpauth"
+	"vornik.io/vornik/internal/persistence"
 )
 
 // Plan P4.3 (P3 amendment 5): a read-pending agent server's tools are listed
@@ -36,29 +37,18 @@ const AgentSystemActor = "system:agent-admin"
 // itself loopback (a local server the person approved by its URL) is
 // allow-listed; every other host must resolve to a public address, at
 // listing and at every call.
+//
+// The rule lives in integrations.LoopbackURLGuard since 2026-10-21 (GitHub
+// #433: the trading panel's broker fetch uses the same one).
 func agentDialGuard(rawURL string) integrations.DialGuard {
-	u, err := url.Parse(rawURL)
-	if err != nil {
-		return integrations.DialGuard{}
-	}
-	if host := u.Hostname(); loopbackHost(host) {
-		return integrations.DialGuard{AllowedHosts: []string{host}}
-	}
-	return integrations.DialGuard{}
-}
-
-// loopbackHost is agentDialGuard's loopback test: the name localhost or a
-// loopback IP literal.
-func loopbackHost(host string) bool {
-	ip := net.ParseIP(host)
-	return host == "localhost" || (ip != nil && ip.IsLoopback())
+	return integrations.LoopbackURLGuard(rawURL, nil)
 }
 
 // loopbackAgentURL reports whether rawURL is one agentDialGuard allow-lists.
 // An unparsable URL counts as loopback, the side that tells the agent less.
 func loopbackAgentURL(rawURL string) bool {
 	u, err := url.Parse(rawURL)
-	return err != nil || loopbackHost(u.Hostname())
+	return err != nil || integrations.IsLoopbackHost(u.Hostname())
 }
 
 // probeOutcomeVisible reports whether the agent may learn how a
@@ -85,23 +75,49 @@ func guardAgentServer(cfg *mcp.ServerConfig, projectID string) {
 	cfg.HTTPClient = agentDialGuard(cfg.URL).HTTPClient(timeout)
 }
 
+// toolListing is what one listing advertised: every tool name, and the
+// subset Vornik's classifier calls read-only (design §6.4, GitHub #405).
+type toolListing struct {
+	names []string
+	reads []string
+}
+
 // listMCPTools connects once, through the guard, and returns the advertised
-// tool names, sorted. Errors name the server, never a header value.
-func (c *Container) listMCPTools(ctx context.Context, cfg mcp.ServerConfig) ([]string, error) {
+// tool names, sorted, with the ones mcp.Tool.IsMutating calls read-only,
+// judged on each tool's full descriptor (annotations and input schema).
+// Errors name the server, never a header value.
+func (c *Container) listMCPTools(ctx context.Context, cfg mcp.ServerConfig) (toolListing, error) {
 	cfg.HTTPClient = agentDialGuard(cfg.URL).HTTPClient(listToolsTimeout)
 	cctx, cancel := context.WithTimeout(ctx, listToolsTimeout)
 	defer cancel()
 	cl, err := mcp.Connect(cctx, cfg, c.Logger)
 	if err != nil {
-		return nil, fmt.Errorf("list the tools of %s: %w", cfg.Name, err)
+		return toolListing{}, fmt.Errorf("list the tools of %s: %w", cfg.Name, err)
 	}
 	defer func() { _ = cl.Close() }()
-	var names []string
+	var out toolListing
 	for _, t := range cl.Tools() {
-		names = append(names, t.Name)
+		out.names = append(out.names, t.Name)
+		if !t.IsMutating() {
+			out.reads = append(out.reads, t.Name)
+		}
 	}
-	sort.Strings(names)
-	return names, nil
+	sort.Strings(out.names)
+	sort.Strings(out.reads)
+	return out, nil
+}
+
+// readsByName is the classifier's verdict where nothing was listed (the
+// connector install approves recipe-declared tools): the name rule alone,
+// the only part available without a descriptor (design §6.4 item 2).
+func readsByName(tools []string) []string {
+	var reads []string
+	for _, n := range tools {
+		if !(mcp.Tool{Name: n}).IsMutating() {
+			reads = append(reads, n)
+		}
+	}
+	return reads
 }
 
 // errCredentialMissing means the server's credential is not stored yet.
@@ -185,8 +201,9 @@ func listFailureClass(err error) string {
 type unauthListing struct {
 	url    string
 	tools  []string
-	failed string // the failure's class, when the listing failed
-	refuse string // the refusal, when the server does not speak the transport
+	reads  []string // the classifier's read-only subset of tools (§6.4)
+	failed string   // the failure's class, when the listing failed
+	refuse string   // the refusal, when the server does not speak the transport
 }
 
 // advertiseUnauthenticated lists an add_mcp_server target BEFORE approval,
@@ -207,7 +224,7 @@ func (s *agentAdminService) advertiseUnauthenticated(ctx context.Context, ns str
 		return unauthListing{} // the renderer refuses it, naming the allowed values
 	}
 	cfg := listingConfig(ns, in)
-	tools, err := s.c.listMCPTools(ctx, cfg)
+	listed, err := s.c.listMCPTools(ctx, cfg)
 	if err != nil {
 		s.c.Logger.Info().Str("namespace", ns).Str("server", in.Name).Err(err).Msg("agent admin: could not list a new server's tools; it will be read-pending")
 		if !probeOutcomeVisible(in.URL) {
@@ -218,7 +235,7 @@ func (s *agentAdminService) advertiseUnauthenticated(ctx context.Context, ns str
 		}
 		return unauthListing{url: in.URL, failed: listFailureClass(err)}
 	}
-	return unauthListing{url: in.URL, tools: tools}
+	return unauthListing{url: in.URL, tools: listed.names, reads: listed.reads}
 }
 
 // afterCredentialStored files a tools approval for each read-pending server
@@ -255,7 +272,8 @@ func (s *agentAdminService) fileServerTools(ctx context.Context, ns, projectID, 
 		log.Info().Err(err).Msg("agent admin: the server cannot be listed yet")
 		return
 	}
-	tools, err := s.c.listMCPTools(ctx, cfg)
+	listed, err := s.c.listMCPTools(ctx, cfg)
+	tools := listed.names
 	if hint := wrongTransportHint(cfg, err); hint != "" {
 		// Design §6.1 item 4: tools_pending says why (in memory).
 		s.setToolGap(projectID, server, hint)
@@ -264,10 +282,17 @@ func (s *agentAdminService) fileServerTools(ctx context.Context, ns, projectID, 
 		log.Warn().Err(err).Int("tools", len(tools)).Msg("agent admin: the connected server listed no usable tools; it stays read-pending")
 		return
 	}
-	raw, _ := json.Marshal(agentadmin.ApproveServerToolsInput{Project: projectID, Server: server, Tools: tools})
+	raw, _ := json.Marshal(agentadmin.ApproveServerToolsInput{Project: projectID, Server: server, Tools: tools, Reads: listed.reads})
 	res, err := s.doInternal(ctx, ns, agentadmin.VerbApproveServerTools, raw)
 	if err != nil {
 		log.Error().Err(err).Msg("agent admin: filing the tools approval failed")
+		return
+	}
+	if res.Effect == EffectRefused && res.WaitingOnLock {
+		// Design §19.15 (GitHub #409): recorded by doInternal; filed again
+		// once the holding request is decided.
+		log.Info().Str("reason", res.Reason).Msg("agent admin: the tools approval waits for another change to be decided")
+		s.setToolGap(projectID, server, waitingNote(res.LockedByRequest))
 		return
 	}
 	if res.Effect == EffectRefused {
@@ -278,9 +303,115 @@ func (s *agentAdminService) fileServerTools(ctx context.Context, ns, projectID, 
 			// the refusal's text (review 20261003-6b46 F2).
 			s.setToolGap(projectID, server, "the server does not offer "+strings.Join(res.MissingTools, ", ")+"; this recipe needs them")
 		}
+		if len(res.Withheld) > 0 {
+			s.setToolGap(projectID, server, withheldNote(res.Withheld)) // design §6.4 item 5
+		}
 		return
 	}
-	s.setToolGap(projectID, server, "")
+	// Design §6.4 item 4: the agent never sees this approval's sentence, so
+	// list_my_setup says what was withheld.
+	s.setToolGap(projectID, server, withheldNote(res.Withheld))
+}
+
+// withheldNote is list_my_setup's note for tools withheld as changes
+// (design §6.4, GitHub #405), built from the typed field; "" when none.
+func withheldNote(withheld []string) string {
+	if len(withheld) == 0 {
+		return ""
+	}
+	return "the server's tools " + strings.Join(withheld, ", ") + " change things and are not approved as reads; " +
+		"to propose changes with them, remove the server and add it again naming them in write_tools"
+}
+
+// waitingNote is list_my_setup's note for a server whose tools approval
+// waits for another change (design §19.15 item 2).
+func waitingNote(holder string) string {
+	if holder == "" {
+		return "its tools approval is filed once the change waiting for approval is decided"
+	}
+	return "its tools approval is filed once request " + holder + " is decided"
+}
+
+// waitingTool is a tools approval refused because a waiting request held a
+// lock (design §19.15 item 2): the server, and the request it waits for
+// ("" when unknown).
+type waitingTool struct {
+	ns, project, server, holder string
+}
+
+// recordWaitingTools records a refused approve_server_tools whose lock is
+// held, or clears the record once one is filed. The caller holds s.mu, in
+// the section whose state load saw the lock (design §19.15 item 5).
+func (s *agentAdminService) recordWaitingTools(ns string, input json.RawMessage, ch agentadmin.Change, filed bool) {
+	var in agentadmin.ApproveServerToolsInput
+	if json.Unmarshal(input, &in) != nil {
+		return
+	}
+	key := in.Project + "/" + in.Server
+	switch {
+	case filed:
+		delete(s.waitingTools, key)
+	case ch.LockedOn != "":
+		if s.waitingTools == nil {
+			s.waitingTools = map[string]waitingTool{}
+		}
+		s.waitingTools[key] = waitingTool{ns: ns, project: in.Project, server: in.Server, holder: ch.LockedByRequest}
+	}
+}
+
+// fileWaitingTools is the widening_change terminal observer (design §19.15
+// item 3, GitHub #409): once r is decided, whichever way, the tools
+// approvals that waited for it are filed again, in the background. A
+// record for the server r itself was about is dropped: r was that server's
+// own tools approval, and the person just answered it.
+func (s *agentAdminService) fileWaitingTools(ctx context.Context, r persistence.AgentApprovalRequestRow, _ string) {
+	if r.Namespace == "" {
+		return
+	}
+	var pl approvalPayload
+	_ = json.Unmarshal(r.Rendered, &pl) // unreadable: no locks, so every record retries
+	bg := context.WithoutCancel(ctx)
+	s.background(func() {
+		s.mu.Lock()
+		var due []waitingTool
+		for key, w := range s.waitingTools {
+			if w.ns != r.Namespace || (w.holder != "" && w.holder != r.ID) {
+				continue
+			}
+			delete(s.waitingTools, key)
+			if containsString(pl.Locks, agentadmin.LockIntegration(w.project, w.server)) {
+				s.setToolGap(w.project, w.server, "")
+				continue
+			}
+			due = append(due, w)
+		}
+		s.mu.Unlock()
+		sort.Slice(due, func(i, j int) bool { return due[i].project+"/"+due[i].server < due[j].project+"/"+due[j].server })
+		for _, w := range due {
+			s.refileTools(bg, w)
+		}
+	})
+}
+
+// refileTools files one waiting server's tools approval again, with the
+// project and server as the registry has them now; fileServerTools keeps
+// its guards (still read-pending, not removed, credential present).
+func (s *agentAdminService) refileTools(ctx context.Context, w waitingTool) {
+	s.setToolGap(w.project, w.server, "")
+	p := s.c.Registry.GetProject(w.project)
+	if p != nil {
+		if got, ok := agentns.FromID(p.ID); ok && got == w.ns {
+			for _, srv := range p.MCP.Servers {
+				if srv.Name == w.server {
+					s.fileServerTools(ctx, w.ns, p.ID, srv.Name, srv.URL, srv.Transport, srv.Auth, p.Permissions.Secrets)
+					return
+				}
+			}
+		}
+	}
+	// Removed while it waited (review 21b5 F2): nothing to ask for.
+	s.c.Logger.Info().Str("namespace", w.ns).Str("project", w.project).Str("server", w.server).
+		Msg("agent admin: a server whose tools approval waited is gone; nothing filed")
 }
 
 // mcpServerConfigFor is a credential-less listing of url for namespace ns.
@@ -303,12 +434,23 @@ func (s *agentAdminService) doInternal(ctx context.Context, ns, verb string, inp
 	if err != nil {
 		return AgentAdminResult{}, err
 	}
+	tools := verb == agentadmin.VerbApproveServerTools
 	if ch.Class != agentadmin.Widening {
-		return AgentAdminResult{Effect: EffectRefused, Reason: ch.Reason, MissingTools: ch.MissingTools}, nil
+		res := AgentAdminResult{Effect: EffectRefused, Reason: ch.Reason, MissingTools: ch.MissingTools, Withheld: ch.Withheld}
+		if tools && ch.LockedOn != "" {
+			s.recordWaitingTools(ns, input, ch, false) // design §19.15 item 2
+			res.WaitingOnLock, res.LockedByRequest = true, ch.LockedByRequest
+		}
+		return res, nil
 	}
 	p, err := s.fileProposal(ctx, AgentSystemActor, "", ch)
 	if err != nil {
 		return AgentAdminResult{}, err
 	}
-	return s.requestApproval(ctx, p, ch)
+	res, err := s.requestApproval(ctx, p, ch)
+	res.Withheld = ch.Withheld
+	if tools && err == nil {
+		s.recordWaitingTools(ns, input, ch, true)
+	}
+	return res, err
 }

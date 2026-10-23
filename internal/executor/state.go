@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"slices"
 	"sort"
 	"time"
 
@@ -611,6 +612,14 @@ func (e *Executor) abandonRefusedPause(taskID, executionID, reason string, stamp
 		Msg("pause: execution was no longer pausable — leaving its status as it stands")
 }
 
+// resumeRefused logs and builds Resume's refusal for a task that is not (or no
+// longer) in a resumable status.
+func (e *Executor) resumeRefused(taskID string, current persistence.TaskStatus) error {
+	e.logger.Info().Str("task_id", taskID).Str("status", string(current)).
+		Msg("resume: refused — the task is no longer resumable; nothing was resumed")
+	return fmt.Errorf("%w: task %s is %s", ErrResumeRefused, taskID, current)
+}
+
 // waitForExecutionCleanup blocks until activeExecutions[taskID]
 // has been removed (the goroutine's deferred cleanupExecution
 // fired) or the timeout expires. Polls every 25ms — the goroutine's
@@ -649,7 +658,34 @@ func (e *Executor) ResumeTask(taskID string) error {
 	return err
 }
 
+// ErrResumeRefused reports that Resume wrote nothing because the task (or its
+// execution row) is no longer in a status a resume may move: a cancel, a
+// close or another writer got there first. Callers distinguish it with
+// errors.Is; the wrapped message names the current status (05-scheduler §4.8,
+// "Amended 2026-10-17 (GitHub #421)").
+var ErrResumeRefused = errors.New("resume refused")
+
+// resumableTaskStatuses is the set of task statuses Resume may move to
+// RUNNING: the three a PAUSED execution row is written with (pauseWithReason →
+// PAUSED; runApprovalStep → PENDING; pauseAwaitingChildren and the
+// cross-project-call pause → WAITING_FOR_CHILDREN). Terminal statuses, and
+// QUEUED/LEASED/RUNNING (the scheduler's dispatch owns those), are refused
+// (GitHub #421). Returns a fresh slice.
+func resumableTaskStatuses() []persistence.TaskStatus {
+	return []persistence.TaskStatus{
+		persistence.TaskStatusPaused,
+		persistence.TaskStatusPending,
+		persistence.TaskStatusWaitingForChildren,
+	}
+}
+
 // Resume continues a paused execution.
+//
+// Its first write is the task's conditional move to RUNNING from
+// resumableTaskStatuses (GitHub #421): a resume that read the rows just before
+// a cancel used to overwrite CANCELLED with a plain UpdateStatus and start the
+// run. When that write does not transition, Resume writes nothing else and
+// returns ErrResumeRefused naming the task's current status.
 //
 // It holds e.mu for its whole body, database writes included. That is
 // deliberate and predates the claim work: the function decides on the strength
@@ -717,6 +753,44 @@ func (e *Executor) Resume(taskID string) (*ResumeStatus, error) {
 		return nil, fmt.Errorf("execution is not paused (status: %s)", exec.Status)
 	}
 
+	// The task gate (GitHub #421). The snapshot check is the fast path for a
+	// clear message; the conditional write is the guarantee, because a cancel
+	// can land between the read above and this write. Nothing has been
+	// written yet, so a refusal leaves the claim, the snapshot and the
+	// execution row exactly as they were.
+	fromStatus := task.Status
+	if !slices.Contains(resumableTaskStatuses(), fromStatus) {
+		return nil, e.resumeRefused(taskID, fromStatus)
+	}
+	moved, err := e.taskRepo.TransitionConditional(ioCtx, taskID, resumableTaskStatuses(),
+		persistence.TaskStatusRunning, persistence.TransitionOpts{})
+	if err != nil {
+		return nil, fmt.Errorf("failed to update task status: %w", bounded(err))
+	}
+	if !moved {
+		current := persistence.TaskStatus("unknown")
+		if cur, gerr := e.taskRepo.Get(ioCtx, taskID); gerr == nil && cur != nil {
+			current = cur.Status
+		}
+		return nil, e.resumeRefused(taskID, current)
+	}
+	// From here on the task reads RUNNING; a failure puts it back, and only
+	// while it still reads RUNNING (a cancel that has since moved it stands).
+	// The put-back has its own bound, not ioCtx's: the failure it undoes may
+	// be ioCtx's deadline, and a put-back on an expired context would leave
+	// the task RUNNING with no goroutine (code review 2026-10-17 cf90 F1).
+	undo := func() {
+		undoCtx, cancelUndo := context.WithTimeout(context.Background(), bound)
+		defer cancelUndo()
+		if ok, uerr := e.taskRepo.TransitionConditional(undoCtx, taskID,
+			[]persistence.TaskStatus{persistence.TaskStatusRunning}, fromStatus,
+			persistence.TransitionOpts{}); uerr != nil || !ok {
+			e.logger.Warn().Err(uerr).Bool("moved", ok).Str("task_id", taskID).
+				Str("status", string(fromStatus)).
+				Msg("resume: could not put the task back after a failed resume")
+		}
+	}
+
 	// Release the claim BEFORE any state write below: while it stands,
 	// saveExecutionState re-stamps its reason onto every snapshot, which
 	// would put back the very field this path clears (design §5.5).
@@ -731,11 +805,13 @@ func (e *Executor) Resume(taskID string) (*ResumeStatus, error) {
 		state.ApprovalPendingStep = ""
 		state.PausedReason = ""
 		if err := e.saveExecutionState(ioCtx, exec, state); err != nil {
+			undo()
 			return nil, fmt.Errorf("failed to persist approval resume state: %w", bounded(err))
 		}
 	} else if state.PausedReason == PauseReasonOperator {
 		state.PausedReason = ""
 		if err := e.saveExecutionState(ioCtx, exec, state); err != nil {
+			undo()
 			return nil, fmt.Errorf("failed to clear operator pause reason: %w", bounded(err))
 		}
 	}
@@ -745,12 +821,20 @@ func (e *Executor) Resume(taskID string) (*ResumeStatus, error) {
 		e.ctx, e.cancel = context.WithCancel(context.Background())
 	}
 
-	// Update execution status to running
-	if err := e.execRepo.UpdateStatus(ioCtx, exec.ID, persistence.ExecutionStatusRunning); err != nil {
+	// Update execution status to running — conditionally, so an execution
+	// row superseded since the read (the #410 cascade, the orphan-PAUSED
+	// backstop) is not reopened (GitHub #421).
+	execMoved, err := e.execRepo.TransitionStatusConditional(ioCtx, exec.ID,
+		[]persistence.ExecutionStatus{persistence.ExecutionStatusPaused}, persistence.ExecutionStatusRunning)
+	if err != nil {
+		undo()
 		return nil, fmt.Errorf("failed to update execution status: %w", bounded(err))
 	}
-	if err := e.taskRepo.UpdateStatus(ioCtx, taskID, persistence.TaskStatusRunning); err != nil {
-		return nil, fmt.Errorf("failed to update task status: %w", bounded(err))
+	if !execMoved {
+		undo()
+		e.logger.Info().Str("task_id", taskID).Str("execution_id", exec.ID).
+			Msg("resume: refused — the execution is no longer PAUSED; nothing was resumed")
+		return nil, fmt.Errorf("%w: execution %s is no longer paused", ErrResumeRefused, exec.ID)
 	}
 
 	// Create new execution handle

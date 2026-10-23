@@ -133,8 +133,13 @@ func TestUIAnswerCheckpoint_HappyPath(t *testing.T) {
 	if len(msgRepo.inserts) != 1 {
 		t.Fatalf("expected 1 inserted message; got %d", len(msgRepo.inserts))
 	}
-	if msgRepo.inserts[0].AuthorID == nil || *msgRepo.inserts[0].AuthorID != "alice" {
-		t.Errorf("authorID: got %v", msgRepo.inserts[0].AuthorID)
+	// GitHub #432: the form's author is a client-supplied label, never the
+	// author of record; this request carries no principal.
+	if msgRepo.inserts[0].AuthorID != nil {
+		t.Errorf("authorID: got %q, want nil", *msgRepo.inserts[0].AuthorID)
+	}
+	if !strings.Contains(string(msgRepo.inserts[0].Metadata), `"clientSuppliedAuthor":"alice"`) {
+		t.Errorf("metadata must carry the label: %s", msgRepo.inserts[0].Metadata)
 	}
 }
 

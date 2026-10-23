@@ -17,7 +17,7 @@ import (
 // CE operator shell — account management (2026-09-13 config-assistant
 // review R1/R2, plan §2). These routes are COMMUNITY: they live under
 // /api/v1/operator/ (never /api/v1/admin/, whose prefix carries the EE
-// admin-gate invariant) and gate on requireOperatorCapability — operator
+// admin-gate invariant) and gate on requireOperatorScope (since #495) — operator
 // scope PLUS an explicit operator/admin capability, never merely an
 // unrestricted project set or an X-Control-Plane header (R2).
 
@@ -27,33 +27,12 @@ func WithAccountsService(acc *authz.Accounts) ServerOption {
 	return func(s *Server) { s.accounts = acc }
 }
 
-// requireOperatorCapability is the CE operator shell's gate (review R2):
-// operator scope (no project-scoped tenant key) AND an explicit
-// capability — auth disabled (the trusted local operator), a browser
-// session whose principal resolved to admin, or an API key on the
-// admin.allowed_keys break-glass list. The allowlist is read from the
-// daemon config directly rather than from the EE admin surface so the
-// capability exists in Community; an unrestricted static key with no
-// allowlist entry is refused with a named 403 rather than passing on the
-// strength of its empty project list.
-func (s *Server) requireOperatorCapability(w http.ResponseWriter, r *http.Request) bool {
-	if !s.requireOperatorScope(w, r) {
-		return false
-	}
-	if !IsAuthEnabledFromContext(r.Context()) {
-		return true
-	}
-	if SessionRoleFromContext(r.Context()) == auth.RoleAdmin {
-		return true
-	}
-	key := APIKeyFromContext(r.Context())
-	if key != "" && (s.adminConfig.IsAdminKey(key) || (s.config != nil && s.config.Admin.IsAdminKey(key))) {
-		return true
-	}
-	respondError(w, http.StatusForbidden, "OPERATOR_CAPABILITY_REQUIRED",
-		"this route needs an explicit operator capability: an admin session, or an API key listed in admin.allowed_keys (admin.enabled: true)")
-	return false
-}
+// The CE operator shell's gate (review R2) was requireOperatorCapability, a
+// second implementation layered on requireOperatorScope. Since GitHub #495
+// requireOperatorScope itself requires the explicit capability (an admin
+// session or an admin.allowed_keys key; auth off passes), so these routes
+// call it directly and an unrestricted static key with no allowlist entry is
+// refused with the same named 403 on every operator route.
 
 // operatorActor names the caller for the audit row: a stable id, never a
 // bearer secret. A session caller is "session:<user id>"; a key caller is
@@ -109,7 +88,7 @@ func toAccountJSON(v persistence.UserAdminView) accountJSON {
 // OperatorAccounts handles GET (list) and POST (create) on
 // /api/v1/operator/accounts.
 func (s *Server) OperatorAccounts(w http.ResponseWriter, r *http.Request) {
-	if !s.requireOperatorCapability(w, r) {
+	if !s.requireOperatorScope(w, r) {
 		return
 	}
 	if s.accounts == nil {
@@ -163,7 +142,7 @@ func (s *Server) OperatorAccounts(w http.ResponseWriter, r *http.Request) {
 
 // OperatorAccountItem routes /api/v1/operator/accounts/{id}[/grant|/revoke|/disable|/enable|/unlink].
 func (s *Server) OperatorAccountItem(w http.ResponseWriter, r *http.Request) {
-	if !s.requireOperatorCapability(w, r) {
+	if !s.requireOperatorScope(w, r) {
 		return
 	}
 	if s.accounts == nil {

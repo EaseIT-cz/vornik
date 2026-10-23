@@ -266,7 +266,7 @@ func TestServerConfigFor_NotDialledHasItsOwnSentinel(t *testing.T) {
 // Review 5ed3 A7: list_my_setup shows the default transport by name.
 func TestAgentAdmin_ListMySetupShowsTheDefaultTransport(t *testing.T) {
 	f := newAgentAdminFixture(t)
-	news := newFakeMCP(t, "", "headlines")
+	news := newReadOnlyFakeMCP(t, "", "headlines")
 	f.do(agentadmin.VerbCreateProject, agentadmin.CreateProjectInput{Slug: "news", Purpose: "News"})
 	f.approve(f.do(agentadmin.VerbAddMCPServer, agentadmin.AddMCPServerInput{Project: "news", Name: "feed", URL: news.srv.URL}))
 	setup, err := f.svc.ListSetup(context.Background(), f.key)

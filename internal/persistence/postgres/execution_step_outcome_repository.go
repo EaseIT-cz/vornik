@@ -166,6 +166,46 @@ func (r *ExecutionStepOutcomeRepository) SweepPending(ctx context.Context, execu
 	return out, rows.Err()
 }
 
+// RecordStuckStepOutcome inserts the watchdog's row for the step of an
+// execution it failed as stuck (outcome-quality-design §S8.8, GitHub #369),
+// unless a row for (execution_id, step_id) was recorded at or after since (the
+// last checkpoint), and does nothing when the row's id already exists: the
+// primary key is the rule that keeps the watchdog to one row per execution.
+// Reports whether it inserted.
+func (r *ExecutionStepOutcomeRepository) RecordStuckStepOutcome(ctx context.Context, o *persistence.ExecutionStepOutcome, since time.Time) (bool, error) {
+	if o == nil {
+		return false, fmt.Errorf("nil outcome row")
+	}
+	recordedAt := o.RecordedAt
+	if recordedAt.IsZero() {
+		recordedAt = time.Now().UTC()
+	}
+	res, err := r.db.ExecContext(ctx, `
+		INSERT INTO execution_step_outcomes (
+			id, project_id, task_id, execution_id, step_id,
+			role, model, outcome, error_class, error_detail,
+			duration_ms, finalized_at, recorded_at
+		)
+		SELECT $1::text, $2::text, $3::text, $4::text, $5::text,
+		       $6::text, $7::text, $8::text, $9::text, $10::text,
+		       $11::bigint, $12::timestamptz, $13::timestamptz
+		WHERE NOT EXISTS (
+		    SELECT 1 FROM execution_step_outcomes
+		    WHERE execution_id = $4 AND step_id = $5 AND recorded_at >= $14
+		)
+		ON CONFLICT (id) DO NOTHING`,
+		o.ID, o.ProjectID, o.TaskID, o.ExecutionID, o.StepID,
+		o.Role, o.Model, o.Outcome, o.ErrorClass, o.ErrorDetail,
+		nullableInt64(o.DurationMS), nullableTime(o.FinalizedAt), recordedAt,
+		since,
+	)
+	if err != nil {
+		return false, mapDBError(err)
+	}
+	n, err := res.RowsAffected()
+	return n > 0, err
+}
+
 // SweepPendingForTerminalExecutions relabels pending rows under executions that
 // reached a terminal status without their own sweep running. See the interface
 // doc for why this is a reconciler and why the label is `superseded`.

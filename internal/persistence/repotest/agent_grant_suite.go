@@ -23,6 +23,7 @@ func RunAgentGrantSuite(t *testing.T, repo persistence.AgentGrantRepository) {
 	t.Run("MissContract", func(t *testing.T) { grantMissContract(t, h) })
 	t.Run("Integration_grant_remove_regrant", func(t *testing.T) { grantIntegration(t, h) })
 	t.Run("Account_columns", func(t *testing.T) { grantAccount(t, h) })
+	t.Run("Suspended_tools", func(t *testing.T) { grantSuspended(t, h) })
 	t.Run("Workflow_reach", func(t *testing.T) { grantWorkflowReach(t, h) })
 	t.Run("Ceiling", func(t *testing.T) { grantCeiling(t, h) })
 }

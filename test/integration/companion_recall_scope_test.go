@@ -34,6 +34,7 @@ import (
 	"vornik.io/vornik/internal/memory"
 	"vornik.io/vornik/internal/persistence"
 	"vornik.io/vornik/internal/persistence/postgres"
+	"vornik.io/vornik/internal/secrets"
 	"vornik.io/vornik/internal/service"
 )
 
@@ -57,6 +58,7 @@ func newGH368Harness(t *testing.T) *gh368Harness {
 	t.Cleanup(func() {
 		_, _ = db.Exec(`DELETE FROM project_memory_chunks WHERE project_id = $1`, project)
 		_, _ = db.Exec(`DELETE FROM api_keys WHERE project_id = $1`, project)
+		_, _ = db.Exec(`DELETE FROM artifacts WHERE project_id = $1`, project)
 	})
 
 	repo := memory.NewRepository(db)
@@ -64,7 +66,23 @@ func newGH368Harness(t *testing.T) *gh368Harness {
 	cfg.Enabled = true
 	cfg.EmbeddingEndpoint = ""                     // keyword-only recall: deterministic
 	searcher := memory.NewSearcher(cfg, repo, nil) // routing on by default
-	pipeline := memory.NewPipeline(memory.NewIndexer(cfg, repo, nil, zerolog.Nop()), memory.PipelineConfig{Logger: zerolog.Nop()})
+	// The production companion wiring (container_scheduler.go): a secret
+	// detector on the indexer and the synthetic artifacts row a companion
+	// deposit needs (GitHub #436: a companion correction is a companion
+	// deposit and goes through the same pipeline).
+	indexer := memory.NewIndexer(cfg, repo, nil, zerolog.Nop())
+	det, err := secrets.NewMultiDetector(secrets.Config{})
+	require.NoError(t, err)
+	indexer.SetSecrets(det, nil)
+	pipeline := memory.NewPipeline(indexer, memory.PipelineConfig{
+		Logger: zerolog.Nop(),
+		CreateCompanionArtifact: func(ctx context.Context, projectID, artifactID, sourceName string, _ int64) error {
+			_, err := db.ExecContext(ctx, `
+				INSERT INTO artifacts (id, project_id, name, artifact_class, storage_path, size_bytes)
+				VALUES ($1, $2, $3, 'METADATA', 'companion://inline', 0)`, artifactID, projectID, sourceName)
+			return err
+		},
+	})
 	adapter := service.NewMemoryCompanionAdapterForTesting(searcher, pipeline, repo, 0)
 	require.NotNil(t, adapter)
 

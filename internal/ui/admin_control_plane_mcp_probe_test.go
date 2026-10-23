@@ -131,7 +131,7 @@ func TestMCPProbe_AuthChallengeIsReachableNotAFailure(t *testing.T) {
 	mcpProbeConnect = func(context.Context, mcp.ServerConfig, zerolog.Logger) (mcpProbeConn, error) {
 		return nil, errors.New("mcp initialize failed for probe: streamable-http server returned 401")
 	}
-	mcpProbeReachability = func(context.Context, string) (mcpauth.ReachabilityVerdict, error) {
+	mcpProbeReachability = func(context.Context, *http.Client, string) (mcpauth.ReachabilityVerdict, error) {
 		return mcpauth.ReachabilityAuthRequired, nil
 	}
 
@@ -165,7 +165,7 @@ func TestMCPProbe_RefusedWithoutAChallengeStillFails(t *testing.T) {
 	mcpProbeConnect = func(context.Context, mcp.ServerConfig, zerolog.Logger) (mcpProbeConn, error) {
 		return nil, errors.New("streamable-http server returned 403")
 	}
-	mcpProbeReachability = func(context.Context, string) (mcpauth.ReachabilityVerdict, error) {
+	mcpProbeReachability = func(context.Context, *http.Client, string) (mcpauth.ReachabilityVerdict, error) {
 		return mcpauth.ReachabilityRefused, nil
 	}
 

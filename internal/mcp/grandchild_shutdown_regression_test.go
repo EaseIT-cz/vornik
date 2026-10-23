@@ -136,16 +136,11 @@ func TestRegistryRefreshAll_ForkingStdioServer_PublishesReachable(t *testing.T) 
 	assert.Equal(t, "fake_tool", snap[0].Tools[0].Name)
 }
 
-// killProcessGroup must refuse degenerate PIDs: -0 targets the daemon's
-// OWN process group and -(-1) targets pgid 1. The test passing at all is
-// half the assertion — a missing guard would SIGKILL the test process.
+// killProcessGroup on a client with no subprocess is a no-op. The degenerate
+// pid guard (-0 targets the daemon's OWN process group, -(-1) pgid 1) moved
+// with the kill into spawn.Cmd.KillGroup on 2026-10-17 (GitHub #369) and is
+// pinned there, by TestCmd_KillGroupKillsTheGroupAndRefusesDegeneratePids.
 func TestKillProcessGroup_DegeneratePIDsAreRefused(t *testing.T) {
-	for _, pid := range []int{0, -1} {
-		assert.NoError(t, killGroup(pid, func() error {
-			t.Fatalf("pid %d must be refused, not signalled", pid)
-			return nil
-		}), "pid %d must be refused, not signalled", pid)
-	}
 	assert.NoError(t, (&Client{}).killProcessGroup(), "nil cmd is a no-op")
 }
 

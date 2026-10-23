@@ -12,6 +12,7 @@ import (
 	"vornik.io/vornik/internal/budget"
 	"vornik.io/vornik/internal/persistence"
 	"vornik.io/vornik/internal/registry"
+	"vornik.io/vornik/internal/report"
 	"vornik.io/vornik/internal/taskcancel"
 )
 
@@ -65,6 +66,29 @@ type Action struct {
 	// task creation. See dispatcher.WithChatTurnID for the
 	// upstream propagation.
 	ChatTurnID string `json:"-"`
+	// ErrorView is the caller's view of a task's stored error text
+	// (last_error, error_message) in get_status. Like Confirm it is NOT
+	// decodable from JSON, so no model text can set it. Nil withholds every
+	// line: a caller that did not choose a view never gets the raw text
+	// (process-spawn-law design, "Amendment 2026-10-21 (#480)", J2).
+	ErrorView func(string) string `json:"-"`
+	// CreatorActor is the created task's principal (created_by_actor),
+	// set by the dispatcher from the channel's own identity check, never
+	// decodable from JSON (GitHub #499, operator decision A19; design 22,
+	// part 8a): `user:<id>` for a speaker linked to an admin account in a
+	// direct conversation, the request's principal for the UI chat, empty
+	// otherwise. Empty leaves the task unattributed, which memory
+	// verification does not trust.
+	CreatorActor string `json:"-"`
+}
+
+// errorView applies the action's view of a stored error text.
+func (a Action) errorView(text string) string {
+	if a.ErrorView == nil {
+		out, _ := report.ScrubLines(text, nil)
+		return out
+	}
+	return a.ErrorView(text)
 }
 
 // Action types supported by the parser.
@@ -293,6 +317,10 @@ func executeCreateTask(ctx context.Context, action Action, taskRepo persistence.
 		priority = 50
 	}
 	// ATTRIBUTION GAP, deliberate (adoption-leaderboard LLD 2026-08-15 §3.1).
+	// *(Narrowed 2026-10-22, GitHub #499: the dispatcher now resolves an
+	// admin-linked speaker in a direct conversation, and the UI chat's
+	// request principal, into action.CreatorActor, stamped below. Every
+	// other chat turn still records none.)*
 	// CreatedByActor is intentionally NOT set here. A chat-created task has a
 	// real person behind it, but the only identity reaching this function is
 	// action.ChatTurnID; the user lives in chat_audit_log.user_id and resolving
@@ -321,6 +349,10 @@ func executeCreateTask(ctx context.Context, action Action, taskRepo persistence.
 	if action.ChatTurnID != "" {
 		turn := action.ChatTurnID
 		task.ChatTurnID = &turn
+	}
+	if action.CreatorActor != "" {
+		creator := action.CreatorActor
+		task.CreatedByActor = &creator
 	}
 
 	// Set payload from input if provided
@@ -542,14 +574,14 @@ func executeGetStatus(ctx context.Context, action Action, taskRepo persistence.T
 	}
 
 	if task.LastError != nil && *task.LastError != "" {
-		fmt.Fprintf(&summary, "Last Error: %s\n", *task.LastError)
+		fmt.Fprintf(&summary, "Last Error: %s\n", action.errorView(*task.LastError))
 	}
 
 	if exec != nil {
 		fmt.Fprintf(&summary, "\nExecution: %s\n", exec.ID)
 		fmt.Fprintf(&summary, "Execution Status: %s\n", exec.Status)
 		if exec.ErrorMessage != nil && *exec.ErrorMessage != "" {
-			fmt.Fprintf(&summary, "Error: %s\n", *exec.ErrorMessage)
+			fmt.Fprintf(&summary, "Error: %s\n", action.errorView(*exec.ErrorMessage))
 		}
 		// Show the agent's output message
 		if len(exec.Result) > 0 {

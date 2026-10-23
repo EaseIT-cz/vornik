@@ -2,11 +2,13 @@ package registry
 
 import (
 	_ "embed"
+	"fmt"
 	"reflect"
 	"sort"
 	"strings"
 
 	"vornik.io/vornik/internal/config"
+	"vornik.io/vornik/internal/version"
 )
 
 // Per-key release provenance — loader-validator agreement design §13.2.
@@ -79,21 +81,47 @@ func KeysWithoutProvenance() []string {
 	return missing
 }
 
-// ProjectKeysNewerThan returns the keys introduced AFTER the given release, by
-// simple string comparison of the declared `since:` values.
-//
-// String comparison rather than semver parsing, deliberately: releases here are
-// date-ordered (2026.9.4 < 2026.9.5 < 2026.10.0 fails, and that is the known
-// cost) — so the caller is told to compare against a release it actually ran
-// rather than to trust ordering across a major roll. A key with no `since:`
+// ProjectKeysNewerThan returns the keys introduced AFTER the given release.
+// An empty release returns every key that declares one. A key with no `since:`
 // predates tracking and is never "newer".
-func ProjectKeysNewerThan(release string) []KeySince {
+//
+// Releases compare as calendar versions, field by field (version.CompareReleases;
+// loader-validator agreement design, 2026-10-17 amendment, #371). Until then this
+// compared strings, so "2026.10.0" sorted before "2026.9.8" and a query across a
+// month boundary missed every newer key. The running daemon's own describe stamp
+// (2026.10.6-115-g44e675c12) is a valid release: the build already contains the
+// keys of the tag it follows.
+//
+// A release that does not parse (dev+g<rev>, unstamped, a bare hash) has no
+// position in the order, so it is an error rather than a guess.
+func ProjectKeysNewerThan(release string) ([]KeySince, error) {
 	release = strings.TrimSpace(release)
+	var after version.Release
+	if release != "" {
+		r, ok := version.ParseRelease(release)
+		if !ok {
+			return nil, fmt.Errorf("%q is not a calendar release: use one such as 2026.9.4, 2026.10.7-rc1 or a daemon version such as 2026.10.6-115-g44e675c12 (a dev+g<rev>, unstamped or bare-hash build has no release to compare against; run without --since for the full list)", release)
+		}
+		after = r
+	}
 	var out []KeySince
 	for _, k := range ProjectConfigKeysSince() {
-		if k.Since != "" && (release == "" || k.Since > release) {
+		if k.Since == "" {
+			continue
+		}
+		if release == "" {
+			out = append(out, k)
+			continue
+		}
+		since, ok := version.ParseRelease(k.Since)
+		if !ok {
+			// TestSinceTagsNameAPublishedRelease makes this unreachable; it is
+			// a backstop, not a branch anyone should meet.
+			return nil, fmt.Errorf("config key %s declares since:%q, which is not a calendar release", k.Key, k.Since)
+		}
+		if version.CompareReleases(since, after) > 0 {
 			out = append(out, k)
 		}
 	}
-	return out
+	return out, nil
 }

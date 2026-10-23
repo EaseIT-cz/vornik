@@ -68,8 +68,10 @@ func TestMemorySearch_RoutingOff_NoBannerNoTokens(t *testing.T) {
 			t.Fatalf("routing-off output must not contain %q, got:\n%s", tok, res.Content)
 		}
 	}
-	// The legacy per-hit line is still present unchanged.
-	if !strings.Contains(res.Content, "source=r.md") {
+	// The per-hit header line is unchanged except that source_name moved
+	// inside the hit's wrapper (#456, 2026-10-21).
+	if !strings.Contains(res.Content, "[1] id=c1  score=0.50\n") ||
+		!strings.Contains(res.Content, "<untrusted_content source=\"memory_hit\">\nsource_name: r.md\n") {
 		t.Fatalf("legacy hit line regressed:\n%s", res.Content)
 	}
 }

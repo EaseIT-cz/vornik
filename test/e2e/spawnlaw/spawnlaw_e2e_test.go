@@ -442,6 +442,12 @@ telegram:
 runtime:
   userns_mode: ""
   run_as_user: ""
+# The fake HTTP MCP server listens on loopback. Since #494 the control-plane
+# MCP probe refuses private and loopback addresses unless the operator lists
+# the host, exactly as an operator would for an internal server (CI E2E
+# HTTP on 9f904f056: "dial guard: refusing to dial ... 127.0.0.1").
+integrations:
+  allowed_hosts: ["127.0.0.1"]
 mcp:
   servers:
     - name: config-stdio

@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"vornik.io/vornik/internal/persistence"
+	"vornik.io/vornik/internal/report"
 )
 
 // explainResponse is the JSON shape returned by the explain endpoint.
@@ -34,6 +35,13 @@ func (s *Server) ExplainTask(w http.ResponseWriter, r *http.Request, projectID, 
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
+	// GitHub #491: an unscoped caller that is not admin-class reads no
+	// explain, decided before the task read, the renderer and the scrubber.
+	access := s.errorTextAccess(r)
+	if access == ErrorTextDenied {
+		RespondProjectScopeRequired(w)
+		return
+	}
 	if s.explainRenderer == nil {
 		respondError(w, http.StatusServiceUnavailable, "EXPLAIN_NOT_CONFIGURED",
 			"explain endpoint not wired; pass WithExplainRenderer at server construction")
@@ -56,7 +64,28 @@ func (s *Server) ExplainTask(w http.ResponseWriter, r *http.Request, projectID, 
 		}
 	}
 
-	result, err := s.explainRenderer.Render(r.Context(), taskID)
+	// GitHub #440: only an admin-class caller reads the operator view. Every
+	// other caller renders with a copy whose log tail is the scrubbed held
+	// log and whose free-text fields are scrubbed before they are cut, so the
+	// summary built from them cannot quote a raw value (process-spawn-law
+	// design, "Amendment 2026-10-21 (#439, #440)", C3 R2).
+	renderer := s.explainRenderer
+	if access != ErrorTextOperator {
+		scrub := s.liveLogs().scrub
+		held, herr := s.heldTaskLog().ScrubbedView(scrub)
+		if herr != nil {
+			respondLogScrubberUnavailable(w)
+			return
+		}
+		cp := *s.explainRenderer
+		cp.Scrub = scrub
+		if cp.Logs != nil {
+			cp.Logs = held
+		}
+		renderer = &cp
+	}
+
+	result, err := renderer.Render(r.Context(), taskID)
 	if err != nil {
 		// Structured-cause mapping: ErrNotFound / "not found" → 404,
 		// anything else → 500 with the error text. The CLI surfaces
@@ -67,6 +96,12 @@ func (s *Server) ExplainTask(w http.ResponseWriter, r *http.Request, projectID, 
 		}
 		respondError(w, http.StatusInternalServerError, "EXPLAIN_FAILED", err.Error())
 		return
+	}
+	// The summary is built from the scrubbed inputs; it passes the scrubber
+	// once more so a field added to the template later is covered too
+	// (code review review-20261021-0075 F2, as the explainer's second pass).
+	if renderer.Scrub != nil {
+		result.Summary, _ = report.ScrubLines(result.Summary, renderer.Scrub)
 	}
 
 	// Re-marshal Inputs through json so we don't bind the wire to the

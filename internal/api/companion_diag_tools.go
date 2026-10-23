@@ -365,6 +365,9 @@ func (s *Server) companionToolTaskExplain(ctx context.Context, key *persistence.
 	// podman logs; it is HeldTaskLog now.)
 	renderer := *s.explainRenderer
 	renderer.Logs = nil
+	// GitHub #466 D7: scrub before the renderer's cuts, as the REST route
+	// does, so a secret straddling a cut leaves no fragment.
+	renderer.Scrub = st.scrub
 	res, err := renderer.Render(ctx, task.ID)
 	if err != nil {
 		return "", fmt.Errorf("task %s not found", args.TaskID)

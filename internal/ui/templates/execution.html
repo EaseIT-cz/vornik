@@ -18,7 +18,7 @@
                 </div>
                 <div class="flex items-center gap-2">
                     {{if eq .Execution.Status "RUNNING"}}
-                    <form method="POST" action="/ui/executions/{{.Execution.ID}}/cancel" onsubmit="return confirm('Cancel this execution and its task?')">
+                    <form method="POST" action="/ui/executions/{{.Execution.ID}}/cancel" data-confirm="Cancel this execution and its task?">
                         <button type="submit" class="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg bg-rose-700 hover:bg-rose-600 text-white transition-colors">
                             <svg class="h-3.5 w-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12"/></svg>
                             Cancel
@@ -40,7 +40,7 @@
                     {{if or (eq .Execution.Status "FAILED") (eq .Execution.Status "CANCELLED")}}
                     {{if .Execution.CompletedSteps}}
                     <form method="POST" action="/ui/executions/{{.Execution.ID}}/retry-from-step"
-                          onsubmit="return confirm('Rerun this execution from the selected step? Downstream step outcomes from the original run will be marked as superseded.');"
+                          data-confirm="Rerun this execution from the selected step? Downstream step outcomes from the original run will be marked as superseded."
                           class="flex items-center gap-1.5">
                         <select name="step_id" class="px-2 py-1.5 text-xs font-mono rounded-lg bg-surface-700 border border-control text-ink-100" required>
                             <option value="" disabled selected>Rerun from step…</option>
@@ -459,7 +459,7 @@
                                 <td class="px-4 py-2 font-mono text-xs text-ink-400">{{if .AttributedToStepID}}{{.AttributedToStepID}}{{else}}—{{end}}</td>
                                 <td class="px-4 py-2 text-xs text-ink-400">{{.DurationDisplay}}</td>
                                 <td class="px-4 py-2 text-xs text-ink-300 max-w-xs truncate" title="{{.ErrorDetail}}">{{if .ErrorDetail}}{{.ErrorDetail}}{{else}}—{{end}}</td>
-                                <td class="px-4 py-2 text-xs">{{if .PromptURL}}<a class="text-accent-300 hover:underline" href="{{.PromptURL}}" title="What this step's model was told at its first request (system, user, tools)">view</a>{{else}}<span class="text-ink-500" title="No prompt recorded: the agent image predates step-prompt persistence, or the step never reached its first request">—</span>{{end}}{{if .ExchangesURL}} · <a class="text-accent-300 hover:underline" href="{{.ExchangesURL}}" title="Every model exchange of this step, recorded because the project opted in (recording.llm_exchanges)">exchanges</a>{{end}}{{if .InputURL}} · <a class="text-accent-300 hover:underline" href="{{.InputURL}}" title="The task.json the executor handed this step's container, as stored (redacted at write)">input</a>{{end}}{{if .ResultURL}} · <a class="text-accent-300 hover:underline" href="{{.ResultURL}}" title="The result.json this step's container handed back, as stored (redacted at write)">result</a>{{end}}</td>
+                                <td class="px-4 py-2 text-xs">{{if .PromptURL}}<a class="text-accent-300 hover:underline" href="{{.PromptURL}}" title="What this step's model was told at its first request (system, user, tools)">view</a>{{else}}<span class="text-ink-500" title="No prompt recorded: the agent image predates step-prompt persistence, or the step never reached its first request">—</span>{{end}}{{if .ExchangesURL}} · <a class="text-accent-300 hover:underline" href="{{.ExchangesURL}}" title="Every model exchange of this step, recorded because the project opted in (recording.llm_exchanges)">exchanges</a>{{end}}{{if .InputURL}} · <a class="text-accent-300 hover:underline" href="{{.InputURL}}" title="The task.json the executor handed this step's container: as stored (redacted at write) for an operator, scrubbed for other callers">input</a>{{end}}{{if .ResultURL}} · <a class="text-accent-300 hover:underline" href="{{.ResultURL}}" title="The result.json this step's container handed back: as stored (redacted at write) for an operator, scrubbed for other callers">result</a>{{end}}</td>
                             </tr>
                             {{end}}
                         </tbody>

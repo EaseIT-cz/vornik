@@ -44,17 +44,19 @@ var spawnImporters = map[string]struct {
 	uses   []string
 	reason string
 }{
-	"internal/runtime":                 {[]string{"PodmanAgent", "PodmanControl", "LookPodman"}, "agent containers (PodmanAgent) and their lifecycle (PodmanControl)"},
+	"internal/runtime":                 {[]string{"PodmanAgent", "PodmanControl", "LookPodman", "MemoryLimitFlags"}, "agent containers (PodmanAgent) and their lifecycle (PodmanControl); MemoryLimitFlags builds argv only, spawns nothing (#379)"},
 	"internal/executor":                {[]string{"GitWorkspace", "GitWorkspaceDirs", "PodmanControl"}, "task worktrees (GitWorkspace; GitWorkspaceDirs names a worktree's git dir, S6-D3); the in-use check's podman ps"},
 	"internal/executor/handlers/forge": {[]string{"GitWorkspace"}, "change-request commit count, patch and HEAD"},
 	"internal/forge/github":            {[]string{"GitWorkspace"}, "the change-request push"},
 	"internal/autonomy":                {[]string{"GitWorkspace"}, "the backlog workspace refresh"},
+	"internal/memory":                  {[]string{"GitWorkspace", "GitProvenance", "GitProvenanceClone", "UnderProvenanceRoot"}, "the provenance verifier's read-only object reads (cat-file, rev-parse, rev-list, remote get-url) in a project's clone, run by the ingest worker and the hourly sweep for companion-delegated output, plus the hourly sweep's fetch of the trusted branch into a daemon-only memory.provenance_clone (GitHub #499); since #506 the same reads, the pinned fetch and the pinned blob-less https clone of each repository's automatic clone run under the provenance kind (GitProvenance, GitProvenanceClone), never a workspace kind; no request handler produces such output or triggers the fetch (design 22, amendments #482 and #506)"},
+	"internal/cli":                     {[]string{"RegisterWorkspaceRoot", "RegisterProvenanceRoot"}, "vornikctl memory reverify-delegated registers the workspace root, and as provenance roots a configured daemon-only provenance clone and the automatic-clone root, for the verifier it runs on the operator's request (design 22, amendments #482 and #506)"},
 	"internal/api":                     {[]string{"GitHTTPBackend"}, "git HTTP only (design §3 precondition)"},
-	"internal/sandboxtool":             {[]string{"PodmanAgent", "PodmanControl"}, "the sandbox one-shot runner (S5a)"},
+	"internal/sandboxtool":             {[]string{"PodmanAgent", "PodmanControl", "MemoryLimitFlags"}, "the sandbox one-shot runner (S5a); MemoryLimitFlags builds argv only (#379)"},
+	"internal/projectdeps/install":     {[]string{"MemoryLimitFlags"}, "vornikctl deps install's probe and pip containers; MemoryLimitFlags builds argv only, spawns nothing (#428)"},
 	"internal/mcp":                     {[]string{"ConfiguredProgram"}, "stdio MCP servers: RUNS a ConfiguredCommand, never mints one"},
 	"internal/chat":                    {[]string{"ConfiguredProgram"}, "claude/codex CLI providers: RUNS a ConfiguredCommand, never mints one"},
-	"internal/service":                 {[]string{"NewConfiguredCommand", "RegisterWorkspaceRoot", "ComposeGitConfig"}, "the config loader's hand-off: mints ConfiguredCommands from loaded config, registers the workspace root, and at startup composes daemon git's global config (S6-D4, which reads the operator's config inside spawn); nothing request-reachable"},
-	"cmd/mcp-bridge":                   {[]string{"NewConfiguredCommand"}, "in-sandbox bridge: mints from its own mcp.json"},
+	"internal/service":                 {[]string{"NewConfiguredCommand", "RegisterWorkspaceRoot", "RegisterProvenanceRoot", "ComposeGitConfig"}, "the config loader's hand-off: mints ConfiguredCommands from loaded config, registers the workspace root, registers each accepted daemon-only memory.provenance_clone and the automatic-clone root as provenance roots (GitHub #499, #506), and at startup composes daemon git's global config (S6-D4, which reads the operator's config inside spawn); nothing request-reachable"},
 }
 
 const spawnImportPath = "internal/spawn"

@@ -51,7 +51,11 @@ func init() {
 func runConfigKeys(cmd *cobra.Command, _ []string) error {
 	keys := registry.ProjectConfigKeysSince()
 	if configKeysSince != "" {
-		keys = registry.ProjectKeysNewerThan(configKeysSince)
+		newer, err := registry.ProjectKeysNewerThan(configKeysSince)
+		if err != nil {
+			return fmt.Errorf("--since %w", err)
+		}
+		keys = newer
 	}
 
 	if configJSON {

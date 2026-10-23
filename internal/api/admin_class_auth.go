@@ -3,6 +3,7 @@ package api
 import (
 	"encoding/json"
 	"net/http"
+	"strings"
 
 	"vornik.io/vornik/internal/budget"
 )
@@ -39,6 +40,110 @@ func IsAdminClassRequest(r *http.Request, isAdminKey func(string) bool) bool {
 	}
 	key := APIKeyFromContext(r.Context())
 	return key != "" && isAdminKey != nil && isAdminKey(key)
+}
+
+// ErrorTextAccess is what a caller may read of a task's logs, explain, live
+// stream and persisted error text (GitHub #440, #466, #491; process-spawn-law
+// design, "Amendment 2026-10-21 (#491)", K1). The zero value is
+// ErrorTextDenied, so an unset answer refuses.
+type ErrorTextAccess int
+
+const (
+	// ErrorTextDenied reads nothing: an unscoped caller that is not
+	// admin-class (operator decision B7: deny until scoped).
+	ErrorTextDenied ErrorTextAccess = iota
+	// ErrorTextScrubbed reads the scrubbed view (#440, #466).
+	ErrorTextScrubbed
+	// ErrorTextOperator reads the operator view, bytes unchanged.
+	ErrorTextOperator
+)
+
+// UnscopedWithheldText replaces, whole, a persisted error field on a
+// structured read for an ErrorTextDenied caller (#491, K2): no line of the
+// text, raw or scrubbed, reaches it.
+const UnscopedWithheldText = "[withheld: key not scoped to a project]"
+
+// ErrorTextAccessFor is the one decision behind every reader of the task
+// logs, explain, live stream and persisted error text, in this order: an
+// admin-class caller (IsAdminClassRequest) reads the operator view; a session
+// (whatever its grant: a ["*"] group grant is the operator's own scoping act,
+// a no-access session carries the sentinel scope the project gate refuses)
+// and a request carrying a project scope (every DB key, a scoped static key)
+// read the scrubbed view; everything else is denied, so a principal a later
+// backend adds without a scope is refused until it is placed.
+func ErrorTextAccessFor(r *http.Request, isAdminKey func(string) bool) ErrorTextAccess {
+	if IsAdminClassRequest(r, isAdminKey) {
+		return ErrorTextOperator
+	}
+	if id := IdentityFromContext(r.Context()); id != nil && id.Backend == "session" {
+		return ErrorTextScrubbed
+	}
+	if _, scoped := requestScopedProjectSet(r); scoped {
+		return ErrorTextScrubbed
+	}
+	return ErrorTextDenied
+}
+
+// OperatorSurfaceAccess is what a caller gets of the operator surface: the
+// daemon-level routes behind requireOperatorScope (GitHub #495;
+// 18-security-and-tenancy.md, "Amendment 2026-10-21 (#495)", O1). The zero
+// value is OperatorSurfaceRefused, so an unset answer refuses.
+type OperatorSurfaceAccess int
+
+const (
+	// OperatorSurfaceRefused answers 403: an unscoped caller that is not
+	// admin-class, and any principal a later backend adds without a place.
+	OperatorSurfaceRefused OperatorSurfaceAccess = iota
+	// OperatorSurfaceHidden answers 404: a project-scoped tenant, which is
+	// not told the surface exists.
+	OperatorSurfaceHidden
+	// OperatorSurfaceAllowed passes: an admin-class caller.
+	OperatorSurfaceAllowed
+)
+
+// OperatorSurfaceAccessFor is the one decision behind every operator-surface
+// route, in this order: an admin-class caller (IsAdminClassRequest: auth off,
+// an admin session whatever its grant, an admin key) is allowed; a request
+// carrying a project scope is hidden; everything else is refused. Being
+// unscoped is not an operator capability: a plain api.api_keys static key, a
+// ["*"] user session, an empty-project DB key and an hmac-webhook identity
+// are all unscoped and all refused.
+func OperatorSurfaceAccessFor(r *http.Request, isAdminKey func(string) bool) OperatorSurfaceAccess {
+	if IsAdminClassRequest(r, isAdminKey) {
+		return OperatorSurfaceAllowed
+	}
+	if _, scoped := requestScopedProjectSet(r); scoped {
+		return OperatorSurfaceHidden
+	}
+	return OperatorSurfaceRefused
+}
+
+// operatorSurfaceAccess is OperatorSurfaceAccessFor over the server's
+// admin-key checker.
+func (s *Server) operatorSurfaceAccess(r *http.Request) OperatorSurfaceAccess {
+	return OperatorSurfaceAccessFor(r, s.isAdminClassKey)
+}
+
+// errorTextAccess is ErrorTextAccessFor over the server's admin-key checker.
+func (s *Server) errorTextAccess(r *http.Request) ErrorTextAccess {
+	return ErrorTextAccessFor(r, s.isAdminClassKey)
+}
+
+// WithheldUnscoped is the ErrorTextDenied view of one persisted error field:
+// the constant for any text, an empty text left empty (so no error block is
+// invented where there was none).
+func WithheldUnscoped(text string) string {
+	if strings.TrimSpace(text) == "" {
+		return text
+	}
+	return UnscopedWithheldText
+}
+
+// RespondProjectScopeRequired is the ErrorTextDenied answer of a route whose
+// body is the log, the explain or a stream of either (#491, K2).
+func RespondProjectScopeRequired(w http.ResponseWriter) {
+	respondError(w, http.StatusForbidden, "PROJECT_SCOPE_REQUIRED",
+		"the task logs, explain and error text need a project-scoped key or an admin-class key")
 }
 
 // requireAdminClass gates a doctor route on isAdminClassRequest and writes the

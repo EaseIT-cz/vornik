@@ -1,10 +1,13 @@
 package steering
 
 import (
+	"bytes"
 	"context"
+	"errors"
 	"strings"
 	"testing"
 
+	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/rs/zerolog"
 
 	"vornik.io/vornik/internal/conversation"
@@ -256,5 +259,63 @@ func TestOperatorAlert_EmailRecipientGetsToAndSubject(t *testing.T) {
 	}
 	if cs["subject"] == "" {
 		t.Errorf("email alert must carry a subject")
+	}
+}
+
+// TestOperatorAlert_EveryOutcomeIsCounted — GitHub #369, outcome-quality LLD
+// S8.11 row 12. The package had no metrics: a missing outbound or recipient
+// logged at Debug and a send failure Warned uncounted, so an operator alert
+// meant to go that could not was invisible. Each outcome now counts
+// vornik_steering_operator_alert_total{kind,outcome}, and no_outbound /
+// no_recipients rise to Warn (a misconfiguration).
+func TestOperatorAlert_EveryOutcomeIsCounted(t *testing.T) {
+	delta := func(kind, outcome string, fn func()) float64 {
+		before := testutil.ToFloat64(operatorAlertTotal.WithLabelValues(kind, outcome))
+		fn()
+		return testutil.ToFloat64(operatorAlertTotal.WithLabelValues(kind, outcome)) - before
+	}
+	approval := string(persistence.TaskStatusAwaitingApproval)
+	build := func(ch *fakeChannel, cfg OperatorAlertConfig, buf *bytes.Buffer) *OperatorAlertNotifier {
+		res := fakeResolver{byName: map[string]conversation.Channel{}}
+		if ch != nil {
+			res.byName[ch.name] = ch
+		}
+		return NewOperatorAlert(res, nil, nil, "", cfg, true, zerolog.New(buf))
+	}
+	steer := func(n *OperatorAlertNotifier) {
+		n.NotifySteeringRequired(context.Background(), autonomyTask(), approval)
+	}
+	oper := func(n *OperatorAlertNotifier) { n.NotifyOperator(context.Background(), "s", "b") }
+	tg := OperatorAlertConfig{Channel: "telegram", Session: "555"}
+
+	cases := []struct {
+		name, kind, outcome string
+		ch                  *fakeChannel
+		cfg                 OperatorAlertConfig
+		call                func(*OperatorAlertNotifier)
+		wantWarn            bool
+	}{
+		{"steering sent", "steering", "sent", &fakeChannel{name: "telegram"}, tg, steer, false},
+		{"steering no outbound", "steering", "no_outbound", nil, tg, steer, true},
+		{"steering no recipients", "steering", "no_recipients", &fakeChannel{name: "telegram"},
+			OperatorAlertConfig{Channel: "telegram"}, steer, true},
+		{"steering send failed", "steering", "send_failed",
+			&fakeChannel{name: "telegram", sendErr: errors.New("429")}, tg, steer, true},
+		{"operator sent", "operator", "sent", &fakeChannel{name: "telegram"}, tg, oper, false},
+		{"operator no outbound", "operator", "no_outbound", nil, tg, oper, true},
+		{"operator send failed", "operator", "send_failed",
+			&fakeChannel{name: "telegram", sendErr: errors.New("429")}, tg, oper, true},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			var buf bytes.Buffer
+			n := build(c.ch, c.cfg, &buf)
+			if got := delta(c.kind, c.outcome, func() { c.call(n) }); got != 1 {
+				t.Errorf("operator_alert_total{kind=%q,outcome=%q} delta = %v, want 1", c.kind, c.outcome, got)
+			}
+			if c.wantWarn && !strings.Contains(buf.String(), `"level":"warn"`) {
+				t.Errorf("outcome %q must log at Warn; got %q", c.outcome, buf.String())
+			}
+		})
 	}
 }

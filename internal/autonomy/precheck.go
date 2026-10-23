@@ -4,12 +4,12 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
 	"os"
 	"strings"
 	"time"
 
+	"vornik.io/vornik/internal/integrations/dialguard"
 	"vornik.io/vornik/internal/registry"
 	"vornik.io/vornik/internal/trading"
 )
@@ -176,7 +176,15 @@ func brokerReachable(ctx context.Context, baseURL string) bool {
 	if err != nil {
 		return false
 	}
-	resp, err := http.DefaultClient.Do(req)
+	// GitHub #465 (2026-10-21, trading-dashboard-design "Amendment 2026-10-21
+	// (#465)"): the shared guard, not http.DefaultClient. The URL's own
+	// loopback host is dialled, any other host must resolve to a public
+	// address, and a redirect is never followed, so no second request (and no
+	// X-Project-ID) leaves the daemon. Timeout 0: the caller's context deadline
+	// is the bound, as before.
+	client := dialguard.LoopbackURLGuard(baseURL, nil).NoRedirectHTTPClient(0)
+	defer client.CloseIdleConnections()
+	resp, err := client.Do(req)
 	if err != nil {
 		return false
 	}
@@ -184,7 +192,7 @@ func brokerReachable(ctx context.Context, baseURL string) bool {
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return false
 	}
-	body, err := io.ReadAll(io.LimitReader(resp.Body, 32*1024))
+	body, err := dialguard.ReadBoundedBody(resp.Body, 32*1024)
 	if err != nil {
 		// 200 OK but body unreadable — be lenient (cap content
 		// is best-effort, not a hard contract). Treat as

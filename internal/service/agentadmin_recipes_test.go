@@ -172,9 +172,8 @@ func TestAgentAdmin_InstallRecipeOneHostMailAndCalendar(t *testing.T) {
 	if len(slots) != 2 || slots["MAIL_TOKEN"] == "" || slots["CALENDAR_TOKEN"] == "" {
 		t.Fatalf("credential requests after the approval: %v", slots)
 	}
-	// One key, then that server's tools, then the other: a tools approval
-	// filed while another waits in the same project is refused and not
-	// retried (a separate, host-independent gap, filed with #402's fix).
+	// One key, then that server's tools, then the other. Both keys first is
+	// TestAgentAdmin_BothKeysFirstThenToolsApprovals (GitHub #409, §19.15).
 	for _, server := range []struct{ cred, name string }{{"MAIL_TOKEN", "mail"}, {"CALENDAR_TOKEN", "calendar"}} {
 		req, _ := f.c.repos.ApproverDevices.GetRequest(ctx, slots[server.cred])
 		if err := f.svc.enterCredential(ctx, f.device, *req, req.RenderedSHA256, []byte(credCanary)); err != nil {
@@ -337,7 +336,7 @@ schedule_default: null
 func TestAgentAdmin_RecipeNarrowingIsRecordedAndCounted(t *testing.T) {
 	f := newAgentAdminFixture(t)
 	ctx := context.Background()
-	src := newFakeMCP(t, "", "look", "peek")
+	src := newReadOnlyFakeMCP(t, "", "look", "peek")
 	f.do(agentadmin.VerbCreateProject, agentadmin.CreateProjectInput{Slug: "personal", Purpose: "Personal automations"})
 
 	f.writeProbe(1, "look, peek, scan")

@@ -53,6 +53,16 @@ var chatMemoryCompensationDeletes = promauto.NewCounter(prometheus.CounterOpts{
 	Help:      "Chat-memory writes rolled back because the data-subject link failed after the chunk insert (design D4.1a).",
 })
 
+// chatMemoryNEDRefusals counts shared chat-memory writes the pre-commit NED
+// gate refused, by verdict (block, error). A block used to return its refusal
+// with no log and no metric (GitHub #369, outcome-quality LLD §S8.11 row 10b).
+var chatMemoryNEDRefusals = promauto.NewCounterVec(prometheus.CounterOpts{
+	Namespace: "vornik",
+	Subsystem: "chat_memory",
+	Name:      "ned_refusals_total",
+	Help:      "Shared chat-memory writes refused by the pre-commit NED gate, by verdict (block, error).",
+}, []string{"verdict"})
+
 // SLICE 1 of the chat memory-write design
 // (https://docs.vornik.io), after three review
 // rounds. This slice is the HARD GATE and nothing else — there is deliberately NO write
@@ -451,8 +461,15 @@ func (te *ToolExecutor) rememberSharedGranted(
 	decision := te.sharedNED.Screen(ctx, activeProject, content)
 	switch decision.Verdict {
 	case ned.VerdictBlock:
+		// The count of blocked persons, never their names: the log is not a
+		// place for third-party personal data.
+		te.logger.Info().Str("project", activeProject).
+			Int("blocked_persons", len(decision.BlockedPersons)).
+			Msg("remember: NED gate blocked a shared write")
+		chatMemoryNEDRefusals.WithLabelValues("block").Inc()
 		return ToolResult{Content: sharedNEDBlockRefusal(decision.BlockedPersons)}
 	case ned.VerdictError:
+		chatMemoryNEDRefusals.WithLabelValues("error").Inc()
 		te.logger.Warn().Err(decision.Err).Str("project", activeProject).
 			Msg("remember: NED gate errored on a shared write — failing closed")
 		return ToolResult{Content: sharedNEDErrorRefusal()}

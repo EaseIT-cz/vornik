@@ -1,7 +1,7 @@
 ---
 sources:
     - path: docs/operator/storage-and-retention.md
-      sha256: 8ab4607d847f20fd3ff15647ae93ed4e4ef186a7e8752c62d13778ae8c3eca46
+      sha256: 077ec5c78809f0fddbbe49211a34445a0ce2b7ba886c0ea432b2ba5ddd2b9108
 ---
 # Storage and Retention
 
@@ -124,6 +124,50 @@ What the defaults mean:
   throwaway logs — set a finite value only if storage pressure forces it.
 - `task_messages_days: 0` means chat history is pruned only when its parent
   task is pruned. Set it explicitly to trim chat faster than tasks.
+
+### Copies of conversations: diagnostic caches and upgrade dumps
+
+Some stores hold *copies* of conversation text rather than the original.
+An erasure request does not reach them directly, so each one has a limit on
+how long it can keep a copy. These limits are always on while the sweeper is
+enabled; setting a key to `0` means "use the default", not "keep forever".
+
+```yaml
+retention:
+  blackbox_trace_cache_days: 1   # assembled task traces (default 1 day)
+  project_gists_days: 7          # project summaries and their narrative (default 7)
+  upgrade_dump_keep: 2           # database dumps left by vornik-update.sh
+  upgrade_dump_grace_days: 14    # kept this long after their upgrade succeeded
+  upgrade_dump_dir: ""           # where the backups are; empty = your home directory
+```
+
+- **Task traces** (the black box's trace view) are a cache: a trace older than
+  a day is rebuilt from the original records when you open it, so nothing is
+  lost by removing it.
+- **Project summaries** are rebuilt every few minutes while a project's
+  memory loop runs. A summary that has not been refreshed for a week, and a
+  narrative that has not been rewritten for a week, are removed. A project
+  page then shows its "no summary yet" state until the loop runs again.
+- **Upgrade dumps.** Each run of `vornik-update.sh` saves a full copy of the
+  database in `<home>/vornik-upgrade-backup-<date>/`. The newest two are
+  kept at most, and each is removed 14 days after the upgrade that wrote it
+  succeeded. The newest dump of an upgrade that did *not* succeed is kept until
+  a later upgrade runs: it is your way back. Only the dump file is removed;
+  the previous binaries and the run's record stay, and the record notes when
+  and why the dump went. `vornik-update.sh` applies this at the end of every
+  successful upgrade, and the sweeper applies it between upgrades.
+
+```bash
+vornikctl retention upgrade-dumps            # preview
+vornikctl retention upgrade-dumps --apply    # delete the dumps past the policy
+```
+
+`vornikctl doctor` reports dumps past the policy as `upgrade_dumps`.
+
+!!! warning "With the sweeper off"
+    With `retention.enabled: false` (the default) the task-trace cache and the
+    project summaries keep their copies indefinitely. Upgrade dumps are still
+    pruned, but only when an upgrade runs.
 
 ### Per-project overrides
 

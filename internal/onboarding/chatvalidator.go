@@ -3,10 +3,12 @@ package onboarding
 import (
 	"context"
 	"errors"
+	"net/http"
 	"strings"
 	"time"
 
 	"vornik.io/vornik/internal/chat"
+	"vornik.io/vornik/internal/integrations/dialguard"
 )
 
 // ChatConfigProposal is the chat-config input the validator tests
@@ -62,12 +64,27 @@ type ChatValidator struct {
 	timeout time.Duration
 }
 
+// setupProbeTimeout bounds one chat setup probe request.
+const setupProbeTimeout = 10 * time.Second
+
+// setupProbeHTTPClient is the client every setup probe dials through
+// (GitHub #502; 18-security-and-tenancy.md, "Amendment 2026-10-22 (#502)",
+// S3). The endpoint is the caller's: a local or LAN model server is the
+// common case, so private and loopback addresses are admitted, while the
+// metadata service and the rest of the link-local range are refused, no
+// proxy is consulted and no redirect is followed.
+func setupProbeHTTPClient(timeout time.Duration) *http.Client {
+	return dialguard.DialGuard{AllowPrivate: true}.NoRedirectHTTPClient(timeout)
+}
+
 // NewChatValidator returns a validator that builds real *chat.Client
-// instances with a 10s timeout per check.
+// instances with a 10s timeout per check, dialling through
+// setupProbeHTTPClient.
 func NewChatValidator() ChatValidator {
 	return ChatValidator{
 		factory: func(endpoint, apiKey, model string) chatReachable {
-			return chat.NewClient(endpoint, apiKey, model, chat.WithTimeout(10*time.Second))
+			return chat.NewClient(endpoint, apiKey, model,
+				chat.WithTimeout(setupProbeTimeout), chat.WithHTTPClient(setupProbeHTTPClient(setupProbeTimeout)))
 		},
 		timeout: 10 * time.Second,
 	}

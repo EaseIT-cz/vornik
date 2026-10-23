@@ -202,14 +202,14 @@ func (c *Classifier) Classify(
 			// Tokens were spent on an unusable answer; record cost
 			// so the dashboard isn't undercounted.
 			c.recordUsage(ctx, resp, projectID, chunkID)
-			lastErr = fmt.Errorf("classifier: unrecognised class in response: %q",
+			lastErr = fmt.Errorf("%w: %q", ErrClassifierUnparseable,
 				truncForClassifier(raw, 80))
 			break
 		}
 		if err != nil {
 			lastErr = err
 		} else {
-			lastErr = fmt.Errorf("classifier: no choices in response")
+			lastErr = ErrClassifierNoChoices
 		}
 		if chat.RetryAllowed(callCtx) != nil || errors.Is(err, chat.ErrOptionalWorkDisabled) {
 			return ClassUnclassified, lastErr

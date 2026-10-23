@@ -242,22 +242,39 @@ func (s *Server) AdminCPCCancel(w http.ResponseWriter, r *http.Request, id strin
 // of the daemon explicitly supports.
 // requireOperatorScope gates a daemon-level operator surface that is NOT part
 // of the Enterprise admin suite — it must work in Community Edition (which has
-// no admin surface) while still keeping daemon-wide state away from
-// project-scoped tenant keys. Allowed: auth-off (single-operator), and any
-// all-access caller (admin key, session-admin, or an unscoped key). Denied
-// (404, no existence leak): a project-scoped tenant key. Used by config-show
-// and the memory-firewall management surface, both Community features per the
-// editions matrix. Unlike requireAdminGate it never depends on the admin
-// surface being wired, so it does not 404/501 in Community.
+// no admin surface) while still keeping daemon-wide state away from every
+// caller that is not the operator. The decision is OperatorSurfaceAccessFor
+// (GitHub #495; 18-security-and-tenancy.md, "Amendment 2026-10-21 (#495)"):
+// allowed, an admin-class caller (auth off, an admin session, a key in
+// admin.allowed_keys); hidden (404, no existence leak), a project-scoped
+// tenant; refused (403 OPERATOR_CAPABILITY_REQUIRED), every other caller,
+// an unscoped static key that is not admin-class included. Unscoped is not
+// an operator capability. Unlike requireAdminGate it never depends on the
+// admin surface being wired, so it does not 404/501 in Community.
 func (s *Server) requireOperatorScope(w http.ResponseWriter, r *http.Request) bool {
-	if !IsAuthEnabledFromContext(r.Context()) {
+	switch s.operatorSurfaceAccess(r) {
+	case OperatorSurfaceAllowed:
 		return true
-	}
-	if _, scoped := RequestScopedProjects(r); scoped {
+	case OperatorSurfaceHidden:
 		http.NotFound(w, r)
 		return false
+	default:
+		respondError(w, http.StatusForbidden, "OPERATOR_CAPABILITY_REQUIRED",
+			"this route needs an explicit operator capability: an admin session, or an API key listed in admin.allowed_keys (admin.enabled: true)")
+		return false
 	}
-	return true
+}
+
+// operatorOnly gates h on requireOperatorScope (the one operator-surface
+// gate) for a handler that holds no *Server, such as the config reload pair
+// (GitHub #495, design A4a and O5: they shipped with no gate at all).
+func (s *Server) operatorOnly(h http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if !s.requireOperatorScope(w, r) {
+			return
+		}
+		h(w, r)
+	}
 }
 
 func (s *Server) requireAdminGate(w http.ResponseWriter, r *http.Request) bool {

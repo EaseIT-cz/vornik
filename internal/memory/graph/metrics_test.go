@@ -27,7 +27,7 @@ func TestNewMetrics_RegistersAllExpected(t *testing.T) {
 	m.ChunksExtractedTotal.WithLabelValues("success").Inc()
 	m.ChunksExtractedTotal.WithLabelValues("failed").Inc()
 	m.ExtractionDuration.Observe(1.2)
-	m.CircuitTrippedTotal.Inc()
+	m.CircuitTrippedTotal.WithLabelValues("chunk_failures").Inc()
 	m.StageTokensTotal.WithLabelValues("extractor", "input").Add(123)
 	m.StageTokensTotal.WithLabelValues("extractor", "output").Add(45)
 	m.StageTokensTotal.WithLabelValues("resolver", "input").Add(200)

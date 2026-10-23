@@ -115,7 +115,7 @@ func TestDoctorFeatureAuthz_AdminClassOnly(t *testing.T) {
 					rec := doctorAuthzGetFeature(h, path, tc.key)
 					require.Equalf(t, tc.want, rec.Code, "%s: %s", tc.name, rec.Body.String())
 					if tc.want == http.StatusForbidden {
-						require.Contains(t, rec.Body.String(), "ADMIN_SCOPE_REQUIRED")
+						require.Contains(t, rec.Body.String(), forbiddenCode467(tc.key == keys.taskKey))
 					}
 				}
 			})
@@ -163,7 +163,9 @@ func TestDoctorAuthz_AgentTaskKeyForbidden(t *testing.T) {
 				h, keys := doctorAuthzRouter(t, true, edition)
 				rec := doctorAuthzPost(h, q, keys.taskKey)
 				require.Equal(t, http.StatusForbidden, rec.Code, rec.Body.String())
-				require.Contains(t, rec.Body.String(), "ADMIN_SCOPE_REQUIRED")
+				// Since #467 the agent key is refused by AuthMiddleware's
+				// agent-route confinement before the admin-class gate runs.
+				require.Contains(t, rec.Body.String(), "AGENT_KEY_NOT_OPERATOR")
 			})
 		}
 	}
@@ -227,4 +229,15 @@ func TestDoctorAuthz_SessionRole(t *testing.T) {
 			})
 		}
 	}
+}
+
+// forbiddenCode467 is the refusal a non-admin caller gets: the admin-class
+// gate's code, except for an agent task key, which AuthMiddleware's
+// agent-route confinement refuses first (GitHub #467, task-lifecycle design
+// §17.7).
+func forbiddenCode467(isAgentTaskKey bool) string {
+	if isAgentTaskKey {
+		return "AGENT_KEY_NOT_OPERATOR"
+	}
+	return "ADMIN_SCOPE_REQUIRED"
 }

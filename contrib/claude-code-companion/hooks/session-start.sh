@@ -77,9 +77,13 @@ fi
 #   - origin = git@github.com:X/Y(.git)     → "github.com/X/Y"
 #   - origin = ssh://git@host/path          → "host/path"
 #   - repo with no remote → repo basename
-#   - not in a git repo → current folder basename (never empty, so a
-#     bare working directory still gets a stable per-folder scope
-#     instead of falling through to uncategorized/NULL "none")
+#   - not in a git repo → NO scope (empty). A folder name is not a
+#     repository identity: the old fourth tier, the cwd's basename,
+#     minted a scope per scratch directory (scratchpad, helpers, w2-2)
+#     that no scoped recall from a repository ever sees (GitHub #385,
+#     LLD 21 "Repository scope outside a git repository"). With no
+#     scope, calls omit repo_scope and the daemon applies the key's
+#     default_repo_scope, else project-wide.
 #
 # Operator override: VORNIK_REPO_SCOPE in the shell pins a specific
 # scope (handy for "*" cross-cutting or for non-git workspaces).
@@ -120,13 +124,9 @@ resolve_repo_scope() {
     printf '%s' "$(basename "$toplevel")"
     return
   fi
-  # Not a git repo at all (no origin, no toplevel). Fall back to the
-  # current folder name so the scope is never empty — an empty scope
-  # surfaces to the operator as context "none" and silently routes
-  # recall/remember/delegate to project-wide. A per-folder token is a
-  # better default; operators who want cross-cutting set
-  # VORNIK_REPO_SCOPE="*" explicitly.
-  printf '%s' "$(basename "$PWD")"
+  # Not a git repo at all (no origin, no toplevel): no scope. The
+  # no-repository directive below tells the model so, instead of a
+  # folder name posing as a repository (GitHub #385).
 }
 REPO_SCOPE=$(resolve_repo_scope)
 
@@ -291,6 +291,27 @@ spans repos (e.g. an operator-wide note about their toolchain).
 Omit \`repo_scope\` entirely (the rare opt-out) only when you
 explicitly want project-wide search regardless of repo.
 EOF
+  else
+    # GitHub #385: outside a git repository there is no scope. Say so,
+    # rather than stay silent, so the model does not invent one from the
+    # folder name; the directive stays standing on every path.
+    cat <<EOF
+
+## vornik-companion: no repository scope
+
+This session is not inside a git repository, so no repo scope was
+detected. On \`mcp__plugin_vornik-companion_vornik__recall\`, \`remember\`,
+\`recent_memory\` and \`delegate\`, omit \`repo_scope\`: Vornik then uses
+this key's default scope, or project-wide memory. Never use a folder
+name as a scope. Pass \`repo_scope: "*"\` for a note that genuinely spans
+repositories, and the repository's own scope (its normalised origin
+remote, for example \`github.com/acme/widgets\`) when the work is about a
+repository you know. To pin a scope here, set \`VORNIK_REPO_SCOPE\`.
+
+These tools may arrive deferred (name only, no schema): load them with
+\`ToolSearch("select:mcp__plugin_vornik-companion_vornik__recall,mcp__plugin_vornik-companion_vornik__remember")\`
+(and any other you need) before the first call, or the call fails.
+EOF
   fi
 }
 
@@ -333,6 +354,17 @@ DIGEST=$(printf '%s\n%s' "$DIGEST" "$REPO_SCOPE_DIRECTIVE")
 # fresh macOS install hit exactly that on 2026-08-04 (line 333). Same safe
 # shape as build_digest() above.
 emit_skill_directive() {
+  # With no repository scope (GitHub #385) the directive names none, rather
+  # than an empty one the model would copy into its calls.
+  local search_scope propose_scope
+  if [[ -n "$REPO_SCOPE" ]]; then
+    search_scope=" (repo_scope \`${REPO_SCOPE}\`)"
+    propose_scope=", and
+   \`repo_scope: \"${REPO_SCOPE}\"\`"
+  else
+    search_scope=" (no repo_scope: this session is in no repository)"
+    propose_scope=" (no repo_scope)"
+  fi
   cat <<EOF
 
 ## vornik: capture reusable know-how as skills
@@ -342,12 +374,11 @@ procedure** this session — a troubleshooting flow, a non-obvious fix, a
 deploy/verify sequence worth doing the same way next time — proactively
 capture it as a vornik knowledge skill:
 
-1. First \`mcp__plugin_vornik-companion_vornik__skill_search\` (repo_scope \`${REPO_SCOPE}\`) to
+1. First \`mcp__plugin_vornik-companion_vornik__skill_search\`${search_scope} to
    avoid duplicating an existing skill.
 2. If it's genuinely new, call \`mcp__plugin_vornik-companion_vornik__skill_propose\` with a
    kebab-case \`name\`, a one-line \`description\` (WHEN to apply it), a
-   Markdown \`body\` (the actual steps/checks/anti-patterns), and
-   \`repo_scope: "${REPO_SCOPE}"\`.
+   Markdown \`body\` (the actual steps/checks/anti-patterns)${propose_scope}.
 
 It lands as a **draft** and does NOT take effect until an operator
 approves it — so propose freely, but only for things genuinely worth

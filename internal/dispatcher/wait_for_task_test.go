@@ -103,7 +103,7 @@ func TestWaitForTask_FailedTaskIncludesError(t *testing.T) {
 	repo := newPollingRepo(
 		&persistence.Task{ID: "task_x", ProjectID: "p", Status: persistence.TaskStatusFailed, LastError: &errMsg, LastErrorClass: &cls},
 	)
-	te := &ToolExecutor{taskRepo: repo}
+	te := &ToolExecutor{taskRepo: repo, errorScrub: testLineScrubber480(t)} // the #480 non-admin view keeps a clean line
 	res := te.waitForTask(context.Background(), `{"task_id":"task_x","timeout_seconds":2}`, []string{"p"})
 	assert.Contains(t, res.Content, "FAILED")
 	assert.Contains(t, res.Content, "iteration limit")

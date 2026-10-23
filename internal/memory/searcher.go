@@ -390,16 +390,17 @@ func (s *Searcher) embedQueryWithTimeout(ctx context.Context, projectID, query s
 	if err == nil && len(vec) > 0 {
 		return vec
 	}
-	// Embed() returns (nil, nil) on a non-fatal degrade (network error,
-	// non-200, timeout), so an empty result — with or without err — is
-	// the degrade signal. Make it observable; the caller continues on
-	// the keyword arm.
+	// No vector is the degrade signal: a typed *EmbedError since #369 item 5
+	// (it was (nil, nil), and this log carried no cause), or (nil, nil) for an
+	// empty query. Make it observable; the caller continues on the keyword arm.
 	ev := s.logger.Warn().Str("project_id", projectID).Dur("waited", time.Since(start))
 	if err != nil {
 		ev = ev.Err(err)
 	}
 	if embedCtx.Err() != nil {
 		ev = ev.Str("cause", "query_embed_timeout").Dur("timeout", timeout)
+	} else if reason, ok := EmbedFailureReason(err); ok {
+		ev = ev.Str("cause", reason)
 	}
 	ev.Msg("memory: query embedding unavailable; degrading recall to keyword-only")
 	return nil
@@ -502,10 +503,19 @@ func (s *Searcher) searchInternal(ctx context.Context, projectID, query string, 
 			// A degrade was logged by the reranker with its cause; anything
 			// else is logged here. Either way RRF order is kept and the
 			// observation stays unreranked.
-			if !errors.Is(rerr, ErrRerankDegraded) {
+			var degraded *RerankDegradedError
+			switch {
+			case errors.As(rerr, &degraded):
+				// Counted by cause (GitHub #369, §S8.11 7d); the
+				// optional-work switch is a state, not a failure.
+				if degraded.Cause != RerankCauseOptionalWorkDisabled {
+					s.metrics.RecordSkipped(skipSiteRerank, degraded.Cause)
+				}
+			case !errors.Is(rerr, ErrRerankDegraded):
 				s.logger.Warn().Err(rerr).
 					Str("project_id", projectID).
 					Msg("memory: reranker error — keeping RRF order")
+				s.metrics.RecordSkipped(skipSiteRerank, "error")
 			}
 		} else {
 			results = reordered

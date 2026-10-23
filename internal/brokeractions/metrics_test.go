@@ -15,12 +15,14 @@ func TestMetrics_NilAndUnattachedAreNoOps(_ *testing.T) {
 	nilM.RecordFinished("ok")
 	nilM.RecordFinishFailed()
 	nilM.RecordUnscanned("secrets_disabled")
+	nilM.RecordRefused("writes_off")
 	nilM.Attach(prometheus.NewRegistry(), nil)
 	m := NewMetrics()
 	m.SetStuck([]persistence.BrokerActionStuck{{ProjectID: "p", Status: "unknown", Count: 1}})
 	m.RecordFinished("ok")
 	m.RecordFinishFailed()
 	m.RecordUnscanned("secrets_disabled")
+	m.RecordRefused("writes_off")
 }
 
 // A sweep REPLACES the gauge: a project whose stuck rows cleared must not
@@ -57,5 +59,22 @@ func TestMetrics_FinishFailedAndUnscanned(t *testing.T) {
 	}
 	if got := testutil.ToFloat64(m.unscanned.WithLabelValues("detector_unavailable")); got != 2 {
 		t.Fatalf("unscanned{detector_unavailable} = %v", got)
+	}
+}
+
+// GitHub #369, outcome-quality LLD S8.11 rows 14b/14c: refusals are counted by
+// reason in vornik_broker_actions_refused_total.
+func TestMetrics_RefusedByReason(t *testing.T) {
+	reg := prometheus.NewRegistry()
+	m := NewMetrics()
+	m.Attach(reg, nil)
+	m.RecordRefused("args_hash_mismatch")
+	m.RecordRefused("claim_error")
+	m.RecordRefused("claim_error")
+	if got := testutil.ToFloat64(m.refused.WithLabelValues("claim_error")); got != 2 {
+		t.Fatalf("refused{claim_error} = %v", got)
+	}
+	if n, err := testutil.GatherAndCount(reg, "vornik_broker_actions_refused_total"); err != nil || n != 2 {
+		t.Fatalf("refused series = %d, %v", n, err)
 	}
 }

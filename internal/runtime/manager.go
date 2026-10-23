@@ -449,9 +449,9 @@ func (m *Manager) buildPreImageArgs(config *ContainerConfig) []string {
 	if config.CPUQuota > 0 {
 		args = append(args, "--cpu-quota", strconv.FormatInt(config.CPUQuota, 10))
 	}
-	if limit := m.effectiveMemoryLimit(config); limit > 0 {
-		args = append(args, "--memory", strconv.FormatInt(limit, 10))
-	}
+	// --memory with --memory-swap equal to it: a bounded agent has no swap
+	// (GitHub #379; design 08 "Change 2026-10-17"). Unbounded emits neither.
+	args = append(args, spawn.MemoryLimitFlags(m.effectiveMemoryLimit(config))...)
 
 	// Volume mounts for agent runtime contract.
 	// Input is read-only for ephemeral containers (host writes task.json,

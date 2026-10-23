@@ -176,16 +176,33 @@ func (s *Server) resolveWindowScope(w http.ResponseWriter, r *http.Request, req 
 	return br, true
 }
 
+// supportArchiveWritten is called with the archive's path once
+// streamSupportBundle has written it and before it is read back. A no-op in
+// production; a test seam that starts a second report at that moment
+// (GitHub #427, testing LLD §13). A test that sets it must not be parallel:
+// a sequential top-level test never overlaps a parallel one, so the read
+// here does not race the write.
+var supportArchiveWritten = func(string) {}
+
 // streamSupportBundle stages the in-memory bundle to a temp dir, tars it
 // (reusing archiveutil's TarGzDir + safe-path helpers — same as
 // backup.go), and streams it to the client. Returns the archive size +
 // bytes written.
 func streamSupportBundle(w http.ResponseWriter, res *supportbundle.Result) (size, written int64, err error) {
-	staging, err := os.MkdirTemp("", "vornik-support-build-*")
+	// One private (0700) work directory per report holds both the staging
+	// tree and the archive. The archive used to be written OUT of the staging
+	// dir, at $TMPDIR/vornik-support-<mode>.tar.gz: a name shared by every
+	// concurrent report of that mode, and one another local user could plant
+	// (a symlink os.Create follows) in a shared /tmp (GitHub #427).
+	work, err := os.MkdirTemp("", "vornik-support-*")
 	if err != nil {
+		return 0, 0, fmt.Errorf("create work dir: %w", err)
+	}
+	defer func() { _ = os.RemoveAll(work) }()
+	staging := filepath.Join(work, "bundle")
+	if err := os.Mkdir(staging, 0o700); err != nil {
 		return 0, 0, fmt.Errorf("create staging dir: %w", err)
 	}
-	defer func() { _ = os.RemoveAll(staging) }()
 
 	for name, content := range res.Files {
 		target := filepath.Join(staging, filepath.FromSlash(name))
@@ -197,13 +214,15 @@ func streamSupportBundle(w http.ResponseWriter, res *supportbundle.Result) (size
 		}
 	}
 
-	tmpArchive := filepath.Join(staging, "..", "vornik-support-"+sanitizeForFilename(res.Manifest.Mode)+".tar.gz")
+	// Beside the staging tree, inside the work dir: not in the tree being
+	// archived, and never outside a directory this request created.
+	tmpArchive := filepath.Join(work, "bundle.tar.gz")
 	if tErr := archiveutil.TarGzDir(staging, tmpArchive); tErr != nil {
 		return 0, 0, fmt.Errorf("archive: %w", tErr)
 	}
-	defer func() { _ = os.Remove(tmpArchive) }()
+	supportArchiveWritten(tmpArchive)
 
-	f, err := os.Open(tmpArchive) //nolint:gosec // path is daemon-constructed in our own tmp dir
+	f, err := os.Open(tmpArchive) //nolint:gosec // path is daemon-constructed in our own private work dir
 	if err != nil {
 		return 0, 0, fmt.Errorf("open archive: %w", err)
 	}
@@ -341,15 +360,6 @@ func redactedConfigYAML(cfg any) (string, error) {
 // bundles that disagree about what they cover.
 func parseWindow(sinceStr, untilStr string) (time.Time, time.Time, error) {
 	return supportbundle.ParseWindow(sinceStr, untilStr)
-}
-
-func sanitizeForFilename(s string) string {
-	s = strings.ReplaceAll(s, "/", "_")
-	s = strings.ReplaceAll(s, "..", "_")
-	if s == "" {
-		return "bundle"
-	}
-	return s
 }
 
 // editionFromAdminSurface maps the Server's edition signal to a version

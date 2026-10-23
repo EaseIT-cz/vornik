@@ -20,6 +20,12 @@ type ApproveServerToolsInput struct {
 	Project string   `json:"project"` // the full project ID
 	Server  string   `json:"server"`
 	Tools   []string `json:"tools"`
+	// Reads is the subset of Tools Vornik's classifier (mcp.Tool.IsMutating)
+	// calls read-only, judged by the daemon on the listing's descriptors, or
+	// on the name where nothing was listed (design §6.4, GitHub #405). FAIL
+	// CLOSED: a tool not in it is never approved as a read. Trusted because
+	// only the daemon files this verb.
+	Reads []string `json:"reads,omitempty"`
 }
 
 // approveServerTools renders a read-pending server with exactly the listed
@@ -61,7 +67,7 @@ func (r *Renderer) approveServerTools(st *State, raw json.RawMessage) (Change, e
 			return refuse(verb, ns, "the server advertises a tool with an unusable name"), nil
 		}
 	}
-	tools, why := splitWrites(listed, a.Write)
+	tools, withheld, why := splitWrites(listed, a.Write, in.Reads)
 	if why != "" {
 		return refuse(verb, ns, "%s", why), nil
 	}
@@ -79,7 +85,20 @@ func (r *Renderer) approveServerTools(st *State, raw json.RawMessage) (Change, e
 			c.MissingTools = missing
 			return c, nil
 		}
-		tools = declared
+		// GitHub #405 (design §6.4 item 6): a recipe never approves a write
+		// as a read, whatever it declares.
+		if changes := intersect(declared, withheld); len(changes) > 0 {
+			c := refuse(verb, ns, "the server at %s offers %s as tools that change things; this recipe only reads", hostOf(server.URL), strings.Join(changes, ", "))
+			c.Withheld = changes
+			return c, nil
+		}
+		tools, withheld = declared, nil
+	} else if len(tools) == 0 && len(a.Write) == 0 {
+		// GitHub #405 (design §6.4 item 5): nothing would be approved; the
+		// server stays read-pending and the note names the tools.
+		c := refuse(verb, ns, "%s", onlyChangesWhy(hostOf(server.URL), withheld))
+		c.Withheld = withheld
+		return c, nil
 	}
 	next := *p
 	next.Servers = append([]ServerState(nil), p.Servers...)
@@ -97,6 +116,7 @@ func (r *Renderer) approveServerTools(st *State, raw json.RawMessage) (Change, e
 		Class:   Widening,
 		Grant: Grant{Integrations: []IntegrationGrant{{Project: pid, Name: in.Server, Kind: "mcp", URL: server.URL,
 			Read: tools, Write: a.Write}}},
+		Withheld: withheld,
 	}
 	expect(st, c.ReadSet, projectPath(pid))
 	// The account it signed in as (design §22.2.5).
@@ -106,11 +126,22 @@ func (r *Renderer) approveServerTools(st *State, raw json.RawMessage) (Change, e
 	}
 	c.Sentence = "The server " + in.Server + " at " + hostOf(server.URL) + asAccount(phrase) + " is now connected for " + pid +
 		" and offers these " + strconv.Itoa(len(tools)) + " tools: " + strings.Join(tools, ", ") +
-		". Allow your assistant (" + ns + ") to use them in this project?"
+		"." + withheldSentence(withheld) + " Allow your assistant (" + ns + ") to use them in this project?"
 	if len(a.Write) > 0 {
 		c.Sentence += " (Its changes, " + strings.Join(a.Write, ", ") + ", stay proposals you approve one by one.)"
 	}
 	return c, nil
+}
+
+// intersect returns the members of xs that are in ys, in xs's order.
+func intersect(xs, ys []string) []string {
+	var out []string
+	for _, x := range xs {
+		if contains(ys, x) {
+			out = append(out, x)
+		}
+	}
+	return out
 }
 
 func dedupSorted(xs []string) []string {

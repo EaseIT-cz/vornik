@@ -91,7 +91,7 @@ roles:
       # and keeps a cross-vendor second opinion against the Moonshot
       # strategist above.
       model: "glm-5.3"
-      modelFallback: "zai.glm-5"
+      modelFallback: "zai.glm-5.3"
       # 2026-09-17: JSON mode + shape-retry hint ported from
       # ibkr-trader-swarm.md. This role was carrying a GLM binding with
       # NO structural guard, which is the trap this file existed to be:

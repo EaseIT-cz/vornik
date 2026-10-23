@@ -197,7 +197,7 @@
                 <div class="flex flex-wrap items-center gap-3 pt-2 border-t border-dark-700/60">
                     {{if .CanPromote}}
                     <form method="post" action="/ui/admin/blackbox/candidates/{{.Candidate.ID}}/promote" class="inline"
-                          onsubmit="return confirm('Promote this candidate? This rewrites the live WORKFLOW.md, commits it, and hot-reloads config for all future runs.');">
+                          data-confirm="Promote this candidate? This rewrites the live WORKFLOW.md, commits it, and hot-reloads config for all future runs.">
                         <button type="submit" class="bg-emerald-700 hover:bg-emerald-600 text-white text-sm font-medium px-4 py-2 rounded-md">Promote to production</button>
                     </form>
                     <span class="text-[11px] text-gray-500">Promotion is a manual operator action and requires a passing replay trial.</span>
@@ -207,7 +207,7 @@
 
                     {{if .CanReject}}
                     <form method="post" action="/ui/admin/blackbox/candidates/{{.Candidate.ID}}/reject" class="inline ml-auto"
-                          onsubmit="return confirm('Reject this candidate? It will be marked rejected and no longer offered for promotion.');">
+                          data-confirm="Reject this candidate? It will be marked rejected and no longer offered for promotion.">
                         <button type="submit" class="text-sm text-rose-800 dark:text-rose-400 hover:text-rose-700 dark:text-rose-300">Reject candidate</button>
                     </form>
                     {{end}}

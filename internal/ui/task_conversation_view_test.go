@@ -230,6 +230,8 @@ func TestLoadConversationView_ScratchpadPopulatesPhaseTracker(t *testing.T) {
 	}
 }
 
+// Pause and Resume moved to taskStatusControls (GitHub #375); see
+// TestTaskStatusControls_MatchesTheHandlerSets.
 func TestLoadConversationView_StatusFlags(t *testing.T) {
 	srv := NewServer(WithTaskMessageRepository(&fakeUIMessageRepo{}))
 
@@ -237,31 +239,23 @@ func TestLoadConversationView_StatusFlags(t *testing.T) {
 		got := srv.loadConversationView(context.Background(),
 			&persistence.Task{ID: "t1", Status: persistence.TaskStatusCompleted})
 		assert.True(t, got.Closeable)
-		assert.False(t, got.Pauseable)
-		assert.False(t, got.Resumeable)
 	})
 
-	t.Run("running is pauseable", func(t *testing.T) {
+	t.Run("running is not closeable", func(t *testing.T) {
 		got := srv.loadConversationView(context.Background(),
 			&persistence.Task{ID: "t1", Status: persistence.TaskStatusRunning})
 		assert.False(t, got.Closeable)
-		assert.True(t, got.Pauseable)
-		assert.False(t, got.Resumeable)
 	})
 
-	t.Run("paused is resumeable", func(t *testing.T) {
+	t.Run("paused is not closeable", func(t *testing.T) {
 		got := srv.loadConversationView(context.Background(),
 			&persistence.Task{ID: "t1", Status: persistence.TaskStatusPaused})
 		assert.False(t, got.Closeable)
-		assert.False(t, got.Pauseable)
-		assert.True(t, got.Resumeable)
 	})
 
-	t.Run("awaiting input is both closeable and pauseable", func(t *testing.T) {
+	t.Run("awaiting input is closeable", func(t *testing.T) {
 		got := srv.loadConversationView(context.Background(),
 			&persistence.Task{ID: "t1", Status: persistence.TaskStatusAwaitingInput})
 		assert.True(t, got.Closeable)
-		assert.True(t, got.Pauseable)
-		assert.False(t, got.Resumeable)
 	})
 }

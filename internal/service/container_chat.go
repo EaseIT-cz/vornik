@@ -152,6 +152,26 @@ func (c *Container) initChat() error {
 	if err != nil {
 		return err
 	}
+	c.decorateChatClient(cfg)
+	return nil
+}
+
+// decorateChatClient wraps the resolved provider in c.ChatClient in the
+// daemon's decorator chain, innermost first: the ceiling, the priority
+// queue, the logging provider and the optional-work gate. Split out of
+// initChat so the chain can be driven over a stub provider (GitHub #369).
+func (c *Container) decorateChatClient(cfg config.ChatConfig) {
+	// The ceiling answers the caller even when the provider never returns
+	// (outcome-quality LLD §S8.9, GitHub #369 item 2). Inside the queue, so
+	// queue wait is not provider time and a hung call frees its worker;
+	// inside logging, so the abandon is logged and tallied.
+	if c.ChatClient != nil {
+		ceiling, grace := chat.CeilingFor(chatCallCeilingInputs(cfg))
+		c.ChatClient = chat.NewCeilingProvider(c.ChatClient, ceiling, grace,
+			c.Logger.With().Str("component", "chat").Str("layer", "ceiling").Logger())
+		c.Logger.Info().Dur("ceiling", ceiling).Dur("grace", grace).
+			Msg("chat call ceiling configured (abandons a call whose provider does not return after its context ends)")
+	}
 	if cfg.MaxConcurrentRequests > 0 && c.ChatClient != nil {
 		c.ChatClient = chat.NewQueuedProvider(c.ChatClient, cfg.MaxConcurrentRequests)
 		c.Logger.Info().
@@ -189,7 +209,27 @@ func (c *Container) initChat() error {
 			Msg("chat call logging enabled")
 	}
 	c.ChatClient = wrapOptionalWork(c.ChatClient, cfg.OptionalWork, c.Logger)
-	return nil
+}
+
+// chatCallCeilingInputs returns the effective per-call timeout T (chat.timeout
+// when it parses positive, else zero, which CeilingFor reads as
+// chat.DefaultTimeout, as every provider does) and the largest route-queue
+// wait Q of a router route with queue_depth > 0. Silent: chatCallTimeout
+// already warns about a bad chat.timeout.
+func chatCallCeilingInputs(cfg config.ChatConfig) (timeout, routeQueueWait time.Duration) {
+	if d, err := time.ParseDuration(cfg.Timeout); err == nil && d > 0 {
+		timeout = d
+	}
+	if strings.ToLower(strings.TrimSpace(cfg.Provider)) == "router" {
+		for _, rc := range cfg.Router.Routes {
+			if rc.QueueDepth > 0 {
+				if q := time.Duration(rc.QueueTimeoutMs) * time.Millisecond; q > routeQueueWait {
+					routeQueueWait = q
+				}
+			}
+		}
+	}
+	return timeout, routeQueueWait
 }
 
 // optionalWorkDisables reports whether the switch refuses optional work on

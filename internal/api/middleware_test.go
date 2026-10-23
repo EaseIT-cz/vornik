@@ -449,7 +449,10 @@ func TestAuthMiddleware_CSRF_BasicSameOriginAllowed(t *testing.T) {
 	var reached bool
 	handler := authMiddlewareTestHandler(&reached)
 
-	for _, site := range []string{"same-origin", "same-site", "none"} {
+	// "none" was in this list until GitHub #448 (2026-10-21): it is not a
+	// same-origin signal and now needs a matching Origin
+	// (TestCSRFGate_SecFetchSiteNoneNeedsOrigin_Issue448).
+	for _, site := range []string{"same-origin", "same-site"} {
 		t.Run(site, func(t *testing.T) {
 			reached = false
 			req := newAuthRequest(t, "/api/v1/projects/proj-a/tasks")

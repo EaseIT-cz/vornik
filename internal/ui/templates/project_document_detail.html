@@ -52,7 +52,7 @@
                     <form method="POST" action="{{.ReExtractURL}}" class="inline">
                         <button type="submit"
                                 class="text-xs px-3 py-1.5 rounded-md bg-brand-600/80 hover:bg-brand-500 text-white transition-colors"
-                                onclick="return confirm('Re-extract this document? This re-runs the extractor + re-chunks the result into project memory.');">
+                                data-confirm="Re-extract this document? This re-runs the extractor + re-chunks the result into project memory.">
                             Re-extract
                         </button>
                     </form>

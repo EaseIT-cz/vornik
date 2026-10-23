@@ -66,6 +66,12 @@ type JudgeMetrics struct {
 	// counts the evaluation llm_<cause>, not ok (GitHub #142,
 	// outcome-quality-design §S8 F3).
 	LLMFailure string
+	// NotConfigured is set when the judge has no client or no model, so
+	// the abstain it returns was never put to a model. The runner counts
+	// the evaluation abstain_no_config, not ok, and records the row with
+	// failure_class not_configured (GitHub #369, outcome-quality-design
+	// §S8.11 row 8b).
+	NotConfigured bool
 }
 
 // Judge evaluates a completed task against its produced
@@ -194,7 +200,9 @@ approved[] — both shapes carry the same fields.`
 // nil client) return zero metrics.
 func (j *LLMJudge) Evaluate(ctx context.Context, in JudgeInput) (*Verdict, *JudgeMetrics, error) {
 	if j == nil || j.Client == nil || j.Model == "" {
-		return abstainVerdict("judge not configured"), &JudgeMetrics{}, nil
+		// Marked, so the runner counts abstain_no_config instead of ok
+		// (GitHub #369, outcome-quality-design §S8.11 row 8b).
+		return abstainVerdict("judge not configured"), &JudgeMetrics{NotConfigured: true}, nil
 	}
 	prompt := j.Prompt
 	if prompt == "" {

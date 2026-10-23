@@ -5,11 +5,12 @@ import (
 	"encoding/json"
 	"strings"
 	"time"
-	"unicode/utf8"
 
+	"vornik.io/vornik/internal/auditredact"
 	"vornik.io/vornik/internal/chat"
 	"vornik.io/vornik/internal/hallucination"
 	"vornik.io/vornik/internal/persistence"
+	"vornik.io/vornik/internal/secrets"
 )
 
 // chatAuditTurn collects the per-turn signal during Process /
@@ -77,8 +78,9 @@ func ChatTurnIDFromContext(ctx context.Context) string {
 }
 
 // chatAuditToolCall is the serialisable per-tool-call summary.
-// Args + Result are truncated to keep row size bounded — operators
-// who need the full payload can correlate by ts+chat_id with
+// Args + Result are cut to keep row size bounded — by the redaction seam,
+// AFTER it scans them (auditredact.ToolFieldLimit; chat-audit design §9.2.5).
+// Operators who need the full payload can correlate by ts+chat_id with
 // tool_audit_log (full) when that's wired for chat surfaces.
 type chatAuditToolCall struct {
 	Name   string `json:"name"`
@@ -138,54 +140,47 @@ func (t *chatAuditTurn) recordHallucinationSignals(signals []hallucination.Signa
 	t.hallucinationSignals = append(t.hallucinationSignals, signals...)
 }
 
-// recordToolCall captures one tool invocation's name + truncated
-// args/result/error. Called from the dispatcher's tool loop.
+// recordToolCall captures one tool invocation's name + args/result/error,
+// each capped at the redaction seam's scan WINDOW, not the stored limit: the
+// seam scans the window and then cuts (chat-audit design §9.2.5, GitHub #395).
+// result is what the MODEL saw — the output guard's rewrite (§9.2.4) — not the
+// raw tool content. Called from the dispatcher's tool loop.
 func (t *chatAuditTurn) recordToolCall(name, args, result, errStr string) {
 	if t == nil {
 		return
 	}
 	t.toolCalls = append(t.toolCalls, chatAuditToolCall{
 		Name:   name,
-		Args:   truncateForAudit(redactSensitiveToolArgs(args), 1024),
-		Result: truncateForAudit(result, 1024),
-		Error:  truncateForAudit(errStr, 512),
+		Args:   auditredact.CutBeforeScan(redactSensitiveToolArgs(args), auditredact.ToolWindow(auditredact.ToolFieldLimit)),
+		Result: auditredact.CutBeforeScan(result, auditredact.ToolWindow(auditredact.ToolFieldLimit)),
+		Error:  auditredact.CutBeforeScan(errStr, auditredact.ToolWindow(auditredact.ToolErrorLimit)),
 	})
 }
 
-// sensitiveToolArgKeys are tool-argument field names whose values are
-// capability tokens / secrets and must never land in the chat-audit trail
-// (surfaced on /ui/admin/chat-audit). web_submit's approval_token is a one-time
-// capability bound to a stored row (LLD: "the raw token is never rendered in
-// the UI"); the audit records the LLM's ORIGINAL tool-call args, so redaction
-// happens here rather than in the tool.
-var sensitiveToolArgKeys = map[string]struct{}{
-	"approval_token": {},
-	"daemon_auth":    {}, // web_submit daemon-only capability secret (C1)
-}
-
-// redactSensitiveToolArgs replaces sensitive values in a tool-call args JSON
-// object with "[redacted]" before the args are persisted to the audit log. If
-// args is not a JSON object it is returned unchanged (nothing to key on).
+// redactSensitiveToolArgs replaces the value under every secret-NAMED key of a
+// tool-call args JSON object, at any depth, with [REDACTED:secret_field] before
+// the args reach the audit log. It runs whatever secrets.enabled says, because
+// some of these are capabilities that must never render on /ui/admin/chat-audit
+// (web_submit's approval_token and daemon_auth: "the raw token is never
+// rendered in the UI"); the audit records the LLM's ORIGINAL tool-call args,
+// so redaction happens here rather than in the tool.
+//
+// The key rule is secrets.IsSecretKeyName — the one the Art 15 export and the
+// task_messages seam use — replacing a two-key list that matched nothing else
+// (chat-audit design §9.2.5, GitHub #395). If args is not a JSON object it is
+// returned unchanged (nothing to key on); the seam's detector still scans it.
 func redactSensitiveToolArgs(args string) string {
 	trimmed := strings.TrimSpace(args)
 	if !strings.HasPrefix(trimmed, "{") {
 		return args
 	}
-	var m map[string]json.RawMessage
-	if err := json.Unmarshal([]byte(trimmed), &m); err != nil {
+	var m map[string]any
+	dec := json.NewDecoder(strings.NewReader(trimmed))
+	dec.UseNumber()
+	if err := dec.Decode(&m); err != nil {
 		return args
 	}
-	changed := false
-	for k := range m {
-		if _, ok := sensitiveToolArgKeys[k]; ok {
-			// Only redact a present, non-empty string value.
-			if s := string(m[k]); s != `""` && s != "null" {
-				m[k] = json.RawMessage(`"[redacted]"`)
-				changed = true
-			}
-		}
-	}
-	if !changed {
+	if !redactSecretNamedKeys(m) {
 		return args
 	}
 	out, err := json.Marshal(m)
@@ -193,6 +188,33 @@ func redactSensitiveToolArgs(args string) string {
 		return args
 	}
 	return string(out)
+}
+
+// redactSecretNamedKeys replaces, in place, the whole value under every
+// secret-named key of v at any depth, and reports whether it changed anything.
+// An empty or null value is left alone: there is nothing to hide.
+func redactSecretNamedKeys(v any) bool {
+	changed := false
+	switch x := v.(type) {
+	case map[string]any:
+		for k, val := range x {
+			if secrets.IsSecretKeyName(k) && val != nil && val != "" {
+				x[k] = "[REDACTED:secret_field]"
+				changed = true
+				continue
+			}
+			if redactSecretNamedKeys(val) {
+				changed = true
+			}
+		}
+	case []any:
+		for _, val := range x {
+			if redactSecretNamedKeys(val) {
+				changed = true
+			}
+		}
+	}
+	return changed
 }
 
 // finish persists the audit row. Pass the Request (for chat_id +
@@ -285,14 +307,16 @@ func (t *chatAuditTurn) finish(ctx context.Context, req Request, result Result) 
 		// Empty for synthesised turns (autonomy, retry-from-step, post-mortem
 		// builders) because those have no speaker — correct, and distinct from
 		// "a person spoke and we failed to record them".
-		UserID:                   req.OperatorID,
-		ProjectID:                req.Project,
-		RoleUsed:                 t.roleUsed,
-		Model:                    t.model,
-		SystemPromptHash:         hash,
-		UserMessage:              truncateForAudit(t.userMessage, 500),
+		UserID:           req.OperatorID,
+		ProjectID:        req.Project,
+		RoleUsed:         t.roleUsed,
+		Model:            t.model,
+		SystemPromptHash: hash,
+		// Capped at the scan window; the seam scans, then cuts to
+		// auditredact.ChatTextLimit (chat-audit design §9.2.5, GitHub #395).
+		UserMessage:              auditredact.CutBeforeScan(t.userMessage, auditredact.ChatTextWindow),
 		ToolCallsJSON:            string(toolCallsJSON),
-		Response:                 truncateForAudit(responseText, 500),
+		Response:                 auditredact.CutBeforeScan(responseText, auditredact.ChatTextWindow),
 		Iterations:               t.iterations,
 		DurationMs:               time.Since(t.startedAt).Milliseconds(),
 		CostUSD:                  t.costUSD,
@@ -307,56 +331,6 @@ func (t *chatAuditTurn) finish(ctx context.Context, req Request, result Result) 
 			Str("chat_id", entry.ChatID).
 			Msg("chat_audit: insert failed")
 	}
-}
-
-// truncateForAudit caps long strings to a byte limit, suffixing the
-// chop with "…(truncated)" so operators can spot truncation. Empty
-// stays empty. Multi-byte sequences are NEVER split on a non-rune
-// boundary: PostgreSQL's UTF-8 encoding rejects invalid byte
-// sequences and the chat_audit_log insert dies with
-// "invalid byte sequence for encoding UTF8: 0xf0 0x9f 0x93 0xe2"
-// when an emoji lands on the cut (live evidence: T-0918 follow-up,
-// 2026-05-21 17:20:51 — the audit row was dropped entirely, so
-// the dispatcher's reply existed in Telegram with no auditable
-// trace). After this fix the cut walks back to the previous rune
-// boundary before appending the suffix.
-func truncateForAudit(s string, limit int) string {
-	if limit <= 0 || len(s) <= limit {
-		return s
-	}
-	const suffix = "…(truncated)"
-	if limit <= len(suffix) {
-		return safeUTF8Prefix(s, limit)
-	}
-	return safeUTF8Prefix(s, limit-len(suffix)) + suffix
-}
-
-// safeUTF8Prefix returns the longest prefix of s that contains
-// whole runes and is at most `n` bytes. Walks runes from the start
-// rather than backing up from a byte index because the latter has
-// to validate each byte's continuation status; rune iteration uses
-// the same machinery PostgreSQL would reject on, but cleanly.
-func safeUTF8Prefix(s string, n int) string {
-	if n <= 0 || s == "" {
-		return ""
-	}
-	if n >= len(s) {
-		return s
-	}
-	used := 0
-	for _, r := range s {
-		sz := utf8.RuneLen(r)
-		if sz < 0 {
-			// Invalid rune in source string — bail with what we
-			// have rather than emitting garbage.
-			break
-		}
-		if used+sz > n {
-			break
-		}
-		used += sz
-	}
-	return s[:used]
 }
 
 // modelFromResponse extracts the model identifier from a chat

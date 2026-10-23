@@ -118,6 +118,10 @@ func (s *SlackChannelsSubsystem) Start(ctx context.Context) error {
 			Media:                    c.mediaSight(),
 			DisclosureMetrics:        c.disclosureObserver(),
 			MemoryWriteConfirmations: c.chatMemoryConfirmations(),
+			// #480: an admin-linked speaker in a DM reads the task tools'
+			// error text raw; every other turn reads it scrubbed.
+			OperatorView:  ch.OperatorView,
+			TaskPrincipal: ch.TaskPrincipal, // #499
 		}
 		s.logger.Info().
 			Str("project_id", project.ID).

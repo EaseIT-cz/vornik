@@ -258,22 +258,16 @@ func (r *TaskRepository) Delete(ctx context.Context, id string) error {
 	return mapDBError(err)
 }
 
-// List retrieves tasks matching the filter.
-func (r *TaskRepository) List(ctx context.Context, filter persistence.TaskFilter) ([]*persistence.Task, error) {
-	query := `
-		SELECT id, project_id, workflow_id, idempotency_key, parent_task_id, creation_source,
-		       delegation_mode, status, priority, payload, dependencies,
-		       lease_id, leased_at, leased_by, lease_expires_at,
-		       attempt, max_attempts, last_error, last_error_class, created_at, updated_at,
-		       brief_amended_at, current_phase, expected_by, closed_at, closed_by, message_count, open_checkpoint_id, chat_turn_id, budget_usd, created_by_api_key_id, created_by_actor, goal_origin
-		FROM tasks
-		WHERE 1=1
-	`
-	args := make([]any, 0, 3)
-	argPos := 1
-
+// taskFilterWhere returns the TaskFilter predicates (each prefixed with
+// " AND "), args extended with their values, and the next placeholder
+// position. List and Count both call it, so a field one honours the other
+// honours too: Count once applied only ProjectID and Status/Statuses, and a
+// windowed or project-set count disagreed with the list it was the total of
+// (GitHub #411). Paging is the caller's.
+func taskFilterWhere(filter persistence.TaskFilter, args []any, argPos int) (string, []any, int) {
+	where := ""
 	if filter.ProjectID != nil {
-		query += fmt.Sprintf(" AND project_id = $%d", argPos)
+		where += fmt.Sprintf(" AND project_id = $%d", argPos)
 		args = append(args, *filter.ProjectID)
 		argPos++
 	}
@@ -284,7 +278,7 @@ func (r *TaskRepository) List(ctx context.Context, filter persistence.TaskFilter
 			args = append(args, id)
 			argPos++
 		}
-		query += " AND project_id IN (" + strings.Join(placeholders, ", ") + ")"
+		where += " AND project_id IN (" + strings.Join(placeholders, ", ") + ")"
 	}
 	if len(filter.IDs) > 0 {
 		placeholders := make([]string, len(filter.IDs))
@@ -293,7 +287,7 @@ func (r *TaskRepository) List(ctx context.Context, filter persistence.TaskFilter
 			args = append(args, id)
 			argPos++
 		}
-		query += " AND id IN (" + strings.Join(placeholders, ", ") + ")"
+		where += " AND id IN (" + strings.Join(placeholders, ", ") + ")"
 	}
 	// Statuses wins over Status when both are set (documented
 	// precedence, TaskFilter.Statuses doc comment). An empty non-nil
@@ -305,29 +299,45 @@ func (r *TaskRepository) List(ctx context.Context, filter persistence.TaskFilter
 		for i, s := range filter.Statuses {
 			statusStrings[i] = string(s)
 		}
-		query += fmt.Sprintf(" AND status = ANY($%d)", argPos)
+		where += fmt.Sprintf(" AND status = ANY($%d)", argPos)
 		args = append(args, pq.Array(statusStrings))
 		argPos++
 	} else if filter.Status != nil {
-		query += fmt.Sprintf(" AND status = $%d", argPos)
+		where += fmt.Sprintf(" AND status = $%d", argPos)
 		args = append(args, *filter.Status)
 		argPos++
 	}
 	if filter.UpdatedBefore != nil {
-		query += fmt.Sprintf(" AND updated_at < $%d", argPos)
+		where += fmt.Sprintf(" AND updated_at < $%d", argPos)
 		args = append(args, *filter.UpdatedBefore)
 		argPos++
 	}
 	if filter.UpdatedSince != nil {
-		query += fmt.Sprintf(" AND updated_at >= $%d", argPos)
+		where += fmt.Sprintf(" AND updated_at >= $%d", argPos)
 		args = append(args, *filter.UpdatedSince)
 		argPos++
 	}
 	if filter.FailedSince != nil {
-		query += fmt.Sprintf(" AND failed_at IS NOT NULL AND failed_at >= $%d", argPos)
+		where += fmt.Sprintf(" AND failed_at IS NOT NULL AND failed_at >= $%d", argPos)
 		args = append(args, *filter.FailedSince)
 		argPos++
 	}
+	return where, args, argPos
+}
+
+// List retrieves tasks matching the filter.
+func (r *TaskRepository) List(ctx context.Context, filter persistence.TaskFilter) ([]*persistence.Task, error) {
+	query := `
+		SELECT id, project_id, workflow_id, idempotency_key, parent_task_id, creation_source,
+		       delegation_mode, status, priority, payload, dependencies,
+		       lease_id, leased_at, leased_by, lease_expires_at,
+		       attempt, max_attempts, last_error, last_error_class, created_at, updated_at,
+		       brief_amended_at, current_phase, expected_by, closed_at, closed_by, message_count, open_checkpoint_id, chat_turn_id, budget_usd, created_by_api_key_id, created_by_actor, goal_origin
+		FROM tasks
+		WHERE 1=1
+	`
+	where, args, argPos := taskFilterWhere(filter, make([]any, 0, 3), 1)
+	query += where
 
 	query += " ORDER BY created_at DESC, id DESC"
 	if filter.PageSize > 0 {
@@ -362,26 +372,8 @@ func (r *TaskRepository) List(ctx context.Context, filter persistence.TaskFilter
 // that returns len(page) as Total can't tell the client when to
 // stop fetching — that was the audit's pagination finding.
 func (r *TaskRepository) Count(ctx context.Context, filter persistence.TaskFilter) (int64, error) {
-	query := `SELECT COUNT(*) FROM tasks WHERE 1=1`
-	args := make([]any, 0, 2)
-	argPos := 1
-
-	if filter.ProjectID != nil {
-		query += fmt.Sprintf(" AND project_id = $%d", argPos)
-		args = append(args, *filter.ProjectID)
-		argPos++
-	}
-	if len(filter.Statuses) > 0 {
-		statusStrings := make([]string, len(filter.Statuses))
-		for i, s := range filter.Statuses {
-			statusStrings[i] = string(s)
-		}
-		query += fmt.Sprintf(" AND status = ANY($%d)", argPos)
-		args = append(args, pq.Array(statusStrings))
-	} else if filter.Status != nil {
-		query += fmt.Sprintf(" AND status = $%d", argPos)
-		args = append(args, *filter.Status)
-	}
+	where, args, _ := taskFilterWhere(filter, make([]any, 0, 2), 1)
+	query := `SELECT COUNT(*) FROM tasks WHERE 1=1` + where
 
 	var total int64
 	if err := r.db.QueryRowContext(ctx, query, args...).Scan(&total); err != nil {
@@ -768,6 +760,17 @@ func (r *TaskRepository) LeaseTask(ctx context.Context, opts persistence.LeaseOp
 			argPos++
 		}
 		candidateWhere += " AND tasks.project_id NOT IN (" + strings.Join(placeholders, ", ") + ")"
+	}
+	// Retry holds (permanent-failure design §8.8): a task requeued after an
+	// open model circuit is skipped until the circuit can admit a call.
+	if len(opts.ExcludedTaskIDs) > 0 {
+		placeholders := make([]string, 0, len(opts.ExcludedTaskIDs))
+		for _, id := range opts.ExcludedTaskIDs {
+			placeholders = append(placeholders, fmt.Sprintf("$%d", argPos))
+			args = append(args, id)
+			argPos++
+		}
+		candidateWhere += " AND tasks.id NOT IN (" + strings.Join(placeholders, ", ") + ")"
 	}
 	// Dependency gating (LLD §4.1): a task with a populated
 	// dependencies[] array becomes eligible only when EVERY listed

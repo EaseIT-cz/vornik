@@ -63,6 +63,20 @@ func (s *SessionStore) SetPersister(p *sessionstore.Persister) {
 	s.persister = p
 }
 
+// NoProject is the AllowedProjects entry of a store bound to no project: a
+// value no project id takes (ids never hold a NUL), so the list is
+// non-empty, which every dispatcher tool reads as a restriction, and admits
+// no project (GitHub #496).
+const NoProject = "\x00no-project"
+
+// pinnedProjects is the dispatcher allowlist of a store bound to projectID.
+func pinnedProjects(projectID string) []string {
+	if projectID == "" {
+		return []string{NoProject}
+	}
+	return []string{projectID}
+}
+
 // NewSessionStore returns an empty store bound to projectID. nil
 // registry is allowed (the store then yields empty
 // AvailableProjects / LeadSystemPrompt — useful in tests).
@@ -88,6 +102,15 @@ func (s *SessionStore) Load(ctx context.Context, msg conversation.ChannelMessage
 	sess := dispatcher.Session{
 		History:       history,
 		ActiveProject: s.projectID,
+		// Web chat is project-pinned at the URL; the dispatcher's tools
+		// are restricted to the URL's project, so a chatty prompt can't
+		// route create_task into, or read, a sibling project. Pinned
+		// before the registry-dependent early returns below: an empty
+		// list means "no restriction" to every tool, so a turn whose
+		// project the registry no longer holds (a reload between the
+		// handler's check and this load) must not fall open (GitHub #496;
+		// process-spawn-law design, "Amendment 2026-10-21 (#496)", V3).
+		AllowedProjects: pinnedProjects(s.projectID),
 	}
 	// Tier computation rides at Load time so the dispatcher and the
 	// UI see the same band for this turn. Token estimate matches the
@@ -109,11 +132,6 @@ func (s *SessionStore) Load(ctx context.Context, msg conversation.ChannelMessage
 		return sess, nil
 	}
 	sess.AvailableProjects = s.registry.ListProjects()
-	// Web chat is project-pinned at the URL; restrict dispatcher
-	// tools to the URL's project so a chatty prompt can't
-	// accidentally route create_task into a sibling project the
-	// operator wasn't looking at.
-	sess.AllowedProjects = []string{s.projectID}
 
 	if leadPrompt, _ := dispatcher.ResolveLeadPrompt(s.registry, s.projectID); leadPrompt != "" {
 		swarm := s.registry.GetSwarm(project.SwarmID)

@@ -27,7 +27,7 @@ func accountsAgendaScripts() []Script {
 		item := map[string]any{"source": "calendar-" + label, "id": label + "-event", "title": label + " meeting",
 			"start": "2026-10-03T09:00:00Z", "end": "2026-10-03T09:30:00Z", "location_type": "none", "attendee_count": 2, "conflicts": false}
 		scripts = append(scripts, Script{Marker: "mcp__calendar-" + label + "__calendar_list_events", Final: "Agenda written.", Steps: []ScriptStep{
-			{ToolSuffix: "calendar-" + label + "__calendar_list_events", Args: map[string]any{"range": "today"}},
+			{ToolSuffix: "calendar-" + label + "__calendar_list_events", Args: todayEventsArgs()},
 			{ToolSuffix: "file_write", Args: map[string]any{"path": "artifacts/out/result.json", "content": mustJSON(map[string]any{
 				"status": "ok", "as_of": "2026-10-03T07:00:00Z", "items": []any{item},
 			})}},

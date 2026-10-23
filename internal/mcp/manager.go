@@ -60,6 +60,9 @@ type Manager struct {
 	// for a pending server, and on Close: the broadcast that wakes
 	// WaitForStartingServers (phase 2, P3).
 	ready chan struct{}
+	// holds is the sticky suspension of agent read tools and the re-list
+	// state (agent-administered design §6.5, amendment #481).
+	holds readHolds
 }
 
 // SetBlockNotifier wires the scraper-block → Telegram notify hook. Nil-safe;
@@ -164,6 +167,7 @@ func (m *Manager) SyncProjects(ctx context.Context, desired map[string][]ServerC
 					results <- dialResult{projectID: projectID, name: cfg.Name, cfg: cfg, err: err}
 					return
 				}
+				m.judgeListing(projectID, client) // design §6.5 item 4, amendment #481
 				results <- dialResult{projectID: projectID, name: cfg.Name, client: client, cfg: cfg}
 			}(projectID, cfg)
 		}
@@ -285,6 +289,7 @@ func (m *Manager) StartForProject(ctx context.Context, projectID string, servers
 			m.recordStartFailure(projectID, cfg, err, startGen)
 			continue
 		}
+		m.judgeListing(projectID, client) // design §6.5 item 4, amendment #481
 		m.mu.Lock()
 		if m.generation != startGen {
 			// A reload swapped the catalog while we dialled. Installing now
@@ -388,7 +393,11 @@ func (m *Manager) Tools(projectID string) []chat.Tool {
 	}
 	var tools []chat.Tool
 	for serverName, client := range byServer {
+		readEntry := agentReadEntry(projectID, serverName)
 		for _, t := range client.Tools() {
+			if readEntry && m.agentReadGate(projectID, serverName, t.Name, client) != nil {
+				continue // suspended or held: not offered to a role (design §6.5 item 3, amendment #481)
+			}
 			qualifiedName := fmt.Sprintf("mcp__%s__%s", serverName, t.Name)
 
 			params := t.InputSchema
@@ -602,6 +611,15 @@ func (m *Manager) callOnce(ctx context.Context, projectID, serverName, toolName,
 		}
 		return nil, errors.New(m.notConnectedLocked(projectID, serverName))
 	}
+	// An agent project's read call is judged against the descriptor of this
+	// client's own listing before anything is sent (design §6.5, GitHub
+	// #413), and against the held set (amendment #481). Pure CPU on an
+	// immutable listing and the holds' own lock, so it runs under the read
+	// lock, on exactly the client the call is about to use.
+	if err := m.agentReadGate(projectID, serverName, toolName, client); err != nil {
+		m.mu.RUnlock()
+		return nil, err
+	}
 	client.inflight.Add(1)
 	m.mu.RUnlock()
 	defer client.inflight.Done()
@@ -650,6 +668,7 @@ func (m *Manager) redial(projectID, serverName string) error {
 		// Redacted at the return: Execute logs it (phase 2, P4).
 		return redactConnectErr(err)
 	}
+	m.judgeListing(projectID, fresh) // design §6.5 item 4, amendment #481
 
 	// Pin the closer HERE, on the calling goroutine, rather than letting the
 	// out-of-band goroutines below read the package seam whenever they happen to

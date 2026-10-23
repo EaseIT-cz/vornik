@@ -105,6 +105,12 @@ var ProjectDataTables = []string{
 	"project_memory_quarantine",
 	"project_memory_chunks",
 	"project_ingest_queue",
+	// Memory verification (migration 234, design 22 amendment #482): the
+	// provenance records and the verification events of a deleted project's
+	// chunks. memory_verification_backup goes with its events (cascade).
+	// No content: ids, blob ids, states, counts, actor and reason.
+	"memory_chunk_provenance",
+	"memory_verification_events",
 
 	// Memory audit trails (GitHub #370, operator decision 2026-10-14): they
 	// hold content or query text of a deleted project. No foreign key reaches
@@ -431,6 +437,7 @@ var ProjectScopedTablesNotWiped = map[string]string{
 	"execution_quality_scores":    NotWipedCascadePrefix + "executions",
 	"knowledge_edges":             NotWipedCascadePrefix + "knowledge_entities",
 	"workflow_healing_candidates": NotWipedCascadePrefix + "workflow_healing_triggers",
+	"memory_verification_backup":  NotWipedCascadePrefix + "memory_verification_events",
 
 	"secret_redaction_audit": NotWipedKeptPrefix + "the security record that a secret reached a sink in this " +
 		"project, the evidence for rotating a credential that lives on at its vendor; it holds ids, a sink " +

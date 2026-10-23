@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"time"
 
@@ -115,7 +116,28 @@ func (a *memoryCompanionAdapter) Recall(ctx context.Context, projectID, query st
 	for i, r := range results {
 		out[i] = memorySearchResultToAPI(r)
 	}
+	a.labelProvenance(ctx, projectID, out)
 	return out, nil
+}
+
+// labelProvenance fills each hit's provenance label (#506 C7). A lookup
+// failure leaves the labels empty: recall never fails because a label could
+// not be read.
+func (a *memoryCompanionAdapter) labelProvenance(ctx context.Context, projectID string, hits []api.MemorySearchResult) {
+	if a.repo == nil || len(hits) == 0 {
+		return
+	}
+	ids := make([]string, len(hits))
+	for i, h := range hits {
+		ids[i] = h.ChunkID
+	}
+	labels, err := a.repo.ChunkProvenanceLabels(ctx, projectID, ids)
+	if err != nil {
+		return
+	}
+	for i := range hits {
+		hits[i].Provenance = labels[hits[i].ChunkID]
+	}
 }
 
 // memorySearchResultToAPI is the ONE conversion from a memory result to the
@@ -185,6 +207,9 @@ func (a *memoryCompanionAdapter) RecallRouting(ctx context.Context, projectID, q
 	for i, r := range results {
 		out[i] = memorySearchResultToAPIRouting(r)
 	}
+	// The companion recall goes this way when routing is on: label it too
+	// (live check 2026-10-23: hits came back without their provenance).
+	a.labelProvenance(ctx, projectID, out)
 	return out, routingVerdictToWire(verdict), nil
 }
 
@@ -417,6 +442,31 @@ func (a *memoryCompanionAdapter) Correct(ctx context.Context, in api.CorrectInpu
 	// never scores.
 	corrector.MinRefuteScore = a.minRefuteScore
 	var out api.CorrectResult
+	if in.Correction != "" && !in.DryRun && (a.p == nil || in.ClientKind == "" || in.ActorID == "") {
+		// Checked before any refute, so a correction that cannot be stored
+		// never leaves a half-applied call. remember() needs the same three.
+		return api.CorrectResult{}, errors.New("memory_correct: a correction needs the memory pipeline and a key with a client kind")
+	}
+	if in.DryRun && len(in.ChunkIDs) > 0 {
+		// The by-id path has no plan to show; never let a dry run fall
+		// through to a real refute (GitHub #436).
+		return api.CorrectResult{}, errors.New("memory_correct: dry_run applies to wrong_claim mode only")
+	}
+	// GitHub #436 part 2 (review ee12 F1): the correction is stored FIRST,
+	// and a correction the gates did not admit holds the refute, so a call
+	// never demotes the old fact and loses the new one. The stored
+	// correction is a protected correction, so the claim refute below
+	// cannot select it.
+	if in.Correction != "" && !in.DryRun {
+		admitted, err := a.storeCompanionCorrection(ctx, in, &out)
+		if err != nil {
+			return out, err
+		}
+		if !admitted {
+			out.RefuteHeld = true
+			return out, nil
+		}
+	}
 	if len(in.ChunkIDs) > 0 {
 		// Surgical by-id refute — flips exactly the named chunks,
 		// never the claim-search top matches (which may be the
@@ -435,12 +485,17 @@ func (a *memoryCompanionAdapter) Correct(ctx context.Context, in api.CorrectInpu
 		// The claim search is scoped to the effective repo scope the handler
 		// resolved (GitHub #368, E4): a claim made in repository A never
 		// refutes repository B's chunk. Empty scope = project-wide, as before.
-		refuted, err := corrector.RefuteByClaimInScope(ctx, in.ProjectID, in.WrongClaim, in.RepoScope, in.MaxRefutes)
+		//
+		// GitHub #436: the claim never refutes an operator correction, and
+		// the result reports every hit passed over; a dry run writes nothing
+		// (no refute, and no correction below).
+		res, err := corrector.RefuteClaim(ctx, in.ProjectID, in.WrongClaim, in.RepoScope, in.MaxRefutes, in.DryRun)
 		if err != nil {
 			return api.CorrectResult{}, err
 		}
-		out.Refuted = make([]api.RefutedChunkInfo, 0, len(refuted))
-		for _, r := range refuted {
+		out.DryRun = res.DryRun
+		out.Refuted = make([]api.RefutedChunkInfo, 0, len(res.Refuted))
+		for _, r := range res.Refuted {
 			out.Refuted = append(out.Refuted, api.RefutedChunkInfo{
 				ChunkID:    r.ID,
 				SourceName: r.SourceName,
@@ -448,17 +503,54 @@ func (a *memoryCompanionAdapter) Correct(ctx context.Context, in api.CorrectInpu
 				Score:      r.Score,
 			})
 		}
-	}
-	if in.Correction != "" {
-		id, ierr := corrector.InsertCorrection(ctx, in.ProjectID, in.Correction, in.RepoScope)
-		if ierr != nil {
-			// The refute already landed; surface the insert failure but
-			// don't discard the refute result — return what we have.
-			return out, ierr
+		for _, s := range res.Skipped {
+			out.Skipped = append(out.Skipped, api.SkippedChunkInfo{
+				ChunkID:          s.ID,
+				Score:            s.Score,
+				ValidationStatus: s.ValidationStatus,
+				Reason:           s.Reason,
+			})
 		}
-		out.CorrectionChunkID = id
 	}
 	return out, nil
+}
+
+// storeCompanionCorrection stores a companion memory_correct correction as
+// a companion deposit (GitHub #436 part 2): through the pipeline remember()
+// uses (secret scan, damage floor, gates, the companion authority cap),
+// never through Corrector.InsertCorrection, which stored it verified, 0.95,
+// never expiring and unscanned. Its daemon-minted correction artifact keeps
+// it out of reach of a later claim refute. It reports whether the
+// correction was admitted with a readable chunk id.
+func (a *memoryCompanionAdapter) storeCompanionCorrection(ctx context.Context, in api.CorrectInput, out *api.CorrectResult) (bool, error) {
+	res, err := a.p.IngestCompanionCorrection(ctx, in.ProjectID, in.ClientKind, in.ActorID, in.Correction, in.RepoScope)
+	if err != nil {
+		return false, err
+	}
+	out.CorrectionGatesFailed = res.Stats.GatesFailed
+	switch {
+	case res.Stats.Admitted > 0:
+		// ChunkIDsByArtifact orders by chunk_index: the first is the
+		// deposit's first chunk.
+		ids, lerr := a.repo.ChunkIDsByArtifact(ctx, in.ProjectID, res.ArtifactID)
+		if lerr != nil {
+			return false, lerr
+		}
+		if len(ids) == 0 {
+			// Admitted but not readable back: never report a success
+			// without an id (review ee12 F5).
+			out.CorrectionDecision = "REJECTED"
+			return false, nil
+		}
+		out.CorrectionDecision = "ALLOW"
+		out.CorrectionChunkID = ids[0]
+		return true, nil
+	case res.Stats.Quarantined > 0:
+		out.CorrectionDecision = "QUARANTINED"
+	default:
+		out.CorrectionDecision = "REJECTED"
+	}
+	return false, nil
 }
 
 // extractedDocumentIndexerAdapter wraps memory.Indexer so it
@@ -1240,10 +1332,12 @@ func (a *memoryTitleBackfillAdapter) BackfillBatch(ctx context.Context, batchSiz
 		Processed: res.Processed,
 		Succeeded: res.Succeeded,
 		Failed:    res.Failed,
-		Skipped:   res.Skipped,
-		Remaining: res.Remaining,
-		Errors:    res.Errors,
-		Paused:    res.Paused,
+		// GitHub #369, §S8.11 7b.
+		PersistFailed: res.PersistFailed,
+		Skipped:       res.Skipped,
+		Remaining:     res.Remaining,
+		Errors:        res.Errors,
+		Paused:        res.Paused,
 	}, nil
 }
 
@@ -1271,11 +1365,13 @@ func (a *memoryClassifyBackfillAdapter) BackfillBatch(ctx context.Context, proje
 		Processed: res.Processed,
 		Succeeded: res.Succeeded,
 		Failed:    res.Failed,
-		Skipped:   res.Skipped,
-		Remaining: res.Remaining,
-		Exhausted: res.Exhausted,
-		Errors:    res.Errors,
-		Paused:    res.Paused,
+		// GitHub #369, §S8.11 7b.
+		PersistFailed: res.PersistFailed,
+		Skipped:       res.Skipped,
+		Remaining:     res.Remaining,
+		Exhausted:     res.Exhausted,
+		Errors:        res.Errors,
+		Paused:        res.Paused,
 	}, nil
 }
 

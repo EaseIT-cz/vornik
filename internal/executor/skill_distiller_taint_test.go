@@ -281,14 +281,19 @@ func TestDistiller_UnknownToolTaskIsNotDistilled(t *testing.T) {
 	f.assertRefused(t, f.runOrdinary(t, w, ordinaryTask()), "third_party_tools")
 }
 
-// Severity orders Unknown above High, so a step that used both records
-// requires_review=false. Keying on that flag would have let it through.
+// Severity orders Unknown above High, so before #441 a step that used both
+// recorded requires_review=false. Keying on that flag would have let it
+// through. Since #441 the stamp records true; rows written before it still
+// carry false, so the fixture forces the old value and the distiller must
+// still refuse from the decoded sources.
 func TestDistiller_HighPlusUnknownStepIsNotDistilled(t *testing.T) {
 	f := newDistillFixture(t)
 	w := f.wireTaint()
-	if row := w.step(t, "t1", "web_fetch", "some_new_tool"); row.RequiresReview {
-		t.Fatal("fixture premise: a High+Unknown step records requires_review=false")
+	row := w.step(t, "t1", "web_fetch", "some_new_tool")
+	if !row.RequiresReview {
+		t.Fatal("#441: a High+Unknown step must record requires_review=true")
 	}
+	row.RequiresReview = false // a row written before #441
 	f.assertRefused(t, f.runOrdinary(t, w, ordinaryTask()), "third_party_tools")
 }
 

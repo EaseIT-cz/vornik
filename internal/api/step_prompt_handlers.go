@@ -29,10 +29,11 @@ type StepPromptResponse struct {
 }
 
 // GetExecutionStepPrompt serves what the model was TOLD at the step's first
-// request — system, user, tools — as stored: redacted at write, so served
-// as-is (step-prompt persistence design §7). Operator scope is the execution's
-// project scope: a project-scoped key sees only its own project's executions,
-// through the same check every execution read applies.
+// request — system, user, tools (step-prompt persistence design §7): as
+// stored (redacted at write) to an admin-class caller, scrubbed to a scoped
+// caller, refused to an unscoped caller that is not admin-class (GitHub #496,
+// stepTextView). A project-scoped key sees only its own project's
+// executions, through the same check every execution read applies.
 func (s *Server) GetExecutionStepPrompt(w http.ResponseWriter, r *http.Request, executionID, stepID string) {
 	if r.Method != http.MethodGet {
 		respondError(w, http.StatusMethodNotAllowed, "METHOD_NOT_ALLOWED", "use GET")
@@ -40,6 +41,12 @@ func (s *Server) GetExecutionStepPrompt(w http.ResponseWriter, r *http.Request, 
 	}
 	if stepID == "" {
 		respondError(w, http.StatusBadRequest, "VALIDATION_ERROR", "stepId is required")
+		return
+	}
+	// GitHub #496: the view comes from the one per-access mapping, decided
+	// before any store is read.
+	view, scrubbed, ok := s.stepTextView(w, r)
+	if !ok {
 		return
 	}
 	if s.executionRepo == nil || s.stepOutcomeRepo == nil || s.stepPromptRepo == nil {
@@ -93,7 +100,12 @@ func (s *Server) GetExecutionStepPrompt(w http.ResponseWriter, r *http.Request, 
 			respondError(w, http.StatusInternalServerError, "INTERNAL_ERROR", "Failed to read prompt part")
 			return
 		}
-		resp.Parts[part] = p.Body
+		resp.Parts[part] = view(p.Body)
+	}
+	// The hashes of the stored bytes go with the stored bytes only
+	// (stepHashView, GitHub #496).
+	if scrubbed {
+		resp.Hashes = persistence.StepPromptHashes{}
 	}
 	respondJSON(w, http.StatusOK, resp)
 }

@@ -10,7 +10,6 @@ import (
 	"sync"
 	"time"
 
-	"vornik.io/vornik/internal/auth"
 	"vornik.io/vornik/internal/persistence"
 )
 
@@ -306,12 +305,7 @@ func (s *Server) DaemonDrain(w http.ResponseWriter, r *http.Request) {
 // admin by user ID (as assistActor does), a key by its principal (review
 // f072 #3).
 func drainPrincipal(r *http.Request) string {
-	if id := IdentityFromContext(r.Context()); id != nil && id.Extra != nil {
-		if uid, _ := id.Extra[auth.ExtraSessionUserID].(string); uid != "" {
-			return "session:" + uid
-		}
-	}
-	if p := apiKeyPrincipalFromContext(r.Context()); p != "" {
+	if p := RequestPrincipal(r.Context()); p != "" {
 		return p
 	}
 	return "anonymous-admin"

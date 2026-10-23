@@ -70,6 +70,10 @@ func (c *Container) approverDeviceService() *approverdevice.Service {
 		if c.agentAdminWireable() {
 			svc.SetConnectorPages(lazyConnectorPages{c: c})
 		}
+		// Agent read tools suspended because their server now says they
+		// change things (agent-administered design §6.5 item 6, GitHub
+		// #413), read from the live MCP manager per page view.
+		svc.SetWithheldTools(c.agentWithheldToolLines)
 		c.approverDevices = svc
 	})
 	return c.approverDevices

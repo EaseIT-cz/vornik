@@ -3,7 +3,7 @@ sources:
     - path: internal/autonomy/manager.go
       sha256: 7c6e2f23a2568a97cd04b51dba09b595b3dc54bf45977d6deb0b1517cec753a2
     - path: internal/registry/project.go
-      sha256: 708b07a7761489e4c64817087dd9f25914af2470a52ccd1295b3e44911c33061
+      sha256: 438282a14b6e55cf685243941018f913c0acbce35f70ea190b878644695f67e6
 ---
 # Autonomy — self-running projects
 
@@ -269,6 +269,47 @@ terminates with no PR opened. The next tick's reconcile pass finds the
 terminal-failed item and flips its box from `- [x]` to `- [!]` in the backlog
 file, so nothing is silently lost — investigate, then flip it back to
 `- [ ]` to retry, or delete the line if it's not worth retrying.
+
+## Refreshing the workspace before scheduled work
+
+*New in 2026.10.7.* A task from `cron` or `llm` autonomy, or from a
+task-kind reminder, normally starts from whatever the project workspace
+last held. If the workspace is a clone of a repository that changes
+elsewhere, opt in to a reset before each such task:
+
+```yaml
+workspace:
+  refresh_before_work: true
+  refresh_branch: main   # optional; default: the workspace's current branch
+```
+
+Before the task's worktree is created, vornik fetches `origin` and resets the
+workspace to `origin/<branch>`. This is the same reset a forge task gets:
+
+- commits that exist only in the workspace (for example a git-over-HTTPS push
+  that never reached `origin`) are moved off the branch and kept in a
+  `refs/vornik/discarded/<time>-<sha>` ref you can recover them from;
+- uncommitted changes to tracked files in the workspace itself are discarded;
+- untracked files are left alone.
+
+So opt in only for a project whose workspace should mirror `origin`, such as
+one that reads a repository, not one whose agents commit work that is never
+pushed.
+
+What it does not cover: tasks you submit by hand, from chat or from a
+companion, and child tasks, start from the workspace as it is. A
+`backlog`-mode project already refreshes at every tick and keeps its
+checklist marks across that refresh, so the key is refused with
+`autonomy.mode: backlog`. A detached HEAD with no `refresh_branch` is not
+refreshed. The fetch is bounded at 90 seconds; a private repository needs a
+credential the daemon's git can use.
+
+The refresh never stops a task: when it cannot run, the task starts from the
+workspace as it is. Every attempt is counted in
+`vornik_executor_workspace_refresh_total{project, source, outcome}` and logged.
+`outcome` is `refreshed` or the reason it was not: `no_origin`,
+`fetch_failed`, `reset_failed`, `not_git`, `skipped_no_branch`,
+`skipped_has_children`, `skipped_resume` or `skipped_backlog_mode`.
 
 ## Watching it
 

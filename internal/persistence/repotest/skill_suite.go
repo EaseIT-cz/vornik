@@ -27,6 +27,7 @@ func RunSkillSuite(t *testing.T, repo persistence.SkillRepository) {
 	t.Run("Get_unknown_is_ErrNotFound", func(t *testing.T) { skillGetUnknown(t, repo) })
 	t.Run("List_scope_isolation", func(t *testing.T) { skillScopeIsolation(t, repo) })
 	t.Run("List_maturity_and_role_filters", func(t *testing.T) { skillMaturityRoleFilters(t, repo) })
+	t.Run("List_role_filter_is_exact_membership", func(t *testing.T) { skillRoleFilterIsExactMembership(t, repo) })
 	t.Run("Upsert_bumps_version_and_resets_to_draft", func(t *testing.T) { skillUpsertVersionBump(t, repo) })
 	t.Run("SetMaturity_transitions", func(t *testing.T) { skillSetMaturity(t, repo) })
 	t.Run("RecordFeedback_increments_counters", func(t *testing.T) { skillRecordFeedback(t, repo) })

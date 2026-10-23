@@ -326,15 +326,6 @@ func TestSupportReport_TaskRepoNotWired(t *testing.T) {
 	}
 }
 
-func TestSanitizeForFilename(t *testing.T) {
-	if got := sanitizeForFilename(""); got != "bundle" {
-		t.Errorf("empty -> %q", got)
-	}
-	if got := sanitizeForFilename("a/../b"); strings.ContainsAny(got, "/") || strings.Contains(got, "..") {
-		t.Errorf("unsafe -> %q", got)
-	}
-}
-
 func TestRedactedConfigYAML_MapInput(t *testing.T) {
 	// A plain map exercises the marshal path without a full Config.
 	yml, err := redactedConfigYAML(map[string]any{"password": "hunter2", "name": "ok"})

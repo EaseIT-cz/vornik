@@ -1098,7 +1098,7 @@ func canonicalPipelineGates(quarantineByGate map[string]int) []pipelineGateNode 
 		{Name: "policy_match", Stage: "chunk", X: 380, Y: yChunk,
 			Description: "Project deny patterns — substring match → quarantine"},
 		{Name: "min_content", Stage: "chunk", X: 480, Y: yChunk,
-			Description: "<64 chars rejects, <10 words quarantines"},
+			Description: "<64 chars rejects, <10 words quarantines; a companion or chat note: <3 words or <10 chars rejects"},
 		// Classify stage
 		{Name: "class_known", Stage: "classify", X: 580, Y: yClassify,
 			Description: "Producer role → content_class lookup; unknown classes downgrade to unclassified with warn-log"},

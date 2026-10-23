@@ -2,6 +2,7 @@ package memory
 
 import (
 	"context"
+	"errors"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -53,8 +54,8 @@ func TestConsolidateOne_StaleLeader_NoWrite(t *testing.T) {
 		LeaderGate: gate,
 	}
 
-	if err := w.consolidateOne(context.Background(), "proj-a"); err != nil {
-		t.Fatalf("consolidateOne returned error: %v", err)
+	if err := w.consolidateOne(context.Background(), "proj-a"); !errors.Is(err, errLeaderFenced) {
+		t.Fatalf("consolidateOne = %v, want errLeaderFenced", err)
 	}
 
 	if got := gate.verified.Load(); got == 0 {
@@ -118,7 +119,7 @@ func TestProcessOne_StaleLeader_NoLLMCall(t *testing.T) {
 		LeaderGate: gate,
 	}
 
-	if err := w.processOne(context.Background(), "proj-a"); err != nil {
+	if _, err := w.processOne(context.Background(), "proj-a"); err != nil {
 		t.Fatalf("processOne returned error: %v", err)
 	}
 
@@ -165,7 +166,7 @@ func TestProcessOne_CurrentLeader_Writes(t *testing.T) {
 		WithArgs("proj-a", "narrative for proj-a", "", sqlmock.AnyArg()).
 		WillReturnResult(sqlmock.NewResult(0, 1))
 
-	if err := w.processOne(context.Background(), "proj-a"); err != nil {
+	if _, err := w.processOne(context.Background(), "proj-a"); err != nil {
 		t.Fatalf("processOne returned error: %v", err)
 	}
 	if fp.calls.Load() != 1 {

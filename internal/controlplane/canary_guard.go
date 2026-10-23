@@ -465,6 +465,14 @@ func (w *CanaryGuardWorker) evaluateOne(ctx context.Context, c *persistence.Cost
 		// Another apply/rollback holds the global mutex — transient. Leave open,
 		// retry next tick (no special backoff; ticks are ~15m).
 		w.Logger.Info().Str("proposal_id", c.ProposalID).Msg("canary: rollback deferred (apply in progress); retry next tick")
+	case errors.Is(rerr, ErrWriterFenced):
+		// This daemon holds the canary lease but not the config_writer lease
+		// (GitHub #447, journal design §14.3): it may not write the tree, so
+		// the rollback was refused with nothing written. Not superseded — the
+		// change still owns its locus. Leave open and retry next tick; the
+		// max_canary_age failsafe bounds it (open decision O-447).
+		w.Logger.Warn().Err(rerr).Str("proposal_id", c.ProposalID).
+			Msg("canary: rollback refused: this daemon is not the config writer; retry next tick")
 	case errors.Is(rerr, ErrRollbackTargetDrifted), errors.Is(rerr, persistence.ErrProposalNotApplied):
 		// A newer change now owns the locus — superseded. No cooldown.
 		_ = w.finalize(ctx, c, persistence.CanaryStatusSuperseded,

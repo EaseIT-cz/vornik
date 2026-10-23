@@ -236,6 +236,22 @@ func (s *MemoryIngestSubsystem) Start(ctx context.Context) error {
 		go s.llmConsolidateWorker.Run(collectorsCtxFrom(ctx, c))
 	}
 
+	// Provenance sweep (design 22, amendment #482): hourly re-check of
+	// every provenance record against its project's clone. Leader-gated: two
+	// daemons must not both write the audited events.
+	// A node that does not run singleton workers never sweeps; with no
+	// leader-lock store (a single-node SQLite deployment) the one node
+	// sweeps ungated (code review 9a9a F1).
+	if c != nil && c.memoryProvenanceSweeper != nil && c.capabilities().RunWorkers {
+		if e := c.initWorkerElector("memory_provenance_sweep"); e != nil {
+			c.RegisterExtraElector(e)
+			c.memoryProvenanceSweeper.LeaderGate = e
+			e.BootstrapAcquire(ctx)
+			go e.Run(ctx)
+		}
+		go c.memoryProvenanceSweeper.Run(collectorsCtxFrom(ctx, c))
+	}
+
 	// Knowledge-skill maturity engine (learning-loop §D.3). Leader-gated
 	// promote/decay of operator-approved skills; hourly cadence. Nil-safe
 	// when the skill store isn't wired (e.g. minimal harnesses).

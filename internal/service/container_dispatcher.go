@@ -74,6 +74,17 @@ func (c *Container) initDispatcher() {
 		opts = append(opts, dispatcher.WithBudgetNotifier(c.TelegramBot))
 	}
 
+	// The task tools' view of a stored error text (#480): scrubbed with the
+	// container's line scrubber, the one the UI and the explainer use,
+	// unless the channel marks the turn as an admin-linked audience. If it
+	// cannot be built, nil: every line is withheld, nothing is served raw.
+	errScrub, errScrubErr := c.logScrubber()
+	if errScrubErr != nil {
+		c.Logger.Warn().Err(errScrubErr).Msg("dispatcher: error-text scrubber unavailable; chat status tools withhold every error line")
+		errScrub = nil
+	}
+	opts = append(opts, dispatcher.WithErrorTextScrubber(errScrub))
+
 	// Defensive primitives: hallucination check + output guard always on.
 	opts = append(opts, dispatcher.WithHallucinationDetector(hallucination.NewDefault()))
 	opts = append(opts, dispatcher.WithOutputGuard(true))

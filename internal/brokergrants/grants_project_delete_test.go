@@ -13,6 +13,7 @@ import (
 	"vornik.io/vornik/internal/persistence/sqlite"
 	"vornik.io/vornik/internal/projectarchive"
 	"vornik.io/vornik/internal/registry"
+	"vornik.io/vornik/internal/testutil/testwait"
 )
 
 // noAudit discards the sweeper's audit rows.
@@ -21,6 +22,19 @@ type noAudit struct{}
 func (noAudit) Insert(context.Context, *persistence.AdminAuditEntry) error { return nil }
 func (noAudit) List(context.Context, persistence.AdminAuditFilter) ([]*persistence.AdminAuditEntry, error) {
 	return nil, nil
+}
+
+// waitRecorder is the real sweeper with the deadline of the context the
+// lifecycle waits on recorded (GitHub #423).
+type waitRecorder struct {
+	*projectarchive.Sweeper
+	deadline time.Time
+	bounded  bool
+}
+
+func (w *waitRecorder) WaitOutcome(ctx context.Context, projectID string, afterSeq uint64) (projectarchive.DeleteOutcome, bool) {
+	w.deadline, w.bounded = ctx.Deadline()
+	return w.Sweeper.WaitOutcome(ctx, projectID, afterSeq)
 }
 
 // GitHub #370 carry-over, delta audit 2026-10-14 (lane W8-W, archival design
@@ -56,13 +70,23 @@ func TestCover_ReCreatedProjectInheritsNoStandingGrant_370(t *testing.T) {
 	})
 	runCtx, stop := context.WithCancel(e.ctx)
 	t.Cleanup(stop)
+	rec := &waitRecorder{Sweeper: sw}
 	lc := &projectarchive.LifecycleService{
 		ConfigDir: dir,
 		Patcher:   func(c []byte, _ []projectarchive.PatchOp) ([]byte, error) { return c, nil },
-		Sweeper:   sw,
+		Sweeper:   rec,
 		Reload:    func(context.Context) error { go sw.Run(runCtx); return nil },
 	}
-	res, err := lc.DeleteNowAndWait(e.ctx, "ns1--p", true, 10*time.Second)
+	// GitHub #423 (found at: unit, a loaded make test lane): with a fixed 10 s
+	// bound this answered "pending" for a wipe that takes 4 ms unloaded. The
+	// wait ends on the sweeper's outcome; only the test's own deadline may
+	// cut it short, which the recorder checks.
+	minDeadline := time.Now().Add(testwait.ForOutcome(t) - 5*time.Second)
+	res, err := lc.DeleteNowAndWait(e.ctx, "ns1--p", true, testwait.ForOutcome(t))
+	if _, testBounded := t.Deadline(); testBounded && rec.bounded && rec.deadline.Before(minDeadline) {
+		t.Errorf("the wait for the wipe's outcome ends %s from now, before the test's own budget (%s): a fixed bound answers pending under load (#423)",
+			time.Until(rec.deadline).Round(time.Second), time.Until(minDeadline).Round(time.Second))
+	}
 	if err != nil || res.State != projectarchive.DeleteNowDeleted {
 		t.Fatalf("delete-now = %q (%v, %v), want deleted", res.State, res.Err, err)
 	}

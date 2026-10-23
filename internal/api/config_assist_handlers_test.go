@@ -21,7 +21,7 @@ import (
 func TestOperatorAssist_GateAndUnwired(t *testing.T) {
 	cfg := config.DefaultConfig()
 	cfg.Admin = config.AdminConfig{Enabled: true, AllowedKeys: []string{"sk-operator"}}
-	s := NewServer(WithLogger(zerolog.Nop()), WithConfig(cfg))
+	s := NewServer(WithLogger(zerolog.Nop()), WithConfig(cfg), WithAdminClassKeys(cfg.Admin))
 
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/operator/assist", strings.NewReader(`{"projectId":"p","intent":"x"}`))
@@ -43,7 +43,7 @@ func TestOperatorAssist_RefusalIs200WithRefusal(t *testing.T) {
 	cfg.Admin = config.AdminConfig{Enabled: true, AllowedKeys: []string{"sk-operator"}}
 	cfg.ConfigAssistant.Enabled = true
 	cfg.ConfigAssistant.Paused = true
-	s := NewServer(WithLogger(zerolog.Nop()), WithConfig(cfg))
+	s := NewServer(WithLogger(zerolog.Nop()), WithConfig(cfg), WithAdminClassKeys(cfg.Admin))
 	s.configAssist = &configassist.Engine{
 		Config:   func() config.AssistantConfig { return cfg.ConfigAssistant },
 		Registry: registry.New(),

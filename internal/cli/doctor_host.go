@@ -11,6 +11,7 @@ import (
 
 	"vornik.io/vornik/internal/config"
 	"vornik.io/vornik/internal/hostdoctor"
+	"vornik.io/vornik/internal/retention"
 )
 
 // Host checks (process-spawn law, S2,
@@ -35,6 +36,9 @@ var doctorHostChecks = func(ctx context.Context, daemonRevision string) []doctor
 	if env.runtime != nil {
 		checker = checker.WithRuntime(*env.runtime)
 	}
+	if env.upgradeDumps != nil {
+		checker = checker.WithUpgradeDumps(*env.upgradeDumps)
+	}
 	for _, c := range checker.Run(ctx) {
 		out = append(out, doctorCheck{Name: c.Name, Status: c.Status, Message: c.Message, Items: c.Items, Fixed: c.Fixed})
 	}
@@ -53,6 +57,8 @@ type doctorHostEnv struct {
 	workspacesRoot string
 	sandbox        *hostdoctor.SandboxEnv
 	runtime        *hostdoctor.RuntimeEnv
+	// upgradeDumps is the retention.upgrade_dump_* policy (GitHub #394).
+	upgradeDumps *retention.UpgradeDumpPolicy
 }
 
 var (
@@ -74,6 +80,8 @@ func loadDoctorHostEnv() doctorHostEnv {
 			doctorHostEnvVal.sandbox = &env
 			rt := runtimeEnvFromConfig(cfg)
 			doctorHostEnvVal.runtime = &rt
+			_, dumps := retention.GlobalFromConfig(cfg.Retention)
+			doctorHostEnvVal.upgradeDumps = &dumps
 		}
 	})
 	return doctorHostEnvVal

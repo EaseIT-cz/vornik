@@ -93,6 +93,10 @@ func (f *fakeChunkSource) Stats(context.Context) (*persistence.KGStats, error) {
 	return &persistence.KGStats{ChunksPending: len(f.queue)}, nil
 }
 
+func (f *fakeChunkSource) ReflagQuarantinedChunks(context.Context, string, string, bool) ([]persistence.QuarantineReflagCount, error) {
+	return nil, nil
+}
+
 func (f *fakeChunkSource) ReflagChunksMissingEdges(context.Context, string, bool) (int, error) {
 	// Worker tests don't exercise the operator-driven backfill
 	// path; return zero so the interface is satisfied.

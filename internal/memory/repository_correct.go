@@ -3,6 +3,7 @@ package memory
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -124,10 +125,18 @@ func (r *Repository) MarkRefutedByIDs(ctx context.Context, projectID string, chu
 		return 0, nil
 	}
 	placeholders := make([]string, len(chunkIDs))
-	args := make([]any, 0, len(chunkIDs)+2)
-	args = append(args, projectID, route)
+	args := make([]any, 0, len(chunkIDs)+3)
+	// $3 is the validator a by-id refute spares: a provenance-verified chunk
+	// (the merged bytes of a design) is retired only by a forget, never by a
+	// by-id "this is wrong" (design review 565b F1; design 22 part 8f). ""
+	// spares nothing.
+	spare := ""
+	if !isForgetRoute(route) {
+		spare = ValidatorRoleProvenance
+	}
+	args = append(args, projectID, route, spare)
 	for i, id := range chunkIDs {
-		placeholders[i] = fmt.Sprintf("$%d", i+3) // $1 project_id, $2 route
+		placeholders[i] = fmt.Sprintf("$%d", i+4) // $1 project_id, $2 route, $3 spared validator
 		args = append(args, id)
 	}
 	query := fmt.Sprintf(`
@@ -136,6 +145,7 @@ func (r *Repository) MarkRefutedByIDs(ctx context.Context, projectID string, chu
 		    refute_route = NULLIF($2, '')
 		WHERE project_id = $1
 		  AND id IN (%s)
+		  AND NOT ($3 <> '' AND validation_status = 'verified' AND COALESCE(validator_role, '') = $3)
 		  AND (validation_status NOT IN ('refuted', 'superseded')
 		       OR (validation_status = 'refuted'
 		           AND refute_route = 'mirror_forget'
@@ -147,6 +157,162 @@ func (r *Repository) MarkRefutedByIDs(ctx context.Context, projectID string, chu
 	}
 	n, _ := res.RowsAffected()
 	return int(n), nil
+}
+
+// isForgetRoute reports whether a by-id refute is a user's forget: the
+// forget command from any harness, the dispatcher's memory_forget, or the
+// approver device. Those retire any chunk they name, a provenance-verified
+// design included (the user's data-subject control, GitHub #119); every
+// other by-id route (memory_correct, the Hermes mirror's forget of a
+// mirrored note) spares a provenance-verified chunk.
+func isForgetRoute(route string) bool {
+	switch route {
+	case RefuteRouteForgetCommand, RefuteRouteChatForget, RefuteRouteDeviceForget:
+		return true
+	}
+	return false
+}
+
+// ProducerRoleOperatorCorrection is the producer_role an operator
+// correction carries. It is reserved: insertOperatorCorrection is its only
+// writer, and PatchPolicyByArtifact refuses it, so a claim refute can trust
+// it to mean "the operator's own correction" (GitHub #436, design 22
+// "Amendment 2026-10-21 (#436)").
+const ProducerRoleOperatorCorrection = "operator_correction"
+
+// ErrReservedProducerRole is returned when an ingest tries to stamp the
+// reserved operator-correction producer_role on a chunk.
+var ErrReservedProducerRole = errors.New("memory repo: producer_role operator_correction is reserved for operator corrections")
+
+// claimChunkFacts is what a claim refute needs to know about a search hit
+// before it chooses what to refute.
+type claimChunkFacts struct {
+	ProducerRole     string
+	ValidationStatus string
+	ArtifactID       string
+	ValidatorRole    string
+}
+
+// isProvenanceVerified reports whether a chunk is verified by provenance:
+// the merged bytes of a design (design 22, part 8f). A claim refute matches
+// text and never refutes one; the correction belongs in the design itself,
+// and an explicit chunk_ids forget still retires it.
+func isProvenanceVerified(f claimChunkFacts) bool {
+	return f.ValidationStatus == "verified" && f.ValidatorRole == ValidatorRoleProvenance
+}
+
+// companionCorrectionArtifactLike is the artifact-id prefix a companion
+// correction's synthetic artifact carries (GenerateID's "<prefix>_").
+const companionCorrectionArtifactLike = CompanionCorrectionArtifactPrefix + "_"
+
+// isProtectedCorrection reports whether a chunk is a correction a claim
+// refute must never refute: an operator correction
+// (insertOperatorCorrection), or a companion memory_correct correction (a
+// companion producer role on a daemon-minted correction artifact). The
+// claim UPDATE in markRefutedByClaim carries the same predicate in SQL.
+func isProtectedCorrection(f claimChunkFacts) bool {
+	if f.ProducerRole == ProducerRoleOperatorCorrection {
+		return true
+	}
+	return strings.HasPrefix(f.ProducerRole, "companion:") && strings.HasPrefix(f.ArtifactID, companionCorrectionArtifactLike)
+}
+
+// claimRefuteFacts returns producer_role and validation_status for the
+// named chunks under projectID (project-scoped, the IDOR guard). An id with
+// no row is absent from the map.
+func (r *Repository) claimRefuteFacts(ctx context.Context, projectID string, chunkIDs []string) (map[string]claimChunkFacts, error) {
+	if r == nil || r.db == nil {
+		return nil, fmt.Errorf("memory repo: not configured")
+	}
+	out := make(map[string]claimChunkFacts, len(chunkIDs))
+	if projectID == "" || len(chunkIDs) == 0 {
+		return out, nil
+	}
+	placeholders := make([]string, len(chunkIDs))
+	args := make([]any, 0, len(chunkIDs)+1)
+	args = append(args, projectID)
+	for i, id := range chunkIDs {
+		placeholders[i] = fmt.Sprintf("$%d", i+2)
+		args = append(args, id)
+	}
+	q := fmt.Sprintf(`
+		SELECT id, COALESCE(producer_role, ''), COALESCE(validation_status, ''), COALESCE(artifact_id, ''),
+		       COALESCE(validator_role, '')
+		FROM project_memory_chunks
+		WHERE project_id = $1 AND id IN (%s)`, strings.Join(placeholders, ","))
+	rows, err := r.db.QueryContext(ctx, q, args...)
+	if err != nil {
+		return nil, fmt.Errorf("memory repo: claim refute facts: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+	for rows.Next() {
+		var id string
+		var f claimChunkFacts
+		if err := rows.Scan(&id, &f.ProducerRole, &f.ValidationStatus, &f.ArtifactID, &f.ValidatorRole); err != nil {
+			return nil, fmt.Errorf("memory repo: scan claim refute facts: %w", err)
+		}
+		out[id] = f
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("memory repo: iterate claim refute facts: %w", err)
+	}
+	return out, nil
+}
+
+// markRefutedByClaim is the claim path's refute statement (GitHub #436).
+// It is MarkRefutedByIDs's statement plus two things the chunk-id path must
+// not have: it never flips an operator correction (the producer_role
+// predicate, so a row the caller's lookup missed is still safe), and it
+// returns the ids it flipped, so the caller reports what was written rather
+// than what it chose. MarkRefutedByIDs is unchanged and stays the chunk_ids
+// sink, which is how a correction is retired deliberately.
+func (r *Repository) markRefutedByClaim(ctx context.Context, projectID string, chunkIDs []string, route string) ([]string, error) {
+	if r == nil || r.db == nil {
+		return nil, fmt.Errorf("memory repo: not configured")
+	}
+	if projectID == "" || len(chunkIDs) == 0 {
+		return nil, nil
+	}
+	placeholders := make([]string, len(chunkIDs))
+	args := make([]any, 0, len(chunkIDs)+5)
+	args = append(args, projectID, route, ProducerRoleOperatorCorrection, companionCorrectionArtifactLike, ValidatorRoleProvenance)
+	for i, id := range chunkIDs {
+		placeholders[i] = fmt.Sprintf("$%d", i+6) // $1 project_id, $2 route, $3 reserved role, $4 companion correction artifact prefix, $5 provenance label
+		args = append(args, id)
+	}
+	// The protection predicates are isProtectedCorrection and isProvenanceVerified in SQL.
+	q := fmt.Sprintf(`
+		UPDATE project_memory_chunks
+		SET validation_status = 'refuted',
+		    refute_route = NULLIF($2, '')
+		WHERE project_id = $1
+		  AND id IN (%s)
+		  AND COALESCE(producer_role, '') <> $3
+		  AND NOT (COALESCE(producer_role, '') LIKE 'companion:%%'
+		           AND strpos(COALESCE(artifact_id, ''), $4) = 1)
+		  AND NOT (validation_status = 'verified' AND COALESCE(validator_role, '') = $5)
+		  AND (validation_status NOT IN ('refuted', 'superseded')
+		       OR (validation_status = 'refuted'
+		           AND refute_route = 'mirror_forget'
+		           AND $2 <> 'mirror_forget'))
+		RETURNING id`, strings.Join(placeholders, ","))
+	rows, err := r.db.QueryContext(ctx, q, args...)
+	if err != nil {
+		return nil, fmt.Errorf("mark refuted by claim: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+	var flipped []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, fmt.Errorf("mark refuted by claim: scan: %w", err)
+		}
+		flipped = append(flipped, id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("mark refuted by claim: %w", err)
+	}
+	return flipped, nil
 }
 
 // ChunkPreviewByID returns a chunk's source_name + content for a

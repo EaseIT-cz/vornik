@@ -27,7 +27,7 @@ func liveServerForUpgrade(t *testing.T, opts ...ServerOption) (string, *stubLive
 	srv := NewServer(append(defaults, opts...)...)
 	mux := http.NewServeMux()
 	mux.HandleFunc("/api/v1/executions/exec_1/live", func(w http.ResponseWriter, r *http.Request) {
-		srv.ExecutionLive(w, r, "exec_1")
+		srv.ExecutionLive(w, adminClassReq491(r), "exec_1") // GitHub #491: the operator, stated
 	})
 	hs := httptest.NewServer(mux)
 	t.Cleanup(hs.Close)

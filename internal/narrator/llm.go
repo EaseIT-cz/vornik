@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"vornik.io/vornik/internal/chat"
+	"vornik.io/vornik/internal/ctxerr"
 	"vornik.io/vornik/internal/llmspend"
 )
 
@@ -77,23 +78,38 @@ func buildUserMessage(kind triggerKind, in templateInput, stepName, toolName str
 	return b.String()
 }
 
+// Degraded-line reasons: vornik_narration_degraded_total{reason}
+// (outcome-quality LLD §S8.11 row 11, GitHub #369). Each names why a line
+// fell back to the deterministic template.
+const (
+	degradedNoClient     = "no_client"
+	degradedLLMTimeout   = "llm_timeout"
+	degradedLLMCancelled = "llm_cancelled"
+	degradedLLMError     = "llm_error"
+	degradedNoChoices    = "no_choices"
+	degradedEmpty        = "empty"
+	degradedCostCapped   = "cost_capped"
+	degradedEmptyText    = "empty_text"
+)
+
 // composeLine calls the cheap-tier model for one narration line.
-// Returns (text, degraded) — degraded=true means the deterministic
-// fallback was used (nil client, transient error, empty response).
+// Returns (text, degradedReason) — a non-empty reason means the
+// deterministic fallback was used, and says why (nil client, an LLM
+// timeout/cancel/error, no choices, an empty reply). The caller counts it.
 // On a successful, billed call, st.spendUSD is updated and the
 // cost-cap transition is evaluated (design §5.4); the caller
 // (emitLine) has already checked st.costCapped before calling this,
 // so composeLine itself never needs to re-check that gate.
-func (n *Narrator) composeLine(ctx context.Context, kind triggerKind, in templateInput, stepName, toolName string, st *executionState) (string, bool) {
+func (n *Narrator) composeLine(ctx context.Context, kind triggerKind, in templateInput, stepName, toolName string, st *executionState) (string, string) {
 	if n == nil || n.Client == nil {
-		return fallbackTemplate(kind, in), true
+		return fallbackTemplate(kind, in), degradedNoClient
 	}
 	// A terminal-failure line is accuracy-critical: use the deterministic
 	// template, never the LLM (which — the 2026-07-11 headmatch incident —
 	// spins a failed attempt into "everything passed / finished"). Not
 	// flagged degraded: the fixed wording IS the intended line here.
 	if kind == triggerAttemptFailed {
-		return fallbackTemplate(kind, in), false
+		return fallbackTemplate(kind, in), ""
 	}
 	timeout := n.llmTimeout()
 	callCtx, cancel := context.WithTimeout(ctx, timeout)
@@ -107,12 +123,24 @@ func (n *Narrator) composeLine(ctx context.Context, kind triggerKind, in templat
 	}
 	client := pickModel(n.Client, n.Model)
 	resp, err := client.Complete(callCtx, msgs)
-	if err != nil || resp == nil || len(resp.Choices) == 0 {
-		return fallbackTemplate(kind, in), true
+	if err != nil {
+		reason := degradedLLMError
+		switch ctxerr.Classify(callCtx, err) {
+		case ctxerr.Timeout:
+			reason = degradedLLMTimeout
+		case ctxerr.Cancelled:
+			reason = degradedLLMCancelled
+		}
+		n.Logger.Warn().Err(err).Str("execution_id", st.executionID).Str("reason", reason).
+			Msg("narrator: line LLM call failed; using the template")
+		return fallbackTemplate(kind, in), reason
+	}
+	if resp == nil || len(resp.Choices) == 0 {
+		return fallbackTemplate(kind, in), degradedNoChoices
 	}
 	cleaned := cleanLine(resp.Choices[0].Message.Content)
 	if cleaned == "" {
-		return fallbackTemplate(kind, in), true
+		return fallbackTemplate(kind, in), degradedEmpty
 	}
 	// No TOCTOU between this spend accumulation and the costCapped
 	// flip: composeLine (and its caller emitLine) only ever run on the
@@ -135,7 +163,7 @@ func (n *Narrator) composeLine(ctx context.Context, kind triggerKind, in templat
 	if n.Scanner != nil {
 		cleaned = redactLine(n.Scanner, cleaned)
 	}
-	return cleaned, false
+	return cleaned, ""
 }
 
 // pickModel wraps the chat client with the requested model override

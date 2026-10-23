@@ -291,6 +291,22 @@ func TestHermesLane(t *testing.T) {
 	startHermesModel(t, s, append(append(append(hermesScripts(s), h3fScripts()...), h3gScripts()...), h9Scripts()...)...)
 	prepareHermesHome(t, s)
 
+	// H0-skills — every skill in the bundle's skills directory is registered
+	// in Hermes (GitHub #388: Hermes swallows a memory provider's
+	// register_skill error at debug level). No model turn.
+	{
+		expected, err := expectedPluginSkills(filepath.Join(repoRoot(t), "contrib", "hermes-companion"))
+		if err != nil {
+			t.Fatalf("H0-skills: the expected set: %v", err)
+		}
+		ensureHermesImage(t) // stub mode builds no image before this
+		summary, err := checkPluginSkills(expected, probeHermesSkills(t, s))
+		if err != nil {
+			t.Fatalf("H0-skills: %v", err)
+		}
+		t.Logf("H0-skills: %s", summary)
+	}
+
 	// H1 — the plugin's tools reach the model; catalog is called. Judged on
 	// the daemon's audit row, not the reply's wording (lane design §4).
 	catalogBefore := catalogCalls(t)
@@ -394,7 +410,7 @@ func TestHermesLane(t *testing.T) {
 	bigJSON := strings.Replace(mustJSON(goodDigest()), "{", "{"+strings.Repeat(" ", 20000), 1)
 	oversize := Script{Marker: digestMarker, Final: "Digest written.", Steps: []ScriptStep{
 		{ToolSuffix: "gmail_search", Args: map[string]any{"query": "newer_than:1d"}},
-		{ToolSuffix: "gmail_get", Args: map[string]any{"id": invoiceMessageID}},
+		{ToolSuffix: "gmail_get", Args: map[string]any{"messageId": invoiceMessageID}},
 		{ToolSuffix: "file_write", Args: map[string]any{"path": "artifacts/out/digest.json", "content": bigJSON}},
 	}}
 	s.llm.SetScripts(oversize, replyScript())

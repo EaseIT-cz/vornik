@@ -71,6 +71,9 @@ func (c *Container) brokerActionWorkerConfig() brokeractions.Config {
 		OnFinishError: func(*persistence.BrokerAction, string) {
 			metrics.RecordFinishFailed()
 		},
+		// Each refusal before sending, by reason (outcome-quality LLD §S8.11
+		// rows 14b and 14c).
+		OnRefused: metrics.RecordRefused,
 		// Tell the push outbox (design §7a).
 		OnChange: func() { c.companionPusher.Kick() },
 		Gauge:    metrics.SetStuck,

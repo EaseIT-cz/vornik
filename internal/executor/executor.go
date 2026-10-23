@@ -449,6 +449,10 @@ type Executor struct {
 	// behaviour); a non-nil registry fast-fails-over a sick model to the
 	// role's modelFallback instead of burning the infra-retry ladder.
 	agentHealth *agenthealth.Registry
+	// retryHold carries a failed attempt's retry hold to the scheduler
+	// (permanent-failure design §8.8 D2): when the agent circuit that
+	// rejected it can next admit a call. See retry_hold.go.
+	retryHold retryHolds
 	// tradingOrderRepo (optional) lets the executor inject a
 	// "recent activity" block into the strategist's prompt so
 	// next-tick reasoning has structured context (last 24h
@@ -527,6 +531,13 @@ type Executor struct {
 	// Per-process state — a daemon restart leaves rows with
 	// empty context_source until the next step prep runs.
 	contextSourceByExecution sync.Map
+	// inFlightSteps holds, per execution id, the agent step running now
+	// (stepoutcome.InFlightStep): set by executeAgentStep once the model is
+	// resolved, deleted by its defer after the step's own row. The watchdog
+	// reads it to record the step it fails as stuck (outcome-quality §S8.8,
+	// GitHub #369). Per-process: an execution run elsewhere, or abandoned by
+	// a restart, is not in it.
+	inFlightSteps sync.Map
 	// schemaRegistry validates result envelopes' `data` field
 	// against the registered JSON-Schema body (Phase D follow-
 	// on; LLD §4.2 + §5.3). Nil disables schema validation —
@@ -1695,9 +1706,16 @@ func (e *Executor) ResumePaused(execID string) error {
 	}
 	// Flip the row to RUNNING before calling recoverExecution,
 	// mirroring the Recover() loop. recoverExecution does the rest
-	// of the lifecycle wiring (worktree, goroutine spawn).
-	if uerr := e.execRepo.UpdateStatus(ctx, exec.ID, persistence.ExecutionStatusRunning); uerr != nil {
+	// of the lifecycle wiring (worktree, goroutine spawn). The flip is
+	// conditional on PAUSED (GitHub #421): an execution superseded since
+	// the read (a cancel's cascade) is not reopened.
+	moved, uerr := e.execRepo.TransitionStatusConditional(ctx, exec.ID,
+		[]persistence.ExecutionStatus{persistence.ExecutionStatusPaused}, persistence.ExecutionStatusRunning)
+	if uerr != nil {
 		return fmt.Errorf("flip paused→running: %w", uerr)
+	}
+	if !moved {
+		return fmt.Errorf("%w: execution %s is no longer paused", ErrResumeRefused, execID)
 	}
 	exec.Status = persistence.ExecutionStatusRunning
 	e.logger.Info().
@@ -2235,11 +2253,24 @@ func (e *Executor) runExecution(ctx context.Context, task *persistence.Task, exe
 			Err(err).
 			Msg("failed to mark execution as RUNNING — status may remain PENDING in the API")
 	}
-	if err := e.taskRepo.UpdateStatus(ctx, task.ID, persistence.TaskStatusRunning); err != nil {
+	// Conditional on an unfinished row (GitHub #421): a cancel that landed
+	// after the dispatch or resume but before this write must not be
+	// overwritten, or the step guard below reads RUNNING and the run goes on.
+	// Refused, the row keeps its terminal status and the step guard at the top
+	// of the attempt loop (taskTerminalBeforeStep) ends the run without
+	// dispatching a step. That guard is what acts on a refusal here: moving
+	// or removing it needs an explicit stop in this branch instead.
+	if moved, err := e.taskRepo.TransitionConditional(ctx, task.ID, persistence.CancellableTaskStatuses(),
+		persistence.TaskStatusRunning, persistence.TransitionOpts{}); err != nil {
 		e.logger.Warn().
 			Str("task_id", task.ID).
 			Err(err).
 			Msg("failed to mark task as RUNNING — status may remain LEASED in the API")
+	} else if !moved {
+		e.logger.Info().
+			Str("task_id", task.ID).
+			Str("execution_id", execution.ID).
+			Msg("task is no longer unfinished; not marking it RUNNING")
 	}
 
 	// Per-execution timeout. MaxAttempts controls retries, not timeout.
@@ -2436,6 +2467,12 @@ func (e *Executor) runExecution(ctx context.Context, task *persistence.Task, exe
 				// default branch.
 				rebaseProjectToOrigin(ctx, projectDir, spec.DefaultBranch, e.logger)
 			}
+		} else if plan != nil {
+			// Not a forge task: a project that opted in
+			// (workspace.refresh_before_work) gets the same reset before a
+			// scheduled or autonomous task, counted either way (executor
+			// design §9.6, GitHub #400). A no-op for every other project.
+			e.refreshBeforeWork(ctx, task, plan.project, projectDir, adoptKeptWorktree)
 		}
 
 		if adoptKeptWorktree {
@@ -3225,6 +3262,45 @@ func (e *Executor) ActiveCount() int {
 }
 
 // IsExecuting returns whether a task is currently being executed.
+// InFlightStep reports the agent step this executor is running for
+// executionID (watchdog.InFlightStepSource; outcome-quality §S8.8).
+// A parallel step runs several agent branches under one execution; the
+// record is then the most recently started branch.
+func (e *Executor) InFlightStep(executionID string) (stepoutcome.InFlightStep, bool) {
+	if e == nil || executionID == "" {
+		return stepoutcome.InFlightStep{}, false
+	}
+	v, ok := e.inFlightSteps.Load(executionID)
+	if !ok {
+		return stepoutcome.InFlightStep{}, false
+	}
+	s, ok := v.(*stepoutcome.InFlightStep)
+	if !ok || s == nil {
+		return stepoutcome.InFlightStep{}, false
+	}
+	return *s, true
+}
+
+// noteInFlightStep records the agent step now running for execution and
+// returns the record, which clearInFlightStep takes back.
+func (e *Executor) noteInFlightStep(execution *persistence.Execution, stepID, role, model string, startedAt time.Time) *stepoutcome.InFlightStep {
+	if e == nil || execution == nil || execution.ID == "" {
+		return nil
+	}
+	s := &stepoutcome.InFlightStep{StepID: stepID, Role: role, Model: model, StartedAt: startedAt}
+	e.inFlightSteps.Store(execution.ID, s)
+	return s
+}
+
+// clearInFlightStep removes s if it is still the execution's record (a later
+// branch of a parallel step may have replaced it).
+func (e *Executor) clearInFlightStep(execution *persistence.Execution, s *stepoutcome.InFlightStep) {
+	if e == nil || execution == nil || s == nil {
+		return
+	}
+	e.inFlightSteps.CompareAndDelete(execution.ID, s)
+}
+
 func (e *Executor) IsExecuting(taskID string) bool {
 	e.mu.Lock()
 	defer e.mu.Unlock()

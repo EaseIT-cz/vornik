@@ -84,7 +84,7 @@ services:
     environment:
       POSTGRES_DB:       ${POSTGRES_DB:-vornik}
       POSTGRES_USER:     ${POSTGRES_USER:-vornik}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-vornik_dev_password}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in deployments/podman/.env - the quickstart generates one}
       PGDATA: /var/lib/postgresql/data/pgdata
     volumes:
       - cluster-postgres-data:/var/lib/postgresql/data
@@ -141,7 +141,7 @@ services:
       VORNIK_CONFIGS_DIR: /etc/vornik/configs
       VORNIK_DATA_DIR:    /var/lib/vornik
 
-      VORNIK_DATABASE_PASSWORD:  ${POSTGRES_PASSWORD:-vornik_dev_password}
+      VORNIK_DATABASE_PASSWORD:  ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in deployments/podman/.env - the quickstart generates one}
       VORNIK_CHAT_API_KEY:       ${VORNIK_CHAT_API_KEY:-}
       VORNIK_AGENT_LLM_API_KEY:  ${VORNIK_AGENT_LLM_API_KEY:-}
       VORNIK_EMBEDDING_API_KEY:  ${VORNIK_EMBEDDING_API_KEY:-}
@@ -223,7 +223,7 @@ services:
       # Host-socket runtime: worker spawns agent containers via host podman.
       CONTAINER_HOST: unix:///var/run/podman/podman.sock
 
-      VORNIK_DATABASE_PASSWORD:  ${POSTGRES_PASSWORD:-vornik_dev_password}
+      VORNIK_DATABASE_PASSWORD:  ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in deployments/podman/.env - the quickstart generates one}
       VORNIK_CHAT_API_KEY:       ${VORNIK_CHAT_API_KEY:-}
       VORNIK_AGENT_LLM_API_KEY:  ${VORNIK_AGENT_LLM_API_KEY:-}
       VORNIK_EMBEDDING_API_KEY:  ${VORNIK_EMBEDDING_API_KEY:-}

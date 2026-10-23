@@ -14,6 +14,7 @@ import (
 	"vornik.io/vornik/internal/persistence/sqlite"
 	"vornik.io/vornik/internal/persistence/sqlite/sqlitetest"
 	"vornik.io/vornik/internal/registry"
+	"vornik.io/vornik/internal/testutil/testwait"
 )
 
 // GitHub #370 (operator decision 2026-10-14). Found at: code review/audit
@@ -70,7 +71,7 @@ func TestDeleteNowAndWait_RemovesOAuthTokensAndMemoryAudit_Issue370(t *testing.T
 	t.Cleanup(stop)
 	svc.Reload = func(context.Context) error { go sw.Run(runCtx); return nil }
 
-	res, err := svc.DeleteNowAndWait(ctx, "doomed", true, 10*time.Second)
+	res, err := svc.DeleteNowAndWait(ctx, "doomed", true, testwait.ForOutcome(t))
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -541,15 +541,24 @@ func MinContentGate(c *IngestCandidate, cfg GateConfig) GateOutcome {
 	return GateOutcome{Action: GateAllow, Gate: GateMinContent}
 }
 
+// DefaultDepositMinContentWords and DefaultDepositMinContentChars are the
+// shipped floor for a deliberate deposit (pipeline design, update
+// 2026-10-01). User- and model-facing texts that state the floor are pinned
+// to these by TestDepositFloorStatedInUserTexts (#392).
+const (
+	DefaultDepositMinContentWords = 3
+	DefaultDepositMinContentChars = 10
+)
+
 // depositMinContent is MinContentGate's floor for a deliberate deposit:
 // rejected under DepositMinContentWords words or DepositMinContentChars
 // runes.
 func depositMinContent(c *IngestCandidate, cfg GateConfig) GateOutcome {
 	if cfg.DepositMinContentChars <= 0 {
-		cfg.DepositMinContentChars = 10
+		cfg.DepositMinContentChars = DefaultDepositMinContentChars
 	}
 	if cfg.DepositMinContentWords <= 0 {
-		cfg.DepositMinContentWords = 3
+		cfg.DepositMinContentWords = DefaultDepositMinContentWords
 	}
 	if n := wordCount(c.Content); n < cfg.DepositMinContentWords {
 		return GateOutcome{

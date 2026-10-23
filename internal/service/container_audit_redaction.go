@@ -1,18 +1,23 @@
 package service
 
 import (
+	"fmt"
+
 	"vornik.io/vornik/internal/api"
 	"vornik.io/vornik/internal/auditredact"
+	"vornik.io/vornik/internal/persistence/subjectstore"
 	"vornik.io/vornik/internal/secrets"
 )
 
-// initToolAuditRedaction wraps the tool-audit repository so every writer's rows
-// are scanned before they are persisted.
+// initToolAuditRedaction wraps every repository the redaction seam covers so
+// each writer's rows are scanned before they are persisted: tool_audit_log, and
+// the content stores — chat_audit_log with chat_system_prompts, step_prompts,
+// task_messages and execution_step_outcomes (its hallucination_signals).
 //
-// MUST run after the repos exist and BEFORE any consumer captures
-// c.repos.ToolAudit — the same ordering constraint initLogship documents for
-// its audit decorators. A consumer that grabbed the undecorated repo first
-// would write raw rows and nothing would say so.
+// MUST run after the repos exist and BEFORE any consumer captures them — the
+// same ordering constraint initLogship documents for its audit decorators. A
+// consumer that grabbed an undecorated repo first would write raw rows and
+// nothing would say so.
 //
 // Why a decorator at all: three writers reach tool_audit_log (the realtime
 // POST handler, the post-step batch persist, the companion roll-up) and only
@@ -21,8 +26,59 @@ import (
 // agent-supplied audit_id, the UNREDACTED realtime row landed first and won,
 // silently discarding the redacted one. See
 // https://docs.vornik.io
+//
+// EVERY decorator is installed in EVERY branch — a bypass carries a reason and
+// counts each write — because until 2026-10-16 only the tool-audit one was: the
+// content-store decorators were simply absent when scanning was off or the
+// detector failed, so nothing counted the rows they let through, and
+// task_messages had no decorator at all (chat-audit retention and redaction
+// design §9.2.1, GitHub #395).
 func (c *Container) initToolAuditRedaction() {
-	if c.repos == nil || c.repos.ToolAudit == nil {
+	if c.repos == nil {
+		return
+	}
+	// The census holder is created ONCE and shared by every decorator instance.
+	// On postgres there are two live ones for the life of the daemon: the
+	// scheduler and dispatcher capture the decorators built at boot, and the
+	// observability rebuild builds another set that only the re-run
+	// initHTTPServer picks up. Per-instance counters would cover roughly half
+	// the rows while presenting as complete. See the auditredact.Metrics doc.
+	if c.auditRedactMetrics == nil {
+		c.auditRedactMetrics = auditredact.NewMetrics()
+	}
+	// The Art 15 export builds its own default-pattern detector; when that
+	// fails it withholds the column, and now says why in this log (§9.2.6).
+	subjectstore.SetExportLogger(&c.Logger)
+
+	reason := auditredact.ReasonNone
+	var detector secrets.Detector
+	var actions map[string]secrets.Action
+	if !c.Config.Secrets.Enabled {
+		// The operator disabled scanning outright; initScheduler already warns
+		// loudly about that. The rows it lets through are still counted.
+		reason = auditredact.ReasonSecretsDisabled
+	} else {
+		d, a, err := buildSecretsDetector(c.Config.Secrets)
+		if err != nil || d == nil {
+			c.Logger.Error().Err(err).Msg("secrets: redaction seams NOT scanning — detector failed to construct; tool_audit_log, chat_audit_log, chat_system_prompts, step_prompts, task_messages and execution_step_outcomes rows may persist plaintext credentials")
+			reason = auditredact.ReasonDetectorUnavailable
+		} else {
+			detector, actions = d, a
+		}
+	}
+
+	c.wireToolAuditSeam(reason, detector, actions)
+	c.wireContentSeams(reason, detector)
+	if reason == auditredact.ReasonNone {
+		c.Logger.Info().
+			Str("action", string(secrets.ResolveAction(secrets.CheckpointToolAudit, actions))).
+			Msg("secrets: redaction wired at the repository seams — every writer is covered")
+	}
+}
+
+// wireToolAuditSeam installs (or upgrades) the tool-audit decorator.
+func (c *Container) wireToolAuditSeam(reason auditredact.Reason, detector secrets.Detector, actions map[string]secrets.Action) {
+	if c.repos.ToolAudit == nil {
 		return
 	}
 	base := c.repos.ToolAudit
@@ -30,8 +86,7 @@ func (c *Container) initToolAuditRedaction() {
 		// Idempotent: the observability rebuild re-runs this after replacing
 		// the repo handles, and a double wrap would scan every row twice.
 		//
-		// A BYPASS wrapper is the exception — it must be upgradeable. This runs
-		// once at container.go:834 and again after the rebuild, and a
+		// A BYPASS wrapper is the exception — it must be upgradeable. A
 		// pass-through pinned by the first call would keep the fleet writing
 		// unscanned rows while the counter honestly reported a bypass the
 		// second call should have fixed.
@@ -39,80 +94,142 @@ func (c *Container) initToolAuditRedaction() {
 			return
 		}
 		// Upgrading: wrap what the bypass wrapped, not the bypass itself.
-		// Nesting would count each row twice — skipped by the inner wrapper and
-		// scanned by the outer one — corrupting the denominator.
-		//
-		// The replaced bypass is NOT orphaned for counting purposes. Consumers
-		// that captured it (initScheduler, initDispatcher) keep writing through
-		// it, and it holds a reference to the same shared holder, so its rows
-		// keep landing in the same series. That is the whole reason the holder
-		// is shared rather than per-instance.
+		// Nesting would count each row twice. The replaced bypass is NOT
+		// orphaned for counting purposes: consumers that captured it keep
+		// writing through it, into the same shared holder.
 		base = existing.Inner()
 	}
-
-	// The census holder is created ONCE and shared by every decorator instance.
-	// On postgres there are two live ones for the life of the daemon: the
-	// scheduler and dispatcher capture the Repo built at container.go:834, and
-	// the rebuild at :1421 builds another that only the re-run initHTTPServer
-	// picks up. Per-instance counters would cover roughly half the rows while
-	// presenting as complete. See the auditredact.Metrics doc comment.
-	if c.auditRedactMetrics == nil {
-		c.auditRedactMetrics = auditredact.NewMetrics()
-	}
-
-	// A bypass is a decorator carrying a reason, never an absent decorator:
-	// otherwise the object that would count the fail-open is never built, and
-	// the bypass announces itself exactly once, in a boot log that scrolls
-	// (Finding C, docs/audits/2026-08-26-silent-controls-audit.md).
-	wrap := func(reason auditredact.Reason) {
+	if reason != auditredact.ReasonNone {
+		// A bypass is a decorator carrying a reason, never an absent decorator:
+		// otherwise the object that would count the fail-open is never built
+		// (Finding C, docs/audits/2026-08-26-silent-controls-audit.md).
 		repo := auditredact.NewBypassed(base, reason, &c.Logger)
 		repo.SetMetrics(c.auditRedactMetrics)
 		c.repos.ToolAudit = repo
-	}
-
-	if !c.Config.Secrets.Enabled {
-		// The operator disabled scanning outright; initScheduler already warns
-		// loudly about that. The rows it lets through are still counted.
-		wrap(auditredact.ReasonSecretsDisabled)
 		return
 	}
-	detector, actions, err := buildSecretsDetector(c.Config.Secrets)
-	if err != nil || detector == nil {
-		c.Logger.Error().Err(err).Msg("secrets: tool-audit redaction NOT wired — detector failed to construct; audit rows may persist plaintext credentials")
-		wrap(auditredact.ReasonDetectorUnavailable)
-		return
-	}
-	wired := auditredact.New(
-		base,
-		detector,
-		actions,
-		c.repos.SecretRedaction,
-		c.Config.Secrets.TrustedOutputTools,
-		&c.Logger,
-	)
+	wired := auditredact.New(base, detector, actions, c.repos.SecretRedaction, c.Config.Secrets.TrustedOutputTools, &c.Logger)
 	wired.SetMetrics(c.auditRedactMetrics)
 	c.repos.ToolAudit = wired
-	// The step-prompt store goes through the same detector at the same kind
-	// of seam (step-prompt persistence design §5): every part of a step's
-	// model input is scanned before it is stored, hash taken after. Same
-	// rule as above — any path that rebuilds c.repos must re-apply this.
-	if c.repos.StepPrompts != nil {
-		c.repos.StepPrompts = auditredact.NewStepPrompts(c.repos.StepPrompts, detector, c.repos.SecretRedaction, &c.Logger)
+}
+
+// seamDecorator is what the content-store decorators have in common for the
+// idempotency and bypass-upgrade rule.
+type seamDecorator interface{ BypassReason() auditredact.Reason }
+
+// keepExisting reports whether an already-installed decorator stays: a
+// scanning one always does (wrapping it again would scan twice), and a bypass
+// does when it would be rebuilt with the same reason. Any other bypass is
+// replaced by wrapping its Inner(), never nested.
+func keepExisting(existing seamDecorator, reason auditredact.Reason) bool {
+	r := existing.BypassReason()
+	return r == auditredact.ReasonNone || r == reason
+}
+
+// wireContentSeams installs (or upgrades) the step-prompt, chat-audit and
+// task-message decorators, in every branch (§9.2.1).
+func (c *Container) wireContentSeams(reason auditredact.Reason, detector secrets.Detector) {
+	c.wireStepPromptSeam(reason, detector)
+	c.wireChatAuditSeam(reason, detector)
+	c.wireTaskMessageSeam(reason, detector)
+	c.wireStepOutcomeSeam(reason, detector)
+}
+
+// wireStepOutcomeSeam installs (or upgrades) the decorator over
+// execution_step_outcomes (chat-audit retention and redaction design §11.2.1,
+// GitHub #425). Only a repository that carries the optional methods callers
+// type-assert for is wrapped: a decorator over anything narrower would either
+// hide them or claim them. Both production repositories carry them; anything
+// else stays undecorated, said here and reported by the doctor as detector_nil.
+func (c *Container) wireStepOutcomeSeam(reason auditredact.Reason, detector secrets.Detector) {
+	if c.repos.StepOutcomes == nil {
+		return
 	}
-	// The chat audit store is the third instance of the same seam
-	// (chat-audit retention and redaction design §3.2): two writers reach it
-	// — the dispatcher's turn audit and the chat proxy's — and neither
-	// scanned. Idempotent for the same reason the tool-audit wrap is: the
-	// observability rebuild re-runs this, and a double wrap would scan every
-	// row twice.
-	if c.repos.ChatAudit != nil {
-		if _, already := c.repos.ChatAudit.(*auditredact.ChatAudit); !already {
-			c.repos.ChatAudit = auditredact.NewChatAudit(c.repos.ChatAudit, detector, c.repos.SecretRedaction, &c.Logger)
+	var base auditredact.StepOutcomeStore
+	switch existing := c.repos.StepOutcomes.(type) {
+	case *auditredact.StepOutcomes:
+		if keepExisting(existing, reason) {
+			return
 		}
+		base = existing.Inner()
+	case auditredact.StepOutcomeStore:
+		base = existing
+	default:
+		c.Logger.Warn().Str("type", fmt.Sprintf("%T", c.repos.StepOutcomes)).
+			Msg("secrets: execution_step_outcomes left undecorated — the repository lacks the optional sweep/stuck-step methods; hallucination_signals are persisted unscanned")
+		return
 	}
-	c.Logger.Info().
-		Str("action", string(secrets.ResolveAction(secrets.CheckpointToolAudit, actions))).
-		Msg("secrets: tool-audit redaction wired at the repository seam — every writer is covered")
+	var so *auditredact.StepOutcomes
+	if reason == auditredact.ReasonNone {
+		so = auditredact.NewStepOutcomes(base, detector, c.repos.SecretRedaction, &c.Logger)
+	} else {
+		so = auditredact.NewStepOutcomesBypassed(base, reason, &c.Logger)
+	}
+	so.SetMetrics(c.auditRedactMetrics)
+	c.repos.StepOutcomes = so
+}
+
+func (c *Container) wireStepPromptSeam(reason auditredact.Reason, detector secrets.Detector) {
+	base := c.repos.StepPrompts
+	if base == nil {
+		return
+	}
+	if existing, ok := base.(*auditredact.StepPrompts); ok {
+		if keepExisting(existing, reason) {
+			return
+		}
+		base = existing.Inner()
+	}
+	var sp *auditredact.StepPrompts
+	if reason == auditredact.ReasonNone {
+		sp = auditredact.NewStepPrompts(base, detector, c.repos.SecretRedaction, &c.Logger)
+	} else {
+		sp = auditredact.NewStepPromptsBypassed(base, reason, &c.Logger)
+	}
+	sp.SetMetrics(c.auditRedactMetrics)
+	c.repos.StepPrompts = sp
+}
+
+func (c *Container) wireChatAuditSeam(reason auditredact.Reason, detector secrets.Detector) {
+	base := c.repos.ChatAudit
+	if base == nil {
+		return
+	}
+	if existing, ok := base.(*auditredact.ChatAudit); ok {
+		if keepExisting(existing, reason) {
+			return
+		}
+		base = existing.Inner()
+	}
+	var ca *auditredact.ChatAudit
+	if reason == auditredact.ReasonNone {
+		ca = auditredact.NewChatAudit(base, detector, c.repos.SecretRedaction, &c.Logger)
+	} else {
+		ca = auditredact.NewChatAuditBypassed(base, reason, &c.Logger)
+	}
+	ca.SetMetrics(c.auditRedactMetrics)
+	c.repos.ChatAudit = ca
+}
+
+func (c *Container) wireTaskMessageSeam(reason auditredact.Reason, detector secrets.Detector) {
+	base := c.repos.Messages
+	if base == nil {
+		return
+	}
+	if existing, ok := base.(*auditredact.TaskMessages); ok {
+		if keepExisting(existing, reason) {
+			return
+		}
+		base = existing.Inner()
+	}
+	var tm *auditredact.TaskMessages
+	if reason == auditredact.ReasonNone {
+		tm = auditredact.NewTaskMessages(base, detector, c.repos.SecretRedaction, &c.Logger)
+	} else {
+		tm = auditredact.NewTaskMessagesBypassed(base, reason, &c.Logger)
+	}
+	tm.SetMetrics(c.auditRedactMetrics)
+	c.repos.Messages = tm
 }
 
 // toolAuditRedactionState reports how the seam was wired, for the
@@ -137,15 +254,77 @@ func (c *Container) toolAuditRedactionState() (auditredact.Reason, string) {
 	return auditredact.ReasonNone, string(secrets.ResolveAction(secrets.CheckpointToolAudit, repo.Actions()))
 }
 
+// redactionSeamsState reports, for the redaction_seams doctor check, how the
+// content-store decorators are wired: the worst reason any of them carries
+// (ReasonNone when all of them scan), and the stores present. Like
+// toolAuditRedactionState it reads the DECORATORS: a store present but not
+// decorated reports detector_nil.
+func (c *Container) redactionSeamsState() (auditredact.Reason, []string) {
+	if c.repos == nil {
+		return auditredact.ReasonDetectorNil, nil
+	}
+	type entry struct {
+		store   string
+		present bool
+		dec     seamDecorator
+	}
+	entries := []entry{
+		{auditredact.StoreChatAuditLog, c.repos.ChatAudit != nil, asSeam(c.repos.ChatAudit)},
+		{auditredact.StoreStepPrompts, c.repos.StepPrompts != nil, asSeam(c.repos.StepPrompts)},
+		{auditredact.StoreTaskMessages, c.repos.Messages != nil, asSeam(c.repos.Messages)},
+		{auditredact.StoreExecutionStepOutcomes, c.repos.StepOutcomes != nil, asSeam(c.repos.StepOutcomes)},
+	}
+	worst := auditredact.ReasonNone
+	var stores []string
+	for _, e := range entries {
+		if !e.present {
+			continue
+		}
+		stores = append(stores, e.store)
+		if e.store == auditredact.StoreChatAuditLog {
+			stores = append(stores, auditredact.StoreChatSystemPrompts)
+		}
+		r := auditredact.ReasonDetectorNil
+		if e.dec != nil {
+			r = e.dec.BypassReason()
+		}
+		worst = worseReason(worst, r)
+	}
+	return worst, stores
+}
+
+func asSeam(v any) seamDecorator {
+	if d, ok := v.(seamDecorator); ok {
+		return d
+	}
+	return nil
+}
+
+// worseReason orders reasons by how much an operator needs to hear them:
+// detector_unavailable (a control asked for is not running) over the two
+// deployment choices, over none.
+func worseReason(a, b auditredact.Reason) auditredact.Reason {
+	rank := map[auditredact.Reason]int{
+		auditredact.ReasonNone:                0,
+		auditredact.ReasonDetectorNil:         1,
+		auditredact.ReasonSecretsDisabled:     2,
+		auditredact.ReasonDetectorUnavailable: 3,
+	}
+	if rank[b] > rank[a] {
+		return b
+	}
+	return a
+}
+
 // exchangeRedactor is the recorder's seam (llm-exchange record/replay design
 // §4): the same detector the step-prompt store was decorated with, exposed as
-// a function so the API server never holds the decorator itself. Nil when
-// the step-prompt store was not decorated (no detector configured), in which
-// case the recorder stores bodies as they are — the same position step
-// prompts are in on such a deployment.
+// a function so the API server never holds the decorator itself. Nil when the
+// step-prompt decorator does not scan (no detector configured, or a bypass),
+// in which case the recorder stores bodies as they are — the same position
+// step prompts are in on such a deployment.
 func (c *Container) exchangeRedactor() api.ExchangeRedactor {
 	sp, ok := c.repos.StepPrompts.(*auditredact.StepPrompts)
-	if !ok || sp == nil {
+	if !ok || !sp.Scans() {
 		return nil
 	}
 	return func(body string) (string, int) {

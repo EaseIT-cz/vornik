@@ -194,9 +194,9 @@ var cascadeChildSeeders = map[string]func(f *cascadeFixture, r cascadeRow) error
 			VALUES ($1, $2, $3, 'r', $4, $5)`, r.id, r.project, r.artifact, r.exec, f.ts())
 	},
 	"project_memory_chunks": func(f *cascadeFixture, r cascadeRow) error {
-		if !f.postgres { // SQLite's chunk table has artifact_id but no task_id / source_name
-			return f.exec(`INSERT INTO project_memory_chunks (id, project_id, artifact_id, content, content_hash, created_at)
-				VALUES ($1, $2, $3, 'c', $1, $4)`, r.id, r.project, r.artifact, f.ts())
+		if !f.postgres { // SQLite's chunk table carries task_id since design 22 amendment #482
+			return f.exec(`INSERT INTO project_memory_chunks (id, project_id, task_id, artifact_id, content, content_hash, created_at)
+				VALUES ($1, $2, $3, $4, 'c', $1, $5)`, r.id, r.project, r.task, r.artifact, f.ts())
 		}
 		return f.exec(`INSERT INTO project_memory_chunks (id, project_id, task_id, artifact_id, source_name, content,
 			content_hash) VALUES ($1, $2, $3, $4, 's', 'c', $1)`, r.id, r.project, r.task, r.artifact)

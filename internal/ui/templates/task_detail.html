@@ -106,56 +106,8 @@
                     {{end}}
                 </div>
                 <div class="flex items-center gap-2">
-                    {{/* Retry is offered for terminal statuses AND for
-                         PENDING (stuck-waiting) so an operator can
-                         unstick a task that was paused but never got
-                         resumed — see incident 2026-05-16 on
-                         task_20260516015931_*. Server-side
-                         RequeueTerminalTask gates the WRITE on the
-                         live status so a stale UI click doesn't race
-                         a concurrent scheduler pickup. */}}
-                    {{if or (eq .Task.Status "FAILED") (eq .Task.Status "CANCELLED") (eq .Task.Status "COMPLETED") (eq .Task.Status "PENDING")}}
-                    {{/* 2026-05-26 refactor B: "Retry" renamed to
-                         "Requeue" to disambiguate task-level requeue
-                         from execution-level "Rerun from step". URL
-                         unchanged (/retry endpoint), only the label
-                         and confirm copy update. */}}
-                    <form method="POST" action="/ui/tasks/{{.Task.ID}}/retry" onsubmit="return confirm('Requeue this task? Resets the attempt counter and starts a fresh execution from step 1.')">
-                        <button type="submit" class="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg bg-brand-600 hover:bg-brand-500 text-white transition-colors" title="Reset and run from step 1. For per-step replay, use the execution detail's Rerun from step.">
-                            <svg class="h-3.5 w-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M16.023 9.348h4.992v-.001M2.985 19.644v-4.992m0 0h4.992m-4.993 0l3.181 3.183a8.25 8.25 0 0013.803-3.7M4.031 9.865a8.25 8.25 0 0113.803-3.7l3.181 3.182m0-4.991v4.99"/></svg>
-                            Requeue
-                        </button>
-                    </form>
-                    {{/* Requeue but force each role with a configured
-                         modelFallback onto that fallback for the next
-                         run (fallback_model=1). Same effect as the
-                         "model: fallback" steer keyword. */}}
-                    <form method="POST" action="/ui/tasks/{{.Task.ID}}/retry" onsubmit="return confirm('Requeue on the fallback model? Every role with a configured modelFallback runs on its fallback for this attempt.')">
-                        <input type="hidden" name="fallback_model" value="1">
-                        <button type="submit" class="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg bg-surface-700 hover:bg-surface-600 text-ink-100 ring-1 ring-surface-600 transition-colors" title="Re-run with each role on its configured fallback model">
-                            <svg class="h-3.5 w-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M16.023 9.348h4.992v-.001M2.985 19.644v-4.992m0 0h4.992m-4.993 0l3.181 3.183a8.25 8.25 0 0013.803-3.7M4.031 9.865a8.25 8.25 0 0113.803-3.7l3.181 3.182m0-4.991v4.99"/></svg>
-                            Fallback model
-                        </button>
-                    </form>
-                    {{end}}
-                    {{if or (eq .Task.Status "QUEUED") (eq .Task.Status "PENDING") (eq .Task.Status "LEASED") (eq .Task.Status "RUNNING")}}
-                    <a href="/ui/tasks/{{.Task.ID}}/live" class="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg bg-emerald-700 hover:bg-emerald-600 text-white transition-colors" title="Watch the live execution stream">
-                        <svg class="h-3.5 w-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><circle cx="12" cy="12" r="9"/></svg>
-                        Watch live
-                    </a>
-                    {{end}}
-                    {{/* Cancel is offered for every non-terminal active state AND
-                         for PAUSED (an operator-paused task can be abandoned, not
-                         only resumed). TransitionToCancelled gates the write to
-                         these same states. */}}
-                    {{if or (eq .Task.Status "QUEUED") (eq .Task.Status "PENDING") (eq .Task.Status "LEASED") (eq .Task.Status "RUNNING") (eq .Task.Status "PAUSED")}}
-                    <form method="POST" action="/ui/tasks/{{.Task.ID}}/cancel" onsubmit="return confirm('Cancel this task?')">
-                        <button type="submit" class="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg bg-rose-700 hover:bg-rose-600 text-white transition-colors">
-                            <svg class="h-3.5 w-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12"/></svg>
-                            Cancel
-                        </button>
-                    </form>
-                    {{end}}
+                    {{/* Status controls: one partial for both layouts (GitHub #375). */}}
+                    {{template "taskStatusControls" (dict "D" . "Layout" "header")}}
                     {{if .Project}}
                     <a href="/ui/projects/{{.Project.ID}}" class="flex items-center gap-1 text-ink-500 hover:text-ink-300 text-sm transition-colors">
                         <svg class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M10 19l-7-7m0 0l7-7m-7 7h18"/></svg>
@@ -351,14 +303,8 @@
                         <span class="text-xs text-ink-500">{{len .Conversation.Messages}} message{{if ne (len .Conversation.Messages) 1}}s{{end}}</span>
                     </div>
                     <div class="flex items-center gap-2">
-                        {{if .Conversation.Pauseable}}
-                        <form method="POST" action="/ui/tasks/{{.Task.ID}}/pause" class="inline"><button class="text-xs text-ink-400 hover:text-ink-200">⏸ Pause</button></form>
-                        {{end}}
-                        {{if .Conversation.Resumeable}}
-                        <form method="POST" action="/ui/tasks/{{.Task.ID}}/resume" class="inline"><button class="text-xs text-ink-400 hover:text-ink-200">▶ Resume</button></form>
-                        {{end}}
                         {{if .Conversation.Closeable}}
-                        <form method="POST" action="/ui/tasks/{{.Task.ID}}/close" class="inline" onsubmit="return confirm('Close this task? This is terminal.');">
+                        <form method="POST" action="/ui/tasks/{{.Task.ID}}/close" class="inline" data-confirm="Close this task? This is terminal.">
                             <button class="text-xs text-amber-800 dark:text-amber-400 hover:text-amber-600 dark:text-amber-200">✓ Close</button>
                         </form>
                         {{end}}
@@ -480,98 +426,6 @@
                 </div>
             </div>
 
-            {{/* Phone: sticky action bar above the bottom nav.
-
-                 Position math:
-                   nav height = 64px (h-16)
-                   nav reserved bottom inset = env(safe-area-inset-bottom)
-                   ⇒ action bar bottom = nav height + safe-area inset
-                   so the bar clears the iOS home indicator AND the nav
-                   without depending on flexible-units that don't pick
-                   up the env() variable.
-
-                 Colorblind-aware: every action shows a text label, not
-                 just an icon or color. Compose stays primary indigo;
-                 Pause/Resume use neutral gray; Close uses amber + a
-                 ✓ icon + the word "Close" so red-green colorblind
-                 operators don't have to read the colour as a signal. */}}
-            {{/* Mobile action bar — feature parity with the
-                 desktop md:+ header. Wraps to two rows when more
-                 than 4 actions apply so phones never lose Retry /
-                 Watch live / Cancel that the desktop layout
-                 offers (2026-05-23 — operator reported missing
-                 buttons on mobile). flex-wrap + min-h instead of
-                 a fixed-height bar so the layout adapts to the
-                 active-status combination. */}}
-            <div class="md:hidden fixed left-0 right-0 z-30 bg-surface-900/95 backdrop-blur border-t border-surface-600/60 px-3 py-2 flex flex-wrap gap-2"
-                 style="bottom: calc(64px + env(safe-area-inset-bottom));">
-                <button type="button" onclick="composeSheet.showModal()"
-                        class="flex-1 min-w-[8rem] h-12 bg-brand-600 active:bg-brand-500 text-white text-sm font-medium rounded-lg flex items-center justify-center gap-1.5">
-                    <svg class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" d="M12 4v16m8-8H4"/></svg>
-                    Compose
-                </button>
-                {{if .Conversation.Pauseable}}
-                <form method="POST" action="/ui/tasks/{{.Task.ID}}/pause" class="contents">
-                    <button class="h-12 px-3 bg-surface-700 active:bg-surface-600 text-ink-200 text-sm rounded-lg flex items-center gap-1" aria-label="Pause task">
-                        <svg class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" d="M10 9v6m4-6v6"/></svg>
-                        Pause
-                    </button>
-                </form>
-                {{end}}
-                {{if .Conversation.Resumeable}}
-                <form method="POST" action="/ui/tasks/{{.Task.ID}}/resume" class="contents">
-                    <button class="h-12 px-3 bg-surface-700 active:bg-surface-600 text-ink-200 text-sm rounded-lg flex items-center gap-1" aria-label="Resume task">
-                        <svg class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z"/><circle cx="12" cy="12" r="9" stroke-width="2"/></svg>
-                        Resume
-                    </button>
-                </form>
-                {{end}}
-                {{/* Status-driven actions — same gates as the
-                     md:+ header above (kept in sync; do not
-                     drift). Retry covers terminal + PENDING;
-                     Watch live + Cancel cover any pre-terminal
-                     live status. */}}
-                {{if or (eq .Task.Status "QUEUED") (eq .Task.Status "PENDING") (eq .Task.Status "LEASED") (eq .Task.Status "RUNNING")}}
-                <a href="/ui/tasks/{{.Task.ID}}/live" class="h-12 px-3 bg-emerald-700 active:bg-emerald-600 text-white text-sm rounded-lg flex items-center gap-1" aria-label="Watch live execution">
-                    <svg class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3"/><circle cx="12" cy="12" r="9"/></svg>
-                    Live
-                </a>
-                <form method="POST" action="/ui/tasks/{{.Task.ID}}/cancel" class="contents" onsubmit="return confirm('Cancel this task?');">
-                    <button class="h-12 px-3 bg-rose-700/90 active:bg-rose-600 text-rose-600 dark:text-rose-100 text-sm rounded-lg flex items-center gap-1" aria-label="Cancel task">
-                        <svg class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12"/></svg>
-                        Cancel
-                    </button>
-                </form>
-                {{end}}
-                {{if or (eq .Task.Status "FAILED") (eq .Task.Status "CANCELLED") (eq .Task.Status "COMPLETED") (eq .Task.Status "PENDING")}}
-                <form method="POST" action="/ui/tasks/{{.Task.ID}}/retry" class="contents" onsubmit="return confirm('Requeue this task? Resets the attempt counter and starts a fresh execution from step 1.');">
-                    <button class="h-12 px-3 bg-brand-700/80 active:bg-brand-600 text-white text-sm rounded-lg flex items-center gap-1" aria-label="Requeue task">
-                        <svg class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" d="M16.023 9.348h4.992v-.001M2.985 19.644v-4.992m0 0h4.992m-4.993 0l3.181 3.183a8.25 8.25 0 0013.803-3.7M4.031 9.865a8.25 8.25 0 0113.803-3.7l3.181 3.182m0-4.991v4.99"/></svg>
-                        Requeue
-                    </button>
-                </form>
-                {{/* Requeue but force every role with a configured
-                     modelFallback onto that fallback for the next run.
-                     Posts the same /retry endpoint with fallback_model=1.
-                     Equivalent to typing "model: fallback" in a steer
-                     hint. */}}
-                <form method="POST" action="/ui/tasks/{{.Task.ID}}/retry" class="contents" onsubmit="return confirm('Requeue on the fallback model? Every role with a configured modelFallback runs on its fallback for this attempt.');">
-                    <input type="hidden" name="fallback_model" value="1">
-                    <button class="h-12 px-3 bg-surface-700 active:bg-surface-600 text-ink-100 text-sm rounded-lg flex items-center gap-1 ring-1 ring-surface-600" aria-label="Requeue on fallback model" title="Re-run with each role on its configured fallback model">
-                        <svg class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" d="M16.023 9.348h4.992v-.001M2.985 19.644v-4.992m0 0h4.992m-4.993 0l3.181 3.183a8.25 8.25 0 0013.803-3.7M4.031 9.865a8.25 8.25 0 0113.803-3.7l3.181 3.182m0-4.991v4.99"/></svg>
-                        Fallback model
-                    </button>
-                </form>
-                {{end}}
-                {{if .Conversation.Closeable}}
-                <form method="POST" action="/ui/tasks/{{.Task.ID}}/close" class="contents" onsubmit="return confirm('Close this task? This is terminal.');">
-                    <button class="h-12 px-3 bg-amber-700/80 active:bg-amber-600 text-amber-600 dark:text-amber-100 text-sm rounded-lg flex items-center gap-1 ring-1 ring-amber-600/40" aria-label="Close task — terminal">
-                        <svg class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" d="M5 13l4 4L19 7"/></svg>
-                        Close
-                    </button>
-                </form>
-                {{end}}
-            </div>
 
             <dialog id="composeSheet" class="md:hidden bottom-0 left-0 right-0 m-0 mb-0 mt-auto w-full max-w-full p-0 glass border-t border-surface-600 backdrop:bg-black/50 rounded-t-xl text-ink-100" aria-label="Compose message">
                 {{/* 2026-05-26 mobile compose collapse: same single-Send
@@ -633,6 +487,51 @@
             {{end}}
 
             {{end}}{{/* /.Conversation.Enabled */}}
+
+            {{/* Phone: sticky action bar above the bottom nav.
+
+                 Position math:
+                   nav height = 64px (h-16)
+                   nav reserved bottom inset = env(safe-area-inset-bottom)
+                   ⇒ action bar bottom = nav height + safe-area inset
+                   so the bar clears the iOS home indicator AND the nav
+                   without depending on flexible-units that don't pick
+                   up the env() variable.
+
+                 Colorblind-aware: every action shows a text label, not
+                 just an icon or color. Compose stays primary indigo;
+                 Pause/Resume use neutral gray; Close uses amber + a
+                 ✓ icon + the word "Close" so red-green colorblind
+                 operators don't have to read the colour as a signal. */}}
+            {{/* Mobile action bar (below md:). GitHub #375: it renders for
+                 every status but CLOSED, outside the .Conversation.Enabled
+                 block, so a deployment without a task-message repository
+                 still offers Cancel and Requeue on the phone; only Compose
+                 (and its sheet) needs the conversation. The status controls
+                 come from the same partial as the md:+ header row, so the
+                 two layouts cannot offer different controls. Wraps to two
+                 rows when many actions apply. */}}
+            {{if ne (printf "%s" .Task.Status) "CLOSED"}}
+            <div class="md:hidden fixed left-0 right-0 z-30 bg-surface-900/95 backdrop-blur border-t border-surface-600/60 px-3 py-2 flex flex-wrap gap-2"
+                 style="bottom: calc(64px + env(safe-area-inset-bottom));">
+                {{if .Conversation.Enabled}}
+                <button type="button" onclick="composeSheet.showModal()"
+                        class="flex-1 min-w-[8rem] h-12 bg-brand-600 active:bg-brand-500 text-white text-sm font-medium rounded-lg flex items-center justify-center gap-1.5">
+                    <svg class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" d="M12 4v16m8-8H4"/></svg>
+                    Compose
+                </button>
+                {{end}}
+                {{template "taskStatusControls" (dict "D" . "Layout" "bar")}}
+                {{if .Conversation.Closeable}}
+                <form method="POST" action="/ui/tasks/{{.Task.ID}}/close" class="contents" data-confirm="Close this task? This is terminal.">
+                    <button class="h-12 px-3 bg-amber-700/80 active:bg-amber-600 text-amber-600 dark:text-amber-100 text-sm rounded-lg flex items-center gap-1 ring-1 ring-amber-600/40" aria-label="Close task — terminal">
+                        <svg class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" d="M5 13l4 4L19 7"/></svg>
+                        Close
+                    </button>
+                </form>
+                {{end}}
+            </div>
+            {{end}}
 
             <!-- Live Logs -->
             <div class="glass rounded-xl border border-surface-600 overflow-hidden">
@@ -864,8 +763,8 @@
 
                      POST actions render as forms (so they survive
                      no-JS clients); GET actions render as anchors.
-                     Confirm prompts fire via inline onsubmit/onclick
-                     — keeps the partial JS-light. */}}
+                     Confirm prompts use data-confirm (the delegated
+                     listener in pageHead; no inline handler, #416). */}}
                 {{if .RecoveryActions}}
                 <div class="border-t border-surface-600/60 px-5 py-4">
                     <div class="flex items-center gap-2 mb-3">
@@ -876,7 +775,7 @@
                     <div class="flex flex-wrap gap-2">
                     {{range .RecoveryActions}}
                         {{if eq .Method "POST"}}
-                        <form method="POST" action="{{.URL}}" class="m-0"{{if .Confirm}} onsubmit="return confirm('{{.Confirm}}')"{{end}}>
+                        <form method="POST" action="{{.URL}}" class="m-0"{{if .Confirm}} data-confirm="{{.Confirm}}"{{end}}>
                             <button type="submit"
                                     {{if .Tooltip}}title="{{.Tooltip}}"{{end}}
                                     class="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg transition-colors {{if eq .Variant "primary"}}bg-emerald-700 hover:bg-emerald-600 text-white{{else if eq .Variant "danger"}}bg-rose-800/40 hover:bg-rose-700/50 text-rose-600 dark:text-rose-100 ring-1 ring-rose-800/40{{else}}bg-surface-700 hover:bg-surface-600 text-ink-200 ring-1 ring-surface-600{{end}}">
@@ -1425,3 +1324,65 @@
 </body>
 </html>
 {{end}}
+
+{{/* taskStatusControls renders the task's status controls for one layout:
+     .Layout "header" (the md:+ header row, compact) or "bar" (the phone
+     action bar, 48px targets). WHICH controls appear comes only from
+     .D.Controls (taskStatusControls in task_controls.go, GitHub #375); the
+     layout changes classes, never the set. New status controls go here.
+     A confirmation uses data-confirm (the delegated listener in pageHead),
+     never an inline onsubmit (console CSP, console_security.go). */}}
+{{define "taskStatusControls"}}{{$bar := eq .Layout "bar"}}{{with .D}}{{$id := .Task.ID}}
+{{if .Controls.Pause}}
+<form method="POST" action="/ui/tasks/{{$id}}/pause"{{if $bar}} class="contents"{{end}}>
+    <button type="submit" aria-label="Pause task" class="{{if $bar}}h-12 px-3 bg-surface-700 active:bg-surface-600 text-ink-200 text-sm rounded-lg flex items-center gap-1{{else}}inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg bg-surface-700 hover:bg-surface-600 text-ink-100 ring-1 ring-surface-600 transition-colors{{end}}">
+        <svg class="{{if $bar}}h-4 w-4{{else}}h-3.5 w-3.5{{end}}" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" d="M10 9v6m4-6v6"/></svg>
+        Pause
+    </button>
+</form>
+{{end}}
+{{if .Controls.Resume}}
+<form method="POST" action="/ui/tasks/{{$id}}/resume"{{if $bar}} class="contents"{{end}}>
+    <button type="submit" aria-label="Resume task" class="{{if $bar}}h-12 px-3 bg-surface-700 active:bg-surface-600 text-ink-200 text-sm rounded-lg flex items-center gap-1{{else}}inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg bg-surface-700 hover:bg-surface-600 text-ink-100 ring-1 ring-surface-600 transition-colors{{end}}">
+        <svg class="{{if $bar}}h-4 w-4{{else}}h-3.5 w-3.5{{end}}" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z"/><circle cx="12" cy="12" r="9" stroke-width="2"/></svg>
+        Resume
+    </button>
+</form>
+{{end}}
+{{if .Controls.Requeue}}
+{{/* "Requeue" (was "Retry", 2026-05-26) re-runs from step 1; the URL stays
+     /retry. Offered for terminal statuses and PENDING (incident
+     2026-05-16); RequeueTerminalTask gates the write on the live status. */}}
+<form method="POST" action="/ui/tasks/{{$id}}/retry"{{if $bar}} class="contents"{{end}} data-confirm="Requeue this task? Resets the attempt counter and starts a fresh execution from step 1.">
+    <button type="submit" aria-label="Requeue task" title="Reset and run from step 1. For per-step replay, use the execution detail's Rerun from step." class="{{if $bar}}h-12 px-3 bg-brand-700/80 active:bg-brand-600 text-white text-sm rounded-lg flex items-center gap-1{{else}}inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg bg-brand-600 hover:bg-brand-500 text-white transition-colors{{end}}">
+        <svg class="{{if $bar}}h-4 w-4{{else}}h-3.5 w-3.5{{end}}" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" d="M16.023 9.348h4.992v-.001M2.985 19.644v-4.992m0 0h4.992m-4.993 0l3.181 3.183a8.25 8.25 0 0013.803-3.7M4.031 9.865a8.25 8.25 0 0113.803-3.7l3.181 3.182m0-4.991v4.99"/></svg>
+        Requeue
+    </button>
+</form>
+{{/* Requeue with every role that has a modelFallback on that fallback for
+     the next run (fallback_model=1); same as the "model: fallback" steer. */}}
+<form method="POST" action="/ui/tasks/{{$id}}/retry"{{if $bar}} class="contents"{{end}} data-confirm="Requeue on the fallback model? Every role with a configured modelFallback runs on its fallback for this attempt.">
+    <input type="hidden" name="fallback_model" value="1">
+    <button type="submit" aria-label="Requeue on fallback model" title="Re-run with each role on its configured fallback model" class="{{if $bar}}h-12 px-3 bg-surface-700 active:bg-surface-600 text-ink-100 text-sm rounded-lg flex items-center gap-1 ring-1 ring-surface-600{{else}}inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg bg-surface-700 hover:bg-surface-600 text-ink-100 ring-1 ring-surface-600 transition-colors{{end}}">
+        <svg class="{{if $bar}}h-4 w-4{{else}}h-3.5 w-3.5{{end}}" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" d="M16.023 9.348h4.992v-.001M2.985 19.644v-4.992m0 0h4.992m-4.993 0l3.181 3.183a8.25 8.25 0 0013.803-3.7M4.031 9.865a8.25 8.25 0 0113.803-3.7l3.181 3.182m0-4.991v4.99"/></svg>
+        Fallback model
+    </button>
+</form>
+{{end}}
+{{if .Controls.WatchLive}}
+<a href="/ui/tasks/{{$id}}/live" aria-label="Watch live execution" title="Watch the live execution stream" class="{{if $bar}}h-12 px-3 bg-emerald-700 active:bg-emerald-600 text-white text-sm rounded-lg flex items-center gap-1{{else}}inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg bg-emerald-700 hover:bg-emerald-600 text-white transition-colors{{end}}">
+    <svg class="{{if $bar}}h-4 w-4{{else}}h-3.5 w-3.5{{end}}" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3"/><circle cx="12" cy="12" r="9"/></svg>
+    {{if $bar}}Live{{else}}Watch live{{end}}
+</a>
+{{end}}
+{{if .Controls.Cancel}}
+{{/* Every status in persistence.CancellableTaskStatuses(), the set cancelOne
+     accepts: active, PAUSED and the parked statuses (05-scheduler §4.10). */}}
+<form method="POST" action="/ui/tasks/{{$id}}/cancel"{{if $bar}} class="contents"{{end}} data-confirm="Cancel this task?">
+    <button type="submit" aria-label="Cancel task" class="{{if $bar}}h-12 px-3 bg-rose-700/90 active:bg-rose-600 text-white text-sm rounded-lg flex items-center gap-1{{else}}inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg bg-rose-700 hover:bg-rose-600 text-white transition-colors{{end}}">
+        <svg class="{{if $bar}}h-4 w-4{{else}}h-3.5 w-3.5{{end}}" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12"/></svg>
+        Cancel
+    </button>
+</form>
+{{end}}
+{{end}}{{end}}

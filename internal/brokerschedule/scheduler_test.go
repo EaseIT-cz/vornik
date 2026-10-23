@@ -1,14 +1,17 @@
 package brokerschedule
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus/testutil"
+	"github.com/rs/zerolog"
 )
 
 type fakeSource struct{ entries []Entry }
@@ -222,6 +225,30 @@ func TestScheduler_UnloadableZoneCountedOnce(t *testing.T) {
 	s.TickOnce(context.Background())
 	if got := testutil.ToFloat64(skipped.WithLabelValues(ReasonError)) - before; got != 1 || len(f.keys) != 0 {
 		t.Fatalf("counted %v, fired %v", got, f.keys)
+	}
+}
+
+// GitHub #369, outcome-quality LLD S8.11 row 14a: a cron expression that does
+// not parse folded into "not due yet", with no log and no count. It is now
+// counted once per workflow as error, however many ticks see it, with a Warn;
+// nothing fires. Control: the cron branch of consider.
+func TestScheduler_UnparseableCronCountedOnce(t *testing.T) {
+	before := testutil.ToFloat64(skipped.WithLabelValues(ReasonError))
+	now := time.Date(2026, 10, 2, 8, 1, 0, 0, time.UTC)
+	e := daily("a--b--badcron")
+	e.Cron = "not a cron"
+	f := &fakeFirer{}
+	var logBuf bytes.Buffer
+	s := New(Config{Source: &fakeSource{entries: []Entry{e}}, Firer: f,
+		Clock: func() time.Time { return now }, Logger: zerolog.New(&logBuf)})
+	s.TickOnce(context.Background())
+	now = now.Add(time.Minute)
+	s.TickOnce(context.Background())
+	if got := testutil.ToFloat64(skipped.WithLabelValues(ReasonError)) - before; got != 1 || len(f.keys) != 0 {
+		t.Fatalf("counted %v, fired %v", got, f.keys)
+	}
+	if n := strings.Count(logBuf.String(), `"level":"warn"`); n != 1 || !strings.Contains(logBuf.String(), "a--b--badcron") {
+		t.Fatalf("want exactly one Warn naming the workflow, got %d: %q", n, logBuf.String())
 	}
 }
 

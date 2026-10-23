@@ -53,6 +53,17 @@ var (
 		Help:      "Channel send failures at task-kind delivery.",
 	})
 
+	// metricTaskUndeliverable counts task-kind outcomes that could not be
+	// delivered because no channel resolver is wired or the reminder's
+	// channel is not configured (outcome-quality LLD §S8.11 row 16d, GitHub
+	// #369). Full name: vornik_reminders_task_undeliverable_total.
+	metricTaskUndeliverable = promauto.NewCounterVec(prometheus.CounterOpts{
+		Namespace: metricsNamespace,
+		Subsystem: metricsSubsystem,
+		Name:      "task_undeliverable_total",
+		Help:      "Task-kind reminder outcomes that could not be delivered, by reason (no_resolver, channel_not_configured).",
+	}, []string{"reason"})
+
 	// metricFiringReclaimed counts rows the stuck-firing reconciliation
 	// sweep reclaims (Task 14, design §9 crash recovery) — a row that
 	// sat in 'firing' past the grace window because a crash interrupted

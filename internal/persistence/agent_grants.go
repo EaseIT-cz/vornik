@@ -2,6 +2,7 @@ package persistence
 
 import (
 	"context"
+	"errors"
 	"time"
 )
 
@@ -12,6 +13,10 @@ import (
 // the inert path may only withdraw them (Mark*Removed, DeleteWorkflowReach).
 // Every row carries its namespace, so a namespace's rows are read by an
 // exact match, never a LIKE pattern.
+
+// ErrStaleListing refuses a suspension judged from a listing taken before
+// the row's approval (design §6.5, amendment #481).
+var ErrStaleListing = errors.New("persistence: the listing predates the approval")
 
 // AgentIntegrationApproval is one approved integration of one project.
 type AgentIntegrationApproval struct {
@@ -37,6 +42,15 @@ type AgentIntegrationApproval struct {
 	AccountLabel    string
 	AccountIdentity string
 	IdentitySource  string
+	// SuspendedTools are read tools the daemon stopped because the server
+	// described them as tools that change things (agent-administered design
+	// §6.5, amendment #481): sticky, written only by
+	// SuspendIntegrationTools, and reset only when the row is re-added
+	// (a removed row re-granted, which the person approves on the device).
+	// UpsertIntegration never takes them from its argument. SuspendedAt is
+	// when the first of them was suspended; nil when none is.
+	SuspendedTools []string
+	SuspendedAt    *time.Time
 }
 
 // Account identity sources (agent-administered design §22.2.1).
@@ -111,6 +125,17 @@ type AgentGrantRepository interface {
 	ListIntegrations(ctx context.Context, namespace string) ([]AgentIntegrationApproval, error)
 	// MarkIntegrationRemoved withdraws an approval, keeping its history.
 	MarkIntegrationRemoved(ctx context.Context, projectID, integration string, at time.Time) error
+	// SuspendIntegrationTools adds tools to a live row's suspended set
+	// (agent-administered design §6.5, amendment #481) and stamps
+	// suspended_at if the set was empty. listedAt is when the listing that
+	// judged them was taken: a row approved after it is left alone
+	// (ErrStaleListing), so a listing older than the person's re-approval
+	// cannot hold what they approved. ErrNotFound when no live row
+	// matches. It only adds; only UpsertIntegration's re-add clears.
+	SuspendIntegrationTools(ctx context.Context, projectID, integration string, tools []string, listedAt time.Time) error
+	// ListSuspendedIntegrations returns every live row with a non-empty
+	// suspended set, across namespaces (the MCP manager's load).
+	ListSuspendedIntegrations(ctx context.Context) ([]AgentIntegrationApproval, error)
 	// SetIntegrationIdentity records the provider identity of a live row
 	// (identity_source "provider"), or clears both identity columns when
 	// identity is "". It never touches the label. ErrNotFound when no live

@@ -12,7 +12,6 @@ import (
 	"strconv"
 	"strings"
 
-	"vornik.io/vornik/internal/auth"
 	"vornik.io/vornik/internal/chat"
 	"vornik.io/vornik/internal/config"
 	"vornik.io/vornik/internal/featuredoctor"
@@ -24,10 +23,6 @@ import (
 // install already has a committed onboarding row and, if not, whether the
 // conservative heuristic still considers the install fresh.
 func (s *Server) SetupStatus(w http.ResponseWriter, r *http.Request) {
-	if SessionRoleFromContext(r.Context()) == auth.RoleUser {
-		respondError(w, http.StatusForbidden, "ADMIN_SCOPE_REQUIRED", "admin scope required")
-		return
-	}
 	if r.Method != http.MethodGet {
 		w.Header().Set("Allow", http.MethodGet)
 		w.WriteHeader(http.StatusMethodNotAllowed)
@@ -60,10 +55,6 @@ type setupModelLister interface {
 // operator type a model ID from memory. This is a read-only probe: it never
 // writes config or session state. Admin-scoped like the rest of setup.
 func (s *Server) SetupModels(w http.ResponseWriter, r *http.Request) {
-	if SessionRoleFromContext(r.Context()) == auth.RoleUser {
-		respondError(w, http.StatusForbidden, "ADMIN_SCOPE_REQUIRED", "admin scope required")
-		return
-	}
 	if r.Method != http.MethodPost {
 		w.Header().Set("Allow", http.MethodPost)
 		w.WriteHeader(http.StatusMethodNotAllowed)
@@ -94,10 +85,6 @@ func (s *Server) SetupModels(w http.ResponseWriter, r *http.Request) {
 // configured and the operator has created a project to pin dispatcher chat
 // cost/routing to.
 func (s *Server) SetupDispatcherCommit(w http.ResponseWriter, r *http.Request) {
-	if SessionRoleFromContext(r.Context()) == auth.RoleUser {
-		respondError(w, http.StatusForbidden, "ADMIN_SCOPE_REQUIRED", "admin scope required")
-		return
-	}
 	if r.Method != http.MethodPost {
 		w.Header().Set("Allow", http.MethodPost)
 		w.WriteHeader(http.StatusMethodNotAllowed)
@@ -147,10 +134,6 @@ func (s *Server) SetupDispatcherCommit(w http.ResponseWriter, r *http.Request) {
 // SetupSessionCreate handles POST /api/v1/setup/session. It creates a
 // fresh onboarding session (Step 1 of the guide) and returns its JSON.
 func (s *Server) SetupSessionCreate(w http.ResponseWriter, r *http.Request) {
-	if SessionRoleFromContext(r.Context()) == auth.RoleUser {
-		respondError(w, http.StatusForbidden, "ADMIN_SCOPE_REQUIRED", "admin scope required")
-		return
-	}
 	if r.Method != http.MethodPost {
 		w.Header().Set("Allow", http.MethodPost)
 		w.WriteHeader(http.StatusMethodNotAllowed)
@@ -200,10 +183,6 @@ func (s *Server) SetupSessionCreate(w http.ResponseWriter, r *http.Request) {
 // the result + proposal on the session, and returns the result for
 // inline render.
 func (s *Server) SetupSessionValidate(w http.ResponseWriter, r *http.Request) {
-	if SessionRoleFromContext(r.Context()) == auth.RoleUser {
-		respondError(w, http.StatusForbidden, "ADMIN_SCOPE_REQUIRED", "admin scope required")
-		return
-	}
 	if r.Method != http.MethodPost {
 		w.Header().Set("Allow", http.MethodPost)
 		w.WriteHeader(http.StatusMethodNotAllowed)
@@ -258,10 +237,6 @@ func (s *Server) SetupSessionValidate(w http.ResponseWriter, r *http.Request) {
 // (see the design doc): a config-patch failure rolls back config.yaml
 // but leaves an orphaned chat.env the operator can re-use on retry.
 func (s *Server) SetupSessionCommit(w http.ResponseWriter, r *http.Request) {
-	if SessionRoleFromContext(r.Context()) == auth.RoleUser {
-		respondError(w, http.StatusForbidden, "ADMIN_SCOPE_REQUIRED", "admin scope required")
-		return
-	}
 	if r.Method != http.MethodPost {
 		w.Header().Set("Allow", http.MethodPost)
 		w.WriteHeader(http.StatusMethodNotAllowed)

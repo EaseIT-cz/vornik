@@ -228,11 +228,13 @@ func (r *SkillRepository) List(ctx context.Context, projectID string, f persiste
 	}
 	if f.Role != "" {
 		// roles is a JSON array of quoted strings; an empty roles list
-		// ('[]') applies to any role. The quoted LIKE avoids matching a
-		// role that is a prefix of another (e.g. "researcher" vs
-		// "researcher-lead").
-		b.WriteString(` AND (roles = '[]' OR roles LIKE ?)`)
-		args = append(args, `%"`+f.Role+`"%`)
+		// ('[]') applies to any role. Exact, case-sensitive membership:
+		// the role's JSON encoding (quotes included) as a literal substring,
+		// the same rule as the Postgres driver. Not LIKE: the role is
+		// caller-supplied and LIKE read its % and _ as wildcards and folded
+		// ASCII case on SQLite only (W16-I, #449 sweep; skill store §4).
+		b.WriteString(` AND (roles = '[]' OR instr(roles, ?) > 0)`)
+		args = append(args, persistence.JSONElementNeedle(f.Role))
 	}
 	b.WriteString(` ORDER BY updated_at DESC`)
 	if f.Limit > 0 {

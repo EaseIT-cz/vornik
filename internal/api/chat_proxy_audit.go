@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 
+	"vornik.io/vornik/internal/auditredact"
 	"vornik.io/vornik/internal/chat"
 	"vornik.io/vornik/internal/persistence"
 )
@@ -85,7 +86,12 @@ func (s *Server) recordChatAPIAudit(
 	// caller. principal is, in priority: the User-Agent
 	// (distinguishes "Open WebUI" / "Python SDK" / "curl"), then
 	// "anonymous" as the last resort.
-	principal := r.Header.Get("User-Agent")
+	//
+	// The User-Agent is the caller's choice, so it is bounded here (valid
+	// UTF-8, no control characters, at most auditredact.IdentityLimit bytes)
+	// and scanned by the seam's identity rule (chat-audit design §10.2.3,
+	// GitHub #414).
+	principal := auditredact.BoundIdentity(r.Header.Get("User-Agent"))
 	if principal == "" {
 		principal = "anonymous"
 	}
@@ -103,17 +109,23 @@ func (s *Server) recordChatAPIAudit(
 		RoleUsed:         "external_api",
 		Model:            effectiveModel,
 		SystemPromptHash: systemPromptHash,
-		UserMessage:      truncateForAuditAPI(userMessage, 500),
-		ToolCallsJSON:    "[]",
-		Response:         truncateForAuditAPI(responseText, 500),
-		Iterations:       1,
-		DurationMs:       time.Since(startedAt).Milliseconds(),
-		CostUSD:          costUSD,
+		// Capped at the scan WINDOW, not the stored limit: the redaction seam
+		// scans the window and then cuts to auditredact.ChatTextLimit, so a
+		// credential straddling the stored cut is seen whole (chat-audit
+		// design §9.2.5, GitHub #395). Cutting here first is how one was
+		// stored as an unmatchable head.
+		UserMessage:   auditredact.CutBeforeScan(userMessage, auditredact.ChatTextWindow),
+		ToolCallsJSON: "[]",
+		Response:      auditredact.CutBeforeScan(responseText, auditredact.ChatTextWindow),
+		Iterations:    1,
+		DurationMs:    time.Since(startedAt).Milliseconds(),
+		CostUSD:       costUSD,
 	}
 	if err := s.chatAuditRepo.Insert(ctx, entry); err != nil {
+		// No chat_id: this is the caller's User-Agent before the seam
+		// scanned it, and a log line is a store too (§10.2.3).
 		s.logger.Warn().Err(err).
 			Str("project_id", projectID).
-			Str("chat_id", chatID).
 			Msg("chat audit: Insert failed (proxy call)")
 	}
 }
@@ -144,20 +156,4 @@ func extractAssistantText(resp *chat.ChatResponse) string {
 		return ""
 	}
 	return resp.Choices[0].Message.Content
-}
-
-// truncateForAuditAPI caps long strings to a byte limit, suffixing
-// the chop with "…(truncated)" so operators can spot truncation in
-// the UI. Empty stays empty. Mirrors dispatcher.truncateForAudit
-// but lives in this package so the api code doesn't import the
-// dispatcher just for one helper.
-func truncateForAuditAPI(s string, limit int) string {
-	if limit <= 0 || len(s) <= limit {
-		return s
-	}
-	const suffix = "…(truncated)"
-	if limit <= len(suffix) {
-		return s[:limit]
-	}
-	return s[:limit-len(suffix)] + suffix
 }

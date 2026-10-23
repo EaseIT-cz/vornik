@@ -58,7 +58,7 @@ if [ -z "$bsum" ]; then
     echo "error: cannot read the amd64 bundle sha256 (an 'amd64) ... sum=<64 hex>' line) from $CONTAINERFILE" >&2
     exit 4
 fi
-if ! printf '%s' "$espeak_commit" | grep -qxE '[0-9a-f]{40}'; then
+if ! grep -qxE '[0-9a-f]{40}' <<<"$espeak_commit"; then
     echo "error: sources.tsv must name exactly one espeak-ng commit; found '$espeak_commit'" >&2
     exit 4
 fi

@@ -16,7 +16,7 @@
                 <div class="flex items-center gap-3 text-sm">
                     <a href="/ui/workflows/{{.WorkflowID}}/graph" class="text-brand-300 hover:text-brand-200 underline-offset-2 hover:underline">View graph →</a>
                     <form method="POST" action="/ui/workflows/{{.WorkflowID}}/clone" class="flex items-center gap-1"
-                          onsubmit="return confirm('Clone this workflow to the new id?')">
+                          data-confirm="Clone this workflow to the new id?">
                         <input name="newId" placeholder="new-id" required pattern="[a-z0-9][a-z0-9-]{1,30}[a-z0-9]"
                                class="w-28 bg-dark-800 border border-control rounded px-2 py-0.5 text-xs text-gray-200" aria-label="New workflow id">
                         <button type="submit" class="text-gray-400 hover:text-gray-200 underline-offset-2 hover:underline">Clone</button>

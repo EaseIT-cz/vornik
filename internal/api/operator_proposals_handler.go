@@ -53,6 +53,26 @@ type proposalJSON struct {
 	DecidedAt   *string `json:"decidedAt,omitempty"`
 }
 
+// proposalJSONFor is the wire shape of p as r may read it (GitHub #491;
+// process-spawn-law design, "Amendment 2026-10-21 (#491)", code review): a
+// proposal's title, diff, rationale and evidence can carry a model's reading
+// of the projects' error text (the self-heal worker files the diagnose
+// verdict as a DRAFT whose title is the root cause), so each goes through
+// the one per-access mapping every persisted error text uses
+// (errorTextView): unchanged for an admin-class caller, scrubbed for a
+// scrubbed one (a non-admin ["*"] session reaches the ledger through
+// requireOperatorScope), the constant for a denied one. Every handler
+// response goes through it.
+func (s *Server) proposalJSONFor(r *http.Request, p *persistence.ControlPlaneProposal) proposalJSON {
+	j := toProposalJSON(p)
+	view := s.errorTextView(r)
+	j.Title = view(j.Title)
+	j.Diff = view(j.Diff)
+	j.Rationale = view(j.Rationale)
+	j.Evidence = view(j.Evidence)
+	return j
+}
+
 func toProposalJSON(p *persistence.ControlPlaneProposal) proposalJSON {
 	j := proposalJSON{
 		ID: p.ID, ProjectID: p.ProjectID, Kind: p.Kind, BlastRadius: p.BlastRadius,
@@ -134,7 +154,7 @@ func (s *Server) OperatorProposalItem(w http.ResponseWriter, r *http.Request) {
 		respondError(w, http.StatusNotFound, "NOT_FOUND", "proposal not found")
 		return
 	}
-	respondJSON(w, http.StatusOK, toProposalJSON(p))
+	respondJSON(w, http.StatusOK, s.proposalJSONFor(r, p))
 }
 
 func (s *Server) operatorPropose(w http.ResponseWriter, r *http.Request) {
@@ -176,7 +196,7 @@ func (s *Server) operatorPropose(w http.ResponseWriter, r *http.Request) {
 		respondError(w, http.StatusBadRequest, "PROPOSE_FAILED", err.Error())
 		return
 	}
-	respondJSON(w, http.StatusCreated, toProposalJSON(p))
+	respondJSON(w, http.StatusCreated, s.proposalJSONFor(r, p))
 }
 
 func (s *Server) operatorListProposals(w http.ResponseWriter, r *http.Request) {
@@ -193,7 +213,7 @@ func (s *Server) operatorListProposals(w http.ResponseWriter, r *http.Request) {
 	}
 	out := make([]proposalJSON, 0, len(list))
 	for _, p := range list {
-		out = append(out, toProposalJSON(p))
+		out = append(out, s.proposalJSONFor(r, p))
 	}
 	respondJSON(w, http.StatusOK, map[string]any{"proposals": out, "count": len(out)})
 }
@@ -227,7 +247,7 @@ func (s *Server) operatorDecide(w http.ResponseWriter, r *http.Request, id strin
 	switch {
 	case err == nil:
 		p, _ := s.proposalStore.GetByID(r.Context(), id)
-		respondJSON(w, http.StatusOK, toProposalJSON(p))
+		respondJSON(w, http.StatusOK, s.proposalJSONFor(r, p))
 	case errors.Is(err, persistence.ErrProposalSelfApprove):
 		respondError(w, http.StatusConflict, "SELF_APPROVAL_FORBIDDEN", "the proposer cannot approve their own proposal")
 	case errors.Is(err, persistence.ErrProposalNotDraft):
@@ -284,7 +304,7 @@ func (s *Server) respondApplyOutcome(w http.ResponseWriter, r *http.Request, id 
 	case err == nil:
 		if s.proposalStore != nil {
 			if p, gerr := s.proposalStore.GetByID(r.Context(), id); gerr == nil {
-				respondJSON(w, http.StatusOK, toProposalJSON(p))
+				respondJSON(w, http.StatusOK, s.proposalJSONFor(r, p))
 				return
 			}
 		}
@@ -318,6 +338,14 @@ func (s *Server) OperatorDiagnose(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !s.requireOperatorScope(w, r) {
+		return
+	}
+	// GitHub #491: the diagnose bundle is built from the projects' error
+	// text; an unscoped caller that is not admin-class gets none of it,
+	// before the body is decoded or the diagnoser called.
+	// requireOperatorScope itself is unchanged (design K3).
+	if s.errorTextAccess(r) == ErrorTextDenied {
+		RespondProjectScopeRequired(w)
 		return
 	}
 	if s.diagnoser == nil {

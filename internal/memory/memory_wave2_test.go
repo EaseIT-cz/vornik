@@ -307,9 +307,9 @@ func TestW2MemEmbedderDuplicateTextsBothMissAndPopulate(t *testing.T) {
 }
 
 func TestW2MemEmbedderUpstreamFailureReturnsNilNotPartial(t *testing.T) {
-	// When the upstream batch errors mid-flight, Embed degrades to
-	// (nil, nil) for the WHOLE call rather than returning a partially
-	// populated slice — callers treat nil as "no embeddings this round".
+	// When the upstream batch errors mid-flight, Embed fails the WHOLE
+	// call (nil vectors, a typed error since #369 item 5) rather than
+	// returning a partially populated slice.
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusInternalServerError)
 	}))
@@ -319,8 +319,8 @@ func TestW2MemEmbedderUpstreamFailureReturnsNilNotPartial(t *testing.T) {
 	cache.data[ContentHash("cached")+":m"] = []float32{5}
 	e := w2Embedder(srv.URL, "m", cache)
 	out, err := e.Embed(context.Background(), EmbedScope{ProjectID: "p1", CallSite: EmbedCallSiteIngest}, []string{"cached", "miss"})
-	if err != nil {
-		t.Fatalf("err: %v", err)
+	if r, _ := EmbedFailureReason(err); r != EmbedReasonHTTPStatus {
+		t.Fatalf("err: %v, want http_status", err)
 	}
 	if out != nil {
 		t.Fatalf("expected nil on upstream failure, got %v", out)

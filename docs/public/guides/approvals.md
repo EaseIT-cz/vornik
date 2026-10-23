@@ -1,9 +1,9 @@
 ---
 sources:
     - path: internal/ui/task_conversation.go
-      sha256: 1487b9e4152a0448e224cf93a1791fe59ed8c7196b002c1b504a8dd5306e3e99
+      sha256: 01bed65dbe350e2908095107402d2ef5b861d24511f7ff04a91a2f991a44e371
     - path: internal/registry/project.go
-      sha256: 708b07a7761489e4c64817087dd9f25914af2470a52ccd1295b3e44911c33061
+      sha256: 438282a14b6e55cf685243941018f913c0acbce35f70ea190b878644695f67e6
 ---
 # Approvals & human-in-the-loop
 
@@ -71,6 +71,10 @@ vornikctl task answer <taskId> --project my-project \
 
 You can also steer a running task with `vornikctl task directive`, pause/resume
 it, or amend its brief — see the [vornikctl reference](../reference/vornikctl.md).
+
+Every answer, directive, amendment and closure is recorded under the account
+or API key that sent it. The `--author` flag adds a display label only. It is
+stored as client-supplied and never replaces the recorded author.
 
 ## How you're notified
 

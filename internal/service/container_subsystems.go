@@ -101,6 +101,10 @@ func (c *Container) initMCPWithBudget(budget time.Duration) {
 	// 2026-07-06 non-blocking-config-save design).
 	ctx, cancel := context.WithTimeout(context.Background(), budget)
 	defer cancel()
+	// The held agent read tools are read before any client is installed
+	// (agent-administered design §6.5, amendment #481): this is the one
+	// place the manager is wired with its store.
+	c.wireReadSuspensions(ctx)
 	c.mcpManager.SyncProjects(ctx, desired)
 	if len(desired) == 0 {
 		// No project needs MCP. Leave the Manager in place but empty;
@@ -120,6 +124,13 @@ func (c *Container) initMCPWithBudget(budget time.Duration) {
 // mcpDesiredServers assembles the per-project MCP server configs the
 // registry currently declares — the desired state SyncProjects
 // reconciles the live manager against.
+//
+// It is the ONE builder of a project server's mcp.ServerConfig: boot,
+// every reload (initMCPWithBudget) and the admin MCP refresh
+// (adminMCPRefresher) all take their configs from here, so the credential,
+// the withholding rules and the agent SSRF dial guard cannot differ by
+// route (agent-administered design §6.6, GitHub #429). Do not build a
+// project server's config anywhere else.
 func (c *Container) mcpDesiredServers() map[string][]mcp.ServerConfig {
 	daemonServers := indexMCPServersByName(c.daemonMCPServers())
 	desired := make(map[string][]mcp.ServerConfig)
@@ -989,9 +1000,15 @@ func (c *Container) initDatabase() error {
 
 	// Run pending migrations. Historical behaviour: log and continue
 	// on migration failure rather than fail boot — the existing
-	// schema is usually still serviceable.
-	if err := backend.Migrate(context.Background()); err != nil {
-		c.Logger.Warn().Err(err).Msg("database migration failed (continuing with existing schema)")
+	// schema is usually still serviceable. A backend whose open already
+	// migrated (SQLite: storage.Open migrates or fails) is not migrated a
+	// second time: that pass was a schema no-op, and 21 % of the unit-test
+	// package's race profile (#418, storage-abstraction design, "The second
+	// SQLite migrate at boot", 2026-10-17).
+	if !backend.MigratedAtOpen {
+		if err := backend.Migrate(context.Background()); err != nil {
+			c.Logger.Warn().Err(err).Msg("database migration failed (continuing with existing schema)")
+		}
 	}
 
 	// Verify connection
@@ -1107,7 +1124,8 @@ func (c *Container) applyMCPOAuthToken(cfg *mcp.ServerConfig, projectID, scope s
 	// installed and consulted on every request instead.
 	//
 	// Resolving it here is what caused the 2026-08-25 P0. This function runs
-	// only inside initMCP — at boot, on config reload, and on consent — so a
+	// only inside mcpDesiredServers — at boot, on config reload, on consent
+	// and on the admin MCP refresh — so a
 	// bearer written into cfg.AuthHeaders here is valid for the vendor's
 	// access-token lifetime and dead for however long the daemon runs after
 	// that, with nothing to notice. Measured on this deployment: an 8-hour

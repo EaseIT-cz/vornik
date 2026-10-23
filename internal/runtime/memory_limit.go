@@ -162,6 +162,21 @@ func DeriveAgentMemoryLimit(totalBytes int64, concurrency int) int64 {
 	return share
 }
 
+// AgentMemoryLimitBytes is the one rule that turns runtime.agent_memory_limit
+// into bytes: absent (blank) DERIVES from the host total and concurrency, a
+// size is parsed, "none"/"unbounded" is 0 (unbounded), anything else is
+// refused. The daemon (service.resolveAgentMemoryLimit, which adds its
+// boot-time checks on top) and `vornikctl deps install` (GitHub #428, project
+// dependency provisioning design §8.6) both call it, so the limit an install
+// container gets is the one an agent gets. totalBytes of 0 is an unreadable
+// host: a derived limit is then 0, an explicit one is unaffected.
+func AgentMemoryLimitBytes(raw string, concurrency int, totalBytes int64) (int64, error) {
+	if strings.TrimSpace(raw) == "" {
+		return DeriveAgentMemoryLimit(totalBytes, concurrency), nil
+	}
+	return ParseMemoryLimit(raw)
+}
+
 // HostTotalMemory reports the host's total physical memory in bytes.
 //
 // Used only to DERIVE a default limit, so an unreadable value is not fatal:

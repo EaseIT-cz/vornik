@@ -204,8 +204,9 @@ func (s *Server) AdminControlPlaneMCPWrite(w http.ResponseWriter, r *http.Reques
 		ApplyTarget:  filepath.Base(s.cpConfigPath), // the engine resolves it against this file's directory
 		ApplyContent: string(edited),
 		// LiveApply: adding/removing an MCP server is non-disruptive to in-flight
-		// tasks — the MCP catalog is injected into agent containers at start
-		// (executor writes /app/input/mcp.json once), so a running task never
+		// tasks — an agent container discovers its MCP catalog once, at start
+		// (mcp-bridge discover through the daemon; no mcp.json since GitHub
+		// #498), so a running task never
 		// sees a mid-flight catalog change. Skipping the all-projects busy gate
 		// is what makes this daemon-scope change appliable on a busy prod daemon.
 		LiveApply: true,

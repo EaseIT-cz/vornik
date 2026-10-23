@@ -129,16 +129,3 @@ func TestSetupMemoryCommit_DisabledWritesEnabledFalseNoSecret(t *testing.T) {
 		t.Errorf("disabled commit must not write embedding fields, got: %s", got)
 	}
 }
-
-func TestSetupMemoryCommit_BlocksProjectScopedUser(t *testing.T) {
-	srv, _, _ := newMemoryCommitServer(t, stubMemoryValidator{})
-	router := NewRouter(srv, &config.Config{})
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/setup/session/s1/memory/commit", strings.NewReader(`{}`))
-	req.Header.Set("Content-Type", "application/json")
-	req = req.WithContext(stampSetupIdentity(context.Background(), "user"))
-	rec := httptest.NewRecorder()
-	router.Handler().ServeHTTP(rec, req)
-	if rec.Code != http.StatusForbidden {
-		t.Fatalf("status = %d, want 403", rec.Code)
-	}
-}

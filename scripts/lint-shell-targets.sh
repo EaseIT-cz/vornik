@@ -51,7 +51,7 @@ fi
 status=0
 while IFS= read -r e; do
   [ -n "$e" ] || continue
-  if ! printf '%s\n' "$tracked" | grep -Fxq -- "$e"; then
+  if ! grep -Fxq -- "$e" <<<"$tracked"; then
     echo "lint-shell-targets: FAIL — $exclude_file names $e, which is not a tracked shell file; delete the stale line" >&2
     status=1
   fi

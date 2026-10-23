@@ -28,6 +28,17 @@ type fakeMCP struct {
 }
 
 func newFakeMCP(t *testing.T, want string, tools ...string) *fakeMCP {
+	return newFakeMCPAnnotated(t, want, false, tools...)
+}
+
+// newReadOnlyFakeMCP is newFakeMCP whose every tool carries readOnlyHint:
+// true, a server that annotates its reads: its tool names need no read verb
+// to be approved as reads (design §6.4, GitHub #405).
+func newReadOnlyFakeMCP(t *testing.T, want string, tools ...string) *fakeMCP {
+	return newFakeMCPAnnotated(t, want, true, tools...)
+}
+
+func newFakeMCPAnnotated(t *testing.T, want string, readOnly bool, tools ...string) *fakeMCP {
 	f := &fakeMCP{}
 	f.srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		f.mu.Lock()
@@ -51,7 +62,11 @@ func newFakeMCP(t *testing.T, want string, tools ...string) *fakeMCP {
 		case "tools/list":
 			list := []any{}
 			for _, n := range tools {
-				list = append(list, map[string]any{"name": n})
+				d := map[string]any{"name": n}
+				if readOnly {
+					d["annotations"] = map[string]any{"readOnlyHint": true}
+				}
+				list = append(list, d)
 			}
 			result = map[string]any{"tools": list}
 		}
@@ -94,7 +109,7 @@ func pendingToolsRequest(t *testing.T, f *agentAdminFixture) *persistence.AgentA
 func TestAgentAdmin_ServerToolsApprovedOnceConnected(t *testing.T) {
 	f := newAgentAdminFixture(t)
 	ctx := context.Background()
-	bank := newFakeMCP(t, "Bearer "+credCanary, "balance", "statement")
+	bank := newReadOnlyFakeMCP(t, "Bearer "+credCanary, "balance", "statement")
 	f.do(agentadmin.VerbCreateProject, agentadmin.CreateProjectInput{Slug: "finance", Purpose: "Monthly finance"})
 	f.approve(f.do(agentadmin.VerbAddMCPServer, agentadmin.AddMCPServerInput{Project: "finance", Name: "bank",
 		URL: bank.srv.URL, Auth: agentadmin.MCPAuthInput{Mode: "static", Credential: "FIO"}}))
@@ -142,7 +157,7 @@ func TestAgentAdmin_ServerToolsApprovedOnceConnected(t *testing.T) {
 // approved with the add, in one tap.
 func TestAgentAdmin_UnauthenticatedServerListedAtAdd(t *testing.T) {
 	f := newAgentAdminFixture(t)
-	news := newFakeMCP(t, "", "headlines")
+	news := newReadOnlyFakeMCP(t, "", "headlines")
 	f.do(agentadmin.VerbCreateProject, agentadmin.CreateProjectInput{Slug: "news", Purpose: "News"})
 	res := f.do(agentadmin.VerbAddMCPServer, agentadmin.AddMCPServerInput{Project: "news", Name: "feed", URL: news.srv.URL,
 		Auth: agentadmin.MCPAuthInput{Mode: "none"}})
@@ -178,7 +193,7 @@ func TestAgentAdmin_ServerToolsNothingListedAndInternalVerb(t *testing.T) {
 	if len(after) != len(before) {
 		t.Fatal("a server that listed nothing filed a request")
 	}
-	raw, _ := json.Marshal(agentadmin.ApproveServerToolsInput{Project: "hermes--finance", Server: "bank", Tools: []string{"x"}})
+	raw, _ := json.Marshal(agentadmin.ApproveServerToolsInput{Project: "hermes--finance", Server: "bank", Tools: []string{"x"}, Reads: []string{"x"}})
 	if res, _ := f.svc.Do(ctx, f.key, agentadmin.VerbApproveServerTools, raw); res.Effect != agentadmin.EffectRefused {
 		t.Fatalf("an agent key filed the internal verb: %+v", res)
 	}
@@ -195,10 +210,12 @@ func TestAgentDialGuard(t *testing.T) {
 			t.Errorf("%s: %v", u, err)
 		}
 	}
-	if g := agentDialGuard("http://127.0.0.1:9/m"); len(g.AllowedHosts) != 1 {
-		t.Error("a loopback URL is not allowed")
+	// Since GitHub #494 the URL's own loopback host is a LoopbackHosts entry
+	// (dialled only when it resolves to loopback), not an AllowedHosts one.
+	if g := agentDialGuard("http://127.0.0.1:9/m"); len(g.LoopbackHosts) != 1 || len(g.AllowedHosts) != 0 {
+		t.Error("a loopback URL is not allowed (as a loopback-only host)")
 	}
-	if g := agentDialGuard("https://bank.example/m"); len(g.AllowedHosts) != 0 {
+	if g := agentDialGuard("https://bank.example/m"); len(g.AllowedHosts) != 0 || len(g.LoopbackHosts) != 0 {
 		t.Error("a public host was allow-listed, which skips the private-address check")
 	}
 	cfg := mcp.ServerConfig{URL: "https://bank.example/m"}

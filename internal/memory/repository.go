@@ -1034,6 +1034,7 @@ func (r *Repository) SupersedeBySameSource(ctx context.Context, projectID, conte
 		  AND artifact_id  != $4
 		  AND (source_name = $5 OR source_name LIKE $6)
 		  AND validation_status NOT IN ('superseded','refuted','legacy')
+		  AND `+unverifiedNeverRetiresVerified("$4")+`
 	`, projectID, contentClass, taskID, newArtifactID, legacyExact, likePattern, epochID)
 	if err != nil {
 		return 0, err
@@ -1097,14 +1098,60 @@ func (r *Repository) SupersedeDocument(ctx context.Context, projectID, repoScope
 // outer filter share uploadChunkPredicate, the upload-only invariant, so the
 // two cannot disagree about which chunks count; DocumentOlderChunks counts
 // with the same clause, so a dry run reports exactly what would be retired.
-const documentSupersedeWhere = uploadChunkPredicate + `
+//
+// An unverified survivor never retires a verified version (design 22,
+// amendment #482): otherwise a companion could upload anything at a design's
+// path and retire the provenance-verified record of it.
+var documentSupersedeWhere = uploadChunkPredicate + `
 		  AND source_name = $3
-		  AND artifact_id <> (
+		  AND artifact_id <> ` + documentSurvivorSQL + `
+		  AND ` + documentSurvivorKeepsVerified
+
+// documentSurvivorSQL is the newest upload of the document: the version that
+// stays live.
+const documentSurvivorSQL = `(
 		        SELECT a.id FROM artifacts a
 		        WHERE a.id IN (SELECT DISTINCT artifact_id FROM project_memory_chunks
 		                       WHERE ` + uploadChunkPredicate + ` AND source_name = $3)
 		        ORDER BY a.created_at DESC, a.id DESC
 		        LIMIT 1)`
+
+var documentSurvivorKeepsVerified = `NOT (validation_status = 'verified' AND NOT EXISTS (
+		        SELECT 1 FROM project_memory_chunks nv
+		        WHERE nv.project_id = $1 AND nv.validation_status = 'verified'
+		          AND ` + provenanceRetiredOnlyByProvenance("project_memory_chunks") + `
+		          AND nv.artifact_id = ` + documentSurvivorSQL + `))`
+
+// unverifiedNeverRetiresVerified is the supersession guard of design 22,
+// amendment #482, for a supersession whose new artifact is the bind newArt:
+// a verified chunk is retired only by a version that is itself verified. A
+// companion-delegated upload is unverified unless its bytes are on main, so
+// without this it could retire the verified version of the same source.
+// Amended for #506 (C5): a provenance-verified chunk is retired only by a
+// provenance-verified version (provenanceRetiredOnlyByProvenance).
+func unverifiedNeverRetiresVerified(newArt string) string {
+	return `NOT (validation_status = 'verified' AND NOT EXISTS (
+		        SELECT 1 FROM project_memory_chunks nv
+		        WHERE nv.project_id = $1 AND nv.artifact_id = ` + newArt + `
+		          AND nv.validation_status = 'verified'
+		          AND ` + provenanceRetiredOnlyByProvenance("project_memory_chunks") + `))`
+}
+
+// provenanceRetiredOnlyByProvenance is the #506 keystone (design 22,
+// "Amendment 2026-10-22 (#506)", C5), a condition on the successor chunk nv
+// of a candidate chunk (the outer project_memory_chunks row). A
+// provenance-verified candidate is retired only by a provenance-verified
+// successor; any other verified candidate (role-of-record, or a document
+// whose provenance could not be examined) by any verified successor. Keyed
+// on the validator role, not on "verified": an unavailable upload is stored
+// verified (C4), so a status-keyed guard would let it retire a version
+// proven to be on the trusted branch. outer names the candidate row's table
+// or alias in the enclosing statement (code review 5420 F2), so an aliased
+// caller cannot silently change what the guard correlates with.
+func provenanceRetiredOnlyByProvenance(outer string) string {
+	return `(COALESCE(` + outer + `.validator_role, '') <> '` + ValidatorRoleProvenance +
+		`' OR nv.validator_role = '` + ValidatorRoleProvenance + `')`
+}
 
 // DocumentOlderChunks counts the chunks SupersedeDocument would retire for a
 // document path, without changing anything.
@@ -1755,6 +1802,12 @@ func (r *Repository) ListRepoScopes(ctx context.Context, projectID string) ([]Re
 func (r *Repository) PatchPolicyByArtifact(ctx context.Context, projectID, artifactID, contentClass string, confidence float32, producerRole, ingestExecutionID string, expiresAt *time.Time, repoScope string) error {
 	if r == nil || r.db == nil {
 		return nil
+	}
+	// The operator-correction role is reserved (GitHub #436): a claim refute
+	// trusts it to mean "the operator's own correction", so no ingest may
+	// stamp it, whatever role a workflow step is configured with.
+	if producerRole == ProducerRoleOperatorCorrection {
+		return ErrReservedProducerRole
 	}
 	if projectID == "" || artifactID == "" {
 		return nil
@@ -2498,9 +2551,7 @@ LIMIT $2`
 // ESCAPE '\' on the query). Without this a search query containing % or
 // _ is interpreted as a wildcard — e.g. "_" or "%" would match nearly
 // every row (wildcard injection in the tier-3 substring fallback).
-func escapeLikeWildcards(s string) string {
-	return strings.NewReplacer(`\`, `\\`, `%`, `\%`, `_`, `\_`).Replace(s)
-}
+func escapeLikeWildcards(s string) string { return persistence.EscapeLike(s) }
 
 func (r *Repository) substringSearch(ctx context.Context, projectID, queryText string, limit int, repoScope string, strictScope bool) ([]SearchResult, error) {
 	q := strings.TrimSpace(queryText)

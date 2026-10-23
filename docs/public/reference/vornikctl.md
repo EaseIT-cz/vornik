@@ -795,13 +795,19 @@ Runtime:
 Security:
   api_security_posture  Flag API auth disabled with non-loopback listen address
   api_key_strength      Detect weak / placeholder API keys
+  db_credential_strength Database password that is a known default, the test lane's pair, or the role/database name; states how many it examined
+  db_listen_exposure    Postgres listening on a non-loopback address of this host (the firewall is not examined); states how many sockets it examined
+  credential_reuse      One secret serving two purposes (database, operator API, LLM provider, ...); states how many it examined, never prints a value
   secrets_permissions   Secrets files/dirs with world-readable permissions
   config_secret_hygiene Config.yaml plaintext secrets or loose permissions (recommends ${ENV_VAR})
+  redaction_seams       Secret scanning of chat_audit_log, chat_system_prompts, step_prompts, task_messages and execution_step_outcomes signals before persist; warns when off, with rows written and unscanned since boot
   secret_store_key      Agent credential store: a missing or wrong key while credentials exist is an error
   approver_devices      Agent approvals: a warning when an agent namespace exists with no paired device or no push
   agent_namespace_budget Agent namespaces whose project budgets sum above the approved ceiling, naming the waiting cover request
   agent_model_catalogue Agent role models: agent_admin.models entries not offered to agent roles (no route, a command-line provider, or remote without an exact price)
+  memory_provenance_clone Daemon-only provenance clones (memory.provenance_clone): usable or refused, and the sweep's last fetch of the trusted branch
   agent_refusal_burst   Agent namespaces with 20 or more refused agent-admin calls in the last hour (a loop or a probe); states how many it examined
+  agent_change_stays_applied Agent-admin changes refused to the agent whose rollback failed and that are still applied (last 30 days); states how many it examined
 
 Models:
   model_health          Role-pinned models with high recent failure rate or
@@ -2226,7 +2232,7 @@ vornikctl memory reembed [flags]
 
 ## vornikctl memory regraph
 
-Re-flag chunks with zero edges so the KG worker reprocesses them
+Re-flag chunks with zero edges (or quarantined chunks) so the KG worker reprocesses them
 
 Re-flag every chunk in --project that produced zero published
 edges, so the daemon's KG extraction worker picks them up on its next
@@ -2240,10 +2246,23 @@ Idempotent: re-running against the same project re-flags the same
 chunk set minus any that the latest pass DID manage to extract edges
 from. --dry-run reports the candidate count without writing.
 
+--quarantined selects a different set: only QUARANTINED chunks (the
+worker gave up after its failure bound, graph_extraction_attempts > 0
+with the flag cleared), and re-flags them with the attempt counter
+reset to 0, so each gets a full set of attempts under the current
+code. --error-contains narrows to chunks whose last recorded error
+contains the given text (literal, case-sensitive). --project is
+optional here; without it every project is examined, which needs a
+key that is not project-scoped. The report lists, per project, the
+quarantined chunks examined, the ones matched and the ones
+re-flagged. A chunk that is not quarantined is never touched.
+
 Examples:
   vornikctl memory regraph --project assistant --dry-run
   vornikctl memory regraph --project assistant
   vornikctl memory regraph --project assistant --json
+  vornikctl memory regraph --quarantined --error-contains "invalid byte sequence" --dry-run
+  vornikctl memory regraph --quarantined --error-contains "invalid byte sequence"
 
 ```
 vornikctl memory regraph [flags]
@@ -2252,7 +2271,49 @@ vornikctl memory regraph [flags]
 | Flag | Default | Description |
 |---|---|---|
 | `--dry-run` | `false` | Report candidate count without writing |
+| `--error-contains` |  | With --quarantined: only chunks whose last error contains this text (literal, case-sensitive) |
 | `--json` | `false` | Emit JSON summary instead of human-readable output |
+| `--quarantined` | `false` | Re-flag only quarantined chunks, resetting their attempt counter (all projects unless --project) |
+| `-p`, `--project` |  | Project ID (required, except with --quarantined) |
+
+## vornikctl memory reverify-delegated
+
+Re-verify companion-delegated chunks by provenance; de-verify the rest (dry run by default)
+
+Chunks an agent role wrote in a companion-delegated task were stamped
+verified by role-of-record before design 22 amendment #482. This verb
+re-verifies each such artifact by provenance (its stored bytes are the blob
+at an eligible path on origin's default branch in the project's own clone)
+and de-verifies the rest. The default branch is the project's
+workspace.refresh_branch when set, checked against the clone's origin/HEAD,
+else origin/HEAD.
+
+A dry run by default: it prints the denominator (every artifact and chunk
+examined), how many are left alone (not companion-delegated), verified and
+de-verified (split by reason), and a content sample with what it measures.
+
+--apply (with --reason) writes everything as ONE audited event; the prior
+state of every changed chunk is kept, and --restore <event-id> puts it back
+where nothing has changed it since. Before verifying it force-fetches the
+clone's tracking ref of that branch from origin (--no-fetch skips it), so a
+tracking ref pushed before the push guard existed is reset.
+
+Always runs against the configured database. Run the dry run first.
+
+```
+vornikctl memory reverify-delegated [flags]
+```
+
+| Flag | Default | Description |
+|---|---|---|
+| `--accept-unverifiable` | `false` | Apply although the clone or its fetch failed (every companion-delegated chunk is de-verified) |
+| `--actor` |  | Who runs it (default: the OS user) |
+| `--allow-self-certified` | `false` | Let --restore reinstate role-of-record stamps (the count is recorded on the restore event) |
+| `--apply` | `false` | Write the plan (or the restore); without it this is a dry run |
+| `--no-fetch` | `false` | Do not fetch the default branch into the clone first: verify against the tracking ref as it stands |
+| `--reason` |  | Why (required with --apply); recorded on the event |
+| `--restore` |  | Restore the prior state an earlier --apply event changed |
+| `--sample` | `20` | Chunks per outcome in the content sample |
 | `-p`, `--project` |  | Project ID (required) |
 
 ## vornikctl memory rollback
@@ -2973,6 +3034,39 @@ vornikctl retention [flags]
 | `--json` | `false` | emit machine-readable JSON instead of a table |
 | `--project` |  | operate on a single project (default: all) |
 
+## vornikctl retention upgrade-dumps
+
+Preview or prune the database dumps left by vornik-update.sh
+
+Each run of vornik-update.sh writes a full database dump into
+<dir>/vornik-upgrade-backup-<UTC>/. A dump is a complete copy of the
+database, so an erasure made after it is undone in it. This command keeps
+at most retention.upgrade_dump_keep dumps (default 2, newest first) and
+removes a dump retention.upgrade_dump_grace_days (default 14) after the
+upgrade that wrote it succeeded — or, for a run that did not succeed,
+after a newer upgrade ran. The newest dump of a failed upgrade is kept.
+
+Only the .dump file is removed; the binaries, config.yaml and STATE.txt
+stay, and the removal is recorded in STATE.txt. Preview by default; add
+--apply to delete. The daemon's retention sweeper applies the same rules
+when retention.enabled is on.
+
+Examples:
+  vornikctl retention upgrade-dumps                 # preview, in your home directory
+  vornikctl retention upgrade-dumps --apply
+  vornikctl retention upgrade-dumps --dir /srv/vornik-backups --json
+
+
+```
+vornikctl retention upgrade-dumps [flags]
+```
+
+| Flag | Default | Description |
+|---|---|---|
+| `--apply` | `false` | actually delete the dumps past the policy (default: preview only) |
+| `--dir` |  | directory holding the vornik-upgrade-backup-* directories (default: retention.upgrade_dump_dir, else your home) |
+| `--json` | `false` | emit machine-readable JSON |
+
 ## vornikctl skill
 
 Export, import, and validate portable SWARM-SKILL.md files
@@ -3276,7 +3370,7 @@ vornikctl task amend <taskId> [flags]
 
 | Flag | Default | Description |
 |---|---|---|
-| `--author` |  | Author identity (operator handle, defaults to OS user) |
+| `--author` |  | Display label, stored as client-supplied; the author of record is the authenticated key or session |
 | `--new-brief` |  | New brief text |
 | `--reason` |  | Optional reason for the amendment |
 | `-p`, `--project` |  | Project ID (required) |
@@ -3291,7 +3385,7 @@ vornikctl task answer <taskId> [flags]
 
 | Flag | Default | Description |
 |---|---|---|
-| `--author` |  | Author identity (operator handle, defaults to OS user) |
+| `--author` |  | Display label, stored as client-supplied; the author of record is the authenticated key or session |
 | `--checkpoint` |  | Checkpoint message id (required) |
 | `--choice` |  | Selected option id (for decision checkpoints) |
 | `--content` |  | Message content |
@@ -3305,11 +3399,11 @@ Cancel a task by ID. Tasks in PENDING, QUEUED, LEASED, RUNNING,
 WAITING_FOR_CHILDREN, AWAITING_INPUT, AWAITING_EXTERNAL or PAUSED status can be
 cancelled.
 
-Cancelling a parent also cancels its descendants (children, their children,
-and so on) that are PENDING, QUEUED, LEASED, RUNNING or WAITING_FOR_CHILDREN,
-and stops their running containers. A descendant that is PAUSED or awaiting
-input, an external event or approval is not cancelled by the cascade; list
-them with 'vornikctl task list --active --all' and cancel them by ID.
+Cancelling a parent also cancels every unfinished descendant (children, their
+children, and so on): PENDING, QUEUED, LEASED, RUNNING, WAITING_FOR_CHILDREN,
+PAUSED, AWAITING_INPUT, AWAITING_EXTERNAL and AWAITING_APPROVAL ones alike, and
+stops their running containers. Each records that it was cancelled with its
+ancestor. Finished descendants are left as they are.
 
 ```
 vornikctl task cancel <taskId> [flags]
@@ -3329,7 +3423,7 @@ vornikctl task close <taskId> [flags]
 
 | Flag | Default | Description |
 |---|---|---|
-| `--author` |  | Author identity (operator handle, defaults to OS user) |
+| `--author` |  | Display label, stored as client-supplied; the author of record is the authenticated key or session |
 | `--reason` |  | Optional closure reason |
 | `-p`, `--project` |  | Project ID (required) |
 
@@ -3343,7 +3437,7 @@ vornikctl task directive <taskId> [flags]
 
 | Flag | Default | Description |
 |---|---|---|
-| `--author` |  | Author identity (operator handle, defaults to OS user) |
+| `--author` |  | Display label, stored as client-supplied; the author of record is the authenticated key or session |
 | `--content` |  | Message content |
 | `-p`, `--project` |  | Project ID (required) |
 
@@ -3427,7 +3521,7 @@ vornikctl task message <taskId> [flags]
 
 | Flag | Default | Description |
 |---|---|---|
-| `--author` |  | Author identity (operator handle, defaults to OS user) |
+| `--author` |  | Display label, stored as client-supplied; the author of record is the authenticated key or session |
 | `--content` |  | Message content |
 | `-p`, `--project` |  | Project ID (required) |
 

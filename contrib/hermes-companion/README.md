@@ -100,8 +100,9 @@ treated the plugin as an exclusive memory plugin and never loaded the broker
 tools. It declares `vornik_delegate`'s `inputs` as an open object. Before that,
 a model served by llama.cpp could only send `"inputs": {}`. It also reports a note that Vornik's memory gates refuse or hold for
 review as an error to the model, instead of a result the model could read
-as "saved". Vornik refuses notes under about ten words, so write a fact as
-a full sentence with its context.
+as "saved". Vornik refuses a note shorter than three words and ten characters
+("Dr Novak" is refused, "My dentist is Dr Novak." is kept), so write a fact
+as a full sentence with its context.
 
 ### Admin setup
 

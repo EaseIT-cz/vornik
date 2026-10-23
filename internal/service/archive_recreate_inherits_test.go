@@ -20,6 +20,7 @@ import (
 	"vornik.io/vornik/internal/projectarchive"
 	"vornik.io/vornik/internal/registry"
 	"vornik.io/vornik/internal/storage"
+	"vornik.io/vornik/internal/testutil/testwait"
 	"vornik.io/vornik/internal/ui"
 )
 
@@ -112,7 +113,7 @@ func TestArchiveDeleteNow_RecreatedAgentProjectInheritsNoApproval_370(t *testing
 	done := make(chan struct{})
 	go func() { defer close(done); c.archiveSweeper.Run(runCtx) }()
 	t.Cleanup(func() { cancel(); <-done })
-	res, err := lc.DeleteNowAndWait(ctx, project, true, 20*time.Second)
+	res, err := lc.DeleteNowAndWait(ctx, project, true, testwait.ForOutcome(t))
 	if err != nil || res.State != projectarchive.DeleteNowDeleted {
 		t.Fatalf("delete-now = %q (%v, %v), want deleted", res.State, res.Err, err)
 	}

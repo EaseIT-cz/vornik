@@ -116,20 +116,27 @@ func checkoutForgeChangeRequest(ctx context.Context, projectDir, headRef, defaul
 // an unreachable origin, or a missing branch is logged and skipped — the task
 // still runs off the current local HEAD. Only called for forge tasks (those
 // carrying a forge_job), where the workspace IS a clone of origin and resetting
-// to upstream is the intended per-issue starting point.
-func rebaseProjectToOrigin(ctx context.Context, projectDir, branch string, logger zerolog.Logger) {
+// to upstream is the intended per-issue starting point, and for the opt-in
+// pre-work refresh (workspace.refresh_before_work, see refreshBeforeWork).
+//
+// Returns the outcome as a WorkspaceRefresh* constant (an empty branch counts
+// as not_git: there is nothing to reset to). The forge callers ignore it; the
+// opt-in path counts it (executor design §9.6). The git commands, the backup
+// ref and the log lines are the forge path's, so both paths share one set of
+// safety rules.
+func rebaseProjectToOrigin(ctx context.Context, projectDir, branch string, logger zerolog.Logger) string {
 	if !isGitRepo(projectDir) || strings.TrimSpace(branch) == "" {
-		return
+		return WorkspaceRefreshNotGit
 	}
 	if out, err := gitExec.combined(ctx, "-C", projectDir, "remote", "get-url", "origin"); err != nil {
 		logger.Debug().Str("project_dir", projectDir).Str("detail", strings.TrimSpace(string(out))).
 			Msg("pre-work rebase: no origin remote — skipping (task runs off local HEAD)")
-		return
+		return WorkspaceRefreshNoOrigin
 	}
 	if out, err := gitExec.combined(ctx, "-C", projectDir, "fetch", "origin", branch); err != nil {
 		logger.Warn().Err(err).Str("project_dir", projectDir).Str("branch", branch).Str("detail", strings.TrimSpace(string(out))).
 			Msg("pre-work rebase: git fetch origin failed — continuing off local HEAD")
-		return
+		return WorkspaceRefreshFetchFailed
 	}
 
 	// Best-effort backup: save any local-only commits before they are discarded.
@@ -138,10 +145,11 @@ func rebaseProjectToOrigin(ctx context.Context, projectDir, branch string, logge
 	if out, err := gitExec.combined(ctx, "-C", projectDir, "reset", "--hard", "origin/"+branch); err != nil {
 		logger.Warn().Err(err).Str("project_dir", projectDir).Str("branch", branch).Str("detail", strings.TrimSpace(string(out))).
 			Msg("pre-work rebase: git reset --hard origin/<branch> failed — continuing off local HEAD")
-		return
+		return WorkspaceRefreshResetFailed
 	}
 	logger.Info().Str("project_dir", projectDir).Str("branch", branch).
 		Msg("pre-work rebase: project clone reset to current upstream before worktree")
+	return WorkspaceRefreshRefreshed
 }
 
 // backupLocalOnlyCommits is the best-effort pre-reset step for
@@ -322,11 +330,16 @@ func worktreePointerIntact(projectDir, taskID, wtDir string) bool {
 
 // preReceiveHookScript is the POSIX-sh hook installed at
 // <dir>/.git/hooks/pre-receive by ensureReceiveGuards. It reads stdin lines
-// of "<old> <new> <ref>" and enforces three rules:
+// of "<old> <new> <ref>" and enforces these rules:
 //
 //  1. Reject any update to refs/heads/worktree/* (daemon-reserved per-task branches).
 //  2. Reject any update to refs/vornik/* (daemon-internal refs, defensive).
-//  3. For the repo's default branch (resolved via `git symbolic-ref HEAD`),
+//  3. Reject any ref that is not a branch (refs/heads/*) or a tag
+//     (refs/tags/*): an allowlist (GitHub #482, design 22 "Amendment
+//     2026-10-21 (#482)"). A pushed refs/remotes/origin/main or
+//     refs/replace/<id> would let a key with allow_push forge what the
+//     memory provenance verifier reads as "merged to main".
+//  4. For the repo's default branch (resolved via `git symbolic-ref HEAD`),
 //     reject a non-fast-forward update — i.e. when old is non-zero and old
 //     is NOT an ancestor of new. Creates (old == all-zeros) and true
 //     fast-forwards are allowed.
@@ -338,12 +351,18 @@ default_branch=$(git symbolic-ref HEAD 2>/dev/null | sed 's|refs/heads/||')
 
 while read old new ref; do
     case "$ref" in
-        refs/heads/worktree/*)
+        refs/heads/worktree|refs/heads/worktree/*)
             echo >&2 "vornik: push rejected — '$ref' is a reserved worktree branch managed by vornik; do not push to it directly."
             exit 1
             ;;
         refs/vornik/*)
             echo >&2 "vornik: push rejected — '$ref' is a reserved daemon-internal ref; direct pushes are not allowed."
+            exit 1
+            ;;
+        refs/heads/*|refs/tags/*)
+            ;;
+        *)
+            echo >&2 "vornik: push rejected — '$ref' is not a branch or a tag; only refs/heads/* and refs/tags/* may be pushed."
             exit 1
             ;;
     esac
@@ -352,6 +371,10 @@ while read old new ref; do
     if [ -n "$default_branch" ] && [ "$ref" = "refs/heads/$default_branch" ]; then
         # old == all-zeros means branch creation; always allow.
         zero40="0000000000000000000000000000000000000000"
+        if [ "$new" = "$zero40" ]; then
+            echo >&2 "vornik: push rejected — deleting the default branch '$default_branch' is not allowed."
+            exit 1
+        fi
         if [ "$old" != "$zero40" ]; then
             if ! git merge-base --is-ancestor "$old" "$new" 2>/dev/null; then
                 echo >&2 "vornik: push rejected — non-fast-forward update to default branch '$default_branch' is not allowed."

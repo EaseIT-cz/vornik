@@ -415,6 +415,219 @@ make_stub podman 'exit 0'
 if isolated fresh_db_install "$TMP/deps.env"; then bad "existing deps .env treated as fresh"; else ok "existing deps .env ⇒ keep password"; fi
 rm -f "$STUB/podman"
 
+echo "--- seed_db_password (#412: one value, never the shipped constant) ---"
+# GitHub #412 (found at: production, 2026-10-16): the reference host ran on a
+# shared, guessable database password. Every non-fresh quickstart branch used
+# to keep vornik_dev_password silently, and the two files could disagree.
+# Design: 2026-10-21-installation-credential-hygiene-design.md §2.1 D1.
+EX="$TMP/env.example"; printf '# example\nPOSTGRES_DB=vornik\nPOSTGRES_USER=vornik\nPOSTGRES_PASSWORD=\n' > "$EX"
+envval() { sed -n "s/^$2=//p" "$1" | tail -n 1; }
+fmode() { stat -c %a "$1" 2>/dev/null || stat -f %Lp "$1"; }
+# new_cfg <name> [vornik.env password] — a config dir with a freshly seeded vornik.env.
+new_cfg() {
+  mkdir -p "$TMP/$1"
+  printf 'POSTGRES_DB=vornik\nVORNIK_DATABASE_PASSWORD=%s\nVORNIK_DATABASE_PORT=5432\n' "${2:-}" > "$TMP/$1/vornik.env"
+  chmod 600 "$TMP/$1/vornik.env"
+}
+# with_podman <stub body> <cmd...> — run with a podman stub ahead of the host's.
+with_podman() { _b="$1"; shift; make_stub podman "$_b"; ( PATH="$STUB:$PATH"; "$@" ); _rc=$?; rm -f "$STUB/podman"; return $_rc; }
+NOVOL='echo other-volume; exit 0'
+VOL='echo vornik-postgres-data; exit 0'
+
+new_cfg s1; new_cfg s2
+O1="$(with_podman "$NOVOL" seed_db_password "$TMP/s1" "$TMP/s1/deps.env" "$EX" 2>&1)"
+with_podman "$NOVOL" seed_db_password "$TMP/s2" "$TMP/s2/deps.env" "$EX" >/dev/null 2>&1
+p1="$(envval "$TMP/s1/vornik.env" VORNIK_DATABASE_PASSWORD)"; p2="$(envval "$TMP/s2/vornik.env" VORNIK_DATABASE_PASSWORD)"
+case "$p1" in *[!0-9a-f]*|"") bad "fresh password is not hex: '$p1'";; *) [ "${#p1}" -eq 64 ] && ok "fresh install: 64-hex password" || bad "fresh password length ${#p1}";; esac
+[ -n "$p1" ] && [ "$p1" != "$p2" ] && ok "two fresh installs get different passwords" || bad "two installs share a password"
+[ "$p1" = "$(envval "$TMP/s1/deps.env" POSTGRES_PASSWORD)" ] && ok "vornik.env and deps .env hold one value" || bad "vornik.env and deps .env disagree"
+[ "$(fmode "$TMP/s1/deps.env")" = 600 ] && ok "deps .env is 0600" || bad "deps .env mode $(fmode "$TMP/s1/deps.env")"
+[ "$(fmode "$TMP/s1/vornik.env")" = 600 ] && ok "vornik.env stays 0600" || bad "vornik.env mode changed"
+case "$O1" in *"$p1"*) bad "seed_db_password printed the password";; *) ok "password never printed";; esac
+case "$p1" in vornik_dev_password|vornik|swarmd) bad "fresh install got a constant";; *) ok "fresh install is not a constant";; esac
+grep -q '^POSTGRES_USER=vornik$' "$TMP/s1/deps.env" && ok "deps .env keeps the example's other keys" || bad "deps .env lost the example's keys"
+
+# Re-run: nothing changes.
+with_podman "$VOL" seed_db_password "$TMP/s1" "$TMP/s1/deps.env" "$EX" >/dev/null 2>&1
+[ "$(envval "$TMP/s1/vornik.env" VORNIK_DATABASE_PASSWORD)" = "$p1" ] && [ "$(envval "$TMP/s1/deps.env" POSTGRES_PASSWORD)" = "$p1" ] \
+  && ok "re-run keeps the pair" || bad "re-run changed the password"
+
+# Kept volume + an existing deps .env: vornik.env adopts its value (an odd one survives byte-exact).
+new_cfg s3
+ODD='a|b&c\d/e$f'
+printf 'POSTGRES_USER=vornik\nPOSTGRES_PASSWORD=%s\n' "$ODD" > "$TMP/s3/deps.env"
+with_podman "$VOL" seed_db_password "$TMP/s3" "$TMP/s3/deps.env" "$EX" >/dev/null 2>&1
+[ "$(envval "$TMP/s3/vornik.env" VORNIK_DATABASE_PASSWORD)" = "$ODD" ] && ok "vornik.env adopts the deps .env value byte-exact" || bad "adopted value differs: '$(envval "$TMP/s3/vornik.env" VORNIK_DATABASE_PASSWORD)'"
+[ "$(fmode "$TMP/s3/deps.env")" = 600 ] && ok "an existing deps .env is tightened to 0600" || bad "existing deps .env mode $(fmode "$TMP/s3/deps.env")"
+
+# An operator-set vornik.env value is never overwritten; the deps .env adopts it.
+new_cfg s4 'operator-chosen-db-password-0001'
+with_podman "$VOL" seed_db_password "$TMP/s4" "$TMP/s4/deps.env" "$EX" >/dev/null 2>&1
+[ "$(envval "$TMP/s4/vornik.env" VORNIK_DATABASE_PASSWORD)" = operator-chosen-db-password-0001 ] && ok "operator value kept" || bad "operator value overwritten"
+[ "$(envval "$TMP/s4/deps.env" POSTGRES_PASSWORD)" = operator-chosen-db-password-0001 ] && ok "deps .env adopts the vornik.env value" || bad "deps .env did not adopt"
+
+# Both set and different: the daemon cannot log in, so the install STOPS
+# (code review round 1, F2: a warning followed by a "successful" bring-up hid
+# the lockout). Neither value is rewritten or printed.
+new_cfg s5 'one-value-aaaaaaaaaaaaaaaaaaaa'
+printf 'POSTGRES_PASSWORD=other-value-bbbbbbbbbbbbbbbbbbb\n' > "$TMP/s5/deps.env"
+if O5="$(with_podman "$VOL" seed_db_password "$TMP/s5" "$TMP/s5/deps.env" "$EX" 2>&1)"; then
+  bad "differing values did not stop the install"
+else
+  ok "differing values stop the install"
+fi
+[ "$(envval "$TMP/s5/vornik.env" VORNIK_DATABASE_PASSWORD)" = one-value-aaaaaaaaaaaaaaaaaaaa ] && [ "$(envval "$TMP/s5/deps.env" POSTGRES_PASSWORD)" = other-value-bbbbbbbbbbbbbbbbbbb ] \
+  && ok "two different set values are both kept" || bad "a set value was rewritten"
+case "$O5" in *differ*) ok "the stop says the values differ";; *) bad "no message for differing values: $O5";; esac
+case "$O5" in *one-value-aaaa*|*other-value-bbbb*) bad "the message printed a password";; *) ok "the message names no value";; esac
+
+# A stale deps .env still on the old shipped constant, over NO volume, with an
+# empty vornik.env: nothing holds that value, so it is replaced by a generated
+# one in both files (code review round 1, F1: the install used to adopt it).
+new_cfg s8
+printf 'POSTGRES_USER=vornik\nPOSTGRES_PASSWORD=vornik_dev_password\n' > "$TMP/s8/deps.env"
+with_podman "$NOVOL" seed_db_password "$TMP/s8" "$TMP/s8/deps.env" "$EX" >/dev/null 2>&1
+p8="$(envval "$TMP/s8/vornik.env" VORNIK_DATABASE_PASSWORD)"
+[ "${#p8}" -eq 64 ] && [ "$p8" = "$(envval "$TMP/s8/deps.env" POSTGRES_PASSWORD)" ] \
+  && ok "stale constant over no volume: regenerated in both files" || bad "stale constant adopted over no volume: '$p8'"
+# The same stale constant over a KEPT volume is that install's real password:
+# adopted (so it keeps working), with a warning naming the runbook.
+new_cfg s9
+printf 'POSTGRES_PASSWORD=vornik_dev_password\n' > "$TMP/s9/deps.env"
+O9="$(with_podman "$VOL" seed_db_password "$TMP/s9" "$TMP/s9/deps.env" "$EX" 2>&1)"
+[ "$(envval "$TMP/s9/vornik.env" VORNIK_DATABASE_PASSWORD)" = vornik_dev_password ] && ok "stale constant over a kept volume: adopted" || bad "kept-volume constant not adopted"
+case "$O9" in *retrofit*) ok "adopting a known default warns with the runbook";; *) bad "adopting a known default is silent: $O9";; esac
+
+# Code review round 2, G1 (found at: review; a user observes it at e2e-lane, a
+# fresh quickstart): a known default held in vornik.env (alone, or equal in
+# both files) over NO volume was kept, so a brand-new database was created on
+# the shared constant; the both-equal case did not even warn. Nothing can hold
+# a password when no volume exists, so the value is regenerated in both files.
+new_cfg s10 vornik_dev_password
+printf 'POSTGRES_PASSWORD=vornik_dev_password\n' > "$TMP/s10/deps.env"
+with_podman "$NOVOL" seed_db_password "$TMP/s10" "$TMP/s10/deps.env" "$EX" >/dev/null 2>&1
+p10="$(envval "$TMP/s10/vornik.env" VORNIK_DATABASE_PASSWORD)"
+[ "${#p10}" -eq 64 ] && [ "$p10" = "$(envval "$TMP/s10/deps.env" POSTGRES_PASSWORD)" ] \
+  && ok "known default in both files over no volume: regenerated in both" || bad "both-file known default kept over no volume: '$p10'"
+new_cfg s11 vornik_dev_password
+with_podman "$NOVOL" seed_db_password "$TMP/s11" "$TMP/s11/deps.env" "$EX" >/dev/null 2>&1
+p11="$(envval "$TMP/s11/vornik.env" VORNIK_DATABASE_PASSWORD)"
+[ "${#p11}" -eq 64 ] && [ "$p11" = "$(envval "$TMP/s11/deps.env" POSTGRES_PASSWORD)" ] \
+  && ok "known default only in vornik.env over no volume: regenerated in both" || bad "vornik.env known default kept over no volume: '$p11'"
+# Case-insensitive, like the doctor.
+new_cfg s12 Postgres
+with_podman "$NOVOL" seed_db_password "$TMP/s12" "$TMP/s12/deps.env" "$EX" >/dev/null 2>&1
+p12="$(envval "$TMP/s12/vornik.env" VORNIK_DATABASE_PASSWORD)"
+[ "${#p12}" -eq 64 ] && ok "known default matched case-insensitively" || bad "mixed-case known default kept: '$p12'"
+# vornik.env names a database on another host: the local volume says nothing
+# about that server's password, so the value is kept (the daemon must still log
+# in) and the operator is warned to rotate it there.
+new_cfg s13 vornik_dev_password
+printf 'VORNIK_DATABASE_HOST=db.example.net\n' >> "$TMP/s13/vornik.env"
+O13="$(with_podman "$NOVOL" seed_db_password "$TMP/s13" "$TMP/s13/deps.env" "$EX" 2>&1)"
+[ "$(envval "$TMP/s13/vornik.env" VORNIK_DATABASE_PASSWORD)" = vornik_dev_password ] && ok "known default for an external database host: kept" || bad "external-host password replaced"
+case "$O13" in *retrofit*) ok "keeping an external host's known default warns";; *) bad "external-host known default kept silently: $O13";; esac
+# The same both-equal known default over a KEPT volume is kept (it opens that
+# database), but no longer silently.
+new_cfg s14 vornik_dev_password
+printf 'POSTGRES_PASSWORD=vornik_dev_password\n' > "$TMP/s14/deps.env"
+O14="$(with_podman "$VOL" seed_db_password "$TMP/s14" "$TMP/s14/deps.env" "$EX" 2>&1)"
+[ "$(envval "$TMP/s14/vornik.env" VORNIK_DATABASE_PASSWORD)" = vornik_dev_password ] && [ "$(envval "$TMP/s14/deps.env" POSTGRES_PASSWORD)" = vornik_dev_password ] \
+  && ok "both-equal known default over a kept volume: kept" || bad "both-equal known default over a kept volume was changed"
+case "$O14" in *retrofit*) ok "both-equal known default over a kept volume warns";; *) bad "both-equal known default kept silently: $O14";; esac
+# A local host name is still local: regenerated over no volume.
+new_cfg s15 vornik_dev_password
+printf 'VORNIK_DATABASE_HOST=127.0.0.1\n' >> "$TMP/s15/vornik.env"
+with_podman "$NOVOL" seed_db_password "$TMP/s15" "$TMP/s15/deps.env" "$EX" >/dev/null 2>&1
+[ "$(envval "$TMP/s15/vornik.env" VORNIK_DATABASE_PASSWORD | wc -c)" -eq 65 ] && ok "loopback host: known default regenerated" || bad "loopback host treated as external"
+
+# config.yaml naming an external database host (vornik.env silent): kept.
+new_cfg s16 vornik_dev_password
+printf 'server:\n  port: 8080\ndatabase:\n  host: "db.example.net"\n  port: 5432\n' > "$TMP/s16/config.yaml"
+with_podman "$NOVOL" seed_db_password "$TMP/s16" "$TMP/s16/deps.env" "$EX" >/dev/null 2>&1
+[ "$(envval "$TMP/s16/vornik.env" VORNIK_DATABASE_PASSWORD)" = vornik_dev_password ] && ok "config.yaml external host: known default kept" || bad "config.yaml external host: password replaced"
+# The quickstart's own seeded config (database.host 127.0.0.1) is local.
+new_cfg s17 vornik_dev_password
+cp "$SCRIPT_DIR/config/vornik.host.yaml" "$TMP/s17/config.yaml"
+with_podman "$NOVOL" seed_db_password "$TMP/s17" "$TMP/s17/deps.env" "$EX" >/dev/null 2>&1
+[ "$(envval "$TMP/s17/vornik.env" VORNIK_DATABASE_PASSWORD | wc -c)" -eq 65 ] && ok "seeded config.yaml host is local: known default regenerated" || bad "seeded config.yaml host read as external"
+
+# A quoted known default (systemd's EnvironmentFile and compose both strip the
+# quotes, so the password IS the constant) is still a known default.
+new_cfg s18 '"vornik_dev_password"'
+with_podman "$NOVOL" seed_db_password "$TMP/s18" "$TMP/s18/deps.env" "$EX" >/dev/null 2>&1
+[ "$(envval "$TMP/s18/vornik.env" VORNIK_DATABASE_PASSWORD | wc -c)" -eq 65 ] && ok "quoted known default regenerated" || bad "quoted known default kept: $(envval "$TMP/s18/vornik.env" VORNIK_DATABASE_PASSWORD)"
+known_default_db_password "'postgres'" && ok "single-quoted known default matched" || bad "single-quoted known default missed"
+
+# Code review round 3, F1: a config.yaml whose database host this script cannot
+# read must count as external (keep and warn), never as local. An absent
+# database block or host key is the daemon's compiled default (localhost), so it
+# stays local.
+new_cfg s19 vornik_dev_password
+printf 'database: {host: db.example.net, port: 5432}\n' > "$TMP/s19/config.yaml"
+with_podman "$NOVOL" seed_db_password "$TMP/s19" "$TMP/s19/deps.env" "$EX" >/dev/null 2>&1
+[ "$(envval "$TMP/s19/vornik.env" VORNIK_DATABASE_PASSWORD)" = vornik_dev_password ] && ok "flow-style database block: unreadable host kept" || bad "flow-style database block read as local"
+new_cfg s20 vornik_dev_password
+printf 'database:\n  host:\n  port: 5432\n' > "$TMP/s20/config.yaml"
+with_podman "$NOVOL" seed_db_password "$TMP/s20" "$TMP/s20/deps.env" "$EX" >/dev/null 2>&1
+[ "$(envval "$TMP/s20/vornik.env" VORNIK_DATABASE_PASSWORD)" = vornik_dev_password ] && ok "empty host value: kept" || bad "empty host value read as local"
+new_cfg s21 vornik_dev_password
+printf 'database:\n  host: db.example.net\n' > "$TMP/s21/config.yaml"; chmod 000 "$TMP/s21/config.yaml"
+if [ -r "$TMP/s21/config.yaml" ]; then ok "unreadable config.yaml (skipped: running as root)"; else
+with_podman "$NOVOL" seed_db_password "$TMP/s21" "$TMP/s21/deps.env" "$EX" >/dev/null 2>&1
+[ "$(envval "$TMP/s21/vornik.env" VORNIK_DATABASE_PASSWORD)" = vornik_dev_password ] && ok "unreadable config.yaml: kept" || bad "unreadable config.yaml read as local"; fi
+chmod 600 "$TMP/s21/config.yaml"
+new_cfg s22 vornik_dev_password
+printf 'server:\n  port: 8080\ndatabase:\n  name: vornik\n' > "$TMP/s22/config.yaml"
+with_podman "$NOVOL" seed_db_password "$TMP/s22" "$TMP/s22/deps.env" "$EX" >/dev/null 2>&1
+[ "$(envval "$TMP/s22/vornik.env" VORNIK_DATABASE_PASSWORD | wc -c)" -eq 65 ] && ok "no host key (daemon default localhost): regenerated" || bad "absent host key read as external"
+
+new_cfg s23 vornik_dev_password
+printf 'database:\n  host: ""\n' > "$TMP/s23/config.yaml"
+with_podman "$NOVOL" seed_db_password "$TMP/s23" "$TMP/s23/deps.env" "$EX" >/dev/null 2>&1
+[ "$(envval "$TMP/s23/vornik.env" VORNIK_DATABASE_PASSWORD)" = vornik_dev_password ] && ok "quoted empty host value: kept" || bad "quoted empty host value read as local"
+
+# env_set refuses a value with a line break (code review round 1, F4).
+printf 'A=1\n' > "$TMP/nl.env"
+if env_set "$TMP/nl.env" B "$(printf 'x\ny')" 2>/dev/null; then bad "env_set wrote a multi-line value"; else ok "env_set refuses a multi-line value"; fi
+[ "$(cat "$TMP/nl.env")" = "A=1" ] && ok "refused write left the file unchanged" || bad "refused write changed the file"
+
+# Kept volume, no value anywhere: STOP, write nothing (design review round 1,
+# a1: writing the old constant would lock a post-fix volume out while
+# reporting success).
+new_cfg s6
+if O6="$(with_podman "$VOL" seed_db_password "$TMP/s6" "$TMP/s6/deps.env" "$EX" 2>&1)"; then
+  bad "kept volume with no known value did not stop"
+else
+  ok "kept volume with no known value stops the install"
+fi
+[ -z "$(envval "$TMP/s6/vornik.env" VORNIK_DATABASE_PASSWORD)" ] && [ ! -e "$TMP/s6/deps.env" ] \
+  && ok "nothing written when stopping" || bad "stopping still wrote a password"
+case "$O6" in *VORNIK_DATABASE_PASSWORD*retrofit*|*retrofit*VORNIK_DATABASE_PASSWORD*) ok "the stop says what to set and names the runbook";; *) bad "stop message: $O6";; esac
+
+# podman cannot list volumes: a volume may exist, so the same stop (fail safe).
+new_cfg s7
+if with_podman 'exit 1' seed_db_password "$TMP/s7" "$TMP/s7/deps.env" "$EX" >/dev/null 2>&1; then
+  bad "podman failure did not stop"
+else
+  ok "podman failure stops rather than generate over a possible volume"
+fi
+[ -z "$(envval "$TMP/s7/vornik.env" VORNIK_DATABASE_PASSWORD)" ] && ok "podman failure wrote nothing" || bad "podman failure wrote a password"
+
+# seed_db_password owns the deps .env: no later step of the main body may copy
+# the example over it or sed a password into it (review round 1, a2).
+if awk '/^seed_db_password\(\)/{f=1} f&&/^}/{f=0;next} !f' "$SCRIPT_DIR/quickstart.sh" | grep -Eq 'cp \.env\.example \.env|POSTGRES_PASSWORD=\$\{DB_PASSWORD'; then
+  bad "the main body still writes the deps .env outside seed_db_password"
+else
+  ok "only seed_db_password writes the deps .env"
+fi
+grep -q '^ *seed_db_password "\$CONFIG_DIR"' "$SCRIPT_DIR/quickstart.sh" && ok "the main body calls seed_db_password" || bad "seed_db_password is never called"
+
+# The shipped examples carry no password at all.
+for f in "$SCRIPT_DIR/vornik.env.example" "$SCRIPT_DIR/.env.example"; do
+  if grep -Eq '^(VORNIK_DATABASE_PASSWORD|POSTGRES_PASSWORD)=.+' "$f"; then bad "$(basename "$f") ships a password"; else ok "$(basename "$f") ships no password"; fi
+done
+
 echo "--- warn_auth_disabled ---"
 printf 'api:\n  auth_enabled: false\n' > "$TMP/old.yaml"
 W="$(warn_auth_disabled "$TMP/old.yaml" 2>&1)"

@@ -938,7 +938,7 @@ func (e *Executor) executeWorkflowAttempt(ctx context.Context, task *persistence
 			if !ok {
 				err := fmt.Errorf("system step %s: no handler registered for %q (registered: %v)",
 					currentStepID, step.Handler, e.systemHandlers.Names())
-				e.recordStepOutcome(ctx, task, execution, currentStepID, "system", step.Handler,
+				e.recordStepOutcome(ctx, task, execution, currentStepID, stepoutcome.RoleSystem, step.Handler,
 					string(stepoutcome.GateFailed), "unknown_handler", err.Error(), nil, nil)
 				if step.OnFail != "" {
 					// Shutdown guard (Fix-2, 2026-06-21): abort on_fail routing
@@ -1001,7 +1001,7 @@ func (e *Executor) executeWorkflowAttempt(ctx context.Context, task *persistence
 					Msg("system handler panicked — step failed, daemon survived; this is a bug")
 			}
 			if sysErr != nil {
-				e.recordStepOutcome(ctx, task, execution, currentStepID, "system", step.Handler,
+				e.recordStepOutcome(ctx, task, execution, currentStepID, stepoutcome.RoleSystem, step.Handler,
 					sysOutcome, sysClass, sysErr.Error(), nil, nil)
 				if step.OnFail != "" {
 					// Shutdown guard (Fix-2, 2026-06-21): abort on_fail routing
@@ -1028,7 +1028,7 @@ func (e *Executor) executeWorkflowAttempt(ctx context.Context, task *persistence
 				}
 				return "", nil, completedSteps, sysErr
 			}
-			e.recordStepOutcome(ctx, task, execution, currentStepID, "system", step.Handler,
+			e.recordStepOutcome(ctx, task, execution, currentStepID, stepoutcome.RoleSystem, step.Handler,
 				string(stepoutcome.OK), "", "", nil, nil)
 			// 2026-06-13 diagnostic: surface the system handler's result envelope
 			// (e.g. forge.open_change_request's {cr_url, branch, state}) so a
@@ -2348,7 +2348,7 @@ func (e *Executor) runGateStep(
 	if err == nil {
 		// Gate produced a routing decision cleanly. Record ok for
 		// consistency with agent-step finalization.
-		e.recordStepOutcome(ctx, task, execution, currentStepID, "gate", "",
+		e.recordStepOutcome(ctx, task, execution, currentStepID, stepoutcome.RoleGate, "",
 			string(stepoutcome.OK), "", "", nil, nil)
 		return nextStepID, nil
 	}
@@ -2362,7 +2362,7 @@ func (e *Executor) runGateStep(
 	// step is the explicit default route — a clean fall-through, not a
 	// failure (same intuition as a switch's default case).
 	if producerOutcome == string(stepoutcome.DownstreamRejected) && step.OnSuccess != "" {
-		e.recordStepOutcome(ctx, task, execution, currentStepID, "gate", "",
+		e.recordStepOutcome(ctx, task, execution, currentStepID, stepoutcome.RoleGate, "",
 			string(stepoutcome.OK), "", "", nil, nil)
 		return step.OnSuccess, nil
 	}
@@ -2373,7 +2373,7 @@ func (e *Executor) runGateStep(
 	}
 	// The gate step itself is recorded as gate_failed (its own evaluation
 	// didn't produce a routing decision).
-	e.recordStepOutcome(ctx, task, execution, currentStepID, "gate", "",
+	e.recordStepOutcome(ctx, task, execution, currentStepID, stepoutcome.RoleGate, "",
 		string(stepoutcome.GateFailed), producerClass, err.Error(), nil, nil)
 	if step.OnFail == "" {
 		return "", err
@@ -2909,8 +2909,10 @@ func (e *Executor) handleSuccess(ctx context.Context, task *persistence.Task, ex
 // not background work, but we cap so a stuck LLM doesn't pin
 // the goroutine forever.
 //
-// Every early-exit logs the reason at debug level (and skip
-// reason as a structured field) so operators can see whether
+// Every early-exit logs the reason (and skip reason as a
+// structured field): Debug for configuration, Warn plus a
+// judge_evaluations_total count for a missing resolver or
+// project (GitHub #369, §S8.11 row 16a), so operators can see whether
 // the judge is silent because it ran-and-passed vs. silent
 // because something is misconfigured. Pre-2026-05-04 the
 // function was completely silent on every skip path, which
@@ -2925,24 +2927,39 @@ func (e *Executor) fireJudgeIfEnabled(task *persistence.Task) {
 			Msg("judge: skipped — no runner wired (chat client unavailable at executor build time?)")
 		return
 	}
+	// The resolver and project skips are failures, not configuration: a
+	// runner is wired, so a judge was meant to run. They Warn and are counted
+	// in judge_evaluations_total, nil-safe on the metrics (GitHub #369,
+	// outcome-quality-design §S8.11 row 16a). no_runner and judge_not_enabled
+	// are configuration and stay at Debug, uncounted.
+	countSkip := func(outcome string) {
+		if e.hallucinationMetrics != nil && e.hallucinationMetrics.JudgeEvaluationsTotal != nil {
+			e.hallucinationMetrics.JudgeEvaluationsTotal.WithLabelValues(task.ProjectID, outcome).Inc()
+		}
+	}
 	if e.workflows == nil {
-		e.logger.Debug().Str("task_id", task.ID).Str("skip_reason", "no_workflow_resolver").
+		e.logger.Warn().Str("task_id", task.ID).Str("project_id", task.ProjectID).
+			Str("skip_reason", "no_workflow_resolver").
 			Msg("judge: skipped — workflow resolver not wired")
+		countSkip("skipped_no_resolver")
 		return
 	}
 	getter, ok := e.workflows.(interface {
 		GetProject(string) *registry.Project
 	})
 	if !ok {
-		e.logger.Debug().Str("task_id", task.ID).Str("skip_reason", "resolver_no_GetProject").
+		e.logger.Warn().Str("task_id", task.ID).Str("project_id", task.ProjectID).
+			Str("skip_reason", "resolver_no_GetProject").
 			Msg("judge: skipped — workflow resolver does not implement GetProject")
+		countSkip("skipped_no_resolver")
 		return
 	}
 	p := getter.GetProject(task.ProjectID)
 	if p == nil {
-		e.logger.Debug().Str("task_id", task.ID).Str("project_id", task.ProjectID).
+		e.logger.Warn().Str("task_id", task.ID).Str("project_id", task.ProjectID).
 			Str("skip_reason", "project_not_found").
 			Msg("judge: skipped — project not in registry (deleted? config reload race?)")
+		countSkip("skipped_project_not_found")
 		return
 	}
 	if !p.HallucinationJudge.Enabled {
@@ -3845,6 +3862,12 @@ func (e *Executor) handleFailure(ctx context.Context, task *persistence.Task, ex
 	// is still in flight.
 	if task.Status == persistence.TaskStatusFailed {
 		e.settleBudgetReservation(ctx, task.ID)
+	} else {
+		// A retry after an open model circuit waits until the circuit can
+		// admit a call (permanent-failure design §8.8, GitHub #363). Stored
+		// here, inside runExecution and before its deferred cleanup, so it
+		// exists before IsExecuting turns false and the scheduler requeues.
+		e.recordRetryHold(task.ID, err)
 	}
 	// Inter-project resolve: failed-side. Skips when the task
 	// isn't a CPC callee.
@@ -4426,11 +4449,13 @@ func (e *Executor) NotifyChildTerminal(ctx context.Context, childTaskID string) 
 	e.checkParentUnblock(ctx, child)
 }
 
-// cancellableChildStatuses are the non-terminal statuses a child task may be
-// cancelled from during a parent cascade. It mirrors the direct-cancel set
-// but ALSO includes WAITING_FOR_CHILDREN so an intermediate parent inside the
-// tree is itself cancelled — its own children are then reached by recursion.
-var cancellableChildStatuses = []persistence.TaskStatus{
+// cancellableDependentStatuses are the statuses cancelBlockedDependents may
+// cancel a dependent of a failed upstream sibling from. Until GitHub #410 this
+// was also the parent cascade's set (as cancellableChildStatuses); the cascade
+// now uses persistence.CancellableTaskStatuses(), and whether this sweep
+// should widen too is a separate question (05-scheduler §4.11 "Amended
+// 2026-10-17", considered 3).
+var cancellableDependentStatuses = []persistence.TaskStatus{
 	persistence.TaskStatusPending,
 	persistence.TaskStatusQueued,
 	persistence.TaskStatusLeased,
@@ -4448,18 +4473,35 @@ var cancellableChildStatuses = []persistence.TaskStatus{
 // scanner's cascadeCancelCallee), not the parent_task_id relation GetChildren
 // walks.
 //
+// Every unfinished descendant is cancelled: the from-set is
+// persistence.CancellableTaskStatuses(), so PAUSED, AWAITING_INPUT,
+// AWAITING_EXTERNAL and AWAITING_APPROVAL descendants end with the parent
+// instead of surviving under a CANCELLED one (GitHub #410; 05-scheduler §4.11
+// "Amended 2026-10-17"). Each cascaded row records why.
+//
 // Idempotent + race-safe: each child flips via TransitionConditional gated on
-// the active statuses, so a child that reached a terminal state concurrently
-// keeps it. A running child additionally has its process torn down. The seen
-// set guards against any accidental parent_task_id cycle.
+// the unfinished statuses, so a child that reached a terminal state
+// concurrently keeps it. A running child additionally has its process torn
+// down; a moved child with no live execution has its reservation settled and
+// its leftover (e.g. PAUSED) execution rows superseded here, since no
+// handleCancelled will run for it. The seen set guards against any accidental
+// parent_task_id cycle.
 func (e *Executor) CancelChildren(ctx context.Context, parentTaskID string) {
 	if e == nil || e.taskRepo == nil || parentTaskID == "" {
 		return
 	}
-	e.cancelDescendants(ctx, parentTaskID, map[string]bool{parentTaskID: true})
+	e.cancelDescendants(ctx, parentTaskID, parentTaskID, map[string]bool{parentTaskID: true})
 }
 
-func (e *Executor) cancelDescendants(ctx context.Context, parentTaskID string, seen map[string]bool) {
+// cascadeCancelReason is the last_error a cascaded child records; rootTaskID
+// is the task CancelChildren was called for (cancelled, or retried and so
+// superseding this attempt).
+func cascadeCancelReason(rootTaskID string) string {
+	return "cancelled with ancestor task " + rootTaskID +
+		": cancelling or retrying a task ends every unfinished task below it"
+}
+
+func (e *Executor) cancelDescendants(ctx context.Context, rootTaskID, parentTaskID string, seen map[string]bool) {
 	children, err := e.taskRepo.GetChildren(ctx, parentTaskID)
 	if err != nil {
 		e.logger.Warn().Err(err).Str("parent_task_id", parentTaskID).
@@ -4472,9 +4514,11 @@ func (e *Executor) cancelDescendants(ctx context.Context, parentTaskID string, s
 		}
 		seen[child.ID] = true
 
+		reason := cascadeCancelReason(rootTaskID)
+		class := string(persistence.TaskFailureClassCancelled)
 		moved, terr := e.taskRepo.TransitionConditional(ctx, child.ID,
-			cancellableChildStatuses, persistence.TaskStatusCancelled,
-			persistence.TransitionOpts{})
+			persistence.CancellableTaskStatuses(), persistence.TaskStatusCancelled,
+			persistence.TransitionOpts{LastError: &reason, LastErrorClass: &class})
 		if terr != nil {
 			// Log and keep going — a grandchild may still be cancellable
 			// even if this child's transition errored.
@@ -4486,14 +4530,22 @@ func (e *Executor) cancelDescendants(ctx context.Context, parentTaskID string, s
 			// snapshot from GetChildren; the transition above accepts LEASED
 			// too, so a child that reached RUNNING in between would have had
 			// its row cancelled and its container left alive (§4.7).
-			if _, cerr := e.CancelIfActive(child.ID); cerr != nil {
+			had, cerr := e.CancelIfActive(child.ID)
+			if cerr != nil {
 				e.logger.Warn().Err(cerr).Str("child_task_id", child.ID).
 					Msg("cancel cascade: child container did not stop — it may still be running")
+			}
+			if !had {
+				// No live execution, so no handleCancelled will run for this
+				// child (a parked, paused or queued one): close what it holds,
+				// in handleCancelled's order (#410).
+				e.settleBudgetReservation(ctx, child.ID)
+				e.cascadeOrphanExecutions(ctx, child.ID)
 			}
 		}
 		// Recurse regardless of whether this child transitioned: it may
 		// already have been terminal yet still have active descendants.
-		e.cancelDescendants(ctx, child.ID, seen)
+		e.cancelDescendants(ctx, rootTaskID, child.ID, seen)
 	}
 }
 
@@ -4530,7 +4582,7 @@ func (e *Executor) cancelBlockedDependents(ctx context.Context, taskID, reason s
 
 		errClass := string(persistence.TaskFailureClassChildFailed)
 		moved, terr := e.taskRepo.TransitionConditional(ctx, dep.ID,
-			cancellableChildStatuses, persistence.TaskStatusCancelled,
+			cancellableDependentStatuses, persistence.TaskStatusCancelled,
 			persistence.TransitionOpts{LastError: &reason, LastErrorClass: &errClass})
 		if terr != nil {
 			e.logger.Warn().Err(terr).Str("dependent_task_id", dep.ID).

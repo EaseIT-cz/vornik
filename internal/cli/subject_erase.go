@@ -239,6 +239,11 @@ func printErasureResult(r *datasubject.ErasureResult) {
 	fmt.Printf("Derived data: %d knowledge entit(ies), %d graph edge(s), "+
 		"%d quarantined pre-ingest cop(ies).\n",
 		r.DerivedGraphEntitiesDeleted, r.DerivedGraphEdgesDeleted, r.QuarantinedCopiesDeleted)
+	// The assembled black-box traces copy task messages and audit rows; every
+	// erasure evicts them (#415 item 3, Art 17 design §15.12). Printed with its
+	// status so "0 evicted" and "never ran" read differently.
+	fmt.Printf("Cached black-box traces: %d evicted (%s).\n",
+		r.AssembledTracesEvicted, r.AssembledTraceCache)
 	if len(r.Redacted) > 0 {
 		fmt.Printf("Redacted: %d shared record(s) rewritten to remove this subject while "+
 			"preserving other people's data.\n", len(r.Redacted))

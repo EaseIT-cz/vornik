@@ -247,10 +247,12 @@ func NewRouter(server *Server, cfg *config.Config) *Router {
 
 		// Config management endpoints. These go through the auth middleware chain
 		// applied at the bottom of this function (applyMiddleware wraps the mux),
-		// so they require a valid API key when auth is enabled.
+		// so they require a valid API key when auth is enabled, and through
+		// the operator-surface gate: they reload the whole daemon and report
+		// every project's validation errors (GitHub #495, design A4a).
 		if configHandlers != nil {
-			mux.HandleFunc("/api/v1/config/reload-status", configHandlers.GetReloadStatus)
-			mux.HandleFunc("/api/v1/config/reload", configHandlers.Reload)
+			mux.HandleFunc("/api/v1/config/reload-status", server.operatorOnly(configHandlers.GetReloadStatus))
+			mux.HandleFunc("/api/v1/config/reload", server.operatorOnly(configHandlers.Reload))
 		}
 		// GET /api/v1/config — effective config dump with secrets redacted.
 		// Registered only when the server carries a config reference (it
@@ -386,7 +388,7 @@ func NewRouter(server *Server, cfg *config.Config) *Router {
 
 		// CE operator shell — account management (2026-09-13 identity work,
 		// review R1/R2). Community: NOT under /api/v1/admin/. Gated on
-		// requireOperatorCapability (operator scope + explicit capability).
+		// requireOperatorScope (operator scope + explicit capability, #495).
 		// Self-service account routes (§5.5): the caller acts on their OWN
 		// account, identified by the session, so they carry no operator
 		// capability — and refuse outright without a session, since there is
@@ -402,7 +404,7 @@ func NewRouter(server *Server, cfg *config.Config) *Router {
 		mux.HandleFunc("/api/v1/operator/accounts/", server.OperatorAccountItem)
 
 		// Configuration assistant — operator REST door (2026-09-13 design
-		// §6.3 door 1). Community; requireOperatorCapability-gated.
+		// §6.3 door 1). Community; requireOperatorScope-gated (#495).
 		mux.HandleFunc("/api/v1/operator/assist", server.OperatorAssist)
 
 		// Continuous-learning instinct layer — read/inspect/retire surfaces.
@@ -489,14 +491,18 @@ func NewRouter(server *Server, cfg *config.Config) *Router {
 		mux.HandleFunc("/api/v1/capabilities", server.GetCapabilities)
 		mux.HandleFunc("/api/v1/memory/stats", server.MemoryStats)
 		mux.HandleFunc("/api/v1/memory/cache-stats", server.MemoryCacheStats)
-		mux.HandleFunc("/api/v1/projects/wizard/converse", server.ProjectWizardConverse)
-		mux.HandleFunc("/api/v1/projects/wizard/", server.projectWizardRouter)
+		// The project wizard and setup are operator surface (GitHub #502;
+		// 18-security-and-tenancy.md, "Amendment 2026-10-22 (#502)", S1 and
+		// S4): setup writes config.yaml and dials the caller's endpoint, the
+		// wizard commits a project. The handlers carry no check of their own.
+		mux.HandleFunc("/api/v1/projects/wizard/converse", server.operatorOnly(server.ProjectWizardConverse))
+		mux.HandleFunc("/api/v1/projects/wizard/", server.operatorOnly(server.projectWizardRouter))
 		mux.HandleFunc("/api/v1/fixit/converse", server.FixItConverse)
-		mux.HandleFunc("/api/v1/setup/status", server.SetupStatus)
-		mux.HandleFunc("/api/v1/setup/models", server.SetupModels)
-		mux.HandleFunc("/api/v1/setup/dispatcher", server.SetupDispatcherCommit)
-		mux.HandleFunc("/api/v1/setup/session", server.SetupSessionCreate)
-		mux.HandleFunc("/api/v1/setup/session/", server.setupSessionRouter)
+		mux.HandleFunc("/api/v1/setup/status", server.operatorOnly(server.SetupStatus))
+		mux.HandleFunc("/api/v1/setup/models", server.operatorOnly(server.SetupModels))
+		mux.HandleFunc("/api/v1/setup/dispatcher", server.operatorOnly(server.SetupDispatcherCommit))
+		mux.HandleFunc("/api/v1/setup/session", server.operatorOnly(server.SetupSessionCreate))
+		mux.HandleFunc("/api/v1/setup/session/", server.operatorOnly(server.setupSessionRouter))
 		mux.HandleFunc("/api/v1/memory/backfill-titles", server.MemoryBackfillTitles)
 		mux.HandleFunc("/api/v1/memory/reclassify-llm", server.MemoryReclassifyLLM)
 		// KG re-flag — operator-driven backfill of isolated entities.
@@ -505,6 +511,10 @@ func NewRouter(server *Server, cfg *config.Config) *Router {
 		// Shipped 2026-05-25 (1e3a248c7) for the KG under-extraction
 		// audit; `vornikctl memory regraph` drives it.
 		mux.HandleFunc("/api/v1/memory/regraph", server.MemoryRegraph)
+		// Targeted re-flag of QUARANTINED chunks (counter reset), optionally
+		// one project and an error substring. Knowledge-graph LLD §3.3b
+		// (2026-10-16, after #284); `vornikctl memory regraph --quarantined`.
+		mux.HandleFunc("/api/v1/memory/regraph/quarantined", server.MemoryRegraphQuarantined)
 		mux.HandleFunc("/api/v1/executions/", server.apiV1ExecutionsHandler)
 		mux.HandleFunc("/api/v1/quality/executions", server.ExecutionQualityList)
 		mux.HandleFunc("/api/v1/projects/", server.apiV1ProjectsHandler)

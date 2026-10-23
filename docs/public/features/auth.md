@@ -107,6 +107,7 @@ a crash mid-change. Review it at `/ui/admin/audit`.
 |-----|---------|
 | `api.auth_enabled` | require authentication on control-plane routes |
 | `api.auth_dry_run` | evaluate + log auth without enforcing |
+| `server.accepted_hosts` | with auth off (or dry-run): extra `Host` names the daemon answers; any other name gets 403 (DNS-rebinding guard). IP addresses, `localhost` and the public base URL's host need no entry |
 | `auth.bootstrap_admins` | identities seeded into the first admin group (`channel:external_id`) |
 | `auth.external_base_url` | public base URL, required when a sign-in provider is set |
 | `auth.session.lifetime` / `auth.session.idle_timeout` | session expiry controls |

@@ -25,6 +25,8 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"vornik.io/vornik/internal/actor"
+	"vornik.io/vornik/internal/api"
 
 	"vornik.io/vornik/internal/persistence"
 	"vornik.io/vornik/internal/registry"
@@ -188,6 +190,11 @@ func (s *Server) ProjectCreateTaskSubmit(w http.ResponseWriter, r *http.Request,
 		Priority:   data.Priority,
 		WorkflowID: data.WorkflowID,
 		GoalOrigin: persistence.TaskGoalOriginUI,
+		// The session user is the task's principal (GitHub #482): memory
+		// verification trusts a USER task only with an attributable
+		// operator. An admin-key UI request without a session user records
+		// none and is not trusted.
+		Actor: s.uiSessionActor(r),
 	})
 	if err != nil {
 		// Map known reasons to HTTP statuses. Anything else
@@ -315,4 +322,15 @@ func containsString(haystack []string, s string) bool {
 		}
 	}
 	return false
+}
+
+// uiSessionActor is the request's task principal (api.TaskPrincipal, design
+// 22 part 8a): a presented key decides first (the operator's listed admin
+// key, or any other static key), then the session user. Zero when nothing is
+// known, which the memory verification predicate does not trust.
+func (s *Server) uiSessionActor(r *http.Request) actor.Actor {
+	if s == nil {
+		return actor.Actor{}
+	}
+	return api.TaskPrincipal(r.Context(), s.operatorCapability.IsOperatorKey)
 }

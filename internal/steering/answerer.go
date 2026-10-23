@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"vornik.io/vornik/internal/auditredact"
 	"vornik.io/vornik/internal/persistence"
 )
 
@@ -209,7 +210,7 @@ func (a *Answerer) Answer(ctx context.Context, req AnswerRequest) (AnswerResult,
 	if checkpointID == "" {
 		checkpointID = cp.ID
 	}
-	authorID := req.AuthorID
+	authorID := auditredact.BoundIdentity(req.AuthorID) // bounded here, scanned by the seam (GitHub #414)
 	metaBytes, _ := json.Marshal(map[string]any{
 		"source": req.Source,
 		"choice": req.OptionID,

@@ -57,12 +57,12 @@ REPO_URL="${VORNIK_REPO_URL:-https://github.com/EaseIT-cz/vornik}"
 # (`make quickstart-stamp-ref REF=<tag>`), so the PUBLISHED installer pins a
 # concrete release rather than a moving branch. Keep it a real, recent tag in
 # the repo. Override at runtime with VORNIK_REF (e.g. VORNIK_REF=main).
-DEFAULT_VORNIK_REF="2026.10.6"
+DEFAULT_VORNIK_REF="2026.10.7"
 REF="${VORNIK_REF:-$DEFAULT_VORNIK_REF}"
 DIR="${VORNIK_DIR:-$HOME/vornik}"
 HTTP_PORT="${VORNIK_HTTP_PORT:-8080}"
 PG_PORT="${POSTGRES_PORT:-5432}"
-GO_IMAGE="${VORNIK_GO_IMAGE:-docker.io/library/golang:1.26.9}"
+GO_IMAGE="${VORNIK_GO_IMAGE:-docker.io/library/golang:1.26.10}"
 
 c_blue=$'\033[1;36m'; c_yellow=$'\033[1;33m'; c_red=$'\033[1;31m'; c_green=$'\033[1;32m'; c_off=$'\033[0m'
 log()  { printf '%s==>%s %s\n' "$c_blue"   "$c_off" "$*"; }
@@ -396,18 +396,157 @@ ensure_api_key() {
   ok "Generated an API key in $_cfg/secrets/api.env (0600)"
 }
 
-# fresh_db_install <deps_env_path> — true only when nothing can already hold
-# the database password: the deps .env does not exist yet AND podman lists no
-# vornik-postgres-data volume (Postgres fixes its password when the volume is
-# first initialised). A podman that cannot list volumes answers "not fresh",
-# which keeps the existing default: the safe direction.
-fresh_db_install() {
-  [ -e "$1" ] && return 1
+# db_volume_absent — true only when podman lists volumes and none is
+# vornik-postgres-data, i.e. no local database can hold a password yet
+# (Postgres fixes it when the volume is first initialised). A podman that
+# cannot list volumes answers "present": the safe direction.
+db_volume_absent() {
   _vols="$(podman volume ls --format '{{.Name}}' 2>/dev/null)" || return 1
   case "$_vols" in
     *vornik-postgres-data*) return 1 ;;
   esac
   return 0
+}
+
+# fresh_db_install <deps_env_path> — true only when nothing can already hold
+# the database password: the deps .env does not exist yet AND no
+# vornik-postgres-data volume exists (db_volume_absent).
+fresh_db_install() {
+  [ -e "$1" ] && return 1
+  db_volume_absent
+}
+
+# known_default_db_password <value> — true for a shipped constant: a value an
+# installer, example or test lane has shipped, plus the generic guesses. This
+# list MUST equal knownDefaultDBPasswords in internal/api/doctor_db_credentials.go
+# (TestDoctor412_QuickstartKnownDefaultsMatchDoctor fails when they differ). The
+# doctor also flags a password equal to the role or database name; that is not
+# checked here.
+known_default_db_password() {
+  _kd="$1"
+  # One pair of surrounding quotes is not part of the password: systemd's
+  # EnvironmentFile and compose's .env both strip it.
+  case "$_kd" in
+    \"*\"|\'*\') _kd="${_kd#?}"; _kd="${_kd%?}" ;;
+  esac
+  case "$(printf '%s' "$_kd" | tr '[:upper:]' '[:lower:]')" in
+    vornik|swarmd|postgres|vornik_dev_password|password|changeme|secret|admin|test|your-secure-password) return 0 ;;
+  esac
+  return 1
+}
+
+# env_get <file> <key> — the last value of KEY=... in an env file ("" if none).
+env_get() {
+  [ -r "$1" ] || return 0
+  sed -n "s/^$2=//p" "$1" | tail -n 1
+}
+
+# env_set <file> <key> <value> — set KEY=value in an env file, replacing every
+# existing KEY= line or appending one, keeping the file's other lines. The value
+# reaches awk through the environment, not the program text or a sed
+# replacement, so a password holding |, & or \ is written byte-exact and never
+# interpreted (#412). A value with a line break is refused (it would split the
+# line); the file is then left unchanged. Lines are written with LF endings.
+env_set() {
+  # A literal newline: $(printf '\n') would strip it and match every value.
+  _es_nl='
+'
+  _es_cr="$(printf '\r')"
+  case "$3" in
+    *"$_es_nl"*|*"$_es_cr"*) return 1 ;;
+  esac
+  _es_tmp="$1.tmp.$$"
+  ( umask 077
+    ES_KEY="$2" ES_VAL="$3" awk '
+      BEGIN { k = ENVIRON["ES_KEY"]; v = ENVIRON["ES_VAL"]; done = 0 }
+      index($0, k "=") == 1 { if (!done) { print k "=" v; done = 1 } ; next }
+      { print }
+      END { if (!done) print k "=" v }
+    ' "$1" > "$_es_tmp" ) || { rm -f "$_es_tmp"; return 1; }
+  chmod 600 "$_es_tmp" && mv "$_es_tmp" "$1"
+}
+
+# db_host_local <config_dir> — true when the daemon's database is this host's
+# deps Postgres. The host is VORNIK_DATABASE_HOST in vornik.env (the daemon's
+# env override), else database.host in config.yaml, else the daemon's compiled
+# default, localhost. Local means: the compose service name, localhost, or a
+# loopback/unspecified address. Only then does the local vornik-postgres-data
+# volume say anything about which password the database holds. A host this
+# script cannot read (an unreadable config.yaml, a flow-style database block,
+# an empty host value) counts as NOT local, the safe direction: the caller then
+# keeps the value and warns rather than regenerate it (review round 3, F1).
+db_host_local() {
+  _dh="$(env_get "$1/vornik.env" VORNIK_DATABASE_HOST)"
+  if [ -z "$_dh" ] && [ -e "$1/config.yaml" ]; then
+    [ -r "$1/config.yaml" ] || return 1
+    # Prints "H <host>" for a block-style host, "?" for a form it cannot read,
+    # nothing when the database block or its host key is absent.
+    _dh="$(awk '
+      /^database:/ { v = $0; sub(/^database:[[:space:]]*/, "", v); sub(/[[:space:]]*#.*/, "", v)
+                     if (v != "") { print "?"; exit } ; f = 1; next }
+      f && /^[^[:space:]#]/ { f = 0 }
+      f && $1 == "host:" { if (NF < 2 || substr($2, 1, 1) == "#") print "?"; else print "H " $2; exit }
+    ' "$1/config.yaml")"
+    case "$_dh" in
+      "") _dh=localhost ;;
+      "?") return 1 ;;
+      *) _dh="$(printf '%s' "${_dh#H }" | tr -d "\"'")"; [ -n "$_dh" ] || return 1 ;;
+    esac
+  fi
+  case "${_dh:-localhost}" in
+    postgres|localhost|127.*|::1|"[::1]"|0.0.0.0|::) return 0 ;;
+  esac
+  return 1
+}
+
+# seed_db_password <config_dir> <deps_env> <deps_env_example> — keep the
+# daemon's VORNIK_DATABASE_PASSWORD (<config_dir>/vornik.env) and the deps
+# compose POSTGRES_PASSWORD (<deps_env>) on ONE value, and never write a
+# constant (GitHub #412; quickstart design §3.3, hygiene design §2.1 D1, §2.6):
+#   both set, differ     stop: the daemon could not log in
+#   a known default, no volume, local database host
+#                        nothing holds it (Postgres fixes the password when the
+#                        volume is first initialised), so a new value is
+#                        generated into BOTH files, whichever file held it
+#   a known default otherwise (a kept volume, or an external database host)
+#                        kept so the install keeps working, with a warning
+#   one set              copy it to the other
+#   both set, equal      keep both
+#   neither, no volume   generate one into both
+#   neither, a volume    stop: no value this script could write is known to
+#                        open it
+# This function owns <deps_env>: it creates it from the example (0600) when
+# absent. The password is never printed.
+seed_db_password() {
+  _sd_cfg="$1/vornik.env"; _sd_deps="$2"; _sd_ex="$3"
+  _sd_runbook="docs/operator/2026-10-21-database-credential-retrofit.md (retrofit runbook)"
+  _sd_v="$(env_get "$_sd_cfg" VORNIK_DATABASE_PASSWORD)"
+  _sd_d="$(env_get "$_sd_deps" POSTGRES_PASSWORD)"
+  if [ -n "$_sd_v" ] && [ -n "$_sd_d" ] && [ "$_sd_v" != "$_sd_d" ]; then
+    die "VORNIK_DATABASE_PASSWORD in $_sd_cfg and POSTGRES_PASSWORD in $_sd_deps differ, so the daemon cannot log in to its database. Set both to the password the database was created with, then re-run. Rotating it: $_sd_runbook."
+  fi
+  _sd_val="${_sd_v:-$_sd_d}"
+  _sd_regen=""
+  if [ -n "$_sd_val" ] && known_default_db_password "$_sd_val" && db_host_local "$1" && db_volume_absent; then
+    _sd_val=""; _sd_regen=1   # a shipped default that no database holds yet
+  fi
+  if [ -z "$_sd_val" ]; then
+    db_volume_absent || die "An existing vornik-postgres-data volume (or a podman that cannot list volumes) may hold a database password that neither $_sd_cfg nor $_sd_deps records. Set VORNIK_DATABASE_PASSWORD in $_sd_cfg to the password that volume was created with (an install made before 2026-10-21 used vornik_dev_password), then re-run. Rotating it: $_sd_runbook."
+    _sd_val="$(rand_hex)"
+    [ ${#_sd_val} -eq 64 ] || die "could not generate a database password (/dev/urandom unreadable?)"
+    _sd_msg="Generated a per-install database password (vornik.env + deps .env, 0600)"
+  else
+    _sd_msg="Database password: one value in vornik.env and the deps .env"
+    known_default_db_password "$_sd_val" && warn "The database password is a shipped default that other installs share. It was kept because a database may already use it; rotate it: $_sd_runbook."
+  fi
+  if [ ! -f "$_sd_deps" ]; then
+    ( umask 077; cp "$_sd_ex" "$_sd_deps" ) || die "cannot create $_sd_deps"
+  fi
+  env_set "$_sd_deps" POSTGRES_PASSWORD "$_sd_val" || die "cannot write $_sd_deps"
+  if [ -z "$_sd_v" ] || [ -n "$_sd_regen" ]; then
+    env_set "$_sd_cfg" VORNIK_DATABASE_PASSWORD "$_sd_val" || die "cannot write $_sd_cfg"
+  fi
+  ok "$_sd_msg"
 }
 
 # warn_auth_disabled <config.yaml> — a re-run never edits an existing config;
@@ -648,7 +787,6 @@ if [ ! -f "$CONFIG_DIR/config.yaml" ]; then
   configure_anonymous_telemetry "$CONFIG_DIR/config.yaml" "$telemetry_interactive"
 fi
 
-DB_PASSWORD=""
 if [ ! -f "$CONFIG_DIR/vornik.env" ]; then
   cp "$DIR/deployments/podman/vornik.env.example" "$CONFIG_DIR/vornik.env"
   chmod 600 "$CONFIG_DIR/vornik.env"
@@ -657,14 +795,12 @@ if [ ! -f "$CONFIG_DIR/vornik.env" ]; then
     -e "s|^VORNIK_RUN_AS_USER=.*|VORNIK_RUN_AS_USER=$(id -u):$(id -g)|" \
     -e "s|^VORNIK_DATABASE_PORT=.*|VORNIK_DATABASE_PORT=${PG_PORT}|" \
     "$CONFIG_DIR/vornik.env"
-  # A per-install database password instead of the shipped default, but only
-  # when no existing Postgres could already hold the old one (design §3.2).
-  if fresh_db_install "$DIR/deployments/podman/.env"; then
-    DB_PASSWORD="$(rand_hex)"
-    sed -i -e "s|^VORNIK_DATABASE_PASSWORD=.*|VORNIK_DATABASE_PASSWORD=${DB_PASSWORD}|" "$CONFIG_DIR/vornik.env"
-  fi
   ok "Seeded $CONFIG_DIR/vornik.env (add your LLM key here)"
 fi
+# One database password in vornik.env and the deps .env, generated per install
+# and never the shipped constant (GitHub #412, design §3.3). This owns the deps
+# .env: it creates it from the example, so step 6 does not.
+seed_db_password "$CONFIG_DIR" "$DIR/deployments/podman/.env" "$DIR/deployments/podman/.env.example"
 ensure_api_key "$CONFIG_DIR"
 [ -n "$new_install" ] || warn_auth_disabled "$CONFIG_DIR/config.yaml"
 
@@ -675,14 +811,6 @@ seed_configs "$DIR" "$CONFIG_DIR"
 # 6. Bring up dependencies (PostgreSQL; scraper on Enterprise).
 # ---------------------------------------------------------------------------
 cd "$DIR/deployments/podman"
-if [ ! -f .env ]; then
-  cp .env.example .env && ok "Created .env from .env.example"
-  if [ -n "$DB_PASSWORD" ]; then
-    chmod 600 .env
-    sed -i -e "s|^POSTGRES_PASSWORD=.*|POSTGRES_PASSWORD=${DB_PASSWORD}|" .env
-    ok "Generated a per-install database password (vornik.env + .env)"
-  fi
-fi
 
 log "Starting PostgreSQL + pgvector..."
 VORNIK_HTTP_PORT="$HTTP_PORT" POSTGRES_PORT="$PG_PORT" \

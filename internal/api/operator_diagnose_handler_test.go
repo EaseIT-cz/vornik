@@ -33,7 +33,7 @@ func TestOperatorDiagnose_ReturnsVerdict(t *testing.T) {
 	}
 	s.diagnoser = fd
 	rec := httptest.NewRecorder()
-	s.OperatorDiagnose(rec, operatorReq(http.MethodPost, "/api/v1/operator/diagnose", `{"focus":"family","propose":true}`))
+	s.OperatorDiagnose(rec, adminClassReq491(operatorReq(http.MethodPost, "/api/v1/operator/diagnose", `{"focus":"family","propose":true}`)))
 	if rec.Code != http.StatusOK {
 		t.Fatalf("diagnose: want 200, got %d: %s", rec.Code, rec.Body.String())
 	}
@@ -56,7 +56,7 @@ func TestOperatorDiagnose_RequiresFocus(t *testing.T) {
 	s := newProposalTestServer(t)
 	s.diagnoser = &fakeDiagnoser{}
 	rec := httptest.NewRecorder()
-	s.OperatorDiagnose(rec, operatorReq(http.MethodPost, "/api/v1/operator/diagnose", `{"focus":"  "}`))
+	s.OperatorDiagnose(rec, adminClassReq491(operatorReq(http.MethodPost, "/api/v1/operator/diagnose", `{"focus":"  "}`)))
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("empty focus must 400, got %d", rec.Code)
 	}
@@ -65,7 +65,7 @@ func TestOperatorDiagnose_RequiresFocus(t *testing.T) {
 func TestOperatorDiagnose_NotWired(t *testing.T) {
 	s := newProposalTestServer(t) // no diagnoser
 	rec := httptest.NewRecorder()
-	s.OperatorDiagnose(rec, operatorReq(http.MethodPost, "/api/v1/operator/diagnose", `{"focus":"family"}`))
+	s.OperatorDiagnose(rec, adminClassReq491(operatorReq(http.MethodPost, "/api/v1/operator/diagnose", `{"focus":"family"}`)))
 	if rec.Code != http.StatusServiceUnavailable {
 		t.Fatalf("unwired diagnoser must 503, got %d", rec.Code)
 	}
@@ -86,7 +86,7 @@ func TestOperatorDiagnose_ErrorMapping(t *testing.T) {
 			s := newProposalTestServer(t)
 			s.diagnoser = &fakeDiagnoser{err: c.err}
 			rec := httptest.NewRecorder()
-			s.OperatorDiagnose(rec, operatorReq(http.MethodPost, "/api/v1/operator/diagnose", `{"focus":"x"}`))
+			s.OperatorDiagnose(rec, adminClassReq491(operatorReq(http.MethodPost, "/api/v1/operator/diagnose", `{"focus":"x"}`)))
 			if rec.Code != c.want {
 				t.Fatalf("%s: want %d, got %d: %s", c.name, c.want, rec.Code, rec.Body.String())
 			}

@@ -193,18 +193,33 @@ func TestListOperators_CommunityEdition_AllAccessCaller(t *testing.T) {
 		OperatorID: "slack:U123",
 		Structured: []byte(`{"verbosity":"concise"}`),
 	}
+	// Community wiring: the operator's admin key is admin-class through
+	// WithAdminClassKeys, with no admin surface (WithAdminConfig) at all.
 	s := NewServer(
 		WithLogger(zerolog.Nop()),
 		WithOperatorProfileRepository(repo),
+		WithAdminClassKeys(config.AdminConfig{Enabled: true, AllowedKeys: []string{"sk-admin"}}),
 	)
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/operators", nil)
-	req = req.WithContext(context.WithValue(req.Context(), authEnabledKey, true))
+	ctx := context.WithValue(req.Context(), authEnabledKey, true)
+	req = req.WithContext(context.WithValue(ctx, apiKeyKey, "sk-admin"))
 	rec := httptest.NewRecorder()
 
 	s.ListOperators(rec, req)
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status=%d, want 200 in Community Edition; body=%s", rec.Code, rec.Body.String())
+	}
+
+	// GitHub #495: an all-access key that is not admin-class is refused;
+	// it was admitted before.
+	req = httptest.NewRequest(http.MethodGet, "/api/v1/operators", nil)
+	ctx = context.WithValue(req.Context(), authEnabledKey, true)
+	req = req.WithContext(context.WithValue(ctx, apiKeyKey, "sk-plain"))
+	rec = httptest.NewRecorder()
+	s.ListOperators(rec, req)
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("plain unscoped key: status=%d, want 403; body=%s", rec.Code, rec.Body.String())
 	}
 }
 

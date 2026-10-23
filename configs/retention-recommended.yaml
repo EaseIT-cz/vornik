@@ -75,6 +75,15 @@ retention:
   # needs a window rather than inheriting one.
   memory_chunks_days: 730
 
+  # Cached embeddings. Every memory search caches the vector of its QUERY under
+  # the hash of the query text, and a query often names a person. No erasure
+  # can find those rows (there is no chunk or link to erase them by), so this
+  # window is the only limit on how long they are kept. A cold row costs one
+  # local re-embed to rebuild. Inert on SQLite, which has no embedding cache,
+  # and while memory.embedding_cache_enabled is off.
+  # (https://docs.vornik.io §4.4a)
+  embedding_cache_days: 30
+
   # Memory ingest audit. Diagnostic; short.
   memory_ingest_audit_days: 90
 
@@ -82,3 +91,17 @@ retention:
   # decisions are evidence and are kept a year.
   memory_policy_eval_allow_days: 30
   memory_policy_eval_block_days: 365
+
+  # --- Copies of conversation text (GitHub #394) ---
+
+  # Assembled black-box traces: a cache of a task's messages and audit rows.
+  # A trace older than the cache's 24-hour TTL is never served, so one day.
+  blackbox_trace_cache_days: 1
+  # Project gists: a gist not refreshed, or a narrative not rewritten, for a
+  # week no longer describes a project the memory loop covers.
+  project_gists_days: 7
+  # Database dumps vornik-update.sh leaves in ~/vornik-upgrade-backup-*/. Each
+  # is a full copy of the database, so every erasure since is undone in it.
+  # Keep at most two; remove each two weeks after its upgrade succeeded.
+  upgrade_dump_keep: 2
+  upgrade_dump_grace_days: 14

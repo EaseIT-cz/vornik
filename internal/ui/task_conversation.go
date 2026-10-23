@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"vornik.io/vornik/internal/api"
+	"vornik.io/vornik/internal/auditredact"
 	"vornik.io/vornik/internal/auth"
 	"vornik.io/vornik/internal/budget"
 	"vornik.io/vornik/internal/executor"
@@ -50,10 +51,9 @@ type TaskConversationView struct {
 	ScratchpadOpenQuestions []string
 	// PhaseTracker shows the operator the lead's phase progress.
 	PhaseTracker []PhaseEntry
-	// Closeable / Pauseable / Resumeable drive the action buttons.
-	Closeable  bool
-	Pauseable  bool
-	Resumeable bool
+	// Closeable drives the Close button. Pause and Resume moved to
+	// TaskDetailData.Controls (taskStatusControls, GitHub #375).
+	Closeable bool
 }
 
 // CheckpointView mirrors the executor's CheckpointPayload but
@@ -134,8 +134,8 @@ func (s *Server) loadConversationView(ctx context.Context, task *persistence.Tas
 	view.Closeable = task.Status == persistence.TaskStatusCompleted ||
 		task.Status == persistence.TaskStatusAwaitingInput ||
 		task.Status == persistence.TaskStatusAwaitingExternal
-	view.Pauseable = scheduler.IsActiveTaskStatus(task.Status) || scheduler.IsAwaitingInput(task.Status)
-	view.Resumeable = task.Status == persistence.TaskStatusPaused
+	// Pause and Resume are no longer decided here: taskStatusControls decides
+	// them with Cancel, Requeue and Watch live for both layouts (GitHub #375).
 	return view
 }
 
@@ -288,6 +288,12 @@ func (s *Server) TaskConversationAction(w http.ResponseWriter, r *http.Request) 
 		http.Error(w, "task lifecycle not configured", http.StatusServiceUnavailable)
 		return
 	}
+	// Every action here writes as the operator; an agent's per-task key is
+	// never the operator (task-lifecycle design §17.6, GitHub #463).
+	if api.IsAgentKey(r.Context()) {
+		http.Error(w, "AGENT_KEY_NOT_OPERATOR: an agent's key cannot write as the operator", http.StatusForbidden)
+		return
+	}
 
 	// Path is /tasks/{id}/{action} after the /ui prefix is stripped
 	// upstream; tolerate both shapes so the handler works regardless
@@ -370,14 +376,17 @@ func (s *Server) uiPostMessage(ctx context.Context, task *persistence.Task, r *h
 	if content == "" {
 		return "empty-message"
 	}
-	if len(content) > uiInspectMaxBytes {
-		content = content[:uiInspectMaxBytes]
-	}
+	// A cut before the seam: rune-safe, and a straddling secret-alphabet run
+	// is dropped whole, so the seam is never handed a credential's head
+	// (chat-audit design §9.2.5 for the REST cap; GitHub #414 for this one).
+	content = auditredact.CutBeforeScan(content, uiInspectMaxBytes)
 	kind := defaultKind
 	if isDirective {
 		kind = persistence.TaskMessageKindDirective
 	}
-	authorID := strings.TrimSpace(r.FormValue("author"))
+	// The server names the author; the form's "author" is only a bounded
+	// label in metadata (task-lifecycle design §17, GitHub #432).
+	authorID, authorLabel := api.TaskMessageAuthor(r.Context(), r.FormValue("author"))
 	msg := &persistence.TaskMessage{
 		TaskID:      task.ID,
 		AuthorKind:  persistence.TaskMessageAuthorOperator,
@@ -387,6 +396,9 @@ func (s *Server) uiPostMessage(ctx context.Context, task *persistence.Task, r *h
 	}
 	if authorID != "" {
 		msg.AuthorID = &authorID
+	}
+	if authorLabel != "" {
+		msg.Metadata, _ = json.Marshal(map[string]any{api.ClientSuppliedAuthorKey: authorLabel})
 	}
 	if err := s.taskMessageRepo.Insert(ctx, msg); err != nil {
 		s.logger.Error().Err(err).Str("task_id", task.ID).Msg("uiPostMessage: insert failed")
@@ -470,7 +482,9 @@ func (s *Server) uiAnswerCheckpoint(ctx context.Context, task *persistence.Task,
 	checkpointID := strings.TrimSpace(r.FormValue("checkpoint_id"))
 	content := strings.TrimSpace(r.FormValue("content"))
 	choice := strings.TrimSpace(r.FormValue("choice"))
-	authorID := strings.TrimSpace(r.FormValue("author"))
+	// The server names the author; the form's "author" is only a bounded
+	// label in metadata (task-lifecycle design §17, GitHub #432).
+	authorID, authorLabel := api.TaskMessageAuthor(r.Context(), r.FormValue("author"))
 	if checkpointID == "" {
 		return "missing-checkpoint"
 	}
@@ -552,7 +566,11 @@ func (s *Server) uiAnswerCheckpoint(ctx context.Context, task *persistence.Task,
 			}
 		}
 	}
-	meta, _ := json.Marshal(map[string]any{"choice": choice})
+	answerMeta := map[string]any{"choice": choice}
+	if authorLabel != "" {
+		answerMeta[api.ClientSuppliedAuthorKey] = authorLabel
+	}
+	meta, _ := json.Marshal(answerMeta)
 	answer := &persistence.TaskMessage{
 		TaskID:      task.ID,
 		ParentID:    &checkpointID,
@@ -641,7 +659,9 @@ func (s *Server) uiAnswerCheckpoint(ctx context.Context, task *persistence.Task,
 func (s *Server) uiAmendBrief(ctx context.Context, task *persistence.Task, r *http.Request) string {
 	newBrief := strings.TrimSpace(r.FormValue("new_brief"))
 	reason := strings.TrimSpace(r.FormValue("reason"))
-	authorID := strings.TrimSpace(r.FormValue("author"))
+	// The server names the author; the form's "author" is only a bounded
+	// label in metadata (task-lifecycle design §17, GitHub #432).
+	authorID, authorLabel := api.TaskMessageAuthor(r.Context(), r.FormValue("author"))
 	if newBrief == "" {
 		return "empty-amend"
 	}
@@ -652,7 +672,11 @@ func (s *Server) uiAmendBrief(ctx context.Context, task *persistence.Task, r *ht
 	if reason != "" {
 		body = reason + "\n\n---\n\n" + body
 	}
-	meta, _ := json.Marshal(map[string]any{"kind": "brief_amendment", "reason": reason})
+	amendMeta := map[string]any{"kind": "brief_amendment", "reason": reason}
+	if authorLabel != "" {
+		amendMeta[api.ClientSuppliedAuthorKey] = authorLabel
+	}
+	meta, _ := json.Marshal(amendMeta)
 	msg := &persistence.TaskMessage{
 		TaskID:      task.ID,
 		AuthorKind:  persistence.TaskMessageAuthorOperator,
@@ -707,15 +731,9 @@ func (s *Server) uiAmendBrief(ctx context.Context, task *persistence.Task, r *ht
 // goroutine to cancel; the bare TransitionConditional path is
 // correct.
 func (s *Server) uiPauseTask(ctx context.Context, task *persistence.Task) string {
-	from := []persistence.TaskStatus{
-		persistence.TaskStatusPending,
-		persistence.TaskStatusQueued,
-		persistence.TaskStatusLeased,
-		persistence.TaskStatusRunning,
-		persistence.TaskStatusWaitingForChildren,
-		persistence.TaskStatusAwaitingInput,
-		persistence.TaskStatusAwaitingExternal,
-	}
+	// The same set the page offers Pause for (taskStatusControls, GitHub
+	// #375), so the button and the handler cannot drift.
+	from := uiPausableTaskStatuses()
 
 	// Ask the executor's live map FIRST, whatever the status snapshot says
 	// (05-scheduler.md §4.8). executor.Pause stops the container, flips
@@ -901,7 +919,9 @@ func (s *Server) uiSimpleFlip(ctx context.Context, task *persistence.Task,
 
 func (s *Server) uiCloseTask(ctx context.Context, task *persistence.Task, r *http.Request) string {
 	reason := strings.TrimSpace(r.FormValue("reason"))
-	authorID := strings.TrimSpace(r.FormValue("author"))
+	// The server names the author; the form's "author" is only a bounded
+	// label in metadata (task-lifecycle design §17, GitHub #432).
+	authorID, authorLabel := api.TaskMessageAuthor(r.Context(), r.FormValue("author"))
 	if err := scheduler.ValidateTransition(task.Status, persistence.TaskStatusClosed, scheduler.TriggerOperatorClose); err != nil {
 		return "close-not-eligible"
 	}
@@ -913,7 +933,11 @@ func (s *Server) uiCloseTask(ctx context.Context, task *persistence.Task, r *htt
 	if body == "" {
 		body = "closed by operator"
 	}
-	meta, _ := json.Marshal(map[string]any{"kind": "task_closed", "closedBy": closer, "reason": reason})
+	closeMeta := map[string]any{"kind": "task_closed", "closedBy": closer, "reason": reason}
+	if authorLabel != "" {
+		closeMeta[api.ClientSuppliedAuthorKey] = authorLabel
+	}
+	meta, _ := json.Marshal(closeMeta)
 	msg := &persistence.TaskMessage{
 		TaskID:      task.ID,
 		AuthorKind:  persistence.TaskMessageAuthorSystem,

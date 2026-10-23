@@ -9,6 +9,7 @@ import (
 	"regexp"
 	"time"
 
+	"vornik.io/vornik/internal/auditredact"
 	"vornik.io/vornik/internal/chat"
 	"vornik.io/vornik/internal/llmspend"
 	"vornik.io/vornik/internal/persistence"
@@ -584,7 +585,9 @@ func (s *Server) recordChatAPIUsage(ctx context.Context, r *http.Request, model 
 		effectiveModel = model
 	}
 	costUSD := s.computeChatCallCost(effectiveModel, resp)
-	sessionID := r.Header.Get("User-Agent")
+	// Bounded, not scanned: the caller's User-Agent (chat-audit design
+	// §10.2.3, GitHub #414).
+	sessionID := auditredact.BoundIdentity(r.Header.Get("User-Agent"))
 	if sessionID == "" {
 		sessionID = "unknown-client"
 	}

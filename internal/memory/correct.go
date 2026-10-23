@@ -30,6 +30,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"sort"
 	"time"
 
 	"vornik.io/vornik/internal/persistence"
@@ -164,6 +165,64 @@ func (c *Corrector) RefuteByClaim(ctx context.Context, projectID, wrongClaim str
 // claim search ignored it, so a claim made in repository A refuted
 // repository B's chunk.
 func (c *Corrector) RefuteByClaimInScope(ctx context.Context, projectID, wrongClaim, repoScope string, maxRefutes int) ([]RefutedChunk, error) {
+	res, err := c.RefuteClaim(ctx, projectID, wrongClaim, repoScope, maxRefutes, false)
+	if err != nil {
+		return nil, err
+	}
+	if len(res.Refuted) == 0 {
+		return nil, nil
+	}
+	return res.Refuted, nil
+}
+
+// claimRefuteOverFetch is how many hits beyond maxRefutes a claim refute
+// asks the search for, so protected operator corrections ranked above the
+// stale chunk cannot crowd it out of the pool (GitHub #436).
+const claimRefuteOverFetch = 10
+
+// Skip reasons a claim refute reports for a hit it did not refute.
+const (
+	SkipReasonOperatorCorrection = "protected_correction" // an operator or companion memory_correct correction: never refuted by claim
+	SkipReasonBelowFloor         = "below_floor"          // under the confidence floor; refute by chunk_ids if it is the target
+	SkipReasonOverCap            = "over_cap"             // cleared the floor, but max_refutes was reached
+	SkipReasonNotFlipped         = "not_flipped"          // chosen, but the UPDATE did not flip it (refuted, superseded or protected meanwhile)
+	// SkipReasonProvenanceVerified: the merged bytes of a design (GitHub
+	// #482, design 22 part 8f); correct the design itself, or forget the
+	// chunk by chunk_ids.
+	SkipReasonProvenanceVerified = "provenance_verified"
+)
+
+// SkippedChunk is a search hit a claim refute passed over, and why.
+type SkippedChunk struct {
+	ID               string
+	Score            float64
+	ValidationStatus string
+	Reason           string
+}
+
+// ClaimRefuteResult is what a claim refute did (or, with DryRun, would do).
+// Refuted is what the UPDATE flipped; under DryRun it is what would be
+// refuted, and nothing was written. Skipped holds every other hit the
+// search returned, in search order.
+type ClaimRefuteResult struct {
+	Refuted []RefutedChunk
+	Skipped []SkippedChunk
+	DryRun  bool
+}
+
+// RefuteClaim searches for wrongClaim (scoped as RefuteByClaimInScope) and
+// refutes the best non-protected matches (GitHub #436, design 22
+// "Amendment 2026-10-21 (#436)"):
+//
+//   - an operator correction (producer_role operator_correction) is never
+//     refuted by a claim, and the refute statement itself refuses one;
+//   - the search over-fetches by claimRefuteOverFetch, and the cap applies
+//     after the floor and the exclusion;
+//   - unverified and legacy hits are refuted before verified ones;
+//   - the result reports what was written and every hit passed over.
+//
+// dryRun plans and reports without writing.
+func (c *Corrector) RefuteClaim(ctx context.Context, projectID, wrongClaim, repoScope string, maxRefutes int, dryRun bool) (*ClaimRefuteResult, error) {
 	if c == nil || c.Repo == nil || c.Searcher == nil {
 		return nil, fmt.Errorf("memory corrector: not configured")
 	}
@@ -176,57 +235,156 @@ func (c *Corrector) RefuteByClaimInScope(ctx context.Context, projectID, wrongCl
 	if maxRefutes > 20 {
 		maxRefutes = 20
 	}
-
-	var hits []SearchResult
-	var err error
-	if repoScope == "" {
-		hits, err = c.Searcher.Search(ctx, projectID, wrongClaim, maxRefutes)
-	} else {
-		scoped, ok := c.Searcher.(scopedCorrectorSearcher)
-		if !ok {
-			return nil, ErrScopedRefuteUnsupported
-		}
-		hits, err = scoped.SearchWithOptions(ctx, projectID, wrongClaim, SearchOptions{Limit: maxRefutes, RepoScope: repoScope, StrictScope: false})
-	}
+	hits, err := c.searchClaim(ctx, projectID, wrongClaim, repoScope, maxRefutes+claimRefuteOverFetch)
 	if err != nil {
-		return nil, fmt.Errorf("memory corrector: search: %w", err)
+		return nil, err
 	}
+	res := &ClaimRefuteResult{DryRun: dryRun}
 	if len(hits) == 0 {
-		return nil, nil
+		return res, nil
 	}
-	// Confidence floor (incident 2026-07-31: memory_correct refuted an
-	// unrelated chunk on a 0.03 non-match). Only hits that clear the
-	// floor are eligible — a "wrong claim" that matches nothing well
-	// must down-weight NOTHING rather than the noise top hit. Refuting
-	// is the destructive side; when in doubt, refute less.
-	minScore := c.effectiveMinRefuteScore()
-	eligible := make([]RefutedChunk, 0, len(hits))
-	ids := make([]string, 0, len(hits))
-	for _, h := range hits {
-		if h.Score < minScore {
+	skipped := map[string]SkippedChunk{}
+	chosen, err := c.planClaim(ctx, projectID, hits, maxRefutes, skipped)
+	if err != nil {
+		return nil, err
+	}
+	written, err := c.writeClaim(ctx, projectID, chosen, dryRun)
+	if err != nil {
+		return nil, err
+	}
+	for _, h := range chosen {
+		if !written[h.ChunkID] {
+			skipped[h.ChunkID] = skippedFrom(h, SkipReasonNotFlipped)
 			continue
 		}
 		preview := h.Content
 		if len(preview) > 200 {
 			preview = preview[:200] + "…"
 		}
-		eligible = append(eligible, RefutedChunk{
+		res.Refuted = append(res.Refuted, RefutedChunk{
 			ID:         h.ChunkID,
 			SourceName: h.SourceName,
 			Preview:    preview,
 			Score:      h.Score,
 		})
-		ids = append(ids, h.ChunkID)
 	}
-	if len(ids) == 0 {
-		// Hits existed but none cleared the floor — the wrong claim
-		// matched nothing confidently. Refute nothing.
+	for _, h := range hits {
+		if s, ok := skipped[h.ChunkID]; ok {
+			res.Skipped = append(res.Skipped, s)
+		}
+	}
+	return res, nil
+}
+
+func skippedFrom(h SearchResult, reason string) SkippedChunk {
+	return SkippedChunk{ID: h.ChunkID, Score: h.Score, ValidationStatus: h.ValidationStatus, Reason: reason}
+}
+
+// searchClaim runs the claim search, scoped (lenient) when repoScope is set.
+// A searcher that cannot scope refuses rather than search project-wide
+// (GitHub #368).
+func (c *Corrector) searchClaim(ctx context.Context, projectID, wrongClaim, repoScope string, limit int) ([]SearchResult, error) {
+	var hits []SearchResult
+	var err error
+	if repoScope == "" {
+		hits, err = c.Searcher.Search(ctx, projectID, wrongClaim, limit)
+	} else {
+		scoped, ok := c.Searcher.(scopedCorrectorSearcher)
+		if !ok {
+			return nil, ErrScopedRefuteUnsupported
+		}
+		hits, err = scoped.SearchWithOptions(ctx, projectID, wrongClaim, SearchOptions{Limit: limit, RepoScope: repoScope, StrictScope: false})
+	}
+	if err != nil {
+		return nil, fmt.Errorf("memory corrector: search: %w", err)
+	}
+	return hits, nil
+}
+
+// planClaim chooses what a claim refutes: the floor, then the exclusion of
+// operator corrections, then unverified before verified, then the cap
+// (GitHub #436). Every hit it passes over lands in skipped with its reason.
+func (c *Corrector) planClaim(ctx context.Context, projectID string, hits []SearchResult, maxRefutes int, skipped map[string]SkippedChunk) ([]SearchResult, error) {
+	// Confidence floor (incident 2026-07-31: memory_correct refuted an
+	// unrelated chunk on a 0.03 non-match). Only hits that clear the
+	// floor are eligible — a "wrong claim" that matches nothing well
+	// must down-weight NOTHING rather than the noise top hit. Refuting
+	// is the destructive side; when in doubt, refute less.
+	minScore := c.effectiveMinRefuteScore()
+	var above []SearchResult
+	for _, h := range hits {
+		if h.Score < minScore {
+			skipped[h.ChunkID] = skippedFrom(h, SkipReasonBelowFloor)
+			continue
+		}
+		above = append(above, h)
+	}
+	if len(above) == 0 {
 		return nil, nil
 	}
-	if _, err := c.Repo.MarkRefutedByIDs(ctx, projectID, ids, RefuteRouteMemoryCorrect); err != nil {
+	ids := make([]string, len(above))
+	for i, h := range above {
+		ids[i] = h.ChunkID
+	}
+	facts, err := c.Repo.claimRefuteFacts(ctx, projectID, ids)
+	if err != nil {
+		return nil, fmt.Errorf("memory corrector: %w", err)
+	}
+	var candidates []SearchResult
+	for _, h := range above {
+		f, ok := facts[h.ChunkID]
+		if ok {
+			h.ValidationStatus = f.ValidationStatus
+		}
+		if ok && isProtectedCorrection(f) {
+			skipped[h.ChunkID] = skippedFrom(h, SkipReasonOperatorCorrection)
+			continue
+		}
+		if ok && isProvenanceVerified(f) {
+			skipped[h.ChunkID] = skippedFrom(h, SkipReasonProvenanceVerified)
+			continue
+		}
+		candidates = append(candidates, h)
+	}
+	// Unverified and legacy before verified, search order within each.
+	sort.SliceStable(candidates, func(i, j int) bool {
+		return candidates[i].ValidationStatus != "verified" && candidates[j].ValidationStatus == "verified"
+	})
+	if len(candidates) <= maxRefutes {
+		return candidates, nil
+	}
+	for _, h := range candidates[maxRefutes:] {
+		skipped[h.ChunkID] = skippedFrom(h, SkipReasonOverCap)
+	}
+	return candidates[:maxRefutes], nil
+}
+
+// writeClaim refutes the chosen hits through the guarded claim statement
+// and returns the ids it flipped; a dry run writes nothing and returns the
+// chosen ids as what would be flipped.
+func (c *Corrector) writeClaim(ctx context.Context, projectID string, chosen []SearchResult, dryRun bool) (map[string]bool, error) {
+	written := make(map[string]bool, len(chosen))
+	if len(chosen) == 0 {
+		return written, nil
+	}
+	ids := make([]string, len(chosen))
+	for i, h := range chosen {
+		ids[i] = h.ChunkID
+	}
+	if dryRun {
+		for _, id := range ids {
+			written[id] = true
+		}
+		return written, nil
+	}
+	flipped, err := c.Repo.markRefutedByClaim(ctx, projectID, ids, RefuteRouteMemoryCorrect)
+	if err != nil {
 		return nil, fmt.Errorf("memory corrector: mark refuted: %w", err)
 	}
-	return eligible, nil
+	for _, id := range flipped {
+		written[id] = true
+	}
+	return written, nil
 }
 
 // RefuteByIDs soft-refutes specific chunks by ID — the surgical

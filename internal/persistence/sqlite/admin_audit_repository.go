@@ -137,7 +137,4 @@ func nullableString(s string) any {
 // literal hex-escape form. Backslash also gets doubled so the
 // resulting pattern stays consistent if the prefix already
 // contained one.
-func escapeLikePrefix(in string) string {
-	r := strings.NewReplacer("\\", "\\\\", "%", "\\%", "_", "\\_")
-	return r.Replace(in)
-}
+func escapeLikePrefix(in string) string { return persistence.EscapeLike(in) }

@@ -50,7 +50,7 @@ gh auth status >/dev/null 2>&1 || { echo "SKIP: release-audit_test: gh is not au
 
 # The happy path must exit 0. Guard against the exact inversion above.
 out="$("$AUDIT" 1 2>&1)"; rc=$?
-if printf '%s' "$out" | grep -q 'produced what they promised'; then
+if grep -q 'produced what they promised' <<<"$out"; then
 	if [ "$rc" -eq 0 ]; then
 		pass "a clean audit reports success AND exits 0"
 	else
@@ -76,7 +76,7 @@ fi
 # (2026-09-23, during the 2026.9.6 release itself). Two releases means at least
 # one has a settled build whatever day this runs.
 out="$(RELEASE_AUDIT_IMAGE=ghcr.io/easeit-cz/definitely-not-an-image "$AUDIT" 2 2>&1)"; rc=$?
-if [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -q 'NO agent image'; then
+if [ "$rc" -ne 0 ] && grep -q 'NO agent image' <<<"$out"; then
 	pass "a missing agent image is reported and fatal"
 else
 	fail "missing agent image should report and exit non-zero (rc=$rc); got: $out"
@@ -85,8 +85,8 @@ fi
 # ...and PENDING is reported WITHOUT counting as a problem. Only assertable
 # while a build is actually in flight, so it self-skips rather than pretending.
 out="$("$AUDIT" 2 2>&1)"
-if printf '%s' "$out" | grep -q 'PENDING — publish-agent-image is still running'; then
-	if printf '%s' "$out" | grep -q '\*\*.*PENDING'; then
+if grep -q 'PENDING — publish-agent-image is still running' <<<"$out"; then
+	if grep -q '\*\*.*PENDING' <<<"$out"; then
 		fail "a pending image was counted as a problem; it is nothing for an operator to do yet"
 	else
 		pass "an in-flight image build is reported as PENDING and is not a problem"

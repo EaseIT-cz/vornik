@@ -7,11 +7,11 @@ import (
 	"os"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/rs/zerolog"
 
 	"vornik.io/vornik/internal/registry"
+	"vornik.io/vornik/internal/testutil/testwait"
 )
 
 // Delta audit 2026-10-14 (lane W8-W, archival design section H). Found at:
@@ -50,7 +50,7 @@ func TestDeleteNowAndWait_ArtifactWipeFailureIsDeletedWithErrors(t *testing.T) {
 	t.Cleanup(stop)
 	svc.Reload = func(context.Context) error { go sw.Run(runCtx); return nil }
 
-	res, err := svc.DeleteNowAndWait(ctx, "doomed", true, 10*time.Second)
+	res, err := svc.DeleteNowAndWait(ctx, "doomed", true, testwait.ForOutcome(t))
 	if err != nil {
 		t.Fatal(err)
 	}

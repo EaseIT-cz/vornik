@@ -8,6 +8,7 @@ import (
 
 	"gopkg.in/yaml.v3"
 
+	"vornik.io/vornik/internal/mcp"
 	"vornik.io/vornik/internal/registry"
 )
 
@@ -24,6 +25,11 @@ type tree struct {
 	ceiling   float64
 	homes     map[string]bool
 	advert    map[string][]string
+	// reads is the classifier's read-only subset of advert per URL (design
+	// §6.4). Nil: every advertised tool is a read (the fixtures predate the
+	// classifier and name tools freely); a #405 test sets it, and a test of
+	// the fail-closed default sets it to an empty map.
+	reads map[string][]string
 	// listFailed is the class of each failed pre-approval listing (§6.1).
 	listFailed map[string]string
 	writesOff  bool
@@ -50,12 +56,35 @@ func newTree(t *testing.T, ns string) *tree {
 		ceiling: 10, homes: map[string]bool{}, advert: map[string][]string{}}
 }
 
+// advertisedReads is State.AdvertisedReads as the service fills it.
+func (tr *tree) advertisedReads() map[string][]string {
+	if tr.reads != nil {
+		return tr.reads
+	}
+	out := map[string][]string{}
+	for url, tools := range tr.advert {
+		out[url] = tools
+	}
+	return out
+}
+
+// readsByNameForTest is the service's name-only verdict.
+func readsByNameForTest(tools []string) []string {
+	var reads []string
+	for _, n := range tools {
+		if !(mcp.Tool{Name: n}).IsMutating() {
+			reads = append(reads, n)
+		}
+	}
+	return reads
+}
+
 func (tr *tree) state() *State {
 	tr.t.Helper()
 	st := &State{
 		Namespace: tr.ns, DefaultBudgetUSD: 2, CeilingUSD: tr.ceiling, AgentImage: "ghcr.io/easeit-cz/vornik-agent:latest",
 		Projects: map[string]*ProjectState{}, Workflows: map[string]*WorkflowState{},
-		FileHashes: map[string]string{}, Locked: map[string]bool{}, Approvals: tr.approvals, Advertised: tr.advert, ListFailed: tr.listFailed,
+		FileHashes: map[string]string{}, Locked: map[string]bool{}, Approvals: tr.approvals, Advertised: tr.advert, AdvertisedReads: tr.advertisedReads(), ListFailed: tr.listFailed,
 		WritesOn: !tr.writesOff, models: tr.models, ApprovedDestinations: tr.destinations, CredentialSet: tr.credentialSet,
 	}
 	for _, c := range tr.pending {
@@ -110,6 +139,12 @@ func (tr *tree) state() *State {
 
 func (tr *tree) render(verb string, in any) Change {
 	tr.t.Helper()
+	if a, ok := in.(ApproveServerToolsInput); ok && a.Reads == nil {
+		// The fixtures' listings classify every tool read, as reads does
+		// for advert; a #405 test passes its own Reads.
+		a.Reads = a.Tools
+		in = a
+	}
 	raw, err := json.Marshal(in)
 	if err != nil {
 		tr.t.Fatal(err)

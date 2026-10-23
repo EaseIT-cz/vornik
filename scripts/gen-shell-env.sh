@@ -40,7 +40,7 @@ unit_env() {
   out="$(systemctl --user show vornik.service --property=Environment --value 2>/dev/null || true)"
   [ -n "$out" ] || return 1
   # Environment= is a space-separated K=V list. Emit the first match's value.
-  tr ' ' '\n' <<<"$out" | sed -n "s/^${key}=//p" | head -n1
+  tr ' ' '\n' <<<"$out" | sed -n "s/^${key}=//p" | sed -n 1p
 }
 
 resolved_config="$(unit_env VORNIK_CONFIG || true)"

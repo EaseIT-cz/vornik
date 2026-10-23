@@ -18,6 +18,9 @@ type Metrics struct {
 	logger zerolog.Logger
 	regs   *prometheus.Registry
 	server *http.Server
+	// wrap, when set, wraps the listener's mux (GitHub #494: the daemon's
+	// Host allowlist, because this listener never authenticates).
+	wrap func(http.Handler) http.Handler
 }
 
 // NewMetrics creates a new Metrics instance with a Prometheus registry.
@@ -48,17 +51,32 @@ func (m *Metrics) Registry() *prometheus.Registry {
 	return m.regs
 }
 
-// StartServer starts the Prometheus metrics HTTP server.
-// This should be run in a goroutine as it blocks until the context is cancelled.
-func (m *Metrics) StartServer(ctx context.Context) error {
+// SetHandlerWrapper sets a middleware applied to the dedicated listener's
+// handler (GitHub #494, cloudflare-real-ip-design "Amendment 2026-10-21 (#494,
+// #448)"). Call it before StartServer.
+func (m *Metrics) SetHandlerWrapper(wrap func(http.Handler) http.Handler) {
+	m.wrap = wrap
+}
+
+// Handler is what the dedicated listener serves: /metrics from the registry,
+// wrapped by the handler wrapper when one is set.
+func (m *Metrics) Handler() http.Handler {
 	mux := http.NewServeMux()
 
 	// Expose the Prometheus metrics endpoint
 	mux.Handle("/metrics", promhttp.HandlerFor(m.regs, promhttp.HandlerOpts{}))
+	if m.wrap != nil {
+		return m.wrap(mux)
+	}
+	return mux
+}
 
+// StartServer starts the Prometheus metrics HTTP server.
+// This should be run in a goroutine as it blocks until the context is cancelled.
+func (m *Metrics) StartServer(_ context.Context) error {
 	m.server = &http.Server{
 		Addr:              m.cfg.MetricsAddr,
-		Handler:           mux,
+		Handler:           m.Handler(),
 		ReadHeaderTimeout: 10 * time.Second,
 		ReadTimeout:       15 * time.Second,
 		WriteTimeout:      15 * time.Second,

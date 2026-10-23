@@ -89,3 +89,34 @@ func Ptr(scope string) *string {
 	s := scope
 	return &s
 }
+
+// NormalizeRemote turns a git remote URL into the host/path scope token, with
+// the same rules as the companion plugin's normalize_remote: strip ".git",
+// the scheme, and a leading "user@", then "host:path" becomes "host/path".
+//
+// It lives here, beside the rest of the scope rules, because two callers need
+// the plugin's exact rule: the legacy-document verb (internal/cli), which
+// derives a checkout's scope, and the provenance verifier (design 22,
+// amendment #482), which requires a project clone's origin to BE the chunk's
+// repo_scope. Two copies would be two answers to "which repository is this".
+func NormalizeRemote(url string) string {
+	url = strings.TrimSuffix(url, ".git")
+	for _, pre := range []string{"https://", "http://", "ssh://"} {
+		url = strings.TrimPrefix(url, pre)
+	}
+	if at := strings.Index(url, "@"); at > 0 {
+		sep := -1
+		for _, i := range []int{strings.Index(url, ":"), strings.Index(url, "/")} {
+			if i != -1 && (sep == -1 || i < sep) {
+				sep = i
+			}
+		}
+		if sep == -1 || at < sep {
+			url = url[at+1:]
+		}
+	}
+	if i := strings.Index(url, ":"); i != -1 && !strings.Contains(url[:i], "/") {
+		url = url[:i] + "/" + url[i+1:]
+	}
+	return url
+}

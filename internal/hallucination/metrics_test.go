@@ -26,6 +26,9 @@ func TestNewMetrics_RegistersOnRegistry(t *testing.T) {
 	m.JudgeEvaluationsTotal.WithLabelValues("p", "ok").Inc()
 	m.SignalsTotal.WithLabelValues("p", string(SeverityHigh), "d").Inc()
 	m.JudgeConfidence.WithLabelValues("p", "r", "pass").Observe(0.5)
+	// GitHub #369, outcome-quality LLD S8.11 row 16b.
+	m.ObserveScanSkipped("p", ScanSkippedNoProse)
+	(*Metrics)(nil).ObserveScanSkipped("p", ScanSkippedNoProse) // nil-safe
 
 	mfs, err := reg.Gather()
 	if err != nil {
@@ -37,6 +40,7 @@ func TestNewMetrics_RegistersOnRegistry(t *testing.T) {
 		"vornik_judge_cost_usd_total",
 		"vornik_judge_evaluations_total",
 		"vornik_hallucination_signals_total",
+		"vornik_hallucination_scans_skipped_total",
 	}
 	got := map[string]bool{}
 	for _, mf := range mfs {

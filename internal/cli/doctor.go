@@ -81,13 +81,19 @@ Runtime:
 Security:
   api_security_posture  Flag API auth disabled with non-loopback listen address
   api_key_strength      Detect weak / placeholder API keys
+  db_credential_strength Database password that is a known default, the test lane's pair, or the role/database name; states how many it examined
+  db_listen_exposure    Postgres listening on a non-loopback address of this host (the firewall is not examined); states how many sockets it examined
+  credential_reuse      One secret serving two purposes (database, operator API, LLM provider, ...); states how many it examined, never prints a value
   secrets_permissions   Secrets files/dirs with world-readable permissions
   config_secret_hygiene Config.yaml plaintext secrets or loose permissions (recommends ${ENV_VAR})
+  redaction_seams       Secret scanning of chat_audit_log, chat_system_prompts, step_prompts, task_messages and execution_step_outcomes signals before persist; warns when off, with rows written and unscanned since boot
   secret_store_key      Agent credential store: a missing or wrong key while credentials exist is an error
   approver_devices      Agent approvals: a warning when an agent namespace exists with no paired device or no push
   agent_namespace_budget Agent namespaces whose project budgets sum above the approved ceiling, naming the waiting cover request
   agent_model_catalogue Agent role models: agent_admin.models entries not offered to agent roles (no route, a command-line provider, or remote without an exact price)
+  memory_provenance_clone Daemon-only provenance clones (memory.provenance_clone): usable or refused, and the sweep's last fetch of the trusted branch
   agent_refusal_burst   Agent namespaces with 20 or more refused agent-admin calls in the last hour (a loop or a probe); states how many it examined
+  agent_change_stays_applied Agent-admin changes refused to the agent whose rollback failed and that are still applied (last 30 days); states how many it examined
 
 Models:
   model_health          Role-pinned models with high recent failure rate or

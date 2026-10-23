@@ -32,6 +32,14 @@ type Paginator struct {
 	HasNext bool
 	PrevURL string
 	NextURL string
+	// Unknown is set when the total could not be counted: the summary says
+	// so and names no total, and Next is offered while pages come back full
+	// (a failed count is never a total; web-ui-design.md, #411 item 4).
+	Unknown bool
+	// Label names the controls' <nav> landmark ("Pagination" when empty);
+	// Noun follows the total in the summary ("of 130 tasks"). Both optional.
+	Label string
+	Noun  string
 }
 
 // NewPaginator clamps page into [1, Pages], computes the visible
@@ -66,6 +74,34 @@ func NewPaginator(total, page, perPage int, basePath string, query url.Values) P
 	p.HasPrev = page > 1
 	p.HasNext = page < pages
 
+	p.setURLs(basePath, query)
+	return p
+}
+
+// NewUnknownTotalPaginator is NewPaginator for a list whose total could not
+// be counted: the caller listed page `page` and got `shown` rows. Next is
+// offered when the page came back full; no total or page count is claimed.
+func NewUnknownTotalPaginator(page, perPage, shown int, basePath string, query url.Values) Paginator {
+	if perPage <= 0 {
+		perPage = defaultPerPage
+	}
+	if page < 1 {
+		page = 1
+	}
+	p := Paginator{Page: page, PerPage: perPage, Unknown: true}
+	if shown > 0 {
+		p.Start = (page-1)*perPage + 1
+		p.End = p.Start + shown - 1
+	}
+	p.HasPrev = page > 1
+	p.HasNext = shown >= perPage
+	p.setURLs(basePath, query)
+	return p
+}
+
+// setURLs builds PrevURL/NextURL from basePath and query, overwriting only
+// "page" so every other filter survives navigation.
+func (p *Paginator) setURLs(basePath string, query url.Values) {
 	mk := func(n int) string {
 		q := url.Values{}
 		for k, v := range query {
@@ -78,12 +114,11 @@ func NewPaginator(total, page, perPage int, basePath string, query url.Values) P
 		return basePath + "?" + q.Encode()
 	}
 	if p.HasPrev {
-		p.PrevURL = mk(page - 1)
+		p.PrevURL = mk(p.Page - 1)
 	}
 	if p.HasNext {
-		p.NextURL = mk(page + 1)
+		p.NextURL = mk(p.Page + 1)
 	}
-	return p
 }
 
 // pageWindow slices items to the 1-based page. An out-of-range page

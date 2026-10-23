@@ -134,6 +134,7 @@ func (m *Manager) Repository() *Repository {
 // ordering, which is what "did this change anything" is measured from.
 func (m *Manager) SetMetrics(metrics *Metrics) {
 	m.Indexer.setMetrics(metrics)
+	m.Embedder.setMetrics(metrics)
 	m.worker.setMetrics(metrics)
 	m.Searcher.setMetrics(metrics)
 	m.repo.SetMetrics(metrics)

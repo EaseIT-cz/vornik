@@ -79,7 +79,7 @@ func TestKnowledgeEntityRepositoryCorePaths(t *testing.T) {
 
 	projectID := "proj-a"
 	mock.ExpectQuery(regexp.QuoteMeta("SELECT id, project_id, type, canonical_name")).
-		WithArgs(projectID, sqlmock.AnyArg(), sqlmock.AnyArg(), "%Ac%", 10, 3).
+		WithArgs(projectID, sqlmock.AnyArg(), sqlmock.AnyArg(), "%ac%", 10, 3).
 		WillReturnRows(knowledgeEntityRows().AddRow(
 			"kent-2", projectID, "person", "Ada",
 			nil, "", nil, nil,
@@ -204,7 +204,7 @@ func TestKnowledgeEdgeRepositoryCorePaths(t *testing.T) {
 	if err := repo.UpdateLifecycle(context.Background(), "kedge-1", "archived"); err != nil {
 		t.Fatalf("UpdateLifecycle() error = %v", err)
 	}
-	mock.ExpectExec(regexp.QuoteMeta("WITH updated AS")).
+	mock.ExpectExec(regexp.QuoteMeta("SET source_chunks = array_remove(source_chunks, $1)")).
 		WithArgs("chunk-1").
 		WillReturnResult(sqlmock.NewResult(0, 2))
 	n, err := repo.DropChunkFromSources(context.Background(), "chunk-1")

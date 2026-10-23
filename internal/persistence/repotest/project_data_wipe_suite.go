@@ -527,6 +527,8 @@ var wipeValueOverrides = map[string]any{
 	"broker_actions.status":            "pending",
 	"control_plane_proposals.kind":     "config",
 	"groups.role":                      "user",
+	"memory_verification_events.kind":  "sweep",
+	"memory_chunk_provenance.state":    "unverified",
 }
 
 type wipeFK struct {

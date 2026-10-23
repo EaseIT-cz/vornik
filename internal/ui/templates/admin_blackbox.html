@@ -69,7 +69,7 @@
                 </div>
                 {{if .Triggers}}
                 <form method="post" action="/ui/admin/blackbox/triggers/bulk-dismiss"
-                      onsubmit="return confirm('Dismiss the selected triggers? The detector will re-open new rows if the regressions persist.');">
+                      data-confirm="Dismiss the selected triggers? The detector will re-open new rows if the regressions persist.">
                 <div class="overflow-x-auto">
                     <table class="min-w-full">
                         <thead><tr class="border-b border-dark-700/60">

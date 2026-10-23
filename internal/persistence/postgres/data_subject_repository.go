@@ -30,6 +30,9 @@ func SubjectStoreDialect() subjectstore.Dialect {
 		MapErr:          mapDBError,
 		EmbedCacheKey:   memory.EmbedInputHash,
 		ChannelSessions: true,
+		// blackbox_trace_cache (migration 68): an erasure evicts it
+		// (Art 17 design §15.12, GitHub #415 item 3).
+		TraceCache: true,
 	}
 }
 

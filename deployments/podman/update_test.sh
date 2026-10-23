@@ -421,4 +421,95 @@ grep -q "^$WORK/cfg rev=bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb" "$WORK/deploy.
   fail "config deploy must run between stop and start, got: $(tr '\n' ' ' < "$WORK/order.log")"
 echo 'update: the cutover deploys new config subtrees — OK'
 
+# ---------------------------------------------------------------------------
+# 10. GitHub #394 (2026-10-16): every run wrote a full pg_dump into
+#     $HOME/vornik-upgrade-backup-<UTC>/ and nothing ever pruned one, so every
+#     Art 17 erasure since a dump was undone in it. Found at: review (the Art 17
+#     copies inventory). A successful run now stamps upgrade_completed_at into
+#     STATE.txt and runs the INSTALLED vornikctl's pruner on the root it wrote
+#     to; a run whose readiness fails does neither; a failing pruner is a
+#     warning, never a failed upgrade (retention design §8.2.3, image-freshness
+#     design §20). The pruning rules themselves are tested once, in Go
+#     (internal/retention/upgrade_dumps_test.go).
+# ---------------------------------------------------------------------------
+cat > "$REPO/.bin/vornikctl" <<CTL
+#!/usr/bin/env bash
+printf '%s\n' "\$*" >> "$WORK/vornikctl.log"
+case "\$*" in
+  "retention upgrade-dumps"*) echo "upgrade dumps in \$HOME: 1 examined, 0 pruned"; exit "\${PRUNE_EXIT:-0}" ;;
+  doctor) echo "doctor-stub: 30 checks run"; exit "\${DOCTOR_EXIT:-0}" ;;
+esac
+exit 0
+CTL
+chmod +x "$REPO/.bin/vornikctl"
+
+rm -f "$WORK/vornikctl.log"
+run_updater --yes --no-build
+state=$(cat "$WORK/home"/vornik-upgrade-backup-*/STATE.txt 2>/dev/null || true)
+grep -Eq '^upgrade_completed_at=[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$' <<<"$state" || \
+  fail "a successful upgrade must stamp upgrade_completed_at=<RFC 3339 UTC> into STATE.txt, got:
+$state"
+grep -qx "retention upgrade-dumps --dir $WORK/home --apply" "$WORK/vornikctl.log" 2>/dev/null || \
+  fail "a successful upgrade must run the installed vornikctl's dump pruner on \$HOME, got:
+$(cat "$WORK/vornikctl.log" 2>/dev/null)"
+grep -q 'upgrade dumps in' "$WORK/out" || fail "the pruner's summary is not printed"
+# The pruner runs after readiness, i.e. after "Upgrade complete." is decided.
+awk '/Upgrade complete/{c=NR} /upgrade dumps in/{p=NR} END{exit !(c && p && c < p)}' "$WORK/out" || \
+  fail "the pruner must run after the upgrade is complete"
+echo 'update: a successful upgrade stamps STATE.txt and prunes old dumps — OK'
+
+# A pruner that fails must not fail the upgrade.
+rm -f "$WORK/vornikctl.log"
+PRUNE_EXIT=3 run_updater --yes --no-build
+grep -q 'Upgrade complete' "$WORK/out" || fail "a failing dump pruner turned a successful upgrade into a failure"
+grep -q 'vornikctl retention upgrade-dumps' "$WORK/out" || fail "a failing pruner must be named with the command to re-run"
+echo 'update: a failing dump pruner is a warning, not a failed upgrade — OK'
+
+# Readiness fails: no stamp, no prune. curl always fails; sleep is a no-op so
+# the 60-second wait loop does not slow the suite.
+NOREADY="$WORK/bin-noready"; mkdir -p "$NOREADY"
+printf '#!/usr/bin/env bash\nexit 7\n' > "$NOREADY/curl"
+printf '#!/usr/bin/env bash\nexit 0\n' > "$NOREADY/sleep"
+chmod +x "$NOREADY/curl" "$NOREADY/sleep"
+rm -f "$WORK/vornikctl.log"
+TEST_PATH="$NOREADY:$WORK/bin:$PATH" run_updater --yes --no-build
+grep -q 'readiness check failed' "$WORK/out" || fail "the readiness-failure fixture did not fail readiness"
+state=$(cat "$WORK/home"/vornik-upgrade-backup-*/STATE.txt 2>/dev/null || true)
+grep -q '^upgrade_completed_at=' <<<"$state" && fail "a run whose readiness failed must not stamp upgrade_completed_at:
+$state"
+grep -q 'retention upgrade-dumps' "$WORK/vornikctl.log" 2>/dev/null && \
+  fail "a run whose readiness failed must not prune dumps: its own dump is the rollback point"
+echo 'update: a failed upgrade neither stamps nor prunes — OK'
+
+# ---------------------------------------------------------------------------
+# 11. GitHub #415 item 1 (found 2026-10-16 while fixing #394): the header and
+#     UPDATING.md said step 6 "runs doctor", and the script never did — a
+#     documented behaviour nothing implemented. A successful run now runs the
+#     INSTALLED vornikctl's doctor after readiness; a failing doctor is a
+#     warning naming the command, never a failed upgrade; a run whose
+#     readiness fails never reaches it (image-freshness design §21).
+# ---------------------------------------------------------------------------
+rm -f "$WORK/vornikctl.log"
+run_updater --yes --no-build
+grep -qx 'doctor' "$WORK/vornikctl.log" 2>/dev/null || \
+  fail "a successful upgrade must run the installed vornikctl doctor (step 6), got:
+$(cat "$WORK/vornikctl.log" 2>/dev/null)"
+grep -q 'doctor-stub: 30 checks run' "$WORK/out" || fail "the doctor's output is not printed"
+awk '/Waiting for readiness/{r=NR} /doctor-stub/{d=NR} END{exit !(r && d && r < d)}' "$WORK/out" || \
+  fail "doctor must run after readiness"
+echo 'update: a successful upgrade runs doctor after readiness — OK'
+
+rm -f "$WORK/vornikctl.log"
+DOCTOR_EXIT=1 run_updater --yes --no-build
+grep -q 'Upgrade complete' "$WORK/out" || fail "a failing doctor turned a successful upgrade into a failure"
+grep -q 'upgrade dumps in' "$WORK/out" || fail "a failing doctor must not stop the dump pruner (step 7)"
+grep -q "re-run: .*vornikctl doctor" "$WORK/out" || fail "a failing doctor must be named with the command to re-run"
+echo 'update: a failing doctor is a warning, not a failed upgrade — OK'
+
+rm -f "$WORK/vornikctl.log"
+TEST_PATH="$NOREADY:$WORK/bin:$PATH" run_updater --yes --no-build
+grep -qx 'doctor' "$WORK/vornikctl.log" 2>/dev/null && \
+  fail "a run whose readiness failed must not run the post-cutover doctor"
+echo 'update: a failed upgrade does not run the post-cutover doctor — OK'
+
 echo 'update_test.sh: PASS'

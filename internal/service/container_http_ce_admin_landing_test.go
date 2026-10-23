@@ -35,6 +35,7 @@ func TestNewContainer_CommunityAdminLandingHidesEESurfaces(t *testing.T) {
 
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/ui/admin/", nil)
+	req.Host = "127.0.0.1" // GitHub #465: with auth off the TCP root answers only the daemon's own names
 	c.HTTPServer.Handler.ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusOK {

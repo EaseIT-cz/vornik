@@ -206,9 +206,20 @@ func (c *Container) buildPostMortemExplainer() ui.PostMortemExplainer {
 		return nil
 	}
 	// The daemon-held task log, never the executor's container logs (GitHub
-	// #294: the post-mortem button ran podman logs on the request).
-	logSrc := c.heldTaskLog()
+	// #294: the post-mortem button ran podman logs on the request), in its
+	// SCRUBBED view: the evidence goes to the model provider (GitHub #439).
+	// No scrubber, no explainer: the button then says it is not configured.
+	scrub, err := c.logScrubber()
+	if err != nil {
+		c.Logger.Warn().Err(err).Msg("postmortem: the evidence scrubber could not be built; the post-mortem explainer is off")
+		return nil
+	}
+	logSrc, err := c.heldTaskLog().ScrubbedView(scrub)
+	if err != nil {
+		return nil
+	}
 	exp := &postmortem.Explainer{
+		Scrub:       scrub,
 		Tasks:       c.repos.Tasks,
 		Executions:  c.repos.Executions,
 		Outcomes:    c.repos.StepOutcomes,

@@ -179,7 +179,7 @@
             {{else if .CanApply}}
             <form method="post" action="/ui/admin/workflow-proposals/{{.Proposal.ID}}/apply"
                   class="glass rounded-xl border border-dark-700 px-5 py-4 space-y-3"
-                  onsubmit="return confirm('Apply this proposal? This writes the new WORKFLOW.md to disk and git-commits the change.');">
+                  data-confirm="Apply this proposal? This writes the new WORKFLOW.md to disk and git-commits the change.">
                 <h2 class="text-sm font-semibold text-gray-300 uppercase tracking-wider">Apply</h2>
                 <p class="text-xs text-gray-500">
                     Writes the proposed WORKFLOW.md to the source + deployed config trees, git-commits the change, and broadcasts a config-reload to all replicas. Reversible via the Rollback button once applied.
@@ -192,7 +192,7 @@
             {{else if .CanRollback}}
             <form method="post" action="/ui/admin/workflow-proposals/{{.Proposal.ID}}/rollback"
                   class="glass rounded-xl border border-dark-700 px-5 py-4 space-y-3"
-                  onsubmit="return confirm('Roll back this applied proposal? Runs git revert and broadcasts config-reload.');">
+                  data-confirm="Roll back this applied proposal? Runs git revert and broadcasts config-reload.">
                 <h2 class="text-sm font-semibold text-gray-300 uppercase tracking-wider">Rollback</h2>
                 <p class="text-xs text-gray-500">
                     Runs git revert against commit <code class="font-mono text-gray-400">{{.Proposal.AppliedCommit}}</code> in the source tree and reverts the WORKFLOW.md change.

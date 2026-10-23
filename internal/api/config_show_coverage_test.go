@@ -31,6 +31,10 @@ var reviewedNonSecretLeaves = map[string]string{
 	// File paths, not key material: tls.LoadX509KeyPair reads them.
 	"node.relay.client_key":         "PEM file path",
 	"node.relay_ingress.server_key": "PEM file path",
+	// GitHub #499: the first 16 hex digits of a key's SHA-256, the id the
+	// audit trail already prints (api_key_sha256:<id>); a high-entropy
+	// key cannot be recovered from it.
+	"admin.operator_key_ids": "key hash ids, not keys",
 }
 
 // TestGetConfig_EveryCredentialShapedLeafIsRedacted is the regression test

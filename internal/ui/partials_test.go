@@ -150,22 +150,29 @@ func TestNoOrphanDescriptionTerms(t *testing.T) {
 
 // TestSemanticColorFamiliesRegistered guards the root invariant the
 // ink/surface token migration depends on: the `ink` and `surface` Tailwind
-// color families MUST be registered in the pageHead tailwind.config, or the
-// CDN JIT emits no CSS for text-ink-*/bg-surface-*/border-surface-* and all
-// four re-tiered pages render colorless. The string-presence/absence guards
+// color families MUST be registered in the Tailwind config
+// (internal/ui/tailwind/tailwind.config.js since #165), or the build emits no
+// CSS for text-ink-*/bg-surface-*/border-surface-* and all four re-tiered
+// pages render colorless. The string-presence/absence guards
 // (assertNoLegacyTokens, the partial render tests) cannot catch this — they
-// never check that a utility resolves. This test does.
+// never check that a utility resolves. This test does, in the config and in
+// the generated stylesheet the console serves.
 func TestSemanticColorFamiliesRegistered(t *testing.T) {
-	head := renderPartial(t, "pageHead", map[string]any{"Title": "x"})
-	for _, fam := range []struct{ key, varPrefix string }{
-		{"ink", "--ink-"},
-		{"surface", "--surface-"},
+	cfg := tailwindConfigSource(t)
+	css := string(embeddedTailwindCSS(t))
+	for _, fam := range []struct{ key, varPrefix, utility string }{
+		{"ink", "--ink-", ".text-ink-100{"},
+		{"surface", "--surface-", ".bg-surface-800{"},
 	} {
-		if !strings.Contains(head, fam.key+": {") {
+		if !strings.Contains(cfg, fam.key+": {") {
 			t.Errorf("tailwind config is missing the %q color family — text-%s-*/bg-%s-* utilities won't resolve and the re-tiered pages render colorless", fam.key, fam.key, fam.key)
 		}
-		if !strings.Contains(head, "rgb(var("+fam.varPrefix) {
+		if !strings.Contains(cfg, "rgb(var("+fam.varPrefix) {
 			t.Errorf("%q family not wired to %s* CSS vars", fam.key, fam.varPrefix)
+		}
+		i := strings.Index(css, fam.utility)
+		if i < 0 || !strings.Contains(css[i:min(len(css), i+200)], "var("+fam.varPrefix) {
+			t.Errorf("the generated stylesheet has no %s rule reading %s*", fam.utility, fam.varPrefix)
 		}
 	}
 	// The guard is only meaningful if the pages actually use these families.

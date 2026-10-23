@@ -461,6 +461,17 @@ func (c AuthConfig) serveAuthEnabled(w http.ResponseWriter, r *http.Request, nex
 				"companion API keys may only use /api/v1/mcp/companion")
 			return
 		}
+		// An agent container's key (per-task or warm-pool) is confined to the
+		// agent route set on every listener, as the unix socket already
+		// confined it: otherwise it is a full project key that can cancel,
+		// retry, create and steer tasks, mint an ordinary key, or archive its
+		// project (GitHub #467).
+		// see LLD § https://docs.vornik.io §17.7
+		if isAgentKeyRow(dbRow) && !IsAgentRoute(r.URL.Path) {
+			respondError(w, http.StatusForbidden, "AGENT_KEY_NOT_OPERATOR",
+				"an agent's key may only use the agent routes")
+			return
+		}
 	}
 	next.ServeHTTP(w, r.WithContext(stampIdentityContext(r.Context(), identity, apiKey, c)))
 }
@@ -1111,7 +1122,8 @@ func enforceKeyRateLimit(w http.ResponseWriter, limiter *ratelimit.APIKeyLimiter
 //     UI pages cross-origin is benign.
 //  2. Sec-Fetch-Site header present (modern browsers, Chrome 76+,
 //     Firefox 90+, Safari 16.4+):
-//     - "same-origin" / "same-site" / "none" → safe.
+//     - "same-origin" / "same-site" → safe. ("none" was here until
+//     GitHub #448, 2026-10-21: it now falls through to the Origin rung.)
 //     - "cross-site" → unsafe.
 //  3. Sec-Fetch-Site absent → fall back to Origin:
 //     - No Origin → UNSAFE (fail closed). A2/A3 audit finding A3

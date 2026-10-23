@@ -150,8 +150,10 @@ func TestIconOnlyControls_NameAndGlyphContrast(t *testing.T) {
 	// A text-gray-N glyph is measured as ink-N. That is what it renders: the
 	// console's Tailwind config maps the gray family onto the ink tokens
 	// (review-20261012-057d F1 asked). Pin the mapping so the alias holds.
+	// The config lives in internal/ui/tailwind since #165.
+	cfg := tailwindConfigSource(t)
 	for _, n := range []string{"100", "200", "300", "400", "500", "600"} {
-		if !regexp.MustCompile(`(?s)gray:\s*\{[^}]*` + n + `: 'rgb\(var\(--ink-` + n + `\) / <alpha-value>\)'`).MatchString(src) {
+		if !regexp.MustCompile(`(?s)gray:\s*\{[^}]*` + n + `: 'rgb\(var\(--ink-` + n + `\) / <alpha-value>\)'`).MatchString(cfg) {
 			t.Fatalf("Tailwind gray-%s no longer maps to --ink-%s; the glyph measurements below assume it does", n, n)
 		}
 	}

@@ -39,7 +39,7 @@ func newKeysServer(t *testing.T) (*Server, *accountsStubRepo, *accountsStubAudit
 	cfg := config.DefaultConfig()
 	cfg.Admin = config.AdminConfig{Enabled: true, AllowedKeys: []string{"sk-operator"}}
 	acc := authz.NewAccounts(repo, audit).WithAPIKeys(keys)
-	s := NewServer(WithLogger(zerolog.Nop()), WithConfig(cfg), WithAccountsService(acc))
+	s := NewServer(WithLogger(zerolog.Nop()), WithConfig(cfg), WithAdminClassKeys(cfg.Admin), WithAccountsService(acc))
 	return s, repo, audit, keys
 }
 
@@ -148,7 +148,7 @@ func TestLinkCodeRoute_ReturnsTheCodeOnceAndNeverAudits(t *testing.T) {
 	cfg := config.DefaultConfig()
 	cfg.Admin = config.AdminConfig{Enabled: true, AllowedKeys: []string{"sk-operator"}}
 	acc := authz.NewAccounts(repo, audit).WithLinkCodes(codes)
-	s := NewServer(WithLogger(zerolog.Nop()), WithConfig(cfg), WithAccountsService(acc))
+	s := NewServer(WithLogger(zerolog.Nop()), WithConfig(cfg), WithAdminClassKeys(cfg.Admin), WithAccountsService(acc))
 
 	req := accountsReq(http.MethodPost, "/api/v1/operator/accounts/user_a/link-code", "{}")
 	rec := httptest.NewRecorder()

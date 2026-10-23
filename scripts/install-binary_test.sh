@@ -81,7 +81,7 @@ echo 'install-binary: replaces a running binary — OK'
 
 # No temp file left beside the target. A failed or partial install must not
 # leave a stray executable in a bin directory.
-strays=$(find "$(dirname "$TMP/daemon")" -maxdepth 1 -name '.*.new.*' 2>/dev/null | head -3)
+strays=$(find "$(dirname "$TMP/daemon")" -maxdepth 1 -name '.*.new.*' 2>/dev/null | sed -n 1,3p)
 [ -z "$strays" ] || { echo "FAIL: temp file left behind: $strays"; exit 1; }
 
 echo 'install-binary: leaves no temp file — OK'

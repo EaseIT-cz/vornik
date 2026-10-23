@@ -121,7 +121,7 @@
                                 <td class="px-4 py-2 text-xs text-gray-300 max-w-xs truncate" title="{{.Notes}}">{{.Notes}}</td>
                                 <td class="px-4 py-2 text-[10px] font-mono text-right text-gray-500">{{.UpdatedAt}}{{if .CreatedBy}} <span class="text-gray-600">by {{.CreatedBy}}</span>{{end}}</td>
                                 <td class="px-4 py-2 text-right">
-                                    <form method="post" action="/ui/admin/blackbox/overrides/delete" class="inline" onsubmit="return confirm('Delete this override?');">
+                                    <form method="post" action="/ui/admin/blackbox/overrides/delete" class="inline" data-confirm="Delete this override?">
                                         <input type="hidden" name="project" value="{{.ProjectID}}">
                                         <input type="hidden" name="workflow" value="{{.WorkflowID}}">
                                         <input type="hidden" name="class" value="{{.Class}}">

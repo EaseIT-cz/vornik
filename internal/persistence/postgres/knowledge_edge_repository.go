@@ -190,25 +190,27 @@ func (r *KnowledgeEdgeRepository) DropChunkFromSources(ctx context.Context, chun
 	if chunkID == "" {
 		return 0, fmt.Errorf("DropChunkFromSources: chunk_id required")
 	}
-	// Remove chunkID from every source_chunks array. Then for any
-	// edge whose source_chunks went empty, flip lifecycle to
-	// quarantined (no remaining evidence supports the edge).
+	// One UPDATE (GitHub #450; KG design §5.1 amendment 2026-10-21). It
+	// used to be a data-modifying CTE plus an outer UPDATE of the same
+	// rows: Postgres skips a row already updated by the same command, so
+	// the quarantine never ran and RowsAffected (the outer statement's)
+	// was 0. RowsAffected is now the number of edges whose source_chunks
+	// changed, the same count as the SQLite driver.
 	res, err := r.db.ExecContext(ctx, `
-		WITH updated AS (
-		    UPDATE knowledge_edges
-		    SET source_chunks = array_remove(source_chunks, $1)
-		    WHERE $1 = ANY(source_chunks)
-		    RETURNING id, source_chunks
-		)
-		UPDATE knowledge_edges e
-		SET lifecycle_state = 'quarantined'
-		FROM updated u
-		WHERE e.id = u.id AND cardinality(u.source_chunks) = 0`,
+		UPDATE knowledge_edges
+		SET source_chunks = array_remove(source_chunks, $1),
+		    lifecycle_state = CASE
+		        WHEN cardinality(array_remove(source_chunks, $1)) = 0 THEN 'quarantined'
+		        ELSE lifecycle_state END
+		WHERE $1 = ANY(source_chunks)`,
 		chunkID)
 	if err != nil {
 		return 0, mapDBError(err)
 	}
-	n, _ := res.RowsAffected()
+	n, err := res.RowsAffected()
+	if err != nil {
+		return 0, mapDBError(err)
+	}
 	return int(n), nil
 }
 

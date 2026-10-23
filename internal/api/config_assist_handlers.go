@@ -19,7 +19,7 @@ import (
 
 // The configuration assistant's operator REST entrypoint (2026-09-13 design
 // §6.3, entrypoint 1; plan §7f). COMMUNITY: /api/v1/operator/assist, gated by
-// requireOperatorCapability (operator scope + explicit capability, review
+// requireOperatorScope (operator scope + explicit capability since #495, review
 // R2), never under /api/v1/admin/. One request = one intent = one
 // proposal or one named refusal (design §3).
 
@@ -200,7 +200,7 @@ func (s *Server) OperatorAssist(w http.ResponseWriter, r *http.Request) {
 		respondError(w, http.StatusMethodNotAllowed, "METHOD_NOT_ALLOWED", "use POST")
 		return
 	}
-	if !s.requireOperatorCapability(w, r) {
+	if !s.requireOperatorScope(w, r) {
 		return
 	}
 	if s.configAssist == nil {

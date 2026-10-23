@@ -15,6 +15,8 @@ import (
 	"runtime"
 	"strconv"
 	"time"
+
+	"vornik.io/vornik/internal/version"
 )
 
 const (
@@ -121,8 +123,10 @@ const ProductionEmissionEnabled = true
 
 var safeVersion = regexp.MustCompile(`^[0-9A-Za-z][0-9A-Za-z._+-]{0,63}$`)
 
-// releaseVersion matches the bounded release identifiers that may travel on the
-// wire: a calendar version, optionally with a simple pre-release tag.
+// The bounded release identifiers that may travel on the wire are a calendar
+// version, optionally with a simple pre-release tag: version.IsTaggedRelease,
+// the one release grammar (loader-validator agreement design, 2026-10-17
+// amendment, #371; this was a private regex until then).
 //
 // Anything else collapses to "dev". A `git describe` build stamp such as
 // 2026.7.4-112-g29df3bdb(-dirty) identifies exactly one commit, so putting it
@@ -131,7 +135,6 @@ var safeVersion = regexp.MustCompile(`^[0-9A-Za-z][0-9A-Za-z._+-]{0,63}$`)
 // the source IP the edge necessarily sees, would weaken the anonymity the
 // privacy page promises. Release tags are shared by every install of that
 // release, so their cardinality stays bounded.
-var releaseVersion = regexp.MustCompile(`^[0-9]{4}\.[0-9]{1,2}\.[0-9]{1,3}(-(?:alpha|beta|rc)\.?[0-9]{1,3})?$`)
 
 type platform struct {
 	OS   string `json:"os"`
@@ -337,7 +340,7 @@ func sanitizeVersion(v string) string {
 	if !safeVersion.MatchString(v) {
 		return "unknown"
 	}
-	if releaseVersion.MatchString(v) {
+	if version.IsTaggedRelease(v) {
 		return v
 	}
 	// Safe characters but not a bounded release identifier — a source build,

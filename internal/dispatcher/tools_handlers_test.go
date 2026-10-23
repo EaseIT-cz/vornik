@@ -1806,6 +1806,7 @@ func TestFormatWaitResult_FailedWithErrorClass(t *testing.T) {
 		LastError: &errMsg, LastErrorClass: &class,
 	}
 	te := newExecutor()
+	te.errorScrub = testLineScrubber480(t) // the #480 non-admin view keeps a clean line
 	res := te.formatWaitResult(context.Background(), task)
 	if !strings.Contains(res.Content, "reached status FAILED") {
 		t.Errorf("missing status: %q", res.Content)
@@ -1822,6 +1823,7 @@ func TestFormatWaitResult_TruncatesLongError(t *testing.T) {
 	huge := strings.Repeat("x", 2000)
 	task := &persistence.Task{ID: "t1", Status: persistence.TaskStatusFailed, LastError: &huge}
 	te := newExecutor()
+	te.errorScrub = testLineScrubber480(t) // the #480 non-admin view keeps a clean line
 	res := te.formatWaitResult(context.Background(), task)
 	if !strings.Contains(res.Content, "…") {
 		t.Errorf("expected truncation: %q", res.Content[len(res.Content)-30:])

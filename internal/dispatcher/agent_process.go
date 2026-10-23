@@ -114,6 +114,8 @@ func (a *Agent) allTools(projectID string, sessionKey string, tier chat.ContextT
 // prompt) and should replace the caller's session state.
 func (a *Agent) Process(ctx context.Context, req Request) (result Result) {
 	ctx = withOriginatingChannel(ctx, req.OriginatingChannel, req.OriginatingSessionID)
+	ctx = withOperatorView(ctx, req.OperatorView)   // #480: the task tools' view of stored error text
+	ctx = withTaskPrincipal(ctx, req.TaskPrincipal) // #499: the principal create_task stamps
 	if req.OperatorID != "" {
 		ctx = WithOperatorID(ctx, req.OperatorID)
 	}
@@ -271,7 +273,12 @@ func (a *Agent) Process(ctx context.Context, req Request) (result Result) {
 				continue
 			}
 			tr := out.Result
-			audit.recordToolCall(tc.Function.Name, tc.Function.Arguments, tr.Content, "")
+			// The audit records what the MODEL saw — out.Content, after the
+			// output guard — not tr.Content: the guard's HIGH redaction never
+			// reached the row while the raw bytes were recorded (chat-audit
+			// design §9.2.4, GitHub #395). With no guard wired the two are
+			// the same text.
+			audit.recordToolCall(tc.Function.Name, tc.Function.Arguments, out.Content, "")
 
 			if tr.ProjectSwitch != nil {
 				activeProject = tr.ProjectSwitch.ProjectID
@@ -310,6 +317,8 @@ func (a *Agent) Process(ctx context.Context, req Request) (result Result) {
 // "[running: create_task]". The final Result is identical to Process.
 func (a *Agent) ProcessStreaming(ctx context.Context, req Request, onText chat.StreamCallback) (result Result) {
 	ctx = withOriginatingChannel(ctx, req.OriginatingChannel, req.OriginatingSessionID)
+	ctx = withOperatorView(ctx, req.OperatorView)   // #480: the task tools' view of stored error text
+	ctx = withTaskPrincipal(ctx, req.TaskPrincipal) // #499: the principal create_task stamps
 	if req.OperatorID != "" {
 		ctx = WithOperatorID(ctx, req.OperatorID)
 	}
@@ -471,7 +480,12 @@ func (a *Agent) ProcessStreaming(ctx context.Context, req Request, onText chat.S
 				continue
 			}
 			tr := out.Result
-			audit.recordToolCall(tc.Function.Name, tc.Function.Arguments, tr.Content, "")
+			// The audit records what the MODEL saw — out.Content, after the
+			// output guard — not tr.Content: the guard's HIGH redaction never
+			// reached the row while the raw bytes were recorded (chat-audit
+			// design §9.2.4, GitHub #395). With no guard wired the two are
+			// the same text.
+			audit.recordToolCall(tc.Function.Name, tc.Function.Arguments, out.Content, "")
 
 			if tr.ProjectSwitch != nil {
 				activeProject = tr.ProjectSwitch.ProjectID

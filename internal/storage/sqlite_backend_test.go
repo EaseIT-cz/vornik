@@ -1,7 +1,12 @@
 package storage
 
 import (
+	"go/ast"
+	"go/parser"
+	"go/token"
+	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 
 	"vornik.io/vornik/internal/config"
@@ -53,5 +58,72 @@ func TestNewSQLiteBackend_IsWhatOpenBuildsAfterMigrate(t *testing.T) {
 	}
 	if err := wrapped.Migrate(sqlitetest.Context(t)); err != nil {
 		t.Fatalf("Migrate on the wrapped migrated copy: %v", err)
+	}
+}
+
+// #418 (2026-10-17): initDatabase skips its own Migrate when the open already
+// migrated. Only openSQLite may say so: it migrates and refuses to return a
+// database it could not migrate. A database merely connected and wrapped
+// (NewSQLiteBackend over an unmigrated Connect) must not claim it, or a boot
+// would run on an empty schema (storage-abstraction design, "The second SQLite
+// migrate at boot", 2026-10-17).
+func TestMigratedAtOpen_OnlyOpenSQLiteSetsIt(t *testing.T) {
+	opened, err := Open(sqlitetest.Context(t), config.DatabaseConfig{Driver: "sqlite", Path: ":memory:"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = opened.Close() })
+	if !opened.MigratedAtOpen {
+		t.Fatal("storage.Open's SQLite backend migrated but does not say so")
+	}
+	if err := opened.IsReady(sqlitetest.Context(t)); err != nil {
+		t.Fatalf("a backend claiming MigratedAtOpen is not at the latest schema: %v", err)
+	}
+	if NewSQLiteBackend(sqlitetest.Connect(t, ":memory:")).MigratedAtOpen {
+		t.Fatal("NewSQLiteBackend over an unmigrated database claims it was migrated")
+	}
+
+	// The law: no other non-test code in this package sets the flag.
+	files, err := filepath.Glob("*.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	fset := token.NewFileSet()
+	var sites []string
+	examined := 0
+	for _, name := range files {
+		if strings.HasSuffix(name, "_test.go") {
+			continue
+		}
+		f, err := parser.ParseFile(fset, name, nil, 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		examined++
+		for _, decl := range f.Decls {
+			fn, ok := decl.(*ast.FuncDecl)
+			if !ok || fn.Body == nil {
+				continue
+			}
+			ast.Inspect(fn.Body, func(n ast.Node) bool {
+				switch x := n.(type) {
+				case *ast.KeyValueExpr:
+					if k, ok := x.Key.(*ast.Ident); ok && k.Name == "MigratedAtOpen" {
+						sites = append(sites, fn.Name.Name)
+					}
+				case *ast.AssignStmt:
+					for _, lhs := range x.Lhs {
+						if sel, ok := lhs.(*ast.SelectorExpr); ok && sel.Sel.Name == "MigratedAtOpen" {
+							sites = append(sites, fn.Name.Name)
+						}
+					}
+				}
+				return true
+			})
+		}
+	}
+	t.Logf("MigratedAtOpen law: %d non-test files examined, set in %v", examined, sites)
+	if examined < 3 || strings.Join(sites, ",") != "openSQLite" {
+		t.Fatalf("MigratedAtOpen is set in %v (of %d files); want only openSQLite", sites, examined)
 	}
 }

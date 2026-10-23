@@ -23,6 +23,7 @@ import (
 	"time"
 
 	"vornik.io/vornik/internal/projectdeps"
+	"vornik.io/vornik/internal/spawn"
 )
 
 // Runner runs one program and returns its combined output. The seam every
@@ -73,13 +74,16 @@ func ImageID(ctx context.Context, run Runner, image string) (string, error) {
 }
 
 // Probe returns image's interpreter triple, refusing an image whose python3
-// does not run (a config can name any local image).
-func Probe(ctx context.Context, run Runner, image string) (string, error) {
+// does not run (a config can name any local image). memLimit is the
+// container's memory bound in bytes, with no swap (spawn.MemoryLimitFlags,
+// GitHub #428); 0 is unbounded.
+func Probe(ctx context.Context, run Runner, image string, memLimit int64) (string, error) {
 	if err := ValidImageRef(image); err != nil {
 		return "", err
 	}
-	out, err := run(ctx, "podman", "run", "--rm", "--pull=never", "--network=none",
-		"--entrypoint", "python3", "--", image, "-c", probeScript)
+	args := append([]string{"run", "--rm", "--pull=never", "--network=none"}, spawn.MemoryLimitFlags(memLimit)...)
+	args = append(args, "--entrypoint", "python3", "--", image, "-c", probeScript)
+	out, err := run(ctx, "podman", args...)
 	if err != nil {
 		return "", fmt.Errorf("image %s has no usable python3 (probe failed: %v): %s", image, err, tailLines(string(out), 5))
 	}
@@ -93,13 +97,13 @@ func Probe(ctx context.Context, run Runner, image string) (string, error) {
 // ChooseInterpreter probes every image and returns their common triple, or
 // refuses naming each image and its triple: one tree serves every role
 // (§5.4), so it can be right for only one interpreter.
-func ChooseInterpreter(ctx context.Context, run Runner, images []string) (string, error) {
+func ChooseInterpreter(ctx context.Context, run Runner, images []string, memLimit int64) (string, error) {
 	if len(images) == 0 {
 		return "", errors.New("no role images to install for")
 	}
 	seen := map[string][]string{}
 	for _, img := range images {
-		triple, err := Probe(ctx, run, img)
+		triple, err := Probe(ctx, run, img, memLimit)
 		if err != nil {
 			return "", err
 		}
@@ -133,7 +137,11 @@ func ChooseInterpreter(ctx context.Context, run Runner, images []string) (string
 //
 // Only the lockfile FILE is mounted, not its directory: the directory is the
 // project checkout, and a connected install has network (review F2).
-func PipFetcher(run Runner, image, lockfilePath, wheelhouse string) Fetcher {
+//
+// memLimit bounds the container's memory in bytes with no swap
+// (spawn.MemoryLimitFlags; 0 is unbounded): the agents' own limit, resolved by
+// the caller (GitHub #428, design §8.6). A pip killed at it says so.
+func PipFetcher(run Runner, image, lockfilePath, wheelhouse string, memLimit int64) Fetcher {
 	return func(ctx context.Context, dir string) error {
 		if err := ValidImageRef(image); err != nil {
 			return err
@@ -147,6 +155,7 @@ func PipFetcher(run Runner, image, lockfilePath, wheelhouse string) Fetcher {
 			}
 		}
 		args := []string{"run", "--rm", "--pull=never", "--userns=keep-id"}
+		args = append(args, spawn.MemoryLimitFlags(memLimit)...)
 		if wheelhouse != "" {
 			args = append(args, "--network=none", "-v", wheelhouse+":/wheels:ro,z")
 		}
@@ -166,10 +175,40 @@ func PipFetcher(run Runner, image, lockfilePath, wheelhouse string) Fetcher {
 			args = append(args, "--no-index", "--find-links", "/wheels")
 		}
 		if out, err := run(ctx, "podman", args...); err != nil {
+			if memLimit > 0 && exitCode(err) == oomExitCode {
+				return fmt.Errorf("pip install in %s was killed (exit %d), most likely by its memory limit of %s "+
+					"(%d bytes, runtime.agent_memory_limit, the agents' own limit): raise runtime.agent_memory_limit, "+
+					"or set it to \"none\" for this install, and re-run: %w: %s",
+					image, oomExitCode, FormatMemory(memLimit), memLimit, err, tailLines(string(out), 40))
+			}
 			return fmt.Errorf("pip install in %s failed: %w: %s", image, err, tailLines(string(out), 40))
 		}
 		return nil
 	}
+}
+
+// oomExitCode is the status podman run exits with when the container is
+// SIGKILLed, which is what the cgroup OOM killer sends. With --rm the
+// container is gone before State.OOMKilled could be read, and a 137 can also
+// be an external kill -9, hence "most likely" in the message (design §8.6).
+const oomExitCode = 137
+
+// FormatMemory renders an install bound for the operator: GiB at or above
+// one GiB, MiB below it.
+func FormatMemory(n int64) string {
+	if n >= 1<<30 {
+		return fmt.Sprintf("%.1f GiB", float64(n)/(1<<30))
+	}
+	return fmt.Sprintf("%d MiB", n>>20)
+}
+
+// exitCode is err's process exit status, or -1 when it carries none.
+func exitCode(err error) int {
+	var ec interface{ ExitCode() int }
+	if errors.As(err, &ec) {
+		return ec.ExitCode()
+	}
+	return -1
 }
 
 // validMountSource refuses a bind-mount source podman could misread: it must

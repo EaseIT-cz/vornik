@@ -111,7 +111,7 @@
                                     <button type="submit" class="px-2.5 py-1 text-[11px] rounded bg-brand-600 hover:bg-brand-500 text-white">Generate candidate</button>
                                 </form>
                                 {{end}}
-                                <form method="POST" action="/ui/admin/blackbox/triggers/{{.ID}}/dismiss" onsubmit="return confirm('Dismiss this trigger?')">
+                                <form method="POST" action="/ui/admin/blackbox/triggers/{{.ID}}/dismiss" data-confirm="Dismiss this trigger?">
                                     <input type="hidden" name="return_to" value="control-plane">
                                     <button type="submit" class="px-2.5 py-1 text-[11px] rounded bg-dark-700 hover:bg-dark-600 text-gray-300">Dismiss</button>
                                 </form>
@@ -422,7 +422,7 @@
                                     class="px-2.5 py-1 text-xs rounded-md {{if .CanConnect}}bg-brand-600 hover:bg-brand-500 text-white{{else}}bg-dark-700 text-gray-500 border border-dark-600 cursor-not-allowed{{end}}">{{if .Connected}}Reconnect{{else}}Connect{{end}}</button>
                         </form>
                         {{if .Connected}}
-                        <form method="POST" action="/ui/admin/control-plane/mcp/connect" onsubmit="return confirm('Revoke Vornik&#39;s stored grant for {{.Name}}? Tools needing it stop working until you reconnect. This does NOT revoke the authorization at the vendor.')">
+                        <form method="POST" action="/ui/admin/control-plane/mcp/connect" data-confirm="Revoke Vornik&#39;s stored grant for {{.Name}}? Tools needing it stop working until you reconnect. This does NOT revoke the authorization at the vendor.">
                             <input type="hidden" name="action" value="disconnect">
                             <input type="hidden" name="name" value="{{.Name}}">
                             <button type="submit" class="px-2.5 py-1 text-xs rounded-md bg-dark-700 hover:bg-red-900/40 text-gray-300 border border-dark-600">Disconnect</button>
@@ -430,7 +430,7 @@
                         {{end}}
                         {{end}}
                         {{if $.MCPWritable}}
-                        <form method="POST" action="/ui/admin/control-plane/mcp" onsubmit="return confirm('Propose removing MCP server {{.Name}}? (daemon-scope — you review + apply on the Proposals tab)')">
+                        <form method="POST" action="/ui/admin/control-plane/mcp" data-confirm="Propose removing MCP server {{.Name}}? (daemon-scope — you review + apply on the Proposals tab)">
                             <input type="hidden" name="action" value="remove">
                             <input type="hidden" name="name" value="{{.Name}}">
                             <button type="submit" class="px-2.5 py-1 text-xs rounded-md bg-dark-700 hover:bg-red-900/40 text-gray-300 border border-dark-600">Remove…</button>

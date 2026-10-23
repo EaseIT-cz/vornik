@@ -651,7 +651,11 @@ func (n *Narrator) taskStillActive(ctx context.Context, taskID string) (active, 
 // (design §5.3, load-bearing — never the reverse), then metrics.
 func (n *Narrator) emitLine(ctx context.Context, executionID string, st *executionState, kind triggerKind, in templateInput, stepID, toolName, storageKind string) {
 	if st.lineCapped {
-		return // hard backstop — narration stopped entirely (design §8)
+		// Hard backstop — narration stopped entirely (design §8). Counted per
+		// dropped line; budget_capped_total counts only the transition
+		// (outcome-quality LLD §S8.11 row 11b, GitHub #369).
+		n.metricDropped("line_capped")
+		return
 	}
 	if n.projectSettings(st.projectID).NoNarration {
 		// Per-project opt-out (design §9 Q3) — this project produces no
@@ -686,15 +690,21 @@ func (n *Narrator) emitLine(ctx context.Context, executionID string, st *executi
 		return
 	}
 
-	var text string
-	var degraded bool
+	var text, degradedReason string
 	if st.costCapped {
-		text, degraded = fallbackTemplate(kind, in), true
+		text, degradedReason = fallbackTemplate(kind, in), degradedCostCapped
 	} else {
-		text, degraded = n.composeLine(ctx, kind, in, stepID, toolName, st)
+		text, degradedReason = n.composeLine(ctx, kind, in, stepID, toolName, st)
 	}
 	if text == "" {
-		text, degraded = fallbackTemplate(kind, in), true
+		text, degradedReason = fallbackTemplate(kind, in), degradedEmptyText
+	}
+	degraded := degradedReason != ""
+	if degraded {
+		// One reason per degraded line, so the reasons sum to
+		// lines_total{degraded="true"} plus any line whose persist failed
+		// (outcome-quality LLD §S8.11 row 11a, GitHub #369).
+		n.metricDegraded(degradedReason)
 	}
 
 	row := &persistence.ExecutionNarration{

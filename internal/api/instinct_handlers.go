@@ -223,8 +223,9 @@ func (s *Server) RetireInstinct(w http.ResponseWriter, r *http.Request, id strin
 	defer cancel()
 	// Fetch before mutating so a scoped caller can't retire another
 	// project's project-scoped instinct. 404 on out-of-scope rows so the
-	// endpoint doesn't confirm their existence. Global-scope rows are
-	// cross-project advisory and retirable by any authenticated caller.
+	// endpoint doesn't confirm their existence. A global-scope row is
+	// operator surface (GitHub #502, S5): retiring it changes advice every
+	// project receives, so only an admin-class caller may.
 	existing, err := s.instinctRepo.Get(ctx, id)
 	if err != nil {
 		if err == persistence.ErrNotFound {
@@ -236,6 +237,9 @@ func (s *Server) RetireInstinct(w http.ResponseWriter, r *http.Request, id strin
 	}
 	if existing.Scope == persistence.InstinctScopeProject && !requestAllowsProject(r, existing.ProjectID) {
 		respondError(w, http.StatusNotFound, "NOT_FOUND", "instinct not found")
+		return
+	}
+	if existing.Scope != persistence.InstinctScopeProject && !s.requireOperatorScope(w, r) {
 		return
 	}
 	if err := s.instinctRepo.Retire(ctx, id); err != nil {

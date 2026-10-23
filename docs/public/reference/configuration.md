@@ -70,6 +70,7 @@ vornik reads its configuration from `config.yaml`. The keys below are the custom
 | `server.real_ip.trusted_proxies` | list | CIDRs/IPs trusted to set the real-IP header. List ONLY the cloudflared host. | — |
 | `server.real_ip.header` | string | Trusted client-IP header. Default CF-Connecting-IP. | — |
 | `server.public_base_url` | string | Public origin (scheme://host[:port]) for git clone/push HTTPS URLs; used only to render the clone URL on the project page. | — |
+| `server.accepted_hosts` | list | Extra Host names the daemon answers on its unauthenticated surfaces: every route when api.auth_enabled is false, and the metrics endpoints whenever they need no credential (DNS-rebinding guard). IP literals, localhost and the public base URL's host are always accepted. | — |
 
 ## database
 
@@ -119,7 +120,7 @@ vornik reads its configuration from `config.yaml`. The keys below are the custom
 | `runtime.run_as_user` | string | Override the container user (uid, uid:gid, or user:group). Use to force non-root on root-default images. | `VORNIK_RUNTIME_RUN_AS_USER` |
 | `runtime.default_network` | string | Default network policy for agent roles: host, none, or daemon-only (zero egress; requires server.unix_socket). | — |
 | `runtime.image_timeout` | string | Bound on a podman run or pull of the agent image, which may download it (a Go duration). Empty = 15m. Raise it on a slow registry link. | — |
-| `runtime.agent_memory_limit` | string | Per-agent-container memory cap (e.g. 2GiB). Absent derives from host memory and concurrency; "none" disables the limit. | — |
+| `runtime.agent_memory_limit` | string | Per-agent-container memory cap (e.g. 2GiB); a bounded container gets no swap. Absent derives from host memory and concurrency; "none" disables the limit. | — |
 | `runtime.agent_llm.endpoint` | string | OpenAI-compatible base URL for the LLM agents call. Falls back to the chat section when empty. | — |
 | `runtime.agent_llm.api_key` | string | API key for the agent LLM endpoint. | — |
 | `runtime.agent_llm.model` | string | Default model for agents. | — |
@@ -200,6 +201,11 @@ vornik reads its configuration from `config.yaml`. The keys below are the custom
 | `retention.response_cache_days` | int | Days to keep cached LLM responses (30d recommended on busy deployments). | — |
 | `retention.execution_ratings_days` | int | Days to keep execution ratings. 0 means the 400-day default, not forever. | — |
 | `retention.embedding_cache_days` | int | Days to keep cached embeddings before evicting cold entries (0 = keep forever; 30d recommended if the table grows large). | — |
+| `retention.blackbox_trace_cache_days` | int | Days to keep assembled black-box traces (0 = 1 day, the cache TTL). | — |
+| `retention.project_gists_days` | int | Days a project gist or its narrative may go unrefreshed before it is removed (0 = 7). | — |
+| `retention.upgrade_dump_keep` | int | Upgrade database dumps kept at most, newest first (0 = 2). | — |
+| `retention.upgrade_dump_grace_days` | int | Days an upgrade database dump is kept after its upgrade succeeded (0 = 14). | — |
+| `retention.upgrade_dump_dir` | string | Directory holding the vornik-upgrade-backup-* directories (empty = the daemon user's home). | — |
 
 ## workspace_ingest
 
@@ -415,6 +421,12 @@ vornik reads its configuration from `config.yaml`. The keys below are the custom
 | `instinct.lift.reeval_cooldown_hours` | int | Suppress re-proposing a rejected instinct for this many hours (0 = 168). | — |
 | `instinct.lift.window_hours` | int | Measurement window in hours (0 = the confidence model's evidence-freshness horizon, else the decay half-life). | — |
 
+## mcp
+
+| Key | Type | Description | Environment override |
+|---|---|---|---|
+| `mcp.agent_read_relist_interval` | string | How often each connected agent-namespace MCP read server is listed again, so a tool its server now marks as changing things is suspended between reloads (Go duration, 1m to 24h). Empty means 15m. Read at daemon start: a change takes a restart. | — |
+
 ## auth
 
 | Key | Type | Description | Environment override |
@@ -430,6 +442,12 @@ vornik reads its configuration from `config.yaml`. The keys below are the custom
 | `auth.providers.github.org` | string | Restrict/soft-gate login to a GitHub org. | — |
 | `auth.providers.github.org_member_role` | string | Auto-grant role for GitHub org members on login: empty (default, no auto-grant), 'user', or 'admin'. Requires 'org' set. | — |
 | `auth.providers.github.org_member_projects` | list | Projects an auto-granted org member (user role) receives; '*' = all projects. | — |
+
+## admin
+
+| Key | Type | Description | Environment override |
+|---|---|---|---|
+| `admin.operator_key_ids` | list | Hash ids (first 16 hex digits of SHA-256) of the admin keys that are the operator's own; tasks they start count as the operator's for memory verification. Leave the broker's and the A2A keys out. | — |
 
 ## voice
 
@@ -495,7 +513,7 @@ vornik reads its configuration from `config.yaml`. The keys below are the custom
 
 | Key | Type | Description | Environment override |
 |---|---|---|---|
-| `integrations.allowed_hosts` | list | Hostnames allowed to bypass the Integrations Hub's private-range SSRF guard for probes/saves. Empty = block all private/loopback/link-local destinations (secure default). | — |
+| `integrations.allowed_hosts` | list | Hostnames allowed to bypass the daemon's private-range SSRF guard for operator-initiated dials: Integrations Hub probes/saves, the control-plane MCP Test probe, an operator project's MCP OAuth flow and the GitHub App API base. Empty = block all private/loopback/link-local destinations (secure default). | — |
 
 ## narrator
 

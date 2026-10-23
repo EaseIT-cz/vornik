@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"sort"
+	"strings"
 	"text/tabwriter"
 	"time"
 
@@ -50,13 +51,27 @@ daemon actually scans with.`,
 
 var secretsScanHistoryCmd = &cobra.Command{
 	Use:   "scan-history",
-	Short: "Retro-scan historical tool-audit rows for secret-shaped values",
-	Long: `Scan the historical audit + prompt stores for secret-shaped values and, with --apply, redact
-them in place. The tool_audit checkpoint defaults to REDACT, so a current daemon
+	Short: "Retro-scan historical audit, transcript and prompt rows for secret-shaped values",
+	Long: `Scan the historical audit, transcript and prompt stores for secret-shaped values and, with
+--apply, redact them in place. The tool_audit checkpoint defaults to REDACT, so a current daemon
 cleans rows as it writes them — but rows written before that default changed, or
 under an explicit checkpoints.tool_audit: detect override, or by a writer that
 predates the redaction seam, can still hold raw secrets. This is the retro-scan
 that cleans them.
+
+STORES AND COLUMNS. tool_audit_log (tool_input, tool_output); chat_audit_log
+(user_message, response, tool_calls_json, hallucination_signals_json, chat_id,
+user_id); task_messages (content, metadata, author_id); execution_step_outcomes
+(hallucination_signals); chat_system_prompts and step_prompts (body, re-keyed).
+Each column gets the rule its live write-time
+seam applies today: metadata is walked as JSON without the entropy class and a
+value under a secret-named key ("password", "apiKey", ...) is replaced whole
+(rule secret_field); identity columns are scanned without entropy; signals also
+lose fragments of a credential found elsewhere in the same row, and a long
+token-like run at a cut edge (rule cut_token, heuristic). For chat_audit_log,
+task_messages and execution_step_outcomes the report gives, per column, how many rows held a value
+(examined) and how many matched, so "clean" never stands for "not looked at".
+--project filters task_messages through its task.
 
 Other operational tables are NOT scanned: webhook_events stores only a payload
 HASH, task_llm_usage stores token COUNTS, and artifacts are redacted at write
@@ -70,8 +85,8 @@ match, so a second pass is a no-op (though it writes a fresh admin_audit row —
 run dry-run first). Postgres-only.
 
 WHICH RULES GET REDACTED. --rules defaults to "strong": the typed,
-prefix-anchored credential patterns only. The heuristic rules (entropy,
-generic_kv) are high-recall and fire on hashes, opaque ids and base64 that in an
+prefix-anchored credential patterns and the secret_field key-name rule. The
+heuristic rules (entropy, generic_kv, cut_token) are high-recall and fire on hashes, opaque ids and base64 that in an
 audit table are frequently the substance of the record rather than a secret in
 it — and the rewrite is irreversible. Counting and reporting always cover every
 rule; only the write-back set narrows. --rules all restores the historical
@@ -164,6 +179,13 @@ type scanHistoryResult struct {
 	SelectedByType map[string]int `json:"selected_by_type"`
 	ExcludedByType map[string]int `json:"excluded_by_type"`
 	Samples        []string       `json:"samples,omitempty"`
+	// ExaminedByColumn and MatchedByColumn are the per-column denominator for
+	// the transcript stores (design §10.2.2): rows whose column held a value,
+	// and rows where it matched. Every column is present, zeros included.
+	ExaminedByColumn map[string]int `json:"examined_by_column,omitempty"`
+	MatchedByColumn  map[string]int `json:"matched_by_column,omitempty"`
+	// columns orders the per-column report.
+	columns []string
 }
 
 func runSecretsScanHistory(_ *cobra.Command, _ []string) error {
@@ -230,11 +252,22 @@ func runSecretsScanHistory(_ *cobra.Command, _ []string) error {
 	}
 	targets := []scanTargetResult{{table: "tool_audit_log", result: result}}
 
-	chatRes, err := scanChatAuditHistory(ctx, db, detector, secretsScanProject, since, secretsScanApply, selection, secretsScanSample)
+	env := postgresScanEnv(db)
+	chatRes, err := scanChatAuditHistory(ctx, env, detector, secretsScanProject, since, secretsScanApply, selection, secretsScanSample)
 	if err != nil {
 		return err
 	}
 	targets = append(targets, scanTargetResult{table: "chat_audit_log", result: chatRes})
+	msgRes, err := scanTaskMessagesHistory(ctx, env, detector, secretsScanProject, since, secretsScanApply, selection, secretsScanSample)
+	if err != nil {
+		return err
+	}
+	targets = append(targets, scanTargetResult{table: "task_messages", result: msgRes})
+	outRes, err := scanStepOutcomesHistory(ctx, env, detector, secretsScanProject, since, secretsScanApply, selection, secretsScanSample)
+	if err != nil {
+		return err
+	}
+	targets = append(targets, scanTargetResult{table: "execution_step_outcomes", result: outRes})
 
 	for _, store := range contentStores {
 		storeRes, serr := scanContentStore(ctx, db, store, detector, since, secretsScanApply, selection, secretsScanSample)
@@ -308,6 +341,7 @@ func runSecretsScanHistory(_ *cobra.Command, _ []string) error {
 		// exists to remove.
 		_, _ = fmt.Fprintf(os.Stdout, "%s: scanned %d row(s), %d contained secret-shaped value(s)\n",
 			t.table, t.result.RowsScanned, t.result.RowsMatched)
+		printColumns(t.result)
 		if t.result.RowsMatched == 0 {
 			continue
 		}
@@ -333,6 +367,18 @@ func runSecretsScanHistory(_ *cobra.Command, _ []string) error {
 type scanTargetResult struct {
 	table  string
 	result scanHistoryResult
+}
+
+// printColumns renders the per-column denominator, every column included.
+func printColumns(r scanHistoryResult) {
+	if len(r.columns) == 0 {
+		return
+	}
+	parts := make([]string, 0, len(r.columns))
+	for _, c := range r.columns {
+		parts = append(parts, fmt.Sprintf("%s %d/%d", c, r.ExaminedByColumn[c], r.MatchedByColumn[c]))
+	}
+	_, _ = fmt.Fprintf(os.Stdout, "  per column (rows holding a value / rows matching): %s\n", strings.Join(parts, ", "))
 }
 
 // printCounts renders a finding-type histogram in a stable order. emptyNote is

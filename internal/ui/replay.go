@@ -75,6 +75,33 @@ func (s *Server) ExecutionReplay(w http.ResponseWriter, r *http.Request, execID 
 		return
 	}
 
+	// GitHub #466: a caller that is not admin-class reads each step's
+	// error_detail and the stored post-mortem summary scrubbed. The timeline
+	// is built for this request, so its steps are rewritten in place; the
+	// post-mortem row is copied.
+	if view := s.errorTextFor(r); view != nil && tl != nil {
+		for i := range tl.Steps {
+			tl.Steps[i].ErrorDetail = view(tl.Steps[i].ErrorDetail)
+		}
+		if tl.PostMortem != nil {
+			pm := *tl.PostMortem
+			pm.Summary = view(pm.Summary)
+			tl.PostMortem = &pm
+		}
+		// A cross-project call row's error_message is the raw failure
+		// reason (MarkRejected with err.Error()), not closed text.
+		for i := range tl.CrossProjectHops {
+			tl.CrossProjectHops[i].ErrorMessage = view(tl.CrossProjectHops[i].ErrorMessage)
+		}
+		if tl.IncomingCrossProjectCall != nil {
+			in := *tl.IncomingCrossProjectCall
+			in.ErrorMessage = view(in.ErrorMessage)
+			tl.IncomingCrossProjectCall = &in
+		}
+		tl.Task = scrubbedTask(tl.Task, view)
+		tl.Execution = scrubbedExecution(tl.Execution, view, s.resultViewFor(r))
+	}
+
 	data := ReplayData{
 		Title:       "Replay — " + execID,
 		CurrentPage: "executions",

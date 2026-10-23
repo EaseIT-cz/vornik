@@ -72,6 +72,9 @@ func newLiveAgentHarness(t *testing.T, opts ...ServerOption) *liveAgentHarness {
 		WithExecutionRepository(execRepo),
 		WithTaskRepository(taskRepo),
 		WithMetricsRegistry(prometheus.NewRegistry()),
+		// The operator's static key is admin-class: since GitHub #491 an
+		// unscoped static key that is not reads no live stream.
+		WithAdminClassKeys(config.AdminConfig{Enabled: true, AllowedKeys: []string{liveOperatorKey}}),
 	}, opts...)...)
 	h.srv.apiKeyRepo = h.keyRepo
 	h.srv.projectRegistry = reg

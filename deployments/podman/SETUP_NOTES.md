@@ -57,10 +57,10 @@ Host:     localhost
 Port:     5432
 Database: vornik
 User:     vornik
-Password: vornik_dev_password (or value of POSTGRES_PASSWORD env var)
+Password: POSTGRES_PASSWORD in deployments/podman/.env (generated per install since 2026-10-21, #412)
 ```
 
 Connection string:
 ```
-postgresql://vornik:vornik_dev_password@localhost:5432/vornik
+postgresql://vornik:<POSTGRES_PASSWORD>@localhost:5432/vornik
 ```

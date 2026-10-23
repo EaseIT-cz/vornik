@@ -158,4 +158,38 @@ CTX7="$(printf '%s' "$OUT7" | jq -r '.hookSpecificOutput.additionalContext')"
 [[ "$CTX7" == *"$DEVBANNER"* ]] || fail "end marker missing: the banner was not printed"
 [[ "$CTX7" != *"trailing text that is not guidance"* ]] || fail "end marker missing: text after the start marker was printed"
 
+# --- Case 8: outside any git repository, no folder-name scope (GitHub #385).
+# Found in production (operator-facing list_scopes, 2026-10-15): sessions run
+# from scratch directories minted scopes named after them (scratchpad, helpers,
+# w2-2), which a scoped recall from the repository never sees. The fourth
+# resolution tier, the cwd's basename, is gone: outside a repository there is
+# no scope, and the hook says so instead of naming the folder. Both paths.
+NOREPO_PARENT="$(mktemp -d)"
+NOREPO="$NOREPO_PARENT/w2-2"
+mkdir -p "$NOREPO"
+for mode in normal refresh; do
+  args=()
+  [[ "$mode" == refresh ]] && args=(--refresh)
+  OUT8="$(
+    cd "$NOREPO" &&
+    env -u VORNIK_REPO_SCOPE \
+      GIT_CEILING_DIRECTORIES="$NOREPO_PARENT" \
+      VORNIK_COMPANION_TOKEN="test-token" \
+      VORNIK_URL="http://127.0.0.1:1" \
+      bash "$HOOK" ${args[@]+"${args[@]}"} 2>/dev/null
+  )"
+  CTX8="$(printf '%s' "$OUT8" | jq -r '.hookSpecificOutput.additionalContext')"
+  [[ -n "$CTX8" && "$CTX8" != "null" ]] || { rm -rf "$NOREPO_PARENT"; fail "$mode: no additionalContext outside a repository"; }
+  if [[ "$CTX8" == *"w2-2"* ]]; then
+    rm -rf "$NOREPO_PARENT"; fail "$mode: the folder name was used as a repo scope outside a repository"
+  fi
+  if [[ "$CTX8" == *"repo scope auto-detected"* ]]; then
+    rm -rf "$NOREPO_PARENT"; fail "$mode: a repo scope was announced outside a repository"
+  fi
+  [[ "$CTX8" == *"vornik-companion: no repository scope"* ]] || { rm -rf "$NOREPO_PARENT"; fail "$mode: the no-repository directive is missing"; }
+  [[ "$CTX8" == *'repo_scope ``'* || "$CTX8" == *'repo_scope: ""'* ]] && { rm -rf "$NOREPO_PARENT"; fail "$mode: a directive names an empty repo_scope"; }
+  [[ "$CTX8" == *"capture reusable know-how as skills"* ]] || { rm -rf "$NOREPO_PARENT"; fail "$mode: the skill-capture directive is missing"; }
+done
+rm -rf "$NOREPO_PARENT"
+
 echo "PASS: session-start.sh emits every standing directive on both paths, skips the digest on --refresh, and degrades cleanly without a token"

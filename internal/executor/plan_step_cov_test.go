@@ -214,9 +214,10 @@ func TestPlanStepCov_BuildPlanningPrompt_ConversationalContext(t *testing.T) {
 	}
 	now := time.Now()
 	msgs := []*persistence.TaskMessage{
-		{ID: "m1", AuthorKind: persistence.TaskMessageAuthorOperator, MessageKind: persistence.TaskMessageKindDirective, Content: "do X", CreatedAt: now},
+		{ID: "m1", AuthorKind: persistence.TaskMessageAuthorLead, MessageKind: persistence.TaskMessageKindMessage, Content: "did X", CreatedAt: now},
 		// A note summarizing m1 — m1 should be hidden from the rendered thread.
-		{ID: "m2", AuthorKind: persistence.TaskMessageAuthorLead, MessageKind: persistence.TaskMessageKindNote, Content: "summary note", CreatedAt: now, Metadata: []byte(`{"summarized_message_ids":["m1"]}`)},
+		// (GitHub #431: only an agent-authored message can be summarized away.)
+		{ID: "m2", AuthorKind: persistence.TaskMessageAuthorLead, MessageKind: persistence.TaskMessageKindNote, Content: "summary note", CreatedAt: now, Metadata: []byte(`{"kind":"thread_summary","summarized_message_ids":["m1"]}`)},
 	}
 	got := buildPlanningPromptWithContext("", nil, sp, msgs, nil)
 	assert.Contains(t, got, "running summary")

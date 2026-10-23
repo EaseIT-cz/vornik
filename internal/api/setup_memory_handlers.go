@@ -8,7 +8,6 @@ import (
 	"strconv"
 	"strings"
 
-	"vornik.io/vornik/internal/auth"
 	"vornik.io/vornik/internal/config"
 	"vornik.io/vornik/internal/featuredoctor"
 	"vornik.io/vornik/internal/onboarding"
@@ -26,10 +25,6 @@ const memoryEmbeddingKeyEnv = "VORNIK_MEMORY_EMBEDDING_API_KEY"
 // It probes the proposed embedding endpoint and returns a structured result
 // for inline render. A disabled proposal short-circuits to Skipped.
 func (s *Server) SetupMemoryValidate(w http.ResponseWriter, r *http.Request) {
-	if SessionRoleFromContext(r.Context()) == auth.RoleUser {
-		respondError(w, http.StatusForbidden, "ADMIN_SCOPE_REQUIRED", "admin scope required")
-		return
-	}
 	if r.Method != http.MethodPost {
 		w.Header().Set("Allow", http.MethodPost)
 		w.WriteHeader(http.StatusMethodNotAllowed)
@@ -65,10 +60,6 @@ func (s *Server) SetupMemoryValidate(w http.ResponseWriter, r *http.Request) {
 // the embedding key secret + patches memory.* into config.yaml, advances the
 // session to complete. A disabled proposal just writes memory.enabled=false.
 func (s *Server) SetupMemoryCommit(w http.ResponseWriter, r *http.Request) {
-	if SessionRoleFromContext(r.Context()) == auth.RoleUser {
-		respondError(w, http.StatusForbidden, "ADMIN_SCOPE_REQUIRED", "admin scope required")
-		return
-	}
 	if r.Method != http.MethodPost {
 		w.Header().Set("Allow", http.MethodPost)
 		w.WriteHeader(http.StatusMethodNotAllowed)

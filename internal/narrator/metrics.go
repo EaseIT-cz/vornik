@@ -18,6 +18,11 @@ type Metrics struct {
 	DroppedEventsTotal *prometheus.CounterVec
 	// PanicsTotal — recovered Run-loop panics (design §5.1).
 	PanicsTotal prometheus.Counter
+	// DegradedTotal — narration lines that fell back to the deterministic
+	// template, by cause (outcome-quality LLD §S8.11 row 11, GitHub #369):
+	// no_client, llm_timeout, llm_cancelled, llm_error, no_choices, empty,
+	// cost_capped, empty_text. lines_total{degraded="true"} is the sum.
+	DegradedTotal *prometheus.CounterVec
 }
 
 // NewMetrics creates and registers the narrator metrics. Returns nil
@@ -44,7 +49,7 @@ func NewMetrics(reg *prometheus.Registry) *Metrics {
 			Namespace: "vornik",
 			Subsystem: "narration",
 			Name:      "dropped_events_total",
-			Help:      "Bus events the narrator dropped (unresolvable execution, persist failure, or subscriber lag), by kind.",
+			Help:      "Bus events and lines the narrator dropped, by kind: min_line_interval, persist_error, line_capped, chatpush_lookup_error, chatpush_task_missing, chatpush_send_error.",
 		}, []string{"kind"}),
 		PanicsTotal: prometheus.NewCounter(prometheus.CounterOpts{
 			Namespace: "vornik",
@@ -52,8 +57,14 @@ func NewMetrics(reg *prometheus.Registry) *Metrics {
 			Name:      "panics_total",
 			Help:      "Recovered panics in the narrator's Run loop. The daemon is never affected; the loop re-subscribes.",
 		}),
+		DegradedTotal: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Namespace: "vornik",
+			Subsystem: "narration",
+			Name:      "degraded_total",
+			Help:      "Narration lines that fell back to the deterministic template, by cause: no_client, llm_timeout, llm_cancelled, llm_error, no_choices, empty, cost_capped, empty_text.",
+		}, []string{"reason"}),
 	}
-	reg.MustRegister(m.LinesTotal, m.BudgetCappedTotal, m.DroppedEventsTotal, m.PanicsTotal)
+	reg.MustRegister(m.LinesTotal, m.BudgetCappedTotal, m.DroppedEventsTotal, m.PanicsTotal, m.DegradedTotal)
 	return m
 }
 
@@ -83,6 +94,13 @@ func (n *Narrator) metricDropped(kind string) {
 		return
 	}
 	n.Metrics.DroppedEventsTotal.WithLabelValues(kind).Inc()
+}
+
+func (n *Narrator) metricDegraded(reason string) {
+	if n == nil || n.Metrics == nil || n.Metrics.DegradedTotal == nil {
+		return
+	}
+	n.Metrics.DegradedTotal.WithLabelValues(reason).Inc()
 }
 
 func (n *Narrator) metricPanic() {

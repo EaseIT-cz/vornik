@@ -123,6 +123,9 @@ func observeBackfillTick(
 // backfillCounts is one tick's outcome, in the shape both backfill loops produce.
 type backfillCounts struct {
 	Processed, Succeeded, Failed, Skipped, Remaining int
+	// PersistFailed is the subset of Failed that failed to store, not in
+	// the model (GitHub #369, §S8.11 7b).
+	PersistFailed int
 	// Paused: the batch met a refusal of optional work (breaker design
 	// §5.3d) and stopped calling the model. Not a failure.
 	Paused bool
@@ -138,7 +141,7 @@ type backfillTickHooks struct {
 	runBatch       func(context.Context, int) (backfillCounts, error)
 	// observability hooks; each is nil-safe at the call site.
 	tickOutcome  func(outcome string)
-	chunkCounts  func(succeeded, failed, skipped int)
+	chunkCounts  func(backfillCounts)
 	setRemaining func(int)
 	// paused is the loop's own flag, so the pause and resume lines are logged
 	// once per transition, not once per tick. Nil disables them.
@@ -212,7 +215,7 @@ func runBackfillTick(ctx context.Context, batchSize int, h backfillTickHooks) (b
 		h.tickOutcome("progressed")
 	}
 	if h.chunkCounts != nil {
-		h.chunkCounts(counts.Succeeded, counts.Failed, counts.Skipped)
+		h.chunkCounts(counts)
 	}
 	if h.setRemaining != nil {
 		h.setRemaining(counts.Remaining)
@@ -266,13 +269,16 @@ func newBackfillHooks(
 			m.ticks.WithLabelValues(outcome).Inc()
 		}
 	}
-	h.chunkCounts = func(succeeded, failed, skipped int) {
+	h.chunkCounts = func(c backfillCounts) {
 		if m.chunks == nil {
 			return
 		}
-		m.chunks.WithLabelValues("succeeded").Add(float64(succeeded))
-		m.chunks.WithLabelValues("failed").Add(float64(failed))
-		m.chunks.WithLabelValues("skipped").Add(float64(skipped))
+		m.chunks.WithLabelValues("succeeded").Add(float64(c.Succeeded))
+		// failed is the model's; persist_failed the store's, so the two
+		// remedies are told apart (GitHub #369, §S8.11 7b).
+		m.chunks.WithLabelValues("failed").Add(float64(c.Failed - c.PersistFailed))
+		m.chunks.WithLabelValues("persist_failed").Add(float64(c.PersistFailed))
+		m.chunks.WithLabelValues("skipped").Add(float64(c.Skipped))
 	}
 	h.setRemaining = func(n int) {
 		if m.remaining != nil {

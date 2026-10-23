@@ -70,6 +70,12 @@ type agentAdminService struct {
 	// approval (design §19.8 F6), keyed "<project>/<server>".
 	gapsMu   sync.Mutex
 	toolGaps map[string]string
+	// waitingTools holds the tools approvals refused because a waiting
+	// request held a lock, keyed "<project>/<server>", until that request is
+	// decided (design §19.15, GitHub #409). Guarded by mu, not its own
+	// lock: it is written in the render section whose state saw the lock,
+	// so a decision cannot slip between the two (item 5). In memory.
+	waitingTools map[string]waitingTool
 	// notifications is a bounded, process-local advisory buffer of terminal
 	// approval signals, keyed by request namespace.
 	notificationsMu sync.Mutex
@@ -87,6 +93,9 @@ type agentAdminService struct {
 	// rollback undoes an applied proposal; nil means engine.Rollback. A test
 	// fails it to pin the double failure (design §23.4).
 	rollback func(ctx context.Context, id string) error
+	// verify confirms an applied change loaded; nil means verifyLoaded. A
+	// test forces a verify miss (design §23.9).
+	verify func(ch agentadmin.Change) string
 }
 
 // background runs fn detached and tracked.
@@ -149,6 +158,9 @@ func (c *Container) agentAdmin() *agentAdminService {
 	devices.RegisterEffect(persistence.ApprovalKindWideningChange, s.applyApproved)
 	devices.RegisterOnReject(persistence.ApprovalKindWideningChange, s.rejectApproved)
 	devices.RegisterTerminalObserver(persistence.ApprovalKindWideningChange, s.recordApprovalNotification)
+	// A tools approval that waited for this request is filed now (design
+	// §19.15, GitHub #409). Only widening changes hold project locks.
+	devices.RegisterTerminalObserver(persistence.ApprovalKindWideningChange, s.fileWaitingTools)
 	// A moot cover request is withdrawn (design §9.2d, GitHub #264).
 	devices.RegisterWithdrawable(persistence.ApprovalKindWideningChange)
 	// A credential slot's effect stores what its decision carried: the
@@ -351,7 +363,7 @@ func (s *agentAdminService) doVerb(ctx context.Context, key *persistence.APIKey,
 			return AgentAdminResult{Effect: EffectRefused, Reason: listing.refuse, Rule: agentadmin.RuleTransportMismatch}, nil
 		}
 	}
-	var recipeTargets map[string][]string
+	var recipeTargets map[string]toolListing
 	if verb == agentadmin.VerbInstallRecipe {
 		recipeTargets = s.advertiseRecipeTargets(ctx, ns, input)
 	}
@@ -363,6 +375,7 @@ func (s *agentAdminService) doVerb(ctx context.Context, key *persistence.APIKey,
 	}
 	if listing.url != "" && listing.failed == "" {
 		st.Advertised[listing.url] = listing.tools
+		st.AdvertisedReads[listing.url] = listing.reads // design §6.4
 	}
 	if listing.failed != "" {
 		if st.ListFailed == nil {
@@ -370,8 +383,9 @@ func (s *agentAdminService) doVerb(ctx context.Context, key *persistence.APIKey,
 		}
 		st.ListFailed[listing.url] = listing.failed
 	}
-	for url, tools := range recipeTargets {
-		st.Advertised[url] = tools
+	for url, listed := range recipeTargets {
+		st.Advertised[url] = listed.names
+		st.AdvertisedReads[url] = listed.reads // design §6.4
 	}
 	// A namespace above its ceiling owes a cover request (§18.4 F10): filed
 	// here, from the state loaded under this lock and BEFORE the block
@@ -416,6 +430,13 @@ func (s *agentAdminService) doVerb(ctx context.Context, key *persistence.APIKey,
 			s.withdrawMootCoverAfter(ctx, ns, key.ProjectID)
 		}
 		return res, err
+	}
+	if verb == agentadmin.VerbAddMCPServer && len(ch.Grant.Integrations) == 1 {
+		// Design §6.4 item 4 (review 923e): list_my_setup names the tools
+		// an add withheld, as it does for a tools approval; a fresh add
+		// clears a note left by an earlier server of that name.
+		g := ch.Grant.Integrations[0]
+		s.setToolGap(g.Project, g.Name, withheldNote(ch.Withheld))
 	}
 	return s.requestApproval(ctx, p, ch)
 }
@@ -486,7 +507,7 @@ func (s *agentAdminService) applyInert(ctx context.Context, p *persistence.Contr
 	if err := s.recordNarrowing(ctx, ch.Narrow); err != nil {
 		// GitHub #172 item 3 (design §23.4): the files and the ledger row
 		// landed, the change's own record did not; undo the change.
-		return s.rollBackUnrecorded(ctx, p.ID, ch.Verb, err), nil
+		return s.rollBackUnrecorded(ctx, ch.Namespace, p.ID, ch.Verb, err), nil
 	}
 	return AgentAdminResult{ChangeID: p.ID, Effect: EffectApplied, Sentence: ch.Sentence}, nil
 }
@@ -497,14 +518,12 @@ func (s *agentAdminService) applyInert(ctx context.Context, p *persistence.Contr
 // applied and the answer says so. The rule is record_failed, not
 // apply_refused: the failure is the daemon's, so the refusal ledger and the
 // burst check do not count it against the agent (#334 audit 2026-10-14).
-func (s *agentAdminService) rollBackUnrecorded(ctx context.Context, id, verb string, cause error) AgentAdminResult {
-	rollback := s.rollback
-	if rollback == nil {
-		rollback = s.engine.Rollback
-	}
+// The rollback outlives the request and a failed one is recorded for the
+// doctor (design §23.9, GitHub #373).
+func (s *agentAdminService) rollBackUnrecorded(ctx context.Context, ns, id, verb string, cause error) AgentAdminResult {
 	res := AgentAdminResult{ChangeID: id, Effect: EffectRefused, Rule: agentadmin.RuleRecordFailed,
 		Reason: verb + " refused: the change could not be recorded and was rolled back; try again"}
-	if rerr := rollback(ctx, id); rerr != nil {
+	if rerr := s.rollBackAgentChange(ctx, ns, id, verb, rollbackStageRecord, cause); rerr != nil {
 		s.c.Logger.Error().Err(cause).AnErr("rollback_error", rerr).Str("proposal_id", id).
 			Msg("agent admin: a change whose record failed could not be rolled back; it stays applied")
 		res.Reason = verb + " refused: the change could not be recorded; rolling it back failed, so it stays applied " +
@@ -548,7 +567,7 @@ func (s *agentAdminService) applyInertTransition(ctx context.Context, p *persist
 		// Design §23.4: Finish has committed (busy is clear); the rollback is
 		// a plain engine rollback, leaving the connection configured with its
 		// approval recorded as removed: fail-closed.
-		return s.rollBackUnrecorded(ctx, p.ID, ch.Verb, err), nil
+		return s.rollBackUnrecorded(ctx, ch.Namespace, p.ID, ch.Verb, err), nil
 	}
 	return AgentAdminResult{ChangeID: p.ID, Effect: EffectApplied, Sentence: ch.Sentence}, nil
 }
@@ -609,7 +628,10 @@ func (s *agentAdminService) applyAndVerify(ctx context.Context, id, actor string
 	}
 	if err := s.engine.Apply(ctx, id, actor, false); err != nil {
 		if !retryable || !errors.Is(err, controlplane.ErrBusy) {
-			_ = s.proposals.SetStatus(ctx, id, persistence.ProposalStatusRejected, actor)
+			// R3 (design §23.9): the compensation outlives the request.
+			rctx, cancel := compensationContext(ctx, agentCompensationWriteTimeout)
+			_ = s.proposals.SetStatus(rctx, id, persistence.ProposalStatusRejected, actor)
+			cancel()
 		}
 		unpublished := !resumes && slices.ContainsFunc(preWriteApplyErrors, func(e error) bool { return errors.Is(err, e) })
 		switch {
@@ -622,8 +644,13 @@ func (s *agentAdminService) applyAndVerify(ctx context.Context, id, actor string
 		}
 		return "the change could not be applied: " + err.Error(), unpublished
 	}
-	if missing := s.verifyLoaded(ch); missing != "" {
-		if rerr := s.engine.Rollback(ctx, id); rerr != nil {
+	verify := s.verify
+	if verify == nil {
+		verify = s.verifyLoaded
+	}
+	if missing := verify(ch); missing != "" {
+		// R2 (design §23.9): detached, bounded, counted and recorded.
+		if rerr := s.rollBackAgentChange(ctx, ch.Namespace, id, ch.Verb, rollbackStageVerify, errors.New("did not load "+missing)); rerr != nil {
 			s.c.Logger.Error().Err(rerr).Str("proposal_id", id).Msg("agent admin: rollback after a failed verify failed")
 			return "Vornik could not load " + missing + "; rolling the change back failed", false
 		}
@@ -1143,6 +1170,7 @@ func (s *agentAdminService) loadStateExcluding(ctx context.Context, ns, homeProj
 		Projects:   map[string]*agentadmin.ProjectState{}, Workflows: map[string]*agentadmin.WorkflowState{},
 		FileHashes: map[string]string{}, ProjectYAML: map[string][]byte{}, Locked: map[string]bool{},
 		Approvals: map[string]map[string]agentadmin.IntegrationApproval{}, Advertised: map[string][]string{},
+		AdvertisedReads: map[string][]string{},
 	}
 	if mode, err := s.c.Config.Broker.WritesMode(); err == nil && mode == "on" {
 		st.WritesOn = true // proposals need broker.writes (plan P4.8)
@@ -1188,6 +1216,7 @@ func (s *agentAdminService) loadStateExcluding(ctx context.Context, ns, homeProj
 		}
 		st.Approvals[a.ProjectID][a.Integration] = agentadmin.IntegrationApproval{
 			Kind: a.Kind, URL: a.URL, Read: a.ReadTools, Write: a.WriteTools, ReadPending: a.ReadPending, Removed: a.RemovedAt != nil,
+			Suspended:       a.SuspendedTools,
 			AccountIdentity: a.AccountIdentity, IdentitySource: a.IdentitySource,
 		}
 	}

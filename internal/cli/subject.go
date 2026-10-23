@@ -392,47 +392,10 @@ func runSubjectExport(_ *cobra.Command, args []string) error {
 	if err != nil {
 		return err
 	}
-	links, err := repo.ListLinks(ctx, req.SubjectID)
+	exp, ids, blob, hash, err := assembleSubjectExport(ctx, repo, req)
 	if err != nil {
 		return err
 	}
-	items, err := repo.CollectItems(ctx, req.SubjectID, links)
-	if err != nil {
-		return err
-	}
-	methods := map[string]bool{}
-	for _, l := range links {
-		methods[string(l.Source)] = true
-	}
-	methodList := make([]string, 0, len(methods))
-	for m := range methods {
-		methodList = append(methodList, m)
-	}
-
-	exp, err := datasubject.BuildExport(req, items, methodList)
-	if err != nil {
-		return err
-	}
-	ids, err := repo.ListIdentifiers(ctx, req.SubjectID)
-	if err != nil {
-		return err
-	}
-	exp.Identifiers = ids
-
-	// Belt: assert the Art 15(4) property on the finished artefact before it
-	// leaves the process. The leak is silent and the report looks plausible
-	// either way, so it is checked rather than assumed.
-	if exp.LeaksForeignContent(items) {
-		return fmt.Errorf("refusing to emit the report: it would disclose content from a record " +
-			"that also concerns another person (Art 15(4)) — this is a bug, please report it")
-	}
-
-	blob, err := json.MarshalIndent(exp, "", "  ")
-	if err != nil {
-		return err
-	}
-	sum := sha256.Sum256(blob)
-	hash := "sha256:" + hex.EncodeToString(sum[:])
 
 	if subjectOutPath != "" {
 		if err := os.WriteFile(subjectOutPath, blob, 0o600); err != nil {
@@ -453,6 +416,56 @@ func runSubjectExport(_ *cobra.Command, args []string) error {
 	fmt.Printf("%d item(s); %d withheld under Art 15(4)\n", len(exp.Items), countWithheld(exp))
 	warnIfKGUnresolved(ids, req)
 	return nil
+}
+
+// assembleSubjectExport builds the Art 15 / Art 20 report for a request and
+// returns it with the subject's identifiers, the serialised artefact and its
+// hash. It writes nothing: the caller emits the artefact and actions the
+// request. Split from runSubjectExport so the artefact the subject receives is
+// testable on a real store (GDPR design §4.20, #115).
+func assembleSubjectExport(ctx context.Context, repo *subjectstore.Repository, req datasubject.Request) (
+	exp *datasubject.Export, ids []datasubject.Identifier, blob []byte, hash string, err error) {
+	links, err := repo.ListLinks(ctx, req.SubjectID)
+	if err != nil {
+		return nil, nil, nil, "", err
+	}
+	items, err := repo.CollectItems(ctx, req.SubjectID, links)
+	if err != nil {
+		return nil, nil, nil, "", err
+	}
+	methods := map[string]bool{}
+	for _, l := range links {
+		methods[string(l.Source)] = true
+	}
+	methodList := make([]string, 0, len(methods))
+	for m := range methods {
+		methodList = append(methodList, m)
+	}
+
+	exp, err = datasubject.BuildExport(req, items, methodList)
+	if err != nil {
+		return nil, nil, nil, "", err
+	}
+	ids, err = repo.ListIdentifiers(ctx, req.SubjectID)
+	if err != nil {
+		return nil, nil, nil, "", err
+	}
+	exp.SetIdentifiers(ids)
+
+	// Belt: assert the Art 15(4) property on the finished artefact before it
+	// leaves the process. The leak is silent and the report looks plausible
+	// either way, so it is checked rather than assumed.
+	if exp.LeaksForeignContent(items) {
+		return nil, nil, nil, "", fmt.Errorf("refusing to emit the report: it would disclose content from a record " +
+			"that also concerns another person (Art 15(4)) — this is a bug, please report it")
+	}
+
+	blob, err = json.MarshalIndent(exp, "", "  ")
+	if err != nil {
+		return nil, nil, nil, "", err
+	}
+	sum := sha256.Sum256(blob)
+	return exp, ids, blob, "sha256:" + hex.EncodeToString(sum[:]), nil
 }
 
 // warnIfKGUnresolved tells the operator when a request has been served without

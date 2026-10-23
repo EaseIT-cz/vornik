@@ -8,6 +8,7 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"net/url"
 	"sort"
 	"strings"
 	"time"
@@ -63,6 +64,31 @@ type TasksData struct {
 	// other mode — confusing as a two-button selector.
 	NestedURL string
 	FlatURL   string
+
+	// GitHub #411 (web-ui-design.md "Task list (/ui/tasks) states its cut —
+	// 2026-10-17"). Paginator drives the "Showing X–Y of M tasks" line and
+	// Prev/Next; M is TaskRepository.Count of exactly the list's filter.
+	Paginator Paginator
+	// ActiveFilter is ?active=1: the CLI's `task list --active` set,
+	// persistence.CancellableTaskStatuses. ActiveCount is that set's sum of
+	// StatusCounts (the palette cell), ActiveURL the cell's link.
+	ActiveFilter bool
+	ActiveCount  int64
+	ActiveURL    string
+	// TileQS is appended to every status cell's link: limit, flat and the
+	// project filter (the cells' counts are the project's). Never page or
+	// a recency window.
+	TileQS string
+	// UpdatedWithin / FailedWithin echo the recency windows so the
+	// page-size form keeps them.
+	UpdatedWithin string
+	FailedWithin  string
+	// QueryMatches is how many fetched rows ?q= kept (the search runs in Go
+	// over this page only); SortLocal is true when a non-default sort
+	// re-orders only this page of a multi-page list. Both are said on the
+	// page so neither reads as covering the whole list.
+	QueryMatches int
+	SortLocal    bool
 }
 
 // TaskHierarchyMeta carries the per-row hierarchy fields the list
@@ -99,6 +125,21 @@ func (s *Server) Tasks(w http.ResponseWriter, r *http.Request) {
 		projectID = r.URL.Query().Get("project")
 	}
 	query := strings.TrimSpace(r.URL.Query().Get("q"))
+	// ?active=1 is `vornikctl task list --active` (GitHub #411): the same
+	// status set from the same function, never a second list. Like the CLI,
+	// it is refused alongside a single status, and any other value is
+	// refused rather than silently ignored.
+	activeRaw := r.URL.Query().Get("active")
+	activeFilter := activeRaw == "1"
+	if activeRaw != "" && !activeFilter {
+		http.Error(w, "active must be 1 when set", http.StatusBadRequest)
+		return
+	}
+	if activeFilter && status != "" {
+		http.Error(w, "active and status are mutually exclusive", http.StatusBadRequest)
+		return
+	}
+	page := parsePageParam(r.URL.Query())
 	// ?updated_within=24h narrows to tasks touched inside a recent window.
 	// The dashboard's attention cards count over such a window and link here
 	// with the same one, so clicking a card lands on exactly the rows it
@@ -151,6 +192,9 @@ func (s *Server) Tasks(w http.ResponseWriter, r *http.Request) {
 		st := persistence.TaskStatus(status)
 		filter.Status = &st
 	}
+	if activeFilter {
+		filter.Statuses = persistence.CancellableTaskStatuses()
+	}
 
 	if projectID != "" {
 		if !api.RequestAllowsProject(r, projectID) {
@@ -160,12 +204,38 @@ func (s *Server) Tasks(w http.ResponseWriter, r *http.Request) {
 		filter.ProjectID = &projectID
 	}
 
+	scopedProjects, isScoped := api.RequestScopedProjects(r)
+	scopedAll := isScoped && projectID == ""
+	if scopedAll {
+		filter.ProjectIDs = scopedProjects
+	}
+
 	var tasks []*persistence.Task
+	var pager Paginator
+	tasksPath := uiPathPrefix + "/tasks"
 	if s.taskRepo != nil {
 		ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
 		defer cancel()
+		// Count first, so the page can be clamped into range before the
+		// offset is taken (a stale ?page= after deletions shows the last
+		// page, not an empty one). A failed count is never a total.
+		var total int64
+		var countErr error
+		if !scopedAll || len(scopedProjects) > 0 {
+			// An empty ProjectIDs is "no constraint": a scoped session with
+			// no projects must not count every project's tasks.
+			total, countErr = s.taskRepo.Count(ctx, filter)
+		}
+		if countErr == nil {
+			pager = NewPaginator(int(total), page, limit, tasksPath, r.URL.Query())
+			page = pager.Page
+		} else {
+			s.logger.Warn().Err(countErr).Str("project_id", projectID).Msg("failed to count tasks for UI; the list will not claim a total")
+		}
+		filter.Offset = (page - 1) * limit
 		var err error
-		if scoped, isScoped := api.RequestScopedProjects(r); isScoped && projectID == "" {
+		if scopedAll {
+			scoped := scopedProjects
 			// Project-scoped session with no explicit project: query each
 			// allowed project and merge, rather than fetching the latest N
 			// across ALL projects and post-filtering (which leaves a scoped
@@ -185,12 +255,17 @@ func (s *Server) Tasks(w http.ResponseWriter, r *http.Request) {
 	} else {
 		s.logger.Warn().Msg("task repository is not configured for UI")
 	}
+	if s.taskRepo != nil && pager.PerPage == 0 {
+		pager = NewUnknownTotalPaginator(page, limit, len(tasks), tasksPath, r.URL.Query())
+	}
+	pager.Label, pager.Noun = "Task list pages", "tasks"
 	tasks = filterTasksForRequest(r, tasks) // defense-in-depth; no-op for the scoped path
 
 	// In-memory filter on the page slice. The repo doesn't support full-text
-	// search and adding it for one UI page isn't worth the complexity — the
-	// list is already capped at 100. If a user needs to scan further they
-	// should narrow with status / project filters first.
+	// search and adding it for one UI page isn't worth the complexity; the
+	// page says the search covers this page only (QueryMatches, #411 item 8).
+	// If a user needs to scan further they should narrow with status /
+	// project filters first, or page.
 	if query != "" {
 		needle := strings.ToLower(query)
 		filtered := tasks[:0]
@@ -202,8 +277,10 @@ func (s *Server) Tasks(w http.ResponseWriter, r *http.Request) {
 		}
 		tasks = filtered
 	}
+	queryMatches := len(tasks)
 
 	sortBy(tasks, taskColumns, sortKey, sortDir, "created")
+	sortLocal := (sortKey != "created" || sortDir != "desc") && (pager.HasPrev || pager.HasNext)
 
 	// Hierarchy decoration. ?flat=1 short-circuits — operators who
 	// want the raw chronological list can opt out. The default
@@ -257,19 +334,34 @@ func (s *Server) Tasks(w http.ResponseWriter, r *http.Request) {
 	if s.taskRepo != nil {
 		ctx, cancel := context.WithTimeout(r.Context(), 3*time.Second)
 		defer cancel()
-		if counts, err := s.taskRepo.CountByStatus(ctx, projectID); err == nil {
-			if projectID == "" && !requestHasAllProjectAccess(r) {
+		switch {
+		case scopedAll:
+			// A scoped session's tiles count its projects, not the page
+			// (#411 item 7); a failed per-project count falls back to the
+			// page, as before.
+			statusCounts = s.countByStatusScoped(ctx, scopedProjects)
+			if statusCounts == nil {
 				statusCounts = countStatuses(tasks)
-			} else {
-				statusCounts = counts
+			}
+		default:
+			if counts, err := s.taskRepo.CountByStatus(ctx, projectID); err == nil {
+				if projectID == "" && !requestHasAllProjectAccess(r) {
+					statusCounts = countStatuses(tasks)
+				} else {
+					statusCounts = counts
+				}
 			}
 		}
 	}
 
-	var totalCount int64
+	var totalCount, activeCount int64
 	for _, n := range statusCounts {
 		totalCount += n
 	}
+	for _, st := range persistence.CancellableTaskStatuses() {
+		activeCount += statusCounts[st]
+	}
+	tileQS := tasksTileQS(limit, flat, projectID)
 
 	data := TasksData{
 		Title:        "Tasks",
@@ -289,9 +381,52 @@ func (s *Server) Tasks(w http.ResponseWriter, r *http.Request) {
 		Flat:         flat,
 		NestedURL:    viewModeURL(r, false),
 		FlatURL:      viewModeURL(r, true),
+
+		Paginator:     pager,
+		ActiveFilter:  activeFilter,
+		ActiveCount:   activeCount,
+		ActiveURL:     tasksPath + "?active=1" + tileQS,
+		TileQS:        tileQS,
+		UpdatedWithin: r.URL.Query().Get("updated_within"),
+		FailedWithin:  r.URL.Query().Get("failed_within"),
+		QueryMatches:  queryMatches,
+		SortLocal:     sortLocal,
 	}
 
 	s.render(w, "tasks.html", data)
+}
+
+// tasksTileQS is the query suffix every status-palette cell carries: the
+// page size, the view mode and the project filter, whose counts the cells
+// show (#411 item 6). It never carries page (a new filter starts at page 1)
+// or a recency window (the tile counts are unwindowed).
+func tasksTileQS(limit int, flat bool, projectID string) string {
+	qs := fmt.Sprintf("&limit=%d", limit)
+	if flat {
+		qs += "&flat=1"
+	}
+	if projectID != "" {
+		qs += "&project_id=" + url.QueryEscape(projectID)
+	}
+	return qs
+}
+
+// countByStatusScoped sums CountByStatus over a scoped session's projects,
+// so its palette counts the projects rather than the fetched page (#411 item
+// 7). nil when any count fails; the caller falls back to the page.
+func (s *Server) countByStatusScoped(ctx context.Context, projects []string) map[persistence.TaskStatus]int64 {
+	out := map[persistence.TaskStatus]int64{}
+	for _, p := range projects {
+		counts, err := s.taskRepo.CountByStatus(ctx, p)
+		if err != nil {
+			s.logger.Debug().Err(err).Str("project_id", p).Msg("scoped CountByStatus failed; tiles fall back to the page")
+			return nil
+		}
+		for st, n := range counts {
+			out[st] += n
+		}
+	}
+	return out
 }
 
 func filterTasksForRequest(r *http.Request, tasks []*persistence.Task) []*persistence.Task {

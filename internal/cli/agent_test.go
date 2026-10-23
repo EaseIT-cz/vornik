@@ -23,9 +23,19 @@ func TestRunMCPBridge(t *testing.T) {
 		_, _ = w.Write([]byte(`{"jsonrpc":"2.0","id":1,"result":{}}`))
 	}))
 	t.Cleanup(srv.Close)
+	// The key lives under os.UserConfigDir(), which reads XDG_CONFIG_HOME on
+	// Linux and $HOME/Library/Application Support on macOS. Point both at the
+	// temp dir and ask the same function, so the test writes where the code
+	// reads on either OS (public CE macos-check, 2026-10-23: the key was
+	// written under XDG_CONFIG_HOME and looked for under Library).
 	cfg := t.TempDir()
 	t.Setenv("XDG_CONFIG_HOME", cfg)
+	t.Setenv("HOME", cfg)
 	t.Setenv("VORNIK_API_URL", "")
+	userCfg, err := os.UserConfigDir()
+	if err != nil {
+		t.Fatal(err)
+	}
 	agentNamespace, agentURL = "hermes", srv.URL
 	t.Cleanup(func() { agentNamespace, agentURL = "", "" })
 
@@ -35,7 +45,7 @@ func TestRunMCPBridge(t *testing.T) {
 		t.Fatal("ran with no key file")
 	}
 
-	dir := filepath.Join(cfg, "vornik", "agents")
+	dir := filepath.Join(userCfg, "vornik", "agents")
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		t.Fatal(err)
 	}

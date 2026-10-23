@@ -64,9 +64,12 @@ echo "scraper make"  > "$SRC/services/scraper/Makefile"
 
 rsync -a --delete --exclude='.git/' "${EXCL[@]}" "$SRC/" "$DST/"
 
-for f in LICENSE Makefile CLA.md CODE_OF_CONDUCT.md; do
+for f in LICENSE CLA.md CODE_OF_CONDUCT.md; do
   chk "root $f preserved" grep -qx 'public-root' "$DST/$f"
 done
+# The root Makefile SYNCS from its template since 2026-10-23: the live copy
+# lacked the ui-css-check target the template workflow calls.
+chk "root Makefile SYNCS from the template (2026-10-23)" grep -qx 'ee-root' "$DST/Makefile"
 # The root README is deliberately NOT preserved: it syncs from
 # scripts/public-ce-templates/README.md. Preserving it is what let the public
 # landing page drift behind the maintained template, including a security-relevant

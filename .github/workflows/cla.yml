@@ -1,7 +1,7 @@
 # Vornik CLA gate (CLA Assistant Lite). Injected into the public repo.
 #
 # Setup (operator, one-time): add a repository secret PERSONAL_ACCESS_TOKEN — a
-# fine-grained PAT scoped to grinco/vornik with Contents + Pull requests
+# fine-grained PAT scoped to EaseIT-cz/vornik with Contents + Pull requests
 # read/write. The action uses it to record signatures on the `cla-signatures`
 # branch (created on the first signature). The CLA text lives at /CLA.md.
 #
@@ -50,12 +50,12 @@ jobs:
           # founder personally to EaseIT Labs s.r.o. Pointing at a fresh file makes
           # every v1 signer sign again; signatures/cla.json stays as the v1 record.
           path-to-signatures: signatures/cla-v2.json
-          path-to-document: https://github.com/grinco/vornik/blob/main/CLA.md
+          path-to-document: https://github.com/EaseIT-cz/vornik/blob/main/CLA.md
           branch: cla-signatures
           allowlist: dependabot[bot],grinco
           custom-pr-sign-comment: I have read the CLA Document and I hereby sign the CLA
           custom-notsigned-prcomment: >-
             Thank you for your pull request. Before we can merge it, please read
-            the [Contributor License Agreement](https://github.com/grinco/vornik/blob/main/CLA.md)
+            the [Contributor License Agreement](https://github.com/EaseIT-cz/vornik/blob/main/CLA.md)
             and sign it by posting a comment containing exactly:
           custom-allsigned-prcomment: 'All contributors have signed the CLA. ✍️'

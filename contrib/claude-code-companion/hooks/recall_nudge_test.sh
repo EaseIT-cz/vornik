@@ -216,4 +216,20 @@ jq -e '.hooks.PostToolUse[] | select(.matcher == "mcp__plugin_vornik-companion_v
 [[ "$(jq -r '[.hooks.SessionStart[].matcher] | join(",")' "$HOOKS_JSON")" == "startup|resume|clear|fork,compact" ]] \
   || fail "case9: SessionStart registrations changed"
 
+# Case drain: every early exit reads stdin first (2026-10-23). The public CE
+# CI failed "case5 unknown mode: exit 141": the hook exited on an unknown mode
+# without reading its stdin, so the writer took SIGPIPE when the hook won the
+# race. In use the writer is the client itself. A payload larger than a pipe
+# buffer (64 KiB) makes the race deterministic: a hook that exits unread always
+# leaves the writer blocked and then broken.
+BIG="$(printf '{"pad":"%s"}' "$(head -c 262144 /dev/zero | tr '\0' x)")"
+for spec in "bogus-mode|VORNIK_COMPANION_TOKEN=t" "observe|VORNIK_COMPANION_TOKEN=" "observe|VORNIK_NUDGE=off VORNIK_COMPANION_TOKEN=t" "recalled|VORNIK_COMPANION_TOKEN="; do
+  dmode="${spec%%|*}"; denv="${spec#*|}"
+  # shellcheck disable=SC2086 # denv is a list of NAME=value words on purpose
+  printf '%s' "$BIG" | env PATH="$ALLOW" $denv "$BASH_BIN" "$HOOK" "$dmode" >/dev/null 2>/dev/null
+  st=("${PIPESTATUS[@]}")
+  [[ "${st[0]}" == 0 && "${st[1]}" == 0 ]] \
+    || fail "case drain ($dmode, $denv): writer exit ${st[0]}, hook exit ${st[1]}; the hook must read its stdin before any exit"
+done
+
 echo "PASS: recall-nudge.sh nudges once per subsystem on the 3rd read, yields to a recent successful recall, fails open, stays offline and keeps no content"

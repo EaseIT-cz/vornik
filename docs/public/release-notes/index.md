@@ -1,7 +1,7 @@
 ---
 sources:
     - path: docs/release-notes
-      sha256: b80c61cf33751e6dd4fd4192e2152afaa86cbc044308f6e38ae610fd8d72324e
+      sha256: 7bd7943458d3bf2d942f60c7e1772d1ba41080cf9933e5119ad33b68fdf0be4b
 ---
 # Release Notes
 
@@ -16,6 +16,10 @@ behavior changes, and notable fixes. Internal-only changes are omitted.
     new behavior; those are called out below.
 
 ---
+
+## 2026.10.8
+
+*Unreleased draft.*
 
 ## 2026.10.7
 

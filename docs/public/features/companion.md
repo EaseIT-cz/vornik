@@ -5,9 +5,9 @@ sources:
     - path: internal/api/companion_mcp.go
       sha256: 01f7c494025657d6195f169c81e7ebb2a4cc9e2374b08862a043d2685b0632c4
     - path: contrib/claude-code-companion/.claude-plugin/plugin.json
-      sha256: fe435769be41a8c3e942c07fa28ffe22cf4f4a1195fb830ab56d9c8e1a34c68b
+      sha256: 3ef65903d76c454435210adae79c54379867457c245e7d56d85e1d428fdbb099
     - path: contrib/codex-companion/.codex-plugin/plugin.json
-      sha256: 62fb3bb870d2c062594c6e4b4c8508db76a4a9cbe9f1f59b4d9f1126bfed5140
+      sha256: 8ba365101517b05aaf0c88563cdf77a6065531373fea977b1e0e0bf5021e8742
 ---
 # Companion plugin
 

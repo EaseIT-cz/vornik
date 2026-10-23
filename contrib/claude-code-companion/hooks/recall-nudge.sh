@@ -29,6 +29,10 @@
 #   VORNIK_NUDGE_RECALL_WINDOW_S  how long a recall suppresses, seconds (900)
 
 MODE="${1:-}"
+# Read stdin before any exit: the client writes the payload into this pipe,
+# and a hook that exits unread breaks the writer's pipe (SIGPIPE, exit 141 in
+# the public CE CI, 2026-10-23). Every early exit below comes after this.
+INPUT="$(cat 2>/dev/null)"
 
 [[ "$MODE" == observe || "$MODE" == recalled ]] || exit 0
 [[ "${VORNIK_NUDGE:-}" == off ]] && exit 0
@@ -40,7 +44,6 @@ THRESHOLD="${VORNIK_NUDGE_THRESHOLD:-3}"
 WINDOW="${VORNIK_NUDGE_RECALL_WINDOW_S:-900}"
 [[ "$WINDOW" =~ ^[0-9]{1,9}$ ]] || WINDOW=900
 
-INPUT="$(cat 2>/dev/null)"
 [[ -n "$INPUT" ]] || exit 0
 
 # One jq pass, fields joined by the ASCII unit separator (0x1f). It is not

@@ -73,7 +73,10 @@ done
 # install instruction. If this assertion is ever flipped back, that drift returns.
 chk "root README.md SYNCS (no longer frozen — see PUBLISH_EXCL)" \
   grep -qx 'ee-root' "$DST/README.md"
-chk "public CI workflow preserved" grep -qx 'public-ci' "$DST/.github/workflows/ci.yaml"
+# The public CI workflow SYNCS from the template since 2026-10-23 (operator
+# decision (a), export runbook): the hand-kept live file had drifted behind the
+# template the export tests. If it is preserved again, that drift returns.
+chk "public CI workflow SYNCS from the template (2026-10-23)" grep -qx 'ee-ci' "$DST/.github/workflows/ci.yaml"
 chk "injected import-law test preserved" \
   grep -qx 'public-law' "$DST/internal/architecture/import_law_test.go"
 

@@ -1,10 +1,16 @@
-# AGENTS.md — Vornik runbook for AI agents
+# AGENTS.md — Vornik for AI agents
 
-You are an AI agent (Claude Code, Codex, Gemini CLI, …) and your user asked
-you to set up Vornik, connect it to an LLM, or work on this codebase. This
-file is written for you: every step is a command plus a check. Run the
-command, verify the check, and only then continue. If a check fails, stop
-and triage with the step's hints — do not push on past a failed check.
+You are an AI agent (Claude Code, Codex, Gemini CLI, …). This file is
+written for you, in two parts:
+
+- **Part 1 — using Vornik** (Runbooks A, B, D): your user asked you to set up
+  Vornik, connect it to an LLM, wire yourself in, or update an install. Every
+  step is a command plus a check. Run the command, verify the check, and only
+  then continue. If a check fails, stop and triage with the step's hints — do
+  not push on past a failed check.
+- **Part 2 — changing the code** (§1–§8): the operative rules for anyone,
+  human or agent, changing this codebase. `CLAUDE.md` imports this file, so
+  Claude Code loads the same rules.
 
 ## Trust & safety (read first)
 
@@ -316,24 +322,6 @@ they're reviewed.
 
 ---
 
-## Runbook C — working on the codebase
-
-```bash
-make build             # go build (daemon + CLI)
-make test              # unit tests (-short)
-make test-integration  # needs PostgreSQL — see README "Integration Tests"
-make lint              # golangci-lint + LLD contract lint; run before every commit
-```
-
-Conventions that will get your PR rejected if skipped: tests first (TDD —
-each bugfix carries a regression test that fails pre-fix), every touched
-file keeps unit coverage, and `go test ./...` (not just `go build`) before
-claiming a rename/deletion is safe. Start with `https://docs.vornik.io` and
-`https://docs.vornik.io` for how the pieces fit; user-facing docs live in
-`docs/public/`.
-
----
-
 ## Runbook D — updating an existing install
 
 For a host installed via Runbook A, **upgrade in place** with the update
@@ -365,3 +353,207 @@ timer: `deployments/podman/UPDATING.md`.
 
 **Ground rule 1 still applies:** the cutover restarts the service (interrupting
 any running task); the script warns first unless you pass `--yes`.
+
+---
+
+# Part 2 — Changing the code
+
+Operative rules for anyone — human or agent — changing this codebase. They are
+stated here, in full, rather than linked, because every one of them has been
+carried as a pointer that was re-injected into context, read, and not followed.
+A rule behind a link is a rule the reader chooses; that choice is what this file
+removes.
+
+**Build, test, lint** (the commands; §2 says which runs are required before
+claiming anything works):
+
+```bash
+make build             # go build (daemon + CLI)
+make test              # unit + agent shell + script tests
+make test-integration  # needs PostgreSQL with pgvector; the Postgres lane
+make lint              # golangci-lint + the LLD contract checks + shellcheck
+```
+
+Start with `https://docs.vornik.io` and `https://docs.vornik.io` for how the
+pieces fit; user-facing docs live in `docs/public/`.
+
+## 1. Design before code
+
+**Recall the subsystem's design before reading or editing its code, and again
+when the subsystem changes.** The designs in `https://docs.vornik.io` are the
+authoritative record; code confirms what a named file, flag or function still
+is, because a design freezes facts at write time.
+
+Then one of three things is true, and each has an obligation:
+
+| the design | you |
+|---|---|
+| is silent on what you are about to do | add it |
+| contradicts what shipped | correct it, dated, and mark the stale sections inline |
+| does not exist for this surface | write one |
+
+**An undesigned surface is designed before it is changed, in this order:**
+
+1. **As-built first.** Write the low-level design of what the surface does
+   TODAY, reverse-engineered from the code, its configuration and its
+   observed behaviour (measured where it can be: run times, sizes, counts),
+   not from memory or intent. Say what was measured and what was inferred.
+2. **Review the as-built record** until GREEN. A wrong picture of the
+   present makes every proposal built on it wrong.
+3. **Then the change**, as a dated section of the same design: what moves,
+   why, what it costs, and what it gives up. Review it until GREEN.
+4. **Then TDD**: the failing test, the change, the test passing, the
+   design amended with what actually shipped.
+
+Never fold the as-built record and the proposal into one unreviewed draft,
+and never let "it is only configuration" (a workflow, a Makefile, a script)
+excuse a surface from this: those are where undesigned behaviour lives
+longest.
+
+**Touch a surface a design covers → amend that design in the same change.**
+Never a second document about one surface: retrieval serves whichever chunk
+ranks highest, and neither document says it is the incomplete one.
+
+The failure this prevents is not hypothetical and not rare. It is skipped most
+often on changes that look contained — "one line", "obviously right" — and those
+are the ones where the design turns out to disagree.
+
+*(In the public Community repository `https://docs.vornik.io` is not present;
+the rule still holds for whatever design record that fork keeps.)*
+
+## 2. Verify at CI scope, not at "it compiles"
+
+Before claiming anything works:
+
+```
+go test ./...                 # the sqlite lane
+make lint                     # golangci-lint + the LLD contract checks + shellcheck
+make test                     # unit + agent shell + script tests
+```
+
+and, **for any change under `internal/persistence` or that touches SQL**, the
+Postgres lane as well:
+
+```
+make test-integration         # -tags=integration; the pgvector lane
+```
+
+`go test ./...` is SQLite. A repository can diverge between the two drivers and
+pass — that is how a JSONB byte-exactness difference reached CI, and how a
+`LIKE` pattern silently matched nothing on one driver for weeks.
+
+**Read the exit code directly.** Never through a pipe: `go test ./... | tail`
+reports the exit status of `tail`.
+
+## 3. A bug fix without a failing test is a guess
+
+Write the test that fails before the fix and passes after it, and name the
+incident in a comment. A fix whose test cannot distinguish the broken code from
+the fixed code has not been demonstrated.
+
+The same applies to a rare bug: make the interleaving deterministic (a seam, a
+hook) rather than relying on a 1-in-600 stochastic reproduction as the gate.
+
+**The test sits at the level where the bug was FOUND, or higher, never only
+below it** (operator, 2026-10-14), because every level below already passed.
+The levels, lowest first: `unit`; `integration` (real DB, git or HTTP
+handler); `executor-e2e` (the real daemon loop); `e2e-lane` (a real
+container); `production` (operator observation), which a test cannot reach,
+so it is compared as `e2e-lane`. A `review` or audit find also names the
+level where a user would observe it, and counts there. The fix's commit
+message says `Found at: <level>` and `Regression test at: <level> <test>`,
+plus `Lower because: <reason>` when the test sits lower; the local commit-msg
+hook (after `make install-hooks`) refuses a `fix:` commit without them.
+Canonical text: `https://docs.vornik.io` §4.7 to §4.9.
+
+## 4. Say what is true
+
+- A number with no scope reads as a guarantee — publish what it does NOT cover.
+- A control that cannot distinguish "examined and clean" from "never examined"
+  reports the first and means the second. **A denylist is that failure by
+  construction** — it reports clean about every shape not on the list, so
+  publish the DENOMINATOR: how many things were examined, not only how many
+  were found. A back-merge guard matching one wording missed twenty-four
+  back-merges of another while printing "none new" (2026-09-23).
+- A documented behaviour nothing implements is worse than an absent one: it
+  stops the next person looking.
+- Report failures with their output. "Tests pass" after a partial run is a
+  claim about a run that did not happen.
+
+## 5. Before improvising, check what exists
+
+This codebase is large and most surfaces have been solved once. Search for the
+prior art before building the second one — a safety check with two
+implementations has one that is wrong, and the wrong one is usually the newer.
+
+The same holds for the operator-facing tooling: prefer the shipped skills and
+`vornikctl` verbs over hand-rolled commands.
+
+## 6. Work as a team lead, and finish what is in hand
+
+- **Delegate first, never idle-wait.** Reviews, edge-case brainstorms,
+  critiques, summaries and research go to Vornik (the companion workflows or
+  your agent namespace's team) before you start your own part; keep one in
+  flight and read results between steps. Verify what comes back.
+- **Teams, not individuals.** A project is a domain, a workflow a capability,
+  the swarm a team of roles with distinct jobs, tools and models.
+- **Park side tasks.** An off-goal bug or task is filed, with evidence, as a
+  GitHub issue (or with the backlog_deposit tool, which lands in the inbox
+  that is swept into issues) or handed to a parallel agent or Vornik task;
+  only production breakage or a blocker interrupts the goal. Keep an ordered
+  in-flight list.
+- **Write every operator idea down at once** (a GitHub issue, the
+  backlog_deposit tool, or the design), so a compaction cannot lose it.
+- **Recall the design every time you touch one**, at minimum, not once per
+  session.
+
+## 7. Commit discipline
+
+- `make lint` before every commit.
+- Stage the exact paths you changed. Never `git add -A` or `git add .` — other
+  work happens in this tree concurrently.
+- Commit locally; do not push unless asked.
+- The commit message explains WHY, and states what was verified.
+
+## 8. Security-relevant code
+
+If a change touches any of these, state the security impact in the commit
+message, make sure a test covers the invariant you relied on, and re-review
+the public security model (`docs/public/security-model.md`; it is anchored to
+the main files below, so `make lint` asks for it):
+
+- Authentication, admin class and project scoping:
+  `internal/api/middleware.go`, `internal/api/admin_class_auth.go`
+  (`OperatorSurfaceAccessFor`, `ErrorTextAccessFor`), `internal/api/routes.go`,
+  `internal/httpx/realip/`
+- Process starts: `internal/spawn/` (the only daemon-linked package that may
+  start a process) and `internal/architecture/spawn_law_test.go`
+- Sandbox one-shots: `internal/sandboxtool/` (hardening flags, limits,
+  `ffmpeg_guard.go`)
+- Agent containers and workspaces: `internal/runtime/manager.go`,
+  `internal/runtime/pool.go`, `internal/executor/artifacts.go`,
+  `internal/safepath/`
+- Secrets and redaction: `internal/secrets/secrets.go`,
+  `internal/egressscan/`, `internal/report/scrubbed_view.go` (`ScrubLines`),
+  `internal/chatview/`
+- Untrusted content: `internal/outputguard/`, `internal/untrusted/`,
+  `internal/taintlineage/`, `internal/memory/gates.go`, `internal/memoryfirewall/`
+- Outbound: `internal/netguard/`, `internal/mcp/client.go`,
+  `internal/mcp/mutating_tools.go`, `internal/config/stdio_mcp_guard.go`
+- Approvals: `internal/approval/` (`CanonicalSHA256`), `internal/approverdevice/`,
+  `internal/brokeractions/worker.go`, `internal/agentadmin/`
+- Data protection: `internal/datasubject/`, `internal/aidisclosure/`,
+  `internal/retention/`
+
+Rules every such change keeps:
+
+- A new outbound HTTP client has an explicit timeout, reads through a size
+  cap, and dials through `netguard` unless it is loopback by construction.
+- A new process start goes through `internal/spawn`; the import law refuses
+  anything else.
+- A new podman invocation goes through `internal/sandboxtool` (one-shot) or
+  the runtime manager (agent), never a hand-built argv.
+- A new place that stores or forwards model or tool text passes a secrets
+  checkpoint.
+- `go test -race -short ./...` and `make vulncheck` (`govulncheck`, a
+  required CI job) stay green.

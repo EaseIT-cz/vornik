@@ -492,6 +492,22 @@ func mvCaseApplyBacksUpChangesAndCountsInOneEvent(t *testing.T, h MemoryVerifica
 	mvState(t, h, c6, "unverified", "")
 	mvState(t, h, c7, "verified", "rag-ingester")
 
+	// #508 F5: OnlyValidatorRoles narrows a de-verify to ANY of the stamps it
+	// names (either provenance role), and to nothing else.
+	c8, c9, c10 := uniqueID("c"), uniqueID("c"), uniqueID("c")
+	art5 := "x5-" + project
+	mvChunk(t, h, VerificationSeedChunk{ID: c8, ProjectID: project, ArtifactID: art5, ProducerRole: "rag-ingester", ValidatorRole: "provenance:origin/main", Status: "verified"})
+	mvChunk(t, h, VerificationSeedChunk{ID: c9, ProjectID: project, ArtifactID: art5, ProducerRole: "rag-ingester", ValidatorRole: "provenance:forge-api", Status: "verified"})
+	mvChunk(t, h, VerificationSeedChunk{ID: c10, ProjectID: project, ArtifactID: art5, ProducerRole: "rag-ingester", ValidatorRole: "provenance:unavailable", Status: "verified"})
+	sweep2 := &persistence.MemoryVerificationEvent{ProjectID: project, Kind: "sweep", Actor: "provenance-sweep"}
+	if err := h.Repo.ApplyVerificationChange(ctx, sweep2, []persistence.ArtifactVerificationChange{
+		{ArtifactID: art5, NewStatus: "unverified", OnlyValidatorRoles: []string{"provenance:origin/main", "provenance:forge-api"}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	mvState(t, h, c8, "unverified", "")
+	mvState(t, h, c9, "unverified", "")
+	mvState(t, h, c10, "verified", "provenance:unavailable")
 }
 
 func mvCaseRestorePutsBackOnlyUnchangedRows(t *testing.T, h MemoryVerificationHarness) {

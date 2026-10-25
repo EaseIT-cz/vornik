@@ -90,7 +90,7 @@ func TestAutoClones506_CreatesOneCloneByScopeOnFirstUse(t *testing.T) {
 	r := &localCloneRunner{origin: newOrigin(t)}
 	a := newAutoClones(t, r)
 
-	dir, reason := a.Ensure(ctx, "github.com/acme/widgets")
+	dir, reason := a.Ensure(ctx, "p", "github.com/acme/widgets")
 	if reason != "" || dir != filepath.Join(a.Root, "github.com", "acme", "widgets") {
 		t.Fatalf("Ensure = %q, %q", dir, reason)
 	}
@@ -98,10 +98,10 @@ func TestAutoClones506_CreatesOneCloneByScopeOnFirstUse(t *testing.T) {
 		t.Fatalf("no clone at %s: %v", dir, err)
 	}
 	// A second scope gets its own clone; the first is reused, not re-cloned.
-	if _, reason := a.Ensure(ctx, "github.com/acme/gadgets"); reason != "" {
+	if _, reason := a.Ensure(ctx, "p", "github.com/acme/gadgets"); reason != "" {
 		t.Fatal(reason)
 	}
-	if _, reason := a.Ensure(ctx, "github.com/acme/widgets"); reason != "" {
+	if _, reason := a.Ensure(ctx, "p", "github.com/acme/widgets"); reason != "" {
 		t.Fatal(reason)
 	}
 	if n := r.clones.Load(); n != 2 {
@@ -119,7 +119,7 @@ func TestAutoClones506_RefusesScopesThatAreNotARepositoryOnAListedHost(t *testin
 	// A well-formed scope on an unlisted host may be a self-hosted forge: no
 	// clone is made, and it is clone_failed (confined to its own scope).
 	for _, scope := range []string{"evil.example/acme/widgets", "github.com.evil.example/a/b"} {
-		if dir, reason := a.Ensure(ctx, scope); reason != ProvReasonCloneFailed || dir != "" {
+		if dir, reason := a.Ensure(ctx, "p", scope); reason != ProvReasonCloneFailed || dir != "" {
 			t.Errorf("%q: Ensure = %q, %q; want clone_failed", scope, dir, reason)
 		}
 	}
@@ -139,7 +139,7 @@ func TestAutoClones506_RefusesScopesThatAreNotARepositoryOnAListedHost(t *testin
 		"",                              // empty
 		"*",                             // the cross-cutting scope
 	} {
-		if dir, reason := a.Ensure(ctx, scope); reason != ProvReasonScopeNotCloneable || dir != "" {
+		if dir, reason := a.Ensure(ctx, "p", scope); reason != ProvReasonScopeNotCloneable || dir != "" {
 			t.Errorf("%q: Ensure = %q, %q; want scope_not_cloneable", scope, dir, reason)
 		}
 	}
@@ -156,7 +156,7 @@ func TestAutoClones506_FailedCreateIsRememberedForAnHour(t *testing.T) {
 	a.Now = func() time.Time { return now }
 
 	for i := 0; i < 3; i++ {
-		if _, reason := a.Ensure(ctx, "github.com/acme/private"); reason != ProvReasonCloneFailed {
+		if _, reason := a.Ensure(ctx, "p", "github.com/acme/private"); reason != ProvReasonCloneFailed {
 			t.Fatalf("attempt %d: reason %q", i, reason)
 		}
 	}
@@ -165,7 +165,7 @@ func TestAutoClones506_FailedCreateIsRememberedForAnHour(t *testing.T) {
 	}
 	now = now.Add(61 * time.Minute)
 	r.fail = nil
-	if _, reason := a.Ensure(ctx, "github.com/acme/private"); reason != "" {
+	if _, reason := a.Ensure(ctx, "p", "github.com/acme/private"); reason != "" {
 		t.Fatalf("after the hour: %q", reason)
 	}
 }
@@ -176,18 +176,18 @@ func TestAutoClones506_Limits(t *testing.T) {
 	a := newAutoClones(t, r)
 	a.MaxClones = 2
 	for _, s := range []string{"github.com/a/one", "github.com/a/two"} {
-		if _, reason := a.Ensure(ctx, s); reason != "" {
+		if _, reason := a.Ensure(ctx, "p", s); reason != "" {
 			t.Fatal(reason)
 		}
 	}
-	if _, reason := a.Ensure(ctx, "github.com/a/three"); reason != ProvReasonCloneFailed {
+	if _, reason := a.Ensure(ctx, "p", "github.com/a/three"); reason != ProvReasonCloneFailed {
 		t.Fatalf("a clone past the count limit: %q", reason)
 	}
 
 	// A clone over the size limit is removed and refused.
 	b := newAutoClones(t, r)
 	b.MaxCloneBytes = 1
-	if dir, reason := b.Ensure(ctx, "github.com/a/big"); reason != ProvReasonCloneFailed || dir != "" {
+	if dir, reason := b.Ensure(ctx, "p", "github.com/a/big"); reason != ProvReasonCloneFailed || dir != "" {
 		t.Fatalf("an oversized clone: %q %q", dir, reason)
 	}
 	if _, err := os.Stat(filepath.Join(b.Root, "github.com", "a", "big")); !os.IsNotExist(err) {
@@ -202,7 +202,7 @@ func TestAutoClones506_AtMostTwoCreationsAtOnce(t *testing.T) {
 	var wg sync.WaitGroup
 	for _, s := range []string{"github.com/c/one", "github.com/c/two", "github.com/c/three", "github.com/c/four"} {
 		wg.Add(1)
-		go func(s string) { defer wg.Done(); a.Ensure(ctx, s) }(s)
+		go func(s string) { defer wg.Done(); a.Ensure(ctx, "p", s) }(s)
 	}
 	time.Sleep(200 * time.Millisecond)
 	close(r.block)
@@ -218,17 +218,17 @@ func TestAutoClones506_FetchesBeforeVerifyingWhenStale(t *testing.T) {
 	a := newAutoClones(t, r)
 	now := time.Date(2026, 10, 23, 9, 0, 0, 0, time.UTC)
 	a.Now = func() time.Time { return now }
-	if _, reason := a.Ensure(ctx, "github.com/acme/widgets"); reason != "" {
+	if _, reason := a.Ensure(ctx, "p", "github.com/acme/widgets"); reason != "" {
 		t.Fatal(reason)
 	}
 	// Fresh from the clone: no fetch.
-	a.Ensure(ctx, "github.com/acme/widgets")
+	a.Ensure(ctx, "p", "github.com/acme/widgets")
 	if n := r.fetches.Load(); n != 0 {
 		t.Fatalf("fetched %d times right after cloning", n)
 	}
 	now = now.Add(3 * time.Minute)
-	a.Ensure(ctx, "github.com/acme/widgets")
-	a.Ensure(ctx, "github.com/acme/widgets")
+	a.Ensure(ctx, "p", "github.com/acme/widgets")
+	a.Ensure(ctx, "p", "github.com/acme/widgets")
 	if n := r.fetches.Load(); n != 1 {
 		t.Fatalf("fetches after 3 minutes = %d, want exactly 1 (2-minute limit)", n)
 	}
@@ -244,7 +244,7 @@ func TestAutoClones506_CountLimitHoldsUnderConcurrency(t *testing.T) {
 	var wg sync.WaitGroup
 	for i := 0; i < 8; i++ {
 		wg.Add(1)
-		go func(i int) { defer wg.Done(); a.Ensure(ctx, "github.com/race/r"+string(rune('a'+i))) }(i)
+		go func(i int) { defer wg.Done(); a.Ensure(ctx, "p", "github.com/race/r"+string(rune('a'+i))) }(i)
 	}
 	wg.Wait()
 	if n := len(a.List()); n > 3 {
@@ -259,7 +259,7 @@ func TestAutoClones506_SizeLimitDuringCloneAndEviction(t *testing.T) {
 	big := &bigCloneRunner{}
 	a := newAutoClones(t, big)
 	a.MaxCloneBytes = 1 << 20
-	if _, reason := a.Ensure(ctx, "github.com/a/huge"); reason != ProvReasonCloneFailed {
+	if _, reason := a.Ensure(ctx, "p", "github.com/a/huge"); reason != ProvReasonCloneFailed {
 		t.Fatalf("a clone growing past the limit: %q", reason)
 	}
 	if !big.cancelled.Load() {
@@ -269,7 +269,7 @@ func TestAutoClones506_SizeLimitDuringCloneAndEviction(t *testing.T) {
 	r := &localCloneRunner{origin: newOrigin(t)}
 	b := newAutoClones(t, r)
 	b.MaxClones = 1
-	if _, reason := b.Ensure(ctx, "github.com/a/old"); reason != "" {
+	if _, reason := b.Ensure(ctx, "p", "github.com/a/old"); reason != "" {
 		t.Fatal(reason)
 	}
 	old := filepath.Join(b.Root, "github.com", "a", "old")
@@ -277,7 +277,7 @@ func TestAutoClones506_SizeLimitDuringCloneAndEviction(t *testing.T) {
 	if err := os.Chtimes(filepath.Join(old, ".git", lastUsedMarker), stale, stale); err != nil {
 		t.Fatal(err)
 	}
-	if _, reason := b.Ensure(ctx, "github.com/a/new"); reason != "" {
+	if _, reason := b.Ensure(ctx, "p", "github.com/a/new"); reason != "" {
 		t.Fatalf("no slot was freed from a clone unused for 8 days: %q", reason)
 	}
 	if _, err := os.Stat(old); !os.IsNotExist(err) {

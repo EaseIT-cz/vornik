@@ -202,6 +202,40 @@ func (c *Channel) OperatorView(ctx context.Context, msg conversation.ChannelMess
 	return c.authorizeCtx(authCtx, msg.SpeakerID, c.legacySenderAccess(msg.SpeakerID)).AdminLinked()
 }
 
+// OperatorAudience implements chatview.AudienceViewer for the notices that
+// hold the channel rather than an inbound turn (process-spawn-law design,
+// "Amendment 2026-10-24 (#497)", L2): the session is a DM, the channel has
+// recorded exactly one participant for it, and that participant resolves to
+// an admin principal. The participant set lives in memory, so after a
+// restart, until the DM's next inbound, the session is not an operator
+// audience and reads the scrubbed view.
+func (c *Channel) OperatorAudience(ctx context.Context, sessionID string) bool {
+	if c == nil || c.identityShim == nil || !isDirectMessageSession(sessionID) {
+		return false
+	}
+	user, ok := c.soleParticipant(sessionID)
+	if !ok {
+		return false
+	}
+	authCtx, cancel := context.WithTimeout(ctx, authorizeBudget)
+	defer cancel()
+	return c.authorizeCtx(authCtx, user, c.legacySenderAccess(user)).AdminLinked()
+}
+
+// soleParticipant returns a session's one recorded participant.
+func (c *Channel) soleParticipant(sessionID string) (string, bool) {
+	c.sessionsMu.Lock()
+	defer c.sessionsMu.Unlock()
+	e, ok := c.sessions[sessionID]
+	if !ok || len(e.participants) != 1 {
+		return "", false
+	}
+	for u := range e.participants {
+		return u, strings.TrimSpace(u) != ""
+	}
+	return "", false
+}
+
 // isDirectMessageSession reports whether a session id "<team>/<channel>#..."
 // names a DM channel (Slack's "D..." channel id convention).
 func isDirectMessageSession(sessionID string) bool {

@@ -210,7 +210,8 @@ func (c *Container) reminderCompletionNotifier() executor.CompletionNotifier {
 			c.repos.Tasks,
 		))
 	}
-	opts = append(opts, reminders.WithDisclosure(c.AIDisclosure)) // Art 50, GitHub #342
+	opts = append(opts, reminders.WithDisclosure(c.AIDisclosure))             // Art 50, GitHub #342
+	opts = append(opts, reminders.WithTaskTextScrubber(c.taskTextScrubber())) // #497
 	return reminders.NewCompletionNotifier(
 		c.repos.Reminders,
 		&containerChannelResolver{c: c},

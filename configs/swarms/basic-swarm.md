@@ -21,7 +21,7 @@ roles:
       # task; quality wins. Fallback to GPT-5.4 via codex-
       # subscription (plan-billed, different vendor + reasoning
       # chain).
-      model: "zai.glm-5.3"
+      model: "zai.glm-5" # back to zai.glm-5.3 once Bedrock grants this account access (#512, 2026-10-23)
       modelFallback: "moonshotai.kimi-k2.5"
       maxTokens: 4096
       requiredOutputKeys: ["plan"]
@@ -88,7 +88,7 @@ roles:
       # leaderboard; structured spec writing benefits from the same
       # reasoning the lead uses. Fallback to GPT-5.4 via
       # codex-subscription (plan-billed).
-      model: "zai.glm-5.3"
+      model: "zai.glm-5" # back to zai.glm-5.3 once Bedrock grants this account access (#512, 2026-10-23)
       modelFallback: "moonshotai.kimi-k2.5"
       maxTokens: 6144
       # outputSchema replaces requiredOutputKeys + prose Output blocks.

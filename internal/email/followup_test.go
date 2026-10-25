@@ -10,6 +10,7 @@ import (
 
 	"vornik.io/vornik/internal/conversation"
 	"vornik.io/vornik/internal/persistence"
+	"vornik.io/vornik/internal/report"
 )
 
 // captureReceiverForFollowup records every synthetic resume turn
@@ -103,6 +104,12 @@ func TestNotifyTaskCompleted_NotRegistered(t *testing.T) {
 // the task status + message, Source set to the channel name.
 func TestNotifyTaskCompleted_FiresResume(t *testing.T) {
 	ch := newTestChannelForFollowup()
+	// #497: the status text reads the scrubbed view; a clean line survives.
+	scrub, err := report.NewLineScrubber("testhost")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ch.SetTaskTextScrubber(scrub)
 	recv := &captureReceiverForFollowup{}
 	ch.recv = recv
 	ch.RegisterFollowup("thread-root-msgid", "task-99", "assistant")
@@ -169,6 +176,13 @@ func TestNotifyTaskCompleted_NotificationStatusDerivedFromSuccess(t *testing.T) 
 // something useful to report to the operator.
 func TestNotifyTaskCompleted_FailureSurfacesError(t *testing.T) {
 	ch := newTestChannelForFollowup()
+	// #497: the follow-up reads the scrubbed view; a clean error line
+	// survives it.
+	scrub, err := report.NewLineScrubber("testhost")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ch.SetTaskTextScrubber(scrub)
 	recv := &captureReceiverForFollowup{}
 	ch.recv = recv
 	ch.RegisterFollowup("thread-x", "task-fail", "proj-1")

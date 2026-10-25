@@ -45,7 +45,7 @@ func TestHandleStatusCmd_ShowsStatusAndStep(t *testing.T) {
 			return &persistence.Execution{ID: "e1", CurrentStepID: &step}, nil
 		},
 	}
-	out := bot.handleStatusCmd(context.Background(), 0, []string{"/status", "task-9"})
+	out := bot.handleStatusCmd(context.Background(), 0, 0, []string{"/status", "task-9"})
 	for _, want := range []string{"task-9", "RUNNING", "summarise"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("/status output missing %q:\n%s", want, out)
@@ -55,7 +55,7 @@ func TestHandleStatusCmd_ShowsStatusAndStep(t *testing.T) {
 
 func TestHandleStatusCmd_MissingID(t *testing.T) {
 	bot := makeBotWithTaskRepo(t, &mocks.MockTaskRepository{})
-	if out := bot.handleStatusCmd(context.Background(), 0, []string{"/status"}); !strings.Contains(out, "Usage:") {
+	if out := bot.handleStatusCmd(context.Background(), 0, 0, []string{"/status"}); !strings.Contains(out, "Usage:") {
 		t.Errorf("expected usage message; got %q", out)
 	}
 }
@@ -174,7 +174,7 @@ func TestTaskControl_ScopeDenied(t *testing.T) {
 		var out string
 		switch cmd[0] {
 		case "/status":
-			out = bot.handleStatusCmd(context.Background(), 111, cmd)
+			out = bot.handleStatusCmd(context.Background(), 111, 111, cmd)
 		case "/cancel":
 			out = bot.handleCancelCmd(context.Background(), 111, cmd)
 		case "/retry":

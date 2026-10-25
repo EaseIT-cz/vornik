@@ -42,6 +42,10 @@ type ProvenanceSweeper struct {
 	// Clones lists the configured daemon-only clones (memory.provenance_clone,
 	// GitHub #499); each is fetched before the pass. Nil = none.
 	Clones func() []ProvenanceClone
+	// AutoFetch fetches an automatic clone (one with no project) with the
+	// credential that made it (AutoClones.SweepFetch; #508). Nil = fetch
+	// with git's own credential helpers, as before #508.
+	AutoFetch func(ctx context.Context, scope, dir, branch string) error
 	// FetchTimeout bounds one clone's fetch (DefaultProvenanceFetchTimeout).
 	FetchTimeout time.Duration
 	// Metrics carries memory_provenance_fetch_total. Nil = not counted.
@@ -229,14 +233,14 @@ func (s *ProvenanceSweeper) recheckOne(ctx context.Context, rec *persistence.Chu
 	}
 	ch := persistence.ArtifactVerificationChange{ArtifactID: rec.ArtifactID, Provenance: next}
 	if next.State == ProvenanceVerified {
-		ch.NewStatus, ch.NewValidatorRole = "verified", ValidatorRoleProvenance
+		ch.NewStatus, ch.NewValidatorRole = "verified", res.Role()
 	} else {
 		// Only the stamps the verifier made are withdrawn: the provenance
 		// stamp, or (#506) the unavailable stamp of a record that could not
 		// be examined before.
-		ch.NewStatus, ch.OnlyValidatorRole = "unverified", ValidatorRoleProvenance
+		ch.NewStatus, ch.OnlyValidatorRoles = "unverified", ProvenanceRoles()
 		if ProvenanceUnexaminable(rec.Reason) {
-			ch.OnlyValidatorRole = ValidatorRoleProvenanceUnavailable
+			ch.OnlyValidatorRoles, ch.OnlyValidatorRole = nil, ValidatorRoleProvenanceUnavailable
 		}
 	}
 	o.change = &ch

@@ -3,6 +3,7 @@ package dispatcher
 import (
 	"context"
 
+	"vornik.io/vornik/internal/chatview"
 	"vornik.io/vornik/internal/report"
 )
 
@@ -43,14 +44,8 @@ func WithErrorTextScrubber(s report.LineScrubber) AgentOption {
 	return func(a *Agent) { a.errorScrub = s }
 }
 
-// errorTextView returns the turn's view of a stored error text.
+// errorTextView returns the turn's view of a stored error text: the one rule
+// the non-tool chat readers share (chatview.View, #497 L1).
 func (te *ToolExecutor) errorTextView(ctx context.Context) func(string) string {
-	if operatorViewFromContext(ctx) {
-		return func(s string) string { return s }
-	}
-	scrub := te.errorScrub
-	return func(s string) string {
-		out, _ := report.ScrubLines(s, scrub)
-		return out
-	}
+	return chatview.View(operatorViewFromContext(ctx), te.errorScrub)
 }

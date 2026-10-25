@@ -73,6 +73,9 @@ type ArtifactVerificationChange struct {
 	NewStatus         string
 	NewValidatorRole  string
 	OnlyValidatorRole string
+	// OnlyValidatorRoles, when set, limits the change to chunks carrying any
+	// of these roles (the sweep withdraws either provenance stamp, #508 F5).
+	OnlyValidatorRoles []string
 	// OnlyNeverStamped narrows a "verified" change to chunks that were
 	// never stamped: unverified, no validator role, and no backup row (no
 	// verification event ever changed them). The #506 heal uses it so a

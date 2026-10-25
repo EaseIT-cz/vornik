@@ -30,7 +30,7 @@ roles:
     # when needed — normal small completions cost the same (you pay
     # per token generated, not per cap). Pair with the issue-fix
     # prompt's "cite the spec file, don't paste it" rule.
-    model: "zai.glm-5.3"
+    model: "zai.glm-5" # back to zai.glm-5.3 once Bedrock grants this account access (#512, 2026-10-23)
     modelFallback: "moonshotai.kimi-k2.5"
     maxTokens: 8192
     runtime:
@@ -141,7 +141,7 @@ roles:
     # bounded. Reverted from Gemini 3.1 Pro 2026-05-07.
     # Fallback to Kimi K2.5 via Bedrock — GPT deliberately
     # excluded from fallback to preserve subscription tokens.
-    model: "zai.glm-5.3"
+    model: "zai.glm-5" # back to zai.glm-5.3 once Bedrock grants this account access (#512, 2026-10-23)
     modelFallback: "moonshotai.kimi-k2.5"
     maxTokens: 6144
     # outputSchema replaces the legacy requiredOutputKeys + prose
@@ -254,7 +254,7 @@ roles:
     # the OSS-model preference. codex/GPT tiers deliberately avoided
     # on this hot path.
     model: "moonshotai.kimi-k2.5"
-    modelFallback: "zai.glm-5.3"
+    modelFallback: "zai.glm-5" # back to zai.glm-5.3 once Bedrock grants this account access (#512, 2026-10-23)
     maxTokens: 16384
     # outputSchema replaces requiredOutputKeys + prose Output blocks.
     # The coder is invoked at workflow steps that pin different
@@ -328,7 +328,7 @@ roles:
     # zai.glm-5 (proven — the analyst/lead's model) replaces the flaky
     # glm-4.7, keeping cross-vendor diversity (moonshotai → zai).
     model: "moonshotai.kimi-k2.5"
-    modelFallback: "zai.glm-5.3"
+    modelFallback: "zai.glm-5" # back to zai.glm-5.3 once Bedrock grants this account access (#512, 2026-10-23)
     maxTokens: 8192
     # outputSchema pins testing.passed:bool because every workflow
     # step that uses this role gates on it (dev-pipeline branches
@@ -472,7 +472,7 @@ roles:
     # Paired with the iteration-cap cut below (120 → 40). See
     # https://docs.vornik.io §C3.
     model: "moonshotai.kimi-k2.5"
-    modelFallback: "zai.glm-5.3"
+    modelFallback: "zai.glm-5" # back to zai.glm-5.3 once Bedrock grants this account access (#512, 2026-10-23)
     maxTokens: 8192
     # outputSchema pins review.approved AND review.all_done because
     # dev-pipeline gates on BOTH. Two of its three gate conditions read
@@ -711,7 +711,7 @@ roles:
     # gh review). The authoritative instructions live in the github-router
     # step prompt; this role just needs the tools + a permissive schema.
     # delegationAllowed: routes via selected_workflow to dev-pipeline.
-    model: "zai.glm-5.3"
+    model: "zai.glm-5" # back to zai.glm-5.3 once Bedrock grants this account access (#512, 2026-10-23)
     modelFallback: "moonshotai.kimi-k2.5"
     maxTokens: 4096
     injectSchemaIntoPrompt: true

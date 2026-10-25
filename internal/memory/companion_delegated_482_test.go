@@ -183,7 +183,7 @@ func TestProvenanceSweep_StaleWithdrawsStamps(t *testing.T) {
 		t.Fatalf("event: %+v", ev)
 	}
 	if len(ch) != 1 || ch[0].ArtifactID != "art-ok" || ch[0].NewStatus != "unverified" ||
-		ch[0].OnlyValidatorRole != ValidatorRoleProvenance || ch[0].Provenance.State != ProvenanceStale {
+		!sameRoles(ch[0].OnlyValidatorRoles, ProvenanceRoles()) || ch[0].Provenance.State != ProvenanceStale {
 		t.Fatalf("change: %+v", ch)
 	}
 }

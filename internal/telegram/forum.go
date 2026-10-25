@@ -15,6 +15,7 @@ import (
 	"strings"
 	"time"
 
+	"vornik.io/vornik/internal/chatview"
 	"vornik.io/vornik/internal/persistence"
 	"vornik.io/vornik/internal/scheduler"
 	"vornik.io/vornik/internal/secrets"
@@ -817,8 +818,13 @@ func taskTypeFromPayload(payload []byte) string {
 // load the open checkpoint message; on lookup failure the function
 // falls back to the bare summary so the notification still goes
 // out.
+//
+// A forum topic is a group's (#497 L3): its members all read it, so the
+// error and status text always take the scrubbed view, applied after
+// humanising and before every cut.
 func (b *Bot) formatTaskEvent(ctx context.Context, task *persistence.Task, success bool, message string, isSubtask bool) string {
-	humanized := strings.TrimSpace(humanizeTaskMessage(message))
+	view := chatview.View(false, b.taskTextScrub)
+	humanized := strings.TrimSpace(view(humanizeTaskMessage(message)))
 
 	// Subtask events ride into the root task's topic — prefix the
 	// header so the operator can tell who emitted what without
@@ -848,29 +854,19 @@ func (b *Bot) formatTaskEvent(ctx context.Context, task *persistence.Task, succe
 		sb.WriteString(subPrefix)
 		sb.WriteString("✅ Task completed")
 		if humanized != "" {
-			if len(humanized) > 800 {
-				humanized = humanized[:800] + "…"
-			}
 			sb.WriteString("\n\n")
-			sb.WriteString(humanized)
+			sb.WriteString(chatview.Cut(humanized, 800))
 		}
 
 	default:
 		sb.WriteString(subPrefix)
 		sb.WriteString("❌ Task failed")
 		if humanized != "" {
-			if len(humanized) > 500 {
-				humanized = humanized[:500] + "…"
-			}
 			sb.WriteString("\n\n")
-			sb.WriteString(humanized)
+			sb.WriteString(chatview.Cut(humanized, 500))
 		}
 		if task.LastError != nil && *task.LastError != "" {
-			errText := *task.LastError
-			if len(errText) > 300 {
-				errText = errText[:300] + "…"
-			}
-			fmt.Fprintf(&sb, "\n\nError: %s", errText)
+			fmt.Fprintf(&sb, "\n\nError: %s", chatview.Cut(view(*task.LastError), 300))
 		}
 		if task.LastErrorClass != nil && *task.LastErrorClass != "" {
 			fmt.Fprintf(&sb, "\nFailure class: %s", *task.LastErrorClass)

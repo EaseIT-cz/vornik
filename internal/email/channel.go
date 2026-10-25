@@ -46,6 +46,7 @@ import (
 	"vornik.io/vornik/internal/conversation"
 	"vornik.io/vornik/internal/leaderelection"
 	"vornik.io/vornik/internal/persistence"
+	"vornik.io/vornik/internal/report"
 )
 
 // channelName is the stable identifier surfaced as
@@ -288,6 +289,9 @@ type Channel struct {
 	// — we refuse early so the channel never has to babysit a
 	// 25-MiB inbound through the rest of the pipeline.
 	attachmentCap int64
+
+	// taskTextScrub scrubs the follow-up's stored task text (#497).
+	taskTextScrub report.LineScrubber
 
 	recvMu sync.RWMutex
 	recv   conversation.Receiver

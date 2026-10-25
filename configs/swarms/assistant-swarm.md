@@ -51,7 +51,7 @@ roles:
       # Bedrock zai.glm-5 (pay-per-token, the proven prior primary)
       # becomes the modelFallback so a session-limit hit or Ollama
       # outage degrades to the exact model this role ran before.
-      model: "zai.glm-5.3"
+      model: "zai.glm-5" # back to zai.glm-5.3 once Bedrock grants this account access (#512, 2026-10-23)
       modelFallback: "glm-5.2"
       maxTokens: 4096
       runtime:
@@ -93,7 +93,7 @@ roles:
       # Bedrock zai.glm-5 (pay-per-token, the proven prior primary)
       # becomes the modelFallback so a session-limit hit or Ollama
       # outage degrades to the exact model this role ran before.
-      model: "zai.glm-5.3"
+      model: "zai.glm-5" # back to zai.glm-5.3 once Bedrock grants this account access (#512, 2026-10-23)
       modelFallback: "glm-5.2"
       maxTokens: 8192
       # NO inline systemPrompt on purpose — this role is body-canonical
@@ -188,7 +188,7 @@ roles:
       # Bedrock zai.glm-5 (pay-per-token, the proven prior primary)
       # becomes the modelFallback so a session-limit hit or Ollama
       # outage degrades to the exact model this role ran before.
-      model: "zai.glm-5.3"
+      model: "zai.glm-5" # back to zai.glm-5.3 once Bedrock grants this account access (#512, 2026-10-23)
       modelFallback: "glm-5.2"
       maxTokens: 8192
       # Mirrors the writer's contract: written/path/summary on
@@ -269,7 +269,7 @@ roles:
       # Bedrock zai.glm-5 (pay-per-token, the proven prior primary)
       # becomes the modelFallback so a session-limit hit or Ollama
       # outage degrades to the exact model this role ran before.
-      model: "zai.glm-5.3"
+      model: "zai.glm-5" # back to zai.glm-5.3 once Bedrock grants this account access (#512, 2026-10-23)
       modelFallback: "glm-5.2"
       maxTokens: 8192
       # outputSchema is the single source of truth for this role's
@@ -570,7 +570,7 @@ roles:
       # Bedrock zai.glm-5 (pay-per-token, the proven prior primary)
       # becomes the modelFallback so a session-limit hit or Ollama
       # outage degrades to the exact model this role ran before.
-      model: "zai.glm-5.3"
+      model: "zai.glm-5" # back to zai.glm-5.3 once Bedrock grants this account access (#512, 2026-10-23)
       modelFallback: "glm-5.2"
       maxTokens: 8192
       injectSchemaIntoPrompt: true
@@ -644,7 +644,7 @@ roles:
       # Bedrock zai.glm-5 (pay-per-token, the proven prior primary)
       # becomes the modelFallback so a session-limit hit or Ollama
       # outage degrades to the exact model this role ran before.
-      model: "zai.glm-5.3"
+      model: "zai.glm-5" # back to zai.glm-5.3 once Bedrock grants this account access (#512, 2026-10-23)
       modelFallback: "glm-5.2"
       runtime:
         image: noop:dispatcher

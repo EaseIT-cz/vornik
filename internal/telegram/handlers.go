@@ -668,7 +668,7 @@ func (b *Bot) HandleMessage(ctx context.Context, msg *Message) error {
 			return b.sendMessage(ctx, msg.ChatID, b.handleTasksCmd(ctx, msg.UserID, parts))
 		}
 		if cmd == "/status" {
-			return b.sendMessage(ctx, msg.ChatID, b.handleStatusCmd(ctx, msg.UserID, parts))
+			return b.sendMessage(ctx, msg.ChatID, b.handleStatusCmd(ctx, msg.ChatID, msg.UserID, parts))
 		}
 		if cmd == "/cancel" {
 			return b.sendMessage(ctx, msg.ChatID, b.handleCancelCmd(ctx, msg.UserID, parts))

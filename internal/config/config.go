@@ -3447,6 +3447,11 @@ type MemoryConfig struct {
 	// config.yaml reload swaps the live list without a daemon restart (same
 	// path as prompt_injection_scan / claim_audit_disabled_projects).
 	DenyPatterns []string `yaml:"deny_patterns" doc:"Substring deny-list (NOT regex) that quarantines matching content at memory ingest."`
+
+	// Provenance configures where companion documents may be verified from
+	// beyond the public forges (GitHub #508, design 22 #508 F1). Read at
+	// daemon start.
+	Provenance MemoryProvenanceConfig `yaml:"provenance" json:"provenance"`
 }
 
 // InstinctConfig configures the continuous-learning instinct layer.

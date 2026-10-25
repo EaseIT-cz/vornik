@@ -215,6 +215,9 @@ type DoctorHandlers struct {
 	// provenanceClones reports the daemon-only provenance clones
 	// (memory_provenance_clone, GitHub #499). Nil = SKIPPED.
 	provenanceClones func() []ProvenanceCloneStatus
+	// provenanceForgeNotes reports the configured forges and the scopes the
+	// automatic clones refused in the last day (GitHub #508 F6). Nil = none.
+	provenanceForgeNotes func() (forges, refusals []string)
 
 	// systemHandlerNames is the set of system-step handler names the
 	// role-library doctor check accepts as valid tool entries. Wired
@@ -286,6 +289,9 @@ type DoctorHandlers struct {
 	// brokerActions backs stuck_broker_actions (broker write-actions design
 	// §5.4). Nil → the check reports SKIPPED.
 	brokerActions persistence.BrokerActionRepository
+	// brokerTargets backs broker_audit_channel (trading-broker-design.md,
+	// amendment 2026-10-23). Nil leaves the check SKIPPED.
+	brokerTargets func() []BrokerTarget
 
 	// mcpPending backs mcp_project_connections (MCP failed-connect recovery
 	// design, D4); mcpNow is its clock seam, set only by tests (nil means
@@ -676,6 +682,7 @@ func (h *DoctorHandlers) RunReportReadOnly(ctx context.Context) DoctorReport {
 	report.Checks = append(report.Checks, h.checkAgentModelCatalogue())
 	report.Checks = append(report.Checks, h.checkProvenanceClone())
 	report.Checks = append(report.Checks, h.checkStuckBrokerActions(ctx))
+	report.Checks = append(report.Checks, h.checkBrokerAuditChannel(ctx))
 	report.Checks = append(report.Checks, h.checkMCPProjectConnections())
 	report.Checks = append(report.Checks, h.checkAgentReadRejudge())
 	report.Checks = append(report.Checks, h.checkUnclassifiedShare(ctx))
@@ -785,6 +792,7 @@ func (h *DoctorHandlers) RunDoctor(w http.ResponseWriter, r *http.Request) {
 	report.Checks = append(report.Checks, h.checkAgentModelCatalogue())
 	report.Checks = append(report.Checks, h.checkProvenanceClone())
 	report.Checks = append(report.Checks, h.checkStuckBrokerActions(ctx))
+	report.Checks = append(report.Checks, h.checkBrokerAuditChannel(ctx))
 	report.Checks = append(report.Checks, h.checkMCPProjectConnections())
 	report.Checks = append(report.Checks, h.checkAgentReadRejudge())
 	report.Checks = append(report.Checks, h.checkUnclassifiedShare(ctx))

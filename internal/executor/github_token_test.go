@@ -106,3 +106,22 @@ func TestInstallationToken_MintError(t *testing.T) {
 		t.Fatalf("want error and empty token, got %q, %v", tok, err)
 	}
 }
+
+// Security review of 180ed1da9 (pre-existing in the executor): a project
+// naming another project's installation id with a different App id or key
+// must mint with its own key, never receive the cached push token.
+func TestInstallationToken508_CacheKeyIsTheWholeAppIdentity(t *testing.T) {
+	e := &Executor{ghMintFn: func(_ context.Context, _ string, _, _ int64, keyPath string) (string, time.Time, error) {
+		return "tok-" + keyPath, time.Now().Add(time.Hour), nil
+	}}
+	mk := func(app int64, key string) *registry.Project {
+		p := &registry.Project{ID: key}
+		p.GitHub = registry.ProjectGitHub{AppID: app, InstallationID: 77, PrivateKeyPath: key}
+		return p
+	}
+	victim, _ := e.installationToken(context.Background(), mk(1, "/victim.pem"))
+	borrower, _ := e.installationToken(context.Background(), mk(2, "/attacker.pem"))
+	if victim == borrower {
+		t.Errorf("another project's cached push token was handed out: %q", borrower)
+	}
+}

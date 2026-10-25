@@ -97,6 +97,7 @@ var doctorCheckConfigPointer = map[string]string{
 	"checkAgentModelCatalogue":     "", // config.yaml (agent_admin.models), not a deployed config file
 	"checkProvenanceClone":         "", // project memory.provenance_clone; a daemon-only clone, not a deployed config file
 	"checkStuckBrokerActions":      "",
+	"checkBrokerAuditChannel":      "", // a running broker's /health, not deployed config content
 	"checkMCPProjectConnections":   "",
 	"checkAgentReadRejudge":        "",
 	"checkWorkspaceCanonical":      "",

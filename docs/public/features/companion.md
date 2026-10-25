@@ -343,6 +343,49 @@ repository's `repo_scope`. A path is an identity only within a scope, so
 Vornik refuses a delegation that sends a `path` without a repo scope (unless
 the key or the project has a default scope).
 
+### Where an ingested document is verified
+
+A document a companion ingests is verified against its repository: Vornik
+keeps its own read-only clone of each repository (commits and trees, no
+files) and checks that the uploaded bytes are the file on the default branch.
+A recall hit says `verified`, `unavailable: …` (the repository could not be
+reached, so the document is trusted as an upload) or `unverified: …` (for
+example a draft not yet pushed; it is re-checked automatically).
+
+Repositories on github.com, gitlab.com, bitbucket.org and codeberg.org are
+cloned with no configuration. For a self-hosted forge, list it in
+`config.yaml`:
+
+```yaml
+memory:
+  provenance:
+    forges:
+      - name: corp-gitlab
+        kind: gitlab              # github, gitlab, gitea, forgejo or git
+        scope_prefix: gitlab.example.com/8443   # how the repo scope starts
+        base_url: https://gitlab.example.com:8443
+        token: "${CORP_GITLAB_READ_TOKEN}"       # or token_file: /path
+        allowed_projects: [team-a]               # empty = every project
+        max_repo_depth: 3                        # GitLab subgroups
+```
+
+- `scope_prefix` is written the way the repo scope is: a port in the remote
+  URL becomes a path segment (`gitlab.example.com/8443/group/repo`).
+- Use a read-only token (GitLab `read_repository` and `read_api`; Gitea and
+  Forgejo `read:repository`). It is used only by the daemon, never handed to
+  an agent, and only for the projects in `allowed_projects`.
+- A GitHub repository is also cloned with a project's own GitHub App
+  installation when that project's `github:` block names the repository's
+  owner.
+- When a repository cannot be cloned (too large, or the clone fails), a
+  `github`, `gitlab`, `gitea` or `forgejo` forge is asked through its API
+  instead; a document verified that way reads `verified (forge API)`.
+- `replace_default_hosts: true` stops cloning from the four public hosts.
+- These settings are read when the daemon starts; restart it after a change.
+
+`vornikctl doctor` (check `memory_provenance_clone`) lists the configured
+forges and every repository refused in the last day, with the fix.
+
 Documents ingested before paths existed carry only a file name. Re-ingest them
 with a current plugin, then retire the old versions with
 `vornikctl memory supersede-legacy-documents -p <project> --scope <scope> --root <checkout>`.

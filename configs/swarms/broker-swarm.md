@@ -13,7 +13,7 @@ roles:
       runtimePolicy: "ephemeral"
       # Open-weight by default: the broker exists to keep sensitive work on
       # infrastructure you control. Point this at a local model if you have one.
-      model: "zai.glm-5.3"
+      model: "zai.glm-5" # back to zai.glm-5.3 once Bedrock grants this account access (#512, 2026-10-23)
       maxTokens: 4096
       runtime:
         image: "ghcr.io/easeit-cz/vornik-agent:latest"

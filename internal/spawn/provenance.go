@@ -17,6 +17,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 )
@@ -155,8 +156,8 @@ func GitProvenanceClone(ctx context.Context, root, rawURL, dest string) (*Cmd, e
 		return nil, refuse(KindGitProvenance, "%q is not a registered provenance root", root)
 	}
 	u, err := url.Parse(rawURL)
-	if err != nil || u.Scheme != "https" || u.User != nil || u.Port() != "" || u.Host == "" ||
-		u.RawQuery != "" || u.Fragment != "" || u.Opaque != "" {
+	if err != nil || u.Scheme != "https" || u.User != nil || !plainPort(u.Port()) || u.Hostname() == "" ||
+		u.RawQuery != "" || u.ForceQuery || u.Fragment != "" || u.Opaque != "" {
 		return nil, refuse(KindGitProvenance, "clone URL %q is not a plain https URL", rawURL)
 	}
 	absRoot, err := filepath.Abs(root)
@@ -182,4 +183,15 @@ func GitProvenanceClone(ctx context.Context, root, rawURL, dest string) (*Cmd, e
 	c.gitSub = "clone"
 	c.c.Env = provenanceEnv()
 	return c, nil
+}
+
+// plainPort accepts no port, or a numeric port 1-65535: a self-hosted forge
+// served on an https port (GitHub #508 F7; process-spawn-law design,
+// "Amendment 2026-10-24 (#508)"). The scheme stays https only.
+func plainPort(p string) bool {
+	if p == "" {
+		return true
+	}
+	n, err := strconv.Atoi(p)
+	return err == nil && n >= 1 && n <= 65535 && strconv.Itoa(n) == p
 }

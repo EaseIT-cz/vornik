@@ -84,13 +84,18 @@ recreate_compose() { # name tag config_files working_dir service
   local envf; envf="$(env_file_for "$file")"
   [[ -n "$envf" ]] && cmd+=(--env-file "$envf")
   cmd+=(up -d --no-deps --force-recreate "$service")
+  # The env file must beat the caller's exports: compose interpolation
+  # prefers a shell export over --env-file (GitHub #515; image-freshness
+  # design §22). The logged command stays the compose call itself.
+  local -a run=("${cmd[@]}")
+  [[ -n "$envf" ]] && run=(bash "$(dirname "${BASH_SOURCE[0]}")/with-env-file.sh" "$envf" "${cmd[@]}")
   local hof; hof="$(podman inspect "$name" --format '{{.Config.HealthcheckOnFailureAction}}' 2>/dev/null || true)"
   if [[ "$DRY" = 1 ]]; then
     log "would recreate $name ($tag) with: ${cmd[*]}"
     return 0
   fi
   log "recreating $name ($tag): ${cmd[*]}"
-  "${cmd[@]}" || { echo "recreate-sidecars: FAILED to recreate $name from $tag (compose exit $?) — the container still runs the previous image" >&2; return 1; }
+  "${run[@]}" || { echo "recreate-sidecars: FAILED to recreate $name from $tag (compose exit $?) — the container still runs the previous image" >&2; return 1; }
   if [[ -n "$hof" && "$hof" != none ]]; then
     if podman update "--health-on-failure=$hof" "$name" >/dev/null 2>&1; then
       log "  $name: --health-on-failure=$hof re-applied"

@@ -229,15 +229,7 @@ func projectCapsHeader(project *registry.Project) string {
 // or "" when no broker server is configured. Trading panel is
 // gated on this — see TradingPanel.Enabled.
 func brokerURL(project *registry.Project) string {
-	if project == nil {
-		return ""
-	}
-	for _, srv := range project.MCP.Servers {
-		if srv.Name == "broker" {
-			return strings.TrimRight(srv.URL, "/")
-		}
-	}
-	return ""
+	return project.TradingBrokerURL()
 }
 
 // buildTradingPanel populates a TradingPanel by hitting

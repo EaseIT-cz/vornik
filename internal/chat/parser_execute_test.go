@@ -427,7 +427,7 @@ func TestExecuteAction_GetStatus_HappyPath_NoExecRepo(t *testing.T) {
 		},
 	}
 	res, err := ExecuteAction(context.Background(),
-		Action{Type: ActionGetStatus, TaskID: "t-1"},
+		Action{Type: ActionGetStatus, TaskID: "t-1", ErrorView: rawErrorView}, // #497: choose the operator view
 		repo, nil, nil)
 	if err != nil {
 		t.Fatalf("ExecuteAction: %v", err)

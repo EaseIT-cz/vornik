@@ -76,7 +76,8 @@ Docs: https://docs.vornik.io
 - [Results by release](https://docs.vornik.io/benchmarks/results/): One row per release, per benchmark. Rows are never edited after a release ships — a regression is shown by the next row being worse, not by the previous row changing.
 
 ## Compliance
-- [Compliance status](https://docs.vornik.io/compliance/): Last updated: 28 July 2026
+- [Security model](https://docs.vornik.io/security-model/): Last reviewed: 25 October 2026, against release 2026.10.8.
+- [Compliance status](https://docs.vornik.io/compliance/): Last updated: 25 October 2026
 - [AI transparency](https://docs.vornik.io/ai-transparency/): Last updated: 29 July 2026
 - [Licensing: what you can do with Vornik](https://docs.vornik.io/licensing/): Plain answers to the questions companies and fork maintainers actually ask. This page explains; the licence texts govern. Vornik Community Edition is AGPL-3.0. The companion plugins under contrib/ are Apache-2.0. The...
 - [The Vornik logo](https://docs.vornik.io/brand/): This page is where the Vornik logo's proportions and colours are published. The trademark policy lets you use the logo to point at the project at these proportions and colours.

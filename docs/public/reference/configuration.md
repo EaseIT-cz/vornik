@@ -395,6 +395,8 @@ vornik reads its configuration from `config.yaml`. The keys below are the custom
 | `memory.prompt_injection_scan` | string | Ingest prompt-injection gate: off (default), detect, or quarantine. | — |
 | `memory.claim_audit_disabled_projects` | list | Project IDs that skip the claim-audit/hallucination ingest gate. | — |
 | `memory.deny_patterns` | list | Substring deny-list (NOT regex) that quarantines matching content at memory ingest. | — |
+| `memory.provenance.replace_default_hosts` | bool | Drop the public default forges (github.com, gitlab.com, bitbucket.org, codeberg.org); only memory.provenance.forges are cloned. | — |
+| `memory.provenance.forges` | list | Self-hosted forges for provenance clones: name, kind (github, gitlab, gitea, forgejo, git), scope_prefix, base_url, token or token_file, allowed_projects, max_repo_depth. | — |
 
 ## instinct
 

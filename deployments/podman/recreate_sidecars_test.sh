@@ -36,7 +36,8 @@ case "$1 $2" in
   "inspect vornik-broker-ta") echo "restart" ;;
   "inspect vornik-broker-news") echo "none" ;;
   "inspect "*) echo "" ;;
-  "compose "*) if [ "${FAIL_COMPOSE:-0}" = 1 ]; then exit 7; fi ;;
+  "compose "*) echo "compose-saw-key=${VORNIK_BROKER_DAEMON_API_KEY:-<unset>}" >> "$CALLS"
+               if [ "${FAIL_COMPOSE:-0}" = 1 ]; then exit 7; fi ;;
   "update "*) ;;
 esac
 exit 0
@@ -108,6 +109,16 @@ if echo "$out" | grep -q "would recreate vornik-broker-ta"; then ok "--dry-run n
 out=$(rows | FAIL_COMPOSE=1 bash "$SCRIPT" 2>&1); rc=$?
 expect "a failed recreate exits non-zero" "a failed recreate must not exit 0" test "$rc" -ne 0
 if echo "$out" | grep -q "localhost/vornik-broker-ta:latest"; then ok "the failure names the tag"; else bad "failure output lacks the tag: $out"; fi
+
+# --- 7. the env file beats a stale export (GitHub #515; image-freshness §22).
+#        Incident 2026-10-01: broker-mcp recreated from a shell still exporting
+#        the rotated-out daemon key; compose interpolation preferred the export.
+: > "$CALLS"; printf 'VORNIK_BROKER_DAEMON_API_KEY=sk-from-the-file\n' > "$TMP/trading.env"
+out=$(rows | VORNIK_BROKER_DAEMON_API_KEY=sk-stale-export VORNIK_TRADING_ENV="$TMP/trading.env" bash "$SCRIPT" 2>&1)
+expect "compose sees the env file's key, not the stale export" "compose saw: $(grep compose-saw-key "$CALLS")" \
+  grep -q "compose-saw-key=sk-from-the-file" "$CALLS"
+expect "the logged compose call is unchanged" "compose args changed" \
+  grep -q -- "podman compose -f /repo/deployments/podman/trading.compose.yaml --env-file $TMP/trading.env up -d --no-deps --force-recreate broker-ta" "$CALLS"
 
 echo "recreate-sidecars: $pass passed, $fail failed"
 [ "$fail" -eq 0 ]

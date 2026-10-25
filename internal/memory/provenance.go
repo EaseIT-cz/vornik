@@ -57,6 +57,41 @@ const ValidatorRoleProvenance = "provenance:origin/main"
 // retire a ValidatorRoleProvenance chunk (C5).
 const ValidatorRoleProvenanceUnavailable = "provenance:unavailable"
 
+// ValidatorRoleProvenanceForgeAPI is the validator_role of a chunk verified
+// through the forge's API because no clone of its repository could be made
+// (design 22, "Amendment 2026-10-24 (#508)", F4). It is trusted exactly as
+// ValidatorRoleProvenance (operator decision 2026-10-24): IsProvenanceRole
+// covers both, and so does every guard.
+const ValidatorRoleProvenanceForgeAPI = "provenance:forge-api"
+
+// provenanceRoles are the validator roles that mean "proven to be on the
+// trusted branch" (#508 F5): the one list every check reads.
+var provenanceRoles = []string{ValidatorRoleProvenance, ValidatorRoleProvenanceForgeAPI}
+
+// provenanceRoleSQL is IsProvenanceRole in SQL over a column: the roles are
+// compile-time constants, quoted here, never caller input.
+func provenanceRoleSQL(col string) string {
+	quoted := make([]string, len(provenanceRoles))
+	for i, r := range provenanceRoles {
+		quoted[i] = "'" + r + "'"
+	}
+	return `COALESCE(` + col + `, '') IN (` + strings.Join(quoted, ", ") + `)`
+}
+
+// ProvenanceRoles returns the provenance-verified roles, for a caller that
+// filters by role (the sweep's withdrawal).
+func ProvenanceRoles() []string { return append([]string(nil), provenanceRoles...) }
+
+// IsProvenanceRole reports whether a validator role is provenance-verified.
+func IsProvenanceRole(role string) bool {
+	for _, r := range provenanceRoles {
+		if role == r {
+			return true
+		}
+	}
+	return false
+}
+
 // The only refs the verifier reads are refs/remotes/origin/HEAD (to find the
 // default branch) and refs/remotes/origin/<that branch> (see trustedBranch).
 
@@ -218,6 +253,20 @@ type ProvenanceResult struct {
 	ContentBlobSHA string
 	OriginBlobSHA  string
 	CheckedAt      time.Time
+	// Method is how a verified result was established: "" (the clone) or
+	// ProvenanceMethodForgeAPI (#508 F4).
+	Method string
+}
+
+// ProvenanceMethodForgeAPI marks a result the forge's API established.
+const ProvenanceMethodForgeAPI = "forge-api"
+
+// Role is the validator_role a verified result stamps.
+func (r ProvenanceResult) Role() string {
+	if r.Method == ProvenanceMethodForgeAPI {
+		return ValidatorRoleProvenanceForgeAPI
+	}
+	return ValidatorRoleProvenance
 }
 
 // Verified reports whether the result verifies the chunk.
@@ -283,8 +332,15 @@ type ProvenanceVerifier struct {
 	// DefaultBranch returns the project's configured default branch
 	// (workspace.refresh_branch), or "" when none is configured. Nil = none.
 	DefaultBranch func(projectID string) string
-	Git           GitRunner
-	Now           func() time.Time
+	// ExpectedOrigin, when set, names the normalised origin a scope's
+	// automatic clone has, when it differs from the scope (#508: a forge's
+	// clone URL). "" = the scope itself.
+	ExpectedOrigin func(scope string) string
+	// ForgeAPI, when set, answers for a scope whose clone could not be made
+	// (#508 F4): the client and whether the project may use it now.
+	ForgeAPI func(ctx context.Context, projectID, scope string) (ForgeAPIClient, bool)
+	Git      GitRunner
+	Now      func() time.Time
 }
 
 // NewProvenanceVerifier verifies against workspaceRoot/<projectID>.
@@ -358,6 +414,11 @@ func (v *ProvenanceVerifier) evaluate(ctx context.Context, projectID, scope, p s
 	// 2. The clone exists, is safe to read, and is this repository.
 	dir, repo, reason := v.checkClone(ctx, projectID, scope)
 	res.Repo = repo
+	if reason == ProvReasonCloneFailed && v.ForgeAPI != nil {
+		if api, ok := v.ForgeAPI(ctx, projectID, scope); ok && api != nil {
+			return v.evaluateAPI(ctx, api, projectID, scope, p, contentBlob, prior, res)
+		}
+	}
 	if reason != "" {
 		return fail(reason)
 	}
@@ -446,7 +507,7 @@ func (v *ProvenanceVerifier) checkClone(ctx context.Context, projectID, scope st
 		return dir, "", ProvReasonNoOrigin
 	}
 	repo := memoryscope.NormalizeRemote(strings.TrimSpace(string(url)))
-	if repo != scope {
+	if repo != scope && (v.ExpectedOrigin == nil || v.ExpectedOrigin(scope) == "" || repo != v.ExpectedOrigin(scope)) {
 		return dir, repo, ProvReasonRepoMismatch
 	}
 	// Replace refs would let a pushed ref substitute any object we read.
@@ -657,6 +718,8 @@ func isHexID(s string) bool {
 // companion-delegated document).
 func ProvenanceLabel(validationStatus, validatorRole, recordState, recordReason string) string {
 	switch {
+	case validatorRole == ValidatorRoleProvenanceForgeAPI && validationStatus == "verified":
+		return "verified (forge API)"
 	case validatorRole == ValidatorRoleProvenance && validationStatus == "verified":
 		return "verified"
 	case validatorRole == ValidatorRoleProvenanceUnavailable && validationStatus == "verified":

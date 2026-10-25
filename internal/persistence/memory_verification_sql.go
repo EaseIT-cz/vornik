@@ -479,9 +479,18 @@ func (r *SQLMemoryVerificationRepository) changeChunks(ctx context.Context, db D
 		return 0, fmt.Errorf("memory verification: unknown target status %q", ch.NewStatus)
 	}
 	backupArgs := args
+	only := ch.OnlyValidatorRoles
 	if ch.OnlyValidatorRole != "" {
-		pred += ` AND COALESCE(validator_role, '') = $6`
-		backupArgs = append(append([]any(nil), args...), ch.OnlyValidatorRole)
+		only = append([]string{ch.OnlyValidatorRole}, only...)
+	}
+	if len(only) > 0 {
+		backupArgs = append([]any(nil), args...)
+		ph := make([]string, len(only))
+		for i, role := range only {
+			ph[i] = fmt.Sprintf("$%d", 6+i)
+			backupArgs = append(backupArgs, role)
+		}
+		pred += ` AND COALESCE(validator_role, '') IN (` + strings.Join(ph, ", ") + `)`
 	}
 	if _, err := db.ExecContext(ctx, `
 		INSERT INTO memory_verification_backup

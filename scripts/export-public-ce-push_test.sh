@@ -25,6 +25,14 @@ case "${STUB_MODE:-ok}" in
   *) echo "gate-stamp: refusing (stub)" >&2; exit 1 ;;
 esac
 STUB
+# The summary-doc release gate (GitHub #545) is a stub too: refuses when
+# SUMMARY_MODE=fail, so the tag path's use of it is driven deterministically.
+cat > "$TMP/ee/scripts/summary-release-check.sh" <<'STUB'
+#!/usr/bin/env bash
+echo "$*" > "$SUMMARY_LOG"
+[ "${SUMMARY_MODE:-ok}" = ok ] || { echo "summary-release: 1 summary doc(s) not reviewed for $1" ; exit 1; }
+echo "summary-release: every registered summary doc was reviewed for $1"
+STUB
 chmod +x "$TMP/ee/scripts/"*.sh
 git init -q -b main "$TMP/ee"
 EXPORT="$TMP/ee/scripts/export-public-ce.sh"
@@ -44,7 +52,7 @@ git clone -q "$TMP/ce.git" "$TMP/work" 2>/dev/null
 ( cd "$TMP/work" && git -c user.email=t@e -c user.name=t commit -q --allow-empty -m "$SYNC_MSG" && git push -q origin HEAD:main ) 2>/dev/null
 git clone -q "$TMP/ce.git" "$TMP/.vornik-public-clone" 2>/dev/null
 
-run() { (cd "$TMP" && STUB_LOG="$TMP/stub.log" CE_PUBLISH_TOKEN="$SECRET" CE_REPO=example/ce bash "$EXPORT" --push-tag "$1" 2>&1); }
+run() { (cd "$TMP" && SUMMARY_LOG="$TMP/summary.log" STUB_LOG="$TMP/stub.log" CE_PUBLISH_TOKEN="$SECRET" CE_REPO=example/ce bash "$EXPORT" --push-tag "$1" 2>&1); }
 
 out="$(run 2026.10.2)"; rc=$?
 [ "$rc" -eq 0 ] && git -C "$TMP/ce.git" rev-parse -q --verify refs/tags/2026.10.2 >/dev/null \
@@ -90,6 +98,16 @@ verified="$(git -C "$TMP/.vornik-public-clone" rev-parse HEAD)"
 out="$(CLONE="$TMP/.vornik-public-clone" STUB_MODE=movecl run 2026.10.6)"; rc=$?
 [ "$rc" -eq 0 ] && [ "$(git -C "$TMP/ce.git" rev-parse -q --verify 'refs/tags/2026.10.6^{commit}')" = "$verified" ] \
   && ok "the tag lands on the verified commit even if the clone moves during verify" || bad "moved clone (rc=$rc): tag=$(git -C "$TMP/ce.git" rev-parse -q --verify 'refs/tags/2026.10.6^{commit}') verified=$verified $out"
+
+# GitHub #545: a CE release tag is refused until every registered summary doc
+# was reviewed for that version, and the gate is asked about the tag itself.
+( cd "$TMP/.vornik-public-clone" && git -c user.email=t@e -c user.name=t commit -q --allow-empty -m "$SYNC_MSG" )
+out="$(SUMMARY_MODE=fail run 2026.10.7)"; rc=$?
+[ "$rc" -ne 0 ] && ! git -C "$TMP/ce.git" rev-parse -q --verify refs/tags/2026.10.7 >/dev/null && grep -q "summary doc" <<<"$out" \
+  && ok "a release whose summary docs were not reviewed is not tagged" || bad "unreviewed summary docs tagged (rc=$rc): $out"
+out="$(run 2026.10.7)"; rc=$?
+[ "$rc" -eq 0 ] && grep -qx "2026.10.7" "$TMP/summary.log" \
+  && ok "the summary gate is asked about the tag being cut" || bad "summary gate not asked about 2026.10.7 (rc=$rc): $(cat "$TMP/summary.log" 2>/dev/null) $out"
 
 out="$(run v1.0)"; rc=$?
 [ "$rc" -ne 0 ] && ok "a non-calendar tag is refused" || bad "a non-calendar tag was accepted: $out"

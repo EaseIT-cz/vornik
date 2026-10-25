@@ -96,7 +96,9 @@ func TestGitProvenanceClone506_PinnedShape(t *testing.T) {
 	for _, bad := range []struct{ url, dest string }{
 		{"http://github.com/acme/gadgets.git", dest},
 		{"https://user:pw@github.com/acme/gadgets.git", dest},
-		{"https://github.com:8443/acme/gadgets.git", dest},
+		{"https://github.com:0/acme/gadgets.git", dest},
+		{"https://github.com:99999/acme/gadgets.git", dest},
+		{"https://github.com/acme/gadgets.git?x=1", dest},
 		{"ext::sh -c touch% /tmp/x", dest},
 		{"https://github.com/acme/gadgets.git", filepath.Join(t.TempDir(), "elsewhere")},
 		{"https://github.com/acme/gadgets.git", filepath.Join(root, "..", "escape")},
@@ -131,5 +133,20 @@ func TestGitProvenance506_AuthHeaderOnlyOnFetchAndClone(t *testing.T) {
 	}
 	if err := r.WithGitHTTPAuthHeader("Authorization: Basic eA=="); !errors.Is(err, ErrRefused) {
 		t.Fatal("a read accepted a credential")
+	}
+}
+
+// GitHub #508 F7: a self-hosted forge served on an https port clones; the
+// port is the only relaxation (process-spawn-law design, "Amendment
+// 2026-10-24 (#508)").
+func TestGitProvenanceClone508_AcceptsANumericPort(t *testing.T) {
+	root := newProvenanceRoot(t)
+	dest := filepath.Join(root, "gitlab.corp+8443", "group+repo")
+	c, err := GitProvenanceClone(context.Background(), root, "https://gitlab.corp:8443/group/repo.git", dest)
+	if err != nil {
+		t.Fatalf("a port was refused: %v", err)
+	}
+	if !strings.Contains(strings.Join(c.Args(), " "), "https://gitlab.corp:8443/group/repo.git") {
+		t.Errorf("args = %v", c.Args())
 	}
 }

@@ -2,9 +2,6 @@ package executor
 
 import (
 	"context"
-	"fmt"
-	"net/http"
-	"os"
 	"time"
 
 	"vornik.io/vornik/internal/github"
@@ -34,9 +31,13 @@ func (e *Executor) installationToken(ctx context.Context, project *registry.Proj
 	e.ghTokenMu.Lock()
 	defer e.ghTokenMu.Unlock()
 	if e.ghTokens == nil {
-		e.ghTokens = make(map[int64]ghCachedToken)
+		e.ghTokens = make(map[github.AppIdentity]ghCachedToken)
 	}
-	if c, ok := e.ghTokens[g.InstallationID]; ok && time.Until(c.expires) > ghTokenRenewBuffer {
+	// Keyed by the whole App identity, never the installation id alone: a
+	// project naming another's installation must not receive its cached
+	// push token (security review of 180ed1da9).
+	id := github.AppIdentity{APIBase: g.ResolvedAPIBaseURL(), AppID: g.AppID, InstallationID: g.InstallationID, KeyPath: g.PrivateKeyPath}
+	if c, ok := e.ghTokens[id]; ok && time.Until(c.expires) > ghTokenRenewBuffer {
 		return c.token, nil
 	}
 
@@ -48,7 +49,7 @@ func (e *Executor) installationToken(ctx context.Context, project *registry.Proj
 	if err != nil {
 		return "", err
 	}
-	e.ghTokens[g.InstallationID] = ghCachedToken{token: token, expires: expires}
+	e.ghTokens[id] = ghCachedToken{token: token, expires: expires}
 	return token, nil
 }
 
@@ -93,13 +94,5 @@ func (e *Executor) injectGitHubToken(ctx context.Context, env map[string]string,
 // this process — only the short-lived token is returned to the caller, which
 // injects it as GH_TOKEN into the agent container.
 func defaultGitHubMint(ctx context.Context, apiBase string, appID, installID int64, keyPath string) (string, time.Time, error) {
-	keyBytes, err := os.ReadFile(keyPath)
-	if err != nil {
-		return "", time.Time{}, fmt.Errorf("read github private key: %w", err)
-	}
-	key, err := github.LoadPrivateKeyPEM(keyBytes)
-	if err != nil {
-		return "", time.Time{}, fmt.Errorf("parse github private key: %w", err)
-	}
-	return github.MintInstallationToken(ctx, &http.Client{Timeout: 15 * time.Second}, apiBase, appID, installID, key)
+	return github.MintFromKeyFile(ctx, apiBase, appID, installID, keyPath)
 }

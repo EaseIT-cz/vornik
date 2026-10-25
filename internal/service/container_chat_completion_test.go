@@ -12,6 +12,7 @@ import (
 	"github.com/rs/zerolog"
 	"vornik.io/vornik/internal/conversation"
 	"vornik.io/vornik/internal/persistence"
+	"vornik.io/vornik/internal/report"
 )
 
 // captureChannel records what a notifier sent, and where.
@@ -141,6 +142,13 @@ func TestChatCompletionNotifier_ReportsFailureAndTheReason(t *testing.T) {
 		"turn-1": {ID: "turn-1", ChatID: "slack:T123/C_general#main", ProjectID: "p"},
 	})
 
+	// #497: the notice reads the session's view; a clean error line
+	// survives the scrub.
+	scrub, err := report.NewLineScrubber("testhost")
+	if err != nil {
+		t.Fatal(err)
+	}
+	n.taskTextScrub = scrub
 	task := turnTask("task_43", "turn-1")
 	task.Status = "FAILED"
 	boom := "container exited 137"

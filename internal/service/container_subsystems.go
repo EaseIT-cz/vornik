@@ -885,6 +885,10 @@ func (c *Container) initTelegram() error {
 	if shim := c.chatAuthShim(); shim != nil {
 		bot.SetIdentityShim(shim)
 	}
+	// #497: the bot's non-tool readers (/status, follow-ups, watcher pushes,
+	// forum notices) scrub a task's stored text for every chat that is not an
+	// admin's private chat, with the scrubber the dispatcher tools use.
+	bot.SetTaskTextScrubber(c.taskTextScrubber())
 	// The §5.2 redemption half of `/link`. Wired independently of the shim:
 	// the shim answers "may this speaker act", this answers "which account is
 	// this speaker", and a deployment can reach the second before the first

@@ -204,7 +204,7 @@ func TestMarkRefutedByIDs_OneStatementStrictestRouteWins(t *testing.T) {
 		    refute_route = NULLIF($2, '')
 		WHERE project_id = $1
 		  AND id IN ($4)
-		  AND NOT ($3 <> '' AND validation_status = 'verified' AND COALESCE(validator_role, '') = $3)
+		  AND NOT ($3 <> '' AND validation_status = 'verified' AND COALESCE(validator_role, '') IN ('provenance:origin/main', 'provenance:forge-api'))
 		  AND (validation_status NOT IN ('refuted', 'superseded')
 		       OR (validation_status = 'refuted'
 		           AND refute_route = 'mirror_forget'

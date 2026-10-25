@@ -16,9 +16,11 @@ import (
 
 	"github.com/rs/zerolog"
 	"vornik.io/vornik/internal/aidisclosure"
+	"vornik.io/vornik/internal/chatview"
 	"vornik.io/vornik/internal/conversation"
 	"vornik.io/vornik/internal/executor"
 	"vornik.io/vornik/internal/persistence"
+	"vornik.io/vornik/internal/report"
 )
 
 // CompletionNotifier delivers a task-kind reminder's outcome to the
@@ -32,6 +34,10 @@ type CompletionNotifier struct {
 	auditRepo persistence.AdminAuditRepository
 	logger    zerolog.Logger
 	clock     func() time.Time
+
+	// taskTextScrub scrubs a failure body for a session that is not an
+	// operator audience (#497); nil withholds every line.
+	taskTextScrub report.LineScrubber
 
 	artifactRepo   persistence.ArtifactRepository
 	artifactReader ReminderArtifactReader
@@ -94,6 +100,14 @@ func WithArtifactDelivery(repo persistence.ArtifactRepository, reader ReminderAr
 	}
 }
 
+// WithTaskTextScrubber gives the failure body the line scrubber for the
+// executor's error text (process-spawn-law design, "Amendment 2026-10-24
+// (#497)"; the service passes Container.logScrubber()). Unset, a session
+// that is not an operator audience reads every line withheld.
+func WithTaskTextScrubber(s report.LineScrubber) CompletionOption {
+	return func(n *CompletionNotifier) { n.taskTextScrub = s }
+}
+
 // NewCompletionNotifier constructs the notifier. auditRepo may be nil.
 func NewCompletionNotifier(repo persistence.ReminderRepository, resolver ChannelResolver, auditRepo persistence.AdminAuditRepository, logger zerolog.Logger, clock func() time.Time, opts ...CompletionOption) *CompletionNotifier {
 	if clock == nil {
@@ -131,6 +145,11 @@ func (n *CompletionNotifier) NotifyTaskCompleted(ctx context.Context, task *pers
 	if ch == nil {
 		n.undeliverable(ctx, rem, task.ID, "channel_not_configured", "channel "+rem.Channel+" not configured")
 		return
+	}
+	// A failure's message is the executor's error text: it takes the
+	// session's view (#497 L3). A success's is the deliverable (L4).
+	if !success {
+		message = chatview.ForSession(ctx, ch, rem.ChannelRef, n.taskTextScrub)(message)
 	}
 	body := scheduledUpdateBody(rem, task, success, message)
 	if success {

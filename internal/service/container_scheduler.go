@@ -1074,6 +1074,9 @@ func (c *Container) initScheduler() error {
 					Interval: memory.DefaultProvenanceSweepInterval,
 					Logger:   c.Logger.With().Str("component", "memory").Str("worker", "provenance_sweep").Logger(),
 					Clones:   c.provenanceClones,
+					// #508: an automatic clone is fetched with the credential
+					// that made it.
+					AutoFetch: c.provenanceAutoFetch(),
 					// #506 C9: a version that verifies after its ingest
 					// retires its predecessor.
 					Supersede: func(ctx context.Context, projectID, scope, path string) (int, error) {

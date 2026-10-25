@@ -60,6 +60,33 @@ var restartOnlyPaths = []restartOnlyPath{
 		reason: "passed to the title-backfill loop as a parameter at start",
 		value:  func(c *Config) string { return itoa(c.Memory.Titler.AutoBackfillBatchSize) },
 	},
+	{
+		path: "memory.provenance.forges",
+		reason: "the automatic provenance clone manager is built once at start " +
+			"(internal/service/memory_provenance.go provenanceAutoClones; GitHub #508)",
+		value: provenanceForgesSummary,
+	},
+	{
+		path:   "memory.provenance.replace_default_hosts",
+		reason: "read with memory.provenance.forges when the clone manager is built at start",
+		value:  func(c *Config) string { return strconv.FormatBool(c.Memory.Provenance.ReplaceDefaultHosts) },
+	},
+}
+
+// provenanceForgesSummary names each forge's shape for the restart warning:
+// never a token value, only whether one is set (a rotated token is not
+// detected here; it too needs a restart).
+func provenanceForgesSummary(c *Config) string {
+	var parts []string
+	for _, f := range c.Memory.Provenance.Forges {
+		cred := "anonymous"
+		if f.Token != "" || f.TokenFile != "" {
+			cred = "token"
+		}
+		parts = append(parts, fmt.Sprintf("%s(%s %s %s %s depth=%d projects=%s)", f.Name, f.Kind,
+			f.ScopePrefix, f.BaseURL, cred, f.MaxRepoDepth, strings.Join(f.AllowedProjects, ",")))
+	}
+	return strings.Join(parts, "; ")
 }
 
 func itoa(i int) string { return strconv.Itoa(i) }

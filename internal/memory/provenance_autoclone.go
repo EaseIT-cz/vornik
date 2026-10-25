@@ -48,14 +48,27 @@ type CloneRunner interface {
 // AutoClones manages the automatic clones under Root, laid out as
 // <Root>/<host>/<owner>/<repo>.
 type AutoClones struct {
-	Root  string
+	Root string
+	// Hosts replaces DefaultAutoCloneHosts when set (tests); the daemon
+	// leaves it empty and lists forges in Forges (#508 F1).
 	Hosts []string
-	Run   CloneRunner
-	// Credential returns an HTTP header for the repository ("" for none):
-	// a token the daemon already holds (#506 C3). Nil = anonymous; git's
-	// own composed credential helpers still apply.
-	Credential func(ctx context.Context, host, owner, repo string) string
-	Now        func() time.Time
+	// Forges are the configured self-hosted forges (memory.provenance.forges).
+	Forges []ProvenanceForge
+	// ReplaceDefaultHosts drops DefaultAutoCloneHosts (air-gapped installs).
+	ReplaceDefaultHosts bool
+	// AppToken returns a minted GitHub App installation token and its
+	// installation id for a GitHub repository owner, from the REQUESTING
+	// project's own github: block only ("" when it has none for that owner;
+	// #508 F3).
+	// identity names the whole App (API host, App id, installation), which
+	// the clone's marker records: an installation id alone is configuration
+	// any project can name (security review of 180ed1da9).
+	AppToken func(ctx context.Context, projectID, host, owner string) (token, identity string)
+	// AppTokenByIdentity mints a token for the App identity the sweep finds
+	// recorded on a clone (SweepFetch). Nil = fetch anonymously.
+	AppTokenByIdentity func(ctx context.Context, identity string) string
+	Run                CloneRunner
+	Now                func() time.Time
 
 	MaxClones     int
 	MaxCloneBytes int64
@@ -66,6 +79,8 @@ type AutoClones struct {
 	once      sync.Once
 	mu        sync.Mutex // guards the maps and the count/size check with the create
 	failed    map[string]time.Time
+	unmade    map[string]time.Time // creations that failed or were refused by a limit (#508 F4)
+	refusals  []ProvenanceRefusal  // recent refusals, for the doctor (#508 F6)
 	fetched   map[string]time.Time
 	scopeMu   map[string]*sync.Mutex
 	pending   int // creations reserved but not finished, counted against MaxClones
@@ -76,6 +91,7 @@ type AutoClones struct {
 func (a *AutoClones) init() {
 	a.once.Do(func() {
 		a.failed = map[string]time.Time{}
+		a.unmade = map[string]time.Time{}
 		a.fetched = map[string]time.Time{}
 		a.scopeMu = map[string]*sync.Mutex{}
 		a.createSem = make(chan struct{}, autoCloneCreateSlots)
@@ -100,49 +116,6 @@ func orDefault[T int | int64 | time.Duration](v, d T) T {
 // autoCloneSegment is one path segment of a scope: host, owner or repo.
 var autoCloneSegment = regexp.MustCompile(`^[A-Za-z0-9._-]{1,100}$`)
 
-// scopeParts splits a normalised scope into host, owner and repository.
-// reason is "" for a cloneable scope; ProvReasonScopeNotCloneable for
-// anything that is not exactly <host>/<owner>/<repo> of plain segments (no
-// userinfo, port, traversal or odd character), which cannot name a
-// repository and fails closed; ProvReasonCloneFailed for a well-formed scope
-// on a host off the list, which may be a self-hosted forge and is treated as
-// a clone that could not be made (confined to that scope by retrieval).
-func (a *AutoClones) scopeParts(scope string) (host, owner, repo, reason string) {
-	parts := strings.Split(scope, "/")
-	if len(parts) != 3 {
-		return "", "", "", ProvReasonScopeNotCloneable
-	}
-	for _, p := range parts {
-		if p == "." || p == ".." || !autoCloneSegment.MatchString(p) {
-			return "", "", "", ProvReasonScopeNotCloneable
-		}
-	}
-	hosts := a.Hosts
-	if len(hosts) == 0 {
-		hosts = DefaultAutoCloneHosts
-	}
-	for _, h := range hosts {
-		if strings.EqualFold(h, parts[0]) {
-			return strings.ToLower(parts[0]), parts[1], parts[2], ""
-		}
-	}
-	return "", "", "", ProvReasonCloneFailed
-}
-
-// dirFor is the clone directory of a scope, checked to stay under Root.
-func (a *AutoClones) dirFor(host, owner, repo string) (string, bool) {
-	root, err := filepath.Abs(a.Root)
-	if err != nil || a.Root == "" {
-		return "", false
-	}
-	dir := filepath.Join(root, host, owner, repo)
-	rel, err := filepath.Rel(root, dir)
-	if err != nil || strings.HasPrefix(rel, "..") || filepath.IsAbs(rel) || rel == "." {
-		return "", false
-	}
-	return dir, true
-}
-
 // isClone reports a finished automatic clone: a .git directory and the
 // last-used marker, which is written only after the clone was renamed into
 // place, so a clone still being made is never read (code review 5420 F3).
@@ -160,40 +133,85 @@ func isClone(dir string) bool {
 // clone is usable, else ProvReasonCloneFailed: the scope is not a listed
 // repository, a limit refused it, or the clone failed (remembered for
 // FailMemory so a repository without access costs one attempt an hour).
-func (a *AutoClones) Ensure(ctx context.Context, scope string) (string, string) {
+//
+// projectID is the project whose ingest asks (#508 F2): a clone made with a
+// credential is returned only to a project allowed that credential, checked
+// on every call; a clone with no credential marker is made again.
+func (a *AutoClones) Ensure(ctx context.Context, projectID, scope string) (string, string) {
 	a.init()
-	host, owner, repo, reason := a.scopeParts(scope)
+	t, reason := a.resolve(scope)
 	if reason != "" {
+		a.refuse(projectID, scope, reason, resolveFix(reason))
 		return "", reason
 	}
-	dir, ok := a.dirFor(host, owner, repo)
+	dir, ok := a.dirForTarget(t)
 	if !ok {
 		return "", ProvReasonCloneFailed
 	}
-	key := host + "/" + owner + "/" + repo
+	key := t.key
 	lock := a.lockFor(key)
 	lock.Lock()
 	defer lock.Unlock()
 
 	if isClone(dir) {
-		touchLastUsed(dir)
-		a.freshen(ctx, key, dir, host, owner, repo)
-		return dir, ""
+		marker, ok := readCredentialMarker(dir)
+		if ok && staleForgeMarker(marker, t) {
+			ok = false // the forge that made it is gone or renamed: make it again
+		}
+		if !ok && sweepCaller(ctx) {
+			// The sweep never re-makes a clone; the next project use does.
+			return "", ProvReasonNoClone
+		}
+		if ok {
+			header, allowed := a.mayUse(ctx, projectID, marker, t)
+			if sweepCaller(ctx) {
+				// The daemon's own sweep reads and fetches; it compares no
+				// content, so it is no oracle (SweepFetch).
+				allowed = true
+			}
+			if !allowed {
+				a.refuse(projectID, scope, "project "+projectID+" may not use this clone's credential ("+marker+")",
+					"add "+projectID+" to the forge's allowed_projects, or give the project its own GitHub App block for this owner")
+				return "", ProvReasonCloneFailed
+			}
+			touchLastUsed(dir)
+			if !sweepCaller(ctx) {
+				a.freshen(ctx, key, dir, header)
+			}
+			return dir, ""
+		}
+		// No marker: made before #508, or tampered. Fail closed by making it
+		// again with this project's credential.
+		_ = os.RemoveAll(dir)
 	}
 	// A directory without the finished marker is a clone whose creation was
 	// interrupted: remove it, or the rename below could never succeed.
 	if _, err := os.Lstat(dir); err == nil {
 		_ = os.RemoveAll(dir)
 	}
-	if !a.reserve(key) {
+	// The credential is chosen before the reservation, and a failure is
+	// remembered per (scope, credential): one project's anonymous attempt on
+	// a private repository must not block, for an hour, the clone another
+	// project's credential would make (push security review of 180ed1da9).
+	marker, header := a.credentialFor(ctx, projectID, t)
+	failKey := key + "|" + marker
+	if !a.reserve(failKey) {
+		a.markUnmade(key)
+		a.refuse(projectID, scope, "a clone limit, or a failed clone with this credential remembered for an hour", "see the doctor's clone count and the provenance root's size")
 		return "", ProvReasonCloneFailed
 	}
-	err := a.create(ctx, dir, host, owner, repo)
+	err := a.create(ctx, dir, t, header)
 	a.release()
+	if err == nil {
+		err = writeCredentialMarker(dir, marker)
+	}
 	if err != nil {
+		_ = os.RemoveAll(dir)
 		a.mu.Lock()
-		a.failed[key] = a.now()
+		a.failed[failKey] = a.now()
 		a.mu.Unlock()
+		a.markUnmade(key)
+		a.refuse(projectID, scope, "the clone failed: "+firstErrLine(err), "check the forge's base_url and credential, and that the repository exists")
 		return "", ProvReasonCloneFailed
 	}
 	touchLastUsed(dir)
@@ -257,11 +275,12 @@ func (a *AutoClones) lockFor(key string) *sync.Mutex {
 	return m
 }
 
-// reserve applies the failure memory and the count and total-size limits.
-func (a *AutoClones) reserve(key string) bool {
+// reserve applies the failure memory, keyed by (scope, credential marker),
+// and the count and total-size limits.
+func (a *AutoClones) reserve(failKey string) bool {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	if at, ok := a.failed[key]; ok && a.now().Sub(at) < orDefault(a.FailMemory, DefaultAutoCloneFailMemory) {
+	if at, ok := a.failed[failKey]; ok && a.now().Sub(at) < orDefault(a.FailMemory, DefaultAutoCloneFailMemory) {
 		return false
 	}
 	if len(a.listLocked())+a.pending >= orDefault(a.MaxClones, DefaultAutoCloneMax) && !a.evictLRULocked() {
@@ -285,7 +304,7 @@ func (a *AutoClones) release() {
 
 // create clones into a temporary sibling and renames it into place, so a
 // half-made clone is never visible as one.
-func (a *AutoClones) create(ctx context.Context, dir, host, owner, repo string) error {
+func (a *AutoClones) create(ctx context.Context, dir string, t scopeTarget, header string) error {
 	select {
 	case a.createSem <- struct{}{}:
 	case <-ctx.Done():
@@ -295,13 +314,12 @@ func (a *AutoClones) create(ctx context.Context, dir, host, owner, repo string) 
 	if err := os.MkdirAll(filepath.Dir(dir), 0o700); err != nil {
 		return err
 	}
-	tmp, err := os.MkdirTemp(filepath.Dir(dir), "."+repo+".clone-")
+	tmp, err := os.MkdirTemp(filepath.Dir(dir), "."+filepath.Base(dir)+".clone-")
 	if err != nil {
 		return err
 	}
 	_ = os.Remove(tmp) // git clone wants a destination that does not exist
 	defer func() { _ = os.RemoveAll(tmp) }()
-	url := "https://" + host + "/" + owner + "/" + repo + ".git"
 	// The size limit holds DURING the clone, not only after it (security
 	// review 2026-10-23): a watcher cancels the clone as soon as the
 	// temporary directory passes the limit, so a huge repository cannot fill
@@ -328,7 +346,7 @@ func (a *AutoClones) create(ctx context.Context, dir, host, owner, repo string) 
 			}
 		}
 	}()
-	err = a.Run.Clone(cctx, a.Root, url, tmp, a.header(ctx, host, owner, repo))
+	err = a.Run.Clone(cctx, a.Root, t.cloneURL, tmp, header)
 	close(done)
 	if tooLarge.Load() || dirBytes(tmp) > limit {
 		return errCloneTooLarge
@@ -348,7 +366,7 @@ const errCloneTooLarge = cloneError("provenance clone exceeds the size limit")
 // freshen fetches the clone's default branch when the last fetch is older
 // than FetchAfter. A failed fetch leaves the clone as it was: the version is
 // still examined against the state already fetched (#506 C4).
-func (a *AutoClones) freshen(ctx context.Context, key, dir, host, owner, repo string) {
+func (a *AutoClones) freshen(ctx context.Context, key, dir, header string) {
 	a.mu.Lock()
 	last := a.fetched[key]
 	a.mu.Unlock()
@@ -368,7 +386,7 @@ func (a *AutoClones) freshen(ctx context.Context, key, dir, host, owner, repo st
 	if err != nil || !plainBranchName(branch) {
 		return
 	}
-	_ = a.Run.Fetch(ctx, dir, branch, a.header(ctx, host, owner, repo))
+	_ = a.Run.Fetch(ctx, dir, branch, header)
 }
 
 // Freshen fetches a clone that is not one of the automatic ones (a
@@ -381,14 +399,7 @@ func (a *AutoClones) Freshen(ctx context.Context, dir string) {
 	lock := a.lockFor(key)
 	lock.Lock()
 	defer lock.Unlock()
-	a.freshen(ctx, key, dir, "", "", "")
-}
-
-func (a *AutoClones) header(ctx context.Context, host, owner, repo string) string {
-	if a.Credential == nil || host == "" {
-		return ""
-	}
-	return a.Credential(ctx, host, owner, repo)
+	a.freshen(ctx, key, dir, "")
 }
 
 // List returns the automatic clones on disk, for the sweep's fetch and the
@@ -410,6 +421,11 @@ func (a *AutoClones) listLocked() []ProvenanceClone {
 		owners, _ := os.ReadDir(filepath.Join(a.Root, h.Name()))
 		for _, o := range owners {
 			if !o.IsDir() || strings.HasPrefix(o.Name(), ".") {
+				continue
+			}
+			// A forge clone (#508): <prefix joined by +>/<repo joined by +>.
+			if two := filepath.Join(a.Root, h.Name(), o.Name()); isClone(two) {
+				out = append(out, ProvenanceClone{Dir: two, RepoScope: strings.ReplaceAll(h.Name(), "+", "/") + "/" + strings.ReplaceAll(o.Name(), "+", "/")})
 				continue
 			}
 			repos, _ := os.ReadDir(filepath.Join(a.Root, h.Name(), o.Name()))
@@ -541,6 +557,6 @@ func ScopedCloneFor(own func(projectID string) (scope, dir string, refused bool)
 		if auto == nil {
 			return "", ProvReasonNoClone
 		}
-		return auto.Ensure(ctx, scope)
+		return auto.Ensure(ctx, projectID, scope)
 	}
 }

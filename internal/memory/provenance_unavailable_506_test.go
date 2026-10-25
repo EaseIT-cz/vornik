@@ -142,7 +142,7 @@ func TestProvenanceSweep506_Transitions(t *testing.T) {
 		t.Fatal(err)
 	}
 	if len(store3.changes) != 1 || store3.changes[0][0].NewStatus != "unverified" ||
-		store3.changes[0][0].OnlyValidatorRole != ValidatorRoleProvenance {
+		!sameRoles(store3.changes[0][0].OnlyValidatorRoles, ProvenanceRoles()) {
 		t.Fatalf("an unsafe clone kept a provenance stamp: %+v", store3.changes)
 	}
 }

@@ -28,6 +28,29 @@ func (h *DoctorHandlers) SetProvenanceClones(fn func() []ProvenanceCloneStatus) 
 	h.provenanceClones = fn
 }
 
+// SetProvenanceForgeNotes wires the forge lines of memory_provenance_clone
+// (#508 F6).
+func (h *DoctorHandlers) SetProvenanceForgeNotes(fn func() (forges, refusals []string)) {
+	h.provenanceForgeNotes = fn
+}
+
+// forgeNotes appends the configured forges and the recent refusals to a
+// message; a refusal turns an OK into a WARNING, since each names its fix.
+func (h *DoctorHandlers) forgeNotes(status, msg string) (string, string) {
+	if h.provenanceForgeNotes == nil {
+		return status, msg
+	}
+	forges, refusals := h.provenanceForgeNotes()
+	if len(forges) > 0 {
+		msg += "; forges: " + strings.Join(forges, "; ")
+	}
+	if len(refusals) > 0 {
+		msg += fmt.Sprintf("; %d scope(s) refused in the last 24 h: ", len(refusals)) + strings.Join(refusals, "; ")
+		status = "WARNING"
+	}
+	return status, msg
+}
+
 // checkProvenanceClone reports every configured daemon-only provenance
 // clone: whether it is usable and how its last fetch went. It states how
 // many it examined; with none configured the check is OK and says the
@@ -39,7 +62,8 @@ func (h *DoctorHandlers) checkProvenanceClone() DoctorCheck {
 	}
 	clones := h.provenanceClones()
 	if len(clones) == 0 {
-		return DoctorCheck{Name: name, Status: "OK", Message: "0 provenance clones yet; each repository gets an automatic clone on its first companion document ingest"}
+		status, msg := h.forgeNotes("OK", "0 provenance clones yet; each repository gets an automatic clone on its first companion document ingest")
+		return DoctorCheck{Name: name, Status: status, Message: msg}
 	}
 	var bad, ok []string
 	for _, c := range clones {
@@ -64,8 +88,10 @@ func (h *DoctorHandlers) checkProvenanceClone() DoctorCheck {
 		msg += "; " + strings.Join(ok, "; ")
 	}
 	if len(bad) == 0 {
-		return DoctorCheck{Name: name, Status: "OK", Message: msg}
+		status, m := h.forgeNotes("OK", msg)
+		return DoctorCheck{Name: name, Status: status, Message: m}
 	}
-	return DoctorCheck{Name: name, Status: "WARNING", Message: msg + "; " + strings.Join(bad, "; ") +
-		"; chunks checked against a stale or missing clone stay or become unverified"}
+	_, m := h.forgeNotes("WARNING", msg+"; "+strings.Join(bad, "; ")+
+		"; chunks checked against a stale or missing clone stay or become unverified")
+	return DoctorCheck{Name: name, Status: "WARNING", Message: m}
 }

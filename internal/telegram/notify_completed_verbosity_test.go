@@ -28,6 +28,8 @@ func newNotifyTestBot(t *testing.T, allowedUsers map[int64]UserAccess) (*Bot, *t
 		t.Fatalf("NewBot: %v", err)
 	}
 	b.baseURL = rec.server.URL
+	// #497: the push reads the scrubbed view; clean status text survives it.
+	b.SetTaskTextScrubber(scrubber497(t))
 	return b, rec
 }
 

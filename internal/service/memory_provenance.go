@@ -74,7 +74,18 @@ func (c *Container) provenanceAutoClones(workspaceRoot string) *memory.AutoClone
 			c.Logger.Error().Err(err).Str("dir", dir).Msg("memory provenance: cannot register the automatic-clone root; no repository can be provenance-verified")
 			return
 		}
-		c.provenanceAuto = &memory.AutoClones{Root: dir, Run: memory.SpawnCloneRunner{}}
+		auto := &memory.AutoClones{Root: dir, Run: memory.SpawnCloneRunner{},
+			AppToken: c.provenanceAppToken, AppTokenByIdentity: c.provenanceAppTokenByIdentity}
+		// #508 F1: self-hosted forges and the default-host choice. A forge
+		// that cannot be configured (an unreadable token_file) leaves the
+		// defaults in place and says so; it never disables provenance.
+		if c.Config != nil {
+			if err := memory.ConfigureAutoClones(auto, c.Config.Memory.Provenance, nil); err != nil {
+				c.Logger.Error().Err(err).Msg("memory provenance: memory.provenance could not be applied; only the public default forges are cloned")
+				auto.Forges, auto.ReplaceDefaultHosts = nil, false
+			}
+		}
+		c.provenanceAuto = auto
 	})
 	return c.provenanceAuto
 }
@@ -89,6 +100,7 @@ func provenanceAutoRoot(workspaceRoot string) string { return memory.AutoCloneRo
 // "no clone": only genuine absence counts as unexaminable (C4). A project's
 // configured branch applies only to its own repository.
 func wireProvenanceAutoClones(v *memory.ProvenanceVerifier, root string, project func(string) *registry.Project, auto *memory.AutoClones) {
+	memory.WireForgeVerification(v, auto) // #508: forge origins and the forge-API fallback
 	v.CloneFor = memory.ScopedCloneFor(func(projectID string) (string, string, bool) {
 		p := project(projectID)
 		if p == nil || p.Memory.ProvenanceClone == "" {

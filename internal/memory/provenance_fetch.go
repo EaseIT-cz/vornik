@@ -99,7 +99,15 @@ func (s *ProvenanceSweeper) fetchClone(ctx context.Context, c ProvenanceClone) P
 	// The clone is resolved ONCE and passes the verifier's own clone checks
 	// (unbent, origin = repo_scope) before anything is fetched into it, so a
 	// repointed origin is never fetched from (review 05cc F2, F3).
-	dir, _, reason := s.Verifier.checkClone(ctx, c.ProjectID, c.RepoScope)
+	// An automatic clone has no project: the sweep resolves it as the
+	// daemon's own caller (#508 F2), which reads and fetches but compares no
+	// content.
+	automatic := c.ProjectID == ""
+	cctx := ctx
+	if automatic {
+		cctx = WithSweepCaller(ctx)
+	}
+	dir, _, reason := s.Verifier.checkClone(cctx, c.ProjectID, c.RepoScope)
 	switch {
 	case reason == ProvReasonNoClone:
 		res.Outcome = ProvenanceFetchNoClone
@@ -120,8 +128,13 @@ func (s *ProvenanceSweeper) fetchClone(ctx context.Context, c ProvenanceClone) P
 	}
 	fctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
-	_, err := s.Verifier.Git(fctx, dir, "fetch", "--quiet", "origin",
-		"+refs/heads/"+branch+":refs/remotes/origin/"+branch)
+	var err error
+	if automatic && s.AutoFetch != nil {
+		err = s.AutoFetch(fctx, c.RepoScope, dir, branch)
+	} else {
+		_, err = s.Verifier.Git(fctx, dir, "fetch", "--quiet", "origin",
+			"+refs/heads/"+branch+":refs/remotes/origin/"+branch)
+	}
 	switch {
 	case err == nil:
 		res.Outcome = ProvenanceFetchOK

@@ -9,7 +9,9 @@ import (
 	"path/filepath"
 	"sync"
 	"time"
+
 	"vornik.io/vornik/internal/egressscan"
+	"vornik.io/vornik/internal/github"
 
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/rs/zerolog"
@@ -430,7 +432,7 @@ type Executor struct {
 	// reused across the task's steps until near expiry. ghMintFn is the mint
 	// implementation (overridable in tests; nil → defaultGitHubMint).
 	ghTokenMu sync.Mutex
-	ghTokens  map[int64]ghCachedToken
+	ghTokens  map[github.AppIdentity]ghCachedToken
 	ghMintFn  func(ctx context.Context, apiBase string, appID, installID int64, keyPath string) (string, time.Time, error)
 	// ingestQueue (optional) routes ingestion through the
 	// project_ingest_queue → IngestWorker pipeline introduced in

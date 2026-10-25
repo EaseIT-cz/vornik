@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -613,10 +614,21 @@ func grantRevokeVsCoverage(t *testing.T, h *standingHarness, pause bool) {
 	go func() {
 		defer wg.Done()
 		time.Sleep(20 * time.Millisecond)
-		if pause {
-			changeErr = h.grants.SetPaused(h.ctx, g.ID, true)
-		} else {
-			changeErr = h.grants.Revoke(h.ctx, g.ID, h.now)
+		// The change contends with the held approval for SQLite's single
+		// writer lock. On a slow-fsync filesystem (btrfs, synchronous FULL)
+		// under full-suite load a commit has stalled past busy_timeout, and
+		// the change got SQLITE_BUSY: noise, not the race under test (#517,
+		// gate-stamp 2026-10-24). Retry it; the assertions are on the end
+		// state. Postgres never returns SQLITE_BUSY, so it is unaffected.
+		for attempt := 0; attempt < 3; attempt++ {
+			if pause {
+				changeErr = h.grants.SetPaused(h.ctx, g.ID, true)
+			} else {
+				changeErr = h.grants.Revoke(h.ctx, g.ID, h.now)
+			}
+			if changeErr == nil || !strings.Contains(changeErr.Error(), "SQLITE_BUSY") {
+				break
+			}
 		}
 	}()
 	wg.Wait()

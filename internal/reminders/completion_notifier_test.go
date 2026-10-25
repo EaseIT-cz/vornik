@@ -18,6 +18,7 @@ import (
 	"vornik.io/vornik/internal/conversation"
 	"vornik.io/vornik/internal/persistence"
 	"vornik.io/vornik/internal/persistence/mocks"
+	"vornik.io/vornik/internal/report"
 )
 
 type captureReminderFileSender struct {
@@ -353,7 +354,13 @@ func TestCompletionNotifierFailureNotice(t *testing.T) {
 	repo := newStubRepo()
 	repo.claim = rem
 	ch := &stubChannel{}
-	n := NewCompletionNotifier(repo, &stubResolver{channels: map[string]conversation.Channel{"telegram": ch}}, nil, zerolog.Nop(), time.Now)
+	// #497: the failure body reads the scrubbed view; a clean line survives.
+	scrub, err := report.NewLineScrubber("testhost")
+	if err != nil {
+		t.Fatal(err)
+	}
+	n := NewCompletionNotifier(repo, &stubResolver{channels: map[string]conversation.Channel{"telegram": ch}}, nil, zerolog.Nop(), time.Now,
+		WithTaskTextScrubber(scrub))
 
 	n.NotifyTaskCompleted(context.Background(), &persistence.Task{ID: "task_4"}, false, "boom")
 

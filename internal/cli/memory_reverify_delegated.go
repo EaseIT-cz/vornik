@@ -299,7 +299,7 @@ func applyReverify(ctx context.Context, d reverifyDeps, opt reverifyOptions, pla
 			ev.Unchanged++
 		case reverifyVerify:
 			changes = append(changes, persistence.ArtifactVerificationChange{ArtifactID: r.Cand.ArtifactID,
-				NewStatus: "verified", NewValidatorRole: memory.ValidatorRoleProvenance,
+				NewStatus: "verified", NewValidatorRole: r.Result.Role(),
 				Provenance: memory.ProvenanceRecord(opt.Project, r.Cand.ArtifactID, r.Cand.RepoScope, r.Result)})
 		case reverifyUnavailable:
 			// Only the role-of-record stamp the plan saw is relabelled, so a
@@ -484,6 +484,13 @@ func runReverifyBackfill(ctx context.Context, out io.Writer, cfg *config.Config,
 			return err
 		}
 		auto = &memory.AutoClones{Root: autoRoot, Run: memory.SpawnCloneRunner{}}
+		// #508 F1: the same forges and default-host choice as the daemon.
+		// GitHub App tokens are the daemon's (it holds the registry's App
+		// keys); the backfill clones a GitHub repository with a forge token
+		// or the host's own credential helpers, as before #508.
+		if err := memory.ConfigureAutoClones(auto, cfg.Memory.Provenance, nil); err != nil {
+			return err
+		}
 	}
 	verifier.CloneFor = memory.ScopedCloneFor(func(string) (string, string, bool) {
 		if clone == "" {
@@ -491,6 +498,7 @@ func runReverifyBackfill(ctx context.Context, out io.Writer, cfg *config.Config,
 		}
 		return ownScope, cloneDir, cloneDir == ""
 	}, auto)
+	memory.WireForgeVerification(verifier, auto)
 	verifier.DefaultBranchFor = func(_, scope string) string {
 		if scope != "" && strings.EqualFold(scope, ownScope) {
 			return branch

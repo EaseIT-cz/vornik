@@ -1149,8 +1149,7 @@ func unverifiedNeverRetiresVerified(newArt string) string {
 // or alias in the enclosing statement (code review 5420 F2), so an aliased
 // caller cannot silently change what the guard correlates with.
 func provenanceRetiredOnlyByProvenance(outer string) string {
-	return `(COALESCE(` + outer + `.validator_role, '') <> '` + ValidatorRoleProvenance +
-		`' OR nv.validator_role = '` + ValidatorRoleProvenance + `')`
+	return `(NOT ` + provenanceRoleSQL(outer+`.validator_role`) + ` OR ` + provenanceRoleSQL(`nv.validator_role`) + `)`
 }
 
 // DocumentOlderChunks counts the chunks SupersedeDocument would retire for a

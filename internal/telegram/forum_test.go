@@ -423,7 +423,7 @@ func TestEnsureTaskThread_DuplicateKeyFallback(t *testing.T) {
 }
 
 func TestFormatTaskEvent_Completion(t *testing.T) {
-	bot := &Bot{}
+	bot := &Bot{taskTextScrub: scrubber497(t)} // #497: a forum topic reads the scrubbed view
 	task := &persistence.Task{
 		ID:     "t1",
 		Status: persistence.TaskStatusCompleted,
@@ -440,7 +440,7 @@ func TestFormatTaskEvent_Completion(t *testing.T) {
 func TestFormatTaskEvent_Failure(t *testing.T) {
 	errMsg := "tests failed"
 	errClass := "test_failure"
-	bot := &Bot{}
+	bot := &Bot{taskTextScrub: scrubber497(t)} // #497: a forum topic reads the scrubbed view
 	task := &persistence.Task{
 		ID:             "t2",
 		Status:         persistence.TaskStatusFailed,

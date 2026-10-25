@@ -6,8 +6,10 @@ import (
 	"strings"
 	"sync"
 
+	"vornik.io/vornik/internal/chatview"
 	"vornik.io/vornik/internal/conversation"
 	"vornik.io/vornik/internal/persistence"
+	"vornik.io/vornik/internal/report"
 )
 
 // followupStore is the per-channel pending-followup map. Keyed by
@@ -77,6 +79,15 @@ func (c *Channel) RegisterFollowup(sessionID, taskID, projectID string) {
 		Msg("email: follow-up registered — thread will auto-resume on task completion")
 }
 
+// SetTaskTextScrubber gives the follow-up the line scrubber for a task's
+// stored error and status text (#497; the service passes
+// Container.logScrubber()). Unset, every line is withheld.
+func (c *Channel) SetTaskTextScrubber(s report.LineScrubber) {
+	if c != nil {
+		c.taskTextScrub = s
+	}
+}
+
 // NotifyTaskCompleted implements executor.CompletionNotifier. The
 // service container wires this so the executor's per-task
 // "task done" event fans out to every channel that might be
@@ -127,25 +138,21 @@ func (c *Channel) triggerFollowup(ctx context.Context, task *persistence.Task, s
 	// taskRepo.UpdateStatus only writes to the DB row. Reading from
 	// the success bool the executor already passed keeps the
 	// synthetic turn coherent.
+	// The thread's recipients all read the turn and e-mail has no identity
+	// authority, so the stored text is always the scrubbed view (#497 L3),
+	// applied before each cut.
+	view := chatview.View(false, c.taskTextScrub)
 	var sb strings.Builder
 	if success {
 		fmt.Fprintf(&sb, "[Task %s completed successfully.]\n", task.ID)
 	} else {
 		fmt.Fprintf(&sb, "[Task %s did NOT complete successfully. Status: %s.]\n", task.ID, task.Status)
 		if task.LastError != nil && *task.LastError != "" {
-			errMsg := *task.LastError
-			if len(errMsg) > 1500 {
-				errMsg = errMsg[:1500] + "…"
-			}
-			fmt.Fprintf(&sb, "Error: %s\n", errMsg)
+			fmt.Fprintf(&sb, "Error: %s\n", chatview.Cut(view(*task.LastError), 1500))
 		}
 	}
 	if message != "" {
-		trimmed := message
-		if len(trimmed) > 800 {
-			trimmed = trimmed[:800] + "…"
-		}
-		fmt.Fprintf(&sb, "Last status: %s\n", trimmed)
+		fmt.Fprintf(&sb, "Last status: %s\n", chatview.Cut(view(message), 800))
 	}
 
 	c.logger.Info().

@@ -643,6 +643,9 @@ func (c *Config) Validate() error {
 	if err := c.Memory.RetrievalRouting.Validate(); err != nil {
 		return err
 	}
+	if err := c.Memory.Provenance.Validate(); err != nil {
+		return err
+	}
 	if err := c.ControlPlane.CostTuningCanary.Validate(); err != nil {
 		return err
 	}

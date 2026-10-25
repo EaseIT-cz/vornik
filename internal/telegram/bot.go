@@ -20,6 +20,8 @@ import (
 
 	"vornik.io/vornik/internal/agentns"
 	"vornik.io/vornik/internal/aidisclosure"
+	"vornik.io/vornik/internal/chatview"
+	"vornik.io/vornik/internal/report"
 
 	"github.com/rs/zerolog"
 	"vornik.io/vornik/internal/budget"
@@ -468,6 +470,9 @@ type Bot struct {
 	artifactRepo  persistence.ArtifactRepository
 	artifactStore dispatcher.InputArtifactStore // optional; enables snapshotting input_files into durable storage
 	watcherRepo   persistence.TaskWatcherRepository
+	// taskTextScrub scrubs a task's stored error and status text for a chat
+	// that is not an admin's private chat (#497); nil withholds every line.
+	taskTextScrub report.LineScrubber
 	// taskCredentialRepo surfaces tool-issued access credentials (credential
 	// carryover) in the completion notification. Optional; nil = no credentials
 	// section.
@@ -1286,7 +1291,7 @@ func (b *Bot) triggerFollowup(task *persistence.Task, success bool, message stri
 		return
 	}
 
-	syntheticText := b.composeSyntheticTurn([]taskOutcome{outcome})
+	syntheticText := b.composeSyntheticTurn(context.Background(), []taskOutcome{outcome})
 
 	// Route the synthetic auto-resume turn through the receiver.
 	// SessionStore reads existing conversation history; the receiver
@@ -1396,7 +1401,7 @@ func (b *Bot) deliverCoalescedTurn(turnID string, chatID int64) {
 		}
 		b.followupMu.Unlock()
 
-		syntheticText := b.composeSyntheticTurn(outcomes)
+		syntheticText := b.composeSyntheticTurn(context.Background(), outcomes)
 		// Coalesced outcomes share a chat_turn_id — same originating dispatcher
 		// turn, hence the same project. Pin the followup to that project's lane.
 		followupProject := outcomes[0].fu.projectID
@@ -1450,7 +1455,7 @@ func (b *Bot) deliverCoalescedTurn(turnID string, chatID int64) {
 // preamble so the dispatcher LLM understands several tasks
 // terminated together and answers once. Per-task body (status,
 // error class, artifact list, last-status humanise) is unchanged.
-func (b *Bot) composeSyntheticTurn(outcomes []taskOutcome) string {
+func (b *Bot) composeSyntheticTurn(ctx context.Context, outcomes []taskOutcome) string {
 	var sb strings.Builder
 	if len(outcomes) > 1 {
 		fmt.Fprintf(&sb, "[%d tasks from this turn terminated.]\n\n", len(outcomes))
@@ -1459,7 +1464,7 @@ func (b *Bot) composeSyntheticTurn(outcomes []taskOutcome) string {
 		if i > 0 {
 			sb.WriteString("\n---\n\n")
 		}
-		b.appendOutcomeBlock(&sb, o)
+		b.appendOutcomeBlock(ctx, &sb, o)
 	}
 	sb.WriteString("\nPlease continue answering my earlier question with this fresh data. If any task failed, explain what went wrong and offer next steps.")
 	return sb.String()
@@ -1470,8 +1475,12 @@ func (b *Bot) composeSyntheticTurn(outcomes []taskOutcome) string {
 // onto sb. Extracted from triggerFollowup so the single-task and
 // coalesced paths share the body — keeping any future format
 // change in one place.
-func (b *Bot) appendOutcomeBlock(sb *strings.Builder, o taskOutcome) {
+//
+// The error and status text take the chat's view (#497 L3): compose, view,
+// then cut, so a cut never leaves a fragment the scrubber did not see whole.
+func (b *Bot) appendOutcomeBlock(ctx context.Context, sb *strings.Builder, o taskOutcome) {
 	task := o.task
+	view := b.taskTextView(ctx, o.fu.chatID)
 	taskRef := idfmt.Short(task.ID)
 	if o.success {
 		fmt.Fprintf(sb, "[Task %s completed successfully.]\n", taskRef)
@@ -1479,20 +1488,13 @@ func (b *Bot) appendOutcomeBlock(sb *strings.Builder, o taskOutcome) {
 		fmt.Fprintf(sb, "[Task %s did NOT complete successfully. Status: %s.]\n", taskRef, task.Status)
 	}
 	if !o.success && task.LastError != nil && *task.LastError != "" {
-		errMsg := *task.LastError
-		if len(errMsg) > 1500 {
-			errMsg = errMsg[:1500] + "…"
-		}
-		fmt.Fprintf(sb, "Error: %s\n", errMsg)
+		fmt.Fprintf(sb, "Error: %s\n", chatview.Cut(view(*task.LastError), 1500))
 	}
 	if task.LastErrorClass != nil && *task.LastErrorClass != "" {
 		fmt.Fprintf(sb, "Failure class: %s\n", *task.LastErrorClass)
 	}
 	if o.message != "" {
-		humanized := humanizeTaskMessage(o.message)
-		if len(humanized) > 800 {
-			humanized = humanized[:800] + "…"
-		}
+		humanized := chatview.Cut(view(humanizeTaskMessage(o.message)), 800)
 		if humanized != "" {
 			fmt.Fprintf(sb, "Last status: %s\n", humanized)
 		}
@@ -1778,13 +1780,19 @@ func (b *Bot) NotifyTaskCompleted(_ context.Context, task *persistence.Task, suc
 	// Watchers are removed regardless of mode so the watcher row
 	// doesn't leak across modes; "silent" is "process internally,
 	// don't ping the user", not "ignore the task".
-	humanized := message
-	if humanized != "" {
-		humanized = humanizeTaskMessage(humanized)
+	// Humanised once; each chat then reads it through its own view (#497
+	// L3: compose, view, cut).
+	rawHumanized := message
+	if rawHumanized != "" {
+		rawHumanized = humanizeTaskMessage(rawHumanized)
 	}
 
 	for _, chatID := range chatIDs {
 		mode := b.getVerbosity(chatID)
+		humanized := rawHumanized
+		if humanized != "" && mode != "silent" {
+			humanized = b.taskTextView(ctx, chatID)(humanized)
+		}
 		// Art 50 (GitHub #342): the push carries a task result and may be the
 		// first thing this chat hears from the system. Disclose first; if the
 		// notice cannot be delivered, do not push undisclosed content.
@@ -1803,11 +1811,7 @@ func (b *Bot) NotifyTaskCompleted(_ context.Context, task *persistence.Task, suc
 		case "short":
 			line := fmt.Sprintf("%s Task %s %s", emoji, idfmt.Short(task.ID), strings.ToUpper(status))
 			if !success && humanized != "" {
-				short := humanized
-				if len(short) > 200 {
-					short = short[:200] + "…"
-				}
-				line += ": " + short
+				line += ": " + chatview.Cut(humanized, 200)
 			}
 			// Phase 28: send via sendMessageGetID so we capture the
 			// message_id and remember the chat→task mapping. Lets
@@ -1824,15 +1828,9 @@ func (b *Bot) NotifyTaskCompleted(_ context.Context, task *persistence.Task, suc
 			body := humanized
 			if body != "" {
 				if success {
-					if len(body) > 500 {
-						body = body[:500] + "…"
-					}
-					text += "\n\n" + body
+					text += "\n\n" + chatview.Cut(body, 500)
 				} else {
-					if len(body) > 300 {
-						body = body[:300] + "…"
-					}
-					text += "\nError: " + body
+					text += "\nError: " + chatview.Cut(body, 300)
 				}
 			}
 			// 2026-05-17 — surface deliverable filenames inline with

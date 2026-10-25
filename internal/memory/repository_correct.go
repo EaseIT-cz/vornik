@@ -132,7 +132,7 @@ func (r *Repository) MarkRefutedByIDs(ctx context.Context, projectID string, chu
 	// spares nothing.
 	spare := ""
 	if !isForgetRoute(route) {
-		spare = ValidatorRoleProvenance
+		spare = ValidatorRoleProvenance // non-empty: spare every provenance role (#508 F5)
 	}
 	args = append(args, projectID, route, spare)
 	for i, id := range chunkIDs {
@@ -145,7 +145,7 @@ func (r *Repository) MarkRefutedByIDs(ctx context.Context, projectID string, chu
 		    refute_route = NULLIF($2, '')
 		WHERE project_id = $1
 		  AND id IN (%s)
-		  AND NOT ($3 <> '' AND validation_status = 'verified' AND COALESCE(validator_role, '') = $3)
+		  AND NOT ($3 <> '' AND validation_status = 'verified' AND `+provenanceRoleSQL("validator_role")+`)
 		  AND (validation_status NOT IN ('refuted', 'superseded')
 		       OR (validation_status = 'refuted'
 		           AND refute_route = 'mirror_forget'
@@ -198,7 +198,7 @@ type claimChunkFacts struct {
 // text and never refutes one; the correction belongs in the design itself,
 // and an explicit chunk_ids forget still retires it.
 func isProvenanceVerified(f claimChunkFacts) bool {
-	return f.ValidationStatus == "verified" && f.ValidatorRole == ValidatorRoleProvenance
+	return f.ValidationStatus == "verified" && IsProvenanceRole(f.ValidatorRole)
 }
 
 // companionCorrectionArtifactLike is the artifact-id prefix a companion
@@ -277,7 +277,7 @@ func (r *Repository) markRefutedByClaim(ctx context.Context, projectID string, c
 	args := make([]any, 0, len(chunkIDs)+5)
 	args = append(args, projectID, route, ProducerRoleOperatorCorrection, companionCorrectionArtifactLike, ValidatorRoleProvenance)
 	for i, id := range chunkIDs {
-		placeholders[i] = fmt.Sprintf("$%d", i+6) // $1 project_id, $2 route, $3 reserved role, $4 companion correction artifact prefix, $5 provenance label
+		placeholders[i] = fmt.Sprintf("$%d", i+6) // $1 project_id, $2 route, $3 reserved role, $4 companion correction artifact prefix, $5 the provenance label, a non-empty flag (the roles themselves are inlined, #508 F5)
 		args = append(args, id)
 	}
 	// The protection predicates are isProtectedCorrection and isProvenanceVerified in SQL.
@@ -290,7 +290,7 @@ func (r *Repository) markRefutedByClaim(ctx context.Context, projectID string, c
 		  AND COALESCE(producer_role, '') <> $3
 		  AND NOT (COALESCE(producer_role, '') LIKE 'companion:%%'
 		           AND strpos(COALESCE(artifact_id, ''), $4) = 1)
-		  AND NOT (validation_status = 'verified' AND COALESCE(validator_role, '') = $5)
+		  AND NOT (validation_status = 'verified' AND `+provenanceRoleSQL("validator_role")+` AND $5 <> '')
 		  AND (validation_status NOT IN ('refuted', 'superseded')
 		       OR (validation_status = 'refuted'
 		           AND refute_route = 'mirror_forget'

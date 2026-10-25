@@ -10,9 +10,11 @@ import (
 	"github.com/rs/zerolog"
 	"vornik.io/vornik/internal/aidisclosure"
 	"vornik.io/vornik/internal/chatorigin"
+	"vornik.io/vornik/internal/chatview"
 	"vornik.io/vornik/internal/conversation"
 	"vornik.io/vornik/internal/executor"
 	"vornik.io/vornik/internal/persistence"
+	"vornik.io/vornik/internal/report"
 )
 
 // CUSTOMER REPORT 2026-07-30, remote installation: "vornik said on Slack it would
@@ -57,6 +59,11 @@ type chatCompletionNotifier struct {
 	// disclosure applies the Art 50 notice to the push (design §11.4, GitHub
 	// #342). Nil discloses with the compiled defaults.
 	disclosure *aidisclosure.Service
+
+	// taskTextScrub scrubs the notice's error and status text for a session
+	// that is not an operator audience (process-spawn-law design, "Amendment
+	// 2026-10-24 (#497)"); nil withholds every line.
+	taskTextScrub report.LineScrubber
 
 	logger zerolog.Logger
 
@@ -124,7 +131,10 @@ func (n *chatCompletionNotifier) NotifyTaskCompleted(
 	}
 
 	n.markSent(task.ID)
-	text := n.composeText(origin.ChannelName, task, success, message)
+	// The session's view (#497 L3): raw only when the channel says the
+	// session's audience is one admin-linked principal.
+	view := chatview.ForSession(ctx, origin.Channel, origin.SessionID, n.taskTextScrub)
+	text := n.composeText(origin.ChannelName, task, success, message, view)
 	// Art 50: a push outside ChannelReceiver takes the shared disclosure path —
 	// footer on email, notice-first on Slack (design §11.4, GitHub #342).
 	if _, err := conversation.SendDisclosed(ctx, n.disclosure, origin.Channel, conversation.ChannelMessage{
@@ -154,7 +164,7 @@ func (n *chatCompletionNotifier) NotifyTaskCompleted(
 // Status comes from the `success` bool rather than task.Status: the executor's in-memory
 // *Task is stale when this fires (UpdateStatus writes the row, not the struct) — the
 // 2026-05-21 incident recorded in telegram/bot.go's triggerFollowup.
-func (n *chatCompletionNotifier) composeText(channelName string, task *persistence.Task, success bool, message string) string {
+func (n *chatCompletionNotifier) composeText(channelName string, task *persistence.Task, success bool, message string, view func(string) string) string {
 	var sb strings.Builder
 	// Formatted for reading: an emoji carries the outcome at a glance in a busy
 	// channel, and the identifiers are code-spanned so they can be copied. The TTS
@@ -170,10 +180,10 @@ func (n *chatCompletionNotifier) composeText(channelName string, task *persisten
 	sb.WriteString(".\n")
 
 	if !success && task.LastError != nil && strings.TrimSpace(*task.LastError) != "" {
-		fmt.Fprintf(&sb, "*Error:* %s\n", truncateForChat(*task.LastError, 800))
+		fmt.Fprintf(&sb, "*Error:* %s\n", truncateForChat(view(*task.LastError), 800))
 	}
 	if strings.TrimSpace(message) != "" {
-		fmt.Fprintf(&sb, "*Last status:* %s\n", truncateForChat(message, 500))
+		fmt.Fprintf(&sb, "*Last status:* %s\n", truncateForChat(view(message), 500))
 	}
 	// The link is the point: it is how someone reads the result without asking again.
 	// Rendered as a hyperlink on words rather than pasted raw — a task URL is long and
@@ -264,5 +274,6 @@ func (c *Container) chatCompletionSink() executor.CompletionNotifier {
 		c.Logger.With().Str("component", "chat-completion").Logger(),
 	)
 	n.disclosure = c.AIDisclosure
+	n.taskTextScrub = c.taskTextScrubber()
 	return n
 }

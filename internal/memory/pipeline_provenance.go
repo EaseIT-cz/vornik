@@ -90,7 +90,7 @@ func (p *Pipeline) verifyProvenance(ctx context.Context, projectID, artifactID, 
 		}
 		return true
 	}
-	if err := p.indexer.MarkVerifiedByArtifact(ctx, projectID, artifactID, ValidatorRoleProvenance); err != nil {
+	if err := p.indexer.MarkVerifiedByArtifact(ctx, projectID, artifactID, res.Role()); err != nil {
 		p.logger.Warn().Err(err).Str("project_id", projectID).Str("artifact_id", artifactID).
 			Msg("pipeline: provenance verify-stamp failed; the record stays pending and the sweep re-verifies it")
 		p.recordProvenanceOutcome(projectID, "stamp_failed")

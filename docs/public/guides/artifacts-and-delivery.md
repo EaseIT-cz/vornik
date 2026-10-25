@@ -7,11 +7,11 @@ sources:
     - path: internal/dispatcher/agent.go
       sha256: 251f0e6fcaebef88a15895a31083ade297bc3df7b79cbfdf497a043965f5cd58
     - path: internal/email/channel.go
-      sha256: 900fac5793862ee30e9333d08706c79db223b5013597fdd1c8b4516d8ef3247c
+      sha256: 6e25a0e684fb8b94622507546e49aea4834b8cf2c06d8364de7fd4505d36dfd6
     - path: internal/slack/voice.go
       sha256: 74a85ffb02d275a6cdd24f40b43abdcb2c700d0a3923d23a1845b0df172c679f
     - path: internal/reminders/completion_notifier.go
-      sha256: 21e3e39bd3be991093fd6091c598abb7c20eca892919ca12eeb32797bacd1cd3
+      sha256: 39f310edeed8d3f01613224f92615506bf85f755baee580fd44339d9c4b0381f
 ---
 # Artifacts & Outbound File Delivery
 

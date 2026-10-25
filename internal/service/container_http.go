@@ -1522,9 +1522,10 @@ func (c *Container) initHTTPServer() error {
 	if len(emChannels) > 0 {
 		c.EmailChannels = emChannels
 		c.EmailProjects = emProjects
+		scrub := c.taskTextScrubber() // #497: the follow-up's stored task text
 		for i, ch := range emChannels {
 			p := emProjects[i]
-			_ = ch // channel construction is logged per-project below
+			ch.SetTaskTextScrubber(scrub)
 			c.Logger.Info().
 				Str("project_id", p.ID).
 				Str("imap_host", p.Email.IMAPHost).
@@ -1783,6 +1784,19 @@ func (c *Container) initHTTPServer() error {
 		if c.repos != nil && c.repos.BrokerActions != nil {
 			dh.SetBrokerActionRepository(c.repos.BrokerActions)
 		}
+		// broker_audit_channel (trading-broker-design.md, amendment
+		// 2026-10-23): read the registry at call time so a reload is seen.
+		if c.Registry != nil {
+			dh.SetBrokerTargets(func() []api.BrokerTarget {
+				var out []api.BrokerTarget
+				for _, p := range c.Registry.ListProjects() {
+					if u := p.TradingBrokerURL(); u != "" {
+						out = append(out, api.BrokerTarget{ProjectID: p.ID, BaseURL: u})
+					}
+				}
+				return out
+			})
+		}
 		// Gated on its own repository: secret_store_key must not stay
 		// SKIPPED merely because an unrelated repository is absent.
 		if c.repos != nil && c.repos.AgentSecrets != nil {
@@ -1803,6 +1817,7 @@ func (c *Container) initHTTPServer() error {
 				}
 				dh.SetAgentModelCatalogue(c.agentModelCatalogueStatus)
 				dh.SetProvenanceClones(c.provenanceCloneStatus)
+				dh.SetProvenanceForgeNotes(c.provenanceForgeNotes) // #508 F6
 			}
 		}
 		// Read c.mcpManager at call time: the manager is created by initMCP,
@@ -3287,6 +3302,19 @@ func (c *Container) heldTaskLog() api.HeldTaskLog {
 func (c *Container) logScrubber() (report.LineScrubber, error) {
 	host, _ := os.Hostname()
 	return report.NewLineScrubber(host)
+}
+
+// taskTextScrubber is logScrubber for the chat readers of a task's stored
+// error and status text (process-spawn-law design, "Amendment 2026-10-24
+// (#497)"): nil when the detector cannot be built, which every reader treats
+// as "withhold every line", so the failure is logged rather than returned.
+func (c *Container) taskTextScrubber() report.LineScrubber {
+	s, err := c.logScrubber()
+	if err != nil {
+		c.Logger.Error().Err(err).Msg("chat task-text scrubber unavailable; non-operator chats read every line withheld")
+		return nil
+	}
+	return s
 }
 
 // subjectLedgerFor is the GDPR data-subject store the daemon wires for the

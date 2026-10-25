@@ -9,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	"vornik.io/vornik/internal/chatview"
 	"vornik.io/vornik/internal/persistence"
 	"vornik.io/vornik/internal/taskcancel"
 )
@@ -480,7 +481,10 @@ func (b *Bot) loadScopedTask(ctx context.Context, userID int64, parts []string, 
 
 // handleStatusCmd implements /status <id> — a task's status + last step,
 // composed from the task row + its current/most-recent execution.
-func (b *Bot) handleStatusCmd(ctx context.Context, userID int64, parts []string) string {
+//
+// The task's last error takes the chat's view (#497 L3): raw only in an
+// admin-linked user's private chat, scrubbed before the cut elsewhere.
+func (b *Bot) handleStatusCmd(ctx context.Context, chatID, userID int64, parts []string) string {
 	t, msg := b.loadScopedTask(ctx, userID, parts, "Usage: /status <task-id>")
 	if t == nil {
 		return msg
@@ -504,11 +508,7 @@ func (b *Bot) handleStatusCmd(ctx context.Context, userID int64, parts []string)
 		}
 	}
 	if t.LastError != nil && *t.LastError != "" {
-		le := *t.LastError
-		if len(le) > 200 {
-			le = le[:200] + "…"
-		}
-		fmt.Fprintf(&sb, "\n  Last error: %s", le)
+		fmt.Fprintf(&sb, "\n  Last error: %s", chatview.Cut(b.taskTextView(ctx, chatID)(*t.LastError), 200))
 	}
 	return sb.String()
 }

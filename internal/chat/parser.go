@@ -569,7 +569,8 @@ func executeGetStatus(ctx context.Context, action Action, taskRepo persistence.T
 			} `json:"context"`
 		}
 		if json.Unmarshal(task.Payload, &payload) == nil && payload.Context.Prompt != "" {
-			fmt.Fprintf(&summary, "\nInput prompt: %s\n", payload.Context.Prompt)
+			// #497 decision A: the prompt takes the error text's view.
+			fmt.Fprintf(&summary, "\nInput prompt: %s\n", action.errorView(payload.Context.Prompt))
 		}
 	}
 
@@ -589,7 +590,8 @@ func executeGetStatus(ctx context.Context, action Action, taskRepo persistence.T
 				Message string `json:"message"`
 			}
 			if json.Unmarshal(exec.Result, &result) == nil && result.Message != "" {
-				msg := result.Message
+				// #497 decision A: the same view, before the cut.
+				msg := action.errorView(result.Message)
 				if len(msg) > 500 {
 					msg = msg[:500] + "... (truncated)"
 				}

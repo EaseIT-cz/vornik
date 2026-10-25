@@ -1,7 +1,7 @@
 ---
 sources:
     - path: README.md
-      sha256: dc1a9aec836620e42857061d7259150fcb85dda9138f43304d2ff0da47de5fb1
+      sha256: 486436d672aaaf50319572f26366da5b8e740b7f26edc60cae69bf342949467c
 ---
 # Getting Started
 
@@ -20,17 +20,18 @@ runs continuously in the background — you submit and walk away, then come
 back for the output.
 
 You can drive it from the CLI, the HTTP API, the Web UI, or a connected
-conversation channel (a Telegram bot or email). Around the core,
+conversation channel (Telegram, Slack, e-mail or web chat), or from another AI
+assistant connected as a companion. Around the core,
 recent releases add operability and resilience features you will meet later
 in the docs — a one-command redacted support bundle, expanded `vornikctl
 doctor` checks, centralised log forwarding, structured recovery for failed
-steps, and a bounded graceful shutdown — plus security hardening for running
-the daemon behind a reverse proxy. None of that is needed to get started; the
+steps, and a bounded graceful shutdown — plus approvals on a paired phone and
+the controls described in the [security model](../security-model.md). None of that is needed to get started; the
 defaults are safe and local-first.
 
 ## Prerequisites
 
-- **Go 1.25+** — to build the daemon and CLI from source.
+- **Go 1.26+** — to build the daemon and CLI from source.
 - **Podman** (rootless recommended) — vornik runs every agent in its own
   Podman container for isolation. Docker is not used.
 - **PostgreSQL with the [pgvector](https://github.com/pgvector/pgvector)

@@ -53,3 +53,24 @@ func TestCheckProvenanceClone(t *testing.T) {
 		})
 	}
 }
+
+// GitHub #508 F6: the check names each configured forge and each scope
+// refused in the last day with its fix; a refusal is a WARNING (actionable).
+func TestCheckProvenanceClone508_ForgesAndRefusals(t *testing.T) {
+	h := &DoctorHandlers{}
+	h.SetProvenanceClones(func() []ProvenanceCloneStatus { return nil })
+	h.SetProvenanceForgeNotes(func() ([]string, []string) {
+		return []string{"corp (gitlab, scope_prefix gitlab.corp/8443, https://gitlab.corp:8443, token set)"}, nil
+	})
+	got := h.checkProvenanceClone()
+	if got.Status != "OK" || !strings.Contains(got.Message, "corp (gitlab") {
+		t.Errorf("forges only: %+v", got)
+	}
+	h.SetProvenanceForgeNotes(func() ([]string, []string) {
+		return nil, []string{"git.unlisted.example/acme/repo: clone_failed; fix: add a memory.provenance.forges entry"}
+	})
+	got = h.checkProvenanceClone()
+	if got.Status != "WARNING" || !strings.Contains(got.Message, "git.unlisted.example/acme/repo") || !strings.Contains(got.Message, "memory.provenance.forges") {
+		t.Errorf("a refusal: %+v", got)
+	}
+}

@@ -512,6 +512,9 @@ type Container struct {
 	// provenanceAutoClones.
 	provenanceAuto     *memory.AutoClones
 	provenanceAutoOnce sync.Once
+	// provenanceGitHubTokens caches the App installation tokens the
+	// provenance clones mint (#508 F3).
+	provenanceGitHubTokens github.InstallationTokenSource
 
 	// narratorWorker is the Narrated Execution bus subscriber (task
 	// 2.1, https://docs.vornik.io). nil

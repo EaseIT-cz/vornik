@@ -98,6 +98,8 @@ func makeAutopilotBot(t *testing.T) (*Bot, *[]apiCall, func()) {
 	if err != nil {
 		t.Fatalf("NewBot: %v", err)
 	}
+	// #497: notices read the scrubbed view; clean status text survives it.
+	bot.SetTaskTextScrubber(scrubber497(t))
 	return bot, calls, srv.Close
 }
 

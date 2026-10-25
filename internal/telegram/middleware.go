@@ -84,21 +84,14 @@ func (b *Bot) authorizeCtx(ctx context.Context, userID int64) chatauth.Decision 
 //
 // It reads only the adapter-built SessionID and SpeakerID, never
 // ChannelSpecific.
+//
+// The last two are OperatorAudience (#497 L2), shared with the non-tool
+// readers so the two rules cannot drift.
 func (b *Bot) OperatorView(ctx context.Context, msg conversation.ChannelMessage) bool {
-	if b == nil || b.identityShim == nil || msg.SpeakerID == "" {
+	if b == nil || msg.SpeakerID == "" || msg.SpeakerID != msg.SessionID {
 		return false
 	}
-	userID, err := strconv.ParseInt(msg.SpeakerID, 10, 64)
-	if err != nil || userID <= 0 {
-		return false
-	}
-	chatID, err := strconv.ParseInt(msg.SessionID, 10, 64)
-	if err != nil || chatID != userID {
-		return false
-	}
-	authCtx, cancel := context.WithTimeout(ctx, authorizeBudget)
-	defer cancel()
-	return b.authorizeCtx(authCtx, userID).AdminLinked()
+	return b.OperatorAudience(ctx, msg.SessionID)
 }
 
 // IsAllowed reports whether the user may interact with the bot at

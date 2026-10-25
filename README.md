@@ -180,6 +180,8 @@ Small n, one ability, and an easy subset — the caveats are published alongside
 | **Memory that compounds** | pgvector RAG with a gate stack, scoped per project and per repo. |
 | **Open-weight friendly** | Point it at your own endpoint — Ollama, vLLM, or a cloud API. |
 | **Workflows, not prompts** | Multi-step graphs with typed steps, budgets, and approval gates. |
+| **Assistants without your keys** | Hermes, Claude Code or Codex ask Vornik for work over your private systems; Vornik holds the credentials and returns a checked result, never raw data. |
+| **You approve on your phone** | New connections, credentials and every proposed write wait for you on a paired phone. |
 
 > **Editions.** This repository is **Vornik Community Edition** (AGPL-3.0) — the
 > complete orchestration core, fully usable on its own for personal and small-team
@@ -198,7 +200,8 @@ Small n, one ability, and an easy subset — the caveats are published alongside
 | [CLI reference](docs/public/cli.md) | `vornik` (daemon) and `vornikctl` (control) |
 | [Editions](docs/public/editions.md) | Community vs Enterprise feature matrix |
 | [Contributing](docs/public/contributing.md) | Dev setup, the CLA, the PR bar |
-| [Security](docs/public/security.md) | Supported versions + reporting a vulnerability |
+| [Security model](docs/public/security-model.md) | Threat model, trust boundaries, controls, residual risks |
+| [Security policy](docs/public/security.md) | Supported versions + reporting a vulnerability |
 | [Support](docs/public/support.md) | Community help and commercial support |
 
 Full documentation: <https://docs.vornik.io>
@@ -229,3 +232,5 @@ make lint     # gofmt + go vet
 Contributions welcome under a [CLA](docs/public/contributing.md)
 
 </div>
+
+<!-- summary-reviewed-through: 2026.10.8 -->

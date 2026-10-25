@@ -12,6 +12,7 @@ import (
 
 	"vornik.io/vornik/internal/persistence"
 	"vornik.io/vornik/internal/persistence/mocks"
+	"vornik.io/vornik/internal/report"
 )
 
 // rawErrorView is the caller's chosen view of a stored error text that
@@ -116,9 +117,58 @@ func TestExecuteGetStatus_WithExecution_TruncatesLongResult(t *testing.T) {
 			return &persistence.Execution{Result: resultBytes}, nil
 		},
 	}
+	// #497: the agent output takes the error view; the zero value withholds
+	// every line, so this test chooses the operator view to see the cut.
 	res, _ := ExecuteAction(context.Background(),
-		Action{Type: ActionGetStatus, TaskID: "t-1"}, taskRepo, execRepo, nil)
+		Action{Type: ActionGetStatus, TaskID: "t-1", ErrorView: rawErrorView}, taskRepo, execRepo, nil)
 	if !strings.Contains(res.Message, "(truncated)") {
 		t.Errorf("long result not truncated: %q", res.Message)
+	}
+}
+
+// GitHub #497 (operator decision A, process-spawn-law design, "Amendment
+// 2026-10-24 (#497)"): the input prompt and the agent's output excerpt take
+// the same view as the error text, applied before the 500-byte cut.
+func TestExecuteGetStatus497_PromptAndResultTakeTheView(t *testing.T) {
+	promptSecret := "ghp_" + strings.Repeat("P1aS2dF3gH", 4)[:36]
+	resultSecret := "ghp_" + strings.Repeat("R5tY8uI1oP", 4)[:36]
+	taskRepo := &mocks.MockTaskRepository{
+		GetFunc: func(_ context.Context, id string) (*persistence.Task, error) {
+			return &persistence.Task{ID: id, Status: persistence.TaskStatusCompleted,
+				Payload: []byte(`{"context":{"prompt":"deploy with token ` + promptSecret + `"}}`)}, nil
+		},
+	}
+	execRepo := &mocks.MockExecutionRepository{
+		GetByTaskIDFunc: func(_ context.Context, _ string) (*persistence.Execution, error) {
+			// The secret straddles the 500-byte cut.
+			msg := strings.Repeat("x", 480) + " " + resultSecret + "\ndone"
+			res, _ := json.Marshal(map[string]string{"message": msg})
+			return &persistence.Execution{ID: "exec-1", Result: res}, nil
+		},
+	}
+	res, err := ExecuteAction(context.Background(), Action{Type: ActionGetStatus, TaskID: "t-1", ErrorView: func(s string) string {
+		out, _ := report.ScrubLines(s, func(line string) (string, bool) {
+			if strings.Contains(line, "ghp_") {
+				return "", true
+			}
+			return line, false
+		})
+		return out
+	}}, taskRepo, execRepo, nil)
+	if err != nil {
+		t.Fatalf("ExecuteAction: %v", err)
+	}
+	if strings.Contains(res.Message, "ghp_") {
+		t.Errorf("a secret or a fragment of one reached the model: %q", res.Message)
+	}
+	if !strings.Contains(res.Message, report.WithheldLine) {
+		t.Errorf("no withheld marker: %q", res.Message)
+	}
+	raw, err := ExecuteAction(context.Background(), Action{Type: ActionGetStatus, TaskID: "t-1", ErrorView: rawErrorView}, taskRepo, execRepo, nil)
+	if err != nil {
+		t.Fatalf("ExecuteAction: %v", err)
+	}
+	if !strings.Contains(raw.Message, promptSecret) {
+		t.Errorf("the operator view lost the raw prompt: %q", raw.Message)
 	}
 }

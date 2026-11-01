@@ -223,7 +223,7 @@ func TestRequest_ExtensionCannotBeRetroactive(t *testing.T) {
 	opened := time.Now().Add(-40 * 24 * time.Hour)
 	r := openRequest(RequestAccess, opened)
 
-	err := r.Extend("complex", time.Now())
+	err := r.Extend("complex", time.Now(), time.Now())
 	if err == nil {
 		t.Fatal("an extension after the first month must be refused")
 	}
@@ -233,33 +233,46 @@ func TestRequest_ExtensionCannotBeRetroactive(t *testing.T) {
 
 	// In time, with a reason, it works and moves the deadline.
 	fresh := openRequest(RequestAccess, time.Now().Add(-5*24*time.Hour))
-	if err := fresh.Extend("", time.Now()); err == nil {
+	if err := fresh.Extend("", time.Now(), time.Now()); err == nil {
 		t.Error("an unreasoned extension must be refused")
 	}
-	if err := fresh.Extend("numerous requests from this subject", time.Now()); err != nil {
+	if err := fresh.Extend("numerous requests from this subject", time.Now(), time.Now()); err != nil {
 		t.Fatal(err)
 	}
-	if fresh.Deadline().Sub(fresh.OpenedAt) != ExtendedDeadline {
-		t.Error("extending must move the deadline to three months")
+	if want := monthsAfter(FirstMonthEnd(fresh.OpenedAt), 2); !fresh.Deadline().Equal(want) {
+		t.Errorf("extending must move the deadline two months past the first: %s, want %s", fresh.Deadline(), want)
 	}
 }
 
 // The warning has to arrive with time left to act, not on the day the legal
 // deadline expires.
 func TestRequest_DeadlineWarningArrivesEarly(t *testing.T) {
-	opened := time.Now().Add(-25 * 24 * time.Hour)
-	r := openRequest(RequestAccess, opened)
+	// Fixed dates. The clock is one calendar month (Art 12(3)) to the end of
+	// the same day number, not 30 days: with time.Now() a request opened "31
+	// days ago" on 1 Nov was opened on 1 Oct, its deadline is the end of 1 Nov,
+	// and the test failed on that one day (seen 2026-11-01).
+	now := time.Date(2026, 10, 26, 12, 0, 0, 0, time.UTC)
+	r := openRequest(RequestAccess, now.Add(-25*24*time.Hour))
 
-	if r.Overdue(time.Now()) {
+	if r.Overdue(now) {
 		t.Error("25 days in is not yet overdue")
 	}
-	if !r.NeedsAttention(time.Now()) {
-		t.Error("25 days into a 30-day clock must already be flagged")
+	if !r.NeedsAttention(now) {
+		t.Error("25 days into a one-month clock must already be flagged")
 	}
 
-	old := openRequest(RequestAccess, time.Now().Add(-31*24*time.Hour))
-	if !old.Overdue(time.Now()) {
-		t.Error("31 days in is overdue")
+	old := openRequest(RequestAccess, now.Add(-41*24*time.Hour))
+	if !old.Overdue(now) {
+		t.Error("41 days in is overdue")
+	}
+
+	// The month boundary: opened 1 Oct, due by the end of 1 Nov.
+	oct1 := openRequest(RequestAccess, time.Date(2026, 10, 1, 9, 0, 0, 0, time.UTC))
+	if oct1.Overdue(time.Date(2026, 11, 1, 23, 0, 0, 0, time.UTC)) {
+		t.Error("opened 1 Oct: still in time on 1 Nov")
+	}
+	if !oct1.Overdue(time.Date(2026, 11, 2, 0, 0, 1, 0, time.UTC)) {
+		t.Error("opened 1 Oct: overdue on 2 Nov")
 	}
 
 	// A finished request is neither overdue nor in need of attention.

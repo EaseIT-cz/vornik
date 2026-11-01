@@ -307,3 +307,22 @@ func TestIngestTradingOrderRateLimitDisabled(t *testing.T) {
 		}
 	}
 }
+
+// GitHub #444: a request captured before a daemon restart cannot be
+// replayed into the new process. The verifier is built "now" (the restart);
+// the captured request was validly signed 30s earlier, is inside the
+// freshness window, and its nonce is unseen by the new process.
+func TestIngestTradingOrderHMACSignedBeforeRestartRejected_444(t *testing.T) {
+	repo := &capturingTradingOrderRepo{}
+	v := tradingauth.NewVerifier(handlerSecret, tradingauth.DefaultClockSkew)
+	server := NewServer(WithLogger(zerolog.Nop()), WithTradingOrderRepository(repo), WithTradingAuthVerifier(v))
+	req := scopedSignedRequest(t, tradingauth.NewSigner(handlerSecret), validOrderBody(), time.Now().Add(-30*time.Second))
+	rec := httptest.NewRecorder()
+	server.IngestTradingOrder(rec, req)
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("a request signed before the daemon started: got %d, want 401", rec.Code)
+	}
+	if repo.row != nil {
+		t.Fatal("a refused request must not be persisted")
+	}
+}

@@ -400,7 +400,7 @@ func TestChannelSend_VoiceInbound_RoutesThroughTTS(t *testing.T) {
 	}
 	vts := newVoiceTestServer(t, nil)
 	defer vts.Close()
-	bot := newVoiceBot(t, vts, VoiceProviders{TTS: tts})
+	bot := newVoiceBot(t, vts, VoiceProviders{TTS: tts, SyntheticReplies: true}) // opted in (#543)
 	bot.voiceTracker = newVoiceInboundTracker()
 	bot.voiceTracker.MarkVoice(100)
 

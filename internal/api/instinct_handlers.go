@@ -239,7 +239,7 @@ func (s *Server) RetireInstinct(w http.ResponseWriter, r *http.Request, id strin
 		respondError(w, http.StatusNotFound, "NOT_FOUND", "instinct not found")
 		return
 	}
-	if existing.Scope != persistence.InstinctScopeProject && !s.requireOperatorScope(w, r) {
+	if existing.Scope != persistence.InstinctScopeProject && !s.requireOperatorScopeFor(w, r, SurfaceInstinctRetireGlobal) {
 		return
 	}
 	if err := s.instinctRepo.Retire(ctx, id); err != nil {

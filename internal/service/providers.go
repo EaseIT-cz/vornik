@@ -57,6 +57,10 @@ type IdentityProvider interface {
 	// provider: login disabled. The provider owns its own Info/Warn logging
 	// for the omission cases (via deps.Logger).
 	LoginWiring(deps IdentityDeps) (backend auth.Backend, login http.Handler, logout http.HandlerFunc, providerNames []string, ok bool)
+	// IssuerProbe checks that an OpenID issuer answers discovery, through the
+	// dial guard: managed setup's check before it binds an owner (GitHub #582
+	// P2).
+	IssuerProbe() func(ctx context.Context, issuer string) error
 }
 
 // IdentityDeps carries the CE-held handles the EE login wiring needs to build

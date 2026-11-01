@@ -166,6 +166,11 @@ func (s *Server) ProjectArtifacts(w http.ResponseWriter, r *http.Request, projec
 // can read agent output directly in the browser. Anything else
 // is forced into an octet-stream attachment so the browser can't
 // be tricked into executing markup planted in a workspace file.
+//
+// It is not marked under Art 50(2): it serves a file by
+// path with no record of its origin, so it cannot say the file was generated
+// (Art 50 design §14.8 C, commit 1b). ArtifactDownload, which has the row,
+// marks an agent's own output.
 func (s *Server) ProjectArtifactView(w http.ResponseWriter, r *http.Request, projectID string) {
 	if s.projectWorkspaceRoot == "" {
 		http.Error(w, "Project workspace path not configured", http.StatusServiceUnavailable)

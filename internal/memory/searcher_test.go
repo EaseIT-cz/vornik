@@ -450,7 +450,7 @@ func TestSearcher_LegacyPathNeverReturnsSupersededRow(t *testing.T) {
 		mock.ExpectQuery("SELECT EXISTS.*pg_extension").
 			WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(true))
 		mock.ExpectQuery(bothCTEs).WillReturnRows(makeRR([]string{"c1"}, []float64{0.5}))
-		got, err := r.hybridSearchTemporal(context.Background(), "p", vec, "q", 5, time.Now().AddDate(0, -1, 0), time.Time{}, "", false)
+		got, err := r.hybridSearchTemporal(context.Background(), "p", vec, "q", 5, time.Now().AddDate(0, -1, 0), time.Time{}, ScopeFilter{RepoScope: "", Strict: false})
 		if err != nil || len(got) != 1 {
 			t.Fatalf("hybridSearchTemporal: %v %v", got, err)
 		}
@@ -482,7 +482,7 @@ func TestRepository_KeywordSearchExcludesRefuted(t *testing.T) {
 		defer cleanup()
 		mock.ExpectQuery("ts_rank").WillReturnError(errors.New("fts unavailable"))
 		mock.ExpectQuery(substring).WillReturnRows(makeRR([]string{"c1"}, []float64{1}))
-		got, err := r.keywordSearchTemporal(context.Background(), "p", "q", 5, time.Now().AddDate(0, -1, 0), time.Time{}, "", false)
+		got, err := r.keywordSearchTemporal(context.Background(), "p", "q", 5, time.Now().AddDate(0, -1, 0), time.Time{}, ScopeFilter{RepoScope: "", Strict: false})
 		if err != nil || len(got) != 1 {
 			t.Fatalf("keywordSearchTemporal: %v %v", got, err)
 		}

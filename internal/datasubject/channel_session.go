@@ -36,3 +36,12 @@ func ParseChannelSessionRowID(rowID string) (kind, sessionID string, err error) 
 // construction, so only a web chat session (one browser, one person) may be
 // exported verbatim; every other kind is treated as shared under Art 15(4).
 func ChannelSessionSingleSpeaker(kind string) bool { return kind == "webchat" }
+
+// ChannelSessionAttributed reports whether a session's history shows who wrote
+// each entry: email carries a From: line, and a web chat has one speaker.
+// Slack, GitHub and Telegram entries carry no speaker, so a shared session of
+// those kinds is deleted rather than masked (#346 Q5, art17 redact design
+// §15.19).
+func ChannelSessionAttributed(kind string) bool {
+	return kind == "email" || ChannelSessionSingleSpeaker(kind)
+}

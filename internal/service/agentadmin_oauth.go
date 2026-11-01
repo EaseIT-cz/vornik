@@ -17,6 +17,7 @@ import (
 	"vornik.io/vornik/internal/agentadmin"
 	"vornik.io/vornik/internal/agentns"
 	"vornik.io/vornik/internal/approverdevice"
+	"vornik.io/vornik/internal/integrations/dialguard"
 	"vornik.io/vornik/internal/mcpconnect"
 	"vornik.io/vornik/internal/persistence"
 )
@@ -152,7 +153,9 @@ func (s *agentAdminService) deviceOAuthCallback(w http.ResponseWriter, r *http.R
 	}
 	// The exchange runs inside the slot's effect (slotEffect), so a failure
 	// after the decision is recorded on the request.
-	state, code := strings.TrimSpace(q.Get("state")), strings.TrimSpace(q.Get("code"))
+	// The whole response, iss and scope included, so the device flow gets the
+	// same RFC 9207 and scope checks as the browser callback (design §16.5).
+	completeReq := mcpconnect.CompleteRequestFromQuery(q)
 	// The account the person signed in to (design §22.2.7, §22.2.14 item 2;
 	// GitHub #119 item 8). This closure is the provider identity's only
 	// writer and runs inside the slot's effect: before the token is stored,
@@ -163,7 +166,7 @@ func (s *agentAdminService) deviceOAuthCallback(w http.ResponseWriter, r *http.R
 	done := oauthCompletion{complete: func(ctx context.Context) error {
 		s.signInMu.Lock()
 		defer s.signInMu.Unlock()
-		_, err := conn.CompleteWithIdentity(context.WithValue(ctx, oauthPublicationResultKey{}, &paused), state, code, func(_ context.Context, idToken string) error {
+		_, err := conn.CompleteWithIdentity(context.WithValue(ctx, oauthPublicationResultKey{}, &paused), completeReq, func(_ context.Context, idToken string) error {
 			signedInAs, _ = agentadmin.EmailFromIDToken(idToken)
 			return nil
 		})
@@ -243,7 +246,7 @@ func agentOAuthHTTP(projectID, serverURL string) *http.Client {
 	if _, agent := agentns.FromID(projectID); !agent {
 		return nil
 	}
-	return agentDialGuard(serverURL).HTTPClient(mcpOAuthHTTPTimeout)
+	return dialguard.CustomerURLClient(serverURL, nil, mcpOAuthHTTPTimeout) // live read (#560 M1c D0)
 }
 
 // priorSignIn reports whether the server already holds a token row (so a
@@ -254,7 +257,7 @@ func (s *agentAdminService) priorSignIn(ctx context.Context, project, server, in
 	if s.c.repos == nil || s.c.repos.MCPOAuthTokens == nil {
 		return false, "", errors.New("no token store")
 	}
-	_, err := s.c.repos.MCPOAuthTokens.Get(ctx, project, server)
+	_, err := s.c.repos.MCPOAuthTokens.Get(ctx, project, server, "")
 	switch {
 	case errors.Is(err, persistence.ErrNotFound):
 		return false, "", nil

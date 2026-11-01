@@ -112,6 +112,7 @@ func (c *Container) allElectors() []*leaderelection.Elector {
 		c.cpcTimeoutElector,
 		c.remindersElector,
 		c.ratelimitCounterSweepElector,
+		c.erasureEscalationElector(),
 		// clusterNodePrunerElector + clusterMonitorElector moved to
 		// internal/enterprise/clustering (Phase 2c); they register via
 		// RegisterExtraElector and are released through extraElectors below.

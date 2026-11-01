@@ -22,6 +22,7 @@ import (
 	"strings"
 	"time"
 
+	"vornik.io/vornik/internal/auth"
 	"vornik.io/vornik/internal/persistence"
 	"vornik.io/vornik/internal/reminders"
 )
@@ -487,7 +488,9 @@ func (s *Server) reminderVisibleToRequest(r *http.Request, rem *persistence.Remi
 	// admin-class exactly like an allowlisted key — without this, the
 	// flip scoped admins down to "rows owned by my principal", which
 	// for operator-owned (telegram:…) reminders is none.
-	if SessionRoleFromContext(r.Context()) == "admin" {
+	// GitHub #560 (M1b B2b): managed hosting's instance owner (tenant_admin)
+	// owns every reminder on the instance too.
+	if role := SessionRoleFromContext(r.Context()); role == "admin" || role == auth.RoleTenantAdmin {
 		return true
 	}
 	if rem.ProjectID != "" {

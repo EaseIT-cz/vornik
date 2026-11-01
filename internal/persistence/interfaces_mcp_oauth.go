@@ -20,6 +20,11 @@ type MCPOAuthToken struct {
 	// mcp.servers), which is reachable from every project — see design §9's warning.
 	ProjectID  string
 	ServerName string
+	// OwnerUserID is the user whose own account this grant is; "" is the
+	// project's shared account, which every grant is in U3 (GitHub #571 U3b;
+	// mcp-server-authentication-design.md §15.3a C1). One connection holds one
+	// shared account and at most one per owner.
+	OwnerUserID string
 
 	// Resource is the RFC 8707 canonical resource URI the token was issued FOR, stored
 	// rather than derived. F5: Trello and Jira share one authorization server but are
@@ -111,7 +116,9 @@ type MCPOAuthTokenRepository interface {
 	// Absence is ordinary here — every wiring pass asks about every configured
 	// oauth server — so callers translate ErrNotFound rather than propagating
 	// it (mcpconnect.Connector.Grant, mcpconnect.AccessToken).
-	Get(ctx context.Context, projectID, serverName string) (*MCPOAuthToken, error)
+	//
+	// owner names the account: "" the shared one (§15.3a C4).
+	Get(ctx context.Context, projectID, serverName, owner string) (*MCPOAuthToken, error)
 
 	// Upsert writes the grant, replacing any existing one for the pair. Used by the
 	// callback (first consent) and by a refresh that had no prior refresh token to compare
@@ -131,7 +138,7 @@ type MCPOAuthTokenRepository interface {
 	// MarkNeedsReconnect flags the grant as requiring human re-consent, recording nothing
 	// about why beyond the flag — the reason belongs in the log, not in a row an operator
 	// might mistake for an audit record.
-	MarkNeedsReconnect(ctx context.Context, projectID, serverName string) error
+	MarkNeedsReconnect(ctx context.Context, projectID, serverName, owner string) error
 
 	// InvalidateStaleRedirectURIs drops the stored client_id and marks
 	// needs_reconnect on every grant whose recorded redirect URI is neither empty
@@ -148,10 +155,12 @@ type MCPOAuthTokenRepository interface {
 
 	// Delete removes the grant (Disconnect). Config is untouched: the `auth:` block stays,
 	// so reconnecting needs no config change.
-	Delete(ctx context.Context, projectID, serverName string) error
+	// Deleting an absent grant is not an error, so a retried removal completes
+	// (§15.3a C5).
+	Delete(ctx context.Context, projectID, serverName, owner string) error
 
-	// ListForProject returns every grant for a project, for the control-plane row status.
-	// Pass "" for the daemon scope.
+	// ListForProject returns every grant for a project, for the control-plane row status,
+	// of every owner (each row carries its OwnerUserID). Pass "" for the daemon scope.
 	ListForProject(ctx context.Context, projectID string) ([]*MCPOAuthToken, error)
 
 	// WithRefreshLock runs fn while holding a cross-process lock for the (project, server)
@@ -166,5 +175,25 @@ type MCPOAuthTokenRepository interface {
 	//
 	// fn must re-read the token INSIDE the callback: the classic double-check, where the
 	// lock winner refreshes and the loser wakes to find a fresh token and uses it.
-	WithRefreshLock(ctx context.Context, projectID, serverName string, fn func(context.Context) error) error
+	WithRefreshLock(ctx context.Context, projectID, serverName, owner string, fn func(context.Context) error) error
+
+	// ListAll returns every grant of every project and the daemon scope, for
+	// the one-time seal pass (GitHub #571 A3), of every owner. Tokens are as stored.
+	ListAll(ctx context.Context) ([]*MCPOAuthToken, error)
+
+	// ReplaceTokens sets a grant's access and refresh tokens ONLY IF both
+	// still hold oldAccess and oldRefresh, and reports whether it did: the
+	// seal pass never overwrites a concurrent writer (#571 A3). With
+	// needsReconnect it also sets needs_reconnect in the same statement (a
+	// quarantined grant); otherwise no other column changes.
+	ReplaceTokens(ctx context.Context, projectID, serverName, owner, oldAccess, oldRefresh, newAccess, newRefresh string, needsReconnect bool) (bool, error)
 }
+
+// SealPassLockServer is the reserved server name whose refresh lock
+// serialises the startup token seal pass across daemons sharing a database
+// (GitHub #571, #578). It cannot be a configured server's name: a YAML plain
+// key cannot begin with "!" (a tag), and the server-name rule
+// (^[a-zA-Z0-9_-]{1,64}$) refuses it. It must not hold a NUL byte, which
+// Postgres refuses in a text parameter: the first value did, and on Postgres
+// the pass never ran (production 2026-10-31).
+const SealPassLockServer = "!u3a-seal-pass"

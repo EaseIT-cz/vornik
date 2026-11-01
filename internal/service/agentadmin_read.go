@@ -623,7 +623,7 @@ func (s *agentAdminService) credentialsOf(ctx context.Context, ns string, p *age
 		}
 		c := SetupCredential{Name: agentadmin.OAuthCredentialName(srv.Name), Kind: agentadmin.CredentialOAuth, Status: "missing"}
 		if conn != nil {
-			if tok, err := conn.Tokens.Get(ctx, p.ID, srv.Name); err == nil {
+			if tok, err := conn.Tokens.Get(ctx, p.ID, srv.Name, ""); err == nil {
 				at := tok.ConnectedAt
 				c.Status, c.SetAt = "set", &at
 				if tok.NeedsReconnect {

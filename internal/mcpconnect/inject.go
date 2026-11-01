@@ -53,7 +53,7 @@ func (c *Connector) AccessToken(ctx context.Context, ref ServerRef) (string, err
 // Tokens.Get would put two database round trips on the cold path of every
 // tool call — half the cost the cache exists to remove.
 func (c *Connector) resolveAccessToken(ctx context.Context, ref ServerRef) (string, *time.Time, error) {
-	tok, err := c.Tokens.Get(ctx, ref.ProjectID, ref.ServerName)
+	tok, err := c.Tokens.Get(ctx, ref.ProjectID, ref.ServerName, "")
 	if errors.Is(err, persistence.ErrNotFound) {
 		// Every wiring pass asks about every configured oauth server,
 		// most of which the operator has never connected. That is not an
@@ -83,7 +83,7 @@ func (c *Connector) resolveAccessToken(ctx context.Context, ref ServerRef) (stri
 	if !tok.Refreshable() {
 		// Expired with no refresh token is needs_reconnect by definition
 		// (§6). Recorded so the UI and the CLI can say which it is.
-		if markErr := c.Tokens.MarkNeedsReconnect(ctx, ref.ProjectID, ref.ServerName); markErr != nil {
+		if markErr := c.Tokens.MarkNeedsReconnect(ctx, ref.ProjectID, ref.ServerName, ""); markErr != nil {
 			c.Logger.Error().Err(markErr).Str("server", ref.ServerName).
 				Msg("mcp oauth: could not flag the grant as needing reconnect")
 		}
@@ -92,8 +92,8 @@ func (c *Connector) resolveAccessToken(ctx context.Context, ref ServerRef) (stri
 
 	var refreshed string
 	var refreshedExpiry *time.Time
-	lockErr := c.Tokens.WithRefreshLock(ctx, ref.ProjectID, ref.ServerName, func(ctx context.Context) error {
-		current, err := c.Tokens.Get(ctx, ref.ProjectID, ref.ServerName)
+	lockErr := c.Tokens.WithRefreshLock(ctx, ref.ProjectID, ref.ServerName, "", func(ctx context.Context) error {
+		current, err := c.Tokens.Get(ctx, ref.ProjectID, ref.ServerName, "")
 		if errors.Is(err, persistence.ErrNotFound) {
 			return fmt.Errorf("%w: %q (grant disappeared)", ErrNeedsReconnect, ref.ServerName)
 		}
@@ -145,14 +145,14 @@ func (c *Connector) refreshLocked(ctx context.Context, ref ServerRef, current *p
 		creds.ID = current.ClientID
 	}
 
-	tr, err := mcpauth.Refresh(ctx, c.httpFor(ref.ProjectID, ref.URL), md, creds, current.RefreshToken)
+	tr, err := mcpauth.Refresh(ctx, c.httpFor(ref), md, creds, current.RefreshToken)
 	if err != nil {
 		// invalid_grant is terminal: the grant is gone at the vendor and no
 		// amount of retrying brings it back, so flag it and stop. Any other
 		// error may be transient (a 503 at the token endpoint), so the grant
 		// is left alone to be retried on the next call.
 		if errors.Is(err, mcpauth.ErrInvalidGrant) {
-			if markErr := c.Tokens.MarkNeedsReconnect(ctx, ref.ProjectID, ref.ServerName); markErr != nil {
+			if markErr := c.Tokens.MarkNeedsReconnect(ctx, ref.ProjectID, ref.ServerName, ""); markErr != nil {
 				c.Logger.Error().Err(markErr).Str("server", ref.ServerName).
 					Msg("mcp oauth: could not flag the grant as needing reconnect")
 			}
@@ -190,7 +190,7 @@ func (c *Connector) refreshLocked(ctx context.Context, ref ServerRef, current *p
 	if !won {
 		// Another process rotated the token under us. Its value is the live
 		// one; ours is already spent, so reload rather than overwrite.
-		reloaded, err := c.Tokens.Get(ctx, ref.ProjectID, ref.ServerName)
+		reloaded, err := c.Tokens.Get(ctx, ref.ProjectID, ref.ServerName, "")
 		if err != nil || reloaded == nil {
 			return "", nil, fmt.Errorf("mcpconnect: lost the refresh race and could not reload the grant: %w", err)
 		}

@@ -67,6 +67,15 @@
     {{/* HTMX is vendored under /ui/static/ so the dashboard works offline
          and no CDN can break the UI. Tailwind is a prebuilt same-origin
          stylesheet, linked at the end of this head (GitHub #165). */}}
+    {{/* The one dispatcher of control actions (GitHub #416, phase 3): page
+         scripts register their actions with Vornik.action at top level,
+         so it loads before them. */}}
+    <script src="/ui/static/console.js"></script>
+    {{/* Read before htmx loads. htmx evaluates nothing (#416 phase 4) and
+         re-creates no script from swapped HTML (phase 6). Back reloads the
+         page rather than restoring a saved body, whose nav scripts would
+         not run again (phase 6, finding H). */}}
+    <meta name="htmx-config" content='{"allowEval":false,"allowScriptTags":false,"historyCacheSize":0,"refreshOnHistoryMiss":true}'>
     <script src="/ui/static/htmx.min.js"></script>
     <script src="/ui/static/htmx-ext-sse.js"></script>
     <script>
@@ -88,8 +97,10 @@
         // (dark/gray = surface/ink, brand, accent, control) and the dark:
         // selector live in internal/ui/tailwind/tailwind.config.js, compiled
         // into /ui/static/tailwind.css (GitHub #165).
-        // Pages that poll for status (task/execution detail) gate their
-        // hx-trigger on `!document.body.classList.contains('poll-stopped')`.
+        // Pages that poll for status (task/execution detail) mark the
+        // polling element data-poll; console.js cancels its timer polls once
+        // body has poll-stopped (#416 phase 4, replacing an evaluated
+        // hx-trigger filter).
         // The server-side handlers send `HX-Trigger: stopPolling` once the
         // entity reaches a terminal state — we listen for it here and
         // stop further polls instead of needing per-page JS.
@@ -1417,7 +1428,7 @@ sortHeader renders a sortable <th>. Expects a dict:
     {{range $k, $v := .Hidden}}{{if $v}}<input type="hidden" name="{{$k}}" value="{{$v}}">{{end}}{{end}}
     <label for="page-size-{{$param}}" class="text-gray-500 uppercase tracking-wider">Show</label>
     <select id="page-size-{{$param}}" name="{{$param}}"
-            onchange="this.form.submit()"
+            data-on-change="submit-form"
             class="bg-dark-700 border border-control text-gray-200 text-xs rounded-md px-2 py-1 hover:bg-dark-600 focus:border-brand-500 focus:outline-none">
         {{$cur := .Current}}
         {{range $val := .Options}}
@@ -1650,6 +1661,14 @@ scanner picks them up. Pass a dict:
      HrefLabel gates the anchor: Href renders only when HrefLabel is also
      set, and HrefLabel wins over MetaText when both are given.
      Replaces the hand-rolled `<div class="px-5 py-3.5 border-b ..."><h2>…` blocks. */}}
+{{/* hintOpen / hintClose: a standing explanation behind an ⓘ that opens on
+   hover, keyboard focus or a tap (web-ui-design.md "Explanations behind an ⓘ
+   — 2026-11-01"). The argument is the button's accessible label; the text
+   between the pair may hold template values. The tap goes through the
+   console.js hint-toggle action (no inline handler, CSP). */}}
+{{define "hintOpen"}}<span class="vk-hint"><button type="button" class="vk-hint-btn" aria-label="{{.}}" aria-expanded="false" data-on-click="hint-toggle"><svg aria-hidden="true" viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7-4a1 1 0 11-2 0 1 1 0 012 0zM9 9a1 1 0 000 2v3a1 1 0 001 1h1a1 1 0 100-2v-3a1 1 0 00-1-1H9z" clip-rule="evenodd"/></svg></button><span class="vk-hint-pop" role="tooltip">{{end}}
+{{define "hintClose"}}</span></span>{{end}}
+
 {{define "sectionHeader"}}
 <div class="px-5 py-3.5 border-b border-surface-600/60 flex items-center justify-between gap-2 flex-wrap">
     <h2 class="text-sm font-semibold text-ink-200 flex items-center gap-2">{{.Title}}</h2>

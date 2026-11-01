@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"vornik.io/vornik/internal/ctxerr"
+	"vornik.io/vornik/internal/integrations/dialguard"
 )
 
 // StreamCallback is invoked with the accumulated text content during streaming.
@@ -151,7 +152,17 @@ func (c *Client) CompleteWithToolsStream(ctx context.Context, messages []Message
 	// Per-call client allocation is fine: the keep-alive pool lives in the
 	// shared transport, so connections are still reused across stream calls
 	// (a nil Transport would fall back to the under-pooled DefaultTransport).
-	streamClient := &http.Client{Transport: sharedHTTPTransport()}
+	// The transport and redirect policy are the client's own, so a client set
+	// with WithHTTPClient streams through its own guard too (GitHub #505, C3).
+	streamClient := &http.Client{Transport: sharedHTTPTransport(), CheckRedirect: dialguard.SameHostRedirects}
+	if c.httpClient != nil {
+		if c.httpClient.Transport != nil {
+			streamClient.Transport = c.httpClient.Transport
+		}
+		if c.httpClient.CheckRedirect != nil {
+			streamClient.CheckRedirect = c.httpClient.CheckRedirect
+		}
+	}
 	resp, err := streamClient.Do(httpReq)
 	if err != nil {
 		c.logger.Warn().Err(err).Str("url", url).Dur("duration", time.Since(start)).Msg("streaming request failed")

@@ -195,7 +195,7 @@ func NewClaudeSubscriptionClient(model string, opts ...ClaudeSubscriptionOption)
 	c := &ClaudeSubscriptionClient{
 		auth:      newClaudeAuthManager(""),
 		account:   newClaudeAccountResolver(),
-		http:      &http.Client{Timeout: 0, Transport: sharedHTTPTransport()}, // we enforce via ctx below
+		http:      newChatHTTPClient(0), // we enforce via ctx below
 		model:     model,
 		logger:    zerolog.Nop(),
 		timeout:   DefaultTimeout,

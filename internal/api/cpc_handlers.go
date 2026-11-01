@@ -251,8 +251,10 @@ func (s *Server) AdminCPCCancel(w http.ResponseWriter, r *http.Request, id strin
 // an unscoped static key that is not admin-class included. Unscoped is not
 // an operator capability. Unlike requireAdminGate it never depends on the
 // admin surface being wired, so it does not 404/501 in Community.
-func (s *Server) requireOperatorScope(w http.ResponseWriter, r *http.Request) bool {
-	switch s.operatorSurfaceAccess(r) {
+func (s *Server) requireOperatorScopeFor(w http.ResponseWriter, r *http.Request, surface Surface) bool {
+	access := s.operatorSurfaceAccess(r, surface)
+	s.logTenantAdminDecision(r, surface, access == OperatorSurfaceAllowed)
+	switch access {
 	case OperatorSurfaceAllowed:
 		return true
 	case OperatorSurfaceHidden:
@@ -268,9 +270,9 @@ func (s *Server) requireOperatorScope(w http.ResponseWriter, r *http.Request) bo
 // operatorOnly gates h on requireOperatorScope (the one operator-surface
 // gate) for a handler that holds no *Server, such as the config reload pair
 // (GitHub #495, design A4a and O5: they shipped with no gate at all).
-func (s *Server) operatorOnly(h http.HandlerFunc) http.HandlerFunc {
+func (s *Server) operatorOnly(surface Surface, h http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		if !s.requireOperatorScope(w, r) {
+		if !s.requireOperatorScopeFor(w, r, surface) {
 			return
 		}
 		h(w, r)

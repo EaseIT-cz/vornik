@@ -14,8 +14,7 @@
 
             <div data-admin-link class="{{if not (hasAdminFlag .)}}hidden {{end}}glass rounded-xl border border-dark-700 p-4 flex items-center gap-3">
                 <div class="flex-1">
-                    <h2 class="text-sm font-medium text-gray-200">Operator profiles</h2>
-                    <p class="text-xs text-gray-500 mt-0.5">Cross-project, cross-channel preferences + notes the dispatcher injects into every chat turn's system prompt. Distinct from per-project memory below — both layers compose. Admin-only.</p>
+                    <h2 class="text-sm font-medium text-gray-200">Operator profiles{{template "hintOpen" "About operator profiles"}}Cross-project, cross-channel preferences + notes the dispatcher injects into every chat turn's system prompt. Distinct from per-project memory below — both layers compose. Admin-only.{{template "hintClose"}}</h2>
                 </div>
                 <a href="/ui/memory/operators" class="text-xs px-3 py-1.5 rounded bg-brand-600 hover:bg-brand-500 text-white font-medium">View operators →</a>
             </div>
@@ -34,8 +33,7 @@
             <div class="glass rounded-xl border border-dark-700 overflow-hidden">
                 <div class="px-5 py-4 border-b border-dark-700/60 flex items-center justify-between">
                     <div>
-                        <h2 class="text-sm font-medium text-gray-300">Knowledge graph extraction</h2>
-                        <p class="mt-1 text-xs text-gray-500">Background pipeline turning project_memory_chunks into a property graph (entities + edges). One worker drains all projects.</p>
+                        <h2 class="text-sm font-medium text-gray-300">Knowledge graph extraction{{template "hintOpen" "About extraction"}}Background pipeline turning project_memory_chunks into a property graph (entities + edges). One worker drains all projects.{{template "hintClose"}}</h2>
                     </div>
                     <a href="/ui/memory" class="text-xs text-emerald-800 dark:text-emerald-400 hover:text-emerald-700 dark:text-emerald-300" title="Refresh">↻ refresh</a>
                 </div>

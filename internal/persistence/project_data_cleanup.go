@@ -88,6 +88,11 @@ var ProjectDataTables = []string{
 	"trading_orders",
 	"trading_positions_snapshots",
 	"trading_safety_events",
+	// The entry funnel and its forward outcomes (GitHub #596): project-
+	// scoped measurement rows, no FK.
+	"trading_funnel_candidates",
+	// The rule engine's shadow record (GitHub #598).
+	"trading_shadow_decisions",
 
 	// Memory pipeline — child queues + DLQ first, then the
 	// chunks they reference (project_memory_chunks has

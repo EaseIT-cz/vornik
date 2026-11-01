@@ -11,12 +11,14 @@ import (
 	"io"
 	"sync"
 	"time"
+	"vornik.io/vornik/internal/aimark"
 
 	"github.com/rs/zerolog"
 	"vornik.io/vornik/internal/apigateway"
 	"vornik.io/vornik/internal/budget"
 	"vornik.io/vornik/internal/chat"
 	"vornik.io/vornik/internal/config"
+	"vornik.io/vornik/internal/firstvalue"
 	"vornik.io/vornik/internal/hallucination"
 	"vornik.io/vornik/internal/llmspend"
 	"vornik.io/vornik/internal/memory/ned"
@@ -185,6 +187,8 @@ type Result struct {
 
 // Agent is the dispatcher. It owns the tool-calling loop and system prompt.
 type Agent struct {
+	// firstValue marks the first assistant answer (WithFirstValue, #587).
+	firstValue    *firstvalue.Tracker
 	chatClient    chat.Provider
 	toolExecutor  *ToolExecutor
 	logger        zerolog.Logger
@@ -194,6 +198,8 @@ type Agent struct {
 	// sandboxRunner runs render_document's pandoc in the pinned agent image
 	// (WithSandboxRunner; process-spawn law S4/S5a).
 	sandboxRunner *sandboxtool.Runner
+	// aiMarker is passed to the tool executor (render_document, #117).
+	aiMarker *aimark.Marker
 	// deferredToolThreshold overrides DefaultDeferredToolThreshold for
 	// the F12 deferred-tool-loading gate. 0 = package default (20);
 	// negative = never defer (full MCP catalog always visible). Set via
@@ -634,6 +640,7 @@ func NewAgent(
 		webWriteTokenStore:    a.webWriteTokenStore,
 		logger:                a.logger,
 	}
+	a.toolExecutor.SetAIMarker(a.aiMarker)
 	return a
 }
 

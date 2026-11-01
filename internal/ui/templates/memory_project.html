@@ -389,8 +389,7 @@
                  ============================================================ -->
             <div class="glass rounded-xl border border-dark-700 overflow-hidden">
                 <div class="px-5 py-4 border-b border-dark-700/60">
-                    <h2 class="text-sm font-medium text-gray-300">Pipeline funnel</h2>
-                    <p class="mt-1 text-xs text-gray-500">Cumulative volume by stage across the recent epochs. The bar widths are relative to the largest stage so the funnel is readable regardless of absolute counts.</p>
+                    <h2 class="text-sm font-medium text-gray-300">Pipeline funnel{{template "hintOpen" "About the funnel"}}Cumulative volume by stage across the recent epochs. The bar widths are relative to the largest stage so the funnel is readable regardless of absolute counts.{{template "hintClose"}}</h2>
                 </div>
                 <div class="px-5 py-4 space-y-3">
                     {{$max := .Pipeline.BarMax}}
@@ -1319,8 +1318,7 @@
             {{if .QuarantineByGate}}
             <div class="glass rounded-xl border border-dark-700 overflow-hidden">
                 <div class="px-5 py-4 border-b border-dark-700/60">
-                    <h2 class="text-sm font-medium text-gray-300">Quarantine by gate</h2>
-                    <p class="mt-1 text-xs text-gray-500">Which quality gate is rejecting most for this project. Pending only — released and dropped rows are excluded.</p>
+                    <h2 class="text-sm font-medium text-gray-300">Quarantine by gate{{template "hintOpen" "About quarantine by gate"}}Which quality gate is rejecting most for this project. Pending only — released and dropped rows are excluded.{{template "hintClose"}}</h2>
                 </div>
                 <div class="px-5 py-3 flex flex-wrap gap-2">
                     {{range $gate, $count := .QuarantineByGate}}
@@ -1337,8 +1335,7 @@
             <div class="glass rounded-xl border border-dark-700 overflow-hidden">
                 <div class="px-5 py-4 border-b border-dark-700/60 flex items-start gap-4">
                     <div class="flex-1 min-w-0">
-                        <h2 class="text-sm font-medium text-gray-300">Epochs (snapshots)</h2>
-                        <p class="mt-1 text-xs text-gray-500">One row per ingest pipeline run. Active epochs are visible to default search; rolled-back ones are not. The rollback action targets older epochs — newer epochs become inactive, reverting the corpus to the chosen point.</p>
+                        <h2 class="text-sm font-medium text-gray-300">Epochs (snapshots){{template "hintOpen" "About epochs"}}One row per ingest pipeline run. Active epochs are visible to default search; rolled-back ones are not. The rollback action targets older epochs — newer epochs become inactive, reverting the corpus to the chosen point.{{template "hintClose"}}</h2>
                     </div>
                     <div class="flex-shrink-0 pt-1">
                         {{template "pageSizeSelector" (dict
@@ -1564,12 +1561,7 @@
             <div class="glass rounded-xl border border-dark-700 overflow-hidden">
                 <div class="px-5 py-4 border-b border-dark-700/60 flex items-start gap-4">
                     <div class="flex-1 min-w-0">
-                        <h2 class="text-sm font-medium text-gray-300">Eviction audit</h2>
-                        <p class="mt-1 text-xs text-gray-500">
-                            Tombstones from <code class="text-gray-400">memory_eviction_audit</code> — every hard-delete records the chunk's
-                            denormalised snapshot (content_hash, source, class, role) plus operator-supplied reason. Newest first.
-                            This table is the GDPR Art 30 ROPA hook for memory-side processing.
-                        </p>
+                        <h2 class="text-sm font-medium text-gray-300">Eviction audit{{template "hintOpen" "About the eviction audit"}}Tombstones from <code class="text-gray-400">memory_eviction_audit</code> — every hard-delete records the chunk's denormalised snapshot (content_hash, source, class, role) plus operator-supplied reason. Newest first. This table is the GDPR Art 30 ROPA hook for memory-side processing.{{template "hintClose"}}</h2>
                     </div>
                     <div class="flex-shrink-0 pt-1">
                         {{template "pageSizeSelector" (dict
@@ -1626,8 +1618,7 @@
             <div class="glass rounded-xl border border-dark-700 overflow-hidden">
                 <div class="px-5 py-4 border-b border-dark-700/60 flex items-start gap-4">
                     <div class="flex-1 min-w-0">
-                        <h2 class="text-sm font-medium text-gray-300">Rollback history</h2>
-                        <p class="mt-1 text-xs text-gray-500">Audit trail for corpus_epochs_active mutations. Includes manual operator rollbacks, automatic circuit-breaker rollbacks, and scheduled canary failures.</p>
+                        <h2 class="text-sm font-medium text-gray-300">Rollback history{{template "hintOpen" "About rollbacks"}}Audit trail for corpus_epochs_active mutations. Includes manual operator rollbacks, automatic circuit-breaker rollbacks, and scheduled canary failures.{{template "hintClose"}}</h2>
                     </div>
                     <div class="flex-shrink-0 pt-1">
                         {{template "pageSizeSelector" (dict

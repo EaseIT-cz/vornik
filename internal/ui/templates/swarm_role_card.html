@@ -36,9 +36,9 @@
     <div class="flex items-center justify-between gap-2">
         <h4 class="text-sm font-semibold text-gray-200 role-card-title">{{if .Name}}{{.Name}}{{else}}New role{{end}}</h4>
         <div class="flex items-center gap-2 text-xs">
-            <button type="button" class="text-gray-400 hover:text-gray-200" onclick="swarmMoveCard(this,-1)" aria-label="Move up">▲</button>
-            <button type="button" class="text-gray-400 hover:text-gray-200" onclick="swarmMoveCard(this,1)" aria-label="Move down">▼</button>
-            <button type="button" class="text-red-700 dark:text-red-300 hover:text-red-600 dark:text-red-200" onclick="this.closest('.role-card').remove()">Remove</button>
+            <button type="button" class="text-gray-400 hover:text-gray-200" data-on-click="swarmMoveCard" data-args="[-1]" aria-label="Move up">▲</button>
+            <button type="button" class="text-gray-400 hover:text-gray-200" data-on-click="swarmMoveCard" data-args="[1]" aria-label="Move down">▼</button>
+            <button type="button" class="text-red-700 dark:text-red-300 hover:text-red-600 dark:text-red-200" data-on-click="remove-closest" data-target=".role-card">Remove</button>
         </div>
     </div>
     {{range .Sections}}

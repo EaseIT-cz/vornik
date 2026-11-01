@@ -40,7 +40,7 @@ func newFakeTokens() *fakeTokens {
 
 func (f *fakeTokens) key(p, s string) string { return p + "\x00" + s }
 
-func (f *fakeTokens) Get(_ context.Context, p, s string) (*persistence.MCPOAuthToken, error) {
+func (f *fakeTokens) Get(_ context.Context, p, s, _ string) (*persistence.MCPOAuthToken, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	// A miss is (nil, persistence.ErrNotFound), matching both backends —
@@ -57,7 +57,7 @@ func (f *fakeTokens) Get(_ context.Context, p, s string) (*persistence.MCPOAuthT
 // like, or it certifies the callers' miss paths without exercising them.
 func TestFakeTokens_miss_obeys_the_contract(t *testing.T) {
 	repotest.AssertMiss(t, "MCPOAuthTokenRepository.Get", func() (*persistence.MCPOAuthToken, error) {
-		return newFakeTokens().Get(context.Background(), "no-project", "no-server")
+		return newFakeTokens().Get(context.Background(), "no-project", "no-server", "")
 	})
 }
 
@@ -83,7 +83,7 @@ func (f *fakeTokens) SwapRefreshToken(_ context.Context, used string, next *pers
 	return true, nil
 }
 
-func (f *fakeTokens) MarkNeedsReconnect(_ context.Context, p, s string) error {
+func (f *fakeTokens) MarkNeedsReconnect(_ context.Context, p, s, _ string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if row := f.rows[f.key(p, s)]; row != nil {
@@ -92,7 +92,7 @@ func (f *fakeTokens) MarkNeedsReconnect(_ context.Context, p, s string) error {
 	return nil
 }
 
-func (f *fakeTokens) Delete(_ context.Context, p, s string) error {
+func (f *fakeTokens) Delete(_ context.Context, p, s, _ string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	delete(f.rows, f.key(p, s))
@@ -130,7 +130,32 @@ func (f *fakeTokens) InvalidateStaleRedirectURIs(_ context.Context, current stri
 	return n, nil
 }
 
-func (f *fakeTokens) WithRefreshLock(ctx context.Context, _, _ string, fn func(context.Context) error) error {
+// ListAll and ReplaceTokens complete the interface (GitHub #571 A3); the
+// connector never calls them.
+func (f *fakeTokens) ListAll(context.Context) ([]*persistence.MCPOAuthToken, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	out := make([]*persistence.MCPOAuthToken, 0, len(f.rows))
+	for _, r := range f.rows {
+		cp := *r
+		out = append(out, &cp)
+	}
+	return out, nil
+}
+
+func (f *fakeTokens) ReplaceTokens(_ context.Context, p, s, _, oa, or, na, nr string, needsReconnect bool) (bool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	r, ok := f.rows[f.key(p, s)]
+	if !ok || r.AccessToken != oa || r.RefreshToken != or {
+		return false, nil
+	}
+	r.AccessToken, r.RefreshToken = na, nr
+	r.NeedsReconnect = r.NeedsReconnect || needsReconnect
+	return true, nil
+}
+
+func (f *fakeTokens) WithRefreshLock(ctx context.Context, _, _, _ string, fn func(context.Context) error) error {
 	f.lockMu.Lock()
 	defer f.lockMu.Unlock()
 	return fn(ctx)
@@ -299,7 +324,7 @@ func TestBeginComplete_PersistsGrantAndRecordsConsent(t *testing.T) {
 
 	// Nothing is persisted until the callback: a half-finished consent must
 	// leave no grant behind.
-	pre, err := tokens.Get(context.Background(), "p1", "linear")
+	pre, err := tokens.Get(context.Background(), "p1", "linear", "")
 	require.ErrorIs(t, err, persistence.ErrNotFound)
 	assert.Nil(t, pre)
 
@@ -311,7 +336,7 @@ func TestBeginComplete_PersistsGrantAndRecordsConsent(t *testing.T) {
 	assert.Equal(t, vendor.URL+"/mcp", tok.Resource)
 	require.NotNil(t, tok.ExpiresAt)
 
-	stored, err := tokens.Get(context.Background(), "p1", "linear")
+	stored, err := tokens.Get(context.Background(), "p1", "linear", "")
 	require.NoError(t, err)
 	require.NotNil(t, stored)
 	assert.Equal(t, "at-1", stored.AccessToken)
@@ -345,16 +370,16 @@ func TestCompleteWithIdentity_HookRunsBeforePersistAndCanStopIt(t *testing.T) {
 	require.NoError(t, err)
 	stop := errors.New("suspension failed")
 	calls := 0
-	_, err = c.CompleteWithIdentity(context.Background(), begun.State, "code", func(ctx context.Context, _ string) error {
+	_, err = c.CompleteWithIdentity(context.Background(), CompleteRequest{State: begun.State, Code: "code"}, func(ctx context.Context, _ string) error {
 		calls++
-		pre, gerr := tokens.Get(ctx, "p1", "s")
+		pre, gerr := tokens.Get(ctx, "p1", "s", "")
 		require.ErrorIs(t, gerr, persistence.ErrNotFound, "the hook must run before the token is stored")
 		assert.Nil(t, pre)
 		return stop
 	})
 	require.ErrorIs(t, err, stop)
 	assert.Equal(t, 1, calls)
-	_, gerr := tokens.Get(context.Background(), "p1", "s")
+	_, gerr := tokens.Get(context.Background(), "p1", "s", "")
 	require.ErrorIs(t, gerr, persistence.ErrNotFound, "a failed hook left a grant")
 	assert.Empty(t, audit.entries, "a failed hook recorded a consent")
 	_, err = c.Complete(context.Background(), begun.State, "code")
@@ -363,9 +388,9 @@ func TestCompleteWithIdentity_HookRunsBeforePersistAndCanStopIt(t *testing.T) {
 	// A hook that succeeds lets the completion persist as Complete does.
 	begun, err = c.Begin(context.Background(), ref, "op")
 	require.NoError(t, err)
-	tok, err := c.CompleteWithIdentity(context.Background(), begun.State, "code", func(context.Context, string) error { return nil })
+	tok, err := c.CompleteWithIdentity(context.Background(), CompleteRequest{State: begun.State, Code: "code"}, func(context.Context, string) error { return nil })
 	require.NoError(t, err)
-	stored, err := tokens.Get(context.Background(), "p1", "s")
+	stored, err := tokens.Get(context.Background(), "p1", "s", "")
 	require.NoError(t, err)
 	assert.Equal(t, tok.AccessToken, stored.AccessToken)
 }
@@ -581,7 +606,7 @@ func TestDisconnect_DeletesAndRecords(t *testing.T) {
 
 	require.NoError(t, c.Disconnect(context.Background(), "p1", "linear", "bob"))
 
-	got, err := tokens.Get(context.Background(), "p1", "linear")
+	got, err := tokens.Get(context.Background(), "p1", "linear", "")
 	require.ErrorIs(t, err, persistence.ErrNotFound)
 	assert.Nil(t, got)
 
@@ -691,7 +716,7 @@ func TestBegin_DropsAClientRegisteredUnderAPreviousRedirectURI(t *testing.T) {
 		t.Fatalf("Begin: %v", err)
 	}
 
-	got, err := tokens.Get(context.Background(), "p1", "atlassian")
+	got, err := tokens.Get(context.Background(), "p1", "atlassian", "")
 	require.NoError(t, err)
 	require.NotNil(t, got)
 	assert.Empty(t, got.ClientID,
@@ -722,7 +747,7 @@ func TestBegin_KeepsAClientRegisteredUnderTheCurrentRedirectURI(t *testing.T) {
 	if _, err := c.Begin(context.Background(), ref, "op"); err != nil {
 		t.Fatalf("Begin: %v", err)
 	}
-	got, err := tokens.Get(context.Background(), "p1", "atlassian")
+	got, err := tokens.Get(context.Background(), "p1", "atlassian", "")
 	require.NoError(t, err)
 	assert.Equal(t, "client-still-valid", got.ClientID)
 	assert.False(t, got.NeedsReconnect)

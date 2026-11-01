@@ -271,6 +271,13 @@ type SearchOptions struct {
 	// filtered. RecallTool defaults to false so host LLMs still
 	// reach pre-migration deposits.
 	StrictScope bool
+	// Authority narrows which stamps count (#550; design
+	// 2026-10-25-architect-expert-design.md §2.1 C1). AuthorityAny (the
+	// default) admits every live chunk; AuthorityProvenance only chunks the
+	// daemon checked against the trusted branch. Applied in the search SQL,
+	// before the LIMIT, and kept on every widen round (widenRoutingOptions
+	// copies the options whole).
+	Authority string
 	// Rerank opts this search into the LLM reranker pass (and the wider
 	// candidate fetch it needs). Default false: the interactive paths
 	// (memory_search tool, companion recall) stay on fast RRF ordering and
@@ -471,7 +478,8 @@ func (s *Searcher) searchInternal(ctx context.Context, projectID, query string, 
 			fetchLimit = 60
 		}
 	}
-	results, err := s.repo.HybridSearchWithEpochs(ctx, projectID, queryVec, keywordQuery, fetchLimit, activeEpochs, s.epochSource != nil, opts.FromDate, opts.ToDate, opts.RepoScope, opts.StrictScope)
+	results, err := s.repo.HybridSearchWithEpochsFiltered(ctx, projectID, queryVec, keywordQuery, fetchLimit, activeEpochs, s.epochSource != nil, opts.FromDate, opts.ToDate,
+		ScopeFilter{RepoScope: opts.RepoScope, Strict: opts.StrictScope, Authority: opts.Authority})
 	// GDPR Art 18: drop restricted chunks HERE, before the role boost, the LLM
 	// reranker and every later pass — sending restricted text to a model is
 	// processing even if the result is dropped afterwards (§4.16.1).

@@ -60,6 +60,10 @@ type Repositories struct {
 	AdminAudit         persistence.AdminAuditRepository
 	ClassESlots        persistence.ClassESlotRepository
 	KeyClaimAttempts   persistence.KeyClaimAttemptRepository
+	// InstanceExports is the owner export registry (GitHub #581 D5).
+	InstanceExports persistence.InstanceExportRepository
+	// InstanceMilestones is the instance's once-only milestones (GitHub #587).
+	InstanceMilestones persistence.InstanceMilestoneRepository
 	// PackageContributions is the extension-package provenance store:
 	// one row per contributed config row, with the content hash at
 	// install time so uninstall can refuse an operator-edited file.
@@ -70,6 +74,16 @@ type Repositories struct {
 	// ChannelDisclosure is the EU AI Act Art 50 disclosure record —
 	// per-session state AND the Art 99 evidence trail.
 	ChannelDisclosure persistence.ChannelDisclosureRepository
+	// AIOutputMarks is the EU AI Act Art 50(2) marking evidence (GitHub
+	// #117): signed output marks and the keys that signed them.
+	AIOutputMarks persistence.AIOutputMarkRepository
+	// TradingFunnel is the trading entry funnel and its forward outcomes
+	// (GitHub #596). Measurement only.
+	TradingFunnel persistence.FunnelRepository
+	// TradingBenchmarks holds benchmark (SPY) session closes (GitHub #597).
+	TradingBenchmarks persistence.BenchmarkCloseRepository
+	// TradingShadow is the rule engine's shadow record (GitHub #598).
+	TradingShadow persistence.ShadowDecisionRepository
 
 	// ForgePRReviewState is the per-PR re-review state behind the Forge
 	// coalescing rules (migration 171).
@@ -458,11 +472,17 @@ func buildSQLiteRepositories(db *sql.DB) *Repositories {
 		AdminAudit:                     sqlite.NewAdminAuditRepository(db),
 		ClassESlots:                    sqlite.NewClassESlotRepository(db),
 		KeyClaimAttempts:               sqlite.NewKeyClaimAttemptRepository(db),
+		InstanceExports:                sqlite.NewInstanceExportRepository(db),
+		InstanceMilestones:             sqlite.NewInstanceMilestoneRepository(db),
 		PackageContributions:           sqlite.NewPackageContributionRepository(db),
 		SecretRedaction:                sqlite.NewSecretRedactionAuditRepository(db),
 		TaskCredentials:                sqlite.NewTaskCredentialRepository(db),
 		ChatAudit:                      sqlite.NewChatAuditRepository(db),
 		ChannelDisclosure:              sqlite.NewChannelDisclosureRepository(db),
+		AIOutputMarks:                  sqlite.NewAIOutputMarkRepository(db),
+		TradingFunnel:                  sqlite.NewFunnelRepository(db),
+		TradingBenchmarks:              sqlite.NewBenchmarkCloseRepository(db),
+		TradingShadow:                  sqlite.NewShadowDecisionRepository(db),
 		ProjectFirstSeen:               sqlite.NewProjectFirstSeenRepository(db),
 		ChatMemoryWriteConfirmations:   sqlite.NewChatMemoryWriteConfirmationRepository(db),
 		MCPOAuthTokens:                 sqlite.NewMCPOAuthTokenRepository(db),
@@ -624,11 +644,17 @@ func Build(dbtx persistence.DBTX) *Repositories {
 		AdminAudit:                     postgres.NewAdminAuditRepository(dbtx),
 		ClassESlots:                    postgres.NewClassESlotRepository(dbtx),
 		KeyClaimAttempts:               postgres.NewKeyClaimAttemptRepository(dbtx),
+		InstanceExports:                postgres.NewInstanceExportRepository(dbtx),
+		InstanceMilestones:             postgres.NewInstanceMilestoneRepository(dbtx),
 		PackageContributions:           postgres.NewPackageContributionRepository(dbtx),
 		SecretRedaction:                postgres.NewSecretRedactionAuditRepository(dbtx),
 		TaskCredentials:                postgres.NewTaskCredentialRepository(dbtx),
 		ChatAudit:                      postgres.NewChatAuditRepository(dbtx),
 		ChannelDisclosure:              postgres.NewChannelDisclosureRepository(dbtx),
+		AIOutputMarks:                  postgres.NewAIOutputMarkRepository(dbtx),
+		TradingFunnel:                  postgres.NewFunnelRepository(dbtx),
+		TradingBenchmarks:              postgres.NewBenchmarkCloseRepository(dbtx),
+		TradingShadow:                  postgres.NewShadowDecisionRepository(dbtx),
 		ProjectFirstSeen:               postgres.NewProjectFirstSeenRepository(dbtx),
 		ChatMemoryWriteConfirmations:   postgres.NewChatMemoryWriteConfirmationRepository(dbtx),
 		MCPOAuthTokens:                 postgres.NewMCPOAuthTokenRepository(dbtx),

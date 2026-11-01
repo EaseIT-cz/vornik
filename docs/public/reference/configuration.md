@@ -121,6 +121,8 @@ vornik reads its configuration from `config.yaml`. The keys below are the custom
 | `runtime.default_network` | string | Default network policy for agent roles: host, none, or daemon-only (zero egress; requires server.unix_socket). | — |
 | `runtime.image_timeout` | string | Bound on a podman run or pull of the agent image, which may download it (a Go duration). Empty = 15m. Raise it on a slow registry link. | — |
 | `runtime.agent_memory_limit` | string | Per-agent-container memory cap (e.g. 2GiB); a bounded container gets no swap. Absent derives from host memory and concurrency; "none" disables the limit. | — |
+| `runtime.agent_read_only_root` | bool | Run agent containers with a read-only root filesystem (writable /tmp, /var/tmp and home on disk-backed volumes). Default off; always on in managed hosting. | — |
+| `runtime.agent_pids_limit` | int | Agent container PID limit. 0 (default) leaves podman's own default; managed hosting uses 2048. | — |
 | `runtime.agent_llm.endpoint` | string | OpenAI-compatible base URL for the LLM agents call. Falls back to the chat section when empty. | — |
 | `runtime.agent_llm.api_key` | string | API key for the agent LLM endpoint. | — |
 | `runtime.agent_llm.model` | string | Default model for agents. | — |
@@ -221,6 +223,7 @@ vornik reads its configuration from `config.yaml`. The keys below are the custom
 | `metrics.enabled` | bool | Expose a Prometheus metrics endpoint. | `VORNIK_METRICS_ENABLED` |
 | `metrics.addr` | string | Listen address for the dedicated metrics server. | `VORNIK_METRICS_ADDR` |
 | `metrics.require_admin` | bool | Require the admin key on the main port metrics endpoint. | — |
+| `metrics.previous_scrape_token` | string | During a scrape token rotation, the previous token, accepted by /metrics beside scrape_token. Written and cleared by the rotation operation; empty otherwise. | — |
 
 ## tracing
 
@@ -444,6 +447,9 @@ vornik reads its configuration from `config.yaml`. The keys below are the custom
 | `auth.providers.github.org` | string | Restrict/soft-gate login to a GitHub org. | — |
 | `auth.providers.github.org_member_role` | string | Auto-grant role for GitHub org members on login: empty (default, no auto-grant), 'user', or 'admin'. Requires 'org' set. | — |
 | `auth.providers.github.org_member_projects` | list | Projects an auto-granted org member (user role) receives; '*' = all projects. | — |
+| `auth.providers.oidc.issuer` | string | The OpenID issuer's https URL, exactly as its ID tokens state it in iss; discovery is read from <issuer>/.well-known/openid-configuration. | — |
+| `auth.providers.oidc.client_id` | string | This instance's client id at the issuer; ID tokens must name it in aud. | — |
+| `auth.providers.oidc.name` | string | The provider's name: the login path (/auth/<name>/start) and the channel of every identity it binds, so auth.bootstrap_admins entries read <name>:<subject>. Lowercase letters, digits and hyphens; default vornikcloud. Do not change it once an owner is bound. | — |
 
 ## admin
 
@@ -463,6 +469,9 @@ vornik reads its configuration from `config.yaml`. The keys below are the custom
 | `voice.tts.voice` | string | Absolute path to the TTS voice model (.onnx, with its .onnx.json beside it); the directory is mounted read-only into the sandbox. | — |
 | `voice.tts.binary_path` | string | Ignored since 2026.9.7 (piper runs in the agent image); startup warns when set. | — |
 | `voice.tts.ffmpeg_path` | string | Ignored since 2026.9.7 (ffmpeg runs in the agent image); startup warns when set. | — |
+| `voice.synthetic_replies` | bool | Answer voice messages with synthesised speech (Art 50(2)). Off by default; needs synthetic_replies_ack and synthetic_replies_ack_basis. | — |
+| `voice.synthetic_replies_ack` | bool | Accept that synthetic voice replies carry metadata and the ledger only (no audio watermark yet). | — |
+| `voice.synthetic_replies_ack_basis` | string | Who accepted single-layer marking for synthetic voice replies, and why (recorded in the admin audit). | — |
 
 ## media
 
@@ -510,6 +519,20 @@ vornik reads its configuration from `config.yaml`. The keys below are the custom
 | `node.relay_ingress.server_cert` | string | PEM server cert presented to relaying webhook nodes. | — |
 | `node.relay_ingress.server_key` | string | PEM server key for the relay ingress. | — |
 | `node.relay_ingress.client_ca` | string | PEM CA bundle; only client certs it signed are accepted. | — |
+
+## hosting
+
+| Key | Type | Description | Environment override |
+|---|---|---|---|
+| `hosting.mode` | string | self (default) or managed. Managed hosting adds an operations listener and refuses admin-class credentials on the public listener. | — |
+| `hosting.operations_address` | string | Managed hosting only: host:port of the operations listener, a loopback or private IP literal reachable by the control plane. | — |
+| `hosting.model_hosts` | list | Managed hosting only: bare host names of vouched model endpoints (the model gateway) that may resolve to a private address. | — |
+| `hosting.image_servers` | list | Managed hosting only: the image's loopback MCP servers as exact 127.0.0.1:<port> or [::1]:<port> pairs; only daemon-level mcp.servers URLs may reach them. | — |
+| `hosting.instance_id` | string | Managed hosting only: the instance's id (lowercase letters, digits, inner hyphens), named in a routed OAuth state. | — |
+| `hosting.previous_admin_api_key` | string | Managed hosting only: during an instance_admin key rotation, the previous key (still listed in api.api_keys and admin.allowed_keys, still accepted, never for a credential operation). Written and cleared by the rotation operation; empty otherwise. | — |
+| `hosting.oauth_redirect_uri` | string | Managed hosting only: the OAuth router's https redirect URI, under the parent domain of server.public_base_url; requires hosting.instance_id. | — |
+| `hosting.backup_bucket` | string | Managed hosting only: the backup bucket the owner export is read from, at instances/<hosting.instance_id>/exports/, with the instance's own role. Empty: exports are not configured. | — |
+| `hosting.backup_region` | string | Managed hosting only: the backup bucket's region; empty means storage.s3.region. | — |
 
 ## integrations
 

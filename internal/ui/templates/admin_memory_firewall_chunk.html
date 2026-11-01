@@ -128,7 +128,8 @@
         </div>
     </main>
 
-    <script>
+    <script type="application/json" id="mf-chunk-data">{"chunkID": {{.ChunkID}}}</script>
+<script>
     // Vanilla fetch — no JS framework dep. Submits the policy
     // form as a partial update (only non-empty fields land in
     // the body so the API's "nil = leave untouched" semantic is
@@ -160,7 +161,7 @@
                     body[k] = v;
                 }
             });
-            const chunkID = "{{.ChunkID}}";
+            const chunkID = JSON.parse(document.getElementById('mf-chunk-data').textContent).chunkID;
             try {
                 const resp = await fetch('/api/v1/admin/memory/policy/chunks/' + chunkID, {
                     method: 'POST',

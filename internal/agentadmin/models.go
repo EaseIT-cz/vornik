@@ -30,6 +30,10 @@ type ModelRoute struct {
 	SubProvider string
 	Endpoint    string
 	CLI         bool
+	// Provided marks a route to the hosting service's model gateway: in
+	// managed hosting, an endpoint whose host is in hosting.model_hosts
+	// (GitHub #582 P3). The resolver sets it; nothing else may.
+	Provided bool
 }
 
 // ModelResolver answers where the live router sends a model; false when the
@@ -47,6 +51,11 @@ type Destination struct {
 	// loopback or private address (round 2 F6: an operator running such an
 	// endpoint as a tunnel chose that route in their own config).
 	Local bool
+	// Provided is the hosting service's gateway (GitHub #582 P3): not local,
+	// and not a remote destination an approval must name. The owner accepted
+	// the provided models at sign-up, under the service's DPA; the gateway
+	// meters them.
+	Provided bool
 }
 
 // String is the approval key, "<sub-provider>@<endpoint host>".
@@ -89,7 +98,10 @@ func destinationOf(r ModelRoute, ok bool) (Destination, ModelRefusal) {
 		return Destination{}, ModelRefusal{RefusalNoEndpoint, fmt.Sprintf("the chat router sends it to %s, whose endpoint has no host", r.SubProvider)}
 	}
 	host := strings.ToLower(u.Hostname())
-	d := Destination{SubProvider: r.SubProvider, Host: host}
+	d := Destination{SubProvider: r.SubProvider, Host: host, Provided: r.Provided}
+	if r.Provided {
+		return d, ModelRefusal{}
+	}
 	if netguard.IsLocalHostname(host) {
 		d.Local = true
 	} else if ip := net.ParseIP(host); ip != nil && netguard.IsPrivateIP(ip) {
@@ -111,6 +123,9 @@ type CatalogueModel struct {
 // PriceLabel says the price as describe_installation shows it. An unpriced
 // entry is always local (round 3 F4) and records no charge.
 func (m CatalogueModel) PriceLabel() string {
+	if !m.Priced && m.Dest.Provided {
+		return "metered by the hosting service"
+	}
 	if !m.Priced {
 		return "no charge recorded"
 	}
@@ -119,6 +134,9 @@ func (m CatalogueModel) PriceLabel() string {
 
 // Where says local or remote, as describe_installation shows it.
 func (m CatalogueModel) Where() string {
+	if m.Dest.Provided {
+		return "provided by the hosting service"
+	}
 	if m.Dest.Local {
 		return "local"
 	}
@@ -169,7 +187,7 @@ func BuildCatalogue(specs []ModelSpec, resolve ModelResolver, price ModelPricer)
 		if price != nil {
 			m.InputUSDPerMillion, m.OutputUSDPerMillion, m.Priced = price(id)
 		}
-		if !m.Priced && !dest.Local {
+		if !m.Priced && !dest.Local && !dest.Provided {
 			findings = append(findings, CatalogueFinding{ID: id, Why: fmt.Sprintf("it is remote (%s) and pricing.yaml has no exact entry for it, so its spend could not be counted", dest.Words())})
 			continue
 		}
@@ -214,7 +232,7 @@ func RunModelRefusal(model string, specs []ModelSpec, resolve ModelResolver, app
 		refusal.Why = fmt.Sprintf("the model %q cannot run for an agent role: %s", model, refusal.Why)
 		return dest, refusal
 	}
-	if dest.Local || (approved != nil && approved(dest.String())) {
+	if dest.Local || dest.Provided || (approved != nil && approved(dest.String())) {
 		return dest, ModelRefusal{}
 	}
 	return dest, ModelRefusal{RefusalUnapproved, fmt.Sprintf("the model %q now sends the role's work to %s, which no approver device has approved for this namespace; define the swarm again to ask", model, dest.String())}
@@ -229,6 +247,8 @@ const (
 	// runsOnLocal: the live router sends the role's model to a loopback or
 	// private endpoint.
 	runsOnLocal = "local"
+	// runsOnProvided: the hosting service's gateway (GitHub #582 P3).
+	runsOnProvided = "provided"
 )
 
 // RoleRunsOn says where a role's model sends its work now, with the same
@@ -244,6 +264,9 @@ func RoleRunsOn(model string, specs []ModelSpec, resolve ModelResolver, approved
 	dest, refusal := RunModelRefusal(model, specs, resolve, approved)
 	switch refusal.Reason {
 	case "":
+		if dest.Provided {
+			return runsOnProvided
+		}
 		if dest.Local {
 			return runsOnLocal
 		}

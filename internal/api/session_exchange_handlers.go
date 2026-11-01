@@ -134,7 +134,7 @@ func (s *Server) SessionExchange(w http.ResponseWriter, r *http.Request) {
 		HttpOnly: false, Secure: secure, SameSite: http.SameSiteLaxMode,
 	})
 	http.SetCookie(w, &http.Cookie{
-		Name: authsession.UIMarkerCookieName, Value: navMarker(subject.Role), Path: "/", MaxAge: maxAge,
+		Name: authsession.UIMarkerCookieName, Value: navMarker(s.navRole(r, subject.Role)), Path: "/", MaxAge: maxAge,
 		// Decoration, never authority — the server re-resolves the real
 		// principal on every request.
 		HttpOnly: false, Secure: secure, SameSite: http.SameSiteLaxMode,
@@ -220,4 +220,15 @@ func WithSessionExchange(subjects exchangeSubjectResolver, minter sessionExchang
 		s.sessionLifetime = lifetime
 		s.insecureSessionsAllowed = allowInsecure
 	}
+}
+
+// navRole is the role the nav marker shows: the principal's, except that an
+// admin whose session the managed-hosting rule demotes shows as a user,
+// because the admin console refuses the owner (GitHub #560, M1b B4).
+func (s *Server) navRole(r *http.Request, role string) string {
+	if sb, ok := s.sessionBackend.(*authsession.SessionBackend); ok && role == authz.RoleAdmin &&
+		sb.DemoteAdmin != nil && sb.DemoteAdmin(r.Context()) {
+		return authz.RoleUser
+	}
+	return role
 }

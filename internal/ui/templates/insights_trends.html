@@ -8,10 +8,10 @@
     <main id="main" tabindex="-1" class="flex-1 max-w-7xl mx-auto w-full py-6 px-4 sm:px-6 lg:px-8 shell-offset">
         <div class="space-y-6">
             <div class="flex items-center justify-between gap-3 flex-wrap">
-                <h1 class="text-xl font-semibold text-gray-100">Trends</h1>
+                <h1 class="text-xl font-semibold text-gray-100">Trends{{template "hintOpen" "About this page"}}Daily task throughput and success rate over the last {{.Stats.Days}} days, from the most recent {{.Stats.Sample}} tasks (bucketed by creation date).{{template "hintClose"}}</h1>
                 {{if .AllowedProjects}}
                 <form method="get" action="/ui/insights/trends" class="flex items-center gap-2">
-                    <select name="projectId" onchange="this.form.submit()" class="text-sm bg-dark-800 border border-control text-gray-200 rounded-md px-2 py-1.5">
+                    <select name="projectId" data-on-change="submit-form" class="text-sm bg-dark-800 border border-control text-gray-200 rounded-md px-2 py-1.5">
                         <option value="">{{if .AllAccess}}All projects{{else}}All my projects{{end}}</option>
                         {{range .AllowedProjects}}
                         <option value="{{.}}" {{if eq . $.ProjectID}}selected{{end}}>{{.}}</option>
@@ -21,7 +21,6 @@
                 </form>
                 {{end}}
             </div>
-            <p class="text-[11px] text-gray-500">Daily task throughput and success rate over the last {{.Stats.Days}} days, from the most recent {{.Stats.Sample}} tasks (bucketed by creation date).</p>
 
             {{if .Notice}}
             <div class="glass rounded-xl border border-dark-700 px-5 py-8 text-center text-gray-500 text-sm">{{.Notice}}</div>
@@ -35,7 +34,7 @@
             </div>
 
             <div class="glass rounded-xl border border-dark-700 p-4 overflow-x-auto">
-                <h2 class="text-sm font-medium text-gray-300 mb-3">Daily throughput</h2>
+                <h2 class="text-sm font-medium text-gray-300 mb-3">Daily throughput{{template "hintOpen" "About this chart"}}Bar height = tasks created that day. Hover a bar for the day's completed/failed/success breakdown.{{template "hintClose"}}</h2>
                 <svg viewBox="0 0 {{.Stats.SVGWidth}} {{.Stats.SVGHeight}}" width="100%" role="img" aria-label="Daily task throughput">
                     {{range .Stats.Buckets}}
                     <rect x="{{.X}}" y="{{.BarY}}" width="22" height="{{.BarH}}" rx="2" fill="#60a5fa" opacity="0.85">
@@ -43,7 +42,6 @@
                     </rect>
                     {{end}}
                 </svg>
-                <p class="text-[11px] text-gray-500 mt-1">Bar height = tasks created that day. Hover a bar for the day's completed/failed/success breakdown.</p>
             </div>
 
             {{if .Verdicts.HasData}}
@@ -54,7 +52,7 @@
                 <div class="glass rounded-xl border border-dark-700 px-4 py-3"><div class="text-2xl font-semibold text-gray-100">{{.Verdicts.OverallAbstainPct}}%</div><div class="text-[11px] text-gray-500 mt-0.5">Abstain rate</div></div>
             </div>
             <div class="glass rounded-xl border border-dark-700 p-4 overflow-x-auto">
-                <h2 class="text-sm font-medium text-gray-300 mb-3">Daily judge verdicts</h2>
+                <h2 class="text-sm font-medium text-gray-300 mb-3">Daily judge verdicts{{template "hintOpen" "About this chart"}}Bar height = verdicts recorded that day. Hover for the pass/fail/abstain breakdown.{{template "hintClose"}}</h2>
                 <svg viewBox="0 0 {{.Verdicts.SVGWidth}} {{.Verdicts.SVGHeight}}" width="100%" role="img" aria-label="Daily judge verdicts">
                     {{range .Verdicts.Buckets}}
                     <rect x="{{.X}}" y="{{.BarY}}" width="22" height="{{.BarH}}" rx="2" fill="#fbbf24" opacity="0.85">
@@ -62,7 +60,6 @@
                     </rect>
                     {{end}}
                 </svg>
-                <p class="text-[11px] text-gray-500 mt-1">Bar height = verdicts recorded that day. Hover for the pass/fail/abstain breakdown.</p>
             </div>
             {{end}}
 

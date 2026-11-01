@@ -319,3 +319,22 @@ func TestOperatorAlert_EveryOutcomeIsCounted(t *testing.T) {
 		})
 	}
 }
+
+// GitHub #344 5d-1c (art17 redact design §15.16 correction 2): the erasure
+// escalation records an alert only after it was sent, so a send that fails,
+// or a notifier that cannot send, must say so.
+func TestSendOperator_ReportsFailure(t *testing.T) {
+	ch := &fakeChannel{name: "telegram"}
+	n, tg := newOperatorAlert(t, ch, OperatorAlertConfig{Channel: "telegram", Session: "555"}, true)
+	if err := n.SendOperator(context.Background(), "erasure", "row held"); err != nil || len(tg.sent) != 1 {
+		t.Fatalf("send = %v, sent %d", err, len(tg.sent))
+	}
+	unconfigured, _ := newOperatorAlert(t, ch, OperatorAlertConfig{}, true)
+	if err := unconfigured.SendOperator(context.Background(), "x", "y"); !errors.Is(err, ErrOperatorAlertUnavailable) {
+		t.Fatalf("unconfigured = %v", err)
+	}
+	var none *OperatorAlertNotifier
+	if err := none.SendOperator(context.Background(), "x", "y"); !errors.Is(err, ErrOperatorAlertUnavailable) {
+		t.Fatalf("nil = %v", err)
+	}
+}

@@ -9,21 +9,10 @@
         <div class="space-y-5">
             <div class="flex items-center gap-3">
                 <svg class="h-5 w-5 text-gray-400" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2"/></svg>
-                <h1 class="text-xl font-semibold text-gray-100">Memory Audit</h1>
+                <h1 class="text-xl font-semibold text-gray-100">Memory Audit{{template "hintOpen" "About this page"}}Per-call audit trail for memory-search retrievals and ingest deposits. Each row is stamped with the actor that initiated the call: <span class="font-mono text-gray-400">companion:&lt;client&gt;</span> for host-LLM-plugin calls, <span class="font-mono text-gray-400">agent</span> for in-workflow searches, <span class="font-mono text-gray-400">rest_api</span> / <span class="font-mono text-gray-400">ui</span> for operator-direct requests. Use this to answer "who pulled X out of memory?" and "where did this chunk come from?"{{template "hintClose"}}</h1>
                 <a href="/ui/admin/" class="text-xs text-brand-400 hover:text-brand-300 ml-auto">← Admin</a>
             </div>
 
-            <p class="text-sm text-gray-500">
-                Per-call audit trail for memory-search retrievals and ingest
-                deposits. Each row is stamped with the actor that initiated the
-                call: <span class="font-mono text-gray-400">companion:&lt;client&gt;</span>
-                for host-LLM-plugin calls,
-                <span class="font-mono text-gray-400">agent</span> for in-workflow
-                searches, <span class="font-mono text-gray-400">rest_api</span> /
-                <span class="font-mono text-gray-400">ui</span> for operator-direct
-                requests. Use this to answer "who pulled X out of memory?" and
-                "where did this chunk come from?"
-            </p>
 
             {{/* Tab strip — query-string driven so the browser back button
                  returns to the previous tab cleanly. */}}

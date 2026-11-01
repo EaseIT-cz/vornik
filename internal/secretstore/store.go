@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/aes"
 	"crypto/cipher"
+	"crypto/ed25519"
 	"crypto/hkdf"
 	"crypto/rand"
 	"crypto/sha256"
@@ -151,4 +152,19 @@ func (s *Store) Delete(ctx context.Context, ns, name string) error {
 		return err
 	}
 	return s.repo.Delete(ctx, ns, name)
+}
+
+// aimarkSigningSalt and aimarkSigningInfo are the HKDF domain of the AI
+// output-marking key (GitHub #117; Art 50 design §14.7). Its own salt keeps
+// it apart from every encryption key by construction (review 3701 F1). The
+// "k1" in the info is the key epoch: a rotation derives "k2" beside it.
+const (
+	aimarkSigningSalt = "vornik-aimark-signing"
+	aimarkSigningInfo = "aimark/ed25519/k1"
+)
+
+// AIMarkSigningSeed derives the Ed25519 seed that signs AI output marks.
+// Every daemon sharing the master key derives the same seed.
+func (s *Store) AIMarkSigningSeed() ([]byte, error) {
+	return hkdf.Key(sha256.New, s.master, []byte(aimarkSigningSalt), aimarkSigningInfo, ed25519.SeedSize)
 }

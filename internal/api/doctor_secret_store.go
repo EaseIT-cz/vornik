@@ -52,29 +52,10 @@ func (h *DoctorHandlers) checkSecretStoreKey(ctx context.Context, _ bool) Doctor
 	return DoctorCheck{Name: name, Status: "OK", Message: fmt.Sprintf("%d agent credential(s); key opens them", n)}
 }
 
-// errNothingSampled means rows were counted but none could be listed, so no
-// credential was opened and the key is unproven either way.
-var errNothingSampled = errors.New("rows were counted but none could be listed to sample")
-
 func sampleOpens(ctx context.Context, repo persistence.AgentSecretRepository, key []byte) error {
 	st, err := secretstore.New(repo, key)
 	if err != nil {
 		return err
 	}
-	nss, err := repo.ListNamespaces(ctx)
-	if err != nil {
-		return err
-	}
-	if len(nss) == 0 {
-		return errNothingSampled
-	}
-	metas, err := st.List(ctx, nss[0])
-	if err != nil {
-		return err
-	}
-	if len(metas) == 0 {
-		return errNothingSampled
-	}
-	_, err = st.Get(ctx, nss[0], metas[0].Name)
-	return err
+	return st.SampleOpens(ctx)
 }

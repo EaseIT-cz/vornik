@@ -347,6 +347,27 @@ You can configure `stt` alone (vornik transcribes incoming audio and replies
 with text) or `tts` alone (vornik reads its replies aloud) — you do not need
 both.
 
+### Voice replies are off by default (AI Act Art 50(2))
+
+Since 2026.11.1 vornik answers a voice message **in text** unless you opt in,
+even when `tts` is configured. The EU AI Act asks that synthetic audio be
+marked as AI-generated in a machine-readable way. Today vornik's voice replies
+carry metadata and a server-side record only, without an audio watermark. So
+sending them is a choice you make knowingly:
+
+```yaml
+voice:
+  synthetic_replies: true          # answer voice messages with speech
+  synthetic_replies_ack: true      # I accept: metadata and ledger only, no audio watermark yet
+  synthetic_replies_ack_basis: "Who accepted this and why, e.g. internal team use only"
+```
+
+All three are needed. If `synthetic_replies` is set without the other two, it
+is ignored (replies stay text) and the daemon logs what is missing. When it is
+on, the acceptance is recorded in the admin audit at startup, and
+`vornikctl doctor` shows it on every run (`synthetic_voice_replies`).
+Transcription of incoming voice messages is not affected.
+
 ### Good to know
 
 - `max_text_runes` caps how much text gets spoken (1500 is about 90 seconds).

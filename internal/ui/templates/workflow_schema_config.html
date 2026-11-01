@@ -36,7 +36,7 @@
             <div class="rounded-lg border border-red-500/30 bg-red-500/10 px-4 py-3 text-sm text-red-600 dark:text-red-200 whitespace-pre-wrap">{{.Error}}</div>
             {{end}}
 
-            <form method="POST" action="/ui/workflows/{{.WorkflowID}}/schema" class="space-y-5" onsubmit="wfRenumberCards()">
+            <form method="POST" action="/ui/workflows/{{.WorkflowID}}/schema" class="space-y-5" data-on-submit="wfRenumberCards">
                 {{range .TopSections}}
                 <details class="rounded-xl border border-dark-700 bg-dark-800/60" {{if not .Advanced}}open{{end}}>
                     <summary class="cursor-pointer select-none px-4 py-3 text-sm font-semibold text-gray-200">{{.Title}}{{if .Advanced}} <span class="text-[10px] uppercase tracking-wide text-gray-500 font-normal">advanced</span>{{end}}</summary>
@@ -55,7 +55,7 @@
                         </div>
                         <button type="button" id="add-step"
                                 data-card-url="/ui/workflows/{{.WorkflowID}}/schema/step"
-                                onclick="wfAddCard(this)"
+                                data-on-click="wfAddCard"
                                 class="px-3 py-1.5 rounded-md bg-dark-700 text-gray-100 hover:bg-dark-600 text-xs font-medium">Add {{.StepsSingular}}</button>
                     </div>
                     <div id="step-cards" class="space-y-3">
@@ -98,6 +98,14 @@
             .then(function (r) { return r.text(); })
             .then(function (html) { document.getElementById('step-cards').insertAdjacentHTML('beforeend', html); });
     }
+    </script>
+<script>
+    // #416 phase 3: this page's actions (web-ui-design.md, "C, phase 3"). Each
+    // calls its function at event time, so a script that defines it later
+    // (or again, after a swap) is the one that runs.
+    Vornik.action('wfAddCard', (el) => window.wfAddCard(el));
+    Vornik.action('wfRenumberCards', () => window.wfRenumberCards());
+    Vornik.action('wfMoveCard', (el, e, dir) => window.wfMoveCard(el, dir));
     </script>
 </body>
 </html>

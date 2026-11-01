@@ -129,7 +129,7 @@ func TestAccessToken_RefreshesBeforeExpiryNotAfter(t *testing.T) {
 	assert.Equal(t, "at-refreshed", got)
 	assert.Equal(t, 1, v.count())
 
-	stored, err := tokens.Get(context.Background(), "p1", "linear")
+	stored, err := tokens.Get(context.Background(), "p1", "linear", "")
 	require.NoError(t, err)
 	assert.Equal(t, "at-refreshed", stored.AccessToken)
 	assert.Equal(t, "rt-rotated", stored.RefreshToken, "the rotated refresh token must be persisted")
@@ -165,7 +165,7 @@ func TestAccessToken_ExpiredWithNoRefreshTokenNeedsReconnect(t *testing.T) {
 	require.Error(t, err)
 	assert.True(t, errors.Is(err, ErrNeedsReconnect), "got %v", err)
 
-	stored, err := tokens.Get(context.Background(), "p1", "linear")
+	stored, err := tokens.Get(context.Background(), "p1", "linear", "")
 	require.NoError(t, err)
 	assert.True(t, stored.NeedsReconnect, "the state must be recorded, not just returned")
 }
@@ -183,7 +183,7 @@ func TestAccessToken_InvalidGrantIsTerminal(t *testing.T) {
 	require.Error(t, err)
 	assert.True(t, errors.Is(err, ErrNeedsReconnect), "got %v", err)
 
-	stored, err := tokens.Get(context.Background(), "p1", "linear")
+	stored, err := tokens.Get(context.Background(), "p1", "linear", "")
 	require.NoError(t, err)
 	assert.True(t, stored.NeedsReconnect)
 
@@ -223,7 +223,7 @@ func TestAccessToken_TransientRefreshFailureLeavesTheGrantAlone(t *testing.T) {
 	require.Error(t, err)
 	assert.False(t, errors.Is(err, ErrNeedsReconnect), "a transient failure must not read as a revoked grant")
 
-	stored, err := tokens.Get(context.Background(), "p1", "linear")
+	stored, err := tokens.Get(context.Background(), "p1", "linear", "")
 	require.NoError(t, err)
 	assert.False(t, stored.NeedsReconnect)
 	assert.Equal(t, "rt-1", stored.RefreshToken, "the refresh token must survive a failed attempt")

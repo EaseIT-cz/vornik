@@ -83,6 +83,24 @@ type TradingDashboardData struct {
 	// orders → fills → safety events. Performance is deliberately FIRST so
 	// the operator sees realized P&L before the broker balance.
 	Perf tradingpnl.Performance
+	// PerfR is the window's results in R per entry order (GitHub #597);
+	// PerfRUnknown is its unknown-risk total.
+	PerfR             tradingpnl.RSummary
+	PerfRUnknown      int
+	PerfRProfitFactor string
+	PerfRAvgWinLoss   string
+	// VsBenchmark is the book's daily change on strategy capital beside the
+	// first benchmark symbol's close to close (GitHub #597).
+	VsBenchmarkSymbol string
+	VsBenchmark       []tradingpnl.VsRow
+	// EntrySignal is the entry funnel's forward outcomes per gate (GitHub
+	// #596); HasEntrySignal is false when no funnel store is wired.
+	EntrySignal     tradingpnl.FunnelSummary
+	HasEntrySignal  bool
+	EntrySignalRows []entrySignalRow
+	// Shadow is the rule engine's parity with the strategist (GitHub #598).
+	Shadow    tradingpnl.ShadowSummary
+	HasShadow bool
 
 	// PerfProfitFactor is the pre-formatted profit factor string: the
 	// decimal value when ProfitFactor != nil, otherwise "—" (so the
@@ -231,7 +249,16 @@ func (s *Server) Trading(w http.ResponseWriter, r *http.Request) {
 
 	// Trading Performance — compute realized round-trip P&L and equity
 	// curve for the window. Best-effort; nil repos silently skip each step.
-	data.Perf, data.PerfChart = s.buildTradingPerformance(r.Context(), project.ID, since, now)
+	var equityPts []tradingpnl.DailyPoint
+	data.Perf, data.PerfChart, data.PerfR, equityPts = s.buildTradingPerformance(r.Context(), project.ID, since, now)
+	data.VsBenchmarkSymbol, data.VsBenchmark = s.buildVsBenchmark(r.Context(), project, equityPts, since, now)
+	data.EntrySignal, data.HasEntrySignal = s.buildEntrySignal(r.Context(), project.ID, since)
+	data.EntrySignalRows = entrySignalRows(data.EntrySignal)
+	data.Shadow, data.HasShadow = s.buildShadow(r.Context(), project.ID, since)
+	for _, n := range data.PerfR.Unknown {
+		data.PerfRUnknown += n
+	}
+	data.PerfRProfitFactor, data.PerfRAvgWinLoss = formatRSummary(data.PerfR)
 	if data.Perf.ProfitFactor != nil {
 		data.PerfProfitFactor = fmt.Sprintf("%.2f", *data.Perf.ProfitFactor)
 	} else {
@@ -257,7 +284,7 @@ func (s *Server) buildTradingPerformance(
 	ctx context.Context,
 	projectID string,
 	windowStart, now time.Time,
-) (tradingpnl.Performance, perfChartData) {
+) (tradingpnl.Performance, perfChartData, tradingpnl.RSummary, []tradingpnl.DailyPoint) {
 	fillsSince := windowStart.Add(-30 * 24 * time.Hour) // open-position grace
 
 	// Step 1: load fills with extended lookback.
@@ -279,17 +306,19 @@ func (s *Server) buildTradingPerformance(
 
 	// Step 2: build sideByOrderID from the order repo.
 	sideByOrderID := make(map[string]string)
+	var orders []*persistence.TradingOrder
 	if s.tradingOrderRepo != nil && len(fills) > 0 {
 		oCtx, oCancel := context.WithTimeout(ctx, 4*time.Second)
 		defer oCancel()
 		pid := projectID
 		since := fillsSince
-		orders, err := s.tradingOrderRepo.List(oCtx, persistence.TradingOrderFilter{
+		rows, err := s.tradingOrderRepo.List(oCtx, persistence.TradingOrderFilter{
 			ProjectID: &pid,
 			Since:     &since,
 			PageSize:  perfFillsPageSize,
 		})
 		if err == nil {
+			orders = rows
 			for _, o := range orders {
 				if o != nil {
 					sideByOrderID[o.ID] = o.Action
@@ -301,6 +330,8 @@ func (s *Server) buildTradingPerformance(
 	// Step 3: pair fills into closed trades + aggregate metrics.
 	trades := tradingpnl.PairRoundTrips(fills, sideByOrderID)
 	perf := tradingpnl.Aggregate(trades, windowStart, now)
+	// Results in R per entry order (GitHub #597): the same trades and orders.
+	rsum := tradingpnl.RStats(tradingpnl.EntryResults(trades, orders), windowStart, now)
 
 	// Step 4: equity curve from snapshots.
 	var equityPts []tradingpnl.DailyPoint
@@ -317,7 +348,7 @@ func (s *Server) buildTradingPerformance(
 	merged := mergePerfDaily(perf.Daily, equityPts)
 	chart := layoutPerfChart(merged)
 
-	return perf, chart
+	return perf, chart, rsum, equityPts
 }
 
 // tradingSnapshotStaleAfter — the SOFT bound. A position snapshot older than
@@ -389,4 +420,98 @@ func (s *Server) lookupProject(id string) *registry.Project {
 		return nil
 	}
 	return s.projectReg.GetProject(id)
+}
+
+// formatRSummary renders the profit factors and the average win and loss of
+// an R summary. A side with no trades reads "none", never a zero that looks
+// like a result (GitHub #597).
+func formatRSummary(r tradingpnl.RSummary) (profitFactor, avgWinLoss string) {
+	profitFactor = "no losses"
+	if r.ProfitFactorR != nil && r.ProfitFactorUSD != nil {
+		profitFactor = fmt.Sprintf("%.2f in R, %.2f in $", *r.ProfitFactorR, *r.ProfitFactorUSD)
+	}
+	win, loss := "none", "none"
+	if r.AvgWinR > 0 {
+		win = fmt.Sprintf("%+.2fR", r.AvgWinR)
+	}
+	if r.AvgLossR < 0 {
+		loss = fmt.Sprintf("%+.2fR", r.AvgLossR)
+	}
+	return profitFactor, win + " / " + loss
+}
+
+// buildVsBenchmark lines the book's daily equity change, on the strategy
+// capital (the entry policy's max_gross_exposure_usd), up against the
+// project's first benchmark symbol (GitHub #597). Empty when either is not
+// configured or nothing is recorded yet.
+func (s *Server) buildVsBenchmark(ctx context.Context, project *registry.Project, equity []tradingpnl.DailyPoint, since, now time.Time) (string, []tradingpnl.VsRow) {
+	if s.tradingBenchmarkRepo == nil || project == nil || len(project.Trading.AnalysisEvidence.BenchmarkSymbols) == 0 {
+		return "", nil
+	}
+	capital := project.Trading.EntryPolicy.MaxGrossExposureUSD
+	symbol := project.Trading.AnalysisEvidence.BenchmarkSymbols[0]
+	bCtx, cancel := context.WithTimeout(ctx, 4*time.Second)
+	defer cancel()
+	closes, err := s.tradingBenchmarkRepo.Range(bCtx, symbol, since.AddDate(0, 0, -5), now)
+	if err != nil {
+		return symbol, nil
+	}
+	return symbol, tradingpnl.VsBenchmark(equity, closes, capital)
+}
+
+// buildEntrySignal summarizes the entry funnel recorded in the window
+// (GitHub #596). Measurement only.
+func (s *Server) buildEntrySignal(ctx context.Context, projectID string, since time.Time) (tradingpnl.FunnelSummary, bool) {
+	if s.tradingFunnelRepo == nil {
+		return tradingpnl.FunnelSummary{}, false
+	}
+	fCtx, cancel := context.WithTimeout(ctx, 4*time.Second)
+	defer cancel()
+	rows, err := s.tradingFunnelRepo.Since(fCtx, projectID, since)
+	if err != nil {
+		return tradingpnl.FunnelSummary{}, false
+	}
+	return tradingpnl.FunnelReport(rows), true
+}
+
+// entrySignalRow is one display row of the entry-signal block: the mean
+// return per horizon, or "pending" while no outcome is known yet.
+type entrySignalRow struct {
+	Name    string
+	N       int
+	Cells   [3]string
+	Touched string
+}
+
+func entrySignalRows(sum tradingpnl.FunnelSummary) []entrySignalRow {
+	rows := make([]entrySignalRow, 0, len(sum.Groups))
+	for _, g := range sum.Groups {
+		r := entrySignalRow{Name: g.Name, N: g.N, Touched: "pending"}
+		for i := range g.Known {
+			r.Cells[i] = "pending"
+			if g.Known[i] > 0 {
+				r.Cells[i] = fmt.Sprintf("%+.2f%%", 100*g.MeanRet[i])
+			}
+		}
+		if g.Known[2] > 0 {
+			r.Touched = fmt.Sprintf("%.0f%%", g.TouchedATR[2])
+		}
+		rows = append(rows, r)
+	}
+	return rows
+}
+
+// buildShadow summarizes the rule engine's shadow record in the window
+// (GitHub #598). Measurement only.
+func (s *Server) buildShadow(ctx context.Context, projectID string, since time.Time) (tradingpnl.ShadowSummary, bool) {
+	if s.tradingShadowRepo == nil {
+		return tradingpnl.ShadowSummary{}, false
+	}
+	sCtx, cancel := context.WithTimeout(ctx, 4*time.Second)
+	defer cancel()
+	rows, err := s.tradingShadowRepo.Since(sCtx, projectID, since)
+	if err != nil {
+		return tradingpnl.ShadowSummary{}, false
+	}
+	return tradingpnl.ShadowReport(rows), true
 }

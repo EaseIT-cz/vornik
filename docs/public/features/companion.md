@@ -1,11 +1,11 @@
 ---
 sources:
     - path: internal/api/companion_artifacts.go
-      sha256: b5f389b1d084f5708807a7080bf034009dd78ec499487525e2ac4d3f38e0bbf8
+      sha256: 3ad6022ea09f444eace44d417596dd259bd5a603307401b1309161255aa2110f
     - path: internal/api/companion_mcp.go
       sha256: 01f7c494025657d6195f169c81e7ebb2a4cc9e2374b08862a043d2685b0632c4
     - path: contrib/claude-code-companion/.claude-plugin/plugin.json
-      sha256: 3ef65903d76c454435210adae79c54379867457c245e7d56d85e1d428fdbb099
+      sha256: c6b11a28679ba4bcfc20ad9d8999972f8e8f6cca5529811baf43adc3decf073b
     - path: contrib/codex-companion/.codex-plugin/plugin.json
       sha256: 8ba365101517b05aaf0c88563cdf77a6065531373fea977b1e0e0bf5021e8742
 ---
@@ -124,6 +124,10 @@ is returned as text even when it is called `notes.png` or `dump.bin`. Binary
 files such as PDF return a signed download URL valid for five minutes, with a
 32 MiB download limit. Relay that URL to the user or channel; do not fetch the
 binary into model context. If it expires, call `read_artifact` again.
+
+A download of a file an agent produced carries the EU AI Act Art 50(2)
+machine-readable mark in its `AI-Disclosure` and `X-Vornik-AI-Mark` response
+headers. Uploaded and fetched files are not marked.
 
 For broker workflows, additional files are opt-in. The operator declares their
 original bare names in the workflow's YAML:
@@ -725,7 +729,13 @@ export VORNIK_COMPANION_TOKEN="sk-vornik-companion-…"   # the key from `compan
 
 For Claude Code, add the plugin from your vornik checkout's companion plugin
 directory (`claude --plugin-dir <path>/contrib/claude-code-companion`), or
-install it from the bundled plugin marketplace for a persistent setup. Once
+install it from the bundled plugin marketplace for a persistent setup.
+From plugin version 0.48.0 the environment variables are optional for Claude
+Code. When `VORNIK_URL` and `VORNIK_COMPANION_TOKEN` are unset, Claude Code
+asks for both when it enables the plugin, and keeps the key in your system's
+credential store. When set, the environment variables win. A hosted instance's
+**Connect your companion** page (`/ui/companion`) creates the key and shows
+these steps. Once
 loaded, the tools and slash commands are available in the session, and a
 start-up digest brings recently-completed delegations and fresh memory back into
 context.

@@ -33,9 +33,15 @@ import (
 // OIDC/RBAC machinery that *populates* a session's role is absent.
 //
 // Admin is instance-wide; user is scoped by the Identity's Projects.
+//
+// TenantAdmin is managed hosting's instance owner (GitHub #560;
+// 18-security-and-tenancy.md, "Amendment 2026-10-28 (#560, slice M1b)"): an
+// admin principal's session off the operations listener. It is not
+// admin-class; it is granted the operator surfaces api.TenantAdminMay names.
 const (
-	RoleAdmin = "admin"
-	RoleUser  = "user"
+	RoleAdmin       = "admin"
+	RoleUser        = "user"
+	RoleTenantAdmin = "tenant_admin"
 )
 
 // Session Extra keys. These are the CE-visible contract between whatever

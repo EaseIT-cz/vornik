@@ -76,7 +76,10 @@ func (c *Container) mcpConnector() *mcpconnect.Connector {
 			// An agent project's server names its authorization server in
 			// its own metadata: those calls go through the SSRF guard (P4.4).
 			HTTPFor: oauthPerServer,
-			Logger:  c.Logger.With().Str("component", "mcp-oauth").Logger(),
+			// GitHub #566 (§16): a managed instance with a router routes
+			// every sign-in through it.
+			Router: c.oauthRouter,
+			Logger: c.Logger.With().Str("component", "mcp-oauth").Logger(),
 		}
 		// §7.2a boot sweep: a redirect URI that changed while the daemon was down
 		// leaves stored DCR clients registered at the vendor under a callback this
@@ -120,7 +123,7 @@ func (c *Container) agentSealedTokens() *agenttokens.Repo {
 				if src.KeyErr != nil {
 					return nil, src.KeyErr
 				}
-				return nil, errors.New("no agent credential has been stored yet")
+				return nil, errors.New("no sealed credential can be read: the secret store key (store.key) does not exist yet")
 			}
 			return src.Store, nil
 		},
@@ -178,7 +181,7 @@ func (c *Container) mcpServerRef(projectID, serverName string) (mcpconnect.Serve
 		if !ok {
 			return mcpconnect.ServerRef{}, false
 		}
-		return mcpconnect.ServerRef{ServerName: s.Name, URL: s.URL, Auth: s.Auth}, true
+		return mcpconnect.ServerRef{ServerName: s.Name, URL: s.URL, Auth: s.Auth, FromDaemonConfig: true}, true
 	}
 
 	var proj *registry.Project
@@ -207,6 +210,7 @@ func (c *Container) mcpServerRef(projectID, serverName string) (mcpconnect.Serve
 		if s.Transport == "" {
 			if daemon, ok := daemonServers[s.Name]; ok {
 				ref.URL = daemon.URL
+				ref.FromDaemonConfig = true // URL provenance, whatever the credential's scope (#566 E3)
 				// The project's own auth block wins when it has one; the
 				// ambiguous both-sides case is refused at wiring time
 				// (mcpDesiredServers), not silently resolved here.
@@ -245,17 +249,42 @@ func (c *Container) mcpServerRef(projectID, serverName string) (mcpconnect.Serve
 // code exchange at a private address. An operator project's server may use
 // the operator's integrations.allowed_hosts and its own loopback URL host; an
 // agent project's server only its own loopback URL host (agentOAuthHTTP).
-func (c *Container) mcpOAuthClients() (*http.Client, func(projectID, serverURL string) *http.Client) {
+//
+// GitHub #566 (M7 E3): a ref whose URL came from config.yaml
+// (FromDaemonConfig) is checked first, ahead of the agent branch: in managed
+// hosting it gets ImageServerClient, the only client that may reach an
+// image-declared loopback server, and is otherwise the customer guard. So the
+// three choices are: an image-server-aware client for a config.yaml URL in
+// managed hosting, the agent client for an agent project's own server, and
+// the customer client for everything else.
+func (c *Container) mcpOAuthClients() (*http.Client, func(ref mcpconnect.ServerRef) *http.Client) {
 	var allowed []string
 	if c.Config != nil {
 		allowed = c.Config.Integrations.AllowedHosts
 	}
-	fallback := dialguard.DialGuard{AllowedHosts: append([]string(nil), allowed...)}.HTTPClient(mcpOAuthHTTPTimeout)
-	perServer := func(projectID, serverURL string) *http.Client {
-		if h := agentOAuthHTTP(projectID, serverURL); h != nil {
+	// GitHub #560 (M1c D5): both through CustomerURLClient, so managed
+	// hosting refuses loopback and cross-host redirects; self-hosted they are
+	// the guards they were (LoopbackURLGuard("", allowed) is AllowedHosts only).
+	fallback := dialguard.CustomerURLClient("", allowed, mcpOAuthHTTPTimeout)
+	managed := c.Config != nil && c.Config.Hosting.Managed()
+	perServer := func(ref mcpconnect.ServerRef) *http.Client {
+		if managed && ref.FromDaemonConfig {
+			return dialguard.ImageServerClient(ref.URL, mcpOAuthHTTPTimeout)
+		}
+		if h := agentOAuthHTTP(ref.ProjectID, ref.URL); h != nil {
 			return h
 		}
-		return dialguard.LoopbackURLGuard(serverURL, allowed).HTTPClient(mcpOAuthHTTPTimeout)
+		return dialguard.CustomerURLClient(ref.URL, allowed, mcpOAuthHTTPTimeout)
 	}
 	return fallback, perServer
+}
+
+// oauthRouter is the EaseIT OAuth router of a managed instance (GitHub #566,
+// mcp-server-authentication-design.md §16 R1, R2): its redirect URI and the
+// instance id, or empty when none is configured. Validate has checked both.
+func (c *Container) oauthRouter() (redirectURI, instanceID string) {
+	if c.Config == nil || !c.Config.Hosting.Managed() {
+		return "", ""
+	}
+	return c.Config.Hosting.OAuthRedirectURI, c.Config.Hosting.InstanceID
 }

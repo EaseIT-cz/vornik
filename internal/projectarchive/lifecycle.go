@@ -19,6 +19,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"vornik.io/vornik/internal/configlock"
 
 	"vornik.io/vornik/internal/safepath"
 )
@@ -345,6 +346,11 @@ func (s *LifecycleService) checkPrereqs(projectID string) error {
 // atomically. Uses os.Rename for the swap so a crash mid-write
 // leaves either the old or the new content — never a partial.
 func (s *LifecycleService) applyPatches(projectID string, patches []PatchOp) error {
+	// The process's one config-write lock (GitHub #584,
+	// operations-api-contract-design.md §6.6): the read, patch and write of
+	// the project's config, like every other config writer.
+	unlock := configlock.Lock()
+	defer unlock()
 	path, err := s.projectYAMLPath(projectID)
 	if err != nil {
 		return err

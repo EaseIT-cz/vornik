@@ -99,6 +99,24 @@ func TestAgentImageSmokeBuildsAndRunsAsNonRoot(t *testing.T) {
 	if !strings.Contains(string(idOut), wantUID) {
 		t.Fatalf("agent image must run as %s (the build uid); got: %s", wantUID, idOut)
 	}
+
+	// GitHub #569 R6: the scripts that drive the container are root-owned and
+	// not writable by the agent user, whatever the read-only-root setting.
+	permOut, err := exec.Command(
+		"podman", "run", "--rm", "--entrypoint", "sh", agentImageTag, "-c",
+		`stat -c '%U %a %n' /entrypoint.sh /tool_registry.generated.sh; for f in /entrypoint.sh /tool_registry.generated.sh; do [ -w "$f" ] && echo "writable $f"; done; true`,
+	).CombinedOutput()
+	if err != nil {
+		t.Fatalf("podman run stat failed: %v\n%s", err, permOut)
+	}
+	for _, want := range []string{"root 755 /entrypoint.sh", "root 644 /tool_registry.generated.sh"} {
+		if !strings.Contains(string(permOut), want) {
+			t.Errorf("agent image script ownership: want %q in %s", want, permOut)
+		}
+	}
+	if strings.Contains(string(permOut), "writable") {
+		t.Errorf("the agent user can write a script that drives its container: %s", permOut)
+	}
 	if uid != 0 && strings.Contains(string(idOut), "uid=0(") {
 		t.Fatalf("agent image is still running as root: %s", idOut)
 	}

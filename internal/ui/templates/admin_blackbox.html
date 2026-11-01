@@ -37,7 +37,7 @@
             {{else}}
             <form method="get" action="/ui/admin/blackbox/{{.PrefilledTask}}"
                   class="glass rounded-xl border border-dark-700 px-4 py-3 flex items-end gap-3 text-sm"
-                  onsubmit="event.preventDefault(); var v = this.task_id.value.trim(); if (v) window.location.href = '/ui/admin/blackbox/' + encodeURIComponent(v);">
+                  data-on-submit="openBlackbox">
                 <label class="block flex-1 max-w-xl">
                     <span class="block text-xs text-gray-500 uppercase tracking-wider mb-1">Task ID</span>
                     <input type="text" name="task_id" value="{{.PrefilledTask}}" placeholder="e.g. T-20260524abc123" class="w-full bg-dark-700 border border-control text-gray-200 text-xs rounded-md px-2 py-1 font-mono" autofocus>
@@ -73,7 +73,7 @@
                 <div class="overflow-x-auto">
                     <table class="min-w-full">
                         <thead><tr class="border-b border-dark-700/60">
-                            <th scope="col" class="px-4 py-2 text-left text-[10px] font-medium text-gray-500 uppercase tracking-wider"><input type="checkbox" onclick="document.querySelectorAll('input[name=ids]').forEach(c=>c.checked=this.checked);" aria-label="Select all"></th>
+                            <th scope="col" class="px-4 py-2 text-left text-[10px] font-medium text-gray-500 uppercase tracking-wider"><input type="checkbox" data-on-click="check-all" data-name="ids" aria-label="Select all"></th>
                             <th scope="col" class="px-4 py-2 text-left text-[10px] font-medium text-gray-500 uppercase tracking-wider">Status</th>
                             <th scope="col" class="px-4 py-2 text-left text-[10px] font-medium text-gray-500 uppercase tracking-wider">Project / Workflow</th>
                             <th scope="col" class="px-4 py-2 text-left text-[10px] font-medium text-gray-500 uppercase tracking-wider">Class</th>
@@ -145,6 +145,12 @@
     </main>
 
     {{template "pageFooter" .}}
+<script>
+    // #416 phase 3: this page's actions (web-ui-design.md, "C, phase 3"). Each
+    // calls its function at event time, so a script that defines it later
+    // (or again, after a swap) is the one that runs.
+    Vornik.action('openBlackbox', (el, e) => { e.preventDefault(); var v = el.task_id.value.trim(); if (v) window.location.href = '/ui/admin/blackbox/' + encodeURIComponent(v); });
+    </script>
 </body>
 </html>
 {{end}}

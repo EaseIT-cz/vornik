@@ -55,13 +55,15 @@ func WithToolCredentials(mappings []ToolCredentialMapping, repo persistence.Task
 // one tool-audit entry's raw output, if the tool matches a configured mapping.
 // Best-effort: any miss (no mapping, unparseable output, absent field,
 // strong-pattern value, store error) logs and returns without failing the step.
-func (e *Executor) captureToolCredential(ctx context.Context, task *persistence.Task, execution *persistence.Execution, tool, rawOutput string) {
+// It returns the value it stored, "" when it stored nothing, so the caller can
+// keep it out of the audit row (#578 B2).
+func (e *Executor) captureToolCredential(ctx context.Context, task *persistence.Task, execution *persistence.Execution, tool, rawOutput string) string {
 	if len(e.toolCredentialMappings) == 0 || e.taskCredentialRepo == nil {
-		return
+		return ""
 	}
 	m, ok := e.matchCredentialMapping(tool)
 	if !ok {
-		return
+		return ""
 	}
 	var (
 		value       string
@@ -80,7 +82,7 @@ func (e *Executor) captureToolCredential(ctx context.Context, task *persistence.
 		if !ok {
 			e.logger.Debug().Str("tool", tool).Str("execution_id", execution.ID).
 				Msg("tool-credential: output not parseable as JSON — no capture")
-			return
+			return ""
 		}
 		value, _ = lookupDottedPath(obj, m.CredentialField)
 		if m.ArtifactField != "" {
@@ -90,19 +92,24 @@ func (e *Executor) captureToolCredential(ctx context.Context, task *persistence.
 	if value == "" {
 		e.logger.Debug().Str("tool", tool).
 			Msg("tool-credential: credential value absent/empty — no capture")
-		return
+		return ""
 	}
 	// Strong-pattern denylist: even from a trusted tool + correct mapping, a
 	// value matching a strong, prefix-anchored credential pattern (openai/
 	// anthropic/github/aws/jwt/…) is refused — those always redact. Only the
 	// heuristic (generic_kv/entropy) shape, which a viewing password takes, is
 	// eligible. Uses the redactor's own registry (no ad-hoc list here).
-	if e.secretsDetector != nil {
-		if len(dropHeuristicFindings(e.secretsDetector.Scan([]byte(value)))) > 0 {
-			e.logger.Debug().Str("tool", tool).
-				Msg("tool-credential: value matches a strong secret pattern — refusing capture")
-			return
-		}
+	// No detector, no capture (#578 B1a): the strong-pattern check below is
+	// what keeps a real API key out of the carryover.
+	if e.secretsDetector == nil {
+		e.logger.Warn().Str("tool", tool).
+			Msg("tool-credential: no secrets detector wired — refusing capture")
+		return ""
+	}
+	if len(dropHeuristicFindings(e.secretsDetector.Scan([]byte(value)))) > 0 {
+		e.logger.Debug().Str("tool", tool).
+			Msg("tool-credential: value matches a strong secret pattern — refusing capture")
+		return ""
 	}
 	cred := &persistence.TaskCredential{
 		TaskID:      task.ID,
@@ -115,7 +122,7 @@ func (e *Executor) captureToolCredential(ctx context.Context, task *persistence.
 	if err := e.taskCredentialRepo.Upsert(ctx, cred); err != nil {
 		e.logger.Error().Err(err).Str("tool", tool).Str("execution_id", execution.ID).
 			Msg("tool-credential: failed to store captured credential")
-		return
+		return ""
 	}
 	e.logger.Info().
 		Str("tool", tool).
@@ -124,6 +131,7 @@ func (e *Executor) captureToolCredential(ctx context.Context, task *persistence.
 		Str("task_id", task.ID).
 		Str("execution_id", execution.ID).
 		Msg("tool-credential: captured operator-facing credential")
+	return value
 }
 
 // matchCredentialMapping returns the first mapping whose Tool is a prefix of
@@ -255,5 +263,21 @@ func stringifyScalar(v any) (string, bool) {
 		return strconv.FormatBool(x), true
 	default:
 		return "", false
+	}
+}
+
+// scrubCarriedCredential replaces a carried value in the stored audit rows of
+// one execution and tool, whichever writer stored them (#578 B2).
+func (e *Executor) scrubCarriedCredential(ctx context.Context, executionID, tool, value string) {
+	scrub, ok := e.auditRepo.(persistence.ToolAuditValueScrubber)
+	if !ok {
+		e.logger.Warn().Str("tool", tool).Msg("tool-credential: the audit store cannot scrub a stored row; the carried value may remain in it")
+		return
+	}
+	for _, form := range CarriedCredentialForms(value) {
+		if _, err := scrub.ReplaceOutputValue(ctx, executionID, tool, form, CarriedCredentialMarker); err != nil {
+			e.logger.Error().Err(err).Str("tool", tool).Str("execution_id", executionID).
+				Msg("tool-credential: scrubbing the stored audit row failed")
+		}
 	}
 }

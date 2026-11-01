@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"strings"
 	"time"
 
 	"vornik.io/vornik/internal/persistence"
@@ -46,12 +47,21 @@ func (r *AgentGrantRepository) UpsertIntegration(ctx context.Context, a persiste
 	// same rule (design §6.5, amendment #481): a re-add, which the person
 	// approves on the device, starts with none; any other upsert keeps them,
 	// and none is ever taken from a.
-	_, err := r.db.ExecContext(ctx, `
+	//
+	// A label a user's own live account of the connection holds is refused
+	// (GitHub #571 U3b, §15.3a C6): the guard is part of this one statement,
+	// which SQLite's single writer makes atomic, so no create can slip
+	// between the check and the write. Its WHERE also keeps SQLite's parser
+	// from reading ON CONFLICT as a join constraint.
+	res, err := r.db.ExecContext(ctx, `
 		INSERT INTO agent_integration_approvals
 			(namespace, project_id, integration, kind, url, read_tools, write_tools, read_pending, approved_by_device, approved_at, removed_at,
 			 account_label, account_identity, identity_source)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?)
-		ON CONFLICT (project_id, integration) DO UPDATE SET
+		SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?
+		 WHERE NOT EXISTS (SELECT 1 FROM agent_integration_approvals o
+		                    WHERE o.project_id = ? AND o.integration = ? AND o.owner_user_id IS NOT NULL
+		                      AND o.removed_at IS NULL AND o.account_label = ?)
+		ON CONFLICT (project_id, integration) WHERE owner_user_id IS NULL DO UPDATE SET
 			namespace = excluded.namespace, kind = excluded.kind, url = excluded.url,
 			read_tools = excluded.read_tools, write_tools = excluded.write_tools,
 			read_pending = excluded.read_pending, approved_by_device = excluded.approved_by_device,
@@ -63,15 +73,69 @@ func (r *AgentGrantRepository) UpsertIntegration(ctx context.Context, a persiste
 			suspended_at = CASE WHEN agent_integration_approvals.removed_at IS NOT NULL THEN NULL ELSE agent_integration_approvals.suspended_at END`,
 		a.Namespace, a.ProjectID, a.Integration, a.Kind, a.URL, grantToolsJSON(a.ReadTools), grantToolsJSON(a.WriteTools),
 		boolToInt(a.ReadPending), a.ApprovedByDevice, sqliteTime(a.ApprovedAt),
-		a.StoredAccountLabel(), a.AccountIdentity, a.IdentitySource)
-	return err
+		a.StoredAccountLabel(), a.AccountIdentity, a.IdentitySource,
+		a.ProjectID, a.Integration, a.StoredAccountLabel())
+	if err != nil {
+		return err
+	}
+	if n, err := res.RowsAffected(); err != nil {
+		return err
+	} else if n == 0 {
+		return persistence.ErrAccountLabelTaken
+	}
+	return nil
+}
+
+// CreateOwnedIntegration implements persistence.AgentGrantRepository: one
+// guarded statement, as UpsertIntegration (§15.3a C6).
+func (r *AgentGrantRepository) CreateOwnedIntegration(ctx context.Context, a persistence.AgentIntegrationApproval) error {
+	if a.OwnerUserID == "" {
+		return errors.New("persistence: an owned account names its owner")
+	}
+	res, err := r.db.ExecContext(ctx, `
+		INSERT INTO agent_integration_approvals
+			(namespace, project_id, integration, kind, url, read_tools, write_tools, read_pending, approved_by_device, approved_at, removed_at,
+			 account_label, account_identity, identity_source, owner_user_id)
+		SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, ?
+		 WHERE NOT EXISTS (SELECT 1 FROM agent_integration_approvals s
+		                    WHERE s.project_id = ? AND s.integration = ? AND s.owner_user_id IS NULL
+		                      AND s.removed_at IS NULL AND s.account_label = ?)`,
+		a.Namespace, a.ProjectID, a.Integration, a.Kind, a.URL, grantToolsJSON(a.ReadTools), grantToolsJSON(a.WriteTools),
+		boolToInt(a.ReadPending), a.ApprovedByDevice, sqliteTime(a.ApprovedAt),
+		a.StoredAccountLabel(), a.AccountIdentity, a.IdentitySource, a.OwnerUserID,
+		a.ProjectID, a.Integration, a.StoredAccountLabel())
+	if err != nil {
+		if strings.Contains(err.Error(), "UNIQUE constraint failed") {
+			return persistence.ErrDuplicateKey
+		}
+		return err
+	}
+	if n, err := res.RowsAffected(); err != nil {
+		return err
+	} else if n == 0 {
+		return persistence.ErrAccountLabelTaken
+	}
+	return nil
+}
+
+// GetOwnedIntegration implements persistence.AgentGrantRepository.
+func (r *AgentGrantRepository) GetOwnedIntegration(ctx context.Context, projectID, integration, owner string) (*persistence.AgentIntegrationApproval, error) {
+	a, err := scanAgentIntegration(r.db.QueryRowContext(ctx, `SELECT `+agentIntegrationCols+` FROM agent_integration_approvals
+		WHERE project_id = ? AND integration = ? AND owner_user_id = ?`, projectID, integration, owner))
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, persistence.ErrNotFound
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &a, nil
 }
 
 // SetIntegrationIdentity implements persistence.AgentGrantRepository.
 func (r *AgentGrantRepository) SetIntegrationIdentity(ctx context.Context, projectID, integration, identity string) error {
 	res, err := r.db.ExecContext(ctx, `UPDATE agent_integration_approvals
 		SET account_identity = ?, identity_source = CASE WHEN ? = '' THEN '' ELSE 'provider' END
-		WHERE project_id = ? AND integration = ? AND removed_at IS NULL`,
+		WHERE project_id = ? AND integration = ? AND removed_at IS NULL AND owner_user_id IS NULL`,
 		identity, identity, projectID, integration)
 	if err != nil {
 		return err
@@ -84,7 +148,7 @@ func (r *AgentGrantRepository) SetIntegrationIdentity(ctx context.Context, proje
 	return nil
 }
 
-const agentIntegrationCols = `namespace, project_id, integration, kind, url, read_tools, write_tools, read_pending, approved_by_device, approved_at, removed_at, account_label, account_identity, identity_source, suspended_tools, suspended_at`
+const agentIntegrationCols = `namespace, project_id, integration, kind, url, read_tools, write_tools, read_pending, approved_by_device, approved_at, removed_at, account_label, account_identity, identity_source, suspended_tools, suspended_at, owner_user_id`
 
 func scanAgentIntegration(s interface{ Scan(...interface{}) error }) (persistence.AgentIntegrationApproval, error) {
 	var (
@@ -95,11 +159,13 @@ func scanAgentIntegration(s interface{ Scan(...interface{}) error }) (persistenc
 		approved    sqlTime
 		removed     sqlNullTime
 		suspendedAt sqlNullTime
+		owner       sql.NullString
 	)
 	if err := s.Scan(&a.Namespace, &a.ProjectID, &a.Integration, &a.Kind, &a.URL, &read, &write, &pending, &a.ApprovedByDevice, &approved, &removed,
-		&a.AccountLabel, &a.AccountIdentity, &a.IdentitySource, &suspended, &suspendedAt); err != nil {
+		&a.AccountLabel, &a.AccountIdentity, &a.IdentitySource, &suspended, &suspendedAt, &owner); err != nil {
 		return a, err
 	}
+	a.OwnerUserID = owner.String
 	a.ReadTools, a.WriteTools, a.ReadPending, a.ApprovedAt = grantToolsFrom(read), grantToolsFrom(write), pending != 0, approved.Time
 	if removed.Valid {
 		t := removed.Time
@@ -117,7 +183,7 @@ func scanAgentIntegration(s interface{ Scan(...interface{}) error }) (persistenc
 
 // GetIntegration implements persistence.AgentGrantRepository.
 func (r *AgentGrantRepository) GetIntegration(ctx context.Context, projectID, integration string) (*persistence.AgentIntegrationApproval, error) {
-	a, err := scanAgentIntegration(r.db.QueryRowContext(ctx, `SELECT `+agentIntegrationCols+` FROM agent_integration_approvals WHERE project_id = ? AND integration = ?`, projectID, integration))
+	a, err := scanAgentIntegration(r.db.QueryRowContext(ctx, `SELECT `+agentIntegrationCols+` FROM agent_integration_approvals WHERE project_id = ? AND integration = ? AND owner_user_id IS NULL`, projectID, integration))
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, persistence.ErrNotFound
 	}
@@ -129,7 +195,7 @@ func (r *AgentGrantRepository) GetIntegration(ctx context.Context, projectID, in
 
 // ListIntegrations implements persistence.AgentGrantRepository.
 func (r *AgentGrantRepository) ListIntegrations(ctx context.Context, namespace string) ([]persistence.AgentIntegrationApproval, error) {
-	rows, err := r.db.QueryContext(ctx, `SELECT `+agentIntegrationCols+` FROM agent_integration_approvals WHERE namespace = ? ORDER BY project_id, integration`, namespace)
+	rows, err := r.db.QueryContext(ctx, `SELECT `+agentIntegrationCols+` FROM agent_integration_approvals WHERE namespace = ? AND owner_user_id IS NULL ORDER BY project_id, integration`, namespace)
 	if err != nil {
 		return nil, err
 	}
@@ -160,7 +226,7 @@ func (r *AgentGrantRepository) SuspendIntegrationTools(ctx context.Context, proj
 			suspendedRaw      sql.NullString
 		)
 		err := r.db.QueryRowContext(ctx, `SELECT suspended_tools, approved_at, suspended_at FROM agent_integration_approvals
-			WHERE project_id = ? AND integration = ? AND removed_at IS NULL`, projectID, integration).Scan(&have, &approvedRaw, &suspendedRaw)
+			WHERE project_id = ? AND integration = ? AND removed_at IS NULL AND owner_user_id IS NULL`, projectID, integration).Scan(&have, &approvedRaw, &suspendedRaw)
 		if errors.Is(err, sql.ErrNoRows) {
 			return persistence.ErrNotFound
 		}
@@ -183,7 +249,7 @@ func (r *AgentGrantRepository) SuspendIntegrationTools(ctx context.Context, proj
 			at = suspendedRaw.String
 		}
 		res, err := r.db.ExecContext(ctx, `UPDATE agent_integration_approvals SET suspended_tools = ?, suspended_at = ?
-			WHERE project_id = ? AND integration = ? AND removed_at IS NULL AND suspended_tools = ? AND approved_at = ?`,
+			WHERE project_id = ? AND integration = ? AND removed_at IS NULL AND owner_user_id IS NULL AND suspended_tools = ? AND approved_at = ?`,
 			next, at, projectID, integration, have, approvedRaw)
 		if err != nil {
 			return err
@@ -200,7 +266,7 @@ func (r *AgentGrantRepository) SuspendIntegrationTools(ctx context.Context, proj
 // ListSuspendedIntegrations implements persistence.AgentGrantRepository.
 func (r *AgentGrantRepository) ListSuspendedIntegrations(ctx context.Context) ([]persistence.AgentIntegrationApproval, error) {
 	rows, err := r.db.QueryContext(ctx, `SELECT `+agentIntegrationCols+` FROM agent_integration_approvals
-		WHERE removed_at IS NULL AND suspended_tools <> '[]' ORDER BY project_id, integration`)
+		WHERE removed_at IS NULL AND owner_user_id IS NULL AND suspended_tools <> '[]' ORDER BY project_id, integration`)
 	if err != nil {
 		return nil, err
 	}
@@ -218,7 +284,7 @@ func (r *AgentGrantRepository) ListSuspendedIntegrations(ctx context.Context) ([
 
 // MarkIntegrationRemoved implements persistence.AgentGrantRepository.
 func (r *AgentGrantRepository) MarkIntegrationRemoved(ctx context.Context, projectID, integration string, at time.Time) error {
-	_, err := r.db.ExecContext(ctx, `UPDATE agent_integration_approvals SET removed_at = ? WHERE project_id = ? AND integration = ? AND removed_at IS NULL`,
+	_, err := r.db.ExecContext(ctx, `UPDATE agent_integration_approvals SET removed_at = ? WHERE project_id = ? AND integration = ? AND removed_at IS NULL AND owner_user_id IS NULL`,
 		sqliteTime(at), projectID, integration)
 	return err
 }

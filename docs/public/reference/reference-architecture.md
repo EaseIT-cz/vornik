@@ -1,13 +1,13 @@
 ---
 sources:
     - path: internal/service/container_scheduler.go
-      sha256: e8ed2e7d862b3cca2c043410ad8ee10bcd0b116719e41f6b1289b3cbd911845c
+      sha256: ddb5d67d7bc79e40a6f6460e9594ea1f1206427b7ced99ef8e1aaaebfe818e39
     - path: internal/service/memory_adapter.go
-      sha256: d4803455c2c470a9a242d5332a5d095c123e1ec628394e74565fd92fa9e6d0da
+      sha256: 86b8a3bfab72043cf419f604632af77e8f11268b463bb74b97d2ab4bda387a49
     - path: internal/memory/reranker.go
       sha256: 88e93ebb3925fd546e7d93be65ab66367d278ef2e685d748d6d0804f0b367d5a
     - path: internal/config/config.go
-      sha256: 97124b0fc664025a8a47edf859084b16343438129b078aa27be8a88c3fb6bff4
+      sha256: 2908858f50540e2c7973be2f308d559b0811c622faabcad546cb5adcf36854c3
 ---
 # Reference architecture
 
@@ -530,8 +530,10 @@ sentence, and the status column says where those differ.
 What this table does **not** cover: host hardening outside vornik (the kernel, podman,
 SELinux policy), the database server's own access control, and model-provider
 behaviour. It is not an exhaustive list of boundaries either: properties observed
-without a test are not registered, for example that the agent step runs without a
-read-only root or a pids limit (the sandbox one-shots have both), and that container
+without a test are not registered, for example that by default the agent step runs
+without a read-only root or a pids limit (the sandbox one-shots have both; set
+`runtime.agent_read_only_root` and `runtime.agent_pids_limit` to add them, and
+managed hosting always does), and that container
 environment values, which the logs redact, are visible to host users through the
 process table and `podman inspect`. A container escape reaches the host kernel; optional microVM isolation
 is designed but not built.

@@ -67,7 +67,7 @@
              hx-ext="sse"
              sse-connect="/ui/tasks/{{.Task.ID}}/events"
              hx-get="/ui/tasks/{{.Task.ID}}/status"
-             hx-trigger="sse:status, every 30s [!document.body.classList.contains('poll-stopped')]"
+             hx-trigger="sse:status, every 30s" data-poll
              hx-swap="innerHTML"
              hx-target="#task-status-pill-mobile">
             {{statusPill (printf "%s" .Task.Status)}}
@@ -87,7 +87,7 @@
                     <div id="task-status-pill" class="flex items-center gap-2 mb-1"
                          {{if or (eq .Task.Status "QUEUED") (eq .Task.Status "PENDING") (eq .Task.Status "LEASED") (eq .Task.Status "RUNNING") (eq .Task.Status "WAITING_FOR_CHILDREN")}}
                          hx-get="/ui/tasks/{{.Task.ID}}/status"
-                         hx-trigger="every 5s [!document.body.classList.contains('poll-stopped')]"
+                         hx-trigger="every 5s" data-poll
                          hx-swap="innerHTML"
                          hx-target="#task-status-pill"
                          {{end}}>
@@ -320,7 +320,7 @@
                            autocomplete="off"
                            aria-label="Search messages"
                            class="w-full bg-surface-900 border border-control rounded-lg px-3 py-1.5 text-sm text-ink-200 focus:border-brand-500 focus:outline-none"
-                           oninput="convSearchFilter(this.value)" onkeydown="if(event.key==='Escape'){this.value='';convSearchFilter('');}">
+                           data-on-input="convSearchFilter" data-on-keydown="escape-clear">
                 </div>
                 <div id="conv-thread" class="px-5 py-4 space-y-3 max-h-[60vh] overflow-y-auto">
                     {{/* Same-author grouping: when the previous message
@@ -416,7 +416,7 @@
                         <div class="flex items-center justify-between gap-3 flex-wrap">
                             <label class="text-xs text-ink-400 flex items-center gap-2 cursor-pointer select-none">
                                 <input type="checkbox" id="taskComposeAsDirectiveDesktop"
-                                       onchange="document.getElementById('taskComposeFormDesktop').action = this.checked ? '/ui/tasks/{{.Task.ID}}/directive' : '/ui/tasks/{{.Task.ID}}/message'"
+                                       data-on-change="set-form-action" data-form="taskComposeFormDesktop" data-action-on="/ui/tasks/{{.Task.ID}}/directive" data-action-off="/ui/tasks/{{.Task.ID}}/message"
                                        class="rounded border-control bg-surface-900 text-purple-800 dark:text-purple-500 focus:ring-purple-500/40">
                                 <span>As a course correction (directive — requeues failed/cancelled tasks)</span>
                             </label>
@@ -434,7 +434,7 @@
                 <form method="POST" action="/ui/tasks/{{.Task.ID}}/message" id="taskComposeFormMobile">
                     <div class="flex items-center justify-between px-4 py-3 border-b border-surface-600">
                         <h2 class="text-sm font-semibold">Compose</h2>
-                        <button type="button" onclick="composeSheet.close()" class="tap p-1 text-ink-400" aria-label="Close">
+                        <button type="button" data-on-click="close-modal" data-dialog="composeSheet" class="tap p-1 text-ink-400" aria-label="Close">
                             <svg class="h-5 w-5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12"/></svg>
                         </button>
                     </div>
@@ -444,7 +444,7 @@
                                   class="w-full bg-surface-900 border border-control rounded-lg px-3 py-2 text-base text-ink-100" required></textarea>
                         <label class="text-xs text-ink-300 flex items-center gap-2 cursor-pointer select-none">
                             <input type="checkbox" id="taskComposeAsDirectiveMobile"
-                                   onchange="document.getElementById('taskComposeFormMobile').action = this.checked ? '/ui/tasks/{{.Task.ID}}/directive' : '/ui/tasks/{{.Task.ID}}/message'"
+                                   data-on-change="set-form-action" data-form="taskComposeFormMobile" data-action-on="/ui/tasks/{{.Task.ID}}/directive" data-action-off="/ui/tasks/{{.Task.ID}}/message"
                                    class="h-4 w-4 rounded border-control bg-surface-900 text-purple-800 dark:text-purple-500 focus:ring-purple-500/40">
                             <span>Course correction (directive)</span>
                         </label>
@@ -515,7 +515,7 @@
             <div class="md:hidden fixed left-0 right-0 z-30 bg-surface-900/95 backdrop-blur border-t border-surface-600/60 px-3 py-2 flex flex-wrap gap-2"
                  style="bottom: calc(64px + env(safe-area-inset-bottom));">
                 {{if .Conversation.Enabled}}
-                <button type="button" onclick="composeSheet.showModal()"
+                <button type="button" data-on-click="show-modal" data-dialog="composeSheet"
                         class="flex-1 min-w-[8rem] h-12 bg-brand-600 active:bg-brand-500 text-white text-sm font-medium rounded-lg flex items-center justify-center gap-1.5">
                     <svg class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" d="M12 4v16m8-8H4"/></svg>
                     Compose
@@ -818,13 +818,13 @@
                                     {{/* Secondary: queue without retry — for
                                          operators composing multiple hints
                                          before the actual retry. */}}
-                                    <button id="steer-failed-queue-only" type="button" onclick="submitFailedSteeringHint(false)" class="text-[11px] text-ink-400 hover:text-ink-200 transition-colors underline-offset-2 hover:underline">
+                                    <button id="steer-failed-queue-only" type="button" data-on-click="submitFailedSteeringHint" data-args="[false]" class="text-[11px] text-ink-400 hover:text-ink-200 transition-colors underline-offset-2 hover:underline">
                                         Queue only
                                     </button>
                                     {{/* Primary: queue THEN retry in one
                                          click — matches the recovery card's
                                          "Steer + retry" promise. */}}
-                                    <button id="steer-failed-send" type="button" onclick="submitFailedSteeringHint(true)" class="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg bg-accent-600 hover:bg-accent-500 text-white transition-colors disabled:opacity-40 disabled:cursor-not-allowed">
+                                    <button id="steer-failed-send" type="button" data-on-click="submitFailedSteeringHint" data-args="[true]" class="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg bg-accent-600 hover:bg-accent-500 text-white transition-colors disabled:opacity-40 disabled:cursor-not-allowed">
                                         <svg class="h-3.5 w-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M12 19l9 2-9-18-9 18 9-2zm0 0v-8"/></svg>
                                         Queue &amp; retry
                                     </button>
@@ -840,7 +840,9 @@
                             <form id="steer-failed-retry-form" method="POST" action="/ui/tasks/{{.Task.ID}}/retry" class="hidden"></form>
                         </div>
                     </details>
-                    <script>
+                    <script type="application/json" id="task-detail-data">{"projectID": {{.Task.ProjectID}}, "taskID": {{.Task.ID}}}</script>
+<script>
+    var __td = JSON.parse(document.getElementById('task-detail-data').textContent);
                         (function() {
                             // Auto-open + focus when the recovery card
                             // sent us here via ?steer=open. Without this,
@@ -889,8 +891,8 @@
                                 queueBtn.disabled = true;
                                 try {
                                     var resp = await fetch('/api/v1/projects/' +
-                                        encodeURIComponent({{.Task.ProjectID}}) +
-                                        '/tasks/' + encodeURIComponent({{.Task.ID}}) +
+                                        encodeURIComponent(__td.projectID) +
+                                        '/tasks/' + encodeURIComponent(__td.taskID) +
                                         '/hints',
                                         {
                                             method: 'POST',
@@ -1321,6 +1323,13 @@
     </main>
 
     {{template "pageFooter" .}}
+<script>
+    // #416 phase 3: this page's actions (web-ui-design.md, "C, phase 3"). Each
+    // calls its function at event time, so a script that defines it later
+    // (or again, after a swap) is the one that runs.
+    Vornik.action('convSearchFilter', (el) => window.convSearchFilter(el.value));
+    Vornik.action('submitFailedSteeringHint', (el, e, send) => window.submitFailedSteeringHint(send));
+    </script>
 </body>
 </html>
 {{end}}

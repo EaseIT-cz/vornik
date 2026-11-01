@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"strings"
 
+	"vornik.io/vornik/internal/auth"
 	"vornik.io/vornik/internal/budget"
 )
 
@@ -35,6 +36,8 @@ func IsAdminClassRequest(r *http.Request, isAdminKey func(string) bool) bool {
 	if !IsAuthEnabledFromContext(r.Context()) {
 		return true
 	}
+	// GitHub #560 (M1b B1): a tenant_admin session is never admin-class; it is
+	// granted named surfaces by OperatorSurfaceAccessFor.
 	if SessionRoleFromContext(r.Context()) == "admin" {
 		return true
 	}
@@ -108,9 +111,21 @@ const (
 // unscoped is not an operator capability: a plain api.api_keys static key, a
 // ["*"] user session, an empty-project DB key and an hmac-webhook identity
 // are all unscoped and all refused.
-func OperatorSurfaceAccessFor(r *http.Request, isAdminKey func(string) bool) OperatorSurfaceAccess {
+//
+// GitHub #560 (M1b, B2): a tenant_admin session (managed hosting's instance
+// owner) is answered after admin-class and before the scope check, because an
+// owner's ["*"] project set reads as scoped and would otherwise be hidden: it
+// is allowed on a surface TenantAdminMay grants and refused (403) on every
+// other.
+func OperatorSurfaceAccessFor(r *http.Request, isAdminKey func(string) bool, surface Surface) OperatorSurfaceAccess {
 	if IsAdminClassRequest(r, isAdminKey) {
 		return OperatorSurfaceAllowed
+	}
+	if SessionRoleFromContext(r.Context()) == auth.RoleTenantAdmin {
+		if TenantAdminMay(surface) {
+			return OperatorSurfaceAllowed
+		}
+		return OperatorSurfaceRefused
 	}
 	if _, scoped := requestScopedProjectSet(r); scoped {
 		return OperatorSurfaceHidden
@@ -120,8 +135,8 @@ func OperatorSurfaceAccessFor(r *http.Request, isAdminKey func(string) bool) Ope
 
 // operatorSurfaceAccess is OperatorSurfaceAccessFor over the server's
 // admin-key checker.
-func (s *Server) operatorSurfaceAccess(r *http.Request) OperatorSurfaceAccess {
-	return OperatorSurfaceAccessFor(r, s.isAdminClassKey)
+func (s *Server) operatorSurfaceAccess(r *http.Request, surface Surface) OperatorSurfaceAccess {
+	return OperatorSurfaceAccessFor(r, s.isAdminClassKey, surface)
 }
 
 // errorTextAccess is ErrorTextAccessFor over the server's admin-key checker.

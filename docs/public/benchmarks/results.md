@@ -1,158 +1,210 @@
 # Results by release
 
-One row per release, per benchmark. Rows are never edited after a release ships — a
-regression is shown by the next row being worse, not by the previous row changing.
+Every result Vornik publishes, with its spread and what it does not show.
+Rows are never edited after a release ships: a regression shows as a worse
+next row, not a changed old one. A mean without its standard deviation is not
+a result, because two systems whose intervals overlap have not been separated.
 
-Each row states its item count and standard deviation across repeated runs. A mean
-without a spread is not a result: two systems whose intervals overlap have not been
-separated by the measurement.
+| Benchmark | Latest | Result | Section |
+|---|---|---|---|
+| Memory retrieval, LongMemEval, 120 items, cold corpus | 2026.11.1 | recall 0.9851, precision 0.9854, MRR 0.9958, sd 0.0000 (unchanged since 2026.9.4) | [cold axis](#longmemeval-retrieval-all-six-abilities-tier-2-cold-corpus) |
+| Agent quality, open-weight model on one GPU | `2026.10.7-94` (in 2026.11.1) | 89 to 90 of 90 tasks; €1.34 to €1.40 of electricity per run | [below](#agent-quality-a-4b-active-open-weight-model-on-one-gpu-2026-10-31) |
+| Agent quality, first scored arm | 2026.9.0 | 30 tasks, 100% task success, 9.7% of steps produced no output | [below](#agent-quality-202690-first-scored-arm) |
+| Judged accuracy and the judge's noise | 24 items × 10 runs | accuracy 0.8241, sd 0.0340: a gate needs ±10.2 points | [tier 1](#longmemeval-judged-accuracy-tier-1-and-the-judges-noise-floor) |
 
-## LongMemEval — retrieval (tier 2, judge-free)
+## Agent quality — a 4B-active open-weight model on one GPU (2026-10-31)
 
-**How these rows were produced** — kept as the record of what was run, **not** as a
-reproduction recipe. The harness now clears the store before every run, so this command
-yields a *cold* result against a table of *warm* ones. What that costs you depends on
-your deployment: with the reranker **off** it reproduces these figures exactly
-(measured 2026-08-27, sd 0.0000 on all three metrics); with the reranker **on** the
-MRR varies run to run. The script cannot control that — it is
-`memory.reranker.enabled` on the daemon. See the axis note below.
+**Result.** On one RTX 3090 workstation, `gemma-4-26b-a4b` completed 89 to 90
+of 90 software tasks through Vornik's multi-agent `dev-pipeline`. The
+electricity for a full run cost €1.34 to €1.40. The bench's price list puts the
+same tokens on a hosted model at about $20.
 
-```bash
-curl -sLO https://huggingface.co/datasets/xiaowu0162/longmemeval-cleaned/resolve/main/longmemeval_oracle.json
-scripts/bench-reproduce.sh --dataset-path ./longmemeval_oracle.json \
-    --category temporal-reasoning --items 6 --runs 3 --database <your-bench-db>
-```
+Measured on `2026.10.7-94-g3246baad0`, which is part of 2026.11.1. The run was
+made twice: once without container hardening (OFF) and once with a read-only
+agent root filesystem and a 2,048-process limit (ON).
 
-Item selection is deterministic: the first N items of the named category, in dataset
-file order. The rows below scored `gpt4_2655b836`, `gpt4_2487a7cb`, `gpt4_76048e76`,
-`gpt4_2312f94c`, `0bb5a684`, `08f4fc43` — listed so a reproduction can confirm it
-measured the same questions rather than inferring it from a count.
+| | OFF | ON |
+|---|---|---|
+| run slots passed (30 tasks × 3 repeats) | 90 of 90 | 89 of 90 |
+| acceptance suites passed (12 graded) | 9; 3 did not compile | 11; 1 did not compile |
+| expected files produced | 76 of 90 | 79 of 90 |
+| schema conformance (share of steps whose output matched the required structure) | 0.965 | 0.973 |
+| tool-call validity | 1.000 | 1.000 |
+| steps with no output | 3.0% | 3.5% |
+| tokens per task | 324,067 | 325,975 |
+| wall time per run (median) | 5.1 min | 4.6 min |
+| run window | 9.94 h | 9.63 h |
+| energy, model host | 3.87 kWh (389 W average) | 3.69 kWh (383 W average) |
+| electricity cost | 34.18 CZK (€1.40) | 32.58 CZK (€1.34) |
+| priced cost on a hosted model | $20.88 | $19.75 |
 
-**Dataset:** LongMemEval v1-cleaned (`xiaowu0162/longmemeval-cleaned`, Sept 2025),
-`longmemeval_oracle.json`, `sha256 821a2034d219ab45846873dd14c14f12cfe7776e73527a483f9dac095d38620c`.
-**Budget:** `max_tokens=4096` both arms. **Judge:** none — tier 2 is judge-free.
+**Setup.** Model: `gemma-4-26b-a4b` (26B parameters, about 4B active per
+token), GGUF Q4_K_M, served by llama.cpp with native tool calls, 131,072-token
+context, about 141 tokens/s decode. Vornik's daemon, harness and agent image
+were built from one commit. The task set is 20 `dev-pipeline` and 10
+simple-workflow tasks, each run 3 times.
 
-**This axis is CLOSED.** It measures a *warm* corpus — the run repeats against an
-already-ingested store. Since `98037e34` (2026-08-21) the harness clears the store
-before every run, unconditionally, so a warm repeat can no longer be produced. The
-table is kept because a shipped row is history; it is not extended. The open axis is
-[all six abilities, cold](#longmemeval-retrieval-all-six-abilities-tier-2-cold-corpus).
+**Energy.** Metered at the model host's wall socket over each run window. The
+meter covers the model host only, not the machine running Vornik. Priced at
+8.83 CZK/kWh (36.26 euro cents): Eurostat's Czech household electricity price
+for H1 2026, all taxes and charges included (`nrg_pc_204`), at the Czech
+National Bank rate of 30 October 2026. Hardware cost is not included.
 
-| Release | Items | Ability | Context recall | Context precision | MRR | Runs | Key |
-|---|---|---|---|---|---|---|---|
-| `2026.8.3-13-g13476b8f` (baseline, pre-tracking) | 6 | temporal-reasoning | 1.0000 ±0.0000 | 0.9444 ±0.0000 | 1.0000 ±0.0000 | n=3 | `d0fa4f0f8389` |
-| `2026.8.7-48-g0e450f9c` (shipped as **2026.8.8**) | 6 | temporal-reasoning | 1.0000 ±0.0000 | 0.9444 ±0.0000 | 1.0000 ±0.0000 | n=3 | `e865104e9959` |
+**What the numbers show.**
 
-Both rows were produced by the `scripts/bench-reproduce.sh` invocation above, on the
-binary named in the Release column. All three metrics are **deterministic** across
-repeated runs — sd exactly 0.0000 — so these rows can be gated on exact equality
-rather than a tolerance.
+- **Vornik carries a small model to completion.** Malformed output was caught
+  and re-asked (about one schema retry per run). Every step that produced
+  nothing was recovered by a retry. No tool call was malformed.
+- **Finishing is not the same as being right.** Task success says the
+  pipeline finished. Only 4 of the 30 tasks carry an acceptance suite, so the
+  correctness signal is 9 of 12 (OFF) and 11 of 12 (ON): mostly right, not
+  always, on a small sample.
+- **The hardening costs nothing measurable.** The one ON slot that failed
+  was a model loop and two step timeouts; the daemon log of the whole arm has
+  no read-only filesystem or process-limit error. One slot in 90 is not
+  distinguishable from noise (Fisher's exact test, p = 1.0). Energy per hour
+  differed by 1.5%.
 
-**The two rows carry different comparability keys, and that is stated rather than
-smoothed over.** The 2026.8.8 run left `our_extraction_model`, `answer_model` and
-`judge_model` empty, which marks its key PARTIAL; the baseline run named them. Every
-field that determines *what was measured* matches — harness version, dataset name and
-digest, item selection, `max_tokens=4096`, `observed_recall_method=context-assembly`.
-So the relationship is "not provably comparable" rather than "not comparable", and the
-exact metric equality is offered as the evidence. A reader who wants the strict
-reading should treat them as two tables of one row each.
+**What this does NOT establish.**
 
-**Why 2026.8.8's row is dated a day before its tag.** The run was taken at
-`0e450f9c`, four commits before `2026.8.8`; all four are release-notes and installer
-plumbing, touching no code the benchmark exercises. This is recorded rather than
-rounded off, because the alternative — writing the tag and hoping — is how a track
-record stops being believable.
+- **No ranking against other models or the 2026.9.0 row.** The model, the
+  hardware and the harness version all differ, and no comparison was
+  pre-registered.
+- **No noise floor.** One run per arm, three repeats per task.
+- **One OFF slot was run twice.** The harness refused to start it because the
+  previous task's failure left files in the workspace (a known harness
+  gap), so it never reached a container. It was re-run on the same commit and configuration, outside the
+  metered window, and passed.
+- **Not independently reproducible.** As for the 2026.9.0 row, the task set
+  and its answer key are not published.
+- **The electricity price is a national household average.** A different
+  tariff changes the cost in proportion.
 
-#### Re-ingesting the corpus moves the numbers slightly
+## Agent quality — 2026.9.0 (first scored arm)
 
-The rows above repeat the run against an **already-ingested** corpus, which is what
-the reproduction script did at the time. Clearing the database and re-ingesting before
-every run instead gives MRR 0.9444 ±0.0481 (n=3) on the same six items, with recall and
-precision unchanged.
+30 software tasks through a multi-agent `dev-pipeline` swarm, scored against an
+operator-reviewed answer key. It measures the control logic's decisions (what
+the lead granted, whether roles followed their output schemas, whether agents
+called tools correctly), not retrieval.
 
-The cause was recorded at the time as ingest non-determinism: an LLM titler runs over
-each chunk and does not produce identical titles every time, so retrieval is
-deterministic *given a corpus* while the corpus is not identical across re-ingests.
+| Release | Tasks | Task success | Schema conformance | Tool-call validity | Steps with no output | Cost/task |
+|---|---|---|---|---|---|---|
+| `2026.8.9-70-g5d247f72` (shipped as **2026.9.0**) | 30 | 100.0% | 0.985 | 1.000 | 9.7% | $0.29 |
 
-**That attribution turned out to be wrong, and is corrected below.** Re-measured
-2026-08-27 with the reranker disabled, the same six items are deterministic *cold* —
-MRR 1.0000, sd exactly 0.0000 across three runs. The ±0.0481 came from the LLM
-reranker reordering results between runs, not from the corpus changing. The original
-figure was taken with each system as it ships, reranker active, and the reranker was
-never named as the source. The advice to compare warm-to-warm or cold-to-cold still
-holds on general grounds; it is just not what produced this particular spread.
+Same arm: 667,801 tokens and 62.4 tool calls per task, 0 escalations, 0 schema
+retries, $8.79 in total.
 
-**This distinction stopped being a caveat and became the axis break.** Until
-2026-08-21 the harness never actually performed the clear that its own flag
-(`--i-know-this-wipes`), its guard text and its design all promised — the
-authorisation was built, the action was not (`98037e34`). Every run before that date
-is warm; every run after it is cold, and there is no flag to opt out. The fix also
-established that the missing clear *moved the score*: on three runs of an identical
-120 items, admitted deposits fell 426 → 426 → 209 as the store filled, and judged
-accuracy moved 0.692 → 0.750 on a manual wipe with nothing else changed — in the
-direction that **understates** the system, because a deduped item loses the haystack
-it is scored against. Warm numbers are therefore not merely incomparable to cold ones;
-the older ones are pessimistic by an amount nobody has bounded.
+**Read the step figure with the success figure.** Task success is 100%, but
+14 of 144 terminal steps (9.7%) produced no output: 8 hit the iteration cap,
+4 entered a degenerate tool loop, 2 failed. Recovery absorbed them.
 
-#### The same six items, measured cold
+**The model is part of the result.** `Qwen/Qwen3.8-27B-FP8`, self-hosted on
+one machine. Over about 244,000 tool calls on two deployments, it entered
+identical-repeat tool loops 26 times as often as a mix of larger hosted models
+(0.52% of calls against 0.02%), and changed approach after a nudge 36% of the
+time against 82%. A self-hosted 27B is what someone running Vornik at home
+has, so this row describes the harder case; a large hosted model behind the
+same control logic sees the lower rate. The comparability key pins the
+model, so an arm on another model cannot silently replace this row.
 
-Taken 2026-08-27 on `2026.8.9-50-g4b343821`, reranker disabled, store cleared before
-every run. It is **not** appended to the table above, because that table is warm and
-this is cold — appending it is precisely the silent axis change rule 3 forbids.
+**Cost corrected on 2026-09-19.** First published as $0.74 per task and
+$25.23 in total: the model was missing from the pricing table, so calls were
+billed at the default $1.00/$3.00 per million tokens instead of $0.35/$2.75.
+The corrected figures come from the arm's recorded tokens (22,353,287 prompt,
+351,933 completion). They are an upper bound: this path did not report
+prompt-cache reads, and a later pass on the same model served 79.5% of prompt
+tokens from cache at a tenth of the input rate. Quality figures are
+unaffected.
 
-| Release | Items | Ability | Context recall | Context precision | MRR | Runs | Key |
-|---|---|---|---|---|---|---|---|
-| `2026.8.9-50-g4b343821` | 6 | temporal-reasoning | 1.0000 ±0.0000 | 0.9444 ±0.0000 | 1.0000 ±0.0000 | n=3 | `e865104e9959` |
+**What this row does NOT establish.**
 
-**On this subset, warm and cold are identical** — the same three figures, all with sd
-exactly 0.0000, as the warm `2026.8.7-48-g0e450f9c` row. The corpus-warmth effect the
-section above warns about does not appear here at all once the reranker is out of the
-retrieval path.
+- **No pass or fail.** `bench agent gate` refused a verdict: resolving a
+  5-point effect at the inherited σ of 0.0604 needs 12 paired tasks; this arm
+  has 5, which resolve 7.6 points.
+- **No trend.** It is the first scored arm.
+- **No noise floor for this task set.** The σ comes from an earlier 3-task
+  measurement of a different set.
+- **Not independently reproducible.** The task set and answer key are not
+  published.
 
-That reframes the earlier caveat rather than contradicting it. The published cold
-figure of **MRR 0.9444 ±0.0481** was measured with each system *as it ships* — LLM
-reranker active — so its variance was a model reordering results between runs, not the
-corpus differing. Take the model out and the RRF path is deterministic cold, exactly as
-it is warm.
-
-> **A gap this exposed — FIXED 2026-09-03.** The warm row above and the cold row here
-> carry the **same comparability key** `e865104e9959`, because `ComparabilityFields`
-> did not encode whether the corpus was warm or cold. Two runs on opposite sides of the
-> 2026-08-21 clear fix compared clean, and the tooling would have merged them without
-> complaint. It went unnoticed because on these six items the two regimes give identical
-> numbers — but a key that cannot express an axis this documentation calls decisive is a
-> guard that looks protective and is not.
->
-> The key now carries `corpus_regime`, observed rather than declared, alongside
-> `daemon_revision` (two releases with the same config also keyed identically).
-> HarnessVersion is 4 → 5, so every key changes and the incomparability is explicit
-> rather than left to a field older runs never carried. **The rows above keep their v4
-> keys as history** — they are not recomputed, because a key is a record of what a run
-> could say about itself at the time. Until a v5 run exists for each row, warm-versus-cold
-> across these published figures still has to be checked by hand against the
-> run date.
+**Provenance.** The daemon binary and agent image are recorded by content
+digest in the arm key, and batches that disagree on any axis are not merged.
+Arms recorded before 2026-08-29 carry no agent-image identity (the executor
+discarded it), so they cannot serve as a baseline. This is the first arm with
+real image provenance.
 
 ## LongMemEval — retrieval, all six abilities (tier 2, cold corpus)
 
-**This is the open axis.** It replaces the six-item warm axis above, which the
-2026-08-21 clear fix closed. It is a better measurement on both counts that matter:
-120 items rather than 6, and all six abilities rather than one — a single ability is a
-statement about that ability, not about retrieval.
+The open memory axis: 120 items, 20 from each of LongMemEval's six abilities,
+scored without a judge (context recall, context precision and MRR against
+the dataset's gold documents). The store is cleared before every run.
 
-**Reproduce:**
+| Release | Items | Abilities | Context recall | Context precision | MRR | Runs | Key |
+|---|---|---|---|---|---|---|---|
+| `2026.8.8-40-g2698eb67` | 120 | all 6 | 0.9900 ±0.0036 | 0.9854 ±0.0000 | 0.9958 ±0.0000 | n=3 | `93a6e7a0729b` |
+| `2026.8.9-50-g4b343821` | 120 | all 6 | 0.9891 ±0.0036 | 0.9854 ±0.0000 | 0.9958 ±0.0000 | n=3 | `93a6e7a0729b` |
+| `2026.9.4-205-g97fb8b36e` | 120 | all 6 | 0.9851 ±0.0000 | 0.9854 ±0.0000 | 0.9958 ±0.0000 | n=3 | `28fd464fb163` |
+| `2026.9.4-207-g61634a063` | 120 | all 6 | 0.9851 ±0.0000 | 0.9854 ±0.0000 | 0.9958 ±0.0000 | n=3 | `ed7ea84021e0` |
+| `2026.9.6-117-gee40525c8` (2026.9.7) | 120 | all 6 | 0.9851 ±0.0000 | 0.9854 ±0.0000 | 0.9958 ±0.0000 | n=3 | `4a95cccf5f7a` |
+| `2026.9.8-52-g86d3af802` (2026.10.1) | 120 | all 6 | 0.9851 ±0.0000 | 0.9854 ±0.0000 | 0.9958 ±0.0000 | n=3 | `0c4971cc78ae` |
+| `2026.10.1-55-gc800c23be` (2026.10.2) | 120 | all 6 | 0.9851 ±0.0000 | 0.9854 ±0.0000 | 0.9958 ±0.0000 | n=3 | `dcfeaf709dc5` |
+| `2026.10.1-77-gbb5238eb2` (2026.10.3) | 120 | all 6 | 0.9851 ±0.0000 | 0.9854 ±0.0000 | 0.9958 ±0.0000 | n=3 | `16a79559dd84` |
+| `2026.10.4-171-g2213d297b` (2026.10.5) | 120 | all 6 | 0.9851 ±0.0000 | 0.9854 ±0.0000 | 0.9958 ±0.0000 | n=3 | `d2ffc5b3e11e` |
+| `2026.10.5-535-g3a228c188` (2026.10.6) | 120 | all 6 | 0.9851 ±0.0000 | 0.9854 ±0.0000 | 0.9958 ±0.0000 | n=3 | `496e1e5efb22` |
+| `2026.10.6-439-g67cafb8e9` (2026.10.7) | 120 | all 6 | 0.9851 ±0.0000 | 0.9854 ±0.0000 | 0.9958 ±0.0000 | n=3 | `9d32bf3c9a33` |
+| `2026.10.7-130-ge8dc9aab6` (2026.11.1) | 120 | all 6 | 0.9851 ±0.0000 | 0.9854 ±0.0000 | 0.9958 ±0.0000 | n=3 | `be04eee379bd` |
 
-The harness reads its target and credentials from the ENVIRONMENT, and the three
-variables below are not optional — a run without them either refuses or, worse,
-aims somewhere you did not intend. `VORNIK_URL` and `VORNIK_COMPANION_TOKEN` are
-what the *harness* reads; `vornikctl`'s own `VORNIK_API_URL` / `VORNIK_API_KEY`
-are a different pair and setting only those points the run at
-`http://localhost:8080` — which on a single-host deployment is **production**.
-The database guard is what catches that, and it is the last line of defence, not
-the first.
+Figures from `bench memory aggregate` over three run directories; standard
+deviations are sample (n−1).
+
+**What each row adds.** Every row from the fifth on is identical to the one
+before to four decimal places across three deterministic runs. Its key is new
+only because `daemon_revision` moved (plus `harness_revision` for 2026.10.7
+and 2026.11.1).
+The dataset revision, `max_tokens`, item selection and embedder
+(`openai/qwen3-embedding:0.6b@1024d`) are unchanged, and each run cleared a
+store of 1,897 chunks.
+
+| Row | Why it was measured | What it does NOT show |
+|---|---|---|
+| 1. `2026.8.8-40` | First run on the cold axis | Shares row 2's key, so row 2's limits apply |
+| 2. `2026.8.9-50` | First release-over-release comparison: recall −0.0009 against sd 0.0036 and a 3σ threshold of ±0.0107, so no regression; sd reproduced exactly | Key PARTIAL. Reranker on (path `context-assembly+rerank`), so not deterministic by construction: right for reporting the system as shipped, wrong for a CI gate, which needs the reranker off. n=3 cannot resolve a sub-point move |
+| 3. `2026.9.4-205` | First complete key (`observed_embedder` and `daemon_revision` were empty on every earlier run), so it starts a new comparable set. Recall 0.9851, −0.0040, a third of the 3σ threshold | Not a clean comparison: the extraction model was down, so the corpus was built by the embedder alone; that also explains sd 0.0000. Run with `--accept-unverified-path`, reranker off |
+| 4. `2026.9.4-207` | The binary installed in production; identical metrics, new key because the build moved from `-205-…-dirty` | — |
+| 5. 2026.9.7 | The retrieval path changed twice (2026.9.5 recency ranking and series supersession; 2026.9.7 document supersession, versions stored whole under artifact-salted chunk hashes) | Each item is ingested once into a cold store, so re-ingest supersession is never exercised; covered by the daemon's tests and verified live |
+| 6. 2026.10.1 | The minimum deposit size from a companion client was lowered, on this benchmark's ingest path; the corpus stayed 1,897 chunks, so it admitted nothing new here | Not a test of the size floor itself |
+| 7. 2026.10.2 | No-regression check (agent administration, update path, packaging) | — |
+| 8. 2026.10.3 | No-regression check (macOS release check, Hermes catalog readiness, EULA 3) | — |
+| 9. 2026.10.5 | Companion note ingest changed (a forgotten memory added again is reinstated; a refute takes the strictest route) and recall records each result's use | Never forgets or refutes, so those paths are covered by the daemon's tests only |
+| 10. 2026.10.6 | Article 18 restriction became default-deny on every chunk read, and companion tools refuse undeclared arguments. A first attempt at `aa2dc8d5d` was refused at the leakage probe because the harness sent an undeclared `max_tokens`; the harness no longer sends it. Run 1 cleared 4 chunks (the failed attempt's leftovers) | One unrestricted project, so the restriction is exercised only on its pass-through side |
+| 11. 2026.10.7 | Every recall path honours the repository scope; each hit carries a provenance label. Each item is deposited and recalled under its own scope with `strict_scope` | Deposits use class `research`, so the trust changes for `decision` and `spec` deposits and delegated ingests are covered by the daemon's tests only |
+| 12. 2026.11.1 | The recall path changed (the architect answers only from the checked design record) and the embedding client now dials through the SSRF guard. Measured 2026-11-01 on `e8dc9aab6`; the commits after it are documentation only | The design-record filter applies to architect answers, which this benchmark does not ask for; covered by the daemon's tests |
+
+Rows 2 to 12 carry `retrieval_path_unverified`: the harness trusts the
+daemon's reported recall method rather than observing it.
+
+**Per ability** (row 2's three runs):
+
+| Ability | Context recall | Context precision | MRR | Items |
+|---|---|---|---|---|
+| `knowledge-update` | 1.0000 ±0.0000 | 1.0000 ±0.0000 | 1.0000 ±0.0000 | 20 |
+| `multi-session` | 0.9564 ±0.0250 | 0.9667 ±0.0000 | 0.9750 ±0.0000 | 20 |
+| `single-session-assistant` | 1.0000 ±0.0000 | 1.0000 ±0.0000 | 1.0000 ±0.0000 | 20 |
+| `single-session-preference` | 1.0000 ±0.0000 | 1.0000 ±0.0000 | 1.0000 ±0.0000 | 20 |
+| `single-session-user` | 1.0000 ±0.0000 | 1.0000 ±0.0000 | 1.0000 ±0.0000 | 20 |
+| `temporal-reasoning` | 0.9833 ±0.0144 | 0.9458 ±0.0000 | 1.0000 ±0.0000 | 20 |
+
+**Where it loses.** `multi-session` is the only ability that misses recall,
+and its recall varies between runs (sd 0.0250): evidence spread across
+sessions is the weakest case, and which items miss changes from run to run.
+`temporal-reasoning` has the lowest precision (0.9458): it finds the right
+documents and adds extra ones.
+
+**Reproduce.** Run against a bench daemon, never production: the run
+bulk-writes and clears the store.
 
 ```bash
-# The daemon under test. NOT the production one: this run bulk-writes and
-# clears the store. Mint the token against that same daemon:
+# Mint the token against the bench daemon:
 #   VORNIK_API_URL=<daemon> vornikctl companion grant \
 #       --project bench --client claude-code --memory-all
 export VORNIK_URL=<your-bench-daemon>
@@ -172,319 +224,148 @@ vornikctl bench memory run --system vornik --dataset longmemeval \
 vornikctl bench memory aggregate ./run-*
 ```
 
-`--our-extraction-model` must match what the system reports it is embedding
-with, or the run is refused: *"a number labelled with a model that did not
-produce it is worse than no number"*. Read the value from the daemon rather than
-typing one — `whoami` reports it as `embedder`, and the id the key uses is
-`<provider>/<model>@<dimensions>d`, e.g. `openai/qwen3-embedding:0.6b@1024d`.
-Leaving it unset, or naming a model the daemon is not using, is what made the
-2026-09-08 run's key partial.
+- **The harness reads `VORNIK_URL` and `VORNIK_COMPANION_TOKEN`.**
+  `vornikctl`'s own `VORNIK_API_URL` and `VORNIK_API_KEY` are a different
+  pair; setting only those aims the run at `http://localhost:8080`, which on a
+  single host is production. The database guard is the last line of defence.
+- **`--our-extraction-model` must match what the daemon embeds with**, or the
+  run is refused. Read it from `whoami` (`embedder`); the key uses
+  `<provider>/<model>@<dimensions>d`, for example
+  `openai/qwen3-embedding:0.6b@1024d`. Leaving it unset is what made the
+  2026-09-08 run's key partial.
+- **Set `memory.reranker.enabled: false` on the daemon under test.**
+  `--tier2-only` stops requesting the reranked path but cannot disable it, and
+  refuses the run if a rerank happened. An LLM reranker reorders results
+  between identical runs.
 
-**Dataset:** as above. **Budget:** `max_tokens=4096`. **Judge:** none — tier 2 is
-judge-free. **Corpus:** cold; the harness clears the store before each run.
+**Dataset:** LongMemEval v1-cleaned (`xiaowu0162/longmemeval-cleaned`,
+September 2025), `longmemeval_oracle.json`, `sha256
+821a2034d219ab45846873dd14c14f12cfe7776e73527a483f9dac095d38620c`.
+**Budget:** `max_tokens=4096`. **Judge:** none.
 
-**The deployment under test must have `memory.reranker.enabled: false`.**
-`--tier2-only` stops *requesting* the reranked path but cannot disable it, and it
-refuses the run if recall reports a rerank happened. An LLM reranker is billed
-per call and reorders between identical runs, so leaving it on is the difference
-between a deterministic gate and one that fires on noise.
+## LongMemEval — judged accuracy (tier 1) and the judge's noise floor
 
-| Release | Items | Abilities | Context recall | Context precision | MRR | Runs | Key |
-|---|---|---|---|---|---|---|---|
-| `2026.8.8-40-g2698eb67` | 120 | all 6 | 0.9900 ±0.0036 | 0.9854 ±0.0000 | 0.9958 ±0.0000 | n=3 | `93a6e7a0729b` |
-| `2026.8.9-50-g4b343821` | 120 | all 6 | 0.9891 ±0.0036 | 0.9854 ±0.0000 | 0.9958 ±0.0000 | n=3 | `93a6e7a0729b` |
-| `2026.9.4-205-g97fb8b36e` | 120 | all 6 | 0.9851 ±0.0000 | 0.9854 ±0.0000 | 0.9958 ±0.0000 | n=3 | `28fd464fb163` |
-| `2026.9.4-207-g61634a063` | 120 | all 6 | 0.9851 ±0.0000 | 0.9854 ±0.0000 | 0.9958 ±0.0000 | n=3 | `ed7ea84021e0` |
-| `2026.9.6-117-gee40525c8` (2026.9.7) | 120 | all 6 | 0.9851 ±0.0000 | 0.9854 ±0.0000 | 0.9958 ±0.0000 | n=3 | `4a95cccf5f7a` |
-| `2026.9.8-52-g86d3af802` (2026.10.1) | 120 | all 6 | 0.9851 ±0.0000 | 0.9854 ±0.0000 | 0.9958 ±0.0000 | n=3 | `0c4971cc78ae` |
-| `2026.10.1-55-gc800c23be` (2026.10.2) | 120 | all 6 | 0.9851 ±0.0000 | 0.9854 ±0.0000 | 0.9958 ±0.0000 | n=3 | `dcfeaf709dc5` |
-| `2026.10.1-77-gbb5238eb2` (2026.10.3) | 120 | all 6 | 0.9851 ±0.0000 | 0.9854 ±0.0000 | 0.9958 ±0.0000 | n=3 | `16a79559dd84` |
-| `2026.10.4-171-g2213d297b` (2026.10.5) | 120 | all 6 | 0.9851 ±0.0000 | 0.9854 ±0.0000 | 0.9958 ±0.0000 | n=3 | `d2ffc5b3e11e` |
-| `2026.10.5-535-g3a228c188` (2026.10.6) | 120 | all 6 | 0.9851 ±0.0000 | 0.9854 ±0.0000 | 0.9958 ±0.0000 | n=3 | `496e1e5efb22` |
-| `2026.10.6-439-g67cafb8e9` (2026.10.7) | 120 | all 6 | 0.9851 ±0.0000 | 0.9854 ±0.0000 | 0.9958 ±0.0000 | n=3 | `9d32bf3c9a33` |
+**A judged number needs the judge's own variance first**, or a "win" cannot
+be told apart from the judge disagreeing with itself. Ten identical runs,
+same items, same models, warm corpus:
 
-**The eleventh row is 2026.10.7's release candidate** (`main` at
-`67cafb8e9`, an enterprise build), measured on 2026-10-23 on the
-memory-benchmark deployment, same embedder
-(`openai/qwen3-embedding:0.6b@1024d`), reranker off, cold corpus: each run
-cleared the store (1,897 chunks, as in every row since 2026.9.7). Every metric
-is identical to 2026.10.6 to four decimal places across three deterministic
-runs, so **no regression**. The key is new (`9d32bf3c9a33`) and the only
-fields that moved are `daemon_revision` and `harness_revision` (checked field
-by field against 2026.10.6's manifest); dataset revision, `max_tokens`, item
-selection and embedder are unchanged. The run was required: the cycle makes
-every recall path honour the repository scope and adds a provenance label to
-each recall hit, read from the store. **What it does NOT show:** the harness
-deposits with class `research` through `remember`, so this cycle's changes to
-how `decision` and `spec` deposits and companion-delegated ingests are
-trusted are not on its path; they are covered by the daemon's own tests on
-both database drivers. The scope change is on its path: each item is
-deposited and recalled under its own repository scope with `strict_scope`,
-so every recall excludes the other items' chunks. The run carries
-`retrieval_path_unverified`, as every row since the third does.
+| Metric | Mean | sd | Min | Max | Narrowest defensible gate (3σ) |
+|---|---|---|---|---|---|
+| **judged accuracy** | **0.8241** | **0.0340** | 0.7500 | 0.8750 | **±0.1020** |
+| context recall | 0.9764 | 0.0059 | 0.9722 | 0.9861 | ±0.0176 |
+| context precision | 0.9410 | 0.0000 | 0.9410 | 0.9410 | exact |
+| MRR | 0.9917 | 0.0108 | 0.9792 | 1.0000 | ±0.0323 |
 
-**The tenth row is 2026.10.6's release candidate** (`main` at `3a228c188`,
-an enterprise build), measured on 2026-10-14 on the memory-benchmark
-deployment, same embedder (`openai/qwen3-embedding:0.6b@1024d`), reranker
-off, cold corpus. Every metric is identical to 2026.10.5 to four decimal
-places across three deterministic runs, so **no regression**. The key is new
-(`496e1e5efb22`) and the only key field that moved is `daemon_revision`
-(checked field by field against 2026.10.5's manifest); dataset revision,
-`max_tokens`, item selection and embedder are unchanged. The run was
-required: the cycle makes the Article 18 restriction default-deny on every
-chunk read (knowledge-graph reads included), and makes every companion tool
-refuse an argument it does not declare (#305), which recall is. **The first
-attempt failed, and is part of this row's record.** At `aa2dc8d5d` every
-recall was refused at the harness's leakage probe, before any item was
-scored: the harness had always sent recall an undeclared `max_tokens`, which
-the daemon had silently dropped (harness design §13.26). The harness no longer
-sends it and the daemon accepts and ignores that one name from older
-harnesses; the daemon never read it, so this row is comparable with the rows
-above. Run 1 cleared 4 chunks rather than 1,897, because the failed attempt
-had cleared the store and written only its probe; runs 2 and 3 cleared 1,897
-as in every row since 2026.9.7. Each run starts from an empty store either
-way. **What it does NOT show:** the benchmark ingests into one unrestricted
-project, so no restricted chunk exists and the restriction filter is
-exercised only on its pass-through side; the refusal side is covered by the
-daemon's own tests on both database drivers. The run carries
-`retrieval_path_unverified`, as every row since the third does.
+n=10 runs × 24 `temporal-reasoning` items, key `a2fd4d245b21`. **Judge:**
+`gemma4:31b`. **Answerer:** `gpt-oss:120b`, a different model family, so the
+judge does not grade its own output. Both open-weight, version-pinned and
+served by one provider (Ollama Cloud); a multi-provider router would add
+variance to the number being measured.
 
-**The ninth row is 2026.10.5's release candidate** (`main` at `2213d297b`,
-an enterprise build), measured on 2026-10-07 on the memory-benchmark
-deployment, same embedder (`openai/qwen3-embedding:0.6b@1024d`), reranker
-off, cold corpus: each run cleared the store (1,897 chunks before each run,
-as in every row since 2026.9.7), re-ingested the pinned dataset and recorded
-the daemon's own revision. Every metric is identical to 2026.10.3 to four
-decimal places across three deterministic runs, so **no regression**. The key
-is new (`d2ffc5b3e11e`) and the only key field that moved is
-`daemon_revision`; dataset revision, `max_tokens`, item selection and
-embedder are unchanged. The run was required: the cycle changed the companion
-note ingest path (a forgotten memory added again is reinstated and
-recallable; a refute takes the strictest route and lands in one statement so
-a racing reinstate cannot lose it) and made recall record the use of each
-result it returns, for idle retention. **What it does NOT show:** this
-benchmark ingests each item once into a cold store and never forgets or
-refutes, so the reinstate and refute paths are not exercised; they are
-covered by the daemon's own tests on both database drivers. The run carries
-`retrieval_path_unverified`, as every row since the third does.
+- **Accuracy moved between 0.750 and 0.875 with nothing changed** but the
+  models' sampling: 3 of 24 items flipped. A tier-1 gate needs ±10.2 points,
+  wider than most real improvements. That is why tier 2 leads: on the same
+  runs, context precision was exactly constant.
+- **Context recall varies here (sd 0.0059) but not in tier 2.** These runs
+  use the system as shipped, with the LLM reranker in the path; tier 2 uses
+  the reranker-free path.
 
-**The eighth row is 2026.10.3's release candidate** (the tagged commit
-differs from it only in documentation, this row among them), measured on
-2026-10-02 on the memory-benchmark deployment, same embedder, reranker off,
-cold corpus: each run cleared the store, re-ingested the pinned dataset and
-recorded the daemon's own revision. Every metric is identical to 2026.10.2 to
-four decimal places across three deterministic runs; the key is new
-(`16a79559dd84`) because `daemon_revision` moved. The cycle did not change the
-retrieval or ingest path (it shipped the macOS release check, the Hermes
-plugin's catalog readiness and EULA version 3), so this row is the
-no-regression check, not a measurement of a change. The harness reports
-`retrieval_path_unverified`: it trusts the daemon's reported recall method
-(`context-assembly`) rather than observing it.
+```bash
+export VORNIK_BENCH_LLM_URL=https://ollama.com/v1
+export VORNIK_BENCH_LLM_KEY=<your key>
+for i in $(seq 1 10); do
+  vornikctl bench memory run --system vornik --dataset longmemeval \
+    --dataset-path ./longmemeval_oracle.json \
+    --database <your-bench-db> --i-know-this-wipes <your-bench-db> \
+    --answer-model gpt-oss:120b --judge-model gemma4:31b \
+    --category temporal-reasoning --max-items 24 --max-tokens 4096 \
+    --run-dir ./jv-$i
+done
+vornikctl bench memory aggregate ./jv-*
+```
 
-**The seventh row is 2026.10.2's release candidate** (the tagged commit
-differs from it only in tests and documentation), measured on 2026-10-02 on
-the memory-benchmark deployment, same embedder, reranker off, cold corpus.
-Every metric is identical to 2026.10.1 to four decimal places across three
-deterministic runs; the key is new (`dcfeaf709dc5`) because `daemon_revision`
-moved. The cycle did not change the retrieval or ingest path (it added agent
-administration, update-path fixes and release packaging), so this row is the
-no-regression check, not a measurement of a change.
+About 4.5 minutes per run on the reference deployment; the first run is
+slower because it ingests the corpus.
 
-**The sixth row is 2026.10.1's release build**, measured on 2026-10-01 on the
-memory-benchmark deployment, same embedder, reranker off, cold corpus. Every
-metric is identical to 2026.9.7 to four decimal places across three
-deterministic runs. The key is new (`0c4971cc78ae`) because
-`daemon_revision` moved. The run was required because the cycle lowered the
-minimum size of a deliberate deposit from a companion client, and this
-benchmark ingests through that path. **What it shows about that change:** the
-stored corpus is unchanged, 1,897 chunks before each run, exactly as in
-2026.9.7, so the lower floor admitted nothing the old one refused on this
-corpus. It is not a test of the floor itself; that is covered by the
-daemon's own tests.
+### Comparison: hindsight 0.9.0, same items, same budget
 
-**The fifth row is 2026.9.7's release build**, measured on 2026-09-27 on the
-memory-benchmark deployment. Every metric is identical to the 2026.9.4 build
-that shipped, to four decimal places, across three deterministic runs. Its key
-is new (`4a95cccf5f7a`) because `daemon_revision` moved.
+Same machine, same six `temporal-reasoning` items, each system as it ships
+(own reranker on), both cold (store or bank cleared before every run):
 
-The cycle between the two rows changed the retrieval path twice:
-- 2026.9.5 added recency ranking and series supersession.
-- 2026.9.7 added document supersession, and stores each document version
-  whole under chunk hashes salted by artifact.
-
-The row shows that neither moved tier-2 retrieval on this corpus. **What it
-does NOT show:** this benchmark ingests each item once into a cold store, so
-re-ingest supersession, the behaviour 2026.9.7 exists for, is never
-exercised. It is covered by the daemon's own tests and was verified live on
-the reference deployment, not by this table.
-
-**The fourth row is the build that shipped**, re-measured on the binary actually
-installed in production (`2026.9.4-207-g61634a063`) rather than on a
-development build. Every metric is identical to the row above it, to four
-decimal places — and the key nevertheless CHANGED, from `28fd464fb163` to
-`ed7ea84021e0`, because `daemon_revision` moved from `-205-…-dirty` to `-207-…`.
-That is the repaired key doing its job: two runs of the same code on different
-builds are no longer allowed to look like one measurement. Before 2026-09-17
-these two rows would have shared a key.
-
-**The third row is the first with a COMPLETE comparability key, and it is
-deliberately not comparable to the two above it.** Until 2026-09-17 two of the
-key's fields — `observed_embedder` and `daemon_revision` — were empty on every
-run ever made (harness design §13.25), so the key could not distinguish one
-build, or one embedding model, from another. That is why rows one and two share
-`93a6e7a0729b` despite being different releases. Both fields are now populated,
-which necessarily changes the key: `28fd464fb163` starts a new comparable set
-rather than extending the old one. `compare` will refuse to diff across that
-boundary, correctly.
-
-**What the numbers say anyway.** Precision and MRR are bit-identical to both
-earlier rows. Recall is 0.9851, **−0.0040** against the last published row —
-about a third of that row's own 3σ threshold of ±0.0107, so nothing here
-resembles a regression.
-
-**Two caveats that stop this being a clean release-over-release claim, stated
-rather than left for a reader to infer:**
-
-- **The ingest regime differed.** The self-hosted vLLM arm is down, so this run
-  had no LLM extraction model and the stored corpus is produced deterministically
-  by the embedder alone. That is visible in the spread: every metric has
-  **sd = 0.0000** here against ±0.0036 for both earlier rows, whose variance the
-  2026-08-21 note attributes to LLM-driven ingest differing per run. A −0.0040
-  recall difference and a collapsed spread have a common candidate cause, and
-  this measurement cannot separate "the corpus was built differently" from "the
-  code changed".
-- **`retrieval_path_unverified` is set**, because the run passed
-  `--accept-unverified-path`. The reranker was disabled on the deployment under
-  test (`memory.reranker.enabled: false`) as `--tier2-only` requires — its model
-  is the same unreachable vLLM — so the path exercised was plain
-  `context-assembly`.
-
-Re-measuring against a live extraction model is what would turn this into a
-comparable row; it is blocked on the benchmark arm's model endpoint, not on
-anything in the harness.
-
-**The second row is the first release-over-release comparison this table can
-actually support**, and it shows no regression. Precision and MRR are identical to
-four decimal places; recall moved −0.0009 against a per-release sd of 0.0036 and a
-narrowest-defensible (3σ) threshold of ±0.0107 — about a twelfth of the smallest
-move that could fire without being noise. The sd itself reproduced exactly
-(0.0036 both times), which is the more reassuring number: it says the *measurement*
-is stable, not merely that two point estimates happened to agree.
-
-Figures from `bench memory aggregate` over the three run directories, not
-hand-computed. Standard deviations are sample (n−1), which is what the tool reports.
-
-Per ability, same three runs:
-
-| Ability | Context recall | Context precision | MRR | Items |
+| System | Context recall | Context precision | MRR | Runs |
 |---|---|---|---|---|
-| `knowledge-update` | 1.0000 ±0.0000 | 1.0000 ±0.0000 | 1.0000 ±0.0000 | 20 |
-| `multi-session` | 0.9564 ±0.0250 | 0.9667 ±0.0000 | 0.9750 ±0.0000 | 20 |
-| `single-session-assistant` | 1.0000 ±0.0000 | 1.0000 ±0.0000 | 1.0000 ±0.0000 | 20 |
-| `single-session-preference` | 1.0000 ±0.0000 | 1.0000 ±0.0000 | 1.0000 ±0.0000 | 20 |
-| `single-session-user` | 1.0000 ±0.0000 | 1.0000 ±0.0000 | 1.0000 ±0.0000 | 20 |
-| `temporal-reasoning` | 0.9833 ±0.0144 | 0.9458 ±0.0000 | 1.0000 ±0.0000 | 20 |
+| Vornik | 1.0000 ±0.0000 | **0.9444 ±0.0000** | **0.9444 ±0.0481** | n=3 |
+| hindsight 0.9.0 | 1.0000 ±0.0000 | 0.6806 ±0.0833 | 0.7292 ±0.1250 | n=4 |
 
-**Where it loses.** `multi-session` is the only ability that misses recall, and it is
-also the only one whose recall varies run to run (sd 0.0250 against 0.0000 on four of
-six). Questions needing evidence spread across sessions are where this system is
-weakest, and the variance says the weakness is not a fixed set of items — the boundary
-moves. `temporal-reasoning` carries the lowest precision (0.9458): it retrieves the
-right documents and pads the set.
+- **Recall ties at 1.000.** This oracle subset has about three sessions per
+  item; the full `longmemeval_s` has 38 to 62, where recall should separate
+  the systems.
+- **Vornik's retrieved set is tighter and better ordered** (precision 0.944
+  against 0.681, MRR 0.944 against 0.729); hindsight reaches the same recall
+  by returning more.
+- **hindsight varies between runs** (precision sd 0.083, MRR sd 0.125, MRR
+  0.667 to 0.917 over four runs) because an LLM consolidates its memories at
+  ingest, so its corpus differs each time. A single hindsight run cannot be
+  quoted; a gate on it would need ±0.375 MRR. Vornik's ingest is chunk and
+  embed, with no model deciding what is stored.
+- **Caveats.** n=6, one ability: a smoke-scale baseline, not a ranking. Both
+  arms are `retrieval_path_unverified` (rerankers on). hindsight's extraction
+  model was pinned to `google/gemma-4-26b-a4b-it`, with its bundled local
+  embedder and reranker; Vornik used its configured local embedder. Without
+  deleting hindsight's bank between runs its precision fell from 0.806 to
+  0.639 on an identical repeat.
 
-**Caveats specific to this row.**
+## LongMemEval — the six-item warm axis (closed)
 
-- The key is **PARTIAL**. `our_extraction_model`, `answer_model` and `judge_model`
-  were left empty, so the run cannot be *proven* comparable to another — only observed
-  to match on every field it does record.
-- `retrieval_path_unverified` is set. The reranker was enabled on the deployment, so
-  the observed path is `context-assembly|context-assembly+rerank` — a model is in the
-  retrieval path and the run is therefore not deterministic by construction. This is
-  the correct setting for reporting the system **as shipped** and the wrong one for a
-  CI gate, which wants the reranker off and the RRF path proven.
-- n=3 on 120 items. Enough for a spread, not enough to resolve a sub-point move.
+**Closed on 2026-08-21.** Until `98037e34` the harness did not clear the store
+its flag (`--i-know-this-wipes`) promised to clear, so runs repeated against
+an already-ingested, warm corpus. Every run since is cold. The missing clear
+moved scores: on three runs of the same 120 items, admitted deposits went
+426 → 426 → 209 as the store filled, and judged accuracy moved from 0.692 to
+0.750 after a manual wipe. Warm figures understate the system by an amount
+nobody has bounded, because a deduplicated item loses the haystack it is
+scored against.
 
-## Agent quality — 2026.9.0 (first scored arm)
+| Release | Items | Ability | Context recall | Context precision | MRR | Runs | Key |
+|---|---|---|---|---|---|---|---|
+| `2026.8.3-13-g13476b8f` (baseline, pre-tracking) | 6 | temporal-reasoning | 1.0000 ±0.0000 | 0.9444 ±0.0000 | 1.0000 ±0.0000 | n=3 | `d0fa4f0f8389` |
+| `2026.8.7-48-g0e450f9c` (shipped as **2026.8.8**) | 6 | temporal-reasoning | 1.0000 ±0.0000 | 0.9444 ±0.0000 | 1.0000 ±0.0000 | n=3 | `e865104e9959` |
 
-A different benchmark from the LongMemEval rows above, measuring a different
-thing: not retrieval, but **the decisions the control logic makes** — what the
-lead granted, whether roles followed their output schemas, and whether agents
-called tools correctly. It runs 30 software tasks through a multi-agent
-`dev-pipeline` swarm against an operator-reviewed answer key.
+The same six items measured cold on 2026-08-27, reranker off:
 
-| Release | Tasks | Task success | Schema conformance | Tool-call validity | Steps with no output | Cost/task |
-|---|---|---|---|---|---|---|
-| `2026.8.9-70-g5d247f72` (shipped as **2026.9.0**) | 30 | 100.0% | 0.985 | 1.000 | 9.7% | $0.29 |
+| Release | Items | Ability | Context recall | Context precision | MRR | Runs | Key |
+|---|---|---|---|---|---|---|---|
+| `2026.8.9-50-g4b343821` | 6 | temporal-reasoning | 1.0000 ±0.0000 | 0.9444 ±0.0000 | 1.0000 ±0.0000 | n=3 | `e865104e9959` |
 
-Efficiency, same arm: 667,801 tokens and 62.4 tool calls per task, 0 escalations,
-0 schema retries. Total spend $8.79.
+- **Warm and cold are identical on these six items** once the reranker is
+  off, all with sd 0.0000.
+- **A cold figure of MRR 0.9444 ±0.0481** (in the hindsight comparison) was
+  first attributed to an LLM titler making ingest non-deterministic. That was
+  wrong: the reranker reorders results between runs. With it off, the path is
+  deterministic warm and cold.
+- **The 2026.8.8 row** was taken at `0e450f9c`, four commits before the tag;
+  those commits touch only release notes and installer plumbing. Its key is
+  PARTIAL (extraction, answer and judge models left empty), so the two warm
+  rows are "not provably comparable"; every field that sets what was measured
+  matches.
+- **The key could not tell warm from cold until 2026-09-03**: the warm 2026.8.8
+  row and the cold row share key `e865104e9959`. The key now carries an
+  observed `corpus_regime` and `daemon_revision` (harness version 4 → 5).
+  These rows keep their version-4 keys as history.
 
-> **Cost corrected downwards, 2026-09-19.** This row first published $0.74 per
-> task and $25.23 total. Those figures were wrong and we are the ones who found
-> it: the observed model was absent from our pricing table, so every call was
-> billed at the table's `default` rate of $1.00/$3.00 per million tokens instead
-> of the model's real $0.35/$2.75. The corrected figures are recomputed from the
-> arm's own recorded token counts — 22,353,287 prompt and 351,933 completion —
-> and nothing else about the run changed.
->
-> The true cost may be lower still. This arm reached the model over a path that
-> did not report prompt-cache reads, and a later pass on the same model measured
-> 79.5% of prompt tokens served from cache at a tenth of the input rate. We do
-> not know that share for this arm, so we have not applied it: the number above
-> is an upper bound, stated as one.
->
-> Quality figures in this row are unaffected — pricing enters no scoring path.
+Item ids scored: `gpt4_2655b836`, `gpt4_2487a7cb`, `gpt4_76048e76`,
+`gpt4_2312f94c`, `0bb5a684`, `08f4fc43` (the first six `temporal-reasoning`
+items in file order). The rows were produced with:
 
-**Read both layers, because the first one alone flatters us.** Task success is
-100%, and underneath it **14 of 144 terminal steps (9.7%) produced no output at
-all** — 8 hit the iteration cap, 4 entered a degenerate tool loop, 2 failed
-outright. Recovery absorbs those, which is the system working as designed, but a
-headline "100%" without the step figure would describe a smoother product than
-exists.
+```bash
+curl -sLO https://huggingface.co/datasets/xiaowu0162/longmemeval-cleaned/resolve/main/longmemeval_oracle.json
+scripts/bench-reproduce.sh --dataset-path ./longmemeval_oracle.json \
+    --category temporal-reasoning --items 6 --runs 3 --database <your-bench-db>
+```
 
-### The model is part of the result, not a footnote
-
-**Model: `Qwen/Qwen3.8-27B-FP8`, self-hosted, one box.** Every figure above is
-that model's behaviour as much as the control logic's, and the difference is
-large enough to change how the numbers read.
-
-Measured over ~244,000 tool calls across two deployments: this model enters
-identical-repeat tool loops **26x more often** than the mix of larger hosted
-models (0.52% of calls against 0.02%), and once nudged out of one it changes
-approach **36%** of the time against **82%**.
-
-That is deliberate and it is the point. **A self-hosted 27B on a single machine
-is what someone running this at home actually has.** An organisation putting a
-large hosted model behind the same control logic sees the lower rate; these
-figures describe the harder case rather than the flattering one. The comparability
-key pins the model identity, so a future arm on a different model refuses to
-compare against this row rather than quietly superseding it.
-
-### What this row does NOT establish
-
-- **No pass or fail.** `bench agent gate` **refused a verdict**, correctly:
-  resolving a 5-point effect at the inherited σ=0.0604 needs 12 paired tasks and
-  this arm has 5, which can only resolve 7.6 points. A smaller movement must be
-  reported as inconclusive with that floor, never as "no change".
-- **No trend.** It is the first scored arm; there is nothing to compare it
-  against. The releases before it have no agent row at all.
-- **No noise floor for this task set.** The σ above is inherited from an earlier
-  3-task measurement and describes a different set. The honest σ for these 30
-  tasks does not exist yet, which is why the gate refuses.
-- **Not independently reproducible.** Unlike the LongMemEval rows, which run
-  against a public dataset anyone can fetch, the agent task set and its answer
-  key are not published. An external reader can see the method and the figures
-  and cannot re-run them. That is a real limitation of this row and is stated
-  rather than left to be discovered.
-
-### Provenance
-
-Both the daemon binary and the agent image are recorded by content digest in the
-run's arm key, and the run refuses to merge batches that disagree on any axis.
-**Arms recorded before 2026-08-29 carry no agent-image identity at all** — the
-executor discarded every image ID it observed, so those runs are marked
-untrustworthy and cannot serve as a baseline. This is the first arm whose image
-provenance is real.
+Today this command produces a cold result: with the reranker off it
+reproduces the figures above exactly (measured 2026-08-27, sd 0.0000 on all
+three metrics); with it on, MRR varies between runs.
 
 ## Releases with no row, and why
 
@@ -516,111 +397,6 @@ each is stated:
 | `2026.10.5` | **memory row only** | The memory open axis above, on the release candidate (`2026.10.4-171-g2213d297b`, n=3), identical to 2026.10.3. The cycle changes the companion note ingest path (memory reinstate after a forget, the refute route) and makes recall record each returned result's use, so a waiver was not open to it. No agent row, for the reason stated under 2026.10.1: the arm's model endpoint is still unreachable. |
 | `2026.10.6` | **memory row only** | The memory open axis above, on the release candidate (`2026.10.5-535-g3a228c188`, n=3), identical to 2026.10.5. The cycle makes the Article 18 restriction default-deny on every chunk read and makes recall refuse undeclared arguments, so a waiver was not open to it. This entry records the memory row only; no agent row is published for this release in this table. |
 | `2026.10.7` | **memory row only** | The memory open axis above, on the release candidate (`2026.10.6-439-g67cafb8e9`, n=3), identical to 2026.10.6. The cycle changes the recall paths (repository scope on every path, a provenance label on every hit), so a waiver was not open to it. This entry records the memory row only; no agent row is published for this release in this table. |
+| `2026.11.1` | **yes, both** | The memory open axis above, measured on `2026.10.7-130-ge8dc9aab6` (n=3), identical to 2026.10.7; the cycle changed the recall path, so a waiver was not open to it. The agent axis: the open-weight arms in [Agent quality](#agent-quality-a-4b-active-open-weight-model-on-one-gpu-2026-10-31), measured on `2026.10.7-94-g3246baad0`, part of this release; they start a new table (different model and hardware from 2026.9.0). |
 
 A missing row stated as missing is honest. An absent row is not — which is the whole
-reason this section exists.
-
-## LongMemEval — judged accuracy (tier 1) and the judge's noise floor
-
-**A judge with an unmeasured noise floor is not a standard.** Before any judged number
-can be gated or quoted as a win, the variance of the judge itself has to be known —
-otherwise a "win" is indistinguishable from the judge disagreeing with itself.
-
-Ten identical runs, same items, same models, warm corpus:
-
-| Metric | Mean | sd | Min | Max | Narrowest defensible gate (3σ) |
-|---|---|---|---|---|---|
-| **judged accuracy** | **0.8241** | **0.0340** | 0.7500 | 0.8750 | **±0.1020** |
-| context recall | 0.9764 | 0.0059 | 0.9722 | 0.9861 | ±0.0176 |
-| context precision | 0.9410 | 0.0000 | 0.9410 | 0.9410 | exact |
-| MRR | 0.9917 | 0.0108 | 0.9792 | 1.0000 | ±0.0323 |
-
-n=10 runs × 24 items, `temporal-reasoning`, comparability key `a2fd4d245b21`.
-**Judge:** `gemma4:31b`. **Answerer:** `gpt-oss:120b` — a different model family, so the
-judge is not grading its own output. Both open-weight and version-pinned, served from
-a single provider (Ollama Cloud). A multi-provider router was deliberately avoided:
-switching backends between calls would inject variance into the very number being
-measured.
-
-**What this means in practice.** Judged accuracy moved between 0.750 and 0.875 with
-nothing changing but the models' own sampling — 3 of 24 items flipping verdict. A
-tier-1 gate would therefore need a **±10.2 point** threshold to avoid firing on noise,
-which is wider than most real improvements. That is the entire argument for leading
-with tier 2: on the same runs, context precision was exactly constant.
-
-Note that context recall is **not** deterministic here (sd 0.0059) although it is on
-the tier-2 rows above. These judged runs measure the system **as shipped**, with the
-LLM reranker in the retrieval path; the tier-2 rows measure the RRF path, which has no
-model in it. Same product, two paths, and only one of them can carry an
-exact-equality gate.
-
-### Reproducing the judge-variance figure
-
-```bash
-export VORNIK_BENCH_LLM_URL=https://ollama.com/v1
-export VORNIK_BENCH_LLM_KEY=<your key>
-for i in $(seq 1 10); do
-  vornikctl bench memory run --system vornik --dataset longmemeval \
-    --dataset-path ./longmemeval_oracle.json \
-    --database <your-bench-db> --i-know-this-wipes <your-bench-db> \
-    --answer-model gpt-oss:120b --judge-model gemma4:31b \
-    --category temporal-reasoning --max-items 24 --max-tokens 4096 \
-    --run-dir ./jv-$i
-done
-vornikctl bench memory aggregate ./jv-*
-```
-
-Roughly 4.5 minutes per run on the reference deployment; the first run is much slower
-because it ingests the corpus.
-
-### Comparison: hindsight 0.9.0, same items, same budget
-
-Measured under identical conditions on the same machine, each system **as it ships**
-— both with their own rerankers active. Recorded because a comparison that only
-flatters us is worth less than one that is obviously honest.
-
-| System | Context recall | Context precision | MRR | Runs |
-|---|---|---|---|---|
-| Vornik | 1.0000 ±0.0000 | **0.9444 ±0.0000** | **0.9444 ±0.0481** | n=3 |
-| hindsight 0.9.0 | 1.0000 ±0.0000 | 0.6806 ±0.0833 | 0.7292 ±0.1250 | n=4 |
-
-Both arms are **cold** here — database truncated / bank deleted before every run — so
-the two are measured the same way. That is why Vornik's MRR reads 0.9444 ±0.0481 in
-this table and 1.0000 ±0.0000 in the release row above: the release row repeats
-against a warm corpus, as the reproduction script does. Comparing a warm number with
-a cold one would flatter whichever arm was warm.
-
-**Recall is tied at 1.000.** Both systems retrieved every gold document on all six
-items, so this subset does not separate them on recall — it is the *oracle* haystack,
-which carries about three sessions per item where the full `longmemeval_s` carries
-38–62. Expect recall to separate the systems on the larger haystack, and treat a tie
-on an easy subset as a statement about the subset.
-
-Vornik's retrieved set is tighter (precision 0.944 vs 0.681) and better ordered
-(MRR 0.944 vs 0.729). hindsight reaches the same recall by returning more.
-
-**One difference matters more than the scores.** Vornik's tier-2 figures are
-*deterministic*: recall and precision have standard deviation exactly 0.0000 across
-repeated runs, because its ingest path is chunk-and-embed with no model deciding what
-gets stored. hindsight's precision and MRR vary run to run (sd 0.083 and 0.125, with
-MRR ranging 0.667–0.917 across four runs) because its ingest consolidates memories
-through an LLM, so the corpus itself differs each time.
-
-That has a practical consequence: **a single hindsight run cannot be quoted**, and any
-comparison against it needs repeated runs and a spread. Vornik can be gated on exact
-equality; hindsight would need a ±0.375 MRR tolerance to avoid firing on its own noise.
-
-### Method and honest caveats
-
-- **n=6, one of six abilities.** A smoke-scale result. It exists to prove the pipeline
-  end to end and to establish a baseline, not to rank products.
-- Both arms are marked `retrieval_path_unverified` in their comparability keys: each
-  system was measured with its own reranker in the path, so neither run establishes a
-  deterministic retrieval path. This is the correct setting for a product comparison
-  and the wrong one for a CI gate.
-- hindsight's internal extraction model was pinned to an open-weight hosted model
-  (`google/gemma-4-26b-a4b-it`). Its embedder and reranker were its own bundled local
-  defaults. Vornik used its configured local embedder.
-- Hindsight banks are deleted between runs. Without that its corpus accumulates and
-  precision falls run over run — the first measurement taken before this was wired
-  read 0.806 precision against 0.639 on an identical repeat.

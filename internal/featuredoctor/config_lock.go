@@ -1,35 +1,31 @@
 package featuredoctor
 
 import (
-	"path/filepath"
-	"sync"
+	"vornik.io/vornik/internal/configlock"
 )
 
-// configFileLocks maps a cleaned config-file path to its write mutex. Entries
-// are never evicted — the set of config-file paths is tiny and bounded, so a
-// stale *sync.Mutex for a no-longer-written path costs one pointer.
-var configFileLocks sync.Map // string -> *sync.Mutex
-
-// LockConfigFile acquires the process-wide write lock for one config file and
-// returns its release func. EVERY read-modify-write transaction against a
-// config file MUST hold it across the full backup→read→patch→write→validate→
-// reload sequence: FileConfigWriter's temp+rename stops file CORRUPTION, not a
-// LOST UPDATE (two transactions each read the old file, patch their own copy,
-// and the second write clobbers the first's just-landed keys).
+// LockConfigFile acquires the process's one config-write lock
+// (internal/configlock) and returns its release func. EVERY read-modify-write
+// transaction against a config file MUST hold it across the full
+// backup→read→patch→write→validate→reload sequence: FileConfigWriter's
+// temp+rename stops file CORRUPTION, not a LOST UPDATE (two transactions each
+// read the old file, patch their own copy, and the second write clobbers the
+// first's just-landed keys).
 //
-// Path-keyed: transactions targeting the SAME file serialize; transactions on
-// DIFFERENT files run concurrently. Keyed on filepath.Clean(path) so equivalent
-// path strings (e.g. "/x/./c.yaml" and "/x/c.yaml") share one lock.
+// It was path-keyed until GitHub #584 (operations-api-contract-design.md §6.6):
+// a separate lock from the operations' and the control plane's, so writers
+// holding different locks still interleaved on one file. Now every writer
+// holds the same lock, whatever the path.
 //
-// Process-local only. The multi-daemon case (a Postgres advisory lock) is
-// deferred with the multi-instance work; a single daemon owns its config tree
-// today.
+// Process-local only. Another daemon on the same files is fenced by the
+// config-writer lease.
 func LockConfigFile(path string) (unlock func()) {
-	key := filepath.Clean(path)
-	// LoadOrStore may allocate a throwaway *sync.Mutex for racers that lose the
-	// create; harmless (a pointer) and this path is admin-triggered + rare.
-	v, _ := configFileLocks.LoadOrStore(key, &sync.Mutex{})
-	mu := v.(*sync.Mutex)
-	mu.Lock()
-	return mu.Unlock
+	// The process's one config-write lock (GitHub #584,
+	// operations-api-contract-design.md §6.6): every writer of the config
+	// files holds it, so this serialises with rotation, setup, the archive
+	// and the control plane too, not only with writers of the same path.
+	// path stays in the signature for its callers; the lock no longer keys
+	// on it.
+	_ = path
+	return configlock.Lock()
 }

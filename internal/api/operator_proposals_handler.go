@@ -95,7 +95,7 @@ const rfc3339 = "2006-01-02T15:04:05Z07:00"
 //	POST /api/v1/operator/proposals        — propose (writes DRAFT)
 //	GET  /api/v1/operator/proposals        — list (?project=&status=)
 func (s *Server) OperatorProposals(w http.ResponseWriter, r *http.Request) {
-	if !s.requireOperatorScope(w, r) {
+	if !s.requireOperatorScopeFor(w, r, SurfaceOperatorProposals) {
 		return
 	}
 	if s.proposalStore == nil {
@@ -117,7 +117,7 @@ func (s *Server) OperatorProposals(w http.ResponseWriter, r *http.Request) {
 //	GET  /api/v1/operator/proposals/{id}
 //	POST /api/v1/operator/proposals/{id}/decide  {"decision":"approve|reject","actor":"..."}
 func (s *Server) OperatorProposalItem(w http.ResponseWriter, r *http.Request) {
-	if !s.requireOperatorScope(w, r) {
+	if !s.requireOperatorScopeFor(w, r, SurfaceOperatorProposals) {
 		return
 	}
 	if s.proposalStore == nil {
@@ -337,7 +337,7 @@ func (s *Server) OperatorDiagnose(w http.ResponseWriter, r *http.Request) {
 		respondError(w, http.StatusMethodNotAllowed, "METHOD_NOT_ALLOWED", "use POST")
 		return
 	}
-	if !s.requireOperatorScope(w, r) {
+	if !s.requireOperatorScopeFor(w, r, SurfaceOperatorProposals) {
 		return
 	}
 	// GitHub #491: the diagnose bundle is built from the projects' error

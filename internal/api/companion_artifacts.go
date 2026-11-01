@@ -430,6 +430,7 @@ func (s *Server) companionArtifactDownload(w http.ResponseWriter, r *http.Reques
 	w.Header().Set("Content-Type", "application/octet-stream")
 	w.Header().Set("Content-Disposition", mime.FormatMediaType("attachment", map[string]string{"filename": a.Name}))
 	w.Header().Set("Content-Length", fmt.Sprint(len(b)))
+	s.markArtifactDownload(r.Context(), w, a) // Art 50(2), aimark_mark.go
 	result = string(b)
 	_, callErr = w.Write(b)
 }

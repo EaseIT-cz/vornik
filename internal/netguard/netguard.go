@@ -8,6 +8,11 @@
 // guard, which is bound to that subsystem's Repository and cannot be reused
 // across packages. This package is the shared home for that primitive; the
 // liveness checker is a candidate to fold onto it in a later pass.
+//
+// Which addresses are refused is not decided here: IsPrivateIP delegates to
+// dialguard.IsBlockedIP, the daemon's one list (GitHub #505), so this package
+// depends on internal/integrations/dialguard (a stdlib-only leaf) and never
+// the reverse.
 package netguard
 
 import (
@@ -18,21 +23,16 @@ import (
 	"net/url"
 	"strings"
 	"time"
+
+	"vornik.io/vornik/internal/integrations/dialguard"
 )
 
-// IsPrivateIP reports whether ip is one an SSRF guard must refuse: the
-// unspecified address, loopback, RFC1918 private ranges, link-local (incl.
-// the 169.254.0.0/16 cloud-metadata range), or any multicast address.
+// IsPrivateIP reports whether ip is one an SSRF guard must refuse. It is
+// dialguard.IsBlockedIP, the daemon's one list (GitHub #505: this package kept
+// its own and missed 0.0.0.0/8, broadcast, Alibaba Cloud's metadata address
+// and IPv4 embedded in NAT64 / 6to4 / IPv4-compatible IPv6); nil is refused.
 func IsPrivateIP(ip net.IP) bool {
-	if ip == nil {
-		return true
-	}
-	return ip.IsUnspecified() ||
-		ip.IsLoopback() ||
-		ip.IsPrivate() ||
-		ip.IsLinkLocalUnicast() ||
-		ip.IsLinkLocalMulticast() ||
-		ip.IsMulticast()
+	return ip == nil || dialguard.IsBlockedIP(ip)
 }
 
 // IsLocalHostname reports whether host is "localhost" or a "*.localhost" name.

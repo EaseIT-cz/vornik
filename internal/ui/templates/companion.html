@@ -1,0 +1,63 @@
+{{define "companion.html"}}
+<!DOCTYPE html>
+<html lang="en">
+{{template "pageHead" .}}
+<body class="bg-dark-900 text-gray-100 min-h-screen flex flex-col">
+    {{template "nav" .}}
+
+    <main id="main" tabindex="-1" class="flex-1 max-w-4xl mx-auto w-full py-6 px-4 sm:px-6 lg:px-8 shell-offset">
+        <div class="space-y-5">
+            <h1 class="text-xl font-semibold text-gray-100">Connect your companion</h1>
+
+            {{if not .HasProject}}
+            <div class="rounded-md border border-dark-700 bg-dark-800 px-3 py-3 text-sm text-gray-300">
+                This instance has no companion project: the Engineering template was not chosen at sign-up.
+                Choose it in the console to connect a coding assistant.
+            </div>
+            {{else}}
+            <p class="text-sm text-gray-300">
+                Connect Claude Code to this instance, so it can remember and recall what you work on, and hand work to Vornik.
+                For Codex, follow the manual steps in the companion guide.
+            </p>
+
+            <ol class="list-decimal ml-5 space-y-3 text-sm text-gray-300">
+                <li>
+                    Create a key for your companion. It is shown once, here, and never again.
+                    <div class="mt-2">
+                        <button id="companion-create" type="button" class="rounded-md bg-brand-600 px-3 py-1.5 text-sm text-white">Create a companion key</button>
+                    </div>
+                    <div id="companion-key-box" class="mt-2 hidden rounded-md border border-brand-600 bg-dark-800 px-3 py-3 space-y-1">
+                        <div class="text-xs text-gray-400">Your companion key: copy it now, it is not shown again.</div>
+                        <div id="companion-key" class="font-mono text-sm break-all text-gray-100"></div>
+                    </div>
+                    <div id="companion-error" class="mt-2 hidden text-xs text-red-400"></div>
+                </li>
+                <li>
+                    In a terminal, add the marketplace and install the plugin (safe to run again):
+                    <pre class="mt-1 rounded bg-dark-800 px-3 py-2 text-xs text-gray-100">claude plugin marketplace add EaseIT-cz/vornik
+claude plugin install vornik-companion@vornik</pre>
+                </li>
+                <li>
+                    When Claude Code enables the plugin it asks for two values. Give it this instance's address,
+                    <span class="font-mono text-gray-100">{{.VornikURL}}</span>, and the key from step 1.
+                    Claude Code keeps the key in your system's credential store, not in a file or your shell history.
+                </li>
+            </ol>
+
+            <noscript><div class="text-sm text-red-400">Creating and listing keys needs JavaScript.</div></noscript>
+
+            <h2 class="text-base font-semibold text-gray-100 pt-2">Your companion keys</h2>
+            <table class="w-full text-sm">
+                <thead><tr class="text-left text-xs text-gray-400"><th class="py-1">Name</th><th>Client</th><th>Created</th><th>Last used</th><th></th></tr></thead>
+                <tbody id="companion-keys"></tbody>
+            </table>
+            <div id="companion-root" class="hidden" data-vornik-url="{{.VornikURL}}"></div>
+            {{end}}
+        </div>
+    </main>
+{{if .HasProject}}
+<script src="/ui/static/companion.js"></script>
+{{end}}
+</body>
+</html>
+{{end}}

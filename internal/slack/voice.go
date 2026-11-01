@@ -37,6 +37,12 @@ type VoiceProviders struct {
 	STT                 voice.STTProvider
 	TTS                 voice.TTSProvider
 	MaxOutboundDuration int64 // milliseconds
+
+	// SyntheticReplies is the resolved voice.synthetic_replies switch
+	// (voice.ResolveSyntheticReplies; GitHub #543, AI Act Art 50(2)).
+	// False, the default, means replies go as text even to a voice
+	// message; inbound transcription is unaffected.
+	SyntheticReplies bool
 }
 
 const (
@@ -629,7 +635,9 @@ func (c *Channel) SendFile(ctx context.Context, sessionID, fileName string, cont
 // synthesised audio exceeds Slack's 5-min UX cap, fall back to text
 // rather than truncate or split.
 func (c *Channel) sendVoiceReply(ctx context.Context, inst *installation, p uploadAudioParams, text string) (sentID string, used bool, err error) {
-	if c.voice.TTS == nil {
+	// The canonical Art 50(2) gate (#543): nothing is synthesised unless an
+	// operator opted in. shouldReplyAsVoice checks it too.
+	if c.voice.TTS == nil || !c.voice.SyntheticReplies {
 		return "", false, nil
 	}
 	// Rich text is for READING. A synthesiser handed mrkdwn pronounces the asterisks and
@@ -668,6 +676,7 @@ func (c *Channel) sendVoiceReply(ctx context.Context, inst *installation, p uplo
 	if err != nil {
 		return "", false, err
 	}
+	c.recordAIAudio(ctx, p.Audio.Bytes) // Art 50(2): the ledger row is the mark (#117)
 	return fileID, true, nil
 }
 
@@ -675,7 +684,7 @@ func (c *Channel) sendVoiceReply(ctx context.Context, inst *installation, p uplo
 // voice-vs-text decision. Returns true when the session's most-recent
 // inbound was an audio clip AND a TTS provider is wired.
 func (c *Channel) shouldReplyAsVoice(sessionID string) bool {
-	if c.voiceTracker == nil || c.voice.TTS == nil {
+	if c.voiceTracker == nil || c.voice.TTS == nil || !c.voice.SyntheticReplies {
 		return false
 	}
 	return c.voiceTracker.IsVoice(sessionID)

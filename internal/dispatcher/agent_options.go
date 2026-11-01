@@ -5,10 +5,14 @@ package dispatcher
 // can stay focused on struct + lifecycle + processing.
 
 import (
+	"context"
+	"vornik.io/vornik/internal/aimark"
+
 	"github.com/rs/zerolog"
 	"vornik.io/vornik/internal/apigateway"
 	"vornik.io/vornik/internal/budget"
 	"vornik.io/vornik/internal/config"
+	"vornik.io/vornik/internal/firstvalue"
 	"vornik.io/vornik/internal/hallucination"
 	"vornik.io/vornik/internal/llmspend"
 	"vornik.io/vornik/internal/persistence"
@@ -42,6 +46,12 @@ func WithMaxIterations(n int) AgentOption {
 // pandoc through, in the pinned agent image and never on the daemon host
 // (process-spawn law S4/S5a); unset, render_document reports that rendering is
 // not available.
+// WithAIMarker sets the EU AI Act Art 50(2) marker render_document signs
+// documents with (GitHub #117). Nil leaves them with the unsigned statement.
+func WithAIMarker(m *aimark.Marker) AgentOption {
+	return func(a *Agent) { a.aiMarker = m }
+}
+
 func WithSandboxRunner(r *sandboxtool.Runner) AgentOption {
 	return func(a *Agent) {
 		a.sandboxRunner = r
@@ -402,4 +412,17 @@ func WithWebWritePendingNotifier(n WebWritePendingNotifier) AgentOption {
 // reminder.fired row still records the eventual fire).
 func WithAdminAuditRepository(repo persistence.AdminAuditRepository) AgentOption {
 	return func(a *Agent) { a.adminAuditRepo = repo }
+}
+
+// WithFirstValue wires the instance's first-value tracker: an answered turn
+// on any channel marks the first assistant answer (GitHub #587,
+// operations-api-contract-design.md §7.2.2). Nil leaves it unmarked.
+func WithFirstValue(t *firstvalue.Tracker) AgentOption {
+	return func(a *Agent) { a.firstValue = t }
+}
+
+// MarkAnswered records the first assistant answer; ChannelReceiver calls it
+// after an answered turn.
+func (a *Agent) MarkAnswered(ctx context.Context) {
+	a.firstValue.Mark(ctx, firstvalue.FirstAnswer)
 }

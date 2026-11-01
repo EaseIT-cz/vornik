@@ -80,6 +80,16 @@ type Auth struct {
 	// well-known path (Intercom). Both must be set together.
 	AuthorizationEndpoint string `yaml:"authorization_endpoint,omitempty" json:"authorization_endpoint,omitempty"`
 	TokenEndpoint         string `yaml:"token_endpoint,omitempty" json:"token_endpoint,omitempty"`
+	// Issuer and IssParameterSupported describe a manual-endpoint server's
+	// authorization server for RFC 9207 (design §16.5 C2): its issuer, and
+	// whether it sends iss in the authorization response. A discovered
+	// server's come from its metadata instead.
+	Issuer                string `yaml:"issuer,omitempty" json:"issuer,omitempty"`
+	IssParameterSupported bool   `yaml:"iss_parameter_supported,omitempty" json:"iss_parameter_supported,omitempty"`
+	// RouterProvider is the server's name in the EaseIT OAuth router's
+	// provider allowlist (design §16.5 C1): a managed instance starts its
+	// flows at <router>/oauth/start?provider=<this>.
+	RouterProvider string `yaml:"router_provider,omitempty" json:"router_provider,omitempty"`
 
 	// --- mode: static ---
 

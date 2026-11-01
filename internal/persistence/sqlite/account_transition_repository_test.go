@@ -238,3 +238,46 @@ func TestAccountTransition_BeginConfigRejectsStaleSnapshot(t *testing.T) {
 		})
 	}
 }
+
+// GitHub #571 U3b (§15.3a C5): a removed connection's sign-in is deleted in
+// the transaction that withdraws its approval, so a failed publication keeps
+// both and a retried one removes both.
+func TestAccountTransition571_SignInDeletedWithTheRemoval(t *testing.T) {
+	db := sqlitetest.Memory(t)
+	ctx := context.Background()
+	tokens := sqlite.NewMCPOAuthTokenRepository(db.DB)
+	if err := tokens.Upsert(ctx, &persistence.MCPOAuthToken{ProjectID: "hermes--mail", ServerName: "gmail", Resource: "r", ClientID: "c", AccessToken: "sv1:x"}); err != nil {
+		t.Fatal(err)
+	}
+	grants := sqlite.NewAgentGrantRepository(db.DB)
+	if err := grants.UpsertIntegration(ctx, persistence.AgentIntegrationApproval{Namespace: "hermes", ProjectID: "hermes--mail", Integration: "gmail",
+		Kind: "mcp", URL: "u", ApprovedByDevice: "d", ApprovedAt: time.Now()}); err != nil {
+		t.Fatal(err)
+	}
+	r := sqlite.NewAccountTransitionRepository(db.DB)
+	ticket, err := r.Begin(ctx, persistence.AccountNamespaceScope("hermes"), "owner", "config", time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	p := persistence.AccountPublication{
+		DeleteTokens: []persistence.AccountTokenKey{{ProjectID: "hermes--mail", ServerName: "gmail"}},
+		Removed:      []persistence.AccountIntegrationRemoval{{ProjectID: "hermes--mail", Integration: "gmail", At: time.Now()}},
+		Identity:     &persistence.AccountIdentityUpdate{ProjectID: "missing", Integration: "missing", Identity: "x"},
+	}
+	if err = r.Finish(ctx, ticket, p); err == nil {
+		t.Fatal("a publication with a missing identity target succeeded")
+	}
+	if _, err = tokens.Get(ctx, "hermes--mail", "gmail", ""); err != nil {
+		t.Fatalf("a failed publication deleted the sign-in: %v", err)
+	}
+	p.Identity = nil
+	if err = r.Finish(ctx, ticket, p); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = tokens.Get(ctx, "hermes--mail", "gmail", ""); !errors.Is(err, persistence.ErrNotFound) {
+		t.Fatalf("the published removal kept the sign-in: %v", err)
+	}
+	if a, err := grants.GetIntegration(ctx, "hermes--mail", "gmail"); err != nil || a.RemovedAt == nil {
+		t.Fatalf("the approval after the published removal: %+v %v", a, err)
+	}
+}

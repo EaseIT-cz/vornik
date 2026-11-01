@@ -51,6 +51,17 @@ type Dialect struct {
 	// an erasure evicts (Postgres, migration 68). False on SQLite, which has no
 	// such table; there EvictAssembledTraces reports "not applicable".
 	TraceCache bool
+	// JSONB says JSON columns (task_messages.metadata, tasks.payload) are
+	// jsonb, compared through ::text and written through ::jsonb. On SQLite
+	// they are BLOB, compared through CAST(... AS TEXT).
+	JSONB bool
+	// RowLocks says a transcript write locks its task subtree FOR UPDATE
+	// first (Postgres, READ COMMITTED). SQLite's BEGIN IMMEDIATE already
+	// serialises writers.
+	RowLocks bool
+	// NullSafeEq is the NULL-safe equality operator; empty means
+	// IS NOT DISTINCT FROM. SQLite sets IS.
+	NullSafeEq string
 }
 
 func (d Dialect) mapErr(err error) error {

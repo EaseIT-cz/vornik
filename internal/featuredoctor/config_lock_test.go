@@ -39,20 +39,29 @@ func TestLockConfigFile_SameFileSerializes(t *testing.T) {
 	}
 }
 
-func TestLockConfigFile_DifferentFilesConcurrent(t *testing.T) {
+// GitHub #584 reversed this test's former property ("a different path must
+// not block"): writers holding locks on different paths, or different locks,
+// interleaved on one config file. Every writer now holds the one lock, so a
+// different path waits too.
+func TestLockConfigFile_DifferentFilesSerialiseToo(t *testing.T) {
 	u1 := LockConfigFile("/tmp/vornik-a.yaml")
-	defer u1()
-	done := make(chan struct{})
+	acquired := make(chan struct{})
 	go func() {
-		u2 := LockConfigFile("/tmp/vornik-b.yaml") // different path — must not block
+		u2 := LockConfigFile("/tmp/vornik-b.yaml")
+		close(acquired)
 		u2()
-		close(done)
 	}()
 	select {
-	case <-done:
-		// good
+	case <-acquired:
+		u1()
+		t.Fatal("a lock on a different path did not wait for the one config-write lock")
+	case <-time.After(60 * time.Millisecond):
+	}
+	u1()
+	select {
+	case <-acquired:
 	case <-time.After(2 * time.Second):
-		t.Fatal("lock on a different path blocked behind an unrelated path")
+		t.Fatal("the second lock was never acquired after the first released")
 	}
 }
 

@@ -14,7 +14,9 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"vornik.io/vornik/internal/aimark"
 	"vornik.io/vornik/internal/brokergrants"
+	"vornik.io/vornik/internal/listener"
 
 	"github.com/rs/zerolog"
 	"vornik.io/vornik/internal/admin"
@@ -217,6 +219,8 @@ type ArchiveLifecycleSnapshot struct {
 
 // Server handles HTTP requests for the web UI.
 type Server struct {
+	// aiMarker signs Art 50(2) marks on web chat replies (chat_aimark.go).
+	aiMarker *aimark.Marker
 	// receiptSigningKey signs the post-eviction receipt so a crafted link
 	// cannot fabricate one. Per-process and random — see
 	// memory_evict_receipt.go for why that is the right lifetime.
@@ -284,7 +288,13 @@ type Server struct {
 	cpConfigPath        string
 	tradingSnapshotRepo persistence.TradingPositionsSnapshotRepository
 	tradingOrderRepo    persistence.TradingOrderRepository
-	tradingSafetyRepo   persistence.TradingSafetyEventRepository
+	// tradingBenchmarkRepo holds benchmark (SPY) session closes (GitHub #597).
+	tradingBenchmarkRepo persistence.BenchmarkCloseRepository
+	// tradingFunnelRepo holds the entry funnel and its outcomes (GitHub #596).
+	tradingFunnelRepo persistence.FunnelRepository
+	// tradingShadowRepo holds the rule engine's shadow record (GitHub #598).
+	tradingShadowRepo persistence.ShadowDecisionRepository
+	tradingSafetyRepo persistence.TradingSafetyEventRepository
 	// tradingFillRepo (optional) backs the soak-panel "volume
 	// today / 7d" tile with precise SUM(qty × fill_price) over
 	// trading_fills. nil falls back to the trading_orders
@@ -809,6 +819,9 @@ type Server struct {
 	// the break-glass key form. Set by WithLoginProviders (github-
 	// login phase 3).
 	loginProviders []string
+	// managedHosting hides the API-key login off the operations listener
+	// (GitHub #560, M1c D3).
+	managedHosting bool
 	// logoutHandler serves POST /ui/logout — revokes the session and
 	// clears the cookie. Nil → the nav renders no logout button and
 	// the route 404s. Wired by WithLogoutHandler to the loginflow
@@ -1764,6 +1777,30 @@ func WithTradingOrderRepository(repo persistence.TradingOrderRepository) ServerO
 	}
 }
 
+// WithTradingBenchmarkRepository wires benchmark session closes for the
+// Trading Performance panel's "vs SPY" block (GitHub #597).
+func WithTradingBenchmarkRepository(repo persistence.BenchmarkCloseRepository) ServerOption {
+	return func(s *Server) {
+		s.tradingBenchmarkRepo = repo
+	}
+}
+
+// WithTradingFunnelRepository wires the entry funnel for the Trading
+// Performance panel's "Entry signal" block (GitHub #596).
+func WithTradingFunnelRepository(repo persistence.FunnelRepository) ServerOption {
+	return func(s *Server) {
+		s.tradingFunnelRepo = repo
+	}
+}
+
+// WithTradingShadowRepository wires the rule engine's shadow record for the
+// panel's parity block (GitHub #598).
+func WithTradingShadowRepository(repo persistence.ShadowDecisionRepository) ServerOption {
+	return func(s *Server) {
+		s.tradingShadowRepo = repo
+	}
+}
+
 // WithTradingSafetyRepository wires the safety-event audit repo
 // for the project-page recent-safety-events timeline. Phase 2
 // of the broker→daemon audit channel — populated by every
@@ -2266,6 +2303,19 @@ func WithLoginProviders(providers []string) ServerOption {
 	return func(s *Server) { s.loginProviders = providers }
 }
 
+// WithManagedHosting marks a managed (hosted) instance: the API-key login is
+// offered on the operations listener only (GitHub #560, M1c D3).
+func WithManagedHosting(managed bool) ServerOption {
+	return func(s *Server) { s.managedHosting = managed }
+}
+
+// keyLoginOffered reports whether this request may use the API-key login: in
+// managed hosting only on the operations listener (M1a's gate already refuses
+// an admin key presented as Basic elsewhere; this removes the dead end).
+func (s *Server) keyLoginOffered(r *http.Request) bool {
+	return !s.managedHosting || listener.FromContext(r.Context()) == listener.Operations
+}
+
 // WithLogoutHandler wires the POST /ui/logout handler (the loginflow
 // Logout handler). When set, the nav renders a logout button and the
 // route is mounted; nil leaves both absent. Passed as an http.Handler
@@ -2336,6 +2386,13 @@ func NewServer(opts ...ServerOption) *Server {
 		panic(fmt.Errorf("ui: embedded template parse failed: %w", err))
 	}
 	s.templates = tmpl
+	// The console CSP admits inline scripts by their hashes only (#416
+	// phases 5 and 6), so a console whose hashes cannot be computed would run
+	// no inline script: refuse to start, as for a template parse failure.
+	if _, err := consoleCSPForServer(); err != nil {
+		s.logger.Error().Err(err).Msg("console CSP: the inline script hashes could not be computed")
+		panic(fmt.Errorf("ui: console CSP: %w", err))
+	}
 
 	return s
 }
@@ -2495,6 +2552,8 @@ func (s *Server) Handler() http.Handler {
 	// scope + explicit capability), never by the EE admin router.
 	// Self-service account surface (§5.5). No operator capability and no
 	// admin surface, so it serves Community and Enterprise identically.
+	// The managed instance owner's companion page (GitHub #587).
+	mux.HandleFunc("/companion", s.CompanionPage)
 	mux.HandleFunc("/account", s.MyAccount)
 	mux.HandleFunc("/account/", s.MyAccountAction)
 	mux.HandleFunc("/operator/accounts", s.operatorAccountsRouter)
@@ -2559,9 +2618,20 @@ func (s *Server) Handler() http.Handler {
 	// already catches /tasks/, so dispatch via suffix match.
 
 	return withConsoleSecurityHeaders(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if api.SessionRoleFromContext(r.Context()) == auth.RoleUser && sessionUserGlobalConfigPath(r.URL.Path) {
+		// GitHub #560 (M1b B2b): managed hosting's instance owner
+		// (tenant_admin) is refused the daemon-global authoring surfaces
+		// too, except project creation (/projects/new: the gallery and the
+		// wizard, granted by the B3 allowlist).
+		if role := api.SessionRoleFromContext(r.Context()); (role == auth.RoleUser || (role == auth.RoleTenantAdmin && !tenantAdminAuthoringPath(r.URL.Path))) && sessionUserGlobalConfigPath(r.URL.Path) {
+			if role == auth.RoleTenantAdmin {
+				s.logger.Info().Str("surface", "ui_global_authoring").Str("outcome", "refused").Str("path", r.URL.Path).
+					Msg("operator surface: tenant_admin refused")
+			}
 			http.Error(w, "admin scope required", http.StatusForbidden)
 			return
+		} else if role == auth.RoleTenantAdmin && sessionUserGlobalConfigPath(r.URL.Path) {
+			s.logger.Info().Str("surface", "ui_project_creation").Str("outcome", "allowed").Str("path", r.URL.Path).
+				Msg("operator surface: tenant_admin allowed")
 		}
 		mux.ServeHTTP(w, r)
 	}))
@@ -2653,6 +2723,12 @@ var sessionUserGlobalAuthoringPrefixes = []string{
 	"/assistant/draft",
 	"/audit",
 	"/mcp",
+}
+
+// tenantAdminAuthoringPath is the one daemon-global authoring root managed
+// hosting's instance owner may use: project creation (GitHub #560, M1b B2b).
+func tenantAdminAuthoringPath(path string) bool {
+	return path == "/projects/new" || strings.HasPrefix(path, "/projects/new/")
 }
 
 // sessionUserGlobalConfigPath reports whether path is a daemon-global
@@ -3048,6 +3124,9 @@ func uiFuncMap() template.FuncMap {
 		"csrfClientScript": csrfClientScript,
 		// The prebuilt stylesheet's URL with its content hash (#165).
 		"tailwindCSSHref": tailwindCSSHref,
+		// markAt is the Art 50(2) mark of chat history entry i (chat_aimark.go);
+		// "index" above is typed for status counts, so it cannot serve here.
+		"markAt": func(marks map[int]string, i int) string { return marks[i] },
 		"index": func(m map[persistence.TaskStatus]int64, key persistence.TaskStatus) int64 {
 			if m == nil {
 				return 0
@@ -3355,6 +3434,10 @@ func uiFuncMap() template.FuncMap {
 			}
 			return int(pct)
 		},
+		// jsonArgs is a data-args value: its arguments as a JSON array, as a
+		// plain string so html/template escapes it for the attribute (#416,
+		// phase 3).
+		"jsonArgs": jsonArgs,
 		// toJSON marshals any value to a JSON string for embedding in <script> tags.
 		"toJSON": func(v any) template.JS {
 			b, err := json.Marshal(v)
@@ -3580,4 +3663,19 @@ func uiFuncMap() template.FuncMap {
 		"navModel":       navModel,
 		"navAreaForPage": navAreaForPage,
 	}
+}
+
+// jsonArgs renders its arguments as a JSON array for a data-args attribute
+// (GitHub #416, web-ui-design.md "C, phase 3"). It returns a string, never
+// template.JS, so html/template escapes it for the double-quoted attribute;
+// the browser decodes the entities before dataset exposes the value.
+func jsonArgs(v ...any) string {
+	if v == nil {
+		v = []any{}
+	}
+	b, err := json.Marshal(v)
+	if err != nil {
+		return "[]"
+	}
+	return string(b)
 }

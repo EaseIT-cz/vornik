@@ -392,7 +392,7 @@ func TestSlackSend_VoiceInbound_UploadsAudio(t *testing.T) {
 	}
 	vts := newSlackVoiceTestServer(t, "audio/mp4", nil)
 	defer vts.Close()
-	ch := newSlackVoiceChannel(t, vts, VoiceProviders{TTS: tts})
+	ch := newSlackVoiceChannel(t, vts, VoiceProviders{TTS: tts, SyntheticReplies: true}) // opted in (#543)
 	sessionID := "T123/C_test#1700000010.000200"
 	ch.voiceTracker.MarkVoice(sessionID)
 
@@ -589,8 +589,12 @@ func TestShouldReplyAsVoice_RequiresBothTrackerAndTTS(t *testing.T) {
 		t.Errorf("tracker not marked; should not reply as voice")
 	}
 	ch.voiceTracker.MarkVoice("s")
+	if ch.shouldReplyAsVoice("s") {
+		t.Errorf("synthetic replies not opted in (#543); should not reply as voice")
+	}
+	ch.voice.SyntheticReplies = true
 	if !ch.shouldReplyAsVoice("s") {
-		t.Errorf("expected voice reply: tracker marked + TTS wired")
+		t.Errorf("expected voice reply: tracker marked + TTS wired + opted in")
 	}
 }
 
@@ -851,7 +855,7 @@ func TestUploadAudioV2_CompleteUploadHTTPError(t *testing.T) {
 	cfg := validConfig()
 	cfg.APIBaseURL = srv.URL
 	cfg.HTTPClient = srv.Client()
-	cfg.Voice = VoiceProviders{TTS: tts}
+	cfg.Voice = VoiceProviders{TTS: tts, SyntheticReplies: true} // opted in (#543)
 	now := time.Unix(1700000000, 0)
 	ch := makeChannel(t, cfg, now)
 	inst := ch.installations[0]

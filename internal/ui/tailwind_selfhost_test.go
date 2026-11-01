@@ -146,7 +146,9 @@ func assertNoThirdPartyCSPSource(t *testing.T, where, policy string) {
 	}
 	for dir, srcs := range csp {
 		for _, s := range srcs {
-			if !allowed[s] {
+			// A hash (#416 phase 5) admits one inline script's text; it names
+			// no origin.
+			if !allowed[s] && !strings.HasPrefix(s, "'sha256-") {
 				t.Errorf("%s: CSP %s allows %q, a source outside this origin", where, dir, s)
 			}
 		}

@@ -1000,6 +1000,7 @@ func TestMCPOAuthTokenRepository_PostgresContract(t *testing.T) {
 	db := newIntegrationDB(t)
 	resetSuiteTables(t, db, "mcp_oauth_tokens")
 	repotest.RunMCPOAuthTokenSuite(t, NewMCPOAuthTokenRepository(db.DB))
+	repotest.RunMCPOAuthOwnerSuite(t, NewMCPOAuthTokenRepository(db.DB)) // #571 U3b
 	// Plan P4.4: the agent sealing wrapper over this driver.
 	repotest.RunSealedMCPOAuthTokenSuite(t, sealedTokens(t, NewMCPOAuthTokenRepository(db.DB)), NewMCPOAuthTokenRepository(db.DB))
 }
@@ -1059,6 +1060,7 @@ func TestAgentSecret_PostgresContract(t *testing.T) {
 func TestAgentGrant_PostgresContract(t *testing.T) {
 	db := newIntegrationDB(t)
 	repotest.RunAgentGrantSuite(t, NewAgentGrantRepository(db.DB))
+	repotest.RunAgentGrantOwnerSuite(t, NewAgentGrantRepository(db.DB)) // #571 U3b
 }
 
 // TestMigration219_IsAdditive — GitHub #119 item 8 (2026-10-08): migration
@@ -1477,4 +1479,67 @@ func TestQueuedAction_PostgresContract(t *testing.T) {
 // seam; both backends satisfy auditredact.StepOutcomeStore.
 func decorateStepOutcomes425(inner persistence.ExecutionStepOutcomeRepository, det secrets.Detector) persistence.ExecutionStepOutcomeRepository {
 	return auditredact.NewStepOutcomes(inner.(auditredact.StepOutcomeStore), det, nil, nil)
+}
+
+// GitHub #581 D5: the owner export registry.
+func TestInstanceExportSuite(t *testing.T) {
+	db := newIntegrationDB(t)
+	repotest.RunInstanceExportSuite(t, NewInstanceExportRepository(db.DB))
+}
+
+// GitHub #587: the instance's once-only milestones.
+func TestInstanceMilestoneSuite(t *testing.T) {
+	db := newIntegrationDB(t)
+	repotest.RunInstanceMilestoneSuite(t, NewInstanceMilestoneRepository(db.DB))
+}
+
+// TestAIOutputMarkRepository_PostgresContract — the EU AI Act Art 50(2)
+// marking evidence (migration 243; GitHub #117), the suite that also runs on
+// SQLite.
+func TestAIOutputMarkRepository_PostgresContract(t *testing.T) {
+	db := newIntegrationDB(t)
+	resetSuiteTables(t, db, "ai_output_marks", "ai_mark_keys")
+	repotest.RunAIOutputMarkSuite(t, NewAIOutputMarkRepository(db.DB))
+}
+
+// TestFunnelRepository_PostgresContract — the trading entry funnel and its forward outcomes (GitHub
+// #596), the suite that runs on both drivers.
+func TestFunnelRepository_PostgresContract(t *testing.T) {
+	db := newIntegrationDB(t)
+	resetSuiteTables(t, db, "trading_funnel_candidates")
+	repotest.RunFunnelSuite(t, NewFunnelRepository(db.DB))
+}
+
+// TestBenchmarkCloseRepository_PostgresContract — benchmark session closes (GitHub #597), the suite that runs on
+// both drivers.
+func TestBenchmarkCloseRepository_PostgresContract(t *testing.T) {
+	db := newIntegrationDB(t)
+	resetSuiteTables(t, db, "trading_benchmark_closes")
+	repotest.RunBenchmarkCloseSuite(t, NewBenchmarkCloseRepository(db.DB))
+}
+
+// TestWithRefreshLock_SealPassLockName_Postgres — production 2026-10-31: the
+// startup seal pass (#571, #578) locked on a reserved server name holding a
+// NUL byte, which Postgres refuses in a text parameter ("invalid byte sequence
+// for encoding UTF8: 0x00"). The pass never ran, OAuth tokens stayed unsealed
+// and the read path refused them. The reserved name must lock on Postgres.
+func TestWithRefreshLock_SealPassLockName_Postgres(t *testing.T) {
+	db := newIntegrationDB(t)
+	repo := NewMCPOAuthTokenRepository(db.DB)
+	ran := false
+	err := repo.WithRefreshLock(context.Background(), "", persistence.SealPassLockServer, "", func(context.Context) error {
+		ran = true
+		return nil
+	})
+	if err != nil || !ran {
+		t.Fatalf("the seal pass's lock must work on Postgres: ran=%v err=%v", ran, err)
+	}
+}
+
+// TestShadowDecisionRepository_PostgresContract — the rule engine's shadow record (GitHub #598), the suite that
+// runs on both drivers.
+func TestShadowDecisionRepository_PostgresContract(t *testing.T) {
+	db := newIntegrationDB(t)
+	resetSuiteTables(t, db, "trading_shadow_decisions")
+	repotest.RunShadowDecisionSuite(t, NewShadowDecisionRepository(db.DB))
 }

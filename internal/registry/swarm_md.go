@@ -26,6 +26,7 @@ package registry
 import (
 	"fmt"
 	"strings"
+	"vornik.io/vornik/internal/config"
 
 	"gopkg.in/yaml.v3"
 
@@ -150,7 +151,28 @@ func decodeSwarmFrontmatter(content []byte, filename string) (*Swarm, []byte, er
 	if err := yaml.Unmarshal(frontmatter, &sw); err != nil {
 		return nil, nil, fmt.Errorf("%s %s: yaml frontmatter parse: %w", swarmKindLabel, filename, err)
 	}
+	if err := refuseReservedAgentEnv(&sw, filename); err != nil {
+		return nil, nil, err
+	}
 	return &sw, body, nil
+}
+
+// refuseReservedAgentEnv refuses a role whose envVars set a key the daemon
+// owns: where the agent's daemon calls go, their credentials and the task's
+// identity. A role's envVars are layered over the daemon's own values, so it
+// could otherwise send the agent's calls, with the per-task key, to another
+// host (GitHub #501). In the decode, so the loader, the skill validator and
+// the config-assist gate refuse it alike.
+func refuseReservedAgentEnv(sw *Swarm, filename string) error {
+	for _, role := range sw.Roles {
+		for key := range role.Runtime.EnvVars {
+			if config.IsReservedAgentEnvKey(key) {
+				return fmt.Errorf("%s %s: role %s sets %s in runtime.envVars, which the daemon sets for every agent container; remove it",
+					swarmKindLabel, filename, role.Name, key)
+			}
+		}
+	}
+	return nil
 }
 
 // applyRolePrompts fills each role's SystemPrompt from the body

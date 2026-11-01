@@ -22,7 +22,7 @@ func (r *routingStub) Search(_ context.Context, _, _ string, _ int) ([]MemorySea
 	return r.results, nil
 }
 
-func (r *routingStub) SearchRouting(_ context.Context, _, _ string, _ int) ([]MemorySearchResult, *RoutingVerdictWire, error) {
+func (r *routingStub) SearchRouting(_ context.Context, _, _ string, _ MemorySearchRequest) ([]MemorySearchResult, *RoutingVerdictWire, error) {
 	return r.results, r.verdict, nil
 }
 

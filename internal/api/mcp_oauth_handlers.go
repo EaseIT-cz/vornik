@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"vornik.io/vornik/internal/auth"
 	"vornik.io/vornik/internal/mcpauth"
 	"vornik.io/vornik/internal/mcpconnect"
 	"vornik.io/vornik/internal/persistence"
@@ -43,6 +44,23 @@ type MCPOAuthConnector interface {
 // Everything else about the gate is identical: auth disabled (single-operator homelab) passes, a
 // browser session with role=admin passes, and otherwise the caller needs an admin-allowlisted
 // API key.
+// requireAdminClassGateFor is requireAdminClassGate that also grants managed
+// hosting's instance owner (tenant_admin) the surface when TenantAdminMay
+// names it (GitHub #560, M1b B2): the MCP OAuth connect flow.
+//
+//nolint:unparam // the surface is the allowlist key the completeness test reads at every call site (M1b B5); one surface uses this gate today
+func (s *Server) requireAdminClassGateFor(w http.ResponseWriter, r *http.Request, surface Surface) bool {
+	if IsAuthEnabledFromContext(r.Context()) && SessionRoleFromContext(r.Context()) == auth.RoleTenantAdmin {
+		allowed := TenantAdminMay(surface)
+		s.logTenantAdminDecision(r, surface, allowed)
+		if !allowed {
+			respondError(w, http.StatusForbidden, "ADMIN_SCOPE_REQUIRED", "admin scope required")
+		}
+		return allowed
+	}
+	return s.requireAdminClassGate(w, r)
+}
+
 func (s *Server) requireAdminClassGate(w http.ResponseWriter, r *http.Request) bool {
 	if !IsAuthEnabledFromContext(r.Context()) {
 		return true
@@ -130,7 +148,7 @@ func (s *Server) MCPOAuthBegin(w http.ResponseWriter, r *http.Request) {
 		respondError(w, http.StatusMethodNotAllowed, "METHOD_NOT_ALLOWED", "POST required")
 		return
 	}
-	if !s.requireAdminClassGate(w, r) {
+	if !s.requireAdminClassGateFor(w, r, SurfaceMCPOAuthConnect) {
 		return
 	}
 	if s.mcpOAuth == nil {
@@ -179,7 +197,7 @@ func (s *Server) MCPOAuthStatus(w http.ResponseWriter, r *http.Request) {
 		respondError(w, http.StatusMethodNotAllowed, "METHOD_NOT_ALLOWED", "GET required")
 		return
 	}
-	if !s.requireAdminClassGate(w, r) {
+	if !s.requireAdminClassGateFor(w, r, SurfaceMCPOAuthConnect) {
 		return
 	}
 	if s.mcpOAuth == nil {
@@ -227,7 +245,7 @@ func (s *Server) MCPOAuthDisconnect(w http.ResponseWriter, r *http.Request) {
 		respondError(w, http.StatusMethodNotAllowed, "METHOD_NOT_ALLOWED", "POST required")
 		return
 	}
-	if !s.requireAdminClassGate(w, r) {
+	if !s.requireAdminClassGateFor(w, r, SurfaceMCPOAuthConnect) {
 		return
 	}
 	if s.mcpOAuth == nil {

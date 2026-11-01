@@ -2,8 +2,10 @@ package service
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
+	"vornik.io/vornik/internal/sessionstore/sessionstoretest"
 
 	"github.com/rs/zerolog"
 	"vornik.io/vornik/internal/chat"
@@ -195,7 +197,9 @@ func TestSlackSessionStore_InheritanceIsScopedToTheSameChannel(t *testing.T) {
 // stubPersistRepo is a channel-session repository that survives "restart": the rows live
 // outside the store, so a fresh store reads what the previous one wrote.
 type stubPersistRepo struct {
-	rows map[string]*persistence.ChannelSession
+	// fence numbers the rows (art17 redact design §15.18).
+	fence sessionstoretest.Versions
+	rows  map[string]*persistence.ChannelSession
 }
 
 func newStubPersistRepo() *stubPersistRepo {
@@ -217,7 +221,9 @@ func (r *stubPersistRepo) Load(_ context.Context, kind, sessionID string) (*pers
 	if !ok {
 		return nil, persistence.ErrNotFound
 	}
-	return row, nil
+	cp := *row
+	cp.Version = r.fence.Of(kind, sessionID)
+	return &cp, nil
 }
 
 func (r *stubPersistRepo) Delete(_ context.Context, kind, sessionID string) error {
@@ -308,3 +314,31 @@ func TestSlackFormattingBlock_TeachesTheMrkdwnTraps(t *testing.T) {
 		t.Error("the guidance does not tell the lead that voice conversion is automatic")
 	}
 }
+
+// Version, SaveIfVersion and Fenced honour the fence over this fake's own
+// rows (art17 redact design §15.18).
+func (r *stubPersistRepo) Version(ctx context.Context, kind, sessionID string) (bool, int64, error) {
+	if _, err := r.Load(ctx, kind, sessionID); err != nil {
+		if errors.Is(err, persistence.ErrNotFound) {
+			return false, 0, nil
+		}
+		return false, 0, err
+	}
+	return true, r.fence.Of(kind, sessionID), nil
+}
+
+func (r *stubPersistRepo) SaveIfVersion(ctx context.Context, kind, sessionID, activeProject string, history []byte, expect *int64) (int64, bool, error) {
+	exists, _, err := r.Version(ctx, kind, sessionID)
+	if err != nil {
+		return 0, false, err
+	}
+	if !r.fence.Matches(kind, sessionID, exists, expect) {
+		return 0, false, nil
+	}
+	if err := r.Save(ctx, kind, sessionID, activeProject, history); err != nil {
+		return 0, false, err
+	}
+	return r.fence.Bump(kind, sessionID), true, nil
+}
+
+func (r *stubPersistRepo) Fenced() bool { return true }

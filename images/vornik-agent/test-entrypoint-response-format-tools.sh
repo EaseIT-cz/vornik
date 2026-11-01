@@ -130,3 +130,29 @@ if ! grep -q 'compute-bound' "$ep"; then
   exit 1
 fi
 echo "PASS: build/test subprocess timeouts are scalable, and scoped as compute-bound"
+
+# --- 6. A schema-constrained request never ends on an assistant message -----
+# GitHub #594, found 2026-10-31 by the gemma-4-26b-a4b bench (llama.cpp):
+# the tool-free schema re-ask appended the model's own final answer and called
+# again with response_format, so the conversation ENDED ON AN ASSISTANT
+# MESSAGE. llama.cpp (and Anthropic) treat a trailing assistant message as a
+# prefix to continue; the prefix could not satisfy the JSON grammar and the
+# server answered 400 "Failed to initialize samplers", which opened the
+# model's circuit and failed the task as MODEL_UNHEALTHY. Found at: e2e-lane
+# (bench smoke); regression test at: unit (this request builder, which every
+# re-ask path goes through). Lower because: the defect is the request shape,
+# and asserting it here covers every caller.
+printf '%s\n' '[{"role":"user","content":"go"},{"role":"assistant","content":"```json\n{\"summary\":\"x\"}\n```"}]' > "$msgs"
+build_llm_request_file "$req" "$msgs" "$tmp/notools.json" "r" "json_schema" "$schema"
+[ "$(jq -r '.messages[-1].role' "$req")" = "user" ] || {
+  echo "FAIL: a schema-constrained request ends on an assistant message; llama.cpp refuses it (#594)" >&2
+  jq -c '.messages' "$req" >&2
+  exit 1
+}
+[ "$(jq '.messages | length' "$req")" = "3" ] || { echo "FAIL: the conversation was not kept whole" >&2; exit 1; }
+# The history file itself is not rewritten: the instruction is per request.
+[ "$(jq -r '.[-1].role' "$msgs")" = "assistant" ] || { echo "FAIL: the stored history was modified" >&2; exit 1; }
+# A request without a directive keeps its shape (a tool phase continues normally).
+build_llm_request_file "$req" "$msgs" "$tmp/notools.json" "r" "" "null"
+[ "$(jq -r '.messages[-1].role' "$req")" = "assistant" ] || { echo "FAIL: a free-form request was changed" >&2; exit 1; }
+echo "PASS: a schema-constrained request ends on a user turn"

@@ -32,6 +32,8 @@ func SubjectStoreDialect() subjectstore.Dialect {
 		// No blackbox_trace_cache table on SQLite; an erasure reports the
 		// eviction "not applicable" (Art 17 design §15.12).
 		TraceCache: false,
+		// Transcript erasure, slice 5d-1 (Art 17 design §15.14).
+		NullSafeEq: "IS",
 	}
 }
 

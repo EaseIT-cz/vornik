@@ -16,6 +16,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"reflect"
 	"strings"
 	"testing"
@@ -1163,6 +1164,23 @@ func RunReminderSuite(t *testing.T, repo persistence.ReminderRepository) {
 // ChannelSessionRepository — Postgres-only (SQLite is a no-op stub).
 // ---------------------------------------------------------------------------
 
+// saveChannelSession writes a session over whatever version it holds now, the
+// fenced equivalent of the removed blind upsert (art17 redact design §15.18).
+func saveChannelSession(ctx context.Context, repo persistence.ChannelSessionRepository, kind, sess, project string, history []byte) error {
+	found, v, err := repo.Version(ctx, kind, sess)
+	if err != nil {
+		return err
+	}
+	var expect *int64
+	if found {
+		expect = &v
+	}
+	if _, ok, err := repo.SaveIfVersion(ctx, kind, sess, project, history, expect); err != nil || !ok {
+		return fmt.Errorf("save %s/%s: ok=%v err=%v", kind, sess, ok, err)
+	}
+	return nil
+}
+
 // RunChannelSessionSuite exercises durable per-channel session storage:
 // save/load round-trip, ErrNotFound on a fresh session, upsert on repeat,
 // and idempotent delete.
@@ -1173,7 +1191,7 @@ func RunChannelSessionSuite(t *testing.T, repo persistence.ChannelSessionReposit
 	t.Run("Save_then_Load_round_trips", func(t *testing.T) {
 		kind, sess := uniqueID("kind"), uniqueID("sess")
 		history := []byte(`[{"role":"user","content":"hi"}]`)
-		if err := repo.Save(ctx, kind, sess, "proj-a", history); err != nil {
+		if err := saveChannelSession(ctx, repo, kind, sess, "proj-a", history); err != nil {
 			t.Fatalf("Save: %v", err)
 		}
 		got, err := repo.Load(ctx, kind, sess)
@@ -1193,10 +1211,10 @@ func RunChannelSessionSuite(t *testing.T, repo persistence.ChannelSessionReposit
 
 	t.Run("Save_upserts_on_repeat", func(t *testing.T) {
 		kind, sess := uniqueID("kind"), uniqueID("sess")
-		if err := repo.Save(ctx, kind, sess, "proj-a", []byte(`[]`)); err != nil {
+		if err := saveChannelSession(ctx, repo, kind, sess, "proj-a", []byte(`[]`)); err != nil {
 			t.Fatalf("Save 1: %v", err)
 		}
-		if err := repo.Save(ctx, kind, sess, "proj-b", []byte(`[{"x":1}]`)); err != nil {
+		if err := saveChannelSession(ctx, repo, kind, sess, "proj-b", []byte(`[{"x":1}]`)); err != nil {
 			t.Fatalf("Save 2: %v", err)
 		}
 		got, _ := repo.Load(ctx, kind, sess)
@@ -1209,16 +1227,16 @@ func RunChannelSessionSuite(t *testing.T, repo persistence.ChannelSessionReposit
 		kind, other := uniqueID("kind"), uniqueID("kind")
 		prefix := uniqueID("T") + "/C_general#"
 		for _, id := range []string{prefix + "111.1", prefix + "222.2"} {
-			if err := repo.Save(ctx, kind, id, "proj-a", []byte(`[]`)); err != nil {
+			if err := saveChannelSession(ctx, repo, kind, id, "proj-a", []byte(`[]`)); err != nil {
 				t.Fatalf("Save %s: %v", id, err)
 			}
 		}
 		// Same prefix, different kind — must not appear.
-		if err := repo.Save(ctx, other, prefix+"333.3", "proj-a", []byte(`[]`)); err != nil {
+		if err := saveChannelSession(ctx, repo, other, prefix+"333.3", "proj-a", []byte(`[]`)); err != nil {
 			t.Fatalf("Save other-kind: %v", err)
 		}
 		// Same kind, different container — must not appear.
-		if err := repo.Save(ctx, kind, uniqueID("T")+"/C_other#444.4", "proj-a", []byte(`[]`)); err != nil {
+		if err := saveChannelSession(ctx, repo, kind, uniqueID("T")+"/C_other#444.4", "proj-a", []byte(`[]`)); err != nil {
 			t.Fatalf("Save other-container: %v", err)
 		}
 
@@ -1241,7 +1259,7 @@ func RunChannelSessionSuite(t *testing.T, repo persistence.ChannelSessionReposit
 		prefix := uniqueID("T") + "/C#"
 		// Saved in order, so the last one saved has the newest updated_at.
 		for _, id := range []string{prefix + "1", prefix + "2", prefix + "3"} {
-			if err := repo.Save(ctx, kind, id, "proj-a", []byte(`[]`)); err != nil {
+			if err := saveChannelSession(ctx, repo, kind, id, "proj-a", []byte(`[]`)); err != nil {
 				t.Fatalf("Save %s: %v", id, err)
 			}
 		}
@@ -1267,7 +1285,7 @@ func RunChannelSessionSuite(t *testing.T, repo persistence.ChannelSessionReposit
 		// containment property callers rely on to scope reads to one container.
 		kind := uniqueID("kind")
 		decoy := uniqueID("T") + "/C_decoy#1"
-		if err := repo.Save(ctx, kind, decoy, "proj-a", []byte(`[]`)); err != nil {
+		if err := saveChannelSession(ctx, repo, kind, decoy, "proj-a", []byte(`[]`)); err != nil {
 			t.Fatalf("Save decoy: %v", err)
 		}
 		got, err := repo.ListByPrefix(ctx, kind, "%", 10)
@@ -1281,7 +1299,7 @@ func RunChannelSessionSuite(t *testing.T, repo persistence.ChannelSessionReposit
 
 	t.Run("Delete_is_idempotent", func(t *testing.T) {
 		kind, sess := uniqueID("kind"), uniqueID("sess")
-		if err := repo.Save(ctx, kind, sess, "", []byte(`[]`)); err != nil {
+		if err := saveChannelSession(ctx, repo, kind, sess, "", []byte(`[]`)); err != nil {
 			t.Fatalf("Save: %v", err)
 		}
 		if err := repo.Delete(ctx, kind, sess); err != nil {

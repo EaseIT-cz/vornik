@@ -84,7 +84,7 @@
                  {{if or (eq .Execution.Status "RUNNING") (eq .Execution.Status "PENDING")}}
                  aria-live="polite" aria-atomic="false"
                  hx-get="/ui/executions/{{.Execution.ID}}/status"
-                 hx-trigger="every 3s [!document.body.classList.contains('poll-stopped')]"
+                 hx-trigger="every 3s" data-poll
                  hx-target="#live-status"
                  hx-swap="innerHTML"
                  {{end}}>
@@ -264,7 +264,7 @@
                             <button type="button"
                                     class="text-[10px] px-2 py-0.5 rounded bg-surface-800 hover:bg-brand-900/40 text-ink-400 hover:text-brand-300 ring-1 ring-surface-600 hover:ring-brand-700/40 transition-colors"
                                     title="Reset execution state to before this step and re-run from here"
-                                    onclick="retryExecutionFromStep('{{$.Execution.ID}}', '{{$o.StepID}}')">
+                                    data-on-click="retryExecutionFromStep" data-args="{{jsonArgs $.Execution.ID $o.StepID}}">
                                 ↻ retry
                             </button>
                             {{end}}
@@ -652,6 +652,12 @@
                 alert('Retry request failed: ' + err.message);
             }
         }
+    </script>
+<script>
+    // #416 phase 3: this page's actions (web-ui-design.md, "C, phase 3"). Each
+    // calls its function at event time, so a script that defines it later
+    // (or again, after a swap) is the one that runs.
+    Vornik.action('retryExecutionFromStep', (el, e, id, step) => window.retryExecutionFromStep(id, step));
     </script>
 </body>
 </html>

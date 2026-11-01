@@ -59,3 +59,4 @@ images/vornik-agent/test-entrypoint-result-never-emptied.sh  # sources an exclud
 images/vornik-agent/test-entrypoint-tool-result-hygiene.sh  # sources an excluded file
 scripts/config-deploy.sh  # sources an excluded file
 scripts/config-drift-check.sh  # sources an excluded file
+images/vornik-agent/test-entrypoint-memory-search-policy.sh  # sources an excluded file

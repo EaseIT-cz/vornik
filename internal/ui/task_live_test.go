@@ -2,8 +2,10 @@ package ui
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -361,29 +363,19 @@ func TestLiveTask_NoEmbeddedQuotesInJSStrings(t *testing.T) {
 	}
 	body := rr.Body.String()
 
-	// The fix produces clean JS string literals like:
-	//   const executionID = "exec_under_test";
-	// The bug produced:
-	//   const executionID = "\"exec_under_test\"";
-	// Each assignment is asserted explicitly so the failure message
-	// names exactly which variable regressed.
-	wantClean := map[string]string{
-		`const executionID =`:        `const executionID = "exec_under_test"`,
-		`const taskID =`:             `const taskID = "task_under_test"`,
-		`const initialStatus =`:      `const initialStatus = "RUNNING"`,
-		`const initialCurrentStep =`: `const initialCurrentStep = "summarise"`,
-	}
-	for label, want := range wantClean {
-		if !strings.Contains(body, want) {
-			t.Errorf("expected clean JS assignment %q in rendered page (%s)", want, label)
-		}
-		// The bug-shape — an assignment whose value starts with `"\"`
-		// — must NOT appear. We grep for the assignment prefix + the
-		// double-escape opener.
-		bug := label + ` "\"` // e.g. `const executionID = "\"`
-		if strings.Contains(body, bug) {
-			t.Errorf("regression: %s value is double-quoted (%q present in body) — "+
-				"template re-introduced `printf \"%%q\"` inside <script>", label, bug)
+	// The fix produces clean values, such as executionID "exec_under_test";
+	// the bug produced "\"exec_under_test\"". Since #416 phase 5 the values
+	// sit in the task-live-data JSON block, so each is decoded and compared
+	// exactly: a doubled quote would survive the decode.
+	data := taskLiveData(t, body)
+	for key, want := range map[string]string{
+		"executionID":        "exec_under_test",
+		"taskID":             "task_under_test",
+		"initialStatus":      "RUNNING",
+		"initialCurrentStep": "summarise",
+	} {
+		if got, _ := data[key].(string); got != want {
+			t.Errorf("task-live-data %s = %q, want %q (a printf %%q regression doubles the quotes)", key, got, want)
 		}
 	}
 
@@ -485,10 +477,11 @@ func TestTaskDetail_FailedSteerSectionWiresHintThenRetry(t *testing.T) {
 	}
 	// JS reads the alsoRetry flag — operator can opt into queue-
 	// only with the secondary button.
-	if !strings.Contains(body, "submitFailedSteeringHint(true)") {
+	// #416 phase 3: the buttons name the action, with the flag in data-args.
+	if !strings.Contains(body, `data-on-click="submitFailedSteeringHint" data-args="[true]"`) {
 		t.Error("primary button must call submitFailedSteeringHint(true) — alsoRetry mode")
 	}
-	if !strings.Contains(body, "submitFailedSteeringHint(false)") {
+	if !strings.Contains(body, `data-on-click="submitFailedSteeringHint" data-args="[false]"`) {
 		t.Error("secondary button must call submitFailedSteeringHint(false) — queue-only mode")
 	}
 	if !strings.Contains(body, `'steer-failed-retry-form').submit()`) {
@@ -717,4 +710,18 @@ func TestLiveTask_IsTerminalExecutionStatus(t *testing.T) {
 			t.Errorf("expected %q to be non-terminal", s)
 		}
 	}
+}
+
+// taskLiveData decodes the page's task-live-data block (#416 phase 5).
+func taskLiveData(t *testing.T, body string) map[string]any {
+	t.Helper()
+	m := regexp.MustCompile(`(?s)<script type="application/json" id="task-live-data">(.*?)</script>`).FindStringSubmatch(body)
+	if m == nil {
+		t.Fatal("the page has no task-live-data block")
+	}
+	var d map[string]any
+	if err := json.Unmarshal([]byte(m[1]), &d); err != nil {
+		t.Fatalf("task-live-data %q: %v", m[1], err)
+	}
+	return d
 }

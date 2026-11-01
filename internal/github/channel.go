@@ -383,6 +383,8 @@ type TaskCreationEvent struct {
 // Constructed once at boot; the HTTP handler (HandleWebhook) is
 // mounted on the daemon's API server by the service container.
 type Channel struct {
+	// aiMark is the Art 50(2) marker for replies (aimark.go).
+	aiMark      aiMarkHolder
 	cfg         Config
 	secretBytes []byte
 

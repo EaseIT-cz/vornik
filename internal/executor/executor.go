@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"sync"
 	"time"
+	"vornik.io/vornik/internal/aimark"
 
 	"vornik.io/vornik/internal/egressscan"
 	"vornik.io/vornik/internal/github"
@@ -342,8 +343,11 @@ type SteeringNotifier interface {
 
 // Executor runs workflow instances for tasks.
 type Executor struct {
-	config  *Config
-	runtime RuntimeManager
+	// aiMarker records Art 50(2) ledger rows for harvested agent files
+	// (artifacts.go recordHarvestedOutput; GitHub #117).
+	aiMarker *aimark.Marker
+	config   *Config
+	runtime  RuntimeManager
 	// toolGrantsWired reports whether mcp__vornik__grant_step_tools is served to
 	// agents. Set by the container when the grant store is wired; gates the
 	// tool-budget prompt block so agents are never told about a tool they lack.
@@ -462,7 +466,16 @@ type Executor struct {
 	// remembering to call memory_search. Nil-safe: a nil repo
 	// just disables the injection.
 	tradingOrderRepo persistence.TradingOrderRepository
-	workflows        WorkflowResolver
+	// tradingFunnelRepo (optional) records the strategist's entry funnel and
+	// its forward outcomes (GitHub #596). Nil records nothing.
+	tradingFunnelRepo persistence.FunnelRepository
+	// tradingBenchmarkRepo (optional) records benchmark (SPY) session
+	// closes from the pre-warm's bars (GitHub #597). Nil records nothing.
+	tradingBenchmarkRepo persistence.BenchmarkCloseRepository
+	// tradingShadowRepo (optional) records the rule engine's shadow decision
+	// (GitHub #598). Nil records nothing.
+	tradingShadowRepo persistence.ShadowDecisionRepository
+	workflows         WorkflowResolver
 	// circuitBreaker (optional) auto-pauses a project's autonomy
 	// when the rolling failure count crosses the configured
 	// threshold. Nil disables the breaker — preserves the
@@ -1108,6 +1121,28 @@ func WithTradingOrderRepo(r persistence.TradingOrderRepository) Option {
 	}
 }
 
+// WithTradingFunnelRepo wires the entry-funnel store (GitHub #596). Nil
+// disables recording; trading behaviour is unaffected either way.
+func WithTradingFunnelRepo(r persistence.FunnelRepository) Option {
+	return func(e *Executor) {
+		e.tradingFunnelRepo = r
+	}
+}
+
+// WithTradingBenchmarkRepo wires the benchmark-close store (GitHub #597).
+func WithTradingBenchmarkRepo(r persistence.BenchmarkCloseRepository) Option {
+	return func(e *Executor) {
+		e.tradingBenchmarkRepo = r
+	}
+}
+
+// WithTradingShadowRepo wires the rule engine's shadow record (GitHub #598).
+func WithTradingShadowRepo(r persistence.ShadowDecisionRepository) Option {
+	return func(e *Executor) {
+		e.tradingShadowRepo = r
+	}
+}
+
 // WithAPIKeyMinter wires the per-task API-key lifecycle into the
 // executor. When set, startContainer mints a scoped key for each
 // container run and the step teardown revokes it — so a
@@ -1521,6 +1556,12 @@ func WithTracer(tracer trace.Tracer) Option {
 }
 
 // WithArtifactStore sets the artifact store used for persisted outputs.
+// WithAIMarker sets the EU AI Act Art 50(2) marker that records each
+// harvested agent file in the ledger (GitHub #117). Nil records nothing.
+func WithAIMarker(m *aimark.Marker) Option {
+	return func(e *Executor) { e.aiMarker = m }
+}
+
 func WithArtifactStore(store ArtifactStore) Option {
 	return func(e *Executor) {
 		e.artifactStore = store

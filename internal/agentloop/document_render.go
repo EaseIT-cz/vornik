@@ -120,7 +120,10 @@ func renderDocumentWith(env Env, raw json.RawMessage, renderer documentRenderer)
 	if err := os.WriteFile(filterPath, []byte(documentHTMLFilter), 0600); err != nil {
 		return documentFailure(a.Format, "filter", err)
 	}
-	html, err := renderer.run(ctx, "/usr/bin/pandoc", []string{"--from=" + docrender.PandocFrom, "--to=html5", "--standalone", "--lua-filter=" + filterPath}, content)
+	// #117: the unsigned Art 50(2) fields (no signing key in the agent's
+	// container; the daemon records the file's hash when it harvests it).
+	pandocArgs := append([]string{"--from=" + docrender.PandocFrom, "--to=html5", "--standalone", "--lua-filter=" + filterPath}, docrender.UnsignedMarkArgs()...)
+	html, err := renderer.run(ctx, "/usr/bin/pandoc", pandocArgs, content)
 	if err != nil {
 		return documentFailure(a.Format, "pandoc", err)
 	}

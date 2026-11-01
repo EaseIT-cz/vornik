@@ -17,6 +17,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"vornik.io/vornik/internal/aimark"
 
 	"vornik.io/vornik/internal/forge"
 	"vornik.io/vornik/internal/forgereview"
@@ -57,6 +58,10 @@ type Provider struct {
 	apiBaseURL     string
 	httpClient     *http.Client
 	mention        string // bot handle for comment commands; empty = package default
+	// aiMarker signs Art 50(2) marks on posted bodies (aimark.go). Its own
+	// lock: mu is held across a token mint.
+	aiMarkerMu sync.Mutex
+	aiMarker   *aimark.Marker
 
 	issueMu     sync.Mutex
 	mu          sync.Mutex
@@ -348,7 +353,7 @@ func (p *Provider) OpenChangeRequest(ctx context.Context, s forge.ChangeRequestS
 
 	// Create.
 	createBody, _ := json.Marshal(map[string]any{
-		"title": s.Title, "head": s.Head, "base": s.Base, "body": s.Body, "draft": s.Draft,
+		"title": s.Title, "head": s.Head, "base": s.Base, "body": p.withMark(ctx, s.Body), "draft": s.Draft,
 	})
 	createReq, err := p.newReq(ctx, http.MethodPost, fmt.Sprintf("%s/repos/%s/pulls", p.apiBaseURL, s.Repo), createBody, tok)
 	if err != nil {
@@ -381,7 +386,8 @@ func (p *Provider) PostReview(ctx context.Context, repo string, number int, r fo
 	if err != nil {
 		return err
 	}
-	reqBody, _ := json.Marshal(map[string]string{"body": r.Body, "event": githubReviewEvent(r.Event)})
+	marked := p.withMark(ctx, r.Body) // marked once; the fallback comment reuses it
+	reqBody, _ := json.Marshal(map[string]string{"body": marked, "event": githubReviewEvent(r.Event)})
 	url := fmt.Sprintf("%s/repos/%s/pulls/%d/reviews", p.apiBaseURL, repo, number)
 	req, err := p.newReq(ctx, http.MethodPost, url, reqBody, tok)
 	if err != nil {
@@ -401,7 +407,7 @@ func (p *Provider) PostReview(ctx context.Context, repo string, number int, r fo
 		if resp.StatusCode == http.StatusUnprocessableEntity &&
 			r.Event != forge.ReviewComment &&
 			strings.Contains(strings.ToLower(string(body)), "your own pull request") {
-			cReqBody, _ := json.Marshal(map[string]string{"body": r.Body, "event": "COMMENT"})
+			cReqBody, _ := json.Marshal(map[string]string{"body": marked, "event": "COMMENT"})
 			cReq, cErr := p.newReq(ctx, http.MethodPost, url, cReqBody, tok)
 			if cErr != nil {
 				return cErr
@@ -443,7 +449,7 @@ func (p *Provider) PostComment(ctx context.Context, repo string, number int, bod
 	if err != nil {
 		return err
 	}
-	reqBody, err := json.Marshal(map[string]string{"body": body})
+	reqBody, err := json.Marshal(map[string]string{"body": p.withMark(ctx, body)})
 	if err != nil {
 		return fmt.Errorf("forge/github: encode comment: %w", err)
 	}

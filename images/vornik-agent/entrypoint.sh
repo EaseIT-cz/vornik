@@ -1442,7 +1442,16 @@ build_llm_request_file() {
            elif $response_format != "" then
                . + {"response_format":{"type":$response_format}}
            else . end
-           end' > "$out_file"
+           end
+         # A schema-constrained request never ends on an assistant message
+         # (GitHub #594): llama.cpp and Anthropic read a trailing assistant
+         # message as a prefix to continue, and a prefix that does not fit the
+         # JSON grammar is refused (llama.cpp: 400 "Failed to initialize
+         # samplers"), which opened the circuit and failed the task. The
+         # instruction is added to this request only; the history is unchanged.
+         | if has("response_format") and (.messages | length) > 0 and (.messages[-1].role == "assistant") then
+             .messages += [{"role":"user","content":"Give your final answer now as the JSON object only, with no other text."}]
+           else . end' > "$out_file"
 }
 
 # guard_result_update accepts a proposed new result ($1) only if it is usable,
@@ -1879,9 +1888,28 @@ handle_memory_search() {
     # wrap=untrusted (#454): the daemon wraps every caller-controlled chunk
     # field (content, source_name, content_class, repo_scope) in
     # <untrusted_content> markers before this tool prints the response.
+    # #550: the role's pinned retrieval policy, from the executor's
+    # VORNIK_MEM_* environment (design 2026-10-25-architect-expert-design.md
+    # §2.1 C1). The policy limit is the default and the ceiling; the daemon
+    # re-applies the whole policy server-side for this task key regardless.
+    if [ "${VORNIK_MEM_LIMIT:-}" -gt 0 ] 2>/dev/null; then
+        if [ "$(printf '%s' "$params" | jq -r 'has("limit")')" != "true" ] \
+            || ! [ "$limit" -le "$VORNIK_MEM_LIMIT" ] 2>/dev/null; then
+            limit="$VORNIK_MEM_LIMIT"
+        fi
+    fi
     url="${VORNIK_MEM_URL}/api/v1/projects/${project_id}/memory/search?wrap=untrusted&limit=${limit}"
     encoded_q=$(printf '%s' "$query" | jq -Rr @uri)
     url="${url}&q=${encoded_q}"
+    if [ -n "${VORNIK_MEM_SCOPE:-}" ]; then
+        url="${url}&repo_scope=$(printf '%s' "$VORNIK_MEM_SCOPE" | jq -Rr @uri)"
+    fi
+    if [ "${VORNIK_MEM_STRICT:-}" = "true" ]; then
+        url="${url}&strict_scope=true"
+    fi
+    if [ -n "${VORNIK_MEM_AUTHORITY:-}" ]; then
+        url="${url}&authority=$(printf '%s' "$VORNIK_MEM_AUTHORITY" | jq -Rr @uri)"
+    fi
     vornik_resolve_url "$url"; url="$VORNIK_URL"
 
     # X-API-Key: required since the 2026-06-06 auth flip. This bare curl

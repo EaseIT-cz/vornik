@@ -16,6 +16,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -58,6 +59,24 @@ var (
 	// ErrNotOAuth reports that the named server's auth block is not mode: oauth, so there is
 	// nothing to consent to.
 	ErrNotOAuth = errors.New("server is not configured with auth mode: oauth")
+	// ErrNoRouterProvider refuses a flow on an instance with the EaseIT OAuth
+	// router for a server that names no router provider: the router forwards
+	// no code for a flow it did not start (design §16.5 C1).
+	ErrNoRouterProvider = errors.New("this connector names no router provider; a managed instance's sign-ins go through the router (auth.router_provider)")
+	// ErrRouterNeedsClient refuses a dynamically registered client on such an
+	// instance: the router's allowlist admits EaseIT's client id only.
+	ErrRouterNeedsClient = errors.New("a managed instance's sign-ins use the configured EaseIT client (auth.client_id); a dynamically registered client is refused by the router")
+	// ErrRouterNeedsIssuer refuses a routed manual-endpoint server without
+	// auth.issuer: the daemon would have no issuer to check iss against.
+	ErrRouterNeedsIssuer = errors.New("a managed instance's manual-endpoint connector states its authorization server's issuer (auth.issuer), so the response's iss can be checked")
+	// ErrRouterPublicClientOffered refuses a routed server configured with a
+	// client secret for a provider that accepts public clients: the operator's
+	// decision (2026-10-29, design §16.5 C4) is a public PKCE client wherever
+	// one is offered, since one secret on every instance is an all-customer
+	// secret.
+	ErrRouterPublicClientOffered = errors.New("this provider accepts public clients, and a managed instance uses a public PKCE client wherever one is offered; drop auth.client_secret_from")
+	// ErrScopeWidened is a grant wider than requested (design §16.5 C3).
+	ErrScopeWidened = errors.New("the authorization server granted scopes that were not requested")
 )
 
 // SecretSource resolves a secret:// name to its value — satisfied by mcpauth.EnvSecretSource.
@@ -117,9 +136,15 @@ type Connector struct {
 	// discovery, registration, exchange and refresh calls instead of HTTP.
 	// An agent project's server chooses its authorization server through its
 	// own metadata, so those calls go through the SSRF guard
-	// (agent-administered Vornik plan P4.4).
-	HTTPFor func(projectID, serverURL string) *http.Client
-	Logger  zerolog.Logger
+	// (agent-administered Vornik plan P4.4). It takes the ref, so the
+	// container can choose by the URL's origin (GitHub #566, M7 E3).
+	HTTPFor func(ref ServerRef) *http.Client
+	// Router, when set and returning a redirect URI, routes every sign-in
+	// through the EaseIT OAuth router (GitHub #566,
+	// mcp-server-authentication-design.md §16): the redirect URI is the
+	// router's, and the state names the instance.
+	Router func() (redirectURI, instanceID string)
+	Logger zerolog.Logger
 
 	mu      sync.Mutex
 	pending map[string]*pendingAuth
@@ -136,6 +161,10 @@ type Connector struct {
 // in front of the browser, and a restart mid-consent is recoverable by clicking Connect again.
 // Persisting it would put a PKCE verifier — a short-lived secret — in the database for no gain.
 type pendingAuth struct {
+	// Routed is a flow started through the EaseIT OAuth router (a managed
+	// instance): its scope is confined by the router, so a widened grant is
+	// refused (design §16.5 C3).
+	Routed      bool
 	ProjectID   string
 	ServerName  string
 	Metadata    mcpauth.Metadata
@@ -176,9 +205,9 @@ func (c *Connector) Peek(state string) (origin, binding string, ok bool) {
 }
 
 // httpFor returns the client for a server's OAuth calls.
-func (c *Connector) httpFor(projectID, serverURL string) *http.Client {
+func (c *Connector) httpFor(ref ServerRef) *http.Client {
 	if c.HTTPFor != nil {
-		if h := c.HTTPFor(projectID, serverURL); h != nil {
+		if h := c.HTTPFor(ref); h != nil {
 			return h
 		}
 	}
@@ -205,6 +234,12 @@ type ServerRef struct {
 	// Empty for a project that owns its credential and for a direct
 	// daemon-scope lookup. Never part of a storage key.
 	InheritedFrom string
+	// FromDaemonConfig records URL provenance only: true exactly when URL
+	// was taken from config.yaml (a daemon-level server, or a name-only
+	// subscription that inherited the daemon entry's URL), whatever scope
+	// the credential resolves at (GitHub #566, M7 E3). False, the default,
+	// is the customer-guarded side.
+	FromDaemonConfig bool
 }
 
 // ServerResolver resolves a (project, server) pair to its configuration. projectID "" means the
@@ -228,7 +263,7 @@ func (c *Connector) ResolveServer(projectID, serverName string) (ServerRef, bool
 // here rather than propagated. The repository keeps the strict contract; this accessor states
 // the looser one it has always advertised.
 func (c *Connector) Grant(ctx context.Context, projectID, serverName string) (*persistence.MCPOAuthToken, error) {
-	tok, err := c.Tokens.Get(ctx, projectID, serverName)
+	tok, err := c.Tokens.Get(ctx, projectID, serverName, "")
 	if errors.Is(err, persistence.ErrNotFound) {
 		return nil, nil
 	}
@@ -282,6 +317,11 @@ func DroppedScopeNotice(server string, dropped []string) string {
 
 // RedirectURI is the single redirect URI for this deployment.
 func (c *Connector) RedirectURI() (string, error) {
+	if uri, _ := c.router(); uri != "" {
+		// §16 R2: one URI for every flow of the instance; config validation
+		// already required it to be https under the instance's parent domain.
+		return uri, nil
+	}
 	raw := ""
 	if c.BaseURL != nil {
 		raw = c.BaseURL()
@@ -319,6 +359,19 @@ func (c *Connector) BeginWith(ctx context.Context, ref ServerRef, connectedBy st
 	if ref.Auth.EffectiveMode() != mcpauth.ModeOAuth {
 		return BeginResult{}, fmt.Errorf("%w: %q is mode %q", ErrNotOAuth, ref.ServerName, ref.Auth.EffectiveMode())
 	}
+	routed := false
+	if uri, _ := c.router(); uri != "" {
+		routed = true
+		if ref.Auth.RouterProvider == "" {
+			return BeginResult{}, fmt.Errorf("%w: server %q", ErrNoRouterProvider, ref.ServerName)
+		}
+		if ref.Auth.ClientID == "" {
+			return BeginResult{}, fmt.Errorf("%w: server %q", ErrRouterNeedsClient, ref.ServerName)
+		}
+		if ref.Auth.AuthorizationEndpoint != "" && ref.Auth.Issuer == "" {
+			return BeginResult{}, fmt.Errorf("%w: server %q", ErrRouterNeedsIssuer, ref.ServerName)
+		}
+	}
 	redirectURI, err := c.RedirectURI()
 	if err != nil {
 		return BeginResult{}, err
@@ -334,6 +387,23 @@ func (c *Connector) BeginWith(ctx context.Context, ref ServerRef, connectedBy st
 	md, err := c.resolveMetadata(ctx, ref)
 	if err != nil {
 		return BeginResult{}, err
+	}
+	if routed && ref.Auth.ClientSecretFrom != "" && slices.Contains(md.TokenEndpointAuthMethods, "none") {
+		return BeginResult{}, fmt.Errorf("%w: server %q", ErrRouterPublicClientOffered, ref.ServerName)
+	}
+	if md.IssuerMismatch {
+		// RFC 8414 §3.3, the premise of the iss check. A managed instance
+		// refuses the server; a self host keeps a working connector to a
+		// non-conforming server but checks no iss for it (design §16.5 C2,
+		// as shipped).
+		if routed {
+			return BeginResult{}, fmt.Errorf("%w: server %q's authorization-server metadata names another issuer than its URL", mcpauth.ErrIssuerMismatch, ref.ServerName)
+		}
+		// Fail closed all the same (commit security review of ac63c9bae and
+		// its background review): iss is accepted only as the URL the
+		// metadata came from, never the issuer it claims.
+		c.Logger.Warn().Str("server", ref.ServerName).
+			Msg("mcp oauth: the authorization server's metadata names another issuer than its URL (RFC 8414 §3.3); iss is accepted only as that URL")
 	}
 
 	scopes := ref.Auth.Scopes
@@ -364,13 +434,21 @@ func (c *Connector) BeginWith(ctx context.Context, ref ServerRef, connectedBy st
 	if err != nil {
 		return BeginResult{}, err
 	}
-	state, err := mcpauth.NewState()
+	state, err := c.newState()
 	if err != nil {
 		return BeginResult{}, err
 	}
 	authURL, err := mcpauth.AuthorizationURL(md, creds, redirectURI, scopes, state, pkce)
 	if err != nil {
 		return BeginResult{}, err
+	}
+	if routed {
+		// Every flow starts at the router, which records it for the
+		// signed-in member in this browser and forwards a code only for a
+		// flow it recorded (design §16.5 C1; the router design §2.2).
+		if authURL, err = routerStartURL(redirectURI, ref.Auth.RouterProvider, authURL); err != nil {
+			return BeginResult{}, err
+		}
 	}
 
 	c.mu.Lock()
@@ -382,7 +460,8 @@ func (c *Connector) BeginWith(ctx context.Context, ref ServerRef, connectedBy st
 		ProjectID: ref.ProjectID, ServerName: ref.ServerName,
 		Metadata: md, Creds: creds, PKCE: pkce, Scopes: scopes,
 		RedirectURI: redirectURI, ConnectedBy: connectedBy, CreatedAt: time.Now(),
-		Origin: opts.Origin, FlowBinding: opts.FlowBinding, HTTP: c.httpFor(ref.ProjectID, ref.URL),
+		Origin: opts.Origin, FlowBinding: opts.FlowBinding, HTTP: c.httpFor(ref),
+		Routed: routed,
 	}
 	c.mu.Unlock()
 
@@ -411,7 +490,105 @@ func (c *Connector) BeginWith(ctx context.Context, ref ServerRef, connectedBy st
 // Complete finishes an authorization from the callback: exchange the code, persist the grant,
 // and record the consent.
 func (c *Connector) Complete(ctx context.Context, state, code string) (*persistence.MCPOAuthToken, error) {
-	return c.CompleteWithIdentity(ctx, state, code, nil)
+	return c.CompleteWith(ctx, CompleteRequest{State: state, Code: code}, nil)
+}
+
+// CompleteRequest is what a callback carries to the completion: the state and
+// code, and the authorization response's iss and scope (RFC 9207; the router
+// forwards both, design §16.5 C2, C3).
+type CompleteRequest struct {
+	State, Code, Iss, Scope string
+}
+
+// CompleteRequestFromQuery reads a CompleteRequest from a callback's query.
+func CompleteRequestFromQuery(q url.Values) CompleteRequest {
+	return CompleteRequest{
+		State: strings.TrimSpace(q.Get("state")),
+		Code:  strings.TrimSpace(q.Get("code")),
+		Iss:   strings.TrimSpace(q.Get("iss")),
+		Scope: strings.TrimSpace(q.Get("scope")),
+	}
+}
+
+// ScopeWidenedError is ErrScopeWidened with the scopes granted beyond the
+// request, and whether the grant was revoked at the authorization server.
+type ScopeWidenedError struct {
+	Extra   []string
+	Revoked bool
+	// Host is the authorization server's host, for the page that asks to
+	// revoke it there when it could not be revoked here.
+	Host string
+}
+
+func (e *ScopeWidenedError) Error() string {
+	return fmt.Sprintf("%v: %s", ErrScopeWidened, strings.Join(e.Extra, " "))
+}
+
+func (e *ScopeWidenedError) Unwrap() error { return ErrScopeWidened }
+
+// checkIss applies RFC 9207 to a flow (design §16.5 C2): an absent iss is
+// refused where the server sends one, and a present iss must equal the one
+// expected issuer (expectedIssuer), by simple string comparison (RFC 9207
+// §2.4). Only when no issuer is known at all (a self host's manual endpoint
+// without auth.issuer; a routed one requires it) is a present iss accepted.
+func checkIss(md mcpauth.Metadata, iss string) error {
+	iss = strings.TrimSuffix(iss, "/")
+	if iss == "" {
+		if md.IssParameterSupported {
+			return fmt.Errorf("%w: the authorization response carries no iss, and this server sends one", mcpauth.ErrIssuerMismatch)
+		}
+		return nil
+	}
+	expected := expectedIssuer(md)
+	if expected == "" {
+		if md.IssParameterSupported {
+			return fmt.Errorf("%w: no issuer is known to compare iss with", mcpauth.ErrIssuerMismatch)
+		}
+		return nil
+	}
+	if iss != expected {
+		return fmt.Errorf("%w: the authorization response names another issuer than the one the flow started against", mcpauth.ErrIssuerMismatch)
+	}
+	return nil
+}
+
+// expectedIssuer is the issuer a flow's iss must equal. When the metadata
+// named another issuer than the URL it was fetched from, or none at all, it
+// is that URL: the claimed issuer is self-asserted, and a malicious server
+// could claim an honest one's, which is the mix-up itself (the commit
+// security reviews of ac63c9bae and 573ff4f36).
+func expectedIssuer(md mcpauth.Metadata) string {
+	if md.IssuerMismatch {
+		return md.IssuerFetchedFrom
+	}
+	return md.Issuer
+}
+
+// widenedScopes returns the granted scopes that were not requested.
+func widenedScopes(requested []string, granted string) []string {
+	asked := map[string]bool{}
+	for _, s := range requested {
+		asked[s] = true
+	}
+	var extra []string
+	for _, s := range strings.Fields(granted) {
+		if !asked[s] {
+			extra = append(extra, s)
+		}
+	}
+	return extra
+}
+
+// routerStartURL is the router's start for a flow: <the redirect URI's
+// origin>/oauth/start?provider=<name>&authorize=<the vendor URL>.
+func routerStartURL(redirectURI, provider, authorizeURL string) (string, error) {
+	u, err := url.Parse(redirectURI)
+	if err != nil || u.Scheme == "" || u.Host == "" {
+		return "", fmt.Errorf("mcpconnect: the router's redirect URI is not a URL")
+	}
+	start := url.URL{Scheme: u.Scheme, Host: u.Host, Path: "/oauth/start",
+		RawQuery: url.Values{"provider": {provider}, "authorize": {authorizeURL}}.Encode()}
+	return start.String(), nil
 }
 
 // CompleteWithIdentity is Complete with a hook that runs after the code
@@ -420,7 +597,17 @@ func (c *Connector) Complete(ctx context.Context, state, code string) (*persiste
 // §22.2.14 item 2). A hook error is returned and none of those runs, so a
 // device sign-in can suspend the grants a replaced account held before the
 // new token is usable. A nil hook is Complete.
-func (c *Connector) CompleteWithIdentity(ctx context.Context, state, code string, before func(ctx context.Context, idToken string) error) (*persistence.MCPOAuthToken, error) {
+func (c *Connector) CompleteWithIdentity(ctx context.Context, req CompleteRequest, before func(ctx context.Context, idToken string) error) (*persistence.MCPOAuthToken, error) {
+	return c.CompleteWith(ctx, req, before)
+}
+
+// CompleteWith is the completion. The pending entry is consumed first and
+// once, whatever follows: a second presentation of the state, a replayed
+// callback included, is ErrUnknownState, and a refused check leaves nothing
+// to retry (design §16.5 C2, c31d F4). Then iss is checked, before any token
+// request; then the grant's scope, before anything is stored.
+func (c *Connector) CompleteWith(ctx context.Context, req CompleteRequest, before func(ctx context.Context, idToken string) error) (*persistence.MCPOAuthToken, error) {
+	state, code := req.State, req.Code
 	c.mu.Lock()
 	c.reapExpiredLocked()
 	p := c.pending[state]
@@ -434,6 +621,9 @@ func (c *Connector) CompleteWithIdentity(ctx context.Context, state, code string
 	}
 	if strings.TrimSpace(code) == "" {
 		return nil, errors.New("mcpconnect: callback carried no authorization code")
+	}
+	if err := checkIss(p.Metadata, req.Iss); err != nil {
+		return nil, err
 	}
 
 	hc := p.HTTP
@@ -452,10 +642,25 @@ func (c *Connector) CompleteWithIdentity(ctx context.Context, state, code string
 
 	granted := tr.Scopes
 	if granted == "" {
+		granted = req.Scope
+	}
+	if granted == "" {
 		// Not every server echoes `scope`; recording what we asked for is
 		// better than recording nothing, and the CLI's comparison then
 		// reports a match rather than a spurious mismatch.
 		granted = strings.Join(p.Scopes, " ")
+	}
+	if extra := widenedScopes(p.Scopes, granted); len(extra) > 0 {
+		if p.Routed {
+			return nil, c.refuseWidened(ctx, hc, p, tr, extra)
+		}
+		// A self host keeps the grant, as before: providers add scopes such
+		// as offline_access on their own, and refusing them would break
+		// working connectors (design §16.5 C3, as shipped). The router
+		// confines a managed flow's scope to the provider's configured set,
+		// so a widened managed grant is anomalous and refused.
+		c.Logger.Warn().Str("server", p.ServerName).Strs("extra_scopes", extra).
+			Msg("mcp oauth: the grant is wider than requested; stored, as a self-hosted daemon does (a managed instance refuses it)")
 	}
 	tok := &persistence.MCPOAuthToken{
 		ProjectID:    p.ProjectID,
@@ -500,7 +705,7 @@ func (c *Connector) Disconnect(ctx context.Context, projectID, serverName, actor
 	// operator has explicitly withdrawn. Eviction is idempotent and costs
 	// nothing when there was nothing cached.
 	c.InvalidateToken(projectID, serverName)
-	existing, err := c.Tokens.Get(ctx, projectID, serverName)
+	existing, err := c.Tokens.Get(ctx, projectID, serverName, "")
 	if err != nil && !errors.Is(err, persistence.ErrNotFound) {
 		return err
 	}
@@ -515,7 +720,7 @@ func (c *Connector) Disconnect(ctx context.Context, projectID, serverName, actor
 		}
 	}
 	if !handled {
-		if err := c.Tokens.Delete(ctx, projectID, serverName); err != nil {
+		if err := c.Tokens.Delete(ctx, projectID, serverName, ""); err != nil {
 			return err
 		}
 	}
@@ -633,9 +838,11 @@ func (c *Connector) resolveMetadata(ctx context.Context, ref ServerRef) (mcpauth
 			AuthorizationEndpoint: ref.Auth.AuthorizationEndpoint,
 			TokenEndpoint:         ref.Auth.TokenEndpoint,
 			ScopesSupported:       ref.Auth.Scopes,
+			Issuer:                strings.TrimSuffix(ref.Auth.Issuer, "/"),
+			IssParameterSupported: ref.Auth.IssParameterSupported,
 		}, nil
 	}
-	md, err := mcpauth.Discover(ctx, c.httpFor(ref.ProjectID, ref.URL), ref.URL)
+	md, err := mcpauth.Discover(ctx, c.httpFor(ref), ref.URL)
 	if err != nil {
 		return mcpauth.Metadata{}, err
 	}
@@ -663,7 +870,7 @@ func (c *Connector) resolveClient(ctx context.Context, ref ServerRef, md mcpauth
 		return mcpauth.ClientCredentials{}, fmt.Errorf("%w for %q — set auth.client_id (and auth.client_secret_from if the vendor issued a secret)",
 			mcpauth.ErrNoDCR, ref.ServerName)
 	}
-	return mcpauth.Register(ctx, c.httpFor(ref.ProjectID, ref.URL), md, redirectURI, scopes)
+	return mcpauth.Register(ctx, c.httpFor(ref), md, redirectURI, scopes)
 }
 
 // configuredClient resolves an operator-configured client, including its secret when the vendor
@@ -703,7 +910,7 @@ func (c *Connector) configuredClient(ref ServerRef) (mcpauth.ClientCredentials, 
 // DCR accepts a public client. A confidential client is always operator-configured, and that
 // path is handled above.
 func (c *Connector) storedClient(ctx context.Context, ref ServerRef) (mcpauth.ClientCredentials, error) {
-	tok, err := c.Tokens.Get(ctx, ref.ProjectID, ref.ServerName)
+	tok, err := c.Tokens.Get(ctx, ref.ProjectID, ref.ServerName, "")
 	if err != nil && !errors.Is(err, persistence.ErrNotFound) {
 		return mcpauth.ClientCredentials{}, err
 	}
@@ -713,7 +920,7 @@ func (c *Connector) storedClient(ctx context.Context, ref ServerRef) (mcpauth.Cl
 	if ref.ProjectID != "" {
 		// Fall back to the daemon-scope row for the same server: same
 		// deployment, same redirect URI, so the same client applies.
-		if tok, err := c.Tokens.Get(ctx, "", ref.ServerName); err == nil && tok != nil && tok.ClientID != "" {
+		if tok, err := c.Tokens.Get(ctx, "", ref.ServerName, ""); err == nil && tok != nil && tok.ClientID != "" {
 			return mcpauth.ClientCredentials{ID: tok.ClientID}, nil
 		}
 	}
@@ -815,4 +1022,45 @@ func readOnlyScopes(scopes []string) []string {
 		}
 	}
 	return out
+}
+
+// router is Router's answer, or empty when no router is configured.
+func (c *Connector) router() (redirectURI, instanceID string) {
+	if c.Router == nil {
+		return "", ""
+	}
+	return c.Router()
+}
+
+// newState is the state of a new authorization attempt: routed (naming the
+// instance, §16 R3) when the router is configured, else NewState's.
+func (c *Connector) newState() (string, error) {
+	if uri, id := c.router(); uri != "" {
+		return mcpauth.NewRoutedState(id)
+	}
+	return mcpauth.NewState()
+}
+
+// refuseWidened answers a widened grant (design §16.5 C3): nothing is stored,
+// and the token is revoked where the server offers RFC 7009, the refresh
+// token first. Neither token is logged.
+func (c *Connector) refuseWidened(ctx context.Context, hc *http.Client, p *pendingAuth, tr mcpauth.TokenResponse, extra []string) error {
+	e := &ScopeWidenedError{Extra: extra}
+	if u, err := url.Parse(p.Metadata.AuthorizationEndpoint); err == nil {
+		e.Host = u.Host
+	}
+	if p.Metadata.RevocationEndpoint != "" {
+		token, hint := tr.RefreshToken, "refresh_token"
+		if token == "" {
+			token, hint = tr.AccessToken, "access_token"
+		}
+		if err := mcpauth.Revoke(ctx, hc, p.Metadata, p.Creds, token, hint); err != nil {
+			c.Logger.Warn().Str("server", p.ServerName).Err(err).Msg("mcp oauth: a widened grant could not be revoked; the page asks to revoke it at the provider")
+		} else {
+			e.Revoked = true
+		}
+	}
+	c.Logger.Warn().Str("server", p.ServerName).Strs("extra_scopes", extra).Bool("revoked", e.Revoked).
+		Msg("mcp oauth: refused a grant wider than requested; nothing was stored")
+	return e
 }

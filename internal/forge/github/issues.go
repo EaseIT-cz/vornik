@@ -321,7 +321,7 @@ func (p *Provider) CloseIssue(ctx context.Context, repo string, number int, s fo
 			notice = (*aidisclosure.Service)(nil).PublicationNotice()
 		}
 		body := aidisclosure.WithFooter(marker+"\nDuplicate of #"+strconv.Itoa(s.DuplicateOf)+".\n\n"+s.Explanation+"\n\nAutomated triage by Vornik.", notice)
-		if _, err = p.issueREST(ctx, http.MethodPost, path+"/comments", map[string]string{"body": body}, nil); err != nil {
+		if _, err = p.issueREST(ctx, http.MethodPost, path+"/comments", map[string]string{"body": p.withMark(ctx, body)}, nil); err != nil {
 			return err
 		}
 	}

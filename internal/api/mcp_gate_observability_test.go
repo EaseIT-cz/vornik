@@ -22,7 +22,12 @@ import (
 
 func counterValue(t *testing.T, m *MCPGateMetrics, path, reason string) float64 {
 	t.Helper()
-	c, err := m.UnrestrictedTotal.GetMetricWithLabelValues(path, reason)
+	return counterVecValue(t, m.UnrestrictedTotal, path, reason)
+}
+
+func counterVecValue(t *testing.T, v *prometheus.CounterVec, path, reason string) float64 {
+	t.Helper()
+	c, err := v.GetMetricWithLabelValues(path, reason)
 	if err != nil {
 		t.Fatalf("GetMetricWithLabelValues(%q,%q): %v", path, reason, err)
 	}
@@ -37,7 +42,7 @@ func TestRoleAllowsMCPTool_CountsTheNoTaskIDGap(t *testing.T) {
 	m := NewMCPGateMetrics(prometheus.NewRegistry())
 	s := &Server{mcpGateMetrics: m}
 
-	if !s.roleAllowsMCPTool(context.Background(), "", "mcp__srv__tool") {
+	if ok, _ := s.roleAllowsMCPTool(context.Background(), "", "mcp__srv__tool"); !ok {
 		t.Fatal("the gap must still fail OPEN — this change makes it visible, not strict")
 	}
 	if got := counterValue(t, m, "call", string(mcpGapNoTaskID)); got != 1 {
@@ -49,7 +54,7 @@ func TestRoleAllowsMCPTool_CountsUnwiredDependencies(t *testing.T) {
 	m := NewMCPGateMetrics(prometheus.NewRegistry())
 	s := &Server{mcpGateMetrics: m}
 
-	if !s.roleAllowsMCPTool(context.Background(), "task-1", "mcp__srv__tool") {
+	if ok, _ := s.roleAllowsMCPTool(context.Background(), "task-1", "mcp__srv__tool"); !ok {
 		t.Fatal("unwired deps must still fail open")
 	}
 	if got := counterValue(t, m, "call", string(mcpGapDepsUnwired)); got != 1 {
@@ -80,7 +85,7 @@ func TestMCPGapReasons_AreDistinct(t *testing.T) {
 // Nil metrics must stay a no-op: CE and test paths build a Server without them.
 func TestRoleAllowsMCPTool_NilMetricsIsSafe(t *testing.T) {
 	s := &Server{}
-	if !s.roleAllowsMCPTool(context.Background(), "", "mcp__srv__tool") {
+	if ok, _ := s.roleAllowsMCPTool(context.Background(), "", "mcp__srv__tool"); !ok {
 		t.Fatal("unmetered gate must behave identically")
 	}
 }

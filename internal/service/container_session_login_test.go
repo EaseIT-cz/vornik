@@ -42,6 +42,8 @@ type fakeIdentityProvider struct {
 	gotDeps       *IdentityDeps
 }
 
+func (f *fakeIdentityProvider) IssuerProbe() func(context.Context, string) error { return nil }
+
 func (f *fakeIdentityProvider) LoginWiring(deps IdentityDeps) (auth.Backend, http.Handler, http.HandlerFunc, []string, bool) {
 	f.gotDeps = &deps
 	return f.backend, f.login, f.logout, f.providerNames, f.ok

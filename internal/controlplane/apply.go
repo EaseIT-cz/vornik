@@ -13,6 +13,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"vornik.io/vornik/internal/configlock"
 
 	"github.com/rs/zerolog"
 
@@ -62,7 +63,7 @@ var (
 	// ErrContentTooLarge means the apply content exceeds the size cap.
 	ErrContentTooLarge = errors.New("control-plane: apply content too large")
 	// ErrApplyInProgress means another apply/rollback holds the global lock.
-	ErrApplyInProgress = errors.New("control-plane: another apply is in progress")
+	ErrApplyInProgress = errors.New("control-plane: another apply or config write is in progress")
 	// ErrSnapshotMissing means rollback found an empty/corrupt snapshot.
 	ErrSnapshotMissing = errors.New("control-plane: pre-apply snapshot missing; restore by hand")
 	// ErrScaffoldConflict means a create target already exists or a replace
@@ -262,10 +263,11 @@ type ApplyEngine struct {
 	mu sync.Mutex // global apply lock (serialises all applies + rollbacks)
 }
 
-// configWriteMu serialises every config mutation in this PROCESS, across all
-// ApplyEngine instances. See Apply for why the per-engine mutex is not
-// sufficient (re-audit 2026-09-15, CA-06).
-var configWriteMu sync.Mutex
+// Every config mutation in this PROCESS, across all ApplyEngine instances,
+// is serialised by internal/configlock, the process's one config-write lock
+// (re-audit 2026-09-15, CA-06; GitHub #584 made it the one lock every writer
+// holds, not one of two). See Apply for why the per-engine mutex is not
+// sufficient.
 
 // resolveTarget joins + cleans apply_target under ConfigDir and rejects any
 // path that escapes it.
@@ -355,10 +357,11 @@ func (e *ApplyEngine) Apply(ctx context.Context, id, actor string, ackDaemon boo
 	// TryLock keeps the existing contract: a concurrent apply is refused
 	// with ErrApplyInProgress rather than queued behind an operation that
 	// may take minutes.
-	if !configWriteMu.TryLock() {
+	unlockConfig, ok := configlock.TryLock()
+	if !ok {
 		return ErrApplyInProgress
 	}
-	defer configWriteMu.Unlock()
+	defer unlockConfig()
 	if !e.mu.TryLock() {
 		return ErrApplyInProgress
 	}
@@ -841,10 +844,11 @@ func (e *ApplyEngine) rollbackUnsafe(ctx context.Context, p *persistence.Control
 func (e *ApplyEngine) Rollback(ctx context.Context, id string) error {
 	// A rollback is a config mutation, so it takes the same process-wide
 	// writer lock Apply does (CA-06).
-	if !configWriteMu.TryLock() {
+	unlockConfig, ok := configlock.TryLock()
+	if !ok {
 		return ErrApplyInProgress
 	}
-	defer configWriteMu.Unlock()
+	defer unlockConfig()
 	if !e.mu.TryLock() {
 		return ErrApplyInProgress
 	}

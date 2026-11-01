@@ -205,6 +205,11 @@ type SwarmRole struct {
 	// The fallback runs at most once per step — if it also fails,
 	// the executor reports the most recent error.
 	ModelFallback string `yaml:"modelFallback"`
+	// MemorySearch pins this role's memory_search retrieval policy (#550;
+	// design 2026-10-25-architect-expert-design.md §2.1 C1). nil = today's
+	// project-wide search. The daemon applies it to every search the role's
+	// task key makes, overriding a wider request; the model cannot widen it.
+	MemorySearch *MemorySearchPolicy `yaml:"memorySearch,omitempty"`
 	// RequiredModalities declares what this role's work needs to
 	// PERCEIVE — "vision" for a role that looks at images, "audio" for
 	// one that listens. Validation then refuses a Model (or
@@ -416,6 +421,68 @@ type SwarmRolePermissions struct {
 	MaxDelegations int `yaml:"maxDelegations"`
 }
 
+// MemorySearchPolicy is a role's pinned retrieval policy (SwarmRole.MemorySearch).
+type MemorySearchPolicy struct {
+	// RepoScope limits hits to one repository's scope (or '*'). Required
+	// whenever StrictScope or Authority is set.
+	RepoScope string `yaml:"repoScope"`
+	// StrictScope drops NULL-scoped chunks (the migration-grace bucket).
+	StrictScope bool `yaml:"strictScope"`
+	// Authority is MemorySearchAuthorityAny (default) or
+	// MemorySearchAuthorityProvenance: only chunks the daemon checked against
+	// the trusted branch.
+	Authority string `yaml:"authority"`
+	// Limit is the default hit count when the tool call names none, and the
+	// ceiling a call may not exceed. 0 = the tool's default.
+	Limit int `yaml:"limit"`
+}
+
+// Memory-search authority values (MemorySearchPolicy.Authority). They are the
+// wire values of the memory package's search authority.
+const (
+	MemorySearchAuthorityAny        = "any"
+	MemorySearchAuthorityProvenance = "provenance"
+	// MemorySearchMaxLimit is memory_search's own cap (its tool schema: max 20).
+	MemorySearchMaxLimit = 20
+)
+
+// Narrows reports whether the policy restricts what a search may return
+// beyond the repository scope (strict scope or an authority).
+func (p *MemorySearchPolicy) Narrows() bool {
+	return p != nil && (p.StrictScope || (p.Authority != "" && p.Authority != MemorySearchAuthorityAny))
+}
+
+// validateMemorySearchPolicy is the loader rule for SwarmRole.MemorySearch.
+func validateMemorySearchPolicy(filename string, i int, role SwarmRole) error {
+	p := role.MemorySearch
+	if p == nil {
+		return nil
+	}
+	field := fmt.Sprintf("roles[%d].memorySearch", i)
+	fail := func(sub, msg string) error {
+		return SwarmValidationError{File: filename, Field: field + sub, Message: msg}
+	}
+	switch p.Authority {
+	case "", MemorySearchAuthorityAny, MemorySearchAuthorityProvenance:
+	default:
+		return fail(".authority", fmt.Sprintf("authority %q is not one of %q, %q", p.Authority, MemorySearchAuthorityAny, MemorySearchAuthorityProvenance))
+	}
+	if p.Narrows() && strings.TrimSpace(p.RepoScope) == "" {
+		return fail(".repoScope", "repoScope is required when strictScope or authority is set: a narrowing policy names the repository it narrows to")
+	}
+	if p.Limit < 0 || p.Limit > MemorySearchMaxLimit {
+		return fail(".limit", fmt.Sprintf("limit %d is outside 0..%d", p.Limit, MemorySearchMaxLimit))
+	}
+	if p.Narrows() {
+		for _, tool := range role.Permissions.AllowedTools {
+			if tool == "run_shell" {
+				return fail("", "a narrowing memorySearch policy cannot sit on a role that holds run_shell: such a role can build its own request, so the policy would be assumed and not held (design §2.1 C1, static gate)")
+			}
+		}
+	}
+	return nil
+}
+
 // SwarmValidationError represents a validation error for a swarm
 type SwarmValidationError struct {
 	File    string
@@ -487,6 +554,9 @@ func (s *Swarm) Validate(filename string) error {
 		}
 
 		if err := validateRoleModalities(filename, i, role, declaredModalities); err != nil {
+			return err
+		}
+		if err := validateMemorySearchPolicy(filename, i, role); err != nil {
 			return err
 		}
 

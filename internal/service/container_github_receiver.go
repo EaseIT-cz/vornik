@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"errors"
 	"sync"
 
 	"vornik.io/vornik/internal/chat"
@@ -98,6 +99,13 @@ func (s *githubSessionStore) Load(ctx context.Context, msg conversation.ChannelM
 	history := append([]chat.Message(nil), s.history[msg.SessionID]...)
 	s.mu.Unlock()
 
+	// The fence (§15.18): serve the cached copy only while the stored row is
+	// as this process last saw it; an erasure or another node moved it.
+	if len(history) > 0 && !s.persister.Fresh(ctx, msg.SessionID) {
+		s.dropSession(msg.SessionID)
+		history = nil
+	}
+
 	if len(history) == 0 && s.persister != nil {
 		if persisted, _, found, err := s.persister.Load(ctx, msg.SessionID); err == nil && found && len(persisted) > 0 {
 			history = persisted
@@ -153,9 +161,20 @@ func (s *githubSessionStore) Append(ctx context.Context, msg conversation.Channe
 
 	if s.persister != nil {
 		projectID := s.resolver.ProjectForSession(msg.SessionID)
-		_ = s.persister.Save(ctx, msg.SessionID, projectID, updated)
+		if err := s.persister.Save(ctx, msg.SessionID, projectID, updated); errors.Is(err, sessionstore.ErrSessionMoved) {
+			s.dropSession(msg.SessionID)
+		}
 	}
 	return nil
+}
+
+// dropSession forgets a session whose stored row moved (art17 redact design
+// §15.18), so the next read starts from the row.
+func (s *githubSessionStore) dropSession(sessionID string) {
+	s.mu.Lock()
+	delete(s.history, sessionID)
+	s.mu.Unlock()
+	s.persister.Forget(sessionID)
 }
 
 // snapshotHistory returns a copy of the stored history for a

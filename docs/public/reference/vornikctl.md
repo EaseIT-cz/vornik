@@ -134,7 +134,9 @@ vornikctl backup [flags]
 
 | Flag | Default | Description |
 |---|---|---|
+| `--export` | `false` | the owner export: no secrets/, the config redacted, and the rows of every secret-material table (keys, tokens, sessions) left out of the dump; restores to an instance whose secrets are set up again |
 | `--out` |  | output archive path (default auto-generated) |
+| `--restorable` | `false` | also include the secrets/ directory beside the config file (the secret store's key, the env files), so the archive restores on another host; the archive is then as sensitive as those secrets |
 
 ## vornikctl bench
 
@@ -801,6 +803,7 @@ Security:
   secrets_permissions   Secrets files/dirs with world-readable permissions
   config_secret_hygiene Config.yaml plaintext secrets or loose permissions (recommends ${ENV_VAR})
   redaction_seams       Secret scanning of chat_audit_log, chat_system_prompts, step_prompts, task_messages and execution_step_outcomes signals before persist; warns when off, with rows written and unscanned since boot
+  synthetic_voice_replies Voice replies with synthesised speech (AI Act Art 50(2)): off by default; warns when on (accepted single-layer marking, with its basis) or when asked for without the acknowledgement
   secret_store_key      Agent credential store: a missing or wrong key while credentials exist is an error
   approver_devices      Agent approvals: a warning when an agent namespace exists with no paired device or no push
   agent_namespace_budget Agent namespaces whose project budgets sum above the approved ceiling, naming the waiting cover request

@@ -45,6 +45,7 @@ var repoWalkExempt = map[string]struct {
 	"internal/ui/csrf_client_test.go:readTemplates":                          {1, "embed: walks the embedded templates filesystem, not the disk"},
 
 	"internal/architecture/test_env_law_test.go:TestTestEnvLaw_SentinelDataDirUntouchedByServiceTests":               {1, "temp: lists what a run left in its own sentinel data directory"},
+	"cmd/vornik-enterprise/provision_561_test.go:treeState":                                                          {1, "temp: lists what provision left in the test's own config directory"},
 	"internal/cli/agent_connect_generic_test.go:TestAgentConnectGeneric_PrintsEntryAndWritesNoFile":                  {1, "temp: lists every file the command wrote under the test's HOME"},
 	"internal/cli/agent_connect_test.go:TestAgentConnect_RoundTrip":                                                  {1, "temp: searches the test's HOME for the key"},
 	"internal/cli/agent_connect_test.go:TestAgentConnect_APIKeyStdinReadsKeyAndNotEnv":                               {1, "temp: searches the test's HOME for the admin key"},

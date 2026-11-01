@@ -424,6 +424,14 @@ func EnsureReceiveGuards(ctx context.Context, dir string, logger zerolog.Logger)
 	return nil
 }
 
+// EnsureGitRepo is ensureGitRepo for the benchmark harness, which must
+// create the same workspace the daemon would before the first task runs
+// (benchmark LLD §12.28, GitHub #593). One implementation, so the two cannot
+// disagree about what a bootstrapped workspace is.
+func EnsureGitRepo(ctx context.Context, dir string, logger zerolog.Logger) error {
+	return ensureGitRepo(ctx, dir, logger)
+}
+
 // ensureGitRepo guarantees that dir is a git repository with at least one
 // commit, creating dir and initializing the repo if necessary. This is the
 // bootstrap half of the deterministic workspace contract: every project

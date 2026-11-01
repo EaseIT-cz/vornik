@@ -165,7 +165,7 @@ func TestPodmanControl_RefusesEverythingElse(t *testing.T) {
 		{"system", "reset"},               // only migrate
 		{"stop", "a", "b"},                // exactly one target
 		{"rm"},                            // no target
-		{"rm", "--volumes", "abc"},        // flag not in rm's set
+		{"rm", "--all", "abc"},            // flag not in rm's set (--volumes is, #569)
 		{"logs", "--follow", "abc"},       // not in logs' set
 		{"ps", "abc"},                     // ps takes no target
 		{"inspect", "-f", "x", "--", "a"}, // "--" is not a target

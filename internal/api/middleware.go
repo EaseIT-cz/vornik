@@ -4,6 +4,7 @@ package api
 import (
 	"context"
 	"crypto/subtle"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -914,6 +915,15 @@ func isPublicEndpoint(path string) bool {
 		// exemption is unconditional.
 		return true
 	}
+	// EU AI Act Art 50(2) detection (#117, Art 50 design §14.9): anyone
+	// holding content or a mark may check it. Read-only; each handler
+	// applies its own per-IP limit, since this return skips AuthMiddleware's.
+	// Exact shapes only: a lookup is /provenance/<64 lowercase hex>, so no
+	// sibling path under /provenance/ (or a dot-segment) is ever public.
+	if path == provenanceVerify || path == aiMarkKeysPath ||
+		(strings.HasPrefix(path, provenancePrefix) && isSHA256Hex(strings.TrimPrefix(path, provenancePrefix))) {
+		return true
+	}
 	// A2A agent cards are public per spec — clients fetch the card
 	// BEFORE they have credentials to submit a task. Per-agent
 	// task submission + SSE stream endpoints under /api/v1/... go
@@ -1218,45 +1228,82 @@ func respondUnauthorized(w http.ResponseWriter, message string) {
 // extractAPIKey supports both the legacy X-API-Key header used by the E2E guide
 // and standard Bearer authorization.
 func extractAPIKey(r *http.Request) string {
-	if key := strings.TrimSpace(r.Header.Get("X-API-Key")); key != "" {
+	if key := apiKeyFromXAPIKey(r.Header.Get("X-API-Key")); key != "" {
 		return key
 	}
+	key, _ := apiKeyFromAuthorization(r.Header.Get("Authorization"))
+	return key
+}
 
-	// HTTP Basic Auth: browsers can't send `Authorization: Bearer ...`
-	// from a plain URL, so we let them carry the bearer as the
-	// password field of a Basic credential. The username is ignored
-	// (operators can type any value, conventionally "api"). This
-	// keeps single-user / single-operator deployments accessible from
-	// a browser without adding a login template, session cookies, or
-	// CSRF protection — the credential check is still the same
-	// bearer-token path every other client uses.
-	//
-	// MUST be checked BEFORE the Bearer branch so a request that
-	// carries both (rare; some HTTP debuggers do) is parsed
-	// consistently: Bearer wins.
-	if _, pass, ok := r.BasicAuth(); ok {
-		if v := strings.TrimSpace(pass); v != "" {
-			// Allow `Basic <user>:<bearer>` too — some clients
-			// prepend `Bearer ` to the password field.
-			parts := strings.SplitN(v, " ", 2)
-			if len(parts) == 2 && strings.EqualFold(parts[0], "Bearer") {
-				return strings.TrimSpace(parts[1])
-			}
-			return v
+// apiKeyFromXAPIKey reads a key from one X-API-Key header value. It and
+// apiKeyFromAuthorization are the per-form readers extractAPIKey is built
+// from and the managed-hosting listener gate calls on every header value
+// (GitHub #560, A4), so the two can never normalise a credential differently.
+func apiKeyFromXAPIKey(v string) string { return strings.TrimSpace(v) }
+
+// apiKeyFromAuthorization reads a key from one Authorization header value and
+// names its form ("basic" or "bearer"; "" when there is none).
+//
+// HTTP Basic: browsers can't send `Authorization: Bearer ...` from a plain
+// URL, so they carry the bearer as the password of a Basic credential (the
+// `?method=key` break-glass login). The username is ignored (operators type
+// any value, conventionally "api"). `Basic <user>:Bearer <key>` is accepted
+// too: some clients prepend `Bearer ` to the password field. The Basic value
+// is parsed exactly as net/http's Request.BasicAuth parses it. A value is one
+// scheme or the other, never both: a Basic value is never re-read as Bearer.
+func apiKeyFromAuthorization(v string) (key, form string) {
+	if _, pass, ok := parseBasicAuthValue(v); ok {
+		p := strings.TrimSpace(pass)
+		if p == "" {
+			return "", ""
+		}
+		if parts := strings.SplitN(p, " ", 2); len(parts) == 2 && strings.EqualFold(parts[0], "Bearer") {
+			return strings.TrimSpace(parts[1]), "basic"
+		}
+		return p, "basic"
+	}
+	parts := strings.SplitN(strings.TrimSpace(v), " ", 2)
+	if len(parts) != 2 || !strings.EqualFold(parts[0], "Bearer") {
+		return "", ""
+	}
+	return strings.TrimSpace(parts[1]), "bearer"
+}
+
+// parseBasicAuthValue is net/http's parseBasicAuth for one header value:
+// an ASCII case-insensitive "Basic " prefix (as net/http's, not Unicode
+// folding, which would match "Baſic "), standard base64, user and password
+// split at the first colon.
+func parseBasicAuthValue(v string) (user, pass string, ok bool) {
+	const prefix = "Basic "
+	if len(v) < len(prefix) || !asciiEqualFold(v[:len(prefix)], prefix) {
+		return "", "", false
+	}
+	raw, err := base64.StdEncoding.DecodeString(v[len(prefix):])
+	if err != nil {
+		return "", "", false
+	}
+	user, pass, ok = strings.Cut(string(raw), ":")
+	return user, pass, ok
+}
+
+// asciiEqualFold is strings.EqualFold restricted to ASCII letters.
+func asciiEqualFold(a, b string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := 0; i < len(a); i++ {
+		x, y := a[i], b[i]
+		if 'A' <= x && x <= 'Z' {
+			x += 'a' - 'A'
+		}
+		if 'A' <= y && y <= 'Z' {
+			y += 'a' - 'A'
+		}
+		if x != y {
+			return false
 		}
 	}
-
-	authHeader := strings.TrimSpace(r.Header.Get("Authorization"))
-	if authHeader == "" {
-		return ""
-	}
-
-	parts := strings.SplitN(authHeader, " ", 2)
-	if len(parts) != 2 || !strings.EqualFold(parts[0], "Bearer") {
-		return ""
-	}
-
-	return strings.TrimSpace(parts[1])
+	return true
 }
 
 // respondError writes a JSON error response. Uses json.Marshal so

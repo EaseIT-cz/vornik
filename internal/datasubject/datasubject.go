@@ -176,6 +176,9 @@ var UncoveredTable = map[string]string{
 		"and reported as a retained category.",
 	"channel_disclosure_log": "AI Act Art 50/99 conformity evidence. Protected by the retention denylist " +
 		"(internal/retention evidenceTables) and NOT erasable on request; reported as a retained category with its ground.",
+	"ai_output_marks": "AI Act Art 50(2) conformity evidence: content hashes and signed marks, not the content. Protected by the " +
+		"retention denylist and NOT erasable on request; reported as a retained category with its ground.",
+	"ai_mark_keys": "AI Act Art 50(2) conformity evidence: the public keys that signed marks. Holds no personal data.",
 
 	// --- added 2026-07-29 when the ROPA inventory was extended ---
 	//

@@ -23,7 +23,9 @@
 # Deliberately NO `set -e` / `set -u`: any failure must end in a silent exit 0.
 #
 # Environment:
-#   VORNIK_COMPANION_TOKEN        unset -> silent (the recall tool cannot work)
+#   VORNIK_COMPANION_TOKEN        unset (and no plugin option
+#                                 CLAUDE_PLUGIN_OPTION_COMPANION_TOKEN, #587)
+#                                 -> silent (the recall tool cannot work)
 #   VORNIK_NUDGE=off              per-user opt-out
 #   VORNIK_NUDGE_THRESHOLD        calls into one subsystem before the nudge (3)
 #   VORNIK_NUDGE_RECALL_WINDOW_S  how long a recall suppresses, seconds (900)
@@ -36,7 +38,7 @@ INPUT="$(cat 2>/dev/null)"
 
 [[ "$MODE" == observe || "$MODE" == recalled ]] || exit 0
 [[ "${VORNIK_NUDGE:-}" == off ]] && exit 0
-[[ -n "${VORNIK_COMPANION_TOKEN:-}" ]] || exit 0
+[[ -n "${VORNIK_COMPANION_TOKEN:-${CLAUDE_PLUGIN_OPTION_COMPANION_TOKEN:-}}" ]] || exit 0
 command -v jq >/dev/null 2>&1 || exit 0
 
 THRESHOLD="${VORNIK_NUDGE_THRESHOLD:-3}"

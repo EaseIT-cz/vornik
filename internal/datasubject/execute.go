@@ -103,6 +103,12 @@ type Executor struct {
 	// store does), so the production executor cannot be wired without it by
 	// omission; an executor with neither reports TraceCacheNotWired.
 	Traces TraceCacheEvictor
+	// Sessions erases channel sessions through the fence (slice 5d-2,
+	// §15.18). Nil (SQLite, where sessions live only in the daemon's memory)
+	// defers every channel_sessions action with reasonLiveSession.
+	Sessions ChannelSessionStore
+	// TelegramSaves reaches the bot's named saves (§15.18.1). Nil: none.
+	TelegramSaves *TelegramSaves
 }
 
 // DeferredAction is a planned action this slice could not perform.
@@ -111,12 +117,18 @@ type DeferredAction struct {
 	RowID       string        `json:"row_id"`
 	Disposition Disposition   `json:"disposition"`
 	Reason      string        `json:"reason"`
+	// LiveTaskID names the running task a transcript row waits on (5d-1), so
+	// the escalation pass can re-check it before the Art 12(3) deadline.
+	LiveTaskID string `json:"live_task_id,omitempty"`
 }
 
 // DeletedRecord identifies one row actually removed.
 type DeletedRecord struct {
 	Table LinkableTable `json:"table"`
 	RowID string        `json:"row_id"`
+	// Kind says why a record was deleted when it is not the plain case:
+	// SessionUnattributed for a shared channel session (§15.19).
+	Kind string `json:"kind,omitempty"`
 }
 
 // FailedAction is a planned action that was attempted and errored.
@@ -231,16 +243,29 @@ func (e *Executor) Execute(ctx context.Context, plan *ErasurePlan) (*ErasureResu
 	for _, a := range plan.Actions {
 		// Store-level deferrals come first, before any store is touched and
 		// whatever the disposition (design §15.10).
-		if reason := deferredStoreReason(a); reason != "" {
+		if reason := e.deferredStoreReason(a); reason != "" {
 			res.Deferred = append(res.Deferred, DeferredAction{
 				Table: a.Table, RowID: a.RowID, Disposition: a.Disposition, Reason: reason,
 			})
+			continue
+		}
+		if a.Table == TableChannelSessions {
+			e.applySessionErase(ctx, a, ids, idErr, res)
 			continue
 		}
 		switch a.Disposition {
 		case DispositionDelete:
 			e.applyDelete(ctx, a, res)
 		case DispositionRedact:
+			if e.transcriptRedactable(a.Table) {
+				if idErr != nil {
+					e.deferRedaction(a, res, fmt.Sprintf("the subject's identifiers could not be read (%v), so no "+
+						"masking could be verified; this row has NOT been changed", idErr))
+					break
+				}
+				e.applyTranscriptRedact(ctx, a, ids, plan, res)
+				break
+			}
 			if e.Redact == nil || e.Redact.Redactor == nil || e.Redact.Rewriter == nil {
 				// Reported, never silently passed over.
 				res.Deferred = append(res.Deferred, DeferredAction{
@@ -312,32 +337,43 @@ const (
 	// reasonNoRedactionPath: slice 5d-0. Only project_memory_chunks have a
 	// redaction path; a shared transcript row handed to the chunk redactor used
 	// to end FAILED ("memory chunk … not found") instead of deferred.
-	reasonNoRedactionPath = "no redaction path for this record type yet (removing one " +
-		"participant from a shared conversation is slice 5d, not yet shipped); it has NOT been changed"
-	// reasonLiveSession: a channel session is held in memory by the running
-	// daemon and saved again on its next message, so deleting or editing the
-	// stored copy from this process would be undone while reported as done.
-	reasonLiveSession = "this is live conversation state: the daemon holds the session in " +
-		"memory and saves it again on the next message, so changing the stored copy from here " +
-		"would not erase it; this record has NOT been changed and needs the session cleared " +
-		"through its channel or while the daemon is stopped"
+	reasonNoRedactionPath = "no redaction path for this record type is configured (removing one " +
+		"participant from a shared conversation needs the transcript store, slice 5d-1); it has NOT been changed"
+	// reasonLiveSession: no fenced session store is wired (SQLite keeps
+	// channel sessions only in the daemon's memory, which this process cannot
+	// reach), so a session is never erased from here (§15.10 item 5, §15.18).
+	reasonLiveSession = "this is live conversation state held only in the daemon's memory " +
+		"(no fenced session store, as on SQLite), which this command cannot reach; this record " +
+		"has NOT been changed; it ends when the daemon restarts, or clear it through its channel"
 )
 
 // deferredStoreReason reports why an action must be deferred before any store is
 // touched, or "" when it may proceed.
-func deferredStoreReason(a Action) string {
+func (e *Executor) deferredStoreReason(a Action) string {
 	if a.Table == TableChannelSessions {
-		return reasonLiveSession
+		if !e.sessionErasable() {
+			return reasonLiveSession
+		}
+		return "" // 5d-2 handles both dispositions (applySessionErase)
 	}
-	if a.Disposition == DispositionRedact && !redactableTable(a.Table) {
+	if a.Disposition == DispositionRedact && !redactableTable(a.Table) && !e.transcriptRedactable(a.Table) {
 		return reasonNoRedactionPath
 	}
 	return ""
 }
 
-// redactableTable reports whether a table has a redaction path. Only memory
-// chunks do (slice 5c); transcripts wait on 5d (design §15.4).
+// redactableTable reports whether a table has the chunk redaction path (slice
+// 5c). Transcripts have their own (transcriptRedactable, 5d-1).
 func redactableTable(t LinkableTable) bool { return t == TableProjectMemoryChunks }
+
+// transcriptRedactable reports whether a shared transcript row can be
+// redacted: a transcript table with the 5d-1 store wired.
+func (e *Executor) transcriptRedactable(t LinkableTable) bool {
+	if t != TableChatAuditLog && t != TableTaskMessages {
+		return false
+	}
+	return e != nil && e.Redact != nil && e.Redact.Transcripts != nil
+}
 
 // evictAssembledTraces runs the trace-cache evictor and records what it did. A
 // failure is a FailedAction: the cache still holds a copy of erased data, so the

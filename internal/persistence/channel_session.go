@@ -30,28 +30,44 @@ type ChannelSession struct {
 	CreatedAt     time.Time
 	UpdatedAt     time.Time
 	ExpiresAt     *time.Time
+	// Version is the row's fence version (Postgres; 0 on SQLite). Every
+	// write draws a new one from one sequence, so a value is never reused.
+	Version int64
 }
 
 // ChannelSessionRepository persists per-channel session state.
 // Implementations:
-//   - Postgres: durable, multi-replica safe. Save uses ON CONFLICT
-//     (kind, session_id) DO UPDATE so the post-turn write is one
-//     round trip.
-//   - SQLite: returns ErrNotFound on Load and is a no-op on Save —
+//   - Postgres: durable, multi-replica safe, and fenced: every write
+//     draws a new version and SaveIfVersion writes only over the
+//     version the caller last saw (art17 redact design §15.18, GitHub
+//     #344), so a session an erasure deleted or masked is never
+//     written back from a node's memory.
+//   - SQLite: returns ErrNotFound on Load and is a no-op on writes —
 //     single-process deployments keep their in-memory map as the
-//     authoritative state. Wiring the interface uniformly means
-//     channel implementations never have to branch on backend.
+//     authoritative state, and Fenced reports false.
+//
+// There is no unconditional save: a blind upsert is what let a deleted
+// session come back.
 type ChannelSessionRepository interface {
 	// Load returns the session for (kind, sessionID). ErrNotFound
 	// for a session that has never been persisted — channels treat
 	// that the same as "fresh session, empty history".
 	Load(ctx context.Context, kind, sessionID string) (*ChannelSession, error)
 
-	// Save upserts the session. activeProject may be empty (channel
-	// hasn't pinned one yet). historyJSON is the JSON-encoded full
-	// post-turn slice the caller marshalled — channels never store
-	// partial history (Result.Messages is authoritative).
-	Save(ctx context.Context, kind, sessionID, activeProject string, historyJSON []byte) error
+	// Version reads the row's version alone; found is false when the
+	// row does not exist.
+	Version(ctx context.Context, kind, sessionID string) (found bool, version int64, err error)
+
+	// SaveIfVersion writes the session only when the row still holds
+	// expect, or, with expect nil, only when no row exists. ok is false
+	// (and nothing is written) when the row moved; newVersion is the
+	// version the write drew. activeProject may be empty. historyJSON is
+	// the JSON-encoded full post-turn slice.
+	SaveIfVersion(ctx context.Context, kind, sessionID, activeProject string, historyJSON []byte, expect *int64) (newVersion int64, ok bool, err error)
+
+	// Fenced reports whether this store carries versions. False on the
+	// SQLite stub, where there is nothing durable to compare.
+	Fenced() bool
 
 	// Delete removes the session. Used by the webchat "clear chat"
 	// affordance and the future stale-session sweeper. No error

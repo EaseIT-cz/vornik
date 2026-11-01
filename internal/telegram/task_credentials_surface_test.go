@@ -26,11 +26,11 @@ func TestRenderCredentialsSection(t *testing.T) {
 	}}
 
 	// No repo / unknown task → empty.
-	if s, allow := bot.renderCredentialsSection(context.Background(), &persistence.Task{ID: "other"}); s != "" || allow != nil {
+	if s, allow := bot.renderCredentialsSection(context.Background(), &persistence.Task{ID: "other"}, 42); s != "" || allow != nil {
 		t.Fatalf("unknown task: got (%q,%v), want empty", s, allow)
 	}
 
-	s, allow := bot.renderCredentialsSection(context.Background(), &persistence.Task{ID: "t1"})
+	s, allow := bot.renderCredentialsSection(context.Background(), &persistence.Task{ID: "t1"}, 42)
 	if !strings.Contains(s, "viewing password: `hunter2-xY9pQ`") {
 		t.Errorf("section missing backtick-wrapped credential: %q", s)
 	}

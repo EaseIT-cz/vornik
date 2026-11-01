@@ -291,6 +291,8 @@ type InstallationConfig struct {
 // Splitting keeps slice-1 unit tests on the verifier independent of
 // the slice-2 webhook-dispatch pipeline.
 type Channel struct {
+	// aiMark is the Art 50(2) marker (aimark.go).
+	aiMark             aiMarkHolder
 	cfg                Config
 	signingSecretBytes []byte
 	apiBaseURL         string

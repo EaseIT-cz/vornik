@@ -147,28 +147,29 @@ flowchart LR
 
 ## Benchmarks — measured, not asserted
 
-Vornik ships its own benchmark harness (`vornikctl bench memory`) and publishes the
-numbers with their **spread**, because a mean without a spread cannot show a
-regression. Every result carries a comparability key — change the dataset, the models
-or the retrieval budget and two numbers refuse to be compared.
+Vornik ships its benchmark harness, `vornikctl bench memory` and `vornikctl bench
+agent`, and publishes every result with its **spread** and a comparability key: change
+the dataset, the models or the budget and two results refuse to be compared.
+
+**Benchmark models on your own agent work.** The agent benchmark runs software tasks
+through a multi-agent swarm and scores what the agents did, not just whether they
+finished. On one RTX 3090, the open-weight `gemma-4-26b-a4b` (4B active parameters)
+completed 89 to 90 of 90 tasks, for €1.34 to €1.40 of electricity per full run.
+
+**Memory retrieval** is measured on the public LongMemEval dataset:
 
 <img src="docs/public/assets/benchmark-retrieval.svg" alt="Retrieval quality on LongMemEval: recall tied at 1.000; Vornik precision 0.944 vs 0.681, MRR 0.944 vs 0.729" width="100%">
 
-On this six-item subset **recall is tied** — both systems retrieve every gold document,
-so it does not separate them. Vornik's retrieved set is tighter and better ordered; the
-comparison system reaches the same recall by returning more.
-
-We also measured how noisy our own measurement is, before quoting any of it:
+On this six-item subset recall is tied. Vornik's retrieved set is tighter and better
+ordered; the comparison system reaches the same recall by returning more.
 
 <img src="docs/public/assets/benchmark-noise-floor.svg" alt="Across ten identical runs, judged accuracy ranged 0.750-0.875 while judge-free context precision was identical every time" width="100%">
 
-That is why the judge-free tier is the headline number and judged accuracy is
-supporting: a gate on the judged figure would need ±10.2 points to avoid firing on the
-judge disagreeing with itself.
+Across ten identical runs, judged accuracy moved by up to 12.5 points while the
+judge-free figures did not move at all, so the judge-free tier is the headline number.
 
-**[Full results, method, and how to reproduce them →](https://docs.vornik.io/benchmarks/)**
-Small n, one ability, and an easy subset — the caveats are published alongside, and
-`scripts/bench-reproduce.sh` runs the whole thing on your machine.
+**[Full results, method, caveats, and how to reproduce →](https://docs.vornik.io/benchmarks/)**
+`scripts/bench-reproduce.sh` runs the memory benchmark on your machine.
 
 ## What you get
 
@@ -182,6 +183,7 @@ Small n, one ability, and an easy subset — the caveats are published alongside
 | **Workflows, not prompts** | Multi-step graphs with typed steps, budgets, and approval gates. |
 | **Assistants without your keys** | Hermes, Claude Code or Codex ask Vornik for work over your private systems; Vornik holds the credentials and returns a checked result, never raw data. |
 | **You approve on your phone** | New connections, credentials and every proposed write wait for you on a paired phone. |
+| **EU AI Act transparency built in** | Every channel tells people they are talking to an AI, and generated output carries a signed mark anyone can verify. |
 
 > **Editions.** This repository is **Vornik Community Edition** (AGPL-3.0) — the
 > complete orchestration core, fully usable on its own for personal and small-team
@@ -233,4 +235,4 @@ Contributions welcome under a [CLA](docs/public/contributing.md)
 
 </div>
 
-<!-- summary-reviewed-through: 2026.10.8 -->
+<!-- summary-reviewed-through: 2026.11.1 -->

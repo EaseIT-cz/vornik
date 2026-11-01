@@ -75,7 +75,14 @@ func run416(t *testing.T, page *cdpPage, snippet string) (cancel, accept confirm
 func openConfirmHarness(t *testing.T) *cdpPage {
 	t.Helper()
 	chrome := findHeadlessChrome(t)
-	srv := httptest.NewServer(http.StripPrefix("/ui", NewServer().Handler()))
+	// The harness compares the old inline handlers with their data-confirm
+	// replacements, so it serves the page without the console CSP: since
+	// phase 5's hashes, Chromium ignores 'unsafe-inline' and would refuse the
+	// old side. The CSP itself is tested in csp_hashes_416_test.go.
+	ui := http.StripPrefix("/ui", NewServer().Handler())
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		ui.ServeHTTP(noCSPWriter{w}, r)
+	}))
 	t.Cleanup(srv.Close)
 	page := startCDP(t, chrome).newPage(t)
 	page.navigate(t, srv.URL+"/ui/login")
@@ -358,3 +365,17 @@ func TestConfirmations_RealTaskPage_416(t *testing.T) {
 }
 
 func itoa416(i int) string { b, _ := json.Marshal(i); return string(b) }
+
+// noCSPWriter drops the Content-Security-Policy header as the response is
+// written.
+type noCSPWriter struct{ http.ResponseWriter }
+
+func (w noCSPWriter) WriteHeader(code int) {
+	w.Header().Del("Content-Security-Policy")
+	w.ResponseWriter.WriteHeader(code)
+}
+
+func (w noCSPWriter) Write(b []byte) (int, error) {
+	w.Header().Del("Content-Security-Policy")
+	return w.ResponseWriter.Write(b)
+}

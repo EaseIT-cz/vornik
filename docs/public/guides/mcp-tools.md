@@ -3,7 +3,7 @@ sources:
     - path: internal/registry/project.go
       sha256: 438282a14b6e55cf685243941018f913c0acbce35f70ea190b878644695f67e6
     - path: internal/mcp/client.go
-      sha256: 193151fbf78a9a586764d736dc4d608813ef45c5d8df5d11dc289b8b8d4ac349
+      sha256: c83b3aafab0ad14229d76879a35fef9aa3dea8f02dabbee099c54738a60aacea
     - path: internal/mcp/ratelimit.go
       sha256: 19ad0c64e2abd9d25e95971e1ba5e3cfe91f34852edeca6e4f9c70825b2e901d
     - path: internal/cli/mcp.go

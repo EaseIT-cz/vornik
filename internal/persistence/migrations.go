@@ -134,6 +134,9 @@ func (r *MigrationRunner) run(ctx context.Context, done, pending *int) error {
 	if err != nil {
 		return fmt.Errorf("failed to get applied migration versions: %w", err)
 	}
+	if err := refuseNewerSchema(applied, r.migrations); err != nil {
+		return err
+	}
 
 	// Apply in VERSION order (not slice order). DefaultMigrations is
 	// maintained in roughly version order but has inversions (e.g. v26
@@ -256,6 +259,32 @@ func (r *MigrationRunner) getAppliedVersions(ctx context.Context) (map[int]bool,
 		out[v] = true
 	}
 	return out, rows.Err()
+}
+
+// ErrSchemaNewerThanBinary is Run's refusal of a database a newer release
+// migrated (GitHub #581 D1, enterprise-packaging-design.md amendment
+// 2026-10-29). An older binary on that schema would run against tables and
+// constraints it was not built for; downgrading is restoring a backup taken
+// before the upgrade, then installing the older package.
+var ErrSchemaNewerThanBinary = errors.New("the database schema is newer than this binary")
+
+// refuseNewerSchema returns ErrSchemaNewerThanBinary when the highest applied
+// version is above the highest version the binary knows. An unknown version
+// below that (a migration renumbered or removed long ago) is not a newer
+// schema and passes.
+func refuseNewerSchema(applied map[int]bool, all []Migration) error {
+	newest, top := 0, 0
+	for _, m := range all {
+		newest = max(newest, m.Version)
+	}
+	for v := range applied {
+		top = max(top, v)
+	}
+	if top > newest {
+		return fmt.Errorf("%w: migration %d is applied and this binary's newest is %d; restore a backup taken before the upgrade to run this version",
+			ErrSchemaNewerThanBinary, top, newest)
+	}
+	return nil
 }
 
 // pendingMigrations returns the migrations to apply, in VERSION order, that
@@ -9382,6 +9411,298 @@ CREATE INDEX IF NOT EXISTS idx_memory_verification_backup_project
 DROP TABLE IF EXISTS memory_verification_backup;
 DROP TABLE IF EXISTS memory_verification_events;
 DROP TABLE IF EXISTS memory_chunk_provenance;
+`,
+	}, {
+		Version: 235,
+		Name:    "sealed_key_version",
+		// GitHub #571 U3a (mcp-server-authentication-design.md §15.2 A4).
+		// Every table that holds sealed values carries key_version, the
+		// version of the key a row was sealed with: 0 is today's derivation
+		// from the master store.key. Inert in U3: nothing writes or reads it
+		// yet (the per-tenant key slice T3 will). persistence.SealedTables
+		// lists these tables; its architecture test checks the column.
+		// SQLite: the same columns in schema.go and sqliteAdditiveColumns.
+		Up: `
+ALTER TABLE mcp_oauth_tokens ADD COLUMN IF NOT EXISTS key_version INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE agent_secrets ADD COLUMN IF NOT EXISTS key_version INTEGER NOT NULL DEFAULT 0;
+`,
+		Down: `
+ALTER TABLE agent_secrets DROP COLUMN IF EXISTS key_version;
+ALTER TABLE mcp_oauth_tokens DROP COLUMN IF EXISTS key_version;
+`,
+	}, {
+		Version: 236,
+		Name:    "broker_grant_key_version",
+		// GitHub #571 U3a: broker_standing_grants.key_values is sealed
+		// (brokergrants.Store), so it is in persistence.SealedTables and
+		// carries key_version like the tables of migration 235. The
+		// multi-tenancy design's list of sealed tables missed it; the
+		// Postgres registry test found it the first time it ran. Inert in U3.
+		Up: `
+ALTER TABLE broker_standing_grants ADD COLUMN IF NOT EXISTS key_version INTEGER NOT NULL DEFAULT 0;
+`,
+		Down: `
+ALTER TABLE broker_standing_grants DROP COLUMN IF EXISTS key_version;
+`,
+	},
+	{
+		Version: 237,
+		Name:    "owned_account_keys",
+		// GitHub #571 U3b (mcp-server-authentication-design.md §15.3a C1, C3).
+		// One connection is one account (agent-administered design §22.2.1
+		// F1), so the label stays out of the key: each table gets a
+		// surrogate id and owner_user_id (NULL = the project's shared
+		// account, which every existing row is), and its two-column primary
+		// key becomes a partial unique index over the shared rows plus one
+		// over the owned rows. No value is opened or re-sealed: a shared row
+		// keeps its U3a sealing label. Run under the migration runner's
+		// advisory lock. No downgrade by an older binary (its ON CONFLICT
+		// target has no matching index); the release notes say so.
+		// SQLite: the same shape in schema.go, existing tables rebuilt by
+		// sqliteTableRebuilds.
+		Up: `
+ALTER TABLE mcp_oauth_tokens ADD COLUMN IF NOT EXISTS id TEXT NOT NULL DEFAULT replace(gen_random_uuid()::text, '-', '');
+ALTER TABLE mcp_oauth_tokens ADD COLUMN IF NOT EXISTS owner_user_id TEXT;
+ALTER TABLE mcp_oauth_tokens DROP CONSTRAINT IF EXISTS mcp_oauth_tokens_pkey;
+ALTER TABLE mcp_oauth_tokens ADD CONSTRAINT mcp_oauth_tokens_pkey PRIMARY KEY (id);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_mcp_oauth_tokens_shared
+    ON mcp_oauth_tokens (project_id, server_name) WHERE owner_user_id IS NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS uq_mcp_oauth_tokens_owned
+    ON mcp_oauth_tokens (project_id, server_name, owner_user_id) WHERE owner_user_id IS NOT NULL;
+ALTER TABLE agent_integration_approvals ADD COLUMN IF NOT EXISTS id TEXT NOT NULL DEFAULT replace(gen_random_uuid()::text, '-', '');
+ALTER TABLE agent_integration_approvals ADD COLUMN IF NOT EXISTS owner_user_id TEXT;
+ALTER TABLE agent_integration_approvals DROP CONSTRAINT IF EXISTS agent_integration_approvals_pkey;
+ALTER TABLE agent_integration_approvals ADD CONSTRAINT agent_integration_approvals_pkey PRIMARY KEY (id);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_agent_integration_approvals_shared
+    ON agent_integration_approvals (project_id, integration) WHERE owner_user_id IS NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS uq_agent_integration_approvals_owned
+    ON agent_integration_approvals (project_id, integration, owner_user_id) WHERE owner_user_id IS NOT NULL;
+`,
+		Down: `
+DROP INDEX IF EXISTS uq_agent_integration_approvals_owned;
+DROP INDEX IF EXISTS uq_agent_integration_approvals_shared;
+DELETE FROM agent_integration_approvals WHERE owner_user_id IS NOT NULL;
+ALTER TABLE agent_integration_approvals DROP CONSTRAINT IF EXISTS agent_integration_approvals_pkey;
+ALTER TABLE agent_integration_approvals ADD CONSTRAINT agent_integration_approvals_pkey PRIMARY KEY (project_id, integration);
+ALTER TABLE agent_integration_approvals DROP COLUMN IF EXISTS owner_user_id;
+ALTER TABLE agent_integration_approvals DROP COLUMN IF EXISTS id;
+DROP INDEX IF EXISTS uq_mcp_oauth_tokens_owned;
+DROP INDEX IF EXISTS uq_mcp_oauth_tokens_shared;
+DELETE FROM mcp_oauth_tokens WHERE owner_user_id IS NOT NULL;
+ALTER TABLE mcp_oauth_tokens DROP CONSTRAINT IF EXISTS mcp_oauth_tokens_pkey;
+ALTER TABLE mcp_oauth_tokens ADD CONSTRAINT mcp_oauth_tokens_pkey PRIMARY KEY (project_id, server_name);
+ALTER TABLE mcp_oauth_tokens DROP COLUMN IF EXISTS owner_user_id;
+ALTER TABLE mcp_oauth_tokens DROP COLUMN IF EXISTS id;
+`,
+	},
+	{
+		Version: 238,
+		Name:    "instance_exports",
+		// GitHub #581 D5 (enterprise-packaging-design.md, amendment
+		// 2026-10-29): the registry of owner exports. The control plane
+		// registers an export it wrote to the instance's backup prefix; the
+		// daemon serves it to the owner for 7 days by this row's created_at,
+		// never an id with no row. SQLite: the same table in schema.go.
+		Up: `
+CREATE TABLE IF NOT EXISTS instance_exports (
+    export_id  TEXT PRIMARY KEY,
+    created_at TIMESTAMP WITH TIME ZONE NOT NULL
+);
+`,
+		Down: `DROP TABLE IF EXISTS instance_exports;`,
+	},
+	{
+		Version: 239,
+		Name:    "instance_milestones",
+		// GitHub #587 (operations-api-contract-design.md §7.2.2): the
+		// instance's once-only milestones, the first recall hit and the first
+		// assistant answer, read by the first-value gauges. The first mark of
+		// a name is kept; no retention or erasure prunes it. SQLite: the same
+		// table in schema.go.
+		Up: `
+CREATE TABLE IF NOT EXISTS instance_milestones (
+    name TEXT PRIMARY KEY,
+    at   TIMESTAMP WITH TIME ZONE NOT NULL
+);
+`,
+		Down: `DROP TABLE IF EXISTS instance_milestones;`,
+	},
+	{
+		Version: 240,
+		Name:    "data_subject_escalations",
+		// GitHub #344 slice 5d-1c (art17 redact design §15.16): the once-only
+		// record of an operator alert for an erasure row a running task holds
+		// near the Art 12(3) deadline, keyed with the deadline so an extension
+		// alerts again; and the date the subject was told of an extension, a
+		// separate fact from the extension itself. SQLite: the same table in
+		// schema.go and the column in sqliteColumnAdds.
+		Up: `
+CREATE TABLE IF NOT EXISTS data_subject_escalations (
+    request_id TEXT NOT NULL,
+    row_table  TEXT NOT NULL,
+    row_id     TEXT NOT NULL,
+    deadline   TIMESTAMP WITH TIME ZONE NOT NULL,
+    raised_at  TIMESTAMP WITH TIME ZONE NOT NULL,
+    PRIMARY KEY (request_id, row_table, row_id, deadline)
+);
+ALTER TABLE data_subject_requests ADD COLUMN IF NOT EXISTS extension_notified_at TIMESTAMP WITH TIME ZONE;
+`,
+		Down: `
+ALTER TABLE data_subject_requests DROP COLUMN IF EXISTS extension_notified_at;
+DROP TABLE IF EXISTS data_subject_escalations;
+`,
+	},
+	{
+		Version: 241,
+		Name:    "channel_session_version_fence",
+		// GitHub #344 slice 5d-2 (art17 redact design §15.18): the fence that
+		// lets an erasure delete or mask a channel session without a node's
+		// in-memory copy writing it back. Every write draws a version from one
+		// sequence (never reused, so a delete and re-create cannot pass as
+		// unchanged); the trigger draws it for every writer, including a binary
+		// that predates the fence and still upserts blindly. The volatile
+		// default numbers existing rows one by one. SQLite has no
+		// channel_sessions table.
+		Up: `
+CREATE SEQUENCE IF NOT EXISTS channel_session_version_seq;
+ALTER TABLE channel_sessions ADD COLUMN IF NOT EXISTS version BIGINT NOT NULL
+    DEFAULT nextval('channel_session_version_seq');
+CREATE OR REPLACE FUNCTION channel_session_next_version() RETURNS trigger AS $$
+BEGIN
+    NEW.version := nextval('channel_session_version_seq');
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+DROP TRIGGER IF EXISTS channel_session_version_fence ON channel_sessions;
+CREATE TRIGGER channel_session_version_fence BEFORE INSERT OR UPDATE ON channel_sessions
+    FOR EACH ROW EXECUTE FUNCTION channel_session_next_version();
+`,
+		Down: `
+DROP TRIGGER IF EXISTS channel_session_version_fence ON channel_sessions;
+DROP FUNCTION IF EXISTS channel_session_next_version();
+ALTER TABLE channel_sessions DROP COLUMN IF EXISTS version;
+DROP SEQUENCE IF EXISTS channel_session_version_seq;
+`,
+	}, {
+		Version: 242,
+		Name:    "task_credentials_key_version",
+		// GitHub #578 (tool-credential-carryover design, Amendment 2026-10-31
+		// (#578) B4): task_credentials.value is sealed now, so the table is
+		// in persistence.SealedTables and carries key_version like the tables
+		// of migration 235. Inert until the per-tenant key slice.
+		// SQLite: schema.go and sqliteAdditiveColumns.
+		Up: `
+ALTER TABLE task_credentials ADD COLUMN IF NOT EXISTS key_version INTEGER NOT NULL DEFAULT 0;
+`,
+		Down: `
+ALTER TABLE task_credentials DROP COLUMN IF EXISTS key_version;
+`,
+	}, {
+		Version: 243,
+		Name:    "ai_output_marks",
+		// GitHub #117 (Art 50 design §14.7): the EU AI Act Art 50(2) ledger
+		// of signed output marks and the public keys that signed them. Both
+		// are evidence tables (retention.evidenceTables), never pruned.
+		// SQLite: schema.go.
+		Up: `
+CREATE TABLE IF NOT EXISTS ai_output_marks (
+    content_sha256 TEXT PRIMARY KEY,
+    surface        TEXT NOT NULL,
+    mark           TEXT NOT NULL,
+    task_id        TEXT,
+    issued_at      TIMESTAMPTZ NOT NULL
+);
+CREATE TABLE IF NOT EXISTS ai_mark_keys (
+    kid           TEXT PRIMARY KEY,
+    public_key    BYTEA NOT NULL,
+    first_used_at TIMESTAMPTZ NOT NULL
+);
+`,
+		Down: `
+DROP TABLE IF EXISTS ai_mark_keys;
+DROP TABLE IF EXISTS ai_output_marks;
+`,
+	}, {
+		Version: 244,
+		Name:    "trading_funnel_candidates",
+		// GitHub #596 (trading entry-policy design, Amendment 2026-10-31):
+		// the strategist's entry funnel, recorded by the daemon, with each
+		// candidate's forward outcome at 1, 3 and 5 completed sessions.
+		// Measurement only. SQLite: schema.go.
+		Up: `
+CREATE TABLE IF NOT EXISTS trading_funnel_candidates (
+    execution_id TEXT NOT NULL,
+    symbol       TEXT NOT NULL,
+    intent       TEXT NOT NULL,
+    task_id      TEXT NOT NULL,
+    project_id   TEXT NOT NULL,
+    step_id      TEXT NOT NULL,
+    observed_at  TIMESTAMPTZ NOT NULL,
+    status       TEXT NOT NULL,
+    gate         TEXT NOT NULL,
+    gate_raw     TEXT NOT NULL,
+    reason       TEXT NOT NULL DEFAULT '',
+    inputs       JSONB,
+    ref_close    DOUBLE PRECISION,
+    ref_atr      DOUBLE PRECISION,
+    ret_1 DOUBLE PRECISION, ret_3 DOUBLE PRECISION, ret_5 DOUBLE PRECISION,
+    mfe_1 DOUBLE PRECISION, mfe_3 DOUBLE PRECISION, mfe_5 DOUBLE PRECISION,
+    mae_1 DOUBLE PRECISION, mae_3 DOUBLE PRECISION, mae_5 DOUBLE PRECISION,
+    PRIMARY KEY (execution_id, symbol, intent)
+);
+CREATE INDEX IF NOT EXISTS idx_trading_funnel_project_observed
+    ON trading_funnel_candidates (project_id, observed_at);
+CREATE INDEX IF NOT EXISTS idx_trading_funnel_project_symbol
+    ON trading_funnel_candidates (project_id, symbol);
+`,
+		Down: `
+DROP TABLE IF EXISTS trading_funnel_candidates;
+`,
+	}, {
+		Version: 245,
+		Name:    "trading_benchmark_closes",
+		// GitHub #597 (trading-performance-tracker design, Amendment
+		// 2026-10-31): completed-session closes of benchmark symbols (SPY),
+		// recorded from bars the indicator pre-warm already fetches. Not
+		// project-scoped. Session is the New York date, ISO text.
+		// SQLite: schema.go.
+		Up: `
+CREATE TABLE IF NOT EXISTS trading_benchmark_closes (
+    symbol  TEXT NOT NULL,
+    session TEXT NOT NULL,
+    close   DOUBLE PRECISION NOT NULL,
+    PRIMARY KEY (symbol, session)
+);
+`,
+		Down: `
+DROP TABLE IF EXISTS trading_benchmark_closes;
+`,
+	}, {
+		Version: 246,
+		Name:    "trading_shadow_decisions",
+		// GitHub #598 step 1 (trading entry-policy design, Amendment
+		// 2026-10-31 §2 C): the rule engine's decision beside the
+		// strategist's, per candidate per tick. Measurement only.
+		// SQLite: schema.go.
+		Up: `
+CREATE TABLE IF NOT EXISTS trading_shadow_decisions (
+    execution_id  TEXT NOT NULL,
+    symbol        TEXT NOT NULL,
+    intent        TEXT NOT NULL,
+    project_id    TEXT NOT NULL,
+    observed_at   TIMESTAMPTZ NOT NULL,
+    engine_status TEXT NOT NULL,
+    engine_gate   TEXT NOT NULL,
+    model_status  TEXT NOT NULL DEFAULT '',
+    model_gate    TEXT NOT NULL DEFAULT '',
+    agree         BOOLEAN NOT NULL,
+    PRIMARY KEY (execution_id, symbol, intent)
+);
+CREATE INDEX IF NOT EXISTS idx_trading_shadow_project_observed
+    ON trading_shadow_decisions (project_id, observed_at);
+`,
+		Down: `
+DROP TABLE IF EXISTS trading_shadow_decisions;
 `,
 	},
 }

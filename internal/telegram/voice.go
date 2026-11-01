@@ -57,6 +57,12 @@ type VoiceProviders struct {
 	// well up to ~60 s; longer replies still play but the operator
 	// experience degrades. Zero falls back to 60 s.
 	MaxOutboundDuration int64 // milliseconds
+
+	// SyntheticReplies is the resolved voice.synthetic_replies switch
+	// (voice.ResolveSyntheticReplies; GitHub #543, AI Act Art 50(2)).
+	// False, the default, means replies go as text even to a voice
+	// message; inbound transcription is unaffected.
+	SyntheticReplies bool
 }
 
 const (
@@ -295,6 +301,7 @@ func (b *Bot) sendVoice(ctx context.Context, chatID int64, audio voice.Audio) (i
 	if !parsed.OK {
 		return 0, fmt.Errorf("voice: sendVoice error: %s", parsed.Description)
 	}
+	b.recordAIAudio(ctx, audio.Bytes) // Art 50(2): the ledger row is the mark (#117)
 	return parsed.Result.MessageID, nil
 }
 
@@ -320,7 +327,9 @@ func (b *Bot) sendVoice(ctx context.Context, chatID int64, audio voice.Audio) (i
 // fails for a reason the caller should escalate. The caller falls
 // back to text-Send in that case.
 func (b *Bot) sendVoiceReply(ctx context.Context, chatID int64, text string) (sentID string, voiceUsed bool, err error) {
-	if b.voice.TTS == nil {
+	// The canonical Art 50(2) gate (#543): nothing is synthesised unless an
+	// operator opted in. shouldReplyAsVoice checks it too.
+	if b.voice.TTS == nil || !b.voice.SyntheticReplies {
 		return "", false, nil
 	}
 	// See internal/voice.ForSpeech: rich text is for reading, not for a synthesiser.
@@ -355,7 +364,7 @@ func (b *Bot) sendVoiceReply(ctx context.Context, chatID int64, text string) (se
 // voice-vs-text decision. Returns true when the chat's most-recent
 // inbound was a voice message AND a TTS provider is wired.
 func (b *Bot) shouldReplyAsVoice(chatID int64) bool {
-	if b.voiceTracker == nil || b.voice.TTS == nil {
+	if b.voiceTracker == nil || b.voice.TTS == nil || !b.voice.SyntheticReplies {
 		return false
 	}
 	return b.voiceTracker.IsVoice(chatID)

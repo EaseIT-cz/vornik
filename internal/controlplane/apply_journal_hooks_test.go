@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"vornik.io/vornik/internal/configlock"
 )
 
 // GitHub #302 (2026-10-13): the approver-device card for a DRIFT row is filed
@@ -32,8 +33,8 @@ func TestOnResolved_FiresAfterAResultOutsideTheLocks(t *testing.T) {
 		fired = append(fired, journalID)
 		// The hook runs after the resolve released its locks, so a hook
 		// that reaches the engine cannot deadlock it.
-		if configWriteMu.TryLock() {
-			configWriteMu.Unlock()
+		if release, ok := configlock.TryLock(); ok {
+			release()
 			lockFree = true
 		}
 	}
@@ -66,9 +67,9 @@ func TestOnDrift_RunsUnderTheEngineLocks(t *testing.T) {
 	env, _ := readSetCase(t, "verifying")
 	held := false
 	env.e.OnDrift = func(context.Context, string) {
-		writeFree := configWriteMu.TryLock()
+		release, writeFree := configlock.TryLock()
 		if writeFree {
-			configWriteMu.Unlock()
+			release()
 		}
 		engineFree := env.e.mu.TryLock()
 		if engineFree {

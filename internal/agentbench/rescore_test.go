@@ -62,6 +62,7 @@ func TestRescore_AppliesTheCurrentScoringToOldTraces(t *testing.T) {
 	}
 	if grant == nil {
 		t.Fatal("no grant verdict after re-scoring")
+		return // t.Fatal does not return; this tells staticcheck (SA5011) too
 	}
 	if grant.CoreMiss {
 		t.Error("v2's core miss survived re-scoring; git_status is covered by the granted shell")

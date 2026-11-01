@@ -15,10 +15,10 @@ import (
 type MemoryProvenanceConfig struct {
 	// ReplaceDefaultHosts drops github.com, gitlab.com, bitbucket.org and
 	// codeberg.org, leaving only Forges (air-gapped installs).
-	ReplaceDefaultHosts bool `yaml:"replace_default_hosts" json:"replace_default_hosts" doc:"Drop the public default forges (github.com, gitlab.com, bitbucket.org, codeberg.org); only memory.provenance.forges are cloned." since:"2026.10.8"`
+	ReplaceDefaultHosts bool `yaml:"replace_default_hosts" json:"replace_default_hosts" doc:"Drop the public default forges (github.com, gitlab.com, bitbucket.org, codeberg.org); only memory.provenance.forges are cloned." since:"2026.11.1"`
 	// Forges are self-hosted forges whose repositories may be cloned (and,
 	// for an API kind, checked through their API) to verify a document.
-	Forges []ProvenanceForgeConfig `yaml:"forges" json:"forges" doc:"Self-hosted forges for provenance clones: name, kind (github, gitlab, gitea, forgejo, git), scope_prefix, base_url, token or token_file, allowed_projects, max_repo_depth." since:"2026.10.8"`
+	Forges []ProvenanceForgeConfig `yaml:"forges" json:"forges" doc:"Self-hosted forges for provenance clones: name, kind (github, gitlab, gitea, forgejo, git), scope_prefix, base_url, token or token_file, allowed_projects, max_repo_depth." since:"2026.11.1"`
 }
 
 // ProvenanceForgeConfig is one memory.provenance.forges entry.

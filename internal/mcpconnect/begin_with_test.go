@@ -29,8 +29,8 @@ func TestBeginWith_OriginPeekAndClient(t *testing.T) {
 	vendor := newOAuthServer(t, true, "read", "offline_access")
 	c := newConnector(t, newFakeTokens(), &fakeAudit{}, "https://vornik.example.com")
 	guarded := &countingTransport{next: http.DefaultTransport}
-	c.HTTPFor = func(projectID, _ string) *http.Client {
-		if projectID == "hermes--work" {
+	c.HTTPFor = func(ref ServerRef) *http.Client {
+		if ref.ProjectID == "hermes--work" {
 			return &http.Client{Transport: guarded}
 		}
 		return nil

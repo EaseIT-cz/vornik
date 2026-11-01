@@ -11,7 +11,7 @@
                 <h1 class="text-xl font-semibold text-gray-100">Adoption</h1>
                 {{if .AllowedProjects}}
                 <form method="get" action="/ui/insights/adoption" class="flex items-center gap-2">
-                    <select name="projectId" onchange="this.form.submit()" class="text-sm bg-dark-800 border border-control text-gray-200 rounded-md px-2 py-1.5">
+                    <select name="projectId" data-on-change="submit-form" class="text-sm bg-dark-800 border border-control text-gray-200 rounded-md px-2 py-1.5">
                         <option value="">{{if .AllAccess}}All projects{{else}}All my projects{{end}}</option>
                         {{range .AllowedProjects}}
                         <option value="{{.}}" {{if eq . $.ProjectID}}selected{{end}}>{{.}}</option>
@@ -54,22 +54,8 @@
                  strength of very little data. */}}
             <div class="glass rounded-xl border border-dark-700 p-4 overflow-x-auto">
                 <h2 class="text-sm font-medium text-gray-300 mb-1">
-                    Credential activity <span class="text-[11px] text-gray-500 font-normal">— who uses Vornik, how much, and how often</span>
+                    Credential activity <span class="text-[11px] text-gray-500 font-normal">— who uses Vornik, how much, and how often{{template "hintOpen" "About credential activity"}}From <code class="text-gray-400">memory_retrieval_audit</code> and <code class="text-gray-400">task_llm_usage</code>, which record the credential directly — so these rows are real today, independent of task attribution. Credentials the system issues to itself (a fresh key per task execution, plus warm-pool keys) are folded into one row each rather than listed individually — they are the agent runtime doing someone's work, not separate users. <strong class="text-gray-400">Active days</strong> is the retention signal: a credential active on most days is a habit, one with a single busy day is a trial. <strong class="text-gray-400">Memory writes</strong> are deposits into project memory — teaching Vornik something rather than asking it, which is the stronger adoption signal. Chat activity is attributed per CHANNEL OPERATOR (telegram:42, slack:U123) and does not yet merge with the same person's API-key activity: linking channel identities to one account is designed but not wired.{{template "hintClose"}}</span>
                 </h2>
-                <p class="text-[11px] text-gray-500 mb-3">
-                    From <code class="text-gray-400">memory_retrieval_audit</code> and <code class="text-gray-400">task_llm_usage</code>,
-                    which record the credential directly — so these rows are real today, independent of task attribution.
-                    Credentials the system issues to itself (a fresh key per task execution, plus warm-pool keys) are
-                    folded into one row each rather than listed individually — they are the agent runtime doing someone's
-                    work, not separate users.
-                    <strong class="text-gray-400">Active days</strong> is the retention signal: a credential
-                    active on most days is a habit, one with a single busy day is a trial.
-                    <strong class="text-gray-400">Memory writes</strong> are deposits into project memory —
-                    teaching Vornik something rather than asking it, which is the stronger adoption signal.
-                    Chat activity is attributed per CHANNEL OPERATOR (telegram:42, slack:U123) and does not
-                    yet merge with the same person's API-key activity: linking channel identities to one
-                    account is designed but not wired.
-                </p>
                 {{if .Stats.Keys}}
                 <table class="w-full text-sm">
                     <thead>
@@ -143,14 +129,8 @@
                  climb "try the next feature". */}}
             <div class="glass rounded-xl border border-dark-700 p-4 overflow-x-auto">
                 <h2 class="text-sm font-medium text-gray-300 mb-1">
-                    Capability breadth <span class="text-[11px] text-gray-500 font-normal">— how much of the product each team has exercised</span>
+                    Capability breadth <span class="text-[11px] text-gray-500 font-normal">— how much of the product each team has exercised{{template "hintOpen" "About capability breadth"}}Scored on distinct capabilities used, not event volume: a team climbs by trying something new rather than by using one feature harder. Measured against the {{len .Capabilities.Rows}} catalogued capabilities, of which <strong class="text-gray-400">{{.Capabilities.Unused}}</strong> are untouched by every team. A capability no team has used is one the customer never discovered; one that a single team uses is the enablement session with evidence behind it. Capabilities whose absence is GOOD — security incidents, dead-letter queues — are deliberately not catalogued, since an empty incident table is a success rather than an unexplored feature.{{template "hintClose"}}</span>
                 </h2>
-                <p class="text-[11px] text-gray-500 mb-3">
-                    Scored on distinct capabilities used, not event volume: a team climbs by trying something
-                    new rather than by using one feature harder. Measured against the
-                    {{len .Capabilities.Rows}} catalogued capabilities, of which
-                    <strong class="text-gray-400">{{.Capabilities.Unused}}</strong> are untouched by every team.
-                </p>
                 {{if .Capabilities.Teams}}
                 <table class="w-full text-sm mb-4">
                     <thead>
@@ -200,12 +180,6 @@
                         {{end}}
                     </tbody>
                 </table>
-                <p class="text-[11px] text-gray-500 mt-3">
-                    A capability no team has used is one the customer never discovered; one that a single team uses
-                    is the enablement session with evidence behind it. Capabilities whose absence is GOOD — security
-                    incidents, dead-letter queues — are deliberately not catalogued, since an empty incident table is
-                    a success rather than an unexplored feature.
-                </p>
             </div>
             {{end}}
 
@@ -244,7 +218,7 @@
 
             <div class="glass rounded-xl border border-dark-700 p-4 overflow-x-auto">
                 <h2 class="text-sm font-medium text-gray-300 mb-3">
-                    Task attribution <span class="text-[11px] text-gray-500 font-normal">— who started scheduled work; the thinnest signal on this page</span>
+                    Task attribution <span class="text-[11px] text-gray-500 font-normal">— who started scheduled work; the thinnest signal on this page{{template "hintOpen" "About this table"}}Machine actors (autonomy, background workers, cross-project calls, replay) are shown and marked rather than hidden — omitting them would make human usage look larger than it is. This table counts TASKS only. Most companion use never schedules one, so credential activity above is the better adoption measure and this is included for completeness.{{template "hintClose"}}</span>
                 </h2>
                 {{if .Stats.Rows}}
                 <table class="w-full text-sm">
@@ -287,12 +261,6 @@
             {{/* Machine work is SHOWN and marked, never hidden: hiding it makes
                  human usage look larger than it is, and folding it into a person
                  is worse. */}}
-            <p class="text-[11px] text-gray-500">
-                Machine actors (autonomy, background workers, cross-project calls, replay) are shown and
-                marked rather than hidden — omitting them would make human usage look larger than it is.
-                This table counts TASKS only. Most companion use never schedules one, so credential activity
-                above is the better adoption measure and this is included for completeness.
-            </p>
 
             {{end}}
         </div>

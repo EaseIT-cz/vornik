@@ -1,15 +1,15 @@
 ---
 sources:
     - path: internal/dispatcher/render_document.go
-      sha256: b56577cedd74a94c78937e7148a7377f4275e3501f377d9bc53c0741d2962511
+      sha256: 3b9186ad84783c7cb102a04635ea36f1ecbfb4899fbb897af8f6359e720e4754
     - path: internal/dispatcher/tools.go
-      sha256: f2cfb36979335aad4c875d8a8a6b95e83e18b84fa1b01b0f75ccf30b929c24af
+      sha256: 266dfb00c471fb1a3ae928c53dff07b9fd58361dd03dacf5e230215a2821ffcb
     - path: internal/dispatcher/agent.go
-      sha256: 251f0e6fcaebef88a15895a31083ade297bc3df7b79cbfdf497a043965f5cd58
+      sha256: ab6f57d4b176d92fa080c1aecc7a7bda4414cbd74c3c5bbd613a4ded5fb647b0
     - path: internal/email/channel.go
-      sha256: 6e25a0e684fb8b94622507546e49aea4834b8cf2c06d8364de7fd4505d36dfd6
+      sha256: ecebe120876ddafbec3ffe8f8ca45d36382e9db8c3c8da554c0b084b4203a143
     - path: internal/slack/voice.go
-      sha256: 74a85ffb02d275a6cdd24f40b43abdcb2c700d0a3923d23a1845b0df172c679f
+      sha256: 1836b2db7a8a16253a0ebba29de188423fa5f6ec62713e37f541daffacd626f0
     - path: internal/reminders/completion_notifier.go
       sha256: 39f310edeed8d3f01613224f92615506bf85f755baee580fd44339d9c4b0381f
 ---
@@ -34,6 +34,12 @@ formats and sends each file back to the chat. It runs deterministically, with no
 extra model call. The conversion happens inside the bundled agent image, in a
 short-lived container with no network access, never on the daemon host itself:
 the host needs podman and the agent image, not pandoc.
+
+Each rendered document says it is AI-generated in its metadata (the HTML
+description and keywords, the PDF Subject and Keywords, the Word document's
+properties), with the EU AI Act Art 50(2) machine-readable mark signed over the
+markdown it was rendered from. Files agents produce, and opt-in voice replies,
+are recorded by hash so they can be checked later.
 
 Parameters:
 
@@ -158,7 +164,10 @@ completion summary. Scratch/intermediate files are never forwarded.
 Every scheduled update, reminder and delivered file says that an AI system
 produced it: on email each message ends with the AI-disclosure notice; on
 Telegram and Slack the chat gets the notice once, before the first update it
-receives, unless it was already told in an earlier conversation.
+receives, unless it was already told in an earlier conversation. Each email
+also carries the EU AI Act Art 50(2) machine-readable mark in its
+`Auto-Submitted` and `X-AI-Generated` headers, and each Slack message in its
+message metadata.
 
 Attachments are collected from the scheduled task **and any tasks it delegated
 to**. A scheduled prompt frequently runs a router workflow that hands the real

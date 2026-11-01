@@ -159,7 +159,7 @@ marketplace shipped at `.claude-plugin/marketplace.json` in the vornik
 repo root. Inside Claude Code:
 
 ```
-> /plugin marketplace add /opt/vornik/vornik
+> /plugin marketplace add /path/to/vornik
 > /plugin install vornik-companion@vornik
 ```
 
@@ -174,32 +174,51 @@ The marketplace and the plugin's `.claude-plugin/plugin.json` both
 lint clean under the official validator:
 
 ```
-$ claude plugin validate /opt/vornik/vornik
-$ claude plugin validate /opt/vornik/vornik/contrib/claude-code-companion
+$ claude plugin validate /path/to/vornik
+$ claude plugin validate /path/to/vornik/contrib/claude-code-companion
 ```
 
 ## MCP wiring
 
-The plugin's `.mcp.json` references two environment variables:
+The plugin's `.mcp.json` takes each value from your environment first, then
+from the plugin's options:
 
 ```json
 {
   "mcpServers": {
     "vornik": {
       "type": "http",
-      "url": "${VORNIK_URL:-http://localhost:8080}/api/v1/mcp/companion",
+      "url": "${VORNIK_URL:-${user_config.vornik_url}}/api/v1/mcp/companion",
       "headers": {
-        "Authorization": "Bearer ${VORNIK_COMPANION_TOKEN}"
+        "Authorization": "Bearer ${VORNIK_COMPANION_TOKEN:-${user_config.companion_token}}"
       }
     }
   }
 }
 ```
 
-`VORNIK_URL` falls back to `http://localhost:8080` when unset.
-`VORNIK_COMPANION_TOKEN` has no fallback — Claude Code will report a missing-
-env-var error if you forgot to export it. Rotate the token by re-exporting
-and starting a fresh session.
+- **The environment wins when set.** `VORNIK_URL` and
+  `VORNIK_COMPANION_TOKEN` work as before.
+- **Without them, the options apply.** When Claude Code enables the plugin,
+  it asks for:
+  - `vornik_url` (default `http://localhost:8080`);
+  - `companion_token`, which it keeps in your system's credential store,
+    not in a file you edit or in your shell history.
+
+  A hosted instance's companion page (`/ui/companion`) leads you through
+  this.
+- **The slash commands.** `/upload`, `/rag-ingest`, `/remember` and
+  `/memory-correct` run in Claude's shell, which gets no option values. So
+  the SessionStart hook passes a value from the options on to that shell
+  (`CLAUDE_ENV_FILE`), and only when:
+  - the value came from the options, not the environment;
+  - it has the expected shape: an http(s) URL, and a key of letters,
+    digits, `_` and `-`.
+
+  If it cannot, it says so, and the commands need the two variables in
+  your shell.
+- **To rotate the token,** re-export it (or change the option), and start
+  a fresh session.
 
 ## Try it
 

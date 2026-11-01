@@ -69,7 +69,7 @@ func days(n int) time.Duration { return time.Duration(n) * 24 * time.Hour }
 func TestSubjectRequestDeadlines_OverdueIsAnErrorNamingTheRequestNotTheSubject(t *testing.T) {
 	_, h, add := subjectLedgerFixture(t)
 	now := time.Now().UTC()
-	add("dsr_overdue", datasubject.RequestErasure, datasubject.StateVerified, now.Add(-days(31)), false)
+	add("dsr_overdue", datasubject.RequestErasure, datasubject.StateVerified, now.Add(-days(40)), false) // 40: past "one month" in any month (31 days is not, from Nov 1)
 	add("dsr_intime", datasubject.RequestAccess, datasubject.StateOpen, now.Add(-days(2)), false)
 
 	c := h.checkSubjectRequestDeadlines(context.Background())
@@ -104,7 +104,7 @@ func TestSubjectRequestDeadlines_BundlePathNeverNamesTheSubject(t *testing.T) {
 	for _, tc := range []struct {
 		status string
 		age    time.Duration
-	}{{"ERROR", days(31)}, {"WARNING", days(25)}} {
+	}{{"ERROR", days(40)}, {"WARNING", days(25)}} {
 		t.Run(tc.status, func(t *testing.T) {
 			_, h, add := subjectLedgerFixture(t)
 			add("dsr_bundle", datasubject.RequestAccess, datasubject.StateVerified, time.Now().UTC().Add(-tc.age), false)

@@ -304,7 +304,7 @@ func (c *Channel) sendIssueComment(ctx context.Context, sessionID, text string) 
 	url := c.apiBaseURL + fmt.Sprintf("/repos/%s/%s/issues/%d/comments", owner, repo, number)
 	body, _ := json.Marshal(struct {
 		Body string `json:"body"`
-	}{Body: text})
+	}{Body: c.withMark(ctx, text)}) // Art 50(2) (#117)
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
 	if err != nil {
 		return "", fmt.Errorf("github-app: build comment request: %w", err)

@@ -51,7 +51,7 @@ func TestCallback_HappyPathNeverRendersTheToken(t *testing.T) {
 	assert.NotContains(t, body, "rt-1")
 	assert.Equal(t, "no-store", w.Header().Get("Cache-Control"))
 
-	stored, err := tokens.Get(context.Background(), "p1", "linear")
+	stored, err := tokens.Get(context.Background(), "p1", "linear", "")
 	require.NoError(t, err)
 	require.NotNil(t, stored)
 }

@@ -427,6 +427,31 @@ func GetYAMLString(content []byte, dottedKey string) string {
 	return node.Value
 }
 
+// GetYAMLStringList returns the raw scalar items of the sequence at dottedKey,
+// as written (an ${ENV} reference stays unexpanded), or nil when the key is
+// missing or is not a sequence. GitHub #582: a rotation appends to the list as
+// written, so it never inlines a secret the file held as a reference.
+func GetYAMLStringList(content []byte, dottedKey string) []string {
+	var doc yaml.Node
+	if err := yaml.Unmarshal(content, &doc); err != nil {
+		return nil
+	}
+	if doc.Kind != yaml.DocumentNode || len(doc.Content) == 0 {
+		return nil
+	}
+	seq := findSequenceNode(doc.Content[0], strings.Split(dottedKey, "."))
+	if seq == nil {
+		return nil
+	}
+	var out []string
+	for _, item := range seq.Content {
+		if item.Kind == yaml.ScalarNode {
+			out = append(out, item.Value)
+		}
+	}
+	return out
+}
+
 // setInNode recursively walks mapping nodes following segments and sets the
 // leaf scalar's value. Returns created=true when the leaf key was absent and
 // had to be appended (directly, or beneath a freshly-created intermediate

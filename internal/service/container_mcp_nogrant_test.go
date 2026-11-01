@@ -71,6 +71,7 @@ func noGrantContainer(t *testing.T, projectYAML string, daemon []config.MCPServe
 		Config:   &config.Config{MCP: config.MCPConfig{Servers: daemon}},
 		repos:    &storage.Repositories{MCPOAuthTokens: tokens},
 	}
+	tokens.seal = withTestSecretStore(t, c)
 	return c, tokens, logs
 }
 

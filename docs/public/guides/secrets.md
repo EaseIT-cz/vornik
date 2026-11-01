@@ -1,9 +1,9 @@
 ---
 sources:
     - path: internal/config/config.go
-      sha256: 97124b0fc664025a8a47edf859084b16343438129b078aa27be8a88c3fb6bff4
+      sha256: 2908858f50540e2c7973be2f308d559b0811c622faabcad546cb5adcf36854c3
     - path: internal/executor/executor.go
-      sha256: 4141f025680dd95a250876f00067e5703a4531bc1788727e443a603d151528bb
+      sha256: c281ff12df80cf1a4eb409f19044be54dff5678cf5cc70f03ae69b22c376b28b
 ---
 # Named secrets
 
@@ -109,7 +109,10 @@ password-shaped value like any other secret and replaces it with
 **deterministically from the trusted tool's own output** — no model decides
 what's a credential — stores it against the task, and surfaces it
 **code-formatted and one-tap-copyable** in the task's completion notification
-(Telegram) and on the task-detail page, instead of redacting it.
+(Telegram) and on the task-detail page, instead of redacting it. The
+notification carries the credential to **private chats only**. A group chat
+watching the task gets a note and a link to the task page instead, so the
+group's members never see it.
 
 ## Enabling it
 
@@ -120,10 +123,8 @@ pattern** (a regexp with one capture group, for tools that return prose) or a
 
 ```yaml
 secrets:
-  # A capturing tool is implicitly trusted-output for its captured field, but
-  # listing it here too keeps the value un-redacted in the tool-audit log.
-  trusted_output_tools:
-    - "mcp__pagedrop__pagedrop_publish"
+  # No trusted_output_tools entry is needed: the tool-audit log keeps the
+  # captured value redacted, and its one copy is the sealed one below.
   tool_credentials:
     # PageDrop returns prose ("View: <url> … Password: <pw>"), so use patterns:
     - tool: "mcp__pagedrop__pagedrop_"      # prefix — matches publish/republish
@@ -161,5 +162,11 @@ behaviour is unchanged.
   real API key into a carryover, and it isn't an exfiltration channel.
 - **Retries don't leak stale credentials.** Only the task's most recent
   execution's credential is surfaced; an earlier attempt's password is hidden.
-- The value is stored alongside the task for its lifetime (same as the
-  tool-audit row that already holds it) and removed when the task is purged.
+- **The value is sealed at rest.** It is stored with the task, encrypted
+  with the secret store key (`store.key`, the key that protects OAuth tokens
+  and agent secrets), and removed when the task is purged. The tool-audit log
+  shows `[REDACTED:carried_credential]` in its place. Back the key file up
+  beside the database: without it, stored credentials cannot be read (a
+  re-publish issues a new one).
+- **Capture needs secret scanning.** With no secrets detector, nothing is
+  captured, since the strong-key check above could not run.

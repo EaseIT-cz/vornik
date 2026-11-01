@@ -34,6 +34,9 @@ func TestPricingCoverage_NoUncheckedModelField(t *testing.T) {
 		"model_capabilities": "a map keyed by model id, not a model id",
 		"model_limits":       "a map keyed by model id, not a model id",
 		"model_fallbacks":    "a map of model id → fallback id, not a model id field",
+		// GitHub #560 (M1c D4): host names of vouched model endpoints, for the
+		// dial guard; no model id.
+		"model_hosts": "host names of vouched model endpoints (the gateway), not a model id",
 		// chat.optional_work.disabled_models (breaker design §5.3d) lists models
 		// whose optional work is REFUSED. It never causes a call, so there is
 		// nothing on it to price; the models themselves are priced where used.

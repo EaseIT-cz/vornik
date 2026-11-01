@@ -25,7 +25,7 @@ type countingTokens struct {
 	onLock func()
 }
 
-func (c *countingTokens) Get(_ context.Context, _, _ string) (*persistence.MCPOAuthToken, error) {
+func (c *countingTokens) Get(_ context.Context, _, _, _ string) (*persistence.MCPOAuthToken, error) {
 	atomic.AddInt64(&c.gets, 1)
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -36,7 +36,7 @@ func (c *countingTokens) Get(_ context.Context, _, _ string) (*persistence.MCPOA
 	return &cp, nil
 }
 
-func (c *countingTokens) WithRefreshLock(ctx context.Context, _, _ string, fn func(context.Context) error) error {
+func (c *countingTokens) WithRefreshLock(ctx context.Context, _, _, _ string, fn func(context.Context) error) error {
 	atomic.AddInt64(&c.locks, 1)
 	if c.onLock != nil {
 		c.onLock()
@@ -44,7 +44,9 @@ func (c *countingTokens) WithRefreshLock(ctx context.Context, _, _ string, fn fu
 	return fn(ctx)
 }
 
-func (c *countingTokens) MarkNeedsReconnect(context.Context, string, string) error { return nil }
+func (c *countingTokens) MarkNeedsReconnect(context.Context, string, string, string) error {
+	return nil
+}
 
 func newCachedConnector(t *testing.T, tok *persistence.MCPOAuthToken) (*Connector, *countingTokens) {
 	t.Helper()

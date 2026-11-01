@@ -2009,6 +2009,8 @@ func (e *Executor) executeWarmAgentStep(ctx context.Context, task *persistence.T
 		roleEnv[k] = v
 	}
 
+	applyMemorySearchPolicyEnv(roleEnv, roleConfig)
+
 	// Warm containers are keyed per (project, role, image), so the project
 	// ID is stable for the container's lifetime. Inject it here so the agent
 	// can call project-scoped endpoints like /api/v1/projects/{id}/mcp/*;
@@ -3098,6 +3100,7 @@ func (e *Executor) agentEnv(ctx context.Context, task *persistence.Task, executi
 		envVars["VORNIK_LLM_MODEL"] = m
 	}
 	e.applyTokenLimits(envVars, task, roleConfig)
+	applyMemorySearchPolicyEnv(envVars, roleConfig)
 	if e.config.LogLevel != "" {
 		envVars["VORNIK_LOG_LEVEL"] = e.config.LogLevel
 	}
@@ -3188,4 +3191,35 @@ func stepRuntimePolicy(projectID, runtimePolicy string) string {
 		return "ephemeral"
 	}
 	return runtimePolicy
+}
+
+// memorySearchEnvKeys are the variables handle_memory_search reads for the
+// role's pinned retrieval policy (#550).
+var memorySearchEnvKeys = []string{"VORNIK_MEM_SCOPE", "VORNIK_MEM_STRICT", "VORNIK_MEM_AUTHORITY", "VORNIK_MEM_LIMIT"}
+
+// applyMemorySearchPolicyEnv writes the role's memorySearch policy into a
+// container's environment (design 2026-10-25-architect-expert-design.md
+// §2.1 C1), and clears the keys when the role pins none, so a role's own
+// envVars cannot pose as a policy. The daemon applies the policy to the
+// request regardless; the env only lets the agent send it.
+func applyMemorySearchPolicyEnv(env map[string]string, role *registry.SwarmRole) {
+	for _, k := range memorySearchEnvKeys {
+		delete(env, k)
+	}
+	if role == nil || role.MemorySearch == nil {
+		return
+	}
+	p := role.MemorySearch
+	if p.RepoScope != "" {
+		env["VORNIK_MEM_SCOPE"] = p.RepoScope
+	}
+	if p.StrictScope {
+		env["VORNIK_MEM_STRICT"] = "true"
+	}
+	if p.Authority != "" && p.Authority != registry.MemorySearchAuthorityAny {
+		env["VORNIK_MEM_AUTHORITY"] = p.Authority
+	}
+	if p.Limit > 0 {
+		env["VORNIK_MEM_LIMIT"] = strconv.Itoa(p.Limit)
+	}
 }

@@ -60,6 +60,9 @@ type OutboundMessage struct {
 	// multipart/mixed (text body part + one base64 part per
 	// attachment). Empty keeps the legacy text/plain shape unchanged.
 	Attachments []OutboundAttachment
+	// AIMark is the compact EU AI Act Art 50(2) mark over Body (GitHub
+	// #117). Non-empty adds Auto-Submitted (RFC 3834) and X-AI-Generated.
+	AIMark string
 }
 
 // OutboundAttachment is one file to attach to an outbound email. The
@@ -120,6 +123,10 @@ func RenderRFC5322(m OutboundMessage) (rendered []byte, messageID string, err er
 	}
 	if m.References != "" {
 		writeHeader(&b, "References", renderReferencesHeader(m.References))
+	}
+	if m.AIMark != "" {
+		writeHeader(&b, "Auto-Submitted", "auto-generated")
+		writeHeader(&b, "X-AI-Generated", m.AIMark)
 	}
 	writeHeader(&b, "MIME-Version", "1.0")
 

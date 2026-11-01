@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 )
 
 // Execution of a DispositionRedact action — the generative half of Art 17 erasure.
@@ -109,6 +110,9 @@ type RedactedAction struct {
 	BeforeHash string        `json:"before_hash"`
 	AfterHash  string        `json:"after_hash"`
 	Model      string        `json:"model"`
+	// Kind says what was done to a transcript row (TranscriptTombstoned,
+	// TranscriptMasked, TranscriptPayloadMasked); empty for a memory chunk.
+	Kind string `json:"kind,omitempty"`
 	// Verified is always true for a committed redaction — the write is unreachable
 	// otherwise. Recorded explicitly because it is the claim the report makes.
 	Verified bool `json:"verified"`
@@ -146,6 +150,12 @@ type RedactDeps struct {
 	// ApplyWithoutReview is --apply. Audited, not silent: every action it commits
 	// carries ReviewBypassed.
 	ApplyWithoutReview bool
+	// Transcripts is the shared-transcript store (slice 5d-1). Nil leaves
+	// chat_audit_log and task_messages REDACTs deferred, as before 5d-1.
+	// Transcripts need no Rewriter: they are masked deterministically (O-5d-1).
+	Transcripts TranscriptRedactor
+	// Now dates the tombstone; nil is time.Now.
+	Now func() time.Time
 }
 
 // collisionRetry marks a chunk deferred because the chunk it collided with is itself
@@ -200,7 +210,7 @@ func (e *Executor) applyRedact(ctx context.Context, a Action, ids []string,
 		return nil
 	}
 
-	if !e.reviewApproved(a, before, after, ids, res) {
+	if !e.reviewApproved(a, before, after, ids, d.Rewriter.ModelVersion(), res) {
 		return nil
 	}
 
@@ -243,7 +253,7 @@ func (e *Executor) applyRedact(ctx context.Context, a Action, ids []string,
 // reviewApproved applies the §8 gate. Returns false when the redaction must not
 // proceed, having already recorded the deferral.
 func (e *Executor) reviewApproved(a Action, before, after string, ids []string,
-	res *ErasureResult) bool {
+	model string, res *ErasureResult) bool {
 	d := e.Redact
 	if d.ApplyWithoutReview {
 		return true
@@ -254,7 +264,7 @@ func (e *Executor) reviewApproved(a Action, before, after string, ids []string,
 	}
 	ok, err := d.Approve(RedactionProposal{
 		Table: a.Table, RowID: a.RowID, Before: before, After: after,
-		Model: d.Rewriter.ModelVersion(), Identifiers: ids,
+		Model: model, Identifiers: ids,
 	})
 	if err != nil {
 		e.deferRedaction(a, res, fmt.Sprintf("operator review could not be completed (%v)", err))
@@ -286,8 +296,14 @@ func (e *Executor) resolveCollision(ctx context.Context, a Action, survivorID st
 }
 
 func (e *Executor) deferRedaction(a Action, res *ErasureResult, reason string) {
+	e.deferLive(a, res, reason, "")
+}
+
+// deferLive records a deferral that names the running task holding the row,
+// for the escalation pass (5d-1c).
+func (e *Executor) deferLive(a Action, res *ErasureResult, reason, liveTaskID string) {
 	res.Deferred = append(res.Deferred, DeferredAction{
-		Table: a.Table, RowID: a.RowID, Disposition: a.Disposition, Reason: reason,
+		Table: a.Table, RowID: a.RowID, Disposition: a.Disposition, Reason: reason, LiveTaskID: liveTaskID,
 	})
 }
 

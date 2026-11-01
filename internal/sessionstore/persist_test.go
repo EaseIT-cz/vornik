@@ -16,13 +16,16 @@ import (
 
 // fakeRepo is an in-memory ChannelSessionRepository for tests.
 // Mirrors the Postgres semantics: (kind, session_id) composite
-// key, Save upserts, Load returns ErrNotFound for missing.
+// key, a version drawn from one counter on every write (never
+// reused), SaveIfVersion guarded on it, ErrNotFound for missing.
 type fakeRepo struct {
-	mu        sync.Mutex
-	rows      map[string]map[string]*persistence.ChannelSession
-	saveErr   error
-	loadErr   error
-	deleteErr error
+	mu         sync.Mutex
+	rows       map[string]map[string]*persistence.ChannelSession
+	next       int64
+	saveErr    error
+	loadErr    error
+	deleteErr  error
+	versionErr error
 }
 
 func newFakeRepo() *fakeRepo {
@@ -43,23 +46,50 @@ func (f *fakeRepo) Load(_ context.Context, kind, sessionID string) (*persistence
 	return nil, persistence.ErrNotFound
 }
 
-func (f *fakeRepo) Save(_ context.Context, kind, sessionID, activeProject string, history []byte) error {
-	if f.saveErr != nil {
-		return f.saveErr
+func (f *fakeRepo) Version(_ context.Context, kind, sessionID string) (bool, int64, error) {
+	if f.versionErr != nil {
+		return false, 0, f.versionErr
 	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if row, ok := f.rows[kind][sessionID]; ok {
+		return true, row.Version, nil
+	}
+	return false, 0, nil
+}
+
+func (f *fakeRepo) SaveIfVersion(_ context.Context, kind, sessionID, activeProject string, history []byte, expect *int64) (int64, bool, error) {
+	if f.saveErr != nil {
+		return 0, false, f.saveErr
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	cur, exists := f.rows[kind][sessionID]
+	if (expect == nil) == exists || (expect != nil && cur.Version != *expect) {
+		return 0, false, nil
+	}
 	if f.rows[kind] == nil {
 		f.rows[kind] = map[string]*persistence.ChannelSession{}
 	}
+	f.next++
 	f.rows[kind][sessionID] = &persistence.ChannelSession{
 		Kind:          kind,
 		SessionID:     sessionID,
 		ActiveProject: activeProject,
 		History:       append([]byte(nil), history...),
 		UpdatedAt:     time.Now(),
+		Version:       f.next,
 	}
-	return nil
+	return f.next, true, nil
+}
+
+func (f *fakeRepo) Fenced() bool { return true }
+
+// eraseBehind deletes a row as an erasure in another process would.
+func (f *fakeRepo) eraseBehind(kind, sessionID string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	delete(f.rows[kind], sessionID)
 }
 
 // ListByPrefix is unused by these tests — fakeRepo exists to exercise

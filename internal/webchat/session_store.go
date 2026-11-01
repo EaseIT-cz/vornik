@@ -2,6 +2,7 @@ package webchat
 
 import (
 	"context"
+	"errors"
 	"sync"
 	"time"
 
@@ -168,7 +169,9 @@ func (s *SessionStore) Append(ctx context.Context, msg conversation.ChannelMessa
 	// user's current conversation is unaffected. The next
 	// successful Save catches up.
 	if s.persister != nil {
-		_ = s.persister.Save(ctx, msg.SessionID, s.projectID, updated)
+		if err := s.persister.Save(ctx, msg.SessionID, s.projectID, updated); errors.Is(err, sessionstore.ErrSessionMoved) {
+			s.dropSession(msg.SessionID)
+		}
 	}
 	return nil
 }
@@ -197,6 +200,13 @@ func (s *SessionStore) historyWithReadThrough(ctx context.Context, sessionID str
 	history := append([]chat.Message(nil), s.history[sessionID]...)
 	s.mu.Unlock()
 
+	// The fence (§15.18): serve the cached copy only while the stored row is
+	// as this process last saw it; an erasure or another node moved it.
+	if len(history) > 0 && !s.persister.Fresh(ctx, sessionID) {
+		s.dropSession(sessionID)
+		history = nil
+	}
+
 	if len(history) == 0 && s.persister != nil && sessionID != "" {
 		if persisted, _, found, err := s.persister.Load(ctx, sessionID); err == nil && found && len(persisted) > 0 {
 			history = persisted
@@ -206,6 +216,15 @@ func (s *SessionStore) historyWithReadThrough(ctx context.Context, sessionID str
 		}
 	}
 	return history
+}
+
+// dropSession forgets a session whose stored row moved (art17 redact design
+// §15.18), so the next read starts from the row.
+func (s *SessionStore) dropSession(sessionID string) {
+	s.mu.Lock()
+	delete(s.history, sessionID)
+	s.mu.Unlock()
+	s.persister.Forget(sessionID)
 }
 
 // Reset drops a session's history. Used by the UI's "clear chat"

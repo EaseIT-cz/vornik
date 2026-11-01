@@ -24,7 +24,8 @@ const testAgentImage = "localhost/vornik-agent:test"
 
 // recordingPodman is a fake podman that appends each `run` argv (one arg per
 // line, attempts separated by "----") to a log, answers `run` per the rule
-// given, and fails every other verb.
+// given, answers the pre-start `rm` with "no such container", and fails
+// every other verb.
 func recordingPodman(t *testing.T, runBody string) (path, logPath string) {
 	t.Helper()
 	logPath = filepath.Join(t.TempDir(), "runs.log")
@@ -34,6 +35,8 @@ if [[ "$1" == "run" ]]; then
   echo "----" >> "`+logPath+`"
 `+runBody+`
 fi
+# The pre-start removal of a same-named container (GitHub #569 R4).
+if [[ "$1" == "rm" ]]; then echo "Error: no such container: $*" >&2; exit 1; fi
 echo "unexpected podman verb: $*" >&2
 exit 1
 `)

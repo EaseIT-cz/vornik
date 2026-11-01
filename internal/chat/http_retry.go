@@ -2,6 +2,7 @@ package chat
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"strconv"
@@ -9,6 +10,8 @@ import (
 	"time"
 
 	"github.com/rs/zerolog"
+
+	"vornik.io/vornik/internal/integrations/dialguard"
 )
 
 // retryAfterCeiling caps how long the helper will wait on a 429
@@ -82,6 +85,10 @@ func retryableHTTPDo(
 		}
 		resp, err := client.Do(req)
 		switch {
+		case err != nil && (errors.Is(err, dialguard.ErrDialRefused) || errors.Is(err, dialguard.ErrCrossHostRedirect)):
+			// The SSRF guard's refusal is permanent: a retry dials the same
+			// refused address again (GitHub #505).
+			return nil, err
 		case err != nil:
 			lastErr = err
 		case resp.StatusCode == http.StatusTooManyRequests && cfg.retryOn429:

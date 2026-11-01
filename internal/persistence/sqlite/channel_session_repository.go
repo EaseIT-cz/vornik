@@ -11,12 +11,12 @@ import (
 // deployments keep their in-memory map as the authoritative
 // state, so the repo presents itself as "always empty": Load
 // returns ErrNotFound (channels fall back to their in-memory
-// cache), Save is a no-op (the cache already holds the same
+// cache), SaveIfVersion is a no-op (the cache already holds the same
 // data), Delete is a no-op.
 //
 // Wiring the interface uniformly across both backends means the
 // channel implementations never branch on backend — they just call
-// Load/Save and let the repo's semantics decide whether the call
+// Load/SaveIfVersion and let the repo's semantics decide whether the call
 // is durable.
 type ChannelSessionRepository struct {
 	_ *sql.DB
@@ -34,13 +34,22 @@ func (r *ChannelSessionRepository) Load(_ context.Context, _, _ string) (*persis
 	return nil, persistence.ErrNotFound
 }
 
-// Save is a no-op. The caller's in-memory map already holds the
-// post-turn state; no DB write would change behaviour.
-func (r *ChannelSessionRepository) Save(_ context.Context, _, _, _ string, _ []byte) error {
-	return nil
+// Version reports no row: nothing is stored on SQLite.
+func (r *ChannelSessionRepository) Version(_ context.Context, _, _ string) (bool, int64, error) {
+	return false, 0, nil
 }
 
-// Delete is a no-op for the same reason as Save.
+// SaveIfVersion is a no-op that reports success: the in-memory map is the
+// only state.
+func (r *ChannelSessionRepository) SaveIfVersion(_ context.Context, _, _, _ string, _ []byte, _ *int64) (int64, bool, error) {
+	return 0, true, nil
+}
+
+// Fenced is false: there is nothing durable to compare against, and no
+// erasure of a channel session runs on SQLite (art17 redact design §15.18).
+func (r *ChannelSessionRepository) Fenced() bool { return false }
+
+// Delete is a no-op for the same reason as SaveIfVersion.
 func (r *ChannelSessionRepository) Delete(_ context.Context, _, _ string) error {
 	return nil
 }

@@ -149,6 +149,7 @@ func SetDoctorHandlers(handlers *DoctorHandlers) {
 type Router struct {
 	handler http.Handler
 	server  *Server
+	mux     *http.ServeMux
 }
 
 // SetConfigHandlers sets the config handlers for the API router.
@@ -179,6 +180,10 @@ func NewRouter(server *Server, cfg *config.Config) *Router {
 	mux.HandleFunc("/livez", server.Livez)
 	mux.HandleFunc("/healthz", server.Livez) // Liveness alias (was Healthz; same body now)
 	mux.HandleFunc("/readyz", server.Readyz)
+
+	// EU AI Act Art 50(2) detection (#117, Art 50 design §14.9): public,
+	// read-only, each route rate-limited by its own handler.
+	server.registerAIMarkDetection(mux)
 	mux.HandleFunc("/health/live", server.Livez)   // Liveness probe alias
 	mux.HandleFunc("/health/ready", server.Readyz) // Readiness probe alias
 
@@ -204,13 +209,18 @@ func NewRouter(server *Server, cfg *config.Config) *Router {
 	if server.config != nil && server.config.Metrics.RequireAdmin && server.config.API.AuthEnabled {
 		inner := metricsHandler
 		scrapeToken := server.config.Metrics.ScrapeToken
+		// During a rotation's overlap the previous token is accepted too
+		// (GitHub #582 P4, §6.3 F3).
+		previousScrapeToken := server.config.Metrics.PreviousScrapeToken
 		metricsHandler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			key := extractAPIKey(r)
 			// Accept the dedicated read-only scrape token (constant-time)
 			// OR the admin key. The scrape token lets Prometheus
 			// authenticate without holding admin.
-			okToken := scrapeToken != "" && key != "" &&
-				subtle.ConstantTimeCompare([]byte(key), []byte(scrapeToken)) == 1
+			okToken := (scrapeToken != "" && key != "" &&
+				subtle.ConstantTimeCompare([]byte(key), []byte(scrapeToken)) == 1) ||
+				(previousScrapeToken != "" && key != "" &&
+					subtle.ConstantTimeCompare([]byte(key), []byte(previousScrapeToken)) == 1)
 			if !okToken && (key == "" || !server.adminConfig.IsAdminKey(key)) {
 				w.Header().Set("WWW-Authenticate", `Bearer realm="vornik-metrics"`)
 				http.Error(w, "metrics authentication required (audit A5): present the scrape token or admin key", http.StatusUnauthorized)
@@ -251,8 +261,8 @@ func NewRouter(server *Server, cfg *config.Config) *Router {
 		// the operator-surface gate: they reload the whole daemon and report
 		// every project's validation errors (GitHub #495, design A4a).
 		if configHandlers != nil {
-			mux.HandleFunc("/api/v1/config/reload-status", server.operatorOnly(configHandlers.GetReloadStatus))
-			mux.HandleFunc("/api/v1/config/reload", server.operatorOnly(configHandlers.Reload))
+			mux.HandleFunc("/api/v1/config/reload-status", server.operatorOnly(SurfaceConfigReloadStatus, configHandlers.GetReloadStatus))
+			mux.HandleFunc("/api/v1/config/reload", server.operatorOnly(SurfaceConfigReload, configHandlers.Reload))
 		}
 		// GET /api/v1/config — effective config dump with secrets redacted.
 		// Registered only when the server carries a config reference (it
@@ -495,14 +505,16 @@ func NewRouter(server *Server, cfg *config.Config) *Router {
 		// 18-security-and-tenancy.md, "Amendment 2026-10-22 (#502)", S1 and
 		// S4): setup writes config.yaml and dials the caller's endpoint, the
 		// wizard commits a project. The handlers carry no check of their own.
-		mux.HandleFunc("/api/v1/projects/wizard/converse", server.operatorOnly(server.ProjectWizardConverse))
-		mux.HandleFunc("/api/v1/projects/wizard/", server.operatorOnly(server.projectWizardRouter))
+		mux.HandleFunc("/api/v1/projects/wizard/converse", server.operatorOnly(SurfaceWizardConverse, server.ProjectWizardConverse))
+		mux.HandleFunc("/api/v1/projects/wizard/", server.operatorOnly(SurfaceWizard, server.projectWizardRouter))
 		mux.HandleFunc("/api/v1/fixit/converse", server.FixItConverse)
-		mux.HandleFunc("/api/v1/setup/status", server.operatorOnly(server.SetupStatus))
-		mux.HandleFunc("/api/v1/setup/models", server.operatorOnly(server.SetupModels))
-		mux.HandleFunc("/api/v1/setup/dispatcher", server.operatorOnly(server.SetupDispatcherCommit))
-		mux.HandleFunc("/api/v1/setup/session", server.operatorOnly(server.SetupSessionCreate))
-		mux.HandleFunc("/api/v1/setup/session/", server.operatorOnly(server.setupSessionRouter))
+		mux.HandleFunc("/api/v1/setup/status", server.operatorOnly(SurfaceSetupStatus, server.SetupStatus))
+		mux.HandleFunc("/api/v1/setup/models", server.operatorOnly(SurfaceSetupModels, server.SetupModels))
+		mux.HandleFunc("/api/v1/setup/dispatcher", server.operatorOnly(SurfaceSetupDispatcher, server.SetupDispatcherCommit))
+		mux.HandleFunc("/api/v1/setup/session", server.operatorOnly(SurfaceSetupSession, server.SetupSessionCreate))
+		mux.HandleFunc("/api/v1/setup/session/", server.operatorOnly(SurfaceSetupSessionRouter, server.setupSessionRouter))
+		// Managed setup (GitHub #582 P2): binds the customer, idempotently.
+		mux.HandleFunc("/api/v1/setup/managed", server.operatorOnly(SurfaceSetupManaged, server.SetupManaged))
 		mux.HandleFunc("/api/v1/memory/backfill-titles", server.MemoryBackfillTitles)
 		mux.HandleFunc("/api/v1/memory/reclassify-llm", server.MemoryReclassifyLLM)
 		// KG re-flag — operator-driven backfill of isolated entities.
@@ -659,6 +671,14 @@ func NewRouter(server *Server, cfg *config.Config) *Router {
 		// request can start uncounted before the restart (GitHub #290).
 		// POST drains (a TTL lease), DELETE undrains. Admin-class only.
 		mux.HandleFunc("/api/v1/daemon/drain", server.DaemonDrain)
+		// Replacement of the operations credentials (GitHub #582 P4): the
+		// current instance_admin key only, the new value sealed to the caller.
+		mux.HandleFunc("/api/v1/operations/credentials/rotate", server.RotateOperationsCredential)
+		// The owner export (GitHub #581 D5): the control plane registers an
+		// export it wrote; the owner downloads it with their own session on
+		// the public listener (each handler checks its caller and listener).
+		mux.HandleFunc("/api/v1/operations/exports", server.RegisterOperationsExport)
+		mux.HandleFunc(ownerExportPathPrefix, server.ServeOwnerExport)
 		// Failure-class playbook. Always available — the corpus is
 		// daemon-version-pinned metadata, no chat dependency.
 		mux.HandleFunc("/api/v1/playbook", server.Playbook)
@@ -737,7 +757,17 @@ func NewRouter(server *Server, cfg *config.Config) *Router {
 	return &Router{
 		handler: handler,
 		server:  server,
+		mux:     mux,
 	}
+}
+
+// RoutePattern returns the pattern the router's mux matches for req: "" when
+// none does, "/" for the catch-all. The operations API contract test reads it,
+// because a response body cannot tell a routed path from the catch-all
+// (GitHub #575; 2026-10-28-operations-api-contract-design.md, C4.1).
+func (r *Router) RoutePattern(req *http.Request) string {
+	_, pattern := r.mux.Handler(req)
+	return pattern
 }
 
 // apiV1ExecutionsHandler routes requests under /api/v1/executions/{executionId}/

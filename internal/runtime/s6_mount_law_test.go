@@ -114,9 +114,8 @@ func TestS6_WarmContainerMountsNoProjectDirectory(t *testing.T) {
 	logFile := filepath.Join(t.TempDir(), "argv")
 	mgr := &Manager{
 		podmanPath: writeFakePodman(t, `#!/usr/bin/env bash
-printf '%s\n' "$@" >> "`+logFile+`"
 case "$1" in
-  run)     echo "warm-s6"; exit 0 ;;
+  run)     printf '%s\n' "$@" >> "`+logFile+`"; echo "warm-s6"; exit 0 ;;
   inspect) echo '[{"Id":"warm-s6","Name":"/w","Image":"img","State":{"Status":"running","ExitCode":0},"Config":{"Labels":{}}}]'; exit 0 ;;
   *)       exit 0 ;;
 esac

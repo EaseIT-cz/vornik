@@ -148,3 +148,20 @@ func TestWorkspaceLine(t *testing.T) {
 		t.Fatalf("got %q", got)
 	}
 }
+
+// GitHub #593 (benchmark LLD §12.28). Found at: e2e-lane (a new bench
+// instance's smoke failed before any model call). Regression test at: unit;
+// lower because the defect is Prepare's handling of a missing directory.
+// The first task on a fresh bench instance found no workspace: the daemon
+// creates it only when a task runs, and Prepare runs before.
+func TestGitWorkspace_PrepareBootstrapsAMissingWorkspace(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "workspaces", "agentbench")
+	spec := agentbench.TaskSpec{ID: "sw-01", Targets: []string{"scratch/x"}}
+	if _, err := (gitWorkspace{dir: dir}).Prepare(context.Background(), spec, 1); err != nil {
+		t.Fatalf("Prepare on a missing workspace: %v", err)
+	}
+	out, err := exec.Command("git", "-C", dir, "log", "--format=%s").CombinedOutput()
+	if err != nil || !strings.Contains(string(out), "bootstrap: vornik-managed project") {
+		t.Fatalf("the workspace was not bootstrapped as the daemon would: %v %s", err, out)
+	}
+}

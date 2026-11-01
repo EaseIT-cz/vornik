@@ -74,5 +74,6 @@ func (s *Server) storyLines(ctx context.Context, executionID string) []StoryLine
 // admin: the technical view stays open by default, matching today's
 // behaviour for those deployments.
 func isStoryDefaultViewer(r *http.Request) bool {
+	// GitHub #560 (M1b B2b): tenant_admin is not a default viewer on purpose: the owner gets the admin's technical view.
 	return api.SessionRoleFromContext(r.Context()) == auth.RoleUser
 }

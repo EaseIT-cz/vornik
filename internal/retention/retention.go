@@ -987,6 +987,9 @@ func (s *Sweeper) pruneExecutionRatings(ctx context.Context, threshold time.Time
 // see LLD § https://docs.vornik.io
 var evidenceTables = map[string]bool{
 	"channel_disclosure_log": true,
+	// EU AI Act Art 50(2) marking evidence (GitHub #117; Art 50 design §14.7).
+	"ai_output_marks": true,
+	"ai_mark_keys":    true,
 }
 
 // globalCleanupTables is the allowlist of global (non-project-scoped) tables

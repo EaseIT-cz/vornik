@@ -2,6 +2,7 @@ package mcpauth
 
 import (
 	"fmt"
+	"regexp"
 	"strings"
 )
 
@@ -161,6 +162,9 @@ func (a Auth) validateOAuth() error {
 			return fmt.Errorf("%s must be https", field)
 		}
 	}
+	if err := a.validateRouterFields(authSet); err != nil {
+		return err
+	}
 	if strings.TrimSpace(a.ClientSecretFrom) == "" {
 		return nil
 	}
@@ -189,6 +193,9 @@ func (a Auth) validateStrayFields(mode string) error {
 		{"client_secret_from", strings.TrimSpace(a.ClientSecretFrom) != "", []string{ModeOAuth}},
 		{"authorization_endpoint", strings.TrimSpace(a.AuthorizationEndpoint) != "", []string{ModeOAuth}},
 		{"token_endpoint", strings.TrimSpace(a.TokenEndpoint) != "", []string{ModeOAuth}},
+		{"issuer", strings.TrimSpace(a.Issuer) != "", []string{ModeOAuth}},
+		{"iss_parameter_supported", a.IssParameterSupported, []string{ModeOAuth}},
+		{"router_provider", strings.TrimSpace(a.RouterProvider) != "", []string{ModeOAuth}},
 		{"header", strings.TrimSpace(a.Header) != "", []string{ModeStatic}},
 		{"value_from", strings.TrimSpace(a.ValueFrom) != "", []string{ModeStatic}},
 		{"value_prefix", a.ValuePrefix != "", []string{ModeStatic}},
@@ -246,4 +253,29 @@ func validEnvName(s string) bool {
 		}
 	}
 	return true
+}
+
+// routerProviderPattern is a provider name of the EaseIT OAuth router.
+var routerProviderPattern = regexp.MustCompile(`^[a-z][a-z0-9-]{0,31}$`)
+
+// validateRouterFields checks the design §16.5 fields: a router provider's
+// name, and a manual endpoint's issuer, which only a manual endpoint may
+// state (a discovered server's comes from its metadata).
+func (a Auth) validateRouterFields(manual bool) error {
+	if p := a.RouterProvider; p != "" && !routerProviderPattern.MatchString(p) {
+		return fmt.Errorf("router_provider %q must match %s", p, routerProviderPattern)
+	}
+	if a.Issuer == "" {
+		if a.IssParameterSupported {
+			return fmt.Errorf("iss_parameter_supported needs issuer: iss is compared against it")
+		}
+		return nil
+	}
+	if !manual {
+		return fmt.Errorf("issuer applies to a manual endpoint (authorization_endpoint and token_endpoint); a discovered server's issuer comes from its metadata")
+	}
+	if !strings.HasPrefix(a.Issuer, "https://") {
+		return fmt.Errorf("issuer must be https")
+	}
+	return nil
 }

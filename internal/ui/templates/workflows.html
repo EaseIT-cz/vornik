@@ -20,7 +20,7 @@
             <div class="glass rounded-xl border border-control px-4 py-2.5 flex items-center gap-3">
                 <svg class="h-4 w-4 text-gray-500" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/></svg>
                 <input id="ia-filter" type="text" placeholder="Filter workflows by name, description, or project…"
-                       oninput="filterIARows(this.value)"
+                       data-on-input="filterIARows"
                        class="flex-1 bg-transparent border-none text-sm text-gray-100 placeholder-gray-500 focus:outline-none focus:ring-0">
             </div>
 
@@ -51,7 +51,7 @@
                     </thead>
                     <tbody class="divide-y divide-dark-800">
                         {{range .Rows}}
-                        <tr class="hover:bg-dark-800/50 transition-colors cursor-pointer" onclick="location.href='/ui/workflows/{{.ID}}/edit'">
+                        <tr class="hover:bg-dark-800/50 transition-colors cursor-pointer" data-on-click="navigate" data-href="/ui/workflows/{{.ID}}/edit">
                             <td class="px-5 py-3">
                                 <div class="text-sm font-medium text-gray-100">{{.Label}}</div>
                                 <div class="text-[11px] text-gray-500 font-mono">{{.ID}}</div>
@@ -81,6 +81,12 @@
                 row.style.display = (!q || t.indexOf(q) !== -1) ? '' : 'none';
             });
         }
+    </script>
+<script>
+    // #416 phase 3: this page's actions (web-ui-design.md, "C, phase 3"). Each
+    // calls its function at event time, so a script that defines it later
+    // (or again, after a swap) is the one that runs.
+    Vornik.action('filterIARows', (el) => window.filterIARows(el.value));
     </script>
 </body>
 </html>

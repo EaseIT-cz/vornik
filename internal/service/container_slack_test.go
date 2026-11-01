@@ -8,6 +8,7 @@ import (
 	"github.com/rs/zerolog"
 
 	"vornik.io/vornik/internal/registry"
+	"vornik.io/vornik/internal/slack"
 )
 
 // projectWithSlack returns a stub Project with a configured slack
@@ -28,9 +29,9 @@ func projectWithSlack(id, teamID, secretEnv, botTokenEnv string) *registry.Proje
 // TestBuildSlackChannels_NoProjects — empty inputs return nil
 // without error.
 func TestBuildSlackChannels_NoProjects(t *testing.T) {
-	channels, picked, err := buildSlackChannels(nil, nil, nil, zerolog.Nop())
+	channels, picked, err := buildSlackChannels(nil, slack.VoiceProviders{}, zerolog.Nop())
 	if err != nil {
-		t.Fatalf("buildSlackChannels(nil, nil, nil, zerolog.Nop()): %v", err)
+		t.Fatalf("buildSlackChannels(nil, slack.VoiceProviders{}, zerolog.Nop()): %v", err)
 	}
 	if channels != nil || picked != nil {
 		t.Errorf("expected (nil, nil), got (%v, %v)", channels, picked)
@@ -41,7 +42,7 @@ func TestBuildSlackChannels_NoProjects(t *testing.T) {
 // a slack block; nothing constructed.
 func TestBuildSlackChannels_AllDisabled(t *testing.T) {
 	p := &registry.Project{ID: "noop"}
-	channels, picked, err := buildSlackChannels([]*registry.Project{p}, nil, nil, zerolog.Nop())
+	channels, picked, err := buildSlackChannels([]*registry.Project{p}, slack.VoiceProviders{}, zerolog.Nop())
 	if err != nil {
 		t.Fatalf("buildSlackChannels: %v", err)
 	}
@@ -56,7 +57,7 @@ func TestBuildSlackChannels_AllDisabled(t *testing.T) {
 func TestBuildSlackChannels_InboundOnly_Constructs(t *testing.T) {
 	t.Setenv("SLACK_SIGNING_TEST", "shhh")
 	p := projectWithSlack("proj-a", "T_A", "SLACK_SIGNING_TEST", "")
-	channels, picked, err := buildSlackChannels([]*registry.Project{p}, nil, nil, zerolog.Nop())
+	channels, picked, err := buildSlackChannels([]*registry.Project{p}, slack.VoiceProviders{}, zerolog.Nop())
 	if err != nil {
 		t.Fatalf("buildSlackChannels: %v", err)
 	}
@@ -74,7 +75,7 @@ func TestBuildSlackChannels_OutboundConstructs(t *testing.T) {
 	t.Setenv("SLACK_SIGN_TEST_OUT", "shhh")
 	t.Setenv("SLACK_BOT_TEST_OUT", "xoxb-secret")
 	p := projectWithSlack("proj-out", "T_OUT", "SLACK_SIGN_TEST_OUT", "SLACK_BOT_TEST_OUT")
-	channels, _, err := buildSlackChannels([]*registry.Project{p}, nil, nil, zerolog.Nop())
+	channels, _, err := buildSlackChannels([]*registry.Project{p}, slack.VoiceProviders{}, zerolog.Nop())
 	if err != nil {
 		t.Fatalf("buildSlackChannels: %v", err)
 	}
@@ -87,7 +88,7 @@ func TestBuildSlackChannels_OutboundConstructs(t *testing.T) {
 // at boot, not at first delivery.
 func TestBuildSlackChannels_MissingSigningEnv(t *testing.T) {
 	p := projectWithSlack("proj-missing", "T_M", "SLACK_DOES_NOT_EXIST_XYZ", "")
-	_, _, err := buildSlackChannels([]*registry.Project{p}, nil, nil, zerolog.Nop())
+	_, _, err := buildSlackChannels([]*registry.Project{p}, slack.VoiceProviders{}, zerolog.Nop())
 	if err == nil {
 		t.Fatal("expected boot failure on missing signing env, got nil")
 	}
@@ -102,7 +103,7 @@ func TestBuildSlackChannels_MissingBotTokenEnv(t *testing.T) {
 	t.Setenv("SLACK_SIGN_HAS_BOT", "shhh")
 	// Note: not setting SLACK_BOT_MISSING.
 	p := projectWithSlack("proj-bot-miss", "T_B", "SLACK_SIGN_HAS_BOT", "SLACK_BOT_MISSING_XYZ")
-	_, _, err := buildSlackChannels([]*registry.Project{p}, nil, nil, zerolog.Nop())
+	_, _, err := buildSlackChannels([]*registry.Project{p}, slack.VoiceProviders{}, zerolog.Nop())
 	if err == nil {
 		t.Fatal("expected boot failure on missing bot-token env, got nil")
 	}
@@ -119,7 +120,7 @@ func TestBuildSlackChannels_DuplicateTeamID(t *testing.T) {
 	t.Setenv("SLACK_SIGN_DUP_B", "shhh-b")
 	p1 := projectWithSlack("proj-1", "T_DUP", "SLACK_SIGN_DUP_A", "")
 	p2 := projectWithSlack("proj-2", "T_DUP", "SLACK_SIGN_DUP_B", "")
-	_, _, err := buildSlackChannels([]*registry.Project{p1, p2}, nil, nil, zerolog.Nop())
+	_, _, err := buildSlackChannels([]*registry.Project{p1, p2}, slack.VoiceProviders{}, zerolog.Nop())
 	if err == nil {
 		t.Fatal("expected boot failure on duplicate team_id, got nil")
 	}
@@ -135,7 +136,7 @@ func TestBuildSlackChannels_MultipleEnabled(t *testing.T) {
 	t.Setenv("SLACK_SIGN_MULTI_B", "shhh-b")
 	p1 := projectWithSlack("proj-x", "T_X", "SLACK_SIGN_MULTI_A", "")
 	p2 := projectWithSlack("proj-y", "T_Y", "SLACK_SIGN_MULTI_B", "")
-	channels, picked, err := buildSlackChannels([]*registry.Project{p1, p2}, nil, nil, zerolog.Nop())
+	channels, picked, err := buildSlackChannels([]*registry.Project{p1, p2}, slack.VoiceProviders{}, zerolog.Nop())
 	if err != nil {
 		t.Fatalf("buildSlackChannels: %v", err)
 	}
@@ -220,7 +221,7 @@ func TestBuildSlackChannels_PreservesErrFromUnderlyingNew(t *testing.T) {
 	// the happy path; the slack package's own tests cover slack.New
 	// failure modes.
 	p := projectWithSlack("proj-ok", "T_OK", "SLACK_SIGN_BAD", "")
-	_, _, err := buildSlackChannels([]*registry.Project{p}, nil, nil, zerolog.Nop())
+	_, _, err := buildSlackChannels([]*registry.Project{p}, slack.VoiceProviders{}, zerolog.Nop())
 	if err != nil {
 		t.Fatalf("buildSlackChannels: %v", err)
 	}
@@ -231,7 +232,7 @@ func TestBuildSlackChannels_PreservesErrFromUnderlyingNew(t *testing.T) {
 // log line shows which project caused the boot failure.
 func TestBuildSlackChannelForProject_ContextWrap(t *testing.T) {
 	p := projectWithSlack("the-broken-one", "T_BR", "MISSING_SIGNING_ENV_XYZ", "")
-	_, err := buildSlackChannelForProject(p, nil, nil, zerolog.Nop())
+	_, err := buildSlackChannelForProject(p, slack.VoiceProviders{}, zerolog.Nop())
 	if err == nil {
 		t.Fatal("expected error, got nil")
 	}

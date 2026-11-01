@@ -206,7 +206,7 @@ func TestOperatorSurface495_CensusCoversEveryGate(t *testing.T) {
 				}
 				if sel, ok := call.Fun.(*ast.SelectorExpr); ok {
 					switch sel.Sel.Name {
-					case "requireOperatorScope":
+					case "requireOperatorScopeFor": // #560 M1b: the surface-taking form
 						got = append(got, fn.Name.Name)
 					case "requireOperatorCapability":
 						t.Errorf("%s calls requireOperatorCapability: the second gate implementation is gone (design O3)", fn.Name.Name)

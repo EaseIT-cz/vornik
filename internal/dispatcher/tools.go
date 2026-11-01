@@ -285,6 +285,8 @@ type ChannelFollowupRegistrar interface {
 
 // ToolExecutor executes individual tool calls on behalf of the dispatcher agent.
 type ToolExecutor struct {
+	// aiMark is the Art 50(2) marker for render_document (render_document_aimark.go).
+	aiMark   aiMarkHolder
 	registry *registry.Registry
 	// sandboxRunner runs render_document's pandoc in the pinned agent image
 	// (process-spawn law S4/S5a); nil means rendering is not available.

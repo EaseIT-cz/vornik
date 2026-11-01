@@ -115,7 +115,7 @@ func newCodexAuthManager(path string) *codexAuthManager {
 	}
 	return &codexAuthManager{
 		path:       path,
-		httpClient: &http.Client{Timeout: 30 * time.Second, Transport: sharedHTTPTransport()},
+		httpClient: newChatHTTPClient(30 * time.Second),
 		// openclaw / Codex CLI OAuth client ID. Confirmed against
 		// https://github.com/openai/codex-cli and openclaw's
 		// pi-mono/packages/ai/src/utils/oauth/openai-codex.ts.

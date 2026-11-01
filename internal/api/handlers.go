@@ -1656,6 +1656,13 @@ func (s *Server) ListMCPTools(w http.ResponseWriter, r *http.Request) {
 	// so an unneeded tool here is a recurring cost, not a one-off. Callers with no
 	// task context (vornikctl, the UI) resolve to no allowlist and see everything.
 	ceiling, ceilingGap := s.roleToolAllowlistReason(r.Context(), mcpCallerTaskID(r))
+	if gapRefuses(ceilingGap) {
+		// /mcp/call refuses every tool on this gap, so none is advertised
+		// (GitHub #501).
+		s.recordMCPRefused("advertise", ceilingGap)
+		respondJSON(w, http.StatusOK, map[string]any{"tools": []any{}})
+		return
+	}
 	if len(ceiling) == 0 {
 		// The advertise path shares this resolution, so a gap here costs a WIDE
 		// PROMPT as well as a wide grant — every MCP schema re-sent on every
@@ -1769,8 +1776,12 @@ func (s *Server) CallMCPTool(w http.ResponseWriter, r *http.Request) {
 			respondError(w, http.StatusForbidden, "FORBIDDEN", reason)
 			return
 		}
-	} else if !s.roleAllowsMCPTool(ctx, taskID, req.Name) {
-		respondError(w, http.StatusForbidden, "FORBIDDEN", "tool not in the calling role's allowedTools")
+	} else if ok, refused := s.roleAllowsMCPTool(ctx, taskID, req.Name); !ok {
+		msg := "tool not in the calling role's allowedTools"
+		if refused != mcpGapNone {
+			msg = "the calling task's role could not be resolved (" + string(refused) + "); MCP tools are refused until it is"
+		}
+		respondError(w, http.StatusForbidden, "FORBIDDEN", msg)
 		return
 	}
 
@@ -1887,8 +1898,15 @@ func (s *Server) CallMCPTool(w http.ResponseWriter, r *http.Request) {
 // allowlist matches the fully-qualified tool name (mcp__server__tool) as
 // authored in swarm config, falling back to the bare tool segment so an
 // operator can allowlist either shape.
-func (s *Server) roleAllowsMCPTool(ctx context.Context, taskID, qualifiedName string) bool {
+//
+// A gap that means the task's role could not be resolved refuses, and is
+// returned so the caller can say why (GitHub #501); the other gaps admit.
+func (s *Server) roleAllowsMCPTool(ctx context.Context, taskID, qualifiedName string) (bool, mcpGapReason) {
 	allowed, reason := s.roleToolAllowlistReason(ctx, taskID)
+	if gapRefuses(reason) {
+		s.recordMCPRefused("call", reason)
+		return false, reason
+	}
 	// No resolvable allowlist → unrestricted (preserve pre-B2 behavior).
 	if len(allowed) == 0 {
 		// Counted, not refused. The fail-open is deliberate; what it lacked was
@@ -1902,16 +1920,17 @@ func (s *Server) roleAllowsMCPTool(ctx context.Context, taskID, qualifiedName st
 	// AllowlistAdmits (media routing LLD §4.2a). Do not substitute
 	// agenttools.RoleAllowsTool here: it is the stricter bare matcher, admits
 	// nothing on an empty slice, and would flip this fail-open to fail-closed.
-	return agenttools.AllowlistAdmits(allowed, qualifiedName)
+	return agenttools.AllowlistAdmits(allowed, qualifiedName), mcpGapNone
 }
 
 // roleToolAllowlistReason resolves the calling task's current role and returns
 // that role's declared allowedTools, or nil AND THE REASON when there is no
 // allowlist to apply.
 //
-// Nil covers every resolution gap AND the "role declares none" case, because both
-// mean the same thing to callers: do not narrow. FAIL-OPEN by design — the project
-// gate (ProjectAuthMiddleware) remains in force either way.
+// Nil covers every resolution gap AND the "role declares none" case. The
+// callers refuse the gaps gapRefuses names (GitHub #501) and do not narrow on
+// the rest; the project gate (ProjectAuthMiddleware) remains in force either
+// way.
 //
 // Extracted 2026-08-12 so the ADVERTISED tool list (ListMCPTools) and the
 // invoke-time gate resolve the role through exactly one path. Two paths could

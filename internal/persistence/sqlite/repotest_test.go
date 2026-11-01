@@ -547,6 +547,7 @@ func TestChatMemoryWriteConfirmationRepository_Contract(t *testing.T) {
 func TestMCPOAuthTokenRepository_Contract(t *testing.T) {
 	db := newTestDB(t)
 	repotest.RunMCPOAuthTokenSuite(t, sqlite.NewMCPOAuthTokenRepository(db.DB))
+	repotest.RunMCPOAuthOwnerSuite(t, sqlite.NewMCPOAuthTokenRepository(db.DB)) // #571 U3b
 	// Plan P4.4: the agent sealing wrapper over this driver.
 	repotest.RunSealedMCPOAuthTokenSuite(t, sealedTokens(t, sqlite.NewMCPOAuthTokenRepository(db.DB)), sqlite.NewMCPOAuthTokenRepository(db.DB))
 }
@@ -709,6 +710,7 @@ func TestAgentSecret_Contract(t *testing.T) {
 // TestAgentGrant_Contract — the agent approval tables (design §7).
 func TestAgentGrant_Contract(t *testing.T) {
 	repotest.RunAgentGrantSuite(t, sqlite.NewAgentGrantRepository(newTestDB(t).DB))
+	repotest.RunAgentGrantOwnerSuite(t, sqlite.NewAgentGrantRepository(newTestDB(t).DB)) // #571 U3b
 }
 
 // TestAgentModelDestination_Contract — agent_model_provider_approvals
@@ -853,4 +855,45 @@ func restrictChunkForSuite(db *sqlite.DB) repotest.RestrictChunk {
 // seam; both backends satisfy auditredact.StepOutcomeStore.
 func decorateStepOutcomes425(inner persistence.ExecutionStepOutcomeRepository, det secrets.Detector) persistence.ExecutionStepOutcomeRepository {
 	return auditredact.NewStepOutcomes(inner.(auditredact.StepOutcomeStore), det, nil, nil)
+}
+
+// GitHub #581 D5: the owner export registry.
+func TestInstanceExportSuite(t *testing.T) {
+	db := newTestDB(t)
+	repotest.RunInstanceExportSuite(t, sqlite.NewInstanceExportRepository(db.DB))
+}
+
+// GitHub #587: the instance's once-only milestones.
+func TestInstanceMilestoneSuite(t *testing.T) {
+	db := newTestDB(t)
+	repotest.RunInstanceMilestoneSuite(t, sqlite.NewInstanceMilestoneRepository(db.DB))
+}
+
+// TestAIOutputMarkRepository_Contract — the EU AI Act Art 50(2) marking
+// evidence (GitHub #117). Real tables on sqlite; the same suite runs on
+// Postgres.
+func TestAIOutputMarkRepository_Contract(t *testing.T) {
+	db := newTestDB(t)
+	repotest.RunAIOutputMarkSuite(t, sqlite.NewAIOutputMarkRepository(db.DB))
+}
+
+// TestFunnelRepository_Contract — the trading entry funnel and its forward outcomes (GitHub
+// #596), the suite that runs on both drivers.
+func TestFunnelRepository_Contract(t *testing.T) {
+	db := newTestDB(t)
+	repotest.RunFunnelSuite(t, sqlite.NewFunnelRepository(db.DB))
+}
+
+// TestBenchmarkCloseRepository_Contract — benchmark session closes (GitHub #597), the suite that runs on
+// both drivers.
+func TestBenchmarkCloseRepository_Contract(t *testing.T) {
+	db := newTestDB(t)
+	repotest.RunBenchmarkCloseSuite(t, sqlite.NewBenchmarkCloseRepository(db.DB))
+}
+
+// TestShadowDecisionRepository_Contract — the rule engine's shadow record (GitHub #598), the suite that
+// runs on both drivers.
+func TestShadowDecisionRepository_Contract(t *testing.T) {
+	db := newTestDB(t)
+	repotest.RunShadowDecisionSuite(t, sqlite.NewShadowDecisionRepository(db.DB))
 }

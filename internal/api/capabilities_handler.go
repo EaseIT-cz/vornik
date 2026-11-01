@@ -5,6 +5,7 @@ import (
 	"strings"
 	"time"
 
+	"vornik.io/vornik/internal/opsapi"
 	"vornik.io/vornik/internal/version"
 )
 
@@ -29,10 +30,14 @@ type CapabilitiesResponse struct {
 	// carries, and reporting the daemon's version beside the CLI's edition
 	// would be a mixed answer to the one field a support engineer trusts
 	// first (support-bundle-in-CE design §4.1).
-	Edition          string            `json:"edition"`
-	APIVersion       string            `json:"apiVersion"`
-	Transports       []string          `json:"transports"`
-	Features         map[string]bool   `json:"features"`
+	Edition    string          `json:"edition"`
+	APIVersion string          `json:"apiVersion"`
+	Transports []string        `json:"transports"`
+	Features   map[string]bool `json:"features"`
+	// OperationsAPI lists the operations API majors this release serves,
+	// for a hosting control plane (GitHub #575). Unrelated to APIVersion,
+	// which names the data-plane path version (/api/v1).
+	OperationsAPI    []string          `json:"operationsAPI"`
 	AllowedProjects  []ProjectSummary  `json:"allowedProjects"`
 	AllowedWorkflows []WorkflowSummary `json:"allowedWorkflows"`
 	ServerTime       time.Time         `json:"serverTime"`
@@ -95,11 +100,12 @@ func (s *Server) GetCapabilities(w http.ResponseWriter, r *http.Request) {
 		// adminSurfacePresent is the honest edition signal on the Server —
 		// the service container sets it only inside its Enterprise providers
 		// gate — so this cannot disagree with the surface actually served.
-		Edition:    editionFromAdminSurface(s.adminSurfacePresent),
-		APIVersion: "v1",
-		Transports: []string{"http", "sse"},
-		Features:   s.featureFlags(),
-		ServerTime: time.Now().UTC(),
+		Edition:       editionFromAdminSurface(s.adminSurfacePresent),
+		APIVersion:    "v1",
+		Transports:    []string{"http", "sse"},
+		Features:      s.featureFlags(),
+		OperationsAPI: opsapi.Served(),
+		ServerTime:    time.Now().UTC(),
 	}
 	if s.daemonHost != nil && s.isAdminClassRequest(r) {
 		resp.Host = &DaemonHostFacts{DaemonUID: s.daemonHost.UID, DaemonContainerized: s.daemonHost.Containerized, StoreKeyPath: s.daemonHost.StoreKeyPath}

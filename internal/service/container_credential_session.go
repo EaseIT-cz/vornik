@@ -79,6 +79,9 @@ func (c *Container) buildCredentialSession() *credentialSessionWiring {
 	// than somewhere a later edit could separate them.
 	backend.Credentials = accounts
 	backend.Revoker = sessionRevoker{store}
+	if !c.applyManagedSessionRule(backend) { // GitHub #560, A4b
+		return nil
+	}
 
 	if c.Config.Auth.Session.AllowInsecureExchange {
 		// Loud, once, at boot. An operator who set this deliberately

@@ -65,7 +65,7 @@
              timeline with the live view. */}}
         <div id="gap-banner" class="hidden mb-3 px-4 py-2 rounded-lg bg-rose-50 dark:bg-rose-950/40 border border-rose-900/40 text-rose-700 dark:text-rose-200 text-xs flex items-center justify-between gap-3">
             <span>The live stream skipped ahead beyond the server's replay buffer.</span>
-            <button type="button" onclick="window.location.reload()" class="px-2 py-1 rounded bg-rose-800/60 hover:bg-rose-700/60 text-rose-50">Refresh for full state</button>
+            <button type="button" data-on-click="reload" class="px-2 py-1 rounded bg-rose-800/60 hover:bg-rose-700/60 text-rose-50">Refresh for full state</button>
         </div>
 
         <div class="grid grid-cols-1 lg:grid-cols-[1fr,18rem] gap-4">
@@ -256,7 +256,7 @@
                                 <button type="button" data-scope="execution" class="scope-chip px-2 py-0.5 rounded-full border text-[10px] transition-colors" title="Any next step in this execution — applies even if the current step finishes before the hint lands.">any step</button>
                                 <button type="button" data-scope="task" class="scope-chip px-2 py-0.5 rounded-full border text-[10px] transition-colors" title="Task-scoped: if the task fails and retries, the hint still applies to the next attempt's first step.">across retries</button>
                             </div>
-                            <button id="steer-send" type="button" onclick="submitInlineHint()" class="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg bg-accent-600 hover:bg-accent-500 text-white transition-colors disabled:opacity-40 disabled:cursor-not-allowed">
+                            <button id="steer-send" type="button" data-on-click="submitInlineHint" class="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg bg-accent-600 hover:bg-accent-500 text-white transition-colors disabled:opacity-40 disabled:cursor-not-allowed">
                                 <svg class="h-3.5 w-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M12 19l9 2-9-18-9 18 9-2zm0 0v-8"/></svg>
                                 Send
                             </button>
@@ -307,7 +307,7 @@
                                     <textarea id="fork-inline-prompt" rows="3" class="mt-1 w-full px-3 py-2 text-sm font-mono rounded-lg bg-dark-900 border border-control text-gray-100 focus:border-amber-500/60 focus:outline-none" placeholder="Prepended to the step's prompt on iteration 1 of the fork."></textarea>
                                 </label>
                                 <div class="flex items-center justify-end">
-                                    <button id="fork-inline-submit" type="button" onclick="submitFork()" class="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg bg-amber-700 hover:bg-amber-600 text-white transition-colors disabled:opacity-40 disabled:cursor-not-allowed">
+                                    <button id="fork-inline-submit" type="button" data-on-click="submitFork" class="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg bg-amber-700 hover:bg-amber-600 text-white transition-colors disabled:opacity-40 disabled:cursor-not-allowed">
                                         <svg class="h-3.5 w-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M8 7v8a2 2 0 002 2h6M8 7V5a2 2 0 012-2h4.586a1 1 0 01.707.293l4.414 4.414a1 1 0 01.293.707V15a2 2 0 01-2 2h-2M8 7H6a2 2 0 00-2 2v10a2 2 0 002 2h8a2 2 0 002-2v-2"/></svg>
                                         Create fork
                                     </button>
@@ -347,6 +347,7 @@
          deleted in refactor #3; killing it lets us delete the
          modal-Cmd/Ctrl+Enter handler too. */}}
 
+    <script type="application/json" id="task-live-data">{"executionID": {{if .Execution}}{{.Execution.ID}}{{else}}""{{end}}, "taskID": {{if .Task}}{{.Task.ID}}{{else}}""{{end}}, "projectID": {{if .Task}}{{.Task.ProjectID}}{{else}}""{{end}}, "initialStatus": {{if .Execution}}{{.Execution.Status}}{{else}}""{{end}}, "initialStartedAtMs": {{if and .Execution .Execution.StartedAt}}{{.Execution.StartedAt.UnixMilli}}{{else}}0{{end}}, "initialCurrentStep": {{.CurrentStep}}, "seededSteps": [{{- range $i, $s := .CompletedSteps -}}{{- if $i -}},{{- end -}}{{$s}}{{- end -}}], "seededNarration": [{{- range $i, $l := .StoryLines -}}{{- if $i -}},{{- end -}}{"seq": {{$l.Seq}}, "kind": {{$l.Kind}}, "text": {{$l.Text}}, "degraded": {{$l.Degraded}}}{{- end -}}], "pauseKindTexts": {{.PauseKindTexts}}}</script>
     <script>
     (function () {
         // Page state captured once. The JS layer drives the rest
@@ -361,29 +362,22 @@
         // every URL built from these IDs — WS upgrade, hint POST,
         // /hints fetch — surfacing as a "Reconnecting" loop and
         // 400 errors in the daemon log (2026-05-26 incident).
-        const executionID = {{if .Execution}}{{.Execution.ID}}{{else}}""{{end}};
-        const taskID = {{if .Task}}{{.Task.ID}}{{else}}""{{end}};
-        const projectID = {{if .Task}}{{.Task.ProjectID}}{{else}}""{{end}};
-        const initialStatus = {{if .Execution}}{{.Execution.Status}}{{else}}""{{end}};
-        const initialStartedAtMs = {{if and .Execution .Execution.StartedAt}}{{.Execution.StartedAt.UnixMilli}}{{else}}0{{end}};
-        const initialCurrentStep = {{.CurrentStep}};
-        const seededSteps = {{/* completed-step IDs pre-rendered */}}[
-            {{- range $i, $s := .CompletedSteps -}}
-                {{- if $i -}},{{- end -}}{{$s}}
-            {{- end -}}
-        ];
+        // The page's values arrive in the task-live-data block (#416
+        // phase 5): this script's text is constant, so the CSP admits it by
+        // its hash. html/template escaped each value there as a JSON literal.
+        const __tl = JSON.parse(document.getElementById('task-live-data').textContent);
+        const executionID = __tl.executionID;
+        const taskID = __tl.taskID;
+        const projectID = __tl.projectID;
+        const initialStatus = __tl.initialStatus;
+        const initialStartedAtMs = __tl.initialStartedAtMs;
+        const initialCurrentStep = __tl.initialCurrentStep;
+        const seededSteps = __tl.seededSteps;
         // Story panel seed (Narrated Execution, task 2.2 —
-        // narrated-execution-design.md §5.6). Server-rendered from
-        // execution_narration, already in seq order and already in
-        // the DOM (as <li data-seeded="1"> rows) by the time this
-        // script runs — html/template's JS-context autoescape quotes
-        // Text safely, mirroring the seededSteps convention above.
-        const seededNarration = [
-            {{- range $i, $l := .StoryLines -}}
-                {{- if $i -}},{{- end -}}
-                {seq: {{$l.Seq}}, kind: {{$l.Kind}}, text: {{$l.Text}}, degraded: {{$l.Degraded}}}
-            {{- end -}}
-        ];
+        // narrated-execution-design.md §5.6): server-rendered from
+        // execution_narration, in seq order, also in the DOM as
+        // <li data-seeded="1"> rows.
+        const seededNarration = __tl.seededNarration;
 
         // Reactive state. lastSeq is the server-side cursor we
         // replay from on reconnect; status flips on paused / resumed.
@@ -1385,7 +1379,7 @@
 
         // Why an execution is paused and what releases it, by pause kind
         // (outcome-quality LLD §S7 #13): the same table the server renders.
-        const pauseKindTexts = {{.PauseKindTexts}};
+        const pauseKindTexts = __tl.pauseKindTexts;
 
         function showPauseReason(kind) {
             const el = document.getElementById('pause-reason');
@@ -1707,6 +1701,13 @@
     </script>
 
     {{template "pageFooter" .}}
+<script>
+    // #416 phase 3: this page's actions (web-ui-design.md, "C, phase 3"). Each
+    // calls its function at event time, so a script that defines it later
+    // (or again, after a swap) is the one that runs.
+    Vornik.action('submitInlineHint', () => window.submitInlineHint());
+    Vornik.action('submitFork', () => window.submitFork());
+    </script>
 </body>
 </html>
 {{end}}

@@ -33,6 +33,9 @@ func SubjectStoreDialect() subjectstore.Dialect {
 		// blackbox_trace_cache (migration 68): an erasure evicts it
 		// (Art 17 design §15.12, GitHub #415 item 3).
 		TraceCache: true,
+		// Transcript erasure, slice 5d-1 (Art 17 design §15.14).
+		JSONB:    true,
+		RowLocks: true,
 	}
 }
 

@@ -479,6 +479,12 @@ type Config struct {
 	// every capability is on, exactly today's single-process behavior.
 	// See https://docs.vornik.io §1.
 	Node NodeConfig `yaml:"node"`
+
+	// Hosting selects self-hosted (the default) or managed hosting, where the
+	// daemon serves customers it is not operated by (GitHub #560; SaaS MVP
+	// design 2.2; 18-security-and-tenancy.md "Amendment 2026-10-28 (#560,
+	// slice M1a)").
+	Hosting HostingConfig `yaml:"hosting" json:"hosting"`
 	// Blackbox configures the Autonomy Black Box counterfactual replay
 	// engine. Empty → the replay-safe classifier seeds from the curated
 	// built-in default (blackbox.DefaultReplaySafeTools). See
@@ -1319,6 +1325,29 @@ type SessionSettings struct {
 // ProviderSettings — one optional block per login provider.
 type ProviderSettings struct {
 	GitHub *GitHubProviderSettings `yaml:"github" json:"github"`
+	OIDC   *OIDCProviderSettings   `yaml:"oidc" json:"oidc"`
+}
+
+// OIDCProviderSettings is an OpenID Connect issuer, verified by discovery,
+// its keys (JWKS), PKCE S256 and a nonce (GitHub #582 P1,
+// operations-api-contract-design.md §6.2). A public client: no secret. In
+// managed hosting the managed setup operation writes it, naming the control
+// plane as the issuer.
+type OIDCProviderSettings struct {
+	Issuer   string `yaml:"issuer" json:"issuer" doc:"The OpenID issuer's https URL, exactly as its ID tokens state it in iss; discovery is read from <issuer>/.well-known/openid-configuration."`
+	ClientID string `yaml:"client_id" json:"client_id" doc:"This instance's client id at the issuer; ID tokens must name it in aud."`
+	Name     string `yaml:"name" json:"name" doc:"The provider's name: the login path (/auth/<name>/start) and the channel of every identity it binds, so auth.bootstrap_admins entries read <name>:<subject>. Lowercase letters, digits and hyphens; default vornikcloud. Do not change it once an owner is bound."`
+}
+
+// OIDCDefaultName is the OpenID provider's name when the config gives none.
+const OIDCDefaultName = "vornikcloud"
+
+// ChannelName is the provider's name, the default when unset.
+func (o *OIDCProviderSettings) ChannelName() string {
+	if o == nil || o.Name == "" {
+		return OIDCDefaultName
+	}
+	return o.Name
 }
 
 // GitHubProviderSettings — GitHub OAuth App credentials. GitHub
@@ -2129,6 +2158,18 @@ type RuntimeConfig struct {
 	// down on 2026-09-20.
 	AgentMemoryLimit string `yaml:"agent_memory_limit" doc:"Per-agent-container memory cap (e.g. 2GiB); a bounded container gets no swap. Absent derives from host memory and concurrency; \"none\" disables the limit."`
 
+	// AgentReadOnlyRoot runs agent containers with a read-only root and
+	// disk-backed anonymous volumes for /tmp, /var/tmp and the agent's home
+	// (GitHub #569; 08-runtime-manager-podman.md, "Change 2026-10-28"). A
+	// pointer so managed hosting can refuse an explicit false; absent is off
+	// self-hosted and on in managed hosting.
+	AgentReadOnlyRoot *bool `yaml:"agent_read_only_root" doc:"Run agent containers with a read-only root filesystem (writable /tmp, /var/tmp and home on disk-backed volumes). Default off; always on in managed hosting."`
+
+	// AgentPidsLimit is the agent container's --pids-limit. 0 emits no flag,
+	// so the host podman's containers.conf pids_limit applies, which is no
+	// Vornik limit at all. Managed hosting uses ManagedAgentPidsLimit.
+	AgentPidsLimit int `yaml:"agent_pids_limit" doc:"Agent container PID limit. 0 (default) leaves podman's own default; managed hosting uses 2048."`
+
 	// AgentLLM configures the LLM endpoint injected into agent containers
 	// as environment variables. When empty, values fall back to the chat.*
 	// section so that agents use the same LLM as the Telegram bot.
@@ -2226,6 +2267,10 @@ type MetricsConfig struct {
 	// handed the full admin key — a compromised scraper then can't act
 	// as admin. Empty disables the token path (admin key only).
 	ScrapeToken string `yaml:"scrape_token"`
+	// PreviousScrapeToken is the scrape token being rotated out, accepted
+	// beside ScrapeToken during the overlap (GitHub #582 §6.3 F3). Written and
+	// cleared by the rotation operation.
+	PreviousScrapeToken string `yaml:"previous_scrape_token" doc:"During a scrape token rotation, the previous token, accepted by /metrics beside scrape_token. Written and cleared by the rotation operation; empty otherwise."`
 }
 
 // TracingConfig holds OpenTelemetry tracing configuration.
@@ -3795,6 +3840,19 @@ type MemoryGraphConfig struct {
 type VoiceConfig struct {
 	STT VoiceSTTConfig `yaml:"stt"`
 	TTS VoiceTTSConfig `yaml:"tts"`
+
+	// SyntheticReplies lets a channel answer a voice message with
+	// synthesised speech (GitHub #543, AI Act Art 50(2)). Off by default:
+	// with it off, replies are text and inbound speech-to-text is
+	// unaffected. It takes effect only with SyntheticRepliesAck and a
+	// non-empty SyntheticRepliesAckBasis (voice.ResolveSyntheticReplies).
+	SyntheticReplies bool `yaml:"synthetic_replies" doc:"Answer voice messages with synthesised speech (Art 50(2)). Off by default; needs synthetic_replies_ack and synthetic_replies_ack_basis."`
+	// SyntheticRepliesAck accepts that synthetic audio carries metadata and
+	// the ledger only, until an audio watermark ships.
+	SyntheticRepliesAck bool `yaml:"synthetic_replies_ack" doc:"Accept that synthetic voice replies carry metadata and the ledger only (no audio watermark yet)."`
+	// SyntheticRepliesAckBasis says who accepted that, and why. It is
+	// written to the admin audit at startup and shown by the doctor.
+	SyntheticRepliesAckBasis string `yaml:"synthetic_replies_ack_basis" doc:"Who accepted single-layer marking for synthetic voice replies, and why (recorded in the admin audit)."`
 }
 
 // VoiceSTTConfig configures the speech-to-text provider. The MVP
@@ -4105,3 +4163,43 @@ func (r RuntimeConfig) ProjectWorkspaceDir() string {
 	}
 	return ""
 }
+
+// Hosting modes (hosting.mode).
+const (
+	HostingModeSelf    = "self"
+	HostingModeManaged = "managed"
+)
+
+// HostingConfig is hosting.*: whether this daemon is a self-hosted install
+// or a managed (hosted) instance (GitHub #560).
+type HostingConfig struct {
+	Mode              string `yaml:"mode" json:"mode" doc:"self (default) or managed. Managed hosting adds an operations listener and refuses admin-class credentials on the public listener."`
+	OperationsAddress string `yaml:"operations_address" json:"operations_address" doc:"Managed hosting only: host:port of the operations listener, a loopback or private IP literal reachable by the control plane."`
+	// ModelHosts are the model-endpoint host names the provisioner vouches
+	// for (the EaseIT model gateway): in managed hosting they may resolve to a
+	// private address; every other model endpoint must be public (M1c D4).
+	ModelHosts []string `yaml:"model_hosts" json:"model_hosts" doc:"Managed hosting only: bare host names of vouched model endpoints (the model gateway) that may resolve to a private address."`
+	// ImageServers are the image's declared loopback MCP servers, as exact
+	// ip:port pairs (GitHub #566, M7 E1): the one loopback exemption of a
+	// managed instance, for URLs taken from this file only.
+	ImageServers []string `yaml:"image_servers" json:"image_servers" doc:"Managed hosting only: the image's loopback MCP servers as exact 127.0.0.1:<port> or [::1]:<port> pairs; only daemon-level mcp.servers URLs may reach them."`
+	// InstanceID is the managed instance's id, written by the provisioner
+	// (GitHub #566, §16 R1).
+	InstanceID string `yaml:"instance_id" json:"instance_id" doc:"Managed hosting only: the instance's id (lowercase letters, digits, inner hyphens), named in a routed OAuth state."`
+	// PreviousAdminAPIKey names which of the instance_admin keys in
+	// admin.allowed_keys is the previous one during a rotation's overlap
+	// (GitHub #582, operations-api-contract-design.md §6.3 F3). It still
+	// authenticates, but never a credential operation. Written and cleared by
+	// the rotation operation only.
+	PreviousAdminAPIKey string `yaml:"previous_admin_api_key" json:"previous_admin_api_key" doc:"Managed hosting only: during an instance_admin key rotation, the previous key (still listed in api.api_keys and admin.allowed_keys, still accepted, never for a credential operation). Written and cleared by the rotation operation; empty otherwise."`
+	// OAuthRedirectURI is the EaseIT OAuth router's redirect URI (§16 R1).
+	OAuthRedirectURI string `yaml:"oauth_redirect_uri" json:"oauth_redirect_uri" doc:"Managed hosting only: the OAuth router's https redirect URI, under the parent domain of server.public_base_url; requires hosting.instance_id."`
+	// BackupBucket and BackupRegion locate the backup bucket the owner
+	// export is read from (GitHub #581 D5): instances/<instance_id>/exports/
+	// under the instance's own role.
+	BackupBucket string `yaml:"backup_bucket" json:"backup_bucket" doc:"Managed hosting only: the backup bucket the owner export is read from, at instances/<hosting.instance_id>/exports/, with the instance's own role. Empty: exports are not configured."`
+	BackupRegion string `yaml:"backup_region" json:"backup_region" doc:"Managed hosting only: the backup bucket's region; empty means storage.s3.region."`
+}
+
+// Managed reports whether hosting.mode is managed.
+func (h HostingConfig) Managed() bool { return h.Mode == HostingModeManaged }

@@ -57,7 +57,32 @@ type Metadata struct {
 	// client_secret_post, i.e. a confidential client — a public-client PKCE-only
 	// implementation cannot talk to it (F1).
 	TokenEndpointAuthMethods []string
+
+	// Issuer is the authorization server's issuer identifier, for RFC 9207's
+	// iss check (design §16.5 C2). Empty means unknown: iss is not checked.
+	Issuer string
+	// IssParameterSupported is RFC 9207's
+	// authorization_response_iss_parameter_supported: the server sends iss,
+	// so a response without it is refused.
+	IssParameterSupported bool
+	// IssuerMismatch reports that the metadata's issuer was not the URL it
+	// was fetched from (RFC 8414 §3.3), the mix-up defence's premise. A
+	// managed instance refuses the server; a self host checks no iss for it.
+	IssuerMismatch bool
+	// IssuerFetchedFrom is the URL the metadata was fetched from. When it
+	// differs from Issuer, a callback's iss may be either of the two and
+	// nothing else (commit security review of ac63c9bae: dropping the check
+	// on a mismatch failed open).
+	IssuerFetchedFrom string
+	// RevocationEndpoint is RFC 7009's, used to revoke a grant the daemon
+	// refuses (design §16.5 C3). Empty when none is advertised.
+	RevocationEndpoint string
 }
+
+// ErrIssuerMismatch is a refused issuer: a metadata document naming another
+// issuer than its URL, or a callback whose iss is not the flow's issuer, or
+// that lacks one where the server sends it (RFC 8414 §3.3, RFC 9207).
+var ErrIssuerMismatch = errors.New("the authorization server's issuer does not match")
 
 // SupportsDCR reports whether the authorization server accepts dynamic client registration.
 func (m Metadata) SupportsDCR() bool { return m.RegistrationEndpoint != "" }
@@ -91,6 +116,8 @@ type asDocument struct {
 	RegistrationEndpoint              string   `json:"registration_endpoint"`
 	ScopesSupported                   []string `json:"scopes_supported"`
 	TokenEndpointAuthMethodsSupported []string `json:"token_endpoint_auth_methods_supported"`
+	IssParameterSupported             bool     `json:"authorization_response_iss_parameter_supported"`
+	RevocationEndpoint                string   `json:"revocation_endpoint"`
 }
 
 // Discover resolves how to authenticate to the MCP server at serverURL.
@@ -149,7 +176,7 @@ func Discover(ctx context.Context, client *http.Client, serverURL string) (Metad
 		resource = serverURL
 	}
 
-	as, err := fetchASMetadata(ctx, client, prm.AuthorizationServers)
+	as, fetchedFrom, err := fetchASMetadata(ctx, client, prm.AuthorizationServers)
 	if err != nil {
 		return Metadata{}, err
 	}
@@ -168,6 +195,11 @@ func Discover(ctx context.Context, client *http.Client, serverURL string) (Metad
 		RegistrationEndpoint:     as.RegistrationEndpoint,
 		ScopesSupported:          scopes,
 		TokenEndpointAuthMethods: as.TokenEndpointAuthMethodsSupported,
+		Issuer:                   strings.TrimSuffix(as.Issuer, "/"),
+		IssParameterSupported:    as.IssParameterSupported,
+		IssuerMismatch:           strings.TrimSuffix(as.Issuer, "/") != fetchedFrom,
+		IssuerFetchedFrom:        fetchedFrom,
+		RevocationEndpoint:       as.RevocationEndpoint,
 	}, nil
 }
 
@@ -275,7 +307,9 @@ func wellKnownProbeURLs(serverURL string) []string {
 
 // fetchASMetadata tries each advertised authorization server, and for each one the OAuth
 // well-known path before the OpenID Connect one — some servers publish only the latter.
-func fetchASMetadata(ctx context.Context, client *http.Client, servers []string) (*asDocument, error) {
+// It returns the issuer URL the document was fetched from too, so Discover can
+// compare it with the document's own issuer (RFC 8414 §3.3).
+func fetchASMetadata(ctx context.Context, client *http.Client, servers []string) (*asDocument, string, error) {
 	var lastErr error
 	for _, issuer := range servers {
 		issuer = strings.TrimSuffix(issuer, "/")
@@ -297,14 +331,14 @@ func fetchASMetadata(ctx context.Context, client *http.Client, servers []string)
 					lastErr = err
 					continue
 				}
-				return doc, nil
+				return doc, issuer, nil
 			}
 		}
 	}
 	if lastErr != nil {
-		return nil, fmt.Errorf("%w: could not read authorization-server metadata: %v", ErrNoDiscovery, lastErr)
+		return nil, "", fmt.Errorf("%w: could not read authorization-server metadata: %v", ErrNoDiscovery, lastErr)
 	}
-	return nil, fmt.Errorf("%w: the protected-resource metadata names no reachable authorization server", ErrNoDiscovery)
+	return nil, "", fmt.Errorf("%w: the protected-resource metadata names no reachable authorization server", ErrNoDiscovery)
 }
 
 func validateASDocument(doc *asDocument) error {
@@ -315,6 +349,7 @@ func validateASDocument(doc *asDocument) error {
 		{"authorization endpoint", doc.AuthorizationEndpoint},
 		{"token endpoint", doc.TokenEndpoint},
 		{"registration endpoint", doc.RegistrationEndpoint},
+		{"revocation endpoint", doc.RevocationEndpoint},
 	} {
 		if endpoint.url == "" {
 			continue

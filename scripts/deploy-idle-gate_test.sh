@@ -29,7 +29,17 @@ pop() { # file -> first line, removed; fails when empty (no GNU sed -i)
   head -n1 "\$1"
   tail -n +2 "\$1" > "\$1.rest" && mv "\$1.rest" "\$1"
 }
+printf '%s\n' "\$*" >> "\$state/argv"
+if [ -f "\$state/accept_key" ] && [ "\$1 \$2" != "daemon operations-credentials" ] \
+  && [ "\$VORNIK_API_KEY" != "\$(cat "\$state/accept_key")" ]; then
+  echo "\$1 \$2 key=\$VORNIK_API_KEY" >> "\$state/refused"
+  echo "error: HTTP 401: unauthorized"; exit 1
+fi
 case "\$1 \$2" in
+  "daemon operations-credentials")
+    [ "\$3 \$4" = "--config \$state/vornik.yaml" ] || { echo "stub: bad config arg \$*" >&2; exit 99; }
+    [ -f "\$state/opscreds" ] || { echo "error: no current key"; exit 1; }
+    cat "\$state/opscreds" ;;
   "project list")
     [ -f "\$state/projects_fail" ] && exit 1
     printf 'ID  NAME\nalpha  Alpha\nbeta  Beta\n' ;;
@@ -67,7 +77,8 @@ chmod +x "$work/bin/vornikctl"
 
 reset() {
   rm -f "$work/projects_fail" "$work/tasks_fail" "$work/task_running" "$work/inflight" \
-    "$work/inflight_seq" "$work/task_seq" "$work/drain_fail" "$work/undrain_fail" "$work/calls"
+    "$work/inflight_seq" "$work/task_seq" "$work/drain_fail" "$work/undrain_fail" "$work/calls" \
+    "$work/argv" "$work/accept_key" "$work/opscreds" "$work/refused"
 }
 run() { # extra gate args...
   PATH="$work/bin:$PATH" bash "$gate" --interval 0 "$@" >"$work/out" 2>&1; echo $?
@@ -143,6 +154,27 @@ grep -q "task(s) under drain; undraining" "$work/out" || { echo "FAIL: task-unde
 reset; printf '0\n' > "$work/inflight_seq"; echo 1 > "$work/inflight"; touch "$work/undrain_fail"
 check "--drain: a failed undrain says the drain expires by itself" 3 "expires by itself within 300s" --rounds 2 --drain
 
+# --- GitHub #581 D3: --config on a managed image ---------------------------
+
+printf 'url=http://10.0.0.5:8081\nkey=sk-current\nprevious=sk-previous\n' > "$work/opscreds.fixture"
+reset; cp "$work/opscreds.fixture" "$work/opscreds"; echo sk-current > "$work/accept_key"
+check "--config: the current key is used" 0 "idle (0 tasks" --rounds 2 --config "$work/vornik.yaml"
+if grep -q 'sk-' "$work/argv"; then
+  echo "FAIL: --config: a key reached an argv:"; sed 's/^/  /' "$work/argv"; fail=1
+else
+  echo "deploy-idle-gate: --config: no key on any argv — OK"
+fi
+
+reset; cp "$work/opscreds.fixture" "$work/opscreds"; echo sk-previous > "$work/accept_key"
+check "--config: between a rotation and its restart the previous key is used" 0 "using the previous instance_admin key" --rounds 2 --config "$work/vornik.yaml"
+grep -q "idle (0 tasks" "$work/out" || { echo "FAIL: --config previous: not idle"; sed 's/^/  /' "$work/out"; fail=1; }
+
+reset; cp "$work/opscreds.fixture" "$work/opscreds"; echo sk-other > "$work/accept_key"
+check "--config: neither key accepted fails closed" 1 "gate-auth" --rounds 2 --config "$work/vornik.yaml"
+
+reset
+check "--config: unreadable credentials abort" 1 "could not read the operations credentials" --rounds 2 --config "$work/vornik.yaml"
+
 # A signal while drained undrains before exiting (the deploy was aborted).
 # The gate sets drained=1 before it calls `daemon drain`, so once the stub
 # has logged the drain the gate holds it and any later signal undrains. The
@@ -165,7 +197,8 @@ fi
 
 # Bad usage exits 64 with a usage line, never a shell error (review 5860 #8).
 for args in "--rounds x" "--rounds" "--interval" "--rounds 2 --interval" "--rounds '' --interval 0" "--bogus" \
-  "--drain --drain-ttl x" "--drain --drain-ttl 0" "--drain --drain-ttl 3601" "--drain --drain-ttl"; do
+  "--drain --drain-ttl x" "--drain --drain-ttl 0" "--drain --drain-ttl 3601" "--drain --drain-ttl" \
+  "--config" "--config ''"; do
   eval "set -- $args"
   rc=0
   PATH="$work/bin:$PATH" bash "$gate" "$@" >"$work/out" 2>&1 || rc=$?

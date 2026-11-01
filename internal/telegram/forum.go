@@ -173,6 +173,7 @@ func (b *Bot) sendForumMessage(ctx context.Context, threadID int64, text string)
 	if !parsed.OK {
 		return 0, fmt.Errorf("forum: sendMessage failed: %s", parsed.Description)
 	}
+	b.recordAIText(ctx, text) // Art 50(2): the ledger row is the mark
 	return parsed.Result.MessageID, nil
 }
 

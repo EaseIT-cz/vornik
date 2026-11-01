@@ -44,3 +44,9 @@ type ClusterNodeRepository interface {
 	// comparison eliminates cross-node clock skew. Returns rows deleted.
 	DeleteStale(ctx context.Context, olderThan time.Duration, protectedInstanceIDs []string) (int, error)
 }
+
+// ChannelSessionFenceCapability is the cluster_nodes capability a node
+// advertises when it honours the channel-session version fence. An erasure
+// of a channel session is deferred while any registered node lacks it: such
+// a node would write the session back (art17 redact design §15.18).
+const ChannelSessionFenceCapability = "channel_session_fence"

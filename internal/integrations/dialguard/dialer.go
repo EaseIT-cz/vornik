@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"net/netip"
 	"net/url"
 	"syscall"
 	"time"
@@ -54,6 +55,20 @@ type DialGuard struct {
 	// caller points at a local or LAN model server; it never disables the
 	// guard.
 	AllowPrivate bool
+
+	// PrivateHosts are host names that may resolve to a private (RFC 1918,
+	// ULA) address, and to nothing else isBlockedIP refuses: never loopback,
+	// link-local or a metadata address. Narrower than AllowedHosts, which
+	// skips the address check: rebinding a listed name to the metadata
+	// service is still refused (GitHub #560, M1c D4).
+	PrivateHosts []string
+
+	// ExactAddrs are addresses dialled with no address check, matched as an
+	// exact netip.AddrPort against the dial's own host:port before any other
+	// rule (GitHub #566, M7 E2): an image-declared loopback server. Only
+	// ImageServerGuard sets it, to the one pair its URL names, so a redirect
+	// to another port meets the full check.
+	ExactAddrs []netip.AddrPort
 }
 
 // HTTPClient returns an *http.Client whose transport dials every connection
@@ -123,6 +138,15 @@ func LoopbackURLGuard(rawURL string, allowed []string) DialGuard {
 // (internal/email) expects, so a guard's method value can be passed
 // straight through for the SMTP probe leg too.
 func (g DialGuard) DialContext(ctx context.Context, network, addr string) (net.Conn, error) {
+	if len(g.ExactAddrs) > 0 {
+		if p, err := netip.ParseAddrPort(addr); err == nil {
+			for _, want := range g.ExactAddrs {
+				if p == want {
+					return (&net.Dialer{}).DialContext(ctx, network, addr)
+				}
+			}
+		}
+	}
 	host, _, err := net.SplitHostPort(addr)
 	if err != nil {
 		// addr without a port (shouldn't normally happen via http.Transport,
@@ -178,7 +202,13 @@ func (g DialGuard) Dialer(host string) *net.Dialer {
 			}
 			// GitHub #502: AllowPrivate admits a DIRECT loopback or private
 			// address only; everything else isBlockedIP refuses stays refused.
-			admitted := g.AllowPrivate && (ip.IsLoopback() || ip.IsPrivate())
+			// A cloud metadata address is never admitted (#505).
+			admitted := g.AllowPrivate && (ip.IsLoopback() || ip.IsPrivate()) && !isCloudMetadata(ip)
+			// GitHub #560 (M1c D4): a PrivateHosts name may reach a private
+			// address, never loopback or a metadata address.
+			if !admitted && g.privateHost(host) && ip.IsPrivate() && !ip.IsLoopback() && !isCloudMetadata(ip) {
+				admitted = true
+			}
 			if isBlockedIP(ip) && !admitted {
 				return fmt.Errorf("%w private/loopback/link-local address %s (host %s)", ErrDialRefused, ip, host)
 			}
@@ -240,7 +270,15 @@ func (g DialGuard) hostAllowed(host string) bool {
 // 2002::/16 (code review fd9f F3). IPv4-mapped IPv6 (::ffff:a.b.c.d) is
 // covered by the net.IP predicates, which test the embedded IPv4 address. The
 // check is by address range: it does not model a site-specific NAT64 prefix.
+// IsBlockedIP is the daemon's one list of addresses an SSRF guard refuses,
+// exported so internal/netguard decides by it too instead of keeping a
+// second list (GitHub #505; AGENTS.md §5).
+func IsBlockedIP(ip net.IP) bool { return isBlockedIP(ip) }
+
 func isBlockedIP(ip net.IP) bool {
+	if isCloudMetadata(ip) {
+		return true
+	}
 	if ip4 := ip.To4(); ip4 != nil && (ip4[0] == 0 || ip4.Equal(net.IPv4bcast)) {
 		return true
 	}
@@ -268,6 +306,30 @@ func isBlockedIP(ip net.IP) bool {
 		ip.IsUnspecified()
 }
 
+// cloudMetadataIPs are the instance-metadata addresses of the clouds Vornik
+// runs on, refused by every guard whatever AllowPrivate says (GitHub #505,
+// automated security review of a708bd96a): AWS's IPv6 IMDS and GCP's IPv6
+// metadata server sit in the ULA range fc00::/7 that AllowPrivate admits, and
+// Alibaba Cloud's sits in 100.64.0.0/10, which no other rule here refuses.
+// 169.254.169.254 (AWS, Azure, GCP, OCI over IPv4) is link-local and listed
+// for completeness. isBlockedIP's embedded-IPv4 recursion covers their NAT64,
+// 6to4 and IPv4-compatible forms; To4 covers the IPv4-mapped one.
+var cloudMetadataIPs = []net.IP{
+	net.ParseIP("169.254.169.254"),
+	net.ParseIP("fd00:ec2::254"),
+	net.ParseIP("fd20:ce::254"),
+	net.ParseIP("100.100.100.200"),
+}
+
+func isCloudMetadata(ip net.IP) bool {
+	for _, m := range cloudMetadataIPs {
+		if m.Equal(ip) {
+			return true
+		}
+	}
+	return false
+}
+
 // The IPv6 prefixes that embed an IPv4 address isBlockedIP checks: RFC 6052's
 // well-known NAT64 prefix, RFC 4291's deprecated IPv4-compatible form, and
 // RFC 3056's 6to4.
@@ -276,3 +338,14 @@ var (
 	ipv4Compatible = &net.IPNet{IP: net.IPv6zero, Mask: net.CIDRMask(96, 128)}
 	sixToFour      = &net.IPNet{IP: net.ParseIP("2002::"), Mask: net.CIDRMask(16, 128)}
 )
+
+// privateHost reports whether host is a PrivateHosts entry (the dial's own
+// exact match, as hostAllowed).
+func (g DialGuard) privateHost(host string) bool {
+	for _, h := range g.PrivateHosts {
+		if h == host {
+			return true
+		}
+	}
+	return false
+}

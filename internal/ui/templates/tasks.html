@@ -21,7 +21,7 @@
                 <svg class="h-4 w-4 text-gray-500" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/></svg>
                 <input id="task-filter" type="text"
                        placeholder="Filter visible tasks by id, project, or summary text…"
-                       oninput="filterTaskRows(this.value)"
+                       data-on-input="filterTaskRows"
                        class="flex-1 bg-transparent border-none text-sm text-gray-100 placeholder-gray-500 focus:outline-none focus:ring-0">
                 <span id="task-filter-count" class="text-[11px] text-gray-500"></span>
             </div>
@@ -113,12 +113,12 @@
                  render checkboxes, so the toolbar stays hidden naturally —
                  no need to gate by breakpoint. -->
             <form id="bulk-form" method="POST" class="glass rounded-xl border border-dark-700 px-4 py-2 hidden items-center gap-2"
-                  onsubmit="return bulkConfirm(event)">
+                  data-on-submit="bulkConfirm">
                 <span id="bulk-count" class="text-xs text-gray-400 mr-2" aria-live="polite" aria-atomic="true">0 selected</span>
                 <button type="submit" formaction="/ui/tasks-bulk/cancel" class="px-3 py-1 text-xs font-medium rounded-md bg-rose-700 hover:bg-rose-600 text-white">Cancel selected</button>
                 <button type="submit" formaction="/ui/tasks-bulk/retry"  class="px-3 py-1 text-xs font-medium rounded-md bg-brand-600 hover:bg-brand-500 text-white">Requeue selected</button>
                 <button type="submit" formaction="/ui/tasks-bulk/close"  class="px-3 py-1 text-xs font-medium rounded-md bg-amber-700 hover:bg-amber-600 text-white">Close selected</button>
-                <button type="button" onclick="bulkClear()" class="ml-auto px-3 py-1 text-xs font-medium rounded-md bg-dark-700 hover:bg-dark-600 text-gray-300">Clear</button>
+                <button type="button" data-on-click="bulkClear" class="ml-auto px-3 py-1 text-xs font-medium rounded-md bg-dark-700 hover:bg-dark-600 text-gray-300">Clear</button>
             </form>
 
             {{/* The list states its cut (#411): "Showing X–Y of M tasks"
@@ -235,7 +235,7 @@
                         <thead><tr class="border-b border-dark-700/60">
                             <th scope="col" class="px-3 py-2.5 w-8 text-left">
                                 <input type="checkbox" id="bulk-toggle-all"
-                                       onchange="bulkToggleAll(this.checked)"
+                                       data-on-change="bulkToggleAll"
                                        class="form-checkbox h-3.5 w-3.5 rounded border-control bg-dark-700 text-brand-500" aria-label="Select all">
                             </th>
                             {{template "sortHeader" (dict "Label" "ID"       "Key" "id"       "Active" .Sort "Dir" .Dir "BaseURL" .BaseURL "Align" "left")}}
@@ -254,7 +254,7 @@
                             <tr class="hover:bg-dark-700/40 transition-colors">
                                 <td class="px-3 py-3 whitespace-nowrap">
                                     <input type="checkbox" form="bulk-form" name="task_ids" value="{{.ID}}"
-                                           onchange="bulkUpdateCount()"
+                                           data-on-change="bulkUpdateCount"
                                            class="form-checkbox h-3.5 w-3.5 rounded border-control bg-dark-700 text-brand-500"
                                            aria-label="Select task {{shortID .ID}}">
                                 </td>
@@ -378,6 +378,16 @@
             var input = document.getElementById('task-filter');
             if (input && input.value) filterTaskRows(input.value);
         });
+    </script>
+<script>
+    // #416 phase 3: this page's actions (web-ui-design.md, "C, phase 3"). Each
+    // calls its function at event time, so a script that defines it later
+    // (or again, after a swap) is the one that runs.
+    Vornik.action('bulkToggleAll', (el) => window.bulkToggleAll(el.checked));
+    Vornik.action('bulkUpdateCount', () => window.bulkUpdateCount());
+    Vornik.action('bulkClear', () => window.bulkClear());
+    Vornik.action('filterTaskRows', (el) => window.filterTaskRows(el.value));
+    Vornik.action('bulkConfirm', (el, e) => window.bulkConfirm(e));
     </script>
 </body>
 </html>

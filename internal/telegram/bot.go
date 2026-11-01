@@ -341,6 +341,8 @@ type GetUpdatesResponse struct {
 
 // Bot is a Telegram bot client.
 type Bot struct {
+	// aiMark records Art 50(2) marks of sent text (aimark.go).
+	aiMark     aiMarkHolder
 	config     BotConfig
 	httpClient *http.Client
 
@@ -1647,7 +1649,12 @@ func formatArtifactLine(a *persistence.Artifact, ownerTaskID string) string {
 // into a tap-to-copy <code>. Returns ("", nil) when the repo is unwired or the
 // task captured no credential (the common case — caller then takes the
 // unchanged send path). Credentials are read from the latest execution only.
-func (b *Bot) renderCredentialsSection(ctx context.Context, task *persistence.Task) (string, [][]byte) {
+//
+// Only a private chat (a positive id) receives the values (GitHub #518,
+// operator 2026-10-31): a group's members would all see them. Any other chat
+// gets a pointer to the task page, with neither the value nor the artifact
+// URL it gates, and no allowlist.
+func (b *Bot) renderCredentialsSection(ctx context.Context, task *persistence.Task, chatID int64) (string, [][]byte) {
 	if b.taskCredentialRepo == nil || task == nil {
 		return "", nil
 	}
@@ -1658,6 +1665,13 @@ func (b *Bot) renderCredentialsSection(ctx context.Context, task *persistence.Ta
 	}
 	if len(creds) == 0 {
 		return "", nil
+	}
+	if chatID <= 0 {
+		pointer := "\n\n🔑 An access credential was issued for this task. It is sent to private chats only: open the task page, or watch the task from a private chat."
+		if base := strings.TrimRight(b.config.WebUIBaseURL, "/"); base != "" {
+			pointer += "\n" + base + "/ui/tasks/" + url.PathEscape(task.ID)
+		}
+		return pointer, nil
 	}
 	var sb strings.Builder
 	allow := make([][]byte, 0, len(creds))
@@ -1850,7 +1864,7 @@ func (b *Bot) NotifyTaskCompleted(_ context.Context, task *persistence.Task, suc
 			// this task, code-formatted + copyable. Only present when the
 			// task actually captured one, so notifications without
 			// credentials take the unchanged sendMessageGetID path.
-			credSection, credAllow := b.renderCredentialsSection(ctx, task)
+			credSection, credAllow := b.renderCredentialsSection(ctx, task, chatID)
 			// Phase 28: track the notification id so replies to it
 			// route to this task's conversation thread.
 			var (
@@ -2293,22 +2307,7 @@ func (b *Bot) Start(ctx context.Context) error {
 	b.running = true
 	b.mu.Unlock()
 
-	// Restore conversations from disk if persistence is configured
-	if b.config.SessionPath != "" {
-		loaded, err := chat.LoadConversations(b.config.SessionPath, b.config.MaxHistory)
-		if err != nil {
-			b.logger.Warn().Err(err).Str("path", b.config.SessionPath).Msg("failed to load sessions (starting fresh)")
-		} else if len(loaded) > 0 {
-			b.mu.Lock()
-			for chatID, conv := range loaded {
-				b.tuneConversation(conv)
-				// Legacy disk sessions carry no project → the no-project lane.
-				b.conversations[convKey{chatID: chatID}] = conv
-			}
-			b.mu.Unlock()
-			b.logger.Info().Int("count", len(loaded)).Msg("restored conversations from disk")
-		}
-	}
+	b.restoreConversations()
 
 	// Register bot commands in the Telegram menu.
 	b.registerBotMenu(ctx)
@@ -2350,9 +2349,33 @@ func (b *Bot) Stop() error {
 	return nil
 }
 
+// restoreConversations restores conversations from disk if persistence is
+// configured. With the database persister wired the snapshot only duplicates
+// channel_sessions (the same active lane per chat) and sits outside the
+// erasure fence, so it is removed instead (art17 redact design §15.18.1).
+func (b *Bot) restoreConversations() {
+	if b.config.SessionPath != "" && b.snapshotSuperseded() {
+		b.removeSupersededSnapshot()
+	} else if b.config.SessionPath != "" {
+		loaded, err := chat.LoadConversations(b.config.SessionPath, b.config.MaxHistory)
+		if err != nil {
+			b.logger.Warn().Err(err).Str("path", b.config.SessionPath).Msg("failed to load sessions (starting fresh)")
+		} else if len(loaded) > 0 {
+			b.mu.Lock()
+			for chatID, conv := range loaded {
+				b.tuneConversation(conv)
+				// Legacy disk sessions carry no project → the no-project lane.
+				b.conversations[convKey{chatID: chatID}] = conv
+			}
+			b.mu.Unlock()
+			b.logger.Info().Int("count", len(loaded)).Msg("restored conversations from disk")
+		}
+	}
+}
+
 // saveConversations writes current conversations to disk if persistence is configured.
 func (b *Bot) saveConversations() {
-	if b.config.SessionPath == "" {
+	if b.config.SessionPath == "" || b.snapshotSuperseded() {
 		return
 	}
 	b.mu.RLock()
@@ -3007,6 +3030,7 @@ func (b *Bot) doSendMessage(ctx context.Context, chatID int64, reqBody SendMessa
 	}
 	b.logger.Info().Int64("chat_id", chatID).Int64("message_id", result.Result.MessageID).
 		Dur("duration", time.Since(start)).Msg("telegram message sent")
+	b.recordAIText(ctx, reqBody.Text) // Art 50(2): the ledger row is the mark
 	return result.Result.MessageID, nil
 }
 
@@ -3035,6 +3059,7 @@ func (b *Bot) sendMessageGetID(ctx context.Context, chatID int64, text string) (
 	if err := json.Unmarshal(respBody, &result); err != nil || !result.OK {
 		return 0, fmt.Errorf("sendMessage failed: %s", result.Description)
 	}
+	b.recordAIText(ctx, text) // Art 50(2): the ledger row is the mark
 	return result.Result.MessageID, nil
 }
 
@@ -3057,10 +3082,7 @@ func (b *Bot) editMessageText(ctx context.Context, chatID, messageID int64, text
 		return nil
 	}
 	// Telegram rejects edits with identical text — truncate to 4096 chars.
-	if len(text) > 4096 {
-		text = text[:4093] + "..."
-	}
-	return b.editMessageTextAndMarkup(ctx, chatID, messageID, text, nil)
+	return b.editMessageTextAndMarkup(ctx, chatID, messageID, editText(text), nil)
 }
 
 // editMessageTextAndMarkup edits a message's text AND its inline keyboard in
@@ -3072,9 +3094,7 @@ func (b *Bot) editMessageTextAndMarkup(ctx context.Context, chatID, messageID in
 	if text == "" {
 		return nil
 	}
-	if len(text) > 4096 {
-		text = text[:4093] + "..."
-	}
+	text = editText(text)
 	payload := map[string]any{
 		"chat_id":    chatID,
 		"message_id": messageID,
@@ -3181,6 +3201,55 @@ func (b *Bot) resetConversation(chatID int64, project string) {
 	if persister != nil {
 		_ = persister.Delete(context.Background(), strconv.FormatInt(chatID, 10))
 	}
+}
+
+// snapshotSuperseded reports whether the database persister replaces the
+// session_path snapshot (§15.18.1).
+func (b *Bot) snapshotSuperseded() bool {
+	return b.sessionPersisterRef().Fenced()
+}
+
+// removeSupersededSnapshot deletes a snapshot file left from before the
+// database persister was wired: its conversations are in channel_sessions,
+// and a file copy would survive an erasure there.
+func (b *Bot) removeSupersededSnapshot() {
+	err := os.Remove(b.config.SessionPath)
+	switch {
+	case err == nil:
+		b.logger.Info().Str("path", b.config.SessionPath).
+			Msg("removed the telegram session snapshot: the database holds the sessions now")
+	case !errors.Is(err, os.ErrNotExist):
+		b.logger.Warn().Err(err).Str("path", b.config.SessionPath).
+			Msg("could not remove the superseded telegram session snapshot")
+	}
+}
+
+// fenceChat drops every in-memory lane of a chat whose stored session moved
+// since this process last saw it (an erasure, or another node), so no lane
+// read serves it (art17 redact design §15.18). A chat with no lane in memory
+// has nothing to serve.
+func (b *Bot) fenceChat(ctx context.Context, chatID int64) {
+	persister := b.sessionPersisterRef()
+	if persister == nil || !b.hasAnyInMemorySession(chatID) {
+		return
+	}
+	sid := strconv.FormatInt(chatID, 10)
+	if persister.Fresh(ctx, sid) {
+		return
+	}
+	b.dropChatLanes(chatID)
+	persister.Forget(sid)
+}
+
+// dropChatLanes removes every in-memory lane of the chat.
+func (b *Bot) dropChatLanes(chatID int64) {
+	b.mu.Lock()
+	for k := range b.conversations {
+		if k.chatID == chatID {
+			delete(b.conversations, k)
+		}
+	}
+	b.mu.Unlock()
 }
 
 // resetInMemoryConversation drops ONLY the in-memory (chat, project) lane,

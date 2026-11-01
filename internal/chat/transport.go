@@ -1,8 +1,13 @@
 package chat
 
 import (
+	"context"
+	"net"
 	"net/http"
 	"sync"
+	"time"
+
+	"vornik.io/vornik/internal/integrations/dialguard"
 )
 
 // chatTransportMaxIdleConnsPerHost bounds the keep-alive connections
@@ -29,8 +34,20 @@ const chatTransportMaxIdleConnsPerHost = 32
 // http.DefaultTransport with the chat connection-pool tuning applied. It
 // is separate from sharedHTTPTransport so tests can inject a counting
 // DialContext and assert the pool actually reuses connections.
+//
+// It dials through dialguard.ModelEndpointGuard and consults no proxy
+// (GitHub #505, 18-security-and-tenancy.md "Amendment 2026-10-28 (#505)",
+// C1): with a proxy the guard would check the proxy's address, never the
+// target's.
 func newChatTransport() *http.Transport {
 	t := http.DefaultTransport.(*http.Transport).Clone()
+	t.Proxy = nil
+	// The guard is resolved on every dial, not captured here: managed
+	// hosting's policy may be set after this transport is built (GitHub #560,
+	// M1c D0).
+	t.DialContext = func(ctx context.Context, network, addr string) (net.Conn, error) {
+		return dialguard.ModelEndpointGuard().DialContext(ctx, network, addr)
+	}
 	t.MaxIdleConns = 100
 	t.MaxIdleConnsPerHost = chatTransportMaxIdleConnsPerHost
 	t.MaxConnsPerHost = 0 // no limit — the chat queue is the parallelism gate
@@ -46,3 +63,15 @@ func newChatTransport() *http.Transport {
 // fixes. The Bedrock path is unaffected — it uses the AWS SDK's own
 // transport.
 var sharedHTTPTransport = sync.OnceValue(newChatTransport)
+
+// newChatHTTPClient is a client on the shared transport that follows only
+// same-host redirects (GitHub #505, C2). CheckRedirect belongs to the client,
+// not the transport, so every client built on the shared transport is built
+// here. A zero timeout leaves cancellation to the request context.
+func newChatHTTPClient(timeout time.Duration) *http.Client {
+	return &http.Client{
+		Timeout:       timeout,
+		Transport:     sharedHTTPTransport(),
+		CheckRedirect: dialguard.SameHostRedirects,
+	}
+}

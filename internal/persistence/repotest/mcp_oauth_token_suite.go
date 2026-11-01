@@ -28,7 +28,7 @@ func RunMCPOAuthTokenSuite(t *testing.T, repo persistence.MCPOAuthTokenRepositor
 	t.Helper()
 	t.Run("Get_miss_obeys_the_contract", func(t *testing.T) {
 		AssertMiss(t, "MCPOAuthTokenRepository.Get", func() (*persistence.MCPOAuthToken, error) {
-			return repo.Get(context.Background(), uniqueID("absent-proj"), uniqueID("absent-server"))
+			return repo.Get(context.Background(), uniqueID("absent-proj"), uniqueID("absent-server"), "")
 		})
 	})
 	runMCPOAuthUpsertGet(t, repo)
@@ -39,6 +39,74 @@ func RunMCPOAuthTokenSuite(t *testing.T, repo persistence.MCPOAuthTokenRepositor
 	runMCPOAuthDeleteAndList(t, repo)
 	runMCPOAuthRefreshLockSerialises(t, repo)
 	runMCPOAuthInvalidateStaleRedirectURIs(t, repo)
+	runMCPOAuthListAllAndReplaceTokens(t, repo)
+}
+
+// GitHub #571 A3: the one-time seal pass lists every row and replaces a row's
+// tokens only while both still hold what it read, so a concurrent writer wins.
+func runMCPOAuthListAllAndReplaceTokens(t *testing.T, repo persistence.MCPOAuthTokenRepository) {
+	t.Run("ListAll_and_ReplaceTokens", func(t *testing.T) { runMCPOAuthListAllReplace(t, repo) })
+	t.Run("ReplaceTokens_quarantine", func(t *testing.T) { runMCPOAuthReplaceQuarantine(t, repo) })
+}
+
+func runMCPOAuthListAllReplace(t *testing.T, repo persistence.MCPOAuthTokenRepository) {
+	{
+		ctx := context.Background()
+		project := uniqueID("all")
+		for _, srv := range []string{"a", "b"} {
+			if err := repo.Upsert(ctx, mcpToken(project, srv)); err != nil {
+				t.Fatal(err)
+			}
+		}
+		all, err := repo.ListAll(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		n := 0
+		for _, r := range all {
+			if r.ProjectID == project {
+				n++
+			}
+		}
+		if n != 2 {
+			t.Fatalf("ListAll returned %d rows of the project, want 2", n)
+		}
+		cur, _ := repo.Get(ctx, project, "a", "")
+		won, err := repo.ReplaceTokens(ctx, project, "a", "", cur.AccessToken, cur.RefreshToken, "AT-NEW", "RT-NEW", false)
+		if err != nil || !won {
+			t.Fatalf("ReplaceTokens with the current values: %v %v", won, err)
+		}
+		lost, err := repo.ReplaceTokens(ctx, project, "a", "", cur.AccessToken, cur.RefreshToken, "AT-LATE", "RT-LATE", false)
+		if err != nil || lost {
+			t.Fatalf("ReplaceTokens with stale values won: %v %v", lost, err)
+		}
+		got, _ := repo.Get(ctx, project, "a", "")
+		if got.AccessToken != "AT-NEW" || got.RefreshToken != "RT-NEW" || got.Resource != cur.Resource || got.ConnectedBy != cur.ConnectedBy {
+			t.Fatalf("after ReplaceTokens: %+v", got)
+		}
+		if got.NeedsReconnect {
+			t.Fatal("a plain replace set needs_reconnect")
+		}
+	}
+}
+
+func runMCPOAuthReplaceQuarantine(t *testing.T, repo persistence.MCPOAuthTokenRepository) {
+	{
+		// A quarantine empties both tokens and flags the grant in one statement.
+		ctx := context.Background()
+		project := uniqueID("quarantine")
+		tok := mcpToken(project, "a")
+		if err := repo.Upsert(ctx, tok); err != nil {
+			t.Fatal(err)
+		}
+		if won, err := repo.ReplaceTokens(ctx, project, "a", "", tok.AccessToken, tok.RefreshToken, "", "", true); err != nil || !won {
+			t.Fatalf("quarantine: %v %v", won, err)
+		}
+		q, _ := repo.Get(ctx, project, "a", "")
+		if q.AccessToken != "" || q.RefreshToken != "" || !q.NeedsReconnect {
+			t.Fatalf("after a quarantine: %+v", q)
+		}
+	}
 }
 
 func mcpToken(projectID, serverName string) *persistence.MCPOAuthToken {
@@ -65,7 +133,7 @@ func runMCPOAuthUpsertGet(t *testing.T, repo persistence.MCPOAuthTokenRepository
 		t.Fatalf("Upsert: %v", err)
 	}
 
-	got, err := repo.Get(ctx, "proj-upsert", "atlassian")
+	got, err := repo.Get(ctx, "proj-upsert", "atlassian", "")
 	if err != nil {
 		t.Fatalf("Get: %v", err)
 	}
@@ -97,7 +165,7 @@ func runMCPOAuthUpsertGet(t *testing.T, repo persistence.MCPOAuthTokenRepository
 	// A missing pair is (nil, ErrNotFound) per the miss contract. The
 	// injection path asks about every oauth server on every wiring pass, so
 	// it tests for ErrNotFound rather than treating any error as fatal.
-	missing, err := repo.Get(ctx, "proj-upsert", "never-connected")
+	missing, err := repo.Get(ctx, "proj-upsert", "never-connected", "")
 	if !errors.Is(err, persistence.ErrNotFound) {
 		t.Fatalf("Get(missing): want ErrNotFound, got %v", err)
 	}
@@ -111,7 +179,7 @@ func runMCPOAuthUpsertGet(t *testing.T, repo persistence.MCPOAuthTokenRepository
 	if err := repo.Upsert(ctx, tok); err != nil {
 		t.Fatalf("Upsert(replace): %v", err)
 	}
-	got, err = repo.Get(ctx, "proj-upsert", "atlassian")
+	got, err = repo.Get(ctx, "proj-upsert", "atlassian", "")
 	if err != nil {
 		t.Fatalf("Get after replace: %v", err)
 	}
@@ -137,14 +205,14 @@ func runMCPOAuthDaemonScopeIsItsOwnKey(t *testing.T, repo persistence.MCPOAuthTo
 		t.Fatalf("Upsert(project): %v", err)
 	}
 
-	got, err := repo.Get(ctx, "", "shared-server")
+	got, err := repo.Get(ctx, "", "shared-server", "")
 	if err != nil || got == nil {
 		t.Fatalf("Get(daemon scope): %v / %v", got, err)
 	}
 	if got.AccessToken != "daemon-at" {
 		t.Errorf("daemon-scope Get returned %q", got.AccessToken)
 	}
-	got, err = repo.Get(ctx, "proj-scope", "shared-server")
+	got, err = repo.Get(ctx, "proj-scope", "shared-server", "")
 	if err != nil || got == nil {
 		t.Fatalf("Get(project scope): %v / %v", got, err)
 	}
@@ -188,7 +256,7 @@ func runMCPOAuthSwapRotationGuard(t *testing.T, repo persistence.MCPOAuthTokenRe
 		t.Fatal("a refresh that used a ROTATED-AWAY refresh token must lose")
 	}
 
-	got, err := repo.Get(ctx, "proj-swap", "linear")
+	got, err := repo.Get(ctx, "proj-swap", "linear", "")
 	if err != nil {
 		t.Fatalf("Get: %v", err)
 	}
@@ -215,7 +283,7 @@ func runMCPOAuthSwapPreservesConsent(t *testing.T, repo persistence.MCPOAuthToke
 		t.Fatalf("SwapRefreshToken: %v", err)
 	}
 
-	got, err := repo.Get(ctx, "proj-consent", "notion")
+	got, err := repo.Get(ctx, "proj-consent", "notion", "")
 	if err != nil {
 		t.Fatalf("Get: %v", err)
 	}
@@ -233,10 +301,10 @@ func runMCPOAuthNeedsReconnect(t *testing.T, repo persistence.MCPOAuthTokenRepos
 	if err := repo.Upsert(ctx, tok); err != nil {
 		t.Fatalf("Upsert: %v", err)
 	}
-	if err := repo.MarkNeedsReconnect(ctx, "proj-reconnect", "slack"); err != nil {
+	if err := repo.MarkNeedsReconnect(ctx, "proj-reconnect", "slack", ""); err != nil {
 		t.Fatalf("MarkNeedsReconnect: %v", err)
 	}
-	got, err := repo.Get(ctx, "proj-reconnect", "slack")
+	got, err := repo.Get(ctx, "proj-reconnect", "slack", "")
 	if err != nil {
 		t.Fatalf("Get: %v", err)
 	}
@@ -258,7 +326,7 @@ func runMCPOAuthNeedsReconnect(t *testing.T, repo persistence.MCPOAuthTokenRepos
 	if !won {
 		t.Fatal("swap should have won")
 	}
-	got, err = repo.Get(ctx, "proj-reconnect", "slack")
+	got, err = repo.Get(ctx, "proj-reconnect", "slack", "")
 	if err != nil {
 		t.Fatalf("Get: %v", err)
 	}
@@ -286,7 +354,7 @@ func runMCPOAuthDeleteAndList(t *testing.T, repo persistence.MCPOAuthTokenReposi
 			list[0].ServerName, list[1].ServerName)
 	}
 
-	if err := repo.Delete(ctx, "proj-list", "alpha"); err != nil {
+	if err := repo.Delete(ctx, "proj-list", "alpha", ""); err != nil {
 		t.Fatalf("Delete: %v", err)
 	}
 	list, err = repo.ListForProject(ctx, "proj-list")
@@ -299,7 +367,7 @@ func runMCPOAuthDeleteAndList(t *testing.T, repo persistence.MCPOAuthTokenReposi
 
 	// Deleting a grant that is not there is not an error — Disconnect is
 	// idempotent, and a double-click must not surface a failure.
-	if err := repo.Delete(ctx, "proj-list", "alpha"); err != nil {
+	if err := repo.Delete(ctx, "proj-list", "alpha", ""); err != nil {
 		t.Errorf("Delete(missing) = %v, want nil", err)
 	}
 }
@@ -318,7 +386,7 @@ func runMCPOAuthRefreshLockSerialises(t *testing.T, repo persistence.MCPOAuthTok
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			_ = repo.WithRefreshLock(ctx, "proj-lock", "server", func(context.Context) error {
+			_ = repo.WithRefreshLock(ctx, "proj-lock", "server", "", func(context.Context) error {
 				mu.Lock()
 				inside++
 				if inside > 1 {
@@ -343,7 +411,7 @@ func runMCPOAuthRefreshLockSerialises(t *testing.T, repo persistence.MCPOAuthTok
 	// An error from fn propagates unchanged — the caller distinguishes a
 	// refresh failure from a locking failure.
 	sentinel := errors.New("boom")
-	if err := repo.WithRefreshLock(ctx, "proj-lock", "server", func(context.Context) error {
+	if err := repo.WithRefreshLock(ctx, "proj-lock", "server", "", func(context.Context) error {
 		return sentinel
 	}); !errors.Is(err, sentinel) {
 		t.Errorf("WithRefreshLock swallowed fn's error: %v", err)
@@ -352,7 +420,7 @@ func runMCPOAuthRefreshLockSerialises(t *testing.T, repo persistence.MCPOAuthTok
 	// …and the lock is released after an error, or every later refresh wedges.
 	done := make(chan struct{})
 	go func() {
-		_ = repo.WithRefreshLock(ctx, "proj-lock", "server", func(context.Context) error { return nil })
+		_ = repo.WithRefreshLock(ctx, "proj-lock", "server", "", func(context.Context) error { return nil })
 		close(done)
 	}()
 	select {
@@ -396,7 +464,7 @@ func runMCPOAuthInvalidateStaleRedirectURIs(t *testing.T, repo persistence.MCPOA
 		t.Errorf("invalidated %d rows, want at least the stale one", n)
 	}
 
-	got, err := repo.Get(ctx, stale.ProjectID, stale.ServerName)
+	got, err := repo.Get(ctx, stale.ProjectID, stale.ServerName, "")
 	if err != nil || got == nil {
 		t.Fatalf("Get(stale): %v", err)
 	}
@@ -411,7 +479,7 @@ func runMCPOAuthInvalidateStaleRedirectURIs(t *testing.T, repo persistence.MCPOA
 	}
 
 	for _, keep := range []*persistence.MCPOAuthToken{matching, unknown} {
-		got, err := repo.Get(ctx, keep.ProjectID, keep.ServerName)
+		got, err := repo.Get(ctx, keep.ProjectID, keep.ServerName, "")
 		if err != nil || got == nil {
 			t.Fatalf("Get(%s): %v", keep.ProjectID, err)
 		}

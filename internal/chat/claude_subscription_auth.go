@@ -88,7 +88,7 @@ func newClaudeAuthManager(path string) *claudeAuthManager {
 	}
 	return &claudeAuthManager{
 		path:     path,
-		http:     &http.Client{Timeout: 30 * time.Second, Transport: sharedHTTPTransport()},
+		http:     newChatHTTPClient(30 * time.Second),
 		tokenURL: claudeOAuthTokenURL,
 	}
 }

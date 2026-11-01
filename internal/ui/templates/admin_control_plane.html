@@ -481,7 +481,7 @@
                         <div class="border-t border-dark-700 pt-3 space-y-3">
                             <div>
                                 <label class="block text-xs text-gray-400 mb-1" for="mcp-auth-mode">Authentication</label>
-                                <select id="mcp-auth-mode" name="auth_mode" onchange="mcpAuthModeChanged(this.value)"
+                                <select id="mcp-auth-mode" name="auth_mode" data-on-change="mcpAuthModeChanged"
                                         class="w-full rounded-md bg-dark-900 border border-control px-3 py-1.5 text-sm text-gray-100 focus:border-brand-500 focus:outline-none">
                                     <option value="none">none — unauthenticated (default)</option>
                                     <option value="static">static — fixed header (bearer / API key), sse + streamable-http</option>
@@ -580,6 +580,12 @@
     </main>
 
     {{template "pageFooter" .}}
+<script>
+    // #416 phase 3: this page's actions (web-ui-design.md, "C, phase 3"). Each
+    // calls its function at event time, so a script that defines it later
+    // (or again, after a swap) is the one that runs.
+    Vornik.action('mcpAuthModeChanged', (el) => window.mcpAuthModeChanged(el.value));
+    </script>
 </body>
 </html>
 {{end}}

@@ -32,21 +32,21 @@ func TestTier3SubstringSearch_GatesOnPublishedLifecycle(t *testing.T) {
 		{
 			name: "substringSearch",
 			call: func(r *Repository) error {
-				_, err := r.substringSearch(context.Background(), "p1", "needle", 10, "", false)
+				_, err := r.substringSearch(context.Background(), "p1", "needle", 10, ScopeFilter{RepoScope: "", Strict: false})
 				return err
 			},
 		},
 		{
 			name: "substringSearchTemporal",
 			call: func(r *Repository) error {
-				_, err := r.substringSearchTemporal(context.Background(), "p1", "needle", 10, time.Time{}, time.Time{}, "", false)
+				_, err := r.substringSearchTemporal(context.Background(), "p1", "needle", 10, time.Time{}, time.Time{}, ScopeFilter{RepoScope: "", Strict: false})
 				return err
 			},
 		},
 		{
 			name: "substringSearchWithEpochsTemporal",
 			call: func(r *Repository) error {
-				_, err := r.substringSearchWithEpochsTemporal(context.Background(), "p1", "needle", 10, []string{"e1"}, time.Time{}, time.Time{}, "", false)
+				_, err := r.substringSearchWithEpochsTemporal(context.Background(), "p1", "needle", 10, []string{"e1"}, time.Time{}, time.Time{}, ScopeFilter{RepoScope: "", Strict: false})
 				return err
 			},
 		},

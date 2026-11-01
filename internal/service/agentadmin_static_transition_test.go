@@ -39,7 +39,7 @@ func TestAgentAccount_StaticSuspendsHiddenNamespace(t *testing.T) {
 	ctx := context.Background()
 	// Foreign grants are real persisted rows, copied from the valid seed.
 	for _, item := range []struct{ id, ns string }{{"static-operator", ""}, {"static-foreign", "other-agent"}} {
-		_, err := f.c.DB.ExecContext(ctx, `INSERT INTO broker_standing_grants SELECT ?, project_id, ?, workflow_id, action, key_paths, key_values, key_hash, max_uses, uses_left, expires_at, created_at, created_by, seed_action_id, reach_hash_at_creation, active, paused, suspended_at, revoked_at, digest_through, account_label, account_identity FROM broker_standing_grants WHERE id=?`, item.id, item.ns, gs[0].ID)
+		_, err := f.c.DB.ExecContext(ctx, `INSERT INTO broker_standing_grants SELECT ?, project_id, ?, workflow_id, action, key_paths, key_values, key_hash, max_uses, uses_left, expires_at, created_at, created_by, seed_action_id, reach_hash_at_creation, active, paused, suspended_at, revoked_at, digest_through, account_label, account_identity, key_version FROM broker_standing_grants WHERE id=?`, item.id, item.ns, gs[0].ID)
 		if err != nil {
 			t.Fatal(err)
 		}

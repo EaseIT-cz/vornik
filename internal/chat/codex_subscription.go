@@ -108,7 +108,7 @@ func NewCodexSubscriptionClient(model string, opts ...CodexSubscriptionOption) *
 	}
 	c := &CodexSubscriptionClient{
 		auth:    newCodexAuthManager(""),
-		http:    &http.Client{Timeout: 0, Transport: sharedHTTPTransport()}, // we enforce timeout via ctx below
+		http:    newChatHTTPClient(0), // we enforce timeout via ctx below
 		model:   model,
 		logger:  zerolog.Nop(),
 		timeout: DefaultTimeout,

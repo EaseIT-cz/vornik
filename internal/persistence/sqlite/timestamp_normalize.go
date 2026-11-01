@@ -25,6 +25,7 @@ var timestampExtraColumns = map[string]bool{
 	"approver_devices.share_until":              true,
 	"cluster_nodes.last_seen":                   true,
 	"cost_tuning_canaries.window_until":         true,
+	"data_subject_escalations.deadline":         true,
 	"project_memory_chunks.event_time":          true,
 }
 

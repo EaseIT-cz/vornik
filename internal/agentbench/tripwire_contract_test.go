@@ -45,6 +45,7 @@ func TestTripwireDecision_SucceededTaskWithUnmetContractIsNotAPass(t *testing.T)
 		t.Fatal("a tripwire whose declared contract went unmet must not pass — task status " +
 			"can be manufactured by a recovery path, which is exactly how dev-pipeline " +
 			"scored 3/3 with its verifier failing every attempt")
+		return // t.Fatal does not return; this tells staticcheck (SA5011) too
 	}
 	if !strings.Contains(got.Reason, "tw-pipeline") {
 		t.Errorf("the refusal must name the tripwire, got %q", got.Reason)

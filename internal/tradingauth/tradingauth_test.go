@@ -28,7 +28,7 @@ func newSignedRequest(t *testing.T, signer *Signer, body string, now time.Time) 
 }
 
 func TestSignVerifyRoundTrip(t *testing.T) {
-	v := NewVerifier(testSecret, DefaultClockSkew)
+	v := testVerifier(DefaultClockSkew)
 	s := NewSigner(testSecret)
 	now := time.Unix(1_700_000_000, 0)
 
@@ -39,7 +39,7 @@ func TestSignVerifyRoundTrip(t *testing.T) {
 }
 
 func TestVerifyMissingHeaders(t *testing.T) {
-	v := NewVerifier(testSecret, DefaultClockSkew)
+	v := testVerifier(DefaultClockSkew)
 	now := time.Unix(1_700_000_000, 0)
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/internal/trading-orders", strings.NewReader("{}"))
 	if err := v.Verify(req, []byte("{}"), now); err == nil {
@@ -48,7 +48,7 @@ func TestVerifyMissingHeaders(t *testing.T) {
 }
 
 func TestVerifyForgedSignature(t *testing.T) {
-	v := NewVerifier(testSecret, DefaultClockSkew)
+	v := testVerifier(DefaultClockSkew)
 	s := NewSigner(testSecret)
 	now := time.Unix(1_700_000_000, 0)
 	req := newSignedRequest(t, s, `{"id":"o1"}`, now)
@@ -65,7 +65,7 @@ func TestVerifyForgedSignature(t *testing.T) {
 }
 
 func TestVerifyWrongSecret(t *testing.T) {
-	v := NewVerifier(testSecret, DefaultClockSkew)
+	v := testVerifier(DefaultClockSkew)
 	s := NewSigner("a-different-secret-entirely-9876543210")
 	now := time.Unix(1_700_000_000, 0)
 	req := newSignedRequest(t, s, `{}`, now)
@@ -75,7 +75,7 @@ func TestVerifyWrongSecret(t *testing.T) {
 }
 
 func TestVerifyExpiredTimestamp(t *testing.T) {
-	v := NewVerifier(testSecret, 5*time.Minute)
+	v := testVerifier(5 * time.Minute)
 	s := NewSigner(testSecret)
 	signedAt := time.Unix(1_700_000_000, 0)
 	req := newSignedRequest(t, s, `{}`, signedAt)
@@ -90,7 +90,7 @@ func TestVerifyExpiredTimestamp(t *testing.T) {
 }
 
 func TestVerifyMalformedTimestamp(t *testing.T) {
-	v := NewVerifier(testSecret, DefaultClockSkew)
+	v := testVerifier(DefaultClockSkew)
 	s := NewSigner(testSecret)
 	now := time.Unix(1_700_000_000, 0)
 	req := newSignedRequest(t, s, `{}`, now)
@@ -101,7 +101,7 @@ func TestVerifyMalformedTimestamp(t *testing.T) {
 }
 
 func TestVerifyReplayRejected(t *testing.T) {
-	v := NewVerifier(testSecret, DefaultClockSkew)
+	v := testVerifier(DefaultClockSkew)
 	s := NewSigner(testSecret)
 	now := time.Unix(1_700_000_000, 0)
 	req := newSignedRequest(t, s, `{"id":"o1"}`, now)
@@ -116,7 +116,7 @@ func TestVerifyReplayRejected(t *testing.T) {
 }
 
 func TestVerifyDistinctNoncesAccepted(t *testing.T) {
-	v := NewVerifier(testSecret, DefaultClockSkew)
+	v := testVerifier(DefaultClockSkew)
 	s := NewSigner(testSecret)
 	now := time.Unix(1_700_000_000, 0)
 	for i := 0; i < 5; i++ {
@@ -128,7 +128,7 @@ func TestVerifyDistinctNoncesAccepted(t *testing.T) {
 }
 
 func TestVerifyMethodAndPathBound(t *testing.T) {
-	v := NewVerifier(testSecret, DefaultClockSkew)
+	v := testVerifier(DefaultClockSkew)
 	s := NewSigner(testSecret)
 	now := time.Unix(1_700_000_000, 0)
 	req := newSignedRequest(t, s, `{}`, now)
@@ -145,7 +145,7 @@ func TestNonceCacheEviction(t *testing.T) {
 	// can legitimately be reused (its timestamp would be stale anyway,
 	// so the freshness check is the real replay backstop past the
 	// window — this test pins that the cache itself prunes).
-	v := NewVerifier(testSecret, time.Minute)
+	v := testVerifier(time.Minute)
 	s := NewSigner(testSecret)
 	base := time.Unix(1_700_000_000, 0)
 	req := newSignedRequest(t, s, `{}`, base)
@@ -194,11 +194,11 @@ func TestVerifyErrorMessage(t *testing.T) {
 }
 
 func TestNewVerifierDefaultsClockSkew(t *testing.T) {
-	v := NewVerifier(testSecret, 0)
+	v := testVerifier(0)
 	if v.skew != DefaultClockSkew {
 		t.Fatalf("non-positive skew should default to %v, got %v", DefaultClockSkew, v.skew)
 	}
-	v2 := NewVerifier(testSecret, -time.Hour)
+	v2 := testVerifier(-time.Hour)
 	if v2.skew != DefaultClockSkew {
 		t.Fatalf("negative skew should default to %v, got %v", DefaultClockSkew, v2.skew)
 	}
@@ -216,4 +216,11 @@ func TestEmptySecretSignerNoop(t *testing.T) {
 	if req.Header.Get(HeaderSignature) != "" {
 		t.Error("empty-secret signer must not set a signature header")
 	}
+}
+
+// testVerifier starts at the Unix epoch, so these tests' fixed timestamps
+// are never "signed before this daemon started" (GitHub #444); that check
+// has its own tests in restart_replay_444_test.go.
+func testVerifier(skew time.Duration) *Verifier {
+	return NewVerifierAt(testSecret, skew, time.Unix(0, 0))
 }

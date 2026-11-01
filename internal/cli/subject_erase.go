@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 	"time"
@@ -171,6 +172,12 @@ func runSubjectErase(_ *cobra.Command, args []string) error {
 		fmt.Println("The request is left open: record the outcome with 'subject refuse' or close it once")
 		fmt.Println("the subject has been told what the search covered.")
 		return nil
+	}
+
+	// Before the confirmation: a plan that can leave the subject's data in
+	// other people's messages needs this request's assessment (#346 Q2).
+	if err := assessResidual(plan, subjectResidualAssessment, subjectAssessedBy, time.Now().UTC()); err != nil {
+		return err
 	}
 
 	if !subjectEraseYes {
@@ -377,20 +384,25 @@ func openErasureDeps(ctx context.Context) (*erasureDeps, func(), error) {
 // extraction storage directories, and the uploaded file itself. A plain row
 // delete would orphan every one of those while reporting success.
 func newSubjectExecutor(d *erasureDeps, requestID string) (*datasubject.Executor, error) {
-	redact, err := newRedactDeps(d.Cfg, d)
+	redact, rewriter, err := newRedactDeps(d.Cfg, d)
 	if err != nil {
 		// Configured but broken. Refuse rather than degrade every shared record to a
 		// deferral, which would read as a policy decision instead of a fault.
 		return nil, fmt.Errorf("wire redaction capability: %w", err)
 	}
-	if redact == nil {
+	if !rewriter {
 		fmt.Println("\nNOTE: no rewrite model is configured (chat.endpoint + chat.model, or " +
-			"--rewrite-model), so records shared with other people will be DEFERRED rather " +
-			"than redacted. They are listed in the report and stay un-erased.")
+			"--rewrite-model), so memory records shared with other people will be DEFERRED " +
+			"rather than redacted. They are listed in the report and stay un-erased. Shared " +
+			"conversation transcripts need no model and are handled.")
 	}
 	return &datasubject.Executor{
 		Redact: redact,
 		Rows:   d.Repo,
+		// Channel sessions are erased through the fence (slice 5d-2, art17
+		// redact design §15.18), and Telegram's named saves with them.
+		Sessions:      d.Repo.ChannelSessionEraser(),
+		TelegramSaves: telegramSavesFor(d.Cfg),
 		Artifacts: cascadeEraser{svc: &erasure.Service{
 			Docs:      postgres.NewExtractedDocumentRepository(d.DB),
 			Chunks:    memory.NewRepository(d.DB),
@@ -429,4 +441,35 @@ func buildErasurePlan(
 	}
 	sort.Strings(methodList)
 	return datasubject.PlanErasure(req, items, methodList)
+}
+
+// telegramSavesFor locates the Telegram bot's named saves from the same
+// config the daemon reads (§15.18.1); nil when the bot keeps no files.
+func telegramSavesFor(cfg *config.Config) *datasubject.TelegramSaves {
+	if cfg == nil || strings.TrimSpace(cfg.Telegram.SessionPath) == "" {
+		return nil
+	}
+	return &datasubject.TelegramSaves{Root: filepath.Dir(cfg.Telegram.SessionPath)}
+}
+
+// assessResidual records the operator's per-request assessment of the
+// residual (#346 Q2, art17 redact design §15.19): what remains of the subject
+// inside other participants' messages after a shared transcript is redacted
+// is kept only on a ground assessed for this request, never automatically.
+// The ground is the deployer's own; the error suggests the EU one.
+func assessResidual(plan *datasubject.ErasurePlan, text, by string, now time.Time) error {
+	if !plan.MayLeaveResidual() {
+		return nil
+	}
+	text, by = strings.TrimSpace(text), strings.TrimSpace(by)
+	if text == "" || by == "" {
+		return fmt.Errorf("this erasure redacts shared conversations, so what remains of the subject in other " +
+			"people's messages (quotes, context) is kept only on a ground you assess for this request.\n" +
+			"Pass --residual-assessment \"<ground and reasoning>\" and --assessed-by <who>, for example:\n" +
+			"  --residual-assessment \"GDPR Art 17(3)(a): the other participants' freedom of expression in their " +
+			"own recorded speech; the subject's own messages removed and identifiers masked\" --assessed-by <you>\n" +
+			"Add your national basis where one applies. Both are recorded in the request report")
+	}
+	plan.ResidualAssessment = &datasubject.ResidualAssessment{Text: text, By: by, At: now}
+	return nil
 }

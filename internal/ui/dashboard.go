@@ -258,6 +258,7 @@ func (s *Server) Dashboard(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, "/ui/setup", http.StatusFound)
 		return
 	}
+	// GitHub #560 (M1b B2b): tenant_admin passes this check on purpose: the owner gets the admin's dashboard.
 	if api.SessionRoleFromContext(r.Context()) == auth.RoleUser {
 		// Project-scoped users get the operator dashboard's instance-wide
 		// aggregates gated away, so land them on the Outcome Inbox (task

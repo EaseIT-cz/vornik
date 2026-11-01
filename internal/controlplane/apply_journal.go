@@ -10,6 +10,7 @@ import (
 	"sort"
 	"strings"
 	"time"
+	"vornik.io/vornik/internal/configlock"
 
 	"vornik.io/vornik/internal/leaderelection"
 	"vornik.io/vornik/internal/persistence"
@@ -660,10 +661,11 @@ func (e *ApplyEngine) Reconcile(ctx context.Context) error {
 	}
 	// Recovery writes files, so it takes the process-wide writer lock too
 	// (CA-06) — a reconcile racing an apply is the same hazard.
-	if !configWriteMu.TryLock() {
+	unlockConfig, ok := configlock.TryLock()
+	if !ok {
 		return ErrApplyInProgress
 	}
-	defer configWriteMu.Unlock()
+	defer unlockConfig()
 	if !e.mu.TryLock() {
 		return ErrApplyInProgress
 	}

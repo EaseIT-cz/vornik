@@ -212,10 +212,11 @@ RUN mkdir -p /home/vornik/go/pkg/mod /home/vornik/.cache/go-build \
  && chmod 1777 /home/vornik /home/vornik/go /home/vornik/go/pkg /home/vornik/go/pkg/mod \
                /home/vornik/.cache /home/vornik/.cache/go-build
 
-COPY --chown=vornik:vornik images/vornik-agent/entrypoint.sh /entrypoint.sh
+# Root-owned, so an agent cannot rewrite the script that drives its own
+# container, whatever the read-only-root setting (GitHub #569 R6).
+COPY --chown=root:root --chmod=0755 images/vornik-agent/entrypoint.sh /entrypoint.sh
 # The generated tool registry the entrypoint sources (internal/agenttools -> docs-gen tools).
-COPY --chown=vornik:vornik images/vornik-agent/tool_registry.generated.sh /tool_registry.generated.sh
-RUN chmod +x /entrypoint.sh
+COPY --chown=root:root --chmod=0644 images/vornik-agent/tool_registry.generated.sh /tool_registry.generated.sh
 
 # Declares that this image works as ANY uid (the 1777 paths above), so the
 # daemon's agent_image_uid doctor check can answer without starting a

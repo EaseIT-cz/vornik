@@ -1,10 +1,14 @@
 package service
 
 import (
+	"context"
+	"encoding/json"
 	"os"
 	"strings"
+	"time"
 
 	"vornik.io/vornik/internal/config"
+	"vornik.io/vornik/internal/persistence"
 	"vornik.io/vornik/internal/sandboxtool"
 	"vornik.io/vornik/internal/voice"
 )
@@ -78,6 +82,7 @@ func (c *Container) initVoice() error {
 		probeTTS(c, c.Config.Voice.TTS)
 	}
 	c.voiceTTS = tts
+	c.resolveSyntheticVoice(context.Background())
 
 	if c.voiceSTT != nil || c.voiceTTS != nil {
 		c.Logger.Info().
@@ -192,5 +197,41 @@ func probeModel(c *Container, label, path string) {
 			Err(err).
 			Str("path", path).
 			Msgf("voice: %s model stat failed", label)
+	}
+}
+
+// syntheticVoiceAcceptedAction is the admin-audit action recording that an
+// operator accepted single-layer marking for synthetic voice replies.
+const syntheticVoiceAcceptedAction = "synthetic_voice.accepted"
+
+// resolveSyntheticVoice decides once, at startup, whether channels may answer
+// with synthesised speech (GitHub #543; Art 50 disclosure design §13). Off
+// unless voice.synthetic_replies is accepted with its acknowledgement and
+// basis; a request without them is ignored and the warning logged once. An
+// accepted state is written to the admin audit as evidence.
+func (c *Container) resolveSyntheticVoice(ctx context.Context) {
+	v := c.Config.Voice
+	accepted, warning := voice.ResolveSyntheticReplies(v.SyntheticReplies, v.SyntheticRepliesAck, v.SyntheticRepliesAckBasis)
+	if warning != "" {
+		c.Logger.Warn().Msg(warning)
+	}
+	c.syntheticVoice = accepted && c.voiceTTS != nil
+	if !c.syntheticVoice {
+		return
+	}
+	c.Logger.Warn().Str("basis", v.SyntheticRepliesAckBasis).
+		Msg("voice: synthetic voice replies are on with single-layer marking (metadata and ledger only, no audio watermark), as accepted")
+	if c.repos == nil || c.repos.AdminAudit == nil {
+		return
+	}
+	after, _ := json.Marshal(map[string]string{
+		"basis":   v.SyntheticRepliesAckBasis,
+		"marking": "metadata and ledger only; no audio watermark",
+	})
+	if err := c.repos.AdminAudit.Insert(ctx, &persistence.AdminAuditEntry{
+		ID: persistence.GenerateID("admaud"), Timestamp: time.Now().UTC(),
+		Principal: "config", Source: "daemon", Action: syntheticVoiceAcceptedAction, Target: "voice.synthetic_replies", After: string(after),
+	}); err != nil {
+		c.Logger.Error().Err(err).Msg("voice: the acceptance of synthetic voice replies could not be written to the admin audit")
 	}
 }

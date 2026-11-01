@@ -1,6 +1,9 @@
 package datasubject
 
-import "fmt"
+import (
+	"fmt"
+	"time"
+)
 
 // Art 17 erasure — the decision layer (design §4.6, §5.3).
 //
@@ -188,6 +191,41 @@ type ErasurePlan struct {
 	// Limitations is the honest statement of coverage. Erasure over free text is
 	// best-effort and the report must say so.
 	Limitations []string `json:"limitations"`
+
+	// ResidualAssessment is the operator's per-request assessment of why what
+	// remains of the subject in other people's messages is kept (#346 Q2).
+	// Required before executing a plan that MayLeaveResidual.
+	ResidualAssessment *ResidualAssessment `json:"residual_assessment,omitempty"`
+}
+
+// ResidualAssessment records who assessed the residual, when, and on which
+// ground. The ground is the deployer's: the product names none for them.
+type ResidualAssessment struct {
+	Text string    `json:"text"`
+	By   string    `json:"by"`
+	At   time.Time `json:"at"`
+}
+
+// MayLeaveResidual reports whether executing the plan can leave the subject's
+// data inside other participants' messages: a redaction of a shared
+// transcript row, or of a channel session whose entries are attributed (an
+// unattributed one is deleted). A bare legacy session id counts, since its
+// kind is unknown until it is loaded.
+func (p *ErasurePlan) MayLeaveResidual() bool {
+	for _, a := range p.Actions {
+		if a.Disposition != DispositionRedact {
+			continue
+		}
+		switch a.Table {
+		case TableChatAuditLog, TableTaskMessages:
+			return true
+		case TableChannelSessions:
+			if kind, _, err := ParseChannelSessionRowID(a.RowID); err != nil || ChannelSessionAttributed(kind) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // DeleteCount is how many rows the plan deletes.

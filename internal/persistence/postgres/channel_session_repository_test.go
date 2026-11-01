@@ -23,8 +23,8 @@ func TestChannelSession_Load_Found(t *testing.T) {
 	now := time.Date(2026, 5, 23, 16, 0, 0, 0, time.UTC)
 	mock.ExpectQuery(regexp.QuoteMeta("SELECT kind, session_id")).
 		WithArgs("webchat", "sess-1").
-		WillReturnRows(sqlmock.NewRows([]string{"kind", "session_id", "active_project", "history", "created_at", "updated_at", "expires_at"}).
-			AddRow("webchat", "sess-1", "proj-x", historyBytes, now, now, nil))
+		WillReturnRows(sqlmock.NewRows([]string{"kind", "session_id", "active_project", "history", "created_at", "updated_at", "expires_at", "version"}).
+			AddRow("webchat", "sess-1", "proj-x", historyBytes, now, now, nil, int64(7)))
 
 	got, err := repo.Load(context.Background(), "webchat", "sess-1")
 	if err != nil {
@@ -47,7 +47,7 @@ func TestChannelSession_Load_NotFound(t *testing.T) {
 
 	mock.ExpectQuery(regexp.QuoteMeta("SELECT kind, session_id")).
 		WithArgs("webchat", "missing").
-		WillReturnRows(sqlmock.NewRows([]string{"kind", "session_id", "active_project", "history", "created_at", "updated_at", "expires_at"}))
+		WillReturnRows(sqlmock.NewRows([]string{"kind", "session_id", "active_project", "history", "created_at", "updated_at", "expires_at", "version"}))
 
 	_, err := repo.Load(context.Background(), "webchat", "missing")
 	if !errors.Is(err, persistence.ErrNotFound) {
@@ -70,21 +70,38 @@ func TestChannelSession_Load_RequiresKindSessionID(t *testing.T) {
 	}
 }
 
-// TestChannelSession_Save_UpsertsRow: the ON CONFLICT upsert is
-// the post-turn write-through path. Bind args verify the exact
-// kind / session_id / active_project / history payload land in
-// the query as sent.
-func TestChannelSession_Save_UpsertsRow(t *testing.T) {
+// TestChannelSession_SaveIfVersion_InsertsOnlyWhileAbsent: with no
+// expected version the write is an insert that does nothing on conflict
+// (art17 redact design §15.18). Bind args verify the payload lands as sent.
+func TestChannelSession_SaveIfVersion_InsertsOnlyWhileAbsent(t *testing.T) {
 	db, mock, cleanup := newMockDBTX(t)
 	defer cleanup()
 	repo := NewChannelSessionRepository(db)
 
-	mock.ExpectExec(regexp.QuoteMeta("INSERT INTO channel_sessions")).
+	mock.ExpectQuery(regexp.QuoteMeta("ON CONFLICT (kind, session_id) DO NOTHING")).
 		WithArgs("email", "thread-A", sqlmock.AnyArg(), []byte(`[{"r":1}]`)).
-		WillReturnResult(sqlmock.NewResult(0, 1))
+		WillReturnRows(sqlmock.NewRows([]string{"version"}).AddRow(int64(5)))
 
-	if err := repo.Save(context.Background(), "email", "thread-A", "proj-mail", []byte(`[{"r":1}]`)); err != nil {
-		t.Fatalf("Save: %v", err)
+	v, ok, err := repo.SaveIfVersion(context.Background(), "email", "thread-A", "proj-mail", []byte(`[{"r":1}]`), nil)
+	if err != nil || !ok || v != 5 {
+		t.Fatalf("SaveIfVersion = %d %v %v", v, ok, err)
+	}
+}
+
+// TestChannelSession_SaveIfVersion_RefusedWhenTheRowMoved: no row returned
+// by the guarded UPDATE is a refusal, not an error.
+func TestChannelSession_SaveIfVersion_RefusedWhenTheRowMoved(t *testing.T) {
+	db, mock, cleanup := newMockDBTX(t)
+	defer cleanup()
+	repo := NewChannelSessionRepository(db)
+
+	expect := int64(3)
+	mock.ExpectQuery(regexp.QuoteMeta("AND version = $5")).
+		WithArgs("slack", "t", sqlmock.AnyArg(), []byte(`[]`), expect).
+		WillReturnRows(sqlmock.NewRows([]string{"version"}))
+
+	if _, ok, err := repo.SaveIfVersion(context.Background(), "slack", "t", "p", []byte(`[]`), &expect); err != nil || ok {
+		t.Fatalf("moved row: ok=%v err=%v", ok, err)
 	}
 }
 
@@ -98,12 +115,12 @@ func TestChannelSession_Save_EmptyHistoryWritesEmptyArray(t *testing.T) {
 	defer cleanup()
 	repo := NewChannelSessionRepository(db)
 
-	mock.ExpectExec(regexp.QuoteMeta("INSERT INTO channel_sessions")).
+	mock.ExpectQuery(regexp.QuoteMeta("INSERT INTO channel_sessions")).
 		WithArgs("slack", "thread-empty", sqlmock.AnyArg(), []byte("[]")).
-		WillReturnResult(sqlmock.NewResult(0, 1))
+		WillReturnRows(sqlmock.NewRows([]string{"version"}).AddRow(int64(1)))
 
-	if err := repo.Save(context.Background(), "slack", "thread-empty", "proj", nil); err != nil {
-		t.Fatalf("Save: %v", err)
+	if _, _, err := repo.SaveIfVersion(context.Background(), "slack", "thread-empty", "proj", nil, nil); err != nil {
+		t.Fatalf("SaveIfVersion: %v", err)
 	}
 }
 

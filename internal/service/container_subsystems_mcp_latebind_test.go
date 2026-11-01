@@ -1,16 +1,19 @@
 package service
 
 import (
+	"bytes"
 	"context"
 	"testing"
 	"time"
 
 	"github.com/rs/zerolog"
 
+	"vornik.io/vornik/internal/agenttokens"
 	"vornik.io/vornik/internal/config"
 	"vornik.io/vornik/internal/mcpconnect"
 	"vornik.io/vornik/internal/persistence"
 	"vornik.io/vornik/internal/persistence/repotest"
+	"vornik.io/vornik/internal/secretstore"
 	"vornik.io/vornik/internal/storage"
 )
 
@@ -33,14 +36,42 @@ import (
 type stubTokens struct {
 	persistence.MCPOAuthTokenRepository
 	tok *persistence.MCPOAuthToken
+	// seal, when set, returns tok as a sealed row (GitHub #571: every row
+	// is sealed, and the wrapper refuses a plaintext one).
+	seal func(*persistence.MCPOAuthToken) *persistence.MCPOAuthToken
 }
 
-func (s *stubTokens) Get(_ context.Context, _, _ string) (*persistence.MCPOAuthToken, error) {
+func (s *stubTokens) Get(_ context.Context, _, _, _ string) (*persistence.MCPOAuthToken, error) {
 	if s.tok == nil {
 		return nil, persistence.ErrNotFound
 	}
 	cp := *s.tok
+	if s.seal != nil {
+		return s.seal(&cp), nil
+	}
 	return &cp, nil
+}
+
+// withTestSecretStore gives c a fixed secret store and returns a function that
+// seals a token row the way the production wrapper does (GitHub #571).
+func withTestSecretStore(t *testing.T, c *Container) func(*persistence.MCPOAuthToken) *persistence.MCPOAuthToken {
+	t.Helper()
+	st, err := secretstore.New(nil, bytes.Repeat([]byte{9}, 32))
+	if err != nil {
+		t.Fatal(err)
+	}
+	c.secretStoreMu.Lock()
+	c.secretStore, c.secretStoreLoaded = st, true
+	c.secretStoreMu.Unlock()
+	get := func() (agenttokens.Sealer, error) { return st, nil }
+	sealer := &agenttokens.Repo{ForWrite: get, ForRead: get}
+	return func(tok *persistence.MCPOAuthToken) *persistence.MCPOAuthToken {
+		out, err := sealer.PrepareSealedToken(tok)
+		if err != nil {
+			t.Fatalf("seal a test grant: %v", err)
+		}
+		return out
+	}
 }
 
 // A double that disagrees with production about what ABSENCE looks like
@@ -53,7 +84,7 @@ func TestStubTokensHonoursTheMissContract(t *testing.T) {
 	s := &stubTokens{}
 	repotest.AssertMissRepo(t, "MCPOAuthTokenRepository.Get",
 		func(ctx context.Context, id string) (*persistence.MCPOAuthToken, error) {
-			return s.Get(ctx, "", id)
+			return s.Get(ctx, "", id, "")
 		})
 }
 
@@ -63,8 +94,10 @@ func containerWithGrant(t *testing.T, tok *persistence.MCPOAuthToken) *Container
 		Logger:   zerolog.Nop(),
 		Registry: writeMCPInheritFixture(t, oauthProjectYAML),
 		Config:   &config.Config{},
-		repos:    &storage.Repositories{MCPOAuthTokens: &stubTokens{tok: tok}},
 	}
+	stub := &stubTokens{tok: tok}
+	c.repos = &storage.Repositories{MCPOAuthTokens: stub}
+	stub.seal = withTestSecretStore(t, c)
 	return c
 }
 

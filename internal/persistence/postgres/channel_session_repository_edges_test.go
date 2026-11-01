@@ -46,10 +46,10 @@ func TestChannelSession_Save_RequiresArgs(t *testing.T) {
 	defer cleanup()
 	repo := NewChannelSessionRepository(db)
 
-	if err := repo.Save(context.Background(), "", "s", "p", []byte(`[]`)); err == nil {
+	if _, _, err := repo.SaveIfVersion(context.Background(), "", "s", "p", []byte(`[]`), nil); err == nil {
 		t.Errorf("empty kind should error")
 	}
-	if err := repo.Save(context.Background(), "k", "", "p", []byte(`[]`)); err == nil {
+	if _, _, err := repo.SaveIfVersion(context.Background(), "k", "", "p", []byte(`[]`), nil); err == nil {
 		t.Errorf("empty sessionID should error")
 	}
 }
@@ -61,10 +61,10 @@ func TestChannelSession_Save_DriverError(t *testing.T) {
 	defer cleanup()
 	repo := NewChannelSessionRepository(db)
 
-	mock.ExpectExec(regexp.QuoteMeta("INSERT INTO channel_sessions")).
+	mock.ExpectQuery(regexp.QuoteMeta("INSERT INTO channel_sessions")).
 		WillReturnError(sql.ErrConnDone)
 
-	if err := repo.Save(context.Background(), "webchat", "abc", "proj", []byte(`[]`)); err == nil {
+	if _, _, err := repo.SaveIfVersion(context.Background(), "webchat", "abc", "proj", []byte(`[]`), nil); err == nil {
 		t.Errorf("driver error should propagate")
 	}
 }

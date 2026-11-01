@@ -530,7 +530,7 @@ func (s *Server) renderFixItTranscript(w http.ResponseWriter, data FixItPanelDat
 // to — duplicated here (rather than importing internal/fixitdoctor's
 // Turn type) so the UI package's transcript decode stays a pure,
 // dependency-free JSON projection, the same pattern
-// resumeTranscriptJSON uses for the project wizard.
+// resumeTranscript uses for the project wizard.
 type fixItTranscriptTurn struct {
 	Role      string `json:"role"`
 	Content   string `json:"content"`

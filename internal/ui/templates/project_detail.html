@@ -930,7 +930,7 @@
                 <div class="border-t border-surface-600/60">
                 <div id="wf-canvas-{{.WorkflowID}}" class="relative overflow-x-auto bg-surface-900 rounded-b-xl" style="min-height:200px"></div>
                 </div>
-                <script>renderWorkflowGraph(document.getElementById("wf-canvas-{{.WorkflowID}}"), {{toJSON .Workflow}});</script>
+                <script type="application/json" data-wf-graph="wf-canvas-{{.WorkflowID}}">{{.Workflow}}</script>
                 {{end}}
             </details>
             {{end}}
@@ -1523,6 +1523,16 @@
     </main>
 
     {{template "pageFooter" .}}
+<script>
+    // #416 phase 5: each workflow graph's data is a JSON block next to its
+    // canvas; this constant script draws them all. A block that does not
+    // parse leaves its own canvas empty, not the graphs after it.
+    document.querySelectorAll('script[type="application/json"][data-wf-graph]').forEach(function (d) {
+        let wf;
+        try { wf = JSON.parse(d.textContent); } catch (e) { console.error('workflow graph data', d.dataset.wfGraph, e); return; }
+        renderWorkflowGraph(document.getElementById(d.dataset.wfGraph), wf);
+    });
+    </script>
 </body>
 </html>
 {{end}}

@@ -1720,6 +1720,59 @@ RETURNING id`, projectID, contentHash, producerRole).Scan(&id)
 // Lifted into one place because five queries share the clause and
 // drift between them would be invisible. The unit test
 // TestScopeFilterSQL_StrictVsLenient pins both forms.
+// Authority values for ScopeFilter.Authority (#550; design
+// 2026-10-25-architect-expert-design.md §2.1 C1).
+const (
+	// AuthorityAny is today's behaviour: every live chunk is eligible.
+	AuthorityAny = ""
+	// AuthorityProvenance admits only chunks the daemon checked against the
+	// trusted branch: verified, with a provenance validator.
+	AuthorityProvenance = "provenance"
+)
+
+// ScopeFilter is what narrows a search beyond its project: the repo scope
+// (migration 75), whether NULL-scoped chunks leak through, and which stamps
+// count as authoritative.
+type ScopeFilter struct {
+	RepoScope string
+	Strict    bool
+	Authority string
+}
+
+// IsZero reports whether the filter narrows nothing, so a search may take
+// its unscoped statement.
+func (sf ScopeFilter) IsZero() bool { return sf.RepoScope == "" && sf.Authority == "" }
+
+// sql renders the filter's WHERE fragment, its repo-scope parameter at
+// paramIdx.
+//
+// The authority predicate names its columns unqualified: every search
+// statement reads one project_memory_chunks row source in the WHERE it lands
+// in (aliased c, or bare), so the names resolve to it. An authority this
+// build does not know admits nothing, never everything.
+func (sf ScopeFilter) sql(paramIdx int) string {
+	clause := scopeFilterSQL(sf.Strict, paramIdx)
+	switch sf.Authority {
+	case AuthorityAny:
+	case AuthorityProvenance:
+		// A provenance stamp names the repository it was checked against, so
+		// an authoritative chunk always carries a scope; requiring one here
+		// keeps that true for a chunk whose scope was retagged away after it
+		// verified, and makes lenient and strict scope agree (design §2.1 C1).
+		clause += " AND repo_scope IS NOT NULL AND validation_status = 'verified' AND validator_role IN ('" +
+			ValidatorRoleProvenance + "', '" + ValidatorRoleProvenanceForgeAPI + "')"
+	default:
+		clause += " AND FALSE"
+	}
+	return clause
+}
+
+// HybridSearchWithEpochs is HybridSearchWithEpochsFiltered with a scope and
+// no authority filter.
+func (r *Repository) HybridSearchWithEpochs(ctx context.Context, projectID string, queryVec []float32, queryText string, limit int, activeEpochs []string, epochsEnabled bool, fromDate, toDate time.Time, repoScope string, strictScope bool) ([]SearchResult, error) {
+	return r.HybridSearchWithEpochsFiltered(ctx, projectID, queryVec, queryText, limit, activeEpochs, epochsEnabled, fromDate, toDate, ScopeFilter{RepoScope: repoScope, Strict: strictScope})
+}
+
 func scopeFilterSQL(strict bool, paramIdx int) string {
 	if strict {
 		return fmt.Sprintf("AND ($%d::text IS NULL OR repo_scope = $%d OR repo_scope = '*')", paramIdx, paramIdx)
@@ -1978,18 +2031,32 @@ ORDER BY score DESC, c.id LIMIT $3`
 
 // hybridSearchTemporal is the no-epoch sibling of HybridSearchWithEpochs;
 // it shares the repo_scope filter contract (migration 75) on $7.
-func (r *Repository) hybridSearchTemporal(ctx context.Context, projectID string, queryVec []float32, queryText string, limit int, fromDate, toDate time.Time, repoScope string, strictScope bool) ([]SearchResult, error) {
-	if fromDate.IsZero() && toDate.IsZero() && repoScope == "" {
+func (r *Repository) hybridSearchTemporal(ctx context.Context, projectID string, queryVec []float32, queryText string, limit int, fromDate, toDate time.Time, sf ScopeFilter) ([]SearchResult, error) {
+	if fromDate.IsZero() && toDate.IsZero() && sf.IsZero() {
 		return r.HybridSearch(ctx, projectID, queryVec, queryText, limit)
 	}
 	if !r.pgvectorAvailable(ctx) || len(queryVec) == 0 {
-		return r.keywordSearchTemporal(ctx, projectID, queryText, limit, fromDate, toDate, repoScope, strictScope)
+		return r.keywordSearchTemporal(ctx, projectID, queryText, limit, fromDate, toDate, sf)
 	}
 
 	vecLit := vectorLiteral(queryVec)
 	relaxedQueryText := relaxedFTSQueryText(queryText)
-	scopeClause := scopeFilterSQL(strictScope, 7)
-	query := fmt.Sprintf(`
+	scopeClause := sf.sql(7)
+	query := r.hybridSearchTemporalSQL(projectID, scopeClause)
+
+	rows, err := r.db.QueryContext(ctx, query, projectID, queryText, overFetchLimit(limit, r.recency), vecLit, nullableTime(fromDate), nullableTime(toDate), nullableString(sf.RepoScope), relaxedQueryText)
+	if err != nil {
+		r.logSearchDegrade(projectID, queryText, err, false, queryVec, "keyword")
+		return r.keywordSearchTemporal(ctx, projectID, queryText, limit, fromDate, toDate, sf)
+	}
+	defer func() { _ = rows.Close() }()
+
+	return r.finishSearch(rows, projectID, limit)
+}
+
+// hybridSearchTemporalSQL is hybridSearchTemporal's statement; scopeClause is its scope and authority fragment, parameter $7 (extracted so the search function stays within funlen, #550).
+func (r *Repository) hybridSearchTemporalSQL(projectID, scopeClause string) string {
+	return fmt.Sprintf(`
 WITH q AS (
     SELECT websearch_to_tsquery('vornik_english', $2) AS strict_q,
            websearch_to_tsquery('vornik_english', $8) AS relaxed_q
@@ -2053,15 +2120,6 @@ LEFT JOIN semantic s ON s.id = c.id
 LEFT JOIN keyword  k ON k.id = c.id
 WHERE s.id IS NOT NULL OR k.id IS NOT NULL
 ORDER BY score DESC, c.id LIMIT $3`, scopeClause)
-
-	rows, err := r.db.QueryContext(ctx, query, projectID, queryText, overFetchLimit(limit, r.recency), vecLit, nullableTime(fromDate), nullableTime(toDate), nullableString(repoScope), relaxedQueryText)
-	if err != nil {
-		r.logSearchDegrade(projectID, queryText, err, false, queryVec, "keyword")
-		return r.keywordSearchTemporal(ctx, projectID, queryText, limit, fromDate, toDate, repoScope, strictScope)
-	}
-	defer func() { _ = rows.Close() }()
-
-	return r.finishSearch(rows, projectID, limit)
 }
 
 // HybridSearchWithEpochs is the Phase-3 epoch-aware search. When
@@ -2076,12 +2134,12 @@ ORDER BY score DESC, c.id LIMIT $3`, scopeClause)
 // indefinitely until operators retire them. The lifecycle +
 // validation filter excludes work-in-progress and rolled-back
 // chunks.
-func (r *Repository) HybridSearchWithEpochs(ctx context.Context, projectID string, queryVec []float32, queryText string, limit int, activeEpochs []string, epochsEnabled bool, fromDate, toDate time.Time, repoScope string, strictScope bool) ([]SearchResult, error) {
+func (r *Repository) HybridSearchWithEpochsFiltered(ctx context.Context, projectID string, queryVec []float32, queryText string, limit int, activeEpochs []string, epochsEnabled bool, fromDate, toDate time.Time, sf ScopeFilter) ([]SearchResult, error) {
 	if !epochsEnabled {
-		return r.hybridSearchTemporal(ctx, projectID, queryVec, queryText, limit, fromDate, toDate, repoScope, strictScope)
+		return r.hybridSearchTemporal(ctx, projectID, queryVec, queryText, limit, fromDate, toDate, sf)
 	}
 	if !r.pgvectorAvailable(ctx) || len(queryVec) == 0 {
-		return r.keywordSearchWithEpochsTemporal(ctx, projectID, queryText, limit, activeEpochs, fromDate, toDate, repoScope, strictScope)
+		return r.keywordSearchWithEpochsTemporal(ctx, projectID, queryText, limit, activeEpochs, fromDate, toDate, sf)
 	}
 
 	vecLit := vectorLiteral(queryVec)
@@ -2100,9 +2158,22 @@ func (r *Repository) HybridSearchWithEpochs(ctx context.Context, projectID strin
 	// emits the canonical "$8 IS NULL OR exact match OR '*'" clause,
 	// optionally extended with the legacy "OR IS NULL" leak-through.
 	// See its doc for the strict-vs-lenient contract.
-	scopeClause := scopeFilterSQL(strictScope, 8)
+	scopeClause := sf.sql(8)
 	relaxedQueryText := relaxedFTSQueryText(queryText)
-	query := fmt.Sprintf(`
+	query := r.hybridSearchWithEpochsSQL(projectID, scopeClause)
+
+	rows, err := r.db.QueryContext(ctx, query, projectID, queryText, overFetchLimit(limit, r.recency), vecLit, pqStringArray(activeEpochs), nullableTime(fromDate), nullableTime(toDate), nullableString(sf.RepoScope), relaxedQueryText)
+	if err != nil {
+		r.logSearchDegrade(projectID, queryText, err, epochsEnabled, queryVec, "keyword")
+		return r.keywordSearchWithEpochsTemporal(ctx, projectID, queryText, limit, activeEpochs, fromDate, toDate, sf)
+	}
+	defer func() { _ = rows.Close() }()
+	return r.finishSearch(rows, projectID, limit)
+}
+
+// hybridSearchWithEpochsSQL is HybridSearchWithEpochsFiltered's statement; scopeClause is its scope and authority fragment, parameter $8 (extracted so the search function stays within funlen, #550).
+func (r *Repository) hybridSearchWithEpochsSQL(projectID, scopeClause string) string {
+	return fmt.Sprintf(`
 WITH q AS (
     SELECT websearch_to_tsquery('vornik_english', $2) AS strict_q,
            websearch_to_tsquery('vornik_english', $9) AS relaxed_q
@@ -2170,14 +2241,6 @@ LEFT JOIN semantic s ON s.id = c.id
 LEFT JOIN keyword  k ON k.id = c.id
 WHERE s.id IS NOT NULL OR k.id IS NOT NULL
 ORDER BY score DESC, c.id LIMIT $3`, scopeClause)
-
-	rows, err := r.db.QueryContext(ctx, query, projectID, queryText, overFetchLimit(limit, r.recency), vecLit, pqStringArray(activeEpochs), nullableTime(fromDate), nullableTime(toDate), nullableString(repoScope), relaxedQueryText)
-	if err != nil {
-		r.logSearchDegrade(projectID, queryText, err, epochsEnabled, queryVec, "keyword")
-		return r.keywordSearchWithEpochsTemporal(ctx, projectID, queryText, limit, activeEpochs, fromDate, toDate, repoScope, strictScope)
-	}
-	defer func() { _ = rows.Close() }()
-	return r.finishSearch(rows, projectID, limit)
 }
 
 // nullableTime returns nil for a zero time.Time so the
@@ -2199,10 +2262,10 @@ func (r *Repository) keywordSearchWithEpochs(ctx context.Context, projectID, que
 	// Legacy shim — no scope filter and lenient strict mode (the
 	// IS NULL leak-through is irrelevant here since repoScope is
 	// empty anyway, so the first OR catches everything).
-	return r.keywordSearchWithEpochsTemporal(ctx, projectID, queryText, limit, activeEpochs, time.Time{}, time.Time{}, "", false)
+	return r.keywordSearchWithEpochsTemporal(ctx, projectID, queryText, limit, activeEpochs, time.Time{}, time.Time{}, ScopeFilter{})
 }
 
-func (r *Repository) keywordSearchTemporal(ctx context.Context, projectID, queryText string, limit int, fromDate, toDate time.Time, repoScope string, strictScope bool) ([]SearchResult, error) {
+func (r *Repository) keywordSearchTemporal(ctx context.Context, projectID, queryText string, limit int, fromDate, toDate time.Time, sf ScopeFilter) ([]SearchResult, error) {
 	relaxedQueryText := relaxedFTSQueryText(queryText)
 	q := fmt.Sprintf(`
 WITH q AS (
@@ -2244,10 +2307,10 @@ WHERE c.project_id = $1 AND (c.tsv @@ q.strict_q OR c.tsv @@ q.relaxed_q)
   AND ($4::timestamptz IS NULL OR COALESCE(c.event_time, c.created_at) >= $4::timestamptz)
   AND ($5::timestamptz IS NULL OR COALESCE(c.event_time, c.created_at) <= $5::timestamptz)
   %s
-ORDER BY score DESC, c.id LIMIT $3`, strings.ReplaceAll(scopeFilterSQL(strictScope, 6), "repo_scope", "c.repo_scope"))
-	rows, err := r.db.QueryContext(ctx, q, projectID, queryText, limit, nullableTime(fromDate), nullableTime(toDate), nullableString(repoScope), relaxedQueryText)
+ORDER BY score DESC, c.id LIMIT $3`, strings.ReplaceAll(sf.sql(6), "repo_scope", "c.repo_scope"))
+	rows, err := r.db.QueryContext(ctx, q, projectID, queryText, limit, nullableTime(fromDate), nullableTime(toDate), nullableString(sf.RepoScope), relaxedQueryText)
 	if err != nil {
-		return r.substringSearchTemporal(ctx, projectID, queryText, limit, fromDate, toDate, repoScope, strictScope)
+		return r.substringSearchTemporal(ctx, projectID, queryText, limit, fromDate, toDate, sf)
 	}
 	defer func() { _ = rows.Close() }()
 	return r.finishSearch(rows, projectID, limit)
@@ -2257,7 +2320,7 @@ ORDER BY score DESC, c.id LIMIT $3`, strings.ReplaceAll(scopeFilterSQL(strictSco
 // the same created_at lower/upper bounds the hybrid query uses.
 // Zero time.Time on either side disables that bound — see
 // nullableTime() for the NULL-binding contract.
-func (r *Repository) keywordSearchWithEpochsTemporal(ctx context.Context, projectID, queryText string, limit int, activeEpochs []string, fromDate, toDate time.Time, repoScope string, strictScope bool) ([]SearchResult, error) {
+func (r *Repository) keywordSearchWithEpochsTemporal(ctx context.Context, projectID, queryText string, limit int, activeEpochs []string, fromDate, toDate time.Time, sf ScopeFilter) ([]SearchResult, error) {
 	relaxedQueryText := relaxedFTSQueryText(queryText)
 	q := fmt.Sprintf(`
 WITH q AS (
@@ -2301,10 +2364,10 @@ WHERE c.project_id = $1 AND (c.tsv @@ q.strict_q OR c.tsv @@ q.relaxed_q)
   AND ($5::timestamptz IS NULL OR COALESCE(c.event_time, c.created_at) >= $5::timestamptz)
   AND ($6::timestamptz IS NULL OR COALESCE(c.event_time, c.created_at) <= $6::timestamptz)
   %s
-ORDER BY score DESC, c.id LIMIT $3`, strings.ReplaceAll(scopeFilterSQL(strictScope, 7), "repo_scope", "c.repo_scope"))
-	rows, err := r.db.QueryContext(ctx, q, projectID, queryText, limit, pqStringArray(activeEpochs), nullableTime(fromDate), nullableTime(toDate), nullableString(repoScope), relaxedQueryText)
+ORDER BY score DESC, c.id LIMIT $3`, strings.ReplaceAll(sf.sql(7), "repo_scope", "c.repo_scope"))
+	rows, err := r.db.QueryContext(ctx, q, projectID, queryText, limit, pqStringArray(activeEpochs), nullableTime(fromDate), nullableTime(toDate), nullableString(sf.RepoScope), relaxedQueryText)
 	if err != nil {
-		return r.substringSearchWithEpochsTemporal(ctx, projectID, queryText, limit, activeEpochs, fromDate, toDate, repoScope, strictScope)
+		return r.substringSearchWithEpochsTemporal(ctx, projectID, queryText, limit, activeEpochs, fromDate, toDate, sf)
 	}
 	defer func() { _ = rows.Close() }()
 	return r.finishSearch(rows, projectID, limit)
@@ -2361,7 +2424,7 @@ ORDER BY score DESC, c.id LIMIT $3`
 		// in its own query) — preserve that by passing empty
 		// repoScope + lenient strictScope. Callers needing scope
 		// use the keywordSearchTemporal / *Epochs* variants.
-		return r.substringSearch(ctx, projectID, queryText, limit, "", false)
+		return r.substringSearch(ctx, projectID, queryText, limit, ScopeFilter{})
 	}
 	defer func() { _ = rows.Close() }()
 
@@ -2552,7 +2615,7 @@ LIMIT $2`
 // every row (wildcard injection in the tier-3 substring fallback).
 func escapeLikeWildcards(s string) string { return persistence.EscapeLike(s) }
 
-func (r *Repository) substringSearch(ctx context.Context, projectID, queryText string, limit int, repoScope string, strictScope bool) ([]SearchResult, error) {
+func (r *Repository) substringSearch(ctx context.Context, projectID, queryText string, limit int, sf ScopeFilter) ([]SearchResult, error) {
 	q := strings.TrimSpace(queryText)
 	if q == "" {
 		// An empty query under ILIKE matches every row — refuse so
@@ -2571,8 +2634,8 @@ WHERE c.project_id = $1 AND c.content ILIKE '%%' || $2 || '%%' ESCAPE '\'
   AND c.validation_status NOT IN ('refuted','superseded')
   AND `+r.expiryClause(projectID, "c.")+" AND "+persistence.ChunkNotRestrictedSQL("c.id")+`
   %s
-ORDER BY c.created_at DESC LIMIT $3`, strings.ReplaceAll(scopeFilterSQL(strictScope, 4), "repo_scope", "c.repo_scope"))
-	rows, err := r.db.QueryContext(ctx, sql, projectID, escapeLikeWildcards(q), limit, nullableString(repoScope))
+ORDER BY c.created_at DESC LIMIT $3`, strings.ReplaceAll(sf.sql(4), "repo_scope", "c.repo_scope"))
+	rows, err := r.db.QueryContext(ctx, sql, projectID, escapeLikeWildcards(q), limit, nullableString(sf.RepoScope))
 	if err != nil {
 		// True end of the line — the DB itself is unreachable.
 		// Return the error rather than a third nested fallback;
@@ -2583,7 +2646,7 @@ ORDER BY c.created_at DESC LIMIT $3`, strings.ReplaceAll(scopeFilterSQL(strictSc
 	return r.finishSearch(rows, projectID, limit)
 }
 
-func (r *Repository) substringSearchTemporal(ctx context.Context, projectID, queryText string, limit int, fromDate, toDate time.Time, repoScope string, strictScope bool) ([]SearchResult, error) {
+func (r *Repository) substringSearchTemporal(ctx context.Context, projectID, queryText string, limit int, fromDate, toDate time.Time, sf ScopeFilter) ([]SearchResult, error) {
 	q := strings.TrimSpace(queryText)
 	if q == "" {
 		return nil, nil
@@ -2602,8 +2665,8 @@ WHERE c.project_id = $1 AND c.content ILIKE '%%' || $2 || '%%' ESCAPE '\'
   AND ($4::timestamptz IS NULL OR COALESCE(c.event_time, c.created_at) >= $4::timestamptz)
   AND ($5::timestamptz IS NULL OR COALESCE(c.event_time, c.created_at) <= $5::timestamptz)
   %s
-ORDER BY c.created_at DESC LIMIT $3`, strings.ReplaceAll(scopeFilterSQL(strictScope, 6), "repo_scope", "c.repo_scope"))
-	rows, err := r.db.QueryContext(ctx, sql, projectID, escapeLikeWildcards(q), limit, nullableTime(fromDate), nullableTime(toDate), nullableString(repoScope))
+ORDER BY c.created_at DESC LIMIT $3`, strings.ReplaceAll(sf.sql(6), "repo_scope", "c.repo_scope"))
+	rows, err := r.db.QueryContext(ctx, sql, projectID, escapeLikeWildcards(q), limit, nullableTime(fromDate), nullableTime(toDate), nullableString(sf.RepoScope))
 	if err != nil {
 		return nil, fmt.Errorf("substring search temporal (tier-3 fallback): %w", err)
 	}
@@ -2611,7 +2674,7 @@ ORDER BY c.created_at DESC LIMIT $3`, strings.ReplaceAll(scopeFilterSQL(strictSc
 	return r.finishSearch(rows, projectID, limit)
 }
 
-func (r *Repository) substringSearchWithEpochsTemporal(ctx context.Context, projectID, queryText string, limit int, activeEpochs []string, fromDate, toDate time.Time, repoScope string, strictScope bool) ([]SearchResult, error) {
+func (r *Repository) substringSearchWithEpochsTemporal(ctx context.Context, projectID, queryText string, limit int, activeEpochs []string, fromDate, toDate time.Time, sf ScopeFilter) ([]SearchResult, error) {
 	q := strings.TrimSpace(queryText)
 	if q == "" {
 		return nil, nil
@@ -2631,8 +2694,8 @@ WHERE c.project_id = $1 AND c.content ILIKE '%%' || $2 || '%%' ESCAPE '\'
   AND ($5::timestamptz IS NULL OR COALESCE(c.event_time, c.created_at) >= $5::timestamptz)
   AND ($6::timestamptz IS NULL OR COALESCE(c.event_time, c.created_at) <= $6::timestamptz)
   %s
-ORDER BY c.created_at DESC LIMIT $3`, strings.ReplaceAll(scopeFilterSQL(strictScope, 7), "repo_scope", "c.repo_scope"))
-	rows, err := r.db.QueryContext(ctx, sql, projectID, escapeLikeWildcards(q), limit, pqStringArray(activeEpochs), nullableTime(fromDate), nullableTime(toDate), nullableString(repoScope))
+ORDER BY c.created_at DESC LIMIT $3`, strings.ReplaceAll(sf.sql(7), "repo_scope", "c.repo_scope"))
+	rows, err := r.db.QueryContext(ctx, sql, projectID, escapeLikeWildcards(q), limit, pqStringArray(activeEpochs), nullableTime(fromDate), nullableTime(toDate), nullableString(sf.RepoScope))
 	if err != nil {
 		return nil, fmt.Errorf("substring search epochs temporal (tier-3 fallback): %w", err)
 	}

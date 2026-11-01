@@ -174,6 +174,18 @@ func (c *Container) initHTTPServer() error {
 		api.WithSetupValidator(onboarding.NewChatValidator()),
 		api.WithSetupMemoryValidator(onboarding.NewMemoryValidator()),
 		api.WithSetupConfigPath(c.ConfigPath),
+		// The owner export (GitHub #581 D5): managed, with a backup bucket.
+		c.ownerExportOption(),
+		api.WithFirstValue(c.firstValueTracker()),
+		// Managed setup's issuer check (GitHub #582 P2), from the
+		// Enterprise identity provider; nil in Community, which leaves the
+		// operation answering 503.
+		func() api.ServerOption {
+			if c.providers.Identity == nil {
+				return api.WithIssuerProbe(nil)
+			}
+			return api.WithIssuerProbe(c.providers.Identity.IssuerProbe())
+		}(),
 		// Per-model modality declarations, so the Ollama-compat
 		// /api/show surface advertises the same judgement the media
 		// routing gate acts on. Validate() already rejected a bad
@@ -846,7 +858,8 @@ func (c *Container) initHTTPServer() error {
 		apiOpts = append(apiOpts, api.WithChainMetrics(c.chainMetrics))
 	}
 	if c.memoryManager != nil {
-		apiOpts = append(apiOpts, api.WithMemorySearcher(newMemorySearchAdapter(c.memoryManager.Searcher)))
+		apiOpts = append(apiOpts, api.WithMemorySearcher(newMemorySearchAdapter(c.memoryManager.Searcher, c.memoryManager.Repository())))
+		apiOpts = append(apiOpts, api.WithMemorySearchRolePolicy(c.memorySearchRolePolicy))
 		apiOpts = append(apiOpts, api.WithMemoryStats(newMemoryStatsAdapter(c.memoryManager)))
 		apiOpts = append(apiOpts, api.WithMemoryEmbedderReporter(newMemoryEmbedderAdapter(c.memoryManager)))
 		// Knowledge-skill dedup preflight (LLD §12.2). Reuses the memory
@@ -1090,6 +1103,12 @@ func (c *Container) initHTTPServer() error {
 	// works around a few lines further down; the API side had kept the eager
 	// call. Caught by the build_provenance doctor check on 2026-08-15.
 	apiOpts = append(apiOpts, api.WithBuildVersionFunc(c.Version))
+	// EU AI Act Art 50(2): the API marks the text it returns (GitHub #117).
+	apiOpts = append(apiOpts, api.WithAIMarker(c.aiMarker()))
+	// The public Art 50(2) detection routes read the same ledger (#117).
+	if c.repos != nil && c.repos.AIOutputMarks != nil {
+		apiOpts = append(apiOpts, api.WithAIMarkLedger(c.repos.AIOutputMarks))
+	}
 	// Workflow rollbacker — Slice 5 of the memetic-workflows arc.
 	// Mirror of the applier wiring; nil-safe at the endpoint.
 	workflowRollbacker := newWorkflowRollbacker(
@@ -1455,6 +1474,7 @@ func (c *Container) initHTTPServer() error {
 	}
 	if ghChannel != nil {
 		c.GitHubChannel = ghChannel
+		ghChannel.SetAIMarker(c.aiMarker()) // EU AI Act Art 50(2): channel replies (#117)
 		c.GitHubProjects = ghEnabledProjects
 		// Back-compat: GitHubProject mirrors the single-installation
 		// pin when exactly one project is configured. Multi-install
@@ -1526,6 +1546,7 @@ func (c *Container) initHTTPServer() error {
 		for i, ch := range emChannels {
 			p := emProjects[i]
 			ch.SetTaskTextScrubber(scrub)
+			ch.SetAIMarker(c.aiMarker()) // EU AI Act Art 50(2), rows 8-10 (GitHub #117)
 			c.Logger.Info().
 				Str("project_id", p.ID).
 				Str("imap_host", p.Email.IMAPHost).
@@ -1557,7 +1578,7 @@ func (c *Container) initHTTPServer() error {
 	if c.Registry != nil {
 		slackProjects = c.Registry.ListProjects()
 	}
-	skChannels, skProjects, err := buildSlackChannels(slackProjects, c.voiceSTT, c.voiceTTS, c.Logger)
+	skChannels, skProjects, err := buildSlackChannels(slackProjects, slack.VoiceProviders{STT: c.voiceSTT, TTS: c.voiceTTS, SyntheticReplies: c.syntheticVoice}, c.Logger)
 	if err != nil {
 		return fmt.Errorf("slack channel: %w", err)
 	}
@@ -1587,6 +1608,9 @@ func (c *Container) initHTTPServer() error {
 			}
 		}
 		c.SlackChannels = skChannels
+		for _, ch := range skChannels {
+			ch.SetAIMarker(c.aiMarker()) // EU AI Act Art 50(2), row 15 (GitHub #117)
+		}
 		c.SlackProjects = skProjects
 		muxLogger := c.Logger.With().Str("component", "slack_mux").Logger()
 		apiOpts = append(apiOpts, api.WithSlackWebhookHandler(
@@ -1718,6 +1742,7 @@ func (c *Container) initHTTPServer() error {
 			dh.SetWorkflowProposals(c.repos.WorkflowProposals)
 		}
 		dh.SetServerConfig(c.Config)
+		dh.SetAIMarker(c.aiMarker())
 		// model_route_coverage asks the live router, never a copy of its
 		// route table (model-route-coverage design, 2026-09-24; issue #61(b)).
 		// Requires initChat to have run: Container.Init calls initChat before
@@ -1868,6 +1893,7 @@ func (c *Container) initHTTPServer() error {
 		}
 		api.SetDoctorHandlers(dh)
 		doctorH = dh
+		c.doctorHandlers = dh
 	}
 	// Wire the support-report collectors now that the apiServer (and,
 	// when DB-backed, the doctor handler) exist — the doctor + health
@@ -1909,6 +1935,7 @@ func (c *Container) initHTTPServer() error {
 	uiOpts := []ui.ServerOption{
 		ui.WithLogger(c.Logger.With().Str("component", "ui").Logger()),
 		ui.WithVersionFunc(c.Version), // page-footer changelog link (lazy — SetVersion runs after this server is built)
+		ui.WithAIMarker(c.aiMarker()), // EU AI Act Art 50(2): web chat replies and downloads (GitHub #117)
 
 		ui.WithTaskRepository(c.repos.Tasks),
 		// Task 5.4: the Guided Integrations Hub's probe/save counters.
@@ -1927,7 +1954,7 @@ func (c *Container) initHTTPServer() error {
 		ui.WithUIRatingRollupRepository(c.repos.RatingRollup),
 		ui.WithExecutionQualityScoreRepository(c.repos.ExecutionQualityScores),
 		ui.WithArtifactRepository(c.repos.Artifacts),
-		ui.WithTaskCredentialRepository(c.repos.TaskCredentials),
+		ui.WithTaskCredentialRepository(c.sealedTaskCredentials()),
 		// Route UI blob reads (changelog inline render +
 		// /artifacts/{id} download) through the backend-aware
 		// Store. Without this, the S3 backend can't serve any
@@ -1967,6 +1994,9 @@ func (c *Container) initHTTPServer() error {
 		ui.WithControlPlaneConfigPath(c.ConfigPath),
 		ui.WithTradingSnapshotRepository(c.repos.TradingSnapshots),
 		ui.WithTradingOrderRepository(c.repos.TradingOrders),
+		ui.WithTradingBenchmarkRepository(c.repos.TradingBenchmarks),
+		ui.WithTradingFunnelRepository(c.repos.TradingFunnel),
+		ui.WithTradingShadowRepository(c.repos.TradingShadow),
 		ui.WithTradingSafetyRepository(c.repos.TradingSafetyEvents),
 		ui.WithTradingFillRepository(c.repos.TradingFills),
 		ui.WithPostMortemRepository(c.repos.PostMortems),
@@ -2537,6 +2567,9 @@ func (c *Container) initHTTPServer() error {
 		)
 	}
 
+	// GitHub #560 (M1c D3): the key login is offered on the operations
+	// listener only in managed hosting.
+	uiOpts = append(uiOpts, ui.WithManagedHosting(c.Config.Hosting.Managed()))
 	if c.capabilities().ServeUI {
 		uiServer := ui.NewServer(uiOpts...)
 		// Task 3.4: stored so the Fix-It Doctor's IntegrationProbeProvider/
@@ -2689,21 +2722,16 @@ func (c *Container) initHTTPServer() error {
 	if err != nil {
 		return err
 	}
-	server := &http.Server{
-		Addr:              c.Config.Server.Address,
-		Handler:           rootHandler,
-		ReadTimeout:       readTimeout,
-		ReadHeaderTimeout: 10 * time.Second,
-		WriteTimeout:      writeTimeout,
-		IdleTimeout:       60 * time.Second,
-	}
-	c.HTTPServer = server
+	c.HTTPServer = c.newPublicServer(rootHandler, readTimeout, writeTimeout)
 
 	// The daemon unix socket gets its own server serving only the agent
 	// route set in front of the SAME mux (GitHub #95).
 	// see LLD § https://docs.vornik.io §12.2
 	if c.Config.Server.UnixSocket != "" {
-		c.AgentSocketServer = newAgentSocketServer(mux, realIPMW, readTimeout, writeTimeout)
+		c.AgentSocketServer = newAgentSocketServer(mux, realIPMW, c.listenerGate(), readTimeout, writeTimeout)
+	}
+	if c.Config.Hosting.Managed() {
+		c.OperationsServer = newOperationsServer(c.Config.Hosting.OperationsAddress, mux, realIPMW, readTimeout, writeTimeout)
 	}
 	return nil
 }

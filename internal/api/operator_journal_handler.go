@@ -145,7 +145,7 @@ func (s *Server) operatorJournalResolve(w http.ResponseWriter, r *http.Request, 
 		return
 	case errors.Is(err, controlplane.ErrApplyInProgress):
 		respondError(w, http.StatusConflict, controlplane.RefusalApplyInProgress, err.Error()+
-			". Remedy: retry when the running apply or reconcile finishes")
+			". Remedy: retry when the running apply, reconcile or config write finishes")
 		return
 	case errors.Is(err, controlplane.ErrWriterFenced):
 		respondError(w, http.StatusConflict, controlplane.RefusalWriterFenced, err.Error()+

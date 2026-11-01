@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/url"
+	"slices"
 	"strings"
 
 	"github.com/prometheus/client_golang/prometheus"
@@ -64,7 +66,26 @@ func (c *Container) modelRoute(model string) (agentadmin.ModelRoute, bool) {
 	if c.modelRoutes != nil {
 		return c.modelRoutes(model)
 	}
-	return resolveModelRoute(c.Config.Chat, c.chatRouter, model)
+	rt, ok := resolveModelRoute(c.Config.Chat, c.chatRouter, model)
+	if ok {
+		rt.Provided = providedRoute(c.Config.Hosting, rt.Endpoint)
+	}
+	return rt, ok
+}
+
+// providedRoute reports whether an endpoint is the hosting service's model
+// gateway: managed hosting, and its host in hosting.model_hosts (GitHub #582
+// P3). The host list is the provisioner's, so a customer's own endpoint can
+// never be marked provided.
+func providedRoute(h config.HostingConfig, endpoint string) bool {
+	if !h.Managed() || endpoint == "" {
+		return false
+	}
+	u, err := url.Parse(strings.TrimSpace(endpoint))
+	if err != nil || u.Scheme != "https" {
+		return false
+	}
+	return slices.Contains(h.ModelHosts, strings.ToLower(u.Hostname()))
 }
 
 // modelPrice is the pricing table's exact entry for model.

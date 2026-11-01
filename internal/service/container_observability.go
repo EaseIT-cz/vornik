@@ -28,11 +28,21 @@ func buildObservabilityConfig(cfg *config.Config) observability.Config {
 		TracingEndpoint: cfg.Tracing.Endpoint,
 	}
 
-	if cfg.Metrics.Enabled {
+	if dedicatedMetricsServer(cfg) {
 		obsCfg.MetricsAddr = cfg.Metrics.Addr
 	}
 
 	return obsCfg
+}
+
+// dedicatedMetricsServer reports whether the daemon starts its dedicated
+// metrics server on metrics.addr: when metrics are enabled, and never in
+// managed hosting, because that server never authenticates; a managed
+// instance's metrics are scraped on the operations listener behind
+// metrics.require_admin (GitHub #560; 18-security-and-tenancy.md, "Amendment
+// 2026-10-28 (#560, slice M1a)", A1).
+func dedicatedMetricsServer(cfg *config.Config) bool {
+	return cfg != nil && cfg.Metrics.Enabled && !cfg.Hosting.Managed()
 }
 
 func (c *Container) observabilityRegistry() *prometheus.Registry {

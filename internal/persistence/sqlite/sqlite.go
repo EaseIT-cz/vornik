@@ -390,6 +390,9 @@ var sqliteAdditiveColumns = []additiveColumn{
 	// (operator decision 2026-10-09; design §22.2.16).
 	{"broker_standing_grants", "account_label", `TEXT NOT NULL DEFAULT ''`},
 	{"broker_standing_grants", "account_identity", `TEXT NOT NULL DEFAULT ''`},
+	// Postgres migration 240 — when the subject was told of an Art 12(3)
+	// extension (GitHub #344 5d-1c). Nullable: NULL is "not recorded".
+	{"data_subject_requests", "extension_notified_at", `TEXT`},
 	// Not a new Postgres migration — content_title has long been on the
 	// production chunk table. The Art 15 collector reads it on both drivers
 	// since the subject store reached SQLite (GitHub #355; GDPR design §4.19).
@@ -403,6 +406,12 @@ var sqliteAdditiveColumns = []additiveColumn{
 	// (GitHub #369; outcome-quality-design §S8.11 row 8a). Nullable, no
 	// backfill: NULL is an evaluation on full evidence.
 	{"task_judge_verdicts", "failure_class", `TEXT`},
+	// Postgres migration 235 — the key version of a sealed row (GitHub #571
+	// U3a, §15.2 A4). 0 is today's derivation; inert until T3.
+	{"mcp_oauth_tokens", "key_version", `INTEGER NOT NULL DEFAULT 0`},
+	{"agent_secrets", "key_version", `INTEGER NOT NULL DEFAULT 0`},
+	{"broker_standing_grants", "key_version", `INTEGER NOT NULL DEFAULT 0`}, // Postgres migration 236
+	{"task_credentials", "key_version", `INTEGER NOT NULL DEFAULT 0`},       // Postgres migration 242 (#578)
 }
 
 // applyAdditiveColumns adds any registered column missing from an existing
@@ -481,6 +490,12 @@ var sqliteTableRebuilds = []tableRebuild{
 	// Postgres migration 227: agent_approval_requests learns
 	// config_journal_drift (config-apply journal design §13.3, GitHub #302).
 	{"agent_approval_requests", "'config_journal_drift'", agentApprovalRequestsTableSQL},
+	// Postgres migration 237: mcp_oauth_tokens and agent_integration_approvals
+	// get a surrogate id and an owner, and lose their two-column key to two
+	// partial unique indexes (GitHub #571 U3b, §15.3a C1, C3). Both are
+	// leaves: no foreign key references either.
+	{"mcp_oauth_tokens", "owner_user_id   TEXT", mcpOAuthTokensTableSQL},
+	{"agent_integration_approvals", "owner_user_id       TEXT", agentIntegrationApprovalsTableSQL},
 }
 
 func (d *DB) applyTableRebuilds(ctx context.Context) error {

@@ -65,6 +65,7 @@ type ComposerGraphViewData struct {
 // multi-workflow bundle — so a preview render can never leak a
 // transient registration into the live registry (design §5.5).
 func (s *Server) ComposerPreviewGraph(w http.ResponseWriter, r *http.Request) {
+	// GitHub #560 (M1b B2b): tenant_admin passes this check on purpose: a read-only render of the owner's own bundle.
 	if api.SessionRoleFromContext(r.Context()) == auth.RoleUser {
 		http.Error(w, "admin scope required", http.StatusForbidden)
 		return

@@ -10,6 +10,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+	"vornik.io/vornik/internal/aimark"
 
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/rs/zerolog"
@@ -27,6 +28,7 @@ import (
 	"vornik.io/vornik/internal/executor/livepubsub"
 	"vornik.io/vornik/internal/extractor"
 	"vornik.io/vornik/internal/featuredoctor"
+	"vornik.io/vornik/internal/firstvalue"
 	"vornik.io/vornik/internal/forge"
 	"vornik.io/vornik/internal/forgereview"
 	"vornik.io/vornik/internal/llmspend"
@@ -67,9 +69,46 @@ type MemorySearcher interface {
 // that don't satisfy it fall back to the plain Search path, whose response
 // is byte-identical to before the feature. The production adapter satisfies
 // this; test stubs need not.
+//
+// The request carries the search's filters (#550): a searcher that cannot
+// honour them must not be handed them, so the handler refuses a filtered
+// search when only the plain Search path is available.
 type MemoryRoutingSearcher interface {
-	SearchRouting(ctx context.Context, projectID, query string, limit int) ([]MemorySearchResult, *RoutingVerdictWire, error)
+	SearchRouting(ctx context.Context, projectID, query string, req MemorySearchRequest) ([]MemorySearchResult, *RoutingVerdictWire, error)
 }
+
+// MemorySearchRequest is one REST memory search's size and filters (#550;
+// design 2026-10-25-architect-expert-design.md §2.1 C1). Authority is "" (any
+// live chunk) or "provenance" (only chunks checked against the trusted
+// branch).
+type MemorySearchRequest struct {
+	Limit       int
+	RepoScope   string
+	StrictScope bool
+	Authority   string
+}
+
+// narrows reports whether the request filters beyond its project.
+func (r MemorySearchRequest) narrows() bool {
+	return r.RepoScope != "" || r.StrictScope || r.Authority != ""
+}
+
+// AgentKeyPrincipal says which agent a key the executor minted belongs to:
+// a per-task key names its task, a warm-pool key its project and role
+// (#550). Both empty means the key looks like an agent key and names neither;
+// the resolver must refuse it.
+type AgentKeyPrincipal struct {
+	TaskID    string
+	ProjectID string
+	Role      string
+}
+
+// MemorySearchRolePolicyFunc resolves the memory_search policy pinned on the
+// role an agent key runs: the role of a task's current step, or a warm-pool
+// key's role. (nil, nil) means the role pins none; an error means the role
+// could not be resolved, and the search is refused rather than served
+// unfiltered.
+type MemorySearchRolePolicyFunc func(ctx context.Context, who AgentKeyPrincipal) (*registry.MemorySearchPolicy, error)
 
 // RoutingVerdictWire is the JSON-wire shape of the retrieval_trust_verdict
 // and its basis + guidance. Emitted only on Routing-on responses.
@@ -624,6 +663,16 @@ type ForkExecutorResult struct {
 // Server handles HTTP API requests for the data plane.
 // This is the primary external interface for all execution-related traffic.
 type Server struct {
+	// aiMarker signs and records Art 50(2) marks on generated output
+	// (aimark_mark.go); nil marks nothing.
+	aiMarker *aimark.Marker
+	// aiMarkLedger is read by the public detection routes (aimark_detect.go).
+	aiMarkLedger      persistence.AIOutputMarkRepository
+	detectLimiterOnce sync.Once
+	detectLimiter     *ratelimit.PerIPLimiter
+	// exports is the owner export (GitHub #581 D5): its registry, the backup
+	// bucket's object store, and the download slots. Nil: not configured.
+	exports            *ownerExports
 	forgeIssueResolver ForgeIssueResolver
 	forgeIssueBudget   apiBudgetTracker
 	// forgeIssueTaskLocks serialise each task's forge issue calls (striped
@@ -715,6 +764,12 @@ type Server struct {
 	// setupSecretsDir is <configDir>/secrets, derived from setupConfigPath
 	// by the container. The commit handler writes chat.env here.
 	setupSecretsDir string
+	// issuerProbe checks an OpenID issuer's discovery for managed setup
+	// (GitHub #582 P2); the Enterprise container wires it.
+	issuerProbe IssuerProbe
+	// firstValue marks the instance's first recall hit (WithFirstValue,
+	// GitHub #587). Nil marks nothing.
+	firstValue *firstvalue.Tracker
 	// liveSub powers GET /executions/{id}/live (Feature #3
 	// Phase B). nil → endpoint returns 503.
 	liveSub LiveSubscriber
@@ -1166,8 +1221,11 @@ type Server struct {
 	// re-resolving the registry.
 	apiMetrics     *APIMetrics
 	memorySearcher MemorySearcher
-	memoryStats    MemoryStatsProvider
-	memoryEmbedder MemoryEmbedderReporter
+	// memorySearchRolePolicy resolves an executor task key's role policy for
+	// the REST memory search (#550). Nil: no role policy is applied.
+	memorySearchRolePolicy MemorySearchRolePolicyFunc
+	memoryStats            MemoryStatsProvider
+	memoryEmbedder         MemoryEmbedderReporter
 	// memoryCompanion powers the companion MCP server's `recall` and
 	// `remember` tools (LLD 22). Nil-safe: those tools return a
 	// "memory subsystem not wired on this daemon" error when this
@@ -2581,6 +2639,14 @@ func WithMetricsRegistry(reg *prometheus.Registry) ServerOption {
 func WithMemorySearcher(ms MemorySearcher) ServerOption {
 	return func(s *Server) {
 		s.memorySearcher = ms
+	}
+}
+
+// WithMemorySearchRolePolicy wires the resolver of a task's role
+// memory_search policy (#550).
+func WithMemorySearchRolePolicy(fn MemorySearchRolePolicyFunc) ServerOption {
+	return func(s *Server) {
+		s.memorySearchRolePolicy = fn
 	}
 }
 

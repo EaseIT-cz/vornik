@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"vornik.io/vornik/internal/api"
+	"vornik.io/vornik/internal/listener"
 )
 
 // allowedAgentSocketPath reports whether p is one of the agent routes the
@@ -35,9 +36,13 @@ func agentSocketRoutes(next http.Handler) http.Handler {
 // newAgentSocketServer is the unix socket's own server: the agent route
 // filter in front of the root mux, wrapped by the same real-IP middleware as
 // the TCP root, with the TCP server's timeouts (GitHub #95).
-func newAgentSocketServer(mux http.Handler, realIPMW func(http.Handler) http.Handler, readTimeout, writeTimeout time.Duration) *http.Server {
+//
+// gate is the managed-hosting listener gate (GitHub #560, A4: agent
+// containers run code a customer's workflows steer) or the identity.
+func newAgentSocketServer(mux http.Handler, realIPMW, gate func(http.Handler) http.Handler, readTimeout, writeTimeout time.Duration) *http.Server {
 	return &http.Server{
-		Handler:           realIPMW(agentSocketRoutes(mux)),
+		Handler:           gate(realIPMW(agentSocketRoutes(mux))),
+		ConnContext:       listener.ConnContext(listener.AgentSocket),
 		ReadTimeout:       readTimeout,
 		ReadHeaderTimeout: 10 * time.Second,
 		WriteTimeout:      writeTimeout,

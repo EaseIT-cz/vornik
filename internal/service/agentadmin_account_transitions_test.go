@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -15,6 +16,7 @@ import (
 	"vornik.io/vornik/internal/mcpauth"
 	"vornik.io/vornik/internal/persistence"
 	"vornik.io/vornik/internal/registry"
+	"vornik.io/vornik/internal/secretstore"
 )
 
 func TestAgentAccount_DaemonMissingGrantStoreFailsClosed(t *testing.T) {
@@ -25,7 +27,7 @@ func TestAgentAccount_DaemonMissingGrantStoreFailsClosed(t *testing.T) {
 	if handled, err := f.c.publishOAuthAccount(ctx, tok, "", false); !handled || err == nil {
 		t.Fatal("missing grant denominator allowed publication")
 	}
-	if _, err := f.c.repos.MCPOAuthTokens.Get(ctx, "", "daemon-mail"); !errors.Is(err, persistence.ErrNotFound) {
+	if _, err := f.c.repos.MCPOAuthTokens.Get(ctx, "", "daemon-mail", ""); !errors.Is(err, persistence.ErrNotFound) {
 		t.Fatal("missing grant store published token")
 	}
 	if _, err := f.c.accountDecisionEpoch(ctx, "hermes"); !errors.Is(err, persistence.ErrAccountTransition) {
@@ -155,7 +157,7 @@ func TestAgentAccount_OAuthFreshDespiteWarmCache(t *testing.T) {
 	if !f.c.applyMCPOAuthToken(&cfg, "hermes--work", "test") {
 		t.Fatal("no auth")
 	}
-	tok, err := conn.Tokens.Get(ctx, "hermes--work", "jira")
+	tok, err := conn.Tokens.Get(ctx, "hermes--work", "jira", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -211,12 +213,18 @@ func TestAgentAccount_DaemonOAuthSuspendsHiddenAgentGrant(t *testing.T) {
 	if row.SuspendedAt == nil {
 		t.Fatal("stale registry hid a live agent grant")
 	}
-	stored, err := f.c.repos.MCPOAuthTokens.Get(ctx, "", "daemon-mail")
+	stored, err := f.c.repos.MCPOAuthTokens.Get(ctx, "", "daemon-mail", "")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if stored.AccessToken != tok.AccessToken {
-		t.Fatal("daemon storage representation was changed")
+	// GitHub #571 U3a: the daemon scope is sealed too, in the operator
+	// domain; the raw row holds a sealed value that opens to the same token.
+	if !strings.HasPrefix(stored.AccessToken, secretstore.SealedPrefix) {
+		t.Fatalf("the daemon row holds an unsealed token: %q", stored.AccessToken)
+	}
+	opened, err := f.c.agentSealedTokens().Get(ctx, "", "daemon-mail", "")
+	if err != nil || opened.AccessToken != tok.AccessToken {
+		t.Fatalf("the daemon row does not open to its token: %v", err)
 	}
 }
 
@@ -247,11 +255,11 @@ func TestAgentAccount_AdminCompleteAndDisconnectUseTransition(t *testing.T) {
 	if row.AccountIdentity != "bob@corp.example" {
 		t.Fatal("admin token and display identity were not published together")
 	}
-	stored, err := f.c.repos.MCPOAuthTokens.Get(ctx, "hermes--work", "jira")
+	stored, err := f.c.repos.MCPOAuthTokens.Get(ctx, "hermes--work", "jira", "")
 	if err != nil {
 		t.Fatal(err)
 	}
-	opened, err := conn.Tokens.Get(ctx, "hermes--work", "jira")
+	opened, err := conn.Tokens.Get(ctx, "hermes--work", "jira", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -268,7 +276,7 @@ func TestAgentAccount_AdminCompleteAndDisconnectUseTransition(t *testing.T) {
 	if row.AccountIdentity != "" || row.IdentitySource != "" {
 		t.Fatal("Disconnect left the old provider identity")
 	}
-	if _, err = conn.Tokens.Get(ctx, "hermes--work", "jira"); !errors.Is(err, persistence.ErrNotFound) {
+	if _, err = conn.Tokens.Get(ctx, "hermes--work", "jira", ""); !errors.Is(err, persistence.ErrNotFound) {
 		t.Fatalf("Disconnect kept its token: %v", err)
 	}
 	if _, err = f.c.accountDecisionEpoch(ctx, "hermes"); err != nil {

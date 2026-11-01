@@ -58,7 +58,7 @@ func TestSubstringSearch_EscapesWildcards(t *testing.T) {
 	mock.ExpectQuery("content ILIKE.*ESCAPE").
 		WithArgs("p", `50\%\_x`, 10, sqlmock.AnyArg()).
 		WillReturnRows(sqlmock.NewRows(cols))
-	if _, err := r.substringSearch(context.Background(), "p", "50%_x", 10, "", false); err != nil {
+	if _, err := r.substringSearch(context.Background(), "p", "50%_x", 10, ScopeFilter{RepoScope: "", Strict: false}); err != nil {
 		t.Fatalf("substringSearch: %v", err)
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
@@ -1260,7 +1260,7 @@ func TestSubstringSearch_StrictScopeFiltersResults(t *testing.T) {
 	mock.ExpectQuery(regexp.QuoteMeta("$4::text IS NULL OR c.repo_scope = $4 OR c.repo_scope = '*'")).
 		WithArgs("p", "NVDA", 5, "github.com/me/repo").
 		WillReturnRows(makeRR([]string{"c1"}, []float64{1.0}))
-	got, err := r.substringSearch(context.Background(), "p", "NVDA", 5, "github.com/me/repo", true)
+	got, err := r.substringSearch(context.Background(), "p", "NVDA", 5, ScopeFilter{RepoScope: "github.com/me/repo", Strict: true})
 	if err != nil {
 		t.Fatalf("substringSearch with strict scope: %v", err)
 	}
@@ -1276,7 +1276,7 @@ func TestSubstringSearch_StrictScopeFiltersResults(t *testing.T) {
 func TestSubstringSearch_EmptyQueryReturnsNilWithoutHittingDB(t *testing.T) {
 	r, _, cleanup := newRepo(t)
 	defer cleanup()
-	got, err := r.substringSearch(context.Background(), "p", "   ", 5, "", false)
+	got, err := r.substringSearch(context.Background(), "p", "   ", 5, ScopeFilter{RepoScope: "", Strict: false})
 	if err != nil {
 		t.Fatalf("empty query must not error, got: %v", err)
 	}
@@ -1298,7 +1298,7 @@ func TestSubstringSearch_HappyPath(t *testing.T) {
 	mock.ExpectQuery("content ILIKE").
 		WithArgs("p", "NVDA", 5, nil).
 		WillReturnRows(makeRR([]string{"c1", "c2"}, []float64{1.0, 1.0}))
-	got, err := r.substringSearch(context.Background(), "p", "NVDA", 5, "", false)
+	got, err := r.substringSearch(context.Background(), "p", "NVDA", 5, ScopeFilter{RepoScope: "", Strict: false})
 	if err != nil {
 		t.Fatalf("got %v", err)
 	}
@@ -1730,5 +1730,31 @@ func TestSupersedeDocument_GuardsAndBinding(t *testing.T) {
 	var idx *Indexer
 	if n, err := idx.SupersedeDocument(context.Background(), "p", "s", "d", ""); n != 0 || err != nil {
 		t.Fatal("a nil indexer is a no-op")
+	}
+}
+
+// TestScopeFilterSQL_Authority pins the #550 authority fragment (design
+// 2026-10-25-architect-expert-design.md §2.1 C1): provenance admits only
+// verified chunks with a provenance validator and a repository; an unknown
+// authority admits nothing; the default adds nothing to the scope clause.
+func TestScopeFilterSQL_Authority(t *testing.T) {
+	if got, want := (ScopeFilter{Strict: true}).sql(7), scopeFilterSQL(true, 7); got != want {
+		t.Errorf("AuthorityAny changed the scope clause:\n got %s\nwant %s", got, want)
+	}
+	prov := ScopeFilter{Authority: AuthorityProvenance}.sql(7)
+	for _, want := range []string{"repo_scope IS NOT NULL", "validation_status = 'verified'",
+		"'" + ValidatorRoleProvenance + "'", "'" + ValidatorRoleProvenanceForgeAPI + "'"} {
+		if !strings.Contains(prov, want) {
+			t.Errorf("provenance clause missing %q; got: %s", want, prov)
+		}
+	}
+	if strings.Contains(prov, ValidatorRoleProvenanceUnavailable) {
+		t.Errorf("provenance clause must not admit %q; got: %s", ValidatorRoleProvenanceUnavailable, prov)
+	}
+	if got := (ScopeFilter{Authority: "role-of-record"}).sql(7); !strings.HasSuffix(got, " AND FALSE") {
+		t.Errorf("an unknown authority must fail closed; got: %s", got)
+	}
+	if (ScopeFilter{Authority: AuthorityProvenance}).IsZero() {
+		t.Error("an authority-only filter must not count as zero (it would take the unscoped statement)")
 	}
 }

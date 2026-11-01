@@ -9,6 +9,7 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+	"vornik.io/vornik/internal/mcpconnect"
 
 	"github.com/rs/zerolog"
 
@@ -16,6 +17,7 @@ import (
 	"vornik.io/vornik/internal/conversation"
 	"vornik.io/vornik/internal/integrations/dialguard"
 	"vornik.io/vornik/internal/registry"
+	"vornik.io/vornik/internal/slack"
 )
 
 // GitHub #494 item 5 (2026-10-21, integrations-hub-design "Amendment
@@ -83,10 +85,10 @@ func TestMCPOAuthHTTP_OperatorProjectIsGuarded_Issue494(t *testing.T) {
 
 	target := "http://0.0.0.0:" + port + "/token"
 	clients := map[string]*http.Client{"fallback": fallback}
-	if h := perServer("ops-project", "https://mcp.example.com/mcp"); h != nil {
+	if h := perServer(mcpconnect.ServerRef{ProjectID: "ops-project", URL: "https://mcp.example.com/mcp"}); h != nil {
 		clients["operator project"] = h
 	}
-	if h := perServer("ops-project", "https://mcp.example.com/mcp"); h == nil {
+	if h := perServer(mcpconnect.ServerRef{ProjectID: "ops-project", URL: "https://mcp.example.com/mcp"}); h == nil {
 		t.Error("an operator project gets no per-server client, so the connector's fallback decides")
 	}
 	for name, client := range clients {
@@ -101,7 +103,7 @@ func TestMCPOAuthHTTP_OperatorProjectIsGuarded_Issue494(t *testing.T) {
 
 	// The operator's integrations.allowed_hosts vouches for a host: a
 	// loopback server URL is dialled when it resolves to loopback.
-	local := perServer("ops-project", "http://127.0.0.1:"+port+"/mcp")
+	local := perServer(mcpconnect.ServerRef{ProjectID: "ops-project", URL: "http://127.0.0.1:" + port + "/mcp"})
 	if local == nil {
 		t.Fatal("no per-server client for a loopback operator server")
 	}
@@ -147,7 +149,7 @@ func TestSlackChannel_AttachmentFetchIsGuarded_Issue494(t *testing.T) {
 	p := projectWithSlack("proj-494", "T494", "SLACK_SIGN_494", "SLACK_BOT_494")
 	t.Setenv("SLACK_SIGN_494", "sign")
 	t.Setenv("SLACK_BOT_494", "xoxb-test")
-	ch, err := buildSlackChannelForProject(p, nil, nil, zerolog.Nop())
+	ch, err := buildSlackChannelForProject(p, slack.VoiceProviders{}, zerolog.Nop())
 	if err != nil {
 		t.Fatalf("build: %v", err)
 	}

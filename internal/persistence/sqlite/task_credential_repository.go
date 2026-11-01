@@ -41,6 +41,42 @@ func (r *TaskCredentialRepository) Upsert(ctx context.Context, cred *persistence
 	return err
 }
 
+// ListAll implements persistence.TaskCredentialSealPass (#578 B3).
+func (r *TaskCredentialRepository) ListAll(ctx context.Context) ([]*persistence.TaskCredential, error) {
+	rows, err := r.db.QueryContext(ctx, `
+		SELECT id, task_id, execution_id, tool, label, value, artifact_url, created_at
+		FROM task_credentials`)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+	var out []*persistence.TaskCredential
+	for rows.Next() {
+		var (
+			c         persistence.TaskCredential
+			createdAt string
+		)
+		if err := rows.Scan(&c.ID, &c.TaskID, &c.ExecutionID, &c.Tool, &c.Label, &c.Value, &c.ArtifactURL, &createdAt); err != nil {
+			return nil, err
+		}
+		if t, perr := parseSqliteTime(createdAt); perr == nil {
+			c.CreatedAt = t
+		}
+		out = append(out, &c)
+	}
+	return out, rows.Err()
+}
+
+// ReplaceValue implements persistence.TaskCredentialSealPass (#578 B3).
+func (r *TaskCredentialRepository) ReplaceValue(ctx context.Context, id, prev, next string) (bool, error) {
+	res, err := r.db.ExecContext(ctx, `UPDATE task_credentials SET value = ? WHERE id = ? AND value = ?`, next, id, prev)
+	if err != nil {
+		return false, err
+	}
+	n, err := res.RowsAffected()
+	return n == 1, err
+}
+
 // ListByTaskLatestExecution returns the credentials captured by the task's
 // most-recently-capturing execution only. Empty when none.
 func (r *TaskCredentialRepository) ListByTaskLatestExecution(ctx context.Context, taskID string) ([]*persistence.TaskCredential, error) {

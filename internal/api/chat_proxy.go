@@ -429,9 +429,18 @@ func (s *Server) ChatCompletions(w http.ResponseWriter, r *http.Request) {
 		resp.Created = time.Now().Unix()
 	}
 
+	// Art 50(2): mark the reply text (aimark_mark.go; Art 50 design §14.8).
+	var out any = resp
+	if compact := s.markOutput(ctx, r, chatResponseText(resp), "chat_api"); compact != "" {
+		setMarkHeaders(w, compact)
+		out = struct {
+			*chat.ChatResponse
+			AIGenerated aiGenerated `json:"ai_generated"`
+		}{resp, aiGenerated{Mark: compact}}
+	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
-	if err := json.NewEncoder(w).Encode(resp); err != nil {
+	if err := json.NewEncoder(w).Encode(out); err != nil {
 		// Response already partially written — nothing more we can do
 		// than log. The agent will see a truncated body and error out
 		// on its end, which is an acceptable failure mode for an

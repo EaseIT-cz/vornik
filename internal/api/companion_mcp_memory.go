@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"vornik.io/vornik/internal/counterfactual"
+	"vornik.io/vornik/internal/firstvalue"
 	"vornik.io/vornik/internal/mcp"
 	"vornik.io/vornik/internal/memory"
 	"vornik.io/vornik/internal/persistence"
@@ -605,6 +606,11 @@ func (s *Server) companionToolRecall(ctx context.Context, key *persistence.APIKe
 		return hits
 	}
 	hits := filterHits(results)
+	// GitHub #587 (operations-api-contract-design.md §7.2.2): a recall
+	// that returns a hit is the instance's first recall.
+	if len(hits) > 0 {
+		s.firstValue.Mark(ctx, firstvalue.FirstRecall)
+	}
 	// A crowded zero is recounted once with strict_scope: the same query,
 	// scope, limit and dates, plain Recall without sufficient, so no model
 	// call (GitHub #391, design §11.14).

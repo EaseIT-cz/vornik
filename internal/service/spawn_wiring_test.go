@@ -10,12 +10,12 @@ import (
 // (S1b-2): it mints a stdio server's program from loaded config, and only a
 // stdio server gets one.
 func TestConfiguredMCPProgram(t *testing.T) {
-	p := configuredMCPProgram(mcp.ServerConfig{Transport: "stdio", Command: "uvx", Args: []string{"srv", "--x"}})
+	p := (&Container{}).configuredMCPProgram(mcp.ServerConfig{Transport: "stdio", Command: "uvx", Args: []string{"srv", "--x"}}, "daemon", "")
 	if p.Path() != "uvx" || len(p.Args()) != 2 || p.Args()[1] != "--x" {
 		t.Fatalf("stdio program = %q %v", p.Path(), p.Args())
 	}
 	for _, tr := range []string{"sse", "streamable-http", ""} {
-		if !configuredMCPProgram(mcp.ServerConfig{Transport: tr, Command: "uvx"}).IsZero() {
+		if !(&Container{}).configuredMCPProgram(mcp.ServerConfig{Transport: tr, Command: "uvx"}, "daemon", "").IsZero() {
 			t.Errorf("transport %q must carry no program", tr)
 		}
 	}

@@ -150,6 +150,10 @@ type ChatPageData struct {
 	// template renders with renderMarkdown.
 	History []chat.Message
 
+	// Marks maps a History index to the Art 50(2) mark of the reply it
+	// shows (this turn's replies only; chat_aimark.go).
+	Marks map[int]string
+
 	// Error, when non-empty, renders an inline banner above the
 	// composer. Used for both dispatcher errors and missing
 	// configuration (chat-dispatcher unset).
@@ -296,6 +300,7 @@ func (s *Server) ChatPostMessage(w http.ResponseWriter, r *http.Request, project
 	// Refresh history from the store so the rendered page shows
 	// the user's new prompt + the assistant reply.
 	data.History = mergeDisclosureIntoHistory(store.History(historyKey), channel, s.aiDisclosure)
+	data.Marks = s.markChatReplies(ctx, w, channel.Sent(), data.History)
 	s.render(w, "chat.html", data)
 }
 

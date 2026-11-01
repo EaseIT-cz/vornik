@@ -127,7 +127,7 @@ var outboundSites = map[string]outboundRow{
 	"internal/ui Server.DeliverableSend":                             {classDisclosed, 1, "true", ""},
 	"internal/slack Channel.sendConfigAssistReply":                   {classDisclosed, 1, "false", ""},
 	"internal/steering OperatorAlertNotifier.NotifySteeringRequired": {classExempt, 1, "", "ownerless-task alert: fmt template of task id, project and state (composeText), no model output"},
-	"internal/steering OperatorAlertNotifier.NotifyOperator":         {classExempt, 1, "", "cluster-monitor operator alert: subject/body built by the monitor from health state, no model output"},
+	"internal/steering OperatorAlertNotifier.SendOperator":           {classExempt, 1, "", "operator alert (NotifyOperator calls it): the cluster monitor's health text and the GDPR erasure escalation's fixed template of request, record, task and deadline (GitHub #344); no model output"},
 
 	// --- Telegram: rows 13 and 14 and the inventory extras ---
 	"internal/telegram Bot.NotifyTaskCompleted":             {classDisclosed, 4, "", ""},

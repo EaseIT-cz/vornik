@@ -1309,6 +1309,48 @@ func RunTaskCredentialSuite(t *testing.T, repo persistence.TaskCredentialReposit
 	if none, err := repo.ListByTaskLatestExecution(ctx, ""); err != nil || len(none) != 0 {
 		t.Errorf("empty task id: %v %v", none, err)
 	}
+	runTaskCredentialSealPass(t, repo, task.ID)
+}
+
+// runTaskCredentialSealPass pins the seal pass's two operations (GitHub #578
+// B3): every driver implements them, ListAll returns the rows as stored, and
+// ReplaceValue changes a row only while it holds prev.
+func runTaskCredentialSealPass(t *testing.T, repo persistence.TaskCredentialRepository, taskID string) {
+	t.Helper()
+	ctx := context.Background()
+	pass, ok := repo.(persistence.TaskCredentialSealPass)
+	if !ok {
+		t.Fatalf("%T must implement persistence.TaskCredentialSealPass", repo)
+	}
+	plain := &persistence.TaskCredential{TaskID: taskID, ExecutionID: uniqueID("exec"), Tool: "p", Label: "l", Value: "plain-578"}
+	if err := repo.Upsert(ctx, plain); err != nil {
+		t.Fatalf("Upsert: %v", err)
+	}
+	value := func() string {
+		rows, err := pass.ListAll(ctx)
+		if err != nil {
+			t.Fatalf("ListAll: %v", err)
+		}
+		for _, r := range rows {
+			if r.ID == plain.ID {
+				return r.Value
+			}
+		}
+		t.Fatalf("ListAll missed row %s", plain.ID)
+		return ""
+	}
+	if v := value(); v != "plain-578" {
+		t.Fatalf("ListAll value = %q", v)
+	}
+	if won, err := pass.ReplaceValue(ctx, plain.ID, "not-what-it-holds", "sv1:x"); err != nil || won {
+		t.Errorf("ReplaceValue with a stale prev must not change the row: %v %v", won, err)
+	}
+	if won, err := pass.ReplaceValue(ctx, plain.ID, "plain-578", "sv1:new"); err != nil || !won {
+		t.Errorf("ReplaceValue with the current prev must win: %v %v", won, err)
+	}
+	if v := value(); v != "sv1:new" {
+		t.Errorf("after ReplaceValue the row holds %q", v)
+	}
 }
 
 // ------------------------------------- GDPR Art 18 restriction on extraction

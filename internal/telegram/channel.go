@@ -265,6 +265,8 @@ func (s *telegramStream) Close() (string, error) {
 			return "", err
 		}
 	}
+	// Art 50(2): the complete streamed reply, as the last edit sent it.
+	s.bot.recordAIText(context.WithoutCancel(s.ctx), editText(s.buf))
 	s.terminated = ErrStreamClosed
 	return strconv.FormatInt(s.messageID, 10), nil
 }

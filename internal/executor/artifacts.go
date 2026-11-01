@@ -443,7 +443,23 @@ func (e *Executor) harvestOne(ctx context.Context, executionID, projectID, taskI
 		return nil, nil
 	}
 	seen[key] = true
-	return e.storeOneArtifact(ctx, executionID, projectID, taskID, f.name, f.sourcePath, src, now)
+	out, err := e.storeOneArtifact(ctx, executionID, projectID, taskID, f.name, f.sourcePath, src, now)
+	if err == nil && out != nil {
+		e.recordHarvestedOutput(ctx, hash, taskID)
+	}
+	return out, err
+}
+
+// recordHarvestedOutput writes the EU AI Act Art 50(2) ledger row for a file
+// an agent produced (GitHub #117; Art 50 design §14.8, commit 5 second
+// amendment), so it is found by its hash whichever tool made it. Called after
+// the file is stored, on either store path. A ledger failure is counted by
+// the marker and never fails the harvest.
+func (e *Executor) recordHarvestedOutput(ctx context.Context, sha256hex, taskID string) {
+	if e.aiMarker == nil {
+		return
+	}
+	_, _, _ = e.aiMarker.NewForHash(ctx, sha256hex, "agent_file", taskID)
 }
 
 // storeOneArtifact persists a single harvested file through the
@@ -1296,15 +1312,30 @@ func (e *Executor) persistToolAuditFromResult(ctx context.Context, task *persist
 			DurationMs:  clampToolAuditDurationMs(e, entry.Tool, execution.ID, entry.DurationMs),
 			CreatedAt:   time.Now(),
 		}
+		// Credential carryover: capture an operator-facing access credential
+		// from this tool's RAW output when the tool matches a configured
+		// mapping. Best-effort; never fails the step. It runs before the audit
+		// write so a carried value is kept out of the audit row exactly: its
+		// only copy at rest is the sealed one (#578 B2). A value it did not
+		// store is left to the audit's own scanning.
+		carried := e.captureToolCredential(ctx, task, execution, entry.Tool, entry.Output)
+		if carried != "" {
+			for _, form := range CarriedCredentialForms(carried) {
+				auditEntry.ToolOutput = strings.ReplaceAll(auditEntry.ToolOutput, form, CarriedCredentialMarker)
+			}
+		}
 		if err := e.auditRepo.Log(ctx, auditEntry); err != nil {
 			e.logger.Error().Err(err).Str("tool", entry.Tool).Str("execution_id", execution.ID).
 				Int64("duration_ms", auditEntry.DurationMs).
 				Msg("audit: failed to write audit entry to DB")
 		}
-		// Credential carryover: capture an operator-facing access credential
-		// from this tool's RAW output (not the redacted copy) when the tool
-		// matches a configured mapping. Best-effort; never fails the step.
-		e.captureToolCredential(ctx, task, execution, entry.Tool, entry.Output)
+		// The agent's realtime stream usually stored this row first, with
+		// the same audit_id, and the batch insert above then does nothing
+		// (ON CONFLICT DO NOTHING). So the carried value is also scrubbed
+		// from whatever row is stored (commit security review 2026-10-31).
+		if carried != "" {
+			e.scrubCarriedCredential(ctx, execution.ID, entry.Tool, carried)
+		}
 	}
 	return toolCallCount, loopDetail, taint
 }

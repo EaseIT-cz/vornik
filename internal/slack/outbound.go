@@ -69,6 +69,8 @@ type chatPostMessageRequest struct {
 	// shows Text as the notification/fallback even when blocks are present, so
 	// both are always sent.
 	Blocks []blockElement `json:"blocks,omitempty"`
+	// Metadata carries the Art 50(2) mark (aimark.go); omitted when nil.
+	Metadata *messageMetadata `json:"metadata,omitempty"`
 }
 
 // sendChatPostMessage posts a Slack message via the Web API,
@@ -115,6 +117,7 @@ func (c *Channel) sendChatPostMessage(ctx context.Context, msg conversation.Chan
 		Text:     msg.Text,
 		ThreadTs: threadRoot,
 		Blocks:   buildBlocks(msg.Text, msg.Buttons),
+		Metadata: c.markText(ctx, msg.Text),
 	})
 	if err != nil {
 		return "", fmt.Errorf("slack channel: marshal request: %w", err)

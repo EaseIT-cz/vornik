@@ -67,10 +67,16 @@ func TestChannelSessionRepository_SQLiteNoOp(t *testing.T) {
 	ctx := context.Background()
 	repo := sqlite.NewChannelSessionRepository(newTestDB(t).DB)
 
-	// Save is a no-op; Load reports ErrNotFound so callers fall back to a
-	// fresh empty session.
-	if err := repo.Save(ctx, "webchat", "s1", "proj", []byte(`[]`)); err != nil {
-		t.Fatalf("Save (no-op): expected nil, got %v", err)
+	// SaveIfVersion is a no-op; Load reports ErrNotFound so callers fall
+	// back to a fresh empty session; the stub is not fenced (§15.18).
+	if _, ok, err := repo.SaveIfVersion(ctx, "webchat", "s1", "proj", []byte(`[]`), nil); err != nil || !ok {
+		t.Fatalf("SaveIfVersion (no-op): expected ok, got %v %v", ok, err)
+	}
+	if found, _, err := repo.Version(ctx, "webchat", "s1"); err != nil || found {
+		t.Fatalf("Version: expected no row, got %v %v", found, err)
+	}
+	if repo.Fenced() {
+		t.Fatal("the SQLite stub must not report itself fenced")
 	}
 	if _, err := repo.Load(ctx, "webchat", "s1"); !errors.Is(err, persistence.ErrNotFound) {
 		t.Fatalf("Load: expected ErrNotFound (nothing persisted), got %v", err)

@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"vornik.io/vornik/internal/config"
+	"vornik.io/vornik/internal/configlock"
 	"vornik.io/vornik/internal/featuredoctor"
 	"vornik.io/vornik/internal/onboarding"
 	"vornik.io/vornik/internal/persistence"
@@ -132,6 +133,9 @@ func (s *Server) SetupMemoryCommit(w http.ResponseWriter, r *http.Request) {
 // model, dimension, and (when a key was provided) the env-placeholder
 // api_key. The secret is never rolled back (reused on retry).
 func writeMemoryConfig(configPath, secretPath string, p onboarding.MemoryConfigProposal) error {
+	// The process's one config-write lock (GitHub #584, operations-api-contract-design.md §6.6).
+	unlock := configlock.Lock()
+	defer unlock()
 	writer := &featuredoctor.FileConfigWriter{Path: configPath}
 	backup, err := writer.Backup()
 	if err != nil {

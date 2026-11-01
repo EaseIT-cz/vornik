@@ -149,6 +149,12 @@ type Doer interface {
 	ProcessStreaming(ctx context.Context, req Request, onText chat.StreamCallback) Result
 }
 
+// answerMarker is a Doer that records the instance's first assistant answer
+// (GitHub #587). *Agent is one when wired WithFirstValue.
+type answerMarker interface {
+	MarkAnswered(ctx context.Context)
+}
+
 // SessionStore is the per-channel state surface. Each channel
 // implementation provides its own — Telegram already has one
 // (Bot.conversations); GitHub App / Slack /
@@ -349,6 +355,11 @@ func (r *ChannelReceiver) receive(ctx context.Context, msg conversation.ChannelM
 	result := r.dispatch(ctx, msg.SessionID, req)
 	if result.Err != nil {
 		return result.Err
+	}
+	// GitHub #587 (operations-api-contract-design.md §7.2.2): an answered
+	// turn on any channel is the instance's first-answer event.
+	if m, ok := r.Agent.(answerMarker); ok && strings.TrimSpace(result.Text) != "" {
+		m.MarkAnswered(ctx)
 	}
 
 	if r.Sessions != nil {

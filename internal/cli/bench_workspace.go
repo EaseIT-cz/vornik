@@ -9,7 +9,11 @@ import (
 	"regexp"
 	"strings"
 
+	"github.com/rs/zerolog"
+
 	"vornik.io/vornik/internal/agentbench"
+	"vornik.io/vornik/internal/executor"
+	"vornik.io/vornik/internal/spawn"
 )
 
 // gitWorkspace clears a benchmark task's targets from the benchmark
@@ -36,6 +40,16 @@ func (w gitWorkspace) git(ctx context.Context, args ...string) (string, error) {
 // refused: the daemon's merge would fail on it anyway, and a clear on top of
 // unknown state proves nothing.
 func (w gitWorkspace) Prepare(ctx context.Context, spec agentbench.TaskSpec, repeat int) (string, error) {
+	// A fresh bench instance has no workspace until its first task runs, and
+	// this runs before that: bootstrap it exactly as the daemon would (#593).
+	// The executor's git runs under the spawn law, which allows only registered
+	// roots: register the workspaces directory, as the daemon does.
+	if err := spawn.RegisterWorkspaceRoot(filepath.Dir(w.dir)); err != nil {
+		return "", err
+	}
+	if err := executor.EnsureGitRepo(ctx, w.dir, zerolog.Nop()); err != nil {
+		return "", fmt.Errorf("bootstrap the benchmark workspace: %w", err)
+	}
 	status, err := w.git(ctx, "status", "--porcelain")
 	if err != nil {
 		return "", err

@@ -60,6 +60,7 @@ func (b MissBehavior) String() string {
 // grow.
 var Contract = map[string]MissBehavior{
 	"A2APushConfigRepository.Get":                  MissErrNotFound, // *A2APushConfig
+	"AIOutputMarkRepository.Get":                   MissErrNotFound, // *AIOutputMark — an unknown hash is a miss (#117)
 	"ApplyJournalRepository.Get":                   MissErrNotFound, // *ConfigApplyJournal
 	"ApplyJournalRepository.OpenForProposal":       MissErrNotFound, // *ConfigApplyJournal — no open row is a miss, not a state
 	"ArtifactRepository.Get":                       MissErrNotFound, // *Artifact
@@ -97,6 +98,7 @@ var Contract = map[string]MissBehavior{
 	"ApproverDeviceRepository.GetPairingByClaim":     MissErrNotFound, // *ApproverPairingRow
 	"ApproverDeviceRepository.GetPairing":            MissErrNotFound, // *ApproverPairingRow
 	"AgentGrantRepository.GetIntegration":            MissErrNotFound, // *AgentIntegrationApproval
+	"AgentGrantRepository.GetOwnedIntegration":       MissErrNotFound, // *AgentIntegrationApproval (#571 U3b)
 	"AgentGrantRepository.GetWorkflowReach":          MissErrNotFound, // *AgentWorkflowApproval
 	"AgentGrantRepository.GetCeiling":                MissErrNotFound, // *AgentNamespaceBudget
 	"AgentGrantRepository.GetModelDestination":       MissErrNotFound, // *AgentModelDestinationApproval

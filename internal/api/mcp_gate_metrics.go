@@ -7,9 +7,10 @@ import (
 
 // mcpGapReason names WHY the MCP role gate could not resolve an allowlist.
 //
-// The gate fails open on every one of these (Finding B2), deliberately, so that
-// dev and sqlite deployments keep working and the project gate carries the
-// boundary. What was missing is that they were indistinguishable from each
+// The gate failed open on every one of these (Finding B2), so that dev and
+// sqlite deployments keep working and the project gate carries the boundary.
+// Since 2026-10-31 (GitHub #501) the gaps meaning the role could not be
+// resolved refuse instead; see gapRefuses. What was missing is that they were indistinguishable from each
 // other AND from a healthy resolve: roleToolAllowlist returned a bare nil for
 // all of them, so a deployment running every MCP call unrestricted looked
 // exactly like one whose roles all resolve.
@@ -76,6 +77,20 @@ func allMCPGapReasons() []mcpGapReason {
 	}
 }
 
+// gapRefuses reports whether a gap means the calling task's role could not be
+// resolved, which the gate refuses (GitHub #501; agent runtime contract
+// §14.2 B). The other gaps stay open and counted: no task id (the CLI and the
+// UI), nothing wired (dev), a role declaring no tools (an operator decision)
+// and a finished execution (measured live traffic, 2026-09-04).
+func gapRefuses(reason mcpGapReason) bool {
+	switch reason {
+	case mcpGapNoExecution, mcpGapNoWorkflow, mcpGapStepNotFound,
+		mcpGapNoStepRole, mcpGapNoSwarm, mcpGapRoleNotFound:
+		return true
+	}
+	return false
+}
+
 // MCPGateMetrics makes the MCP gate's fail-open states countable.
 //
 // The backlog asked for the gaps to be "at least logged, so a deployment
@@ -93,6 +108,9 @@ type MCPGateMetrics struct {
 	// catalogue filter, where a gap costs a wide prompt rather than a wide
 	// grant).
 	UnrestrictedTotal *prometheus.CounterVec
+	// RefusedTotal counts MCP resolutions refused because the calling task's
+	// role could not be resolved, by {path, reason} (GitHub #501).
+	RefusedTotal *prometheus.CounterVec
 }
 
 // NewMCPGateMetrics registers the fail-open counter. Same shared-registry +
@@ -108,11 +126,20 @@ func NewMCPGateMetrics(registerer prometheus.Registerer) *MCPGateMetrics {
 				Name:      "mcp_gate_unrestricted_total",
 				Help: "MCP role-gate resolutions that applied NO allowlist, by {path, reason}. " +
 					"This is a fail-open census, NOT a refusal count: every one of these calls was " +
-					"PERMITTED, by design (the project gate remains in force). A rising number means " +
-					"roles are not resolving, not that something was blocked. path = call|advertise; " +
-					"reason = no_task_id|deps_unwired|no_execution|no_workflow|no_step_role|" +
-					"execution_terminal|step_not_found|no_swarm|" +
-					"role_not_found|role_declares_none.",
+					"PERMITTED, by design (the project gate remains in force). Unresolved roles are " +
+					"refused and counted on vornik_mcp_gate_refused_total instead. path = call|advertise; " +
+					"reason = no_task_id|deps_unwired|execution_terminal|role_declares_none.",
+			},
+			[]string{"path", "reason"},
+		),
+		RefusedTotal: promauto.With(registerer).NewCounterVec(
+			prometheus.CounterOpts{
+				Namespace: "vornik",
+				Name:      "mcp_gate_refused_total",
+				Help: "MCP role-gate resolutions REFUSED because the calling task's role could not " +
+					"be resolved, by {path, reason}. path = call (403) | advertise (no MCP tools " +
+					"listed); reason = no_execution|no_workflow|step_not_found|no_step_role|" +
+					"no_swarm|role_not_found.",
 			},
 			[]string{"path", "reason"},
 		),
@@ -126,4 +153,13 @@ func (s *Server) recordMCPGap(path string, reason mcpGapReason) {
 		return
 	}
 	s.mcpGateMetrics.UnrestrictedTotal.WithLabelValues(path, string(reason)).Inc()
+}
+
+// recordMCPRefused counts one refusal on an unresolved role (GitHub #501).
+// No-op when metrics are unwired.
+func (s *Server) recordMCPRefused(path string, reason mcpGapReason) {
+	if s == nil || s.mcpGateMetrics == nil {
+		return
+	}
+	s.mcpGateMetrics.RefusedTotal.WithLabelValues(path, string(reason)).Inc()
 }

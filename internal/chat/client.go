@@ -706,10 +706,7 @@ func NewClient(endpoint, apiKey, model string, opts ...ClientOption) *Client {
 	}
 
 	if c.httpClient == nil {
-		c.httpClient = &http.Client{
-			Timeout:   c.timeout,
-			Transport: sharedHTTPTransport(),
-		}
+		c.httpClient = newChatHTTPClient(c.timeout)
 	}
 
 	return c

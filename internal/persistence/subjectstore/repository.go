@@ -25,6 +25,8 @@ type Repository struct {
 	// statements bind it rather than calling NOW(): SQLite has no NOW(), and a
 	// column default would store a different text form there.
 	now func() time.Time
+	// hooks are the transcript-erasure test seams (transcript_redact.go).
+	hooks TranscriptHooks
 }
 
 // New constructs the repository over db with the driver's dialect.
@@ -420,7 +422,8 @@ func (r *Repository) CreateRequest(ctx context.Context, req datasubject.Request)
 func (r *Repository) GetRequest(ctx context.Context, id string) (datasubject.Request, error) {
 	return r.scanRequest(r.db.QueryRowContext(ctx,
 		`SELECT id, subject_id, kind, state, opened_at, verified_by, verified_how, verified_at,
-		        extended, extended_reason, report_hash, refused_reason, erasure_ground
+		        extended, extended_reason, report_hash, refused_reason, erasure_ground,
+		        extension_notified_at
 		   FROM data_subject_requests WHERE id = $1`, id).Scan)
 }
 
@@ -430,11 +433,12 @@ func (r *Repository) SaveRequest(ctx context.Context, req datasubject.Request) e
 		`UPDATE data_subject_requests
 		    SET state = $2, verified_by = $3, verified_how = $4, verified_at = $5,
 		        extended = $6, extended_reason = $7, report_hash = $8, refused_reason = $9,
-		        updated_at = $10
+		        updated_at = $10, extension_notified_at = $11
 		  WHERE id = $1`,
 		req.ID, string(req.State), nullIfEmpty(req.VerifiedBy), nullIfEmpty(req.VerifiedHow),
 		r.d.bindTimeOrNull(req.VerifiedAt), req.Extended, nullIfEmpty(req.ExtendedReason),
-		nullIfEmpty(req.ReportHash), nullIfEmpty(req.RefusedReason), r.clock())
+		nullIfEmpty(req.ReportHash), nullIfEmpty(req.RefusedReason), r.clock(),
+		r.d.bindTimeOrNull(req.ExtensionNotifiedAt))
 	return r.d.mapErr(err)
 }
 
@@ -484,7 +488,7 @@ func (r *Repository) ListRequests(ctx context.Context, limit, offset int) ([]dat
 	rows, err := r.db.QueryContext(ctx,
 		`SELECT id, subject_id, kind, state, opened_at, verified_by, verified_how, verified_at,
 		        extended, extended_reason, report_hash, refused_reason, erasure_ground,
-		        report_json IS NOT NULL
+		        extension_notified_at, report_json IS NOT NULL
 		   FROM data_subject_requests
 		  ORDER BY opened_at DESC, id DESC
 		  LIMIT $1 OFFSET $2`, limit, offset)
@@ -529,7 +533,7 @@ func (r *Repository) scanRequest(scan func(...any) error) (datasubject.Request, 
 	var by, how, extReason, hash, refused, ground sql.NullString
 	if err := scan(&req.ID, &req.SubjectID, &kind, &state, r.d.scanTime(&req.OpenedAt), &by, &how,
 		r.d.scanTime(&req.VerifiedAt),
-		&req.Extended, &extReason, &hash, &refused, &ground); err != nil {
+		&req.Extended, &extReason, &hash, &refused, &ground, r.d.scanTime(&req.ExtensionNotifiedAt)); err != nil {
 		return datasubject.Request{}, r.d.mapErr(err)
 	}
 	req.Kind, req.State = datasubject.RequestKind(kind), datasubject.RequestState(state)

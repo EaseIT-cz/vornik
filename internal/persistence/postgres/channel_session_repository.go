@@ -12,8 +12,8 @@ import (
 // ChannelSessionRepository implements
 // persistence.ChannelSessionRepository against PostgreSQL. The
 // (kind, session_id) composite PK keeps webchat/email/slack/github
-// namespaces isolated within a single table; Save uses ON CONFLICT
-// DO UPDATE so the post-turn write is one round trip.
+// namespaces isolated within a single table. Writes are fenced on the
+// row's version (migration 241, art17 redact design §15.18).
 type ChannelSessionRepository struct {
 	db DBTX
 }
@@ -34,7 +34,7 @@ func (r *ChannelSessionRepository) Load(ctx context.Context, kind, sessionID str
 		return nil, fmt.Errorf("channel_session: kind + sessionID required")
 	}
 	const q = `
-SELECT kind, session_id, COALESCE(active_project, ''), history, created_at, updated_at, expires_at
+SELECT kind, session_id, COALESCE(active_project, ''), history, created_at, updated_at, expires_at, version
 FROM channel_sessions
 WHERE kind = $1 AND session_id = $2`
 	row := r.db.QueryRowContext(ctx, q, kind, sessionID)
@@ -42,7 +42,7 @@ WHERE kind = $1 AND session_id = $2`
 		s         persistence.ChannelSession
 		expiresAt sql.NullTime
 	)
-	if err := row.Scan(&s.Kind, &s.SessionID, &s.ActiveProject, &s.History, &s.CreatedAt, &s.UpdatedAt, &expiresAt); err != nil {
+	if err := row.Scan(&s.Kind, &s.SessionID, &s.ActiveProject, &s.History, &s.CreatedAt, &s.UpdatedAt, &expiresAt, &s.Version); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, persistence.ErrNotFound
 		}
@@ -55,17 +55,31 @@ WHERE kind = $1 AND session_id = $2`
 	return &s, nil
 }
 
-// Save upserts the session. The DO UPDATE branch always wins
-// because the post-turn write is authoritative — there is no
-// per-session contention semantics to honour (a session is
-// driven by one inbound channel message at a time).
-func (r *ChannelSessionRepository) Save(ctx context.Context, kind, sessionID, activeProject string, historyJSON []byte) error {
+// Version reads the row's version alone, one primary-key read per channel
+// turn (the fence's freshness check).
+func (r *ChannelSessionRepository) Version(ctx context.Context, kind, sessionID string) (bool, int64, error) {
+	var v int64
+	err := r.db.QueryRowContext(ctx,
+		`SELECT version FROM channel_sessions WHERE kind = $1 AND session_id = $2`, kind, sessionID).Scan(&v)
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, 0, nil
+	}
+	if err != nil {
+		return false, 0, fmt.Errorf("channel_session: version: %w", err)
+	}
+	return true, v, nil
+}
+
+// SaveIfVersion writes the session only over the version the caller saw:
+// with expect nil, only while no row exists; otherwise only while the row
+// still holds *expect. The trigger from migration 241 draws the new version.
+// A refused write changes nothing and reports ok=false.
+func (r *ChannelSessionRepository) SaveIfVersion(ctx context.Context, kind, sessionID, activeProject string, historyJSON []byte, expect *int64) (int64, bool, error) {
 	if kind == "" || sessionID == "" {
-		return fmt.Errorf("channel_session: kind + sessionID required")
+		return 0, false, fmt.Errorf("channel_session: kind + sessionID required")
 	}
 	// Empty payload becomes the JSONB empty array so the column's
-	// NOT NULL constraint is satisfied and downstream readers see
-	// a sane default rather than a Postgres NULL.
+	// NOT NULL constraint is satisfied.
 	if len(historyJSON) == 0 {
 		historyJSON = []byte("[]")
 	}
@@ -73,18 +87,31 @@ func (r *ChannelSessionRepository) Save(ctx context.Context, kind, sessionID, ac
 	if activeProject != "" {
 		ap = sql.NullString{String: activeProject, Valid: true}
 	}
-	const q = `
+	var row *sql.Row
+	if expect == nil {
+		row = r.db.QueryRowContext(ctx, `
 INSERT INTO channel_sessions (kind, session_id, active_project, history, created_at, updated_at)
 VALUES ($1, $2, $3, $4, NOW(), NOW())
-ON CONFLICT (kind, session_id) DO UPDATE
-SET active_project = EXCLUDED.active_project,
-    history = EXCLUDED.history,
-    updated_at = NOW()`
-	if _, err := r.db.ExecContext(ctx, q, kind, sessionID, ap, historyJSON); err != nil {
-		return fmt.Errorf("channel_session: save: %w", err)
+ON CONFLICT (kind, session_id) DO NOTHING
+RETURNING version`, kind, sessionID, ap, historyJSON)
+	} else {
+		row = r.db.QueryRowContext(ctx, `
+UPDATE channel_sessions SET active_project = $3, history = $4, updated_at = NOW()
+WHERE kind = $1 AND session_id = $2 AND version = $5
+RETURNING version`, kind, sessionID, ap, historyJSON, *expect)
 	}
-	return nil
+	var v int64
+	if err := row.Scan(&v); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return 0, false, nil
+		}
+		return 0, false, fmt.Errorf("channel_session: save: %w", err)
+	}
+	return v, true, nil
 }
+
+// Fenced is true: the Postgres table carries versions.
+func (r *ChannelSessionRepository) Fenced() bool { return true }
 
 // ListByPrefix returns the sessions under a SessionID prefix, newest activity
 // first. See the interface doc for why a prefix query is the right shape.
@@ -101,7 +128,7 @@ func (r *ChannelSessionRepository) ListByPrefix(ctx context.Context, kind, prefi
 		return nil, nil
 	}
 	const q = `
-SELECT kind, session_id, COALESCE(active_project, ''), history, created_at, updated_at, expires_at
+SELECT kind, session_id, COALESCE(active_project, ''), history, created_at, updated_at, expires_at, version
 FROM channel_sessions
 WHERE kind = $1 AND session_id LIKE $2
 ORDER BY updated_at DESC
@@ -118,7 +145,7 @@ LIMIT $3`
 			s         persistence.ChannelSession
 			expiresAt sql.NullTime
 		)
-		if err := rows.Scan(&s.Kind, &s.SessionID, &s.ActiveProject, &s.History, &s.CreatedAt, &s.UpdatedAt, &expiresAt); err != nil {
+		if err := rows.Scan(&s.Kind, &s.SessionID, &s.ActiveProject, &s.History, &s.CreatedAt, &s.UpdatedAt, &expiresAt, &s.Version); err != nil {
 			return nil, fmt.Errorf("channel_session: list by prefix scan: %w", err)
 		}
 		if expiresAt.Valid {

@@ -168,7 +168,7 @@ func (s *agentAdminService) credentialPresent(ctx context.Context, ns, projectID
 		}
 		for _, srv := range p.MCP.Servers {
 			if srv.Auth.Mode == "oauth" && agentadmin.OAuthCredentialName(srv.Name) == name {
-				if _, err := conn.Tokens.Get(ctx, projectID, srv.Name); err == nil {
+				if _, err := conn.Tokens.Get(ctx, projectID, srv.Name, ""); err == nil {
 					return true
 				}
 			}
@@ -236,7 +236,7 @@ func (c *Container) missingCredential(ctx context.Context, p *registry.Project, 
 				missing = append(missing, agentadmin.OAuthCredentialName(srv.Name))
 				continue
 			}
-			if _, err := conn.Tokens.Get(ctx, p.ID, srv.Name); err != nil {
+			if _, err := conn.Tokens.Get(ctx, p.ID, srv.Name, ""); err != nil {
 				missing = append(missing, agentadmin.OAuthCredentialName(srv.Name))
 			}
 			continue

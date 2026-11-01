@@ -407,7 +407,7 @@ func TestChannel_StreamingSend_RefusesInVoiceMode(t *testing.T) {
 	// Wire a TTS stub so shouldReplyAsVoice returns true once the
 	// tracker reports voice. STT isn't needed for this path; the
 	// inbound voice routing happens in HandleMessage, not here.
-	WithVoiceProviders(VoiceProviders{TTS: &fakeTTS{}})(bot)
+	WithVoiceProviders(VoiceProviders{TTS: &fakeTTS{}, SyntheticReplies: true})(bot) // voice replies opted in (#543)
 	bot.voiceTracker.MarkVoice(555)
 
 	ch := NewChannel(bot)

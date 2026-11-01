@@ -1,8 +1,10 @@
 package ui
 
 import (
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -38,7 +40,7 @@ func TestProjectsNewWizard_ResumeSeedsSessionAndTranscript(t *testing.T) {
 	}
 	body := rec.Body.String()
 	// sessionID seeded so the page continues (not starts) the draft.
-	if !strings.Contains(body, `let sessionID = "pw_resume";`) {
+	if wizardSessionID(t, body) != "pw_resume" {
 		t.Error("resumed page must seed sessionID with the draft id")
 	}
 	// Prior turns are available for replay.
@@ -52,7 +54,7 @@ func TestProjectsNewWizard_FreshWhenNoSessionParam(t *testing.T) {
 	rec := httptest.NewRecorder()
 	srv.ProjectsNewWizard(rec, resumeReq("", "op_1"))
 	body := rec.Body.String()
-	if !strings.Contains(body, `let sessionID = "";`) {
+	if wizardSessionID(t, body) != "" {
 		t.Error("a fresh wizard must start with an empty sessionID")
 	}
 }
@@ -116,8 +118,25 @@ func TestProjectsNewWizard_ResumeRejectsForeignAndClosed(t *testing.T) {
 		rec := httptest.NewRecorder()
 		srv.ProjectsNewWizard(rec, resumeReq(sid, "op_1"))
 		body := rec.Body.String()
-		if !strings.Contains(body, `let sessionID = "";`) {
+		if wizardSessionID(t, body) != "" {
 			t.Errorf("session %q must NOT be resumable (foreign/closed/unknown) — page should start fresh", sid)
 		}
 	}
+}
+
+// wizardSessionID reads the sessionID the page seeds, from its wizard-data
+// block (#416 phase 5 moved it there from the inline script).
+func wizardSessionID(t *testing.T, body string) string {
+	t.Helper()
+	m := regexp.MustCompile(`(?s)<script type="application/json" id="wizard-data">(.*?)</script>`).FindStringSubmatch(body)
+	if m == nil {
+		t.Fatal("the page has no wizard-data block")
+	}
+	var d struct {
+		SessionID string `json:"sessionID"`
+	}
+	if err := json.Unmarshal([]byte(m[1]), &d); err != nil {
+		t.Fatalf("wizard-data %q: %v", m[1], err)
+	}
+	return d.SessionID
 }

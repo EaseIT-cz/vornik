@@ -30,6 +30,9 @@ type ClosedTrade struct {
 	EntryAt     time.Time
 	ExitAt      time.Time
 	RealizedUSD float64 // net of pro-rated commissions on both legs
+	// EntryOrderID is the order of the opening fill this lot came from
+	// (GitHub #597): R is computed per entry order.
+	EntryOrderID string
 }
 
 // DailyPoint is one calendar day's realized P&L and mark-to-market equity.
@@ -81,6 +84,7 @@ type openLot struct {
 	price         float64
 	at            time.Time
 	commissionUSD float64 // total commission for the fill (0 if nil)
+	orderID       string  // the opening fill's order (GitHub #597)
 }
 
 // symbolQueues holds FIFO open-lot queues per symbol.
@@ -138,14 +142,15 @@ func matchClose(
 		}
 
 		trades = append(trades, ClosedTrade{
-			Symbol:      sym,
-			Side:        openSide,
-			Qty:         matched,
-			EntryPx:     lot.price,
-			ExitPx:      fillPrice,
-			EntryAt:     lot.at,
-			ExitAt:      fillAt,
-			RealizedUSD: realized,
+			Symbol:       sym,
+			Side:         openSide,
+			Qty:          matched,
+			EntryPx:      lot.price,
+			ExitPx:       fillPrice,
+			EntryAt:      lot.at,
+			ExitAt:       fillAt,
+			RealizedUSD:  realized,
+			EntryOrderID: lot.orderID,
 		})
 
 		lot.qty -= matched
@@ -223,7 +228,7 @@ func PairRoundTrips(fills []*persistence.TradingFill, sideByOrderID map[string]s
 				openComm := comm * (remaining / f.Qty)
 				sq.long = append(sq.long, openLot{
 					side: "long", qty: remaining, totalQty: remaining,
-					price: f.Price, at: f.FilledAt, commissionUSD: openComm,
+					price: f.Price, at: f.FilledAt, commissionUSD: openComm, orderID: f.OrderID,
 				})
 			}
 		case "SELL":
@@ -233,7 +238,7 @@ func PairRoundTrips(fills []*persistence.TradingFill, sideByOrderID map[string]s
 				openComm := comm * (remaining / f.Qty)
 				sq.short = append(sq.short, openLot{
 					side: "short", qty: remaining, totalQty: remaining,
-					price: f.Price, at: f.FilledAt, commissionUSD: openComm,
+					price: f.Price, at: f.FilledAt, commissionUSD: openComm, orderID: f.OrderID,
 				})
 			}
 		}

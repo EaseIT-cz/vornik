@@ -45,6 +45,7 @@ func (c *Container) initDispatcher() {
 		// image, never on the daemon host (process-spawn law S4), through
 		// the bounded sandbox runner (S5a).
 		dispatcher.WithSandboxRunner(c.sandboxRunner),
+		dispatcher.WithAIMarker(c.aiMarker()), // Art 50(2) on rendered documents (#117)
 	}
 	if c.Config.Chat.DeferredToolThreshold != 0 {
 		opts = append(opts, dispatcher.WithDeferredToolThreshold(c.Config.Chat.DeferredToolThreshold))
@@ -324,6 +325,8 @@ func (c *Container) initDispatcher() {
 	if c.repos != nil {
 		taskRepo, execRepo, artifactRepo = c.repos.Tasks, c.repos.Executions, c.repos.Artifacts
 	}
+	// GitHub #587: an answered turn on any channel marks the first answer.
+	opts = append(opts, dispatcher.WithFirstValue(c.firstValueTracker()))
 	c.Dispatcher = dispatcher.NewAgent(c.ChatClient, taskRepo, execRepo, artifactRepo, c.Registry, opts...)
 	// cancel_task stops the running execution through the shared cancel
 	// primitive (05-scheduler.md §4.11, GitHub #300). The executor is built in

@@ -123,6 +123,9 @@ type configAccountPublication struct {
 	// narrowed are the kinds of the tool removals collected into rows,
 	// counted once the change is published.
 	narrowed []string
+	// deletedSignIns are the removed connections' sign-ins in rows,
+	// logged and counted once the change is published (§15.3a C5).
+	deletedSignIns []persistence.AccountTokenKey
 }
 type configAccountPublicationKey struct{}
 type configAccountSnapshotKey struct{}
@@ -172,7 +175,7 @@ type oauthPublicationResultKey struct{}
 
 func (c *Container) prepareNamespaceOAuthTransition(ctx context.Context, ns string, tok *persistence.MCPOAuthToken, identity string, disconnect bool, p *persistence.AccountPublication) error {
 	integration := agentns.IntegrationOf(tok.ServerName)
-	prior, err := c.agentSealedTokens().Get(ctx, tok.ProjectID, tok.ServerName)
+	prior, err := c.agentSealedTokens().Get(ctx, tok.ProjectID, tok.ServerName, tok.OwnerUserID)
 	if err != nil && !errors.Is(err, persistence.ErrNotFound) {
 		return err
 	}

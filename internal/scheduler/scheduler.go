@@ -204,6 +204,7 @@ type Scheduler struct {
 	metrics         *Metrics
 	tracer          trace.Tracer
 	runtime         RuntimeManager
+	orphanSweep     func(ctx context.Context)
 	execRepo        ExecutionRepository
 	livePub         LivePublisher
 	executor        Executor
@@ -354,6 +355,13 @@ type LivePublisher interface {
 }
 
 // WithLivePublisher wires the publisher; nil publishes nothing.
+// WithOrphanSweep runs sweep once when the recovery loop starts and then on
+// each of its ticks: the runtime's orphan sweep (GitHub #569 R4), which reads
+// task state, so its order against lease recovery does not matter.
+func WithOrphanSweep(sweep func(ctx context.Context)) Option {
+	return func(s *Scheduler) { s.orphanSweep = sweep }
+}
+
 func WithLivePublisher(pub LivePublisher) Option {
 	return func(s *Scheduler) { s.livePub = pub }
 }
@@ -588,13 +596,21 @@ func (s *Scheduler) recoveryLoop() {
 	ticker := time.NewTicker(s.config.RecoveryInterval)
 	defer ticker.Stop()
 
+	s.sweepOrphans()
 	for {
 		select {
 		case <-s.ctx.Done():
 			return
 		case <-ticker.C:
 			s.recoverExpiredLeases()
+			s.sweepOrphans()
 		}
+	}
+}
+
+func (s *Scheduler) sweepOrphans() {
+	if s.orphanSweep != nil {
+		s.orphanSweep(s.baseContext())
 	}
 }
 

@@ -250,6 +250,10 @@ func (b *Bot) HandleMessage(ctx context.Context, msg *Message) error {
 		b.metrics.MessagesReceived.WithLabelValues(userLabel).Inc()
 	}
 
+	// The fence (art17 redact design §15.18.1): before any command or turn
+	// reads a lane, drop the chat's lanes if its stored session moved.
+	b.fenceChat(ctx, msg.ChatID)
+
 	// Silent-drop guard. Must run BEFORE the auth check.
 	//
 	// Telegram emits service messages (forum_topic_created,

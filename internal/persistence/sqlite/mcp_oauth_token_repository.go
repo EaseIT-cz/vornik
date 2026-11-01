@@ -35,15 +35,34 @@ func NewMCPOAuthTokenRepository(db persistence.DBTX) *MCPOAuthTokenRepository {
 var _ persistence.MCPOAuthTokenRepository = (*MCPOAuthTokenRepository)(nil)
 
 const mcpOAuthColumns = `project_id, server_name, resource, client_id, access_token,
-	refresh_token, expires_at, scopes, redirect_uri, connected_by, needs_reconnect, connected_at, updated_at`
+	refresh_token, expires_at, scopes, redirect_uri, connected_by, needs_reconnect, connected_at, updated_at, owner_user_id`
+
+// ownerArg is the owner_user_id value of an account: NULL for the shared one
+// (""), so `owner_user_id IS ?` (SQLite's null-safe equality) matches it
+// (GitHub #571 U3b, §15.3a C4).
+func ownerArg(owner string) any {
+	if owner == "" {
+		return nil
+	}
+	return owner
+}
+
+// ownerConflict is the upsert's conflict target: the partial unique index
+// the row belongs to.
+func ownerConflict(owner string) string {
+	if owner == "" {
+		return `(project_id, server_name) WHERE owner_user_id IS NULL`
+	}
+	return `(project_id, server_name, owner_user_id) WHERE owner_user_id IS NOT NULL`
+}
 
 // Get returns the grant, or nil when there is none.
-func (r *MCPOAuthTokenRepository) Get(ctx context.Context, projectID, serverName string) (*persistence.MCPOAuthToken, error) {
+func (r *MCPOAuthTokenRepository) Get(ctx context.Context, projectID, serverName, owner string) (*persistence.MCPOAuthToken, error) {
 	row := r.db.QueryRowContext(ctx,
 		`SELECT `+mcpOAuthColumns+`
 		   FROM mcp_oauth_tokens
-		  WHERE project_id = ? AND server_name = ?`,
-		projectID, serverName)
+		  WHERE project_id = ? AND server_name = ? AND owner_user_id IS ?`,
+		projectID, serverName, ownerArg(owner))
 	tok, err := scanMCPOAuthToken(row)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, persistence.ErrNotFound
@@ -66,8 +85,8 @@ func (r *MCPOAuthTokenRepository) Upsert(ctx context.Context, tok *persistence.M
 	}
 	_, err := r.db.ExecContext(ctx,
 		`INSERT INTO mcp_oauth_tokens (`+mcpOAuthColumns+`)
-		 VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
-		 ON CONFLICT (project_id, server_name) DO UPDATE SET
+		 VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+		 ON CONFLICT `+ownerConflict(tok.OwnerUserID)+` DO UPDATE SET
 		     resource        = excluded.resource,
 		     client_id       = excluded.client_id,
 		     access_token    = excluded.access_token,
@@ -80,7 +99,7 @@ func (r *MCPOAuthTokenRepository) Upsert(ctx context.Context, tok *persistence.M
 		     updated_at      = excluded.updated_at`,
 		tok.ProjectID, tok.ServerName, tok.Resource, tok.ClientID, tok.AccessToken,
 		tok.RefreshToken, sqliteTimePtr(tok.ExpiresAt), tok.Scopes, tok.RedirectURI, tok.ConnectedBy,
-		boolToInt(tok.NeedsReconnect), sqliteTime(connectedAt), sqliteTime(now),
+		boolToInt(tok.NeedsReconnect), sqliteTime(connectedAt), sqliteTime(now), ownerArg(tok.OwnerUserID),
 	)
 	if err != nil {
 		return fmt.Errorf("sqlite: mcp_oauth_tokens upsert: %w", err)
@@ -102,9 +121,9 @@ func (r *MCPOAuthTokenRepository) SwapRefreshToken(ctx context.Context, usedRefr
 		        scopes          = ?,
 		        needs_reconnect = 0,
 		        updated_at      = ?
-		  WHERE project_id = ? AND server_name = ? AND refresh_token = ?`,
+		  WHERE project_id = ? AND server_name = ? AND owner_user_id IS ? AND refresh_token = ?`,
 		next.AccessToken, next.RefreshToken, sqliteTimePtr(next.ExpiresAt), next.Scopes,
-		sqliteTime(time.Now().UTC()), next.ProjectID, next.ServerName, usedRefreshToken,
+		sqliteTime(time.Now().UTC()), next.ProjectID, next.ServerName, ownerArg(next.OwnerUserID), usedRefreshToken,
 	)
 	if err != nil {
 		return false, fmt.Errorf("sqlite: mcp_oauth_tokens swap: %w", err)
@@ -117,12 +136,12 @@ func (r *MCPOAuthTokenRepository) SwapRefreshToken(ctx context.Context, usedRefr
 }
 
 // MarkNeedsReconnect flags the grant as requiring human re-consent.
-func (r *MCPOAuthTokenRepository) MarkNeedsReconnect(ctx context.Context, projectID, serverName string) error {
+func (r *MCPOAuthTokenRepository) MarkNeedsReconnect(ctx context.Context, projectID, serverName, owner string) error {
 	_, err := r.db.ExecContext(ctx,
 		`UPDATE mcp_oauth_tokens
 		    SET needs_reconnect = 1, updated_at = ?
-		  WHERE project_id = ? AND server_name = ?`,
-		sqliteTime(time.Now().UTC()), projectID, serverName)
+		  WHERE project_id = ? AND server_name = ? AND owner_user_id IS ?`,
+		sqliteTime(time.Now().UTC()), projectID, serverName, ownerArg(owner))
 	if err != nil {
 		return fmt.Errorf("sqlite: mcp_oauth_tokens mark needs_reconnect: %w", err)
 	}
@@ -147,10 +166,10 @@ func (r *MCPOAuthTokenRepository) InvalidateStaleRedirectURIs(ctx context.Contex
 }
 
 // Delete removes the grant (Disconnect).
-func (r *MCPOAuthTokenRepository) Delete(ctx context.Context, projectID, serverName string) error {
+func (r *MCPOAuthTokenRepository) Delete(ctx context.Context, projectID, serverName, owner string) error {
 	_, err := r.db.ExecContext(ctx,
-		`DELETE FROM mcp_oauth_tokens WHERE project_id = ? AND server_name = ?`,
-		projectID, serverName)
+		`DELETE FROM mcp_oauth_tokens WHERE project_id = ? AND server_name = ? AND owner_user_id IS ?`,
+		projectID, serverName, ownerArg(owner))
 	if err != nil {
 		return fmt.Errorf("sqlite: mcp_oauth_tokens delete: %w", err)
 	}
@@ -163,7 +182,7 @@ func (r *MCPOAuthTokenRepository) ListForProject(ctx context.Context, projectID 
 		`SELECT `+mcpOAuthColumns+`
 		   FROM mcp_oauth_tokens
 		  WHERE project_id = ?
-		  ORDER BY server_name`, projectID)
+		  ORDER BY server_name, owner_user_id`, projectID)
 	if err != nil {
 		return nil, fmt.Errorf("sqlite: mcp_oauth_tokens list: %w", err)
 	}
@@ -185,7 +204,7 @@ func (r *MCPOAuthTokenRepository) ListForProject(ctx context.Context, projectID 
 
 // WithRefreshLock serialises refreshes in-process. Honours ctx cancellation while waiting so a
 // shutdown does not block behind a slow token endpoint.
-func (r *MCPOAuthTokenRepository) WithRefreshLock(ctx context.Context, _, _ string, fn func(context.Context) error) error {
+func (r *MCPOAuthTokenRepository) WithRefreshLock(ctx context.Context, _, _, _ string, fn func(context.Context) error) error {
 	select {
 	case r.refreshMu <- struct{}{}:
 	case <-ctx.Done():
@@ -206,14 +225,16 @@ func scanMCPOAuthToken(row rowScanner) (*persistence.MCPOAuthToken, error) {
 		connectedAt sqlTime
 		updatedAt   sqlTime
 		needs       int
+		owner       sql.NullString
 	)
 	if err := row.Scan(
 		&tok.ProjectID, &tok.ServerName, &tok.Resource, &tok.ClientID, &tok.AccessToken,
 		&tok.RefreshToken, &expiresAt, &tok.Scopes, &tok.RedirectURI, &tok.ConnectedBy,
-		&needs, &connectedAt, &updatedAt,
+		&needs, &connectedAt, &updatedAt, &owner,
 	); err != nil {
 		return nil, err
 	}
+	tok.OwnerUserID = owner.String
 	if expiresAt.Valid {
 		t := expiresAt.Time.UTC()
 		tok.ExpiresAt = &t
@@ -222,4 +243,47 @@ func scanMCPOAuthToken(row rowScanner) (*persistence.MCPOAuthToken, error) {
 	tok.ConnectedAt = connectedAt.Time.UTC()
 	tok.UpdatedAt = updatedAt.Time.UTC()
 	return &tok, nil
+}
+
+// ListAll returns every grant, for the one-time seal pass (GitHub #571 A3).
+func (r *MCPOAuthTokenRepository) ListAll(ctx context.Context) ([]*persistence.MCPOAuthToken, error) {
+	rows, err := r.db.QueryContext(ctx,
+		`SELECT `+mcpOAuthColumns+`
+		   FROM mcp_oauth_tokens
+		  ORDER BY project_id, server_name, owner_user_id`)
+	if err != nil {
+		return nil, fmt.Errorf("sqlite: mcp_oauth_tokens list all: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	var out []*persistence.MCPOAuthToken
+	for rows.Next() {
+		tok, err := scanMCPOAuthToken(rows)
+		if err != nil {
+			return nil, fmt.Errorf("sqlite: mcp_oauth_tokens list all scan: %w", err)
+		}
+		out = append(out, tok)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("sqlite: mcp_oauth_tokens list all rows: %w", err)
+	}
+	return out, nil
+}
+
+// ReplaceTokens sets both tokens only while both still hold what the caller
+// read (GitHub #571 A3): a concurrent writer is never overwritten.
+func (r *MCPOAuthTokenRepository) ReplaceTokens(ctx context.Context, projectID, serverName, owner, oldAccess, oldRefresh, newAccess, newRefresh string, needsReconnect bool) (bool, error) {
+	res, err := r.db.ExecContext(ctx,
+		`UPDATE mcp_oauth_tokens
+		    SET access_token = ?, refresh_token = ?, needs_reconnect = (needs_reconnect OR ?)
+		  WHERE project_id = ? AND server_name = ? AND owner_user_id IS ? AND access_token = ? AND refresh_token = ?`,
+		newAccess, newRefresh, needsReconnect, projectID, serverName, ownerArg(owner), oldAccess, oldRefresh) // positional: the order of the ? above
+	if err != nil {
+		return false, fmt.Errorf("sqlite: mcp_oauth_tokens replace tokens: %w", err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return false, fmt.Errorf("sqlite: mcp_oauth_tokens replace tokens rows: %w", err)
+	}
+	return n > 0, nil
 }

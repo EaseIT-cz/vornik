@@ -48,7 +48,7 @@ func startSocket(t *testing.T) (*http.Client, string) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	c.AgentSocketServer = newAgentSocketServer(socketProbeMux(), mw, time.Second, time.Second)
+	c.AgentSocketServer = newAgentSocketServer(socketProbeMux(), mw, func(h http.Handler) http.Handler { return h }, time.Second, time.Second)
 	errCh := make(chan error, 1)
 	if err := c.serveAgentUnixSocket(errCh); err != nil {
 		t.Fatalf("serveAgentUnixSocket: %v", err)

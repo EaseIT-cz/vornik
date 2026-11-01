@@ -194,10 +194,9 @@
                         <dd class="text-3xl font-semibold text-emerald-700 dark:text-emerald-300 tabular-nums" title="Sum over every cached entry of hit_count × CostUSD(model, prompt_tokens, completion_tokens). Counts from when each entry was cached; entries unused for retention.response_cache_days are deleted with their counts, so this is not a lifetime total and not a 24h / 7d / 30d window. A lower bound: entries without token counts and un-priced models add hits but no dollars.">{{fmtUSD .CacheSavings.TotalSavingsUSD}}</dd>
                     </div>
                     <div>
-                        <dt class="text-ink-500 uppercase tracking-wider text-[10px]">LLM calls skipped · all cached entries</dt>
+                        <dt class="text-ink-500 uppercase tracking-wider text-[10px]">LLM calls skipped · all cached entries{{template "hintOpen" "About skipped calls"}}Calls Vornik answered itself, with no provider call. Separate from the provider prompt-cache savings shown with spend, which cover a 24h / 7d / 30d window.{{template "hintClose"}}</dt>
                         <dd class="text-3xl font-semibold text-ink-100 tabular-nums">{{.CacheSavings.TotalHits}}</dd>
                     </div>
-                    <p class="col-span-2 text-[11px] text-ink-500">Calls Vornik answered itself, with no provider call. Separate from the provider prompt-cache savings shown with spend, which cover a 24h / 7d / 30d window.</p>
                 </div>
             </div>
             {{end}}

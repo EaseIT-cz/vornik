@@ -43,6 +43,36 @@ func (r *TaskCredentialRepository) Upsert(ctx context.Context, cred *persistence
 	return mapDBError(err)
 }
 
+// ListAll implements persistence.TaskCredentialSealPass (#578 B3).
+func (r *TaskCredentialRepository) ListAll(ctx context.Context) ([]*persistence.TaskCredential, error) {
+	rows, err := r.db.QueryContext(ctx, `
+		SELECT id, task_id, execution_id, tool, label, value, artifact_url, created_at
+		FROM task_credentials`)
+	if err != nil {
+		return nil, mapDBError(err)
+	}
+	defer func() { _ = rows.Close() }()
+	var out []*persistence.TaskCredential
+	for rows.Next() {
+		var c persistence.TaskCredential
+		if err := rows.Scan(&c.ID, &c.TaskID, &c.ExecutionID, &c.Tool, &c.Label, &c.Value, &c.ArtifactURL, &c.CreatedAt); err != nil {
+			return nil, err
+		}
+		out = append(out, &c)
+	}
+	return out, rows.Err()
+}
+
+// ReplaceValue implements persistence.TaskCredentialSealPass (#578 B3).
+func (r *TaskCredentialRepository) ReplaceValue(ctx context.Context, id, prev, next string) (bool, error) {
+	tag, err := r.db.ExecContext(ctx, `UPDATE task_credentials SET value = $1 WHERE id = $2 AND value = $3`, next, id, prev)
+	if err != nil {
+		return false, mapDBError(err)
+	}
+	n, err := tag.RowsAffected()
+	return n == 1, err
+}
+
 // ListByTaskLatestExecution returns the credentials captured by the task's
 // most-recently-capturing execution only, so a retry's stale credential is
 // never surfaced. Empty when none.

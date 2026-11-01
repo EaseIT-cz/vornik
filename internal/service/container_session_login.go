@@ -67,6 +67,9 @@ func (c *Container) buildSessionLogin() *sessionLoginWiring {
 	if !ok {
 		return nil
 	}
+	if !c.applyManagedSessionRule(backend) { // GitHub #560, A4b
+		return nil
+	}
 	return &sessionLoginWiring{
 		backend:       backend,
 		loginHandler:  login,

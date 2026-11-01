@@ -12,7 +12,6 @@ import (
 	"vornik.io/vornik/internal/integrations/dialguard"
 	"vornik.io/vornik/internal/registry"
 	"vornik.io/vornik/internal/slack"
-	"vornik.io/vornik/internal/voice"
 )
 
 // buildSlackChannels scans the project registry for every project
@@ -42,7 +41,7 @@ import (
 // operator with a shared signing secret across workspaces), but the
 // per-project YAML pattern keeps the boundary clean: project ⇔
 // workspace ⇔ channel.
-func buildSlackChannels(projects []*registry.Project, stt voice.STTProvider, tts voice.TTSProvider, logger zerolog.Logger) ([]*slack.Channel, []*registry.Project, error) {
+func buildSlackChannels(projects []*registry.Project, vp slack.VoiceProviders, logger zerolog.Logger) ([]*slack.Channel, []*registry.Project, error) {
 	var (
 		channels []*slack.Channel
 		picked   []*registry.Project
@@ -56,7 +55,7 @@ func buildSlackChannels(projects []*registry.Project, stt voice.STTProvider, tts
 			return nil, nil, fmt.Errorf("project %q slack: duplicate team_id %q (already configured by project %q)",
 				p.ID, p.Slack.TeamID, existing)
 		}
-		ch, err := buildSlackChannelForProject(p, stt, tts, logger)
+		ch, err := buildSlackChannelForProject(p, vp, logger)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -74,7 +73,7 @@ func buildSlackChannels(projects []*registry.Project, stt voice.STTProvider, tts
 // buildSlackChannels delegates to. Kept separate for testability so
 // callers (tests, future per-project hot-reload paths) can build a
 // single channel without iterating a registry.
-func buildSlackChannelForProject(p *registry.Project, stt voice.STTProvider, tts voice.TTSProvider, logger zerolog.Logger) (*slack.Channel, error) {
+func buildSlackChannelForProject(p *registry.Project, vp slack.VoiceProviders, logger zerolog.Logger) (*slack.Channel, error) {
 	cfg, err := resolveSlackConfig(p.Slack, p.ID)
 	if err != nil {
 		return nil, fmt.Errorf("project %q slack: %w", p.ID, err)
@@ -92,9 +91,9 @@ func buildSlackChannelForProject(p *registry.Project, stt voice.STTProvider, tts
 	// Voice round-trip: the channel adapter is nil-safe per
 	// direction, so a nil STT/TTS just keeps the pre-voice text-only
 	// path active for that direction.
-	if stt != nil || tts != nil {
-		cfg.Voice = slack.VoiceProviders{STT: stt, TTS: tts}
-	}
+	// vp.SyntheticReplies is the resolved voice.synthetic_replies switch
+	// (#543); with it off, replies to an audio clip are text.
+	cfg.Voice = vp
 	ch, err := slack.New(cfg)
 	if err != nil {
 		return nil, fmt.Errorf("project %q slack: %w", p.ID, err)

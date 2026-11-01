@@ -36,7 +36,7 @@ type ProfileUseAuditResponse struct {
 // ListOperatorAudit handles
 // GET /api/v1/operators/{id}/audit?limit&since&until.
 func (s *Server) ListOperatorAudit(w http.ResponseWriter, r *http.Request, operatorID string) {
-	if !s.requireOperatorScope(w, r) {
+	if !s.requireOperatorScopeFor(w, r, SurfaceOperatorAudit) {
 		return
 	}
 	if s.profileUseAuditRepo == nil {

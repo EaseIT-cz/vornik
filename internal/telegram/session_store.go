@@ -28,6 +28,7 @@ package telegram
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"strconv"
@@ -36,6 +37,7 @@ import (
 	"vornik.io/vornik/internal/conversation"
 	"vornik.io/vornik/internal/dispatcher"
 	"vornik.io/vornik/internal/registry"
+	"vornik.io/vornik/internal/sessionstore"
 )
 
 const approximateCharsPerToken = 4
@@ -79,6 +81,10 @@ func (s *SessionStore) Load(ctx context.Context, msg conversation.ChannelMessage
 	if err != nil {
 		return dispatcher.Session{}, fmt.Errorf("telegram: SessionID %q is not a chat_id: %w", msg.SessionID, err)
 	}
+
+	// The fence (§15.18): a moved session drops every lane of the chat first,
+	// so the rehydrate below reads the row.
+	s.bot.fenceChat(ctx, chatID)
 
 	// Restart / replica-failover rehydrate. On the first touch of a chat with
 	// no in-memory lane, pull the persisted (bare-chat-id = ACTIVE) row — which
@@ -201,7 +207,10 @@ func (s *SessionStore) Append(ctx context.Context, msg conversation.ChannelMessa
 	// Save is an upsert (one row per turn).
 	if laneProject == s.bot.getActiveProject(chatID) {
 		if persister := s.bot.sessionPersisterRef(); persister != nil {
-			_ = persister.Save(ctx, msg.SessionID, laneProject, result.Messages)
+			if err := persister.Save(ctx, msg.SessionID, laneProject, result.Messages); errors.Is(err, sessionstore.ErrSessionMoved) {
+				// Erased or moved while this turn ran: keep no lane of it.
+				s.bot.dropChatLanes(chatID)
+			}
 		}
 	}
 	return nil

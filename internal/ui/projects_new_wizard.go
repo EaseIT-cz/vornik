@@ -3,7 +3,6 @@ package ui
 import (
 	"context"
 	"encoding/json"
-	"html/template"
 	"net/http"
 	"strings"
 	"time"
@@ -18,7 +17,7 @@ import (
 // resumes an existing draft (banner "Resume" link → ?session=<id>),
 // ResumeSessionID seeds the client's sessionID so the page continues
 // that session (Converse appends to it; Cancel targets it) instead of
-// silently starting a fresh one — and ResumeTranscriptJSON replays the
+// silently starting a fresh one — and ResumeTranscript replays the
 // prior turns into the chat pane.
 type WizardPageData struct {
 	Title       string
@@ -26,17 +25,18 @@ type WizardPageData struct {
 
 	// ResumeSessionID is the draft being resumed ("" for a new wizard).
 	ResumeSessionID string
-	// ResumeTranscriptJSON is a JS array of {role,content} for the
-	// prior turns, safe to embed in <script> (json.Marshal escapes
-	// <,>,&). Always a valid literal — "[]" when there's nothing to
-	// replay.
-	ResumeTranscriptJSON template.JS
+	// ResumeTranscript is the prior turns, {role,content} each. The page's
+	// wizard-data block writes it with html/template, which escapes it as
+	// JSON (#416 phase 5: no data block holds a template.JS). Never nil, so
+	// it renders as [] when there is nothing to replay.
+	ResumeTranscript []wizardTurn
 }
 
 // ProjectsNewWizard renders the conversational project-setup wizard.
 // With ?session=<id> it resumes one of the requesting operator's own
 // uncommitted drafts.
 func (s *Server) ProjectsNewWizard(w http.ResponseWriter, r *http.Request) {
+	// GitHub #560 (M1b B2b): tenant_admin passes this check on purpose: project creation is granted to the instance owner.
 	if api.SessionRoleFromContext(r.Context()) == auth.RoleUser {
 		http.Error(w, "admin scope required", http.StatusForbidden)
 		return
@@ -46,9 +46,9 @@ func (s *Server) ProjectsNewWizard(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	data := WizardPageData{
-		Title:                "New project — wizard",
-		CurrentPage:          "projects",
-		ResumeTranscriptJSON: template.JS("[]"),
+		Title:            "New project — wizard",
+		CurrentPage:      "projects",
+		ResumeTranscript: []wizardTurn{},
 	}
 	if sid := strings.TrimSpace(r.URL.Query().Get("session")); sid != "" {
 		s.populateWizardResume(r, &data, sid)
@@ -83,37 +83,34 @@ func (s *Server) populateWizardResume(r *http.Request, data *WizardPageData, sid
 			return // closed draft — nothing to resume
 		}
 		data.ResumeSessionID = row.ID
-		data.ResumeTranscriptJSON = resumeTranscriptJSON(row.Transcript)
+		data.ResumeTranscript = resumeTranscript(row.Transcript)
 		return
 	}
 }
 
-// resumeTranscriptJSON projects a stored wizard transcript down to a
-// {role,content} JS array for replay. Returns "[]" on empty/invalid
-// input rather than failing the page render.
-func resumeTranscriptJSON(raw []byte) template.JS {
+// wizardTurn is one replayed turn of a resumed wizard draft.
+type wizardTurn struct {
+	Role    string `json:"role"`
+	Content string `json:"content"`
+}
+
+// resumeTranscript projects a stored wizard transcript down to its
+// {role,content} turns for replay. Returns an empty list on empty or
+// invalid input rather than failing the page render.
+func resumeTranscript(raw []byte) []wizardTurn {
+	out := []wizardTurn{}
 	if len(raw) == 0 {
-		return template.JS("[]")
+		return out
 	}
-	var turns []struct {
-		Role    string `json:"role"`
-		Content string `json:"content"`
-	}
+	var turns []wizardTurn
 	if err := json.Unmarshal(raw, &turns); err != nil {
-		return template.JS("[]")
+		return out
 	}
-	out := make([]map[string]string, 0, len(turns))
 	for _, t := range turns {
 		if strings.TrimSpace(t.Content) == "" {
 			continue
 		}
-		out = append(out, map[string]string{"role": t.Role, "content": t.Content})
+		out = append(out, wizardTurn{Role: t.Role, Content: t.Content})
 	}
-	// json.Marshal escapes <,>,& (HTML escaping on by default), so the
-	// result is safe to inline inside a <script> block.
-	b, err := json.Marshal(out)
-	if err != nil {
-		return template.JS("[]")
-	}
-	return template.JS(b)
+	return out
 }

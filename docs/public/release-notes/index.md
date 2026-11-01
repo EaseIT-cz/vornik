@@ -1,7 +1,7 @@
 ---
 sources:
     - path: docs/release-notes
-      sha256: 02ef4e7b6d0130f9d32c734b6e321f912529beb219a08a1dc54b1b357186385e
+      sha256: cbcb571e1215868b354f689963ca3044b52b85f9fc7fe0a1e11d3d4092714dff
 ---
 # Release Notes
 
@@ -17,9 +17,94 @@ behavior changes, and notable fixes. Internal-only changes are omitted.
 
 ---
 
-## 2026.10.8
+## 2026.11.1
 
-*Unreleased draft.*
+!!! warning "Upgrade requirements"
+    - **Back up `~/.config/vornik/secrets/store.key` beside the database,
+      never inside its backup.** Every MCP OAuth token and every credential
+      a tool hands to a task is now sealed with it; on first start the
+      daemon seals the existing rows once. Without the key, sealed secrets
+      must be entered again. Daemons that share one database must share the
+      key file and upgrade together. **An older release cannot read the
+      upgraded tables**: the way back is the database backup taken before
+      upgrading.
+    - **Model clients ignore `HTTP_PROXY` and `HTTPS_PROXY`.** A chat or
+      embedding provider reachable only through a proxy is unreachable after
+      this upgrade; the daemon logs each proxy variable it ignores. Bedrock
+      is unaffected.
+    - **Spoken replies are off by default.** An install with text-to-speech
+      answers voice messages in text. To keep spoken replies, set
+      `voice.synthetic_replies: true`, `voice.synthetic_replies_ack: true`
+      and a `voice.synthetic_replies_ack_basis` naming who accepted that the
+      audio carries no embedded watermark, and why.
+    - **A swarm role can no longer set the daemon's agent environment keys**
+      (`VORNIK_API_URL`, `VORNIK_LLM_ENDPOINT`, `VORNIK_MEM_URL`,
+      `VORNIK_API_KEY`, `VORNIK_LLM_API_KEY`, `VORNIK_PROJECT_ID`,
+      `VORNIK_TASK_ID`, `VORNIK_EXECUTION_ID`), in `runtime.envVars` or
+      `named_secrets`. Such a swarm file fails to load, naming the role and
+      key. No shipped swarm sets one.
+    - **`vornikctl subject erase` may ask for a residual assessment**: a plan
+      that leaves a person's data inside other participants' messages needs
+      `--residual-assessment` and `--assessed-by`.
+    - **A sign-in started before the upgrade fails once** (every login now
+      carries a PKCE cookie); signing in again works.
+
+EU AI Act marking, a stricter console and stricter outbound connections.
+
+- **AI-generated output is marked, and anyone can check it** (EU AI Act
+  Art 50(2), due 2 December 2026). On by default on an install with a
+  secret store key.
+  - A signed mark in every channel that can carry one: API and web chat
+    response headers, email headers, a hidden comment on GitHub texts,
+    Slack message metadata, document metadata. A ledger record of every
+    mark, which is the only mark on Telegram, agent files and voice.
+  - Anyone can look up a content hash, verify a mark and fetch the public
+    keys, without an account; answers carry no content, task, project or
+    channel. How it works, its limits and how to check:
+    [AI transparency](../ai-transparency.md#how-ai-generated-output-is-marked).
+  - Visible changes: GitHub texts end with a hidden HTML comment, and mail
+    carries `Auto-Submitted: auto-generated`, so mail systems send no
+    automatic replies to it.
+- **Security.**
+  - The console runs only its own scripts: its Content-Security-Policy
+    admits an inline script only by the hash of its exact text, with no
+    `'unsafe-inline'` or `'unsafe-eval'` for scripts. Inline styles are
+    still allowed.
+  - The chat and embedding clients dial through the SSRF guard: a model
+    endpoint on, or redirecting to, a link-local or cloud-metadata address
+    is refused; local and LAN model servers keep working. Every guard now
+    refuses the cloud metadata addresses, IPv6 ones included.
+  - Chat notices (Telegram, Slack, email) show a task's error and status
+    text scrubbed to everyone except an admin-linked user in a private chat.
+  - A credential a tool issues during a task reaches private Telegram chats
+    only, and is kept out of the tool audit.
+  - A task whose role cannot be resolved gets no MCP tools (403, counted on
+    `vornik_mcp_gate_refused_total`).
+  - Removing an MCP connection deletes its stored sign-in.
+  - Agent containers can run with a read-only root filesystem and a PID
+    limit (`runtime.agent_read_only_root`, `runtime.agent_pids_limit`, off
+    by default). On the 90-task agent benchmark this showed no measurable
+    effect on pass rate or energy.
+- **Compliance.**
+  - Data-subject request deadlines count one calendar month from receipt
+    (GDPR Art 12(3)), not 30 days from when the command ran.
+  - An erased chat session stays erased: a later save can no longer write
+    it back, on any node.
+- **Memory.** Companion documents verify on self-hosted forges (GitLab,
+  Gitea, Forgejo, GitHub Enterprise, plain git) listed under
+  `memory.provenance.forges`; a repository too large to clone is checked
+  through the forge's API. On upgrade each automatic clone is made once more.
+- **Benchmarks.** An open-weight model on one GPU is published:
+  `gemma-4-26b-a4b` on one RTX 3090 passed 89 to 90 of 90 agent tasks, for
+  €1.34 to €1.40 of electricity per run. [Results](../benchmarks/results.md).
+- **Reliability.** A schema-constrained retry no longer fails on llama.cpp
+  (HTTP 400); all configuration writes share one lock, so two writes can no
+  longer lose an update.
+- **Console.** Standing explanations on the reporting pages moved into an ⓘ
+  tooltip that opens on hover, focus or tap.
+- **Companions.** The Claude Code plugin (0.48.0) takes its key from Claude
+  Code's options dialog, which keeps it in the system credential store.
+- The web scraper identifies itself as `vornik-agent/<release>`.
 
 ## 2026.10.7
 

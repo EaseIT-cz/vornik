@@ -107,6 +107,20 @@ func (r *ToolAuditRepository) List(ctx context.Context, filter persistence.ToolA
 	return entries, rows.Err()
 }
 
+// ReplaceOutputValue implements persistence.ToolAuditValueScrubber (#578 B3):
+// one exact value in the tool output of an execution's rows for one tool.
+func (r *ToolAuditRepository) ReplaceOutputValue(ctx context.Context, executionID, tool, value, replacement string) (int64, error) {
+	if value == "" {
+		return 0, nil
+	}
+	res, err := r.db.ExecContext(ctx, `UPDATE tool_audit_log SET tool_output = REPLACE(tool_output, ?, ?)
+		WHERE execution_id = ? AND tool_name = ? AND instr(tool_output, ?) > 0`, value, replacement, executionID, tool, value)
+	if err != nil {
+		return 0, err
+	}
+	return res.RowsAffected()
+}
+
 // CountByTool groups invocation counts by tool name for one execution.
 func (r *ToolAuditRepository) CountByTool(ctx context.Context, executionID string) (map[string]int64, error) {
 	rows, err := r.db.QueryContext(ctx, `

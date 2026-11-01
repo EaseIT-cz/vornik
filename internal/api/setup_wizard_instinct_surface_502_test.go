@@ -42,6 +42,7 @@ var setupSurface502 = []route495{
 	{http.MethodPost, "/api/v1/setup/session/s502/commit", `{"endpoint":"http://192.0.2.1:11434","api_key":"k","model":"m"}`},
 	{http.MethodPost, "/api/v1/setup/session/s502/memory/validate", `{"enabled":true}`},
 	{http.MethodPost, "/api/v1/setup/session/s502/memory/commit", `{"enabled":true}`},
+	{http.MethodPost, "/api/v1/setup/managed", `{}`}, // GitHub #582 P2
 }
 
 // wizardSurface502 is design S4: every wizard pair, not only commit.
@@ -185,7 +186,8 @@ func TestOperatorSurface502_SetupAndWizardRoutesWrapped(t *testing.T) {
 		assert.True(t, strings.HasPrefix(h, "server.operatorOnly("), "%s is registered as %s, not through server.operatorOnly", path, h)
 		return true
 	})
-	assert.Equal(t, 7, seen, "the setup and wizard registrations moved: update design U1/U3")
+	// 8 since GitHub #582 P2 added /api/v1/setup/managed (18-security-and-tenancy.md, U1 amendment).
+	assert.Equal(t, 8, seen, "the setup and wizard registrations moved: update design U1/U3")
 }
 
 // The eight setup handlers lost their in-handler RoleUser check (S1); a
@@ -212,7 +214,7 @@ func TestSetupSurface502_UserSessionRefusedByTheGate(t *testing.T) {
 			}
 			req := httptest.NewRequest(http.MethodPost, "/api/v1/setup/x", strings.NewReader(`{}`)).WithContext(ctx)
 			rec := httptest.NewRecorder()
-			srv.operatorOnly(h)(rec, req)
+			srv.operatorOnly(SurfaceSetupSession, h)(rec, req)
 			assert.Equal(t, tc.want, rec.Code, "%s, user session with scope %v: %s", name, tc.scope, rec.Body.String())
 		}
 	}

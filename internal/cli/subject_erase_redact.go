@@ -14,6 +14,7 @@ import (
 	"vornik.io/vornik/internal/datasubject"
 	"vornik.io/vornik/internal/erasure"
 	"vornik.io/vornik/internal/persistence/postgres"
+	"vornik.io/vornik/internal/textutil"
 )
 
 // Wiring for slice 5c — Art 17 redaction of records that also concern other people.
@@ -56,30 +57,33 @@ func (s identifierSource) Identifiers(ctx context.Context, subjectID string) ([]
 
 // newRedactDeps assembles the redaction capability, or explains why it cannot.
 //
-// Returns (nil, nil) when redaction is simply not configured — the executor then
-// DEFERS every shared record with a recorded reason, which is the honest outcome and
-// exactly the 5b behaviour. An error is returned only when redaction was configured
-// but is broken, because silently degrading a misconfigured erasure to "deferred"
-// would look like a policy decision rather than a fault.
-func newRedactDeps(cfg *config.Config, d *erasureDeps) (*datasubject.RedactDeps, error) {
-	provider, model := newRewriteProvider(cfg)
-	if provider == nil {
-		return nil, nil
-	}
-	rw, err := erasure.NewRewriter(provider, model)
-	if err != nil {
-		return nil, err
-	}
-	deps := &datasubject.RedactDeps{
-		Redactor:           postgres.NewChunkRedactorRepository(d.DB),
-		Rewriter:           rw,
+// Shared transcripts (slice 5d-1) are always wired: they are masked
+// deterministically and need no model (O-5d-1). The memory-chunk rewrite (5c)
+// is wired only when a rewrite model is configured; without one rewriter is
+// false and the executor DEFERS every shared memory chunk with a recorded
+// reason, exactly the 5b behaviour. An error is returned only when the rewrite
+// was configured but is broken, because silently degrading a misconfigured
+// erasure to "deferred" would look like a policy decision rather than a fault.
+func newRedactDeps(cfg *config.Config, d *erasureDeps) (deps *datasubject.RedactDeps, rewriter bool, err error) {
+	deps = &datasubject.RedactDeps{
+		Transcripts:        d.Repo,
 		Identifiers:        identifierSource{repo: d.Repo},
 		ApplyWithoutReview: subjectEraseApply,
 	}
 	if !subjectEraseApply {
 		deps.Approve = reviewRedactionOnTerminal
 	}
-	return deps, nil
+	provider, model := newRewriteProvider(cfg)
+	if provider == nil {
+		return deps, false, nil
+	}
+	rw, err := erasure.NewRewriter(provider, model)
+	if err != nil {
+		return nil, false, err
+	}
+	deps.Redactor = postgres.NewChunkRedactorRepository(d.DB)
+	deps.Rewriter = rw
+	return deps, true, nil
 }
 
 // newRewriteProvider builds the LLM client used for rewrites.
@@ -117,14 +121,7 @@ func newRewriteProvider(cfg *config.Config) (*chat.Client, string) {
 // OVER-redaction — a rewrite that also removed the other person's data would verify
 // perfectly clean and pass every mechanical check.
 func reviewRedactionOnTerminal(p datasubject.RedactionProposal) (bool, error) {
-	fmt.Printf("\n────────────────────────────────────────────────────────────\n")
-	fmt.Printf("REVIEW REDACTION  %s/%s\n", p.Table, p.RowID)
-	fmt.Printf("model: %s\n", p.Model)
-	fmt.Printf("removing: %s\n", strings.Join(p.Identifiers, ", "))
-	fmt.Printf("\n--- BEFORE ---\n%s\n", p.Before)
-	fmt.Printf("\n--- AFTER ----\n%s\n", p.After)
-	fmt.Printf("\nCheck that OTHER people's data survived — that is what this review is for.\n")
-	fmt.Printf("Apply this rewrite? [y/N/q]: ")
+	fmt.Print(formatRedactionReview(p))
 
 	line, err := bufio.NewReader(os.Stdin).ReadString('\n')
 	if err != nil {
@@ -140,4 +137,28 @@ func reviewRedactionOnTerminal(p datasubject.RedactionProposal) (bool, error) {
 	default:
 		return false, nil
 	}
+}
+
+// formatRedactionReview renders the §8 review. Everything in it but the
+// fixed labels is data another person may have written (a transcript is chat
+// text), so control characters are shown escaped: an ESC sequence must not
+// hide or rewrite what the operator approves (GitHub #344, security review of
+// cc464bb70). A transcript proposal joins its columns with NUL (5d-1), shown
+// one per line, before the escaping.
+func formatRedactionReview(p datasubject.RedactionProposal) string {
+	safe := func(v string) string { return textutil.EscapeControl(strings.ReplaceAll(v, "\x00", "\n")) }
+	ids := make([]string, len(p.Identifiers))
+	for i, id := range p.Identifiers {
+		ids[i] = textutil.EscapeControl(id)
+	}
+	var b strings.Builder
+	b.WriteString("\n────────────────────────────────────────────────────────────\n")
+	fmt.Fprintf(&b, "REVIEW REDACTION  %s/%s\n", textutil.EscapeControl(string(p.Table)), textutil.EscapeControl(p.RowID))
+	fmt.Fprintf(&b, "model: %s\n", textutil.EscapeControl(p.Model))
+	fmt.Fprintf(&b, "removing: %s\n", strings.Join(ids, ", "))
+	fmt.Fprintf(&b, "\n--- BEFORE ---\n%s\n", safe(p.Before))
+	fmt.Fprintf(&b, "\n--- AFTER ----\n%s\n", safe(p.After))
+	b.WriteString("\nCheck that OTHER people's data survived — that is what this review is for.\n")
+	b.WriteString("Apply this rewrite? [y/N/q]: ")
+	return b.String()
 }

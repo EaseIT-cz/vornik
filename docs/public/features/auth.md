@@ -3,7 +3,7 @@ sources:
     - path: internal/featuredoctor/feature_auth.go
       sha256: c0d204531a03dd02c5e16a291d1d8fbedf061544fefad70b965c4358b151e715
     - path: internal/auth/backend.go
-      sha256: 9b0e8e6a9fd4ac18aa631d7c6df46a2bcda0330d152159782505ca52d3cc2c40
+      sha256: bf8888283c2a4e0227ef66e62bb076d5aaec7c8c6b9a4502b60e2b138dc834b3
 ---
 # Authentication & access control
 
@@ -71,6 +71,10 @@ caller.
 Identities resolve to a **principal** with a role and a set of projects:
 
 - **Roles.** There are two — `admin` (instance-wide) and `user` (project-scoped).
+  A managed (hosted) instance adds a third for its owner: an administrator's
+  browser session on the public address is a `tenant_admin`, who may use the
+  project wizard and gallery, connect MCP servers through OAuth and read the
+  operator audit, and nothing else of the operator surface.
 - **Groups.** Users belong to groups; a group carries a role and a set of
   projects. Membership in any admin-role group makes a user an admin with access
   to everything. Otherwise a user's accessible projects are the union of their

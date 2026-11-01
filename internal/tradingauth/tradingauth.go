@@ -130,6 +130,11 @@ func newNonce() (string, error) {
 type Verifier struct {
 	secret string
 	skew   time.Duration
+	// startedAt, in Unix seconds, is when this verifier was built. A
+	// signature timestamped before it is refused, so a request captured
+	// before a daemon restart cannot be replayed into the new process,
+	// whose nonce cache is empty (GitHub #444).
+	startedAt int64
 
 	mu     sync.Mutex
 	nonces map[string]time.Time // nonce → signing time, pruned past skew
@@ -138,13 +143,20 @@ type Verifier struct {
 // NewVerifier returns a Verifier keyed on secret with the given
 // freshness window. A non-positive skew falls back to DefaultClockSkew.
 func NewVerifier(secret string, skew time.Duration) *Verifier {
+	return NewVerifierAt(secret, skew, time.Now())
+}
+
+// NewVerifierAt is NewVerifier with an explicit start time (for tests).
+// Signatures timestamped before startedAt's whole second are refused.
+func NewVerifierAt(secret string, skew time.Duration, startedAt time.Time) *Verifier {
 	if skew <= 0 {
 		skew = DefaultClockSkew
 	}
 	return &Verifier{
-		secret: secret,
-		skew:   skew,
-		nonces: make(map[string]time.Time),
+		secret:    secret,
+		skew:      skew,
+		startedAt: startedAt.Unix(),
+		nonces:    make(map[string]time.Time),
 	}
 }
 
@@ -177,6 +189,10 @@ func (v *Verifier) Verify(req *http.Request, body []byte, now time.Time) error {
 	}
 	if delta > v.skew {
 		return &VerifyError{Reason: "timestamp outside freshness window"}
+	}
+	// Whole seconds, the signature's own granularity (#444).
+	if tsSec < v.startedAt {
+		return &VerifyError{Reason: "signed before this daemon started"}
 	}
 
 	presented, err := hex.DecodeString(sig)

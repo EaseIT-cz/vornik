@@ -169,6 +169,7 @@ func TestSQLTraceStore_ReadsFailedCallsAndKeepsThemOutOfInvoked(t *testing.T) {
 	}
 	if failed == nil {
 		t.Fatal("the failing call was recorded as successful")
+		return // t.Fatal does not return; this tells staticcheck (SA5011) too
 	}
 	if failed.ErrorText == "" {
 		t.Error("the failure text was dropped, so the tool-use probe cannot classify it")

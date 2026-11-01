@@ -71,6 +71,10 @@ func (s *Server) ArtifactDownload(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=%q", filepath.Base(artifact.Name)))
+	// Art 50(2) (chat_aimark.go): marked from the stored hash. The bytes served
+	// are the ones it describes: a stored artifact is an immutable revision
+	// under its own key, hashed from the bytes written (artifacts/store.go).
+	s.markDownload(ctx, w, artifact)
 	if artifact.MimeType != nil && *artifact.MimeType != "" {
 		w.Header().Set("Content-Type", *artifact.MimeType)
 	} else {

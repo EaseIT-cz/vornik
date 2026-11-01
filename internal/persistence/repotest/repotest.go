@@ -110,6 +110,50 @@ func RunToolAuditSuite(t *testing.T, repo persistence.ToolAuditRepository) {
 	t.Helper()
 	ctx := context.Background()
 
+	// GitHub #578 B3: the seal pass scrubs a carried credential's old copy out
+	// of the audit, exactly, for one execution and tool only. A value holding
+	// LIKE wildcards must not match anything else.
+	t.Run("ReplaceOutputValue_is_exact_and_scoped", func(t *testing.T) {
+		sc, ok := repo.(persistence.ToolAuditValueScrubber)
+		if !ok {
+			t.Fatalf("%T must implement persistence.ToolAuditValueScrubber", repo)
+		}
+		exec := uniqueID("exec578")
+		mk := func(execID, tool, out string) *persistence.ToolAuditEntry {
+			return &persistence.ToolAuditEntry{ID: uniqueID("aud"), ProjectID: "p578", TaskID: "t578", ExecutionID: execID,
+				ToolName: tool, ToolOutput: out, CreatedAt: time.Now().UTC()}
+		}
+		target := mk(exec, "pd", `Password: pw_1% View: x Password: pw_1%`)
+		otherTool := mk(exec, "other", `Password: pw_1%`)
+		otherExec := mk(uniqueID("exec578"), "pd", `Password: pw_1%`)
+		wildcard := mk(exec, "pd", `Password: pwX1Z`)
+		for _, e := range []*persistence.ToolAuditEntry{target, otherTool, otherExec, wildcard} {
+			if err := repo.Log(ctx, e); err != nil {
+				t.Fatalf("Log: %v", err)
+			}
+		}
+		n, err := sc.ReplaceOutputValue(ctx, exec, "pd", "pw_1%", "[REDACTED:carried_credential]")
+		if err != nil || n != 1 {
+			t.Fatalf("ReplaceOutputValue: n=%d err=%v, want exactly the target row", n, err)
+		}
+		project := "p578"
+		got, err := repo.List(ctx, persistence.ToolAuditFilter{ProjectID: &project})
+		if err != nil {
+			t.Fatalf("List: %v", err)
+		}
+		want := map[string]string{
+			target.ID:    `Password: [REDACTED:carried_credential] View: x Password: [REDACTED:carried_credential]`,
+			otherTool.ID: otherTool.ToolOutput,
+			otherExec.ID: otherExec.ToolOutput,
+			wildcard.ID:  wildcard.ToolOutput,
+		}
+		for _, e := range got {
+			if w, ok := want[e.ID]; ok && e.ToolOutput != w {
+				t.Errorf("row %s output = %q, want %q", e.ID, e.ToolOutput, w)
+			}
+		}
+	})
+
 	t.Run("Log_then_List_round_trips_entry", func(t *testing.T) {
 		entry := &persistence.ToolAuditEntry{
 			ID:          uniqueID("aud"),

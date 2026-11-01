@@ -147,7 +147,10 @@ func (te *ToolExecutor) renderDocument(ctx context.Context, argsJSON string, fs 
 		wantSet[strings.ToLower(strings.TrimSpace(f))] = true
 	}
 
-	produced, failures := renderRequestedFormats(ctx, te.sandbox(), tmpDir, mdPath, safeName, wantSet)
+	renderer := te.sandbox()
+	renderer.mark = te.markSource(ctx, args.Content) // Art 50(2) (#117)
+	produced, failures := renderRequestedFormats(ctx, renderer, tmpDir, mdPath, safeName, wantSet)
+	te.recordRendered(ctx, produced, mdPath)
 
 	// If the caller asked for md ONLY, produced is [mdPath] and we
 	// deliver it. If md wasn't requested but other formats were, drop
@@ -212,6 +215,7 @@ var errRenderUnavailable = errors.New("rendering not available in the agent imag
 //     render-tool-design.md §0.3, #339).
 type sandboxRenderer struct {
 	runner *sandboxtool.Runner
+	mark   string // the Art 50(2) mark over the source, "" when unsigned (#117)
 }
 
 func (te *ToolExecutor) sandbox() sandboxRenderer {
@@ -244,7 +248,9 @@ func (r sandboxRenderer) render(ctx context.Context, mdPath, outPath, title, for
 		return err
 	}
 	// JSON is valid YAML, and json.Marshal escapes the title safely.
-	meta, err := json.Marshal(map[string]string{"title": title})
+	m := map[string]any{"title": title}
+	docrender.MarkMeta(m, r.mark) // Art 50(2): signed when r.mark is set (#117)
+	meta, err := json.Marshal(m)
 	if err != nil {
 		return err
 	}

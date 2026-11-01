@@ -95,6 +95,11 @@ func (e *Executor) checkTradingEvidence(ctx context.Context, in *StepOutcome) er
 	}
 	refusal := trading.CheckAnalysisEvidence(in.ResultBytes, calls, p.Trading.AnalysisEvidence, p.Trading.EntryPolicy.AllowedSymbols, p.Trading.ProtectedSymbols)
 	if refusal == nil {
+		// The accepted strategist output: record its entry funnel
+		// (GitHub #596). Measurement only; it never fails the step.
+		e.recordFunnel(ctx, in)
+		// The rule engine decides the same tick in shadow (GitHub #598).
+		e.recordShadow(ctx, in, calls, p)
 		return nil
 	}
 	incEvidenceRefused(refusal.Reason)

@@ -88,7 +88,7 @@ func toAccountJSON(v persistence.UserAdminView) accountJSON {
 // OperatorAccounts handles GET (list) and POST (create) on
 // /api/v1/operator/accounts.
 func (s *Server) OperatorAccounts(w http.ResponseWriter, r *http.Request) {
-	if !s.requireOperatorScope(w, r) {
+	if !s.requireOperatorScopeFor(w, r, SurfaceOperatorAccounts) {
 		return
 	}
 	if s.accounts == nil {
@@ -142,7 +142,7 @@ func (s *Server) OperatorAccounts(w http.ResponseWriter, r *http.Request) {
 
 // OperatorAccountItem routes /api/v1/operator/accounts/{id}[/grant|/revoke|/disable|/enable|/unlink].
 func (s *Server) OperatorAccountItem(w http.ResponseWriter, r *http.Request) {
-	if !s.requireOperatorScope(w, r) {
+	if !s.requireOperatorScopeFor(w, r, SurfaceOperatorAccounts) {
 		return
 	}
 	if s.accounts == nil {

@@ -14,6 +14,7 @@ import (
 	awsconfig "github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/bedrockruntime"
 
+	"vornik.io/vornik/internal/integrations/dialguard"
 	"vornik.io/vornik/internal/llmspend"
 )
 
@@ -56,9 +57,10 @@ type bedrockRuntimeEmbedClient interface {
 func NewEmbedder(cfg Config) *Embedder {
 	e := &Embedder{
 		cfg: cfg,
-		client: &http.Client{
-			Timeout: 60 * time.Second,
-		},
+		// GitHub #505 (18-security-and-tenancy.md "Amendment 2026-10-28
+		// (#505)", C4): the configured embedding endpoint is dialled through
+		// the model-endpoint guard, proxy-free, same-host redirects only.
+		client: modelEndpointHTTPClient(60 * time.Second),
 	}
 	if e.usesBedrock() {
 		if strings.TrimSpace(cfg.BedrockRegion) == "" {
@@ -701,4 +703,12 @@ func (e *Embedder) embedOneBedrock(ctx context.Context, scope EmbedScope, text s
 		e.recordEmbedUsage(ctx, scope, estimateEmbedTokens([]string{text}), true)
 	}
 	return resp.Embedding, nil
+}
+
+// modelEndpointHTTPClient is the embedder's default client: guarded by
+// dialguard.ModelEndpointGuard, resolved on every dial so managed hosting's
+// policy applies even when it is set later (#560 M1c D0), no proxy,
+// same-host redirects only (#505).
+func modelEndpointHTTPClient(timeout time.Duration) *http.Client {
+	return dialguard.ModelEndpointClient(timeout)
 }

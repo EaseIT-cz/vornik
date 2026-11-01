@@ -368,3 +368,17 @@ func TestWriteTrustVerdictTrace_WriteError_Swallowed(_ *testing.T) {
 	// Must not panic / must not surface — best-effort.
 	s.writeTrustVerdictTrace(context.Background(), "p", &RoutingVerdict{Verdict: VerdictLow}, defCfg())
 }
+
+// TestWidenRoutingOptions_KeepsAuthority: a widen round must never relax the
+// caller's authority, the #368 strict-scope lesson applied to #550's filter.
+// A widen that dropped it would hand the architect the reviews and notes its
+// role policy excludes, exactly when its first round found too little.
+func TestWidenRoutingOptions_KeepsAuthority(t *testing.T) {
+	base := SearchOptions{Limit: 5, RepoScope: "github.com/example/vornik", StrictScope: true, Authority: AuthorityProvenance, Routing: true}
+	for round := 1; round <= 3; round++ {
+		o := widenRoutingOptions(base, round)
+		if o.Authority != AuthorityProvenance || !o.StrictScope || o.RepoScope != base.RepoScope {
+			t.Fatalf("round %d relaxed the filter: %+v", round, o)
+		}
+	}
+}

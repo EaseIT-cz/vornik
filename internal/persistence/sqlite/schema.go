@@ -718,6 +718,7 @@ CREATE TABLE IF NOT EXISTS agent_secrets (
     created_by_device  TEXT NOT NULL DEFAULT '',
     created_at         TEXT NOT NULL,
     updated_at         TEXT NOT NULL,
+    key_version        INTEGER NOT NULL DEFAULT 0, -- migration 235 (#571 A4)
     PRIMARY KEY (namespace, name)
 );
 
@@ -763,27 +764,11 @@ CREATE TABLE IF NOT EXISTS agent_account_transitions (
  operation TEXT NOT NULL DEFAULT '', started_at TEXT NOT NULL DEFAULT ''
 );
 
-CREATE TABLE IF NOT EXISTS agent_integration_approvals (
-    namespace           TEXT NOT NULL,
-    project_id          TEXT NOT NULL,
-    integration         TEXT NOT NULL,
-    kind                TEXT NOT NULL CHECK (kind IN ('mcp','api')),
-    url                 TEXT NOT NULL,
-    read_tools          TEXT NOT NULL DEFAULT '[]',
-    write_tools         TEXT NOT NULL DEFAULT '[]',
-    read_pending        INTEGER NOT NULL DEFAULT 0,
-    approved_by_device  TEXT NOT NULL,
-    approved_at         TEXT NOT NULL,
-    removed_at          TEXT,
-    -- migration 219 (design §22.2.2); also in sqliteAdditiveColumns.
-    account_label       TEXT NOT NULL DEFAULT 'default',
-    account_identity    TEXT NOT NULL DEFAULT '',
-    identity_source     TEXT NOT NULL DEFAULT '' CHECK (identity_source IN ('', 'agent', 'provider')),
-    -- migration 233 (design §6.5, amendment #481); also in sqliteAdditiveColumns.
-    suspended_tools     TEXT NOT NULL DEFAULT '[]',
-    suspended_at        TEXT,
-    PRIMARY KEY (project_id, integration)
-);
+` + agentIntegrationApprovalsTableSQL + `;
+CREATE UNIQUE INDEX IF NOT EXISTS uq_agent_integration_approvals_shared
+    ON agent_integration_approvals (project_id, integration) WHERE owner_user_id IS NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS uq_agent_integration_approvals_owned
+    ON agent_integration_approvals (project_id, integration, owner_user_id) WHERE owner_user_id IS NOT NULL;
 CREATE INDEX IF NOT EXISTS agent_integration_approvals_ns ON agent_integration_approvals (namespace);
 CREATE TABLE IF NOT EXISTS agent_workflow_approvals (
     workflow_id         TEXT PRIMARY KEY,
@@ -893,7 +878,8 @@ CREATE TABLE IF NOT EXISTS broker_standing_grants (
     digest_through         TEXT NOT NULL,
     -- migration 220 (design §22.2.16); also in sqliteAdditiveColumns.
     account_label          TEXT NOT NULL DEFAULT '',
-    account_identity       TEXT NOT NULL DEFAULT ''
+    account_identity       TEXT NOT NULL DEFAULT '',
+    key_version            INTEGER NOT NULL DEFAULT 0 -- migration 236 (#571 A4)
 );
 CREATE INDEX IF NOT EXISTS idx_broker_standing_grants_class ON broker_standing_grants (project_id, workflow_id, action);
 CREATE INDEX IF NOT EXISTS idx_broker_standing_grants_ns ON broker_standing_grants (namespace);
@@ -1103,7 +1089,8 @@ CREATE TABLE IF NOT EXISTS data_subject_requests (
     refused_reason  TEXT,
     updated_at      TEXT NOT NULL,
     erasure_ground  TEXT,
-    report_json     TEXT
+    report_json     TEXT,
+    extension_notified_at TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_ds_requests_live
     ON data_subject_requests(opened_at) WHERE state IN ('open', 'verified');
@@ -1498,6 +1485,7 @@ CREATE TABLE IF NOT EXISTS task_credentials (
     value        TEXT NOT NULL,
     artifact_url TEXT NOT NULL DEFAULT '',
     created_at   TEXT NOT NULL,
+    key_version  INTEGER NOT NULL DEFAULT 0, -- migration 242 (#578 B4)
     UNIQUE (task_id, execution_id, tool, artifact_url)
 );
 CREATE INDEX IF NOT EXISTS idx_task_credentials_task ON task_credentials(task_id);
@@ -1532,6 +1520,78 @@ CREATE TABLE IF NOT EXISTS channel_disclosure_log (
 
 CREATE INDEX IF NOT EXISTS idx_channel_disclosure_served_at
     ON channel_disclosure_log (served_at);
+
+-- EU AI Act Art 50(2) marks and the keys that signed them. Mirrors postgres
+-- migration 243 (GitHub #117). Evidence tables: never pruned.
+CREATE TABLE IF NOT EXISTS ai_output_marks (
+    content_sha256 TEXT PRIMARY KEY,
+    surface        TEXT NOT NULL,
+    mark           TEXT NOT NULL,
+    task_id        TEXT,
+    issued_at      TEXT NOT NULL
+);
+
+-- The rule engine's shadow record (GitHub #598). Mirrors postgres migration
+-- 246. Measurement only.
+CREATE TABLE IF NOT EXISTS trading_shadow_decisions (
+    execution_id  TEXT NOT NULL,
+    symbol        TEXT NOT NULL,
+    intent        TEXT NOT NULL,
+    project_id    TEXT NOT NULL,
+    observed_at   TEXT NOT NULL,
+    engine_status TEXT NOT NULL,
+    engine_gate   TEXT NOT NULL,
+    model_status  TEXT NOT NULL DEFAULT '',
+    model_gate    TEXT NOT NULL DEFAULT '',
+    agree         INTEGER NOT NULL,
+    PRIMARY KEY (execution_id, symbol, intent)
+);
+
+CREATE INDEX IF NOT EXISTS idx_trading_shadow_project_observed
+    ON trading_shadow_decisions (project_id, observed_at);
+
+-- Benchmark closes (SPY), completed sessions. Mirrors postgres migration
+-- 245 (GitHub #597). Not project-scoped.
+CREATE TABLE IF NOT EXISTS trading_benchmark_closes (
+    symbol  TEXT NOT NULL,
+    session TEXT NOT NULL,
+    close   REAL NOT NULL,
+    PRIMARY KEY (symbol, session)
+);
+
+-- The trading entry funnel and its forward outcomes. Mirrors postgres
+-- migration 244 (GitHub #596). Measurement only.
+CREATE TABLE IF NOT EXISTS trading_funnel_candidates (
+    execution_id TEXT NOT NULL,
+    symbol       TEXT NOT NULL,
+    intent       TEXT NOT NULL,
+    task_id      TEXT NOT NULL,
+    project_id   TEXT NOT NULL,
+    step_id      TEXT NOT NULL,
+    observed_at  TEXT NOT NULL,
+    status       TEXT NOT NULL,
+    gate         TEXT NOT NULL,
+    gate_raw     TEXT NOT NULL,
+    reason       TEXT NOT NULL DEFAULT '',
+    inputs       TEXT,
+    ref_close    REAL,
+    ref_atr      REAL,
+    ret_1 REAL, ret_3 REAL, ret_5 REAL,
+    mfe_1 REAL, mfe_3 REAL, mfe_5 REAL,
+    mae_1 REAL, mae_3 REAL, mae_5 REAL,
+    PRIMARY KEY (execution_id, symbol, intent)
+);
+
+CREATE INDEX IF NOT EXISTS idx_trading_funnel_project_observed
+    ON trading_funnel_candidates (project_id, observed_at);
+CREATE INDEX IF NOT EXISTS idx_trading_funnel_project_symbol
+    ON trading_funnel_candidates (project_id, symbol);
+
+CREATE TABLE IF NOT EXISTS ai_mark_keys (
+    kid           TEXT PRIMARY KEY,
+    public_key    BLOB NOT NULL,
+    first_used_at TEXT NOT NULL
+);
 
 CREATE TABLE IF NOT EXISTS forge_pr_review_state (
     project_id             TEXT    NOT NULL,
@@ -2263,25 +2323,11 @@ CREATE INDEX IF NOT EXISTS idx_step_outcomes_role_error_time
 -- repositories must agree on that comparison or the shared
 -- repotest contract suite would diverge.
 -- ============================================================
-CREATE TABLE IF NOT EXISTS mcp_oauth_tokens (
-    project_id      TEXT NOT NULL,
-    server_name     TEXT NOT NULL,
-    resource        TEXT NOT NULL,
-    client_id       TEXT NOT NULL,
-    access_token    TEXT NOT NULL,
-    refresh_token   TEXT NOT NULL DEFAULT '',
-    expires_at      TEXT,
-    scopes          TEXT NOT NULL DEFAULT '',
-    -- Migration 151 parity: the redirect URI the stored client_id is registered
-    -- under at the vendor. '' = unknown (pre-migration), never treated as a
-    -- mismatch. See §7.2a.
-    redirect_uri    TEXT NOT NULL DEFAULT '',
-    connected_by    TEXT NOT NULL DEFAULT '',
-    needs_reconnect INTEGER NOT NULL DEFAULT 0,
-    connected_at    TEXT NOT NULL,
-    updated_at      TEXT NOT NULL,
-    PRIMARY KEY (project_id, server_name)
-);
+` + mcpOAuthTokensTableSQL + `;
+CREATE UNIQUE INDEX IF NOT EXISTS uq_mcp_oauth_tokens_shared
+    ON mcp_oauth_tokens (project_id, server_name) WHERE owner_user_id IS NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS uq_mcp_oauth_tokens_owned
+    ON mcp_oauth_tokens (project_id, server_name, owner_user_id) WHERE owner_user_id IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_mcp_oauth_tokens_project
     ON mcp_oauth_tokens (project_id);
 CREATE INDEX IF NOT EXISTS idx_mcp_oauth_tokens_expiry
@@ -2438,6 +2484,30 @@ CREATE TABLE IF NOT EXISTS class_e_slot_reservations (
 -- ATTEMPT, counted over a sliding hour, so the bound holds across replicas and
 -- restarts rather than per process. No unique constraint: two genuine attempts
 -- in the same instant are two attempts.
+-- GitHub #581 D5: the owner export registry (Postgres migration 238).
+CREATE TABLE IF NOT EXISTS instance_exports (
+    export_id  TEXT PRIMARY KEY,
+    created_at TEXT NOT NULL
+);
+
+-- GitHub #587: the instance's once-only milestones (Postgres migration 239).
+-- data_subject_escalations — postgres migration 240 (GitHub #344 5d-1c,
+-- art17 redact design §15.16): one operator alert per erasure row and
+-- deadline.
+CREATE TABLE IF NOT EXISTS data_subject_escalations (
+    request_id TEXT NOT NULL,
+    row_table  TEXT NOT NULL,
+    row_id     TEXT NOT NULL,
+    deadline   TEXT NOT NULL,
+    raised_at  TEXT NOT NULL,
+    PRIMARY KEY (request_id, row_table, row_id, deadline)
+);
+
+CREATE TABLE IF NOT EXISTS instance_milestones (
+    name TEXT PRIMARY KEY,
+    at   TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS key_claim_attempts (
     id           TEXT PRIMARY KEY,
     key_id       TEXT NOT NULL,
@@ -2529,4 +2599,58 @@ const agentApprovalRequestsTableSQL = `CREATE TABLE IF NOT EXISTS agent_approval
     -- migration 228: who withdrew a pending request, and why (design §9.2d)
     withdrawn_by       TEXT,
     withdraw_reason    TEXT
+)`
+
+// mcpOAuthTokensTableSQL and agentIntegrationApprovalsTableSQL are shared by
+// schemaSQL and the sqliteTableRebuilds entries that bring an existing table to
+// the U3b shape (GitHub #571; mcp-server-authentication-design.md §15.3a C3).
+// The rebuild copies every existing column by name; id and owner_user_id take
+// their defaults, so every existing row is a shared account with a fresh id.
+const mcpOAuthTokensTableSQL = `CREATE TABLE IF NOT EXISTS mcp_oauth_tokens (
+    -- Postgres migration 237 (#571 U3b, §15.3a C1): a surrogate id, and the
+    -- owner of the account (NULL = the project's shared account). The two
+    -- partial unique indexes below replace the (project_id, server_name) key.
+    id              TEXT NOT NULL PRIMARY KEY DEFAULT (lower(hex(randomblob(16)))),
+    owner_user_id   TEXT,
+    project_id      TEXT NOT NULL,
+    server_name     TEXT NOT NULL,
+    resource        TEXT NOT NULL,
+    client_id       TEXT NOT NULL,
+    access_token    TEXT NOT NULL,
+    refresh_token   TEXT NOT NULL DEFAULT '',
+    expires_at      TEXT,
+    scopes          TEXT NOT NULL DEFAULT '',
+    -- Migration 151 parity: the redirect URI the stored client_id is registered
+    -- under at the vendor. '' = unknown (pre-migration), never treated as a
+    -- mismatch. See §7.2a.
+    redirect_uri    TEXT NOT NULL DEFAULT '',
+    connected_by    TEXT NOT NULL DEFAULT '',
+    needs_reconnect INTEGER NOT NULL DEFAULT 0,
+    connected_at    TEXT NOT NULL,
+    updated_at      TEXT NOT NULL,
+    key_version     INTEGER NOT NULL DEFAULT 0 -- migration 235 (#571 A4)
+)`
+
+const agentIntegrationApprovalsTableSQL = `CREATE TABLE IF NOT EXISTS agent_integration_approvals (
+    -- Postgres migration 237 (#571 U3b, §15.3a C1): as mcp_oauth_tokens.
+    id                  TEXT NOT NULL PRIMARY KEY DEFAULT (lower(hex(randomblob(16)))),
+    owner_user_id       TEXT,
+    namespace           TEXT NOT NULL,
+    project_id          TEXT NOT NULL,
+    integration         TEXT NOT NULL,
+    kind                TEXT NOT NULL CHECK (kind IN ('mcp','api')),
+    url                 TEXT NOT NULL,
+    read_tools          TEXT NOT NULL DEFAULT '[]',
+    write_tools         TEXT NOT NULL DEFAULT '[]',
+    read_pending        INTEGER NOT NULL DEFAULT 0,
+    approved_by_device  TEXT NOT NULL,
+    approved_at         TEXT NOT NULL,
+    removed_at          TEXT,
+    -- migration 219 (design §22.2.2); also in sqliteAdditiveColumns.
+    account_label       TEXT NOT NULL DEFAULT 'default',
+    account_identity    TEXT NOT NULL DEFAULT '',
+    identity_source     TEXT NOT NULL DEFAULT '' CHECK (identity_source IN ('', 'agent', 'provider')),
+    -- migration 233 (design §6.5, amendment #481); also in sqliteAdditiveColumns.
+    suspended_tools     TEXT NOT NULL DEFAULT '[]',
+    suspended_at        TEXT
 )`

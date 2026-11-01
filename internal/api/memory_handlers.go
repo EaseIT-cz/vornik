@@ -1,11 +1,17 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"strconv"
+	"strings"
 
+	"vornik.io/vornik/internal/auth"
 	"vornik.io/vornik/internal/memory"
+	"vornik.io/vornik/internal/persistence"
+	"vornik.io/vornik/internal/registry"
+	"vornik.io/vornik/internal/taskkeys"
 )
 
 // MemoryStats handles GET /api/v1/memory/stats. Unscoped (returns all
@@ -328,6 +334,108 @@ type memorySearchResponse struct {
 	Guidance              string                   `json:"guidance,omitempty"`
 	VerdictBasis          *RoutingVerdictBasisWire `json:"verdict_basis,omitempty"`
 	WidenRounds           int                      `json:"widen_rounds,omitempty"`
+	// RetrievalPolicy is the denominator of a filtered search (#550), absent
+	// when nothing filtered it.
+	RetrievalPolicy *retrievalPolicyWire `json:"retrieval_policy,omitempty"`
+}
+
+// retrievalPolicyWire says what filtered a search and what it left out:
+// UnfilteredReturned is the same query's hit count with no scope or
+// authority filter, measured only when the filtered search returned fewer
+// than its limit. 0 of 5 says the filter excluded everything relevant; 0 of
+// 0 says nothing relevant exists.
+type retrievalPolicyWire struct {
+	RepoScope          string `json:"repo_scope,omitempty"`
+	StrictScope        bool   `json:"strict_scope"`
+	Authority          string `json:"authority"`
+	Returned           int    `json:"returned"`
+	UnfilteredReturned *int   `json:"unfiltered_returned,omitempty"`
+}
+
+// memorySearchRequestFrom reads the search's limit and filters from the
+// query string. ok is false for an unknown authority.
+func memorySearchRequestFrom(r *http.Request, limit int) (MemorySearchRequest, bool) {
+	qs := r.URL.Query()
+	req := MemorySearchRequest{Limit: limit, RepoScope: strings.TrimSpace(qs.Get("repo_scope"))}
+	req.StrictScope, _ = strconv.ParseBool(qs.Get("strict_scope"))
+	switch a := strings.TrimSpace(qs.Get("authority")); a {
+	case "", registry.MemorySearchAuthorityAny:
+	case registry.MemorySearchAuthorityProvenance:
+		req.Authority = a
+	default:
+		return req, false
+	}
+	return req, true
+}
+
+// applyMemorySearchRolePolicy narrows req to the role's policy: the policy's
+// scope replaces the caller's, strict scope and authority can only be turned
+// on, and the limit defaults to and is capped by the policy's.
+func applyMemorySearchRolePolicy(req MemorySearchRequest, pol *registry.MemorySearchPolicy, limitGiven bool) MemorySearchRequest {
+	if pol == nil {
+		return req
+	}
+	if pol.RepoScope != "" {
+		req.RepoScope = pol.RepoScope
+	}
+	req.StrictScope = req.StrictScope || pol.StrictScope
+	if pol.Authority == registry.MemorySearchAuthorityProvenance {
+		req.Authority = registry.MemorySearchAuthorityProvenance
+	}
+	if pol.Limit > 0 && (!limitGiven || req.Limit > pol.Limit) {
+		req.Limit = pol.Limit
+	}
+	return req
+}
+
+// agentKeyPrincipal reports whether the request authenticated with a key the
+// executor mints for an agent container, and which agent it belongs to, read
+// from the key row alone (no header takes part). Recognition is the broad,
+// name-based isAgentKeyRow, the one AuthMiddleware confines agent keys with,
+// so a warm-pool key is covered as well as a per-task key (security review
+// 2026-10-25, finding 1: a warm role's key was not recognised and its search
+// ran unfiltered). A warm-pool key's role is read only from the name suffix
+// after its own project, so a key cannot claim another project's role. Unlike
+// runningAgentTaskKey it does not require the task to be running: a key
+// whose policy cannot be resolved is refused, never served unfiltered.
+func agentKeyPrincipal(r *http.Request) (AgentKeyPrincipal, bool) {
+	id := IdentityFromContext(r.Context())
+	if id == nil {
+		return AgentKeyPrincipal{}, false
+	}
+	row, ok := id.Extra[auth.ExtraDBKeyRow].(*persistence.APIKey)
+	if !ok || !isAgentKeyRow(row) {
+		return AgentKeyPrincipal{}, false
+	}
+	if taskID, isTaskKey := persistence.TaskIDFromKeyName(row.Name); isTaskKey {
+		return AgentKeyPrincipal{TaskID: taskID, ProjectID: row.ProjectID}, true
+	}
+	who := AgentKeyPrincipal{ProjectID: row.ProjectID}
+	if own := taskkeys.WarmAgentKeyNamePrefix + row.ProjectID + ":"; row.ProjectID != "" && strings.HasPrefix(row.Name, own) {
+		who.Role = strings.TrimPrefix(row.Name, own)
+	}
+	return who, true
+}
+
+// retrievalPolicyBlock builds the denominator of a filtered search. The
+// unfiltered count costs one more search, only when the filtered one came
+// back short; its hits are counted and never returned.
+func (s *Server) retrievalPolicyBlock(ctx context.Context, rs MemoryRoutingSearcher, projectID, q string, req MemorySearchRequest, returned int) *retrievalPolicyWire {
+	block := &retrievalPolicyWire{RepoScope: req.RepoScope, StrictScope: req.StrictScope, Authority: req.Authority, Returned: returned}
+	if block.Authority == "" {
+		block.Authority = registry.MemorySearchAuthorityAny
+	}
+	if rs == nil || returned >= req.Limit {
+		return block
+	}
+	all, _, err := rs.SearchRouting(ctx, projectID, q, MemorySearchRequest{Limit: req.Limit})
+	if err != nil {
+		s.logger.Debug().Err(err).Str("project_id", projectID).Msg("memory search: unfiltered count failed; denominator omitted")
+		return block
+	}
+	n := len(all)
+	block.UnfilteredReturned = &n
+	return block
 }
 
 // MemorySearch handles GET /api/v1/projects/{projectId}/memory/search?q=<query>&limit=<n>.
@@ -372,6 +480,28 @@ func (s *Server) MemorySearch(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// #550: the search's filters, then the role policy of an executor task
+	// key, which a wider parameter cannot loosen (design
+	// 2026-10-25-architect-expert-design.md §2.1 C1).
+	searchReq, ok := memorySearchRequestFrom(r, limit)
+	if !ok {
+		respondError(w, http.StatusBadRequest, "VALIDATION_ERROR", "authority must be 'any' or 'provenance'")
+		return
+	}
+	who, isAgent := agentKeyPrincipal(r)
+	if isAgent && s.memorySearchRolePolicy != nil {
+		pol, perr := s.memorySearchRolePolicy(r.Context(), who)
+		if perr != nil {
+			// Serving the search unfiltered would hand a narrowed role what
+			// its policy excludes; refuse instead.
+			s.logger.Warn().Err(perr).Str("project_id", projectID).Str("task_id", who.TaskID).Str("role", who.Role).
+				Msg("memory search: role policy unresolved; search refused")
+			respondError(w, http.StatusServiceUnavailable, "POLICY_UNAVAILABLE", "the role's memory search policy could not be resolved")
+			return
+		}
+		searchReq = applyMemorySearchRolePolicy(searchReq, pol, r.URL.Query().Get("limit") != "")
+	}
+
 	// B-15: stamp retrieval context so the audit row carries who
 	// did the search. Without this every REST-API recall produced an
 	// audit row with NULL actor_kind / actor_id, muddying the
@@ -394,10 +524,15 @@ func (s *Server) MemorySearch(w http.ResponseWriter, r *http.Request) {
 		verdict *RoutingVerdictWire
 		err     error
 	)
-	if rs, ok := s.memorySearcher.(MemoryRoutingSearcher); ok {
-		results, verdict, err = rs.SearchRouting(ctx, projectID, q, limit)
-	} else {
-		results, err = s.memorySearcher.Search(ctx, projectID, q, limit)
+	rs, routing := s.memorySearcher.(MemoryRoutingSearcher)
+	switch {
+	case routing:
+		results, verdict, err = rs.SearchRouting(ctx, projectID, q, searchReq)
+	case searchReq.narrows():
+		respondError(w, http.StatusServiceUnavailable, "FILTER_UNSUPPORTED", "this memory searcher cannot apply repo_scope, strict_scope or authority")
+		return
+	default:
+		results, err = s.memorySearcher.Search(ctx, projectID, q, searchReq.Limit)
 	}
 	if err != nil {
 		s.logger.Warn().
@@ -421,6 +556,16 @@ func (s *Server) MemorySearch(w http.ResponseWriter, r *http.Request) {
 	}
 
 	resp := memorySearchResponse{Results: results}
+	if searchReq.narrows() {
+		// An agent gets the policy and its own count only: a second,
+		// unfiltered search would tell the model how much its policy
+		// excluded, and record a retrieval of chunks nobody was shown.
+		countWith := rs
+		if isAgent {
+			countWith = nil
+		}
+		resp.RetrievalPolicy = s.retrievalPolicyBlock(ctx, countWith, projectID, q, searchReq, len(results))
+	}
 	if verdict != nil {
 		resp.RetrievalTrustVerdict = verdict.Verdict
 		resp.Guidance = verdict.Guidance

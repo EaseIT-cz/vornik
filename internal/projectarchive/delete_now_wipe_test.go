@@ -79,10 +79,10 @@ func TestDeleteNowAndWait_RemovesOAuthTokensAndMemoryAudit_Issue370(t *testing.T
 		t.Fatalf("delete-now = %q (%v), want deleted", res.State, res.Err)
 	}
 
-	if _, err := tokens.Get(ctx, "doomed", "jira"); !errors.Is(err, persistence.ErrNotFound) {
+	if _, err := tokens.Get(ctx, "doomed", "jira", ""); !errors.Is(err, persistence.ErrNotFound) {
 		t.Errorf("the deleted project's OAuth token is still readable (err=%v)", err)
 	}
-	if _, err := tokens.Get(ctx, "keeper", "jira"); err != nil {
+	if _, err := tokens.Get(ctx, "keeper", "jira", ""); err != nil {
 		t.Errorf("another project's OAuth token was removed: %v", err)
 	}
 	for p, want := range map[string]int{"doomed": 0, "keeper": 1} {

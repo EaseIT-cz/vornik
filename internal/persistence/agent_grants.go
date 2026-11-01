@@ -51,7 +51,16 @@ type AgentIntegrationApproval struct {
 	// when the first of them was suspended; nil when none is.
 	SuspendedTools []string
 	SuspendedAt    *time.Time
+	// OwnerUserID is the user whose own account this approval is; "" is
+	// the project's shared account. Every method but the owned pair below
+	// addresses the shared row (GitHub #571 U3b; §15.3a C1).
+	OwnerUserID string
 }
+
+// ErrAccountLabelTaken is a create refused because the label already names
+// another visible account of the same connection: the shared one, or a
+// user's own (§15.3a C6; multi-tenancy design §6).
+var ErrAccountLabelTaken = errors.New("persistence: this connection already has an account with that label")
 
 // Account identity sources (agent-administered design §22.2.1).
 const (
@@ -117,8 +126,17 @@ type AgentConnectorInstall struct {
 
 // AgentGrantRepository persists the approval tables.
 type AgentGrantRepository interface {
-	// UpsertIntegration grants (or re-grants, clearing removed_at).
+	// UpsertIntegration grants (or re-grants, clearing removed_at) the
+	// shared account. An add or re-add whose label a user's own account of
+	// the connection holds is ErrAccountLabelTaken.
 	UpsertIntegration(ctx context.Context, a AgentIntegrationApproval) error
+	// CreateOwnedIntegration creates a user's own account of a connection
+	// (a.OwnerUserID, never empty). ErrAccountLabelTaken when the live shared
+	// account holds the label; ErrDuplicateKey when the owner already has one.
+	// It has no caller in U3: the per-user flow is multi-tenancy §6.
+	CreateOwnedIntegration(ctx context.Context, a AgentIntegrationApproval) error
+	// GetOwnedIntegration returns a user's own account, or ErrNotFound.
+	GetOwnedIntegration(ctx context.Context, projectID, integration, owner string) (*AgentIntegrationApproval, error)
 	// GetIntegration returns ErrNotFound when there is no row (removed rows
 	// are returned; the caller checks RemovedAt).
 	GetIntegration(ctx context.Context, projectID, integration string) (*AgentIntegrationApproval, error)

@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"errors"
 	"io"
 	"strings"
 	"sync"
@@ -147,6 +148,13 @@ func (s *slackSessionStore) Load(ctx context.Context, msg conversation.ChannelMe
 	history := append([]chat.Message(nil), s.history[msg.SessionID]...)
 	s.mu.Unlock()
 
+	// The fence (§15.18): serve the cached copy only while the stored row is
+	// as this process last saw it; an erasure or another node moved it.
+	if len(history) > 0 && !s.persister.Fresh(ctx, msg.SessionID) {
+		s.dropSession(msg.SessionID)
+		history = nil
+	}
+
 	if len(history) == 0 && s.persister != nil {
 		if persisted, _, found, err := s.persister.Load(ctx, msg.SessionID); err == nil && found && len(persisted) > 0 {
 			history, _ = s.boundedHistory(persisted)
@@ -161,7 +169,12 @@ func (s *slackSessionStore) Load(ctx context.Context, msg conversation.ChannelMe
 				// Keep hydration and legacy-row compaction ordered ahead of
 				// Append. Append takes the same lock before publishing newer
 				// history, then persists it after this save completes.
-				_ = s.persister.Save(ctx, msg.SessionID, s.projectID, history)
+				err := s.persister.Save(ctx, msg.SessionID, s.projectID, history)
+				if errors.Is(err, sessionstore.ErrSessionMoved) {
+					// Moved between the read and the compaction write: do
+					// not keep a copy the row no longer matches.
+					delete(s.history, msg.SessionID)
+				}
 				s.mu.Unlock()
 			}
 		}
@@ -237,10 +250,11 @@ func (s *slackSessionStore) threadDigestBlock(ctx context.Context, sessionID str
 			return ""
 		}
 	}
-	if len(siblings) == 0 {
-		// No persistence (SQLite / unwired) or nothing stored yet — fall back
-		// to whatever this process has seen. Without this, single-process
-		// deployments would get no digests at all.
+	if s.persister == nil {
+		// No persistence (unwired) — fall back to whatever this process has
+		// seen. Never because the durable listing is empty: with persistence
+		// an empty listing can be an erased channel, whose threads this
+		// process may still hold in memory (art17 redact design §15.18).
 		siblings = s.inMemorySiblings(prefix)
 	}
 	return renderThreadDigests(digestsForChannel(siblings, sessionID))
@@ -281,9 +295,20 @@ func (s *slackSessionStore) Append(ctx context.Context, msg conversation.Channel
 	s.mu.Unlock()
 
 	if s.persister != nil {
-		_ = s.persister.Save(ctx, msg.SessionID, s.projectID, updated)
+		if err := s.persister.Save(ctx, msg.SessionID, s.projectID, updated); errors.Is(err, sessionstore.ErrSessionMoved) {
+			s.dropSession(msg.SessionID)
+		}
 	}
 	return nil
+}
+
+// dropSession forgets a session whose stored row moved (art17 redact design
+// §15.18), so the next read starts from the row.
+func (s *slackSessionStore) dropSession(sessionID string) {
+	s.mu.Lock()
+	delete(s.history, sessionID)
+	s.mu.Unlock()
+	s.persister.Forget(sessionID)
 }
 
 // snapshotHistory returns a copy of the stored history for a
@@ -315,9 +340,14 @@ func (s *slackSessionStore) ReadThread(ctx context.Context, sessionID string) ([
 	if h, ok := s.history[sessionID]; ok && len(h) > 0 {
 		out := append([]chat.Message(nil), h...)
 		s.mu.Unlock()
-		return out, nil
+		// The fence (§15.18), checked before the copy is handed out.
+		if s.persister.Fresh(ctx, sessionID) {
+			return out, nil
+		}
+		s.dropSession(sessionID)
+	} else {
+		s.mu.Unlock()
 	}
-	s.mu.Unlock()
 
 	// A store without persistence (SQLite, or unwired test/degenerate config) has
 	// nothing durable to consult. Dereferencing it unconditionally crashed the daemon

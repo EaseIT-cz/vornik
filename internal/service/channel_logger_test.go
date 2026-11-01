@@ -8,6 +8,7 @@ import (
 	"github.com/rs/zerolog"
 
 	"vornik.io/vornik/internal/registry"
+	"vornik.io/vornik/internal/slack"
 )
 
 // Regression (2026-07-26): none of the conversation-channel builders set
@@ -57,7 +58,7 @@ func TestBuildSlackChannels_WiresAWritingLogger(t *testing.T) {
 	var buf bytes.Buffer
 	p := projectWithSlack("slackproj", "T_LOG", "SLACK_SIGNING_LOGGER", "")
 
-	channels, _, err := buildSlackChannels([]*registry.Project{p}, nil, nil, zerolog.New(&buf))
+	channels, _, err := buildSlackChannels([]*registry.Project{p}, slack.VoiceProviders{}, zerolog.New(&buf))
 	if err != nil {
 		t.Fatalf("buildSlackChannels: %v", err)
 	}

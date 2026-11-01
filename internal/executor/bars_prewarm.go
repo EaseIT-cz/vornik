@@ -97,6 +97,10 @@ func (e *Executor) buildWatchlistIndicatorsBlock(ctx context.Context, project *r
 				results[idx] = indicatorRow{symbol: symbol, err: truncateForPrompt(err.Error(), 60)}
 				return
 			}
+			// The same bars score earlier funnel candidates of this symbol
+			// (GitHub #596): no extra broker call. Measurement only.
+			e.fillFunnelOutcomes(probeCtx, project.ID, symbol, bars, evidenceNow())
+			e.recordBenchmarkCloses(probeCtx, project.Trading.AnalysisEvidence.BenchmarkSymbols, symbol, bars, evidenceNow())
 			closes := make([]float64, 0, len(bars))
 			for _, b := range bars {
 				closes = append(closes, b.Close)
@@ -176,7 +180,10 @@ func (e *Executor) buildWatchlistIndicatorsBlock(ctx context.Context, project *r
 // helper doesn't depend on the broker package's full Bar struct
 // (avoids dragging the broker module into agent-image builds).
 type barClose struct {
-	Close float64 `json:"close"`
+	TS    time.Time `json:"ts"`
+	High  float64   `json:"high"`
+	Low   float64   `json:"low"`
+	Close float64   `json:"close"`
 }
 
 // brokerBaseURL returns the broker MCP base URL from the environment,

@@ -17,6 +17,8 @@ type loginProviderView struct {
 
 // loginPageData is the template payload for login.html.
 type loginPageData struct {
+	// ShowKeyLogin renders the API-key login link (GitHub #560, M1c D3).
+	ShowKeyLogin bool
 	// Title feeds pageHead's <title>; the login page is standalone
 	// (no nav) but reuses pageHead for consistent styling.
 	Title       string
@@ -51,6 +53,10 @@ type loginPageData struct {
 // middleware's /ui/login exemption unconditional.
 func (s *Server) Login(w http.ResponseWriter, r *http.Request) {
 	if r.URL.Query().Get("method") == "key" {
+		if !s.keyLoginOffered(r) { // GitHub #560, M1c D3
+			http.NotFound(w, r)
+			return
+		}
 		// Same challenge respondUnauthorized emits on the API side so
 		// the browser shows the credential prompt; the user types any
 		// username + their API-key bearer as the password.
@@ -63,12 +69,13 @@ func (s *Server) Login(w http.ResponseWriter, r *http.Request) {
 	next := sanitizeLoginNext(q.Get("next"))
 
 	data := loginPageData{
-		Title:       "Sign in",
-		CurrentPage: "login",
-		Awaiting:    q.Get("awaiting") == "1",
-		Member:      normalizeMember(q.Get("member")),
-		Error:       q.Get("error"),
-		Next:        next,
+		Title:        "Sign in",
+		CurrentPage:  "login",
+		Awaiting:     q.Get("awaiting") == "1",
+		Member:       normalizeMember(q.Get("member")),
+		Error:        q.Get("error"),
+		Next:         next,
+		ShowKeyLogin: s.keyLoginOffered(r),
 	}
 	for _, name := range s.loginProviders {
 		data.Providers = append(data.Providers, loginProviderView{

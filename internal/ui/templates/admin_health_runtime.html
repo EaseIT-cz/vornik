@@ -8,14 +8,9 @@
     <main id="main" tabindex="-1" class="flex-1 max-w-7xl mx-auto w-full py-6 px-4 sm:px-6 lg:px-8 shell-offset">
         <div class="space-y-5">
             <div class="flex items-center gap-3">
-                <h1 class="text-xl font-semibold text-gray-100">Runtime readiness</h1>
+                <h1 class="text-xl font-semibold text-gray-100">Runtime readiness{{template "hintOpen" "About this page"}}Voice (STT / TTS) provider health + artifact storage backend status, probed at request time. Mirrors the WARN-log surface in <code class="text-gray-400">container_voice.go</code> + the FileBackend wiring in <code class="text-gray-400">internal/storage/artifactbackend.go</code>.{{template "hintClose"}}</h1>
                 <a href="/ui/admin/health" class="text-xs text-brand-400 hover:text-brand-300 ml-auto">← Health</a>
             </div>
-            <p class="text-sm text-gray-500 -mt-3">
-                Voice (STT / TTS) provider health + artifact storage backend status, probed at request time.
-                Mirrors the WARN-log surface in <code class="text-gray-400">container_voice.go</code> + the
-                FileBackend wiring in <code class="text-gray-400">internal/storage/artifactbackend.go</code>.
-            </p>
 
             {{if not .Available}}
             <div class="glass rounded-xl border border-amber-700/30 px-5 py-4">
@@ -29,11 +24,7 @@
             <div class="glass rounded-xl border border-dark-700 overflow-hidden">
                 <div class="px-5 py-4 border-b border-dark-700/60 flex items-center justify-between flex-wrap gap-2">
                     <div>
-                        <h2 class="text-sm font-medium text-gray-200">Voice providers</h2>
-                        <p class="mt-1 text-xs text-gray-500">
-                            STT (Whisper) + TTS (Piper) + ffmpeg. A row's <span class="text-rose-700 dark:text-rose-300">red</span> status
-                            means the first voice message will fail with that exact missing binary / model.
-                        </p>
+                        <h2 class="text-sm font-medium text-gray-200">Voice providers{{template "hintOpen" "About voice providers"}}STT (Whisper) + TTS (Piper) + ffmpeg. A row's <span class="text-rose-700 dark:text-rose-300">red</span> status means the first voice message will fail with that exact missing binary / model.{{template "hintClose"}}</h2>
                     </div>
                     <div class="text-xs text-gray-400 flex items-center gap-3">
                         <span>STT: <span class="{{if .Voice.STTProvider}}text-emerald-700 dark:text-emerald-300{{else}}text-gray-500{{end}} font-mono">{{if .Voice.STTProvider}}{{.Voice.STTProvider}}{{else}}disabled{{end}}</span></span>
@@ -82,13 +73,7 @@
             <!-- Storage -->
             <div class="glass rounded-xl border border-dark-700 overflow-hidden">
                 <div class="px-5 py-4 border-b border-dark-700/60">
-                    <h2 class="text-sm font-medium text-gray-200">Artifact storage backend</h2>
-                    <p class="mt-1 text-xs text-gray-500">
-                        Active <code class="text-gray-400">FileBackend</code> for artifact blob I/O — picked by
-                        <code class="text-gray-400">storage.OpenArtifactBackend</code> from
-                        <code class="text-gray-400">Config.Storage.Backend</code>. Filesystem probes a touch+remove
-                        on the artifacts directory; S3 probes a HeadBucket call.
-                    </p>
+                    <h2 class="text-sm font-medium text-gray-200">Artifact storage backend{{template "hintOpen" "About the storage backend"}}Active <code class="text-gray-400">FileBackend</code> for artifact blob I/O — picked by <code class="text-gray-400">storage.OpenArtifactBackend</code> from <code class="text-gray-400">Config.Storage.Backend</code>. Filesystem probes a touch+remove on the artifacts directory; S3 probes a HeadBucket call.{{template "hintClose"}}</h2>
                 </div>
                 <div class="px-5 py-4 space-y-3">
                     <div class="flex items-center gap-3">

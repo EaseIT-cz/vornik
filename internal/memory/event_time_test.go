@@ -48,11 +48,17 @@ var eventTimePredicateRE = regexp.MustCompile(`COALESCE\(\s*(?:\w+\.)?event_time
 // which the design table had mislabelled as "routing/widen path" (the line
 // numbers were right, the attribution was not). That is the guard doing the
 // job it was added for, on its first execution.
+//
+// 2026-10-25 (#550): the statements of hybridSearchTemporal and
+// HybridSearchWithEpochs(Filtered) moved verbatim into the SQL builders
+// hybridSearchTemporalSQL and hybridSearchWithEpochsSQL (funlen), so those
+// names hold the literals now. No predicate changed; both keep the event-time
+// clock (the COALESCE form TestTemporalPredicates_UseEventTimeFallback pins).
 var wantTemporalFuncs = []string{
-	"hybridSearchTemporal",
+	"hybridSearchTemporalSQL",
 	"keywordSearchTemporal",
 	"keywordSearchWithEpochsTemporal",
-	"HybridSearchWithEpochs",
+	"hybridSearchWithEpochsSQL",
 	"substringSearchTemporal",
 	"substringSearchWithEpochsTemporal",
 }

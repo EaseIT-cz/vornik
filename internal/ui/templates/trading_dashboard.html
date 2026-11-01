@@ -120,6 +120,62 @@
                 </div>
                 {{end}}{{/* Perf.Trades != 0 */}}
 
+                {{/* Results in R per entry order (GitHub #597). Always states its sample. */}}
+                <div class="px-5 py-3 text-xs text-gray-400 border-b border-dark-700/40" data-perf-r>
+                    <p class="text-gray-500 uppercase tracking-wider">R per entry{{template "hintOpen" "About R"}}Paper fills are optimistic: no slippage or rejection as in live trading.{{template "hintClose"}}</p>
+                    <p class="mt-1 tabular-nums text-gray-200">
+                        {{if .PerfR.Scored}}mean {{printf "%+.2fR" .PerfR.MeanR}} · median {{printf "%+.2fR" .PerfR.MedianR}} · win rate {{printf "%.0f" .PerfR.WinRatePct}}% · avg win / loss {{.PerfRAvgWinLoss}} · profit factor {{.PerfRProfitFactor}}{{else}}no scored entries{{end}}
+                    </p>
+                    <p class="mt-1 text-gray-500">{{.PerfR.Scored}} scored · {{.PerfR.Open}} open · {{.PerfRUnknown}} unknown risk · {{.PerfR.Excluded}} excluded (ledger before 2026-07-16)</p>
+                    {{if lt .PerfR.Scored 20}}<p class="mt-1 text-amber-700 dark:text-amber-400">Too few trades to judge (under 20 scored entries).</p>{{end}}
+                </div>
+
+                {{/* The entry signal scored on its own (GitHub #596). */}}
+                {{if .HasEntrySignal}}
+                <div class="px-5 py-3 text-xs text-gray-400 border-b border-dark-700/40" data-perf-signal>
+                    <p class="text-gray-500 uppercase tracking-wider">Entry signal: forward outcome per candidate</p>
+                    {{if .EntrySignal.Groups}}
+                    <table class="mt-1 tabular-nums">
+                        <tr class="text-gray-500"><th class="pr-4 text-left font-normal">group</th><th class="pr-4 text-right font-normal">n</th><th class="pr-4 text-right font-normal">1 session</th><th class="pr-4 text-right font-normal">3 sessions</th><th class="pr-4 text-right font-normal">5 sessions</th><th class="text-right font-normal">touched +1 ATR (5)</th></tr>
+                        {{range .EntrySignalRows}}<tr><td class="pr-4">{{.Name}}</td><td class="pr-4 text-right">{{.N}}</td>{{range .Cells}}<td class="pr-4 text-right">{{.}}</td>{{end}}<td class="text-right">{{.Touched}}</td></tr>
+                        {{end}}
+                    </table>
+                    {{else}}<p class="mt-1">No funnel recorded in this window.</p>{{end}}
+                    <p class="mt-1 text-gray-500">{{.EntrySignal.Candidates}} candidates · {{.EntrySignal.Sessions}} sessions · {{.EntrySignal.Pending}} with outcomes pending. Means are over the candidates whose outcome is known.</p>
+                    {{if lt .EntrySignal.Sessions 20}}<p class="mt-1 text-amber-700 dark:text-amber-400">Too few sessions to judge (under 20).</p>{{end}}
+                    {{if .EntrySignal.OtherSpellings}}<p class="mt-1 text-gray-500">Gate names not yet mapped (filed as "other"): {{range $i, $o := .EntrySignal.OtherSpellings}}{{if $i}}, {{end}}{{$o}}{{end}}</p>{{end}}
+                </div>
+                {{end}}
+
+                {{/* The rule engine in shadow beside the strategist (GitHub #598). */}}
+                {{if .HasShadow}}
+                <div class="px-5 py-3 text-xs text-gray-400 border-b border-dark-700/40" data-perf-shadow>
+                    <p class="text-gray-500 uppercase tracking-wider">Rule engine shadow: deterministic rules vs the strategist{{template "hintOpen" "About the shadow"}}The engine decides only from the tools the strategist called; "insufficient inputs" means it would have needed data the strategist did not fetch.{{template "hintClose"}}</p>
+                    {{if .Shadow.Rows}}
+                    <p class="mt-1 tabular-nums text-gray-200">{{.Shadow.Agree}} of {{.Shadow.Rows}} agree on the decision ({{.Shadow.SameGate}} of those name the same gate) · {{.Shadow.InsufficientInputs}} insufficient inputs · {{.Shadow.Sessions}} sessions</p>
+                    {{if .Shadow.Pairs}}<table class="mt-1 tabular-nums"><tr class="text-gray-500"><th class="pr-4 text-left font-normal">engine</th><th class="pr-4 text-left font-normal">strategist</th><th class="text-right font-normal">n</th></tr>
+                        {{range .Shadow.Pairs}}<tr><td class="pr-4">{{.Engine}}</td><td class="pr-4">{{.Model}}</td><td class="text-right">{{.Count}}</td></tr>{{end}}
+                    </table>{{end}}
+                    {{if .Shadow.Disagreements}}<p class="mt-1 text-gray-500">Latest disagreements: {{range $i, $d := .Shadow.Disagreements}}{{if $i}}, {{end}}{{$d.Symbol}} ({{$d.ExecutionID}}){{end}}</p>{{end}}
+                    {{else}}<p class="mt-1">No shadow decisions recorded in this window.</p>{{end}}
+                    {{if lt .Shadow.Sessions 10}}<p class="mt-1 text-amber-700 dark:text-amber-400">Too few sessions to judge (under 10). The issue asks for two weeks before any takeover.</p>{{end}}
+                </div>
+                {{end}}
+
+                {{/* The book against the benchmark (GitHub #597). */}}
+                {{if .VsBenchmarkSymbol}}
+                <div class="px-5 py-3 text-xs text-gray-400 border-b border-dark-700/40" data-perf-vs>
+                    <p class="text-gray-500 uppercase tracking-wider">Book vs {{.VsBenchmarkSymbol}}{{template "hintOpen" "About this comparison"}}The book is marked to market (realized and unrealized) on the strategy capital (max gross exposure); {{.VsBenchmarkSymbol}} is price return without dividends. A trend line, not an attribution.{{template "hintClose"}}</p>
+                    {{if .VsBenchmark}}
+                    <table class="mt-1 tabular-nums">
+                        <tr class="text-gray-500"><th class="pr-4 text-left font-normal">session</th><th class="pr-4 text-right font-normal">book</th><th class="pr-4 text-right font-normal">{{.VsBenchmarkSymbol}}</th><th class="text-right font-normal">cumulative difference</th></tr>
+                        {{range .VsBenchmark}}<tr><td class="pr-4">{{.Day.Format "2006-01-02"}}</td><td class="pr-4 text-right">{{printf "%+.2f%%" .BookPct}}</td><td class="pr-4 text-right">{{printf "%+.2f%%" .BenchPct}}</td><td class="text-right">{{printf "%+.2f%%" .CumDiffPct}}</td></tr>
+                        {{end}}
+                    </table>
+                    {{else}}<p class="mt-1">No sessions with both a book value and a {{.VsBenchmarkSymbol}} close yet.</p>{{end}}
+                </div>
+                {{end}}
+
                 {{/* Daily P&L chart — realized bars + equity line (server-rendered SVG).
                      Renders unconditionally when chart data exists so the equity line is
                      shown even when there are no closed trades (broker-offline path). */}}

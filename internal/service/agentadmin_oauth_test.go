@@ -158,7 +158,7 @@ func TestAgentAdmin_OAuthServerConnectedFromThePhone(t *testing.T) {
 	if r, _ := f.c.repos.ApproverDevices.GetRequest(ctx, slot.ID); r.Status != persistence.ApprovalApproved || r.DecidedByDevice != f.device.ID {
 		t.Fatalf("after the sign-in the slot is %s", r.Status)
 	}
-	raw, err := f.c.repos.MCPOAuthTokens.Get(ctx, "hermes--work", "jira")
+	raw, err := f.c.repos.MCPOAuthTokens.Get(ctx, "hermes--work", "jira", "")
 	if err != nil || !strings.HasPrefix(raw.AccessToken, "sv1:") || strings.Contains(raw.AccessToken+raw.RefreshToken, "CANARY") {
 		t.Fatalf("the token row is not sealed: %+v %v", raw, err)
 	}
@@ -274,7 +274,7 @@ func TestAgentAdmin_OAuthSealedRefreshOnce(t *testing.T) {
 	if n != 1 {
 		t.Fatalf("%d token-endpoint calls for one expired grant, want 1", n)
 	}
-	raw, _ := f.c.repos.MCPOAuthTokens.Get(ctx, "hermes--work", "jira")
+	raw, _ := f.c.repos.MCPOAuthTokens.Get(ctx, "hermes--work", "jira", "")
 	if !strings.HasPrefix(raw.RefreshToken, "sv1:") || strings.Contains(raw.RefreshToken, "CANARY") {
 		t.Fatalf("the rotated refresh token is not sealed: %q", raw.RefreshToken)
 	}
@@ -307,7 +307,7 @@ func TestAgentAdmin_OAuthExchangeFailsAfterDecision(t *testing.T) {
 	if got.Status != persistence.ApprovalApproved || !strings.Contains(got.ApplyError, "sign-in did not complete") {
 		t.Fatalf("after a failed exchange: %s %q", got.Status, got.ApplyError)
 	}
-	if _, err := f.c.repos.MCPOAuthTokens.Get(ctx, "hermes--work", "jira"); err == nil {
+	if _, err := f.c.repos.MCPOAuthTokens.Get(ctx, "hermes--work", "jira", ""); err == nil {
 		t.Fatal("a token was stored although the exchange failed")
 	}
 }

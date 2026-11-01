@@ -7,13 +7,10 @@
     <main id="main" tabindex="-1" class="flex-1 max-w-7xl mx-auto w-full py-6 px-4 sm:px-6 lg:px-8 shell-offset">
         <div class="space-y-5">
             <div class="flex items-center gap-3">
-                <h1 class="text-xl font-semibold text-gray-100">Operator profiles</h1>
+                <h1 class="text-xl font-semibold text-gray-100">Operator profiles{{template "hintOpen" "About this page"}}Per-operator preferences + accumulated notes the dispatcher injects into the system prompt on every chat turn. Memory is additive — per-project memory still drives swarm context; operator memory follows the user across projects and channels.{{template "hintClose"}}</h1>
                 <span class="text-xs text-gray-500 font-mono">{{.GeneratedAt.Format "15:04:05 UTC"}}</span>
                 <a href="/ui/memory" class="text-xs text-brand-400 hover:text-brand-300 ml-auto">← Memory</a>
             </div>
-            <p class="text-sm text-gray-400">
-                Per-operator preferences + accumulated notes the dispatcher injects into the system prompt on every chat turn. Memory is additive — per-project memory still drives swarm context; operator memory follows the user across projects and channels.
-            </p>
 
             {{if not .Available}}
             <div class="glass rounded-xl border border-dark-700 p-5 text-gray-400 text-sm">

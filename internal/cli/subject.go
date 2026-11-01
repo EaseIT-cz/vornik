@@ -23,6 +23,7 @@ var (
 	subjectIDKind        string
 	subjectIDValue       string
 	subjectRequestKind   string
+	subjectReceivedAt    string
 	subjectVerifiedBy    string
 	subjectVerifiedHow   string
 	subjectRefuseWhy     string
@@ -35,6 +36,10 @@ var (
 	subjectLinkShared    bool
 	subjectErasureGround string
 	subjectEraseYes      bool
+	// subjectResidualAssessment and subjectAssessedBy record the per-request
+	// assessment of the residual (#346 Q2).
+	subjectResidualAssessment string
+	subjectAssessedBy         string
 )
 
 var subjectCmd = &cobra.Command{
@@ -148,6 +153,8 @@ func init() {
 	subjectIdentifyCmd.Flags().StringVar(&subjectIDKind, "kind", "", "identifier kind: email | channel | user_id | operator_id (required)")
 	subjectIdentifyCmd.Flags().StringVar(&subjectIDValue, "value", "", "identifier value (required)")
 	subjectRequestCmd.Flags().StringVar(&subjectRequestKind, "kind", "access", "access | portability | erasure | rectification | restriction | objection")
+	subjectRequestCmd.Flags().StringVar(&subjectReceivedAt, "received-at", "",
+		"when the request was received, RFC 3339 or YYYY-MM-DD (00:00 UTC); the Art 12(3) month runs from receipt (default: now)")
 	subjectVerifyCmd.Flags().StringVar(&subjectVerifiedBy, "by", "", "who established identity (required)")
 	subjectVerifyCmd.Flags().StringVar(&subjectVerifiedHow, "how", "", "how identity was established (required)")
 	subjectRefuseCmd.Flags().StringVar(&subjectRefuseWhy, "reason", "", "the ground for refusal (required)")
@@ -162,6 +169,11 @@ func init() {
 		"model used to rewrite shared records (defaults to the chat section's model)")
 	subjectEraseCmd.Flags().BoolVar(&subjectEraseYes, "yes", false,
 		"skip the confirmation prompt (erasure is irreversible)")
+	subjectEraseCmd.Flags().StringVar(&subjectResidualAssessment, "residual-assessment", "",
+		"the ground and reasoning for keeping what remains of the subject in other people's messages, "+
+			"assessed for this request (required when shared conversations are redacted)")
+	subjectEraseCmd.Flags().StringVar(&subjectAssessedBy, "assessed-by", "",
+		"who made the residual assessment (required with --residual-assessment)")
 	subjectLinkCmd.Flags().StringVar(&subjectLinkTable, "table", "", "table the row lives in (required)")
 	subjectLinkCmd.Flags().StringVar(&subjectLinkRow, "row", "", "row id (required; channel_sessions: <kind>/<session_id>)")
 	subjectLinkCmd.Flags().StringVar(&subjectLinkProject, "project", "", "project id, for project-scoped tables")
@@ -310,6 +322,10 @@ func runSubjectRequest(_ *cobra.Command, args []string) error {
 	} else if strings.TrimSpace(subjectErasureGround) != "" {
 		return fmt.Errorf("--ground applies only to an erasure request, not %q", kind)
 	}
+	received, err := receivedAt(subjectReceivedAt, time.Now().UTC())
+	if err != nil {
+		return err
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	repo, closeFn, err := openSubjectRepo(ctx)
@@ -320,7 +336,7 @@ func runSubjectRequest(_ *cobra.Command, args []string) error {
 
 	req := datasubject.Request{
 		ID: newRequestID(), SubjectID: args[0], Kind: kind,
-		State: datasubject.StateOpen, OpenedAt: time.Now().UTC(),
+		State: datasubject.StateOpen, OpenedAt: received,
 		ErasureGround: ground,
 	}
 	if err := repo.CreateRequest(ctx, req); err != nil {
@@ -330,6 +346,23 @@ func runSubjectRequest(_ *cobra.Command, args []string) error {
 	fmt.Printf("Article 12(3) response due: %s\n", req.Deadline().Format(time.RFC3339))
 	fmt.Printf("next: establish identity, then\n  vornikctl subject verify %s --by <you> --how <evidence>\n", req.ID)
 	return nil
+}
+
+// receivedAt is when the request was received (--received-at), defaulting to
+// now; the Art 12(3) clock runs from receipt, so a request logged late must
+// not get a later deadline (#590, GDPR rights design §4.20.6).
+func receivedAt(flag string, now time.Time) (time.Time, error) {
+	if strings.TrimSpace(flag) == "" {
+		return now, nil
+	}
+	t, err := parseFlagTime("--received-at", flag)
+	if err != nil {
+		return time.Time{}, err
+	}
+	if t.After(now) {
+		return time.Time{}, fmt.Errorf("--received-at %s is in the future", t.Format(time.RFC3339))
+	}
+	return t, nil
 }
 
 func runSubjectVerify(_ *cobra.Command, args []string) error {

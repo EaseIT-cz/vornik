@@ -172,6 +172,8 @@ func (c *Container) initScheduler() error {
 	// rather than at the ContainerConfig construction sites because the
 	// manager is the single point the field reaches podman, so a site that
 	// forgets it still gets the limit.
+	runtimeOptions = append(runtimeOptions, c.agentHardeningOptions()...)
+
 	var memLimitErr error
 	runtimeOptions, memLimitErr = c.applyAgentMemoryLimit(
 		runtimeOptions, runtime.HostTotalMemory, runtime.HostAvailableMemory)
@@ -486,6 +488,10 @@ func (c *Container) initScheduler() error {
 		executor.WithHallucinationDetector(hallucination.NewDefault()),
 		executor.WithJudgeRunner(c.storeJudgeRunner(c.buildJudgeRunner())),
 		executor.WithTradingOrderRepo(c.repos.TradingOrders),
+		executor.WithTradingFunnelRepo(c.repos.TradingFunnel),
+		executor.WithTradingBenchmarkRepo(c.repos.TradingBenchmarks),
+		executor.WithTradingShadowRepo(c.repos.TradingShadow),
+		executor.WithAIMarker(c.aiMarker()), // Art 50(2): a ledger row per harvested agent file (#117)
 		// Continuous-learning Consumer A (slice 3): surface worker-mined
 		// recovery remediations in the lead's RECOVERY_CONTEXT block. Double-
 		// gated — the master instinct.enabled AND
@@ -633,7 +639,7 @@ func (c *Container) initScheduler() error {
 					mappings = append(mappings, m)
 				}
 				if len(mappings) > 0 {
-					executorOpts = append(executorOpts, executor.WithToolCredentials(mappings, c.repos.TaskCredentials))
+					executorOpts = append(executorOpts, executor.WithToolCredentials(mappings, c.sealedTaskCredentials()))
 					c.Logger.Info().Int("tool_credentials", len(mappings)).
 						Msg("secrets: capturing operator-facing credentials from these tools' output (credential carryover)")
 				}
@@ -1553,6 +1559,10 @@ func (c *Container) initScheduler() error {
 		schedulerOptions = append(schedulerOptions, scheduler.WithConfigBlocked(gate))
 	}
 
+	if c.runtimeManager != nil && taskRepo != nil {
+		schedulerOptions = append(schedulerOptions, scheduler.WithOrphanSweep(orphanSweep(c.runtimeManager, taskRepo)))
+	}
+
 	c.Scheduler = scheduler.NewWithOptions(taskRepo, cfg, schedulerOptions...)
 	return nil
 }
@@ -1865,6 +1875,8 @@ func (c *Container) rebuildSchedulerMetrics() {
 	// is visible on /metrics — avoids the 2026-06-06 invisible-metric class.
 	verifier.RegisterFloorMetrics(reg)
 	executor.RegisterEvidenceMetrics(reg)
+	executor.RegisterFunnelMetrics(reg)
+	executor.RegisterShadowMetrics(reg)
 	c.Logger.Info().Msg("trading floor and evidence metrics wired")
 
 	// Memory firewall metrics (LLD § Observability / drift-mitigation

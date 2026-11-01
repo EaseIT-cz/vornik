@@ -8,6 +8,7 @@ import (
 	"net/url"
 	"os"
 	"reflect"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -438,6 +439,9 @@ func (c *Config) Validate() error {
 	if c.Server.Address == "" {
 		return c.requiredErr("server address is required")
 	}
+	if err := validateNamedSecrets(c.NamedSecrets); err != nil {
+		return err
+	}
 	driver := c.Database.Driver
 	if driver == "" {
 		driver = "postgres"
@@ -466,6 +470,12 @@ func (c *Config) Validate() error {
 	// A doctor threshold outside its range produces a check that can never
 	// fire, which is indistinguishable from the check not existing — the exact
 	// invisibility the config seam was added to remove. Fail the boot instead.
+	if err := c.validateAgentHardening(); err != nil {
+		return err
+	}
+	if err := c.validateHosting(); err != nil {
+		return err
+	}
 	if err := c.Admin.ValidateOperatorKeyIDs(); err != nil {
 		return err
 	}
@@ -568,6 +578,9 @@ func (c *Config) Validate() error {
 				return fmt.Errorf("auth.bootstrap_admins entry %q must use the immutable numeric GitHub account ID, not a login name", b)
 			}
 		}
+	}
+	if err := validateOIDCProvider(c); err != nil {
+		return err
 	}
 	// Phase-3 login config validation.
 	if c.Auth.Providers.GitHub != nil {
@@ -859,5 +872,29 @@ func resolveGatewaySecret(cfg *Config) error {
 	}
 	cfg.Gateway.Token = strings.TrimSpace(string(data))
 	cfg.Gateway.TokenFile = ""
+	return nil
+}
+
+var oidcNameRE = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,31}$`)
+
+// validateOIDCProvider checks auth.providers.oidc (GitHub #582 P1).
+func validateOIDCProvider(c *Config) error {
+	o := c.Auth.Providers.OIDC
+	if o == nil {
+		return nil
+	}
+	if c.PublicOrigin() == "" {
+		return fmt.Errorf("a public origin is required when a login provider is configured: set server.public_base_url (preferred) or auth.external_base_url")
+	}
+	u, err := url.Parse(o.Issuer)
+	if o.Issuer == "" || err != nil || u.Scheme != "https" || u.Host == "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" {
+		return fmt.Errorf("auth.providers.oidc.issuer %q: an https URL with no userinfo, query or fragment, exactly as the issuer's ID tokens state it", o.Issuer)
+	}
+	if strings.TrimSpace(o.ClientID) == "" {
+		return fmt.Errorf("auth.providers.oidc.client_id is required")
+	}
+	if o.Name != "" && (!oidcNameRE.MatchString(o.Name) || o.Name == "github") {
+		return fmt.Errorf("auth.providers.oidc.name %q: lowercase letters, digits and hyphens, at most 32, and not github (the GitHub provider's channel)", o.Name)
+	}
 	return nil
 }

@@ -46,6 +46,11 @@ type Metrics struct {
 	// which are deliberately deferred until it exists.
 	ContainerOOMKillsTotal *prometheus.CounterVec
 
+	// OrphanSweepTotal counts the orphan sweep's outcomes per container
+	// (GitHub #569 R4): removed_exited, removed_runaway, kept_live,
+	// kept_unknown, kept_lookup_failed.
+	OrphanSweepTotal *prometheus.CounterVec
+
 	// registry is the Prometheus registerer used for registering metrics.
 	registry prometheus.Registerer
 }
@@ -130,6 +135,15 @@ func NewMetrics(registerer prometheus.Registerer) *Metrics {
 			},
 			[]string{"role"},
 		),
+		OrphanSweepTotal: promauto.With(registerer).NewCounterVec(
+			prometheus.CounterOpts{
+				Namespace: runtimeNamespace,
+				Subsystem: runtimeSubsystem,
+				Name:      "orphan_sweep_total",
+				Help:      "Orphan sweep outcomes per agent container, by rule.",
+			},
+			[]string{"rule"},
+		),
 	}
 
 	return m
@@ -187,4 +201,12 @@ func (m *Metrics) SetContainersRunning(projectID string, count float64) {
 		return
 	}
 	m.ContainersRunning.WithLabelValues(projectID).Set(count)
+}
+
+// RecordOrphanSweep counts one orphan sweep outcome.
+func (m *Metrics) RecordOrphanSweep(rule string) {
+	if m == nil {
+		return
+	}
+	m.OrphanSweepTotal.WithLabelValues(rule).Inc()
 }

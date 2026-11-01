@@ -92,6 +92,17 @@ func swarmRoleItemSchema() AssetSchema {
 				},
 			},
 			{
+				// #550: a role-pinned retrieval policy for memory_search; the
+				// daemon enforces it for the role's task key.
+				Title: "Memory search",
+				Fields: []Field{
+					{Path: "memorySearch.repoScope", Label: "Repo scope", Kind: KindString, Help: "Limit memory_search to one repository's scope (or '*'). Required when strict scope or an authority is set."},
+					{Path: "memorySearch.strictScope", Label: "Strict scope", Kind: KindBool, Help: "Drop chunks with no repo scope (the migration-grace bucket)."},
+					{Path: "memorySearch.authority", Label: "Authority", Kind: KindEnum, Enum: []string{"any", "provenance"}, Help: "provenance = only design documents the daemon checked against the trusted branch. Not allowed on a role that holds run_shell."},
+					{Path: "memorySearch.limit", Label: "Limit", Kind: KindInt, Help: "Default and maximum hits per search (1-20). 0 = the tool's default."},
+				},
+			},
+			{
 				Title: "Prompt",
 				Fields: []Field{
 					// Lives in the SWARM.md body, not the frontmatter.

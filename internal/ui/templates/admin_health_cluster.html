@@ -75,8 +75,7 @@
 
             {{if .LeasesAvailable}}
             <div class="glass rounded-xl border border-dark-700 p-5">
-                <h2 class="text-sm font-medium text-gray-400 uppercase tracking-wider mb-1">Lease summary</h2>
-                <p class="text-xs text-gray-500 mb-3">Leader-election lease ownership (daemon_leader_locks). Only nodes that run singleton workers hold leases — the Fleet above is the full node list.</p>
+                <h2 class="text-sm font-medium text-gray-400 uppercase tracking-wider mb-1">Lease summary{{template "hintOpen" "About leases"}}Leader-election lease ownership (daemon_leader_locks). Only nodes that run singleton workers hold leases — the Fleet above is the full node list.{{template "hintClose"}}</h2>
                 <ul class="flex flex-wrap gap-3 text-sm">
                     <li class="px-3 py-1 rounded-md bg-dark-700 text-gray-200 font-mono"><span class="text-gray-400">lease-holders</span>: {{.Counts.Nodes}}</li>
                     <li class="px-3 py-1 rounded-md bg-emerald-900/40 text-emerald-600 dark:text-emerald-200 font-mono"><span class="text-emerald-800 dark:text-emerald-400">active</span>: {{.Counts.Active}}</li>

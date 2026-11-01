@@ -11,12 +11,28 @@
 # Configured environment:
 #   VORNIK_URL              — daemon base URL (default http://localhost:8080)
 #   VORNIK_COMPANION_TOKEN  — companion bearer; required
+# or, when those are unset, the plugin's options (its configuration dialog),
+# which Claude Code passes to hooks as CLAUDE_PLUGIN_OPTION_VORNIK_URL and
+# CLAUDE_PLUGIN_OPTION_COMPANION_TOKEN (GitHub #587).
 #
 # The hook is deliberately a small jq pipeline so operators can read
 # what it's doing without reverse-engineering a binary.
 
 set -uo pipefail
 
+# The environment first, then the plugin's options (GitHub #587,
+# operations-api-contract-design.md §7.2.4a). Which one each value came from
+# decides whether it is passed on to the slash commands below.
+URL_FROM_OPTION=0
+TOKEN_FROM_OPTION=0
+if [[ -z "${VORNIK_URL:-}" && -n "${CLAUDE_PLUGIN_OPTION_VORNIK_URL:-}" ]]; then
+  VORNIK_URL="$CLAUDE_PLUGIN_OPTION_VORNIK_URL"
+  URL_FROM_OPTION=1
+fi
+if [[ -z "${VORNIK_COMPANION_TOKEN:-}" && -n "${CLAUDE_PLUGIN_OPTION_COMPANION_TOKEN:-}" ]]; then
+  VORNIK_COMPANION_TOKEN="$CLAUDE_PLUGIN_OPTION_COMPANION_TOKEN"
+  TOKEN_FROM_OPTION=1
+fi
 VORNIK_URL="${VORNIK_URL:-http://localhost:8080}"
 TOKEN="${VORNIK_COMPANION_TOKEN:-}"
 
@@ -59,6 +75,32 @@ for arg in "$@"; do
     --refresh) VORNIK_HOOK_REFRESH=1 ;;
   esac
 done
+
+# ----- The slash commands' environment (GitHub #587, §7.2.4a) ---------
+# The slash commands run through the Bash tool, which gets no plugin option
+# values; a SessionStart hook can pass values on through CLAUDE_ENV_FILE,
+# which Claude Code runs before each later Bash command of the session. Only
+# a value that came from the options is written (an environment-configured
+# install changes nothing), only on a new session, and only of a closed shape
+# inside single quotes, so the line can never carry shell code. Nothing here
+# prints a value.
+ENV_FILE_NOTICE=0
+if [[ $VORNIK_HOOK_REFRESH -eq 0 && -n "${CLAUDE_ENV_FILE:-}" ]]; then
+  if [[ $URL_FROM_OPTION -eq 1 ]]; then
+    if [[ "$VORNIK_URL" =~ ^https?://[A-Za-z0-9._:/-]+$ ]]; then
+      printf "export VORNIK_URL='%s'\n" "$VORNIK_URL" >> "$CLAUDE_ENV_FILE"
+    else
+      ENV_FILE_NOTICE=1
+    fi
+  fi
+  if [[ $TOKEN_FROM_OPTION -eq 1 ]]; then
+    if [[ "$TOKEN" =~ ^[A-Za-z0-9_-]+$ ]]; then
+      printf "export VORNIK_COMPANION_TOKEN='%s'\n" "$TOKEN" >> "$CLAUDE_ENV_FILE"
+    else
+      ENV_FILE_NOTICE=1
+    fi
+  fi
+fi
 
 # Degrade gracefully when the plugin isn't fully configured.
 if [[ -z "$TOKEN" ]]; then
@@ -444,6 +486,9 @@ emit_guidance_directive() {
 }
 GUIDANCE_DIRECTIVE=$(emit_guidance_directive)
 DIGEST=$(printf '%s\n%s' "$DIGEST" "$GUIDANCE_DIRECTIVE")
+if [[ $ENV_FILE_NOTICE -eq 1 ]]; then
+  DIGEST=$(printf '%s\n\n## vornik-companion: slash commands need VORNIK_COMPANION_TOKEN and VORNIK_URL in your shell\n\nThe values in the plugin'"'"'s options are not of the expected shape (an http(s) URL; a key of letters, digits, _ and -), so they were not passed on to /upload, /rag-ingest, /remember and /memory-correct. The tools work; set the two variables in your shell for the commands.\n' "$DIGEST")
+fi
 
 if [[ -n "$DIGEST" ]]; then
   jq -n --arg ctx "$DIGEST" '{

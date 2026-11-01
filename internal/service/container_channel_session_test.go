@@ -3,11 +3,13 @@ package service
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"sort"
 	"strings"
 	"sync"
 	"testing"
 	"time"
+	"vornik.io/vornik/internal/sessionstore/sessionstoretest"
 
 	"github.com/rs/zerolog"
 	"github.com/stretchr/testify/assert"
@@ -25,6 +27,8 @@ import (
 // its own copy because cross-package test helpers would require an
 // exported test-helper package.
 type fakeChanSessionRepo struct {
+	// fence numbers the rows (art17 redact design §15.18).
+	fence          sessionstoretest.Versions
 	mu             sync.Mutex
 	rows           map[string]*persistence.ChannelSession
 	blockOneSave   bool
@@ -43,6 +47,7 @@ func (f *fakeChanSessionRepo) Load(_ context.Context, kind, sessionID string) (*
 	defer f.mu.Unlock()
 	if row, ok := f.rows[chKey(kind, sessionID)]; ok {
 		cp := *row
+		cp.Version = f.fence.Of(kind, sessionID)
 		return &cp, nil
 	}
 	return nil, persistence.ErrNotFound
@@ -394,3 +399,31 @@ func TestChannelSessionPersister_NilContainerSafe(t *testing.T) {
 		t.Errorf("nil container should produce nil persister, got %v", got)
 	}
 }
+
+// Version, SaveIfVersion and Fenced honour the fence over this fake's own
+// rows (art17 redact design §15.18).
+func (f *fakeChanSessionRepo) Version(ctx context.Context, kind, sessionID string) (bool, int64, error) {
+	if _, err := f.Load(ctx, kind, sessionID); err != nil {
+		if errors.Is(err, persistence.ErrNotFound) {
+			return false, 0, nil
+		}
+		return false, 0, err
+	}
+	return true, f.fence.Of(kind, sessionID), nil
+}
+
+func (f *fakeChanSessionRepo) SaveIfVersion(ctx context.Context, kind, sessionID, activeProject string, history []byte, expect *int64) (int64, bool, error) {
+	exists, _, err := f.Version(ctx, kind, sessionID)
+	if err != nil {
+		return 0, false, err
+	}
+	if !f.fence.Matches(kind, sessionID, exists, expect) {
+		return 0, false, nil
+	}
+	if err := f.Save(ctx, kind, sessionID, activeProject, history); err != nil {
+		return 0, false, err
+	}
+	return f.fence.Bump(kind, sessionID), true, nil
+}
+
+func (f *fakeChanSessionRepo) Fenced() bool { return true }

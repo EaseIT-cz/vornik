@@ -9,10 +9,12 @@ package telegram
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"strconv"
 	"sync"
 	"testing"
 	"time"
+	"vornik.io/vornik/internal/sessionstore/sessionstoretest"
 
 	"github.com/rs/zerolog"
 
@@ -29,8 +31,10 @@ import (
 // helper would mean a new test-only package, which isn't worth
 // the surface for a tight three-file pattern.
 type fakeChannelSessionRepo struct {
-	mu   sync.Mutex
-	rows map[string]*persistence.ChannelSession
+	// fence numbers the rows (art17 redact design §15.18).
+	fence sessionstoretest.Versions
+	mu    sync.Mutex
+	rows  map[string]*persistence.ChannelSession
 }
 
 func newFakeChannelSessionRepo() *fakeChannelSessionRepo {
@@ -44,6 +48,7 @@ func (f *fakeChannelSessionRepo) Load(_ context.Context, kind, sessionID string)
 	defer f.mu.Unlock()
 	if row, ok := f.rows[chKey(kind, sessionID)]; ok {
 		cp := *row
+		cp.Version = f.fence.Of(kind, sessionID)
 		return &cp, nil
 	}
 	return nil, persistence.ErrNotFound
@@ -167,33 +172,31 @@ func TestTelegramSessionStore_Load_RehydratesFromPersister(t *testing.T) {
 	}
 }
 
-// TestTelegramSessionStore_Load_SkipsHydrateWhenCacheWarm: the
-// second inbound on a chat must NOT round-trip to the DB —
-// the in-memory state is the hot-path read.
+// TestTelegramSessionStore_Load_SkipsHydrateWhenCacheWarm: a warm lane whose
+// stored row is still as this process saved it is served from memory, not
+// re-read. Since the fence (art17 redact design §15.18) "warm" means saved or
+// loaded by this process: a lane it never synchronised with the row yields
+// to the row (TestTelegramFence_UnseenLaneYieldsToTheRow).
 func TestTelegramSessionStore_Load_SkipsHydrateWhenCacheWarm(t *testing.T) {
 	repo := newFakeChannelSessionRepo()
-	// Pre-seed a DB row that DIFFERS from the in-memory state.
-	staleDB := []chat.Message{{Role: "user", Content: "stale-from-db"}}
-	raw, _ := json.Marshal(staleDB)
-	if err := repo.Save(context.Background(), "telegram", "300", "stale-project", raw); err != nil {
-		t.Fatalf("pre-seed: %v", err)
-	}
-
 	bot := newBareTestBot(t, BotConfig{Token: "t"})
 	bot.sessionPersister = sessionstore.New(repo, "telegram", zerolog.Nop())
-	// Warm the cache with FRESHER content (mimics a chat that's
-	// been active in this process since boot).
-	freshConv := bot.getConversation(300, "")
-	freshConv.AddMessage(chat.Message{Role: "user", Content: "fresh-in-memory"})
-
 	store := NewSessionStore(bot, nil)
-	sess, err := store.Load(context.Background(),
-		conversation.ChannelMessage{Source: "telegram", SessionID: "300", SpeakerID: "42"})
+	msg := conversation.ChannelMessage{Source: "telegram", SessionID: "300", SpeakerID: "42"}
+	if err := store.Append(context.Background(), msg, dispatcher.Result{
+		Messages: []chat.Message{{Role: "user", Content: "saved"}}}); err != nil {
+		t.Fatalf("Append: %v", err)
+	}
+	// Memory moves ahead of the row (as between a turn and its save); the
+	// row's version is unchanged, so memory is served.
+	bot.getConversation(300, "").AddMessage(chat.Message{Role: "user", Content: "fresh-in-memory"})
+
+	sess, err := store.Load(context.Background(), msg)
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
-	if len(sess.History) != 1 || sess.History[0].Content != "fresh-in-memory" {
-		t.Errorf("Load returned stale DB content instead of fresh cache: %+v", sess.History)
+	if n := len(sess.History); n != 2 || sess.History[1].Content != "fresh-in-memory" {
+		t.Errorf("Load re-read the row instead of the warm cache: %+v", sess.History)
 	}
 }
 
@@ -296,3 +299,31 @@ func TestTelegramSessionID_FormatMatchesChatID(t *testing.T) {
 		t.Errorf("FormatInt produced unexpected %q", got)
 	}
 }
+
+// Version, SaveIfVersion and Fenced honour the fence over this fake's own
+// rows (art17 redact design §15.18).
+func (f *fakeChannelSessionRepo) Version(ctx context.Context, kind, sessionID string) (bool, int64, error) {
+	if _, err := f.Load(ctx, kind, sessionID); err != nil {
+		if errors.Is(err, persistence.ErrNotFound) {
+			return false, 0, nil
+		}
+		return false, 0, err
+	}
+	return true, f.fence.Of(kind, sessionID), nil
+}
+
+func (f *fakeChannelSessionRepo) SaveIfVersion(ctx context.Context, kind, sessionID, activeProject string, history []byte, expect *int64) (int64, bool, error) {
+	exists, _, err := f.Version(ctx, kind, sessionID)
+	if err != nil {
+		return 0, false, err
+	}
+	if !f.fence.Matches(kind, sessionID, exists, expect) {
+		return 0, false, nil
+	}
+	if err := f.Save(ctx, kind, sessionID, activeProject, history); err != nil {
+		return 0, false, err
+	}
+	return f.fence.Bump(kind, sessionID), true, nil
+}
+
+func (f *fakeChannelSessionRepo) Fenced() bool { return true }

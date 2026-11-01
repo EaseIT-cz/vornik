@@ -78,3 +78,14 @@ func (s pgTranscriptSeeder) SeedTaskMessage(ctx context.Context, id, projectID, 
 func TestMemoryPolicyEvaluation_PostgresContract(t *testing.T) {
 	repotest.RunMemoryPolicyEvaluationSuite(t, NewMemoryPolicyEvaluationRepository(newIntegrationDB(t).DB))
 }
+
+// GitHub #344, slice 5d-1a: the guarded transcript write. Same suite as SQLite.
+func TestTranscriptRedact_PostgresContract(t *testing.T) {
+	db := newIntegrationDB(t)
+	repotest.RunTranscriptRedactSuite(t, NewDataSubjectRepository(db.DB), repotest.DBExec{DB: db.DB})
+}
+
+// GitHub #344, slice 5d-1c: the escalation record. Same suite as SQLite.
+func TestDataSubjectEscalation_PostgresContract(t *testing.T) {
+	repotest.RunDataSubjectEscalationSuite(t, NewDataSubjectRepository(newIntegrationDB(t).DB))
+}

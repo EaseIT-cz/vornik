@@ -41,7 +41,7 @@
                     </div>
                     <div id="wizard-suggestions" class="px-5 pb-2 flex flex-wrap gap-1.5 text-xs"></div>
                     <div class="px-5 py-3 border-t border-dark-700/60">
-                        <form id="wizard-form" class="flex items-end gap-2" onsubmit="event.preventDefault(); submitWizardTurn();">
+                        <form id="wizard-form" class="flex items-end gap-2" data-on-submit="submitWizardTurn">
                             <textarea id="wizard-input" rows="2" class="flex-1 px-3 py-2 text-sm rounded-lg bg-dark-900 border border-control text-gray-100 focus:border-accent-500/60 focus:outline-none resize-none" placeholder="Tell me about your project…" autofocus></textarea>
                             <button id="wizard-submit" type="submit" class="inline-flex items-center gap-1.5 px-3 py-2 text-xs font-medium rounded-lg bg-accent-600 hover:bg-accent-500 text-white transition-colors disabled:opacity-50 disabled:cursor-not-allowed">
                                 <svg class="h-3.5 w-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M5 12h14M13 6l6 6-6 6"/></svg>
@@ -82,9 +82,9 @@
                          tier-1/2 turn never shows this panel. -->
                     <div id="composer-preview" class="hidden border-t border-dark-700/60">
                         <div class="flex gap-1 px-5 pt-3" role="tablist" aria-label="Composed automation preview">
-                            <button type="button" id="composer-tab-plan" role="tab" aria-selected="true" onclick="switchComposerTab('plan')" class="px-2.5 py-1 text-xs font-medium rounded-t-lg bg-dark-900/60 text-accent-300 border border-b-0 border-dark-700">Plan</button>
-                            <button type="button" id="composer-tab-graph" role="tab" aria-selected="false" onclick="switchComposerTab('graph')" class="px-2.5 py-1 text-xs font-medium rounded-t-lg text-gray-400 hover:text-gray-200">Graph</button>
-                            <button type="button" id="composer-tab-yaml" role="tab" aria-selected="false" onclick="switchComposerTab('yaml')" class="px-2.5 py-1 text-xs font-medium rounded-t-lg text-gray-400 hover:text-gray-200">YAML</button>
+                            <button type="button" id="composer-tab-plan" role="tab" aria-selected="true" data-on-click="switchComposerTab" data-args="[&#34;plan&#34;]" class="px-2.5 py-1 text-xs font-medium rounded-t-lg bg-dark-900/60 text-accent-300 border border-b-0 border-dark-700">Plan</button>
+                            <button type="button" id="composer-tab-graph" role="tab" aria-selected="false" data-on-click="switchComposerTab" data-args="[&#34;graph&#34;]" class="px-2.5 py-1 text-xs font-medium rounded-t-lg text-gray-400 hover:text-gray-200">Graph</button>
+                            <button type="button" id="composer-tab-yaml" role="tab" aria-selected="false" data-on-click="switchComposerTab" data-args="[&#34;yaml&#34;]" class="px-2.5 py-1 text-xs font-medium rounded-t-lg text-gray-400 hover:text-gray-200">YAML</button>
                         </div>
                         <div class="px-5 py-3 text-xs">
                             <!-- Plan (default tab): the ComposedPlan narrative. -->
@@ -118,7 +118,7 @@
                                      a later turn changes the cadence. -->
                                 <div id="composer-schedule-chip" class="hidden mt-3 flex items-center gap-2 px-3 py-2 rounded-lg bg-dark-900/50 border border-dark-700">
                                     <span id="composer-schedule-text" class="flex-1 text-gray-200"></span>
-                                    <button type="button" id="composer-schedule-confirm-btn" onclick="confirmComposerSchedule()" class="px-2 py-1 rounded bg-accent-600 hover:bg-accent-500 text-white text-[11px] font-medium disabled:opacity-50">Confirm</button>
+                                    <button type="button" id="composer-schedule-confirm-btn" data-on-click="confirmComposerSchedule" class="px-2 py-1 rounded bg-accent-600 hover:bg-accent-500 text-white text-[11px] font-medium disabled:opacity-50">Confirm</button>
                                 </div>
                             </div>
 
@@ -140,10 +140,10 @@
                         </div>
                     </div>
                     <div class="px-5 py-3 border-t border-dark-700/60 flex items-center justify-end gap-2">
-                        <button id="wizard-cancel" type="button" onclick="submitWizardCancel()" class="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg bg-dark-700 hover:bg-dark-600 text-gray-300 transition-colors" title="Cancel this session and return to projects">
+                        <button id="wizard-cancel" type="button" data-on-click="submitWizardCancel" class="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg bg-dark-700 hover:bg-dark-600 text-gray-300 transition-colors" title="Cancel this session and return to projects">
                             Cancel
                         </button>
-                        <button id="wizard-commit" type="button" disabled onclick="submitWizardCommit()" class="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg bg-emerald-700 hover:bg-emerald-600 text-white transition-colors disabled:opacity-40 disabled:cursor-not-allowed" title="Create the project from this proposal">
+                        <button id="wizard-commit" type="button" disabled data-on-click="submitWizardCommit" class="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg bg-emerald-700 hover:bg-emerald-600 text-white transition-colors disabled:opacity-40 disabled:cursor-not-allowed" title="Create the project from this proposal">
                             <svg class="h-3.5 w-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M5 13l4 4L19 7"/></svg>
                             Create project
                         </button>
@@ -154,13 +154,15 @@
         </div>
     </main>
 
+    <script type="application/json" id="wizard-data">{"sessionID": {{.ResumeSessionID}}, "prior": {{.ResumeTranscript}}}</script>
     <script>
     (function () {
         // Seeded from ?session=<id> when resuming a draft (empty for a
         // fresh wizard). Without this the page always started a NEW
         // session on the first turn, so "Resume" never continued the
         // draft and "Cancel" had no session to cancel.
-        let sessionID = "{{ .ResumeSessionID }}";
+        const __wz = JSON.parse(document.getElementById('wizard-data').textContent);
+        let sessionID = __wz.sessionID;
         let lastProposal = null;
         // Set true whenever the latest turn's envelope carries a `bundle`
         // (tier 3) — the commit button's CLICK handler branches on this
@@ -214,7 +216,7 @@
         // LLM on the next turn; this just re-renders the bubbles.
         (function replayResumedTranscript() {
             try {
-                const prior = {{ .ResumeTranscriptJSON }};
+                const prior = __wz.prior;
                 if (Array.isArray(prior)) {
                     for (const t of prior) {
                         if (t && t.content) {
@@ -777,6 +779,16 @@
     </script>
 
     {{template "pageFooter" .}}
+<script>
+    // #416 phase 3: this page's actions (web-ui-design.md, "C, phase 3"). Each
+    // calls its function at event time, so a script that defines it later
+    // (or again, after a swap) is the one that runs.
+    Vornik.action('confirmComposerSchedule', () => window.confirmComposerSchedule());
+    Vornik.action('submitWizardCancel', () => window.submitWizardCancel());
+    Vornik.action('submitWizardCommit', () => window.submitWizardCommit());
+    Vornik.action('switchComposerTab', (el, e, tab) => window.switchComposerTab(tab));
+    Vornik.action('submitWizardTurn', (el, e) => { e.preventDefault(); window.submitWizardTurn(); });
+    </script>
 </body>
 </html>
 {{end}}

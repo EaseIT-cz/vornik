@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"vornik.io/vornik/internal/configlock"
 
 	"vornik.io/vornik/internal/persistence"
 )
@@ -147,10 +148,11 @@ func (e *ApplyEngine) resolveJournal(ctx context.Context, id, mode, actor string
 	if actor == "" {
 		actor = "operator"
 	}
-	if !configWriteMu.TryLock() {
+	unlockConfig, ok := configlock.TryLock()
+	if !ok {
 		return nil, refuseBusy()
 	}
-	defer configWriteMu.Unlock()
+	defer unlockConfig()
 	if !e.mu.TryLock() {
 		return nil, refuseBusy()
 	}

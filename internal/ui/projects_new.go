@@ -93,6 +93,7 @@ type ProjectsNewData struct {
 // `?slug=<slug>` is present, renders the parameter form for that
 // template instead of the grid; `?domain=<d>` filters the grid.
 func (s *Server) ProjectsNew(w http.ResponseWriter, r *http.Request) {
+	// GitHub #560 (M1b B2b): tenant_admin passes this check on purpose: project creation is granted to the instance owner.
 	if api.SessionRoleFromContext(r.Context()) == auth.RoleUser {
 		http.Error(w, "admin scope required", http.StatusForbidden)
 		return
@@ -190,6 +191,7 @@ func (s *Server) resolveDynamicOptions(data *ProjectsNewData) {
 // with the operator's values intact; on success we render a
 // confirmation view with links into the new project.
 func (s *Server) ProjectsCreateFromTemplate(w http.ResponseWriter, r *http.Request) {
+	// GitHub #560 (M1b B2b): tenant_admin passes this check on purpose: project creation is granted to the instance owner.
 	if api.SessionRoleFromContext(r.Context()) == auth.RoleUser {
 		http.Error(w, "admin scope required", http.StatusForbidden)
 		return

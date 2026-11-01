@@ -3,11 +3,11 @@ sources:
     - path: internal/forge/forge.go
       sha256: 8fe94fe7e928d7d2e18eaabf8d0b149db4210746cebe491ccb8202ab8e221c88
     - path: internal/forge/github/github.go
-      sha256: 44e8cf74915ea21fcbb960f86e9c01e1a492578e4af2d973695ebd37bca39c9e
+      sha256: 77b398d2904c0b16036455b2a00323cee1d2dbce584b9d15d47113756b51923a
     - path: internal/forge/issues.go
       sha256: 26e007910abebbabf41b907c81741ae7d53680e9675bce1748785129f35e60c4
     - path: internal/forge/github/issues.go
-      sha256: 1bf427bc8c7242fe6c878dfaaac875a145c94292338c861649a569d25fda7fc2
+      sha256: 854085558c5d8ecb7d18384e68f8a681947390b10989fb6b4d136bcf871135aa
     - path: internal/api/forge_issues.go
       sha256: 4eb63a71b8ef21adf60cbf32b343e8fc7e5fdf27237f4cfa80dc2e62f7d2f311
     - path: internal/registry/project_forge_issues.go
@@ -456,6 +456,10 @@ ending with the AI-disclosure notice (`ai_disclosure.publication_text`), and
 closes the source as not planned. Retries recognize only markers posted through
 this same GitHub App. Closing refuses when the full comment set cannot be
 checked within the 100-comment cap. Both write opt-ins default to false.
+
+Every pull request body, review and comment Vornik posts also ends with a
+hidden line, `<!-- vornik-ai-mark: … -->`: the EU AI Act Art 50(2)
+machine-readable mark, signed over the text above it.
 
 ### Issue writes are unattended
 

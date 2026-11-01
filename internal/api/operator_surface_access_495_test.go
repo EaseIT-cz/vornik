@@ -61,11 +61,11 @@ func TestOperatorSurfaceAccess495_DecisionTable(t *testing.T) {
 		{"no-access session", req(true, session("user"), "", []string{noAccessSentinelProject}), OperatorSurfaceHidden},
 	}
 	for _, c := range cases {
-		assert.Equal(t, c.want, OperatorSurfaceAccessFor(c.r, isAdmin), c.name)
+		assert.Equal(t, c.want, OperatorSurfaceAccessFor(c.r, isAdmin, SurfaceConfigShow), c.name)
 	}
 	var zero OperatorSurfaceAccess
 	assert.Equal(t, OperatorSurfaceRefused, zero, "the zero value must refuse")
-	assert.Equal(t, OperatorSurfaceRefused, OperatorSurfaceAccessFor(req(true, static, adminKey, nil), nil),
+	assert.Equal(t, OperatorSurfaceRefused, OperatorSurfaceAccessFor(req(true, static, adminKey, nil), nil, SurfaceConfigShow),
 		"a nil isAdminKey accepts no key")
 }
 
@@ -80,7 +80,7 @@ func TestOperatorSurfaceAccess495_AdminDisabled(t *testing.T) {
 	r = r.WithContext(ctx)
 
 	disabled := config.AdminConfig{Enabled: false, AllowedKeys: []string{k}}
-	assert.Equal(t, OperatorSurfaceRefused, OperatorSurfaceAccessFor(r, disabled.IsAdminKey))
+	assert.Equal(t, OperatorSurfaceRefused, OperatorSurfaceAccessFor(r, disabled.IsAdminKey, SurfaceConfigShow))
 	enabled := config.AdminConfig{Enabled: true, AllowedKeys: []string{k}}
-	assert.Equal(t, OperatorSurfaceAllowed, OperatorSurfaceAccessFor(r, enabled.IsAdminKey))
+	assert.Equal(t, OperatorSurfaceAllowed, OperatorSurfaceAccessFor(r, enabled.IsAdminKey, SurfaceConfigShow))
 }

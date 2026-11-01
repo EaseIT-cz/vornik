@@ -272,7 +272,10 @@ var agentFlags = map[string]agentFlag{
 	"--userns":       {value: true, allowed: set("host", "keep-id", "private")},
 	"--security-opt": {value: true, allowed: set("no-new-privileges", "label=disable")},
 	"--pull":         {value: true, allowed: set("never")},
-	"--ulimit":       {value: true, valid: fsizeOnly},
+	// GitHub #569 R7: the agent's read-only root turns podman's own tmpfs off
+	// (it would cover the anonymous volumes); turning it on is never emitted.
+	"--read-only-tmpfs": {value: true, allowed: set("false")},
+	"--ulimit":          {value: true, valid: fsizeOnly},
 }
 
 // parseFlags walks flags until the first non-flag token, checking each against
@@ -358,7 +361,8 @@ type controlVerb struct {
 var controlVerbs = map[string]controlVerb{
 	"version": {flags: map[string]agentFlag{"--format": {value: true}}},
 	"stop":    {flags: map[string]agentFlag{"--time": {value: true}, "-t": {value: true}, "--ignore": {}, "-i": {}}, target: true},
-	"rm":      {flags: map[string]agentFlag{"--force": {}, "-f": {}, "--ignore": {}, "-i": {}}, target: true},
+	// --volumes: a container's anonymous volumes go with it (GitHub #569 R4).
+	"rm":      {flags: map[string]agentFlag{"--force": {}, "-f": {}, "--ignore": {}, "-i": {}, "--volumes": {}, "-v": {}}, target: true},
 	"inspect": {flags: map[string]agentFlag{"--format": {value: true}, "-f": {value: true}}, target: true},
 	"ps": {flags: map[string]agentFlag{"--all": {}, "-a": {}, "--no-trunc": {}, "--quiet": {}, "-q": {},
 		"--filter": {value: true}, "-f": {value: true}, "--format": {value: true}}},

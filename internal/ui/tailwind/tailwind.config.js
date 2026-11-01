@@ -15,6 +15,7 @@ module.exports = {
         relative: true,
         files: [
             '../templates/*.html',
+            '../static/console.js',
             '../*.go',
             '!../*_test.go',
             '../../api/setup_handlers.go',

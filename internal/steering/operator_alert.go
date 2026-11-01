@@ -2,6 +2,7 @@ package steering
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"sync"
@@ -210,14 +211,26 @@ func (n *OperatorAlertNotifier) NotifySteeringRequired(ctx context.Context, task
 // a no-op. Independent of the task-steering dedup. The cluster monitor relies
 // on its own edge-triggering so this isn't called per-tick.
 func (n *OperatorAlertNotifier) NotifyOperator(ctx context.Context, subject, body string) {
+	_ = n.SendOperator(ctx, subject, body)
+}
+
+// ErrOperatorAlertUnavailable is SendOperator's answer when no alert can be
+// sent: a nil, disabled or unconfigured notifier, or a channel with no
+// outbound.
+var ErrOperatorAlertUnavailable = errors.New("steering: no operator alert recipient is available")
+
+// SendOperator is NotifyOperator that reports whether the alert was sent. A
+// caller that records "the operator was told" (the GDPR erasure escalation,
+// GitHub #344 5d-1c) must know; NotifyOperator's callers do not.
+func (n *OperatorAlertNotifier) SendOperator(ctx context.Context, subject, body string) error {
 	if n == nil || !n.enabled || n.resolver == nil || !n.cfg.configured() {
-		return
+		return ErrOperatorAlertUnavailable
 	}
 	ch := n.resolver.ResolveChannel(n.cfg.Channel)
 	if ch == nil {
 		n.logger.Warn().Str("channel", n.cfg.Channel).Msg("operator-alert: configured channel has no outbound; skipping")
 		operatorAlertTotal.WithLabelValues("operator", "no_outbound").Inc()
-		return
+		return ErrOperatorAlertUnavailable
 	}
 	text := subject
 	if body != "" {
@@ -230,9 +243,10 @@ func (n *OperatorAlertNotifier) NotifyOperator(ctx context.Context, subject, bod
 	if _, err := ch.Send(ctx, msg); err != nil {
 		n.logger.Warn().Err(err).Str("channel", n.cfg.Channel).Msg("operator-alert: outbound send failed")
 		operatorAlertTotal.WithLabelValues("operator", "send_failed").Inc()
-		return
+		return fmt.Errorf("steering: operator alert send failed: %w", err)
 	}
 	operatorAlertTotal.WithLabelValues("operator", "sent").Inc()
+	return nil
 }
 
 func (n *OperatorAlertNotifier) recentlySent(recipientKey, state string) bool {

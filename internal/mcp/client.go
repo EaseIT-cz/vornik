@@ -138,6 +138,11 @@ type stdioResult struct {
 // per-request timeout. Default 30s; a server may raise it
 // (cfg.TimeoutSeconds) when its tools run long (e.g. scraper web_fetch
 // against slow targets).
+// connectHTTPClient is deliberately unguarded when cfg.HTTPClient is nil: in
+// a self-hosted install the configuration is the operator's. In managed
+// hosting the caller (the service container) sets a guarded client first
+// (GitHub #560, 18-security-and-tenancy.md M1c D5); this package stays
+// mode-agnostic.
 func connectHTTPClient(cfg ServerConfig) *http.Client {
 	if cfg.HTTPClient != nil {
 		return cfg.HTTPClient

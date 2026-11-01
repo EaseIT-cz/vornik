@@ -80,6 +80,15 @@ type SessionBackend struct {
 	// doomed row does not linger failing every request forever.
 	Revoker SessionRevoker
 
+	// DemoteAdmin, when set, is managed hosting's listener rule (GitHub
+	// #560; 18-security-and-tenancy.md, "Amendment 2026-10-28 (#560, slice
+	// M1a)", A4b): when it reports true for the request's context, an admin
+	// principal's session carries the role tenant_admin (M1b; user in M1a),
+	// not admin. Nil (self-hosted)
+	// changes nothing. It is a predicate so this package never reads the
+	// hosting config.
+	DemoteAdmin func(context.Context) bool
+
 	mu sync.Mutex
 	// cache grows with distinct logged-in users and has no
 	// eviction — bounded by the human population of the instance,
@@ -138,6 +147,15 @@ func (b *SessionBackend) Authenticate(ctx context.Context, cred auth.Credential)
 		// contract as the store error above.
 		return nil, errors.Join(auth.ErrBackendUnavailable, err)
 	}
+	// The session's role, decided per request: only this local value is
+	// demoted, never the principal (which, for an admin, is never cached
+	// either: resolveUser, A2). The demoted role is tenant_admin, the
+	// instance owner (GitHub #560, M1b), which every reader of the session
+	// role places explicitly (18-security-and-tenancy.md, M1b B2b).
+	role := p.Role
+	if role == auth.RoleAdmin && b.DemoteAdmin != nil && b.DemoteAdmin(ctx) {
+		role = auth.RoleTenantAdmin
+	}
 	return &auth.Identity{
 		Subject:     "user:" + sess.UserID,
 		Projects:    p.Projects,
@@ -145,7 +163,7 @@ func (b *SessionBackend) Authenticate(ctx context.Context, cred auth.Credential)
 		IssuedAt:    sess.CreatedAt,
 		ExpiresAt:   sess.ExpiresAt,
 		Extra: map[string]any{
-			auth.ExtraSessionRole:   p.Role,
+			auth.ExtraSessionRole:   role,
 			auth.ExtraSessionID:     sess.ID,
 			auth.ExtraSessionUserID: sess.UserID,
 		},

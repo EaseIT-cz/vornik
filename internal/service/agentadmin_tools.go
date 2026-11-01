@@ -16,6 +16,7 @@ import (
 	"vornik.io/vornik/internal/agentadmin"
 	"vornik.io/vornik/internal/agentns"
 	"vornik.io/vornik/internal/integrations"
+	"vornik.io/vornik/internal/integrations/dialguard"
 	"vornik.io/vornik/internal/mcp"
 	"vornik.io/vornik/internal/mcpauth"
 	"vornik.io/vornik/internal/persistence"
@@ -40,8 +41,11 @@ const AgentSystemActor = "system:agent-admin"
 //
 // The rule lives in integrations.LoopbackURLGuard since 2026-10-21 (GitHub
 // #433: the trading panel's broker fetch uses the same one).
+//
+// GitHub #560 (M1c D5): it is dialguard.CustomerURLGuard, LoopbackURLGuard
+// self-hosted and public-only with no loopback grant in managed hosting.
 func agentDialGuard(rawURL string) integrations.DialGuard {
-	return integrations.LoopbackURLGuard(rawURL, nil)
+	return dialguard.CustomerURLGuard(rawURL, nil)
 }
 
 // loopbackAgentURL reports whether rawURL is one agentDialGuard allow-lists.
@@ -72,7 +76,7 @@ func guardAgentServer(cfg *mcp.ServerConfig, projectID string) {
 	if cfg.TimeoutSeconds > 0 {
 		timeout = time.Duration(cfg.TimeoutSeconds) * time.Second
 	}
-	cfg.HTTPClient = agentDialGuard(cfg.URL).HTTPClient(timeout)
+	cfg.HTTPClient = dialguard.CustomerURLClient(cfg.URL, nil, timeout) // live read (M1c D0)
 }
 
 // toolListing is what one listing advertised: every tool name, and the
@@ -87,7 +91,7 @@ type toolListing struct {
 // judged on each tool's full descriptor (annotations and input schema).
 // Errors name the server, never a header value.
 func (c *Container) listMCPTools(ctx context.Context, cfg mcp.ServerConfig) (toolListing, error) {
-	cfg.HTTPClient = agentDialGuard(cfg.URL).HTTPClient(listToolsTimeout)
+	cfg.HTTPClient = dialguard.CustomerURLClient(cfg.URL, nil, listToolsTimeout) // live read (M1c D0)
 	cctx, cancel := context.WithTimeout(ctx, listToolsTimeout)
 	defer cancel()
 	cl, err := mcp.Connect(cctx, cfg, c.Logger)

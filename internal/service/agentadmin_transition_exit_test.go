@@ -163,7 +163,7 @@ func TestAgentAccount_OAuthPreSuspensionFailureAborts(t *testing.T) {
 	if handled, err := f.c.publishOAuthAccount(ctx, tok, "", false); !handled || err == nil {
 		t.Fatalf("a connect without an integration row published: %v/%v", handled, err)
 	}
-	if _, err := f.c.repos.MCPOAuthTokens.Get(ctx, "hermes--comms", "nosuch"); !errors.Is(err, persistence.ErrNotFound) {
+	if _, err := f.c.repos.MCPOAuthTokens.Get(ctx, "hermes--comms", "nosuch", ""); !errors.Is(err, persistence.ErrNotFound) {
 		t.Fatal("the refused connect stored a token")
 	}
 	notBusy(t, f, "OAuth pre-suspension failure")
@@ -182,7 +182,7 @@ func TestAgentAccount_DisconnectRemovedIntegrationDeletesAndClears(t *testing.T)
 	if err := f.c.mcpConnector().Disconnect(ctx, "hermes--work", "jira", "operator"); err != nil {
 		t.Fatalf("Disconnect of a removed integration failed: %v", err)
 	}
-	if _, err := f.c.repos.MCPOAuthTokens.Get(ctx, "hermes--work", "jira"); !errors.Is(err, persistence.ErrNotFound) {
+	if _, err := f.c.repos.MCPOAuthTokens.Get(ctx, "hermes--work", "jira", ""); !errors.Is(err, persistence.ErrNotFound) {
 		t.Fatalf("Disconnect kept the token: %v", err)
 	}
 	if _, err := f.c.accountDecisionEpoch(ctx, "hermes"); err != nil {
@@ -195,7 +195,7 @@ func TestAgentAccount_DisconnectRemovedIntegrationDeletesAndClears(t *testing.T)
 	if handled, err := f.c.publishOAuthAccount(ctx, tok, "", false); !handled || err == nil {
 		t.Fatalf("a Connect to a removed connection published: %v/%v", handled, err)
 	}
-	if _, err := f.c.repos.MCPOAuthTokens.Get(ctx, "hermes--work", "jira"); !errors.Is(err, persistence.ErrNotFound) {
+	if _, err := f.c.repos.MCPOAuthTokens.Get(ctx, "hermes--work", "jira", ""); !errors.Is(err, persistence.ErrNotFound) {
 		t.Fatalf("the refused Connect stored a token: %v", err)
 	}
 	if _, err := f.c.accountDecisionEpoch(ctx, "hermes"); err != nil {

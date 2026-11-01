@@ -163,6 +163,11 @@ assert_silent "case5 no tool_input" "$OUT" "$RC"
 OUT="$(run_hook observe "$(pre '../../etc' Read "$(read_in "$REPO/internal/x/a.go")")" VORNIK_NUDGE_THRESHOLD=1)"; RC=$?
 assert_silent "case5 invalid session id" "$OUT" "$RC"
 [[ ! -e "$WORK/etc" ]] || fail "case5: a crafted session id escaped the state dir"
+
+# --- Case 5b (GitHub #587, §7.2.4a): a token from the plugin's options alone
+# is enough; the hook gets it as CLAUDE_PLUGIN_OPTION_COMPANION_TOKEN.
+OUT="$(printf '%s' "$(pre sess5b Read "$(read_in "$REPO/internal/x/a.go")")" | env PATH="$ALLOW" VORNIK_COMPANION_TOKEN="" CLAUDE_PLUGIN_OPTION_COMPANION_TOKEN="opt-token" VORNIK_NUDGE_THRESHOLD=1 "$BASH_BIN" "$HOOK" observe)"
+[[ -n "$OUT" ]] || fail "case5b: the option's token did not enable the nudge"
 RO="$WORK/ro"; mkdir -p "$RO"; chmod 0500 "$RO"
 OUT="$(run_hook observe "$GOOD" VORNIK_NUDGE_THRESHOLD=1 CLAUDE_PLUGIN_DATA="$RO/data")"; RC=$?
 assert_silent "case5 unwritable state dir" "$OUT" "$RC"

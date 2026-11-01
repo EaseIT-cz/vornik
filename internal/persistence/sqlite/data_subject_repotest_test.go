@@ -130,3 +130,16 @@ func seedChatTurnForSuite(db *sqlite.DB) repotest.SeedChatTurn {
 		return err
 	}
 }
+
+// GitHub #344, slice 5d-1a: the guarded transcript write. Same suite as the
+// Postgres lane.
+func TestTranscriptRedact_Contract(t *testing.T) {
+	db := newTestDB(t)
+	repotest.RunTranscriptRedactSuite(t, sqlite.NewDataSubjectRepository(db.DB),
+		repotest.DBExec{DB: db.DB, BindTime: sqlite.SubjectStoreDialect().BindTime})
+}
+
+// GitHub #344, slice 5d-1c: the escalation record. Same suite as Postgres.
+func TestDataSubjectEscalation_Contract(t *testing.T) {
+	repotest.RunDataSubjectEscalationSuite(t, sqlite.NewDataSubjectRepository(newTestDB(t).DB))
+}

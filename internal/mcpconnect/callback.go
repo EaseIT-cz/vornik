@@ -42,20 +42,37 @@ func (c *Connector) CallbackHandler() http.Handler {
 			return
 		}
 
-		state := strings.TrimSpace(q.Get("state"))
-		code := strings.TrimSpace(q.Get("code"))
-		if state == "" || code == "" {
+		req := CompleteRequestFromQuery(q)
+		if req.State == "" || req.Code == "" {
 			c.renderCallback(w, http.StatusBadRequest, "Incomplete callback",
 				"This URL is the OAuth redirect target and is not meant to be opened directly.")
 			return
 		}
 
-		tok, err := c.Complete(r.Context(), state, code)
+		tok, err := c.CompleteWith(r.Context(), req, nil)
 		if err != nil {
 			status := http.StatusBadGateway
 			title := "Could not complete the connection"
 			detail := "The authorization server rejected the token request. The daemon log names the reason."
+			var widened *ScopeWidenedError
 			switch {
+			case errors.As(err, &widened):
+				// design §16.5 C3: nothing was stored; say what was granted
+				// beyond the request and whether it was revoked.
+				status = http.StatusBadRequest
+				title = "Not connected: more access was granted than asked for"
+				detail = fmt.Sprintf("The provider granted %s, which this connection did not ask for, so nothing was stored.",
+					html.EscapeString(strings.Join(widened.Extra, ", ")))
+				if widened.Revoked {
+					detail += " The token was revoked; the provider may still list the authorization, so remove it there too."
+				} else {
+					detail += fmt.Sprintf(" This provider offers no revocation: revoke the authorization at %s.", html.EscapeString(orNone(widened.Host)))
+				}
+			case errors.Is(err, mcpauth.ErrIssuerMismatch):
+				// design §16.5 C2 (RFC 9207): refused before any token request.
+				status = http.StatusBadRequest
+				title = "Not connected: the response did not come from the expected provider"
+				detail = "The authorization response named another issuer, or none where the provider sends one, so no token was requested. Start again from the control plane."
 			case errors.Is(err, ErrUnknownState):
 				status = http.StatusBadRequest
 				title = "This authorization has expired"

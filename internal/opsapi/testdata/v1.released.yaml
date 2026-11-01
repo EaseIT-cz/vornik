@@ -1,0 +1,409 @@
+openapi: 3.1.0
+info:
+  title: Vornik operations API
+  version: 1.0.0
+  description: |
+    The operations a hosting control plane calls on a managed Vornik instance,
+    over the instance's operations listener, authenticated with the
+    instance_admin key (GitHub #575; https://docs.vornik.io).
+
+    Compatibility: a release serves the current and the previous major of this
+    API; GET /api/v1/capabilities lists the majors served in `operationsAPI`
+    (unrelated to its `apiVersion`, which names the data-plane path version).
+    Within a major an operation and its documented success statuses are never
+    removed. Response bodies list the fields a control plane reads; other
+    fields may appear and must be ignored. Shapes are not checked by this
+    repository's contract test; the hosting side's staging run checks them.
+
+    Not operations: provisioning is the `vornik-enterprise provision` command;
+    backups and the upgrade itself run on the machine, outside the daemon.
+servers:
+  - url: http://{operations_address}
+    variables:
+      operations_address:
+        default: 127.0.0.1:9443
+        description: hosting.operations_address
+security:
+  - instanceAdmin: []
+components:
+  securitySchemes:
+    instanceAdmin:
+      type: http
+      scheme: bearer
+      description: The instance_admin key (admin.allowed_keys and api.api_keys).
+    scrapeToken:
+      type: http
+      scheme: bearer
+      description: metrics.scrape_token; accepted for /metrics on the operations listener only.
+  responses:
+    Unauthorized:
+      description: No key, or a key the instance does not accept (the auth middleware answers before any handler).
+      content:
+        application/json:
+          schema: {$ref: '#/components/schemas/Error'}
+    Forbidden:
+      description: The key is valid but not admin-class.
+      content:
+        application/json:
+          schema: {$ref: '#/components/schemas/Error'}
+  schemas:
+    Error:
+      type: object
+      properties:
+        error:
+          type: object
+          properties:
+            code: {type: string}
+            message: {type: string}
+    ChatProposal:
+      type: object
+      required: [endpoint, api_key, model]
+      properties:
+        endpoint: {type: string, description: OpenAI-compatible base URL}
+        api_key: {type: string}
+        model: {type: string}
+        force: {type: boolean, description: commit even when the validation ping fails}
+    ChatValidationResult:
+      type: object
+      properties:
+        endpoint_ok: {type: boolean}
+        models_listed: {type: boolean}
+        model_known: {type: boolean}
+        ping_ok: {type: boolean}
+        failures:
+          type: array
+          items: {type: object}
+    Committed:
+      type: object
+      required: [committed, restart_required]
+      properties:
+        committed: {type: boolean}
+        restart_required: {type: boolean}
+    Inflight:
+      type: object
+      required: [chat_proxy, total, draining]
+      properties:
+        chat_proxy: {type: integer}
+        total: {type: integer}
+        draining: {type: boolean}
+    Drain:
+      type: object
+      required: [draining, shutting_down, total]
+      properties:
+        draining: {type: boolean}
+        shutting_down: {type: boolean}
+        since: {type: string, format: date-time}
+        expires_at: {type: string, format: date-time}
+        chat_proxy: {type: integer}
+        total: {type: integer}
+  parameters:
+    SessionID:
+      name: id
+      in: path
+      required: true
+      schema: {type: string}
+paths:
+  /readyz:
+    get:
+      operationId: readyz
+      summary: Readiness, the control plane's probe.
+      security: []
+      responses:
+        '200':
+          description: Ready.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status: {type: string, enum: [ready]}
+        '503':
+          description: Draining or not ready.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status: {type: string, enum: [draining, not-ready]}
+  /healthz:
+    get:
+      operationId: healthz
+      summary: Liveness only; never the readiness or upgrade signal.
+      security: []
+      responses:
+        '200': {description: The process is alive.}
+  /api/v1/capabilities:
+    get:
+      operationId: capabilities
+      summary: Version, edition, features and the operations API majors served.
+      responses:
+        '200':
+          description: Capabilities.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [version, operationsAPI]
+                properties:
+                  version: {type: string}
+                  edition: {type: string}
+                  apiVersion: {type: string}
+                  operationsAPI:
+                    type: array
+                    items: {type: string}
+                  features:
+                    type: object
+                    additionalProperties: {type: boolean}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+  /api/v1/setup/status:
+    get:
+      operationId: setupStatus
+      summary: Whether first-run setup is still pending.
+      responses:
+        '200':
+          description: Setup state.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [fresh_install]
+                properties:
+                  fresh_install: {type: boolean}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+  /api/v1/setup/models:
+    post:
+      operationId: setupModels
+      summary: The models a proposed endpoint and key offer. Writes nothing.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [endpoint, api_key]
+              properties:
+                endpoint: {type: string}
+                api_key: {type: string}
+      responses:
+        '200':
+          description: The model list.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  models:
+                    type: array
+                    items: {type: object, properties: {id: {type: string}}}
+        '400': {description: Malformed body.}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '502': {description: The endpoint or key was refused upstream.}
+        '503': {description: Setup is not wired on this instance.}
+  /api/v1/setup/session:
+    post:
+      operationId: setupSessionCreate
+      summary: Start a setup session.
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                selected_use_case: {type: string}
+      responses:
+        '200':
+          description: The new session.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [id]
+                properties:
+                  id: {type: string}
+                  current_step: {type: string}
+        '400': {description: Malformed body.}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '503': {description: Setup is not wired on this instance.}
+  /api/v1/setup/session/{id}/validate:
+    post:
+      operationId: setupSessionValidate
+      summary: Check a chat proposal. Answers an HTML fragment for the setup page; a control plane uses commit, which validates again.
+      parameters: [{$ref: '#/components/parameters/SessionID'}]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/ChatProposal'}
+      responses:
+        '200':
+          description: The validation result, rendered.
+          content:
+            text/html: {schema: {type: string}}
+        '400': {description: Malformed body.}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {description: No such session.}
+        '503': {description: Setup is not wired on this instance.}
+  /api/v1/setup/session/{id}/commit:
+    post:
+      operationId: setupSessionCommit
+      summary: Validate and commit the chat model; a restart applies it.
+      parameters: [{$ref: '#/components/parameters/SessionID'}]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/ChatProposal'}
+      responses:
+        '200':
+          description: Committed.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Committed'}
+        '400':
+          description: Malformed body, or the validation failed (the result is the body).
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/ChatValidationResult'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {description: No such session.}
+        '503': {description: Setup is not wired on this instance.}
+  /api/v1/setup/session/{id}/memory/validate:
+    post:
+      operationId: setupMemoryValidate
+      summary: Check an embedding proposal.
+      parameters: [{$ref: '#/components/parameters/SessionID'}]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {type: object}
+      responses:
+        '200': {description: The validation result.}
+        '400': {description: Malformed body.}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {description: No such session.}
+        '503': {description: Setup is not wired on this instance.}
+  /api/v1/setup/session/{id}/memory/commit:
+    post:
+      operationId: setupMemoryCommit
+      summary: Commit the memory step (enabled with an embedding endpoint, or disabled).
+      parameters: [{$ref: '#/components/parameters/SessionID'}]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                enabled: {type: boolean}
+      responses:
+        '200':
+          description: Committed.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Committed'}
+        '400': {description: Malformed body, or the validation failed.}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {description: No such session.}
+        '503': {description: Setup is not wired on this instance.}
+  /api/v1/setup/dispatcher:
+    post:
+      operationId: setupDispatcher
+      summary: Pin the chat dispatcher to a loaded project; a restart applies it.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [project_id]
+              properties:
+                project_id: {type: string}
+      responses:
+        '200':
+          description: Committed.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Committed'}
+        '400': {description: Malformed body, or an unknown project.}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '503': {description: Setup is not wired on this instance.}
+  /api/v1/doctor:
+    post:
+      operationId: doctor
+      summary: Feature readiness checks. A control plane sends fix=false (the report only); fix=true repairs.
+      parameters:
+        - name: fix
+          in: query
+          schema: {type: boolean, default: false}
+      responses:
+        '200': {description: The doctor report.}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+  /api/v1/daemon/inflight:
+    get:
+      operationId: daemonInflight
+      summary: Long requests in flight, for the upgrade idle window.
+      responses:
+        '200':
+          description: The counts.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Inflight'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+  /api/v1/daemon/drain:
+    post:
+      operationId: daemonDrain
+      summary: Drain for a bounded time; readiness answers 503 while it lasts.
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                ttl_seconds: {type: integer, minimum: 1, maximum: 3600}
+      responses:
+        '200':
+          description: The drain state.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Drain'}
+        '400': {description: An invalid ttl_seconds.}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '409': {description: The daemon is shutting down.}
+    delete:
+      operationId: daemonUndrain
+      summary: End the drain.
+      responses:
+        '200':
+          description: The drain state.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Drain'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '409': {description: The daemon is shutting down.}
+  /metrics:
+    get:
+      operationId: metrics
+      summary: Prometheus metrics. Operations listener only (the public listener answers 404). Routed on the root mux; its routing check is TestManagedListeners560, and its credential is checked by no contract test.
+      security:
+        - scrapeToken: []
+        - instanceAdmin: []
+      responses:
+        '200':
+          description: Prometheus text format.
+          content:
+            text/plain: {schema: {type: string}}
+        '401': {description: No accepted credential.}

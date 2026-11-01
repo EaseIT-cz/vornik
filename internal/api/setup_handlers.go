@@ -14,6 +14,7 @@ import (
 
 	"vornik.io/vornik/internal/chat"
 	"vornik.io/vornik/internal/config"
+	"vornik.io/vornik/internal/configlock"
 	"vornik.io/vornik/internal/featuredoctor"
 	"vornik.io/vornik/internal/onboarding"
 	"vornik.io/vornik/internal/persistence"
@@ -335,6 +336,9 @@ func (e *configPatchError) Error() string { return e.Msg }
 // without re-formatting. The secret at secretPath is never rolled back —
 // it is reused on retry — so every error message names it honestly.
 func writeChatConfig(configPath, secretPath string, proposal onboarding.ChatConfigProposal) error {
+	// The process's one config-write lock (GitHub #584, operations-api-contract-design.md §6.6).
+	unlock := configlock.Lock()
+	defer unlock()
 	writer := &featuredoctor.FileConfigWriter{Path: configPath}
 	backup, err := writer.Backup()
 	if err != nil {
@@ -373,6 +377,9 @@ func writeChatConfig(configPath, secretPath string, proposal onboarding.ChatConf
 }
 
 func writeDispatcherProjectConfig(configPath, projectID string) error {
+	// The process's one config-write lock (GitHub #584, operations-api-contract-design.md §6.6).
+	unlock := configlock.Lock()
+	defer unlock()
 	writer := &featuredoctor.FileConfigWriter{Path: configPath}
 	backup, err := writer.Backup()
 	if err != nil {
@@ -400,18 +407,39 @@ func writeDispatcherProjectConfig(configPath, projectID string) error {
 
 // setupSessionRouter dispatches /api/v1/setup/session/{id}/{action}.
 func (s *Server) setupSessionRouter(w http.ResponseWriter, r *http.Request) {
-	switch {
-	case strings.HasSuffix(r.URL.Path, "/memory/validate"):
+	switch setupSessionAction(r.URL.Path) {
+	case "memory/validate":
 		s.SetupMemoryValidate(w, r)
-	case strings.HasSuffix(r.URL.Path, "/memory/commit"):
+	case "memory/commit":
 		s.SetupMemoryCommit(w, r)
-	case strings.HasSuffix(r.URL.Path, "/validate"):
+	case "validate":
 		s.SetupSessionValidate(w, r)
-	case strings.HasSuffix(r.URL.Path, "/commit"):
+	case "commit":
 		s.SetupSessionCommit(w, r) // implemented in Task 6
 	default:
 		respondError(w, http.StatusNotFound, "UNKNOWN_SETUP_ACTION", "unknown setup session action")
 	}
+}
+
+// setupSessionActions are the actions under /api/v1/setup/session/{id}/, matched
+// as path suffixes in this order: the memory actions first, since their
+// suffixes end like the session's own.
+var setupSessionActions = []string{"memory/validate", "memory/commit", "validate", "commit"}
+
+// setupSessionAction names the action a setup-session path dispatches to, or
+// "" for none. A pure function so the operations API contract test can prove
+// each documented leaf reaches its own action (GitHub #575, C4.1).
+func setupSessionAction(path string) string {
+	return setupSessionActionIn(setupSessionActions, path)
+}
+
+func setupSessionActionIn(actions []string, path string) string {
+	for _, a := range actions {
+		if strings.HasSuffix(path, "/"+a) {
+			return a
+		}
+	}
+	return ""
 }
 
 func (s *Server) setupSessionOwnedByRequest(r *http.Request, sess *persistence.InstallationOnboardingSession) bool {

@@ -260,7 +260,7 @@ func (s *Server) buildTradingPanel(ctx context.Context, project *registry.Projec
 	// here (not in the shared window-path) so the dashboard, which builds its
 	// own windowed Perf into the page model, doesn't double-compute.
 	now := time.Now().UTC()
-	perf, _ := s.buildTradingPerformance(ctx, project.ID, now.AddDate(0, 0, -tradingPanelPerfWindowDays), now)
+	perf, _, _, _ := s.buildTradingPerformance(ctx, project.ID, now.AddDate(0, 0, -tradingPanelPerfWindowDays), now)
 	panel.Perf = perf
 	panel.PerfWindowDays = tradingPanelPerfWindowDays
 	if perf.ProfitFactor != nil {

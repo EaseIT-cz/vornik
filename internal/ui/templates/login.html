@@ -75,10 +75,12 @@
                 {{/* Break-glass: API-key access via the native Basic
                      dialog. method=key triggers the 401+WWW-Authenticate
                      from the Login handler. */}}
+                {{if .ShowKeyLogin}}
                 <a href="/ui/login?method=key"
                    class="flex items-center justify-center gap-2 w-full px-4 py-2.5 rounded-lg bg-dark-700 hover:bg-dark-600 text-gray-200 text-sm font-medium transition-colors border border-dark-600">
                     Sign in with an API key
                 </a>
+                {{end}}
             </div>
 
             <p class="mt-6 text-center text-[11px] text-gray-600">

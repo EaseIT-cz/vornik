@@ -13,6 +13,8 @@ import (
 	"net/url"
 	"strings"
 	"time"
+
+	"vornik.io/vornik/internal/instanceid"
 )
 
 // The OAuth 2.1 authorization-code flow with PKCE, plus RFC 7591 dynamic client registration.
@@ -76,6 +78,65 @@ func NewState() (string, error) {
 		return "", fmt.Errorf("mcpauth: generate state: %w", err)
 	}
 	return base64.RawURLEncoding.EncodeToString(raw), nil
+}
+
+// NewRoutedState is a state that names the instance for the EaseIT OAuth
+// router (GitHub #566, mcp-server-authentication-design.md §16.2 R3):
+// "<instance id>.<NewState>". Neither part can hold a ".", because the id
+// must match instanceid.Pattern and base64url has none, so the router splits
+// at the first ".". The random part keeps NewState's 192 bits.
+func NewRoutedState(instanceID string) (string, error) {
+	if !instanceid.Pattern.MatchString(instanceID) {
+		return "", fmt.Errorf("mcpauth: instance id %q does not match the instance id rule", instanceID)
+	}
+	s, err := NewState()
+	if err != nil {
+		return "", err
+	}
+	return instanceID + "." + s, nil
+}
+
+// minRedactedLen is the shortest code or PKCE verifier redactRequest
+// replaces. A real code or verifier (43 or more characters) is far longer;
+// replacing a one-letter test value would mangle the error text. A client
+// secret or refresh token has no lower bound in any spec, so those are
+// replaced whatever their length (review 8c0e F2).
+const minRedactedLen = 8
+
+// requestSecretFields are the token request's values that must never appear
+// in an error the daemon returns or logs, with whether the length bound
+// applies.
+var requestSecretFields = []struct {
+	name    string
+	bounded bool
+}{{"code", true}, {"code_verifier", true}, {"refresh_token", false}, {"client_secret", false}}
+
+// redactRequest replaces every occurrence of the request's secret values in
+// a token endpoint's response body with "[redacted]", before anything is
+// parsed, truncated or quoted from it (GitHub #566, §16.2 R4): an endpoint
+// that echoes its request, in the error field or anywhere in its
+// description, cannot put a code, a verifier, a refresh token or the client
+// secret into the daemon's log. Each value is replaced in every spelling an
+// echo can take: as sent decoded, JSON-escaped (Go's escaping, and the "\/"
+// solidus escape other encoders use), and percent-encoded as the form body
+// carried it (review 8c0e F1).
+func redactRequest(raw []byte, form url.Values) []byte {
+	out := string(raw)
+	for _, f := range requestSecretFields {
+		v := form.Get(f.name)
+		if v == "" || (f.bounded && len(v) < minRedactedLen) {
+			continue
+		}
+		escaped, _ := json.Marshal(v)
+		jsonSpelling := strings.Trim(string(escaped), `"`)
+		// Go's encoder never writes "\/", but JSON allows it and some
+		// encoders always escape the solidus (review 07e9 F1).
+		solidus := strings.ReplaceAll(jsonSpelling, "/", `\/`)
+		for _, spelling := range []string{url.QueryEscape(v), url.PathEscape(v), solidus, jsonSpelling, v} {
+			out = strings.ReplaceAll(out, spelling, "[redacted]")
+		}
+	}
+	return []byte(out)
 }
 
 // ClientCredentials identifies the OAuth client. Secret is empty for a public client.
@@ -270,7 +331,7 @@ func postToken(ctx context.Context, client *http.Client, endpoint string, creds 
 			return TokenResponse{}, fmt.Errorf("%w: status %d", ErrInvalidGrant, resp.StatusCode)
 		}
 		return TokenResponse{}, fmt.Errorf("%w: token endpoint returned %d: %s",
-			ErrAuthorizationServer, resp.StatusCode, oauthErrorSummary(raw))
+			ErrAuthorizationServer, resp.StatusCode, oauthErrorSummary(redactRequest(raw, form)))
 	}
 
 	var out struct {
@@ -334,4 +395,40 @@ func oauthErrorSummary(raw []byte) string {
 		out += ": " + desc
 	}
 	return out
+}
+
+// Revoke asks the authorization server to revoke token (RFC 7009), with the
+// client's own authentication, as the token request does. It is the daemon's
+// answer to a grant it refuses (design §16.5 C3). The token never appears in
+// the error: a failure is reported by status alone.
+func Revoke(ctx context.Context, client *http.Client, md Metadata, creds ClientCredentials, token, hint string) error {
+	if md.RevocationEndpoint == "" {
+		return errors.New("mcpauth: the authorization server offers no revocation endpoint")
+	}
+	if _, err := secureOAuthURL(md.RevocationEndpoint, "revocation endpoint"); err != nil {
+		return err
+	}
+	form := url.Values{"token": {token}, "client_id": {creds.ID}}
+	if hint != "" {
+		form.Set("token_type_hint", hint)
+	}
+	if creds.Confidential() {
+		form.Set("client_secret", creds.Secret)
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, md.RevocationEndpoint, strings.NewReader(form.Encode()))
+	if err != nil {
+		return fmt.Errorf("mcpauth: build revocation request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	setUserAgent(req)
+	resp, err := doSensitivePOST(client, req)
+	if err != nil {
+		return fmt.Errorf("mcpauth: revocation request failed")
+	}
+	defer func() { _ = resp.Body.Close() }()
+	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 64*1024))
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("%w: revocation endpoint returned %d", ErrAuthorizationServer, resp.StatusCode)
+	}
+	return nil
 }

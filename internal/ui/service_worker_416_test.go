@@ -50,7 +50,7 @@ func TestServiceWorkerScript_HeadersAndVersion_416(t *testing.T) {
 	if cc := rr.Header().Get("Cache-Control"); cc != "no-cache" {
 		t.Errorf("Cache-Control = %q, want no-cache", cc)
 	}
-	if got := rr.Header().Get("Content-Security-Policy"); got != consoleCSP {
+	if got := rr.Header().Get("Content-Security-Policy"); got != consoleCSPHeader() {
 		t.Errorf("worker script CSP = %q, want the console CSP", got)
 	}
 	body := rr.Body.String()

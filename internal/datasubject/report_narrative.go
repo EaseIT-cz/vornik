@@ -43,6 +43,41 @@ const (
 	NarrativeDeferred = "We could not safely remove your data from this record " +
 		"automatically. It has NOT been changed, and an operator is handling it."
 
+	// The shared-transcript sentences (slice 5d-1, design §15.14 and the
+	// grounds memo 2026-10-22). They say what was done and what was not: the
+	// other participants' words are not rewritten, so what they quoted of the
+	// subject (R1) and the surrounding context (R2) may still identify them.
+	NarrativeTombstoned = "The text of this message, which you wrote in a shared conversation, " +
+		"was removed and replaced by a dated note that a message was removed at a participant's " +
+		"request. Its time and place in the conversation were kept, and your name as its author " +
+		"was replaced by a pseudonym. Other people's messages in the conversation were not removed."
+	NarrativeMasked = "Your known identifiers were masked in this message of a shared " +
+		"conversation. Its author could not be matched to you, so it was masked, not removed. " +
+		"Their words were not otherwise changed, so the surrounding context may still identify you."
+	NarrativePayloadMasked = "The stored instructions of a task started from your messages had " +
+		"your identifiers masked."
+	// The channel-session sentences (slice 5d-2, design §15.18).
+	NarrativeSessionTombstoned = "In this conversation held for a chat channel, the messages you wrote " +
+		"were replaced by a dated note that a message was removed at a participant's request, and your " +
+		"known identifiers were masked in the other messages. Their words were not otherwise changed."
+	// NarrativeSessionMasked is kept for reports stored before §15.19; it is
+	// no longer produced.
+	NarrativeSessionMasked = "In this conversation held for a chat channel, the stored messages do not " +
+		"record who wrote each one, so the messages you wrote could not be told apart from the others. " +
+		"Your known identifiers were masked in every message, but the rest of the text you wrote was kept."
+	NarrativeSessionUnattributed = "This conversation held for a chat channel did not record who wrote " +
+		"each message, so your messages could not be separated from the others'. It was deleted in full. " +
+		"A separate record of who said what is kept; any of your messages in it that are linked to you " +
+		"are listed in this report with what was done to them."
+	// The residual limitations, added once when any transcript row was acted on.
+	LimitationQuotedWords = "Words of yours that other participants quoted may remain in their " +
+		"messages; they are kept as their recorded speech (GDPR Art 17(3)(a))."
+	LimitationContext = "The surrounding context of a shared conversation, such as replies and " +
+		"pronouns, may still identify you."
+	LimitationArt19 = "Recipients of the erased data: the other participants in the conversation " +
+		"(the note tells anyone reading it that a message was removed), and any copy made before " +
+		"the erasure outside this system, such as an export, a support bundle or a client's own copy."
+
 	// NarrativeFailed — distinct from deferred: something went wrong rather than
 	// something being undecidable.
 	NarrativeFailed = "An error prevented us from removing your data from this record. " +
@@ -73,6 +108,9 @@ type SubjectNarrative struct {
 	// Art 17(3)(b) and Art 99 require them, and the subject is entitled to know
 	// which records remain and on what basis.
 	Retained map[string]string `json:"retained,omitempty"`
+	// ResidualGround is the operator's assessment of why what remains of the
+	// subject in other people's messages is kept, for this request (#346 Q2).
+	ResidualGround string `json:"residual_ground,omitempty"`
 	// Limitations are the honest bounds of the whole exercise (backups, replicas,
 	// inferential identification).
 	Limitations []string `json:"limitations,omitempty"`
@@ -87,19 +125,47 @@ func (r *ErasureResult) Narrative(plan *ErasurePlan) SubjectNarrative {
 	if plan != nil {
 		n.Retained = plan.RetainedCategories
 		n.Limitations = plan.Limitations
+		if plan.ResidualAssessment != nil {
+			n.ResidualGround = plan.ResidualAssessment.Text
+		}
 	}
 
 	for _, a := range r.Deleted {
+		outcome := NarrativeDeleted
+		if a.Kind == SessionUnattributed {
+			outcome = NarrativeSessionUnattributed
+		}
 		n.Entries = append(n.Entries, NarrativeEntry{
 			Table: a.Table, RowID: a.RowID, What: describeTable(a.Table),
-			Outcome: NarrativeDeleted,
+			Outcome: outcome,
 		})
 	}
+	transcript := false
 	for _, a := range r.Redacted {
+		outcome := NarrativeRedacted
+		switch a.Kind {
+		case TranscriptTombstoned:
+			outcome = NarrativeTombstoned
+		case TranscriptMasked:
+			outcome = NarrativeMasked
+		case TranscriptPayloadMasked:
+			outcome = NarrativePayloadMasked
+		case SessionTombstoned:
+			outcome = NarrativeSessionTombstoned
+		case SessionMasked:
+			outcome = NarrativeSessionMasked
+		}
+		if a.Kind != "" {
+			transcript = true
+		}
 		n.Entries = append(n.Entries, NarrativeEntry{
 			Table: a.Table, RowID: a.RowID, What: describeTable(a.Table),
-			Outcome: NarrativeRedacted,
+			Outcome: outcome,
 		})
+	}
+	if transcript {
+		n.Limitations = append(append([]string(nil), n.Limitations...),
+			LimitationQuotedWords, LimitationContext, LimitationArt19)
 	}
 	for _, a := range r.CollisionDeleted {
 		n.Entries = append(n.Entries, NarrativeEntry{

@@ -40,6 +40,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"vornik.io/vornik/internal/aimark"
 
 	"github.com/rs/zerolog"
 
@@ -260,8 +261,11 @@ type AttachmentExtraction struct {
 // instance is constructed per daemon boot; per-project multi-
 // address routing is a slice-2 concern.
 type Channel struct {
-	cfg     Config
-	senders senderAllowlist
+	// aiMarker signs Art 50(2) marks on outbound bodies (aimark.go).
+	aiMarkerMu sync.Mutex
+	aiMarker   *aimark.Marker
+	cfg        Config
+	senders    senderAllowlist
 
 	imap     IMAPClient
 	smtp     SMTPSender
@@ -1068,6 +1072,7 @@ func (c *Channel) sendOutbound(ctx context.Context, msg conversation.ChannelMess
 	}
 
 	out := OutboundMessage{
+		AIMark:      c.markBody(ctx, msg.Text),
 		From:        c.cfg.FromAddress,
 		To:          to,
 		Subject:     subject,

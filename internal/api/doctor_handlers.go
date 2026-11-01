@@ -11,6 +11,7 @@ import (
 	"sort"
 	"strings"
 	"time"
+	"vornik.io/vornik/internal/aimark"
 
 	"vornik.io/vornik/internal/auditredact"
 	"vornik.io/vornik/internal/chat"
@@ -384,6 +385,11 @@ type DoctorHandlers struct {
 	// subjectRequests backs checkSubjectRequestDeadlines (GDPR Art 12(3)).
 	// Wired by the container on the resolved driver; nil → SKIPPED.
 	subjectRequests SubjectRequestLedger
+	// aiMarker backs checkAIOutputMarking (Art 50(2), GitHub #117).
+	aiMarker    *aimark.Marker
+	aiMarkerSet bool
+	// syntheticVoice backs checkSyntheticVoiceReplies (GitHub #543).
+	syntheticVoice syntheticVoiceDoctor
 }
 
 // SetAPIMetrics wires the registered APIMetrics so the
@@ -500,6 +506,7 @@ func (h *DoctorHandlers) SetServerConfig(cfg *config.Config) {
 	// recorded: an unset window prunes nothing, so counting it as configured
 	// would let a half-configured sweeper report as healthy.
 	h.retentionKnown = true
+	h.ConfigureSyntheticVoice(cfg)
 	h.retentionEnabled = cfg.Retention.Enabled
 	// The cache is written only when it is switched on, and only off SQLite
 	// (an empty driver means postgres, the config default).
@@ -661,6 +668,7 @@ func (h *DoctorHandlers) RunReportReadOnly(ctx context.Context) DoctorReport {
 	report.Checks = append(report.Checks, h.checkModelCircuits())
 	report.Checks = append(report.Checks, h.checkAgentModelCircuits())
 	report.Checks = append(report.Checks, h.checkConnectorAuth(ctx))
+	report.Checks = append(report.Checks, h.checkMCPOAuthTokensSealed(ctx))
 	report.Checks = append(report.Checks, h.checkFallbackRungs(ctx))
 	report.Checks = append(report.Checks, h.checkConfigCRLF(fix))
 	report.Checks = append(report.Checks, h.checkLegacyImageNames())
@@ -668,8 +676,10 @@ func (h *DoctorHandlers) RunReportReadOnly(ctx context.Context) DoctorReport {
 	report.Checks = append(report.Checks, h.checkSlackSlashCommand())
 	report.Checks = append(report.Checks, h.checkProjectDependencies())
 	report.Checks = append(report.Checks, h.checkRetentionEnabled())
+	report.Checks = append(report.Checks, h.checkSyntheticVoiceReplies())
 	report.Checks = append(report.Checks, h.checkBreachDeadlines(ctx))
 	report.Checks = append(report.Checks, h.checkSubjectRequestDeadlines(ctx))
+	report.Checks = append(report.Checks, h.checkAIOutputMarking())
 	report.Checks = append(report.Checks, h.checkModelRouteCoverage())
 	report.Checks = append(report.Checks, h.checkScraperProfileFreshness(ctx, fix))
 	report.Checks = append(report.Checks, h.checkGatewayHealthy(ctx, fix))
@@ -771,6 +781,7 @@ func (h *DoctorHandlers) RunDoctor(w http.ResponseWriter, r *http.Request) {
 	report.Checks = append(report.Checks, h.checkModelCircuits())
 	report.Checks = append(report.Checks, h.checkAgentModelCircuits())
 	report.Checks = append(report.Checks, h.checkConnectorAuth(ctx))
+	report.Checks = append(report.Checks, h.checkMCPOAuthTokensSealed(ctx))
 	report.Checks = append(report.Checks, h.checkFallbackRungs(ctx))
 	report.Checks = append(report.Checks, h.checkConfigCRLF(fix))
 	report.Checks = append(report.Checks, h.checkLegacyImageNames())
@@ -778,8 +789,10 @@ func (h *DoctorHandlers) RunDoctor(w http.ResponseWriter, r *http.Request) {
 	report.Checks = append(report.Checks, h.checkSlackSlashCommand())
 	report.Checks = append(report.Checks, h.checkProjectDependencies())
 	report.Checks = append(report.Checks, h.checkRetentionEnabled())
+	report.Checks = append(report.Checks, h.checkSyntheticVoiceReplies())
 	report.Checks = append(report.Checks, h.checkBreachDeadlines(ctx))
 	report.Checks = append(report.Checks, h.checkSubjectRequestDeadlines(ctx))
+	report.Checks = append(report.Checks, h.checkAIOutputMarking())
 	report.Checks = append(report.Checks, h.checkModelRouteCoverage())
 	report.Checks = append(report.Checks, h.checkScraperProfileFreshness(ctx, fix))
 	report.Checks = append(report.Checks, h.checkGatewayHealthy(ctx, fix))

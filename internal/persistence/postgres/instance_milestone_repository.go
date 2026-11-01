@@ -1,0 +1,50 @@
+package postgres
+
+import (
+	"context"
+	"time"
+
+	"vornik.io/vornik/internal/persistence"
+)
+
+// InstanceMilestoneRepository is the Postgres store of the instance's
+// once-only milestones. See persistence.InstanceMilestoneRepository.
+type InstanceMilestoneRepository struct{ db DBTX }
+
+// NewInstanceMilestoneRepository constructs the repository.
+func NewInstanceMilestoneRepository(db DBTX) *InstanceMilestoneRepository {
+	return &InstanceMilestoneRepository{db: db}
+}
+
+var _ persistence.InstanceMilestoneRepository = (*InstanceMilestoneRepository)(nil)
+
+// MarkMilestone inserts name unless it is recorded; the first time stays.
+func (r *InstanceMilestoneRepository) MarkMilestone(ctx context.Context, name string, at time.Time) (bool, error) {
+	res, err := r.db.ExecContext(ctx,
+		`INSERT INTO instance_milestones (name, at) VALUES ($1, $2) ON CONFLICT (name) DO NOTHING`,
+		name, at.UTC())
+	if err != nil {
+		return false, mapDBError(err)
+	}
+	n, err := res.RowsAffected()
+	return err == nil && n == 1, err
+}
+
+// Milestones reads every recorded milestone.
+func (r *InstanceMilestoneRepository) Milestones(ctx context.Context) (map[string]time.Time, error) {
+	rows, err := r.db.QueryContext(ctx, `SELECT name, at FROM instance_milestones`)
+	if err != nil {
+		return nil, mapDBError(err)
+	}
+	defer func() { _ = rows.Close() }()
+	out := map[string]time.Time{}
+	for rows.Next() {
+		var name string
+		var at time.Time
+		if err := rows.Scan(&name, &at); err != nil {
+			return nil, mapDBError(err)
+		}
+		out[name] = at.UTC()
+	}
+	return out, rows.Err()
+}

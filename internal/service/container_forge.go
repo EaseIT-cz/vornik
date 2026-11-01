@@ -10,6 +10,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"vornik.io/vornik/internal/aimark"
 	"vornik.io/vornik/internal/forgereview"
 
 	forgeh "vornik.io/vornik/internal/executor/handlers/forge"
@@ -33,6 +34,9 @@ type forgeProviderResolver struct {
 	projects projectGetter
 	mu       sync.Mutex
 	cache    map[string]forge.ForgeProvider
+	// marker signs Art 50(2) marks on the bodies a provider posts (GitHub
+	// #117); a provider that supports it gets it at construction.
+	marker *aimark.Marker
 }
 
 // ForgeProvider returns the project's provider, building it on first use.
@@ -56,6 +60,9 @@ func (r *forgeProviderResolver) ForgeProvider(_ context.Context, projectID strin
 	p, err := forge.New(cfg)
 	if err != nil {
 		return nil, err
+	}
+	if mk, ok := p.(interface{ SetAIMarker(*aimark.Marker) }); ok && r.marker != nil {
+		mk.SetAIMarker(r.marker)
 	}
 	if r.cache == nil {
 		r.cache = map[string]forge.ForgeProvider{}
@@ -91,7 +98,9 @@ func (c *Container) newForgeResolver() *forgeProviderResolver {
 	if c.Registry == nil {
 		return nil
 	}
-	return &forgeProviderResolver{projects: c.Registry, cache: map[string]forge.ForgeProvider{}}
+	// The CI-outcome provider (container_github_ci_outcomes.go) gets no marker:
+	// it posts deterministic CI facts, out of Art 50(2) scope (design §14.2).
+	return &forgeProviderResolver{projects: c.Registry, cache: map[string]forge.ForgeProvider{}, marker: c.aiMarker()}
 }
 
 // forgeWebhookClassifier implements api.ForgeClassifier: it classifies a verified

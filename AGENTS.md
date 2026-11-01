@@ -8,7 +8,7 @@ written for you, in two parts:
   step is a command plus a check. Run the command, verify the check, and only
   then continue. If a check fails, stop and triage with the step's hints — do
   not push on past a failed check.
-- **Part 2 — changing the code** (§1–§8): the operative rules for anyone,
+- **Part 2 — changing the code** (§1–§10): the operative rules for anyone,
   human or agent, changing this codebase. `CLAUDE.md` imports this file, so
   Claude Code loads the same rules.
 
@@ -557,3 +557,33 @@ Rules every such change keeps:
   checkpoint.
 - `go test -race -short ./...` and `make vulncheck` (`govulncheck`, a
   required CI job) stay green.
+
+## 9. Keep it simple
+
+Prefer simple, straightforward code (KISS). A reader should be able to follow
+it top to bottom without a map.
+
+- **Abstract to remove repetition, not in anticipation of it.** When the same
+  logic appears a second or third time, extract one plain helper (§5: one
+  implementation of a check, not two). Do not build a framework, interface or
+  option set for a caller that does not exist yet.
+- **Choose the obvious construct.** A function over a type hierarchy, a loop
+  over a generic pipeline, an explicit branch over a clever table, unless the
+  simpler form is clearly worse.
+- **Overengineering is a defect, the same as duplication.** A review that
+  finds either says so.
+
+## 10. Write for the reader
+
+Write documents as fact- and data-focused narratives (the Amazon style):
+lead with the answer, give numbers with their source and scope instead of
+adjectives, say each thing once, and cut anything that does not change the
+reader's understanding or action. Short sentences, plain words, active
+voice. A shorter document that says something beats a long one nobody
+finishes.
+
+**A document you touch is rewritten to this style in the same change,
+re-reviewed and re-ingested.** The whole document when it is a public page
+or under about 300 lines; otherwise the sections you touched, plus an issue
+(label `docs-style`) for the rest. The review checks that the rewrite kept
+every fact. Canonical text: `https://docs.vornik.io` §11.

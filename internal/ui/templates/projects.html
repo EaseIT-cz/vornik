@@ -53,7 +53,7 @@
             <input id="project-search" type="search" placeholder="Filter projects… (Esc to clear)"
                    aria-label="Filter projects"
                    class="w-full sm:w-96 px-3 py-2 text-sm rounded-lg bg-dark-800 border border-control focus:border-brand-500 focus:outline-none text-gray-200 placeholder-gray-500"
-                   oninput="filterProjects(this.value)" onkeydown="if(event.key==='Escape'){this.value='';filterProjects('')}">
+                   data-on-input="filterProjects" data-on-keydown="escape-clear">
             {{end}}
 
             {{if .Rows}}
@@ -114,8 +114,8 @@
                                          via JS instead and stop the click from also firing
                                          the card's own link. */}}
                                     <span role="link" tabindex="0" class="pill pill-nodot pill-danger cursor-pointer"
-                                          onclick="event.preventDefault(); event.stopPropagation(); window.location.href='/ui/projects/{{.Project.ID}}/setup';"
-                                          onkeydown="if(event.key==='Enter'){event.preventDefault(); event.stopPropagation(); window.location.href='/ui/projects/{{.Project.ID}}/setup';}">
+                                          data-on-click="navigate" data-stop data-href="/ui/projects/{{.Project.ID}}/setup"
+                                          data-on-keydown="navigate-on-enter">
                                         {{template "iconX"}}Setup incomplete
                                     </span>
                                     {{end}}
@@ -192,6 +192,12 @@
             });
             document.getElementById('project-empty-msg').classList.toggle('hidden', shown > 0 || cards.length === 0);
         }
+    </script>
+<script>
+    // #416 phase 3: this page's actions (web-ui-design.md, "C, phase 3"). Each
+    // calls its function at event time, so a script that defines it later
+    // (or again, after a swap) is the one that runs.
+    Vornik.action('filterProjects', (el) => window.filterProjects(el.value));
     </script>
 </body>
 </html>

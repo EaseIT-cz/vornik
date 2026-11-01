@@ -94,14 +94,17 @@ type iconOnly struct {
 var iconOnlyTable = []iconOnly{
 	{"_partials.html", `aria-label="Vornik — Dashboard"`, "", []glyphPair{{"", bdGlassPage}}},
 	{"_partials.html", `id="theme-toggle"`, "", []glyphPair{{"", bdGlassPage}}},
+	// The ⓘ hint (web-ui-design.md "Explanations behind an ⓘ — 2026-11-01"):
+	// .vk-hint-btn colours its glyph; it sits in cards on glass.
+	{"_partials.html", `class="vk-hint-btn"`, "vk-hint-btn", []glyphPair{{"ink-500", bdGlassPage}}},
 	// .rail-ico: ink-300 at rest; .rail-ico-active: white on brand-500.
 	{"_partials.html", `data-rail="{{.Key}}"`, "rail-ico", []glyphPair{{"ink-300", bdGlassPage}, {"white", bdBrand500}}},
 	{"_partials.html", `title="Sign out" class="rail-ico"`, "rail-ico", []glyphPair{{"ink-300", bdGlassPage}}},
-	{"replay.html", `onclick="closeForkModal()"`, "", []glyphPair{{"", bdModalGlass}}},
+	{"replay.html", `data-on-click="closeForkModal"`, "", []glyphPair{{"", bdModalGlass}}},
 	{"task_detail.html", `aria-label="Back"`, "", []glyphPair{{"", bdPage}}},
 	{"task_detail.html", `aria-label="Previous task"`, "", []glyphPair{{"", bdPage}}},
 	{"task_detail.html", `aria-label="Next task"`, "", []glyphPair{{"", bdPage}}},
-	{"task_detail.html", `onclick="composeSheet.close()"`, "", []glyphPair{{"", bdSheetGlass}}},
+	{"task_detail.html", `data-on-click="close-modal"`, "", []glyphPair{{"", bdSheetGlass}}},
 	{"task_detail.html", `title="Download"`, "", []glyphPair{{"", bdRaised}}},
 	// .fab: white on brand-500.
 	{"tasks.html", `aria-label="Create new task"`, "fab", []glyphPair{{"white", bdBrand500}}},

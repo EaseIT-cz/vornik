@@ -35,7 +35,13 @@ type SetupProjectOption struct {
 
 // Setup renders the installation onboarding landing page.
 func (s *Server) Setup(w http.ResponseWriter, r *http.Request) {
-	if api.SessionRoleFromContext(r.Context()) == auth.RoleUser {
+	// GitHub #560 (M1b B2b): setup is the provisioner's in managed hosting,
+	// so the instance owner (tenant_admin) is refused like a user.
+	if role := api.SessionRoleFromContext(r.Context()); role == auth.RoleUser || role == auth.RoleTenantAdmin {
+		if role == auth.RoleTenantAdmin {
+			s.logger.Info().Str("surface", "ui_setup").Str("outcome", "refused").Str("path", r.URL.Path).
+				Msg("operator surface: tenant_admin refused")
+		}
 		http.Error(w, "admin scope required", http.StatusForbidden)
 		return
 	}

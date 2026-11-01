@@ -15,12 +15,21 @@ import (
 
 // memorySearchAdapter wraps memory.Searcher so it satisfies api.MemorySearcher.
 type memorySearchAdapter struct {
-	s *memory.Searcher
+	s       *memory.Searcher
+	labeler provenanceLabeler
 }
 
-// newMemorySearchAdapter creates a new adapter.
-func newMemorySearchAdapter(s *memory.Searcher) api.MemorySearcher {
-	return &memorySearchAdapter{s: s}
+// provenanceLabeler reads hits' provenance labels (#506 C7);
+// *memory.Repository satisfies it.
+type provenanceLabeler interface {
+	ChunkProvenanceLabels(ctx context.Context, projectID string, chunkIDs []string) (map[string]string, error)
+}
+
+// newMemorySearchAdapter creates the REST memory-search adapter. labeler fills
+// each routing hit's provenance label, as the companion recall does (#550);
+// nil leaves the labels empty.
+func newMemorySearchAdapter(s *memory.Searcher, labeler provenanceLabeler) api.MemorySearcher {
+	return &memorySearchAdapter{s: s, labeler: labeler}
 }
 
 // memoryCompanionAdapter composes memory.Searcher + memory.Pipeline +
@@ -116,22 +125,26 @@ func (a *memoryCompanionAdapter) Recall(ctx context.Context, projectID, query st
 	for i, r := range results {
 		out[i] = memorySearchResultToAPI(r)
 	}
-	a.labelProvenance(ctx, projectID, out)
+	if a.repo != nil {
+		labelHitsProvenance(ctx, a.repo, projectID, out)
+	}
 	return out, nil
 }
 
-// labelProvenance fills each hit's provenance label (#506 C7). A lookup
-// failure leaves the labels empty: recall never fails because a label could
-// not be read.
-func (a *memoryCompanionAdapter) labelProvenance(ctx context.Context, projectID string, hits []api.MemorySearchResult) {
-	if a.repo == nil || len(hits) == 0 {
+// labelHitsProvenance fills each hit's provenance label (#506 C7). It is the
+// one labeller for both the companion recall and the REST search (#550:
+// the REST path never labelled, so the architect saw no "verified"). A
+// lookup failure leaves the labels empty: a search never fails because a
+// label could not be read.
+func labelHitsProvenance(ctx context.Context, l provenanceLabeler, projectID string, hits []api.MemorySearchResult) {
+	if l == nil || len(hits) == 0 {
 		return
 	}
 	ids := make([]string, len(hits))
 	for i, h := range hits {
 		ids[i] = h.ChunkID
 	}
-	labels, err := a.repo.ChunkProvenanceLabels(ctx, projectID, ids)
+	labels, err := l.ChunkProvenanceLabels(ctx, projectID, ids)
 	if err != nil {
 		return
 	}
@@ -209,7 +222,9 @@ func (a *memoryCompanionAdapter) RecallRouting(ctx context.Context, projectID, q
 	}
 	// The companion recall goes this way when routing is on: label it too
 	// (live check 2026-10-23: hits came back without their provenance).
-	a.labelProvenance(ctx, projectID, out)
+	if a.repo != nil {
+		labelHitsProvenance(ctx, a.repo, projectID, out)
+	}
 	return out, routingVerdictToWire(verdict), nil
 }
 
@@ -759,14 +774,15 @@ func (a *memorySearchAdapter) Search(ctx context.Context, projectID, query strin
 // bounded verdict-predicated DB widen, and returns the verdict + guidance
 // alongside the results with per-result trust fields populated. Satisfies
 // api.MemoryRoutingSearcher.
-func (a *memorySearchAdapter) SearchRouting(ctx context.Context, projectID, query string, limit int) ([]api.MemorySearchResult, *api.RoutingVerdictWire, error) {
+func (a *memorySearchAdapter) SearchRouting(ctx context.Context, projectID, query string, req api.MemorySearchRequest) ([]api.MemorySearchResult, *api.RoutingVerdictWire, error) {
 	reqCtx := memoryfirewall.RequestContext{Purpose: memoryfirewall.PurposeOperational}
 	if rc := memory.RetrievalContextFromContext(ctx); rc.ActorKind != "" {
 		reqCtx.Role = rc.ActorKind
 		reqCtx.OperatorID = rc.ActorID
 	}
 	results, verdict, err := a.s.RecallWithRouting(ctx, projectID, query,
-		memory.SearchOptions{Limit: limit, Routing: true}, reqCtx)
+		memory.SearchOptions{Limit: req.Limit, Routing: true,
+			RepoScope: req.RepoScope, StrictScope: req.StrictScope, Authority: req.Authority}, reqCtx)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -774,6 +790,7 @@ func (a *memorySearchAdapter) SearchRouting(ctx context.Context, projectID, quer
 	for i, r := range results {
 		out[i] = memorySearchResultToAPIRouting(r)
 	}
+	labelHitsProvenance(ctx, a.labeler, projectID, out)
 	return out, routingVerdictToWire(verdict), nil
 }
 

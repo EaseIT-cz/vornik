@@ -9,17 +9,10 @@
         <div class="space-y-5">
             <div class="flex items-center gap-3">
                 <svg class="h-5 w-5 text-gray-400" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z"/></svg>
-                <h1 class="text-xl font-semibold text-gray-100">Chat Audit</h1>
+                <h1 class="text-xl font-semibold text-gray-100">Chat Audit{{template "hintOpen" "About this page"}}One row per dispatcher turn. Each row captures the system prompt (content-addressed by SHA-256, click into a row to read the body), the LLM model used, every tool call the dispatcher made, and the final response excerpt. Use this to answer "why did the bot do (or not do) X this turn?"{{template "hintClose"}}</h1>
                 <a href="/ui/admin/" class="text-xs text-brand-400 hover:text-brand-300 ml-auto">← Admin</a>
             </div>
 
-            <p class="text-sm text-gray-500">
-                One row per dispatcher turn. Each row captures the system prompt
-                (content-addressed by SHA-256, click into a row to read the body), the
-                LLM model used, every tool call the dispatcher made, and the final
-                response excerpt. Use this to answer
-                "why did the bot do (or not do) X this turn?"
-            </p>
 
             <form method="get" action="/ui/admin/chat-audit"
                   class="glass rounded-xl border border-dark-700 px-4 py-3 flex flex-wrap items-end gap-3 text-sm">

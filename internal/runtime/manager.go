@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -106,6 +107,17 @@ type Manager struct {
 	// starts. Empty means trust the image's USER directive. A typical value
 	// is "1000:1000" to guarantee non-root even if an image regresses.
 	runAsUser string
+
+	// readOnlyRoot and pidsLimit harden every agent container (GitHub #569;
+	// 08-runtime-manager-podman.md, "Change 2026-10-28"). Off and 0 emit
+	// nothing, so the run argv is the one before #569.
+	readOnlyRoot bool
+	pidsLimit    int
+
+	// sweepWarned holds the containers the orphan sweep kept and warned
+	// about, so each is warned about once per process (orphan_sweep.go).
+	sweepMu     sync.Mutex
+	sweepWarned map[string]bool
 
 	// daemonUID, daemonGID and rootless are the daemon's own identity, which
 	// the D5 resolver (internal/agentuser) needs: with run_as_user empty, a
@@ -246,6 +258,19 @@ func (m *Manager) effectiveMemoryLimit(config *ContainerConfig) int64 {
 // another package can prove the limit reached the manager, rather than only
 // that some option was appended.
 func (m *Manager) AgentMemoryLimitForTest() int64 { return m.agentMemoryLimit }
+
+// WithAgentReadOnlyRoot runs agent containers with a read-only root, podman's
+// own tmpfs off, bounded /run and /dev/shm tmpfs and disk-backed anonymous
+// volumes for /tmp, /var/tmp and the agent's home (GitHub #569 R2).
+func WithAgentReadOnlyRoot(on bool) ManagerOption {
+	return func(m *Manager) { m.readOnlyRoot = on }
+}
+
+// WithAgentPidsLimit sets the agent container's --pids-limit; 0 emits none, so
+// the host podman's default applies (GitHub #569 R3).
+func WithAgentPidsLimit(n int) ManagerOption {
+	return func(m *Manager) { m.pidsLimit = n }
+}
 
 func WithRunAsUser(user string) ManagerOption {
 	return func(m *Manager) {
@@ -452,6 +477,10 @@ func (m *Manager) buildPreImageArgs(config *ContainerConfig) []string {
 	// --memory with --memory-swap equal to it: a bounded agent has no swap
 	// (GitHub #379; design 08 "Change 2026-10-17"). Unbounded emits neither.
 	args = append(args, spawn.MemoryLimitFlags(m.effectiveMemoryLimit(config))...)
+	if m.pidsLimit > 0 {
+		args = append(args, "--pids-limit", strconv.Itoa(m.pidsLimit))
+	}
+	args = append(args, m.readOnlyRootArgs()...)
 
 	// Volume mounts for agent runtime contract.
 	// Input is read-only for ephemeral containers (host writes task.json,
@@ -942,7 +971,62 @@ func (m *Manager) RunArgsForTest(ctx context.Context, config *ContainerConfig, u
 }
 
 func (m *Manager) runPodmanCommand(ctx context.Context, args []string) ([]byte, error) {
+	if len(args) > 0 && args[0] == "run" {
+		// A run the spawn law refuses must not get to remove anything first:
+		// check it before the pre-start removal (the test seam has no law).
+		if m.execPodman == nil {
+			if _, err := spawn.PodmanAgent(ctx, m.podmanPath, args); err != nil {
+				return nil, err
+			}
+		}
+		if err := m.removeSameNamed(ctx, args); err != nil {
+			return []byte(err.Error()), err
+		}
+	}
 	return m.podman(ctx, args...)
+}
+
+// agentHome is the agent image's home directory (the agent runtime contract,
+// design 09); the read-only root gives it a disk-backed anonymous volume.
+const agentHome = "/home/vornik"
+
+// readOnlyRootArgs is the read-only root of GitHub #569 R2, measured together
+// on the reference host. --read-only-tmpfs=false is load-bearing: podman's
+// default would mount its tmpfs over the /tmp and /var/tmp volumes, putting
+// every write in unreclaimable memory after all.
+func (m *Manager) readOnlyRootArgs() []string {
+	if !m.readOnlyRoot {
+		return nil
+	}
+	return []string{
+		"--read-only", "--read-only-tmpfs=false",
+		"--tmpfs", "/run:rw,size=16m,mode=1777",
+		"--tmpfs", "/dev/shm:rw,size=64m,mode=1777",
+		"--volume", "/tmp", "--volume", "/var/tmp", "--volume", agentHome,
+	}
+}
+
+// removeSameNamed removes any container already holding this run's --name,
+// its anonymous volumes with it, before every start attempt: --replace removes
+// the old container but leaks its anonymous volumes (measured, GitHub #569
+// H4). No such container is the usual answer and not an error; any other
+// failure aborts the attempt rather than letting --replace leak.
+func (m *Manager) removeSameNamed(ctx context.Context, runArgs []string) error {
+	i := slices.Index(runArgs, "--name")
+	if i < 0 || i+1 >= len(runArgs) {
+		return nil
+	}
+	name := runArgs[i+1]
+	out, err := m.podman(ctx, "rm", "--force", "--volumes", name)
+	if err == nil || isNoSuchContainer(out) {
+		return nil
+	}
+	m.recordPodmanError("remove")
+	return fmt.Errorf("removing a container left with the name %s before starting: %w - output: %s", name, err, strings.TrimSpace(string(out)))
+}
+
+func isNoSuchContainer(out []byte) bool {
+	return strings.Contains(strings.ToLower(string(out)), "no such container")
 }
 
 // podman runs one podman invocation through the process-spawn law's kinds
@@ -1120,7 +1204,9 @@ func (m *Manager) RemoveContainer(ctx context.Context, containerID string, force
 	if force {
 		args = append(args, "--force")
 	}
-	args = append(args, containerID)
+	// The container's anonymous volumes (the read-only root's /tmp, /var/tmp
+	// and home) go with it; a no-op for a container without any (#569 R4).
+	args = append(args, "--volumes", containerID)
 
 	output, err := m.podman(ctx, args...)
 	if err != nil {

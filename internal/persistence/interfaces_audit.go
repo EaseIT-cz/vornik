@@ -94,6 +94,24 @@ type TaskCredentialRepository interface {
 	ListByTaskLatestExecution(ctx context.Context, taskID string) ([]*TaskCredential, error)
 }
 
+// TaskCredentialSealPass is what the one-time startup seal pass needs of the
+// task_credentials store (GitHub #578 B3). Only the two drivers implement it;
+// the pass type-asserts.
+type TaskCredentialSealPass interface {
+	// ListAll returns every row; the pass tells sealed from plaintext.
+	ListAll(ctx context.Context) ([]*TaskCredential, error)
+	// ReplaceValue sets the row's value to next only while it still holds
+	// prev; it reports whether it did.
+	ReplaceValue(ctx context.Context, id, prev, next string) (bool, error)
+}
+
+// ToolAuditValueScrubber replaces one exact value in the tool output of an
+// execution's audit rows for one tool (GitHub #578 B3: a carried credential's
+// old plaintext copy). Only the two drivers implement it.
+type ToolAuditValueScrubber interface {
+	ReplaceOutputValue(ctx context.Context, executionID, tool, value, replacement string) (int64, error)
+}
+
 // ChatAuditRepository persists per-turn dispatcher activity for
 // the `/ui/admin/chat-audit` operator surface. One row per inbound
 // user message processed through the LLM tool loop — system prompt

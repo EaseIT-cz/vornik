@@ -135,6 +135,9 @@ type ollamaChatResponse struct {
 	PromptEvalDuration int64             `json:"prompt_eval_duration,omitempty"`
 	EvalCount          int               `json:"eval_count,omitempty"`
 	EvalDuration       int64             `json:"eval_duration,omitempty"`
+	// AIGenerated is the Art 50(2) mark (aimark_mark.go); on a stream,
+	// only the final done:true line carries it.
+	AIGenerated *aiGenerated `json:"ai_generated,omitempty"`
 }
 
 // ollamaGenerateRequest is the POST /api/generate wire shape.
@@ -158,6 +161,8 @@ type ollamaGenerateResponse struct {
 	TotalDuration   int64  `json:"total_duration,omitempty"`
 	PromptEvalCount int    `json:"prompt_eval_count,omitempty"`
 	EvalCount       int    `json:"eval_count,omitempty"`
+	// AIGenerated: as ollamaChatResponse.
+	AIGenerated *aiGenerated `json:"ai_generated,omitempty"`
 }
 
 // ollamaVersionResponse is the GET /api/version reply.
@@ -481,8 +486,10 @@ func (s *Server) OllamaChat(w http.ResponseWriter, r *http.Request) {
 			respondError(w, http.StatusBadGateway, "PROVIDER_ERROR", "provider returned nil response")
 			return
 		}
+		out := translateChatResponseToOllama(resp, model, startedAt)
+		out.AIGenerated = s.ollamaMark(w, r, out.Message.Content, true)
 		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(translateChatResponseToOllama(resp, model, startedAt))
+		_ = json.NewEncoder(w).Encode(out)
 		// Telemetry fire-and-forget AFTER the response is flushed — these
 		// are blocking Postgres writes that must not stall the client (see
 		// chat_proxy.go ChatCompletions). Detached context: r.Context()
@@ -511,6 +518,7 @@ func (s *Server) OllamaChat(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-cache")
 
 	prev := ""
+	var sent strings.Builder // the text the client assembles: every delta sent
 	onText := func(accumulated string) {
 		// Provider callback fires with the full accumulated text
 		// each time. Ollama wants per-chunk deltas, so we diff
@@ -526,6 +534,7 @@ func (s *Server) OllamaChat(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		prev = accumulated
+		sent.WriteString(delta)
 		chunk := ollamaChatResponse{
 			Model:     model,
 			CreatedAt: time.Now().UTC().Format(time.RFC3339Nano),
@@ -579,6 +588,7 @@ func (s *Server) OllamaChat(w http.ResponseWriter, r *http.Request) {
 	if final.DoneReason == "" {
 		final.DoneReason = "stop"
 	}
+	final.AIGenerated = s.ollamaMark(w, r, sent.String(), false)
 	buf, _ := json.Marshal(final)
 	_, _ = w.Write(buf)
 	_, _ = w.Write([]byte("\n"))
@@ -690,6 +700,7 @@ func (s *Server) OllamaGenerate(w http.ResponseWriter, r *http.Request) {
 			out.EvalCount = resp.Usage.CompletionTokens
 		}
 		out.TotalDuration = time.Since(startedAt).Nanoseconds()
+		out.AIGenerated = s.ollamaMark(w, r, out.Response, true)
 		_ = json.NewEncoder(w).Encode(out)
 		return
 	}
@@ -699,6 +710,7 @@ func (s *Server) OllamaGenerate(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-cache")
 
 	prev := ""
+	var sent strings.Builder // the text the client assembles: every delta sent
 	onText := func(accumulated string) {
 		if !strings.HasPrefix(accumulated, prev) {
 			prev = ""
@@ -708,6 +720,7 @@ func (s *Server) OllamaGenerate(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		prev = accumulated
+		sent.WriteString(delta)
 		chunk := ollamaGenerateResponse{
 			Model:     model,
 			CreatedAt: time.Now().UTC().Format(time.RFC3339Nano),
@@ -756,6 +769,7 @@ func (s *Server) OllamaGenerate(w http.ResponseWriter, r *http.Request) {
 		final.PromptEvalCount = resp.Usage.PromptTokens
 		final.EvalCount = resp.Usage.CompletionTokens
 	}
+	final.AIGenerated = s.ollamaMark(w, r, sent.String(), false)
 	buf, _ := json.Marshal(final)
 	_, _ = w.Write(buf)
 	_, _ = w.Write([]byte("\n"))

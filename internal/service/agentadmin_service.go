@@ -14,6 +14,9 @@ import (
 	"sync"
 	"time"
 
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/promauto"
+
 	"vornik.io/vornik/internal/agentadmin"
 	"vornik.io/vornik/internal/agentns"
 	"vornik.io/vornik/internal/approval"
@@ -683,8 +686,47 @@ func (s *agentAdminService) collectAccountRows(ctx context.Context, p *configAcc
 	now := time.Now().UTC()
 	for _, ref := range n.RemovedIntegrations {
 		p.rows.Removed = append(p.rows.Removed, persistence.AccountIntegrationRemoval{ProjectID: ref.Project, Integration: ref.Name, At: now})
+		// The removed connection's stored sign-in goes in the same
+		// transaction (§15.3a C5). Read while the namespace is busy, so the
+		// set is stable until Finish.
+		keys, err := s.storedSignIns(ctx, ref)
+		if err != nil {
+			return err
+		}
+		p.rows.DeleteTokens = append(p.rows.DeleteTokens, keys...)
+		p.deletedSignIns = append(p.deletedSignIns, keys...)
 	}
 	return nil
+}
+
+// storedSignIns lists the shared sign-in rows a removed connection holds:
+// its own server name and its write sibling's (agentns.IntegrationOf maps
+// both to the connection). Only existence is read, never a token.
+func (s *agentAdminService) storedSignIns(ctx context.Context, ref agentadmin.IntegrationRef) ([]persistence.AccountTokenKey, error) {
+	if s.c.repos == nil || s.c.repos.MCPOAuthTokens == nil {
+		return nil, nil
+	}
+	var out []persistence.AccountTokenKey
+	for _, server := range []string{ref.Name, ref.Name + agentns.WriteSuffix} {
+		_, err := s.c.repos.MCPOAuthTokens.Get(ctx, ref.Project, server, "")
+		switch {
+		case errors.Is(err, persistence.ErrNotFound):
+		case err != nil:
+			return nil, err
+		default:
+			out = append(out, persistence.AccountTokenKey{ProjectID: ref.Project, ServerName: server})
+		}
+	}
+	return out, nil
+}
+
+// noteRemovedSignIns logs and counts the sign-ins a published removal deleted.
+func (s *agentAdminService) noteRemovedSignIns(keys []persistence.AccountTokenKey) {
+	for _, k := range keys {
+		mcpOAuthGrantsRemoved.Inc()
+		s.c.Logger.Info().Str("project", k.ProjectID).Str("server", k.ServerName).Str("reason", "connection removed").
+			Msg("mcp oauth: deleted the stored sign-in of a removed connection")
+	}
 }
 
 // verifyLoaded checks every op's entity against the live registry.
@@ -723,6 +765,8 @@ func (s *agentAdminService) recordNarrowing(ctx context.Context, n agentadmin.Na
 			countNarrowing(kind)
 		}
 		publication.narrowed = nil
+		s.noteRemovedSignIns(publication.deletedSignIns)
+		publication.deletedSignIns = nil
 		return s.deleteWorkflowReaches(ctx, n.RemovedWorkflows)
 	}
 	if err := s.recordToolRemovals(ctx, n.RemovedTools); err != nil {
@@ -746,12 +790,47 @@ func (s *agentAdminService) recordNarrowing(ctx context.Context, n agentadmin.Na
 			return err
 		}
 	}
+	// A removed connection takes its sign-in with it (GitHub #571 U3b,
+	// mcp-server-authentication-design.md §15.3a C5): the injection path
+	// reads only the token row, so a same-name re-add would otherwise be
+	// served the removed account's token. After the suspension and before
+	// the approval is withdrawn, as above; Delete succeeds on an absent row,
+	// so a retry completes.
+	for _, ref := range n.RemovedIntegrations {
+		if err := s.deleteRemovedSignIn(ctx, ref); err != nil {
+			return err
+		}
+	}
 	for _, ref := range n.RemovedIntegrations {
 		if err := s.grants.MarkIntegrationRemoved(ctx, ref.Project, ref.Name, now); err != nil {
 			return err
 		}
 	}
 	return s.deleteWorkflowReaches(ctx, n.RemovedWorkflows)
+}
+
+// mcpOAuthGrantsRemoved counts stored sign-ins deleted because their
+// connection was removed (§15.3a C5).
+var mcpOAuthGrantsRemoved = promauto.NewCounter(prometheus.CounterOpts{
+	Namespace: "vornik", Name: "mcp_oauth_grants_removed_total",
+	Help: "Stored MCP OAuth sign-ins deleted because their connection was removed.",
+})
+
+// deleteRemovedSignIn deletes a removed connection's stored sign-ins on a
+// path with no config account transition (§15.3a C5). Delete succeeds on an
+// absent row, so a retry completes.
+func (s *agentAdminService) deleteRemovedSignIn(ctx context.Context, ref agentadmin.IntegrationRef) error {
+	keys, err := s.storedSignIns(ctx, ref)
+	if err != nil {
+		return err
+	}
+	for _, k := range keys {
+		if err := s.c.repos.MCPOAuthTokens.Delete(ctx, k.ProjectID, k.ServerName, ""); err != nil {
+			return err
+		}
+	}
+	s.noteRemovedSignIns(keys)
+	return nil
 }
 
 func (s *agentAdminService) deleteWorkflowReaches(ctx context.Context, workflows []string) error {

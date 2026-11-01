@@ -21,6 +21,7 @@ package auditredact
 
 import (
 	"context"
+	"fmt"
 	"time"
 
 	"github.com/rs/zerolog"
@@ -220,6 +221,18 @@ func (r *Repo) CountByTool(ctx context.Context, executionID string) (map[string]
 // ToolLatencyP95ByProjectTool delegates unchanged.
 func (r *Repo) ToolLatencyP95ByProjectTool(ctx context.Context, since time.Time) ([]persistence.ToolLatencyStat, error) {
 	return r.inner.ToolLatencyP95ByProjectTool(ctx, since)
+}
+
+// ReplaceOutputValue passes a carried credential's scrub to the driver
+// (GitHub #578; persistence.ToolAuditValueScrubber). The executor holds this
+// decorator, not the driver, so without it the scrub could not reach the
+// stored row. A driver that cannot scrub is an error, never a silent no-op.
+func (r *Repo) ReplaceOutputValue(ctx context.Context, executionID, tool, value, replacement string) (int64, error) {
+	sc, ok := r.inner.(persistence.ToolAuditValueScrubber)
+	if !ok {
+		return 0, fmt.Errorf("auditredact: the audit store %T cannot scrub a stored value", r.inner)
+	}
+	return sc.ReplaceOutputValue(ctx, executionID, tool, value, replacement)
 }
 
 func (r *Repo) isTrustedOutputTool(tool string) bool {

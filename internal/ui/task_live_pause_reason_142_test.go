@@ -49,8 +49,10 @@ func TestLiveTask_SaysWhyAnExecutionIsPausedAndWhatReleasesIt(t *testing.T) {
 		if !strings.Contains(body, c.want) {
 			t.Errorf("%s: the page does not say %q", c.snapshot, c.want)
 		}
-		// The JS onPaused handler gets the same table, as a JSON object.
-		if !strings.Contains(body, `const pauseKindTexts = {"awaiting_approval":`) {
+		// The JS onPaused handler gets the same table, as a JSON object in
+		// the task-live-data block (#416 phase 5).
+		texts, _ := taskLiveData(t, body)["pauseKindTexts"].(map[string]any)
+		if _, ok := texts["awaiting_approval"]; !ok {
 			t.Errorf("%s: the page does not hand onPaused the pause-kind table", c.snapshot)
 		}
 	}

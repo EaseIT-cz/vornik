@@ -206,7 +206,12 @@ func publishAccountRows(ctx context.Context, x persistence.DBTX, p persistence.A
 		}
 	}
 	if p.DeleteToken != nil {
-		if err = NewMCPOAuthTokenRepository(x).Delete(ctx, p.DeleteToken.ProjectID, p.DeleteToken.ServerName); err != nil {
+		if err = NewMCPOAuthTokenRepository(x).Delete(ctx, p.DeleteToken.ProjectID, p.DeleteToken.ServerName, ""); err != nil {
+			return err
+		}
+	}
+	for _, k := range p.DeleteTokens {
+		if err = NewMCPOAuthTokenRepository(x).Delete(ctx, k.ProjectID, k.ServerName, ""); err != nil {
 			return err
 		}
 	}

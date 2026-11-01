@@ -35,9 +35,13 @@ type AccountTransitionTicket struct {
 // Agent credential rows are sealed. Non-agent OAuth rows preserve their existing
 // operator storage representation; no operator encryption migration is implied.
 type AccountPublication struct {
-	Secret       *AgentSecretRow
-	Token        *MCPOAuthToken
-	DeleteToken  *AccountTokenKey
+	Secret      *AgentSecretRow
+	Token       *MCPOAuthToken
+	DeleteToken *AccountTokenKey
+	// DeleteTokens are the stored sign-ins of removed connections, deleted
+	// in the same transaction as their Removed rows (GitHub #571 U3b,
+	// mcp-server-authentication-design.md §15.3a C5).
+	DeleteTokens []AccountTokenKey
 	Identity     *AccountIdentityUpdate
 	Integrations []AgentIntegrationApproval
 	Removed      []AccountIntegrationRemoval

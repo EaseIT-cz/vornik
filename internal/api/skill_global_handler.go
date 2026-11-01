@@ -25,7 +25,7 @@ func (s *Server) SkillSetGlobal(w http.ResponseWriter, r *http.Request) {
 		respondError(w, http.StatusMethodNotAllowed, "METHOD_NOT_ALLOWED", "use POST")
 		return
 	}
-	if !s.requireOperatorScope(w, r) {
+	if !s.requireOperatorScopeFor(w, r, SurfaceSkillSetGlobal) {
 		return
 	}
 	if s.skillStore == nil {

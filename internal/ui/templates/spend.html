@@ -201,8 +201,7 @@
             {{if .BySource}}
             <div class="glass rounded-xl border border-dark-700 overflow-hidden">
                 <div class="px-5 py-3.5 border-b border-dark-700/60">
-                    <h2 class="text-sm font-semibold text-gray-200">Source attribution</h2>
-                    <p class="text-xs text-gray-500 mt-0.5">Workflow steps are the executor's per-step LLM calls; dispatcher rows are the chat bot's tool-routing round-trips.</p>
+                    <h2 class="text-sm font-semibold text-gray-200">Source attribution{{template "hintOpen" "About sources"}}Workflow steps are the executor's per-step LLM calls; dispatcher rows are the chat bot's tool-routing round-trips.{{template "hintClose"}}</h2>
                 </div>
                 {{/* Phone cards (Phase 39). */}}
                 <div class="md:hidden divide-y divide-dark-700/40">
@@ -308,8 +307,7 @@
             <div class="glass rounded-xl border border-dark-700 overflow-hidden">
                 <div class="px-5 py-3.5 border-b border-dark-700/60 flex items-center justify-between gap-3 flex-wrap">
                     <div>
-                        <h2 class="text-sm font-semibold text-gray-200">Top tasks · {{.WindowLabel}}</h2>
-                        <p class="text-xs text-gray-500 mt-0.5">High <span class="text-amber-800 dark:text-amber-400">iter/step</span> = tool loop running long. High <span class="text-rose-800 dark:text-rose-400">input %</span> = context bloat.</p>
+                        <h2 class="text-sm font-semibold text-gray-200">Top tasks · {{.WindowLabel}}{{template "hintOpen" "About these columns"}}High <span class="text-amber-800 dark:text-amber-400">iter/step</span> = tool loop running long. High <span class="text-rose-800 dark:text-rose-400">input %</span> = context bloat.{{template "hintClose"}}</h2>
                     </div>
                     {{/* Shared page-size selector — preserves window +
                          project so changing row count doesn't reset

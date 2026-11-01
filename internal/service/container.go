@@ -65,6 +65,7 @@ import (
 	"sync/atomic"
 	"syscall"
 	"time"
+	"vornik.io/vornik/internal/aimark"
 
 	"vornik.io/vornik/internal/agentadmin"
 	"vornik.io/vornik/internal/approverdevice"
@@ -72,6 +73,8 @@ import (
 	"vornik.io/vornik/internal/brokergrants"
 	"vornik.io/vornik/internal/companionpush"
 	"vornik.io/vornik/internal/egressscan"
+	"vornik.io/vornik/internal/firstvalue"
+	"vornik.io/vornik/internal/integrations/dialguard"
 
 	"vornik.io/vornik/internal/authz"
 	"vornik.io/vornik/internal/chatauth"
@@ -170,6 +173,9 @@ type Container struct {
 	agentAdminMu      sync.Mutex
 	agentAdminWarned  time.Time
 	secretStoreMu     sync.Mutex
+	// aiMarkerOnce / aiMarkerVal: the Art 50(2) marker (container_aimark.go).
+	aiMarkerOnce      sync.Once
+	aiMarkerVal       *aimark.Marker
 	secretStoreLoaded bool
 	secretStoreErr    error
 	ConfigReloader    *config.ConfigReloader
@@ -291,6 +297,10 @@ type Container struct {
 	// initHTTPServer next to HTTPServer; nil when no socket is configured
 	// or before initHTTPServer runs.
 	AgentSocketServer *http.Server
+	// OperationsServer is managed hosting's operations listener
+	// (hosting.operations_address; GitHub #560, A3): the control plane's
+	// door, where instance_admin works. Nil when self-hosted.
+	OperationsServer *http.Server
 	// relayServer is the additional mTLS listener for the relay-ingress
 	// endpoint (POST /internal/v1/webhook-relay). Nil when the node does
 	// not run workers or relay_ingress is not configured (Slice B).
@@ -488,8 +498,11 @@ type Container struct {
 	webWriteTokenStore *dispatcher.WebWriteTokenStore
 	stopCollectors     context.CancelFunc
 	collectorsCtx      context.Context
-	memoryManager      *memory.Manager
-	memoryTitler       *memory.Titler
+	// doctorHandlers is the DB-backed doctor, nil without a database; the
+	// managed doctor gauge reads its report (GitHub #581 D6).
+	doctorHandlers *api.DoctorHandlers
+	memoryManager  *memory.Manager
+	memoryTitler   *memory.Titler
 	// memoryConsolidateWorker runs the periodic LLM-free gist pass
 	// over every enabled project. Pure-Go; the cadence is bounded
 	// by Memory.ConsolidateIntervalSeconds (default 10 min). nil
@@ -823,11 +836,21 @@ type Container struct {
 	// the chat client wasn't available). Stored so wireComponentMetrics
 	// can attach a Prometheus sink after observability is initialised
 	// without rebuilding the runner or the executor that holds it.
-	judgeRunner         *hallucination.JudgeRunner
-	rateLimiter         ratelimit.ProjectLimiter
-	apiKeyLimiter       *ratelimit.APIKeyLimiter
-	rateLimitMetrics    *ratelimit.Metrics
-	dryRunMetrics       *api.DryRunMetrics
+	judgeRunner      *hallucination.JudgeRunner
+	rateLimiter      ratelimit.ProjectLimiter
+	apiKeyLimiter    *ratelimit.APIKeyLimiter
+	rateLimitMetrics *ratelimit.Metrics
+	dryRunMetrics    *api.DryRunMetrics
+	// firstValue is the first-value tracker (GitHub #587); see
+	// container_firstvalue.go. firstValueRegistered: its gauges are on the
+	// served registry.
+	firstValue           *firstvalue.Tracker
+	firstValueRegistered bool
+	// erasureEscalation is the GDPR Art 12(3) escalation loop (GitHub #344
+	// 5d-1c); see container_erasure_escalation.go.
+	erasureEscalation *erasureEscalationState
+	// channelSessionFence counts failed fence reads (art17 redact design §15.18).
+	channelSessionFence channelSessionFenceMetrics
 	configMirrorMetrics *configrecon.Metrics
 	agentWriteMetrics   *api.AgentAPIWriteMetrics
 	mcpGateMetrics      *api.MCPGateMetrics
@@ -909,6 +932,10 @@ type Container struct {
 	// name is not supported — the channel adapters are nil-safe.
 	voiceSTT voice.STTProvider
 	voiceTTS voice.TTSProvider
+	// syntheticVoice is the resolved voice.synthetic_replies switch
+	// (voice.ResolveSyntheticReplies, GitHub #543): off unless an operator
+	// accepted single-layer marking for synthetic audio.
+	syntheticVoice bool
 
 	// extractorPipeline holds the lazy-init document-extraction
 	// surfaces (registry + runner). Accessed via ExtractorRegistry /
@@ -998,6 +1025,12 @@ func NewContainer(cfg *config.Config, configPath string, opts ...ContainerOption
 	// always finds a snapshot; bootProvenance arrives through an option and
 	// is attached right after applyOptions.
 	c.configSnapshot.Store(cfg, nil)
+	// GitHub #560 (M1c D0): managed hosting's outbound policy, set from this
+	// config before anything dials or listens (nil for a self-hosted config,
+	// so the last container built decides, deterministically).
+	if cfg != nil {
+		dialguard.SetManagedPolicy(dialguard.ManagedPolicyFor(cfg.Hosting.Managed(), cfg.Hosting.ModelHosts, cfg.Hosting.ImageServerPairs()...))
+	}
 
 	// Apply edition options immediately after struct allocation so c.providers
 	// is set before every downstream init site (initLogship @617,
@@ -1256,6 +1289,13 @@ func NewContainer(cfg *config.Config, configPath string, opts ...ContainerOption
 	// Phase 1 Step 5b: Initialize MCP servers from project configs, with the
 	// short startup budget: anything slower becomes pending and is installed
 	// or retried in the background (MCP failed-connect recovery, phase 2 P1).
+	// GitHub #571 U3a: seal every OAuth token row written before U3a, once,
+	// before anything wires or refreshes a grant.
+	func() {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+		defer cancel()
+		c.sealExistingTokens(ctx)
+	}()
 	c.initMCPWithBudget(mcpStartupBudget)
 	// Daemon-level MCP discovery registry — populates /api/v1/mcp/servers
 	// + /ui/mcp from the top-level mcp.servers block in the daemon
@@ -1403,6 +1443,9 @@ func NewContainer(cfg *config.Config, configPath string, opts ...ContainerOption
 
 	// Phase 1 Step 6c: Optional background retention sweeper.
 	c.initRetention()
+
+	// The GDPR Art 12(3) escalation, whatever retention.enabled says.
+	c.initErasureEscalation()
 
 	// Phase 1 Step 7: Initialize HTTP server with health endpoints
 	if err := c.initHTTPServer(); err != nil {
@@ -1662,6 +1705,11 @@ func NewContainerWithObservability(cfg *config.Config, configPath string, obsCfg
 	// Attach the logship Prometheus metrics now that the registry exists
 	// (the router was built in NewContainer with nil metrics).
 	c.attachLogshipMetrics()
+
+	// The first-value gauges (GitHub #587), on the registry /metrics serves.
+	c.registerFirstValueGauges()
+	c.registerErasureEscalationGauge()
+	c.registerChannelSessionFenceCounter()
 
 	// Rebuild the HTTP server so /metrics uses the custom Prometheus registry.
 	// The initial initHTTPServer ran before observability was set, so the API
@@ -2081,7 +2129,18 @@ func (c *Container) serveAgentUnixSocket(errCh chan error) error {
 
 // Run starts the daemon and blocks until shutdown.
 func (c *Container) Run(ctx context.Context) error {
-	errCh := make(chan error, 3) // Buffer for HTTP server, metrics server, and relay-ingress errors
+	errCh := make(chan error, 4) // Buffer for HTTP server, metrics server, relay-ingress and operations-listener errors
+
+	// GitHub #560 (M1c, review b0fa F1): the outbound boundary of a managed
+	// instance is the process-wide policy NewContainer set; serving a managed
+	// config without it would silently fall back to self-hosted egress, so
+	// refuse instead (fail closed).
+	if c.Config != nil && c.Config.Hosting.Managed() && !dialguard.ManagedPolicySet() {
+		return fmt.Errorf("managed hosting: the outbound policy is not set; refusing to serve")
+	}
+	// GitHub #505: the model clients (chat and embedding) dial through the
+	// SSRF guard and ignore proxy variables; say so once, at start.
+	chat.LogIgnoredProxyEnv(c.Logger)
 
 	// Create a cancellable context for background collector goroutines
 	// so they stop cleanly during shutdown instead of racing with DB close.
@@ -2115,6 +2174,7 @@ func (c *Container) Run(ctx context.Context) error {
 	}
 	c.startApproverDeviceTicker(c.collectorsCtx)
 	c.startBrokerGrantTicker(c.collectorsCtx)
+	c.startDoctorGauge(c.collectorsCtx)
 	// MCP failed-connect recovery (every node, not leader-gated): retries a
 	// project's MCP server whose dial failed. Before 2026-09-30 such a server
 	// stayed dark until a reload or restart (ibkr-trader's broker, 24 hours).
@@ -2289,41 +2349,10 @@ func (c *Container) Run(ctx context.Context) error {
 	// per-channel followup-registrar wiring at the tail of its
 	// Start.
 
-	// Start HTTP server in a goroutine
-	go func() {
-		c.Logger.Info().Str("address", c.HTTPServer.Addr).Msg("starting HTTP server")
-		if err := c.HTTPServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			errCh <- err
-		}
-	}()
-
-	// Start the mTLS relay-ingress listener when this node is the job tier
-	// and relay_ingress is configured (Slice B). Certs are already loaded
-	// into TLSConfig.Certificates, so empty cert/key args to ListenAndServeTLS.
-	if rs, initErr := c.initRelayIngress(); initErr != nil {
-		return fmt.Errorf("relay ingress init: %w", initErr)
-	} else if rs != nil {
-		c.relayServer = rs
-		go func() {
-			c.Logger.Info().Str("address", rs.Addr).Msg("starting mTLS relay ingress")
-			if err := rs.ListenAndServeTLS("", ""); err != nil && err != http.ErrServerClosed {
-				errCh <- err
-			}
-		}()
-	}
-
-	// Start dedicated metrics server if a separate address is configured
-	if c.Observability != nil && c.Observability.Metrics != nil && c.Config.Metrics.Enabled {
-		// GitHub #494: the listener never authenticates, so it answers only
-		// the daemon's own Host names (DNS-rebinding guard).
-		if err := c.guardMetricsListener(); err != nil {
-			return err
-		}
-		go func() {
-			if err := c.Observability.Metrics.StartServer(ctx); err != nil {
-				errCh <- err
-			}
-		}()
+	// Bind every listener and run every fallible step, then serve (GitHub
+	// #581 D2a): a start that fails here has served nothing.
+	if err := c.startListeners(ctx, errCh); err != nil {
+		return err
 	}
 
 	// Phase 3 judge wiring summary — operators can now see
@@ -2540,6 +2569,9 @@ func (c *Container) shutdown() error {
 	} else if c.AgentSocketServer != nil {
 		servers = append(servers, c.AgentSocketServer)
 	}
+	if c.OperationsServer != nil { // GitHub #560
+		servers = append(servers, c.OperationsServer)
+	}
 	if len(servers) > 0 {
 		c.Logger.Info().Int("servers", len(servers)).Msg("stopping HTTP server")
 		shutdownHTTPServers(ctx, httpShutdownBudget, c.Logger, servers...)
@@ -2605,6 +2637,8 @@ func (c *Container) shutdown() error {
 			}
 		}
 	}
+
+	c.stopErasureEscalation(ctx)
 
 	if c.mcpManager != nil {
 		c.mcpManager.Close()

@@ -39,18 +39,18 @@ const (
 	StateClosed RequestState = "closed"
 )
 
-// Art 12(3) response deadlines.
+// Art 12(3) warning margins. The deadline itself is counted in calendar
+// months (Deadline, monthsAfter), never as a fixed duration (#590).
 const (
-	// ResponseDeadline is the one-month baseline.
-	ResponseDeadline = 30 * 24 * time.Hour
-	// ExtendedDeadline is the maximum with an Art 12(3) extension (three
-	// months total), available for complex or numerous requests — and only
-	// where the subject was informed of the extension within the first month.
-	ExtendedDeadline = 90 * 24 * time.Hour
 	// WarnBefore is how long before the deadline an operator should be warned.
 	// Nine days: the warning has to leave time to actually DO the work, not
 	// merely to notice the miss.
 	WarnBefore = 9 * 24 * time.Hour
+	// EscalationMargin is how long before the deadline a transcript row that a
+	// running task still holds is pushed to the operator (O-5d-3, GitHub #344
+	// 5d-1c). Not WarnBefore: that is the general 9-day warning doctor shows
+	// for every open request; this is a push alert for one deferred row.
+	EscalationMargin = 7 * 24 * time.Hour
 )
 
 // Request is one rights request and its audit trail.
@@ -59,7 +59,9 @@ type Request struct {
 	SubjectID string
 	Kind      RequestKind
 	State     RequestState
-	OpenedAt  time.Time
+	// OpenedAt is when the request was RECEIVED, in UTC: the Art 12(3) clock
+	// runs from receipt, not from when it was recorded (#590).
+	OpenedAt time.Time
 
 	// VerifiedBy / VerifiedHow record WHO established identity and HOW.
 	// Both are required to leave StateOpen: an unattributable verification is
@@ -74,6 +76,10 @@ type Request struct {
 	// recorded for the accountability trail.
 	Extended       bool
 	ExtendedReason string
+	// ExtensionNotifiedAt is when the subject was told of the extension, with
+	// its reasons (GitHub #344, 5d-1c). A separate fact from Extended: the
+	// extension is lawful only if this is within the first month.
+	ExtensionNotifiedAt time.Time
 
 	// ReportHash pins the artefact that was produced, so "what did we actually
 	// send them" is answerable later (Art 5(2)).
@@ -98,12 +104,31 @@ type Request struct {
 	ErasureGround ErasureGround
 }
 
-// Deadline is when the Art 12(3) response is due.
+// Deadline is when the Art 12(3) response is due: one month from receipt,
+// or, extended, two further months from the end of the first (GDPR rights
+// design §4.20.6).
 func (r Request) Deadline() time.Time {
+	first := FirstMonthEnd(r.OpenedAt)
 	if r.Extended {
-		return r.OpenedAt.Add(ExtendedDeadline)
+		return monthsAfter(first, 2)
 	}
-	return r.OpenedAt.Add(ResponseDeadline)
+	return first
+}
+
+// monthsAfter is the end of a period of n months from t (Regulation 1182/71
+// Art 3(2)(c)): the last instant of the UTC day in the n-th month after t's
+// month with t's UTC date, or of that month's last day when it has none.
+// Art 3(4) (a last day on a weekend or holiday moves to the next working
+// day) is not applied; it only ever makes the period longer.
+func monthsAfter(t time.Time, n int) time.Time {
+	t = t.UTC()
+	y, m, d := t.Date()
+	firstOfTarget := time.Date(y, m+time.Month(n), 1, 0, 0, 0, 0, time.UTC)
+	if last := firstOfTarget.AddDate(0, 1, -1).Day(); d > last {
+		d = last
+	}
+	return time.Date(firstOfTarget.Year(), firstOfTarget.Month(), d, 0, 0, 0, 0, time.UTC).
+		AddDate(0, 0, 1).Add(-time.Nanosecond)
 }
 
 // Overdue reports whether the response deadline has passed unmet.
@@ -183,12 +208,19 @@ func (r *Request) Refuse(reason string) error {
 	return nil
 }
 
+// FirstMonthEnd is the end of "one month of receipt of the request" (Art
+// 12(3)): the unextended deadline, and the last moment the subject may be
+// told of an extension.
+func FirstMonthEnd(opened time.Time) time.Time { return monthsAfter(opened, 1) }
+
 // Extend applies the Art 12(3) extension.
 //
-// Only from a live state, and only with a reason: the extension is lawful only
-// for complex or numerous requests AND only where the subject was informed
-// within the first month, so an unreasoned extension cannot be justified later.
-func (r *Request) Extend(reason string, now time.Time) error {
+// Only from a live state, and only with a reason and the date the subject was
+// told: the extension is lawful only for complex or numerous requests AND only
+// where the subject was informed, with the reasons, "within one month of
+// receipt of the request" (Art 12(3)). The notice date is refused when it is
+// missing, in the future, before the request, or after FirstMonthEnd.
+func (r *Request) Extend(reason string, notifiedAt, now time.Time) error {
 	switch r.State {
 	case StateOpen, StateVerified:
 	default:
@@ -197,10 +229,31 @@ func (r *Request) Extend(reason string, now time.Time) error {
 	if strings.TrimSpace(reason) == "" {
 		return fmt.Errorf("datasubject: an Art 12(3) extension requires a reason (complexity or number of requests)")
 	}
-	if now.After(r.OpenedAt.Add(ResponseDeadline)) {
-		return fmt.Errorf("datasubject: the Art 12(3) extension must be claimed WITHIN the first month " +
-			"and the subject informed then; it cannot be applied retroactively to a deadline already missed")
+	// A timely notice may be recorded after the first month; the notice date,
+	// not the recording date, is what Art 12(3) bounds.
+	limit := FirstMonthEnd(r.OpenedAt)
+	switch {
+	case notifiedAt.IsZero():
+		return fmt.Errorf("datasubject: an Art 12(3) extension needs the date the subject was told of it, " +
+			"with the reasons")
+	case notifiedAt.After(now):
+		return fmt.Errorf("datasubject: the extension notice date %s is in the future", notifiedAt.Format(time.RFC3339))
+	case notifiedAt.Before(r.OpenedAt):
+		return fmt.Errorf("datasubject: the extension notice date is before the request was received")
+	case notifiedAt.After(limit):
+		return fmt.Errorf("datasubject: the subject must be told of the extension within one month of receipt "+
+			"(by %s); a notice on %s is too late, so the extension cannot be applied retroactively to a deadline already missed",
+			limit.Format(time.RFC3339), notifiedAt.Format(time.RFC3339))
 	}
-	r.Extended, r.ExtendedReason = true, reason
+	r.Extended, r.ExtendedReason, r.ExtensionNotifiedAt = true, reason, notifiedAt
 	return nil
+}
+
+// EscalationKey identifies one Art 12(3) escalation: a deferred row of a
+// request, against the deadline it was raised for (GitHub #344 5d-1c).
+type EscalationKey struct {
+	RequestID string
+	Table     LinkableTable
+	RowID     string
+	Deadline  time.Time
 }

@@ -2,6 +2,7 @@ package cli
 
 import (
 	"database/sql"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -23,6 +24,8 @@ var (
 	restoreForce         bool
 	restoreAllowNonEmpty bool
 	restoreClean         bool
+	backupRestorable     bool
+	backupExport         bool
 )
 
 var backupCmd = &cobra.Command{
@@ -84,6 +87,8 @@ func init() {
 	restoreCmd.Flags().StringVar(&restoreIn, "from", "", "archive path (required)")
 	restoreCmd.Flags().BoolVar(&restoreForce, "force", false, "required — confirms the daemon is stopped and the DB can be overwritten")
 	restoreCmd.Flags().BoolVar(&restoreAllowNonEmpty, "allow-non-empty", false, "permit restore into a DB with existing project/task rows")
+	backupCmd.Flags().BoolVar(&backupRestorable, "restorable", false, "also include the secrets/ directory beside the config file (the secret store's key, the env files), so the archive restores on another host; the archive is then as sensitive as those secrets")
+	backupCmd.Flags().BoolVar(&backupExport, "export", false, "the owner export: no secrets/, the config redacted, and the rows of every secret-material table (keys, tokens, sessions) left out of the dump; restores to an instance whose secrets are set up again")
 	restoreCmd.Flags().BoolVar(&restoreClean, "clean", false, "DROP SCHEMA public CASCADE before restore — wipes any vornik schema already loaded on the target")
 	_ = restoreCmd.MarkFlagRequired("from")
 	rootCmd.AddCommand(backupCmd)
@@ -91,6 +96,9 @@ func init() {
 }
 
 func runBackup(cmd *cobra.Command, args []string) error {
+	if backupExport && backupRestorable {
+		return errors.New("--export and --restorable refuse each other: an export leaves the secrets out, a restorable backup adds them")
+	}
 	cfg, configPath, err := config.Load()
 	if err != nil {
 		return fmt.Errorf("load config: %w", err)
@@ -129,6 +137,9 @@ func runBackup(cmd *cobra.Command, args []string) error {
 		"--no-owner", "--no-privileges",
 		"-f", dumpPath,
 	}
+	if backupExport {
+		pgArgs = append(pgArgs, exportExcludeTableData()...)
+	}
 	pgCmd := exec.Command("pg_dump", pgArgs...)
 	pgCmd.Env = pgEnv
 	if out, err := pgCmd.CombinedOutput(); err != nil {
@@ -144,6 +155,13 @@ func runBackup(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("pg_dump failed: %w\n%s", err, out)
 	}
 	fmt.Printf("✔ database dumped (%d bytes)\n", fileSize(dumpPath))
+	if backupExport {
+		n, err := scrubDumpFile(dumpPath)
+		if err != nil {
+			return fmt.Errorf("scrub the dump: %w", err)
+		}
+		fmt.Printf("✔ dump scrubbed by value: %d line(s) changed\n", n)
+	}
 
 	// 2. artifacts dir (optional — may not exist on fresh deployments).
 	artifactsSrc := cfg.Storage.ArtifactsPath
@@ -168,13 +186,25 @@ func runBackup(cmd *cobra.Command, args []string) error {
 				return fmt.Errorf("copy project workspaces: %w", err)
 			}
 			fmt.Printf("✔ project workspaces copied from %s\n", workspacesSrc)
+			if backupExport {
+				removed, rewritten, err := scrubWorkspaceCredentials(workspacesDst)
+				if err != nil {
+					return fmt.Errorf("scrub workspace credentials: %w", err)
+				}
+				fmt.Printf("✔ workspace credentials left out: %d file(s) removed, %d git remote config(s) stripped of userinfo\n", removed, rewritten)
+			}
 		} else {
 			fmt.Printf("  (skipping project workspaces: %s not found)\n", workspacesSrc)
 		}
 	}
 
-	// 4. config snapshot: main file + configs/ sibling tree.
-	if configPath != "" {
+	// 4. config snapshot: main file + configs/ sibling tree; for an export,
+	// redacted (#581 D5).
+	if configPath != "" && backupExport {
+		if err := stageExportConfig(configPath, staging); err != nil {
+			return err
+		}
+	} else if configPath != "" {
 		if err := copyFile(configPath, filepath.Join(staging, "config.yaml")); err != nil {
 			return fmt.Errorf("copy config: %w", err)
 		}
@@ -188,12 +218,29 @@ func runBackup(cmd *cobra.Command, args []string) error {
 		}
 	}
 
+	// 4b. --restorable (GitHub #581 D4): secrets/, at 0600, so the sealed
+	// secrets open on a replacement host.
+	if backupRestorable {
+		if configPath == "" {
+			return errors.New("--restorable: no config file path, so no secrets/ directory beside it")
+		}
+		n, err := stageSecrets(secretsDirFor(configPath), staging)
+		if err != nil {
+			return err
+		}
+		fmt.Printf("✔ %d secret file(s) added from %s: this archive is as sensitive as those secrets\n", n, secretsDirFor(configPath))
+	}
+
 	// 5. Marker file so restore can validate it's a real vornik archive.
 	if err := os.WriteFile(filepath.Join(staging, "VORNIK_BACKUP"), []byte("vornik-backup-v1\n"), 0o644); err != nil {
 		return err
 	}
 
-	// 6. tar.gz the staging dir.
+	// 6. tar.gz the staging dir, into a file that is 0600 before a byte is
+	// written: it holds the database (#581 D4).
+	if err := createPrivateFile(outPath); err != nil {
+		return fmt.Errorf("archive: %w", err)
+	}
 	if err := tarGzDir(staging, outPath); err != nil {
 		return fmt.Errorf("archive: %w", err)
 	}
@@ -205,7 +252,7 @@ func runRestore(cmd *cobra.Command, args []string) error {
 	if !restoreForce {
 		return fmt.Errorf("--force is required. stop the vornik daemon and confirm you want to overwrite the target database")
 	}
-	cfg, _, err := config.Load()
+	cfg, configPath, err := config.Load()
 	if err != nil {
 		return fmt.Errorf("load config: %w", err)
 	}
@@ -325,6 +372,19 @@ func runRestore(cmd *cobra.Command, args []string) error {
 			}
 			fmt.Printf("✔ project workspaces restored to %s\n", cfg.Runtime.ProjectWorkspacePath)
 		}
+	}
+
+	// secrets/ from a --restorable archive (#581 D4), into the directory
+	// provision made, with its owner.
+	if info, err := os.Stat(filepath.Join(staging, "secrets")); err == nil && info.IsDir() {
+		if configPath == "" {
+			return errors.New("restore secrets: no config file path, so no secrets/ directory to restore into")
+		}
+		n, err := restoreSecrets(filepath.Join(staging, "secrets"), secretsDirFor(configPath))
+		if err != nil {
+			return fmt.Errorf("restore secrets: %w", err)
+		}
+		fmt.Printf("✔ %d secret file(s) restored to %s\n", n, secretsDirFor(configPath))
 	}
 
 	fmt.Println("\nrestore complete. Config files in the archive were NOT applied — compare against your current deployment manually and merge as needed.")

@@ -22,6 +22,7 @@ import (
 	"strings"
 	"time"
 	"vornik.io/vornik/internal/agentns"
+	"vornik.io/vornik/internal/integrations/dialguard"
 
 	"vornik.io/vornik/internal/authz"
 	"vornik.io/vornik/internal/chatauth"
@@ -195,6 +196,7 @@ func (c *Container) mcpDesiredServers() map[string][]mcp.ServerConfig {
 			// Scope the CREDENTIAL is resolved under. The project's own by
 			// default; an inherited daemon credential overrides it below.
 			authProjectID := mcpCredentialScope(p.ID, false)
+			fromConfig := false // set where the URL is inherited from config.yaml (#566 E3)
 			if s.Transport == "" {
 				if daemon, ok := daemonServers[s.Name]; ok {
 					cfg.Transport = daemon.Transport
@@ -202,6 +204,7 @@ func (c *Container) mcpDesiredServers() map[string][]mcp.ServerConfig {
 					cfg.Args = append([]string(nil), daemon.Args...)
 					cfg.Env = maps.Clone(daemon.Env)
 					cfg.URL = daemon.URL
+					fromConfig = true // GitHub #566 E3: the URL is config.yaml's
 					// A name-only entry means "use that daemon server", so
 					// it inherits the daemon block's credentials along with
 					// its connection fields. The project's own
@@ -257,7 +260,8 @@ func (c *Container) mcpDesiredServers() map[string][]mcp.ServerConfig {
 			// (process-spawn law, reading 3; S1b-2). After the inheritance
 			// above, so a name-only subscription runs the daemon entry's
 			// program.
-			cfg.Program = configuredMCPProgram(cfg)
+			cfg.Program = c.configuredMCPProgram(cfg, "project", p.ID)
+			c.guardManagedMCPServer(&cfg, fromConfig) // GitHub #560 M1c D5, #566 E3
 			// The label must name BOTH the project doing the work and the
 			// scope its credential actually resolves at — a log line reading
 			// "project X" for a grant stored at project_id "" sends an
@@ -392,11 +396,43 @@ func (c *Container) applyMCPAuth(cfg *mcp.ServerConfig, auth mcpauth.Auth, grant
 // loaded config: the config loader's hand-off, the one place outside the
 // sandbox bridge that may call spawn.NewConfiguredCommand (pinned by
 // TestSpawnLaw_OnlyNamedPackagesImportSpawn). Non-stdio servers carry none.
-func configuredMCPProgram(cfg mcp.ServerConfig) spawn.ConfiguredCommand {
+func (c *Container) configuredMCPProgram(cfg mcp.ServerConfig, scope, project string) spawn.ConfiguredCommand {
 	if cfg.Transport != "stdio" {
 		return spawn.ConfiguredCommand{}
 	}
+	// GitHub #560 (M1c D2): a managed instance starts no stdio MCP server; the
+	// client refuses a stdio server with no program (ErrNoConfiguredProgram).
+	if c.Config != nil && c.Config.Hosting.Managed() {
+		c.Logger.Warn().Str("mode", "managed").Str("scope", scope).Str("project", project).Str("server", cfg.Name).
+			Msg("MCP: withheld — managed hosting starts no stdio MCP server")
+		return spawn.ConfiguredCommand{}
+	}
 	return spawn.NewConfiguredCommand(cfg.Command, cfg.Args...)
+}
+
+// guardManagedMCPServer gives a configured HTTP MCP server a guarded client in
+// managed hosting (GitHub #560, M1c D5): public addresses only, no loopback
+// grant, same-host redirects, the policy read on every dial. A client already
+// set (an integration's, the agent-admin guard's) is kept. Self-hosted, the
+// configuration is the operator's and nothing changes.
+//
+// fromConfig is the URL's provenance (GitHub #566, M7 E3): a URL taken from
+// config.yaml gets ImageServerClient, the only client that may reach an
+// image-declared loopback server; a URL from a project file, which the owner
+// can write through the agent-admin verbs, never does.
+func (c *Container) guardManagedMCPServer(cfg *mcp.ServerConfig, fromConfig bool) {
+	if c.Config == nil || !c.Config.Hosting.Managed() || cfg.HTTPClient != nil || cfg.Transport == "stdio" || cfg.URL == "" {
+		return
+	}
+	timeout := 30 * time.Second
+	if cfg.TimeoutSeconds > 0 {
+		timeout = time.Duration(cfg.TimeoutSeconds) * time.Second
+	}
+	if fromConfig {
+		cfg.HTTPClient = dialguard.ImageServerClient(cfg.URL, timeout)
+		return
+	}
+	cfg.HTTPClient = dialguard.CustomerURLClient(cfg.URL, nil, timeout)
 }
 
 // daemonMCPServerConfigs converts the daemon-level MCP catalog (config.yaml's
@@ -419,7 +455,8 @@ func (c *Container) daemonMCPServerConfigs() []mcp.ServerConfig {
 			AllowedTools:   s.AllowedTools,
 			TimeoutSeconds: s.TimeoutSeconds,
 		}
-		cfg.Program = configuredMCPProgram(cfg)
+		cfg.Program = c.configuredMCPProgram(cfg, "daemon", "")
+		c.guardManagedMCPServer(&cfg, true) // GitHub #560 M1c D5, #566 E3: config.yaml's URL
 		// Daemon-scope servers are admin-configured and have no project
 		// allowlist to check against.
 		if !c.applyMCPAuth(&cfg, s.Auth, mcpauth.Grants{Unrestricted: true}, "", "daemon") {
@@ -666,7 +703,7 @@ func (c *Container) initTelegram() error {
 		telegram.WithSkillRatingRollup(c.repos.RatingRollup, c.repos.ExecInjectedSkills),
 		telegram.WithExecutionRepository(c.repos.Executions),
 		telegram.WithArtifactRepository(c.repos.Artifacts),
-		telegram.WithTaskCredentialRepository(c.repos.TaskCredentials),
+		telegram.WithTaskCredentialRepository(c.sealedTaskCredentials()),
 		telegram.WithRegistry(c.Registry),
 		telegram.WithTaskWatcherRepository(c.repos.Watchers),
 	}
@@ -796,8 +833,9 @@ func (c *Container) initTelegram() error {
 		// sendVoice when the chat's most-recent inbound was voice. Either
 		// provider may be nil — the option is nil-safe per direction.
 		botOpts = append(botOpts, telegram.WithVoiceProviders(telegram.VoiceProviders{
-			STT: c.voiceSTT,
-			TTS: c.voiceTTS,
+			STT:              c.voiceSTT,
+			TTS:              c.voiceTTS,
+			SyntheticReplies: c.syntheticVoice,
 		}))
 	}
 
@@ -872,6 +910,7 @@ func (c *Container) initTelegram() error {
 
 	// Art 50 (GitHub #342): pushes outside ChannelReceiver share its disclosure state.
 	bot.SetAIDisclosure(c.AIDisclosure)
+	bot.SetAIMarker(c.aiMarker()) // EU AI Act Art 50(2), rows 11, 13 (GitHub #117)
 	c.TelegramBot = bot
 
 	// Phase 4 (oidc-identity-permissions-design §5.1/§5.3): route the bot's

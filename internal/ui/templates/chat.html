@@ -59,10 +59,10 @@
                  don't fight the layout. -->
             <section class="rounded-lg border border-dark-700 bg-dark-800/30 p-4 min-h-[300px] max-h-[60vh] overflow-y-auto space-y-3" data-testid="chat-message-list">
                 {{if .History}}
-                    {{range .History}}
+                    {{range $i, $msg := .History}}
                     <div class="rounded-md px-3 py-2 text-sm leading-relaxed
                                 {{if eq .Role "user"}}bg-brand-900/40 border border-brand-700/40 text-brand-50 ml-12{{else}}bg-dark-700/40 border border-dark-600 text-gray-100 mr-12{{end}}"
-                         data-role="{{.Role}}">
+                         data-role="{{.Role}}"{{with markAt $.Marks $i}} data-ai-mark="{{.}}"{{end}}>
                         <div class="text-[10px] uppercase tracking-wide text-gray-400 mb-1">{{.Role}}</div>
                         <div class="whitespace-pre-wrap">{{renderMarkdown .Content}}</div>
                     </div>

@@ -330,6 +330,31 @@ binaries in the same ephemeral golang container the quickstart uses (no host
 Go), takes a DB dump + binary/config backup first, and prints exact rollback
 commands.
 
+### D1. Read the upgrade requirements first
+
+A release can need action **before** you upgrade: a key file to back up, a
+setting that changes default, a config key that is now refused. Each such
+release lists them in a **"Upgrade requirements"** box at the top of its
+release notes. 2026.11.1, for example, requires backing up the secret store
+key and turns spoken replies off unless re-enabled.
+
+```bash
+cd ~/vornik/deployments/podman
+./vornik-update.sh --check     # your version and the newest tag (changes nothing)
+git -C ~/vornik fetch --tags origin
+git -C ~/vornik show <newest-tag>:docs/public/release-notes/index.md | less
+```
+
+Read the section of **every** release after the one you run, up to the
+target (also at https://docs.vornik.io/release-notes/).
+
+**Check:** for each "Upgrade requirements" item, either it does not apply to
+this install, or you have done it. Show your user the list and what you did
+about each item, and get their go-ahead, before running the upgrade (ground
+rule 1).
+
+### D2. Upgrade
+
 ```bash
 cd ~/vornik/deployments/podman
 ./vornik-update.sh --check                  # is a newer tag available? (changes nothing)

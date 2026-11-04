@@ -45,13 +45,16 @@ var allSurfaces = []Surface{
 	SurfaceSetupDispatcher, SurfaceSetupSession, SurfaceSetupSessionRouter, SurfaceSetupManaged, SurfaceConfigAssist,
 	SurfaceConfigShow, SurfaceInstinctRetireGlobal, SurfaceMemoryFirewall, SurfaceOperatorAccounts,
 	SurfaceOperatorLinks, SurfaceOperatorProposals, SurfaceOperators, SurfaceSkillSetGlobal,
+	SurfaceOperatorCredentials,
 }
 
 var grantedSurfaces = map[Surface]bool{
 	SurfaceWizardConverse: true, SurfaceWizard: true, SurfaceMCPOAuthConnect: true, SurfaceOperatorAudit: true,
+	SurfaceOperatorCredentials: true, // GitHub #623
 }
 
-// B3: exactly four surfaces are granted.
+// B3: exactly five surfaces are granted (the fifth, operator_credentials,
+// GitHub #623).
 func TestTenantAdmin560_Allowlist(t *testing.T) {
 	n := 0
 	for _, s := range allSurfaces {
@@ -62,8 +65,8 @@ func TestTenantAdmin560_Allowlist(t *testing.T) {
 			n++
 		}
 	}
-	if n != 4 || len(tenantAdminSurfaces) != 4 {
-		t.Fatalf("granted %d surfaces (map holds %d), want 4", n, len(tenantAdminSurfaces))
+	if n != 5 || len(tenantAdminSurfaces) != 5 {
+		t.Fatalf("granted %d surfaces (map holds %d), want 5", n, len(tenantAdminSurfaces))
 	}
 	if TenantAdminMay(Surface("unlisted")) {
 		t.Fatal("an unlisted surface was granted")
@@ -150,6 +153,13 @@ func TestTenantAdmin560_SurfaceCompleteness(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// A surface may also be gated from the console package, through
+	// api.OperatorSurfaceAccessFor (GitHub #623, /ui/credentials).
+	uiFiles, err := filepath.Glob("../ui/*.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	files = append(files, uiFiles...)
 	fset := token.NewFileSet()
 	declared := map[string]bool{}
 	used := map[string]int{}
@@ -178,13 +188,17 @@ func TestTenantAdmin560_SurfaceCompleteness(t *testing.T) {
 				switch sel.Sel.Name {
 				case "operatorOnly":
 					idx = 0
-				case "requireOperatorScopeFor", "requireAdminClassGateFor":
+				case "requireOperatorScopeFor", "requireAdminClassGateFor", "OperatorSurfaceAccessFor":
 					idx = 2
 				}
 				if idx < 0 || len(x.Args) <= idx {
 					return true
 				}
-				id, ok := x.Args[idx].(*ast.Ident)
+				arg := x.Args[idx]
+				if sel, isSel := arg.(*ast.SelectorExpr); isSel {
+					arg = sel.Sel // api.SurfaceX from the console package
+				}
+				id, ok := arg.(*ast.Ident)
 				if !ok {
 					t.Errorf("%s: %s is passed a non-constant surface", fset.Position(x.Pos()), sel.Sel.Name)
 					return true

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"time"
+	"vornik.io/vornik/internal/agentns"
 
 	"vornik.io/vornik/internal/mcpauth"
 )
@@ -29,11 +30,28 @@ type Source struct {
 func (s Source) Get(name string) (string, bool) {
 	ns, bare, namespaced := mcpauth.SplitSecretName(name)
 	if !namespaced {
-		if s.Env == nil {
+		// The environment first, then the operator credentials the console
+		// writes (GitHub #623; operator decision 2026-11-02).
+		if s.Env != nil {
+			if v, ok := s.Env.Get(name); ok {
+				return v, true
+			}
+		}
+		if !agentns.ValidSecretName(name) {
 			return "", false
 		}
-		return s.Env.Get(name)
+		return s.fromStore(name, func(ctx context.Context) ([]byte, error) {
+			return s.Store.GetOperatorCredential(ctx, name)
+		})
 	}
+	return s.fromStore(name, func(ctx context.Context) ([]byte, error) {
+		return s.Store.Get(ctx, ns, bare)
+	})
+}
+
+// fromStore runs one store read under the lookup timeout, reporting a key or
+// store failure through OnError and treating "not found" as a quiet miss.
+func (s Source) fromStore(name string, read func(context.Context) ([]byte, error)) (string, bool) {
 	if s.KeyErr != nil {
 		s.report(name, s.KeyErr)
 		return "", false
@@ -47,7 +65,7 @@ func (s Source) Get(name string) (string, bool) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
-	v, err := s.Store.Get(ctx, ns, bare)
+	v, err := read(ctx)
 	if err != nil {
 		if !errors.Is(err, ErrNotFound) {
 			s.report(name, err)

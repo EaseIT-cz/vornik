@@ -127,10 +127,33 @@ entry. Omitting it (the default) means "no authentication", which is how every
 server behaved before this block existed.
 
 Credentials are **never written in the config**. Every credential field takes a
-`secret://<name>` reference; the value lives in the secret store, and the name
-must appear in the project's `permissions.secrets`. That is what lets a server
-definition travel through the control plane as a reviewable diff without
-leaking anything.
+`secret://<NAME>` reference, so a server definition can travel through the
+control plane as a reviewable diff without leaking anything. A project-level
+server's name must also appear in the project's `permissions.secrets`.
+
+**Where a `secret://NAME` value comes from.** Vornik reads the daemon's
+environment first (the files under `~/.config/vornik/secrets/`, loaded at
+start), then the **operator credentials**: values stored encrypted in the
+daemon's credential store. A server whose credential exists in neither is not
+registered, and the MCP section of the control plane lists it under
+**Waiting for credentials**.
+
+**Adding a value without a shell** (any install, and the only way on a hosted
+instance):
+
+- **Admin → Keys & access → Credentials** (`/ui/credentials`): enter the name and the
+  value. The value is write-only: it is stored encrypted, never shown again,
+  and every change is audited. Saving re-registers the servers waiting for it,
+  with no restart. Remove or replace a value on the same page.
+- **Control plane → MCP → Add**: in static mode, type the token in
+  **Credential value**. It is stored under the **Value from** name when you
+  submit; the proposal carries only the reference.
+
+Names stored this way are `UPPER_SNAKE_CASE` (`CONTEXT7_API_KEY`), without a
+namespace. Store the token alone and set **Value prefix** to `Bearer ` when the
+server expects `Authorization: Bearer <token>`. A value set in the environment
+wins over a stored one of the same name; the Credentials page says when that
+happens.
 
 Project IDs containing `--` are reserved for agent namespaces: an ID of the form
 `<namespace>--<name>` belongs to an agent's own setup. Such a project resolves only

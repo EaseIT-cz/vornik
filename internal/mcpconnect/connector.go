@@ -895,8 +895,8 @@ func (c *Connector) configuredClient(ref ServerRef) (mcpauth.ClientCredentials, 
 	}
 	secret, ok := c.secretValue(name)
 	if !ok {
-		return creds, fmt.Errorf("%w: client_secret_from names secret %q, which the secret store does not hold",
-			mcpauth.ErrSecretUnresolved, name)
+		return creds, fmt.Errorf("%w: client_secret_from names secret %q, %s",
+			mcpauth.ErrSecretUnresolved, name, mcpauth.MissingWhere(name))
 	}
 	creds.Secret = secret
 	return creds, nil

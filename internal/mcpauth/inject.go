@@ -117,7 +117,7 @@ func Resolve(a Auth, transport string, src SecretSource, g Grants) (Injection, e
 		name, _ := ParseSecretRef(a.ValueFrom) // validated above
 		value, ok := src.Get(name)
 		if !ok {
-			return Injection{}, fmt.Errorf("%w: value_from names secret %q, which the secret store does not hold", ErrSecretUnresolved, name)
+			return Injection{}, fmt.Errorf("%w: value_from names secret %q, %s", ErrSecretUnresolved, name, MissingWhere(name))
 		}
 		header := a.Header
 		if header == "" {
@@ -131,11 +131,22 @@ func Resolve(a Auth, transport string, src SecretSource, g Grants) (Injection, e
 			name, _ := ParseSecretRef(ref) // validated above
 			value, ok := src.Get(name)
 			if !ok {
-				return Injection{}, fmt.Errorf("%w: env_from[%q] names secret %q, which the secret store does not hold", ErrSecretUnresolved, varName, name)
+				return Injection{}, fmt.Errorf("%w: env_from[%q] names secret %q, %s", ErrSecretUnresolved, varName, name, MissingWhere(name))
 			}
 			env[varName] = value
 		}
 		return Injection{Env: env}, nil
 	}
 	return Injection{}, nil
+}
+
+// MissingWhere says where an unresolved secret NAME was looked for, so the
+// error points at the right place: a namespaced name is read from the
+// credential store only; any other name from the daemon's environment, then
+// the operator credentials an admin enters in the console (GitHub #623).
+func MissingWhere(name string) string {
+	if _, _, namespaced := SplitSecretName(name); namespaced {
+		return "which the credential store does not hold"
+	}
+	return "which neither the daemon's environment nor the operator credentials hold (add it on the Credentials page, /ui/credentials)"
 }

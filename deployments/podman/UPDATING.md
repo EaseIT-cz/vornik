@@ -81,10 +81,27 @@ cd ~/vornik/deployments/podman
 ./vornik-update.sh --ref 2026.8.0     # pin a specific tag or commit
 ./vornik-update.sh --ref origin/main  # track the tip of main
 ./vornik-update.sh --yes        # skip the confirmation prompt (automation)
+./vornik-update.sh --yes --ack-upgrade-requirements=<target>  # ...when the target has upgrade requirements
 ./vornik-update.sh --no-rebuild-images  # skip the image rebuild (see caveat below)
 ./vornik-update.sh --force      # rebuild+reinstall even if the checkout already matches
 ./vornik-update.sh --help
 ```
+
+### Upgrade requirements are shown before anything changes
+
+A release that needs action before upgrading says so in an **"Upgrade
+requirements"** box in its release notes. Before the backup, the updater reads
+the TARGET's notes and prints the box of every release newer than the installed
+one (the installed release is the newest tag behind the installed binary's
+commit). If there is at least one, it stops until you acknowledge them:
+
+- interactively, by typing the target's name (`2026.11.2`, `origin/main`);
+- with `--yes`, by also passing `--ack-upgrade-requirements=<target>`. `--yes`
+  alone refuses, and an acknowledgement names one target only.
+
+`--check` prints the boxes and changes nothing. A target older than the notes
+file gets a warning and no gate. The first upgrade TO 2026.11.2 runs the older
+updater, which has no gate: read that release's box yourself.
 
 ### What it does, step by step
 

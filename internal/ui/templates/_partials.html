@@ -785,8 +785,13 @@
         /* menu-solid: near-opaque surface for the mobile menus (operator
            wanted them much less transparent). Overrides the glass tint with
            the theme card surface at 0.97 — reads as solid while keeping the
-           backdrop blur from .glass. */
-        .menu-solid { background: rgb(var(--surface-800) / 0.97); }
+           backdrop blur from .glass. Only the top edge keeps .glass's
+           border: the bar and its drawers span the screen, so side and
+           bottom edges boxed them against it (2026-11-02, phone, dark). */
+        .menu-solid {
+            background: rgb(var(--surface-800) / 0.97);
+            border-right-width: 0; border-bottom-width: 0; border-left-width: 0;
+        }
         /* Hierarchy primitives (ui-per-page-polish). Wrapper primitives are
            classes, not partials, because html/template has no content slot. */
         .panel-primary {
@@ -1713,4 +1718,16 @@ scanner picks them up. Pass a dict:
 {{else if eq . "CANCELLED"}}<span class="pill pill-nodot pill-neutral">{{template "iconX"}}Cancelled</span>
 {{else}}<span class="pill pill-nodot pill-neutral">{{.}}</span>
 {{end}}
+{{end}}
+
+{{/* keysAccessTabs: the two tabs of the Admin nav's "Keys & access" entry
+     (operator, 2026-11-02): API keys (/ui/admin/keys, admin-only) and
+     Credentials (/ui/credentials, GitHub #623, also for a managed instance's
+     owner, who does not see the API keys tab). Call with a dict-free pipeline:
+     {{template "keysAccessTabs" (keysAccessTab "keys" .IsAdmin)}}. */}}
+{{define "keysAccessTabs"}}
+<nav class="flex gap-1 border-b border-dark-700" aria-label="Keys and access" data-keys-access-tabs>
+    {{if .ShowKeys}}<a href="/ui/admin/keys" class="px-3 py-1.5 text-sm rounded-t-md {{if eq .Active "keys"}}bg-dark-800 text-gray-100 border border-b-0 border-dark-700{{else}}text-gray-400 hover:text-gray-200{{end}}" {{if eq .Active "keys"}}aria-current="page"{{end}}>API keys</a>{{end}}
+    <a href="/ui/credentials" class="px-3 py-1.5 text-sm rounded-t-md {{if eq .Active "credentials"}}bg-dark-800 text-gray-100 border border-b-0 border-dark-700{{else}}text-gray-400 hover:text-gray-200{{end}}" {{if eq .Active "credentials"}}aria-current="page"{{end}}>Credentials</a>
+</nav>
 {{end}}

@@ -1,7 +1,7 @@
 ---
 sources:
     - path: internal/api/middleware.go
-      sha256: 9e7893d2ca09cc00d0cfc17860b5c66f5e3004cae087233ac9203ba17e1c6f44
+      sha256: 8f51fec1e58343181a8981123f3eeb25cec855147f8e1e1f27d067dafa1a8f3e
     - path: internal/api/admin_class_auth.go
       sha256: 8f952ecfcc872c4f41b6541e48fa1c80ce79728d9eb95d14c7c27b96a8ab8c9b
     - path: internal/spawn/spawn.go
@@ -147,6 +147,12 @@ connected assistants, and upstream services.
   so existence does not leak.
 - **Agent keys reach only the agent route set**, on every listener (TCP and
   the unix socket), and cannot post as the operator.
+- **A database key's flags bind it on every route.** A key minted with
+  `vornikctl key create` reaches its project's memory only with
+  `memory_read` (reads) or `memory_write` (writes, including document
+  extraction into memory). With a workflow list it reaches only the A2A
+  routes of those workflows. It cannot create, list or change keys: key
+  management is for static keys, admin keys and the console.
 - Request bodies are size-capped and strictly decoded. The configuration dump
   redacts every credential-shaped field; a test plants a marker in every
   string field of the configuration and requires each credential-shaped one

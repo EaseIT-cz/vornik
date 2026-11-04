@@ -203,7 +203,11 @@ type AdminControlPlaneData struct {
 	// Diagnose section.
 	Diagnose *AdminCPDiagnoseResult
 	// MCP section.
-	MCPRows     []AdminCPMCPRow
+	MCPRows []AdminCPMCPRow
+	// MCPWaiting lists the un-namespaced credentials the configuration
+	// references that resolve nowhere: their servers are refused at
+	// registration and so absent from MCPRows (GitHub #623).
+	MCPWaiting  []CredentialRow
 	MCPWritable bool
 	Flash       string
 	Error       string
@@ -256,13 +260,16 @@ var cpFlashMessages = map[string]string{
 		"so its step timeout would exceed the cap and do nothing — nothing was written. Reject it; the detector re-files if still needed.",
 	"error": "That action could not be completed.",
 	// MCP-tab (hub §4) write outcomes.
-	"mcp-proposed":      "MCP change proposed — review the diff + apply on the Proposals tab.",
-	"mcp-bad-name":      "Invalid server name (use letters, digits, - or _).",
-	"mcp-bad-transport": "Transport must be sse or streamable-http. A stdio server is registered in the config files on the host.",
-	"mcp-bad-endpoint":  "sse/streamable-http need a valid http(s) URL.",
-	"mcp-stdio-refused": "stdio MCP servers are registered by editing the config files on the host, not through the daemon: the daemon would run that program.",
-	"mcp-secret":        "A field looked like a literal secret — use a ${ENV_VAR} placeholder instead.",
-	"mcp-not-found":     "No MCP server by that name to remove.",
+	"mcp-proposed":          "MCP change proposed — review the diff + apply on the Proposals tab.",
+	"mcp-bad-name":          "Invalid server name (use letters, digits, - or _).",
+	"mcp-bad-transport":     "Transport must be sse or streamable-http. A stdio server is registered in the config files on the host.",
+	"mcp-bad-endpoint":      "sse/streamable-http need a valid http(s) URL.",
+	"mcp-stdio-refused":     "stdio MCP servers are registered by editing the config files on the host, not through the daemon: the daemon would run that program.",
+	"mcp-secret":            "A field looked like a literal secret — use a ${ENV_VAR} placeholder instead.",
+	"mcp-credential-name":   "To store a credential value, the reference must be secret://NAME with an UPPER_SNAKE_CASE name and no namespace.",
+	"mcp-credential-failed": "The credential value could not be stored, so no proposal was filed.",
+	"mcp-credential-saved":  "Credential stored, and the MCP change proposed: review the diff and apply it on the Proposals tab.",
+	"mcp-not-found":         "No MCP server by that name to remove.",
 	// Discovery verdicts, surfaced instead of hidden: each is our own
 	// structural conclusion about the vendor, reached before any token request
 	// exists, so none can carry a vendor body or a secret — and each tells the
@@ -311,6 +318,9 @@ func (s *Server) AdminControlPlane(w http.ResponseWriter, r *http.Request) {
 		s.adminCPDecide(w, r)
 		return
 	}
+	// The MCP section's form carries a credential value field (GitHub #623):
+	// the page is never cached.
+	w.Header().Set("Cache-Control", "no-store")
 	section := normalizeCPSection(r.URL.Query().Get("section"))
 	// CE gate (design §6.3): without a diagnoser the Diagnose tab does not
 	// exist — a direct ?section=diagnose falls back to the Overview and the

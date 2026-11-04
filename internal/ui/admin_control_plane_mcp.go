@@ -13,6 +13,7 @@ import (
 	"regexp"
 	"strings"
 	"time"
+	"vornik.io/vornik/internal/agentns"
 
 	"gopkg.in/yaml.v3"
 
@@ -110,6 +111,15 @@ func validMCPEndpoint(transport, url, command string) error {
 // live probe on load — the badge is last-known status).
 func (s *Server) buildCPMCP(ctx context.Context, data *AdminControlPlaneData) {
 	data.MCPWritable = s.cpConfigPath != "" && s.proposalStore != nil
+	if s.operatorCredentials != nil {
+		if view, err := s.operatorCredentials.Status(ctx); err == nil {
+			for _, row := range view.Rows {
+				if row.State() == "missing" && len(row.NeededBy) > 0 {
+					data.MCPWaiting = append(data.MCPWaiting, row)
+				}
+			}
+		}
+	}
 	if s.mcpRegistry == nil {
 		return
 	}
@@ -156,6 +166,7 @@ func (s *Server) AdminControlPlaneMCPWrite(w http.ResponseWriter, r *http.Reques
 		redirect("error")
 		return
 	}
+	r.Body = http.MaxBytesReader(w, r.Body, maxCredentialValueBytes+64<<10)
 	_ = r.ParseForm()
 	action := r.FormValue("action")
 	name := strings.TrimSpace(r.FormValue("name"))
@@ -187,6 +198,19 @@ func (s *Server) AdminControlPlaneMCPWrite(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
+	// A credential value typed beside a static reference is stored now, before
+	// the proposal: the proposal is a reviewable diff and never carries a value
+	// (GitHub #623, OC4). A failed store files no proposal.
+	credentialSaved := false
+	if action == "add" && r.PostFormValue("auth_mode") == mcpauth.ModeStatic && r.PostFormValue("auth_credential_value") != "" {
+		token, ok := s.storeMCPFormCredential(r)
+		if !ok {
+			redirect(token)
+			return
+		}
+		credentialSaved = true
+	}
+
 	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
 	defer cancel()
 	actor := adminPrincipal(r)
@@ -212,10 +236,40 @@ func (s *Server) AdminControlPlaneMCPWrite(w http.ResponseWriter, r *http.Reques
 		LiveApply: true,
 	}
 	if err := s.proposalStore.Create(ctx, p); err != nil {
+		// A credential stored above stays listed on the credentials page,
+		// where it can be removed, as after a rejected proposal.
 		redirect("error")
 		return
 	}
+	if credentialSaved {
+		redirect("mcp-credential-saved")
+		return
+	}
 	redirect("mcp-proposed")
+}
+
+// storeMCPFormCredential stores the MCP form's credential value under the
+// value_from name, audited and followed by the MCP refresh, as the
+// credentials page does. It returns a done token and false on a refusal.
+func (s *Server) storeMCPFormCredential(r *http.Request) (string, bool) {
+	value := r.PostFormValue("auth_credential_value")
+	name, ok := mcpauth.ParseSecretRef(strings.TrimSpace(r.PostFormValue("auth_value_from")))
+	if !ok || !agentns.ValidSecretName(name) {
+		return "mcp-credential-name", false
+	}
+	if s.operatorCredentials == nil || len(value) > maxCredentialValueBytes {
+		return "mcp-credential-failed", false
+	}
+	actor := credentialsActor(r)
+	if err := s.operatorCredentials.Put(r.Context(), name, []byte(value), actor); err != nil {
+		s.logger.Warn().Err(err).Str("credential", name).Msg("MCP form: credential store failed")
+		return "mcp-credential-failed", false
+	}
+	s.auditCredential(r, "credential.set", name, actor)
+	if _, err := s.operatorCredentials.Refresh(r.Context()); err != nil {
+		s.logger.Warn().Err(err).Msg("MCP form: refresh after credential save failed")
+	}
+	return "", true
 }
 
 // mcpAddEdit builds the config.yaml content adding (or replacing) one server in

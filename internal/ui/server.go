@@ -799,6 +799,8 @@ type Server struct {
 	operatorProfileAudit OperatorProfileAuditSource
 	adminMCPSource       MCPInventorySource
 	adminMCPRefresher    MCPRefresher
+	// operatorCredentials backs /ui/credentials (GitHub #623).
+	operatorCredentials OperatorCredentials
 	// runtimeReadiness powers /ui/admin/health/runtime — voice STT/
 	// TTS provider health + storage backend reachability. Nil-safe;
 	// page renders an "Available: false" placeholder when absent.
@@ -2430,6 +2432,10 @@ func (s *Server) Handler() http.Handler {
 	if s.mcpOAuthAdmin != nil {
 		mux.HandleFunc("/admin/control-plane/mcp/connect", s.AdminControlPlaneMCPConnect)
 	}
+	// The credentials page is mounted at its exact path, outside adminRouter
+	// (admin-class only), and gates itself on SurfaceOperatorCredentials so a
+	// managed instance's owner reaches it (GitHub #623).
+	mux.HandleFunc("/credentials", s.AdminCredentials)
 
 	// Guided Integrations Hub (design doc: integrations-hub-design.md,
 	// task 5.3) — catalog + guided per-kind connect flow. Scope-filtered
@@ -3662,7 +3668,19 @@ func uiFuncMap() template.FuncMap {
 		"hasSessionFlag": hasSessionFlag,
 		"navModel":       navModel,
 		"navAreaForPage": navAreaForPage,
+		"keysAccessTab":  keysAccessTab,
 	}
+}
+
+// keysAccessTabData feeds the "keysAccessTabs" partial: which tab is active
+// and whether the admin-only API keys tab is shown (operator, 2026-11-02).
+type keysAccessTabData struct {
+	Active   string
+	ShowKeys bool
+}
+
+func keysAccessTab(active string, isAdmin bool) keysAccessTabData {
+	return keysAccessTabData{Active: active, ShowKeys: isAdmin}
 }
 
 // jsonArgs renders its arguments as a JSON array for a data-args attribute

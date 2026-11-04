@@ -49,6 +49,16 @@
 #   ./vornik-update.sh --force            # rebuild+reinstall even if the checkout already matches
 #   ./vornik-update.sh --check            # only report current vs. available version, then exit
 #   ./vornik-update.sh --allow-downgrade  # explicitly permit an older ancestor of the installed build
+#   ./vornik-update.sh --yes --ack-upgrade-requirements=<target>
+#                                         # unattended: confirm you have read and done
+#                                         # the target's "Upgrade requirements" (below)
+#
+# UPGRADE REQUIREMENTS. A release that needs action before upgrading says so in
+# an "Upgrade requirements" box in its release notes. Before changing anything,
+# this script prints the box of every release newer than the installed one, read
+# from the TARGET's notes, and needs an acknowledgement: interactively you type
+# the target's name; with --yes you pass --ack-upgrade-requirements=<target>.
+# --yes alone never skips it. --check prints them and exits. (#610)
 # Bare branch names prefer fetched origin branches; tags and qualified refs keep
 # their meaning. --yes and --force never imply --allow-downgrade. The ancestry
 # guard cannot prove database/config compatibility for unknown or divergent builds.
@@ -154,6 +164,7 @@ DO_BUILD=1
 CHECK_ONLY=0
 FORCE=0
 ALLOW_DOWNGRADE=0
+ACK_REQUIREMENTS=""
 # Rebuilding images is what this script DOES, not an extra it can be asked for.
 # The previous default (REBUILD_AGENT=0, opt-in via --rebuild-agent) is the
 # defect this inversion fixes.
@@ -172,6 +183,10 @@ while [[ $# -gt 0 ]]; do
     --check)        CHECK_ONLY=1; shift ;;
     --force)        FORCE=1; shift ;;
     --allow-downgrade) ALLOW_DOWNGRADE=1; shift ;;
+    --ack-upgrade-requirements)
+      [[ $# -ge 2 ]] || { echo "--ack-upgrade-requirements needs the target's name" >&2; exit 2; }
+      ACK_REQUIREMENTS="$2"; shift 2 ;;
+    --ack-upgrade-requirements=*) ACK_REQUIREMENTS="${1#*=}"; shift ;;
     --no-rebuild-images) REBUILD_IMAGES=0; shift ;;
     --no-recreate-sidecars) RECREATE_SIDECARS=0; shift ;;
     # Retained so cron wrappers and timers carrying the old flag keep working.
@@ -235,6 +250,9 @@ if [[ -z "$TARGET_REF" ]]; then
   TARGET_REF="$(git -C "$REPO_DIR" tag -l --sort=-creatordate | sed -n 1p)"
   [[ -n "$TARGET_REF" ]] || die "no tags found; pass --ref <tag-or-commit> (e.g. --ref origin/main)"
 fi
+# The name the operator knows the target by, before the rewrite below: what the
+# upgrade-requirements acknowledgement must repeat (#610).
+TARGET_LABEL="$TARGET_REF"
 # A bare branch name must not select a stale local branch after a fetch (#64).
 # Existing tags retain Git's tag-first precedence; qualified refs are deliberate.
 if [[ "$TARGET_REF" != refs/* && ! "$TARGET_REF" =~ ^[0-9a-f]{7,40}$ ]] \
@@ -303,7 +321,50 @@ else
   fi
 fi
 
+# Upgrade requirements (#610, design §23). Read from the TARGET's release notes
+# without a checkout, for every release newer than the installed one: the newest
+# tag that is an ancestor of the installed commit. Unknown installed commit: the
+# helper shows every box, which is the safe failure. The helper is run from the
+# checkout BEFORE step 2 moves it, so it is the same commit as this copy.
+# Computed only for --check and for a run that will upgrade, never for a no-op.
+REQUIREMENTS=""
+INSTALLED_RELEASE=""
+load_requirements() {
+  if [[ -n "${INSTALLED_FULL:-}" ]]; then
+    INSTALLED_RELEASE="$(git -C "$REPO_DIR" describe --tags --abbrev=0 "$INSTALLED_FULL" 2>/dev/null || true)"
+  fi
+  local notes_file="docs/public/release-notes/index.md" tree notes
+  local helper="$REPO_DIR/deployments/podman/upgrade-requirements.sh"
+  # Presence in the target's TREE, read separately from the blob: an absent
+  # file (an old target) warns; anything else that fails refuses, so a git
+  # error can never read as "no requirements".
+  tree="$(git -C "$REPO_DIR" ls-tree --name-only "$TARGET_REF^{commit}" -- "$notes_file")" \
+    || die "could not list the target's tree; refusing rather than skipping its upgrade requirements"
+  if [[ -z "$tree" ]]; then
+    warn "The target has no $notes_file, so its upgrade requirements cannot be"
+    warn "  shown. Read the release notes of every release up to $TARGET_LABEL yourself."
+    return 0
+  fi
+  notes="$(git -C "$REPO_DIR" show "$TARGET_REF^{commit}:$notes_file")" \
+    || die "the target's release notes exist but could not be read; refusing rather than skipping its upgrade requirements"
+  [[ -x "$helper" ]] \
+    || die "upgrade-requirements.sh is missing from $REPO_DIR; refusing rather than skipping the upgrade requirements"
+  REQUIREMENTS="$(printf '%s\n' "$notes" | "$helper" "$INSTALLED_RELEASE")" \
+    || die "could not read the upgrade requirements from the target's release notes"
+}
+show_requirements() {
+  [[ -n "$REQUIREMENTS" ]] || return 0
+  echo
+  warn "UPGRADE REQUIREMENTS from ${INSTALLED_RELEASE:-the installed build} to $TARGET_LABEL."
+  warn "  Read every item and do what applies to this install BEFORE upgrading:"
+  echo
+  printf '%s\n' "$REQUIREMENTS"
+  echo
+}
+
 if [[ "$CHECK_ONLY" == 1 ]]; then
+  load_requirements
+  show_requirements
   [[ "$CURRENT_COMMIT" == "$TARGET_COMMIT" ]] && log "Checkout is already at the target commit."
   exit 0
 fi
@@ -320,6 +381,26 @@ elif [[ "$CURRENT_COMMIT" == "$TARGET_COMMIT" && "$FORCE" != 1 ]]; then
   warn "This compares the git checkout, not the installed binary. If you moved HEAD"
   warn "manually (e.g. 'git pull'), pass --force to rebuild + reinstall anyway."
   exit 0
+fi
+
+# The acknowledgement gate, after the "nothing to do" exits so a no-op run is
+# never asked, and before the backup so a refusal changes nothing. --yes alone
+# never passes it: the 2026-11-01 production upgrade was an agent's --yes.
+load_requirements
+if [[ -n "$REQUIREMENTS" ]]; then
+  show_requirements
+  if [[ -n "$ACK_REQUIREMENTS" ]]; then
+    [[ "$ACK_REQUIREMENTS" == "$TARGET_LABEL" ]] \
+      || die "--ack-upgrade-requirements=$ACK_REQUIREMENTS does not name the target ($TARGET_LABEL). An acknowledgement is for one target. NOTHING CHANGED."
+  elif [[ "$ASSUME_YES" == 1 ]]; then
+    die "the upgrade requirements above are not acknowledged, and --yes does not acknowledge them. Do what applies, then re-run with --ack-upgrade-requirements=$TARGET_LABEL. NOTHING CHANGED."
+  else
+    typed=""
+    read -r -p "Type the target ($TARGET_LABEL) to confirm you have read these and done what applies: " typed || true
+    [[ "$typed" == "$TARGET_LABEL" ]] \
+      || die "upgrade requirements not acknowledged (expected '$TARGET_LABEL'). NOTHING CHANGED."
+  fi
+  log "Upgrade requirements acknowledged for $TARGET_LABEL"
 fi
 
 # Best-effort in-flight-task warning: a restart interrupts running agents.

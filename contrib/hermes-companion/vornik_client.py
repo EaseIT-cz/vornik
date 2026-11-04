@@ -23,6 +23,13 @@ CAPABILITIES_TTL_SECONDS = 600.0
 CAPABILITIES_NEGATIVE_TTL_SECONDS = 30.0
 
 
+# The plugin names itself on every request. Python's default "Python-urllib"
+# signature is refused by a Cloudflare zone in front of the daemon (error
+# 1010) before the request reaches it (GitHub #628). Keep the version equal to
+# plugin.yaml; tests/test_user_agent.py checks it.
+USER_AGENT = "vornik-companion/0.22.2 (hermes)"
+
+
 class VornikError(Exception):
     """Transport or protocol failure (not a tool-level refusal)."""
 
@@ -77,7 +84,8 @@ class VornikClient:
     def _request(self, method: str, path: str, body=None, timeout=None, identity=None):
         base_url, token = identity or self.identity()
         data = None
-        headers = {"Authorization": "Bearer " + token, "Accept": "application/json"}
+        headers = {"Authorization": "Bearer " + token, "Accept": "application/json",
+                   "User-Agent": USER_AGENT}
         if body is not None:
             data = json.dumps(body).encode("utf-8")
             headers["Content-Type"] = "application/json"

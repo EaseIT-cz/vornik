@@ -82,6 +82,9 @@
                          too); edition is. (2026-07-13 CE admin-console gating.) */}}
                     <ul class="space-y-2 text-sm">
                         {{if .FirewallAvailable}}<li><a class="text-brand-400 hover:text-brand-300" href="/ui/admin/memory/firewall">Memory firewall <span class="text-[10px] text-gray-500">— policy evaluations + per-chunk edit</span></a></li>{{end}}
+                        {{/* Credentials omitted here: it is the second tab of the
+                             Admin nav's "Keys & access" entry (2026-11-02; same
+                             dedupe rule as API keys below). */}}
                         {{if .EnterpriseAdmin}}
                         <li><a class="text-brand-400 hover:text-brand-300" href="/ui/admin/users">Users <span class="text-[10px] text-gray-500">— approve logins, roles, project access</span>{{if gt .AwaitingUsers 0}} <span class="px-1.5 py-0.5 text-[10px] font-mono rounded bg-amber-900/60 text-amber-600 dark:text-amber-200">{{.AwaitingUsers}} awaiting</span>{{end}}</a></li>
                         <li><a class="text-brand-400 hover:text-brand-300" href="/ui/admin/audit">Audit log <span class="text-[10px] text-gray-500">— admin-initiated mutations</span></a></li>

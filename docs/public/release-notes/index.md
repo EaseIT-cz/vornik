@@ -1,7 +1,7 @@
 ---
 sources:
     - path: docs/release-notes
-      sha256: cbcb571e1215868b354f689963ca3044b52b85f9fc7fe0a1e11d3d4092714dff
+      sha256: b4957bae1db465aadabc1512c14706c7b840c27f78d35cfc132e378f9db82cc3
 ---
 # Release Notes
 
@@ -14,6 +14,55 @@ behavior changes, and notable fixes. Internal-only changes are omitted.
     so upgrades generally require no config changes. Always take a backup
     before upgrading. A few releases ask you to restart the daemon to pick up
     new behavior; those are called out below.
+
+---
+
+## 2026.11.2
+
+Draft: not yet released.
+
+!!! warning "Upgrade requirements"
+    - **A database API key is bound by its flags on every route.** A key
+      minted with `vornikctl key create` reads project memory only with
+      `memory_read` and writes it only with `memory_write`; with a workflow
+      list it reaches only the A2A routes of those workflows; and it can no
+      longer create, list or change keys. Use a static key, an admin key or
+      the console for key management. Agent keys, companion keys, static keys
+      and console sessions are unchanged.
+    - **Read these boxes yourself for this upgrade.** From 2026.11.2 on,
+      `vornik-update.sh` prints the upgrade requirements of every release you
+      are upgrading across and will not run unattended until you pass
+      `--ack-upgrade-requirements=<target>` (with `--yes`, an acknowledgement
+      alone is not enough). The upgrade TO 2026.11.2 still runs the older
+      updater, which neither shows them nor knows the flag.
+
+- **A project key given to an A2A caller can no longer read the project's
+  memory or keys** (security). Before, a key narrowed to one workflow was
+  still a full key on the REST API of its project.
+- **Add MCP tokens without a shell.** A `secret://NAME` reference now
+  resolves from the daemon's environment, then from credentials you enter on
+  **Admin → Keys & access → Credentials** (`/ui/credentials`) or type in the control plane's MCP form. Values are
+  stored encrypted, never shown again, and every change is audited; saving
+  registers a server that was waiting for its token, with no restart.
+- **The updater shows what to do before an upgrade** (fix). `vornik-update.sh`
+  prints the "Upgrade requirements" of every release between the installed one
+  and the target, read from the target's notes, before it changes anything.
+  It continues only after you type the target's name, or, with `--yes`, after
+  `--ack-upgrade-requirements=<target>`. `--check` prints them too.
+- **Companion plugins work behind Cloudflare** (fix). The Claude Code plugin
+  (0.48.1) and the Hermes plugin (0.22.2) name themselves on every call, as
+  `vornik-companion/<version>`. Python's default signature was refused by
+  Cloudflare with `error code: 1010`, so `/upload` failed for a daemon behind
+  it. A proxy or firewall in front of the daemon should allow that name.
+- **A later agent step can read a system step's output** (fix). A step prompt
+  can now reference a system step's result with `${outputs.<step>.<field>}`,
+  for example `${outputs.fetch_diff.diff}` in a review workflow's second agent
+  step. Before, such a reference passed validation and failed every run with
+  `prompt reference unresolved`, so only the agent step directly after the
+  system step saw the diff. A value longer than 256 KiB is cut, and the prompt
+  says so. The value is otherwise inserted as-is: wrap it in your own
+  delimiters and tell the model it is data, because a pull request's author
+  controls a diff's text.
 
 ---
 

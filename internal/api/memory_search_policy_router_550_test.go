@@ -59,13 +59,15 @@ func newRig550(t *testing.T) rig550 {
 		CurrentStepID: &step, Status: persistence.ExecutionStatusRunning, CreatedAt: time.Now().UTC(),
 	}))
 	keyRepo := sqlite.NewAPIKeyRepository(db.DB)
+	// Every key here may search memory: a plain key needs memory_read for it
+	// since #613, and agent keys ignore the flag (their role policy governs).
 	mint := func(name, createdBy string) string {
 		raw, err := apikey.Generate(tcProjectID)
 		require.NoError(t, err)
 		require.NoError(t, keyRepo.Create(ctx, &persistence.APIKey{
 			ID: persistence.GenerateID("akey"), ProjectID: tcProjectID, Name: name,
 			KeyHash: apikey.Hash(raw), KeyPrefix: apikey.DisplayPrefix(raw),
-			CreatedBy: createdBy, CreatedAt: time.Now().UTC(),
+			CreatedBy: createdBy, CreatedAt: time.Now().UTC(), MemoryRead: true,
 		}))
 		return raw
 	}

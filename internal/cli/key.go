@@ -123,6 +123,11 @@ Add / remove modes fetch the current list, mutate, and PUT the
 result — last writer wins on concurrent edits. Set mode is the
 raw PUT.
 
+On a key minted with 'vornikctl key create' (no client kind), a
+non-empty list also confines the key to the A2A routes of those
+workflows, /a2a/v1/agents/<project>/<workflow>: it can no longer
+read the project's tasks, memory or keys over the REST API.
+
 Examples:
   vornikctl key update -p my-project --add-workflow=rag-ingest <keyID>
   vornikctl key update -p my-project --remove-workflow=doc-review <keyID>

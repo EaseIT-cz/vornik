@@ -473,6 +473,13 @@ func (c AuthConfig) serveAuthEnabled(w http.ResponseWriter, r *http.Request, nex
 				"an agent's key may only use the agent routes")
 			return
 		}
+		// A plain key's workflow list and memory flags bind it, and it does
+		// not manage keys (GitHub #613).
+		// see LLD § https://docs.vornik.io, Amendment 2026-11-01 (#613)
+		if code, msg := plainKeyRefusal(dbRow, r.Method, r.URL.Path); code != "" {
+			respondError(w, http.StatusForbidden, code, msg)
+			return
+		}
 	}
 	next.ServeHTTP(w, r.WithContext(stampIdentityContext(r.Context(), identity, apiKey, c)))
 }

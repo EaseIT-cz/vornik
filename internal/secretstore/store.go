@@ -82,6 +82,13 @@ func (s *Store) PreparePut(ns, name, kind string, value []byte, device string) (
 	if kind != "secret" && kind != "oauth_token" {
 		return nil, fmt.Errorf("secretstore: unknown kind %q", kind)
 	}
+	return s.seal(ns, name, kind, value, device)
+}
+
+// seal builds a sealed row for (ns, name). Callers check the namespace and
+// name first: the agent paths with check, the operator paths with their own
+// reserved namespace.
+func (s *Store) seal(ns, name, kind string, value []byte, device string) (*persistence.AgentSecretRow, error) {
 	if len(value) == 0 {
 		// Source reads an empty value as unset; refuse it here so no row
 		// exists that reads as missing.
@@ -108,6 +115,11 @@ func (s *Store) Get(ctx context.Context, ns, name string) ([]byte, error) {
 	if err := check(ns, name); err != nil {
 		return nil, err
 	}
+	return s.open(ctx, ns, name)
+}
+
+// open reads and opens (ns, name). Callers check the namespace and name.
+func (s *Store) open(ctx context.Context, ns, name string) ([]byte, error) {
 	row, err := s.repo.Get(ctx, ns, name)
 	if errors.Is(err, persistence.ErrNotFound) {
 		return nil, fmt.Errorf("%w: %s/%s", ErrNotFound, ns, name)
@@ -135,6 +147,10 @@ func (s *Store) List(ctx context.Context, ns string) ([]Meta, error) {
 	if !agentns.Valid(ns) {
 		return nil, fmt.Errorf("secretstore: invalid namespace %q", ns)
 	}
+	return s.list(ctx, ns)
+}
+
+func (s *Store) list(ctx context.Context, ns string) ([]Meta, error) {
 	rows, err := s.repo.List(ctx, ns)
 	if err != nil {
 		return nil, err
@@ -167,4 +183,55 @@ const (
 // Every daemon sharing the master key derives the same seed.
 func (s *Store) AIMarkSigningSeed() ([]byte, error) {
 	return hkdf.Key(sha256.New, s.master, []byte(aimarkSigningSalt), aimarkSigningInfo, ed25519.SeedSize)
+}
+
+// operatorCredentialsNamespace holds the credentials an operator (or a managed
+// instance's tenant_admin) enters in the console, which an un-namespaced
+// secret://NAME reference reads after the environment (GitHub #623). It fails
+// agentns.Valid, so check refuses it on every agent path and no
+// secret://<ns>/NAME reference can name it; its HKDF domain is its own, apart
+// from the _operator sealing domain.
+// see LLD § https://docs.vornik.io, Amendment 2026-11-02 (#623)
+const operatorCredentialsNamespace = "_operator_credentials"
+
+func checkOperatorName(name string) error {
+	if !agentns.ValidSecretName(name) {
+		return fmt.Errorf("secretstore: invalid credential name %q (use A-Z, 0-9 and _, starting with a letter)", name)
+	}
+	return nil
+}
+
+// PutOperatorCredential seals value under name; actor is the console
+// principal, recorded in created_by_device.
+func (s *Store) PutOperatorCredential(ctx context.Context, name string, value []byte, actor string) error {
+	if err := checkOperatorName(name); err != nil {
+		return err
+	}
+	row, err := s.seal(operatorCredentialsNamespace, name, "secret", value, actor)
+	if err != nil {
+		return err
+	}
+	return s.repo.Upsert(ctx, *row)
+}
+
+// GetOperatorCredential opens the operator credential name.
+func (s *Store) GetOperatorCredential(ctx context.Context, name string) ([]byte, error) {
+	if err := checkOperatorName(name); err != nil {
+		return nil, err
+	}
+	return s.open(ctx, operatorCredentialsNamespace, name)
+}
+
+// ListOperatorCredentials returns the operator credentials' metadata, never a
+// value.
+func (s *Store) ListOperatorCredentials(ctx context.Context) ([]Meta, error) {
+	return s.list(ctx, operatorCredentialsNamespace)
+}
+
+// DeleteOperatorCredential removes name; a missing one is not an error.
+func (s *Store) DeleteOperatorCredential(ctx context.Context, name string) error {
+	if err := checkOperatorName(name); err != nil {
+		return err
+	}
+	return s.repo.Delete(ctx, operatorCredentialsNamespace, name)
 }

@@ -289,6 +289,11 @@ func respondAccountErrorStatus(w http.ResponseWriter, err error) {
 	case errors.Is(err, authz.ErrKeyClaimRefused):
 		// One status, one message, for all three causes (§5.4).
 		respondError(w, http.StatusForbidden, "CLAIM_REFUSED", claimRefusalMessage)
+	case errors.Is(err, authz.ErrKeyNotALogin):
+		// An admin assign of an A2A caller key (#622). The admin is
+		// authorised to know why, so the reason is the message.
+		respondError(w, http.StatusConflict, "KEY_NOT_A_LOGIN",
+			"a key limited to workflows is an A2A key and cannot be mapped to an account")
 	case errors.Is(err, authz.ErrLinkCodeInvalid):
 		respondError(w, http.StatusForbidden, "LINK_CODE_INVALID", "link code not valid")
 	case errors.Is(err, authz.ErrIdentityAlreadyLinked):

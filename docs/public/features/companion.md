@@ -5,7 +5,7 @@ sources:
     - path: internal/api/companion_mcp.go
       sha256: 01f7c494025657d6195f169c81e7ebb2a4cc9e2374b08862a043d2685b0632c4
     - path: contrib/claude-code-companion/.claude-plugin/plugin.json
-      sha256: c6b11a28679ba4bcfc20ad9d8999972f8e8f6cca5529811baf43adc3decf073b
+      sha256: e8e938eaf4e0f50a2d9d5cb79c7925c146de8a29e487e1dc0b1bdb82aa569293
     - path: contrib/codex-companion/.codex-plugin/plugin.json
       sha256: 8ba365101517b05aaf0c88563cdf77a6065531373fea977b1e0e0bf5021e8742
 ---
@@ -739,6 +739,13 @@ these steps. Once
 loaded, the tools and slash commands are available in the session, and a
 start-up digest brings recently-completed delegations and fresh memory back into
 context.
+
+If a proxy or web application firewall (such as Cloudflare) sits in front of
+the daemon, allow the companion plugins by name. They send
+`User-Agent: vornik-companion/<version> (claude-code)` (Claude Code plugin
+0.48.1 and later) or `(hermes)` (Hermes plugin 0.22.2 and later) on every
+call. Older versions sent Python's default signature, which Cloudflare
+refuses with `error code: 1010`.
 
 The hook also fires **after a compaction**, and does something different there:
 it re-plants the standing directives — repo scope, recall-before-reading-code,

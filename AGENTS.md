@@ -346,7 +346,10 @@ git -C ~/vornik show <newest-tag>:docs/public/release-notes/index.md | less
 ```
 
 Read the section of **every** release after the one you run, up to the
-target (also at https://docs.vornik.io/release-notes/).
+target (also at https://docs.vornik.io/release-notes/). From the updater
+shipped in 2026.11.2, `--check` prints those boxes for you, read from the
+target's notes; the first upgrade to 2026.11.2 still runs the older updater,
+so read them yourself for that one.
 
 **Check:** for each "Upgrade requirements" item, either it does not apply to
 this install, or you have done it. Show your user the list and what you did
@@ -360,8 +363,15 @@ cd ~/vornik/deployments/podman
 ./vornik-update.sh --check                  # is a newer tag available? (changes nothing)
 ./vornik-update.sh                          # upgrade to the newest tag (asks to confirm)
 ./vornik-update.sh --ref origin/main        # or track the tip of main
-./vornik-update.sh --yes                    # skip the prompt (automation)
+./vornik-update.sh --yes --ack-upgrade-requirements=<target>
+                                            # automation: --yes alone does not pass
+                                            # the upgrade-requirements gate
 ```
+
+When the target has upgrade requirements, the updater prints them and stops
+until they are acknowledged: interactively by typing the target's name, with
+`--yes` by `--ack-upgrade-requirements=<target>`. Pass the flag only after the
+D1 check, with your user's go-ahead.
 
 **Check:** the run ends with `Upgrade complete.` and prints `/readyz : ready`
 plus the `DB migr : vN -> vM` bump.

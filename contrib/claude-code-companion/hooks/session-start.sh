@@ -176,6 +176,11 @@ REPO_SCOPE=$(resolve_repo_scope)
 # directly rather than going through Claude — the hook isn't an MCP
 # client of its own.
 MCP_URL="$VORNIK_URL/api/v1/mcp/companion"
+# The plugin names itself: a Cloudflare zone in front of the daemon refuses a
+# client by its signature (error 1010), which blocked every /upload (GitHub
+# #628). Keep the version equal to plugin.json; scripts/user_agent_test.sh
+# checks it.
+VORNIK_UA="vornik-companion/0.48.1 (claude-code)"
 
 # build_digest emits the digest's markdown to stdout. Wrapped in a
 # function so the caller can capture it once at the end and emit the
@@ -208,6 +213,7 @@ EOF
   # digest — Claude Code is already waiting on us.
   local response
   response=$(curl -sS \
+    -A "$VORNIK_UA" \
     --connect-timeout 5 \
     --max-time 10 \
     -H "Content-Type: application/json" \
@@ -263,6 +269,7 @@ EOF
     }
   }')
   recent_response=$(curl -sS \
+    -A "$VORNIK_UA" \
     --connect-timeout 5 \
     --max-time 10 \
     -H "Content-Type: application/json" \

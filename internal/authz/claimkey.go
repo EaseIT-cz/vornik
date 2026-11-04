@@ -41,6 +41,23 @@ var ErrKeyClaimRefused = errors.New("authz: key claim refused")
 // not (audit 2026-09-15 CA-09).
 var ErrKeyClaimRateLimited = errors.New("authz: too many claim attempts for this key")
 
+// ErrKeyNotALogin refuses an admin's mapping of an A2A caller key (#622): a
+// plain key that carries a workflow list. Distinct from ErrKeyClaimRefused
+// because the admin is authorised to know why; the self-service claim answers
+// the one ErrKeyClaimRefused instead.
+var ErrKeyNotALogin = errors.New("authz: a key limited to workflows is an A2A key and cannot be a login")
+
+// isWorkflowCallerKey reports whether key is a plain key that carries a
+// workflow list: an A2A caller key, which #613 confines to its A2A workflows
+// and which must never be mapped to a person, because a mapped key is that
+// person's console login (#622, option 2). Companion keys (a client kind) map
+// with a list: they are mapped for attribution and cannot reach the session
+// exchange.
+// see LLD § https://docs.vornik.io, Amendment 2026-11-02 (#622)
+func isWorkflowCallerKey(key *persistence.APIKey) bool {
+	return key != nil && key.ClientKind == "" && len(key.AllowedWorkflows) > 0
+}
+
 // ErrKeysUnavailable is returned when no API-key repository is wired.
 var ErrKeysUnavailable = errors.New("authz: key claims not available")
 
@@ -101,6 +118,11 @@ func (a *Accounts) ClaimKey(ctx context.Context, userID, keyID, secret string, a
 		return ErrKeyClaimRefused
 	case !secretMatches(key.KeyHash, secret):
 		return ErrKeyClaimRefused
+	case isWorkflowCallerKey(key):
+		// An A2A caller key is never a login (#622). The same refusal as
+		// the rest, decided after the same lookups: the claimant learns
+		// nothing about the key's kind.
+		return ErrKeyClaimRefused
 	case ownerID == userID:
 		// Already theirs: nothing to change, and nothing to refuse either.
 		return nil
@@ -126,11 +148,15 @@ func (a *Accounts) AssignKey(ctx context.Context, userID, keyID string, actor Ac
 	if a.keys == nil {
 		return ErrKeysUnavailable
 	}
-	if _, err := a.keys.GetByID(ctx, keyID); err != nil {
+	key, err := a.keys.GetByID(ctx, keyID)
+	if err != nil {
 		// An admin may be told the key does not exist: they are already
 		// authenticated and authorized to know, and the oracle §5.4 closes
 		// is one for unauthenticated probing.
 		return fmt.Errorf("authz: assign key: %w", err)
+	}
+	if isWorkflowCallerKey(key) {
+		return ErrKeyNotALogin
 	}
 	if _, err := a.Get(ctx, userID); err != nil {
 		return fmt.Errorf("authz: assign key: %w", err)

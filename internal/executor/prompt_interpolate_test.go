@@ -5,6 +5,7 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"unicode/utf8"
 
 	"github.com/rs/zerolog"
 	"vornik.io/vornik/internal/persistence"
@@ -174,5 +175,44 @@ func TestAssembleStepPrompt_UnresolvedReferenceFailsTheStep(t *testing.T) {
 		&executionState{StepResults: map[string]json.RawMessage{}})
 	if !errors.Is(err, errPromptRefUnresolved) {
 		t.Fatalf("error = %v, want errPromptRefUnresolved", err)
+	}
+}
+
+// GitHub #631, design E2: an interpolated value is capped like the chain, with
+// the cut stated in the text, so an outsider-inflated diff cannot overflow a
+// later agent's window and the model knows it reads part of the value.
+func TestInterpolatePromptRefs_CapsAnOversizedValueVisibly(t *testing.T) {
+	huge := strings.Repeat("d", systemResultMaxBytes+4096)
+	raw, err := json.Marshal(map[string]any{"diff": huge})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := interpolatePromptRefs("<diff>${outputs.fetch.diff}</diff>",
+		map[string]json.RawMessage{"fetch": raw})
+	if err != nil {
+		t.Fatal(err)
+	}
+	inner := strings.TrimSuffix(strings.TrimPrefix(got, "<diff>"), "</diff>")
+	if len(inner) != systemResultMaxBytes {
+		t.Fatalf("capped value is %d bytes, want exactly %d", len(inner), systemResultMaxBytes)
+	}
+	if !strings.Contains(inner, "truncated: ${outputs.fetch.diff}") {
+		t.Fatal("the cut must be stated in the text and name the reference")
+	}
+
+	small, err := interpolatePromptRefs("${outputs.fetch.n}", map[string]json.RawMessage{"fetch": json.RawMessage(`{"n":49}`)})
+	if err != nil || small != "49" {
+		t.Fatalf("a small value must pass through unchanged, got %q, %v", small, err)
+	}
+}
+
+// The cut never splits a multi-byte character (#631, C6).
+func TestCapPromptRefValue_KeepsValidUTF8(t *testing.T) {
+	got := capPromptRefValue("${outputs.f.d}", strings.Repeat("é", systemResultMaxBytes))
+	if !utf8.ValidString(got) {
+		t.Fatal("the capped value must stay valid UTF-8")
+	}
+	if len(got) > systemResultMaxBytes {
+		t.Fatalf("capped value is %d bytes, over the %d budget", len(got), systemResultMaxBytes)
 	}
 }

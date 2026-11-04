@@ -87,13 +87,18 @@ var adminClassResolvers = map[string]int{
 	"internal/api/reminders_handlers.go": 2,
 	"internal/api/routes.go":             2,
 	"internal/ui/admin.go":               1,
-	"internal/ui/chat.go":                1,
-	"internal/ui/fixit_doctor.go":        1,
-	"internal/ui/memory.go":              1,
-	"internal/ui/memory_operators.go":    3,
-	"internal/ui/operator_accounts.go":   2,
-	"internal/ui/reminders.go":           1,
-	"internal/ui/server.go":              1,
+	// GitHub #623: the credentials page's surface gate (OperatorSurfaceAccessFor
+	// takes the admin-key checker) and its IsAdmin nav flag. On a managed
+	// instance's public listener the listener gate refuses admin keys first,
+	// so a tenant_admin session is admitted only through the granted surface.
+	"internal/ui/admin_credentials.go": 2,
+	"internal/ui/chat.go":              1,
+	"internal/ui/fixit_doctor.go":      1,
+	"internal/ui/memory.go":            1,
+	"internal/ui/memory_operators.go":  3,
+	"internal/ui/operator_accounts.go": 2,
+	"internal/ui/reminders.go":         1,
+	"internal/ui/server.go":            1,
 }
 
 var adminClassResolverRe = regexp.MustCompile(`\.IsAdminKey\(|IsAdminClassRequest\(|isAdminClassKey\(|IsAdminFromContext\(`)

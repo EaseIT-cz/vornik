@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"unicode/utf8"
 )
 
 // errPromptRefUnresolved marks a ${outputs.<step>.<field>} reference in an
@@ -49,9 +50,36 @@ func interpolatePromptRefs(prompt string, stepResults map[string]json.RawMessage
 				"%w: ${outputs.%s.%s} — step %q has no readable %q in this execution's step results",
 				errPromptRefUnresolved, step, field, step, field)
 		}
-		b.WriteString(scalarStringForm(val))
+		b.WriteString(capPromptRefValue(prompt[m[0]:m[1]], scalarStringForm(val)))
 		last = m[1]
 	}
 	b.WriteString(prompt[last:])
 	return b.String(), nil
+}
+
+// capPromptRefValue bounds one interpolated value to the same budget the
+// system-step chain uses (systemResultMaxBytes), and says so IN the text when
+// it cuts, so the model knows it is reading part of the value.
+//
+// A system step's result can be a whole pull-request diff, up to 1 MiB, whose
+// bytes the pull request's author controls. Uncapped, an inflated diff could
+// overflow the window of every later agent that references it, a run failure
+// an outsider can trigger. (GitHub #631; design
+// 2026-09-03-system-step-output-reaches-the-next-agent-design.md, Amendment
+// 2026-11-03, E2.)
+func capPromptRefValue(ref, val string) string {
+	if len(val) <= systemResultMaxBytes {
+		return val
+	}
+	marker := "\n\n[... truncated: " + ref + " exceeded the context budget. You are seeing " +
+		"the FIRST part only. Do not treat it as complete.]"
+	cut := systemResultMaxBytes - len(marker)
+	if cut <= 0 { // only a reference longer than the budget itself
+		return marker
+	}
+	// Back up to a rune boundary so the prompt stays valid UTF-8.
+	for cut > 0 && !utf8.RuneStart(val[cut]) {
+		cut--
+	}
+	return val[:cut] + marker
 }

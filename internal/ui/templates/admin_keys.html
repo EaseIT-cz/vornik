@@ -21,6 +21,7 @@
                 <a href="/ui/admin/" class="text-xs text-brand-400 hover:text-brand-300 ml-auto">← Admin</a>
             </div>
 
+            {{template "keysAccessTabs" (keysAccessTab "keys" true)}}
             <p class="text-xs text-gray-500 max-w-3xl">
                 Daemon-wide inventory of every DB-backed API key across every project. Read-only — create / rotate / revoke from <code class="font-mono text-gray-400">/ui/projects/{id}/keys</code>. Sorted newest-first so recent rotations land at the top.
             </p>

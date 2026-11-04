@@ -37,6 +37,12 @@ const (
 	SurfaceOperatorProposals    Surface = "operator_proposals"
 	SurfaceOperators            Surface = "operators"
 	SurfaceSkillSetGlobal       Surface = "skill_set_global"
+	// SurfaceOperatorCredentials is the console's credentials page
+	// (/ui/credentials, GitHub #623; deliberately outside /ui/admin, which admin.Middleware reserves for admins): the operator, or a managed
+	// instance's owner with no shell, enters the values that
+	// un-namespaced secret:// references resolve to. Its gate is in the UI
+	// package (api.OperatorSurfaceAccessFor).
+	SurfaceOperatorCredentials Surface = "operator_credentials"
 )
 
 // tenantAdminSurfaces is the closed allowlist of B3: granted surfaces only.
@@ -45,6 +51,10 @@ var tenantAdminSurfaces = map[Surface]bool{
 	SurfaceWizard:          true,
 	SurfaceMCPOAuthConnect: true,
 	SurfaceOperatorAudit:   true,
+	// GitHub #623: valid while managed mode is single-customer
+	// (tenant_admin = the instance's owner); a multi-tenant instance
+	// (multi-tenancy design, Stage T) must revisit it.
+	SurfaceOperatorCredentials: true,
 }
 
 // TenantAdminMay reports whether a tenant_admin session may use surface.

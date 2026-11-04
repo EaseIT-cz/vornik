@@ -2877,6 +2877,9 @@ func (c *Container) adminUIOptions(deps adminUIDeps) []ui.ServerOption { //nolin
 			ui.WithAdminMCPRefresher(c.newAdminMCPRefresher()),
 		)
 	}
+	// The console's credentials page (GitHub #623). Always wired: the store is
+	// created on the first write when no key exists yet.
+	opts = append(opts, ui.WithOperatorCredentials(c.newOperatorCredentials()))
 	return opts
 }
 

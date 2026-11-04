@@ -374,6 +374,16 @@
                     then opt in from their config form.
                 </p>
 
+                {{if .MCPWaiting}}
+                <div class="rounded-xl border border-amber-700/50 bg-amber-900/20 p-3 text-sm" role="status" data-mcp-waiting>
+                    <p class="text-amber-700 dark:text-amber-200 font-medium">Waiting for credentials</p>
+                    <p class="text-xs text-gray-400 mb-1">These servers are not registered until their credential exists. Add the value on <a href="/ui/credentials" class="text-brand-400 hover:text-brand-300">Credentials</a>.</p>
+                    <ul class="text-xs font-mono text-gray-300">
+                        {{range .MCPWaiting}}<li data-waiting="{{.Name}}">{{.Name}} — needed by {{range $i, $n := .NeededBy}}{{if $i}}, {{end}}{{$n}}{{end}}</li>{{end}}
+                    </ul>
+                </div>
+                {{end}}
+
                 {{if .MCPRows}}
                 <div class="space-y-2">
                     {{range .MCPRows}}
@@ -500,6 +510,12 @@
                                 <div>
                                     <label class="block text-xs text-gray-400 mb-1" for="mcp-auth-value-from">Value from</label>
                                     <input type="text" id="mcp-auth-value-from" name="auth_value_from" placeholder="secret://N8N_MCP_TOKEN"
+                                           class="w-full rounded-md bg-dark-900 border border-control px-3 py-1.5 text-sm text-gray-100 focus:border-brand-500 focus:outline-none">
+                                    <p class="text-xs text-gray-500 mt-1">A name without a namespace (UPPER_SNAKE_CASE) comes from the daemon's environment, then from <a href="/ui/credentials" class="text-brand-400 hover:text-brand-300">Credentials</a>. The server is not registered until the value exists: provision it there, or type it below.</p>
+                                </div>
+                                <div>
+                                    <label class="block text-xs text-gray-400 mb-1" for="mcp-auth-credential-value">Credential value <span class="text-gray-600">(optional; stored encrypted under the name above when you submit, never shown again)</span></label>
+                                    <input type="password" id="mcp-auth-credential-value" name="auth_credential_value" autocomplete="off" maxlength="16384"
                                            class="w-full rounded-md bg-dark-900 border border-control px-3 py-1.5 text-sm text-gray-100 focus:border-brand-500 focus:outline-none">
                                 </div>
                                 <div>

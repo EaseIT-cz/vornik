@@ -962,6 +962,7 @@ func (e *Executor) executeWorkflowAttempt(ctx context.Context, task *persistence
 					systemChain.Reset()
 					lastResultMessage = fmt.Sprintf("system step %s failed: %s", step.Handler, err.Error())
 					state.LastResult = errorResultJSON(err)
+					delete(state.StepResults, currentStepID) // as on the handler-error path below (#631)
 					if saveErr := e.saveCheckpoint(ctx, execution, step.OnFail, completedSteps, state); saveErr != nil {
 						return "", nil, completedSteps, saveErr
 					}
@@ -1020,6 +1021,9 @@ func (e *Executor) executeWorkflowAttempt(ctx context.Context, task *persistence
 					systemChain.Reset()
 					lastResultMessage = fmt.Sprintf("system step %s failed: %s", step.Handler, sysErr.Error())
 					state.LastResult = errorResultJSON(sysErr)
+					// A failed RE-RUN must not leave the previous run's output
+					// readable as if it were current (#631, design E1).
+					delete(state.StepResults, currentStepID)
 					if saveErr := e.saveCheckpoint(ctx, execution, step.OnFail, completedSteps, state); saveErr != nil {
 						return "", nil, completedSteps, saveErr
 					}
@@ -1044,6 +1048,25 @@ func (e *Executor) executeWorkflowAttempt(ctx context.Context, task *persistence
 			completedSteps = append(completedSteps, currentStepID)
 			if len(sysResult.Result) > 0 {
 				state.LastResult = stepResultJSON(sysResult.Result)
+				// Mirror into the per-step map ${outputs.<step>.<field>} reads,
+				// exactly as the agent success path does, so a LATER agent can
+				// read this step's fields; the chain below reaches only the next
+				// one. Same checkpoint write as LastResult.
+				//
+				// CUSTOMER-REPORTED 2026-11-03 (GitHub #631): without this, a
+				// prompt reference to forge.fetch_diff passed validation and
+				// failed every run, and the adjudicator after the reviewer never
+				// saw the diff. An empty or failed result writes no entry, so a
+				// reference to it still fails closed.
+				//
+				// Design: 2026-09-03-system-step-output-reaches-the-next-agent-design.md,
+				// Amendment 2026-11-03, E1.
+				if state.StepResults == nil {
+					state.StepResults = map[string]json.RawMessage{}
+				}
+				// A copy, not an alias of LastResult's bytes: the two are
+				// repaired and reassigned independently.
+				state.StepResults[currentStepID] = append(json.RawMessage(nil), state.LastResult...)
 				// Carry the handler's own rendering to the NEXT agent step, the
 				// same way an agent step's message is carried (see the agent
 				// success path above).
@@ -1070,6 +1093,9 @@ func (e *Executor) executeWorkflowAttempt(ctx context.Context, task *persistence
 				lastResultMessage = systemChain.Render()
 			} else {
 				state.LastResult = []byte(`{}`)
+				// Nothing to read, so no entry, including on a re-run whose
+				// earlier run did write one (#631, design E1).
+				delete(state.StepResults, currentStepID)
 				// An empty result CONTRIBUTES NOTHING and no longer clears.
 				//
 				// It used to clear, correctly: without accumulation, leaving

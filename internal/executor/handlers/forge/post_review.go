@@ -2,9 +2,11 @@ package forge
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"regexp"
 	"strings"
 	"time"
 
@@ -14,6 +16,7 @@ import (
 	"vornik.io/vornik/internal/executor"
 	forgeapi "vornik.io/vornik/internal/forge"
 	"vornik.io/vornik/internal/persistence"
+	"vornik.io/vornik/internal/secrets"
 )
 
 // Discloser supplies the EU AI Act Art 50(1) notice for authored artifacts.
@@ -23,12 +26,24 @@ type Discloser interface {
 	PublicationNotice() aidisclosure.Notice
 }
 
+// These high-precision rules supplement the configurable shared detector at
+// this public egress boundary. They target short values that the generic
+// secret detector intentionally treats as heuristic, without blocking on
+// entropy alone.
+var forgeReviewCredentialPatterns = []*regexp.Regexp{
+	regexp.MustCompile(`(?i)\bauthorization\s*:\s*basic\s+[A-Za-z0-9+/]{8,}={0,2}`),
+	regexp.MustCompile(`(?:^|[^A-Za-z0-9+/])([A-Za-z0-9+/]{8,}={0,2})(?:$|[^A-Za-z0-9+/=])`),
+	regexp.MustCompile(`(?i)\b(?:api[_-]?key|password|passwd|secret|token|auth(?:[_-]?token)?)\s*[:=]\s*['"]?[A-Za-z0-9!@#$%^&*()_+\-=/.]{8,}['"]?`),
+	regexp.MustCompile(`(?i)\b(?:decoded\s+(?:as|to)|basic\s+auth(?:entication)?(?:\s+credentials?)?)\s*[:=]?\s*[A-Za-z0-9_.-]{1,64}:[A-Za-z0-9!@#$%^&*()_+={}\[\]:;,.?/-]{3,128}`),
+}
+
 // PostReviewHandler implements the "forge.post_review" system step: post the
 // reviewer agent's prose against the change request as a review/note. The body
 // is the LLM's text; the posting itself is deterministic.
 type PostReviewHandler struct {
-	resolver   ProviderResolver
-	disclosure Discloser
+	resolver       ProviderResolver
+	disclosure     Discloser
+	secretDetector secrets.Detector
 
 	// reviewState advances the incremental baseline once a review has actually
 	// posted (design §6). Optional: nil simply means no baseline is recorded,
@@ -62,6 +77,16 @@ func (h *PostReviewHandler) WithCIGate(o persistence.ForgeCIOutcomeRepository, b
 func (h *PostReviewHandler) WithReviewState(s persistence.ForgePRReviewStateRepository) *PostReviewHandler {
 	if h != nil {
 		h.reviewState = s
+	}
+	return h
+}
+
+// WithSecretDetector attaches the configured detector used at the public
+// Forge publication boundary. A nil detector deliberately makes Execute
+// refuse publication.
+func (h *PostReviewHandler) WithSecretDetector(d secrets.Detector) *PostReviewHandler {
+	if h != nil {
+		h.secretDetector = d
 	}
 	return h
 }
@@ -328,6 +353,9 @@ func (h *PostReviewHandler) Execute(ctx context.Context, in executor.SystemStepI
 		body = ciWithheldNotice(failing) + body
 		body = withRequestQuote(body, job)
 		body = aidisclosure.WithFooter(body, h.disclosure.PublicationNotice())
+		if err := h.checkReviewBody(body); err != nil {
+			return executor.SystemStepResult{}, fmt.Errorf("%s: %w", name, err)
+		}
 		// A COMMENT, not REQUEST_CHANGES. The prose says the change is fine;
 		// posting it under a rejecting state puts approving words in a
 		// rejecting envelope and a reader cannot tell which half to believe.
@@ -346,6 +374,9 @@ func (h *PostReviewHandler) Execute(ctx context.Context, in executor.SystemStepI
 
 	body = withRequestQuote(body, job)
 	body = aidisclosure.WithFooter(body, h.disclosure.PublicationNotice())
+	if err := h.checkReviewBody(body); err != nil {
+		return executor.SystemStepResult{}, fmt.Errorf("%s: %w", name, err)
+	}
 	if err := provider.PostReview(ctx, job.Repo, job.Number, forgeapi.ReviewSpec{Body: body, Event: event}); err != nil {
 		return executor.SystemStepResult{}, fmt.Errorf("%s: post review: %w", name, err)
 	}
@@ -381,6 +412,60 @@ func (h *PostReviewHandler) Execute(ctx context.Context, in executor.SystemStepI
 	}
 
 	return finishPostReview(job, event)
+}
+
+// checkReviewBody scans the exact text that would be sent to a public Forge
+// endpoint. Never return or log a matched value: it may be a live credential.
+func (h *PostReviewHandler) checkReviewBody(body string) error {
+	if h.secretDetector == nil {
+		return errors.New("secret detector unavailable; refusing publication")
+	}
+	for _, pattern := range forgeReviewCredentialPatterns {
+		if pattern.MatchString(body) {
+			if pattern == forgeReviewCredentialPatterns[1] && !containsEncodedBasicAuth(body, pattern) {
+				continue
+			}
+			return errors.New("credential-shaped content in review body; refusing publication")
+		}
+	}
+	if findings := secrets.DropHeuristic(h.secretDetector.Scan([]byte(body))); len(findings) > 0 {
+		return errors.New("credential-shaped content in review body; refusing publication")
+	}
+	return nil
+}
+
+// containsEncodedBasicAuth catches a short, detached Base64 Basic value when
+// the model repeats it without its Authorization header. A candidate blocks
+// only when it decodes to printable username:password material.
+func containsEncodedBasicAuth(body string, pattern *regexp.Regexp) bool {
+	for _, match := range pattern.FindAllStringSubmatch(body, -1) {
+		if len(match) < 2 {
+			continue
+		}
+		token := match[1]
+		decoded, err := base64.StdEncoding.DecodeString(token)
+		if err != nil {
+			decoded, err = base64.RawStdEncoding.DecodeString(token)
+		}
+		if err != nil {
+			continue
+		}
+		colon := strings.IndexByte(string(decoded), ':')
+		if colon <= 0 || colon == len(decoded)-1 || strings.IndexByte(string(decoded[colon+1:]), ':') >= 0 {
+			continue
+		}
+		printable := true
+		for _, b := range decoded {
+			if b < 0x20 || b > 0x7e {
+				printable = false
+				break
+			}
+		}
+		if printable {
+			return true
+		}
+	}
+	return false
 }
 
 // finishPostReview builds the step result. Extracted so the baseline-advance

@@ -15,7 +15,16 @@ import (
 	forgeapi "vornik.io/vornik/internal/forge"
 	"vornik.io/vornik/internal/persistence"
 	"vornik.io/vornik/internal/registry"
+	"vornik.io/vornik/internal/secrets"
 )
+
+func newTestPostReviewHandler(resolver ProviderResolver, disclosure Discloser) *PostReviewHandler {
+	detector, err := secrets.NewMultiDetector(secrets.Config{})
+	if err != nil {
+		panic(err)
+	}
+	return NewPostReviewHandler(resolver, disclosure).WithSecretDetector(detector)
+}
 
 // --- fakes ---
 
@@ -329,7 +338,7 @@ func TestPostReview_HappyPathAndEventMapping(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			prov := &fakeProvider{}
-			h := NewPostReviewHandler(fakeResolver{p: prov}, realDiscloser())
+			h := newTestPostReviewHandler(fakeResolver{p: prov}, realDiscloser())
 			in := executor.SystemStepInput{
 				Task:       taskWithJob(forgeapi.ForgeJob{Repo: "o/r", Number: 3}),
 				Step:       &registry.WorkflowStep{Handler: "forge.post_review", GatingReviews: tc.gating},
@@ -377,7 +386,7 @@ func TestPostReview_GatingDerivesEventFromVerdict(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			prov := &fakeProvider{}
-			h := NewPostReviewHandler(fakeResolver{p: prov}, realDiscloser())
+			h := newTestPostReviewHandler(fakeResolver{p: prov}, realDiscloser())
 			in := executor.SystemStepInput{
 				Task:       taskWithJob(forgeapi.ForgeJob{Repo: "o/r", Number: 7}),
 				Step:       &registry.WorkflowStep{Handler: "forge.post_review", GatingReviews: tc.gating},
@@ -401,7 +410,7 @@ func TestPostReview_Errors(t *testing.T) {
 		t.Error("missing deps should error")
 	}
 	// empty body
-	h := NewPostReviewHandler(fakeResolver{p: &fakeProvider{}}, realDiscloser())
+	h := newTestPostReviewHandler(fakeResolver{p: &fakeProvider{}}, realDiscloser())
 	if _, err := h.Execute(ctx, executor.SystemStepInput{Task: good, PrevResult: json.RawMessage(`{}`)}); err == nil {
 		t.Error("empty review body should error")
 	}
@@ -410,12 +419,12 @@ func TestPostReview_Errors(t *testing.T) {
 		t.Error("missing job should error")
 	}
 	// resolver error
-	hr := NewPostReviewHandler(fakeResolver{err: errors.New("no provider")}, realDiscloser())
+	hr := newTestPostReviewHandler(fakeResolver{err: errors.New("no provider")}, realDiscloser())
 	if _, err := hr.Execute(ctx, executor.SystemStepInput{Task: good, PrevResult: json.RawMessage(`{"body":"x"}`)}); err == nil {
 		t.Error("resolver error should propagate")
 	}
 	// post error
-	hp := NewPostReviewHandler(fakeResolver{p: &fakeProvider{reviewErr: errors.New("post boom")}}, realDiscloser())
+	hp := newTestPostReviewHandler(fakeResolver{p: &fakeProvider{reviewErr: errors.New("post boom")}}, realDiscloser())
 	if _, err := hp.Execute(ctx, executor.SystemStepInput{Task: good, PrevResult: json.RawMessage(`{"body":"x"}`)}); err == nil {
 		t.Error("post error should propagate")
 	}

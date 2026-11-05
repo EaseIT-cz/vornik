@@ -42,7 +42,7 @@ func wantDisclosedBody(body string) string {
 
 func TestPostReview_G6A_BodyCarriesTheAIDisclosure(t *testing.T) {
 	prov := &fakeProvider{}
-	h := NewPostReviewHandler(fakeResolver{p: prov}, realDiscloser())
+	h := newTestPostReviewHandler(fakeResolver{p: prov}, realDiscloser())
 	in := executor.SystemStepInput{
 		Task:       taskWithJob(forgeapi.ForgeJob{Repo: "o/r", Number: 3}),
 		Step:       &registry.WorkflowStep{Handler: "forge.post_review"},
@@ -71,7 +71,7 @@ func TestPostReview_G6A_BodyCarriesTheAIDisclosure(t *testing.T) {
 // default. Critically: nothing may reach the provider.
 func TestPostReview_G6A_NilDiscloserRefusesAndPostsNothing(t *testing.T) {
 	prov := &fakeProvider{}
-	h := NewPostReviewHandler(fakeResolver{p: prov}, nil)
+	h := newTestPostReviewHandler(fakeResolver{p: prov}, nil)
 	in := executor.SystemStepInput{
 		Task:       taskWithJob(forgeapi.ForgeJob{Repo: "o/r", Number: 3}),
 		PrevResult: json.RawMessage(`{"body":"looks good"}`),
@@ -88,7 +88,7 @@ func TestPostReview_G6A_NilDiscloserRefusesAndPostsNothing(t *testing.T) {
 // interleaved into the reviewer's markdown and not repeated per section.
 func TestPostReview_G6A_NoticeAppendedOnceAfterStructuredReview(t *testing.T) {
 	prov := &fakeProvider{}
-	h := NewPostReviewHandler(fakeResolver{p: prov}, realDiscloser())
+	h := newTestPostReviewHandler(fakeResolver{p: prov}, realDiscloser())
 	prev := `{"message":"{\"review\":{\"approved\":true,\"feedback\":\"Looks solid.\",\"summary\":\"Approved.\"}}"}`
 	in := executor.SystemStepInput{
 		Task:       taskWithJob(forgeapi.ForgeJob{Repo: "o/r", Number: 7}),
@@ -117,7 +117,7 @@ func TestPostReview_G6A_NoticeAppendedOnceAfterStructuredReview(t *testing.T) {
 // must not become the body of an otherwise-empty review.
 func TestPostReview_G6A_EmptyReviewDoesNotBecomeADisclosureOnlyComment(t *testing.T) {
 	prov := &fakeProvider{}
-	h := NewPostReviewHandler(fakeResolver{p: prov}, realDiscloser())
+	h := newTestPostReviewHandler(fakeResolver{p: prov}, realDiscloser())
 	in := executor.SystemStepInput{
 		Task:       taskWithJob(forgeapi.ForgeJob{Repo: "o/r", Number: 3}),
 		PrevResult: json.RawMessage(`{}`),
@@ -144,7 +144,7 @@ func TestPostReview_G6A_DisclosureDoesNotAffectGatingEvent(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			prov := &fakeProvider{}
-			h := NewPostReviewHandler(fakeResolver{p: prov}, realDiscloser())
+			h := newTestPostReviewHandler(fakeResolver{p: prov}, realDiscloser())
 			in := executor.SystemStepInput{
 				Task:       taskWithJob(forgeapi.ForgeJob{Repo: "o/r", Number: 3}),
 				Step:       &registry.WorkflowStep{Handler: "forge.post_review", GatingReviews: tc.gating},
@@ -164,7 +164,7 @@ func TestPostReview_G6A_DisclosureDoesNotAffectGatingEvent(t *testing.T) {
 // pins that the new dependency did not reorder the existing guards.
 func TestPostReview_G6A_MissingJobStillRefuses(t *testing.T) {
 	prov := &fakeProvider{}
-	h := NewPostReviewHandler(fakeResolver{p: prov}, realDiscloser())
+	h := newTestPostReviewHandler(fakeResolver{p: prov}, realDiscloser())
 	if _, err := h.Execute(context.Background(), executor.SystemStepInput{
 		Task:       &persistence.Task{},
 		PrevResult: json.RawMessage(`{"body":"x"}`),

@@ -141,6 +141,17 @@ func TestFetchDiff(t *testing.T) {
 	}
 }
 
+func TestFetchDiff_RejectsOversizedResponseInsteadOfReturningTruncatedDiff(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = io.WriteString(w, strings.Repeat("x", maxResponseBytes+1))
+	}))
+	defer srv.Close()
+
+	if _, err := testProvider(srv.URL).FetchDiff(context.Background(), "o/r", 12); err == nil {
+		t.Fatal("oversized diff must fail instead of looking complete after truncation")
+	}
+}
+
 func TestOpenChangeRequest_CreatesAndAppliesLabels(t *testing.T) {
 	var created, labeled bool
 	var gotDraft bool

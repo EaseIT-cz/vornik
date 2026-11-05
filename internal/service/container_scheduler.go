@@ -757,6 +757,7 @@ func (c *Container) initScheduler() error {
 		}
 		sysHandlers.Register(forgeh.NewPostReviewHandler(forgeResolver, c.AIDisclosure).
 			WithReviewState(forgeReviewState).
+			WithSecretDetector(c.secretsDetector).
 			WithCIGate(forgeCIOutcomes, blocksApproval))
 		sysHandlers.Register(forgeh.NewFetchDiffHandler(forgeResolver).WithReviewState(forgeReviewState))
 		if c.repos != nil && c.repos.ForgeCIOutcomes != nil {

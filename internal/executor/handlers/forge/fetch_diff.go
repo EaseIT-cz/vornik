@@ -1,6 +1,7 @@
 package forge
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -138,6 +139,9 @@ func (h *FetchDiffHandler) fetchAndClose(
 		diff, scope, head, observed, err := h.diffForJob(ctx, provider, projectID, job)
 		if err != nil {
 			return nil, "", "", fmt.Errorf("%s: fetch diff for %s#%d: %w", name, job.Repo, job.Number, err)
+		}
+		if scope != scopeNoChange && len(bytes.TrimSpace(diff)) == 0 {
+			return nil, "", "", fmt.Errorf("%s: forge returned an empty diff; refusing review without change coverage", name)
 		}
 		if h.reviewState == nil {
 			// No coalescing bookkeeping: nothing can have been absorbed, so

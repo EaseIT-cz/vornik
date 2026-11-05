@@ -519,7 +519,13 @@ func (p *Provider) do(req *http.Request) (*http.Response, []byte, error) {
 		return nil, nil, fmt.Errorf("forge/github: %s %s: %w", req.Method, req.URL.Path, err)
 	}
 	defer func() { _ = resp.Body.Close() }()
-	body, _ := io.ReadAll(io.LimitReader(resp.Body, maxResponseBytes))
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxResponseBytes+1))
+	if err != nil {
+		return nil, nil, fmt.Errorf("forge/github: read %s %s response: %w", req.Method, req.URL.Path, err)
+	}
+	if len(body) > maxResponseBytes {
+		return nil, nil, fmt.Errorf("forge/github: %s %s response exceeds size cap", req.Method, req.URL.Path)
+	}
 	return resp, body, nil
 }
 

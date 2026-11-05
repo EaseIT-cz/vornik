@@ -170,7 +170,7 @@ func TestOpenChangeRequest_G6C_BothForgeSinksDiscloseIdentically(t *testing.T) {
 		t.Fatalf("open: %v", err)
 	}
 
-	rv := NewPostReviewHandler(fakeResolver{p: prov}, realDiscloser())
+	rv := newTestPostReviewHandler(fakeResolver{p: prov}, realDiscloser())
 	if _, err := rv.Execute(context.Background(), executor.SystemStepInput{
 		Task:       taskWithJob(jobForCR()),
 		Step:       &registry.WorkflowStep{Handler: "forge.post_review"},

@@ -18,6 +18,14 @@ sources:
       sha256: e5090fd8f664c75d4c8095b5b401c451d02a3663140db5e2b4d7fa9d348bcc0d
     - path: internal/egressscan/egressscan.go
       sha256: 39ab44bae5d6ab6e4b4029d5e882ffa92779cc70454f94f309fd72d5de7f4167
+    - path: internal/executor/handlers/forge/post_review.go
+      sha256: 10bb7368b47b2df6b75856c948dd738d1114101c2f3f1869d73a7e0242f8ae14
+    - path: internal/executor/handlers/forge/fetch_diff.go
+      sha256: 815e6020efe976b62a0d2c987ac9340dc73eb852d43031e6e910d8c3f03f2b2b
+    - path: internal/forge/github/github.go
+      sha256: 72582fde909513b6f8333d5175fb6d5bf9ec0c53e6755182b40124890c1b5c16
+    - path: internal/service/container_scheduler.go
+      sha256: ff49ef2eb3775dcaf3c855167a82d25445a0354bf1cbcbd25d6a648f072dff2a
     - path: internal/approval/approval.go
       sha256: e5c042190f09de50edc949f67151c8f6cd2d8c5f5b834b5edc76ed38477d913c
     - path: internal/approverdevice/rotation.go
@@ -35,7 +43,7 @@ sources:
 ---
 # Security model
 
-**Last reviewed:** 1 November 2026, against `main` after release 2026.11.1.
+**Last reviewed:** 5 November 2026, against `main` after release 2026.11.1.
 
 What Vornik defends against, its trust boundaries, and the controls in place
 today, with what each does **not** cover. It applies to both editions;
@@ -398,6 +406,25 @@ connected assistants, and upstream services.
   prompts, transcripts, task messages) and redacts what it finds.
 - Credentials an assistant provides are sealed at rest with a key file the
   operator must back up; the doctor checks that the key opens them.
+
+### Forge review publication
+
+- Before Vornik publishes a Forge review or comment, it scans the exact final
+  body, including rendered feedback, quoted requests, and disclosure text, with
+  the configured secrets detector. A missing detector or strong credential
+  finding refuses publication without copying the matched text into the error.
+  Explicit Basic Auth material and sensitive-key assignments are detected;
+  entropy and generic key/value heuristics alone do not block publication.
+- Empty full or incremental diffs and HTTP responses over the 1 MiB cap
+  are refused rather than presented as complete review input. The explicit
+  `no-change` result remains a no-op.
+- The GitHub review request is not yet pinned to the head SHA used to fetch the
+  diff. A separate change must bind publication to that reviewed commit before
+  the workflow can claim exact-head coverage.
+- These controls reduce amplification into review comments and notifications;
+  they cannot retract a credential already committed to a public repository.
+  Rotate any exposed credential. Detection is pattern-based and cannot prove
+  that every possible credential format is covered.
 
 ### Outbound connections and SSRF
 

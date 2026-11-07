@@ -25,6 +25,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"vornik.io/vornik/internal/safepath"
 )
 
 // GitDirs names the repository a worktree command reads: the worktree's admin
@@ -392,6 +393,10 @@ func ComposeGitConfig(ctx context.Context, dataDir string) (GitConfigComposition
 
 	kept, dropped := FilterGitConfig(all)
 	dir := filepath.Join(dataDir, "git")
+	// dataDir may be a fixed name under the temp dir (#461).
+	if err := safepath.EnsurePrivateDir(dataDir); err != nil {
+		return GitConfigComposition{}, fmt.Errorf("spawn: compose git config: %w", err)
+	}
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return GitConfigComposition{}, fmt.Errorf("spawn: compose git config: %w", err)
 	}

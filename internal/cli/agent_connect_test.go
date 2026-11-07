@@ -300,6 +300,12 @@ func TestAgentConnect_Refusals(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(user.configDir, "vornik", "agents", "hermes.key")); !os.IsNotExist(err) {
 		t.Fatal("a key file was written after a refused grant")
 	}
+	// GitHub #503: the daemon's one operator-surface gate refuses with
+	// OPERATOR_CAPABILITY_REQUIRED.
+	d.grantCode = "OPERATOR_CAPABILITY_REQUIRED"
+	if err := c.connect(&bytes.Buffer{}); err == nil || !strings.Contains(err.Error(), "operator's admin key") {
+		t.Fatalf("not admin: %v", err)
+	}
 	d.grantCode = "NAMESPACE_TAKEN"
 	if err := c.connect(&bytes.Buffer{}); err == nil || !strings.Contains(err.Error(), "vornikctl agent disconnect hermes") {
 		t.Fatalf("taken: %v", err)

@@ -611,7 +611,9 @@ func (c *connector) mint() (*companionGrantOutput, error) {
 				return nil, errors.New("pair a phone first: vornikctl pair-device (it approves everything the assistant asks for)")
 			case "NAMESPACE_TAKEN":
 				return nil, fmt.Errorf("namespace %q is already connected: vornikctl agent disconnect %s first, or choose another --namespace", c.ns, c.ns)
-			case "ADMIN_SCOPE_REQUIRED", "UNAUTHORIZED":
+			// OPERATOR_CAPABILITY_REQUIRED: the grant route passes the one
+			// operator-surface gate since GitHub #503.
+			case "ADMIN_SCOPE_REQUIRED", "OPERATOR_CAPABILITY_REQUIRED", "UNAUTHORIZED":
 				return nil, errors.New("connect needs the operator's admin key (VORNIK_API_KEY, or vornikctl auth login)")
 			}
 		}

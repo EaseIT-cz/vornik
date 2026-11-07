@@ -2612,7 +2612,7 @@ type ChatConfig struct {
 	// are condensed into one deterministic topic-summary message instead of
 	// being dropped silently. Default off → legacy truncation.
 	Compaction        ChatCompactionConfig `yaml:"compaction"`
-	MaxToolIterations int                  `yaml:"max_tool_iterations" doc:"Tool-call loop cap per dispatcher turn."` // dispatcher tool-call loop cap; 0 = default (30)
+	MaxToolIterations int                  `yaml:"max_tool_iterations" doc:"Tool-call loop cap per dispatcher turn."` // dispatcher tool-call loop cap; 0 = default (10)
 	// DeferredToolThreshold tunes F12 deferred tool loading: when a
 	// project's MCP tool catalog exceeds this count, chat sessions see
 	// tool_search instead of the full catalog (tools the system prompt
@@ -2700,7 +2700,7 @@ type ChatRouterConfig struct {
 	// model. Empty = no non-swarm fallback (swarm agents use their role
 	// modelFallback regardless). See
 	// https://docs.vornik.io
-	ModelFallbacks map[string]string `yaml:"model_fallbacks" doc:"Non-swarm per-model fallback map (primary model -> fallback model), used when the primary's circuit is open. Empty disables non-swarm fallback."`
+	ModelFallbacks map[string]string `yaml:"model_fallbacks" doc:"Non-swarm per-model fallback map (primary model -> fallback model), used when the primary's circuit is open or it returns a 429, 5xx or timeout. Give chat.model an entry on another provider. Empty disables non-swarm fallback."`
 
 	// ClaudeCLI configures the subprocess-backed Claude Code sub-provider.
 	// Deprecated: prefer ClaudeSubscription — the CLI adds ~200ms
@@ -3306,6 +3306,13 @@ type MemoryConfig struct {
 	// uses an OpenAI-compatible /v1/embeddings endpoint; "bedrock"
 	// uses AWS Bedrock's native InvokeModel API.
 	EmbeddingProvider string `yaml:"embedding_provider" doc:"Embedding transport: empty or openai for an OpenAI-compatible /v1/embeddings endpoint, or bedrock for native AWS Bedrock InvokeModel embeddings."`
+
+	// PublicSourcePrefixes derive public for a role capped by
+	// memorySearch.maxSensitivity (#618; firewall design, "Amendment
+	// 2026-11-06 (#618)"): a chunk with no tier set, under one of these, that
+	// is repo-scoped and provenance-verified counts as public. Unset means
+	// [docs/public/]; an empty list derives nothing.
+	PublicSourcePrefixes []string `yaml:"public_source_prefixes" doc:"Source-path prefixes whose provenance-verified chunks count as public for a role capped by memorySearch.maxSensitivity. Each is path segments ending in /. Unset means [docs/public/]; [] derives nothing, so only operator-set public chunks reach a public cap."`
 
 	// Sufficiency governs scored-sufficiency iterative retrieval.
 	Sufficiency MemorySufficiencyConfig `yaml:"sufficiency"`

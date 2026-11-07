@@ -1,0 +1,96 @@
+# The companion's just-in-time hints (GitHub #634; design
+# 2026-08-20-companion-autonomy-and-failure-mode-hardening-design.md §13).
+#
+# Each hint is a trigger the plugins' hooks detect offline and a sentence
+# they print once per session when it fires. The daemon serves this file
+# (GET /api/v1/companion/hints) without the hints a project muted or backed
+# off; both bundles embed a copy (hooks/hints.json), kept equal by a test.
+#
+# Fields:
+#   id       stable across wording changes only (§13 H5): a new trigger kind
+#            or follow target is a new id.
+#   version  bump on every wording change.
+#   trigger  kind: commit | edits | design_written | test_failed | first_prompt
+#            design_written takes globs, test_failed takes runners.
+#   follow   what counts as following the hint, by logical name, resolved
+#            to each bundle's tool names by its hooks:
+#              recall
+#              delegate:<workflow>
+#              skill:<name>   (Claude Code reaches slash commands this way)
+#   active   false ships the hint muted until it is measured (§13.5).
+#   text     at most 300 bytes of UTF-8. {recall}, {delegate}, {upload} and
+#            {rag_ingest} are replaced by each bundle's own tool or command
+#            name. Short sentences, plain words, active voice (#633).
+#
+# The seed practices are AGENTS.md Part 2 and the operator's standing rules
+# for developing Vornik with Vornik: review until GREEN, ingest every touched
+# design, recall before reading code or debugging, design before code.
+hints:
+  - id: commit.review
+    version: 1
+    trigger:
+      kind: commit
+    follow: ["delegate:companion-architectural-review", "skill:review", "skill:upload"]
+    active: true
+    text: >-
+      vornik-companion: you just committed. Before you push, send the diff for
+      review: {delegate} workflow companion-architectural-review, with the diff
+      attached. Fix what is real and send it again until the verdict is GREEN.
+
+  - id: design_written.ingest
+    version: 1
+    trigger:
+      kind: design_written
+      globs: ["docs/**/*design*.md", "docs/adr/**", "**/ADR-*.md", "docs/low-level-design/**"]
+    follow: ["delegate:companion-rag-ingest", "skill:rag-ingest"]
+    active: true
+    text: >-
+      vornik-companion: you changed a design document. Once it is committed,
+      ingest it under its repository path ({rag_ingest}), so project memory
+      serves this version and stops serving the old one.
+
+  - id: test_failed.recall
+    version: 1
+    trigger:
+      kind: test_failed
+      runners: ["go test", "make test", "make test-integration", "pytest", "npm test", "npm run test", "cargo test", "mvn test", "gradle test", "bun test", "yarn test"]
+    follow: ["recall"]
+    active: true
+    text: >-
+      vornik-companion: a test run failed. Before you debug from scratch,
+      recall the symptom ({recall} with the failing test's name or its error),
+      in case it has been seen and solved before.
+
+  - id: design_written.review
+    version: 1
+    trigger:
+      kind: design_written
+      globs: ["docs/**/*design*.md", "docs/adr/**", "**/ADR-*.md", "docs/low-level-design/**"]
+    follow: ["delegate:companion-architectural-review", "delegate:companion-doc-review", "skill:upload"]
+    active: false
+    text: >-
+      vornik-companion: you changed a design document. Have it reviewed before
+      you build on it: {upload} it to companion-architectural-review, fix what
+      is real, and repeat until the verdict is GREEN.
+
+  - id: first_prompt.recall
+    version: 1
+    trigger:
+      kind: first_prompt
+    follow: ["recall"]
+    active: false
+    text: >-
+      vornik-companion: before you start, {recall} the project's engineering
+      rules and prior work on this task. Then delegate what can run while you
+      work, such as research or an edge-case brainstorm.
+
+  - id: edits.recall_design
+    version: 1
+    trigger:
+      kind: edits
+    follow: ["recall"]
+    active: false
+    text: >-
+      vornik-companion: several edits since the last commit. {recall} the
+      design of the part you are changing. If the change contradicts it,
+      amend the design in the same change.

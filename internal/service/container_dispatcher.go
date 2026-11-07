@@ -328,6 +328,10 @@ func (c *Container) initDispatcher() {
 	// GitHub #587: an answered turn on any channel marks the first answer.
 	opts = append(opts, dispatcher.WithFirstValue(c.firstValueTracker()))
 	c.Dispatcher = dispatcher.NewAgent(c.ChatClient, taskRepo, execRepo, artifactRepo, c.Registry, opts...)
+	// Let every channel that can show a turn status show it (Slack's
+	// placeholder, Telegram's streamed reply; #642). Channels that cannot are
+	// skipped by the reporter.
+	c.Dispatcher.SetTurnStatusReporter(&turnStatusReporter{resolver: &containerChannelResolver{c: c}})
 	// cancel_task stops the running execution through the shared cancel
 	// primitive (05-scheduler.md §4.11, GitHub #300). The executor is built in
 	// initScheduler, which runs before this.

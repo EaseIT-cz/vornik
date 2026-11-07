@@ -923,9 +923,18 @@ func (c *Container) initChatRouter(cfg config.ChatConfig) error {
 		// bedrock/http/vertex honour the request; CLI kinds ignore
 		// it (they refuse arbitrary model IDs).
 		chat.WithRouterFallbackName(defaultKind),
+		// chat.model takes its own prefix route when that is not
+		// router.default (nonswarm-llm-fallback design §11.2(a), #620).
+		chat.WithRouterDefaultModel(cfg.Model),
 	)
 	if err != nil {
 		return fmt.Errorf("chat.router: %w", err)
+	}
+	// A chat.model with no usable twin fails every chat turn in a quota
+	// outage; say so at startup (design §11.2(b), #620). The doctor's
+	// chat_model_fallback check reports the same findings.
+	for _, f := range chat.ModelFallbackFindings(cfg.Model, cfg.Router.ModelFallbacks, router.RouteOf) {
+		c.Logger.Warn().Str("chat_model", cfg.Model).Msg("chat: " + f)
 	}
 	// Non-swarm model fallback (LLD 2026-07-18-nonswarm-llm-fallback-design.md):
 	// wrap the router so an in-daemon caller (dispatcher/autonomy/wizard +
@@ -953,6 +962,7 @@ func (c *Container) initChatRouter(cfg config.ChatConfig) error {
 		Int("routes", len(routes)).
 		Str("fallback_model", fallback.Model()).
 		Str("fallback_pin_source", fallbackPinSource).
+		Str("default_model_route", router.DefaultModelRoute()).
 		Msg("chat client configured")
 	return nil
 }

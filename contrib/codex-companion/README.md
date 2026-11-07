@@ -82,6 +82,42 @@ it cannot parse counts as nothing.
 Without `VORNIK_COMPANION_TOKEN` the hook stays silent, since the recall tool
 cannot work.
 
+### Just-in-time hints (since 0.45.0)
+
+`hooks/hints.sh`, the same script the Claude Code plugin uses, adds one hint
+from the project's catalogue at the moment it applies:
+
+- after a `git commit`: send the diff for review
+  (`mcp__vornik__delegate` to companion-architectural-review);
+- after `apply_patch`, or a shell command (a heredoc, a redirection, `tee`,
+  `sed -i`, `cp`, `mv`), changes a design document: ingest it
+  (`mcp__vornik__delegate` to companion-rag-ingest);
+- after a test run whose output shows a failure: recall the symptom first
+  (`mcp__vornik__recall`).
+
+How it behaves:
+- Each hint fires at most once per session and never blocks a command.
+- The hooks keep hint ids and counters only, never a command, a path or
+  output.
+- At session start a detached hook fetches the catalogue and reports, for
+  earlier sessions, whether Codex called the hint's tool within 10 calls.
+  A hint followed in fewer than 2 of its last 10 firings turns off for 14
+  days in that project.
+
+What Codex cannot tell the hook:
+- Codex gives a hook no exit status, so a failed test run is recognised from
+  its output, and a failed `git commit` still shows the review hint.
+- The new hooks need trusting once, at "Hooks need review".
+
+| Variable | Effect |
+|---|---|
+| `VORNIK_HINTS=off` | silence every hint |
+
+Per project, `companion.hints: off` or `companion.mute: [<id>]` in the
+project config turns hints off or mutes one; `vornikctl companion hints -p
+<project>` lists them. `VORNIK_COMPANION_TOKEN` must be exported in the shell
+Codex starts from, since Codex replays that environment into its hooks.
+
 ## Prerequisites
 
 1. A running vornik daemon. The companion capability flags should be enabled:

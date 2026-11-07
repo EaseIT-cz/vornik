@@ -8,7 +8,6 @@ import (
 	"strings"
 	"time"
 
-	"vornik.io/vornik/internal/auth"
 	"vornik.io/vornik/internal/mcpauth"
 	"vornik.io/vornik/internal/mcpconnect"
 	"vornik.io/vornik/internal/persistence"
@@ -31,54 +30,12 @@ type MCPOAuthConnector interface {
 // start a flow, prints the URL, and polls until the daemon's own callback has completed the
 // exchange (§7.2a).
 
-// requireAdminClassGate authorizes an admin-CLASS caller WITHOUT the edition check that
-// requireAdminGate applies.
-//
-// The distinction matters and is deliberate (design §7.2's CE note, verified 2026-08-03): the
-// control-plane hub is admin-gated, NOT edition-gated, and MCP authentication is a Community
-// feature by operator decision. Routing these endpoints through requireAdminGate would answer
-// 501 EDITION_UNSUPPORTED on Community — making OAuth connect Enterprise-only by accident of a
-// shared helper, and repeating the mistake the backlog already records for CE support bundles
-// ("the edition most likely to need help is the one that cannot ask for it").
-//
-// Everything else about the gate is identical: auth disabled (single-operator homelab) passes, a
-// browser session with role=admin passes, and otherwise the caller needs an admin-allowlisted
-// API key.
-// requireAdminClassGateFor is requireAdminClassGate that also grants managed
-// hosting's instance owner (tenant_admin) the surface when TenantAdminMay
-// names it (GitHub #560, M1b B2): the MCP OAuth connect flow.
-//
-//nolint:unparam // the surface is the allowlist key the completeness test reads at every call site (M1b B5); one surface uses this gate today
-func (s *Server) requireAdminClassGateFor(w http.ResponseWriter, r *http.Request, surface Surface) bool {
-	if IsAuthEnabledFromContext(r.Context()) && SessionRoleFromContext(r.Context()) == auth.RoleTenantAdmin {
-		allowed := TenantAdminMay(surface)
-		s.logTenantAdminDecision(r, surface, allowed)
-		if !allowed {
-			respondError(w, http.StatusForbidden, "ADMIN_SCOPE_REQUIRED", "admin scope required")
-		}
-		return allowed
-	}
-	return s.requireAdminClassGate(w, r)
-}
-
-func (s *Server) requireAdminClassGate(w http.ResponseWriter, r *http.Request) bool {
-	if !IsAuthEnabledFromContext(r.Context()) {
-		return true
-	}
-	if SessionRoleFromContext(r.Context()) == "admin" {
-		return true
-	}
-	key := APIKeyFromContext(r.Context())
-	if key == "" {
-		respondError(w, http.StatusUnauthorized, "UNAUTHORIZED", "admin authentication required")
-		return false
-	}
-	if !s.isAdminClassKey(key) {
-		respondError(w, http.StatusForbidden, "ADMIN_SCOPE_REQUIRED", "admin scope required")
-		return false
-	}
-	return true
-}
+// The connect routes pass requireOperatorScopeFor (GitHub #503), the one
+// operator-surface decision, which answers the same in both editions: MCP
+// authentication is a Community feature (design §7.2's CE note), so these
+// routes must never go through requireAdminGate's edition check. Auth
+// disabled passes, an admin session or admin-class key passes, tenant_admin
+// passes by surface (#560 B2), a project-scoped caller gets 404.
 
 // mcpOAuthBeginRequest is the POST body for starting a flow. ProjectID empty = daemon scope.
 type mcpOAuthBeginRequest struct {
@@ -148,7 +105,7 @@ func (s *Server) MCPOAuthBegin(w http.ResponseWriter, r *http.Request) {
 		respondError(w, http.StatusMethodNotAllowed, "METHOD_NOT_ALLOWED", "POST required")
 		return
 	}
-	if !s.requireAdminClassGateFor(w, r, SurfaceMCPOAuthConnect) {
+	if !s.requireOperatorScopeFor(w, r, SurfaceMCPOAuthConnect) {
 		return
 	}
 	if s.mcpOAuth == nil {
@@ -197,7 +154,7 @@ func (s *Server) MCPOAuthStatus(w http.ResponseWriter, r *http.Request) {
 		respondError(w, http.StatusMethodNotAllowed, "METHOD_NOT_ALLOWED", "GET required")
 		return
 	}
-	if !s.requireAdminClassGateFor(w, r, SurfaceMCPOAuthConnect) {
+	if !s.requireOperatorScopeFor(w, r, SurfaceMCPOAuthConnect) {
 		return
 	}
 	if s.mcpOAuth == nil {
@@ -245,7 +202,7 @@ func (s *Server) MCPOAuthDisconnect(w http.ResponseWriter, r *http.Request) {
 		respondError(w, http.StatusMethodNotAllowed, "METHOD_NOT_ALLOWED", "POST required")
 		return
 	}
-	if !s.requireAdminClassGateFor(w, r, SurfaceMCPOAuthConnect) {
+	if !s.requireOperatorScopeFor(w, r, SurfaceMCPOAuthConnect) {
 		return
 	}
 	if s.mcpOAuth == nil {

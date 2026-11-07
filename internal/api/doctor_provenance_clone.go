@@ -2,6 +2,7 @@ package api
 
 import (
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 )
@@ -20,6 +21,28 @@ type ProvenanceCloneStatus struct {
 	FetchOutcome string
 	FetchError   string
 	FetchedAt    time.Time
+	// Mirrored is true once the repository mirror (memory.mirror_paths,
+	// #639) has run for this project since start; MirrorCounts is that
+	// pass, by outcome.
+	Mirrored     bool
+	MirroredAt   time.Time
+	MirrorCounts map[string]int
+}
+
+// mirrorLine renders a project's last mirror pass, outcomes sorted, and
+// whether it should warn: failed files or a clone it could not read.
+func mirrorLine(c ProvenanceCloneStatus) (string, bool) {
+	keys := make([]string, 0, len(c.MirrorCounts))
+	for k := range c.MirrorCounts {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	parts := make([]string, 0, len(keys))
+	for _, k := range keys {
+		parts = append(parts, fmt.Sprintf("%s %d", k, c.MirrorCounts[k]))
+	}
+	line := fmt.Sprintf("%s: mirrored %s (%s)", c.ProjectID, c.MirroredAt.UTC().Format(time.RFC3339), strings.Join(parts, ", "))
+	return line, c.MirrorCounts["failed"] > 0 || c.MirrorCounts["no_clone"] > 0
 }
 
 // SetProvenanceClones wires the memory_provenance_clone check; nil leaves it
@@ -77,6 +100,14 @@ func (h *DoctorHandlers) checkProvenanceClone() DoctorCheck {
 				c.FetchedAt.UTC().Format(time.RFC3339), c.FetchError))
 		default:
 			ok = append(ok, fmt.Sprintf("%s: fetched %s", c.ProjectID, c.FetchedAt.UTC().Format(time.RFC3339)))
+		}
+		if c.Mirrored {
+			line, warn := mirrorLine(c)
+			if warn {
+				bad = append(bad, line)
+			} else {
+				ok = append(ok, line)
+			}
 		}
 	}
 	scope := fmt.Sprintf("%d provenance clones examined", len(clones))

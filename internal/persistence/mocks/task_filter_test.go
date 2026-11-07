@@ -209,3 +209,30 @@ func TestFilterTasks_FailedSinceTreatsUnknownAsNotRecent(t *testing.T) {
 		t.Fatalf("FailedSince = %v, want only [failed-just-now]", ids)
 	}
 }
+
+// #617: the A2A quota counts one key's tasks of one workflow since a time.
+// The reference filter must match the repos, or a test double would pass a
+// count the real drivers do not make.
+func TestFilterTasks_KeyWorkflowCreatedSince_617(t *testing.T) {
+	key, other, wf := "key-a", "key-b", "qa"
+	now := time.Now()
+	cutoff := now.Add(-time.Hour)
+	tasks := []*persistence.Task{
+		{ID: "mine-recent", CreatedByAPIKeyID: &key, WorkflowID: &wf, CreatedAt: now},
+		{ID: "mine-old", CreatedByAPIKeyID: &key, WorkflowID: &wf, CreatedAt: now.Add(-2 * time.Hour)},
+		{ID: "other-key", CreatedByAPIKeyID: &other, WorkflowID: &wf, CreatedAt: now},
+		{ID: "no-key", WorkflowID: &wf, CreatedAt: now},
+		{ID: "no-workflow", CreatedByAPIKeyID: &key, CreatedAt: now},
+	}
+	got := mocks.FilterTasks(tasks, persistence.TaskFilter{CreatedByAPIKeyID: &key, WorkflowID: &wf, CreatedSince: &cutoff})
+	if len(got) != 1 || got[0].ID != "mine-recent" {
+		ids := []string{}
+		for _, g := range got {
+			ids = append(ids, g.ID)
+		}
+		t.Fatalf("got %v, want only [mine-recent]", ids)
+	}
+	if n := len(mocks.FilterTasks(tasks, persistence.TaskFilter{CreatedSince: &now})); n != 4 {
+		t.Fatalf("CreatedSince is inclusive: got %d tasks at or after now, want 4", n)
+	}
+}

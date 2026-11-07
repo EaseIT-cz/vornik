@@ -37,6 +37,12 @@ const (
 	SurfaceOperatorProposals    Surface = "operator_proposals"
 	SurfaceOperators            Surface = "operators"
 	SurfaceSkillSetGlobal       Surface = "skill_set_global"
+	// GitHub #503: the last three admin-only routes that had their own gate
+	// (requireAdminClassGate) now pass the one decision. None is granted to
+	// tenant_admin.
+	SurfaceConfigJournal Surface = "config_journal"
+	SurfaceInflight      Surface = "inflight"
+	SurfaceAgentGrant    Surface = "agent_grant"
 	// SurfaceOperatorCredentials is the console's credentials page
 	// (/ui/credentials, GitHub #623; deliberately outside /ui/admin, which admin.Middleware reserves for admins): the operator, or a managed
 	// instance's owner with no shell, enters the values that

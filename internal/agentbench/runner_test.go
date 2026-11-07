@@ -37,6 +37,20 @@ type fakeTraces struct {
 	askedTasks []string
 	states     map[string][]byte
 	stateErr   error
+	// terminals maps an execution id to the terminal it reached; an id not
+	// in the map reached "complete", a non-recovery terminal (§12.29).
+	terminals   map[string]ExecutionTerminal
+	terminalErr error
+}
+
+func (f *fakeTraces) Terminal(_ context.Context, executionID string) (ExecutionTerminal, error) {
+	if f.terminalErr != nil {
+		return ExecutionTerminal{}, f.terminalErr
+	}
+	if t, ok := f.terminals[executionID]; ok {
+		return t, nil
+	}
+	return ExecutionTerminal{StepID: "complete"}, nil
 }
 
 func (f *fakeTraces) StateSnapshot(_ context.Context, executionID string) ([]byte, error) {

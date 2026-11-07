@@ -67,6 +67,7 @@ var doctorCheckConfigPointer = map[string]string{
 	"checkModelCircuits":           "",
 	"checkModelHealth":             "",
 	"checkModelRouteCoverage":      "",
+	"checkChatModelFallback":       "",
 	"checkOrphanedWatchers":        "",
 	"checkOrphanFKRows":            "",
 	"checkOrphanWorktrees":         "",
@@ -96,6 +97,8 @@ var doctorCheckConfigPointer = map[string]string{
 	"checkApproverDevices":         "",
 	"checkAgentNamespaceBudget":    "",
 	"checkAgentRefusalBurst":       "",
+	"checkA2ACorpusWalk":           "",
+	"checkMemorySensitivityCap":    "",
 	"checkAgentChangeStaysApplied": "",
 	"checkAgentModelCatalogue":     "", // config.yaml (agent_admin.models), not a deployed config file
 	"checkProvenanceClone":         "", // project memory.provenance_clone; a daemon-only clone, not a deployed config file

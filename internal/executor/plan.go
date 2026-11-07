@@ -1188,12 +1188,12 @@ func taskWorkflowID(task *persistence.Task) string {
 func buildRouteCorrectiveHint(badPick string, candidates []string) string {
 	if badPick == "" {
 		return fmt.Sprintf(
-			"\n\nROUTE CORRECTION: Your previous response did not include a `selected_workflow` field. Refusal is not allowed — the candidate list IS the configuration; do not request additional files. You MUST pick EXACTLY ONE of: %v. Emit {\"selected_workflow\": \"<one-of-those>\", \"reason\": \"...\"} and nothing else.",
+			"\n\nROUTE CORRECTION: Your previous response did not include a `selected_workflow` field. Refusal is not allowed — the candidate list IS the configuration; do not request additional files. Pick EXACTLY ONE of: %v, or \"none\" if no candidate is equipped for the task (\"none\" is an answer, not a refusal; never use it to ask for configuration). Emit {\"selected_workflow\": \"<one-of-those or none>\", \"reason\": \"...\"} and nothing else.",
 			candidates,
 		)
 	}
 	return fmt.Sprintf(
-		"\n\nROUTE CORRECTION: Your previous response selected workflow %q, which is NOT in the allowed list. You must pick EXACTLY ONE of: %v. Emit {\"selected_workflow\": \"<one-of-those>\", \"reason\": \"...\"} and nothing else for the workflow field.",
+		"\n\nROUTE CORRECTION: Your previous response selected workflow %q, which is NOT in the allowed list. Pick EXACTLY ONE of: %v, or \"none\" if no candidate is equipped for the task (\"none\" is an answer, not a refusal). Emit {\"selected_workflow\": \"<one-of-those or none>\", \"reason\": \"...\"} and nothing else for the workflow field.",
 		badPick, candidates,
 	)
 }

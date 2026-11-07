@@ -61,6 +61,11 @@ the host checks to mean anything. A few checks are worth knowing by name:
   the running chat router (including the default routes an enabled provider
   adds) and has a pricing entry, so nothing routes to an unintended catch-all
   or has its cost silently estimated.
+- **`chat_model_fallback`** — warns when `chat.model` has no twin in
+  `chat.router.model_fallbacks`, or its twin is on the same provider. Without
+  a twin on another provider, a quota or rate limit (429) on the chat model
+  fails every chat turn until it recovers. With a twin, the reply says which
+  model answered.
 
 ### Collect evidence before asking for help
 

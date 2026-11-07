@@ -649,7 +649,7 @@ for check in report.get("checks", []):
         sys.exit(0)
 sys.exit(1)
 PYEOF
-            die "config-class preflight FAILED: the deployed config tree names a step error class the NEW binary rejects. The daemon would fail to start and flap after the swap. Fix the named workflow(s), then re-run. NOTHING SWAPPED."
+            die "config-class preflight FAILED: the deployed config tree names a step error class or an output reference the NEW binary rejects. The daemon would fail to start and flap after the swap. Fix the named workflow(s), then re-run. NOTHING SWAPPED."
         fi
         log "Config-class preflight: the new binary accepts the deployed tree"
     else

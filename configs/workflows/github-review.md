@@ -2,7 +2,7 @@
 workflowId: "github-review"
 displayName: "GitHub PR Review"
 description: "Deterministic-bracketed change-request review: the daemon fetches the diff (forge.fetch_diff), a reviewer agent writes the review prose + verdict, then forge.post_review submits it as a REAL forge review (APPROVE / REQUEST_CHANGES). No agent runs git or gh."
-version: "1.0.0"
+version: "1.1.0"
 author: "Vadim Grinco <vadim@grinco.eu>"
 license: "Proprietary"
 maxStepVisits: 4
@@ -13,7 +13,7 @@ steps:
   fetch_diff:
     type: "system"
     handler: "forge.fetch_diff"
-    on_success: "fetch_ci"
+    on_success: "readability"
     # Nothing new since the last review: stop here rather than pay a reviewer to
     # look at no commits. forge.post_review's guard would refuse to post the
     # result anyway (2026-09-01-forge-rereview-triggers-design.md §16), and with
@@ -27,6 +27,18 @@ steps:
       no-change: "nothing_to_review"
     on_fail: "failed"
     timeout: "5m"
+  # GitHub #633: the daemon measures the added lines of prose files in the
+  # diff (words, sentence length, hedges, vague references) and passes the
+  # counts to the reviewer after the diff, stored as readability.md too.
+  # Here the step can run before the reviewer: fetch_diff already gives it a
+  # previous result, so the reviewer's framing does not change
+  # (reviewable-output design §6.4). on_fail continues, like fetch_ci.
+  readability:
+    type: "system"
+    handler: "text.readability"
+    on_success: "fetch_ci"
+    on_fail: "fetch_ci"
+    timeout: "2m"
   # What CI concluded for the commit under review
   # (2026-09-08-forge-ci-outcomes-design.md §6). Optional by design: a review
   # that omits this step behaves exactly as it did before the feature. It never
@@ -92,7 +104,17 @@ steps:
          Legitimate overrides exist and this rule does not forbid them: a
          broken CI environment, an unrelated flaky job, a failure in a file
          this diff does not touch. Show the work.
-      8. VERDICT — list findings by severity (blocker/major/minor/nit). If
+      8. READABILITY — the readability step above gave you the daemon's
+         counts for the added prose (words, sentences over 30 words,
+         hedges, vague references; English word lists, so zero hits in
+         another language is not clean). Start from them and judge what they
+         cannot measure: jargon, buried lead, repetition, over-complex code.
+         Each finding quotes the passage, names one class (verbose, jargon,
+         vague-reference, hedge, buried-lead, repetition, passive-abstract,
+         over-complex-code) and gives a rewrite that keeps every fact. When
+         the change cannot be reviewed in reasonable time, say why with the
+         counts and rate it major; otherwise readability findings are minor.
+      9. VERDICT — list findings by severity (blocker/major/minor/nit). If
          you found nothing, state explicitly what you checked and how. A
          non-zero `failed` count with no pasted counter-evidence means
          approved=false, and say which run failed.
@@ -135,12 +157,17 @@ Deterministic handling of an opened change request:
 
 1. `forge.fetch_diff` (system) fetches the unified diff daemon-side and passes it
    to the reviewer as its input — the agent needs no forge CLI or network access.
-2. `review` (reviewer agent) reads the diff and writes the review prose,
+2. `readability` (system) measures the added prose lines of the diff
+   (words, sentence length, hedges, vague references) and hands the counts
+   to the reviewer after the diff; the report is also stored as
+   `readability.md` (GitHub #633).
+3. `fetch_ci` (system) adds what CI concluded for the commit.
+4. `review` (reviewer agent) reads the diff and writes the review prose,
    following a hardened adversarial rubric (intent → design challenge →
    correctness hunt → test adequacy → security/robustness → an explicit
-   "what would break this" attempt → severity-ranked verdict). This is the
+   "what would break this" attempt → readability → severity-ranked verdict). This is the
    only LLM step; it touches no git state.
-3. `forge.post_review` (system) posts the prose as a review via the project's
+5. `forge.post_review` (system) posts the prose as a review via the project's
    forge provider, mapping the neutral review event onto the provider's API.
    With `gating_reviews: true` (set above) the reviewer's verdict is submitted as
    a real review state — `approved: true` → **APPROVE**, `approved: false` →

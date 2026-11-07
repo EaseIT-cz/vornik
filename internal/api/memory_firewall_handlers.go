@@ -4,8 +4,8 @@ package api
 // gate matrix as /admin/audit (admin.enabled + admin-key
 // allowlist).
 //
-//   GET  /api/v1/admin/memory/policy/evaluations
-//   GET  /api/v1/admin/memory/policy/mode
+//   GET  /api/v1/memory/policy/evaluations
+//   GET  /api/v1/memory/policy/mode
 //
 // LLD: https://docs.vornik.io
 // § "API".
@@ -40,7 +40,7 @@ func WithMemoryPolicyEvaluations(repo persistence.MemoryPolicyEvaluationReposito
 }
 
 // MemoryFirewallEditor is the narrow surface the
-// POST /api/v1/admin/memory/policy/chunks/{id} handler needs
+// POST /api/v1/memory/policy/chunks/{id} handler needs
 // from the memory subsystem. Lets the handler load + mutate
 // per-chunk policy without dragging the full memory.Repository
 // into the API package's import surface.
@@ -100,7 +100,7 @@ func WithMemoryFirewallProjectModeFn(fn func(projectID string) (memoryfirewall.E
 }
 
 // AdminMemoryFirewallEvaluations handles
-// GET /api/v1/admin/memory/policy/evaluations?project_id=X&decision=Y&since=YYYY-MM-DD&limit=N.
+// GET /api/v1/memory/policy/evaluations?project_id=X&decision=Y&since=YYYY-MM-DD&limit=N.
 //
 // 503 BLACKBOX_DISABLED  — repo not wired.
 // 400 BAD_REQUEST       — required project_id missing.
@@ -161,7 +161,7 @@ func (s *Server) AdminMemoryFirewallEvaluations(w http.ResponseWriter, r *http.R
 }
 
 // AdminMemoryFirewallEvaluationsByDigest handles
-// GET /api/v1/admin/memory/policy/evaluations/digest/{policy_digest}?limit=N.
+// GET /api/v1/memory/policy/evaluations/digest/{policy_digest}?limit=N.
 //
 // Returns every evaluation row recorded under a policy digest — the
 // proof-verifier surface from the firewall LLD § REST endpoints
@@ -185,11 +185,13 @@ func (s *Server) AdminMemoryFirewallEvaluationsByDigest(w http.ResponseWriter, r
 			"memory firewall audit repo not wired on this deployment")
 		return
 	}
-	const prefix = "/api/v1/admin/memory/policy/evaluations/digest/"
+	// #503 (1): the route is registered without /admin/ (routes.go); the old
+	// prefix never matched, so every call answered 400.
+	const prefix = "/api/v1/memory/policy/evaluations/digest/"
 	digest := strings.TrimSpace(strings.TrimPrefix(r.URL.Path, prefix))
 	if digest == "" || strings.Contains(digest, "/") {
 		respondError(w, http.StatusBadRequest, "BAD_REQUEST",
-			"policy_digest required: GET /api/v1/admin/memory/policy/evaluations/digest/{policy_digest}")
+			"policy_digest required: GET /api/v1/memory/policy/evaluations/digest/{policy_digest}")
 		return
 	}
 	limit := 50
@@ -215,7 +217,7 @@ func (s *Server) AdminMemoryFirewallEvaluationsByDigest(w http.ResponseWriter, r
 }
 
 // chunkPolicyUpdateRequest is the JSON body for
-// POST /api/v1/admin/memory/policy/chunks/{id}. All fields are
+// POST /api/v1/memory/policy/chunks/{id}. All fields are
 // optional pointers — only non-nil fields are applied. Allows
 // callers to update a single dimension without re-supplying
 // the others.
@@ -245,7 +247,7 @@ type chunkPolicyUpdateResponse struct {
 }
 
 // AdminMemoryFirewallChunkPolicy handles
-// POST /api/v1/admin/memory/policy/chunks/{id}. Mutates the
+// POST /api/v1/memory/policy/chunks/{id}. Mutates the
 // per-chunk policy columns + recomputes policy_digest +
 // emits an admin_audit row tagged with the operator-principal.
 //
@@ -266,11 +268,13 @@ func (s *Server) AdminMemoryFirewallChunkPolicy(w http.ResponseWriter, r *http.R
 			"memory firewall editor not wired on this deployment")
 		return
 	}
-	const prefix = "/api/v1/admin/memory/policy/chunks/"
+	// #503 (1): the route is registered without /admin/ (routes.go), as the
+	// CLI calls it; the old prefix never matched, so every call answered 400.
+	const prefix = "/api/v1/memory/policy/chunks/"
 	chunkID := strings.TrimSpace(strings.TrimPrefix(r.URL.Path, prefix))
 	if chunkID == "" || strings.Contains(chunkID, "/") {
 		respondError(w, http.StatusBadRequest, "BAD_REQUEST",
-			"chunk_id required: POST /api/v1/admin/memory/policy/chunks/{chunk_id}")
+			"chunk_id required: POST /api/v1/memory/policy/chunks/{chunk_id}")
 		return
 	}
 	body, err := readLimitedBody(w, r, 1<<15) // 32 KiB cap; policy bodies are tiny
@@ -403,7 +407,7 @@ func policyFromChunkRow(row ChunkPolicyRow) memoryfirewall.Policy {
 }
 
 // AdminMemoryFirewallEvaluationsCSV handles
-// GET /api/v1/admin/memory/policy/evaluations.csv.
+// GET /api/v1/memory/policy/evaluations.csv.
 // Same query params as the JSON variant; streams the rows as
 // RFC 4180 CSV with a header line. Compliance reviewers
 // running spreadsheet workflows want this shape; the JSON
@@ -498,7 +502,7 @@ func (s *Server) AdminMemoryFirewallEvaluationsCSV(w http.ResponseWriter, r *htt
 	}
 }
 
-// AdminMemoryFirewallMode handles GET /api/v1/admin/memory/policy/mode.
+// AdminMemoryFirewallMode handles GET /api/v1/memory/policy/mode.
 // Returns the daemon's current enforcement mode + a short
 // explanation of what each mode means. When ?project_id= is
 // supplied, also reports the per-project override (Phase D

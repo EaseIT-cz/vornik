@@ -71,6 +71,7 @@ var acknowledgementPhraseSets = map[string]map[string]bool{
 	string(memoryScopeShared): shareAcknowledgementPhrases,
 	scopeCancelTask:           cancelAcknowledgementPhrases,
 	scopeRetryTask:            retryAcknowledgementPhrases,
+	scopeCancelReminder:       cancelAcknowledgementPhrases,
 }
 
 // normaliseAcknowledgement is limited to what cannot change meaning: case, surrounding

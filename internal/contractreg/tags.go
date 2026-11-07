@@ -115,12 +115,27 @@ func collectFileTags(root, path string, into map[string][]string) {
 			continue
 		}
 		for _, ident := range reTagIdent.FindAllString(m[1], -1) {
-			if ident == "ignore" {
+			if ident == "ignore" || toolchainConstraints[ident] {
 				continue
 			}
 			into[ident] = append(into[ident], rel)
 		}
 	}
+}
+
+// toolchainConstraints are the build constraints the go command sets itself
+// for a matching platform (GOOS, GOARCH, unix, cgo), so no plumbing sets them
+// and they cannot leave code unbuilt the way a custom tag can. A release tag
+// such as go1.22 reaches here as "go1" (reTagIdent stops at the dot).
+var toolchainConstraints = map[string]bool{
+	"unix": true, "cgo": true, "go1": true,
+	"aix": true, "android": true, "darwin": true, "dragonfly": true, "freebsd": true,
+	"hurd": true, "illumos": true, "ios": true, "js": true, "linux": true, "nacl": true,
+	"netbsd": true, "openbsd": true, "plan9": true, "solaris": true, "wasip1": true,
+	"windows": true, "zos": true,
+	"386": true, "amd64": true, "arm": true, "arm64": true, "loong64": true, "mips": true,
+	"mips64": true, "mips64le": true, "mipsle": true, "ppc64": true, "ppc64le": true,
+	"riscv64": true, "s390x": true, "wasm": true,
 }
 
 // scanPlumbing marks tags referenced anywhere in the build/CI plumbing. Each

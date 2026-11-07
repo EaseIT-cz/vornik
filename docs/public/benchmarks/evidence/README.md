@@ -1,3 +1,7 @@
+---
+disclosure: never
+---
+
 # Run evidence for the published rows
 
 One `*.manifest.json` per run behind a row in [results.md](../results.md). A published

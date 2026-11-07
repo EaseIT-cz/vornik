@@ -374,6 +374,14 @@ func NewRouter(server *Server, cfg *config.Config) *Router {
 		// and companion minting is no longer an admin-only action.
 		mux.HandleFunc("/api/v1/companion/grant", server.CompanionGrant)
 		mux.HandleFunc("/api/v1/companion/keys", server.CompanionKeysList)
+		// The companion hooks' hint catalogue (#634): served to a companion
+		// key for its own project; one of the exact paths a companion key
+		// may use (isCompanionAllowedPath).
+		mux.HandleFunc("/api/v1/companion/hints", server.CompanionHintsGet)
+		// The hooks' outcome upload (#634 slice 2), also an exact companion
+		// path; and the operator report, which is not (§13.10 S3, S6).
+		mux.HandleFunc("/api/v1/companion/hints/outcomes", server.CompanionHintOutcomesPost)
+		mux.HandleFunc("/api/v1/companion/hints/report", server.CompanionHintsReport)
 
 		// Knowledge-skill global-reach toggle — operator CLI surface
 		// (vornikctl knowledge set-global/set-project). Cross-project
@@ -488,7 +496,7 @@ func NewRouter(server *Server, cfg *config.Config) *Router {
 		// project access to tools it hasn't explicitly declared.
 		mux.HandleFunc("/api/v1/mcp/servers", server.ListMCPServers)
 		// MCP OAuth connect (design steps 4-5). Admin-class gated inside the
-		// handlers via requireAdminClassGate — NOT requireAdminGate, which
+		// handlers via requireOperatorScopeFor (#503) — NOT requireAdminGate, which
 		// would answer 501 EDITION_UNSUPPORTED on Community and make OAuth
 		// connect Enterprise-only by accident.
 		mux.HandleFunc("/api/v1/mcp/oauth/begin", server.MCPOAuthBegin)
@@ -582,7 +590,9 @@ func NewRouter(server *Server, cfg *config.Config) *Router {
 			// drive a project/workflow it's scoped to (authz-bypass fix,
 			// a2a-expert-federation-design §4). The public card path above
 			// is intentionally NOT guarded.
-			mux.HandleFunc("/a2a/v1/agents/", a2aScopeGuard(server.a2aHandler.HandleAgentRoute))
+			// a2aCallerLimits then bounds the key's rate, budget and daily
+			// quota (#617, amendment 2026-11-06).
+			mux.HandleFunc("/a2a/v1/agents/", a2aScopeGuard(server.a2aCallerLimits(server.a2aHandler.HandleAgentRoute)))
 		}
 	} // end region 3: ServeAPI
 

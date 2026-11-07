@@ -12,6 +12,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"testing"
 
 	"vornik.io/vornik/internal/auth"
@@ -70,7 +71,7 @@ func TestMemorySearch550_QueryParamsReachTheSearch(t *testing.T) {
 	decodePolicyResp(t, rec)
 	got := stub.calls[0]
 	want := MemorySearchRequest{Limit: 7, RepoScope: policyScope, StrictScope: true, Authority: "provenance"}
-	if got != want {
+	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("search got %+v, want %+v", got, want)
 	}
 }
@@ -98,7 +99,7 @@ func TestMemorySearch550_RolePolicyOverridesAWiderRequest(t *testing.T) {
 	srv.MemorySearch(rec, executorKeyReq("/api/v1/projects/p1/memory/search?q=x&limit=50&repo_scope=github.com/other/repo&strict_scope=false&authority=any"))
 	decodePolicyResp(t, rec)
 	want := MemorySearchRequest{Limit: 8, RepoScope: policyScope, StrictScope: true, Authority: "provenance"}
-	if got := stub.calls[0]; got != want {
+	if got := stub.calls[0]; !reflect.DeepEqual(got, want) {
 		t.Fatalf("search got %+v, want the role policy %+v", got, want)
 	}
 }
@@ -111,7 +112,7 @@ func TestMemorySearch550_RolePolicyKeepsANarrowerRequest(t *testing.T) {
 	srv.MemorySearch(rec, executorKeyReq("/api/v1/projects/p1/memory/search?q=x&limit=3&strict_scope=true&authority=provenance"))
 	decodePolicyResp(t, rec)
 	want := MemorySearchRequest{Limit: 3, RepoScope: policyScope, StrictScope: true, Authority: "provenance"}
-	if got := stub.calls[0]; got != want {
+	if got := stub.calls[0]; !reflect.DeepEqual(got, want) {
 		t.Fatalf("search got %+v, want %+v", got, want)
 	}
 }
@@ -150,7 +151,7 @@ func TestMemorySearch550_NonExecutorKeyIsNotGivenARolePolicy(t *testing.T) {
 	rec := httptest.NewRecorder()
 	srv.MemorySearch(rec, httptest.NewRequest(http.MethodGet, "/api/v1/projects/p1/memory/search?q=x", nil))
 	decodePolicyResp(t, rec)
-	if called || stub.calls[0] != (MemorySearchRequest{Limit: 10}) {
+	if called || !reflect.DeepEqual(stub.calls[0], MemorySearchRequest{Limit: 10}) {
 		t.Fatalf("resolver called=%v, search %+v; an operator request keeps its own parameters", called, stub.calls[0])
 	}
 }
@@ -190,7 +191,7 @@ func TestMemorySearch550_DenominatorTellsExcludedFromAbsent(t *testing.T) {
 	if pol.Returned != 0 || pol.UnfilteredReturned == nil || *pol.UnfilteredReturned != 2 || pol.Authority != "provenance" || pol.RepoScope != policyScope {
 		t.Fatalf("retrieval_policy %+v", pol)
 	}
-	if len(stub.calls) != 2 || stub.calls[1] != (MemorySearchRequest{Limit: 5}) {
+	if len(stub.calls) != 2 || !reflect.DeepEqual(stub.calls[1], MemorySearchRequest{Limit: 5}) {
 		t.Fatalf("calls %+v; want the filtered search, then one unfiltered count", stub.calls)
 	}
 }
@@ -215,7 +216,7 @@ func TestMemorySearch550_AuthorityWithoutScopeReachesTheSearch(t *testing.T) {
 	rec := httptest.NewRecorder()
 	srv.MemorySearch(rec, httptest.NewRequest(http.MethodGet, "/api/v1/projects/p1/memory/search?q=x&authority=provenance", nil))
 	decodePolicyResp(t, rec)
-	if got := stub.calls[0]; got != (MemorySearchRequest{Limit: 10, Authority: "provenance"}) {
+	if got := stub.calls[0]; !reflect.DeepEqual(got, MemorySearchRequest{Limit: 10, Authority: "provenance"}) {
 		t.Fatalf("search got %+v", got)
 	}
 }

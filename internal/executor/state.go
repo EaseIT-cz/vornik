@@ -26,11 +26,15 @@ type executionState struct {
 	// typically <100 KB total.
 	//
 	// Inter-project orchestration Phase D (LLD §6.1).
-	StepResults         map[string]json.RawMessage `json:"stepResults,omitempty"`
-	ApprovalPendingStep string                     `json:"approvalPendingStep,omitempty"`
-	ApprovalGrantedStep string                     `json:"approvalGrantedStep,omitempty"`
-	VisitCounts         map[string]int             `json:"visitCounts,omitempty"`
-	Iterations          int                        `json:"iterations,omitempty"`
+	StepResults map[string]json.RawMessage `json:"stepResults,omitempty"`
+	// CallResume is set by a call_project step at dispatch and read by the
+	// caller's resume, which routes on the call's outcome (GitHub #636,
+	// #664; inter-project orchestration design, amendment 2026-11-06).
+	CallResume          *callResume    `json:"callResume,omitempty"`
+	ApprovalPendingStep string         `json:"approvalPendingStep,omitempty"`
+	ApprovalGrantedStep string         `json:"approvalGrantedStep,omitempty"`
+	VisitCounts         map[string]int `json:"visitCounts,omitempty"`
+	Iterations          int            `json:"iterations,omitempty"`
 	// PlanSteps and PlanIndex track progress within a "plan" step so that
 	// execution can resume from the right role after a daemon restart.
 	PlanSteps       []string `json:"planSteps,omitempty"`
@@ -861,4 +865,27 @@ func (e *Executor) Resume(taskID string) (*ResumeStatus, error) {
 		ExecutionID: exec.ID,
 		ResumedAt:   time.Now(),
 	}, nil
+}
+
+// recordStepResult makes a successful step's result readable by every later
+// step through ${outputs.<step>.<field>}. ONE implementation for every type in
+// registry.RecordingStepTypes (GitHub #632, F1): agent, system, plan,
+// spawn_project, a2a_call. call_project is recorded by its caller's resume
+// instead (applyCallResume, GitHub #636). An empty result records nothing, so a reference
+// to it fails closed. The bytes are copied (stepResultJSON), never aliased to
+// LastResult, which is reassigned independently.
+//
+// Called on success only. Entering a step cleared its entry (F2), so a step
+// that fails never leaves the previous run's result behind.
+//
+// Design: 2026-09-03-system-step-output-reaches-the-next-agent-design.md,
+// Amendment 2026-11-04.
+func recordStepResult(state *executionState, stepID string, raw json.RawMessage) {
+	if state == nil || len(raw) == 0 {
+		return
+	}
+	if state.StepResults == nil {
+		state.StepResults = map[string]json.RawMessage{}
+	}
+	state.StepResults[stepID] = stepResultJSON(raw)
 }

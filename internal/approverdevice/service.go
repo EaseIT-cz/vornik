@@ -142,6 +142,8 @@ type Service struct {
 	// guarded transition, in Decide and Withdraw (withdraw.go seam). Nil in
 	// production.
 	beforeTransition func(op, id string)
+	// pushState is Web Push to the devices (webpush.go, GitHub #163).
+	pushState
 }
 
 // applyLease bounds how long one holder may run an effect before another
@@ -815,8 +817,11 @@ func (s *Service) pushEnrolled(ctx context.Context, label string, at time.Time) 
 			label, at.Format(time.RFC1123), s.origin))
 }
 
+// push sends to the operator channel and, with Web Push on, to each
+// subscribed device: the subject only (§9.3a B.1).
 func (s *Service) push(ctx context.Context, subject, body string) {
 	if s.notify != nil {
 		s.notify(ctx, subject, body)
 	}
+	s.webPushAll(ctx, subject)
 }

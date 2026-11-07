@@ -194,6 +194,9 @@ type DoctorHandlers struct {
 	// (agent-administered Vornik design §9.2).
 	approverDevices persistence.ApproverDeviceRepository
 	approverPush    bool
+	// approverWebPush backs the Web Push part of approver_devices (GitHub
+	// #163); nil when Web Push is off.
+	approverWebPush persistence.ApproverPushRepository
 	// agentBudgets backs agent_namespace_budget (agent-administered design
 	// §18.4 F10): each agent namespace's budget sum, ceiling and waiting
 	// cover request, read per doctor run. Nil leaves the check SKIPPED.
@@ -201,6 +204,13 @@ type DoctorHandlers struct {
 	// agentRefusalCounts backs agent_refusal_burst (agent-administered design
 	// §23.2): per-namespace refusal counts since a time. Nil: SKIPPED.
 	agentRefusalCounts func(ctx context.Context, since time.Time) (map[string]int, error)
+	// a2aKeyRetrieval backs a2a_corpus_walk (federation design, slice 2 of
+	// #617): per caller key, A2A tasks and distinct chunks since a time.
+	// Nil: SKIPPED.
+	a2aKeyRetrieval func(ctx context.Context, since time.Time) ([]persistence.A2AKeyRetrieval, error)
+	// sensitivityCapRoles backs memory_sensitivity_cap (#618 C4; firewall
+	// design, "Amendment 2026-11-06 (#618)"). Nil leaves the check SKIPPED.
+	sensitivityCapRoles func(ctx context.Context) ([]SensitivityCapRole, error)
 	// agentReadVerdicts backs agent_read_tools_rejudged (agent-administered
 	// design §6.5, GitHub #413). Nil: SKIPPED.
 	agentReadVerdicts func() ([]mcp.ReadEntryVerdict, []string)
@@ -331,6 +341,12 @@ type DoctorHandlers struct {
 	// routing decision, so model_route_coverage cannot disagree with dispatch.
 	// Nil when the chat provider is not the router (the check then SKIPs).
 	chatRouteResolver func(model string) (route string, matched bool)
+	// chatRouteOf is the live router's RouteOf, for chat_model_fallback
+	// (nonswarm-llm-fallback design §11.2(b), #620). Nil: the check SKIPs.
+	chatRouteOf func(model string) string
+	// chatModel and chatModelFallbacks are snapshotted from config.yaml.
+	chatModel          string
+	chatModelFallbacks map[string]string
 
 	// modelHealthSource supplies recent per-model runtime health
 	// statistics for checkModelHealth. Defaults to a DB-backed query
@@ -501,6 +517,8 @@ func (h *DoctorHandlers) SetServerConfig(cfg *config.Config) {
 	h.chatEndpoint = cfg.Chat.Endpoint
 	h.chatAPIKey = cfg.Chat.APIKey
 	h.chatProvider = cfg.Chat.Provider
+	h.chatModel = cfg.Chat.Model
+	h.chatModelFallbacks = cfg.Chat.Router.ModelFallbacks
 
 	// Retention posture for checkRetentionEnabled. Only NON-ZERO windows are
 	// recorded: an unset window prunes nothing, so counting it as configured
@@ -589,6 +607,12 @@ func githubClientSecret(cfg *config.Config) string {
 // design, 2026-09-24.
 func (h *DoctorHandlers) SetChatRouteResolver(resolve func(model string) (route string, matched bool)) {
 	h.chatRouteResolver = resolve
+}
+
+// SetChatRouteOf hands chat_model_fallback the live router's RouteOf, under
+// the same contract as SetChatRouteResolver (#620).
+func (h *DoctorHandlers) SetChatRouteOf(routeOf func(model string) string) {
+	h.chatRouteOf = routeOf
 }
 
 // SetConfigPath records the filesystem path config.yaml was loaded
@@ -681,6 +705,7 @@ func (h *DoctorHandlers) RunReportReadOnly(ctx context.Context) DoctorReport {
 	report.Checks = append(report.Checks, h.checkSubjectRequestDeadlines(ctx))
 	report.Checks = append(report.Checks, h.checkAIOutputMarking())
 	report.Checks = append(report.Checks, h.checkModelRouteCoverage())
+	report.Checks = append(report.Checks, h.checkChatModelFallback())
 	report.Checks = append(report.Checks, h.checkScraperProfileFreshness(ctx, fix))
 	report.Checks = append(report.Checks, h.checkGatewayHealthy(ctx, fix))
 	report.Checks = append(report.Checks, h.checkWebWritesInsecure(ctx, fix))
@@ -688,6 +713,8 @@ func (h *DoctorHandlers) RunReportReadOnly(ctx context.Context) DoctorReport {
 	report.Checks = append(report.Checks, h.checkApproverDevices(ctx, fix))
 	report.Checks = append(report.Checks, h.checkAgentNamespaceBudget(ctx))
 	report.Checks = append(report.Checks, h.checkAgentRefusalBurst(ctx))
+	report.Checks = append(report.Checks, h.checkA2ACorpusWalk(ctx))
+	report.Checks = append(report.Checks, h.checkMemorySensitivityCap(ctx))
 	report.Checks = append(report.Checks, h.checkAgentChangeStaysApplied(ctx))
 	report.Checks = append(report.Checks, h.checkAgentModelCatalogue())
 	report.Checks = append(report.Checks, h.checkProvenanceClone())
@@ -794,6 +821,7 @@ func (h *DoctorHandlers) RunDoctor(w http.ResponseWriter, r *http.Request) {
 	report.Checks = append(report.Checks, h.checkSubjectRequestDeadlines(ctx))
 	report.Checks = append(report.Checks, h.checkAIOutputMarking())
 	report.Checks = append(report.Checks, h.checkModelRouteCoverage())
+	report.Checks = append(report.Checks, h.checkChatModelFallback())
 	report.Checks = append(report.Checks, h.checkScraperProfileFreshness(ctx, fix))
 	report.Checks = append(report.Checks, h.checkGatewayHealthy(ctx, fix))
 	report.Checks = append(report.Checks, h.checkWebWritesInsecure(ctx, fix))
@@ -801,6 +829,8 @@ func (h *DoctorHandlers) RunDoctor(w http.ResponseWriter, r *http.Request) {
 	report.Checks = append(report.Checks, h.checkApproverDevices(ctx, fix))
 	report.Checks = append(report.Checks, h.checkAgentNamespaceBudget(ctx))
 	report.Checks = append(report.Checks, h.checkAgentRefusalBurst(ctx))
+	report.Checks = append(report.Checks, h.checkA2ACorpusWalk(ctx))
+	report.Checks = append(report.Checks, h.checkMemorySensitivityCap(ctx))
 	report.Checks = append(report.Checks, h.checkAgentChangeStaysApplied(ctx))
 	report.Checks = append(report.Checks, h.checkAgentModelCatalogue())
 	report.Checks = append(report.Checks, h.checkProvenanceClone())

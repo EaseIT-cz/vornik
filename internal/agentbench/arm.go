@@ -117,7 +117,7 @@ import (
 // v1 was never bumped through any of those, which is the failure this comment
 // exists to prevent: the mechanism refused nothing because nobody moved the
 // number it keys on.
-const HarnessVersion = "9"
+const HarnessVersion = "10"
 
 // ArmFields enumerates every axis that makes two agent-benchmark runs
 // incomparable.

@@ -123,9 +123,9 @@ func TestCompanionGrant_AgentAdmin(t *testing.T) {
 		// H1 (plan P2, pinned in P3): the minted key is not admin-class, so
 		// no admin route (pairing included) is open to it.
 		gate := httptest.NewRecorder()
-		ok := srv.requireAdminClassGate(gate, grantRequest(t, nil, out.Secret, true))
+		ok := srv.requireOperatorScopeFor(gate, grantRequest(t, nil, out.Secret, true), SurfaceAgentGrant)
 		require.False(t, ok, "an agent admin key passed the admin-class gate")
-		require.True(t, strings.Contains(gate.Body.String(), "ADMIN_SCOPE_REQUIRED"))
+		require.True(t, strings.Contains(gate.Body.String(), "OPERATOR_CAPABILITY_REQUIRED"))
 	})
 }
 

@@ -1,7 +1,7 @@
 ---
 sources:
     - path: internal/config/config.go
-      sha256: 2908858f50540e2c7973be2f308d559b0811c622faabcad546cb5adcf36854c3
+      sha256: cebe210e204e478a977d739001b3ca1dd660e60fa5a36f9d9233c9b3ec47e48b
     - path: internal/executor/executor.go
       sha256: c281ff12df80cf1a4eb409f19044be54dff5678cf5cc70f03ae69b22c376b28b
 ---

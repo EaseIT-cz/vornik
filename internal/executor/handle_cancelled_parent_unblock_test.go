@@ -28,6 +28,10 @@ func TestExecutor_HandleCancelled_UnblocksWaitingParent(t *testing.T) {
 	tr.mu.Lock()
 	got := tr.tasks[parentID].Status
 	tr.mu.Unlock()
-	assert.Equal(t, persistence.TaskStatusQueued, got,
-		"cancelling the last child must re-queue the WAITING_FOR_CHILDREN parent")
+	// The 2026-06-07 fix re-queued the parent here, and its resume guard then
+	// reported the cancelled child as completed (#641, 2026-11-04). The
+	// parent still must not wait forever; with its only child cancelled it
+	// now ends CANCELLED.
+	assert.Equal(t, persistence.TaskStatusCancelled, got,
+		"cancelling the last child must end the WAITING_FOR_CHILDREN parent, CANCELLED when no child completed")
 }

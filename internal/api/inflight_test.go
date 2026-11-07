@@ -151,8 +151,10 @@ func TestInflight_EndpointRequiresAdminClass(t *testing.T) {
 	if w := inflightRequest(t, s, "sk-tenant"); w.Code != http.StatusForbidden {
 		t.Fatalf("a non-admin key = %d, want 403", w.Code)
 	}
-	if w := inflightRequest(t, s, ""); w.Code != http.StatusUnauthorized {
-		t.Fatalf("no key = %d, want 401", w.Code)
+	// GitHub #503: the one operator-surface gate refuses an unscoped
+	// caller with no key 403, like a non-admin key.
+	if w := inflightRequest(t, s, ""); w.Code != http.StatusForbidden {
+		t.Fatalf("no key = %d, want 403", w.Code)
 	}
 	w := inflightRequest(t, s, "sk-operator")
 	if w.Code != http.StatusOK {

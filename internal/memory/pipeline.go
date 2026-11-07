@@ -548,6 +548,15 @@ type IngestArtifactOptions struct {
 	// reinstate (GitHub #76; design 22, "Reinstating a refuted mirrored
 	// note").
 	ReinstateMirrored bool
+
+	// ProvenanceOnly makes the ingest's only possible authority provenance
+	// (#639; design 22, "Amendment 2026-11-04 (#639)", M3). It is treated as
+	// companion-delegated without asking CompanionDelegated, so the producer
+	// role is never role-of-record and verifyProvenance runs. The repository
+	// mirror sets it. That is a call-site convention, not a type rule: any
+	// caller that set it would lose role-of-record and gain only provenance,
+	// which needs byte equality with the trusted branch.
+	ProvenanceOnly bool
 }
 
 // IngestArtifact runs one source artifact through the pipeline with
@@ -881,7 +890,7 @@ func (p *Pipeline) IngestArtifactWithOptions(
 		// question asked: provenance replaces the role's authority, it does
 		// not add authority a class never had.
 		eligible := EffectiveClassPolicy(cand.ProposedClass, cand.ProducerRole).RoleOfRecordEligible
-		delegated := eligible && p.companionDelegated(ctx, projectID, taskID, cand.ProducerRole)
+		delegated := p.provenanceDelegated(ctx, projectID, taskID, cand.ProducerRole, eligible, opts)
 		policy := EffectiveClassPolicyFor(cand.ProposedClass, cand.ProducerRole, delegated)
 		if delegated && p.indexer != nil {
 			if p.verifyProvenance(ctx, projectID, artifactID, sourceName, content, opts) {

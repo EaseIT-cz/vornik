@@ -12,6 +12,8 @@ package persistence
 func IsKnownTaskFailureClass(s string) bool {
 	switch s {
 	case TaskFailureClassBudgetBlocked,
+		TaskFailureClassRouteNoFit,
+		TaskFailureClassCrossProjectCallFailed,
 		TaskFailureClassCancelled,
 		TaskFailureClassChildFailed,
 		TaskFailureClassDelegationGuard,

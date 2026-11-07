@@ -81,6 +81,9 @@ func (s *SQLTraceStore) Executions(ctx context.Context, taskID string) ([]string
 	if s == nil || s.DB == nil {
 		return nil, fmt.Errorf("trace store has no database")
 	}
+	// Oldest first, and that is load-bearing: the runner takes the LAST id as
+	// the execution whose terminal decides the task (§12.29), and scoring
+	// lets a later attempt supersede an earlier one.
 	rows, err := s.DB.QueryContext(ctx, fmt.Sprintf(`
 		SELECT id FROM executions WHERE task_id = %s ORDER BY created_at ASC`,
 		s.Dialect.arg(1)), taskID)
@@ -113,6 +116,54 @@ func (s *SQLTraceStore) StateSnapshot(ctx context.Context, executionID string) (
 		return nil, fmt.Errorf("read state snapshot for %s: %w", executionID, err)
 	}
 	return snapshot, nil
+}
+
+// pinnedTerminals is the part of an execution's workflow_snapshot (the JSON
+// of the registry.Workflow it was planned against) that the terminal check
+// reads. Declared here rather than imported, so the scorer does not depend on
+// the whole registry package; TestPinnedTerminals_MatchesTheRegistryShape_655
+// fails if registry.Workflow's JSON stops carrying these fields.
+type pinnedTerminals struct {
+	Terminals map[string]struct {
+		Recovery bool
+	}
+}
+
+// Terminal reads the terminal an execution reached (benchmark LLD §12.29).
+//
+// The terminal is the execution's current_step_id once it is terminal, and its
+// declaration is read from the execution's own workflow_snapshot, the
+// definition the run was planned against, not the live one, which may have
+// changed since. An id the snapshot does not declare as a terminal is an
+// error, never a guess.
+func (s *SQLTraceStore) Terminal(ctx context.Context, executionID string) (ExecutionTerminal, error) {
+	if s == nil || s.DB == nil {
+		return ExecutionTerminal{}, fmt.Errorf("trace store has no database")
+	}
+	var stepID sql.NullString
+	var snapshot []byte
+	err := s.DB.QueryRowContext(ctx, fmt.Sprintf(`
+		SELECT current_step_id, workflow_snapshot FROM executions WHERE id = %s`, s.Dialect.arg(1)), executionID).
+		Scan(&stepID, &snapshot)
+	if err != nil {
+		return ExecutionTerminal{}, fmt.Errorf("read the terminal of %s: %w", executionID, err)
+	}
+	if !stepID.Valid || stepID.String == "" {
+		return ExecutionTerminal{}, fmt.Errorf("execution %s has no current step recorded", executionID)
+	}
+	if len(snapshot) == 0 {
+		return ExecutionTerminal{}, fmt.Errorf("execution %s has no workflow snapshot", executionID)
+	}
+	var wf pinnedTerminals
+	if err := json.Unmarshal(snapshot, &wf); err != nil {
+		return ExecutionTerminal{}, fmt.Errorf("decode the workflow snapshot of %s: %w", executionID, err)
+	}
+	term, ok := wf.Terminals[stepID.String]
+	if !ok {
+		return ExecutionTerminal{}, fmt.Errorf("execution %s is at %q, which its workflow does not declare as a terminal",
+			executionID, stepID.String)
+	}
+	return ExecutionTerminal{StepID: stepID.String, Recovery: term.Recovery}, nil
 }
 
 // ObservedModels reports the role -> model map a run ACTUALLY used.

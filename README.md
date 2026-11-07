@@ -182,7 +182,9 @@ judge-free figures did not move at all, so the judge-free tier is the headline n
 | **Open-weight friendly** | Point it at your own endpoint — Ollama, vLLM, or a cloud API. |
 | **Workflows, not prompts** | Multi-step graphs with typed steps, budgets, and approval gates. |
 | **Assistants without your keys** | Hermes, Claude Code or Codex ask Vornik for work over your private systems; Vornik holds the credentials and returns a checked result, never raw data. |
-| **You approve on your phone** | New connections, credentials and every proposed write wait for you on a paired phone. |
+| **You approve on your phone** | New connections, credentials and every proposed write wait for you on a paired phone, which is notified when one arrives. |
+| **Experts other agents can consult** | A project answers other agents over A2A, each caller key bounded by rate, budget and a daily quota, and only from material you approved. |
+| **Output a person can review** | Agents are told to write for a person, and reviews report readability with numbers the daemon measures. |
 | **EU AI Act transparency built in** | Every channel tells people they are talking to an AI, and generated output carries a signed mark anyone can verify. |
 
 > **Editions.** This repository is **Vornik Community Edition** (AGPL-3.0) — the
@@ -235,4 +237,4 @@ Contributions welcome under a [CLA](docs/public/contributing.md)
 
 </div>
 
-<!-- summary-reviewed-through: 2026.11.1 -->
+<!-- summary-reviewed-through: 2026.11.2 -->

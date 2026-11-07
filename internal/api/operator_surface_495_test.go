@@ -35,7 +35,7 @@ const staticKey495 = "sk-static-not-admin-495"
 type route495 struct{ method, path, body string }
 
 // operatorSurface495 is the census of design A3 and A4a: every working
-// method/path pair behind the operator-surface gate (29).
+// method/path pair behind the operator-surface gate (34; #503 added five).
 var operatorSurface495 = []route495{
 	{http.MethodGet, "/api/v1/config", ""},                                                // 1
 	{http.MethodGet, "/api/v1/memory/policy/evaluations", ""},                             // 2
@@ -66,6 +66,12 @@ var operatorSurface495 = []route495{
 	{http.MethodPost, "/api/v1/operator/assist", `{}`},                                    // 27
 	{http.MethodPost, "/api/v1/config/reload", ""},                                        // 28
 	{http.MethodGet, "/api/v1/config/reload-status", ""},                                  // 29
+	// GitHub #503: the routes that had their own admin-class gate.
+	{http.MethodGet, "/api/v1/operator/journal", ""},                    // 30
+	{http.MethodGet, "/api/v1/daemon/inflight", ""},                     // 31
+	{http.MethodPost, "/api/v1/mcp/oauth/begin", `{"server":"x"}`},      // 32
+	{http.MethodGet, "/api/v1/mcp/oauth/status?state=s503", ""},         // 33
+	{http.MethodPost, "/api/v1/mcp/oauth/disconnect", `{"server":"x"}`}, // 34
 }
 
 // newHarness495 is the #466 harness (real router, real SQLite, an admin
@@ -81,7 +87,7 @@ func newHarness495(t *testing.T) *harness466 {
 }
 
 func TestOperatorSurface495_CensusSize(t *testing.T) {
-	require.Len(t, operatorSurface495, 29, "design A3 + A4a: 27 operator pairs plus config reload and reload-status")
+	require.Len(t, operatorSurface495, 34, "design A3 + A4a: 27 operator pairs plus config reload and reload-status, plus #503's five")
 }
 
 func TestOperatorSurface495_UnscopedStaticKeyRefused(t *testing.T) {
@@ -173,6 +179,13 @@ var expectedOperatorGated495 = []string{
 	"SkillSetGlobal",
 	"RetireInstinct",
 	"operatorOnly",
+	// GitHub #503: the routes that had their own admin-class gate.
+	"DaemonInflight",
+	"MCPOAuthBegin",
+	"MCPOAuthDisconnect",
+	"MCPOAuthStatus",
+	"OperatorJournal",
+	"companionGrantAgentAdmin",
 }
 
 // Limit (code review review-20261022-5c5f, F2): this is a list of names.

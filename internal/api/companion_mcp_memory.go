@@ -998,14 +998,11 @@ func (s *Server) companionToolRemember(ctx context.Context, key *persistence.API
 	// 2026-05-29 drift-mitigation pass. Fails OPEN on a query error
 	// (the deposit is cheap and a transient DB blip shouldn't freeze
 	// every remember).
-	if key.BudgetCapUSD != nil && s.llmUsageRepo != nil {
-		spent, sumErr := s.llmUsageRepo.SumCostByAPIKey(ctx, key.ID, time.Time{}, time.Time{})
-		if sumErr != nil {
-			s.logger.Warn().Err(sumErr).Str("api_key_id", key.ID).
-				Msg("companion remember: budget-cap spend lookup failed; allowing deposit")
-		} else if spent >= *key.BudgetCapUSD {
-			return "", fmt.Errorf("BUDGET_EXCEEDED: key budget cap $%.4f reached (spent $%.4f); remember refused", *key.BudgetCapUSD, spent)
-		}
+	if over, spent, sumErr := s.keySpendOverCap(ctx, key); sumErr != nil {
+		s.logger.Warn().Err(sumErr).Str("api_key_id", key.ID).
+			Msg("companion remember: budget-cap spend lookup failed; allowing deposit")
+	} else if over {
+		return "", fmt.Errorf("BUDGET_EXCEEDED: key budget cap $%.4f reached (spent $%.4f); remember refused", *key.BudgetCapUSD, spent)
 	}
 
 	sourceName := strings.TrimSpace(args.SourceName)

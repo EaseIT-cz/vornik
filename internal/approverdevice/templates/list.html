@@ -9,4 +9,5 @@
 {{range .Pending}}<div class="card"><p>{{.Sentence}}</p><p class="mut">{{when .CreatedAt}}</p><a class="act" href="/ui/approve/{{.ID}}">Review</a></div>
 {{else}}{{if not .Groups}}<div class="card"><p class="mut">Nothing is waiting for a decision.</p></div>{{end}}{{end}}
 <p class="mut">This device: {{.Device.Label}}. {{.Notify}}</p>
+{{with .Push}}<p class="mut">{{.}} <a class="ref" href="/ui/approve/push">Notifications</a></p>{{end}}
 {{template "foot"}}{{end}}

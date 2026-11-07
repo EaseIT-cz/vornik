@@ -1,7 +1,7 @@
 ---
 sources:
     - path: internal/cli/agent_connect.go
-      sha256: 734e810ae87fd744e0f9ca94c5f71ea792587c2dc0d137cccb7238bb15868b2c
+      sha256: f4838336b1ec790303dffcd526a9dad4b914fbff98b957356d223eaea04a3223
     - path: internal/agentadmin/admin_guidance.md
       sha256: b84df1b489d0b74c3ab122225d799e8dc4bfe8fafd2e139bb44acd159b1d124b
 ---

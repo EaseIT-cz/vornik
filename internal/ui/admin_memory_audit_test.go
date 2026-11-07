@@ -31,6 +31,10 @@ func (f *fakeRetrievalAudit) Record(_ context.Context, _ *persistence.MemoryRetr
 func (f *fakeRetrievalAudit) FeedbackStats(_ context.Context, _ string, _ time.Time) (*persistence.MemoryFeedbackStats, error) {
 	return &persistence.MemoryFeedbackStats{}, nil
 }
+func (*fakeRetrievalAudit) A2AChunksByCallerKey(context.Context, time.Time) ([]persistence.A2AKeyRetrieval, error) {
+	return nil, nil
+}
+
 func (f *fakeRetrievalAudit) UnretrievedChunkIDs(_ context.Context, _ string, _ time.Time, _ int) ([]string, error) {
 	return nil, nil
 }

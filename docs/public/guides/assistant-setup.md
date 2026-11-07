@@ -1,7 +1,7 @@
 ---
 sources:
     - path: internal/cli/agent_connect.go
-      sha256: 734e810ae87fd744e0f9ca94c5f71ea792587c2dc0d137cccb7238bb15868b2c
+      sha256: f4838336b1ec790303dffcd526a9dad4b914fbff98b957356d223eaea04a3223
     - path: internal/harnessconfig/harnessconfig.go
       sha256: 601958b2eed5b85284f43c80973d23b0bf9565a5d9e4db3fb42208ff69ea5984
     - path: internal/agentadmin/harness.go
@@ -74,6 +74,13 @@ for reuse.
    - **Another browser used its sign-in.** A code alone does not restore it: a device you already use must approve it again. If you did not expect this, revoke the device first (`vornikctl devices revoke`).
 
    Vornik renews the phone's sign-in on every approval, so a copied sign-in stops working at your next approval. Every restore, and a browser that keeps using the phone's sign-in, raises an alert on your notification channel.
+
+   **To hear of requests on the phone itself,** open **Notifications** (`/ui/approve/push`) on it and choose **Turn on**. Every alert that goes to your notification channel then also reaches the phone as a browser notification. It says what happened, not what is asked. It needs Vornik served over HTTPS. On iPhone and iPad, notifications work only from the Home Screen (iOS 16.4 or later):
+
+   1. Add the approvals page to the Home Screen.
+   2. Open it from there.
+   3. Pair it as a new device: run `vornikctl pair-device`, then approve it from the phone you already paired.
+   4. Turn notifications on inside that app.
 
 2. Make sure your `vornikctl` can reach Vornik with the operator's admin key, as for any other admin command (`VORNIK_API_KEY`, or `vornikctl auth login`).
 

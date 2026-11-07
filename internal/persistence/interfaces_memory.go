@@ -134,6 +134,12 @@ type MemoryRetrievalAuditRepository interface {
 	// projects with thousands of searches per day. Powers B-16's
 	// /ui/admin/memory-audit retrieval panel.
 	List(ctx context.Context, filter MemoryRetrievalAuditFilter) ([]*MemoryRetrievalAudit, error)
+
+	// A2AChunksByCallerKey returns, per creating key of an A2A task
+	// (creation_source A2A, created_by_api_key_id set), the tasks with an
+	// audit row at or after since and the distinct chunks those rows list,
+	// most chunks first. Powers the a2a_corpus_walk doctor check (#617).
+	A2AChunksByCallerKey(ctx context.Context, since time.Time) ([]A2AKeyRetrieval, error)
 }
 
 // MemorySearchStageRepository persists per-search stage rows into
@@ -160,6 +166,11 @@ type MemoryQuarantineRepository interface {
 	Get(ctx context.Context, id string) (*MemoryQuarantineItem, error)
 	MarkReleased(ctx context.Context, id, releasedChunkID string) error
 	MarkDropped(ctx context.Context, id string) error
+	// ExistsForArtifact reports whether one of the project's quarantine
+	// rows for this source artifact is pending or dropped; a released row
+	// does not count. The repository mirror skips such a version (#639;
+	// design 22, "Amendment 2026-11-04 (#639)", M2 step 3).
+	ExistsForArtifact(ctx context.Context, projectID, artifactID string) (bool, error)
 	CountByGate(ctx context.Context, projectID string) (map[string]int, error)
 }
 

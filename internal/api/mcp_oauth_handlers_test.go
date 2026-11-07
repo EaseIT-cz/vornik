@@ -299,12 +299,14 @@ func TestRequireAdminClassGate_RejectsNonAdminKeys(t *testing.T) {
 	s.MCPOAuthBegin(w, r)
 	assert.Equal(t, http.StatusForbidden, w.Code, w.Body.String())
 
-	// Auth enabled + no key at all => 401.
+	// Auth enabled + no key at all => 403 (GitHub #503: the one
+	// operator-surface gate refuses an unscoped caller with no key like a
+	// non-admin key).
 	r = httptest.NewRequest(http.MethodPost, "/api/v1/mcp/oauth/begin", strings.NewReader(`{"server":"x"}`))
 	r = r.WithContext(context.WithValue(r.Context(), authEnabledKey, true))
 	w = httptest.NewRecorder()
 	s.MCPOAuthBegin(w, r)
-	assert.Equal(t, http.StatusUnauthorized, w.Code)
+	assert.Equal(t, http.StatusForbidden, w.Code)
 
 	// Auth enabled + the admin key => through to the handler.
 	r = httptest.NewRequest(http.MethodPost, "/api/v1/mcp/oauth/begin", strings.NewReader(`{"server":"x"}`))

@@ -53,3 +53,31 @@ func TestAuditBuildTags_StillSkipsANestedExportCopy(t *testing.T) {
 		t.Errorf("found %d files, want 1 — the nested export copy was counted twice", got)
 	}
 }
+
+// Toolchain-set constraints (GOOS, GOARCH, unix, cgo, goN.M) are set by
+// every build of a matching platform, not by build plumbing. Found at:
+// lint, 2026-11-05: //go:build unix files (GitHub #461) were reported as
+// never compiled, and linux passed only because one Makefile smoke target
+// happens to pass -tags=linux.
+func TestAuditBuildTags_ToolchainConstraintsAreNotPlumbingTags(t *testing.T) {
+	root := t.TempDir()
+	files := map[string]string{
+		"a.go": "//go:build unix\n\npackage pkg\n",
+		"b.go": "//go:build !unix && !windows\n\npackage pkg\n",
+		"c.go": "//go:build linux && amd64 && cgo\n\npackage pkg\n",
+		"d.go": "//go:build go1.22 && smoke_codex\n\npackage pkg\n",
+	}
+	for name, src := range files {
+		if err := os.WriteFile(filepath.Join(root, name), []byte(src), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	audit, err := AuditBuildTags(root, nil)
+	if err != nil {
+		t.Fatalf("audit: %v", err)
+	}
+	got := audit.NeverSet()
+	if len(got) != 1 || got[0] != "smoke_codex" {
+		t.Errorf("NeverSet = %v, want only [smoke_codex]", got)
+	}
+}

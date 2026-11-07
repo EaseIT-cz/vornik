@@ -241,3 +241,18 @@ func TestInitDispatcher_NilRegistryNoWarnNoPanic(t *testing.T) {
 		t.Fatal("c.Dispatcher nil despite ChatClient being configured")
 	}
 }
+
+// GitHub #642: the turn-status reporter is wired for every channel, not only
+// when the Slack subsystem starts, so Telegram shows its status line without
+// Slack.
+func TestInitDispatcher_TurnStatusReporterWithoutSlack_642(t *testing.T) {
+	c := &Container{
+		Logger:     zerolog.Nop(),
+		Config:     &config.Config{},
+		ChatClient: chat.NewClient("https://api.example.com", "test-key", "gpt-4"),
+	}
+	c.initDispatcher()
+	if c.Dispatcher == nil || !c.Dispatcher.TurnStatusReporterBound() {
+		t.Fatal("the dispatcher must have a turn-status reporter with Slack disabled")
+	}
+}

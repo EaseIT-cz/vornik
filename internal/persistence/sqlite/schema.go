@@ -1388,6 +1388,8 @@ CREATE TABLE IF NOT EXISTS memory_quarantine (
 CREATE INDEX IF NOT EXISTS idx_quarantine_project_time ON memory_quarantine(project_id, quarantined_at DESC);
 CREATE INDEX IF NOT EXISTS idx_quarantine_project_gate ON memory_quarantine(project_id, failed_gate);
 CREATE INDEX IF NOT EXISTS idx_quarantine_project_scope ON memory_quarantine(project_id, repo_scope, quarantined_at DESC);
+-- #639: the repository mirror's per-version lookup (ExistsForArtifact).
+CREATE INDEX IF NOT EXISTS idx_quarantine_project_artifact ON memory_quarantine(project_id, source_artifact_id) WHERE released_at IS NULL;
 
 -- ============================================================
 -- project_ingest_queue — round 3 (memory/KG)
@@ -1549,6 +1551,40 @@ CREATE TABLE IF NOT EXISTS trading_shadow_decisions (
 
 CREATE INDEX IF NOT EXISTS idx_trading_shadow_project_observed
     ON trading_shadow_decisions (project_id, observed_at);
+
+-- Approver devices' Web Push subscriptions, one per device. Mirrors postgres
+-- migration 249 (GitHub #163).
+CREATE TABLE IF NOT EXISTS approver_push_subscriptions (
+    device_id    TEXT PRIMARY KEY REFERENCES approver_devices (id) ON DELETE CASCADE,
+    endpoint     TEXT NOT NULL,
+    p256dh       TEXT NOT NULL,
+    auth         TEXT NOT NULL,
+    created_at   TEXT NOT NULL,
+    last_sent_at TEXT,
+    last_status  TEXT NOT NULL DEFAULT ''
+);
+
+-- The companion hints' follow windows and each key's last contact. Mirrors
+-- postgres migration 248 (GitHub #634 slice 2).
+CREATE TABLE IF NOT EXISTS companion_hint_windows (
+    project_id     TEXT NOT NULL,
+    hint_id        TEXT NOT NULL,
+    "window"       TEXT NOT NULL DEFAULT '',
+    backoff_until  TEXT,
+    fired_total    INTEGER NOT NULL DEFAULT 0,
+    followed_total INTEGER NOT NULL DEFAULT 0,
+    rev            INTEGER NOT NULL,
+    updated_at     TEXT NOT NULL,
+    PRIMARY KEY (project_id, hint_id)
+);
+CREATE TABLE IF NOT EXISTS companion_hint_clients (
+    key_id         TEXT PRIMARY KEY,
+    project_id     TEXT NOT NULL,
+    last_fetch_at  TEXT,
+    last_upload_at TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_companion_hint_clients_project
+    ON companion_hint_clients (project_id);
 
 -- Benchmark closes (SPY), completed sessions. Mirrors postgres migration
 -- 245 (GitHub #597). Not project-scoped.

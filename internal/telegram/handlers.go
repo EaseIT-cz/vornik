@@ -119,6 +119,7 @@ Tasks:
 /tasks [project] - List recent tasks (active or named project)
 /status <id> - Show a task's status + last step
 /cancel <id> - Cancel a task
+/stop - Stop what I am doing in this chat (/stop tasks also cancels the tasks it started)
 /retry <id> - Retry a failed/terminal task
 
 Identity:
@@ -677,6 +678,9 @@ func (b *Bot) HandleMessage(ctx context.Context, msg *Message) error {
 		if cmd == "/cancel" {
 			return b.sendMessage(ctx, msg.ChatID, b.handleCancelCmd(ctx, msg.UserID, parts))
 		}
+		if cmd == "/stop" {
+			return b.sendMessage(ctx, msg.ChatID, b.handleStopCmd(ctx, msg.ChatID, msg.UserID, parts))
+		}
 		if cmd == "/retry" {
 			return b.sendMessage(ctx, msg.ChatID, b.handleRetryCmd(ctx, msg.UserID, parts))
 		}
@@ -732,6 +736,11 @@ func (b *Bot) HandleMessage(ctx context.Context, msg *Message) error {
 	// NOT AddMessage here — the receiver appends the new user turn
 	// itself, and a pre-emptive AddMessage would double it in the
 	// dispatcher's history.
+	// #645: a plain message sent while this chat's turn runs joins that turn
+	// at its next model step instead of waiting behind it.
+	if b.offerSteer(ctx, msg) {
+		return b.sendMessage(ctx, msg.ChatID, "Got it, I'll take that into account.")
+	}
 	go b.handleReceiverTurn(receiver, msg)
 	return nil
 }

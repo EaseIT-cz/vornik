@@ -33,7 +33,7 @@ func SwarmSchema() AssetSchema {
 					{Path: "leadRole", Label: "Lead role", Kind: KindString, Help: "Name of the role that acts as the lead/planner. Must match one of the roles below."},
 					{Path: "rolePrelude", Label: "Role prelude", Kind: KindString, Multiline: true, Help: "Operator text prepended to every role's system prompt (after the built-in safety prelude)."},
 					{Path: "config_assistant_enabled", Label: "Configuration assistant enabled", Kind: KindBool, Advanced: true, Help: "Per-swarm assistant kill switch. Only explicit false disables; leave unset in raw YAML to inherit the enabled default."},
-					{Path: "suppressedGuidanceBlocks", Label: "Suppressed guidance blocks", Kind: KindStringList, Advanced: true, Help: "Daemon-authored ADVISORY guidance blocks this swarm's agents should NOT receive: canonical-context, tool-budget. A list of block names, never prompt text — to ADD guidance use the role prelude. reporting-integrity is invariant and cannot be listed: the check behind it runs whatever the prompt says, so suppressing it would remove the warning and not the rule."},
+					{Path: "suppressedGuidanceBlocks", Label: "Suppressed guidance blocks", Kind: KindStringList, Advanced: true, Help: "Daemon-authored ADVISORY guidance blocks this swarm's agents should NOT receive: canonical-context, tool-budget, writing-style. A list of block names, never prompt text — to ADD guidance use the role prelude. reporting-integrity is invariant and cannot be listed: the check behind it runs whatever the prompt says, so suppressing it would remove the warning and not the rule."},
 				},
 			},
 		},
@@ -78,6 +78,7 @@ func swarmRoleItemSchema() AssetSchema {
 					{Path: "count", Label: "Count", Kind: KindInt, Default: "1", Help: "Number of agents for this role."},
 					{Path: "runtimePolicy", Label: "Runtime policy", Kind: KindEnum, Enum: []string{"ephemeral", "warm"}, Help: "Container lifecycle. Empty = daemon default."},
 					{Path: "aliases", Label: "Aliases", Kind: KindStringList, Help: "Alternate names the lead's plan may use that resolve to this role."},
+					{Path: "suppressedGuidanceBlocks", Label: "Suppressed guidance blocks", Kind: KindStringList, Advanced: true, Help: "ADVISORY guidance blocks this role's agents should NOT receive, on top of the swarm's list: canonical-context, tool-budget, writing-style. Block names, never prompt text. Invariant blocks cannot be listed."},
 				},
 			},
 			{
@@ -100,6 +101,8 @@ func swarmRoleItemSchema() AssetSchema {
 					{Path: "memorySearch.strictScope", Label: "Strict scope", Kind: KindBool, Help: "Drop chunks with no repo scope (the migration-grace bucket)."},
 					{Path: "memorySearch.authority", Label: "Authority", Kind: KindEnum, Enum: []string{"any", "provenance"}, Help: "provenance = only design documents the daemon checked against the trusted branch. Not allowed on a role that holds run_shell."},
 					{Path: "memorySearch.limit", Label: "Limit", Kind: KindInt, Help: "Default and maximum hits per search (1-20). 0 = the tool's default."},
+					{Path: "memorySearch.sourcePrefixes", Label: "Source prefixes", Kind: KindStringList, Help: "Only chunks whose source path begins with one of these, e.g. docs/public/ (each ends in /). Needs a repo scope; not allowed on a role that holds run_shell."},
+					{Path: "memorySearch.maxSensitivity", Label: "Max sensitivity", Kind: KindEnum, Enum: []string{"public", "internal", "confidential"}, Help: "Cap the sensitivity tier of what memory_search returns; leave unset for no cap. public = only provenance-verified files under the daemon's memory.public_source_prefixes and chunks an operator set public. A chunk with no tier counts as confidential. Needs a repo scope; not allowed on a role that holds run_shell."},
 				},
 			},
 			{

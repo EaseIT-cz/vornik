@@ -23,6 +23,10 @@ func (s goldReachStore) Assemble(_ context.Context, _, _ string) (agentbench.Exe
 	return s.rec, s.traces, nil
 }
 
+func (s goldReachStore) Terminal(_ context.Context, _ string) (agentbench.ExecutionTerminal, error) {
+	return agentbench.ExecutionTerminal{StepID: "complete"}, nil
+}
+
 // audit 2026-10-12: GitHub #309. The gold recorder (`bench agent gold`) does
 // not go through Runner.Run, so the run-level "no execution reached the
 // model" refusal has to be fed from its own loop: collectInvoked accumulates

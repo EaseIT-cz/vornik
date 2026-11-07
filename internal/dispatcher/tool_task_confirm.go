@@ -23,6 +23,9 @@ import (
 const (
 	scopeCancelTask = "cancel_task"
 	scopeRetryTask  = "retry_task"
+	// scopeCancelReminder: cancel_reminder uses the same two-step (#642,
+	// incident 2026-11-04: it ran on the model's word inside a looping turn).
+	scopeCancelReminder = "cancel_reminder"
 )
 
 // taskActionConfirmationTTL bounds how long an authorization stays open — the same window as
@@ -53,15 +56,22 @@ func authorizeTaskAction(rec *persistence.ChatMemoryWriteConfirmation, scope, ta
 // HERE, before any chat.Action is built, so ExecuteAction's Confirm flag is only ever set on an
 // authorized path.
 func (te *ToolExecutor) confirmTaskAction(ctx context.Context, scope, verb, taskID string) (bool, ToolResult) {
+	return te.confirmAction(ctx, scope, verb, "task", taskID)
+}
+
+// confirmAction is confirmTaskAction for any object the two-step guards: noun
+// names it in the replies ("task", "reminder"), id is what the confirmation is
+// pinned to.
+func (te *ToolExecutor) confirmAction(ctx context.Context, scope, verb, noun, id string) (bool, ToolResult) {
 	if te.memoryConfirms == nil {
-		return false, ToolResult{Content: "I can't " + verb + " a task from chat here: the confirmation step " +
+		return false, ToolResult{Content: "I can't " + verb + " a " + noun + " from chat here: the confirmation step " +
 			"that must come from the user is not available on this deployment. Nothing was changed. " +
-			"The task can be managed from the web UI or vornikctl."}
+			"The " + noun + " can be managed from the web UI or vornikctl."}
 	}
 	operatorID, _ := operatorIDFromContext(ctx)
 	channel, sessionID := originatingChannelFromContext(ctx)
 	if operatorID == "" || channel == "" || sessionID == "" {
-		return false, ToolResult{Content: "I can't " + verb + " a task here: I can't tell who is asking, and " +
+		return false, ToolResult{Content: "I can't " + verb + " a " + noun + " here: I can't tell who is asking, and " +
 			"this action has to be confirmed by the person who asked for it. Nothing was changed."}
 	}
 
@@ -74,7 +84,7 @@ func (te *ToolExecutor) confirmTaskAction(ctx context.Context, scope, verb, task
 			"nothing was changed. Tell the user there was a temporary problem and to try again."}
 	}
 
-	if authorizeTaskAction(rec, scope, taskID, operatorID, now) {
+	if authorizeTaskAction(rec, scope, id, operatorID, now) {
 		// One-shot: consume the authorization BEFORE acting, so a failed action cannot leave
 		// it reusable. The user confirms again if they want another attempt.
 		if err := te.memoryConfirms.Delete(ctx, channel, sessionID); err != nil {
@@ -87,7 +97,7 @@ func (te *ToolExecutor) confirmTaskAction(ctx context.Context, scope, verb, task
 	if err := te.memoryConfirms.Propose(ctx, &persistence.ChatMemoryWriteConfirmation{
 		Channel:            channel,
 		SessionID:          sessionID,
-		ContentFingerprint: taskActionFingerprint(scope, taskID),
+		ContentFingerprint: taskActionFingerprint(scope, id),
 		Scope:              scope,
 		OperatorID:         operatorID,
 		ProposedAt:         now,
@@ -100,8 +110,8 @@ func (te *ToolExecutor) confirmTaskAction(ctx context.Context, scope, verb, task
 	for _, p := range acknowledgementPhrasesFor(scope) {
 		quoted = append(quoted, `"`+p+`"`)
 	}
-	return false, ToolResult{Content: "Confirmation required: nothing has been done yet. To " + verb + " task " +
-		taskID + ", the user must reply with exactly one of these phrases: " + strings.Join(quoted, ", ") +
-		". Relay this to the user and wait for them to type it; then call this tool again for the same task. " +
-		"Do not claim the task was " + verb + "ed, and do not ask them to just say yes."}
+	return false, ToolResult{Content: "Confirmation required: nothing has been done yet. To " + verb + " " + noun + " " +
+		id + ", the user must reply with exactly one of these phrases: " + strings.Join(quoted, ", ") +
+		". Relay this to the user and wait for them to type it; then call this tool again for the same " + noun + ". " +
+		"Do not claim the " + noun + " was " + verb + "ed, and do not ask them to just say yes."}
 }

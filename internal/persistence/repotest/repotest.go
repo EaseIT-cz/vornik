@@ -3624,6 +3624,44 @@ func RunMemoryQuarantineSuite(t *testing.T, repo persistence.MemoryQuarantineRep
 			t.Errorf("ListPending after release = %d, want 0", len(after))
 		}
 	})
+
+	// #639 (design 22, "Amendment 2026-11-04 (#639)", M2 step 3): the
+	// repository mirror skips a version whose artifact has a pending or
+	// dropped quarantine row, and ingests again one whose row was released.
+	t.Run("ExistsForArtifact_counts_pending_and_dropped_not_released", func(t *testing.T) {
+		// The released row above belongs to artifactID.
+		if got, err := repo.ExistsForArtifact(ctx, project, artifactID); err != nil || got {
+			t.Fatalf("released row: ExistsForArtifact = %v, %v; want false", got, err)
+		}
+		pendingArt := seedArtifactRow(t, ctx, artifactRepo, project)
+		droppedArt := seedArtifactRow(t, ctx, artifactRepo, project)
+		for _, a := range []string{pendingArt, droppedArt} {
+			if err := repo.Insert(ctx, &persistence.MemoryQuarantineItem{
+				ProjectID: project, SourceArtifactID: a, Content: "x", ContentHash: "h-" + a, FailedGate: "secret_leak",
+			}); err != nil {
+				t.Fatalf("Insert: %v", err)
+			}
+		}
+		pending, _ := repo.ListPending(ctx, project, 10)
+		for _, it := range pending {
+			if it.SourceArtifactID == droppedArt {
+				if err := repo.MarkDropped(ctx, it.ID); err != nil {
+					t.Fatalf("MarkDropped: %v", err)
+				}
+			}
+		}
+		for _, a := range []string{pendingArt, droppedArt} {
+			if got, err := repo.ExistsForArtifact(ctx, project, a); err != nil || !got {
+				t.Errorf("%s: ExistsForArtifact = %v, %v; want true", a, got, err)
+			}
+		}
+		if got, err := repo.ExistsForArtifact(ctx, uniqueID("other"), pendingArt); err != nil || got {
+			t.Errorf("another project: ExistsForArtifact = %v, %v; want false", got, err)
+		}
+		if got, err := repo.ExistsForArtifact(ctx, project, "repomirror_none"); err != nil || got {
+			t.Errorf("no row: ExistsForArtifact = %v, %v; want false", got, err)
+		}
+	})
 }
 
 // RunCorpusEpochSuite — Create/Activate/Deactivate/ListActive

@@ -59,14 +59,17 @@ func BuildSystemPrompt(activeProject string, projects []*registry.Project) strin
 interface (typically Telegram) and have access to project memory, task history,
 stored artifacts, and the ability to schedule new work when truly needed.
 
-HOW TO HELP — in order of preference
+` + sizeTheWorkBlock + `HOW TO HELP — in order of preference
 
-  1. LIVE DATA VIA MCP TOOLS (when applicable)
+  1. LIVE DATA FROM YOUR OWN SERVICES VIA MCP TOOLS (when applicable)
      The tool catalog may include entries prefixed mcp__<server>__<tool> —
      those are live integrations with external services configured for
      the active project (e.g. Google Workspace, GitHub, Linear). When the
      user asks about data those services own, CALL THE MCP TOOL — do not
      answer "I don't have access".
+     This is for your own services: the user's mail, calendar, documents
+     and issue trackers. Fetching web pages is for a quick check of one or
+     two pages; research across the web is a task (see SIZE THE WORK FIRST).
 
      Common patterns:
        - "my emails / inbox / messages from X"   → mcp__*__gmail/search/read
@@ -154,12 +157,13 @@ HOW TO HELP — in order of preference
        - "summarise the last week of scans" → create_task
        - "fix this bug + write the patch"   → create_task
 
-  6. SCHEDULE A TASK — ONLY when the above cannot help
+  6. SCHEDULE A TASK — for anything SIZE THE WORK FIRST calls a task
      Create a task when:
-       - the user explicitly asks to research / refresh / update / re-check;
+       - the user asks to research / refresh / update / re-check;
+       - the answer needs research across several sources, several steps,
+         or more than a few tool calls;
        - memory is empty and the topic genuinely requires new investigation;
-       - the request is an ACTION (implement code, commit, write a new
-         document, fix a bug) — not just an information request.
+       - the request is an ACTION (implement, commit, write, fix).
      When you schedule, tell the user briefly what will run and that it
      may take a few minutes.
 
@@ -333,6 +337,9 @@ WHAT NOT TO DO
 				name = p.ID
 			}
 			fmt.Fprintf(&b, "  - %s  (%s)", p.ID, name)
+			if c := projectCapabilities(p); c != "" {
+				fmt.Fprintf(&b, "\n    can run: %s", c)
+			}
 			if p.Autonomy.Enabled && p.Autonomy.Goal != "" {
 				fmt.Fprintf(&b, "\n    autonomy goal: %s", p.Autonomy.Goal)
 			}
@@ -420,6 +427,9 @@ func BuildLeadSystemPrompt(project *registry.Project, swarm *registry.Swarm, lea
 	}
 
 	fmt.Fprintf(&b, "ACTIVE PROJECT: %s\n", project.ID)
+	if c := projectCapabilities(project); c != "" {
+		fmt.Fprintf(&b, "It can run: %s\n", c)
+	}
 	b.WriteString("All tool calls default to this project. You do not need to pass project_id.\n\n")
 
 	if project.Autonomy.Goal != "" {
@@ -439,18 +449,25 @@ func BuildLeadSystemPrompt(project *registry.Project, swarm *registry.Swarm, lea
 				name = p.ID
 			}
 			fmt.Fprintf(&b, "  - %s (%s)\n", p.ID, name)
+			if c := projectCapabilities(p); c != "" {
+				fmt.Fprintf(&b, "    can run: %s\n", c)
+			}
 		}
 		b.WriteString("\n")
 	}
 
+	b.WriteString(sizeTheWorkBlock)
 	b.WriteString(`HOW TO HELP — in order of preference
 
-  1. LIVE DATA VIA MCP TOOLS (when applicable)
+  1. LIVE DATA FROM YOUR OWN SERVICES VIA MCP TOOLS (when applicable)
      The tool catalog may include entries prefixed mcp__<server>__<tool> —
      these are live integrations with external services configured for
      this project (e.g. Google Workspace, GitHub, Linear). When the user
      asks about data those services own, CALL THE MCP TOOL — do not fall
      back to "I don't have access".
+     This is for your own services: the user's mail, calendar, documents
+     and issue trackers. Fetching web pages is for a quick check of one or
+     two pages; research across the web is a task (see SIZE THE WORK FIRST).
 
      Common patterns:
        - "my emails", "my inbox", "messages from X"  → mcp__*__search /
@@ -539,9 +556,11 @@ func BuildLeadSystemPrompt(project *registry.Project, swarm *registry.Swarm, lea
        - "summarise the last week of scans" → create_task
        - "fix this bug + write the patch"   → create_task
 
-  6. SCHEDULE A TASK — ONLY when the above cannot help
+  6. SCHEDULE A TASK — for anything SIZE THE WORK FIRST calls a task
      Create a task when:
-       - the user explicitly asks to research / refresh / update / re-check;
+       - the user asks to research / refresh / update / re-check;
+       - the answer needs research across several sources, several steps,
+         or more than a few tool calls;
        - memory is empty and the topic genuinely requires new investigation;
        - the request is an ACTION (implement, commit, write, fix).
      When you schedule, tell the user what will run and roughly how long.
@@ -682,4 +701,52 @@ func ResolveLeadPrompt(reg *registry.Registry, projectID string) (prompt, roleNa
 		}
 	}
 	return "", ""
+}
+
+// sizeTheWorkBlock comes before the help ladder in both dispatcher prompts
+// (dispatcher turn-context design §7, GitHub #642). On 2026-11-04 the
+// dispatcher did a market study in about 30 web fetches inside one chat turn
+// after two failed scheduling attempts; the ladder ranked MCP tools, the
+// scraper included, first and scheduling last.
+const sizeTheWorkBlock = `SIZE THE WORK FIRST
+  Before you call any tool, decide whether this is a chat answer or a task.
+  - A TASK: work the agents must research or produce: research across
+    several sources, more than a few tool calls, several steps, or a
+    document they write. Call create_task in a project that has a fitting
+    workflow, tell the user in one or two sentences what you scheduled, and
+    stop. The completion follow-up brings them the result.
+  - Rendering content the user gave you is render_document (step 5), not a
+    task.
+  - A CHAT ANSWER: what one or two lookups settle: a fact, a status, a file
+    to send, a short reply.
+  - Choose the project by what it can run (the "can run" line in the project
+    list), not by a name that matches the topic: research goes to a project
+    with a research workflow.
+  - If scheduling fails, do not do the work yourself. Tell the user why and
+    offer the project that fits, or ask them.
+
+`
+
+// maxCapabilitiesListed caps the workflows named per project in the prompts.
+const maxCapabilitiesListed = 8
+
+// projectCapabilities names the workflows a project can run: its adaptive
+// candidates, else its default workflow (dispatcher turn-context design §10,
+// GitHub #648). The dispatcher used to see projects by name only, and on
+// 2026-11-04 sent a research request to a project named like the topic.
+func projectCapabilities(p *registry.Project) string {
+	if p == nil {
+		return ""
+	}
+	names := p.AdaptiveCandidateWorkflows
+	if len(names) == 0 {
+		if p.DefaultWorkflowID == "" {
+			return ""
+		}
+		names = []string{p.DefaultWorkflowID}
+	}
+	if len(names) <= maxCapabilitiesListed {
+		return strings.Join(names, ", ")
+	}
+	return strings.Join(names[:maxCapabilitiesListed], ", ") + fmt.Sprintf(" and %d more", len(names)-maxCapabilitiesListed)
 }

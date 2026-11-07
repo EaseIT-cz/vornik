@@ -61,6 +61,11 @@ func Routes() []Route {
 		{http.MethodPost, "/ui/approve/apr_example", true},
 		{http.MethodGet, "/ui/approve/devices", true},
 		{http.MethodPost, "/ui/approve/devices/dev_example/revoke", true},
+		// Web Push (GitHub #163, design part 09 §9.3a B.6).
+		{http.MethodGet, "/ui/approve/push", true},
+		{http.MethodPost, "/ui/approve/push", true},
+		{http.MethodPost, "/ui/approve/push/test", true},
+		{http.MethodPost, "/ui/approve/push/off", true},
 		{http.MethodPost, "/ui/approve/apr_example/connect", true},
 		{http.MethodGet, "/ui/approve/standing", true},
 		{http.MethodPost, "/ui/approve/standing/bsg_example/revoke", true},
@@ -118,6 +123,8 @@ func securityHeaders(next http.Handler) http.Handler {
 func (s *Service) notifyLine() string {
 	name := strings.ToUpper(s.notifyChannel[:min(1, len(s.notifyChannel))]) + s.notifyChannel[min(1, len(s.notifyChannel)):]
 	switch {
+	case s.notifyChannel != "" && s.notifyActive && s.notify != nil && s.WebPushEnabled():
+		return "New requests are announced on " + name + "."
 	case s.notifyChannel != "" && s.notifyActive && s.notify != nil:
 		return "New requests are announced on " + name + ". Vornik sends no browser notifications."
 	case s.notifyChannel != "":
@@ -322,6 +329,8 @@ func (s *Service) approveRouter(w http.ResponseWriter, r *http.Request) {
 		s.listPage(w, r)
 	case rest == "devices":
 		s.devicesPage(w, r)
+	case rest == "push" || strings.HasPrefix(rest, "push/"):
+		s.pushRouter(w, r, strings.TrimPrefix(rest, "push"))
 	case rest == "memory" || strings.HasPrefix(rest, "memory/"):
 		s.memoryRouter(w, r, strings.TrimPrefix(rest, "memory"))
 	case rest == "connectors" || strings.HasPrefix(rest, "connectors/"):
@@ -348,6 +357,8 @@ type listData struct {
 	Flash   string
 	Refused []string
 	Notify  string
+	// Push is this device's Web Push line, empty when Web Push is off.
+	Push string
 	// Withheld are the daemon's lines for suspended agent read tools
 	// (design §6.5 item 6).
 	Withheld []string
@@ -394,7 +405,7 @@ func (s *Service) listPage(w http.ResponseWriter, r *http.Request) {
 		refused = strings.Split(v, ",")
 	}
 	s.render(w, http.StatusOK, "list.html", listData{Device: d, Pending: singles, Groups: groups,
-		Flash: r.URL.Query().Get("done"), Refused: refused, Notify: s.notifyLine(), Withheld: s.withheldLines(r.Context())})
+		Flash: r.URL.Query().Get("done"), Refused: refused, Notify: s.notifyLine(), Push: s.pushListLine(r.Context(), d.ID), Withheld: s.withheldLines(r.Context())})
 }
 
 // groupPending splits pending requests into groups of two or more (by their

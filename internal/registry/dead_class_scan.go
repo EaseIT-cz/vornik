@@ -124,9 +124,12 @@ func deadClassFindings(content []byte, name, label string) []string {
 		if f.Code != "workflow_invalid" {
 			continue
 		}
-		// workflow_invalid covers more than retry classes; only the class
-		// rejection predicts the daemon-down this scan reports.
-		if !strings.Contains(f.Message, "unknown step error class") {
+		// workflow_invalid covers more than retry classes. Two rejections
+		// predict the daemon-down this scan reports: an unknown retry class,
+		// and an output reference that can never resolve (GitHub #632, F4),
+		// both added to the strict loader after trees were deployed.
+		if !strings.Contains(f.Message, "unknown step error class") &&
+			!strings.Contains(f.Message, OutputRefRefusalPrefix+" ${outputs.") {
 			continue
 		}
 		out = append(out, fmt.Sprintf("%s/%s: %s", label, name, f.Message))

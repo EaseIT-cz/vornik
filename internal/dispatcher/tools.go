@@ -31,6 +31,7 @@ import (
 	"vornik.io/vornik/internal/sandboxtool"
 	"vornik.io/vornik/internal/taskcancel"
 	"vornik.io/vornik/internal/textsim"
+	"vornik.io/vornik/internal/textutil"
 	"vornik.io/vornik/internal/untrusted"
 )
 
@@ -2196,14 +2197,17 @@ func (te *ToolExecutor) executeMCPTool(ctx context.Context, projectID, qualified
 	}
 	if len(result) > mcpToolResultMaxBytes {
 		origSize := len(result)
-		result = result[:mcpToolResultMaxBytes] + fmt.Sprintf(
+		// Cut at a rune boundary: a byte cut can split a multibyte character
+		// and send invalid UTF-8 to the model (#647).
+		kept := textutil.TruncateBytes(result, mcpToolResultMaxBytes)
+		result = kept + fmt.Sprintf(
 			"\n\n[truncated: kept first %d of %d bytes. The dispatcher caps MCP results so the chat-session "+
 				"context window doesn't overflow across iterations of this tool loop. "+
 				"If you need the full content, schedule a task with create_task — the task worker has its own "+
 				"context budget and can process the complete body, then return a summary or artifact you can read "+
 				"back. For narrower data on the next call, refine the MCP arguments (e.g. set max_bytes/limit if the "+
 				"tool exposes one, pass a tighter selector, or request only the section you need).]",
-			mcpToolResultMaxBytes, origSize)
+			len(kept), origSize)
 	}
 	// MCP tool output is by definition external data — scraped pages,
 	// remote API bodies, third-party indexes. Wrap as untrusted so the

@@ -262,7 +262,7 @@ func offlineCheckConfigClasses(cfgPath string, r *doctorReport) {
 	if len(scan.Findings) > 0 {
 		r.Checks = append(r.Checks, doctorCheck{
 			Name: "config_class_compat", Status: "fail",
-			Message: fmt.Sprintf("%d deployed workflow step(s) name a step error class THIS "+
+			Message: fmt.Sprintf("%d deployed workflow step(s) name a step error class or an output reference THIS "+
 				"binary rejects; starting it against this tree would fail the whole daemon "+
 				"and flap on Restart=on-failure. Valid classes: %s",
 				len(scan.Findings), strings.Join(stepoutcome.ErrorClasses(), ", ")),

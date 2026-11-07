@@ -26,6 +26,7 @@ import (
 	"vornik.io/vornik/internal/executor/agenthealth"
 	forgeh "vornik.io/vornik/internal/executor/handlers/forge"
 	"vornik.io/vornik/internal/executor/handlers/rag"
+	texth "vornik.io/vornik/internal/executor/handlers/text"
 	"vornik.io/vornik/internal/hallucination"
 	"vornik.io/vornik/internal/memory"
 	"vornik.io/vornik/internal/memoryfirewall"
@@ -719,6 +720,12 @@ func (c *Container) initScheduler() error {
 	// The WithSystemHandlers option is appended once, before the executor is
 	// constructed (just above NewWithOptions).
 	sysHandlers := executor.NewSystemHandlerRegistry()
+	// text.readability (GitHub #633): measures the text a review is about and
+	// stores the report through the artifact store, whose secret scan runs on
+	// the stored text. Needs only the store and the artifact repository.
+	if c.artifactStore != nil && c.repos != nil && c.repos.Artifacts != nil {
+		sysHandlers.Register(texth.NewReadabilityHandler(c.repos.Artifacts, c.artifactStore))
+	}
 	if forgeResolver := c.newForgeResolver(); forgeResolver != nil {
 		forgeSrc := &forgePublishSource{workspacePath: executorConfig.ProjectWorkspacePath}
 		// c.AIDisclosure is built in initDatabase (container.go:747), which runs
@@ -784,6 +791,7 @@ func (c *Container) initScheduler() error {
 			EmbeddingCacheEnabled: c.Config.Memory.EmbeddingCacheEnabled,
 			ResponseCacheEnabled:  c.Config.Memory.ResponseCacheEnabled,
 			RetrievalRouting:      retrievalRoutingConfig(c.Config.Memory.RetrievalRouting),
+			PublicSourcePrefixes:  c.Config.Memory.PublicSourcePrefixes,
 		}
 		// Wire pricing so the Phase E cache's CacheStats can surface
 		// a TotalSavingsUSD headline on /ui/spend. nil pricing leaves
@@ -1088,6 +1096,18 @@ func (c *Container) initScheduler() error {
 					Supersede: func(ctx context.Context, projectID, scope, path string) (int, error) {
 						return memRepoForChunkExists.SupersedeDocument(ctx, projectID, scope, path, "")
 					},
+				}
+				// #639: the repository mirror (design 22, "Amendment
+				// 2026-11-04 (#639)").
+				if c.memoryQuarantineRepo != nil {
+					mirrorStore := memory.MirrorIngester{Artifacts: artifactsRepo, Pipeline: pipeline,
+						Supersede: c.memoryProvenanceSweeper.Supersede}
+					c.memoryProvenanceSweeper.Mirror = memory.MirrorHooks{
+						Projects:    c.mirrorProjects,
+						Provenance:  provenanceCfg.Repo.GetProvenance,
+						Quarantined: c.memoryQuarantineRepo.ExistsForArtifact,
+						Ingest:      mirrorStore.Ingest,
+					}
 				}
 			}
 			// Wire the searcher's epoch filter so reads honour

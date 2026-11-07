@@ -141,12 +141,7 @@ func (s *SlackChannelsSubsystem) Start(ctx context.Context) error {
 	if len(threadReaders) > 0 {
 		c.Dispatcher.SetChannelThreadReader(threadReaders)
 	}
-	// Let the dispatcher say what it is doing mid-turn. Wired here because Slack is the
-	// only channel that can display a transient status today; the reporter itself is
-	// channel-agnostic and skips channels that cannot.
-	c.Dispatcher.SetTurnStatusReporter(&turnStatusReporter{
-		resolver: &containerChannelResolver{c: c},
-	})
+	// The turn-status reporter is wired in initDispatcher for every channel (#642).
 	return nil
 }
 

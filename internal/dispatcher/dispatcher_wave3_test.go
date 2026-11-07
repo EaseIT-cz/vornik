@@ -413,49 +413,6 @@ func TestW3DispRenderKnownKeys(t *testing.T) {
 	}
 }
 
-// --- toolStatusEmoji -------------------------------------------------------
-//
-// 40% before — only a couple of arms were hit. Pins the mcp prefix,
-// a representative spread of named arms, and the default fallback.
-
-func TestW3DispToolStatusEmoji(t *testing.T) {
-	cases := []struct {
-		name string
-		want string
-	}{
-		{"mcp__gmail__send", "🔌"}, // any mcp__ prefix
-		{"memory_search", "🧠"},
-		{"memory_correct", "🧠"},
-		{"create_task", "📋"},
-		{"send_artifact", "📎"},
-		{"send_message", "✉️"},
-		{"summarize_thread", "🧵"},
-		{"get_conversation_window", "💬"},
-		{"file_read", "📄"},
-		{"file_edit", "📄"},
-		{"run_shell", "⌨️"},
-		{"grep", "🔎"},
-		{"glob", "🗂️"},
-		{"current_time", "🕒"},
-		{"some_unknown_tool", "⏳"}, // default
-		{"", "⏳"},
-	}
-	for _, c := range cases {
-		if got := toolStatusEmoji(c.name); got != c.want {
-			t.Errorf("toolStatusEmoji(%q) = %q, want %q", c.name, got, c.want)
-		}
-	}
-}
-
-// TestW3DispToolStatusMarker_WrapsEmojiAndVerb: the marker composes
-// emoji + humanized verb in "[emoji verb]" form.
-func TestW3DispToolStatusMarker_WrapsEmojiAndVerb(t *testing.T) {
-	got := toolStatusMarker("create_task")
-	if !strings.HasPrefix(got, "[📋 ") || !strings.HasSuffix(got, "]") {
-		t.Errorf("marker = %q, want [📋 <verb>] shape", got)
-	}
-}
-
 // --- modelFromResponse -----------------------------------------------------
 
 func TestW3DispModelFromResponse(t *testing.T) {

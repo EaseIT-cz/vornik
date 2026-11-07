@@ -11,12 +11,14 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"sort"
 	"strings"
 	"time"
 
 	"vornik.io/vornik/internal/companionpush"
+	"vornik.io/vornik/internal/persistence"
 
 	"github.com/rs/zerolog"
 	"vornik.io/vornik/internal/forge"
@@ -74,6 +76,9 @@ type Project struct {
 	// CompanionPush configures completion push for this project's companion
 	// tasks. See the broker write-actions design §7a.
 	CompanionPush CompanionPushConfig `yaml:"companion_push,omitempty" since:"2026.10.1"`
+	// Companion holds the project's companion hint controls (#634; companion
+	// hardening design §13 H6).
+	Companion ProjectCompanionConfig `yaml:"companion,omitempty" since:"2026.11.2"`
 	// Budget caps LLM spend for this project. Zero values disable the cap.
 	Budget ProjectBudget `yaml:"budget"`
 	// Chat configures per-project chat behaviour. Currently only a system
@@ -1517,6 +1522,12 @@ type ProjectMemory struct {
 	// workspace.refresh_branch; either way it is checked against the
 	// clone's origin/HEAD.
 	ProvenanceBranch string `yaml:"provenance_branch,omitempty" since:"2026.10.7"`
+	// MirrorPaths lists repository path prefixes (each ending in "/") whose
+	// Markdown files the hourly provenance sweep ingests into this project's
+	// memory from the trusted branch, verified by provenance (#639; design
+	// 22, "Amendment 2026-11-04 (#639)"). A file marked disclosure: never
+	// is skipped. Needs repo_scope. Empty: nothing is mirrored.
+	MirrorPaths []string `yaml:"mirror_paths,omitempty" since:"2026.11.2"`
 }
 
 // TrustedBranch is the configured branch memory provenance trusts:
@@ -1529,6 +1540,57 @@ func (p *Project) TrustedBranch() string {
 		return b
 	}
 	return strings.TrimSpace(p.Workspace.RefreshBranch)
+}
+
+// ProjectCompanionConfig is a project's control of the companion's
+// just-in-time hints (#634 H6). Hints is "on" (the default when empty) or
+// "off"; Mute lists catalogue ids the daemon withholds when it serves the
+// catalogue to this project's companion keys.
+type ProjectCompanionConfig struct {
+	Hints string   `yaml:"hints,omitempty" since:"2026.11.2"`
+	Mute  []string `yaml:"mute,omitempty" since:"2026.11.2"`
+}
+
+// HintsEnabled reports whether the project serves companion hints.
+func (p *Project) HintsEnabled() bool {
+	return p == nil || strings.TrimSpace(p.Companion.Hints) != "off"
+}
+
+// hintIDRe is a catalogue id's shape: lowercase words, dots and underscores.
+var hintIDRe = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]*$`)
+
+// validateCompanionHints is the strict loader's check of the companion block.
+// It checks shape only: an id the catalogue does not hold is ignored when the
+// catalogue is served, so a catalogue that drops a hint never breaks a load.
+func (p *Project) validateCompanionHints(filename string) error {
+	switch strings.TrimSpace(p.Companion.Hints) {
+	case "", "on", "off":
+	default:
+		return ProjectValidationError{File: filename, Field: "companion.hints", Message: "must be on or off"}
+	}
+	for _, id := range p.Companion.Mute {
+		if !hintIDRe.MatchString(id) {
+			return ProjectValidationError{File: filename, Field: "companion.mute", Message: fmt.Sprintf("%q is not a hint id", id)}
+		}
+	}
+	return nil
+}
+
+// validateMemoryMirror is the strict loader's check of memory.mirror_paths
+// (#639): each entry a valid source prefix, and a repo_scope to mirror from.
+func (p *Project) validateMemoryMirror(filename string) error {
+	if len(p.Memory.MirrorPaths) == 0 {
+		return nil
+	}
+	if strings.TrimSpace(p.RepoScope) == "" {
+		return ProjectValidationError{File: filename, Field: "memory.mirror_paths", Message: "needs repo_scope: the mirror reads that repository's trusted branch"}
+	}
+	for _, sp := range p.Memory.MirrorPaths {
+		if !persistence.ValidSourcePrefix(sp) {
+			return ProjectValidationError{File: filename, Field: "memory.mirror_paths", Message: fmt.Sprintf("%q is not a repository path prefix: it must end in \"/\" and have no \".\" or \"..\" segment", sp)}
+		}
+	}
+	return nil
 }
 
 // validateProvenanceClone is the strict loader's check of
@@ -2437,6 +2499,12 @@ func (p *Project) Validate(filename string) error {
 		return err
 	}
 	if err := p.validateProvenanceClone(filename); err != nil {
+		return err
+	}
+	if err := p.validateMemoryMirror(filename); err != nil {
+		return err
+	}
+	if err := p.validateCompanionHints(filename); err != nil {
 		return err
 	}
 	if _, err := companionpush.ParseAllowedCIDRs(p.CompanionPush.AllowedCIDRs); err != nil {

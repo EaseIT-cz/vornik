@@ -1,9 +1,13 @@
 package executor
 
 import (
+	"fmt"
+	"slices"
 	"strings"
 
+	"vornik.io/vornik/internal/persistence"
 	"vornik.io/vornik/internal/registry"
+	"vornik.io/vornik/internal/textutil"
 )
 
 // isStrictRouteStep reports whether the current step is a strict-adaptive
@@ -87,8 +91,16 @@ You have no tools on this step. Do not plan the work, research it, or produce it
 
 The candidate list (context.adaptiveCandidateWorkflows) is the whole configuration; nothing else is needed and nothing is missing.
 
+If no candidate is equipped for the task (for example a research request and only outreach workflows), answer "none" and say in the reason what the task needs. Use "none" only for that; never to ask for configuration.
+
 Answer with exactly one JSON object and nothing else:
-{"selected_workflow": "<one id from the candidate list, verbatim>", "reason": "<one sentence>"}`
+{"selected_workflow": "<one id from the candidate list, verbatim, or none>", "reason": "<one sentence>"}`
+
+// routeNoFit is the router's answer when no candidate fits the task
+// (delegation-engine design, "No candidate fits" is an answer; GitHub #641).
+// A project whose candidates include a workflow called "none" keeps that
+// workflow: the answer is read as no-fit only when it is not a candidate.
+const routeNoFit = "none"
 
 // roleContractFor returns the role config whose OUTPUT CONTRACT (required keys,
 // plausibility rules) a step is held to. Under the router contract that is a
@@ -118,9 +130,14 @@ func applyStrictRouteContract(opts *agentInputOpts, candidates []string) {
 	opts.ToolFree = true
 	opts.RouteContract = true
 	opts.SystemPrompt = routerSystemPrompt
-	enum := make([]any, 0, len(candidates))
+	enum := make([]any, 0, len(candidates)+1)
 	for _, c := range candidates {
 		enum = append(enum, c)
+	}
+	// "No candidate fits" is an answer (#641): without it, an enforcing
+	// provider can only decode a misfit.
+	if !slices.Contains(candidates, routeNoFit) {
+		enum = append(enum, routeNoFit)
 	}
 	opts.ResponseFormat = "json_schema"
 	opts.ResponseSchema = map[string]any{
@@ -141,4 +158,40 @@ func applyStrictRouteContract(opts *agentInputOpts, candidates []string) {
 	// The lead role's shape hint describes the lead's schema, not this one; the
 	// router's corrective re-run carries buildRouteCorrectiveHint instead.
 	opts.ShapeRetryHint = ""
+}
+
+// routeNoFitError is a route whose router answered that no candidate fits.
+// Its class is permanent: a re-run sees the same candidates.
+type routeNoFitError struct{ msg string }
+
+func (e routeNoFitError) Error() string        { return e.msg }
+func (e routeNoFitError) FailureClass() string { return persistence.TaskFailureClassRouteNoFit }
+
+// routeNoFitReasonMax caps the router's reason in the failure message, so a
+// rambling answer cannot fill the notice.
+const routeNoFitReasonMax = 300
+
+// routeAnsweredNoFit reports whether the router's answer is "none" and "none"
+// is not itself one of the project's candidates.
+func routeAnsweredNoFit(result *agentStepResult, candidates []string) bool {
+	return result.SelectedWorkflow == routeNoFit && !slices.Contains(candidates, routeNoFit)
+}
+
+// routeNoFitFailure logs the no-fit answer and builds the parent's failure,
+// whose message the completion notice carries to the chat.
+func (e *Executor) routeNoFitFailure(task *persistence.Task, project *registry.Project, reason string) error {
+	reason = strings.TrimSpace(reason)
+	if reason == "" {
+		reason = "the router gave no reason"
+	}
+	reason = textutil.TruncateRunes(reason, routeNoFitReasonMax)
+	e.logger.Warn().
+		Str("task_id", task.ID).
+		Str("project", project.ID).
+		Strs("candidates", project.AdaptiveCandidateWorkflows).
+		Str("reason", reason).
+		Msg("strict adaptive: no candidate fits")
+	return routeNoFitError{msg: fmt.Sprintf(
+		"no workflow in project %q fits this task (%s); its workflows are %s. Run it in a project that has one, or add one.",
+		project.ID, reason, strings.Join(project.AdaptiveCandidateWorkflows, ", "))}
 }

@@ -2,7 +2,7 @@
 workflowId: "companion-architectural-review"
 displayName: "Companion: Architectural review"
 description: "Reviews an attached document, diff, or PR for architectural issues. Host LLM clients (Claude Code etc.) delegate this when they want a second opinion without burning their own context. Attach the artifact under review as an input file — the reviewer reads the staged content, never project memory."
-version: "1.1.0"
+version: "1.2.0"
 author: "Vadim Grinco <vadim@grinco.eu>"
 license: "Proprietary"
 entrypoint: "review"
@@ -45,7 +45,7 @@ steps:
     # into artifacts/out/ while this step runs.
     require_output_glob: "artifacts/out/review.md"
     role: "reviewer"
-    on_success: "done"
+    on_success: "measure"
     on_fail: "failed"
     # 2026-09-23: raised 814s -> 1800s. Three consecutive round-3 reviews of
     # ~50KB design documents were killed mid-step ("task left executor in
@@ -53,6 +53,18 @@ steps:
     # round-2 review of a 39.5KB doc completed in ~9.5min, so the step was
     # sitting just under the old ceiling and the documents grew across rounds.
     timeout: "1800s"
+  # GitHub #633: the daemon measures the reviewed documents (words, sentence
+  # length, hedges, vague references) and attaches readability.md to the
+  # result, with no model in between. AFTER the review on purpose: a step
+  # before the reviewer would frame the caller's brief "for reference"
+  # (agent_input_context.go; reviewable-output design §6.4). Both outcomes
+  # end the task: the review's own outcome decides it.
+  measure:
+    type: "system"
+    handler: "text.readability"
+    on_success: "done"
+    on_fail: "done"
+    timeout: "2m"
 terminals:
   done:
     status: "COMPLETED"
@@ -101,5 +113,18 @@ provided" — rather than reviewing memory chunks.
 Produce `artifacts/out/review.md` per the reviewer role's contract.
 Focus on architectural concerns over micro-style: coupling,
 cohesion, separation of concerns, error boundaries, observability
-hooks, surprise blast radius. Style-only nits go in a single
-"Minor" bullet at the bottom — the host LLM already does style.
+hooks, surprise blast radius. Formatting nits (whitespace, Markdown
+style) are out of scope.
+
+Add a "Readability" section: whether a person can review the subject in
+reasonable time. Each finding quotes the passage (at most two lines), names one class
+(verbose, jargon, vague-reference, hedge, buried-lead, repetition,
+passive-abstract, over-complex-code) and gives the rewrite. A rewrite keeps
+every fact of the passage; do not offer one that drops a fact. Count what
+you cite (words, sentences over 30 words, references a reader cannot
+resolve); never estimate. The daemon attaches its own counts to the result
+after your review.
+
+If the subject cannot be reviewed in reasonable time, say why with those
+counts; the verdict is then not GREEN. Otherwise readability findings are
+minor and alone never change the verdict.

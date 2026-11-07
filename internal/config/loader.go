@@ -16,6 +16,7 @@ import (
 	"gopkg.in/yaml.v3"
 
 	"vornik.io/vornik/internal/datasubject"
+	"vornik.io/vornik/internal/persistence"
 )
 
 // Load reads configuration from the specified path with the following precedence:
@@ -274,6 +275,9 @@ func parseEnvBool(v string) (val bool, ok bool) {
 func DefaultConfig() *Config {
 	return &Config{
 		Telemetry: TelemetryConfig{Enabled: true},
+		// #618: published docs derive public for a capped role; [] in YAML
+		// derives nothing.
+		Memory: MemoryConfig{PublicSourcePrefixes: []string{"docs/public/"}},
 		// Steering notifications default ON — a task that needs the operator
 		// should reach them on the channel they used (opt-out via YAML).
 		SteeringNotificationsEnabled: true,
@@ -652,6 +656,11 @@ func (c *Config) Validate() error {
 		// ok — empty/off disable the gate
 	default:
 		return fmt.Errorf("memory.prompt_injection_scan must be one of off|detect|quarantine, got %q", c.Memory.PromptInjectionScan)
+	}
+	for _, sp := range c.Memory.PublicSourcePrefixes {
+		if !persistence.ValidSourcePrefix(sp) {
+			return fmt.Errorf("memory.public_source_prefixes: %q must be path segments of [A-Za-z0-9._-], each ending in /, with no . or .. segment", sp)
+		}
 	}
 	if err := c.Memory.RetrievalRouting.Validate(); err != nil {
 		return err

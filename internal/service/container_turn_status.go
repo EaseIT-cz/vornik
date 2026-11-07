@@ -20,7 +20,8 @@ import (
 //
 // The dispatcher knows nothing about channels, so the resolution lives here: name →
 // conversation.Channel → optional TurnStatusChannel. A channel that cannot display a
-// status is simply skipped, which is why telegram and email need no change.
+// status is simply skipped. Slack rewrites its placeholder; Telegram, since #642,
+// shows the line above its streamed reply.
 type turnStatusReporter struct {
 	resolver chatorigin.ChannelResolver
 }
@@ -40,7 +41,7 @@ func (r *turnStatusReporter) ReportTurnStatus(ctx context.Context, channelName, 
 	}
 	display, ok := ch.(conversation.TurnStatusChannel)
 	if !ok {
-		// Telegram, email, web-chat: no transient-status surface. Not an error.
+		// Email, GitHub: no transient-status surface. Not an error.
 		return
 	}
 	display.SetTurnStatus(ctx, sessionID, status)

@@ -37,6 +37,17 @@ func (p *Pipeline) companionDelegated(ctx context.Context, projectID, taskID, pr
 	return delegated
 }
 
+// provenanceDelegated decides whether an ingest's authority is provenance
+// rather than its producer role: always for a ProvenanceOnly ingest (#639
+// M3), else when the chunk would be role-of-record and its task is
+// companion-delegated (#482).
+func (p *Pipeline) provenanceDelegated(ctx context.Context, projectID, taskID, producerRole string, eligible bool, opts IngestArtifactOptions) bool {
+	if opts.ProvenanceOnly {
+		return true
+	}
+	return eligible && p.companionDelegated(ctx, projectID, taskID, producerRole)
+}
+
 // verifyProvenance runs the provenance rule for a companion-delegated ingest
 // and stamps the chunks verified only when it holds. The record is written
 // first, so there is never a stamp without a record; a failed stamp after a

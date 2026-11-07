@@ -345,11 +345,13 @@ type memorySearchResponse struct {
 // than its limit. 0 of 5 says the filter excluded everything relevant; 0 of
 // 0 says nothing relevant exists.
 type retrievalPolicyWire struct {
-	RepoScope          string `json:"repo_scope,omitempty"`
-	StrictScope        bool   `json:"strict_scope"`
-	Authority          string `json:"authority"`
-	Returned           int    `json:"returned"`
-	UnfilteredReturned *int   `json:"unfiltered_returned,omitempty"`
+	RepoScope          string   `json:"repo_scope,omitempty"`
+	StrictScope        bool     `json:"strict_scope"`
+	Authority          string   `json:"authority"`
+	SourcePrefixes     []string `json:"source_prefixes,omitempty"`
+	MaxSensitivity     string   `json:"max_sensitivity,omitempty"`
+	Returned           int      `json:"returned"`
+	UnfilteredReturned *int     `json:"unfiltered_returned,omitempty"`
 }
 
 // memorySearchRequestFrom reads the search's limit and filters from the
@@ -382,6 +384,11 @@ func applyMemorySearchRolePolicy(req MemorySearchRequest, pol *registry.MemorySe
 	if pol.Authority == registry.MemorySearchAuthorityProvenance {
 		req.Authority = registry.MemorySearchAuthorityProvenance
 	}
+	// Source prefixes come only from the role (#614 C3): the query string has
+	// no parameter for them, so the role's list is the whole list.
+	req.SourcePrefixes = pol.SourcePrefixes
+	// The sensitivity cap, too, comes only from the role (#618).
+	req.MaxSensitivity = pol.MaxSensitivity
 	if pol.Limit > 0 && (!limitGiven || req.Limit > pol.Limit) {
 		req.Limit = pol.Limit
 	}
@@ -421,7 +428,8 @@ func agentKeyPrincipal(r *http.Request) (AgentKeyPrincipal, bool) {
 // unfiltered count costs one more search, only when the filtered one came
 // back short; its hits are counted and never returned.
 func (s *Server) retrievalPolicyBlock(ctx context.Context, rs MemoryRoutingSearcher, projectID, q string, req MemorySearchRequest, returned int) *retrievalPolicyWire {
-	block := &retrievalPolicyWire{RepoScope: req.RepoScope, StrictScope: req.StrictScope, Authority: req.Authority, Returned: returned}
+	block := &retrievalPolicyWire{RepoScope: req.RepoScope, StrictScope: req.StrictScope, Authority: req.Authority,
+		SourcePrefixes: req.SourcePrefixes, MaxSensitivity: req.MaxSensitivity, Returned: returned}
 	if block.Authority == "" {
 		block.Authority = registry.MemorySearchAuthorityAny
 	}
@@ -509,10 +517,20 @@ func (s *Server) MemorySearch(w http.ResponseWriter, r *http.Request) {
 	// retrievals. ActorID empty for static-keys-only is fine — the
 	// audit row gets actor_kind="rest_api" + NULL actor_id, which
 	// still distinguishes it from agent/companion paths.
-	ctx := memory.WithRetrievalContext(r.Context(), &memory.RetrievalContext{
+	//
+	// #617 slice 2: an agent's search also names its task (task key) or
+	// role (warm-pool key), so the audit row ties the chunks to the task
+	// that retrieved them. The task key is deleted when the task ends, so
+	// this cannot be recovered later. ActorKind and ActorID stay as they
+	// were: the dashboards and the memory firewall read only those.
+	rc := &memory.RetrievalContext{
 		ActorKind: "rest_api",
 		ActorID:   APIKeyIDFromContext(r.Context()),
-	})
+	}
+	if isAgent {
+		rc.TaskID, rc.Role = who.TaskID, who.Role
+	}
+	ctx := memory.WithRetrievalContext(r.Context(), rc)
 
 	// Prefer the confidence-based retrieval routing path (P3) when the
 	// searcher supports it: REST is a first opt-in caller (§6). The response

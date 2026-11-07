@@ -81,3 +81,31 @@ func serviceWorkerHandler() http.Handler {
 		_, _ = w.Write(swBytes)
 	})
 }
+
+// approvePushWorkerPath is the approver push worker (GitHub #163,
+// agent-administered design part 09 §9.3a B.7).
+const approvePushWorkerPath = "static/approve-push-sw.js"
+
+// approvePushWorkerHandler serves /ui/static/approve-push-sw.js with
+// Service-Worker-Allowed: /ui/approve/push/, the scope approve-push.js
+// registers it with. That scope holds no page, so the worker controls none.
+// Like sw.js it stays under the auth-exempt /ui/static/ prefix, so an update
+// check never fails on an expired device cookie.
+func approvePushWorkerHandler() http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet && r.Method != http.MethodHead {
+			w.Header().Set("Allow", "GET, HEAD")
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		b, err := fs.ReadFile(staticFS, approvePushWorkerPath)
+		if err != nil {
+			http.NotFound(w, r)
+			return
+		}
+		w.Header().Set("Content-Type", "text/javascript; charset=utf-8")
+		w.Header().Set("Service-Worker-Allowed", "/ui/approve/push/")
+		w.Header().Set("Cache-Control", "no-cache")
+		_, _ = w.Write(b)
+	})
+}

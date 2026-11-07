@@ -3,6 +3,7 @@ package chat
 import (
 	"context"
 	"errors"
+	"fmt"
 
 	"github.com/rs/zerolog"
 )
@@ -123,7 +124,30 @@ func (f *FallbackProvider) withFallback(ctx context.Context, call func(Provider)
 	// Single hop: retry on the ROOT router pinned to the twin (re-runs prefix
 	// routing so the twin lands on its own sub-provider) — NOT the decorator,
 	// so the fallback attempt cannot itself trigger another fallback.
-	return call(ov.WithModel(fb))
+	resp, err = call(ov.WithModel(fb))
+	if resp != nil {
+		resp.FallbackFrom = failedModel
+	}
+	return resp, err
+}
+
+// ModelFallbackFindings reports why chat.model would have no working twin
+// in a quota outage (design §11.2(b), GitHub #620): the map names twins but
+// none for chat.model, or the twin takes the same route and so shares its
+// quota. routeOf is the live router's RouteOf. An empty map is not a finding:
+// a single-provider install has no twin to name.
+func ModelFallbackFindings(chatModel string, fallbacks map[string]string, routeOf func(string) string) []string {
+	if chatModel == "" || len(fallbacks) == 0 {
+		return nil
+	}
+	twin, ok := fallbacks[chatModel]
+	if !ok || twin == "" {
+		return []string{fmt.Sprintf("chat.model %q has no twin in chat.router.model_fallbacks, so a 429 or outage on it fails every chat turn; add an entry naming a model on another provider", chatModel)}
+	}
+	if r := routeOf(chatModel); r == routeOf(twin) {
+		return []string{fmt.Sprintf("chat.model %q and its twin %q take the same route (%s), so one quota or outage takes both down; name a twin on another provider", chatModel, twin, r)}
+	}
+	return nil
 }
 
 // Unwrap exposes the wrapped provider. Returns root rather than inner: inner

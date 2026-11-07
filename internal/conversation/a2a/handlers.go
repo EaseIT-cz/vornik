@@ -35,6 +35,7 @@ import (
 
 	"github.com/rs/zerolog"
 
+	"vornik.io/vornik/internal/config"
 	"vornik.io/vornik/internal/executor/livepubsub"
 	"vornik.io/vornik/internal/persistence"
 	"vornik.io/vornik/internal/registry"
@@ -65,6 +66,7 @@ func (f PublicBaseURLFunc) PublicBaseURL() string { return f() }
 type RegistrySnapshot interface {
 	GetProject(id string) *registry.Project
 	GetWorkflow(id string) *registry.Workflow
+	GetSwarm(id string) *registry.Swarm
 	ListProjects() []*registry.Project
 	ListWorkflows() []*registry.Workflow
 }
@@ -109,7 +111,10 @@ type Handler struct {
 	// daemon can POST task-state updates to the webhook even when the caller
 	// isn't streaming. Nil disables push config (agent card advertises it off).
 	PushConfigStore PushConfigStore
-	Logger          zerolog.Logger
+	// MaxConsultHops is the deepest consult chain this daemon accepts
+	// (a2a.consult.max_hops, #640). Zero applies the config default.
+	MaxConsultHops int
+	Logger         zerolog.Logger
 }
 
 // PushConfigStore is the persistence surface the submit handler + the
@@ -322,6 +327,9 @@ func (h *Handler) handleTaskSubmit(w http.ResponseWriter, r *http.Request, agent
 		writeError(w, http.StatusBadRequest, "VALIDATION_ERROR", "invalid JSON body")
 		return
 	}
+	if h.refuseConsultHops(w, agent, req.Metadata) {
+		return
+	}
 	prompt := extractTextPrompt(req.Message.Parts)
 	if prompt == "" {
 		writeError(w, http.StatusUnprocessableEntity, "VALIDATION_ERROR",
@@ -435,3 +443,50 @@ func writeError(w http.ResponseWriter, status int, code, message string) {
 // reference a project/workflow pair that isn't opted into A2A.
 // Exported so test code can assert on the sentinel.
 var ErrNotPublished = errors.New("a2a: agent not published")
+
+// maxConsultHopsCeiling bounds an accepted hop count, so a malformed header
+// cannot pass as a huge number.
+const maxConsultHopsCeiling = 1000
+
+func (h *Handler) maxConsultHops() int {
+	if h.MaxConsultHops > 0 {
+		return h.MaxConsultHops
+	}
+	return config.DefaultConsultMaxHops
+}
+
+// consultHops reads the consult hop count a caller sent in the task metadata
+// (#640). Absent is hop 0. ok is false for anything but a whole number from 0
+// to maxConsultHopsCeiling.
+func consultHops(md map[string]any) (int, bool) {
+	v, present := md[config.ConsultHopHeader]
+	if !present || v == nil {
+		return 0, true
+	}
+	f, isNum := v.(float64)
+	if !isNum || f < 0 || f > maxConsultHopsCeiling || f != float64(int(f)) {
+		return 0, false
+	}
+	return int(f), true
+}
+
+// refuseConsultHops answers a consult chain deeper than the limit (#640;
+// federation design §6) before any task is created, and reports whether it
+// did. Trust note: the count is the caller's own claim. This stops loops
+// between cooperating Vornik instances, not a caller that lies; that one is
+// bounded by its key's rate limit (#617).
+func (h *Handler) refuseConsultHops(w http.ResponseWriter, agent *PublishedAgent, md map[string]any) bool {
+	hops, ok := consultHops(md)
+	if !ok {
+		writeError(w, http.StatusUnprocessableEntity, "VALIDATION_ERROR",
+			"metadata."+config.ConsultHopHeader+" must be a whole number from 0 to 1000")
+		return true
+	}
+	if hops > h.maxConsultHops() {
+		h.Logger.Warn().Str("project", agent.ProjectID).Str("workflow", agent.WorkflowID).
+			Int("hops", hops).Int("max_hops", h.maxConsultHops()).Msg("a2a: consult hop limit exceeded")
+		writeError(w, http.StatusTooManyRequests, "CONSULT_HOP_LIMIT", "consult hop limit exceeded")
+		return true
+	}
+	return false
+}

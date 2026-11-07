@@ -85,6 +85,11 @@ var SQLiteCascadeGraph = []FKEdge{
 	{Child: "project_ingest_queue", Column: "ingest_execution_id", Parent: "executions", Action: FKSetNull},
 	{Child: "project_memory_quarantine", Column: "ingest_execution_id", Parent: "executions", Action: FKSetNull, PostgresOnly: true},
 
+	// approver_devices (GitHub #163). No code deletes a device today: revoke
+	// sets revoked_at and deletes the subscription itself (RevokeDevice).
+	// The edge is here so the graph matches both schemas.
+	{Child: "approver_push_subscriptions", Column: "device_id", Parent: "approver_devices", Action: FKCascade},
+
 	// artifacts
 	{Child: "project_ingest_queue", Column: "source_artifact_id", Parent: "artifacts", Action: FKCascade},
 	{Child: "project_memory_quarantine", Column: "source_artifact_id", Parent: "artifacts", Action: FKSetNull, PostgresOnly: true},

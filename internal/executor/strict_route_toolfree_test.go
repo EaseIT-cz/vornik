@@ -101,7 +101,8 @@ func assertToolFreeRoutePayload(t *testing.T, raw []byte, candidates []string) {
 	for _, v := range enum {
 		got = append(got, v.(string))
 	}
-	assert.Equal(t, candidates, got, "selected_workflow's enum must be exactly the candidate list")
+	// #641: the candidates plus "none", the no-fit answer.
+	assert.Equal(t, append(append([]string{}, candidates...), routeNoFit), got, "selected_workflow's enum must be the candidate list plus \"none\"")
 	assert.ElementsMatch(t, []any{"selected_workflow", "reason"}, in.Config.ResponseSchema["required"])
 	assert.Equal(t, false, in.Config.ResponseSchema["additionalProperties"])
 

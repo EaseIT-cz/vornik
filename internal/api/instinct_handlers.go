@@ -129,9 +129,11 @@ func (s *Server) ListInstincts(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 		// Drop project-scoped rows owned by a project outside the
-		// caller's scope. Global-scope rows are cross-project advisory
-		// evidence and stay visible to every authenticated caller.
-		if scoped && row.Scope == persistence.InstinctScopeProject && !allowed[row.ProjectID] {
+		// caller's scope, and every global-scope row: a global row copies
+		// one project's trigger and action verbatim, so it can carry
+		// project-identifying content (#504; instinct layer design,
+		// corrected 2026-11-05). Only an unscoped caller reads them.
+		if scoped && (row.Scope != persistence.InstinctScopeProject || !allowed[row.ProjectID]) {
 			continue
 		}
 		out.Instincts = append(out.Instincts, instinctToJSON(row))
@@ -196,9 +198,12 @@ func (s *Server) ShowInstinct(w http.ResponseWriter, r *http.Request, id string)
 	}
 	// A scoped caller may only read a project-scoped instinct belonging to
 	// a project in its scope. 404 (not 403) so the endpoint doesn't
-	// confirm the existence of out-of-scope rows. Global-scope rows are
-	// cross-project advisory evidence and remain readable.
-	if row.Scope == persistence.InstinctScopeProject && !requestAllowsProject(r, row.ProjectID) {
+	// confirm the existence of out-of-scope rows. A global row is answered
+	// the same way for a scoped caller: it can carry another project's
+	// content (#504).
+	_, scoped := requestScopedProjectSet(r)
+	if (row.Scope == persistence.InstinctScopeProject && !requestAllowsProject(r, row.ProjectID)) ||
+		(row.Scope != persistence.InstinctScopeProject && scoped) {
 		respondError(w, http.StatusNotFound, "NOT_FOUND", "instinct not found")
 		return
 	}

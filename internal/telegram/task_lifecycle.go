@@ -524,6 +524,12 @@ func (b *Bot) handleCancelCmd(ctx context.Context, userID int64, parts []string)
 	if t == nil {
 		return msg
 	}
+	return b.cancelScopedTask(ctx, t)
+}
+
+// cancelScopedTask cancels a task the user may act on (loaded through
+// loadScopedTask). Shared by /cancel and /stop tasks (#644).
+func (b *Bot) cancelScopedTask(ctx context.Context, t *persistence.Task) string {
 	// The client surfaces' from-set (operator decision 2026-10-13, GitHub
 	// #326): parked tasks cancel as from the UI; an approval is answered
 	// with approve/reject, not cancelled here.

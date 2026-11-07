@@ -322,6 +322,22 @@ func taskFilterWhere(filter persistence.TaskFilter, args []any, argPos int) (str
 		args = append(args, *filter.FailedSince)
 		argPos++
 	}
+	// #617: one key's tasks of one workflow since a time (the A2A quota).
+	if filter.CreatedByAPIKeyID != nil {
+		where += fmt.Sprintf(" AND created_by_api_key_id = $%d", argPos)
+		args = append(args, *filter.CreatedByAPIKeyID)
+		argPos++
+	}
+	if filter.WorkflowID != nil {
+		where += fmt.Sprintf(" AND workflow_id = $%d", argPos)
+		args = append(args, *filter.WorkflowID)
+		argPos++
+	}
+	if filter.CreatedSince != nil {
+		where += fmt.Sprintf(" AND created_at >= $%d", argPos)
+		args = append(args, *filter.CreatedSince)
+		argPos++
+	}
 	return where, args, argPos
 }
 

@@ -129,6 +129,8 @@ func TestInstinctRetire502_GlobalRowIsOperatorSurface(t *testing.T) {
 // caller the global rows, so ShowInstinct of one stays readable. Gating Show
 // alone would close nothing (whether tenants read global rows at all is
 // #504).
+// Amended for #504 (2026-11-05): through the real middleware, a project key
+// gets 404 for a global row and a static (admin-class) key still reads it.
 func TestInstinctShow502_GlobalRowStaysReadable(t *testing.T) {
 	ctx := context.Background()
 	repo := sqlite.NewInstinctRepository(sqlitetest.Memory(t).DB)
@@ -140,10 +142,10 @@ func TestInstinctShow502_GlobalRowStaysReadable(t *testing.T) {
 		CreatedAt: now, UpdatedAt: now, LastSeenAt: now,
 	})
 	require.NoError(t, err)
-	for _, key := range []string{h.projectKey, staticKey495} {
-		code, body := h.do(t, http.MethodGet, "/api/v1/instincts/"+id, key, "")
-		assert.Equal(t, http.StatusOK, code, body)
-	}
+	code, body := h.do(t, http.MethodGet, "/api/v1/instincts/"+id, h.projectKey, "")
+	assert.Equal(t, http.StatusNotFound, code, body)
+	code, body = h.do(t, http.MethodGet, "/api/v1/instincts/"+id, staticKey495, "")
+	assert.Equal(t, http.StatusOK, code, body)
 }
 
 // S6: neither confined key kind reaches a setup or wizard path, so the

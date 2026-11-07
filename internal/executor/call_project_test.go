@@ -20,6 +20,7 @@ type mockCPCRepo struct {
 	mu          sync.Mutex
 	rows        map[string]*persistence.CrossProjectCall
 	createErr   error
+	getErr      error // GitHub #636: a CPC that cannot be read on resume
 	rejectedIDs []string
 	completed   []string
 	failed      []string
@@ -49,6 +50,9 @@ func (m *mockCPCRepo) Create(_ context.Context, c *persistence.CrossProjectCall)
 func (m *mockCPCRepo) Get(_ context.Context, id string) (*persistence.CrossProjectCall, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	if m.getErr != nil {
+		return nil, m.getErr
+	}
 	if r, ok := m.rows[id]; ok {
 		cp := *r
 		return &cp, nil

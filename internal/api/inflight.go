@@ -116,7 +116,7 @@ func (s *Server) DaemonInflight(w http.ResponseWriter, r *http.Request) {
 		respondError(w, http.StatusMethodNotAllowed, "METHOD_NOT_ALLOWED", "use GET")
 		return
 	}
-	if !s.requireAdminClassGate(w, r) {
+	if !s.requireOperatorScopeFor(w, r, SurfaceInflight) {
 		return
 	}
 	n := s.InflightChatProxy()

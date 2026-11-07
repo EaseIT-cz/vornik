@@ -43,7 +43,7 @@ func (fakeTaskLookup) Get(_ context.Context, taskID string) (*persistence.Task, 
 	if taskID == "demo-task" {
 		proj = "demo"
 	}
-	return &persistence.Task{ID: taskID, ProjectID: proj}, nil
+	return &persistence.Task{ID: taskID, ProjectID: proj, WorkflowID: researchWorkflow()}, nil
 }
 
 func pushConfigHandler(t *testing.T, store PushConfigStore) *Handler {

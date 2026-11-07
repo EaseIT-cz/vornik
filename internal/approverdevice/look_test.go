@@ -42,6 +42,15 @@ func TestLook_NoThirdPartyResource(t *testing.T) {
 	attr := regexp.MustCompile(`(?i)\b(src|href|srcset|action|formaction|ping)\s*=\s*"([^"]*)"`)
 	cssURL := regexp.MustCompile(`(?i)url\(\s*['"]?([^'")]*)`)
 	for f, src := range templateSources(t) {
+		// GitHub #163 (§9.3a B.6): the push page, and only it, loads one
+		// same-origin script; its CSP allows 'self' there alone.
+		if strings.HasSuffix(f, "push.html") {
+			const tag = `<script src="/ui/static/approve-push.js" defer></script>`
+			if strings.Count(src, "<script") != 1 || !strings.Contains(src, tag) {
+				t.Errorf("%s may hold exactly %s", f, tag)
+			}
+			src = strings.ReplaceAll(src, tag, "")
+		}
 		low := strings.ToLower(src)
 		for _, banned := range []string{"<script", `rel="stylesheet"`, "@import"} {
 			if strings.Contains(low, banned) {

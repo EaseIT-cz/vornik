@@ -18,7 +18,7 @@ import (
 //	GET  /api/v1/operator/journal                 — the open rows
 //	POST /api/v1/operator/journal/{id}/resolve    — {"mode":"keep|restore","actor":"..."}
 //
-// Admin class only (requireAdminClassGate): resolve declares a change applied
+// Admin class only (requireOperatorScopeFor, #503): resolve declares a change applied
 // or writes over a hand edit, which no project-scoped or ordinary operator
 // key may do. Every resolve that reaches the engine is audited.
 
@@ -52,7 +52,7 @@ type journalResolveResponse struct {
 
 // OperatorJournal routes the journal door.
 func (s *Server) OperatorJournal(w http.ResponseWriter, r *http.Request) {
-	if !s.requireAdminClassGate(w, r) {
+	if !s.requireOperatorScopeFor(w, r, SurfaceConfigJournal) {
 		return
 	}
 	jr, ok := s.proposalApplier.(journalResolver)

@@ -156,17 +156,20 @@ func (r *reminderRepoForTools) ReclaimStuckFiring(_ context.Context, _ time.Time
 }
 
 // TestCancelReminderTool_HappyPath: cancel via reminder_id +
-// rationale flips the row to cancelled.
+// rationale flips the row to cancelled, once the user has acknowledged the
+// proposal (#642: the two-step of tool_task_confirm.go).
 func TestCancelReminderTool_HappyPath(t *testing.T) {
 	repo := newReminderRepoForTools()
 	repo.rows["rem_xyz"] = &persistence.Reminder{
 		ID: "rem_xyz", OperatorID: "telegram:42", ChannelRef: "42", Status: persistence.ReminderStatusPending,
 	}
-	te := &ToolExecutor{reminderRepo: repo}
+	confirms := newFakeConfirmRepo(nil)
+	seedTaskAck(confirms, scopeCancelReminder, "rem_xyz", testMemOperator, time.Now().Add(10*time.Minute))
+	te := &ToolExecutor{reminderRepo: repo, memoryConfirms: confirms}
 
 	tc := chat.ToolCall{Function: chat.FunctionCall{Name: "cancel_reminder",
 		Arguments: `{"reminder_id":"rem_xyz","rationale":"user said never mind"}`}}
-	res := te.Execute(context.Background(), tc, "", nil, 42, "42", nil)
+	res := te.Execute(sharedCtx(), tc, "", nil, 42, "42", nil)
 
 	if strings.Contains(strings.ToLower(res.Content), "error") {
 		t.Errorf("expected success, got %q", res.Content)
@@ -345,11 +348,13 @@ func TestCancelReminderTool_RepoErrorSurfaces(t *testing.T) {
 		ID: "rem_x", OperatorID: "telegram:42", ChannelRef: "42", Status: persistence.ReminderStatusPending,
 	}
 	repo.cancelErr = errors.New("disk full")
-	te := &ToolExecutor{reminderRepo: repo}
+	confirms := newFakeConfirmRepo(nil)
+	seedTaskAck(confirms, scopeCancelReminder, "rem_x", testMemOperator, time.Now().Add(10*time.Minute))
+	te := &ToolExecutor{reminderRepo: repo, memoryConfirms: confirms}
 
 	tc := chat.ToolCall{Function: chat.FunctionCall{Name: "cancel_reminder",
 		Arguments: `{"reminder_id":"rem_x","rationale":"x"}`}}
-	res := te.Execute(context.Background(), tc, "", nil, 42, "42", nil)
+	res := te.Execute(sharedCtx(), tc, "", nil, 42, "42", nil)
 
 	if !strings.Contains(strings.ToLower(res.Content), "disk full") &&
 		!strings.Contains(strings.ToLower(res.Content), "failed") {

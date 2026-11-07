@@ -26,7 +26,7 @@ func TestAdminClassKeys_CommunityEdition(t *testing.T) {
 		t.Fatal("the operator key is not admin-class in Community")
 	}
 	rec := httptest.NewRecorder()
-	if !srv.requireAdminClassGate(rec, req.WithContext(ctx)) {
+	if !srv.requireOperatorScopeFor(rec, req.WithContext(ctx), SurfaceAgentGrant) {
 		t.Fatalf("the admin-class gate refused the operator key: %d %s", rec.Code, rec.Body.String())
 	}
 	other := context.WithValue(context.WithValue(req.Context(), authEnabledKey, true), apiKeyKey, "sk-vornik-someone")

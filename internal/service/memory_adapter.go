@@ -782,7 +782,8 @@ func (a *memorySearchAdapter) SearchRouting(ctx context.Context, projectID, quer
 	}
 	results, verdict, err := a.s.RecallWithRouting(ctx, projectID, query,
 		memory.SearchOptions{Limit: req.Limit, Routing: true,
-			RepoScope: req.RepoScope, StrictScope: req.StrictScope, Authority: req.Authority}, reqCtx)
+			RepoScope: req.RepoScope, StrictScope: req.StrictScope, Authority: req.Authority,
+			SourcePrefixes: req.SourcePrefixes, MaxSensitivity: req.MaxSensitivity}, reqCtx)
 	if err != nil {
 		return nil, nil, err
 	}

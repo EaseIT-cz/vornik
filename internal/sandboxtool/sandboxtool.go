@@ -41,6 +41,7 @@ import (
 
 	"github.com/rs/zerolog"
 
+	"vornik.io/vornik/internal/safepath"
 	"vornik.io/vornik/internal/spawn"
 )
 
@@ -736,8 +737,9 @@ func dirSize(dir string) int64 {
 }
 
 func (r *Runner) scratch(inputs []Input, limit int64) (work, inDir, outDir string, err error) {
-	if err := os.MkdirAll(r.cfg.ScratchRoot, 0o700); err != nil {
-		return "", "", "", err
+	// The default root is a fixed name under the temp dir (#461).
+	if err := safepath.EnsurePrivateDir(r.cfg.ScratchRoot); err != nil {
+		return "", "", "", fmt.Errorf("sandbox scratch root: %w", err)
 	}
 	work, err = os.MkdirTemp(r.cfg.ScratchRoot, "run-*")
 	if err != nil {

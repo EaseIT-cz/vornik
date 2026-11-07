@@ -161,7 +161,9 @@ done
 # Shell: each curl invocation in a hook passes -A "$VORNIK_UA", and the hook
 # defines it as exactly $want.
 for f in "$root"/hooks/*.sh; do
-  n="$(grep -cE '(^|[^[:alnum:]_-])curl ' "$f")"
+  # A call is a line that runs curl: comments and `command -v curl` probes
+  # are not calls (hints.sh has both, #634).
+  n="$(grep -E '(^|[^[:alnum:]_-])curl ' "$f" | grep -vcE '^[[:space:]]*#|command -v curl')"
   [ "$n" -eq 0 ] && continue
   sites=$((sites+n))
   base="$(basename "$f")"

@@ -53,7 +53,7 @@ func fwCovServer(repo persistence.MemoryPolicyEvaluationRepository) *Server {
 func TestAdminMemoryFirewallEvaluations_NoRepo_503(t *testing.T) {
 	s := NewServer(WithAdminConfig(config.AdminConfig{Enabled: true, AllowedKeys: []string{"sk-admin"}}))
 	req := withAdminKeyContext(
-		httptest.NewRequest(http.MethodGet, "/api/v1/admin/memory/policy/evaluations?project_id=p1", nil),
+		httptest.NewRequest(http.MethodGet, "/api/v1/memory/policy/evaluations?project_id=p1", nil),
 		"sk-admin")
 	rec := httptest.NewRecorder()
 	s.AdminMemoryFirewallEvaluations(rec, req)
@@ -64,7 +64,7 @@ func TestAdminMemoryFirewallEvaluations_NoRepo_503(t *testing.T) {
 func TestAdminMemoryFirewallEvaluations_WrongMethod_405(t *testing.T) {
 	s := fwCovServer(&stubEvaluationsRepo{})
 	req := withAdminKeyContext(
-		httptest.NewRequest(http.MethodPost, "/api/v1/admin/memory/policy/evaluations?project_id=p1", nil),
+		httptest.NewRequest(http.MethodPost, "/api/v1/memory/policy/evaluations?project_id=p1", nil),
 		"sk-admin")
 	rec := httptest.NewRecorder()
 	s.AdminMemoryFirewallEvaluations(rec, req)
@@ -74,7 +74,7 @@ func TestAdminMemoryFirewallEvaluations_WrongMethod_405(t *testing.T) {
 func TestAdminMemoryFirewallEvaluations_MissingProject_400(t *testing.T) {
 	s := fwCovServer(&stubEvaluationsRepo{})
 	req := withAdminKeyContext(
-		httptest.NewRequest(http.MethodGet, "/api/v1/admin/memory/policy/evaluations", nil),
+		httptest.NewRequest(http.MethodGet, "/api/v1/memory/policy/evaluations", nil),
 		"sk-admin")
 	rec := httptest.NewRecorder()
 	s.AdminMemoryFirewallEvaluations(rec, req)
@@ -86,7 +86,7 @@ func TestAdminMemoryFirewallEvaluations_ListError_500(t *testing.T) {
 	repo := &fwCovErrRepo{listErr: errors.New("db down")}
 	s := fwCovServer(repo)
 	req := withAdminKeyContext(
-		httptest.NewRequest(http.MethodGet, "/api/v1/admin/memory/policy/evaluations?project_id=p1", nil),
+		httptest.NewRequest(http.MethodGet, "/api/v1/memory/policy/evaluations?project_id=p1", nil),
 		"sk-admin")
 	rec := httptest.NewRecorder()
 	s.AdminMemoryFirewallEvaluations(rec, req)
@@ -106,7 +106,7 @@ func TestAdminMemoryFirewallEvaluations_OK_WithFilters(t *testing.T) {
 	s := fwCovServer(repo)
 	req := withAdminKeyContext(
 		httptest.NewRequest(http.MethodGet,
-			"/api/v1/admin/memory/policy/evaluations?project_id=p1&decision=allow&limit=25&since=2026-01-01T00:00:00Z",
+			"/api/v1/memory/policy/evaluations?project_id=p1&decision=allow&limit=25&since=2026-01-01T00:00:00Z",
 			nil),
 		"sk-admin")
 	rec := httptest.NewRecorder()
@@ -135,7 +135,7 @@ func TestAdminMemoryFirewallEvaluations_DateOnlySince_DefaultsLimit(t *testing.T
 	s := fwCovServer(repo)
 	req := withAdminKeyContext(
 		httptest.NewRequest(http.MethodGet,
-			"/api/v1/admin/memory/policy/evaluations?project_id=p1&since=2026-02-15&limit=99999",
+			"/api/v1/memory/policy/evaluations?project_id=p1&since=2026-02-15&limit=99999",
 			nil),
 		"sk-admin")
 	rec := httptest.NewRecorder()
@@ -154,7 +154,7 @@ func TestAdminMemoryFirewallEvaluations_DateOnlySince_DefaultsLimit(t *testing.T
 func TestAdminMemoryFirewallMode_WrongMethod_405(t *testing.T) {
 	s := NewServer(WithAdminConfig(config.AdminConfig{Enabled: true, AllowedKeys: []string{"sk-admin"}}))
 	req := withAdminKeyContext(
-		httptest.NewRequest(http.MethodDelete, "/api/v1/admin/memory/policy/mode", nil),
+		httptest.NewRequest(http.MethodDelete, "/api/v1/memory/policy/mode", nil),
 		"sk-admin")
 	rec := httptest.NewRecorder()
 	s.AdminMemoryFirewallMode(rec, req)
@@ -165,7 +165,7 @@ func TestAdminMemoryFirewallMode_WrongMethod_405(t *testing.T) {
 func TestAdminMemoryFirewallMode_Unknown(t *testing.T) {
 	s := NewServer(WithAdminConfig(config.AdminConfig{Enabled: true, AllowedKeys: []string{"sk-admin"}}))
 	req := withAdminKeyContext(
-		httptest.NewRequest(http.MethodGet, "/api/v1/admin/memory/policy/mode", nil),
+		httptest.NewRequest(http.MethodGet, "/api/v1/memory/policy/mode", nil),
 		"sk-admin")
 	rec := httptest.NewRecorder()
 	s.AdminMemoryFirewallMode(rec, req)
@@ -187,7 +187,7 @@ func TestAdminMemoryFirewallMode_DaemonModeReported(t *testing.T) {
 		WithMemoryFirewallMode(memoryfirewall.EnforcementEnforce),
 	)
 	req := withAdminKeyContext(
-		httptest.NewRequest(http.MethodGet, "/api/v1/admin/memory/policy/mode", nil),
+		httptest.NewRequest(http.MethodGet, "/api/v1/memory/policy/mode", nil),
 		"sk-admin")
 	rec := httptest.NewRecorder()
 	s.AdminMemoryFirewallMode(rec, req)
@@ -216,7 +216,7 @@ func TestAdminMemoryFirewallMode_ProjectOverride_Found(t *testing.T) {
 		}),
 	)
 	req := withAdminKeyContext(
-		httptest.NewRequest(http.MethodGet, "/api/v1/admin/memory/policy/mode?project_id=p1", nil),
+		httptest.NewRequest(http.MethodGet, "/api/v1/memory/policy/mode?project_id=p1", nil),
 		"sk-admin")
 	rec := httptest.NewRecorder()
 	s.AdminMemoryFirewallMode(rec, req)
@@ -246,7 +246,7 @@ func TestAdminMemoryFirewallMode_ProjectOverride_Inherit(t *testing.T) {
 		}),
 	)
 	req := withAdminKeyContext(
-		httptest.NewRequest(http.MethodGet, "/api/v1/admin/memory/policy/mode?project_id=other", nil),
+		httptest.NewRequest(http.MethodGet, "/api/v1/memory/policy/mode?project_id=other", nil),
 		"sk-admin")
 	rec := httptest.NewRecorder()
 	s.AdminMemoryFirewallMode(rec, req)
@@ -267,7 +267,7 @@ func TestAdminMemoryFirewallMode_ProjectOverride_Inherit(t *testing.T) {
 func TestAdminMemoryFirewallEvaluationsCSV_NoRepo_503(t *testing.T) {
 	s := NewServer(WithAdminConfig(config.AdminConfig{Enabled: true, AllowedKeys: []string{"sk-admin"}}))
 	req := withAdminKeyContext(
-		httptest.NewRequest(http.MethodGet, "/api/v1/admin/memory/policy/evaluations.csv?project_id=p1", nil),
+		httptest.NewRequest(http.MethodGet, "/api/v1/memory/policy/evaluations.csv?project_id=p1", nil),
 		"sk-admin")
 	rec := httptest.NewRecorder()
 	s.AdminMemoryFirewallEvaluationsCSV(rec, req)
@@ -278,7 +278,7 @@ func TestAdminMemoryFirewallEvaluationsCSV_NoRepo_503(t *testing.T) {
 func TestAdminMemoryFirewallEvaluationsCSV_MissingProject_400(t *testing.T) {
 	s := fwCovServer(&stubEvaluationsRepo{})
 	req := withAdminKeyContext(
-		httptest.NewRequest(http.MethodGet, "/api/v1/admin/memory/policy/evaluations.csv", nil),
+		httptest.NewRequest(http.MethodGet, "/api/v1/memory/policy/evaluations.csv", nil),
 		"sk-admin")
 	rec := httptest.NewRecorder()
 	s.AdminMemoryFirewallEvaluationsCSV(rec, req)
@@ -290,7 +290,7 @@ func TestAdminMemoryFirewallEvaluationsCSV_ListError_500(t *testing.T) {
 	repo := &fwCovErrRepo{listErr: errors.New("boom")}
 	s := fwCovServer(repo)
 	req := withAdminKeyContext(
-		httptest.NewRequest(http.MethodGet, "/api/v1/admin/memory/policy/evaluations.csv?project_id=p1&since=2026-01-01&limit=5", nil),
+		httptest.NewRequest(http.MethodGet, "/api/v1/memory/policy/evaluations.csv?project_id=p1&since=2026-01-01&limit=5", nil),
 		"sk-admin")
 	rec := httptest.NewRecorder()
 	s.AdminMemoryFirewallEvaluationsCSV(rec, req)
@@ -301,7 +301,7 @@ func TestAdminMemoryFirewallEvaluationsCSV_ListError_500(t *testing.T) {
 func TestAdminMemoryFirewallEvaluationsCSV_WrongMethod_405(t *testing.T) {
 	s := fwCovServer(&stubEvaluationsRepo{})
 	req := withAdminKeyContext(
-		httptest.NewRequest(http.MethodPost, "/api/v1/admin/memory/policy/evaluations.csv?project_id=p1", nil),
+		httptest.NewRequest(http.MethodPost, "/api/v1/memory/policy/evaluations.csv?project_id=p1", nil),
 		"sk-admin")
 	rec := httptest.NewRecorder()
 	s.AdminMemoryFirewallEvaluationsCSV(rec, req)
@@ -315,7 +315,7 @@ func TestAdminMemoryFirewallChunkPolicy_BadJSON_400(t *testing.T) {
 	})
 	req := withAdminKeyContext(
 		httptest.NewRequest(http.MethodPost,
-			"/api/v1/admin/memory/policy/chunks/c1",
+			"/api/v1/memory/policy/chunks/c1",
 			bytes.NewBufferString(`{not json`)),
 		"sk-admin")
 	rec := httptest.NewRecorder()
@@ -328,7 +328,7 @@ func TestAdminMemoryFirewallChunkPolicy_BadJSON_400(t *testing.T) {
 func TestAdminMemoryFirewallChunkPolicy_WrongMethod_405(t *testing.T) {
 	s := newFirewallServer(&stubFirewallEditor{})
 	req := withAdminKeyContext(
-		httptest.NewRequest(http.MethodGet, "/api/v1/admin/memory/policy/chunks/c1", nil),
+		httptest.NewRequest(http.MethodGet, "/api/v1/memory/policy/chunks/c1", nil),
 		"sk-admin")
 	rec := httptest.NewRecorder()
 	s.AdminMemoryFirewallChunkPolicy(rec, req)
@@ -340,7 +340,7 @@ func TestAdminMemoryFirewallChunkPolicy_LoadError_500(t *testing.T) {
 	s := newFirewallServer(&stubFirewallEditor{loadErr: errors.New("load fail")})
 	req := withAdminKeyContext(
 		httptest.NewRequest(http.MethodPost,
-			"/api/v1/admin/memory/policy/chunks/c1",
+			"/api/v1/memory/policy/chunks/c1",
 			bytes.NewBufferString(`{}`)),
 		"sk-admin")
 	rec := httptest.NewRecorder()
@@ -372,7 +372,7 @@ func TestAdminMemoryFirewallChunkPolicy_UpdateError_500_AllFields(t *testing.T) 
 	})
 	req := withAdminKeyContext(
 		httptest.NewRequest(http.MethodPost,
-			"/api/v1/admin/memory/policy/chunks/c1",
+			"/api/v1/memory/policy/chunks/c1",
 			bytes.NewBuffer(body)),
 		"sk-admin")
 	rec := httptest.NewRecorder()

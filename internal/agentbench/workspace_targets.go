@@ -14,10 +14,21 @@ const (
 	// WorkspaceResetTargets: a workspace was given and each task repeat's
 	// declared targets were cleared before it ran (possibly none, for "[]").
 	WorkspaceResetTargets = "targets"
+	// WorkspaceResetTargetsAndState: as WorkspaceResetTargets, and the
+	// workflow's own state (WorkflowStatePaths) was cleared too, so no task
+	// could resume an earlier task's feature (§12.29, harness 10).
+	WorkspaceResetTargetsAndState = "targets+workflow-state"
 	// WorkspaceResetNoWorkspace: no workspace was given, so nothing was
 	// cleared and the run is not fresh-workspace evidence.
 	WorkspaceResetNoWorkspace = "none-no-workspace"
 )
+
+// WorkflowStatePaths are the workspace paths where dev-pipeline keeps its own
+// state: the backlog it picks features from and marks in progress, and
+// .autonomy/ (CURRENT_TASK.md, review and testing notes). Prepare removes them
+// before every repeat, so a task cannot resume an earlier task's feature
+// (benchmark LLD §12.29).
+var WorkflowStatePaths = []string{".autonomy", "BACKLOG.md"}
 
 // WorkspacePreparer clears a task's targets before it runs and reports which
 // it produced afterwards. The git implementation lives in internal/cli:

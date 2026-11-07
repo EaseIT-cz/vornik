@@ -87,6 +87,20 @@ type TraceStore interface {
 	// execution ids, and a submitter that cannot name them would otherwise leave
 	// the run silently unmeasured.
 	Executions(ctx context.Context, taskID string) ([]string, error)
+	// Terminal reports the terminal an execution reached and whether its
+	// workflow declares that terminal a recovery exit (benchmark LLD §12.29).
+	Terminal(ctx context.Context, executionID string) (ExecutionTerminal, error)
+}
+
+// ExecutionTerminal is the end state an execution reached, as its own pinned
+// workflow definition declares it.
+type ExecutionTerminal struct {
+	// StepID is the terminal's id, for example "complete" or "checkpoint".
+	StepID string
+	// Recovery is the terminal's `recovery: true` declaration: a COMPLETED
+	// exit that parks a partial result for the autonomy loop to resume, so
+	// the requested work is not finished.
+	Recovery bool
 }
 
 // ExecutionStateStore reads the pinned state evidence used by task scoring.
@@ -203,7 +217,7 @@ func (r *Runner) Run(ctx context.Context, cfg RunConfig) (Journal, error) {
 		WorkspaceReset:      WorkspaceResetNoWorkspace,
 	}}
 	if r.Workspace != nil {
-		j.Manifest.WorkspaceReset = WorkspaceResetTargets
+		j.Manifest.WorkspaceReset = WorkspaceResetTargetsAndState
 	}
 
 	repeats := cfg.Repeats
@@ -398,6 +412,11 @@ func (r *Runner) runOnce(ctx context.Context, cfg RunConfig, spec TaskSpec, repe
 		}}
 	}
 	taskRun.ExecutionIDs = append([]string(nil), executions...)
+	if outcome.Succeeded {
+		outcome = r.finishedOrNot(ctx, outcome, executions[len(executions)-1], &taskRun)
+		taskRun.Succeeded = outcome.Succeeded
+		taskRun.ErrorText = outcome.ErrorText
+	}
 
 	var out []ExecutionRecord
 	for _, execID := range executions {
@@ -432,6 +451,28 @@ func (r *Runner) runOnce(ctx context.Context, cfg RunConfig, spec TaskSpec, repe
 		out = append(out, rec)
 	}
 	return taskRun, out
+}
+
+// finishedOrNot decides whether a task the daemon reported COMPLETED finished
+// the requested work (benchmark LLD §12.29). The newest execution's terminal
+// decides; a terminal its workflow declares `recovery: true` (dev-pipeline's
+// checkpoint) parks a partial result, so the run is not a success. A terminal
+// the harness cannot read fails closed, as a harness failure: the harness
+// cannot say the work finished, and must not charge the model either.
+func (r *Runner) finishedOrNot(ctx context.Context, outcome TaskOutcome, newest string, taskRun *TaskRun) TaskOutcome {
+	terminal, err := r.Traces.Terminal(ctx, newest)
+	if err != nil {
+		outcome.Succeeded = false
+		outcome.ErrorText = fmt.Sprintf("could not assemble trace: reading the terminal of %s failed: %v", newest, err)
+		return outcome
+	}
+	taskRun.Terminal = terminal.StepID
+	if terminal.Recovery {
+		outcome.Succeeded = false
+		outcome.ErrorText = fmt.Sprintf("checkpoint: the workflow ended at recovery terminal %q; the requested work is not finished",
+			terminal.StepID)
+	}
+	return outcome
 }
 
 func taskTierMap(tasks []TaskSpec) map[string]TaskTier {

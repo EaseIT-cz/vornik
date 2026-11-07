@@ -663,6 +663,14 @@ func TestStrictAdaptive_FailsAfterRetryStillBadPick(t *testing.T) {
 	require.NoError(t, err)
 	assert.Len(t, children, 0,
 		"no child task should be spawned when both route attempts produce invalid picks")
+	// #641: a repeated out-of-list pick is not a no-fit answer.
+	task, err := tr.Get(context.Background(), parentID)
+	require.NoError(t, err)
+	require.NotNil(t, task.LastError)
+	assert.Contains(t, *task.LastError, "strict adaptive")
+	if task.LastErrorClass != nil {
+		assert.NotEqual(t, persistence.TaskFailureClassRouteNoFit, *task.LastErrorClass)
+	}
 }
 
 // TestStrictAdaptive_SingleCandidateShortCircuits — when the project's

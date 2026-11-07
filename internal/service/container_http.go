@@ -273,6 +273,7 @@ func (c *Container) initHTTPServer() error {
 		api.WithChatAuditRepository(c.repos.ChatAudit),
 		api.WithWebhookEventRepository(c.repos.Webhooks),
 		api.WithAPIKeyRepository(c.repos.APIKeys),
+		api.WithCompanionHintRepository(c.repos.CompanionHints),
 		api.WithSkillStore(c.repos.Skills),
 		api.WithExecutionSkillRepository(c.repos.ExecInjectedSkills),
 		// CI ingestion on the generic ingress, resolved per project so a
@@ -577,7 +578,9 @@ func (c *Container) initHTTPServer() error {
 			Registry:        c.Registry,
 			TaskCreator:     a2aTaskCreatorAdapter{inner: taskCreator},
 			LiveSubscriber:  c.livePub,
-			Logger:          c.Logger,
+			// #640: the inbound consult hop guard (a2a.consult.max_hops).
+			MaxConsultHops: c.Config.A2A.Consult.EffectiveMaxHops(),
+			Logger:         c.Logger,
 		}
 		// Push notifications: when the config repo is wired, the submit
 		// handler accepts pushNotificationConfig + the agent card advertises
@@ -793,6 +796,11 @@ func (c *Container) initHTTPServer() error {
 			c.approverHTTPSMetrics = approverdevice.NewHTTPSRefusalMetrics()
 		}
 		c.approverHTTPSMetrics.Attach(reg)
+		// vornik_approver_push_total, same Attach rule (GitHub #163).
+		if c.approverPushMetrics == nil {
+			c.approverPushMetrics = approverdevice.NewPushMetrics()
+		}
+		c.approverPushMetrics.Attach(reg)
 		// The §5.3 legacy-grant counter, same Attach rule and for the same
 		// reason: the holder is created during subsystem init, before any
 		// registry exists. This counter IS the removal gate ("14 consecutive
@@ -1750,6 +1758,7 @@ func (c *Container) initHTTPServer() error {
 		// wrong.
 		if c.chatRouter != nil {
 			dh.SetChatRouteResolver(c.chatRouter.Resolves)
+			dh.SetChatRouteOf(c.chatRouter.RouteOf)
 		}
 		// Configuration assistant (2026-09-13): the engine is built over the
 		// API server's own wiring; the doctor's secret snapshot feeds its
@@ -1827,8 +1836,28 @@ func (c *Container) initHTTPServer() error {
 		if c.repos != nil && c.repos.AgentSecrets != nil {
 			dh.SetAgentSecretStore(c.repos.AgentSecrets, c.storeKeyPath())
 		}
+		if c.repos != nil && c.repos.MemoryRetrievalAudit != nil {
+			// a2a_corpus_walk (federation design, #617 slice 2).
+			dh.SetA2AKeyRetrieval(c.repos.MemoryRetrievalAudit.A2AChunksByCallerKey)
+		}
+		if c.memoryManager != nil && c.memoryManager.Repository() != nil && c.Registry != nil {
+			// memory_sensitivity_cap (#618 C4).
+			repo, reg, prefixes := c.memoryManager.Repository(), c.Registry, c.Config.Memory.PublicSourcePrefixes
+			dh.SetSensitivityCapRoles(func(ctx context.Context) ([]api.SensitivityCapRole, error) {
+				swarmOf := func(id string) (*registry.Swarm, error) {
+					_, sw, err := reg.GetProjectWithSwarm(id)
+					return sw, err
+				}
+				return sensitivityCapRoles(ctx, reg.ListActiveProjects(), swarmOf, prefixes, repo.SensitivityCapCounts), nil
+			})
+		}
 		if c.repos != nil && c.repos.ApproverDevices != nil {
 			dh.SetApproverDevices(c.repos.ApproverDevices, c.OperatorAlerter() != nil && c.Config.OperatorAlertActive())
+			if svc := c.approverDeviceService(); svc != nil && svc.WebPushEnabled() {
+				if pr, ok := c.repos.ApproverDevices.(persistence.ApproverPushRepository); ok {
+					dh.SetApproverPush(pr)
+				}
+			}
 			if c.repos.AgentGrants != nil {
 				// agent_namespace_budget (agent-administered design §18.4 F10).
 				dh.SetAgentNamespaceBudgets(c.agentNamespaceBudgets)

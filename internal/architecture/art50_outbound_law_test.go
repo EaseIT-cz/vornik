@@ -127,6 +127,7 @@ var outboundSites = map[string]outboundRow{
 	"internal/ui Server.DeliverableSend":                             {classDisclosed, 1, "true", ""},
 	"internal/slack Channel.sendConfigAssistReply":                   {classDisclosed, 1, "false", ""},
 	"internal/steering OperatorAlertNotifier.NotifySteeringRequired": {classExempt, 1, "", "ownerless-task alert: fmt template of task id, project and state (composeText), no model output"},
+	"internal/approverdevice Service.sendOne":                        {classExempt, 1, "", "approver Web Push (GitHub #163, design part 09 §9.3a): the payload is the push subject and a fixed link; every subject is a fixed string in internal/approverdevice or journalCardPushSubject, plus the daemon's own clock time (hostClock); never the request sentence or any model output"},
 	"internal/steering OperatorAlertNotifier.SendOperator":           {classExempt, 1, "", "operator alert (NotifyOperator calls it): the cluster monitor's health text and the GDPR erasure escalation's fixed template of request, record, task and deadline (GitHub #344); no model output"},
 
 	// --- Telegram: rows 13 and 14 and the inventory extras ---
@@ -152,7 +153,7 @@ var outboundSites = map[string]outboundRow{
 	"internal/telegram Channel.Send":                        {classTransport, 3, "", "the conversation.Channel implementation: called by ChannelReceiver and SendDisclosed, which disclose"},
 	"internal/telegram Channel.StreamingSend":               {classTransport, 1, "", "receiver streaming path: the chat was served by serveDisclosure before dispatch"},
 	"internal/telegram artifactChatSender.SendArtifactFile": {classTransport, 1, "", "send_artifact in a receiver turn; delegates to Bot.SendDocumentReader, which discloses"},
-	"internal/telegram Bot.HandleMessage":                   {classExempt, 43, "", whyTelegramCommand},
+	"internal/telegram Bot.HandleMessage":                   {classExempt, 45, "", whyTelegramCommand},
 	"internal/telegram Bot.handleAutopilot":                 {classExempt, 8, "", whyTelegramCommand},
 	"internal/telegram Bot.handleLinkClaim":                 {classExempt, 5, "", whyTelegramCommand},
 	"internal/telegram Bot.handleLinkCommand":               {classExempt, 3, "", whyTelegramCommand},

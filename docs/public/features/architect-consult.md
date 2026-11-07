@@ -2,48 +2,64 @@
 
 !!! note "Community Edition — use requires a subscription"
 
-    The consultation mechanism ships in the **Community Edition** and is
-    **off by default**. Using it requires a vornik subscription: the gate is
-    your service contract, not a licence check in the software. Enabling it
-    creates an auditable record, and so does every consultation.
+    The consultation ships in the **Community Edition**, **off by default**.
+    Using it requires a vornik subscription. The gate is your service
+    contract, not a licence check in the software. Turning it on is
+    recorded in an audit log, and so is every consultation.
 
 The [configuration assistant](config-assistant.md) can ask the **vornik
-architect** — a remote expert agent reachable over the A2A protocol — one
-question per request when it needs domain knowledge it does not hold: what a
-configuration key means in practice, how a workflow topology is usually shaped
-for a purpose, why a measurement looks the way it does.
+architect**, a remote expert agent reached over the A2A protocol, one
+question per request. It does so when it needs knowledge it does not hold:
+what a configuration key means in practice, how a workflow is usually
+shaped for a purpose, why a measurement looks the way it does.
+
+## What the architect knows
+
+It answers from two sources only:
+
+- implementation briefs, which describe how each feature works end to end
+  and are approved for disclosure before they are added;
+- this documentation.
+
+It does not read Vornik's internal design record, legal material, source
+code or anyone's instance configuration. When a question would need them,
+the answer is "Not found in the design record."
+
+An answer is at most 8 KiB of prose with citations, and holds no code
+blocks. Every citation names a brief or a page of these docs. A run that
+breaks a rule returns no answer, and the consultation counts as not having
+happened.
 
 ## What is sent
 
-Only a **minimized, sanitized question** — never the configuration tree, never
-a diff, never a secret. The question passes the same secret screen as the
-assistant's own model call and the judge call; a question that trips it is
-not sent and the request continues without the consultation.
+Only a minimized, sanitized question: never your configuration tree, a diff
+or a secret. The question passes the same secret screen as the assistant's own
+model call and its judge call. A question that trips the screen is not sent,
+and the request carries on without the consultation.
 
-The peer's answer is **advice**, never an approval: it is folded into the
-assistant's reasoning as untrusted text, cannot grant tools, and cannot make
-a proposal auto-apply.
+The answer is advice, never an approval. It enters the assistant's reasoning
+as untrusted text. It cannot grant tools or make a proposal apply itself.
 
 ## Bounds
 
-- at most one consultation per assistant request;
-- a per-consult deadline (`config_assistant.consult.timeout`, default two
-  minutes) and answer-size cap;
-- the destination is the operator-configured `a2a.peers` entry only — the
-  model cannot choose a host, and the destination and your consent are
-  re-checked immediately before each send;
-- an unreachable or timed-out peer degrades the answer (the proposal says the
-  consultation did not happen); it never fails the request and is never
-  retried automatically.
+- At most one consultation per assistant request.
+- A deadline per consultation (`config_assistant.consult.timeout`, default
+  two minutes) and a cap on the answer's size.
+- The only destination is the `a2a.peers` entry you configure. The model
+  cannot choose a host, and the destination and your consent are checked
+  again just before each send.
+- An unreachable or timed-out peer degrades the answer: the proposal says the
+  consultation did not happen. It never fails the request and is never
+  retried on its own.
 
 ## Audit
 
-Before any network call, the attempt is committed to the admin audit log.
-If the audit log is not wired, or the write fails, **no call is made**. The
-log carries enable / disable / destination-change events, per-request
-attempt and outcome, and the first-attempted and first-successful use per
-project — which is the evidence a contractual gate rests on. Counters
-supplement the log; they do not replace it.
+Each attempt is written to the admin audit log before any network call. If
+the log is not wired, or the write fails, no call is made. The log holds:
+turning the feature on and off, changes of destination, each request's
+attempt and outcome, and each project's first attempted and first
+successful use. That record is the evidence the contract rests on. Counters
+add to the log; they do not replace it.
 
 ## Turning it on
 
@@ -63,5 +79,5 @@ config_assistant:
 vornikctl doctor feature enable architect-consult
 ```
 
-The doctor refuses unless the configuration assistant is enabled, the peer
-entry exists and the admin audit log is wired.
+The doctor refuses unless the configuration assistant is on, the peer entry
+exists and the admin audit log is wired.

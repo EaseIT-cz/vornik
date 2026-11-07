@@ -379,10 +379,22 @@ func (r *ApproverDeviceRepository) TouchDevice(ctx context.Context, id string, n
 }
 
 // RevokeDevice implements persistence.ApproverDeviceRepository.
+// It also deletes the device's Web Push subscription, in the same
+// transaction (GitHub #163, design part 09 §9.3a B.3).
 func (r *ApproverDeviceRepository) RevokeDevice(ctx context.Context, id string, now time.Time) error {
-	_, err := r.db.ExecContext(ctx, `UPDATE approver_devices SET revoked_at = ?, prev_token_hash = NULL, rotation_nonce = NULL, share_until = NULL
-		WHERE id = ? AND revoked_at IS NULL`, sqliteTime(now), id)
-	return err
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+	if _, err := tx.ExecContext(ctx, `UPDATE approver_devices SET revoked_at = ?, prev_token_hash = NULL, rotation_nonce = NULL, share_until = NULL
+		WHERE id = ? AND revoked_at IS NULL`, sqliteTime(now), id); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, `DELETE FROM approver_push_subscriptions WHERE device_id = ?`, id); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 // CreateRequest implements persistence.ApproverDeviceRepository.

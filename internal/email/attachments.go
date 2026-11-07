@@ -131,6 +131,11 @@ func PersistAttachments(ctx context.Context, deps persistAttachmentDeps, atts []
 	// shape that operators saw on artifact paths through 2026-05-21.
 	subdir := safeMessageDir(deps.MessageID)
 	dir := filepath.Join(deps.StoreDir, subdir)
+	// The store root may be a fixed name under the temp dir; it must be a
+	// directory only the daemon's user controls (#461).
+	if err := safepath.EnsurePrivateDir(deps.StoreDir); err != nil {
+		return nil, fmt.Errorf("email: attachment store: %w", err)
+	}
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return nil, fmt.Errorf("email: mkdir attachment store %q: %w", dir, err)
 	}

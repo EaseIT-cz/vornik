@@ -45,7 +45,7 @@
                 </div>
             </div>
 
-            <!-- Edit form. Posts via JS to /api/v1/admin/memory/policy/chunks/{id}
+            <!-- Edit form. Posts via JS to /api/v1/memory/policy/chunks/{id}
                  so the API's partial-update semantic (nil = leave untouched) is
                  preserved. Vanilla fetch — no JS framework dep. -->
             <form id="policy-form" class="glass rounded-xl border border-dark-700 px-4 py-4 space-y-3">
@@ -163,7 +163,7 @@
             });
             const chunkID = JSON.parse(document.getElementById('mf-chunk-data').textContent).chunkID;
             try {
-                const resp = await fetch('/api/v1/admin/memory/policy/chunks/' + chunkID, {
+                const resp = await fetch('/api/v1/memory/policy/chunks/' + chunkID, {
                     method: 'POST',
                     headers: {'Content-Type': 'application/json'},
                     body: JSON.stringify(body),

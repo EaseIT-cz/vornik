@@ -649,3 +649,117 @@ func buildCalleePayload(rawPayload []byte, callDepth int) []byte {
 	}
 	return body
 }
+
+// callResume is what a call_project step leaves for its caller's resume
+// (GitHub #636, #664; inter-project orchestration design, amendment
+// 2026-11-06): which step paused, and which CPC to read. A checkpoint written
+// before the amendment has none, and resumes as it always did.
+type callResume struct {
+	StepID string `json:"stepId"`
+	CPCID  string `json:"cpcId"`
+}
+
+// recordCallResume stamps the dispatch's CallResume on the state.
+func recordCallResume(state *executionState, stepID string, result callProjectResult) {
+	state.CallResume = &callResume{StepID: stepID, CPCID: result.CPCId}
+}
+
+// crossProjectCallError fails a caller whose call did not complete and whose
+// call step has no on_fail.
+type crossProjectCallError struct{ msg string }
+
+func (e *crossProjectCallError) Error() string { return e.msg }
+func (e *crossProjectCallError) FailureClass() string {
+	return persistence.TaskFailureClassCrossProjectCallFailed
+}
+
+type callResumeKind int
+
+const (
+	callResumeContinue callResumeKind = iota // completed: run on at the checkpointed step
+	callResumeOnFail                         // a bad outcome with on_fail: route there
+	callResumeFail                           // a bad outcome without on_fail, or no CPC
+	callResumePause                          // pending or running: not resolved yet
+)
+
+type callResumeOutcome struct {
+	kind   callResumeKind
+	stepID string // the call step
+	onFail string
+	err    error
+}
+
+// applyCallResume reads the CPC a paused call_project step left and decides
+// the resume (design amendment 2026-11-06, rule 2). It updates state in
+// place: on completed, StepResults[step] and LastResult take the envelope's
+// data; on a bad outcome, LastResult is an error result naming the CPC. It
+// never guesses success: an unreadable row fails the task.
+func (e *Executor) applyCallResume(ctx context.Context, plan *executionPlan, state *executionState) callResumeOutcome {
+	cr := state.CallResume
+	state.CallResume = nil
+	out := callResumeOutcome{stepID: cr.StepID}
+	if step, ok := plan.workflow.Steps[cr.StepID]; ok {
+		out.onFail = step.OnFail
+	}
+	if e.cpcRepo == nil {
+		out.kind, out.err = callResumeFail, &crossProjectCallError{msg: fmt.Sprintf("cross-project call %s could not be read: no call repository", cr.CPCID)}
+		return out
+	}
+	cpc, err := e.cpcRepo.Get(ctx, cr.CPCID)
+	if err != nil || cpc == nil {
+		out.kind, out.err = callResumeFail, &crossProjectCallError{msg: fmt.Sprintf("cross-project call %s could not be read: %v", cr.CPCID, err)}
+		return out
+	}
+	switch cpc.Status {
+	case persistence.CPCStatusCompleted:
+		data := envelopeData(cpc.ResultEnvelope)
+		if state.StepResults == nil {
+			state.StepResults = map[string]json.RawMessage{}
+		}
+		state.StepResults[cr.StepID] = data
+		state.LastResult = data
+		out.kind = callResumeContinue
+		return out
+	case persistence.CPCStatusPending, persistence.CPCStatusRunning:
+		// Not reachable through the wake paths: fail closed, keep waiting.
+		state.CallResume = cr
+		e.logger.Warn().Str("cpc_id", cpc.ID).Str("status", string(cpc.Status)).
+			Msg("call_project resume: the call is not resolved yet; the caller stays paused")
+		out.kind = callResumePause
+		return out
+	}
+	msg := ""
+	if cpc.ErrorMessage != nil {
+		msg = *cpc.ErrorMessage
+	}
+	text := fmt.Sprintf("cross-project call %s %s", cpc.ID, cpc.Status)
+	if msg != "" {
+		text += ": " + msg
+	}
+	state.LastResult = resultJSON(map[string]any{
+		"status": "error", "message": text,
+		"cross_project_call_id": cpc.ID, "cross_project_call_status": string(cpc.Status),
+	})
+	out.err = &crossProjectCallError{msg: text}
+	if out.onFail != "" {
+		out.kind = callResumeOnFail
+	} else {
+		out.kind = callResumeFail
+	}
+	return out
+}
+
+// envelopeData is the envelope's `data` field (design §6.1), or the whole
+// envelope when it has none.
+func envelopeData(envelope []byte) json.RawMessage {
+	var env map[string]json.RawMessage
+	if err := json.Unmarshal(envelope, &env); err == nil {
+		if d, ok := env["data"]; ok && len(d) > 0 {
+			return d
+		}
+	}
+	if len(envelope) == 0 {
+		return json.RawMessage(`{}`)
+	}
+	return json.RawMessage(envelope)
+}

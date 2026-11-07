@@ -107,9 +107,15 @@ Conversation content goes to the model providers you configure, listed on the
 [AI transparency](ai-transparency.md) page. A local-model configuration sends
 nothing out.
 
+Approval notifications, once a paired device turns them on, go through that
+browser's push service (Google, Mozilla, Apple or Microsoft). Each one is
+encrypted to the device and says only that a request is waiting, never what
+it asks. The push service sees the device's address and when a notification
+was sent.
+
 ## Contact
 
 Security issues: [security](security.md). Compliance and data protection:
 **enterprise@vornik.io**.
 
-<!-- summary-reviewed-through: 2026.11.1 -->
+<!-- summary-reviewed-through: 2026.11.2 -->

@@ -48,7 +48,7 @@ func (c *Container) memoryFirewallMode() memoryfirewall.EnforcementMode {
 }
 
 // memoryFirewallEditor returns the per-chunk policy-edit
-// adapter for POST /api/v1/admin/memory/policy/chunks/{id}.
+// adapter for POST /api/v1/memory/policy/chunks/{id}.
 // Nil when memory isn't wired (SQLite-no-memory or
 // memory-disabled deployments). Production wiring threads the
 // underlying memory.Repository so the digest-recompute happens

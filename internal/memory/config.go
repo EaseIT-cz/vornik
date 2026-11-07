@@ -154,6 +154,12 @@ type Config struct {
 	// Enabled controls whether the memory system is active.
 	Enabled bool
 
+	// PublicSourcePrefixes derive public for a role capped by
+	// memorySearch.maxSensitivity (#618): a NULL-tier chunk under one of
+	// them that is repo-scoped and provenance-verified counts as public.
+	// Empty derives nothing.
+	PublicSourcePrefixes []string
+
 	// EmbeddingProvider selects the embedding transport. Empty / "openai"
 	// keeps the historical OpenAI-compatible /v1/embeddings path.
 	// "bedrock" uses AWS Bedrock's native InvokeModel API.

@@ -156,7 +156,7 @@ type FirewallChunkData struct {
 // (/ui/admin/memory/firewall/chunks/{chunk_id}).
 //
 // Read-only in v1: the form posts to the existing
-// /api/v1/admin/memory/policy/chunks/{id} endpoint via
+// /api/v1/memory/policy/chunks/{id} endpoint via
 // vanilla HTML form. No JS framework dependency.
 func (s *Server) AdminMemoryFirewallChunk(w http.ResponseWriter, r *http.Request, chunkID string) {
 	data := FirewallChunkData{

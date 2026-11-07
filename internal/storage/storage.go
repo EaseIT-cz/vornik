@@ -84,6 +84,9 @@ type Repositories struct {
 	TradingBenchmarks persistence.BenchmarkCloseRepository
 	// TradingShadow is the rule engine's shadow record (GitHub #598).
 	TradingShadow persistence.ShadowDecisionRepository
+	// CompanionHints holds the companion hints' follow windows and each
+	// key's last contact (GitHub #634 slice 2).
+	CompanionHints persistence.CompanionHintRepository
 
 	// ForgePRReviewState is the per-PR re-review state behind the Forge
 	// coalescing rules (migration 171).
@@ -483,6 +486,7 @@ func buildSQLiteRepositories(db *sql.DB) *Repositories {
 		TradingFunnel:                  sqlite.NewFunnelRepository(db),
 		TradingBenchmarks:              sqlite.NewBenchmarkCloseRepository(db),
 		TradingShadow:                  sqlite.NewShadowDecisionRepository(db),
+		CompanionHints:                 sqlite.NewCompanionHintRepository(db),
 		ProjectFirstSeen:               sqlite.NewProjectFirstSeenRepository(db),
 		ChatMemoryWriteConfirmations:   sqlite.NewChatMemoryWriteConfirmationRepository(db),
 		MCPOAuthTokens:                 sqlite.NewMCPOAuthTokenRepository(db),
@@ -655,6 +659,7 @@ func Build(dbtx persistence.DBTX) *Repositories {
 		TradingFunnel:                  postgres.NewFunnelRepository(dbtx),
 		TradingBenchmarks:              postgres.NewBenchmarkCloseRepository(dbtx),
 		TradingShadow:                  postgres.NewShadowDecisionRepository(dbtx),
+		CompanionHints:                 postgres.NewCompanionHintRepository(dbtx),
 		ProjectFirstSeen:               postgres.NewProjectFirstSeenRepository(dbtx),
 		ChatMemoryWriteConfirmations:   postgres.NewChatMemoryWriteConfirmationRepository(dbtx),
 		MCPOAuthTokens:                 postgres.NewMCPOAuthTokenRepository(dbtx),

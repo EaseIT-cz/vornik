@@ -116,6 +116,19 @@ func (r *MemoryQuarantineRepository) MarkReleased(ctx context.Context, id, relea
 	return err
 }
 
+// ExistsForArtifact implements persistence.MemoryQuarantineRepository.
+func (r *MemoryQuarantineRepository) ExistsForArtifact(ctx context.Context, projectID, artifactID string) (bool, error) {
+	var one int
+	err := r.db.QueryRowContext(ctx, `
+		SELECT 1 FROM memory_quarantine
+		WHERE project_id = ? AND source_artifact_id = ? AND released_at IS NULL
+		LIMIT 1`, projectID, artifactID).Scan(&one)
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, nil
+	}
+	return err == nil, err
+}
+
 func (r *MemoryQuarantineRepository) MarkDropped(ctx context.Context, id string) error {
 	if id == "" {
 		return fmt.Errorf("MarkDropped: id required")

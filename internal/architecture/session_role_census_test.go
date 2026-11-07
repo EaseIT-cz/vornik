@@ -19,7 +19,6 @@ import (
 // the tree (the Community export) are skipped.
 var sessionRoleReaders = map[string]int{
 	"internal/api/admin_class_auth.go":   2, // + the tenant_admin branch of OperatorSurfaceAccessFor (M1b)
-	"internal/api/mcp_oauth_handlers.go": 2, // + requireAdminClassGateFor (M1b)
 	"internal/api/reminders_handlers.go": 1,
 	"internal/api/doctor_ack_handler.go": 1,
 	"internal/api/cpc_handlers.go":       1,

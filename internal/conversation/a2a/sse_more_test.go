@@ -39,7 +39,7 @@ func (fakeStreamTaskLookup) Get(_ context.Context, taskID string) (*persistence.
 	if taskID == "demo-task" {
 		proj = "demo"
 	}
-	return &persistence.Task{ID: taskID, ProjectID: proj}, nil
+	return &persistence.Task{ID: taskID, ProjectID: proj, WorkflowID: researchWorkflow()}, nil
 }
 
 // fakeSubscriber is a LiveSubscriber whose channel the test drives. A

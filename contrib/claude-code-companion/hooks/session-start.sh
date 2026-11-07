@@ -20,6 +20,16 @@
 
 set -uo pipefail
 
+# The hook's input, read before any exit (the recall nudge's SIGPIPE lesson,
+# 2026-10-23). Only the session id is used: the hint hooks' network turn
+# leaves the current session's firings for the next turn (GitHub #634,
+# design §13.11 C6). A terminal on stdin is not read, so a hand run does not
+# wait.
+HOOK_INPUT=""
+[[ -t 0 ]] || HOOK_INPUT="$(cat 2>/dev/null)"
+HOOK_SESSION="$(printf '%s' "$HOOK_INPUT" | jq -r '.session_id // empty' 2>/dev/null)"
+[[ "$HOOK_SESSION" =~ ^[A-Za-z0-9_-]{1,128}$ ]] || HOOK_SESSION=""
+
 # The environment first, then the plugin's options (GitHub #587,
 # operations-api-contract-design.md §7.2.4a). Which one each value came from
 # decides whether it is passed on to the slash commands below.
@@ -107,6 +117,16 @@ if [[ -z "$TOKEN" ]]; then
   exit 0
 fi
 
+# The hint hooks' network turn (GitHub #634, design §13.11 C6): fetch the
+# catalogue and mask, upload earlier sessions' outcomes. In the background,
+# with no descriptor on this hook's output, so it neither delays the digest
+# nor writes into the JSON the client parses. Only under Claude Code's plugin
+# data directory, and only on a new session, not after a compaction.
+if [[ -n "${CLAUDE_PLUGIN_DATA:-}" && -n "$HOOK_SESSION" && $VORNIK_HOOK_REFRESH -eq 0 && -f "$(dirname "${BASH_SOURCE[0]}")/hints.sh" ]]; then
+  VORNIK_URL="$VORNIK_URL" VORNIK_COMPANION_TOKEN="$TOKEN" \
+    bash "$(dirname "${BASH_SOURCE[0]}")/hints.sh" session "$HOOK_SESSION" </dev/null >/dev/null 2>&1 &
+fi
+
 # ----- Per-repo scope resolution (LLD migration 75) -------------------
 # Walk up from $PWD looking for a git repo. If found, normalise the
 # remote URL (or repo basename when no remote) to a stable token that
@@ -180,7 +200,7 @@ MCP_URL="$VORNIK_URL/api/v1/mcp/companion"
 # client by its signature (error 1010), which blocked every /upload (GitHub
 # #628). Keep the version equal to plugin.json; scripts/user_agent_test.sh
 # checks it.
-VORNIK_UA="vornik-companion/0.48.1 (claude-code)"
+VORNIK_UA="vornik-companion/0.50.3 (claude-code)"
 
 # build_digest emits the digest's markdown to stdout. Wrapped in a
 # function so the caller can capture it once at the end and emit the
@@ -217,7 +237,7 @@ EOF
     --connect-timeout 5 \
     --max-time 10 \
     -H "Content-Type: application/json" \
-    -H "Authorization: Bearer $TOKEN" \
+    -H @<(printf 'Authorization: Bearer %s\n' "$TOKEN") \
     -X POST "$MCP_URL" \
     -d "$payload" 2>/dev/null) || return 0
 
@@ -273,7 +293,7 @@ EOF
     --connect-timeout 5 \
     --max-time 10 \
     -H "Content-Type: application/json" \
-    -H "Authorization: Bearer $TOKEN" \
+    -H @<(printf 'Authorization: Bearer %s\n' "$TOKEN") \
     -X POST "$MCP_URL" \
     -d "$recent_payload" 2>/dev/null) || recent_response=""
 

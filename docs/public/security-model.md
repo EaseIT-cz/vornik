@@ -1,13 +1,13 @@
 ---
 sources:
     - path: internal/api/middleware.go
-      sha256: 8f51fec1e58343181a8981123f3eeb25cec855147f8e1e1f27d067dafa1a8f3e
+      sha256: e5340e7e3d069dd2f2d7e1509edb8e7511df7b555dec30e8f7fb0dd54a38fcb8
     - path: internal/api/admin_class_auth.go
       sha256: 8f952ecfcc872c4f41b6541e48fa1c80ce79728d9eb95d14c7c27b96a8ab8c9b
     - path: internal/spawn/spawn.go
       sha256: b2764167a90d022278cccde6d60fb4f5663d2b12b64e644fda9f0b1cec5c0b0d
     - path: internal/sandboxtool/sandboxtool.go
-      sha256: c377b12b2dd9764f508df8161deac6c57fd71396f7cebf81c29176f5fecdb068
+      sha256: 98e975950b0e5be019b7801c4f9b9138d231ab586a3e170f46b89f45dc4e0272
     - path: internal/runtime/manager.go
       sha256: 682736916139aa3bf48466246051bd25f25d7c253a0ef12f59ed307aaf04dfaf
     - path: internal/secrets/secrets.go
@@ -35,7 +35,7 @@ sources:
 ---
 # Security model
 
-**Last reviewed:** 1 November 2026, against `main` after release 2026.11.1.
+**Last reviewed:** 6 November 2026, against `main` before release 2026.11.2.
 
 What Vornik defends against, its trust boundaries, and the controls in place
 today, with what each does **not** cover. It applies to both editions;
@@ -153,6 +153,40 @@ connected assistants, and upstream services.
   extraction into memory). With a workflow list it reaches only the A2A
   routes of those workflows. It cannot create, list or change keys: key
   management is for static keys, admin keys and the console.
+- **A published A2A expert can be limited to what it may say.** A workflow's
+  `a2a.answer` block sends the caller only the listed keys of one named JSON
+  output, only from a run that completed, read under 64 KiB before it is
+  parsed and capped at `maxBytes`. Fenced code is refused or stripped, and
+  each citation must be a clean path under the answering role's
+  `memorySearch.sourcePrefixes`. Any failed check sends nothing, and the
+  caller sees the run as failed. That role's search returns only sources
+  under those prefixes, whatever the request asks.
+  What it does not cover: a model can paraphrase anything it retrieved, so
+  the boundary is what the role's memory holds. Put only what may be
+  disclosed in an expert's project, and keep private material in another
+  one.
+- **A role can be capped at a sensitivity tier.** With
+  `memorySearch.maxSensitivity: public`, the role's search returns two kinds
+  of chunk only: chunks an operator set public, and checked files. A checked
+  file is one under `memory.public_source_prefixes` (default `docs/public/`)
+  whose bytes the daemon matched against the trusted branch. A source path a
+  writer names counts for nothing. A chunk with no tier counts as
+  confidential, and a chunk the operator sets confidential is kept out.
+  `vornikctl doctor` (`memory_sensitivity_cap`) states how many chunks each
+  capped role can retrieve. What it does not cover: companion and console
+  recall have no role policy and are not capped.
+- **An A2A caller key is bounded.** Each task it submits records the key.
+  A submit is refused once the key's attributed spend reaches its
+  `budget_cap_usd` (402), or once it has created the workflow's
+  `a2a.dailyQuotaPerKey` tasks since 00:00 UTC (429; 50 unless set). A key
+  with a workflow list and no rate limit of its own gets 1 request per
+  second, burst 10. A spend or count that cannot be read refuses the submit.
+  What it does not cover: concurrent submits can pass the quota by up to
+  10, and spend from before 2026.11.2 is not attributed.
+  `vornikctl doctor` (`a2a_corpus_walk`) names a caller key whose A2A tasks
+  retrieved more than 500 distinct memory chunks in the last 24 hours: a
+  sign the caller is walking the expert's corpus. It reports after the fact
+  and blocks nothing; the quota and the rate bound how fast a walk can go.
 - Request bodies are size-capped and strictly decoded. The configuration dump
   redacts every credential-shaped field; a test plants a marker in every
   string field of the configuration and requires each credential-shaped one
@@ -296,6 +330,15 @@ connected assistants, and upstream services.
   a canonical form that refuses duplicate keys, so the approver cannot be
   shown one thing and approve another. Choice cards accept only a choice.
 - Approval notices pushed to a channel carry no content, only a link.
+- A paired device can also receive browser notifications (Web Push). A
+  notification names the event, never what is asked. It is encrypted to that
+  device and signed with a key derived from the secret store.
+  - Vornik posts only to the browsers' own push services: four fixed hosts,
+    over https, following no redirect.
+  - The one approval page that runs a script is the notifications page, and
+    the script comes from Vornik itself. Its notification worker controls no
+    page.
+  - Revoking a device deletes its subscription.
 
 ### Agent containers
 
@@ -448,8 +491,19 @@ connected assistants, and upstream services.
 ### Assistants: the companion, the broker and agent administration
 
 - A companion key is bound to one project, optionally to a list of
-  workflows and a budget, and may use only the companion endpoint. A memory
-  key can be minted without any task tools.
+  workflows and a budget. It may use five routes, each matched by its exact
+  path, never a prefix:
+  - the companion endpoint;
+  - the capability list;
+  - a task's live view, for a task in its own project;
+  - the plugin hooks' hint catalogue, for its own project;
+  - the hooks' hint outcome upload, for its own project. The upload holds
+    hint ids and a followed flag only, and refuses any other field.
+
+  The hint report, which shows each hint's follow rate, is an operator route
+  and refuses companion keys.
+
+  A memory key can be minted without any task tools.
 - **Broker projects** let an assistant ask for privileged work (read my mail,
   check my calendar) without ever holding the credentials or seeing raw
   data. A broker workflow takes typed, bounded inputs and returns one
@@ -555,4 +609,4 @@ connected assistants, and upstream services.
 See [Security policy](security.md) for how to report a vulnerability and
 which versions are supported.
 
-<!-- summary-reviewed-through: 2026.11.1 -->
+<!-- summary-reviewed-through: 2026.11.2 -->

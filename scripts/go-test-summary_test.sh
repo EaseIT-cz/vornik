@@ -24,6 +24,18 @@ if [ $rc -eq 0 ] && printf '%s' "$out" | grep -q "2 passed, 0 failed, 0 skipped"
 run "$tmp/fail.json"
 if [ $rc -ne 0 ] && printf '%s' "$out" | grep -q "p.TestB"; then ok "a failed test fails, named"; else bad "fail: rc=$rc out=$out"; fi
 
+# GitHub #666: a failure prints the test's last output lines (its subtests'
+# too), bounded, so a hosted run's log alone explains it; a passing test's
+# output is not printed.
+outev() { printf '{"Action":"output","Package":"%s","Test":"%s","Output":"%s\\n"}\n' "$1" "$2" "$3"; }
+{ ev run p TestA; outev p TestA "chatty but fine"; ev pass p TestA
+  ev run p TestB; outev p TestB "setup"; outev p TestB/sub "hints_test.go:347: lost 9, want 10"; ev fail p TestB/sub; ev fail p TestB
+  for i in $(seq 1 60); do outev p TestC "line $i"; done; ev fail p TestC; pkgev fail p; } > "$tmp/failout.json"
+run "$tmp/failout.json"
+if [ $rc -ne 0 ] && printf '%s' "$out" | grep -qF "| hints_test.go:347: lost 9, want 10" && ! printf '%s' "$out" | grep -qF "chatty but fine"; then ok "a failure prints its output, a pass does not"; else bad "failure output: rc=$rc out=$out"; fi
+n=$(printf '%s\n' "$out" | grep -c '| line ')
+if [ "$n" -eq 40 ] && printf '%s' "$out" | grep -qF "| line 60" && ! printf '%s' "$out" | grep -qF "| line 20"; then ok "a failure prints at most its last 40 lines"; else bad "tail bound: $n lines; out=$out"; fi
+
 { ev run p TestA; ev pass p TestA; ev run p TestS; ev skip p TestS; pkgev pass p; } > "$tmp/skip.json"
 run "$tmp/skip.json"
 if [ $rc -eq 0 ] && printf '%s' "$out" | grep -q "1 skipped" && printf '%s' "$out" | grep -q "p.TestS"; then ok "a skip is allowed and named"; else bad "skip: rc=$rc out=$out"; fi

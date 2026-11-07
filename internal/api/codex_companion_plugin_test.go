@@ -234,11 +234,15 @@ func TestCodexCompanionPlugin_NoClaudeOnlySurfaces(t *testing.T) {
 	}
 }
 
-// TestCodexCompanionPlugin_HooksAreOnlyTheRecallNudge — the one hook surface
-// the Codex bundle ships is the recall nudge (LLD 23 "Recall nudge for Codex
-// — 2026-10-13"): PreToolUse on Bash and PostToolUse on the recall tool.
-// Any other event (a SessionStart digest, say) is a new product decision.
-func TestCodexCompanionPlugin_HooksAreOnlyTheRecallNudge(t *testing.T) {
+// The hook surface the Codex bundle ships: the recall nudge (LLD 23 "Recall
+// nudge for Codex — 2026-10-13"), PreToolUse on Bash and PostToolUse on the
+// recall tool, and since 0.45.0 the hint hooks. Any other event (a
+// SessionStart digest, say) is a new product decision.
+// The Codex bundle registers the recall nudge (PreToolUse, PostToolUse) and,
+// since codex-companion 0.45.0, the hint hooks (SessionStart,
+// UserPromptSubmit and a PostToolUse entry; GitHub #634, companion hardening
+// design §13.12 X2). Nothing else.
+func TestCodexCompanionPlugin_HooksAreTheNudgeAndTheHints(t *testing.T) {
 	raw, err := os.ReadFile(filepath.Join(codexCompanionPluginDir, "hooks", "hooks.json"))
 	require.NoError(t, err)
 	var file map[string]json.RawMessage
@@ -253,7 +257,7 @@ func TestCodexCompanionPlugin_HooksAreOnlyTheRecallNudge(t *testing.T) {
 	for k := range events {
 		keys = append(keys, k)
 	}
-	assert.ElementsMatch(t, []string{"PreToolUse", "PostToolUse"}, keys)
+	assert.ElementsMatch(t, []string{"PreToolUse", "PostToolUse", "SessionStart", "UserPromptSubmit"}, keys)
 }
 
 // TestCodexCompanionPlugin_OperatorSkillTriad — the codex bundle must carry

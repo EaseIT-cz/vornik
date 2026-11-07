@@ -1,6 +1,6 @@
 package api
 
-// Unit tests for POST /api/v1/admin/memory/policy/chunks/{id}.
+// Unit tests for POST /api/v1/memory/policy/chunks/{id}.
 // Pins the merge-then-recompute-digest contract + the 4 error
 // shapes (no editor → 503; bad path → 400; missing chunk → 404;
 // happy path → 200 + new digest).
@@ -71,7 +71,7 @@ func TestAdminMemoryFirewallChunkPolicy_NoEditor_503(t *testing.T) {
 	)
 	req := withAdminKeyContext(
 		httptest.NewRequest(http.MethodPost,
-			"/api/v1/admin/memory/policy/chunks/c1",
+			"/api/v1/memory/policy/chunks/c1",
 			bytes.NewBufferString(`{}`)),
 		"sk-admin")
 	rec := httptest.NewRecorder()
@@ -85,7 +85,7 @@ func TestAdminMemoryFirewallChunkPolicy_BadPath_400(t *testing.T) {
 	// Missing chunk_id (trailing /).
 	req := withAdminKeyContext(
 		httptest.NewRequest(http.MethodPost,
-			"/api/v1/admin/memory/policy/chunks/",
+			"/api/v1/memory/policy/chunks/",
 			bytes.NewBufferString(`{}`)),
 		"sk-admin")
 	rec := httptest.NewRecorder()
@@ -100,7 +100,7 @@ func TestAdminMemoryFirewallChunkPolicy_MissingChunk_404(t *testing.T) {
 	})
 	req := withAdminKeyContext(
 		httptest.NewRequest(http.MethodPost,
-			"/api/v1/admin/memory/policy/chunks/nope",
+			"/api/v1/memory/policy/chunks/nope",
 			bytes.NewBufferString(`{}`)),
 		"sk-admin")
 	rec := httptest.NewRecorder()
@@ -133,7 +133,7 @@ func TestAdminMemoryFirewallChunkPolicy_MergeAndRecomputeDigest(t *testing.T) {
 	})
 	req := withAdminKeyContext(
 		httptest.NewRequest(http.MethodPost,
-			"/api/v1/admin/memory/policy/chunks/c1",
+			"/api/v1/memory/policy/chunks/c1",
 			bytes.NewBuffer(body)),
 		"sk-admin")
 	rec := httptest.NewRecorder()
@@ -172,7 +172,7 @@ func TestAdminMemoryFirewallChunkPolicy_EmptySliceClearsField(t *testing.T) {
 	body, _ := json.Marshal(chunkPolicyUpdateRequest{PermittedRoles: &empty})
 	req := withAdminKeyContext(
 		httptest.NewRequest(http.MethodPost,
-			"/api/v1/admin/memory/policy/chunks/c1",
+			"/api/v1/memory/policy/chunks/c1",
 			bytes.NewBuffer(body)),
 		"sk-admin")
 	rec := httptest.NewRecorder()
@@ -235,7 +235,7 @@ func TestAdminMemoryFirewallEvaluationsByDigest(t *testing.T) {
 
 	req := withAdminKeyContext(
 		httptest.NewRequest(http.MethodGet,
-			"/api/v1/admin/memory/policy/evaluations/digest/abc123?limit=10", nil),
+			"/api/v1/memory/policy/evaluations/digest/abc123?limit=10", nil),
 		"sk-admin")
 	rec := httptest.NewRecorder()
 	s.AdminMemoryFirewallEvaluationsByDigest(rec, req)
@@ -253,7 +253,7 @@ func TestAdminMemoryFirewallEvaluationsByDigest(t *testing.T) {
 	// Empty digest in path → 400.
 	req2 := withAdminKeyContext(
 		httptest.NewRequest(http.MethodGet,
-			"/api/v1/admin/memory/policy/evaluations/digest/", nil),
+			"/api/v1/memory/policy/evaluations/digest/", nil),
 		"sk-admin")
 	rec2 := httptest.NewRecorder()
 	s.AdminMemoryFirewallEvaluationsByDigest(rec2, req2)
@@ -291,7 +291,7 @@ func TestAdminMemoryFirewallEvaluationsCSV_StableShape(t *testing.T) {
 	)
 	req := withAdminKeyContext(
 		httptest.NewRequest(http.MethodGet,
-			"/api/v1/admin/memory/policy/evaluations.csv?project_id=p1",
+			"/api/v1/memory/policy/evaluations.csv?project_id=p1",
 			nil),
 		"sk-admin")
 	rec := httptest.NewRecorder()

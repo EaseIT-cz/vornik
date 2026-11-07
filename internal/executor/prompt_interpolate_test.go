@@ -216,3 +216,40 @@ func TestCapPromptRefValue_KeepsValidUTF8(t *testing.T) {
 		t.Fatalf("capped value is %d bytes, over the %d budget", len(got), systemResultMaxBytes)
 	}
 }
+
+// GitHub #632, F5: the payload path (call_project / spawn_project) resolves a
+// reference to a system step, caps an oversized TEXT value like a prompt value
+// (C6), and passes a structured value whole, since a cut would corrupt it.
+func TestInterpolateOutputs632_PayloadSystemRefCapAndStructuredValue(t *testing.T) {
+	huge := strings.Repeat("d", systemResultMaxBytes+4096)
+	raw, err := json.Marshal(map[string]any{
+		"repo": "EaseIT-cz/demo", "diff": huge,
+		"meta": map[string]any{"files": []any{"a.tf", "b.tf"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	results := map[string]json.RawMessage{"fetch_diff": raw}
+	got, ok := interpolateOutputs(map[string]any{
+		"repo":  "${outputs.fetch_diff.repo}",
+		"diff":  "${outputs.fetch_diff.diff}",
+		"inner": "see ${outputs.fetch_diff.diff}",
+		"meta":  "${outputs.fetch_diff.meta}",
+	}, results).(map[string]any)
+	if !ok {
+		t.Fatal("interpolateOutputs did not return a map")
+	}
+	if got["repo"] != "EaseIT-cz/demo" {
+		t.Errorf("a payload reference to a system step must resolve, got %#v", got["repo"])
+	}
+	for _, k := range []string{"diff", "inner"} {
+		s, _ := got[k].(string)
+		if !strings.Contains(s, "truncated: ${outputs.fetch_diff.diff}") || len(s) > systemResultMaxBytes+64 {
+			t.Errorf("%s: an oversized text value must be capped with the marker (len %d)", k, len(s))
+		}
+	}
+	meta, ok := got["meta"].(map[string]any)
+	if !ok || len(meta["files"].([]any)) != 2 {
+		t.Errorf("a structured value must pass whole, got %#v", got["meta"])
+	}
+}

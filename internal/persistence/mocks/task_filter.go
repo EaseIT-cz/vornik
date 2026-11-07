@@ -26,6 +26,8 @@ import "vornik.io/vornik/internal/persistence"
 //   - UpdatedBefore is an exclusive upper bound on UpdatedAt.
 //   - UpdatedSince is an INCLUSIVE lower bound on UpdatedAt, matching the
 //     repos' `updated_at >= ?`.
+//   - CreatedByAPIKeyID / WorkflowID match exactly (a nil field never
+//     matches); CreatedSince is an INCLUSIVE lower bound on CreatedAt (#617).
 //   - FailedSince is an INCLUSIVE lower bound on FailedAt; a nil FailedAt never
 //     matches, mirroring the repos' `failed_at IS NOT NULL AND failed_at >= ?`.
 func FilterTasks(tasks []*persistence.Task, f persistence.TaskFilter) []*persistence.Task {
@@ -57,6 +59,15 @@ func FilterTasks(tasks []*persistence.Task, f persistence.TaskFilter) []*persist
 			continue
 		}
 		if f.FailedSince != nil && (t.FailedAt == nil || t.FailedAt.Before(*f.FailedSince)) {
+			continue
+		}
+		if f.CreatedByAPIKeyID != nil && (t.CreatedByAPIKeyID == nil || *t.CreatedByAPIKeyID != *f.CreatedByAPIKeyID) {
+			continue
+		}
+		if f.WorkflowID != nil && (t.WorkflowID == nil || *t.WorkflowID != *f.WorkflowID) {
+			continue
+		}
+		if f.CreatedSince != nil && t.CreatedAt.Before(*f.CreatedSince) {
 			continue
 		}
 		out = append(out, t)

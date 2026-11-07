@@ -277,7 +277,7 @@ vornik reads its configuration from `config.yaml`. The keys below are the custom
 | `chat.enabled` | bool | Turn the chat client on. | — |
 | `chat.provider` | string | http (OpenAI-compatible) or router (multi-provider). | — |
 | `chat.router.default` | string | Sub-provider used when no route matches. Required for router. | — |
-| `chat.router.model_fallbacks` | map | Non-swarm per-model fallback map (primary model -> fallback model), used when the primary's circuit is open. Empty disables non-swarm fallback. | — |
+| `chat.router.model_fallbacks` | map | Non-swarm per-model fallback map (primary model -> fallback model), used when the primary's circuit is open or it returns a 429, 5xx or timeout. Give chat.model an entry on another provider. Empty disables non-swarm fallback. | — |
 | `chat.router.claude_cli.effort_level` | string | CLI reasoning effort: low\|medium\|high\|xhigh\|max (default low); honored by claude-cli, ignored by codex-cli. | — |
 | `chat.router.claude_subscription.thinking_budget` | int | Anthropic extended-thinking budget_tokens; 0 disables (router subprovider). | — |
 | `chat.router.codex_cli.effort_level` | string | CLI reasoning effort: low\|medium\|high\|xhigh\|max (default low); honored by claude-cli, ignored by codex-cli. | — |
@@ -358,6 +358,7 @@ vornik reads its configuration from `config.yaml`. The keys below are the custom
 |---|---|---|---|
 | `memory.enabled` | bool | Activate the memory subsystem. | — |
 | `memory.embedding_provider` | string | Embedding transport: empty or openai for an OpenAI-compatible /v1/embeddings endpoint, or bedrock for native AWS Bedrock InvokeModel embeddings. | — |
+| `memory.public_source_prefixes` | list | Source-path prefixes whose provenance-verified chunks count as public for a role capped by memorySearch.maxSensitivity. Each is path segments ending in /. Unset means [docs/public/]; [] derives nothing, so only operator-set public chunks reach a public cap. | — |
 | `memory.sufficiency.enabled` | bool | Widen-and-retry recall when too few high-relevance hits (requires the reranker). | — |
 | `memory.sufficiency.min_high_rel` | int | Hits at/above score_floor that count as 'enough' (0 = default 3). | — |
 | `memory.sufficiency.score_floor` | float | Absolute reranker relevance floor in [0,1] (0 = default 0.6). | — |

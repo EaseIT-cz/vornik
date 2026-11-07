@@ -185,6 +185,22 @@ func (s *Store) AIMarkSigningSeed() ([]byte, error) {
 	return hkdf.Key(sha256.New, s.master, []byte(aimarkSigningSalt), aimarkSigningInfo, ed25519.SeedSize)
 }
 
+// approverPushSalt and approverPushInfo are the HKDF domain of the Web Push
+// VAPID key that signs pushes to approver devices (GitHub #163,
+// agent-administered design part 09 §9.3a B.2). Its own salt keeps it apart
+// from every other key the store derives.
+const (
+	approverPushSalt = "vornik-approver-push-vapid"
+	approverPushInfo = "approver-push/p256/k1"
+)
+
+// ApproverPushVAPIDSeed derives the 32-byte seed of the VAPID P-256 key.
+// Every daemon sharing the master key derives the same seed, so a browser's
+// subscription stays valid whichever daemon sends.
+func (s *Store) ApproverPushVAPIDSeed() ([]byte, error) {
+	return hkdf.Key(sha256.New, s.master, []byte(approverPushSalt), approverPushInfo, 32)
+}
+
 // operatorCredentialsNamespace holds the credentials an operator (or a managed
 // instance's tenant_admin) enters in the console, which an un-namespaced
 // secret://NAME reference reads after the environment (GitHub #623). It fails

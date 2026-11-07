@@ -40,6 +40,9 @@ type TaskRun struct {
 	TargetsProduced map[string]bool `json:"targetsProduced,omitempty"`
 	// Acceptance is the repeat's independent grade (benchmark LLD §12.24).
 	Acceptance *AcceptanceResult `json:"acceptance,omitempty"`
+	// Terminal is the terminal the task's newest execution reached, read
+	// when the daemon reported the task COMPLETED (benchmark LLD §12.29).
+	Terminal string `json:"terminal,omitempty"`
 }
 
 // ValidateTaskTiers refuses a blended/implicit task set before it can be used

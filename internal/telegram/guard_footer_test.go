@@ -218,3 +218,17 @@ func TestDedupePreserveOrder(t *testing.T) {
 		t.Errorf("nil should return nil: %v", got)
 	}
 }
+
+// GitHub #620 (nonswarm-llm-fallback design §11.2(c)): a reply the twin model
+// answered says so, in one plain-text line after the guard footer.
+func TestGuardFooterPostprocessor_FallbackNotice_620(t *testing.T) {
+	pp := GuardFooterPostprocessor()
+	got := pp(dispatcher.Result{Text: "hello", ModelFallback: &dispatcher.ModelFallback{From: "deepseek-v4-pro:0813", To: "zai.glm-5"}})
+	want := "hello\n\nℹ deepseek-v4-pro:0813 is unavailable right now, so zai.glm-5 answered."
+	if got != want {
+		t.Fatalf("postprocessor = %q, want %q", got, want)
+	}
+	if got := pp(dispatcher.Result{Text: "hello"}); got != "hello" {
+		t.Fatalf("no fail-over must add nothing, got %q", got)
+	}
+}

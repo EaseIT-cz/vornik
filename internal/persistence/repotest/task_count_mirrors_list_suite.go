@@ -51,6 +51,25 @@ func RunTaskCountMirrorsListSuite(t *testing.T, repo persistence.TaskRepository)
 	ids = append(ids, failed.ID)
 	mk(pc, persistence.TaskStatusQueued, recent) // a third project, never selected by ProjectIDs below
 
+	// #617 (federation design, amendment 2026-11-06): the A2A daily quota
+	// counts one key's tasks of one workflow since 00:00 UTC. Key A made one
+	// old and two recent tasks of wf-a; key B one recent task of wf-b.
+	keyA, keyB, wfA, wfB := uniqueID("key617-a"), uniqueID("key617-b"), uniqueID("wf617-a"), uniqueID("wf617-b")
+	pd := uniqueID("cnt617-d")
+	mkBy := func(key, wf string, at time.Time) {
+		t.Helper()
+		task := newQueuedTask(pd)
+		task.CreatedByAPIKeyID, task.WorkflowID = &key, &wf
+		task.CreatedAt, task.UpdatedAt = at, at
+		if err := repo.Create(ctx, task); err != nil {
+			t.Fatalf("create: %v", err)
+		}
+	}
+	mkBy(keyA, wfA, old)
+	mkBy(keyA, wfA, recent)
+	mkBy(keyA, wfA, recent.Add(time.Second))
+	mkBy(keyB, wfB, recent)
+
 	since := time.Now().UTC().Add(-time.Hour)
 	before := time.Now().UTC().Add(-24 * time.Hour)
 	pAP := pa
@@ -73,6 +92,11 @@ func RunTaskCountMirrorsListSuite(t *testing.T, repo persistence.TaskRepository)
 		{"Statuses_empty_nonnil_is_no_constraint", persistence.TaskFilter{ProjectIDs: both, Statuses: []persistence.TaskStatus{}}, 10},
 		{"Statuses_wins_over_Status", persistence.TaskFilter{ProjectIDs: both, Status: &queued, Statuses: []persistence.TaskStatus{persistence.TaskStatusCompleted}}, 3},
 		{"ProjectID_and_ProjectIDs_both_apply", persistence.TaskFilter{ProjectID: &pAP, ProjectIDs: []string{pb}}, 0},
+		{"CreatedByAPIKeyID", persistence.TaskFilter{CreatedByAPIKeyID: &keyA}, 3},
+		{"WorkflowID", persistence.TaskFilter{ProjectID: &pd, WorkflowID: &wfB}, 1},
+		{"CreatedSince", persistence.TaskFilter{ProjectID: &pd, CreatedSince: &since}, 3},
+		{"Key_Workflow_CreatedSince_the_quota_count", persistence.TaskFilter{CreatedByAPIKeyID: &keyA, WorkflowID: &wfA, CreatedSince: &since}, 2},
+		{"Key_of_another_workflow_counts_nothing", persistence.TaskFilter{CreatedByAPIKeyID: &keyA, WorkflowID: &wfB}, 0},
 		{"Window_and_Statuses", persistence.TaskFilter{ProjectIDs: both, UpdatedSince: &since, Statuses: []persistence.TaskStatus{persistence.TaskStatusCompleted}}, 3},
 	}
 	for _, tc := range cases {

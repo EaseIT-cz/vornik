@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"vornik.io/vornik/internal/persistence"
+	"vornik.io/vornik/internal/safepath"
 	"vornik.io/vornik/internal/verifier"
 )
 
@@ -256,7 +257,12 @@ func (e *Executor) persistStubArtifact(
 	body string,
 ) error {
 	dir := e.backstopArtifactDir(execution.ID)
-	if err := os.MkdirAll(dir, 0o755); err != nil {
+	// The root is a fixed name under the temp dir: it must be a directory
+	// only the daemon's user controls (#461).
+	if err := safepath.EnsurePrivateDir(filepath.Dir(dir)); err != nil {
+		return fmt.Errorf("backstop root: %w", err)
+	}
+	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return fmt.Errorf("backstop mkdir %s: %w", dir, err)
 	}
 	hostPath := filepath.Join(dir, name)

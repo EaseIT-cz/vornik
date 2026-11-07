@@ -17,15 +17,33 @@ import (
 // internal renderer.
 func GuardFooterPostprocessor() func(dispatcher.Result) string {
 	return func(r dispatcher.Result) string {
-		footer := renderGuardFooter(r.GuardWarnings)
-		if footer == "" {
-			return r.Text
+		text := r.Text
+		for _, line := range []string{renderGuardFooter(r.GuardWarnings), renderFallbackNotice(r.ModelFallback)} {
+			if line == "" {
+				continue
+			}
+			if text == "" {
+				text = line
+			} else {
+				text += "\n\n" + line
+			}
 		}
-		if r.Text == "" {
-			return footer
-		}
-		return r.Text + "\n\n" + footer
+		return text
 	}
+}
+
+// renderFallbackNotice tells the user the chat model was unavailable and its
+// configured twin answered (nonswarm-llm-fallback design §11.2(c), GitHub
+// #620). Plain text: Telegram's sendMessage strips parse_mode.
+func renderFallbackNotice(fb *dispatcher.ModelFallback) string {
+	if fb == nil || fb.From == "" {
+		return ""
+	}
+	to := fb.To
+	if to == "" {
+		to = "a fallback model"
+	}
+	return "ℹ " + fb.From + " is unavailable right now, so " + to + " answered."
 }
 
 // renderGuardFooter produces a one-line operator-facing summary

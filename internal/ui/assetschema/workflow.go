@@ -165,6 +165,19 @@ var WorkflowDeferredPaths = []string{
 	// *bool tri-state (nil = inherit project/task) — a true/false select
 	// can't express "unset"; edit via raw YAML.
 	"pedantic",
+	// *bool with a default of true (#614 C6): an unticked checkbox removes
+	// the key, which means "ingest", so a form could never set false; and a
+	// confidentiality switch is YAML-only like the broker block below.
+	"ingest_output_artifacts",
+	// A2A answer-only egress (#614 C5, C7): what an external caller may
+	// receive. A confidentiality boundary, so YAML-only like the broker block.
+	"a2a.answer.artifact",
+	"a2a.answer.fields",
+	"a2a.answer.maxBytes",
+	"a2a.answer.codeBlocks",
+	// The per-key daily task quota (#617): a caller limit beside the answer
+	// policy, so YAML-only too.
+	"a2a.dailyQuotaPerKey",
 	// Broker block (privileged-work broker design 2026-09-29) — a security
 	// boundary (typed inputs, egress schema). Deliberately YAML-only: the
 	// load rules reject most shapes a form could produce by accident.

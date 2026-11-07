@@ -239,6 +239,12 @@ const (
 	// guard the step would silently advance and a downstream consumer would
 	// fail on an empty diff. Incident task_20260709102613_79c570a868fefedb.
 	ClassEmptyDelegation = "empty_delegation"
+	// ClassRouteOutsideCandidates — a strict route picked a workflow outside
+	// the project's candidates, or none, and the corrective re-run took over.
+	// Paired with SchemaViolation (the pick is outside the schema's enum).
+	// The rejected attempt is the route model's own failure (GitHub #649,
+	// outcome-quality design, amendment 2026-11-05).
+	ClassRouteOutsideCandidates = "route_pick_outside_candidates"
 
 	// --- wave-2 classes: what the residual bucket was actually made of ---
 	//
@@ -432,6 +438,7 @@ var errorClasses = []string{
 	ClassContextOverflow,
 	ClassPlausibilityViolation,
 	ClassEmptyDelegation,
+	ClassRouteOutsideCandidates,
 	ClassLLMCallFailed,
 	ClassMissingPrerequisite,
 	ClassContainerKilled,

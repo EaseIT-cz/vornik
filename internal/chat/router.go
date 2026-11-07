@@ -62,6 +62,13 @@ type Router struct {
 	// didn't pass WithRouterSubs — ListModels then derives the set
 	// from routes + fallback as a best-effort.
 	subs map[string]Provider
+	// defaultModel is chat.model (WithRouterDefaultModel). When it matches an
+	// explicit route of another kind than router.default, def is that route
+	// pinned to it and serves every no-model call; otherwise def is fallback.
+	// nonswarm-llm-fallback design §11.2(a), GitHub #620.
+	defaultModel string
+	def          Provider
+	defRoute     string
 }
 
 // RouterOption configures a Router.
@@ -95,6 +102,15 @@ func WithRouterFallbackName(name string) RouterOption {
 	return func(r *Router) { r.fallbackName = name }
 }
 
+// WithRouterDefaultModel names chat.model, the model the no-model calls
+// (Complete*, Model) mean. When it matches an explicit route whose kind is not
+// router.default, those calls take that route, pinned to the model, so a
+// chat.model of zai.glm-5 reaches bedrock even when router.default is
+// ollama_cloud (GitHub #620). Calls that name a model are unaffected.
+func WithRouterDefaultModel(model string) RouterOption {
+	return func(r *Router) { r.defaultModel = model }
+}
+
 // NewRouter constructs a Router. fallback must be non-nil: it handles
 // requests whose model doesn't match any explicit route, and also
 // serves as the "default" provider when callers don't override model
@@ -118,7 +134,33 @@ func NewRouter(fallback Provider, routes []Route, opts ...RouterOption) (*Router
 	for _, opt := range opts {
 		opt(out)
 	}
+	out.def, out.defRoute = out.fallback, "fallback"
+	if out.defaultModel != "" {
+		// Name is the route's sub-provider kind, unique per sub-provider, so
+		// this compares providers exactly (design §11.2(a)).
+		if sub, name, matched := out.providerFor(out.defaultModel); matched && name != out.fallbackName {
+			out.def, out.defRoute = sub, name
+			if o, ok := sub.(ModelOverridable); ok {
+				out.def = o.WithModel(out.defaultModel)
+			}
+		}
+	}
 	return out, nil
+}
+
+// DefaultModelRoute names the route serving the no-model calls: a route's
+// kind when chat.model bypasses router.default, otherwise "fallback".
+func (r *Router) DefaultModelRoute() string { return r.defRoute }
+
+// RouteOf is Resolves with an unmatched model named by router.default's kind,
+// so a model reaching the default through an explicit route and one reaching
+// it unmatched compare equal (design §11.2(b)).
+func (r *Router) RouteOf(model string) string {
+	route, matched := r.Resolves(model)
+	if !matched && r.fallbackName != "" {
+		return r.fallbackName
+	}
+	return route
 }
 
 // providerFor picks the route matching `model` and reports whether an
@@ -182,26 +224,36 @@ func (r *Router) Resolves(model string) (routeName string, matched bool) {
 // default's endpoint).
 func (r *Router) FallbackName() string { return r.fallbackName }
 
-// Complete implements Provider. Routes through the fallback (no model
-// info available here; callers that care use WithModel first).
+// Complete implements Provider. A call with no model goes to the default
+// provider: chat.model's own route when it bypasses router.default (#620),
+// otherwise the fallback. Callers that name a model use WithModel first.
 func (r *Router) Complete(ctx context.Context, messages []Message) (*ChatResponse, error) {
-	return r.fallback.Complete(ctx, messages)
+	return r.defaultProvider().Complete(ctx, messages)
 }
 
 // CompleteWithTools implements Provider. Same default-route behaviour.
 func (r *Router) CompleteWithTools(ctx context.Context, messages []Message, tools []Tool) (*ChatResponse, error) {
-	return r.fallback.CompleteWithTools(ctx, messages, tools)
+	return r.defaultProvider().CompleteWithTools(ctx, messages, tools)
 }
 
 // CompleteWithToolsStream implements Provider.
 func (r *Router) CompleteWithToolsStream(ctx context.Context, messages []Message, tools []Tool, onText StreamCallback) (*ChatResponse, error) {
-	return r.fallback.CompleteWithToolsStream(ctx, messages, tools, onText)
+	return r.defaultProvider().CompleteWithToolsStream(ctx, messages, tools, onText)
 }
 
-// Model implements Provider. Returns the fallback's model so metrics
+// Model implements Provider. Returns the default provider's model so metrics
 // labels stay stable for non-request-scoped callers (dispatcher's
-// default flow).
-func (r *Router) Model() string { return r.fallback.Model() }
+// default flow), and so the FallbackProvider keys its twin lookup on chat.model.
+func (r *Router) Model() string { return r.defaultProvider().Model() }
+
+// defaultProvider is def, or fallback for a Router built as a struct literal
+// in tests (def is set only by NewRouter).
+func (r *Router) defaultProvider() Provider {
+	if r.def != nil {
+		return r.def
+	}
+	return r.fallback
+}
 
 // SetMetrics fan-outs the metrics sink to every sub-provider so their
 // per-model Prometheus labels all land on the same counters.

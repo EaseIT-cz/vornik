@@ -48,6 +48,17 @@ func WithFirstValue(t *firstvalue.Tracker) ServerOption {
 
 const managedCatalogueMax = 64
 
+// managedModels is setup/managed's provided-model block.
+type managedModels struct {
+	GatewayURL   string `json:"gateway_url"`
+	VirtualKey   string `json:"virtual_key"`
+	DefaultModel string `json:"default_model"`
+	Catalogue    []struct {
+		ID      string `json:"id"`
+		GoodFor string `json:"good_for"`
+	} `json:"catalogue"`
+}
+
 type managedSetupRequest struct {
 	Identity struct {
 		Issuer       string `json:"issuer"`
@@ -55,15 +66,10 @@ type managedSetupRequest struct {
 		OwnerSubject string `json:"owner_subject"`
 		OwnerDisplay string `json:"owner_display"`
 	} `json:"identity"`
-	Models struct {
-		GatewayURL   string `json:"gateway_url"`
-		VirtualKey   string `json:"virtual_key"`
-		DefaultModel string `json:"default_model"`
-		Catalogue    []struct {
-			ID      string `json:"id"`
-			GoodFor string `json:"good_for"`
-		} `json:"catalogue"`
-	} `json:"models"`
+	// Models is the provided models; nil when the owner brings their own key
+	// later (GitHub #629, operations-api-contract-design.md §6.8): the call
+	// then binds the identity, templates and origin and touches no model.
+	Models *managedModels `json:"models,omitempty"`
 	// Templates are the sign-up templates to seed (GitHub #587).
 	Templates []string `json:"templates,omitempty"`
 	// PublicBaseURL and OAuthRedirectURI may arrive here rather than at
@@ -133,7 +139,7 @@ func (s *Server) SetupManaged(w http.ResponseWriter, r *http.Request) {
 		}
 		// The secret last: it is never rolled back, so it is written only once the
 		// config that names it is in place.
-		if chk.keyChanged {
+		if chk.keyChanged && req.Models != nil {
 			if _, err := onboarding.WriteEnvSecret(s.setupSecretsDir, "chat.env", "VORNIK_CHAT_API_KEY", req.Models.VirtualKey); err != nil {
 				_ = writer.Restore(backup)
 				respondError(w, http.StatusInternalServerError, "SECRET_WRITE", "the virtual key could not be written; the config was restored")
@@ -155,7 +161,11 @@ func (s *Server) SetupManaged(w http.ResponseWriter, r *http.Request) {
 			s.logger.Warn().Err(err).Msg("managed setup: the registry reload after seeding failed; the file watcher picks the projects up")
 		}
 	}
-	s.logger.Info().Str("owner_channel", name).Int("catalogue", len(req.Models.Catalogue)).
+	catalogue := 0
+	if req.Models != nil {
+		catalogue = len(req.Models.Catalogue)
+	}
+	s.logger.Info().Str("owner_channel", name).Bool("models_present", req.Models != nil).Int("catalogue", catalogue).
 		Bool("config_changed", chk.configChanged).Strs("seeded", seeded).Msg("managed setup written")
 	respondJSON(w, http.StatusOK, map[string]any{"changed": true, "restart_required": chk.configChanged, "seeded": seeded})
 }
@@ -198,7 +208,8 @@ func (s *Server) managedSetupCheck(w http.ResponseWriter, r *http.Request, write
 		respondError(w, status, code, msg)
 		return managedCheck{}
 	}
-	keyChanged := readEnvSecret(filepath.Join(s.setupSecretsDir, "chat.env"), "VORNIK_CHAT_API_KEY") != req.Models.VirtualKey
+	// Without models no key is written, so none can have changed (§6.8).
+	keyChanged := req.Models != nil && readEnvSecret(filepath.Join(s.setupSecretsDir, "chat.env"), "VORNIK_CHAT_API_KEY") != req.Models.VirtualKey
 	configChanged := keyChanged || !managedConfigCurrent(content, req, name, owner, admins, managedDispatcher(seeds))
 	missing := s.missingSeeds(seeds)
 	if !configChanged && len(missing) == 0 {
@@ -290,7 +301,7 @@ func (s *Server) parseManagedSetup(r *http.Request) (managedSetupRequest, string
 	if msg := validateManagedSetup(&req); msg != "" {
 		return req, "BAD_BODY", msg
 	}
-	if !gatewayVouched(req.Models.GatewayURL, s.config.Hosting.ModelHosts) {
+	if req.Models != nil && !gatewayVouched(req.Models.GatewayURL, s.config.Hosting.ModelHosts) {
 		return req, "GATEWAY_NOT_VOUCHED", "gateway_url must be https, with its host in hosting.model_hosts"
 	}
 	return req, "", ""
@@ -301,6 +312,10 @@ func (s *Server) parseManagedSetup(r *http.Request) (managedSetupRequest, string
 func (s *Server) probeManagedSetup(ctx context.Context, lister setupModelLister, req *managedSetupRequest) (int, string, string) {
 	if err := s.issuerProbe(ctx, req.Identity.Issuer); err != nil {
 		return http.StatusBadGateway, "ISSUER_UNAVAILABLE", "the issuer's discovery document did not answer: " + err.Error()
+	}
+	if req.Models == nil {
+		// No provided models: no gateway to probe (§6.8).
+		return 0, "", ""
 	}
 	listed, err := lister.ListModels(ctx, req.Models.GatewayURL, req.Models.VirtualKey)
 	if err != nil {
@@ -320,7 +335,7 @@ func (s *Server) probeManagedSetup(ctx context.Context, lister setupModelLister,
 
 // validateManagedSetup checks the body's shape; "" when it is well formed.
 func validateManagedSetup(req *managedSetupRequest) string {
-	id, m := req.Identity, req.Models
+	id := req.Identity
 	if u, err := url.Parse(id.Issuer); id.Issuer == "" || err != nil || u.Scheme != "https" || u.Host == "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" {
 		return "identity.issuer must be an https URL with no userinfo, query or fragment"
 	}
@@ -332,6 +347,30 @@ func validateManagedSetup(req *managedSetupRequest) string {
 	}
 	if len(id.OwnerDisplay) > 256 {
 		return "identity.owner_display is at most 256 characters"
+	}
+	// models is optional; when present it is whole (§6.8): "models": {} is
+	// refused here, so leaving the field out is the one way to send none.
+	if m := req.Models; m != nil {
+		if msg := validateManagedModels(m); msg != "" {
+			return msg
+		}
+	}
+	if _, msg := managedSeedsFor(req.Templates); msg != "" {
+		return msg
+	}
+	req.PublicBaseURL = strings.TrimRight(req.PublicBaseURL, "/")
+	if o := req.PublicBaseURL; o != "" {
+		if u, err := url.Parse(o); err != nil || u.Scheme != "https" || u.Hostname() == "" || u.User != nil || u.Path != "" || u.RawQuery != "" || u.ForceQuery || u.Fragment != "" {
+			return "public_base_url must be an https origin: a host and optional port, no userinfo, path, query or fragment"
+		}
+	}
+	return ""
+}
+
+// validateManagedModels checks a present models block; "" when well formed.
+func validateManagedModels(m *managedModels) string {
+	if m.GatewayURL == "" && m.VirtualKey == "" && m.DefaultModel == "" && len(m.Catalogue) == 0 {
+		return "models was sent empty: leave models out when there is no provided model"
 	}
 	if m.VirtualKey == "" || len(m.VirtualKey) > 1024 || strings.ContainsAny(m.VirtualKey, "\r\n") {
 		return "models.virtual_key is required: one line, at most 1024 characters"
@@ -348,15 +387,6 @@ func validateManagedSetup(req *managedSetupRequest) string {
 	}
 	if !seen[m.DefaultModel] {
 		return "models.default_model must be one of the catalogue's ids"
-	}
-	if _, msg := managedSeedsFor(req.Templates); msg != "" {
-		return msg
-	}
-	req.PublicBaseURL = strings.TrimRight(req.PublicBaseURL, "/")
-	if o := req.PublicBaseURL; o != "" {
-		if u, err := url.Parse(o); err != nil || u.Scheme != "https" || u.Hostname() == "" || u.User != nil || u.Path != "" || u.RawQuery != "" || u.ForceQuery || u.Fragment != "" {
-			return "public_base_url must be an https origin: a host and optional port, no userinfo, path, query or fragment"
-		}
 	}
 	return ""
 }
@@ -386,8 +416,15 @@ func managedConfigCurrent(content []byte, req *managedSetupRequest, name, owner 
 	if get("auth.providers.oidc.issuer") != req.Identity.Issuer ||
 		get("auth.providers.oidc.client_id") != req.Identity.ClientID ||
 		get("auth.providers.oidc.name") != name ||
-		!slices.Contains(admins, owner) ||
-		get("chat.enabled") != "true" || get("chat.provider") != "http" ||
+		!slices.Contains(admins, owner) {
+		return false
+	}
+	if req.Models == nil {
+		// No provided models: whatever models the file holds stay, so they
+		// are not compared (§6.8).
+		return true
+	}
+	if get("chat.enabled") != "true" || get("chat.provider") != "http" ||
 		get("chat.endpoint") != req.Models.GatewayURL || get("chat.model") != req.Models.DefaultModel ||
 		get("chat.api_key") != "${VORNIK_CHAT_API_KEY}" {
 		return false
@@ -418,11 +455,6 @@ func managedSetupContent(content []byte, req *managedSetupRequest, name, owner s
 		yamlSet{"auth.providers.oidc.client_id", req.Identity.ClientID},
 		yamlSet{"auth.providers.oidc.name", name},
 		yamlSet{"auth.bootstrap_admins", admins},
-		yamlSet{"chat.enabled", true},
-		yamlSet{"chat.provider", "http"},
-		yamlSet{"chat.endpoint", req.Models.GatewayURL},
-		yamlSet{"chat.model", req.Models.DefaultModel},
-		yamlSet{"chat.api_key", "${VORNIK_CHAT_API_KEY}"},
 	)
 	if err != nil {
 		return nil, err
@@ -443,6 +475,19 @@ func managedSetupContent(content []byte, req *managedSetupRequest, name, owner s
 		if out, _, err = config.SetYAMLKey(out, "telegram.dispatcher_project_id", dispatcher); err != nil {
 			return nil, err
 		}
+	}
+	if req.Models == nil {
+		// No provided models: none written, none removed (§6.8).
+		return out, nil
+	}
+	if out, err = setYAML(out,
+		yamlSet{"chat.enabled", true},
+		yamlSet{"chat.provider", "http"},
+		yamlSet{"chat.endpoint", req.Models.GatewayURL},
+		yamlSet{"chat.model", req.Models.DefaultModel},
+		yamlSet{"chat.api_key", "${VORNIK_CHAT_API_KEY}"},
+	); err != nil {
+		return nil, err
 	}
 	if out, _, err = config.DeleteYAMLKey(out, "agent_admin.models"); err != nil {
 		return nil, err

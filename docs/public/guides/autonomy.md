@@ -3,7 +3,7 @@ sources:
     - path: internal/autonomy/manager.go
       sha256: 7c6e2f23a2568a97cd04b51dba09b595b3dc54bf45977d6deb0b1517cec753a2
     - path: internal/registry/project.go
-      sha256: 438282a14b6e55cf685243941018f913c0acbce35f70ea190b878644695f67e6
+      sha256: 4b8e1ed413d4b52ccb7520d6c25c02140f6e4c5276e0ae7cb02734478ad95d3f
 ---
 # Autonomy — self-running projects
 

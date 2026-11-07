@@ -24,6 +24,7 @@ var timestampExtraColumns = map[string]bool{
 	"agent_approval_requests.apply_lease_until": true,
 	"approver_devices.share_until":              true,
 	"cluster_nodes.last_seen":                   true,
+	"companion_hint_windows.backoff_until":      true,
 	"cost_tuning_canaries.window_until":         true,
 	"data_subject_escalations.deadline":         true,
 	"project_memory_chunks.event_time":          true,

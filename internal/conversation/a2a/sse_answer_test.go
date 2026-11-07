@@ -72,14 +72,14 @@ func TestHandleTaskStream_WaitsForExecutionThenStreams(t *testing.T) {
 type taskLookupWithResult struct{ envelope []byte }
 
 func (l taskLookupWithResult) Get(_ context.Context, taskID string) (*persistence.Task, error) {
-	return &persistence.Task{ID: taskID, ProjectID: "demo", ResultEnvelope: l.envelope}, nil
+	return &persistence.Task{ID: taskID, ProjectID: "demo", WorkflowID: researchWorkflow(), ResultEnvelope: l.envelope}, nil
 }
 
 // taskLookupStatus returns a task with a fixed status (for the terminal-race).
 type taskLookupStatus struct{ status persistence.TaskStatus }
 
 func (l taskLookupStatus) Get(_ context.Context, taskID string) (*persistence.Task, error) {
-	return &persistence.Task{ID: taskID, ProjectID: "demo", Status: l.status}, nil
+	return &persistence.Task{ID: taskID, ProjectID: "demo", WorkflowID: researchWorkflow(), Status: l.status}, nil
 }
 
 // Regression for the 2026-08-01 "stuck consumer": the task finished before the

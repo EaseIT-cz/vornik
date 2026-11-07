@@ -768,13 +768,13 @@ func (e *Executor) executeAgentStep(ctx context.Context, task *persistence.Task,
 	// bind-mount the main .git read-only, so the block can never describe a
 	// deployment it does not apply to.
 	opts.WorktreeGitReadOnly = plan != nil && projectRootFromWorktree(plan.worktreeDir) != ""
-	// Advisory guidance blocks this swarm's operator switched off (LLD 09
-	// §13.3.1). Read fresh from the plan's swarm on every step rather than
+	// Advisory guidance blocks the operator switched off for this swarm or
+	// this role (LLD 09 §13.3.1; per role since GitHub #633). Read fresh from the plan's swarm on every step rather than
 	// cached on the executor, so a config reload takes effect on the next step
 	// like every other swarm field. Invariant blocks are unaffected — neither
 	// the config loader nor the composition seam will suppress one.
 	if plan.swarm != nil {
-		opts.SuppressedGuidanceBlocks = plan.swarm.SuppressedGuidanceBlocks
+		opts.SuppressedGuidanceBlocks = plan.swarm.SuppressedGuidanceBlocksFor(step.Role)
 	}
 	// Tell the agent its REAL budget. Hardcoding 30m here made the runtime
 	// contract's timeoutSeconds a number that was usually wrong.

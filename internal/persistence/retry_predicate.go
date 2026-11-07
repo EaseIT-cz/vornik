@@ -70,6 +70,7 @@ var terminalFailureClasses = map[string]bool{
 	TaskFailureClassForgeJobNoTarget:       true,
 	TaskFailureClassReachNotApproved:       true,
 	TaskFailureClassSetupIncomplete:        true,
+	TaskFailureClassRouteNoFit:             true,
 }
 
 // IsTerminalFailureClass reports whether a TASK failure class is one that never

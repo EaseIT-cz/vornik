@@ -27,8 +27,13 @@ Usage: go-test-summary.py [--fail-on-skip] [--allow-skips FILE] [--require TEST]
        go-test-summary.py --print-output STREAM.json   (the test log only; exit 0)
 """
 import argparse
+import collections
 import json
 import sys
+
+
+# How many of a failed test's last output lines the summary prints.
+FAIL_TAIL_LINES = 40
 
 
 def main() -> int:
@@ -99,6 +104,10 @@ def main() -> int:
     passed, failed, skipped = [], [], []
     failed_pkgs, build_failures, garbage = [], [], 0
     pkg_has_test_result = set()
+    # The last lines each top-level test printed (its subtests' included), so
+    # a failure can be read from this summary alone: a lane's stream file may
+    # not outlive the job that ran it (GitHub #666, the hosted CE export).
+    tail_of = {}
     for line in lines:
         if not line.strip():
             continue
@@ -111,6 +120,9 @@ def main() -> int:
             garbage += 1
             continue
         action, pkg, test = ev.get("Action"), ev.get("Package", ""), ev.get("Test", "")
+        if action == "output" and test:
+            tail_of.setdefault(f"{pkg}.{test.split('/', 1)[0]}", collections.deque(maxlen=FAIL_TAIL_LINES)).append(
+                ev.get("Output", "").rstrip("\n"))
         if action == "build-fail":
             build_failures.append(ev.get("ImportPath", "?"))
             continue
@@ -138,6 +150,8 @@ def main() -> int:
     print(f"{a.lane}: {len(passed)} passed, {len(failed)} failed, {len(skipped)} skipped")
     for name in failed:
         print(f"  FAIL {name}")
+        for out in tail_of.get(name, ()):
+            print(f"       | {out}")
     for name in sorted(set(build_failures)):
         print(f"  BUILD FAILED {name}")
     for pkg in failed_pkgs:

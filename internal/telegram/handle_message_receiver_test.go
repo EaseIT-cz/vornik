@@ -146,6 +146,13 @@ func TestHandleMessage_ReceiverPath_FiresReceive(t *testing.T) {
 // quick messages from the same chat do not dispatch concurrently.
 // The receiver replaces the whole conversation history after each
 // turn, so concurrent same-chat turns can lose or reorder history.
+//
+// The second message is from another member of the chat. Since #645 a
+// message from the running turn's own speaker steers that turn instead of
+// starting one, so with one speaker the outcome depended on whether the
+// first turn had started yet: the test failed 5 times in 50 under -race
+// (CI run 42113348332). Another speaker's message never steers
+// (offerSteer), so it is the case that must still wait its turn.
 func TestHandleMessage_ReceiverPath_SerializesSameChat(t *testing.T) {
 	bot := newBareTestBot(t, BotConfig{Token: "t"})
 	r := &blockingReceiver{
@@ -154,9 +161,9 @@ func TestHandleMessage_ReceiverPath_SerializesSameChat(t *testing.T) {
 	}
 	bot.SetReceiver(r)
 
-	for _, text := range []string{"first", "second"} {
+	for i, text := range []string{"first", "second"} {
 		if err := bot.HandleMessage(context.Background(), &Message{
-			ID: 1, ChatID: 100, UserID: 42, Text: text,
+			ID: int64(i + 1), ChatID: 100, UserID: int64(42 + i), Text: text,
 		}); err != nil {
 			t.Fatalf("HandleMessage(%q): %v", text, err)
 		}

@@ -1,3 +1,7 @@
+---
+disclosure: never
+---
+
 # Vornik
 
 **Vornik** is an open-source multi-agent orchestration fabric: it runs a swarm of

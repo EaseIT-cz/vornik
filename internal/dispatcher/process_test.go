@@ -201,11 +201,14 @@ func TestAgent_ProcessStreaming_ReemitsWholeTurnAccumulatedAfterTool(t *testing.
 
 	require.NoError(t, result.Err)
 	require.Equal(t, "Task created.", result.Text)
-	require.Len(t, got, 3)
-	require.Contains(t, got[0], "[⏳ list projects]")
-	require.True(t, strings.HasSuffix(got[1], "Ta"), "second callback should preserve first letters after tool status, got %q", got[1])
-	require.True(t, strings.HasSuffix(got[2], "Task created."), "final callback = %q", got[2])
-	require.Contains(t, got[2], "[⏳ list projects]")
+	// #642: no tool marker enters the stream; the text after the tool call
+	// still accumulates from its first letters.
+	require.Len(t, got, 2)
+	require.Equal(t, "Ta", got[0], "the first letters after the tool call are kept")
+	require.Equal(t, "Task created.", got[1])
+	for _, g := range got {
+		require.NotContains(t, g, "[", "no tool marker in the stream, got %q", g)
+	}
 }
 
 // TestAgent_Process_IterationCapStopsRunaway covers the maxIterations

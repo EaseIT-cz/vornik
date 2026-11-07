@@ -414,6 +414,34 @@ var corpus = map[string]Entry{
 			"Then run the workflow again; a scheduled one runs at its next slot.",
 		},
 	},
+	persistence.TaskFailureClassRouteNoFit: {
+		Class:        persistence.TaskFailureClassRouteNoFit,
+		Scope:        ScopeTask,
+		HumanMessage: "None of this project's workflows fits the task, so nothing was run.",
+		Cause: "The project routes tasks through the adaptive router, which picks one of the project's candidate workflows " +
+			"(adaptiveCandidateWorkflows). The router judged that none of them is equipped for this task and said why; the " +
+			"reason is in the task's last error. No child task was started. " +
+			"This class SKIPS the retry budget: a re-run sees the same candidates.",
+		Suggestions: []string{
+			"Run the task in a project that has a fitting workflow (for research, one with a research workflow).",
+			"Or add a fitting workflow to this project's adaptiveCandidateWorkflows.",
+			"If one of the candidates does fit, the router was wrong: sharpen the adaptive workflow's route prompt or the candidates' descriptions.",
+		},
+	},
+	persistence.TaskFailureClassCrossProjectCallFailed: {
+		Class:        persistence.TaskFailureClassCrossProjectCallFailed,
+		Scope:        ScopeTask,
+		HumanMessage: "A call to another project did not return a usable answer, so this task stopped.",
+		Cause: "A call_project step asked another project to run a workflow. The call was rejected (the answer was empty, " +
+			"unreadable or did not match the expected schema), the other project's task failed, or the call timed out; the " +
+			"task's last error names the call and its status. The call step has no on_fail, so the workflow could not handle " +
+			"it. A call that could not be read on resume also lands here; the workflow never treats an unknown outcome as success.",
+		Suggestions: []string{
+			"Look at the call: `vornikctl cpc list` shows its status and error message, and its callee task explains a failure.",
+			"For a rejected call, compare the callee's result envelope with the call's expected schema.",
+			"Give the call step an on_fail branch, so the workflow handles a bad outcome instead of failing.",
+		},
+	},
 	persistence.TaskFailureClassWorkspaceUnavailable: {
 		Class:        persistence.TaskFailureClassWorkspaceUnavailable,
 		Scope:        ScopeTask,
@@ -702,6 +730,17 @@ var corpus = map[string]Entry{
 		Suggestions: []string{
 			"Read the step's output: it usually decided there was nothing to delegate, which may be correct.",
 			"If delegation was expected, check the step's inputs actually contained the work to fan out.",
+		},
+	},
+
+	stepoutcome.ClassRouteOutsideCandidates: {
+		Class:        stepoutcome.ClassRouteOutsideCandidates,
+		Scope:        ScopeStep,
+		HumanMessage: "The router picked a workflow outside the project's candidates, or none, so it was asked again.",
+		Cause:        "A strict adaptive route answered with a workflow outside adaptiveCandidateWorkflows, or with no workflow. The corrective re-run asks again with the candidate list; this row is the rejected first answer, charged to the route model.",
+		Suggestions: []string{
+			"Occasional rows are expected: the corrective re-run recovers them.",
+			"Many rows for one model mean it ignores the candidate list; try another route model, or check the candidates' names say what each workflow does.",
 		},
 	},
 

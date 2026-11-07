@@ -218,6 +218,14 @@ var ProjectDeferredPaths = []string{
 	// chunks; YAML-only so moving the trust root is a deliberate config edit.
 	"memory.provenance_clone",
 	"memory.provenance_branch",
+	// Repository mirror prefixes (#639, design 22 "Amendment 2026-11-04")
+	// decide what the hourly sweep brings into memory; YAML-only like the
+	// trust root above.
+	"memory.mirror_paths",
+	// Companion hint controls (#634, companion hardening design §13 H6):
+	// hints on/off and muted hint ids, a deliberate config edit.
+	"companion.hints",
+	"companion.mute",
 	// Broker-project flag (privileged-work broker design 2026-09-29) — turns
 	// every key on the project broker-only; a deliberate config edit, not a
 	// checkbox.

@@ -15,9 +15,13 @@
       "bytes": 676
     },
     {
+      "name": "writing-style",
+      "bytes": 555
+    },
+    {
       "name": "reporting-integrity",
       "bytes": 365
     }
   ],
-  "totalBytes": 1547
+  "totalBytes": 2102
 }

@@ -60,7 +60,7 @@ func TestOperatorJournal_ResolveIsAdminClassOnly(t *testing.T) {
 	s := journalServer(fa, &stubAdminAuditRepo{})
 	rec := httptest.NewRecorder()
 	s.OperatorJournal(rec, journalReq(http.MethodPost, "/api/v1/operator/journal/caj_1/resolve", `{"mode":"keep"}`, "sk-vornik-not-admin"))
-	if rec.Code != http.StatusForbidden || !strings.Contains(rec.Body.String(), "ADMIN_SCOPE_REQUIRED") {
+	if rec.Code != http.StatusForbidden || !strings.Contains(rec.Body.String(), "OPERATOR_CAPABILITY_REQUIRED") {
 		t.Fatalf("a non-admin key: %d %s", rec.Code, rec.Body.String())
 	}
 	if len(fa.resolved) != 0 {

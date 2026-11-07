@@ -321,6 +321,16 @@ func appendWorkflowSchemaFindings(report *WorkflowMDValidationReport, content []
 			Message:  err.Error(),
 		})
 	}
+	// The loader's output-reference rules (GitHub #632): a reference that can
+	// never resolve is refused at load, so the pre-deploy gate and the upgrade
+	// preflight (ScanDeployedTreeForDeadClasses) must see it too.
+	if err := wf.validatePromptOutputRefs(filename); err != nil {
+		report.Findings = append(report.Findings, WorkflowMDFinding{
+			Severity: SeverityError,
+			Code:     "workflow_invalid",
+			Message:  err.Error(),
+		})
+	}
 	// An authoring-ergonomics WARNING rather than a schema rejection — see
 	// workflow_onfail_connector.go for why the rule is advisory and why it is
 	// scoped to steps reachable only as a recovery target.

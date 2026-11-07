@@ -342,9 +342,12 @@ type GetUpdatesResponse struct {
 // Bot is a Telegram bot client.
 type Bot struct {
 	// aiMark records Art 50(2) marks of sent text (aimark.go).
-	aiMark     aiMarkHolder
-	config     BotConfig
-	httpClient *http.Client
+	aiMark aiMarkHolder
+	// openStreams holds each chat's open streamed reply, so a turn status
+	// can be shown on it (turn_status.go, GitHub #642).
+	openStreams openStreamRegistry
+	config      BotConfig
+	httpClient  *http.Client
 
 	// receiver is the ConversationChannel-driven dispatcher entry
 	// point. Wired by the service container at boot via SetReceiver;
@@ -398,7 +401,10 @@ type Bot struct {
 	conversations  map[convKey]*chat.Conversation
 	activeProjects map[int64]string
 	receiverLocks  map[int64]*sync.Mutex
-	rateLimits     map[int64]*rateLimitEntry
+	// stops holds each chat's running turn and its last /stop (stop.go,
+	// GitHub #644).
+	stops      stopRegistry
+	rateLimits map[int64]*rateLimitEntry
 
 	// sessionPersister (optional) DB-backs the in-memory
 	// conversations + activeProjects maps. Wired via
@@ -1008,6 +1014,7 @@ func botMenuCommands() []map[string]string {
 		{"command": "tasks", "description": "List recent tasks (active or named project)"},
 		{"command": "status", "description": "Show a task's status + last step"},
 		{"command": "cancel", "description": "Cancel a task"},
+		{"command": "stop", "description": "Stop what the assistant is doing in this chat"},
 		{"command": "retry", "description": "Retry a failed/terminal task"},
 		{"command": "help", "description": "Show available commands"},
 	}
@@ -1414,7 +1421,8 @@ func (b *Bot) deliverCoalescedTurn(turnID string, chatID int64) {
 			Int("outcome_count", len(outcomes)).
 			Msg("auto-resume: routing coalesced follow-up through ConversationChannel receiver")
 
-		ctx, cancel := context.WithTimeout(context.Background(), b.effectiveDispatchTimeout())
+		// #644: a follow-up delivery can be ended with /stop too.
+		ctx, done := b.beginTurn(chatID, true, 0)
 		cm := MessageToChannelMessage(&Message{
 			ChatID:          chatID,
 			UserID:          0,
@@ -1422,8 +1430,10 @@ func (b *Bot) deliverCoalescedTurn(turnID string, chatID int64) {
 			ProjectOverride: followupProject,
 		})
 		start := time.Now()
-		err := r.Receive(ctx, cm)
-		cancel()
+		err := func() error {
+			defer done() // released even if Receive panics (review 6f20 F4)
+			return r.Receive(ctx, cm)
+		}()
 		if err != nil {
 			b.logger.Warn().
 				Err(err).
@@ -3409,8 +3419,9 @@ func (b *Bot) handleReceiverTurn(r conversation.Receiver, msg *Message) {
 	lock.Lock()
 	defer lock.Unlock()
 
-	ctx, cancel := context.WithTimeout(context.Background(), b.effectiveDispatchTimeout())
-	defer cancel()
+	// #644: the turn can be ended with /stop.
+	ctx, done := b.beginTurn(msg.ChatID, false, msg.UserID)
+	defer done()
 
 	b.logger.Info().
 		Int64("chat_id", msg.ChatID).

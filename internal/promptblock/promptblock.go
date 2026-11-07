@@ -46,6 +46,8 @@ const (
 	ToolBudget         = "tool-budget"
 	ReportingIntegrity = "reporting-integrity"
 	WorkspaceGit       = "workspace-git"
+	// WritingStyle tells an agent how to write for a person (GitHub #633).
+	WritingStyle = "writing-style"
 )
 
 // classByName is the declaration. internal/executor's registry pairs each of
@@ -63,6 +65,10 @@ var classByName = map[string]Class{
 	// came to be agents retrying a git write that can never succeed
 	// (2026-08-18).
 	WorkspaceGit: Invariant,
+	// WritingStyle is ADVISORY: it is guidance on how to write, not a rule the
+	// daemon enforces, so an operator may switch it off per swarm or per role
+	// (reviewable-output design §6.1).
+	WritingStyle: Advisory,
 }
 
 // ClassOf returns a block's class, and whether the name is known at all.

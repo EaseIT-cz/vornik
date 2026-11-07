@@ -220,3 +220,34 @@ func joinAnd(parts []string) string {
 	}
 	return out
 }
+
+// A2AChunksByCallerKey implements the #617 corpus-walk count: per creating
+// key of an A2A task, the tasks with an audit row since the window start
+// and the distinct chunk ids those rows list. The LEFT JOIN LATERAL keeps a
+// task whose rows listed no chunk in the task count.
+func (r *MemoryRetrievalAuditRepository) A2AChunksByCallerKey(ctx context.Context, since time.Time) ([]persistence.A2AKeyRetrieval, error) {
+	rows, err := r.db.QueryContext(ctx, `
+		SELECT t.created_by_api_key_id, COALESCE(k.name, ''),
+		       COUNT(DISTINCT a.task_id), COUNT(DISTINCT c.id)
+		FROM memory_retrieval_audit a
+		JOIN tasks t ON t.id = a.task_id
+		LEFT JOIN api_keys k ON k.id = t.created_by_api_key_id
+		LEFT JOIN LATERAL unnest(a.chunk_ids) AS c(id) ON true
+		WHERE t.creation_source = 'A2A' AND t.created_by_api_key_id IS NOT NULL
+		  AND t.created_by_api_key_id <> '' AND a.retrieved_at >= $1
+		GROUP BY t.created_by_api_key_id, k.name
+		ORDER BY 4 DESC, 1`, since)
+	if err != nil {
+		return nil, fmt.Errorf("a2a chunks by caller key: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+	var out []persistence.A2AKeyRetrieval
+	for rows.Next() {
+		var x persistence.A2AKeyRetrieval
+		if err := rows.Scan(&x.KeyID, &x.KeyName, &x.Tasks, &x.Chunks); err != nil {
+			return nil, err
+		}
+		out = append(out, x)
+	}
+	return out, rows.Err()
+}

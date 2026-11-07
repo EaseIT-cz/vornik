@@ -2,6 +2,7 @@ package persistence
 
 import (
 	"encoding/json"
+	"regexp"
 	"strings"
 )
 
@@ -46,4 +47,26 @@ func JSONElementNeedle(s string) string {
 		return "\x00"
 	}
 	return string(b)
+}
+
+// sourcePrefixRe is the shape of a retrieval source prefix (#614 C3): one or
+// more path segments of [A-Za-z0-9._-], each followed by "/". No leading
+// slash, no empty segment, no quote, space, backslash or LIKE wildcard.
+var sourcePrefixRe = regexp.MustCompile(`^(?:[A-Za-z0-9._-]+/)+$`)
+
+// ValidSourcePrefix reports whether p may restrict a memory search by
+// source_name (a role's memorySearch.sourcePrefixes, architect design §4.2
+// C3). The swarm loader refuses an invalid one, and the search SQL renders
+// one only after this check, admitting nothing otherwise; "." and ".."
+// segments are refused so a prefix names exactly the directory it reads.
+func ValidSourcePrefix(p string) bool {
+	if !sourcePrefixRe.MatchString(p) {
+		return false
+	}
+	for _, seg := range strings.Split(strings.TrimSuffix(p, "/"), "/") {
+		if seg == "." || seg == ".." {
+			return false
+		}
+	}
+	return true
 }

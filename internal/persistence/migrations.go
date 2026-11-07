@@ -9704,5 +9704,76 @@ CREATE INDEX IF NOT EXISTS idx_trading_shadow_project_observed
 		Down: `
 DROP TABLE IF EXISTS trading_shadow_decisions;
 `,
+	}, {
+		Version: 247,
+		Name:    "quarantine_project_artifact_index",
+		// GitHub #639 (design 22, "Amendment 2026-11-04 (#639)", M2 step
+		// 3): the repository mirror asks, per file version, whether its
+		// artifact has a pending or dropped quarantine row
+		// (ExistsForArtifact). No index led with source_artifact_id.
+		// SQLite: schema.go.
+		Up: `
+CREATE INDEX IF NOT EXISTS idx_quarantine_project_artifact
+    ON project_memory_quarantine (project_id, source_artifact_id)
+    WHERE released_at IS NULL;
+`,
+		Down: `
+DROP INDEX IF EXISTS idx_quarantine_project_artifact;
+`,
+	}, {
+		Version: 248,
+		Name:    "companion_hint_windows",
+		// GitHub #634 slice 2 (companion hardening design §13.10 S1, S4):
+		// each hint's last 10 firings per project ('0'/'1', oldest first),
+		// its back-off end and lifetime counts; and each companion key's last
+		// catalogue fetch and outcome upload. Ids, booleans, counts and
+		// times only. SQLite: schema.go.
+		Up: `
+CREATE TABLE IF NOT EXISTS companion_hint_windows (
+    project_id     TEXT NOT NULL,
+    hint_id        TEXT NOT NULL,
+    "window"       TEXT NOT NULL DEFAULT '',
+    backoff_until  TIMESTAMPTZ,
+    fired_total    INTEGER NOT NULL DEFAULT 0,
+    followed_total INTEGER NOT NULL DEFAULT 0,
+    rev            INTEGER NOT NULL,
+    updated_at     TIMESTAMPTZ NOT NULL,
+    PRIMARY KEY (project_id, hint_id)
+);
+CREATE TABLE IF NOT EXISTS companion_hint_clients (
+    key_id         TEXT PRIMARY KEY,
+    project_id     TEXT NOT NULL,
+    last_fetch_at  TIMESTAMPTZ,
+    last_upload_at TIMESTAMPTZ
+);
+CREATE INDEX IF NOT EXISTS idx_companion_hint_clients_project
+    ON companion_hint_clients (project_id);
+`,
+		Down: `
+DROP TABLE IF EXISTS companion_hint_clients;
+DROP TABLE IF EXISTS companion_hint_windows;
+`,
+	}, {
+		Version: 249,
+		Name:    "approver_push_subscriptions",
+		// GitHub #163 (agent-administered design part 09 §9.3a B.3): each
+		// approver device's Web Push subscription, one per device. The
+		// endpoint and keys come from the browser, checked by
+		// internal/webpush before they are stored. RevokeDevice deletes the
+		// row; the sender joins on unrevoked devices. SQLite: schema.go.
+		Up: `
+CREATE TABLE IF NOT EXISTS approver_push_subscriptions (
+    device_id    TEXT PRIMARY KEY REFERENCES approver_devices (id) ON DELETE CASCADE,
+    endpoint     TEXT NOT NULL,
+    p256dh       TEXT NOT NULL,
+    auth         TEXT NOT NULL,
+    created_at   TIMESTAMPTZ NOT NULL,
+    last_sent_at TIMESTAMPTZ,
+    last_status  TEXT NOT NULL DEFAULT ''
+);
+`,
+		Down: `
+DROP TABLE IF EXISTS approver_push_subscriptions;
+`,
 	},
 }

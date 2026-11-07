@@ -45,7 +45,7 @@ var allSurfaces = []Surface{
 	SurfaceSetupDispatcher, SurfaceSetupSession, SurfaceSetupSessionRouter, SurfaceSetupManaged, SurfaceConfigAssist,
 	SurfaceConfigShow, SurfaceInstinctRetireGlobal, SurfaceMemoryFirewall, SurfaceOperatorAccounts,
 	SurfaceOperatorLinks, SurfaceOperatorProposals, SurfaceOperators, SurfaceSkillSetGlobal,
-	SurfaceOperatorCredentials,
+	SurfaceOperatorCredentials, SurfaceConfigJournal, SurfaceInflight, SurfaceAgentGrant,
 }
 
 var grantedSurfaces = map[Surface]bool{
@@ -133,20 +133,24 @@ func TestTenantAdmin560_GateLogsDecisions(t *testing.T) {
 
 // The MCP OAuth connect gate grants tenant_admin by surface; the admin-only
 // families still refuse it.
-func TestTenantAdmin560_AdminClassGateFor(t *testing.T) {
+func TestTenantAdmin560_MCPOAuthAndAdminOnlySurfaces(t *testing.T) {
 	s := &Server{logger: zerolog.Nop()}
-	if !s.requireAdminClassGateFor(httptest.NewRecorder(), sessionRequest(auth.RoleTenantAdmin, []string{"*"}), SurfaceMCPOAuthConnect) {
+	if !s.requireOperatorScopeFor(httptest.NewRecorder(), sessionRequest(auth.RoleTenantAdmin, []string{"*"}), SurfaceMCPOAuthConnect) {
 		t.Fatal("tenant_admin refused MCP OAuth connect")
 	}
-	w := httptest.NewRecorder()
-	if s.requireAdminClassGate(w, sessionRequest(auth.RoleTenantAdmin, []string{"*"})) {
-		t.Fatal("the admin-only requireAdminClassGate admitted tenant_admin")
+	// GitHub #503: the admin-only routes that had their own gate now pass
+	// the one decision with surfaces tenant_admin is not granted.
+	for _, surface := range []Surface{SurfaceConfigJournal, SurfaceInflight, SurfaceAgentGrant} {
+		w := httptest.NewRecorder()
+		if s.requireOperatorScopeFor(w, sessionRequest(auth.RoleTenantAdmin, []string{"*"}), surface) || w.Code != http.StatusForbidden {
+			t.Fatalf("%s admitted tenant_admin (status %d)", surface, w.Code)
+		}
 	}
 }
 
 // B5 completeness: the surfaces passed to the three surface-taking gates
 // (operatorOnly's first argument, requireOperatorScopeFor's and
-// requireAdminClassGateFor's third) are exactly the declared Surface
+// OperatorSurfaceAccessFor's third) are exactly the declared Surface
 // constants, each used at least once.
 func TestTenantAdmin560_SurfaceCompleteness(t *testing.T) {
 	files, err := filepath.Glob("*.go")
@@ -188,7 +192,7 @@ func TestTenantAdmin560_SurfaceCompleteness(t *testing.T) {
 				switch sel.Sel.Name {
 				case "operatorOnly":
 					idx = 0
-				case "requireOperatorScopeFor", "requireAdminClassGateFor", "OperatorSurfaceAccessFor":
+				case "requireOperatorScopeFor", "OperatorSurfaceAccessFor":
 					idx = 2
 				}
 				if idx < 0 || len(x.Args) <= idx {
@@ -259,9 +263,8 @@ func TestTenantAdmin560_Matrix(t *testing.T) {
 			strings.HasPrefix(rt.path, "/api/v1/mcp/oauth/")
 	}
 	routes := append(append(append([]route495{}, operatorSurface495...), setupSurface502...), wizardSurface502...)
-	// The MCP OAuth connect gate (granted) and an admin-only route (refused
-	// by construction, B2a), through the same router (review 2fd9 F3, F5).
-	routes = append(routes, route495{http.MethodGet, "/api/v1/mcp/oauth/status?server=x", ""})
+	// The MCP OAuth connect routes (granted) are in operatorSurface495 since
+	// GitHub #503, which moved them onto the one operator-surface gate.
 	nGranted := 0
 	for _, rt := range routes {
 		req, err := http.NewRequest(rt.method, h.hs.URL+rt.path, strings.NewReader(rt.body))
@@ -294,8 +297,8 @@ func TestTenantAdmin560_Matrix(t *testing.T) {
 			t.Errorf("%s %s: tenant_admin reached a refused surface: %d %s", rt.method, rt.path, resp.StatusCode, body.String())
 		}
 	}
-	if nGranted != 7 {
-		t.Errorf("%d granted routes exercised, want 7 (5 wizard, 1 audit, 1 MCP OAuth)", nGranted)
+	if nGranted != 9 {
+		t.Errorf("%d granted routes exercised, want 9 (5 wizard, 1 audit, 3 MCP OAuth)", nGranted)
 	}
 	// An admin-only (requireAdminGate) route refuses the owner.
 	req, _ := http.NewRequest(http.MethodGet, h.hs.URL+"/api/v1/admin/audit", nil)

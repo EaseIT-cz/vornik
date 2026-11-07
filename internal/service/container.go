@@ -162,6 +162,8 @@ type Container struct {
 	hostApprovalMetrics *approverdevice.HostActionMetrics
 	// approverHTTPSMetrics counts plain-http refusals on the approver pages.
 	approverHTTPSMetrics *approverdevice.HTTPSRefusalMetrics
+	// approverPushMetrics is vornik_approver_push_total (GitHub #163).
+	approverPushMetrics *approverdevice.PushMetrics
 	// agentAdminSvc is built by agentAdmin on its first success (agent
 	// admin verbs, §6); agentAdminMu guards it, agentAdminWarned paces the
 	// warning while the templates are missing.

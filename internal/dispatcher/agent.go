@@ -181,8 +181,19 @@ type Result struct {
 	// alongside the assistant reply.
 	GuardWarnings []GuardWarning
 
+	// ModelFallback is set when the chat model was unavailable and its
+	// configured twin answered (the turn's first fail-over), so the channel
+	// can tell the user. Nil when the primary answered. GitHub #620.
+	ModelFallback *ModelFallback
+
 	// Err is non-nil when the dispatcher encountered a fatal error.
 	Err error
+}
+
+// ModelFallback names the unavailable chat model and the twin that answered.
+type ModelFallback struct {
+	From string
+	To   string
 }
 
 // Agent is the dispatcher. It owns the tool-calling loop and system prompt.

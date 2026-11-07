@@ -198,6 +198,13 @@ type Workflow struct {
 	// essential: without it, every task with uploaded attachments
 	// (Telegram/email/research inputs) would be dumped into RAG.
 	IngestInputArtifacts bool `yaml:"ingest_input_artifacts,omitempty"`
+	// IngestOutputArtifacts, when set to false, keeps the task's OUTPUT
+	// artifacts out of project memory (the executor's ingestOutputArtifacts
+	// skips the workflow). Absent means ingest, today's behaviour. The A2A
+	// architect sets it so nothing one caller's run writes can reach the
+	// next caller's retrieval (architect design §4.2 C6, #614). Read it
+	// through WantsOutputIngest.
+	IngestOutputArtifacts *bool `yaml:"ingest_output_artifacts,omitempty"`
 	// Broker, when set, makes this a broker workflow: a front-end agent's
 	// key on a broker project may run it with typed inputs, and the
 	// companion returns only the declared egress document. Nil for every
@@ -223,6 +230,85 @@ type WorkflowA2A struct {
 	// falls back to the project whose default workflow this is
 	// (back-compat with the original default-workflow-only gate).
 	Projects []string `yaml:"projects,omitempty"`
+
+	// Answer, when set, is the egress policy for what an A2A caller
+	// receives: only this artifact, only these keys, only from a COMPLETED
+	// task, within MaxBytes, with fenced code refused or stripped.
+	// Without it every OUTPUT artifact is sent (architect design §4.2 C5
+	// and C7, #614).
+	Answer *WorkflowA2AAnswer `yaml:"answer,omitempty"`
+
+	// DailyQuotaPerKey is how many tasks of this workflow one caller key may
+	// create per UTC day; 0 means DefaultA2ADailyQuotaPerKey (#617, federation
+	// design, amendment 2026-11-06).
+	DailyQuotaPerKey int `yaml:"dailyQuotaPerKey,omitempty"`
+}
+
+// DefaultA2ADailyQuotaPerKey is twice the busiest measured A2A day (21 tasks
+// from all callers, 2026-08-10 to 2026-11-04) and leaves room for the
+// 12-question set.
+const DefaultA2ADailyQuotaPerKey = 50
+
+// EffectiveDailyQuotaPerKey is the per-key daily task quota in force.
+func (a WorkflowA2A) EffectiveDailyQuotaPerKey() int {
+	if a.DailyQuotaPerKey > 0 {
+		return a.DailyQuotaPerKey
+	}
+	return DefaultA2ADailyQuotaPerKey
+}
+
+// WorkflowA2AAnswer is the answer-only egress policy of a published
+// workflow (architect design §4.2 C5, C7).
+type WorkflowA2AAnswer struct {
+	// Artifact is the output file name the answer is read from (the name the
+	// agent gave it, before the executor's disambiguation suffix).
+	Artifact string `yaml:"artifact"`
+	// Fields are the only top-level keys of the artifact's JSON object sent.
+	Fields []string `yaml:"fields"`
+	// MaxBytes caps the re-encoded answer; over it the caller gets nothing.
+	MaxBytes int `yaml:"maxBytes"`
+	// CodeBlocks is "refuse" (the default when empty) or "strip".
+	CodeBlocks string `yaml:"codeBlocks,omitempty"`
+}
+
+// A2AAnswerReadBound is the most an answer artifact may hold before it is
+// parsed; it matches the stream's inline answer budget.
+const A2AAnswerReadBound = 64 * 1024
+
+// validateA2AAnswer refuses a policy the stream could not enforce as written.
+func (w *Workflow) validateA2AAnswer(filename string) error {
+	if w.A2A.DailyQuotaPerKey < 0 {
+		return WorkflowValidationError{File: filename, Field: "a2a.dailyQuotaPerKey", Message: "dailyQuotaPerKey must be 0 (the default) or more"}
+	}
+	a := w.A2A.Answer
+	if a == nil {
+		return nil
+	}
+	bad := func(field, msg string) error {
+		return WorkflowValidationError{File: filename, Field: "a2a.answer." + field, Message: msg}
+	}
+	if a.Artifact == "" || strings.ContainsAny(a.Artifact, `/\`) || !strings.HasSuffix(a.Artifact, ".json") {
+		return bad("artifact", "artifact must be a bare .json file name")
+	}
+	if len(a.Fields) == 0 {
+		return bad("fields", "fields must list at least one key")
+	}
+	seen := map[string]bool{}
+	for _, f := range a.Fields {
+		if f == "" || seen[f] {
+			return bad("fields", "fields must be non-empty and unique")
+		}
+		seen[f] = true
+	}
+	if a.MaxBytes <= 0 || a.MaxBytes > A2AAnswerReadBound {
+		return bad("maxBytes", fmt.Sprintf("maxBytes must be between 1 and %d", A2AAnswerReadBound))
+	}
+	switch a.CodeBlocks {
+	case "", "refuse", "strip":
+	default:
+		return bad("codeBlocks", `codeBlocks must be "refuse" or "strip"`)
+	}
+	return nil
 }
 
 // WorkflowStep represents a single step in a workflow
@@ -671,6 +757,9 @@ func (w *Workflow) Validate(filename string) error {
 		return WorkflowValidationError{File: filename, Field: "steps", Message: "at least one step is required"}
 	}
 	if err := w.validateQualityScoring(filename); err != nil {
+		return err
+	}
+	if err := w.validateA2AAnswer(filename); err != nil {
 		return err
 	}
 	if err := w.validateRetryClasses(filename); err != nil {
@@ -1748,11 +1837,21 @@ func InertToolNames() []string {
 // `call_project` / `spawn_project` / `a2a_call` cross the project
 // boundary entirely, and `system` dispatches daemon-side handler code
 // that this derivation cannot inspect. A workflow containing any of
-// them is never claimed to be network-incapable.
+// them is never claimed to be network-incapable, except a system step
+// whose handler is in networkFreeSystemHandlers.
 var stepTypesGrantingOnlyDeclaredRoles = map[string]struct{}{
 	"agent":    {},
 	"gate":     {},
 	"approval": {},
+}
+
+// networkFreeSystemHandlers are system handlers whose package cannot reach
+// the network: each one's package carries a test refusing every network
+// import (net, net/http, netguard, the MCP and forge clients). A system step
+// running one of these does not make a workflow network-capable. Only add a
+// handler together with that test (GitHub #633: text.readability).
+var networkFreeSystemHandlers = map[string]struct{}{
+	"text.readability": {},
 }
 
 // WorkflowIsNetworkIncapable reports whether wf, run by swarm, provably
@@ -1778,6 +1877,12 @@ func WorkflowIsNetworkIncapable(wf *Workflow, swarm *Swarm) bool {
 	}
 	sawRole := false
 	for _, step := range wf.Steps {
+		if strings.TrimSpace(step.Type) == "system" {
+			if _, ok := networkFreeSystemHandlers[strings.TrimSpace(step.Handler)]; ok {
+				continue
+			}
+			return false
+		}
 		if _, ok := stepTypesGrantingOnlyDeclaredRoles[strings.TrimSpace(step.Type)]; !ok {
 			return false
 		}
@@ -1911,4 +2016,11 @@ func successEdges(st WorkflowStep) []string {
 		}
 	}
 	return out
+}
+
+// WantsOutputIngest reports whether the executor may ingest this workflow's
+// OUTPUT artifacts into project memory: true unless ingest_output_artifacts
+// is explicitly false. A nil workflow keeps the default (#614 C6).
+func (w *Workflow) WantsOutputIngest() bool {
+	return w == nil || w.IngestOutputArtifacts == nil || *w.IngestOutputArtifacts
 }

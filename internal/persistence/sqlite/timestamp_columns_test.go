@@ -13,6 +13,7 @@ import (
 // so a new timestamp column cannot be missed silently.
 var notTimestampColumns = map[string]string{
 	"class_e_slot_reservations.day":                "a fixed-width YYYY-MM-DD key; orders correctly as is",
+	"approver_push_subscriptions.last_status":      "an outcome and an HTTP status (GitHub #163)",
 	"control_plane_proposals.blast_radius":         "text",
 	"fixit_sessions.last_envelope":                 "JSON text",
 	"forge_pr_review_state.last_reviewed_head_sha": "a commit sha",

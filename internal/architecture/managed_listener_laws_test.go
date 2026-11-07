@@ -82,7 +82,6 @@ var adminClassResolvers = map[string]int{
 	// control plane's); the listener gate refuses admin keys on the public
 	// listener first. The download beside it reads no admin class.
 	"internal/api/owner_export_581.go":   1,
-	"internal/api/mcp_oauth_handlers.go": 1,
 	"internal/api/middleware.go":         2,
 	"internal/api/reminders_handlers.go": 2,
 	"internal/api/routes.go":             2,
@@ -157,7 +156,7 @@ var adminOnlyFamilyFiles = []string{
 	"internal/api/project_doctor_handlers.go",
 	"internal/api/project_templates_handlers.go",
 	"internal/api/support_report_handlers.go",
-	// requireAdminClassGate's admin-only callers.
+	// The admin-only routes that had their own gate until GitHub #503.
 	"internal/api/admin_companion_agent_grant.go",
 	"internal/api/operator_journal_handler.go",
 	"internal/api/inflight.go",

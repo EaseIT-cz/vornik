@@ -93,6 +93,10 @@ var ProjectDataTables = []string{
 	"trading_funnel_candidates",
 	// The rule engine's shadow record (GitHub #598).
 	"trading_shadow_decisions",
+	// The companion hints' follow windows and keys' last contact (GitHub
+	// #634 slice 2): ids, booleans, counts and times; no FK.
+	"companion_hint_windows",
+	"companion_hint_clients",
 
 	// Memory pipeline — child queues + DLQ first, then the
 	// chunks they reference (project_memory_chunks has

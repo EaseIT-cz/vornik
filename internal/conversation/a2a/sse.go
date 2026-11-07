@@ -29,6 +29,7 @@ import (
 
 	"vornik.io/vornik/internal/executor/livepubsub"
 	"vornik.io/vornik/internal/persistence"
+	"vornik.io/vornik/internal/registry"
 )
 
 // executionLookup is the narrow read surface the SSE handler
@@ -109,9 +110,10 @@ func (h *Handler) handleTaskStream(w http.ResponseWriter, r *http.Request, agent
 		writeError(w, http.StatusNotFound, "NOT_FOUND", "task "+taskID+" not found")
 		return
 	}
-	if task.ProjectID != agent.ProjectID {
+	if !taskBelongsToAgent(task, agent) {
 		// Don't leak existence of out-of-scope tasks — same code
-		// path as "not found".
+		// path as "not found". The workflow must match too, so the
+		// answer policy taken from agent below is the task's own (#614).
 		writeError(w, http.StatusNotFound, "NOT_FOUND", "task "+taskID+" not found")
 		return
 	}
@@ -145,11 +147,12 @@ func (h *Handler) handleTaskStream(w http.ResponseWriter, r *http.Request, agent
 	// replayed), so the loop would hang on keepalives forever — the 2026-08-01
 	// loopback e2e "stuck consumer". Deliver the answer directly if the task is
 	// already terminal.
-	if finishIfTerminal(r.Context(), w, flusher, taskID) {
+	eg := answerEgress{policy: h.answerPolicyFor(agent), prefixes: h.citationPrefixesFor(agent), logger: h.Logger}
+	if finishIfTerminal(r.Context(), w, flusher, taskID, eg) {
 		return
 	}
 
-	h.streamEvents(r.Context(), w, flusher, taskID, events)
+	h.streamEvents(r.Context(), w, flusher, taskID, events, eg)
 }
 
 // streamEvents runs the SSE write loop: translate live events to A2A frames
@@ -157,7 +160,7 @@ func (h *Handler) handleTaskStream(w http.ResponseWriter, r *http.Request, agent
 // terminal live event that never arrives) re-check the task's terminal status
 // on each tick. Returns when terminal, the client disconnects, or the event
 // channel closes.
-func (h *Handler) streamEvents(ctx context.Context, w http.ResponseWriter, flusher http.Flusher, taskID string, events <-chan livepubsub.LiveEvent) {
+func (h *Handler) streamEvents(ctx context.Context, w http.ResponseWriter, flusher http.Flusher, taskID string, events <-chan livepubsub.LiveEvent, eg answerEgress) {
 	pingTicker := time.NewTicker(terminalRecheckInterval)
 	defer pingTicker.Stop()
 	for {
@@ -165,7 +168,7 @@ func (h *Handler) streamEvents(ctx context.Context, w http.ResponseWriter, flush
 		case <-ctx.Done():
 			return
 		case <-pingTicker.C:
-			if finishIfTerminal(ctx, w, flusher, taskID) {
+			if finishIfTerminal(ctx, w, flusher, taskID, eg) {
 				return
 			}
 			if _, err := w.Write([]byte(": ping\n\n")); err != nil {
@@ -183,7 +186,7 @@ func (h *Handler) streamEvents(ctx context.Context, w http.ResponseWriter, flush
 				// No live event carries the answer text — it lives in the task's
 				// OUTPUT artifacts (or ResultEnvelope). Emit it BEFORE the
 				// terminal status so the A2A caller receives it, then closes.
-				emitAnswerArtifact(ctx, w, taskID)
+				emitAnswerArtifact(ctx, w, taskID, eg)
 			}
 			translateAndWrite(w, ev, taskID, final)
 			if flusher != nil {
@@ -199,7 +202,8 @@ func (h *Handler) streamEvents(ctx context.Context, w http.ResponseWriter, flush
 // answerInlineCapBytes bounds how much OUTPUT-artifact content is inlined into
 // the answer frame. Matches the companion result() inline budget (64 KiB); the
 // SSE frame rides well under any proxy limit either way.
-const answerInlineCapBytes = 64 * 1024
+// It is the same bound the answer policy reads under (#614), one constant.
+const answerInlineCapBytes = registry.A2AAnswerReadBound
 
 // terminalRecheckInterval is how often the stream re-checks the task's terminal
 // status (a fallback for a terminal live event that never arrives) while also
@@ -212,7 +216,7 @@ var terminalRecheckInterval = 3 * time.Second
 // already-complete execution yields an open channel with no events, so the
 // stream would otherwise hang on keepalives waiting for a terminal that already
 // fired.
-func finishIfTerminal(ctx context.Context, w http.ResponseWriter, flusher http.Flusher, taskID string) bool {
+func finishIfTerminal(ctx context.Context, w http.ResponseWriter, flusher http.Flusher, taskID string, eg answerEgress) bool {
 	if streamDeps == nil || streamDeps.Tasks == nil {
 		return false
 	}
@@ -224,7 +228,7 @@ func finishIfTerminal(ctx context.Context, w http.ResponseWriter, flusher http.F
 	if !ok {
 		return false
 	}
-	emitAnswerArtifact(ctx, w, taskID)
+	emitAnswerArtifact(ctx, w, taskID, eg)
 	writeSSEStatus(w, state, taskID, true, nil)
 	if flusher != nil {
 		flusher.Flush()
@@ -254,8 +258,14 @@ func a2aStateForTerminalStatus(s persistence.TaskStatus) (string, bool) {
 // deliverable the companion result() tool serves. ResultEnvelope is a fallback
 // for cross-project-style tasks that populate it. The shared outbound client
 // (internal/a2a/client) reads this frame's payload.
-func emitAnswerArtifact(ctx context.Context, w http.ResponseWriter, taskID string) {
+func emitAnswerArtifact(ctx context.Context, w http.ResponseWriter, taskID string, eg answerEgress) {
 	if streamDeps == nil {
+		return
+	}
+	if eg.policy != nil {
+		// Answer-only egress (#614 C5): the policy is the whole answer path;
+		// no other artifact and no ResultEnvelope fallback.
+		emitPolicedAnswer(ctx, w, taskID, eg.policy, eg.prefixes, eg.logger)
 		return
 	}
 	if payload := buildAnswerFromArtifacts(ctx, taskID); len(payload) > 0 {

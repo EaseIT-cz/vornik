@@ -774,6 +774,13 @@ func TestMemoryRetrievalAuditRepository_PostgresContract(t *testing.T) {
 	repotest.RunMemoryRetrievalAuditSuite(t, NewMemoryRetrievalAuditRepository(db.DB))
 }
 
+// #617 slice 2: the corpus-walk count per A2A caller key.
+func TestA2AKeyRetrieval_PostgresContract(t *testing.T) {
+	db := newIntegrationDB(t)
+	repotest.RunA2AKeyRetrievalSuite(t, NewMemoryRetrievalAuditRepository(db.DB),
+		NewTaskRepository(db.DB), NewAPIKeyRepository(db.DB))
+}
+
 // Round-2 trading-event contracts.
 func TestTradingFillRepository_PostgresContract(t *testing.T) {
 	db := newIntegrationDB(t)
@@ -1134,7 +1141,8 @@ func TestApproverDevice_PostgresContract(t *testing.T) {
 	// (the Hermes approval transport's host_action kind and decided_choice),
 	// 215 (rotation sharing and dead-value recognition, P1 2026-10-05), 217
 	// (the memory_retention kind), 227 (the config_journal_drift kind, GitHub
-	// #302) and 228 (the withdrawn status and its who/why columns, #264).
+	// #302), 228 (the withdrawn status and its who/why columns, #264) and 249
+	// (approver_push_subscriptions, #163).
 	// Named, not "everything from 206 on": a later migration altering another
 	// table (208 alters api_keys) has nothing to alter in a fresh schema.
 	// partial: a migration that also alters a non-approver table contributes
@@ -1143,9 +1151,9 @@ func TestApproverDevice_PostgresContract(t *testing.T) {
 	// Wave 6 (2026-10-13): this list missed 228 and then 217 + 227, and each
 	// miss surfaced only as constraint/column errors deep in the suite. The
 	// guard below fails up front, naming the migration, instead.
-	approverMigrations := map[int]bool{206: true, 207: true, 209: true, 211: true, 212: true, 215: true, 227: true, 228: true}
+	approverMigrations := map[int]bool{206: true, 207: true, 209: true, 211: true, 212: true, 215: true, 227: true, 228: true, 249: true}
 	partial := map[int]bool{217: true}
-	approverTables := []string{"agent_approval_requests", "approver_devices", "approver_pairings"}
+	approverTables := []string{"agent_approval_requests", "approver_devices", "approver_pairings", "approver_push_subscriptions"}
 	namesApproverTable := func(sql string) bool {
 		for _, tbl := range approverTables {
 			if strings.Contains(sql, tbl) {
@@ -1178,7 +1186,7 @@ func TestApproverDevice_PostgresContract(t *testing.T) {
 	if found != len(approverMigrations) {
 		t.Fatalf("approver migrations found %d of %d", found, len(approverMigrations))
 	}
-	repotest.RunApproverDeviceSuite(t, NewApproverDeviceRepository(shared.DB), func(t *testing.T) persistence.ApproverDeviceRepository {
+	fresh := func(t *testing.T) persistence.ApproverDeviceRepository {
 		schema := fmt.Sprintf("ad_%d", time.Now().UnixNano())
 		ctx := context.Background()
 		if _, err := shared.ExecContext(ctx, `CREATE SCHEMA `+schema); err != nil {
@@ -1204,7 +1212,10 @@ func TestApproverDevice_PostgresContract(t *testing.T) {
 			}
 		}
 		return NewApproverDeviceRepository(pool)
-	})
+	}
+	repotest.RunApproverDeviceSuite(t, NewApproverDeviceRepository(shared.DB), fresh)
+	// GitHub #163: Web Push subscriptions on the same fresh schemas.
+	t.Run("Push", func(t *testing.T) { repotest.RunApproverPushSuite(t, NewApproverDeviceRepository(shared.DB), fresh) })
 }
 
 // TestCompanionPush_PostgresContract — the §7a outbox on the production lane.
@@ -1542,4 +1553,13 @@ func TestShadowDecisionRepository_PostgresContract(t *testing.T) {
 	db := newIntegrationDB(t)
 	resetSuiteTables(t, db, "trading_shadow_decisions")
 	repotest.RunShadowDecisionSuite(t, NewShadowDecisionRepository(db.DB))
+}
+
+// TestCompanionHintRepository_PostgresContract — the companion hints' follow
+// windows and last contact (GitHub #634 slice 2), the suite that runs on both
+// drivers.
+func TestCompanionHintRepository_PostgresContract(t *testing.T) {
+	db := newIntegrationDB(t)
+	resetSuiteTables(t, db, "companion_hint_windows", "companion_hint_clients")
+	repotest.RunCompanionHintSuite(t, NewCompanionHintRepository(db.DB))
 }

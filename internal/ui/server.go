@@ -2580,6 +2580,7 @@ func (s *Server) Handler() http.Handler {
 	// The service worker script, with the header that lets it control /ui/
 	// and its cache version (GitHub #416). More specific than /static/.
 	mux.Handle("/static/sw.js", serviceWorkerHandler())
+	mux.Handle("/static/approve-push-sw.js", approvePushWorkerHandler())
 
 	// Cmd+K palette JSON endpoint. Mounted at /palette/search so
 	// the global key handler in pageHead can fetch+render results

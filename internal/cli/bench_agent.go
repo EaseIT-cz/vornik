@@ -430,7 +430,7 @@ func runBenchAgentGold(cmd *cobra.Command, _ []string) error {
 		// Runner.Run); its manifest carries the provenance (§12.23).
 		manifest.WorkspaceReset = agentbench.WorkspaceResetNoWorkspace
 		if workspace != nil {
-			manifest.WorkspaceReset = agentbench.WorkspaceResetTargets
+			manifest.WorkspaceReset = agentbench.WorkspaceResetTargetsAndState
 		}
 	}
 	if err != nil {
@@ -1044,9 +1044,15 @@ func openBenchDB() (*sql.DB, error) {
 // workspaceLine says whether "task success" is evidence that the tasks WROTE
 // their code (benchmark LLD §12.23): with no reset, a task may have
 // re-validated an earlier run's output; with a reset, how many declared
-// targets the tasks actually produced.
+// targets the tasks actually produced. A harness-9 reset cleared targets only,
+// so a task could still resume an earlier task's feature (§12.29).
 func workspaceLine(j agentbench.Journal) string {
-	if j.Manifest.WorkspaceReset != agentbench.WorkspaceResetTargets {
+	caveat := ""
+	switch j.Manifest.WorkspaceReset {
+	case agentbench.WorkspaceResetTargetsAndState:
+	case agentbench.WorkspaceResetTargets:
+		caveat = "; workflow state carried over between tasks (harness 9, §12.29)"
+	default:
 		return "NOT reset: tasks may have re-validated earlier runs' output (harness < 9 or no --workspace)"
 	}
 	produced, declared := 0, 0
@@ -1058,7 +1064,7 @@ func workspaceLine(j agentbench.Journal) string {
 			}
 		}
 	}
-	return fmt.Sprintf("pristine per task; targets produced %d/%d", produced, declared)
+	return fmt.Sprintf("pristine per task; targets produced %d/%d%s", produced, declared, caveat)
 }
 
 // benchGrader is the acceptance grader, or nil when there is no workspace to

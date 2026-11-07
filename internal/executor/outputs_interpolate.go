@@ -92,6 +92,12 @@ func interpolateStringRefs(s string, stepResults map[string]json.RawMessage) any
 			if val == nil {
 				return ""
 			}
+			// A text value is capped like a prompt value (C6, GitHub #632
+			// F5); a structured value passes whole, since a cut would
+			// corrupt it.
+			if str, ok := val.(string); ok {
+				return capPromptRefValue(s, str)
+			}
 			return val
 		}
 	}
@@ -104,7 +110,7 @@ func interpolateStringRefs(s string, stepResults map[string]json.RawMessage) any
 		step := s[m[2]:m[3]]
 		field := s[m[4]:m[5]]
 		val := resolveStepField(stepResults, step, field)
-		b.WriteString(scalarStringForm(val))
+		b.WriteString(capPromptRefValue(s[m[0]:m[1]], scalarStringForm(val)))
 		last = m[1]
 	}
 	b.WriteString(s[last:])

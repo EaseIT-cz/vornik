@@ -44,7 +44,7 @@ func (h *DoctorHandlers) checkConfigClassCompat() DoctorCheck {
 		return DoctorCheck{
 			Name:   name,
 			Status: "ERROR",
-			Message: fmt.Sprintf("%d deployed workflow step(s) name a step error class this "+
+			Message: fmt.Sprintf("%d deployed workflow step(s) name a step error class or an output reference this "+
 				"binary rejects; the daemon will FAIL TO START on its next restart and flap "+
 				"on Restart=on-failure. Valid classes: %s. This answers only whether the "+
 				"binary running now refuses this tree — upgrade coverage is UPDATING.md "+

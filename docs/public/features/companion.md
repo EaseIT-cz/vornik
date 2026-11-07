@@ -5,9 +5,9 @@ sources:
     - path: internal/api/companion_mcp.go
       sha256: 01f7c494025657d6195f169c81e7ebb2a4cc9e2374b08862a043d2685b0632c4
     - path: contrib/claude-code-companion/.claude-plugin/plugin.json
-      sha256: e8e938eaf4e0f50a2d9d5cb79c7925c146de8a29e487e1dc0b1bdb82aa569293
+      sha256: 062b4a4aa41a7671a6aef7c4d6ac90211378093a6a8f28d2830e2ddc44006efd
     - path: contrib/codex-companion/.codex-plugin/plugin.json
-      sha256: 8ba365101517b05aaf0c88563cdf77a6065531373fea977b1e0e0bf5021e8742
+      sha256: 2c529c0407b82cf85ecd26ebe829e636dc22866dd3566d9c2da7733a49b8541d
 ---
 # Companion plugin
 
@@ -396,6 +396,40 @@ with a current plugin, then retire the old versions with
 It is a dry run until you add `--apply`, and it leaves alone any name that more
 than one file in the checkout shares.
 
+### Keeping repository docs current in memory
+
+A project can mirror parts of its repository into its memory, so that docs
+stay current without anyone re-ingesting them. List path prefixes in the
+project's configuration:
+
+```yaml
+repo_scope: github.com/acme/widgets
+memory:
+  mirror_paths: [docs/public/, docs/guides/]
+```
+
+Once an hour, after Vornik fetches the default branch into its clone, it
+ingests every Markdown file under those prefixes whose current version it
+has not ingested yet. Each file is read from the clone, so it is `verified`
+like a companion ingest of the same file. The new version replaces the old
+one. A file deleted or changed on the branch has its old version withdrawn
+by the same hourly check.
+
+- A file whose front matter says `disclosure: never` is skipped. So is a
+  file whose front matter does not parse, and a file that lists
+  `disclosureExclude` sections, because mirroring it whole would include
+  them.
+- A file over 512 KiB is skipped, and at most 200 files are ingested per
+  project per hour; the rest follow in the next pass.
+- Text the ingest gates refuse is quarantined as usual, and is tried again
+  only when the file changes.
+- `vornikctl doctor` (check `memory_provenance_clone`) shows each mirroring
+  project's last pass, file counts by outcome, and warns when a file failed
+  or the clone could not be read. The metric is
+  `vornik_memory_mirror_files_total{project_id,outcome}`.
+- `mirror_paths` needs `repo_scope`, and each entry ends in `/`. It is read
+  on every pass, so a config reload applies a change.
+
 ### Digging harder when the fast answer misses
 
 `recall` is tuned for interactive use: one search pass, ranked by fusing semantic
@@ -773,6 +807,31 @@ starts**.
   paths given to a read program (`cat`, `head`, `sed`, `rg`, `grep`, `find`,
   `ls` and a few others). It parses the text and never runs it. Codex runs
   the hook only after you trust it at the "Hooks need review" prompt.
+
+Since plugin 0.50.0, Claude Code also gets **just-in-time hints** from the
+project's hint catalogue.
+
+- After a `git commit`, Claude is asked to send the diff for review. After
+  an edit to a design document, it is asked to ingest the document; that
+  includes a design written by a shell command (a heredoc, a redirection,
+  `tee`, `sed -i`, `cp` or `mv`), which the hook reads from the command
+  text and never runs. After a
+  test run that failed, it is asked to recall the symptom first.
+- Each hint fires at most once per session, never blocks a tool call, and
+  makes no network call on a tool event. The hooks store hint ids and
+  counters only, never a command, a path or output.
+- At the next session start the plugin fetches the catalogue and reports,
+  for each earlier hint, whether Claude called the hint's tool within 10
+  calls. A hint followed in fewer than 2 of its last 10 firings turns off
+  for 14 days in that project.
+- Turn hints off with `VORNIK_HINTS=off`, or per project with
+  `companion.hints: off`; mute one with `companion.mute: [<id>]`.
+  `vornikctl companion hints -p <project>` lists each hint's state and
+  follow rate.
+- Codex gets the same hints since codex-companion 0.45.0, from the same
+  script. Codex gives a hook no exit status, so a failed test run is
+  recognised from its output, and a failed commit still shows the review
+  hint. Codex runs the new hooks once you trust them.
 
 For Codex, install `codex-companion` from the bundled Codex marketplace at
 `<path>/.agents/plugins/marketplace.json`, or load the plugin directly from

@@ -2,7 +2,9 @@ package dispatcher
 
 import (
 	"context"
+	"fmt"
 	"strings"
+	"time"
 )
 
 // TurnStatusReporter receives coarse progress for an in-flight turn so the
@@ -25,6 +27,14 @@ func (a *Agent) SetTurnStatusReporter(r TurnStatusReporter) {
 	a.turnStatusMu.Lock()
 	a.turnStatus = r
 	a.turnStatusMu.Unlock()
+}
+
+// TurnStatusReporterBound reports whether a status sink is bound. It exists for
+// the container's wiring test (#642); production code does not need it.
+func (a *Agent) TurnStatusReporterBound() bool {
+	a.turnStatusMu.RLock()
+	defer a.turnStatusMu.RUnlock()
+	return a.turnStatus != nil
 }
 
 // reportTurnStatus forwards one status line for the turn described by req.
@@ -56,9 +66,53 @@ func toolStatusLine(toolName string) string {
 	if phrase, ok := friendlyToolPhrases[name]; ok {
 		return phrase
 	}
-	// Unknown tools (MCP servers register their own at runtime) degrade to the
-	// bare name rather than to something invented.
+	// An MCP tool (mcp__<server>__<tool>) names its server, as the stream
+	// markers did before #642 removed them.
+	if rest, ok := strings.CutPrefix(name, "mcp__"); ok {
+		if server, tool, found := strings.Cut(rest, "__"); found && server != "" {
+			return "using " + server + "/" + tool + "…"
+		}
+		return "using " + rest + "…"
+	}
+	// Unknown tools degrade to the bare name rather than to something invented.
 	return "running `" + name + "`…"
+}
+
+// turnProgress builds the one status line a turn shows (conversation-channel
+// design, update 2026-11-05, GitHub #642): the current activity, the elapsed
+// time and every activity so far with a count. It replaced a status line per
+// tool call, which piled up above the answer on Telegram.
+type turnProgress struct {
+	start  time.Time
+	order  []string
+	counts map[string]int
+}
+
+func newTurnProgress(start time.Time) *turnProgress {
+	return &turnProgress{start: start, counts: map[string]int{}}
+}
+
+// note records a tool call and returns the line to show now.
+func (p *turnProgress) note(toolName string) string {
+	return p.noteAt(toolName, time.Now())
+}
+
+func (p *turnProgress) noteAt(toolName string, now time.Time) string {
+	phrase := strings.TrimSuffix(toolStatusLine(toolName), "…")
+	if p.counts[phrase] == 0 {
+		p.order = append(p.order, phrase)
+	}
+	p.counts[phrase]++
+	parts := make([]string, 0, len(p.order))
+	for _, ph := range p.order {
+		if n := p.counts[ph]; n > 1 {
+			parts = append(parts, fmt.Sprintf("%s ×%d", ph, n))
+		} else {
+			parts = append(parts, ph)
+		}
+	}
+	elapsed := now.Sub(p.start).Round(time.Second)
+	return fmt.Sprintf("⏳ %s · %s · so far: %s", phrase, elapsed, strings.Join(parts, ", "))
 }
 
 // friendlyToolPhrases covers the built-in dispatcher tools. An unlisted tool is

@@ -99,6 +99,15 @@ func scanBundleMCPNames(t *testing.T, root string) (refs []bundleNameRef, files 
 		if strings.Contains(base, "_test.") || base == "plugin.json" || base == "LICENSE" {
 			return nil
 		}
+		// hooks/hints.sh is one script, byte-equal in both bundles, holding
+		// each client's tool names on that client's branch (GitHub #634,
+		// companion hardening design §13.12 X4). A name scan of either bundle
+		// would refuse the other client's names. Its names are checked by the
+		// hint contracts instead, which run the script as each client and
+		// assert which name credits a follow there.
+		if base == "hints.sh" && filepath.Base(filepath.Dir(path)) == "hooks" {
+			return nil
+		}
 		raw, err := os.ReadFile(path)
 		if err != nil {
 			return err

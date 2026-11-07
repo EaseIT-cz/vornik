@@ -228,6 +228,13 @@ func (c *Container) provenanceCloneStatus() []api.ProvenanceCloneStatus {
 			last[r.Dir] = r
 		}
 	}
+	// #639: each mirroring project's last pass rides on its clone's line.
+	mirrors := map[string]memory.MirrorResult{}
+	if c != nil && c.memoryProvenanceSweeper != nil {
+		for _, m := range c.memoryProvenanceSweeper.LastMirrors() {
+			mirrors[m.ProjectID] = m
+		}
+	}
 	var out []api.ProvenanceCloneStatus
 	for _, cl := range c.provenanceClones() {
 		st := api.ProvenanceCloneStatus{ProjectID: cl.ProjectID, Usable: memory.DaemonCloneDir(cl.Dir, root) != ""}
@@ -239,7 +246,24 @@ func (c *Container) provenanceCloneStatus() []api.ProvenanceCloneStatus {
 		if r, ok := last[cl.Dir]; ok {
 			st.Fetched, st.FetchOutcome, st.FetchError, st.FetchedAt = true, r.Outcome, r.Error, r.At
 		}
+		if m, ok := mirrors[cl.ProjectID]; ok && cl.ProjectID != "" {
+			st.Mirrored, st.MirroredAt, st.MirrorCounts = true, m.At, m.Counts
+		}
 		out = append(out, st)
+	}
+	return out
+}
+
+// mirrorProjects lists the projects that set memory.mirror_paths (#639).
+func (c *Container) mirrorProjects() []memory.MirrorProject {
+	if c == nil || c.Registry == nil {
+		return nil
+	}
+	var out []memory.MirrorProject
+	for _, p := range c.Registry.ListProjects() {
+		if p != nil && len(p.Memory.MirrorPaths) > 0 && p.RepoScope != "" {
+			out = append(out, memory.MirrorProject{ProjectID: p.ID, RepoScope: p.RepoScope, Paths: append([]string(nil), p.Memory.MirrorPaths...)})
+		}
 	}
 	return out
 }

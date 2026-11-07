@@ -3,12 +3,14 @@ package service
 import (
 	"context"
 	"net/http"
+	"strings"
 	"time"
 
 	"vornik.io/vornik/internal/agentadmin"
 	"vornik.io/vornik/internal/api"
 	"vornik.io/vornik/internal/approverdevice"
 	"vornik.io/vornik/internal/persistence"
+	"vornik.io/vornik/internal/webpush"
 )
 
 // Agent-administered Vornik design §9: approver devices, the pairing page and
@@ -44,6 +46,18 @@ func (c *Container) approverDeviceService() *approverdevice.Service {
 			c.approverHTTPSMetrics = approverdevice.NewHTTPSRefusalMetrics()
 		}
 		opts = append(opts, approverdevice.WithHTTPSRefusalRecorder(c.approverHTTPSMetrics.Record))
+		// Web Push to the devices (GitHub #163, design part 09 §9.3a):
+		// on when the secret store gives a VAPID key and the public origin
+		// is https.
+		if sender := c.approverPushSender(); sender != nil {
+			if pr, ok := c.repos.ApproverDevices.(persistence.ApproverPushRepository); ok {
+				if c.approverPushMetrics == nil {
+					c.approverPushMetrics = approverdevice.NewPushMetrics()
+				}
+				opts = append(opts, approverdevice.WithWebPush(pr, sender),
+					approverdevice.WithPushOutcomeRecorder(c.approverPushMetrics.Record))
+			}
+		}
 		svc := approverdevice.New(c.repos.ApproverDevices, opts...)
 		svc.RegisterEffect(persistence.ApprovalKindMemoryRetention, c.applyMemoryRetention)
 		// The interrupted-config-apply card (config-apply journal design
@@ -118,4 +132,38 @@ func (c *Container) startApproverDeviceTicker(ctx context.Context) {
 	go svc.Run(ctx, time.Minute, func(err error) {
 		c.Logger.Warn().Err(err).Msg("approver device housekeeping")
 	})
+}
+
+// approverPushSender builds the Web Push sender from the secret store's
+// VAPID seed (design part 09 §9.3a B.2), with the public origin as the
+// contact. Nil, and Web Push off, without a store, a key or an https origin:
+// a browser offers push only to a secure page, and the approval pages
+// require HTTPS (§9.2, T12).
+func (c *Container) approverPushSender() *webpush.Sender {
+	if c.Config == nil {
+		return nil
+	}
+	origin := c.Config.PublicOrigin()
+	if !strings.HasPrefix(origin, "https://") {
+		return nil
+	}
+	c.ensureSecretStore()
+	c.secretStoreMu.Lock()
+	st := c.secretStore
+	c.secretStoreMu.Unlock()
+	if st == nil {
+		c.Logger.Info().Msg("approver web push is off: no secret store key")
+		return nil
+	}
+	seed, err := st.ApproverPushVAPIDSeed()
+	if err != nil {
+		c.Logger.Warn().Err(err).Msg("approver web push is off: the VAPID key could not be derived")
+		return nil
+	}
+	key, err := webpush.KeyFromSeed(seed)
+	if err != nil {
+		c.Logger.Warn().Err(err).Msg("approver web push is off: the VAPID key could not be derived")
+		return nil
+	}
+	return webpush.NewSender(webpush.NewVAPID(key, strings.TrimRight(origin, "/")))
 }

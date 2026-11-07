@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -374,10 +375,12 @@ func TestWriteTrustVerdictTrace_WriteError_Swallowed(_ *testing.T) {
 // A widen that dropped it would hand the architect the reviews and notes its
 // role policy excludes, exactly when its first round found too little.
 func TestWidenRoutingOptions_KeepsAuthority(t *testing.T) {
-	base := SearchOptions{Limit: 5, RepoScope: "github.com/example/vornik", StrictScope: true, Authority: AuthorityProvenance, Routing: true}
+	base := SearchOptions{Limit: 5, RepoScope: "github.com/example/vornik", StrictScope: true, Authority: AuthorityProvenance, Routing: true,
+		SourcePrefixes: []string{"docs/architect/", "docs/public/"}} // #614 C3: prefixes too
 	for round := 1; round <= 3; round++ {
 		o := widenRoutingOptions(base, round)
-		if o.Authority != AuthorityProvenance || !o.StrictScope || o.RepoScope != base.RepoScope {
+		if o.Authority != AuthorityProvenance || !o.StrictScope || o.RepoScope != base.RepoScope ||
+			strings.Join(o.SourcePrefixes, ",") != "docs/architect/,docs/public/" {
 			t.Fatalf("round %d relaxed the filter: %+v", round, o)
 		}
 	}

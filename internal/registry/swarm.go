@@ -9,6 +9,7 @@ import (
 
 	"vornik.io/vornik/internal/imageref"
 	"vornik.io/vornik/internal/mediakind"
+	"vornik.io/vornik/internal/persistence"
 	"vornik.io/vornik/internal/promptblock"
 )
 
@@ -84,12 +85,47 @@ func (s *Swarm) UnknownSuppressedGuidanceBlocks() []string {
 		return nil
 	}
 	var out []string
-	for _, listed := range s.SuppressedGuidanceBlocks {
-		name := strings.TrimSpace(listed)
-		if name == "" || promptblock.Known(name) {
-			continue
+	lists := [][]string{s.SuppressedGuidanceBlocks}
+	for _, r := range s.Roles {
+		lists = append(lists, r.SuppressedGuidanceBlocks)
+	}
+	for _, list := range lists {
+		for _, listed := range list {
+			name := strings.TrimSpace(listed)
+			if name == "" || promptblock.Known(name) {
+				continue
+			}
+			out = append(out, name)
 		}
-		out = append(out, name)
+	}
+	return out
+}
+
+// SuppressedGuidanceBlocksFor returns the blocks switched off for one role:
+// the swarm's list, then the role's, duplicates merged (GitHub #633). A role
+// the swarm does not declare gets the swarm list.
+func (s *Swarm) SuppressedGuidanceBlocksFor(role string) []string {
+	if s == nil {
+		return nil
+	}
+	lists := [][]string{s.SuppressedGuidanceBlocks}
+	for _, r := range s.Roles {
+		if r.Name == role {
+			lists = append(lists, r.SuppressedGuidanceBlocks)
+			break
+		}
+	}
+	var out []string
+	seen := map[string]bool{}
+	for _, list := range lists {
+		for _, listed := range list {
+			name := strings.TrimSpace(listed)
+			if name == "" || seen[name] {
+				continue
+			}
+			seen[name] = true
+			out = append(out, name)
+		}
 	}
 	return out
 }
@@ -104,7 +140,7 @@ func (s *Swarm) UnknownSuppressedGuidanceBlocks() []string {
 // so honouring the config "as far as possible" would leave an operator believing
 // they had switched off a rule that is still enforced. Better to refuse the file
 // and say why.
-func validateSuppressedGuidance(filename string, blocks []string) error {
+func validateSuppressedGuidance(filename, field string, blocks []string) error {
 	for i, listed := range blocks {
 		name := strings.TrimSpace(listed)
 		if name == "" || !promptblock.Known(name) {
@@ -115,7 +151,7 @@ func validateSuppressedGuidance(filename string, blocks []string) error {
 		}
 		return SwarmValidationError{
 			File:  filename,
-			Field: "suppressedGuidanceBlocks",
+			Field: field,
 			Message: fmt.Sprintf(
 				"%q is an invariant guidance block and cannot be suppressed (entry %d): it states a "+
 					"rule the daemon enforces whatever the prompt says, so switching the block off "+
@@ -189,6 +225,11 @@ type SwarmRole struct {
 	Description string `yaml:"description"`
 	// Count is the number of agents for this role (default: 1)
 	Count int `yaml:"count"`
+	// SuppressedGuidanceBlocks names ADVISORY guidance blocks this role's
+	// agents should not receive, on top of the swarm's own list (GitHub #633;
+	// reviewable-output design §6.1). Same rules as the swarm field: names,
+	// never text; an invariant name fails the file; an unknown name warns.
+	SuppressedGuidanceBlocks []string `yaml:"suppressedGuidanceBlocks,omitempty"`
 	// RuntimePolicy defines container lifecycle: "ephemeral" or "warm"
 	RuntimePolicy string `yaml:"runtimePolicy"`
 	// Model overrides the daemon-level LLM model for this role.
@@ -435,6 +476,18 @@ type MemorySearchPolicy struct {
 	// Limit is the default hit count when the tool call names none, and the
 	// ceiling a call may not exceed. 0 = the tool's default.
 	Limit int `yaml:"limit"`
+	// SourcePrefixes, when set, admits only chunks whose source_name begins
+	// with one of them, e.g. [docs/architect/, docs/public/] for the A2A
+	// architect (#614 C3, architect design §4.2). Applied by the daemon to
+	// the role's own key; the model cannot widen it.
+	SourcePrefixes []string `yaml:"sourcePrefixes,omitempty"`
+	// MaxSensitivity caps the sensitivity tier a returned chunk may carry:
+	// public, internal or confidential; empty for no cap (#618; firewall
+	// design, "Amendment 2026-11-06 (#618)"). A chunk with no tier counts
+	// as confidential unless it is a provenance-verified file under the
+	// daemon's memory.public_source_prefixes. Applied by the daemon to the
+	// role's own key; the model cannot widen it.
+	MaxSensitivity string `yaml:"maxSensitivity,omitempty"`
 }
 
 // Memory-search authority values (MemorySearchPolicy.Authority). They are the
@@ -446,10 +499,18 @@ const (
 	MemorySearchMaxLimit = 20
 )
 
+// Memory-search sensitivity caps (MemorySearchPolicy.MaxSensitivity, #618).
+// They are the wire values of the memory package's SensitivityCap values.
+const (
+	MemorySearchMaxSensitivityPublic       = "public"
+	MemorySearchMaxSensitivityInternal     = "internal"
+	MemorySearchMaxSensitivityConfidential = "confidential"
+)
+
 // Narrows reports whether the policy restricts what a search may return
 // beyond the repository scope (strict scope or an authority).
 func (p *MemorySearchPolicy) Narrows() bool {
-	return p != nil && (p.StrictScope || (p.Authority != "" && p.Authority != MemorySearchAuthorityAny))
+	return p != nil && (p.StrictScope || (p.Authority != "" && p.Authority != MemorySearchAuthorityAny) || len(p.SourcePrefixes) > 0 || p.MaxSensitivity != "")
 }
 
 // validateMemorySearchPolicy is the loader rule for SwarmRole.MemorySearch.
@@ -467,8 +528,19 @@ func validateMemorySearchPolicy(filename string, i int, role SwarmRole) error {
 	default:
 		return fail(".authority", fmt.Sprintf("authority %q is not one of %q, %q", p.Authority, MemorySearchAuthorityAny, MemorySearchAuthorityProvenance))
 	}
+	switch p.MaxSensitivity {
+	case "", MemorySearchMaxSensitivityPublic, MemorySearchMaxSensitivityInternal, MemorySearchMaxSensitivityConfidential:
+	default:
+		return fail(".maxSensitivity", fmt.Sprintf("maxSensitivity %q is not one of %q, %q, %q (omit it for no cap)", p.MaxSensitivity,
+			MemorySearchMaxSensitivityPublic, MemorySearchMaxSensitivityInternal, MemorySearchMaxSensitivityConfidential))
+	}
+	for _, sp := range p.SourcePrefixes {
+		if !persistence.ValidSourcePrefix(sp) {
+			return fail(".sourcePrefixes", fmt.Sprintf("source prefix %q must be path segments of [A-Za-z0-9._-], each ending in /, with no . or .. segment", sp))
+		}
+	}
 	if p.Narrows() && strings.TrimSpace(p.RepoScope) == "" {
-		return fail(".repoScope", "repoScope is required when strictScope or authority is set: a narrowing policy names the repository it narrows to")
+		return fail(".repoScope", "repoScope is required when strictScope, authority, sourcePrefixes or maxSensitivity is set: a narrowing policy names the repository it narrows to")
 	}
 	if p.Limit < 0 || p.Limit > MemorySearchMaxLimit {
 		return fail(".limit", fmt.Sprintf("limit %d is outside 0..%d", p.Limit, MemorySearchMaxLimit))
@@ -522,7 +594,7 @@ func (s *Swarm) Validate(filename string) error {
 	if len(s.Roles) == 0 {
 		return SwarmValidationError{File: filename, Field: "roles", Message: "at least one role is required"}
 	}
-	if err := validateSuppressedGuidance(filename, s.SuppressedGuidanceBlocks); err != nil {
+	if err := validateSuppressedGuidance(filename, "suppressedGuidanceBlocks", s.SuppressedGuidanceBlocks); err != nil {
 		return err
 	}
 
@@ -554,6 +626,9 @@ func (s *Swarm) Validate(filename string) error {
 		}
 
 		if err := validateRoleModalities(filename, i, role, declaredModalities); err != nil {
+			return err
+		}
+		if err := validateSuppressedGuidance(filename, fmt.Sprintf("roles[%d].suppressedGuidanceBlocks", i), role.SuppressedGuidanceBlocks); err != nil {
 			return err
 		}
 		if err := validateMemorySearchPolicy(filename, i, role); err != nil {

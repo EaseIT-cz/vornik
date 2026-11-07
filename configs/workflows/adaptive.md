@@ -2,7 +2,7 @@
 workflowId: "adaptive"
 displayName: "Adaptive Workflow Router"
 description: "Routes a task to one of the project's configured candidate workflows by asking the lead to classify the task, then delegates the real work to a child task running the picked workflow."
-version: "3.0"
+version: "3.1"
 author: "Vadim Grinco <vadim@grinco.eu>"
 license: "Proprietary"
 entrypoint: "route"
@@ -60,17 +60,21 @@ provide one; do not claim configuration is missing. If
 `adaptiveCandidateWorkflows` is in your context with at
 least one entry, you have everything you need to route.
 
-You MUST pick a value that appears verbatim in that list.
+Pick a value that appears verbatim in that list, or `none` (below).
 Out-of-list picks are validated server-side: you'll get one
 corrective retry with the allowed list spelled out, then
 the parent task FAILS with `route_invalid_pick`. There is
 no silent fallback to the project's default workflow.
 
-**Refusal is not allowed.** Emitting anything other than a
-JSON object with `selected_workflow` set to a valid candidate
-is treated as a refusal and triggers the same one-shot
-corrective retry as an out-of-list pick. Do not respond
-with prose explaining what configuration you need — the
+**Answer with a candidate, or with `none`.** If no candidate is
+equipped for the task (a research request and only outreach
+workflows, say), answer `"selected_workflow": "none"` and say in
+`reason` what the task needs; the task then fails with that
+reason and the user is told to run it in a project that fits.
+Use `none` only for that. Anything else that is not a valid
+candidate is treated as a refusal and gets the same one-shot
+corrective retry as an out-of-list pick. Do not respond with
+prose explaining what configuration you need — the
 configuration is already complete.
 
 **Route on the task prompt and the candidate list alone.** Do not read

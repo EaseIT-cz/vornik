@@ -5,6 +5,7 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	"vornik.io/vornik/internal/chat"
 	"vornik.io/vornik/internal/outputguard"
@@ -170,25 +171,40 @@ func TestNilGuardSinkIsSafe(t *testing.T) {
 }
 
 // Review F6: lock in that the scan does not spike superlinearly at the upper
-// payload bound. A generous ceiling, deliberately — a tight timing assertion in
-// CI is flaky, and a flaky test gets deleted, and a deleted test measures
-// nothing. Benchmarked 2026-08-26 at ~22ms for 64KiB on the dev host.
+// payload bound. The property is the growth, so the test measures a ratio:
+// the best of five 64KiB scans against the best of five 8KiB scans. Linear is
+// 8 times, quadratic 64; the ceiling is 32. A ratio is immune to a uniformly
+// slow machine, which an absolute ceiling is not: a 2-second ceiling failed on
+// a loaded CI runner on 2026-11-06 (64KiB took 2.12s there; 27ms on the dev
+// host, where 8 to 64KiB measured 5, 8, 14 and 27ms, linear).
 func TestScanScalesToUpperBound(t *testing.T) {
 	if testing.Short() {
 		t.Skip("timing-sensitive")
 	}
-	body := strings.Repeat("the quick brown fox jumps over the lazy dog. ", 64*1024/44)
-	rec := &recordingGuard{}
-	c := newGuardedExecutor(body, rec)
-	if _, err := c.Execute(context.Background(), "p", "mcp__x__y", "{}"); err != nil {
-		t.Fatalf("Execute: %v", err)
+	bestOf := func(kib int) time.Duration {
+		body := strings.Repeat("the quick brown fox jumps over the lazy dog. ", kib*1024/44)
+		best := time.Duration(1<<63 - 1)
+		for i := 0; i < 5; i++ {
+			rec := &recordingGuard{}
+			c := newGuardedExecutor(body, rec)
+			if _, err := c.Execute(context.Background(), "p", "mcp__x__y", "{}"); err != nil {
+				t.Fatalf("Execute: %v", err)
+			}
+			if len(rec.calls) != 1 {
+				t.Fatalf("want 1 scan, got %d", len(rec.calls))
+			}
+			if d := rec.calls[0].duration; d < best {
+				best = d
+			}
+		}
+		return best
 	}
-	if len(rec.calls) != 1 {
-		t.Fatalf("want 1 scan, got %d", len(rec.calls))
+	small, large := bestOf(8), bestOf(64)
+	if small <= 0 {
+		t.Fatalf("an 8KiB scan measured %v; the guard did not record a duration", small)
 	}
-	if d := rec.calls[0].duration; d > 2_000_000_000 {
-		t.Fatalf("a 64KiB scan took %v — far beyond the ~22ms measured; "+
-			"something has gone superlinear", d)
+	if ratio := float64(large) / float64(small); ratio > 32 {
+		t.Fatalf("64KiB took %v and 8KiB %v: %.1fx for 8x the input, so the scan has gone superlinear", large, small, ratio)
 	}
 }
 

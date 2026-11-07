@@ -1,5 +1,5 @@
 {
-  "description": "vornik-companion for Codex: recall-nudge.sh, an OFFLINE just-in-time nudge. PreToolUse(Bash) parses the shell command text (it never runs it) for paths a read program (cat, sed, rg, grep, find, ls, ...) was pointed at; on the 3rd read into one subsystem with no recent successful recall it tells the model to recall that subsystem's design. PostToolUse(mcp__vornik__recall) records that a recall returned. It fires once per subsystem per session, never blocks, makes no network call and keeps no content (LLD 23, Recall nudge for Codex, 2026-10-13). Codex runs it only after you trust it; set VORNIK_NUDGE=off to silence it.",
+  "description": "vornik-companion for Codex: recall-nudge.sh, an OFFLINE just-in-time nudge. PreToolUse(Bash) parses the shell command text (it never runs it) for paths a read program (cat, sed, rg, grep, find, ls, ...) was pointed at; on the 3rd read into one subsystem with no recent successful recall it tells the model to recall that subsystem's design. PostToolUse(mcp__vornik__recall) records that a recall returned. It fires once per subsystem per session, never blocks, makes no network call and keeps no content (LLD 23, Recall nudge for Codex, 2026-10-13). Codex runs it only after you trust it; set VORNIK_NUDGE=off to silence it. hints.sh, the same script as the Claude Code bundle's (kept byte-equal by a test), shows the companion's just-in-time hints: SessionStart runs its network turn detached (fetch the catalogue, upload earlier sessions' outcomes), and PostToolUse on every tool and UserPromptSubmit detect a commit, a design edit (from apply_patch's headers) and a failed test run (from its output; Codex gives a hook no exit status). Each hint fires at most once per session; the hooks keep hint ids and counters only. Set VORNIK_HINTS=off to silence them (LLD 2026-08-20 companion hardening \u00a713.12, GitHub #634).",
   "hooks": {
     "PreToolUse": [
       {
@@ -20,6 +20,38 @@
           {
             "type": "command",
             "command": "bash \"${PLUGIN_ROOT}/hooks/recall-nudge.sh\" recalled",
+            "timeout": 5
+          }
+        ]
+      },
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"${PLUGIN_ROOT}/hooks/hints.sh\" call codex",
+            "timeout": 5
+          }
+        ]
+      }
+    ],
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"${PLUGIN_ROOT}/hooks/hints.sh\" session-start codex",
+            "timeout": 5
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"${PLUGIN_ROOT}/hooks/hints.sh\" prompt codex",
             "timeout": 5
           }
         ]

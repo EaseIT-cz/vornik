@@ -11,7 +11,7 @@ import (
 	"errors"
 	"fmt"
 	"strconv"
-	"strings"
+	"time"
 
 	"vornik.io/vornik/internal/chat"
 	"vornik.io/vornik/internal/llmspend"
@@ -160,6 +160,9 @@ func (a *Agent) Process(ctx context.Context, req Request) (result Result) {
 	// Malformed citation markers in earlier replies seed the model to copy
 	// them (operator-profile-design.md, 2026-09-28).
 	sanitizeHistoryCitations(msgs)
+	// #646: the user message that opens this turn. A synthetic user message
+	// added later (the hallucination retry) does not move it.
+	turnStart := turnStartIndex(msgs)
 
 	activeProject := req.Project
 	// guardWarnings accumulates output-guard findings across every
@@ -167,6 +170,7 @@ func (a *Agent) Process(ctx context.Context, req Request) (result Result) {
 	// render a non-jargon banner. Always present (possibly empty);
 	// no nil-vs-empty distinction the caller has to handle.
 	var guardWarnings []GuardWarning
+	var modelFallback *ModelFallback // #620: the turn's first fail-over
 	// hallucinationRetried caps the in-loop retry-on-hallucination
 	// at one. A second hallucination after the synthetic retry
 	// prompt almost always indicates a model that can't ground its
@@ -175,8 +179,18 @@ func (a *Agent) Process(ctx context.Context, req Request) (result Result) {
 	// through path.
 	hallucinationRetried := false
 
+	statusReads := newStatusReadGuard() // #642: one turn's status reads
+	progress := newTurnProgress(time.Now())
 	for i := 0; i < a.maxIterations; i++ {
-		resp, updatedMsgs, err := a.complete(ctx, systemPrompt, msgs, tools, i == 0, nil)
+		// #645: messages the user sent while the turn runs join it here.
+		if steered, got := appendSteered(ctx, msgs); got {
+			msgs = steered
+			a.reportTurnStatus(ctx, req, "⏳ reading your new message")
+		}
+		resp, updatedMsgs, err := a.complete(ctx, systemPrompt, msgs, turnStart, tools, i == 0, nil)
+		if len(updatedMsgs) < len(msgs) {
+			turnStart = 0 // the gateway retry pruned the list to this turn
+		}
 		msgs = updatedMsgs
 		if err != nil {
 			return Result{
@@ -186,6 +200,7 @@ func (a *Agent) Process(ctx context.Context, req Request) (result Result) {
 		}
 		a.recordLLMUsage(ctx, activeProject, req.ChatID, resp)
 		audit.recordIteration(resp, modelFromResponse(resp), 0)
+		modelFallback = firstModelFallback(modelFallback, resp)
 		if len(resp.Choices) == 0 {
 			return Result{
 				Err:      fmt.Errorf("empty response from LLM"),
@@ -200,6 +215,16 @@ func (a *Agent) Process(ctx context.Context, req Request) (result Result) {
 		msgs = append(msgs, assistantMsg)
 
 		if len(assistantMsg.ToolCalls) == 0 {
+			// #645: a message that arrived while the model answered is
+			// answered in this turn, unless the iteration cap leaves no step
+			// for it (then it stays in the inbox and runs as its own turn).
+			if i+1 < a.maxIterations {
+				if steered, got := appendSteered(ctx, msgs); got {
+					msgs = steered
+					a.reportTurnStatus(ctx, req, "⏳ reading your new message")
+					continue
+				}
+			}
 			// Final text response — tool loop complete. Strip any
 			// <think>/<reasoning> blocks gpt-oss-style models embed
 			// in-content so the user sees the answer, not the model's
@@ -235,11 +260,13 @@ func (a *Agent) Process(ctx context.Context, req Request) (result Result) {
 				text = v.Reason
 			}
 
+			markSteeredAnswered(ctx) // #645: steered messages got their answer
 			return Result{
 				Text:          text,
 				NewProject:    activeProject,
 				Messages:      msgs,
 				GuardWarnings: guardWarnings,
+				ModelFallback: modelFallback,
 			}
 		}
 
@@ -252,11 +279,18 @@ func (a *Agent) Process(ctx context.Context, req Request) (result Result) {
 			// Tell the originating channel what is happening. Display only —
 			// never enters history, costs no context, and a channel that cannot
 			// show it does nothing.
-			a.reportTurnStatus(ctx, req, toolStatusLine(tc.Function.Name))
+			a.reportTurnStatus(ctx, req, progress.note(tc.Function.Name)) // #642: one summary line per turn
 
 			// The pre-tool and post-tool points (pipeline_points.go). The
 			// intent judge runs before execution and never refuses today; the
 			// output guard wraps execution and rewrites what the model sees.
+			// #642: a repeated status read is refused before it runs.
+			if refusal, refused := statusReads.check(tc.Function.Name, tc.Function.Arguments); refused {
+				logRefusedCall(a.logger, statusReads, tc.Function.Name)
+				audit.recordToolCall(tc.Function.Name, tc.Function.Arguments, refusal, "")
+				msgs = append(msgs, chat.Message{Role: "tool", Content: refusal, ToolCallID: tc.ID, Name: tc.Function.Name})
+				continue
+			}
 			in := ToolCallInput{Tool: tc.Function.Name, Arguments: tc.Function.Arguments, ActiveProject: activeProject, ChatID: req.ChatID}
 			if v := a.points().preTool.Run(ctx, in); v.Refused {
 				a.logger.Warn().Str("tool", tc.Function.Name).Str("participant", v.Participant).Msg("dispatcher: tool call refused before execution")
@@ -308,6 +342,7 @@ func (a *Agent) Process(ctx context.Context, req Request) (result Result) {
 		Text:          "I reached the tool step limit for this turn. Your request may need to be broken into smaller steps, or you can continue from where I left off.",
 		Messages:      msgs,
 		GuardWarnings: guardWarnings,
+		ModelFallback: modelFallback,
 	}
 }
 
@@ -361,9 +396,13 @@ func (a *Agent) ProcessStreaming(ctx context.Context, req Request, onText chat.S
 	// Malformed citation markers in earlier replies seed the model to copy
 	// them (operator-profile-design.md, 2026-09-28).
 	sanitizeHistoryCitations(msgs)
+	// #646: the user message that opens this turn. A synthetic user message
+	// added later (the hallucination retry) does not move it.
+	turnStart := turnStartIndex(msgs)
 
 	activeProject := req.Project
 	var guardWarnings []GuardWarning
+	var modelFallback *ModelFallback // #620: the turn's first fail-over
 	hallucinationRetried := false
 
 	var streamAccum string
@@ -375,6 +414,8 @@ func (a *Agent) ProcessStreaming(ctx context.Context, req Request, onText chat.S
 		onText(streamAccum)
 	}
 
+	statusReads := newStatusReadGuard() // #642: one turn's status reads
+	progress := newTurnProgress(time.Now())
 	for i := 0; i < a.maxIterations; i++ {
 		// Provider callbacks are accumulated per LLM call, while the
 		// ChannelReceiver expects accumulated text for the whole turn.
@@ -390,7 +431,15 @@ func (a *Agent) ProcessStreaming(ctx context.Context, req Request, onText chat.S
 			llmAccum = accumulated
 			emitStreamDelta(delta)
 		})
-		resp, updatedMsgs, err := a.complete(ctx, systemPrompt, msgs, tools, i == 0, streamOnText)
+		// #645: messages the user sent while the turn runs join it here.
+		if steered, got := appendSteered(ctx, msgs); got {
+			msgs = steered
+			a.reportTurnStatus(ctx, req, "⏳ reading your new message")
+		}
+		resp, updatedMsgs, err := a.complete(ctx, systemPrompt, msgs, turnStart, tools, i == 0, streamOnText)
+		if len(updatedMsgs) < len(msgs) {
+			turnStart = 0 // the gateway retry pruned the list to this turn
+		}
 		msgs = updatedMsgs
 		if err != nil {
 			return Result{
@@ -400,6 +449,7 @@ func (a *Agent) ProcessStreaming(ctx context.Context, req Request, onText chat.S
 		}
 		a.recordLLMUsage(ctx, activeProject, req.ChatID, resp)
 		audit.recordIteration(resp, modelFromResponse(resp), 0)
+		modelFallback = firstModelFallback(modelFallback, resp)
 		if len(resp.Choices) == 0 {
 			return Result{
 				Err:      fmt.Errorf("empty response from LLM"),
@@ -414,6 +464,17 @@ func (a *Agent) ProcessStreaming(ctx context.Context, req Request, onText chat.S
 		msgs = append(msgs, assistantMsg)
 
 		if len(assistantMsg.ToolCalls) == 0 {
+			// #645: as in Process; the stream says the answer is being
+			// reconsidered, so text already shown is not silently superseded
+			// (review cd48 F1).
+			if i+1 < a.maxIterations {
+				if steered, got := appendSteered(ctx, msgs); got {
+					msgs = steered
+					a.reportTurnStatus(ctx, req, "⏳ reading your new message")
+					emitStreamDelta("\n\n[Taking your new message into account…]\n\n")
+					continue
+				}
+			}
 			text := sanitizeCitationMarkers(stripReasoning(assistantMsg.Content))
 			if text == "" {
 				text = "Done."
@@ -437,33 +498,30 @@ func (a *Agent) ProcessStreaming(ctx context.Context, req Request, onText chat.S
 			case v.Refused:
 				text = v.Reason
 			}
+			markSteeredAnswered(ctx) // #645: steered messages got their answer
 			return Result{
 				Text:          text,
 				NewProject:    activeProject,
 				Messages:      msgs,
 				GuardWarnings: guardWarnings,
+				ModelFallback: modelFallback,
 			}
 		}
 
 		for _, tc := range assistantMsg.ToolCalls {
 			a.logger.Info().Str("tool", tc.Function.Name).Msg("dispatcher: executing tool")
-			a.reportTurnStatus(ctx, req, toolStatusLine(tc.Function.Name))
-
-			if onText != nil {
-				// Status marker bracketed in blank lines so the
-				// receiver renders it as its own paragraph instead
-				// of concatenating with the streamed text on either
-				// side. Pre-fix the bare "[running: create_task]"
-				// marker docked against the preceding/following
-				// stream chunks (e.g. "...create_task]ask to
-				// generate" — the "ask" is the "t" of "task" being
-				// adjacent without separator).
-				emitStreamDelta(fmt.Sprintf("\n\n%s\n\n", toolStatusMarker(tc.Function.Name)))
-			}
+			a.reportTurnStatus(ctx, req, progress.note(tc.Function.Name)) // #642: one summary line per turn
 
 			// The pre-tool and post-tool points (pipeline_points.go). The
 			// intent judge runs before execution and never refuses today; the
 			// output guard wraps execution and rewrites what the model sees.
+			// #642: a repeated status read is refused before it runs.
+			if refusal, refused := statusReads.check(tc.Function.Name, tc.Function.Arguments); refused {
+				logRefusedCall(a.logger, statusReads, tc.Function.Name)
+				audit.recordToolCall(tc.Function.Name, tc.Function.Arguments, refusal, "")
+				msgs = append(msgs, chat.Message{Role: "tool", Content: refusal, ToolCallID: tc.ID, Name: tc.Function.Name})
+				continue
+			}
 			in := ToolCallInput{Tool: tc.Function.Name, Arguments: tc.Function.Arguments, ActiveProject: activeProject, ChatID: req.ChatID}
 			if v := a.points().preTool.Run(ctx, in); v.Refused {
 				a.logger.Warn().Str("tool", tc.Function.Name).Str("participant", v.Participant).Msg("dispatcher: tool call refused before execution")
@@ -511,6 +569,7 @@ func (a *Agent) ProcessStreaming(ctx context.Context, req Request, onText chat.S
 		Text:          "I reached the tool step limit for this turn. Your request may need to be broken into smaller steps, or you can continue from where I left off.",
 		Messages:      msgs,
 		GuardWarnings: guardWarnings,
+		ModelFallback: modelFallback,
 	}
 }
 
@@ -522,15 +581,19 @@ func (a *Agent) ProcessStreaming(ctx context.Context, req Request, onText chat.S
 // slice that was actually sent; callers should continue appending to that.
 //
 // If onText is non-nil, the streaming API variant is used.
+// complete returns a list shorter than msgs only when the first-call gateway
+// retry pruned it to the last user turn; the turn loop relies on that to reset
+// its turn start to 0 (#646).
 func (a *Agent) complete(
 	ctx context.Context,
 	systemPrompt string,
 	msgs []chat.Message,
+	turnStart int,
 	tools []chat.Tool,
 	retryEligible bool,
 	onText chat.StreamCallback,
 ) (*chat.ChatResponse, []chat.Message, error) {
-	resp, err := a.doChatCall(ctx, systemPrompt, msgs, tools, onText)
+	resp, err := a.doChatCall(ctx, systemPrompt, msgs, turnStart, tools, onText)
 	if err == nil {
 		return resp, msgs, nil
 	}
@@ -553,7 +616,7 @@ func (a *Agent) complete(
 		Int("orig_msgs", len(msgs)).
 		Int("pruned_msgs", len(pruned)).
 		Msg("dispatcher: gateway error — retrying with pruned history")
-	retryResp, retryErr := a.doChatCall(ctx, systemPrompt, pruned, tools, onText)
+	retryResp, retryErr := a.doChatCall(ctx, systemPrompt, pruned, 0, tools, onText)
 	if retryErr != nil {
 		return nil, msgs, retryErr
 	}
@@ -566,12 +629,23 @@ func (a *Agent) doChatCall(
 	ctx context.Context,
 	systemPrompt string,
 	msgs []chat.Message,
+	turnStart int,
 	tools []chat.Tool,
 	onText chat.StreamCallback,
 ) (*chat.ChatResponse, error) {
-	callMsgs := make([]chat.Message, 0, len(msgs)+1)
+	// #646: large tool results the model has already had are sent shortened;
+	// the turn's own list and the saved session keep them whole.
+	sent, stat := compactTurnToolResults(msgs, turnStart)
+	if stat.results > 0 {
+		a.logger.Info().
+			Int("results", stat.results).
+			Int("runes_removed", stat.runesRemoved).
+			Strs("tools", stat.tools).
+			Msg("dispatcher: compacted earlier tool results")
+	}
+	callMsgs := make([]chat.Message, 0, len(sent)+1)
 	callMsgs = append(callMsgs, chat.Message{Role: "system", Content: systemPrompt})
-	callMsgs = append(callMsgs, msgs...)
+	callMsgs = append(callMsgs, sent...)
 	ctx = chat.WithRequestPriority(ctx, 0)
 	// Billed by recordLLMUsage; labelled so the log can tell a chat turn from
 	// a workflow step (ledger-completeness design §13).
@@ -601,97 +675,6 @@ func projectIDsFromRegistry(projects []*registry.Project) []string {
 	return out
 }
 
-// toolStatusMarker maps an internal tool identifier to the visible
-// in-stream "[emoji <verb>]" status marker.
-func toolStatusMarker(name string) string {
-	return fmt.Sprintf("[%s %s]", toolStatusEmoji(name), humanizeToolName(name))
-}
-
-func toolStatusEmoji(name string) string {
-	if strings.HasPrefix(name, "mcp__") {
-		return "🔌"
-	}
-	switch name {
-	case "memory_search", "memory_correct", "memory_forget":
-		return "🧠"
-	case "create_task":
-		return "📋"
-	case "send_artifact":
-		return "📎"
-	case "send_message":
-		return "✉️"
-	case "summarize_thread":
-		return "🧵"
-	case "get_conversation_window":
-		return "💬"
-	case "file_read", "file_write", "file_edit", "read_many_files":
-		return "📄"
-	case "run_shell":
-		return "⌨️"
-	case "grep":
-		return "🔎"
-	case "glob":
-		return "🗂️"
-	case "current_time":
-		return "🕒"
-	}
-	return "⏳"
-}
-
-// humanizeToolName maps internal tool identifiers to a short verb
-// phrase suitable for the in-stream status marker
-// the chat surface shows mid-turn. Unknown tools fall back to the
-// raw name with underscores swapped for spaces — readable enough
-// that adding a new tool doesn't require a same-PR humanizer update.
-//
-// MCP-bridge tool names have the shape `mcp__<server>__<tool>`;
-// they get a special-case "using <server>/<tool>" rendering so the
-// origin server is visible to the operator.
-func humanizeToolName(name string) string {
-	if strings.HasPrefix(name, "mcp__") {
-		rest := strings.TrimPrefix(name, "mcp__")
-		if idx := strings.Index(rest, "__"); idx > 0 {
-			return fmt.Sprintf("using %s/%s", rest[:idx], rest[idx+2:])
-		}
-		return "using " + rest
-	}
-	switch name {
-	case "create_task":
-		return "creating task"
-	case "send_artifact":
-		return "sending artifact"
-	case "send_message":
-		return "sending message"
-	case "memory_search":
-		return "searching memory"
-	case "memory_correct":
-		return "correcting memory"
-	case "memory_forget":
-		return "evicting memory chunk"
-	case "summarize_thread":
-		return "summarizing thread"
-	case "get_conversation_window":
-		return "loading conversation"
-	case "file_read":
-		return "reading file"
-	case "file_write":
-		return "writing file"
-	case "file_edit":
-		return "editing file"
-	case "read_many_files":
-		return "reading files"
-	case "run_shell":
-		return "running shell command"
-	case "grep":
-		return "searching files"
-	case "glob":
-		return "listing files"
-	case "current_time":
-		return "checking time"
-	}
-	return strings.ReplaceAll(name, "_", " ")
-}
-
 // trimToLastUserTurn returns a copy of msgs containing only messages from the
 // most recent user turn onward. If no user message is present, msgs is returned
 // unchanged (the caller treats that as "cannot prune further").
@@ -704,4 +687,14 @@ func trimToLastUserTurn(msgs []chat.Message) []chat.Message {
 		}
 	}
 	return msgs
+}
+
+// firstModelFallback keeps the turn's first fail-over: once a response came
+// from the twin, a later one in the same turn does not replace it
+// (nonswarm-llm-fallback design §11.2(c), GitHub #620).
+func firstModelFallback(seen *ModelFallback, resp *chat.ChatResponse) *ModelFallback {
+	if seen != nil || resp == nil || resp.FallbackFrom == "" {
+		return seen
+	}
+	return &ModelFallback{From: resp.FallbackFrom, To: resp.Model}
 }

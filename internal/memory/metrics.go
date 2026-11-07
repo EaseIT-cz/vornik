@@ -158,6 +158,10 @@ type Metrics struct {
 	// outcome: ok, no_clone, no_branch, timeout, failed.
 	ProvenanceFetchTotal *prometheus.CounterVec
 
+	// MirrorFilesTotal counts the repository mirror's files per pass, by
+	// outcome (#639; design 22, "Amendment 2026-11-04 (#639)", M4).
+	MirrorFilesTotal *prometheus.CounterVec
+
 	// URL liveness recheck — labelled by project + alive=true|false.
 	// Drives operator dashboards for "dead-URL rate" and powers the
 	// alert "any chunk's URL just went dead" so memory hits stay
@@ -585,6 +589,15 @@ func NewMetrics(registerer prometheus.Registerer) *Metrics {
 				Subsystem: memSubsystem,
 				Name:      "provenance_fetch_total",
 				Help:      "Fetches of the trusted branch into a daemon-only provenance clone (memory.provenance_clone), by outcome: ok, no_clone, no_branch, timeout, failed (GitHub #499).",
+			},
+			[]string{"project_id", "outcome"},
+		),
+		MirrorFilesTotal: promauto.With(registerer).NewCounterVec(
+			prometheus.CounterOpts{
+				Namespace: memNamespace,
+				Subsystem: memSubsystem,
+				Name:      "mirror_files_total",
+				Help:      "Files the repository mirror (memory.mirror_paths) examined per pass, by outcome: ingested, unchanged, quarantined, terminal, not_canonical, not_markdown, not_regular, never_marked, bad_front_matter, has_exclusions, too_large, capped, failed, no_clone (GitHub #639).",
 			},
 			[]string{"project_id", "outcome"},
 		),

@@ -662,7 +662,7 @@ UPDATE project_memory_chunks
 // memoryfirewall.PolicyDigest before invoking this method).
 //
 // Phase D follow-on of the Policy-Aware Memory Firewall (LLD §
-// "API — POST /api/v1/admin/memory/policy/chunks/{id}"). Wires
+// "API — POST /api/v1/memory/policy/chunks/{id}"). Wires
 // the persistence side of per-chunk policy editing; the API
 // handler + audit-row emission live in the api package.
 //
@@ -1737,11 +1737,34 @@ type ScopeFilter struct {
 	RepoScope string
 	Strict    bool
 	Authority string
+	// SourcePrefixes, when set, admits only chunks whose source_name begins
+	// with one of them, matched literally (#614 C3, architect design §4.2).
+	// A prefix persistence.ValidSourcePrefix refuses admits nothing.
+	SourcePrefixes []string
+	// MaxSensitivity caps the tier a chunk may carry (#618, firewall design
+	// "Amendment 2026-11-06 (#618)"): one of the SensitivityCap values, or
+	// empty for no cap. An unknown value admits nothing.
+	MaxSensitivity string
+	// PublicPrefixes are the daemon's memory.public_source_prefixes: a
+	// NULL-tier chunk under one of them that is repo-scoped and
+	// provenance-verified is derived public. They come from the searcher's
+	// config, never from a request, and serve only MaxSensitivity.
+	PublicPrefixes []string
 }
+
+// Sensitivity caps for ScopeFilter.MaxSensitivity (#618). They are the wire
+// values of a role's memorySearch.maxSensitivity.
+const (
+	SensitivityCapPublic       = "public"
+	SensitivityCapInternal     = "internal"
+	SensitivityCapConfidential = "confidential"
+)
 
 // IsZero reports whether the filter narrows nothing, so a search may take
 // its unscoped statement.
-func (sf ScopeFilter) IsZero() bool { return sf.RepoScope == "" && sf.Authority == "" }
+func (sf ScopeFilter) IsZero() bool {
+	return sf.RepoScope == "" && sf.Authority == "" && len(sf.SourcePrefixes) == 0 && sf.MaxSensitivity == ""
+}
 
 // sql renders the filter's WHERE fragment, its repo-scope parameter at
 // paramIdx.
@@ -1764,7 +1787,67 @@ func (sf ScopeFilter) sql(paramIdx int) string {
 	default:
 		clause += " AND FALSE"
 	}
-	return clause
+	return clause + sourcePrefixSQL(sf.SourcePrefixes) + sensitivityCapSQL(sf.MaxSensitivity, sf.PublicPrefixes)
+}
+
+// sensitivityCapSQL renders the sensitivity cap (#618). A NULL tier ranks as
+// confidential unless the chunk is derived public; credentials are excluded
+// under any cap (the classifier bridge makes them restricted); an unknown cap
+// admits nothing.
+func sensitivityCapSQL(maxTier string, publicPrefixes []string) string {
+	const noCredentials = " AND content_class IS DISTINCT FROM 'credentials'"
+	switch maxTier {
+	case "":
+		return ""
+	case SensitivityCapPublic:
+		return noCredentials + " AND (sensitivity_tier = 'public' OR " + derivedPublicSQL(publicPrefixes) + ")"
+	case SensitivityCapInternal:
+		return noCredentials + " AND (sensitivity_tier IN ('public', 'internal') OR " + derivedPublicSQL(publicPrefixes) + ")"
+	case SensitivityCapConfidential:
+		return noCredentials + " AND (sensitivity_tier IS NULL OR sensitivity_tier <> 'restricted')"
+	default:
+		return " AND FALSE"
+	}
+}
+
+// derivedPublicSQL is the proof that a NULL-tier chunk is published: it is
+// repo-scoped, provenance-verified (its bytes are the blob at its path on the
+// trusted branch), and under a public prefix. A path alone is a claim, so the
+// prefix never counts without the stamp. No prefixes, or one invalid prefix,
+// derive nothing; prefixes are inlined under the sourcePrefixSQL rules.
+func derivedPublicSQL(prefixes []string) string {
+	if len(prefixes) == 0 {
+		return "FALSE"
+	}
+	terms := make([]string, 0, len(prefixes))
+	for _, p := range prefixes {
+		if !persistence.ValidSourcePrefix(p) {
+			return "FALSE"
+		}
+		terms = append(terms, "source_name LIKE '"+persistence.EscapeLike(p)+"%' ESCAPE '\\'")
+	}
+	return "(sensitivity_tier IS NULL AND repo_scope IS NOT NULL AND validation_status = 'verified' AND validator_role IN ('" +
+		ValidatorRoleProvenance + "', '" + ValidatorRoleProvenanceForgeAPI + "') AND (" + strings.Join(terms, " OR ") + "))"
+}
+
+// sourcePrefixSQL renders the source-prefix predicate (#614 C3). The
+// prefixes are inlined as literals, not bound, so the eight statements keep
+// their parameter numbering; that is safe only because each prefix passes
+// persistence.ValidSourcePrefix first (no quote, backslash or wildcard
+// survives it), and EscapeLike still makes '_' and '.' literal. One invalid
+// prefix makes the whole filter admit nothing.
+func sourcePrefixSQL(prefixes []string) string {
+	if len(prefixes) == 0 {
+		return ""
+	}
+	terms := make([]string, 0, len(prefixes))
+	for _, p := range prefixes {
+		if !persistence.ValidSourcePrefix(p) {
+			return " AND FALSE"
+		}
+		terms = append(terms, "source_name LIKE '"+persistence.EscapeLike(p)+"%' ESCAPE '\\'")
+	}
+	return " AND (" + strings.Join(terms, " OR ") + ")"
 }
 
 // HybridSearchWithEpochs is HybridSearchWithEpochsFiltered with a scope and

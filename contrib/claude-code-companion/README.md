@@ -51,6 +51,28 @@ plugs in without any vornik-side change.
     plugin's data directory.
   - **Tuning:** `VORNIK_NUDGE=off` disables it. `VORNIK_NUDGE_THRESHOLD`
     (default 3) and `VORNIK_NUDGE_RECALL_WINDOW_S` (default 900) tune it.
+- **Just-in-time hints** (`hooks/hints.sh`, since 0.50.0). These run on
+  `PostToolUse` and `PostToolUseFailure` for every tool, and on
+  `UserPromptSubmit`.
+  - **When they fire:** after a `git commit` (send the diff for review),
+    after an edit to a design document (ingest it), and after a test run
+    that failed (recall the symptom). A design edit counts whether it is
+    made with `Write`/`Edit` or by a shell command (a heredoc, a redirection,
+    `tee`, `sed -i`, `cp`, `mv`), which the hook reads from the command text
+    and never runs. The hints come from the project's
+    catalogue, which the daemon serves; the bundle carries a copy in
+    `hooks/hints.json`.
+  - **Limits:** each hint fires at most once per session, never blocks a
+    tool call, and makes no network call on a tool event.
+  - **What it stores:** hint ids and counters only, never a command, a path
+    or output.
+  - **What it reports:** at the next session start, for each earlier
+    session's hint, whether the model called the hint's tool within 10
+    calls. A hint followed in fewer than 2 of its last 10 firings turns off
+    for 14 days.
+  - **Tuning:** `VORNIK_HINTS=off` turns every hint off. Per project,
+    `companion.hints: off` or `companion.mute: [<id>]` in the project
+    config; `vornikctl companion hints -p <project>` lists them.
 - **`recall_hint` on every `delegate`** — when the key carries
   `memory_read`, the daemon runs a bounded semantic-neighbour check
   on the delegate prompt and attaches the strongest hits to the

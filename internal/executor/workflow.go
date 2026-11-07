@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -19,6 +20,8 @@ import (
 	"vornik.io/vornik/internal/registry"
 	"vornik.io/vornik/internal/stepid"
 	"vornik.io/vornik/internal/stepoutcome"
+	"vornik.io/vornik/internal/taskcancel"
+	"vornik.io/vornik/internal/textutil"
 )
 
 // errExecutionPaused is returned when an execution is paused (e.g. awaiting approval
@@ -127,6 +130,28 @@ func (e *Executor) executeWorkflowAttempt(ctx context.Context, task *persistence
 	// in-memory loop would have; empty for every other execution.
 	lastResultMessage = autoResumePreviousMessage(state, completedSteps)
 
+	// A resume after a call_project step reads the call's outcome before
+	// running anything (GitHub #636, #664; inter-project orchestration
+	// design, amendment 2026-11-06).
+	if state.CallResume != nil {
+		out := e.applyCallResume(ctx, plan, &state)
+		switch out.kind {
+		case callResumeOnFail:
+			lastResultMessage = out.err.Error()
+			lastResultErr = out.err
+			currentStepID = e.effectiveOnFail(task, plan, execution, out.stepID, out.onFail)
+		case callResumeFail:
+			return "", nil, completedSteps, out.err
+		case callResumePause:
+			_ = e.taskRepo.UpdateStatus(ctx, task.ID, persistence.TaskStatusWaitingForChildren)
+			_ = e.execRepo.UpdateStatus(ctx, execution.ID, persistence.ExecutionStatusPaused)
+			return "", nil, completedSteps, errExecutionPaused
+		}
+		if err := e.saveCheckpoint(ctx, execution, currentStepID, completedSteps, state); err != nil {
+			return "", nil, completedSteps, err
+		}
+	}
+
 	// Loop protection: track how many times each step is visited.
 	maxVisits := plan.workflow.MaxStepVisits
 	if maxVisits <= 0 {
@@ -208,6 +233,13 @@ func (e *Executor) executeWorkflowAttempt(ctx context.Context, task *persistence
 		if iterations > maxIterations {
 			return "", nil, completedSteps, fmt.Errorf("workflow exceeded %d total iterations — terminating", maxIterations)
 		}
+
+		// Entering a step clears its readable result (GitHub #632, F2): success
+		// writes it again (recordStepResult); failure, a pause or a cancel
+		// leaves it absent, so a later ${outputs.<step>.<field>} fails closed
+		// instead of reading the previous run as current. The checkpoint
+		// written after the step carries the absence.
+		delete(state.StepResults, currentStepID)
 
 		// Per-step loop protection: fail if a step is visited too many times.
 		visitCount[currentStepID]++
@@ -663,10 +695,7 @@ func (e *Executor) executeWorkflowAttempt(ctx context.Context, task *persistence
 			// ${outputs.<step>.<field>} interpolator. Stored
 			// alongside LastResult so the same checkpoint write
 			// covers both (no extra DB round-trip).
-			if state.StepResults == nil {
-				state.StepResults = map[string]json.RawMessage{}
-			}
-			state.StepResults[currentStepID] = stepResultJSON(resultBytes)
+			recordStepResult(&state, currentStepID, resultBytes)
 			// Checkpoint the handoff this step just gave the next one, so an
 			// automatic resume can restage it (GitHub #123, design §8.3 D4).
 			// stepArtifacts is (task inputs ⊕ this step's tagged outputs).
@@ -765,6 +794,7 @@ func (e *Executor) executeWorkflowAttempt(ctx context.Context, task *persistence
 			state.PlanSteps = nil
 			state.PlanIndex = 0
 			state.LastResult = stepResultJSON(result)
+			recordStepResult(&state, currentStepID, result) // #632 F1
 			state.ApprovalPendingStep = ""
 			state.ApprovalGrantedStep = ""
 			if err := e.saveCheckpoint(ctx, execution, nextStepID, completedSteps, state); err != nil {
@@ -813,6 +843,7 @@ func (e *Executor) executeWorkflowAttempt(ctx context.Context, task *persistence
 				"initial_task_id": result.InitialTaskID,
 				"skipped":         result.Skipped,
 			})
+			recordStepResult(&state, currentStepID, state.LastResult) // #632 F1
 			if err := e.saveCheckpoint(ctx, execution, step.OnSuccess, completedSteps, state); err != nil {
 				return "", nil, completedSteps, err
 			}
@@ -863,6 +894,7 @@ func (e *Executor) executeWorkflowAttempt(ctx context.Context, task *persistence
 				"callee_task_id":        result.CalleeTaskID,
 			})
 			state.PausedReason = result.PauseReason
+			recordCallResume(&state, currentStepID, result)
 			if err := e.saveCheckpoint(ctx, execution, nextStep, completedSteps, state); err != nil {
 				return "", nil, completedSteps, err
 			}
@@ -921,6 +953,7 @@ func (e *Executor) executeWorkflowAttempt(ctx context.Context, task *persistence
 			completedSteps = append(completedSteps, currentStepID)
 			if buf, mErr := json.Marshal(result); mErr == nil {
 				state.LastResult = buf
+				recordStepResult(&state, currentStepID, buf) // #632 F1
 			} else {
 				state.LastResult = []byte(`{}`)
 			}
@@ -962,7 +995,6 @@ func (e *Executor) executeWorkflowAttempt(ctx context.Context, task *persistence
 					systemChain.Reset()
 					lastResultMessage = fmt.Sprintf("system step %s failed: %s", step.Handler, err.Error())
 					state.LastResult = errorResultJSON(err)
-					delete(state.StepResults, currentStepID) // as on the handler-error path below (#631)
 					if saveErr := e.saveCheckpoint(ctx, execution, step.OnFail, completedSteps, state); saveErr != nil {
 						return "", nil, completedSteps, saveErr
 					}
@@ -1021,9 +1053,6 @@ func (e *Executor) executeWorkflowAttempt(ctx context.Context, task *persistence
 					systemChain.Reset()
 					lastResultMessage = fmt.Sprintf("system step %s failed: %s", step.Handler, sysErr.Error())
 					state.LastResult = errorResultJSON(sysErr)
-					// A failed RE-RUN must not leave the previous run's output
-					// readable as if it were current (#631, design E1).
-					delete(state.StepResults, currentStepID)
 					if saveErr := e.saveCheckpoint(ctx, execution, step.OnFail, completedSteps, state); saveErr != nil {
 						return "", nil, completedSteps, saveErr
 					}
@@ -1048,25 +1077,10 @@ func (e *Executor) executeWorkflowAttempt(ctx context.Context, task *persistence
 			completedSteps = append(completedSteps, currentStepID)
 			if len(sysResult.Result) > 0 {
 				state.LastResult = stepResultJSON(sysResult.Result)
-				// Mirror into the per-step map ${outputs.<step>.<field>} reads,
-				// exactly as the agent success path does, so a LATER agent can
-				// read this step's fields; the chain below reaches only the next
-				// one. Same checkpoint write as LastResult.
-				//
-				// CUSTOMER-REPORTED 2026-11-03 (GitHub #631): without this, a
-				// prompt reference to forge.fetch_diff passed validation and
-				// failed every run, and the adjudicator after the reviewer never
-				// saw the diff. An empty or failed result writes no entry, so a
-				// reference to it still fails closed.
-				//
-				// Design: 2026-09-03-system-step-output-reaches-the-next-agent-design.md,
-				// Amendment 2026-11-03, E1.
-				if state.StepResults == nil {
-					state.StepResults = map[string]json.RawMessage{}
-				}
-				// A copy, not an alias of LastResult's bytes: the two are
-				// repaired and reassigned independently.
-				state.StepResults[currentStepID] = append(json.RawMessage(nil), state.LastResult...)
+				// Readable by ANY later agent through ${outputs.<step>.<field>};
+				// the chain below reaches only the next one (GitHub #631; one
+				// write for every recording type since #632, F1).
+				recordStepResult(&state, currentStepID, sysResult.Result)
 				// Carry the handler's own rendering to the NEXT agent step, the
 				// same way an agent step's message is carried (see the agent
 				// success path above).
@@ -1093,9 +1107,6 @@ func (e *Executor) executeWorkflowAttempt(ctx context.Context, task *persistence
 				lastResultMessage = systemChain.Render()
 			} else {
 				state.LastResult = []byte(`{}`)
-				// Nothing to read, so no entry, including on a re-run whose
-				// earlier run did write one (#631, design E1).
-				delete(state.StepResults, currentStepID)
 				// An empty result CONTRIBUTES NOTHING and no longer clears.
 				//
 				// It used to clear, correctly: without accumulation, leaving
@@ -1205,6 +1216,9 @@ type agentStepResult struct {
 	DelegatedTasks   []delegatedTaskSpec `json:"delegatedTasks"`
 	DelegationMode   string              `json:"delegationMode"`
 	SelectedWorkflow string              `json:"selected_workflow"`
+	// Reason is the router's one sentence; the schema has always required
+	// it, and the "none" answer reports it (#641).
+	Reason string `json:"reason"`
 }
 
 // pauseAwaitingChildren flips the task + execution to the awaiting-children
@@ -1290,10 +1304,23 @@ func (e *Executor) handleSelectedWorkflowRoute(
 	if isDelegatorStep(step) || len(result.DelegatedTasks) > 0 {
 		return false, "", nil, completedSteps, nil
 	}
+	// "No candidate fits" is an answer (delegation-engine design, #641):
+	// final on the first answer, no corrective re-run, no child.
+	if routeAnsweredNoFit(result, plan.project.AdaptiveCandidateWorkflows) {
+		return true, "", nil, completedSteps, e.routeNoFitFailure(task, plan.project, result.Reason)
+	}
 	badPick := result.SelectedWorkflow != "" && !slices.Contains(plan.project.AdaptiveCandidateWorkflows, result.SelectedWorkflow)
 	emptyPick := result.SelectedWorkflow == ""
+	// usedStepID is the attempt whose answer the delegation uses: the first,
+	// or the corrective re-run (GitHub #649).
+	usedStepID := currentStepID
 	if badPick || emptyPick {
 		retryStepID := currentStepID + "_route_retry"
+		// The rejected answer is the route model's own failure, charged to it
+		// rather than left for the orphan sweep (outcome-quality design,
+		// amendment 2026-11-05).
+		e.rejectRoutePick(ctx, execution.ID, currentStepID, result.SelectedWorkflow, plan.project.AdaptiveCandidateWorkflows)
+		usedStepID = retryStepID
 		retryReason := "out_of_list"
 		if emptyPick {
 			retryReason = "empty_selected_workflow"
@@ -1316,18 +1343,36 @@ func (e *Executor) handleSelectedWorkflowRoute(
 		lastResult = retryBytes
 		completedSteps = append(completedSteps, retryStepID)
 		*result = agentStepResult{}
+		// A re-run whose answer is not used is not ok either: without these
+		// the failure path's sweep would finalise it ok, and the pair would
+		// read "the second attempt fixed it" (review ea30 N2).
 		if unmarshalErr := json.Unmarshal(retryBytes, result); unmarshalErr != nil {
+			e.finalizePendingOutcome(ctx, execution.ID, retryStepID, string(stepoutcome.ParseError),
+				stepoutcome.ClassParseInvalidJSON, unmarshalErr.Error(), nil)
 			return true, "", nil, completedSteps, fmt.Errorf("strict adaptive: corrective re-run produced unparseable result: %w", unmarshalErr)
 		}
 		if result.SelectedWorkflow == "" {
+			e.rejectRoutePick(ctx, execution.ID, retryStepID, "", plan.project.AdaptiveCandidateWorkflows)
 			return true, "", nil, completedSteps, fmt.Errorf("strict adaptive: corrective re-run did not emit selected_workflow")
+		}
+		if routeAnsweredNoFit(result, plan.project.AdaptiveCandidateWorkflows) {
+			return true, "", nil, completedSteps, e.routeNoFitFailure(task, plan.project, result.Reason)
 		}
 	}
 
+	if !slices.Contains(plan.project.AdaptiveCandidateWorkflows, result.SelectedWorkflow) {
+		// Reached only by a re-run that also picked outside the candidates;
+		// delegateSelectedWorkflow refuses it below.
+		e.rejectRoutePick(ctx, execution.ID, usedStepID, result.SelectedWorkflow, plan.project.AdaptiveCandidateWorkflows)
+	}
 	chosen, err := e.delegateSelectedWorkflow(ctx, task, plan.project, result.SelectedWorkflow)
 	if err != nil {
 		return true, "", nil, completedSteps, fmt.Errorf("strict adaptive: %w", err)
 	}
+	// The child exists: the delegation has used the answer. Finalised now,
+	// before the pause, so a child that finishes at once cannot let the
+	// parent's terminal sweep reach the row first (review df9e F5).
+	e.finalizeDelegatingStep(ctx, execution.ID, usedStepID)
 	e.logger.Info().
 		Str("task_id", task.ID).
 		Str("execution_id", execution.ID).
@@ -1339,6 +1384,24 @@ func (e *Executor) handleSelectedWorkflowRoute(
 		return true, "", nil, completedSteps, pErr
 	}
 	return true, lastContainerID, lastResult, completedSteps, nil
+}
+
+// rejectRoutePick records a route answer outside the candidates (or empty)
+// as the route model's schema violation (GitHub #649).
+func (e *Executor) rejectRoutePick(ctx context.Context, executionID, stepID, pick string, candidates []string) {
+	e.finalizePendingOutcome(ctx, executionID, stepID, string(stepoutcome.SchemaViolation),
+		stepoutcome.ClassRouteOutsideCandidates,
+		textutil.TruncateRunes(fmt.Sprintf("picked %q; candidates %v", pick, candidates), 500), nil)
+}
+
+// finalizeDelegatingStep records that the delegation consumed the step's
+// output: it was parsed, checked and used to create the children, so the
+// step is ok (outcome-quality design, "Amendment 2026-11-05 — the
+// delegation consumes the step that delegates", GitHub #649). Without it the
+// row stayed pending until the orphan sweep, and doctor model_health read
+// every route model as 100% failing.
+func (e *Executor) finalizeDelegatingStep(ctx context.Context, executionID, stepID string) {
+	e.finalizePendingOutcome(ctx, executionID, stepID, string(stepoutcome.OK), "", "", nil)
 }
 
 // handleDelegatedTasks creates the child tasks an agent requested via
@@ -1366,6 +1429,7 @@ func (e *Executor) handleDelegatedTasks(ctx context.Context, task *persistence.T
 	if err := e.createDelegatedTasks(ctx, task, result.DelegatedTasks, parseDelegationMode(result.DelegationMode)); err != nil {
 		return true, fmt.Errorf("failed to create delegated tasks: %w", err)
 	}
+	e.finalizeDelegatingStep(ctx, execution.ID, currentStepID)
 	if err := e.pauseAwaitingChildren(ctx, task, execution, currentStepID, completedSteps, state); err != nil {
 		return true, err
 	}
@@ -3024,6 +3088,22 @@ func (e *Executor) ingestOutputArtifacts(ctx context.Context, task *persistence.
 	if e.memoryIndexer == nil {
 		return
 	}
+	// ingest_output_artifacts: false (architect design §4.2 C6 and §4.8,
+	// #614): the workflow's outputs never enter memory, so one A2A caller's
+	// run cannot feed the next caller's retrieval. A workflow the registry no
+	// longer resolves (removed by a reload while the task ran) fails closed:
+	// its flag cannot be read, and losing one run's ingest is the cheaper
+	// mistake.
+	if e.workflows != nil && execution.WorkflowID != "" {
+		wf := e.workflows.GetWorkflow(execution.WorkflowID)
+		if wf == nil || !wf.WantsOutputIngest() {
+			if wf == nil {
+				e.logger.Warn().Str("task_id", task.ID).Str("workflow_id", execution.WorkflowID).
+					Msg("memory: skipped output ingest — the workflow no longer resolves")
+			}
+			return
+		}
+	}
 
 	// Producer-success gate (LLD 2026-07-12-rag-ingest-producer-success-gate
 	// §12): ingest a task's OUTPUT artifacts only when the task reached
@@ -4212,7 +4292,9 @@ func (e *Executor) synthesizeResumeResult(ctx context.Context, children []*persi
 	case 0:
 		// Children carried no parseable message — report status instead of an
 		// empty outcome (don't strand the dispatcher with nothing).
-		msg = fmt.Sprintf("%d delegated subtask(s) completed", len(children))
+		// Each status is counted: "completed" for a cancelled child was the
+		// #641 false success.
+		msg = childStatusSummary(children)
 	case 1:
 		msg = messages[0]
 	default:
@@ -4223,6 +4305,43 @@ func (e *Executor) synthesizeResumeResult(ctx context.Context, children []*persi
 		Children []childOutcome `json:"children,omitempty"`
 	}{Message: msg, Children: outcomes})
 	return out
+}
+
+// childStatusSummary counts delegated children by status, completed first:
+// "2 delegated subtask(s): 1 completed, 1 cancelled" (#641).
+func childStatusSummary(children []*persistence.Task) string {
+	counts := map[persistence.TaskStatus]int{}
+	var order []persistence.TaskStatus
+	for _, ch := range children {
+		if counts[ch.Status] == 0 {
+			order = append(order, ch.Status)
+		}
+		counts[ch.Status]++
+	}
+	// A total order: completed, then failed, then cancelled, then the rest
+	// alphabetically (review 0c05 F3).
+	rank := func(s persistence.TaskStatus) int {
+		switch s {
+		case persistence.TaskStatusCompleted:
+			return 0
+		case persistence.TaskStatusFailed:
+			return 1
+		case persistence.TaskStatusCancelled:
+			return 2
+		}
+		return 3
+	}
+	sort.Slice(order, func(i, j int) bool {
+		if rank(order[i]) != rank(order[j]) {
+			return rank(order[i]) < rank(order[j])
+		}
+		return order[i] < order[j]
+	})
+	parts := make([]string, 0, len(order))
+	for _, s := range order {
+		parts = append(parts, fmt.Sprintf("%d %s", counts[s], strings.ToLower(string(s))))
+	}
+	return fmt.Sprintf("%d delegated subtask(s): %s", len(children), strings.Join(parts, ", "))
 }
 
 func (e *Executor) checkParentUnblock(ctx context.Context, task *persistence.Task) {
@@ -4281,6 +4400,11 @@ func (e *Executor) unblockParentIfChildrenDone(ctx context.Context, parentID str
 	allDone := true
 	anyFailed := false
 	failedChildIDs := make([]string, 0)
+	// #641: a cancelled child is not a completed one. Counted so a parent
+	// whose every child was cancelled ends CANCELLED instead of resuming to
+	// COMPLETED (design 10-delegation-engine.md §4).
+	anyCompleted := false
+	cancelledChildIDs := make([]string, 0)
 	for _, child := range children {
 		switch child.Status {
 		case persistence.TaskStatusCompleted,
@@ -4295,8 +4419,23 @@ func (e *Executor) unblockParentIfChildrenDone(ctx context.Context, parentID str
 			// sat in WAITING_FOR_CHILDREN forever
 			// (task_20260521111852_8016a4a902b4f959, 2026-05-21).
 			if child.Status == persistence.TaskStatusFailed {
+				// A failed cross-project callee whose caller paused with
+				// CallResume re-queues the caller instead of bubbling up: the
+				// resume reads the failed CPC and takes the call step's
+				// on_fail (GitHub #664; inter-project orchestration design,
+				// amendment 2026-11-06, rule 3). A caller paused before the
+				// amendment, and an in-project child, keep the bubble-up.
+				if child.CrossProjectCallID != nil && e.parentAwaitsCallResume(ctx, parent.ID) {
+					continue
+				}
 				anyFailed = true
 				failedChildIDs = append(failedChildIDs, child.ID)
+			}
+			if child.Status == persistence.TaskStatusCompleted || child.Status == persistence.TaskStatusClosed {
+				anyCompleted = true
+			}
+			if child.Status == persistence.TaskStatusCancelled {
+				cancelledChildIDs = append(cancelledChildIDs, child.ID)
 			}
 		default:
 			allDone = false
@@ -4362,6 +4501,33 @@ func (e *Executor) unblockParentIfChildrenDone(ctx context.Context, parentID str
 
 	if anyFailed {
 		e.bubbleUpChildFailure(ctx, parent, failedChildIDs, nil)
+	} else if !anyCompleted && len(cancelledChildIDs) > 0 {
+		// #641: every child was cancelled (none completed, none failed).
+		// Resuming would let the resume guard report the cancelled work as
+		// done. The parent ends CANCELLED, naming the children.
+		errMsg := fmt.Sprintf("every delegated subtask was cancelled: %v", cancelledChildIDs)
+		// Through the one CANCELLED primitive (taskcancel), whose teardown
+		// also drives this parent's own parent's unblock.
+		outcome, cerr := taskcancel.CancelWith(ctx, e.taskRepo, e, parent.ID,
+			[]persistence.TaskStatus{persistence.TaskStatusWaitingForChildren},
+			persistence.TransitionOpts{LastError: &errMsg})
+		moved := outcome.Transitioned
+		if cerr != nil {
+			e.logger.Warn().Err(cerr).Str("parent_task_id", parent.ID).Msg("task: cancelling the parent of cancelled subtasks failed")
+		}
+		e.logger.Info().
+			Str("parent_task_id", parent.ID).
+			Strs("cancelled_child_task_ids", cancelledChildIDs).
+			Bool("transitioned", moved).
+			Str("decision_path", "checkParentUnblock.allCancelled").
+			Msg("task: parent → CANCELLED, every delegated subtask was cancelled")
+		// The chat that asked is waiting on this parent's follow-up: tell it,
+		// as a failure, so it never reads the cancel as done.
+		if moved {
+			if after, gerr := e.taskRepo.Get(ctx, parent.ID); gerr == nil && after != nil {
+				e.notifyCompletion(ctx, after, false, errMsg, true)
+			}
+		}
 	} else {
 		moved, _ := e.taskRepo.TransitionConditional(ctx, parent.ID,
 			[]persistence.TaskStatus{persistence.TaskStatusWaitingForChildren},
@@ -4373,6 +4539,21 @@ func (e *Executor) unblockParentIfChildrenDone(ctx context.Context, parentID str
 				Msg("task: parent unblock lost the race — already handled by a concurrent child finaliser")
 		}
 	}
+}
+
+// parentAwaitsCallResume reports whether the parent's paused execution
+// carries a CallResume, i.e. it paused at a call_project step under the
+// amendment of 2026-11-06 (#664). False when it cannot be read: the old
+// bubble-up is the safe default.
+func (e *Executor) parentAwaitsCallResume(ctx context.Context, parentID string) bool {
+	if e.execRepo == nil {
+		return false
+	}
+	exec, err := e.execRepo.GetByTaskID(ctx, parentID)
+	if err != nil || exec == nil {
+		return false
+	}
+	return loadExecutionState(exec).CallResume != nil
 }
 
 // loadParallelJoinDescriptor returns the parent execution's ParallelJoin

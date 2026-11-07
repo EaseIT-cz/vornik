@@ -782,6 +782,11 @@ func isCompanionAllowedPath(p string) bool {
 	switch p {
 	case "/api/v1/mcp/companion", "/api/v1/capabilities":
 		return true
+	case "/api/v1/companion/hints", "/api/v1/companion/hints/outcomes":
+		// The hooks' catalogue fetch and outcome upload (#634; companion
+		// hardening design §13.8, §13.10 S3): exact paths, the project
+		// taken from the key. The report beside them is operator-only.
+		return true
 	}
 	return isCompanionLivePath(p)
 }
@@ -836,6 +841,16 @@ func ContextWithAPIKeyForTesting(ctx context.Context, key string) context.Contex
 		ctx = context.Background()
 	}
 	return context.WithValue(ctx, apiKeyKey, key)
+}
+
+// ContextWithAPIKeyIDForTesting stamps the api_keys.id of a matched database
+// key the way the middleware does (APIKeyIDFromContext reads it). Test seam
+// only.
+func ContextWithAPIKeyIDForTesting(ctx context.Context, id string) context.Context {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	return context.WithValue(ctx, apiKeyIDKey, id)
 }
 
 func ContextWithScopeForTesting(ctx context.Context, projects ...string) context.Context {

@@ -110,5 +110,16 @@ func (h *Handler) taskInScope(ctx context.Context, agent *PublishedAgent, taskID
 	if err != nil || task == nil {
 		return false
 	}
-	return task.ProjectID == agent.ProjectID
+	return taskBelongsToAgent(task, agent)
+}
+
+// taskBelongsToAgent is the one scope rule for a task reached through an A2A
+// agent's routes: the task is in the agent's project AND ran the agent's
+// workflow. Project alone let a caller read a task of another workflow (one
+// with an answer policy, through one without), or any task of the project
+// (security review of e729b6d04, finding 1; #614). A task with no recorded
+// workflow was not submitted through an agent and is out of scope.
+func taskBelongsToAgent(task *persistence.Task, agent *PublishedAgent) bool {
+	return task != nil && agent != nil && task.ProjectID == agent.ProjectID &&
+		task.WorkflowID != nil && *task.WorkflowID == agent.WorkflowID
 }

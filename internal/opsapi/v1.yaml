@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: Vornik operations API
-  version: 1.2.0
+  version: 1.3.0
   description: |
     The operations a hosting control plane calls on a managed Vornik instance,
     over the instance's operations listener, authenticated with the
@@ -375,7 +375,7 @@ paths:
           application/json:
             schema:
               type: object
-              required: [identity, models]
+              required: [identity]
               additionalProperties: false
               properties:
                 identity:
@@ -388,6 +388,14 @@ paths:
                     owner_display: {type: string}
                 models:
                   type: object
+                  description: >-
+                    The provided models. Optional since 1.3.0 (GitHub #629):
+                    left out, the call binds the identity, templates and
+                    origin and writes, probes and removes no model, for an
+                    owner who brings their own key later. A later call that
+                    carries models adds them; a later call without models
+                    keeps them. When present it is whole: an empty object is
+                    BAD_BODY.
                   required: [gateway_url, virtual_key, default_model, catalogue]
                   properties:
                     gateway_url: {type: string, description: https, its host in hosting.model_hosts}

@@ -278,6 +278,16 @@ type SearchOptions struct {
 	// before the LIMIT, and kept on every widen round (widenRoutingOptions
 	// copies the options whole).
 	Authority string
+	// SourcePrefixes admits only chunks whose source_name begins with one of
+	// them (#614 C3). Applied in the search SQL like Authority, and kept on
+	// every widen round for the same reason.
+	SourcePrefixes []string
+	// MaxSensitivity caps the sensitivity tier a returned chunk may carry
+	// (#618): a ScopeFilter SensitivityCap value, or empty for none. Applied
+	// in the search SQL like Authority, with the searcher's own
+	// Config.PublicSourcePrefixes deriving public, and kept on every widen
+	// round for the same reason.
+	MaxSensitivity string
 	// Rerank opts this search into the LLM reranker pass (and the wider
 	// candidate fetch it needs). Default false: the interactive paths
 	// (memory_search tool, companion recall) stay on fast RRF ordering and
@@ -479,7 +489,8 @@ func (s *Searcher) searchInternal(ctx context.Context, projectID, query string, 
 		}
 	}
 	results, err := s.repo.HybridSearchWithEpochsFiltered(ctx, projectID, queryVec, keywordQuery, fetchLimit, activeEpochs, s.epochSource != nil, opts.FromDate, opts.ToDate,
-		ScopeFilter{RepoScope: opts.RepoScope, Strict: opts.StrictScope, Authority: opts.Authority})
+		ScopeFilter{RepoScope: opts.RepoScope, Strict: opts.StrictScope, Authority: opts.Authority, SourcePrefixes: opts.SourcePrefixes,
+			MaxSensitivity: opts.MaxSensitivity, PublicPrefixes: s.cfg.PublicSourcePrefixes})
 	// GDPR Art 18: drop restricted chunks HERE, before the role boost, the LLM
 	// reranker and every later pass — sending restricted text to a model is
 	// processing even if the result is dropped afterwards (§4.16.1).

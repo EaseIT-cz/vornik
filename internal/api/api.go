@@ -86,11 +86,17 @@ type MemorySearchRequest struct {
 	RepoScope   string
 	StrictScope bool
 	Authority   string
+	// SourcePrefixes comes only from the role's policy, never from the query
+	// string (#614 C3).
+	SourcePrefixes []string
+	// MaxSensitivity, like SourcePrefixes, comes only from the role's policy
+	// (#618): the sensitivity tier a returned chunk may carry at most.
+	MaxSensitivity string
 }
 
 // narrows reports whether the request filters beyond its project.
 func (r MemorySearchRequest) narrows() bool {
-	return r.RepoScope != "" || r.StrictScope || r.Authority != ""
+	return r.RepoScope != "" || r.StrictScope || r.Authority != "" || len(r.SourcePrefixes) > 0 || r.MaxSensitivity != ""
 }
 
 // AgentKeyPrincipal says which agent a key the executor minted belongs to:
@@ -1031,7 +1037,7 @@ type Server struct {
 	// so the CLI can say "Enterprise-only" instead of "404 page not found".
 	adminSurfacePresent bool
 	// adminClassKeys is the admin key list for the admin-class checks
-	// (isAdminClassRequest, requireAdminClassGate) in both editions; see
+	// (isAdminClassRequest, OperatorSurfaceAccessFor) in both editions; see
 	// WithAdminClassKeys.
 	adminClassKeys config.AdminConfig
 	// instinctRepo backs the instinct surfaces (continuous-learning
@@ -1070,6 +1076,10 @@ type Server struct {
 	// only — both coexist during the 2026.6.0 → 2026.8.0
 	// deprecation window.
 	apiKeyRepo persistence.APIKeyRepository
+	// companionHintRepo stores the companion hints' follow windows and each
+	// key's last contact (GitHub #634 slice 2). Nil: the GET serves without
+	// back-off and the outcome upload answers 503.
+	companionHintRepo persistence.CompanionHintRepository
 	// sessionBackend authenticates browser login sessions via the
 	// vornik_session cookie (github-login phase 3). nil leaves cookie
 	// auth off. Threaded into AuthMiddleware by applyMiddleware, the
@@ -2244,6 +2254,14 @@ func WithSlackInteractionParser(p SlackInteractionParser) ServerOption {
 func WithSlackWebhookHandler(h http.HandlerFunc) ServerOption {
 	return func(s *Server) {
 		s.slackWebhook = h
+	}
+}
+
+// WithCompanionHintRepository wires the companion hints' outcome store
+// (GitHub #634 slice 2).
+func WithCompanionHintRepository(repo persistence.CompanionHintRepository) ServerOption {
+	return func(s *Server) {
+		s.companionHintRepo = repo
 	}
 }
 

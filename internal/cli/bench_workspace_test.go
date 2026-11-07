@@ -144,7 +144,12 @@ func TestWorkspaceLine(t *testing.T) {
 			{TargetsProduced: map[string]bool{"scratch/a": true}},
 			{TargetsProduced: map[string]bool{"scratch/b": false}},
 		}}
-	if got := workspaceLine(j); !strings.Contains(got, "targets produced 1/2") {
+	if got := workspaceLine(j); !strings.Contains(got, "targets produced 1/2") || !strings.Contains(got, "workflow state carried over") {
+		t.Fatalf("a harness-9 reset cleared targets only, and must say so: %q", got)
+	}
+	// §12.29: the reset that also clears BACKLOG.md and .autonomy/.
+	j.Manifest.WorkspaceReset = agentbench.WorkspaceResetTargetsAndState
+	if got := workspaceLine(j); !strings.Contains(got, "targets produced 1/2") || strings.Contains(got, "carried over") {
 		t.Fatalf("got %q", got)
 	}
 }

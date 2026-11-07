@@ -1,7 +1,7 @@
 ---
 sources:
     - path: docs/release-notes
-      sha256: b4957bae1db465aadabc1512c14706c7b840c27f78d35cfc132e378f9db82cc3
+      sha256: 07f0005776affd75cddc64664ec0e7038232bf67dda256badb0c861da86a8a91
 ---
 # Release Notes
 
@@ -19,8 +19,6 @@ behavior changes, and notable fixes. Internal-only changes are omitted.
 
 ## 2026.11.2
 
-Draft: not yet released.
-
 !!! warning "Upgrade requirements"
     - **A database API key is bound by its flags on every route.** A key
       minted with `vornikctl key create` reads project memory only with
@@ -29,6 +27,21 @@ Draft: not yet released.
       longer create, list or change keys. Use a static key, an admin key or
       the console for key management. Agent keys, companion keys, static keys
       and console sessions are unchanged.
+    - **A workflow output reference that can never work is refused when the
+      workflow loads.** `${outputs.<step>.<field>}` naming a `gate`,
+      `approval` or `parallel` step, the step itself, or (in a
+      payload) a step that does not exist used to load and then fail, or turn
+      into an empty string, on every run; so did one in a non-agent step's
+      prompt. A daemon holding such a workflow would not start, so the
+      updater's preflight now refuses the upgrade and names the file. Check
+      with `vornikctl workflow validate <dir>`.
+    - **An A2A caller key is limited by default.** A key with a workflow list
+      and no rate limit of its own now gets 1 request per second, burst 10, on
+      its A2A routes (429 over it). A key's own `rate_limit_rps` and
+      `rate_limit_burst` replace the default. Each task such a key submits
+      also counts against its `budget_cap_usd` (402 once reached) and the
+      workflow's `a2a.dailyQuotaPerKey`, 50 per key per UTC day unless set
+      (429 once reached).
     - **Read these boxes yourself for this upgrade.** From 2026.11.2 on,
       `vornik-update.sh` prints the upgrade requirements of every release you
       are upgrading across and will not run unattended until you pass
@@ -36,6 +49,105 @@ Draft: not yet released.
       alone is not enough). The upgrade TO 2026.11.2 still runs the older
       updater, which neither shows them nor knows the flag.
 
+- **One access decision for every operator route** (security). The config
+  journal, in-flight, MCP OAuth and agent-grant routes now use the same
+  operator check as the rest: a project-scoped key gets 404 instead of 403,
+  and a caller with no key gets 403 `OPERATOR_CAPABILITY_REQUIRED`. The two
+  memory-firewall policy routes, which answered 400 to everyone, now work.
+- **A project-scoped key no longer reads global instincts** (security). A
+  scoped caller sees only its project's instincts; a global one is 404.
+- **An A2A caller key is bounded** (security, #617). Its tasks are now
+  attributed to it, so its budget cap and the daily quota see them; spend
+  before this release was not attributed and does not count. A submit whose
+  spend or count cannot be read is refused (503). The doctor check
+  `a2a_corpus_walk` names a caller key whose A2A tasks retrieved more than
+  500 distinct memory chunks in the last 24 hours. It reports the key and the
+  count, never the chunks, and blocks nothing.
+- **A role can be capped at a sensitivity tier** (security, #618).
+  `memorySearch.maxSensitivity: public` keeps the role's search to two kinds
+  of chunk: chunks an operator set public, and files under
+  `memory.public_source_prefixes` (default `docs/public/`) that the daemon
+  checked against the trusted branch. A chunk with no tier counts as
+  confidential. The doctor check `memory_sensitivity_cap` states what each
+  capped role can retrieve.
+- **The A2A consult hop limit is enforced** (security).
+  `a2a.consult.max_hops` was read but not applied; a consult chain now stops
+  at it.
+- **Cancelling a reminder from the chat needs your confirmation**
+  (security), as cancelling a task already did.
+- **Chat: a running turn can be stopped and steered.** In Telegram, `/stop`
+  ends what the assistant is doing in that chat and lists the tasks it had
+  started; `/stop tasks` cancels those too. A message you send while your
+  own turn runs now joins it at its next step ("Got it, I'll take that into
+  account."), instead of waiting until the turn ends; in a group, another
+  member's message still waits and runs as their own turn.
+- **Chat: one status line instead of a line per tool call.** A turn shows
+  one line, edited in place above the reply, with the current activity,
+  the time so far and a count per activity, and removes it when the answer
+  lands. Slack's placeholder shows the same line.
+- **Chat: long work is scheduled as a task.** The assistant now treats
+  research across several sources, multi-step work or a written document as
+  a task in a project that can run it, and answers in the chat only what one
+  or two lookups settle. It makes at most 4 web or consult lookups in one
+  turn, and no longer polls task status in a loop. The project list it sees
+  names what each project can run, so it picks a project by capability, not
+  by a name that matches the topic.
+- **Chat: smaller prompts on long conversations.** Large tool results the
+  model has already used (from earlier turns, or older than the turn's two
+  newest tool steps) are sent shortened to their first 1,600 characters. A
+  typical five-call turn sends about 40% less to the model; saved
+  conversations keep the full results.
+- **Chat fails over when the model is out of quota** (fix). `chat.model`
+  now routes by its model prefix like every other model call, so setting a
+  Bedrock model as `chat.model` reaches Bedrock even when
+  `chat.router.default` names another provider. A reply answered by the
+  backup model says so in one line. The new doctor check
+  `chat_model_fallback` warns when `chat.model` has no backup in
+  `chat.router.model_fallbacks`, or one on the same provider.
+- **A routed task that fits no workflow says so** (fix). The adaptive router
+  may now answer that none of the project's workflows fits; the task fails
+  at once with `ROUTE_NO_FIT`, naming the project's workflows and what the
+  task needs, instead of being forced into the closest misfit. Take the
+  `route` prompt change into a deployed `configs/workflows/adaptive.md`
+  (`config_template_drift` lists it); the router works without it.
+- **The doctor no longer reads the routing model as always failing** (fix).
+  A route step that handed its task to a workflow was never recorded as a
+  success, so `vornikctl doctor` reported the adaptive router's model at a
+  100% failure rate and advised switching it. A step that delegates is now
+  recorded `ok`; the warning clears within a day of upgrading.
+- **A task whose subtasks were all cancelled ends CANCELLED** (fix), and its
+  completion notice reports that, instead of reporting success.
+- **Output a person can review** (new). Every agent is told how to write
+  for a person: answer first, short sentences, exact references, no
+  unstated hedges. A swarm or a single role can switch this off with
+  `suppressedGuidanceBlocks` (`writing-style`). The doc, architectural and
+  GitHub review workflows report readability findings, each with the quoted
+  passage, a problem class and a rewrite that keeps every fact. A review
+  can withhold approval when its subject cannot be reviewed in reasonable
+  time. A new system step, `text.readability`, measures words, sentence
+  length, hedges and vague references. Its word lists are English only.
+  On one deployment, 20 architecture reviews before and 20 after: mean
+  sentence length fell from 17.1 to 10.0 words.
+- **Approval notifications on the phone** (new). A paired approver device
+  can turn on browser notifications at `/ui/approve/push`, so an install
+  with no chat or e-mail alerts still hears of a waiting request. A
+  notification says only that a request is waiting, never what it asks,
+  and is encrypted to the device. It needs an https public origin. On iPhone
+  and iPad it works only from a Home Screen web app (iOS 16.4 or later).
+- **Companion hints** (new). `GET /api/v1/companion/hints` serves the
+  project's hint catalogue to companion keys, and two project settings turn
+  hints off or mute single ones (`companion.hints`, `companion.mute`). The
+  daemon also records, per project, whether each hint was followed, and
+  turns off for 14 days a hint followed in fewer than 2 of its last 10
+  firings. `vornikctl companion hints -p <project>` lists each hint's state
+  and follow rate. The Claude Code (0.50.3) and Codex (0.45.1) plugins show
+  the hints: after a commit, after a design edit, and after a failed test
+  run, each at most once per session. Codex recognises a failed test run
+  from its output, since it gives hooks no exit status.
+- **Repository paths can be mirrored into project memory** (new). A project
+  can list repository paths whose documents are ingested into its memory
+  and kept current; a document is mirrored only if its disclosure mark
+  allows it, and an unreadable or partial mark fails closed.
 - **A project key given to an A2A caller can no longer read the project's
   memory or keys** (security). Before, a key narrowed to one workflow was
   still a full key on the REST API of its project.
@@ -54,6 +166,10 @@ Draft: not yet released.
   `vornik-companion/<version>`. Python's default signature was refused by
   Cloudflare with `error code: 1010`, so `/upload` failed for a daemon behind
   it. A proxy or firewall in front of the daemon should allow that name.
+- **Every step that produces a result is readable by later steps** (fix).
+  `${outputs.<step>.<field>}` now resolves for `plan`, `spawn_project` and
+  `a2a_call` steps, not only `agent` and `system`. A step that runs again and
+  fails no longer leaves its previous result readable.
 - **A later agent step can read a system step's output** (fix). A step prompt
   can now reference a system step's result with `${outputs.<step>.<field>}`,
   for example `${outputs.fetch_diff.diff}` in a review workflow's second agent

@@ -27,7 +27,7 @@ func WithApproverDevices(repo persistence.ApproverDeviceRepository) ServerOption
 // is bound to the namespace's home project, which this creates through the
 // same inert path the verbs use.
 func (s *Server) companionGrantAgentAdmin(w http.ResponseWriter, r *http.Request, req *companionGrantRequest) {
-	if !s.requireAdminClassGate(w, r) {
+	if !s.requireOperatorScopeFor(w, r, SurfaceAgentGrant) {
 		return
 	}
 	if !IsAuthEnabledFromContext(r.Context()) {

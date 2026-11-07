@@ -86,6 +86,22 @@ func main() {
 		writeToolRegistry(root)
 	case "stamp":
 		stamp(root, os.Args[2:])
+	case "brief-input":
+		// #614 C1: what an architect brief's author may be shown of one
+		// design, on stdout. Refuses a design not marked customer.
+		if len(os.Args) != 3 {
+			fmt.Fprintln(os.Stderr, "usage: docs-gen brief-input <design.md>")
+			os.Exit(2)
+		}
+		raw, rerr := os.ReadFile(os.Args[2])
+		if rerr != nil {
+			fatal(rerr)
+		}
+		out, berr := docsmeta.BriefInput(raw)
+		if berr != nil {
+			fatal(fmt.Errorf("%s: %w", os.Args[2], berr))
+		}
+		_, _ = os.Stdout.Write(out)
 	default:
 		fmt.Fprintf(os.Stderr, "docs-gen: unknown command %q\n", os.Args[1])
 		os.Exit(2)

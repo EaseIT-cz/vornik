@@ -443,6 +443,12 @@ type ChatResponse struct {
 	// JSON serialization (- tag) because it's an internal signal,
 	// not a wire-format value.
 	ExtractionWarning string `json:"-"`
+
+	// FallbackFrom names the primary model when FallbackProvider served this
+	// response from its configured twin, so a channel can tell the user
+	// (nonswarm-llm-fallback design §11.2(c), GitHub #620). Empty for a
+	// primary answer. Internal signal, never serialised.
+	FallbackFrom string `json:"-"`
 }
 
 // Error represents an API error response.

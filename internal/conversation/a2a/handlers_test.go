@@ -20,6 +20,16 @@ import (
 type fakeRegistry struct {
 	projects  []*registry.Project
 	workflows []*registry.Workflow
+	swarms    []*registry.Swarm
+}
+
+func (f *fakeRegistry) GetSwarm(id string) *registry.Swarm {
+	for _, s := range f.swarms {
+		if s.ID == id {
+			return s
+		}
+	}
+	return nil
 }
 
 func (f *fakeRegistry) GetProject(id string) *registry.Project {
@@ -93,8 +103,9 @@ func (f *fakeTaskCreator) Create(ctx context.Context, params TaskCreateParams) (
 	}
 	f.lastParams = params
 	return &persistence.Task{
-		ID:        "task-" + params.ProjectID + "-1",
-		ProjectID: params.ProjectID,
+		ID:         "task-" + params.ProjectID + "-1",
+		ProjectID:  params.ProjectID,
+		WorkflowID: &params.WorkflowID, // as the real creator records it
 	}, nil
 }
 

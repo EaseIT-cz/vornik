@@ -359,6 +359,13 @@ func TestMemoryRetrievalAuditRepository_Contract(t *testing.T) {
 	repotest.RunMemoryRetrievalAuditSuite(t, sqlite.NewMemoryRetrievalAuditRepository(db.DB))
 }
 
+// #617 slice 2: the corpus-walk count per A2A caller key.
+func TestA2AKeyRetrieval_Contract(t *testing.T) {
+	db := newTestDB(t)
+	repotest.RunA2AKeyRetrievalSuite(t, sqlite.NewMemoryRetrievalAuditRepository(db.DB),
+		sqlite.NewTaskRepository(db.DB), sqlite.NewAPIKeyRepository(db.DB))
+}
+
 // Round-2 trading-event contracts.
 func TestTradingFillRepository_Contract(t *testing.T) {
 	db := newTestDB(t)
@@ -743,11 +750,16 @@ func TestAgentAdminRefusal_Contract(t *testing.T) {
 // database with the production pool size, not :memory: (one connection),
 // which would serialise every transaction and hide the first-device race.
 func TestApproverDevice_Contract(t *testing.T) {
-	repotest.RunApproverDeviceSuite(t, sqlite.NewApproverDeviceRepository(newTestDB(t).DB), func(t *testing.T) persistence.ApproverDeviceRepository {
+	fresh := func(t *testing.T) persistence.ApproverDeviceRepository {
 		// The production pool shape: a file database, whose default pool is
 		// 5 connections.
 		db := sqlitetest.File(t, "approver.db")
 		return sqlite.NewApproverDeviceRepository(db.DB)
+	}
+	repotest.RunApproverDeviceSuite(t, sqlite.NewApproverDeviceRepository(newTestDB(t).DB), fresh)
+	// GitHub #163: Web Push subscriptions.
+	t.Run("Push", func(t *testing.T) {
+		repotest.RunApproverPushSuite(t, sqlite.NewApproverDeviceRepository(newTestDB(t).DB), fresh)
 	})
 }
 
@@ -896,4 +908,11 @@ func TestBenchmarkCloseRepository_Contract(t *testing.T) {
 func TestShadowDecisionRepository_Contract(t *testing.T) {
 	db := newTestDB(t)
 	repotest.RunShadowDecisionSuite(t, sqlite.NewShadowDecisionRepository(db.DB))
+}
+
+// TestCompanionHintRepository_Contract — the companion hints' follow windows
+// and last contact (GitHub #634 slice 2), the suite that runs on both drivers.
+func TestCompanionHintRepository_Contract(t *testing.T) {
+	db := newTestDB(t)
+	repotest.RunCompanionHintSuite(t, sqlite.NewCompanionHintRepository(db.DB))
 }

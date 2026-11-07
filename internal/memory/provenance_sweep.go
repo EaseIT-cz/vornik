@@ -59,10 +59,14 @@ type ProvenanceSweeper struct {
 	// PendingInterval is the cadence of the short pass over drafts awaiting
 	// their push (#506 C9.2; DefaultProvenancePendingInterval).
 	PendingInterval time.Duration
+	// Mirror wires the repository mirror (#639). Unset: nothing mirrored.
+	Mirror MirrorHooks
 
-	fetchState provenanceFetchState
-	healMu     sync.Mutex
-	healed     map[string]bool
+	fetchState  provenanceFetchState
+	mirrorSkips mirrorSkipState
+	mirrorLast  mirrorLastState
+	healMu      sync.Mutex
+	healed      map[string]bool
 }
 
 // DefaultProvenancePendingInterval is how often the short pass looks for
@@ -307,6 +311,9 @@ func (s *ProvenanceSweeper) supersedeVerified(ctx context.Context, projectID str
 // failure is logged and does not stop the others.
 func (s *ProvenanceSweeper) SweepAll(ctx context.Context) {
 	s.FetchClones(ctx)
+	// #639: after the fetch and before the re-checks, so a version mirrored
+	// in this pass is re-checked in the same pass.
+	s.MirrorAll(ctx)
 	projects, err := s.Store.ListProvenanceProjects(ctx)
 	if err != nil {
 		s.Logger.Warn().Err(err).Msg("provenance sweep: list projects failed")

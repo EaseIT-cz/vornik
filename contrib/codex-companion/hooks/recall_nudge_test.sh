@@ -364,11 +364,16 @@ run_hook observe "$(sh_in sess8new "cat $REPO/internal/z/a.go")" >/dev/null
 # --- Case 9: registration (Codex HooksFile shape: only description + hooks).
 [[ -f "$HOOKS_JSON" ]] || fail "case9: hooks.json does not exist"
 [[ "$(jq -r 'keys - ["description","hooks"] | length' "$HOOKS_JSON")" == 0 ]] || fail "case9: hooks.json has top-level keys Codex refuses"
-[[ "$(jq -r '.hooks | keys | join(",")' "$HOOKS_JSON")" == "PostToolUse,PreToolUse" ]] || fail "case9: hooks.json registers events other than PreToolUse/PostToolUse"
+# Since codex-companion 0.45.0 the bundle also registers hints.sh (GitHub
+# #634, companion hardening design §13.12 X2): SessionStart, UserPromptSubmit
+# and a second PostToolUse entry. The nudge's two entries are unchanged.
+[[ "$(jq -r '.hooks | keys | join(",")' "$HOOKS_JSON")" == "PostToolUse,PreToolUse,SessionStart,UserPromptSubmit" ]] || fail "case9: hooks.json registers events other than the nudge's and the hints'"
 jq -e '[.hooks.PreToolUse[]] | length == 1 and (.[0].matcher == "Bash") and (.[0].hooks | length == 1) and (.[0].hooks[0] | .type == "command" and .timeout == 5 and .command == "bash \"${PLUGIN_ROOT}/hooks/recall-nudge.sh\" observe")' "$HOOKS_JSON" >/dev/null \
   || fail "case9: hooks.json has no single PreToolUse Bash -> recall-nudge.sh observe (timeout 5)"
-jq -e '[.hooks.PostToolUse[]] | length == 1 and (.[0].matcher == "mcp__vornik__recall") and (.[0].hooks | length == 1) and (.[0].hooks[0] | .type == "command" and .timeout == 5 and .command == "bash \"${PLUGIN_ROOT}/hooks/recall-nudge.sh\" recalled")' "$HOOKS_JSON" >/dev/null \
+jq -e '[.hooks.PostToolUse[] | select(.matcher == "mcp__vornik__recall")] | length == 1 and (.[0].hooks | length == 1) and (.[0].hooks[0] | .type == "command" and .timeout == 5 and .command == "bash \"${PLUGIN_ROOT}/hooks/recall-nudge.sh\" recalled")' "$HOOKS_JSON" >/dev/null \
   || fail "case9: hooks.json has no single PostToolUse mcp__vornik__recall -> recall-nudge.sh recalled (timeout 5)"
+jq -e '[.hooks.PostToolUse[] | select(.matcher != "mcp__vornik__recall")] | length == 1 and (.[0].matcher == "*") and (.[0].hooks[0].command == "bash \"${PLUGIN_ROOT}/hooks/hints.sh\" call codex")' "$HOOKS_JSON" >/dev/null \
+  || fail "case9: the only other PostToolUse entry must be * -> hints.sh call codex"
 
 [[ ! -s "$ERRLOG" ]] || fail "the hook wrote to stderr: $(head -c 400 "$ERRLOG")"
 

@@ -507,19 +507,31 @@ func deepCopyJSON(v map[string]any) map[string]any {
 	return out
 }
 
+// keySpendOverCap reports whether a key's attributed lifetime spend has
+// reached its budget_cap_usd. A key without a cap, or a server without the
+// usage ledger, is never over. Callers choose what an unreadable spend means:
+// the companion paths allow, the A2A submit refuses (#617).
+func (s *Server) keySpendOverCap(ctx context.Context, key *persistence.APIKey) (over bool, spent float64, err error) {
+	if key.BudgetCapUSD == nil || s.llmUsageRepo == nil {
+		return false, 0, nil
+	}
+	spent, err = s.llmUsageRepo.SumCostByAPIKey(ctx, key.ID, time.Time{}, time.Time{})
+	if err != nil {
+		return false, 0, err
+	}
+	return spent >= *key.BudgetCapUSD, spent, nil
+}
+
 // checkCompanionKeyBudget is the per-key lifetime budget gate (LLD 21
 // Bundle 4), shared by the ordinary and the broker delegate paths.
 func (s *Server) checkCompanionKeyBudget(ctx context.Context, key *persistence.APIKey) error {
-	if key.BudgetCapUSD == nil || s.llmUsageRepo == nil {
-		return nil
-	}
-	spent, err := s.llmUsageRepo.SumCostByAPIKey(ctx, key.ID, time.Time{}, time.Time{})
+	over, spent, err := s.keySpendOverCap(ctx, key)
 	if err != nil {
 		s.logger.Warn().Err(err).Str("api_key_id", key.ID).
 			Msg("companion delegate: budget-cap spend lookup failed; allowing (project budget gate still applies)")
 		return nil
 	}
-	if spent >= *key.BudgetCapUSD {
+	if over {
 		return fmt.Errorf("BUDGET_EXCEEDED: key budget cap $%.4f reached (spent $%.4f); delegate refused", *key.BudgetCapUSD, spent)
 	}
 	return nil

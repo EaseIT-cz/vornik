@@ -44,15 +44,12 @@ func TestListInstincts_ScopedHidesOtherProjects(t *testing.T) {
 			t.Fatalf("scoped caller (beta) leaked alpha project instinct %s", ins.ID)
 		}
 	}
-	// Global advisory row must remain visible.
-	sawGlobal := false
+	// #504 (2026-11-05): a global row can carry another project's content,
+	// so a scoped caller no longer sees it (it was visible before).
 	for _, ins := range got.Instincts {
 		if ins.ID == "ins_3" {
-			sawGlobal = true
+			t.Fatalf("global-scope instinct ins_3 was served to a scoped caller")
 		}
-	}
-	if !sawGlobal {
-		t.Fatalf("global-scope instinct ins_3 should stay visible to scoped callers")
 	}
 }
 
@@ -140,9 +137,9 @@ func TestShowInstinct_ScopedForeignProject404(t *testing.T) {
 	}
 }
 
-// TestShowInstinct_ScopedGlobalVisible confirms global-scope rows stay
-// readable by scoped callers.
-func TestShowInstinct_ScopedGlobalVisible(t *testing.T) {
+// TestShowInstinct_ScopedGlobalHidden: since #504 (2026-11-05) a scoped
+// caller gets 404 for a global-scope row, as for another project's row.
+func TestShowInstinct_ScopedGlobalHidden(t *testing.T) {
 	repo := &stubInstinctRepo{rows: sampleInstincts()}
 	s := instinctTestServer(repo, nil, nil)
 
@@ -151,8 +148,8 @@ func TestShowInstinct_ScopedGlobalVisible(t *testing.T) {
 	rec := httptest.NewRecorder()
 	s.ShowInstinct(rec, req, "ins_3") // ins_3 is global
 
-	if rec.Code != http.StatusOK {
-		t.Fatalf("global show = %d, want 200", rec.Code)
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("global show = %d, want 404 for a scoped caller", rec.Code)
 	}
 }
 

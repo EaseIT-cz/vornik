@@ -71,6 +71,10 @@ func (te *ToolExecutor) cancelReminderTool(ctx context.Context, argsJSON string,
 	if !reminderBelongsToCaller(row, chatID, ctx) {
 		return ToolResult{Content: fmt.Sprintf("cancel_reminder: reminder %q is not yours (belongs to a different operator).", args.ReminderID)}
 	}
+	// #642: the user confirms in their own next turn before anything changes.
+	if ok, reply := te.confirmAction(ctx, scopeCancelReminder, "cancel", "reminder", args.ReminderID); !ok {
+		return reply
+	}
 	if err := te.reminderRepo.Cancel(ctx, args.ReminderID); err != nil {
 		return ToolResult{Content: "cancel_reminder: " + err.Error()}
 	}

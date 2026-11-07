@@ -48,6 +48,10 @@ func (s *stubQuarantineRepo) MarkReleased(_ context.Context, id, _ string) error
 	s.releaseCalls = append(s.releaseCalls, id)
 	return s.releaseErr
 }
+func (s *stubQuarantineRepo) ExistsForArtifact(context.Context, string, string) (bool, error) {
+	return false, nil
+}
+
 func (s *stubQuarantineRepo) MarkDropped(_ context.Context, id string) error {
 	s.dropCalls = append(s.dropCalls, id)
 	return s.dropErr

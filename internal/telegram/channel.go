@@ -189,13 +189,15 @@ func (c *Channel) StreamingSend(ctx context.Context, sessionID string) (conversa
 	if err != nil {
 		return nil, err
 	}
-	return &telegramStream{
+	stream := &telegramStream{
 		bot:          c.bot,
 		ctx:          ctx,
 		chatID:       chatID,
 		messageID:    msgID,
 		minEditEvery: defaultTelegramEditInterval,
-	}, nil
+	}
+	c.bot.openStreams.put(chatID, stream)
+	return stream, nil
 }
 
 // ErrVoiceModeNoStream is the sentinel StreamingSend returns when
@@ -224,6 +226,11 @@ type telegramStream struct {
 	buf        string
 	lastEdit   time.Time
 	terminated error
+	// status is the turn's progress line, shown above buf while the turn
+	// runs and removed by Close (#642). statusShown records that an edit
+	// carried one, so Close clears it even with no text.
+	status      string
+	statusShown bool
 }
 
 // Append appends text to the accumulated stream body. Edits the
@@ -238,6 +245,24 @@ func (s *telegramStream) Append(text string) error {
 		return s.terminated
 	}
 	s.buf += text
+	return s.flushLocked()
+}
+
+// setStatus shows the turn's progress line above the text, under the same
+// edit floor as Append. A failed edit is terminal, as for Append; the
+// receiver then falls back to one Send. Caller does not hold s.mu.
+func (s *telegramStream) setStatus(status string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.terminated != nil {
+		return
+	}
+	s.status = status
+	_ = s.flushLocked()
+}
+
+// flushLocked edits the message if the edit floor allows. Caller holds s.mu.
+func (s *telegramStream) flushLocked() error {
 	if time.Since(s.lastEdit) < s.minEditEvery {
 		return nil
 	}
@@ -247,6 +272,19 @@ func (s *telegramStream) Append(text string) error {
 	}
 	s.lastEdit = time.Now()
 	return nil
+}
+
+// rendered is what an edit shows: the status above the text while the turn
+// runs. Caller holds s.mu.
+func (s *telegramStream) rendered() string {
+	switch {
+	case s.status == "":
+		return s.buf
+	case s.buf == "":
+		return s.status
+	default:
+		return s.status + "\n\n" + s.buf
+	}
 }
 
 // Close flushes any buffered Append delta as a final edit and marks
@@ -259,7 +297,11 @@ func (s *telegramStream) Close() (string, error) {
 	if s.terminated != nil {
 		return "", s.terminated
 	}
-	if s.buf != "" {
+	s.bot.openStreams.remove(s.chatID, s)
+	// The final edit carries the text alone: the status goes with the turn
+	// (#642). With no text, a shown status is replaced by the placeholder.
+	s.status = ""
+	if s.buf != "" || s.statusShown {
 		if err := s.edit(); err != nil {
 			s.terminated = err
 			return "", err
@@ -285,7 +327,16 @@ const streamEditTimeout = 15 * time.Second
 func (s *telegramStream) edit() error {
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(s.ctx), streamEditTimeout)
 	defer cancel()
-	return s.bot.editMessageText(ctx, s.chatID, s.messageID, s.buf)
+	body := s.rendered()
+	if body == "" {
+		body = telegramStreamPlaceholder
+	}
+	// Set before the call on purpose: if this edit fails after an earlier
+	// one showed a status, Close must still try to clear it (review eb73 F2).
+	if s.status != "" {
+		s.statusShown = true
+	}
+	return s.bot.editMessageText(ctx, s.chatID, s.messageID, body)
 }
 
 // ErrStreamClosed is the terminal sentinel returned by Append and

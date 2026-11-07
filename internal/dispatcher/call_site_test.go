@@ -36,7 +36,7 @@ func TestDoChatCall_LabelsTheTurn(t *testing.T) {
 		if stream {
 			onText = func(string) {}
 		}
-		if _, err := a.doChatCall(context.Background(), "sys", nil, nil, onText); err != nil {
+		if _, err := a.doChatCall(context.Background(), "sys", nil, 0, nil, onText); err != nil {
 			t.Fatal(err)
 		}
 		if got := chat.CallSiteFromContext(p.lastCtx); got != "dispatcher.turn" {
@@ -45,7 +45,7 @@ func TestDoChatCall_LabelsTheTurn(t *testing.T) {
 	}
 	p := &ctxCapturingProvider{}
 	a := NewAgent(p, nil, nil, nil, nil, WithMaxIterations(1))
-	if _, err := a.doChatCall(chat.WithCallSite(context.Background(), "chat.remember.ned"), "sys", nil, nil, nil); err != nil {
+	if _, err := a.doChatCall(chat.WithCallSite(context.Background(), "chat.remember.ned"), "sys", nil, 0, nil, nil); err != nil {
 		t.Fatal(err)
 	}
 	if got := chat.CallSiteFromContext(p.lastCtx); got != "chat.remember.ned" {

@@ -243,6 +243,9 @@ func buildAgentContextMap(taskType, prompt string, timeContext currentDateTimeCo
 		if !toolFree && !suppressed(promptblock.ToolBudget) {
 			sp = composeSystemPromptWithToolGrant(sp, opts.ToolGrantAvailable)
 		}
+		// How to write for a person (GitHub #633). Advisory, so suppressible;
+		// not on a tool-free route step, which returns a schema-bound pick.
+		sp = composeSystemPromptWithWritingStyle(sp, !toolFree && !suppressed(promptblock.WritingStyle))
 		// Reporting integrity states an invariant every deployment enforces
 		// (verifyRoleClaims). Inside this guard, NOT above it: when nothing else
 		// composes a system prompt the entrypoint applies its own default, and

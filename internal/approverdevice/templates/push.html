@@ -1,0 +1,21 @@
+{{define "push.html"}}{{template "head" (page "Notifications" 0)}}
+{{template "nav" "devices"}}
+<h1>Notifications on this device</h1>
+{{if not .Available}}<div class="card"><p>Browser notifications are not available on this installation. New requests are announced on the operator channel, if one is set, and always appear on the approvals list.</p></div>
+{{else}}{{with .Flash}}<p class="flash">Done: {{if eq . "on"}}notifications turned on{{else if eq . "off"}}notifications turned off{{else}}a test notification was sent{{end}}.</p>{{end}}
+<div class="card" id="push" data-key="{{.Key}}">
+{{if .On}}<p>Notifications are on for this device.</p>
+{{with .Row}}<p class="mut">{{if .LastSentAt}}Last notification: {{.LastStatus}}, {{whenp .LastSentAt}}.{{else}}No notification sent yet.{{end}}</p>{{end}}
+<form method="post" action="/ui/approve/push/test"><button type="submit">Send a test</button></form>
+<form method="post" action="/ui/approve/push/off"><button class="no" type="submit">Turn off</button></form>
+{{else}}<p>Notifications are off for this device.</p>
+<p class="mut">A notification says what happened, such as "your assistant is asking for approval", never what is asked. Open the approvals list to see it.</p>
+<p class="mut" id="push-ios" hidden>On iPhone and iPad, notifications work only from the Home Screen: add this page to the Home Screen, open it from there, pair it as a new device, then come back to this page.</p>
+<p class="mut" id="push-unsupported" hidden>This browser does not support notifications.</p>
+<p class="err" id="push-error" hidden></p>
+<button type="button" id="push-on">Turn on</button>
+<noscript><p class="mut">Turning notifications on needs JavaScript in this browser.</p></noscript>
+{{end}}</div>
+<script src="/ui/static/approve-push.js" defer></script>
+{{end}}
+{{template "foot"}}{{end}}

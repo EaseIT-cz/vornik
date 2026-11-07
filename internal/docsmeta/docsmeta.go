@@ -125,6 +125,12 @@ type Source struct {
 // Frontmatter is the parsed leading YAML block of a docs page.
 type Frontmatter struct {
 	Sources []Source `yaml:"sources"`
+	// Disclosure marks a design "customer" (it may be the source of an A2A
+	// architect brief) or "never"; absent means never (#614 C1).
+	Disclosure string `yaml:"disclosure"`
+	// DisclosureExclude names, by exact heading line, the sections of a
+	// customer design a brief's author is never shown (#614 C1).
+	DisclosureExclude []string `yaml:"disclosureExclude"`
 }
 
 const fence = "---\n"

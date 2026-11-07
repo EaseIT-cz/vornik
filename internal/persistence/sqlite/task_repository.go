@@ -326,6 +326,19 @@ func appendTaskFilterWhere(b *strings.Builder, args []any, filter persistence.Ta
 		b.WriteString(" AND failed_at IS NOT NULL AND failed_at >= ?")
 		args = append(args, sqliteTime(*filter.FailedSince))
 	}
+	// #617: one key's tasks of one workflow since a time (the A2A quota).
+	if filter.CreatedByAPIKeyID != nil {
+		b.WriteString(" AND created_by_api_key_id = ?")
+		args = append(args, *filter.CreatedByAPIKeyID)
+	}
+	if filter.WorkflowID != nil {
+		b.WriteString(" AND workflow_id = ?")
+		args = append(args, *filter.WorkflowID)
+	}
+	if filter.CreatedSince != nil {
+		b.WriteString(" AND created_at >= ?")
+		args = append(args, sqliteTime(*filter.CreatedSince))
+	}
 	return args
 }
 

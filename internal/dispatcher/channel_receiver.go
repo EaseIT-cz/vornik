@@ -514,9 +514,10 @@ func (r *ChannelReceiver) dispatch(ctx context.Context, sessionID string, req Re
 				streamedText = finalText
 			}
 		case result.Text != "" && strings.HasPrefix(finalText, result.Text) && strings.HasSuffix(streamedText, result.Text):
-			// Tool-use streams include progress markers before the final
-			// model reply. That means the transport-visible stream is not
-			// byte-identical to Result.Text, but it already contains the
+			// The model may stream text of its own before a tool call, or a
+			// retry's banner may precede the final reply. Since #642 no tool
+			// markers enter the stream, but the transport-visible stream can
+			// still be longer than Result.Text while already containing the
 			// final answer. Append only the channel postprocessor suffix
 			// (for example Telegram's guard footer) instead of treating
 			// the expected status-prefix difference as a failed stream and
@@ -530,11 +531,11 @@ func (r *ChannelReceiver) dispatch(ctx context.Context, sessionID string, req Re
 				}
 			}
 		case result.Text != "" && !strings.Contains(streamedText, result.Text):
-			// A provider may stream only tool-status text and then return a
-			// final answer without text deltas. Keep the status paragraph
-			// and append the final reply rather than replacing it with a
-			// one-shot fallback that would duplicate the already-edited
-			// Telegram message.
+			// The model streamed text of its own earlier in the turn ("Let me
+			// check…") and the final answer does not contain it, or arrived
+			// without text deltas. Keep what was streamed and append the
+			// final reply rather than replacing it with a one-shot fallback
+			// that would duplicate the already-edited Telegram message.
 			sep := ""
 			if !strings.HasSuffix(streamedText, "\n") {
 				sep = "\n\n"
@@ -601,7 +602,19 @@ const streamFailureNoticeTimeout = 15 * time.Second
 // The cause comes from ctxerr.Classify on the turn's context: a finished
 // context means the turn itself ran out of time or was cancelled; a timeout
 // on a live context was one model call.
+// ErrStoppedByUser is the cancel cause of a chat turn the user ended with
+// /stop (dispatcher turn-context design §8, GitHub #644).
+var ErrStoppedByUser = errors.New("stopped by the user")
+
 func streamFailureNotice(ctx context.Context, err error, partial bool) string {
+	// A turn the user stopped on purpose needs no apology and no "ask
+	// again" (#644, review d298 F6).
+	if errors.Is(context.Cause(ctx), ErrStoppedByUser) {
+		if partial {
+			return "\n\n[Stopped.]"
+		}
+		return "[Stopped.]"
+	}
 	var why string
 	switch cause := ctxerr.Classify(ctx, err); {
 	case cause == ctxerr.Timeout && ctx.Err() != nil:

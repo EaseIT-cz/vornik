@@ -74,3 +74,29 @@ func TestCheckProvenanceClone508_ForgesAndRefusals(t *testing.T) {
 		t.Errorf("a refusal: %+v", got)
 	}
 }
+
+// #639 M4 (design 22, "Amendment 2026-11-04 (#639)"): a mirroring project's
+// last mirror pass, with its counts; failed files or an unreadable clone
+// warn.
+func TestCheckProvenanceClone639_MirrorLine(t *testing.T) {
+	at := time.Date(2026, 11, 4, 9, 0, 0, 0, time.UTC)
+	ok := ProvenanceCloneStatus{ProjectID: "arch", Usable: true, Fetched: true, FetchOutcome: "ok", FetchedAt: at,
+		Mirrored: true, MirroredAt: at, MirrorCounts: map[string]int{"ingested": 3, "unchanged": 70}}
+	h := &DoctorHandlers{}
+	h.SetProvenanceClones(func() []ProvenanceCloneStatus { return []ProvenanceCloneStatus{ok} })
+	got := h.checkProvenanceClone()
+	if got.Status != "OK" || !strings.Contains(got.Message, "arch: mirrored 2026-11-04T09:00:00Z (ingested 3, unchanged 70)") {
+		t.Fatalf("mirror line: %s %s", got.Status, got.Message)
+	}
+	bad := ok
+	bad.MirrorCounts = map[string]int{"failed": 2, "ingested": 1}
+	h.SetProvenanceClones(func() []ProvenanceCloneStatus { return []ProvenanceCloneStatus{bad} })
+	if got := h.checkProvenanceClone(); got.Status != "WARNING" || !strings.Contains(got.Message, "failed 2") {
+		t.Fatalf("failed files must warn: %s %s", got.Status, got.Message)
+	}
+	bad.MirrorCounts = map[string]int{"no_clone": 1}
+	h.SetProvenanceClones(func() []ProvenanceCloneStatus { return []ProvenanceCloneStatus{bad} })
+	if got := h.checkProvenanceClone(); got.Status != "WARNING" {
+		t.Fatalf("an unreadable clone must warn: %s %s", got.Status, got.Message)
+	}
+}

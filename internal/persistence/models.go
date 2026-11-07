@@ -442,6 +442,18 @@ const (
 	// any container starts. Terminal: no retry can enter a credential; the
 	// person does, on their phone. Decided by the verifier's typed error.
 	TaskFailureClassSetupIncomplete = "SETUP_INCOMPLETE"
+	// TaskFailureClassRouteNoFit is a strict-adaptive route whose router
+	// answered that none of the project's candidate workflows fits the task
+	// (delegation-engine design, "No candidate fits" is an answer; GitHub
+	// #641). Terminal: a re-run sees the same candidates. Decided by the
+	// executor's typed routeNoFitError.
+	TaskFailureClassRouteNoFit = "ROUTE_NO_FIT"
+	// TaskFailureClassCrossProjectCallFailed: a call_project caller whose
+	// call was rejected, failed or timed out, with no on_fail on the call
+	// step; or whose call could not be read on resume (GitHub #664). The
+	// message names the call and its status. Not terminal: a timed-out call
+	// may succeed on a retry.
+	TaskFailureClassCrossProjectCallFailed = "CROSS_PROJECT_CALL_FAILED"
 	// TaskFailureClassInvalidOutputLoop fires when a single role keeps
 	// emitting result.json that fails schema validation across the
 	// shape-retry + model-fallback budget. Distinct from INVALID_OUTPUT
@@ -1683,6 +1695,18 @@ const (
 	AutonomyOutcomeAborted = "ABORTED"
 )
 
+// A2AKeyRetrieval is one caller key's retrieval breadth over a window
+// (#617 slice 2; federation design, "Slice 2: the corpus-walk finding"):
+// the A2A tasks the key created that have an audit row in the window, and
+// the distinct chunks those rows list. KeyName is empty when the key row
+// is gone.
+type A2AKeyRetrieval struct {
+	KeyID   string
+	KeyName string
+	Tasks   int
+	Chunks  int
+}
+
 // MemoryRetrievalAudit is one Searcher.Search call's record. Captures
 // the chunks returned plus best-effort attribution to the
 // (task, execution, step) that triggered the search. Persisted for
@@ -2774,6 +2798,13 @@ type TaskFilter struct {
 	// broken. A card that COUNTS by failed_at must hand over a list filtered
 	// the same way, or the two disagree again.
 	FailedSince *time.Time
+	// CreatedByAPIKeyID, WorkflowID and CreatedSince narrow to one key's
+	// tasks of one workflow created at or after a time (tasks.created_at >=).
+	// They count an A2A caller key's daily quota (#617, federation design,
+	// amendment 2026-11-06). Nil = no constraint.
+	CreatedByAPIKeyID *string
+	WorkflowID        *string
+	CreatedSince      *time.Time
 	// UpdatedSince is the lower bound on tasks.updated_at. Nil = no bound.
 	//
 	// Added 2026-08-14 for the dashboard's "N failed in last 24h" card, which

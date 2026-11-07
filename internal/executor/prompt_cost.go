@@ -159,6 +159,7 @@ func AttributePromptCost(f PromptCostFixture) PromptCost {
 	if !suppressed(promptblock.ToolBudget) {
 		add(promptblock.ToolBudget, composeSystemPromptWithToolGrant(sp, f.ToolGrantAvailable))
 	}
+	add(promptblock.WritingStyle, composeSystemPromptWithWritingStyle(sp, !suppressed(promptblock.WritingStyle)))
 	// Unconditional, matching agent_input_context.go: the reporting-integrity
 	// gate runs on every step of every deployment, so suppressing the block
 	// would remove the warning and not the rule.

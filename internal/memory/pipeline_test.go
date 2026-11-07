@@ -38,6 +38,9 @@ func (f *fakeQuarantine) Get(context.Context, string) (*persistence.MemoryQuaran
 }
 func (f *fakeQuarantine) MarkReleased(context.Context, string, string) error { return nil }
 func (f *fakeQuarantine) MarkDropped(context.Context, string) error          { return nil }
+func (f *fakeQuarantine) ExistsForArtifact(context.Context, string, string) (bool, error) {
+	return false, nil
+}
 func (f *fakeQuarantine) CountByGate(context.Context, string) (map[string]int, error) {
 	return nil, nil
 }

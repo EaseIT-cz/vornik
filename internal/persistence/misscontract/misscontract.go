@@ -95,6 +95,7 @@ var Contract = map[string]MissBehavior{
 	"BrokerGrantRepository.Get":                      MissErrNotFound, // *BrokerStandingGrant
 	"AgentSecretRepository.Get":                      MissErrNotFound, // *AgentSecretRow
 	"ApproverDeviceRepository.GetDeviceByTokenHash":  MissErrNotFound, // *ApproverDeviceRow
+	"ApproverPushRepository.GetPushSubscription":     MissErrNotFound, // *ApproverPushSubscriptionRow (#163)
 	"ApproverDeviceRepository.GetPairingByClaim":     MissErrNotFound, // *ApproverPairingRow
 	"ApproverDeviceRepository.GetPairing":            MissErrNotFound, // *ApproverPairingRow
 	"AgentGrantRepository.GetIntegration":            MissErrNotFound, // *AgentIntegrationApproval

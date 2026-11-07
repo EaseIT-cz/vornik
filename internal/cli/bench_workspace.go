@@ -35,8 +35,9 @@ func (w gitWorkspace) git(ctx context.Context, args ...string) (string, error) {
 	return strings.TrimSpace(string(out)), nil
 }
 
-// Prepare removes every target present at HEAD in one commit and returns it,
-// or "" when none was present. A workspace with uncommitted entries is
+// Prepare removes every target present at HEAD, and the workflow's own state
+// (agentbench.WorkflowStatePaths, benchmark LLD §12.29), in one commit and
+// returns it, or "" when none was present. A workspace with uncommitted entries is
 // refused: the daemon's merge would fail on it anyway, and a clear on top of
 // unknown state proves nothing.
 func (w gitWorkspace) Prepare(ctx context.Context, spec agentbench.TaskSpec, repeat int) (string, error) {
@@ -59,7 +60,7 @@ func (w gitWorkspace) Prepare(ctx context.Context, spec agentbench.TaskSpec, rep
 			w.dir, spec.ID, w.describeDirt(ctx))
 	}
 	var present []string
-	for _, tg := range spec.Targets {
+	for _, tg := range append(append([]string(nil), spec.Targets...), agentbench.WorkflowStatePaths...) {
 		if out, err := w.git(ctx, "ls-files", "--", tg); err == nil && out != "" {
 			present = append(present, tg)
 		}
@@ -70,13 +71,13 @@ func (w gitWorkspace) Prepare(ctx context.Context, spec agentbench.TaskSpec, rep
 	if _, err := w.git(ctx, append([]string{"rm", "-r", "-q", "--"}, present...)...); err != nil {
 		return "", err
 	}
-	msg := fmt.Sprintf("bench: clear targets for %s r%d (§12.23)", spec.ID, repeat)
+	msg := fmt.Sprintf("bench: reset workspace for %s r%d (§12.23, §12.29)", spec.ID, repeat)
 	if _, err := w.git(ctx, "commit", "-q", "-m", msg); err != nil {
 		return "", err
 	}
 	for _, tg := range present {
 		if _, err := os.Stat(filepath.Join(w.dir, tg)); !os.IsNotExist(err) {
-			return "", fmt.Errorf("target %s still present after the clear commit", tg)
+			return "", fmt.Errorf("%s still present after the clear commit", tg)
 		}
 	}
 	return w.git(ctx, "rev-parse", "HEAD")

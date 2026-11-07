@@ -1,13 +1,13 @@
 ---
 sources:
     - path: internal/executor/call_project.go
-      sha256: f48470cb202527a9caebbbee7336a511da5d47a748477e101457c77ef2677e10
+      sha256: 6f16a913e2d39f7fd81a172d191a5a1446b9bf6699b8d0bceba5f4462c636918
     - path: internal/executor/spawn_project.go
       sha256: 657a54540b0a72fc4a61556982a8fb05c40b532083de853ec4bd3439e7e100ed
     - path: internal/executor/a2a_call.go
       sha256: 138a2e550e367a72f367669faa9fbeaa52691e74f1146a615ab12637fe51b165
     - path: internal/registry/project.go
-      sha256: 438282a14b6e55cf685243941018f913c0acbce35f70ea190b878644695f67e6
+      sha256: 4b8e1ed413d4b52ccb7520d6c25c02140f6e4c5276e0ae7cb02734478ad95d3f
 ---
 # Cross-project orchestration & agent federation
 
@@ -32,9 +32,18 @@ separately (see [A2A federation](#a2a-federation-calling-remote-agents) below).
 
 ## `call_project`: invoke another project's workflow
 
-`call_project` is a workflow **step type**. The caller blocks until the callee
-workflow reaches a terminal state, then continues with the callee's result
-available to later steps.
+`call_project` is a workflow **step type**. The caller blocks until the call
+ends, then goes where the call's outcome sends it:
+
+| the call | the caller |
+|---|---|
+| completed: the callee finished and its result passed `expect.schema` | continues at `on_success`; later steps read the result's `data` as `${outputs.<step-id>.<field>}` |
+| rejected (an empty, unreadable or schema-invalid result), failed, or timed out | goes to `on_fail`, whose step sees a result naming the call and its status |
+| any of those, with no `on_fail` | fails with the class `CROSS_PROJECT_CALL_FAILED` |
+
+`vornikctl cpc list` shows each call's status and error. A caller that was
+already waiting when you upgraded finishes under the old rule, which resumed
+at `on_success` whatever the call returned.
 
 ```yaml
 - id: enrich
@@ -51,8 +60,13 @@ available to later steps.
   on_fail: handle-error
 ```
 
-`payload` values support `${outputs.<step-id>.<field>}` interpolation from
-earlier steps in the calling workflow.
+`payload` values support `${outputs.<step-id>.<field>}` from earlier `agent`,
+`system`, `plan`, `spawn_project`, `a2a_call` and `call_project` steps. A
+reference that can never resolve is refused when the workflow loads: one to a
+step that does not exist, to the step itself, or to a `gate`, `approval` or
+`parallel` step, none of which records a readable result. A reference to a
+step that did not run on this path becomes an empty string. A text value
+longer than 256 KiB is cut, and the text says so.
 
 ### Who may call whom (allowlists)
 
@@ -139,7 +153,10 @@ enabled.
 
 The step POSTs the prompt to the agent's `tasks` endpoint, then streams the
 agent's progress over SSE until it reaches a terminal state. A stream that goes
-idle for 90s is treated as a failure.
+idle for 90s is treated as a failure. The prompt is sent as written: only an `agent`
+step's prompt resolves `${outputs.…}`, so a reference here is refused when the
+workflow loads. A later step can read the partner's answer as
+`${outputs.<this step>.text}`.
 
 ### Exposing your own agents (inbound A2A)
 

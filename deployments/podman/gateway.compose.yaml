@@ -20,6 +20,9 @@
 # this mirrors the loopback-publish idiom in trading.compose.yaml.
 services:
   gateway:
+    # Memory bound with no swap (GitHub #460, 08-runtime-manager-podman.md S6).
+    mem_limit: 2g
+    memswap_limit: 2g
     image: docker.io/kong:3.7
     container_name: vornik-gateway
     labels:

@@ -661,7 +661,9 @@ func redactPodmanArgs(args []string) []string {
 //
 // When userNSMode is explicitly configured, it is used directly with no
 // fallback. When unconfigured, StartContainer tries progressively less
-// isolated user namespace modes: default → keep-id → host. This handles
+// isolated user namespace modes: default → keep-id → host, and keep-id →
+// host when rootless (the default namespace cannot give a non-root agent its
+// bind mounts there; design D6). This handles
 // SELinux hosts and systems without /etc/subuid entries where newuidmap
 // fails under systemd's NoNewPrivileges (host mode bypasses newuidmap
 // entirely and works on any Linux host).
@@ -698,6 +700,14 @@ func (m *Manager) StartContainer(ctx context.Context, config *ContainerConfig) (
 	tries := []usernsTry{
 		{"", "default"},
 		{"keep-id", "keep-id"},
+	}
+	// Rootless: skip the default namespace (onboarding-hardening design D6,
+	// GitHub #663). It starts the container fine and then the agent, a
+	// non-root uid in the image, cannot use its bind mounts, so no start-time
+	// failure ever moved the chain on to keep-id. keep-id is the mode that
+	// works for a rootless host bind mount; host stays the last resort.
+	if m.rootless {
+		tries = tries[1:]
 	}
 	if m.allowHostUserns {
 		tries = append(tries, usernsTry{"host", "host"})

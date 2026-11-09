@@ -57,14 +57,16 @@ func TestHermesCompanion_ManifestDeclaresWhatTheCodeRegisters(t *testing.T) {
 	assert.Equal(t, "vornik-companion", m.Name)
 	assert.Regexp(t, `^\d+\.\d+\.\d+$`, m.Version)
 	assert.Equal(t, "Apache-2.0", m.License)
-	assert.Equal(t, []string{"pre_llm_call"}, m.ProvidesHooks)
+	// The digest's pre_llm_call, and the hints' hooks (design 24,
+	// "Engineering guidance from Vornik", H and V; GitHub #686).
+	assert.Equal(t, []string{"pre_llm_call", "transform_tool_result", "pre_verify"}, m.ProvidesHooks)
 
 	// Every tool the plugin can register, the memory provider's included:
 	// those register only with VORNIK_MEMORY_TOKEN set, and Hermes's catalog
 	// rule 6 is about what the plugin can register (design 24, catalog
 	// listing; review 8a55 F2).
 	var defined []string
-	for _, file := range []string{"/broker_tools.py", "/memory_provider.py"} {
+	for _, file := range []string{"/broker_tools.py", "/memory_provider.py", "/companion_delegate.py"} {
 		src, err := os.ReadFile(hermesPluginDir + file)
 		require.NoError(t, err)
 		for _, match := range regexp.MustCompile(`"name": "(vornik_[a-z_]+)"`).FindAllStringSubmatch(string(src), -1) {

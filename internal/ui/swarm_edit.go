@@ -36,6 +36,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"vornik.io/vornik/internal/configlock"
 	"vornik.io/vornik/internal/registry"
 	"vornik.io/vornik/internal/safepath"
 )
@@ -108,6 +109,14 @@ func (s *Server) SwarmEdit(w http.ResponseWriter, r *http.Request, swarmID strin
 
 // SwarmSave applies the form edits and writes a new SWARM.md.
 func (s *Server) SwarmSave(w http.ResponseWriter, r *http.Request, swarmID string) {
+	// The read, write and reload hold the process's config-write lock
+	// (operations design §6.9, GitHub #676).
+	unlock, lerr := configlock.LockAsWriter(r.Context())
+	if lerr != nil {
+		s.refuseNotConfigWriter(w, lerr)
+		return
+	}
+	defer unlock()
 	data := s.swarmEditData(swarmID)
 	data.AssistProjectID = r.URL.Query().Get("projectId")
 	data.AssistProjectID = assistProjectFromRequest(data.AssistProjectID, s.defaultAssistProjectForSwarm(swarmID))

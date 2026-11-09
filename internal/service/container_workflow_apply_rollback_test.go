@@ -153,10 +153,10 @@ func TestWorkflowProposal_RollbackConvergesTheSourceTreeToDeployed(t *testing.T)
 	_ = repo.Insert(ctx, &persistence.WorkflowProposal{
 		ID: id, WorkflowID: wfID, ProposalYAML: genome, Status: persistence.WorkflowProposalStatusApproved,
 	})
-	if _, err := newWorkflowApplier(repo, nil, deployed, nil).Apply(ctx, id, "operator"); err != nil {
+	if _, err := newWorkflowApplier(repo, nil, deployed, nil, nil).Apply(ctx, id, "operator"); err != nil {
 		t.Fatalf("apply: %v", err)
 	}
-	if _, err := newWorkflowRollbacker(repo, nil, deployed).Rollback(ctx, id, "operator"); err != nil {
+	if _, err := newWorkflowRollbacker(repo, nil, deployed, nil).Rollback(ctx, id, "operator"); err != nil {
 		t.Fatalf("rollback: %v", err)
 	}
 	for _, tree := range []string{deployed, source} {
@@ -183,7 +183,7 @@ func TestWorkflowProposal_ApplyToAMissingWorkflowIsRefusedAndWritesNothing(t *te
 		ID: id, WorkflowID: wfID, ProposalYAML: "---\nworkflowId: " + wfID + "\n---\nnew\n",
 		Status: persistence.WorkflowProposalStatusApproved,
 	})
-	if _, err := newWorkflowApplier(repo, nil, deployed, nil).Apply(ctx, id, "operator"); !errors.Is(err, workflowapply.ErrNoRollbackRecord) {
+	if _, err := newWorkflowApplier(repo, nil, deployed, nil, nil).Apply(ctx, id, "operator"); !errors.Is(err, workflowapply.ErrNoRollbackRecord) {
 		t.Fatalf("apply = %v, want ErrNoRollbackRecord", err)
 	}
 	if _, err := os.Stat(filepath.Join(deployed, "workflows", wfID+".md")); !os.IsNotExist(err) {
@@ -238,7 +238,7 @@ func TestWorkflowProposal_ApplyAndRollbackWithoutGit(t *testing.T) {
 				Status: persistence.WorkflowProposalStatusApproved,
 			})
 
-			applier := newWorkflowApplier(repo, nil, deployed, nil)
+			applier := newWorkflowApplier(repo, nil, deployed, nil, nil)
 			if applier == nil {
 				t.Fatal("newWorkflowApplier returned nil")
 			}
@@ -255,7 +255,7 @@ func TestWorkflowProposal_ApplyAndRollbackWithoutGit(t *testing.T) {
 				t.Errorf("applied row: status %q, pre_apply_yaml %q; want applied with the prior file", applied.Status, applied.PreApplyYAML)
 			}
 
-			rollbacker := newWorkflowRollbacker(repo, nil, deployed)
+			rollbacker := newWorkflowRollbacker(repo, nil, deployed, nil)
 			if rollbacker == nil {
 				t.Fatal("newWorkflowRollbacker returned nil (it used to need a git repository)")
 			}
@@ -277,5 +277,14 @@ func TestWorkflowProposal_ApplyAndRollbackWithoutGit(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// GitHub #462: with no config-writer elector the gate must be an UNTYPED nil.
+// A nil *Elector inside the interface would pass the fence's EpochVerifier
+// check and be called.
+func TestWorkflowWriterGate462_NoElectorIsUntypedNil(t *testing.T) {
+	if g := (&Container{}).workflowWriterGate(); g != nil {
+		t.Fatalf("workflowWriterGate() = %#v, want an untyped nil", g)
 	}
 }

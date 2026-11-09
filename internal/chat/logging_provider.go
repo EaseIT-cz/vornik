@@ -213,10 +213,12 @@ func (p *LoggingProvider) ModelHealthSnapshot() []ModelHealthSnapshot {
 }
 
 // WithModel returns a logging wrapper around the inner provider's
-// model-pinned clone, so per-request model overrides stay logged.
+// model-pinned clone, so per-request model overrides stay logged and are
+// tallied in the same CallStats the doctor reads (GitHub #458: the clone
+// used to drop them, undercounting every overridden call).
 func (p *LoggingProvider) WithModel(model string) Provider {
 	if o, ok := p.inner.(ModelOverridable); ok {
-		return &LoggingProvider{inner: o.WithModel(model), log: p.log}
+		return &LoggingProvider{inner: o.WithModel(model), log: p.log, stats: p.stats}
 	}
 	return p
 }

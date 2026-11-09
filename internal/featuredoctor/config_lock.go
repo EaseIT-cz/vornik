@@ -1,6 +1,8 @@
 package featuredoctor
 
 import (
+	"context"
+
 	"vornik.io/vornik/internal/configlock"
 )
 
@@ -18,8 +20,10 @@ import (
 // holds the same lock, whatever the path.
 //
 // Process-local only. Another daemon on the same files is fenced by the
-// config-writer lease.
-func LockConfigFile(path string) (unlock func()) {
+// config-writer lease: since GitHub #681 this takes configlock.LockAsWriter,
+// so on a daemon that does not hold it the write is refused with
+// configlock.ErrNotConfigWriter (operations-api-contract design §6.10).
+func LockConfigFile(ctx context.Context, path string) (unlock func(), err error) {
 	// The process's one config-write lock (GitHub #584,
 	// operations-api-contract-design.md §6.6): every writer of the config
 	// files holds it, so this serialises with rotation, setup, the archive
@@ -27,5 +31,5 @@ func LockConfigFile(path string) (unlock func()) {
 	// path stays in the signature for its callers; the lock no longer keys
 	// on it.
 	_ = path
-	return configlock.Lock()
+	return configlock.LockAsWriter(ctx)
 }

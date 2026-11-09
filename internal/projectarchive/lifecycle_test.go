@@ -514,7 +514,7 @@ func TestApplyPatches_ReadError(t *testing.T) {
 	if err := os.Remove(yamlPath); err != nil {
 		t.Fatalf("remove: %v", err)
 	}
-	if err := svc.applyPatches("proj", nil); err == nil || !strings.Contains(err.Error(), "read project yaml") {
+	if err := svc.applyPatches(context.Background(), "proj", nil); err == nil || !strings.Contains(err.Error(), "read project yaml") {
 		t.Fatalf("want 'read project yaml' error, got %v", err)
 	}
 }

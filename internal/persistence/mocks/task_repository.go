@@ -52,6 +52,10 @@ type MockTaskRepository struct {
 	// (nil, nil) when nil.
 	ListRetryInFlightFunc func(ctx context.Context, projectIDs []string, since time.Time) ([]*persistence.Task, error)
 
+	// ListApprovalsClosedSinceFunc scripts the closed-approval query.
+	// Defaults to (nil, nil) when nil.
+	ListApprovalsClosedSinceFunc func(ctx context.Context, projectIDs []string, since time.Time) ([]*persistence.Task, error)
+
 	// TransitionConditionalFunc scripts atomic status transitions
 	// for the conversational task lifecycle. Defaults to (true, nil)
 	// when nil.
@@ -251,6 +255,14 @@ func (m *MockTaskRepository) RequeueTerminalTask(ctx context.Context, id string,
 func (m *MockTaskRepository) ListRetryInFlight(ctx context.Context, projectIDs []string, since time.Time) ([]*persistence.Task, error) {
 	if m.ListRetryInFlightFunc != nil {
 		return m.ListRetryInFlightFunc(ctx, projectIDs, since)
+	}
+	return nil, nil
+}
+
+// ListApprovalsClosedSince implements TaskRepository.
+func (m *MockTaskRepository) ListApprovalsClosedSince(ctx context.Context, projectIDs []string, since time.Time) ([]*persistence.Task, error) {
+	if m.ListApprovalsClosedSinceFunc != nil {
+		return m.ListApprovalsClosedSinceFunc(ctx, projectIDs, since)
 	}
 	return nil, nil
 }

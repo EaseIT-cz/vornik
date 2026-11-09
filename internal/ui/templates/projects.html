@@ -13,6 +13,43 @@
                 {{if .Rows}}<span class="text-sm text-gray-500">{{len .Rows}} configured{{if gt .ArchivedCount 0}}, {{.ArchivedCount}} archived{{end}}</span>{{end}}
             </div>
 
+            {{/* Moved from the overview (GitHub #603): each autonomy-enabled project's
+                 next evaluation, and the Telegram conversations in flight. */}}
+            <div class="grid grid-cols-1 gap-4 lg:grid-cols-3" data-block="autonomy">
+                <div class="lg:col-span-2">
+                <!-- Autonomy ETAs tile -->
+                    <div class="glass rounded-xl border border-surface-600 overflow-hidden">
+                        {{template "sectionHeader" (dict "Title" "Autonomy · next eval" "MetaText" (printf "%d active" (len .AutonomyETAs)))}}
+                        {{if .AutonomyETAs}}
+                        <ul class="divide-y divide-surface-600/30" id="autonomy-etas">
+                            {{range .AutonomyETAs}}
+                            <li class="px-5 py-2.5">
+                                <div class="flex items-center justify-between text-sm">
+                                    <a href="/ui/projects/{{.ProjectID}}" class="text-ink-200 font-medium truncate">{{.ProjectID}}</a>
+                                    <span class="text-xs text-amber-700 dark:text-amber-300 font-mono autonomy-eta-label" data-next-eval-iso="{{.NextEvalAtISO}}">{{.EtaLabel}}</span>
+                                </div>
+                                <div class="text-xs text-ink-500 mt-0.5 flex items-center gap-2">
+                                    <span>every {{.Interval}}</span>
+                                    {{if .AgoLabel}}<span class="text-ink-600">·</span><span>last {{.AgoLabel}}</span>{{end}}
+                                    {{if .LastOutcome}}<span class="text-ink-600">·</span><span class="text-ink-400">{{.LastOutcome}}</span>{{end}}
+                                </div>
+                            </li>
+                            {{end}}
+                        </ul>
+                        {{else}}
+                        <div class="px-5 py-6 text-center text-xs text-ink-500">No projects have autonomy enabled.</div>
+                        {{end}}
+                    </div>
+                </div>
+                <div class="glass rounded-xl border border-surface-600 overflow-hidden" data-block="active-chats">
+                    {{template "sectionHeader" (dict "Title" "Active Chats")}}
+                    <div class="px-5 py-6 flex flex-col items-center justify-center">
+                        <div class="text-4xl font-bold text-purple-800 dark:text-purple-400">{{.ActiveChatCount}}</div>
+                        <div class="text-xs text-ink-500 mt-2">Telegram conversations in flight</div>
+                    </div>
+                </div>
+            </div>
+
             {{/* Delete-now outcome banners (archival design section H,
                  2026-10-14): the redirect after "Delete now" names what
                  happened — deleted, deleted with residue, or still running. */}}

@@ -238,7 +238,16 @@ func TestGitWorkspace_RefusesArgvOutsideItsShape(t *testing.T) {
 	must(t, "identity -c")(GitWorkspace(ctx, root, "-c", "user.name=vornik-agent", "-c", "user.email=agent@vornik.io", "commit", "-m", "x"))
 	must(t, "the guard's config key")(GitWorkspace(ctx, root, "config", "receive.denyCurrentBranch", "updateInstead"))
 	must(t, "remote get-url")(GitWorkspace(ctx, root, "remote", "get-url", "origin"))
+	must(t, "stash create")(GitWorkspace(ctx, root, "-c", "user.name=vornik-agent", "-c", "user.email=agent@vornik.io", "stash", "create"))
 	for _, args := range [][]string{
+		// GitHub #484: stash only as `create`, which changes no ref or file.
+		{"stash"},
+		{"stash", "drop"},
+		{"stash", "clear"},
+		{"stash", "pop"},
+		{"stash", "apply"},
+		{"stash", "push"},
+		{"stash", "create", "message"},
 		{"-c", "core.hooksPath=/tmp/h", "status"},
 		{"-c", "core.fsmonitor=/tmp/x", "status"},
 		{"-C", "/etc", "status"},

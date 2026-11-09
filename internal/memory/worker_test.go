@@ -117,7 +117,7 @@ func TestProcessBatch_EmbeddingFailureMovesToDLQ(t *testing.T) {
 		}).AddRow("c1", "p", "", "", "s", 0, "text", "h", time.Now()))
 
 	mock.ExpectBegin()
-	mock.ExpectExec("DELETE FROM memory_embed_queue").WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectQuery("DELETE FROM memory_embed_queue WHERE chunk_id = \\$1 RETURNING").WillReturnRows(noDLQCarry())
 	mock.ExpectExec("INSERT INTO memory_embed_dlq").WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectCommit()
 	w.processBatch(context.Background())
@@ -151,7 +151,7 @@ func TestProcessBatch_EmptyEmbeddingParksInDLQ(t *testing.T) {
 
 	// DLQ move + park.
 	mock.ExpectBegin()
-	mock.ExpectExec("DELETE FROM memory_embed_queue").WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectQuery("DELETE FROM memory_embed_queue WHERE chunk_id = \\$1 RETURNING").WillReturnRows(noDLQCarry())
 	mock.ExpectExec("INSERT INTO memory_embed_dlq").WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectCommit()
 	mock.ExpectExec("UPDATE memory_embed_dlq").WillReturnResult(sqlmock.NewResult(0, 1))
@@ -181,7 +181,7 @@ func TestProcessBatch_DimensionMismatchParks(t *testing.T) {
 		}).AddRow("c1", "p", "", "", "s", 0, "text", "h", time.Now()))
 
 	mock.ExpectBegin()
-	mock.ExpectExec("DELETE FROM memory_embed_queue").WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectQuery("DELETE FROM memory_embed_queue WHERE chunk_id = \\$1 RETURNING").WillReturnRows(noDLQCarry())
 	mock.ExpectExec("INSERT INTO memory_embed_dlq").WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectCommit()
 	mock.ExpectExec("UPDATE memory_embed_dlq").WillReturnResult(sqlmock.NewResult(0, 1))
@@ -238,7 +238,7 @@ func TestProcessBatch_StoreFailureMovesToDLQ(t *testing.T) {
 
 	mock.ExpectExec("UPDATE project_memory_chunks SET embedding").WillReturnError(errors.New("disk full"))
 	mock.ExpectBegin()
-	mock.ExpectExec("DELETE FROM memory_embed_queue").WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectQuery("DELETE FROM memory_embed_queue WHERE chunk_id = \\$1 RETURNING").WillReturnRows(noDLQCarry())
 	mock.ExpectExec("INSERT INTO memory_embed_dlq").WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectCommit()
 	w.processBatch(context.Background())
@@ -286,7 +286,7 @@ func TestProcessBatch_BatchFailureFallsBackToPerChunk(t *testing.T) {
 	mock.ExpectCommit()
 	mock.ExpectExec("UPDATE project_memory_chunks SET embedding").WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectBegin()
-	mock.ExpectExec("DELETE FROM memory_embed_queue").WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectQuery("DELETE FROM memory_embed_queue WHERE chunk_id = \\$1 RETURNING").WillReturnRows(noDLQCarry())
 	mock.ExpectExec("INSERT INTO memory_embed_dlq").WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectCommit()
 	// Both chunks are now terminal — one stored, one parked in the DLQ — so the

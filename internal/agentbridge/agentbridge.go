@@ -295,6 +295,17 @@ func KeyPath(configDir, ns string) (string, error) {
 	return filepath.Join(configDir, "vornik", "agents", ns+".key"), nil
 }
 
+// CompanionKeyPath is a companion key's file under configDir:
+// <configDir>/vornik/companion/<name>.key (25-claude-desktop-companion.md,
+// GitHub #589). The name follows the agent-namespace rule, so it cannot name
+// another path.
+func CompanionKeyPath(configDir, name string) (string, error) {
+	if !agentns.Valid(name) {
+		return "", fmt.Errorf("%q is not a companion name (2 to 16 lowercase letters and digits, starting with a letter)", name)
+	}
+	return filepath.Join(configDir, "vornik", "companion", name+".key"), nil
+}
+
 // CheckEndpoint refuses a URL the key would cross the network in cleartext
 // to: https anywhere, plain http only to this machine.
 func CheckEndpoint(raw string) error {

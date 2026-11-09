@@ -181,20 +181,37 @@ func runConfigReload(cmd *cobra.Command, args []string) error {
 	}
 
 	var parsed struct {
-		Success   bool   `json:"success"`
-		Message   string `json:"message"`
-		Timestamp string `json:"timestamp"`
+		Success   bool     `json:"success"`
+		Message   string   `json:"message"`
+		Timestamp string   `json:"timestamp"`
+		Warnings  []string `json:"warnings"`
 	}
 	if err := json.Unmarshal(raw, &parsed); err != nil {
 		// Print whatever we got if it's not the expected shape.
 		return prettyPrintJSON(raw)
 	}
-	if parsed.Success {
-		fmt.Printf("reload ok at %s\n", parsed.Timestamp)
-	} else {
+	if !parsed.Success {
 		fmt.Printf("reload failed at %s: %s\n", parsed.Timestamp, parsed.Message)
+		return nil
 	}
-	return nil
+	return reportReloadWarnings(cmd.ErrOrStderr(), parsed.Timestamp, parsed.Warnings)
+}
+
+// reportReloadWarnings prints "reload ok" or, when the reload applied but
+// the active configuration does not reflect every file (a project stripped,
+// or one quarantined on its previous configuration, loader-validator design
+// §15, GitHub #669/#683), each warning and a non-zero exit, so a script
+// cannot read a partial reload as a clean one.
+func reportReloadWarnings(errOut io.Writer, ts string, warnings []string) error {
+	if len(warnings) == 0 {
+		fmt.Printf("reload ok at %s\n", ts)
+		return nil
+	}
+	fmt.Printf("reload applied at %s, with %d warning(s):\n", ts, len(warnings))
+	for _, w := range warnings {
+		_, _ = fmt.Fprintf(errOut, "warning: %s\n", w)
+	}
+	return fmt.Errorf("reload applied with %d warning(s): the running configuration does not reflect every file", len(warnings))
 }
 
 func runConfigReloadStatus(cmd *cobra.Command, args []string) error {

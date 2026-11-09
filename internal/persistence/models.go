@@ -678,6 +678,14 @@ type TaskMessageFilter struct {
 	MessageKinds   []string // optional; restrict to these kinds
 	IncludeDeleted bool     // reserved; v1 doesn't soft-delete
 	Limit          int
+	// Newest applies Limit to the NEWEST rows instead of the oldest; the
+	// result is still ordered oldest first (GitHub #464,
+	// task-lifecycle-conversational design §18).
+	Newest bool
+	// IDs, when set, restricts the result to these message ids (still within
+	// TaskID), wherever they sit in the thread (GitHub #670, §18a). Limit
+	// still applies; a caller naming at most 500 ids gets every one.
+	IDs []string
 }
 
 // TaskStatusHoldsNoLease reports whether a row in status s must hold no

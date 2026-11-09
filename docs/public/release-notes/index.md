@@ -1,7 +1,7 @@
 ---
 sources:
     - path: docs/release-notes
-      sha256: 07f0005776affd75cddc64664ec0e7038232bf67dda256badb0c861da86a8a91
+      sha256: be7fb946e86a4e2dcb63ce53c7d79f094b6764084efbcf8710d9f4a0a9d242a6
 ---
 # Release Notes
 
@@ -14,6 +14,175 @@ behavior changes, and notable fixes. Internal-only changes are omitted.
     so upgrades generally require no config changes. Always take a backup
     before upgrading. A few releases ask you to restart the daemon to pick up
     new behavior; those are called out below.
+
+---
+
+## 2026.11.3
+
+### Security
+
+- **The Ollama-compatible API no longer forwards a provider's error text**
+  (GitHub #667). `/api/chat` and `/api/generate` used to answer a provider
+  error with the provider's own text, which could hold the upstream account
+  name and links. They now answer as the OpenAI-compatible proxy does: a
+  class code and a fixed or daemon-built message. The provider's text goes
+  to the daemon log. A buffered error now carries its class status (400,
+  429 or 503) where it was always 502.
+- **The companion's recall nudge no longer keeps state in a shared temp
+  path** (GitHub #651). It uses the plugin's data directory, else your own
+  runtime directory, else it stays silent, and refuses a symlinked or foreign
+  state directory. Claude Code plugin 0.50.4, Codex plugin 0.45.2.
+- **Mirrored files re-marked `never` leave the corpus** (GitHub #657). A
+  file mirrored into a project's memory and later marked `disclosure: never`
+  (or given excluded sections, or broken front matter) now has its chunks
+  retired in the next pass. A corpus rollback does not restore them.
+- **Agent read tools cannot be raced out of the workspace** (GitHub #455).
+  `file_read` and `read_many_files` open through the workspace root and check
+  the opened file, as the write tools do. A symlink that stays inside the
+  workspace still works. Ships in the agent image.
+- **The config assistant refuses tokenised calendar URLs** (GitHub #219).
+  A Google Calendar secret address, an Outlook published calendar or an
+  iCloud public calendar URL anywhere in a project's files, prose included,
+  is now a secret-hygiene finding. Other providers' feeds are not
+  recognised. Move such URLs into a secret.
+- **Memory catches a short unlabeled credential** (GitHub #438). A random
+  24 to 39 character token with mixed case and digits and no label is now
+  redacted on its way into memory; a Google Places ID is left alone.
+
+### Improvements
+
+- **Vornik guides how Hermes works** (GitHub #686). With the memory key,
+  the Hermes plugin (0.23.0) carries Vornik's standing rules in each new
+  session's prompt, hints at the moment of need (review after a commit,
+  ingest after a design, recall after a failed test), and one check before
+  finishing, as Claude Code and Codex have. The Hermes memory key is now
+  granted the review and ingest workflows; see the Hermes setup guide.
+- **A guide to publishing your own A2A expert** (GitHub #637): publishing,
+  caller keys, the answer policy, the retrieval policy, and why the
+  expert's memory is the boundary.
+- **Claude Desktop and Cowork connect with one command** (GitHub #589).
+  `vornikctl companion connect claude-desktop` stores the key in a file only
+  you can read and adds the built-in bridge to Claude Desktop's config: no
+  Node, no token in that file. `vornikctl companion doctor --client claude-desktop`
+  names each failure and its fix.
+- **The overview says what needs you first** (GitHub #603). Needs you (the
+  inbox's first rows with their actions, approver-device requests, the last
+  doctor report's errors), then health problems only, or one "All clear"
+  line. The statistics stay below, as At a glance.
+
+### Fixes
+
+- **Only the leader runs the watchdog's startup scan** (GitHub #442), so a
+  daemon joining a multi-daemon install no longer repeats the leader's sweep.
+- **A chunk the embed DLQ could not take is retried, not lost** (GitHub
+  #437, #677). It keeps its queue row instead of being released, whether
+  the embed call failed or its vector could not be stored or came back
+  empty or the wrong size.
+- **A cancelled migration run no longer leaves its lock held** (GitHub
+  #457), so the next daemon to start does not wait on it.
+- **A task message and its counters are written together on SQLite**
+  (GitHub #451), as on PostgreSQL.
+- **Two knowledge-graph updates of one edge keep both sources on SQLite**
+  (GitHub #452).
+- **A reset to origin keeps the clone's uncommitted changes** (GitHub
+  #484). They are saved to a `refs/vornik/discarded/*-dirty-*` ref first;
+  recover them with `git stash apply <ref>`.
+- **Workflow proposals are applied and rolled back by the config writer
+  only** (GitHub #462). A refusal writes nothing and answers 409
+  (`APPLY_IN_PROGRESS` or `WRITER_FENCED`).
+- **The memory recall audit has a retention horizon** (GitHub #549): the
+  tool-call audit's window, at least 180 days unless that floor is
+  overridden, once retention is enabled (it is off by default).
+- **A retry the model circuit rejected keeps its attempt** (GitHub #492),
+  so tasks released together after an outage no longer run out of attempts
+  on rejects.
+- **Tool grants and API audits name the right role in every workflow**
+  (GitHub #551), not the default workflow's.
+- **The web scraper says when its network is down** (GitHub #601), instead
+  of reporting an SSRF-guard refusal.
+- **Admin UI edits wait for other configuration changes** (GitHub #676),
+  so a UI save and a control-plane apply cannot overwrite each other.
+- **The backlog refresh keeps the clone's local work** (GitHub #675):
+  local-only commits and uncommitted changes are saved to
+  `refs/vornik/discarded/*` refs before the reset, as a task-start reset
+  does.
+- **Deleting a project on some S3-compatible stores deletes every object**
+  (GitHub #443), not only the first 1,000; a delete that cannot finish is
+  reported as incomplete.
+- **Secret checks no longer reveal a secret's length** (GitHub #445): the
+  `/metrics` scrape token and the broker's internal key are compared as
+  fixed-length digests.
+- **A parent waiting on its children no longer counts as needing you**
+  (GitHub #671): the row stays in the inbox, uncounted, and the overview
+  can say "All clear".
+- **Doctor counts calls made with a model override** (GitHub #458), so its
+  per-model failure counts include them.
+- **Failed embeddings back off longer each time** (GitHub #674), up to 24
+  hours, instead of every 10 minutes.
+- **Placeholder text is easier to read on the light theme** (GitHub #486):
+  it meets 4.5:1 contrast in both themes.
+- **The benchmark grader and the scraper login browser have a memory
+  limit** (GitHub #460): half the host's memory, no swap.
+- **Memory recall queries are scanned for secrets before they are stored**
+  (GitHub #680), like chat transcripts and task messages.
+- **The design-edit hint sees DESIGN.md** (GitHub #682), whatever the case of
+  the name (companion plugins 0.50.5 and 0.45.3).
+- **Config changes are refused on a daemon that is not the config writer**
+  (GitHub #681): on a multi-daemon install they answer 409 and write
+  nothing; a single daemon is not affected.
+- **A config reload no longer drops a project whose file it cannot read**
+  (GitHub #683, #669): the project keeps its previous configuration, the
+  other changes apply, and `vornikctl config reload` exits non-zero with the
+  warning.
+- **A restart no longer refills the knowledge graph's retry budget**
+  (GitHub #493): the count of a chunk's uncounted provider-error retries is
+  stored with the chunk.
+- **The canary guard runs where it can roll back** (GitHub #485): on the
+  daemon that holds the config-writer lease.
+- **The lead reads a long thread's newest messages** (GitHub #464). On a
+  thread over 50 messages the lead now sees the latest ones, the operator's
+  newest directive included.
+- **An approved change that cannot apply no longer deadlocks its project**
+  (GitHub #579). A verified revert frees the namespace; an approval whose
+  effect keeps failing is recorded failed after 60 attempts (about an hour).
+- **A closed approval says which task above it was cancelled** (GitHub
+  #490). The inbox shows it for 24 hours, and a stale Telegram button
+  answers with the reason instead of "already handled".
+- **Agent benchmark tasks no longer see earlier tasks' work in git**
+  (GitHub #655). Each repeat now starts on a one-commit history, and the
+  earlier history moves to an archive no agent can read. Harness version 11;
+  journals from harness 10 and 11 do not compare.
+- **A hand-configured rootless install runs its first agent task** (GitHub
+  #663). With `userns_mode` empty, rootless Podman now starts agents with
+  keep-id; `server.address: ":8080"` gives agents a reachable callback URL;
+  and the new doctor check `agent_daemon_reach` flags a loopback listen
+  address that agents cannot reach.
+- **An empty git repository is bootstrapped** (GitHub #659). A project
+  directory made with `git init` and no commit gets a seed commit, instead of
+  failing every task at merge.
+- **The agent benchmark runs unattended past a failed task** (GitHub #600,
+  #660). A failed task's leftover files are archived instead of stopping the
+  next task, and the reset commit no longer needs a git identity on the host.
+- **A pipeline failure is no longer graded as a compile failure** (GitHub
+  #661). A benchmark task that failed before its code reached the workspace
+  is graded `pipeline_failed`, not `does_not_compile`. Pass rates do not
+  change.
+- **A memory version pushed and then replaced is labelled out of date**
+  (GitHub #550). It was labelled as a draft awaiting its push for good. A
+  document redacted on upload now says so, instead of the same false label.
+- **Doctor's fallback advice no longer depends on read order** (GitHub
+  #668). `model_health` lists every fallback the roles pinning a model name,
+  with the number of roles for each. It also counts roles with no fallback,
+  and roles whose fallback is the model itself. Before, it kept the first
+  role it read, so two runs could disagree.
+- **Doctor names a provider's usage limit instead of blaming the model**
+  (GitHub #665). A failed call no longer counts as "degenerate output" in
+  `model_health`: the token median reads only calls that reached the model.
+  An upstream usage or rate limit now reaches the agent as
+  `429 UPSTREAM_RATE_LIMITED` instead of a generic `502 PROVIDER_ERROR`.
+  The message is fixed; the provider's text is never forwarded. Doctor counts
+  these failures and names the account's limit as the cause. External
+  OpenAI-compatible callers see a 429 where they saw a 502.
 
 ---
 

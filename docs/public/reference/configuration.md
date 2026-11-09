@@ -193,7 +193,7 @@ vornik reads its configuration from `config.yaml`. The keys below are the custom
 | `retention.enabled` | bool | Turn the background sweeper on. | — |
 | `retention.interval` | string | How often the sweeper runs. | — |
 | `retention.task_llm_usage_days` | int | Days to keep per-task LLM usage rows. | — |
-| `retention.tool_audit_days` | int | Days to keep tool-call audit rows; clamped up to tool_audit_floor_days. | — |
+| `retention.tool_audit_days` | int | Days to keep tool-call audit rows and memory recall audit rows; clamped up to tool_audit_floor_days. | — |
 | `retention.tool_audit_floor_days` | int | Minimum days to keep tool-call audit rows (0 = 180, six months). | — |
 | `retention.tool_audit_floor_override` | bool | Allow tool_audit_floor_days below six months (logs a warning). | — |
 | `retention.tool_audit_floor_override_basis` | string | Why six months does not apply (a law requiring less, or not a high-risk deployment); required for the override. | — |

@@ -431,8 +431,13 @@ func (w *Watchdog) runLoop() {
 	defer w.wg.Done()
 
 	// Fire one scan immediately so a stuck row caught at startup
-	// doesn't have to wait an interval before being surfaced.
-	w.scanOnce()
+	// doesn't have to wait an interval before being surfaced. It takes the
+	// leader gate like every tick (GitHub #442: a booting non-leader ran the
+	// full sweep beside the leader). The subsystem bootstraps the election
+	// before Start, so a leader already knows it here.
+	if w.leaderGate == nil || w.leaderGate.IsLeader() {
+		w.scanOnce()
+	}
 
 	ticker := time.NewTicker(w.cfg.Interval)
 	defer ticker.Stop()

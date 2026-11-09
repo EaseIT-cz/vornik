@@ -86,6 +86,9 @@ func (h *DoctorHandlers) resolveDaemonRevision() string {
 
 // DoctorHandlers provides the /api/v1/doctor endpoint.
 type DoctorHandlers struct {
+	// lastReport keeps the last report's error checks for the overview
+	// (GitHub #603); set by RunReportReadOnly and RunDoctor.
+	lastReport doctorLastReport
 	// buildRevision reports the running binary's revision for
 	// config_template_drift's baseline-currency test; nil means
 	// version.BuildRevision. A seam because a test binary carries no VCS stamp.
@@ -164,7 +167,10 @@ type DoctorHandlers struct {
 	// that only the daemon's own /api/v1 proxy accepts, and an empty
 	// agent_llm.endpoint silently falls back to the real upstream.
 	agentLLMEndpoint string
-	unixSocketPath   string
+	// defaultNetwork backs checkAgentDaemonReach (runtime.default_network,
+	// the network a role without its own network field gets; design D6).
+	defaultNetwork string
+	unixSocketPath string
 	// chatEndpoint and chatAPIKey back checkAgentLLMAPIKey, the
 	// upstream-credential guard (F2c): a present-but-rejected chat.api_key
 	// (or an empty one against a real, non-loopback chat.endpoint) makes
@@ -513,6 +519,7 @@ func (h *DoctorHandlers) SetServerConfig(cfg *config.Config) {
 	h.workspacesRoot = cfg.Runtime.ProjectWorkspacePath
 	h.webWritesMode, _ = cfg.Web.WritesMode() // invalid values fail Validate() at startup
 	h.agentLLMEndpoint = cfg.Runtime.AgentLLM.Endpoint
+	h.defaultNetwork = cfg.Runtime.DefaultNetwork
 	h.unixSocketPath = cfg.Server.UnixSocket
 	h.chatEndpoint = cfg.Chat.Endpoint
 	h.chatAPIKey = cfg.Chat.APIKey
@@ -684,6 +691,7 @@ func (h *DoctorHandlers) RunReportReadOnly(ctx context.Context) DoctorReport {
 	report.Checks = append(report.Checks, hostChecksNotice())
 	report.Checks = append(report.Checks, h.checkGitConfigComposition())
 	report.Checks = append(report.Checks, h.checkAgentLLMTopology())
+	report.Checks = append(report.Checks, h.checkAgentDaemonReach())
 	report.Checks = append(report.Checks, h.checkAPISecurityPosture())
 	report.Checks = append(report.Checks, h.checkBudgetUtilisation(ctx))
 	report.Checks = append(report.Checks, h.checkLeaderLocksHealth())
@@ -736,6 +744,7 @@ func (h *DoctorHandlers) RunReportReadOnly(ctx context.Context) DoctorReport {
 	} else {
 		report.Summary = fmt.Sprintf("%d issues found", issues)
 	}
+	h.lastReport.remember(report, time.Now())
 	return report
 }
 
@@ -783,6 +792,7 @@ func (h *DoctorHandlers) RunDoctor(w http.ResponseWriter, r *http.Request) {
 	report.Checks = append(report.Checks, h.checkEnvFileFreshness())
 	report.Checks = append(report.Checks, h.checkBuildProvenance())
 	report.Checks = append(report.Checks, h.checkAgentLLMTopology())
+	report.Checks = append(report.Checks, h.checkAgentDaemonReach())
 	report.Checks = append(report.Checks, h.checkAgentLLMAPIKey(ctx))
 	report.Checks = append(report.Checks, h.checkAPISecurityPosture())
 	report.Checks = append(report.Checks, h.checkAPIKeyStrength())
@@ -859,6 +869,7 @@ func (h *DoctorHandlers) RunDoctor(w http.ResponseWriter, r *http.Request) {
 		report.Summary = fmt.Sprintf("%d issues found (run with ?fix=true to repair)", issues)
 	}
 
+	h.lastReport.remember(report, time.Now())
 	respondJSON(w, http.StatusOK, report)
 }
 

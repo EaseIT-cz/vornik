@@ -14,6 +14,9 @@ import (
 type retryHolds struct {
 	mu sync.Mutex
 	at map[string]retryHold
+	// unspent marks a failed attempt the circuit fast-rejected, so it spent
+	// no budget (GitHub #492); the value is when it was stored, for pruning.
+	unspent map[string]time.Time
 }
 
 type retryHold struct {
@@ -59,4 +62,32 @@ func (e *Executor) RetryNotBefore(taskID string) (time.Time, bool) {
 	h, ok := e.retryHold.at[taskID]
 	delete(e.retryHold.at, taskID)
 	return h.notBefore, ok
+}
+
+// recordUnspentAttempt marks taskID's failed attempt as not spent: its model
+// call was fast-rejected by an open circuit (permanent-failure design §8.8.5,
+// GitHub #492). Stored beside the hold, pruned the same way.
+func (e *Executor) recordUnspentAttempt(taskID string) {
+	now := time.Now()
+	e.retryHold.mu.Lock()
+	defer e.retryHold.mu.Unlock()
+	if e.retryHold.unspent == nil {
+		e.retryHold.unspent = make(map[string]time.Time)
+	}
+	for id, at := range e.retryHold.unspent {
+		if now.Sub(at) > retryHoldMaxAge {
+			delete(e.retryHold.unspent, id)
+		}
+	}
+	e.retryHold.unspent[taskID] = now
+}
+
+// AttemptNotSpent reports and forgets whether taskID's failed attempt was not
+// spent. Implements scheduler.UnspentAttemptSource.
+func (e *Executor) AttemptNotSpent(taskID string) bool {
+	e.retryHold.mu.Lock()
+	defer e.retryHold.mu.Unlock()
+	_, ok := e.retryHold.unspent[taskID]
+	delete(e.retryHold.unspent, taskID)
+	return ok
 }

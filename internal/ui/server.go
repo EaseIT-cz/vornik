@@ -775,6 +775,9 @@ type Server struct {
 	// was left pointing at a deleted architect when the producer changed.
 	healingGenerator HealingCandidateGeneratorUI
 	adminReadiness   ReadinessProvider
+	// lastDoctorErrors reports the last doctor report's error checks for the
+	// overview (GitHub #603); nil shows no doctor line.
+	lastDoctorErrors func() (names []string, at time.Time, ok bool)
 	adminLeaseAudit  LeaseAuditSource
 	adminStuckExecs  StuckExecutionSource
 	// leaderLockSource powers /ui/admin/health/cluster — cluster
@@ -2173,6 +2176,12 @@ func WithMemoryIngestAuditRepository(repo persistence.MemoryIngestAuditRepositor
 // WithCapabilityUsageRepository wires the capability-adoption reader.
 func WithCapabilityUsageRepository(repo persistence.CapabilityUsageRepository) ServerOption {
 	return func(s *Server) { s.capabilityUsage = repo }
+}
+
+// WithLastDoctorErrors wires the source of the overview's doctor line: the
+// error checks of the last doctor report any caller ran (GitHub #603).
+func WithLastDoctorErrors(fn func() (names []string, at time.Time, ok bool)) ServerOption {
+	return func(s *Server) { s.lastDoctorErrors = fn }
 }
 
 // WithAdminReadinessProvider wires an in-process readiness source

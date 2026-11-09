@@ -143,7 +143,23 @@ type ChunkGraphExtractionRepository interface {
 	// instead re-attempt the same ~83% of chunks every tick at a full token
 	// budget. A quarantined chunk is re-flagged deliberately (vornikctl memory
 	// regraph --quarantined, ReflagQuarantinedChunks) once the cause is fixed.
+	//
+	// When the failure quarantines the chunk it also zeroes the chunk's
+	// transient-failure count (LLD §3.3d).
 	RecordExtractionFailure(ctx context.Context, chunkID, reason string, maxAttempts int) (attempts int, quarantined bool, err error)
+
+	// AbsorbTransientFailure spends one of the chunk's uncounted retries for
+	// a transient provider failure (LLD §3.3c/§3.3d, GitHub #493): it
+	// increments graph_transient_failures when it is below maxTransient and
+	// reports whether it did, in one statement, so the budget survives a
+	// restart and two workers cannot both spend the last retry. A chunk that
+	// does not exist is not absorbed (false, nil). MarkExtracted and a
+	// quarantining RecordExtractionFailure zero the count.
+	AbsorbTransientFailure(ctx context.Context, chunkID string, maxTransient int) (absorbed bool, err error)
+
+	// ResetTransientFailures zeroes the chunk's transient-failure count: the
+	// worker calls it on a non-transient failure (the provider was up).
+	ResetTransientFailures(ctx context.Context, chunkID string) error
 
 	// PendingCount reports how many chunks still need extraction.
 	// Powers the worker's "still draining" gauge so dashboards can

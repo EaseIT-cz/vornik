@@ -246,7 +246,7 @@ class NoEnvironmentReadTest(unittest.TestCase):
         for path in sorted(PLUGIN_DIR.glob("*.py")):
             examined += 1
             self.assertIsNone(read.search(path.read_text()), path.name)
-        self.assertEqual(examined, 8, "the denominator: every module of the plugin was scanned")
+        self.assertEqual(examined, 11, "the denominator: every module of the plugin was scanned")
 
     def test_the_scan_catches_the_old_read(self):
         names = "|".join(settings.NAMES)

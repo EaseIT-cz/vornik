@@ -137,7 +137,7 @@ func (b *Bot) steerApprove(ctx context.Context, chatID int64, callbackID string,
 		return b.answerCallbackQuery(ctx, callbackID, "Could not approve: "+err.Error(), true)
 	}
 	if !ok {
-		return b.answerCallbackQuery(ctx, callbackID, "This task was already handled or its state changed.", false)
+		return b.answerStaleSteer(ctx, chatID, callbackID, msgID, task.ID)
 	}
 	if b.rescheduler != nil {
 		b.rescheduler.Wake()
@@ -158,7 +158,7 @@ func (b *Bot) steerReject(ctx context.Context, chatID int64, callbackID string, 
 		return b.answerCallbackQuery(ctx, callbackID, "Could not reject: "+err.Error(), true)
 	}
 	if !outcome.Transitioned {
-		return b.answerCallbackQuery(ctx, callbackID, "This task was already handled or its state changed.", false)
+		return b.answerStaleSteer(ctx, chatID, callbackID, msgID, task.ID)
 	}
 	if outcome.TeardownErr != nil {
 		b.logger.Error().Err(outcome.TeardownErr).Str("task_id", task.ID).
@@ -180,6 +180,27 @@ func (b *Bot) steerReject(ctx context.Context, chatID int64, callbackID string, 
 // with the buttons stripped, so the operator sees the action landed. Best-
 // effort: a nil/zero message id or an edit failure just skips the edit (the
 // callback toast still confirms).
+// callbackAnswerMax is Telegram's limit on an answerCallbackQuery text.
+const callbackAnswerMax = 200
+
+// answerStaleSteer answers an Approve or Reject tap whose write did not move
+// the task. When the cancel cascade closed the approval, the answer is its
+// reason and the prompt loses its buttons (05-scheduler §4.11 "Amended
+// 2026-11-07", GitHub #490); otherwise the answer is the generic one.
+func (b *Bot) answerStaleSteer(ctx context.Context, chatID int64, callbackID string, msgID int64, taskID string) error {
+	fresh, err := b.taskRepo.Get(ctx, taskID)
+	if err == nil && fresh != nil && fresh.Status == persistence.TaskStatusCancelled &&
+		fresh.LastError != nil && strings.HasPrefix(*fresh.LastError, persistence.ApprovalClosedPrefix) {
+		text := "Closed: " + strings.TrimPrefix(*fresh.LastError, persistence.ApprovalClosedPrefix)
+		b.markSteerRecorded(ctx, chatID, msgID, text)
+		if r := []rune(text); len(r) > callbackAnswerMax {
+			text = string(r[:callbackAnswerMax-1]) + "…"
+		}
+		return b.answerCallbackQuery(ctx, callbackID, text, false)
+	}
+	return b.answerCallbackQuery(ctx, callbackID, "This task was already handled or its state changed.", false)
+}
+
 func (b *Bot) markSteerRecorded(ctx context.Context, chatID, msgID int64, text string) {
 	if msgID == 0 {
 		return

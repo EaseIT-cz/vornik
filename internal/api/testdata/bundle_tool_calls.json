@@ -1,35 +1,354 @@
 {
   "_comment": "Every companion tool call the shipped bundles make in code, one entry per call site, with the fullest argument object that site can send. Read by TestCompanionStrictArgs_ShippedBundleCallsDecode (GitHub #305, LLD 21 section A). The test scans the bundle sources and fails when a call site has no entry here.",
   "calls": [
-    {"bundle": "hermes", "file": "contrib/hermes-companion/digest.py", "line": 72, "tool": "list", "arguments": {"project": "*"}},
-    {"bundle": "hermes", "file": "contrib/hermes-companion/digest.py", "line": 126, "tool": "status", "arguments": {"task_id": "t"}},
-    {"bundle": "hermes", "file": "contrib/hermes-companion/__init__.py", "line": 53, "tool": "list", "arguments": {"project": "*"}},
-    {"bundle": "hermes", "file": "contrib/hermes-companion/memory_provider.py", "line": 320, "tool": "recall", "arguments": {"query": "q"}},
-    {"bundle": "hermes", "file": "contrib/hermes-companion/memory_provider.py", "line": 329, "tool": "remember", "arguments": {"content": "c"}},
-    {"bundle": "hermes", "file": "contrib/hermes-companion/memory_provider.py", "line": 342, "tool": "recall", "arguments": {"query": "q", "limit": 5}},
-    {"bundle": "hermes", "file": "contrib/hermes-companion/memory_provider.py", "line": 385, "tool": "remember", "arguments": {"content": "c"}},
-    {"bundle": "hermes", "file": "contrib/hermes-companion/memory_provider.py", "line": 393, "tool": "recall", "arguments": {"query": "q", "limit": 5}},
-    {"bundle": "hermes", "file": "contrib/hermes-companion/memory_provider.py", "line": 426, "tool": "memory_correct", "arguments": {"chunk_ids": ["a"], "reason": "mirror_forget"}},
-    {"bundle": "hermes", "file": "contrib/hermes-companion/memory_provider.py", "line": 494, "tool": "recall", "arguments": {"query": "q", "limit": 20}},
-    {"bundle": "hermes", "file": "contrib/hermes-companion/memory_provider.py", "line": 497, "tool": "recent_memory", "arguments": {"limit": 20}},
-    {"bundle": "hermes", "file": "contrib/hermes-companion/memory_provider.py", "line": 519, "tool": "memory_list", "arguments": {"limit": 20, "cursor": "c", "query": "q"}},
-    {"bundle": "hermes", "file": "contrib/hermes-companion/memory_provider.py", "line": 546, "tool": "memory_list", "arguments": {"limit": 1}},
-    {"bundle": "hermes", "file": "contrib/hermes-companion/memory_provider.py", "line": 566, "tool": "memory_correct", "arguments": {"chunk_ids": ["a"], "reason": "forget_command"}},
-    {"bundle": "claude-code", "file": "contrib/claude-code-companion/commands/remember.md", "line": 90, "tool": "remember", "arguments": {"content": "c", "class": "decision", "ttl_days": 30, "repo_scope": "github.com/x/y"}},
-    {"bundle": "claude-code", "file": "contrib/claude-code-companion/commands/memory-correct.md", "line": 123, "tool": "memory_correct", "arguments": {"chunk_ids": ["a"], "wrong_claim": "w", "correction": "c", "max_refutes": 3, "repo_scope": "github.com/x/y"}},
-    {"bundle": "claude-code", "file": "contrib/claude-code-companion/commands/upload.md", "line": 263, "tool": "delegate", "arguments": {"workflow": "companion-architectural-review", "prompt": "p", "inputArtifacts": [{"name": "a.md", "content": "YQ=="}], "skip_auto_extract": true, "repo_scope": "github.com/x/y"}},
-    {"bundle": "claude-code", "file": "contrib/claude-code-companion/commands/rag-ingest.md", "line": 353, "tool": "delegate", "arguments": {"workflow": "companion-rag-ingest", "prompt": "p", "inputArtifacts": [{"name": "a.md", "content": "YQ==", "path": "docs/a.md"}], "skip_auto_extract": true, "repo_scope": "github.com/x/y"}},
-    {"bundle": "claude-code", "file": "contrib/claude-code-companion/hooks/session-start.sh", "line": 225, "tool": "list", "arguments": {"limit": 20}},
-    {"bundle": "claude-code", "file": "contrib/claude-code-companion/hooks/session-start.sh", "line": 284, "tool": "recent_memory", "arguments": {"limit": 5, "repo_scope": "github.com/x/y"}},
-    {"bundle": "hermes", "file": "contrib/hermes-companion/broker_tools.py", "line": 194, "tool": "catalog", "arguments": {}},
-    {"bundle": "hermes", "file": "contrib/hermes-companion/broker_tools.py", "line": 215, "tool": "catalog", "arguments": {}},
-    {"bundle": "hermes", "file": "contrib/hermes-companion/broker_tools.py", "line": 238, "tool": "delegate", "arguments": {"workflow": "mail-digest", "inputs": {"since": "1d"}, "max_age_seconds": 600}},
-    {"bundle": "hermes", "file": "contrib/hermes-companion/broker_tools.py", "line": 251, "tool": "result", "arguments": {"task_id": "t", "wait_seconds": 25}},
-    {"bundle": "hermes", "file": "contrib/hermes-companion/broker_tools.py", "line": 256, "tool": "status", "arguments": {"task_id": "t"}},
-    {"bundle": "hermes", "file": "contrib/hermes-companion/broker_tools.py", "line": 261, "tool": "cancel", "arguments": {"task_id": "t"}},
-    {"bundle": "hermes", "file": "contrib/hermes-companion/broker_tools.py", "line": 291, "tool": "list_artifacts", "arguments": {"task_id": "t", "execution_id": "e", "page_size": 100, "offset": 200}},
-    {"bundle": "hermes", "file": "contrib/hermes-companion/broker_tools.py", "line": 295, "tool": "read_artifact", "arguments": {"task_id": "t", "execution_id": "e", "artifact_id": "a"}},
-    {"bundle": "hermes", "file": "contrib/hermes-companion/broker_tools.py", "line": 329, "tool": "task_logs", "arguments": {"task_id": "t", "cursor": "e:1", "tail": 500, "wait_seconds": 25}},
-    {"bundle": "hermes", "file": "contrib/hermes-companion/broker_tools.py", "line": 337, "tool": "task_explain", "arguments": {"task_id": "t"}}
+    {
+      "bundle": "hermes",
+      "file": "contrib/hermes-companion/__init__.py",
+      "line": 53,
+      "tool": "list",
+      "arguments": {
+        "project": "*"
+      }
+    },
+    {
+      "bundle": "hermes",
+      "file": "contrib/hermes-companion/broker_tools.py",
+      "line": 197,
+      "tool": "catalog",
+      "arguments": {}
+    },
+    {
+      "bundle": "hermes",
+      "file": "contrib/hermes-companion/broker_tools.py",
+      "line": 218,
+      "tool": "catalog",
+      "arguments": {}
+    },
+    {
+      "bundle": "hermes",
+      "file": "contrib/hermes-companion/broker_tools.py",
+      "line": 241,
+      "tool": "delegate",
+      "arguments": {
+        "workflow": "mail-digest",
+        "inputs": {
+          "since": "1d"
+        },
+        "max_age_seconds": 600
+      }
+    },
+    {
+      "bundle": "hermes",
+      "file": "contrib/hermes-companion/broker_tools.py",
+      "line": 263,
+      "tool": "result",
+      "arguments": {
+        "task_id": "t",
+        "wait_seconds": 25
+      }
+    },
+    {
+      "bundle": "hermes",
+      "file": "contrib/hermes-companion/broker_tools.py",
+      "line": 270,
+      "tool": "status",
+      "arguments": {
+        "task_id": "t"
+      }
+    },
+    {
+      "bundle": "hermes",
+      "file": "contrib/hermes-companion/broker_tools.py",
+      "line": 277,
+      "tool": "cancel",
+      "arguments": {
+        "task_id": "t"
+      }
+    },
+    {
+      "bundle": "hermes",
+      "file": "contrib/hermes-companion/broker_tools.py",
+      "line": 307,
+      "tool": "list_artifacts",
+      "arguments": {
+        "task_id": "t",
+        "execution_id": "e",
+        "page_size": 100,
+        "offset": 200
+      }
+    },
+    {
+      "bundle": "hermes",
+      "file": "contrib/hermes-companion/broker_tools.py",
+      "line": 311,
+      "tool": "read_artifact",
+      "arguments": {
+        "task_id": "t",
+        "execution_id": "e",
+        "artifact_id": "a"
+      }
+    },
+    {
+      "bundle": "hermes",
+      "file": "contrib/hermes-companion/broker_tools.py",
+      "line": 345,
+      "tool": "task_logs",
+      "arguments": {
+        "task_id": "t",
+        "cursor": "e:1",
+        "tail": 500,
+        "wait_seconds": 25
+      }
+    },
+    {
+      "bundle": "hermes",
+      "file": "contrib/hermes-companion/broker_tools.py",
+      "line": 353,
+      "tool": "task_explain",
+      "arguments": {
+        "task_id": "t"
+      }
+    },
+    {
+      "bundle": "hermes",
+      "file": "contrib/hermes-companion/cli.py",
+      "line": 244,
+      "tool": "catalog",
+      "arguments": {}
+    },
+    {
+      "bundle": "hermes",
+      "file": "contrib/hermes-companion/companion_delegate.py",
+      "line": 87,
+      "tool": "catalog",
+      "arguments": {}
+    },
+    {
+      "bundle": "hermes",
+      "file": "contrib/hermes-companion/companion_delegate.py",
+      "line": 202,
+      "tool": "delegate",
+      "arguments": {
+        "workflow": "companion-architectural-review",
+        "prompt": "p",
+        "inputArtifacts": [
+          {
+            "name": "change.diff",
+            "content": "eA=="
+          }
+        ]
+      }
+    },
+    {
+      "bundle": "hermes",
+      "file": "contrib/hermes-companion/digest.py",
+      "line": 72,
+      "tool": "list",
+      "arguments": {
+        "project": "*"
+      }
+    },
+    {
+      "bundle": "hermes",
+      "file": "contrib/hermes-companion/digest.py",
+      "line": 126,
+      "tool": "status",
+      "arguments": {
+        "task_id": "t"
+      }
+    },
+    {
+      "bundle": "hermes",
+      "file": "contrib/hermes-companion/memory_provider.py",
+      "line": 321,
+      "tool": "recall",
+      "arguments": {
+        "query": "q"
+      }
+    },
+    {
+      "bundle": "hermes",
+      "file": "contrib/hermes-companion/memory_provider.py",
+      "line": 330,
+      "tool": "remember",
+      "arguments": {
+        "content": "c"
+      }
+    },
+    {
+      "bundle": "hermes",
+      "file": "contrib/hermes-companion/memory_provider.py",
+      "line": 343,
+      "tool": "recall",
+      "arguments": {
+        "query": "q",
+        "limit": 5
+      }
+    },
+    {
+      "bundle": "hermes",
+      "file": "contrib/hermes-companion/memory_provider.py",
+      "line": 386,
+      "tool": "remember",
+      "arguments": {
+        "content": "c"
+      }
+    },
+    {
+      "bundle": "hermes",
+      "file": "contrib/hermes-companion/memory_provider.py",
+      "line": 394,
+      "tool": "recall",
+      "arguments": {
+        "query": "q",
+        "limit": 5
+      }
+    },
+    {
+      "bundle": "hermes",
+      "file": "contrib/hermes-companion/memory_provider.py",
+      "line": 427,
+      "tool": "memory_correct",
+      "arguments": {
+        "chunk_ids": [
+          "a"
+        ],
+        "reason": "mirror_forget"
+      }
+    },
+    {
+      "bundle": "hermes",
+      "file": "contrib/hermes-companion/memory_provider.py",
+      "line": 495,
+      "tool": "recall",
+      "arguments": {
+        "query": "q",
+        "limit": 20
+      }
+    },
+    {
+      "bundle": "hermes",
+      "file": "contrib/hermes-companion/memory_provider.py",
+      "line": 498,
+      "tool": "recent_memory",
+      "arguments": {
+        "limit": 20
+      }
+    },
+    {
+      "bundle": "hermes",
+      "file": "contrib/hermes-companion/memory_provider.py",
+      "line": 520,
+      "tool": "memory_list",
+      "arguments": {
+        "limit": 20,
+        "cursor": "c",
+        "query": "q"
+      }
+    },
+    {
+      "bundle": "hermes",
+      "file": "contrib/hermes-companion/memory_provider.py",
+      "line": 547,
+      "tool": "memory_list",
+      "arguments": {
+        "limit": 1
+      }
+    },
+    {
+      "bundle": "hermes",
+      "file": "contrib/hermes-companion/memory_provider.py",
+      "line": 567,
+      "tool": "memory_correct",
+      "arguments": {
+        "chunk_ids": [
+          "a"
+        ],
+        "reason": "forget_command"
+      }
+    },
+    {
+      "bundle": "claude-code",
+      "file": "contrib/claude-code-companion/commands/memory-correct.md",
+      "line": 123,
+      "tool": "memory_correct",
+      "arguments": {
+        "chunk_ids": [
+          "a"
+        ],
+        "wrong_claim": "w",
+        "correction": "c",
+        "max_refutes": 3,
+        "repo_scope": "github.com/x/y"
+      }
+    },
+    {
+      "bundle": "claude-code",
+      "file": "contrib/claude-code-companion/commands/rag-ingest.md",
+      "line": 353,
+      "tool": "delegate",
+      "arguments": {
+        "workflow": "companion-rag-ingest",
+        "prompt": "p",
+        "inputArtifacts": [
+          {
+            "name": "a.md",
+            "content": "YQ==",
+            "path": "docs/a.md"
+          }
+        ],
+        "skip_auto_extract": true,
+        "repo_scope": "github.com/x/y"
+      }
+    },
+    {
+      "bundle": "claude-code",
+      "file": "contrib/claude-code-companion/commands/remember.md",
+      "line": 90,
+      "tool": "remember",
+      "arguments": {
+        "content": "c",
+        "class": "decision",
+        "ttl_days": 30,
+        "repo_scope": "github.com/x/y"
+      }
+    },
+    {
+      "bundle": "claude-code",
+      "file": "contrib/claude-code-companion/commands/upload.md",
+      "line": 263,
+      "tool": "delegate",
+      "arguments": {
+        "workflow": "companion-architectural-review",
+        "prompt": "p",
+        "inputArtifacts": [
+          {
+            "name": "a.md",
+            "content": "YQ=="
+          }
+        ],
+        "skip_auto_extract": true,
+        "repo_scope": "github.com/x/y"
+      }
+    },
+    {
+      "bundle": "claude-code",
+      "file": "contrib/claude-code-companion/hooks/session-start.sh",
+      "line": 225,
+      "tool": "list",
+      "arguments": {
+        "limit": 20
+      }
+    },
+    {
+      "bundle": "claude-code",
+      "file": "contrib/claude-code-companion/hooks/session-start.sh",
+      "line": 284,
+      "tool": "recent_memory",
+      "arguments": {
+        "limit": 5,
+        "repo_scope": "github.com/x/y"
+      }
+    }
   ]
 }

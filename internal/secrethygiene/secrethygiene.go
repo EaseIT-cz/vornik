@@ -24,6 +24,7 @@ import (
 	"fmt"
 	"net/url"
 	"os"
+	"regexp"
 	"sort"
 	"strings"
 
@@ -335,11 +336,17 @@ func Refusal(findings []Finding) string {
 // lives (a path, an env-var name), not the material itself, and are skipped —
 // the same distinction Evaluate's `_file` sibling exemption draws.
 //
+// A second pass reads every line, prose included, for a tokenised calendar
+// feed URL (scanCalendarURLs, design §17, GitHub #219); a line the key pass
+// flagged is not reported twice.
+//
 // Findings never carry the value: Detail names the key and the line number,
 // because the finding's own text is what gets logged and shown.
 func ScanText(s string) []Finding {
 	var out []Finding
-	for i, line := range strings.Split(s, "\n") {
+	lines := strings.Split(s, "\n")
+	flagged := map[int]bool{}
+	for i, line := range lines {
 		key, value, ok := splitKeyValueLine(line)
 		if !ok {
 			continue
@@ -353,11 +360,75 @@ func ScanText(s string) []Finding {
 		if !LooksLikeRawSecret(value) {
 			continue
 		}
+		flagged[i] = true
 		out = append(out, Finding{
 			Kind:   KindRawSecret,
 			Key:    key,
 			Detail: fmt.Sprintf("line %d: %s appears to be a raw plaintext secret (%d chars)", i+1, key, len(strings.TrimSpace(value))),
 		})
+	}
+	return append(out, scanCalendarURLs(lines, flagged)...)
+}
+
+// lineURLRe finds the URLs on a line of free text. It stops at whitespace,
+// quotes, brackets and angle brackets, so a markdown link or a placeholder
+// such as <token> ends the match.
+var lineURLRe = regexp.MustCompile(`(?i)\b(?:https?|webcal)://[^\s<>"'()\[\]]+`)
+
+// calendarTokenProvider names the provider when raw is a calendar feed URL
+// whose path carries the feed's access token, and returns "" otherwise
+// (config-assistant design §17, GitHub #219). Only the three shapes below are
+// recognised; another provider's tokenised feed is not.
+func calendarTokenProvider(raw string) string {
+	u, err := url.Parse(strings.TrimRight(raw, ".,;:!?"))
+	if err != nil {
+		return ""
+	}
+	host := strings.ToLower(u.Hostname())
+	// Split the escaped path, so an encoded "/" (%2F) inside an id cannot
+	// shift the segments the shapes index.
+	segs := strings.Split(strings.Trim(u.EscapedPath(), "/"), "/")
+	switch {
+	case host == "calendar.google.com" && strings.HasPrefix(u.Path, "/calendar/ical/"):
+		for _, s := range segs {
+			if t, ok := strings.CutPrefix(s, "private-"); ok && LooksLikeRawSecret(t) {
+				return "Google Calendar"
+			}
+		}
+	case (host == "outlook.office365.com" || host == "outlook.office.com" || host == "outlook.live.com") &&
+		strings.HasPrefix(u.Path, "/owa/calendar/") && strings.HasSuffix(strings.ToLower(u.Path), ".ics"):
+		// /owa/calendar/<id>/<token>/[...]/<name>.ics
+		if len(segs) >= 5 && LooksLikeRawSecret(segs[3]) {
+			return "Outlook"
+		}
+	case strings.HasSuffix(host, ".icloud.com") && strings.HasPrefix(u.Path, "/published/"):
+		if len(segs) >= 3 && LooksLikeRawSecret(segs[len(segs)-1]) {
+			return "iCloud"
+		}
+	}
+	return ""
+}
+
+// scanCalendarURLs is ScanText's second pass: every line, prose included,
+// for a tokenised calendar URL. flagged holds the lines the key pass already
+// reported, so a line is one finding. The finding names the provider and the
+// line, never the URL.
+func scanCalendarURLs(lines []string, flagged map[int]bool) []Finding {
+	var out []Finding
+	for i, line := range lines {
+		if flagged[i] {
+			continue
+		}
+		for _, raw := range lineURLRe.FindAllString(line, -1) {
+			if p := calendarTokenProvider(raw); p != "" {
+				out = append(out, Finding{
+					Kind:   KindRawSecret,
+					Key:    "tokenised calendar URL",
+					Detail: fmt.Sprintf("line %d: a %s calendar URL carries its access token; keep it in a secret, not in this file", i+1, p),
+				})
+				break
+			}
+		}
 	}
 	return out
 }

@@ -17,8 +17,9 @@ import (
 // AcceptanceOutcome is the grade of one task repeat.
 type AcceptanceOutcome string
 
-// The acceptance outcomes. Only passed, failed, timeout and does_not_compile
-// count as graded; error is a harness fault and not_graded means no suite.
+// The acceptance outcomes. passed, failed, timeout, does_not_compile and
+// pipeline_failed count as graded; error is a harness fault and not_graded
+// means no suite.
 const (
 	AcceptancePassed         AcceptanceOutcome = "passed"
 	AcceptanceFailed         AcceptanceOutcome = "failed"           // an assertion failed
@@ -26,12 +27,26 @@ const (
 	AcceptanceDoesNotCompile AcceptanceOutcome = "does_not_compile" // package missing or not buildable against the pinned API
 	AcceptanceError          AcceptanceOutcome = "error"            // harness fault; never a model failure
 	AcceptanceNotGraded      AcceptanceOutcome = "not_graded"       // the task has no suite
+	// AcceptancePipelineFailed: the repeat failed and its package never
+	// reached HEAD, so nothing was graded; a model failure (§12.32, #661).
+	AcceptancePipelineFailed AcceptanceOutcome = "pipeline_failed"
 )
 
 // AcceptanceResult is one repeat's grade. Output is truncated to 4 KB.
 type AcceptanceResult struct {
 	Outcome AcceptanceOutcome `json:"outcome"`
 	Output  string            `json:"output,omitempty"`
+}
+
+// acceptanceOutputLimit is the 4 KB bound on an outcome's output (§12.24).
+const acceptanceOutputLimit = 4096
+
+// truncateOutput bounds an outcome's output to acceptanceOutputLimit bytes.
+func truncateOutput(s string) string {
+	if len(s) <= acceptanceOutputLimit {
+		return s
+	}
+	return s[:acceptanceOutputLimit] + "\n[truncated]"
 }
 
 // AcceptanceGrader grades the produced package with the task's suite. The

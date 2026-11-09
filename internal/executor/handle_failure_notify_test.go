@@ -329,11 +329,11 @@ func TestTaskWillRetry_Table(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			task := &persistence.Task{Attempt: tc.attempt, MaxAttempts: tc.maxAttempts}
-			assert.Equal(t, tc.want, e.taskWillRetry(task))
+			assert.Equal(t, tc.want, e.taskWillRetry(task, false))
 		})
 	}
 	// Nil task is the defensive default — never retry.
-	assert.False(t, e.taskWillRetry(nil), "nil task must return false")
+	assert.False(t, e.taskWillRetry(nil, false), "nil task must return false")
 }
 
 // TestHandleFailure_LeavesStatusLeasedWhenRetryRemains — the user-

@@ -114,10 +114,22 @@ import (
 //	    dev-swarm figures are not comparable to v9 ones, including the
 //	    release-gate baselines.
 //
+//	v10 (2026-11-06) — A CHECKPOINT IS NOT A FINISH (benchmark LLD §12.29,
+//	    #655). A task ending at a recovery terminal (dev-pipeline's checkpoint)
+//	    is journaled not succeeded, and BACKLOG.md and .autonomy/ are cleared
+//	    with the targets. 26 of 132 runs journaled succeeded on 2026-11-05/06
+//	    had not finished their feature.
+//
+//	v11 (2026-11-07) — NO HISTORY FROM EARLIER TASKS (§12.30, #655). Each
+//	    repeat starts on a one-commit history; the old history moves to an
+//	    archive outside the agents' mounts. lh-06 r2 had read its predecessor's
+//	    spec with git show. A task now starts from less, so journals either
+//	    side do not compare.
+//
 // v1 was never bumped through any of those, which is the failure this comment
 // exists to prevent: the mechanism refused nothing because nobody moved the
 // number it keys on.
-const HarnessVersion = "10"
+const HarnessVersion = "11"
 
 // ArmFields enumerates every axis that makes two agent-benchmark runs
 // incomparable.

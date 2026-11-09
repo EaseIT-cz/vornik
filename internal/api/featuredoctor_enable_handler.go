@@ -150,6 +150,9 @@ func (h *DoctorHandlers) EnableFeature(w http.ResponseWriter, r *http.Request) {
 		// Audit the failed apply too — a mutating admin POST that errored
 		// (and rolled back) is still operator-relevant forensics.
 		h.auditFeatureEnable(ctx, r, found.ID, plan, false, "apply failed: "+err.Error())
+		if respondNotConfigWriter(w, err) {
+			return
+		}
 		respondError(w, http.StatusInternalServerError, "APPLY_FAILED", err.Error())
 		return
 	}

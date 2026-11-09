@@ -164,6 +164,9 @@ func (r *retryTaskRepo) RequeueTerminalTask(_ context.Context, _ string, attempt
 func (r *retryTaskRepo) ListRetryInFlight(context.Context, []string, time.Time) ([]*persistence.Task, error) {
 	return nil, nil
 }
+func (r *retryTaskRepo) ListApprovalsClosedSince(context.Context, []string, time.Time) ([]*persistence.Task, error) {
+	return nil, nil
+}
 
 func TestFixitTaskRetrier_NotFound(t *testing.T) {
 	repo := &retryTaskRepo{getErr: persistence.ErrNotFound}

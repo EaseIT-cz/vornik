@@ -57,7 +57,7 @@ func BootRejectionError(rejected []RejectedFile, refuseStart bool) error {
 }
 
 // Rejections returns the files the ACTIVE tree refused, or nil. The boot path
-// reads this after the initial load; stagedRejections is its reload-time twin.
+// reads this after the initial load; GateStagedRejections reads the staged tree.
 func (r *Registry) Rejections() []RejectedFile {
 	if r == nil {
 		return nil

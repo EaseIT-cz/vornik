@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"vornik.io/vornik/internal/configlock"
 
 	"vornik.io/vornik/internal/config"
 	"vornik.io/vornik/internal/leaderelection"
@@ -77,6 +78,7 @@ func TestConfigWriterLease_ProductionApplySucceedsAfterStartup(t *testing.T) {
 	if err := c.StartConfigWriterLease(ctx); err != nil {
 		t.Fatalf("StartConfigWriterLease: %v", err)
 	}
+	t.Cleanup(func() { configlock.SetWriterCheck(nil) }) // the #681 fence goes with the lease
 	t.Cleanup(func() { _ = c.StopConfigWriterLease(context.Background()) })
 
 	if err := c.ReconcileConfigApplyJournal(ctx); err != nil {
@@ -167,6 +169,7 @@ func TestWorkspaceApply_TwoEnginesInOneDaemonDoNotInterleave(t *testing.T) {
 	if err := c.StartConfigWriterLease(ctx); err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() { configlock.SetWriterCheck(nil) }) // the #681 fence goes with the lease
 	t.Cleanup(func() { _ = c.StopConfigWriterLease(context.Background()) })
 
 	first := approvedWorkspaceProposal(t, c)
@@ -213,6 +216,7 @@ func TestConfigWriterLease_FenceActuallyPermitsWritesAfterStartup(t *testing.T) 
 	if err := c.StartConfigWriterLease(ctx); err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() { configlock.SetWriterCheck(nil) }) // the #681 fence goes with the lease
 	t.Cleanup(func() { _ = c.StopConfigWriterLease(context.Background()) })
 
 	engine := c.newProposalApplier()

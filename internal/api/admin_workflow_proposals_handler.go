@@ -27,6 +27,7 @@ import (
 	"time"
 
 	"vornik.io/vornik/internal/persistence"
+	"vornik.io/vornik/internal/workflowapply"
 )
 
 // workflowProposalJSON is the wire shape. Mirrors
@@ -354,6 +355,9 @@ func (s *Server) mapApplyError(w http.ResponseWriter, err error) {
 			respondError(w, http.StatusConflict, "PROPOSAL_NOT_APPROVED", err.Error())
 			return
 		}
+		if respondWorkflowWriteRefusal(w, err) {
+			return
+		}
 		s.logger.Warn().Err(err).Msg("workflow-proposals apply failed")
 		respondError(w, http.StatusInternalServerError, "INTERNAL", err.Error())
 	}
@@ -374,9 +378,28 @@ func (s *Server) mapRollbackError(w http.ResponseWriter, err error) {
 			respondError(w, http.StatusConflict, "PROPOSAL_NOT_APPLIED", err.Error())
 			return
 		}
+		if respondWorkflowWriteRefusal(w, err) {
+			return
+		}
 		s.logger.Warn().Err(err).Msg("workflow-proposals rollback failed")
 		respondError(w, http.StatusInternalServerError, "INTERNAL", err.Error())
 	}
+}
+
+// respondWorkflowWriteRefusal answers the two refusals an apply or rollback
+// makes before writing anything (GitHub #462): another config write holds the
+// lock, or this daemon is not the config writer. workflowapply does not import
+// this package, so its error values are matched with errors.Is.
+func respondWorkflowWriteRefusal(w http.ResponseWriter, err error) bool {
+	switch {
+	case errors.Is(err, workflowapply.ErrConfigBusy):
+		respondError(w, http.StatusConflict, "APPLY_IN_PROGRESS", err.Error())
+	case errors.Is(err, workflowapply.ErrWriterFenced):
+		respondError(w, http.StatusConflict, "WRITER_FENCED", err.Error())
+	default:
+		return false
+	}
+	return true
 }
 
 func (s *Server) mapProposalReadError(w http.ResponseWriter, err error) {

@@ -512,7 +512,7 @@ func underRoot(dir string) bool {
 // gitSubcommands are the ones the orchestration runs.
 var gitSubcommands = set("add", "branch", "cat-file", "checkout", "clean", "commit", "config",
 	"diff", "fetch", "format-patch", "init", "log", "ls-files", "merge", "push", "remote",
-	"reset", "rev-list", "rev-parse", "rm", "status", "update-ref", "worktree")
+	"reset", "rev-list", "rev-parse", "rm", "stash", "status", "update-ref", "worktree")
 
 // gitProgramOptions name a program git would run; refused everywhere.
 var gitProgramOptions = []string{"--upload-pack", "--receive-pack", "--exec", "--ext-diff", "--textconv", "--config-env"}
@@ -563,6 +563,13 @@ func gitWorkspace(ctx context.Context, dir string, dirs GitDirs, args []string) 
 	case "remote":
 		if len(rest) < 1 || rest[0] != "get-url" {
 			return nil, refuse(KindGitWorkspace, "remote may only get-url")
+		}
+	case "stash":
+		// Only `stash create`: it writes objects and prints a commit id, and
+		// changes no ref, index entry or file (GitHub #484, the pre-work
+		// reset's backup). Every other form can drop or apply.
+		if len(rest) != 1 || rest[0] != "create" {
+			return nil, refuse(KindGitWorkspace, "stash may only create")
 		}
 	}
 	for _, a := range rest {

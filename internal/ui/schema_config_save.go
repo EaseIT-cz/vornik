@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"vornik.io/vornik/internal/configlock"
 	"vornik.io/vornik/internal/ui/assetschema"
 )
 
@@ -56,6 +57,16 @@ type schemaAssetSpec struct {
 // parameter — every render path goes through the spec's renderErr / renderOK
 // closures (which capture the caller's w), so the skeleton never touches it.
 func (s *Server) saveSchemaAsset(r *http.Request, spec schemaAssetSpec) {
+	// The read, write and reload hold the process's config-write lock
+	// (operations design §6.9, GitHub #676). A caller must not hold it:
+	// configlock is a plain mutex, and a second Lock would deadlock.
+	unlock, lerr := configlock.LockAsWriter(r.Context())
+	if lerr != nil {
+		// Refused on a non-writer daemon (GitHub #681); nothing is read or written.
+		spec.renderErr(http.StatusConflict, "This daemon is not the config writer: make this change on the daemon that holds the config_writer lease. Nothing was saved.", nil, nil)
+		return
+	}
+	defer unlock()
 	base := filepath.Base(spec.assetPath)
 	coll, _ := spec.schema.CollectionByPath(spec.collPath)
 

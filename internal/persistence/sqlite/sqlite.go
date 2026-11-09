@@ -316,6 +316,10 @@ var sqliteAdditiveColumns = []additiveColumn{
 	// predates it the column MUST land here first — otherwise the CREATE INDEX
 	// errors and Migrate fails the daemon's startup rather than one query.
 	{"project_memory_chunks", "series_key", `TEXT`},
+	// Postgres migration 250 — the KG worker's uncounted transient-failure
+	// count, kept on the row so a restart cannot reset it (knowledge-graph
+	// LLD §3.3d, GitHub #493). Default 0: a full budget, as after a restart.
+	{"project_memory_chunks", "graph_transient_failures", `INTEGER NOT NULL DEFAULT 0`},
 	// Member identity and TTL for the same re-rank (design §5.3/§5.1). These
 	// are NOT new Postgres migrations — artifact_id, source_name and
 	// expires_at have been on the production table for a long time; the slim

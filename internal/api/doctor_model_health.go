@@ -69,7 +69,15 @@ type modelHealthStat struct {
 	model                  string
 	samples                int   // recent steps CHARGED to this model (excluded classes removed)
 	failures               int   // charged steps whose outcome was not 'ok'/'pending_validation'
-	medianCompletionTokens int64 // median completion_tokens across recent calls
+	medianCompletionTokens int64 // median completion_tokens across recent calls that reached the model
+	// hasTokenMedian is false when no recent call reached the model: a failed
+	// call posts 0 prompt and 0 completion tokens, and those rows are not
+	// output. With no median there is no degenerate verdict (GitHub #665).
+	hasTokenMedian bool
+	// rateLimited counts charged failures whose error_detail carries the chat
+	// proxy's chat.CodeUpstreamRateLimited: the provider refusing the account
+	// for a usage or rate limit (GitHub #665).
+	rateLimited int
 	// excludedByClass counts recent failures NOT charged to the model — the
 	// container, host or an upstream step failed (stepoutcome.
 	// NotAttributableToModel; model-health attribution design, 2026-09-24).
@@ -350,40 +358,90 @@ func (h *DoctorHandlers) checkModelHealth(ctx context.Context) DoctorCheck {
 	}
 }
 
-// collectModelFallbacks returns the set of models referenced by any swarm role
-// and a model→recommended-fallback map. A model can appear in several roles;
-// the first non-empty fallback seen wins for the recommendation text. A model
-// that appears only as a fallback is referenced (so it's evaluated) but has no
-// fallback of its own modeled.
-func collectModelFallbacks(swarms []*registry.Swarm) (referenced map[string]bool, fallbacks map[string]string) {
+// collectModelFallbacks walks every swarm role. referenced holds each model a
+// role pins as its primary or names as its modelFallback. fallbacks counts,
+// per primary model, the role entries pinning it with each fallback (model →
+// fallback → count): "" for a role with no modelFallback, the model itself for
+// a role whose fallback names its own primary. Every role entry counts, so the
+// result does not depend on the order the registry's map is walked in. Before
+// GitHub #668 one fallback per model was kept, first role seen wins, and two
+// doctor runs gave different advice (model-health attribution design,
+// amendment 2026-11-07, second).
+func collectModelFallbacks(swarms []*registry.Swarm) (referenced map[string]bool, fallbacks map[string]map[string]int) {
 	referenced = map[string]bool{}
-	fallbacks = map[string]string{}
+	fallbacks = map[string]map[string]int{}
 	for _, s := range swarms {
 		if s == nil {
 			continue
 		}
 		for _, role := range s.Roles {
-			if m := strings.TrimSpace(role.Model); m != "" {
-				referenced[m] = true
-				if _, ok := fallbacks[m]; !ok {
-					fallbacks[m] = strings.TrimSpace(role.ModelFallback)
-				}
-			}
-			if fb := strings.TrimSpace(role.ModelFallback); fb != "" {
+			fb := strings.TrimSpace(role.ModelFallback)
+			if fb != "" {
 				referenced[fb] = true
-				if _, ok := fallbacks[fb]; !ok {
-					fallbacks[fb] = ""
-				}
 			}
+			m := strings.TrimSpace(role.Model)
+			if m == "" {
+				continue
+			}
+			referenced[m] = true
+			if fallbacks[m] == nil {
+				fallbacks[m] = map[string]int{}
+			}
+			fallbacks[m][fb]++
 		}
 	}
 	return referenced, fallbacks
 }
 
+// fallbackRecommendation is a flagged model's advice: every configured fallback
+// to another model, most roles first and equal counts by name, then how many
+// roles have none and how many name the model itself (which retries it).
+func fallbackRecommendation(model string, byFallback map[string]int) string {
+	type entry struct {
+		name  string
+		roles int
+	}
+	var others []entry
+	for fb, n := range byFallback {
+		if fb != "" && fb != model {
+			others = append(others, entry{fb, n})
+		}
+	}
+	sort.Slice(others, func(i, j int) bool {
+		if others[i].roles != others[j].roles {
+			return others[i].roles > others[j].roles
+		}
+		return others[i].name < others[j].name
+	})
+	var b strings.Builder
+	if len(others) == 0 {
+		b.WriteString("no fallback configured — set modelFallback on the affected role(s)")
+	} else {
+		b.WriteString("recommend switching to the configured modelFallback ")
+		for i, e := range others {
+			if i > 0 {
+				b.WriteString(", ")
+			}
+			noun := "roles"
+			if e.roles == 1 {
+				noun = "role"
+			}
+			fmt.Fprintf(&b, "%q (%d %s)", e.name, e.roles, noun)
+		}
+		if n := byFallback[""]; n > 0 {
+			fmt.Fprintf(&b, "; %d role(s) pinning it have no other model as modelFallback, set one", n)
+		}
+	}
+	if n := byFallback[model]; n > 0 {
+		fmt.Fprintf(&b, "; %d role(s) name the model itself as modelFallback, which retries the same model", n)
+	}
+	return b.String()
+}
+
 // evalModelHealth scores each stat and returns a finding per unhealthy model.
 // Pure — directly unit-testable. fallbacks maps model → its recommended
 // fallback ("" = none configured).
-func evalModelHealth(stats []modelHealthStat, fallbacks map[string]string, th config.ResolvedDoctorThresholds) []modelHealthFinding {
+func evalModelHealth(stats []modelHealthStat, fallbacks map[string]map[string]int, th config.ResolvedDoctorThresholds) []modelHealthFinding {
 	var findings []modelHealthFinding
 	for _, s := range stats {
 		// The host-problem finding is its own row, emitted whatever the
@@ -408,7 +466,7 @@ func evalModelHealth(stats []modelHealthStat, fallbacks map[string]string, th co
 			continue
 		}
 		failRate := float64(s.failures) / float64(s.samples)
-		degenerate := s.medianCompletionTokens < modelHealthDegenerateTokens
+		degenerate := s.hasTokenMedian && s.medianCompletionTokens < modelHealthDegenerateTokens
 		highFail := failRate >= th.ModelFailureRate.Value
 		if !highFail && !degenerate {
 			if hostFinding != nil {
@@ -428,14 +486,15 @@ func evalModelHealth(stats []modelHealthStat, fallbacks map[string]string, th co
 		if degenerate {
 			reasons = append(reasons, fmt.Sprintf("degenerate output (median %d completion tokens)", s.medianCompletionTokens))
 		}
+		if s.rateLimited > 0 {
+			reasons = append(reasons, fmt.Sprintf("%d of these failures were the provider refusing the account for a usage or rate limit (%s), which is not the model: raise the limit or wait for its reset",
+				s.rateLimited, chat.CodeUpstreamRateLimited))
+		}
 		if ex := s.excludedTotal(); ex > 0 {
 			reasons = append(reasons, fmt.Sprintf("%d further failure(s) not charged to the model (%s)", ex, s.excludedBreakdown()))
 		}
 
-		rec := "no fallback configured — set modelFallback on the affected role(s)"
-		if fb := fallbacks[s.model]; fb != "" {
-			rec = fmt.Sprintf("recommend switching to configured modelFallback %q", fb)
-		}
+		rec := fallbackRecommendation(s.model, fallbacks[s.model])
 		findings = append(findings, modelHealthFinding{
 			model:   s.model,
 			status:  status,
@@ -476,7 +535,10 @@ func queryModelHealthOutcomes(ctx context.Context, db *sql.DB, since time.Time) 
 	// 2026-09-24) leave both counts and are reported per class instead.
 	// The list is the Go declaration passed as parameters, so the SQL cannot
 	// drift from stepoutcome.NotAttributableToModel.
-	args := []any{since, modelHealthRowCap}
+	// $3 is the proxy's rate-limit code as a LIKE pattern. No ESCAPE: "_"
+	// matches any one character, itself included, so the pattern matches
+	// the code identically on SQLite and Postgres (GitHub #665).
+	args := []any{since, modelHealthRowCap, "%" + chat.CodeUpstreamRateLimited + "%"}
 	var ph []string
 	for _, c := range stepoutcome.NotAttributableToModelClasses() {
 		args = append(args, c)
@@ -488,9 +550,11 @@ func queryModelHealthOutcomes(ctx context.Context, db *sql.DB, since time.Time) 
 		       COALESCE(error_class, '') AS error_class,
 		       COUNT(*) FILTER (WHERE NOT excluded) AS samples,
 		       COUNT(*) FILTER (WHERE NOT excluded AND outcome NOT IN ('ok', 'pending_validation', 'superseded', 'orphaned')) AS failures,
-		       COUNT(*) FILTER (WHERE excluded AND outcome NOT IN ('ok', 'pending_validation')) AS excluded_failures
+		       COUNT(*) FILTER (WHERE excluded AND outcome NOT IN ('ok', 'pending_validation')) AS excluded_failures,
+		       COUNT(*) FILTER (WHERE NOT excluded AND outcome NOT IN ('ok', 'pending_validation', 'superseded', 'orphaned') AND rate_limited) AS rate_limited
 		FROM (
-		    SELECT model, outcome, error_class, `+excluded+` AS excluded
+		    SELECT model, outcome, error_class, `+excluded+` AS excluded,
+		           COALESCE(error_detail, '') LIKE $3 AS rate_limited
 		    FROM execution_step_outcomes
 		    WHERE recorded_at >= $1 AND model <> ''
 		      AND outcome NOT IN ('superseded', 'orphaned')
@@ -507,8 +571,8 @@ func queryModelHealthOutcomes(ctx context.Context, db *sql.DB, since time.Time) 
 	statByModel := map[string]*modelHealthStat{}
 	for outcomeRows.Next() {
 		var model, class string
-		var samples, failures, excludedFailures int
-		if err := outcomeRows.Scan(&model, &class, &samples, &failures, &excludedFailures); err != nil {
+		var samples, failures, excludedFailures, rateLimited int
+		if err := outcomeRows.Scan(&model, &class, &samples, &failures, &excludedFailures, &rateLimited); err != nil {
 			// Fail, don't drop: a missing (model, class) row would understate
 			// exactly the excluded counts this aggregation exists to report.
 			return nil, fmt.Errorf("scan step outcomes: %w", err)
@@ -520,6 +584,7 @@ func queryModelHealthOutcomes(ctx context.Context, db *sql.DB, since time.Time) 
 		}
 		st.samples += samples
 		st.failures += failures
+		st.rateLimited += rateLimited
 		if excludedFailures > 0 {
 			if st.excludedByClass == nil {
 				st.excludedByClass = map[string]int{}
@@ -559,30 +624,11 @@ func (h *DoctorHandlers) queryModelHealthStats(ctx context.Context) ([]modelHeal
 		return nil, err
 	}
 
-	// Median completion tokens per model from the usage table.
-	tokenRows, err := h.db.QueryContext(ctx, `
-		SELECT model,
-		       PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY completion_tokens) AS median_completion
-		FROM (
-		    SELECT model, completion_tokens
-		    FROM task_llm_usage
-		    WHERE recorded_at >= $1 AND model <> ''
-		    ORDER BY recorded_at DESC
-		    LIMIT $2
-		) recent
-		GROUP BY model
-	`, since, modelHealthRowCap)
+	medians, err := queryModelHealthTokenMedians(ctx, h.db, since)
 	if err != nil {
-		return nil, fmt.Errorf("query usage tokens: %w", err)
+		return nil, err
 	}
-	defer func() { _ = tokenRows.Close() }()
-
-	for tokenRows.Next() {
-		var model string
-		var median sql.NullFloat64
-		if err := tokenRows.Scan(&model, &median); err != nil {
-			continue
-		}
+	for model, median := range medians {
 		st, ok := statByModel[model]
 		if !ok {
 			// A model with usage rows but no outcome rows: still track it so a
@@ -592,12 +638,8 @@ func (h *DoctorHandlers) queryModelHealthStats(ctx context.Context) ([]modelHeal
 			st = &modelHealthStat{model: model}
 			statByModel[model] = st
 		}
-		if median.Valid {
-			st.medianCompletionTokens = int64(median.Float64)
-		}
-	}
-	if err := tokenRows.Err(); err != nil {
-		return nil, fmt.Errorf("scan usage tokens: %w", err)
+		st.medianCompletionTokens = median
+		st.hasTokenMedian = true
 	}
 
 	out := make([]modelHealthStat, 0, len(statByModel))
@@ -616,4 +658,50 @@ func tripReasonSuffix(reason string) string {
 		return ""
 	}
 	return fmt.Sprintf(" (tripped: %s — %s)", reason, remedy)
+}
+
+// queryModelHealthTokenMedians returns, per model, the median completion
+// tokens of recent calls that reached the model (GitHub #665). A failed call
+// posts a usage row with 0 prompt and 0 completion tokens; counting those made
+// every model behind an exhausted quota read "degenerate output (median 0)".
+// A model reached and answering nothing still has prompt tokens, so it keeps
+// its 0. The median is taken in Go, the mean of the middle two for an even
+// count (what PERCENTILE_CONT(0.5) returned), so the query is portable and
+// tested on SQLite. A model with no qualifying row has no entry.
+func queryModelHealthTokenMedians(ctx context.Context, db *sql.DB, since time.Time) (map[string]int64, error) {
+	rows, err := db.QueryContext(ctx, `
+		SELECT model, completion_tokens
+		FROM task_llm_usage
+		WHERE recorded_at >= $1 AND model <> ''
+		  AND (prompt_tokens > 0 OR completion_tokens > 0)
+		ORDER BY recorded_at DESC
+		LIMIT $2
+	`, since, modelHealthRowCap)
+	if err != nil {
+		return nil, fmt.Errorf("query usage tokens: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+	byModel := map[string][]int64{}
+	for rows.Next() {
+		var model string
+		var completion int64
+		if err := rows.Scan(&model, &completion); err != nil {
+			return nil, fmt.Errorf("scan usage tokens: %w", err)
+		}
+		byModel[model] = append(byModel[model], completion)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("scan usage tokens: %w", err)
+	}
+	out := make(map[string]int64, len(byModel))
+	for model, v := range byModel {
+		sort.Slice(v, func(i, j int) bool { return v[i] < v[j] })
+		n := len(v)
+		if n%2 == 1 {
+			out[model] = v[n/2]
+		} else {
+			out[model] = (v[n/2-1] + v[n/2]) / 2
+		}
+	}
+	return out, nil
 }

@@ -1,9 +1,9 @@
 ---
 sources:
     - path: internal/cli/agent_connect.go
-      sha256: f4838336b1ec790303dffcd526a9dad4b914fbff98b957356d223eaea04a3223
+      sha256: e95011ada8d07d6f85104a800c33189513170e297eb833066ff735155aaf6228
     - path: internal/harnessconfig/harnessconfig.go
-      sha256: 601958b2eed5b85284f43c80973d23b0bf9565a5d9e4db3fb42208ff69ea5984
+      sha256: 0f975d706d42516be9408868b28f36e9de5dc8535b6eeec5427514f7080c49fe
     - path: internal/agentadmin/harness.go
       sha256: 769bbb380005cce2f52c94afeeedb369483a8ba2575c1d38298f4150c3f2fdc5
     - path: internal/agentadmin/admin_guidance.md

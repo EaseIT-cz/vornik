@@ -423,8 +423,12 @@ type Counts struct {
 	// AgentAdminRefusals is the count of agent_admin_refusals rows pruned, on
 	// the tool_audit_log window (retention design §5, GitHub #172).
 	AgentAdminRefusals int
-	Tasks              int
-	Executions         int
+	// MemoryRetrievalAudit is the count of memory_retrieval_audit rows (recall
+	// queries) pruned, on the tool_audit_log window (retention design §5a,
+	// GitHub #549).
+	MemoryRetrievalAudit int
+	Tasks                int
+	Executions           int
 	// StepPrompts is the count of step_prompts rows no outcome row referenced
 	// any more (pruned after executions, since outcome rows go with them).
 	StepPrompts int
@@ -1170,6 +1174,23 @@ func (s *Sweeper) run(ctx context.Context, p Policy, previewOnly bool) (Counts, 
 		counts.AgentAdminRefusals = n
 	}
 
+	// 2c. memory_retrieval_audit — recall queries, retained personal data in
+	//     tool_audit_log's category; its window, floor included (retention
+	//     design §5a, GitHub #549).
+	if n, err := s.pruneOlderThan(ctx,
+		"memory_retrieval_audit", "retrieved_at",
+		"project_id = $2", p.ProjectID,
+		now.AddDate(0, 0, -p.toolAuditWindow()),
+		previewOnly,
+	); err != nil {
+		s.warn("memory_retrieval_audit", err)
+		if firstErr == nil {
+			firstErr = err
+		}
+	} else {
+		counts.MemoryRetrievalAudit = n
+	}
+
 	// 3. Artifacts — DB record + file on disk. Do this BEFORE tasks so
 	//    the cascaded delete from tasks → artifacts via FK doesn't orphan
 	//    files. We read rows, unlink files, then delete DB records.
@@ -1901,6 +1922,7 @@ func (s *Sweeper) pruneOlderThan(ctx context.Context, table, tsCol, extraWhere s
 		"task_llm_usage":            true,
 		"tool_audit_log":            true,
 		"agent_admin_refusals":      true, // tool_audit_log's window — retention design §5
+		"memory_retrieval_audit":    true, // tool_audit_log's window — retention design §5a
 		"tasks":                     true,
 		"executions":                true,
 		"step_prompts":              true,
@@ -1921,6 +1943,7 @@ func (s *Sweeper) pruneOlderThan(ctx context.Context, table, tsCol, extraWhere s
 		"evaluated_at": true,
 		"evicted_at":   true,
 		"terminal_at":  true,
+		"retrieved_at": true, // memory_retrieval_audit, §5a
 	}
 	if evidenceTables[table] {
 		return 0, fmt.Errorf("refusing to prune %s: conformity evidence trail (AI Act Art 50 / Art 99) — see evidenceTables", table)

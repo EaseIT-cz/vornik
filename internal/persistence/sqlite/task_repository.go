@@ -413,6 +413,44 @@ func (r *TaskRepository) ListRetryInFlight(ctx context.Context, projectIDs []str
 	return tasks, rows.Err()
 }
 
+// ListApprovalsClosedSince returns approvals the cancel cascade closed
+// (GitHub #490); see the interface for the contract.
+func (r *TaskRepository) ListApprovalsClosedSince(ctx context.Context, projectIDs []string, since time.Time) ([]*persistence.Task, error) {
+	var b strings.Builder
+	b.WriteString(`SELECT ` + taskSelectColumns + ` FROM tasks
+		WHERE status = 'CANCELLED'
+		  AND last_error LIKE ?
+		  AND updated_at >= ?`)
+	args := []any{persistence.ApprovalClosedPrefix + "%", sqliteTime(since.UTC())}
+	if len(projectIDs) > 0 {
+		b.WriteString(" AND project_id IN (")
+		for i, id := range projectIDs {
+			if i > 0 {
+				b.WriteString(", ")
+			}
+			b.WriteString("?")
+			args = append(args, id)
+		}
+		b.WriteString(")")
+	}
+	b.WriteString(" ORDER BY updated_at DESC LIMIT 50")
+
+	rows, err := r.db.QueryContext(ctx, b.String(), args...)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+	var tasks []*persistence.Task
+	for rows.Next() {
+		t, err := scanSqliteTask(rows)
+		if err != nil {
+			return nil, err
+		}
+		tasks = append(tasks, t)
+	}
+	return tasks, rows.Err()
+}
+
 // Count mirrors List's WHERE clauses without LIMIT/OFFSET: both build them
 // with appendTaskFilterWhere (GitHub #411).
 func (r *TaskRepository) Count(ctx context.Context, filter persistence.TaskFilter) (int64, error) {

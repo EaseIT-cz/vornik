@@ -67,6 +67,11 @@ func (p *Pipeline) verifyProvenance(ctx context.Context, projectID, artifactID, 
 	res := p.cfg.Provenance.Verify(ctx, ProvenanceRequest{
 		ProjectID: projectID, RepoScope: opts.RepoScope, Path: sourceName, Content: []byte(content),
 	})
+	// Text redacted on its way in cannot match the trusted branch: say so,
+	// not "a draft awaiting its push" (LLD 22, amendment 2026-11-08, #550 D4).
+	if res.State == ProvenanceUnverified && res.Reason == ProvReasonBlobMismatch && HasRedactionMarker(content) {
+		res.Reason = ProvReasonRedacted
+	}
 	rec := ProvenanceRecord(projectID, artifactID, opts.RepoScope, res)
 	if res.Verified() {
 		// Three steps, so that neither crash window leaves a lie: the record

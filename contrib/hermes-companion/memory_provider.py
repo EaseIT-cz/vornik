@@ -1,6 +1,7 @@
 """The vornik memory provider: Hermes's long-term memory lives in Vornik.
 
-Uses a key on a SEPARATE memory project (minted --memory-all --no-delegate).
+Uses a key on a SEPARATE memory project (minted --memory-all, with the review and
+ingest workflows for the hints, or --no-delegate for none).
 A broker-project key is refused by the daemon on every memory tool, so a
 misconfiguration fails closed: the provider disables itself.
 
@@ -280,7 +281,7 @@ class VornikMemoryProvider(MemoryProvider):
     def get_config_schema(self) -> list:
         return [
             {"key": "VORNIK_URL", "description": "Vornik daemon base URL", "secret": False},
-            {"key": "VORNIK_MEMORY_TOKEN", "description": "Companion key on the memory project (--memory-all --no-delegate)", "secret": True},
+            {"key": "VORNIK_MEMORY_TOKEN", "description": "Companion key on the memory project (--memory-all, plus the review and ingest workflows)", "secret": True},
         ]
 
     def save_config(self, values: dict, hermes_home: str) -> None:

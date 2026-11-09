@@ -20,6 +20,9 @@ volumes:
 
 services:
   pagedrop-host:
+    # Memory bound with no swap (GitHub #460, 08-runtime-manager-podman.md S6).
+    mem_limit: 512m
+    memswap_limit: 512m
     container_name: vornik-pagedrop-host
     image: localhost/pagedrop-host:current
     labels:

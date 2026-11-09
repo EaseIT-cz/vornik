@@ -37,5 +37,8 @@ restore
 reminders
 version
 agent
+# companion: grant/keys are on the public companion page already; connect,
+# mcp-bridge, disconnect and doctor are the Claude Desktop path (GitHub #589).
+companion
 pair-device
 devices

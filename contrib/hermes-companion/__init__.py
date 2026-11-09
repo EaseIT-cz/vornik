@@ -11,7 +11,7 @@ import json
 import logging
 from pathlib import Path
 
-from . import approval, cli, settings
+from . import approval, cli, companion_delegate, guidance, hints, settings
 from .broker_tools import SCHEMAS, BrokerTools
 from .digest import Digest, list_arguments
 from .memory_provider import MemoryCommands, VornikMemoryProvider
@@ -86,9 +86,53 @@ def _check_fn(tools, name):
     return tools.available
 
 
+def _rules_client(broker_client: VornikClient):
+    """The client vornik.rules asks: the memory key's when one is set, else
+    the broker key's (design 24, #686 R)."""
+    def pick():
+        try:
+            if settings.get(settings.MEMORY_TOKEN):
+                return VornikClient(settings.getter(settings.URL), settings.getter(settings.MEMORY_TOKEN))
+        except Exception:  # no profile scope bound: fall back to the broker key
+            pass
+        return broker_client
+    return pick
+
+
+def _register_rules(ctx, broker_client: VornikClient) -> None:
+    """Register Vornik's standing rules as a system prompt section. A Hermes
+    without the seam keeps everything else."""
+    seam = getattr(ctx, "register_system_prompt_section", None)
+    if not callable(seam):
+        log.info("vornik-companion: this Hermes has no register_system_prompt_section; "
+                 "Vornik's standing rules are not added to the prompt")
+        return
+    # Fail open: a Hermes that refuses the section must not lose the rest of
+    # the plugin, which registers after this (e2e lane, 2026-11-08: a refused
+    # max_chars aborted register() and dropped the memory provider).
+    try:
+        seam(guidance.SECTION_ID, guidance.Rules(_rules_client(broker_client)),
+             position=guidance.POSITION, max_chars=guidance.MAX_CHARS)
+    except (ValueError, TypeError) as e:
+        log.warning("vornik-companion: Hermes refused the vornik.rules prompt section: %s", e)
+
+
+def _memory_client():
+    """The memory key's client, or None when no memory key is set for the
+    active profile (read at each use, as every setting is)."""
+    try:
+        if not settings.get(settings.MEMORY_TOKEN):
+            return None
+    except Exception:  # no profile scope bound
+        return None
+    return VornikClient(settings.getter(settings.URL), settings.getter(settings.MEMORY_TOKEN),
+                        not_configured=lambda: settings.not_configured(settings.URL, settings.MEMORY_TOKEN))
+
+
 def register(ctx) -> None:
     client = _broker_client()
-    tools = BrokerTools(client)
+    companion_tasks = companion_delegate.CompanionTasks(_memory_client)
+    tools = BrokerTools(client, companion_tasks=companion_tasks)
     handlers = tools.handlers()
     for schema in SCHEMAS:
         ctx.register_tool(
@@ -99,6 +143,7 @@ def register(ctx) -> None:
             check_fn=_check_fn(tools, schema["name"]),
         )
     ctx.register_hook("pre_llm_call", Digest(client))
+    _register_rules(ctx, client)
     ctx.register_command("vornik-peek", handler=_peek(client), description="List recent Vornik broker tasks")
     ctx.register_command("vornik-result", handler=_result(tools), description="Show a Vornik broker task's result")
     skill = Path(__file__).parent / "skills" / "vornik-broker" / "SKILL.md"
@@ -121,6 +166,17 @@ def register(ctx) -> None:
         # only with the memory provider.
         ctx.register_skill("develop-with-memory",
                            Path(__file__).parent / "skills" / "develop-with-memory" / "SKILL.md")
+        # Review and ingest delegations with files, on the memory key
+        # (design 24, "Engineering guidance from Vornik", F; GitHub #686).
+        delegate = companion_delegate.CompanionDelegate(companion_tasks)
+        ctx.register_tool(name=companion_delegate.SCHEMA["name"], toolset="vornik",
+                          schema=companion_delegate.SCHEMA, handler=delegate, check_fn=delegate.available)
+        # Just-in-time hints (design 24, "Engineering guidance from Vornik",
+        # H and V): fetched and reported with the memory key.
+        adviser = hints.Hints(_memory_client, companion_tasks.workflows)
+        ctx.register_hook("pre_llm_call", adviser.pre_llm_call)
+        ctx.register_hook("transform_tool_result", adviser.transform_tool_result)
+        ctx.register_hook("pre_verify", adviser.pre_verify)
     # `hermes vornik connect|status`: a terminal subcommand a person types,
     # the plugin's only process spawn (design 24, catalog listing §3).
     ctx.register_cli_command("vornik", help="Connect Hermes to Vornik and check the connection",

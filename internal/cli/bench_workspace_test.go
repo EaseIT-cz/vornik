@@ -88,22 +88,100 @@ func TestGitWorkspace_AbsentTargetsMakeNoCommit(t *testing.T) {
 	}
 }
 
-func TestGitWorkspace_RefusesADirtyWorkspace(t *testing.T) {
+// GitHub #600 (benchmark LLD §12.31). Found at: e2e-lane (the 2026-10-31
+// gemma-4-26b-a4b arm): sw-05-table-test r3 failed and left uncommitted files,
+// the next task's Prepare refused the dirty workspace, and the unattended arm
+// stopped. Regression test at: integration, Prepare on a real repository.
+// Lower because: the e2e lane is the operator's bench host. Leftovers are now
+// stashed, archived with the history (§12.30) and named in the root commit.
+func TestGitWorkspace_ArchivesAFailedTasksLeftovers_600(t *testing.T) {
 	dir := gitRepo(t)
 	commitFile(t, dir, "README", "x\n")
+	commitFile(t, dir, "scratch/old/old.go", "package old\n")
 	if err := os.WriteFile(filepath.Join(dir, "stray"), []byte("x"), 0o644); err != nil {
 		t.Fatal(err)
 	}
+	if err := os.WriteFile(filepath.Join(dir, "scratch/old/old.go"), []byte("package old // half done\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, ".git", "info", "exclude"), []byte("artifacts/out/\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	ignored := filepath.Join(dir, "artifacts", "out", "keep.txt")
+	if err := os.MkdirAll(filepath.Dir(ignored), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(ignored, []byte("ephemeral"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	commit, err := gitWorkspace{dir: dir}.Prepare(context.Background(), agentbench.TaskSpec{ID: "dp-01-nilguard"}, 1)
+	if err != nil || commit == "" {
+		t.Fatalf("a failed task's leftovers must not stop the next task: %q %v", commit, err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "stray")); !os.IsNotExist(err) {
+		t.Error("an untracked leftover must be gone from the tree")
+	}
+	if b, _ := os.ReadFile(filepath.Join(dir, "scratch/old/old.go")); string(b) != "package old\n" {
+		t.Errorf("a modified tracked file must be back to HEAD, got %q", b)
+	}
+	if _, err := os.Stat(ignored); err != nil {
+		t.Error("an ignored path must be left alone")
+	}
+	if status, _ := exec.Command("git", "-C", dir, "status", "--porcelain").Output(); len(status) != 0 {
+		t.Fatalf("the task starts from a clean tree: %q", status)
+	}
+	archive := dir + ".history.git"
+	stash := ""
+	for _, r := range strings.Split(gitOut(t, "", "--git-dir", archive, "for-each-ref", "--format=%(refname)"), "\n") {
+		if strings.HasPrefix(r, "refs/bench/dp-01-nilguard/r1/") && strings.HasSuffix(r, "/refs/stash") {
+			stash = r
+		}
+	}
+	if stash == "" {
+		t.Fatal("the leftovers must be archived as a stash ref")
+	}
+	files := gitOut(t, "", "--git-dir", archive, "show", "--name-only", "--format=", stash+"^3")
+	if !strings.Contains(files, "stray") {
+		t.Errorf("the archived stash must hold the untracked file, got %q", files)
+	}
+	if diff := gitOut(t, "", "--git-dir", archive, "diff", stash+"^1", stash, "--name-only"); !strings.Contains(diff, "scratch/old/old.go") {
+		t.Errorf("the archived stash must hold the tracked change, got %q", diff)
+	}
+	body := gitOut(t, dir, "log", "-1", "--format=%B")
+	if !strings.Contains(body, "Leftovers archived") || !strings.Contains(body, "stray") || !strings.Contains(body, "scratch/old/old.go") {
+		t.Fatalf("the root commit must name the archived leftovers:\n%s", body)
+	}
+}
+
+// Leftovers git cannot stash (unmerged paths from an interrupted merge) are
+// refused, not half-archived (#600, §12.31).
+func TestGitWorkspace_RefusesAnInterruptedMerge_600(t *testing.T) {
+	dir := gitRepo(t)
+	commitFile(t, dir, "f.txt", "base\n")
+	git := func(args ...string) {
+		t.Helper()
+		_ = exec.Command("git", append([]string{"-C", dir}, args...)...).Run()
+	}
+	git("checkout", "-q", "-b", "other")
+	commitFile(t, dir, "f.txt", "other\n")
+	git("checkout", "-q", "master")
+	commitFile(t, dir, "f.txt", "master\n")
+	git("merge", "-q", "other") // conflicts and stops, leaving unmerged paths
+	if out, _ := exec.Command("git", "-C", dir, "ls-files", "-u").Output(); len(out) == 0 {
+		t.Fatal("fixture: the merge did not conflict")
+	}
 	if _, err := (gitWorkspace{dir: dir}).Prepare(context.Background(), agentbench.TaskSpec{ID: "a"}, 1); err == nil {
-		t.Fatal("uncommitted entries must refuse the task")
+		t.Fatal("an interrupted merge must refuse the task")
 	}
 }
 
 // audit 2026-10-12: GitHub #307. A failed task's backlog deposit left one
 // uncommitted BACKLOG.md line in the bench workspace, and Prepare refused with
 // "has uncommitted entries", naming neither the path nor the task that left
-// it. The refusal now lists the dirty paths and, from each change's
+// it. The record now lists the dirty paths and, from each change's
 // "via task_..." deposit trailers, the origin task (benchmark LLD §12.25 D4).
+// Since #600 (§12.31) that record is the root commit's message, not a refusal.
 func TestGitWorkspace_PrepareNamesDirtyPathsAndOrigin(t *testing.T) {
 	dir := gitRepo(t)
 	commitFile(t, dir, "BACKLOG.md", "# Backlog\n\n- [?] old item (via task_20260901000000_aaaaaaaaaaaaaaaa, 2026-09-01)\n")
@@ -117,19 +195,18 @@ func TestGitWorkspace_PrepareNamesDirtyPathsAndOrigin(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	_, err = gitWorkspace{dir: dir}.Prepare(context.Background(), agentbench.TaskSpec{ID: "sw-01"}, 1)
-	if err == nil {
-		t.Fatal("a dirty workspace must be refused")
+	if _, err := (gitWorkspace{dir: dir}).Prepare(context.Background(), agentbench.TaskSpec{ID: "sw-01"}, 1); err != nil {
+		t.Fatalf("prepare: %v", err)
 	}
-	msg := err.Error()
+	msg := gitOut(t, dir, "log", "-1", "--format=%B")
 	for _, want := range []string{"BACKLOG.md", "task_20260927075535_c5798f15038adcbc", "notes.txt", "origin unknown"} {
 		if !strings.Contains(msg, want) {
-			t.Errorf("refusal does not name %q:\n%s", want, msg)
+			t.Errorf("the leftovers record does not name %q:\n%s", want, msg)
 		}
 	}
 	// The committed line's task is history, not the origin of the dirt.
 	if strings.Contains(msg, "task_20260901000000_aaaaaaaaaaaaaaaa") {
-		t.Errorf("refusal attributes the dirt to a task whose line was already committed:\n%s", msg)
+		t.Errorf("the record attributes the dirt to a task whose line was already committed:\n%s", msg)
 	}
 }
 
@@ -147,9 +224,17 @@ func TestWorkspaceLine(t *testing.T) {
 	if got := workspaceLine(j); !strings.Contains(got, "targets produced 1/2") || !strings.Contains(got, "workflow state carried over") {
 		t.Fatalf("a harness-9 reset cleared targets only, and must say so: %q", got)
 	}
-	// §12.29: the reset that also clears BACKLOG.md and .autonomy/.
+	// §12.29: the reset that also clears BACKLOG.md and .autonomy/, but left
+	// the history (harness 10).
 	j.Manifest.WorkspaceReset = agentbench.WorkspaceResetTargetsAndState
-	if got := workspaceLine(j); !strings.Contains(got, "targets produced 1/2") || strings.Contains(got, "carried over") {
+	if got := workspaceLine(j); !strings.Contains(got, "targets produced 1/2") || strings.Contains(got, "carried over") ||
+		!strings.Contains(got, "git history") {
+		t.Fatalf("got %q", got)
+	}
+	// §12.30: targets, state and history (harness 11): no caveat.
+	j.Manifest.WorkspaceReset = agentbench.WorkspaceResetTargetsStateAndHistory
+	if got := workspaceLine(j); !strings.Contains(got, "targets produced 1/2") || strings.Contains(got, "carried over") ||
+		strings.Contains(got, "git history") {
 		t.Fatalf("got %q", got)
 	}
 }

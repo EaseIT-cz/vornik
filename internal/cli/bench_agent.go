@@ -430,7 +430,7 @@ func runBenchAgentGold(cmd *cobra.Command, _ []string) error {
 		// Runner.Run); its manifest carries the provenance (§12.23).
 		manifest.WorkspaceReset = agentbench.WorkspaceResetNoWorkspace
 		if workspace != nil {
-			manifest.WorkspaceReset = agentbench.WorkspaceResetTargetsAndState
+			manifest.WorkspaceReset = agentbench.WorkspaceResetTargetsStateAndHistory
 		}
 	}
 	if err != nil {
@@ -1045,11 +1045,14 @@ func openBenchDB() (*sql.DB, error) {
 // their code (benchmark LLD §12.23): with no reset, a task may have
 // re-validated an earlier run's output; with a reset, how many declared
 // targets the tasks actually produced. A harness-9 reset cleared targets only,
-// so a task could still resume an earlier task's feature (§12.29).
+// so a task could still resume an earlier task's feature (§12.29); a
+// harness-10 reset left earlier tasks' work in the git history (§12.30).
 func workspaceLine(j agentbench.Journal) string {
 	caveat := ""
 	switch j.Manifest.WorkspaceReset {
+	case agentbench.WorkspaceResetTargetsStateAndHistory:
 	case agentbench.WorkspaceResetTargetsAndState:
+		caveat = "; earlier tasks' work readable in the git history (harness 10, §12.30)"
 	case agentbench.WorkspaceResetTargets:
 		caveat = "; workflow state carried over between tasks (harness 9, §12.29)"
 	default:
@@ -1085,7 +1088,7 @@ func benchGrader(tasks []agentbench.TaskSpec) (agentbench.AcceptanceGrader, erro
 		}
 		return nil, nil
 	}
-	return podmanGrader{workspace: benchAgentWorkspace, image: benchAgentAcceptanceImage}, nil
+	return podmanGrader{workspace: benchAgentWorkspace, image: benchAgentAcceptanceImage, memoryLimit: oneSlotMemoryLimit()}, nil
 }
 
 // benchWorkspace is the task-target clearer for --workspace, or nil (an

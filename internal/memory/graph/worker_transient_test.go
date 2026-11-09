@@ -104,8 +104,9 @@ func TestWorker_nonTransientFailuresStillCount(t *testing.T) {
 	}
 }
 
-// The map is bounded by the flagged set: a quarantined chunk and a chunk
-// that succeeds leave it; a non-transient failure resets the budget.
+// The budget is given back on quarantine and on a non-transient failure (the
+// store holds it since #493, LLD §3.3d), and a store that cannot answer
+// counts the failure: the bounded direction.
 func TestWorker_transientBudgetIsForgottenOnQuarantineAndReset(t *testing.T) {
 	src := &fakeChunkSource{}
 	w := NewWorker(src, erroringPipeline(errBedrock503), zerolog.New(io.Discard), WorkerConfig{BatchSize: 5})
@@ -113,23 +114,72 @@ func TestWorker_transientBudgetIsForgottenOnQuarantineAndReset(t *testing.T) {
 	for i := 0; i < MaxTransientRetries+MaxExtractionAttempts; i++ {
 		w.runOne(context.Background(), chunk)
 	}
-	w.transientMu.Lock()
-	left := len(w.transientFailures)
-	w.transientMu.Unlock()
+	src.mu.Lock()
+	left := src.transient["c-503"]
+	src.mu.Unlock()
 	if left != 0 {
-		t.Errorf("a quarantined chunk must leave the uncounted-failure map, map holds %d", left)
+		t.Errorf("a quarantined chunk's uncounted budget must be reset, count = %d", left)
 	}
 
 	// A non-transient failure gives the budget back.
-	w2 := NewWorker(&fakeChunkSource{}, erroringPipeline(errBedrock503), zerolog.New(io.Discard), WorkerConfig{BatchSize: 5})
+	src2 := &fakeChunkSource{}
+	w2 := NewWorker(src2, erroringPipeline(errBedrock503), zerolog.New(io.Discard), WorkerConfig{BatchSize: 5})
 	for i := 0; i < MaxTransientRetries; i++ {
 		w2.runOne(context.Background(), chunk)
 	}
 	w2.pipeline = erroringPipeline(errors.New("permanent: fake LLM down"))
 	w2.runOne(context.Background(), chunk)
-	w2.transientMu.Lock()
-	defer w2.transientMu.Unlock()
-	if n := w2.transientFailures["c-503"]; n != 0 {
+	src2.mu.Lock()
+	n := src2.transient["c-503"]
+	src2.mu.Unlock()
+	if n != 0 {
 		t.Errorf("a non-transient failure must reset the uncounted budget, count = %d", n)
+	}
+
+	// The store cannot record a transient failure: it is counted.
+	src3 := &fakeChunkSource{transientErr: errors.New("db down")}
+	w3 := NewWorker(src3, erroringPipeline(errBedrock503), zerolog.New(io.Discard), WorkerConfig{BatchSize: 5})
+	w3.runOne(context.Background(), chunk)
+	src3.mu.Lock()
+	defer src3.mu.Unlock()
+	if got := src3.attempts["c-503"]; got != 1 {
+		t.Errorf("an unrecordable transient failure must be counted, attempts = %d", got)
+	}
+}
+
+// GitHub #493 (LLD §3.3d): the uncounted budget is the chunk's, not the
+// process's. A restart (a new Worker over the same store) used to grant ten
+// more free retries; now the eleventh transient failure across the restart is
+// counted and the chunk quarantines on the ordinary three.
+func TestWorker_transientCountSurvivesRestart_493(t *testing.T) {
+	src := &fakeChunkSource{}
+	chunk := persistence.ChunkForExtraction{ID: "c-503", ProjectID: "p1", Content: "names Ada"}
+	before := NewWorker(src, erroringPipeline(errBedrock503), zerolog.New(io.Discard), WorkerConfig{BatchSize: 5})
+	for i := 0; i < 6; i++ {
+		before.runOne(context.Background(), chunk)
+	}
+	after := NewWorker(src, erroringPipeline(errBedrock503), zerolog.New(io.Discard), WorkerConfig{BatchSize: 5})
+	for i := 0; i < MaxTransientRetries-6; i++ {
+		after.runOne(context.Background(), chunk)
+	}
+	src.mu.Lock()
+	if got := src.attempts["c-503"]; got != 0 {
+		t.Fatalf("ten transient failures across a restart: attempts = %d, want 0", got)
+	}
+	src.mu.Unlock()
+	after.runOne(context.Background(), chunk)
+	src.mu.Lock()
+	got := src.attempts["c-503"]
+	src.mu.Unlock()
+	if got != 1 {
+		t.Fatalf("the eleventh transient failure, after a restart, must be counted: attempts = %d, want 1", got)
+	}
+	for i := 1; i < MaxExtractionAttempts; i++ {
+		after.runOne(context.Background(), chunk)
+	}
+	src.mu.Lock()
+	defer src.mu.Unlock()
+	if len(src.quarantined) != 1 {
+		t.Fatalf("the chunk must quarantine at 10 + 3 across a restart, quarantined %v", src.quarantined)
 	}
 }

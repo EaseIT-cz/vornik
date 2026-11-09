@@ -32,6 +32,14 @@ func TestAgentCallbackURL(t *testing.T) {
 	assert.Equal(t, "http://127.0.0.1:8080", agentCallbackURL(""))
 	assert.Equal(t, "http://host.containers.internal:8080", agentCallbackURL("0.0.0.0:8080"))
 	assert.Equal(t, "https://vornik.internal", agentCallbackURL("https://vornik.internal"))
+	// GitHub #663 (onboarding D6): the example's ":8080" (all interfaces, no
+	// host) gave agents "http://:8080". An unspecified host means all
+	// interfaces; any other host, loopback included, is kept.
+	assert.Equal(t, "http://host.containers.internal:8080", agentCallbackURL(":8080"))
+	assert.Equal(t, "http://host.containers.internal:8080", agentCallbackURL("[::]:8080"))
+	assert.Equal(t, "http://127.0.0.1:8091", agentCallbackURL("127.0.0.1:8091"))
+	assert.Equal(t, "http://localhost:8080", agentCallbackURL("localhost:8080"))
+	assert.Equal(t, "http://[::1]:8080", agentCallbackURL("[::1]:8080"))
 }
 
 // TestHealthChecker_* removed alongside the HealthChecker type — health

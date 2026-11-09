@@ -14,6 +14,7 @@
 package ui
 
 import (
+	"context"
 	"errors"
 	"net/http"
 	"net/http/httptest"
@@ -284,7 +285,7 @@ func TestApplyProjectPatches_WriteFailure(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = os.Chmod(projDir, 0o755) })
 
-	err := s.applyProjectPatches("gp", gitPatchGuard, []yamlPatch{
+	err := s.applyProjectPatches(context.Background(), "gp", gitPatchGuard, []yamlPatch{
 		{Path: []string{"git", "enabled"}, Value: true},
 	})
 	if err == nil || !strings.Contains(err.Error(), "write project yaml") {
@@ -307,14 +308,14 @@ func TestProjectGitToggle_MethodNotAllowed(t *testing.T) {
 func TestApplyProjectPatches_GuardAndErrorBranches(t *testing.T) {
 	// Invalid project id (path separator) is rejected before any IO.
 	s0 := NewServer()
-	if err := s0.applyProjectPatches("a/b", gitPatchGuard, []yamlPatch{
+	if err := s0.applyProjectPatches(context.Background(), "a/b", gitPatchGuard, []yamlPatch{
 		{Path: []string{"git", "enabled"}, Value: true},
 	}); err == nil || !strings.Contains(err.Error(), "invalid project id") {
 		t.Errorf("invalid id: want 'invalid project id' error, got %v", err)
 	}
 
 	// No registry wired → configDir empty → refused before IO.
-	if err := s0.applyProjectPatches("gp", gitPatchGuard, []yamlPatch{
+	if err := s0.applyProjectPatches(context.Background(), "gp", gitPatchGuard, []yamlPatch{
 		{Path: []string{"git", "enabled"}, Value: true},
 	}); err == nil || !strings.Contains(err.Error(), "config directory") {
 		t.Errorf("no configdir: want config-directory error, got %v", err)
@@ -330,14 +331,14 @@ func TestApplyProjectPatches_GuardAndErrorBranches(t *testing.T) {
 	s := NewServer(WithProjectRegistry(reg))
 
 	// Guard refusal: a stray non-git key is refused before the write.
-	if err := s.applyProjectPatches("gp", gitPatchGuard, []yamlPatch{
+	if err := s.applyProjectPatches(context.Background(), "gp", gitPatchGuard, []yamlPatch{
 		{Path: []string{"projectId"}, Value: "renamed"},
 	}); err == nil || !strings.Contains(err.Error(), "refused") {
 		t.Errorf("guard: want 'refused' error, got %v", err)
 	}
 
 	// Happy path through the projectReg.Load fallback branch.
-	if err := s.applyProjectPatches("gp", gitPatchGuard, []yamlPatch{
+	if err := s.applyProjectPatches(context.Background(), "gp", gitPatchGuard, []yamlPatch{
 		{Path: []string{"git", "enabled"}, Value: true},
 	}); err != nil {
 		t.Fatalf("fallback reload path: unexpected error %v", err)
@@ -347,7 +348,7 @@ func TestApplyProjectPatches_GuardAndErrorBranches(t *testing.T) {
 	}
 
 	// Missing YAML file → read error.
-	if err := s.applyProjectPatches("does-not-exist", gitPatchGuard, []yamlPatch{
+	if err := s.applyProjectPatches(context.Background(), "does-not-exist", gitPatchGuard, []yamlPatch{
 		{Path: []string{"git", "enabled"}, Value: true},
 	}); err == nil || !strings.Contains(err.Error(), "read project yaml") {
 		t.Errorf("missing file: want read error, got %v", err)

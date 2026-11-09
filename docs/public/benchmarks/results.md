@@ -7,7 +7,7 @@ a result, because two systems whose intervals overlap have not been separated.
 
 | Benchmark | Latest | Result | Section |
 |---|---|---|---|
-| Memory retrieval, LongMemEval, 120 items, cold corpus | 2026.11.2 | recall 0.9851, precision 0.9854, MRR 0.9958, sd 0.0000 (unchanged since 2026.9.4) | [cold axis](#longmemeval-retrieval-all-six-abilities-tier-2-cold-corpus) |
+| Memory retrieval, LongMemEval, 120 items, cold corpus | 2026.11.3 | recall 0.9851, precision 0.9854, MRR 0.9958, sd 0.0000 (unchanged since 2026.9.4) | [cold axis](#longmemeval-retrieval-all-six-abilities-tier-2-cold-corpus) |
 | Agent quality, open-weight model on one GPU | `2026.10.7-94` (in 2026.11.1) | 89 to 90 of 90 tasks; €1.34 to €1.40 of electricity per run | [below](#agent-quality-a-4b-active-open-weight-model-on-one-gpu-2026-10-31) |
 | Agent quality, first scored arm | 2026.9.0 | 30 tasks, 100% task success, 9.7% of steps produced no output | [below](#agent-quality-202690-first-scored-arm) |
 | Judged accuracy and the judge's noise | 24 items × 10 runs | accuracy 0.8241, sd 0.0340: a gate needs ±10.2 points | [tier 1](#longmemeval-judged-accuracy-tier-1-and-the-judges-noise-floor) |
@@ -154,6 +154,7 @@ the dataset's gold documents). The store is cleared before every run.
 | `2026.10.6-439-g67cafb8e9` (2026.10.7) | 120 | all 6 | 0.9851 ±0.0000 | 0.9854 ±0.0000 | 0.9958 ±0.0000 | n=3 | `9d32bf3c9a33` |
 | `2026.10.7-130-ge8dc9aab6` (2026.11.1) | 120 | all 6 | 0.9851 ±0.0000 | 0.9854 ±0.0000 | 0.9958 ±0.0000 | n=3 | `be04eee379bd` |
 | `2026.11.1-76-g8e62945d8` (2026.11.2) | 120 | all 6 | 0.9851 ±0.0000 | 0.9854 ±0.0000 | 0.9958 ±0.0000 | n=3 | `4888e3c70ece` |
+| `2026.11.2-60-ge0920131c` (2026.11.3) | 120 | all 6 | 0.9851 ±0.0000 | 0.9854 ±0.0000 | 0.9958 ±0.0000 | n=3 | `83861e2a27ad` |
 
 Figures from `bench memory aggregate` over three run directories; standard
 deviations are sample (n−1).
@@ -181,6 +182,7 @@ store of 1,897 chunks.
 | 11. 2026.10.7 | Every recall path honours the repository scope; each hit carries a provenance label. Each item is deposited and recalled under its own scope with `strict_scope` | Deposits use class `research`, so the trust changes for `decision` and `spec` deposits and delegated ingests are covered by the daemon's tests only |
 | 12. 2026.11.1 | The recall path changed (the architect answers only from the checked design record) and the embedding client now dials through the SSRF guard. Measured 2026-11-01 on `e8dc9aab6`; the commits after it are documentation only | The design-record filter applies to architect answers, which this benchmark does not ask for; covered by the daemon's tests |
 | 13. 2026.11.2 | The search SQL gained a sensitivity cap, and an agent's search now records its task in the retrieval audit. Measured 2026-11-06 on `8e62945d8`; the commits after it are documentation and a test only | No role in this benchmark sets a cap, so the cap's filtering is covered by the daemon's tests (every search statement, on PostgreSQL) only |
+| 14. 2026.11.3 | Recall queries are scanned for secrets before the retrieval audit stores them; the memory secret checkpoint catches short unlabelled tokens; failed embeddings back off longer and a dead-lettered chunk is retried; provenance labels say when a version was pushed and replaced, or redacted. Measured 2026-11-09 on `e0920131c`; the commits after it are a Hermes plugin fix and documentation | The benchmark's items carry no secret-shaped text and no embedding fails, so the scan, the backoff and the dead-letter retry are covered by the daemon's tests only |
 
 Rows 2 to 13 carry `retrieval_path_unverified`: the harness trusts the
 daemon's reported recall method rather than observing it.
@@ -401,5 +403,6 @@ each is stated:
 | `2026.10.7` | **memory row only** | The memory open axis above, on the release candidate (`2026.10.6-439-g67cafb8e9`, n=3), identical to 2026.10.6. The cycle changes the recall paths (repository scope on every path, a provenance label on every hit), so a waiver was not open to it. This entry records the memory row only; no agent row is published for this release in this table. |
 | `2026.11.1` | **yes, both** | The memory open axis above, measured on `2026.10.7-130-ge8dc9aab6` (n=3), identical to 2026.10.7; the cycle changed the recall path, so a waiver was not open to it. The agent axis: the open-weight arms in [Agent quality](#agent-quality-a-4b-active-open-weight-model-on-one-gpu-2026-10-31), measured on `2026.10.7-94-g3246baad0`, part of this release; they start a new table (different model and hardware from 2026.9.0). |
 | `2026.11.2` | **memory row only** | The memory open axis above, measured on `2026.11.1-76-g8e62945d8` (n=3), identical to 2026.11.1; the cycle changed the search SQL (the sensitivity cap) and the retrieval audit, so a waiver was not open to it. **No agent row, and this is a gap, not a waiver.** The cycle adds the `writing-style` guidance block to every agent prompt, which the agent axis would measure; the arm was not re-run for this release. The agent axis therefore stands at 2026.11.1's row, which does not include the block. |
+| `2026.11.3` | **memory row only** | The memory open axis above, measured on `2026.11.2-60-ge0920131c` (n=3), identical to 2026.11.2; the cycle changed the memory checkpoint, the recall audit, the embed retry and the provenance labels, so a waiver was not open to it. **No agent row.** An agent arm did run on this release's code (`gemma-4-26b-a4b`, 30 tasks × 3, harness 11 at `35fb8e0b0`), but it was pre-registered as the end-to-end check of GitHub #655, not as a scored arm, so its numbers are not published as a row. Harness 11 counts a run that stops at a checkpoint as not finished, which the harness behind the 2026-10-31 rows counted as finished; the next scored arm starts a new table for that reason. On that check: 70 of 90 runs finished, 19 stopped at a checkpoint, 1 failed, and no task read an earlier task's work from git. |
 
 A missing row stated as missing is honest. An absent row is not — which is the whole

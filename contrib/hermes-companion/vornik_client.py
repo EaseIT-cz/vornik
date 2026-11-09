@@ -27,7 +27,8 @@ CAPABILITIES_NEGATIVE_TTL_SECONDS = 30.0
 # signature is refused by a Cloudflare zone in front of the daemon (error
 # 1010) before the request reaches it (GitHub #628). Keep the version equal to
 # plugin.yaml; tests/test_user_agent.py checks it.
-USER_AGENT = "vornik-companion/0.22.2 (hermes)"
+VERSION = "0.23.0"
+USER_AGENT = "vornik-companion/%s (hermes)" % VERSION
 
 
 class VornikError(Exception):
@@ -125,6 +126,37 @@ class VornikClient:
 
     def supports(self, feature: str) -> bool:
         return bool(self.capabilities().get(feature))
+
+    def get_json(self, path: str, timeout=None):
+        """GET a daemon JSON endpoint with this key; raises VornikError."""
+        return self._request("GET", path, timeout=timeout)
+
+    def post_json(self, path: str, body: dict, timeout=None):
+        """POST JSON with this key; raises VornikError on a non-2xx answer.
+        A 2xx answer with an empty body returns None."""
+        try:
+            return self._request("POST", path, body, timeout=timeout)
+        except VornikError as e:
+            if "non-JSON" in str(e):
+                return None
+            raise
+
+    def initialize_instructions(self, timeout=None) -> str:
+        """The daemon's MCP initialize ``instructions`` for this key: the
+        working-with-Vornik rules for a companion key, "" for a broker key
+        (design 24, "Engineering guidance from Vornik", R). Raises
+        VornikError when the daemon cannot be reached."""
+        with self._lock:
+            self._next_id += 1
+            rid = self._next_id
+        body = {"jsonrpc": "2.0", "id": rid, "method": "initialize",
+                "params": {"protocolVersion": "2025-06-18", "capabilities": {},
+                           "clientInfo": {"name": "vornik-companion-hermes", "version": VERSION}}}
+        resp = self._request("POST", MCP_PATH, body, timeout=timeout)
+        if resp.get("error"):
+            raise VornikError("companion error: %s" % resp["error"].get("message", "unknown"))
+        text = (resp.get("result") or {}).get("instructions")
+        return text if isinstance(text, str) else ""
 
     def call(self, tool: str, arguments: dict, timeout=None):
         """Call a companion tool. Returns (text, is_error): a tool-level

@@ -50,9 +50,9 @@ func expectDequeue(mock sqlmock.Sqlmock, ids ...string) {
 
 func expectDLQ(mock sqlmock.Sqlmock, id, reason, lastErrSub string, park bool) {
 	mock.ExpectBegin()
-	mock.ExpectExec("DELETE FROM memory_embed_queue").WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectQuery("DELETE FROM memory_embed_queue WHERE chunk_id = \\$1 RETURNING").WillReturnRows(noDLQCarry())
 	mock.ExpectExec("INSERT INTO memory_embed_dlq").
-		WithArgs(id, "p", reason, containsArg{lastErrSub}, sqlmock.AnyArg()).
+		WithArgs(id, "p", reason, containsArg{lastErrSub}, sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg()).
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectCommit()
 	if park {

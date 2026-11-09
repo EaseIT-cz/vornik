@@ -55,7 +55,7 @@ func TestExecGitRefresh_ResetsToOriginTip(t *testing.T) {
 	git(t, work, "add", "-A")
 	git(t, work, "commit", "-m", "stale local")
 
-	if err := ExecGitRefresh(context.Background(), work); err != nil {
+	if err := ExecGitRefresh(context.Background(), work, "BACKLOG.md"); err != nil {
 		t.Fatalf("ExecGitRefresh: %v", err)
 	}
 
@@ -71,7 +71,7 @@ func TestExecGitRefresh_ResetsToOriginTip(t *testing.T) {
 
 // TestExecGitRefresh_NonRepoIsNoOp — a non-git dir must not error the tick.
 func TestExecGitRefresh_NonRepoIsNoOp(t *testing.T) {
-	if err := ExecGitRefresh(context.Background(), t.TempDir()); err != nil {
+	if err := ExecGitRefresh(context.Background(), t.TempDir(), "BACKLOG.md"); err != nil {
 		t.Fatalf("non-repo dir must be a no-op, got %v", err)
 	}
 }

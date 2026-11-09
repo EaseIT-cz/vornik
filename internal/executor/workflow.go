@@ -3811,6 +3811,10 @@ func (e *Executor) handleFailure(ctx context.Context, task *persistence.Task, ex
 	}
 	ctx, cancelFinal := finaliserContext(ctx)
 	defer cancelFinal()
+	// An execution whose ending call the open circuit fast-rejected reached
+	// no model, so its attempt is not spent (permanent-failure design
+	// §8.8.5, GitHub #492).
+	unspent := attemptNotSpent(err)
 	// Operator-pause guard. If the task has been flipped to PAUSED
 	// between the goroutine starting and reaching the failure
 	// finaliser (typical case: pause arrived after agent steps
@@ -3931,7 +3935,7 @@ func (e *Executor) handleFailure(ctx context.Context, task *persistence.Task, ex
 	if errorClass != "" {
 		task.LastErrorClass = &errorClass
 	}
-	if !e.taskWillRetry(task) {
+	if !e.taskWillRetry(task, unspent) {
 		// Diagnostic for stability item 3 ("tasks finalize FAILED
 		// after one attempt"). Logging which decision path triggered
 		// terminal-FAILED — and what the attempt budget looked like
@@ -3974,6 +3978,9 @@ func (e *Executor) handleFailure(ctx context.Context, task *persistence.Task, ex
 		// here, inside runExecution and before its deferred cleanup, so it
 		// exists before IsExecuting turns false and the scheduler requeues.
 		e.recordRetryHold(task.ID, err)
+		if unspent {
+			e.recordUnspentAttempt(task.ID)
+		}
 	}
 	// Inter-project resolve: failed-side. Skips when the task
 	// isn't a CPC callee.
@@ -3993,7 +4000,7 @@ func (e *Executor) handleFailure(ctx context.Context, task *persistence.Task, ex
 	// failure isn't terminal yet — flipping the breaker on a
 	// transient is the wrong signal). Skipped when the breaker
 	// isn't wired (the default for upgrades).
-	if e.circuitBreaker != nil && !e.taskWillRetry(task) {
+	if e.circuitBreaker != nil && !e.taskWillRetry(task, unspent) {
 		e.circuitBreaker.Trip(ctx, task, errorClass)
 	}
 
@@ -4007,7 +4014,7 @@ func (e *Executor) handleFailure(ctx context.Context, task *persistence.Task, ex
 	// RemoveWatchers after sending), so the eventual success on retry
 	// would have nobody to tell. Defer the announcement until the
 	// retry budget is actually exhausted.
-	if !e.taskWillRetry(task) {
+	if !e.taskWillRetry(task, unspent) {
 		e.notifyCompletion(ctx, task, false, errorMsg, true)
 
 		// Phase 3 LLM-as-judge — fire on TERMINAL failures too, not
@@ -4043,13 +4050,17 @@ func (e *Executor) handleFailure(ctx context.Context, task *persistence.Task, ex
 // nothing at all. Both now call the same function, so they cannot drift.
 //
 // MaxAttempts == 0 means retries are disabled — the only attempt.
-func (e *Executor) taskWillRetry(task *persistence.Task) bool {
+func (e *Executor) taskWillRetry(task *persistence.Task, unspent bool) bool {
 	if task == nil {
 		return false
 	}
 	class := ""
 	if task.LastErrorClass != nil {
 		class = *task.LastErrorClass
+	}
+	if unspent {
+		// The scheduler decides with the same predicate (AttemptNotSpent).
+		return persistence.TaskRetryAfterUnspentAttempt(task.MaxAttempts, class)
 	}
 	return persistence.TaskShouldRetry(task.Attempt, task.MaxAttempts, class)
 }
@@ -4697,7 +4708,16 @@ func (e *Executor) CancelChildren(ctx context.Context, parentTaskID string) {
 	if e == nil || e.taskRepo == nil || parentTaskID == "" {
 		return
 	}
-	e.cancelDescendants(ctx, parentTaskID, parentTaskID, map[string]bool{parentTaskID: true})
+	// A child closed while awaiting approval names the root and why it ended
+	// (GitHub #490). The root is read once: every child sees one state.
+	root, err := e.taskRepo.Get(ctx, parentTaskID)
+	if err != nil {
+		e.logger.Warn().Err(err).Str("root_task_id", parentTaskID).
+			Msg("cancel cascade: failed to read the root task; a closed approval will not repeat its reason")
+		root = nil
+	}
+	approvalReason := persistence.ApprovalClosedReason(parentTaskID, root)
+	e.cancelDescendants(ctx, parentTaskID, parentTaskID, approvalReason, map[string]bool{parentTaskID: true})
 }
 
 // cascadeCancelReason is the last_error a cascaded child records; rootTaskID
@@ -4708,7 +4728,7 @@ func cascadeCancelReason(rootTaskID string) string {
 		": cancelling or retrying a task ends every unfinished task below it"
 }
 
-func (e *Executor) cancelDescendants(ctx context.Context, rootTaskID, parentTaskID string, seen map[string]bool) {
+func (e *Executor) cancelDescendants(ctx context.Context, rootTaskID, parentTaskID, approvalReason string, seen map[string]bool) {
 	children, err := e.taskRepo.GetChildren(ctx, parentTaskID)
 	if err != nil {
 		e.logger.Warn().Err(err).Str("parent_task_id", parentTaskID).
@@ -4721,11 +4741,21 @@ func (e *Executor) cancelDescendants(ctx context.Context, rootTaskID, parentTask
 		}
 		seen[child.ID] = true
 
-		reason := cascadeCancelReason(rootTaskID)
 		class := string(persistence.TaskFailureClassCancelled)
+		// An approval-parked child first, so its reason says an approval was
+		// closed (05-scheduler §4.11 "Amended 2026-11-07", GitHub #490). The
+		// from-set makes that true only of a child awaiting approval at the
+		// moment of the write; any other unfinished child moves below.
+		approvalText := approvalReason
 		moved, terr := e.taskRepo.TransitionConditional(ctx, child.ID,
-			persistence.CancellableTaskStatuses(), persistence.TaskStatusCancelled,
-			persistence.TransitionOpts{LastError: &reason, LastErrorClass: &class})
+			[]persistence.TaskStatus{persistence.TaskStatusAwaitingApproval}, persistence.TaskStatusCancelled,
+			persistence.TransitionOpts{LastError: &approvalText, LastErrorClass: &class})
+		if terr == nil && !moved {
+			reason := cascadeCancelReason(rootTaskID)
+			moved, terr = e.taskRepo.TransitionConditional(ctx, child.ID,
+				persistence.CancellableTaskStatuses(), persistence.TaskStatusCancelled,
+				persistence.TransitionOpts{LastError: &reason, LastErrorClass: &class})
+		}
 		if terr != nil {
 			// Log and keep going — a grandchild may still be cancellable
 			// even if this child's transition errored.
@@ -4752,7 +4782,7 @@ func (e *Executor) cancelDescendants(ctx context.Context, rootTaskID, parentTask
 		}
 		// Recurse regardless of whether this child transitioned: it may
 		// already have been terminal yet still have active descendants.
-		e.cancelDescendants(ctx, rootTaskID, child.ID, seen)
+		e.cancelDescendants(ctx, rootTaskID, child.ID, approvalReason, seen)
 	}
 }
 

@@ -28,6 +28,10 @@ type fakeChunkSource struct {
 	failReasons map[string]string
 	quarantined []string
 	failErr     error
+	// transient mirrors graph_transient_failures (LLD §3.3d): it lives in
+	// the store, so a new Worker over the same fake is a restart.
+	transient    map[string]int
+	transientErr error
 }
 
 func (f *fakeChunkSource) FetchUnextracted(_ context.Context, limit int) ([]persistence.ChunkForExtraction, error) {
@@ -54,6 +58,31 @@ func (f *fakeChunkSource) MarkExtracted(_ context.Context, chunkID string) error
 		return err
 	}
 	f.marked = append(f.marked, chunkID)
+	delete(f.transient, chunkID)
+	return nil
+}
+
+// AbsorbTransientFailure mirrors the real repositories' guarded increment.
+func (f *fakeChunkSource) AbsorbTransientFailure(_ context.Context, chunkID string, maxTransient int) (bool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.transientErr != nil {
+		return false, f.transientErr
+	}
+	if f.transient == nil {
+		f.transient = map[string]int{}
+	}
+	if f.transient[chunkID] >= maxTransient {
+		return false, nil
+	}
+	f.transient[chunkID]++
+	return true, nil
+}
+
+func (f *fakeChunkSource) ResetTransientFailures(_ context.Context, chunkID string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	delete(f.transient, chunkID)
 	return nil
 }
 
@@ -76,6 +105,7 @@ func (f *fakeChunkSource) RecordExtractionFailure(_ context.Context, chunkID, re
 	n := f.attempts[chunkID]
 	if n >= maxAttempts {
 		f.quarantined = append(f.quarantined, chunkID)
+		delete(f.transient, chunkID)
 		return n, true, nil
 	}
 	return n, false, nil

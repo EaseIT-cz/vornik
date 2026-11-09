@@ -1,6 +1,11 @@
 package taintlineage
 
-import "encoding/json"
+import (
+	"context"
+	"encoding/json"
+
+	"vornik.io/vornik/internal/persistence"
+)
 
 // CheckpointDecisionKind is the discriminator stamped on an untrusted-review
 // checkpoint's metadata (decision.kind == "untrusted_review"), so the answer
@@ -81,4 +86,38 @@ func ParseLatchHash(meta []byte) (string, bool) {
 		return "", false
 	}
 	return m.SourceSetHash, true
+}
+
+// latchReadLimit is how many of a task's newest system messages
+// ReadLatchHashes scans: the repositories' List ceiling.
+const latchReadLimit = 500
+
+// ReadLatchHashes returns the source-set hashes of the task's recorded
+// taint_latch markers, read from its newest latchReadLimit system messages:
+// the one reader for the API's review decision and the executor's park
+// check. A read error returns nil: the task parks again, which fails closed.
+//
+// Before GitHub #670 (task-lifecycle-conversational design §18a) each kept
+// its own copy, listing with no limit, so the driver default (100, oldest
+// first) applied and a later latch was missed.
+func ReadLatchHashes(ctx context.Context, repo persistence.TaskMessageRepository, taskID string) []string {
+	if repo == nil || taskID == "" {
+		return nil
+	}
+	msgs, err := repo.List(ctx, persistence.TaskMessageFilter{
+		TaskID:       taskID,
+		MessageKinds: []string{persistence.TaskMessageKindSystem},
+		Limit:        latchReadLimit,
+		Newest:       true,
+	})
+	if err != nil {
+		return nil
+	}
+	var out []string
+	for _, m := range msgs {
+		if h, ok := ParseLatchHash(m.Metadata); ok {
+			out = append(out, h)
+		}
+	}
+	return out
 }

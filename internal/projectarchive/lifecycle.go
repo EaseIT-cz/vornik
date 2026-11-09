@@ -138,7 +138,7 @@ func (s *LifecycleService) Archive(ctx context.Context, projectID string, in Arc
 	reason := strings.TrimSpace(in.Reason)
 	principal := strings.TrimSpace(in.Principal)
 
-	if err := s.applyPatches(projectID, []PatchOp{
+	if err := s.applyPatches(ctx, projectID, []PatchOp{
 		{Path: []string{"lifecycle", "status"}, Value: "archived"},
 		{Path: []string{"lifecycle", "archivedAt"}, Value: now.Format(time.RFC3339)},
 		{Path: []string{"lifecycle", "scheduledDeleteAt"}, Value: deleteAt.Format(time.RFC3339)},
@@ -172,7 +172,7 @@ func (s *LifecycleService) Unarchive(ctx context.Context, projectID string) erro
 		{Path: []string{"lifecycle", "reason"}, Value: "", RemoveIfEmpty: true},
 		{Path: []string{"lifecycle", "archivedBy"}, Value: "", RemoveIfEmpty: true},
 	}
-	if err := s.applyPatches(projectID, patches); err != nil {
+	if err := s.applyPatches(ctx, projectID, patches); err != nil {
 		return fmt.Errorf("unarchive: %w", err)
 	}
 	if err := s.reloadIfWired(ctx); err != nil {
@@ -193,7 +193,7 @@ func (s *LifecycleService) ScheduleDeleteNow(ctx context.Context, projectID stri
 		return fmt.Errorf("delete-now requires project to be archived first")
 	}
 	now := time.Now().UTC()
-	if err := s.applyPatches(projectID, []PatchOp{
+	if err := s.applyPatches(ctx, projectID, []PatchOp{
 		{Path: []string{"lifecycle", "scheduledDeleteAt"}, Value: now.Format(time.RFC3339)},
 	}); err != nil {
 		return fmt.Errorf("delete-now: %w", err)
@@ -345,11 +345,15 @@ func (s *LifecycleService) checkPrereqs(projectID string) error {
 // applyPatches reads + patches + writes the project YAML
 // atomically. Uses os.Rename for the swap so a crash mid-write
 // leaves either the old or the new content — never a partial.
-func (s *LifecycleService) applyPatches(projectID string, patches []PatchOp) error {
+func (s *LifecycleService) applyPatches(ctx context.Context, projectID string, patches []PatchOp) error {
 	// The process's one config-write lock (GitHub #584,
 	// operations-api-contract-design.md §6.6): the read, patch and write of
 	// the project's config, like every other config writer.
-	unlock := configlock.Lock()
+	// Refused on a daemon that is not the config writer (GitHub #681).
+	unlock, err := configlock.LockAsWriter(ctx)
+	if err != nil {
+		return err
+	}
 	defer unlock()
 	path, err := s.projectYAMLPath(projectID)
 	if err != nil {

@@ -159,12 +159,16 @@ func (w *Worker) processBatch(ctx context.Context) {
 			Err(err).
 			Int("batch_size", len(chunks)).
 			Msg("memory worker: embedding failed — moving batch to DLQ")
+		moved := make([]MemoryChunk, 0, len(chunks))
 		for _, c := range chunks {
-			w.dlqEmbedFailure(ctx, c, err)
+			if w.dlqEmbedFailure(ctx, c, err) {
+				moved = append(moved, c)
+			}
 		}
-		// The DLQ owns these from here, so release the queue rows. Without this the
-		// claim would age out and re-deliver chunks the DLQ is already retrying.
-		w.ackEmbedQueue(ctx, chunks)
+		// The DLQ owns the moved chunks from here, so release their queue rows.
+		// Without this the claim would age out and re-deliver chunks the DLQ is
+		// already retrying. A chunk whose move failed keeps its row (#437).
+		w.ackEmbedQueue(ctx, moved)
 		return
 	}
 	if w.metrics != nil {
@@ -173,6 +177,9 @@ func (w *Worker) processBatch(ctx context.Context) {
 	}
 
 	stored := 0
+	// done is every chunk whose outcome is durable: stored, or moved to the DLQ.
+	// A chunk whose DLQ move failed is not in it and keeps its claim (#677).
+	done := make([]MemoryChunk, 0, len(chunks))
 	dim := w.cfg.EmbeddingDimension
 	if dim <= 0 {
 		dim = 1536
@@ -186,11 +193,9 @@ func (w *Worker) processBatch(ctx context.Context) {
 			// that won't resolve on retry. Defensive since #369 item 5:
 			// the embedder now fails such a batch with a typed
 			// partial_response / empty_vector error, handled above.
-			retryAfter := time.Now().Add(24 * time.Hour)
-			if derr := w.repo.DLQMove(ctx, c.ID, c.ProjectID, "empty_embedding", "embedder returned no vector for this chunk", retryAfter); derr != nil {
-				w.logger.Warn().Err(derr).Str("chunk_id", c.ID).Msg("memory worker: DLQ move (empty) failed")
+			if w.moveToDLQ(ctx, c, "empty_embedding", "embedder returned no vector for this chunk", time.Now().Add(24*time.Hour), true) {
+				done = append(done, c)
 			}
-			_ = w.repo.DLQPark(ctx, c.ID)
 			continue
 		}
 		if len(vecs[i]) != dim {
@@ -204,13 +209,11 @@ func (w *Worker) processBatch(ctx context.Context) {
 				Str("model", w.cfg.EmbeddingModel).
 				Str("chunk_id", c.ID).
 				Msg("memory worker: embedding dimension mismatch — parking in DLQ")
-			retryAfter := time.Now().Add(24 * time.Hour)
 			msg := fmt.Sprintf("embedder returned dim=%d, expected=%d (model=%s)",
 				len(vecs[i]), dim, w.cfg.EmbeddingModel)
-			if derr := w.repo.DLQMove(ctx, c.ID, c.ProjectID, "dimension_mismatch", msg, retryAfter); derr != nil {
-				w.logger.Warn().Err(derr).Str("chunk_id", c.ID).Msg("memory worker: DLQ move (dim) failed")
+			if w.moveToDLQ(ctx, c, "dimension_mismatch", msg, time.Now().Add(24*time.Hour), true) {
+				done = append(done, c)
 			}
-			_ = w.repo.DLQPark(ctx, c.ID)
 			continue
 		}
 		if err := w.repo.UpdateEmbedding(ctx, c.ID, vecs[i], ContentHash(texts[i])); err != nil {
@@ -218,13 +221,13 @@ func (w *Worker) processBatch(ctx context.Context) {
 				Err(err).
 				Str("chunk_id", c.ID).
 				Msg("memory worker: failed to store embedding — moving to DLQ")
-			retryAfter := time.Now().Add(w.dlqBackoff(0))
-			if derr := w.repo.DLQMove(ctx, c.ID, c.ProjectID, "store_failed", err.Error(), retryAfter); derr != nil {
-				w.logger.Warn().Err(derr).Str("chunk_id", c.ID).Msg("memory worker: DLQ move (store) failed")
+			if w.moveToDLQ(ctx, c, "store_failed", err.Error(), time.Now().Add(w.dlqBackoff(0)), false) {
+				done = append(done, c)
 			}
 			continue
 		}
 		stored++
+		done = append(done, c)
 
 		// Generate the content_title display label. Display-only —
 		// failures log + move on; the viz falls back to markdown
@@ -233,11 +236,11 @@ func (w *Worker) processBatch(ctx context.Context) {
 		w.titleChunk(ctx, c.ID, c.ProjectID, c.Content)
 	}
 	// Acknowledge every chunk whose outcome is now durable. Deliberately AFTER the
-	// per-chunk loop: each path above either stored an embedding or parked the chunk
-	// in the DLQ, and both are terminal for the queue. A chunk that reached neither
-	// (a store failure that also failed to DLQ) keeps its claim and is re-delivered
-	// once the claim ages out — which is the whole point of the lease.
-	w.ackEmbedQueue(ctx, chunks)
+	// per-chunk loop: each path above either stored an embedding or moved the chunk
+	// to the DLQ, and both are terminal for the queue. A chunk that reached neither
+	// (a store failure that also failed to DLQ) is not in done, keeps its claim and
+	// is re-delivered once the claim ages out (#677; before, every chunk was acked).
+	w.ackEmbedQueue(ctx, done)
 
 	if w.metrics != nil && stored > 0 {
 		// EmbeddingsStoredTotal is per-project; use the first chunk's project.
@@ -330,6 +333,7 @@ func (w *Worker) embedBatchByProject(ctx context.Context, chunks []MemoryChunk, 
 }
 
 func (w *Worker) processIndividually(ctx context.Context, chunks []MemoryChunk) {
+	done := make([]MemoryChunk, 0, len(chunks))
 	for _, c := range chunks {
 		text := applyEmbedContext(c.SourceName, c.Content)
 		vecs, err := w.embedder.Embed(ctx,
@@ -343,16 +347,21 @@ func (w *Worker) processIndividually(ctx context.Context, chunks []MemoryChunk) 
 			if w.metrics != nil {
 				w.metrics.EmbedBatchesTotal.WithLabelValues("error").Inc()
 			}
-			w.dlqEmbedFailure(ctx, c, err)
+			if w.dlqEmbedFailure(ctx, c, err) {
+				done = append(done, c)
+			}
 			continue
 		}
-		w.persistEmbeddedChunk(ctx, c, vecs[0], ContentHash(text))
+		if w.persistEmbeddedChunk(ctx, c, vecs[0], ContentHash(text)) {
+			done = append(done, c)
+		}
 	}
-	// Every chunk here reached a durable outcome — stored, or parked in the DLQ
-	// which owns retry — so release the leases. This path is reached only after a
+	// Release the leases of the chunks whose outcome is durable: stored, or
+	// moved to the DLQ, which owns retry from there. This path is reached only after a
 	// batch embed failed, which is exactly when a restart is most likely, so
 	// forgetting it would leave the orphaning hazard alive on the retry path.
-	w.ackEmbedQueue(ctx, chunks)
+	// A chunk whose DLQ move failed is not among them and keeps its row (#437).
+	w.ackEmbedQueue(ctx, done)
 }
 
 // dlqEmbedFailure moves one chunk whose embed call failed into the DLQ, with the
@@ -361,7 +370,12 @@ func (w *Worker) processIndividually(ctx context.Context, chunks []MemoryChunk) 
 // the worker's own dimension check parks it: retrying cannot fix a config/model
 // mismatch. Every other cause keeps the back-off, so a key fixed or an endpoint
 // back is picked up by the replay.
-func (w *Worker) dlqEmbedFailure(ctx context.Context, c MemoryChunk, err error) {
+//
+// It reports whether the chunk reached the DLQ: only then may the caller ack its
+// queue row. A chunk whose move failed keeps its claimed row and is re-delivered
+// after EmbedClaimReclaimAfter (project RAG memory design 2026-11-08, GitHub
+// #437: it was acked anyway and lost from both tables).
+func (w *Worker) dlqEmbedFailure(ctx context.Context, c MemoryChunk, err error) bool {
 	msg := ""
 	if err != nil {
 		msg = err.Error()
@@ -369,25 +383,19 @@ func (w *Worker) dlqEmbedFailure(ctx context.Context, c MemoryChunk, err error) 
 	if reason, _ := EmbedFailureReason(err); reason == EmbedReasonDimensionMismatch {
 		w.logger.Warn().Err(err).Str("model", w.cfg.EmbeddingModel).Str("chunk_id", c.ID).
 			Msg("memory worker: embedding dimension mismatch — parking in DLQ")
-		if derr := w.repo.DLQMove(ctx, c.ID, c.ProjectID, "dimension_mismatch", msg, time.Now().Add(24*time.Hour)); derr != nil {
-			w.logger.Warn().Err(derr).Str("chunk_id", c.ID).Msg("memory worker: DLQ move (dim) failed")
-		}
-		// Park = retry_count -1: the replay never picks it up again, unlike the
-		// 24h retry_after alone.
-		if perr := w.repo.DLQPark(ctx, c.ID); perr != nil {
-			w.logger.Warn().Err(perr).Str("chunk_id", c.ID).Msg("memory worker: DLQ park (dim) failed")
-		}
-		return
+		// Parked (retry_count -1): the replay never picks it up again, unlike
+		// the 24 h retry_after alone.
+		return w.moveToDLQ(ctx, c, "dimension_mismatch", msg, time.Now().Add(24*time.Hour), true)
 	}
-	if derr := w.repo.DLQMove(ctx, c.ID, c.ProjectID, "embedding_failed", msg, time.Now().Add(w.dlqBackoff(0))); derr != nil {
-		w.logger.Warn().Err(derr).Str("chunk_id", c.ID).Msg("memory worker: DLQ move failed")
-	}
+	return w.moveToDLQ(ctx, c, "embedding_failed", msg, time.Now().Add(w.dlqBackoff(0)), false)
 }
 
 // embedInputHash is the embedding_cache key the vector was stored under — the hash of
 // the exact string handed to the embedder, passed down rather than recomputed so the
-// column cannot drift from what was cached (migration 150).
-func (w *Worker) persistEmbeddedChunk(ctx context.Context, c MemoryChunk, vec []float32, embedInputHash string) {
+// column cannot drift from what was cached (migration 150). It reports whether the
+// chunk's outcome is durable (stored, or moved to the DLQ), so the caller acks it
+// only then (#677).
+func (w *Worker) persistEmbeddedChunk(ctx context.Context, c MemoryChunk, vec []float32, embedInputHash string) bool {
 	dim := w.cfg.EmbeddingDimension
 	if dim <= 0 {
 		dim = 1536
@@ -399,25 +407,16 @@ func (w *Worker) persistEmbeddedChunk(ctx context.Context, c MemoryChunk, vec []
 			Str("model", w.cfg.EmbeddingModel).
 			Str("chunk_id", c.ID).
 			Msg("memory worker: embedding dimension mismatch — parking in DLQ")
-		retryAfter := time.Now().Add(24 * time.Hour)
 		msg := fmt.Sprintf("embedder returned dim=%d, expected=%d (model=%s)",
 			len(vec), dim, w.cfg.EmbeddingModel)
-		if derr := w.repo.DLQMove(ctx, c.ID, c.ProjectID, "dimension_mismatch", msg, retryAfter); derr != nil {
-			w.logger.Warn().Err(derr).Str("chunk_id", c.ID).Msg("memory worker: DLQ move (dim) failed")
-		}
-		_ = w.repo.DLQPark(ctx, c.ID)
-		return
+		return w.moveToDLQ(ctx, c, "dimension_mismatch", msg, time.Now().Add(24*time.Hour), true)
 	}
 	if err := w.repo.UpdateEmbedding(ctx, c.ID, vec, embedInputHash); err != nil {
 		w.logger.Warn().
 			Err(err).
 			Str("chunk_id", c.ID).
 			Msg("memory worker: failed to store embedding — moving to DLQ")
-		retryAfter := time.Now().Add(w.dlqBackoff(0))
-		if derr := w.repo.DLQMove(ctx, c.ID, c.ProjectID, "store_failed", err.Error(), retryAfter); derr != nil {
-			w.logger.Warn().Err(derr).Str("chunk_id", c.ID).Msg("memory worker: DLQ move (store) failed")
-		}
-		return
+		return w.moveToDLQ(ctx, c, "store_failed", err.Error(), time.Now().Add(w.dlqBackoff(0)), false)
 	}
 	if w.metrics != nil {
 		w.metrics.EmbeddingsStoredTotal.WithLabelValues(c.ProjectID).Inc()
@@ -438,6 +437,7 @@ func (w *Worker) persistEmbeddedChunk(ctx context.Context, c MemoryChunk, vec []
 			}
 		}
 	}
+	return true
 }
 
 // dlqBackoff returns the retry delay for a DLQ row with the given
@@ -449,8 +449,13 @@ func (w *Worker) dlqBackoff(retryCount int) time.Duration {
 		return 24 * time.Hour
 	}
 	base := 10 * time.Minute
-	d := base << retryCount // 10m, 20m, 40m, 80m…
 	max := 24 * time.Hour
+	if retryCount > 20 {
+		// 10m << 21 is already far past the cap, and a shift of about 24 or
+		// more wraps int64 to an arbitrary value (review d016 F2, GitHub #437).
+		return max
+	}
+	d := base << retryCount // 10m, 20m, 40m, 80m…
 	if d <= 0 || d > max {
 		return max
 	}
@@ -473,4 +478,23 @@ func (w *Worker) replayDueDLQ(ctx context.Context) (int, error) {
 		ids[i] = r.ChunkID
 	}
 	return w.repo.DLQReplay(ctx, ids)
+}
+
+// moveToDLQ moves one chunk to the DLQ (parking it when park, for a failure a
+// retry cannot fix) and reports whether the move landed. A failed move rolls
+// back, so the chunk keeps its queue row; the caller must not ack it, or it
+// would be in neither table (GitHub #437, #677).
+func (w *Worker) moveToDLQ(ctx context.Context, c MemoryChunk, reason, msg string, retryAfter time.Time, park bool) bool {
+	if err := w.repo.DLQMove(ctx, c.ID, c.ProjectID, reason, msg, retryAfter); err != nil {
+		w.logger.Warn().Err(err).Str("chunk_id", c.ID).Str("reason", reason).
+			Msg("memory worker: DLQ move failed — the chunk keeps its queue claim and is re-delivered")
+		return false
+	}
+	if park {
+		// In the DLQ either way: a failed park leaves it on its back-off.
+		if perr := w.repo.DLQPark(ctx, c.ID); perr != nil {
+			w.logger.Warn().Err(perr).Str("chunk_id", c.ID).Str("reason", reason).Msg("memory worker: DLQ park failed")
+		}
+	}
+	return true
 }

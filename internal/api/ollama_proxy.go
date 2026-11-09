@@ -477,9 +477,7 @@ func (s *Server) OllamaChat(w http.ResponseWriter, r *http.Request) {
 	if !stream {
 		resp, err := provider.CompleteWithTools(r.Context(), internal, req.Tools)
 		if err != nil {
-			s.logger.Warn().Err(err).Str("model", req.Model).
-				Msg("ollama chat: provider returned error")
-			respondError(w, http.StatusBadGateway, "PROVIDER_ERROR", err.Error())
+			s.ollamaProviderError(w, req.Model, "chat", err)
 			return
 		}
 		if resp == nil {
@@ -563,7 +561,7 @@ func (s *Server) OllamaChat(w http.ResponseWriter, r *http.Request) {
 			CreatedAt:  time.Now().UTC().Format(time.RFC3339Nano),
 			Message:    ollamaChatMessage{Role: "assistant"},
 			Done:       true,
-			DoneReason: "error: " + truncateOllamaErr(err.Error()),
+			DoneReason: s.ollamaStreamErrorReason(req.Model, err),
 		}
 		buf, _ := json.Marshal(final)
 		_, _ = w.Write(buf)
@@ -678,7 +676,7 @@ func (s *Server) OllamaGenerate(w http.ResponseWriter, r *http.Request) {
 	if !stream {
 		resp, err := provider.CompleteWithTools(r.Context(), internal, nil)
 		if err != nil {
-			respondError(w, http.StatusBadGateway, "PROVIDER_ERROR", err.Error())
+			s.ollamaProviderError(w, req.Model, "generate", err)
 			return
 		}
 		// Cost metric. Agent calls (task/execution header set)
@@ -741,7 +739,7 @@ func (s *Server) OllamaGenerate(w http.ResponseWriter, r *http.Request) {
 			Model:      model,
 			CreatedAt:  time.Now().UTC().Format(time.RFC3339Nano),
 			Done:       true,
-			DoneReason: "error: " + truncateOllamaErr(err.Error()),
+			DoneReason: s.ollamaStreamErrorReason(req.Model, err),
 		}
 		buf, _ := json.Marshal(final)
 		_, _ = w.Write(buf)
@@ -815,6 +813,30 @@ func translateChatResponseToOllama(resp *chat.ChatResponse, model string, starte
 // truncateOllamaErr keeps the inline error short enough that
 // clients rendering it inline don't blow up their UI. 240 chars
 // matches the Telegram bot's humanize cap.
+// ollamaProviderError answers a buffered request whose provider call failed,
+// with the reply both proxies share (providerErrorReply, GitHub #667). The
+// provider's own text goes to the log only: it can carry the upstream account
+// name and links, and before 2026-11-07 it was sent to the caller.
+func (s *Server) ollamaProviderError(w http.ResponseWriter, model, endpoint string, err error) {
+	status, code, msg := providerErrorReply(err)
+	s.logger.Warn().Err(err).Str("model", model).Str("code", code).
+		Msg("ollama " + endpoint + ": provider returned error")
+	respondError(w, status, code, msg)
+}
+
+// ollamaStreamErrorReason is the done_reason of a stream's final frame when
+// the provider call failed: "error: CODE: message", the code once, cut at 240
+// bytes. The code leads, so the cut only shortens the text after it.
+func (s *Server) ollamaStreamErrorReason(model string, err error) string {
+	_, code, msg := providerErrorReply(err)
+	s.logger.Warn().Err(err).Str("model", model).Str("code", code).
+		Msg("ollama: provider returned error mid-stream")
+	if !strings.HasPrefix(msg, code) {
+		msg = code + ": " + msg
+	}
+	return "error: " + truncateOllamaErr(msg)
+}
+
 func truncateOllamaErr(s string) string {
 	const max = 240
 	if len(s) <= max {

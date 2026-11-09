@@ -122,7 +122,7 @@ email:
   smtp_password_env: "VORNIK_PA_SMTP_PASSWORD"
   from_address: "Assistant <assistant@example.com>"
   sender_allowlist:
-    - "you@example.com"            # TODO: replace with your sender list
+    - "you@example.com"                  # TODO: replace with your sender list
     - "example.com"                       # bare domain allowlist also works
   poll_interval: "60s"
   attachment_size_cap_bytes: 26214400   # 25 MiB; Gmail's per-message cap

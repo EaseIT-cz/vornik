@@ -24,6 +24,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"vornik.io/vornik/internal/configlock"
 	"vornik.io/vornik/internal/registry"
 	"vornik.io/vornik/internal/safepath"
 )
@@ -122,6 +123,14 @@ func (s *Server) WorkflowEdit(w http.ResponseWriter, r *http.Request, workflowID
 
 // WorkflowSave applies the form edits and writes a new WORKFLOW.md.
 func (s *Server) WorkflowSave(w http.ResponseWriter, r *http.Request, workflowID string) {
+	// The read, write and reload hold the process's config-write lock
+	// (operations design §6.9, GitHub #676).
+	unlock, lerr := configlock.LockAsWriter(r.Context())
+	if lerr != nil {
+		s.refuseNotConfigWriter(w, lerr)
+		return
+	}
+	defer unlock()
 	data := s.workflowEditData(workflowID)
 	data.AssistProjectID = r.URL.Query().Get("projectId")
 	data.AssistProjectID = assistProjectFromRequest(data.AssistProjectID, s.defaultAssistProjectForWorkflow(workflowID))

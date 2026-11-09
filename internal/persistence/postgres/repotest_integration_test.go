@@ -1563,3 +1563,53 @@ func TestCompanionHintRepository_PostgresContract(t *testing.T) {
 	resetSuiteTables(t, db, "companion_hint_windows", "companion_hint_clients")
 	repotest.RunCompanionHintSuite(t, NewCompanionHintRepository(db.DB))
 }
+
+// TestTaskMessageNewest_464_PostgresContract — TaskMessageFilter.Newest
+// (GitHub #464) on Postgres.
+func TestTaskMessageNewest_464_PostgresContract(t *testing.T) {
+	db := newIntegrationDB(t)
+	id := fmt.Sprintf("t464-%d", time.Now().UnixNano())
+	t.Cleanup(func() {
+		_, _ = db.DB.Exec(`DELETE FROM task_messages WHERE task_id = $1`, id)
+		_, _ = db.DB.Exec(`DELETE FROM tasks WHERE id = $1`, id)
+	})
+	repotest.RunTaskMessageNewestSuite(t, NewTaskRepository(db.DB), NewTaskMessageRepository(db.DB), id)
+}
+
+// GitHub #493 (knowledge-graph LLD §3.3d): the KG transient-failure count
+// survives a restart, on the driver production runs.
+func TestChunkGraphTransientFailure_PostgresContract(t *testing.T) {
+	db := newIntegrationDB(t)
+	repotest.RunChunkGraphTransientFailureSuite(t,
+		func() persistence.ChunkGraphExtractionRepository { return NewChunkGraphExtractionRepository(db.DB) },
+		seedChunkForSuite(db),
+		func(ctx context.Context, id string) (int, error) {
+			var n int
+			err := db.QueryRowContext(ctx, `SELECT graph_transient_failures FROM project_memory_chunks WHERE id = $1`, id).Scan(&n)
+			return n, err
+		})
+}
+
+// TestTaskMessageIDs_670_PostgresContract — TaskMessageFilter.IDs (GitHub
+// #670) on Postgres.
+func TestTaskMessageIDs_670_PostgresContract(t *testing.T) {
+	db := newIntegrationDB(t)
+	id := fmt.Sprintf("t670-%d", time.Now().UnixNano())
+	t.Cleanup(func() {
+		_, _ = db.Exec(`DELETE FROM task_messages WHERE task_id IN ($1, $2)`, id, id+"-other")
+		_, _ = db.Exec(`DELETE FROM tasks WHERE id IN ($1, $2)`, id, id+"-other")
+	})
+	repotest.RunTaskMessageIDsSuite(t, NewTaskRepository(db.DB), NewTaskMessageRepository(db.DB), id)
+}
+
+// TestTaskMessageAfter_679_PostgresContract — TaskMessageFilter.After
+// follows the sort (GitHub #679) on Postgres.
+func TestTaskMessageAfter_679_PostgresContract(t *testing.T) {
+	db := newIntegrationDB(t)
+	id := fmt.Sprintf("t679-%d", time.Now().UnixNano())
+	t.Cleanup(func() {
+		_, _ = db.Exec(`DELETE FROM task_messages WHERE task_id = $1`, id)
+		_, _ = db.Exec(`DELETE FROM tasks WHERE id = $1`, id)
+	})
+	repotest.RunTaskMessageAfterSuite(t, NewTaskRepository(db.DB), NewTaskMessageRepository(db.DB), id)
+}

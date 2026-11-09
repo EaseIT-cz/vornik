@@ -102,7 +102,11 @@ func (s *Server) SetupManaged(w http.ResponseWriter, r *http.Request) {
 	writer := &featuredoctor.FileConfigWriter{Path: s.setupConfigPath}
 	// Phase 1, under the config lock: the key, owner and no-change checks,
 	// from the file as written. Nothing changes: answer and stop.
-	unlock := configlock.Lock()
+	unlock, lerr := configlock.LockAsWriter(r.Context()) // refused on a non-writer daemon (#681)
+	if lerr != nil {
+		respondNotConfigWriter(w, lerr)
+		return
+	}
 	chk := s.managedSetupCheck(w, r, writer, &req, name, owner, seeds)
 	unlock()
 	if !chk.proceed {
@@ -121,7 +125,11 @@ func (s *Server) SetupManaged(w http.ResponseWriter, r *http.Request) {
 	}
 	// Phase 2, under the lock again: the file may have changed meanwhile, so
 	// every check runs again on what is there now, then the writes.
-	unlock = configlock.Lock()
+	unlock, lerr = configlock.LockAsWriter(r.Context())
+	if lerr != nil {
+		respondNotConfigWriter(w, lerr)
+		return
+	}
 	defer unlock()
 	chk = s.managedSetupCheck(w, r, writer, &req, name, owner, seeds)
 	if !chk.proceed {

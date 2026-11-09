@@ -119,9 +119,14 @@ class FakeOpener:
     """Scripted daemon. `features` answers /capabilities; `tools` maps a
     companion tool name to (payload, is_error) or a callable(args)."""
 
-    def __init__(self, features=None, tools=None):
+    def __init__(self, features=None, tools=None, instructions=None, initialize_error=None):
         self.features = features
         self.tools = tools or {}
+        # instructions: what MCP initialize answers (None: no instructions
+        # field); initialize_error: an exception initialize raises instead.
+        self.instructions = instructions
+        self.initialize_error = initialize_error
+        self.initializes = 0
         self.calls = []
         # Every request, capability probes included: (base URL, bearer).
         self.requests = []
@@ -138,6 +143,15 @@ class FakeOpener:
                 raise urllib.error.HTTPError(req.full_url, 404, "not found", {}, None)
             return FakeResponse(json.dumps({"features": self.features}).encode())
         body = json.loads(req.data.decode())
+        if body.get("method") == "initialize":
+            self.initializes += 1
+            if self.initialize_error is not None:
+                raise self.initialize_error
+            result = {"protocolVersion": "2025-06-18", "capabilities": {"tools": {}},
+                      "serverInfo": {"name": "vornik-companion", "version": "test"}}
+            if self.instructions is not None:
+                result["instructions"] = self.instructions
+            return FakeResponse(json.dumps({"jsonrpc": "2.0", "id": body["id"], "result": result}).encode())
         name, args = body["params"]["name"], body["params"]["arguments"]
         self.calls.append((name, args, timeout, req.headers.get("Authorization")))
         refusal = undeclared_argument_error(name, args)
@@ -158,12 +172,18 @@ class FakeCtx:
     def __init__(self):
         self.tools, self.hooks, self.commands, self.skills, self.memory = {}, {}, {}, {}, []
         self.cli_commands = {}
+        self.prompt_sections = {}
+        self.hook_lists = {}
 
     def register_tool(self, name, toolset, schema, handler, override=False, check_fn=None):
         self.tools[name] = (schema, handler, check_fn)
 
     def register_hook(self, name, fn):
-        self.hooks[name] = fn
+        # Hermes appends every callback under its hook name (plugins.py
+        # _track_callback at f97608f); hooks keeps the first, as the older
+        # tests read it, and hook_lists keeps them all.
+        self.hooks.setdefault(name, fn)
+        self.hook_lists.setdefault(name, []).append(fn)
 
     def register_command(self, name, handler, description=""):
         self.commands[name] = handler
@@ -173,6 +193,25 @@ class FakeCtx:
 
     def register_memory_provider(self, provider):
         self.memory.append(provider)
+
+    # Hermes's checks at f97608f (hermes_cli/plugins.py; plugins_dispatch.py:
+    # MAX_SYSTEM_PROMPT_SECTION_CHARS = 4_000). The fake that accepted any
+    # max_chars let a value Hermes refuses pass the unit tests (e2e lane,
+    # 2026-11-08).
+    SECTION_MAX_CHARS = 4000
+    SECTION_POSITIONS = ("after_memory",)
+
+    def register_system_prompt_section(self, id, content, position="after_memory", max_chars=4000):
+        import re as _re
+        if not _re.match(r"^[a-z0-9._-]{1,128}$", id):
+            raise ValueError("system prompt section id must be 1-128 lowercase characters")
+        if not isinstance(content, str) and not callable(content):
+            raise TypeError("system prompt section content must be a string or callable")
+        if isinstance(max_chars, bool) or not isinstance(max_chars, int) or not 0 < max_chars <= self.SECTION_MAX_CHARS:
+            raise ValueError("system prompt section max_chars must be between 1 and %d" % self.SECTION_MAX_CHARS)
+        if id in self.prompt_sections:
+            raise ValueError("system prompt section %r is already registered" % id)
+        self.prompt_sections[id] = {"content": content, "position": position, "max_chars": max_chars}
 
     def register_cli_command(self, name, help, setup_fn, handler_fn=None, description=""):
         self.cli_commands[name] = (setup_fn, handler_fn)

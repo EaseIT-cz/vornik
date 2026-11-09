@@ -81,3 +81,6 @@ vornikctl doctor feature enable architect-consult
 
 The doctor refuses unless the configuration assistant is on, the peer entry
 exists and the admin audit log is wired.
+
+To publish your own workflow as an expert with the same controls, see
+[Publish a workflow as an A2A expert](../guides/publish-a2a-expert.md).

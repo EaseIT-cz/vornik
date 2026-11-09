@@ -177,6 +177,7 @@ func runRetention(cmd *cobra.Command, args []string) error {
 		LLMUsage              int    `json:"llm_usage"`
 		ToolAudit             int    `json:"tool_audit"`
 		AgentAdminRefusals    int    `json:"agent_admin_refusals"`
+		RecallAudit           int    `json:"memory_retrieval_audit"`
 		Tasks                 int    `json:"tasks"`
 		Executions            int    `json:"executions"`
 		Artifacts             int    `json:"artifacts"`
@@ -221,6 +222,7 @@ func runRetention(cmd *cobra.Command, args []string) error {
 			LLMUsage:              counts.TaskLLMUsage,
 			ToolAudit:             counts.ToolAudit,
 			AgentAdminRefusals:    counts.AgentAdminRefusals,
+			RecallAudit:           counts.MemoryRetrievalAudit,
 			Tasks:                 counts.Tasks,
 			Executions:            counts.Executions,
 			Artifacts:             counts.Artifacts,
@@ -272,12 +274,12 @@ func runRetention(cmd *cobra.Command, args []string) error {
 	}
 	fmt.Println()
 	tw := tabwriter.NewWriter(os.Stdout, 2, 4, 2, ' ', 0)
-	if _, err := fmt.Fprintln(tw, "project\tllm_usage\taudit\trefusals\ttasks\texecutions\tartifacts\tfiles\ttask_msgs\tmem_chunks\tingest_audit\tfw_eval_allow\tfw_eval_block\tchat_audit"); err != nil {
+	if _, err := fmt.Fprintln(tw, "project\tllm_usage\taudit\trefusals\trecall_audit\ttasks\texecutions\tartifacts\tfiles\ttask_msgs\tmem_chunks\tingest_audit\tfw_eval_allow\tfw_eval_block\tchat_audit"); err != nil {
 		return fmt.Errorf("write header: %w", err)
 	}
 	for _, row := range rows {
-		if _, err := fmt.Fprintf(tw, "%s\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%d\n",
-			row.Project, row.LLMUsage, row.ToolAudit, row.AgentAdminRefusals, row.Tasks,
+		if _, err := fmt.Fprintf(tw, "%s\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%d\n",
+			row.Project, row.LLMUsage, row.ToolAudit, row.AgentAdminRefusals, row.RecallAudit, row.Tasks,
 			row.Executions, row.Artifacts, row.ArtifactFiles,
 			row.TaskMessages, row.MemoryChunks, row.MemoryIngestAudit,
 			row.MemoryPolicyEvalAllow, row.MemoryPolicyEvalBlock,

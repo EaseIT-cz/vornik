@@ -32,6 +32,9 @@ services:
   # CREATE EXTENSION vector succeeds for any user with the privilege.
   # ---------------------------------------------------------------------
   postgres:
+    # Memory bound with no swap (GitHub #460, 08-runtime-manager-podman.md S6).
+    mem_limit: 2g
+    memswap_limit: 2g
     container_name: vornik-postgres
     image: docker.io/pgvector/pgvector:pg16
     labels:

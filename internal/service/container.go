@@ -189,6 +189,10 @@ type Container struct {
 	// stagedProvenance is the provenance of stagedConfig, published with it
 	// into configSnapshot when the reload activates.
 	stagedProvenance *config.Provenance
+	// pendingReloadQuarantine is the §15 quarantine of the reload cycle in
+	// progress, reported once it activates (GitHub #683). Reload cycles are
+	// serialised by the ConfigReloader, so no lock.
+	pendingReloadQuarantine *registry.ReloadQuarantinedError
 	// configSnapshot is what `config show` reads: the config the daemon is
 	// running with its provenance, written at boot and by every activated
 	// reload. c.Config is deliberately never swapped (see applyHotConfig);
@@ -1000,15 +1004,25 @@ func (c *Container) SetBuildDate(d string) { c.buildDate = d }
 func (c *Container) BuildDate() string { return c.buildDate }
 
 func agentCallbackURL(address string) string {
-	url := address
-	if url == "" {
-		url = "http://127.0.0.1:8080"
+	if address == "" {
+		return "http://127.0.0.1:8080"
 	}
-	url = strings.ReplaceAll(url, "0.0.0.0", "host.containers.internal")
-	if !strings.HasPrefix(url, "http") {
-		url = "http://" + url
+	if strings.Contains(address, "://") {
+		return address
 	}
-	return url
+	// An unspecified host ("", 0.0.0.0, ::) means the daemon listens on every
+	// interface; a container reaches it as host.containers.internal. Any
+	// other host is kept, loopback included: a loopback-bound daemon cannot be
+	// reached over TCP from a container, and rewriting the host would hide
+	// that (doctor agent_daemon_reach names it). The example config's ":8080"
+	// used to become "http://:8080" (onboarding design D6, GitHub #663).
+	if host, port, err := net.SplitHostPort(address); err == nil {
+		if host == "" || host == "0.0.0.0" || host == "::" {
+			return "http://" + net.JoinHostPort("host.containers.internal", port)
+		}
+		return "http://" + net.JoinHostPort(host, port)
+	}
+	return "http://" + address
 }
 
 // NewContainer creates and initializes all services in the correct order.

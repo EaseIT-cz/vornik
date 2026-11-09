@@ -152,7 +152,7 @@ type Manager struct {
 	// Called inside the backlog Store lock (via RefreshFromOrigin) so the
 	// local [x]/[!] consumption marks are preserved across the reset.
 	// nil disables the refresh (the tick reads the workspace as-is).
-	gitRefresh func(ctx context.Context, repoDir string) error
+	gitRefresh func(ctx context.Context, repoDir, backlogRel string) error
 	// backlog is the process-wide backlogfile.Store shared with the
 	// HTTP deposit endpoint (Container.BacklogStore, round-2 F2). All
 	// BACKLOG.md read-modify-writes for Mode="backlog" ticks go through
@@ -304,8 +304,9 @@ func WithBacklogStore(s *backlogfile.Store) Option {
 // WithGitRefresh wires the workspace-refresh hook a backlog tick runs before
 // reading BACKLOG.md: fetch origin + hard-reset repoDir to origin/<branch>,
 // picking up external contributions merged to main each iteration. nil (the
-// default) leaves the workspace un-refreshed. See execGitRefresh.
-func WithGitRefresh(fn func(ctx context.Context, repoDir string) error) Option {
+// default) leaves the workspace un-refreshed. backlogRel is the backlog file
+// relative to repoDir (its marks alone write no backup ref). See ExecGitRefresh.
+func WithGitRefresh(fn func(ctx context.Context, repoDir, backlogRel string) error) Option {
 	return func(m *Manager) { m.gitRefresh = fn }
 }
 
@@ -1328,8 +1329,9 @@ func (m *Manager) tickBacklog(ctx context.Context, project *registry.Project, ev
 	if m.gitRefresh != nil {
 		repoDir := filepath.Join(m.workspacePath, project.ID)
 		rctx, cancel := context.WithTimeout(ctx, 90*time.Second)
+		rctx = m.logger.With().Str("project", project.ID).Logger().WithContext(rctx)
 		if rerr := m.backlog.RefreshFromOrigin(abs, project.ID, func() error {
-			return m.gitRefresh(rctx, repoDir)
+			return m.gitRefresh(rctx, repoDir, rel)
 		}); rerr != nil {
 			m.logger.Warn().Err(rerr).
 				Str("project", project.ID).

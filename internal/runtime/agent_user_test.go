@@ -184,7 +184,9 @@ func TestStartContainer_D5_OtherRowsDoNotSynthesise(t *testing.T) {
 
 // R1 corrected / R8: with userns_mode unset, the default attempt carries no
 // synthesised --user, and the keep-id attempt the chain reaches after a
-// namespace-setup failure carries it exactly once.
+// namespace-setup failure carries it exactly once. Since D6 (GitHub #663)
+// only a ROOTFUL chain starts with the default attempt, so this pins the
+// rootful chain; the rootless chain is userns_chain_663_test.go.
 func TestStartContainer_D5_FallbackChainSynthesisesOnKeepIDAttemptOnly(t *testing.T) {
 	path, logPath := recordingPodman(t, `  for arg in "$@"; do
     if [[ "$arg" == "keep-id" ]]; then echo "cid-keep"; exit 0; fi
@@ -192,6 +194,7 @@ func TestStartContainer_D5_FallbackChainSynthesisesOnKeepIDAttemptOnly(t *testin
   echo 'Error: cannot set up namespace using "/usr/bin/newuidmap": exit status 1'
   exit 125`)
 	m := d5Manager(path)
+	m.rootless = false
 	m.imageLabelFunc = (&labelCall{}).fn("sha256:aaa", true, nil)
 
 	startOnce(t, m)
@@ -206,12 +209,9 @@ func TestStartContainer_D5_FallbackChainSynthesisesOnKeepIDAttemptOnly(t *testin
 	if indexOf(attempts[0], "--userns") != -1 {
 		t.Fatalf("default attempt carries --userns: %v", attempts[0])
 	}
-	keep := attempts[1]
-	if got := userFlags(keep); len(got) != 1 || got[0] != "1001:1001" {
-		t.Fatalf("keep-id attempt --user = %v, want exactly [1001:1001]; argv=%v", got, keep)
-	}
-	if u, img := indexOf(keep, "--user"), indexOf(keep, testAgentImage); u > img || img != len(keep)-1 {
-		t.Fatalf("keep-id attempt order wrong: %v", keep)
+	// Rootful: agentuser.Resolve synthesises no --user on any attempt.
+	if got := userFlags(attempts[1]); len(got) != 0 {
+		t.Fatalf("rootful keep-id attempt carries --user %v; argv=%v", got, attempts[1])
 	}
 }
 

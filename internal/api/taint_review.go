@@ -81,7 +81,7 @@ func (s *Server) resolveTaintReview(ctx context.Context, projectID, taskID strin
 	}
 	roll := taintlineage.Rollup(own, ancestor, walkComplete)
 
-	dec := taintlineage.Decide(mode, roll, s.taintLatchHashes(ctx, taskID))
+	dec := taintlineage.Decide(mode, roll, taintlineage.ReadLatchHashes(ctx, s.taskMessageRepo, taskID))
 	return taintResolution{
 		mode:           mode,
 		tainted:        dec.Tainted,
@@ -102,29 +102,6 @@ func (s *Server) taintFailClosed(mode taintlineage.Mode) taintResolution {
 	return taintResolution{mode: mode, walkComplete: false}
 }
 
-// taintLatchHashes reads the recorded taint_latch source-set hashes for a task
-// (D7). Best-effort: a repo error yields no latches (fail-closed — an
-// unreadable latch never suppresses a park). Nil repo ⇒ no latches.
-func (s *Server) taintLatchHashes(ctx context.Context, taskID string) []string {
-	if s.taskMessageRepo == nil || taskID == "" {
-		return nil
-	}
-	msgs, err := s.taskMessageRepo.List(ctx, persistence.TaskMessageFilter{
-		TaskID:       taskID,
-		MessageKinds: []string{persistence.TaskMessageKindSystem},
-	})
-	if err != nil {
-		return nil
-	}
-	var out []string
-	for _, m := range msgs {
-		if h, ok := taintlineage.ParseLatchHash(m.Metadata); ok {
-			out = append(out, h)
-		}
-	}
-	return out
-}
-
 // IsTaintReviewCheckpoint reports whether a checkpoint message's metadata is an
 // untrusted-review decision (decision.kind == "untrusted_review"), so the answer
 // handlers (API + UI) branch onto the admin-class allow/cancel path. Sibling of
@@ -135,7 +112,7 @@ func IsTaintReviewCheckpoint(meta []byte) bool {
 
 // recordTaintReviewLatch writes the D7 latch marker for a reviewed source set:
 // a system task_message carrying the source-set hash the admin operator was
-// shown. resolveTaintReview reads it back via taintLatchHashes on the re-run.
+// shown. resolveTaintReview reads it back via taintlineage.ReadLatchHashes on the re-run.
 // Best-effort — a latch write failure is logged; the resume still proceeds (the
 // re-run simply re-parks, the safe direction).
 func (s *Server) recordTaintReviewLatch(ctx context.Context, taskID, executionID, sourceSetHash string) {

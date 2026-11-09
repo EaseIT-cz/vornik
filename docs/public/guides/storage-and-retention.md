@@ -99,7 +99,7 @@ retention:
   enabled: true            # default: false - opt in
   interval: "6h"
   task_llm_usage_days: 90  # cost history
-  tool_audit_days: 180     # tool-call audit (never below 180, see below)
+  tool_audit_days: 180     # tool-call and recall audit (never below 180, see below)
   tasks_days: 60           # finished tasks
   executions_days: 60      # finished executions
   artifacts_days: 60       # artifact records and their files
@@ -117,7 +117,9 @@ What the defaults mean:
   set `tool_audit_floor_override: true` and say which in
   `tool_audit_floor_override_basis`; an override without a basis is ignored.
   The record of a connected assistant's refused calls (shown on its page
-  under **Admin → Assistants**) is kept for the same time.
+  under **Admin → Assistants**) is kept for the same time, and so is the
+  memory recall audit: the text of each memory search and which records it
+  returned. Before 2026.11.3 the recall audit was never pruned.
 
 - `memory_chunks_days: 0` keeps long-term memory forever, which is the right
   posture for most deployments. Long-term memory is product data, not

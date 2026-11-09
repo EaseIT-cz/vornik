@@ -222,7 +222,10 @@ func (m *ExternalWaitMonitor) scanClosureGrace(ctx context.Context) {
 		msgs, err := m.msgRepo.List(ctx, persistence.TaskMessageFilter{
 			TaskID:       t.ID,
 			MessageKinds: []string{persistence.TaskMessageKindClosureRequest},
-			Limit:        5,
+			// The latest request only (GitHub #464): the oldest five read
+			// the fifth oldest as "latest" once a task had six.
+			Limit:  1,
+			Newest: true,
 		})
 		if err != nil || len(msgs) == 0 {
 			continue

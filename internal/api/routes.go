@@ -2,11 +2,11 @@
 package api
 
 import (
-	"crypto/subtle"
 	"net/http"
 	"strings"
 
 	"github.com/prometheus/client_golang/prometheus/promhttp"
+	"vornik.io/vornik/internal/apikey"
 	"vornik.io/vornik/internal/auth"
 	"vornik.io/vornik/internal/config"
 	"vornik.io/vornik/internal/ratelimit"
@@ -217,10 +217,12 @@ func NewRouter(server *Server, cfg *config.Config) *Router {
 			// Accept the dedicated read-only scrape token (constant-time)
 			// OR the admin key. The scrape token lets Prometheus
 			// authenticate without holding admin.
-			okToken := (scrapeToken != "" && key != "" &&
-				subtle.ConstantTimeCompare([]byte(key), []byte(scrapeToken)) == 1) ||
-				(previousScrapeToken != "" && key != "" &&
-					subtle.ConstantTimeCompare([]byte(key), []byte(previousScrapeToken)) == 1)
+			// apikey.SecretEqual compares digests, so the timing does not
+			// give away the token's length (GitHub #445); both are checked,
+			// so it does not say which one matched either.
+			okCurrent := apikey.SecretEqual(key, scrapeToken)
+			okPrevious := apikey.SecretEqual(key, previousScrapeToken)
+			okToken := okCurrent || okPrevious
 			if !okToken && (key == "" || !server.adminConfig.IsAdminKey(key)) {
 				w.Header().Set("WWW-Authenticate", `Bearer realm="vornik-metrics"`)
 				http.Error(w, "metrics authentication required (audit A5): present the scrape token or admin key", http.StatusUnauthorized)

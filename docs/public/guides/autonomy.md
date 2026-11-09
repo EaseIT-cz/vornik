@@ -1,7 +1,7 @@
 ---
 sources:
     - path: internal/autonomy/manager.go
-      sha256: 7c6e2f23a2568a97cd04b51dba09b595b3dc54bf45977d6deb0b1517cec753a2
+      sha256: 09ccca2f5e2d8a11309aadc9e8e2e2e2b98bcb89a56a3ecea5d19e15a64a2124
     - path: internal/registry/project.go
       sha256: 4b8e1ed413d4b52ccb7520d6c25c02140f6e4c5276e0ae7cb02734478ad95d3f
 ---
@@ -289,7 +289,9 @@ workspace to `origin/<branch>`. This is the same reset a forge task gets:
 - commits that exist only in the workspace (for example a git-over-HTTPS push
   that never reached `origin`) are moved off the branch and kept in a
   `refs/vornik/discarded/<time>-<sha>` ref you can recover them from;
-- uncommitted changes to tracked files in the workspace itself are discarded;
+- uncommitted changes to tracked files in the workspace itself, staged or
+  not, are saved to a `refs/vornik/discarded/<time>-dirty-<id>` ref and then
+  discarded from the working tree; recover them with `git stash apply <ref>`;
 - untracked files are left alone.
 
 So opt in only for a project whose workspace should mirror `origin`, such as

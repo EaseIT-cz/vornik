@@ -303,12 +303,21 @@ chmod 0700 "$PLUGIN_DATA/nudge/sess5ro"
 ALT="$WORK/alt"
 printf '%s' "$(sh_in sess5alt "cat internal/x/a.go")" | env -u PLUGIN_DATA PATH="$ALLOW" VORNIK_COMPANION_TOKEN=t CLAUDE_PLUGIN_DATA="$ALT" VORNIK_NUDGE_THRESHOLD=1 "$BASH_BIN" "$HOOK" observe >/dev/null 2>>"$ERRLOG"
 [[ -d "$ALT/nudge/sess5alt" ]] || fail "case5: CLAUDE_PLUGIN_DATA was not used when PLUGIN_DATA is unset"
-# With neither set, the fallback is the Codex hook's own tmp path, never the
-# Claude hook's (review r2 N2).
+# With neither set, the state is never a shared temp path (#651): only an owned
+# XDG_RUNTIME_DIR, under the Codex hook's own name, never the Claude hook's
+# (review r2 N2); with no runtime directory the hook is silent and writes
+# nothing under TMPDIR; a symlinked base is refused.
 TMPB="$WORK/tmpbase"; mkdir -p "$TMPB"
 printf '%s' "$(sh_in sess5tmp "cat internal/x/a.go")" | env -u PLUGIN_DATA -u CLAUDE_PLUGIN_DATA -u XDG_RUNTIME_DIR PATH="$ALLOW" TMPDIR="$TMPB" VORNIK_COMPANION_TOKEN=t VORNIK_NUDGE_THRESHOLD=1 "$BASH_BIN" "$HOOK" observe >/dev/null 2>>"$ERRLOG"
-compgen -G "$TMPB/vornik-codex-companion-*/nudge/sess5tmp" >/dev/null || fail "case5: the unset-variables fallback is not under vornik-codex-companion-"
-! compgen -G "$TMPB/vornik-companion-*" >/dev/null || fail "case5: the fallback shares the Claude hook's state path"
+[[ -z "$(ls -A "$TMPB")" ]] || fail "case5: with no data or runtime directory the hook wrote under TMPDIR: $(ls -A "$TMPB")"
+XDG="$WORK/xdg"; mkdir -p "$XDG"; chmod 0700 "$XDG"
+printf '%s' "$(sh_in sess5xdg "cat internal/x/a.go")" | env -u PLUGIN_DATA -u CLAUDE_PLUGIN_DATA PATH="$ALLOW" XDG_RUNTIME_DIR="$XDG" VORNIK_COMPANION_TOKEN=t VORNIK_NUDGE_THRESHOLD=1 "$BASH_BIN" "$HOOK" observe >/dev/null 2>>"$ERRLOG"
+[[ -d "$XDG/vornik-codex-companion/nudge/sess5xdg" ]] || fail "case5: an owned XDG_RUNTIME_DIR was not used under vornik-codex-companion"
+[[ ! -e "$XDG/vornik-companion" ]] || fail "case5: the Codex hook used the Claude hook's state path"
+XDG2="$WORK/xdg2"; ELSEWHERE="$WORK/elsewhere"; mkdir -p "$XDG2/vornik-codex-companion" "$ELSEWHERE"; chmod 0700 "$XDG2"
+ln -s "$ELSEWHERE" "$XDG2/vornik-codex-companion/nudge"
+printf '%s' "$(sh_in sess5link "cat internal/x/a.go")" | env -u PLUGIN_DATA -u CLAUDE_PLUGIN_DATA PATH="$ALLOW" XDG_RUNTIME_DIR="$XDG2" VORNIK_COMPANION_TOKEN=t VORNIK_NUDGE_THRESHOLD=1 "$BASH_BIN" "$HOOK" observe >/dev/null 2>>"$ERRLOG"
+[[ -z "$(ls -A "$ELSEWHERE")" ]] || fail "case5: the hook wrote through a symlinked base"
 NOJQ="$WORK/nojq"; mkdir -p "$NOJQ"
 for b in "${ALLOWED[@]}"; do
   [[ "$b" == jq ]] && continue
@@ -392,5 +401,28 @@ for spec in "bogus-mode|VORNIK_COMPANION_TOKEN=t" "observe|VORNIK_COMPANION_TOKE
   [[ "${st[0]}" == 0 && "${st[1]}" == 0 ]] \
     || fail "case drain ($dmode, $denv): writer exit ${st[0]}, hook exit ${st[1]}; the hook must read its stdin before any exit"
 done
+
+# --- Claims hold where mkdir is not exclusive (#687, hardening §13.15).
+# uutils coreutils mkdir 0.10.0 (Ubuntu 26.04) let two concurrent callers
+# both create one directory; this mkdir is the worst case of that race: it
+# succeeds when the directory exists. Each read still takes its own slot, so
+# the third nudges, and the fourth does not nudge again.
+REAL_MKDIR="$(readlink "$ALLOW/mkdir")"
+rm -f "$ALLOW/mkdir"
+printf '#!/bin/sh\nexec %s -p "$@"\n' "$REAL_MKDIR" >"$ALLOW/mkdir"
+chmod 0755 "$ALLOW/mkdir"
+mkdir -p "$REPO/internal/claims"
+for n in 1 2 3 4; do : >"$REPO/internal/claims/f$n.go"; done
+S=sessclaims
+for n in 1 2; do
+  OUT="$(run_hook observe "$(sh_in $S "cat $REPO/internal/claims/f$n.go")")"; RC=$?
+  assert_silent "claims call $n" "$OUT" "$RC"
+done
+OUT="$(run_hook observe "$(sh_in $S "cat $REPO/internal/claims/f3.go")")"
+[[ -n "$OUT" ]] || fail "claims: no nudge on the 3rd read under a non-exclusive mkdir"
+OUT="$(run_hook observe "$(sh_in $S "cat $REPO/internal/claims/f4.go")")"; RC=$?
+assert_silent "claims: the 4th read nudged again" "$OUT" "$RC"
+rm -f "$ALLOW/mkdir"
+ln -s "$REAL_MKDIR" "$ALLOW/mkdir"
 
 echo "PASS: codex recall-nudge.sh parses shell reads without running them, nudges once per subsystem on the 3rd read, yields to a recent successful recall, fails open, stays offline and keeps no content"

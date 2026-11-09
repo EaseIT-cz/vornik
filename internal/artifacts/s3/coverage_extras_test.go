@@ -64,28 +64,39 @@ func TestBackend_Put_BodyReadFailure(t *testing.T) {
 	}
 }
 
-// TestBackend_List_TruncatedNoToken_StopsCleanly — defensive: an
-// S3-compatible server that returns IsTruncated=true but no
-// NextContinuationToken would loop forever under a naïve walker.
-// The Backend's fallback is to stop iteration; assert that. We use
-// a one-off client wrapper rather than extending the shared stub so
-// the truncated-no-token semantics stay isolated to this scenario.
-func TestBackend_List_TruncatedNoToken_StopsCleanly(t *testing.T) {
+// GitHub #443: a server that answers IsTruncated=true with no
+// NextContinuationToken and ignores StartAfter would repeat its first page
+// forever. List used to return success after that page, so
+// DeleteProjectArtifacts reported a complete delete and orphaned the rest.
+// It must fail instead, after the one StartAfter retry that made no progress.
+func TestBackend_List_TruncatedNoTokenNoProgressFails_443(t *testing.T) {
 	client := &truncatedNoTokenStub{}
 	b := newWithClient(Options{Region: "us-east-1", Bucket: "bucket"}, client)
-	var seen []string
-	err := b.List(context.Background(), "", func(info artifacts.ObjectInfo) error {
-		seen = append(seen, info.Key)
-		return nil
-	})
-	if err != nil {
+	err := b.List(context.Background(), "", func(artifacts.ObjectInfo) error { return nil })
+	if err == nil {
+		t.Fatal("a listing that cannot continue must return an error, not success")
+	}
+	if client.calls != 2 {
+		t.Errorf("ListObjectsV2 calls = %d, want 2 (one StartAfter retry, then stop)", client.calls)
+	}
+}
+
+// GitHub #443: the fallback the code comment promised. A server that never
+// sends a token still lists every key, continuing from each page's last key.
+func TestBackend_List_TruncatedNoTokenFallsBackToStartAfter_443(t *testing.T) {
+	keys := map[string]string{}
+	for i := 0; i < 2500; i++ {
+		keys[fmtSprintf("p/k%05d", i)] = "x"
+	}
+	b, stub := seedList(t, "", keys)
+	stub.pageSize = 1000
+	stub.omitToken = true
+	n := 0
+	if err := b.List(context.Background(), "p", func(artifacts.ObjectInfo) error { n++; return nil }); err != nil {
 		t.Fatalf("List: %v", err)
 	}
-	if len(seen) != 1 {
-		t.Errorf("seen = %d, want 1 (truncated-no-token stops after first page)", len(seen))
-	}
-	if client.calls != 1 {
-		t.Errorf("ListObjectsV2 calls = %d, want 1 (loop must terminate, not spin)", client.calls)
+	if n != 2500 || stub.listCalls != 3 {
+		t.Fatalf("listed %d keys in %d calls, want 2500 in 3", n, stub.listCalls)
 	}
 }
 

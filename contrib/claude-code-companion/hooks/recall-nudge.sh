@@ -69,19 +69,36 @@ IFS=$'\x1f' read -r SESSION CWD TOOL TPATH PATTERN RESPONSE <<<"$FIELDS"
 # A crafted session id must not escape the state directory (§10.3).
 [[ "$SESSION" =~ ^[A-Za-z0-9_-]{1,128}$ ]] || exit 0
 
+# The state base is the plugin's data directory, else the per-user runtime
+# directory when the user owns it. Never a shared temp path: a directory
+# another local user created first could suppress the nudge or fire it early
+# (#651, the #461 class; hardening LLD amendment 2026-11-07). With neither,
+# the hook is silent.
 if [[ -n "${CLAUDE_PLUGIN_DATA:-}" ]]; then
   BASE="$CLAUDE_PLUGIN_DATA/nudge"
+elif [[ -n "${XDG_RUNTIME_DIR:-}" && -d "$XDG_RUNTIME_DIR" && -O "$XDG_RUNTIME_DIR" ]]; then
+  BASE="$XDG_RUNTIME_DIR/vornik-companion/nudge"
 else
-  BASE="${XDG_RUNTIME_DIR:-${TMPDIR:-/tmp}}/vornik-companion-${UID:-0}/nudge"
+  exit 0
 fi
 SDIR="$BASE/$SESSION"
+
+# claim PATH — create PATH as an empty file, only if nothing is there. Of N
+# concurrent callers exactly one succeeds: bash's noclobber opens a new file
+# with O_EXCL. Not mkdir: uutils coreutils mkdir 0.10.0 (Ubuntu 26.04) let
+# two concurrent callers both create one directory (#687, §13.15). Any entry
+# already there reads as held: a directory an older version made, and a
+# FIFO or device too, which noclobber would open (blocking, or succeeding).
+claim() { [[ -e "$1" || -L "$1" ]] && return 1; (set -C; : >"$1") 2>/dev/null; }
 
 # ensure_session_dir — create the session dir (mode 0700). The first time a
 # session is seen, sweep sibling session dirs older than 7 days; the sweep is
 # confined to $BASE at depth 1 and is this script's only delete.
 ensure_session_dir() {
-  [[ -d "$SDIR" ]] && return 0
   (umask 077 && mkdir -p "$BASE") 2>/dev/null || return 1
+  # A base that is a symlink, or one another user owns, is refused (#651).
+  [[ -d "$BASE" && ! -L "$BASE" && -O "$BASE" ]] || return 1
+  [[ -d "$SDIR" ]] && return 0
   if (umask 077 && mkdir "$SDIR") 2>/dev/null; then
     find "$BASE" -mindepth 1 -maxdepth 1 -type d -mtime +7 ! -name "$SESSION" \
       -exec rm -rf {} + 2>/dev/null
@@ -172,7 +189,7 @@ KEY="$ROOT/$SUB"
 ENC="$ROOT+$SUB"
 
 ensure_session_dir || exit 0
-[[ -d "$SDIR/nudged.$ENC" || -d "$SDIR/covered.$ENC" ]] && exit 0
+[[ -e "$SDIR/nudged.$ENC" || -d "$SDIR/covered.$ENC" ]] && exit 0
 
 # A successful recall within the window covers this subsystem for the rest of
 # the session.
@@ -186,17 +203,17 @@ if [[ -f "$SDIR/recall-at" ]]; then
   fi
 fi
 
-# Claim the next free slot. mkdir is atomic, so N parallel calls claim N
-# distinct slots and only the threshold slot's claimant can nudge.
+# Claim the next free slot. A claim is exclusive, so N parallel calls claim
+# N distinct slots and only the threshold slot's claimant can nudge.
 SLOT=0
 for ((n = 1; n <= THRESHOLD; n++)); do
-  if mkdir "$SDIR/hit.$ENC.$n" 2>/dev/null; then
+  if claim "$SDIR/hit.$ENC.$n"; then
     SLOT=$n
     break
   fi
 done
 ((SLOT == THRESHOLD)) || exit 0
-mkdir "$SDIR/nudged.$ENC" 2>/dev/null || exit 0
+claim "$SDIR/nudged.$ENC" || exit 0
 
 MSG="vornik-companion: this is Read/Grep/Glob call ${THRESHOLD} into ${KEY} this session with no recent recall. Before reading further, recall its design: recall(query: \"${KEY} design\", class: \"spec\"). If a design exists it is the authoritative record; read code only to verify what it names. (Shown once per subsystem per session.)"
 jq -cn --arg ctx "$MSG" '{hookSpecificOutput: {hookEventName: "PreToolUse", additionalContext: $ctx}}' 2>/dev/null

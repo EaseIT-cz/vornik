@@ -130,6 +130,22 @@ func TestAcceptanceLine(t *testing.T) {
 	}
 }
 
+// GitHub #661 (benchmark LLD §12.32): a pipeline failure is graded, is not a
+// pass, and is named apart from does_not_compile.
+func TestAcceptanceLine_CountsPipelineFailedApart_661(t *testing.T) {
+	j := agentbench.Journal{TaskRuns: []agentbench.TaskRun{
+		{Acceptance: &agentbench.AcceptanceResult{Outcome: agentbench.AcceptancePassed}},
+		{Acceptance: &agentbench.AcceptanceResult{Outcome: agentbench.AcceptancePipelineFailed}},
+		{Acceptance: &agentbench.AcceptanceResult{Outcome: agentbench.AcceptanceDoesNotCompile}},
+	}}
+	got := acceptanceLine(j)
+	for _, want := range []string{"graded 3 of 3", "passed 1", "does not compile 1", "pipeline failed 1"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("want %q in %q", want, got)
+		}
+	}
+}
+
 // Suites and attachments resolve against the task-set file (they were
 // resolving against the working directory and pointing at nothing).
 func TestLoadTaskSet_ResolvesAgainstTheSetDirectory(t *testing.T) {

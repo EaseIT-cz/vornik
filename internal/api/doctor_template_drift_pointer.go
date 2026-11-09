@@ -37,6 +37,7 @@ var doctorCheckConfigPointer = map[string]string{
 	"checkAgentImageUID":           "",
 	"checkAgentLLMAPIKey":          "",
 	"checkAgentLLMTopology":        "",
+	"checkAgentDaemonReach":        "",
 	"checkAgentModelCircuits":      "",
 	"checkAPIKeyStrength":          "",
 	"checkAPISecurityPosture":      "",

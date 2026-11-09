@@ -297,8 +297,9 @@ func TestOllamaChat_BodyTooLarge413(t *testing.T) {
 }
 
 // TestOllamaChat_NonStreamingProviderError502 — non-streaming
-// path: provider error must become a 502 with the error message
-// preserved in the envelope.
+// path: provider error must become a 502 PROVIDER_ERROR whose message is
+// fixed, never the provider's text (GitHub #667: that text carried the
+// upstream account name; this test used to require it).
 func TestOllamaChat_NonStreamingProviderError502(t *testing.T) {
 	stub := &streamingStub{
 		model: "stub",
@@ -312,8 +313,8 @@ func TestOllamaChat_NonStreamingProviderError502(t *testing.T) {
 	if rr.Code != http.StatusBadGateway {
 		t.Errorf("status = %d, want 502", rr.Code)
 	}
-	if !strings.Contains(rr.Body.String(), "rate limit") {
-		t.Errorf("error message should propagate, got %q", rr.Body.String())
+	if strings.Contains(rr.Body.String(), "rate limit") || !strings.Contains(rr.Body.String(), `"code":"PROVIDER_ERROR"`) {
+		t.Errorf("want PROVIDER_ERROR without the provider's text, got %q", rr.Body.String())
 	}
 }
 
@@ -486,8 +487,9 @@ func TestOllamaGenerate_StreamingProviderError(t *testing.T) {
 	if !final.Done {
 		t.Error("final frame should have done:true")
 	}
-	if !strings.Contains(final.DoneReason, "upstream rate limit") {
-		t.Errorf("DoneReason = %q, expected the upstream error to surface", final.DoneReason)
+	// GitHub #667: the class surfaces, never the provider's text.
+	if strings.Contains(final.DoneReason, "upstream rate limit") || !strings.HasPrefix(final.DoneReason, "error: PROVIDER_ERROR: ") {
+		t.Errorf("DoneReason = %q, want the PROVIDER_ERROR class without the provider's text", final.DoneReason)
 	}
 }
 

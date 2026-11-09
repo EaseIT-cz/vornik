@@ -29,6 +29,7 @@ import (
 
 	"github.com/rs/zerolog"
 	"vornik.io/vornik/internal/aidisclosure"
+	"vornik.io/vornik/internal/api"
 	"vornik.io/vornik/internal/config"
 	"vornik.io/vornik/internal/conversation/a2a"
 	"vornik.io/vornik/internal/mcp"
@@ -1346,8 +1347,16 @@ func (c *Container) roleToolCeiling(ctx context.Context, taskID string) (string,
 	if err != nil || exec == nil || exec.CurrentStepID == nil || *exec.CurrentStepID == "" {
 		return "", nil
 	}
-	_, workflow, err := c.Registry.GetProjectWithWorkflow(exec.ProjectID)
-	if err != nil || workflow == nil {
+	// The execution's own workflow, the default only when it records none:
+	// the tool gate's rule, shared (api.ExecutionWorkflow). Resolving through
+	// the default judged a non-default workflow's grant against another role
+	// (GitHub #551).
+	defaultID := ""
+	if _, wf, err := c.Registry.GetProjectWithWorkflow(exec.ProjectID); err == nil && wf != nil {
+		defaultID = wf.ID
+	}
+	workflow := api.ExecutionWorkflow(c.Registry, exec, defaultID)
+	if workflow == nil {
 		return "", nil
 	}
 	step, ok := workflow.Steps[*exec.CurrentStepID]

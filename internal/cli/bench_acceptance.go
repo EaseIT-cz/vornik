@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"vornik.io/vornik/internal/agentbench"
+	"vornik.io/vornik/internal/spawn"
 )
 
 // podmanGrader grades a task's produced package with its hidden acceptance
@@ -21,6 +22,9 @@ import (
 type podmanGrader struct {
 	workspace string
 	image     string
+	// memoryLimit bounds the grading container, with no swap (GitHub #460);
+	// 0 is unbounded. benchGrader sets it from oneSlotMemoryLimit.
+	memoryLimit int64
 	// run is the seam for the podman call.
 	run func(ctx context.Context, name string, args ...string) ([]byte, error)
 }
@@ -75,14 +79,16 @@ func (g podmanGrader) Grade(ctx context.Context, spec agentbench.TaskSpec) agent
 	if run == nil {
 		run = execCombined
 	}
-	out, err := run(runCtx, "podman", "run", "--rm", "--network=none", "--pull=never", "--userns=keep-id",
-		"--entrypoint", "go",
+	argv := append([]string{"run", "--rm", "--network=none", "--pull=never", "--userns=keep-id"},
+		spawn.MemoryLimitFlags(g.memoryLimit)...)
+	argv = append(argv, "--entrypoint", "go",
 		"-v", tree+":/work:z", "-w", "/work/"+filepath.ToSlash(filepath.Clean(spec.Targets[0])),
 		"-e", "GOFLAGS=-mod=mod", "-e", "GOPROXY=off", "-e", "GOWORK=off", "-e", "GOCACHE=/tmp/gocache",
 		g.image, "test", "-count=1", "-timeout="+acceptanceTestTimeout,
 		// Only the suite's tests run: the agent's own tests must compile, but
 		// a failing one is not the independent grade.
 		"-run=^TestAcceptance_", "./...")
+	out, err := run(runCtx, "podman", argv...)
 	return classifyAcceptance(runCtx, string(out), err)
 }
 
@@ -168,7 +174,7 @@ func acceptanceLine(j agentbench.Journal) string {
 	if total == 0 {
 		return "not graded (no acceptance suites or no --acceptance-image; descriptive only, §12.24)"
 	}
-	return fmt.Sprintf("graded %d of %d, passed %d (failed %d, timeout %d, does not compile %d), harness errors %d (not graded); descriptive, n=%d",
+	return fmt.Sprintf("graded %d of %d, passed %d (failed %d, timeout %d, does not compile %d, pipeline failed %d), harness errors %d (not graded); descriptive, n=%d",
 		graded, total, passed, byOutcome[agentbench.AcceptanceFailed], byOutcome[agentbench.AcceptanceTimeout],
-		byOutcome[agentbench.AcceptanceDoesNotCompile], harness, graded)
+		byOutcome[agentbench.AcceptanceDoesNotCompile], byOutcome[agentbench.AcceptancePipelineFailed], harness, graded)
 }

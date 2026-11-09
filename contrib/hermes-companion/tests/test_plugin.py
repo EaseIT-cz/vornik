@@ -1,5 +1,6 @@
 import json
 import os
+import re
 import unittest
 from unittest import mock
 
@@ -40,6 +41,26 @@ class RegisterTest(unittest.TestCase):
         self.assertEqual(len(ctx.memory), 1)
         self.assertEqual(ctx.memory[0].name, "vornik")
         self.assertTrue(ctx.skills["develop-with-memory"].exists())
+
+    def test_the_hint_hooks_and_the_companion_delegate_register_only_with_a_memory_key(self):
+        # GitHub #686 (design 24, "Engineering guidance from Vornik", F, H, V).
+        hint_hooks = ["transform_tool_result", "pre_verify"]
+        env = {"VORNIK_URL": "https://vornik.test", "VORNIK_BROKER_TOKEN": "b"}
+        with mock.patch.dict(os.environ, env, clear=True):
+            ctx = FakeCtx()
+            plugin.register(ctx)
+        for name in hint_hooks:
+            self.assertNotIn(name, ctx.hook_lists)
+        self.assertEqual(len(ctx.hook_lists["pre_llm_call"]), 1, "the digest only")
+        self.assertNotIn("vornik_companion_delegate", ctx.tools)
+        self.assertIn("vornik.rules", ctx.prompt_sections, "the rules register with either key")
+        with mock.patch.dict(os.environ, dict(env, VORNIK_MEMORY_TOKEN="m"), clear=True):
+            ctx = FakeCtx()
+            plugin.register(ctx)
+        for name in hint_hooks:
+            self.assertEqual(len(ctx.hook_lists[name]), 1, name)
+        self.assertEqual(len(ctx.hook_lists["pre_llm_call"]), 2, "the digest and the hints")
+        self.assertIn("vornik_companion_delegate", ctx.tools)
 
 
 class CapabilityFallbackTest(unittest.TestCase):
@@ -540,14 +561,14 @@ class CatalogManifestTest(unittest.TestCase):
     def test_requires_hermes_is_the_certified_semver_floor(self):
         self.assertRegex(MANIFEST, r'(?m)^requires_hermes:\s*">=0\.21\.5"\s*$')
 
-    def test_all_eleven_tools_are_declared(self):
+    def test_all_twelve_tools_are_declared(self):
         # Rule 6: the memory provider's two tools are declared although they
         # register only with VORNIK_MEMORY_TOKEN set (review 8a55 F2). 0.21.0
         # adds the two task-diagnosis tools (design 24, "Audit fixes" A).
         self.assertEqual(sorted(_yaml_list("provides_tools")), sorted([
             "vornik_catalog", "vornik_delegate", "vornik_result", "vornik_status",
             "vornik_cancel", "vornik_list_artifacts", "vornik_read_artifact", "vornik_task_logs",
-            "vornik_task_explain", "vornik_recall", "vornik_remember"]))
+            "vornik_task_explain", "vornik_recall", "vornik_remember", "vornik_companion_delegate"]))
 
     def test_version_has_its_changelog_line_and_the_history_stays(self):
         # The lead's baseline gate run, 2026-10-12: this test pinned 0.19.0
@@ -595,9 +616,18 @@ class ReadmeSetupTest(unittest.TestCase):
         for want in ("cron", "hermes chat -q", "hermes -z", "approvals.cron_mode", "never reach your phone"):
             self.assertIn(want, section)
 
-    def test_never_suggests_coding_companion_grants(self):
+    def test_suggests_only_the_review_and_ingest_grant(self):
+        # Operator decision 2026-11-08 (design 24, "Engineering guidance from
+        # Vornik"; GitHub #686): the memory key may start the review and the
+        # ingest the hints ask for, and nothing else of the companion set; no
+        # skill flags ever.
         self.assertNotIn("--skill-all", self.README.replace("no skill flags", ""))
-        self.assertNotIn("companion-architectural-review", self.README)
+        named = set(re.findall(r"companion-[a-z-]+", self.README)) - {"companion-broker", "companion-artifact-read",
+                                                                     "companion-progress", "companion-result-wait",
+                                                                     "companion-result-reuse", "companion-broker-actions"}
+        self.assertEqual(named, {"companion-architectural-review", "companion-rag-ingest"})
+        grant = [ln for ln in self.README.splitlines() if "-p hermes-memory" in ln]
+        self.assertTrue(grant and all("--memory-all" in ln for ln in grant), grant)
 
 
 class CliRegistrationTest(unittest.TestCase):

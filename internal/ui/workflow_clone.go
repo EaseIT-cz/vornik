@@ -12,11 +12,20 @@ import (
 	"path/filepath"
 	"strings"
 
+	"vornik.io/vornik/internal/configlock"
 	"vornik.io/vornik/internal/registry"
 )
 
 // WorkflowClone handles POST /workflows/{id}/clone (form: newId, displayName?).
 func (s *Server) WorkflowClone(w http.ResponseWriter, r *http.Request, srcID string) {
+	// The read, write and reload hold the process's config-write lock
+	// (operations design §6.9, GitHub #676).
+	unlock, lerr := configlock.LockAsWriter(r.Context())
+	if lerr != nil {
+		s.refuseNotConfigWriter(w, lerr)
+		return
+	}
+	defer unlock()
 	if !s.uiRequireAdminMutation(w, r) {
 		return
 	}
@@ -78,7 +87,7 @@ func (s *Server) WorkflowClone(w http.ResponseWriter, r *http.Request, srcID str
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	if err := os.WriteFile(target, joined, 0o600); err != nil {
+	if _, err := writeProjectConfigAtomic(target, joined); err != nil {
 		http.Error(w, "write failed: "+err.Error(), http.StatusInternalServerError)
 		return
 	}

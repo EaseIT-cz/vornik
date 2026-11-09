@@ -14,6 +14,7 @@ import (
 	"regexp"
 	"strings"
 
+	"vornik.io/vornik/internal/configlock"
 	"vornik.io/vornik/internal/registry"
 )
 
@@ -61,6 +62,14 @@ func (s *Server) WorkflowsNew(w http.ResponseWriter, r *http.Request) {
 // On success: writes <configsDir>/workflows/<workflowId>.md,
 // reloads, redirects to /ui/workflows/<workflowId>/edit.
 func (s *Server) WorkflowsCreate(w http.ResponseWriter, r *http.Request) {
+	// The read, write and reload hold the process's config-write lock
+	// (operations design §6.9, GitHub #676).
+	unlock, lerr := configlock.LockAsWriter(r.Context())
+	if lerr != nil {
+		s.refuseNotConfigWriter(w, lerr)
+		return
+	}
+	defer unlock()
 	if strings.TrimSpace(s.configsDir) == "" {
 		http.Error(w, "Daemon doesn't know where to write workflow files (configsDir unset)", http.StatusServiceUnavailable)
 		return
@@ -142,7 +151,7 @@ func (s *Server) WorkflowsCreate(w http.ResponseWriter, r *http.Request) {
 		s.render(w, "workflows_new.html", data)
 		return
 	}
-	if err := os.WriteFile(target, []byte(body), 0o600); err != nil {
+	if _, err := writeProjectConfigAtomic(target, []byte(body)); err != nil {
 		data.Error = "Write failed: " + err.Error()
 		w.WriteHeader(http.StatusInternalServerError)
 		s.render(w, "workflows_new.html", data)

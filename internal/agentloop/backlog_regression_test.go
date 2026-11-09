@@ -136,13 +136,14 @@ func TestBacklogReadBoundaryCompatibility(t *testing.T) {
 
 func TestReadFilePrefixErrorsAndSentinel(t *testing.T) {
 	ws := t.TempDir()
+	// Since #455 the read goes through the workspace Root (readInWorkspace).
 	for _, path := range []string{filepath.Join(ws, "missing"), ws} {
-		if _, _, err := readFilePrefix(path, 10); err == nil {
+		if _, _, err := readInWorkspace(ws, path, 10); err == nil {
 			t.Errorf("read of %q must fail", path)
 		}
 	}
 	mustWrite(t, filepath.Join(ws, "file"), "0123456789abcdef")
-	data, size, err := readFilePrefix(filepath.Join(ws, "file"), 10)
+	data, size, err := readInWorkspace(ws, filepath.Join(ws, "file"), 10)
 	if err != nil || string(data) != "0123456789a" || size != 16 {
 		t.Fatalf("prefix=%q size=%d err=%v", data, size, err)
 	}

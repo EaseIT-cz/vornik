@@ -11,7 +11,12 @@
 // the config-writer lease (config-apply-journal design §10.6).
 package configlock
 
-import "sync"
+import (
+	"context"
+	"errors"
+	"fmt"
+	"sync"
+)
 
 var mu sync.Mutex
 
@@ -29,4 +34,41 @@ func TryLock() (unlock func(), ok bool) {
 		return func() {}, false
 	}
 	return mu.Unlock, true
+}
+
+// ErrNotConfigWriter is returned by LockAsWriter on a daemon that does not
+// hold the config_writer lease: nothing may be written here (GitHub #681,
+// operations-api-contract design §6.10).
+var ErrNotConfigWriter = errors.New("configlock: this daemon is not the config writer; make the change on the daemon that holds the config_writer lease")
+
+var (
+	checkMu     sync.RWMutex
+	writerCheck func(context.Context) (bool, string)
+)
+
+// SetWriterCheck registers the check LockAsWriter asks after taking the lock
+// (the service passes leaderelection.DangerousWriteAllowed over the
+// config-writer elector). A function keeps this a leaf package. nil removes it.
+func SetWriterCheck(f func(context.Context) (allowed bool, reason string)) {
+	checkMu.Lock()
+	defer checkMu.Unlock()
+	writerCheck = f
+}
+
+// LockAsWriter takes the lock, then asks the writer check. On a refusal it
+// releases the lock and returns ErrNotConfigWriter wrapping the reason. With
+// no check registered it allows, as Lock does. Interactive writers use it;
+// the control plane and workflowapply keep their own fences.
+func LockAsWriter(ctx context.Context) (unlock func(), err error) {
+	mu.Lock()
+	checkMu.RLock()
+	f := writerCheck
+	checkMu.RUnlock()
+	if f != nil {
+		if ok, reason := f(ctx); !ok {
+			mu.Unlock()
+			return nil, fmt.Errorf("%w (%s)", ErrNotConfigWriter, reason)
+		}
+	}
+	return mu.Unlock, nil
 }

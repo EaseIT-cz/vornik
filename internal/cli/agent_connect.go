@@ -754,7 +754,7 @@ func disconnectAgent(client *Client, user agentUser, ns string, out io.Writer) e
 	for _, path := range disconnectPaths(rec, user) {
 		removed := false
 		_, err := harnessconfig.Apply(path, func(b []byte) ([]byte, error) {
-			o, r, err := harnessconfig.Remove(rec.Harness, b, ns)
+			o, r, err := harnessconfig.Remove(rec.Harness, b, harnessconfig.Entry{Namespace: ns})
 			removed = r
 			return o, err
 		}, nil)

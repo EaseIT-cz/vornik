@@ -108,7 +108,10 @@ type bundleCall struct {
 // tools/call body in a Claude Code command is "params": {"name": "tool";
 // in a shell hook the name sits on its own line.
 var (
-	bundleCallPy     = regexp.MustCompile(`(?:\.call|\._call)\("([a-z_]+)"|_wrap\(self\.client, "([a-z_]+)"`)
+	// _wrap's first argument is any client expression (self.client, client,
+	// owner or self.client): a site routed by key must still be scanned
+	// (GitHub #686; a narrower pattern stopped seeing three sites).
+	bundleCallPy     = regexp.MustCompile(`(?:\.call|\._call)\("([a-z_]+)"|_wrap\([A-Za-z_.]+(?: or [A-Za-z_.]+)?, "([a-z_]+)"`)
 	bundleCallParams = regexp.MustCompile(`"params": \{"name": "([a-z_]+)"`)
 	bundleCallSh     = regexp.MustCompile(`^\s*"?name"?: "([a-z_]+)",\s*$`)
 )

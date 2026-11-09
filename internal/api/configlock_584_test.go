@@ -63,17 +63,17 @@ func TestConfigLock584_EveryWriterWaitsForTheLock(t *testing.T) {
 	t.Run("the setup session commit", func(t *testing.T) {
 		path := writeConfig582(t, managedYAML582())
 		waitsForTheLock(t, path, func() error {
-			return writeChatConfig(path, secret, onboarding.ChatConfigProposal{Endpoint: "https://llm.example.com/v1", Model: "m"})
+			return writeChatConfig(context.Background(), path, secret, onboarding.ChatConfigProposal{Endpoint: "https://llm.example.com/v1", Model: "m"})
 		})
 	})
 	t.Run("the dispatcher commit", func(t *testing.T) {
 		path := writeConfig582(t, managedYAML582())
-		waitsForTheLock(t, path, func() error { return writeDispatcherProjectConfig(path, "assistant") })
+		waitsForTheLock(t, path, func() error { return writeDispatcherProjectConfig(context.Background(), path, "assistant") })
 	})
 	t.Run("the memory commit", func(t *testing.T) {
 		path := writeConfig582(t, managedYAML582())
 		waitsForTheLock(t, path, func() error {
-			return writeMemoryConfig(path, secret, onboarding.MemoryConfigProposal{Enabled: false})
+			return writeMemoryConfig(context.Background(), path, secret, onboarding.MemoryConfigProposal{Enabled: false})
 		})
 	})
 }

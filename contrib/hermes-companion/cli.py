@@ -24,12 +24,13 @@ anything (review 8a55 F1).
 
 from __future__ import annotations
 
+import json
 import os
 import shutil
 import subprocess
 
 from . import approval, settings
-from .vornik_client import VornikClient
+from .vornik_client import VornikClient, VornikError
 
 # connect checks the daemon, mints a key and writes one config entry; it
 # never waits on a person (it refuses, rather than waits, when no phone is
@@ -225,4 +226,28 @@ def status(args, values=None, opener=None, out=print, load_config=None) -> int:
         return 1
     on = sorted(k for k, v in caps.items() if v)
     out("Daemon capabilities: %s" % (", ".join(on) or "none"))
+    memory_token = env.get("VORNIK_MEMORY_TOKEN") or ""
+    if memory_token:
+        out(_engineering_status(VornikClient(url, memory_token, opener=opener)))
     return 0
+
+
+ENGINEERING_WORKFLOWS = ("companion-architectural-review", "companion-rag-ingest")
+REGRANT = ("vornikctl companion grant -p hermes-memory --client hermes --memory-all "
+           "--workflows %s --budget-usd 5" % ",".join(ENGINEERING_WORKFLOWS))
+
+
+def _engineering_status(memory_client) -> str:
+    """Whether the memory key may start the workflows the review and ingest
+    hints ask for (design 24, #686 Decision). Reads only; never re-grants."""
+    try:
+        text, is_error = memory_client.call("catalog", {}, timeout=10)
+        body = json.loads(text) if text and not is_error else {}
+    except (VornikError, ValueError):
+        text, is_error, body = "", True, {}
+    ids = {w.get("id") for w in (body.get("workflows") or []) if isinstance(w, dict)}
+    granted = [w for w in ENGINEERING_WORKFLOWS if w in ids]
+    if granted:
+        return "Review and ingest hints: on (%s)" % ", ".join(granted)
+    return ("Review and ingest hints: off: the memory key may not start %s. To turn them on, the operator "
+            "re-grants it: %s" % (" or ".join(ENGINEERING_WORKFLOWS), REGRANT))

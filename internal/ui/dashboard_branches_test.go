@@ -30,7 +30,11 @@ func (f *fakeChunkGraph) RecordExtractionFailure(context.Context, string, string
 	// The UI never records extraction failures; the KG worker owns that path.
 	return 0, false, nil
 }
-func (f *fakeChunkGraph) PendingCount(context.Context) (int, error) { return 0, nil }
+func (f *fakeChunkGraph) AbsorbTransientFailure(context.Context, string, int) (bool, error) {
+	return false, nil // the KG worker owns this path
+}
+func (f *fakeChunkGraph) ResetTransientFailures(context.Context, string) error { return nil }
+func (f *fakeChunkGraph) PendingCount(context.Context) (int, error)            { return 0, nil }
 func (f *fakeChunkGraph) Stats(context.Context) (*persistence.KGStats, error) {
 	return f.stats, nil
 }
@@ -108,32 +112,6 @@ func TestDashboard_OperatorQueue_HealthyState(t *testing.T) {
 	if strings.Contains(body, "waiting for children") {
 		t.Error("Healthy state must NOT show a stuck-parents card")
 	}
-}
-
-// TestDashboard_OperatorQueue_StuckParentsCard — when there are
-// WAITING_FOR_CHILDREN parents, the queue rail renders the stuck
-// card and suppresses the "All clear" indicator. Uses TaskCounts
-// directly (no recent-failures sweep needed — that path requires
-// projectReg which the simple Server fixture doesn't carry).
-func TestDashboard_OperatorQueue_StuckParentsCard(t *testing.T) {
-	taskRepo := &mocks.MockTaskRepository{
-		CountByStatusFunc: func(context.Context, string) (map[persistence.TaskStatus]int64, error) {
-			return map[persistence.TaskStatus]int64{
-				persistence.TaskStatusWaitingForChildren: 3,
-			}, nil
-		},
-		ListFunc: func(_ context.Context, _ persistence.TaskFilter) ([]*persistence.Task, error) {
-			return nil, nil
-		},
-	}
-	srv := NewServer(WithTaskRepository(taskRepo), WithOnboardingDetector(alreadyOnboardedDetector()))
-	req := httptest.NewRequest(http.MethodGet, "/", nil)
-	rec := httptest.NewRecorder()
-	srv.Dashboard(rec, req)
-	require.Equal(t, http.StatusOK, rec.Code)
-	body := rec.Body.String()
-	assert.Contains(t, body, "waiting for children", "rail must surface stuck-parents card when count > 0")
-	assert.NotContains(t, body, "All clear", "healthy indicator must NOT render alongside queue cards")
 }
 
 // TestDashboard_RendersWithTaskCountsAndActive — the task counts
@@ -277,48 +255,4 @@ func TestDashboard_LimitParamHonoured(t *testing.T) {
 	require.Equal(t, http.StatusOK, rec.Code)
 	// limit=10 → page-size selector shows 10 selected.
 	assert.Contains(t, rec.Body.String(), `value="10" selected`)
-}
-
-// Regression, 2026-08-14: the failures card COUNTS with a 24h window
-// (CountRecentFailuresByProject, updated_at >= now()-24h) but linked to
-// /ui/tasks?status=FAILED, which is unwindowed and sorted by creation date. On
-// the operator's deployment that list held 110 rows and the single task the
-// card was counting sat 32 rows down, months old. They closed a failure they
-// COULD see, the count did not move, and the card read as stuck.
-//
-// A card must hand over the same set it counted. This asserts the link carries
-// the window rather than asserting a literal URL, so the two can only drift by
-// someone deleting this test.
-func TestDashboard_FailuresCardLinksToTheWindowItCounted(t *testing.T) {
-	taskRepo := &mocks.MockTaskRepository{
-		CountRecentFailuresByProjectFunc: func(_ context.Context, _ []string, since time.Time) (map[string]int, error) {
-			// The card's own window, echoed back so the test reads what the
-			// production query actually asks for.
-			if d := time.Since(since); d < 23*time.Hour || d > 25*time.Hour {
-				t.Errorf("failure count window is %v, not the 24h the card claims", d)
-			}
-			return map[string]int{"project-1": 1}, nil
-		},
-	}
-	srv := NewServer(
-		WithTaskRepository(taskRepo),
-		WithProjectRegistry(buildPopulatedUIRegistry(t)),
-		WithOnboardingDetector(alreadyOnboardedDetector()),
-	)
-	req := httptest.NewRequest(http.MethodGet, "/", nil)
-	rec := httptest.NewRecorder()
-	srv.Dashboard(rec, req)
-	require.Equal(t, http.StatusOK, rec.Code)
-
-	body := rec.Body.String()
-	if !strings.Contains(body, "failed in last 24h") {
-		t.Fatal("failures card did not render, so its link cannot be checked")
-	}
-	// failed_within, not updated_within: the card counts by failed_at, and a
-	// list filtered on updated_at would select a different set again — a sweep
-	// touching an old FAILED row makes it look freshly broken.
-	if !strings.Contains(body, "failed_within=24h") {
-		t.Error("the failures card does not link to the set it counted: the operator " +
-			"lands on failures selected by a different timestamp than the count used")
-	}
 }

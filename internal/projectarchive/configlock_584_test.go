@@ -2,6 +2,7 @@ package projectarchive
 
 import (
 	"bytes"
+	"context"
 	"os"
 	"testing"
 	"time"
@@ -22,7 +23,7 @@ func TestConfigLock584_ProjectArchiveWaits(t *testing.T) {
 
 	unlock := configlock.Lock()
 	done := make(chan error, 1)
-	go func() { done <- svc.applyPatches("p", nil) }()
+	go func() { done <- svc.applyPatches(context.Background(), "p", nil) }()
 	select {
 	case err := <-done:
 		unlock()

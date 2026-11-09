@@ -404,7 +404,11 @@ func TestSupportReport_HostErrorsRecorded(t *testing.T) {
 }
 
 func TestSupportReport_AutoOutputName(t *testing.T) {
-	// No -o: writes an auto-named file in cwd; clean it up.
+	// No -o: writes an auto-named file in cwd. The cwd is a temp dir, not the
+	// package directory: written there, the archive (and its .tmp) raced the
+	// architecture laws that walk internal/ (a lstat of the vanished .tmp
+	// failed TestProductionDisabledUsesAreClassified, 2026-11-08).
+	t.Chdir(t.TempDir())
 	cmd, _ := newTestCmd()
 	daemon := &fakeDaemon{status: http.StatusOK, bundle: baseBundle(t)}
 	opts := supportReportOptions{Task: "autotask", MaxSize: supportDefaultMaxSize, Lines: 1}

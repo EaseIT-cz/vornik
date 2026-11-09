@@ -1,7 +1,7 @@
 ---
 sources:
     - path: https://docs.vornik.io
-      sha256: 976aa7f7a4ba3cf8e3470dea8500f6840d9ab2704241a7f3ac9219a68ab8c2b0
+      sha256: 6c664fbc1e0264ee3b1fa1f104ed2e91b1d5b1ec03bf8764bb8027e8ae7ab13a
 ---
 # Troubleshooting
 
@@ -51,12 +51,14 @@ the host checks to mean anything. A few checks are worth knowing by name:
   model's — the agent's container could not start or could not read its
   files — are counted separately, and when they are most of what went wrong
   the check tells you to look at the host (`agent_image_uid`,
-  `image_freshness`), not the model. It never switches models for you —
-  swapping a model under a live swarm is left to you.
+  `image_freshness`), not the model. When the provider refuses your account for a usage
+  or rate limit (`UPSTREAM_RATE_LIMITED`), the check reports how many failures
+  that caused. Raise your provider quota or wait for its reset. It never switches models for you —
+  you swap a model under a live swarm yourself.
 - **`config_crlf`** — finds config files saved with Windows-style CRLF line
   endings, a common cause of phantom config drift (see
   [Configuration drift after editing in the UI](#configuration-drift-after-editing-in-the-ui)).
-  Run `vornikctl doctor --fix` to normalize them to LF in place.
+  To normalize them to LF in place, run `vornikctl doctor --fix`.
 - **`model_route_coverage`** — confirms every model a role uses is routed by
   the running chat router (including the default routes an enabled provider
   adds) and has a pricing entry, so nothing routes to an unintended catch-all
@@ -118,7 +120,7 @@ with your login session unless you enable lingering. Enable it once:
 sudo loginctl enable-linger <your-username>
 ```
 
-After this, vornik keeps running whether or not you are logged in.
+After this, vornik keeps running even if you log out.
 
 ### The daemon will not stop, or is killed on restart
 

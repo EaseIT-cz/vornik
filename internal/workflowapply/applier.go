@@ -38,6 +38,8 @@ import (
 
 	"github.com/rs/zerolog"
 
+	"vornik.io/vornik/internal/configlock"
+	"vornik.io/vornik/internal/leaderelection"
 	"vornik.io/vornik/internal/persistence"
 )
 
@@ -91,7 +93,18 @@ type ConfigReloadTrigger interface {
 type ApplierConfig struct {
 	// Logger receives the applier's warnings; nil discards them.
 	Logger *zerolog.Logger
+	// LeaderGate is the daemon's config-writer elector (journal design
+	// §10.1). Nil proceeds, as leaderelection.DangerousWriteAllowed does.
+	LeaderGate any
 }
+
+// ErrWriterFenced is returned when this daemon does not hold the
+// config_writer lease, so it writes no workflow file (GitHub #462). The admin API matches it with errors.Is.
+var ErrWriterFenced = errors.New("memetic: this daemon is not the config writer (config-writer lease); nothing was written")
+
+// ErrConfigBusy is returned when another config writer in this process holds
+// the config-write lock (GitHub #462). The admin API matches it with errors.Is.
+var ErrConfigBusy = errors.New("memetic: another config write is in progress; nothing was written, retry")
 
 // Applier owns the apply-path workflow. Constructed via NewApplier
 // with the narrow interfaces wired by the service layer. The proposals
@@ -144,6 +157,13 @@ func (a *Applier) Apply(ctx context.Context, proposalID, decidedBy string) (*per
 	if a.writer == nil {
 		return nil, fmt.Errorf("memetic.Apply: workflow writer not wired")
 	}
+	// A config write: hold the process's config-write lock to the end, as
+	// every other config writer does (GitHub #462).
+	unlock, ok := configlock.TryLock()
+	if !ok {
+		return nil, ErrConfigBusy
+	}
+	defer unlock()
 
 	got, err := a.proposals.Get(ctx, proposalID)
 	if err != nil {
@@ -161,7 +181,11 @@ func (a *Applier) Apply(ctx context.Context, proposalID, decidedBy string) (*per
 		return nil, err
 	}
 
-	// 1. Filesystem writeback (both trees).
+	// 1. Filesystem writeback (both trees), only by the config writer: the
+	// fence is checked once, after all reads, immediately before the write.
+	if err := writerFence(ctx, a.cfg.LeaderGate); err != nil {
+		return nil, err
+	}
 	if _, err := a.writer.Write(ctx, got.WorkflowID, []byte(got.ProposalYAML)); err != nil {
 		return nil, fmt.Errorf("memetic.Apply: write workflow %q: %w", got.WorkflowID, err)
 	}
@@ -203,9 +227,9 @@ func (a *Applier) Apply(ctx context.Context, proposalID, decidedBy string) (*per
 // records it. Every refusal happens here, before anything is written: a writer
 // that cannot read, a repository that cannot record, a failed read, or an
 // empty file (an empty record reads as "not recorded", which rollback refuses).
-// It assumes applies to one workflow are serialized (they are admin-driven);
-// an apply interleaving between this read and the write would fold its change
-// into this proposal's pre→post diff.
+// Apply holds the process's config-write lock across this read and the write
+// (GitHub #462), so no apply or rollback in this daemon interleaves; the
+// writer fence keeps other daemons out.
 func (a *Applier) capturePreApply(ctx context.Context, p *persistence.WorkflowProposal) ([]byte, preApplyStamper, error) {
 	reader, ok := a.writer.(DeployedReader)
 	if !ok {
@@ -229,4 +253,15 @@ func (a *Applier) capturePreApply(ctx context.Context, p *persistence.WorkflowPr
 		return nil, nil, fmt.Errorf("%w: the deployed file %q is empty", ErrNoRollbackRecord, p.WorkflowID)
 	}
 	return body, stamper, nil
+}
+
+// writerFence refuses a workflow write on a daemon that does not hold the
+// config_writer lease (journal design §10.1, GitHub #462). A nil gate
+// proceeds.
+func writerFence(ctx context.Context, gate any) error {
+	if ok, reason := leaderelection.DangerousWriteAllowed(ctx, gate); !ok {
+		leaderelection.LeaderFenceRejected("config_writer")
+		return fmt.Errorf("%w (%s)", ErrWriterFenced, reason)
+	}
+	return nil
 }

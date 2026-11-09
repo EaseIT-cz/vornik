@@ -17,10 +17,10 @@ import (
 )
 
 func TestLockConfigFile_SameFileSerializes(t *testing.T) {
-	unlock := LockConfigFile("/tmp/vornik-a.yaml")
+	unlock := lockForTest("/tmp/vornik-a.yaml")
 	acquired := make(chan struct{})
 	go func() {
-		u2 := LockConfigFile("/tmp/vornik-a.yaml")
+		u2 := lockForTest("/tmp/vornik-a.yaml")
 		close(acquired)
 		u2()
 	}()
@@ -44,10 +44,10 @@ func TestLockConfigFile_SameFileSerializes(t *testing.T) {
 // interleaved on one config file. Every writer now holds the one lock, so a
 // different path waits too.
 func TestLockConfigFile_DifferentFilesSerialiseToo(t *testing.T) {
-	u1 := LockConfigFile("/tmp/vornik-a.yaml")
+	u1 := lockForTest("/tmp/vornik-a.yaml")
 	acquired := make(chan struct{})
 	go func() {
-		u2 := LockConfigFile("/tmp/vornik-b.yaml")
+		u2 := lockForTest("/tmp/vornik-b.yaml")
 		close(acquired)
 		u2()
 	}()
@@ -66,10 +66,10 @@ func TestLockConfigFile_DifferentFilesSerialiseToo(t *testing.T) {
 }
 
 func TestLockConfigFile_CleanEquivalence(t *testing.T) {
-	unlock := LockConfigFile("/x/c.yaml")
+	unlock := lockForTest("/x/c.yaml")
 	acquired := make(chan struct{})
 	go func() {
-		u2 := LockConfigFile("/x/./c.yaml") // filepath.Clean-equivalent → same lock
+		u2 := lockForTest("/x/./c.yaml") // filepath.Clean-equivalent → same lock
 		close(acquired)
 		u2()
 	}()
@@ -91,7 +91,7 @@ func TestLockConfigFile_PreventsLostUpdate(t *testing.T) {
 		t.Fatal(err)
 	}
 	rmw := func(key string) {
-		unlock := LockConfigFile(path)
+		unlock := lockForTest(path)
 		defer unlock()
 		content, err := os.ReadFile(path)
 		if err != nil {

@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
@@ -43,20 +44,23 @@ func (r *TaskMessageRepository) Insert(ctx context.Context, msg *persistence.Tas
 		msg.CreatedAt = time.Now().UTC()
 	}
 
-	// Caller may have wrapped us in a Tx already; only wrap when
-	// we can actually start one.
-	if db, ok := r.db.(*sql.DB); ok {
-		tx, err := db.BeginTx(ctx, nil)
-		if err != nil {
-			return err
-		}
-		defer func() { _ = tx.Rollback() }()
-		if err := r.insertWithExec(ctx, tx, msg); err != nil {
-			return err
-		}
-		return tx.Commit()
+	// The INSERT and the counter bump are one transaction. persistence.BeginTx
+	// recognises the raw pool and the metrics-wrapped handle; the old
+	// r.db.(*sql.DB) assertion matched only the first, so under the wrapper
+	// the two ran as autocommit statements (GitHub #451, the Postgres twin's
+	// 2026-06-04 fix). Inside a caller's transaction, that one owns commit.
+	tx, ok, err := persistence.BeginTx(ctx, r.db, nil)
+	if err != nil {
+		return err
 	}
-	return r.insertWithExec(ctx, r.db, msg)
+	if !ok {
+		return r.insertWithExec(ctx, r.db, msg)
+	}
+	defer func() { _ = tx.Rollback() }()
+	if err := r.insertWithExec(ctx, tx, msg); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 func (r *TaskMessageRepository) insertWithExec(ctx context.Context, exec DBTX, msg *persistence.TaskMessage) error {
@@ -114,8 +118,13 @@ func (r *TaskMessageRepository) List(ctx context.Context, filter persistence.Tas
 	args := []any{filter.TaskID}
 
 	if filter.After != nil && *filter.After != "" {
-		b.WriteString(" AND id > ?")
-		args = append(args, *filter.After)
+		// Continue after the cursor row's (created_at, id), the order this
+		// returns; id alone sorts by second then a random suffix (GitHub #679,
+		// task-lifecycle-conversational design §18b). A cursor naming no
+		// message of the task falls back to id > After.
+		b.WriteString(` AND ((created_at, id) > (SELECT c.created_at, c.id FROM task_messages c WHERE c.task_id = ? AND c.id = ?)` +
+			` OR (id > ? AND NOT EXISTS (SELECT 1 FROM task_messages c WHERE c.task_id = ? AND c.id = ?)))`)
+		args = append(args, filter.TaskID, *filter.After, *filter.After, filter.TaskID, *filter.After)
 	}
 	if len(filter.MessageKinds) > 0 {
 		placeholders := strings.Repeat("?,", len(filter.MessageKinds))
@@ -125,7 +134,18 @@ func (r *TaskMessageRepository) List(ctx context.Context, filter persistence.Tas
 			args = append(args, k)
 		}
 	}
-	b.WriteString(" ORDER BY created_at ASC, id ASC LIMIT ?")
+	if len(filter.IDs) > 0 {
+		placeholders := strings.Repeat("?,", len(filter.IDs))
+		b.WriteString(" AND id IN (" + placeholders[:len(placeholders)-1] + ")")
+		for _, id := range filter.IDs {
+			args = append(args, id)
+		}
+	}
+	if filter.Newest {
+		b.WriteString(" ORDER BY created_at DESC, id DESC LIMIT ?")
+	} else {
+		b.WriteString(" ORDER BY created_at ASC, id ASC LIMIT ?")
+	}
 	args = append(args, limit)
 
 	rows, err := r.db.QueryContext(ctx, b.String(), args...)
@@ -141,6 +161,9 @@ func (r *TaskMessageRepository) List(ctx context.Context, filter persistence.Tas
 			return nil, err
 		}
 		out = append(out, m)
+	}
+	if filter.Newest {
+		slices.Reverse(out) // read newest first; returned oldest first
 	}
 	return out, rows.Err()
 }

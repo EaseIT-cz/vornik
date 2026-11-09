@@ -916,3 +916,40 @@ func TestCompanionHintRepository_Contract(t *testing.T) {
 	db := newTestDB(t)
 	repotest.RunCompanionHintSuite(t, sqlite.NewCompanionHintRepository(db.DB))
 }
+
+// TestTaskMessageNewest_464_Contract — TaskMessageFilter.Newest (GitHub #464).
+// The same suite runs on Postgres.
+func TestTaskMessageNewest_464_Contract(t *testing.T) {
+	db := newTestDB(t)
+	repotest.RunTaskMessageNewestSuite(t, sqlite.NewTaskRepository(db.DB), sqlite.NewTaskMessageRepository(db.DB), "t464")
+}
+
+// GitHub #493 (knowledge-graph LLD §3.3d): the KG transient-failure count
+// survives a restart.
+func TestChunkGraphTransientFailure_Contract(t *testing.T) {
+	db := newTestDB(t)
+	repotest.RunChunkGraphTransientFailureSuite(t,
+		func() persistence.ChunkGraphExtractionRepository {
+			return sqlite.NewChunkGraphExtractionRepository(db.DB)
+		},
+		seedChunkForSuite(db),
+		func(ctx context.Context, id string) (int, error) {
+			var n int
+			err := db.QueryRowContext(ctx, `SELECT graph_transient_failures FROM project_memory_chunks WHERE id = ?`, id).Scan(&n)
+			return n, err
+		})
+}
+
+// TestTaskMessageIDs_670_Contract — TaskMessageFilter.IDs (GitHub #670). The
+// same suite runs on Postgres.
+func TestTaskMessageIDs_670_Contract(t *testing.T) {
+	db := newTestDB(t)
+	repotest.RunTaskMessageIDsSuite(t, sqlite.NewTaskRepository(db.DB), sqlite.NewTaskMessageRepository(db.DB), "t670")
+}
+
+// TestTaskMessageAfter_679_Contract — TaskMessageFilter.After follows the
+// sort (GitHub #679). The same suite runs on Postgres.
+func TestTaskMessageAfter_679_Contract(t *testing.T) {
+	db := newTestDB(t)
+	repotest.RunTaskMessageAfterSuite(t, sqlite.NewTaskRepository(db.DB), sqlite.NewTaskMessageRepository(db.DB), "t679")
+}

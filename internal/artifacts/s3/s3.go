@@ -343,7 +343,7 @@ func (b *Backend) List(ctx context.Context, prefix string, fn artifacts.WalkFunc
 		}
 	}
 
-	var continuationToken *string
+	var continuationToken, startAfter *string
 	for {
 		if err := ctx.Err(); err != nil {
 			return err
@@ -351,6 +351,7 @@ func (b *Backend) List(ctx context.Context, prefix string, fn artifacts.WalkFunc
 		in := &awss3.ListObjectsV2Input{
 			Bucket:            aws.String(b.opts.Bucket),
 			ContinuationToken: continuationToken,
+			StartAfter:        startAfter,
 		}
 		if s3Prefix != "" {
 			in.Prefix = aws.String(s3Prefix)
@@ -359,8 +360,10 @@ func (b *Backend) List(ctx context.Context, prefix string, fn artifacts.WalkFunc
 		if err != nil {
 			return fmt.Errorf("artifacts/s3: list %q: %w", prefix, err)
 		}
+		lastKey := ""
 		for _, obj := range out.Contents {
 			key := aws.ToString(obj.Key)
+			lastKey = key
 			info := artifacts.ObjectInfo{
 				Key: b.stripPrefix(key),
 			}
@@ -380,15 +383,19 @@ func (b *Backend) List(ctx context.Context, prefix string, fn artifacts.WalkFunc
 		if out.IsTruncated == nil || !*out.IsTruncated {
 			return nil
 		}
-		// Prefer NextContinuationToken; fall back to the page's last
-		// key if some servers omit it.
+		// Prefer NextContinuationToken. Some S3-compatible servers omit it
+		// on a truncated page: continue after the page's last key instead
+		// (GitHub #443; design storage-abstraction-phase4.md). A listing that
+		// cannot continue is an error, never success: a caller such as
+		// DeleteProjectArtifacts must not mistake the first page for all.
 		if out.NextContinuationToken != nil {
-			continuationToken = out.NextContinuationToken
-		} else {
-			// No token + truncated is a server bug, but we stop
-			// rather than loop forever.
-			return nil
+			continuationToken, startAfter = out.NextContinuationToken, nil
+			continue
 		}
+		if lastKey == "" || (startAfter != nil && lastKey <= *startAfter) {
+			return fmt.Errorf("artifacts/s3: list %q: the server reported a truncated page with no continuation token and the listing did not advance past %q; the listing is incomplete", prefix, lastKey)
+		}
+		continuationToken, startAfter = nil, aws.String(lastKey)
 	}
 }
 

@@ -146,7 +146,15 @@ const (
 	// requeue stays visible until the re-run terminates, but does NOT count
 	// toward the "needs you" badge (Inbox sets Count excluding this kind).
 	inboxKindRetrying = "Retrying"
+	// inboxKindApprovalClosed is an INFORMATIONAL row: an approval the
+	// cancel cascade closed, shown for failedRecencyWindow with the reason
+	// naming the task above it (05-scheduler §4.11 "Amended 2026-11-07",
+	// GitHub #490). Not counted toward the badge: nothing awaits the user.
+	inboxKindApprovalClosed = "Approval closed"
 )
+
+// approvalClosedRank sorts closed approvals after FAILED rows.
+const approvalClosedRank = 4
 
 // retryingRank sorts the informational "Retrying…" rows after every
 // actionable category (ranks 1–4) — they progress on their own, nothing is
@@ -165,12 +173,16 @@ func isRetryInFlightStatus(s persistence.TaskStatus) bool {
 }
 
 // countActionableItems counts the attention rows a human is actually blocked
-// on — every kind EXCEPT the informational "Retrying…" rows, which render in
-// the queue but must not inflate the "needs you" badge.
+// on — every kind EXCEPT the informational ones, which render in the queue but
+// must not inflate the "needs you" badge: "Retrying…", "Approval closed", and
+// "Blocked on children" (a parent waiting on its children is normal operation;
+// a stuck one is the watchdog's finding; outcome-inbox design §5.2a, #671).
 func countActionableItems(items []inboxItem) int {
 	n := 0
 	for _, it := range items {
-		if it.Kind != inboxKindRetrying {
+		switch it.Kind {
+		case inboxKindRetrying, inboxKindApprovalClosed, inboxKindBlocked:
+		default:
 			n++
 		}
 	}
@@ -191,6 +203,28 @@ func newRetryingItem(t *persistence.Task) inboxItem {
 		Action:    "Retrying…",
 		Href:      "/ui/tasks/" + t.ID,
 		rank:      retryingRank,
+		createdAt: t.CreatedAt,
+	}
+}
+
+// newApprovalClosedItem builds the informational row for an approval the
+// cancel cascade closed. Detail is the task's last_error, which the daemon
+// built (persistence.ApprovalClosedReason), never model text.
+func newApprovalClosedItem(t *persistence.Task) inboxItem {
+	detail := ""
+	if t.LastError != nil {
+		detail = strings.TrimPrefix(*t.LastError, persistence.ApprovalClosedPrefix)
+	}
+	return inboxItem{
+		TaskID:    t.ID,
+		ProjectID: t.ProjectID,
+		Kind:      inboxKindApprovalClosed,
+		Title:     taskSummary(t.Payload),
+		Detail:    detail,
+		Age:       humanizeSince(time.Since(t.UpdatedAt)) + " ago",
+		Action:    "See details",
+		Href:      "/ui/tasks/" + t.ID,
+		rank:      approvalClosedRank,
 		createdAt: t.CreatedAt,
 	}
 }
@@ -282,6 +316,20 @@ const inboxAttentionPageSize = 800
 // Task 4.2 additionally folds the same query's tasks to request-root
 // cards ("Your requests", §5.3/§5.5) — see buildRequestCards.
 func (s *Server) Inbox(w http.ResponseWriter, r *http.Request) {
+	data := s.inboxData(r, true)
+	// vornik_ui_inbox_views_total{role} (design §5.8) — every inbox
+	// render, regardless of whether taskRepo is wired (a view is a
+	// view; an unwired repo just renders an empty-clear page).
+	s.inboxMetrics.RecordView(inboxMetricsRole(r))
+	s.render(w, "inbox.html", data)
+}
+
+// inboxData assembles the "Needs you" queue: the one implementation the inbox
+// page and the overview's Needs you block both render (web UI design,
+// "The overview answers..." 2026-11-07, GitHub #603), so their counts are one
+// number. withRequests adds the "Your requests" cards, which only the inbox
+// page shows; the overview passes false to skip those two queries.
+func (s *Server) inboxData(r *http.Request, withRequests bool) InboxData {
 	data := InboxData{
 		Title:                  "Needs you",
 		CurrentPage:            "inbox",
@@ -293,154 +341,18 @@ func (s *Server) Inbox(w http.ResponseWriter, r *http.Request) {
 		ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
 		defer cancel()
 
-		byStatus := make(map[persistence.TaskStatus]inboxCategory, len(inboxCategories))
-		statuses := make([]persistence.TaskStatus, 0, len(inboxCategories))
-		for _, c := range inboxCategories {
-			byStatus[c.status] = c
-			statuses = append(statuses, c.status)
-		}
 		failedCutoff := time.Now().Add(-failedRecencyWindow)
 		// Scope the DB query itself: a global latest-N slice lets a busy
 		// instance's other-project rows bury a scoped caller's own
 		// actionable items past the cap (ui-cross-project-visibility audit).
 		// nil = all-access (single global query); else per-project merge.
 		queryIDs := scopeQueryIDs(r)
-
-		tasks := s.listTasksForScope(ctx, queryIDs, persistence.TaskFilter{
-			Statuses: statuses,
-			PageSize: inboxAttentionPageSize,
-		})
-		if len(tasks) >= inboxAttentionPageSize {
-			// The query returned a full page: more actionable rows may
-			// exist beyond the cap. Never drop this silently (review-2627)
-			// — log it and let the page say so.
-			data.HasMoreAttention = true
-			s.logger.Warn().
-				Int("page_size", inboxAttentionPageSize).
-				Int("returned", len(tasks)).
-				Msg("inbox attention query hit its page-size cap; some actionable rows may not be shown")
+		filtered := s.inboxAttention(ctx, r, queryIDs, failedCutoff, &data)
+		s.inboxAttachCheckpoints(ctx, &data)
+		s.inboxInformationalRows(ctx, r, queryIDs, failedCutoff, &data)
+		if withRequests {
+			s.inboxRequestCards(ctx, r, queryIDs, failedCutoff, filtered, &data)
 		}
-
-		// filtered is the same in-scope, recency-windowed set Items
-		// renders from — reused (not re-queried) to fold into request
-		// cards so both sections agree on exactly which tasks count.
-		filtered := make([]*persistence.Task, 0, len(tasks))
-		for _, t := range tasks {
-			if t == nil || !api.RequestAllowsProject(r, t.ProjectID) {
-				continue
-			}
-			c, ok := byStatus[t.Status]
-			if !ok {
-				// Defensive: a status outside the requested Statuses set
-				// should never come back, but don't render a mislabeled
-				// row if it somehow does.
-				continue
-			}
-			item, ok := newAttentionItem(t, c, failedCutoff)
-			if !ok {
-				// FAILED older than the 24h recency window.
-				continue
-			}
-			filtered = append(filtered, t)
-			data.Items = append(data.Items, item)
-		}
-
-		// Inline "Needs input" answer control (task 4.3, §5.6): resolve
-		// each such row's open checkpoint so the fragment can render the
-		// decision options / text-answer input. Per-item lookup (not
-		// batched) — acceptable at inbox scale per the design's §5.6
-		// note; a batch GetOpenCheckpoint variant is a future
-		// optimisation if the queue ever grows large enough to matter.
-		if s.taskMessageRepo != nil {
-			for i := range data.Items {
-				if data.Items[i].Kind != inboxKindNeedsInput {
-					continue
-				}
-				cp, err := s.taskMessageRepo.GetOpenCheckpoint(ctx, data.Items[i].TaskID)
-				if err != nil || cp == nil {
-					continue
-				}
-				data.Items[i].CheckpointID = cp.ID
-				if cp.Metadata != nil {
-					data.Items[i].Checkpoint = parseCheckpointView(cp.Metadata)
-				}
-			}
-		}
-
-		// "Retrying…" rows (fix/retry/dismiss design 2026-07-22): tasks an
-		// operator retried that are back in flight (RequeueTerminalTask stamped
-		// retry_requested_at). Kept visible until the re-run terminates so a
-		// requeue no longer vanishes as if resolved. Fetched separately from the
-		// status-filtered attention query (they're QUEUED/LEASED/RUNNING, not one
-		// of the four attention statuses) and NOT folded into request cards —
-		// buildRequestCards ran on `filtered` above, which excludes them.
-		if retrying, err := s.taskRepo.ListRetryInFlight(ctx, queryIDs, failedCutoff); err != nil {
-			s.logger.Warn().Err(err).Msg("inbox: retry-in-flight query failed; Retrying rows suppressed")
-		} else {
-			for _, t := range retrying {
-				if t == nil || !api.RequestAllowsProject(r, t.ProjectID) || !isRetryInFlightStatus(t.Status) {
-					continue
-				}
-				data.Items = append(data.Items, newRetryingItem(t))
-			}
-		}
-
-		data.Requests = s.buildRequestCards(ctx, filtered)
-
-		// Broader "Your requests" list (task 4.4, design §5.7 — the gap
-		// task 4.2 deferred): recent request-root cards in the viewer's
-		// scope, ANY status, not just the four attention statuses above.
-		// A SEPARATE scoped query (not reused from the attention query,
-		// which is status-filtered by design) over a recent-activity
-		// window, folded through the SAME buildRequestCards machinery so
-		// a purely COMPLETED/RUNNING request — unreachable via the
-		// attention query alone — now gets a card.
-		recentTasks := s.listTasksForScope(ctx, queryIDs, persistence.TaskFilter{
-			PageSize: inboxRecentRequestsPageSize,
-		})
-		if len(recentTasks) >= inboxRecentRequestsPageSize {
-			data.HasMoreRecent = true
-			s.logger.Warn().
-				Int("page_size", inboxRecentRequestsPageSize).
-				Int("returned", len(recentTasks)).
-				Msg("inbox recent-requests query hit its page-size cap; some requests may not be shown")
-		}
-		recentFiltered := make([]*persistence.Task, 0, len(recentTasks))
-		for _, t := range recentTasks {
-			if t == nil || !api.RequestAllowsProject(r, t.ProjectID) {
-				continue
-			}
-			if t.Status == persistence.TaskStatusFailed && t.UpdatedAt.Before(failedCutoff) {
-				// Same 24h recency window the attention query applies
-				// (newAttentionItem) — a stale FAILED task must not
-				// resurface here just because it's unfiltered-by-status.
-				continue
-			}
-			recentFiltered = append(recentFiltered, t)
-		}
-		recentCards := s.buildRequestCards(ctx, recentFiltered)
-
-		// Dedup against the pinned attention section: a request already
-		// rendered above (Requests) is not repeated in the broader list.
-		pinned := make(map[string]bool, len(data.Requests))
-		for _, c := range data.Requests {
-			pinned[c.RequestID] = true
-		}
-		data.RecentRequests = make([]requestCard, 0, len(recentCards))
-		for _, c := range recentCards {
-			if pinned[c.RequestID] {
-				continue
-			}
-			data.RecentRequests = append(data.RecentRequests, c)
-		}
-		// Recency order: buildRequestCards sorts by rollup rank first
-		// (needs-you > working > done), which is right for the pinned
-		// attention section but wrong here — the broader list's whole
-		// point is "what's recently happened", so re-sort purely by the
-		// card's createdAt (freshest first).
-		sort.SliceStable(data.RecentRequests, func(i, j int) bool {
-			return data.RecentRequests[i].createdAt.After(data.RecentRequests[j].createdAt)
-		})
 	}
 
 	// Pending supervised web-write approvals (Task 6). Independent of the
@@ -464,16 +376,184 @@ func (s *Server) Inbox(w http.ResponseWriter, r *http.Request) {
 	})
 	// Count is the "needs you" badge total: actionable attention rows +
 	// pending web-write approvals (both are things a human is blocked on).
-	// The informational "Retrying…" rows render in the queue but are excluded
-	// — nothing is blocked on them, so they must not inflate the badge.
+	// The informational rows (Retrying, Approval closed, Blocked on children)
+	// render in the queue but are excluded: nothing is blocked on them.
 	data.Count = countActionableItems(data.Items) + len(data.WebWrites) + len(data.BrokerActions) + len(data.AgentApprovals)
+	return data
+}
 
-	// vornik_ui_inbox_views_total{role} (design §5.8) — every inbox
-	// render, regardless of whether taskRepo is wired (a view is a
-	// view; an unwired repo just renders an empty-clear page).
-	s.inboxMetrics.RecordView(inboxMetricsRole(r))
+// inboxAttention runs the one scoped attention query and returns the
+// in-scope, recency-windowed tasks the rows were built from (reused, not
+// re-queried, by the request cards).
+func (s *Server) inboxAttention(ctx context.Context, r *http.Request, queryIDs []string, failedCutoff time.Time, data *InboxData) []*persistence.Task {
+	byStatus := make(map[persistence.TaskStatus]inboxCategory, len(inboxCategories))
+	statuses := make([]persistence.TaskStatus, 0, len(inboxCategories))
+	for _, c := range inboxCategories {
+		byStatus[c.status] = c
+		statuses = append(statuses, c.status)
+	}
 
-	s.render(w, "inbox.html", data)
+	tasks := s.listTasksForScope(ctx, queryIDs, persistence.TaskFilter{
+		Statuses: statuses,
+		PageSize: inboxAttentionPageSize,
+	})
+	if len(tasks) >= inboxAttentionPageSize {
+		// The query returned a full page: more actionable rows may
+		// exist beyond the cap. Never drop this silently (review-2627)
+		// — log it and let the page say so.
+		data.HasMoreAttention = true
+		s.logger.Warn().
+			Int("page_size", inboxAttentionPageSize).
+			Int("returned", len(tasks)).
+			Msg("inbox attention query hit its page-size cap; some actionable rows may not be shown")
+	}
+
+	// filtered is the same in-scope, recency-windowed set Items
+	// renders from — reused (not re-queried) to fold into request
+	// cards so both sections agree on exactly which tasks count.
+	filtered := make([]*persistence.Task, 0, len(tasks))
+	for _, t := range tasks {
+		if t == nil || !api.RequestAllowsProject(r, t.ProjectID) {
+			continue
+		}
+		c, ok := byStatus[t.Status]
+		if !ok {
+			// Defensive: a status outside the requested Statuses set
+			// should never come back, but don't render a mislabeled
+			// row if it somehow does.
+			continue
+		}
+		item, ok := newAttentionItem(t, c, failedCutoff)
+		if !ok {
+			// FAILED older than the 24h recency window.
+			continue
+		}
+		filtered = append(filtered, t)
+		data.Items = append(data.Items, item)
+	}
+
+	return filtered
+}
+
+// inboxAttachCheckpoints resolves each "Needs input" row's open checkpoint.
+func (s *Server) inboxAttachCheckpoints(ctx context.Context, data *InboxData) {
+	// Inline "Needs input" answer control (task 4.3, §5.6): resolve
+	// each such row's open checkpoint so the fragment can render the
+	// decision options / text-answer input. Per-item lookup (not
+	// batched) — acceptable at inbox scale per the design's §5.6
+	// note; a batch GetOpenCheckpoint variant is a future
+	// optimisation if the queue ever grows large enough to matter.
+	if s.taskMessageRepo != nil {
+		for i := range data.Items {
+			if data.Items[i].Kind != inboxKindNeedsInput {
+				continue
+			}
+			cp, err := s.taskMessageRepo.GetOpenCheckpoint(ctx, data.Items[i].TaskID)
+			if err != nil || cp == nil {
+				continue
+			}
+			data.Items[i].CheckpointID = cp.ID
+			if cp.Metadata != nil {
+				data.Items[i].Checkpoint = parseCheckpointView(cp.Metadata)
+			}
+		}
+	}
+}
+
+// inboxInformationalRows adds the rows nothing is blocked on: retried tasks
+// back in flight, and approvals the cancel cascade closed.
+func (s *Server) inboxInformationalRows(ctx context.Context, r *http.Request, queryIDs []string, failedCutoff time.Time, data *InboxData) {
+	// "Retrying…" rows (fix/retry/dismiss design 2026-07-22): tasks an
+	// operator retried that are back in flight (RequeueTerminalTask stamped
+	// retry_requested_at). Kept visible until the re-run terminates so a
+	// requeue no longer vanishes as if resolved. Fetched separately from the
+	// status-filtered attention query (they're QUEUED/LEASED/RUNNING, not one
+	// of the four attention statuses) and NOT folded into request cards —
+	// buildRequestCards ran on `filtered` above, which excludes them.
+	if retrying, err := s.taskRepo.ListRetryInFlight(ctx, queryIDs, failedCutoff); err != nil {
+		s.logger.Warn().Err(err).Msg("inbox: retry-in-flight query failed; Retrying rows suppressed")
+	} else {
+		for _, t := range retrying {
+			if t == nil || !api.RequestAllowsProject(r, t.ProjectID) || !isRetryInFlightStatus(t.Status) {
+				continue
+			}
+			data.Items = append(data.Items, newRetryingItem(t))
+		}
+	}
+
+	// Closed approvals (GitHub #490): a separate query, as the retrying
+	// rows are, so cancelled tasks never compete for the attention page.
+	if closed, err := s.taskRepo.ListApprovalsClosedSince(ctx, queryIDs, failedCutoff); err != nil {
+		s.logger.Warn().Err(err).Msg("inbox: closed-approval query failed; Approval closed rows suppressed")
+	} else {
+		for _, t := range closed {
+			if t == nil || !api.RequestAllowsProject(r, t.ProjectID) || t.Status != persistence.TaskStatusCancelled {
+				continue
+			}
+			data.Items = append(data.Items, newApprovalClosedItem(t))
+		}
+	}
+}
+
+// inboxRequestCards folds the attention tasks into request cards and builds the
+// broader "Your requests" list; only the inbox page shows them.
+func (s *Server) inboxRequestCards(ctx context.Context, r *http.Request, queryIDs []string, failedCutoff time.Time, filtered []*persistence.Task, data *InboxData) {
+	data.Requests = s.buildRequestCards(ctx, filtered)
+
+	// Broader "Your requests" list (task 4.4, design §5.7 — the gap
+	// task 4.2 deferred): recent request-root cards in the viewer's
+	// scope, ANY status, not just the four attention statuses above.
+	// A SEPARATE scoped query (not reused from the attention query,
+	// which is status-filtered by design) over a recent-activity
+	// window, folded through the SAME buildRequestCards machinery so
+	// a purely COMPLETED/RUNNING request — unreachable via the
+	// attention query alone — now gets a card.
+	recentTasks := s.listTasksForScope(ctx, queryIDs, persistence.TaskFilter{
+		PageSize: inboxRecentRequestsPageSize,
+	})
+	if len(recentTasks) >= inboxRecentRequestsPageSize {
+		data.HasMoreRecent = true
+		s.logger.Warn().
+			Int("page_size", inboxRecentRequestsPageSize).
+			Int("returned", len(recentTasks)).
+			Msg("inbox recent-requests query hit its page-size cap; some requests may not be shown")
+	}
+	recentFiltered := make([]*persistence.Task, 0, len(recentTasks))
+	for _, t := range recentTasks {
+		if t == nil || !api.RequestAllowsProject(r, t.ProjectID) {
+			continue
+		}
+		if t.Status == persistence.TaskStatusFailed && t.UpdatedAt.Before(failedCutoff) {
+			// Same 24h recency window the attention query applies
+			// (newAttentionItem) — a stale FAILED task must not
+			// resurface here just because it's unfiltered-by-status.
+			continue
+		}
+		recentFiltered = append(recentFiltered, t)
+	}
+	recentCards := s.buildRequestCards(ctx, recentFiltered)
+
+	// Dedup against the pinned attention section: a request already
+	// rendered above (Requests) is not repeated in the broader list.
+	pinned := make(map[string]bool, len(data.Requests))
+	for _, c := range data.Requests {
+		pinned[c.RequestID] = true
+	}
+	data.RecentRequests = make([]requestCard, 0, len(recentCards))
+	for _, c := range recentCards {
+		if pinned[c.RequestID] {
+			continue
+		}
+		data.RecentRequests = append(data.RecentRequests, c)
+	}
+	// Recency order: buildRequestCards sorts by rollup rank first
+	// (needs-you > working > done), which is right for the pinned
+	// attention section but wrong here — the broader list's whole
+	// point is "what's recently happened", so re-sort purely by the
+	// card's createdAt (freshest first).
+	sort.SliceStable(data.RecentRequests, func(i, j int) bool {
+		return data.RecentRequests[i].createdAt.After(data.RecentRequests[j].createdAt)
+	})
 }
 
 // inboxRecentRequestsPageSize bounds the broader "Your requests" query

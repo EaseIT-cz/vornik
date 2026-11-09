@@ -53,9 +53,14 @@ const (
 	// mirrored whole it would serve them, and stripped it could never verify.
 	MirrorHasExclusions = "has_exclusions"
 	MirrorTooLarge      = "too_large"
-	MirrorCapped        = "capped"
-	MirrorFailed        = "failed"
-	MirrorNoClone       = "no_clone"
+	// MirrorRetired: a version kept out (never_marked, bad_front_matter,
+	// has_exclusions) retired the chunks the project already held of its
+	// path (#657). Counted beside the skip outcome, so labels do not sum to
+	// files walked.
+	MirrorRetired = "retired"
+	MirrorCapped  = "capped"
+	MirrorFailed  = "failed"
+	MirrorNoClone = "no_clone"
 )
 
 // MirrorProject is one project's mirror setting.
@@ -89,6 +94,10 @@ type MirrorHooks struct {
 	// provenance-only, and supersedes the path's older versions when it
 	// verified.
 	Ingest func(ctx context.Context, f MirrorFile) error
+	// Retire marks every servable upload chunk of (project, scope, path)
+	// superseded, with no survivor (Repository.RetireDocument, #657): the
+	// file's current version is kept out, so no version of it may stay.
+	Retire func(ctx context.Context, projectID, scope, path string) (int, error)
 }
 
 // MirrorResult is one project's pass, by outcome.
@@ -232,7 +241,7 @@ func (s *ProvenanceSweeper) mirrorProject(ctx context.Context, mp MirrorProject)
 			res.Counts[MirrorCapped] += res.Pending
 			break
 		}
-		outcome := s.mirrorOne(ctx, mp, dir, e)
+		outcome := s.mirrorOne(ctx, mp, dir, e, res.Counts)
 		res.Counts[outcome]++
 		if outcome == MirrorIngested {
 			ingested++
@@ -303,7 +312,7 @@ func (s *ProvenanceSweeper) mirrorWalk(ctx context.Context, dir, head, prefix st
 }
 
 // mirrorOne decides and, when due, ingests one version (M2 steps 3 and 4).
-func (s *ProvenanceSweeper) mirrorOne(ctx context.Context, mp MirrorProject, dir string, e mirrorEntry) string {
+func (s *ProvenanceSweeper) mirrorOne(ctx context.Context, mp MirrorProject, dir string, e mirrorEntry, counts map[string]int) string {
 	if !canonicalRepoPath(e.path) {
 		return MirrorNotCanonical
 	}
@@ -342,16 +351,35 @@ func (s *ProvenanceSweeper) mirrorOne(ctx context.Context, mp MirrorProject, dir
 	// Fail closed (security review 2026-11-05): an unreadable mark, a never
 	// mark, or named exclusions all keep the file out.
 	mark, exclude, perr := docsmeta.ParseDisclosure(content)
+	keptOut := ""
 	switch {
 	case perr != nil:
-		s.mirrorSkips.remember(mp.ProjectID, e.path, e.blob)
-		return MirrorBadFrontMatter
+		keptOut = MirrorBadFrontMatter
 	case mark == docsmeta.DisclosureNever:
-		s.mirrorSkips.remember(mp.ProjectID, e.path, e.blob)
-		return MirrorNeverMarked
+		keptOut = MirrorNeverMarked
 	case len(exclude) > 0:
+		keptOut = MirrorHasExclusions
+	}
+	if keptOut != "" {
+		// A version kept out retires what the project already holds of the
+		// path (#657): a file mirrored while customer and re-marked must not
+		// stay. The skip is remembered only once the retire succeeded, so a
+		// failed retire is retried on the next pass.
+		if s.Mirror.Retire != nil {
+			n, err := s.Mirror.Retire(ctx, mp.ProjectID, mp.RepoScope, e.path)
+			if err != nil {
+				s.Logger.Warn().Err(err).Str("project_id", mp.ProjectID).Str("path", e.path).Str("reason", keptOut).
+					Msg("provenance sweep: mirror could not retire a kept-out path; the next pass retries")
+				return MirrorFailed
+			}
+			counts[MirrorRetired]++
+			if n > 0 {
+				s.Logger.Info().Str("project_id", mp.ProjectID).Str("path", e.path).Str("reason", keptOut).Int("chunks", n).
+					Msg("provenance sweep: mirror retired the chunks of a path its current version keeps out")
+			}
+		}
 		s.mirrorSkips.remember(mp.ProjectID, e.path, e.blob)
-		return MirrorHasExclusions
+		return keptOut
 	}
 	if err := s.Mirror.Ingest(ctx, MirrorFile{ProjectID: mp.ProjectID, RepoScope: mp.RepoScope,
 		Path: e.path, Blob: e.blob, ArtifactID: id, Content: content}); err != nil {

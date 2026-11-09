@@ -574,6 +574,30 @@ func short(sha string) string {
 // pending outcome row after the spawned children have run — that's
 // what enables plan-quality attribution (lead is downstream_rejected
 // when its own plan caused a child to fail).
+// leadThreadWindow is how many of a task's messages the plan step loads for
+// the lead; buildPlanningPromptWithContext renders the newest 30 of them.
+const leadThreadWindow = 50
+
+// loadLeadThread returns the task's newest leadThreadWindow messages, oldest
+// first, or nil when no repository is wired or the read fails (the lead then
+// plans from the step prompt alone, as before the conversational lifecycle).
+func (e *Executor) loadLeadThread(ctx context.Context, taskID string) []*persistence.TaskMessage {
+	if e.taskMessageRepo == nil {
+		return nil
+	}
+	msgs, err := e.taskMessageRepo.List(ctx, persistence.TaskMessageFilter{
+		TaskID: taskID,
+		Limit:  leadThreadWindow,
+		// The newest, not the oldest (GitHub #464): the operator's latest
+		// directive must reach the lead on a thread longer than the window.
+		Newest: true,
+	})
+	if err != nil {
+		return nil
+	}
+	return msgs
+}
+
 func (e *Executor) runLeadPlanning(
 	ctx context.Context,
 	task *persistence.Task,
@@ -591,16 +615,8 @@ func (e *Executor) runLeadPlanning(
 	// when the conversational lifecycle is wired. Without it (legacy
 	// deployments) the lead sees only the original step prompt, same
 	// as before.
-	var convoMsgs []*persistence.TaskMessage
+	convoMsgs := e.loadLeadThread(ctx, task.ID)
 	var scratchpad *persistence.TaskScratchpad
-	if e.taskMessageRepo != nil {
-		if msgs, mErr := e.taskMessageRepo.List(ctx, persistence.TaskMessageFilter{
-			TaskID: task.ID,
-			Limit:  50,
-		}); mErr == nil {
-			convoMsgs = msgs
-		}
-	}
 	if e.taskScratchpadRepo != nil {
 		if sp, spErr := e.taskScratchpadRepo.Get(ctx, task.ID); spErr == nil {
 			scratchpad = sp

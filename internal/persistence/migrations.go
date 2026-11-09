@@ -5,6 +5,7 @@ package persistence
 import (
 	"context"
 	"database/sql"
+	"database/sql/driver"
 	"errors"
 	"fmt"
 	"sort"
@@ -32,6 +33,7 @@ type MigrationRunner struct {
 	db         *sql.DB
 	migrations []Migration
 	mu         sync.Mutex
+	afterLock  func() // test seam; nil in the daemon
 }
 
 // NewMigrationRunner creates a new migration runner.
@@ -50,6 +52,28 @@ func NewMigrationRunner(db *sql.DB) *MigrationRunner {
 func NewMigrationRunnerFor(db *sql.DB, migrations []Migration) *MigrationRunner {
 	return &MigrationRunner{db: db, migrations: migrations}
 }
+
+// WithAfterLockHook sets a function Run calls right after it takes the
+// advisory lock. It is the seam test/integration uses to end Run's context
+// between two statements (GitHub #457). The daemon never calls it.
+func (r *MigrationRunner) WithAfterLockHook(f func()) *MigrationRunner {
+	r.afterLock = f
+	return r
+}
+
+// migrationDB is what the runner's statements run on: the pool, or (inside
+// run) the one connection that holds the advisory lock. *sql.DB and
+// *sql.Conn both satisfy it (GitHub #457).
+type migrationDB interface {
+	ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error)
+	QueryContext(ctx context.Context, query string, args ...any) (*sql.Rows, error)
+	QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row
+	BeginTx(ctx context.Context, opts *sql.TxOptions) (*sql.Tx, error)
+}
+
+// migrationUnlockTimeout bounds the advisory unlock, which runs on a context
+// detached from Run's so an ended Run still releases the lock.
+const migrationUnlockTimeout = 5 * time.Second
 
 // migrationLockKey is the bigint passed to pg_advisory_lock to
 // serialise migration runs across daemon processes. Picked once
@@ -101,24 +125,50 @@ func (r *MigrationRunner) run(ctx context.Context, done, pending *int) error {
 	// Cross-process serialisation. pg_advisory_lock blocks until
 	// the lock is available — when a rolling deploy lands two
 	// pods simultaneously the second waits for the first to
-	// finish before reading currentVersion. Released explicitly
-	// on success path; on panic / process death the session
-	// teardown releases it.
-	if _, err := r.db.ExecContext(ctx, "SELECT pg_advisory_lock($1)", migrationLockKey); err != nil {
+	// finish before reading currentVersion.
+	//
+	// The lock is session-scoped, so the lock, every statement and the
+	// unlock run on ONE connection (GitHub #457): on the pool, the unlock
+	// could land on another session and leave the lock held by an idle
+	// pooled connection, and migrations beside a held connection would
+	// deadlock a pool of one.
+	conn, err := r.db.Conn(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to get a connection for migrations: %w", err)
+	}
+	defer releaseMigrationConn(ctx, conn)
+	if _, err := conn.ExecContext(ctx, "SELECT pg_advisory_lock($1)", migrationLockKey); err != nil {
 		return fmt.Errorf("failed to acquire migration advisory lock: %w", err)
 	}
-	defer func() {
-		// Best-effort release. If this fails the lock auto-releases
-		// at session end so it's not a leak risk, just noise.
-		_, _ = r.db.ExecContext(ctx, "SELECT pg_advisory_unlock($1)", migrationLockKey)
-	}()
+	if r.afterLock != nil {
+		r.afterLock()
+	}
+	return r.migrate(ctx, conn, done, pending)
+}
 
+// releaseMigrationConn unlocks the advisory lock on the connection that took
+// it, on a context detached from Run's (an ended Run still unlocks), then
+// returns the connection. When the unlock fails the connection is discarded,
+// so its session ends and the lock with it, rather than going back to the
+// pool holding the lock. Unlocking a lock the session does not hold is
+// harmless (it returns false), so this also runs when the lock call failed.
+func releaseMigrationConn(ctx context.Context, conn *sql.Conn) {
+	uctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), migrationUnlockTimeout)
+	defer cancel()
+	if _, err := conn.ExecContext(uctx, "SELECT pg_advisory_unlock($1)", migrationLockKey); err != nil {
+		_ = conn.Raw(func(any) error { return driver.ErrBadConn })
+	}
+	_ = conn.Close()
+}
+
+// migrate is run's body once the lock is held, on q, the lock's connection.
+func (r *MigrationRunner) migrate(ctx context.Context, q migrationDB, done, pending *int) error {
 	// Ensure migrations table exists
-	if err := r.ensureMigrationsTable(ctx); err != nil {
+	if err := r.ensureMigrationsTable(ctx, q); err != nil {
 		return fmt.Errorf("failed to ensure migrations table: %w", err)
 	}
 
-	if err := r.syncBootstrapSchema(ctx); err != nil {
+	if err := r.syncBootstrapSchema(ctx, q); err != nil {
 		return fmt.Errorf("failed to sync bootstrap schema: %w", err)
 	}
 
@@ -130,7 +180,7 @@ func (r *MigrationRunner) run(ctx context.Context, done, pending *int) error {
 	// rather than silently left missing. The migrations' DDL is
 	// IF NOT EXISTS / IF NOT EXISTS-guarded, so re-applying a partially- or
 	// never-applied migration is safe.
-	applied, err := r.getAppliedVersions(ctx)
+	applied, err := r.getAppliedVersions(ctx, q)
 	if err != nil {
 		return fmt.Errorf("failed to get applied migration versions: %w", err)
 	}
@@ -148,7 +198,7 @@ func (r *MigrationRunner) run(ctx context.Context, done, pending *int) error {
 	todo := pendingMigrations(applied, r.migrations)
 	*pending = len(todo)
 	for _, m := range todo {
-		if err := r.applyMigration(ctx, m); err != nil {
+		if err := r.applyMigration(ctx, q, m); err != nil {
 			return fmt.Errorf("failed to apply migration %d (%s): %w", m.Version, m.Name, err)
 		}
 		applied[m.Version] = true
@@ -160,7 +210,7 @@ func (r *MigrationRunner) run(ctx context.Context, done, pending *int) error {
 
 // syncBootstrapSchema records the initial migration when the schema was
 // applied out-of-band via deployments/postgres/schema/001_initial.sql.
-func (r *MigrationRunner) syncBootstrapSchema(ctx context.Context) error {
+func (r *MigrationRunner) syncBootstrapSchema(ctx context.Context, q migrationDB) error {
 	if len(r.migrations) == 0 {
 		return nil
 	}
@@ -168,7 +218,7 @@ func (r *MigrationRunner) syncBootstrapSchema(ctx context.Context) error {
 	const initialVersion = 1
 
 	var alreadyApplied bool
-	if err := r.db.QueryRowContext(
+	if err := q.QueryRowContext(
 		ctx,
 		"SELECT EXISTS(SELECT 1 FROM migrations WHERE version = $1)",
 		initialVersion,
@@ -193,7 +243,7 @@ func (r *MigrationRunner) syncBootstrapSchema(ctx context.Context) error {
 	`
 
 	var bootstrapSchemaPresent bool
-	if err := r.db.QueryRowContext(ctx, bootstrapSchemaQuery).Scan(&bootstrapSchemaPresent); err != nil {
+	if err := q.QueryRowContext(ctx, bootstrapSchemaQuery).Scan(&bootstrapSchemaPresent); err != nil {
 		return err
 	}
 
@@ -201,7 +251,7 @@ func (r *MigrationRunner) syncBootstrapSchema(ctx context.Context) error {
 		return nil
 	}
 
-	_, err := r.db.ExecContext(
+	_, err := q.ExecContext(
 		ctx,
 		`INSERT INTO migrations (version, name)
 		 VALUES ($1, $2)
@@ -213,7 +263,7 @@ func (r *MigrationRunner) syncBootstrapSchema(ctx context.Context) error {
 }
 
 // ensureMigrationsTable creates the migrations tracking table if it doesn't exist.
-func (r *MigrationRunner) ensureMigrationsTable(ctx context.Context) error {
+func (r *MigrationRunner) ensureMigrationsTable(ctx context.Context, q migrationDB) error {
 	query := `
 		CREATE TABLE IF NOT EXISTS migrations (
 			version INTEGER PRIMARY KEY,
@@ -221,7 +271,7 @@ func (r *MigrationRunner) ensureMigrationsTable(ctx context.Context) error {
 			applied_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW()
 		)
 	`
-	_, err := r.db.ExecContext(ctx, query)
+	_, err := q.ExecContext(ctx, query)
 	return err
 }
 
@@ -244,8 +294,8 @@ func (r *MigrationRunner) getCurrentVersion(ctx context.Context) (int, error) {
 // a gap left by slice inversions (v26 before v25, v74 before v73) or by a
 // migration added after the DB had already migrated past its version (the
 // memory-hardening v23 tables going missing on a long-lived DB).
-func (r *MigrationRunner) getAppliedVersions(ctx context.Context) (map[int]bool, error) {
-	rows, err := r.db.QueryContext(ctx, "SELECT version FROM migrations")
+func (r *MigrationRunner) getAppliedVersions(ctx context.Context, q migrationDB) (map[int]bool, error) {
+	rows, err := q.QueryContext(ctx, "SELECT version FROM migrations")
 	if err != nil {
 		return nil, err
 	}
@@ -307,8 +357,8 @@ func pendingMigrations(applied map[int]bool, all []Migration) []Migration {
 }
 
 // applyMigration executes a single migration.
-func (r *MigrationRunner) applyMigration(ctx context.Context, m Migration) error {
-	tx, err := r.db.BeginTx(ctx, nil)
+func (r *MigrationRunner) applyMigration(ctx context.Context, q migrationDB, m Migration) error {
+	tx, err := q.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("failed to begin transaction: %w", err)
 	}
@@ -402,10 +452,10 @@ type MigrationInfo struct {
 
 // Status returns the current migration status.
 func (r *MigrationRunner) Status(ctx context.Context) (*MigrationStatus, error) {
-	if err := r.ensureMigrationsTable(ctx); err != nil {
+	if err := r.ensureMigrationsTable(ctx, r.db); err != nil {
 		return nil, err
 	}
-	if err := r.syncBootstrapSchema(ctx); err != nil {
+	if err := r.syncBootstrapSchema(ctx, r.db); err != nil {
 		return nil, err
 	}
 
@@ -9774,6 +9824,39 @@ CREATE TABLE IF NOT EXISTS approver_push_subscriptions (
 `,
 		Down: `
 DROP TABLE IF EXISTS approver_push_subscriptions;
+`,
+	}, {
+		Version: 250,
+		Name:    "chunk_graph_transient_failures",
+		// GitHub #493 (knowledge-graph LLD §3.3d): the KG worker's count of a
+		// chunk's uncounted transient provider failures, on the row instead of
+		// in process memory, so a restart cannot grant every flagged chunk ten
+		// more free retries during an outage. Default 0 is the full budget, as
+		// after a restart today; no backfill. SQLite: schema.go + sqlite.go.
+		Up: `
+ALTER TABLE project_memory_chunks
+    ADD COLUMN IF NOT EXISTS graph_transient_failures INTEGER NOT NULL DEFAULT 0;
+`,
+		Down: `
+ALTER TABLE project_memory_chunks DROP COLUMN IF EXISTS graph_transient_failures;
+`,
+	}, {
+		Version: 251,
+		Name:    "embed_queue_dlq_history",
+		// GitHub #674 (project RAG memory design, "the DLQ backoff survives a
+		// replay"): DLQReplay re-queues a chunk and deletes its DLQ row, so its
+		// next failure restarted at retry_count 0 and a 10-minute backoff. The
+		// replay now copies the history onto the queue row and DLQMove reads it
+		// back. NULL = never in the DLQ. Postgres only: SQLite has no embed queue.
+		Up: `
+ALTER TABLE memory_embed_queue
+    ADD COLUMN IF NOT EXISTS dlq_retry_count     INTEGER,
+    ADD COLUMN IF NOT EXISTS dlq_first_failed_at TIMESTAMPTZ;
+`,
+		Down: `
+ALTER TABLE memory_embed_queue
+    DROP COLUMN IF EXISTS dlq_retry_count,
+    DROP COLUMN IF EXISTS dlq_first_failed_at;
 `,
 	},
 }

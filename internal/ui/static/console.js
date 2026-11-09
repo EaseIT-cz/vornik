@@ -217,3 +217,37 @@
     // debugging operator read it).
     window.Vornik = Object.freeze({ action: register, names: function () { return Object.keys(actions); } });
 })();
+
+// Autonomy next-eval countdown (web UI design, "The overview answers...", §D):
+// every .autonomy-eta-label[data-next-eval-iso] on a page (the overview and
+// Projects) ticks once a second while the tab is visible, and reads "due now"
+// once its deadline passes. Shared here so neither page needs an inline script.
+(function () {
+    function fmt(deltaSec) {
+        if (deltaSec <= 0) return "due now";
+        if (deltaSec < 60) return "in " + deltaSec + "s";
+        var m = Math.floor(deltaSec / 60), s = deltaSec % 60;
+        if (m < 60) return "in " + m + "m " + (s < 10 ? "0" : "") + s + "s";
+        var h = Math.floor(m / 60), mm = m % 60;
+        return "in " + h + "h " + (mm < 10 ? "0" : "") + mm + "m";
+    }
+    function tick() {
+        if (document.hidden) return;
+        var now = Date.now();
+        document.querySelectorAll(".autonomy-eta-label[data-next-eval-iso]").forEach(function (el) {
+            var when = Date.parse(el.getAttribute("data-next-eval-iso") || "");
+            if (isNaN(when)) return;
+            el.textContent = fmt(Math.floor((when - now) / 1000));
+        });
+    }
+    // Once when the page is ready, then every second.
+    if (document.readyState === "loading") {
+        document.addEventListener("DOMContentLoaded", tick);
+    } else {
+        tick();
+    }
+    setInterval(tick, 1000);
+    document.addEventListener("visibilitychange", function () {
+        if (!document.hidden) tick();
+    });
+})();

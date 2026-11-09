@@ -42,8 +42,9 @@ const MaxExtractionAttempts = 3
 // MaxExtractionAttempts. A provider outage is not a defect of the chunk and
 // must not quarantine it (GitHub #419: 24 chunks quarantined by Bedrock 503s);
 // but an uncounted retry must not become an unbounded one, so after this many
-// the next failure counts as any other. In-process only: a restart grants a
-// chunk this many again (knowledge-graph LLD §3.3c).
+// the next failure counts as any other. The count is on the chunk row
+// (graph_transient_failures), so a restart does not grant it again
+// (knowledge-graph LLD §3.3c, §3.3d, GitHub #493).
 const MaxTransientRetries = 10
 
 type Worker struct {
@@ -69,14 +70,6 @@ type Worker struct {
 	lastTick       time.Time
 	lastProcessed  int
 	lastFailed     int
-
-	// transientFailures counts, per chunk id, the uncounted transient
-	// failures since the chunk's last success or non-transient failure.
-	// runOne runs on several goroutines under runParallel, hence the mutex.
-	// Bounded by the flagged set: an entry is deleted on success, on a
-	// non-transient failure and on quarantine.
-	transientMu       sync.Mutex
-	transientFailures map[string]int
 }
 
 // LeaderGate is the narrow contract Worker uses to skip drain
@@ -357,7 +350,7 @@ func (w *Worker) runOne(ctx context.Context, c persistence.ChunkForExtraction) b
 		// #419, LLD §3.3c). It still returns false, so the circuit breaker
 		// sees the outage exactly as before.
 		transient := isTransientProviderErr(err)
-		if transient && w.absorbTransient(c.ID) {
+		if transient && w.absorbTransient(ctx, c.ID) {
 			w.logger.Warn().Err(err).
 				Str("chunk_id", c.ID).
 				Str("project_id", c.ProjectID).
@@ -370,7 +363,10 @@ func (w *Worker) runOne(ctx context.Context, c persistence.ChunkForExtraction) b
 		// failure counts and the chunk reaches quarantine in
 		// MaxExtractionAttempts more.
 		if !transient {
-			w.forgetTransient(c.ID)
+			if rErr := w.source.ResetTransientFailures(ctx, c.ID); rErr != nil {
+				w.logger.Debug().Err(rErr).Str("chunk_id", c.ID).
+					Msg("KG worker: could not reset the uncounted transient budget; it stays spent")
+			}
 		}
 		// Count the failure and quarantine the chunk once it has burned
 		// MaxExtractionAttempts. Without the bound, a systemic failure —
@@ -383,7 +379,6 @@ func (w *Worker) runOne(ctx context.Context, c persistence.ChunkForExtraction) b
 			w.logger.Warn().Err(rErr).Str("chunk_id", c.ID).
 				Msg("KG worker: could not record extraction failure; chunk stays flagged")
 		case quarantined:
-			w.forgetTransient(c.ID)
 			if w.metrics != nil {
 				w.metrics.ChunksExtractedTotal.WithLabelValues("quarantined").Inc()
 			}
@@ -405,7 +400,6 @@ func (w *Worker) runOne(ctx context.Context, c persistence.ChunkForExtraction) b
 		}
 		return false
 	}
-	w.forgetTransient(c.ID)
 	if mErr := w.source.MarkExtracted(ctx, c.ID); mErr != nil {
 		if w.metrics != nil {
 			w.metrics.ChunksExtractedTotal.WithLabelValues("failed").Inc()
@@ -435,29 +429,18 @@ func (w *Worker) runOne(ctx context.Context, c persistence.ChunkForExtraction) b
 	return true
 }
 
-// absorbTransient records one uncounted transient failure of the chunk and
-// reports true while the chunk is within MaxTransientRetries; past it, it
-// reports false and the caller counts the failure.
-func (w *Worker) absorbTransient(chunkID string) bool {
-	w.transientMu.Lock()
-	defer w.transientMu.Unlock()
-	if w.transientFailures[chunkID] >= MaxTransientRetries {
+// absorbTransient spends one of the chunk's uncounted retries and reports
+// true while it had one (MaxTransientRetries, kept on the chunk row so a
+// restart does not refill it; LLD §3.3d). When the store cannot answer, the
+// failure is counted: the bounded direction.
+func (w *Worker) absorbTransient(ctx context.Context, chunkID string) bool {
+	ok, err := w.source.AbsorbTransientFailure(ctx, chunkID, MaxTransientRetries)
+	if err != nil {
+		w.logger.Debug().Err(err).Str("chunk_id", chunkID).
+			Msg("KG worker: could not record a transient failure; counting it")
 		return false
 	}
-	if w.transientFailures == nil {
-		w.transientFailures = map[string]int{}
-	}
-	w.transientFailures[chunkID]++
-	return true
-}
-
-// forgetTransient drops the chunk's uncounted-failure count: on success, on a
-// non-transient failure and on quarantine, so the map holds only flagged
-// chunks whose most recent failures were transient.
-func (w *Worker) forgetTransient(chunkID string) {
-	w.transientMu.Lock()
-	defer w.transientMu.Unlock()
-	delete(w.transientFailures, chunkID)
+	return ok
 }
 
 // runParallel runs MaxParallel pipeline calls concurrently using

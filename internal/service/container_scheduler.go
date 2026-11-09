@@ -1107,6 +1107,8 @@ func (c *Container) initScheduler() error {
 						Provenance:  provenanceCfg.Repo.GetProvenance,
 						Quarantined: c.memoryQuarantineRepo.ExistsForArtifact,
 						Ingest:      mirrorStore.Ingest,
+						// #657: a kept-out version retires the path's chunks.
+						Retire: memRepoForChunkExists.RetireDocument,
 					}
 				}
 			}

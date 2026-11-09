@@ -98,12 +98,6 @@ func deSlashedWorkspacePath(ws, raw string) string {
 	return raw
 }
 
-// isRegularFile is `[ -f path ]` / os.path.isfile: follows symlinks.
-func isRegularFile(p string) bool {
-	st, err := os.Stat(p)
-	return err == nil && st.Mode().IsRegular()
-}
-
 func isDir(p string) bool {
 	st, err := os.Stat(p)
 	return err == nil && st.IsDir()

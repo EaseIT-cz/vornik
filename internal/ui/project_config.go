@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"vornik.io/vornik/internal/config"
+	"vornik.io/vornik/internal/configlock"
 	"vornik.io/vornik/internal/registry"
 	"vornik.io/vornik/internal/safepath"
 )
@@ -36,6 +37,14 @@ func (s *Server) ProjectConfigEdit(w http.ResponseWriter, r *http.Request, proje
 
 // ProjectConfigSave validates, writes, and reloads a project YAML edit.
 func (s *Server) ProjectConfigSave(w http.ResponseWriter, r *http.Request, projectID string) {
+	// The read, write and reload hold the process's config-write lock
+	// (operations design §6.9, GitHub #676).
+	unlock, lerr := configlock.LockAsWriter(r.Context())
+	if lerr != nil {
+		s.refuseNotConfigWriter(w, lerr)
+		return
+	}
+	defer unlock()
 	// D2 (audit 2026-06-10): the project YAML carries autonomy gates,
 	// tool allowlists, and rate limits — rewriting it is an authoring
 	// action, not an operate action. Restrict to admin scope (the

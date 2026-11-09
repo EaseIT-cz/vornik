@@ -77,6 +77,14 @@ type RetryHoldSource interface {
 	RetryNotBefore(taskID string) (time.Time, bool)
 }
 
+// UnspentAttemptSource is implemented by an executor that knows a failed
+// attempt did not spend its budget: its model call was fast-rejected by an
+// open circuit, so nothing reached a model (permanent-failure design §8.8.5,
+// GitHub #492). Read once, which forgets it; a miss is false (spent).
+type UnspentAttemptSource interface {
+	AttemptNotSpent(taskID string) bool
+}
+
 // ProjectRegistry provides read-only access to project scheduling
 // metadata: concurrency caps + priorities. Both feed the lease query
 // — concurrency caps gate eligibility (LLD §4.1), priorities order
@@ -1377,11 +1385,17 @@ func (s *Scheduler) taskFailed(taskID, leaseID, note, detail string) error {
 		// stamped and the one the retry decision must honour.
 		class = *task.LastErrorClass
 	}
-	if persistence.TaskShouldRetry(attempt, maxAttempts, class) {
+	// An attempt the circuit fast-rejected reached no model: it keeps its
+	// budget (GitHub #492). The executor decided the same in handleFailure.
+	nextAttempt, retry := attempt+1, persistence.TaskShouldRetry(attempt, maxAttempts, class)
+	if src, ok := s.executor.(UnspentAttemptSource); ok && src.AttemptNotSpent(taskID) {
+		nextAttempt, retry = attempt, persistence.TaskRetryAfterUnspentAttempt(maxAttempts, class)
+	}
+	if retry {
 		// The hold is taken before the release, which makes the task leasable.
 		held := s.holdRetry(taskID)
 		err := s.repo.ReleaseLease(s.baseContext(), taskID, leaseID, persistence.TaskStatusQueued, persistence.ReleaseOptions{
-			Attempt:     attempt + 1,
+			Attempt:     nextAttempt,
 			MaxAttempts: maxAttempts,
 			Error:       detail + held,
 		})

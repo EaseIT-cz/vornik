@@ -216,18 +216,27 @@ func (r *Registry) Reload() error {
 	// fired; the reload path is where this has to be caught.
 	//
 	// Design: 2026-08-27-loader-validator-agreement-design.md §12.
+	// §15 (GitHub #669 item 2): a refused PROJECT file quarantines that
+	// project on its running definition instead of refusing the whole tree;
+	// a refused swarm or workflow still refuses. The same two calls run on
+	// the service's ConfigReloader path (GitHub #683).
 	if err := r.Stage(r.configDir); err != nil {
 		return err
 	}
-	if rejected := r.stagedRejections(); len(rejected) > 0 {
-		// Drop the snapshot so no later ActivateStaged can promote the tree
-		// this call just refused.
-		r.discardStaged()
-		return &ReloadRejectedError{Rejected: rejected}
+	gate := r.GateStagedRejections()
+	var rejected *ReloadRejectedError
+	if errors.As(gate, &rejected) {
+		return gate
 	}
 	warnings := r.StripInvalidFromStaged()
+	if err := r.CheckStagedKeepsRunning(); err != nil {
+		return err
+	}
 	if err := r.ActivateStaged(); err != nil {
 		return err
+	}
+	if gate != nil {
+		return gate
 	}
 	if warnings != nil {
 		return warnings

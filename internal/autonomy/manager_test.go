@@ -79,6 +79,9 @@ func (m *mockTaskRepo) RequeueTerminalTask(context.Context, string, int, int) (b
 func (m *mockTaskRepo) ListRetryInFlight(context.Context, []string, time.Time) ([]*persistence.Task, error) {
 	return nil, nil
 }
+func (m *mockTaskRepo) ListApprovalsClosedSince(context.Context, []string, time.Time) ([]*persistence.Task, error) {
+	return nil, nil
+}
 func (m *mockTaskRepo) TransitionConditional(context.Context, string, []persistence.TaskStatus, persistence.TaskStatus, persistence.TransitionOpts) (bool, error) {
 	return true, nil
 }

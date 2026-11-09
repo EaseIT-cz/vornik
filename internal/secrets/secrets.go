@@ -696,7 +696,7 @@ func FilterAllowlisted(findings []Finding, allow [][]byte) []Finding {
 // Unknown names are NOT heuristic. An unrecognised type is treated as strong,
 // so a pattern nobody classified cannot be quietly suppressed by an allowlist.
 func IsHeuristicType(name string) bool {
-	return name == FindingTypeGenericKV || name == FindingTypeEntropy
+	return name == FindingTypeGenericKV || name == FindingTypeEntropy || name == FindingTypeEntropyShort
 }
 
 // StrongPatterns filters a pattern corpus down to the strong, prefix-anchored

@@ -1093,10 +1093,6 @@ func (s *Server) SummarizeThread(w http.ResponseWriter, r *http.Request) {
 // maxSummarizedMessageIDs bounds one summarize call's id list (§16.2.2).
 const maxSummarizedMessageIDs = 200
 
-// summarizeLookupLimit is the repositories' List ceiling: an id outside the
-// first this-many rows of the task is unknown, so the check fails closed.
-const summarizeLookupLimit = 500
-
 // summarizableMessageIDs de-duplicates ids and checks that each names an
 // agent-authored (lead or role:*) message of taskID (GitHub #431, §16.2.2).
 // A non-zero status refuses the whole call; the detail names counts only.
@@ -1113,7 +1109,10 @@ func (s *Server) summarizableMessageIDs(ctx context.Context, taskID string, ids 
 		return nil, http.StatusBadRequest, "VALIDATION_ERROR",
 			fmt.Sprintf("messageIds: at most %d per call", maxSummarizedMessageIDs)
 	}
-	msgs, err := s.taskMessageRepo.List(ctx, persistence.TaskMessageFilter{TaskID: taskID, Limit: summarizeLookupLimit})
+	// The named ids are looked up directly, wherever they sit in the thread
+	// (GitHub #670; an unknown id stays refused below). At most
+	// maxSummarizedMessageIDs, under the repositories' 500-row ceiling.
+	msgs, err := s.taskMessageRepo.List(ctx, persistence.TaskMessageFilter{TaskID: taskID, IDs: out, Limit: len(out)})
 	if err != nil {
 		s.logger.Error().Err(err).Str("taskId", taskID).Msg("SummarizeThread: message lookup failed")
 		return nil, http.StatusInternalServerError, "INTERNAL_ERROR", "failed to read the thread"

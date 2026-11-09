@@ -25,6 +25,7 @@ import (
 	"strings"
 
 	"gopkg.in/yaml.v3"
+	"vornik.io/vornik/internal/configlock"
 	"vornik.io/vornik/internal/fieldguard"
 	"vornik.io/vornik/internal/persistence"
 	"vornik.io/vornik/internal/safepath"
@@ -66,6 +67,14 @@ func (s *Server) ProjectSchemaConfigEdit(w http.ResponseWriter, r *http.Request,
 // On any failure it re-renders the form with the operator's input and a
 // precise error; nothing is written unless every step succeeds.
 func (s *Server) ProjectSchemaConfigSave(w http.ResponseWriter, r *http.Request, projectID string) {
+	// The read, write and reload hold the process's config-write lock
+	// (operations design §6.9, GitHub #676).
+	unlock, lerr := configlock.LockAsWriter(r.Context())
+	if lerr != nil {
+		s.refuseNotConfigWriter(w, lerr)
+		return
+	}
+	defer unlock()
 	// Rewriting a project YAML (autonomy gates, tool allowlists, rate
 	// limits) is an authoring action — admin scope, matching the
 	// raw-YAML and guided-form editors.

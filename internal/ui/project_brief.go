@@ -23,6 +23,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"vornik.io/vornik/internal/configlock"
 	"vornik.io/vornik/internal/registry"
 	"vornik.io/vornik/internal/safepath"
 )
@@ -74,6 +75,14 @@ func (s *Server) ProjectBriefEdit(w http.ResponseWriter, r *http.Request, projec
 // by re-parsing the serialised output, writes atomically, and
 // reloads the registry.
 func (s *Server) ProjectBriefSave(w http.ResponseWriter, r *http.Request, projectID string) {
+	// The read, write and reload hold the process's config-write lock
+	// (operations design §6.9, GitHub #676).
+	unlock, lerr := configlock.LockAsWriter(r.Context())
+	if lerr != nil {
+		s.refuseNotConfigWriter(w, lerr)
+		return
+	}
+	defer unlock()
 	data := s.projectBriefData(projectID)
 	if data.Error != "" {
 		w.WriteHeader(http.StatusNotFound)

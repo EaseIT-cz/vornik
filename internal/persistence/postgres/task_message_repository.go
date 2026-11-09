@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"time"
 
 	"github.com/lib/pq"
@@ -144,7 +145,14 @@ func (r *TaskMessageRepository) List(ctx context.Context, filter persistence.Tas
 	pos := 2
 
 	if filter.After != nil && *filter.After != "" {
-		query += fmt.Sprintf(` AND id > $%d`, pos)
+		// Continue after the cursor row's (created_at, id), the order this
+		// returns; id alone sorts by second then a random suffix (GitHub #679,
+		// task-lifecycle-conversational design §18b). A cursor naming no
+		// message of the task falls back to id > After (the bound keeps that
+		// fallback a page, not the whole thread). All three $%d are the same
+		// After value; Newest is not combined with After by any caller.
+		query += fmt.Sprintf(` AND ((created_at, id) > (SELECT c.created_at, c.id FROM task_messages c WHERE c.task_id = $1 AND c.id = $%d)`+
+			` OR (id > $%d AND NOT EXISTS (SELECT 1 FROM task_messages c WHERE c.task_id = $1 AND c.id = $%d)))`, pos, pos, pos)
 		args = append(args, *filter.After)
 		pos++
 	}
@@ -153,7 +161,16 @@ func (r *TaskMessageRepository) List(ctx context.Context, filter persistence.Tas
 		args = append(args, pq.Array(filter.MessageKinds))
 		pos++
 	}
-	query += fmt.Sprintf(` ORDER BY created_at ASC, id ASC LIMIT $%d`, pos)
+	if len(filter.IDs) > 0 {
+		query += fmt.Sprintf(` AND id = ANY($%d)`, pos)
+		args = append(args, pq.Array(filter.IDs))
+		pos++
+	}
+	order := "ASC"
+	if filter.Newest {
+		order = "DESC"
+	}
+	query += fmt.Sprintf(` ORDER BY created_at %s, id %s LIMIT $%d`, order, order, pos)
 	args = append(args, limit)
 
 	rows, err := r.db.QueryContext(ctx, query, args...)
@@ -177,6 +194,9 @@ func (r *TaskMessageRepository) List(ctx context.Context, filter persistence.Tas
 			m.Metadata = []byte(meta.String)
 		}
 		out = append(out, &m)
+	}
+	if filter.Newest {
+		slices.Reverse(out) // read newest first; returned oldest first
 	}
 	return out, rows.Err()
 }

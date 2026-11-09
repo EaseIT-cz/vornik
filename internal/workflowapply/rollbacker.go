@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"time"
 
+	"vornik.io/vornik/internal/configlock"
 	"vornik.io/vornik/internal/persistence"
 )
 
@@ -30,9 +31,11 @@ import (
 // state-machine guard).
 var ErrProposalNotApplied = errors.New("memetic: proposal must be applied before rollback")
 
-// RollbackerConfig tunes the rollbacker. It carries nothing today; it stays so
-// the wiring mirrors ApplierConfig.
-type RollbackerConfig struct{}
+// RollbackerConfig tunes the rollbacker.
+type RollbackerConfig struct {
+	// LeaderGate is the daemon's config-writer elector, as ApplierConfig's.
+	LeaderGate any
+}
 
 // Rollbacker owns the rollback-path workflow.
 type Rollbacker struct {
@@ -74,6 +77,12 @@ func (r *Rollbacker) Rollback(ctx context.Context, proposalID, revertedBy string
 	if r.writer == nil {
 		return nil, fmt.Errorf("memetic.Rollback: workflow writer not wired")
 	}
+	// A rollback is a config write (GitHub #462), as Apply.
+	unlock, ok := configlock.TryLock()
+	if !ok {
+		return nil, ErrConfigBusy
+	}
+	defer unlock()
 
 	got, err := r.proposals.Get(ctx, proposalID)
 	if err != nil {
@@ -89,6 +98,9 @@ func (r *Rollbacker) Rollback(ctx context.Context, proposalID, revertedBy string
 			"applied_commit %q, then reload the config", got.ID, got.WorkflowID, got.AppliedCommit)
 	}
 
+	if err := writerFence(ctx, r.cfg.LeaderGate); err != nil {
+		return nil, err
+	}
 	if _, err := r.writer.Write(ctx, got.WorkflowID, []byte(got.PreApplyYAML)); err != nil {
 		return nil, fmt.Errorf("memetic.Rollback: restore workflow %q: %w", got.WorkflowID, err)
 	}

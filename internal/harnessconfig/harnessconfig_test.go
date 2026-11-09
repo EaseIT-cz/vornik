@@ -60,7 +60,7 @@ func TestSetRemove_JSON(t *testing.T) {
 	if string(again) != string(out) {
 		t.Fatal("not idempotent")
 	}
-	removed, ok, err := Remove(ClaudeCode, out, "hermes")
+	removed, ok, err := Remove(ClaudeCode, out, Entry{Namespace: "hermes"})
 	if err != nil || !ok || strings.Contains(string(removed), "vornik-hermes") || !strings.Contains(string(removed), `"other"`) {
 		t.Fatalf("remove: %v %v %s", ok, err, removed)
 	}
@@ -78,7 +78,7 @@ func TestSetRemove_JSON(t *testing.T) {
 		if _, err := Set(ClaudeDesktop, []byte(bad), entry); err == nil {
 			t.Errorf("%q was overwritten", bad)
 		}
-		if _, _, err := Remove(ClaudeDesktop, []byte(bad), "hermes"); err == nil {
+		if _, _, err := Remove(ClaudeDesktop, []byte(bad), Entry{Namespace: "hermes"}); err == nil {
 			t.Errorf("%q: remove did not refuse", bad)
 		}
 	}
@@ -120,7 +120,7 @@ func TestSetRemove_YAML(t *testing.T) {
 	if string(again) != string(out) {
 		t.Fatalf("not idempotent:\n%s\n---\n%s", out, again)
 	}
-	removed, ok, err := Remove(Hermes, out, "hermes")
+	removed, ok, err := Remove(Hermes, out, Entry{Namespace: "hermes"})
 	if err != nil || !ok || strings.Contains(string(removed), "vornik-hermes") || !strings.Contains(string(removed), "# the files server") {
 		t.Fatalf("remove: %v %v\n%s", ok, err, removed)
 	}
@@ -148,7 +148,7 @@ func TestSetRemove_TOML(t *testing.T) {
 	if string(again) != string(out) {
 		t.Fatalf("not idempotent:\n%s\n---\n%s", out, again)
 	}
-	removed, ok, err := Remove(Codex, out, "hermes")
+	removed, ok, err := Remove(Codex, out, Entry{Namespace: "hermes"})
 	if err != nil || !ok || string(removed) != in {
 		t.Fatalf("remove did not restore the file: %v %v\n%q\n%q", ok, err, removed, in)
 	}
@@ -176,10 +176,10 @@ func TestSetRemove_TOML(t *testing.T) {
 	}
 	// Disconnect removes the block with the tables under it, and refuses
 	// what connect refuses (review 20261002-00bc F1).
-	if out, ok, err := Remove(Codex, []byte(mid), "hermes"); err != nil || !ok || string(out) != "# profiles\n[profiles.x]\na = 1\n" {
+	if out, ok, err := Remove(Codex, []byte(mid), Entry{Namespace: "hermes"}); err != nil || !ok || string(out) != "# profiles\n[profiles.x]\na = 1\n" {
 		t.Fatalf("remove with a nested table: %v %v\n%q", ok, err, out)
 	}
-	if _, _, err := Remove(Codex, []byte("[[mcp_servers.vornik-hermes]]\n"), "hermes"); err == nil || !strings.Contains(err.Error(), "array of tables") {
+	if _, _, err := Remove(Codex, []byte("[[mcp_servers.vornik-hermes]]\n"), Entry{Namespace: "hermes"}); err == nil || !strings.Contains(err.Error(), "array of tables") {
 		t.Fatalf("remove an array of tables: %v", err)
 	}
 	// Quoted and spaced headers are the same table.
@@ -283,7 +283,7 @@ func TestApply(t *testing.T) {
 func TestApply_AbsentAndEmptyWritesNothing(t *testing.T) {
 	p := filepath.Join(t.TempDir(), "absent.yaml")
 	changed, err := Apply(p, func(b []byte) ([]byte, error) {
-		out, _, err := Remove(Hermes, b, "hermes")
+		out, _, err := Remove(Hermes, b, Entry{Namespace: "hermes"})
 		return out, err
 	}, nil)
 	if err != nil || changed {

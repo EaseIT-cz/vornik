@@ -237,4 +237,42 @@ for spec in "bogus-mode|VORNIK_COMPANION_TOKEN=t" "observe|VORNIK_COMPANION_TOKE
     || fail "case drain ($dmode, $denv): writer exit ${st[0]}, hook exit ${st[1]}; the hook must read its stdin before any exit"
 done
 
+# --- Case base (#651): the state is never a shared temp path. With no plugin
+# data directory, only an owned XDG_RUNTIME_DIR is used; with neither, the
+# hook is silent and writes nothing under TMPDIR. A base that is a symlink is
+# refused. Found at: review (the commit security review of 8420351a1).
+TMPB="$WORK/tmpbase"; mkdir -p "$TMPB"
+OUT="$(env -u CLAUDE_PLUGIN_DATA -u XDG_RUNTIME_DIR PATH="$ALLOW" TMPDIR="$TMPB" VORNIK_COMPANION_TOKEN=t VORNIK_NUDGE_THRESHOLD=1 "$BASH_BIN" "$HOOK" observe < <(pre sessbase Read "$(read_in "$REPO/internal/x/a.go")"))"; RC=$?
+assert_silent "case base no data dir, no runtime dir" "$OUT" "$RC"
+[[ -z "$(ls -A "$TMPB")" ]] || fail "case base: the hook wrote under TMPDIR: $(ls -A "$TMPB")"
+XDG="$WORK/xdg"; mkdir -p "$XDG"; chmod 0700 "$XDG"
+env -u CLAUDE_PLUGIN_DATA PATH="$ALLOW" XDG_RUNTIME_DIR="$XDG" VORNIK_COMPANION_TOKEN=t VORNIK_NUDGE_THRESHOLD=1 "$BASH_BIN" "$HOOK" observe < <(pre sessxdg Read "$(read_in "$REPO/internal/x/a.go")") >/dev/null
+[[ -d "$XDG/vornik-companion/nudge/sessxdg" ]] || fail "case base: an owned XDG_RUNTIME_DIR was not used"
+XDG2="$WORK/xdg2"; ELSEWHERE="$WORK/elsewhere"; mkdir -p "$XDG2/vornik-companion" "$ELSEWHERE"; chmod 0700 "$XDG2"
+ln -s "$ELSEWHERE" "$XDG2/vornik-companion/nudge"
+OUT="$(env -u CLAUDE_PLUGIN_DATA PATH="$ALLOW" XDG_RUNTIME_DIR="$XDG2" VORNIK_COMPANION_TOKEN=t VORNIK_NUDGE_THRESHOLD=1 "$BASH_BIN" "$HOOK" observe < <(pre sesslink Read "$(read_in "$REPO/internal/x/a.go")"))"; RC=$?
+assert_silent "case base symlinked base" "$OUT" "$RC"
+[[ -z "$(ls -A "$ELSEWHERE")" ]] || fail "case base: the hook wrote through a symlinked base"
+
+# --- Claims hold where mkdir is not exclusive (#687, §13.15). uutils
+# coreutils mkdir 0.10.0 (Ubuntu 26.04) let two concurrent callers both
+# create one directory; this mkdir is the worst case of that race: it
+# succeeds when the directory exists. Each Read still takes its own slot,
+# so the third nudges, and the fourth does not nudge again.
+REAL_MKDIR="$(readlink "$ALLOW/mkdir")"
+rm -f "$ALLOW/mkdir"
+printf '#!/bin/sh\nexec %s -p "$@"\n' "$REAL_MKDIR" >"$ALLOW/mkdir"
+chmod 0755 "$ALLOW/mkdir"
+S=sessclaims
+for n in 1 2; do
+  OUT="$(run_hook observe "$(pre $S Read "$(read_in "$REPO/internal/claims/f$n.go")")")"; RC=$?
+  assert_silent "claims call $n" "$OUT" "$RC"
+done
+OUT="$(run_hook observe "$(pre $S Read "$(read_in "$REPO/internal/claims/f3.go")")")"
+[[ -n "$OUT" ]] || fail "claims: no nudge on the 3rd read under a non-exclusive mkdir"
+OUT="$(run_hook observe "$(pre $S Read "$(read_in "$REPO/internal/claims/f4.go")")")"; RC=$?
+assert_silent "claims: the 4th read nudged again" "$OUT" "$RC"
+rm -f "$ALLOW/mkdir"
+ln -s "$REAL_MKDIR" "$ALLOW/mkdir"
+
 echo "PASS: recall-nudge.sh nudges once per subsystem on the 3rd read, yields to a recent successful recall, fails open, stays offline and keeps no content"

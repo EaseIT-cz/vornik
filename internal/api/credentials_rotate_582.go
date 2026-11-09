@@ -10,7 +10,6 @@ package api
 
 import (
 	"crypto/hpke"
-	"crypto/subtle"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
@@ -74,7 +73,11 @@ func (s *Server) RotateOperationsCredential(w http.ResponseWriter, r *http.Reque
 	}
 
 	// The process's one config-write lock (§6.3 F4; GitHub #584, §6.6).
-	unlock := configlock.Lock()
+	unlock, lerr := configlock.LockAsWriter(r.Context()) // refused on a non-writer daemon (#681)
+	if lerr != nil {
+		respondNotConfigWriter(w, lerr)
+		return
+	}
 	defer unlock()
 	writer := &featuredoctor.FileConfigWriter{Path: s.setupConfigPath}
 	content, err := writer.Read()
@@ -150,7 +153,9 @@ func isCurrentAdminKeyInFile(content []byte, key string) bool {
 	// which listed key matched.
 	found := 0
 	for _, k := range config.CurrentAdminKeysInFile(content) {
-		found |= subtle.ConstantTimeCompare([]byte(k), []byte(key))
+		if apikey.SecretEqual(key, k) { // length-safe (GitHub #445)
+			found = 1
+		}
 	}
 	return found == 1
 }

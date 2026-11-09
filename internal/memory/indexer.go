@@ -121,7 +121,8 @@ func (idx *Indexer) scanContentForSecrets(projectID, taskID, sourceName, content
 	if idx.secretsDetector == nil || content == "" {
 		return content
 	}
-	findings := idx.secretsDetector.Scan([]byte(content))
+	// The memory checkpoint adds the short-token rule (GitHub #438).
+	findings := secrets.MemoryFindings(idx.secretsDetector, []byte(content))
 	if len(findings) == 0 {
 		return content
 	}

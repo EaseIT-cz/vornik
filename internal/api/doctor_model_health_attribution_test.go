@@ -27,7 +27,7 @@ func TestEvalModelHealth_TheUidOutageDoesNotFlagTheModel(t *testing.T) {
 	// "exactly one finding" does not depend on the default (review 8b0f F3).
 	th := defaultDoctorThresholds()
 	th.ModelFailureRate.Value = 0.5
-	findings := evalModelHealth(stats, map[string]string{"glm-5.2": "zai.glm-5"}, th)
+	findings := evalModelHealth(stats, oneFallback("glm-5.2", "zai.glm-5"), th)
 	if len(findings) != 1 {
 		t.Fatalf("want exactly the host-problem finding, got %v", findings)
 	}
@@ -46,7 +46,7 @@ func TestEvalModelHealth_AFailingModelIsStillFlagged(t *testing.T) {
 	stats := []modelHealthStat{{
 		model: "bad-model", samples: 99, failures: 75, medianCompletionTokens: 800,
 	}}
-	findings := evalModelHealth(stats, map[string]string{"bad-model": "good"}, defaultDoctorThresholds())
+	findings := evalModelHealth(stats, oneFallback("bad-model", "good"), defaultDoctorThresholds())
 	if len(findings) != 1 || !strings.Contains(findings[0].message, "recommend switching") {
 		t.Fatalf("a model failing on its own must still be flagged: %v", findings)
 	}
@@ -138,7 +138,7 @@ func TestEvalModelHealth_AFailingModelInAnOutageGetsTwoRows(t *testing.T) {
 		model: "m", samples: 20, failures: 19, medianCompletionTokens: 800,
 		excludedByClass: map[string]int{stepoutcome.ClassAgentMountUnusable: 40},
 	}}
-	findings := evalModelHealth(stats, map[string]string{"m": "fb"}, defaultDoctorThresholds())
+	findings := evalModelHealth(stats, oneFallback("m", "fb"), defaultDoctorThresholds())
 	if len(findings) != 2 {
 		t.Fatalf("want two rows, got %v", findings)
 	}
@@ -160,7 +160,7 @@ func TestQueryModelHealthOutcomes_SeparatesWhatWasNotTheModels(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = db.Close() })
 	if _, err := db.Exec(`CREATE TABLE execution_step_outcomes (
-		model TEXT, outcome TEXT, error_class TEXT, recorded_at TIMESTAMP)`); err != nil {
+		model TEXT, outcome TEXT, error_class TEXT, error_detail TEXT, recorded_at TIMESTAMP)`); err != nil {
 		t.Fatal(err)
 	}
 	now := time.Now().UTC()

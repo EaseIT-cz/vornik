@@ -3033,6 +3033,17 @@ func workflowForGate(lookup gateWorkflowLookup, exec *persistence.Execution, def
 	return wf, mcpGapNone
 }
 
+// ExecutionWorkflow is workflowForGate for callers outside this package: the
+// workflow an execution runs (its WorkflowID, the default only when it records
+// none), or nil. One rule for every task-to-step-role lookup (GitHub #551).
+func ExecutionWorkflow(lookup gateWorkflowLookup, exec *persistence.Execution, defaultWorkflowID string) *registry.Workflow {
+	wf, reason := workflowForGate(lookup, exec, defaultWorkflowID)
+	if reason != mcpGapNone {
+		return nil
+	}
+	return wf
+}
+
 func stepForGate(workflow *registry.Workflow, currentStepID string) (registry.WorkflowStep, mcpGapReason) {
 	step, ok := workflow.Steps[currentStepID]
 	if !ok {

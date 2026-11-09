@@ -1151,6 +1151,7 @@ CREATE TABLE IF NOT EXISTS project_memory_chunks (
     -- same chunks every tick at a full token budget.
     graph_extraction_attempts          INTEGER NOT NULL DEFAULT 0,
     graph_extraction_error             TEXT NOT NULL DEFAULT '',
+    graph_transient_failures           INTEGER NOT NULL DEFAULT 0,
     derived_from_extracted_document_id TEXT,
     derived_from_section_id            TEXT,
     created_at                         TEXT NOT NULL,

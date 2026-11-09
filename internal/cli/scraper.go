@@ -9,6 +9,8 @@ import (
 	"time"
 
 	"github.com/spf13/cobra"
+
+	"vornik.io/vornik/internal/spawn"
 )
 
 // Scraper login sidecar CLI.
@@ -156,32 +158,7 @@ func runScraperLoginStart(cmd *cobra.Command, _ []string) error {
 	// readable by the scraper on its next run and vice versa. The
 	// host operator never needs direct fs access to /profiles —
 	// everything goes through the volume.
-	args := []string{
-		"run", "--rm", "-d",
-		"--name", loginContainerName,
-		"--pids-limit", "512",
-		// Chrome stores tab-renderer shared memory in /dev/shm.
-		// Podman's default is 64M which Chrome blows through on
-		// any heavy page (Gmail, LinkedIn, banking portals),
-		// renderer SIGBUSes, and the tab crashes — what the user
-		// sees as "the browser froze". 2G is plenty for a real-
-		// world manual login session and matches the value the
-		// Playwright/Puppeteer ecosystem recommends.
-		// (--disable-dev-shm-usage in entrypoint.sh redirects
-		// most of the allocation to /tmp anyway, but small
-		// fragments still land in /dev/shm and the headroom
-		// avoids surprises.)
-		"--shm-size=2g",
-		"-p", fmt.Sprintf("%s:%d:6080", scraperLoginBind, scraperLoginPort),
-		"-v", "vornik-scraper-profiles:/profiles",
-		"-e", fmt.Sprintf("SCRAPER_PROJECT_ID=%s", scraperLoginProject),
-		"-e", fmt.Sprintf("SCRAPER_PROFILE_NAME=%s", scraperLoginProfile),
-		"-e", fmt.Sprintf("SCRAPER_LOGIN_URL=%s", scraperLoginURL),
-	}
-	if scraperLoginPassword != "" {
-		args = append(args, "-e", fmt.Sprintf("SCRAPER_VNC_PASSWORD=%s", scraperLoginPassword))
-	}
-	args = append(args, loginImage)
+	args := scraperLoginArgs(loginImage, oneSlotMemoryLimit())
 
 	_, _ = fmt.Fprintln(cmd.OutOrStdout(), "starting login sidecar...")
 	out, err := exec.Command("podman", args...).CombinedOutput()
@@ -362,4 +339,36 @@ func lanIPHint() string {
 		}
 	}
 	return "<host>"
+}
+
+// scraperLoginArgs is the login sidecar's podman argv. memLimit bounds it with
+// no swap (GitHub #460; 0 is unbounded); the image is the last argument.
+func scraperLoginArgs(image string, memLimit int64) []string {
+	args := []string{
+		"run", "--rm", "-d",
+		"--name", loginContainerName,
+		"--pids-limit", "512",
+		// Chrome stores tab-renderer shared memory in /dev/shm.
+		// Podman's default is 64M which Chrome blows through on
+		// any heavy page (Gmail, LinkedIn, banking portals),
+		// renderer SIGBUSes, and the tab crashes — what the user
+		// sees as "the browser froze". 2G is plenty for a real-
+		// world manual login session and matches the value the
+		// Playwright/Puppeteer ecosystem recommends.
+		// (--disable-dev-shm-usage in entrypoint.sh redirects
+		// most of the allocation to /tmp anyway, but small
+		// fragments still land in /dev/shm and the headroom
+		// avoids surprises.)
+		"--shm-size=2g",
+		"-p", fmt.Sprintf("%s:%d:6080", scraperLoginBind, scraperLoginPort),
+		"-v", "vornik-scraper-profiles:/profiles",
+		"-e", fmt.Sprintf("SCRAPER_PROJECT_ID=%s", scraperLoginProject),
+		"-e", fmt.Sprintf("SCRAPER_PROFILE_NAME=%s", scraperLoginProfile),
+		"-e", fmt.Sprintf("SCRAPER_LOGIN_URL=%s", scraperLoginURL),
+	}
+	if scraperLoginPassword != "" {
+		args = append(args, "-e", fmt.Sprintf("SCRAPER_VNC_PASSWORD=%s", scraperLoginPassword))
+	}
+	args = append(args, spawn.MemoryLimitFlags(memLimit)...)
+	return append(args, image)
 }

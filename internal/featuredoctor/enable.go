@@ -113,7 +113,10 @@ func ApplyEnable(ctx context.Context, f Feature, deps Deps, plan *EnablePlan, w 
 	// (LockConfigFile) instead of a featuredoctor-private mutex, closing the
 	// cross-subsystem lost-update. Same file serializes; different files don't.
 	// Covers fixit too (it routes through ApplyEnable).
-	unlock := LockConfigFile(w.ConfigPath())
+	unlock, err := LockConfigFile(ctx, w.ConfigPath())
+	if err != nil {
+		return PrereqResult{}, err
+	}
 	defer unlock()
 
 	if len(plan.Changes) == 0 {

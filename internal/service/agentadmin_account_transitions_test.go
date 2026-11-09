@@ -328,7 +328,7 @@ func TestAgentAccount_ConfigSuspensionFailureKeepsBusy(t *testing.T) {
 	}
 }
 
-func TestAgentAccount_ConfigPostRenameFailureDrainedRecovery(t *testing.T) {
+func TestAgentAccount_ConfigPostRenameFailureVerifiedRevertAborts_579(t *testing.T) {
 	f := accountGrantFixture(t, agentadmin.MCPAuthInput{Mode: "none"}, map[string]*agentadmin.AccountInput{"mail": {Label: "work"}})
 	ctx := context.Background()
 	g := seedGrant(t, f, "mail")
@@ -343,6 +343,7 @@ func TestAgentAccount_ConfigPostRenameFailureDrainedRecovery(t *testing.T) {
 	renameObserved := make(chan struct{})
 	var observed bool
 	var journalID string
+	var held persistence.AccountTransitionTicket
 	f.svc.engine.Reload = func() error {
 		if observed {
 			return originalReload()
@@ -356,6 +357,10 @@ func TestAgentAccount_ConfigPostRenameFailureDrainedRecovery(t *testing.T) {
 			return errors.New("fixture never crossed filesystem publication")
 		}
 		if err = f.c.DB.QueryRowContext(ctx, `SELECT id FROM config_apply_journal WHERE terminal_at IS NULL ORDER BY created_at DESC LIMIT 1`).Scan(&journalID); err != nil {
+			return err
+		}
+		held.Scope = persistence.AccountNamespaceScope("hermes")
+		if err = f.c.DB.QueryRowContext(ctx, `SELECT epoch,owner FROM agent_account_transitions WHERE scope=? AND busy=TRUE`, held.Scope).Scan(&held.Epoch, &held.Owner); err != nil {
 			return err
 		}
 		close(renameObserved)
@@ -395,29 +400,19 @@ func TestAgentAccount_ConfigPostRenameFailureDrainedRecovery(t *testing.T) {
 	if !suspended(t, f, g.ID) {
 		t.Fatal("post-publication failure restored grant authority")
 	}
-	if _, err = f.c.accountDecisionEpoch(ctx, "hermes"); !errors.Is(err, persistence.ErrAccountTransition) {
-		t.Fatal("failed filesystem publication cleared busy")
+	// A verified rollback published nothing, so the transition is aborted,
+	// not kept busy (part 22 §22.2.16a, GitHub #579). Before #579 this test
+	// pinned busy here and recovered by hand; that recovery is for a revert
+	// that drifted, which keeps busy. The suspension above stays: abort clears
+	// busy and writes no account row.
+	if _, err = f.c.accountDecisionEpoch(ctx, "hermes"); err != nil {
+		t.Fatalf("a verified rollback must abort the transition: %v", err)
 	}
-	var ticket persistence.AccountTransitionTicket
-	ticket.Scope = persistence.AccountNamespaceScope("hermes")
-	if err = f.c.DB.QueryRowContext(ctx, `SELECT epoch,owner FROM agent_account_transitions WHERE scope=? AND busy=TRUE`, ticket.Scope).Scan(&ticket.Epoch, &ticket.Owner); err != nil {
-		t.Fatal(err)
-	}
-	// The inspected file is restored, holder is canceled/joined and grants
-	// remain suspended: controlled recovery advances, never rewinds, epoch.
-	result, err := f.c.DB.ExecContext(ctx, `UPDATE agent_account_transitions SET epoch=epoch+1,busy=FALSE,owner='',operation='' WHERE scope=? AND epoch=? AND owner=? AND busy=TRUE`, ticket.Scope, ticket.Epoch, ticket.Owner)
-	if err != nil {
-		t.Fatal(err)
-	}
-	n, err := result.RowsAffected()
-	if err != nil || n != 1 {
-		t.Fatal("drained recovery CAS did not match one holder")
-	}
-	if err = f.c.repos.AccountTransitions.Finish(ctx, ticket, persistence.AccountPublication{Secret: faultRecoverySecret()}); !errors.Is(err, persistence.ErrAccountTransition) {
-		t.Fatalf("late holder survived controlled recovery: %v", err)
+	if err = f.c.repos.AccountTransitions.Finish(ctx, held, persistence.AccountPublication{Secret: faultRecoverySecret()}); !errors.Is(err, persistence.ErrAccountTransition) {
+		t.Fatalf("the aborted holder's ticket still finished: %v", err)
 	}
 	if !suspended(t, f, g.ID) {
-		t.Fatal("recovery reactivated suspended grant")
+		t.Fatal("abort reactivated suspended grant")
 	}
 	if _, err = f.c.repos.AgentSecrets.Get(ctx, "hermes", "late"); !errors.Is(err, persistence.ErrNotFound) {
 		t.Fatal("late holder published credential")

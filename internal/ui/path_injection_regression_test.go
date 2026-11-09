@@ -28,6 +28,7 @@ package ui
 //   - WizardGenerate              (wizard.go:204; 153/160 clear via the same barrier)
 
 import (
+	"context"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -58,11 +59,11 @@ func TestApplyProjectPatches_RejectsTraversalID(t *testing.T) {
 	s := NewServer(WithProjectRegistry(buildPopulatedUIRegistry(t)))
 	patches := []yamlPatch{{Path: []string{"lifecycle", "status"}, Value: "archived"}}
 	for _, id := range pathInjectionTraversalIDs {
-		err := s.applyLifecyclePatches(id, patches)
+		err := s.applyLifecyclePatches(context.Background(), id, patches)
 		if err == nil || !strings.Contains(err.Error(), "invalid project id") {
 			t.Errorf("applyLifecyclePatches(%q) err = %v, want invalid-project-id refusal", id, err)
 		}
-		err = s.removeEmptyLifecycleMap(id)
+		err = s.removeEmptyLifecycleMap(context.Background(), id)
 		if err == nil || !strings.Contains(err.Error(), "invalid project id") {
 			t.Errorf("removeEmptyLifecycleMap(%q) err = %v, want invalid-project-id refusal", id, err)
 		}

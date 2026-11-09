@@ -7,6 +7,11 @@
 # HTTP server
 # ---------------------------------------------------------------------------
 server:
+  # address: where the HTTP API listens. ":8080" listens on every interface.
+  # Agent containers call the daemon over TCP at host.containers.internal, so
+  # a loopback address (127.0.0.1, localhost) refuses them, unless every role
+  # uses network "daemon-only" with unix_socket set. `vornikctl doctor`
+  # (agent_daemon_reach) checks this.
   address: ":8080"
   # unix_socket: also serve the HTTP API on this unix socket. REQUIRED
   # when runtime.default_network (or any role) is "daemon-only": the
@@ -196,8 +201,11 @@ tracing:
 # ---------------------------------------------------------------------------
 runtime:
   # userns_mode: Podman user namespace mode for agent containers.
-  # Leave empty for the Podman default.
-  # "host" is useful for rootless Podman under systemd.
+  # Leave empty to let the daemon choose: on rootless Podman it uses keep-id
+  # (falling back to host when allow_host_userns is set), because the plain
+  # default namespace cannot give the non-root agent its bind mounts. On
+  # rootful Podman it starts with Podman's default.
+  # A custom agent image that runs as root needs "host" on rootless Podman.
   userns_mode: ""
 
   # run_as_user: forces a non-root identity on every agent container via

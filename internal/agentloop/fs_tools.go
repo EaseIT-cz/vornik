@@ -3,8 +3,10 @@ package agentloop
 import (
 	"crypto/rand"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -24,6 +26,11 @@ const (
 	readManyTotalCap = 120000 // characters
 )
 
+// afterResolve is a test seam that runs between resolvePath and the open in
+// the read tools, so a symlink swap in that window is deterministic (GitHub
+// #455). Nil outside tests.
+var afterResolve func(resolved string)
+
 func fileRead(env Env, raw json.RawMessage) string {
 	a := decodeArgs(raw)
 	path := a.str("path", "")
@@ -37,10 +44,10 @@ func fileRead(env Env, raw json.RawMessage) string {
 	if strings.HasPrefix(resolved, toolResultsDir(env.Workspace)) {
 		return "ERROR: .tool_results is only readable through tool_result_read"
 	}
-	if !isRegularFile(resolved) {
-		return "ERROR: file not found: " + resolved
+	if afterResolve != nil {
+		afterResolve(resolved)
 	}
-	data, size, err := readFilePrefix(resolved, fileReadCap)
+	data, size, err := readInWorkspace(env.Workspace, resolved, fileReadCap)
 	if err != nil {
 		return "ERROR: file not found: " + resolved
 	}
@@ -168,9 +175,8 @@ func readManyFiles(env Env, raw json.RawMessage) string {
 			parts = append(parts, fmt.Sprintf("===== ERROR: path escapes workspace: %s =====", p))
 			continue
 		}
-		if !isRegularFile(resolved) {
-			parts = append(parts, fmt.Sprintf("===== FILE: %s =====", p), "ERROR: file not found")
-			continue
+		if afterResolve != nil {
+			afterResolve(resolved)
 		}
 		// The cap is CHARACTERS (python sliced the decoded text), so the
 		// bounded read has to admit up to UTFMax bytes per character plus one
@@ -179,7 +185,11 @@ func readManyFiles(env Env, raw json.RawMessage) string {
 		// bounded-read fix) truncated a 40,000-byte file of 20,000 two-byte
 		// runes that python returned whole and split the last rune, handing
 		// the model invalid UTF-8 (found 2026-09-05 validating the audit).
-		data, size, err := readFilePrefix(resolved, readManyFileCap*utf8.UTFMax)
+		data, size, err := readInWorkspace(ws, resolved, readManyFileCap*utf8.UTFMax)
+		if errors.Is(err, errNotRegular) || errors.Is(err, fs.ErrNotExist) {
+			parts = append(parts, fmt.Sprintf("===== FILE: %s =====", p), "ERROR: file not found")
+			continue
+		}
 		if err != nil {
 			parts = append(parts, fmt.Sprintf("===== FILE: %s =====", p), "ERROR: "+err.Error())
 			continue
@@ -237,18 +247,39 @@ func replaceInRoot(root *os.Root, name, tmp string, data []byte, mode os.FileMod
 	return root.Rename(tmp, name)
 }
 
-// readFilePrefix bounds input allocation independently of the file's length.
-// The extra byte detects truncation even if stat size is stale or unavailable
-// for a virtual file; size is informational and never smaller than bytes read.
-func readFilePrefix(path string, limitBytes int) ([]byte, int64, error) {
-	f, err := os.Open(path)
+// errNotRegular: the opened name is not a regular file (a directory, a
+// device), which the read tools report as "file not found".
+var errNotRegular = errors.New("not a regular file")
+
+// readInWorkspace opens resolved through the workspace Root, so a name swapped
+// for an escaping symlink after resolvePath is refused rather than followed
+// (GitHub #455; the writes have done this since the 2026-09-05 audit). The
+// regular-file check is made on the opened descriptor, so the bytes read are
+// those of the file checked. A symlink that stays inside is followed.
+func readInWorkspace(workspace, resolved string, limitBytes int) ([]byte, int64, error) {
+	root, rel, err := workspaceRoot(workspace, resolved)
+	if err != nil {
+		return nil, 0, err
+	}
+	defer func() { _ = root.Close() }()
+	f, err := root.Open(rel)
 	if err != nil {
 		return nil, 0, err
 	}
 	defer func() { _ = f.Close() }()
+	return readFilePrefix(f, limitBytes)
+}
+
+// readFilePrefix bounds input allocation independently of the file's length.
+// The extra byte detects truncation even if stat size is stale or unavailable
+// for a virtual file; size is informational and never smaller than bytes read.
+func readFilePrefix(f *os.File, limitBytes int) ([]byte, int64, error) {
 	st, err := f.Stat()
 	if err != nil {
 		return nil, 0, err
+	}
+	if !st.Mode().IsRegular() {
+		return nil, 0, errNotRegular
 	}
 	data, err := io.ReadAll(io.LimitReader(f, int64(limitBytes)+1))
 	if err != nil {

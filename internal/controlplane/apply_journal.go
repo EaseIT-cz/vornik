@@ -43,6 +43,14 @@ var (
 	// preparing a second one (R8). The wrapped detail names the outcome; if
 	// the proposal is still APPROVED it may be re-applied.
 	ErrJournalReconciled = errors.New("control-plane: an open apply journal for this proposal was reconciled instead of re-applied")
+
+	// ErrReverted wraps every error the journaled apply returns after
+	// revertJournaled succeeded: the row is REVERTED and the restore was
+	// verified, so the change is not in effect. A caller holding an account
+	// transition aborts it rather than keeping it busy (agent-administered
+	// design part 22, §22.2.16a, GitHub #579). A revert that drifted or was
+	// fenced does not wrap it.
+	ErrReverted = errors.New("control-plane: the apply's writes were reverted and the restore verified")
 	// ErrJournalRootMismatch means an open row was prepared against a
 	// different deployment root than this engine's ConfigDir; it is left
 	// alone rather than reconciled against the wrong tree.
@@ -396,7 +404,7 @@ func (e *ApplyEngine) abortWrites(ctx context.Context, row *persistence.ConfigAp
 	if rerr := e.revertJournaled(ctx, row, resolved, failure); rerr != nil {
 		return rerr
 	}
-	return cause
+	return fmt.Errorf("%w (%w)", cause, ErrReverted)
 }
 
 // verifyAndCommit is VERIFYING → APPLIED | PENDING_RESTART (§3): reload,
@@ -407,14 +415,14 @@ func (e *ApplyEngine) verifyAndCommit(ctx context.Context, row *persistence.Conf
 		if verr := e.revertJournaled(ctx, row, resolved, "reload rejected: "+rerr.Error()); verr != nil {
 			return verr
 		}
-		return fmt.Errorf("apply reload rejected (reverted): %w", rerr)
+		return fmt.Errorf("apply reload rejected (reverted): %w (%w)", rerr, ErrReverted)
 	}
 	if e.VerifyGeneration != nil {
 		if gerr := e.VerifyGeneration(ctx, journaledOps(resolved), row.GenerationBefore); gerr != nil {
 			if verr := e.revertJournaled(ctx, row, resolved, "generation not confirmed: "+gerr.Error()); verr != nil {
 				return verr
 			}
-			return fmt.Errorf("apply generation not confirmed (reverted): %w", gerr)
+			return fmt.Errorf("apply generation not confirmed (reverted): %w (%w)", gerr, ErrReverted)
 		}
 	}
 	to := persistence.JournalStateApplied
@@ -424,7 +432,7 @@ func (e *ApplyEngine) verifyAndCommit(ctx context.Context, row *persistence.Conf
 			if verr := e.revertJournaled(ctx, row, resolved, "restart classification failed: "+rerr.Error()); verr != nil {
 				return verr
 			}
-			return fmt.Errorf("restart classification failed (reverted): %w", rerr)
+			return fmt.Errorf("restart classification failed (reverted): %w (%w)", rerr, ErrReverted)
 		}
 		if restart {
 			to = persistence.JournalStatePendingRestart
@@ -456,7 +464,7 @@ func (e *ApplyEngine) verifyAndCommit(ctx context.Context, row *persistence.Conf
 		if verr := e.revertJournaled(ctx, row, resolved, "ledger commit failed: "+merr.Error()); verr != nil {
 			return verr
 		}
-		return fmt.Errorf("apply recorded failed, reverted writes: %w", merr)
+		return fmt.Errorf("apply recorded failed, reverted writes: %w (%w)", merr, ErrReverted)
 	}
 	e.pendingRestart.Store(to == persistence.JournalStatePendingRestart)
 	e.Logger.Info().Str("proposal_id", p.ID).Str("journal_id", row.ID).Str("state", to).
@@ -971,7 +979,7 @@ func (e *ApplyEngine) revertOrErr(ctx context.Context, row *persistence.ConfigAp
 	if rerr := e.revertJournaled(ctx, row, resolved, failure); rerr != nil {
 		return rerr
 	}
-	return cause
+	return fmt.Errorf("%w (%w)", cause, ErrReverted)
 }
 
 // mustResolve resolves a read-set path for diagnostics, falling back to a

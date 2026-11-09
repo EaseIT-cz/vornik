@@ -34,8 +34,20 @@ const (
 // Harnesses lists them in the order help text shows.
 var Harnesses = []string{Hermes, ClaudeDesktop, ClaudeCode, Codex}
 
-// Entry is the stdio MCP server entry for one namespace.
+// Entry kinds: an agent-admin namespace's entry (the zero value) or a
+// companion key's (25-claude-desktop-companion.md, GitHub #589).
+const (
+	KindAgent     = ""
+	KindCompanion = "companion"
+)
+
+// Entry is the stdio MCP server entry for one agent namespace or one
+// companion key.
 type Entry struct {
+	// Kind is KindAgent or KindCompanion.
+	Kind string
+	// Namespace is the agent namespace, or the companion key's name; both
+	// follow agentns.Valid.
 	Namespace string
 	Command   string // the absolute path of vornikctl
 	// URL is the daemon's base URL, passed to the bridge as --url: a harness
@@ -45,11 +57,20 @@ type Entry struct {
 }
 
 // Name is the entry's key in the harness's server map.
-func (e Entry) Name() string { return "vornik-" + e.Namespace }
+func (e Entry) Name() string {
+	if e.Kind == KindCompanion {
+		return "vornik-companion-" + e.Namespace
+	}
+	return "vornik-" + e.Namespace
+}
 
-// Args runs the bridge for the namespace.
+// Args runs the bridge for the namespace or companion key.
 func (e Entry) Args() []string {
+	// The two kinds run different bridge commands; --url is appended to either.
 	args := []string{"agent", "mcp-bridge", "--namespace", e.Namespace}
+	if e.Kind == KindCompanion {
+		args = []string{"companion", "mcp-bridge", "--name", e.Namespace}
+	}
 	if e.URL != "" {
 		args = append(args, "--url", e.URL)
 	}
@@ -57,8 +78,8 @@ func (e Entry) Args() []string {
 }
 
 func (e Entry) check() error {
-	if !agentns.Valid(e.Namespace) {
-		return fmt.Errorf("%q is not a namespace", e.Namespace)
+	if err := e.checkName(); err != nil {
+		return err
 	}
 	if !filepath.IsAbs(e.Command) {
 		return fmt.Errorf("the bridge command must be an absolute path, got %q", e.Command)
@@ -70,6 +91,16 @@ func (e Entry) check() error {
 		if err := agentbridge.CheckEndpoint(e.URL); err != nil {
 			return err
 		}
+	}
+	return nil
+}
+
+func (e Entry) checkName() error {
+	if e.Kind != KindAgent && e.Kind != KindCompanion {
+		return fmt.Errorf("unknown entry kind %q", e.Kind)
+	}
+	if !agentns.Valid(e.Namespace) {
+		return fmt.Errorf("%q is not a namespace or companion name", e.Namespace)
 	}
 	return nil
 }
@@ -122,11 +153,11 @@ func Set(harness string, content []byte, e Entry) ([]byte, error) {
 	return nil, fmt.Errorf("unknown harness %q", harness)
 }
 
-// Remove returns content without the entry, and whether it was there.
-func Remove(harness string, content []byte, ns string) ([]byte, bool, error) {
-	e := Entry{Namespace: ns}
-	if !agentns.Valid(ns) {
-		return nil, false, fmt.Errorf("%q is not a namespace", ns)
+// Remove returns content without the entry, and whether it was there. Only
+// e's Kind and Namespace are read.
+func Remove(harness string, content []byte, e Entry) ([]byte, bool, error) {
+	if err := e.checkName(); err != nil {
+		return nil, false, err
 	}
 	switch harness {
 	case ClaudeCode, ClaudeDesktop:

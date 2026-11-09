@@ -171,6 +171,12 @@ func (c *Container) initRegistry() error {
 		if err := c.Registry.Stage(configDir); err != nil {
 			return err
 		}
+		// §12/§15 on this path too (GitHub #683, #669 item 2): a refused swarm
+		// or workflow refuses the reload; a refused project file is
+		// quarantined on its running definition.
+		if err := c.gateRegistryReload(); err != nil {
+			return err
+		}
 		// Re-parse config.yaml for the keys that are safe to hot-apply
 		// (memory gate knobs). Parse/validate failure aborts the whole
 		// reload before activation — fail closed, leaving the running
@@ -209,12 +215,18 @@ func (c *Container) initRegistry() error {
 				reloader.RecordReloadWarning(e.Error())
 			}
 		}
+		// §12, re-checked after the carry-over and the strip (GitHub #683):
+		// never activate a set that drops a running project.
+		if err := c.Registry.CheckStagedKeepsRunning(); err != nil {
+			return err
+		}
 		return c.validateRegistryActivation(taskRepo, execRepo)
 	})
 	reloader.SetActivator(func() error {
 		if err := c.Registry.ActivateStaged(); err != nil {
 			return err
 		}
+		c.reportReloadQuarantine(reloader)
 		// Re-wire autonomy manager so new/changed projects get loops.
 		if c.autonomyManager != nil {
 			c.autonomyManager.Reload()
@@ -663,4 +675,37 @@ func (a *registryProjectIDsAdapter) ListProjectIDs() []string {
 		}
 	}
 	return out
+}
+
+// gateRegistryReload applies the registry's §15 gate to the staged tree on
+// the ConfigReloader path (GitHub #683, #669 item 2). A refusal is returned;
+// a quarantine is kept for reportReloadQuarantine once the reload activates.
+func (c *Container) gateRegistryReload() error {
+	c.pendingReloadQuarantine = nil
+	gate := c.Registry.GateStagedRejections()
+	if gate == nil {
+		return nil
+	}
+	var q *registry.ReloadQuarantinedError
+	if errors.As(gate, &q) {
+		c.pendingReloadQuarantine = q
+		return nil
+	}
+	return gate
+}
+
+// reportReloadQuarantine reports, at ERROR and as a reload warning, each
+// project a reload kept on its previous configuration because its new file
+// was refused (loader-validator agreement design §15).
+func (c *Container) reportReloadQuarantine(reloader *config.ConfigReloader) {
+	q := c.pendingReloadQuarantine
+	c.pendingReloadQuarantine = nil
+	if q == nil {
+		return
+	}
+	c.Logger.Error().Strs("quarantined_projects", q.Projects).Int("refused_files", len(q.Rejected)).
+		Msg("registry reload: project file(s) refused; the projects keep their previous configuration until fixed")
+	if reloader != nil {
+		reloader.RecordReloadWarning(q.Error())
+	}
 }

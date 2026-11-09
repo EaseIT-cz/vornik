@@ -33,6 +33,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"vornik.io/vornik/internal/configlock"
 	"vornik.io/vornik/internal/fieldguard"
 	"vornik.io/vornik/internal/registry"
 	"vornik.io/vornik/internal/safepath"
@@ -76,6 +77,14 @@ type wizardWorkflowEnvelope struct {
 // On success: writes 2 new files, repoints project.yaml,
 // reloads the registry, returns 200 JSON.
 func (s *Server) WizardGenerate(w http.ResponseWriter, r *http.Request, projectID string) {
+	// The read, write and reload hold the process's config-write lock
+	// (operations design §6.9, GitHub #676).
+	unlock, lerr := configlock.LockAsWriter(r.Context())
+	if lerr != nil {
+		s.refuseNotConfigWriter(w, lerr)
+		return
+	}
+	defer unlock()
 	if r.Method != http.MethodPost {
 		w.Header().Set("Allow", http.MethodPost)
 		writeWizardJSON(w, http.StatusMethodNotAllowed, wizardResponse{Error: "method not allowed"})

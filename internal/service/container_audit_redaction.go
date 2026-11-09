@@ -60,7 +60,7 @@ func (c *Container) initToolAuditRedaction() {
 	} else {
 		d, a, err := buildSecretsDetector(c.Config.Secrets)
 		if err != nil || d == nil {
-			c.Logger.Error().Err(err).Msg("secrets: redaction seams NOT scanning — detector failed to construct; tool_audit_log, chat_audit_log, chat_system_prompts, step_prompts, task_messages and execution_step_outcomes rows may persist plaintext credentials")
+			c.Logger.Error().Err(err).Msg("secrets: redaction seams NOT scanning — detector failed to construct; tool_audit_log, chat_audit_log, chat_system_prompts, step_prompts, task_messages, execution_step_outcomes and memory_retrieval_audit rows may persist plaintext credentials")
 			reason = auditredact.ReasonDetectorUnavailable
 		} else {
 			detector, actions = d, a
@@ -126,13 +126,40 @@ func keepExisting(existing seamDecorator, reason auditredact.Reason) bool {
 	return r == auditredact.ReasonNone || r == reason
 }
 
-// wireContentSeams installs (or upgrades) the step-prompt, chat-audit and
-// task-message decorators, in every branch (§9.2.1).
+// wireContentSeams installs (or upgrades) the step-prompt, chat-audit,
+// task-message, step-outcome and recall-audit decorators, in every branch
+// (§9.2.1).
 func (c *Container) wireContentSeams(reason auditredact.Reason, detector secrets.Detector) {
 	c.wireStepPromptSeam(reason, detector)
 	c.wireChatAuditSeam(reason, detector)
 	c.wireTaskMessageSeam(reason, detector)
 	c.wireStepOutcomeSeam(reason, detector)
+	c.wireRetrievalAuditSeam(reason, detector)
+}
+
+// wireRetrievalAuditSeam installs (or upgrades) the decorator over
+// memory_retrieval_audit, whose query column is the text a person or model
+// typed into a recall (chat-audit retention and redaction design §12, GitHub
+// #680).
+func (c *Container) wireRetrievalAuditSeam(reason auditredact.Reason, detector secrets.Detector) {
+	base := c.repos.MemoryRetrievalAudit
+	if base == nil {
+		return
+	}
+	if existing, ok := base.(*auditredact.RetrievalAudit); ok {
+		if keepExisting(existing, reason) {
+			return
+		}
+		base = existing.Inner()
+	}
+	var ra *auditredact.RetrievalAudit
+	if reason == auditredact.ReasonNone {
+		ra = auditredact.NewRetrievalAudit(base, detector, c.repos.SecretRedaction, &c.Logger)
+	} else {
+		ra = auditredact.NewRetrievalAuditBypassed(base, reason, &c.Logger)
+	}
+	ra.SetMetrics(c.auditRedactMetrics)
+	c.repos.MemoryRetrievalAudit = ra
 }
 
 // wireStepOutcomeSeam installs (or upgrades) the decorator over
@@ -273,6 +300,7 @@ func (c *Container) redactionSeamsState() (auditredact.Reason, []string) {
 		{auditredact.StoreStepPrompts, c.repos.StepPrompts != nil, asSeam(c.repos.StepPrompts)},
 		{auditredact.StoreTaskMessages, c.repos.Messages != nil, asSeam(c.repos.Messages)},
 		{auditredact.StoreExecutionStepOutcomes, c.repos.StepOutcomes != nil, asSeam(c.repos.StepOutcomes)},
+		{auditredact.StoreMemoryRetrievalAudit, c.repos.MemoryRetrievalAudit != nil, asSeam(c.repos.MemoryRetrievalAudit)},
 	}
 	worst := auditredact.ReasonNone
 	var stores []string

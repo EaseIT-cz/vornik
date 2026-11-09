@@ -18,6 +18,10 @@ const (
 	// workflow's own state (WorkflowStatePaths) was cleared too, so no task
 	// could resume an earlier task's feature (§12.29, harness 10).
 	WorkspaceResetTargetsAndState = "targets+workflow-state"
+	// WorkspaceResetTargetsStateAndHistory: as WorkspaceResetTargetsAndState,
+	// and the history was replaced by one root commit after archiving it, so
+	// no task could read an earlier task's work with git (§12.30, harness 11).
+	WorkspaceResetTargetsStateAndHistory = "targets+workflow-state+history"
 	// WorkspaceResetNoWorkspace: no workspace was given, so nothing was
 	// cleared and the run is not fresh-workspace evidence.
 	WorkspaceResetNoWorkspace = "none-no-workspace"

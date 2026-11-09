@@ -107,11 +107,14 @@ func TestRetryAfterOpenCircuit_HeldUntilHalfOpen(t *testing.T) {
 		var err error
 		task, err = tasks.Get(ctx, taskID)
 		require.NoError(t, err)
-		return (task.Status == persistence.TaskStatusQueued && task.Attempt == 2) ||
+		// GitHub #492: the reject reached no model, so the attempt is not
+		// spent; the retry is still attempt 1.
+		return (task.Status == persistence.TaskStatusQueued && countExecutions(t, execs, taskID) == 1) ||
 			task.Status == persistence.TaskStatusFailed || task.Status == persistence.TaskStatusCompleted
 	}, 10*time.Second, 2*time.Millisecond, "attempt 1 never finished")
 	require.Equal(t, persistence.TaskStatusQueued, task.Status,
 		"the retry was dispatched while the circuit was still open and failed the same way: %s", strDeref(task.LastError))
+	assert.Equal(t, 1, task.Attempt, "a reject that reached no model spends no attempt (#492)")
 	require.NotNil(t, task.LastError)
 	assert.Contains(t, *task.LastError, "MODEL_UNHEALTHY")
 	assert.Contains(t, *task.LastError, "retry held until", "a held task must say why it is not running")

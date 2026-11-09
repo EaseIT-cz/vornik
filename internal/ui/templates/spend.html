@@ -35,6 +35,17 @@
                 </form>
             </div>
 
+            {{/* Four fixed windows, moved from the overview (GitHub #603). Instance-wide,
+                 so all-access sessions only; independent of the window selector above. */}}
+            {{if .AllAccess}}
+            <div class="grid grid-cols-2 gap-4 sm:grid-cols-4" data-block="spend-windows">
+                {{template "spendCard" (dict "Label" "Spend · 24h"    "USD" .Windows.Day24hUSD     "Color" "cyan"   "SparkLine" .Windows.Sparkline "SparkFilled" .Windows.SparklineFilled)}}
+                {{template "spendCard" (dict "Label" "Spend · 7 days" "USD" .Windows.Day7USD       "Color" "cyan")}}
+                {{template "spendCard" (dict "Label" "Spend · 30 days" "USD" .Windows.Day30USD     "Color" "cyan")}}
+                {{template "spendCard" (dict "Label" "Month-to-date"  "USD" .Windows.MonthToDateUSD "Color" "purple")}}
+            </div>
+            {{end}}
+
             <div id="spend-results" class="space-y-6">
             {{/* Headline cards: total $, total tokens (with input ratio), call count, calls per task. */}}
             <div class="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">

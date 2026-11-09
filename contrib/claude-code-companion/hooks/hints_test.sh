@@ -103,6 +103,13 @@ assert_hint "adr, relative path" "$OUT" "$RC" "changed a design document" PostTo
 S=d3
 OUT="$(run_hook call "$(post $S Write "$(write_in "/elsewhere/docs/low-level-design/x-design.md")")")"; RC=$?
 assert_silent "outside the cwd" "$OUT" "$RC"
+# GitHub #682: a design document named in upper case counts too. The name
+# starts lower-case on purpose: the CE export rewrites any docs/<Capital>*.md
+# path to the docs site, which turned https://docs.vornik.io into a URL and failed this
+# case on the exported tree (publish-ce for 2026.11.3).
+S=d4
+OUT="$(run_hook call "$(post $S Edit "$(write_in "$REPO/docs/system-DESIGN.md")")")"; RC=$?
+assert_hint "upper-case DESIGN.md" "$OUT" "$RC" "changed a design document" PostToolUse
 
 # --- design_written and edits from a Bash command's writes (§13.13, #653):
 # heredocs, redirections, tee, sed -i, cp, mv; never a heredoc body, a file
@@ -285,5 +292,94 @@ rm -f "$CLAUDE_PLUGIN_DATA/hints/catalogue.json"
 if grep -rqE 'secret-file-content|git commit|low-level-design|--- FAIL' "$CLAUDE_PLUGIN_DATA/hints" 2>/dev/null; then
   fail "a state file holds a command, a path or output: $(grep -rlE 'secret-file-content|git commit|low-level-design|--- FAIL' "$CLAUDE_PLUGIN_DATA/hints")"
 fi
+
+# --- the shared trigger cases (hints_cases.json; design 24 #686 parity).
+# The Hermes plugin runs the same cases against its Python port, so a rule
+# changed in one implementation and not the other fails one of the two.
+CASES="$HERE/hints_cases.json"
+[[ -f "$CASES" ]] || fail "hints_cases.json is missing"
+EMBED="$HERE/hints.json"
+n=0
+while IFS= read -r c; do
+  n=$((n + 1))
+  name="$(jq -r .name <<<"$c")"
+  CD="$WORK/cases/$n"
+  mkdir -p "$CD/hints"
+  # The case's catalogue: the embedded one, with its activations, saved as
+  # the fetched copy; its mutes as the mask.
+  jq -c --argjson a "$(jq -c '.activate // []' <<<"$c")" '.hints |= map(if (.id as $i | $a | index($i)) then .active = true else . end)' "$EMBED" >"$CD/hints/catalogue.json"
+  jq -cn --argjson m "$(jq -c '.mute // []' <<<"$c")" '{enabled: true, muted: $m}' >"$CD/hints/mask.json"
+  S="case$n"
+  while IFS= read -r st; do
+    if [[ "$(jq -r 'has("shell")' <<<"$st")" == true ]]; then
+      cmd="$(jq -r .shell <<<"$st")"; ex="$(jq -r '.exit // 0' <<<"$st")"; o="$(jq -r '.output // ""' <<<"$st")"
+      if [[ "$ex" == 0 ]]; then
+        run_hook call "$(post $S Bash "$(bash_in "$cmd")" "$(bash_out "$o")")" CLAUDE_PLUGIN_DATA="$CD" >/dev/null
+      else
+        run_hook failed "$(failure $S "$cmd" "$o")" CLAUDE_PLUGIN_DATA="$CD" >/dev/null
+      fi
+    elif [[ "$(jq -r 'has("write")' <<<"$st")" == true ]]; then
+      p="$(jq -r .write <<<"$st")"; [[ "$p" == /* ]] || p="$REPO/$p"
+      run_hook call "$(post $S Write "$(write_in "$p")")" CLAUDE_PLUGIN_DATA="$CD" >/dev/null
+    elif [[ "$(jq -r 'has("patch")' <<<"$st")" == true ]]; then
+      body="$(jq -r '"*** Begin Patch\n" + (.patch | map("*** Update File: " + .) | join("\n")) + "\n*** End Patch"' <<<"$st")"
+      run_hook call "$(post $S apply_patch "$(jq -cn --arg b "$body" '{command:$b}')")" CLAUDE_PLUGIN_DATA="$CD" >/dev/null
+    elif [[ "$(jq -r 'has("prompt")' <<<"$st")" == true ]]; then
+      run_hook prompt "$(jq -cn --arg s "$S" --arg c "$REPO" '{session_id:$s, cwd:$c, hook_event_name:"UserPromptSubmit", prompt:"go"}')" CLAUDE_PLUGIN_DATA="$CD" >/dev/null
+    elif [[ "$(jq -r 'has("recall")' <<<"$st")" == true ]]; then
+      run_hook call "$(post $S mcp__plugin_vornik-companion_vornik__recall '{"query":"q"}')" CLAUDE_PLUGIN_DATA="$CD" >/dev/null
+    elif [[ "$(jq -r 'has("delegate")' <<<"$st")" == true ]]; then
+      run_hook call "$(post $S mcp__plugin_vornik-companion_vornik__delegate "$(jq -c '{workflow: .delegate, prompt: "p"}' <<<"$st")")" CLAUDE_PLUGIN_DATA="$CD" >/dev/null
+    fi
+  done < <(jq -c '.steps[]' <<<"$c")
+  got_fired="$(cd "$CD/hints/$S" 2>/dev/null && for d in fired.*; do [[ -d "$d" ]] && echo "${d#fired.}"; done | sort | paste -sd, -)"
+  got_followed="$(cd "$CD/hints/$S" 2>/dev/null && for d in followed.*; do [[ -d "$d" ]] && echo "${d#followed.}"; done | sort | paste -sd, -)"
+  want_fired="$(jq -r '.fired | sort | join(",")' <<<"$c")"
+  want_followed="$(jq -r '.followed | sort | join(",")' <<<"$c")"
+  [[ "$got_fired" == "$want_fired" ]] || fail "case '$name': fired [$got_fired], want [$want_fired]"
+  [[ "$got_followed" == "$want_followed" ]] || fail "case '$name': followed [$got_followed], want [$want_followed]"
+done < <(jq -c '.cases[]' "$CASES")
+((n > 0)) || fail "hints_cases.json holds no case"
+echo "hints_test.sh: $n shared cases passed"
+
+# --- claims hold where mkdir is not exclusive (#687, §13.15). uutils
+# coreutils mkdir 0.10.0 (Ubuntu 26.04) let two concurrent callers both
+# create one directory; this mkdir is the worst case of that race: it
+# succeeds when the directory exists. A hint still fires once.
+REAL_MKDIR="$(readlink "$ALLOW/mkdir")"
+rm -f "$ALLOW/mkdir"
+printf '#!/bin/sh\nexec %s -p "$@"\n' "$REAL_MKDIR" >"$ALLOW/mkdir"
+chmod 0755 "$ALLOW/mkdir"
+CD="$WORK/claims"
+mkdir -p "$CD/hints"
+jq -c '.hints |= map(if .id == "first_prompt.recall" then .active = true else . end)' "$EMBED" >"$CD/hints/catalogue.json"
+S=claims1
+OUT="$(run_hook call "$(post $S Bash "$(bash_in 'git commit -m a')")" CLAUDE_PLUGIN_DATA="$CD")"; RC=$?
+assert_hint "claims: first commit" "$OUT" "$RC" "you just committed" PostToolUse
+OUT="$(run_hook call "$(post $S Bash "$(bash_in 'git commit -m b')")" CLAUDE_PLUGIN_DATA="$CD")"; RC=$?
+assert_silent "claims: a second commit fired again under a non-exclusive mkdir" "$OUT" "$RC"
+PROMPT="$(jq -cn --arg s "$S" --arg c "$REPO" '{session_id:$s, cwd:$c, hook_event_name:"UserPromptSubmit", prompt:"go"}')"
+OUT="$(run_hook prompt "$PROMPT" CLAUDE_PLUGIN_DATA="$CD")"; RC=$?
+[[ -n "$OUT" ]] || fail "claims: the first prompt did not fire first_prompt"
+OUT="$(run_hook prompt "$PROMPT" CLAUDE_PLUGIN_DATA="$CD")"; RC=$?
+assert_silent "claims: a second prompt fired again under a non-exclusive mkdir" "$OUT" "$RC"
+rm -f "$ALLOW/mkdir"
+ln -s "$REAL_MKDIR" "$ALLOW/mkdir"
+# A claim path that is a FIFO or a link to a device reads as held: bash's
+# noclobber refuses only regular files, so a bare (set -C; : >fifo) blocked
+# for good, and one on /dev/null succeeded every time (review 6f99 N1,
+# checked 2026-11-09).
+S=claims2
+mkdir -p "$CD/hints/$S"
+mkfifo "$CD/hints/$S/prompted"
+PROMPT="$(jq -cn --arg s "$S" --arg c "$REPO" '{session_id:$s, cwd:$c, hook_event_name:"UserPromptSubmit", prompt:"go"}')"
+OUT="$(timeout 10 env -u VORNIK_HINTS -u CLAUDE_PLUGIN_OPTION_COMPANION_TOKEN PATH="$ALLOW" VORNIK_COMPANION_TOKEN=test-token CLAUDE_PLUGIN_DATA="$CD" "$BASH_BIN" "$HOOK" prompt < <(printf '%s' "$PROMPT"))"; RC=$?
+assert_silent "claims: a FIFO claim path" "$OUT" "$RC"
+S=claims3
+mkdir -p "$CD/hints/$S"
+ln -s /dev/null "$CD/hints/$S/prompted"
+PROMPT="$(jq -cn --arg s "$S" --arg c "$REPO" '{session_id:$s, cwd:$c, hook_event_name:"UserPromptSubmit", prompt:"go"}')"
+OUT="$(run_hook prompt "$PROMPT" CLAUDE_PLUGIN_DATA="$CD")"; RC=$?
+assert_silent "claims: a claim path linked to /dev/null" "$OUT" "$RC"
 
 echo "hints_test.sh: all cases passed"

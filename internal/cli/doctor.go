@@ -74,6 +74,8 @@ skopeo or systemctl, and no daemon request may run a program):
   image_freshness       Deployment images vs the daemon's build (release record)
 
 Runtime:
+  agent_daemon_reach    Agent containers can reach the daemon: a loopback server.address
+                        refuses every role that is not daemon-only
   env_file_freshness    Flag EnvironmentFile= entries modified after daemon
                         start (systemd reads them only at ExecStart, so
                         post-edit secrets are invisible until restart)
@@ -86,7 +88,7 @@ Security:
   credential_reuse      One secret serving two purposes (database, operator API, LLM provider, ...); states how many it examined, never prints a value
   secrets_permissions   Secrets files/dirs with world-readable permissions
   config_secret_hygiene Config.yaml plaintext secrets or loose permissions (recommends ${ENV_VAR})
-  redaction_seams       Secret scanning of chat_audit_log, chat_system_prompts, step_prompts, task_messages and execution_step_outcomes signals before persist; warns when off, with rows written and unscanned since boot
+  redaction_seams       Secret scanning of chat_audit_log, chat_system_prompts, step_prompts, task_messages, execution_step_outcomes signals and memory_retrieval_audit queries before persist; warns when off, with rows written and unscanned since boot
   synthetic_voice_replies Voice replies with synthesised speech (AI Act Art 50(2)): off by default; warns when on (accepted single-layer marking, with its basis) or when asked for without the acknowledgement
   secret_store_key      Agent credential store: a missing or wrong key while credentials exist is an error
   approver_devices      Agent approvals: a warning when an agent namespace exists with no paired device or no push

@@ -13,6 +13,7 @@ import (
 
 	"github.com/rs/zerolog"
 
+	"vornik.io/vornik/internal/gitbackup"
 	"vornik.io/vornik/internal/spawn"
 )
 
@@ -96,6 +97,7 @@ func checkoutForgeChangeRequest(ctx context.Context, projectDir, headRef, defaul
 		rebaseProjectToOrigin(ctx, projectDir, defaultBranch, logger)
 		return
 	}
+	backupDirtyTrackedChanges(ctx, projectDir, logger)
 	if out, err := gitExec.combined(ctx, "-C", projectDir, "reset", "--hard", "FETCH_HEAD"); err != nil {
 		logger.Warn().Err(err).Str("project_dir", projectDir).Str("head_ref", headRef).Str("detail", strings.TrimSpace(string(out))).
 			Msg("forge CR checkout: reset --hard FETCH_HEAD failed — continuing off local HEAD")
@@ -139,8 +141,10 @@ func rebaseProjectToOrigin(ctx context.Context, projectDir, branch string, logge
 		return WorkspaceRefreshFetchFailed
 	}
 
-	// Best-effort backup: save any local-only commits before they are discarded.
+	// Best-effort backups: save any local-only commits, and any tracked
+	// uncommitted changes, before the reset discards them.
 	backupLocalOnlyCommits(ctx, projectDir, branch, logger)
+	backupDirtyTrackedChanges(ctx, projectDir, logger)
 
 	if out, err := gitExec.combined(ctx, "-C", projectDir, "reset", "--hard", "origin/"+branch); err != nil {
 		logger.Warn().Err(err).Str("project_dir", projectDir).Str("branch", branch).Str("detail", strings.TrimSpace(string(out))).
@@ -152,41 +156,26 @@ func rebaseProjectToOrigin(ctx context.Context, projectDir, branch string, logge
 	return WorkspaceRefreshRefreshed
 }
 
-// backupLocalOnlyCommits is the best-effort pre-reset step for
-// rebaseProjectToOrigin: if local HEAD has commits not reachable from
-// origin/<branch> (i.e. an operator pushed to the workspace but not to the
-// forge origin), it creates a refs/vornik/discarded/<ts>-<shortHEAD> ref so
-// those commits can be recovered after the reset. Any failure is logged and
-// silently skipped — this must never block the task.
+// backupLocalOnlyCommits and backupDirtyTrackedChanges are the best-effort
+// pre-reset steps for rebaseProjectToOrigin and checkoutForgeChangeRequest:
+// local-only commits and tracked uncommitted changes are kept under
+// refs/vornik/discarded/ before `reset --hard` (executor design §9.6.6, GitHub
+// #484). The rule lives in internal/gitbackup, shared with the autonomy
+// backlog-mode refresh (§9.6.7, #675); these wrappers run it through gitExec
+// so the package's fake runner sees every call. Never blocks the task.
 func backupLocalOnlyCommits(ctx context.Context, projectDir, branch string, logger zerolog.Logger) {
-	countOut, err := gitExec.output(ctx, "-C", projectDir, "rev-list", "--count", "origin/"+branch+"..HEAD")
-	if err != nil {
-		logger.Debug().Err(err).Str("project_dir", projectDir).Str("branch", branch).
-			Msg("pre-work rebase: rev-list ahead-count failed — continuing to reset")
-		return
+	gitbackup.LocalOnlyCommits(ctx, gitInDir(projectDir), branch, logger.With().Str("project_dir", projectDir).Logger())
+}
+
+func backupDirtyTrackedChanges(ctx context.Context, projectDir string, logger zerolog.Logger) {
+	gitbackup.DirtyTrackedChanges(ctx, gitInDir(projectDir), "", logger.With().Str("project_dir", projectDir).Logger())
+}
+
+// gitInDir adapts gitExec to gitbackup.Run for one directory.
+func gitInDir(dir string) gitbackup.Run {
+	return func(ctx context.Context, args ...string) ([]byte, error) {
+		return gitExec.output(ctx, append([]string{"-C", dir}, args...)...)
 	}
-	count := 0
-	if _, scanErr := fmt.Sscanf(strings.TrimSpace(string(countOut)), "%d", &count); scanErr != nil || count == 0 {
-		return // no local-only commits — nothing to back up
-	}
-	shortOut, shortErr := gitExec.output(ctx, "-C", projectDir, "rev-parse", "--short", "HEAD")
-	if shortErr != nil {
-		logger.Debug().Err(shortErr).Str("project_dir", projectDir).
-			Msg("pre-work rebase: could not resolve short HEAD for backup ref — continuing anyway")
-		return
-	}
-	backupRef := fmt.Sprintf("refs/vornik/discarded/%d-%s", time.Now().Unix(), strings.TrimSpace(string(shortOut)))
-	if _, refErr := gitExec.combined(ctx, "-C", projectDir, "update-ref", backupRef, "HEAD"); refErr != nil {
-		logger.Debug().Err(refErr).Str("project_dir", projectDir).Str("branch", branch).
-			Msg("pre-work rebase: could not create backup ref for local-only commits — continuing anyway")
-		return
-	}
-	logger.Warn().
-		Str("project_dir", projectDir).
-		Str("branch", branch).
-		Int("count", count).
-		Str("backup_ref", backupRef).
-		Msg("pre-work rebase: local HEAD has commits not present on origin (operator/local push not yet pushed to forge) — resetting to origin; commits saved to backup ref and are recoverable from it")
 }
 
 // vornikInternalPaths are working/bookkeeping artifacts vornik's own pipelines
@@ -441,7 +430,8 @@ func EnsureGitRepo(ctx context.Context, dir string, logger zerolog.Logger) error
 // Semantics:
 //   - Empty dir argument is a no-op (no ProjectWorkspacePath configured).
 //   - If dir doesn't exist, it's created with 0o755.
-//   - If dir is already a git repo, this is a no-op.
+//   - If dir is already a git repo with a commit, this is a no-op. A repo
+//     with no commit gets the seed commit below (#659).
 //   - Otherwise: `git init`, then a single commit with any pre-existing
 //     files under a fixed vornik-agent identity. If the directory was
 //     empty, a `.vornik/bootstrap.md` marker is created so the commit
@@ -459,19 +449,25 @@ func ensureGitRepo(ctx context.Context, dir string, logger zerolog.Logger) error
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return fmt.Errorf("ensure project dir: %w", err)
 	}
-	if isGitRepo(dir) {
+	switch {
+	case isGitRepo(dir) && gitHEAD(ctx, dir) != "":
 		// Keep the ephemeral output tier (artifacts/out/) out of git for
 		// every project — see excludeEphemeralArtifactOutputs. Idempotent.
 		excludeEphemeralArtifactOutputs(dir, logger)
 		// Guards must be applied on every call (idempotent): older repos
 		// predate this change and a hand-tampered repo must be re-guarded.
 		return EnsureReceiveGuards(ctx, dir, logger)
-	}
-
-	logger.Info().Str("project_dir", dir).Msg("bootstrap: project dir is not a git repo — initializing")
-
-	if out, err := gitExec.combined(ctx, "-C", dir, "init"); err != nil {
-		return fmt.Errorf("git init: %w: %s", err, strings.TrimSpace(string(out)))
+	case isGitRepo(dir):
+		// A repository with no commit (a bare `git init`) has no HEAD to
+		// branch worktrees from, and every task then failed at merge
+		// (GitHub #659, executor design §9.1). Seed it like a directory
+		// that was not a repo, keeping its own init settings.
+		logger.Info().Str("project_dir", dir).Msg("bootstrap: project dir is a git repo with no commit — seeding")
+	default:
+		logger.Info().Str("project_dir", dir).Msg("bootstrap: project dir is not a git repo — initializing")
+		if out, err := gitExec.combined(ctx, "-C", dir, "init"); err != nil {
+			return fmt.Errorf("git init: %w: %s", err, strings.TrimSpace(string(out)))
+		}
 	}
 
 	// If the directory was empty, seed it with a bootstrap marker so we

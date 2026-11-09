@@ -15,18 +15,47 @@ import (
 	"vornik.io/vornik/internal/persistence"
 )
 
-// maxActiveTasksPrealloc caps the pre-allocated capacity of the
-// dashboard "active tasks" slice. `limit` is derived from the ?limit=N
-// query parameter; parsePageSize whitelists it to the PageSizeOptions
-// set (max 100), but that equality-whitelist isn't a recognizable
-// upper bound at the allocation site, so the capacity hint is clamped
-// here to bound the pre-allocation (CodeQL go/uncontrolled-allocation-size).
-const maxActiveTasksPrealloc = 1000
+// overviewNeedsYouRows is how many of the inbox's rows the overview shows;
+// the rest are one link away (GitHub #603).
+const overviewNeedsYouRows = 5
 
-// DashboardData holds data for the dashboard template.
+// DashboardData holds data for the overview (/ui/). It answers, in order:
+// does anything need me now, and is anything unhealthy (web UI design, "The
+// overview answers 'does anything need me now?' first", 2026-11-07, GitHub
+// #603). History lives on the detail pages.
 type DashboardData struct {
-	Title        string
-	CurrentPage  string
+	Title       string
+	CurrentPage string
+
+	// NeedsYou is the first overviewNeedsYouRows of the inbox's rows, built by
+	// inboxData, so they carry the inbox's actions.
+	NeedsYou []inboxItem
+	// NeedsYouCount is the inbox's Count: the nav badge and the length of the
+	// list "See all" links to.
+	NeedsYouCount int
+	// NeedsYouHidden is how many inbox rows the overview does not show.
+	NeedsYouHidden int
+	// WebWrites, BrokerActions and AgentApprovals count the inbox's other
+	// waiting cards; the overview links to them rather than repeating them.
+	WebWrites            int
+	BrokerActions        int
+	AgentApprovals       int
+	AgentApprovalsFailed bool
+
+	// Doctor is the last doctor report's error checks, when one has run.
+	Doctor DashboardDoctor
+
+	// Health problems only: a healthy state renders nothing here.
+	SpendSpike      bool
+	SpendSpikeRatio float64
+	NotReady        []AdminReadinessCheck
+
+	// AllClear is true when nothing needs the operator and nothing is
+	// unhealthy; it is the only thing a healthy overview shows.
+	AllClear bool
+
+	// At a glance (§D, operator correction 2026-11-07): the statistics tiles,
+	// below Needs you and Health. Filled by loadGlance.
 	ProjectCount int
 	TaskCounts   map[persistence.TaskStatus]int64
 	// 2026.4.11+ financial + model-performance summary. Zero values
@@ -67,12 +96,9 @@ type DashboardData struct {
 	// has no hits yet — avoids a confusing "$0 saved" empty state.
 	CacheSavings DashboardCacheSavings
 
-	// OperatorQueue (Upgrade #4 — 2026-05-26) is the action-oriented
-	// rail rendered at the top of the dashboard. Each card answers
-	// "what needs me?" rather than "how many?". Replaces the implicit
-	// "operators figure out where to look" pattern. Empty struct =
-	// the dashboard is healthy and no card renders.
-	OperatorQueue DashboardOperatorQueue
+	// GlanceRestricted: a project-scoped session; the instance-wide tiles
+	// stay empty and the page says why.
+	GlanceRestricted bool
 
 	// IsSession is true when the request authenticated via a browser
 	// session cookie (github-login phase 3). Drives the nav logout
@@ -81,173 +107,20 @@ type DashboardData struct {
 	IsSession bool
 }
 
-// DashboardOperatorQueue is the action-oriented queue rail rendered
-// at the top of the dashboard (Upgrade #4 — 2026-05-26). Each field
-// represents one queue card; the card renders only when its count is
-// non-zero, so a quiet dashboard collapses to a single "Healthy"
-// indicator rather than a sea of zero-tiles.
-//
-// Counts are loaded best-effort — a DB blip on any one of them leaves
-// that field at zero and the card hides. Operators always see the
-// pieces that DID load.
-type DashboardOperatorQueue struct {
-	// AwaitingInput is the operator-input-blocked count. Duplicates
-	// the existing inbox tile's source but rendered as part of the
-	// rail so the queue feels uniform. The inbox tile above the rail
-	// stays as a more prominent surface; this is the rail-shaped
-	// echo so the queue's visual weight is consistent.
-	AwaitingInput int64
-	// AwaitingApproval is the count of autonomy tasks parked in
-	// AWAITING_APPROVAL (created under requireApproval) waiting for the
-	// operator to approve/reject. Surfaced as its own tile so the
-	// distinct call to action ("approve me") reads separately from
-	// "answer a checkpoint". See
-	// https://docs.vornik.io
-	AwaitingApproval int64
-	// FailedRecently is the count of tasks that reached FAILED in the
-	// last 24h. Drives the operator-attention card with class-
-	// breakdown link.
-	FailedRecently int64
-	// StuckTotal is the count of tasks stuck in WAITING_FOR_CHILDREN
-	// — the most common "non-terminal but no events flowing" state.
-	// Lighter heuristic than scanning every non-terminal task for
-	// last-event-age; the startup sweep (2026-05-26) now handles the
-	// historical class.
-	StuckTotal int64
-	// SpendSpike is true when today's 24h spend > 2x the 7d average
-	// daily rate. Visible budget-alert affordance.
-	SpendSpike bool
-	// SpendSpikeRatio is the multiplier today/avg (e.g. 2.4 means
-	// today is 2.4x the rolling average). Drives the card detail
-	// text. Zero when SpendSpike is false.
-	SpendSpikeRatio float64
+// NavAttentionCount implements navAttentionCounter: the overview sets the nav
+// badge to the inbox's count, as the inbox page does.
+func (d DashboardData) NavAttentionCount() int { return d.NeedsYouCount }
+
+// DashboardDoctor is the overview's doctor line: the names of the error checks
+// in the last report any caller ran, and its age. Names only: a check's
+// message is for the operator's terminal.
+type DashboardDoctor struct {
+	Shown  bool
+	Errors []string
+	Age    string
 }
 
-// AutonomyProjectETA is one project's autonomy state for the
-// landing page. Provides "when is this project's lead going to fire
-// again" so the operator can predict spend bursts and sanity-check
-// that autonomy is healthy.
-type AutonomyProjectETA struct {
-	ProjectID  string
-	Interval   time.Duration
-	LastEvalAt time.Time
-	NextEvalAt time.Time
-	// LastOutcome is the most recent evaluation's outcome string
-	// (CREATED / NO_ACTION / RATE_LIMITED / ...). Lets operators
-	// glance at the page and see whether the loop is firing
-	// productively or just churning.
-	LastOutcome string
-	// AgoLabel is a pre-rendered "3m 24s ago" string for LastEvalAt.
-	// Computed handler-side because Go templates can't subtract
-	// times cleanly without a helper funcmap entry.
-	AgoLabel string
-	// EtaLabel is "in 1m 36s" or "due now" for NextEvalAt — the
-	// initial server-render value. The dashboard's client-side
-	// ticker re-derives this every second from NextEvalAtISO so
-	// the countdown is live; without that ticker the label froze
-	// at page-load time and never moved (operator-reported
-	// 2026-05-05).
-	EtaLabel string
-	// NextEvalAtISO is NextEvalAt rendered as RFC3339 for the
-	// client-side ticker to parse. Zero-time projects emit empty
-	// string; the ticker leaves their label alone.
-	NextEvalAtISO string
-}
-
-// DashboardMemory is the cross-project memory-pipeline snapshot
-// shown on the landing page. KG fields mirror persistence.KGStats
-// for the global extraction worker; IngestBacklog is the sum of
-// `queued+processing` rows across every project, which spikes
-// when ingestion is starved (the broker is publishing faster than
-// the worker can drain).
-type DashboardMemory struct {
-	Enabled        bool // chunkGraph repo wired
-	ChunksPending  int
-	ChunksDone     int
-	ChunksTotal    int
-	PercentDone    float64
-	Entities       int
-	Edges          int
-	Mentions       int
-	IngestBacklog  int // sum across all projects (queued+processing rows)
-	IngestProjects int // number of projects with any backlog
-}
-
-// DashboardJudge is the LLM-as-judge verdict rollup shown on the
-// landing page. Pulled from task_judge_verdicts over the last 24h
-// (or the most recent N rows if the window has no traffic). Zero
-// when judgeVerdictRepo isn't wired or the project has no
-// verdicts yet.
-type DashboardJudge struct {
-	Enabled     bool // judgeVerdictRepo wired
-	WindowHours int  // window the counts cover (24h by default)
-	Pass        int
-	Fail        int
-	Abstain     int
-	Total       int
-	PercentPass float64 // Pass / Total * 100, 0 when Total == 0
-}
-
-// DashboardLearning is the "Learning" tile — what the deployment has
-// distilled from its own runs, and what of that is waiting on the operator.
-// It fills the third slot of the "Health & knowledge" row, empty since the
-// trading tile was removed (2026-08-07).
-//
-// The skill half ships in both editions. The instinct half does not:
-// instincts are Enterprise-only (every existing entry point sits behind
-// .EnterpriseAdmin), so InstinctsAvailable gates that row and a Community
-// dashboard simply renders one row fewer — no empty slot, no upsell.
-type DashboardLearning struct {
-	// Enabled means the counts below are real: skillRepo is wired AND the
-	// caller may see instance-wide totals.
-	Enabled bool
-	// Restricted distinguishes "you may not see this" from "this isn't
-	// wired". Both render an empty tile, but conflating them would tell a
-	// project-scoped operator their deployment lacks a skill store.
-	Restricted bool
-	Trusted    int
-	Active     int
-	Draft      int // == the operator review-queue depth
-	Retired    int // counted but not rendered; excluded from Total
-	// Total is trusted+active+draft. Retired skills inject nowhere, so
-	// including them would overstate what the store contributes.
-	Total int
-
-	// InstinctsAvailable is true only in an Enterprise build with the
-	// instinct repo wired.
-	InstinctsAvailable bool
-	// InstinctsLive counts active + promoted. A promoted instinct is still
-	// firing, so excluding it would under-report; candidates and retired
-	// instincts fire nowhere and are excluded.
-	InstinctsLive int
-}
-
-// DashboardSpend is the headline $ summary shown on the dashboard.
-type DashboardSpend struct {
-	Day24hUSD      float64
-	Day7USD        float64
-	Day30USD       float64
-	MonthToDateUSD float64
-	// Sparkline is a pre-computed SVG polyline points string for the
-	// 24h hourly spend chart. Empty string means "don't render" — repo
-	// not wired, no data, or all hours zero.
-	Sparkline       string
-	SparklineFilled string // closed polyline for the filled-area underlay
-}
-
-// DashboardCacheSavings is the at-a-glance LLM-cache effectiveness
-// tile on the landing page. Pulls the response cache's lifetime
-// hits + $ saved so operators see the feature paying off without
-// drilling into /ui/spend. Available=false hides the tile (cache
-// disabled or no hits yet — a "$0 saved" tile is more confusing
-// than an absent one on fresh installs).
-type DashboardCacheSavings struct {
-	Available       bool
-	TotalSavingsUSD float64
-	TotalHits       int64
-}
-
-// Dashboard renders the main dashboard page.
+// Dashboard renders the overview.
 func (s *Server) Dashboard(w http.ResponseWriter, r *http.Request) {
 	// Fresh-install stays ahead of BOTH branches below (design
 	// outcome-inbox-design.md §5.7: "the fresh-install /ui/setup redirect
@@ -269,406 +142,87 @@ func (s *Server) Dashboard(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, "/ui/inbox", http.StatusFound)
 		return
 	}
-	s.logger.Debug().
-		Str("method", r.Method).
-		Str("path", r.URL.Path).
-		Msg("rendering dashboard")
-
 	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
 	defer cancel()
 
-	limit := parsePageSize(r.URL.Query().Get("limit"))
 	data := DashboardData{
-		Title:        "Dashboard",
-		CurrentPage:  "dashboard",
-		TaskCounts:   make(map[persistence.TaskStatus]int64),
-		WindowDays:   7,
-		WindowLabel:  "7 days",
-		WindowParam:  "7d",
-		Limit:        limit,
-		LimitOptions: PageSizeOptions,
-		// Show the logout button for browser-session logins.
-		IsSession: api.SessionRoleFromContext(r.Context()) != "",
+		Title:       "Overview",
+		CurrentPage: "dashboard",
+		IsSession:   api.SessionRoleFromContext(r.Context()) != "",
 	}
 
-	switch r.URL.Query().Get("window") {
-	case "24h", "1d":
-		data.WindowDays = 1
-		data.WindowLabel = "1 day"
-		data.WindowParam = "1d"
-	case "30d":
-		data.WindowDays = 30
-		data.WindowLabel = "30 days"
-		data.WindowParam = "30d"
-	case "7d":
-		data.WindowDays = 7
-		data.WindowLabel = "7 days"
-		data.WindowParam = "7d"
+	// 1. Needs you: the inbox's own rows and count (one implementation).
+	inbox := s.inboxData(r, false)
+	data.NeedsYouCount = inbox.Count
+	data.NeedsYou = inbox.Items
+	if len(data.NeedsYou) > overviewNeedsYouRows {
+		data.NeedsYouHidden = len(data.NeedsYou) - overviewNeedsYouRows
+		data.NeedsYou = data.NeedsYou[:overviewNeedsYouRows]
 	}
+	data.WebWrites = len(inbox.WebWrites)
+	data.BrokerActions = len(inbox.BrokerActions)
+	data.AgentApprovals = len(inbox.AgentApprovals)
+	data.AgentApprovalsFailed = inbox.AgentApprovalsFailed
+	data.Doctor = s.overviewDoctor(time.Now())
 
-	// Get project count
-	if s.projectReg != nil {
-		stats := s.projectReg.GetStats()
-		data.ProjectCount = stats.ProjectCount
-	}
-
-	// Get task counts by status
-	if s.taskRepo != nil {
-		// Get counts across all projects by passing empty string
-		counts, err := s.taskRepo.CountByStatus(ctx, "")
-		if err == nil {
-			data.TaskCounts = counts
-		} else {
-			s.logger.Warn().Err(err).Msg("failed to load task counts for dashboard")
-		}
-
-	}
-
-	// Financial summary: 4 rolling windows + top-10 role+model leaderboard
-	// by 30-day spend. INSTANCE-WIDE (SumCost/AggregateByRoleModel are not
-	// project-scoped here), so gated to all-access callers — a project-
-	// scoped session must not see cross-project spend; it uses
-	// /ui/spend?project=<id> (project-scoped) instead. Silent degrade when
-	// the repo isn't wired or no rows match — UI renders $0.00.
-	if s.llmUsageRepo != nil && requestHasAllProjectAccess(r) {
-		now := time.Now().UTC()
-		windows := []struct {
-			setter func(float64)
-			since  time.Time
-		}{
-			{func(v float64) { data.Spend.Day24hUSD = v }, now.Add(-24 * time.Hour)},
-			{func(v float64) { data.Spend.Day7USD = v }, now.Add(-7 * 24 * time.Hour)},
-			{func(v float64) { data.Spend.Day30USD = v }, now.Add(-30 * 24 * time.Hour)},
-			{func(v float64) { data.Spend.MonthToDateUSD = v }, time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, time.UTC)},
-		}
-		for _, w := range windows {
-			if v, err := s.llmUsageRepo.SumCost(ctx, w.since, time.Time{}); err == nil {
-				w.setter(v)
-			}
-		}
-		loadLeaderboard := func(since time.Time, setter func([]persistence.RoleModelSpend), label string) {
-			rows, err := s.llmUsageRepo.AggregateByRoleModel(ctx, since, time.Time{}, 10, "")
-			if err != nil {
-				s.logger.Warn().Err(err).Str("window", label).Msg("failed to load model leaderboard for dashboard")
-				return
-			}
-			// Replace raw role identifiers (kg_extractor, judge, ...)
-			// with operator-facing labels for display. The DB rows
-			// stay raw — this is a render-side transform only.
-			for i := range rows {
-				rows[i].Role = displayRole(rows[i].Role)
-			}
-			setter(rows)
-		}
-		// Preload all three small result sets. The dashboard switches between
-		// them client-side, so the operator gets an instant tab change rather
-		// than a full page reload or another round-trip.
-		loadLeaderboard(now.Add(-24*time.Hour), func(rows []persistence.RoleModelSpend) {
-			data.TopModels1d = rows
-		}, "1d")
-		loadLeaderboard(now.Add(-7*24*time.Hour), func(rows []persistence.RoleModelSpend) {
-			data.TopModels7d = rows
-		}, "7d")
-		loadLeaderboard(now.Add(-30*24*time.Hour), func(rows []persistence.RoleModelSpend) {
-			data.TopModels30d = rows
-		}, "30d")
-
-		// Hourly buckets for the 24h sparkline. We bucket client-side
-		// from the raw rows because the repo doesn't expose a bucketed
-		// query. PageSize=5000 caps per-request cost — in busy
-		// deployments older hours within the window may be undercounted,
-		// which is acceptable for a sparkline (the headline number above
-		// uses SumCost so it's still accurate).
-		since24 := now.Add(-24 * time.Hour)
-		usage, err := s.llmUsageRepo.List(ctx, persistence.TaskLLMUsageFilter{
-			Since:    &since24,
-			PageSize: 5000,
-		})
-		if err == nil {
-			data.Spend.Sparkline, data.Spend.SparklineFilled = sparklinePoints(bucketHourly(usage, now), 100, 24)
-		} else {
-			s.logger.Warn().Err(err).Msg("failed to load hourly usage for sparkline")
-		}
-	}
-
-	// Cache savings tile (Phase E). Tight 2s timeout — the landing
-	// page must render even if the cache stats query stalls. Hides
-	// itself when no hits yet so a fresh install isn't dominated by
-	// a "$0.00 saved" placeholder.
-	if s.responseCacheStats != nil {
-		csCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
-		stats, err := s.responseCacheStats.CacheStats(csCtx)
-		cancel()
-		if err == nil && stats.TotalHits > 0 {
-			data.CacheSavings = DashboardCacheSavings{
-				Available:       true,
-				TotalSavingsUSD: stats.TotalSavingsUSD,
-				TotalHits:       stats.TotalHits,
+	// 2. Health: problems only.
+	data.SpendSpike, data.SpendSpikeRatio = s.overviewSpendSpike(ctx, r)
+	if s.adminReadiness != nil {
+		for _, c := range s.adminReadiness.ReadinessChecks(ctx) {
+			if !strings.EqualFold(c.Status, "ok") {
+				data.NotReady = append(data.NotReady, c)
 			}
 		}
 	}
 
-	// Active tasks tile: focused list of in-flight work. Selects
-	// QUEUED / LEASED / RUNNING separately and concatenates so a
-	// dashboard that shows mostly "queued, queued, running" reads
-	// at a glance. Row cap is `limit` (?limit=N — same shared
-	// validator as the rest of the UI; default 20). The legacy
-	// fixed cap of 8 was raised to the audit-default 20 so the
-	// landing page matches the rest of the list views.
-	if s.taskRepo != nil {
-		nowActive := time.Now().UTC()
-		_ = nowActive
-		active := make([]*persistence.Task, 0, min(limit, maxActiveTasksPrealloc))
-		for _, status := range []persistence.TaskStatus{
-			persistence.TaskStatusRunning,
-			persistence.TaskStatusLeased,
-			persistence.TaskStatusQueued,
-		} {
-			st := status
-			rows, err := s.taskRepo.List(ctx, persistence.TaskFilter{
-				Status:   &st,
-				PageSize: limit,
-			})
-			if err != nil {
-				continue
-			}
-			for _, t := range rows {
-				active = append(active, t)
-				if len(active) >= limit {
-					break
-				}
-			}
-			if len(active) >= limit {
-				break
-			}
-		}
-		data.ActiveTasks = active
-		// Total counts come from TaskCounts (already populated above);
-		// expose a single-int summary for the tile header.
-		data.ActiveTaskCount = int(data.TaskCounts[persistence.TaskStatusRunning] +
-			data.TaskCounts[persistence.TaskStatusLeased] +
-			data.TaskCounts[persistence.TaskStatusQueued])
-	}
+	// The badge decides: an informational row (a waiting parent, a retry in
+	// flight, a closed approval) alone does not hide "All clear"; the inbox
+	// page still lists it (outcome-inbox design §5.2a, GitHub #671).
+	nothingWaits := data.NeedsYouCount == 0 && !data.AgentApprovalsFailed
+	noDoctorErrors := !data.Doctor.Shown || len(data.Doctor.Errors) == 0
+	healthy := !data.SpendSpike && len(data.NotReady) == 0
+	data.AllClear = nothingWaits && noDoctorErrors && healthy
 
-	// Active chats tile.
-	if s.activeChatSource != nil {
-		data.ActiveChatCount = s.activeChatSource.ActiveChatCount()
-	}
-
-	// Operator queue (Upgrade #4 — 2026-05-26). Each card is best-
-	// effort; the cards render only when their counts are non-zero,
-	// so the queue rail collapses to a "Healthy" indicator when
-	// nothing demands attention.
-	data.OperatorQueue.AwaitingInput = data.TaskCounts[persistence.TaskStatusAwaitingInput]
-	data.OperatorQueue.AwaitingApproval = data.TaskCounts[persistence.TaskStatusAwaitingApproval]
-	data.OperatorQueue.StuckTotal = data.TaskCounts[persistence.TaskStatusWaitingForChildren]
-	if s.taskRepo != nil && s.projectReg != nil {
-		since := time.Now().Add(-24 * time.Hour)
-		// One grouped query instead of CountRecentFailures per project (E2,
-		// audit 2026-07-03). Sum only the registered projects' entries so the
-		// tally matches the previous per-project loop.
-		var failedSum int
-		if byProject, ferr := s.taskRepo.CountRecentFailuresByProject(ctx, nil, since); ferr == nil {
-			for _, p := range s.projectReg.ListProjects() {
-				if p == nil {
-					continue
-				}
-				failedSum += byProject[p.ID]
-			}
-		}
-		data.OperatorQueue.FailedRecently = int64(failedSum)
-	}
-	// Spend-spike heuristic: today's 24h > 2x the 7d-average daily
-	// rate. Day7USD is the rolling-7-day spend already loaded above;
-	// dividing by 7 gives the comparable daily average. Avoid the
-	// false-positive case where Day7USD is near-zero (fresh install)
-	// by requiring a $1+ floor on the comparison baseline.
-	if data.Spend.Day7USD > 1.0 {
-		avgDaily := data.Spend.Day7USD / 7.0
-		if avgDaily > 0 {
-			ratio := data.Spend.Day24hUSD / avgDaily
-			if ratio >= 2.0 {
-				data.OperatorQueue.SpendSpike = true
-				data.OperatorQueue.SpendSpikeRatio = ratio
-			}
-		}
-	}
-
-	// Autonomy ETAs tile: per-project (last_eval_at + poll_interval)
-	// projection. Only shows projects with autonomy enabled. Sorted
-	// soonest-first so the operator sees the next thing about to
-	// fire at the top.
-	if s.projectReg != nil && s.autonomyEvalRepo != nil {
-		nowETA := time.Now().UTC()
-		var etas []AutonomyProjectETA
-		// Fetch the latest eval for every project in one query instead of a
-		// List(PageSize:1) per project (E2, audit 2026-07-03).
-		latestByProject, _ := s.autonomyEvalRepo.LatestByProject(ctx)
-		for _, p := range s.projectReg.ListProjects() {
-			if p == nil || !p.Autonomy.Enabled {
-				continue
-			}
-			interval := 5 * time.Minute
-			if p.Autonomy.PollInterval != "" {
-				if d, perr := time.ParseDuration(p.Autonomy.PollInterval); perr == nil && d > 0 {
-					interval = d
-				}
-			}
-			pid := p.ID
-			eta := AutonomyProjectETA{
-				ProjectID: pid,
-				Interval:  interval,
-			}
-			if last := latestByProject[pid]; last != nil {
-				eta.LastEvalAt = last.CreatedAt
-				eta.LastOutcome = last.Outcome
-				eta.NextEvalAt = last.CreatedAt.Add(interval)
-				eta.AgoLabel = humanizeAgo(nowETA.Sub(last.CreatedAt))
-				eta.EtaLabel = humanizeEta(eta.NextEvalAt.Sub(nowETA))
-				eta.NextEvalAtISO = eta.NextEvalAt.UTC().Format(time.RFC3339)
-			} else {
-				// No evaluation yet — the loop will tick within `interval`
-				// of daemon start. We don't know start time here; show
-				// the interval as the ETA so the operator sees "soon".
-				eta.EtaLabel = "≤ " + humanizeAgo(interval)
-			}
-			etas = append(etas, eta)
-		}
-		// Stable sort by NextEvalAt ascending; zero-time (no eval yet)
-		// floats to the bottom by convention.
-		for i := 1; i < len(etas); i++ {
-			for j := i; j > 0; j-- {
-				prev := etas[j-1].NextEvalAt
-				cur := etas[j].NextEvalAt
-				prevZero := prev.IsZero()
-				curZero := cur.IsZero()
-				if curZero && !prevZero {
-					break
-				}
-				if !curZero && (prevZero || cur.Before(prev)) {
-					etas[j], etas[j-1] = etas[j-1], etas[j]
-					continue
-				}
-				break
-			}
-		}
-		data.AutonomyETAs = etas
-	}
-
-	// Memory pipeline tile (2026-05-12). Global KG snapshot + cross-
-	// project ingest backlog — INSTANCE-WIDE (Stats has no project
-	// filter), so gated to all-access callers; a project-scoped session
-	// must not see cross-project totals (same leak fixed on /ui/memory).
-	// Nil-safe — the template hides the tile when Enabled is false.
-	if s.chunkGraph != nil && requestHasAllProjectAccess(r) {
-		if stats, err := s.chunkGraph.Stats(ctx); err == nil && stats != nil {
-			data.Memory.Enabled = true
-			data.Memory.ChunksPending = stats.ChunksPending
-			data.Memory.ChunksDone = stats.ChunksDone
-			data.Memory.ChunksTotal = stats.ChunksPending + stats.ChunksDone
-			if data.Memory.ChunksTotal > 0 {
-				data.Memory.PercentDone = 100.0 * float64(stats.ChunksDone) / float64(data.Memory.ChunksTotal)
-			}
-			data.Memory.Entities = stats.Entities
-			data.Memory.Edges = stats.Edges
-			data.Memory.Mentions = stats.Mentions
-		} else if err != nil {
-			s.logger.Warn().Err(err).Msg("failed to load KG stats for dashboard")
-		}
-	}
-	if s.ingestQueue != nil && s.projectReg != nil {
-		for _, p := range s.projectReg.ListProjects() {
-			if p == nil {
-				continue
-			}
-			if d, err := s.ingestQueue.QueueDepth(ctx, p.ID); err == nil && d > 0 {
-				data.Memory.IngestBacklog += d
-				data.Memory.IngestProjects++
-			}
-		}
-	}
-
-	// Judge verdict tile (2026-05-12). Pulls the most recent 200
-	// verdicts across all projects and counts pass/fail/abstain over
-	// the last 24h. The repo doesn't expose a windowed Count, so we
-	// filter the row slice in Go — cheap at 200 rows and avoids a
-	// schema change for the dashboard.
-	if s.judgeVerdictRepo != nil {
-		data.Judge.Enabled = true
-		data.Judge.WindowHours = 24
-		cutoff := time.Now().UTC().Add(-24 * time.Hour)
-		rows, err := s.judgeVerdictRepo.ListRecent(ctx, "", 200)
-		if err == nil {
-			for _, v := range rows {
-				if v == nil || v.RecordedAt.Before(cutoff) {
-					continue
-				}
-				data.Judge.Total++
-				switch strings.ToLower(v.Verdict) {
-				case "pass":
-					data.Judge.Pass++
-				case "fail":
-					data.Judge.Fail++
-				case "abstain":
-					data.Judge.Abstain++
-				}
-			}
-			if data.Judge.Total > 0 {
-				data.Judge.PercentPass = 100.0 * float64(data.Judge.Pass) / float64(data.Judge.Total)
-			}
-		}
-	}
-
-	s.buildLearningTile(ctx, r, &data)
+	// 3. At a glance: the statistics, below (§D).
+	s.loadGlance(ctx, r, &data)
 
 	s.render(w, "dashboard.html", data)
 }
 
-// buildLearningTile fills the "Learning" tile: skill-store maturity
-// distribution, the draft review-queue depth, and (Enterprise only) the count
-// of live instincts.
-//
-// Both counts are instance-wide aggregates with no project filter, so they are
-// gated to all-access callers exactly like the spend and KG rollups above — a
-// project-scoped session must not read cross-project totals.
-func (s *Server) buildLearningTile(ctx context.Context, r *http.Request, data *DashboardData) {
-	if s.skillRepo == nil {
-		return
+// overviewDoctor reads the last doctor report's error checks; nothing before
+// the first report since start, so the overview never runs doctor itself.
+func (s *Server) overviewDoctor(now time.Time) DashboardDoctor {
+	if s.lastDoctorErrors == nil {
+		return DashboardDoctor{}
 	}
-	if !requestHasAllProjectAccess(r) {
-		data.Learning.Restricted = true
-		return
+	names, at, ok := s.lastDoctorErrors()
+	if !ok {
+		return DashboardDoctor{}
 	}
+	return DashboardDoctor{Shown: true, Errors: names, Age: humanizeAgo(now.Sub(at))}
+}
 
-	counts, err := s.skillRepo.CountByMaturity(ctx)
+// overviewSpendSpike reports whether the last 24 h spend is at least twice the
+// 7-day daily average, the overview's one spend signal. The 7-day spend must
+// exceed $1, so a fresh install never reads as a spike. Instance-wide, so only
+// for all-access sessions.
+func (s *Server) overviewSpendSpike(ctx context.Context, r *http.Request) (bool, float64) {
+	if s.llmUsageRepo == nil || !requestHasAllProjectAccess(r) {
+		return false, 0
+	}
+	now := time.Now().UTC()
+	day, err := s.llmUsageRepo.SumCost(ctx, now.Add(-24*time.Hour), time.Time{})
 	if err != nil {
-		s.logger.Warn().Err(err).Msg("failed to count skills by maturity for dashboard")
-		return
+		return false, 0
 	}
-	data.Learning.Enabled = true
-	data.Learning.Trusted = counts[persistence.SkillMaturityTrusted]
-	data.Learning.Active = counts[persistence.SkillMaturityActive]
-	data.Learning.Draft = counts[persistence.SkillMaturityDraft]
-	data.Learning.Retired = counts[persistence.SkillMaturityRetired]
-	data.Learning.Total = data.Learning.Trusted + data.Learning.Active + data.Learning.Draft
-
-	// Instincts are Enterprise-only. enterpriseAdmin (not repo presence) is
-	// the edition switch — some EE features have their repo wired in CE too.
-	if !s.enterpriseAdmin || s.instinctRepo == nil {
-		return
+	week, err := s.llmUsageRepo.SumCost(ctx, now.Add(-7*24*time.Hour), time.Time{})
+	if err != nil || week <= 1.0 {
+		return false, 0
 	}
-	byDomain, err := s.instinctRepo.CountByDomainStatus(ctx)
-	if err != nil {
-		s.logger.Warn().Err(err).Msg("failed to count instincts for dashboard")
-		return
+	if ratio := day / (week / 7.0); ratio >= 2.0 {
+		return true, ratio
 	}
-	data.Learning.InstinctsAvailable = true
-	for _, c := range byDomain {
-		switch c.Status {
-		case persistence.InstinctStatusActive, persistence.InstinctStatusPromoted:
-			data.Learning.InstinctsLive += c.Count
-		}
-	}
+	return false, 0
 }
 
 // humanizeAgo formats a positive duration as "3m 24s ago"-style

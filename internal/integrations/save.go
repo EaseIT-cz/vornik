@@ -229,7 +229,10 @@ func Save(ctx context.Context, kind IntegrationKind, target SaveTarget, cand Can
 	if err != nil {
 		return SaveResult{Probe: probe}, fmt.Errorf("integrations: resolve config path: %w", err)
 	}
-	unlock := featuredoctor.LockConfigFile(configPath)
+	unlock, err := featuredoctor.LockConfigFile(ctx, configPath)
+	if err != nil {
+		return SaveResult{Probe: probe}, err
+	}
 	defer unlock()
 
 	// Step 2 (field-split) + Step 3 (place secrets first).

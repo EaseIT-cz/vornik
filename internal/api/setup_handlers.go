@@ -116,7 +116,10 @@ func (s *Server) SetupDispatcherCommit(w http.ResponseWriter, r *http.Request) {
 		respondError(w, http.StatusBadRequest, "PROJECT_UNKNOWN", "project_id is not loaded in the project registry")
 		return
 	}
-	if err := writeDispatcherProjectConfig(s.setupConfigPath, projectID); err != nil {
+	if err := writeDispatcherProjectConfig(r.Context(), s.setupConfigPath, projectID); err != nil {
+		if respondNotConfigWriter(w, err) {
+			return
+		}
 		var pe *configPatchError
 		if errors.As(err, &pe) {
 			respondError(w, http.StatusInternalServerError, pe.Code, pe.Msg)
@@ -287,7 +290,10 @@ func (s *Server) SetupSessionCommit(w http.ResponseWriter, r *http.Request) {
 
 	// Step 2: patch config.yaml via the comment-preserving writer, with
 	// backup/restore for rollback on failure.
-	if err := writeChatConfig(s.setupConfigPath, secretPath, proposal); err != nil {
+	if err := writeChatConfig(r.Context(), s.setupConfigPath, secretPath, proposal); err != nil {
+		if respondNotConfigWriter(w, err) {
+			return
+		}
 		var pe *configPatchError
 		if errors.As(err, &pe) {
 			respondError(w, http.StatusInternalServerError, pe.Code, pe.Msg)
@@ -335,9 +341,12 @@ func (e *configPatchError) Error() string { return e.Msg }
 // partial-failure state so the caller can map it to a respondError call
 // without re-formatting. The secret at secretPath is never rolled back —
 // it is reused on retry — so every error message names it honestly.
-func writeChatConfig(configPath, secretPath string, proposal onboarding.ChatConfigProposal) error {
+func writeChatConfig(ctx context.Context, configPath, secretPath string, proposal onboarding.ChatConfigProposal) error {
 	// The process's one config-write lock (GitHub #584, operations-api-contract-design.md §6.6).
-	unlock := configlock.Lock()
+	unlock, err := configlock.LockAsWriter(ctx) // refused on a non-writer daemon (#681)
+	if err != nil {
+		return err
+	}
 	defer unlock()
 	writer := &featuredoctor.FileConfigWriter{Path: configPath}
 	backup, err := writer.Backup()
@@ -376,9 +385,12 @@ func writeChatConfig(configPath, secretPath string, proposal onboarding.ChatConf
 	return nil
 }
 
-func writeDispatcherProjectConfig(configPath, projectID string) error {
+func writeDispatcherProjectConfig(ctx context.Context, configPath, projectID string) error {
 	// The process's one config-write lock (GitHub #584, operations-api-contract-design.md §6.6).
-	unlock := configlock.Lock()
+	unlock, err := configlock.LockAsWriter(ctx) // refused on a non-writer daemon (#681)
+	if err != nil {
+		return err
+	}
 	defer unlock()
 	writer := &featuredoctor.FileConfigWriter{Path: configPath}
 	backup, err := writer.Backup()

@@ -5,9 +5,9 @@ sources:
     - path: internal/api/companion_mcp.go
       sha256: 01f7c494025657d6195f169c81e7ebb2a4cc9e2374b08862a043d2685b0632c4
     - path: contrib/claude-code-companion/.claude-plugin/plugin.json
-      sha256: 062b4a4aa41a7671a6aef7c4d6ac90211378093a6a8f28d2830e2ddc44006efd
+      sha256: 4b65752e254c00782b835787a57988a182a7c32911f773025297feb7649aeab4
     - path: contrib/codex-companion/.codex-plugin/plugin.json
-      sha256: 2c529c0407b82cf85ecd26ebe829e636dc22866dd3566d9c2da7733a49b8541d
+      sha256: 5244d524e9a5d7b33503ac0dfcdb822ebed9a537e98c5709c9e7eb6b17a37ab6
 ---
 # Companion plugin
 
@@ -721,6 +721,10 @@ Hermes, or any other front-end agent, use the broker setup in
 below grants developer workflows and the knowledge-skill store, which a
 front-end agent should not have.
 
+For **Claude Desktop and Cowork**, mint the key the same way, then follow
+[Use Vornik from Claude Desktop and Cowork](../guides/claude-desktop.md): one
+command connects them, with no Node and no token in Claude's config.
+
 On the **daemon** side, an operator prepares a companion project and mints a
 **companion-scoped key** (a plain API key won't be accepted on the companion
 endpoint):
@@ -832,6 +836,14 @@ project's hint catalogue.
   script. Codex gives a hook no exit status, so a failed test run is
   recognised from its output, and a failed commit still shows the review
   hint. Codex runs the new hooks once you trust them.
+- Hermes gets them since its plugin 0.23.0, with the memory key set, from
+  a Python port of the same rules held to the same test cases. A hint is
+  added to the result of the call that fired it, marked as Vornik's, and
+  only hints Hermes can act on are shown. Hermes also gets Vornik's
+  standing rules in each new session's system prompt, and, when it edited
+  files and is about to finish with a hint not followed, one request to
+  follow it or say why not. See
+  [Hermes setup → What Vornik teaches Hermes](../guides/hermes-setup.md#5-what-vornik-teaches-hermes-plugin-0230-and-later).
 
 For Codex, install `codex-companion` from the bundled Codex marketplace at
 `<path>/.agents/plugins/marketplace.json`, or load the plugin directly from

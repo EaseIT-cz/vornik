@@ -28,6 +28,11 @@ type SpendData struct {
 	Title       string
 	CurrentPage string
 
+	// Windows is the four fixed spend windows (24 h, 7 d, 30 d, month to
+	// date), moved here from the overview (GitHub #603). Instance-wide:
+	// zero for a project-scoped session. Independent of the page's own window.
+	Windows DashboardSpend
+
 	// Window controls. WindowDays is the active selection (24h →
 	// 1 day; 7d / 30d as named); operators set it via ?window=24h
 	// / 7d / 30d in the URL. Default 7d.
@@ -649,6 +654,7 @@ func (s *Server) Spend(w http.ResponseWriter, r *http.Request) {
 			data.ResponseCacheSavingsUSD = stats.TotalSavingsUSD
 		}
 	}
+	data.Windows = s.loadSpendWindows(r.Context(), r)
 
 	s.render(w, "spend.html", data)
 }

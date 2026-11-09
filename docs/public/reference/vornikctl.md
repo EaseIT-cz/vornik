@@ -491,6 +491,167 @@ Intended use: run the fixture twice with --tier2-only, then verify.
 vornikctl bench memory verify-determinism <run-dir-a> <run-dir-b>
 ```
 
+## vornikctl companion
+
+Manage vornik-companion plugin sessions (LLD 21)
+
+Mint and list per-session bearer keys for host-LLM clients
+(Claude Code today; Codex / Gemini CLI / opencode tomorrow).
+
+A companion key is bound to ONE project, optionally narrowed to a
+workflow allowlist and a USD budget cap. The host plugin presents the
+key as a normal sk-vornik-* bearer; the daemon's auth layer reads the
+scope columns on every call.
+
+Revocation: use 'vornikctl key revoke <id> --project=X'. There is no
+separate companion-revoke — the underlying api_keys row revokes the
+same way regardless of how it was minted.
+
+## vornikctl companion connect
+
+Connect Claude Desktop (and Cowork) to Vornik with a companion key
+
+Store a companion key in a file only you can read, add one MCP server entry
+to Claude Desktop's config that runs 'vornikctl companion mcp-bridge', and
+check the key against Vornik. The Claude config never holds the key.
+
+The key comes from --key-stdin, else VORNIK_COMPANION_TOKEN. connect does not
+mint keys: an operator mints one with 'vornikctl companion grant'. An
+agent-admin key is refused (use 'vornikctl agent connect').
+
+Claude Code and Codex use their companion plugins instead.
+
+```
+vornikctl companion connect claude-desktop [flags]
+```
+
+| Flag | Default | Description |
+|---|---|---|
+| `--key-stdin` | `false` | Read the companion key from standard input (piped) |
+| `--name` | `default` | The companion key's name (2 to 16 lowercase letters and digits) |
+| `--url` |  | Vornik's URL (default $VORNIK_URL, then $VORNIK_API_URL, then http://localhost:8080) |
+
+Example:
+
+```
+printf '%s\n' "$VORNIK_COMPANION_TOKEN" | vornikctl companion connect claude-desktop --key-stdin --url https://vornik.example
+```
+
+## vornikctl companion disconnect
+
+Remove the companion entry from Claude Desktop and delete its key file
+
+Remove what 'vornikctl companion connect' wrote. It revokes nothing on the daemon: the key belongs to the operator who minted it ('vornikctl companion keys').
+
+```
+vornikctl companion disconnect claude-desktop [flags]
+```
+
+| Flag | Default | Description |
+|---|---|---|
+| `--name` | `default` | The companion key's name (2 to 16 lowercase letters and digits) |
+
+## vornikctl companion doctor
+
+Check a companion connection in Claude Desktop and print the fix for each failure
+
+Check the Claude Desktop entry, the key file, the daemon and the key itself,
+one line per check, each failure with its fix. It changes nothing. Exit status
+0 when every check passes, 1 otherwise.
+
+```
+vornikctl companion doctor [flags]
+```
+
+| Flag | Default | Description |
+|---|---|---|
+| `--client` | `claude-desktop` | The client to check |
+| `--name` | `default` | The companion key's name (2 to 16 lowercase letters and digits) |
+| `--url` |  | Vornik's URL (default $VORNIK_URL, then $VORNIK_API_URL, then http://localhost:8080) |
+
+## vornikctl companion grant
+
+Mint a new companion key (raw secret shown ONCE)
+
+Mint a per-session bearer key for a companion project. The raw
+secret is printed exactly once — capture it and feed it to your host
+LLM client's plugin store. The daemon stores only the sha256 hash.
+
+```
+vornikctl companion grant [flags]
+```
+
+| Flag | Default | Description |
+|---|---|---|
+| `--budget-usd` |  | Lifetime USD budget cap for this key (omit for uncapped) |
+| `--client` |  | Host LLM client: claude-code \| codex \| hermes \| openclaw \| claude-desktop \| gemini-cli \| opencode, or any other lowercase name (letters, digits, dashes; 2 to 32) for an assistant with no adapter (required) |
+| `--expires` |  | Expiration (RFC3339 or duration like 30d, 6m). Empty = never expires. |
+| `--json` | `false` | Emit JSON instead of human text |
+| `--label` |  | Operator-friendly session label (e.g. 'vadim/laptop') |
+| `--memory-all` | `false` | Shorthand for --memory-read --memory-write. |
+| `--memory-read` | `false` | Allow this key to call recall() against the project's RAG store. |
+| `--memory-write` | `false` | Allow this key to call remember() to deposit notes into the project's RAG store. Implies --memory-read. |
+| `--no-delegate` | `false` | Refuse every task tool (delegate/status/result/cancel/list/catalog) for this key — the shape of a front agent's memory key |
+| `--repo-scope` |  | Default repo_scope stamped on memory calls that omit it (e.g. github.com/ORG/REPO). Recommended for clients without a SessionStart scope injector (Codex) so deposits can't land NULL-scoped. An explicit per-call repo_scope still overrides it. |
+| `--skill-admin` | `false` | Allow this key to approve/reject skills (the human gate that promotes a draft to active). |
+| `--skill-all` | `false` | Shorthand for --skill-read --skill-write --skill-admin. |
+| `--skill-read` | `false` | Allow this key to call skill_search/get/list on the knowledge-skill store. |
+| `--skill-write` | `false` | Allow this key to call skill_propose (draft a skill). Implies --skill-read. |
+| `--workflows` |  | Comma-separated workflow allowlist (omit for 'all project workflows') |
+| `-p`, `--project` |  | Project ID (required) — typically companion-<user> |
+
+## vornikctl companion hints
+
+List the companion hints for a project: state, follow rate, last client contact
+
+List each companion hint for a project: whether it is active, muted,
+inactive (shipped muted), backed off or off, its last 10 firings and follow
+rate, and when each companion key last fetched the catalogue and uploaded
+outcomes. Mute a hint or turn hints off in the project's companion block.
+
+```
+vornikctl companion hints [flags]
+```
+
+| Flag | Default | Description |
+|---|---|---|
+| `--json` | `false` | Emit the report as JSON |
+| `-p`, `--project` |  | Project ID (required) |
+
+## vornikctl companion keys
+
+List companion keys for a project (no secrets shown)
+
+```
+vornikctl companion keys [flags]
+```
+
+| Flag | Default | Description |
+|---|---|---|
+| `--json` | `false` | Emit JSON instead of a table |
+| `-p`, `--project` |  | Project ID (required) |
+
+## vornikctl companion mcp-bridge
+
+Relay MCP over stdio to Vornik with a companion key (run by the assistant, not by you)
+
+Relay newline-delimited MCP JSON-RPC between stdin/stdout and Vornik's
+companion endpoint, authenticated with the companion key file
+(<config dir>/vornik/companion/<name>.key, written by vornikctl companion connect).
+VORNIK_COMPANION_TOKEN, when set, is used instead of the file (a manual run).
+
+Claude Desktop runs this command from its MCP server entry. stdout carries the
+protocol only; diagnostics go to stderr and never include the key.
+
+```
+vornikctl companion mcp-bridge [flags]
+```
+
+| Flag | Default | Description |
+|---|---|---|
+| `--name` | `default` | The companion key's name (2 to 16 lowercase letters and digits) |
+| `--url` |  | Vornik's URL (default $VORNIK_URL, then $VORNIK_API_URL, then http://localhost:8080) |
+
 ## vornikctl config
 
 Inspect and control daemon configuration
@@ -790,6 +951,8 @@ skopeo or systemctl, and no daemon request may run a program):
   image_freshness       Deployment images vs the daemon's build (release record)
 
 Runtime:
+  agent_daemon_reach    Agent containers can reach the daemon: a loopback server.address
+                        refuses every role that is not daemon-only
   env_file_freshness    Flag EnvironmentFile= entries modified after daemon
                         start (systemd reads them only at ExecStart, so
                         post-edit secrets are invisible until restart)
@@ -802,7 +965,7 @@ Security:
   credential_reuse      One secret serving two purposes (database, operator API, LLM provider, ...); states how many it examined, never prints a value
   secrets_permissions   Secrets files/dirs with world-readable permissions
   config_secret_hygiene Config.yaml plaintext secrets or loose permissions (recommends ${ENV_VAR})
-  redaction_seams       Secret scanning of chat_audit_log, chat_system_prompts, step_prompts, task_messages and execution_step_outcomes signals before persist; warns when off, with rows written and unscanned since boot
+  redaction_seams       Secret scanning of chat_audit_log, chat_system_prompts, step_prompts, task_messages, execution_step_outcomes signals and memory_retrieval_audit queries before persist; warns when off, with rows written and unscanned since boot
   synthetic_voice_replies Voice replies with synthesised speech (AI Act Art 50(2)): off by default; warns when on (accepted single-layer marking, with its basis) or when asked for without the acknowledgement
   secret_store_key      Agent credential store: a missing or wrong key while credentials exist is an error
   approver_devices      Agent approvals: a warning when an agent namespace exists with no paired device or no push

@@ -29,13 +29,16 @@ the operator and does not run them itself.
 
 On the Vornik host, as the operator, set up two projects and two keys (the
 setup guide above inlines a complete broker project; grant a Hermes key no
-skill flags and no `companion-*` developer workflows):
+skill flags, and no `companion-*` workflow beyond the review and ingest that
+Vornik's hints ask for):
 
 ```bash
 # the broker project holds the credentials; it has `broker: true` in its config
 vornikctl companion grant -p broker-mail --client hermes --workflows mail-digest --budget-usd 5
-# Hermes's long-term memory, which can never delegate
-vornikctl companion grant -p hermes-memory --client hermes --memory-all --no-delegate
+# Hermes's long-term memory, plus the review and ingest the hints ask for
+# (scaffold it with: vornikctl init project hermes-memory --template companion)
+vornikctl companion grant -p hermes-memory --client hermes --memory-all \
+    --workflows companion-architectural-review,companion-rag-ingest --budget-usd 5
 ```
 
 On the Hermes host:
@@ -170,6 +173,9 @@ the limit for Vornik 2026.10.6.
 | Approval transport | `vornik`: Hermes's own approval prompts answered on the paired phone, once selected |
 | Skill | `vornik-companion:vornik-admin`: how to administer Vornik through the admin setup |
 | Memory provider | `vornik-companion`: `vornik_recall` / `vornik_remember`, prefetch before each turn, mirrors Hermes's curated `MEMORY.md` / `USER.md` writes, removals included |
+| Standing rules (0.23.0) | system prompt section `vornik.rules`: Vornik's working rules, read from the daemon for each new session |
+| Hints (0.23.0, memory key) | hooks `transform_tool_result`, `pre_verify` and a second `pre_llm_call`: the daemon's hint catalogue at the moment of need, a once-per-turn check before finishing, outcomes reported |
+| Tool (0.23.0, memory key) | `vornik_companion_delegate`: a code review or a memory ingest on files the plugin reads (the prompt is optional) |
 
 ## What Vornik keeps, and forgetting (0.8.0)
 
@@ -262,6 +268,18 @@ rule 13):
 - **Before each turn:** the `pre_llm_call` hook asks the daemon which broker
   tasks finished (ids and states only); the memory provider, when enabled,
   prefetches relevant memories.
+- **Hints (0.23.0, with the memory key):** at a session's first turn it
+  fetches the hint catalogue and reports earlier sessions' outcomes (hint
+  ids and whether each was followed, nothing else). After a tool call it may
+  add a hint, marked as Vornik's, to that call's result; the hint's text
+  comes only from the catalogue. It keeps hint ids and counters under
+  `<Hermes home>/vornik-companion/hints/`, never a command, a path or
+  output, and deletes them after 7 days once reported, or 30 days in any
+  case.
+- **Files:** `vornik_companion_delegate` reads the files the model names
+  for a review or an ingest and sends them to Vornik: regular files under
+  Hermes's working directory, never through a symlink, at most 20 files and
+  2 MB. Hermes's own `read_file` reads the same paths.
 - **Memory:** when you select it as Hermes's memory provider, it mirrors
   Hermes's curated `MEMORY.md` and `USER.md` writes to Vornik, and has
   Vornik forget an entry Hermes removes or replaces.

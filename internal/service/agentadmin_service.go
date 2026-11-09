@@ -636,7 +636,7 @@ func (s *agentAdminService) applyAndVerify(ctx context.Context, id, actor string
 			_ = s.proposals.SetStatus(rctx, id, persistence.ProposalStatusRejected, actor)
 			cancel()
 		}
-		unpublished := !resumes && slices.ContainsFunc(preWriteApplyErrors, func(e error) bool { return errors.Is(err, e) })
+		unpublished := applyRefusalUnpublished(err, resumes)
 		switch {
 		case errors.Is(err, controlplane.ErrBusy):
 			return "a task of this project is running; try again when it finishes", unpublished
@@ -660,6 +660,23 @@ func (s *agentAdminService) applyAndVerify(ctx context.Context, id, actor string
 		return "Vornik could not load " + missing + "; the change was rolled back", true
 	}
 	return "", false
+}
+
+// applyRefusalUnpublished reports whether a failed ApplyEngine.Apply
+// provably left the configuration unpublished, so the caller's account
+// transition is aborted rather than kept busy. Two cases:
+//   - a pre-write sentinel with no earlier journal row for the proposal
+//     (audit 2026-10-12 finding A): nothing was written;
+//   - controlplane.ErrReverted: the engine reverted the writes and verified
+//     the restore (the row is REVERTED). That holds whichever attempt wrote
+//     the files, so it needs no !resumes (part 22, §22.2.16a, GitHub #579: a
+//     reload-rejected change left a namespace busy and two approvals
+//     retried for hours).
+func applyRefusalUnpublished(err error, resumes bool) bool {
+	if errors.Is(err, controlplane.ErrReverted) {
+		return true
+	}
+	return !resumes && slices.ContainsFunc(preWriteApplyErrors, func(e error) bool { return errors.Is(err, e) })
 }
 
 // collectAccountRows puts a config change's account metadata into its

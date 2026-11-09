@@ -28,6 +28,7 @@ import (
 	"strconv"
 	"strings"
 
+	"vornik.io/vornik/internal/configlock"
 	"vornik.io/vornik/internal/fieldguard"
 	"vornik.io/vornik/internal/registry"
 	"vornik.io/vornik/internal/safepath"
@@ -311,6 +312,14 @@ func (s *Server) ProjectConfigFormEdit(w http.ResponseWriter, r *http.Request, p
 // rendered form re-shows the operator's input plus an inline
 // error.
 func (s *Server) ProjectConfigFormSave(w http.ResponseWriter, r *http.Request, projectID string) {
+	// The read, write and reload hold the process's config-write lock
+	// (operations design §6.9, GitHub #676).
+	unlock, lerr := configlock.LockAsWriter(r.Context())
+	if lerr != nil {
+		s.refuseNotConfigWriter(w, lerr)
+		return
+	}
+	defer unlock()
 	// Mutations to a project's autonomy gates / tool allowlist / MCP config
 	// require admin scope, exactly as the raw-YAML sibling ProjectConfigSave
 	// does (D2/D3, audit 2026-06-10). This form variant was missed in that

@@ -1,5 +1,5 @@
 name: vornik-companion
-version: 0.22.2
+version: 0.23.0
 requires_hermes: ">=0.21.5"
 manifest_version: 2
 # Declared, not inferred: Hermes classifies an undeclared plugin whose
@@ -14,6 +14,17 @@ description: >-
   no credentials: work that touches mail, calendar, documents or accounts is
   delegated to operator-authored broker workflows on a Vornik daemon, which
   return a bounded, schema-validated result instead of raw access.
+  0.23.0 — Vornik guides how Hermes works, as it guides Claude Code and
+  Codex (GitHub #686). Each new session's system prompt carries Vornik's
+  standing rules, read from the daemon. With the memory key, the daemon's
+  hint catalogue is served at the moment of need: after a commit, a review;
+  after a design is written, an ingest; after a failed test run, a recall.
+  A hint is added to the result of the call that fired it behind a marker
+  (transform_tool_result),
+  only hints Hermes can act on are shown, outcomes are reported, and a
+  pre_verify check asks once before finishing. vornik_companion_delegate
+  starts a review or an ingest on the memory key with files the plugin
+  reads, so their bytes never pass through the model.
   0.22.2 — every request names the plugin in its User-Agent,
   vornik-companion/0.22.2 (hermes). Python's default signature is refused by
   Cloudflare (error 1010), so a daemon behind it was unreachable (GitHub #628).
@@ -152,8 +163,11 @@ provides_tools:
   - vornik_task_explain
   - vornik_recall
   - vornik_remember
+  - vornik_companion_delegate
 provides_hooks:
   - pre_llm_call
+  - transform_tool_result
+  - pre_verify
 
 # Nothing is required: a broker setup sets VORNIK_URL and VORNIK_BROKER_TOKEN,
 # a memory setup adds VORNIK_MEMORY_TOKEN, and an admin setup (hermes vornik
@@ -184,7 +198,7 @@ config_schema:
     env: VORNIK_MEMORY_TOKEN
     required: false
     label: Vornik memory key
-    description: Companion key on a separate memory project, minted with --memory-all --no-delegate. Enables the vornik memory provider.
+    description: Companion key on a separate memory project, minted with --memory-all --workflows companion-architectural-review,companion-rag-ingest (or --no-delegate for no review and ingest). Enables the vornik memory provider and the hints.
 
 optional_env:
   - name: VORNIK_URL
@@ -193,5 +207,5 @@ optional_env:
     description: "Companion key minted on a BROKER project (vornikctl companion grant -p <broker project> --client hermes --workflows ...)"
     secret: true
   - name: VORNIK_MEMORY_TOKEN
-    description: "Optional. Companion key on a separate memory project, minted with --memory-all --no-delegate. Enables the vornik memory provider."
+    description: "Optional. Companion key on a separate memory project, minted with --memory-all --workflows companion-architectural-review,companion-rag-ingest (or --no-delegate for no review and ingest). Enables the vornik memory provider and the hints."
     secret: true

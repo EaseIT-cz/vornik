@@ -74,3 +74,32 @@ func TestMetrics_A5_OpenWhenAuthDisabled(t *testing.T) {
 	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/metrics", nil))
 	assert.Equal(t, http.StatusOK, rec.Code)
 }
+
+// GitHub #445: the scrape-token check goes through apikey.SecretEqual. The
+// behaviour is unchanged: the current and the previous token are accepted; a
+// prefix of the token, a longer string and an empty bearer are refused.
+func TestMetricsScrapeToken_LengthSafe_445(t *testing.T) {
+	cfg := &config.Config{}
+	cfg.Metrics.RequireAdmin = true
+	cfg.Metrics.ScrapeToken = "sk-scrape"
+	cfg.Metrics.PreviousScrapeToken = "sk-scrape-old"
+	cfg.API.AuthEnabled = true
+	h := SetupRoutes(NewServer(
+		WithLogger(zerolog.Nop()),
+		WithConfig(cfg),
+		WithAdminConfig(config.AdminConfig{Enabled: true, AllowedKeys: []string{"sk-admin"}}),
+	), cfg)
+	for bearer, want := range map[string]int{
+		"sk-scrape":          http.StatusOK,
+		"sk-scrape-old":      http.StatusOK,
+		"sk-scr":             http.StatusUnauthorized,
+		"sk-scrape-and-more": http.StatusUnauthorized,
+		"":                   http.StatusUnauthorized,
+	} {
+		rec := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodGet, "/metrics", nil)
+		req.Header.Set("Authorization", "Bearer "+bearer)
+		h.ServeHTTP(rec, req)
+		assert.Equal(t, want, rec.Code, "bearer %q", bearer)
+	}
+}

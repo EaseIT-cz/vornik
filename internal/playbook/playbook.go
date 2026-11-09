@@ -753,6 +753,7 @@ var corpus = map[string]Entry{
 		Cause:        "The agent's call to the model provider failed: transport (curl/connect), a gateway error, or an upstream provider error. The step never got a usable answer, so it failed. NOT a fault in the agent's reasoning.",
 		Suggestions: []string{
 			"Read error_detail: it carries the provider and the status, which decides everything else. A 400 is a request the provider rejected; a connect failure is reachability; a 5xx is theirs.",
+			"UPSTREAM_RATE_LIMITED in error_detail is the provider refusing the account for a usage or rate limit, not the model failing: raise the limit or wait for its reset; the role's modelFallback on another provider carries the work meanwhile.",
 			"Check whether the model is a FALLBACK rung. A rung that fails in under a second failed at container startup, not at inference, and has probably never worked — see `container_start_failed`.",
 			"`vornikctl doctor` covers endpoint reachability; agenthealth is the per-model circuit breaker and will have opened if one model is failing consistently.",
 			"Concentrated on one provider over a window, this is an incident to escalate rather than a task to retry.",

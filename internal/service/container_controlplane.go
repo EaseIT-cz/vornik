@@ -16,6 +16,7 @@ import (
 
 	"gopkg.in/yaml.v3"
 
+	"vornik.io/vornik/internal/configlock"
 	"vornik.io/vornik/internal/configrecon"
 	"vornik.io/vornik/internal/controlplane"
 	"vornik.io/vornik/internal/leaderelection"
@@ -578,6 +579,11 @@ func (c *Container) StartConfigWriterLease(ctx context.Context) error {
 			Msg("config-writer lease is held elsewhere; this daemon will refuse config applies until it acquires the lease")
 	}
 	c.configWriterRunOnce.Do(func() { go elector.Run(ctx) })
+	// From here the interactive config writers refuse on a daemon that does
+	// not hold the lease (GitHub #681, operations-api-contract design §6.10).
+	// Registered with the lease's lifecycle, after the first acquire, and
+	// removed by StopConfigWriterLease.
+	c.registerConfigWriterCheck()
 	return nil
 }
 
@@ -587,6 +593,7 @@ func (c *Container) StopConfigWriterLease(ctx context.Context) error {
 	if c == nil || c.configWriterElector == nil {
 		return nil
 	}
+	configlock.SetWriterCheck(nil) // the fence goes with the lease (#681)
 	return c.configWriterElector.Release(ctx)
 }
 
@@ -1072,12 +1079,25 @@ func (c *Container) startCanaryGuardWorker(ctx context.Context) {
 		Metrics:        metrics,
 		Logger:         c.Logger.With().Str("component", "control-plane").Str("worker", "canary-guard").Logger(),
 	}
-	if elector := c.initWorkerElector("control_plane_canary_guard"); elector != nil {
-		w.LeaderGate = elector
-		elector.BootstrapAcquire(ctx)
-		go elector.Run(ctx)
+	// Led by the config writer, not a lease of its own (GitHub #485, canary
+	// design §9.1): its only mutation is a rollback through the config writer,
+	// so the daemon that may roll back is the one that evaluates. The elector
+	// is the shared instance StartConfigWriterLease already bootstraps and
+	// renews; nothing is started here.
+	if gate := c.canaryGuardLeaderGate(); gate != nil {
+		w.LeaderGate = gate
 	}
 	go w.Run(collectorsCtxFrom(ctx, c))
+}
+
+// canaryGuardLeaderGate is the daemon's config-writer elector, or an untyped
+// nil when there is none. A nil *Elector inside the interface would pass the
+// guard's nil check and then be called.
+func (c *Container) canaryGuardLeaderGate() controlplane.LeaderGate {
+	if e := c.configWriter(); e != nil {
+		return e
+	}
+	return nil
 }
 
 // liveCostAutoApplyEnabled returns the hot-reloadable live value of

@@ -163,6 +163,8 @@ var Contract = map[string]MissBehavior{
 // stated decision rather than an oversight.
 var Excluded = map[string]string{
 	"DBTX.QueryContext":                            "not a repository lookup; returns *sql.Rows",
+	"migrationDB.QueryContext":                     "not a repository lookup; returns *sql.Rows (the migration runner's session, #457)",
+	"migrationDB.BeginTx":                          "not a repository lookup; returns *sql.Tx (the migration runner's session, #457)",
 	"ChunkGraphExtractionRepository.Stats":         "aggregate over a set; always produces a value",
 	"MemoryRetrievalAuditRepository.FeedbackStats": "aggregate over a set; always produces a value",
 	"SkillRepository.Upsert":                       "a write that returns the stored row, not a lookup",

@@ -3,7 +3,7 @@ sources:
     - path: internal/observability/metrics.go
       sha256: 234ef6f7682e18b68f3c23409f7bc920b2b90fe2615860b22f1a5cb032599b9d
     - path: internal/ui/spend.go
-      sha256: 41775f83ae3f73e6d6a67e1e3a1a0aca7e72656fe9b2cfbcc4edf0a8f08c7407
+      sha256: 980bdf0cec7fed8002b6187f9990b2b1b3e287ab77b41c76444c71af5abbe2a6
     - path: internal/reminders/metrics.go
       sha256: 7585889dc820b2e0cd021a52d78a25533d9642ffec45d4dc56373d502df067dc
 ---
@@ -17,10 +17,18 @@ endpoint for your own monitoring stack.
 
 ### Home
 
-The Web UI landing page (`/ui/`) is an operator front page of live tiles:
-active tasks (queued, leased, running), active chats, a countdown to the next
-[autonomy](autonomy.md) evaluation per project, the response cache's savings (calls Vornik answered itself, across all cached entries), a memory
-pipeline snapshot, and an **Inbox** tile for anything that needs you.
+The Web UI landing page (`/ui/`) answers two questions, in order. **Needs
+you** lists what waits for you, with its action: the first rows of the
+inbox (approvals, questions, failed work), requests waiting on your approver
+device, and the error checks of the last doctor report anyone ran, with its
+age. Its count is the inbox's count. **Health** lists problems only: a spend
+spike and readiness checks that are not ok. When nothing waits and nothing is
+unhealthy, the page shows one line, "All clear". Below, **At a glance** keeps
+the statistics: task counts, spend over 24 hours, 7 and 30 days and the month,
+the response cache's savings, active tasks and chats, a countdown to the next
+[autonomy](autonomy.md) evaluation per project, the memory pipeline,
+learning, the judge's last 24 hours, and the model leaderboard. Spend and
+Projects show the spend windows and the autonomy countdown too.
 
 ### Insight
 

@@ -69,6 +69,18 @@ var upstreamInfraMarkers = []string{
 	"Connection refused",
 	"no such host",
 	"i/o timeout",
+	// The throttling and quota markers live in rateLimitMarkers below;
+	// IsUpstreamInfraError reads both lists, so every one is infra too.
+}
+
+// CodeUpstreamRateLimited is the chat proxy's code for an upstream usage or
+// rate limit: HTTP 429 with a fixed message, never the provider's text
+// (agent LLM health breaker design, amendment 2026-11-07, GitHub #665).
+const CodeUpstreamRateLimited = "UPSTREAM_RATE_LIMITED"
+
+// rateLimitMarkers are the text signatures of an upstream usage or rate
+// limit. One list serves IsUpstreamRateLimited and IsUpstreamInfraError.
+var rateLimitMarkers = []string{
 	// Throttling and quota exhaustion arriving as TEXT rather than a typed
 	// status. isInfraStatus already covers a typed 429, but an agent's
 	// result.json carries the provider's body as a string, and these are the
@@ -88,6 +100,35 @@ var upstreamInfraMarkers = []string{
 	"insufficient_quota",
 	"usage limit",
 	"ThrottlingException", // Bedrock
+	CodeUpstreamRateLimited,
+}
+
+// IsUpstreamRateLimited reports whether err is the provider refusing the call
+// for a usage or rate limit: a typed 429, or a rateLimitMarkers phrase in the
+// text. The chat proxy answers CodeUpstreamRateLimited for it instead of the
+// generic PROVIDER_ERROR, so the cause reaches the step's error_detail.
+func IsUpstreamRateLimited(err error) bool {
+	if err == nil {
+		return false
+	}
+	var ge *GatewayError
+	if errors.As(err, &ge) && ge.Status == 429 {
+		return true
+	}
+	var rhe *retryableHTTPError
+	if errors.As(err, &rhe) && rhe.StatusCode == 429 {
+		return true
+	}
+	return containsAny(err.Error(), rateLimitMarkers)
+}
+
+func containsAny(s string, markers []string) bool {
+	for _, m := range markers {
+		if strings.Contains(s, m) {
+			return true
+		}
+	}
+	return false
 }
 
 // IsUpstreamInfraError reports whether err represents a transport/upstream
@@ -132,12 +173,7 @@ func IsUpstreamInfraError(err error) bool {
 		return isInfraStatus(rhe.StatusCode)
 	}
 	msg := err.Error()
-	for _, m := range upstreamInfraMarkers {
-		if strings.Contains(msg, m) {
-			return true
-		}
-	}
-	return false
+	return containsAny(msg, upstreamInfraMarkers) || containsAny(msg, rateLimitMarkers)
 }
 
 // isInfraStatus reports whether an HTTP status is a provider-health failure:

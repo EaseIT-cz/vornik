@@ -133,6 +133,20 @@ func (f *retentionFixture) projectSteps() {
 	refusal("aar-thr-minus-1h", floor.Add(-time.Hour), false)
 	refusal("aar-400d", f.daysAgo(400), false)
 
+	// GitHub #549 (2026-11-08): memory_retrieval_audit follows the tool-audit
+	// window, floor included (retention design §5a). Its query text is
+	// retained personal data with no horizon before this.
+	retrieval := func(name string, at time.Time, keep bool) {
+		id := uniqueID(name)
+		f.seed("memory_retrieval_audit", "id", id, keep, `INSERT INTO memory_retrieval_audit
+			(id, project_id, query, retrieved_at) VALUES ($1, $2, 'what did the plumber say', $3)`,
+			id, project, f.seedTime(at))
+	}
+	retrieval("mra-29d", f.daysAgo(29), true)
+	retrieval("mra-thr-plus-1h", floor.Add(time.Hour), true)
+	retrieval("mra-thr-minus-1h", floor.Add(-time.Hour), false)
+	retrieval("mra-400d", f.daysAgo(400), false)
+
 	evaluation := func(name, decision string, at time.Time, keep bool) {
 		id := uniqueID(name)
 		f.seed("memory_policy_evaluations", "id", id, keep, `INSERT INTO memory_policy_evaluations
@@ -170,6 +184,7 @@ func (f *retentionFixture) projectSteps() {
 	}{
 		{"tool_audit_log", preview.ToolAudit, swept.ToolAudit, 3},
 		{"agent_admin_refusals", preview.AgentAdminRefusals, swept.AgentAdminRefusals, 2},
+		{"memory_retrieval_audit", preview.MemoryRetrievalAudit, swept.MemoryRetrievalAudit, 2},
 		{"allow evaluations", preview.MemoryPolicyEvalAllow, swept.MemoryPolicyEvalAllow, 2},
 		{"block evaluations", preview.MemoryPolicyEvalBlock, swept.MemoryPolicyEvalBlock, 1},
 		{"artifacts", preview.Artifacts, swept.Artifacts, 2},

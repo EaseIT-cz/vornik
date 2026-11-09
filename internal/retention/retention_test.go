@@ -593,6 +593,7 @@ func TestSweep_OptInFieldsOffSkipsExtraQueries(t *testing.T) {
 	mock.ExpectQuery("SELECT COUNT.*FROM task_llm_usage").WillReturnRows(sqlmock.NewRows([]string{"n"}).AddRow(0))
 	mock.ExpectQuery("SELECT COUNT.*FROM tool_audit_log").WillReturnRows(sqlmock.NewRows([]string{"n"}).AddRow(0))
 	mock.ExpectQuery("SELECT COUNT.*FROM agent_admin_refusals").WillReturnRows(sqlmock.NewRows([]string{"n"}).AddRow(0))
+	mock.ExpectQuery("SELECT COUNT.*FROM memory_retrieval_audit").WillReturnRows(sqlmock.NewRows([]string{"n"}).AddRow(0)) // #549
 	mock.ExpectQuery("SELECT id, storage_path FROM artifacts").
 		WillReturnRows(sqlmock.NewRows([]string{"id", "storage_path"}))
 	mock.ExpectQuery("SELECT COUNT.*FROM tasks").WillReturnRows(sqlmock.NewRows([]string{"n"}).AddRow(0))
@@ -646,6 +647,7 @@ func TestSweep_OptInFieldsOnIssuesExtraQueries(t *testing.T) {
 	mock.ExpectQuery("SELECT COUNT.*FROM task_llm_usage").WillReturnRows(sqlmock.NewRows([]string{"n"}).AddRow(0))
 	mock.ExpectQuery("SELECT COUNT.*FROM tool_audit_log").WillReturnRows(sqlmock.NewRows([]string{"n"}).AddRow(0))
 	mock.ExpectQuery("SELECT COUNT.*FROM agent_admin_refusals").WillReturnRows(sqlmock.NewRows([]string{"n"}).AddRow(0))
+	mock.ExpectQuery("SELECT COUNT.*FROM memory_retrieval_audit").WillReturnRows(sqlmock.NewRows([]string{"n"}).AddRow(0)) // #549
 	mock.ExpectQuery("SELECT id, storage_path FROM artifacts").
 		WillReturnRows(sqlmock.NewRows([]string{"id", "storage_path"}))
 	mock.ExpectQuery("SELECT COUNT.*FROM tasks").WillReturnRows(sqlmock.NewRows([]string{"n"}).AddRow(0))

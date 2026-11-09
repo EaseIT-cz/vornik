@@ -64,7 +64,7 @@ func TestTaskWillRetry(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			got := e.taskWillRetry(tc.task)
+			got := e.taskWillRetry(tc.task, false)
 			if got != tc.wantRetry {
 				t.Errorf("taskWillRetry: got %v, want %v (Attempt=%d, MaxAttempts=%d)",
 					got, tc.wantRetry,

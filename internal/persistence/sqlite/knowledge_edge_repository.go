@@ -51,6 +51,32 @@ func (r *KnowledgeEdgeRepository) UpsertEdge(ctx context.Context, e *persistence
 		e.CreatedAt = time.Now().UTC()
 	}
 
+	// The read and the merge-write are one transaction (GitHub #451's
+	// sibling, #452): SQLite begins write transactions IMMEDIATE (the DSN's
+	// _txlock), so a second upsert of the same edge waits for this one and
+	// merges onto its result instead of overwriting it. Inside a caller's
+	// transaction, that one serialises and owns commit.
+	tx, ok, err := persistence.BeginTx(ctx, r.db, nil)
+	if err != nil {
+		return err
+	}
+	if !ok {
+		return upsertEdgeOn(ctx, r.db, e)
+	}
+	defer func() { _ = tx.Rollback() }()
+	if err := upsertEdgeOn(ctx, tx, e); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+// edgeMergeReadHook, when set by a test, runs between UpsertEdge's read of
+// the existing row and its write: the seam that makes the lost-update
+// interleaving of GitHub #452 deterministic. Nil in the daemon.
+var edgeMergeReadHook func()
+
+// upsertEdgeOn is UpsertEdge's read-merge-write on q.
+func upsertEdgeOn(ctx context.Context, q DBTX, e *persistence.KnowledgeEdge) error {
 	// Look up an existing row on the merge key.
 	var (
 		existingID           string
@@ -59,7 +85,7 @@ func (r *KnowledgeEdgeRepository) UpsertEdge(ctx context.Context, e *persistence
 		existingConfidence   float32
 		existingFaithfulness sql.NullFloat64
 	)
-	err := r.db.QueryRowContext(ctx, `
+	err := q.QueryRowContext(ctx, `
 		SELECT id, source_chunks, properties, confidence, faithfulness
 		FROM knowledge_edges
 		WHERE project_id = ? AND from_entity = ? AND predicate = ? AND to_entity = ?`,
@@ -68,8 +94,11 @@ func (r *KnowledgeEdgeRepository) UpsertEdge(ctx context.Context, e *persistence
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return err
 	}
+	if edgeMergeReadHook != nil {
+		edgeMergeReadHook()
+	}
 	if errors.Is(err, sql.ErrNoRows) {
-		_, ierr := r.db.ExecContext(ctx, `
+		_, ierr := q.ExecContext(ctx, `
 			INSERT INTO knowledge_edges (
 				id, project_id, from_entity, to_entity, predicate,
 				properties, source_chunks, extracted_by, confidence, faithfulness,
@@ -115,7 +144,7 @@ func (r *KnowledgeEdgeRepository) UpsertEdge(ctx context.Context, e *persistence
 		buf, _ := json.Marshal(existing)
 		mergedProps = buf
 	}
-	_, err = r.db.ExecContext(ctx, `
+	_, err = q.ExecContext(ctx, `
 		UPDATE knowledge_edges
 		SET source_chunks = ?,
 		    properties    = ?,

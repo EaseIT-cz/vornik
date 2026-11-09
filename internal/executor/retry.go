@@ -467,6 +467,12 @@ func isModelShapedFailure(err error) bool {
 	if strings.Contains(msg, "PROVIDER_ERROR") {
 		return true
 	}
+	// The proxy's code for an upstream usage or rate limit (GitHub #665): it
+	// used to arrive as PROVIDER_ERROR, and a fallback on another provider is
+	// still what carries the work.
+	if strings.Contains(msg, chat.CodeUpstreamRateLimited) {
+		return true
+	}
 	// The agent failed the step because every response was cut off at the
 	// output cap (LLD 09 §8.4). Identical inputs reproduce it; a different model
 	// is the one input that changes. Matched on the daemon's message only,
@@ -493,6 +499,17 @@ func isModelShapedFailure(err error) bool {
 // so the executor skips the infra ladder and fails over immediately.
 func isModelUnhealthyFailure(err error) bool {
 	return chat.IsModelUnhealthyFailure(err)
+}
+
+// attemptNotSpent reports whether the failure that ended an attempt reached no
+// model, so the attempt keeps its retry budget (permanent-failure design
+// §8.8.5, GitHub #492). Only the TYPED reject counts: the agent-health gate
+// and the in-daemon chat gate raise *chat.ModelUnhealthyError before any
+// request leaves the daemon. The "MODEL_UNHEALTHY" marker an agent reports in
+// result.json comes from a container that ran and may have reached the model
+// on earlier calls, so it spends, as any other failure does.
+func attemptNotSpent(err error) bool {
+	return chat.IsModelUnhealthy(err)
 }
 
 // isPersistentTimeoutFailure reports whether err is an infra-retry-EXHAUSTED

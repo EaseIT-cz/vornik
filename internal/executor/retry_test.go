@@ -88,6 +88,9 @@ func TestIsModelShapedFailure_FallbackTriggers(t *testing.T) {
 		{"plausibility", errors.New(`plausibility violation: feedback empty`), true},
 		{"iteration limit", errors.New(`agent reported FAILED status: Tool iteration limit (50) reached`), true},
 		{"provider error", errors.New(`PROVIDER_ERROR: upstream gave up after 3 attempts`), true},
+		// GitHub #665: the proxy's code for an upstream usage or rate limit.
+		// A fallback on another provider is what carries the work.
+		{"upstream rate limit", errors.New(`agent reported FAILED status: LLM call failed: UPSTREAM_RATE_LIMITED: the model provider refused the call for a usage or rate limit`), true},
 		// Outside the model-shaped class — the agent's claim was a lie,
 		// no different model produces a different filesystem.
 		{"agent verification", errors.New(`agent claimed 1 file(s) but verification failed: x.md does not exist`), false},

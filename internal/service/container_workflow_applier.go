@@ -152,6 +152,7 @@ func newWorkflowApplier(
 	reloader *config.ConfigReloader,
 	deployedConfigDir string,
 	logger *zerolog.Logger,
+	writerGate any,
 ) *workflowapply.Applier {
 	if proposals == nil || deployedConfigDir == "" {
 		return nil
@@ -159,7 +160,7 @@ func newWorkflowApplier(
 	return workflowapply.NewApplier(
 		proposals, newFSWorkflowWriter(deployedConfigDir),
 		&configReloadAdapter{reloader: reloader},
-		workflowapply.ApplierConfig{Logger: logger},
+		workflowapply.ApplierConfig{Logger: logger, LeaderGate: writerGate},
 	)
 }
 

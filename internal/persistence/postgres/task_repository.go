@@ -632,6 +632,46 @@ func (r *TaskRepository) ListRetryInFlight(ctx context.Context, projectIDs []str
 	return tasks, mapDBError(rows.Err())
 }
 
+// ListApprovalsClosedSince returns approvals the cancel cascade closed
+// (GitHub #490); see the interface for the contract.
+func (r *TaskRepository) ListApprovalsClosedSince(ctx context.Context, projectIDs []string, since time.Time) ([]*persistence.Task, error) {
+	query := `
+		SELECT id, project_id, workflow_id, idempotency_key, parent_task_id, creation_source,
+		       delegation_mode, status, priority, payload, dependencies,
+		       lease_id, leased_at, leased_by, lease_expires_at,
+		       attempt, max_attempts, last_error, last_error_class, created_at, updated_at,
+		       brief_amended_at, current_phase, expected_by, closed_at, closed_by, message_count, open_checkpoint_id, chat_turn_id, budget_usd, created_by_api_key_id, created_by_actor, goal_origin
+		FROM tasks
+		WHERE status = 'CANCELLED'
+		  AND last_error LIKE $1
+		  AND updated_at >= $2`
+	args := []any{persistence.ApprovalClosedPrefix + "%", since}
+	if len(projectIDs) > 0 {
+		ph := make([]string, len(projectIDs))
+		for i, id := range projectIDs {
+			ph[i] = fmt.Sprintf("$%d", i+3)
+			args = append(args, id)
+		}
+		query += " AND project_id IN (" + strings.Join(ph, ", ") + ")"
+	}
+	query += " ORDER BY updated_at DESC LIMIT 50"
+
+	rows, err := r.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, mapDBError(err)
+	}
+	defer func() { _ = rows.Close() }()
+	var tasks []*persistence.Task
+	for rows.Next() {
+		t, serr := scanTask(rows)
+		if serr != nil {
+			return nil, serr
+		}
+		tasks = append(tasks, t)
+	}
+	return tasks, mapDBError(rows.Err())
+}
+
 // LeaseTask atomically claims a queued task.
 // When ProjectConcurrencyLimits is set, projects that already have the
 // maximum number of active tasks are excluded from consideration.

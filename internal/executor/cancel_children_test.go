@@ -2,6 +2,7 @@ package executor
 
 import (
 	"context"
+	"slices"
 	"sort"
 	"testing"
 
@@ -89,6 +90,11 @@ func TestCancelChildren_ConditionalCoversWaitingForChildren(t *testing.T) {
 			return nil, nil
 		},
 		TransitionConditionalFunc: func(_ context.Context, _ string, from []persistence.TaskStatus, to persistence.TaskStatus, _ persistence.TransitionOpts) (bool, error) {
+			// Moves only from its from-set, as the repositories do: the
+			// cascade's first write (#490) is from AWAITING_APPROVAL alone.
+			if !slices.Contains(from, child.Status) {
+				return false, nil
+			}
 			seenFrom = from
 			child.Status = to
 			return true, nil

@@ -985,6 +985,7 @@ func (c *Container) initHTTPServer() error {
 	workflowApplier := newWorkflowApplier(
 		proposalsRepo, c.ConfigReloader,
 		resolveRegistryConfigDir(c.ConfigPath), &c.Logger,
+		c.workflowWriterGate(),
 	)
 	if workflowApplier != nil {
 		apiOpts = append(apiOpts, api.WithWorkflowApplier(&workflowApplierAdapter{a: workflowApplier}))
@@ -1122,6 +1123,7 @@ func (c *Container) initHTTPServer() error {
 	workflowRollbacker := newWorkflowRollbacker(
 		proposalsRepo, c.ConfigReloader,
 		resolveRegistryConfigDir(c.ConfigPath),
+		c.workflowWriterGate(),
 	)
 	if workflowRollbacker != nil {
 		apiOpts = append(apiOpts, api.WithWorkflowRollbacker(&workflowRollbackerAdapter{r: workflowRollbacker}))
@@ -2143,6 +2145,10 @@ func (c *Container) initHTTPServer() error {
 		uiOpts = append(uiOpts, ui.WithAgentApprovals(func(ctx context.Context) ([]persistence.AgentApprovalRequestRow, error) {
 			return c.approverDeviceService().ListPending(ctx)
 		}))
+	}
+	// The overview's doctor line: the last report's error checks (GitHub #603).
+	if c.doctorHandlers != nil {
+		uiOpts = append(uiOpts, ui.WithLastDoctorErrors(c.doctorHandlers.LastReportErrors))
 	}
 	// /ui/admin/agents (agent-administered Vornik plan P6.5).
 	if v := c.agentsView(); v != nil {

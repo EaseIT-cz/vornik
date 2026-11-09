@@ -5,13 +5,13 @@ sources:
     - path: internal/api/admin_class_auth.go
       sha256: 8f952ecfcc872c4f41b6541e48fa1c80ce79728d9eb95d14c7c27b96a8ab8c9b
     - path: internal/spawn/spawn.go
-      sha256: b2764167a90d022278cccde6d60fb4f5663d2b12b64e644fda9f0b1cec5c0b0d
+      sha256: f99a83e5cde3f5ba2a2a3f0428069be713ab70fd8c0501c32b0d43201bb22533
     - path: internal/sandboxtool/sandboxtool.go
       sha256: 98e975950b0e5be019b7801c4f9b9138d231ab586a3e170f46b89f45dc4e0272
     - path: internal/runtime/manager.go
-      sha256: 682736916139aa3bf48466246051bd25f25d7c253a0ef12f59ed307aaf04dfaf
+      sha256: 9560a3ec086c541b538060b355b8ddf1c96ac3e18437fdf86d4c68cea89101db
     - path: internal/secrets/secrets.go
-      sha256: 34037e9a4065b1f33117b7695f1208abbb814f4f4e3358eefa7e2a3755b2661a
+      sha256: fbfba932278463c3455ca9832bdbac634d355b3137b3225ba64cb5eac78d230e
     - path: internal/netguard/netguard.go
       sha256: 7c26dd6c35779aa45022cdf5f7fa5f7d0809628de516b3a6fc21977e27dcf331
     - path: internal/outputguard/outputguard.go
@@ -35,7 +35,7 @@ sources:
 ---
 # Security model
 
-**Last reviewed:** 6 November 2026, against `main` before release 2026.11.2.
+**Last reviewed:** 9 November 2026, against `main` before release 2026.11.3.
 
 What Vornik defends against, its trust boundaries, and the controls in place
 today, with what each does **not** cover. It applies to both editions;
@@ -128,7 +128,13 @@ connected assistants, and upstream services.
   the EU AI Act Art 50(2) detection routes. The quickstart configuration
   requires an API key. Credentials are checked by one ordered chain
   (session, signed webhook, database keys, static keys) that stops at the
-  first refusal. Key comparison is constant-time.
+  first refusal. Key comparison is constant-time, and so are the other
+  secret checks (the metrics scrape token, the broker's internal key, admin
+  key rotation): they compare fixed-length digests, so timing reveals
+  neither a secret's content nor its length.
+- **The Ollama-compatible API never forwards a provider's error text.** A
+  failed upstream call answers with a closed error class; the provider's own
+  message, which can quote the request, stays in the daemon's log.
 - **The detection routes are read-only and say little.** Only three exact
   shapes are public: `/provenance/<64 lowercase hex>`, `/provenance/verify`
   and `/.well-known/vornik-ai-mark-keys`. They answer whether exact content
@@ -299,7 +305,18 @@ connected assistants, and upstream services.
 - The configuration assistant sees a redacted snapshot: secret-named values
   and lists are withheld, and a file it cannot screen fully (a secret reached
   through a YAML alias, more than one YAML document) is refused rather than
-  shown.
+  shown. A tokenised calendar URL (a Google Calendar secret address, an
+  Outlook published calendar, an iCloud public calendar) anywhere in a
+  project's files is refused until it moves into a secret; other providers'
+  feed URLs are not recognised.
+- **One daemon writes configuration.** Interactive writers (setup, key
+  rotation, the console's edit pages, workflow proposals) change files only
+  on the daemon that holds the config-writer lease; another daemon answers
+  409 and changes nothing.
+- **A reload never drops a running project it cannot read.** When a running
+  project's file stops decoding, the reload keeps that project's last good
+  definition, applies every other change, and reports the refused file;
+  `vornikctl config reload` exits non-zero.
 
 ### Identity, chat channels and who sees what
 
@@ -329,6 +346,10 @@ connected assistants, and upstream services.
 - An approval binds to the hash of the exact arguments shown, computed over
   a canonical form that refuses duplicate keys, so the approver cannot be
   shown one thing and approve another. Choice cards accept only a choice.
+- An approved change that fails to apply for a reason that may pass (a busy
+  project, for example) is retried at most 60 times, about an hour. It is then
+  recorded as failed, and the requester is told, so a request never waits
+  unseen for ever.
 - Approval notices pushed to a channel carry no content, only a link.
 - A paired device can also receive browser notifications (Web Push). A
   notification names the event, never what is asked. It is encrypted to that
@@ -368,7 +389,10 @@ connected assistants, and upstream services.
   a worktree fails before any container starts.
 - Inputs are staged only from the task's own project; outputs are harvested
   through one pinned directory handle, so a running agent cannot swap files
-  under the daemon. Symlinks that leave the workspace are refused.
+  under the daemon. Symlinks that leave the workspace are refused. The read
+  tools (`file_read`, `read_many_files`) open through the workspace root and
+  check the opened file, as the write tools do, so a file swapped for a
+  symlink cannot be read outside the workspace.
 - **Credentials stay out of containers.** Third-party API credentials live in
   the gateway, MCP credentials in the daemon, and an agent's tool arguments
   carry none.
@@ -414,7 +438,11 @@ connected assistants, and upstream services.
   untrusted content. In `enforce` mode, a write by a tainted task parks for
   operator review with its sources attached. The default mode is `advisory`.
 - **Memory ingest gates** run on every deposit: secret scan (a mostly
-  redacted "secret dump" is rejected outright), per-project deny patterns
+  redacted "secret dump" is rejected outright; besides the typed patterns,
+  the labelled `key: value` shape and long high-entropy runs, memory alone
+  also catches a random 24 to 39 character token with mixed case and digits
+  and no label, except a Google Places ID; a token of one case, without
+  digits, or shorter is not caught), per-project deny patterns
   (substring, not regex), optional injection detection, dedup and size
   checks. A memory firewall attaches sensitivity, role, purpose and expiry
   policy to chunks and audits every retrieval decision. A connected
@@ -437,6 +465,8 @@ connected assistants, and upstream services.
 - **Outbound tool arguments are scanned too.** For an assistant-administered
   project a credential-shaped value in a tool argument blocks the call; a
   refusal names the field, never the value.
+- **Memory recall queries are scanned before they are stored.** The recall
+  audit keeps the query text in its redacted form.
 - `vornikctl secrets scan-history` rescans stored history (tool audit, step
   prompts, transcripts, task messages) and redacts what it finds.
 - Credentials an assistant provides are sealed at rest with a key file the
@@ -504,6 +534,16 @@ connected assistants, and upstream services.
   and refuses companion keys.
 
   A memory key can be minted without any task tools.
+- **The plugins keep hint state only in the plugin's own data directory**
+  (or the user's runtime directory when the user owns it), never in a shared
+  temp path, and refuse a state directory that is a symlink or that another
+  user owns. A hint's text comes only from the catalogue; nothing from a
+  tool's input or output is put into it. The Hermes plugin (0.23.0) reads,
+  for a review or an ingest, only the files the model names: regular files
+  under Hermes's task workspace, never through a symlink, checked again on
+  the opened file, at most 20 files and 2 MB. Its memory key may start the
+  review and ingest workflows in its own project within the key's budget;
+  neither reaches a credential, mail or the broker project.
 - **Broker projects** let an assistant ask for privileged work (read my mail,
   check my calendar) without ever holding the credentials or seeing raw
   data. A broker workflow takes typed, bounded inputs and returns one
@@ -525,6 +565,10 @@ connected assistants, and upstream services.
 
 ### Data protection
 
+- **Mirrored repository files follow their disclosure marking.** A project
+  may mirror Markdown files from its repository into memory; a file marked
+  `disclosure: never` is not mirrored, and a mirrored file re-marked `never`
+  leaves the corpus at the next sweep.
 - **Retention** windows per data class, with floors for audit evidence
   (tool audit is kept at least six months, as the AI Act requires deployers
   to keep logs) and an AI-disclosure log that is never pruned.
@@ -609,4 +653,4 @@ connected assistants, and upstream services.
 See [Security policy](security.md) for how to report a vulnerability and
 which versions are supported.
 
-<!-- summary-reviewed-through: 2026.11.2 -->
+<!-- summary-reviewed-through: 2026.11.3 -->

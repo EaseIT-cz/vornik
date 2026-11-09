@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"vornik.io/vornik/internal/configlock"
 
 	"github.com/rs/zerolog"
 	"gopkg.in/yaml.v3"
@@ -91,6 +92,7 @@ func newAgentAdminFixtureWith(t *testing.T, adjust func(*config.Config)) *agentA
 	if err := c.StartConfigWriterLease(leaseCtx); err != nil { // as the daemon does at boot
 		t.Fatal(err)
 	}
+	t.Cleanup(func() { configlock.SetWriterCheck(nil) }) // the #681 fence goes with the lease
 	ctx := context.Background()
 	devices := c.approverDeviceService()
 	code, _, _ := devices.StartPairing(ctx, "Phone")

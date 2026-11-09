@@ -32,6 +32,7 @@ package apikey
 import (
 	"crypto/rand"
 	"crypto/sha256"
+	"crypto/subtle"
 	"encoding/base64"
 	"encoding/hex"
 	"errors"
@@ -161,6 +162,20 @@ func Parse(key string) (projectID, random string, err error) {
 func Hash(key string) string {
 	sum := sha256.Sum256([]byte(key))
 	return hex.EncodeToString(sum[:])
+}
+
+// SecretEqual reports whether a presented secret equals a stored one without
+// telling the caller, by timing, the stored secret's length:
+// subtle.ConstantTimeCompare returns at once on a length mismatch, so both
+// sides are hashed to 32 bytes first (GitHub #445, pluggable-auth-design.md).
+// An empty side never matches, so an unset secret accepts nothing.
+func SecretEqual(presented, stored string) bool {
+	if presented == "" || stored == "" {
+		return false
+	}
+	p := sha256.Sum256([]byte(presented))
+	s := sha256.Sum256([]byte(stored))
+	return subtle.ConstantTimeCompare(p[:], s[:]) == 1
 }
 
 // DisplayPrefix extracts the first PrefixDisplayLen characters of

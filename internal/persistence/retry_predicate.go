@@ -82,3 +82,15 @@ var terminalFailureClasses = map[string]bool{
 func IsTerminalFailureClass(class string) bool {
 	return terminalFailureClasses[class]
 }
+
+// TaskRetryAfterUnspentAttempt answers "does this task get another attempt"
+// for a failed attempt that did not spend its budget: one whose model call the
+// circuit fast-rejected, so nothing reached a model (permanent-failure design
+// §8.8.5, GitHub #492). It keeps every rule of TaskShouldRetry that is not the
+// budget: a terminal class, a class set to `fail`, and retries disabled.
+func TaskRetryAfterUnspentAttempt(maxAttempts int, class string) bool {
+	if IsTerminalFailureClass(class) || TaskRetryModeFor(class) == TaskRetryFail {
+		return false
+	}
+	return maxAttempts > 0
+}

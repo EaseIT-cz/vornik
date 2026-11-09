@@ -12,6 +12,8 @@ import (
 	"fmt"
 
 	"vornik.io/vornik/internal/config"
+	"vornik.io/vornik/internal/configlock"
+	"vornik.io/vornik/internal/leaderelection"
 	"vornik.io/vornik/internal/persistence"
 	"vornik.io/vornik/internal/workflowapply"
 )
@@ -33,6 +35,7 @@ func newWorkflowRollbacker(
 	proposals persistence.WorkflowProposalRepository,
 	reloader *config.ConfigReloader,
 	deployedConfigDir string,
+	writerGate any,
 ) *workflowapply.Rollbacker {
 	if proposals == nil || deployedConfigDir == "" {
 		return nil
@@ -41,6 +44,27 @@ func newWorkflowRollbacker(
 		proposals,
 		newFSWorkflowWriter(deployedConfigDir),
 		&configReloadAdapter{reloader: reloader},
-		workflowapply.RollbackerConfig{},
+		workflowapply.RollbackerConfig{LeaderGate: writerGate},
 	)
+}
+
+// workflowWriterGate is the config-writer elector the workflow applier and
+// rollbacker fence on (GitHub #462), or an untyped nil when there is none: a
+// nil *Elector inside an interface would satisfy the fence's interface check
+// and be called.
+func (c *Container) workflowWriterGate() any {
+	if e := c.configWriter(); e != nil {
+		return e
+	}
+	return nil
+}
+
+// registerConfigWriterCheck makes configlock.LockAsWriter refuse on a daemon
+// that does not hold the config_writer lease, with the same gate and rule as
+// the workflow fence (GitHub #681, operations-api-contract design §6.10). A
+// nil gate (one daemon, no election) allows.
+func (c *Container) registerConfigWriterCheck() {
+	configlock.SetWriterCheck(func(ctx context.Context) (bool, string) {
+		return leaderelection.DangerousWriteAllowed(ctx, c.workflowWriterGate())
+	})
 }

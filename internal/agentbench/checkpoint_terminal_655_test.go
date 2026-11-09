@@ -181,8 +181,12 @@ func TestSQLTraceStore_ReadsTheTerminalAndItsRecoveryFlag_655(t *testing.T) {
 // Both §12.29 rules change what a journal's succeeded means and what a task
 // starts from, so journals either side must not compare.
 func TestHarnessVersionMovesForTheCheckpointRule_655(t *testing.T) {
-	if HarnessVersion != "10" {
-		t.Fatalf("HarnessVersion = %q, want 10 (benchmark LLD §12.29)", HarnessVersion)
+	// 10 for §12.29; 11 since §12.30 replaced the history too.
+	if HarnessVersion != "11" {
+		t.Fatalf("HarnessVersion = %q, want 11 (benchmark LLD §12.29, §12.30)", HarnessVersion)
+	}
+	if WorkspaceResetTargetsStateAndHistory == WorkspaceResetTargetsAndState {
+		t.Fatal("the reset that also replaces the history needs its own provenance value")
 	}
 	if WorkspaceResetTargetsAndState == WorkspaceResetTargets {
 		t.Fatal("the reset that also clears workflow state needs its own provenance value")

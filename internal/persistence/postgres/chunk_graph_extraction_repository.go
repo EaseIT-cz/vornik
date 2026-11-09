@@ -56,7 +56,8 @@ func (r *ChunkGraphExtractionRepository) MarkExtracted(ctx context.Context, chun
 		UPDATE project_memory_chunks
 		SET    needs_graph_extraction = FALSE,
 		       graph_extraction_attempts = 0,
-		       graph_extraction_error = ''
+		       graph_extraction_error = '',
+		       graph_transient_failures = 0
 		WHERE  id = $1`, chunkID)
 	return mapDBError(err)
 }
@@ -80,7 +81,9 @@ func (r *ChunkGraphExtractionRepository) RecordExtractionFailure(ctx context.Con
 		UPDATE project_memory_chunks
 		SET    graph_extraction_attempts = graph_extraction_attempts + 1,
 		       graph_extraction_error    = $2,
-		       needs_graph_extraction    = (graph_extraction_attempts + 1 < $3)
+		       needs_graph_extraction    = (graph_extraction_attempts + 1 < $3),
+		       graph_transient_failures  = CASE WHEN graph_extraction_attempts + 1 < $3
+		                                        THEN graph_transient_failures ELSE 0 END
 		WHERE  id = $1
 		RETURNING graph_extraction_attempts, needs_graph_extraction`,
 		chunkID, reason, maxAttempts).Scan(&attempts, &stillFlagged)
@@ -88,6 +91,36 @@ func (r *ChunkGraphExtractionRepository) RecordExtractionFailure(ctx context.Con
 		return 0, false, mapDBError(err)
 	}
 	return attempts, !stillFlagged, nil
+}
+
+// AbsorbTransientFailure spends one uncounted retry when the chunk has one
+// left (LLD §3.3d, GitHub #493). The guard and the increment are one UPDATE.
+func (r *ChunkGraphExtractionRepository) AbsorbTransientFailure(ctx context.Context, chunkID string, maxTransient int) (bool, error) {
+	if chunkID == "" {
+		return false, fmt.Errorf("AbsorbTransientFailure: chunk_id required")
+	}
+	res, err := r.db.ExecContext(ctx, `
+		UPDATE project_memory_chunks
+		SET    graph_transient_failures = graph_transient_failures + 1
+		WHERE  id = $1 AND graph_transient_failures < $2`, chunkID, maxTransient)
+	if err != nil {
+		return false, mapDBError(err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return false, mapDBError(err)
+	}
+	return n == 1, nil
+}
+
+// ResetTransientFailures zeroes the chunk's uncounted-retry count.
+func (r *ChunkGraphExtractionRepository) ResetTransientFailures(ctx context.Context, chunkID string) error {
+	if chunkID == "" {
+		return fmt.Errorf("ResetTransientFailures: chunk_id required")
+	}
+	_, err := r.db.ExecContext(ctx, `
+		UPDATE project_memory_chunks SET graph_transient_failures = 0 WHERE id = $1`, chunkID)
+	return mapDBError(err)
 }
 
 func (r *ChunkGraphExtractionRepository) PendingCount(ctx context.Context) (int, error) {

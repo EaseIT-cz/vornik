@@ -237,4 +237,4 @@ Contributions welcome under a [CLA](docs/public/contributing.md)
 
 </div>
 
-<!-- summary-reviewed-through: 2026.11.2 -->
+<!-- summary-reviewed-through: 2026.11.3 -->

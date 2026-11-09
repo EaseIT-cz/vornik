@@ -1731,7 +1731,7 @@ type RetentionConfig struct {
 	Interval string `yaml:"interval" doc:"How often the sweeper runs."`
 	// Default retention windows in days. Zero → compiled default.
 	TaskLLMUsageDays int `yaml:"task_llm_usage_days" doc:"Days to keep per-task LLM usage rows."`
-	ToolAuditDays    int `yaml:"tool_audit_days" doc:"Days to keep tool-call audit rows; clamped up to tool_audit_floor_days."`
+	ToolAuditDays    int `yaml:"tool_audit_days" doc:"Days to keep tool-call audit rows and memory recall audit rows; clamped up to tool_audit_floor_days."`
 	// ToolAuditFloorDays is the minimum tool_audit_log window, overriding any
 	// lower daemon or project tool_audit_days. 0 → 180 (six months, EU AI Act
 	// Art 26(6)). A larger value raises the floor; a smaller one is ignored

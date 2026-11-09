@@ -18,6 +18,7 @@ import (
 	"strings"
 	"time"
 
+	"vornik.io/vornik/internal/configlock"
 	"vornik.io/vornik/internal/fieldguard"
 	"vornik.io/vornik/internal/persistence"
 	"vornik.io/vornik/internal/projectarchive"
@@ -116,7 +117,7 @@ func (s *Server) ProjectArchive(w http.ResponseWriter, r *http.Request, projectI
 
 	now := time.Now().UTC()
 	deleteAt := now.Add(grace)
-	if err := s.applyLifecyclePatches(projectID, []yamlPatch{
+	if err := s.applyLifecyclePatches(r.Context(), projectID, []yamlPatch{
 		{Path: []string{"lifecycle", "status"}, Value: "archived"},
 		{Path: []string{"lifecycle", "archivedAt"}, Value: now.Format(time.RFC3339)},
 		{Path: []string{"lifecycle", "scheduledDeleteAt"}, Value: deleteAt.Format(time.RFC3339)},
@@ -157,7 +158,7 @@ func (s *Server) ProjectUnarchive(w http.ResponseWriter, r *http.Request, projec
 		http.Redirect(w, r, "/ui/projects/"+projectID+"?unarchived=1", http.StatusSeeOther)
 		return
 	}
-	if err := s.applyLifecyclePatches(projectID, []yamlPatch{
+	if err := s.applyLifecyclePatches(r.Context(), projectID, []yamlPatch{
 		{Path: []string{"lifecycle", "status"}, Value: "", RemoveIfEmpty: true},
 		{Path: []string{"lifecycle", "archivedAt"}, Value: "", RemoveIfEmpty: true},
 		{Path: []string{"lifecycle", "scheduledDeleteAt"}, Value: "", RemoveIfEmpty: true},
@@ -169,7 +170,7 @@ func (s *Server) ProjectUnarchive(w http.ResponseWriter, r *http.Request, projec
 	}
 	// Also remove the now-empty `lifecycle:` key so the YAML stays
 	// tidy for projects that have never been archived.
-	if err := s.removeEmptyLifecycleMap(projectID); err != nil {
+	if err := s.removeEmptyLifecycleMap(r.Context(), projectID); err != nil {
 		s.logger.Warn().Err(err).Str("project_id", projectID).Msg("unarchive: failed to prune empty lifecycle map")
 	}
 
@@ -252,7 +253,7 @@ func (s *Server) ProjectDeleteNow(w http.ResponseWriter, r *http.Request, projec
 	}
 
 	now := time.Now().UTC()
-	if err := s.applyLifecyclePatches(projectID, []yamlPatch{
+	if err := s.applyLifecyclePatches(r.Context(), projectID, []yamlPatch{
 		{Path: []string{"lifecycle", "scheduledDeleteAt"}, Value: now.Format(time.RFC3339)},
 	}); err != nil {
 		http.Error(w, "failed to shorten grace: "+err.Error(), http.StatusInternalServerError)
@@ -277,8 +278,8 @@ func (s *Server) ProjectDeleteNow(w http.ResponseWriter, r *http.Request, projec
 // patches via the surgical yaml.Node patcher (preserves comments
 // + sibling keys), writes the result atomically, and reloads the
 // registry. Used by archive / unarchive / delete-now.
-func (s *Server) applyLifecyclePatches(projectID string, patches []yamlPatch) error {
-	return s.applyProjectPatches(projectID, lifecyclePatchGuard, patches)
+func (s *Server) applyLifecyclePatches(ctx context.Context, projectID string, patches []yamlPatch) error {
+	return s.applyProjectPatches(ctx, projectID, lifecyclePatchGuard, patches)
 }
 
 // applyProjectPatches is the shared project-YAML mutation primitive: it
@@ -288,7 +289,15 @@ func (s *Server) applyLifecyclePatches(projectID string, patches []yamlPatch) er
 // reloads the registry. The guard is the per-caller chokepoint — a lifecycle
 // caller passes lifecyclePatchGuard, the git toggle passes gitPatchGuard —
 // so a stray patch can never ride one path into another path's fields.
-func (s *Server) applyProjectPatches(projectID string, guard *fieldguard.Guard, patches []yamlPatch) error {
+func (s *Server) applyProjectPatches(ctx context.Context, projectID string, guard *fieldguard.Guard, patches []yamlPatch) error {
+	// The read, write and reload hold the process's config-write lock
+	// (operations design §6.9, GitHub #676). A caller must not hold it:
+	// configlock is a plain mutex, and a second Lock would deadlock.
+	unlock, err := configlock.LockAsWriter(ctx) // refused on a non-writer daemon (#681)
+	if err != nil {
+		return err
+	}
+	defer unlock()
 	// CodeQL go/path-injection (2026-07-18): confine the user-supplied id under
 	// the config tree via the safepath primitive, replacing the old
 	// strings.Contains guard which was not a recognised barrier (missed
@@ -332,7 +341,15 @@ func (s *Server) applyProjectPatches(projectID string, guard *fieldguard.Guard, 
 // unarchive (which removes every sub-field). Best-effort: a failed
 // prune doesn't fail the unarchive (the registry already treats
 // an empty lifecycle as active).
-func (s *Server) removeEmptyLifecycleMap(projectID string) error {
+func (s *Server) removeEmptyLifecycleMap(ctx context.Context, projectID string) error {
+	// The read, write and reload hold the process's config-write lock
+	// (operations design §6.9, GitHub #676). A caller must not hold it:
+	// configlock is a plain mutex, and a second Lock would deadlock.
+	unlock, err := configlock.LockAsWriter(ctx) // refused on a non-writer daemon (#681)
+	if err != nil {
+		return err
+	}
+	defer unlock()
 	// CodeQL go/path-injection (2026-07-18): validate the id before joining it
 	// into the config tree; this best-effort prune had no guard of its own.
 	cleanID, err := safepath.CleanPathComponent(projectID)

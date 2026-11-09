@@ -41,7 +41,7 @@ func (s *Server) ProjectGitToggle(w http.ResponseWriter, r *http.Request, projec
 		}
 	}
 
-	if err := s.applyProjectPatches(projectID, gitPatchGuard, []yamlPatch{
+	if err := s.applyProjectPatches(r.Context(), projectID, gitPatchGuard, []yamlPatch{
 		{Path: []string{"git", "enabled"}, Value: enabled},
 	}); err != nil {
 		http.Error(w, "failed to update git access: "+err.Error(), http.StatusInternalServerError)

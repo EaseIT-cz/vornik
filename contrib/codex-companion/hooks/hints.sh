@@ -81,6 +81,14 @@ CATALOGUE_OK='
     and (.text | type == "string") and (.follow | strs)
     and ((.trigger.globs // []) | strs) and ((.trigger.runners // []) | strs))'
 
+# claim PATH — create PATH as an empty file, only if nothing is there. Of N
+# concurrent callers exactly one succeeds: bash's noclobber opens a new file
+# with O_EXCL. Not mkdir: uutils coreutils mkdir 0.10.0 (Ubuntu 26.04) let
+# two concurrent callers both create one directory (#687, §13.15). Any entry
+# already there reads as held: a directory an older version made, and a
+# FIFO or device too, which noclobber would open (blocking, or succeeding).
+claim() { [[ -e "$1" || -L "$1" ]] && return 1; (set -C; : >"$1") 2>/dev/null; }
+
 # catalogue — the eligible hints as JSON lines: active, trigger kind known to
 # this bundle, not masked. The fetched copy wins over the embedded one when it
 # parses (C2).
@@ -142,8 +150,8 @@ if [[ "$MODE" == session ]]; then
   [[ "$CURRENT" =~ ^[A-Za-z0-9_-]{1,128}$ ]] || CURRENT=""
   command -v curl >/dev/null 2>&1 || exit 0
   URL="${VORNIK_URL:-${CLAUDE_PLUGIN_OPTION_VORNIK_URL:-http://localhost:8080}}"
-  VORNIK_UA="vornik-companion/0.50.3 (claude-code)"
-  [[ "$CLIENT" == codex ]] && VORNIK_UA="vornik-companion/0.45.1 (codex)"
+  VORNIK_UA="vornik-companion/0.50.7 (claude-code)"
+  [[ "$CLIENT" == codex ]] && VORNIK_UA="vornik-companion/0.45.5 (codex)"
   NOW="$(date +%s 2>/dev/null)" || exit 0
 
   # 1. Fetch the catalogue and the mask.
@@ -175,15 +183,15 @@ if [[ "$MODE" == session ]]; then
     s="${d##*/}"
     [[ "$s" =~ ^[A-Za-z0-9_-]{1,128}$ && "$s" != "$CURRENT" ]] || continue
     [[ -e "$d/uploaded" ]] && continue
-    if ! mkdir "$d/uploading" 2>/dev/null; then
+    if ! claim "$d/uploading"; then
       # Held by another turn. A turn makes two calls of at most 2 s, so a
       # claim older than 10 minutes is a dead turn's. Its session is given
       # up: marked uploaded, never sent, and counted as lost. A takeover
-      # cannot be made safe with mkdir and mv alone (two turns can both see
+      # cannot be made safe with a claim and mv alone (two turns can both see
       # the claim stale), and nobody sending cannot send twice
       # (review ac74 F2; §13.11 as shipped).
-      # The given-up mark is an mkdir, so concurrent turns count it once.
-      if [[ -n "$(find "$d/uploading" -maxdepth 0 -mmin +10 2>/dev/null)" ]] && mkdir "$d/given-up" 2>/dev/null; then
+      # The given-up mark is a claim, so concurrent turns count it once.
+      if [[ -n "$(find "$d/uploading" -maxdepth 0 -mmin +10 2>/dev/null)" ]] && claim "$d/given-up"; then
         : >"$d/uploaded" 2>/dev/null
         GIVEN_UP=$((GIVEN_UP + 1))
       fi
@@ -192,7 +200,7 @@ if [[ "$MODE" == session ]]; then
     # Another turn may have sent this session and released its claim between
     # the check above and the claim: look again now the claim is held.
     if [[ -e "$d/uploaded" ]]; then
-      rmdir "$d/uploading" 2>/dev/null
+      rm -f "$d/uploading" 2>/dev/null
       continue
     fi
     ev=()
@@ -212,7 +220,7 @@ if [[ "$MODE" == session ]]; then
   done < <(cd "$BASE" 2>/dev/null && ls -1dtr -- */ 2>/dev/null | while IFS= read -r x; do printf '%s\n' "$BASE/${x%/}"; done)
 
   # Beyond the 500 events: marked uploaded, never reported (13.10 S3).
-  for d in "${CUT[@]}"; do : >"$d/uploaded" 2>/dev/null; rmdir "$d/uploading" 2>/dev/null; done
+  for d in "${CUT[@]}"; do : >"$d/uploaded" 2>/dev/null; rm -f "$d/uploading" 2>/dev/null; done
 
   UPLOAD_STATUS=-
   if ((${#CLAIMED[@]} > 0)); then
@@ -223,7 +231,7 @@ if [[ "$MODE" == session ]]; then
     [[ "$UPLOAD_STATUS" =~ ^[0-9]{3}$ ]] || UPLOAD_STATUS=000
     for d in "${CLAIMED[@]}"; do
       [[ "$UPLOAD_STATUS" == 2* ]] && : >"$d/uploaded" 2>/dev/null
-      rmdir "$d/uploading" 2>/dev/null
+      rm -f "$d/uploading" 2>/dev/null
     done
   fi
 
@@ -331,7 +339,11 @@ fire() {
   local h="$1" n="$2" id text
   id="$(jq -r '.id' <<<"$h" 2>/dev/null)" || return
   [[ "$id" =~ ^[a-z0-9_.-]{1,64}$ ]] || return
-  mkdir "$SDIR/fired.$id" 2>/dev/null || return
+  # The claim is the file; fired.<id>/ holds the firing. A session whose
+  # fired.<id>/ an older version made has fired already.
+  [[ -e "$SDIR/fired.$id" ]] && return
+  claim "$SDIR/claim.fired.$id" || return
+  mkdir -p "$SDIR/fired.$id" 2>/dev/null || return
   printf '%s\n' "$n" >"$SDIR/fired.$id/at" 2>/dev/null
   jq -r '.follow[]' <<<"$h" >"$SDIR/fired.$id/targets" 2>/dev/null
   text="$(jq -r '.text' <<<"$h" 2>/dev/null)" || return
@@ -347,7 +359,7 @@ emit() {
 }
 
 if [[ "$MODE" == prompt ]]; then
-  mkdir "$SDIR/prompted" 2>/dev/null || exit 0
+  claim "$SDIR/prompted" || exit 0
   while IFS= read -r h; do
     [[ "$(jq -r '.trigger.kind' <<<"$h" 2>/dev/null)" == first_prompt ]] && fire "$h" 0
   done < <(catalogue)
@@ -448,13 +460,17 @@ runner_in() {
 # glob_match REL HINT_JSON — REL matches one of the hint's globs; "**/" also
 # matches no directory.
 glob_match() {
-  local g
+  local g rc=1
+  # Case-insensitive: https://docs.vornik.io is a design document too (GitHub #682).
+  local restore; restore="$(shopt -p nocasematch)"
+  shopt -s nocasematch
   while IFS= read -r g; do
     [[ -n "$g" ]] || continue
     # shellcheck disable=SC2053 # the glob is a pattern on purpose
-    [[ "$1" == $g || "$1" == ${g//\*\*\//} ]] && return 0
+    if [[ "$1" == $g || "$1" == ${g//\*\*\//} ]]; then rc=0; break; fi
   done < <(jq -r '.trigger.globs[]?' <<<"$2" 2>/dev/null)
-  return 1
+  eval "$restore"
+  return $rc
 }
 
 EDITS=0

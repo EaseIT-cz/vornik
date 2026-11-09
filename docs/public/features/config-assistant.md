@@ -37,7 +37,10 @@ your request ─▶ grounding ─▶ edit loop (private snapshot) ─▶ determi
 - **It refuses to run at all** for a project whose config tree currently
   contains a raw secret (the `config_secret_hygiene` doctor finding), because
   the assistant's model and its judge are hosted models and a raw secret in
-  the tree would leave the box the moment you asked a question.
+  the tree would leave the box the moment you asked a question. The same
+  screen covers a calendar feed URL that carries its access token (Google
+  secret address, Outlook or iCloud published calendar), on any line of the
+  project's files, `PROJECT_CONTEXT.md` included.
 
 ## Blast-radius classes
 

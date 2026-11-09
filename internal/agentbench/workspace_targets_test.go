@@ -86,7 +86,7 @@ func TestRunner_PreparesEachRepeatAndRecordsWhatWasProduced(t *testing.T) {
 	if len(ws.prepared) != 2 {
 		t.Fatalf("each repeat must start pristine: prepared %d times, want 2", len(ws.prepared))
 	}
-	if j.Manifest.WorkspaceReset != WorkspaceResetTargetsAndState {
+	if j.Manifest.WorkspaceReset != WorkspaceResetTargetsStateAndHistory {
 		t.Fatalf("manifest provenance = %q", j.Manifest.WorkspaceReset)
 	}
 	run := j.TaskRuns[0]

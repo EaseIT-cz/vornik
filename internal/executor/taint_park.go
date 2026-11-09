@@ -197,32 +197,8 @@ func resolveTaintDecision(
 	roll := taintlineage.Rollup(own, ancestor, walkComplete)
 
 	// 4. Read recorded latches for THIS task and decide.
-	latches := readLatchHashes(ctx, msgRepo, taskID)
+	latches := taintlineage.ReadLatchHashes(ctx, msgRepo, taskID)
 	return taintlineage.Decide(mode, roll, latches), nil
-}
-
-// readLatchHashes lists the task's messages and collects every recorded
-// taint_latch source-set hash (D7). Best-effort: a repo error yields no
-// latches, so the gate stays fail-closed (an unreadable latch never suppresses
-// a park). Nil msgRepo ⇒ no latches.
-func readLatchHashes(ctx context.Context, msgRepo persistence.TaskMessageRepository, taskID string) []string {
-	if msgRepo == nil || taskID == "" {
-		return nil
-	}
-	msgs, err := msgRepo.List(ctx, persistence.TaskMessageFilter{
-		TaskID:       taskID,
-		MessageKinds: []string{persistence.TaskMessageKindSystem},
-	})
-	if err != nil {
-		return nil
-	}
-	var out []string
-	for _, m := range msgs {
-		if h, ok := taintlineage.ParseLatchHash(m.Metadata); ok {
-			out = append(out, h)
-		}
-	}
-	return out
 }
 
 // parkForTaintReview writes an `untrusted_review` decision checkpoint task_message

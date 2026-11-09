@@ -322,61 +322,32 @@ func (s *Server) ChatCompletions(w http.ResponseWriter, r *http.Request) {
 			// so the error envelope is the recorded response (design §2.2).
 			s.recordLLMExchange(context.WithoutCancel(ctx), r, executionID, req, nil, err, time.Since(auditStart))
 		}
-		// Per-route queue overflow surfaces as 503 — distinct from
-		// 429 (upstream pushed back) and 502 (upstream errored).
-		// 503 means "the daemon refused to queue further" so HA
-		// clients can back off without misreading upstream
-		// availability. See chat.BoundedRouteProvider (rate-limit
-		// hardening sub-item 4).
-		if chat.IsRouteOverflow(err) {
-			s.logger.Warn().Err(err).
-				Str("client_model", req.Model).
-				Msg("chat proxy: route queue overflow — returning 503")
-			respondError(w, http.StatusServiceUnavailable, "ROUTE_OVERFLOW", err.Error())
-			return
-		}
-		// Circuit breaker open for this (route, model) — the model is failing
-		// hard, so we fast-rejected without an upstream call (LLD 2026-07-11-
-		// model-health). Distinct 503 code so the executor skips its retry
-		// ladder and fails over immediately instead of hammering a dead model.
-		if chat.IsModelUnhealthy(err) {
-			s.logger.Warn().Err(err).
-				Str("client_model", req.Model).
-				Msg("chat proxy: model circuit open — returning 503 MODEL_UNHEALTHY")
-			respondError(w, http.StatusServiceUnavailable, "MODEL_UNHEALTHY", err.Error())
-			return
-		}
-		// Context-window overflow is a deterministic 400, not an upstream
-		// outage — sanitizing it into PROVIDER_ERROR (as before 2026-07-12)
-		// made the executor infra-retry an identical oversized prompt ~12
-		// times per execution. Return a distinct code so the agent can
-		// compact-and-retry and the retry ladder stays out of it. The
-		// message is generic (no upstream echo) — the code is the signal.
-		if chat.IsContextOverflow(err) {
-			s.logger.Warn().Err(err).
-				Str("client_model", req.Model).
-				Int("message_count", len(req.Messages)).
-				Msg("chat proxy: prompt exceeds model context window — returning 400 CONTEXT_OVERFLOW")
-			s.emitLLMCallFinishedErr(ctx, executionID, req.Model, err, time.Since(auditStart))
-			respondError(w, http.StatusBadRequest, "CONTEXT_OVERFLOW",
-				"prompt exceeds the model's context window — compact the conversation or reduce input")
-			return
-		}
-		// 502 rather than 500: from the agent's point of view this is
-		// an upstream failure (Claude rate-limited, CLI subprocess
-		// crashed, gateway 5xx, etc.) — not a bug in vornik's handler.
+		// One mapping from a provider error to the caller's reply, shared
+		// with the Ollama-compatible layer (providerErrorReply; Ollama
+		// compat design, change 2026-11-07, GitHub #667). Per class:
+		// ROUTE_OVERFLOW 503 (the daemon refused to queue further, so HA
+		// clients back off without misreading upstream availability);
+		// MODEL_UNHEALTHY 503 (circuit open: the executor skips its retry
+		// ladder and fails over); CONTEXT_OVERFLOW 400 (deterministic: the
+		// agent compacts and retries, the infra ladder stays out, incident
+		// 2026-07-12); UPSTREAM_RATE_LIMITED 429 (the provider refusing the
+		// account, GitHub #665); PROVIDER_ERROR 502 for the rest. The
+		// provider's own text is logged here and never forwarded: it echoes
+		// routing info, account names, and occasionally credentials from
+		// misconfigured auth middleware.
+		status, code, msg := providerErrorReply(err)
 		s.logger.Warn().Err(err).
 			Str("client_model", req.Model).
+			Str("code", code).
 			Int("message_count", len(req.Messages)).
 			Int("tool_count", len(req.Tools)).
-			Msg("chat proxy: provider returned error")
-		s.emitLLMCallFinishedErr(ctx, executionID, req.Model, err, time.Since(auditStart))
-		// Don't forward raw upstream error strings to the
-		// external caller — provider errors frequently echo
-		// internal routing info, model names, and occasionally
-		// credentials from misconfigured auth middleware. Log
-		// the detail; return a sanitized envelope.
-		respondError(w, http.StatusBadGateway, "PROVIDER_ERROR", "upstream provider returned an error")
+			Msg("chat proxy: provider error")
+		// A queue overflow and an open circuit never reached the model, so
+		// they emit no call-finished event, as before the shared mapping.
+		if code != "ROUTE_OVERFLOW" && code != "MODEL_UNHEALTHY" {
+			s.emitLLMCallFinishedErr(ctx, executionID, req.Model, err, time.Since(auditStart))
+		}
+		respondError(w, status, code, msg)
 		return
 	}
 	if resp == nil {

@@ -38,7 +38,8 @@ func TestProvenanceUnexaminable_TheSetIsExact(t *testing.T) {
 	for _, r := range []string{ProvReasonUnsafeClone, ProvReasonRepoMismatch, ProvReasonNoOrigin,
 		ProvReasonNoOriginMain, ProvReasonGitError, ProvReasonBlobMismatch, ProvReasonNotFound,
 		ProvReasonNotRegularFile, ProvReasonBlobChanged, ProvReasonCommitUnreachable,
-		ProvReasonPathNotAllowed, ProvReasonNoScope, ProvReasonContentUnavailable, ProvReasonPendingStamp, ""} {
+		ProvReasonPathNotAllowed, ProvReasonNoScope, ProvReasonContentUnavailable, ProvReasonPendingStamp,
+		ProvReasonRedacted, ""} {
 		if ProvenanceUnexaminable(r) {
 			t.Errorf("%q must not count as cannot-be-examined", r)
 		}

@@ -80,6 +80,9 @@ func (r *taskRepoForDelegationTest) RequeueTerminalTask(context.Context, string,
 func (r *taskRepoForDelegationTest) ListRetryInFlight(context.Context, []string, time.Time) ([]*persistence.Task, error) {
 	return nil, nil
 }
+func (r *taskRepoForDelegationTest) ListApprovalsClosedSince(context.Context, []string, time.Time) ([]*persistence.Task, error) {
+	return nil, nil
+}
 func (r *taskRepoForDelegationTest) LeaseTask(context.Context, persistence.LeaseOptions) (*persistence.Task, error) {
 	panic("not used")
 }

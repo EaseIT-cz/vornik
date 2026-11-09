@@ -86,6 +86,14 @@ type TaskRepository interface {
 	// the row vanish as if resolved.
 	ListRetryInFlight(ctx context.Context, projectIDs []string, since time.Time) ([]*Task, error)
 
+	// ListApprovalsClosedSince returns CANCELLED tasks whose last_error starts
+	// with ApprovalClosedPrefix and whose updated_at is at or after since:
+	// approvals the cancel cascade closed (05-scheduler §4.11 "Amended
+	// 2026-11-07", GitHub #490). Newest first, at most 50. Scoped to
+	// projectIDs when non-empty (all projects when empty). Powers the Outcome
+	// Inbox's "Approval closed" row.
+	ListApprovalsClosedSince(ctx context.Context, projectIDs []string, since time.Time) ([]*Task, error)
+
 	// TransitionConditional atomically updates a task's status
 	// only when it currently sits in one of `from`. Returns
 	// (true, nil) when the row transitioned, (false, nil) when no

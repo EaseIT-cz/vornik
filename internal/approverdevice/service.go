@@ -716,6 +716,12 @@ func (s *Service) Decide(ctx context.Context, d *Device, requestID, shownSHA str
 	return s.claimAndApply(ctx, requestID, fn)
 }
 
+// approvalApplyCeiling is how many transient failures an approved request's
+// effect gets before claimAndApply records it failed. ClaimApply counts each
+// attempt; at the one-minute tick, 60 attempts take about an hour (part 22,
+// §22.2.16a).
+const approvalApplyCeiling = 60
+
 // claimAndApply runs an approved request's effect under a lease, on the row
 // AS DECIDED (re-read after the transition, so an effect sees the approver and
 // the decision time, the same row the re-apply loop reads; review 4de8 F1).
@@ -731,18 +737,30 @@ func (s *Service) claimAndApply(ctx context.Context, id string, fn Effect) error
 		return err
 	}
 	if err := fn(ctx, *r); err != nil {
-		if errors.Is(err, ErrPermanent) {
+		// A transient failure is retried until the ceiling, then the request
+		// ends failed like a permanent one, so the proposal stops blocking and
+		// the agent can propose again (part 22, §22.2.16a, GitHub #579: two
+		// approvals were retried about 200 times against a busy transition).
+		giveUp := !errors.Is(err, ErrPermanent) && r.ApplyAttempts >= approvalApplyCeiling
+		if errors.Is(err, ErrPermanent) || giveUp {
+			reason := err.Error()
+			if giveUp {
+				reason = fmt.Sprintf("gave up after %d attempts: %s", r.ApplyAttempts, err.Error())
+			}
 			now := s.now()
-			if merr := s.repo.MarkApplyFailed(ctx, id, err.Error(), now); merr != nil {
+			if merr := s.repo.MarkApplyFailed(ctx, id, reason, now); merr != nil {
 				return merr
 			}
 			failed := *r
 			failed.AppliedAt = &now
-			failed.ApplyError = err.Error()
+			failed.ApplyError = reason
 			s.notifyTerminal(ctx, failed, "failed")
+			if giveUp {
+				return fmt.Errorf("approverdevice: request %s was approved, but it cannot be applied: gave up after %d attempts: %w", id, r.ApplyAttempts, err)
+			}
 			return fmt.Errorf("approverdevice: request %s was approved, but it cannot be applied: %w", id, err)
 		}
-		return fmt.Errorf("approverdevice: request %s was approved, but applying it failed (attempt %d; it will be retried): %w", id, r.ApplyAttempts, err)
+		return fmt.Errorf("approverdevice: request %s was approved, but applying it failed (attempt %d of %d; it will be retried): %w", id, r.ApplyAttempts, approvalApplyCeiling, err)
 	}
 	now = s.now()
 	if err := s.repo.MarkApplied(ctx, id, now); err != nil {

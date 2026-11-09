@@ -263,8 +263,20 @@ func (s *Server) resolveTaskRole(ctx context.Context, taskID string) string {
 	if err != nil || exec == nil || exec.CurrentStepID == nil || *exec.CurrentStepID == "" {
 		return ""
 	}
-	_, workflow, err := s.projectRegistry.GetProjectWithWorkflow(exec.ProjectID)
-	if err != nil || workflow == nil {
+	// The execution's own workflow, as the tool gate resolves it
+	// (workflowForGate); the default only when the execution records none
+	// (GitHub #551: this resolved through the default, so an execution of
+	// another workflow audited another role or none).
+	project, defaultWorkflow, err := s.projectRegistry.GetProjectWithWorkflow(exec.ProjectID)
+	if err != nil || project == nil {
+		return ""
+	}
+	defaultID := ""
+	if defaultWorkflow != nil {
+		defaultID = defaultWorkflow.ID
+	}
+	workflow, reason := workflowForGate(s.projectRegistry, exec, defaultID)
+	if reason != mcpGapNone {
 		return ""
 	}
 	step, ok := workflow.Steps[*exec.CurrentStepID]

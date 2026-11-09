@@ -149,8 +149,11 @@ def _wrap(client: VornikClient, tool: str, args: dict, timeout=None) -> str:
 
 
 class BrokerTools:
-    def __init__(self, client: VornikClient):
+    def __init__(self, client: VornikClient, companion_tasks=None):
         self.client = client
+        # Tasks vornik_companion_delegate started run on the memory key;
+        # result/status/cancel ask for them with that key (design 24, #686 F).
+        self.companion_tasks = companion_tasks
         # Whether a key is a broker key, per (URL, key): one profile's answer
         # is never reused for another's key (design 24, 0.21.5).
         # The lock guards the map, not a returned entry's fields: two calls for
@@ -237,28 +240,41 @@ class BrokerTools:
                 call["max_age_seconds"] = max_age
         return _wrap(self.client, "delegate", call)
 
+    def _owner(self, task_id: str):
+        """The memory key's client for a task vornik_companion_delegate
+        started, else None (the broker key). Never both."""
+        if self.companion_tasks is not None and task_id and self.companion_tasks.owns(task_id):
+            return self.companion_tasks.client()
+        return None
+
     def result(self, args: dict, **_kw) -> str:
-        if not self.available():
-            return json.dumps({"error": self._unavailable_error()})
         task_id = str((args or {}).get("task_id") or "").strip()
+        owner = self._owner(task_id)
+        if owner is None and not self.available():
+            return json.dumps({"error": self._unavailable_error()})
         if not task_id:
             return json.dumps({"error": "task_id is required"})
+        client = owner or self.client
         call = {"task_id": task_id}
         timeout = None
-        if self.client.supports("companion-result-wait"):
+        if client.supports("companion-result-wait"):
             call["wait_seconds"] = RESULT_WAIT_SECONDS
             timeout = RESULT_WAIT_SECONDS + 15
-        return _wrap(self.client, "result", call, timeout=timeout)
+        return _wrap(client, "result", call, timeout=timeout)
 
     def status(self, args: dict, **_kw) -> str:
-        if not self.available():
+        task_id = str((args or {}).get("task_id") or "")
+        owner = self._owner(task_id.strip())
+        if owner is None and not self.available():
             return json.dumps({"error": self._unavailable_error()})
-        return _wrap(self.client, "status", {"task_id": str((args or {}).get("task_id") or "")})
+        return _wrap(owner or self.client, "status", {"task_id": task_id})
 
     def cancel(self, args: dict, **_kw) -> str:
-        if not self.available():
+        task_id = str((args or {}).get("task_id") or "")
+        owner = self._owner(task_id.strip())
+        if owner is None and not self.available():
             return json.dumps({"error": self._unavailable_error()})
-        return _wrap(self.client, "cancel", {"task_id": str((args or {}).get("task_id") or "")})
+        return _wrap(owner or self.client, "cancel", {"task_id": task_id})
 
     def artifacts_available(self, *_args, **_kwargs) -> bool:
         return self.available() and self.client.supports("companion-artifact-read")

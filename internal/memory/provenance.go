@@ -32,6 +32,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -131,7 +132,18 @@ const (
 	// 2026-10-23). It fails closed, as an examination that failed; an
 	// unlisted but well-formed host (a self-hosted forge) is clone_failed.
 	ProvReasonScopeNotCloneable = "scope_not_cloneable"
+	// ProvReasonRedacted is a document whose stored text carries a
+	// redaction marker and does not match the trusted branch: secret-shaped
+	// text was redacted on its way in, so it cannot match (#550 D4). The
+	// sweep carries it; a match at the head still verifies.
+	ProvReasonRedacted = "redacted"
 )
+
+// HasRedactionMarker reports whether text carries a [REDACTED:<type>] marker
+// of the form secrets.Redact writes (#550 D4).
+func HasRedactionMarker(text string) bool { return redactionMarker.MatchString(text) }
+
+var redactionMarker = regexp.MustCompile(`\[REDACTED:[a-z0-9_]+\]`)
 
 // provenanceUnexaminable are the reasons that mean no clone exists for the
 // scope at all, so the version could not be examined (design 22, "Amendment
@@ -468,10 +480,59 @@ func (v *ProvenanceVerifier) evaluate(ctx context.Context, projectID, scope, p s
 			res.CommitSHA = prior.CommitSHA
 			return res
 		}
+		// A redacted document cannot match; the sweep has no text to look
+		// at, so the reason the ingest recorded is carried (#550 D4).
+		if prior.Reason == ProvReasonRedacted {
+			return fail(ProvReasonRedacted)
+		}
+		// A draft whose exact bytes were pushed and then replaced is stale,
+		// not "awaiting its push" (LLD 22, amendment 2026-11-08, #550 D3).
+		if pushed := v.pushedAt(ctx, dir, head, p, res.ContentBlobSHA); pushed != "" {
+			res.State, res.Reason, res.CommitSHA = ProvenanceStale, ProvReasonBlobChanged, pushed
+			return res
+		}
 		return fail(ProvReasonBlobMismatch)
 	}
 	res.State, res.Reason, res.CommitSHA = ProvenanceVerified, "", commit
 	return res
+}
+
+// provenanceDraftHistoryDepth bounds pushedAt to the newest commits that
+// touched the path. A version replaced by more than this many later commits
+// keeps blob_mismatch, the answer before #550 D3; the bound keeps an hourly
+// re-check of a never-pushed draft to one rev-list and at most this many
+// rev-parse calls.
+const provenanceDraftHistoryDepth = 20
+
+// pushedAt returns the oldest of the newest provenanceDraftHistoryDepth
+// commits on the trusted branch that hold exactly blob at p, confirmed by
+// lookupBlob's hardened walk, or "" when none does. Every git failure answers
+// "": the lookup can only move a label, so its failure keeps the old one.
+func (v *ProvenanceVerifier) pushedAt(ctx context.Context, dir, head, p, blob string) string {
+	if !isHexID(blob) {
+		return ""
+	}
+	out, err := v.Git(ctx, dir, "rev-list", "--topo-order", fmt.Sprintf("--max-count=%d", provenanceDraftHistoryDepth), head, "--", p)
+	if err != nil {
+		return ""
+	}
+	match := ""
+	for _, c := range strings.Fields(string(out)) {
+		if !isHexID(c) {
+			return ""
+		}
+		got, err := v.Git(ctx, dir, "rev-parse", "--verify", "--quiet", c+":"+p)
+		if err == nil && strings.TrimSpace(string(got)) == blob {
+			match = c // newest first: the last match is the oldest
+		}
+	}
+	if match == "" {
+		return ""
+	}
+	if confirmed, reason, err := v.lookupBlob(ctx, dir, match, p); err != nil || reason != "" || confirmed != blob {
+		return ""
+	}
+	return match
 }
 
 // checkClone is rule step 2: the project's clone exists, is unbent (a real
@@ -726,6 +787,8 @@ func ProvenanceLabel(validationStatus, validatorRole, recordState, recordReason 
 		return "unavailable: no clone of this repository could be made; trusted as before provenance checks"
 	case recordState == "":
 		return ""
+	case recordReason == ProvReasonRedacted:
+		return "unverified: the stored text carries redaction markers, so it cannot match the trusted branch's bytes"
 	case recordReason == ProvReasonNotFound || recordReason == ProvReasonBlobMismatch:
 		return "unverified: not yet on the trusted branch (a draft awaiting its push); re-checked automatically"
 	case recordState == ProvenanceStale:

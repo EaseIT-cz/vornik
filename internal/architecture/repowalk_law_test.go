@@ -48,6 +48,7 @@ var repoWalkExempt = map[string]struct {
 	"cmd/vornik-enterprise/provision_561_test.go:treeState":                                                          {1, "temp: lists what provision left in the test's own config directory"},
 	"internal/cli/agent_connect_generic_test.go:TestAgentConnectGeneric_PrintsEntryAndWritesNoFile":                  {1, "temp: lists every file the command wrote under the test's HOME"},
 	"internal/cli/agent_connect_test.go:TestAgentConnect_RoundTrip":                                                  {1, "temp: searches the test's HOME for the key"},
+	"internal/cli/companion_desktop_589_test.go:TestCompanionConnect_589_ClaudeDesktop":                              {1, "temp: searches the test's HOME for the companion key"},
 	"internal/cli/agent_connect_test.go:TestAgentConnect_APIKeyStdinReadsKeyAndNotEnv":                               {1, "temp: searches the test's HOME for the admin key"},
 	"internal/cli/package_upgrade_test.go:readTree":                                                                  {1, "temp: reads back a configs tree the test wrote"},
 	"internal/executor/harvest_race_359_test.go:storedOutputs.bodies":                                                {1, "temp: reads the test's own artifact store"},

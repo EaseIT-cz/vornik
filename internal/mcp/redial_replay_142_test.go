@@ -167,18 +167,31 @@ func TestExecute_CallerCancelEndsTheWaitForARedial(t *testing.T) {
 func TestDialOnUse_CallerCancelEndsTheWait(t *testing.T) {
 	var dials atomic.Int64
 	dialStarted := make(chan struct{}, 4)
+	dialReturned := make(chan struct{}, 4)
 	releaseDial := make(chan struct{})
+	// Built before any dial blocks: the released dial must not touch t, which
+	// may have finished by then (a flake under make test, 2026-11-09: "Fail in
+	// goroutine after TestDialOnUse_CallerCancelEndsTheWait has completed").
+	live := healthyClient(t, "broker", "orders")
 	swapDialSeams(t, func(_ context.Context, cfg ServerConfig, _ zerolog.Logger) (*Client, error) {
 		if dials.Add(1) == 1 {
 			return nil, errors.New("connection refused")
 		}
 		dialStarted <- struct{}{}
 		<-releaseDial
-		return healthyClient(t, cfg.Name, "orders"), nil
+		dialReturned <- struct{}{}
+		return live, nil
 	})
 	m := newPendingManager(newFakeClock())
 	m.SyncProjects(context.Background(), brokerDesired())
-	defer close(releaseDial)
+	defer func() {
+		close(releaseDial)
+		select { // the blocked dial returns before the test ends
+		case <-dialReturned:
+		case <-time.After(5 * time.Second):
+			t.Error("the released dial never returned")
+		}
+	}()
 
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)

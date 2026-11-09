@@ -72,23 +72,37 @@ IFS=$'\x1f' read -r SESSION CWD TOOL CMD RESPONSE <<<"$FIELDS"
 [[ "$SESSION" =~ ^[A-Za-z0-9_-]{1,128}$ ]] || exit 0
 
 # State base (LLD 23 "State base"): Codex's own name, then its Claude-compat
-# alias, then a tmp path that differs from the Claude hook's fallback so the
-# two hooks never share state.
+# alias, then the per-user runtime directory when the user owns it, under a
+# name that differs from the Claude hook's so the two hooks never share state.
+# Never a shared temp path (#651, the #461 class): with none, the hook is
+# silent.
 if [[ -n "${PLUGIN_DATA:-}" ]]; then
   BASE="$PLUGIN_DATA/nudge"
 elif [[ -n "${CLAUDE_PLUGIN_DATA:-}" ]]; then
   BASE="$CLAUDE_PLUGIN_DATA/nudge"
+elif [[ -n "${XDG_RUNTIME_DIR:-}" && -d "$XDG_RUNTIME_DIR" && -O "$XDG_RUNTIME_DIR" ]]; then
+  BASE="$XDG_RUNTIME_DIR/vornik-codex-companion/nudge"
 else
-  BASE="${XDG_RUNTIME_DIR:-${TMPDIR:-/tmp}}/vornik-codex-companion-${UID:-0}/nudge"
+  exit 0
 fi
 SDIR="$BASE/$SESSION"
+
+# claim PATH — create PATH as an empty file, only if nothing is there. Of N
+# concurrent callers exactly one succeeds: bash's noclobber opens a new file
+# with O_EXCL. Not mkdir: uutils coreutils mkdir 0.10.0 (Ubuntu 26.04) let
+# two concurrent callers both create one directory (#687, §13.15). Any entry
+# already there reads as held: a directory an older version made, and a
+# FIFO or device too, which noclobber would open (blocking, or succeeding).
+claim() { [[ -e "$1" || -L "$1" ]] && return 1; (set -C; : >"$1") 2>/dev/null; }
 
 # ensure_session_dir — create the session dir (mode 0700). The first time a
 # session is seen, sweep sibling session dirs older than 7 days; the sweep is
 # confined to $BASE at depth 1 and is this script's only delete.
 ensure_session_dir() {
-  [[ -d "$SDIR" ]] && { [[ -w "$SDIR" ]]; return; }
   (umask 077 && mkdir -p "$BASE") 2>/dev/null || return 1
+  # A base that is a symlink, or one another user owns, is refused (#651).
+  [[ -d "$BASE" && ! -L "$BASE" && -O "$BASE" ]] || return 1
+  [[ -d "$SDIR" ]] && { [[ -w "$SDIR" ]]; return; }
   if (umask 077 && mkdir "$SDIR") 2>/dev/null; then
     find "$BASE" -mindepth 1 -maxdepth 1 -type d -mtime +7 ! -name "$SESSION" \
       -exec rm -rf {} + 2>/dev/null
@@ -372,22 +386,22 @@ MSGS=""
 read -r -a KEYLIST <<<"$KEYS"
 for KEY in "${KEYLIST[@]}"; do
   ENC="${KEY/\//+}"
-  [[ -d "$SDIR/nudged.$ENC" || -d "$SDIR/covered.$ENC" ]] && continue
+  [[ -e "$SDIR/nudged.$ENC" || -d "$SDIR/covered.$ENC" ]] && continue
   if ((RECENT)); then
     mkdir "$SDIR/covered.$ENC" 2>/dev/null
     continue
   fi
-  # Claim the next free slot. mkdir is atomic, so N parallel commands claim N
+  # Claim the next free slot. A claim is exclusive, so N parallel commands claim N
   # distinct slots and only the threshold slot's claimant can nudge.
   SLOT=0
   for ((s = 1; s <= THRESHOLD; s++)); do
-    if mkdir "$SDIR/hit.$ENC.$s" 2>/dev/null; then
+    if claim "$SDIR/hit.$ENC.$s"; then
       SLOT=$s
       break
     fi
   done
   ((SLOT == THRESHOLD)) || continue
-  mkdir "$SDIR/nudged.$ENC" 2>/dev/null || continue
+  claim "$SDIR/nudged.$ENC" || continue
   MSG="vornik-companion: this is shell read ${THRESHOLD} into ${KEY} this session with no recent recall. Before reading further, recall its design: mcp__vornik__recall(query: \"${KEY} design\", class: \"spec\"). If a design exists it is the authoritative record; read code only to verify what it names. (Shown once per subsystem per session.)"
   MSGS="${MSGS:+$MSGS }$MSG"
 done

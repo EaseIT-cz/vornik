@@ -81,6 +81,7 @@ ExecStart=/usr/bin/podman run \
     --replace \
     --rm \
     --log-driver=journald \
+    --memory=2g --memory-swap=2g \
     -p 127.0.0.1:8010:8000 \
     -v %t/vornik/kong.yml:/kong/kong.yml:ro,z \
     -e KONG_DATABASE=off \

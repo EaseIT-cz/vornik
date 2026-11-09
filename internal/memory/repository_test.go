@@ -3,6 +3,7 @@ package memory
 import (
 	"bytes"
 	"context"
+	"database/sql"
 	"errors"
 	"regexp"
 	"strings"
@@ -1365,8 +1366,8 @@ func TestDLQMove(t *testing.T) {
 	r, mock, cleanup := newRepo(t)
 	defer cleanup()
 	mock.ExpectBegin()
-	mock.ExpectExec("DELETE FROM memory_embed_queue").
-		WithArgs("c1").WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectQuery("DELETE FROM memory_embed_queue WHERE chunk_id = \\$1 RETURNING").
+		WithArgs("c1").WillReturnRows(noDLQCarry())
 	mock.ExpectExec("INSERT INTO memory_embed_dlq").
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectCommit()
@@ -1388,7 +1389,7 @@ func TestDLQMove_DeleteErr(t *testing.T) {
 	r, mock, cleanup := newRepo(t)
 	defer cleanup()
 	mock.ExpectBegin()
-	mock.ExpectExec("DELETE FROM memory_embed_queue").WillReturnError(errors.New("x"))
+	mock.ExpectQuery("DELETE FROM memory_embed_queue WHERE chunk_id = \\$1 RETURNING").WillReturnError(errors.New("x"))
 	mock.ExpectRollback()
 	if err := r.DLQMove(context.Background(), "c1", "p", "r", "e", time.Now()); err == nil {
 		t.Fatal("want err")
@@ -1399,8 +1400,7 @@ func TestDLQMove_UpsertErr(t *testing.T) {
 	r, mock, cleanup := newRepo(t)
 	defer cleanup()
 	mock.ExpectBegin()
-	mock.ExpectExec("DELETE FROM memory_embed_queue").
-		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectQuery("DELETE FROM memory_embed_queue WHERE chunk_id = \\$1 RETURNING").WillReturnRows(noDLQCarry())
 	mock.ExpectExec("INSERT INTO memory_embed_dlq").WillReturnError(errors.New("x"))
 	mock.ExpectRollback()
 	if err := r.DLQMove(context.Background(), "c1", "p", "r", "e", time.Now()); err == nil {
@@ -1756,5 +1756,38 @@ func TestScopeFilterSQL_Authority(t *testing.T) {
 	}
 	if (ScopeFilter{Authority: AuthorityProvenance}).IsZero() {
 		t.Error("an authority-only filter must not count as zero (it would take the unscoped statement)")
+	}
+}
+
+// noDLQCarry is the queue-row delete's RETURNING for a chunk with no DLQ
+// history (GitHub #674): no row, which DLQMove reads as "none".
+func noDLQCarry() *sqlmock.Rows {
+	return sqlmock.NewRows([]string{"dlq_retry_count", "dlq_first_failed_at"})
+}
+
+// GitHub #674: a chunk DLQReplay re-queued carries its count; the next move
+// continues it (carried 2 -> 3). A parked chunk (-1) replayed by an operator
+// starts again at 0, and keeps its first failure time.
+func TestDLQMove_ContinuesACarriedCount_674(t *testing.T) {
+	first := time.Date(2026, 11, 1, 0, 0, 0, 0, time.UTC)
+	for _, c := range []struct {
+		carried int64
+		want    sql.NullInt64
+	}{{2, sql.NullInt64{Int64: 3, Valid: true}}, {-1, sql.NullInt64{Int64: 0, Valid: true}}} {
+		r, mock, cleanup := newRepo(t)
+		mock.ExpectBegin()
+		mock.ExpectQuery("DELETE FROM memory_embed_queue WHERE chunk_id = \\$1 RETURNING").
+			WillReturnRows(sqlmock.NewRows([]string{"dlq_retry_count", "dlq_first_failed_at"}).AddRow(c.carried, first))
+		mock.ExpectExec("INSERT INTO memory_embed_dlq").
+			WithArgs("c1", "p", "embedding_failed", "err", sqlmock.AnyArg(), c.want, sql.NullTime{Time: first, Valid: true}).
+			WillReturnResult(sqlmock.NewResult(0, 1))
+		mock.ExpectCommit()
+		if err := r.DLQMove(context.Background(), "c1", "p", "embedding_failed", "err", time.Now()); err != nil {
+			t.Fatalf("carried %d: %v", c.carried, err)
+		}
+		if err := mock.ExpectationsWereMet(); err != nil {
+			t.Fatalf("carried %d: %v", c.carried, err)
+		}
+		cleanup()
 	}
 }

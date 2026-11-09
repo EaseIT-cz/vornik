@@ -409,8 +409,14 @@ func TestOllamaChat_StreamErrorEmitsErrorFrame(t *testing.T) {
 	if !last.Done {
 		t.Error("error frame must have done:true")
 	}
-	if !strings.Contains(last.DoneReason, "upstream rate limit") {
-		t.Errorf("DoneReason = %q, should mention upstream error", last.DoneReason)
+	// GitHub #667: the frame names the class, never the provider's text
+	// (before 2026-11-07 this test required the provider's text, which
+	// pinned the leak of an upstream account name to the caller).
+	if strings.Contains(last.DoneReason, "upstream rate limit") {
+		t.Errorf("DoneReason = %q forwards the provider's text", last.DoneReason)
+	}
+	if !strings.HasPrefix(last.DoneReason, "error: PROVIDER_ERROR: ") {
+		t.Errorf("DoneReason = %q, want the PROVIDER_ERROR class", last.DoneReason)
 	}
 }
 

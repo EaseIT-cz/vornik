@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -100,7 +101,10 @@ func (s *Server) SetupMemoryCommit(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	if err := writeMemoryConfig(s.setupConfigPath, secretPath, proposal); err != nil {
+	if err := writeMemoryConfig(r.Context(), s.setupConfigPath, secretPath, proposal); err != nil {
+		if respondNotConfigWriter(w, err) {
+			return
+		}
 		var pe *configPatchError
 		if errors.As(err, &pe) {
 			respondError(w, http.StatusInternalServerError, pe.Code, pe.Msg)
@@ -132,9 +136,12 @@ func (s *Server) SetupMemoryCommit(w http.ResponseWriter, r *http.Request) {
 // it writes only memory.enabled=false. When enabled it writes endpoint,
 // model, dimension, and (when a key was provided) the env-placeholder
 // api_key. The secret is never rolled back (reused on retry).
-func writeMemoryConfig(configPath, secretPath string, p onboarding.MemoryConfigProposal) error {
+func writeMemoryConfig(ctx context.Context, configPath, secretPath string, p onboarding.MemoryConfigProposal) error {
 	// The process's one config-write lock (GitHub #584, operations-api-contract-design.md §6.6).
-	unlock := configlock.Lock()
+	unlock, err := configlock.LockAsWriter(ctx) // refused on a non-writer daemon (#681)
+	if err != nil {
+		return err
+	}
 	defer unlock()
 	writer := &featuredoctor.FileConfigWriter{Path: configPath}
 	backup, err := writer.Backup()

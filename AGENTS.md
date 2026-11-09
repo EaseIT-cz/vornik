@@ -253,6 +253,19 @@ step and no auto session digest — call the `mcp__vornik__*` tools directly
 (`catalog`, `recall`, `delegate`, `remember`, …). Full options:
 `contrib/codex-companion/README.md`.
 
+**Claude Desktop / Cowork** — no plugin; one command stores the key in a file
+only the user can read and adds a stdio entry to Claude Desktop's config
+(no Node, no token in that file):
+
+```bash
+printf '%s\n' "$VORNIK_COMPANION_TOKEN" | \
+  vornikctl companion connect claude-desktop --key-stdin --url "$VORNIK_URL"
+vornikctl companion doctor --client claude-desktop   # each failure names its fix
+```
+
+**Check:** connect prints the key's project; after a Claude Desktop restart a
+`recall` works. Full page: `docs/public/guides/claude-desktop.md`.
+
 **Any other CLI** (Gemini CLI, opencode, …): there is **no** native companion
 plugin — packaging covers Claude Code and Codex only. Skip this step and drive
 the companion over plain HTTP (B4); the `remember` / `recall` / `delegate`

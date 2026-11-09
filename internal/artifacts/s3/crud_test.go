@@ -30,6 +30,9 @@ type stubClient struct {
 	// pageSize caps each List page (0 = unlimited).
 	pageSize  int
 	listCalls int
+	// omitToken makes a truncated page carry no NextContinuationToken,
+	// as some S3-compatible servers do (GitHub #443); StartAfter is honoured.
+	omitToken bool
 
 	// Last call recorders.
 	lastPut    *awss3.PutObjectInput
@@ -128,6 +131,11 @@ func (c *stubClient) ListObjectsV2(ctx context.Context, in *awss3.ListObjectsV2I
 		_, _ = fmtSscanf(*in.ContinuationToken, "%d", &n)
 		start = n
 	}
+	if sa := aws.ToString(in.StartAfter); sa != "" {
+		for start < len(matched) && matched[start] <= sa {
+			start++
+		}
+	}
 	end := len(matched)
 	if c.pageSize > 0 && start+c.pageSize < end {
 		end = start + c.pageSize
@@ -146,7 +154,7 @@ func (c *stubClient) ListObjectsV2(ctx context.Context, in *awss3.ListObjectsV2I
 		Contents:    contents,
 		IsTruncated: &truncated,
 	}
-	if truncated {
+	if truncated && !c.omitToken {
 		tok := fmtSprintf("%d", end)
 		out.NextContinuationToken = &tok
 	}

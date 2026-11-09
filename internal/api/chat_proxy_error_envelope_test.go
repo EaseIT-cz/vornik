@@ -27,6 +27,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"vornik.io/vornik/internal/chat"
 
 	"github.com/rs/zerolog"
 )
@@ -100,8 +101,10 @@ func TestOllamaChat_StreamErrorFrame_IsSoleTerminalFrame(t *testing.T) {
 	if !strings.HasPrefix(final.DoneReason, "error: ") {
 		t.Errorf("DoneReason = %q, want an 'error: ' prefix so clients can detect the failure", final.DoneReason)
 	}
-	if !strings.Contains(final.DoneReason, "boom on first token") {
-		t.Errorf("DoneReason = %q, should carry the upstream error text", final.DoneReason)
+	// GitHub #667: the frame names the class; the provider's text stays in
+	// the daemon log (this test used to require it in the frame).
+	if strings.Contains(final.DoneReason, "boom on first token") {
+		t.Errorf("DoneReason = %q forwards the provider's text", final.DoneReason)
 	}
 }
 
@@ -113,8 +116,10 @@ func TestOllamaChat_StreamErrorFrame_IsSoleTerminalFrame(t *testing.T) {
 // streaming path. A regression dropping the truncate call would ship
 // the full error to the client.
 func TestOllamaChat_StreamErrorFrame_TruncatesLongError(t *testing.T) {
+	// Since GitHub #667 only daemon-built text reaches the frame, so the
+	// long text is an open-circuit error for a 1000-byte model name.
 	longErr := strings.Repeat("z", 1000)
-	stub := &streamingStub{model: "stub", err: errors.New(longErr)}
+	stub := &streamingStub{model: "stub", err: &chat.ModelUnhealthyError{Route: "r", Model: longErr, State: "open"}}
 	s := NewServer(WithChatProvider(stub), WithLogger(zerolog.Nop()))
 	body := bytes.NewBufferString(`{"messages":[{"role":"user","content":"hi"}]}`)
 	req := httptest.NewRequest(http.MethodPost, "/api/chat", body)
@@ -140,8 +145,11 @@ func TestOllamaChat_StreamErrorFrame_TruncatesLongError(t *testing.T) {
 	if strings.Contains(payload, longErr) {
 		t.Errorf("the full %d-char error leaked into the frame untruncated", len(longErr))
 	}
-	if zCount := strings.Count(payload, "z"); zCount != 240 {
-		t.Errorf("truncated 'z' run = %d, want 240 (truncateOllamaErr cap)", zCount)
+	if !strings.HasPrefix(payload, "MODEL_UNHEALTHY: ") {
+		t.Errorf("the cut must keep the leading code, got %q", payload[:min(40, len(payload))])
+	}
+	if n := len(strings.TrimSuffix(payload, "…")); n != 240 {
+		t.Errorf("truncated payload = %d bytes, want 240 (truncateOllamaErr cap)", n)
 	}
 }
 
@@ -151,8 +159,10 @@ func TestOllamaChat_StreamErrorFrame_TruncatesLongError(t *testing.T) {
 // TestOllamaGenerate_StreamingProviderError only asserts Contains on
 // a short string.
 func TestOllamaGenerate_StreamErrorFrame_TruncatesLongError(t *testing.T) {
+	// Since GitHub #667 only daemon-built text reaches the frame, so the
+	// long text is an open-circuit error for a 1000-byte model name.
 	longErr := strings.Repeat("q", 1000)
-	stub := &streamingStub{model: "stub", err: errors.New(longErr)}
+	stub := &streamingStub{model: "stub", err: &chat.ModelUnhealthyError{Route: "r", Model: longErr, State: "open"}}
 	s := NewServer(WithChatProvider(stub), WithLogger(zerolog.Nop()))
 	body := bytes.NewBufferString(`{"prompt":"hi"}`)
 	req := httptest.NewRequest(http.MethodPost, "/api/generate", body)
@@ -187,8 +197,11 @@ func TestOllamaGenerate_StreamErrorFrame_TruncatesLongError(t *testing.T) {
 	if !strings.HasSuffix(payload, "…") {
 		t.Errorf("truncated payload should end with ellipsis, got tail %q", eeTail(payload))
 	}
-	if qCount := strings.Count(payload, "q"); qCount != 240 {
-		t.Errorf("truncated 'q' run = %d, want 240", qCount)
+	if !strings.HasPrefix(payload, "MODEL_UNHEALTHY: ") {
+		t.Errorf("the cut must keep the leading code, got %q", payload[:min(40, len(payload))])
+	}
+	if n := len(strings.TrimSuffix(payload, "…")); n != 240 {
+		t.Errorf("truncated payload = %d bytes, want 240", n)
 	}
 }
 

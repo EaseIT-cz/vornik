@@ -217,7 +217,7 @@ func (r *Runner) Run(ctx context.Context, cfg RunConfig) (Journal, error) {
 		WorkspaceReset:      WorkspaceResetNoWorkspace,
 	}}
 	if r.Workspace != nil {
-		j.Manifest.WorkspaceReset = WorkspaceResetTargetsAndState
+		j.Manifest.WorkspaceReset = WorkspaceResetTargetsStateAndHistory
 	}
 
 	repeats := cfg.Repeats
@@ -272,10 +272,7 @@ func (r *Runner) Run(ctx context.Context, cfg RunConfig) (Journal, error) {
 				taskRun.TargetsProduced = produced
 			}
 			if r.Grader != nil {
-				res := AcceptanceResult{Outcome: AcceptanceNotGraded}
-				if spec.Acceptance != "" {
-					res = r.Grader.Grade(ctx, spec)
-				}
+				res := r.grade(ctx, spec, taskRun)
 				taskRun.Acceptance = &res
 			}
 			j.TaskRuns = append(j.TaskRuns, taskRun)
@@ -627,4 +624,20 @@ func updateInfraStreak(streak int, records []ExecutionRecord) int {
 		return streak
 	}
 	return streak + 1
+}
+
+// grade is the repeat's acceptance outcome (benchmark LLD §12.24). A repeat
+// that failed and whose package never reached HEAD is pipeline_failed, and the
+// grader is not run: there is no code to test (§12.32, GitHub #661). Without
+// a workspace, TargetsProduced is unset and the grader decides.
+func (r *Runner) grade(ctx context.Context, spec TaskSpec, run TaskRun) AcceptanceResult {
+	if spec.Acceptance == "" {
+		return AcceptanceResult{Outcome: AcceptanceNotGraded}
+	}
+	if len(spec.Targets) == 1 && !run.Succeeded {
+		if produced, known := run.TargetsProduced[spec.Targets[0]]; known && !produced {
+			return AcceptanceResult{Outcome: AcceptancePipelineFailed, Output: truncateOutput(run.ErrorText)}
+		}
+	}
+	return r.Grader.Grade(ctx, spec)
 }

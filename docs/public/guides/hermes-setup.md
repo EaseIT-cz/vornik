@@ -77,11 +77,14 @@ ship with Vornik (`make install-config-assets` installs them). To let Hermes als
 you approve before they are sent, see
 [Proposed writes](../features/companion.md#proposed-writes-a-person-approves-every-one).
 
-Scaffold the memory project rather than writing it by hand:
+Scaffold the memory project from the companion template rather than
+writing it by hand. The template brings the agents that run a code review
+and a memory ingest, which Hermes may start when Vornik's hints ask it to
+(step 2):
 
 ```bash
-vornikctl init project hermes-memory --config-dir ~/.config/vornik/configs \
-    --display-name "Hermes memory"
+vornikctl init project hermes-memory --template companion \
+    --config-dir ~/.config/vornik/configs --display-name "Hermes memory"
 ```
 
 Load both, and check that the daemon accepted them:
@@ -100,9 +103,10 @@ Still as `vornik`:
 # delegation only, to the workflows you name, within a budget
 vornikctl companion grant -p broker-mail --client hermes \
     --workflows mail-digest --budget-usd 5
-# memory only: this key can never delegate
-vornikctl companion grant -p hermes-memory --client hermes \
-    --memory-all --no-delegate
+# memory, plus a code review and a memory ingest, within a budget
+vornikctl companion grant -p hermes-memory --client hermes --memory-all \
+    --workflows companion-architectural-review,companion-rag-ingest \
+    --budget-usd 5
 ```
 
 Each prints its secret once, as the `.env` line Hermes needs:
@@ -112,8 +116,13 @@ Hermes key:
 
 - no `--skill-all` or other skill flags: the knowledge-skill store is for
   coding assistants;
-- no `companion-*` workflows: those are developer workflows
-  (reviews, ingest) for the coding-assistant companion, not for Hermes;
+- no `companion-*` workflow beyond the two above. Vornik's hints ask Hermes
+  for a review after a commit and an ingest after a design is written; both
+  run in the memory project, read only the files Hermes names, and stop at
+  the key's budget. Neither reaches mail, the broker project or a
+  credential. For a Hermes that does no code work, grant the memory key
+  `--memory-all --no-delegate` instead; the review and ingest hints are
+  then off, and `hermes vornik status` says so;
 - no memory flags on the broker key: grant refuses them on a broker project,
   and that refusal is the design.
 
@@ -169,7 +178,7 @@ As `hermes`:
 hermes plugins install vornik-companion
 hermes plugins enable vornik-companion
 hermes config set memory.provider vornik-companion   # Vornik as long-term memory
-hermes vornik status        # URL, which tokens are set, the daemon's capabilities
+hermes vornik status        # URL, tokens, the daemon's capabilities, review and ingest hints
 hermes memory status        # expect "installed" and "available"
 ```
 
@@ -191,6 +200,33 @@ later) has `vornik_task_logs` and `vornik_task_explain`; they show step
 progress and closed error classes only, never the task's own text. From
 0.21.1 they appear only when the daemon advertises `companion-progress`, so
 an older daemon does not offer calls it cannot answer.
+
+### 5. What Vornik teaches Hermes (plugin 0.23.0 and later)
+
+With the memory key set, Vornik guides how Hermes works, the same way it
+guides Claude Code and Codex:
+
+- **Standing rules.** Each new Hermes session's system prompt carries
+  Vornik's working rules: delegate what can run without you, verify what
+  comes back, write ideas down, park side tasks. The text comes from the
+  daemon, so all three clients read the same rules.
+- **Hints at the moment of need.** After a successful `git commit`, Hermes
+  is told to have the change reviewed; after it writes a design document,
+  to ingest it into memory; after a test run fails, to search memory for
+  the failure first. The hint is added to the result of the command that
+  caused it, marked as coming from Vornik. Hermes is shown only hints it
+  can act on.
+- **A check before finishing.** When Hermes edited files and is about to
+  finish with a hint not followed, it is asked once to follow it or to tell
+  you why not. It is never forced.
+- **You see whether it worked.** `vornikctl companion hints -p hermes-memory` reports, per
+  hint, how often it fired and was followed, across Claude Code, Codex and
+  Hermes. Mute a hint for a project with `companion.mute` in its project
+  file; a hint that is rarely followed backs off by itself.
+
+To review a commit, Hermes calls `vornik_companion_delegate` with the files
+to review; the plugin reads them and sends them to Vornik, so their content
+never passes through the model.
 
 ## Admin setup (opt-in)
 

@@ -4,15 +4,19 @@
 @tailwind components;
 @tailwind utilities;
 
-/* The Play CDN's preflight coloured placeholders with Tailwind's default
-   gray-400 (#9ca3af); a CLI build resolves the same rule through this config's
-   gray family (the ink tokens) and renders them darker. Keep the console's
-   look as it was (GitHub #165 changes where the CSS is built, not the palette;
-   web-ui-design.md "Self-hosted Tailwind and the console CSP"). */
+/* Placeholder text meets WCAG 4.5:1 on the card and page surfaces in both
+   themes (GitHub #486, operator decision A13; web-ui-design.md "The console
+   service worker, the CSP plan and the placeholder colour" §F): light
+   --ink-500 (#646C78), dark --ink-400 (#9AA2AC). It was #9ca3af in both,
+   2.54:1 on a light card. TestPlaceholderContrast_486 measures it. */
 @layer base {
     input::placeholder,
     textarea::placeholder {
-        color: #9ca3af;
+        color: rgb(var(--ink-500));
+    }
+    [data-theme="dark"] input::placeholder,
+    [data-theme="dark"] textarea::placeholder {
+        color: rgb(var(--ink-400));
     }
 }
 

@@ -343,3 +343,36 @@ func TestDashboardHasNoTradingData(t *testing.T) {
 func (s *stubLLMUsageRepo) ActiveDaysByAPIKey(context.Context, time.Time, time.Time, string) (map[string][]string, error) {
 	return nil, nil
 }
+
+// TestSpend_603_FourWindows — the overview's four spend cards moved to
+// /ui/spend (GitHub #603), sparkline included. The sparkline once 500'd the
+// page whenever bucketHourly returned a non-zero series (a `sub <int>
+// <float>` in the template); the polyline is pre-computed in Go, and this
+// guards it on its new page.
+func TestSpend_603_FourWindows(t *testing.T) {
+	now := time.Now().UTC()
+	repo := &stubLLMUsageRepo{
+		sum: 12.34,
+		rows: []*persistence.TaskLLMUsage{
+			{CostUSD: 0.50, RecordedAt: now.Add(-30 * time.Minute)},
+			{CostUSD: 1.25, RecordedAt: now.Add(-3 * time.Hour)},
+			{CostUSD: 0.10, RecordedAt: now.Add(-22 * time.Hour)},
+		},
+	}
+	srv := NewServer(WithLLMUsageRepository(repo), WithOnboardingDetector(alreadyOnboardedDetector()))
+	rr := httptest.NewRecorder()
+	srv.Spend(rr, httptest.NewRequest("GET", "/spend", nil))
+	if rr.Code != 200 {
+		t.Fatalf("spend returned %d, body: %s", rr.Code, rr.Body.String())
+	}
+	body := rr.Body.String()
+	for _, want := range []string{`data-block="spend-windows"`, "Spend · 24h", "Spend · 7 days", "Spend · 30 days", "Month-to-date", "<polyline", "$12.34"} {
+		if !strings.Contains(body, want) {
+			t.Errorf("spend page lacks %q", want)
+		}
+	}
+	// The overview's At a glance section still shows them (§D).
+	if over := renderDashboardBody(t, WithLLMUsageRepository(repo)); !strings.Contains(over, "Spend · 24h") {
+		t.Error("the overview's At a glance section lost the spend cards")
+	}
+}

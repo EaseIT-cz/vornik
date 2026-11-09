@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"strings"
 
+	"vornik.io/vornik/internal/configlock"
 	"vornik.io/vornik/internal/persistence"
 	"vornik.io/vornik/internal/registry"
 )
@@ -35,6 +36,15 @@ func (s *Server) applyWorkflowGraphEdit(
 	r *http.Request, workflowID, action string,
 	transform func(fm, body []byte) (newFM, newBody []byte, err error),
 ) string {
+	// The read, write and reload hold the process's config-write lock
+	// (operations design §6.9, GitHub #676). A caller must not hold it:
+	// configlock is a plain mutex, and a second Lock would deadlock.
+	unlock, lerr := configlock.LockAsWriter(r.Context())
+	if lerr != nil {
+		// Refused on a non-writer daemon (GitHub #681); nothing is read or written.
+		return "This daemon is not the config writer: make this change on the daemon that holds the config_writer lease. Nothing was saved."
+	}
+	defer unlock()
 	path := s.workflowGraphPath(workflowID)
 	if path == "" {
 		return "Invalid workflow id"

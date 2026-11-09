@@ -404,7 +404,8 @@ func SecretScanGate(c *IngestCandidate, cfg GateConfig) GateOutcome {
 	if cfg.SecretsDetector == nil || c.Content == "" {
 		return GateOutcome{Action: GateAllow, Gate: GateSecretScan}
 	}
-	findings := cfg.SecretsDetector.Scan([]byte(c.Content))
+	// The memory checkpoint adds the short-token rule (GitHub #438).
+	findings := secrets.MemoryFindings(cfg.SecretsDetector, []byte(c.Content))
 	if len(findings) == 0 {
 		return GateOutcome{Action: GateAllow, Gate: GateSecretScan}
 	}

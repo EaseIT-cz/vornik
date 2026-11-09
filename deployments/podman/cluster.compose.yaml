@@ -98,6 +98,8 @@ services:
       timeout: 5s
       retries: 5
       start_period: 30s
+    # No swap beyond the limit (GitHub #460, 08-runtime-manager-podman.md S6).
+    memswap_limit: 512M
     deploy:
       resources:
         limits:
@@ -165,6 +167,8 @@ services:
       timeout: 10s
       retries: 3
       start_period: 120s
+    # No swap beyond the limit (GitHub #460, 08-runtime-manager-podman.md S6).
+    memswap_limit: 1G
     deploy:
       resources:
         limits:
@@ -252,6 +256,8 @@ services:
       timeout: 10s
       retries: 3
       start_period: 120s
+    # No swap beyond the limit (GitHub #460, 08-runtime-manager-podman.md S6).
+    memswap_limit: 2G
     deploy:
       resources:
         limits:
@@ -317,6 +323,8 @@ services:
       timeout: 10s
       retries: 3
       start_period: 60s
+    # No swap beyond the limit (GitHub #460, 08-runtime-manager-podman.md S6).
+    memswap_limit: 512M
     deploy:
       resources:
         limits:

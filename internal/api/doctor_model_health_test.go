@@ -52,7 +52,7 @@ func TestEvalModelHealth_HighFailureRateFlagged(t *testing.T) {
 	stats := []modelHealthStat{
 		{model: "z-ai/glm-4.5-air:free", samples: 12, failures: 12, medianCompletionTokens: 300},
 	}
-	findings := evalModelHealth(stats, map[string]string{"z-ai/glm-4.5-air:free": "zai.glm-5"}, defaultDoctorThresholds())
+	findings := evalModelHealth(stats, oneFallback("z-ai/glm-4.5-air:free", "zai.glm-5"), defaultDoctorThresholds())
 	if len(findings) != 1 {
 		t.Fatalf("expected 1 finding, got %v", findings)
 	}
@@ -69,7 +69,7 @@ func TestEvalModelHealth_HighFailureRateFlagged(t *testing.T) {
 // rate. This is the local qwen3.6:35b (timeouts + empty output) case.
 func TestEvalModelHealth_DegenerateTokensFlagged(t *testing.T) {
 	stats := []modelHealthStat{
-		{model: "qwen3.6:35b", samples: 20, failures: 4, medianCompletionTokens: 3},
+		{model: "qwen3.6:35b", samples: 20, failures: 4, medianCompletionTokens: 3, hasTokenMedian: true},
 	}
 	findings := evalModelHealth(stats, nil, defaultDoctorThresholds())
 	if len(findings) != 1 {
@@ -87,7 +87,7 @@ func TestEvalModelHealth_DegenerateTokensFlagged(t *testing.T) {
 // not flagged — we don't want a single bad call to trip an alarm.
 func TestEvalModelHealth_LowSampleSkipped(t *testing.T) {
 	stats := []modelHealthStat{
-		{model: "rare.model", samples: 2, failures: 2, medianCompletionTokens: 1},
+		{model: "rare.model", samples: 2, failures: 2, medianCompletionTokens: 1, hasTokenMedian: true},
 	}
 	findings := evalModelHealth(stats, nil, defaultDoctorThresholds())
 	if len(findings) != 0 {

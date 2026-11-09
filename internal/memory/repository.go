@@ -1092,6 +1092,42 @@ func (r *Repository) SupersedeDocument(ctx context.Context, projectID, repoScope
 	return int(n), nil
 }
 
+// RetireDocument marks every servable upload chunk of one document
+// superseded, keeping no survivor (design 22, amendment 2026-11-07, GitHub
+// #657). The repository mirror calls it when the document's current version is
+// kept out (disclosure: never, unparsable front matter, disclosureExclude), so
+// no earlier version of a file its own mark forbids stays in the corpus. The
+// key and the upload-only invariant are SupersedeDocument's: an agent's output
+// named like the path is never touched. No epoch is recorded, so a corpus
+// rollback never restores a forbidden file; pre_supersede_status keeps the
+// prior state for an operator.
+//
+// Returns the count of chunks marked superseded.
+func (r *Repository) RetireDocument(ctx context.Context, projectID, repoScope, documentPath string) (int, error) {
+	if r == nil || r.db == nil {
+		return 0, nil
+	}
+	if projectID == "" || repoScope == "" || documentPath == "" {
+		return 0, nil
+	}
+	res, err := r.db.ExecContext(ctx, `
+		UPDATE project_memory_chunks
+		SET validation_status    = 'superseded',
+		    pre_supersede_status = validation_status,
+		    superseded_in_epoch  = NULL
+		WHERE `+uploadChunkPredicate+`
+		  AND source_name = $3
+	`, projectID, repoScope, documentPath)
+	if err != nil {
+		return 0, fmt.Errorf("retire document %q: %w", documentPath, err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return 0, err
+	}
+	return int(n), nil
+}
+
 // documentSupersedeWhere selects the chunks SupersedeDocument retires for
 // ($1 project, $2 scope, $3 document path): servable upload chunks of the
 // document that do not belong to the survivor. The survivor subquery and the
@@ -2823,10 +2859,18 @@ func (r *Repository) DLQMove(ctx context.Context, chunkID, projectID, reason, la
 	}
 	defer func() { _ = tx.Rollback() }()
 
-	if _, err := tx.ExecContext(ctx,
-		`DELETE FROM memory_embed_queue WHERE chunk_id = $1`, chunkID,
-	); err != nil {
+	// A chunk DLQReplay re-queued carries its DLQ history on the queue row
+	// (GitHub #674); NULL, or no queue row, means no history.
+	var carried sql.NullInt64
+	var carriedFirst sql.NullTime
+	if err := tx.QueryRowContext(ctx,
+		`DELETE FROM memory_embed_queue WHERE chunk_id = $1 RETURNING dlq_retry_count, dlq_first_failed_at`, chunkID,
+	).Scan(&carried, &carriedFirst); err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return fmt.Errorf("dlq delete queue row: %w", err)
+	}
+	insertCount := sql.NullInt64{}
+	if carried.Valid {
+		insertCount = sql.NullInt64{Int64: carried.Int64 + 1, Valid: true}
 	}
 	// retry_after on the UPDATE branch is computed server-side
 	// using the post-bump retry_count so the exponential backoff
@@ -2836,20 +2880,29 @@ func (r *Repository) DLQMove(ctx context.Context, chunkID, projectID, reason, la
 	// of how many prior attempts had failed. Formula matches
 	// worker.go:dlqBackoff exactly: 10m * 2^retry_count, capped
 	// at 24h. INSERT branch (first failure) uses the caller's
-	// retry_after which is already dlqBackoff(0) = 10m.
+	// retry_after which is already dlqBackoff(0) = 10m, unless the chunk
+	// carries a history from DLQReplay ($6, GitHub #674): then the insert
+	// continues the count with the same formula. The exponent is capped
+	// at 20 (10m * 2^20 is far past the 24h cap): 2^31 overflowed the int cast
+	// at retry_count >= 30 and failed the move (GitHub #437).
 	if _, err := tx.ExecContext(ctx, `
 INSERT INTO memory_embed_dlq (chunk_id, project_id, reason, last_error, retry_count, retry_after, first_failed_at, last_failed_at)
-VALUES ($1, $2, $3, $4, 0, $5, now(), now())
+VALUES ($1, $2, $3, $4,
+    COALESCE($6::int, 0),
+    CASE WHEN $6::int > 0
+         THEN now() + LEAST(INTERVAL '24 hours', INTERVAL '10 minutes' * power(2, LEAST($6::int, 20))::int)
+         ELSE $5 END,
+    COALESCE($7::timestamptz, now()), now())
 ON CONFLICT (chunk_id) DO UPDATE SET
     reason         = EXCLUDED.reason,
     last_error     = EXCLUDED.last_error,
     retry_count    = memory_embed_dlq.retry_count + 1,
     retry_after    = now() + LEAST(
         INTERVAL '24 hours',
-        INTERVAL '10 minutes' * power(2, memory_embed_dlq.retry_count + 1)::int
+        INTERVAL '10 minutes' * power(2, LEAST(memory_embed_dlq.retry_count + 1, 20))::int
     ),
     last_failed_at = now()
-`, chunkID, projectID, reason, lastError, retryAfter); err != nil {
+`, chunkID, projectID, reason, lastError, retryAfter, insertCount, carriedFirst); err != nil {
 		return fmt.Errorf("dlq upsert: %w", err)
 	}
 	return tx.Commit()
@@ -3003,9 +3056,13 @@ func (r *Repository) DLQReplay(ctx context.Context, chunkIDs []string) (int, err
 		placeholders[i] = fmt.Sprintf("($%d, $%d)", 2*i+1, 2*i+2)
 		args = append(args, row.chunkID, row.projectID)
 	}
-	insertQuery := `INSERT INTO memory_embed_queue (chunk_id, project_id) VALUES ` +
-		strings.Join(placeholders, ", ") +
-		` ON CONFLICT (chunk_id) DO NOTHING`
+	// The DLQ row's retry_count and first_failed_at ride on the queue row,
+	// so the chunk's next failure continues its backoff (GitHub #674).
+	insertQuery := `INSERT INTO memory_embed_queue (chunk_id, project_id, dlq_retry_count, dlq_first_failed_at)
+		SELECT v.chunk_id, v.project_id, d.retry_count, d.first_failed_at
+		FROM (VALUES ` + strings.Join(placeholders, ", ") + `) AS v (chunk_id, project_id)
+		JOIN memory_embed_dlq d ON d.chunk_id = v.chunk_id
+		ON CONFLICT (chunk_id) DO NOTHING`
 	if _, err := tx.ExecContext(ctx, insertQuery, args...); err != nil {
 		return 0, fmt.Errorf("dlq replay insert: %w", err)
 	}

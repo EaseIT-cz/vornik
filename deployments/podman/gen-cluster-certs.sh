@@ -74,7 +74,7 @@ done
 SAN="DNS:localhost,IP:127.0.0.1"
 IFS=',' read -ra DNS_NAMES <<< "$WORKER_DNS"
 for name in "${DNS_NAMES[@]}"; do
-    name="${name// /}"   # trim spaces
+    name="${name// /}"
     [[ -z "$name" ]] && continue
     SAN="DNS:${name},${SAN}"
 done

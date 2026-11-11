@@ -57,12 +57,12 @@ REPO_URL="${VORNIK_REPO_URL:-https://github.com/EaseIT-cz/vornik}"
 # (`make quickstart-stamp-ref REF=<tag>`), so the PUBLISHED installer pins a
 # concrete release rather than a moving branch. Keep it a real, recent tag in
 # the repo. Override at runtime with VORNIK_REF (e.g. VORNIK_REF=main).
-DEFAULT_VORNIK_REF="2026.11.3"
+DEFAULT_VORNIK_REF="2026.11.4"
 REF="${VORNIK_REF:-$DEFAULT_VORNIK_REF}"
 DIR="${VORNIK_DIR:-$HOME/vornik}"
 HTTP_PORT="${VORNIK_HTTP_PORT:-8080}"
 PG_PORT="${POSTGRES_PORT:-5432}"
-GO_IMAGE="${VORNIK_GO_IMAGE:-docker.io/library/golang:1.26.10}"
+GO_IMAGE="${VORNIK_GO_IMAGE:-docker.io/library/golang:1.26.11}"
 
 c_blue=$'\033[1;36m'; c_yellow=$'\033[1;33m'; c_red=$'\033[1;31m'; c_green=$'\033[1;32m'; c_off=$'\033[0m'
 log()  { printf '%s==>%s %s\n' "$c_blue"   "$c_off" "$*"; }
@@ -596,7 +596,7 @@ if [ "$(uname -s)" = "Darwin" ]; then
   curl -fsSL "${mac_base}/macos/install.sh" | VORNIK_REF="${REF}" bash
   exit "$?"
 fi
-[ "$(uname -s)" = "Linux" ] || die "This quickstart targets Linux or macOS (rootless podman / Lima VM). For Windows or k8s, see deployments/podman/README.md and docs/public/getting-started.md."
+[ "$(uname -s)" = "Linux" ] || die "This quickstart targets Linux or macOS (rootless podman / Lima VM). For Windows or k8s, see deployments/podman/README.md and docs/public/getting-started/index.md."
 [ "$(id -u)" -ne 0 ] || die "Run as a normal (non-root) user: Vornik CE installs as a rootless 'systemctl --user' service and spawns agents via your rootless podman. (The Enterprise RPM/deb is the system-service path.)"
 
 CONFIG_DIR="$HOME/.config/vornik"

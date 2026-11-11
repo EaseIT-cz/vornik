@@ -48,6 +48,13 @@ type Policy struct {
 	MaxEntriesPerDay       int
 	MaxPositionsPerRegion  int
 	CorrelatedGroups       [][]string
+	// BlockLongAtScore: a RISK_OFF region blocks longs at this score or
+	// below; -1 is every RISK_OFF read, -2 only a strong one (GitHub #716).
+	BlockLongAtScore int
+	// RegimePanel is the component count each region's regime needs; nil
+	// means v2.1's us 6, eu 5, apac 4 (GitHub #717: the floor's own
+	// min_component_count).
+	RegimePanel map[string]int
 }
 
 // DefaultPolicy is v2.1 as the strategist prompt states it.
@@ -60,7 +67,24 @@ func DefaultPolicy() Policy {
 		EarningsWindowSessions: 2, CooldownSessions: 3,
 		MaxEntriesPerDay: 4, MaxPositionsPerRegion: 4,
 		CorrelatedGroups: [][]string{{"ASML", "TSM", "NVDA"}},
+		BlockLongAtScore: -1,
 	}
+}
+
+// RiskOffBlocksLong is the one implementation of block_long_at_score
+// (GitHub #716), used by the floor and the engine. At -1 (or any value but
+// -2, the zero value included) it is the label check and the score is not
+// read. At -2 a RISK_OFF long is blocked when its score is -2, missing, or
+// above -1: the regime tool labels RISK_OFF only at -1 or below, so a
+// RISK_OFF score above that is malformed and fails closed.
+func RiskOffBlocksLong(label string, score *int, blockAt int) bool {
+	if label != "RISK_OFF" {
+		return false
+	}
+	if blockAt != -2 {
+		return true
+	}
+	return score == nil || *score <= blockAt || *score > -1
 }
 
 // SPYTrendOK is the market filter: SPY's close and SMA50 both above its

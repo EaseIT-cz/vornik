@@ -2,24 +2,26 @@
 
 ## Reporting a vulnerability
 
-Please report security issues **privately** — do not open a public issue for a
+Report security issues **privately**; do not open a public issue for a
 suspected vulnerability.
 
-- Email: **security@vornik.io** with details and, if possible, a minimal
+- E-mail **security@vornik.io** with the details and, if you can, a minimal
   reproduction.
-- You'll receive an acknowledgement; we'll coordinate a fix and disclosure
+- Enterprise customers can also use their commercial support channel.
+- You will receive an acknowledgement, and we will agree a fix and disclosure
   timeline with you.
-
-> **Before public release:** the `security@vornik.io` inbox is provisioned and a
-> PGP key is published here (for encrypted reports) ahead of the public flip.
 
 ## Supported versions
 
-Security fixes target the latest released line. Once a versioning and release
-cadence is published (with the first public release), this section lists exactly
-which lines receive fixes.
+Security fixes target the latest released version. Release notes say which
+fixes each release carries.
 
 ## Scope
 
 This policy covers the **Vornik Community Edition** in this repository. The
 Enterprise overlay is covered separately under its commercial terms.
+
+## How Vornik is secured
+
+The threat model, trust boundaries, controls and residual risks are described
+in the [public security model](security-model.md).

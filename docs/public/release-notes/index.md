@@ -1,7 +1,7 @@
 ---
 sources:
     - path: docs/release-notes
-      sha256: be7fb946e86a4e2dcb63ce53c7d79f094b6764084efbcf8710d9f4a0a9d242a6
+      sha256: a1ada23f695a48021d6d26781dd2fb958e3fab6ad63559153e997fe967fdcfa3
 ---
 # Release Notes
 
@@ -16,6 +16,61 @@ behavior changes, and notable fixes. Internal-only changes are omitted.
     new behavior; those are called out below.
 
 ---
+
+## 2026.11.4
+
+### Security
+
+- **Go 1.26.11.** The daemon, the CLI and the images are built with Go
+  1.26.11, which fixes GO-2026-6859 in `net/http`, reported by govulncheck
+  against 1.26.10.
+
+### Fixes
+
+- **The Enterprise packages ship the registry and project templates**
+  (GitHub #726). The RPM and deb installed no `configs/` tree, so a fresh
+  package install had no registry and the daemon stopped at start ("no
+  registry config directory found"). The package now carries the shipped
+  swarms, workflows, role library and project templates, and installs them
+  into `/etc/vornik/configs` on install and on upgrade, as the daemon's
+  user, keeping files you edited. A registry you keep directly in
+  `/etc/vornik` is left alone.
+- **A managed instance can rewrite its own configuration** (GitHub #728).
+  Managed setup patches the configuration file as the daemon's user, which
+  could not write beside the root-owned file. Provisioning now gives the
+  daemon its configuration file and lets it write in `/etc/vornik`, while
+  the files root owns there stay out of its reach.
+- **`vornikctl playbook show` resolves the codes doctor prints** (GitHub
+  #702). `doctor` names error codes such as `UPSTREAM_RATE_LIMITED`;
+  `playbook show` answered "Unrecognised failure class" for them. It now
+  shows the entry that covers the code and says it resolved it.
+- **`doctor fallback_rungs` stops alarming about fixed problems** (GitHub
+  #703). A fallback model removed from the configuration, or one that has
+  worked since its last failure, kept the check at ERROR for up to 30 days.
+  The check now compares its 30-day history against the current
+  configuration and the model's own recent successes.
+
+- **Companion hint hooks hold their claims on every host** (GitHub #687).
+  The Claude Code and Codex hint hooks and the recall nudges claimed a slot
+  with `mkdir` and relied on one concurrent caller winning. On Ubuntu 26.04,
+  whose `mkdir` is uutils coreutils 0.10.0, more than one caller won in 13
+  of 200 measured rounds. A claim is now a file opened with `O_EXCL` (bash
+  noclobber), atomic whatever `mkdir` the host has. Plugins 0.50.7 (Claude
+  Code) and 0.45.5+codex.20261109.
+- **Hermes companion 0.23.1: delegations never upload credential files**
+  (Hermes catalogue review). `vornik_companion_delegate` read any regular
+  file in the task's workspace, so a model naming `.env`, or `auth.json`
+  in the Hermes home, sent it to Vornik, where an ingest could store it.
+  It now refuses `.env` and its variants, `.envrc`, and anything under the
+  Hermes home, as Hermes's own `read_file` does. Where Hermes does not say
+  where the task's workspace is, it refuses instead of reading the process
+  directory.
+- **Companion hint hooks: no slow match on long commands.** The rule that
+  spots a `git commit` after variable assignments could take minutes on a
+  crafted ~400-character command in the Hermes plugin; it now matches in
+  linear time. The Claude Code and Codex hooks get the same rule (they were
+  never slow). Plugins 0.23.1 (Hermes), 0.50.8 (Claude Code) and
+  0.45.6+codex.20261111.
 
 ## 2026.11.3
 
@@ -2559,7 +2614,7 @@ model-health is fully visible in the doctor.
   now works on **macOS** as well as Linux — the same command; the script detects
   your OS. On macOS it provisions a small Linux VM and runs the stack inside it,
   so the zero-egress agent isolation is preserved exactly as on Linux. See
-  [Getting started](../getting-started.md#macos-inside-a-linux-vm).
+  [Getting started](../getting-started/index.md#macos-inside-a-linux-vm).
 - **Control-plane: apply tuning changes without waiting for an idle window.** A
   *value-only* workflow edit — e.g. reclaiming an over-provisioned step timeout —
   now applies even while tasks that use the workflow are in flight; only

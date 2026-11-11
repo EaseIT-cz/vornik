@@ -2319,7 +2319,6 @@ func (b *Bot) Start(ctx context.Context) error {
 
 	b.restoreConversations()
 
-	// Register bot commands in the Telegram menu.
 	b.registerBotMenu(ctx)
 
 	b.wg.Add(1)
@@ -2943,7 +2942,6 @@ func (b *Bot) SetSecretsDetector(d secrets.Detector) {
 	b.secretsDetector = d
 }
 
-// sendMessage sends a message to a chat.
 func (b *Bot) sendMessage(ctx context.Context, chatID int64, text string) error {
 	return b.sendMessageWithMarkup(ctx, chatID, text, nil)
 }
@@ -3328,14 +3326,12 @@ func (b *Bot) sessionPersisterRef() *sessionstore.Persister {
 	return b.sessionPersister
 }
 
-// getActiveProject returns the active project for a chat.
 func (b *Bot) getActiveProject(chatID int64) string {
 	b.mu.RLock()
 	defer b.mu.RUnlock()
 	return b.activeProjects[chatID]
 }
 
-// setActiveProject sets the active project for a chat.
 func (b *Bot) setActiveProject(chatID int64, projectID string) {
 	b.mu.Lock()
 	defer b.mu.Unlock()

@@ -58,7 +58,6 @@ func (e *ContainerNotFoundError) Error() string {
 // It is stateless - all state is derived from Podman via labels - except
 // synthLogged, a log-once set (D5 R7) whose loss only repeats a log line.
 type Manager struct {
-	// podmanPath is the path to the podman binary.
 	podmanPath string
 
 	// defaultTimeout bounds every podman verb except run, pull and wait

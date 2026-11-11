@@ -414,7 +414,6 @@ func (w *Wizard) Converse(ctx context.Context, sessionID, operatorID, userMessag
 		CreatedAt: time.Now().UTC(),
 	})
 
-	// Build LLM messages.
 	msgs := w.buildChatMessages(callCtx, transcript)
 
 	// Apply response_format=json_schema via context so the chat

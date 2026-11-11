@@ -88,7 +88,7 @@ The replay creates a **new task** that runs to completion under normal
 scheduling. Poll it like any task, then compare:
 
 ```bash
-vornikctl task status <new_task_id>
+vornikctl task get <new_task_id>
 vornikctl blackbox scorecard <original_task_id> <new_task_id>
 ```
 

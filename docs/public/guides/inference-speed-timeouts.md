@@ -188,8 +188,8 @@ sign you need it. Those timeouts no longer mark the model unhealthy, so they
 cannot take task traffic down with them.
 
 **4. The context window you declared versus the one the server runs.**
-`agent_llm.model_limits.<model>.context` must match what the server actually
-serves, not the model's advertised maximum. Ollama, for example, runs whatever
+`agent_llm.model_limits.<model>.context_size` must match what the server
+actually serves, not the model's advertised maximum. Ollama, for example, runs whatever
 `num_ctx` it was started with. An over-declared window produces prompts the
 server truncates or refuses.
 

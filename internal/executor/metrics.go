@@ -394,7 +394,6 @@ type Metrics struct {
 	// can alert on any non-zero rate.
 	ChildArtifactsEmptyTotal *prometheus.CounterVec
 
-	// registry is the Prometheus registerer used for registering metrics.
 	registry prometheus.Registerer
 
 	// modelStats mirrors counter state so the two derived gauges can be

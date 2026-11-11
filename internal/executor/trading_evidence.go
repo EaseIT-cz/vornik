@@ -56,24 +56,33 @@ func incEvidenceRefused(reason string) {
 // tasks, projects without the gate, results without a proposals key, and
 // ticks outside the US regular session pass untouched.
 func (e *Executor) checkTradingEvidence(ctx context.Context, in *StepOutcome) error {
+	_, _, err := e.examineTradingEvidence(ctx, in)
+	return err
+}
+
+// examineTradingEvidence is checkTradingEvidence that also returns, for an
+// accepted strategist output it examined, the step's tool calls and the
+// project; both are nil when the gate did not examine the step. The caller
+// records the funnel and the shadow (GitHub #717: one recording path).
+func (e *Executor) examineTradingEvidence(ctx context.Context, in *StepOutcome) ([]trading.ToolCall, *registry.Project, error) {
 	if in == nil || in.Task == nil || extractTaskType(in.Task) != "trading" || e.auditRepo == nil {
-		return nil
+		return nil, nil, nil
 	}
 	resolver, ok := e.workflows.(interface {
 		GetProject(string) *registry.Project
 	})
 	if !ok {
-		return nil
+		return nil, nil, nil
 	}
 	p := resolver.GetProject(in.Task.ProjectID)
 	if p == nil || !p.Trading.AnalysisEvidence.Enabled {
-		return nil
+		return nil, nil, nil
 	}
 	if open, _ := trading.USRegularSession(evidenceNow()); !open {
-		return nil
+		return nil, nil, nil
 	}
 	if in.Execution == nil || in.Execution.ID == "" {
-		return nil
+		return nil, nil, nil
 	}
 	execID := in.Execution.ID
 	filter := persistence.ToolAuditFilter{ExecutionID: &execID, PageSize: 500}
@@ -84,7 +93,7 @@ func (e *Executor) checkTradingEvidence(ctx context.Context, in *StepOutcome) er
 	entries, err := e.auditRepo.List(ctx, filter)
 	if err != nil {
 		incEvidenceRefused("audit_unavailable")
-		return fmt.Errorf("schema violation: analysis evidence: tool audit unavailable for this step: %w", err)
+		return nil, nil, fmt.Errorf("schema violation: analysis evidence: tool audit unavailable for this step: %w", err)
 	}
 	calls := make([]trading.ToolCall, 0, len(entries))
 	for _, entry := range entries {
@@ -95,12 +104,7 @@ func (e *Executor) checkTradingEvidence(ctx context.Context, in *StepOutcome) er
 	}
 	refusal := trading.CheckAnalysisEvidence(in.ResultBytes, calls, p.Trading.AnalysisEvidence, p.Trading.EntryPolicy.AllowedSymbols, p.Trading.ProtectedSymbols)
 	if refusal == nil {
-		// The accepted strategist output: record its entry funnel
-		// (GitHub #596). Measurement only; it never fails the step.
-		e.recordFunnel(ctx, in)
-		// The rule engine decides the same tick in shadow (GitHub #598).
-		e.recordShadow(ctx, in, calls, p)
-		return nil
+		return calls, p, nil
 	}
 	incEvidenceRefused(refusal.Reason)
 	e.logger.Warn().
@@ -111,5 +115,5 @@ func (e *Executor) checkTradingEvidence(ctx context.Context, in *StepOutcome) er
 		Msg("trading analysis-evidence gate refused the step: " + refusal.Detail)
 	// "schema violation:" is the prefix the shape-retry layer recognises, so
 	// the strategist gets one corrective attempt naming what was missing.
-	return fmt.Errorf("schema violation: analysis evidence [%s]: %s", refusal.Reason, refusal.Detail)
+	return nil, nil, fmt.Errorf("schema violation: analysis evidence [%s]: %s", refusal.Reason, refusal.Detail)
 }

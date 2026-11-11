@@ -361,7 +361,6 @@ func normalizePath(path string) string {
 	// Strip trailing slash for matching
 	p := strings.TrimRight(path, "/")
 
-	// /api/v1/projects/{id}/...
 	if after, ok := stripPrefix(p, "/api/v1/projects/"); ok {
 		// Find next segment boundary
 		slash := strings.Index(after, "/")
@@ -381,7 +380,6 @@ func normalizePath(path string) string {
 		return "/api/v1/projects/{id}" + rest
 	}
 
-	// /api/v1/executions/{id}/...
 	if after, ok := stripPrefix(p, "/api/v1/executions/"); ok {
 		slash := strings.Index(after, "/")
 		if slash < 0 {

@@ -119,14 +119,14 @@
     {
       "bundle": "hermes",
       "file": "contrib/hermes-companion/companion_delegate.py",
-      "line": 87,
+      "line": 90,
       "tool": "catalog",
       "arguments": {}
     },
     {
       "bundle": "hermes",
       "file": "contrib/hermes-companion/companion_delegate.py",
-      "line": 202,
+      "line": 252,
       "tool": "delegate",
       "arguments": {
         "workflow": "companion-architectural-review",

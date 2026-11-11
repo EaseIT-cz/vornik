@@ -113,6 +113,6 @@ apply journal relies on; and `config_assistant.model` and
 | `config_assistant.request_timeout` | `5m` | per-request deadline |
 | `config_assistant.class_e_daily_cap` | `5` | class-E proposals per credential per day |
 | `config_assistant.auto_apply.<project>.classes` | — | opt-in for A, B1, B2 |
-| `config_assistant.chat_door` | `false` | open the chat door (A, B2) |
+| `config_assistant.chat_entrypoint` | `false` | enable the chat entrypoint (A, B2) |
 
 See also [Architect consultation](architect-consult.md).

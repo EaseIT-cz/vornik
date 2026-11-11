@@ -4,8 +4,11 @@ Design 24, "Engineering guidance from Vornik", F (GitHub #686). The review and
 ingest workflows the hints name run on the memory key and require input files.
 vornik_delegate sends with the broker key and takes typed inputs only, so this
 tool sends ``delegate`` with the memory key and attaches the files the model
-names. The plugin reads them; the model never sees their bytes. Hermes's
-read_file already reads the same paths, so this adds no read capability.
+names. The plugin reads them; the model never sees their bytes. It refuses
+at least what core read_file refuses (the credential basenames in
+CREDENTIAL_NAMES and anything under the Hermes home), and also hard links,
+since a file sent here can be stored in recallable memory (maintainers'
+requested changes on 0.23.0, hermes-agent PR 151967 review 5838868282).
 """
 
 from __future__ import annotations
@@ -94,22 +97,56 @@ class CompanionTasks:
         return ids
 
 
+# Basenames core read_file refuses, in any directory (catalogue review of 0.23.0).
+# Compared case-folded, so .ENV is refused too on a case-insensitive filesystem.
+CREDENTIAL_NAMES = frozenset((".env", ".env.local", ".env.development", ".env.production",
+                              ".env.test", ".env.staging", ".envrc"))
+CONTAINER_REASON = ("Hermes runs its tools in a container here, so the plugin cannot read the files; "
+                    "ask the user to run the review from a local terminal")
+NO_WORKSPACE_REASON = ("this Hermes does not say where the task's workspace is (its private path helpers "
+                       "changed), so the plugin will not guess")
+NO_HOME_REASON = "this Hermes does not say where its home is, so the plugin cannot keep its credentials out"
+
+
+def hermes_home():
+    """The Hermes home's real path; None outside Hermes, or when the lookup
+    fails inside it (read_files then refuses)."""
+    try:
+        from hermes_constants import get_hermes_home
+    except ImportError:
+        return None
+    try:
+        return os.path.realpath(str(get_hermes_home()))
+    except Exception:
+        return None
+
+
+def _in_hermes() -> bool:
+    try:
+        import hermes_constants  # noqa: F401
+    except ImportError:
+        return False
+    return True
+
+
 def workspace_root(task_id: str = "default"):
-    """The directory Hermes's own file tools resolve a relative path against
-    for this task (tools/file_tools_paths._resolve_base_dir at f97608f: the
-    task's workspace root, else the process cwd), or None when Hermes runs
-    its tools in a container, whose files this host process cannot read.
-    Outside Hermes (tests), the process cwd."""
+    """(root, reason): the task's workspace root, the directory Hermes's file
+    tools resolve relative paths against (tools/file_tools_paths.
+    _resolve_base_dir at f97608f). (None, reason) when the plugin cannot know
+    it: Hermes runs its tools in a container, or, inside Hermes, its private
+    path helpers are missing or fail. The process cwd is used only outside
+    Hermes (tests); inside it the cwd can differ from the task's workspace
+    (catalogue review of 0.23.0)."""
     try:
         from tools import file_tools_paths as ftp
     except ImportError:
-        return os.getcwd()
+        return (None, NO_WORKSPACE_REASON) if _in_hermes() else (os.getcwd(), None)
     try:
         if ftp._uses_container_paths(task_id):
-            return None
-        return str(ftp._resolve_base_dir(task_id))
-    except Exception:  # a Hermes whose private helpers changed: the process cwd
-        return os.getcwd()
+            return None, CONTAINER_REASON
+        return str(ftp._resolve_base_dir(task_id)), None
+    except Exception:
+        return (None, NO_WORKSPACE_REASON) if _in_hermes() else (os.getcwd(), None)
 
 
 def _refuse(path: str, rule: str) -> str:
@@ -133,6 +170,10 @@ def read_files(paths, root=None):
     if len(paths) > MAX_FILES:
         return None, json.dumps({"error": "%s at most %d files, got %d" % (REFUSAL_PREFIX, MAX_FILES, len(paths))})
     root = os.path.realpath(root or os.getcwd())
+    home = hermes_home()
+    if home is None and _in_hermes():
+        # Inside Hermes a failed home lookup must not skip the home check.
+        return None, json.dumps({"error": REFUSAL_PREFIX + " " + NO_HOME_REASON})
     out, total = [], 0
     for p in paths:
         full = os.path.abspath(os.path.join(root, p))
@@ -140,6 +181,10 @@ def read_files(paths, root=None):
             return None, _refuse(p, "outside the working directory")
         if os.path.realpath(full) != full:
             return None, _refuse(p, "a symlink on the way to the file; name the file itself")
+        if os.path.basename(full).casefold() in CREDENTIAL_NAMES:
+            return None, _refuse(p, "a credential file; Vornik never uploads it")
+        if home and (full == home or os.path.commonpath([home, full]) == home):
+            return None, _refuse(p, "under the Hermes home, which holds its credentials")
         try:
             fd = os.open(full, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
         except FileNotFoundError:
@@ -154,8 +199,14 @@ def read_files(paths, root=None):
             opened = _fd_path(fd)
             if opened is not None and opened != full:
                 return None, _refuse(p, "changed while it was being read")
-            if not stat.S_ISREG(os.fstat(fd).st_mode):
+            st = os.fstat(fd)
+            if not stat.S_ISREG(st.st_mode):
                 return None, _refuse(p, "not a regular file")
+            if st.st_nlink > 1:
+                # A hard link can give a credential file an innocent name and
+                # place; the path checks above cannot see that (code review of
+                # 0.23.1, F2). Workspace files are not hard-linked in practice.
+                return None, _refuse(p, "a hard link (%d names); name a file with one name" % st.st_nlink)
             data = b""
             while len(data) <= MAX_BYTES - total:
                 chunk = os.read(fd, 65536)
@@ -188,10 +239,9 @@ class CompanionDelegate:
         if workflow not in offered:
             return json.dumps({"error": "%s is not one of your memory key's workflows (%s)"
                                % (workflow, ", ".join(sorted(offered)) or "none")})
-        root = workspace_root(task_id or "default")
+        root, why = workspace_root(task_id or "default")
         if root is None:
-            return json.dumps({"error": REFUSAL_PREFIX + " Hermes runs its tools in a container here, so the "
-                               "plugin cannot read the files; ask the user to run the review from a local terminal"})
+            return json.dumps({"error": REFUSAL_PREFIX + " " + (why or NO_WORKSPACE_REASON)})
         files, error = read_files(args.get("files"), root)
         if error:
             return error

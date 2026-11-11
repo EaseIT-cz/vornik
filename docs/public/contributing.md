@@ -48,5 +48,5 @@ contributions within the Community surface.
 
 ## Code of conduct
 
-> **Before public release:** a `CODE_OF_CONDUCT.md` is added at the repo root and
-> linked here.
+The code of conduct lives at [`CODE_OF_CONDUCT.md`](https://github.com/EaseIT-cz/vornik/blob/main/CODE_OF_CONDUCT.md)
+in the public repository.

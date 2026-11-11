@@ -1,6 +1,6 @@
 // Task 6: reminderCompletionNotifier. Reuses runner_test.go's stubRepo /
 // stubChannel / stubResolver fakes rather than hand-rolling new ones — see
-// docs/plans/2026-07-19-scheduled-task-notifications-plan.md Task 6.
+// https://docs.vornik.io Task 6.
 package reminders
 
 import (

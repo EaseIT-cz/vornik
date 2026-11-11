@@ -38,7 +38,6 @@ log_error() {
     echo -e "${RED}[ERROR]${NC} $*" >&2
 }
 
-# Check dependencies
 check_dependencies() {
     if ! command -v podman &>/dev/null; then
         log_error "podman is required but not installed"
@@ -71,7 +70,6 @@ create_pod() {
     fi
 }
 
-# Create the volume if it doesn't exist
 ensure_volume() {
     if podman volume exists vornik-postgres-data 2>/dev/null; then
         log_info "Volume 'vornik-postgres-data' already exists"
@@ -85,7 +83,6 @@ ensure_volume() {
     fi
 }
 
-# Start PostgreSQL
 start_postgres() {
     log_info "Starting PostgreSQL..."
     
@@ -99,7 +96,6 @@ start_postgres() {
     fi
 }
 
-# Wait for PostgreSQL to be ready
 wait_for_postgres() {
     log_info "Waiting for PostgreSQL to be ready..."
     
@@ -120,7 +116,6 @@ wait_for_postgres() {
     return 1
 }
 
-# Print connection info
 print_connection_info() {
     echo ""
     echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
@@ -143,7 +138,6 @@ print_connection_info() {
     echo ""
 }
 
-# Main
 main() {
     local create_pod_flag=false
     

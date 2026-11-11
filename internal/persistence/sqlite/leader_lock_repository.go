@@ -59,7 +59,6 @@ func (r *LeaderLockRepository) Acquire(ctx context.Context, workerID, holderID s
 	}
 
 	if rowExists {
-		// Parse the stored expires_at.
 		exAt, parseErr := time.Parse(time.RFC3339Nano, expiresAtStr)
 		if parseErr != nil {
 			return false, 0, fmt.Errorf("leader_lock sqlite: parse expires_at: %w", parseErr)

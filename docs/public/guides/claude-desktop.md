@@ -11,7 +11,7 @@ Claude's config files.
   the Vornik host with `vornikctl companion grant` (see
   [Companion](../features/companion.md#setting-it-up)).
 - `vornikctl` on the machine that runs Claude Desktop (see
-  [Getting started](../getting-started.md)).
+  [Getting started](../getting-started/index.md)).
 - Vornik's address, for example `https://vornik.example.com`. Over the
   network it must be `https://`; plain `http://` works only on the same
   machine.

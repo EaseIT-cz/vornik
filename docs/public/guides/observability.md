@@ -113,7 +113,7 @@ in which rows they count.
     looked like it had headroom may be at or over it, and its next `delegate`
     will be refused with `BUDGET_EXCEEDED`. Nothing is retroactively billed;
     only the gate's view widened. If you rely on caps, check
-    `vornikctl companion list` against the per-key rows on `/ui/spend` before
+    `vornikctl companion keys` against the per-key rows on `/ui/spend` before
     upgrading and raise any cap that was sized against companion traffic alone.
 
 From the CLI, `vornikctl cache-stats` reports cache effectiveness. (Note:

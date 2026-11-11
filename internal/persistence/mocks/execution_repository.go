@@ -11,29 +11,22 @@ import (
 
 // MockExecutionRepository is a mock implementation of ExecutionRepository for testing.
 type MockExecutionRepository struct {
-	// CreateFunc is the function called for Create.
 	CreateFunc func(ctx context.Context, execution *persistence.Execution) error
 
-	// GetFunc is the function called for Get.
 	GetFunc func(ctx context.Context, id string) (*persistence.Execution, error)
 
-	// GetByTaskIDFunc is the function called for GetByTaskID.
 	GetByTaskIDFunc func(ctx context.Context, taskID string) (*persistence.Execution, error)
 
-	// GetByTaskIDsFunc is the function called for the batch path.
 	// Nil falls back to looping GetByTaskIDFunc for compatibility.
 	GetByTaskIDsFunc func(ctx context.Context, taskIDs []string) (map[string]*persistence.Execution, error)
 
-	// UpdateFunc is the function called for Update.
 	UpdateFunc func(ctx context.Context, execution *persistence.Execution) error
 
-	// ListFunc is the function called for List.
 	ListFunc func(ctx context.Context, filter persistence.ExecutionFilter) ([]*persistence.Execution, error)
 
 	// CountFunc lets tests script the total-count return.
 	CountFunc func(ctx context.Context, filter persistence.ExecutionFilter) (int64, error)
 
-	// UpdateStatusFunc is the function called for UpdateStatus.
 	UpdateStatusFunc func(ctx context.Context, id string, status persistence.ExecutionStatus) error
 
 	// SetWorkflowSnapshotFunc lets tests dictate the snapshot-write
@@ -44,19 +37,14 @@ type MockExecutionRepository struct {
 	// pinned workflow on disk).
 	GetWorkflowSnapshotFunc func(ctx context.Context, id string) ([]byte, error)
 
-	// SaveStateSnapshotFunc is the function called for SaveStateSnapshot.
 	SaveStateSnapshotFunc func(ctx context.Context, id string, snapshot []byte, currentStepID string, completedSteps []string) error
 
-	// RecordCompletionFunc is the function called for RecordCompletion.
 	RecordCompletionFunc func(ctx context.Context, id string, result []byte) error
 
-	// RecordFailureFunc is the function called for RecordFailure.
 	RecordFailureFunc func(ctx context.Context, id string, errorMessage, errorCode string) error
 
-	// CountByStatusFunc is the function called for CountByStatus.
 	CountByStatusFunc func(ctx context.Context, projectID string) (map[persistence.ExecutionStatus]int64, error)
 
-	// GetRoleQualityFunc is the function called for GetRoleQuality.
 	GetRoleQualityFunc func(ctx context.Context, projectID string, since time.Duration) (map[string]*persistence.RoleQuality, error)
 
 	// CallCount tracks how many times each method was called.

@@ -197,8 +197,8 @@ judge-free figures did not move at all, so the judge-free tier is the headline n
 
 | Guide | What it covers |
 |---|---|
-| [Getting started](docs/public/getting-started.md) | Install, first run, your first task |
-| [Architecture](docs/public/architecture.md) | Daemon, tasks, leases, executor, workflows, MCP |
+| [Getting started](docs/public/getting-started/index.md) | Install, first run, your first task |
+| [Architecture](docs/public/concepts/architecture.md) | Daemon, tasks, leases, executor, workflows, MCP |
 | [Benchmarks](https://docs.vornik.io/benchmarks/) | What we measure, results by release, how to reproduce |
 | [Configuration](docs/public/configuration.md) | Where config lives + the key reference |
 | [CLI reference](docs/public/cli.md) | `vornik` (daemon) and `vornikctl` (control) |
@@ -237,4 +237,4 @@ Contributions welcome under a [CLA](docs/public/contributing.md)
 
 </div>
 
-<!-- summary-reviewed-through: 2026.11.3 -->
+<!-- summary-reviewed-through: 2026.11.4 -->

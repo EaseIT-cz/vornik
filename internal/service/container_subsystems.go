@@ -662,7 +662,6 @@ func brokerHeadersFor(p *registry.Project, serverName string) map[string]string 
 	return headers
 }
 
-// initTelegram initializes the Telegram bot.
 func (c *Container) initTelegram() error {
 	cfg := c.Config.Telegram
 	if !cfg.Enabled {

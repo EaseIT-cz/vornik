@@ -1899,6 +1899,7 @@ func (c *Container) rebuildSchedulerMetrics() {
 	executor.RegisterEvidenceMetrics(reg)
 	executor.RegisterFunnelMetrics(reg)
 	executor.RegisterShadowMetrics(reg)
+	executor.RegisterEngineMetrics(reg)
 	c.Logger.Info().Msg("trading floor and evidence metrics wired")
 
 	// Memory firewall metrics (LLD § Observability / drift-mitigation

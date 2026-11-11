@@ -453,7 +453,6 @@ func managedConfigCurrent(content []byte, req *managedSetupRequest, name, owner 
 	return true
 }
 
-// managedSetupContent writes managed setup's values into content.
 func managedSetupContent(content []byte, req *managedSetupRequest, name, owner string, admins []string, dispatcher string) ([]byte, error) {
 	if !slices.Contains(admins, owner) {
 		admins = append(slices.Clone(admins), owner)

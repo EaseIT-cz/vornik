@@ -57,7 +57,6 @@ func (f *oauthConnectorFixture) choice() approverdevice.ConnectorChoice {
 	return approverdevice.ConnectorChoice{Namespace: "hermes", Project: "personal"}
 }
 
-// confirmOne runs confirm 1 and returns its outcome.
 func (f *oauthConnectorFixture) confirmOne() approverdevice.ConnectorOutcome {
 	f.t.Helper()
 	ctx := context.Background()

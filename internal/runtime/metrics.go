@@ -51,7 +51,6 @@ type Metrics struct {
 	// kept_unknown, kept_lookup_failed.
 	OrphanSweepTotal *prometheus.CounterVec
 
-	// registry is the Prometheus registerer used for registering metrics.
 	registry prometheus.Registerer
 }
 

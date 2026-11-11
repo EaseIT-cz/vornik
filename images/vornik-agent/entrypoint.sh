@@ -1869,7 +1869,6 @@ handle_summarize_thread() {
         "$url" 2>/dev/null || echo '{"error":"request failed"}'
 }
 
-# Handle memory_search tool call.
 handle_memory_search() {
     local params="$1"
     local query limit url project_id encoded_q response
@@ -3287,7 +3286,7 @@ ${previous_result}
         fi
 
         # Build request from files — no shell variable size limits.
-        # Build request. Include max_tokens to override gateway defaults (e.g.
+        # Include max_tokens to override gateway defaults (e.g.
         # bedrock-access-gateway defaults to 2048 which truncates large file writes).
         # Also include options.num_ctx for Ollama-direct endpoints that respect it;
         # OpenAI-compatible gateways (Bedrock, etc.) silently ignore the options field.

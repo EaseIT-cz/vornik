@@ -138,8 +138,6 @@ promote, nothing changes.
 
 | Control | Effect |
 |---------|--------|
-| `VORNIK_ARCHITECT_PAUSED` | pauses architect-based candidate generation (the detector keeps writing triggers; deterministic recipes still apply) |
-| `VORNIK_ARCHITECT_DISABLED_KINDS` | refuses specific proposal kinds |
 | `vornikctl blackbox override set … --mute-hours` | silences detection for one (project, workflow, class) tuple |
 
 ## Where to find it

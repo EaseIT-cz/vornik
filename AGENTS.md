@@ -57,7 +57,7 @@ projects.
    tokens go only into the files named below, never into chat output, shell
    history you display, or git.
 3. **Target platform is Linux with rootless Podman.** On macOS/Windows,
-   stop and point your user at `docs/public/getting-started.md`.
+   stop and point your user at `docs/public/getting-started/index.md`.
 
 ---
 

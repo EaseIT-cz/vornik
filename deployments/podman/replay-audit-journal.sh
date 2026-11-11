@@ -44,7 +44,6 @@ DAEMON_URL="${VORNIK_BROKER_DAEMON_URL:?VORNIK_BROKER_DAEMON_URL must be set}"
 API_KEY="${VORNIK_BROKER_DAEMON_API_KEY:?VORNIK_BROKER_DAEMON_API_KEY must be set}"
 APPLY="${APPLY:-0}"
 
-# Verify dependencies.
 if ! command -v jq &>/dev/null; then
     echo "ERROR: jq is required but not found in PATH" >&2
     exit 1

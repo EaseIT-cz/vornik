@@ -225,7 +225,6 @@ func (s *Server) WizardGenerate(w http.ResponseWriter, r *http.Request, projectI
 		return
 	}
 
-	// Write files.
 	if _, err := writeProjectConfigAtomic(swarmPath, []byte(swarmMD)); err != nil {
 		writeWizardJSON(w, http.StatusInternalServerError, wizardResponse{Error: "write swarm: " + err.Error()})
 		return

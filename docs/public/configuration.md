@@ -7,12 +7,15 @@ schema, so it never drifts).
 
 ## Where configuration lives
 
-Vornik searches for its config file in this order (first match wins):
+Vornik searches for its config file in this order (first existing file wins;
+both `config.yaml` and `vornik.yaml` are accepted at each location):
 
-1. the path in the `$VORNIK_CONFIG` environment variable,
-2. `./config.yaml` (or `./vornik.yaml`) in the working directory,
-3. `/etc/vornik/config.yaml`,
-4. an XDG/home location (`$XDG_CONFIG_HOME/vornik/` or `~/.config/vornik/`).
+1. the `--config` flag,
+2. the path in the `$VORNIK_CONFIG` environment variable,
+3. `./vornik.yaml`, then `./config.yaml`, in the working directory,
+4. an XDG/home location (`$XDG_CONFIG_HOME/vornik/` or `~/.config/vornik/`;
+   `config.yaml` tried before `vornik.yaml`),
+5. `/etc/vornik/`.
 
 Selected settings can be overridden by environment variables (for example the
 server address and database connection), which take precedence over the file —

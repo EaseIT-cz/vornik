@@ -25,7 +25,6 @@ packaging/scripts/postinstall_detect_test.sh  # 1: 1 note
 scripts/agentbench-reproduce.sh  # 5: 5 note
 scripts/backport-ce-pr.sh  # 1: 1 note
 scripts/bench-reproduce.sh  # 1: 1 note
-scripts/ce-leak-scan.sh  # 1: 1 warning
 scripts/check-ce-compliance-parity-selftest_test.sh  # 2: 2 note
 scripts/config-deployable.sh  # 5: 5 warning
 scripts/config-lint.sh  # 1: 1 note

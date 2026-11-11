@@ -32,18 +32,25 @@ to fix it rather than failing cryptically at runtime.
 To apply a feature's gates and bring it up:
 
 ```bash
-vornikctl doctor feature enable <feature-id>
+vornikctl doctor feature enable <feature-id> --apply
 ```
 
-This sets the feature's config gates for you. Two behaviours make this safe:
+Without `--apply` the command is a **dry run**: it prints the proposed gate
+changes and how they would be applied, and mutates no config. With `--apply`
+it backs up `config.yaml`, writes the gates, then either reloads the daemon
+and verifies, or (for restart-gated features) validates the written file and
+tells you to restart. If any step fails, it rolls back to the backup.
+Two behaviours make this safe:
 
 - **Prerequisite-gated.** Enable refuses to proceed if a prerequisite isn't met
   (for example, the embedding endpoint is unreachable), so you don't half-enable
   a feature into a broken state.
-- **Restart-aware.** Many features take effect only on a daemon restart. For
-  those, the doctor is **restart-gated**: it will not restart while tasks are
-  running, and waits for an idle window before applying — so enabling a feature
-  never interrupts work in flight.
+- **Restart-aware.** Some features take effect only on a daemon restart. For
+  those, enable **refuses** while tasks are active rather than waiting — it
+  tells you to wait for an idle window and try again. On an idle daemon it
+  writes the config and reports `RestartRequired`: the doctor never restarts
+  the daemon itself, so you restart vornik when it suits you. Enabling a
+  feature therefore never interrupts work in flight.
 
 ## Why use it instead of editing config
 

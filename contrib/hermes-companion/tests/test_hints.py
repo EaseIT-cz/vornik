@@ -112,6 +112,31 @@ class SharedCasesTest(Base):
                 self.assertEqual(sess.followed(), sorted(c["followed"]), "followed")
 
 
+class CommitRuleCostTest(unittest.TestCase):
+    """COMMIT_RE's value alternatives overlapped: repeated NAME="a NAME=b"
+    units backtracked exponentially (416 chars took 19 s, measured
+    2026-11-11; hermes-agent PR 151967, catalogue review of 0.23.0), on every
+    successful terminal call."""
+
+    def test_an_adversarial_command_matches_in_linear_time(self):
+        import signal
+        import time
+        if not hasattr(signal, "SIGALRM"):
+            self.skipTest("SIGALRM is POSIX-only; the bound is checked on POSIX hosts")
+
+        def boom(*_):
+            raise TimeoutError("COMMIT_RE backtracked")
+        old = signal.signal(signal.SIGALRM, boom)
+        self.addCleanup(signal.signal, signal.SIGALRM, old)
+        signal.alarm(2)
+        try:
+            t = time.monotonic()
+            self.assertIsNone(H.COMMIT_RE.search('NAME="a NAME=b" ' * 200))
+            self.assertLess(time.monotonic() - t, 1.0)
+        finally:
+            signal.alarm(0)
+
+
 class DeliveryTest(Base):
     def test_the_hint_is_appended_to_the_result_behind_the_marker(self):
         h, _ = self.hints()

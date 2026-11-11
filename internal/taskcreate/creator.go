@@ -356,7 +356,6 @@ func (c *Creator) Create(ctx context.Context, p Params) (*persistence.Task, erro
 		}
 	}
 
-	// Resolve priority.
 	priority := p.Priority
 	if priority == 0 && project != nil {
 		priority = project.DefaultPriority

@@ -267,7 +267,6 @@ func (r *BrokerActionRepository) CountStuck(ctx context.Context, now time.Time, 
 	return out, rows.Err()
 }
 
-// list implements persistence.BrokerActionRepository.
 func (r *BrokerActionRepository) list(ctx context.Context, query string, args ...any) ([]*persistence.BrokerAction, error) {
 	rows, err := r.db.QueryContext(ctx, query, args...)
 	if err != nil {

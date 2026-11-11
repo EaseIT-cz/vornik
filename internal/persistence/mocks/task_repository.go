@@ -11,33 +11,25 @@ import (
 
 // MockTaskRepository is a mock implementation of TaskRepository for testing.
 type MockTaskRepository struct {
-	PingFunc func(ctx context.Context) error
-	// CreateFunc is the function called for Create.
+	PingFunc   func(ctx context.Context) error
 	CreateFunc func(ctx context.Context, task *persistence.Task) error
 
-	// GetFunc is the function called for Get.
 	GetFunc func(ctx context.Context, id string) (*persistence.Task, error)
 
-	// GetByIdempotencyKeyFunc is the function called for GetByIdempotencyKey.
 	GetByIdempotencyKeyFunc func(ctx context.Context, projectID, idempotencyKey string) (*persistence.Task, error)
 
-	// UpdateFunc is the function called for Update.
 	UpdateFunc func(ctx context.Context, task *persistence.Task) error
 
-	// UpdateIfStatusFunc is the function called for UpdateIfStatus.
 	UpdateIfStatusFunc func(ctx context.Context, task *persistence.Task, allowed []persistence.TaskStatus) (bool, error)
 
-	// DeleteFunc is the function called for Delete.
 	DeleteFunc func(ctx context.Context, id string) error
 
-	// ListFunc is the function called for List.
 	ListFunc func(ctx context.Context, filter persistence.TaskFilter) ([]*persistence.Task, error)
 
 	// CountFunc lets tests script the total-count return separately
 	// from the paged List result. Defaults to (0, nil).
 	CountFunc func(ctx context.Context, filter persistence.TaskFilter) (int64, error)
 
-	// UpdateStatusFunc is the function called for UpdateStatus.
 	UpdateStatusFunc func(ctx context.Context, id string, status persistence.TaskStatus) error
 
 	// TransitionToCancelledFunc lets tests script the atomic
@@ -61,19 +53,14 @@ type MockTaskRepository struct {
 	// when nil.
 	TransitionConditionalFunc func(ctx context.Context, id string, from []persistence.TaskStatus, to persistence.TaskStatus, opts persistence.TransitionOpts) (bool, error)
 
-	// LeaseTaskFunc is the function called for LeaseTask.
 	LeaseTaskFunc func(ctx context.Context, opts persistence.LeaseOptions) (*persistence.Task, error)
 
-	// RenewLeaseFunc is the function called for RenewLease.
 	RenewLeaseFunc func(ctx context.Context, taskID, leaseID string, extendBySeconds int) error
 
-	// ReleaseLeaseFunc is the function called for ReleaseLease.
 	ReleaseLeaseFunc func(ctx context.Context, taskID, leaseID string, newStatus persistence.TaskStatus, opts persistence.ReleaseOptions) error
 
-	// FindExpiredLeasesFunc is the function called for FindExpiredLeases.
 	FindExpiredLeasesFunc func(ctx context.Context, limit int) ([]*persistence.Task, error)
 
-	// CountByStatusFunc is the function called for CountByStatus.
 	CountByStatusFunc func(ctx context.Context, projectID string) (map[persistence.TaskStatus]int64, error)
 
 	// CountRecentFailuresFunc lets tests dictate the rolling failure
@@ -84,7 +71,6 @@ type MockTaskRepository struct {
 	// per-project failure tally; nil returns an empty map.
 	CountRecentFailuresByProjectFunc func(ctx context.Context, errorClasses []string, since time.Time) (map[string]int, error)
 
-	// GetChildrenFunc is the function called for GetChildren.
 	GetChildrenFunc func(ctx context.Context, parentTaskID string) ([]*persistence.Task, error)
 
 	// OrphanChildrenFunc scripts the retry-path child-detach.
@@ -94,10 +80,8 @@ type MockTaskRepository struct {
 	// Defaults to (nil, nil) — i.e. "no children for any parent".
 	CountChildrenForParentsFunc func(ctx context.Context, parentTaskIDs []string) (map[string]int, error)
 
-	// GetDependenciesFunc is the function called for GetDependencies.
 	GetDependenciesFunc func(ctx context.Context, taskID string) ([]*persistence.Task, error)
 
-	// GetDependentsFunc is the function called for GetDependents.
 	GetDependentsFunc func(ctx context.Context, taskID string) ([]*persistence.Task, error)
 
 	// RaiseTaskBudgetFunc lets tests script the per-task-budget top-up.

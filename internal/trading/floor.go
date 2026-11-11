@@ -1,20 +1,29 @@
 package trading
 
+import "vornik.io/vornik/internal/trading/rules"
+
 // EntryProposal describes a proposed action for a symbol, as emitted by the
 // strategist, ahead of the code-enforced floor check.
 type EntryProposal struct {
 	Symbol, Side, Region, RegimeLabel string
 	Total, ComponentCount             int
 	RegimeStale, HasScores            bool
+	// RegimeScore is the carried regime score; nil when the proposal
+	// omitted it. Read only when BlockLongAtScore is -2 (GitHub #716).
+	RegimeScore *int
 }
 
 // EntryConfig is the operator-controlled configuration for the floor.
 type EntryConfig struct {
 	MinEntryTotal      int
 	BlockLongInRiskOff bool
-	StaleBehavior      string
-	MinComponentCount  map[string]int
-	Protected          map[string]bool
+	// BlockLongAtScore is the RISK_OFF score at or below which a long open
+	// is blocked. -1 (and the zero value) is the label check; -2 blocks only
+	// a strong RISK_OFF (GitHub #716, rules.RiskOffBlocksLong).
+	BlockLongAtScore  int
+	StaleBehavior     string
+	MinComponentCount map[string]int
+	Protected         map[string]bool
 }
 
 func isOpen(side string) bool { return side == "long" || side == "short" }
@@ -49,7 +58,7 @@ func EvaluateEntry(p EntryProposal, cfg EntryConfig) (bool, string) {
 	if p.Total < cfg.MinEntryTotal {
 		return false, "below_min"
 	}
-	if cfg.BlockLongInRiskOff && p.Side == "long" && p.RegimeLabel == "RISK_OFF" {
+	if cfg.BlockLongInRiskOff && p.Side == "long" && rules.RiskOffBlocksLong(p.RegimeLabel, p.RegimeScore, cfg.BlockLongAtScore) {
 		return false, "risk_off_long"
 	}
 	return true, ""

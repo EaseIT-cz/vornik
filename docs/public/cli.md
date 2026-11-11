@@ -8,7 +8,7 @@ Vornik ships two binaries:
 ## `vornik` (daemon)
 
 The daemon takes no required flags. It finds its config file via the search order
-in [Getting started](getting-started.md#first-run) (`--config` flag, then
+in [Getting started](getting-started/index.md#start-the-daemon) (`--config` flag, then
 `$VORNIK_CONFIG`, then `./vornik.yaml`/`./config.yaml`, then an XDG/home
 location, then `/etc/vornik/`).
 
@@ -35,13 +35,13 @@ location, then `/etc/vornik/`).
 | `mcp` | List MCP servers/tools and call a tool. |
 | `version` | Print the CLI version and edition. |
 
-The **complete, generated** command and flag reference — every subcommand, every
-flag, every default — is in **[`vornikctl` reference](reference/vornikctl.md)**.
+The **complete, generated** command and flag reference — every customer-facing
+subcommand, every flag, every default — is in **[`vornikctl` reference](reference/vornikctl.md)**.
 That page is generated from the actual command definitions, so it
 never drifts from the binary; this page is just the orientation. Enterprise-only
 subcommands are not present in the Community build and do not appear there.
 
 ## See also
 
-- [Getting started](getting-started.md)
+- [Getting started](getting-started/index.md)
 - [Configuration](configuration.md)

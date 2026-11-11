@@ -87,7 +87,6 @@ ci "$INSTALL" "$GOV"
 printf '          %s\n' "${INSTALL%2.12.2}2.15.0" >>"$TMP/ci.yaml"
 run
 [ "$rc" -eq 1 ] && [ ! -f "$TMP/ran" ] && case "$out" in *"more than once"*) true ;; *) false ;; esac && pass "two different install pins are refused" || fail "two pins: rc=$rc out=$out"
-# The same pin twice is one pin.
 ci "$INSTALL" "$GOV"
 printf '          %s\n' "$INSTALL" >>"$TMP/ci.yaml"
 run

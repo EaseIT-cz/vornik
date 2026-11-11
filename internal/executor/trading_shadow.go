@@ -50,21 +50,28 @@ func (e *Executor) recordShadow(ctx context.Context, in *StepOutcome, calls []tr
 	}
 	now := evidenceNow().UTC()
 	ins := trading.ShadowInputs(calls, p.Trading.EntryPolicy.AllowedSymbols, now, 0.01)
-	pol := rules.DefaultPolicy()
+	pol := enginePolicy(p)
 	e.addOrderState(ctx, &ins, p.ID, now, pol)
-	ep := p.Trading.EntryPolicy
-	d := rules.Decide(ins, pol, rules.Caps{MaxRiskUSD: ep.MaxRiskUSD, MaxEntriesPerTick: ep.MaxEntriesPerTick,
-		MaxPositions: ep.MaxPositions, MaxGrossExposureUSD: ep.MaxGrossExposureUSD, DailyLossPauseUSD: ep.DailyLossPauseUSD})
+	d := rules.Decide(ins, pol, engineCaps(p))
+	e.writeShadow(ctx, in, d.Funnel, in.ResultBytes)
+}
 
+// writeShadow records the engine's rows beside the model's funnel, read from
+// modelBytes. In engine mode the rows are the decision that ran (#717).
+func (e *Executor) writeShadow(ctx context.Context, in *StepOutcome, engine []rules.FunnelRow, modelBytes []byte) {
+	if e.tradingShadowRepo == nil || in == nil || in.Task == nil || in.Execution == nil {
+		return
+	}
+	now := evidenceNow().UTC()
 	model := map[string][2]string{}
-	if rows, ok := trading.ParseFunnel(in.ResultBytes); ok {
+	if rows, ok := trading.ParseFunnel(modelBytes); ok {
 		for _, r := range rows {
 			model[strings.ToUpper(r.Symbol)+"|"+r.Intent] = [2]string{r.Status, trading.NormalizeGate(r.Gate)}
 		}
 	}
-	out := make([]persistence.ShadowDecision, 0, len(d.Funnel))
+	out := make([]persistence.ShadowDecision, 0, len(engine))
 	var agree int
-	for _, r := range d.Funnel {
+	for _, r := range engine {
 		m, ok := model[r.Symbol+"|"+r.Intent]
 		row := persistence.ShadowDecision{ExecutionID: in.Execution.ID, Symbol: r.Symbol, Intent: r.Intent,
 			ProjectID: in.Task.ProjectID, ObservedAt: now, EngineStatus: r.Status, EngineGate: r.Gate,
@@ -81,6 +88,22 @@ func (e *Executor) recordShadow(ctx context.Context, in *StepOutcome, calls []tr
 	}
 	incShadow("agree", agree)
 	incShadow("disagree", len(out)-agree)
+}
+
+// enginePolicy is the rule engine's policy for a project: v2.1's defaults
+// with the floor's own settings, so the floor is never stricter than the
+// engine: the regime threshold (GitHub #716), the minimum total and the
+// regime panel counts (GitHub #717).
+func enginePolicy(p *registry.Project) rules.Policy {
+	pol := rules.DefaultPolicy()
+	pol.BlockLongAtScore = p.Trading.Regime.LongBlockScore()
+	if n := p.Trading.Scorecard.MinEntryTotal; n > 0 {
+		pol.MinTotal = n
+	}
+	if len(p.Trading.Regime.MinComponentCount) > 0 {
+		pol.RegimePanel = p.Trading.Regime.MinComponentCount
+	}
+	return pol
 }
 
 // addOrderState fills the cooldown and today's entry count from the daemon's

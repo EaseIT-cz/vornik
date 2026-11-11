@@ -22,10 +22,11 @@ type playbookEntryCLI struct {
 	// 2026-08-26 when the step vocabulary joined the corpus: without it
 	// `playbook list` is 42 rows with no indication of which lifetime each
 	// describes. Optional on the wire so an older daemon still renders.
-	Scope       string   `json:"scope,omitempty"`
-	Cause       string   `json:"cause"`
-	Suggestions []string `json:"suggestions"`
-	References  []string `json:"references"`
+	Scope        string   `json:"scope,omitempty"`
+	Cause        string   `json:"cause"`
+	Suggestions  []string `json:"suggestions"`
+	References   []string `json:"references"`
+	ResolvedFrom string   `json:"resolvedFrom,omitempty"`
 }
 
 type playbookListResponseCLI struct {
@@ -143,7 +144,15 @@ func runPlaybookShow(cmd *cobra.Command, args []string) error {
 		return enc.Encode(entry)
 	}
 
-	fmt.Printf("CLASS: %s\n\n", entry.Class)
+	fmt.Printf("CLASS: %s\n", entry.Class)
+	if entry.ResolvedFrom != "" {
+		// The operator asked for an error_detail code (e.g. UPSTREAM_RATE_LIMITED,
+		// as printed by doctor model_health), not a failure class. Say so —
+		// otherwise the class changing under them reads as a lookup bug
+		// (GitHub #702).
+		fmt.Printf("  (resolved from %s — an error-detail code, not a failure class; showing the entry that covers it)\n", entry.ResolvedFrom)
+	}
+	fmt.Println()
 	fmt.Println("Cause:")
 	fmt.Printf("  %s\n", entry.Cause)
 	if len(entry.Suggestions) > 0 {

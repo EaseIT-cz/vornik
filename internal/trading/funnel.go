@@ -66,6 +66,20 @@ var gateSpellings = map[string]string{
 	"rank":                  "rank",
 	"none":                  "none",
 	"data_quality":          "data_quality",
+	// The rule engine's own gate names (rules.Decide), which are already the
+	// fixed names; in engine mode the funnel records them (GitHub #717).
+	"scorecard":               "scorecard",
+	"earnings":                "earnings",
+	"cooldown":                "cooldown",
+	"loss_pause":              "loss_pause",
+	"slots":                   "slots",
+	"hourly_trend":            "hourly_trend",
+	"quote":                   "quote",
+	"chase":                   "chase",
+	"stop_too_wide":           "stop_too_wide",
+	"size_zero":               "size_zero",
+	"size_below_min_notional": "size_below_min_notional",
+	"insufficient_inputs":     "insufficient_inputs",
 }
 
 // NormalizeGate returns the gate's fixed name, or "other".

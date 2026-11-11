@@ -17,9 +17,9 @@ control CLI — on a single deployable daemon.
 
 | Guide | What it covers |
 |---|---|
-| [Getting started](getting-started.md) | Install, first run, your first task |
+| [Getting started](getting-started/index.md) | Install, first run, your first task |
 | [Configuration](configuration.md) | How Vornik is configured and where config lives |
-| [Architecture](architecture.md) | The core concepts: daemon, tasks, leases, executor, workflows, MCP |
+| [Architecture](concepts/architecture.md) | The core concepts: daemon, tasks, leases, executor, workflows, MCP |
 | [CLI reference](cli.md) | `vornik` (daemon) and `vornikctl` (control) |
 | [Editions](editions.md) | Community vs Enterprise — the feature matrix |
 | [Licensing](licensing.md) | What the AGPL asks of you when you use, modify or fork Vornik |

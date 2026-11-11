@@ -265,7 +265,7 @@ body = {
 # The plugin names itself: Cloudflare (error 1010) refuses Python's default
 # "Python-urllib" signature, which blocked every call behind it (GitHub #628).
 # Keep the version equal to plugin.json; scripts/user_agent_test.sh checks it.
-VORNIK_UA = "vornik-companion/0.50.7 (claude-code)"
+VORNIK_UA = "vornik-companion/0.50.8 (claude-code)"
 req = urllib.request.Request(
     url,
     data=json.dumps(body).encode("utf-8"),

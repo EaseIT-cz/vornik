@@ -18,7 +18,7 @@ func TestFallbackRungs_ReportsARungThatNeverReachedInference(t *testing.T) {
 	items, status, msg := evaluateFallbackRungs([]deadFallbackRung{{
 		stepID: "discover_model_fallback", role: "scout", model: "gemma4:26b",
 		attempts: 4, lastClass: "model_unhealthy", lastFailed: last,
-	}})
+	}}, alwaysConfigured, nil)
 
 	if status != "ERROR" {
 		t.Fatalf("a fallback rung that has never worked must be an ERROR, got %q", status)
@@ -46,7 +46,7 @@ func TestFallbackRungs_NamesTheModelWhenItIsTheCommonCause(t *testing.T) {
 		{stepID: "recover_lead_lead_model_fallback_infra_retry1", role: "lead", model: "zai.glm-5", attempts: 11, lastClass: "model_unhealthy", lastFailed: last},
 		{stepID: "ingest_model_fallback_infra_retry2", role: "ingestor", model: "zai.glm-5", attempts: 8, lastClass: "llm_call_failed", lastFailed: last},
 	}
-	_, _, msg := evaluateFallbackRungs(rungs)
+	_, _, msg := evaluateFallbackRungs(rungs, alwaysConfigured, nil)
 	if !strings.Contains(msg, `"zai.glm-5"`) {
 		t.Errorf("three dead rungs on one model did not name it: %q", msg)
 	}
@@ -62,7 +62,7 @@ func TestFallbackRungs_DoesNotInventACommonCause(t *testing.T) {
 	_, _, msg := evaluateFallbackRungs([]deadFallbackRung{
 		{stepID: "a_model_fallback", model: "zai.glm-5", attempts: 3, lastFailed: last},
 		{stepID: "b_model_fallback", model: "gemma4:26b", attempts: 3, lastFailed: last},
-	})
+	}, alwaysConfigured, nil)
 	if strings.Contains(msg, "the model is the fault") {
 		t.Errorf("two different models were reported as one common cause: %q", msg)
 	}
@@ -71,7 +71,7 @@ func TestFallbackRungs_DoesNotInventACommonCause(t *testing.T) {
 // A healthy deployment must be quiet. A check that reports something every run
 // is one that gets muted — which is how the original 4-of-4 survived eleven days.
 func TestFallbackRungs_QuietWhenNothingIsDead(t *testing.T) {
-	items, status, msg := evaluateFallbackRungs(nil)
+	items, status, msg := evaluateFallbackRungs(nil, alwaysConfigured, nil)
 	if status != "OK" || len(items) != 0 {
 		t.Fatalf("status = %q with %d items, want a quiet OK", status, len(items))
 	}
@@ -132,7 +132,7 @@ func TestFallbackRungs_ARefusedRungIsNamedAsRefused(t *testing.T) {
 		stepID: "recover_lead_lead_model_fallback_infra_retry1", role: "lead", model: "zai.glm-5",
 		attempts: 11, refused: 11, lastClass: "model_unhealthy", lastFailed: last,
 		avgDuration: 400 * time.Millisecond,
-	}})
+	}}, alwaysConfigured, nil)
 	if len(items) != 1 {
 		t.Fatalf("want 1 finding, got %d: %v", len(items), items)
 	}
@@ -155,7 +155,7 @@ func TestFallbackRungs_ACalledAndFailedRungIsNamedAsFailedUpstream(t *testing.T)
 		stepID: "ingest_model_fallback_infra_retry1", role: "ingestor", model: "zai.glm-5",
 		attempts: 7, calledAndFailed: 7, lastClass: "llm_call_failed", lastFailed: last,
 		avgDuration: 41 * time.Second,
-	}})
+	}}, alwaysConfigured, nil)
 	if len(items) != 1 {
 		t.Fatalf("want 1 finding, got %d: %v", len(items), items)
 	}
@@ -179,7 +179,7 @@ func TestFallbackRungs_MixedRungReportsBothCounts(t *testing.T) {
 	items, _, msg := evaluateFallbackRungs([]deadFallbackRung{{
 		stepID: "a_model_fallback", model: "zai.glm-5",
 		attempts: 5, refused: 3, calledAndFailed: 2, lastClass: "model_unhealthy", lastFailed: last,
-	}})
+	}}, alwaysConfigured, nil)
 	for _, want := range []string{"3 refused by an open circuit", "2 called and failed upstream"} {
 		if !strings.Contains(items[0], want) {
 			t.Errorf("finding %q does not say %q", items[0], want)
@@ -197,7 +197,7 @@ func TestFallbackRungs_EnvironmentFailuresAreNamedAsSuch(t *testing.T) {
 	items, _, _ := evaluateFallbackRungs([]deadFallbackRung{{
 		stepID: "a_model_fallback", model: "gemma4:26b",
 		attempts: 4, lastClass: "container_start_failed", lastFailed: last,
-	}})
+	}}, alwaysConfigured, nil)
 	if !strings.Contains(items[0], "4 failed before any call (container or environment)") {
 		t.Errorf("finding %q does not name the environment population", items[0])
 	}

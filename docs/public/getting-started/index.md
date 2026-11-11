@@ -1,7 +1,9 @@
 ---
 sources:
     - path: README.md
-      sha256: 98a0d75ee0c28d0e2e5eb4546613a7f5b3e4557542c781dc4e09bed0b0ef6e8d
+      sha256: e1c1da4075554c2249fb1bf60679bfdd82e7da8bc132de4769a7284b221d7b14
+    - path: deployments/macos/install.sh
+      sha256: 2e33767cfddd57a9e466bd99cb9d57d6cd11ed15e8cbe79b3e9cdbb5a7404efe
 ---
 # Getting Started
 
@@ -65,10 +67,12 @@ defaults are safe and local-first.
     before anything privileged.
 
 If you'd rather run it yourself, one command stands up a complete playground
-on a Linux host. It installs any missing prerequisites, builds the daemon +
-CLI in an ephemeral container (no Go toolchain needed), starts PostgreSQL +
-pgvector in a container, and runs the daemon as a rootless `systemctl --user`
-service that spawns agent containers via your rootless Podman:
+on a Linux host — on macOS the same command first provisions a small Linux VM
+([below](#macos-inside-a-linux-vm)). On Linux it installs any missing
+prerequisites, builds the daemon + CLI in an ephemeral container (no Go
+toolchain needed), starts PostgreSQL + pgvector in a container, and runs the
+daemon as a rootless `systemctl --user` service that spawns agent containers
+via your rootless Podman:
 
 ```bash
 curl -fsSL https://get.vornik.io | bash
@@ -97,6 +101,32 @@ set `VORNIK_CHAT_API_KEY` in `~/.config/vornik/vornik.env` and run
 `systemctl --user restart vornik`. See the
 [Podman deployment notes](https://github.com/EaseIT-cz/vornik/tree/main/deployments/podman)
 for tunables and the runtime model.
+
+### macOS (inside a Linux VM)
+
+macOS has no native container runtime, and Vornik's zero-egress agent isolation
+depends on a Linux-only mechanism (a network-less container reaching the daemon
+over a bind-mounted unix socket). To preserve that isolation **exactly** as on
+Linux, the installer provisions a lightweight Linux VM
+([Lima](https://lima-vm.io)) and runs the same stack inside it. The one-liner
+above auto-detects macOS and does this for you — there is no macOS variant to
+remember. The installer adds Lima (via Homebrew), creates a `vornik` VM
+(Apple-Silicon-first; Intel is best-effort), runs the standard install inside
+it, and forwards the UI/API to your Mac at <http://localhost:8080/ui>. Manage
+it with the installed `vornikctl` shim, which runs against the VM:
+
+```bash
+vornikctl status          # daemon health inside the VM
+vornikctl logs            # daemon logs
+vornikctl backup out.tar  # snapshot (DB via pg_dump + config) to a Mac path
+vornikctl delete --force  # destroy the VM — run backup first; this erases all data
+```
+
+Notes: your data (including PostgreSQL) lives **inside the VM** for durability;
+persist across a VM rebuild with `vornikctl backup`/`restore`. Only
+`~/.config/vornik` is shared from the Mac (editable; run `vornikctl reload`
+after editing). The UI port-forward means any local Mac process can reach the
+daemon API — fine for a single-operator install.
 
 This is the fastest way to get a working instance; the rest of this page builds
 the same thing by hand so you understand each piece.

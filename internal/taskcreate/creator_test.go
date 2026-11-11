@@ -19,7 +19,6 @@ import (
 	"vornik.io/vornik/internal/registry"
 )
 
-// zerologNop returns a no-op logger.
 func zerologNop() zerolog.Logger { return zerolog.Nop() }
 
 // loadTestRegistry seeds a tiny project + swarm + workflow tree

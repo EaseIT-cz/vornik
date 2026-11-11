@@ -577,6 +577,10 @@ type ProjectTrading struct {
 	// audit, that it examined every held, benchmark and entry-universe symbol
 	// (2026-09-10). Dark by default.
 	AnalysisEvidence trading.AnalysisEvidence `yaml:"analysis_evidence"`
+	// Rules says who decides the tick's opens: the strategist model
+	// ("shadow", the default: the rule engine only records what it would
+	// have done) or the rule engine ("engine"). GitHub #717.
+	Rules TradingRules `yaml:"rules"`
 
 	// NotifyFillsChatID is the Telegram chat that receives a
 	// per-fill notification when the broker reports a fill on
@@ -626,6 +630,12 @@ type TradingScorecard struct {
 type TradingRegime struct {
 	Enabled            bool `yaml:"enabled"`
 	BlockLongInRiskOff bool `yaml:"block_long_in_risk_off"`
+	// BlockLongAtScore: with BlockLongInRiskOff, a long open is blocked
+	// when the region is RISK_OFF with a score at or below this value.
+	// Unset means -1 (every RISK_OFF read); -2 blocks only a strong
+	// RISK_OFF. A pointer so an explicit 0 is refused, not defaulted
+	// (GitHub #716). Read it through LongBlockScore.
+	BlockLongAtScore *int `yaml:"block_long_at_score" since:"2026.11.4"`
 	// MaxStalenessDays is parsed and defaulted (3, see LoadProjects)
 	// but NOT YET plumbed through to the sidecar regime tool, which
 	// computes `stale` at a hardcoded 3-day window. Setting a
@@ -638,6 +648,23 @@ type TradingRegime struct {
 	// "neutral", or "last_known".
 	StaleBehavior     string         `yaml:"stale_behavior"`
 	MinComponentCount map[string]int `yaml:"min_component_count"`
+}
+
+// TradingRules configures the rule engine (GitHub #598, #717).
+type TradingRules struct {
+	// Authority is "shadow" (or unset) or "engine".
+	Authority string `yaml:"authority" since:"2026.11.4"`
+}
+
+// EngineDecides reports whether the rule engine decides the opens.
+func (r TradingRules) EngineDecides() bool { return r.Authority == "engine" }
+
+// LongBlockScore is the effective block_long_at_score: -1 when unset.
+func (r TradingRegime) LongBlockScore() int {
+	if r.BlockLongAtScore == nil {
+		return -1
+	}
+	return *r.BlockLongAtScore
 }
 
 // TradingCaps is the per-project subset of broker.Caps that the
@@ -2059,9 +2086,11 @@ type ProjectAutonomy struct {
 	// workflow for backlog grooming). An id that doesn't resolve
 	// to a known workflow is a load-time operator typo: it logs
 	// loudly and surfaces as a registry validation warning, but
-	// does NOT strip the project — the tick simply falls back to
-	// DefaultWorkflowID at runtime rather than losing the whole
-	// project over one bad reference.
+	// does NOT strip the project. At tick time the autonomy manager
+	// re-checks the id against the loaded workflows. If it no longer
+	// resolves, the manager SKIPS the tick (the item stays pending)
+	// instead of dispatching under the default. Only an EMPTY
+	// workflow_id falls through to DefaultWorkflowID.
 	WorkflowID string `yaml:"workflow_id" json:"workflowId,omitempty"`
 }
 
@@ -2575,6 +2604,12 @@ func (p *Project) Validate(filename string) error {
 	}
 	if err := p.Trading.AnalysisEvidence.Validate(); err != nil {
 		return ProjectValidationError{File: filename, Field: "trading.analysis_evidence", Message: err.Error()}
+	}
+	if a := p.Trading.Rules.Authority; a != "" && a != "shadow" && a != "engine" {
+		return ProjectValidationError{File: filename, Field: "trading.rules.authority", Message: "must be shadow (the default) or engine"}
+	}
+	if v := p.Trading.Regime.BlockLongAtScore; v != nil && *v != -1 && *v != -2 {
+		return ProjectValidationError{File: filename, Field: "trading.regime.block_long_at_score", Message: "must be -1 (every RISK_OFF read) or -2 (strong RISK_OFF only)"}
 	}
 	if p.Trading.Caps.MaxPositionUSD < 0 {
 		return ProjectValidationError{File: filename, Field: "trading.caps.max_position_usd", Message: "cannot be negative"}

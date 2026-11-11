@@ -9,9 +9,6 @@ Community support is best-effort: there is no guaranteed response time. For a
 bug, include your Vornik version (`vornik --version`), config (with secrets
 redacted), and steps to reproduce.
 
-> **Before public release:** Issues and Discussions are enabled on the public
-> repo so these links resolve.
-
 ## Commercial support (Enterprise)
 
 The **Enterprise Edition** is offered with commercial support by

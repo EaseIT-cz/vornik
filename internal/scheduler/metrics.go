@@ -60,7 +60,6 @@ type Metrics struct {
 	// wedged in a call with no bound.
 	AbandonedDispatchesTotal *prometheus.CounterVec
 
-	// registry is the Prometheus registerer used for registering metrics.
 	registry prometheus.Registerer
 }
 

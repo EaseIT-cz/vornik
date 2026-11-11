@@ -111,7 +111,6 @@ func TextPNG(word string, scale int) []byte {
 	return b.Bytes()
 }
 
-// segmentDistance is the distance from p to the segment ab.
 func segmentDistance(p, a, b point) float64 {
 	dx, dy := b.x-a.x, b.y-a.y
 	t := 0.0

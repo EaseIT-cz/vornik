@@ -1135,7 +1135,6 @@ func (r *TaskRepository) GetDependents(ctx context.Context, taskID string) ([]*p
 	return tasks, rows.Err()
 }
 
-// scanSqliteTask reads one task row from a scanner.
 func scanSqliteTask(scanner interface{ Scan(dest ...any) error }) (*persistence.Task, error) {
 	var (
 		task             persistence.Task

@@ -146,7 +146,6 @@ func (s *CPCTimeoutScanner) processOne(ctx context.Context, cpc *persistence.Cro
 		dur = time.Since(cpc.CreatedAt)
 	}
 
-	// Metrics.
 	if e.metrics != nil {
 		e.metrics.RecordCrossProjectCallResolved(cpc.CallerProject, cpc.CalleeProject, string(persistence.CPCStatusTimedOut), dur.Seconds())
 	}

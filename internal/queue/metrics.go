@@ -21,7 +21,6 @@ type Metrics struct {
 	// DLQTotal is a counter tracking the total number of tasks moved to the dead letter queue.
 	DLQTotal *prometheus.CounterVec
 
-	// registry is the Prometheus registry used for registering metrics.
 	registry prometheus.Registerer
 }
 

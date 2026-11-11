@@ -59,6 +59,10 @@ shown to you as ready to commit, the server:
 - **Never omits a spend budget.** Every composed project carries a
   budget with conservative default caps if you don't set your own; the
   plan preview always states the caps.
+- **Never turns on autonomous scheduling unless you asked for it.** A
+  composed project ships with autonomous scheduling off; it is enabled
+  only when your description asks for a schedule (and then still behind
+  the confirmation gate below).
 - **Never auto-sends without an approval step, unless you explicitly
   ask for it and it's shown to you.** Any step with an outward
   side-effect — sending an email, publishing, opening a request —
@@ -109,6 +113,4 @@ vornikctl doctor feature enable composer
 ```
 
 See [the feature doctor guide](feature-doctor.md) for how enabling and
-prerequisite checks work in general, and
-[the automation composer feature page](../features/composer.md) for the
-full prerequisite and safety-guarantee list.
+prerequisite checks work in general.

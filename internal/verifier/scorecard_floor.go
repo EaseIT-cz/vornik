@@ -3,6 +3,7 @@ package verifier
 import (
 	"encoding/json"
 	"fmt"
+	"strconv"
 	"strings"
 
 	"github.com/prometheus/client_golang/prometheus"
@@ -30,6 +31,10 @@ type TradingFloorConfig struct {
 	// BlockLongInRiskOff refuses long opens while the regime reads
 	// RISK_OFF.
 	BlockLongInRiskOff bool
+	// BlockLongAtScore is the RISK_OFF score at or below which a long
+	// open is blocked (-1 = every RISK_OFF read, -2 = strong only;
+	// GitHub #716).
+	BlockLongAtScore int
 	// StaleBehavior governs a stale regime read: "block_opens"
 	// (default, fail-closed), "neutral", or "last_known" (the two
 	// opt-outs that let a stale open through).
@@ -40,6 +45,39 @@ type TradingFloorConfig struct {
 	// ProtectedSymbols are tickers whose EXIT-class actions the
 	// verifier refuses regardless of scores.
 	ProtectedSymbols []string
+}
+
+// scoreText renders a carried regime score, "none" when omitted.
+func scoreText(s *int) string {
+	if s == nil {
+		return "none"
+	}
+	return strconv.Itoa(*s)
+}
+
+// longBlockAt is the effective threshold (the zero value means -1).
+func longBlockAt(v int) int {
+	if v == 0 {
+		return -1
+	}
+	return v
+}
+
+// floorEntryConfig projects the verifier's floor config onto the floor's
+// own, with the protected set upper-cased. Both floor entry points use it.
+func floorEntryConfig(fc *TradingFloorConfig) trading.EntryConfig {
+	protected := make(map[string]bool, len(fc.ProtectedSymbols))
+	for _, sym := range fc.ProtectedSymbols {
+		protected[strings.ToUpper(strings.TrimSpace(sym))] = true
+	}
+	return trading.EntryConfig{
+		MinEntryTotal:      fc.MinEntryTotal,
+		BlockLongInRiskOff: fc.BlockLongInRiskOff,
+		BlockLongAtScore:   fc.BlockLongAtScore,
+		StaleBehavior:      fc.StaleBehavior,
+		MinComponentCount:  fc.MinComponentCount,
+		Protected:          protected,
+	}
 }
 
 // floorRejectedTotal is the vornik_trading_floor_rejected_total counter,
@@ -112,7 +150,7 @@ type floorProposal struct {
 		Macro    int `json:"macro"`
 	} `json:"scorecard"`
 	Regime *struct {
-		Score          int    `json:"score"`
+		Score          *int   `json:"score"` // nil when omitted (GitHub #716)
 		Label          string `json:"label"`
 		Stale          bool   `json:"stale"`
 		ComponentCount int    `json:"component_count"`
@@ -168,17 +206,8 @@ func verifyScorecardFloor(cfg Config, in Input) *Violation {
 		return nil
 	}
 
-	protected := make(map[string]bool, len(fc.ProtectedSymbols))
-	for _, sym := range fc.ProtectedSymbols {
-		protected[strings.ToUpper(strings.TrimSpace(sym))] = true
-	}
-	entryCfg := trading.EntryConfig{
-		MinEntryTotal:      fc.MinEntryTotal,
-		BlockLongInRiskOff: fc.BlockLongInRiskOff,
-		StaleBehavior:      fc.StaleBehavior,
-		MinComponentCount:  fc.MinComponentCount,
-		Protected:          protected,
-	}
+	entryCfg := floorEntryConfig(fc)
+	protected := entryCfg.Protected
 
 	for _, p := range proposals {
 		if v := evaluateFloorProposal(cfg, p, entryCfg, protected); v != nil {
@@ -216,8 +245,10 @@ func classifyFloorProposal(p floorProposal, entryCfg trading.EntryConfig, protec
 	var total, componentCount int
 	var label string
 	var stale bool
+	var regimeScore *int
 	if hasScores {
 		total = p.Scorecard.Total
+		regimeScore = p.Regime.Score
 		label = p.Regime.Label
 		stale = p.Regime.Stale
 		componentCount = p.Regime.ComponentCount
@@ -252,13 +283,13 @@ func classifyFloorProposal(p floorProposal, entryCfg trading.EntryConfig, protec
 	// Entry floor: only OPEN sides gated (EvaluateEntry waves through non-opens).
 	// A floor failure on an OPEN is a soft DROP.
 	ok, reason := trading.EvaluateEntry(trading.EntryProposal{
-		Symbol: p.Symbol, Side: side, Region: region, RegimeLabel: label,
+		Symbol: p.Symbol, Side: side, Region: region, RegimeLabel: label, RegimeScore: regimeScore,
 		Total: total, ComponentCount: componentCount, RegimeStale: stale, HasScores: hasScores,
 	}, entryCfg)
 	if !ok {
 		return floorDrop, reason, fmt.Sprintf(
-			"dropped %s open on %s: %s (total=%d, regime=%s, stale=%t, components=%d) — below the code-enforced entry floor",
-			side, p.Symbol, reason, total, label, stale, componentCount)
+			"dropped %s open on %s: %s (total=%d, regime=%s, score=%s, block_at=%d, stale=%t, components=%d) — below the code-enforced entry floor",
+			side, p.Symbol, reason, total, label, scoreText(regimeScore), longBlockAt(entryCfg.BlockLongAtScore), stale, componentCount)
 	}
 
 	// Protected-symbol CLOSE guard — integrity violation, HARD. (A protected
@@ -309,17 +340,8 @@ func FilterTradingProposals(resultBytes []byte, fc *TradingFloorConfig) ([]byte,
 	if fc == nil || !fc.ScorecardEnabled || !fc.RegimeEnabled || len(resultBytes) == 0 {
 		return resultBytes, nil
 	}
-	protected := make(map[string]bool, len(fc.ProtectedSymbols))
-	for _, sym := range fc.ProtectedSymbols {
-		protected[strings.ToUpper(strings.TrimSpace(sym))] = true
-	}
-	entryCfg := trading.EntryConfig{
-		MinEntryTotal:      fc.MinEntryTotal,
-		BlockLongInRiskOff: fc.BlockLongInRiskOff,
-		StaleBehavior:      fc.StaleBehavior,
-		MinComponentCount:  fc.MinComponentCount,
-		Protected:          protected,
-	}
+	entryCfg := floorEntryConfig(fc)
+	protected := entryCfg.Protected
 
 	// Parse into an ordered-agnostic object so every top-level field the
 	// executor/risk-officer read (rationale, has_proposals, …) survives; only

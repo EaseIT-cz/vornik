@@ -55,11 +55,11 @@ type stateReplayResponse struct {
 	// and a same-key retry after restart replays instead of placing
 	// a duplicate real order.
 	WorkingOrders []stateReplayWorkingOrder `json:"working_orders"`
-	// Task 11: max(filled_at) across all of today's fills, used by
-	// the broker to seed SafetyEnvelope.execCursor so
-	// ReconcileExecutions resumes from the right point after a
-	// restart rather than from zero (full re-scan). RFC3339 UTC;
-	// empty when no fills have been persisted for this project.
+	// Task 11: max(filled_at) across the project's fills. Since GitHub
+	// #729 the broker reads it only to warn (reconcile_stale_cursor)
+	// when it predates today; it no longer seeds the exec cursor, which
+	// skipped fills that never committed. RFC3339 UTC; empty when no
+	// fills have been persisted for this project.
 	MaxFilledAt string `json:"max_filled_at,omitempty"` // RFC3339 UTC; empty when no fills
 }
 
@@ -197,10 +197,9 @@ func (s *Server) GetTradingStateReplay(w http.ResponseWriter, r *http.Request) {
 		resp.WorkingOrders = append(resp.WorkingOrders, wo)
 	}
 
-	// Task 11: seed the broker's exec-cursor (ReconcileExecutions
-	// resumes from max(filled_at) rather than zero). A zero return
-	// (no fills yet today) is handled gracefully — the field is
-	// omitted from the response and the broker starts from zero.
+	// Task 11: the newest fill time, for the broker's stale-cursor
+	// warning (#729: no longer a cursor seed). A zero return (no fills
+	// yet) is handled gracefully — the field is omitted.
 	if s.tradingFillRepo != nil {
 		if mfa, mfaErr := s.tradingFillRepo.MaxFilledAt(r.Context(), projectID); mfaErr == nil && !mfa.IsZero() {
 			resp.MaxFilledAt = mfa.UTC().Format(time.RFC3339)

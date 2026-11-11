@@ -48,7 +48,6 @@ git add a.go
 git commit -qm "PR commit 2: fixup"
 PR_HEAD="$(git rev-parse HEAD)"
 
-# Advance main past the fork point.
 git checkout -q main
 echo more >> README.md
 git commit -qam "unrelated main commit"

@@ -90,6 +90,12 @@
      "activate": ["edits.recall_design"],
      "steps": [{"write": "src/c1.go"}, {"write": "src/c2.go"}, {"write": "src/c3.go"}, {"write": "src/c4.go"},
                {"write": "src/c5.go"}, {"write": "src/c6.go"}, {"write": "src/c7.go"}],
-     "fired": [], "followed": []}
+     "fired": [], "followed": []},
+    {"name": "an adversarial assignment run neither hangs nor fires (catalogue review 2026-11-11)",
+     "steps": [{"shell": "NAME=\"a NAME=b\" NAME=\"a NAME=b\" NAME=\"a NAME=b\" NAME=\"a NAME=b\" NAME=\"a NAME=b\" NAME=\"a NAME=b\" NAME=\"a NAME=b\" NAME=\"a NAME=b\" NAME=\"a NAME=b\" NAME=\"a NAME=b\" NAME=\"a NAME=b\" NAME=\"a NAME=b\" NAME=\"a NAME=b\" NAME=\"a NAME=b\" NAME=\"a NAME=b\" NAME=\"a NAME=b\" NAME=\"a NAME=b\" NAME=\"a NAME=b\" NAME=\"a NAME=b\" NAME=\"a NAME=b\" NAME=\"a NAME=b\" NAME=\"a NAME=b\" NAME=\"a NAME=b\" NAME=\"a NAME=b\" NAME=\"a NAME=b\" NAME=\"a NAME=b\" NAME=\"a NAME=b\" NAME=\"a NAME=b\" NAME=\"a NAME=b\" NAME=\"a NAME=b\" ", "exit": 0}],
+     "fired": [], "followed": []},
+    {"name": "a value of quoted and unquoted runs before git commit fires commit.review",
+     "steps": [{"shell": "X=a\"b c\" git commit -m x", "exit": 0}],
+     "fired": ["commit.review"], "followed": []}
   ]
 }

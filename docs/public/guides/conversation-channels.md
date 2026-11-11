@@ -8,8 +8,10 @@ sources:
 Conversation channels let people reach vornik from the tools they already use.
 Connect a channel and inbound messages turn into tasks or chat turns, while
 vornik's replies flow back out the same way they came in. vornik ships four
-channels: **GitHub**, **Slack**, **email**, and **voice messages**
-(experimental).
+per-project channels: **GitHub**, **Slack**, **email**, and **voice messages**
+(experimental). There is also a daemon-scope **Telegram** bot you connect once
+for the whole installation from the Integrations Hub — see
+[Telegram](../integrations/telegram.md); it is not configured per project.
 
 You configure each channel per project, in that project's YAML file. After you
 change a channel's settings, reload the project configuration — you do not need

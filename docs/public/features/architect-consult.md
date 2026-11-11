@@ -25,10 +25,12 @@ It does not read Vornik's internal design record, legal material, source
 code or anyone's instance configuration. When a question would need them,
 the answer is "Not found in the design record."
 
-An answer is at most 8 KiB of prose with citations, and holds no code
-blocks. Every citation names a brief or a page of these docs. A run that
-breaks a rule returns no answer, and the consultation counts as not having
-happened.
+By default an answer is at most 32 KiB of prose
+(`config_assistant.consult.max_answer_bytes`); it carries citations and no
+code blocks. The 8 KiB figure is the *question* cap
+(`config_assistant.consult.max_question_bytes`), not the answer. Every
+citation names a brief or a page of these docs. A run that breaks a rule
+returns no answer, and the consultation counts as not having happened.
 
 ## What is sent
 

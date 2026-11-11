@@ -459,7 +459,6 @@ func extractXHTMLText(data []byte) (text string, title string, err error) {
 	}
 	var sb strings.Builder
 	walkXHTML(doc, &sb, &title)
-	// Collapse runs of blank lines.
 	out := collapseBlankLines(sb.String())
 	return strings.TrimSpace(out), strings.TrimSpace(title), nil
 }

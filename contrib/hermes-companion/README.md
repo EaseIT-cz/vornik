@@ -278,8 +278,12 @@ rule 13):
   case.
 - **Files:** `vornik_companion_delegate` reads the files the model names
   for a review or an ingest and sends them to Vornik: regular files under
-  Hermes's working directory, never through a symlink, at most 20 files and
-  2 MB. Hermes's own `read_file` reads the same paths.
+  the task's workspace, never through a symlink, at most 20 files and 2 MB.
+  It refuses credential files (`.env`, `.env.local`, `.env.development`,
+  `.env.production`, `.env.test`, `.env.staging`, `.envrc`, in any case)
+  and anything under the Hermes home, as Hermes's own `read_file` does. It
+  also refuses hard-linked files: a file sent for an ingest can be stored
+  in Vornik's memory (0.23.1).
 - **Memory:** when you select it as Hermes's memory provider, it mirrors
   Hermes's curated `MEMORY.md` and `USER.md` writes to Vornik, and has
   Vornik forget an entry Hermes removes or replaces.

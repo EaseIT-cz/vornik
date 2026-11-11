@@ -216,9 +216,14 @@ upload happened.
 > **Size bound.** The declaration cannot make a large file small. Raw staging for such a
 > workflow is capped at **8 MiB per file**; above that the extraction stands alone, because
 > staging a 32 MB document next to its extraction is what blew an agent's context the first
-> time. That is comfortably above what these workflows normally consume — a companion upload
-> caps a single file at 512 KiB — but if you need a genuinely large file *as a file*, split
-> it, or rely on the extraction and memory search instead of `require_input_artifacts`.
+> time. Companion delegations carry a second, dynamic guard. At delegate time
+> the total staged-artifact bytes are estimated at roughly 3 bytes per prompt
+> token. The delegation is refused (`ARTIFACTS_EXCEED_CONTEXT`) when that
+> estimate exceeds **50% of the reviewer's usable context window** (its
+> `context_size` minus `max_tokens`). An unknown
+> context size never triggers the refusal. If the guard fires, split the upload — one
+> delegation per subsystem or per file — or rely on the extraction and memory search
+> instead of attaching the full documents.
 
 ### 2. A summary of a delegated child's output
 

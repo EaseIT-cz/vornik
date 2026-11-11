@@ -22,7 +22,7 @@ func composerFeature() Feature {
 		Title:   "NL Automation Composer",
 		Summary: "Free-form tier-3 synthesis for the conversational project wizard: describe an automation in plain language and get a validated, guardrailed project + swarm + workflow bundle.",
 		LLDRef:  "https://docs.vornik.io",
-		DocRef:  "docs/public/features/composer.md",
+		DocRef:  "docs/public/guides/automation-composer.md",
 		Edition: version.EditionEnterprise,
 		Apply:   RestartRequired,
 		Gates:   []Gate{{Key: "composer.enabled", EnableTo: true}},

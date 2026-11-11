@@ -164,7 +164,7 @@ func Report(w io.Writer, h *History, o Options) error {
 	f("- Costs: IBKR fixed commission ($%.3f a share, $%.2f minimum) and half the %.1f%% spread cap on each side.\n\n", commissionPerShare, commissionMin, 100*p.MaxSpreadRatio)
 
 	by := map[string][]tradingpnl.EntryResult{}
-	runs := map[string]Result{}
+	runs, runs2 := map[string]Result{}, map[string]Result{}
 	var order []string
 	f("## Variants at 1x and 2x costs\n\n")
 	f("| variant | costs | n | open | mean R | median R | win %% | avg win R | avg loss R | PF (R) | PF ($) | max DD (R) |\n|---|---|---|---|---|---|---|---|---|---|---|---|\n")
@@ -177,6 +177,8 @@ func Report(w io.Writer, h *History, o Options) error {
 			if mult == 1 {
 				by[v.Name], runs[v.Name] = res.EntryResults(), res
 				order = append(order, v.Name)
+			} else {
+				runs2[v.Name] = res
 			}
 		}
 	}
@@ -196,6 +198,9 @@ func Report(w io.Writer, h *History, o Options) error {
 		bs := Bootstrap(rs, o.Bootstrap, o.Seed)
 		f("| %s | %d | %.3f / %.3f / %.3f | %.1f / %.1f / %.1f |\n", name, len(rs), bs.Mean[0], bs.Mean[1], bs.Mean[2], bs.DD[0], bs.DD[1], bs.DD[2])
 	}
+	if one, ok := runs["short_tier"]; ok {
+		writeShortSplit(f, one, runs2["short_tier"], o)
+	}
 	f("\n## Regime at entry (1x)\n\nBy the entry region's regime label. No intervals: read each row's n.\n\n| variant | regime | n | mean R | win %% |\n|---|---|---|---|---|\n")
 	for _, name := range []string{"baseline", "no_risk_off_gate"} {
 		groups := map[string][]tradingpnl.EntryResult{}
@@ -213,6 +218,52 @@ func Report(w io.Writer, h *History, o Options) error {
 	}
 	_, err := io.WriteString(w, b.String())
 	return err
+}
+
+// writeShortSplit reports the short_tier trades by side and the
+// pre-registered decision rule: a live short tier needs 30+ short trades, a
+// bootstrap p5 mean R above 0 at 1x and a positive mean at 2x (backtest
+// design, trading-backtest-design.md §4.2 C).
+func writeShortSplit(f func(string, ...any), one, two Result, o Options) {
+	side := func(res Result, want string) []tradingpnl.EntryResult {
+		ers := res.EntryResults()
+		var out []tradingpnl.EntryResult
+		for i, pos := range res.Positions {
+			if (pos.Side == "short") == (want == "short") {
+				out = append(out, ers[i])
+			}
+		}
+		return out
+	}
+	rsSide := func(ers []tradingpnl.EntryResult) []float64 {
+		var rs []float64
+		for _, e := range ers {
+			if e.R != nil {
+				rs = append(rs, *e.R)
+			}
+		}
+		return rs
+	}
+	f("\n## Short tier by side (1x; GitHub #718)\n\nNot modelled, each making live worse: short-sale restrictions (SEC Rule 201), locate failures, recalls, borrow-fee spikes. Borrow is charged at %.0f%% a year (2%% at 2x costs), a conservative stand-in for large caps. Survivorship (today's names drifted up) understates the short side. Dividends are charged implicitly by the adjusted prices.\n\n| variant | side | n | mean R | win %% | PF (R) | bootstrap mean R p5 / p95 |\n|---|---|---|---|---|---|---|\n", 100*borrowRatePerYear)
+	for _, sd := range []string{"long", "short"} {
+		ers := side(one, sd)
+		s := tradingpnl.RStats(ers, allTime[0], allTime[1])
+		bs := Bootstrap(rsSide(ers), o.Bootstrap, o.Seed)
+		f("| short_tier | %s | %d | %.3f | %.1f | %s | %.3f / %.3f |\n", sd, s.Scored, s.MeanR, s.WinRatePct, pf(s.ProfitFactorR), bs.Mean[0], bs.Mean[2])
+	}
+	short1 := rsSide(side(one, "short"))
+	mean2 := tradingpnl.RStats(side(two, "short"), allTime[0], allTime[1]).MeanR
+	switch {
+	case len(short1) < tooFew:
+		f("\nShort side: %d trades, too few trades to judge. Decision rule: no live short tier.\n", len(short1))
+	default:
+		p5 := Bootstrap(short1, o.Bootstrap, o.Seed).Mean[0]
+		verdict := "no live short tier"
+		if p5 > 0 && mean2 > 0 {
+			verdict = "design a live short tier"
+		}
+		f("\nShort side: %d trades, bootstrap p5 mean R %.3f at 1x, mean R %.3f at 2x. Decision rule: %s.\n", len(short1), p5, mean2, verdict)
+	}
 }
 
 func writeJitter(f func(string, ...any), h *History, p rules.Policy, caps rules.Caps) {

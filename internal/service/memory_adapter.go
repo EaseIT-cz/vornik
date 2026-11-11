@@ -905,7 +905,6 @@ type memoryStatsAdapter struct {
 	m *memory.Manager
 }
 
-// newMemoryStatsAdapter creates a new adapter.
 func newMemoryStatsAdapter(m *memory.Manager) api.MemoryStatsProvider {
 	return &memoryStatsAdapter{m: m}
 }

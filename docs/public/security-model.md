@@ -9,7 +9,7 @@ sources:
     - path: internal/sandboxtool/sandboxtool.go
       sha256: 98e975950b0e5be019b7801c4f9b9138d231ab586a3e170f46b89f45dc4e0272
     - path: internal/runtime/manager.go
-      sha256: 9560a3ec086c541b538060b355b8ddf1c96ac3e18437fdf86d4c68cea89101db
+      sha256: 123dc3a415cf16cb60b254832612cb1709b7672993cfd42cfbbfd29affba2aeb
     - path: internal/secrets/secrets.go
       sha256: fbfba932278463c3455ca9832bdbac634d355b3137b3225ba64cb5eac78d230e
     - path: internal/netguard/netguard.go
@@ -35,7 +35,7 @@ sources:
 ---
 # Security model
 
-**Last reviewed:** 9 November 2026, against `main` before release 2026.11.3.
+**Last reviewed:** 11 November 2026, against `main` before release 2026.11.4.
 
 What Vornik defends against, its trust boundaries, and the controls in place
 today, with what each does **not** cover. It applies to both editions;
@@ -235,6 +235,12 @@ connected assistants, and upstream services.
   - **Checked before it writes.** It probes the issuer's discovery and
     requires every listed model to be served by a gateway named in
     `hosting.model_hosts`.
+  - **The daemon owns its configuration file, not its directory's other
+    files.** Provisioning writes the configuration as the daemon's user
+    and makes `/etc/vornik` writable by the daemon's group with the sticky
+    bit, so setup can replace the configuration while the files root owns
+    there (the provisioning marker, the shipped example) cannot be removed
+    or replaced by the daemon.
   - **The owner's login is OpenID Connect against the hosting service's
     issuer:**
     - PKCE (S256) and a nonce on every sign-in, held in a cookie bound to
@@ -538,10 +544,13 @@ connected assistants, and upstream services.
   (or the user's runtime directory when the user owns it), never in a shared
   temp path, and refuse a state directory that is a symlink or that another
   user owns. A hint's text comes only from the catalogue; nothing from a
-  tool's input or output is put into it. The Hermes plugin (0.23.0) reads,
+  tool's input or output is put into it. The Hermes plugin (0.23.1) reads,
   for a review or an ingest, only the files the model names: regular files
-  under Hermes's task workspace, never through a symlink, checked again on
-  the opened file, at most 20 files and 2 MB. Its memory key may start the
+  under Hermes's task workspace, never through a symlink or a hard link,
+  checked again on the opened file, at most 20 files and 2 MB. It refuses
+  credential files (`.env` and its variants, `.envrc`, in any case) and
+  anything under the Hermes home, and refuses when Hermes does not say where
+  the workspace or its home is. Its memory key may start the
   review and ingest workflows in its own project within the key's budget;
   neither reaches a credential, mail or the broker project.
 - **Broker projects** let an assistant ask for privileged work (read my mail,
@@ -653,4 +662,4 @@ connected assistants, and upstream services.
 See [Security policy](security.md) for how to report a vulnerability and
 which versions are supported.
 
-<!-- summary-reviewed-through: 2026.11.3 -->
+<!-- summary-reviewed-through: 2026.11.4 -->

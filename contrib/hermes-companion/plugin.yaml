@@ -1,5 +1,5 @@
 name: vornik-companion
-version: 0.23.0
+version: 0.23.1
 requires_hermes: ">=0.21.5"
 manifest_version: 2
 # Declared, not inferred: Hermes classifies an undeclared plugin whose
@@ -14,6 +14,12 @@ description: >-
   no credentials: work that touches mail, calendar, documents or accounts is
   delegated to operator-authored broker workflows on a Vornik daemon, which
   return a bounded, schema-validated result instead of raw access.
+  0.23.1 — Catalogue review fixes. vornik_companion_delegate refuses
+  credential files (.env and its variants, .envrc, in any case), anything
+  under the Hermes home, and hard-linked files. It also refuses when Hermes
+  does not say where the task's workspace or its home is, instead of
+  guessing.
+  The commit hint rule matches in linear time.
   0.23.0 — Vornik guides how Hermes works, as it guides Claude Code and
   Codex (GitHub #686). Each new session's system prompt carries Vornik's
   standing rules, read from the daemon. With the memory key, the daemon's

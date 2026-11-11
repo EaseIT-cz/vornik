@@ -141,7 +141,6 @@ func checkArchetype(a *RoleArchetype, handlerSet map[string]bool) []Finding {
 		}
 	}
 
-	// requiredOutputKeys.
 	if len(a.RequiredOutputKeys) == 0 {
 		out = append(out, add(SeverityError, "requiredOutputKeys is empty (a role with no required output contributes nothing verifiable)"))
 	}
@@ -151,12 +150,10 @@ func checkArchetype(a *RoleArchetype, handlerSet map[string]bool) []Finding {
 		}
 	}
 
-	// modelTier.
 	if !validModelTiers[a.ModelTier] {
 		out = append(out, add(SeverityError, "modelTier %q is not one of trivial|standard|complex", a.ModelTier))
 	}
 
-	// runtime.
 	if a.Runtime.MaxTokens <= 0 {
 		out = append(out, add(SeverityError, "runtime.maxTokens must be > 0 (got %d)", a.Runtime.MaxTokens))
 	}

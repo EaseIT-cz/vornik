@@ -9,25 +9,18 @@ import (
 
 // MockArtifactRepository is a mock implementation of ArtifactRepository for testing.
 type MockArtifactRepository struct {
-	// CreateFunc is the function called for Create.
 	CreateFunc func(ctx context.Context, artifact *persistence.Artifact) error
 
-	// GetFunc is the function called for Get.
 	GetFunc func(ctx context.Context, id string) (*persistence.Artifact, error)
 
-	// GetByHashFunc is the function called for GetByHash.
 	GetByHashFunc func(ctx context.Context, hash string) (*persistence.Artifact, error)
 
-	// ListFunc is the function called for List.
 	ListFunc func(ctx context.Context, filter persistence.ArtifactFilter) ([]*persistence.Artifact, error)
 
-	// DeleteFunc is the function called for Delete.
 	DeleteFunc func(ctx context.Context, id string) error
 
-	// DeleteByExecutionIDFunc is the function called for DeleteByExecutionID.
 	DeleteByExecutionIDFunc func(ctx context.Context, executionID string) error
 
-	// UpdateTaskIDFunc is the function called for UpdateTaskID.
 	UpdateTaskIDFunc func(ctx context.Context, artifactID, taskID string) error
 
 	// CallCount tracks how many times each method was called.

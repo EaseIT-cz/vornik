@@ -6,9 +6,9 @@
 #
 # Live promotion: after ≥14 days of paper soak with judge pass
 # rate >85% and zero verifier failures, change `trading.mode`
-# to "live" + set `trading.live_enabled: true` in the daemon
-# config.yaml. Both flags must be true; either alone keeps the
-# project on paper port. See https://docs.vornik.io
+# to "live" + set VORNIK_BROKER_LIVE_ENABLED=true in the
+# broker's environment. Both must be true; either alone keeps
+# the project on paper port. See https://docs.vornik.io
 # broker-design.md §Phasing for the live-promotion checklist.
 
 projectId: "trading-paper"

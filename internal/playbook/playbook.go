@@ -14,6 +14,7 @@
 package playbook
 
 import (
+	"vornik.io/vornik/internal/chat"
 	"vornik.io/vornik/internal/persistence"
 	"vornik.io/vornik/internal/stepoutcome"
 )
@@ -69,6 +70,13 @@ type Entry struct {
 	// suggestion. Optional but encouraged when the suggestion alone
 	// requires context the operator might not have.
 	References []string `json:"references,omitempty"`
+	// ResolvedFrom names the identifier this entry was looked up under when
+	// it is NOT one of the entry's own classes: an error_detail code such as
+	// UPSTREAM_RATE_LIMITED resolves through codeAliases to the class whose
+	// entry covers it. Empty for a direct class lookup. Surfaces render it as
+	// "you asked for X; showing the entry that covers it" rather than letting
+	// the class change go unexplained (GitHub #702).
+	ResolvedFrom string `json:"resolvedFrom,omitempty"`
 }
 
 // HumanFriendly returns the audience-appropriate one-line summary
@@ -81,11 +89,35 @@ func (e Entry) HumanFriendly() string {
 	return e.Cause
 }
 
+// codeAliases maps an error_detail CODE to the failure class whose entry
+// covers it. A code is not a class: UPSTREAM_RATE_LIMITED is what the chat
+// proxy stamps into error_detail when the provider refuses the account for a
+// usage or rate limit (chat.CodeUpstreamRateLimited), and doctor model_health
+// prints it verbatim in front of the operator. Before this table existed, the
+// obvious next step — `vornikctl playbook show UPSTREAM_RATE_LIMITED` —
+// answered "Unrecognised failure class" although the remediation sits inside
+// the LLM_CALL_FAILED entry (GitHub #702, found in production 2026-11-09).
+//
+// Add a line here whenever a surface starts printing a new code that an
+// operator can be expected to look up; TestLookup_AliasNeverPointsAtAMissingEntry
+// keeps every target a real corpus entry.
+var codeAliases = map[string]string{
+	chat.CodeUpstreamRateLimited: stepoutcome.ClassLLMCallFailed,
+}
+
 // Lookup returns the playbook entry for a failure class, or a
 // generic "unknown class" entry when the class isn't in the corpus.
-// Never returns nil — the consumer always gets something to render.
+// An identifier that is not a class but IS a known error_detail code
+// resolves to the entry that covers it, with ResolvedFrom naming the code
+// (codeAliases). Never returns nil — the consumer always gets something to
+// render.
 func Lookup(class string) Entry {
 	if e, ok := corpus[class]; ok {
+		return e
+	}
+	if target, ok := codeAliases[class]; ok {
+		e := corpus[target]
+		e.ResolvedFrom = class
 		return e
 	}
 	return Entry{

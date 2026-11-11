@@ -32,9 +32,9 @@ import (
 //
 // See https://docs.vornik.io §11.5.
 // A SLICE, NOT A MAP LITERAL, and that is load-bearing for the CE export.
-// export-public-ce.sh rewrites internal doc pointers -- https://docs.vornik.io*,
-// https://docs.vornik.io*, docs/<CAPS>.md -- to "https://docs.vornik.io", because CE ships
-// none of those files and a dangling path sends a reader hunting. Five of the
+// export-public-ce.sh rewrites https://docs.vornik.io*, https://docs.vornik.io*,
+// https://docs.vornik.io* and docs/<CAPS>.md pointers to "https://docs.vornik.io" —
+// CE ships none of those files, so a dangling path sends a reader hunting. Five of the
 // keys below are exactly those shapes, so in the EXPORTED tree they all collapse
 // to one string: as a map literal that is `duplicate key ... in map literal`, a
 // COMPILE error, and the CE export fails at its own imagemanifest gate. A slice

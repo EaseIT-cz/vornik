@@ -62,6 +62,19 @@ func fakeCompanion(t *testing.T, admin bool) *httptest.Server {
 	}))
 }
 
+// userConfigDir is os.UserConfigDir under the test's HOME, the directory the
+// CLI resolves: $XDG_CONFIG_HOME on Linux, ~/Library/Application Support on
+// macOS. Building the Linux path by hand failed the public CE repository's
+// macOS lane (2026-11-09) and let the absent-key check pass vacuously there.
+func userConfigDir(t *testing.T) string {
+	t.Helper()
+	dir, err := os.UserConfigDir()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return dir
+}
+
 // desktopHome points HOME and the config dir at a temp dir holding a Claude
 // Desktop config with another server, and returns the config path.
 func desktopHome(t *testing.T) (home, cfgPath string) {
@@ -72,7 +85,7 @@ func desktopHome(t *testing.T) (home, cfgPath string) {
 	t.Setenv("VORNIK_COMPANION_TOKEN", "")
 	t.Setenv("VORNIK_URL", "")
 	t.Setenv("VORNIK_API_URL", "")
-	cfgPath = filepath.Join(home, ".config", "Claude", "claude_desktop_config.json")
+	cfgPath = filepath.Join(userConfigDir(t), "Claude", "claude_desktop_config.json")
 	if err := os.MkdirAll(filepath.Dir(cfgPath), 0o700); err != nil {
 		t.Fatal(err)
 	}
@@ -110,7 +123,7 @@ func TestCompanionConnect_589_ClaudeDesktop(t *testing.T) {
 	if strings.Join(e.Args, " ") != "companion mcp-bridge --name default --url "+srv.URL {
 		t.Fatalf("entry args %v", e.Args)
 	}
-	keyPath := filepath.Join(home, ".config", "vornik", "companion", "default.key")
+	keyPath := filepath.Join(userConfigDir(t), "vornik", "companion", "default.key")
 	fi, err := os.Stat(keyPath)
 	if err != nil || fi.Mode().Perm() != 0o600 {
 		t.Fatalf("key file %v mode %v", err, fi)
@@ -156,7 +169,7 @@ func TestCompanionConnect_589_ClaudeDesktop(t *testing.T) {
 }
 
 func TestCompanionConnect_589_RefusesAnAgentKey(t *testing.T) {
-	home, cfgPath := desktopHome(t)
+	_, cfgPath := desktopHome(t)
 	srv := fakeCompanion(t, true)
 	defer srv.Close()
 	companionDeskURL = srv.URL
@@ -168,7 +181,7 @@ func TestCompanionConnect_589_RefusesAnAgentKey(t *testing.T) {
 	if raw, _ := os.ReadFile(cfgPath); strings.Contains(string(raw), "vornik-companion") {
 		t.Fatal("a refusal writes no entry")
 	}
-	if _, err := os.Stat(filepath.Join(home, ".config", "vornik", "companion", "default.key")); !os.IsNotExist(err) {
+	if _, err := os.Stat(filepath.Join(userConfigDir(t), "vornik", "companion", "default.key")); !os.IsNotExist(err) {
 		t.Fatal("a refusal writes no key file")
 	}
 }

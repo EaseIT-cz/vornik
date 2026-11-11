@@ -44,6 +44,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"vornik.io/vornik/internal/registry"
 )
 
 const (
@@ -107,6 +109,14 @@ type deadFallbackRung struct {
 
 // checkFallbackRungs reports configured fallback rungs that have attempted and
 // never once succeeded.
+//
+// Since 2026-11-10 (GitHub #703) the verdict joins the ledger against what is
+// TRUE NOW: a rung whose (role, model) fallback binding no longer exists in
+// the resolved configuration is history, and a still-configured rung whose
+// model has succeeded since its last failure is history until next reached.
+// Before the join, an operator who fixed the config kept an ERR for up to the
+// full 30-day window — an alarm a fix does not clear teaches the operator to
+// ignore the row.
 func (h *DoctorHandlers) checkFallbackRungs(ctx context.Context) DoctorCheck {
 	const name = "fallback_rungs"
 	if h == nil || h.db == nil {
@@ -117,23 +127,116 @@ func (h *DoctorHandlers) checkFallbackRungs(ctx context.Context) DoctorCheck {
 	if err != nil {
 		return DoctorCheck{Name: name, Status: "WARNING", Message: fmt.Sprintf("fallback rung query failed: %v", err)}
 	}
-	items, status, message := evaluateFallbackRungs(rungs)
+	modelLastOK, err := queryWorkingModels(ctx, h.db, time.Now().Add(-fallbackRungWindow))
+	if err != nil {
+		return DoctorCheck{Name: name, Status: "WARNING", Message: fmt.Sprintf("fallback rung model query failed: %v", err)}
+	}
+	items, status, message := evaluateFallbackRungs(rungs, h.configuredFallbackBindings(), modelLastOK)
 	return DoctorCheck{Name: name, Status: status, Message: message, Items: items}
+}
+
+// configuredFallbackBindings answers "is (role, model) still a configured
+// fallback binding": true when some swarm role names that model as its
+// modelFallback. Nil when the configuration cannot be read (no config dir
+// wired, or the registry failed to load) — the verdict then treats every rung
+// as still configured and says so, rather than claiming a join it did not do.
+//
+// The join is per-ROLE on purpose. The daemon-scope chat router fallbacks are
+// a different surface (chat-proxy failover, not a role's ladder rung): counting
+// them here would keep a rung "configured" after its role's own binding moved
+// — exactly the case #703 reported (the reviewer's zai.glm-5.3 rung read dead
+// for weeks after every role binding moved).
+func (h *DoctorHandlers) configuredFallbackBindings() func(role, model string) bool {
+	if h == nil || h.configDir == "" {
+		return nil
+	}
+	reg := registry.New()
+	if err := reg.Load(h.configDir); err != nil {
+		return nil
+	}
+	set := map[string]bool{}
+	for _, swarm := range reg.ListSwarms() {
+		for _, role := range swarm.Roles {
+			if role.ModelFallback != "" {
+				set[role.Name+"\x00"+role.ModelFallback] = true
+			}
+		}
+	}
+	return func(role, model string) bool { return set[role+"\x00"+model] }
+}
+
+// queryWorkingModels returns, per model, the newest 'ok' outcome inside the
+// window — the ledger's evidence that a model demonstrably works. A dead rung
+// whose model has an ok NEWER than the rung's last failure is history, not a
+// live fault (#703). Portable SQL: GROUP BY / MAX are driver-neutral; on
+// SQLite recorded_at is RFC3339Nano text written UTC by the repositories, so
+// the lexicographic MAX is chronological.
+func queryWorkingModels(ctx context.Context, db *sql.DB, since time.Time) (map[string]time.Time, error) {
+	rows, err := db.QueryContext(ctx, `
+		SELECT model, MAX(recorded_at)
+		  FROM execution_step_outcomes
+		 WHERE recorded_at >= $1 AND model <> '' AND outcome = 'ok'
+		 GROUP BY model`, since)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+
+	out := map[string]time.Time{}
+	for rows.Next() {
+		var model string
+		// MAX(timestamptz) comes back as a time.Time on Postgres and as the
+		// RFC3339Nano text on SQLite; timestampValue normalises both.
+		var last any
+		if err := rows.Scan(&model, &last); err != nil {
+			return nil, err
+		}
+		out[model] = timestampValue(last)
+	}
+	return out, rows.Err()
 }
 
 // evaluateFallbackRungs turns the query result into the check's verdict.
 //
+// Each dead rung lands in one of three places after the join against now
+// (#703): LIVE (still configured, and the model has shown no success since
+// the rung's last failure — the ladder is walking past a hop that cannot
+// work), HISTORICAL (still configured, but the model has succeeded since the
+// last failure — history until the rung is next reached), or STALE (the
+// (role, model) binding no longer exists in the resolved configuration — the
+// ledger remembering a fixed config). The three slices below ARE the
+// classification; nothing else names the classes.
+//
 // Split from the query so the DECISION is testable without a database — the
 // same split connector_auth uses, and for the same reason: the interesting part
 // of a doctor check is what it concludes, not how it reads rows.
-func evaluateFallbackRungs(rungs []deadFallbackRung) (items []string, status, message string) {
+//
+// isConfigured answers whether (role, model) is still a configured fallback
+// binding; nil means the configuration could not be read, in which case every
+// rung is treated as still configured and the message says so. modelLastOK
+// maps a model to its newest 'ok' outcome in the window; a rung whose model
+// has an ok after its last failure is historical, not live.
+func evaluateFallbackRungs(rungs []deadFallbackRung, isConfigured func(role, model string) bool, modelLastOK map[string]time.Time) (items []string, status, message string) {
 	if len(rungs) == 0 {
 		return nil, "OK", "no fallback rung has failed before inference on every attempt in the last 30 days"
 	}
-	items = make([]string, 0, len(rungs))
-	models := map[string]int{}
-	var refused, called, attempts int
+
+	var live, historical, stale []deadFallbackRung
 	for _, r := range rungs {
+		switch {
+		case isConfigured != nil && !isConfigured(r.role, r.model):
+			stale = append(stale, r)
+		default:
+			if ok, worked := modelLastOK[r.model]; worked && ok.After(r.lastFailed) {
+				historical = append(historical, r)
+			} else {
+				live = append(live, r)
+			}
+		}
+	}
+
+	items = make([]string, 0, len(live)+len(historical))
+	for _, r := range live {
 		class := r.lastClass
 		if class == "" {
 			class = "unclassified"
@@ -147,6 +250,56 @@ func evaluateFallbackRungs(rungs []deadFallbackRung) (items []string, status, me
 			r.stepID, role, r.model, r.attempts, rungPopulations(r),
 			rungSeconds(r.avgDuration),
 			r.lastFailed.Format(time.RFC3339), class))
+	}
+	for _, r := range historical {
+		class := r.lastClass
+		if class == "" {
+			class = "unclassified"
+		}
+		role := r.role
+		if role == "" {
+			role = "—"
+		}
+		items = append(items, fmt.Sprintf(
+			"[WARNING] %s (role %s, model %s) — last failed %s as %s, but the model has succeeded since (newest ok %s): history until the rung is next reached",
+			r.stepID, role, r.model,
+			r.lastFailed.Format(time.RFC3339), class,
+			modelLastOK[r.model].Format(time.RFC3339)))
+	}
+
+	// Denominator first (tenets §4): how many dead rungs were examined and how
+	// many are still configured — not only how many were found.
+	switch isConfigured {
+	case nil:
+		message = fmt.Sprintf("%d dead fallback rung(s) in the last 30 days (current configuration not read; all treated as still configured)", len(rungs))
+	default:
+		message = fmt.Sprintf("%d dead fallback rung(s) in the last 30 days: %d still configured, %d no longer configured for their role",
+			len(rungs), len(live)+len(historical), len(stale))
+	}
+
+	// One live rung keeps the check at ERROR, whatever else the window holds.
+	status = "ERROR"
+	switch {
+	case len(live) > 0:
+		message += liveRungsMessage(live)
+	case len(historical) > 0:
+		status = "WARNING"
+		message += "; none is a live fault: each remaining rung's model has succeeded since its last failure — re-check when one is next reached"
+	default:
+		status = "OK"
+		message += "; none remains configured — checked against the current configuration, these are history rather than a fault"
+	}
+	return items, status, message
+}
+
+// liveRungsMessage is the pre-#703 verdict body, computed over the LIVE rungs
+// only: the single-model clause and the refused/called populations name the
+// remedy for the actionable set, and a historical or stale rung must not drag
+// them toward its own (absent) cause.
+func liveRungsMessage(live []deadFallbackRung) string {
+	models := map[string]int{}
+	var refused, called, attempts int
+	for _, r := range live {
 		if r.model != "" {
 			models[r.model]++
 		}
@@ -154,15 +307,15 @@ func evaluateFallbackRungs(rungs []deadFallbackRung) (items []string, status, me
 		called += r.calledAndFailed
 		attempts += r.attempts
 	}
-	message = fmt.Sprintf(
-		"%d fallback rung(s) never reached inference — the ladder is walking past them, "+
-			"so the retry budget is spent on hops that cannot work", len(rungs))
+	msg := fmt.Sprintf(
+		"; %d never reached inference and remain configured — the ladder is walking past them, "+
+			"so the retry budget is spent on hops that cannot work", len(live))
 	// Name the model when one accounts for every dead rung. That is the actual
 	// fault — several rungs failing is usually ONE model being unavailable, and
 	// pointing at the model is what turns a list into an action.
 	if len(models) == 1 {
 		for m := range models {
-			message += fmt.Sprintf("; all of them on %q, so the model is the fault rather than the rungs", m)
+			msg += fmt.Sprintf("; all of them on %q, so the model is the fault rather than the rungs", m)
 		}
 	}
 	// REFUSED and CALLED-AND-FAILED are opposite remedies, so the message says
@@ -175,15 +328,15 @@ func evaluateFallbackRungs(rungs []deadFallbackRung) (items []string, status, me
 	// or its provider.
 	switch {
 	case refused == attempts:
-		message += "; every attempt was refused by an open circuit — the breaker is doing its job, " +
+		msg += "; every attempt was refused by an open circuit — the breaker is doing its job, " +
 			"so look at why the model's circuit is open (agent_model_circuits, model health history), not at the rung"
 	case refused > 0 && called > 0:
-		message += fmt.Sprintf("; %d attempt(s) refused by an open circuit and %d call(s) made and failed upstream — "+
+		msg += fmt.Sprintf("; %d attempt(s) refused by an open circuit and %d call(s) made and failed upstream — "+
 			"the model or its provider is failing, and the breaker is refusing on that evidence", refused, called)
 	case called > 0:
-		message += "; calls were made and failed upstream — the model or its provider, not the rung"
+		msg += "; calls were made and failed upstream — the model or its provider, not the rung"
 	}
-	return items, "ERROR", message
+	return msg
 }
 
 // rungSeconds renders a duration as plain seconds ("0.4s", "41s") so the two

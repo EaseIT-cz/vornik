@@ -535,7 +535,6 @@ func printTaskList(out taskListOutput) {
 	}
 }
 
-// fetchTaskPage GETs one page of the task list.
 func fetchTaskPage(client *Client, path string) (listTasksResponse, error) {
 	var page listTasksResponse
 	resp, err := client.Get(path)

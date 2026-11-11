@@ -896,7 +896,6 @@ func TestWireComponentMetrics(t *testing.T) {
 	chatMetrics := chat.NewMetrics(reg)
 	c.ChatClient.SetMetrics(chatMetrics)
 
-	// Gather all registered metric families.
 	families, err := reg.Gather()
 	require.NoError(t, err)
 

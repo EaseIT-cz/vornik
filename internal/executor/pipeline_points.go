@@ -284,10 +284,26 @@ func (e *Executor) hallucinationDetectorParticipant(ctx context.Context, in *Ste
 func (e *Executor) tradingFloorParticipant(ctx context.Context, in *StepOutcome) pipeline.Verdict {
 	// Evidence first: a step that never examined its symbols is refused
 	// before any filtering of what it did emit.
-	if err := e.checkTradingEvidence(ctx, in); err != nil {
+	calls, p, err := e.examineTradingEvidence(ctx, in)
+	if err != nil {
 		in.HallucinationDetail = err.Error()
 		in.Err = err
 		return refuse(err)
+	}
+	if p != nil {
+		// An accepted, examined strategist output. With the rule engine in
+		// authority it replaces the model's opens (GitHub #717); otherwise
+		// the funnel (#596) and the shadow (#598) are recorded as before.
+		if p.Trading.Rules.EngineDecides() {
+			if err := e.engineDecide(ctx, in, calls, p); err != nil {
+				in.HallucinationDetail = err.Error()
+				in.Err = err
+				return refuse(err)
+			}
+		} else {
+			e.recordFunnel(ctx, in)
+			e.recordShadow(ctx, in, calls, p)
+		}
 	}
 	filtered, err := e.filterTradingFloor(in.Task, in.ResultBytes)
 	if err == nil {

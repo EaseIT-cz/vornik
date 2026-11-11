@@ -71,7 +71,6 @@ files:
 `
 	require.NoError(t, os.WriteFile(filepath.Join(slugDir, "template.yaml"), []byte(manifestYAML), 0o600))
 
-	// Load the catalog.
 	cat, err := templates.Load(dir)
 	require.NoError(t, err)
 

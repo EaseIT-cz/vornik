@@ -5353,7 +5353,6 @@ func RunIdentityRepositorySuite(t *testing.T, repo persistence.IdentityRepositor
 			t.Fatalf("BindIdentity(%s, %s) did not bind: already held by another user", channel, externalID)
 		}
 	}
-	// projectSet collects the non-nil ProjectIDs from a resolver row set.
 	projectSet := func(rows []persistence.PrincipalRow) map[string]bool {
 		out := map[string]bool{}
 		for _, r := range rows {

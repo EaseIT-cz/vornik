@@ -21,8 +21,7 @@ const (
 	// DefaultMaxLines is the design's bound on lines held.
 	DefaultMaxLines = 2000
 	// DefaultMaxAge is the design's bound on a line's age.
-	DefaultMaxAge = time.Hour
-	// maxMessageBytes caps a stored message.
+	DefaultMaxAge   = time.Hour
 	maxMessageBytes = 512
 	// maxFieldBytes caps every other stored string, so the ring has a hard
 	// byte ceiling (review-20261008-f7c9 finding 2).

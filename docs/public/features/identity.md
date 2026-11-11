@@ -58,7 +58,7 @@ link never becomes an account binding.
 
 ## Owning an API key
 
-An operator can assign an API key to an account (`vornikctl key owner set`,
+An operator can assign an API key to an account (`vornikctl account grant-key`,
 or the key's row in the console). Ownership **narrows**, never widens: a key's
 effective permission is the intersection of what the key was minted with and
 what its owner currently holds. Disabling or deleting the owner denies the
@@ -75,11 +75,10 @@ only**, so a deployment can link people one at a time. In that mode:
 - a linked-but-denied, disabled or unresolvable sender is never re-admitted
   through the allowlist;
 - the compat path never opens the configuration assistant;
-- every admission is counted (`vornik_auth_legacy_allowlist_grants_total`)
-  and `vornikctl account migration-report` lists who is still relying on it.
+- every admission is counted (`vornik_auth_legacy_allowlist_grants_total`).
 
-New installs default to `strict`. Switch an existing one when the report is
-empty and the counter has been zero for a while.
+New installs default to `strict`. Switch an existing one once
+`vornik_auth_legacy_allowlist_grants_total` has been zero for a while.
 
 ## Configuration
 

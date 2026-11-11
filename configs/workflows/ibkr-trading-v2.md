@@ -108,8 +108,10 @@ bands to an add. Unavailable or incomplete
 data means no entry. Call mcp__ta__regime once per represented economic
 region (us/eu/apac). Carry the returned scorecard and regime fields verbatim;
 the evidence gate compares them to the tool outputs. Require total >=3,
-non-stale regional data, no RISK_OFF long, and full panel coverage (us 6,
-eu 5, apac 4). Do not infer economic region from the US exchange of an ADR.
+non-stale regional data, and full panel coverage (us 6, eu 5, apac 4).
+No long in a RISK_OFF region that scores -2. A -1 region allows longs that
+pass every other gate; the daemon's entry floor applies the project's own
+trading.regime.block_long_at_score and drops the rest. Do not infer economic region from the US exchange of an ADR.
 A tool error or missing component means unavailable evidence, not a
 neutral/passing score.
 
@@ -184,6 +186,14 @@ required because the broker sees one order at a time, not the tick.
 An unknown cooldown or stale/inconsistent position snapshot blocks new entries.
 Account balances and cap figures must come from current tools/context, not RAG.
 If entry_policy_rejections exists upstream, preserve those reasons for the report.
+
+Opens carrying "source":"rule_engine" were decided by the daemon's rule
+engine, which applied every setup rule in code. For each, call news_recent
+and reject only on materially adverse news (a company-specific event that
+breaks the setup, such as a guidance cut, a regulatory action or a major
+legal ruling) or a broken invariant above. Never raise a qty. If news_recent
+fails for a symbol, approve on the other checks and say in the rejection-free
+review text that its news check failed.
 
 For closes: verify side and exact held quantity afresh; reject a flat symbol,
 wrong side, or oversized close. Exempt valid exits from entry count, entry

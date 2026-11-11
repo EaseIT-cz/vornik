@@ -52,7 +52,13 @@ _SESSION = re.compile(r"^[A-Za-z0-9_-]{1,128}$")
 
 # --- the rules, as hints.sh has them ------------------------------------------
 
-_ASSIGN = r"""([A-Za-z_][A-Za-z0-9_]*=("[^"]*"|'[^']*'|[^\s]*)\s+)*"""
+# A value is a run of disjoint pieces: a double-quoted string, a single-quoted
+# string, or one character that is neither space nor quote. Each character can
+# start only one piece, so the match is linear. The earlier [^\s]* also took a
+# leading quote, so the three alternatives overlapped: repeated NAME="a NAME=b"
+# units backtracked exponentially (416 characters took 19 s; hermes-agent PR
+# 151967).
+_ASSIGN = r"""([A-Za-z_][A-Za-z0-9_]*=(("[^"]*"|'[^']*'|[^\s"'])*)\s+)*"""
 COMMIT_RE = re.compile(r"(^|[;&|(\n])\s*" + _ASSIGN + r"git(\s+(-[Cc]\s+[^\s]+|-[^\s]+))*\s+commit(\s|$)")
 OUTFAIL_RE = re.compile(r"(^|\n)(--- )?FAIL\b|FAILED|(^|[^0-9])[1-9][0-9]* (failed|failures?|errors?)\b")
 
@@ -279,14 +285,9 @@ class Session:
 
 
 def _hermes_home():
-    try:
-        from hermes_constants import get_hermes_home
-    except ImportError:
-        return None
-    try:
-        return Path(get_hermes_home())
-    except Exception:
-        return None
+    from .companion_delegate import hermes_home
+    home = hermes_home()
+    return Path(home) if home else None
 
 
 # --- the Hermes adapter -------------------------------------------------------
@@ -445,7 +446,7 @@ class Hints:
             cwd = self._cwd()
         else:
             from .companion_delegate import workspace_root
-            cwd = workspace_root(task_id or "default") or ""
+            cwd = workspace_root(task_id or "default")[0] or ""
         if tool_name in ("write_file", "patch") and status == "error":
             return []  # a failed write wrote nothing (hints.sh: a failed Write is not an edit)
         command, exit_code, output = "", None, ""

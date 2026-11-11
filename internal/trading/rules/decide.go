@@ -75,6 +75,16 @@ type Decision struct {
 // "full panel coverage (us 6, eu 5, apac 4)").
 var regimePanel = map[string]int{"us": 6, "eu": 5, "apac": 4}
 
+// panel is the component count region's regime needs under p.
+func (p Policy) panel(region string) int {
+	if p.RegimePanel != nil {
+		if n, ok := p.RegimePanel[region]; ok {
+			return n
+		}
+	}
+	return regimePanel[region]
+}
+
 // Decide applies the gates in the prompt's order to every candidate; the
 // first failing gate is the candidate's row. Out of session it decides
 // nothing.
@@ -111,6 +121,20 @@ func Decide(in Inputs, p Policy, caps Caps) Decision {
 		d.Funnel = append(d.Funnel, FunnelRow{Symbol: e.Symbol, Intent: "open", Status: "not_selected", Gate: "rank"})
 	}
 	return d
+}
+
+// SetupCandidates names the candidates that pass the account, market and
+// daily gates: the ones whose hourly bars, quote and earnings timing the
+// engine needs before it can decide (#717).
+func SetupCandidates(in Inputs, p Policy, caps Caps) []string {
+	var out []string
+	for _, c := range in.Candidates {
+		if accountGate(c, in, p, caps) != "" || marketGate(c, in, p) != "" || DailyWindow(*c.Score, p) != "" {
+			continue
+		}
+		out = append(out, c.Symbol)
+	}
+	return out
 }
 
 // gateCandidate returns the sized entry, or the first gate that failed.
@@ -156,7 +180,7 @@ func marketGate(c Candidate, in Inputs, p Policy) string {
 	switch {
 	case !ok:
 		return "insufficient_inputs"
-	case r.Stale || r.Components < regimePanel[c.Region] || r.Label == "RISK_OFF":
+	case r.Stale || r.Components < p.panel(c.Region) || RiskOffBlocksLong(r.Label, &r.Score, p.BlockLongAtScore):
 		return "regime"
 	case c.Score == nil:
 		return "insufficient_inputs"
@@ -192,6 +216,12 @@ func setupGate(c Candidate, p Policy, caps Caps) (Entry, string) {
 	size, g := Size(c.Quote.Ask, c.Score.ATR14, c.Tick, caps.MaxRiskUSD, p)
 	if g != "" {
 		return Entry{}, g
+	}
+	// The limit is the live ask, not the last close the daily window read:
+	// one below the daily SMA50 is refused by the enforcing
+	// entry_gate_consistent verifier, which fails the whole step (#717).
+	if size.Entry < c.Score.SMA50 {
+		return Entry{}, "daily_trend"
 	}
 	mid := (c.Quote.Bid + c.Quote.Ask) / 2
 	return Entry{Symbol: c.Symbol, Size: size, Total: c.Score.Total, Spread: (c.Quote.Ask - c.Quote.Bid) / mid}, ""

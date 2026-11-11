@@ -150,8 +150,8 @@ if [[ "$MODE" == session ]]; then
   [[ "$CURRENT" =~ ^[A-Za-z0-9_-]{1,128}$ ]] || CURRENT=""
   command -v curl >/dev/null 2>&1 || exit 0
   URL="${VORNIK_URL:-${CLAUDE_PLUGIN_OPTION_VORNIK_URL:-http://localhost:8080}}"
-  VORNIK_UA="vornik-companion/0.50.7 (claude-code)"
-  [[ "$CLIENT" == codex ]] && VORNIK_UA="vornik-companion/0.45.5 (codex)"
+  VORNIK_UA="vornik-companion/0.50.8 (claude-code)"
+  [[ "$CLIENT" == codex ]] && VORNIK_UA="vornik-companion/0.45.6 (codex)"
   NOW="$(date +%s 2>/dev/null)" || exit 0
 
   # 1. Fetch the catalogue and the mask.
@@ -408,7 +408,11 @@ NL=$'\n'
 # git at a command position, after optional variable assignments
 # (GIT_AUTHOR_NAME="a b" git commit, §13.5 re-measurement), with optional
 # flags (-C dir, -c k=v, -x), then commit.
-ASSIGN="([A-Za-z_][A-Za-z0-9_]*=(\"[^\"]*\"|'[^']*'|[^[:space:]]*)[[:space:]]+)*"
+# A value is a run of disjoint pieces (quoted, single-quoted, or one character
+# that is neither space nor quote), as hints.py has it (catalogue review of
+# Hermes 0.23.0, 2026-11-11). bash =~ (POSIX ERE) was fast on the old rule too
+# (the 30-unit adversarial shared case passed), so here this is for parity.
+ASSIGN="([A-Za-z_][A-Za-z0-9_]*=((\"[^\"]*\"|'[^']*'|[^[:space:]\"'])*)[[:space:]]+)*"
 COMMIT_RE="(^|[;&|(${NL}])[[:space:]]*${ASSIGN}git([[:space:]]+(-[Cc][[:space:]]+[^[:space:]]+|-[^[:space:]]+))*[[:space:]]+commit([[:space:]]|$)"
 if [[ "$TOOL" == Bash && "$MODE" == call && "$CMD" =~ $COMMIT_RE ]]; then
   IS_COMMIT=1

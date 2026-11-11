@@ -1689,7 +1689,6 @@ func hasDocumentedSkipped(resultBytes []byte, path string) bool {
 func verifyCVClaimsGrounded(cfg Config, in Input) (*Violation, error) {
 	resume := paramString(cfg.Params, "resume")
 	if resume == "" {
-		// Try resume_file + ProjectDir before abstaining.
 		resume = resolveResumeFromFile(cfg.Params, in.ProjectDir)
 	}
 	if resume == "" {

@@ -220,18 +220,31 @@ api:
     per_ip:
       rps: 20
       burst: 40
-      trusted_proxies:
-        - "10.0.0.0/8"
-        - "127.0.0.1/32"
+
+server:
+  real_ip:
+    enabled: true
+    trusted_proxies:
+      - "10.0.0.0/8"
+      - "127.0.0.1/32"
 ```
 
 Notes:
 
 - Setting either `rps` or `burst` to `0` disables the per-IP layer entirely —
   both must be non-zero for it to enforce anything.
-- If vornik sits behind a reverse proxy or load balancer, list the proxy's
-  address ranges in `trusted_proxies`. Otherwise every request appears to come
-  from the proxy and the per-IP limiter cannot tell clients apart.
+- The limiter keys on the client IP vetted by the real-IP middleware, which is
+  configured under `server.real_ip`, not under the limiter. If vornik sits
+  behind a reverse proxy, tunnel, or load balancer, set
+  `server.real_ip.enabled: true` and list the proxy's address ranges in
+  `server.real_ip.trusted_proxies`. With the block off (the default) every
+  request is keyed on the direct connection. Behind a proxy that means all
+  requests share the proxy's address, so the per-IP limiter cannot tell
+  clients apart.
+- The old `api.rate_limit.per_ip.trusted_proxies` key still works as a
+  fallback when `server.real_ip.trusted_proxies` is empty; the daemon then
+  logs a one-time startup warning naming it deprecated. Use
+  `server.real_ip` for new configuration.
 
 The per-project task-creation limiter warns as you approach the cap (logged
 and surfaced in the UI) and only blocks once you exceed it, so you get a heads

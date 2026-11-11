@@ -5,6 +5,10 @@ sources:
 ---
 # Clustering and the DMZ Webhook Relay
 
+!!! abstract "Enterprise Edition"
+
+    Clustering is part of the **Enterprise Edition** — a proprietary overlay on the open-source core. The `vornikctl cluster` verbs ship in the Enterprise binary only; the Community build has no cluster subcommand. See [Editions](../editions.md) for the full Community vs Enterprise matrix.
+
 vornik runs as a single all-in-one daemon by default, and that is the right
 shape for almost every deployment. When you need to scale execution
 independently or isolate public webhook ingress in a DMZ, you can split vornik

@@ -38,7 +38,9 @@ func Load() (*Config, string, error) {
 
 // LoadWithProvenance is Load, keeping the provenance the loader recorded so
 // the daemon can serve it (`config show --provenance`) without a second load.
-func LoadWithProvenance() (*Config, string, *Provenance, error) {
+//
+// opts are passed to the load (WithCredentials, GitHub #626).
+func LoadWithProvenance(opts ...LoadOption) (*Config, string, *Provenance, error) {
 	// Parse flags. Registration is idempotent — see commandLineFlag.
 	configPath := commandLineFlag("config", func() { flag.String("config", "", "Path to configuration file") })
 	showVersion := commandLineFlag("version", func() { flag.Bool("version", false, "Show version information") })
@@ -51,7 +53,7 @@ func LoadWithProvenance() (*Config, string, *Provenance, error) {
 	// Determine config path with precedence
 	path := resolveConfigPath(configPath.Value.String())
 
-	cfg, prov, err := LoadFromPathWithProvenance(path)
+	cfg, prov, err := LoadFromPathWithProvenance(path, opts...)
 	if err != nil {
 		return nil, path, nil, err
 	}
@@ -133,11 +135,10 @@ func ValidateBytes(data []byte) error {
 	return nil
 }
 
-func expandEnvPlaceholders(v interface{}) {
-	expandEnvValue(reflect.ValueOf(v))
-}
-
-func expandEnvValue(v reflect.Value) {
+// expandValue expands every ${NAME} in the string leaves under v through
+// mapping (os.Expand: one pass, so a substituted value is never expanded
+// again).
+func expandValue(v reflect.Value, mapping func(string) string) {
 	if !v.IsValid() {
 		return
 	}
@@ -146,7 +147,7 @@ func expandEnvValue(v reflect.Value) {
 		if v.IsNil() {
 			return
 		}
-		expandEnvValue(v.Elem())
+		expandValue(v.Elem(), mapping)
 		return
 	}
 
@@ -155,16 +156,16 @@ func expandEnvValue(v reflect.Value) {
 		for i := 0; i < v.NumField(); i++ {
 			field := v.Field(i)
 			if field.CanSet() || field.Kind() == reflect.Struct || field.Kind() == reflect.Map || field.Kind() == reflect.Slice || field.Kind() == reflect.Pointer {
-				expandEnvValue(field)
+				expandValue(field, mapping)
 			}
 		}
 	case reflect.String:
 		if v.CanSet() {
-			v.SetString(os.ExpandEnv(v.String()))
+			v.SetString(os.Expand(v.String(), mapping))
 		}
 	case reflect.Slice:
 		for i := 0; i < v.Len(); i++ {
-			expandEnvValue(v.Index(i))
+			expandValue(v.Index(i), mapping)
 		}
 	case reflect.Map:
 		if v.Type().Key().Kind() != reflect.String {
@@ -176,11 +177,11 @@ func expandEnvValue(v reflect.Value) {
 			value := iter.Value()
 			switch value.Kind() {
 			case reflect.String:
-				v.SetMapIndex(key, reflect.ValueOf(os.ExpandEnv(value.String())).Convert(v.Type().Elem()))
+				v.SetMapIndex(key, reflect.ValueOf(os.Expand(value.String(), mapping)).Convert(v.Type().Elem()))
 			case reflect.Interface, reflect.Pointer, reflect.Struct, reflect.Map, reflect.Slice:
 				copied := reflect.New(value.Type()).Elem()
 				copied.Set(value)
-				expandEnvValue(copied)
+				expandValue(copied, mapping)
 				v.SetMapIndex(key, copied)
 			}
 		}
@@ -446,35 +447,16 @@ func (c *Config) Validate() error {
 	if err := validateNamedSecrets(c.NamedSecrets); err != nil {
 		return err
 	}
-	driver := c.Database.Driver
-	if driver == "" {
-		driver = "postgres"
-	}
-	switch driver {
-	case "postgres":
-		if c.Database.Host == "" {
-			return c.requiredErr("database host is required")
-		}
-		if c.Database.Port <= 0 {
-			return fmt.Errorf("database port must be greater than zero")
-		}
-		if c.Database.Name == "" {
-			return c.requiredErr("database name is required")
-		}
-		if c.Database.User == "" {
-			return c.requiredErr("database user is required")
-		}
-	case "sqlite":
-		if c.Database.Path == "" {
-			return c.requiredErr("database path is required for sqlite driver")
-		}
-	default:
-		return fmt.Errorf("unsupported database driver: %s", driver)
+	if err := c.validateDatabase(); err != nil {
+		return err
 	}
 	// A doctor threshold outside its range produces a check that can never
 	// fire, which is indistinguishable from the check not existing — the exact
 	// invisibility the config seam was added to remove. Fail the boot instead.
 	if err := c.validateAgentHardening(); err != nil {
+		return err
+	}
+	if err := c.validateAgentAdminPrivateAPIHosts(); err != nil {
 		return err
 	}
 	if err := c.validateHosting(); err != nil {
@@ -907,3 +889,37 @@ func validateOIDCProvider(c *Config) error {
 	}
 	return nil
 }
+
+// validateDatabase checks the database block: what opening the database
+// needs. LoadBootstrap validates only this (GitHub #626).
+func (c *Config) validateDatabase() error {
+	driver := c.Database.Driver
+	if driver == "" {
+		driver = "postgres"
+	}
+	switch driver {
+	case "postgres":
+		if c.Database.Host == "" {
+			return c.requiredErr("database host is required")
+		}
+		if c.Database.Port <= 0 {
+			return fmt.Errorf("database port must be greater than zero")
+		}
+		if c.Database.Name == "" {
+			return c.requiredErr("database name is required")
+		}
+		if c.Database.User == "" {
+			return c.requiredErr("database user is required")
+		}
+	case "sqlite":
+		if c.Database.Path == "" {
+			return c.requiredErr("database path is required for sqlite driver")
+		}
+	default:
+		return fmt.Errorf("unsupported database driver: %s", driver)
+	}
+	return nil
+}
+
+// validateBootstrap is the bootstrap load's validation.
+func (c *Config) validateBootstrap() error { return c.validateDatabase() }

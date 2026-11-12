@@ -43,17 +43,17 @@ func TestLookup_AliasNeverPointsAtAMissingEntry(t *testing.T) {
 	}
 }
 
-// TestLookup_ClassBeatsAlias — a lookup that is BOTH a class and an alias key
-// answers as the class; the alias only fires on a corpus miss. Guards the
-// resolution order against a future collision.
+// TestLookup_ClassBeatsAlias — guards the resolution ORDER: Lookup checks the
+// corpus before codeAliases, so an identifier that is BOTH a class and an
+// alias key answers as the class (ResolvedFrom empty); the alias only fires on
+// a corpus miss. No alias key collides with a class today, so pin that
+// disjointness — the moment one does, this fails and forces the collision to
+// be handled deliberately instead of resolving silently one way.
 func TestLookup_ClassBeatsAlias(t *testing.T) {
-	for code, class := range codeAliases {
-		if _, isClass := corpus[code]; isClass {
-			got := Lookup(code)
-			assert.Empty(t, got.ResolvedFrom,
-				"%s is itself a class and must not be reported as resolved from itself", code)
-			assert.Equal(t, code, got.Class)
-			_ = class
-		}
+	for code := range codeAliases {
+		_, isClass := corpus[code]
+		assert.False(t, isClass,
+			"%s is both an alias key and a corpus class; Lookup would answer as the class — "+
+				"revisit the corpus-before-aliases order and this guard", code)
 	}
 }

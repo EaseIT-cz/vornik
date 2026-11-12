@@ -998,6 +998,9 @@ type Server struct {
 	// Nil makes the endpoint return 503 — same fail-soft contract
 	// every other optional surface uses.
 	adminAuditRepo persistence.AdminAuditRepository
+	// operatorCreds serves /api/v1/admin/operator-credentials (GitHub #625).
+	operatorCreds OperatorCredentialsService
+	opCredRefresh opCredRefresher
 	// leaderLockWired and leaderLockReleaseMetrics back POST
 	// /api/v1/admin/leader-locks/release (issue #60), with leaderLockRepo
 	// (declared with the cluster fields); a nil repo answers 503.

@@ -78,9 +78,12 @@ fi
 # injection, stopped before the verify gates. Probe the seam here in a
 # throwaway local clone (shared objects: cheap); the end-to-end case below
 # rebuilds through ce-leak-lint.sh, so the suite pays for two pre-verify builds.
+# --shared, not --local: --local hardlinks the object files, and git 2.56
+# aborts ("Invalid cross-device link") when TMPDIR is on another file system
+# than the checkout (a tmpfs /tmp, as on the reference host, 2026-11-11).
 
 clone="$TMP/clone"
-git clone -q --local "$ROOT" "$clone"
+git clone -q --shared "$ROOT" "$clone"
 cd "$clone"
 
 # The Makefile target runs scripts/ce-leak-lint.sh directly (no `bash`), so the

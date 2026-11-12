@@ -29,6 +29,25 @@ func (h *DoctorHandlers) checkSecretStoreKey(ctx context.Context, _ bool) Doctor
 	if err != nil {
 		return DoctorCheck{Name: name, Status: "WARNING", Message: "could not count agent credentials: " + err.Error()}
 	}
+	// GitHub #625 item 4: operator credentials share the table; count them
+	// apart, because a missing key masks them differently (they resolve from
+	// the environment only, so servers that need one stay unregistered).
+	ops := 0
+	rows, lerr := h.agentSecrets.List(ctx, secretstore.OperatorCredentialsNamespace)
+	if lerr == nil {
+		ops = len(rows)
+	}
+	what := fmt.Sprintf("%d agent credential(s)", n-ops)
+	if lerr != nil {
+		// Review 1bae F1: say so rather than count operator rows as agent ones.
+		what = fmt.Sprintf("%d credential(s) (operator credentials could not be counted: %v)", n, lerr)
+	} else if ops > 0 {
+		what = fmt.Sprintf("%d agent credential(s) and %d operator credential(s)", n-ops, ops)
+	}
+	masked := ""
+	if ops > 0 {
+		masked = "; until then the operator credentials resolve from the environment only, so MCP servers that need one stay unregistered"
+	}
 	key, kerr := secretstore.LoadKey(h.agentSecretKeyPath)
 	if n == 0 {
 		// doctor-vacuous: the check ran and counted zero stored credentials, so
@@ -40,16 +59,16 @@ func (h *DoctorHandlers) checkSecretStoreKey(ctx context.Context, _ bool) Doctor
 	}
 	if kerr != nil {
 		return DoctorCheck{Name: name, Status: "ERROR", Message: fmt.Sprintf(
-			"%d agent credential(s) stored but the key at %s is missing or unreadable; restore it from the backup that holds the rows", n, h.agentSecretKeyPath)}
+			"%s stored but the key at %s is missing or unreadable; restore it from the backup that holds the rows%s", what, h.agentSecretKeyPath, masked)}
 	}
 	if err := sampleOpens(ctx, h.agentSecrets, key); err != nil {
 		if errors.Is(err, secretstore.ErrKeyUnavailable) {
 			return DoctorCheck{Name: name, Status: "ERROR", Message: fmt.Sprintf(
-				"the key at %s does not open the stored agent credentials (a different key?)", h.agentSecretKeyPath)}
+				"the key at %s does not open the stored %s (a different key?)%s", h.agentSecretKeyPath, what, masked)}
 		}
 		return DoctorCheck{Name: name, Status: "WARNING", Message: "could not sample an agent credential: " + err.Error()}
 	}
-	return DoctorCheck{Name: name, Status: "OK", Message: fmt.Sprintf("%d agent credential(s); key opens them", n)}
+	return DoctorCheck{Name: name, Status: "OK", Message: what + "; key opens them"}
 }
 
 func sampleOpens(ctx context.Context, repo persistence.AgentSecretRepository, key []byte) error {

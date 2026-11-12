@@ -346,7 +346,8 @@ func TestIntegrationSave_SucceedsWritesConfigAndCachesProbe(t *testing.T) {
 	prober := &fakeIntegrationProber{result: integrations.ProbeResult{OK: true, Outcome: integrations.OutcomeOK, Summary: "mailbox ready"}}
 	withFakeIntegrationsRegistry(t, fakeRegistryWithProber("email", prober))
 
-	s := NewServer(WithProjectRegistry(reg))
+	creds := newMemCreds626()
+	s := NewServer(WithProjectRegistry(reg), WithOperatorCredentials(creds))
 	form := url.Values{
 		"project":   {"form-demo"},
 		"imap_host": {"imap.example.com"}, "imap_username": {"a@example.com"}, "imap_password_env": {"imap-secret-value-2"},
@@ -363,6 +364,13 @@ func TestIntegrationSave_SucceedsWritesConfigAndCachesProbe(t *testing.T) {
 	written, err := os.ReadFile(filepath.Join(root, "projects", "form-demo.yaml"))
 	require.NoError(t, err)
 	assert.Contains(t, string(written), "imap.example.com")
+	// GitHub #626: the passwords went to the credential store, audited as
+	// project setup, and to no file.
+	assert.Equal(t, "imap-secret-value-2", creds.values["EMAIL_IMAP_PASSWORD_FORM_DEMO"])
+	require.NotEmpty(t, creds.who)
+	assert.Equal(t, "project-setup", creds.who[0].Source)
+	_, statErr := os.Stat(filepath.Join(root, "secrets", "project-secrets.env"))
+	assert.True(t, os.IsNotExist(statErr), "no plaintext project secrets file")
 
 	entry, ok := s.cachedIntegrationProbe("email", "form-demo")
 	require.True(t, ok, "a successful save must populate the cached probe store")
@@ -1108,7 +1116,7 @@ func TestIntegrationRecheck_RecordsProbeMetric(t *testing.T) {
 	reg, _ := integrationsProjectRegistry(t)
 
 	metricsReg := prometheus.NewRegistry()
-	s := NewServer(WithProjectRegistry(reg), WithIntegrationsMetrics(NewIntegrationsMetrics(metricsReg)))
+	s := NewServer(WithProjectRegistry(reg), WithIntegrationsMetrics(NewIntegrationsMetrics(metricsReg)), WithOperatorCredentials(newMemCreds626()))
 	req := formRequest("/ui/integrations/slack/recheck", url.Values{"project": {"form-demo"}})
 	rec := httptest.NewRecorder()
 	s.IntegrationRecheck(rec, req, "slack")
@@ -1124,7 +1132,7 @@ func TestIntegrationSave_RecordsOkMetrics(t *testing.T) {
 	withFakeIntegrationsRegistry(t, fakeRegistryWithProber("email", prober))
 
 	metricsReg := prometheus.NewRegistry()
-	s := NewServer(WithProjectRegistry(reg), WithIntegrationsMetrics(NewIntegrationsMetrics(metricsReg)))
+	s := NewServer(WithProjectRegistry(reg), WithIntegrationsMetrics(NewIntegrationsMetrics(metricsReg)), WithOperatorCredentials(newMemCreds626()))
 	form := url.Values{
 		"project":   {"form-demo"},
 		"imap_host": {"imap.example.com"}, "imap_username": {"a@example.com"}, "imap_password_env": {"imap-secret-metrics-ok"},
@@ -1146,7 +1154,7 @@ func TestIntegrationSave_RecordsProbeFailedMetric(t *testing.T) {
 	withFakeIntegrationsRegistry(t, fakeRegistryWithProber("email", prober))
 
 	metricsReg := prometheus.NewRegistry()
-	s := NewServer(WithProjectRegistry(reg), WithIntegrationsMetrics(NewIntegrationsMetrics(metricsReg)))
+	s := NewServer(WithProjectRegistry(reg), WithIntegrationsMetrics(NewIntegrationsMetrics(metricsReg)), WithOperatorCredentials(newMemCreds626()))
 	form := url.Values{
 		"project":   {"form-demo"},
 		"imap_host": {"imap.example.com"}, "imap_username": {"a@example.com"}, "imap_password_env": {"imap-secret-metrics-fail"},
@@ -1170,7 +1178,7 @@ func TestIntegrationSave_RecordsProbeFailedMetric(t *testing.T) {
 func TestIntegrationSave_RecordsWriteFailedMetric(t *testing.T) {
 	reg, _ := integrationsProjectRegistry(t)
 	metricsReg := prometheus.NewRegistry()
-	s := NewServer(WithProjectRegistry(reg), WithIntegrationsMetrics(NewIntegrationsMetrics(metricsReg)))
+	s := NewServer(WithProjectRegistry(reg), WithIntegrationsMetrics(NewIntegrationsMetrics(metricsReg)), WithOperatorCredentials(newMemCreds626()))
 
 	form := url.Values{"project": {"bad/id"}}
 	req := formRequest("/ui/integrations/email/save", form)
@@ -1192,6 +1200,7 @@ func TestIntegrationSave_RecordsReloadFailedMetric(t *testing.T) {
 		WithProjectRegistry(reg),
 		WithIntegrationsMetrics(NewIntegrationsMetrics(metricsReg)),
 		WithConfigReloader(erroringConfigReloader{err: assertError("reload exploded")}),
+		WithOperatorCredentials(newMemCreds626()),
 	)
 	form := url.Values{
 		"project":   {"form-demo"},

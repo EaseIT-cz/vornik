@@ -44,7 +44,10 @@ func TestPreserveFailedWork_SurvivesRetryAndPrune(t *testing.T) {
 	repo, wt := conflictingWorktree(t, taskID)
 	require.Error(t, mergeWorktree(ctx, repo, wt, taskID, "", nil, zerolog.Nop()))
 
-	now := time.Unix(1791840000, 0)
+	// Recent, not a fixed date: the prune below runs against the real clock
+	// and drops refs older than PreservedWorkRetention, so a fixed
+	// 2026-10-12 21:20 UTC made this test fail from 2026-11-11 21:20 UTC on.
+	now := time.Unix(time.Now().Add(-time.Hour).Unix(), 0)
 	pw, err := preserveFailedWork(ctx, repo, wt, taskID, 1, now, zerolog.Nop())
 	require.NoError(t, err)
 	require.NotEmpty(t, pw.SHA)

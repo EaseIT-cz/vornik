@@ -1,6 +1,8 @@
 package config
 
 import (
+	"os"
+	"reflect"
 	"testing"
 	"time"
 )
@@ -89,7 +91,7 @@ func TestA2APeer_APIKeyEnvExpansion(t *testing.T) {
 			"vornik_expert": {URL: "https://host/a2a/v1/agents/p/w", APIKey: "${TEST_A2A_PEER_KEY}"},
 		}},
 	}
-	expandEnvPlaceholders(cfg)
+	expandValue(reflect.ValueOf(cfg), os.Getenv)
 	if got := cfg.A2A.Peers["vornik_expert"].APIKey; got != "sk-vornik-secret" {
 		t.Fatalf("api_key = %q, want expanded secret", got)
 	}

@@ -24,12 +24,12 @@ package executor
 import (
 	"context"
 	"fmt"
-	"os"
 	"strings"
 	"time"
 
 	"vornik.io/vornik/internal/a2a/client"
 	"vornik.io/vornik/internal/registry"
+	"vornik.io/vornik/internal/secretstore"
 )
 
 // a2aClient is the package-shared outbound A2A client, so chained
@@ -67,7 +67,7 @@ func (e *Executor) handleA2ACallStep(ctx context.Context, stepID string, step *r
 	}
 	apiKey := ""
 	if step.APIKeyEnv != "" {
-		apiKey = strings.TrimSpace(os.Getenv(step.APIKeyEnv))
+		apiKey = strings.TrimSpace(secretstore.Value(step.APIKeyEnv))
 	}
 
 	res, err := a2aClient.Call(ctx, client.CallRequest{

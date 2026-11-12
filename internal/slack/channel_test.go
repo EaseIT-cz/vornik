@@ -1259,7 +1259,7 @@ func TestHandleWebhook_ChannelAllowlistStillGatesSharedChannels(t *testing.T) {
 // live deployment had exactly that: assistant.yaml carried an empty
 // sender_allowlist with the comment "empty = allow everyone (dev mode)".
 func TestSlackFailsClosedWithoutAnAllowlist(t *testing.T) {
-	closed := &installation{projectID: "p"}
+	closed := buildInstallation(InstallationConfig{ProjectID: "p"})
 	if _, err := (&Channel{}).resolveSpeakerForInstallation(closed, "U_anyone"); err == nil {
 		t.Error("an empty sender_allowlist must DENY, not admit every workspace member")
 	}
@@ -1268,13 +1268,13 @@ func TestSlackFailsClosedWithoutAnAllowlist(t *testing.T) {
 	}
 
 	// The dev-mode pass-through survives, but has to be asked for.
-	open := &installation{projectID: "p", allowUnlisted: true}
+	open := buildInstallation(InstallationConfig{ProjectID: "p", AllowUnlistedSenders: true})
 	if _, err := (&Channel{}).resolveSpeakerForInstallation(open, "U_anyone"); err != nil {
 		t.Errorf("allowUnlisted must restore the dev-mode pass-through: %v", err)
 	}
 
 	// A configured allowlist is unaffected by the flip.
-	listed := &installation{projectID: "p", senders: map[string]struct{}{"U_alice": {}}}
+	listed := buildInstallation(InstallationConfig{ProjectID: "p", SenderAllowlist: []string{"U_alice"}})
 	if _, err := (&Channel{}).resolveSpeakerForInstallation(listed, "U_alice"); err != nil {
 		t.Errorf("a listed sender must still be admitted: %v", err)
 	}

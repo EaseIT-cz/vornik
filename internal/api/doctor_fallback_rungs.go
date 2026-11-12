@@ -58,6 +58,11 @@ const (
 	// 2026-09-13, defaulting to config.DefaultFallbackRungMinAttempts (two:
 	// one failure is a bad day, and waiting for more than two on a path this
 	// rare would mean never reporting).
+
+	// noDeadRungsMessage is the OK verdict when the window holds no dead rung;
+	// shared by the handler's early return (before any join work) and the pure
+	// evaluator so the wording has one home.
+	noDeadRungsMessage = "no fallback rung has failed before inference on every attempt in the last 30 days"
 )
 
 // unreachedInferenceClasses are the failure classes that mean the rung never
@@ -85,6 +90,17 @@ var unreachedInferenceClasses = []string{
 	"container_wait_failed",
 	"llm_call_failed",
 	"missing_prerequisite",
+}
+
+// modelPathClasses are the failure classes that are about the model itself:
+// the breaker held the model unhealthy (model_unhealthy) or a request reached
+// it and failed upstream (llm_call_failed). Only for these does "the model has
+// succeeded since" clear a rung, because that later success contradicts the
+// cause. A rung that dies in the container or on a prerequisite failed for a
+// reason the model's health elsewhere says nothing about (#703 review).
+var modelPathClasses = map[string]bool{
+	"model_unhealthy": true,
+	"llm_call_failed": true,
 }
 
 // deadFallbackRung is one fallback step that has never succeeded in the window.
@@ -127,6 +143,11 @@ func (h *DoctorHandlers) checkFallbackRungs(ctx context.Context) DoctorCheck {
 	if err != nil {
 		return DoctorCheck{Name: name, Status: "WARNING", Message: fmt.Sprintf("fallback rung query failed: %v", err)}
 	}
+	if len(rungs) == 0 {
+		// Nothing to join: skip the working-models query and the whole-registry
+		// load entirely — both exist only to classify dead rungs (#703 review).
+		return DoctorCheck{Name: name, Status: "OK", Message: noDeadRungsMessage}
+	}
 	modelLastOK, err := queryWorkingModels(ctx, h.db, time.Now().Add(-fallbackRungWindow))
 	if err != nil {
 		return DoctorCheck{Name: name, Status: "WARNING", Message: fmt.Sprintf("fallback rung model query failed: %v", err)}
@@ -141,11 +162,10 @@ func (h *DoctorHandlers) checkFallbackRungs(ctx context.Context) DoctorCheck {
 // wired, or the registry failed to load) — the verdict then treats every rung
 // as still configured and says so, rather than claiming a join it did not do.
 //
-// The join is per-ROLE on purpose. The daemon-scope chat router fallbacks are
-// a different surface (chat-proxy failover, not a role's ladder rung): counting
-// them here would keep a rung "configured" after its role's own binding moved
-// — exactly the case #703 reported (the reviewer's zai.glm-5.3 rung read dead
-// for weeks after every role binding moved).
+// The join is per-ROLE on purpose. Chat-router fallbacks are chat-proxy
+// failover, not a role's ladder rung. Counting them would keep a rung
+// "configured" after its role's own binding moved — the #703 case (the
+// zai.glm-5.3 rung read dead for weeks after every role binding moved).
 func (h *DoctorHandlers) configuredFallbackBindings() func(role, model string) bool {
 	if h == nil || h.configDir == "" {
 		return nil
@@ -169,8 +189,9 @@ func (h *DoctorHandlers) configuredFallbackBindings() func(role, model string) b
 // window — the ledger's evidence that a model demonstrably works. A dead rung
 // whose model has an ok NEWER than the rung's last failure is history, not a
 // live fault (#703). Portable SQL: GROUP BY / MAX are driver-neutral; on
-// SQLite recorded_at is RFC3339Nano text written UTC by the repositories, so
-// the lexicographic MAX is chronological.
+// SQLite recorded_at is the fixed-width UTC text sqliteTime writes (the
+// 2026-10-01 data migration rewrote older rows), so the lexicographic MAX is
+// chronological.
 func queryWorkingModels(ctx context.Context, db *sql.DB, since time.Time) (map[string]time.Time, error) {
 	rows, err := db.QueryContext(ctx, `
 		SELECT model, MAX(recorded_at)
@@ -218,7 +239,7 @@ func queryWorkingModels(ctx context.Context, db *sql.DB, since time.Time) (map[s
 // has an ok after its last failure is historical, not live.
 func evaluateFallbackRungs(rungs []deadFallbackRung, isConfigured func(role, model string) bool, modelLastOK map[string]time.Time) (items []string, status, message string) {
 	if len(rungs) == 0 {
-		return nil, "OK", "no fallback rung has failed before inference on every attempt in the last 30 days"
+		return nil, "OK", noDeadRungsMessage
 	}
 
 	var live, historical, stale []deadFallbackRung
@@ -227,7 +248,21 @@ func evaluateFallbackRungs(rungs []deadFallbackRung, isConfigured func(role, mod
 		case isConfigured != nil && !isConfigured(r.role, r.model):
 			stale = append(stale, r)
 		default:
-			if ok, worked := modelLastOK[r.model]; worked && ok.After(r.lastFailed) {
+			// Demote to history only if every attempt failed on the model path
+			// (the last class and the refused + called-and-failed counts both say
+			// so; a mixed rung keeps an environment cause the model's health
+			// cannot clear, review ffda F1), its last-failed time is known, and
+			// the model has since succeeded. An env-class rung never reaches the model, so the model
+			// working elsewhere proves nothing about it; an unknown last-failed
+			// cannot be compared (ok.After(zeroTime) is always true). Both stay
+			// live — #703 review.
+			demote := false
+			if !r.lastFailed.IsZero() && modelPathClasses[r.lastClass] && r.refused+r.calledAndFailed == r.attempts {
+				if ok, worked := modelLastOK[r.model]; worked && ok.After(r.lastFailed) {
+					demote = true
+				}
+			}
+			if demote {
 				historical = append(historical, r)
 			} else {
 				live = append(live, r)
@@ -249,7 +284,7 @@ func evaluateFallbackRungs(rungs []deadFallbackRung, isConfigured func(role, mod
 			"[ERROR] %s (role %s, model %s) — %d attempts, 0 reached inference in 30d (%s; avg %s); last failed %s as %s",
 			r.stepID, role, r.model, r.attempts, rungPopulations(r),
 			rungSeconds(r.avgDuration),
-			r.lastFailed.Format(time.RFC3339), class))
+			formatLastFailed(r.lastFailed), class))
 	}
 	for _, r := range historical {
 		class := r.lastClass
@@ -263,7 +298,7 @@ func evaluateFallbackRungs(rungs []deadFallbackRung, isConfigured func(role, mod
 		items = append(items, fmt.Sprintf(
 			"[WARNING] %s (role %s, model %s) — last failed %s as %s, but the model has succeeded since (newest ok %s): history until the rung is next reached",
 			r.stepID, role, r.model,
-			r.lastFailed.Format(time.RFC3339), class,
+			formatLastFailed(r.lastFailed), class,
 			modelLastOK[r.model].Format(time.RFC3339)))
 	}
 
@@ -287,7 +322,15 @@ func evaluateFallbackRungs(rungs []deadFallbackRung, isConfigured func(role, mod
 		message += "; none is a live fault: each remaining rung's model has succeeded since its last failure — re-check when one is next reached"
 	default:
 		status = "OK"
-		message += "; none remains configured — checked against the current configuration, these are history rather than a fault"
+		// Every dead rung is stale: name them, so a mass-stale OK verdict is
+		// auditable from doctor output alone — a partial config load that marks
+		// everything stale would otherwise clear live faults silently (#703 review).
+		ids := make([]string, 0, len(stale))
+		for _, r := range stale {
+			ids = append(ids, r.stepID)
+		}
+		message += fmt.Sprintf("; none remains configured (%s) — checked against the current configuration, these are history rather than a fault",
+			strings.Join(ids, ", "))
 	}
 	return items, status, message
 }
@@ -344,6 +387,16 @@ func liveRungsMessage(live []deadFallbackRung) string {
 // tens-of-seconds gap is what separates them in workflow-stats.
 func rungSeconds(d time.Duration) string {
 	return strconv.FormatFloat(math.Round(d.Seconds()*10)/10, 'f', -1, 64) + "s"
+}
+
+// formatLastFailed renders a rung's last-failed time, naming the unknown (zero)
+// case rather than printing 0001-01-01T00:00:00Z as if it were a fact — a rung
+// with an unknown last-failed is kept live, so it reaches the item text.
+func formatLastFailed(t time.Time) string {
+	if t.IsZero() {
+		return "(unknown)"
+	}
+	return t.Format(time.RFC3339)
 }
 
 // rungPopulations renders the three populations a dead rung's attempts fall

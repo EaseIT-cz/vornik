@@ -965,10 +965,10 @@ func TestParseSlackFilesInfo(t *testing.T) {
 // advance. file_shared often ships without channel_type, so the `D` prefix is the only
 // signal available there.
 func TestSlackFileShared_DMBypassesChannelAllowlist(t *testing.T) {
-	inst := &installation{
-		projectID:       "easeit-companion",
-		allowedChannels: map[string]struct{}{"C03HTMUL2S1": {}},
-	}
+	inst := buildInstallation(InstallationConfig{
+		ProjectID:        "easeit-companion",
+		ChannelAllowlist: []string{"C03HTMUL2S1"},
+	})
 	// A DM, identified by channel_type.
 	if !channelAllowed(inst, "im", "D0BLA9ZRDFH") {
 		t.Error("a DM must bypass the channel allowlist — its D… id cannot be pre-listed")
@@ -987,11 +987,11 @@ func TestSlackFileShared_DMBypassesChannelAllowlist(t *testing.T) {
 	// An empty allowlist DENIES as of 2026-08-05 — it used to expose every
 	// channel in the workspace, which is a dev convenience that read as an
 	// unset field rather than an open door.
-	if channelAllowed(&installation{projectID: "p"}, "channel", "C_ANY") {
+	if channelAllowed(buildInstallation(InstallationConfig{ProjectID: "p"}), "channel", "C_ANY") {
 		t.Error("an empty channel allowlist must now DENY, not expose every channel")
 	}
 	// ...unless the deployment opts back in deliberately.
-	if !channelAllowed(&installation{projectID: "p", allowUnlisted: true}, "channel", "C_ANY") {
+	if !channelAllowed(buildInstallation(InstallationConfig{ProjectID: "p", AllowUnlistedSenders: true}), "channel", "C_ANY") {
 		t.Error("allowUnlisted must restore the dev-mode pass-through")
 	}
 	// A private channel (G…) must NOT be mistaken for a DM.

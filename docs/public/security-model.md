@@ -477,6 +477,12 @@ connected assistants, and upstream services.
   prompts, transcripts, task messages) and redacts what it finds.
 - Credentials an assistant provides are sealed at rest with a key file the
   operator must back up; the doctor checks that the key opens them.
+- Operator credentials (values the configuration references as
+  `secret://NAME`) are sealed the same way. They are written from the
+  console's Credentials page, the MCP form, or `vornikctl credential` through
+  the admin API, which takes an admin-class API key only and refuses when API
+  authentication is off. The value is read once and never logged, echoed or
+  audited; each write records who, from where, and the name.
 
 ### Outbound connections and SSRF
 
@@ -490,6 +496,12 @@ connected assistants, and upstream services.
   every guard. An operator-listed allowed host is an explicit vouch and
   bypasses the list, metadata addresses included.
   Operator-listed private ranges are allowed only where a feature needs them.
+- An agent project's approved API reaches a private address only on a host
+  the operator names in `agent_admin.private_api_hosts`, and only over https.
+  A listed host still never reaches loopback, link-local or metadata
+  addresses, each API still needs its approval on an approver device, and a
+  managed instance refuses the setting. `test_connection` reports a refused
+  address as `blocked_private_address`.
 - Redirects that would carry secrets are refused; gateway redirects stay on
   the same origin.
 

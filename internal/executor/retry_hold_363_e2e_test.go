@@ -144,6 +144,9 @@ func TestRetryAfterOpenCircuit_HeldUntilHalfOpen(t *testing.T) {
 	assert.True(t, permitted, "the probe's success closed the circuit")
 }
 
+// waitTicks waits for n scheduler ticks to start, so at least n-1 full
+// scheduling passes have run. The 30 s bound is for a loaded -race run, where
+// one pass can take seconds (GitHub #725, shape 2: 20 ticks in 10 s failed).
 func waitTicks(t *testing.T, s *scheduler.Scheduler, n int) {
 	t.Helper()
 	last := s.LastTick()
@@ -154,7 +157,7 @@ func waitTicks(t *testing.T, s *scheduler.Scheduler, n int) {
 			seen++
 		}
 		return seen >= n
-	}, 10*time.Second, time.Millisecond, "the scheduler stopped polling")
+	}, 30*time.Second, time.Millisecond, "the scheduler stopped polling")
 }
 
 func countExecutions(t *testing.T, execs *sqlite.ExecutionRepository, taskID string) int {

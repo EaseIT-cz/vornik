@@ -13,12 +13,16 @@ import (
 	"fmt"
 	"sort"
 
+	"vornik.io/vornik/internal/api"
 	"vornik.io/vornik/internal/mcpauth"
+	"vornik.io/vornik/internal/persistence"
 	"vornik.io/vornik/internal/ui"
 )
 
 type operatorCredentials struct {
 	c *Container
+	// audit is the admin_audit repository; nil skips the row, as the page did.
+	audit persistence.AdminAuditRepository
 	// refreshDaemon and refreshProjects are the two re-registrations a config
 	// reload runs; fields so a test can observe each.
 	refreshDaemon   func()
@@ -27,6 +31,9 @@ type operatorCredentials struct {
 
 func (c *Container) newOperatorCredentials() ui.OperatorCredentials {
 	oc := &operatorCredentials{c: c, refreshDaemon: c.refreshMCPRegistry}
+	if c.repos != nil {
+		oc.audit = c.repos.AdminAudit
+	}
 	if r := c.newAdminMCPRefresher(); r != nil {
 		oc.refreshProjects = r.RefreshAll
 	}
@@ -102,15 +109,19 @@ func (o *operatorCredentials) referencedNames() map[string][]string {
 	return out
 }
 
-func (o *operatorCredentials) Put(ctx context.Context, name string, value []byte, actor string) error {
+func (o *operatorCredentials) Put(ctx context.Context, name string, value []byte, who persistence.AdminAuditEntry) error {
 	st, err := o.c.secretStoreForWrite()
 	if err != nil {
 		return fmt.Errorf("operator credentials: store unavailable: %w", err)
 	}
-	return st.PutOperatorCredential(ctx, name, value, actor)
+	if err := st.PutOperatorCredential(ctx, name, value, who.Principal); err != nil {
+		return err
+	}
+	o.auditWrite(ctx, "credential.set", name, who)
+	return nil
 }
 
-func (o *operatorCredentials) Delete(ctx context.Context, name string) error {
+func (o *operatorCredentials) Delete(ctx context.Context, name string, who persistence.AdminAuditEntry) error {
 	src := o.c.currentSecretSource()
 	if src.KeyErr != nil {
 		return src.KeyErr
@@ -119,7 +130,24 @@ func (o *operatorCredentials) Delete(ctx context.Context, name string) error {
 		// No store yet means nothing was ever stored: nothing to remove.
 		return nil
 	}
-	return src.Store.DeleteOperatorCredential(ctx, name)
+	if err := src.Store.DeleteOperatorCredential(ctx, name); err != nil {
+		return err
+	}
+	o.auditWrite(ctx, "credential.remove", name, who)
+	return nil
+}
+
+// auditWrite records one credential write after it succeeded: the action, the
+// name and the caller, never the value. A failed audit write is logged and
+// does not undo the store write (GitHub #625; the page's behaviour).
+func (o *operatorCredentials) auditWrite(ctx context.Context, action, name string, who persistence.AdminAuditEntry) {
+	if o.audit == nil {
+		return
+	}
+	who.Action, who.Target = action, name
+	if err := o.audit.Insert(ctx, &who); err != nil {
+		o.c.Logger.Error().Err(err).Str("credential", name).Str("action", action).Msg("operator credentials: audit write failed")
+	}
 }
 
 // Refresh runs the daemon-level registry rebuild (synchronous server set,
@@ -149,4 +177,69 @@ func (o *operatorCredentials) Refresh(ctx context.Context) (ui.CredentialsRefres
 	}
 	sort.Strings(rep.ProjectDials)
 	return rep, nil
+}
+
+// operatorCredentialsAPI adapts the page's service to the REST verb's shapes
+// (GitHub #625 item 2): one store, one audit, one refresh.
+type operatorCredentialsAPI struct{ oc *operatorCredentials }
+
+func (c *Container) newOperatorCredentialsAPI() api.OperatorCredentialsService {
+	return operatorCredentialsAPI{oc: c.newOperatorCredentials().(*operatorCredentials)}
+}
+
+func (a operatorCredentialsAPI) List(ctx context.Context) (api.OperatorCredentialList, error) {
+	view, err := a.oc.Status(ctx)
+	if err != nil {
+		return api.OperatorCredentialList{}, err
+	}
+	out := api.OperatorCredentialList{KeyUnusable: view.KeyUnusable, Credentials: []api.OperatorCredentialInfo{}}
+	for _, r := range view.Rows {
+		info := api.OperatorCredentialInfo{Name: r.Name, State: apiCredentialState(r), SetBy: r.StoreSetBy, NeededBy: r.NeededBy}
+		if r.InStore && !r.StoreSetAt.IsZero() {
+			at := r.StoreSetAt
+			info.SetAt = &at
+		}
+		out.Credentials = append(out.Credentials, info)
+	}
+	return out, nil
+}
+
+func apiCredentialState(r ui.CredentialRow) string {
+	switch {
+	case r.InStore && r.InEnv:
+		return "both"
+	case r.InStore:
+		return "stored"
+	case r.InEnv:
+		return "environment"
+	}
+	return "missing"
+}
+
+func (a operatorCredentialsAPI) Put(ctx context.Context, name string, value []byte, who persistence.AdminAuditEntry) error {
+	return a.oc.Put(ctx, name, value, who)
+}
+
+// Delete reports removed from the store's own list before the removal: a name
+// held only in the environment is not removed (design round 2, review a155 F4).
+func (a operatorCredentialsAPI) Delete(ctx context.Context, name string, who persistence.AdminAuditEntry) (bool, error) {
+	view, err := a.oc.Status(ctx)
+	if err != nil {
+		return false, err
+	}
+	stored := false
+	for _, r := range view.Rows {
+		if r.Name == name && r.InStore {
+			stored = true
+		}
+	}
+	if !stored {
+		return false, nil
+	}
+	return true, a.oc.Delete(ctx, name, who)
+}
+
+func (a operatorCredentialsAPI) Refresh(ctx context.Context) (api.OperatorCredentialsRefresh, error) {
+	rep, err := a.oc.Refresh(ctx)
+	return api.OperatorCredentialsRefresh{DaemonPresent: rep.DaemonPresent, ProjectDials: rep.ProjectDials}, err
 }

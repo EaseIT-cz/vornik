@@ -135,6 +135,22 @@ func (c *Client) Do(method, path string, body interface{}) (*http.Response, erro
 	return resp, nil
 }
 
+// DoRaw sends body as is, with the given content type: for a value that must
+// not be re-encoded (an operator credential, GitHub #625).
+func (c *Client) DoRaw(method, path string, body []byte, contentType string) (*http.Response, error) {
+	req, err := http.NewRequest(method, c.baseURL+path, bytes.NewReader(body))
+	if err != nil {
+		return nil, fmt.Errorf("failed to create request: %w", err)
+	}
+	req.Header.Set("Content-Type", contentType)
+	req.Header.Set("X-API-Key", c.apiKey)
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("request failed: %w", err)
+	}
+	return resp, nil
+}
+
 // Get performs a GET request to the API.
 func (c *Client) Get(path string) (*http.Response, error) {
 	return c.Do(http.MethodGet, path, nil)

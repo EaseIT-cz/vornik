@@ -184,7 +184,7 @@ func (c *Container) initRegistry() error {
 		// embed worker pool) are boot-only and are NOT applied live; see
 		// applyHotConfig.
 		if c.ConfigPath != "" {
-			staged, prov, err := config.LoadFromPathWithProvenance(c.ConfigPath)
+			staged, prov, err := c.stageConfigForReload()
 			if err != nil {
 				return fmt.Errorf("reload: re-parse config.yaml: %w", err)
 			}
@@ -257,6 +257,11 @@ func (c *Container) initRegistry() error {
 		// the live subsystems. Done last, after the registry activates, so a
 		// registry-activation failure doesn't leave config half-applied.
 		c.applyHotConfig()
+		// GitHub #738: live-swap the Slack inbound allowlists on the running
+		// channels. The registry above already holds the activated definitions;
+		// anything in the slack block this cannot apply is named by the
+		// restart-only probe that runs after the activator.
+		c.applySlackHotConfig(reloader)
 		// Rates last, beside the other hot-applied values: the swap is atomic
 		// and in-place, so every holder of the table pointer — executor cost
 		// recorder, judge runner, chat catalogs — bills the new rates from its
@@ -269,8 +274,25 @@ func (c *Container) initRegistry() error {
 	// worker start (backfill tickers), so a reload that reported plain success left an
 	// operator believing a change was live when it was not — 2026-07-30. The probe
 	// reads the live config each cycle; the reloader keeps the start-up baseline.
+	//
+	// GitHub #738: the probe MUST read the config a reload actually parsed. The
+	// previous body returned RestartOnlySnapshotOf(c.Config) — but c.Config is
+	// deliberately never swapped (see applyHotConfig), so baseline and current were
+	// snapshots of the same pointer and DiffRestartOnly was always empty: no
+	// restart-only warning could ever fire on a running daemon, including the
+	// original 2026-07-30 field. The activator's applyHotConfig stores the freshly
+	// parsed config in c.configSnapshot before checkRestartOnlyDrift runs
+	// (config/watcher.go runCycle), so the snapshot IS the on-disk view.
 	reloader.SetRestartOnlyProbe(func() map[string]string {
-		return config.RestartOnlySnapshotOf(c.Config)
+		cfg := c.Config
+		if s := c.configSnapshot.Load(); s != nil && s.Config != nil {
+			cfg = s.Config
+		}
+		m := config.RestartOnlySnapshotOf(cfg)
+		for k, v := range c.projectChannelRestartSnapshot() {
+			m[k] = v
+		}
+		return m
 	})
 	if c.Executor != nil {
 		c.Executor.SetWorkflowResolver(c.Registry)
@@ -433,6 +455,44 @@ func (c *Container) applyHotConfig() {
 				Msg("hot-reload: applied logship scope allowlist from config.yaml without restart")
 		}
 	}
+}
+
+// projectChannelRestartSnapshot is the project-file half of the restart-only probe
+// (GitHub #738). The config.yaml probe cannot see it: conversation-channel blocks
+// live in configs/projects/<id>.yaml, and the channels are built once at boot from
+// the registry — a reload activates the new registry but never rebuilds the running
+// channel objects. So EVERY field of a configured slack / email / github_app block is
+// restart-required, except the three Slack inbound-allowlist fields that
+// applySlackHotConfig swaps live; those are zeroed out before marshalling so an
+// allowlist edit does not raise a false restart warning.
+//
+// Denominator (AGENTS.md §4): the snapshot covers every configured block of every
+// activated project, keyed project:<id>.<block>, so DiffRestartOnly names an
+// added or removed project's block too (a one-sided key counts as a change).
+func (c *Container) projectChannelRestartSnapshot() map[string]string {
+	if c.Registry == nil {
+		return nil
+	}
+	out := make(map[string]string)
+	for _, p := range c.Registry.ListProjects() {
+		if p == nil || p.ID == "" {
+			continue
+		}
+		if p.Slack.Enabled() {
+			s := p.Slack
+			s.ChannelAllowlist = nil // hot-applied by applySlackHotConfig
+			s.SenderAllowlist = nil  // ditto
+			s.AllowUnlistedSenders = false
+			out["project:"+p.ID+".slack"] = config.OneLineYAML(s)
+		}
+		if p.Email.Enabled() {
+			out["project:"+p.ID+".email"] = config.OneLineYAML(p.Email)
+		}
+		if p.GitHubApp.Enabled() {
+			out["project:"+p.ID+".github_app"] = config.OneLineYAML(p.GitHubApp)
+		}
+	}
+	return out
 }
 
 // NewContainerWithObservability creates a container with observability enabled.

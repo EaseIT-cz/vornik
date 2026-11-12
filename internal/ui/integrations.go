@@ -31,7 +31,9 @@ import (
 	"vornik.io/vornik/internal/config"
 	"vornik.io/vornik/internal/featuredoctor"
 	"vornik.io/vornik/internal/integrations"
+	"vornik.io/vornik/internal/projectdoctor"
 	"vornik.io/vornik/internal/registry"
+	"vornik.io/vornik/internal/secretstore"
 )
 
 // integrationsRegistryFunc builds the Integrations Hub catalog. Package var
@@ -753,9 +755,10 @@ func (s *Server) IntegrationSave(w http.ResponseWriter, r *http.Request, kindID 
 
 	cand := integrations.CandidateConfig{Kind: kind.ID, ProjectID: projectID, Values: candidateValuesFromForm(kind, r)}
 	deps := integrations.SaveDeps{
-		ConfigDir:    configDir,
-		Reloader:     s.integrationsReloader(),
-		ReloadStatus: s.integrationsReloadStatus(),
+		ConfigDir:      configDir,
+		Reloader:       s.integrationsReloader(),
+		ReloadStatus:   s.integrationsReloadStatus(),
+		ProjectSecrets: s.projectSecretWriter(r),
 	}
 	result, err := integrations.Save(r.Context(), kind, target, cand, caller, deps)
 	// Save's step 1 is itself a Prober.Probe call the hub makes (the
@@ -805,9 +808,9 @@ func integrationSaveResultLabel(saved bool, err error) string {
 // button posts no field values) so an explicit re-check can re-probe live
 // config. Daemon-scope secrets are already expanded in cfg by the config
 // loader (os.ExpandEnv, internal/config/loader.go); project-scope secrets
-// are read via os.Getenv against the *_env var name the registry stores
-// (placeSecret / EnvSecrets.Set both os.Setenv the value on save, per
-// save.go's doc) — never from a file the UI itself would have to decrypt.
+// are read with secretstore.Value against the *_env var name the registry
+// stores: the environment, then the operator credential the save stored
+// (GitHub #626).
 func (s *Server) currentIntegrationValues(kindID, projectID string) map[string]string {
 	values := map[string]string{}
 	cfg := s.onboardingDetector.Config
@@ -822,18 +825,18 @@ func (s *Server) currentIntegrationValues(kindID, projectID string) map[string]s
 			values["imap_host"] = proj.Email.IMAPHost
 			values["imap_port"] = intOrEmpty(int64(proj.Email.IMAPPort))
 			values["imap_username"] = proj.Email.IMAPUsername
-			values["imap_password_env"] = os.Getenv(proj.Email.IMAPPasswordEnv)
+			values["imap_password_env"] = secretstore.Value(proj.Email.IMAPPasswordEnv)
 			values["smtp_host"] = proj.Email.SMTPHost
 			values["smtp_port"] = intOrEmpty(int64(proj.Email.SMTPPort))
 			values["smtp_username"] = proj.Email.SMTPUsername
-			values["smtp_password_env"] = os.Getenv(proj.Email.SMTPPasswordEnv)
+			values["smtp_password_env"] = secretstore.Value(proj.Email.SMTPPasswordEnv)
 			values["from_address"] = proj.Email.FromAddress
 		}
 	case "slack":
 		if proj != nil {
 			values["team_id"] = proj.Slack.TeamID
-			values["bot_token_env"] = os.Getenv(proj.Slack.BotTokenEnv)
-			values["signing_secret_env"] = os.Getenv(proj.Slack.SigningSecretEnv)
+			values["bot_token_env"] = secretstore.Value(proj.Slack.BotTokenEnv)
+			values["signing_secret_env"] = secretstore.Value(proj.Slack.SigningSecretEnv)
 		}
 	case "github_app":
 		if proj != nil {
@@ -955,4 +958,17 @@ func (s *Server) IntegrationAssist(w http.ResponseWriter, r *http.Request, kindI
 		return
 	}
 	s.render(w, "integrations_assist.html", IntegrationAssistVM{Answer: result.Text, DocHint: field.DocHint})
+}
+
+// projectSecretWriter stores a project-scope integration secret as an
+// operator credential (GitHub #625 item 3, #626), audited as the console
+// caller with Source "project-setup". Nil when the credential service is
+// not wired: the save then refuses the secret.
+func (s *Server) projectSecretWriter(r *http.Request) projectdoctor.SecretWriter {
+	if s.operatorCredentials == nil {
+		return nil
+	}
+	who := credentialsWho(r, credentialsActor(r))
+	who.Source = "project-setup"
+	return projectdoctor.StoreSecrets{Writer: s.operatorCredentials, Who: who}
 }

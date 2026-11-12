@@ -200,7 +200,7 @@ MCP_URL="$VORNIK_URL/api/v1/mcp/companion"
 # client by its signature (error 1010), which blocked every /upload (GitHub
 # #628). Keep the version equal to plugin.json; scripts/user_agent_test.sh
 # checks it.
-VORNIK_UA="vornik-companion/0.50.8 (claude-code)"
+VORNIK_UA="vornik-companion/0.50.10 (claude-code)"
 
 # build_digest emits the digest's markdown to stdout. Wrapped in a
 # function so the caller can capture it once at the end and emit the

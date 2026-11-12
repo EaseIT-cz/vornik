@@ -335,6 +335,11 @@ type Config struct {
 	// out empty — the field is present in the file, its placeholder just
 	// expanded to nothing. Unexported: diagnostic state, never serialised.
 	unresolvedPlaceholders []string
+	// credentialCandidates and shadowedCredentials: the ${NAME}s referenced
+	// outside the database block, and those whose environment value won
+	// over a different stored credential (GitHub #626). Names only.
+	credentialCandidates []string
+	shadowedCredentials  []string
 
 	// SteeringNotificationsEnabled pushes a prompt to the originating
 	// chat/DM when a task that was created there enters a steering state
@@ -762,7 +767,11 @@ type AgentAdminConfig struct {
 	AgentImage              string  `yaml:"agent_image" doc:"Runtime image of the roles an agent defines (default the standard agent image)."`
 	// Models is the catalogue of models an agent's roles may name
 	// (agent-administered design §18.6 item 2). Empty: no model is offered.
-	Models []AgentModelConfig `yaml:"models" doc:"Models an agent's roles may choose (empty, the default: none; every agent role runs on the global agent model). Whether each is local or remote is computed from where the chat router sends it: local only for an HTTP endpoint on a loopback or private address. A role on a remote model needs approval on an approver device, once per destination (sub-provider and endpoint host). Entries served by a command-line provider, with no route, or remote without an exact pricing.yaml entry are not offered; vornikctl doctor names them (agent_model_catalogue)."`
+	// PrivateAPIHosts are intranet hosts an agent project's approved https
+	// API may reach on a private address (agent-administered design part 06,
+	// §6.7, GitHub #734). Self-hosted only; folded at load.
+	PrivateAPIHosts []string           `yaml:"private_api_hosts" doc:"Host names an agent project's approved API may reach on a private (RFC 1918 or ULA) address, for an intranet service. Bare names only, compared without case or a trailing dot; the API's base URL must be https. A listed host still never reaches loopback, link-local or a metadata address, and each API still needs its approval on an approver device. Empty (the default): agent APIs reach public addresses only. Refused under hosting.mode managed."`
+	Models          []AgentModelConfig `yaml:"models" doc:"Models an agent's roles may choose (empty, the default: none; every agent role runs on the global agent model). Whether each is local or remote is computed from where the chat router sends it: local only for an HTTP endpoint on a loopback or private address. A role on a remote model needs approval on an approver device, once per destination (sub-provider and endpoint host). Entries served by a command-line provider, with no route, or remote without an exact pricing.yaml entry are not offered; vornikctl doctor names them (agent_model_catalogue)."`
 }
 
 // AgentModelConfig is one model of agent_admin.models.

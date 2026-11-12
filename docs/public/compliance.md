@@ -1,6 +1,6 @@
 # Compliance status
 
-**Last updated:** 1 November 2026
+**Last updated:** 12 November 2026
 
 Where Vornik stands on the EU AI Act and GDPR, including what is not done.
 
@@ -58,13 +58,19 @@ marking works, its limits and how to check content:
 
 ### High-risk obligations (Annex III)
 
-Vornik is not placed on the market as a high-risk system. If you deploy it in
-an Annex III use case (recruitment, credit scoring, education, essential
-services, critical infrastructure), you become the deployer of a high-risk
-system from **2 December 2027**, with the Article 26 duties. We are building
-the evidence pack you would need (logging guarantees, instructions for use,
-human-oversight documentation, data governance). Tell us if you plan such a
-deployment.
+Vornik is not placed on the market as a high-risk system. If you put it to
+an Annex III use (recruitment, credit scoring, education, essential
+services, critical infrastructure), you change its intended purpose, and the
+AI Act treats you as the **provider** of that high-risk system (Article
+25(1)(c)), with the provider's duties under Article 16, from
+**2 December 2027**. Using it yourself also makes you its deployer, with the
+Article 26 duties. We then owe you cooperation (Article 25(2)): technical
+documentation, the known limitations and failure modes, and access for
+testing. The first part is published:
+[Building a high-risk system on Vornik](high-risk-systems.md) gives you, point
+by point, what Article 13(3) asks your instructions for use to contain. Still
+to come: human-oversight documentation (Article 14), data governance and an
+Annex IV documentation skeleton. Tell us if you plan such a deployment.
 
 ## GDPR
 

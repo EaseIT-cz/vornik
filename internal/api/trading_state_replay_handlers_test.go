@@ -54,6 +54,7 @@ func (r *replayingFillRepo) ListNullCommission(_ context.Context, _ time.Time) (
 type replayingOrderRepo struct {
 	rows       []*persistence.TradingOrder
 	lastFilter persistence.TradingOrderFilter
+	filters    []persistence.TradingOrderFilter // every List call, in order (#739)
 }
 
 func (r *replayingOrderRepo) Record(context.Context, *persistence.TradingOrder) error {
@@ -62,6 +63,7 @@ func (r *replayingOrderRepo) Record(context.Context, *persistence.TradingOrder) 
 
 func (r *replayingOrderRepo) List(_ context.Context, f persistence.TradingOrderFilter) ([]*persistence.TradingOrder, error) {
 	r.lastFilter = f
+	r.filters = append(r.filters, f)
 	return r.rows, nil
 }
 

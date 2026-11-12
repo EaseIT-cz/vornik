@@ -136,6 +136,30 @@ class CommitRuleCostTest(unittest.TestCase):
         finally:
             signal.alarm(0)
 
+    def test_an_adversarial_run_of_git_options_matches_in_linear_time(self):
+        """`-C -a` parsed as `-C <value>` or as two flags, so `git -C -a … x`
+        backtracked on every split: 71 ms at 18 pairs, about 4x per two pairs
+        (catalogue review 5865593401, 2026-11-11). A dash value still matches."""
+        import signal
+        import time
+        if not hasattr(signal, "SIGALRM"):
+            self.skipTest("SIGALRM is POSIX-only; the bound is checked on POSIX hosts")
+
+        def boom(*_):
+            raise TimeoutError("COMMIT_RE backtracked on git options")
+        old = signal.signal(signal.SIGALRM, boom)
+        self.addCleanup(signal.signal, signal.SIGALRM, old)
+        signal.alarm(2)
+        try:
+            t = time.monotonic()
+            self.assertIsNone(H.COMMIT_RE.search("git" + " -C -a" * 30 + " x"))
+            self.assertLess(time.monotonic() - t, 1.0)
+        finally:
+            signal.alarm(0)
+        for cmd in ("git -C repo commit -m x", "X=1 git -c user.name=a commit", "git -C -a commit", "git -C - commit"):
+            self.assertIsNotNone(H.COMMIT_RE.search(cmd), cmd)
+        self.assertIsNone(H.COMMIT_RE.search("git -C repo log"))
+
 
 class DeliveryTest(Base):
     def test_the_hint_is_appended_to_the_result_behind_the_marker(self):

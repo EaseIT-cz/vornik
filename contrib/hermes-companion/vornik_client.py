@@ -27,7 +27,7 @@ CAPABILITIES_NEGATIVE_TTL_SECONDS = 30.0
 # signature is refused by a Cloudflare zone in front of the daemon (error
 # 1010) before the request reaches it (GitHub #628). Keep the version equal to
 # plugin.yaml; tests/test_user_agent.py checks it.
-VERSION = "0.23.1"
+VERSION = "0.23.4"
 USER_AGENT = "vornik-companion/%s (hermes)" % VERSION
 
 

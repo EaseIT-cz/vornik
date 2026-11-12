@@ -23,8 +23,8 @@ type stateReplayFill struct {
 // stateReplayOrder is the wire shape for orders the broker uses
 // to rebuild the orderTimes sliding window. Only entries within
 // the rate-limit horizon (last hour) are needed; older rows are
-// filtered server-side so the broker doesn't pay for filtering it
-// would just discard.
+// dropped from orders. Every order of the last 24 hours is returned
+// separately in day_orders (stateReplayDayOrder).
 type stateReplayOrder struct {
 	ClientTag   string  `json:"client_tag"` // = TradingOrder.ID (deterministic per place)
 	Symbol      string  `json:"symbol"`
@@ -32,6 +32,21 @@ type stateReplayOrder struct {
 	Status      string  `json:"status"`
 	SubmittedAt string  `json:"submitted_at"` // RFC3339 UTC
 	LimitPrice  float64 `json:"limit_price,omitempty"`
+}
+
+// dayOrdersPageSize bounds day_orders; a full page is reported truncated.
+const dayOrdersPageSize = 5000
+
+// stateReplayDayOrder is one order of the project in the last 24 hours,
+// whatever its status: the broker rebuilds its two open guards from these
+// at boot (trading broker design, amendment 2026-11-11 (later), GitHub #739).
+type stateReplayDayOrder struct {
+	ClientTag   string `json:"client_tag"`
+	Symbol      string `json:"symbol"`
+	Action      string `json:"action"`
+	Status      string `json:"status"`
+	TaskID      string `json:"task_id,omitempty"`
+	SubmittedAt string `json:"submitted_at"` // RFC3339 UTC
 }
 
 // stateReplayResponse is what GET /api/v1/internal/trading-state-replay
@@ -55,6 +70,10 @@ type stateReplayResponse struct {
 	// and a same-key retry after restart replays instead of placing
 	// a duplicate real order.
 	WorkingOrders []stateReplayWorkingOrder `json:"working_orders"`
+	// GitHub #739 item 2: every order of the last 24 hours, for the open
+	// guards; truncated when the list filled its page.
+	DayOrders          []stateReplayDayOrder `json:"day_orders"`
+	DayOrdersTruncated bool                  `json:"day_orders_truncated"`
 	// Task 11: max(filled_at) across the project's fills. Since GitHub
 	// #729 the broker reads it only to warn (reconcile_stale_cursor)
 	// when it predates today; it no longer seeds the exec cursor, which
@@ -140,6 +159,7 @@ func (s *Server) GetTradingStateReplay(w http.ResponseWriter, r *http.Request) {
 		Fills:            []stateReplayFill{},
 		Orders:           []stateReplayOrder{},
 		WorkingOrders:    []stateReplayWorkingOrder{},
+		DayOrders:        []stateReplayDayOrder{},
 		SessionStartDate: midnight.Format("2006-01-02"),
 	}
 
@@ -195,6 +215,32 @@ func (s *Server) GetTradingStateReplay(w http.ResponseWriter, r *http.Request) {
 			wo.StopPrice = *o.StopPrice
 		}
 		resp.WorkingOrders = append(resp.WorkingOrders, wo)
+	}
+
+	// GitHub #739 item 2: the last 24 hours of orders for the broker's two
+	// open guards (the day cap counts today's; the per-task rule keeps an
+	// entry 24 hours). A full page may be truncated: the broker then refuses
+	// opens (fail closed), so the flag is part of the answer.
+	dayFrom := now.Add(-24 * time.Hour)
+	recent, err := s.tradingOrderRepo.List(r.Context(), persistence.TradingOrderFilter{
+		ProjectID: &pid, Since: &dayFrom, PageSize: dayOrdersPageSize,
+	})
+	if err != nil {
+		s.logger.Warn().Err(err).Str("project", projectID).Msg("trading state replay: list recent orders failed")
+		respondError(w, http.StatusInternalServerError, "PERSIST_FAILED", err.Error())
+		return
+	}
+	resp.DayOrdersTruncated = len(recent) >= dayOrdersPageSize
+	for _, o := range recent {
+		if o == nil || o.ProjectID != projectID {
+			continue
+		}
+		do := stateReplayDayOrder{ClientTag: o.ID, Symbol: o.Symbol, Action: o.Action, Status: o.Status,
+			SubmittedAt: o.SubmittedAt.UTC().Format(time.RFC3339)}
+		if o.TaskID != nil {
+			do.TaskID = *o.TaskID
+		}
+		resp.DayOrders = append(resp.DayOrders, do)
 	}
 
 	// Task 11: the newest fill time, for the broker's stale-cursor

@@ -93,6 +93,12 @@ func TestHeldRetries492_RejectedAttemptsKeepTheirBudget(t *testing.T) {
 		}
 		return true
 	}, 10*time.Second, 2*time.Millisecond, "the first attempts never finished")
+	// A poll whose exclusion list was read before a task's hold was taken can
+	// lease that task and put it straight back QUEUED (scheduler leaseNext,
+	// permanent-failure design §8.8 D3): a transient LEASED, by design. Wait
+	// two full scheduler ticks so any such poll has finished before the
+	// strict re-read (GitHub #725, shape 1).
+	waitTicks(t, sched, 2)
 	for _, id := range ids {
 		got, err := tasks.Get(ctx, id)
 		require.NoError(t, err)
@@ -103,16 +109,17 @@ func TestHeldRetries492_RejectedAttemptsKeepTheirBudget(t *testing.T) {
 	assert.Equal(t, 0, rt.StartCalls(), "the open circuit admits no container")
 
 	// The circuit admits calls again; let it through as often as the
-	// half-open probe and its follow-ups need, a cooldown at a time.
-	for i := 0; i < 4; i++ {
+	// half-open probe and its follow-ups need, a cooldown at a time. Advance
+	// until every task is done rather than a fixed number of times: a task
+	// re-held behind a half-open probe waits for the next advance, and how
+	// many it needs depends on scheduling under load (GitHub #725). Bounded
+	// by a wall-clock deadline, not an advance count.
+	deadline := time.Now().Add(60 * time.Second)
+	for !allTerminal(t, tasks, ids) {
+		require.True(t, time.Now().Before(deadline), "the held tasks never ran after the circuit could admit them")
 		clock.Advance(cooldown + time.Second)
-		if allTerminal(t, tasks, ids) {
-			break
-		}
-		waitTicks(t, sched, 20)
+		waitTicks(t, sched, 3)
 	}
-	require.Eventually(t, func() bool { return allTerminal(t, tasks, ids) }, 10*time.Second, 2*time.Millisecond,
-		"the held tasks never ran after the circuit could admit them")
 	for _, id := range ids {
 		got, err := tasks.Get(ctx, id)
 		require.NoError(t, err)

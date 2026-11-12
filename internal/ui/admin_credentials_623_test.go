@@ -39,6 +39,9 @@ type storeCreds623 struct {
 	keyBroken  bool
 	mu         sync.Mutex
 	refreshes  int
+	// audit receives the row the service writes after a store write (GitHub
+	// #625 moved it there); the fake writes it the same way.
+	audit persistence.AdminAuditRepository
 }
 
 func (c *storeCreds623) Status(ctx context.Context) (CredentialsView, error) {
@@ -69,11 +72,25 @@ func (c *storeCreds623) Status(ctx context.Context) (CredentialsView, error) {
 	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
 	return CredentialsView{Rows: out}, nil
 }
-func (c *storeCreds623) Put(ctx context.Context, name string, value []byte, actor string) error {
-	return c.st.PutOperatorCredential(ctx, name, value, actor)
+func (c *storeCreds623) Put(ctx context.Context, name string, value []byte, who persistence.AdminAuditEntry) error {
+	if err := c.st.PutOperatorCredential(ctx, name, value, who.Principal); err != nil {
+		return err
+	}
+	c.record(ctx, "credential.set", name, who)
+	return nil
 }
-func (c *storeCreds623) Delete(ctx context.Context, name string) error {
-	return c.st.DeleteOperatorCredential(ctx, name)
+func (c *storeCreds623) Delete(ctx context.Context, name string, who persistence.AdminAuditEntry) error {
+	if err := c.st.DeleteOperatorCredential(ctx, name); err != nil {
+		return err
+	}
+	c.record(ctx, "credential.remove", name, who)
+	return nil
+}
+func (c *storeCreds623) record(ctx context.Context, action, name string, who persistence.AdminAuditEntry) {
+	if c.audit != nil {
+		who.Action, who.Target = action, name
+		_ = c.audit.Insert(ctx, &who)
+	}
 }
 func (c *storeCreds623) Refresh(context.Context) (CredentialsRefresh, error) {
 	c.mu.Lock()
@@ -111,6 +128,7 @@ func newRig623(t *testing.T) rig623 {
 		audit: &recordingAudit623{},
 		logs:  &bytes.Buffer{},
 	}
+	r.creds.audit = r.audit
 	r.srv = NewServer(WithOperatorCredentials(r.creds), WithAdminAuditRepository(r.audit),
 		WithLogger(zerolog.New(r.logs)))
 	return r

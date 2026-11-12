@@ -102,16 +102,25 @@ func (e *Executor) fillFunnelOutcomes(ctx context.Context, projectID, symbol str
 		if c.RefClose == nil {
 			continue
 		}
-		atr := 0.0
-		if c.RefATR != nil {
-			atr = *c.RefATR
-		}
 		observed := trading.SessionDate(c.ObservedAt)
+		// Baseline and forward bars come from one series (#719): the stored
+		// ref_close/ref_atr are yfinance's, the bars are the broker's, and
+		// ref_atr is often NULL. Without the baseline session in the series,
+		// the stored pair is used together, never mixed with the bars' values.
+		refClose, atr, ok := trading.Baseline(daily, c.ObservedAt)
+		if !ok {
+			refClose, atr = *c.RefClose, 0
+			if c.RefATR != nil {
+				atr = *c.RefATR
+			}
+			e.logger.Debug().Str("symbol", symbol).Str("execution_id", c.ExecutionID).
+				Msg("trading funnel: baseline session not in the bar series; outcomes use the stored ref_close/ref_atr")
+		}
 		for i, h := range persistence.FunnelHorizons {
 			if c.Ret[i] != nil {
 				continue
 			}
-			o, ok := trading.ForwardOutcome(daily, observed, *c.RefClose, atr, h, through)
+			o, ok := trading.ForwardOutcome(daily, observed, refClose, atr, h, through)
 			if !ok {
 				continue
 			}

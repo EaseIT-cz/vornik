@@ -22,6 +22,7 @@ import (
 	"vornik.io/vornik/internal/api"
 	"vornik.io/vornik/internal/auth"
 	"vornik.io/vornik/internal/config"
+	"vornik.io/vornik/internal/persistence"
 	"vornik.io/vornik/internal/ui"
 )
 
@@ -30,8 +31,10 @@ type stubCreds623 struct{}
 func (stubCreds623) Status(context.Context) (ui.CredentialsView, error) {
 	return ui.CredentialsView{}, nil
 }
-func (stubCreds623) Put(context.Context, string, []byte, string) error { return nil }
-func (stubCreds623) Delete(context.Context, string) error              { return nil }
+func (stubCreds623) Put(context.Context, string, []byte, persistence.AdminAuditEntry) error {
+	return nil
+}
+func (stubCreds623) Delete(context.Context, string, persistence.AdminAuditEntry) error { return nil }
 func (stubCreds623) Refresh(context.Context) (ui.CredentialsRefresh, error) {
 	return ui.CredentialsRefresh{}, nil
 }

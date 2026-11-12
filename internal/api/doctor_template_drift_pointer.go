@@ -95,6 +95,7 @@ var doctorCheckConfigPointer = map[string]string{
 	"checkMemoryTextDamage":        "",
 	"checkWebWritesInsecure":       "",
 	"checkSecretStoreKey":          "",
+	"checkCredentialsInEnvFiles":   "",
 	"checkApproverDevices":         "",
 	"checkAgentNamespaceBudget":    "",
 	"checkAgentRefusalBurst":       "",

@@ -17,6 +17,7 @@ import (
 	"errors"
 	"path/filepath"
 	"testing"
+	"vornik.io/vornik/internal/persistence"
 
 	"github.com/rs/zerolog"
 
@@ -70,7 +71,7 @@ func TestOperatorCredentials623_SavingRegistersTheWaitingServer(t *testing.T) {
 		t.Fatalf("status before = %+v, want %s missing, needed by Context7", view, credName623)
 	}
 
-	if err := oc.Put(ctx, credName623, []byte("ctx7-token"), "console:user_1"); err != nil {
+	if err := oc.Put(ctx, credName623, []byte("ctx7-token"), persistence.AdminAuditEntry{Principal: "console:user_1", Source: "ui"}); err != nil {
 		t.Fatalf("put: %v", err)
 	}
 	rep, err := oc.Refresh(ctx)
@@ -103,7 +104,7 @@ func TestOperatorCredentials623_SavingRegistersTheWaitingServer(t *testing.T) {
 		t.Errorf("both present = %q", view.Rows[0].State())
 	}
 
-	if err := oc.Delete(ctx, credName623); err != nil {
+	if err := oc.Delete(ctx, credName623, persistence.AdminAuditEntry{Principal: "console:user_1", Source: "ui"}); err != nil {
 		t.Fatalf("delete: %v", err)
 	}
 	t.Setenv(credName623, "")
@@ -119,19 +120,19 @@ func TestOperatorCredentials623_RemoveMissingAndUnusableKey(t *testing.T) {
 	c := newCredContainer623(t)
 	oc := &operatorCredentials{c: c}
 	ctx := context.Background()
-	if err := oc.Delete(ctx, "NEVER_STORED"); err != nil {
+	if err := oc.Delete(ctx, "NEVER_STORED", persistence.AdminAuditEntry{Principal: "console:u", Source: "ui"}); err != nil {
 		t.Fatalf("remove before any store exists: %v", err)
 	}
-	if err := oc.Put(ctx, "SOMETHING", []byte("v"), "console:u"); err != nil {
+	if err := oc.Put(ctx, "SOMETHING", []byte("v"), persistence.AdminAuditEntry{Principal: "console:u", Source: "ui"}); err != nil {
 		t.Fatal(err)
 	}
-	if err := oc.Delete(ctx, "NEVER_STORED"); err != nil {
+	if err := oc.Delete(ctx, "NEVER_STORED", persistence.AdminAuditEntry{Principal: "console:u", Source: "ui"}); err != nil {
 		t.Fatalf("remove of a missing name: %v", err)
 	}
 
 	broken := newCredContainer623(t)
 	broken.secretStoreLoaded, broken.secretStoreErr = true, errors.New("store key unusable")
-	if err := (&operatorCredentials{c: broken}).Put(ctx, "X", []byte("v"), "console:u"); err == nil {
+	if err := (&operatorCredentials{c: broken}).Put(ctx, "X", []byte("v"), persistence.AdminAuditEntry{Principal: "console:u"}); err == nil {
 		t.Fatal("a save with an unusable key succeeded")
 	}
 	view, err := (&operatorCredentials{c: broken}).Status(ctx)

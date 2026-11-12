@@ -27,7 +27,7 @@ func TestSlackAuthorize_ResolverCallIsBounded(t *testing.T) {
 	var sawDeadline bool
 	c := &Channel{
 		logger:        zerolog.Nop(),
-		installations: []*installation{{senders: map[string]struct{}{"U7": {}}}},
+		installations: []*installation{buildInstallation(InstallationConfig{SenderAllowlist: []string{"U7"}})},
 	}
 	c.SetIdentityShim(chatauth.New(deadlineRecordingResolver{sawDeadline: &sawDeadline},
 		chatauth.NewMetrics(prometheus.NewRegistry()), zerolog.Nop()))

@@ -91,6 +91,7 @@ Security:
   redaction_seams       Secret scanning of chat_audit_log, chat_system_prompts, step_prompts, task_messages, execution_step_outcomes signals and memory_retrieval_audit queries before persist; warns when off, with rows written and unscanned since boot
   synthetic_voice_replies Voice replies with synthesised speech (AI Act Art 50(2)): off by default; warns when on (accepted single-layer marking, with its basis) or when asked for without the acknowledgement
   secret_store_key      Agent credential store: a missing or wrong key while credentials exist is an error
+  credentials_in_env_files Secrets the config uses still in a plaintext env file (move them with vornikctl credential import-env), in both a file and the store, or shadowed; states how many it examined, never a value
   approver_devices      Agent approvals: a warning when an agent namespace exists with no paired device or no push
   agent_namespace_budget Agent namespaces whose project budgets sum above the approved ceiling, naming the waiting cover request
   agent_model_catalogue Agent role models: agent_admin.models entries not offered to agent roles (no route, a command-line provider, or remote without an exact price)

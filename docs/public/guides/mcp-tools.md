@@ -1,7 +1,7 @@
 ---
 sources:
     - path: internal/registry/project.go
-      sha256: e5eba39f93315f2258af86de884bb9c9f27007a9b0a594a7e43ddc4eb01b8079
+      sha256: 756a805d466fa9f4244a52c63bedcb142330d4898641380e5f718493ab36197d
     - path: internal/mcp/client.go
       sha256: c83b3aafab0ad14229d76879a35fef9aa3dea8f02dabbee099c54738a60aacea
     - path: internal/mcp/ratelimit.go
@@ -145,6 +145,10 @@ instance):
   value. The value is write-only: it is stored encrypted, never shown again,
   and every change is audited. Saving re-registers the servers waiting for it,
   with no restart. Remove or replace a value on the same page.
+- **From a shell**: `printf '%s' "$TOKEN" | vornikctl credential set NAME`
+  with an admin-class key (`VORNIK_API_KEY`); `vornikctl credential list` and
+  `remove NAME` do the rest. The value is read from standard input only, and
+  every change is audited as on the page.
 - **Control plane → MCP → Add**: in static mode, type the token in
   **Credential value**. It is stored under the **Value from** name when you
   submit; the proposal carries only the reference.

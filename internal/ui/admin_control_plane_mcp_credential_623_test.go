@@ -45,8 +45,8 @@ func hubRig623(t *testing.T, putErr error) (*Server, *storeCreds623, *recordingA
 	if err != nil {
 		t.Fatal(err)
 	}
-	creds := &storeCreds623{st: st, env: map[string]string{}, referenced: map[string][]string{}}
 	audit := &recordingAudit623{}
+	creds := &storeCreds623{st: st, env: map[string]string{}, referenced: map[string][]string{}, audit: audit}
 	s.operatorCredentials = creds
 	if putErr != nil {
 		s.operatorCredentials = failingPut623{creds, putErr}
@@ -69,7 +69,9 @@ type failingPut623 struct {
 	err error
 }
 
-func (f failingPut623) Put(context.Context, string, []byte, string) error { return f.err }
+func (f failingPut623) Put(context.Context, string, []byte, persistence.AdminAuditEntry) error {
+	return f.err
+}
 
 func TestMCPHubCredential623_StoredThenProposedWithoutTheValue(t *testing.T) {
 	s, creds, audit, proposals := hubRig623(t, nil)

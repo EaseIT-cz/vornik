@@ -165,13 +165,17 @@ func (s *Store) SampleOpens(ctx context.Context) error {
 	if len(nss) == 0 {
 		return ErrNothingSampled
 	}
-	metas, err := s.List(ctx, nss[0])
+	// The row is opened directly, not through Get: the reserved operator
+	// namespace sorts first ("_operator_credentials") and Get refuses it, so
+	// every install with an operator credential sampled a refusal, never a
+	// row (GitHub #625 item 4).
+	rows, err := s.repo.List(ctx, nss[0])
 	if err != nil {
 		return err
 	}
-	if len(metas) == 0 {
+	if len(rows) == 0 {
 		return ErrNothingSampled
 	}
-	_, err = s.Get(ctx, nss[0], metas[0].Name)
+	_, err = s.open(ctx, nss[0], rows[0].Name)
 	return err
 }

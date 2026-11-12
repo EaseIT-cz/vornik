@@ -37,8 +37,12 @@ type OperatorCredentials interface {
 	// configuration references, with where each value comes from. Never a
 	// value.
 	Status(ctx context.Context) (CredentialsView, error)
-	Put(ctx context.Context, name string, value []byte, actor string) error
-	Delete(ctx context.Context, name string) error
+	// Put and Delete write the store and then its admin_audit row (action
+	// credential.set or credential.remove, the name, never the value). who
+	// carries the caller's Principal, Source, IP and UserAgent; one
+	// implementation for the page, the MCP form and the API (GitHub #625).
+	Put(ctx context.Context, name string, value []byte, who persistence.AdminAuditEntry) error
+	Delete(ctx context.Context, name string, who persistence.AdminAuditEntry) error
 	// Refresh re-runs MCP registration so a server waiting for a credential
 	// comes up: the daemon-level discovery registry and the projects'
 	// connections.
@@ -165,21 +169,19 @@ func (s *Server) adminCredentialsPost(w http.ResponseWriter, r *http.Request, da
 			data.Error = "a value is at most 16 KiB"
 			return
 		}
-		if err := s.operatorCredentials.Put(r.Context(), name, []byte(value), actor); err != nil {
+		if err := s.operatorCredentials.Put(r.Context(), name, []byte(value), credentialsWho(r, actor)); err != nil {
 			// The store's errors name the credential, never the value.
 			s.logger.Warn().Err(err).Str("credential", name).Msg("credentials page: save failed")
 			data.Error = "the credential could not be stored"
 			return
 		}
-		s.auditCredential(r, "credential.set", name, actor)
 		data.Flash = name + " saved."
 	case "remove":
-		if err := s.operatorCredentials.Delete(r.Context(), name); err != nil {
+		if err := s.operatorCredentials.Delete(r.Context(), name, credentialsWho(r, actor)); err != nil {
 			s.logger.Warn().Err(err).Str("credential", name).Msg("credentials page: remove failed")
 			data.Error = "the credential could not be removed"
 			return
 		}
-		s.auditCredential(r, "credential.remove", name, actor)
 		data.Flash = name + " removed."
 	default:
 		data.Error = "unknown action"
@@ -193,20 +195,9 @@ func (s *Server) adminCredentialsPost(w http.ResponseWriter, r *http.Request, da
 	data.Refresh = &report
 }
 
-func (s *Server) auditCredential(r *http.Request, action, name, actor string) {
-	if s.adminAuditRepo == nil {
-		return
-	}
-	if err := s.adminAuditRepo.Insert(r.Context(), &persistence.AdminAuditEntry{
-		Principal: actor,
-		Source:    "ui",
-		Action:    action,
-		Target:    name,
-		IP:        clientIP(r),
-		UserAgent: r.UserAgent(),
-	}); err != nil {
-		s.logger.Warn().Err(err).Str("credential", name).Msg("credentials page: audit write failed")
-	}
+// credentialsWho is the console caller as the audit row records it.
+func credentialsWho(r *http.Request, actor string) persistence.AdminAuditEntry {
+	return persistence.AdminAuditEntry{Principal: actor, Source: "ui", IP: clientIP(r), UserAgent: r.UserAgent()}
 }
 
 // credentialsActor names who acted: the session's user, else the admin

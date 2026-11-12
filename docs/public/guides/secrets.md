@@ -1,16 +1,15 @@
 ---
 sources:
     - path: internal/config/config.go
-      sha256: bc9eb268cda81acb6fbba92a148158c551edcb4ad7a804c578f4fdf139b79843
+      sha256: 902d27206d07d18368cbbb8ac14251cf688d6c20dbb7482bf9546333d36bf164
     - path: internal/executor/executor.go
       sha256: c281ff12df80cf1a4eb409f19044be54dff5678cf5cc70f03ae69b22c376b28b
 ---
 # Named secrets
 
-Named secrets inject credentials into a project's agent containers as ordinary
-environment variables, scoped to the projects that are allowed to use them.
-They keep API keys and tokens out of project documents and workflow definitions
-— the agent just reads an environment variable.
+Named secrets give a project's agents a credential as an ordinary environment
+variable, only in the projects you allow. The key stays out of project
+documents and workflow definitions.
 
 ## Declaring secrets
 
@@ -19,7 +18,7 @@ Add a `named_secrets` list to the daemon configuration:
 ```yaml
 named_secrets:
   - name: WEATHER_API_KEY
-    value: "${WEATHER_API_KEY}"     # resolved from the daemon's environment
+    value: "${WEATHER_API_KEY}"     # resolved when the configuration loads
     allowed_projects:
       - forecast-bot
   - name: SHARED_ANALYTICS_TOKEN
@@ -30,38 +29,59 @@ named_secrets:
 | Field | Meaning |
 |---|---|
 | `name` | The environment-variable name the agent will see. |
-| `value` | The secret value. Supports `${VAR}` expansion (below). |
+| `value` | The secret value. Supports `${VAR}` placeholders (below). |
 | `allowed_projects` | Projects whose agents receive this secret. Empty = all projects. |
 
-## Keep the literal value out of the file
+## Keep the value out of the file
 
-`value` is expanded with `${VAR}` syntax against the **daemon's own
-environment** at startup, so you don't have to write the raw secret into the
-config file. Store the real value where the daemon process reads its
-environment — for example a systemd `EnvironmentFile` or your secret manager —
-and reference it:
+Write a `${NAME}` placeholder instead of the value. When the configuration
+loads, each placeholder resolves from the first of:
 
-```yaml
-  - name: WEATHER_API_KEY
-    value: "${WEATHER_API_KEY}"     # the real key lives in the daemon's env
+1. the daemon's environment, when it holds a non-empty value;
+2. the **credential store**: the operator credential named `NAME`, stored
+   encrypted with the store key (`secrets/store.key`);
+3. nothing: the value is empty.
+
+Store a value in the credential store from a shell (the value is read from
+standard input, never an argument), or on the console's Credentials page:
+
+```bash
+printf '%s' "$WEATHER_KEY" | vornikctl credential set WEATHER_API_KEY
 ```
 
-Expansion happens once, when the configuration is loaded. Update the
-environment and reload the daemon to pick up a rotated value.
+A placeholder resolves when the configuration loads. Named secrets are given
+to the executor at start, so a new or rotated value reaches agents after a
+daemon restart (`systemctl --user restart vornik`).
+
+When the environment and the store hold different values for one name, the
+environment wins, and the daemon logs `credential NAME: the environment value
+shadows the stored one` at start and at each reload (never a value).
+`vornikctl config show --provenance` shows origin `credential` for a key the
+store filled.
+
+The `database:` block never reads the store: the database is what opens it.
+Its placeholders resolve from the environment and the env files below.
 
 ### Where the env files are read from
 
-Before expanding placeholders, vornik sources these files itself, so `${VAR}`
-resolves the same way for the daemon and for `vornikctl` — which has no systemd
+Before resolving placeholders, vornik sources these files itself, so `${VAR}`
+resolves the same way for the daemon and for `vornikctl`, which has no systemd
 `EnvironmentFile` of its own:
 
-1. `<config-dir>/vornik.env` — the file the podman quickstart seeds
+1. `<config-dir>/vornik.env`: the file the podman quickstart seeds
 2. `<config-dir>/secrets/env`
-3. `<config-dir>/secrets/*.env` — one file per service, alphabetical
+3. `<config-dir>/secrets/*.env`: one file per service, alphabetical
 
-A variable already present and non-empty in the real environment always wins, so
-an explicit `export` or a systemd `EnvironmentFile` still overrides these files.
-Earlier entries in the list win over later ones.
+A variable already present and non-empty in the real environment always wins,
+so an explicit `export` or a systemd `EnvironmentFile` still overrides these
+files. Earlier entries in the list win over later ones.
+
+These files are plaintext. To move the secrets your configuration uses into
+the store, run `vornikctl credential import-env`: it lists each name it would
+move and each it leaves, with the reason, and never prints a value. Run it
+again with `--apply` to store them and remove their lines. Names the
+`database:` block uses stay on disk. `vornikctl doctor` reports the secrets
+still in a file (check `credentials_in_env_files`).
 
 If a required setting comes out empty because its placeholder had nothing to
 resolve to, the error names the variables involved:
@@ -92,8 +112,8 @@ environment variable named exactly by `name`. An agent reads it the usual way
 set in more than one place, per-task environment overrides a named secret,
 which overrides a role's static environment.
 
-Named secrets are configured in the daemon configuration only — there is no
-separate command-line surface for managing them.
+Named secrets are declared in the daemon configuration only; their values can
+come from the credential store (above).
 
 # Carrying tool-issued credentials to you
 

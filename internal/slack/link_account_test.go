@@ -137,10 +137,10 @@ func TestSlackLink_InvalidCodeSaysSo(t *testing.T) {
 // one cannot see it.
 func TestSlackLink_IsReachableByAnUNALLOWLISTEDSpeaker(t *testing.T) {
 	linker := &stubSlackLinker{user: &persistence.User{ID: "user_1", DisplayName: "Vadim"}}
-	inst := &installation{
-		teamID:  "T1",
-		senders: map[string]struct{}{"U-somebody-else": {}}, // U123 is NOT allowlisted
-	}
+	inst := buildInstallation(InstallationConfig{
+		TeamID:          "T1",
+		SenderAllowlist: []string{"U-somebody-else"}, // U123 is NOT allowlisted
+	})
 	c := &Channel{
 		logger:            zerolog.Nop(),
 		installations:     []*installation{inst},
@@ -177,7 +177,7 @@ func TestSlackLink_IsReachableByAnUNALLOWLISTEDSpeaker(t *testing.T) {
 // must still be refused, or hoisting the check would have opened the channel.
 func TestSlackLink_OrdinaryPromptsStillNeedTheAllowlist(t *testing.T) {
 	linker := &stubSlackLinker{}
-	inst := &installation{teamID: "T1", senders: map[string]struct{}{"U-else": {}}}
+	inst := buildInstallation(InstallationConfig{TeamID: "T1", SenderAllowlist: []string{"U-else"}})
 	c := &Channel{
 		logger:            zerolog.Nop(),
 		installations:     []*installation{inst},

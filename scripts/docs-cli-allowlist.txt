@@ -42,3 +42,4 @@ agent
 companion
 pair-device
 devices
+credential

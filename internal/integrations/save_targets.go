@@ -75,7 +75,7 @@ func daemonPlaceholder(envName string) string { return "${" + envName + "}" }
 // itself, not an expandable "${NAME}" placeholder — matching
 // registry.Project's convention (ProjectEmail.IMAPPasswordEnv,
 // ProjectSlack.SigningSecretEnv, ProjectGitHubApp.WebhookSecretEnv, …),
-// where the daemon reads os.Getenv(cfg.X.NameEnv) at the point of use
+// where the daemon reads secretstore.Value(cfg.X.NameEnv) at the point of use
 // rather than os.ExpandEnv-ing the field at load time (task 5.2b).
 func projectEnvNameValue(envName string) string { return envName }
 

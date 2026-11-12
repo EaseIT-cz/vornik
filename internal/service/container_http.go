@@ -342,6 +342,9 @@ func (c *Container) initHTTPServer() error {
 		if c.repos != nil && c.repos.AdminAudit != nil {
 			apiOpts = append(apiOpts, api.WithAdminAuditRepository(c.repos.AdminAudit))
 		}
+		// GitHub #625 item 2: the operator-credentials REST verb, on the same
+		// service (and audit) as the console page.
+		apiOpts = append(apiOpts, api.WithOperatorCredentialsService(c.newOperatorCredentialsAPI()))
 		if !c.adminCapabilityLogged {
 			c.Logger.Info().
 				Str("capability", "admin").
@@ -675,7 +678,14 @@ func (c *Container) initHTTPServer() error {
 	if c.mcpRegistry != nil {
 		doctorMCP = c.mcpRegistry
 	}
-	doctorSecrets := projectdoctor.NewEnvSecrets(onboardingSecretsDir(c.ConfigPath))
+	// Project secrets the doctor's inline fix saves go to the credential
+	// store, audited, never to a plaintext env file (GitHub #625 item 3,
+	// #626).
+	doctorSecrets := projectdoctor.StoreSecrets{
+		Writer: c.newOperatorCredentials(),
+		Lookup: c.secretSource(),
+		Who:    persistence.AdminAuditEntry{Principal: "project-doctor", Source: "project-setup"},
+	}
 	projectDoctor := projectdoctor.New(projectdoctor.Deps{
 		Registry:         doctorRegistry,
 		MCP:              doctorMCP,

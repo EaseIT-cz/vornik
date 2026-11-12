@@ -40,9 +40,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"net/http"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"vornik.io/vornik/internal/aidisclosure"
@@ -577,16 +579,13 @@ func resolveInstallations(cfg Config) ([]*installation, error) {
 // resolved internal form (with the allowlist-set maps pre-indexed
 // for O(1) lookup on the hot path).
 func buildInstallation(ic InstallationConfig) *installation {
-	return &installation{
-		projectID:           ic.ProjectID,
-		teamID:              strings.TrimSpace(ic.TeamID),
-		botToken:            ic.BotToken,
-		allowedChannels:     indexSet(ic.ChannelAllowlist),
-		senders:             indexSet(ic.SenderAllowlist),
-		allowUnlisted:       ic.AllowUnlistedSenders,
-		channelAllowlistRaw: append([]string(nil), ic.ChannelAllowlist...),
-		senderAllowlistRaw:  append([]string(nil), ic.SenderAllowlist...),
+	inst := &installation{
+		projectID: ic.ProjectID,
+		teamID:    strings.TrimSpace(ic.TeamID),
+		botToken:  ic.BotToken,
 	}
+	inst.allowlists.Store(newInstallationAllowlists(ic))
+	return inst
 }
 
 // indexInstallations builds the team_id → *installation lookup map
@@ -619,23 +618,84 @@ func indexSet(in []string) map[string]struct{} {
 // override via Config.APIBaseURL.
 const defaultAPIBaseURL = "https://slack.com/api"
 
+// installationAllowlists is one installation's inbound filters as an
+// immutable snapshot. It exists because a config reload must be able to swap
+// the allowlists on a RUNNING channel (GitHub #738): the webhook hot path
+// reads them on every delivery, so the swap has to be atomic rather than a
+// field-by-field mutation. Readers Load() once per call and see either the
+// old or the new set, never a mix.
+type installationAllowlists struct {
+	channels map[string]struct{}
+	senders  map[string]struct{}
+
+	// allowUnlisted opts this installation back into fail-OPEN on an
+	// empty allowlist. Default false = an empty allowlist denies.
+	allowUnlisted bool
+}
+
+func newInstallationAllowlists(ic InstallationConfig) *installationAllowlists {
+	return &installationAllowlists{
+		channels:      indexSet(ic.ChannelAllowlist),
+		senders:       indexSet(ic.SenderAllowlist),
+		allowUnlisted: ic.AllowUnlistedSenders,
+	}
+}
+
+// allowsChannel applies the channel gate: an EMPTY allowlist denies as of
+// 2026-08-05 unless allowUnlisted opts back in.
+func (a *installationAllowlists) allowsChannel(channelID string) bool {
+	if len(a.channels) == 0 {
+		return a.allowUnlisted
+	}
+	_, ok := a.channels[channelID]
+	return ok
+}
+
+// allowsSender applies the sender gate with the same empty-denies rule.
+func (a *installationAllowlists) allowsSender(userID string) bool {
+	if len(a.senders) == 0 {
+		return a.allowUnlisted
+	}
+	_, ok := a.senders[userID]
+	return ok
+}
+
+func (a *installationAllowlists) equal(b *installationAllowlists) bool {
+	return a.allowUnlisted == b.allowUnlisted &&
+		maps.Equal(a.channels, b.channels) && maps.Equal(a.senders, b.senders)
+}
+
 // installation is the resolved internal form of an InstallationConfig.
-// One per configured workspace; the channel never mutates these after
-// New.
+// One per configured workspace. Everything except the allowlists snapshot is
+// fixed at New; the snapshot is swapped atomically by
+// SetInstallationAllowlists on a config reload.
 type installation struct {
 	projectID string
 	teamID    string
 	botToken  string
 
-	allowedChannels map[string]struct{}
-	senders         map[string]struct{}
+	allowlists atomic.Pointer[installationAllowlists]
+}
 
-	channelAllowlistRaw []string
-	senderAllowlistRaw  []string
-
-	// allowUnlisted opts this installation back into fail-OPEN on an
-	// empty allowlist. Default false = an empty allowlist denies.
-	allowUnlisted bool
+// SetInstallationAllowlists atomically swaps the named installation's
+// inbound allowlists from a freshly resolved config (config reload, GitHub
+// #738). Returns whether anything changed. An unknown team_id is an error:
+// the operator moved the workspace pin, which a reload cannot follow — the
+// caller reports it as restart-required rather than guessing at a route.
+func (c *Channel) SetInstallationAllowlists(teamID string, ic InstallationConfig) (bool, error) {
+	want := strings.TrimSpace(teamID)
+	for _, inst := range c.installations {
+		if inst.teamID != want {
+			continue
+		}
+		next := newInstallationAllowlists(ic)
+		if cur := inst.allowlists.Load(); cur != nil && cur.equal(next) {
+			return false, nil
+		}
+		inst.allowlists.Store(next)
+		return true, nil
+	}
+	return false, fmt.Errorf("slack: no installation for team %q", want)
 }
 
 // sessionEntry holds the per-session metadata ListSessions surfaces.

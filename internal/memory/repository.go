@@ -1227,18 +1227,35 @@ const uploadChunkPredicate = `project_id = $1
 // A.5 of the memory rollback x supersession design). A name with a "/" is a
 // document path and is never listed.
 func (r *Repository) LegacyDocuments(ctx context.Context, projectID, repoScope string) ([]LegacyDocument, error) {
+	return r.uploadDocuments(ctx, projectID, repoScope, false)
+}
+
+// PathDocuments lists the path-identity upload documents in a scope (A.2):
+// sources whose name holds a "/" (amendment A.8, GitHub #701).
+func (r *Repository) PathDocuments(ctx context.Context, projectID, repoScope string) ([]LegacyDocument, error) {
+	return r.uploadDocuments(ctx, projectID, repoScope, true)
+}
+
+// uploadDocuments groups the servable upload chunks of a scope by source name
+// and ingest date: path-identity names (holding a "/") when paths, else bare
+// names.
+func (r *Repository) uploadDocuments(ctx context.Context, projectID, repoScope string, paths bool) ([]LegacyDocument, error) {
 	if r == nil || r.db == nil {
 		return nil, nil
+	}
+	nameCond := `position('/' in source_name) = 0`
+	if paths {
+		nameCond = `position('/' in source_name) > 0`
 	}
 	rows, err := r.db.QueryContext(ctx, `
 		SELECT source_name, to_char(created_at, 'YYYY-MM-DD'), COUNT(*)
 		FROM project_memory_chunks
 		WHERE `+uploadChunkPredicate+`
-		  AND position('/' in source_name) = 0
+		  AND `+nameCond+`
 		GROUP BY 1, 2
 		ORDER BY 1, 2`, projectID, repoScope)
 	if err != nil {
-		return nil, fmt.Errorf("legacy documents: %w", err)
+		return nil, fmt.Errorf("upload documents: %w", err)
 	}
 	defer func() { _ = rows.Close() }()
 	var out []LegacyDocument
@@ -1330,6 +1347,27 @@ func (r *Repository) SupersedeLegacyDocument(ctx context.Context, projectID, rep
 		  AND source_name = $3`, projectID, repoScope, name)
 	if err != nil {
 		return 0, fmt.Errorf("supersede legacy document %q: %w", name, err)
+	}
+	n, err := res.RowsAffected()
+	return int(n), err
+}
+
+// SupersedeMissingDocument retires every servable upload chunk of a
+// path-identity document absent from the operator's checkout (A.8, GitHub
+// #701); the caller established the absence. Refuses a bare name. No epoch,
+// as SupersedeLegacyDocument: a rollback does not restore it.
+func (r *Repository) SupersedeMissingDocument(ctx context.Context, projectID, repoScope, documentPath string) (int, error) {
+	if r == nil || r.db == nil || projectID == "" || !strings.Contains(documentPath, "/") {
+		return 0, nil
+	}
+	res, err := r.db.ExecContext(ctx, `
+		UPDATE project_memory_chunks
+		SET validation_status    = 'superseded',
+		    pre_supersede_status = validation_status
+		WHERE `+uploadChunkPredicate+`
+		  AND source_name = $3`, projectID, repoScope, documentPath)
+	if err != nil {
+		return 0, fmt.Errorf("supersede missing document %q: %w", documentPath, err)
 	}
 	n, err := res.RowsAffected()
 	return int(n), err

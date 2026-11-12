@@ -12,6 +12,7 @@ import (
 	"vornik.io/vornik/internal/auth"
 	"vornik.io/vornik/internal/config"
 	"vornik.io/vornik/internal/contracts"
+	"vornik.io/vornik/internal/executor"
 	"vornik.io/vornik/internal/featuredoctor"
 	"vornik.io/vornik/internal/persistence"
 	"vornik.io/vornik/internal/registry"
@@ -291,6 +292,25 @@ type ProviderSet struct {
 	// never names the concrete EE probe type. Called lazily in container_http.go
 	// after the snapshot repo + registry are ready (Phase 2c seam).
 	TradingSeriesProbeFactory func(projects *registry.Registry, snapshots persistence.TradingPositionsSnapshotRepository, record func(projectID, code string, count int), logger zerolog.Logger) featuredoctor.TradingSeriesProbe
+
+	// TradingSystemHandlers builds the trading system-step handlers
+	// (trading.place_approved, GitHub #739) from a one-shot broker caller and
+	// the tool-audit writer. Nil in Community, which ships no broker: a
+	// workflow naming the handler there gets the executor's unknown-handler
+	// outcome. Called once, when the system-handler registry is built.
+	TradingSystemHandlers func(caller OnceToolCaller, audit ToolAuditWriter) []executor.SystemHandler
+}
+
+// OnceToolCaller makes one MCP tool call and never retries it
+// (mcp.Manager.CallToolOnce); its error wraps mcp.ErrNotSent when nothing
+// left the daemon.
+type OnceToolCaller interface {
+	CallToolOnce(ctx context.Context, projectID, qualifiedName, argsJSON string) (string, bool, error)
+}
+
+// ToolAuditWriter writes one tool_audit_log row.
+type ToolAuditWriter interface {
+	Log(ctx context.Context, entry *persistence.ToolAuditEntry) error
 }
 
 // communityBlackBox is the Community Edition no-op: it contributes no

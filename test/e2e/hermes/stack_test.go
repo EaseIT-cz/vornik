@@ -39,6 +39,11 @@ type stack struct {
 	replyTask, replyAction string
 	daemonLog              string
 	hermesHome             string
+	// hermesWork, when set, is mounted at /work and is Hermes's working
+	// directory: a workspace outside the Hermes home, so the plugin's home
+	// refusal does not apply to its files (guidance test; lane design,
+	// amendment 2026-11-11 H-hints).
+	hermesWork string
 	// Agent-administered Vornik's DoD lane (plan P8): the binaries and the
 	// config path, the bank stub and the agent's mail server.
 	ctl, cfgPath string
@@ -380,8 +385,14 @@ func (s *stack) startDaemon(t *testing.T) {
 	cmd.Env = testenv.Clean("VORNIK_CONFIG="+s.cfgPath, "VORNIK_CONFIGS_DIR="+filepath.Join(filepath.Dir(s.cfgPath), "configs"),
 		"VORNIK_DATA_DIR="+filepath.Join(s.dir, "data"))
 	cmd.Stdout, cmd.Stderr = s.daemonOut, s.daemonOut
+	if err := ensureReaper(); err != nil { // GitHub #694
+		t.Fatalf("start the lane reaper: %v", err)
+	}
 	if err := cmd.Start(); err != nil {
 		t.Fatal(err)
+	}
+	if err := recordDaemon(cmd.Process.Pid); err != nil {
+		t.Fatalf("record the daemon for the reaper: %v", err)
 	}
 	s.daemonCmd = cmd
 }
@@ -401,6 +412,7 @@ func (s *stack) stopDaemon() {
 		_ = cmd.Process.Kill()
 		<-done
 	}
+	forgetDaemon(cmd.Process.Pid) // GitHub #694: it has exited; its PID may be reused
 	s.daemonCmd = nil
 }
 

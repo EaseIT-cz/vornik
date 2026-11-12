@@ -1106,6 +1106,13 @@ func NewContainer(cfg *config.Config, configPath string, opts ...ContainerOption
 	// it must decorate the repo before any consumer captures it.
 	c.initToolAuditRedaction()
 
+	// Point-of-use secret reads (an integration's password, a webhook
+	// secret, an a2a key) resolve through the daemon's source: the
+	// environment, then the operator credentials in the store (GitHub
+	// #626). The source is late-bound, so a store created after boot is
+	// seen.
+	secretstore.SetProcessSource(c.secretSource())
+
 	// Health + readiness probes are served by the API layer
 	// (api.Server.Healthz / Readyz). The Readyz handler does the
 	// DB ping via taskRepo.Ping plus any options-registered
@@ -2724,11 +2731,24 @@ func Run(version, buildDate, edition string, providers ProviderSet) error {
 
 	// Load configuration, keeping the provenance the loader recorded so
 	// `config show --provenance` can serve it.
-	cfg, configPath, bootProv, err := config.LoadWithProvenance()
+	//
+	// Two loads (GitHub #626): the bootstrap load validates only the
+	// database block; the daemon reads the operator credentials the
+	// configuration names from the store; the full load fills the
+	// placeholders the environment does not hold from them.
+	boot, configPath, err := config.LoadBootstrap()
 	if err != nil {
 		if err == config.ErrVersionRequested {
 			fmt.Println(editionpkg.BuildLine("vornik", version, buildDate, edition))
 			return nil
+		}
+		return fmt.Errorf("failed to load configuration: %w", err)
+	}
+	stored := storedCredentialsForBoot(ctx, boot, configPath, boot.CredentialCandidates())
+	cfg, configPath, bootProv, err := config.LoadWithProvenance(config.WithCredentials(stored.found))
+	if err != nil {
+		if stored.err != nil {
+			return fmt.Errorf("failed to load configuration: %w (the credential store could not be read: %v)", err, stored.err)
 		}
 		return fmt.Errorf("failed to load configuration: %w", err)
 	}
@@ -2750,6 +2770,7 @@ func Run(version, buildDate, edition string, providers ProviderSet) error {
 	if err != nil {
 		return fmt.Errorf("failed to initialize container: %w", err)
 	}
+	container.logBootCredentials(stored, cfg)
 	container.SetVersion(version)
 	container.SetBuildDate(buildDate)
 	container.Logger.Info().

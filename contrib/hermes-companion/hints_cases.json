@@ -96,6 +96,15 @@
      "fired": [], "followed": []},
     {"name": "a value of quoted and unquoted runs before git commit fires commit.review",
      "steps": [{"shell": "X=a\"b c\" git commit -m x", "exit": 0}],
+     "fired": ["commit.review"], "followed": []},
+    {"name": "an adversarial run of git -C -a pairs neither hangs nor fires (catalogue review 2026-11-12)",
+     "steps": [{"shell": "git -C -a -C -a -C -a -C -a -C -a -C -a -C -a -C -a -C -a -C -a -C -a -C -a -C -a -C -a -C -a -C -a -C -a -C -a -C -a -C -a -C -a -C -a -C -a -C -a -C -a -C -a -C -a -C -a -C -a -C -a x", "exit": 0}],
+     "fired": [], "followed": []},
+    {"name": "git -C with a dash value before commit fires commit.review",
+     "steps": [{"shell": "git -C -a commit -m x", "exit": 0}],
+     "fired": ["commit.review"], "followed": []},
+    {"name": "git -C with a bare dash value before commit fires commit.review",
+     "steps": [{"shell": "git -C - commit -m x", "exit": 0}],
      "fired": ["commit.review"], "followed": []}
   ]
 }

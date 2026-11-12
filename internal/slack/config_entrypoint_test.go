@@ -48,11 +48,7 @@ func assistChannel(t *testing.T, a ConfigAssistant, linked []string, listed []st
 	for _, u := range linked {
 		principals["slack:"+u] = &authz.Principal{UserID: "user_" + u}
 	}
-	senders := map[string]struct{}{}
-	for _, u := range listed {
-		senders[u] = struct{}{}
-	}
-	inst := &installation{teamID: "T1", projectID: "assistant", senders: senders}
+	inst := buildInstallation(InstallationConfig{TeamID: "T1", ProjectID: "assistant", SenderAllowlist: listed})
 	c := &Channel{
 		logger:            zerolog.Nop(),
 		installations:     []*installation{inst},
@@ -262,7 +258,7 @@ func TestConfigEntrypoint_BareKeywordExplains(t *testing.T) {
 // prompts mean.
 func TestConfigEntrypoint_UnwiredIsAnOrdinaryPrompt(t *testing.T) {
 	c := &Channel{logger: zerolog.Nop()}
-	if c.tryConfigAssistant(httptest.NewRecorder(), &installation{projectID: "p"}, "U1", "config raise the retry budget") {
+	if c.tryConfigAssistant(httptest.NewRecorder(), buildInstallation(InstallationConfig{ProjectID: "p"}), "U1", "config raise the retry budget") {
 		t.Error("an unwired deployment answered a request it cannot serve")
 	}
 }

@@ -115,6 +115,18 @@ out=$(CE_LOCK_WAIT=1 STUB_MODE=pass ce_run_lane integration "$tmp/tree" "$DSN" 2
 wait "$holder"
 if [ $rc -ne 0 ] && printf '%s' "$out" | grep -q "$tmp/db.lock"; then ok "a second integration run waits on the lock, then fails naming it"; else bad "lock: rc=$rc out=$out"; fi
 
+# GitHub #511 follow-up (2026-11-12): the gate stamp's CE lane runs the
+# export INSIDE scripts/integration-db-lane.sh, which holds the lock on fd 9.
+# The export's own integration lane opened the lock a second time and waited
+# on its own parent for CE_LOCK_WAIT (1,800 s in the stamp), then refused
+# ("another integration run holds"). Under the wrapper it must lock the
+# inherited descriptor and run. Found at: e2e-lane (gate stamp at 62868c648).
+wrapped_out=$(INTEGRATION_PSQL_BIN="$tmp/psql" INTEGRATION_LOCK_FILE="$tmp/db.lock" INTEGRATION_LOCK_WAIT=1 \
+  POSTGRES_HOST=127.0.0.1 POSTGRES_PORT=5432 POSTGRES_USER=u POSTGRES_PASSWORD=p \
+  env -u POSTGRES_DB -u TEST_DATABASE_URL bash "$HERE/integration-db-lane.sh" \
+  bash -c 'source "$1/ce-test-gate.sh" && CE_LOCK_WAIT=1 STUB_MODE=pass ce_run_lane integration "$2" "$TEST_DATABASE_URL"' _ "$HERE" "$tmp/tree" 2>&1); rc=$?
+if [ $rc -eq 0 ]; then ok "under integration-db-lane.sh the lane locks the inherited descriptor and runs"; else bad "wrapped lane: rc=$rc out=$wrapped_out"; fi
+
 # Security review 2026-10-15 (#374): the lock open must not follow a planted
 # symlink and truncate its target; `9>"$lock"` did.
 printf 'precious\n' > "$tmp/victim"; ln -s "$tmp/victim" "$tmp/sym.lock"

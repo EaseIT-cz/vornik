@@ -28,7 +28,18 @@ func (c *Container) agentAPIClient(projectID string, write bool, methods map[str
 	return &agentapi.Client{
 		ProjectID: projectID, Project: c.Registry.GetProject, Grants: c.repos.AgentGrants,
 		Secrets: c.secretSource(), AllowedMethods: methods, Write: write,
-		HTTP:   func(base string) *http.Client { return dialguard.CustomerURLClient(base, nil, mcpOAuthHTTPTimeout) }, // #560 M1c D5
+		HTTP: func(base string) *http.Client {
+			return dialguard.AgentAPIClient(base, c.agentPrivateAPIHosts(), mcpOAuthHTTPTimeout)
+		}, // #560 M1c D5; #734
 		Logger: c.Logger.With().Str("component", "agent-api").Str("project", projectID).Logger(),
 	}
+}
+
+// agentPrivateAPIHosts is agent_admin.private_api_hosts, folded at load (design
+// part 06, §6.7, GitHub #734).
+func (c *Container) agentPrivateAPIHosts() []string {
+	if c.Config == nil {
+		return nil
+	}
+	return c.Config.AgentAdmin.PrivateAPIHosts
 }

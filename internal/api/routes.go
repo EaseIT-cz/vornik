@@ -295,6 +295,10 @@ func NewRouter(server *Server, cfg *config.Config) *Router {
 		// (404 when disabled) and the admin-key allowlist (403 when
 		// auth is enabled but the key isn't admin).
 		mux.HandleFunc("/api/v1/admin/audit", server.AdminAuditList)
+		// Operator credentials (GitHub #625 item 2): list, set, remove with an
+		// admin-class API key; the handler refuses with API auth off.
+		mux.HandleFunc("/api/v1/admin/operator-credentials", server.AdminOperatorCredentials)
+		mux.HandleFunc("/api/v1/admin/operator-credentials/", server.AdminOperatorCredentials)
 		// Leader-lock release (issue #60): the predicate in DeleteExpired is
 		// the control, enforced here, daemon-side; the admin gate fronts it.
 		mux.HandleFunc("/api/v1/admin/leader-locks/release", server.LeaderLockRelease)

@@ -147,6 +147,9 @@ func (c *Config) validateManagedDefaults() error {
 			return fmt.Errorf("mcp.servers %q: hosting.mode managed starts no stdio MCP server; declare transport sse or streamable-http and no command", s.Name)
 		}
 	}
+	if len(c.AgentAdmin.PrivateAPIHosts) > 0 {
+		return errors.New("agent_admin.private_api_hosts is set but hosting.mode is managed: a managed instance reaches no customer intranet (GitHub #734)")
+	}
 	for _, h := range c.Hosting.ModelHosts {
 		if err := dialguard.ValidModelHost(h); err != nil {
 			return fmt.Errorf("hosting.model_hosts: %w", err)
@@ -299,6 +302,19 @@ func validateBackupBucket(h HostingConfig, storageRegion string) error {
 	}
 	if h.InstanceID == "" {
 		return errors.New("hosting.backup_bucket requires hosting.instance_id: the export key is instances/<hosting.instance_id>/exports/<id>.tar.zst")
+	}
+	return nil
+}
+
+// validateAgentAdminPrivateAPIHosts checks and folds agent_admin.private_api_hosts
+// (agent-administered design part 06, §6.7, GitHub #734): bare host names,
+// lowercase, no trailing dot.
+func (c *Config) validateAgentAdminPrivateAPIHosts() error {
+	for i, h := range c.AgentAdmin.PrivateAPIHosts {
+		if err := dialguard.ValidModelHost(h); err != nil {
+			return fmt.Errorf("agent_admin.private_api_hosts: %w", err)
+		}
+		c.AgentAdmin.PrivateAPIHosts[i] = dialguard.FoldHost(h)
 	}
 	return nil
 }

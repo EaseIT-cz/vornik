@@ -9858,5 +9858,21 @@ ALTER TABLE memory_embed_queue
     DROP COLUMN IF EXISTS dlq_retry_count,
     DROP COLUMN IF EXISTS dlq_first_failed_at;
 `,
+	}, {
+		Version: 252,
+		Name:    "trading_funnel_outcomes_refill",
+		// GitHub #719 (trading entry-policy design, Amendment 2026-11-11):
+		// every outcome filled so far measured broker bars against the
+		// scorecard's (yfinance) ref_close and ref_atr. Outcomes are written
+		// once, so they are cleared and the next indicator pre-warm refills
+		// them from the bar series. SQLite: applyFunnelOutcomeRefill. Down
+		// restores nothing: the cleared values were wrong.
+		Up: `
+UPDATE trading_funnel_candidates
+   SET ret_1 = NULL, ret_3 = NULL, ret_5 = NULL,
+       mfe_1 = NULL, mfe_3 = NULL, mfe_5 = NULL,
+       mae_1 = NULL, mae_3 = NULL, mae_5 = NULL;
+`,
+		Down: `SELECT 1;`,
 	},
 }

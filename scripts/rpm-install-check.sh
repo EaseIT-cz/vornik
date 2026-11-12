@@ -3,7 +3,9 @@
 # container and assert what a host gets: the binary, unit, example and EULA,
 # and (GitHub #726, #728) the registry and sign-up templates a managed VM
 # needs, owned by the daemon's user, and after `provision` a config the daemon
-# can replace in a directory whose root-owned files it cannot remove.
+# can replace in a directory whose root-owned files it cannot remove. A second
+# container installs self-hosted (#731, #732): the same config layout from
+# gen-config, and git pulled in as a declared dependency.
 #
 # The CI RPM job runs this; so can anyone with podman (GitHub Actions was
 # unavailable when #726/#728 shipped, so it ran locally first). Found-at level
@@ -77,5 +79,32 @@ check "vornik replaces the config by temp-and-rename, as setup does" "runuser -u
 check "vornik cannot remove the marker" "! runuser -u vornik -- rm -f /etc/vornik/provisioned 2>/dev/null && test -f /etc/vornik/provisioned"
 check "vornik cannot replace the example" "! runuser -u vornik -- sh -c \": > /etc/vornik/.x && mv /etc/vornik/.x /etc/vornik/vornik.yaml.example\" 2>/dev/null"
 
-[ "$fail" = 0 ] && echo "rpm-install-check: OK" || { echo "rpm-install-check: FAILED"; exit 1; }
+[ "$fail" = 0 ] && echo "rpm-install-check: OK (managed)" || { echo "rpm-install-check: FAILED (managed)"; exit 1; }
+'
+
+# A self-hosted install (no managed-image marker), in a second clean container
+# (GitHub #731, #732; design C5, C6): gen-config writes the config, and the
+# postinstall gives it to the daemon in a root:vornik 1770 /etc/vornik. git
+# arrives as a declared dependency (the base image has none).
+echo "rpm-install-check: self-hosted install of $BASE in $IMAGE"
+podman run --rm --security-opt label=disable -v "$DIST:/dist:ro" "$IMAGE" bash -c '
+set -euo pipefail
+fail=0
+check() { if eval "$2"; then echo "  ok   $1"; else echo "  FAIL $1"; fail=1; fi; }
+had_git=no; command -v git >/dev/null 2>&1 && had_git=yes
+dnf install -y "/dist/'"$BASE"'" >/tmp/dnf.log 2>&1 || { echo DNF_FAILED; tail -25 /tmp/dnf.log; exit 1; }
+
+echo "== #732: git is a declared dependency"
+check "the package requires git" "rpm -q --requires vornik-enterprise | grep -qx git"
+check "git is installed (the base image had it: $had_git)" "command -v git >/dev/null"
+
+echo "== #731: the daemon owns its config"
+check "config generated" "test -s /etc/vornik/vornik.yaml"
+check "/etc/vornik is root:vornik 1770" "[ \"\$(stat -c \"%a %U %G\" /etc/vornik)\" = \"1770 root vornik\" ]"
+check "config is vornik:vornik 0600" "[ \"\$(stat -c \"%a %U %G\" /etc/vornik/vornik.yaml)\" = \"600 vornik vornik\" ]"
+check "vornik replaces the config by temp-and-rename, as setup does" "runuser -u vornik -- sh -c \"t=\\\$(mktemp /etc/vornik/.config-XXXX.yaml.tmp) && cat /etc/vornik/vornik.yaml > \\\$t && cp /etc/vornik/vornik.yaml /etc/vornik/vornik.yaml.bak-probe && mv \\\$t /etc/vornik/vornik.yaml\""
+check "vornik cannot replace the example" "! runuser -u vornik -- sh -c \": > /etc/vornik/.x && mv /etc/vornik/.x /etc/vornik/vornik.yaml.example\" 2>/dev/null"
+check "an upgrade (reinstall) keeps the layout" "dnf reinstall -y /dist/'"$BASE"' >/tmp/dnf2.log 2>&1 && [ \"\$(stat -c \"%a %U %G\" /etc/vornik)\" = \"1770 root vornik\" ] && [ \"\$(stat -c %U /etc/vornik/vornik.yaml)\" = vornik ]"
+
+[ "$fail" = 0 ] && echo "rpm-install-check: OK (self-hosted)" || { echo "rpm-install-check: FAILED (self-hosted)"; exit 1; }
 '

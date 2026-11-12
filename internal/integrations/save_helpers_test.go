@@ -262,7 +262,7 @@ func TestSplitAndPlaceFields_PlaceSecretErrors(t *testing.T) {
 	// ConfigDir itself is a regular file, so deps.secretsDir()
 	// (ConfigDir+"/secrets") can never be created — placeSecret's
 	// os.MkdirAll fails for both daemon (onboarding.WriteEnvSecret) and
-	// project (projectdoctor.EnvSecrets.Set) scope.
+	// project scope (no credential store wired: refused, never a file).
 	dir := t.TempDir()
 	blockingConfigDir := filepath.Join(dir, "not-a-dir")
 	if err := os.WriteFile(blockingConfigDir, []byte("x"), 0o600); err != nil {
@@ -277,5 +277,19 @@ func TestSplitAndPlaceFields_PlaceSecretErrors(t *testing.T) {
 	_, _, err := splitAndPlaceFields(kind, target, cand, deps)
 	if err == nil || !strings.Contains(err.Error(), "place secret") {
 		t.Fatalf("err = %v, want a place-secret error", err)
+	}
+}
+
+// memSecrets is a project-secret store for tests (GitHub #626: project
+// secrets go to the operator credential store, not a file).
+type memSecrets map[string]string
+
+func (m memSecrets) Set(name, value string) error { m[name] = value; return nil }
+
+// assertNoProjectSecretsFile: nothing writes the pre-#626 plaintext file.
+func assertNoProjectSecretsFile(t *testing.T, configDir string) {
+	t.Helper()
+	if _, err := os.Stat(filepath.Join(configDir, "secrets", "project-secrets.env")); err == nil {
+		t.Fatal("a project secret was written to secrets/project-secrets.env")
 	}
 }

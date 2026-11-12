@@ -5,6 +5,8 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+
+	"gopkg.in/yaml.v3"
 )
 
 // Restart-only config fields: values the running process reads ONCE and cannot pick up
@@ -71,6 +73,98 @@ var restartOnlyPaths = []restartOnlyPath{
 		reason: "read with memory.provenance.forges when the clone manager is built at start",
 		value:  func(c *Config) string { return strconv.FormatBool(c.Memory.Provenance.ReplaceDefaultHosts) },
 	},
+	// The Telegram bot is constructed once at start (internal/service/
+	// container_subsystems.go initTelegram) and a reload never rebuilds it —
+	// the same boot-time shape as the Slack channels of GitHub #738. Every
+	// field of the block is listed so an edit to ANY of them is named; the
+	// token itself is reported only as set/unset (a rotated token needs a
+	// restart too, and its value must not land in a warning).
+	{
+		path:   "telegram.enabled",
+		reason: "the Telegram bot is built once at start (initTelegram); a reload never rebuilds it",
+		value:  func(c *Config) string { return strconv.FormatBool(c.Telegram.Enabled) },
+	},
+	{
+		path:   "telegram.bot_token",
+		reason: "passed to the bot constructor at start; a rotated token needs a restart",
+		value:  func(c *Config) string { return secretSetOrUnset(c.Telegram.BotToken) },
+	},
+	{
+		path:   "telegram.allowed_users",
+		reason: "copied into the bot's admission map at start",
+		value:  func(c *Config) string { return OneLineYAML(c.Telegram.AllowedUsers) },
+	},
+	{
+		path:   "telegram.allow_unlisted_users",
+		reason: "copied into the bot's admission rules at start",
+		value:  func(c *Config) string { return strconv.FormatBool(c.Telegram.AllowUnlistedUsers) },
+	},
+	{
+		path:   "telegram.rate_limit",
+		reason: "the per-user limiter is created at start",
+		value:  func(c *Config) string { return itoa(c.Telegram.RateLimit) },
+	},
+	{
+		path:   "telegram.session_path",
+		reason: "the session store is opened at start",
+		value:  func(c *Config) string { return c.Telegram.SessionPath },
+	},
+	{
+		path:   "telegram.session_ttl",
+		reason: "parsed once at start",
+		value:  func(c *Config) string { return c.Telegram.SessionTTL },
+	},
+	{
+		path:   "telegram.dispatcher_project_id",
+		reason: "pinned onto the dispatcher wiring at start",
+		value:  func(c *Config) string { return c.Telegram.DispatcherProjectID },
+	},
+	{
+		path:   "telegram.dispatcher_max_iterations",
+		reason: "passed to the dispatcher loop construction at start",
+		value:  func(c *Config) string { return itoa(c.Telegram.DispatcherMaxIterations) },
+	},
+	{
+		path:   "telegram.forum_chat_id",
+		reason: "forum routing is wired at start",
+		value:  func(c *Config) string { return strconv.FormatInt(c.Telegram.ForumChatID, 10) },
+	},
+	{
+		path:   "telegram.forum_topic_icon_color",
+		reason: "read when forum topics are created from the start-time config",
+		value:  func(c *Config) string { return itoa(c.Telegram.ForumTopicIconColor) },
+	},
+	{
+		path:   "telegram.web_ui_base_url",
+		reason: "rendered into onboarding links from the start-time config",
+		value:  func(c *Config) string { return c.Telegram.WebUIBaseURL },
+	},
+}
+
+// secretSetOrUnset reports whether a credential-shaped value is present without
+// echoing it: a restart warning names values, and a token in journald or in
+// `vornikctl config reload-status` output would outlive the warning's purpose.
+func secretSetOrUnset(s string) string {
+	if strings.TrimSpace(s) == "" {
+		return "unset"
+	}
+	return "set"
+}
+
+// OneLineYAML renders a value as deterministic single-line YAML for embedding in
+// a restart-warning line. yaml.v3 sorts map keys, so the rendering is stable
+// across snapshots and a diff means a real change.
+func OneLineYAML(v any) string {
+	b, err := yaml.Marshal(v)
+	if err != nil {
+		return fmt.Sprintf("<unmarshalable: %v>", err)
+	}
+	s := strings.TrimSpace(string(b))
+	s = strings.ReplaceAll(s, "\n", " ")
+	for strings.Contains(s, "  ") {
+		s = strings.ReplaceAll(s, "  ", " ")
+	}
+	return s
 }
 
 // provenanceForgesSummary names each forge's shape for the restart warning:

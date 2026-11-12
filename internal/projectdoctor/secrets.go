@@ -1,43 +1,67 @@
 package projectdoctor
 
 import (
-	"os"
+	"context"
+	"errors"
 
-	"vornik.io/vornik/internal/onboarding"
+	"vornik.io/vornik/internal/persistence"
 )
 
-// envSecretsFile is the single env file the doctor's inline secret
-// fix writes into. Kept separate from setup's chat.env so the
-// per-project secrets the operator supplies through the doctor are
-// grouped and obvious. The daemon loads *.env from its secrets dir
-// at boot; os.Setenv (below) makes a freshly-set value live without
-// waiting for a restart.
-const envSecretsFile = "project-secrets.env"
-
-// EnvSecrets reads secret presence from the process environment and
-// writes new secrets both live (os.Setenv) and durably (env file).
-type EnvSecrets struct {
-	Dir string // secrets directory, e.g. ~/.config/vornik/secrets
+// CredentialWriter stores one operator credential and writes its
+// admin_audit row (credential.set, the name, never the value). The service's
+// operatorCredentials is the one implementation: the console page, the MCP
+// form, the API and project setup share it.
+type CredentialWriter interface {
+	Put(ctx context.Context, name string, value []byte, who persistence.AdminAuditEntry) error
 }
 
-// NewEnvSecrets builds an EnvSecrets over the given secrets dir.
-func NewEnvSecrets(dir string) EnvSecrets { return EnvSecrets{Dir: dir} }
-
-// Has reports whether the named secret is present (non-empty) in the
-// running process environment — the authoritative source, since the
-// daemon loads env files at boot and Set updates os.Setenv live.
-func (e EnvSecrets) Has(name string) bool {
-	return os.Getenv(name) != ""
-}
-
-// Set makes the secret live immediately (os.Setenv, so the doctor's
-// Has check flips green with no restart) AND persists it to the env
-// file for the next boot. Subsystems that captured env at startup
-// (e.g. an already-connected MCP server) pick the new value up on
-// their next use / re-sync, not retroactively.
-func (e EnvSecrets) Set(name, value string) error {
-	if _, err := onboarding.WriteEnvSecret(e.Dir, envSecretsFile, name, value); err != nil {
-		return err
+// StoreSecrets keeps a project's secrets in the encrypted store (GitHub #625
+// item 3, #626; agent-administered Vornik design, amendment 2026-11-12 E).
+// Before, Set wrote secrets/project-secrets.env in plaintext and called
+// os.Setenv; now nothing reaches a file or the process environment.
+//
+// A stored value takes effect at its readers' next lookup: the point-of-use
+// reads go through secretstore.Value, which consults the store. A
+// named_secrets placeholder resolves at load, so it applies at the next
+// config reload, as an os.Setenv value did.
+type StoreSecrets struct {
+	// Writer stores the value. Nil refuses every Set: there is no plaintext
+	// fallback.
+	Writer CredentialWriter
+	// Lookup answers Has: the environment, then the store (the daemon's
+	// secret source). Nil reports every name absent.
+	Lookup interface {
+		Get(name string) (string, bool)
 	}
-	return os.Setenv(name, value)
+	// Who is the audit identity of the writes; an empty Source or Principal
+	// defaults to "project-setup".
+	Who persistence.AdminAuditEntry
+}
+
+// errNoCredentialStore is Set's refusal when no store is wired.
+var errNoCredentialStore = errors.New("the credential store is not available; the secret was not saved")
+
+// Has reports whether the environment or the store holds a non-empty value.
+func (s StoreSecrets) Has(name string) bool {
+	if s.Lookup == nil || name == "" {
+		return false
+	}
+	v, ok := s.Lookup.Get(name)
+	return ok && v != ""
+}
+
+// Set stores the secret as an operator credential and audits it.
+func (s StoreSecrets) Set(name, value string) error {
+	if s.Writer == nil {
+		return errNoCredentialStore
+	}
+	who := s.Who
+	if who.Source == "" {
+		who.Source = "project-setup"
+	}
+	if who.Principal == "" {
+		// An audit row always names who wrote (review 1dd3 F2).
+		who.Principal = "project-setup"
+	}
+	return s.Writer.Put(context.Background(), name, []byte(value), who)
 }

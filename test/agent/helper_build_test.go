@@ -13,7 +13,26 @@ var (
 	helperOnce sync.Once
 	helperDir  string
 	helperErr  error
+	// helperTemp is the directory buildHelper created, set even when the
+	// build failed, so TestMain removes it (GitHub #689).
+	helperTemp string
 )
+
+// TestMain removes the helper's build directory after the run. Without it
+// every test binary left a 5-6 MB vornik-agent-helper-* directory in TMPDIR
+// (GitHub #689: 173 of them, 834 MB, on the dev host's tmpfs on 2026-11-09).
+func TestMain(m *testing.M) {
+	code := m.Run()
+	removeHelperTemp()
+	os.Exit(code)
+}
+
+// removeHelperTemp removes the directory buildHelper created, if any.
+func removeHelperTemp() {
+	if helperTemp != "" {
+		_ = os.RemoveAll(helperTemp)
+	}
+}
 
 // buildHelper compiles cmd/agent-helper once per test binary and returns the
 // directory the shell tests prepend to PATH through VORNIK_HELPER_DIR. In the
@@ -33,6 +52,7 @@ func buildHelper(t *testing.T) string {
 			helperErr = err
 			return
 		}
+		helperTemp = dir
 		cmd := exec.Command("go", "build", "-o", filepath.Join(dir, "vornik-agent-helper"), "./cmd/agent-helper")
 		cmd.Dir = root
 		if out, err := cmd.CombinedOutput(); err != nil {

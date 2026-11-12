@@ -176,7 +176,7 @@ func TestHandleWebhook_TaggedThreadReplyAnswersExactlyOnce(t *testing.T) {
 // be reachable through it for a shared channel — otherwise the allowlist could be
 // bypassed by an event shape rather than by a real DM.
 func TestChannelAllowed_AppMentionShapeDoesNotBypassAllowlist(t *testing.T) {
-	inst := &installation{allowedChannels: map[string]struct{}{"C_allowed": {}}}
+	inst := buildInstallation(InstallationConfig{ChannelAllowlist: []string{"C_allowed"}})
 	if channelAllowed(inst, "", "C_other") {
 		t.Error("a C… channel with no channel_type must not be treated as a DM")
 	}
@@ -196,7 +196,7 @@ func TestChannelAllowed_AppMentionShapeDoesNotBypassAllowlist(t *testing.T) {
 // first contact and it cannot be pre-listed. The sender allowlist (fail-closed since the
 // same release) is a DM's real gate; the channel allowlist never applies to one.
 func TestChannelAllowed_EmptyChannelAllowlistStillExemptsDirectMessages(t *testing.T) {
-	inst := &installation{projectID: "p"} // no channel_allowlist, NOT opted open
+	inst := buildInstallation(InstallationConfig{ProjectID: "p"}) // no channel_allowlist, NOT opted open
 	if !channelAllowed(inst, "im", "D0BKS77EVN1") {
 		t.Error("an empty channel_allowlist must not gate a DM (channel_type=im)")
 	}

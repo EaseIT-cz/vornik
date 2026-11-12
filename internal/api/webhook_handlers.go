@@ -22,6 +22,7 @@ import (
 	"vornik.io/vornik/internal/persistence"
 	"vornik.io/vornik/internal/registry"
 	"vornik.io/vornik/internal/secrets"
+	"vornik.io/vornik/internal/secretstore"
 )
 
 const maxWebhookBodyBytes = 2 << 20
@@ -628,7 +629,7 @@ func findWebhookSource(project *registry.Project, name string) (registry.Project
 func verifyWebhookSignature(r *http.Request, body []byte, source registry.ProjectWebhookSource) error {
 	secret := source.Secret
 	if secret == "" && source.SecretEnv != "" {
-		secret = os.Getenv(source.SecretEnv)
+		secret = secretstore.Value(source.SecretEnv)
 	}
 	if secret == "" {
 		return fmt.Errorf("webhook secret is not configured")

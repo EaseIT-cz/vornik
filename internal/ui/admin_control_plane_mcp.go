@@ -261,11 +261,10 @@ func (s *Server) storeMCPFormCredential(r *http.Request) (string, bool) {
 		return "mcp-credential-failed", false
 	}
 	actor := credentialsActor(r)
-	if err := s.operatorCredentials.Put(r.Context(), name, []byte(value), actor); err != nil {
+	if err := s.operatorCredentials.Put(r.Context(), name, []byte(value), credentialsWho(r, actor)); err != nil {
 		s.logger.Warn().Err(err).Str("credential", name).Msg("MCP form: credential store failed")
 		return "mcp-credential-failed", false
 	}
-	s.auditCredential(r, "credential.set", name, actor)
 	if _, err := s.operatorCredentials.Refresh(r.Context()); err != nil {
 		s.logger.Warn().Err(err).Msg("MCP form: refresh after credential save failed")
 	}

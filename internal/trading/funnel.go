@@ -117,6 +117,68 @@ type Outcome struct {
 	MAE    float64
 }
 
+// Baseline is the reference a candidate's outcomes are measured from, taken
+// from the same series as the forward bars (#719). refClose is the series'
+// close of the session a tick's scorecard last_close describes: the last
+// session completed at observedAt (the scorecard never uses the in-progress
+// candle; the observed session's own close is set after the tick). atr is
+// the series' Wilder ATR14 through that session, 0 when fewer than 15 bars
+// lead up to it. The session is the last NYSE trading day completed at
+// observedAt (weekends and IsUSMarketHoliday skipped), compared with
+// DailyBar.Session in the same form: the date at midnight UTC. ok is false when the
+// series has no bar for exactly that session (a gap, or a listing whose
+// sessions are not NYSE's), so the caller never measures from a different
+// session's close.
+func Baseline(bars []DailyBar, observedAt time.Time) (refClose, atr float64, ok bool) {
+	session := CompletedThrough(observedAt)
+	for session.Weekday() == time.Saturday || session.Weekday() == time.Sunday || IsUSMarketHoliday(session) {
+		session = session.AddDate(0, 0, -1)
+	}
+	upTo := make([]DailyBar, 0, len(bars))
+	for _, b := range bars {
+		if !b.Session.After(session) {
+			upTo = append(upTo, b)
+		}
+	}
+	if len(upTo) == 0 {
+		return 0, 0, false
+	}
+	sort.Slice(upTo, func(i, j int) bool { return upTo[i].Session.Before(upTo[j].Session) })
+	last := upTo[len(upTo)-1]
+	if !last.Session.Equal(session) || last.Close <= 0 {
+		return 0, 0, false
+	}
+	return last.Close, wilderATR(upTo, 14), true
+}
+
+// wilderATR is the Wilder ATR of the last bar, the scorecard's definition
+// (services/broker-ta indicators.atr): the mean of the first period true
+// ranges after bar 0, then smoothed with alpha 1/period. 0 when there are
+// too few bars or a bar has no high/low.
+func wilderATR(bars []DailyBar, period int) float64 {
+	if len(bars) <= period {
+		return 0
+	}
+	trueRange := func(i int) float64 {
+		b, prev := bars[i], bars[i-1].Close
+		return math.Max(b.High-b.Low, math.Max(math.Abs(b.High-prev), math.Abs(b.Low-prev)))
+	}
+	for _, b := range bars {
+		if b.High <= 0 || b.Low <= 0 {
+			return 0
+		}
+	}
+	atr := 0.0
+	for i := 1; i <= period; i++ {
+		atr += trueRange(i)
+	}
+	atr /= float64(period)
+	for i := period + 1; i < len(bars); i++ {
+		atr = (atr*float64(period-1) + trueRange(i)) / float64(period)
+	}
+	return atr
+}
+
 // ForwardOutcome measures a candidate observed in session observed, at
 // reference close refClose and ATR refATR, over the next h completed
 // sessions. Sessions are the bars' own dates, so weekends and holidays

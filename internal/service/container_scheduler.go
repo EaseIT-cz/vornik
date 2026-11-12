@@ -720,6 +720,7 @@ func (c *Container) initScheduler() error {
 	// The WithSystemHandlers option is appended once, before the executor is
 	// constructed (just above NewWithOptions).
 	sysHandlers := executor.NewSystemHandlerRegistry()
+	c.registerTradingHandlers(sysHandlers)
 	// text.readability (GitHub #633): measures the text a review is about and
 	// stores the report through the artifact store, whose secret scan runs on
 	// the stored text. Needs only the store and the artifact repository.

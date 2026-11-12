@@ -128,6 +128,72 @@ func TestFallbackRungs703_OldSuccessDoesNotDowngrade(t *testing.T) {
 	}
 }
 
+// A rung whose last-failed time is unknown (zero) cannot be proven history:
+// ok.After(zeroTime) is unconditionally true, so without the guard it would read
+// "historical" the instant its model shows any success in the window. An unknown
+// last-failed must stay live (conservative). #703 review.
+func TestFallbackRungs703_UnknownLastFailedStaysLive(t *testing.T) {
+	_, status, _ := evaluateFallbackRungs([]deadFallbackRung{{
+		stepID: "a_model_fallback", role: "lead", model: "glm-5.2",
+		attempts: 2, lastClass: "llm_call_failed", // lastFailed left at zero
+	}}, configuredBindings([2]string{"lead", "glm-5.2"}),
+		map[string]time.Time{"glm-5.2": time.Now().UTC()}) // the model has a fresh ok
+	if status != "ERROR" {
+		t.Fatalf("a rung with an unknown last-failed time must not be demoted to history just because its model works, got %q", status)
+	}
+}
+
+// A rung that died before reaching the model (an env-class failure) is not
+// cleared by its model succeeding elsewhere: the model's health says nothing
+// about the container or prerequisite the rung failed on. Only model-path
+// classes (model_unhealthy, llm_call_failed) can be demoted. #703 review.
+func TestFallbackRungs703_EnvClassRungStaysLiveWhenModelWorks(t *testing.T) {
+	last := time.Date(2026, 11, 1, 10, 0, 0, 0, time.UTC)
+	for _, class := range unreachedInferenceClasses {
+		if modelPathClasses[class] {
+			continue
+		}
+		_, status, _ := evaluateFallbackRungs([]deadFallbackRung{{
+			stepID: "a_model_fallback", role: "lead", model: "glm-5.2",
+			attempts: 2, lastClass: class, lastFailed: last,
+		}}, configuredBindings([2]string{"lead", "glm-5.2"}),
+			map[string]time.Time{"glm-5.2": last.Add(24 * time.Hour)})
+		if status != "ERROR" {
+			t.Errorf("%s: an env-class rung must stay live although its model works since, got %q", class, status)
+		}
+	}
+}
+
+// Stale beats historical: a rung whose (role, model) binding is gone is stale
+// even if its model has succeeded since its last failure — the config join is
+// consulted before the model's behaviour, so a not-configured rung never reads
+// as a working-model WARNING. #703 review.
+func TestFallbackRungs703_StaleBeatsHistorical(t *testing.T) {
+	last := time.Date(2026, 11, 1, 10, 0, 0, 0, time.UTC)
+	_, status, _ := evaluateFallbackRungs([]deadFallbackRung{{
+		stepID: "a_model_fallback", role: "lead", model: "glm-5.2",
+		attempts: 2, lastClass: "llm_call_failed", lastFailed: last,
+	}}, configuredBindings(), // nothing configured → stale
+		map[string]time.Time{"glm-5.2": last.Add(24 * time.Hour)}) // model works since
+	if status != "OK" {
+		t.Fatalf("a not-configured rung is stale even if its model works since; got %q", status)
+	}
+}
+
+// The downgrade requires an ok STRICTLY after the last failure. An ok at exactly
+// the last-failed instant is not after it, so the rung stays live. #703 review.
+func TestFallbackRungs703_SuccessAtExactLastFailedStaysLive(t *testing.T) {
+	last := time.Date(2026, 11, 1, 10, 0, 0, 0, time.UTC)
+	_, status, _ := evaluateFallbackRungs([]deadFallbackRung{{
+		stepID: "a_model_fallback", role: "lead", model: "glm-5.2",
+		attempts: 2, lastClass: "llm_call_failed", lastFailed: last,
+	}}, configuredBindings([2]string{"lead", "glm-5.2"}),
+		map[string]time.Time{"glm-5.2": last}) // ok AT lastFailed, not after
+	if status != "ERROR" {
+		t.Fatalf("an ok at exactly the last-failed time is not strictly after it; the rung stays live, got %q", status)
+	}
+}
+
 // queryWorkingModels pins the second half of the join on SQLite (the driver
 // the 2026-09-04 extension found this check silent on): model → newest ok in
 // the window, models without an ok absent, empty models ignored.
@@ -156,5 +222,28 @@ func TestQueryWorkingModels703_MostRecentOkPerModel(t *testing.T) {
 	want := now.Add(-2 * time.Hour)
 	if !got["glm-5.2"].Equal(want) {
 		t.Fatalf("glm-5.2 newest ok = %v, want %v", got["glm-5.2"], want)
+	}
+}
+
+// Review ffda F1: a rung whose last attempt failed on the model path but whose
+// earlier attempts died in the environment keeps that environment cause; the
+// model working since cannot clear it.
+func TestFallbackRungs703_MixedRungStaysLiveWhenModelWorks(t *testing.T) {
+	last := time.Date(2026, 11, 1, 10, 0, 0, 0, time.UTC)
+	_, status, _ := evaluateFallbackRungs([]deadFallbackRung{{
+		stepID: "a_model_fallback", role: "lead", model: "glm-5.2",
+		attempts: 3, calledAndFailed: 1, lastClass: "llm_call_failed", lastFailed: last,
+	}}, configuredBindings([2]string{"lead", "glm-5.2"}),
+		map[string]time.Time{"glm-5.2": last.Add(time.Hour)})
+	if status != "ERROR" {
+		t.Fatalf("a rung with environment failures among its attempts must stay live, got %q", status)
+	}
+	_, status, _ = evaluateFallbackRungs([]deadFallbackRung{{
+		stepID: "a_model_fallback", role: "lead", model: "glm-5.2",
+		attempts: 3, calledAndFailed: 3, lastClass: "llm_call_failed", lastFailed: last,
+	}}, configuredBindings([2]string{"lead", "glm-5.2"}),
+		map[string]time.Time{"glm-5.2": last.Add(time.Hour)})
+	if status != "WARNING" {
+		t.Fatalf("an all-model-path rung whose model has worked since is history, got %q", status)
 	}
 }

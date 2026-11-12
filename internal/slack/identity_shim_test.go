@@ -31,9 +31,13 @@ func shimmedChannel(t *testing.T, senders map[string]struct{}, linked map[string
 	t.Helper()
 	reg := prometheus.NewRegistry()
 	logs := &strings.Builder{}
+	keys := make([]string, 0, len(senders))
+	for u := range senders {
+		keys = append(keys, u)
+	}
 	c := &Channel{
 		logger:        zerolog.Nop(),
-		installations: []*installation{{senders: senders}},
+		installations: []*installation{buildInstallation(InstallationConfig{SenderAllowlist: keys})},
 	}
 	c.SetIdentityShim(chatauth.New(fakeResolver{linked: linked}, chatauth.NewMetrics(reg), zerolog.New(logs)))
 	return c, reg, logs
@@ -82,7 +86,7 @@ func TestSlack_UnknownStaysDenied(t *testing.T) {
 // unconfigured installation let a whole workspace drive the dispatcher, and
 // adding the shim must not undo it.
 func TestSlack_EmptyAllowlistStillDeniesWithoutTheShim(t *testing.T) {
-	c := &Channel{logger: zerolog.Nop(), installations: []*installation{{senders: map[string]struct{}{}}}}
+	c := &Channel{logger: zerolog.Nop(), installations: []*installation{buildInstallation(InstallationConfig{})}}
 	if _, err := c.ResolveSpeaker(context.Background(), "U1"); err == nil {
 		t.Error("an empty allowlist must still deny with no shim wired")
 	}
@@ -122,11 +126,11 @@ func TestSlack_BothGatesAgreeAcrossTheWholeMatrix(t *testing.T) {
 	}
 	for _, allowlist := range []struct {
 		name    string
-		senders map[string]struct{}
+		senders []string
 	}{
-		{"empty_list", map[string]struct{}{}},
-		{"lists_the_speaker", map[string]struct{}{"U1": {}}},
-		{"lists_someone_else", map[string]struct{}{"U9": {}}},
+		{"empty_list", nil},
+		{"lists_the_speaker", []string{"U1"}},
+		{"lists_someone_else", []string{"U9"}},
 	} {
 		for _, link := range []struct {
 			name   string
@@ -145,7 +149,7 @@ func TestSlack_BothGatesAgreeAcrossTheWholeMatrix(t *testing.T) {
 						name += "/shim"
 					}
 					t.Run(name, func(t *testing.T) {
-						inst := &installation{senders: allowlist.senders, allowUnlisted: unlisted}
+						inst := buildInstallation(InstallationConfig{SenderAllowlist: allowlist.senders, AllowUnlistedSenders: unlisted})
 						c := &Channel{logger: zerolog.Nop(), installations: []*installation{inst}}
 						if shim {
 							c.SetIdentityShim(chatauth.New(

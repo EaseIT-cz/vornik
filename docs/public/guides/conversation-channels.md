@@ -1,7 +1,7 @@
 ---
 sources:
     - path: docs/operator/conversation-channels.md
-      sha256: 3380fec6cb05d54dac6347a98ce4d076ee9b8e567fb277458d4ce581fb9dc6fc
+      sha256: 114e7a90b2ec5e434d1e360fc034dd7aff29cbfc5e556415f472f0c113e17dbc
 ---
 # Conversation Channels
 
@@ -13,9 +13,20 @@ per-project channels: **GitHub**, **Slack**, **email**, and **voice messages**
 for the whole installation from the Integrations Hub — see
 [Telegram](../integrations/telegram.md); it is not configured per project.
 
-You configure each channel per project, in that project's YAML file. After you
-change a channel's settings, reload the project configuration — you do not need
-to take the whole service down to pick up new channels.
+You configure each channel per project, in that project's YAML file. Which
+changes a `config reload` picks up depends on the setting:
+
+- **Slack inbound allowlists apply live.** Editing `channel_allowlist`,
+  `sender_allowlist` or `allow_unlisted_senders` and reloading takes effect on
+  the running bot — including removing a sender, which is refused from the next
+  message. Removing a project's Slack block, removing the project or changing
+  its `team_id` stops the running bot answering anyone at once; the change
+  itself takes effect at the next restart.
+- **Everything else about a channel needs a restart.** Adding a new channel,
+  changing its workspace (`team_id`) or its secrets, and all email / GitHub App
+  settings are read once when vornik starts. When a reload sees such a change,
+  it says so in its result — the setting is named as requiring a restart —
+  instead of reporting plain success.
 
 ## Things every channel has in common
 
@@ -23,10 +34,13 @@ to take the whole service down to pick up new channels.
   supplied through environment variables. The YAML only names the environment
   variable to read (for example `bot_token_env`), so your config files stay
   safe to commit.
-- **Allowlists are your front door.** Each channel has a sender allowlist and,
-  where it applies, a channel/repo allowlist. Leaving an allowlist empty means
-  "accept everyone" — fine while you are testing, but you should tighten it
-  before going to production.
+- **Allowlists are your front door — and an empty one does not mean what you
+  think.** The default differs per channel: **Slack** denies everything when an
+  allowlist is empty (set `allow_unlisted_senders: true` to opt into open
+  behaviour deliberately); **GitHub** denies every repository until
+  `repo_allowlist` names one; **email** accepts every sender until its
+  `sender_allowlist` is filled in. Check the channel's section below before you
+  rely on either default.
 - **Routing is automatic.** A single channel connection can serve several
   projects when the upstream service gives a stable identifier (a GitHub
   installation, a Slack workspace, an email login). vornik routes each inbound

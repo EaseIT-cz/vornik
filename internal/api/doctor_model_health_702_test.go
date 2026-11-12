@@ -41,6 +41,15 @@ func TestDoctorModelHealth_PrintedCodesResolveInThePlaybook(t *testing.T) {
 		entry := playbook.Lookup(code)
 		if strings.Contains(entry.Cause, "Unrecognised") {
 			t.Errorf("doctor prints %q but `playbook show %s` hits the unknown-class fallback", code, code)
+			continue
+		}
+		// The fallback Entry sets Class==code and leaves ResolvedFrom empty, so
+		// only ResolvedFrom distinguishes a covered code from an unrecognised one
+		// whose class happens to match. Pin it: the entry must record that it was
+		// resolved FROM this code (the alias path), not merely carry its name.
+		if entry.ResolvedFrom != code {
+			t.Errorf("doctor prints %q; `playbook show %s` did not record it as resolved from that code (resolvedFrom=%q, class=%q)",
+				code, code, entry.ResolvedFrom, entry.Class)
 		}
 	}
 }

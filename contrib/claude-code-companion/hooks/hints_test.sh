@@ -171,7 +171,7 @@ run_hook call "$(post $S Bash "$(bash_in 'ls docs')")" >/dev/null
 S=t1
 OUT="$(run_hook failed "$(failure $S 'go test ./...' 'Exit code 1
 --- FAIL: TestX (0.01s)')")"; RC=$?
-assert_hint "failed go test" "$OUT" "$RC" "a test run failed" PostToolUseFailure
+assert_hint "failed go test" "$OUT" "$RC" "failing test's name" PostToolUseFailure
 S=t2
 OUT="$(run_hook failed "$(failure $S 'ls nothere' 'Exit code 2')")"; RC=$?
 assert_silent "a failed non-runner" "$OUT" "$RC"
@@ -183,7 +183,7 @@ done
 for o in '--- FAIL: TestY (0.0s)' 'FAIL	pkg	0.2s' '3 failed, 7 passed' '=== 2 errors ==='; do
   S="tf$RANDOM"
   OUT="$(run_hook call "$(post $S Bash "$(bash_in 'make test 2>&1 | tail -5')" "$(bash_out "$o")")")"; RC=$?
-  assert_hint "failing output: $o" "$OUT" "$RC" "a test run failed" PostToolUse
+  assert_hint "failing output: $o" "$OUT" "$RC" "failing test's name" PostToolUse
 done
 
 # --- the mask and VORNIK_HINTS=off.
@@ -247,6 +247,15 @@ run_hook call "$(post $S mcp__vornik__recall '{"query":"q"}')" >/dev/null
 [[ -d "$CLAUDE_PLUGIN_DATA/hints/$S/followed.test_failed.recall" ]] && fail "client: a Codex tool name credited in Claude Code"
 run_hook call "$(post $S mcp__plugin_vornik-companion_vornik__recall '{"query":"q"}')" >/dev/null
 [[ -d "$CLAUDE_PLUGIN_DATA/hints/$S/followed.test_failed.recall" ]] || fail "client: the plugin-qualified recall did not credit"
+
+# --- the recall hint names the exact tool in Claude Code (#704, design §13.16):
+# the measured wording names mcp__plugin_vornik-companion_vornik__recall, and a
+# call of it within the window still credits the follow.
+S=r704
+out="$(run_hook call "$(post $S Bash "$(bash_in 'go test ./x')" "$(bash_out '--- FAIL: TestQ (0s)')")")"
+grep -qF 'Call mcp__plugin_vornik-companion_vornik__recall with query' <<<"$(ctx_of "$out")" || fail "#704: the recall hint does not name the plugin's recall tool: $(ctx_of "$out")"
+run_hook call "$(post $S mcp__plugin_vornik-companion_vornik__recall '{"query":"TestQ"}')" >/dev/null
+[[ -d "$CLAUDE_PLUGIN_DATA/hints/$S/followed.test_failed.recall" ]] || fail "#704: the named recall did not credit"
 
 # --- a non-string stdout still counts the call (review ac74 F3).
 S=ns1

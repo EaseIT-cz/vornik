@@ -130,6 +130,12 @@ type SystemStepInput struct {
 	// PrevResult carries the previous step's LastResult (JSON
 	// bytes). For the entrypoint step this is nil/empty.
 	PrevResult json.RawMessage
+	// StepResults is every earlier step's result, keyed by step id: a
+	// shallow copy of the execution state's map, whose byte slices are
+	// shared and must be treated as read-only. After a gate, PrevResult is
+	// only the step before the gate; a handler that checks one step's output
+	// against an earlier one reads the earlier one here (GitHub #739).
+	StepResults map[string]json.RawMessage
 }
 
 // SystemStepResult is what Execute returns when it succeeds. The

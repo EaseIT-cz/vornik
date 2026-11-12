@@ -35,7 +35,7 @@
     },
     {
       "id": "test_failed.recall",
-      "version": 1,
+      "version": 2,
       "trigger": {
         "kind": "test_failed",
         "runners": [
@@ -56,7 +56,7 @@
         "recall"
       ],
       "active": true,
-      "text": "vornik-companion: a test run failed. Before you debug from scratch, recall the symptom ({recall} with the failing test's name or its error), in case it has been seen and solved before."
+      "text": "vornik-companion: ACTION REQUIRED as your next step. Call {recall} with query set to the failing test's name and its error message, then read the hits before you change code."
     },
     {
       "id": "design_written.review",

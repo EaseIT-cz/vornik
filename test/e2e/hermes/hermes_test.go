@@ -77,8 +77,11 @@ type hermesRun struct {
 func runHermes(t *testing.T, s *stack, prompt string) hermesRun {
 	t.Helper()
 	modelEvidence(s).reset()
-	args := hermesRunArgs(t, slices.Concat([]string{"--rm", "--network", "host",
-		"-v", s.hermesHome + ":/opt/data:Z"}, hermesVornikEnv(s),
+	mounts := []string{"-v", s.hermesHome + ":/opt/data:Z"}
+	if s.hermesWork != "" {
+		mounts = append(mounts, "-v", s.hermesWork+":/work:Z", "--workdir", "/work")
+	}
+	args := hermesRunArgs(t, slices.Concat([]string{"--rm", "--network", "host"}, mounts, hermesVornikEnv(s),
 		[]string{hermesImage, "hermes", "-z", prompt})...)
 	cmd := exec.Command("podman", args...)
 	var stdout, stderr bytes.Buffer
@@ -87,6 +90,9 @@ func runHermes(t *testing.T, s *stack, prompt string) hermesRun {
 	err := cmd.Run()
 	r := hermesRun{Prompt: prompt, Reply: strings.TrimSpace(stdout.String()), Stderr: stderr.String(), Elapsed: time.Since(start)}
 	_ = exec.Command("podman", "unshare", "chown", "-R", "0:0", s.hermesHome).Run()
+	if s.hermesWork != "" {
+		_ = exec.Command("podman", "unshare", "chown", "-R", "0:0", s.hermesWork).Run()
+	}
 	if err != nil {
 		t.Logf("hermes -z exited: %v\n%s", err, tail(r.Stderr, 3000))
 	}

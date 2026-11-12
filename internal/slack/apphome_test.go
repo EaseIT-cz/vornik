@@ -195,7 +195,7 @@ func TestBuildHomeView_EmptyChannelAllowlistDoesNotPromiseAnyChannel(t *testing.
 	}
 
 	t.Run("fail-closed: DMs only", func(t *testing.T) {
-		view := ch.buildHomeView(&installation{projectID: "p"})
+		view := ch.buildHomeView(buildInstallation(InstallationConfig{ProjectID: "p"}))
 		body := flattenHomeView(t, view)
 		if strings.Contains(body, "Any channel I have been added to") {
 			t.Errorf("empty channel_allowlist must NOT advertise any-channel access; got:\n%s", body)
@@ -206,7 +206,7 @@ func TestBuildHomeView_EmptyChannelAllowlistDoesNotPromiseAnyChannel(t *testing.
 	})
 
 	t.Run("dev mode opted open: any channel is honest", func(t *testing.T) {
-		view := ch.buildHomeView(&installation{projectID: "p", allowUnlisted: true})
+		view := ch.buildHomeView(buildInstallation(InstallationConfig{ProjectID: "p", AllowUnlistedSenders: true}))
 		if body := flattenHomeView(t, view); !strings.Contains(body, "Any channel I have been added to") {
 			t.Errorf("allow_unlisted_senders DOES admit any channel; got:\n%s", body)
 		}
@@ -221,7 +221,7 @@ func TestBuildHomeView_StatesGroupDMsAreUnsupported(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
-	body := flattenHomeView(t, ch.buildHomeView(&installation{projectID: "p"}))
+	body := flattenHomeView(t, ch.buildHomeView(buildInstallation(InstallationConfig{ProjectID: "p"})))
 	if !strings.Contains(strings.ToLower(body), "group dm") {
 		t.Errorf("home view should state group DMs are unsupported; got:\n%s", body)
 	}

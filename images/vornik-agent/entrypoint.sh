@@ -313,6 +313,34 @@ request_file_tokens() {
     printf '%s' "$(( ($(byte_len "$body") + 2) / 3 ))"
 }
 
+# tool_never_mutates — true for a tool that reads and changes nothing, but is
+# deliberately left out of the read cache (agent runtime contract §8.2a).
+tool_never_mutates() {
+    case "$1" in
+        current_time|mcp__broker__get_quote|file_read|file_list)
+            return 0
+            ;;
+    esac
+    return 1
+}
+
+# tool_read_cache_after_call — run after every EXECUTED call (not a cache hit).
+# A call that may change state empties TOOL_READ_CACHE, FILE_READ_CACHE and
+# FILE_READ_MISSES, so the next read is fetched again (exec_tool runs in a
+# subshell, so a write tool cannot clear them itself) (GitHub #739: the trading executor's get_orders after its own
+# place_order was answered from the cache with the order list from before it,
+# so it never saw the fill and ordered again). Default-deny: a tool not known
+# to be a pure read is treated as one that may change state.
+tool_read_cache_after_call() {
+    if tool_is_cacheable_read "$1" || tool_never_mutates "$1"; then
+        return 0
+    fi
+    debug "tool: $1 may change state — emptying the read caches"
+    TOOL_READ_CACHE=()
+    FILE_READ_CACHE=()
+    FILE_READ_MISSES=()
+}
+
 # ms_now returns milliseconds-since-epoch as a portable 13-digit value.
 # The agent image's `date` is from coreutils-rust, which silently
 # treats `%3N` as `%N` and emits the FULL nanosecond count (9 digits)
@@ -333,11 +361,10 @@ request_file_tokens() {
 # write-action tool added to the allow-list doesn't accidentally
 # get its mutating call elided.
 tool_is_cacheable_read() {
+    # Live broker state (account summary, positions, orders) is never cached:
+    # it changes during the step whether or not the step acts (GitHub #739).
     case "$1" in
         mcp__broker__get_historical_bars|\
-        mcp__broker__get_account_summary|\
-        mcp__broker__get_positions|\
-        mcp__broker__get_orders|\
         mcp__ta__sma|mcp__ta__ema|mcp__ta__rsi|\
         mcp__ta__macd|mcp__ta__bbands|mcp__ta__atr|\
         mcp__news__news_recent|mcp__news__fundamentals_snapshot|\
@@ -3119,10 +3146,11 @@ ${previous_result}
     declare -gA FILE_READ_MISSES=()
     declare -g FILE_READ_REPEAT_MISS=""
 
-    # Per-turn cache for OTHER read-only tools (broker bars/positions/
-    # account, TA indicators, news, memory_search). Keyed by
+    # Per-step cache for OTHER read-only tools (broker bars, TA indicators,
+    # news, memory_search), emptied by any call that may change state
+    # (tool_read_cache_after_call, GitHub #739). Keyed by
     # "<tool>:<sha256(args)>". Same intent as FILE_READ_CACHE: when the
-    # model re-asks for data it already fetched in this turn, return
+    # model re-asks for data it already fetched in this step, return
     # the cached payload prefixed with "[already fetched on turn N]"
     # instead of paying another broker round-trip. Pre-cache audit
     # (2026-05-06 exec_20260506182952): strategist re-fetched NVDA
@@ -4073,6 +4101,7 @@ ${previous_result}
             if [ "$tc_cache_hit" = "0" ]; then
                 debug "tool: $tc_name (id=$tc_id)"
                 tool_result=$(exec_tool "$tc_name" "$tc_args" 2>&1 | head -c "$TOOL_RESULT_MAX_BYTES") # sigpipe-ok: the cap; stopping an oversized tool output is the point, and the image runs without pipefail
+                tool_read_cache_after_call "$tc_name"
                 # Advisory near-repeat warning: the call RAN and its real
                 # result is preserved — only a note is appended. Unlike the
                 # exact-repeat nudge we cannot substitute the previous result,

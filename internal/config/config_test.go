@@ -4,6 +4,7 @@ import (
 	"flag"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -383,7 +384,7 @@ func TestExpandEnvPlaceholders(t *testing.T) {
 		},
 	}
 
-	expandEnvPlaceholders(cfg)
+	expandValue(reflect.ValueOf(cfg), os.Getenv)
 
 	if cfg.Chat.APIKey != "chat-secret" {
 		t.Fatalf("expected expanded chat api key, got %q", cfg.Chat.APIKey)

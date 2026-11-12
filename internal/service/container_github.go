@@ -15,6 +15,7 @@ import (
 	"vornik.io/vornik/internal/integrations/dialguard"
 	"vornik.io/vornik/internal/persistence"
 	"vornik.io/vornik/internal/registry"
+	"vornik.io/vornik/internal/secretstore"
 )
 
 // buildGitHubChannel scans the project registry for every project
@@ -259,7 +260,7 @@ func projectIDs(ps []*registry.Project) []string {
 // allowlists pass through verbatim.
 func resolveGitHubAppConfig(project *registry.Project) (github.Config, error) {
 	p := project.GitHubApp
-	secret := os.Getenv(p.WebhookSecretEnv)
+	secret := secretstore.Value(p.WebhookSecretEnv)
 	if strings.TrimSpace(secret) == "" {
 		return github.Config{}, fmt.Errorf("webhook_secret_env %q is unset or empty", p.WebhookSecretEnv)
 	}

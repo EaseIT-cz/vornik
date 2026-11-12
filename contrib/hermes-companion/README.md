@@ -284,6 +284,10 @@ rule 13):
   and anything under the Hermes home, as Hermes's own `read_file` does. It
   also refuses hard-linked files: a file sent for an ingest can be stored
   in Vornik's memory (0.23.1).
+  **Hermes in Docker:** the image's Hermes home is `/opt/data`, so a
+  project kept there has every file refused. Mount the project as its own
+  volume outside the home (for example `-v ~/src/app:/workspace`) and start
+  Hermes in that directory (0.23.4).
 - **Memory:** when you select it as Hermes's memory provider, it mirrors
   Hermes's curated `MEMORY.md` and `USER.md` writes to Vornik, and has
   Vornik forget an entry Hermes removes or replaces.

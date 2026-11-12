@@ -1431,11 +1431,11 @@ type ProjectSlack struct {
 	BotTokenEnv string `yaml:"bot_token_env"`
 
 	// ChannelAllowlist filters inbound. Entries are Slack channel
-	// IDs (C…). Empty allows every channel in the workspace —
-	// useful in dev where the operator doesn't want to pin a specific
-	// channel. Production deployments should set this so a misclick
-	// in Slack's "install to channel" picker doesn't expose the bot
-	// to unrelated channels.
+	// IDs (C…). Empty DENIES every shared channel as of 2026-08-05
+	// (DMs are exempt) — see AllowUnlistedSenders for the deliberate
+	// opt-back into the old pass-through. Set this so a misclick in
+	// Slack's "install to channel" picker doesn't expose the bot to
+	// unrelated channels.
 	ChannelAllowlist []string `yaml:"channel_allowlist"`
 
 	// SenderAllowlist filters inbound by Slack user_id (U…). Empty

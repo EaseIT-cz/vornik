@@ -111,21 +111,23 @@ func (c *Channel) buildHomeView(inst *installation) homeView {
 		blocks = append(blocks, section("*Project*\n`"+project+"`"))
 	}
 
-	if len(inst.allowedChannels) > 0 {
-		names := make([]string, 0, len(inst.allowedChannels))
-		for id := range inst.allowedChannels {
+	al := inst.allowlists.Load()
+	switch {
+	case len(al.channels) > 0:
+		names := make([]string, 0, len(al.channels))
+		for id := range al.channels {
 			names = append(names, "<#"+id+">")
 		}
 		sort.Strings(names) // map iteration order would reshuffle the view on every open
 		blocks = append(blocks, section(
 			"*Where I answer*\nShared channels: "+strings.Join(names, ", ")+
 				"\nPlus direct messages, which are never restricted by channel."))
-	} else if inst.allowUnlisted {
+	case al.allowUnlisted:
 		// Opted back into the pre-2026.8.0 pass-through deliberately, so
 		// any-channel really is the behaviour.
 		blocks = append(blocks, section(
 			"*Where I answer*\nAny channel I have been added to, plus direct messages."))
-	} else {
+	default:
 		// An EMPTY channel allowlist DENIES every channel as of 2026.8.0. This
 		// branch used to promise "any channel I have been added to", which was
 		// true before the flip and the exact opposite afterwards — the surface

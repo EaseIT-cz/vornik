@@ -2,6 +2,7 @@ package config
 
 import (
 	"bufio"
+	"bytes"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -129,14 +130,34 @@ func ParseEnvFile(path string) map[string]string {
 // error, matching the optional (`-`) semantics of the systemd directive.
 func parseEnvFile(path string) map[string]string {
 	out := map[string]string{}
-	f, err := os.Open(path)
+	data, err := os.ReadFile(path)
 	if err != nil {
 		return out
 	}
-	defer func() { _ = f.Close() }()
+	for _, e := range ParseEnvEntries(data) {
+		out[e.Key] = e.Value
+	}
+	return out
+}
 
-	scanner := bufio.NewScanner(f)
+// EnvEntry is one KEY=VALUE line of an env file, with its 1-based line
+// number.
+type EnvEntry struct {
+	Key   string
+	Value string
+	Line  int
+}
+
+// ParseEnvEntries parses env-file bytes by the rules parseEnvFile applies,
+// keeping each entry's line number (a key set twice appears twice; the
+// loader keeps the last). vornikctl credential import-env uses it on the
+// same bytes it hashes (GitHub #626 C).
+func ParseEnvEntries(data []byte) []EnvEntry {
+	var out []EnvEntry
+	scanner := bufio.NewScanner(bytes.NewReader(data))
+	n := 0
 	for scanner.Scan() {
+		n++
 		line := strings.TrimSpace(scanner.Text())
 		if line == "" || strings.HasPrefix(line, "#") {
 			continue
@@ -150,12 +171,14 @@ func parseEnvFile(path string) map[string]string {
 		if key == "" {
 			continue
 		}
-		val := strings.TrimSpace(line[eq+1:])
-		val = unquoteEnvValue(val)
-		out[key] = val
+		out = append(out, EnvEntry{Key: key, Value: unquoteEnvValue(strings.TrimSpace(line[eq+1:])), Line: n})
 	}
 	return out
 }
+
+// ResolveConfigPath is the daemon's config path for an explicit --config
+// value ("" for the default search).
+func ResolveConfigPath(flagPath string) string { return resolveConfigPath(flagPath) }
 
 // unquoteEnvValue strips a single matched pair of surrounding single or
 // double quotes from an env value. Unquoted or mismatched values are

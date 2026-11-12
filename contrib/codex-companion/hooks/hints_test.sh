@@ -66,7 +66,7 @@ grep -q 'mcp__plugin_vornik' <<<"$OUT" && fail "commit: a Claude Code tool name 
 
 # --- test_failed from a string tool_response only; zero counts do not fire.
 OUT="$(run call codex "$(post t1 Bash "$(cmd_in 'go test ./...')" "$(str $'--- FAIL: TestX (0.0s)\nFAIL\tpkg\t0.1s')")")"; RC=$?
-assert_hint "failed go test" "$OUT" "$RC" "a test run failed"
+assert_hint "failed go test" "$OUT" "$RC" "failing test's name"
 grep -q 'mcp__vornik__recall' <<<"$(ctx_of "$OUT")" || fail "test_failed: {recall} is not the Codex tool name: $OUT"
 for o in 'ok  pkg 0.1s' '10 passed, 0 failed' 'no failures'; do
   OUT="$(run call codex "$(post "tz$RANDOM" Bash "$(cmd_in 'pytest')" "$(str "$o")")")"; RC=$?

@@ -38,6 +38,10 @@ const (
 	OriginDerived Origin = "derived"
 	// OriginSecretFile — read from a *_file path; Source is the file's basename.
 	OriginSecretFile Origin = "secret_file"
+	// OriginCredential — a ${VAR} the environment did not hold was filled
+	// from the operator credential store (GitHub #626); Source names the
+	// variables, never the value.
+	OriginCredential Origin = "credential"
 	// OriginUnset — the zero value; nothing set it. The origin that says a key
 	// the operator believes is configured was never bound.
 	OriginUnset Origin = "unset"
@@ -262,7 +266,11 @@ var secretFileResolvers = []secretFileResolver{
 // LoadFromPathWithProvenance is LoadFromPath, recording where every value came
 // from as the pipeline runs. On any error nothing is returned but the error —
 // a partial map for a config that never loaded must not escape.
-func LoadFromPathWithProvenance(path string) (*Config, *Provenance, error) {
+//
+// opts: WithCredentials supplies stored operator credentials for
+// placeholders the environment does not hold (GitHub #626).
+func LoadFromPathWithProvenance(path string, opts ...LoadOption) (*Config, *Provenance, error) {
+	o := collectLoadOptions(opts)
 	cfg := DefaultConfig()
 	prov := newProvenance(path)
 
@@ -293,15 +301,7 @@ func LoadFromPathWithProvenance(path string) (*Config, *Provenance, error) {
 
 	// Recorded AFTER sourcing the env files and before expansion, which
 	// destroys the evidence by turning ${VAR} into "".
-	cfg.unresolvedPlaceholders = unresolvedPlaceholderNames(rawConfigBytes)
-
-	// 4. Placeholders: leaves whose rendering carried ${VAR} and changed.
-	recordChanged(cfg, prov, func(c *Config) { expandEnvPlaceholders(c) }, func(was string) (Origin, string, bool) {
-		if !strings.Contains(was, "$") {
-			return "", "", false
-		}
-		return OriginPlaceholder, placeholderVars(was), true
-	})
+	applyPlaceholders(cfg, prov, rawConfigBytes, o.credentials)
 
 	// 5. Environment overrides, from the table.
 	applyEnvOverridesRecording(cfg, func(keys []string, env string, err error) {
@@ -333,7 +333,11 @@ func LoadFromPathWithProvenance(path string) (*Config, *Provenance, error) {
 	recordChanged(cfg, prov, func(c *Config) { c.Identity.applyDefaults() }, derivedBy("identity.applyDefaults"))
 	recordChanged(cfg, prov, func(c *Config) { c.ConfigAssistant.applyDefaults() }, derivedBy("config_assistant.applyDefaults"))
 
-	if err := cfg.Validate(); err != nil {
+	validate := cfg.Validate
+	if o.bootstrap {
+		validate = cfg.validateBootstrap
+	}
+	if err := validate(); err != nil {
 		return nil, nil, fmt.Errorf("configuration validation failed: %w", err)
 	}
 
@@ -350,6 +354,40 @@ func LoadFromPathWithProvenance(path string) (*Config, *Provenance, error) {
 		prov.set(key, OriginDerived, "")
 	})
 	return cfg, prov, nil
+}
+
+// applyPlaceholders is the load's step 4: it records the credential
+// candidates and the unresolved names, expands every ${VAR} (the database
+// block from the environment only, the rest falling back to the stored
+// credentials, GitHub #626), records where each changed leaf came from, and
+// records the shadowed names.
+func applyPlaceholders(cfg *Config, prov *Provenance, rawConfigBytes []byte, credentials map[string]string) {
+	// A name a stored credential fills is not unresolved.
+	cfg.credentialCandidates = credentialCandidateNames(rawConfigBytes)
+	stored := map[string]bool{}
+	for _, n := range cfg.credentialCandidates {
+		if credentials[n] != "" {
+			stored[n] = true
+		}
+	}
+	for _, n := range unresolvedPlaceholderNames(rawConfigBytes) {
+		if !stored[n] {
+			cfg.unresolvedPlaceholders = append(cfg.unresolvedPlaceholders, n)
+		}
+	}
+
+	// 4. Placeholders: leaves whose rendering carried ${VAR} and changed.
+	// The database block expands from the environment only; everything else
+	// falls back to the stored credentials.
+	creds := newCredentialResolver(credentials)
+	recordChanged(cfg, prov, func(c *Config) { expandConfig(c, creds) }, func(was string) (Origin, string, bool) {
+		if !strings.Contains(was, "$") {
+			return "", "", false
+		}
+		origin, src := creds.credentialOrigin(was)
+		return origin, src, true
+	})
+	cfg.shadowedCredentials = sortedNames(creds.shadowed)
 }
 
 // decodeConfigFile reads and decodes the file into cfg (no file: nothing to

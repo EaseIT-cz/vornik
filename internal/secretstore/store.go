@@ -210,6 +210,10 @@ func (s *Store) ApproverPushVAPIDSeed() ([]byte, error) {
 // see LLD § https://docs.vornik.io, Amendment 2026-11-02 (#623)
 const operatorCredentialsNamespace = "_operator_credentials"
 
+// OperatorCredentialsNamespace is the reserved namespace operator credentials
+// live in (OC1), exported for the doctor's count (GitHub #625 item 4).
+const OperatorCredentialsNamespace = operatorCredentialsNamespace
+
 func checkOperatorName(name string) error {
 	if !agentns.ValidSecretName(name) {
 		return fmt.Errorf("secretstore: invalid credential name %q (use A-Z, 0-9 and _, starting with a letter)", name)

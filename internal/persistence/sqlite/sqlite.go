@@ -224,7 +224,10 @@ func (d *DB) Migrate(ctx context.Context) error {
 	}
 	// One-time data normalisation, after the schema so every column exists
 	// (SQLite timestamp ordering design, D4).
-	return d.applyTimestampNormalization(ctx)
+	if err := d.applyTimestampNormalization(ctx); err != nil {
+		return err
+	}
+	return d.applyFunnelOutcomeRefill(ctx)
 }
 
 // additiveColumn is a column added to an EXISTING table after that table first

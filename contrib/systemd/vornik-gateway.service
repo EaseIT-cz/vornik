@@ -76,6 +76,12 @@ ExecStartPre=%h/.local/bin/vornik-gateway-render.sh %h/.config/vornik/gateway/ko
 # cover an invocation that died before it could clean up.
 ExecStartPre=-/usr/bin/podman rm -f vornik-gateway
 
+# GitHub #601: a pasta-networked container can lose its default route in a
+# host network outage and keep running offline. The health check fails when
+# the container's routing table has no default route; three failures a minute
+# apart kill the container and the unit restarts it. Not
+# --health-on-failure=restart: on this --rm container an in-place restart
+# removes it and leaves the unit dead.
 ExecStart=/usr/bin/podman run \
     --name vornik-gateway \
     --replace \
@@ -83,6 +89,9 @@ ExecStart=/usr/bin/podman run \
     --log-driver=journald \
     --memory=2g --memory-swap=2g \
     -p 127.0.0.1:8010:8000 \
+    --health-cmd 'grep -qE "^[^[:space:]]+[[:space:]]+00000000[[:space:]]" /proc/net/route' \
+    --health-interval=60s --health-retries=3 --health-start-period=60s \
+    --health-on-failure=kill \
     -v %t/vornik/kong.yml:/kong/kong.yml:ro,z \
     -e KONG_DATABASE=off \
     -e KONG_DECLARATIVE_CONFIG=/kong/kong.yml \

@@ -137,13 +137,11 @@ func (c *Channel) legacyForInstallation(inst *installation, userID string) chata
 }
 
 // legacyAllowsSender is the 2026-08-05 rule itself, for one installation: an
-// empty allowlist DENIES unless the installation opted back in.
+// empty allowlist DENIES unless the installation opted back in. The snapshot
+// is loaded once so a concurrent reload swap cannot mix old and new values
+// inside one decision (GitHub #738).
 func legacyAllowsSender(inst *installation, userID string) bool {
-	if len(inst.senders) == 0 {
-		return inst.allowUnlisted
-	}
-	_, ok := inst.senders[userID]
-	return ok
+	return inst.allowlists.Load().allowsSender(userID)
 }
 
 // authorize is the ONE OR-matrix call site for this channel. Both gates go
@@ -942,15 +940,12 @@ func channelAllowed(inst *installation, channelType, channelID string) bool {
 	if isDirectMessageChannel(channelType, channelID) {
 		return true
 	}
-	if len(inst.allowedChannels) == 0 {
-		// Empty denies as of 2026-08-05 unless opted open — the sender gate
-		// above is the primary control, but an unconfigured channel allowlist
-		// used to admit every channel in the workspace, which is the same
-		// fail-open shape.
-		return inst.allowUnlisted
-	}
-	_, ok := inst.allowedChannels[channelID]
-	return ok
+	// allowsChannel carries the 2026-08-05 rule: an EMPTY allowlist denies
+	// unless opted open — the sender gate is the primary control, but an
+	// unconfigured channel allowlist used to admit every channel in the
+	// workspace, which is the same fail-open shape. One Load per call keeps
+	// a concurrent reload swap from mixing old and new values (#738).
+	return inst.allowlists.Load().allowsChannel(channelID)
 }
 
 // isDirectMessageChannel reports whether an inbound event came from a DM.

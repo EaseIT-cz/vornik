@@ -29,7 +29,7 @@ func TestSetSecret_RefusesAgentProjects(t *testing.T) {
 	}
 }
 
-// Plan review f329 finding 1 (design §13): drive the real env writer for an
+// Plan review f329 finding 1 (design §13): drive the real writer for an
 // agent project, then assert no agent-shaped credential exists in the process
 // environment or in any file under the secrets dir. This is the tree-wide
 // negative for this writer; the other writers (fix-it, the project-setup
@@ -43,8 +43,12 @@ func TestAgentCredential_NeverReachesTheFlatEnvironment(t *testing.T) {
 		before[kv] = true
 	}
 	proj := &registry.Project{ID: "hermes--finance", Permissions: registry.ProjectPermissions{Secrets: []string{"hermes/FIO"}}}
-	d := New(Deps{Registry: fakeResolver{proj: proj}, SecretWriter: NewEnvSecrets(dir)})
+	store := &recordingWriter{}
+	d := New(Deps{Registry: fakeResolver{proj: proj}, SecretWriter: StoreSecrets{Writer: store}})
 	_ = d.SetSecret("hermes--finance", "hermes/FIO", "AGENT-CANARY-VALUE")
+	if store.name != "" {
+		t.Fatalf("an agent credential reached the operator credential store as %q", store.name)
+	}
 
 	shape := regexp.MustCompile(`^[a-z][a-z0-9]{1,15}/[A-Z][A-Z0-9_]{0,63}=`)
 	for _, kv := range os.Environ() {

@@ -237,6 +237,9 @@ func startContainer(t *testing.T, name string, limit int64, args ...string) {
 	t.Helper()
 	// No "rm -f <name>": names are per run, and a fixed-name rm removed a
 	// live sibling's container (T10). Leftovers are reaped by label instead.
+	if err := ensureReaper(); err != nil { // GitHub #694: cleanup that outlives a timed-out binary
+		t.Fatalf("start the lane reaper: %v", err)
+	}
 	run(t, "podman", podmanRunArgs(limit, append([]string{"-d", "--name", name}, args...)...)...)
 	t.Cleanup(func() {
 		if t.Failed() {

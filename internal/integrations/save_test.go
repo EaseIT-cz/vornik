@@ -154,7 +154,7 @@ func TestSave_RefusesWhenProbeFails(t *testing.T) {
 	target, _ := SaveTargetForKind("telegram")
 	cand := CandidateConfig{Kind: "telegram", Values: map[string]string{"bot_token": "some-token-value-1234567890"}}
 
-	res, err := Save(context.Background(), kind, target, cand, adminCaller(), SaveDeps{ConfigDir: dir})
+	res, err := Save(context.Background(), kind, target, cand, adminCaller(), SaveDeps{ConfigDir: dir, ProjectSecrets: memSecrets{}})
 	if err != nil {
 		t.Fatalf("Save returned error for a probe-refusal, want nil error: %v", err)
 	}
@@ -190,7 +190,7 @@ func TestSave_TelegramWritesPlaceholderAndSecret(t *testing.T) {
 	}
 	cand := CandidateConfig{Kind: "telegram", Values: map[string]string{"bot_token": "1234567890:AAtheRealSecretTokenValue"}}
 
-	res, err := Save(context.Background(), kind, target, cand, adminCaller(), SaveDeps{ConfigDir: dir})
+	res, err := Save(context.Background(), kind, target, cand, adminCaller(), SaveDeps{ConfigDir: dir, ProjectSecrets: memSecrets{}})
 	if err != nil {
 		t.Fatalf("Save: %v", err)
 	}
@@ -243,7 +243,7 @@ func TestSave_SecretLiteralBoundary_AbortsBeforeWrite(t *testing.T) {
 
 	before, _ := os.ReadFile(filepath.Join(dir, "config.yaml"))
 
-	_, err := Save(context.Background(), kind, target, cand, adminCaller(), SaveDeps{ConfigDir: dir})
+	_, err := Save(context.Background(), kind, target, cand, adminCaller(), SaveDeps{ConfigDir: dir, ProjectSecrets: memSecrets{}})
 	if err == nil {
 		t.Fatal("Save returned nil error, want a secret-literal boundary rejection")
 	}
@@ -284,7 +284,7 @@ func TestSave_SecretLiteralBoundary_EnvShapedSecretNotDeclaredCaught(t *testing.
 
 	before, _ := os.ReadFile(filepath.Join(dir, "config.yaml"))
 
-	_, err := Save(context.Background(), kind, target, cand, adminCaller(), SaveDeps{ConfigDir: dir})
+	_, err := Save(context.Background(), kind, target, cand, adminCaller(), SaveDeps{ConfigDir: dir, ProjectSecrets: memSecrets{}})
 	if err == nil {
 		t.Fatal("Save returned nil error, want a secret-literal boundary rejection for an env-shaped-but-undeclared value")
 	}
@@ -307,7 +307,7 @@ func TestSave_ScopeEnforcement_DaemonRequiresAdmin(t *testing.T) {
 	target, _ := SaveTargetForKind("telegram")
 	cand := CandidateConfig{Kind: "telegram", Values: map[string]string{"bot_token": "x"}}
 
-	_, err := Save(context.Background(), kind, target, cand, Caller{IsAdmin: false}, SaveDeps{ConfigDir: dir})
+	_, err := Save(context.Background(), kind, target, cand, Caller{IsAdmin: false}, SaveDeps{ConfigDir: dir, ProjectSecrets: memSecrets{}})
 	if err == nil {
 		t.Fatal("Save returned nil error, want ErrForbidden for a non-admin daemon-scope save")
 	}
@@ -505,7 +505,7 @@ func TestSave_RestoredConfigLeavesOrphanedSecretInert_ThenCleanResaveOverwrites(
 	target, _ := SaveTargetForKind("telegram")
 	cand := CandidateConfig{Kind: "telegram", Values: map[string]string{"bot_token": "orphaned-secret-value-111"}}
 
-	_, err := Save(context.Background(), kind, target, cand, adminCaller(), SaveDeps{ConfigDir: dir})
+	_, err := Save(context.Background(), kind, target, cand, adminCaller(), SaveDeps{ConfigDir: dir, ProjectSecrets: memSecrets{}})
 	if err == nil {
 		t.Fatal("want the first save to fail (corrupted config.yaml)")
 	}
@@ -528,7 +528,7 @@ func TestSave_RestoredConfigLeavesOrphanedSecretInert_ThenCleanResaveOverwrites(
 		t.Fatal(err)
 	}
 	cand2 := CandidateConfig{Kind: "telegram", Values: map[string]string{"bot_token": "fresh-secret-value-222"}}
-	res, err := Save(context.Background(), kind, target, cand2, adminCaller(), SaveDeps{ConfigDir: dir})
+	res, err := Save(context.Background(), kind, target, cand2, adminCaller(), SaveDeps{ConfigDir: dir, ProjectSecrets: memSecrets{}})
 	if err != nil {
 		t.Fatalf("second save: %v", err)
 	}
@@ -562,7 +562,7 @@ func TestSave_DaemonVsProjectSecretRouting(t *testing.T) {
 	tgKind := telegramTestKind(&fakeProber{kind: "telegram", result: okProbe("telegram")})
 	tgTarget, _ := SaveTargetForKind("telegram")
 	tgCand := CandidateConfig{Kind: "telegram", Values: map[string]string{"bot_token": "daemon-scope-secret-value"}}
-	if _, err := Save(context.Background(), tgKind, tgTarget, tgCand, adminCaller(), SaveDeps{ConfigDir: dir}); err != nil {
+	if _, err := Save(context.Background(), tgKind, tgTarget, tgCand, adminCaller(), SaveDeps{ConfigDir: dir, ProjectSecrets: memSecrets{}}); err != nil {
 		t.Fatalf("daemon save: %v", err)
 	}
 	if _, err := os.Stat(filepath.Join(dir, "secrets", "telegram.env")); err != nil {
@@ -594,8 +594,10 @@ func TestSave_DaemonVsProjectSecretRouting(t *testing.T) {
 	// about secret-store routing, not the config-write pipeline (that's
 	// covered by the real email/slack/github_app save tests below, which
 	// exercise ProjectConfigWriter's project-schema Validate() for real).
+	projStore := memSecrets{}
 	projDeps := SaveDeps{
-		ConfigDir: dir,
+		ConfigDir:      dir,
+		ProjectSecrets: projStore,
 		NewWriter: func(_ string) featuredoctor.ConfigWriter {
 			return &fakeConfigWriter{content: []byte("projectId: proj-a\n")}
 		},
@@ -607,21 +609,21 @@ func TestSave_DaemonVsProjectSecretRouting(t *testing.T) {
 	if !res.Saved {
 		t.Fatal("project save: Saved = false")
 	}
-	projSecret, err := os.ReadFile(filepath.Join(dir, "secrets", projectSecretsFile))
-	if err != nil {
-		t.Fatalf("project secrets file missing: %v", err)
+	// GitHub #626: the project secret goes to the credential store only:
+	// no file, no process environment.
+	if projStore[envName] != "project-scope-secret-value" {
+		t.Errorf("store[%s] = %q, want the project secret", envName, projStore[envName])
 	}
-	if !strings.Contains(string(projSecret), envName+"=project-scope-secret-value") {
-		t.Errorf("project secrets file = %q, want %s=project-scope-secret-value", projSecret, envName)
+	if got := os.Getenv(envName); got != "" {
+		t.Errorf("os.Getenv(%s) = %q, want the environment untouched", envName, got)
 	}
-	// projectdoctor.EnvSecrets.Set also os.Setenv's — config resolves live.
-	if got := os.Getenv(envName); got != "project-scope-secret-value" {
-		t.Errorf("os.Getenv(%s) = %q, want it live via os.Setenv", envName, got)
-	}
-	// The daemon secret file must NOT contain the project secret, and
-	// vice versa — routing must not cross-contaminate the two files.
-	if strings.Contains(string(projSecret), "daemon-scope-secret-value") {
-		t.Error("project secrets file unexpectedly contains the daemon secret")
+	assertNoProjectSecretsFile(t, dir)
+	// Routing must not cross-contaminate: the daemon secret stays in its
+	// file and out of the project store.
+	for _, v := range projStore {
+		if v == "daemon-scope-secret-value" {
+			t.Error("the project store unexpectedly holds the daemon secret")
+		}
 	}
 }
 
@@ -759,7 +761,7 @@ func TestSave_DefensiveGuards(t *testing.T) {
 	t.Run("target scope mismatch", func(t *testing.T) {
 		kind := telegramTestKind(&fakeProber{kind: "telegram", result: okProbe("telegram")})
 		mismatched := SaveTarget{Scope: ScopeProject, ConfigFile: projectConfigFile}
-		_, err := Save(context.Background(), kind, mismatched, CandidateConfig{}, adminCaller(), SaveDeps{ConfigDir: dir})
+		_, err := Save(context.Background(), kind, mismatched, CandidateConfig{}, adminCaller(), SaveDeps{ConfigDir: dir, ProjectSecrets: memSecrets{}})
 		if err == nil || !strings.Contains(err.Error(), "does not match kind") {
 			t.Fatalf("err = %v, want a scope-mismatch error", err)
 		}
@@ -768,7 +770,7 @@ func TestSave_DefensiveGuards(t *testing.T) {
 	t.Run("nil prober", func(t *testing.T) {
 		kind := telegramTestKind(nil)
 		target, _ := SaveTargetForKind("telegram")
-		_, err := Save(context.Background(), kind, target, CandidateConfig{}, adminCaller(), SaveDeps{ConfigDir: dir})
+		_, err := Save(context.Background(), kind, target, CandidateConfig{}, adminCaller(), SaveDeps{ConfigDir: dir, ProjectSecrets: memSecrets{}})
 		if err == nil || !strings.Contains(err.Error(), "no Prober") {
 			t.Fatalf("err = %v, want a nil-Prober error", err)
 		}
@@ -783,7 +785,7 @@ func TestSave_DefensiveGuards(t *testing.T) {
 		}
 		target, _ := SaveTargetForKind("telegram")
 		cand := CandidateConfig{Values: map[string]string{"bot_token": "x"}}
-		_, err := Save(context.Background(), kind, target, cand, adminCaller(), SaveDeps{ConfigDir: dir})
+		_, err := Save(context.Background(), kind, target, cand, adminCaller(), SaveDeps{ConfigDir: dir, ProjectSecrets: memSecrets{}})
 		if err == nil || !strings.Contains(err.Error(), "no EnvName") {
 			t.Fatalf("err = %v, want a missing-EnvName error", err)
 		}
@@ -793,7 +795,7 @@ func TestSave_DefensiveGuards(t *testing.T) {
 		kind := telegramTestKind(&fakeProber{kind: "telegram", result: okProbe("telegram")})
 		target := SaveTarget{Scope: ScopeDaemon, ConfigFile: daemonConfigFile, ScalarKeys: map[string]string{"bot_token": "telegram.bot_token"}}
 		cand := CandidateConfig{Values: map[string]string{"bot_token": "x"}}
-		_, err := Save(context.Background(), kind, target, cand, adminCaller(), SaveDeps{ConfigDir: dir})
+		_, err := Save(context.Background(), kind, target, cand, adminCaller(), SaveDeps{ConfigDir: dir, ProjectSecrets: memSecrets{}})
 		if err == nil || !strings.Contains(err.Error(), "no SecretValue") {
 			t.Fatalf("err = %v, want a no-SecretValue error", err)
 		}
@@ -808,7 +810,7 @@ func TestSave_DefensiveGuards(t *testing.T) {
 			SecretValue: func(_ string) string { return "aBareLiteralNotAPlaceholderAtAll" },
 		}
 		cand := CandidateConfig{Values: map[string]string{"bot_token": "x"}}
-		_, err := Save(context.Background(), kind, target, cand, adminCaller(), SaveDeps{ConfigDir: dir})
+		_, err := Save(context.Background(), kind, target, cand, adminCaller(), SaveDeps{ConfigDir: dir, ProjectSecrets: memSecrets{}})
 		if err == nil || !strings.Contains(err.Error(), "bug in SecretValue") {
 			t.Fatalf("err = %v, want a SecretValue-bug error", err)
 		}
@@ -828,7 +830,7 @@ func TestSave_DefensiveGuards(t *testing.T) {
 			SecretValue: func(_ string) string { return "SOME_OTHER_UNDECLARED_ENV_NAME" },
 		}
 		cand := CandidateConfig{Values: map[string]string{"bot_token": "x"}}
-		_, err := Save(context.Background(), kind, target, cand, adminCaller(), SaveDeps{ConfigDir: dir})
+		_, err := Save(context.Background(), kind, target, cand, adminCaller(), SaveDeps{ConfigDir: dir, ProjectSecrets: memSecrets{}})
 		if err == nil || !strings.Contains(err.Error(), "bug in SecretValue") {
 			t.Fatalf("err = %v, want a SecretValue-bug error", err)
 		}
@@ -845,7 +847,7 @@ func TestSave_DefensiveGuards(t *testing.T) {
 		}
 		target := SaveTarget{Scope: ScopeDaemon, ConfigFile: daemonConfigFile, ScalarKeys: map[string]string{}}
 		cand := CandidateConfig{Values: map[string]string{"bot_token": "x"}}
-		_, err := Save(context.Background(), kind, target, cand, adminCaller(), SaveDeps{ConfigDir: dir})
+		_, err := Save(context.Background(), kind, target, cand, adminCaller(), SaveDeps{ConfigDir: dir, ProjectSecrets: memSecrets{}})
 		if err == nil || !strings.Contains(err.Error(), "no ScalarKeys entry") {
 			t.Fatalf("err = %v, want a missing-ScalarKeys error", err)
 		}
@@ -900,7 +902,8 @@ func TestPollReloadStatus_CompletedSucceeds(t *testing.T) {
 
 // Review 20261002-8932 finding 3 (agent-administered Vornik design §8.1, "No
 // second writer"): the integrations save path writes project secrets into
-// secrets/project-secrets.env and the process environment. For an agent
+// the operator credential store (before #626, secrets/project-secrets.env
+// and the process environment). For an agent
 // project it must refuse before probing or placing anything.
 func TestSave_RefusesAgentProjects(t *testing.T) {
 	dir := newTestConfigDir(t)
@@ -915,7 +918,8 @@ func TestSave_RefusesAgentProjects(t *testing.T) {
 	}
 	target := SaveTarget{Scope: ScopeProject, ConfigFile: projectConfigFile, ScalarKeys: map[string]string{"token": "token"}}
 	cand := CandidateConfig{Kind: "synthetic", ProjectID: "hermes--finance", Values: map[string]string{"token": "AGENT-CANARY-VALUE"}}
-	_, err := Save(context.Background(), kind, target, cand, adminCaller(), SaveDeps{ConfigDir: dir})
+	agentStore := memSecrets{}
+	_, err := Save(context.Background(), kind, target, cand, adminCaller(), SaveDeps{ConfigDir: dir, ProjectSecrets: agentStore})
 	if err == nil || !strings.Contains(err.Error(), "approver device") {
 		t.Fatalf("Save for an agent project = %v, want a refusal naming the approver device", err)
 	}
@@ -928,7 +932,7 @@ func TestSave_RefusesAgentProjects(t *testing.T) {
 	if os.Getenv(envName) != "" {
 		t.Fatal("the value reached the process environment")
 	}
-	if b, rerr := os.ReadFile(filepath.Join(dir, "secrets", projectSecretsFile)); rerr == nil && strings.Contains(string(b), "AGENT-CANARY-VALUE") {
-		t.Fatal("the value reached the project secrets file")
+	if len(agentStore) != 0 {
+		t.Fatal("the value reached the credential store")
 	}
 }

@@ -1,5 +1,5 @@
 name: vornik-companion
-version: 0.23.1
+version: 0.23.4
 requires_hermes: ">=0.21.5"
 manifest_version: 2
 # Declared, not inferred: Hermes classifies an undeclared plugin whose
@@ -14,6 +14,12 @@ description: >-
   no credentials: work that touches mail, calendar, documents or accounts is
   delegated to operator-authored broker workflows on a Vornik daemon, which
   return a bounded, schema-validated result instead of raw access.
+  0.23.4 — README: a workspace inside the Hermes home (Docker's /opt/data)
+  gets every file refused; mount the project outside it.
+  0.23.3 — The recall hint after a failed test run names the recall tool
+  and says to call it now.
+  0.23.2 — The commit hint rule's git options are disjoint too, so a run of
+  `git -C -a` pairs matches in linear time.
   0.23.1 — Catalogue review fixes. vornik_companion_delegate refuses
   credential files (.env and its variants, .envrc, in any case), anything
   under the Hermes home, and hard-linked files. It also refuses when Hermes

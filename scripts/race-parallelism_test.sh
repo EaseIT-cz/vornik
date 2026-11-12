@@ -52,10 +52,13 @@ out="$(bash "$X")"; rc=$?
 # public-managed and has neither target's recipe).
 if [ -f "$ROOT/cmd/vornik-enterprise/main.go" ]; then
   mk() { make -s --no-print-directory -C "$ROOT" -n "$@" 2>&1; }
-  line="$(mk test-unit | grep -E '(^| )go test ')"
-  [[ " $line " == *" -race "* && " $line " == *" -p $out "* && " $line " == *" ./... "* ]] \
-    && ok "make test-unit runs the race lane at -p $out" || bad "make test-unit: '$line' (want -race -p $out ./...)"
-  line="$(mk test-unit RACE_P=3 | grep -E '(^| )go test ')"
+  # Since #483 (2026-11-12) test-unit runs the race lane through the shard
+  # driver, which forwards its flags to every go test it starts (the sweep
+  # of the tree and the three internal/service shards).
+  line="$(mk test-unit | grep -E 'service-shard-lane\.sh')"
+  [[ " $line " == *" -race "* && " $line " == *" -p $out "* ]] \
+    && ok "make test-unit runs the race lane at -p $out" || bad "make test-unit: '$line' (want the shard driver with -race -p $out)"
+  line="$(mk test-unit RACE_P=3 | grep -E 'service-shard-lane\.sh')"
   [[ " $line " == *" -p 3 "* ]] && ok "RACE_P=3 overrides the bound" || bad "RACE_P=3: '$line'"
   line="$(mk test-coverage | grep -E '(^| )go test ')"
   [[ " $line " == *" -race "* && " $line " == *" -p $out "* && " $line " == *" ./... "* ]] \

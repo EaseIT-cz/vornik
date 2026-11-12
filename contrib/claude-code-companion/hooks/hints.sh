@@ -118,7 +118,9 @@ if [[ "$CLIENT" == codex ]]; then
   P_RAG="mcp__vornik__delegate to companion-rag-ingest"
 else
   TOOLS="mcp__plugin_vornik-companion_vornik__"
-  P_RECALL="recall"
+  # The exact tool name: an imperative naming it was followed where the bare
+  # word was not (#704, design 2026-08-20 §13.16).
+  P_RECALL="mcp__plugin_vornik-companion_vornik__recall"
   P_DELEGATE="delegate"
   P_UPLOAD="/upload"
   P_RAG="/rag-ingest"
@@ -150,8 +152,8 @@ if [[ "$MODE" == session ]]; then
   [[ "$CURRENT" =~ ^[A-Za-z0-9_-]{1,128}$ ]] || CURRENT=""
   command -v curl >/dev/null 2>&1 || exit 0
   URL="${VORNIK_URL:-${CLAUDE_PLUGIN_OPTION_VORNIK_URL:-http://localhost:8080}}"
-  VORNIK_UA="vornik-companion/0.50.8 (claude-code)"
-  [[ "$CLIENT" == codex ]] && VORNIK_UA="vornik-companion/0.45.6 (codex)"
+  VORNIK_UA="vornik-companion/0.50.10 (claude-code)"
+  [[ "$CLIENT" == codex ]] && VORNIK_UA="vornik-companion/0.45.8 (codex)"
   NOW="$(date +%s 2>/dev/null)" || exit 0
 
   # 1. Fetch the catalogue and the mask.
@@ -412,8 +414,11 @@ NL=$'\n'
 # that is neither space nor quote), as hints.py has it (catalogue review of
 # Hermes 0.23.0, 2026-11-11). bash =~ (POSIX ERE) was fast on the old rule too
 # (the 30-unit adversarial shared case passed), so here this is for parity.
+# The git-options group is disjoint as well: a -C or -c value is a bare - or
+# does not start with a dash, so -C -a is two flag pieces only (catalogue review of Hermes
+# 0.23.1, 2026-11-11; glibc ERE took under 1 ms on 40 pairs of the old rule).
 ASSIGN="([A-Za-z_][A-Za-z0-9_]*=((\"[^\"]*\"|'[^']*'|[^[:space:]\"'])*)[[:space:]]+)*"
-COMMIT_RE="(^|[;&|(${NL}])[[:space:]]*${ASSIGN}git([[:space:]]+(-[Cc][[:space:]]+[^[:space:]]+|-[^[:space:]]+))*[[:space:]]+commit([[:space:]]|$)"
+COMMIT_RE="(^|[;&|(${NL}])[[:space:]]*${ASSIGN}git([[:space:]]+(-[Cc][[:space:]]+(-|[^[:space:]-][^[:space:]]*)|-[^[:space:]]+))*[[:space:]]+commit([[:space:]]|$)"
 if [[ "$TOOL" == Bash && "$MODE" == call && "$CMD" =~ $COMMIT_RE ]]; then
   IS_COMMIT=1
   : >"$SDIR/edits" 2>/dev/null

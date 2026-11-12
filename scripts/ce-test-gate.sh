@@ -94,17 +94,35 @@ ce_run_lane() {
         local lock
         lock="${CE_LOCK_FILE:-$(integration_lock_path)}" || return 1
         integration_lock_safe "$lock" || return 1
-        (
-            flock -w "${CE_LOCK_WAIT:-1800}" 9 || {
-                echo "   another integration run holds $lock; not sharing the database with it" >&2
-                exit 1
-            }
-            _ce_fresh_database "$tree" "$dsn" || exit 1
-            _ce_exec_lane "$lane" "$tree" "$outdir" "$plan"
-        ) 9>>"$lock"
+        # Under scripts/integration-db-lane.sh (the gate stamp's CE lane,
+        # #511) the caller already holds this lock on fd 9, and the export
+        # inherited it. Lock that descriptor, the same open file, which
+        # succeeds at once; opening the file again would wait on our own
+        # parent and then refuse (gate stamp at 62868c648, 2026-11-12).
+        if [ "${VORNIK_INTEGRATION_LOCK_FD:-}" = 9 ] && [ "${VORNIK_INTEGRATION_LOCK_PATH:-}" = "$lock" ] \
+           && { : >&9; } 2>/dev/null; then
+            _ce_locked_integration "$lock" "$tree" "$dsn" "$outdir" "$plan"
+        else
+            # shellcheck disable=SC2094 # the lock is opened for append and only flock'd; nothing reads it
+            _ce_locked_integration "$lock" "$tree" "$dsn" "$outdir" "$plan" 9>>"$lock"
+        fi
         return $?
     fi
     _ce_exec_lane "$lane" "$tree" "$outdir" "$plan"
+}
+
+# _ce_locked_integration <lock> <tree> <dsn> <outdir> <plan> — the integration
+# lane under the lock on fd 9, which the caller has opened (or inherited).
+_ce_locked_integration() {
+    local lock="$1" tree="$2" dsn="$3" outdir="$4" plan="$5"
+    (
+        flock -w "${CE_LOCK_WAIT:-1800}" 9 || {
+            echo "   another integration run holds $lock; not sharing the database with it" >&2
+            exit 1
+        }
+        _ce_fresh_database "$tree" "$dsn" || exit 1
+        _ce_exec_lane integration "$tree" "$outdir" "$plan"
+    )
 }
 
 # _ce_fresh_database recreates vornik_integration_test and applies the base

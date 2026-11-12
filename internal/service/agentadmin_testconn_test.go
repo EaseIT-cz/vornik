@@ -7,9 +7,11 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -295,13 +297,15 @@ func TestTestConnection_TimesOutAt10s(t *testing.T) {
 
 // Review 00b7 finding 1 (gating): the MCP probe dials through the SSRF
 // guard; an approved server at a private address is refused at the dial.
+// Amended 2026-11-11 (GitHub #734): the refusal now answers
+// blocked_private_address, not unreachable, for an MCP server as for an API.
 func TestTestConnection_PrivateAddressRefusedByTheGuard(t *testing.T) {
 	f := newFinance(t)
 	f.approve(f.do(agentadmin.VerbAddMCPServer, agentadmin.AddMCPServerInput{Project: "finance", Name: "bank", URL: "https://10.0.0.1:1/mcp"}))
 	p := f.c.Registry.GetProject("hermes--finance")
 	var probeErr error
 	code, _ := f.svc.probeMCP(context.Background(), p, p.MCP.Servers[0], func(err error) { probeErr = err })
-	if code != agentadmin.ConnUnreachable || !errors.Is(probeErr, integrations.ErrDialRefused) {
+	if code != agentadmin.ConnBlockedPrivateAddress || !errors.Is(probeErr, integrations.ErrDialRefused) {
 		t.Fatalf("code %s, err %v: the guard did not refuse the dial", code, probeErr)
 	}
 }
@@ -412,5 +416,26 @@ func TestTestConnection_Described(t *testing.T) {
 	}
 	if !hasLine(caps.Verbs, agentadmin.VerbTestConnection) {
 		t.Fatalf("describe_installation does not list test_connection: %v", caps.Verbs)
+	}
+}
+
+// GitHub #734 (design part 06, §6.7 item 5). Found at production (a CE
+// report): a host the guard refuses to dial answered "unreachable", which
+// reads as a network fault. "localhost." resolves to loopback but is not the
+// literal loopback host the self-hosted guard grants, so the guard refuses it
+// exactly as it refuses an intranet name resolving to 10.x.
+func TestTestConnection_GuardRefusalIsBlockedPrivateAddress_734(t *testing.T) {
+	f := newFinance(t)
+	var hits atomic.Int32
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { hits.Add(1) }))
+	t.Cleanup(srv.Close)
+	u, err := url.Parse(srv.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.addAPI("intranet", "https://localhost.:"+u.Port()+"/v1", "", "GET")
+	wantCode(t, f.mustTestConn("finance", "intranet"), agentadmin.ConnBlockedPrivateAddress, "")
+	if n := hits.Load(); n != 0 {
+		t.Fatalf("the guard let %d request(s) through", n)
 	}
 }

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
 	"slices"
@@ -1012,11 +1013,12 @@ func (e *Executor) executeWorkflowAttempt(ctx context.Context, task *persistence
 			// above and, before 2026-10-13, never applied to a system step.
 			sysCtx, cancelSys := systemStepContext(ctx, nativeStepTimeout)
 			sysResult, sysErr := runSystemHandlerSafely(sysCtx, handler, step.Handler, SystemStepInput{
-				Task:       task,
-				Execution:  execution,
-				StepID:     currentStepID,
-				Step:       &step,
-				PrevResult: state.LastResult,
+				Task:        task,
+				Execution:   execution,
+				StepID:      currentStepID,
+				Step:        &step,
+				PrevResult:  state.LastResult,
+				StepResults: maps.Clone(state.StepResults),
 			})
 			// Classify BEFORE cancelSys: cancelling first would make every
 			// failure read as a cancel.

@@ -85,8 +85,9 @@ func TestSave_Email_HappyPath(t *testing.T) {
 		t.Fatal("SaveTargetForKind(email) = false")
 	}
 	cand := CandidateConfig{Kind: "email", ProjectID: "proj-a", Values: emailCandidateValues()}
+	store := memSecrets{}
 
-	res, err := Save(context.Background(), kind, target, cand, adminCaller(), SaveDeps{ConfigDir: dir})
+	res, err := Save(context.Background(), kind, target, cand, adminCaller(), SaveDeps{ConfigDir: dir, ProjectSecrets: store})
 	if err != nil {
 		t.Fatalf("Save: %v", err)
 	}
@@ -114,7 +115,7 @@ func TestSave_Email_HappyPath(t *testing.T) {
 	}
 
 	// Secret-never-inline boundary: the literal passwords must never
-	// appear in project.yaml, only in the secrets file.
+	// appear in project.yaml, only in the credential store (GitHub #626).
 	rawYAML, err := os.ReadFile(filepath.Join(dir, "projects", "proj-a.yaml"))
 	if err != nil {
 		t.Fatal(err)
@@ -122,16 +123,13 @@ func TestSave_Email_HappyPath(t *testing.T) {
 	if strings.Contains(string(rawYAML), "super-secret-imap-password-1234") || strings.Contains(string(rawYAML), "super-secret-smtp-password-5678") {
 		t.Fatalf("project.yaml leaked a literal secret: %s", rawYAML)
 	}
-	secrets, err := os.ReadFile(filepath.Join(dir, "secrets", projectSecretsFile))
-	if err != nil {
-		t.Fatalf("read project secrets file: %v", err)
+	if store[wantIMAPEnv] != "super-secret-imap-password-1234" {
+		t.Errorf("store missing the IMAP password under %s", wantIMAPEnv)
 	}
-	if !strings.Contains(string(secrets), wantIMAPEnv+"=super-secret-imap-password-1234") {
-		t.Errorf("secrets file missing IMAP password entry: %s", secrets)
+	if store[wantSMTPEnv] != "super-secret-smtp-password-5678" {
+		t.Errorf("store missing the SMTP password under %s", wantSMTPEnv)
 	}
-	if !strings.Contains(string(secrets), wantSMTPEnv+"=super-secret-smtp-password-5678") {
-		t.Errorf("secrets file missing SMTP password entry: %s", secrets)
-	}
+	assertNoProjectSecretsFile(t, dir)
 }
 
 // TestSave_Email_ProjectAwareValidate_RollsBackMalformedWrite is the
@@ -154,7 +152,7 @@ func TestSave_Email_ProjectAwareValidate_RollsBackMalformedWrite(t *testing.T) {
 	values["from_address"] = "" // breaks the SMTP all-or-nothing rule
 	cand := CandidateConfig{Kind: "email", ProjectID: "proj-a", Values: values}
 
-	_, err = Save(context.Background(), kind, target, cand, adminCaller(), SaveDeps{ConfigDir: dir})
+	_, err = Save(context.Background(), kind, target, cand, adminCaller(), SaveDeps{ConfigDir: dir, ProjectSecrets: memSecrets{}})
 	if err == nil {
 		t.Fatal("Save() = nil error, want a project-schema validation rejection")
 	}
@@ -185,8 +183,9 @@ func TestSave_Slack_HappyPath(t *testing.T) {
 		"bot_token_env":      "xoxb-fake-bot-token-value",
 		"signing_secret_env": "fake-signing-secret-value",
 	}}
+	store := memSecrets{}
 
-	res, err := Save(context.Background(), kind, target, cand, adminCaller(), SaveDeps{ConfigDir: dir})
+	res, err := Save(context.Background(), kind, target, cand, adminCaller(), SaveDeps{ConfigDir: dir, ProjectSecrets: store})
 	if err != nil {
 		t.Fatalf("Save: %v", err)
 	}
@@ -214,16 +213,13 @@ func TestSave_Slack_HappyPath(t *testing.T) {
 	if strings.Contains(string(rawYAML), "xoxb-fake-bot-token-value") || strings.Contains(string(rawYAML), "fake-signing-secret-value") {
 		t.Fatalf("project.yaml leaked a literal secret: %s", rawYAML)
 	}
-	secrets, err := os.ReadFile(filepath.Join(dir, "secrets", projectSecretsFile))
-	if err != nil {
-		t.Fatalf("read project secrets file: %v", err)
+	if store[wantBotEnv] != "xoxb-fake-bot-token-value" {
+		t.Errorf("store missing the bot token under %s", wantBotEnv)
 	}
-	if !strings.Contains(string(secrets), wantBotEnv+"=xoxb-fake-bot-token-value") {
-		t.Errorf("secrets file missing bot token entry: %s", secrets)
+	if store[wantSigningEnv] != "fake-signing-secret-value" {
+		t.Errorf("store missing the signing secret under %s", wantSigningEnv)
 	}
-	if !strings.Contains(string(secrets), wantSigningEnv+"=fake-signing-secret-value") {
-		t.Errorf("secrets file missing signing secret entry: %s", secrets)
-	}
+	assertNoProjectSecretsFile(t, dir)
 }
 
 // --- GitHub App (file-secret placement mode) ---
@@ -253,7 +249,7 @@ func TestSave_GitHubApp_HappyPath_FileSecretPlacement(t *testing.T) {
 	}
 	cand := CandidateConfig{Kind: "github_app", ProjectID: "proj-a", Values: githubAppCandidateValues()}
 
-	res, err := Save(context.Background(), kind, target, cand, adminCaller(), SaveDeps{ConfigDir: dir})
+	res, err := Save(context.Background(), kind, target, cand, adminCaller(), SaveDeps{ConfigDir: dir, ProjectSecrets: memSecrets{}})
 	if err != nil {
 		t.Fatalf("Save: %v", err)
 	}
@@ -318,14 +314,14 @@ func TestSave_GitHubApp_SecondSaveOverwritesPEMFile(t *testing.T) {
 
 	first := githubAppCandidateValues()
 	cand1 := CandidateConfig{Kind: "github_app", ProjectID: "proj-a", Values: first}
-	if _, err := Save(context.Background(), kind, target, cand1, adminCaller(), SaveDeps{ConfigDir: dir}); err != nil {
+	if _, err := Save(context.Background(), kind, target, cand1, adminCaller(), SaveDeps{ConfigDir: dir, ProjectSecrets: memSecrets{}}); err != nil {
 		t.Fatalf("first save: %v", err)
 	}
 
 	second := githubAppCandidateValues()
 	second["private_key_path"] = strings.ReplaceAll(testGitHubAppPEM, "FAKE", "SECOND")
 	cand2 := CandidateConfig{Kind: "github_app", ProjectID: "proj-a", Values: second}
-	res, err := Save(context.Background(), kind, target, cand2, adminCaller(), SaveDeps{ConfigDir: dir})
+	res, err := Save(context.Background(), kind, target, cand2, adminCaller(), SaveDeps{ConfigDir: dir, ProjectSecrets: memSecrets{}})
 	if err != nil {
 		t.Fatalf("second save: %v", err)
 	}
@@ -385,7 +381,7 @@ func TestSave_RejectsTraversalProjectID(t *testing.T) {
 	target, _ := SaveTargetForKind("email")
 	cand := CandidateConfig{Kind: "email", ProjectID: "../../etc/x", Values: emailCandidateValues()}
 
-	_, err := Save(context.Background(), kind, target, cand, adminCaller(), SaveDeps{ConfigDir: dir})
+	_, err := Save(context.Background(), kind, target, cand, adminCaller(), SaveDeps{ConfigDir: dir, ProjectSecrets: memSecrets{}})
 	if err == nil {
 		t.Fatal("Save() = nil error, want a rejection for a traversal-shaped project ID")
 	}
@@ -446,7 +442,7 @@ func TestSave_RejectsEmptyProjectIDForProjectScope(t *testing.T) {
 	target, _ := SaveTargetForKind("email")
 	cand := CandidateConfig{Kind: "email", ProjectID: "", Values: emailCandidateValues()}
 
-	_, err := Save(context.Background(), kind, target, cand, Caller{IsAdmin: true}, SaveDeps{ConfigDir: dir})
+	_, err := Save(context.Background(), kind, target, cand, Caller{IsAdmin: true}, SaveDeps{ConfigDir: dir, ProjectSecrets: memSecrets{}})
 	if err == nil {
 		t.Fatal("Save() = nil error, want a rejection for an empty project ID on a project-scope kind")
 	}

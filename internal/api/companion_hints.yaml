@@ -50,16 +50,18 @@ hints:
       serves this version and stops serving the old one.
 
   - id: test_failed.recall
-    version: 1
+    # version 2 (#704, design §13.16): the imperative naming the exact tool,
+    # followed in 3 of 3 headless Claude Code runs against 0 of 3 for v1.
+    version: 2
     trigger:
       kind: test_failed
       runners: ["go test", "make test", "make test-integration", "pytest", "npm test", "npm run test", "cargo test", "mvn test", "gradle test", "bun test", "yarn test"]
     follow: ["recall"]
     active: true
     text: >-
-      vornik-companion: a test run failed. Before you debug from scratch,
-      recall the symptom ({recall} with the failing test's name or its error),
-      in case it has been seen and solved before.
+      vornik-companion: ACTION REQUIRED as your next step. Call {recall}
+      with query set to the failing test's name and its error message, then
+      read the hits before you change code.
 
   - id: design_written.review
     version: 1

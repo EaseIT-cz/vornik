@@ -46,6 +46,9 @@ func newFixture(t *testing.T, opts ...Option) *fixture {
 		}),
 	}
 	f.svc = New(f.repo, append(base, opts...)...)
+	// GitHub #736: wait for every push goroutine before the database and temp
+	// dir cleanups (registered earlier, so they run after this one).
+	t.Cleanup(func() { f.svc.waitPushes() })
 	return f
 }
 

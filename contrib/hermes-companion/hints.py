@@ -57,9 +57,12 @@ _SESSION = re.compile(r"^[A-Za-z0-9_-]{1,128}$")
 # start only one piece, so the match is linear. The earlier [^\s]* also took a
 # leading quote, so the three alternatives overlapped: repeated NAME="a NAME=b"
 # units backtracked exponentially (416 characters took 19 s; hermes-agent PR
-# 151967).
+# 151967). The git-options group had the same flaw: `-C -a` parsed as
+# `-C <value>` or as two flags. A value is now a bare `-` or starts with a
+# non-dash; other dash values are two flags, so the matched commands are
+# unchanged (catalogue review 5865593401, 2026-11-11).
 _ASSIGN = r"""([A-Za-z_][A-Za-z0-9_]*=(("[^"]*"|'[^']*'|[^\s"'])*)\s+)*"""
-COMMIT_RE = re.compile(r"(^|[;&|(\n])\s*" + _ASSIGN + r"git(\s+(-[Cc]\s+[^\s]+|-[^\s]+))*\s+commit(\s|$)")
+COMMIT_RE = re.compile(r"(^|[;&|(\n])\s*" + _ASSIGN + r"git(\s+(-[Cc]\s+(-|[^\s-][^\s]*)|-[^\s]+))*\s+commit(\s|$)")
 OUTFAIL_RE = re.compile(r"(^|\n)(--- )?FAIL\b|FAILED|(^|[^0-9])[1-9][0-9]* (failed|failures?|errors?)\b")
 
 

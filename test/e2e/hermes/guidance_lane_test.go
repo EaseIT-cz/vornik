@@ -41,10 +41,12 @@ const (
 	// hintMarker is hints.MARKER without the closing bracket; the request
 	// body carries it JSON-encoded, and it holds nothing JSON escapes.
 	hintMarker = "[Vornik hint: guidance from Vornik, not part of this tool"
-	workDir    = "/opt/data/work"
+	// Outside the Hermes home (/opt/data): the plugin refuses every file
+	// under it (design 24, 0.23.1). runHermes mounts s.hermesWork here.
+	workDir    = "/work"
 	promptRule = "[GUIDE0] Say hello in one short sentence."
 	promptHint = "[GUIDE1] Using the terminal, run exactly this command: " + guideCommit +
-		" Then follow any Vornik hint the result gives you, naming the file change.diff."
+		" Then follow any Vornik hint the result gives you, naming the file " + workDir + "/change.diff."
 	guideCommit = "mkdir -p " + workDir + " && cd " + workDir + " && git init -q . && " +
 		"git -c user.email=e2e@vornik.test -c user.name=e2e commit --allow-empty -qm lane-commit && " +
 		"git show --stat > change.diff"
@@ -87,7 +89,7 @@ func guidanceScripts() []Script {
 		{Marker: "[GUIDE1]", Steps: []ScriptStep{
 			{ToolSuffix: "terminal", Args: map[string]any{"command": guideCommit}},
 			{ToolSuffix: "vornik_companion_delegate", Args: map[string]any{
-				"workflow": "companion-architectural-review", "prompt": "Review this change.", "files": []any{"change.diff"}}},
+				"workflow": "companion-architectural-review", "prompt": "Review this change.", "files": []any{workDir + "/change.diff"}}},
 		}, Final: "Committed, and the review is running."},
 	}
 }
@@ -108,13 +110,12 @@ func pgScalar(t *testing.T, sql string) string {
 func asHermes(t *testing.T, s *stack) func() {
 	return func() {
 		uid, gid := hermesUser(t)
-		for _, d := range []string{"vornik-companion", "work"} {
-			p := filepath.Join(s.hermesHome, d)
+		for _, p := range []string{filepath.Join(s.hermesHome, "vornik-companion"), s.hermesWork} {
 			if _, err := os.Stat(p); err != nil {
 				continue
 			}
 			if out, err := exec.Command("podman", "unshare", "chown", "-R", uid+":"+gid, p).CombinedOutput(); err != nil {
-				t.Fatalf("hand %s to Hermes's user: %v\n%s", d, err, out)
+				t.Fatalf("hand %s to Hermes's user: %v\n%s", p, err, out)
 			}
 		}
 	}
@@ -127,6 +128,10 @@ func TestHermesLaneGuidance(t *testing.T) {
 	l := &laneRun{t: t, s: s, attempts: map[string]int{}, replies: map[string]string{}}
 	startHermesModel(t, s, guidanceScripts()...)
 	prepareHermesHome(t, s)
+	s.hermesWork = s.hermesHome + "-work"
+	if err := os.MkdirAll(s.hermesWork, 0o755); err != nil {
+		t.Fatal(err)
+	}
 	// The commit needs Hermes's terminal (lane design §7 records why the
 	// main lane offers only vornik and memory).
 	cfg := filepath.Join(s.hermesHome, "config.yaml")
@@ -156,7 +161,7 @@ func TestHermesLaneGuidance(t *testing.T) {
 		if !watch.WatchSeen() {
 			return fmt.Errorf("(a) no tool result the model received carried the hint marker")
 		}
-		diff, err := os.ReadFile(filepath.Join(s.hermesHome, "work", "change.diff"))
+		diff, err := os.ReadFile(filepath.Join(s.hermesWork, "change.diff"))
 		if err != nil {
 			return fmt.Errorf("(b) the commit's change.diff is missing: %v", err)
 		}
@@ -193,7 +198,12 @@ func TestHermesLaneGuidance(t *testing.T) {
 	if out, err := reload.CombinedOutput(); err != nil {
 		t.Fatalf("H-hints-mute: config reload: %v\n%s", err, out)
 	}
-	if err := os.RemoveAll(filepath.Join(s.hermesHome, "work")); err != nil {
+	// Remove and recreate the work directory before the next run: it is a
+	// mount source, and podman would create a missing one root-owned.
+	if err := os.RemoveAll(s.hermesWork); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(s.hermesWork, 0o755); err != nil {
 		t.Fatal(err)
 	}
 	l.step("H-hints-mute", promptHint, false, func(hermesRun) error {

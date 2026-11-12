@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"vornik.io/vornik/internal/registry"
+	"vornik.io/vornik/internal/secretstore"
 )
 
 // startFakeA2APartner spins up an httptest server impersonating
@@ -260,3 +261,26 @@ func TestA2AHTTPClientRejectsCrossOriginRedirectWithAPIKey(t *testing.T) {
 		t.Fatalf("cross-origin redirect leaked X-API-Key: %q", leakedKey)
 	}
 }
+
+// GitHub #626 E: an a2a step's API key held only in the credential store.
+func TestHandleA2ACallStep_APIKeyFromTheStore_626(t *testing.T) {
+	partner := newFakePartner(t, []string{
+		sseFrame("status", `{"taskId":"task-fake-1","state":"completed","final":true}`),
+	})
+	defer partner.Close()
+	secretstore.SetProcessSource(storeOnlyA2A{"A2A_KEY_626": "stored-key-626"})
+	t.Cleanup(func() { secretstore.SetProcessSource(nil) })
+	e := &Executor{}
+	if _, err := e.handleA2ACallStep(context.Background(), "step1", &registry.WorkflowStep{
+		Type: "a2a_call", AgentURL: partner.URL(), Prompt: "go", APIKeyEnv: "A2A_KEY_626",
+	}); err != nil {
+		t.Fatalf("call: %v", err)
+	}
+	if partner.gotAPIKey != "stored-key-626" {
+		t.Errorf("partner got API key %q, want the stored one", partner.gotAPIKey)
+	}
+}
+
+type storeOnlyA2A map[string]string
+
+func (m storeOnlyA2A) Get(name string) (string, bool) { v, ok := m[name]; return v, ok }

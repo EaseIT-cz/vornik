@@ -28,14 +28,6 @@ import (
 // project-scoped user targeting a project outside their scope.
 var ErrForbidden = errors.New("integrations: caller not authorized for this save")
 
-// projectSecretsFile mirrors projectdoctor.envSecretsFile (unexported in
-// that package) — every project-scope secret lands in one file per project
-// config directory, alongside the daemon's own secrets (design §5.4 step 3;
-// see internal/service/container_http.go's onboardingSecretsDir, which
-// points both the daemon's and the project doctor's secrets at the same
-// "<configDir>/secrets" directory).
-const projectSecretsFile = "project-secrets.env"
-
 // Caller is the authenticated actor attempting a save, decoupled from any
 // HTTP/session type so this package stays free of UI wiring (design: 5.2 is
 // UI-free; 5.3 builds a Caller from the session/role it already resolves).
@@ -107,6 +99,11 @@ type SaveDeps struct {
 	// Tests inject a fake to force Write/Validate failures without a
 	// real filesystem.
 	NewWriter func(path string) featuredoctor.ConfigWriter
+	// ProjectSecrets stores a project-scope secret as an operator credential
+	// (GitHub #625 item 3, #626): projectdoctor.StoreSecrets over the
+	// daemon's credential writer. Nil refuses a project-scope secret; there
+	// is no plaintext fallback.
+	ProjectSecrets projectdoctor.SecretWriter
 }
 
 // newWriter resolves the ConfigWriter for path. scope picks the DEFAULT
@@ -438,9 +435,9 @@ func resolveEnvSecretField(kind IntegrationKind, target SaveTarget, deps SaveDep
 // projectScopedEnvName derives a per-project-unique secret env-var name for
 // a project-scope Secret field: base (the catalog's static EnvName
 // template, e.g. "EMAIL_IMAP_PASSWORD") + "_" + an env-var-safe suffix
-// derived from projectID. Needed because every project-scope secret lands
-// in the SAME shared project-secrets.env file (projectSecretsFile's doc) —
-// without a per-project suffix, two projects both configuring (say) email
+// derived from projectID. Every project-scope secret shares one namespace,
+// the operator credentials (before #626, one shared project-secrets.env
+// file). Without a per-project suffix, two projects both configuring (say) email
 // through the hub would silently overwrite each other's password under the
 // same bare env-var name (task 5.2b).
 //
@@ -521,16 +518,19 @@ func splitCommaList(raw string) []string {
 // appropriate secret store (design §5.4 step 3): daemon scope uses
 // onboarding.WriteEnvSecret into "<kindID>.env" (one file per integration,
 // mirroring the existing chat.env / per-feature convention); project scope
-// uses projectdoctor.EnvSecrets.Set, which also os.Setenv's the value so
-// the ${ENV}/${envName}-referencing config resolves live without a daemon
-// restart.
+// stores it as an operator credential through deps.ProjectSecrets (GitHub
+// #625 item 3, #626), which the point-of-use reads (secretstore.Value) see
+// at their next lookup, with no restart.
 func placeSecret(scope Scope, projectID, envName, value, kindID string, deps SaveDeps) error {
 	if scope == ScopeDaemon {
 		_, err := onboarding.WriteEnvSecret(deps.secretsDir(), kindID+".env", envName, value)
 		return err
 	}
-	_ = projectID // project scope shares one secrets dir with the daemon (see projectSecretsFile doc); the project id doesn't select a directory.
-	return projectdoctor.NewEnvSecrets(deps.secretsDir()).Set(envName, value)
+	_ = projectID // the env name already carries the project (projectScopedEnvName).
+	if deps.ProjectSecrets == nil {
+		return errors.New("the credential store is not available; the project secret was not saved")
+	}
+	return deps.ProjectSecrets.Set(envName, value)
 }
 
 // placeSecretFile writes a Secret+SecretFile field's literal value (e.g. a

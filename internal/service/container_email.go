@@ -12,6 +12,7 @@ import (
 	"vornik.io/vornik/internal/email"
 	"vornik.io/vornik/internal/persistence"
 	"vornik.io/vornik/internal/registry"
+	"vornik.io/vornik/internal/secretstore"
 )
 
 // buildEmailChannels scans the project registry for every project
@@ -153,7 +154,7 @@ func buildEmailChannel(projects []*registry.Project, defaultAttachmentDir string
 // parsed, and string allowlists / hosts / ports pass through
 // verbatim.
 func resolveEmailConfig(p registry.ProjectEmail) (email.Config, error) {
-	imapPass := os.Getenv(p.IMAPPasswordEnv)
+	imapPass := secretstore.Value(p.IMAPPasswordEnv)
 	if strings.TrimSpace(imapPass) == "" {
 		return email.Config{}, fmt.Errorf("imap_password_env %q is unset or empty", p.IMAPPasswordEnv)
 	}
@@ -170,7 +171,7 @@ func resolveEmailConfig(p registry.ProjectEmail) (email.Config, error) {
 		SenderAllowlist: p.SenderAllowlist,
 	}
 	if p.SMTPHost != "" {
-		smtpPass := os.Getenv(p.SMTPPasswordEnv)
+		smtpPass := secretstore.Value(p.SMTPPasswordEnv)
 		if strings.TrimSpace(smtpPass) == "" {
 			return email.Config{}, fmt.Errorf("smtp_password_env %q is unset or empty", p.SMTPPasswordEnv)
 		}

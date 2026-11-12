@@ -894,6 +894,69 @@ Show a single proposal (full diff + rationale)
 vornikctl control-plane show <proposal-id>
 ```
 
+## vornikctl credential
+
+List, set and remove operator credentials (the console's Credentials page, from a shell)
+
+Operator credentials are values stored encrypted in the daemon's credential
+store and referenced from config as secret://NAME. These verbs call the admin
+API with an admin-class key (VORNIK_API_KEY); every write is audited and never
+records the value. On a managed instance, use the operations address.
+
+## vornikctl credential import-env
+
+Move the secrets your configuration uses from env files into the credential store
+
+Reads the daemon's env files (vornik.env, secrets/env, secrets/*.env) and lists
+each name: "move" when config.yaml references it outside database:, a project
+*_env field names it, or it is in project-secrets.env; "left" otherwise, with
+the reason. Names referenced under database: stay on disk: they open the
+store. Nothing is written without --apply. Values are never printed.
+
+With --apply, each moved name is stored through the admin API (admin-class
+VORNIK_API_KEY, audited). Its line is removed only when the file is unchanged
+since it was read and the line's value is the stored one.
+
+```
+vornikctl credential import-env [flags]
+```
+
+| Flag | Default | Description |
+|---|---|---|
+| `--apply` | `false` | Store the credentials and remove the moved lines (default: print the plan only) |
+| `--config` |  | Path to config.yaml (default: the daemon's search order) |
+
+## vornikctl credential list
+
+List operator credentials and the names the config needs (never a value)
+
+```
+vornikctl credential list
+```
+
+## vornikctl credential remove
+
+Remove an operator credential from the store
+
+```
+vornikctl credential remove NAME
+```
+
+## vornikctl credential set
+
+Store or replace an operator credential, the value read from standard input
+
+Reads the value from standard input (one trailing newline is stripped):
+
+  printf '%s' "$TOKEN" | vornikctl credential set CONTEXT7_API_KEY
+
+It refuses a terminal on standard input, so the value is never typed where it
+is echoed, and it never appears in an argument.
+
+```
+vornikctl credential set NAME
+```
+
 ## vornikctl devices
 
 List or revoke approver devices
@@ -968,6 +1031,7 @@ Security:
   redaction_seams       Secret scanning of chat_audit_log, chat_system_prompts, step_prompts, task_messages, execution_step_outcomes signals and memory_retrieval_audit queries before persist; warns when off, with rows written and unscanned since boot
   synthetic_voice_replies Voice replies with synthesised speech (AI Act Art 50(2)): off by default; warns when on (accepted single-layer marking, with its basis) or when asked for without the acknowledgement
   secret_store_key      Agent credential store: a missing or wrong key while credentials exist is an error
+  credentials_in_env_files Secrets the config uses still in a plaintext env file (move them with vornikctl credential import-env), in both a file and the store, or shadowed; states how many it examined, never a value
   approver_devices      Agent approvals: a warning when an agent namespace exists with no paired device or no push
   agent_namespace_budget Agent namespaces whose project budgets sum above the approved ceiling, naming the waiting cover request
   agent_model_catalogue Agent role models: agent_admin.models entries not offered to agent roles (no route, a command-line provider, or remote without an exact price)
@@ -2656,6 +2720,43 @@ vornikctl memory supersede-legacy-documents [flags]
 
 | Flag | Default | Description |
 |---|---|---|
+| `--allow-scope-mismatch` | `false` | Run although --scope is not the scope the checkout at --root resolves to (a pinned or retagged scope) |
+| `--apply` | `false` | Write the plan; without it this is a dry run |
+| `--root` |  | A path inside the checkout the documents come from (required) |
+| `--scope` |  | Repo scope the documents were ingested under (required) |
+| `-p`, `--project` |  | Project ID (required) |
+
+## vornikctl memory supersede-missing-documents
+
+Retire path-identity document chunks whose file is no longer in the checkout
+
+Re-ingesting a document under the same path supersedes its earlier versions,
+but nothing retires a document whose file was deleted or moved. For each
+path document in the scope, this verb looks the path up in the checkout at
+--root (tracked files plus untracked files git does not ignore):
+
+  the path is in the checkout   -> left alone
+  the path is not in it         -> retired
+
+A missing row also lists, for information, tracked files with the same base
+name that have a live version ("moved to?"); no decision uses it. Re-ingest
+moved documents under their new path first, or recall loses them until you do.
+
+The checkout must be on the remote's default branch (--allow-branch to
+override), and its scope must be --scope. A dry run by default: nothing is
+written without --apply. Under --apply a path re-ingested since the plan is
+skipped. The retirement records no epoch, so a corpus rollback does not
+restore it.
+
+Always runs against the live daemon's chunk store.
+
+```
+vornikctl memory supersede-missing-documents [flags]
+```
+
+| Flag | Default | Description |
+|---|---|---|
+| `--allow-branch` | `false` | Run although the checkout is not on the remote's default branch |
 | `--allow-scope-mismatch` | `false` | Run although --scope is not the scope the checkout at --root resolves to (a pinned or retagged scope) |
 | `--apply` | `false` | Write the plan; without it this is a dry run |
 | `--root` |  | A path inside the checkout the documents come from (required) |

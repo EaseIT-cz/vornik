@@ -35,6 +35,9 @@ var reviewedNonSecretLeaves = map[string]string{
 	// audit trail already prints (api_key_sha256:<id>); a high-entropy
 	// key cannot be recovered from it.
 	"admin.operator_key_ids": "key hash ids, not keys",
+	// GitHub #734: intranet host names an agent API may reach; "private"
+	// names the address class, and the operator who reads the config wrote them.
+	"agent_admin.private_api_hosts": "host names, not key material",
 }
 
 // TestGetConfig_EveryCredentialShapedLeafIsRedacted is the regression test
